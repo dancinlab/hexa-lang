@@ -75,6 +75,77 @@ cleanup(){
 }
 trap cleanup EXIT
 
+# =============================================================================================
+# (0) INPUT-SIDE PRE-GATE (OP-24d) — CPU-ONLY, 0-GPU, runs NOW on ANY host (no CUDA needed).
+#     BEFORE the GPU build/run, prove the (ids,targets) the trainer will consume are
+#     deterministic + machine-independent, by running the OP-28 (byte-level) + OP-28b (BPE)
+#     input-side determinism oracles. This is the 0-pod-PROVEN slice of gap G1; it gates the
+#     turnkey flow so the kit verifies input reproducibility as STEP 0, then (on a CUDA host)
+#     runs the GPU trainer step — the SOLE remaining gated G1 piece.
+#
+#     Each oracle is run TWICE and asserted two ways (matches the oracles' own gate in
+#     F-OP28/F-OP28B): (i) the in-oracle PASS token `F-OP28...= 1` / `F-OP28B-BPE-FIX = 1`
+#     (byte-eq run-to-run + pure-integer => machine-independent by construction), AND
+#     (ii) PROCESS-TO-PROCESS byte-eq — two independent `hexa run` invocations diff clean
+#     (the CROSSPLAT-FINGERPRINT line is byte-identical, so a 2nd host can byte-diff it too).
+#     FAIL here => the real-corpus INPUT is NOT proven reproducible; STOP before spending a
+#     GPU build (a non-reproducible input invalidates any downstream determinism claim, g5).
+# ---------------------------------------------------------------------------------------------
+HEXA_RUN="${HEXA_RUN:-hexa-run}"   # the project hexa runner; oracles are `hexa run`-invoked
+OP28_ORACLE="stdlib/flame/op28_corpus_loader_det.hexa"       # F-OP28  byte-level (V=256)
+OP28B_ORACLE="stdlib/flame/op28b_bpe_byteuni_det.hexa"       # F-OP28b BPE       (V=151936)
+
+run_input_oracle(){
+  # run_input_oracle <name> <oracle-path> <pass-token> -> 0 PASS / non-0 FAIL
+  oname="$1"; opath="$2"; ptok="$3"
+  log "  --- input oracle: $oname ($opath) ---"
+  if [ ! -f "$opath" ]; then
+    log "    MISSING oracle source $opath — cannot pre-gate the input side. FAIL."; return 2
+  fi
+  a="$WORK/${oname}.A.out"; b="$WORK/${oname}.B.out"
+  # two independent process invocations (process-to-process byte-eq leg).
+  # Bare-file form `$HEXA_RUN <file>` matches this script's own emit call (line ~245);
+  # works whether HEXA_RUN=hexa-run (`hexa-run <file>`) or a wrapper. The verdicts'
+  # `hexa run <oracle>` is the same compile-then-exec path.
+  HEXA_LANG="$REPO" "$HEXA_RUN" "$opath" > "$a" 2>>"$RAW"; ra=$?
+  HEXA_LANG="$REPO" "$HEXA_RUN" "$opath" > "$b" 2>>"$RAW"; rb=$?
+  if [ "$ra" -ne 0 ] || [ "$rb" -ne 0 ]; then
+    log "    hexa run FAILED (exit $ra / $rb) — need a working '$HEXA_RUN'; set HEXA_RUN. FAIL."
+    tail -3 "$a" 2>/dev/null | sed 's/^/      /' | tee -a "$RAW"; return 1
+  fi
+  if ! grep -qF "$ptok" "$a"; then
+    log "    in-oracle PASS token absent (expected: $ptok) — the oracle's own gate did NOT pass. FAIL."
+    grep -iE 'FAIL|= 0' "$a" 2>/dev/null | head -2 | sed 's/^/      /' | tee -a "$RAW"; return 1
+  fi
+  if ! diff -q "$a" "$b" >/dev/null 2>&1; then
+    log "    process-to-process byte-eq DIFFERS (run1 != run2) — nondeterminism leaked. FAIL."
+    diff "$a" "$b" 2>/dev/null | head -6 | sed 's/^/      /' | tee -a "$RAW"; return 1
+  fi
+  # surface the cross-platform fingerprint (a 2nd host byte-diffs this exact line)
+  grep -E 'CROSSPLAT-FINGERPRINT|FINGERPRINT' "$a" 2>/dev/null | head -1 | sed 's/^/    /' | tee -a "$RAW"
+  log "    PASS — $ptok present AND run1==run2 byte-eq (input deterministic + machine-independent)."
+  return 0
+}
+
+log "================= STEP 0 · INPUT-SIDE PRE-GATE (OP-24d · CPU · 0-GPU · runs NOW) ================="
+log "  Proving the real-corpus (ids,targets) the GPU trainer will consume are byte-eq + machine-"
+log "  independent (OP-28 byte-level + OP-28b BPE) BEFORE any GPU build. This is the 0-pod-PROVEN"
+log "  slice of gap G1; the GPU trainer STEP run is the sole remaining gated piece."
+INPUT_PREGATE=FAIL
+if run_input_oracle "OP28-bytelevel" "$OP28_ORACLE" "F-OP28-CORPUS-LOADER-DET = 1" \
+   && run_input_oracle "OP28b-bpe"     "$OP28B_ORACLE" "F-OP28B-BPE-FIX = 1"; then
+  INPUT_PREGATE=PASS
+  log "  INPUT-SIDE PRE-GATE = PASS — both the byte-level AND BPE token pipelines are deterministic +"
+  log "  machine-independent (byte-eq run-to-run, pure-integer => no libm/no float/no hash-order). The"
+  log "  real-corpus INPUT to the trainer is PROVEN reproducible 0-pod. Proceeding to the GPU-gated step."
+else
+  log "  INPUT-SIDE PRE-GATE = FAIL — the (ids,targets) the trainer would consume are NOT proven"
+  log "  reproducible. A determinism claim on the GPU step is meaningless on a non-reproducible input."
+  log "  STOP before spending a GPU build (g5 honest). Fix the input oracle, then re-run. EXIT."
+  exit 2
+fi
+log ""
+
 log "================= PROVISION CHECKLIST (authorized CUDA host only — this script does NOT rent) ================="
 log "  [ ] authorization + budget confirmed; ZERO-VAST standing goal — only run if ALREADY on a CUDA host"
 log "  [ ] nvcc present (>=12.x); a GPU with compute_cap >= 12.0 (sm_120) OR set CLM_E2E_ARCH for your card"
@@ -315,6 +386,7 @@ log ""
 # ---------------------------------------------------------------------------------------------
 log "================= HEADLINE (capture into the OP-24c verdict) ================="
 log "[RESULT] OP-24c E2E  D=$CLM_PROD_D E=$CLM_PROD_E T=$CLM_PROD_T B=$CLM_PROD_BATCH steps=$STEPS arch=$ARCH"
+log "         INPUT-PRE-GATE(OP-24d · CPU · 0-GPU)=$INPUT_PREGATE  [OP-28 byte-level + OP-28b BPE input determinism]"
 log "         GATE-A(FP64-unchanged)=$GATE_A  GATE-B(TF32-self-byteeq)=$GATE_B  GATE-C(TF32-tracks-FP64)=$GATE_C"
 log "         worstLossTrack=${WORST}  FP64/TF32-wall=${RATIO}x"
 log "  Raw log saved to tool/clm/op24c_e2e_raw.log by the cleanup trap."
