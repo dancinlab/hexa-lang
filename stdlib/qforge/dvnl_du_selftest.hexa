@@ -1,0 +1,164 @@
+// @ci_gate — deterministic · network-free · ∂V_NL/∂u projector-derivative g5 gate
+//
+// dvnl_du_selftest.hexa — QFORGE B2 brick 1 (∂β_i/∂u, the nonlocal el-ph head).
+//
+// Anchors the single-direction projector derivative ∂β_i(q)/∂u_d = −i q_d β_i(q)
+// on the SAME analytic l=0 Gaussian projector used by projector_selftest.hexa
+// (β(r)=exp(−αr²), β̃(q)=(√π/4α^{3/2})e^{−q²/4α}), reusing qforge_proj_radial (d19).
+//
+//   (A) FINITE-DIFFERENCE vs ANALYTIC (★): for each q on the grid the analytic
+//       ∂β/∂u_d = −i q_d β(q) must match the central finite difference of the
+//       PHASED projector under a τ-displacement,
+//          [β_phased(τ + ε ê_d) − β_phased(τ − ε ê_d)] / 2ε,
+//       to rel-ε < 1e-6 (both re and im parts).            🔵 closed-form anchor
+//   (B) HERMITICITY: ∂β/∂u_d(−q) == conj( ∂β/∂u_d(q) ) to < 1e-10 over a q↔−q
+//       paired grid (⇒ real-space ∂V_NL is real).          🔵
+//   (C) Γ-HEAD: at q=0, q_d=0 ⇒ ∂β/∂u = 0 exactly (translational invariance). 🔵
+//   (D) malformed (size mismatch · bad dir) → [] guard.
+//
+// Run:  hexa run stdlib/qforge/dvnl_du_selftest.hexa
+// PASS: "qforge_dvnl_du_selftest PASS".
+use "stdlib/qforge/dvnl_du"
+use "stdlib/qforge/projector"
+
+let _PI: float = 3.14159265358979323846
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_rel(name: str, got: float, want: float, tol: float) -> int {
+    let w = _abs(want)
+    let d = _abs(got - want)
+    let rel = if w < 1.0e-30 { d } else { d / w }
+    if rel <= tol { println("PASS " + name + " (got " + to_string(got) + ", rel " + to_string(rel) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want) + " rel " + to_string(rel)) ; return 1
+}
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── l=0 Gaussian projector on a fine log mesh (matches projector_selftest) ──
+    let alpha = 1.5
+    let nmesh = 1600
+    let r0 = 0.0002
+    let dx = 0.010
+    let mut r: [float] = []
+    let mut rab: [float] = []
+    let mut beta: [float] = []
+    let mut i = 0
+    while i < nmesh {
+        let ri = r0 * exp(to_float(i) * dx)
+        r.push(ri)
+        rab.push(ri * dx)
+        beta.push(exp(-alpha * ri * ri))
+        i = i + 1
+    }
+    let l = 0
+    // an off-origin atom so the structure-factor phase is non-trivial.
+    let tau = [0.37, -0.21, 0.55]
+
+    // q-grid: paired q / −q so (B) hermiticity can compare conjugates, plus q=0
+    // for the (C) Γ-head, plus varied directions.
+    let qvecs = [ 0.0, 0.0, 0.0,
+                  0.5, 0.0, 0.0,    -0.5, 0.0, 0.0,
+                  0.3, 0.7, 0.2,    -0.3, -0.7, -0.2,
+                  1.1, -0.4, 0.9,   -1.1, 0.4, -0.9 ]
+    let nq = 7
+
+    // ── (A) finite-difference vs analytic ∂β/∂u for each direction ─────────────
+    let eps = 1.0e-6
+    let mut dir = 0
+    while dir < 3 {
+        let bp = qforge_beta_phased(qvecs, r, rab, beta, l, tau)
+        let dbeta = qforge_dbeta_du(bp, qvecs, dir)
+        // displaced τ ± ε ê_dir
+        let mut taup = [tau[0], tau[1], tau[2]]
+        let mut taum = [tau[0], tau[1], tau[2]]
+        taup[dir] = taup[dir] + eps
+        taum[dir] = taum[dir] - eps
+        let bpp = qforge_beta_phased(qvecs, r, rab, beta, l, taup)
+        let bpm = qforge_beta_phased(qvecs, r, rab, beta, l, taum)
+        let mut a = 0
+        while a < nq {
+            let fd_re = (bpp[a * 2]     - bpm[a * 2])     / (2.0 * eps)
+            let fd_im = (bpp[a * 2 + 1] - bpm[a * 2 + 1]) / (2.0 * eps)
+            let an_re = dbeta[a * 2]
+            let an_im = dbeta[a * 2 + 1]
+            // skip the q=0 head here (analytic ≡ 0, tested in (C)); compare magnitude.
+            let mag = sqrt(an_re * an_re + an_im * an_im)
+            if mag > 1.0e-8 {
+                let dre = _abs(fd_re - an_re)
+                let dim = _abs(fd_im - an_im)
+                let rel = (dre + dim) / mag
+                if rel > 1.0e-6 {
+                    println("FAIL (A) FD vs analytic dir=" + to_string(dir) + " q=" + to_string(a)
+                            + " an=(" + to_string(an_re) + "," + to_string(an_im) + ") fd=("
+                            + to_string(fd_re) + "," + to_string(fd_im) + ") rel=" + to_string(rel))
+                    fails = fails + 1
+                }
+            }
+            a = a + 1
+        }
+        dir = dir + 1
+    }
+    fails = fails + _ck_true("(A) FD vs analytic ∂β/∂u < 1e-6 (all q,dir)", fails == 0)
+
+    // ── (B) hermiticity ∂β/∂u(−q) == conj(∂β/∂u(q)) ────────────────────────────
+    // paired indices in qvecs: (1,2) (3,4) (5,6) are q / −q.
+    let bp2 = qforge_beta_phased(qvecs, r, rab, beta, l, tau)
+    let mut herm_ok = true
+    let mut herm_max = 0.0
+    let pairs = [1, 2, 3, 4, 5, 6]
+    let mut d2 = 0
+    while d2 < 3 {
+        let db = qforge_dbeta_du(bp2, qvecs, d2)
+        let mut pp = 0
+        while pp < 3 {
+            let ia = pairs[pp * 2]
+            let ib = pairs[pp * 2 + 1]
+            // conj(∂β(q)) = (re, −im); compare to ∂β(−q)
+            let dre = _abs(db[ib * 2]     - db[ia * 2])
+            let dim = _abs(db[ib * 2 + 1] - (-db[ia * 2 + 1]))
+            if dre > herm_max { herm_max = dre }
+            if dim > herm_max { herm_max = dim }
+            if dre > 1.0e-10 || dim > 1.0e-10 { herm_ok = false }
+            pp = pp + 1
+        }
+        d2 = d2 + 1
+    }
+    fails = fails + _ck_true("(B) ∂β/∂u(−q)=conj(∂β/∂u(q)) < 1e-10 (max="
+                             + to_string(herm_max) + ")", herm_ok)
+
+    // ── (C) Γ-head: q=0 (index 0) → ∂β/∂u = 0 exactly ──────────────────────────
+    let bp3 = qforge_beta_phased(qvecs, r, rab, beta, l, tau)
+    let dbx = qforge_dbeta_du(bp3, qvecs, 0)
+    fails = fails + _ck_close("(C) Γ-head ∂β/∂u(q=0) re = 0", dbx[0], 0.0, 1.0e-14)
+    fails = fails + _ck_close("(C) Γ-head ∂β/∂u(q=0) im = 0", dbx[1], 0.0, 1.0e-14)
+
+    // ── extra explicit value: ∂β/∂u_x at q=(0.5,0,0), τ as above ───────────────
+    // analytic β̃(0.5) closed-form, phase exp(−i·0.5·0.37); ∂/∂u_x = −i·0.5·β(q).
+    let bt05 = sqrt(_PI) / (4.0 * pow(alpha, 1.5)) * exp(-0.5 * 0.5 / (4.0 * alpha))
+    let ph = 0.5 * tau[0]   // q·τ = qx·τx (qy=qz=0)
+    let bre = bt05 * cos(ph) ; let bim = -bt05 * sin(ph)
+    // (−i·0.5)·(bre + i·bim) = 0.5·bim + i·(−0.5·bre)
+    let want_re = 0.5 * bim ; let want_im = -0.5 * bre
+    fails = fails + _ck_rel("(A') explicit ∂β/∂u_x re @q=(0.5,0,0)", dbx[1 * 2], want_re, 1.0e-4)
+    fails = fails + _ck_rel("(A') explicit ∂β/∂u_x im @q=(0.5,0,0)", dbx[1 * 2 + 1], want_im, 1.0e-4)
+
+    // ── (D) malformed guards ───────────────────────────────────────────────────
+    fails = fails + _ck_true("(D) bad dir → []",
+        len(qforge_dbeta_du(bp3, qvecs, 5)) == 0)
+    fails = fails + _ck_true("(D) size mismatch → []",
+        len(qforge_dbeta_du([1.0, 2.0], qvecs, 0)) == 0)
+    fails = fails + _ck_true("(D) qvecs not 3· → []",
+        len(qforge_beta_phased([1.0, 2.0], r, rab, beta, l, tau)) == 0)
+
+    if fails == 0 { println("qforge_dvnl_du_selftest PASS") }
+    else { println("qforge_dvnl_du_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
