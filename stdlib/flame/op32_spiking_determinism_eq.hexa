@@ -30,6 +30,12 @@
 //   genuinely-imported production-lib leg via plasti_sim (which has no GPU
 //   seam). The cross-platform machine-independence proof + OP-30 FMA
 //   diagnostics live in op32_spiking_selfcontained.hexa.
+//   [HOLE CLOSED by OP-32b: tool/restore_frozen_seeds now appends an
+//   #ifndef HEXA_CUDA host body for hexa_forge_dispatch_stdp_pair to the
+//   restored self/runtime.c — `use spiking_lib` links + runs 0-GPU, and the
+//   host dispatch is byte-eq vs flame_stdp_pair (max|Δ|=0, see
+//   op32b_stdp_hostdispatch_eq.hexa). The verbatim copies below are kept
+//   as-is — still a valid run-to-run oracle.]
 //
 // 4th arch = spiking LIF RECURRENT net + local plasticity. Structurally
 // DISTINCT from CLMConvMoE (OP-15), the decoder block (OP-29), and the MLP

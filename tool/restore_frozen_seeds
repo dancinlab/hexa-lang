@@ -405,6 +405,122 @@ if [ -f "$rt" ] && ! grep -q 'OP-19e (HEXA-0POD' "$rt"; then
   echo "[restore_frozen_seeds] OP-19e: rewrote env capture to POSIX environ (musl-safe) in $rt"
 fi
 
+# ── OP-32b (HEXA-0POD) — flame STDP pair-dispatch host fallback ───────────────
+# The frozen self/runtime.c (151c52c8…, .c-graduation parent) predates the flame
+# spiking STDP GPU seam (archive/patches/archive/flame-stdp-pair-gpu-kernel.md,
+# anima LEGO §141): the runtime.h prototype (L1504) + the CUDA kernel emit
+# (self/cuda/runtime_cuda_emit.hexa _hx_cuda_kern_stdp_pair +
+# _hx_cuda_farr_stdp_pair_gpu) + the codegen lowering (self/codegen.hexa L7800
+# forge_dispatch_stdp_pair → hexa_forge_dispatch_stdp_pair) all landed, but the
+# runtime.c BODY was never committed (runtime.c is this gitignored frozen seed).
+# Consequence (OP-32 HOLE-2): `use "stdlib/flame/spiking_lib"` fails to LINK on
+# every CPU-only host — codegen emits all module fns (no DCE), so merely
+# importing the lib pulls the undefined _hexa_forge_dispatch_stdp_pair even if
+# flame_stdp_pair_gpu is never called. This appends the missing `#ifndef
+# HEXA_CUDA` HOST body (the OP-16/18 host-fallback pattern): the canonical
+# SEQUENTIAL STDP pair update, scalar-order-identical to the CPU reference
+# spiking_lib.hexa::flame_stdp_pair (same left-assoc (A·s_i)·tr_pre[j] muls,
+# same (ltp − ltd) subtraction order, same diagonal passthrough + clip), so the
+# host dispatch is BYTE-EQ vs the unfused reference by construction —
+# F-STDP-GPU-1 semantics on 0-GPU hosts. FP_CONTRACT OFF (clang -O2 would
+# otherwise contract `w_ij + (ltp − ltd)`'s feeding muls into fma/fms → ~1 ULP
+# divergence; same hazard the CUDA kernel defeats with __dmul_rn/__dadd_rn).
+# n is derived from the spike farr length (= t_len(spike), exactly what the
+# hexa wrapper uses). Both seam symbols are provided: hexa_forge_dispatch_…
+# (modern hexat lowering) + the bare forge_dispatch_… wrapper (deployed-hexat
+# bootstrap seam, same as forge_dispatch_matmul). Guarded #ifndef HEXA_CUDA so
+# a -DHEXA_CUDA build is byte-identical to today (no duplicate symbol with any
+# CUDA-side dispatcher). Appended at EOF where _hx_farr_table / hexa_as_num /
+# __hx_to_double / hexa_int are all in scope. Idempotent: the marker guards
+# against double-injection across re-restores.
+if [ -f "$rt" ] && ! grep -q 'OP-32b (HEXA-0POD' "$rt"; then
+  cat >> "$rt" <<'OP32B_EOF'
+
+/* ═══════════════════════════════════════════════════════════════════
+ * OP-32b (HEXA-0POD) — host fallback for the flame spiking STDP pair
+ * dispatcher so `use "stdlib/flame/spiking_lib"` LINKS + RUNS on 0-GPU
+ * hosts (closes OP-32 HOLE-2). Canonical sequential STDP pair update,
+ * scalar-order-identical to spiking_lib.hexa::flame_stdp_pair → host
+ * dispatch BYTE-EQ vs the CPU reference by construction.
+ * `#ifndef HEXA_CUDA` only → GPU path UNCHANGED. */
+#ifndef HEXA_CUDA
+#pragma STDC FP_CONTRACT OFF
+/* forge_dispatch_stdp_pair(W, tr_pre, tr_post, spike, out,
+ *                          A_plus, A_minus, w_max) -> int rc (0 ok / -1 err)
+ * W: N×N row-major farr · tr_pre/tr_post/spike: length-N farrs ·
+ * out: caller-allocated N×N farr, filled in place. N = len(spike)
+ * (exactly t_len(spike), the hexa-side wrapper's n). */
+HexaVal hexa_forge_dispatch_stdp_pair(HexaVal W_v, HexaVal tr_pre_v,
+                                      HexaVal tr_post_v, HexaVal spike_v,
+                                      HexaVal out_v, HexaVal A_plus_v,
+                                      HexaVal A_minus_v, HexaVal w_max_v) {
+    int64_t W  = hexa_as_num(W_v);
+    int64_t tp = hexa_as_num(tr_pre_v);
+    int64_t ts = hexa_as_num(tr_post_v);
+    int64_t sp = hexa_as_num(spike_v);
+    int64_t ot = hexa_as_num(out_v);
+    double  A_plus  = __hx_to_double(A_plus_v);
+    double  A_minus = __hx_to_double(A_minus_v);
+    double  w_max   = __hx_to_double(w_max_v);
+    if (W < 0 || tp < 0 || ts < 0 || sp < 0 || ot < 0)      return hexa_int(-1);
+    if (W  >= _hx_farr_count || tp >= _hx_farr_count ||
+        ts >= _hx_farr_count || sp >= _hx_farr_count ||
+        ot >= _hx_farr_count)                               return hexa_int(-1);
+    int64_t n = _hx_farr_table[sp].len;
+    if (n <= 0)                                             return hexa_int(-1);
+    int64_t nn = n * n;
+    if (_hx_farr_table[W].len  < nn || _hx_farr_table[ot].len < nn ||
+        _hx_farr_table[tp].len < n  || _hx_farr_table[ts].len < n)
+        return hexa_int(-1);
+    double* WB = _hx_farr_table[W].buf;
+    double* TP = _hx_farr_table[tp].buf;
+    double* TS = _hx_farr_table[ts].buf;
+    double* SP = _hx_farr_table[sp].buf;
+    double* OT = _hx_farr_table[ot].buf;
+    if (!WB || !TP || !TS || !SP || !OT)                    return hexa_int(-1);
+    double neg_w_max = 0.0 - w_max;
+    for (int64_t i = 0; i < n; i++) {
+        double s_i      = SP[i];
+        double trpost_i = TS[i];
+        for (int64_t j = 0; j < n; j++) {
+            int64_t idx  = i * n + j;
+            double  w_ij = WB[idx];
+            double  wd;
+            if (i == j) {
+                /* diagonal: dW = 0, weight passes through clip unchanged */
+                wd = w_ij;
+            } else {
+                /* same left-assoc scalar order as flame_stdp_pair:
+                 * ltp = (A_plus·s_i)·tr_pre[j] · ltd = (A_minus·trpost_i)·spike[j]
+                 * wnew = w_ij + (ltp − ltd) — FP_CONTRACT OFF above keeps each
+                 * op a separately-rounded IEEE-754 mul/sub/add (no fma/fms). */
+                double ltp = A_plus * s_i * TP[j];
+                double ltd = A_minus * trpost_i * SP[j];
+                wd = w_ij + (ltp - ltd);
+            }
+            if (wd > w_max)     wd = w_max;
+            if (wd < neg_w_max) wd = neg_w_max;
+            OT[idx] = wd;
+        }
+    }
+    return hexa_int(0);
+}
+/* Bare-symbol bootstrap seam — same pattern as forge_dispatch_matmul:
+ * a deployed hexat that predates the 8-arg builtin registration emits a
+ * literal forge_dispatch_stdp_pair(...) call. */
+HexaVal forge_dispatch_stdp_pair(HexaVal W_v, HexaVal tr_pre_v,
+                                 HexaVal tr_post_v, HexaVal spike_v,
+                                 HexaVal out_v, HexaVal A_plus_v,
+                                 HexaVal A_minus_v, HexaVal w_max_v) {
+    return hexa_forge_dispatch_stdp_pair(W_v, tr_pre_v, tr_post_v, spike_v,
+                                         out_v, A_plus_v, A_minus_v, w_max_v);
+}
+#pragma STDC FP_CONTRACT DEFAULT
+#endif
+OP32B_EOF
+  echo "[restore_frozen_seeds] OP-32b: appended flame STDP pair-dispatch host fallback (hexa_forge_dispatch_stdp_pair) to $rt"
+fi
+
 # Unstage everything we just restored so the index reflects the graduated tree;
 # the working-tree files remain as the ephemeral build input.
 git reset -q -- "${FROZEN_SEEDS[@]}" 2>/dev/null || true
