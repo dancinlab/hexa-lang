@@ -1,5 +1,39 @@
 # HEXA-0POD — log
 
+## 2026-06-12 — OP-32 DONE: machine-independence on a 4th flame arch (spiking LIF recurrent + local plasticity) + OP-30 compliance + NEW binary-spike FMA-immunity finding ($0 · 0-pod)
+- Deep-dive round-8 branch ②: generalizes OP-15/29/31's machine-independence from 3 archs to FOUR. 4th arch = a spiking
+  LIF RECURRENT network with local STDP plasticity (production spiking_lib: flame_event_threshold + flame_refractory_step
+  + flame_stdp_pair) + the plasti_sim competitive-Hebbian learner — the first RECURRENT (state threaded across T=32
+  steps: v · refr · traces · plastic Wrec · s_prev), first EVENT-DRIVEN, first NON-BACKPROP-learning arch in the series.
+  NEW primitive class vs CLMConvMoE/decoder/MLP: ≥-threshold branch, integer refractory countdown w/ clamp, clip,
+  winner-take-all argmax, local STDP/Hebbian updates (no loss, no gradient).
+- ORACLES: stdlib/flame/op32_spiking_determinism_eq.hexa (PART A imports PRODUCTION plasti_sim ps_present chain, W
+  threaded over S=24 presentations; PART B = T-step LIF+STDP chain w/ verbatim spiking CPU primitive bodies) +
+  stdlib/flame/op32_spiking_selfcontained.hexa (NO `use`, scp-runnable; inline-ascending currents; 2 in-band OP-30 FMA
+  diagnostics).
+- byte-eq RUN-TO-RUN: raster · plastic W · membrane v · both traces · plasti_sim W + winner sequence ALL max|Δ|=0, with
+  NON-TRIVIAL dynamics (25/320 spikes fired · STDP moved weights max|Δ| 0.254879 · ≥2 distinct winners).
+- CROSS-PLATFORM byte-IDENTICAL (the real OP-30 test): local arm64-macos vs aiden x86-linux (free CPU pool
+  @192.168.50.119, $0, NO vast/GPU) — identical checksums raster 236398270 / final-W 876398044 / final-v 147958574 +
+  identical IEEE-754 fingerprints RASTER `0 0 0 124 77 46 172 65` · W `0 0 0 238 98 30 202 65` · V `0 0 0 92 86 163 161 65`.
+- OP-30: the spiking substrate is compliant BY CONSTRUCTION (pure t_* loops — no farr_matmul anywhere in production);
+  the oracle's only matmul-shaped op (input/recurrent current) is inline-ascending. DIAG-A: rate-coded REAL-VALUED drive
+  through the FMA-fused farr_matmul byte-DIVERGES arm64 1478294112 vs x86 210297454 (live in-band reproduction of the
+  OP-29/30/31 root cause on the 4th arch). NEW FINDING DIAG-B: the binary {0,1} spike pattern through the SAME fused
+  kernel is byte-IDENTICAL cross-ISA (1881150137 both) — fma(a,b,c) with b∈{0,1} makes a·b EXACT ⇒ fused≡unfused, so
+  binary-SPIKE matvecs are provably AND now measurably FMA-immune; rate-coded drives are not. The OP-30 boundary is
+  precision-structural (rule unchanged — traces/weights go real-valued the moment plasticity engages).
+- libm: CLEAN BY CONSTRUCTION — no transcendental on the arch; leak/trace decays are binary-exact rationals (15/16 ·
+  7/8 · 13/16), exp(−dt/τ) folded into constants; no dt_* even needed.
+- HOLE-2 FOUND (pre-existing, link-level, documented NOT closed — packaging follow-up): `use "stdlib/flame/spiking_lib"`
+  fails to LINK on CPU-only hosts: flame_stdp_pair_gpu → builtin forge_dispatch_stdp_pair → codegen lowers to
+  hexa_forge_dispatch_stdp_pair, whose prototype (runtime.h L1504) + CUDA emit exist but whose CPU oracle body is ABSENT
+  from the regenerated runtime.c (grep=0; 2 independent `ld: symbol not found` repros; git -S shows it was never
+  committed). hexa codegen emits all module fns (no DCE) so even non-callers fail. Not a determinism hole — the
+  primitive semantics are proven deterministic+machine-independent by this very oracle.
+- Milestone OP-32 flipped [x]. Verdict .verdicts/hexa-0pod/F-OP32-4TH-ARCH.txt. aiden temp cleaned (leak-0). $0 · 0-GPU ·
+  0-pod · no vast · foreign pod NOT touched.
+
 ## 2026-06-11 — OP-24d DONE: G1 turnkey kit pre-gates the proven input-side determinism (OP-28/28b) ($0 · 0-pod · NO GPU/vast/pod)
 - Deep-dive round-7 branch ④: closes the 0-pod-feasible completeness of gap G1 (real-corpus end-to-end). The GPU
   trainer run stays GPU-build-gated, but the now-proven INPUT-side pieces are WIRED into OP-24c's turnkey kit.

@@ -1,0 +1,221 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP32-4TH-ARCH — machine-independent byte-exact determinism GENERALIZES to a
+FOURTH flame model architecture (a spiking LIF RECURRENT network with local
+STDP/Hebbian plasticity — NOT CLMConvMoE, NOT the decoder block, NOT the MLP)
++ OP-30 compliance verified, + a NEW arch-specific FMA finding (binary-spike
+matvecs are FMA-IMMUNE even through the fused kernel — empirically confirmed)
+HEXA-0POD OP-32 · deep-dive round-8 branch ② · CPU-LOCAL `hexa run` · 0-GPU · $0
+════════════════════════════════════════════════════════════════════════════
+
+GAP (OP-15 / OP-29 #3045 / OP-31 #3048 / OP-30 #3047 — generalize 3 archs → 4)
+  Machine-independence was proven on THREE flame architectures: CLMConvMoE
+  (OP-15 capstone), the pre-norm Transformer decoder block (OP-29), and the
+  feed-forward MLP (OP-31). All three are FEED-FORWARD: no architecture so far
+  carries state ACROSS timesteps. A reviewer could still ask: does "ANY flame
+  model" include RECURRENT / event-driven / non-backprop substrates? OP-32
+  answers it on a FOURTH, structurally-distinct architecture exercising a NEW
+  primitive class — and adds a new in-band OP-30 result while doing so.
+
+4th ARCHITECTURE (new primitive class — none shared with the 3 proven archs)
+  A spiking Leaky-Integrate-and-Fire (LIF) RECURRENT network with local
+  pair-based STDP plasticity (the production spiking_lib substrate), plus the
+  production plasti_sim competitive-Hebbian learner:
+    x_t[D] ─Win→ I[i] ─(+ Wrec·s_prev recurrent)→ leaky integrate (α·v + I,
+    refractory clamp) → event threshold (v ≥ v_th) → spike reset → refractory
+    countdown → eligibility-trace decay → pair-STDP plastic update of Wrec →
+    next step (T=32 steps, N=10 units, D=8 inputs)
+  NEW DETERMINISM SURFACE — recurrence/state-threading: v, refr, tr_pre,
+  tr_post, Wrec and s_prev are THREADED through T sequential steps; one
+  divergent op at step t corrupts every step > t, so the final fingerprints
+  are maximally order-sensitive. NEW PRIMITIVES (vs all 3 proven archs):
+  event thresholding (≥ branch, F-SPIKE-1), integer refractory countdown with
+  clamp (F-SPIKE-2), clip, winner-take-all argmax (plasti_sim ps_winner), and
+  NON-BACKPROP local learning (pair-STDP F-SPIKE-3 + competitive Hebbian
+  ps_hebb_update — event-driven plasticity, no loss, no gradient).
+    - vs CLMConvMoE: no Conv1d, no MoE, no GroupNorm, no CE/softmax
+    - vs decoder block: no attention, no RoPE, no SwiGLU, no RMSNorm
+    - vs MLP: no dense GEMM layers, no GELU — and it LEARNS without backprop
+  Config tiny CPU-runnable: N=10 · D=8 · T=32 (LIF) ; Np=6 · Dp=8 · S=24
+  (plasti_sim). Deterministic init (fixed LCG seeds 2121/2222/3001/4001/7001;
+  no RNG, no clock).
+
+OP-30 MATMUL-PATH AUDIT (this arch)
+  spiking_lib's production primitives are PURE t_get/t_set loops — NO
+  farr_matmul, NO forge_dispatch on the CPU path → OP-30-compliant BY
+  CONSTRUCTION (unlike OP-31's nn_linear_fwd which rode the fused kernel).
+  The only matmul-shaped op on the arch is the per-step input/recurrent
+  current I[i] = Σ_j Win[i·D+j]·x_t[j] + Σ_j Wrec[i·N+j]·s_prev[j] — computed
+  INLINE in fixed ascending j (plain mul+add, no C kernel), the OP-29/30/31
+  discipline. plasti_sim's ps_drive is ALREADY inline-ascending in production.
+LIBM AUDIT (this arch) — clean BY CONSTRUCTION: NO transcendental anywhere on
+  the path. Membrane leak and trace decays are FIXED binary-exact rational
+  constants (α=15/16=0.9375 · decay_pre=7/8=0.875 · decay_post=13/16=0.8125 ·
+  A±=1/32,1/64 · v_th=0.5) — the usual exp(−dt/τ) is folded into the constant,
+  so no dt_* is even needed; every op is +,−,·,/ and compares on fp64.
+
+ORACLES (pure `hexa run`, CPU, 0-GPU)
+  stdlib/flame/op32_spiking_determinism_eq.hexa
+    PART A imports the PRODUCTION plasti_sim (ps_seed_row + ps_present chain:
+    ps_drive → ps_winner → ps_hebb_update) over S=24 sequential presentations
+    with W threaded across presentations; PART B runs the T-step LIF+STDP
+    recurrent chain with the spiking_lib CPU primitive bodies copied VERBATIM
+    (same t_* production tensor surface; see HOLE-2 for why not `use`d).
+    Asserts ALL state byte-eq run-to-run (max|Δ|=0) + non-trivial dynamics.
+  stdlib/flame/op32_spiking_selfcontained.hexa
+    single-file twin (NO `use`) inlining the verbatim primitives + LCG, runs
+    via scp on ANY host (the OP-28/29/31 cross-platform pattern). Inline-
+    ascending currents (OP-30). Emits 3 order-sensitive IEEE-754 fingerprints
+    (raster · final plastic W · final membrane v) + TWO in-band OP-30 FMA
+    diagnostics through the FMA-fused C farr_matmul kernel (tensor_lib L58
+    "ikj order, FMA-fused under clang -O2" — the OP-29/31 divergence kernel):
+      DIAG-A rate-coded REAL-VALUED drive Xr[T·D]·WinT[D·N] → expected DIVERGE
+      DIAG-B the BINARY {0,1} spike pattern Xs[T·D]·WinT  → expected IDENTICAL
+    DIAG-B's FMA-IMMUNITY ARGUMENT: fma(a,b,c) with b∈{0,1} — a·b is EXACT
+    (a·1=a, a·0=0), so round(a·b+c) == round(round(a·b)+c); fused and unfused
+    forms are bit-identical. A binary-spike matvec CANNOT exhibit the FMA hole.
+
+────────────────────────────────────────────────────────────────────────────
+RESULT 1 — byte-eq RUN-TO-RUN (max|Δ|=0)   [both oracles, local arm64-macos]
+────────────────────────────────────────────────────────────────────────────
+  op32_spiking_selfcontained.hexa:
+    (1) RASTER   max|Δ| run-to-run = 0.0
+    (2) FINAL-W  max|Δ| run-to-run = 0.0    (post-STDP plastic weights)
+    (3) FINAL-V  max|Δ| run-to-run = 0.0    (membrane after T=32 steps)
+    (4) TRACE-pre / TRACE-post max|Δ| = 0.0 / 0.0
+    spikes fired = 25 of 320 cells · STDP weight movement max|Δ| vs init =
+    0.254879  (dynamics NON-TRIVIAL: the net spiked AND learned)
+    F-OP32-4TH-ARCH = 1
+  op32_spiking_determinism_eq.hexa (PROD plasti_sim + verbatim spiking CPU):
+    [A] PROD plasti_sim  W   max|Δ| run-to-run = 0.0
+    [A] PROD plasti_sim wins max|Δ| run-to-run = 0.0   (≥2 distinct winners)
+    [B] RASTER/FINAL-W/FINAL-V/TRACES all max|Δ| run-to-run = 0.0
+    F-OP32-4TH-ARCH (run-to-run, prod plasti_sim + verbatim spiking CPU) = 1
+  → the whole 4th-arch recurrent chain (32 threaded steps × plastic updates)
+    is byte-identical run-to-run on arm64-macos. Y.
+
+────────────────────────────────────────────────────────────────────────────
+RESULT 2 — CROSS-PLATFORM byte-IDENTICAL (the REAL OP-30 test)
+            op32_spiking_selfcontained.hexa · 0-GPU · NO vast · $0
+────────────────────────────────────────────────────────────────────────────
+LOCAL arm64-macos (Darwin 25.5.0, this workstation):
+    raster  checksum = 236398270
+    final-W checksum = 876398044
+    final-v checksum = 147958574
+    OP30-DIAG-A fma_matmul(rate-coded)   checksum = 1478294112  ← FMA kernel
+    OP30-DIAG-B fma_matmul(binary-spike) checksum = 1881150137  ← FMA kernel
+    CROSSPLAT-FINGERPRINT-RASTER = 0 0 0 124 77 46 172 65
+    CROSSPLAT-FINGERPRINT-W      = 0 0 0 238 98 30 202 65
+    CROSSPLAT-FINGERPRINT-V      = 0 0 0 92 86 163 161 65
+    F-OP32-4TH-ARCH = 1
+
+AIDEN x86-linux (Linux x86_64, free CPU pool host @192.168.50.119 · NO GPU · $0):
+    raster  checksum = 236398270
+    final-W checksum = 876398044
+    final-v checksum = 147958574
+    OP30-DIAG-A fma_matmul(rate-coded)   checksum = 210297454   ← FMA kernel
+    OP30-DIAG-B fma_matmul(binary-spike) checksum = 1881150137  ← FMA kernel
+    CROSSPLAT-FINGERPRINT-RASTER = 0 0 0 124 77 46 172 65
+    CROSSPLAT-FINGERPRINT-W      = 0 0 0 238 98 30 202 65
+    CROSSPLAT-FINGERPRINT-V      = 0 0 0 92 86 163 161 65
+    F-OP32-4TH-ARCH = 1
+
+  THREE findings, all clean and honest:
+  (a) The det path (raster + plastic weights + membrane) is byte-IDENTICAL on
+      arm64-macos AND x86-linux: same 3 checksums (236398270 / 876398044 /
+      147958574) + same 3 IEEE-754 fingerprints on BOTH. The 4th-arch
+      recurrent spiking chain is machine-independent. Y.
+  (b) OP30-DIAG-A (REAL-VALUED rate-coded drive through the FMA-fused
+      farr_matmul) byte-DIVERGES across ISAs: arm64 1478294112 vs x86
+      210297454 on byte-identical fp64 inputs — the OP-29/30/31 root cause
+      reproduced live in-band on the 4th arch. Had this arch's currents been
+      rate-coded AND routed through the fused kernel, it would NOT be
+      machine-independent; the inline-ascending current is what closes it.
+  (c) NEW FINDING — OP30-DIAG-B (the BINARY {0,1} spike pattern through the
+      SAME FMA-fused kernel) is byte-IDENTICAL across ISAs: 1881150137 on
+      BOTH. This empirically CONFIRMS the FMA-immunity argument (a·b exact
+      for b∈{0,1} ⇒ fused ≡ unfused): binary-SPIKE-driven matvecs cannot
+      exhibit the cross-ISA FMA divergence even through the forbidden kernel,
+      while RATE-coded (real-valued) drives can (DIAG-A). The OP-30 invariant
+      is precision-structural, not superstition — and spiking (event-coded)
+      models occupy a naturally FMA-safe corner of it. (The contract's RULE is
+      unchanged: det-path matmul = inline ascending — the immunity is an
+      input-value property, not a kernel property, and traces/weights are
+      real-valued the moment plasticity engages.)
+
+────────────────────────────────────────────────────────────────────────────
+OP-30 COMPLIANCE / HOLE STATUS
+────────────────────────────────────────────────────────────────────────────
+  HOLE-1 (FMA, none on this arch's production path): spiking_lib's CPU
+  primitives are pure t_* loops — no farr_matmul anywhere → OP-30-compliant
+  BY CONSTRUCTION. The oracle's only matmul-shaped op (input/recurrent
+  current) is written inline-ascending. The would-be hole is DEMONSTRATED
+  in-band anyway (DIAG-A diverges) + bounded (DIAG-B immune for binary spikes).
+  LIBM — clean BY CONSTRUCTION: no transcendental on the arch (decays are
+  binary-exact rational constants; no dt_* even needed). The identical
+  cross-platform fingerprints confirm it. NO libm hole.
+  HOLE-2 (link-level, FOUND, pre-existing, documented — NOT closed here):
+  `use "stdlib/flame/spiking_lib"` does NOT LINK on a CPU-only host with the
+  current regenerated runtime: spiking_lib::flame_stdp_pair_gpu calls the
+  builtin forge_dispatch_stdp_pair, lowered by codegen (self/codegen.hexa
+  L7799) to hexa_forge_dispatch_stdp_pair — whose PROTOTYPE exists
+  (self/runtime.h L1504) and whose CUDA kernel emit exists (self/cuda/
+  runtime_cuda_emit.hexa _hx_cuda_kern_stdp_pair), but whose CPU oracle BODY
+  is ABSENT from the regenerated self/runtime.c (grep = 0 matches; verified
+  on the Jun-2 main-repo runtime.c AND by two independent link failures:
+  `ld: symbol(s) not found: _hexa_forge_dispatch_stdp_pair`) — even though
+  the importer never CALLS the GPU wrapper (hexa codegen emits all module
+  fns; no DCE). git -S history shows the CPU body was never committed: the
+  seam landed header+codegen+CUDA-emit only. IMPACT: any CPU-only `hexa run`
+  importing spiking_lib fails at link. WORKAROUND used here (honest, in
+  scope): the eq twin imports the production plasti_sim (no GPU seam — links
+  clean) and copies the 3 spiking CPU primitive bodies VERBATIM; the proper
+  CLOSE (fold a CPU body for hexa_forge_dispatch_stdp_pair into the runtime
+  seed) touches runtime generation and is left as a follow-up — it is a
+  PACKAGING hole, not a determinism hole (the primitive semantics themselves
+  are proven deterministic + machine-independent by this very oracle).
+
+────────────────────────────────────────────────────────────────────────────
+GATE (g5) — ALL GREEN
+  [x] 4th-arch oracle runs on CPU (`hexa run`) — both import + self-contained
+  [x] byte-eq RUN-TO-RUN: raster, plastic W, membrane v, both traces, plasti_sim
+      W + winner sequence all max|Δ|=0 (both oracles) — with NON-TRIVIAL
+      dynamics (25 spikes fired, STDP moved weights by 0.2549, ≥2 winners)
+  [x] CROSS-PLATFORM byte-IDENTICAL: arm64-macos == x86-linux (3 checksums +
+      3 fingerprints on the det path)
+  [x] OP-30 compliance: production substrate has NO farr_matmul (compliant by
+      construction); currents inline-ascending; the FMA divergence exhibited
+      in-band (DIAG-A 1478294112 vs 210297454) AND the new binary-spike
+      immunity confirmed (DIAG-B 1881150137 == 1881150137). libm-clean by
+      construction. HOLE-2 (spiking_lib CPU link packaging) found + documented
+      honestly (not closed — runtime-seed follow-up).
+
+VERDICT
+  Machine-independence GENERALIZES to a FOURTH flame model architecture — a
+  spiking LIF RECURRENT network with local STDP/Hebbian plasticity — Y. This
+  is the first RECURRENT (state-threaded), first EVENT-DRIVEN, and first
+  NON-BACKPROP-learning arch in the series: the determinism construction
+  (fixed state-threading order + inline ascending reductions + binary-exact
+  constants, NO libm, NO FMA-fused C kernel) is GENERAL across FOUR
+  structurally-distinct archs (CLMConvMoE · decoder block · MLP · spiking
+  LIF). OP-30 is both COMPLIED WITH and SHARPENED: the fused-kernel divergence
+  reproduces on rate-coded (real-valued) drives, while binary {0,1} spike
+  drives are PROVABLY and now MEASURABLY FMA-immune — a precision-structural
+  boundary of the invariant, new with this arch. One pre-existing link-level
+  packaging hole found + documented (spiking_lib CPU import; HOLE-2). $0 ·
+  0-GPU · 0-pod · no vast · no foreign-pod touch.
+
+PROVENANCE
+  oracles: stdlib/flame/op32_spiking_determinism_eq.hexa (run-to-run; imports
+           production plasti_sim; verbatim spiking CPU primitives) ·
+           stdlib/flame/op32_spiking_selfcontained.hexa (cross-platform
+           machine-independent twin + OP-30 FMA diagnostics A/B)
+  4th arch: stdlib/flame/spiking_lib.hexa (flame_event_threshold ·
+           flame_refractory_step · flame_stdp_pair) + stdlib/flame/
+           plasti_sim.hexa (ps_seed_row · ps_present = ps_drive → ps_winner →
+           ps_hebb_update)
+  OP-30 risk kernel: tensor_lib.hexa L58 farr_matmul "ikj order, FMA-fused"
+  hosts: local arm64-macos (Darwin 25.5.0) + aiden x86-linux (sidecar pool,
+         free CPU, $0, NO vast, NO GPU, NO foreign-pod touch; temp cleaned)
+  prior: F-OP15-STEP-DETERMINISM (CLMConvMoE) · F-OP29-2ND-ARCH (decoder
+         block) · F-OP31-3RD-ARCH (MLP) · F-OP30-CROSSISA-CONTRACT (invariant)
+════════════════════════════════════════════════════════════════════════════
