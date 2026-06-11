@@ -153,13 +153,35 @@ $0.
 
 ### Cross-platform measurements (the OP-19/19b layer)
 
-Platforms tested — **free pool + local, ZERO vast, ZERO pod rental**:
+Platforms tested — **free pool + local, ZERO vast, ZERO pod rental**. The
+recorded environment matrix (each row = a distinct environment whose
+deterministic folds were measured and recorded in a named verdict):
 
-| host | platform | role |
-|---|---|---|
-| local | arm64-macos (Darwin libm) | this machine |
-| ghost | arm64-macos (Darwin libm) | pool |
-| aiden | x86_64-linux (glibc) | pool — the cross-arch *and* cross-OS contrast |
+| # | host | platform | environment fingerprint | verdict(s) |
+|---|---|---|---|---|
+| 1 | local | arm64-macos (Darwin libm) | Darwin (Apple Silicon) | F-OP19 / F-OP19B |
+| 2 | ghost | arm64-macos (Darwin libm) | Darwin (Apple Silicon), pool | F-OP19 / F-OP19B |
+| 3 | aiden | x86_64-linux (glibc) | glibc x86 (exact glibc/distro version not recorded; host down at OP-19g recording time) | F-OP19 / F-OP19B |
+| 4 | pi5 | arm64-linux (glibc) | Raspberry Pi 5, Linux ubuntu 6.8.0-1007-raspi aarch64 | F-OP19C |
+| 5 | **summer** | x86_64-linux (glibc) | **Ubuntu 24.04.2 LTS (Noble Numbat) · kernel 6.17.0-35-generic x86_64 · glibc 2.39 (Ubuntu GLIBC 2.39-0ubuntu8.7) · AMD Ryzen 5 9600X** | F-OP19G |
+| 6 | musl | x86_64-linux (**musl**, Alpine 3.20 container on summer) | /lib/ld-musl-x86_64.so.1 — a 3rd distinct libc/libm impl | F-OP19D / F-OP19E |
+
+Rows 1–3 are the original OP-19/19b measurement; rows 4–6 extended the matrix
+(OP-19c/19d/19e); **row 5 (OP-19g) formalizes summer** — previously only an
+ad-hoc substitute leg in OP-33/35 — as a recorded environment with a precise
+glibc fingerprint. On summer the deterministic folds reproduce the golden
+values exactly (`dt_exp` CE-bwd `7679248634312321699`, `dt_erf` GELU-fwd
+`4548590605583584556`, GELU-bwd `4249661408190172843`), and summer's **libm**
+folds equal aiden's recorded glibc-x86 libm folds (CE-bwd-libm
+`3352931952497630952`, GELU-fwd-libm `6306829276275644424`, GELU-bwd-libm
+`5500011732941122953`) — two independent glibc x86 hosts rounding identically
+on the libm lane while still diverging from Darwin/musl, consistent with the
+OP-19c thesis that the libm split is a per-libc effect. (Aiden's exact glibc
+version was never recorded and the host was down at OP-19g time, so the
+glibc-*version*-diversity of the pair is honestly unknown; what row 5 adds for
+certain is a second independent glibc x86_64 host with its fingerprint pinned.)
+Note summer ran the **self-contained** oracle lane only — its older hexa build
+miscompiles cross-module imports (the F-OP33/35-documented toolchain caveat).
 
 **OP-19 — CE-backward libm `exp` was the cross-platform hole.** A self-contained
 3-platform byte oracle (`f64_to_bytes_le` IEEE-754 dump folded to an i64
