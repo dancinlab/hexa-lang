@@ -10,6 +10,26 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-28-CORPUS-LOADER-DET (unique anchor — the 0-pod-feasible slice of gap G1 (real-corpus end-to-end): the trainer STEP is GPU-build-gated but the INPUT side — the data loader / token pipeline (tokenize->pack->batch) producing (ids,targets) — runs on CPU and IS 0-pod-verifiable; byte-eq oracle proving it deterministic + machine-independent, so the real-corpus INPUT is proven reproducible before the GPU step runs) -->
+- [x] **OP-28 — real-corpus token-pipeline determinism oracle (0-pod slice of gap G1; input side proven, GPU step still gated)** —
+  GREEN. 0-pod slice of OP-26b gap G1 (real-corpus end-to-end, GPU-build-gated): the trainer STEP needs the GPU,
+  but its INPUT side — the token pipeline that produces the (ids,targets) tensors fed to clm_step — runs on CPU
+  and IS 0-pod-verifiable. THE PIPELINE (verbatim from flame_d32_corpus_test.hexa, the production corpus path):
+  (1) tokenize = read_file_bytes(corpus) → byte ids [0,256) [V=256 byte-level vocab, the anima d_corpus_fire
+  equivalent]; (2) pack/window = IDS[s*T+p]=toks[s*stride+p], YS[s]=toks[s*stride+T] (pure integer index math,
+  fixed ascending (s,p) order); (3) batch = (IDS,YS)==(ids,targets). ORACLE stdlib/flame/op28_corpus_loader_det.hexa
+  (SELF-CONTAINED, no `use` → runs via scp/stdin on any host; embedded byte-string corpus = the same bytes
+  read_file_bytes yields, disk-free). FINDING: the byte-level token path is PURE INTEGER — NO float, NO libm
+  transcendental, NO dict/set/hash-ordered iteration over a vocab — so (ids,targets) are bit-identical run-to-run
+  AND across machines BY CONSTRUCTION. PROVEN not just asserted: (a) in-process double-run + process-to-process
+  full-output diff → (ids,targets) byte-eq run-to-run max|Δ|=0; (b) CROSS-PLATFORM — local arm64-macos vs aiden
+  x86-linux (free CPU pool host, $0, NO vast/NO GPU) emit the byte-IDENTICAL IEEE-754 fingerprint `0 0 0 216 16
+  88 186 65` (checksum 441979096) + identical ids/targets. HONEST: the GPU TRAINER STEP (nn_decoder_fwd/grad/AdamW
+  on the (ids,targets)) is the GPU-build-gated remainder of G1 — NOT closed here, by design; this closes the
+  INPUT-side 0-pod slice. RESIDUAL input-side item: the BPE path (V=151936) is also documented-integer but flame's
+  BPE has a known upstream chr()-unicode limitation (not cleanly 0-pod-runnable today) — flagged, not locked. $0 ·
+  0-GPU · 0-pod · no vast. Verdict .verdicts/hexa-0pod/F-OP28-CORPUS-LOADER-DET.txt.
+
 <!-- ANCHOR:OP-23B-TF32-DRIFT-LONG (unique anchor — extend OP-23's TF32 trajectory-drift validation to N=500 + an LR schedule (warmup+cosine decay) + a harder synthetic; does bounded loss-tracking hold at the longer/harsher horizon, or does a late blow-up / LR-amplified drift appear; aiden 5070, 0-pod) -->
 - [x] **OP-23b — TF32 drift N=500 + LR-schedule: bounded-tracking holds at longer/harsher horizon (or honest late-blowup bound)** —
   GREEN. Extended OP-23's TF32-vs-FP64 trajectory-drift harness to a LONGER + HARSHER regime: N=500 (5x),
