@@ -1,0 +1,79 @@
+F-W16-WGMMA-H100-MEASURE — OP-21A w16 descriptor-direct own-GEMM, REAL H100 (sm_90a) gate run
+================================================================================================
+TIER: 🟢 GREEN (ran + measured + pre-registered falsifier RESOLVED with a number on real Hopper)
+DATE: 2026-06-12
+HW:   vast contract 40664227, label hexa-g1w16 (ONE-TIME user-approved H100 rental, ~$0.72, leak-0).
+      NVIDIA H100 80GB HBM3, compute_cap 9.0 (sm_90a), driver 550.163.01.
+      nvcc release 12.6, V12.6.77 (EXACT W10/W12/W13 apples-match toolchain).
+      image nvidia/cuda:12.6.2-devel-ubuntu22.04. Pod DESTROYED after capture, leak-0 confirmed.
+KIT:  tool/wgmma/build_w16.sh + self/native/wgmma/wgmma_tf32_w16.cu + wgmma_tf32_w10_lib.h.
+      (CPU-de-risked pre-pod: w16_canon_cpu_check / w16_modes / w16_op29_ref — GPU run MEASURES.)
+
+RESULT (one line): The OP-21A D1 hypothesis (canonical-atom re-encode lets a descriptor-DIRECT
+wgmma read the SWIZZLE_128B-TMA tile bit-exactly, deleting the 32KB software decode band) is
+FALSIFIED on real sm_90a. MODE 0 canonical-decode PASSES rel_rms 0; MODE 1 descriptor-direct
+FLOORS at rel_rms 1.107 at the default config AND across the FULL inline (lbo×sbo×boff×swmode)
+sweep — NO config reaches rel_rms 0. Per g5 the hard gate STOPS before any MODE 4 / perf: no
+TFLOP/s is produced on a falsified read law. The W10 70.7 TFLOP/s / 6.09x frontier is KEPT (the
+W11/W12/W13 hard rule). The documented OP-21B fallback (gemm_w16b, keep the decode band) is the
+indicated next kernel. This REPRODUCES the W15 (3200-cfg) + BENCH-12 (1.009 floor) wall on the
+canonical-atom box: the TMA-swizzle <-> wgmma-descriptor-swizzle layout interaction is REAL and
+is NOT removable by canonical re-encoding + a descriptor-field sweep alone (route-(a) PRE-PERMUTE,
+already shipped as OG16/OG17/BENCH-12/14, is the bit-exact path — NOT this in-place descriptor).
+
+This is the PRE-REGISTERED FALSIFIER outcome the kit + the kernel header documented as a
+"publishable closed-negative WITH a number". The build was clean (no compile/run fault); the
+gate machinery executed exactly as designed; the falsification is a genuine measured device fact.
+
+================================================================================================
+VERBATIM ON-POD OUTPUT (build_w16.sh, captured 2026-06-12 on H100 sm_90a):
+================================================================================================
+================= ENV (hard provision guards) =================
+Cuda compilation tools, release 12.6, V12.6.77
+Build cuda_12.6.r12.6/compiler.34841621_0
+NVIDIA H100 80GB HBM3, 9.0, 550.163.01
+PROVISION OK: nvcc runnable + sm_90a (compute_cap 9.0) GPU visible. Proceeding.
+
+================= BUILD w16 (W16_PRODUCER_WG=1) =================
++ nvcc -O3 -arch=sm_90a -lcublas -lcuda -DW16_PRODUCER_WG=1 -Xptxas -v wgmma_tf32_w16.cu -o /tmp/w16
+W16-BUILD: OK
+--- ptxas -v (regs/CTA + setmaxnreg acceptance; watch for C7507 'setmaxnreg ignored') ---
+ptxas info    : (C7508) Potential Performance Loss: 'setmaxnreg' ignored; unable to determine register count at entry.
+ptxas info    : Compiling entry function 'gemm_w16b' for 'sm_90a'
+    ... Used 94 registers (gemm_w16b), 94 registers (gemm_w16), 90 registers (other entries) ...
+!! ptxas IGNORED setmaxnreg (C7507) — the W12 failure mode. (continuing; D5 not in effect — fallback path)
+
+================= GATE 1/3 — MODE 0 canonical-decode probe (rel_rms 0, HARD GATE) =================
+W16-PROBE MODE=0 canonical-decode: exact=4096/4096 rel_rms=0.000e+00 PASS (canonical law recovers swizzled tile)
+MODE0 exit=0
+MODE 0 PASSED — canonical decode recovers the swizzled tile.
+
+================= GATE 2/3 — MODE 1 descriptor-direct probe (the D1 FALSIFIER, HARD GATE) =================
+W16-PROBE MODE=1 descriptor-direct lbo=16 sbo=1024 boff=0 sw=1: exact=28/4096 rel_rms=1.107e+00 FAIL (D1 falsified at this config -> sweep or fall back to OP-21B)
+--- MODE 1 floored at default; SWEEP (lbo,sbo,boff,swmode) INLINE (W15 iterate, canonical landing) ---
+MODE 1 GATE FAILED across the full sweep — D1 canonical landing did NOT reach rel_rms 0.
+the W15 wall reproduces on the canonical box too -> M3 stays dead. SWITCH to OP-21B:
+   nvcc -O3 -arch=sm_90a -lcublas -lcuda -DW16_PRODUCER_WG=1 -DW16_OP21B -o /tmp/w16 wgmma_tf32_w16.cu   (gemm_w16b: keep band, no M3)
+OP-21B is the documented fallback — re-run with gemm_w16b wired as MODE 4 (kit follow-up).
+
+!! MODE 1 hard gate failed — STOP per g5: no w16 full GEMM, no perf. W10 70.7 frontier KEPT.
+
+================= DESTROY (leak 0) — runs on EVERY exit =================
+(EXIT trap fired — pod destroyed by the operator immediately after capture; leak-0 confirmed.)
+
+================================================================================================
+NOTES
+- MODE 0 rel_rms 0 (4096/4096 exact) proves the canonical-atom landing + the host composed-read
+  law are themselves correct — the falsification is specifically the DESCRIPTOR-DIRECT wgmma HW
+  de-swizzle reading that landing, not a bug in the encode.
+- best MODE 1 = 1.107 (28/4096 exact) at the default basin (lbo=16 sbo=1024 boff=0 sw=1); the
+  full field sweep moved nothing to 0. 1.107 == the W15 single-tile floor on the canonical box.
+- NO MODE 4 perf line by design (g5: no TFLOP/s on a non-bit-exact read). To still get a w16
+  perf number the kit's OP-21B fallback (gemm_w16b, -DW16_OP21B) keeps the decode band; that is
+  the BENCH-11 warp-spec-TMA class already measured (+12-15% over W10, ~6.99x, PARITY=NO) — NOT
+  re-run here to conserve the one-time budget, since w16's primary D1 question is now resolved.
+- WIDER CONTEXT (memory project_hexa_fusion_sm90_wgmma_bitcorrect): the W-ladder has since been
+  carried PAST w16's premise — OG16 #2866 (route-(a) pre-permute) deletes the band bit-exactly,
+  and BENCH-12/14 reach 1.10x parity at D=2048. w16 (in-place descriptor route-(b)) is a CLOSED-
+  NEGATIVE branch of that lever; route-(a) is the winning path. This run is the on-HW confirmation
+  that the in-place descriptor route stays falsified at the canonical landing, on a fresh H100.

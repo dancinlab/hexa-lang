@@ -1,0 +1,84 @@
+F-G1-CLMPROD-TF32-GPU-STEP — gap G1 clm_prod_gpu TF32 e2e step, REAL H100 build attempt
+================================================================================================
+TIER: 🟠 BLOCKED (on-HW attempt CONFIRMS the documented build-env gate; NOT a Hopper/CUDA limit)
+DATE: 2026-06-12
+HW:   vast contract 40664227, label hexa-g1w16 (same ONE-TIME H100 rental as F-W16, ~$0.72,
+      leak-0). NVIDIA H100 80GB HBM3, compute_cap 9.0 (sm_90a), driver 550.163.01, nvcc 12.6.77,
+      image nvidia/cuda:12.6.2-devel-ubuntu22.04. Pod DESTROYED after capture, leak-0 confirmed.
+KIT:  tool/clm/build_clmprod_tf32_e2e.sh (OP-24c turnkey) + STEP-0 input pre-gate (OP-24d).
+
+RESULT (one line): On a REAL, fully-capable H100 (nvcc 12.6 + sm_90a confirmed live), the
+clm_prod_gpu TF32 end-to-end step STILL cannot build — confirming verbatim that G1's sole
+remaining gate is a BUILD-ENV / TOOLCHAIN / FROZEN-SEED-PACKAGING issue, NOT a GPU-capability
+issue. The Hopper card itself is ready (the same pod ran the w16 wgmma kernels). The gate is
+twofold and was reproduced on-HW:
+
+  (i)  TOOLCHAIN: a fresh CUDA pod has NO `hexa`/`hexa-run` binary. The kit's STEP-0 input
+       pre-gate (and the runtime_cuda.c emit + clm_prod.hexa transpile steps) REQUIRE the
+       project's self-host hexa runner. On the pod the kit failed clean at STEP-0 with
+       `hexa run FAILED (exit 127 / 127) — need a working 'hexa-run'`, then EXITed (g5: a
+       determinism claim on a non-reproducible input is meaningless). Bootstrapping hexa from
+       source on the pod is a multi-stage self-host build, out of scope for a ~30-min rental.
+
+  (ii) FROZEN-SEED COMPLETENESS: a plain `git archive HEAD` of self/ carries the THIN
+       pre-graduation self/runtime.c stub — measured 0/31 host marshal wrappers
+       (hexa_forge_dispatch_<op>) on the pod. The COMPLETE CUDA runtime.c is the gitignored
+       frozen blob at 151c52c82 that `tool/restore_frozen_seeds` fetches from git history;
+       that restore needs the repo's git refs, which the shallow tarball did not carry. (For
+       contrast, the local working-tree self/runtime.c on the dev Mac had 15/31 — a build
+       artifact, up from F-OP24B's measured 2/31, i.e. the wrapper set has grown over the
+       campaign but is still not a committed, restore-complete CUDA runtime.)
+
+This is EXACTLY the documented G1 remainder. F-OP24D-G1-READINESS already established G1 is
+"0-pod-MAXIMALLY-CLOSED: input side proven + pre-gated, the GPU trainer STEP run is the SOLE
+gated remainder". This on-HW attempt adds the NEW datapoint that the gate is confirmed to be
+toolchain/seed-packaging on real Hopper — the natural fixes (the kit itself names them) are:
+(a) commit a RE-FROZEN runtime.c seed carrying all 31 #ifdef HEXA_CUDA host wrappers, OR
+(b) add a CUDA build job to release.yml that ships a CUDA-capable clm_prod_gpu (which would
+also ship the hexa toolchain to the build host). Neither is a pod task.
+
+The INPUT side of G1 (OP-28 byte-level + OP-28b BPE token-pipeline determinism) was already
+proven byte-eq + machine-independent 0-pod (F-OP28/28b/28c) and pre-gated into this kit as
+STEP-0; nothing about that changed. The TF32 fast-mode CODE is proven well-formed + codegen-
+complete under -DHEXA_CUDA (F-OP24B: runtime_cuda.o 3.4MB, all TF32 symbols emitted) and the
+fast-mode determinism + bounded loss-tracking is proven on sm_120 (OP-20/23/23b/24/25). The
+remaining un-measured piece is ONLY the real clm_prod_gpu wall-clock TF32-vs-FP64 step ratio
+end-to-end, which stays gated on the build env.
+
+================================================================================================
+VERBATIM ON-POD OUTPUT (G1 build attempt, captured 2026-06-12 on H100 sm_90a):
+================================================================================================
+================= G1 on-pod: real H100 build attempt =================
+--- ENV ---
+Cuda compilation tools, release 12.6, V12.6.77
+Build cuda_12.6.r12.6/compiler.34841621_0
+NVIDIA H100 80GB HBM3, 9.0, 550.163.01
+
+--- (0) the kit STEP-0 input pre-gate needs hexa-run; check toolchain presence ---
+NO hexa/hexa-run toolchain on pod (expected — fresh CUDA pod)
+
+--- (1) frozen-seed 31-wrapper completeness check (env-agnostic, the EXACT G1 blocker) ---
+host wrappers present in repo self/runtime.c (pre-restore): 0 / 31
+MISSING (31): adamw adamw_fused adamw_keepmv ce_grad clm_megafwd col2im db_colsum embedding
+embedding_bwd_scatter expert_pack2 expert_unpack2 gelu gelu_bwd gelu2 grad_sum2 grad_sum3
+groupnorm groupnorm_bwd groupnorm_gelu groupnorm_gelu_residual im2col im2col_t int4_quant
+int4_quant_bwd matmul matmul_batched matmul_t moe_block2 moe_router moe_router_bwd residual_add
+
+--- (2) does the kit's runtime_cuda emitter need hexa-run? (confirms the build-env gate) ---
+self/cuda/runtime_cuda_emit.hexa 463282B
+stdlib/flame/clm_prod.hexa 79867B
+
+--- (3) attempt the kit turnkey itself (it self-gates; capture where it stops on real HW) ---
+================= STEP 0 · INPUT-SIDE PRE-GATE (OP-24d · CPU · 0-GPU · runs NOW) =================
+  --- input oracle: OP28-bytelevel (stdlib/flame/op28_corpus_loader_det.hexa) ---
+    hexa run FAILED (exit 127 / 127) — need a working 'hexa-run'; set HEXA_RUN. FAIL.
+  INPUT-SIDE PRE-GATE = FAIL — the (ids,targets) the trainer would consume are NOT proven
+  reproducible. ... STOP before spending a GPU build (g5 honest). ... EXIT.
+================= DESTROY / CLEANUP (leak 0) =================
+  ZERO-VAST: no pod rented by this script; nothing to destroy. workdir /tmp/op24c_e2e removed.
+================= G1 on-pod attempt DONE =================
+
+(NOTE the STEP-0 FAIL here is a TOOLCHAIN-absence fail (exit 127, no hexa-run on the bare CUDA
+pod), NOT an input-determinism fail — the input determinism itself is PROVEN green 0-pod in
+F-OP28/28b/28c on hosts that DO have hexa. On-pod it could not even reach the GPU build because
+the self-host runner needed to emit/transpile is not present, which IS the build-env gate.)

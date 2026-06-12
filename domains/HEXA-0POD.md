@@ -10,6 +10,40 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:W16-WGMMA-H100-MEASURE (unique anchor — the GPU-gated remainder of OP-21A: the w16 descriptor-direct own-GEMM kernel (canonical-atom re-encode -> delete the 32KB decode band) was CPU-de-risked 0-pod (w16_canon/modes/op29_ref checks pass) but its bit-exactness + perf were H100-sm_90a-GATED (aiden 5070 is sm_120, cannot run sm_90a wgmma). Resolved under a ONE-TIME user-approved H100 rental — the documented Hopper-out-of-scope exception. The MODE-1 descriptor-direct read is the PRE-REGISTERED D1 FALSIFIER) -->
+- [x] **W16 — OP-21A w16 descriptor-direct own-GEMM, REAL H100 sm_90a gate: D1 pre-registered falsifier RESOLVED (closed-neg WITH a number)** —
+  🟢 GREEN (ran + measured on real Hopper; ONE-TIME user-approved H100 rental, ~$0.72, leak-0 confirmed,
+  NO foreign pod touched). vast 40664227 (label hexa-g1w16) H100 80GB HBM3 sm_90a, driver 550.163.01,
+  nvcc 12.6.77 (EXACT W10/W12/W13 apples). RESULT: the OP-21A D1 hypothesis (canonical-atom re-encode lets
+  a descriptor-DIRECT wgmma read the SWIZZLE_128B-TMA tile bit-exactly, deleting the 32KB software decode
+  band) is FALSIFIED. MODE 0 canonical-decode PASS rel_rms 0.000e+00 (4096/4096 exact — the encode + host
+  composed-read law are correct); MODE 1 descriptor-direct FLOORS rel_rms 1.107 at default AND across the
+  FULL inline (lbo×sbo×boff×swmode) sweep — NO config reaches rel_rms 0. Per g5 the hard gate STOPS before
+  any MODE 4 / perf (no TFLOP/s on a falsified read law); W10 70.7/6.09x frontier KEPT (W11/12/13 hard rule);
+  the documented OP-21B fallback (gemm_w16b, keep the band) is the indicated next kernel. REPRODUCES the
+  W15 (3200-cfg) + BENCH-12 (1.009) wall on the canonical-atom box: the TMA-swizzle ↔ wgmma-descriptor-
+  swizzle layout interaction is REAL, NOT removable by canonical re-encode + a descriptor-field sweep alone.
+  (Context: route-(a) PRE-PERMUTE — OG16 #2866 / BENCH-12/14 — is the bit-exact path that DID delete the
+  band and reach 1.10x parity @D=2048; w16 is the closed-negative in-place-descriptor branch of that lever,
+  now confirmed falsified on fresh H100.) Verdict .verdicts/hexa-0pod/F-W16-WGMMA-H100-MEASURE.txt.
+
+<!-- ANCHOR:G1-CLMPROD-TF32-GPU-STEP (unique anchor — the SOLE GPU-gated remainder of gap G1 (real-corpus clm_prod_gpu TF32 end-to-end step). OP-24c/24d closed everything 0-pod-provable: input side proven byte-eq (OP-28/28b/28c) + pre-gated as STEP-0, TF32 code proven well-formed under -DHEXA_CUDA (F-OP24B), fast-mode determinism + bounded loss-tracking proven on sm_120 (OP-20/23/23b/24/25). The remaining un-measured piece = the real wall-clock TF32-vs-FP64 step ratio end-to-end, build-env-gated. Attempted on the same ONE-TIME H100 rental to capture the gate verbatim on real Hopper) -->
+- [x] **G1 — clm_prod_gpu TF32 e2e step, REAL H100 build attempt: build-env gate CONFIRMED on Hopper (toolchain + frozen-seed, NOT a GPU limit)** —
+  🟠 BLOCKED-CONFIRMED (on-HW attempt verbatim; same ~$0.72 H100 rental, leak-0). On a fully-capable H100
+  (nvcc 12.6 + sm_90a live — the SAME pod ran the w16 wgmma kernels), the clm_prod_gpu TF32 step STILL
+  cannot build, confirming G1's sole gate is BUILD-ENV / TOOLCHAIN / FROZEN-SEED-PACKAGING, NOT a Hopper/
+  CUDA-capability limit. Gate reproduced on-HW, twofold: (i) TOOLCHAIN — a fresh CUDA pod has NO hexa/
+  hexa-run; the kit's STEP-0 (and the runtime_cuda.c emit + clm_prod.hexa transpile) NEED the self-host
+  hexa runner → kit failed clean at STEP-0 `hexa run FAILED (exit 127) — need a working hexa-run`, then
+  EXIT (bootstrapping hexa from source = multi-stage, out of scope for a 30-min rental); (ii) FROZEN-SEED —
+  a plain `git archive HEAD` carries the THIN pre-graduation self/runtime.c stub, MEASURED 0/31 host marshal
+  wrappers on the pod; the complete CUDA runtime.c is the gitignored 151c52c8 blob `restore_frozen_seeds`
+  fetches from git history (not in the shallow tarball). This is EXACTLY the F-OP24D documented remainder;
+  the NEW datapoint = the gate is confirmed toolchain/seed on real Hopper. Natural fixes (kit-named, NOT pod
+  tasks): (a) commit a re-frozen runtime.c with all 31 #ifdef HEXA_CUDA wrappers, OR (b) add a CUDA build
+  job to release.yml. Input side of G1 unchanged (proven 0-pod F-OP28/28b/28c). Verdict
+  .verdicts/hexa-0pod/F-G1-CLMPROD-TF32-GPU-STEP.txt.
+
 <!-- ANCHOR:OP-33D-ADAM-STEP-SWEEP (unique anchor — the OP-33c HONEST §8 follow-up: OP-33c cleaned dead adam/safe_update from stdlib/optim.hexa + deregistered grad_clip_norm, but LEFT the falsified adam_step builtin registered in the self/env.hexa roster because 12+ other surfaces (self/ml/*) reference it — out of OP-33c scope. OP-33d does the systematic sweep: classify EVERY adam_step reference as live vs dead, repoint live / NOTE dead, then deregister iff no live surface needs it. Independently RE-VERIFIES (g5) that adam_step is falsified — runtime backs only adamw_step (RFC 034, 11-arg, a DIFFERENT symbol)) -->
 - [x] **OP-33d — falsified adam_step builtin swept across self/ml/* → no LIVE caller → deregistered from the env.hexa roster** —
   🟢 g5 RE-VERIFIED falsified on CURRENT main (verbatim): `adam_step(...)` → emitted C `call to undeclared
