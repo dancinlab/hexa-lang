@@ -183,6 +183,28 @@ loop targets what the consumer card + code can carry.
   regen, NO build-host work (that IS the deferred item), NO codegen/runtime/.tape edits. Verdict
   .verdicts/hexa-0pod/F-OP46-PROMOTE-BUNDLE-SPEC.txt. $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
 
+<!-- ANCHOR:OP-47-MATMUL-DOT-PROBE (unique anchor — OP-43 KEPT 26 ML-family survivors conservatively; the THREE with the largest broken caller surfaces (matmul_into 333 real call-sites · mat_add_inplace 80 · dot 12) were held purely on g0 blast-radius. OP-47 PROBES — not assumes — whether that hold still binds: re-applies OP-41/OP-43's exact per-builtin g5 method (AOT probe correct-args + arg-shape-trap control + local-fn-shadow CONTROL + dead/live caller classification + compiler-core/byte-eq zero-ref check + pre-existing-failure control) to decide keep-or-deregister per builtin. Honest "all stay" was a permitted outcome) -->
+- [x] **OP-47 — matmul_into/dot/mat_add_inplace large-surface probe: all 3 g5-falsified + DEAD-surface + shadow-safe + byte-eq-safe → ALL THREE DEREGISTERED** —
+  🟢 PROBED (not assumed) the 3 largest OP-43 [R]-survivors. All three g5-RE-VERIFIED falsified (fresh
+  hexat ~/.hx/bin/build/hexat → clang -fsyntax-only, CORRECT args: matmul_into([[..]],[[..]],[[..]]) /
+  mat_add_inplace([[..]],[[..]]) / dot([..],[..]) each emit "use of undeclared identifier 'NAME'"); ZERO
+  codegen-inline guard + ZERO runtime symbol (incl prefix variants) each → arg-shape-trap controlled.
+  CONTROL: a local `fn dot` emits its OWN `HexaVal dot(...)` def + a call compiling CLEAN → shadows bind
+  roster-INDEPENDENTLY (11 dot shadows incl stdlib/flame/clm_h911 UNAFFECTED). CALLER SWEEP: matmul_into 333
+  real call-sites ALL self/ml/* trainers + self/test_inplace (already-falsified, NOT in compiler closure);
+  mat_add_inplace 80 ALL self/ml + self/test_inplace/test_new_builtins; dot 12 non-shadow = 3 baseline-dead
+  examples (exit_code=-1) + self/ml,self/stdlib,self/test tensor files that already TRANSPILE-FAIL today
+  ("index 1 out of bounds") + 1 string-literal in a codegen test. SELF-HOST SAFE: compiler/** (byte-eq core,
+  build_selfhost walk(compiler/main.hexa) closure) has ZERO refs to all three + ZERO compiler imports of
+  self/ml → fixpoint untouched. PRE-EXISTING-FAILURE CONTROL: every caller fails on the INSTALLED hexat which
+  STILL registers the builtins → dereg is not the cause. DECISION (g0): all four conditions hold for each
+  (falsified ∧ no-live-caller ∧ shadow-binds-without-it ∧ 0 compiler-core ref) → ALL THREE DEREGISTERED; the
+  OP-43 "large surface → keep" hold RELEASED because the surface is proven DEAD not merely large (breaks no
+  working program — every caller already falsified). OP-43 survivor set 26→23. env.hexa transpiles clean after
+  removal; neighbors (matvec/mat_add/rms_norm/rope/rope_inplace/repeat_kv) intact. REVERSIBLE one-line re-add.
+  wipe_guard: net +11/−2 « 50. Verdict .verdicts/hexa-0pod/F-OP47-MATMUL-DOT-PROBE.txt.
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
 <!-- ANCHOR:OP-43-ML-FAMILY-FALSIFIED (unique anchor — OP-41 deferred ~101 non-optimizer falsified roster builtins conservatively. OP-43 takes the ML-FAMILY subset (conv/quant/activation/attention/array-ML cluster) and audits it ONE LAYER DEEPER with OP-41's exact per-builtin g5 method (AOT probe with CORRECT args + arg-shape-trap control + local-fn-shadow vs builtin distinction + dead/live caller classification) to either safely deregister the truly-dead or document precisely why each survives) -->
 - [x] **OP-43 — ML-family falsified-builtin deeper audit: 42-builtin sub-matrix (all 42 AOT-falsified); 16 truly-dead DEREGISTERED, 26 SURVIVE-WITH-REASON** —
   🟢 re-applied OP-41's RIGOROUS g5 method to the 42-member ML family. Built AOT probe harness (fresh hexat
