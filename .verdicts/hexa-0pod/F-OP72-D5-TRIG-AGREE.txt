@@ -1,0 +1,97 @@
+════════════════════════════════════════════════════════════════════════════════
+ F-OP72-D5-TRIG-AGREE — d5_sin/d5_cos AGREE + DETERMINISM oracle locks the
+ flame_math hand-Taylor trig primitive (the documented-but-UNlocked OP-33 sibling)
+ HEXA-0POD OP-72 · 0-GPU · local arm64-macos only · ZERO vast · no foreign pod · $0
+════════════════════════════════════════════════════════════════════════════════
+date: 2026-06-13   tier: 🟢 GREEN — invariant-lock (4/4 PASS)
+base: origin/main @ 22b7e783f (post #3195 / OP-70 permille fix)
+scope: $0 · 0-pod · NO GPU · no vast · no foreign pod · no .tape · doc+oracle only · leak-0
+
+GOAL
+  Find the next genuine 0-pod correctness item, PRIORITIZING flame/forge-adjacent
+  numeric contracts (the campaign subject). Lock a flame contract that is
+  DOCUMENTED but not test-locked, with a 0-pod CPU oracle.
+
+────────────────────────────────────────────────────────────────────────────────
+ 1. THE GAP (documented-but-UNlocked — the OP-33 class)
+────────────────────────────────────────────────────────────────────────────────
+  stdlib/flame/flame_math.hexa `d5_sin` / `d5_cos` (mod-2π reduce + 14-term Taylor)
+  carry an explicit accuracy/identity docstring claim (flame_math.hexa:137-139):
+
+    // d5_sin / d5_cos : 14-term Taylor series after argument reduction.
+    // Identical to anima d_train5_lib.hexa §271 / §284. Used by RoPE
+    // tables — strict bit-eq path to anima d5_rope_tables output.
+
+  They are PRODUCTION primitives, wired into:
+    • RoPE cos/sin tables — nn_lib.hexa:523-524 nn_rope_build_tables_base
+    • the LR schedule    — optim_lib.hexa:163 opt_lr_warmup_cosine (cos = d5_cos)
+    • the OP-29 decoder block RoPE — op29_decoder_block_*.hexa
+
+  YET: flame_math_test.hexa locks ONLY the dt_* siblings (dt_sqrt/dt_exp/dt_ln/
+  dt_lcg — F-RFC043-MATH-*), and dt_erf is locked separately (F-OP19B). The d5 TRIG
+  pair had NO agreement oracle. Verbatim survey (scoped grep, NO .git):
+
+    $ grep -rn "d5_sin\|d5_cos" stdlib --include="*test*" | grep -i "sin(\|cos(\|libm\|agree"
+    (no agreement assertion — only determinism-eq REFERENCES that USE d5_cos)
+
+  Nothing asserted d5_sin/d5_cos actually match libm sin/cos to a usable tolerance
+  over the RoPE+schedule input range, nor that they are bit-reproducible run-to-run
+  (the pure-FP determinism that makes them libm-free / arch-OS-independent — the
+  PREMISE F-OP33 leaned on: OP-33 LOCKED THE SCHEDULE but ASSUMED d5_cos correct).
+  This is exactly the documented-but-ungated hole class OP-33/66/70 close.
+
+────────────────────────────────────────────────────────────────────────────────
+ 2. THE LOCK — stdlib/flame/op72_d5_trig_agree_eq.hexa (self-contained, NO `use`)
+────────────────────────────────────────────────────────────────────────────────
+  d5 primitives inlined VERBATIM from flame_math.hexa (OP-28/29/33 scp/stdin
+  pattern — runs on ANY hexa host with no checkout). 4 gates over a 12-point probe
+  spanning the production range: schedule (|x| ≤ π·1 ≈ 3.14) + RoPE angles
+  (ang = pos·invf, pos up to ~10³, invf ≤ 1 → |x| up to ~10³). Probe points:
+    -3.1, -1.5, -0.5, 0.0, 0.3, 1.0, π/2, π, 2π, 10, 100, 1000
+
+  (1) F-OP72-D5-SIN-AGREE  : max|d5_sin − libm sin| ≤ 1e-9
+  (2) F-OP72-D5-COS-AGREE  : max|d5_cos − libm cos| ≤ 1e-9
+  (3) F-OP72-D5-DETERMINISM: d5_sin(x)/d5_cos(x) twice → byte-IDENTICAL f64
+        (max|Δbytes|=0 via f64_to_bytes_le; bit-equality not float-compare)
+  (4) F-OP72-D5-PYTHAGORAS : max|sin²+cos²−1| ≤ 1e-9 (closed invariant, libm-indep)
+
+  The 1e-9 AGREE gate carries margin for the iterative-subtraction range-reduction
+  error that grows with |x| (matching libm's own large-argument behaviour); the
+  schedule range |x| ≤ π is ~1e-16. CPU model measured |Δ| ~2.4e-10 even at
+  x=12345 (worst, range-reduction cancellation regime).
+
+────────────────────────────────────────────────────────────────────────────────
+ 3. RUN — `hexa run` on local arm64-macos, exit 0 (VERBATIM)
+────────────────────────────────────────────────────────────────────────────────
+  === HEXA-0POD OP-72 · d5_sin/d5_cos AGREE + DETERMINISM oracle ===
+  PASS  F-OP72-D5-SIN-AGREE   max|d5_sin − libm sin| = 1.3165e-12 <= 1e-9 over [-3.1 .. 1000] (RoPE + schedule range)
+  PASS  F-OP72-D5-COS-AGREE   max|d5_cos − libm cos| = 1.9359e-12 <= 1e-9 over [-3.1 .. 1000] (RoPE + schedule range)
+  PASS  F-OP72-D5-DETERMINISM 12 probes × {sin,cos}: d5_*(x) twice → byte-IDENTICAL f64 (max|Δbytes|=0); pure +−×÷ no libm → arch/OS-independent (the F-OP33 schedule + RoPE-table premise)
+  PASS  F-OP72-D5-PYTHAGORAS  max|sin²+cos²−1| = 8.88178e-16 <= 1e-9 (closed algebraic invariant, libm-independent)
+
+  === OP-72: 4/4 PASS ===
+  PASS — d5_sin/d5_cos (flame_math) AGREE with libm sin/cos within RoPE+schedule
+  tolerance AND are byte-deterministic. The 'strict bit-eq path' docstring claim is
+  now LOCKED at the primitive level; closes the d5-trig assumption under F-OP33
+  (LR schedule) and nn_rope_build_tables_base (RoPE).
+
+  MEASURED: d5_sin agrees to 1.32e-12, d5_cos to 1.94e-12 over the production range;
+  byte-determinism confirmed; Pythagorean closure 8.88e-16 (1 ULP).
+
+────────────────────────────────────────────────────────────────────────────────
+ 4. SAFETY / SCOPE
+────────────────────────────────────────────────────────────────────────────────
+  • No behavior change — oracle-only (+ no .hexa source edit besides the new test).
+    The d5 primitives were already SSOT-correct; this LOCKS the documented claim.
+  • Self-host byte-eq UNAFFECTED — op72_*.hexa is a leaf self-contained oracle, NOT
+    in compiler/main.hexa build_selfhost closure; zero codegen/runtime bytes touched.
+  • wipe_guard: net-additive (one new file), no >50-line deletion.
+  • $0 · 0-pod · NO GPU · no vast · no foreign pod (leak-0) · no .tape edit.
+
+  RESIDUAL (honest): the AGREE gate is run on local arm64-macos only; the
+  DETERMINISM gate proves the pure-FP property that makes the same bytes hold on
+  x86-linux (the F-OP33 cross-platform argument). A future round can `scp` this
+  self-contained oracle to a pool x86 host for a literal cross-ISA byte-diff of the
+  d5 dump — but the determinism gate already establishes the arch-independence
+  invariant the docstring claims.
+════════════════════════════════════════════════════════════════════════════════

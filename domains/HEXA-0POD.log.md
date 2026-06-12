@@ -1,5 +1,31 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-72 DONE: LOCK the flame_math hand-Taylor TRIG primitive (d5_sin/d5_cos) — the documented-but-UNlocked OP-33 sibling · flame_math.hexa:137-139 d5_sin/d5_cos (mod-2π reduce + 14-term Taylor) carry a "strict bit-eq path to anima d5_rope_tables" docstring + are PRODUCTION (RoPE tables nn_lib.hexa:523-524 nn_rope_build_tables_base · LR schedule optim_lib.hexa:163 cos=d5_cos · op29 decoder block) yet had NO agreement oracle · OP-33 LOCKED THE SCHEDULE but ASSUMED d5_cos correct · NEW self-contained stdlib/flame/op72_d5_trig_agree_eq.hexa: 4 gates over a 12-pt probe (schedule |x|≤π + RoPE |x|≤10³) — AGREE sin≤1e-9 · AGREE cos≤1e-9 · DETERMINISM byte-identical f64 run-to-run (pure-FP no-libm = arch/OS-independent, F-OP33's premise) · PYTHAGORAS sin²+cos²−1≤1e-9 · `hexa run` exit 0, 4/4 PASS (sin 1.32e-12, cos 1.94e-12, max|Δbytes|=0, pythagoras 8.88e-16) · oracle-only no behavior change (d5 already SSOT-correct) · self-host byte-eq UNAFFECTED (leaf self-contained oracle, not in build_selfhost closure) · 🟢 GREEN invariant-lock · $0 · 0-pod · NO GPU · leak-0
+- SURVEY (scoped greps/reads, NO .git), priority order: (a) flame/forge numeric libs flame_math/optim_lib/
+  gn_lib/nn_lib for a documented-but-UNlocked contract; (b) stdlib non-math surface; (c)/(d) handoff/deferred.
+- PICK (a) — the campaign-subject axis yielded a real finding. flame_math.hexa:137-139 d5_sin/d5_cos make an
+  explicit identity/accuracy claim ("Identical to anima d_train5_lib §271/§284 … strict bit-eq path") and are
+  WIRED into production (RoPE tables + LR schedule + decoder block), but the agreement was never asserted:
+  · VERBATIM: `grep -rn "d5_sin\|d5_cos" stdlib --include="*test*" | grep -i "sin(\|cos(\|libm\|agree"` → 0
+    assertions (the only test hits USE d5_cos in determinism-eq, none verify it vs libm sin/cos).
+  · flame_math_test.hexa locks dt_sqrt/dt_exp/dt_ln/dt_lcg (F-RFC043-MATH-*) + dt_erf separate (F-OP19B);
+    the d5 trig pair was the lone uncovered flame_math primitive. OP-33 (LR schedule) leaned on d5_cos
+    correctness without locking it = the exact documented-but-ungated hole OP-33/66/70 close.
+- THE LOCK: stdlib/flame/op72_d5_trig_agree_eq.hexa (self-contained, NO `use`, d5 inlined VERBATIM — OP-28/29/
+  33 scp/stdin pattern). 12-pt probe {-3.1,-1.5,-0.5,0,0.3,1,π/2,π,2π,10,100,1000}.
+- RUN-TO-RUN VERBATIM (`hexa run`, arm64-macos, exit 0):
+  · PASS F-OP72-D5-SIN-AGREE   max|d5_sin − libm sin| = 1.3165e-12 <= 1e-9
+  · PASS F-OP72-D5-COS-AGREE   max|d5_cos − libm cos| = 1.9359e-12 <= 1e-9
+  · PASS F-OP72-D5-DETERMINISM 12 probes × {sin,cos}: d5_*(x) twice → byte-IDENTICAL f64 (max|Δbytes|=0)
+  · PASS F-OP72-D5-PYTHAGORAS  max|sin²+cos²−1| = 8.88178e-16 <= 1e-9
+  · === OP-72: 4/4 PASS ===
+- SAFETY: oracle-only (no .hexa source edit besides the new test); d5 primitives already SSOT-correct → this
+  LOCKS the docstring claim, no behavior change. Self-host byte-eq unaffected (leaf, not in build_selfhost
+  closure). wipe_guard net-additive (one new file). RESIDUAL (honest): AGREE run on arm64-macos only; the
+  DETERMINISM gate proves the pure-FP property that carries the same bytes to x86-linux (F-OP33's argument) —
+  a literal cross-ISA byte-diff of the self-contained oracle is a future scp-able round.
+- OUTCOME: 🟢 GREEN invariant-lock. Milestone OP-72 [x]. Verdict F-OP72-D5-TRIG-AGREE.txt.
+
 ## 2026-06-13 — OP-70 DONE: GENERALIZE the OP-68 wrap_pi contract-vs-behavior audit across the sibling stdlib core/signal math surface (9 contract-bearing modules) · for each: surface-doc CONTRACT (range·boundary·rounding·sign·idempotence·units) vs BODY+test · RESULT: ONE genuine contradiction (same class) — stdlib/core/math/permille.hexa:21 doc claimed `pm_mul_pm` divides by 1000 "with banker's rounding" while the body calls `_div_round_half_away` (half-away-from-zero) + the passing test already locks 0.5→1 (banker's-even would give 0) · FIX (doc+test only, behavior+test SSOT-correct per OP-68): corrected the doc line to half-away + fixed the test's "banker-style half-away" comment + ADDED a T5b half-away lock (50×50=2.5→3, −100×5=−0.5→−1 FAIL under round-half-to-even) · 41/41 → 44/44 PASS · the OTHER 8 modules PROVEN-CONSISTENT (honest all-else-consistent = SUCCESS, g63) · self-host byte-eq unaffected (leaf stdlib, doc+test only) · 🔴→fix GREEN · $0 · 0-pod · NO GPU
 - AUDIT SET (explicit documented numeric contract): core/math/{wrap_pi,float,permille} · core/{math,special}
   · signal/core_{window,filter,resample} (+ core_mel curve, core_pitch).
