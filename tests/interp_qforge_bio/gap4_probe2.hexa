@@ -1,0 +1,7 @@
+fn main() {
+    let r = 1.7682
+    let a = (2.0 * r) / 1.122462048309373
+    println(format_float(a, 17))            // direct print of a
+    let big = a * 1000000000000.0
+    println(format_float(big, 5))           // scaled print of a
+}

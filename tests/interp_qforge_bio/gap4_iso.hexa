@@ -1,0 +1,13 @@
+fn main() {
+    let r = 1.7682
+    // form A: r is a variable
+    let a = (2.0 * r) / 1.122462048309373
+    // form B: all literal
+    let b = (2.0 * 1.7682) / 1.122462048309373
+    // form C: numerator precomputed in variable
+    let num = 2.0 * r
+    let c = num / 1.122462048309373
+    println(format_float(a, 17))
+    println(format_float(b, 17))
+    println(format_float(c, 17))
+}

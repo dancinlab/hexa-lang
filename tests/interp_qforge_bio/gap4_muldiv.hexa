@@ -1,0 +1,16 @@
+fn main() {
+    let r = 1.7682
+    // Test 1: pure division, numerator is a plain variable (no hexa_mul)
+    let num = 3.5364
+    let d1 = num / 1.122462048309373
+    println(format_float(d1 * 1000000000000.0, 5))
+    // Test 2: numerator via hexa_mul (2.0 * r)
+    let d2 = (2.0 * r) / 1.122462048309373
+    println(format_float(d2 * 1000000000000.0, 5))
+    // Test 3: hexa_mul result alone, no division
+    let prod = 2.0 * r
+    println(format_float(prod * 1000000000000.0, 5))
+    // Test 4: division of literal/literal
+    let d4 = 3.5364 / 1.122462048309373
+    println(format_float(d4 * 1000000000000.0, 5))
+}

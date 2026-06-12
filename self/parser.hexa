@@ -916,6 +916,12 @@ fn parse_stmt() {
     // returns a visibility string that we discard. Avoids "unexpected token
     // Pub" spam when interp loads self/parser.hexa (which has `pub let mut
     // p_tokens = []` module-state globals).
+    // VISIBILITY CONTRACT (SPEC.md §6.4): `pub` is parse-and-discard and a
+    // leading `_` is convention only — NEITHER is link-enforced because the
+    // whole `use` closure lowers into one C TU. A `_prefix` fn in a `use`'d
+    // module IS callable from importers (relied on, e.g. stdlib/chem/md/pme
+    // `_pme_*` reached by selftests). Real enforcement is a v2 module-boundary
+    // change; do not write code expecting the compiler to reject such access.
     if p_peek_kind() == "Pub" {
         parse_visibility()
     }

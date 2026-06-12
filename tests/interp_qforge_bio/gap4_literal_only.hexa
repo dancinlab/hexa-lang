@@ -1,0 +1,8 @@
+fn main() {
+    let a = 1.122462048309373
+    println(format_float(a, 17))
+    let b = 2.0 * 1.7682
+    println(format_float(b, 17))
+    let c = 3.5364 / 1.122462048309373
+    println(format_float(c, 17))
+}

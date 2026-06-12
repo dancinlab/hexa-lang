@@ -1,0 +1,5 @@
+use "tests/interp_qforge_bio/mod_vis"
+fn main() {
+    println(to_string(qfb_public()))   // legitimate: 43
+    println(to_string(_qfb_secret()))  // SHOULD be a visibility error
+}

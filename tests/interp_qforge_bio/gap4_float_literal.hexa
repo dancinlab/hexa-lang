@@ -1,0 +1,10 @@
+use "tests/interp_qforge_bio/modA"
+
+fn main() {
+    let r = 1.7682
+    let in_main = (2.0 * r) / 1.122462048309373
+    let via_mod = qfb_conv(r)
+    println(format_float(in_main, 15))
+    println(format_float(via_mod, 15))
+    println(format_float(in_main - via_mod, 15))
+}

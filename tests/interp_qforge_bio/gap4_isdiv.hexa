@@ -1,0 +1,12 @@
+fn ident(x: float) -> float { return x }
+fn main() {
+    let a = (2.0 * 1.7682) / 1.122462048309373
+    // route a through a fn call (identity) — does it 'fix' it?
+    let b = ident((2.0 * 1.7682) / 1.122462048309373)
+    // compare to a known-good reference computed via fn
+    let c = ident(3.5364) / ident(1.122462048309373)
+    println(format_float(a * 1e12, 5))
+    println(format_float(b * 1e12, 5))
+    println(format_float(c * 1e12, 5))
+    if a == b { println("a==b") } else { println("a!=b") }
+}

@@ -1,0 +1,11 @@
+fn main() {
+    let r = 1.7682
+    let a = (2.0 * r) / 1.122462048309373
+    println(a)
+    let num = 2.0 * r
+    println(num)
+    println(1.122462048309373)
+    // multiply back to check
+    let back = a * 1.122462048309373
+    println(back)
+}

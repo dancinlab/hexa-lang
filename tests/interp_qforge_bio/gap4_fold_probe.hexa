@@ -1,0 +1,9 @@
+fn main() {
+    // Both literals -> candidate for compile-time folding
+    let folded = 3.5364 / 1.122462048309373
+    // Force runtime: denominator through a variable
+    let d = 1.122462048309373
+    let runtime = 3.5364 / d
+    println(format_float(folded, 17))
+    println(format_float(runtime, 17))
+}

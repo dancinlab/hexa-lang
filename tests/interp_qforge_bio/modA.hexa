@@ -1,0 +1,3 @@
+pub fn qfb_conv(r: float) -> float {
+    return (2.0 * r) / 1.122462048309373
+}

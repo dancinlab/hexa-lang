@@ -1,0 +1,2 @@
+fn _qfb_secret() -> int { return 42 }
+pub fn qfb_public() -> int { return _qfb_secret() + 1 }

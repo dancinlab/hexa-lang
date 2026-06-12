@@ -228,6 +228,36 @@ side extraction landed via 4ed9966e). Sibling id `wilson-pi-port-6-gap-
 prereq` (G1+G2+G3 wilson core gate) is applied — G1=A5, G2 async parity
 (integrated codegen + runtime + interp), G3 cancel token (stdlib).
 
+### 6.4 Symbol visibility — **convention-only, NOT link-enforced (current)**
+
+hexa-lang compiles a whole program — the entry file plus its transitive
+`use` closure — into a **single C translation unit** (the "monolith").
+There is therefore no per-module link boundary at which `pub` could be
+enforced. The current contract is:
+
+- **`pub` is parsed and discarded.** `parse_visibility()`
+  (`self/parser.hexa`, the `pub` / `pub(crate)` / `pub(mod)` absorb
+  sites) accepts Rust-style visibility markers so the grammar does not
+  choke on them, but codegen attaches **no** access semantics. A
+  `pub fn` and a plain `fn` are link-identical.
+- **A leading `_` is a naming convention, not access control.** A
+  `_prefix` function in a `use`'d module **is callable** from any
+  importing file. This is observable (a `use`r can call `_helper()`
+  directly and it succeeds) and is **relied upon** — e.g. PME selftests
+  reach module-private `_pme_*` helpers across the `stdlib/chem/md/pme`
+  boundary.
+
+Consequence for authors: treat `_prefix` as a *documentation* signal
+("internal — do not depend on this") that the compiler does **not**
+police. Do not assume a `_prefix` or non-`pub` symbol is inaccessible to
+downstream code; it is not.
+
+Future direction: real visibility enforcement is a v2-class change that
+must arrive together with a module/link-boundary model (cf. §11 memory
+model v1→v2). Until then, no code may be written *expecting* the
+compiler to reject a cross-module private access — and conversely, no
+existing cross-module `_prefix` reuse is a bug.
+
 ---
 
 ## 7. Diagnostics language — **English only (Decision 3)**

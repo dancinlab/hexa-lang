@@ -1,0 +1,11 @@
+use "tests/interp_qforge_bio/modA"
+fn main() {
+    let r = 1.7682
+    let a = (2.0 * r) / 1.122462048309373
+    let m = qfb_conv(r)
+    let diff = a - m
+    println(diff)
+    if diff == 0.0 { println("EQUAL") } else { println("DIFFER") }
+    // raw bit-ish: multiply diff up
+    println(diff * 1000000.0)
+}
