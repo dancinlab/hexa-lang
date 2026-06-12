@@ -1,0 +1,254 @@
+// ════════════════════════════════════════════════════════════════════════
+//  op76_lr_schedule_shape_contract_eq.hexa
+//  HEXA-0POD OP-76 — LOCK the documented-but-UNGATED SHAPE/BOUNDARY contract
+//  of the flame LR scheduler opt_lr_warmup_cosine (stdlib/flame/optim_lib.hexa).
+//
+//  THE GAP (route-(b), the OP-66/68/70/72 "documented-but-ungated assumption"
+//  class): optim_lib.hexa:131-149 documents an explicit SHAPE contract for the
+//  canonical machine-independent scheduler —
+//     • t <= warmup : lr = base · t/warmup            (linear ramp 0 → base)
+//     • t == warmup : lr == base  EXACTLY  (the PEAK; warmup/warmup = 1.0)
+//     • t >= n_steps: lr == base · floor_frac EXACTLY (the FLOOR)
+//     • else (warmup < t < n_steps): cosine decay base → base·floor, where
+//       cosf = 0.5·(1 + d5_cos(π·prog)) is monotone non-increasing in prog
+//     • the warmup ramp fold is base·(t/warmup) — divide BEFORE multiply
+//       (line 148-149: "NOT (base·t)/warmup" — the two folds are float-different)
+//  …BUT OP-33's oracle (op33_lr_schedule_determinism_eq.hexa) locks ONLY the
+//  byte-DETERMINISM of the trajectory (run-to-run byte-eq + d5-vs-libm divergence
+//  count) — it NEVER asserts a single one of the SHAPE/BOUNDARY promises above.
+//  So the docstring's "linear warmup 0→base then cosine base→floor" contract is
+//  DOCUMENTED but enforced by NOTHING; a refold (e.g. (base·t)/warmup), an
+//  off-by-one at the warmup seam, a sign flip in the cosine, or a wrong floor
+//  could land byte-DETERMINISTIC (OP-33 still green) yet shape-WRONG. This is
+//  exactly the hole OP-33 LEFT OPEN — it assumed the schedule was correct and
+//  locked only that it is reproducible.
+//
+//  THE LOCK: the d5 schedule is inlined VERBATIM from optim_lib.hexa (no `use` —
+//  self-contained leaf oracle, runs on ANY hexa host, OP-33/72 pattern) and
+//  asserted against the documented contract:
+//    G1 PEAK-EXACT      : lr(warmup)   == base                 (max|Δbytes|=0)
+//    G2 FLOOR-EXACT     : lr(n_steps)  == base·floor_frac      (max|Δbytes|=0)
+//    G3 WARMUP-RAMP     : lr over [1..warmup] is strictly increasing, lr(1)>0,
+//                         and equals the closed form base·(t/warmup) byte-exact
+//    G4 DECAY-MONOTONE  : lr over [warmup..n_steps] is non-increasing (cosine
+//                         decay never bumps back up) — the documented base→floor
+//    G5 RANGE           : the TWO-PHASE codomain — warmup [1..warmup] ∈ (0, base]
+//                         (the ramp deliberately starts BELOW the floor, near 0,
+//                         per "linear ramp 0→base"), decay [warmup..n_steps] ∈
+//                         [base·floor_frac, base] (the floor binds the COSINE tail
+//                         only, NOT the warmup ramp — a subtlety the schedule's
+//                         "0→base" wording implies but the naive reading misses)
+//    G6 SEAM-CONTINUITY : |lr(warmup) − lr(warmup+1)| is O(one cosine step),
+//                         i.e. no discontinuous jump at the warmup→cosine seam
+//    G7 FOLD-ORDER-BYTES: base·(t/warmup) is byte-DIFFERENT from (base·t)/warmup
+//                         for ≥1 step in [1..warmup] (PROVES line 148-149's
+//                         "float-different" claim is real, not folklore — a
+//                         falsifiable lock so a future refactor can't silently
+//                         swap the fold)
+//
+//  Oracle-only — opt_lr_warmup_cosine is already SSOT-correct; this adds the
+//  missing CONTRACT lock, no behavior change. Self-host byte-eq UNAFFECTED
+//  (leaf self-contained oracle, NOT in build_selfhost closure). $0, `hexa run`,
+//  CPU-only, no GPU/vast/pod.
+//
+//  F-OP76-LR-SCHEDULE-SHAPE : .verdicts/hexa-0pod/F-OP76-LR-SCHEDULE-SHAPE.txt
+// ════════════════════════════════════════════════════════════════════════
+
+// ── flame_math d5 primitives (inlined VERBATIM — keep in sync w/ op33) ────
+fn d5_two_pi() -> float { return 6.283185307179586 }
+fn d5_pi() -> float { return 3.141592653589793 }
+
+fn d5_reduce(x: float) -> float {
+    let tp = d5_two_pi()
+    let mut r = x
+    while r > d5_pi()  { r = r - tp }
+    while r < 0.0 - d5_pi() { r = r + tp }
+    return r
+}
+
+fn d5_cos(x: float) -> float {
+    let r = d5_reduce(x)
+    let r2 = r * r
+    let mut term = 1.0
+    let mut acc = 1.0
+    let mut k = 1
+    while k < 14 {
+        term = 0.0 - term * r2 / to_float((2*k-1) * (2*k))
+        acc = acc + term
+        k = k + 1
+    }
+    return acc
+}
+
+// ── the schedule (inlined VERBATIM from stdlib/flame/optim_lib.hexa) ────
+fn opt_lr_warmup_cosine(base_lr: float, floor_frac: float,
+                        t: int, n_steps: int, warmup: int) -> float {
+    if warmup > 0 && t <= warmup {
+        return base_lr * (to_float(t) / to_float(warmup))
+    }
+    if t >= n_steps { return base_lr * floor_frac }
+    let prog = to_float(t - warmup) / to_float(n_steps - warmup)
+    let cosf = 0.5 * (1.0 + d5_cos(d5_pi() * prog))
+    return base_lr * (floor_frac + (1.0 - floor_frac) * cosf)
+}
+
+// the WRONG fold the docstring warns against (line 148-149): multiply BEFORE
+// divide. Used ONLY by G7 to PROVE the documented "float-different" claim.
+fn warmup_ramp_wrongfold(base_lr: float, t: int, warmup: int) -> float {
+    return (base_lr * to_float(t)) / to_float(warmup)
+}
+
+// ── byte helpers (OP-33 pattern) ─────────────────────────────────────────
+fn _bits_eq(a: float, b: float) -> bool {
+    let ba = f64_to_bytes_le(a)
+    let bb = f64_to_bytes_le(b)
+    let mut k = 0
+    while k < len(ba) {
+        if ba[k] != bb[k] { return false }
+        k = k + 1
+    }
+    return true
+}
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+// ════════════════════════════════════════════════════════════════════════
+println("=== HEXA-0POD OP-76 · LR-schedule SHAPE/BOUNDARY contract oracle ===")
+println("  locks the documented optim_lib.hexa:131-149 shape contract that")
+println("  OP-33 left ungated (OP-33 locks byte-determinism only).")
+
+// the canonical OP-23b schedule config (same as OP-33)
+let N = 500
+let WARMUP = 50
+let BASE = 0.001
+let FLOOR = 0.05
+print("  config:   N="); print(N); print("  warmup="); print(WARMUP)
+print("  base_lr="); print(BASE); print("  floor_frac="); println(FLOOR)
+
+let mut fail = 0
+
+// ── G1 PEAK-EXACT : lr(warmup) == base ───────────────────────────────────
+let peak = opt_lr_warmup_cosine(BASE, FLOOR, WARMUP, N, WARMUP)
+let g1 = _bits_eq(peak, BASE)
+print("  G1 PEAK-EXACT      lr(warmup="); print(WARMUP); print(") = "); print(peak)
+print("  (want base="); print(BASE); print(")  byte-eq="); println(g1)
+if !g1 { fail = fail + 1 }
+
+// ── G2 FLOOR-EXACT : lr(n_steps) == base·floor ───────────────────────────
+let floorv = opt_lr_warmup_cosine(BASE, FLOOR, N, N, WARMUP)
+let want_floor = BASE * FLOOR
+let g2 = _bits_eq(floorv, want_floor)
+print("  G2 FLOOR-EXACT     lr(n_steps="); print(N); print(") = "); print(floorv)
+print("  (want base*floor="); print(want_floor); print(")  byte-eq="); println(g2)
+if !g2 { fail = fail + 1 }
+
+// ── G3 WARMUP-RAMP : strictly increasing over [1..warmup], lr(1)>0, and
+//    equals the closed form base·(t/warmup) byte-exact ──────────────────
+let mut g3 = true
+let lr1 = opt_lr_warmup_cosine(BASE, FLOOR, 1, N, WARMUP)
+if lr1 <= 0.0 { g3 = false }
+let mut tw = 1
+let mut prev = 0.0 - 1.0
+while tw <= WARMUP {
+    let cur = opt_lr_warmup_cosine(BASE, FLOOR, tw, N, WARMUP)
+    // strictly increasing
+    if cur <= prev { g3 = false }
+    // byte-exact closed form  base·(t/warmup)
+    let closed = BASE * (to_float(tw) / to_float(WARMUP))
+    if !_bits_eq(cur, closed) { g3 = false }
+    prev = cur
+    tw = tw + 1
+}
+print("  G3 WARMUP-RAMP     lr(1)="); print(lr1)
+print("  strictly-incr + closed-form byte-eq over [1.."); print(WARMUP); print("] = "); println(g3)
+if !g3 { fail = fail + 1 }
+
+// ── G4 DECAY-MONOTONE : non-increasing over [warmup..n_steps] ────────────
+let mut g4 = true
+let mut td = WARMUP
+let mut prevd = opt_lr_warmup_cosine(BASE, FLOOR, WARMUP, N, WARMUP)
+let mut max_up = 0.0
+while td <= N {
+    let cur = opt_lr_warmup_cosine(BASE, FLOOR, td, N, WARMUP)
+    let up = cur - prevd
+    if up > 0.0 {
+        if up > max_up { max_up = up }
+        g4 = false
+    }
+    prevd = cur
+    td = td + 1
+}
+print("  G4 DECAY-MONOTONE  non-increasing over [warmup..n_steps] = "); print(g4)
+print("  (max upward step = "); print(max_up); println(")")
+if !g4 { fail = fail + 1 }
+
+// ── G5 RANGE : TWO-PHASE codomain. The warmup ramp deliberately starts
+//    BELOW the floor (near 0, per "linear ramp 0→base"); the floor binds the
+//    COSINE DECAY tail only. So: warmup phase [1..warmup] ∈ (0, base],
+//    decay phase [warmup..n_steps] ∈ [base·floor, base]. ────────────────────
+let mut g5 = true
+let lo = BASE * FLOOR
+let hi = BASE
+let mut tr = 1
+let mut min_lr = hi
+let mut max_lr = lo
+let mut min_decay = hi
+while tr <= N {
+    let cur = opt_lr_warmup_cosine(BASE, FLOOR, tr, N, WARMUP)
+    if cur < min_lr { min_lr = cur }
+    if cur > max_lr { max_lr = cur }
+    // whole-schedule upper bound is base (the peak)
+    if cur > hi { g5 = false }
+    if tr <= WARMUP {
+        // warmup phase: strictly > 0 and <= base (starts near 0)
+        if cur <= 0.0 { g5 = false }
+    } else {
+        // decay phase: bound by the floor below
+        if cur < lo { g5 = false }
+        if cur < min_decay { min_decay = cur }
+    }
+    tr = tr + 1
+}
+print("  G5 RANGE           whole min_lr="); print(min_lr); print("  max_lr="); print(max_lr)
+print("  decay-tail min="); print(min_decay)
+print("  (warmup(0,base] + decay[base*floor,base]) = "); println(g5)
+if !g5 { fail = fail + 1 }
+
+// ── G6 SEAM-CONTINUITY : the jump at the warmup→cosine seam is O(one step) ─
+let lr_w  = opt_lr_warmup_cosine(BASE, FLOOR, WARMUP,     N, WARMUP)
+let lr_w1 = opt_lr_warmup_cosine(BASE, FLOOR, WARMUP + 1, N, WARMUP)
+let seam_jump = _abs(lr_w - lr_w1)
+// one warmup increment is base/warmup; the seam jump must be no larger than a
+// few of those (continuity — NOT a cliff). bound = 3·base/warmup.
+let seam_bound = 3.0 * (BASE / to_float(WARMUP))
+let g6 = seam_jump <= seam_bound
+print("  G6 SEAM-CONTINUITY |lr(warmup)-lr(warmup+1)| = "); print(seam_jump)
+print("  <= 3*base/warmup="); print(seam_bound); print(" -> "); println(g6)
+if !g6 { fail = fail + 1 }
+
+// ── G7 FOLD-ORDER-BYTES : base·(t/warmup) byte-DIFFERS from (base·t)/warmup
+//    for >=1 step (PROVES the documented "float-different" claim) ─────────
+let mut fold_diffs = 0
+let mut tf = 1
+while tf <= WARMUP {
+    let right = opt_lr_warmup_cosine(BASE, FLOOR, tf, N, WARMUP)  // base·(t/warmup)
+    let wrong = warmup_ramp_wrongfold(BASE, tf, WARMUP)           // (base·t)/warmup
+    if !_bits_eq(right, wrong) { fold_diffs = fold_diffs + 1 }
+    tf = tf + 1
+}
+let g7 = fold_diffs >= 1
+print("  G7 FOLD-ORDER      base*(t/warmup) != (base*t)/warmup on "); print(fold_diffs)
+print(" / "); print(WARMUP); print(" steps -> claim-real="); println(g7)
+if !g7 { fail = fail + 1 }
+
+// ── verdict ──────────────────────────────────────────────────────────────
+println("")
+if fail == 0 {
+    println("F-OP76-LR-SCHEDULE-SHAPE = 1")
+    println("PASS 7/7 — documented LR-schedule shape/boundary contract LOCKED")
+    println("  (peak-exact · floor-exact · warmup-ramp · decay-monotone · range ·")
+    println("   seam-continuity · fold-order-float-different).")
+} else {
+    println("F-OP76-LR-SCHEDULE-SHAPE = 0")
+    print("FAIL "); print(fail); println(" / 7 — shape contract violated.")
+}

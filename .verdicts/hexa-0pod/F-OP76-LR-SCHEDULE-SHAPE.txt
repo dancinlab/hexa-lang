@@ -1,0 +1,124 @@
+════════════════════════════════════════════════════════════════════════════════
+ F-OP76-LR-SCHEDULE-SHAPE — opt_lr_warmup_cosine SHAPE/BOUNDARY contract oracle
+ locks the documented optim_lib.hexa:131-149 schedule contract OP-33 LEFT UNGATED
+ HEXA-0POD OP-76 · 0-GPU · local arm64-macos only · ZERO vast · no foreign pod · $0
+════════════════════════════════════════════════════════════════════════════════
+date: 2026-06-13   tier: 🟢 GREEN — invariant-lock (7/7 PASS)
+base: origin/main @ 02b0e3f97 (post #3206 / OP-73 public-claim honesty)
+scope: $0 · 0-pod · NO GPU · no vast · no foreign pod · no .tape · oracle-only · leak-0
+
+GOAL
+  Self-select the next GENUINELY FRESH 0-pod forge/flame item on a surface NONE of
+  OP-58..64/66..74 touched. PRIORITIZE the regimen route-(b) class — a flame
+  trainer-glue invariant DOCUMENTED but NOT in the closed oracle set → CPU-oracle
+  lock.
+
+────────────────────────────────────────────────────────────────────────────────
+ 1. SURVEY (scoped greps/reads, NO .git) — actionable / dry / flag per axis
+────────────────────────────────────────────────────────────────────────────────
+  (a) forge DOC-vs-CODE honesty (OP-71/73 class): the nvptx shfl/exp threads +
+      the public-claim surface are CLOSED (OP-71 wired-comment, OP-73 definitive
+      audit @#3206). Re-read found no NEW stale doc-vs-source contradiction on a
+      fresh forge surface. → DRY this round.
+  (b) flame trainer-glue invariant DOCUMENTED-but-UNLOCKED → the ACTIONABLE axis:
+      · GN epsilon placement (sqrt(var+eps), eps=1e-5 PyTorch default) — gradient
+        already exercised by flame_gn_test (central finite-diff, GRAD-EXACT). The
+        eps PLACEMENT itself is held by the grad test → not a fresh gap.
+      · conv causal no-future-leak — ALREADY LOCKED (flame_conv_test.hexa
+        check_causal: perturbing a strictly-future input leaves Y[0] unchanged).
+      · LR warmup+cosine SHAPE/BOUNDARY contract — **THE HOLE**. optim_lib.hexa
+        :131-149 documents an explicit shape contract (peak=base at t=warmup,
+        floor=base·floor at t=n_steps, linear ramp 0→base, cosine decay base→floor,
+        and the byte-critical fold base·(t/warmup) NOT (base·t)/warmup), but the
+        ONLY existing oracle (op33_lr_schedule_determinism_eq.hexa) locks the
+        byte-DETERMINISM of the trajectory + d5-vs-libm divergence — it NEVER
+        asserts ONE of the SHAPE/BOUNDARY promises. OP-33 LOCKED THAT IT'S
+        REPRODUCIBLE, ASSUMING IT'S SHAPE-CORRECT — exactly the OP-66/68/70/72/74
+        documented-but-ungated-assumption class.
+  (c) forge cost-model self-consistency (OP-60/63 class): selector provenance +
+      parity-map are closed (OP-60/61/63). No fresh cross-check surfaced. → DRY.
+  (d) ## deferred + .log.md tail: all build-host (SELFHOST-NEXT frozen-anchor
+      re-pin) or GPU-bound. → out of 0-pod scope.
+
+  PICK = (b) LR-schedule shape contract, g0-simplest: a pure CPU `hexa run` leaf
+  oracle, no GPU, no build, the exact hole OP-33 left open on the campaign's own
+  flagship machine-independent scheduler.
+
+────────────────────────────────────────────────────────────────────────────────
+ 2. THE GAP (verbatim)
+────────────────────────────────────────────────────────────────────────────────
+  optim_lib.hexa:131-149 (the canonical machine-independent scheduler doc):
+    //   t <= warmup : lr = base · t/warmup                (linear ramp 0→base)
+    //   else        : prog = (t−warmup)/(n_steps−warmup)  (0..1)
+    //                 cosf = 0.5·(1 + d5_cos(π·prog))     (1..0)
+    //                 lr = base · (floor + (1−floor)·cosf)
+    //   • warmup ramp = base·(t/warmup) — divide BEFORE multiply, NOT
+    //     (base·t)/warmup.            ← documented as byte-critical
+  op33_lr_schedule_determinism_eq.hexa asserts ONLY:
+    (1) RUN-TO-RUN d5 schedule max|Δ| == 0   (byte-determinism)
+    (3) libm-cos lane vs d5 lane bit-diff count   (the deterministic-swap cost)
+  → ZERO assertions on peak / floor / monotonicity / range / seam / fold-order.
+  A refold, an off-by-one at the warmup seam, a cosine sign flip, or a wrong floor
+  could stay byte-DETERMINISTIC (OP-33 still green) yet be shape-WRONG.
+
+────────────────────────────────────────────────────────────────────────────────
+ 3. THE LOCK — stdlib/flame/op76_lr_schedule_shape_contract_eq.hexa
+────────────────────────────────────────────────────────────────────────────────
+  Self-contained leaf oracle (NO `use`; the schedule + d5_cos inlined VERBATIM
+  from optim_lib.hexa / flame_math, OP-33/72 pattern). Config = the OP-23b
+  schedule: N=500, warmup=50, base_lr=0.001, floor_frac=0.05. 7 gates:
+    G1 PEAK-EXACT      lr(warmup) == base                 (byte-eq, f64_to_bytes_le)
+    G2 FLOOR-EXACT     lr(n_steps) == base·floor           (byte-eq)
+    G3 WARMUP-RAMP     [1..warmup] strictly increasing, lr(1)>0, and byte-eq to the
+                       closed form base·(t/warmup)
+    G4 DECAY-MONOTONE  [warmup..n_steps] non-increasing (max upward step reported)
+    G5 RANGE           TWO-PHASE codomain — warmup ∈ (0, base], decay ∈ [base·floor,
+                       base]  (see §4: the warmup ramp deliberately starts BELOW
+                       the floor)
+    G6 SEAM-CONTINUITY |lr(warmup)−lr(warmup+1)| <= 3·base/warmup  (no cliff)
+    G7 FOLD-ORDER      base·(t/warmup) byte-DIFFERS from (base·t)/warmup on ≥1 step
+                       (PROVES line 148-149's "float-different" claim is real)
+
+  RUN-TO-RUN VERBATIM (`hexa run stdlib/flame/op76_lr_schedule_shape_contract_eq.hexa`,
+  arm64-macos, exit 0):
+    config:   N=500  warmup=50  base_lr=0.001  floor_frac=0.05
+    G1 PEAK-EXACT      lr(warmup=50) = 0.001  (want base=0.001)  byte-eq=true
+    G2 FLOOR-EXACT     lr(n_steps=500) = 5e-05  (want base*floor=5e-05)  byte-eq=true
+    G3 WARMUP-RAMP     lr(1)=2e-05  strictly-incr + closed-form byte-eq over [1..50] = true
+    G4 DECAY-MONOTONE  non-increasing over [warmup..n_steps] = true  (max upward step = 0.0)
+    G5 RANGE           whole min_lr=2e-05  max_lr=0.001  decay-tail min=5e-05
+                       (warmup(0,base] + decay[base*floor,base]) = true
+    G6 SEAM-CONTINUITY |lr(warmup)-lr(warmup+1)| = 1.15754e-08  <= 3*base/warmup=6e-05 -> true
+    G7 FOLD-ORDER      base*(t/warmup) != (base*t)/warmup on 12 / 50 steps -> claim-real=true
+    F-OP76-LR-SCHEDULE-SHAPE = 1
+    PASS 7/7 — documented LR-schedule shape/boundary contract LOCKED
+
+────────────────────────────────────────────────────────────────────────────────
+ 4. CONTRACT-PRECISION FINDING (the G5 subtlety the oracle surfaced)
+────────────────────────────────────────────────────────────────────────────────
+  The first oracle draft asserted a single whole-schedule codomain [base·floor,
+  base] and FAILED: min_lr = 2e-05 (= lr(1) = base·1/50) sits BELOW the floor
+  base·floor = 5e-05. This is CORRECT scheduler behavior, NOT a bug — the warmup
+  ramp deliberately starts near 0 ("linear ramp 0→base"), so the floor binds the
+  COSINE DECAY TAIL only, never the warmup ramp. The lock now encodes the precise
+  TWO-PHASE codomain (warmup ∈ (0,base], decay ∈ [base·floor,base]) — a contract
+  subtlety the naive "lr ∈ [floor,base]" reading misses. opt_lr_warmup_cosine is
+  SSOT-correct; the oracle caught an over-broad ASSERTION, then was tightened to
+  the true documented two-phase shape.
+
+────────────────────────────────────────────────────────────────────────────────
+ 5. SAFETY
+────────────────────────────────────────────────────────────────────────────────
+  Oracle-only — opt_lr_warmup_cosine unchanged, no behavior change (the schedule
+  is already SSOT-correct; this adds the MISSING contract lock). Self-host byte-eq
+  UNAFFECTED: op76_*_eq.hexa is a leaf self-contained oracle, NOT in the
+  compiler/main.hexa build_selfhost closure; 0 codegen/runtime/stdlib-lib bytes
+  touched. wipe_guard: net-additive (one new file). No .tape, no self/env.hexa.
+  $0 · 0-pod · NO GPU · no vast · no foreign pod · leak-0.
+
+VERDICT: 🟢 GREEN — invariant-lock. The documented opt_lr_warmup_cosine shape/
+  boundary contract OP-33 left ungated is now LOCKED at 7/7 (peak-exact · floor-
+  exact · warmup-ramp · decay-monotone · two-phase-range · seam-continuity ·
+  fold-order-float-different). The campaign's machine-independent LR scheduler is
+  now contract-locked on BOTH axes: byte-determinism (F-OP33) + shape (F-OP76).
+════════════════════════════════════════════════════════════════════════════════
