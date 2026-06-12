@@ -524,3 +524,33 @@ cuBLAS-TF32):**
   same-dtype TF32-tolerant check (rel-RMS vs cuBLAS-TF32), NOT rel-RMS 0 dev-vs-dev — cuBLAS-TF32 does
   not expose its accumulation order. **Value = bit-exactness + device-residency + no-vendor-call on the
   FREE consumer card**, same framing as §0 — parity-seeking, not a beat.
+
+### 10.1 OP-57 — does a SMALLER tile improve small-D on the consumer card? **NO (🔴, measured)**
+
+The §8 cost model predicts the Hopper **64×64** tile fills the 132-SM device **3.1× better** than the
+128×128 baseline at deep under-fill (D≤512). That design is **sm_90a wgmma — it does not run on the
+consumer sm_120** (ptxas rejects wgmma). The closest **FREE proxy** is to shrink the *already-64×64*
+OWN120 to a **32×32 / 1-warp** tile (4× the CTAs/tiles at a given D) and ask whether the more-CTA fill
+helps the small-D regime on the RTX 5070. **HEXA-0POD OP-57** (`F-OP57-SUMMER-SMALLTILE.txt`, summer
+FREE pool, CUDA 12.9, $0) built a tile-parametrized **clone** (BM/BN/WARPS `-D`-overridable; the
+shipped kernel is **unchanged**) and A/B-swept D=256/512/768/1024 — 32×32 vs the 64×64 baseline,
+bit-exact preserved (rel-RMS **identical** between the two configs at every shape, a hard proof the
+shrink is a pure fill change):
+
+| D | baseline 64×64 off-cuBLAS | smalltile 32×32 off-cuBLAS | result |
+|---|---------------------------|----------------------------|--------|
+| 256  | 1.34× | 1.67× | WORSE |
+| 512  | 1.18× | 1.62× | WORSE |
+| 768  | **0.96× ← own EDGES cuBLAS** | **4.13× ← collapses** | FAR WORSE |
+| 1024 | 1.44× | 2.52× | WORSE |
+
+- **The hypothesis is REFUTED on the consumer card.** The smaller tile is strictly worse at every
+  small-D shape — catastrophically at D=768 (0.96× → 4.13×). The 32×32 / 1-warp tile cannot keep the
+  `mma.sync` m16n8 tensor-core pipeline busy (one warp/CTA vs four) **and** halves A/B smem-reuse per
+  global load; the extra CTAs light up more SMs but the **64×64 already fills the 50-SM device** at
+  D≥512, so there is no under-fill to cure — only warp-underutilization + reuse-loss to pay.
+- **The Hopper 64×64-fills-better prediction does NOT transfer.** It was a 132-SM / 128×128-baseline
+  result; the 5070's already-small 64×64 tile has no headroom to shrink. The **shipped 64×64 OWN120
+  tile stays the consumer-card optimum** (D=768 0.96×). The wgmma 64×64 design (MODE_t64, §8) remains a
+  **Hopper-only future build** — untested here (sm_120 can't run wgmma); OP-57 is its closest free
+  sm_120 proxy and the proxy says the more-CTA lever does not help an already-small-tile consumer kernel.

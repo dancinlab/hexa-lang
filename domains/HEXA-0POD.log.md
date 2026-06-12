@@ -2476,3 +2476,42 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   docs/forge-routea-shape-adaptive.md §10 (consumer-sm_120 row, union-resolved after OP-53's §8/§9) + this log. No
   code change (the OWN120 kernel was already in-tree + tuned; OP-54 is a fresh independent MEASUREMENT on a 2nd free
   card). MAIN.tape #-comment SKIPPED (the file is untracked-on-origin / sibling-introduced — avoided a merge race).
+
+## OP-57 — sm_120 OWN120 SMALLER-TILE small-D proxy on the FREE pool RTX 5070 `summer`: 32x32/1-warp vs 64x64/2x2 baseline A/B sweep — smaller tile STRICTLY WORSE at every small-D shape, bit-exact preserved (🔴 hypothesis, honest negative) — 2026-06-13
+- CONTEXT: OP-53 (#3134) designed a Hopper 64x64 small-tile (MODE_t64) the CPU cost model predicts fills the
+  132-SM device 3.1x better @D<=512. That design is sm_90a wgmma → ptxas-rejected on summer's sm_120 (no wgmma).
+  The in-tree OWN120 (self/native/mma_sm120/owngemm_sm120.cu, the OP-1/OP-1b-tuned mma.sync kernel OP-54 measured)
+  is ALREADY a 64x64 tile, so the closest FREE sm_120 proxy for "smaller tile fills better at small-D" = shrink
+  OWN120 to 32x32 / 1-warp (4x the CTAs/tiles at a given D) and A/B-sweep vs the 64x64 baseline at D=256/512/768/1024.
+- METHOD: tile-PARAMETRIZED clone (BM/BN/WARPS `-D`-overridable; the shipped owngemm_sm120.cu is UNCHANGED — the
+  clone ran off-tree on summer). Each warp owns a 32x32 sub-tile in BOTH configs (the 64x64 is 4 such sub-tiles,
+  the 32x32 is one), running the IDENTICAL per-output K-major mma.sync loop → bit-exact preserved by construction.
+  Built on summer's CUDA 12.9 (12.0 ptxas has no sm_120, per OP-54). BUILD_OK both: baseline 1054072 B, smalltile
+  1066360 B. 3 reps, iters=50, cudaEvent, off-cuBLAS = cuBLAS÷own.
+- SHARED-HOST CONTENTION (g5): summer GPU at 98% FOREIGN load (nvidia-smi: PID 110588 python 7190MiB + PID 483710
+  python3, NOT mine, left untouched per g9) — absolute TFLOP/s suppressed; the baseline-vs-smalltile RATIO (both
+  eat the same contention back-to-back) is the contention-robust metric.
+- GATE (VERBATIM, IDENTICAL between the two configs at every shape → proves the shrink is a pure FILL change, not
+  math): S=256 rel-RMS 2.692e-05 · S=512 1.961e-05 · S=768 1.332e-05 · S=1024 3.019e-05 (gate<=1e-2, all PASS,
+  baseline == smalltile byte-for-byte). The smalltile rel-RMS matching the baseline exactly is the hard bit-equality.
+- SWEEP (median off-cuBLAS over 3 reps, baseline 64x64 → smalltile 32x32): D=256 1.34x → 1.67x (WORSE) · D=512
+  1.18x → 1.62x (WORSE) · D=768 0.96x (own EDGES cuBLAS) → 4.13x (COLLAPSE, own 5.6 vs cuBLAS 23.3 TFLOP/s) ·
+  D=1024 1.44x → 2.52x (WORSE). The smaller tile is STRICTLY WORSE at EVERY small-D shape.
+- WHY (physics, honest): the 32x32 / 1-warp tile has ONE warp/CTA (can't keep the mma.sync m16n8 pipeline busy vs
+  the 64x64's 4 warps) AND halves A/B smem-reuse per global load. The extra CTAs light up more SMs, but the 64x64
+  already FILLS the 50-SM RTX 5070 at D>=512 (D=512 → 64 tiles >> 50 SMs) → no under-fill to cure, only
+  warp-underutilization + reuse-loss to pay. Consumer-card MEASURED counterpart to OP-54's "no small-D-closer trend".
+- DID THE PREDICTION HOLD? NO. The OP-53 64x64-fills-better was a HOPPER (132-SM, 128x128-baseline) cost-model
+  result; on the 5070 (50 SMs, 64x64-baseline) the analogous shrink goes the OTHER way. The wgmma 64x64 design
+  itself (MODE_t64) is UNTESTED here (sm_120 can't run wgmma) + remains a HOPPER-ONLY future build; OP-57 is its
+  closest free sm_120 proxy and the proxy says the more-CTA lever does NOT help an already-small-tile consumer kernel.
+- CLEANUP: temp build dir /tmp/op57-build rm -rf'd by the runner + /tmp/op57_run.sh removed → CLEAN (ls /tmp/op57*
+  = no-op57-temp-left); no own-GEMM binary left running; nvidia-smi compute-apps = ONLY the 2 foreign python
+  (untouched). summer left clean, $0, no pod, nothing to leak.
+- VERDICT: 🔴 RED for the hypothesis (honest negative — CLOSES the "smaller tile helps small-D on the consumer card"
+  question with a clean bit-exact A/B measurement; saves a future lane from re-attempting). The underlying OWN120
+  kernel is UNCHANGED + still 🟢 at its 64x64 sweet spot (D=768 0.96x, OP-54 reproduced here every rep). Milestone
+  OP-57 [x]. Deliverables: F-OP57-SUMMER-SMALLTILE.txt (verbatim A/B sweep + 3-rep raw) + docs/forge-routea-shape-
+  adaptive.md §10.1 (consumer-card shrink-negative, union-resolved after §10). No shipped-code change. MAIN.tape
+  #-comment SKIPPED (the file is untracked-on-origin, same as OP-54 — avoided a merge race). $0, no vast, no pod,
+  no foreign-pod touched.
