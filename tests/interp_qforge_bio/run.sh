@@ -7,10 +7,21 @@
 #
 # Gap map (handoff id -> probe -> status on current main):
 #   eb7f3073  gap5 visibility   -> CONTRACT (convention-only; SPEC.md §6.4). Not enforced by design.
-#   043569f7  gap4 float-fold   -> FIXED in source (OP-40 hex-float fold). Needs FRESH hexat
-#                                  (stale installed binary still truncates to 6 sig-figs).
-#   17b823a6  gap2 floor/%      -> RESOLVED: floor() returns int; float % is type-consistent.
-#   fcd72679  gap3 struct-slot  -> RESOLVED: cross-module slot-name collisions work (bt74 fix).
+#   043569f7  gap4 float-fold   -> REAL BUG, ALREADY FIXED ON MAIN by #3084 (OP-40, 9d3aee960,
+#                                  merged 2026-06-12). Root cause: the comptime float-fold
+#                                  serialized the folded double via format_float_sci ("%.17e"),
+#                                  and the self-host runtime's hand-rolled vsnprintf is NOT
+#                                  correctly-rounded -> ~6-sig-fig truncation (3.150574226831496
+#                                  -> 3.15057). OP-40 swaps _cf_float_node to emit a bit-exact
+#                                  hex-float literal (_cf_float_hexlit). VERIFIED: a hexat built
+#                                  from current main emits hexa_float(0x1.93460429ee4e3p+1) and
+#                                  gap4_equal -> FOLD_EXACT. The installed binary (Jun-8) PREDATES
+#                                  the Jun-12 fix -> still FOLD_LOSSY. Resolution = reinstall/
+#                                  rebuild the toolchain; no further source change needed.
+#   17b823a6  gap2 floor/%      -> RESOLVED: floor() returns int (rt_floor -> int); float % is
+#                                  type-consistent. The float/% grid-desync premise no longer holds.
+#   fcd72679  gap3 struct-slot  -> RESOLVED: cross-module slot-name collisions work (bt74 tail-
+#                                  return fix removed the spurious "map key not found").
 #   (no id)   gap1 closure      -> RESOLVED: closures capture local `let`, not just params.
 #
 # Usage: bash tests/interp_qforge_bio/run.sh
