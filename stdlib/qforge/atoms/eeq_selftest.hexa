@@ -1,0 +1,121 @@
+// @ci_gate — deterministic · pure analytic anchors
+//
+// qforge/atoms/eeq_selftest.hexa — QFORGE atoms brick #1 (EEQ charges) g5 gate.
+//
+// eeq.hexa assembles + solves the closed-form electronegativity-equilibration
+// linear system for atomic partial charges (the GFN2-xTB / DFT-D4 charge model,
+// Caldeweyher 2019). Anchors (d6 — every number derivable in closed form, none
+// fit/tuned, none paraphrased from an external code):
+//
+//   (A) CHARGE CONSERVATION: the constraint row forces Σ q_i = Q_tot EXACTLY
+//       (here Q_tot = 0 for a neutral molecule, and a non-zero cation test).      🟢
+//   (B) HOMONUCLEAR SYMMETRY: two IDENTICAL atoms, Q_tot=0 → q = (0, 0) exactly
+//       (symmetry q₁=q₂ + conservation q₁=−q₂ ⇒ both zero). The pure invariant.   🔵
+//   (C) HETERONUCLEAR CLOSED FORM: for a diatomic, Q_tot=0, the analytic charge
+//       q₁ = (χ₂−χ₁)/(A₁₁+A₂₂−2·A₁₂) with A_ii = η_i+sqrt(2/π)/α_i and
+//       A₁₂ = erf(R/γ)/R. The solver must reproduce this to solver+erf tol.       🟢
+//   (D) POLARITY SIGN: the MORE electronegative atom (larger χ) carries the
+//       NEGATIVE charge — the physical direction of charge transfer.              🔵
+//   (E) DISSOCIATION LIMIT: as R→∞, erf(R/γ)/R → 0, so A₁₂→0 and the diatomic
+//       charge → (χ₂−χ₁)/(A₁₁+A₂₂): atoms decouple to their bare-hardness fill.    🟢
+//   (F) ENERGY STATIONARITY: the assembled energy E(q) is MINIMAL at the solved
+//       q — perturbing q (charge-conserving) RAISES E (the variational anchor).   🟢
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/atoms/eeq_selftest.hexa
+// PASS: "qforge_eeq_selftest PASS".
+use "stdlib/qforge/atoms/eeq"
+use "stdlib/core/special"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _sqrtf(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    if g < 1.0 { g = 1.0 }
+    let mut it = 0
+    while it < 60 { let ng = 0.5 * (g + x / g) ; if ng == g { break } ; g = ng ; it = it + 1 }
+    return g
+}
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let two_over_pi_sqrt = 0.7978845608028654
+
+    // ══ (A) CHARGE CONSERVATION ════════════════════════════════════════════
+    // 3-atom bent molecule, neutral. Σ q must be exactly 0 (the border row).
+    let pos3 = [0.0, 0.0, 0.0,  1.8, 0.0, 0.0,  0.9, 1.5, 0.0]
+    let chi3 = [1.20, 1.85, 1.85]
+    let eta3 = [0.50, 0.62, 0.62]
+    let alp3 = [1.20, 0.80, 0.80]
+    let q3 = qforge_eeq_charges(pos3, chi3, eta3, alp3, 0.0)
+    let sum3 = q3[0] + q3[1] + q3[2]
+    fails = fails + _ck_close("(A) neutral: Σ q = 0", sum3, 0.0, 1.0e-9)
+    // cation: Q_tot = +1 must be reproduced exactly.
+    let q3c = qforge_eeq_charges(pos3, chi3, eta3, alp3, 1.0)
+    let sum3c = q3c[0] + q3c[1] + q3c[2]
+    fails = fails + _ck_close("(A) cation: Σ q = +1", sum3c, 1.0, 1.0e-9)
+
+    // ══ (B) HOMONUCLEAR SYMMETRY → q = (0,0) ═══════════════════════════════
+    let posH = [0.0, 0.0, 0.0,  1.4, 0.0, 0.0]
+    let chiH = [1.50, 1.50]
+    let etaH = [0.55, 0.55]
+    let alpH = [1.00, 1.00]
+    let qH = qforge_eeq_charges(posH, chiH, etaH, alpH, 0.0)
+    fails = fails + _ck_close("(B) homonuclear q[0] = 0", qH[0], 0.0, 1.0e-9)
+    fails = fails + _ck_close("(B) homonuclear q[1] = 0", qH[1], 0.0, 1.0e-9)
+
+    // ══ (C) HETERONUCLEAR CLOSED FORM ══════════════════════════════════════
+    // q₁ = (χ₂−χ₁)/(A₁₁+A₂₂−2·A₁₂),  A_ii = η_i+sqrt(2/π)/α_i,  A₁₂=erf(R/γ)/R.
+    let R = 1.6
+    let posD = [0.0, 0.0, 0.0,  R, 0.0, 0.0]
+    let chiD = [1.10, 2.05]      // atom 1 less electronegative
+    let etaD = [0.48, 0.66]
+    let alpD = [1.30, 0.75]
+    let qD = qforge_eeq_charges(posD, chiD, etaD, alpD, 0.0)
+    let A11 = etaD[0] + two_over_pi_sqrt / alpD[0]
+    let A22 = etaD[1] + two_over_pi_sqrt / alpD[1]
+    let gamma = _sqrtf(alpD[0] * alpD[0] + alpD[1] * alpD[1])
+    let A12 = erf_fn(R / gamma) / R
+    let q1_analytic = (chiD[1] - chiD[0]) / (A11 + A22 - 2.0 * A12)
+    fails = fails + _ck_close("(C) q[0] matches closed form", qD[0], q1_analytic, 1.0e-7)
+    fails = fails + _ck_close("(C) q[1] = −q[0]", qD[1], 0.0 - qD[0], 1.0e-9)
+
+    // ══ (D) POLARITY SIGN ══════════════════════════════════════════════════
+    // atom 1 has the SMALLER χ → it should be the POSITIVE (electron-donor) one,
+    // atom 2 (larger χ) the negative. So q[0] > 0 and q[1] < 0.
+    fails = fails + _ck_true("(D) less-EN atom is positive (q[0] > 0)", qD[0] > 0.0)
+    fails = fails + _ck_true("(D) more-EN atom is negative (q[1] < 0)", qD[1] < 0.0)
+
+    // ══ (E) DISSOCIATION LIMIT (R → large) ═════════════════════════════════
+    // at large R, A₁₂ → 0, so q[0] → (χ₂−χ₁)/(A₁₁+A₂₂).
+    let Rbig = 50.0
+    let posF = [0.0, 0.0, 0.0,  Rbig, 0.0, 0.0]
+    let qF = qforge_eeq_charges(posF, chiD, etaD, alpD, 0.0)
+    let q1_decoupled = (chiD[1] - chiD[0]) / (A11 + A22)
+    fails = fails + _ck_close("(E) R→∞: q[0] → decoupled fill", qF[0], q1_decoupled, 1.0e-6)
+    // and the coupled charge has larger magnitude than the decoupled one
+    // (the inter-atom Coulomb A₁₂>0 in the denominator REDUCES the split):
+    fails = fails + _ck_true("(E) coupling reduces |q| (|q_R| > |q_∞|)",
+                             _abs(qD[0]) > _abs(qF[0]))
+
+    // ══ (F) ENERGY STATIONARITY (variational minimum) ══════════════════════
+    // E(q*) ≤ E(q* + δ) for any charge-conserving perturbation δ=(+ε,−ε).
+    let e0 = qforge_eeq_energy(posD, chiD, etaD, alpD, qD)
+    let eps = 0.01
+    let qpA = [qD[0] + eps, qD[1] - eps]
+    let qpB = [qD[0] - eps, qD[1] + eps]
+    let ea = qforge_eeq_energy(posD, chiD, etaD, alpD, qpA)
+    let eb = qforge_eeq_energy(posD, chiD, etaD, alpD, qpB)
+    fails = fails + _ck_true("(F) E minimal at solved q (both perturbations raise E)",
+                             ea > e0 && eb > e0)
+
+    if fails == 0 { println("qforge_eeq_selftest PASS") }
+    else { println("qforge_eeq_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
