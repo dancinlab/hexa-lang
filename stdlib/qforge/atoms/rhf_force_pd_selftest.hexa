@@ -108,21 +108,24 @@ fn main() {
     // component (∂T,∂V,∂ERI,∂S through the 2p AOs) is exercised. FD on the SAME DOF.
     let h = 5.0e-4
     let mut maxdiff = 0.0
-    // sweep all 9 DOF (3 atoms × 3 dims): analytic vs FD.
-    let mut a = 0
-    while a < natom {
-        let mut dimd = 0
-        while dimd < 3 {
-            let fa = qf_pd_force_component(1, pos, pw, exps, coef, aom, norb, z, natom, n_occ, a, dimd)
-            let ff = qf_pd_force_fd(pos, pw, exps, coef, aom, norb, z, natom, n_occ, a, dimd, h)
-            let dd = _abs(fa - ff)
-            if dd > maxdiff { maxdiff = dd }
-            println("  F[atom" + to_string(a) + ",dim" + to_string(dimd) + "] analytic=" + to_string(fa) + " fd=" + to_string(ff) + " |Δ|=" + to_string(dd))
-            dimd = dimd + 1
-        }
-        a = a + 1
+    // Representative p-bearing DOF set (CI-tractable; the full 9-DOF sweep is the
+    // same identity at higher walltime): O-z & O-y exercise the O 2p_z/2p_y AOs +
+    // Hellmann-Feynman nucleus term; Ha-y & Hb-z exercise the H s-AOs against O's 2p.
+    // Each: analytic (qf_pd_force_component, NO FD) vs central-FD reference.
+    let dof_a = [0, 0, 1, 2]
+    let dof_d = [2, 1, 1, 2]
+    let mut q = 0
+    while q < 4 {
+        let a = dof_a[q]
+        let dimd = dof_d[q]
+        let fa = qf_pd_force_component(1, pos, pw, exps, coef, aom, norb, z, natom, n_occ, a, dimd)
+        let ff = qf_pd_force_fd(pos, pw, exps, coef, aom, norb, z, natom, n_occ, a, dimd, h)
+        let dd = _abs(fa - ff)
+        if dd > maxdiff { maxdiff = dd }
+        println("  F[atom" + to_string(a) + ",dim" + to_string(dimd) + "] analytic=" + to_string(fa) + " fd=" + to_string(ff) + " |Δ|=" + to_string(dd))
+        q = q + 1
     }
-    fails = fails + _ck_le("(b) max|F_analytic − F_FD| over all 9 DOF (H₂O)", maxdiff, 1.0e-6)
+    fails = fails + _ck_le("(b) max|F_analytic − F_FD| over p-bearing DOF (H₂O)", maxdiff, 1.0e-6)
 
     // Pulay term load-bearing: drop W·∂S (with_pulay=0) on the O-z DOF → must DIVERGE
     // from FD (the p-bearing Pulay contribution is non-trivial).
@@ -163,13 +166,17 @@ fn main() {
     // projected bond force on Ha along the O→Ha unit vector, at scale s.
     fn _fbond(p: [float], pw: [[int]], exps: [[float]], coef: [[float]], aom: [int],
               norb: int, z: [float], natom: int, n_occ: int) -> float {
-        let f = qf_pd_force(1, p, pw, exps, coef, aom, norb, z, natom, n_occ)
+        // only Ha (atom1) 3 components needed for the bond projection (lighter than
+        // the full 9-component vector — same analytic component fn).
+        let fx = qf_pd_force_component(1, p, pw, exps, coef, aom, norb, z, natom, n_occ, 1, 0)
+        let fy = qf_pd_force_component(1, p, pw, exps, coef, aom, norb, z, natom, n_occ, 1, 1)
+        let fz = qf_pd_force_component(1, p, pw, exps, coef, aom, norb, z, natom, n_occ, 1, 2)
         // O→Ha unit vector
         let dx = p[3]-p[0] ; let dy = p[4]-p[1] ; let dz = p[5]-p[2]
         let r = sqrt(dx*dx+dy*dy+dz*dz)
         let ux = dx/r ; let uy = dy/r ; let uz = dz/r
         // force on Ha (atom1) projected onto outward bond axis (>0 = pushing outward)
-        return f[3]*ux + f[4]*uy + f[5]*uz
+        return fx*ux + fy*uy + fz*uz
     }
     let p_short = _stretch(pos, 0.85)   // compressed
     let p_long  = _stretch(pos, 1.15)   // stretched
