@@ -1,0 +1,85 @@
+// t51_arena_return_late_index — regression for handoff aededed6 (gen3 arena bug)
+//
+// An array returned via __hexa_fn_arena_return, bound to a `let`, then INDEXED
+// LATE after many subsequent allocations, was reported to read back WRONG /
+// swapped element values (silent, no crash) under HEXA_VAL_ARENA=1 (default).
+// Repro shape mirrors QFORGE-CHIP qforge_chip_diatomic_gap → eigh → eigh_jacobi:
+//   * nested arrays grown via .push() (arena items buffer, cap<0)
+//   * heterogeneous return [vals, vectors, sweeps]
+//   * re-wrap [result[0], result[1]]
+//   * index a nested arena-returned array, return an array LITERAL of those
+//   * caller holds the result, runs many allocations, indexes LATE.
+//
+// Expected (correct):  g1=[-0.8,0.8] g2=[-0.3,0.3] g3=[-1.5,1.5]  → "PASS"
+// Buggy behavior:      swapped/stale element reads → "FAIL".
+
+fn jacobi(lo: float, hi: float) -> [float] {
+    let mut vals = []
+    vals.push(lo)
+    vals.push(hi)
+    let mut vectors = []
+    let mut k = 0
+    while k < 2 {
+        let mut row = []
+        row.push(1.0)
+        row.push(0.0)
+        vectors.push(row)
+        k = k + 1
+    }
+    return [vals, vectors, 7]
+}
+
+fn eigh2(lo: float, hi: float) -> [float] {
+    let result = jacobi(lo, hi)
+    return [result[0], result[1]]
+}
+
+fn diatomic_gap(lo: float, hi: float) -> [float] {
+    let res = eigh2(lo, hi)
+    let evs = res[0]
+    if evs[0] <= evs[1] { return [evs[0], evs[1]] }
+    return [evs[1], evs[0]]
+}
+
+fn churn(n: int) -> int {
+    let mut acc = 0
+    let mut i = 0
+    while i < n {
+        let mut tmp = []
+        tmp.push(i)
+        tmp.push(i + 1)
+        tmp.push(i + 2)
+        let s = "churn-" + to_string(i) + "-" + to_string(tmp[0])
+        acc = acc + tmp[1] + len(s)
+        i = i + 1
+    }
+    return acc
+}
+
+fn main() {
+    let g1 = diatomic_gap(0.0 - 0.8, 0.8)
+    let _a = churn(48)
+    let g2 = diatomic_gap(0.0 - 0.3, 0.3)
+    let _b = churn(48)
+    let g3 = diatomic_gap(0.0 - 1.5, 1.5)
+    let _c = churn(48)
+
+    let a0 = g1[0]
+    let a1 = g1[1]
+    let b0 = g2[0]
+    let b1 = g2[1]
+    let c0 = g3[0]
+    let c1 = g3[1]
+
+    println("g1=[" + to_string(a0) + "," + to_string(a1) + "]")
+    println("g2=[" + to_string(b0) + "," + to_string(b1) + "]")
+    println("g3=[" + to_string(c0) + "," + to_string(c1) + "]")
+
+    let ok = (a0 < 0.0) && (a1 > 0.0)
+          && (b0 < 0.0) && (b1 > 0.0)
+          && (c0 < 0.0) && (c1 > 0.0)
+    if ok { println("PASS") }
+    else { println("FAIL — arena-return array read back swapped/stale (aededed6)") }
+}
+
+main()
