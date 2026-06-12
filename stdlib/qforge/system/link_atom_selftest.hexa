@@ -1,0 +1,166 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// link_atom_selftest.hexa — QFORGE/system round-4 g5 gate: COVALENT BOUNDARY /
+// LINK ATOM. A bond Q—H crosses the QM/MM boundary (frontier Q in QM, host H in
+// MM). An H-cap link atom L caps Q's dangling valence, and the host charge is
+// charge-shifted onto adjacent MM atoms. Every reference below is an ANALYTIC
+// closed form (linear slave geometry, chain-rule Jacobian, Σq bookkeeping), so
+// the gate is a pure numerical identity — no LLM judge. VERBATIM run output.
+//
+// FOUR g5 CHECKS (task-mandated):
+//  (a) FORCE CONSERVATION (Newton 3rd across the cut) — project the link-atom
+//      force F_L onto Q and H via the linear-slave Jacobian (ΔF_Q=(1−g)F_L,
+//      ΔF_H=g·F_L). The NET force added to the real DOFs must equal F_L exactly
+//      (component-wise, to round-off): no net force created/destroyed.
+//  (b) CAPPED → UNCUT — in the QM≡MM boundary limit (E_QM(model+cap) ==
+//      E_MM(model+cap)) the ONIOM cap correction CANCELS and the capped energy
+//      reproduces the uncut MM reference (|E_capped − E_uncut| < round-off). For
+//      a GENERAL QM≠MM the residual is the real cap correction, reported (not 0).
+//  (c) CHARGE CONSERVATION — charge-shift zeroes the host charge and spreads it
+//      onto n MM neighbours; total charge is invariant, |Σ Δq| < 1e-12.
+//  (d) H-CAP POSITION — the cap lies on the Q→H axis at R_L = R_Q + g·(R_H−R_Q):
+//      cross-product (R_L−R_Q)×(R_H−R_Q) == 0 (colinear) AND |R_L−R_Q| = g·|R_H−R_Q|.
+//
+// d4-GENERIC — placement ratio g, host charge, neighbour set are all DATA; every
+// routine takes plain float/int arrays (engine callback results). This gate
+// exercises the generic core directly (analytic refs, no engine needed).
+//
+// Run: HEXA_MAC_BUILD_OK=1 hexa build stdlib/qforge/system/link_atom_selftest.hexa -o /tmp/qf_link && /tmp/qf_link
+// PASS: prints "link_atom_selftest PASS".
+
+use "stdlib/qforge/system/link_atom"
+use "stdlib/qforge/system/embed_electrostatic"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _ck(name: str, got: float, want: float, tol: float) -> int {
+    let d = _abs(got - want)
+    if d <= tol {
+        println("PASS " + name + " (got " + to_string(got) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want) + " |Δ|=" + to_string(d))
+    return 1
+}
+
+fn _ck0(name: str, got: float, tol: float) -> int {
+    if _abs(got) <= tol {
+        println("PASS " + name + " (|got|=" + to_string(_abs(got)) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — |got|=" + to_string(_abs(got)) + " not <= " + to_string(tol))
+    return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── shared boundary geometry: Q (QM frontier) — H (MM host) ─────────────
+    let r_q = [1.0, 1.0, 1.0]
+    let r_h = [2.5, 1.0, 1.0]              // Q—H along +x, |R_H−R_Q| = 1.5
+    // cap ratio: target Q—L = 1.09 (C—H), live Q—H = 1.5 ⇒ g = 1.09/1.5
+    let d_ql = 1.09
+    let d_qh = link_qh_distance(r_q, r_h)
+    let g = link_cap_ratio(d_ql, d_qh)
+    fails = fails + _ck("(setup) live Q—H distance = 1.5", d_qh, 1.5, 1.0e-12)
+    fails = fails + _ck("(setup) cap ratio g = d_QL/d_QH = 1.09/1.5", g, 0.726666666666667, 1.0e-12)
+
+    // ── CHECK (d) — H-CAP POSITION on the Q→H axis ──────────────────────────
+    let r_l = link_cap_position(r_q, r_h, g)
+    // R_L = R_Q + g·(R_H−R_Q): along +x, x = 1.0 + g·1.5 = 1.0 + 1.09 = 2.09
+    fails = fails + _ck("(d) cap x = R_Qx + g·ΔX (= 1 + 1.09)", r_l[0], 2.09, 1.0e-12)
+    fails = fails + _ck("(d) cap y on axis (== R_Qy)", r_l[1], 1.0, 1.0e-12)
+    fails = fails + _ck("(d) cap z on axis (== R_Qz)", r_l[2], 1.0, 1.0e-12)
+    // colinearity: (R_L−R_Q) × (R_H−R_Q) == 0 (all components)
+    let ax = r_l[0] - r_q[0]
+    let ay = r_l[1] - r_q[1]
+    let az = r_l[2] - r_q[2]
+    let bx = r_h[0] - r_q[0]
+    let by = r_h[1] - r_q[1]
+    let bz = r_h[2] - r_q[2]
+    let cx = ay * bz - az * by
+    let cy = az * bx - ax * bz
+    let cz = ax * by - ay * bx
+    fails = fails + _ck0("(d) colinear: cross_x == 0", cx, 1.0e-13)
+    fails = fails + _ck0("(d) colinear: cross_y == 0", cy, 1.0e-13)
+    fails = fails + _ck0("(d) colinear: cross_z == 0", cz, 1.0e-13)
+    // distance ratio: |R_L−R_Q| = g·|R_H−R_Q| = d_QL = 1.09
+    let d_ql_actual = sqrt(ax * ax + ay * ay + az * az)
+    fails = fails + _ck("(d) |R_L−R_Q| = g·|R_H−R_Q| = d_QL", d_ql_actual, 1.09, 1.0e-12)
+
+    // ── CHECK (a) — FORCE CONSERVATION (Newton 3rd across the cut) ──────────
+    // An arbitrary force on the link atom; pre-existing forces on Q and H.
+    let f_l = [0.7, -1.3, 2.4]
+    let f_q0 = [0.1, 0.2, -0.05]
+    let f_h0 = [-0.3, 0.4, 0.6]
+    // projected shares: ΔF_Q = (1−g)F_L, ΔF_H = g·F_L; net added = F_L exactly.
+    let net = link_force_net_added(f_l, g)
+    fails = fails + _ck("(a) net added force_x == F_Lx (no net force created)", net[0], f_l[0], 1.0e-12)
+    fails = fails + _ck("(a) net added force_y == F_Ly", net[1], f_l[1], 1.0e-12)
+    fails = fails + _ck("(a) net added force_z == F_Lz", net[2], f_l[2], 1.0e-12)
+    // full projection onto pre-existing forces: total system force change = F_L.
+    let upd = link_project_force(f_q0, f_h0, f_l, g)   // [qx,qy,qz, hx,hy,hz]
+    let dqx = upd[0] - f_q0[0]
+    let dqy = upd[1] - f_q0[1]
+    let dqz = upd[2] - f_q0[2]
+    let dhx = upd[3] - f_h0[0]
+    let dhy = upd[4] - f_h0[1]
+    let dhz = upd[5] - f_h0[2]
+    fails = fails + _ck("(a) Δ(F_Q+F_H)_x == F_Lx (conserved)", dqx + dhx, f_l[0], 1.0e-12)
+    fails = fails + _ck("(a) Δ(F_Q+F_H)_y == F_Ly", dqy + dhy, f_l[1], 1.0e-12)
+    fails = fails + _ck("(a) Δ(F_Q+F_H)_z == F_Lz", dqz + dhz, f_l[2], 1.0e-12)
+    // share split is exactly (1−g):g (the linear-slave Jacobian)
+    let sq = link_force_share_q(f_l, g)
+    let sh = link_force_share_h(f_l, g)
+    fails = fails + _ck("(a) Q share_x == (1−g)·F_Lx", sq[0], (1.0 - g) * f_l[0], 1.0e-12)
+    fails = fails + _ck("(a) H share_x == g·F_Lx", sh[0], g * f_l[0], 1.0e-12)
+
+    // ── CHECK (c) — CHARGE CONSERVATION (charge-shift) ──────────────────────
+    // MM charges: index 0 = host H (carries q_H), 1..3 = its MM neighbours.
+    let q_mm = [0.6, -0.1, -0.2, 0.05, 0.33]   // Σ = 0.68
+    let host_idx = 0
+    let nbr_idx = [1, 2, 3]                      // 3 neighbours accept q_H share
+    let q_after = link_charge_shift(q_mm, host_idx, nbr_idx)
+    let q_before_tot = link_total_charge(q_mm)
+    let q_after_tot = link_total_charge(q_after)
+    println("Σq_before=" + to_string(q_before_tot) + "  Σq_after=" + to_string(q_after_tot)
+            + "  |ΣΔq|=" + to_string(_abs(q_after_tot - q_before_tot)))
+    fails = fails + _ck0("(c) |Σ Δq| < 1e-12 (charge conserved)",
+                         link_charge_residual(q_mm, q_after), 1.0e-12)
+    fails = fails + _ck0("(c) host charge zeroed after shift", q_after[0], 1.0e-15)
+    // each of the 3 neighbours got q_H/3 = 0.2 added on top of its original.
+    fails = fails + _ck("(c) nbr1 += q_H/3 (−0.1 + 0.2)", q_after[1], 0.1, 1.0e-12)
+    fails = fails + _ck("(c) nbr2 += q_H/3 (−0.2 + 0.2)", q_after[2], 0.0, 1.0e-12)
+    fails = fails + _ck("(c) nbr3 += q_H/3 (0.05 + 0.2)", q_after[3], 0.25, 1.0e-12)
+    fails = fails + _ck("(c) non-neighbour untouched", q_after[4], 0.33, 1.0e-15)
+    // the shifted charges feed straight into the round-3 V_ext (d19 reuse).
+    let pos_mm = [2.5, 1.0, 1.0,  4.0, 1.0, 1.0,  2.5, 2.5, 1.0,  2.5, 1.0, 2.5,  9.0, 9.0, 9.0]
+    let v_after = link_vext_after_shift(r_q, q_after, pos_mm)
+    let v_direct = embed_ee_vext_at(r_q, q_after, pos_mm)
+    fails = fails + _ck("(c) V_ext(shifted charges) == round-3 embed_ee_vext_at", v_after, v_direct, 1.0e-15)
+
+    // ── CHECK (b) — CAPPED → UNCUT (QM≡MM limit) + honest QM≠MM residual ────
+    // ONIOM capped: E_capped = E_QM(model+cap) + E_MM(real) − E_MM(model+cap).
+    let e_mm_real = -42.7
+    // QM≡MM limit: high and low DESCRIBE the capped model identically ⇒ cancel.
+    let e_qm_cap_eq = -8.3
+    let e_mm_cap_eq = -8.3
+    let e_capped_eq = link_capped_energy(e_qm_cap_eq, e_mm_real, e_mm_cap_eq)
+    fails = fails + _ck("(b) E_capped == E_uncut when QM≡MM (cap cancels)", e_capped_eq, e_mm_real, 1.0e-12)
+    fails = fails + _ck0("(b) |E_capped − E_uncut| < tol (QM≡MM limit)",
+                         link_capped_minus_uncut(e_qm_cap_eq, e_mm_real, e_mm_cap_eq), 1.0e-12)
+    // HONEST (d6): general QM≠MM — the cap correction is REAL, not zero.
+    let e_qm_cap = -8.3
+    let e_mm_cap = -7.1
+    let resid = link_capped_minus_uncut(e_qm_cap, e_mm_real, e_mm_cap)
+    // resid = E_QM(cap) − E_MM(cap) = −8.3 − (−7.1) = −1.2 (the genuine correction)
+    println("(b) QM≠MM cap correction (E_QM-cap − E_MM-cap) = " + to_string(resid)
+            + " (REAL, not forced to 0)")
+    fails = fails + _ck("(b) QM≠MM residual = E_QM(cap)−E_MM(cap) = −1.2 (honest)", resid, -1.2, 1.0e-12)
+
+    if fails == 0 {
+        println("link_atom_selftest PASS")
+    } else {
+        println("link_atom_selftest FAIL — " + to_string(fails) + " case(s)")
+    }
+}

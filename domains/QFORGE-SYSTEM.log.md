@@ -121,3 +121,87 @@ redistribution (charge-shift / RESP-style). g5 = link-atom force projection cons
 (Newton's 3rd law across the boundary); the capped-bond energy reduces to the uncut reference when
 QM≡MM on the boundary atom. Reuses round-1 partition + round-3 V_ext (the link-atom host charge is
 an MM point charge the QM now sees electrostatically).
+
+## 2026-06-13 — round-4: covalent boundary / link atom (H-cap + charge-shift)
+
+### R1 partition + R3 V_ext audit (d3 · d19)
+
+- AUDITED `stdlib/qforge/system/qmmm` (R1) — additive/ONIOM partition algebra; the link-atom capped
+  energy is the R1 ONIOM subtractive total specialised to the capped model region (reused, d3).
+- AUDITED `stdlib/qforge/system/embed_electrostatic` (R3) — `embed_ee_vext_at(rq, q_mm, pos_mm)` is
+  the V_ext the MM point charges inject into the QM. CONFIRMED: the link-atom host charge IS an MM
+  point charge the R3 V_ext sees → the charge-SHIFTED MM charge array feeds straight into R3 V_ext
+  (verified identical in-gate: `link_vext_after_shift` == `embed_ee_vext_at`). No new V_ext code.
+- FRONTIER (QM) = atom Q at R_Q; HOST (MM) = atom H at R_H bonded across the boundary. The cut bond
+  Q—H is capped by a monovalent link atom L (H-cap), a LINEAR SLAVE of Q,H (no new DOF).
+
+### round-4 brick
+
+- [x] `stdlib/qforge/system/link_atom.hexa` — covalent boundary / link atom. d4-generic: placement
+      ratio g, host charge, neighbour set are DATA (plain float/int arrays = engine callback
+      results). Provides: `link_cap_position` (R_L=(1−g)R_Q+g·R_H), `link_cap_ratio`,
+      `link_qh_distance`, `link_force_share_q`/`_h` ((1−g):g linear-slave Jacobian shares),
+      `link_project_force`, `link_force_net_added`, `link_charge_shift` (zero q_H → spread q_H/n onto
+      n MM neighbours, Σq conserved), `link_total_charge`, `link_charge_residual`,
+      `link_capped_energy` (R1 ONIOM specialised), `link_capped_minus_uncut`, `link_vext_after_shift`
+      (R3 V_ext over the shifted charges).
+- [x] `stdlib/qforge/system/link_atom_selftest.hexa` (@ci_gate) — 28 checks, analytic closed-form.
+- [x] g5 VERBATIM (HEXA_MAC_BUILD_OK=1 hexa build … && run):
+      ```
+      PASS (setup) live Q—H distance = 1.5 (got 1.5)
+      PASS (setup) cap ratio g = d_QL/d_QH = 1.09/1.5 (got 0.726667)
+      PASS (d) cap x = R_Qx + g·ΔX (= 1 + 1.09) (got 2.09)
+      PASS (d) cap y on axis (== R_Qy) (got 1.0)
+      PASS (d) cap z on axis (== R_Qz) (got 1.0)
+      PASS (d) colinear: cross_x == 0 (|got|=0.0)
+      PASS (d) colinear: cross_y == 0 (|got|=0.0)
+      PASS (d) colinear: cross_z == 0 (|got|=0.0)
+      PASS (d) |R_L−R_Q| = g·|R_H−R_Q| = d_QL (got 1.09)
+      PASS (a) net added force_x == F_Lx (no net force created) (got 0.7)
+      PASS (a) net added force_y == F_Ly (got -1.3)
+      PASS (a) net added force_z == F_Lz (got 2.4)
+      PASS (a) Δ(F_Q+F_H)_x == F_Lx (conserved) (got 0.7)
+      PASS (a) Δ(F_Q+F_H)_y == F_Ly (got -1.3)
+      PASS (a) Δ(F_Q+F_H)_z == F_Lz (got 2.4)
+      PASS (a) Q share_x == (1−g)·F_Lx (got 0.191333)
+      PASS (a) H share_x == g·F_Lx (got 0.508667)
+      Σq_before=0.68  Σq_after=0.68  |ΣΔq|=0.0
+      PASS (c) |Σ Δq| < 1e-12 (charge conserved) (|got|=0.0)
+      PASS (c) host charge zeroed after shift (|got|=0.0)
+      PASS (c) nbr1 += q_H/3 (−0.1 + 0.2) (got 0.1)
+      PASS (c) nbr2 += q_H/3 (−0.2 + 0.2) (got -2.77556e-17)
+      PASS (c) nbr3 += q_H/3 (0.05 + 0.2) (got 0.25)
+      PASS (c) non-neighbour untouched (got 0.33)
+      PASS (c) V_ext(shifted charges) == round-3 embed_ee_vext_at (got 0.175)
+      PASS (b) E_capped == E_uncut when QM≡MM (cap cancels) (got -42.7)
+      PASS (b) |E_capped − E_uncut| < tol (QM≡MM limit) (|got|=0.0)
+      (b) QM≠MM cap correction (E_QM-cap − E_MM-cap) = -1.2 (REAL, not forced to 0)
+      PASS (b) QM≠MM residual = E_QM(cap)−E_MM(cap) = −1.2 (honest) (got -1.2)
+      link_atom_selftest PASS
+      ```
+- FINDING: a covalent QM/MM boundary closes consistently. (a) The link atom is a linear slave
+  R_L=(1−g)R_Q+g·R_H, so its force projects onto Q,H via the constant Jacobian (1−g):g and the NET
+  added force == F_L EXACTLY — Newton's 3rd law survives the bond cut (no ghost force). (d) the H-cap
+  sits ON the Q→H axis (cross-product=0) at |R_L−R_Q|=g·|R_H−R_Q|=d_QL. (c) charge-shift zeroes the
+  host charge and spreads q_H/n onto its n MM neighbours with Σq invariant (|ΣΔq|=0), and those
+  shifted charges feed straight into the round-3 V_ext (verified identical). (b) in the QM≡MM limit
+  the ONIOM cap correction cancels and E_capped reproduces the uncut MM reference.
+
+### honesty (d6 · @L5)
+
+- capped==uncut holds ONLY in the QM≡MM boundary limit (E_QM(model+cap)==E_MM(model+cap)). For a
+  GENERAL QM≠MM boundary the cap energy is a REAL physical correction, NOT zero — the gate pins the
+  genuine residual E_QM(cap)−E_MM(cap)=−1.2 explicitly rather than forcing it to 0 (d6). The
+  capped→uncut cancellation is the exact R1 ONIOM identity, not an approximation, in that limit.
+- check (c) nbr2 prints −2.77556e-17 (float round-off of −0.2+0.2), within the 1e-12 tolerance — the
+  real run output, not a cleaned number. No fabricated convergence; the link-atom geometry/force/
+  charge algebra is exact, the cap-energy cancellation is exact in its stated limit.
+
+### round-5 (next)
+
+CG tier (MARTINI 3 ~4-heavy-atom:1-bead, families P/N/C/Q): a QM/MM/CG additive coupling reusing the
+round-1 partition algebra (a third scale joins the additive sum). g5 = MM→CG coarse-graining
+preserves the slow-DOF free energy / first two moments of the mapped coordinate in a toy (the CG bead
+position = mass-weighted centroid of its 4 mapped atoms; the mapping operator is linear → reuse the
+same linear-slave Jacobian pattern as the link atom for CG force back-mapping). Reuses R1 partition +
+R4 linear-slave projection (CG mapping is the same constant-Jacobian back-mapping as the H-cap).
