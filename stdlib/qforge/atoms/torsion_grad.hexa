@@ -16,22 +16,23 @@
 // gradient used by GROMACS / every MD engine.)
 //
 // THE GEOMETRY ────────────────────────────────────────────────────────────────
-//   Four bonded atoms i-j-k-l with bond vectors
-//       F = r_i − r_j ,   G = r_j − r_k ,   H = r_l − r_k .
-//   Define the plane normals  A = F × G ,  B = H × G . The signed dihedral φ
-//   satisfies  cos φ = (A·B)/(|A||B|) ,  sin φ ∝ (B×A)·G. The Blondel-Karplus
+//   Four bonded atoms i-j-k-l with bond vectors (the SAME convention as
+//   qforge_dihedral_angle in torsion.hexa, so ∂φ/∂R is consistent with the φ it
+//   returns — d19, one source for φ):
+//       b1 = r_j − r_i ,  b2 = r_k − r_j ,  b3 = r_l − r_k .
+//   Define the plane normals  n1 = b1 × b2 ,  n2 = b2 × b3 . The Blondel-Karplus
 //   analytic gradient of φ w.r.t. the four positions is
 //
-//       ∂φ/∂r_i = −(|G| / |A|²) A
-//       ∂φ/∂r_l =  (|G| / |B|²) B
-//       ∂φ/∂r_j = ( (F·G)/|G|² − 1 ) ∂φ/∂r_i − ( (H·G)/|G|² ) ∂φ/∂r_l
-//       ∂φ/∂r_k = −( (F·G)/|G|² )     ∂φ/∂r_i + ( (H·G)/|G|² − 1 ) ∂φ/∂r_l
+//       ∂φ/∂r_i = +(|b2| / |n1|²) n1
+//       ∂φ/∂r_l = −(|b2| / |n2|²) n2
+//       ∂φ/∂r_j = −( 1 + (b1·b2)/|b2|² ) ∂φ/∂r_i + ( (b3·b2)/|b2|² ) ∂φ/∂r_l
+//       ∂φ/∂r_k =    ( (b1·b2)/|b2|² )   ∂φ/∂r_i − ( 1 + (b3·b2)/|b2|² ) ∂φ/∂r_l
 //
 //   These four 3-vectors satisfy ∂φ/∂r_i + ∂φ/∂r_j + ∂φ/∂r_k + ∂φ/∂r_l = 0
 //   (translational invariance — a rigid shift of all four atoms leaves φ
 //   unchanged), so the total torsional force on the four-atom cluster is zero.
 //   This is the exact analytic Jacobian; the selftest cross-checks it against a
-//   central finite difference of qforge_dihedral_angle (torsion.hexa).
+//   central finite difference of qforge_dihedral_angle (torsion.hexa) to |Δ|<1e-6.
 //
 // d4-generic: the four atom indices (i,j,k,l) and the flat position array are the
 //   ONLY inputs — no bond type, element, or multiplicity is referenced here. The
@@ -70,44 +71,55 @@ fn _norm3(u: [float]) -> float { return _sqrtf(_dot3(u, u)) }
 //   and any geometry that is not a degenerate (collinear) dihedral.
 pub fn qforge_dihedral_dphi_dr(pos: [float], i: int, j: int, k: int,
                                l: int) -> [float] {
-    let fvec = _sub3(pos, i, j)        // F = r_i − r_j
-    let gvec = _sub3(pos, j, k)        // G = r_j − r_k
-    let hvec = _sub3(pos, l, k)        // H = r_l − r_k
-    let avec = _cross3(fvec, gvec)     // A = F × G   (normal of plane i,j,k)
-    let bvec = _cross3(hvec, gvec)     // B = H × G   (normal of plane j,k,l)
-    let gnorm = _norm3(gvec)
-    let a2 = _dot3(avec, avec)         // |A|²
-    let b2 = _dot3(bvec, bvec)         // |B|²
+    // bond vectors in EXACTLY qforge_dihedral_angle's convention (torsion.hexa):
+    //   b1 = r_j − r_i ,  b2 = r_k − r_j ,  b3 = r_l − r_k
+    //   n1 = b1 × b2 (plane i,j,k) ,  n2 = b2 × b3 (plane j,k,l)
+    // torsion.hexa returns φ = atan2( (n1×b̂2)·n2 , n1·n2 ); the gradient below is
+    // the closed form for THAT φ, with the overall sign FD-verified to |Δ|<1e-6
+    // against a central difference of qforge_dihedral_angle in the selftest.
+    let b1 = _sub3(pos, j, i)
+    let b2 = _sub3(pos, k, j)
+    let b3 = _sub3(pos, l, k)
+    let n1 = _cross3(b1, b2)
+    let n2 = _cross3(b2, b3)
+    let b2n = _norm3(b2)
+    let n1sq = _dot3(n1, n1)           // |n1|²
+    let n2sq = _dot3(n2, n2)           // |n2|²
 
-    // ∂φ/∂r_i = −(|G|/|A|²) A ,  ∂φ/∂r_l = +(|G|/|B|²) B
+    //   ∂φ/∂r_i = +(|b2|/|n1|²) n1
+    //   ∂φ/∂r_l = −(|b2|/|n2|²) n2
+    // (the leading signs are set to match qforge_dihedral_angle's φ — FD-verified.)
     let mut di: [float] = [0.0, 0.0, 0.0]
     let mut dl: [float] = [0.0, 0.0, 0.0]
-    if a2 > 0.0 {
-        let ca = 0.0 - gnorm / a2
-        di = [ca*avec[0], ca*avec[1], ca*avec[2]]
+    if n1sq > 0.0 {
+        let ca = b2n / n1sq
+        di = [ca*n1[0], ca*n1[1], ca*n1[2]]
     }
-    if b2 > 0.0 {
-        let cb = gnorm / b2
-        dl = [cb*bvec[0], cb*bvec[1], cb*bvec[2]]
+    if n2sq > 0.0 {
+        let cb = 0.0 - b2n / n2sq
+        dl = [cb*n2[0], cb*n2[1], cb*n2[2]]
     }
 
-    // projection coefficients  p = (F·G)/|G|² ,  q = (H·G)/|G|²
-    let g2 = gnorm * gnorm
+    // projection coefficients  p = (b1·b2)/|b2|² ,  q = (b3·b2)/|b2|²
+    let b2sq = b2n * b2n
     let mut pcoef = 0.0
     let mut qcoef = 0.0
-    if g2 > 0.0 {
-        pcoef = _dot3(fvec, gvec) / g2
-        qcoef = _dot3(hvec, gvec) / g2
+    if b2sq > 0.0 {
+        pcoef = _dot3(b1, b2) / b2sq
+        qcoef = _dot3(b3, b2) / b2sq
     }
 
-    // ∂φ/∂r_j = (p − 1) ∂φ/∂r_i − q ∂φ/∂r_l
-    // ∂φ/∂r_k = −p ∂φ/∂r_i + (q − 1) ∂φ/∂r_l
+    // translational-invariance closure of the two end gradients (Bekker form,
+    // FD-verified component-by-component to |Δ|<1e-6 against qforge_dihedral_angle):
+    //   ∂φ/∂r_j = −(1 + p) ∂φ/∂r_i + q ∂φ/∂r_l
+    //   ∂φ/∂r_k =      p   ∂φ/∂r_i − (1 + q) ∂φ/∂r_l
+    // (di + dj + dk + dl = 0 by construction — translational invariance.)
     let mut dj: [float] = [0.0, 0.0, 0.0]
     let mut dk: [float] = [0.0, 0.0, 0.0]
     let mut c = 0
     while c < 3 {
-        dj[c] = (pcoef - 1.0) * di[c] - qcoef * dl[c]
-        dk[c] = (0.0 - pcoef) * di[c] + (qcoef - 1.0) * dl[c]
+        dj[c] = (0.0 - (1.0 + pcoef)) * di[c] + qcoef * dl[c]
+        dk[c] = pcoef * di[c] - (1.0 + qcoef) * dl[c]
         c = c + 1
     }
 

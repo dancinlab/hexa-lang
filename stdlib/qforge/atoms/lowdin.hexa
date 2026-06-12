@@ -72,6 +72,34 @@ fn _sqrt(x: float) -> float {
     return g
 }
 
+// exp(x) via range-reduced Taylor (x = k·ln2 + r, |r|≤ln2/2). Pure, no import —
+// matches the sibling eeq_grad.hexa/d4_disp.hexa idiom (exp is not a global builtin).
+fn _exp(x: float) -> float {
+    if x == 0.0 { return 1.0 }
+    let ln2 = 0.6931471805599453
+    let mut k = 0
+    let mut r = x
+    while r > 0.34657359027997264 { r = r - ln2 ; k = k + 1 }
+    while r < 0.0 - 0.34657359027997264 { r = r + ln2 ; k = k - 1 }
+    let mut term = 1.0
+    let mut sum = 1.0
+    let mut nn = 1
+    while nn < 25 {
+        term = term * r / to_float(nn)
+        sum = sum + term
+        nn = nn + 1
+    }
+    let mut p = sum
+    if k > 0 {
+        let mut t = 0
+        while t < k { p = p * 2.0 ; t = t + 1 }
+    } else {
+        let mut t = 0
+        while t < (0 - k) { p = p * 0.5 ; t = t + 1 }
+    }
+    return p
+}
+
 // ── flat matrix multiply C = A·B (all n×n, row-major) ────────────────────────
 //   The one small local helper this brick needs (no BLAS dependency, matching the
 //   inline-rotation style of eigen.hexa). Pure; returns a fresh length-n*n array.
@@ -239,7 +267,7 @@ pub fn qforge_model_overlap(pos: [float], zeta: float, n: int) -> [float] {
             let dy = pos[3 * i + 1] - pos[3 * j + 1]
             let dz = pos[3 * i + 2] - pos[3 * j + 2]
             let r2 = dx * dx + dy * dy + dz * dz
-            let sij = exp(0.0 - 0.5 * zeta * r2)
+            let sij = _exp(0.0 - 0.5 * zeta * r2)
             s[i * n + j] = sij
             s[j * n + i] = sij
             j = j + 1
