@@ -112,11 +112,14 @@ fn _abs_f(x: float) -> float { if x < 0.0 { return 0.0 - x } else { return x } }
 // molecule name, the factory is the single λ→force seam.
 pub fn make_langevin_prop(force_factory, prm, dt: float, md_n: int,
                           cons: array, tol: float, maxiter: int) {
-    let use_cons = cons.len() > 0
+    // NOTE: the inner closure captures only the FACTORY PARAMETERS
+    // (force_factory, prm, dt, md_n, cons, tol, maxiter) — the hexa→C closure
+    // capture binds parameters, not outer `let` locals, so `use_cons` is
+    // recomputed from the captured `cons` parameter inside the body.
     return fn(config, lam, lcg) {
         // bind the λ-coupled force field for THIS rung, then run md_n steps.
         let force_fn = force_factory(lam)
-        if use_cons {
+        if cons.len() > 0 {
             let r = langevin_run_constrained(config, force_fn, prm, dt, md_n,
                                              cons, tol, maxiter, lcg)
             return [r[0], to_int(r[1])]

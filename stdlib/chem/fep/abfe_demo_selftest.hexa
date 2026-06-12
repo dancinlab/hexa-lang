@@ -41,6 +41,10 @@
 //       the real soft-core decoupling; |Δ| within the TI/MBAR band. (Path B.)
 
 use "stdlib/math/logsumexp"
+use "stdlib/tensor/mod"
+use "stdlib/tensor/shape"
+use "stdlib/tensor/ops"
+use "stdlib/autograd"
 use "stdlib/chem/md/lennard_jones"
 use "stdlib/chem/md/shake"
 use "stdlib/chem/md/langevin"
@@ -100,10 +104,12 @@ fn a_ufn(config: array, lam: float) -> float {
 
 // λ-coupled force factory for make_langevin_prop: returns a force_fn that
 // writes fx = −k(λ)(x−μ(λ)) (1-D harmonic restoring force), fy=fz=0.
+// NOTE: the hexa→C closure capture binds the FACTORY PARAMETER `lam` (not a
+// local `let`), so the inner fn recomputes k(λ)/μ(λ) from the captured lam.
 fn a_force_factory(lam: float) {
-    let k  = a_k(lam)
-    let mu = a_mu(lam)
     return fn(particles) {
+        let k  = a_k(lam)
+        let mu = a_mu(lam)
         let mut out = []
         let mut i = 0
         while i < particles.len() {
@@ -177,9 +183,9 @@ fn a_ufn_c(config: array, lam: float) -> float {
     return 0.5 * a_k(lam) * d * d
 }
 fn a_force_factory_c(lam: float) {
-    let k  = a_k(lam)
-    let mu = a_mu(lam)
     return fn(particles) {
+        let k  = a_k(lam)
+        let mu = a_mu(lam)
         let mut out = []
         let mut i = 0
         while i < particles.len() {
