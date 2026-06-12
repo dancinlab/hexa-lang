@@ -1,0 +1,186 @@
+// @ci_gate — deterministic · scattering-NEGF vs closed-form analytic anchors
+//
+// qforge_chip_negf_scatter_selftest.hexa — QFORGE CHIP round-5 g5 gate.
+//
+// negf_scatter.hexa GENERALISES round-2's mode-count LIMIT (T(E)=N(E), the
+// reflectionless ballistic transmission) to a REAL coherent-scattering NEGF with an
+// explicit semi-infinite-lead self-energy:
+//       T(E) = Tr[ Γ_L · Gʳ(E) · Γ_R · Gᵃ(E) ]   (Caroli / Fisher-Lee),
+//       Gʳ = ( (E+iη)I − H_D − Σ_L − Σ_R )⁻¹,
+//       Σ_X = τ_X g_surf τ_X†,  Γ_X = i(Σ_X − Σ_X†),
+// with the 1D semi-infinite-lead SURFACE Green's function
+//       g_surf(E) = ( (E−ε₀) − √((E−ε₀)²−4t²) ) / (2t²)   (retarded, E→E+iη).
+//
+// Every anchor is a CLOSED analytic reference (d6 — derivable, none tuned):
+//
+//   (a) BALLISTIC LIMIT == ROUND-2 MODE COUNT — a clean (un-scattered) device with
+//       leads MATCHED to the device chain (tc=t) transmits T(E)=N=integer channel
+//       count inside the band, and 0 outside — recovering round-2's
+//       qforge_chip_negf_modecount EXACTLY (machine precision). The full Σ-based
+//       NEGF reduces to the integer open-mode count for a reflectionless channel.  🔵
+//   (b) SINGLE-BARRIER TRANSMISSION — a single raised on-site site (barrier ε_d)
+//       between two matched 1D leads has the EXACT transfer-matrix transmission
+//             T(E) = (4t²−E²) / ( (4t²−E²) + ε_d² ),
+//       the 1D-impurity Breit-Wigner / transfer-matrix result. The NEGF T(E) matches
+//       it to the η floor across the band; ε_d→0 → T→1 (clean), ε_d→∞ → T→0.        🔵
+//   (c) UNITARITY — 0 ≤ T(E) ≤ N over a full energy scan, for clean AND barrier
+//       devices (probability conservation; T never exceeds the channel count, never
+//       negative). The Caroli trace is real and bounded.                            🔵
+//   (d) LEAD SURFACE GF — the 1D semi-infinite surface GF closed form g_surf, and
+//       the GENERAL Sancho-Rubio decimation engine converges to it to machine
+//       precision even at η=1e-7 (where the naive fixed point diverges). At E=0,
+//       t=1: g_surf=−i exactly; Im g_surf≤0 inside the band (retarded), real outside.🔵
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/chip/negf_scatter_selftest.hexa
+// PASS: "qforge_chip_negf_scatter_selftest PASS".
+use "stdlib/qforge/chip/negf_scatter"
+use "stdlib/qforge/chip/band_kmesh"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_int(name: str, got: int, want: int) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+// analytic single-barrier transmission T(E)=(4t²−E²)/((4t²−E²)+ε_d²).
+fn _barrier_T(t: float, e: float, ed: float) -> float {
+    let band = 4.0 * t * t - e * e
+    return band / (band + ed * ed)
+}
+
+fn main() {
+    let mut fails = 0
+
+    // shared lead/device chain: ε₀=0, t=1 → band [−2,2]. η tiny (broadening floor).
+    let eps0 = 0.0
+    let t = 1.0
+    let eta = 1.0e-9
+
+    // ══ (d) LEAD SURFACE GREEN'S FUNCTION (do first — it underpins everything) ══
+    // analytic g_surf at E=0,t=1 = (0 − √(−4))/2 = −i  (Re=0, Im=−1, retarded).
+    let g0 = qforge_chip_lead_gsurf_1d(eps0, t, 0.0, eta)
+    let g0re = g0[0]
+    let g0im = g0[1]
+    fails = fails + _ck_close("(d) g_surf(E=0) Re = 0", g0re, 0.0, 1.0e-7)
+    fails = fails + _ck_close("(d) g_surf(E=0) Im = -1 (retarded, -i)", g0im, -1.0, 1.0e-7)
+    // Im g_surf ≤ 0 (retarded) at several in-band energies.
+    let eIn = [-1.5, -0.7, 0.0, 0.9, 1.6]
+    let mut di = 0
+    let mut imLe0 = true
+    while di < 5 {
+        let gg = qforge_chip_lead_gsurf_1d(eps0, t, eIn[di], eta)
+        if gg[1] > 1.0e-9 { imLe0 = false }
+        di = di + 1
+    }
+    fails = fails + _ck_true("(d) Im g_surf ≤ 0 across band (retarded branch)", imLe0)
+    // outside the band g_surf is REAL (Im≈0, evanescent) → Γ=0.
+    let gOut = qforge_chip_lead_gsurf_1d(eps0, t, 3.0, eta)
+    fails = fails + _ck_close("(d) g_surf(E=3, outside band) Im = 0 (evanescent)", gOut[1], 0.0, 1.0e-4)
+    // GENERAL Sancho-Rubio decimation == closed g_surf to machine precision, η=1e-7
+    // (where the naive fixed point diverges — see brick note). Test 3 in-band E.
+    let eSan = [-1.3, 0.5, 1.1]
+    let mut si = 0
+    let mut sanMax = 0.0
+    while si < 3 {
+        let ana = qforge_chip_lead_gsurf_1d(eps0, t, eSan[si], 1.0e-7)
+        let san = qforge_chip_lead_gsurf_sancho(eps0, t, eSan[si], 1.0e-7, 60)
+        let dr = _abs(ana[0] - san[0])
+        let dimg = _abs(ana[1] - san[1])
+        if dr > sanMax { sanMax = dr }
+        if dimg > sanMax { sanMax = dimg }
+        si = si + 1
+    }
+    fails = fails + _ck_true("(d) Sancho-Rubio decimation == analytic g_surf (max|Δ|<1e-9)", sanMax < 1.0e-9)
+
+    // ══ (a) BALLISTIC LIMIT == ROUND-2 MODE COUNT ══════════════════════════════
+    // Clean device chains of length 1, 2, 3 (matched leads tc=t) → T(E)=1 inside the
+    // band (single open channel = mode count), 0 outside. Strictly matches round-2
+    // qforge_chip_negf_modecount over the SAME band [−2,2].
+    // device-1: single clean site H_D=[0].
+    let hd1 = [0.0]
+    // device-2: clean 2-site chain [[0,−t],[−t,0]].
+    let hd2 = [0.0, -t, -t, 0.0]
+    // device-3: clean 3-site chain (tridiagonal −t).
+    let hd3 = [0.0, -t, 0.0,  -t, 0.0, -t,  0.0, -t, 0.0]
+    // round-2 reference band for the open mode: the propagating band is [−2,2].
+    let r2band = [-2.0, 2.0]
+    let eScan = [-1.7, -1.0, -0.3, 0.4, 1.2, 1.8]
+    let mut ai = 0
+    let mut maxDev1 = 0.0
+    let mut maxDev2 = 0.0
+    let mut maxDev3 = 0.0
+    while ai < 6 {
+        let e = eScan[ai]
+        let r2 = qforge_chip_negf_transmission(r2band, e)        // round-2 integer N(E)
+        let T1 = qforge_chip_negf_transmission_se(hd1, 1, eps0, t, t, t, e, eta)
+        let T2 = qforge_chip_negf_transmission_se(hd2, 2, eps0, t, t, t, e, eta)
+        let T3 = qforge_chip_negf_transmission_se(hd3, 3, eps0, t, t, t, e, eta)
+        let d1 = _abs(T1 - to_float(r2))
+        let d2 = _abs(T2 - to_float(r2))
+        let d3 = _abs(T3 - to_float(r2))
+        if d1 > maxDev1 { maxDev1 = d1 }
+        if d2 > maxDev2 { maxDev2 = d2 }
+        if d3 > maxDev3 { maxDev3 = d3 }
+        ai = ai + 1
+    }
+    fails = fails + _ck_true("(a) clean 1-site NEGF == round-2 mode-count (max|Δ|<1e-6)", maxDev1 < 1.0e-6)
+    fails = fails + _ck_true("(a) clean 2-site NEGF == round-2 mode-count (max|Δ|<1e-6)", maxDev2 < 1.0e-6)
+    fails = fails + _ck_true("(a) clean 3-site NEGF == round-2 mode-count (max|Δ|<1e-6)", maxDev3 < 1.0e-6)
+    // outside the band T==0 (closed channel) for the clean device — matches round-2.
+    let Tout = qforge_chip_negf_transmission_se(hd3, 3, eps0, t, t, t, 2.5, eta)
+    let r2out = qforge_chip_negf_transmission(r2band, 2.5)
+    fails = fails + _ck_close("(a) clean device outside band T = 0 == round-2", Tout, to_float(r2out), 1.0e-6)
+
+    // ══ (b) SINGLE-BARRIER TRANSMISSION vs transfer-matrix analytic ════════════
+    // H_D=[ε_d] (one raised site). T(E)=(4t²−E²)/((4t²−E²)+ε_d²) EXACT.
+    let eds = [0.5, 1.0, 2.0, 3.0]
+    let ebs = [0.3, 0.8, -0.5, 1.1]
+    let mut bi = 0
+    let mut maxBarr = 0.0
+    while bi < 4 {
+        let ed = eds[bi]
+        let e = ebs[bi]
+        let hd = [ed]
+        let T = qforge_chip_negf_transmission_se(hd, 1, eps0, t, t, t, e, eta)
+        let ana = _barrier_T(t, e, ed)
+        let d = _abs(T - ana)
+        if d > maxBarr { maxBarr = d }
+        bi = bi + 1
+    }
+    fails = fails + _ck_true("(b) single-barrier NEGF == transfer-matrix T(E) (max|Δ|<1e-6)", maxBarr < 1.0e-6)
+    // limits: ε_d→0 → T→1 (clean); ε_d large → T→small.
+    let Tlo = qforge_chip_negf_transmission_se([1.0e-6], 1, eps0, t, t, t, 0.4, eta)
+    fails = fails + _ck_close("(b) barrier ε_d→0 → T→1 (clean limit)", Tlo, 1.0, 1.0e-6)
+    let Thi = qforge_chip_negf_transmission_se([50.0], 1, eps0, t, t, t, 0.4, eta)
+    fails = fails + _ck_true("(b) barrier ε_d→∞ → T→0 (opaque limit)", Thi < 1.0e-2)
+
+    // ══ (c) UNITARITY — 0 ≤ T(E) ≤ N over a dense scan ═════════════════════════
+    // clean 3-site (N≤1) and barrier device — T must never go negative or exceed N.
+    let mut ci = 0
+    let mut uniOk = true
+    let mut e3 = -2.5
+    while e3 < 2.5 {
+        let Tc = qforge_chip_negf_transmission_se(hd3, 3, eps0, t, t, t, e3, eta)
+        let Tb = qforge_chip_negf_transmission_se([1.5], 1, eps0, t, t, t, e3, eta)
+        if Tc < -1.0e-9 || Tc > 1.0 + 1.0e-6 { uniOk = false }
+        if Tb < -1.0e-9 || Tb > 1.0 + 1.0e-6 { uniOk = false }
+        e3 = e3 + 0.05
+        ci = ci + 1
+    }
+    fails = fails + _ck_true("(c) unitarity 0 ≤ T(E) ≤ N over full scan (clean + barrier)", uniOk)
+
+    // ══ verdict ════════════════════════════════════════════════════════════════
+    if fails == 0 {
+        println("qforge_chip_negf_scatter_selftest PASS")
+    } else {
+        println("qforge_chip_negf_scatter_selftest FAIL — " + to_string(fails) + " check(s) failed")
+    }
+}
