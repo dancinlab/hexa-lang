@@ -1,0 +1,190 @@
+// HEXA Standard Library — qforge/atoms/eeq_grad
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE atoms-scale brick #2 — ANALYTIC EEQ charge gradient ∂q_k/∂R_l, the
+// implicit-differentiation of the round-1 electronegativity-equilibration linear
+// system (stdlib/qforge/atoms/eeq.hexa). xTB / DFT-D4 take this derivative by
+// finite difference (re-solve EEQ at displaced geometries); here it is the EXACT
+// closed-form derivative — one extra linear solve per coordinate, sharing the
+// SAME bordered matrix M as the charge solve (Caldeweyher et al., JCP 150,
+// 154122 (2019), eq. for ∂q/∂R; GFN-xTB analytic gradient, Bannwarth 2021).
+//
+// THE PHYSICS (implicit differentiation of a constrained linear system) ─────────
+//   The EEQ charges solve the bordered system  M x = b  with
+//     M = [ A  1 ; 1ᵀ 0 ],   x = [ q ; λ ],   b = [ −χ ; Q_tot ]
+//   (see eeq.hexa). M, b depend on the geometry R only through A's OFF-diagonal
+//   screened-Coulomb blocks A_ij = erf(R_ij/γ_ij)/R_ij; the diagonal (hardness +
+//   self-Coulomb), the border ones, χ and Q_tot are all R-INDEPENDENT in this
+//   model. Differentiating M x = b w.r.t. a Cartesian DOF R_l (atom a=l/3,
+//   component c=l%3) and solving for ∂x/∂R_l:
+//
+//     M (∂x/∂R_l) = ∂b/∂R_l − (∂M/∂R_l) x         (implicit-function theorem)
+//                 = − (∂M/∂R_l) x                  (∂b/∂R_l = 0 here)
+//
+//   So ∂q/∂R_l is the first n entries of M⁻¹ acting on the perturbation vector
+//   −(∂M/∂R_l) x. Because the SAME M appears, this reuses qforge_eeq_solve with
+//   a fresh RHS — no new matrix, no new factorization concept.
+//
+//   The only nonzero derivative block: for the pair (i,j), with R=R_ij and
+//   γ=γ_ij = sqrt(α_i²+α_j²),
+//     A_ij(R) = erf(R/γ)/R
+//     dA_ij/dR = [ (2/(γ√π)) · exp(−(R/γ)²) · R − erf(R/γ) ] / R²
+//   and the chain rule onto the moved atom a:
+//     ∂R_ij/∂x_{a,c} = ± (x_{i,c} − x_{j,c}) / R_ij   (+ if a=i, − if a=j, 0 else)
+//   The Lagrange-border corner and the constraint row contribute ZERO derivative,
+//   so charge conservation Σ_k ∂q_k/∂R_l = 0 holds identically (the moved RHS has
+//   a 0 in its border slot ⇒ the conservation row of the derivative solve is 0).
+//
+// d4-generic: geometry, element parameters (chi/eta/alpha) and the moved DOF
+//   index are ALL inputs. The routine branches on NO element name and on NO
+//   molecule — H₂, CO, a peptide or a metal cluster traverse the identical path.
+//
+// reuse (d19): the matrix assembler qforge_eeq_matrix, the dense bordered solve
+//   qforge_eeq_solve, the distance helper qforge_eeq_distance and the charge
+//   solve qforge_eeq_charges — all from stdlib/qforge/atoms/eeq (d3: this brick
+//   adds ONLY the new derivative kernel, it does not re-implement the solver).
+//   erf_fn + the exp tail come from stdlib/core/special.
+use "stdlib/qforge/atoms/eeq"
+use "stdlib/core/special"
+
+// ── 2/√π and a local sqrt + exp (no extra std imports; positive args only) ─────
+fn _gsqrt(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    if g < 1.0 { g = 1.0 }
+    let mut it = 0
+    while it < 60 {
+        let ng = 0.5 * (g + x / g)
+        if ng == g { break }
+        g = ng
+        it = it + 1
+    }
+    return g
+}
+
+// exp(x) via range-reduced Taylor (x = k·ln2 + r, |r|≤ln2/2). Pure, no import.
+fn _gexp(x: float) -> float {
+    if x == 0.0 { return 1.0 }
+    let ln2 = 0.6931471805599453
+    let mut k = 0
+    let mut r = x
+    // reduce to |r| < ln2/2 by pulling out integer multiples of ln2
+    while r > 0.34657359027997264 { r = r - ln2 ; k = k + 1 }
+    while r < 0.0 - 0.34657359027997264 { r = r + ln2 ; k = k - 1 }
+    // Taylor on the reduced r (converges fast for |r|<0.35)
+    let mut term = 1.0
+    let mut sum = 1.0
+    let mut nn = 1
+    while nn < 25 {
+        term = term * r / to_float(nn)
+        sum = sum + term
+        nn = nn + 1
+    }
+    // scale by 2^k
+    let mut p = sum
+    if k > 0 {
+        let mut t = 0
+        while t < k { p = p * 2.0 ; t = t + 1 }
+    } else {
+        let mut t = 0
+        while t < (0 - k) { p = p * 0.5 ; t = t + 1 }
+    }
+    return p
+}
+
+// ── d(erf(R/γ)/R)/dR closed form ──────────────────────────────────────────────
+//   f(R) = erf(R/γ)/R ,  f'(R) = [ (2/(γ√π)) e^{−(R/γ)²} R − erf(R/γ) ] / R²
+pub fn qforge_eeq_dAij_dR(r: float, gamma: float) -> float {
+    let two_over_sqrtpi = 1.1283791670955126   // 2/√π
+    let u = r / gamma
+    let gauss = two_over_sqrtpi / gamma * _gexp(0.0 - u * u)   // d/dR erf(R/γ) = (2/(γ√π))e^{-(R/γ)²}
+    let erfv = erf_fn(u)
+    return (gauss * r - erfv) / (r * r)
+}
+
+// ── build the perturbation RHS  p = −(∂M/∂R_l) x  (length n+1) ─────────────────
+//   l = 3·a + c is the moved Cartesian DOF (atom a, component c∈{0,1,2}). Only
+//   off-diagonal A_ij blocks with i=a or j=a are R_l-dependent; their derivative
+//   couples through dAij/dR · ∂R_ij/∂R_l. The border slot p[n] is exactly 0
+//   (constraint row is geometry-independent) ⇒ conservation of the derivative.
+//   x is the FULL solve vector [q; λ] (length n+1); only its first n (the q) enter
+//   because the border column of ∂M/∂R is zero.
+pub fn qforge_eeq_perturb_rhs(pos: [float], chi: [float], eta: [float],
+                              alpha: [float], x: [float], l: int) -> [float] {
+    let n = len(chi)
+    let a = l / 3
+    let c = l - 3 * a
+    let mut p: [float] = []
+    let mut k = 0
+    while k < n + 1 { p.push(0.0) ; k = k + 1 }
+    // walk every pair (a, j) that involves the moved atom a (j ≠ a)
+    let mut j = 0
+    while j < n {
+        if j != a {
+            let rij = qforge_eeq_distance(pos, a, j)
+            let gij = _gsqrt(alpha[a] * alpha[a] + alpha[j] * alpha[j])
+            let dadr = qforge_eeq_dAij_dR(rij, gij)
+            // ∂R_aj/∂x_{a,c} = (pos[a,c] − pos[j,c]) / R_aj  (moving atom a)
+            let diff = pos[3 * a + c] - pos[3 * j + c]
+            let drdrl = diff / rij
+            let dA = dadr * drdrl     // ∂A_aj/∂R_l = ∂A_ja/∂R_l (symmetric)
+            // contribution of −(∂M/∂R_l) x to rows a and j:
+            //   row a gets −dA · x[j] ;  row j gets −dA · x[a]
+            p[a] = p[a] - dA * x[j]
+            p[j] = p[j] - dA * x[a]
+        }
+        j = j + 1
+    }
+    // border slot p[n] stays 0 (geometry-independent constraint row)
+    return p
+}
+
+// ── analytic ∂q_k/∂R_l for a SINGLE moved DOF l ───────────────────────────────
+//   Returns the per-atom charge derivative vector (length n): dq[k] = ∂q_k/∂R_l.
+//   Solves M (∂x) = −(∂M/∂R_l) x with the SAME bordered M as the charge solve
+//   (qforge_eeq_solve, reused). Σ_k dq[k] = 0 by construction.
+pub fn qforge_eeq_charge_grad_dof(pos: [float], chi: [float], eta: [float],
+                                  alpha: [float], qtot: float,
+                                  l: int) -> [float] {
+    let n = len(chi)
+    let m = n + 1
+    // 1) the charges + multiplier (full solve vector x = [q; λ])
+    let a_mat = qforge_eeq_matrix(pos, chi, eta, alpha)
+    let b = qforge_eeq_rhs(chi, qtot)
+    let x = qforge_eeq_solve(a_mat, b, m)
+    // 2) the perturbation RHS p = −(∂M/∂R_l) x
+    let p = qforge_eeq_perturb_rhs(pos, chi, eta, alpha, x, l)
+    // 3) re-solve with the SAME matrix → ∂x/∂R_l ; take its first n (the ∂q)
+    let dx = qforge_eeq_solve(a_mat, p, m)
+    let mut dq: [float] = []
+    let mut k = 0
+    while k < n { dq.push(dx[k]) ; k = k + 1 }
+    return dq
+}
+
+// ── full charge-gradient tensor ∂q_k/∂R_l for ALL 3n DOFs ─────────────────────
+//   Returns a flat (n × 3n) row-major array G with G[k*(3n)+l] = ∂q_k/∂R_l.
+//   k indexes the atom whose charge is differentiated; l = 3·a+c the moved DOF.
+//   Reuses qforge_eeq_charge_grad_dof per column (each column = one re-solve with
+//   the shared M). d4: no element / molecule branching anywhere.
+pub fn qforge_eeq_charge_grad(pos: [float], chi: [float], eta: [float],
+                              alpha: [float], qtot: float) -> [float] {
+    let n = len(chi)
+    let ndof = 3 * n
+    let mut g: [float] = []
+    let mut z = 0
+    while z < n * ndof { g.push(0.0) ; z = z + 1 }
+    let mut l = 0
+    while l < ndof {
+        let dq = qforge_eeq_charge_grad_dof(pos, chi, eta, alpha, qtot, l)
+        let mut k = 0
+        while k < n {
+            g[k * ndof + l] = dq[k]
+            k = k + 1
+        }
+        l = l + 1
+    }
+    return g
+}

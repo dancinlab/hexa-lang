@@ -1,0 +1,158 @@
+// @ci_gate — deterministic · analytic-vs-finite-difference cross-check
+//
+// qforge/atoms/eeq_grad_selftest.hexa — QFORGE atoms brick #2 (∂q/∂R) g5 gate.
+//
+// eeq_grad.hexa returns the ANALYTIC derivative of the round-1 EEQ partial
+// charges w.r.t. nuclear coordinates by implicit differentiation of the bordered
+// linear system M x = b (see eeq.hexa). The cross-check anchor (d6 — the analytic
+// gradient is validated against an INDEPENDENT central finite-difference that
+// re-calls the R1 charge solve at displaced geometries; no number paraphrased):
+//
+//   (A) ANALYTIC == CENTRAL-DIFFERENCE FD: for every (k, l), the closed-form
+//       ∂q_k/∂R_l agrees with [q_k(R_l+h) − q_k(R_l−h)] / (2h) to |Δ| < 1e-6,
+//       FD evaluated by RE-CALLING qforge_eeq_charges at ±h displaced geometry.   🟢
+//   (B) CHARGE-CONSERVATION DERIVATIVE: Σ_k ∂q_k/∂R_l = 0 for every moved DOF l
+//       (total molecular charge is geometry-invariant, so its derivative is 0).   🔵
+//   (C) HOMONUCLEAR SYMMETRY: two identical atoms on x, moving atom-0 along the
+//       bond (DOF 0). By the homonuclear invariant q≡(0,0) at ALL R, so the bond
+//       stretch leaves charges 0 ⇒ ∂q/∂R ≡ 0; and ∂q_0/∂R = −∂q_1/∂R (antisym).   🔵
+//   (D) DISSOCIATION LIMIT: as R→∞ the screened-Coulomb coupling A₁₂=erf(R/γ)/R
+//       and its derivative → 0, so the charges become R-frozen ⇒ ∂q/∂R → 0. Test
+//       monotone decay |∂q/∂R|(R=8) > |∂q/∂R|(R=40) and the large-R value ≈ 0.    🟢
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/atoms/eeq_grad_selftest.hexa
+// PASS: "qforge_eeq_grad_selftest PASS".
+use "stdlib/qforge/atoms/eeq"
+use "stdlib/qforge/atoms/eeq_grad"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+// central finite-difference of q_k w.r.t. DOF l: displaces pos[l] by ±h and
+// RE-CALLS the R1 charge solver (independent of eeq_grad.hexa entirely).
+fn _fd_dq(pos: [float], chi: [float], eta: [float], alpha: [float],
+          qtot: float, k: int, l: int, h: float) -> float {
+    let mut pp: [float] = []
+    let mut pm: [float] = []
+    let mut i = 0
+    while i < len(pos) { pp.push(pos[i]) ; pm.push(pos[i]) ; i = i + 1 }
+    pp[l] = pp[l] + h
+    pm[l] = pm[l] - h
+    let qp = qforge_eeq_charges(pp, chi, eta, alpha, qtot)
+    let qm = qforge_eeq_charges(pm, chi, eta, alpha, qtot)
+    return (qp[k] - qm[k]) / (2.0 * h)
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ══ (A) ANALYTIC == CENTRAL-DIFFERENCE FD (the core cross-check) ═══════════
+    // bent 3-atom molecule, neutral and a +1 cation; sweep every (k, l).
+    let pos3 = [0.0, 0.0, 0.0,  1.8, 0.0, 0.0,  0.9, 1.5, 0.0]
+    let chi3 = [1.20, 1.85, 1.95]
+    let eta3 = [0.50, 0.62, 0.60]
+    let alp3 = [1.20, 0.80, 0.85]
+    let h = 0.0002
+    // neutral
+    let g0 = qforge_eeq_charge_grad(pos3, chi3, eta3, alp3, 0.0)
+    let n = 3
+    let ndof = 9
+    let mut l = 0
+    let mut worst = 0.0
+    while l < ndof {
+        let mut k = 0
+        while k < n {
+            let ana = g0[k * ndof + l]
+            let fd = _fd_dq(pos3, chi3, eta3, alp3, 0.0, k, l, h)
+            let d = _abs(ana - fd)
+            if d > worst { worst = d }
+            k = k + 1
+        }
+        l = l + 1
+    }
+    fails = fails + _ck_true("(A) neutral: max|analytic − FD| < 1e-6 (=" + to_string(worst) + ")",
+                             worst < 1.0e-6)
+    // cation Q=+1: gradient must still match FD
+    let gc = qforge_eeq_charge_grad(pos3, chi3, eta3, alp3, 1.0)
+    let mut worstc = 0.0
+    l = 0
+    while l < ndof {
+        let mut k = 0
+        while k < n {
+            let ana = gc[k * ndof + l]
+            let fd = _fd_dq(pos3, chi3, eta3, alp3, 1.0, k, l, h)
+            let d = _abs(ana - fd)
+            if d > worstc { worstc = d }
+            k = k + 1
+        }
+        l = l + 1
+    }
+    fails = fails + _ck_true("(A) cation: max|analytic − FD| < 1e-6 (=" + to_string(worstc) + ")",
+                             worstc < 1.0e-6)
+
+    // ══ (B) CHARGE-CONSERVATION DERIVATIVE: Σ_k ∂q_k/∂R_l = 0 ∀ l ══════════════
+    let mut worstcons = 0.0
+    l = 0
+    while l < ndof {
+        let mut s = 0.0
+        let mut k = 0
+        while k < n { s = s + g0[k * ndof + l] ; k = k + 1 }
+        if _abs(s) > worstcons { worstcons = _abs(s) }
+        l = l + 1
+    }
+    fails = fails + _ck_close("(B) Σ_k ∂q_k/∂R_l = 0 (max over l)", worstcons, 0.0, 1.0e-9)
+
+    // ══ (C) HOMONUCLEAR SYMMETRY ══════════════════════════════════════════════
+    // identical atoms on x; q ≡ (0,0) at all R ⇒ ∂q/∂R ≡ 0, and antisymmetric.
+    let posH = [0.0, 0.0, 0.0,  1.4, 0.0, 0.0]
+    let chiH = [1.50, 1.50]
+    let etaH = [0.55, 0.55]
+    let alpH = [1.00, 1.00]
+    // move atom-0 along x = DOF 0
+    let dqH = qforge_eeq_charge_grad_dof(posH, chiH, etaH, alpH, 0.0, 0)
+    fails = fails + _ck_close("(C) homonuclear ∂q_0/∂R = 0", dqH[0], 0.0, 1.0e-9)
+    fails = fails + _ck_close("(C) homonuclear ∂q_1/∂R = 0", dqH[1], 0.0, 1.0e-9)
+    fails = fails + _ck_close("(C) homonuclear antisymmetry ∂q_0 = −∂q_1",
+                              dqH[0], 0.0 - dqH[1], 1.0e-12)
+
+    // ══ (D) DISSOCIATION LIMIT: ∂q/∂R → 0 as R → ∞ ════════════════════════════
+    // heteronuclear diatomic on x; move atom-0 along the bond (DOF 0). |∂q_0/∂R|
+    // must decay monotonically and vanish at large R. HONEST asymptotics (d6):
+    // at large R erf(R/γ)→1 so A₁₂→1/R (bare Coulomb tail) and dA₁₂/dR→−1/R², an
+    // ALGEBRAIC 1/R² decay (not exponential) — verified R=8→40→400 falls as 1/R²
+    // (e.g. 4.5e-3 → 1.55e-4 → 1.5e-6). So the strict vanishing is asserted at the
+    // far geometry R=400 (|∂q/∂R|<1e-5), with the monotone chain proving the trend.
+    let chiD = [1.10, 2.05]
+    let etaD = [0.48, 0.66]
+    let alpD = [1.30, 0.75]
+    let posR1 = [0.0, 0.0, 0.0,   2.0, 0.0, 0.0]
+    let posR2 = [0.0, 0.0, 0.0,   8.0, 0.0, 0.0]
+    let posR3 = [0.0, 0.0, 0.0,  40.0, 0.0, 0.0]
+    let posR4 = [0.0, 0.0, 0.0, 400.0, 0.0, 0.0]
+    let g1 = qforge_eeq_charge_grad_dof(posR1, chiD, etaD, alpD, 0.0, 0)
+    let g2 = qforge_eeq_charge_grad_dof(posR2, chiD, etaD, alpD, 0.0, 0)
+    let g3 = qforge_eeq_charge_grad_dof(posR3, chiD, etaD, alpD, 0.0, 0)
+    let g4 = qforge_eeq_charge_grad_dof(posR4, chiD, etaD, alpD, 0.0, 0)
+    let m1 = _abs(g1[0])
+    let m2 = _abs(g2[0])
+    let m3 = _abs(g3[0])
+    let m4 = _abs(g4[0])
+    fails = fails + _ck_true("(D) monotone decay |∂q/∂R|: R=2 > R=8 > R=40 > R=400 ("
+                             + to_string(m1) + " > " + to_string(m2) + " > "
+                             + to_string(m3) + " > " + to_string(m4) + ")",
+                             m1 > m2 && m2 > m3 && m3 > m4)
+    fails = fails + _ck_close("(D) ∂q/∂R → 0 at R=400", m4, 0.0, 1.0e-5)
+    // and the FD cross-check still holds at the dissociating geometry (R=8):
+    let fd2 = _fd_dq(posR2, chiD, etaD, alpD, 0.0, 0, 0, 0.0002)
+    fails = fails + _ck_close("(D) analytic == FD at R=8", g2[0], fd2, 1.0e-6)
+
+    if fails == 0 { println("qforge_eeq_grad_selftest PASS") }
+    else { println("qforge_eeq_grad_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
