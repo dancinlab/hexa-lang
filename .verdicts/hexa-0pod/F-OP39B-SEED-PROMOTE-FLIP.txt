@@ -1,0 +1,162 @@
+F-OP39B-SEED-PROMOTE-FLIP — promote the OP-37/OP-37b float const-fold fix into
+                            the CI seed self/native/hexa_cc.c, then flip the
+                            OP-39 const-fold gate advisory → enforcing.
+                            VERDICT: 🟠 DEFERRED — the "promote into the seed" step
+                            is a FROZEN-ANCHOR RE-PIN (not a surgical edit), whose
+                            byte-eq validation is the ~3.5h build_selfhost.sh
+                            self-host ladder on a build host (out of 0-pod scope),
+                            and it would drag in 27,068 lines of UNRELATED compiler
+                            drift — the task's explicit STOP condition. The fix
+                            itself is PROVEN correct + fixpoint-stable locally.
+══════════════════════════════════════════════════════════════════════════════
+DATE: 2026-06-12 · HEXA-0POD OP-39b · 0-pod ($0, NO GPU, NO vast, NO pod, arm64-macos)
+HOST: local arm64-macos (Darwin 25.5.0), CPU-only
+STATUS: 🟠 DEFERRED (honest g0 tractability STOP — a clean DEFER beats a broken
+        bootstrap seed). The const-fold fix is verified correct + self-host
+        fixpoint-stable LOCALLY; the gate is LEFT ADVISORY (NOT flipped), because
+        flipping while CI's seed still carries the pre-fix const-folder would turn
+        CI RED — the exact failure mode the task forbids. The blocker is the SEED-
+        PROMOTION ARCHITECTURE, not the fix.
+
+────────────────────────────────────────────────────────────────────────────
+THE DECISIVE FINDING — "the CI seed" is an IMMUTABLE FROZEN GIT ANCHOR, not a
+tracked, regenerable, surgically-patchable file
+────────────────────────────────────────────────────────────────────────────
+1. self/native/hexa_cc.c is GITIGNORED (.gitignore:286). It is NOT a tracked
+   file — there is nothing in the repo working tree to "regenerate and commit".
+2. CI obtains its seed by `git checkout 151c52c82502e93d01735c58b43b017d102fee63
+   -- self/native/hexa_cc.c` (tool/restore_frozen_seeds, FROZEN_SEED_REF). That
+   commit is the IMMUTABLE `.c`-graduation PARENT (parent of 7906951c0 / #2065,
+   "tracked .c = 0"), deliberately pinned so every platform is reproducibly
+   self-sufficient for bootstrap. You CANNOT edit a past commit.
+3. tool/release_build → tool/stage_prebuild_hexat clang-builds CI's build/hexat
+   from that frozen seed + runtime.a. .github/workflows/nobaseline-gate.yml's
+   faithful-* jobs run the OP-39 gate against THAT ./hexa → it correctly reports
+   the seed's pre-fix const-folder (DRIFT to the lossy %g bits). OP-39 wired the
+   3 gate steps `continue-on-error: true` (advisory) for exactly this reason.
+
+CONSEQUENCE: "promote the fix into the seed" is NOT a marker-guarded re-emit (as
+the OP-39b deferral note optimistically assumed). The ONLY way to put the fix in
+CI's seed is to RE-PIN FROZEN_SEED_REF to a NEW bootstrap-anchor commit carrying
+a coherent fresh snapshot of ALL 23 seeds (the regenerated hexa_cc.c + a mutually-
+coherent self/runtime.c + 20 native fragments + forge_tier_v1.c). The seeds are
+gitignored in the live tree, so the new pin must be a new force-added, committed,
+graduation-style anchor.
+
+────────────────────────────────────────────────────────────────────────────
+WHY A WHOLESALE RE-ANCHOR IS OUT OF 0-POD SINGLE-PR SCOPE (the STOP condition)
+────────────────────────────────────────────────────────────────────────────
+A. NOT a surgical promotion — 27,068 lines of UNRELATED drift.
+   Regen of hexa_cc.c from CURRENT self/codegen.hexa (via tool/regen_cc_manual,
+   HEXA_V2=~/.hx/bin/build/hexat Jun-8) = 2,098,186 B / 31,222 lines.
+   The frozen seed @151c52c8 = 1,854,825 B / 28,482 lines.
+     diff(frozen, regen) = 27,068 changed/added/removed lines.
+     The const-fold helper family (_cf_negate_float_text / _cf_float_node) does
+     NOT EVEN EXIST in the frozen seed (grep count = 0) — there is no fold path
+     to cherry-pick the fix INTO. Re-anchoring would drag in months of unrelated
+     compiler evolution, NOT "only the const-fold fix flows through". The task's
+     explicit STOP: "If the regen ... would carry unrelated drift, STOP and
+     record 🟠 DEFERRED with the exact blocker."
+B. Byte-eq validation of a new anchor = the ~3.5h self-host ladder on a BUILD HOST.
+   Per tool/SELFHOST_PROMOTE_RUNBOOK.md, a new seed anchor must be proven at the
+   terminal gate cc-gen3.o == cc-gen4.o via tool/build_selfhost.sh = THREE
+   ~68-min native self-emits (~3.5h) + selfhost_parity_gate.sh. That cannot be
+   run locally cheaply/deterministically here, and the task forbids pods/vast.
+   Re-pinning the frozen bootstrap anchor IS the "bad seed promotion breaks the
+   bootstrap" make-or-break risk the task flags as the single highest danger.
+
+g0 verdict: a frozen-anchor re-pin is the WRONG shape for a $0 local single-PR
+HEXA-0POD task. The honest, task-mandated outcome is DEFER with the exact blocker.
+
+────────────────────────────────────────────────────────────────────────────
+WHAT WAS PROVEN LOCALLY ($0, deterministic, arm64-macos) — DE-RISKS the eventual
+promotion; the fix is CORRECT and FIXPOINT-STABLE
+────────────────────────────────────────────────────────────────────────────
+1. REGEN builds clean. tool/regen_cc_manual (HEXA_V2=~/.hx/bin/build/hexat) →
+   /tmp/op39b_regen.c (2,098,186 B, == OP-37b's hexat_op37b_v4). clang -O2
+   -D_GNU_SOURCE -I self /tmp/op39b_regen.c self/runtime.c (frozen-restored,
+   working-tree only) → /tmp/hexat_regen (2,094,328 B), no errors.
+2. SELF-HOST FIXPOINT byte-identical (the paramount property).
+   /tmp/hexat_regen re-regenerates hexa_cc.c:
+     HEXA_V2=/tmp/hexat_regen tool/regen_cc_manual → /tmp/op39b_regen2.c
+     cmp /tmp/op39b_regen.c /tmp/op39b_regen2.c → BYTE-IDENTICAL (gen-N==gen-N+1).
+   Independently confirms OP-37b's fixpoint claim: the fixed compiler compiling
+   the fixed source reproduces itself bit-for-bit.
+3. The regen EMITS THE FIXED LITERALS (smoking gun). /tmp/hexat_regen transpiling
+   the OP-39 oracle stdlib/flame/op39_constfold_byteeq.hexa emits:
+     _bits(__hexa_sl_4,  hexa_float(-0.254829592))            ← exact text (OP-37)
+     _bits(__hexa_sl_13, hexa_float(7.24981871602117067e-02)) ← strtod operands (OP-37b)
+     _bits(__hexa_sl_15, hexa_float(3.00000000000000044e-01))
+     _bits(__hexa_sl_16, hexa_float(3.33333333333333304e-01))
+   NOT the frozen seed's lossy %g (-0.25483 / 0.0724982 / 0.3 / 0.333333). The
+   fix IS in the regenerated seed.
+4. THE OP-39 GATE PASSES against the fixed regen (the whole point).
+   clang(/tmp/op39_fixed.c + self/runtime.c) → /tmp/op39_bin → exit 0; all 13
+   const-folds match the tool/op39_constfold_gate.sh goldens VERBATIM:
+     OK NEG1 -4625109815114573186 · NEG2 -4624575379359918999 ·
+     NEG3 -4614291739287821993 · NEG4 -4614148802754819015 ·
+     NEG5 -4615913072587595475 · NEG6 -4623799060313310324 ·
+     SUB0/ADD0a/ADD0b 4609080297566953815 ·
+     MUL1 4589888465602041183 · MUL2 4604576697939583319 ·
+     ADD1 4599075939470750516 · DIV1 4599676419421066581 ·
+     PASS — all 13 match.
+   → CONFIRMS the gate would auto-go-GREEN the moment the seed carries the fix.
+   The gate (advisory now) is correct; only CI's frozen-seed toolchain is unfixed.
+
+────────────────────────────────────────────────────────────────────────────
+THE GATE FLIP — NOT DONE (correct, honest)
+────────────────────────────────────────────────────────────────────────────
+The 3 `continue-on-error: true` lines (nobaseline-gate.yml:129/193/256) are LEFT
+IN PLACE. The task gates the flip on "the const-fold gate must now PASS enforcing
+on current main (seed has the fix)". The seed does NOT have the fix (it is the
+frozen anchor), and was not re-anchored (see STOP above), so flipping to enforcing
+would turn all 3 nobaseline-gate jobs RED on every push to main — precisely the
+make-or-break red-gate outcome the task forbids. The flip is correctly coupled to
+a successful seed promotion that did not happen.
+
+────────────────────────────────────────────────────────────────────────────
+THE EXACT BLOCKER (for a future H100/build-host session that can run the ladder)
+────────────────────────────────────────────────────────────────────────────
+To actually promote + flip (on a build host, NOT 0-pod):
+  1. Force-add a coherent same-revision snapshot of all 23 bootstrap seeds with
+     the regenerated hexa_cc.c (current self/codegen.hexa) as a NEW anchor commit.
+  2. Run tool/build_selfhost.sh on that anchor to the cc-gen3.o==cc-gen4.o byte-eq
+     fixpoint (~3.5h) + selfhost_parity_gate.sh PASS.
+  3. Re-pin FROZEN_SEED_REF in tool/restore_frozen_seeds (+ the other ~6 build
+     scripts that hardcode 151c52c8) to the new anchor SHA.
+  4. CI: the OP-39 gate auto-goes-GREEN on all 3 nobaseline jobs.
+  5. THEN drop the 3 `continue-on-error: true` lines (nobaseline-gate.yml
+     :129 darwin · :193 linux-x86_64 · :256 linux-arm64) to make it enforcing.
+This is a self-host-anchor refresh, not a 0-pod code task — its risk surface is
+the entire bootstrap, and its validation is the heavy ladder. Belongs to a
+SELFHOST-NEXT / build-host work item, not HEXA-0POD's $0 local loop.
+
+────────────────────────────────────────────────────────────────────────────
+TIER VERDICT (g5)
+────────────────────────────────────────────────────────────────────────────
+🟠 DEFERRED. The OP-37/37b const-fold fix is verified correct, fixpoint-stable,
+and gate-PASSING when regenerated from current source (proven locally, $0). But
+"promote into the CI seed" is not a surgical edit — CI's seed is the IMMUTABLE
+frozen `.c`-graduation anchor (151c52c8), and moving the fix into it requires a
+wholesale frozen-anchor RE-PIN carrying 27,068 lines of unrelated compiler drift,
+validated by the ~3.5h build_selfhost.sh self-host ladder on a build host — out
+of 0-pod scope and exactly the high-blast-radius bootstrap risk the task flags.
+The gate is LEFT ADVISORY (flipping it now would red-gate CI). A clean honest
+DEFER with the exact blocker beats a broken seed. Evidence is the verbatim regen
+sizes, the byte-identical fixpoint cmp, the emitted-literal dump, and the 13/13
+gate PASS above (self-measured, not self-judged).
+
+PROVENANCE
+  guards:    F-OP39-CONSTFOLD-CI-GATE.txt · F-OP37-FLOAT-CONSTFOLD-VERIFY.txt ·
+             F-OP37B-HOST-ATOF-CORRECT-ROUND.txt
+  seed src:  git checkout 151c52c82502e93d01735c58b43b017d102fee63 --
+             self/native/hexa_cc.c  (tool/restore_frozen_seeds, gitignored,
+             1,854,825 B / 28,482 lines — the .c-graduation parent anchor)
+  regen:     tool/regen_cc_manual (HEXA_V2=~/.hx/bin/build/hexat) →
+             /tmp/op39b_regen.c (2,098,186 B / 31,222 lines)
+  drift:     diff(frozen, regen) = 27,068 lines; const-fold helpers ABSENT @frozen
+  fixpoint:  cmp /tmp/op39b_regen.c /tmp/op39b_regen2.c → BYTE-IDENTICAL
+  gate PASS: clang(/tmp/op39_fixed.c + self/runtime.c) → /tmp/op39_bin → 13/13 OK
+  ladder:    tool/SELFHOST_PROMOTE_RUNBOOK.md (cc-gen3.o==cc-gen4.o, ~3.5h)
+  gate yml:  .github/workflows/nobaseline-gate.yml :129/:193/:256 (LEFT advisory)
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.

@@ -1794,3 +1794,29 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   real Hopper. Kit-named fixes (NOT pod tasks): re-freeze runtime.c w/ all 31 wrappers, or add a CUDA release.yml
   job. Input side unchanged (proven 0-pod F-OP28/28b/28c). Verdict F-G1-CLMPROD-TF32-GPU-STEP.txt.
 - Both W16 + G1 milestones flipped [x]. $0.72 total · leak-0 · no foreign pod touched · no .tape edits.
+
+## OP-39b — promote OP-37/37b const-fold fix into CI seed + flip gate → 🟠 DEFERRED (frozen-anchor re-pin, out of 0-pod scope) — 2026-06-12
+- TASK (OP-39's deferred follow-up): promote the OP-37/37b const-fold fix into the CI seed self/native/hexa_cc.c,
+  then flip the OP-39 gate advisory→enforcing (drop the 3 continue-on-error lines).
+- SURVEY (decisive): "the CI seed" is an IMMUTABLE FROZEN GIT ANCHOR, not a tracked/regenerable/surgical file.
+  self/native/hexa_cc.c is gitignored (.gitignore:286); CI restores it via `git checkout 151c52c8 --
+  self/native/hexa_cc.c` (tool/restore_frozen_seeds, FROZEN_SEED_REF = .c-graduation parent of #2065) →
+  tool/stage_prebuild_hexat clang-builds CI's build/hexat from it. So "promote into the seed" is NOT a
+  marker-guarded re-emit — the only way is a wholesale RE-PIN of FROZEN_SEED_REF to a new coherent 23-seed anchor.
+- MEASURED wholesale (not surgical): regen hexa_cc.c from current self/codegen.hexa (tool/regen_cc_manual,
+  HEXA_V2=Jun-8 hexat) = 2,098,186 B / 31,222 lines vs frozen seed 1,854,825 B / 28,482 lines → diff = 27,068
+  lines of UNRELATED drift; const-fold helpers absent in the frozen seed (nothing to cherry-pick). Validation of a
+  new anchor = the ~3.5h build_selfhost.sh self-host ladder (cc-gen3.o==cc-gen4.o) on a build host. g0 STOP for a
+  $0 local single-PR task; the task's explicit "regen carries unrelated drift → DEFER".
+- PROVEN LOCALLY ($0, deterministic, arm64-macos) the FIX is correct + fixpoint-stable: (1) regen builds clean →
+  /tmp/hexat_regen; (2) self-host fixpoint BYTE-IDENTICAL (gen-N re-regen == gen-N+1, cmp clean); (3) regen emits
+  the FIXED exact/strtod literals (-0.254829592 · 7.24981871602117067e-02), NOT lossy %g; (4) the OP-39 gate
+  PASSES all 13 goldens against a binary built from the fixed regen → gate auto-goes-GREEN once the seed carries
+  the fix.
+- GATE FLIP NOT DONE (correct): the 3 continue-on-error lines (nobaseline-gate.yml :129/:193/:256) are LEFT IN
+  PLACE — flipping while CI's frozen seed still has the pre-fix folder would turn all 3 jobs RED (the make-or-break
+  red-gate the task forbids). The flip is correctly coupled to a seed promotion that did not happen.
+- OUTCOME: milestone added [ ] 🟠 DEFERRED + deferred-note resolved-as-deferred. Unblock = a SELFHOST-NEXT /
+  build-host work item (new coherent anchor → ladder fixpoint+parity → re-pin FROZEN_SEED_REF → gate auto-GREEN →
+  drop the 3 continue-on-error lines). $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+  Verdict .verdicts/hexa-0pod/F-OP39B-SEED-PROMOTE-FLIP.txt.
