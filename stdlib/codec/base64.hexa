@@ -17,7 +17,10 @@
 //   • Encoder produces canonical RFC 4648 alphabet (A-Z, a-z, 0-9, +, /, =).
 //   • Decoder ignores whitespace (\t, \n, \r, ' ') for line-folded inputs.
 //   • Invalid byte (non-alphabet, non-whitespace) → returns [] (empty).
-//   • Padding ='s are tolerated and required for canonical roundtrip.
+//   • Padding ='s are tolerated but not load-bearing: the decoder
+//     recovers the trailing partial group from the alphabet-char count
+//     alone (2 chars → 1 byte, 3 chars → 2 bytes), so encode∘decode is
+//     the identity for any byte-length, padded or unpadded.
 
 let _B64_ALPHA: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
@@ -72,7 +75,7 @@ pub fn base64_encode(bytes: [int]) -> string {
         out.push(_B64_ALPHA.byte_at(i2))
         out.push(61)
     }
-    return bytes_to_str(out)
+    return bytes_to_str_raw(out)
 }
 
 @pure
@@ -103,7 +106,8 @@ pub fn base64_decode(s: string) -> [int] {
     }
     let mut out: [int] = []
     let mut j = 0
-    while j + 3 < m {
+    // Full 4-char groups → 3 bytes each.
+    while j + 4 <= m {
         let v0 = idxs[j]
         let v1 = idxs[j+1]
         let v2 = idxs[j+2]
@@ -116,11 +120,23 @@ pub fn base64_decode(s: string) -> [int] {
         out.push(b2 & 0xFF)
         j = j + 4
     }
-    // Trim padded bytes.
-    let trim = if pad > 2 { 2 } else { pad }
-    let final_len = len(out) - trim
-    if final_len <= 0 { return [] }
-    return out.slice(0, final_len)
+    // Trailing partial group (padding stripped): 2 idxs → 1 byte,
+    // 3 idxs → 2 bytes. A lone trailing idx (rem == 1) is incomplete
+    // (no canonical encoder emits it) → drop it. This is what makes the
+    // round-trip whole for any byte-length, not just multiples of 3.
+    let rem = m - j
+    if rem == 2 {
+        let v0 = idxs[j]
+        let v1 = idxs[j+1]
+        out.push(((v0 * 4) + (v1 / 16)) & 0xFF)
+    } else if rem == 3 {
+        let v0 = idxs[j]
+        let v1 = idxs[j+1]
+        let v2 = idxs[j+2]
+        out.push(((v0 * 4) + (v1 / 16)) & 0xFF)
+        out.push((((v1 % 16) * 16) + (v2 / 4)) & 0xFF)
+    }
+    return out
 }
 
 @pure
@@ -137,5 +153,5 @@ pub fn base64_encode_str(s: string) -> string {
 
 @pure
 pub fn base64_decode_str(s: string) -> string {
-    return bytes_to_str(base64_decode(s))
+    return bytes_to_str_raw(base64_decode(s))
 }

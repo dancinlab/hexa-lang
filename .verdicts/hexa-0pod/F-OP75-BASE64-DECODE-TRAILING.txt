@@ -1,0 +1,110 @@
+F-OP75-BASE64-DECODE-TRAILING
+=============================
+TIER: 🔴→fix  (genuine round-trip correctness bug found + fixed + machine-locked;
+              plus a co-located standalone-build bug in the same module)
+SCOPE: 0-pod · $0 · local CPU · NO GPU · no vast · no foreign pod · leak-0
+       (source-logic fix + new self-test; leaf stdlib module, not in the
+        build_selfhost closure → self-host byte-eq fixpoint UNTOUCHED)
+
+CONTEXT
+-------
+These LANE-2 correctness threads are CLOSED, not re-opened: falsified-builtin roster
+(OP-59/62/65/67), const-fold codegen (OP-37/40/65), stdlib core/math doc-vs-behavior
+(OP-68/70), flame numeric-primitive oracle coverage (OP-72/74). OP-75 self-selects a
+GENUINELY FRESH surface — stdlib NON-math encoding contract — per the survey below.
+
+SURVEY (per axis a–d; scoped greps/reads, NO .git)
+--------------------------------------------------
+(a) stdlib NON-math contract audit — ACTIONABLE. stdlib/codec/base64.hexa documents
+    a round-trip invariant ("Padding ='s are tolerated and required for canonical
+    roundtrip") but the decoder CONTRADICTS it: a real bug that breaks encode∘decode
+    for any input whose byte-length is not a multiple of 3 (detail below). PICKED.
+    The sibling streaming impl self/runtime/base64_pure.hexa is CORRECT (proves the
+    contract is achievable and pins the expected algorithm). The codec module had NO
+    test (stdlib/codec/ has big5/cp949/euc_kr/gbk/shift_jis/unicode_normalize tests
+    but NONE for base64) — consistent with it never being exercised.
+
+(b) flame/forge surface outside the closed oracle set — DRY this round. The Adam/AdamW
+    moment-init + bias-correction is already covered (OP-6B adamw-fuse + optim_lib in
+    the OP-69 determinism FMA gate); tokenizer/dataloader + checkpoint round-trip are
+    RUNTIME byte-eq (need a built ./hexa), honestly recorded as documented-but-DEFERRED
+    by OP-69, not statically actionable. No fresh static-checkable invariant surfaced.
+
+(c) transpile/internal-consistency from open handoffs — the prior handoff "bugs"
+    (OP-66/71) were already-fixed stale-seed fixtures; no NEW such item this round.
+
+(d) HEXA-0POD ## deferred + .log.md tail — residual items are build-host seed-promote
+    or GPU/pod-bound (out of 0-pod scope).
+
+PICK (g0): axis (a) — a base64 round-trip bug is the highest-value 0-pod item: a public
+codec invariant that the body breaks, fixable doc+source+test, provable WITHOUT a GPU.
+
+THE BUG (🔴)
+-----------
+stdlib/codec/base64.hexa base64_decode():
+  let m = len(idxs)               // count of NON-PADDING alphabet chars
+  ...
+  while j + 3 < m { ... emit 3 bytes per 4-char group ... j = j + 4 }
+  let trim = if pad > 2 { 2 } else { pad }
+  let final_len = len(out) - trim ; ... return out.slice(0, final_len)
+
+The loop only processes FULL 4-char groups, then trims `pad` bytes. But a padded
+message's non-pad char count m is NEVER a multiple of 4 — it is 2 or 3 (mod 4) exactly
+when there is padding. So the TRAILING 2/3-char group is ALWAYS dropped, and the
+`trim` step can never recover it. Result: encode∘decode is the identity ONLY for inputs
+whose byte-length is a multiple of 3. RFC 4648 §10 trace (faithful port, verbatim):
+
+  'f'       enc=Zg==     OLD_decode=[]                 want=[102]
+  'fo'      enc=Zm8=     OLD_decode=[]                 want=[102, 111]
+  'foo'     enc=Zm9v     OLD_decode=[102, 111, 111]    want=[102, 111, 111]      (ok)
+  'foob'    enc=Zm9vYg== OLD_decode=[102]              want=[102, 111, 111, 98]
+  'fooba'   enc=Zm9vYmE= OLD_decode=[102, 111]         want=[102, 111, 111, 98, 97]
+  'foobar'  enc=Zm9vYmFy OLD_decode=[102,111,111,98,97,114]  want=same             (ok)
+
+CO-LOCATED BUG (same module): base64.hexa called `bytes_to_str(out)` / `bytes_to_str(
+base64_decode(s))`, but `bytes_to_str` is NOT a registered builtin and is NOT imported
+(it is a hexa fn local to stdlib/ckpt/format.hexa). So the module does NOT COMPILE
+standalone — verbatim, against the unmodified installed module:
+  build/.../base64.hexa.c:99: error: use of undeclared identifier 'bytes_to_str'
+This is why it had no test: it was unbuildable in isolation.
+
+THE FIX (doc + source; no behavior beyond making the contract hold)
+------------------------------------------------------------------
+1. Decode: process full 4-char groups (while j + 4 <= m), THEN decode the trailing
+   partial group from the char count alone — 2 idxs → 1 byte, 3 idxs → 2 bytes (a lone
+   trailing idx, rem==1, is incomplete and dropped). This mirrors the proven streaming
+   accumulator in self/runtime/base64_pure.hexa (emit a byte whenever vbits >= 8).
+   The old `trim`-by-pad scheme is removed; padding is now tolerated but not
+   load-bearing (the alphabet-char count carries the length).
+2. Build: bytes_to_str(...) → bytes_to_str_raw(...) (the registered NUL-clean raw-byte
+   constructor used across stdlib net/runtime), making the module self-contained.
+3. Doc: the "padding required for canonical roundtrip" invariant corrected to the true
+   "tolerated but not load-bearing; encode∘decode is the identity for any byte-length".
+
+VERIFY (🟢)
+----------
+A faithful Python port of the FIXED encode/decode integer arithmetic was cross-checked
+against the authoritative `base64` codec:
+  - RFC 4648 §10 vectors (encode AND decode, all 7):  PASS
+  - all 256 single-byte messages (round-trip + Python parity):  0 mismatches
+  - 2000 random messages len 0..40 (encode parity + round-trip + decoding Python's
+    output):  0 mismatches
+NEW lock test stdlib/codec/base64_test.hexa (@sentinel __HEXA_CODEC_BASE64__): RFC
+golden encode + decode + round-trip per vector, whitespace-fold tolerance, invalid-byte
+→ [], and an all-256 single-byte binary round-trip sweep (exercises the restored
+rem==2 trailing path). Matches the stdlib/codec/* test convention (big5_test et al).
+
+NOTE on the local oracle: the installed Jun-1 seed (~/.hx/bin) SIGABRTs (exit 138) when
+RUNNING this module — even the unchanged encode path and even base64_decode's pure-[int]
+path — although the individual builtins (bytes_to_str_raw, byte_at) run clean
+standalone. This is the documented stale-seed runtime limitation (MEMORY: "Local hexa is
+a stale oracle — crashes on already-fixed paths; use ghost for differentials"). The
+source-logic correctness is therefore locked by the authoritative Python cross-check +
+parity with the proven self/runtime/base64_pure.hexa, not by the stale local runtime.
+
+SELF-HOST byte-eq: UNAFFECTED. stdlib/codec/base64.hexa is a leaf module, NOT in the
+compiler/main.hexa build_selfhost closure; zero codegen/runtime bytes touched.
+wipe_guard: net-additive (fix restructures a ~15-line tail + adds a test), no >50-line
+deletion, scoped subject.
+
+$0 · 0-pod · NO GPU · no vast · no foreign pod · leak-0 · no .tape · no self/env.hexa.
