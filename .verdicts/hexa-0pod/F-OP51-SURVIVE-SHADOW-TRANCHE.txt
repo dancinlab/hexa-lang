@@ -1,0 +1,224 @@
+F-OP51-SURVIVE-SHADOW-TRANCHE — [S]-shadow tranche of the OP-43 survive-set, audited with EXTRA care
+        on the local-fn-shadow binding control. OP-48 closed the [R]-only tranche (7 dereg + arange
+        pinned), dropping the OP-43 survivor set to 16. Those 16 ALL carry [S] LOCAL-FN SHADOWS — a
+        strictly HARDER tranche: a local `fn NAME` exists in real programs, so the safety analysis must
+        prove the roster entry is deregisterable WITHOUT breaking those shadow bindings. OP-51 audits a
+        tranche of 6 of the 16 [S R]-survivors (kv_cache_append · repeat_kv · quantize_int8 ·
+        dequantize_int8 · magnitude_prune · tensor_fill). RESULT: all 6 g5-RE-VERIFIED falsified + the
+        [S] shadow-binding CONTROL proven roster-independent per name + every COMPILING caller resolves
+        to a local/imported shadow (NOT the builtin) + every builtin-dependent (no-shadow) call-site
+        dead (example baseline -1 / already-AOT-fail / proof-block-dropped) + compiler/** ZERO refs →
+        ALL 6 DEREGISTERED. The OP-43 survivor set drops 16 → 10.
+HEXA-0POD OP-51 · CPU-LOCAL (hexat AOT transpile + clang -fsyntax-only) · 0-GPU · $0 · no vast/pod
+════════════════════════════════════════════════════════════════════════════
+
+[0] PROVENANCE + MANDATE
+------------------------
+OP-41 audited 231 builtins (~105 falsified, 4 dereg). OP-43 took the 42-member ML family (16 dereg, 26
+survive-with-reason). OP-47 took the 3 largest-surface [R]-survivors (matmul_into/dot/mat_add_inplace —
+all 3 dereg, 26→23). OP-48 took the 8 [R]-ONLY (no-shadow) survivors (7 dereg + arange pinned on a
+self-host compiler-closure ref, 23→16). After OP-48 the survive-set is 16, ALL carrying [S] LOCAL-FN
+SHADOWS — the HARDER tranche. OP-51's mandate: audit a tranche of the 16 [S]-survivors with the SAME
+rigorous per-builtin g5 method PLUS the explicit [S] shadow-safety CONTROL — prove the roster row is
+deregisterable WITHOUT breaking a real local-fn shadow's binding. CONSERVATIVE; "more keeps than [R]"
+was the expected/permitted outcome. The chosen tranche (6, keep it landable):
+  kv_cache_append · repeat_kv · quantize_int8 · dequantize_int8 · magnitude_prune · tensor_fill.
+
+The two sides (OP-41 method):
+  (a) ROSTER — `let builtin_names = [...]` in self/env.hexa env_new() (registration makes the
+      binder/type-checker ACCEPT an UNSHADOWED call to NAME).
+  (b) IMPL   — codegen-inline lowering (self/codegen.hexa `if name == "X"`) ∪ runtime symbols the
+      emitted C calls (self/runtime.h + installed runtime.c, incl prefix variants hexa_/rt_/u_/hexa_math_).
+A FALSIFIED builtin = registered in (a), NO impl in (b) → AOT emits a bare hexa_callN(NAME,…) → clang
+"use of undeclared identifier 'NAME'".  Fresh hexat = ~/.hx/bin/build/hexat (2027336B, Jun-8 — NOT the
+stale Jun-1 ~/.hx/bin/hexa). Installed runtime.c = /Users/mini/.hx/src/self/runtime.c (Jun-12).
+Baseline roster lines (self/env.hexa, pre-edit): :206 "kv_cache_append" · :207 "quantize_int8",
+"dequantize_int8" · :211 "magnitude_prune",…,"tensor_fill" · :213 …,"repeat_kv".
+
+[1] PER-BUILTIN STATIC IMPL CROSS-REF (arg-shape-trap controlled)
+----------------------------------------------------------------
+codegen-inline guards (`if name=="X"` in self/codegen.hexa): ALL 6 = 0 → ARG-SHAPE-TRAP (OP-41 §1)
+  CONTROLLED: with 0 codegen guards, ANY arg shape yields the same bare hexa_callN fallback (no
+  false-undeclared risk; the probe is arg-shape-robust for this tranche).
+runtime symbol (self/runtime.h ∪ installed runtime.c, prefix-variant scan `[A-Za-z0-9_]*NAME[A-Za-z0-9_]*`):
+  kv_cache_append : 0   repeat_kv : 0   quantize_int8 : 0   dequantize_int8 : 0
+  magnitude_prune : 0   tensor_fill : 0      (every distinct-match set EMPTY — no bare or prefixed symbol)
+
+[2] AOT PROBE (g5, authoritative — correct args, fresh hexat → clang -I<self> -fsyntax-only) — VERBATIM
+------------------------------------------------------------------------------------------------------
+Each: `fn main(){ let a=[1.0..]; let m=[[..]]; let _r=<correct-args call>; println("OKMARK") }` →
+~/.hx/bin/build/hexat OK (roster accepts) → clang FALSIFIES:
+  kv_cache_append : kv_cache_append(m, a, a)        → p_kv_cache_append.c:20:29: error: use of undeclared identifier 'kv_cache_append'
+  repeat_kv       : repeat_kv(m, 2)                 → p_repeat_kv.c:20:29: error: use of undeclared identifier 'repeat_kv'
+  quantize_int8   : quantize_int8(a)                → p_quantize_int8.c:20:29: error: use of undeclared identifier 'quantize_int8'
+  dequantize_int8 : dequantize_int8(a, 0.5)         → p_dequantize_int8.c:20:29: error: use of undeclared identifier 'dequantize_int8'
+  magnitude_prune : magnitude_prune(a, 0.5)         → p_magnitude_prune.c:20:29: error: use of undeclared identifier 'magnitude_prune'
+  tensor_fill     : tensor_fill(4, 1.0)             → p_tensor_fill.c:20:29: error: use of undeclared identifier 'tensor_fill'
+ALL 6 g5-RE-VERIFIED FALSIFIED. (The opposite finding — a clean link — did NOT occur for any.)
+
+[3] THE CRITICAL [S] CONTROL — local-fn shadow binds ROSTER-INDEPENDENTLY (per name)
+-----------------------------------------------------------------------------------
+For EACH of the 6, a minimal file `fn NAME(x:float)->float { return x+1.0 }` + a `NAME(2.0)` caller →
+~/.hx/bin/build/hexat OK → clang -I<self> -fsyntax-only CLEAN. Generated C (per name) contains:
+  line 4  `HexaVal NAME(HexaVal x);`        (forward decl)
+  line 10 `HexaVal NAME(HexaVal x) {`       (LOCAL definition)
+  line 19 `HexaVal r = NAME(hexa_float(2.0));`  (call → local def)
+Verified verbatim for all 6 (kv_cache_append, repeat_kv, quantize_int8, dequantize_int8,
+magnitude_prune, tensor_fill — clang CLEAN, local def + call emitted each time). ⇒ a local `fn NAME`
+emits its OWN symbol and the call resolves to it INDEPENDENT of the roster entry. Deregistering the
+builtin can NEVER break a local-fn shadow's binding. (This is the OP-47/OP-48 control, here proven for
+the [S]-family where the shadows are REAL, not vacuous.)
+
+[4] SHADOW DEFS + CALLER SWEEP — shadow-resolved vs builtin-dependent, dead/live (the decisive gate)
+---------------------------------------------------------------------------------------------------
+LOCAL-FN SHADOW DEFS (`(pub )?fn NAME(` repo-wide, *.hexa, excl .claude):
+  kv_cache_append : 2 — self/ml/kv_cache.hexa:47 (5-arg) · self/ml/paged_attention.hexa:86
+  repeat_kv       : 4 — self/test_gqa.hexa:146 · self/test_gqa_attention.hexa:87 · self/ml/gqa_attention.hexa:70 · self/ai_native/gqa.hexa:124
+  quantize_int8   : 3 — self/test_quantize.hexa:100 · self/ml/quantize.hexa:210 (3-arg) · self/ai_native/quantize.hexa:77
+  dequantize_int8 : 2 — self/test_quantize.hexa:164 · self/ai_native/quantize.hexa:140
+  magnitude_prune : 2 — self/test_pruning.hexa:79 · self/ml/pruning.hexa:70
+  tensor_fill     : 2 — bench/hxblas_linux.hexa:78 · self/ml/tensor.hexa:106
+(matches OP-43's [S R] tags exactly.)
+
+Per-builtin caller classification (each call-site file: SHADOW = file binds a local `fn NAME` →
+roster-independent; BUILTIN-DEP = no shadow → binds the roster entry, must be proven dead):
+
+  repeat_kv  — THE CLEANEST: ALL 4 caller files = SHADOW (self/test_gqa · self/test_gqa_attention ·
+    self/ml/gqa_attention · self/ai_native/gqa). Generated C for each emits `HexaVal repeat_kv(...)`
+    DEFINITION (e.g. self/test_gqa.hexa.c:248, self/ml/gqa_attention.hexa.c:77, self/ai_native/gqa.hexa.c:115)
+    → binds LOCAL. ZERO builtin-dependent caller.
+
+  kv_cache_append — callers: SHADOW self/ml/kv_cache.hexa, self/ml/paged_attention.hexa; BUILTIN-DEP
+    example/benchmark_all (baseline exit_code=-1), example/test_conv_cache_io (-1), self/test_flash_decode.
+    self/test_flash_decode.hexa `import "ml/kv_cache.hexa"` (line 365) → generated C emits
+    `extern HexaVal kv_cache_append(HexaVal,HexaVal,HexaVal,HexaVal,HexaVal)` (the 5-arg IMPORTED LOCAL
+    from kv_cache.hexa:47, NOT a bare-name builtin call) and binds to it (clang CLEAN, link to the
+    imported fn). ⇒ the ONLY compiling caller resolves to the shadow; the 2 example callers are dead.
+
+  quantize_int8 — SHADOW self/ml/quantize.hexa, self/ai_native/quantize.hexa, self/test_quantize.hexa.
+    BUILTIN-DEP: example/{anima_convergence_proof,anima_mega_demo,test_quant_beam_init} (ALL baseline -1)
+    + self/ml/quantize_model.hexa + self/ml/quantize_test.hexa. quantize_model emits the 3-arg
+    `extern HexaVal quantize_int8(HexaVal,HexaVal,HexaVal)` (the quantize.hexa:210 3-arg shadow) and
+    AOT-FAILS on OTHER undeclared identifiers (slice/char_code_at/load_checkpoint/write_file_bytes) —
+    NOT on quantize_int8 (builtin-INDEPENDENT pre-existing failure; quantize_int8 binds the shadow).
+    quantize_test.hexa TRANSPILE-FAILS today (builtin-independent).
+
+  dequantize_int8 — SHADOW self/ai_native/quantize.hexa, self/test_quantize.hexa. BUILTIN-DEP: ONLY
+    example/test_quant_beam_init (baseline -1). No self builtin-dependent caller.
+
+  magnitude_prune — SHADOW self/ml/pruning.hexa, self/test_pruning.hexa. BUILTIN-DEP: ONLY example/
+    {anima_mega_demo,benchmark_ai_native,test_reward_prune_ts} (ALL baseline exit_code=-1). No self
+    builtin-dependent caller.
+
+  tensor_fill — LARGEST surface. SHADOW bench/hxblas_linux.hexa, self/ml/tensor.hexa. BUILTIN-DEP:
+    self/ml/{pipeline,reward_model,rlhf,t2_real_bench} ALREADY AOT-FAIL today ("use of undeclared
+    identifier 'tensor_fill'" / 'matmul_into'); self/ml/{tensor_ops,train_full} + self/stdlib/tensor_ops
+    + self/test_{tensor_ops_suite,tensor} ALREADY TRANSPILE-FAIL today ("index N out of bounds");
+    self/test_tensor_ops_deep AOT-FAILS; doc/language_reference AOT-FAILS — ALL builtin-INDEPENDENT
+    (reproduce WITH the builtin still registered on the Jun-8 hexat). The ONE remaining reference,
+    self/test_array_ops_suite.hexa:379 `tensor_fill(3,1.0)`, is inside a `proof ar096_arr_of_tensors {}`
+    block that CODEGEN DROPS (0 tensor_fill refs in the generated C; clang exit 0). PROOF-BLOCK CONTROL:
+    an UNREGISTERED never-defined name (`nonexistent_builtin_xyz(3,1.0)`) inside a `proof {}` block
+    TRANSPILES CLEAN (binder does not reject; codegen drops it — 0 refs in C). ⇒ the proof-block
+    reference is NOT a live roster binding; deregistration cannot break it.
+
+PRE-EXISTING-FAILURE CONTROL (OP-41 §5c / OP-47 §5): every non-shadow non-example caller fails TODAY on
+  the INSTALLED Jun-8 hexat whose roster STILL registers all 6 (pre-dates this edit) — the AOT
+  "undeclared" + transpile "index out of bounds" errors reproduce WITH the builtins present ⇒
+  builtin-independent. Deregistration is NOT the cause of any failure; it only flips a never-compiling
+  program's failure mode from "AOT undeclared symbol" to "binder unbound name" (a strictly-equal no-op
+  for a program that never compiled), and for shadowed/proof-block callers it is a no-op outright.
+
+[5] COMPILER-CLOSURE CHECK (the arange lesson) — ALL 6 CLEAR
+-----------------------------------------------------------
+compiler/** refs (excl embedded.gen.hexa JSON archive noise):
+  kv_cache_append 0 · repeat_kv 0 · quantize_int8 0 · dequantize_int8 0 · magnitude_prune 0 · tensor_fill 0
+⇒ NONE is in the self-host compiler's bind allow-list / codegen special-path (unlike arange, which is
+  in compiler/check/bind.hexa:1281 + PLAN.md:574 and therefore STAYED in OP-48). The only compiling
+  self-host gate is selfhost-byteeq on compiler/main.hexa's closure; with 0 refs each, the
+  cc-gen3.o==cc-gen4.o byte-eq fixpoint is unperturbed.
+
+[6] DECISION (g0 conservative, [S]-strict) — ALL 6 DEREGISTER
+------------------------------------------------------------
+The four conditions per builtin: (proven falsified) ∧ (no live caller depends on the roster entry) ∧
+(local-fn shadow binds without it — proven by the §3 CONTROL) ∧ (compiler/** ZERO refs):
+  kv_cache_append : falsified ✓ · 2 shadows bind LOCAL ✓ · only compiling caller (flash_decode) binds the
+                    5-arg imported shadow · 2 example callers dead · compiler 0 ✓ → DEREGISTER
+  repeat_kv       : falsified ✓ · 4 shadows ✓ · ALL 4 caller files SHADOW, 0 builtin-dep · compiler 0 ✓ → DEREGISTER
+  quantize_int8   : falsified ✓ · 3 shadows ✓ · quantize_model binds the 3-arg shadow, fails on OTHER syms;
+                    quantize_test transpile-fails; 3 example callers dead · compiler 0 ✓ → DEREGISTER
+  dequantize_int8 : falsified ✓ · 2 shadows ✓ · only builtin-dep caller = example -1 · compiler 0 ✓ → DEREGISTER
+  magnitude_prune : falsified ✓ · 2 shadows ✓ · all builtin-dep callers example -1 · compiler 0 ✓ → DEREGISTER
+  tensor_fill     : falsified ✓ · 2 shadows ✓ · every self/ml/test caller ALREADY AOT/transpile-fails today
+                    (builtin-independent); the one extra ref is a codegen-dropped proof block · compiler 0 ✓ → DEREGISTER
+[S]-STRICT respected: each removal is gated on the §3 control proving the real shadow binds without the
+roster row AND on every non-shadow caller being dead. Had ANY caller been a live PASSING program binding
+the builtin (unshadowed) OR a compiler-closure ref, that builtin would STAY. None is.
+
+[7] DIFF
+--------
+  self/env.hexa : 6 names REMOVED from env_new() builtin_names roster (kv_cache_append quantize_int8
+                  dequantize_int8 magnitude_prune tensor_fill repeat_kv) + 3 scoped OP-51 comment blocks
+                  recording the falsified+shadow-control+dead-surface+compiler-0+byte-eq-safe rationale
+                  per group (mirrors the OP-43/OP-47/OP-48 removal-comment convention). KEPT (re-verified
+                  1 each): tensor, tensor_zeros, load_weights_bin, mmap_weights, to_char, arange, matvec,
+                  mat_add, rms_norm, curiosity_reward, dialogue_reward, combined_reward, input, readline.
+  wipe_guard: net +35 / −4 « 50; commit subject scoped
+  `cleanup(env): deregister 6 falsified [S]-shadow ML survivors (shadow-control proven) — OP-51 ...`.
+
+[8] POST-EDIT CHECKS — GREEN
+---------------------------
+(a) env.hexa transpiles clean: `~/.hx/bin/build/hexat self/env.hexa /tmp/op51/env_after.c` → OK (roster
+    well-formed after the 6 removals).
+(b) grep-proof: 0 non-comment roster strings for each removed name; all 14 spot-checked kept neighbors
+    still present (1 each; "tensor" exact + "tensor_zeros").
+(c) self-host byte-eq: env.hexa edit affects the NEXT compiler build; installed hexat keeps its roster
+    until rebuilt (same 0-pod caveat as OP-41/OP-43/OP-47/OP-48 — verified via env.hexa transpile +
+    generated-C inspection + compiler/** zero-ref for the 6, not a from-scratch rebuild). The 6 have
+    zero compiler-core refs → fixpoint safe. The CI selfhost-byteeq-real gate compiles compiler/main.hexa
+    (which never references any of the 6) and is INLINE-polled on the PR.
+
+[9] GATE (g5) — PASS
+--------------------
+  6-builtin tranche matrix built (static + empirical, arg-shape-trap controlled) : YES (§1-2)
+  all 6 AOT-falsified RE-VERIFIED verbatim                                       : YES (§2)
+  [S] local-fn shadow binding CONTROL proven roster-independent PER NAME         : YES (§3)
+  every COMPILING caller resolves to a local/imported shadow (not the builtin)   : YES (§4)
+  every builtin-dependent (no-shadow) caller dead (example -1 / AOT-fail / proof-dropped) : YES (§4)
+  0 compiler-core / byte-eq reference for all 6 (vs arange's 2 in OP-48)          : YES (§5)
+  pre-existing-failure control (dereg not the cause)                             : YES (§4)
+  env.hexa transpiles + roster well-formed after removal                         : YES (§8)
+
+[10] CLOSURE STATEMENT + RUNNING TALLY
+-------------------------------------
+After OP-51: 6 of the 16 [S]-shadow OP-43 survivors (kv_cache_append repeat_kv quantize_int8
+dequantize_int8 magnitude_prune tensor_fill) DEREGISTERED — proven falsified + [S]-shadow-control-safe
++ dead-surface + compiler-0 + byte-eq-safe.
+  OP-43 survivor set: 26 (OP-43) → 23 (OP-47, −3) → 16 (OP-48, −7) → 10 (OP-51, −6).
+  Remaining 10 ML-family survivors:
+    [S R] relu sigmoid transpose normalize zeros attention topk sample_token mse_loss
+    [R]   arange  (PINNED on a HARD compiler-closure dependency — compiler/check/bind.hexa:1281 +
+          codegen special-path; OP-48, conservative keep).
+Real ML in hexa = stdlib/flame/* + per-module LOCAL fns (the shadows), NOT these roster builtins.
+Deregistration is REVERSIBLE (one-line roster re-add); any future program needing one would require a
+real impl anyway (the roster row was a lints-but-won't-link landmine).
+
+[11] HONEST FRONTIER NOTE
+------------------------
+9 [S]-survivors remain (the 10 minus arange, which is a hard compiler-closure KEEP that will not move).
+Of the 9 remaining [S R] members, the audit read is MIXED, and the tranche is getting HARDER as expected:
+this pass deliberately picked the 6 with the smallest / cleanest shadow surfaces (repeat_kv was the ideal
+case — all callers shadowed; the rest had only dead example / already-failing self callers). The 9 that
+remain — relu, sigmoid, zeros, normalize, transpose, attention, topk, sample_token, mse_loss — carry
+LARGER and potentially LIVER shadow surfaces (sigmoid shadow=8 with self=102 refs; relu shadow=3 self=23;
+zeros shadow=4 self=10; mse_loss shadow=9), and the decisive question for each is whether ANY caller is a
+BASELINE-PASSING program that binds the UNSHADOWED roster builtin (not a shadow, not a dead/failing file).
+sigmoid in particular has a compiler/** COMMENT ref (nvptx_target.hexa "// sigmoid(x)=…", non-binding) and
+the largest self surface — it is the most likely conservative KEEP. So the honest depletion read: the
+[S]-tranche is NOT exhausted but the EASY removals within it are now largely consumed by OP-51; the
+remaining 9 will require per-name baseline-pass verification of every unshadowed call-site (a heavier
+audit), and at least one (sigmoid, possibly relu/zeros) looks like a conservative KEEP on live-shadow /
+large-surface grounds rather than a clean dereg. Expect the next [S] tranche to deregister FEWER than 6 —
+the campaign's deregisterable-builtin reservoir is depleting, with the residual increasingly dominated by
+compiler-closure KEEPs (arange) and live-shadow KEEPs (sigmoid-class).
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.

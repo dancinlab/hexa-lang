@@ -10,6 +10,30 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-51-SURVIVE-SHADOW-TRANCHE (unique anchor — OP-48 closed the [R]-only tranche (7 dereg + arange pinned on a self-host compiler-closure ref), dropping the OP-43 survivor set to 16. Those 16 ALL carry [S] LOCAL-FN SHADOWS — a strictly HARDER tranche: a local `fn NAME` exists in real programs, so the safety analysis must prove the roster entry is deregisterable WITHOUT breaking those shadow bindings. OP-51 audits a tranche of 6 [S R]-survivors (kv_cache_append · repeat_kv · quantize_int8 · dequantize_int8 · magnitude_prune · tensor_fill) with the SAME per-builtin g5 method PLUS the explicit [S] shadow-safety CONTROL (a local `fn NAME` emits its OWN forward-decl+def+call and binds roster-INDEPENDENTLY, proven clean per name) + a compiler-closure zero-ref check (the arange lesson) + the proof-block-drop control. CONSERVATIVE; "more keeps than [R]" was the expected/permitted outcome) -->
+- [x] **OP-51 — [S]-shadow survive-audit tranche (6 of 16 [S R]-survivors): all 6 g5-falsified + [S] shadow-binding CONTROL proven roster-independent per name + every compiling caller resolves to a local/imported shadow + every builtin-dep call-site dead (example -1 / already-AOT-fail / proof-block-dropped) + compiler/** ZERO refs → ALL 6 DEREGISTERED. Survivor set 16→10** —
+  🟢 audited the [S]-shadow tranche kv_cache_append·repeat_kv·quantize_int8·dequantize_int8·magnitude_prune·
+  tensor_fill (the HARDER tranche: each carries a REAL local `fn NAME` shadow). Per builtin: 0 codegen guard
+  + 0 runtime symbol (incl prefix variants); AOT probe with correct args RE-VERIFIED FALSIFIED verbatim
+  ("use of undeclared identifier 'NAME'" each). THE CRITICAL [S] CONTROL: a minimal `fn NAME(x){…}` + caller
+  emits `HexaVal NAME(...)` def + call in the generated C and binds roster-INDEPENDENTLY (clang CLEAN per
+  name) — so deregistration can never break a shadow. Every COMPILING caller resolves to a shadow:
+  self/test_flash_decode `import "ml/kv_cache.hexa"` → `extern HexaVal kv_cache_append(_,_,_,_,_)` (5-arg
+  LOCAL); repeat_kv = THE CLEANEST (all 4 caller files carry a local `fn repeat_kv`, 0 builtin-dep);
+  quantize_model binds the 3-arg quantize.hexa shadow + fails on OTHER syms. Every builtin-dep (no-shadow)
+  call-site dead: example baseline exit_code=-1 (benchmark_all/test_conv_cache_io/test_quant_beam_init/
+  anima_mega_demo/anima_convergence_proof/benchmark_ai_native/test_reward_prune_ts); every self/ml tensor_fill
+  caller ALREADY AOT/transpile-fails today with the builtin STILL registered (builtin-independent); the lone
+  proof-block ref (self/test_array_ops_suite:379) is codegen-DROPPED (an UNREGISTERED name compiles inside
+  `proof {}` — confirmed, 0 refs in C). compiler/** ZERO refs to all 6 (vs arange's 2 in bind.hexa:1281 →
+  byte-eq fixpoint safe). env.hexa transpiles clean after the 6 removals (wipe_guard net +35/−4). HONEST
+  FRONTIER: 9 [S R] survivors remain (relu sigmoid transpose normalize zeros attention topk sample_token
+  mse_loss) + arange pinned; the EASY [S] removals are now largely consumed — the remaining 9 carry larger/
+  liver shadow surfaces (sigmoid shadow=8/self=102, relu shadow=3/self=23, mse_loss shadow=9) and need
+  per-name baseline-PASS verification of every unshadowed call-site; ≥1 (sigmoid-class) looks like a
+  conservative live-shadow KEEP. Reservoir depleting; expect the next tranche to dereg FEWER than 6. $0 ·
+  0-GPU · 0-pod · no vast · no foreign-pod · no .tape. Verdict .verdicts/hexa-0pod/F-OP51-SURVIVE-SHADOW-TRANCHE.txt.
+
 <!-- ANCHOR:OP-50-ROUTEA-BOUNDARY-DOCS (unique anchor — the route-(a) own-GEMM perf story has a precise, hard-won boundary scattered across OP-45 #3096 + the GPU route-(a) measurement #3094 + OP-49 #3103: route-(a) pre-permute own-GEMM is bit-exact (rel_rms 0) AND reaches cuBLAS-TF32 PARITY (~1.08x, ~93% roofline, 315 TFLOP/s) @D=2048 but is NOT a cuBLAS BEAT and falls to ~1.50x @D=4096 because it is SHAPE-RIGID (one fixed 128x128 tile) vs cuBLAS SHAPE-ADAPTIVE. OP-50 REFLECTS that boundary into the canonical forge doc (docs/forge-routea-shape-adaptive.md, the file OP-49 authored — extend > duplicate per Occam g0) as a "§0 perf boundary / honest scope" section: what own-GEMM IS (bit-exact-parity-not-beat), what it ISN'T (cuBLAS beat; W14 FP16 11.5x off, W10 6.09x off), its VALUE (bit-exactness + device-residency + no-LLVM, NOT raw TFLOP/s — mirrors flame closeout framing), and the path forward (OP-49 selector + 4 config gaps). DOCS-ONLY, every number traces to a verdict) -->
 - [x] **OP-50 — route-(a) own-GEMM perf BOUNDARY reflected into the canonical forge doc (docs/forge-routea-shape-adaptive.md §0): bit-exact (rel_rms 0) + cuBLAS-TF32 PARITY (1.08x, ~93% roofline, 315 TFLOP/s) @D=2048 — NOT a beat; ~1.50x @D=4096 because SHAPE-RIGID (fixed 128x128) vs cuBLAS SHAPE-ADAPTIVE; VALUE = bit-exactness + device-residency + no-LLVM, not raw TFLOP/s; path-forward = OP-49 selector + 4 gaps. DOCS-ONLY, $0, 0-pod** —
   🟢 DOCS-ONLY reflection (no code/runtime/.tape). Added a "## 0. Perf boundary / honest scope — what own-GEMM
