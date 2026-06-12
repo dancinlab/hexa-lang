@@ -87,7 +87,7 @@ fn _dw_grad(x: float) -> float { return 4.0 * x * (x * x - 1.0) }   // dV/dx
 //   V(x,y) = Σ_{k=0..3} A_k exp[ a_k(x-x0_k)² + b_k(x-x0_k)(y-y0_k) + c_k(y-y0_k)² ]
 fn _mb_AA(k: int) -> float {
     if k == 0 { return -200.0 } if k == 1 { return -100.0 }
-    if k == 2 { return -170.0 } return -15.0
+    if k == 2 { return -170.0 } return 15.0   // A₃=+15 (Müller&Brown 1979; 부호 주의)
 }
 fn _mb_aa(k: int) -> float {
     if k == 0 { return -1.0 } if k == 1 { return -1.0 }
@@ -279,8 +279,10 @@ pub fn neb_relax(pes_id: int, band0: [[float]], k: float,
             if it >= climb_after { climb_idx = _argmax_interior(energies, nimg) }
         }
         // (3) 내부 image 별 NEB force → steepest-descent step.
-        //     fmax 는 climbing image 의 perp 성분을 제외한 일반 image 의 |F^⊥|max
-        //     로 측정(climb image 는 평행력이 의도적으로 0 이 아니므로 별도).
+        //     fmax = 각 image 의 *실제 구동력* |F| max — 일반 image 는 |F^⊥+F^s_∥|,
+        //     climbing image 는 |F_climb|.  climbing image 의 F_climb→0 ⟺ ∇V 가
+        //     수직·평행 둘 다 소멸 ⟺ 진짜 saddle.  따라서 이 기준은 climbing image
+        //     가 saddle 에 완전 도달할 때까지 relaxation 을 지속시킨다(TS 1차조건).
         let mut newfmax = 0.0
         let mut moves: [[float]] = []
         // endpoint 0 은 이동 없음 — 빈 행으로 자리표시.
@@ -296,14 +298,10 @@ pub fn neb_relax(pes_id: int, band0: [[float]], k: float,
             let f = _neb_image_force(band[i - 1], band[i], band[i + 1],
                                      energies[i - 1], energies[i], energies[i + 1],
                                      gi, k, is_climb)
-            // 수렴 측정용 perp force (climb 여부 무관, |F^⊥| 기준).
-            let tau = _improved_tangent(band[i - 1], band[i], band[i + 1],
-                                        energies[i - 1], energies[i], energies[i + 1])
-            let gpar = _vdot(gi, tau)
-            let fperp = _vadd(_vscale(gi, -1.0), _vscale(tau, gpar))
-            let pn = _vnorm(fperp)
-            if pn > newfmax { newfmax = pn }
-            // step (이동제한): 너무 큰 한 스텝 방지 — 표준 SD + cap.
+            // 수렴 측정 = 실제 구동력 |f| (climb image 는 |F_climb| 포함).
+            let fn = _vnorm(f)
+            if fn > newfmax { newfmax = fn }
+            // step (steepest-descent): x ← x + step·F.
             let stepvec = _vscale(f, step)
             moves.push(stepvec)
             i = i + 1

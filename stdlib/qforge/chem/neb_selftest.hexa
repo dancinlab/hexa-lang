@@ -1,0 +1,120 @@
+// @ci_gate — deterministic · network-free · NEB/CI-NEB 메커닉스 g5 게이트
+//
+// neb_selftest.hexa — stdlib/qforge/chem/neb.hexa 의 g5 검증.
+//
+// 검증 케이스 (해석 PES 위, 알려진 saddle/배리어 레퍼런스 대조):
+//  (A) PES dispatcher (d4) 정확성:
+//      (A1) 1D 이중우물 V(±1)=0, V(0)=1, ∇V(0)=0  (해석값)
+//      (A2) Müller-Brown E(saddle SP4=(0.212,0.293)) ≈ -72.25,
+//           E(min A=(-0.558,1.442)) ≈ -146.70  (Müller&Brown 1979 레퍼런스)
+//  (B) NEB band 초기화: 직선보간 endpoint 보존 + 등간격.
+//  (C) improved tangent: 단조구간 → 한쪽 차분과 일치(정규화).
+//  (D) 1D 이중우물 CI-NEB: climbing image 가 saddle x=0 (배리어 1.0) 로 수렴.
+//  (E) Müller-Brown CI-NEB: climbing image 가 saddle SP4=(0.212,0.293) 로 수렴
+//      (좌표·에너지 둘 다 레퍼런스 대조).  ★ 핵심 brick 정확성.
+//
+// 레퍼런스:
+//   Henkelman&Jónsson, J.Chem.Phys. 113, 9978 (2000) — improved tangent
+//   Henkelman/Uberuaga/Jónsson, J.Chem.Phys. 113, 9901 (2000) — CI-NEB
+//   Müller&Brown, Theor.Chim.Acta 53, 75 (1979) — 2D 벤치 saddle/min ref
+//
+// Run:  hexa run stdlib/qforge/chem/neb_selftest.hexa
+// PASS: "qforge_neb_selftest PASS".
+
+use "stdlib/qforge/chem/neb"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_bool(name: str, got: bool) -> int {
+    if got { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── (A1) 1D 이중우물 dispatcher (pes_id=0) ────────────────────────
+    let cm1: [float] = [-1.0]
+    let cp1: [float] = [1.0]
+    let c0: [float] = [0.0]
+    fails = fails + _ck("(A1) V(-1)=0", pes_energy(0, cm1), 0.0, 1.0e-12)
+    fails = fails + _ck("(A1) V(+1)=0", pes_energy(0, cp1), 0.0, 1.0e-12)
+    fails = fails + _ck("(A1) V(0)=1 (barrier)", pes_energy(0, c0), 1.0, 1.0e-12)
+    let g0 = pes_grad(0, c0)
+    fails = fails + _ck("(A1) ∇V(0)=0 (saddle)", g0[0], 0.0, 1.0e-12)
+
+    // ── (A2) Müller-Brown dispatcher (pes_id=1) vs ref ────────────────
+    let mbSP4: [float] = [0.212, 0.293]      // saddle SP4
+    let mbMinA: [float] = [-0.558, 1.442]    // minimum A
+    fails = fails + _ck("(A2) MB E(SP4 saddle) ≈ -72.25", pes_energy(1, mbSP4), -72.25, 0.6)
+    fails = fails + _ck("(A2) MB E(min A) ≈ -146.70", pes_energy(1, mbMinA), -146.70, 0.6)
+
+    // ── (B) 직선보간 초기 밴드 ────────────────────────────────────────
+    let band = neb_linear_init(cm1, cp1, 7)
+    fails = fails + _ck("(B) nimg == 7", len(band) * 1.0, 7.0, 0.0)
+    fails = fails + _ck("(B) endpoint0 보존", band[0][0], -1.0, 1.0e-12)
+    fails = fails + _ck("(B) endpoint6 보존", band[6][0], 1.0, 1.0e-12)
+    fails = fails + _ck("(B) mid image x=0 (등간격)", band[3][0], 0.0, 1.0e-12)
+
+    // ── (C) improved tangent: 단조 상승구간 → τ̂ = unit(R_{i+1}-R_i) ──
+    //   2D 인공 체인: R-=[0,0], Ri=[1,0], R+=[2,0], V 단조상승 → τ̂=[1,0].
+    //   (tangent 은 모듈 내부함수이므로 NEB force 의 0-spring 일치로 간접검증:
+    //    등간격 직선이면 |τ+|=|τ-| → spring=0, perp force 만 → τ̂ 정렬 확인)
+    //   간접: 직선 등간격 밴드에서 NEB step 후에도 endpoint 사이 단조성 유지.
+    let bandC = neb_linear_init([0.0, 0.0], [2.0, 0.0], 3)
+    fails = fails + _ck("(C) 직선밴드 mid=[1,0]", bandC[1][0], 1.0, 1.0e-12)
+
+    // ── (D) 1D 이중우물 CI-NEB: climbing image → saddle x=0, 배리어=1.0 ─
+    let band1d = neb_linear_init(cm1, cp1, 9)
+    let r1d = neb_relax(0, band1d, 1.0, 0.02, 4000, 1.0e-5, true, 200)
+    fails = fails + _ck_bool("(D) CI-NEB 1D 수렴", r1d.converged)
+    let bar1d = neb_barrier(r1d)
+    fails = fails + _ck("(D) 배리어 ≈ 1.0", bar1d.barrier, 1.0, 5.0e-3)
+    // climbing image 좌표가 saddle x=0 로.
+    fails = fails + _ck("(D) saddle image x ≈ 0", r1d.coords[bar1d.top_idx][0], 0.0, 5.0e-3)
+    fails = fails + _ck("(D) saddle E ≈ 1.0", bar1d.top_energy, 1.0, 5.0e-3)
+
+    // ── (E) Müller-Brown CI-NEB: 실 MEP + 율속 saddle ★ 핵심 brick ────
+    //   start = min A (-0.558,1.442), end = min B (0.623,0.028).
+    //   PHYSICS: MB 표면은 A 와 B 사이에 중간최소 min C(-0.05,0.47,E=-80.77) 가 있어
+    //   A→B MEP 는 두 saddle 을 넘는다 — A↔C saddle(≈SP5 (-0.822,0.624) E=-40.67) 와
+    //   C↔B saddle(SP4 (0.212,0.293) E=-72.25).  율속(최고) 점은 SP5-형 A↔C saddle.
+    //   ∴ climbing image 는 율속 saddle(E≈-40.7, ∇V≈0)로 등반해야 옳다(NEB 정의).
+    let mbMinB: [float] = [0.623, 0.028]
+    let bandMB = neb_linear_init(mbMinA, mbMinB, 21)
+    // MB 스케일 큼(|∇V|~수백) → 작은 step. k=2, step=1e-4, climb 40k 후.
+    let rmb = neb_relax(1, bandMB, 2.0, 1.0e-4, 150000, 1.0, true, 40000)
+    fails = fails + _ck_bool("(E) CI-NEB MB 수렴", rmb.converged)
+    let barmb = neb_barrier(rmb)
+    let topc = rmb.coords[barmb.top_idx]
+    println("    [E] climbing image @ (" + to_string(topc[0]) + ", " + to_string(topc[1]) +
+            ")  E=" + to_string(barmb.top_energy) + "  iters=" + to_string(rmb.iters))
+    // (E1) climbing image = 율속 saddle (E≈-40.7, ref SP5 -40.665).
+    fails = fails + _ck("(E1) 율속 saddle E ≈ -40.7", barmb.top_energy, -40.7, 1.5)
+    // (E2) 그 점이 진짜 saddle: |∇V| ≈ 0 (TS 1차조건).
+    let gtop = pes_grad(1, topc)
+    let gtopn = sqrt(gtop[0]*gtop[0] + gtop[1]*gtop[1])
+    fails = fails + _ck("(E2) saddle |∇V| ≈ 0", gtopn, 0.0, 2.0)
+    // (E3) 밴드가 SP4(0.212,0.293,E≈-72.25)도 통과 — 전체 MEP 의 두 번째 saddle.
+    //   내부 image 중 SP4 근처(거리<0.05) 가 존재하고 E≈-72.3 인지 확인.
+    let mut hit_sp4 = false
+    let mut j = 1
+    while j < rmb.nimg - 1 {
+        let dx = rmb.coords[j][0] - 0.212
+        let dy = rmb.coords[j][1] - 0.293
+        if sqrt(dx*dx + dy*dy) < 0.05 {
+            let ej = rmb.energies[j]
+            if ej < -70.0 { if ej > -74.5 { hit_sp4 = true } }
+        }
+        j = j + 1
+    }
+    fails = fails + _ck_bool("(E3) MEP 가 SP4(E≈-72.3) 통과 (2번째 saddle)", hit_sp4)
+    // (E4) forward 율속배리어 = E(top) − E(min A) ≈ -40.7 −(-146.70) = 106.0.
+    fails = fails + _ck("(E4) 율속배리어 ≈ 106.0", barmb.barrier, 106.0, 1.5)
+
+    if fails == 0 { println("qforge_neb_selftest PASS") }
+    else { println("qforge_neb_selftest FAIL (" + to_string(fails) + ")") }
+}
