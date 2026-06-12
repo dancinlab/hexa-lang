@@ -1,0 +1,332 @@
+// HEXA Standard Library — qforge/chip/band_3d
+//
+// QFORGE universal-engine · CHIP scale · round-12 brick — the 3-D k-space band.
+//   scale ladder (QFORGE.md §122):  chip = device 밴드·수송·열(TCAD).
+//   R1 (band_transport)  : single ε(k) 1-D cosine spine.
+//   R3 (band_kmesh)      : k-MESH manifold + 1-D van-Hove DOS.
+//   R9 (band_multiorbital): MULTI-ORBITAL H(k) (n_orb×n_orb), m*, direct/indirect, valley —
+//                           but H(k) was effectively 1-D in k (a single kx axis).
+//
+// Round-12 promotes the band leg from a 1-D-in-k H(k) to a true 3-D Brillouin-zone
+// H(k) over k=(kx,ky,kz) on a 3-D mesh, with the Bloch phase summed over REAL 3-D
+// lattice vectors R=(nx,ny,nz)·a (simple-cubic). This is the LAST genuine-physics
+// completion of the chip band leg — it unlocks the three features a 1-D-in-k band can
+// never express, all EMERGENT from the 3-D band + cubic point-group symmetry:
+//
+//   • VALLEY MULTIPLICITY — the number of symmetry-equivalent conduction-band minima.
+//     A cubic conduction band whose minima sit along ⟨100⟩ (Si-like, toward the X point)
+//     yields EXACTLY 6 equivalent valleys ( (±k₀,0,0),(0,±k₀,0),(0,0,±k₀) ) — the COUNT
+//     EMERGES from the 3-D band + cubic symmetry, it is NOT hardcoded. A 1-D-in-k band
+//     can only see a ±k₀ PAIR (multiplicity 2); the full 6 needs all three axes (d6).
+//
+//   • ANISOTROPIC EFFECTIVE-MASS TENSOR — m*_ij = ħ²·(∂²E/∂k_i∂k_j)⁻¹ at the valley min.
+//     At a ⟨100⟩ valley the LONGITUDINAL curvature (along the valley axis) differs from
+//     the TRANSVERSE curvature (the two ⊥ axes), so m*_l ≠ m*_t and the tensor is
+//     DIAGONAL in the valley frame (the two transverse masses equal by cubic symmetry).
+//     The isotropic limit (equal hopping all 3 axes) collapses to m*_l=m*_t = the R9
+//     scalar m* (the regression bridge). FD curvature in 3 directions → a 3×3 tensor.
+//
+//   • 3-D DOS — histogram DOS over the 3-D mesh shows √(E−E_c) band-edge behaviour
+//     (the 3-D parabolic van-Hove edge, vs the 1/√ EDGE divergence of 1-D), and
+//     ∫DOS = total states = norb · N_k (band-filling normalisation).
+//
+// ── the 3-D Bloch Hamiltonian (d4 generic / d19 reuse) ───────────────────────
+// H_{αβ}(k) = onsite[α]·δ_{αβ} + Σ_R  t_{αβ}(R) · cos(k·R),  R = (nx,ny,nz)·a a real
+// 3-D lattice vector. This is the EXACT 3-D generalisation of R9's 1-D
+//   H_{αβ}(k) = onsite[α]·δ_{αβ} + Σ_hop t·cos(k·dx·a)
+// — the dx scalar offset is promoted to a 3-vector (nx,ny,nz), and the phase k·dx·a
+// becomes the dot product k·R = a·(kx·nx+ky·ny+kz·nz). For a real (inversion-symmetric)
+// basis each directed hop R has its Hermitian partner −R, so e^{ik·R}+e^{−ik·R}=2cos
+// folds to cos(k·R) (same real-symmetric reduction as R9). Diagonalised by the GENERIC
+// stdlib eigh (d19 — the SAME solver R1/R3/R9/L1/Davidson share); we REUSE R9's
+// qforge_chip_mo_* eig path verbatim by assembling a 1-D-equivalent Hop list per k
+// (one orbital, the band value), so this brick adds the 3-D k-geometry, NOT a new eig.
+//
+//   hop3 encoding (flat, 5 floats per hop): [α,β,nx,ny,nz,t]  — α,β orbital indices,
+//   (nx,ny,nz) the integer lattice-vector offset (in units of a), t the hop integral.
+//
+// HONEST(d6): the lattice is simple-cubic and the hoppings are a tight-binding MODEL
+// (same caveat as R9) — the deliverable is the correct 3-D band STRUCTURE (valley
+// COUNT, anisotropic m* TENSOR, 3-D √E DOS) EMERGENT from cubic symmetry, parameterised
+// by model hoppings. A real Si/Ge fitted parametrisation (empirical sp³d⁵s* tables,
+// spin-orbit) is a DATA swap into the same hop3 list (d4 — no code path), NOT a new
+// brick. The 3-D symmetry machinery (BZ mesh, R-vector phase sum, valley degeneracy,
+// curvature tensor) is the round's physics; the specific numbers are model parameters.
+//
+//   pub fn qforge_chip_b3_hk(norb, onsite, hop3, kx,ky,kz, a)        -> [float]  // dense H(k) flat norb²
+//   pub fn qforge_chip_b3_bands(norb, onsite, hop3, kx,ky,kz, a)     -> [float]  // ε_n(k) ascending
+//   pub fn qforge_chip_b3_band_n(norb, onsite, hop3, kx,ky,kz, a, n) -> float    // ε_n(k) of band n
+//   pub fn qforge_chip_b3_valley(...)                               -> int      // # global-degenerate CBM
+//   pub fn qforge_chip_b3_mtensor(...)                              -> [float]  // 3×3 m* tensor (flat 9)
+//   pub fn qforge_chip_b3_dos_hist(...)                             -> [float]  // histogram DOS over 3-D mesh
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/chip/band_3d_selftest.hexa
+use "stdlib/alloc/math/eigen"
+
+fn _pi() -> float { return 3.14159265358979323846 }
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// ── Dense 3-D Bloch H(k) (flat row-major norb²) ──────────────────────────────
+// H_{αβ}(k) = onsite[α]·δ_{αβ} + Σ_hop t·cos(a·(kx·nx+ky·ny+kz·nz)).  Each directed
+// hop3{α,β,nx,ny,nz,t} adds t·cos(k·R) to (α,β) AND (β,α) (Hermitian, real-symmetric);
+// an on-site hop (R=0, α≠β) is a k-independent orbital mixing. ONE generic loop serves
+// any norb / any 3-D hop list — no orbital/direction branch (d4). This is R9's
+// qforge_chip_mo_hk with the scalar dx promoted to the 3-vector (nx,ny,nz).
+pub fn qforge_chip_b3_hk(norb: int, onsite: [float], hop3: [float], kx: float, ky: float, kz: float, a: float) -> [float] {
+    let mut h: [float] = []
+    let mut i = 0
+    while i < norb * norb {
+        h.push(0.0)
+        i = i + 1
+    }
+    let mut al = 0
+    while al < norb {
+        let idx = al * norb + al
+        h[idx] = h[idx] + onsite[al]
+        al = al + 1
+    }
+    let nh = len(hop3) / 6
+    let mut hi = 0
+    while hi < nh {
+        let base = hi * 6
+        let a_idx = to_int(hop3[base])
+        let b_idx = to_int(hop3[base + 1])
+        let nx = hop3[base + 2]
+        let ny = hop3[base + 3]
+        let nz = hop3[base + 4]
+        let t = hop3[base + 5]
+        let phase = cos(a * (kx * nx + ky * ny + kz * nz))   // real 3-D Bloch phase
+        let contrib = t * phase
+        let ij = a_idx * norb + b_idx
+        h[ij] = h[ij] + contrib
+        if a_idx != b_idx {
+            let ji = b_idx * norb + a_idx
+            h[ji] = h[ji] + contrib
+        }
+        hi = hi + 1
+    }
+    return h
+}
+
+// ── ε_n(k): the norb eigenvalues of H(k), ASCENDING ──────────────────────────
+// Diagonalise dense H(k) with the GENERIC eigh (d19, same path as R9). eigh returns
+// eigenvalues DESCENDING; reverse to ascending. Each scalar materialised immediately
+// into a fresh local (gen3 arena-return guard — same idiom as band_multiorbital.hexa).
+pub fn qforge_chip_b3_bands(norb: int, onsite: [float], hop3: [float], kx: float, ky: float, kz: float, a: float) -> [float] {
+    let h = qforge_chip_b3_hk(norb, onsite, hop3, kx, ky, kz, a)
+    if len(h) != norb * norb { return [] }
+    let res = eigh(h, norb)
+    let vals = res[0]
+    let mut out: [float] = []
+    let mut i = norb - 1
+    while i >= 0 {
+        let ev = vals[i]
+        out.push(ev)
+        i = i - 1
+    }
+    return out
+}
+
+// ── ε of a single band n (ascending index) at k=(kx,ky,kz) ───────────────────
+pub fn qforge_chip_b3_band_n(norb: int, onsite: [float], hop3: [float], kx: float, ky: float, kz: float, a: float, n: int) -> float {
+    let eps = qforge_chip_b3_bands(norb, onsite, hop3, kx, ky, kz, a)
+    if n < 0 { return 0.0 }
+    if n >= len(eps) { return 0.0 }
+    return eps[n]
+}
+
+// ── Valley multiplicity: degeneracy of the GLOBAL conduction-band minimum ─────
+// The valley multiplicity is the number of SYMMETRY-EQUIVALENT copies of the
+// conduction-band MINIMUM (the CBM degeneracy) — e.g. Si's 6 equivalent ⟨100⟩
+// X-valleys. We sample the conduction band (band norb−1) over the FULL 3-D BZ
+// [−π/a,π/a)³ on an nk³ periodic mesh, find the global minimum energy E_cbm, then
+// count mesh points that are (a) a STRICT 6-neighbour local minimum AND (b) within
+// `tol` of E_cbm — i.e. the degenerate global minima. This is the physically correct
+// valley count: a valley is a copy of the CBM, not every shallow ripple. d4: generic
+// over norb, read off eig[H(k)] (no per-model branch). A 1-D-in-k band sees only the
+// ±k₀ pair (2); the full ⟨100⟩ sextet emerges only over the 3-D mesh + cubic symmetry.
+pub fn qforge_chip_b3_valley(norb: int, onsite: [float], hop3: [float], a: float, nk: int, tol: float) -> int {
+    let kmax = _pi() / a
+    let last = norb - 1
+    let n3 = nk * nk * nk
+    // sample conduction band over the periodic 3-D ring into a flat nk³ array.
+    let mut cb: [float] = []
+    let mut emin = 1.0e300
+    let mut ix = 0
+    while ix < nk {
+        let kx = -kmax + 2.0 * kmax * (to_float(ix) / to_float(nk))
+        let mut iy = 0
+        while iy < nk {
+            let ky = -kmax + 2.0 * kmax * (to_float(iy) / to_float(nk))
+            let mut iz = 0
+            while iz < nk {
+                let kz = -kmax + 2.0 * kmax * (to_float(iz) / to_float(nk))
+                let eps = qforge_chip_b3_bands(norb, onsite, hop3, kx, ky, kz, a)
+                let ec = eps[last]
+                cb.push(ec)
+                if ec < emin { emin = ec }
+                iz = iz + 1
+            }
+            iy = iy + 1
+        }
+        ix = ix + 1
+    }
+    // count strict local minima within tol of the global CBM (periodic neighbours wrap).
+    let mut nv = 0
+    let mut jx = 0
+    while jx < nk {
+        let mut jy = 0
+        while jy < nk {
+            let mut jz = 0
+            while jz < nk {
+                let here = cb[(jx * nk + jy) * nk + jz]
+                if here - emin <= tol {
+                    let xm = if jx > 0 { jx - 1 } else { nk - 1 }
+                    let xp = if jx < nk - 1 { jx + 1 } else { 0 }
+                    let ym = if jy > 0 { jy - 1 } else { nk - 1 }
+                    let yp = if jy < nk - 1 { jy + 1 } else { 0 }
+                    let zm = if jz > 0 { jz - 1 } else { nk - 1 }
+                    let zp = if jz < nk - 1 { jz + 1 } else { 0 }
+                    let e_xm = cb[(xm * nk + jy) * nk + jz]
+                    let e_xp = cb[(xp * nk + jy) * nk + jz]
+                    let e_ym = cb[(jx * nk + ym) * nk + jz]
+                    let e_yp = cb[(jx * nk + yp) * nk + jz]
+                    let e_zm = cb[(jx * nk + jy) * nk + zm]
+                    let e_zp = cb[(jx * nk + jy) * nk + zp]
+                    let is_min = e_xm > here && e_xp > here && e_ym > here && e_yp > here && e_zm > here && e_zp > here
+                    if is_min { nv = nv + 1 }
+                }
+                jz = jz + 1
+            }
+            jy = jy + 1
+        }
+        jx = jx + 1
+    }
+    let _ = n3
+    return nv
+}
+
+// ── Anisotropic effective-mass TENSOR m*_ij at a valley minimum ──────────────
+// m*_ij = ħ²·(∂²E/∂k_i∂k_j)⁻¹ at the valley centre (kx0,ky0,kz0) of band n. We build
+// the 3×3 curvature (Hessian) tensor by finite difference — diagonal entries by the
+// central 2nd-derivative ε''_ii = [ε(+h)−2ε(0)+ε(−h)]/h² (R9's m* FD pattern), the
+// off-diagonals by the mixed 2nd-difference ε''_ij = [ε(+,+)−ε(+,−)−ε(−,+)+ε(−,−)]/(4h²).
+// For a band whose principal axes ARE the cartesian axes (a ⟨100⟩ valley in a cubic
+// crystal) the off-diagonals vanish and the tensor is DIAGONAL: m*_xx along the valley
+// axis = the LONGITUDINAL mass m*_l, the two ⊥ entries = the TRANSVERSE mass m*_t.
+// Returns the m* tensor (inverse curvature) as a flat 9-vector [m_xx,m_xy,m_xz, m_yx,…].
+// d19: same curvature→mass map as R9 qforge_chip_mo_effmass, now a 3×3 tensor.
+pub fn qforge_chip_b3_mtensor(norb: int, onsite: [float], hop3: [float], a: float, n: int, kx0: float, ky0: float, kz0: float, hbar: float, dk: float) -> [float] {
+    // sample ε_n on the 3×3×3 stencil around (kx0,ky0,kz0).
+    let e0 = qforge_chip_b3_band_n(norb, onsite, hop3, kx0, ky0, kz0, a, n)
+    // diagonal curvatures
+    let exp = qforge_chip_b3_band_n(norb, onsite, hop3, kx0 + dk, ky0, kz0, a, n)
+    let exm = qforge_chip_b3_band_n(norb, onsite, hop3, kx0 - dk, ky0, kz0, a, n)
+    let eyp = qforge_chip_b3_band_n(norb, onsite, hop3, kx0, ky0 + dk, kz0, a, n)
+    let eym = qforge_chip_b3_band_n(norb, onsite, hop3, kx0, ky0 - dk, kz0, a, n)
+    let ezp = qforge_chip_b3_band_n(norb, onsite, hop3, kx0, ky0, kz0 + dk, a, n)
+    let ezm = qforge_chip_b3_band_n(norb, onsite, hop3, kx0, ky0, kz0 - dk, a, n)
+    let cxx = (exp - 2.0 * e0 + exm) / (dk * dk)
+    let cyy = (eyp - 2.0 * e0 + eym) / (dk * dk)
+    let czz = (ezp - 2.0 * e0 + ezm) / (dk * dk)
+    // mixed curvatures (xy, xz, yz) — diagonal valley ⇒ these ≈ 0.
+    let cxy = _mixed(norb, onsite, hop3, a, n, kx0, ky0, kz0, dk, 0, 1)
+    let cxz = _mixed(norb, onsite, hop3, a, n, kx0, ky0, kz0, dk, 0, 2)
+    let cyz = _mixed(norb, onsite, hop3, a, n, kx0, ky0, kz0, dk, 1, 2)
+    // m*_ij = ħ²·(curvature)⁻¹.  For a DIAGONAL curvature tensor the inverse is per-entry
+    // ħ²/c_ii on the diagonal and 0 off-diagonal (the valley-frame principal masses).
+    // We return the diagonal-inverse tensor; off-diagonals carried as a smallness witness
+    // (reported, asserted ≈0 by the selftest — proves the frame is principal).
+    let h2 = hbar * hbar
+    let mxx = if _abs(cxx) > 1.0e-300 { h2 / cxx } else { 0.0 }
+    let myy = if _abs(cyy) > 1.0e-300 { h2 / cyy } else { 0.0 }
+    let mzz = if _abs(czz) > 1.0e-300 { h2 / czz } else { 0.0 }
+    return [mxx, cxy, cxz,
+            cxy, myy, cyz,
+            cxz, cyz, mzz]
+}
+
+// mixed 2nd-difference ∂²ε/∂k_i∂k_j (i,j ∈ {0,1,2} = x,y,z) at (kx0,ky0,kz0).
+fn _mixed(norb: int, onsite: [float], hop3: [float], a: float, n: int, kx0: float, ky0: float, kz0: float, dk: float, i: int, j: int) -> float {
+    // four corner samples (+,+),(+,−),(−,+),(−,−) along axes i,j.
+    let epp = _samp(norb, onsite, hop3, a, n, kx0, ky0, kz0, dk, i, dk, j, dk)
+    let epm = _samp(norb, onsite, hop3, a, n, kx0, ky0, kz0, dk, i, dk, j, -dk)
+    let emp = _samp(norb, onsite, hop3, a, n, kx0, ky0, kz0, dk, i, -dk, j, dk)
+    let emm = _samp(norb, onsite, hop3, a, n, kx0, ky0, kz0, dk, i, -dk, j, -dk)
+    return (epp - epm - emp + emm) / (4.0 * dk * dk)
+}
+
+// sample ε_n at (kx0,ky0,kz0) shifted by di along axis i and dj along axis j.
+fn _samp(norb: int, onsite: [float], hop3: [float], a: float, n: int, kx0: float, ky0: float, kz0: float, dk: float, i: int, di: float, j: int, dj: float) -> float {
+    let mut kx = kx0
+    let mut ky = ky0
+    let mut kz = kz0
+    if i == 0 { kx = kx + di }
+    if i == 1 { ky = ky + di }
+    if i == 2 { kz = kz + di }
+    if j == 0 { kx = kx + dj }
+    if j == 1 { ky = ky + dj }
+    if j == 2 { kz = kz + dj }
+    let _ = dk
+    return qforge_chip_b3_band_n(norb, onsite, hop3, kx, ky, kz, a, n)
+}
+
+// ── 3-D DOS histogram over the BZ mesh ───────────────────────────────────────
+// Histogram the band energies of band n over the full 3-D BZ [−π/a,π/a)³ on an nk³
+// mesh into `nbin` uniform energy bins between the band min and max. Returns a flat
+// list [emin, emax, bin0, bin1, …, bin(nbin−1)] (bin counts). The sum of bins =
+// nk³ = total states in band n (band-filling normalisation). Near a parabolic 3-D
+// minimum the bin counts rise as √(E−E_c) (the 3-D van-Hove EDGE, vs 1-D's 1/√
+// divergence) — the selftest checks the √E edge slope. d4: generic over norb/band n.
+pub fn qforge_chip_b3_dos_hist(norb: int, onsite: [float], hop3: [float], a: float, nk: int, n: int, nbin: int) -> [float] {
+    let kmax = _pi() / a
+    // first pass: collect band-n energies and the min/max.
+    let mut vals: [float] = []
+    let mut emin = 1.0e300
+    let mut emax = -1.0e300
+    let mut ix = 0
+    while ix < nk {
+        let kx = -kmax + 2.0 * kmax * (to_float(ix) / to_float(nk))
+        let mut iy = 0
+        while iy < nk {
+            let ky = -kmax + 2.0 * kmax * (to_float(iy) / to_float(nk))
+            let mut iz = 0
+            while iz < nk {
+                let kz = -kmax + 2.0 * kmax * (to_float(iz) / to_float(nk))
+                let e = qforge_chip_b3_band_n(norb, onsite, hop3, kx, ky, kz, a, n)
+                vals.push(e)
+                if e < emin { emin = e }
+                if e > emax { emax = e }
+                iz = iz + 1
+            }
+            iy = iy + 1
+        }
+        ix = ix + 1
+    }
+    // second pass: bin into nbin uniform bins.
+    let mut bins: [float] = []
+    let mut b = 0
+    while b < nbin {
+        bins.push(0.0)
+        b = b + 1
+    }
+    let span = emax - emin
+    let width = if span > 0.0 { span / to_float(nbin) } else { 1.0 }
+    let nv = len(vals)
+    let mut i = 0
+    while i < nv {
+        let e = vals[i]
+        let mut idx = to_int((e - emin) / width)
+        if idx < 0 { idx = 0 }
+        if idx >= nbin { idx = nbin - 1 }
+        bins[idx] = bins[idx] + 1.0
+        i = i + 1
+    }
+    let mut out: [float] = [emin, emax]
+    let mut j = 0
+    while j < nbin {
+        out.push(bins[j])
+        j = j + 1
+    }
+    return out
+}
