@@ -193,6 +193,26 @@ pub fn md_dshell_ao(m: int, radExp: [float], radCoef: [float]) -> [any] {
     return _md_harm_ao(_md_cart_d(), (_md_dharm())[m], radExp, radCoef)
 }
 
+// Double-factorial n!! (inlined — md_dfact in md_integrals is private).
+fn _md_dfact(n: int) -> float {
+    let mut r = 1.0
+    let mut k = n
+    while k > 0 { r = r * float(k) ; k = k - 2 }
+    return r
+}
+
+// Canonical RADIAL Gaussian-shell norm for total L (independent of the Cartesian
+// component): N_L(a) = (2a/π)^{3/4}·(4a)^{L/2}/√(2L−1)!!. This is the norm the
+// standard basis-library contraction coefficient c_i is defined against (c_i
+// multiplies a RADIALLY-normalized primitive). It uses (2L−1)!! for the TOTAL L,
+// NOT the per-axis double-factorial product of md_norm_prim — that distinction is
+// exactly what makes a CONTRACTED higher-L shell come out right (see below).
+fn _md_radnorm(L: int, a: float) -> float {
+    if a <= 0.0 { return 0.0 }
+    let pi = 3.141592653589793
+    return pow(2.0 * a / pi, 0.75) * pow(4.0 * a, float(L) / 2.0) / sqrt(_md_dfact(2 * L - 1))
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 //   GENERIC harmonic-shell builder (d4 — no per-L branch). Given the Cartesian
 //   monomial basis of one L and ONE harmonic's monomial-coefficient row, emit
@@ -203,17 +223,28 @@ fn _md_harm_ao(cart: [[int]], hc: [float], radExp: [float], radCoef: [float]) ->
     let mut pow = []
     let mut exps = []
     let mut coef = []
+    // total angular momentum L of this shell (all Cartesian components share it).
+    let L = cart[0][0] + cart[0][1] + cart[0][2]
     let mut k = 0
     while k < len(cart) {
         if hc[k] != 0.0 {
             let mut r = 0
             while r < len(radExp) {
-                // divide by the Cartesian prim norm so the angular coefficient acts
-                // on the bare monomial (md_norm_prim is re-applied inside the raw fns).
+                // coeff = harmonic_c · radContraction_c · N_L(a) / md_norm_prim(cart,a).
+                //   · N_L(a)               — the contraction c_i multiplies a RADIALLY-
+                //                            normalized primitive (standard convention),
+                //                            so the radial SHAPE of a CONTRACTED shell is
+                //                            correct across primitives of different α.
+                //   · /md_norm_prim(cart,a) — undo the per-Cartesian-component norm that
+                //                            md_ao_overlap_raw re-applies, so the bare
+                //                            monomial carries the harmonic coefficient.
+                // For a SINGLE primitive the N_L/md_norm_prim factor is a constant absorbed
+                // by md_ao_norm ⇒ the round-5 single-prim d result is unchanged (regress).
                 let nprim = md_norm_prim(cart[k], radExp[r])
+                let rn = _md_radnorm(L, radExp[r])
                 pow.push(cart[k])
                 exps.push(radExp[r])
-                coef.push(hc[k] * radCoef[r] / nprim)
+                coef.push(hc[k] * radCoef[r] * rn / nprim)
                 r = r + 1
             }
         }
