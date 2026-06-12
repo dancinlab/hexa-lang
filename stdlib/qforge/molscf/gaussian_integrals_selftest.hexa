@@ -1,0 +1,91 @@
+// @ci_gate — deterministic · network-free · MOLSCF Gaussian 1-electron g5 gate
+//
+// gaussian_integrals_selftest.hexa — QFORGE MOLSCF brick 1/N (s-type S, T) g5 gate.
+//
+// Atom-centered Gaussian overlap S_ab and kinetic T_ab for s primitives, in
+// closed form (Gaussian product theorem; Szabo & Ostlund eqs. A.4/A.9/A.11).
+// Every target is a HAND-DERIVED analytic value (🔵), no fabrication:
+//
+//   (A) self-overlap of a normalized s primitive (a=b, A=B) = 1            🔵
+//   (B) single-primitive overlap a=b=1.0 @ R=1.4 bohr = exp(−0.98)         🔵
+//       (μ=½, p=2, N²(π/2)^{3/2}=1 → S = exp(−μ R²) = exp(−0.98))
+//   (C) STO-3G H 1s contracted overlap @ R=1.4 bohr = 0.6593182001         🔵
+//       (Szabo & Ostlund Modern QC; unscaled ζ=1.0 STO-3G H, the textbook anchor)
+//   (D) kinetic same-center normalized self term  T = 3μ = 3·(a/2)         🔵
+//       (T = μ(3 − 2μ·0)·S, S=1 → T=3μ; a=b → μ=a/2)
+//   (E) μ and p closed forms                                              🔵
+//   (F) malformed center (len≠3), length-mismatch contraction → 0 sentinel guard
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/molscf/gaussian_integrals_selftest.hexa
+// PASS: "qforge_molscf_gaussian_integrals_selftest PASS".
+use "stdlib/qforge/molscf/gaussian_integrals"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    let origin = [0.0, 0.0, 0.0]
+    let atomB  = [1.4, 0.0, 0.0]   // 1.4 bohr along x (the H2 equilibrium anchor)
+
+    // ══ (A) normalized self-overlap = 1 ═══════════════════════════════════════
+    let s_self = gint_overlap_s(1.2, 1.2, origin, origin)
+    fails = fails + _ck_close("(A) self-overlap a=b=1.2 = 1", s_self, 1.0, 1.0e-12)
+    let s_self2 = gint_overlap_s(3.42525091, 3.42525091, origin, origin)
+    fails = fails + _ck_close("(A) self-overlap a=b=3.425 = 1", s_self2, 1.0, 1.0e-12)
+
+    // ══ (B) single-prim overlap a=b=1.0 @ R=1.4 = exp(−0.98) ══════════════════
+    //   p=2, μ=½, N_a N_b (π/p)^{3/2} = (2/π)^{3/2}(π/2)^{3/2} = 1 → S=exp(−μR²)
+    let s_ab = gint_overlap_s(1.0, 1.0, origin, atomB)
+    let want_b = exp(0.0 - 0.98)   // exp(−½·1.96)
+    fails = fails + _ck_close("(B) prim overlap a=b=1 @1.4 = exp(-0.98)", s_ab, want_b, 1.0e-12)
+
+    // ══ (C) STO-3G H 1s contracted overlap @ 1.4 bohr = 0.6593182001 ══════════
+    //   Unscaled (ζ=1.0) STO-3G hydrogen 1s primitive set (Szabo & Ostlund).
+    let h_alpha = [3.42525091, 0.62391373, 0.16885540]
+    let h_coeff = [0.15432897, 0.53532814, 0.44463454]
+    let s_sto3g = gint_overlap_contracted(h_alpha, h_coeff, origin,
+                                          h_alpha, h_coeff, atomB)
+    fails = fails + _ck_close("(C) STO-3G H2 S_AB @1.4 bohr = 0.6593182001",
+                              s_sto3g, 0.6593182001, 1.0e-6)
+    // and the contracted self-overlap is the GTO normalization ≈ 1
+    let s_sto3g_self = gint_overlap_contracted(h_alpha, h_coeff, origin,
+                                               h_alpha, h_coeff, origin)
+    fails = fails + _ck_close("(C) STO-3G H self-overlap ≈ 1", s_sto3g_self, 1.0, 1.0e-7)
+
+    // ══ (D) kinetic same-center normalized self term = 3μ = 3·(a/2) ═══════════
+    let a = 1.5
+    let t_self = gint_kinetic_s(a, a, origin, origin)
+    let want_d = 3.0 * (a / 2.0)   // μ = a/2, S=1 → T = 3μ
+    fails = fails + _ck_close("(D) kinetic self a=1.5 = 3*(a/2)", t_self, want_d, 1.0e-12)
+    // cross-check the closed form T = μ(3 − 2μR²)S off-center
+    let t_off = gint_kinetic_s(1.0, 1.0, origin, atomB)
+    //   μ=½, R²=1.96, S=exp(−0.98): T = ½(3 − 2·½·1.96)·exp(−0.98) = ½(1.04)exp(−0.98)
+    let want_doff = 0.5 * (3.0 - 1.96) * want_b
+    fails = fails + _ck_close("(D) kinetic off-center a=b=1 @1.4", t_off, want_doff, 1.0e-12)
+
+    // ══ (E) μ and p closed forms ══════════════════════════════════════════════
+    fails = fails + _ck_close("(E) mu(2,3) = 6/5", gint_mu(2.0, 3.0), 1.2, 1.0e-14)
+    fails = fails + _ck_close("(E) norm_s(1) = (2/pi)^0.75",
+                              gint_norm_s(1.0), pow(2.0 / 3.141592653589793, 0.75), 1.0e-14)
+
+    // ══ (F) malformed / mismatch → 0 sentinel ════════════════════════════════
+    let bad = [1.0, 2.0]   // len ≠ 3
+    fails = fails + _ck_true("(F) malformed center → 0", gint_overlap_s(1.0, 1.0, bad, origin) == 0.0)
+    let mm = gint_overlap_contracted([1.0, 2.0], [0.5], origin, [1.0], [0.5], atomB)
+    fails = fails + _ck_true("(F) length mismatch contraction → 0", mm == 0.0)
+
+    if fails == 0 {
+        println("qforge_molscf_gaussian_integrals_selftest PASS")
+    } else {
+        println("qforge_molscf_gaussian_integrals_selftest FAIL (" + to_string(fails) + ")")
+    }
+}
