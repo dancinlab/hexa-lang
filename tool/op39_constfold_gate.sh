@@ -60,8 +60,15 @@ GOLD_NEG6=-4623799060313310324
 GOLD_SUB0=4609080297566953815
 GOLD_ADD0a=4609080297566953815
 GOLD_ADD0b=4609080297566953815
-# (b) computed folds — fixed-compiler output (MUL1 = +1 ULP host-rt_mul residual).
-GOLD_MUL1=4589888465602041183
+# (b) computed folds — fixed-compiler output. OP-40 closed MUL1's former +1 ULP
+# residual (was 4589888465602041183): that 1 ULP was NOT host-rt_mul rounding but
+# the host's hand-rolled %.17e serialize (not correctly-rounded). The fold now
+# serializes a bit-exact hex-float, so MUL1 == python's correctly-rounded IEEE
+# product (…182). On CI's FROZEN pre-OP-37/40 seed `./hexa` this reads as advisory
+# DRIFT (seed still emits …183); it auto-goes-GREEN once the source fix is promoted
+# into the seed — the same promote coupling OP-39/OP-39b documented (gate is
+# continue-on-error precisely for this window). MUL2/ADD1/DIV1 were already exact.
+GOLD_MUL1=4589888465602041182
 GOLD_MUL2=4604576697939583319
 GOLD_ADD1=4599075939470750516
 GOLD_DIV1=4599676419421066581
