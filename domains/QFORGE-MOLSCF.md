@@ -32,7 +32,14 @@ Fock 빌드, (3) 비직교 일반화 고유문제 `FC=SCε`. 모든 g5 anchor �
       `md_integrals.hexa` + 실제 polyatomic H₂O/STO-3G end-to-end through UNCHANGED `rhf_scf` g5 PASS
       (L=0 reduction == brick-1/2 s형 ≤1e-12 · ⟨pₓ|T|pₓ⟩=a(2L+3)/2=2.5 exact ·
        H₂O E_total=−74.9618 Ha vs ref −74.961754 |Δ|=4.6e-5 · 7 MO ε all match · r1/r2/r3 regress PASS)
-- [ ] brick 8 (round-5) — d(+f) 각운동량 (동일 recursion·L-cap 無 · d-bearing 분자) + Cartesian d 정규화
+- [x] brick 8 (round-5) — d 각운동량 (동일 MD recursion·L-cap 無) + Cartesian→spherical d 정규화
+      `md_shell.hexa` (generalized multi-component AO assembly + 5 real solid-harmonic d·s-contaminant 제거)
+      → H₂O/STO-3G + d-polarization(O,α=0.8) 12-AO end-to-end through UNCHANGED `rhf_scf` g5 PASS
+      (a) L≤1 regression: STO-3G H₂ S12=0.6593182001 · ⟨pₓ|T|pₓ⟩=2.5 exact (no s/p drift)
+      (b) ⟨d_xy|d_xy⟩=1 · ⟨d_xy|T|d_xy⟩=a(2L+3)/2=3.5 exact (off-diag) · d_zz=13/6 honest · parity 0 · d⟂(xx+yy+zz)~4e-16
+      (c) E_total=−74.9869 Ha vs PySCF 2.13.1 −74.986924782 |Δ|=2.5e-5 · d 실engage(ΔE=−25 mHa vs s,p-only)
+      (d) r1/r2/r3/r4 regress ALL PASS
+- [ ] brick 9 (round-6) — f 각운동량 (10 Cartesian → 7 spherical, 동일 construction) + 전이금속 d-element 분자
 
 ## three-scale unblock
 

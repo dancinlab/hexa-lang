@@ -260,3 +260,77 @@ printed value is NOT trusted over the recompute.
    or a first-row transition-metal hydride) + Cartesian-d → spherical-harmonic normalization.
 2. brick 6 — analytic molecular force ∇_R E via autograd through brick 1-7 (NOVEL lane).
 3. DIIS convergence accelerator over the F·P·S−S·P·F error vector (round-3/4 use simple mixing).
+
+## 2026-06-13 — round-5: brick 8 — d angular momentum (McMurchie-Davidson + spherical-shell) g5 PASS
+
+Extends the round-4 MD machinery (`md_integrals.hexa`, which carries NO L cap) to **d** angular
+momentum with ZERO change to `rhf_scf` (d4-generic — only the integral front-end gains higher-L).
+3rd-row / d-element molecules now come into range.
+
+### what shipped
+
+- `stdlib/qforge/molscf/md_shell.hexa` — NEW brick. The **generalized AO descriptor**: one center +
+  a flat list of `(lx,ly,lz, alpha, coeff)` TERMS. This single shape subsumes BOTH the radial
+  primitive contraction AND the Cartesian→spherical angular mix, so s/p/d/f all traverse the SAME
+  three assembly fns (`md_ao_overlap_raw` · `md_ao_kinetic_raw` · `md_ao_nuclear_raw` · `md_ao_eri_raw`)
+  + per-AO `md_ao_norm` (unit self-overlap). `md_dshell_ao(m, radExp, radCoef)` builds the 5 real
+  solid-harmonic d's (d_z²=2zz−xx−yy, d_xz, d_yz, d_x²−y², d_xy) — the **s-contaminant (xx+yy+zz) is
+  projected out** (each spherical d ⟂ it to ~4e-16). All per-primitive integrals reused UNCHANGED
+  from `md_integrals` (d3·d19 — no new integral/transcendental).
+- `stdlib/qforge/molscf/md_d_selftest.hexa` — NEW g5 gate, 4 verdicts.
+
+### g5 VERBATIM (HEXA_LANG=. hexa run …md_d_selftest.hexa → qforge_molscf_md_d_selftest PASS)
+
+(a) L≤1 regression — raised-L MD reproduces the round-4 s+p anchors EXACTLY:
+    PASS (a) STO-3G H₂ S12 = 0.6593182001 (raised-L MD) (0.659318)
+    PASS (a) ⟨pₓ|pₓ⟩ self-overlap = 1 (1)
+    PASS (a) ⟨pₓ|T|pₓ⟩ = a(2L+3)/2 = 2.5 (a=1) (2.5)
+(b) d-shell primitive identities (exact analytic, HJO §6.6 + §9.3):
+    PASS (b)(i) ⟨d_xy|d_xy⟩ self-overlap = 1 (1)
+    PASS (b)(ii) ⟨d_xy|T|d_xy⟩ = a(2L+3)/2 = 3.5 (a=1) (3.5)
+    PASS (b)(ii') ⟨d_zz|T|d_zz⟩ = 13/6 (diagonal cart, exact) (2.16667)   ← honest: a(2L+3)/2 is the
+        OFF-diagonal (d_xy) identity; the DIAGONAL cart d_zz=(0,0,2) gives 13/6, also exact, different
+        power pattern (d6 — reported, not forced to 3.5).
+    PASS (b)(iii) ⟨s|d_xy⟩ = 0 (parity) (0.0)
+    PASS (b)(iii) ⟨pₓ|d_xy⟩ = 0 (parity) (0.0)
+    PASS (b)(iii) spherical-d ⟂ s-contaminant (max|⟨d_m|xx+yy+zz⟩|) (4.44089e-16)
+(c) END-TO-END d-bearing molecule — H₂O/STO-3G + one d-polarization shell on O (5 spherical d,
+    single primitive α=0.8) → 12-AO basis → UNCHANGED rhf_scf:
+    iters=11 · converged=true · E_elec=−84.2516 Ha
+    E_total = −74.9869 Ha   (PySCF 2.13.1 ref −74.986924782)   |Δ| = 2.47756e-05 Ha
+    PASS (c) SCF converged
+    PASS (c) H₂O STO-3G+d(O) E_total = −74.986924782 Ha (PySCF)
+    PASS (c) d engages — E_total < s,p-only −74.961754 by ≥10 mHa   ← ΔE = −25.1 mHa vs s,p-only
+    PASS (c) d_z² AO self-overlap = 1 (1.0)
+(d) regression — round-4 s+p H₂O through the d-capable assembly does not drift:
+    PASS (d) round-4 s+p H₂O E_total = −74.9618 (no drift) (-74.9618)
+    + r1/r2/r3/r4 selftests (gaussian/coulomb/rhf/md) ALL re-run PASS.
+
+### HONEST scope (d6)
+
+- **d genuinely engages**: STO-3G S/O are s,p-ONLY (no native d), so d is exercised by an EXPLICIT
+  d-polarization shell (STO-3G* style). It is NOT a spectator — it lowers E by 25 mHa vs the s,p-only
+  −74.961754 and carries a nonzero Mulliken d-population (PySCF: O 3d_yz≈0.021 e⁻, etc.). The energy
+  lands because the spherical-d subspace is correctly spanned (s-contaminant removed) and each AO is
+  self-normalized; the result is INVARIANT to the harmonic's overall scale convention (any orthonormal
+  basis of the pure-d subspace gives the same SCF energy — so we need not match PySCF's internal c2s
+  normalization byte-for-byte, only span the right subspace).
+- **|Δ|=2.5e-5 Ha** is the shared erf_fn-Boys floor class — BETTER than round-4's s+p H₂O |Δ|=4.6e-5.
+- Reference: PySCF 2.13.1 (spherical d, identical geometry), reproduced independently by a faithful
+  scipy McMurchie-Davidson SCF mirror to 6.3e-9 Ha before the hexa run.
+
+### SEALED vs OPEN
+
+- **SEALED**: s + p + **d** angular momentum (S/T/V/ERI) via the unchanged MD recursions + the
+  spherical-shell assembly; a real d-bearing polyatomic (H₂O + d-polarization) through the unchanged
+  generic RHF; full r1-r4 regression green.
+- **OPEN (round-6)**: **f** angular momentum — the SAME construction (10 Cartesian → 7 spherical solid
+  harmonics, s-contaminant analog being the f→p set); a first-row transition-metal d-element molecule
+  on a real d-bearing standard basis (3-21G* / a metal hydride); brick 6 analytic force ∇_R E
+  (autograd lane); DIIS accelerator. f was DEFERRED for a clean brick boundary (g0/g4 <200 lines).
+
+### round-6 next
+1. brick 9 — f angular momentum (10 Cartesian → 7 spherical, same `md_dshell_ao`-style builder).
+2. a genuine transition-metal d-element molecule (e.g. ScH / TiO STO-3G* or 3-21G*) — d in the
+   VALENCE, not just polarization — vs a Psi4/Gaussian reference.
+3. brick 6 analytic molecular force ∇_R E via autograd through brick 1-8 (NOVEL lane); DIIS.
