@@ -1,5 +1,52 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-51 DONE: [S]-shadow survive-audit tranche (6 of 16 [S R]-survivors) — all 6 g5-falsified + shadow-control safe → DEREGISTERED · survivor set 16→10 · $0 · 0-pod
+- SURVEY-FIRST (mandatory). Read F-OP48-SURVIVE-AUDIT-TRANCHE.txt (the [R]/[S] split + running tally:
+  26→23→16 + the arange KEEP precedent — a self-host compiler-closure ref in compiler/check/bind.hexa:1281
+  forced a conservative keep), F-OP43-ML-FAMILY-FALSIFIED.txt (the [S]-tagging + the 16-survivor list), and
+  F-OP47-MATMUL-DOT-PROBE.txt (the CONTROL method: a local `fn dot` provides its OWN symbol, roster-independent).
+- TRANCHE (landable, 6 of 16 [S R]): kv_cache_append · repeat_kv · quantize_int8 · dequantize_int8 ·
+  magnitude_prune · tensor_fill — each carries a REAL local `fn NAME` shadow (the HARDER tranche).
+- IMPL CROSS-REF (arg-shape-trap controlled): all 6 = 0 codegen-inline guard in self/codegen.hexa + 0 runtime
+  symbol (prefix-variant scan of self/runtime.h ∪ installed /Users/mini/.hx/src/self/runtime.c — every distinct-
+  match set EMPTY). 0 guards ⇒ ANY arg shape → same bare hexa_callN fallback (probe arg-shape-robust).
+- AOT PROBE (g5, fresh ~/.hx/bin/build/hexat Jun-8 → clang -fsyntax-only), VERBATIM, correct args each:
+  kv_cache_append(m,a,a) · repeat_kv(m,2) · quantize_int8(a) · dequantize_int8(a,0.5) · magnitude_prune(a,0.5)
+  · tensor_fill(4,1.0) — ALL emit "p_NAME.c:20:29: error: use of undeclared identifier 'NAME'". 6/6 FALSIFIED.
+- THE CRITICAL [S] CONTROL (per name): `fn NAME(x:float)->float{return x+1.0}` + `NAME(2.0)` → hexat OK →
+  clang CLEAN; generated C has `HexaVal NAME(HexaVal);` fwd-decl + `HexaVal NAME(HexaVal){` def + `r=NAME(...)`
+  call → binds the LOCAL def ROSTER-INDEPENDENTLY. Proven for all 6 ⇒ deregistration can never break a shadow.
+- SHADOW DEFS + CALLER SWEEP: shadow counts match OP-43's [S R] (kv_cache_append 2, repeat_kv 4, quantize_int8
+  3, dequantize_int8 2, magnitude_prune 2, tensor_fill 2). repeat_kv = CLEANEST (ALL 4 caller files carry a
+  local `fn repeat_kv`, gen-C emits the def → 0 builtin-dep). kv_cache_append: only compiling caller
+  self/test_flash_decode `import "ml/kv_cache.hexa"` → `extern HexaVal kv_cache_append(_,_,_,_,_)` (5-arg
+  IMPORTED shadow) + 2 example callers baseline exit_code=-1. quantize_int8: quantize_model binds the 3-arg
+  quantize.hexa:210 shadow + AOT-fails on OTHER syms (slice/char_code_at — builtin-independent), quantize_test
+  transpile-fails, 3 example callers -1. dequantize_int8/magnitude_prune: only builtin-dep callers = dead
+  examples (-1). tensor_fill (largest): every self/ml caller (pipeline/reward_model/rlhf/t2_real_bench/
+  train_full/tensor_ops + self/test_tensor*) ALREADY AOT/transpile-fails today (builtin-independent); the lone
+  extra ref self/test_array_ops_suite:379 is inside a `proof {}` block codegen DROPS — PROOF-BLOCK CONTROL: an
+  UNREGISTERED never-defined name compiles inside `proof {}` (binder doesn't reject, 0 refs in gen-C).
+- COMPILER-CLOSURE CHECK (the arange lesson): compiler/** (excl embedded.gen.hexa) ZERO refs to all 6 — none
+  in the bind allow-list / codegen special-path (unlike arange: compiler/check/bind.hexa:1281 + PLAN.md:574).
+  selfhost-byteeq gate compiles compiler/main.hexa which never references any of the 6 → fixpoint safe.
+- DECISION (g0 conservative, [S]-strict): all 4 gates pass per builtin (falsified ∧ no live caller binds the
+  roster ∧ shadow binds without it via §3 control ∧ compiler/** 0) → ALL 6 DEREGISTERED.
+- DIFF: self/env.hexa — 6 names removed from env_new() builtin_names + 3 scoped OP-51 comment blocks. KEPT
+  (re-verified 1 each): tensor/tensor_zeros/load_weights_bin/mmap_weights/to_char/arange/matvec/mat_add/
+  rms_norm/curiosity_reward/dialogue_reward/combined_reward. wipe_guard net +35/−4 « 50, subject scoped.
+- POST-EDIT: env.hexa transpiles clean (~/.hx/bin/build/hexat self/env.hexa /tmp/op51/env_after.c → OK); 0
+  non-comment roster strings for each removed name; neighbors intact.
+- TALLY: OP-43 survivor set 26→23 (OP-47)→16 (OP-48)→10 (OP-51, −6). Remaining 10: [S R] relu sigmoid
+  transpose normalize zeros attention topk sample_token mse_loss + [R] arange (compiler-closure KEEP).
+- HONEST FRONTIER: 9 [S R] survivors remain; the EASY [S] removals are largely consumed. The 9 carry larger/
+  liver shadow surfaces (sigmoid shadow=8/self=102, relu shadow=3/self=23, mse_loss shadow=9) and need per-name
+  baseline-PASS verification of every UNSHADOWED call-site (heavier audit). ≥1 (sigmoid-class) looks like a
+  conservative live-shadow KEEP. Expect the next tranche to dereg FEWER than 6 — reservoir depleting, residual
+  increasingly compiler-closure KEEPs (arange) + live-shadow KEEPs (sigmoid-class).
+- OUTCOME: 🟢 GREEN. Milestone OP-51 [x]. Verdict .verdicts/hexa-0pod/F-OP51-SURVIVE-SHADOW-TRANCHE.txt.
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
 ## 2026-06-13 — OP-50 DONE: route-(a) own-GEMM perf BOUNDARY reflected into the canonical forge doc (docs/forge-routea-shape-adaptive.md §0) · DOCS-ONLY · $0 · 0-pod
 - SURVEY-FIRST (mandatory). Read the 3 source verdicts: F-GPU-ROUTEA-KEEPBAND-MEASURE.txt (#3094 — the GPU
   measurement: route-(a) b14 MODE8 NST3 PDEP2 @D=2048 own ~315 TFLOP/s, ratio 1.08x, PARITY=YES, rel_rms
