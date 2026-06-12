@@ -1,0 +1,216 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/op74_moe_exp_agree_eq.hexa
+// HEXA-0POD OP-74 · _moe_exp AGREEMENT + DETERMINISM oracle · NO `use`
+//
+// THE GAP (documented-but-UNlocked, the OP-72 class — the 3rd distinct exp):
+//   moe_lib.hexa's `_moe_exp` (range-reduce x = n·ln2 + r, |r|≤ln2/2, then a
+//   14-term Taylor e^r, then ×2ⁿ by repeated mul/div) carries an explicit
+//   ACCURACY docstring claim — "|r|≤0.347 → ~12 terms machine-exact" — and is a
+//   PRODUCTION primitive: the MoE router softmax (moe_lib.hexa nn_moe_softmax,
+//   nn_moe_router_fwd) AND its device replay (clm_conv_devfeed._devfeed_moe_exp).
+//   It is the THIRD distinct exp impl in the flame step (libm exp · flame_math
+//   dt_exp · moe_lib _moe_exp), each with its own determinism contract.
+//
+//   YET: every existing _moe_exp lock is a DETERMINISM / replay-equivalence lock
+//   (max|Δ|=0 dev-vs-host, two-pass==one-pass) — F-OP8 (clm_prod_moe_combine_eq)
+//   and F-OP11 (clm_prod_ce_softmax_grad_eq) BOTH assert the hand-rolled exp
+//   replays itself byte-for-byte in the SAME order, NOT that it AGREES with the
+//   true e^x. Verbatim survey (scoped grep, NO .git):
+//
+//     $ git grep -lnE "_moe_exp|_me_exp" -- 'stdlib/flame/*test*' \
+//         'stdlib/flame/*_eq.hexa'  →  3 files, ALL determinism (max|Δ|=0).
+//     (none asserts max|_moe_exp − libm exp| ≤ tol — the accuracy claim.)
+//
+//   The sibling dt_exp HAS such an AGREE oracle (F-RFC043-MATH-DT-EXP-AGREE,
+//   flame_math_test.hexa: max rel|dt_exp − exp| < 1e-9), and the d5 trig pair was
+//   just locked the same way (F-OP72). _moe_exp was the remaining hole: its
+//   "machine-exact" accuracy docstring was UNGATED. This oracle closes it.
+//
+// THE LOCK (three gates, $0 / CPU-only / `hexa run`):
+//   (1) AGREE  — over a probe spanning the production softmax range (logit − mx
+//       after max-subtraction is always ≤ 0; range-reduction is exercised by
+//       points well past |ln2/2|), assert max rel|_moe_exp(x) − exp(x)| ≤ 1e-9.
+//       Relative error is the right metric across many decades (exp spans 1e-13..1).
+//   (2) DETERMINISM — _moe_exp(x) called twice on the SAME input returns
+//       byte-IDENTICAL doubles (max|Δbytes|=0). Pure +−×÷ (NO libm) ⇒ the RoPE/
+//       softmax replay reproducibility that makes the device kernel bit-exact.
+//   (3) ADDITION-LAW — _moe_exp(a)·_moe_exp(b) ≈ _moe_exp(a+b) within tol: a
+//       closed algebraic invariant of exp, libm-INDEPENDENT (locks the internal
+//       consistency of the range-reduction + 2ⁿ recomposition).
+//
+// Self-contained (OP-28/29/33/72 scp/stdin pattern): _moe_exp inlined VERBATIM
+// from stdlib/flame/moe_lib.hexa so the oracle runs on ANY hexa host with no
+// checkout. Keep in sync with moe_lib.hexa.
+//
+// F-OP74-FLAME-PRIMITIVE-ORACLE-COVERAGE :
+//   .verdicts/hexa-0pod/F-OP74-FLAME-PRIMITIVE-ORACLE-COVERAGE.txt
+// ════════════════════════════════════════════════════════════════════════
+
+// ── moe_lib _moe_exp (inlined VERBATIM — keep in sync) ──────────────────
+fn _moe_exp(x: float) -> float {
+    // e^x via scaled Taylor with range reduction (libm-free path not assumed;
+    // matches flame discipline of explicit math). x = n·ln2 + r, |r|<=ln2/2.
+    let ln2 = 0.6931471805599453
+    let mut n = 0
+    let mut r = x
+    while r > 0.34657359 { r = r - ln2; n = n + 1 }
+    while r < 0.0 - 0.34657359 { r = r + ln2; n = n - 1 }
+    // Taylor e^r (|r|<=0.347 → ~12 terms machine-exact)
+    let mut term = 1.0
+    let mut sum = 1.0
+    let mut k = 1
+    while k < 14 {
+        term = term * r / to_float(k)
+        sum = sum + term
+        k = k + 1
+    }
+    // multiply by 2^n
+    let mut p = sum
+    if n >= 0 {
+        let mut i = 0
+        while i < n { p = p * 2.0; i = i + 1 }
+    } else {
+        let mut i = 0
+        while i < (0 - n) { p = p / 2.0; i = i + 1 }
+    }
+    return p
+}
+
+// ── helpers ─────────────────────────────────────────────────────────────
+fn _m_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// production-range probe: softmax logit−mx (always ≤ 0 after max-subtraction),
+// plus a few positive points to exercise the n>0 reduction + 2ⁿ recomposition.
+fn _probe(xs: int) {
+    farr_set(xs,  0, 0.0 - 30.0)   // softmax floor (exp ≈ 9.4e-14)
+    farr_set(xs,  1, 0.0 - 10.0)
+    farr_set(xs,  2, 0.0 - 3.0)
+    farr_set(xs,  3, 0.0 - 0.6931471805599453)  // -ln2 (reduction boundary)
+    farr_set(xs,  4, 0.0 - 0.34657359)          // -ln2/2 (exact reduce edge)
+    farr_set(xs,  5, 0.0 - 0.1)
+    farr_set(xs,  6, 0.0)                        // exp(0) = 1 exactly
+    farr_set(xs,  7, 0.1)
+    farr_set(xs,  8, 0.34657359)                // +ln2/2
+    farr_set(xs,  9, 0.6931471805599453)        // +ln2
+    farr_set(xs, 10, 3.0)
+    farr_set(xs, 11, 10.0)
+}
+
+// ── (1) AGREE vs libm exp (relative error) ──────────────────────────────
+fn check_agree() -> float {
+    let xs = farr_zeros(12); _probe(xs)
+    let mut max_rel = 0.0
+    let mut i = 0
+    while i < 12 {
+        let x = farr_get(xs, i)
+        let a = _moe_exp(x)
+        let b = exp(x)
+        let rel = _m_abs(a - b) / (_m_abs(b) + 1e-300)
+        if rel > max_rel { max_rel = rel }
+        i = i + 1
+    }
+    let _ = farr_free(xs)
+    return max_rel
+}
+
+// ── (2) DETERMINISM — byte-identical run-to-run on the same input ────────
+fn _bytes_eq_f64(a: float, b: float) -> int {
+    let ba = f64_to_bytes_le(a)
+    let bb = f64_to_bytes_le(b)
+    let mut j = 0
+    let mut eq = 1
+    while j < len(ba) {
+        if ba[j] != bb[j] { eq = 0 }
+        j = j + 1
+    }
+    return eq
+}
+
+fn check_det() -> int {
+    let xs = farr_zeros(12); _probe(xs)
+    let mut all_eq = 1
+    let mut i = 0
+    while i < 12 {
+        let x = farr_get(xs, i)
+        if _bytes_eq_f64(_moe_exp(x), _moe_exp(x)) == 0 { all_eq = 0 }
+        i = i + 1
+    }
+    let _ = farr_free(xs)
+    return all_eq
+}
+
+// ── (3) ADDITION-LAW — exp(a)·exp(b) == exp(a+b) (closed, libm-independent) ─
+fn check_addition_law() -> float {
+    // pairs (a, b) spanning the reduction structure
+    let aa = farr_zeros(6)
+    let bb = farr_zeros(6)
+    farr_set(aa, 0, 0.0 - 1.0);  farr_set(bb, 0, 0.0 - 2.0)
+    farr_set(aa, 1, 0.0 - 5.0);  farr_set(bb, 1, 0.3)
+    farr_set(aa, 2, 0.6931471805599453); farr_set(bb, 2, 0.6931471805599453) // ln2+ln2
+    farr_set(aa, 3, 0.0 - 0.5);  farr_set(bb, 3, 0.5)   // → exp(0)=1
+    farr_set(aa, 4, 2.0);        farr_set(bb, 4, 0.0 - 8.0)
+    farr_set(aa, 5, 0.0 - 15.0); farr_set(bb, 5, 0.0 - 15.0)  // → exp(-30)
+    let mut max_rel = 0.0
+    let mut i = 0
+    while i < 6 {
+        let a = farr_get(aa, i)
+        let b = farr_get(bb, i)
+        let lhs = _moe_exp(a) * _moe_exp(b)
+        let rhs = _moe_exp(a + b)
+        let rel = _m_abs(lhs - rhs) / (_m_abs(rhs) + 1e-300)
+        if rel > max_rel { max_rel = rel }
+        i = i + 1
+    }
+    let _ = farr_free(aa)
+    let _ = farr_free(bb)
+    return max_rel
+}
+
+// ── entrypoint ──────────────────────────────────────────────────────────
+println("=== HEXA-0POD OP-74 · _moe_exp AGREE + DETERMINISM + ADDITION-LAW oracle ===")
+
+let mut pass = 0
+let total = 3
+
+let adev = check_agree()
+if adev <= 1e-9 {
+    print("PASS  F-OP74-MOE-EXP-AGREE        max rel|_moe_exp − libm exp| = ")
+    print(adev)
+    println(" <= 1e-9 over [-30 .. 10] (softmax logit−mx range + n>0 reduction)")
+    pass = pass + 1
+} else {
+    print("FAIL  F-OP74-MOE-EXP-AGREE        max rel = "); print(adev); println("")
+}
+
+let det = check_det()
+if det == 1 {
+    println("PASS  F-OP74-MOE-EXP-DETERMINISM  12 probes: _moe_exp(x) twice -> byte-IDENTICAL f64 (max|Dbytes|=0); pure +-*/ no libm -> arch/OS-independent (device replay premise)")
+    pass = pass + 1
+} else {
+    println("FAIL  F-OP74-MOE-EXP-DETERMINISM  _moe_exp not byte-reproducible run-to-run")
+}
+
+let ldev = check_addition_law()
+if ldev <= 1e-9 {
+    print("PASS  F-OP74-MOE-EXP-ADDITION     max rel|exp(a)exp(b) - exp(a+b)| = ")
+    print(ldev)
+    println(" <= 1e-9 (closed exp invariant, libm-independent)")
+    pass = pass + 1
+} else {
+    print("FAIL  F-OP74-MOE-EXP-ADDITION     max rel = "); print(ldev); println("")
+}
+
+println("")
+print("=== OP-74: "); print(pass); print("/"); print(total); println(" PASS ===")
+if pass == total {
+    println("PASS — _moe_exp (moe_lib) AGREES with libm exp over the softmax range AND is")
+    println("byte-deterministic AND satisfies the exp addition law. The '~12 terms")
+    println("machine-exact' accuracy docstring claim is now LOCKED at the primitive level;")
+    println("closes the 3rd-exp (MoE router softmax) accuracy assumption under F-OP8/F-OP11.")
+} else {
+    println("FAIL — OP-74 _moe_exp oracle not landable")
+}

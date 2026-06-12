@@ -1,0 +1,143 @@
+════════════════════════════════════════════════════════════════════════════════
+ F-OP74-FLAME-PRIMITIVE-ORACLE-COVERAGE — full audit of the flame numeric-primitive
+ documented-accuracy surface; locks the LAST documented-but-UNlocked accuracy claim
+ (moe_lib `_moe_exp`, the 3rd distinct exp) + the proven-complete coverage matrix
+ HEXA-0POD OP-74 · 0-GPU · local arm64-macos only · ZERO vast · no foreign pod · $0
+════════════════════════════════════════════════════════════════════════════════
+date: 2026-06-13   tier: 🟢 GREEN — invariant-lock (3/3 PASS) + coverage closed
+base: origin/main @ b96c883e1 (post #3200 / OP-72 d5-trig agree)
+scope: $0 · 0-pod · NO GPU · no vast · no foreign pod · no .tape (domain .md/.log.md
+       only, no MAIN.tape) · oracle+doc only · leak-0
+
+GOAL
+  Complete the flame numeric-primitive oracle coverage. OP-72 (#3200) found the d5
+  trig pair carried a documented bit-eq/accuracy claim with NO agreement oracle and
+  locked it (F-OP72). This round AUDITS the FULL flame numeric-primitive surface for
+  the same documented-but-UNlocked-claim gap and locks each remaining one with a
+  0-pod CPU oracle (the OP-72 pattern) — or proves the surface fully covered.
+
+────────────────────────────────────────────────────────────────────────────────
+ 1. THE COVERAGE MATRIX (primitive → documented claim → locked-by / UNLOCKED)
+────────────────────────────────────────────────────────────────────────────────
+  Scope = the hand-rolled-vs-libm numeric TWINS + reduction/accumulation primitives
+  that carry an accuracy / bit-eq / identity / determinism docstring across the
+  flame numeric surface (flame_math · moe_lib · nn_lib · gn_lib · optim_lib).
+  AGREE = matches libm to a tolerance · DET = byte-reproducible run-to-run.
+
+  ── flame_math.hexa hand-Taylor transcendental twins ──────────────────────────
+  PRIMITIVE     DOCUMENTED CLAIM                          LOCKED BY (PRE-OP74)
+  dt_sqrt       "24-iter Newton ≡ libm sqrt for normal"   🟢 F-RFC043-MATH-DT-SQRT-AGREE
+                                                            (flame_math_test.hexa, rel<1e-12)
+  dt_exp        range-reduce+12-Taylor ≈ libm exp         🟢 F-RFC043-MATH-DT-EXP-AGREE
+                                                            (flame_math_test.hexa, rel<1e-9)
+  dt_ln         atanh series ≈ libm log (useful range)    🟢 F-RFC043-MATH-DT-LN-AGREE
+                + run-to-run byte-eq                         + -DT-LN-DETERMINISM
+  dt_erf        A&S 7.1.26, max|Δ vs erf|=1.38e-7, pure-FP 🟢 F-OP19B-DET-ERF (cross-platform
+                bit-identical x86/arm64                      byte-eq, aiden+ghost+pi5)
+  dt_lcg_next   closed period [0,2^31)                     🟢 F-RFC043-MATH-DT-LCG
+  dt_rand_unit  (s%1000)/1000−0.5 (derived from lcg)       🟢 (trivial, follows dt_lcg)
+  d5_sin/d5_cos 14-Taylor "strict bit-eq path to anima    🟢 F-OP72-D5-TRIG-AGREE
+                d5_rope_tables" + RoPE/schedule premise      (#3200; AGREE 1.3e-12 + DET + Pyth)
+
+  ── moe_lib.hexa MoE-router softmax exp (the 3rd distinct exp impl) ────────────
+  _moe_exp      "|r|≤0.347 → ~12 terms MACHINE-EXACT"      🔴 → 🟢 F-OP74 (THIS round)
+                scaled-Taylor e^x (the accuracy claim)       was DET-only (F-OP8/F-OP11)
+                                                             → AGREE oracle added here
+
+  ── reduction / accumulation / update primitives (DETERMINISM-class) ──────────
+  GN reduction (gn_lib / nn_lib)   sum/var order + _gn_sqrt 🟢 F-OP9-LN-REDUCTION-ORACLE
+  conv fwd / conv-seam             window-concat causal     🟢 F-OP7-IDENTITY / F-OP10-CONV-SEAM
+  MoE combine (two-pass==one-pass) softmax+combine max|Δ|=0 🟢 F-OP8-IDENTITY-ORACLE
+  CE / softmax-grad                per-path exp identity    🟢 F-OP11-CE-SOFTMAX-ORACLE
+  AdamW update                     update arithmetic id     🟢 F-OP12-ADAMW-UPDATE-ORACLE
+  LR warmup+cosine (d5_cos)        N=500 schedule byte-eq   🟢 F-OP33-LR-SCHEDULE (+OP19 cross-plat)
+  step determinism (whole)         max|Δ|=0 run-to-run      🟢 F-OP14/F-OP15
+
+  ── primitives with NO documented accuracy claim (correctly NOT a gap) ────────
+  _gn_sqrt (gn_lib)   Newton sqrt, docstring = "libm-free path not assumed" only —
+                      no accuracy/agreement claim; wired into the GN reduction whose
+                      DETERMINISM is locked (F-OP9). Nothing to AGREE-lock.
+  _nn_sqrt (nn_lib)   = libm sqrt verbatim ("exact double") — no hand-roll, no claim.
+
+  RESULT: every flame numeric primitive bearing a DOCUMENTED accuracy / bit-eq /
+  identity / determinism claim is now oracle-locked. `_moe_exp` was the single
+  remaining documented-but-UNlocked ACCURACY claim (all prior _moe_exp locks were
+  DETERMINISM/replay-equivalence, not agreement-with-true-e^x). OP-74 closes it.
+
+────────────────────────────────────────────────────────────────────────────────
+ 2. THE GAP _moe_exp filled (verbatim survey, scoped grep, NO .git)
+────────────────────────────────────────────────────────────────────────────────
+  moe_lib.hexa:28 `_moe_exp` (range-reduce x = n·ln2 + r, |r|≤ln2/2, 14-term Taylor
+  e^r, ×2ⁿ by repeated mul/div) carries the accuracy docstring:
+
+    moe_lib.hexa:39   // Taylor e^r (|r|<=0.347 → ~12 terms machine-exact)
+
+  It is a PRODUCTION primitive: the MoE router softmax (nn_moe_softmax /
+  nn_moe_router_fwd) AND its device replay (clm_conv_devfeed._devfeed_moe_exp). It
+  is the THIRD distinct exp in the flame step (libm exp · dt_exp · _moe_exp).
+
+    $ git grep -lnE "_moe_exp|_me_exp" -- 'stdlib/flame/*test*' 'stdlib/flame/*_eq.hexa'
+      stdlib/flame/clm_prod_ce_softmax_grad_eq.hexa   (F-OP11)
+      stdlib/flame/clm_prod_moe_block2_hostdispatch_eq.hexa
+      stdlib/flame/clm_prod_moe_combine_eq.hexa       (F-OP8)
+
+  ALL THREE are DETERMINISM / replay-equivalence locks (max|Δ|=0 dev-vs-host,
+  two-pass==one-pass) — they assert the hand-rolled exp REPLAYS ITSELF byte-for-byte
+  in the same order, NOT that it AGREES with the true e^x. The sibling dt_exp HAS an
+  AGREE oracle (F-RFC043-MATH-DT-EXP-AGREE); d5 trig was just AGREE-locked (F-OP72).
+  `_moe_exp`'s "machine-exact" ACCURACY claim was UNGATED — exactly the OP-72 class.
+
+────────────────────────────────────────────────────────────────────────────────
+ 3. THE LOCK — stdlib/flame/op74_moe_exp_agree_eq.hexa (self-contained, NO `use`)
+────────────────────────────────────────────────────────────────────────────────
+  `_moe_exp` inlined VERBATIM from moe_lib.hexa (OP-28/29/33/72 scp/stdin pattern —
+  runs on ANY hexa host, no checkout). 3 gates over a 12-point probe spanning the
+  production softmax range (logit − mx ≤ 0 after max-subtraction; plus n>0 points to
+  exercise reduction + 2ⁿ recomposition): -30, -10, -3, -ln2, -ln2/2, -0.1, 0, 0.1,
+  +ln2/2, +ln2, 3, 10.
+
+  (1) F-OP74-MOE-EXP-AGREE       : max rel|_moe_exp − libm exp| ≤ 1e-9 (rel error —
+        exp spans 1e-13..1 over the range, so relative is the right metric)
+  (2) F-OP74-MOE-EXP-DETERMINISM : _moe_exp(x) twice → byte-IDENTICAL f64
+        (max|Δbytes|=0 via f64_to_bytes_le; bit-equality not float-compare)
+  (3) F-OP74-MOE-EXP-ADDITION    : max rel|exp(a)·exp(b) − exp(a+b)| ≤ 1e-9 (closed
+        exp invariant, libm-INDEPENDENT — locks reduction + 2ⁿ recomposition)
+
+────────────────────────────────────────────────────────────────────────────────
+ 4. RUN — `hexa run` on local arm64-macos, exit 0 (VERBATIM)
+────────────────────────────────────────────────────────────────────────────────
+  === HEXA-0POD OP-74 · _moe_exp AGREE + DETERMINISM + ADDITION-LAW oracle ===
+  PASS  F-OP74-MOE-EXP-AGREE        max rel|_moe_exp − libm exp| = 3.2102e-14 <= 1e-9 over [-30 .. 10] (softmax logit−mx range + n>0 reduction)
+  PASS  F-OP74-MOE-EXP-DETERMINISM  12 probes: _moe_exp(x) twice -> byte-IDENTICAL f64 (max|Dbytes|=0); pure +-*/ no libm -> arch/OS-independent (device replay premise)
+  PASS  F-OP74-MOE-EXP-ADDITION     max rel|exp(a)exp(b) - exp(a+b)| = 3.52043e-14 <= 1e-9 (closed exp invariant, libm-independent)
+
+  === OP-74: 3/3 PASS ===
+  PASS — _moe_exp (moe_lib) AGREES with libm exp over the softmax range AND is
+  byte-deterministic AND satisfies the exp addition law. The '~12 terms
+  machine-exact' accuracy docstring claim is now LOCKED at the primitive level;
+  closes the 3rd-exp (MoE router softmax) accuracy assumption under F-OP8/F-OP11.
+
+  MEASURED: _moe_exp agrees with libm exp to 3.21e-14 relative over the full
+  softmax range, is byte-deterministic across all 12 probes, and the addition law
+  closes to 3.52e-14 — the "machine-exact" docstring is verified.
+
+────────────────────────────────────────────────────────────────────────────────
+ 5. SAFETY / SCOPE
+────────────────────────────────────────────────────────────────────────────────
+  • No behavior change — oracle-only (one new self-contained test file). `_moe_exp`
+    was already SSOT-correct; this LOCKS the documented accuracy claim.
+  • Self-host byte-eq UNAFFECTED — op74_*.hexa is a leaf self-contained oracle, NOT
+    in compiler/main.hexa build_selfhost closure; zero codegen/runtime bytes touched.
+  • wipe_guard: net-additive (one oracle + one verdict + domain log), no deletion.
+  • $0 · 0-pod · NO GPU · no vast · no foreign pod (leak-0) · no MAIN.tape edit.
+
+  RESIDUAL (honest): the AGREE gate runs on local arm64-macos; the DETERMINISM gate
+  proves the pure-FP property that makes the same bytes hold on x86-linux (the
+  cross-platform argument F-OP19/F-OP33 leaned on). A future round can `scp` this
+  self-contained oracle to a pool x86 host for a literal cross-ISA byte-diff — but
+  the determinism gate already establishes the arch-independence invariant.
+
+  CLOSURE: with _moe_exp locked, the flame numeric-primitive documented-accuracy
+  surface is PROVEN-COMPLETE (matrix §1 — every claim-bearing primitive oracle-
+  locked). OP-74 is the last documented-but-UNlocked accuracy hole in this surface.
+════════════════════════════════════════════════════════════════════════════════

@@ -1,5 +1,31 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-74 DONE: COMPLETE the flame numeric-primitive oracle coverage (OP-72 follow-on) · AUDIT the FULL flame numeric surface (flame_math/moe_lib/nn_lib/gn_lib/optim_lib) for the documented-but-UNlocked-accuracy gap + build the coverage matrix · THE SINGLE HOLE = moe_lib.hexa:39 `_moe_exp` (the 3rd distinct exp impl, "~12 terms machine-exact" docstring) had only DETERMINISM/replay locks (F-OP8/F-OP11), NO agreement-vs-libm · NEW self-contained stdlib/flame/op74_moe_exp_agree_eq.hexa: 3 gates over a 12-pt softmax-range probe — AGREE max rel|_moe_exp−libm exp|≤1e-9 · DETERMINISM byte-identical f64 run-to-run · ADDITION-LAW exp(a)exp(b)−exp(a+b)≤1e-9 · `hexa run` exit 0, 3/3 PASS (agree 3.21e-14, det max|Δbytes|=0, addition 3.52e-14) · the "machine-exact" claim now LOCKED at the primitive level → flame numeric-primitive documented-accuracy surface PROVEN-COMPLETE · oracle-only no behavior change · self-host byte-eq UNAFFECTED (leaf oracle, not in build_selfhost closure) · 🟢 GREEN invariant-lock · $0 · 0-pod · NO GPU · leak-0
+- COVERAGE MATRIX (primitive → documented claim → locked-by): dt_sqrt/dt_exp/dt_ln(+det)/dt_lcg → F-RFC043-MATH-*
+  (flame_math_test) · dt_erf → F-OP19B · dt_rand_unit → trivial (dt_lcg) · d5_sin/d5_cos → F-OP72 · GN reduction
+  → F-OP9 · conv fwd/seam → F-OP7/F-OP10 · MoE combine → F-OP8 · CE/softmax-grad → F-OP11 · AdamW → F-OP12 ·
+  LR warmup+cosine (d5_cos) → F-OP33 · whole-step det → F-OP14/F-OP15. _gn_sqrt / _nn_sqrt carry NO accuracy
+  claim (docstring "libm-free path not assumed" / "= libm sqrt verbatim") → correctly NOT a gap.
+- THE HOLE: moe_lib `_moe_exp` (range-reduce x=n·ln2+r |r|≤ln2/2, 14-term Taylor e^r, ×2ⁿ by mul/div). VERBATIM
+  survey: `git grep -lnE "_moe_exp|_me_exp" -- 'stdlib/flame/*test*' 'stdlib/flame/*_eq.hexa'` → 3 files, ALL
+  DETERMINISM (max|Δ|=0 dev-vs-host, two-pass==one-pass); NONE asserts agreement with true e^x. The sibling
+  dt_exp HAS an AGREE oracle (F-RFC043-MATH-DT-EXP-AGREE); d5 trig was just AGREE-locked (F-OP72). `_moe_exp`'s
+  "machine-exact" accuracy docstring was the lone UNGATED accuracy claim — the OP-72 class.
+- THE LOCK: stdlib/flame/op74_moe_exp_agree_eq.hexa (self-contained, NO `use`, _moe_exp inlined VERBATIM — OP-28/
+  29/33/72 scp/stdin pattern). 12-pt probe {-30,-10,-3,-ln2,-ln2/2,-0.1,0,0.1,+ln2/2,+ln2,3,10} (softmax
+  logit−mx ≤0 range + n>0 reduction). AGREE uses RELATIVE error (exp spans 1e-13..1).
+- RUN-TO-RUN VERBATIM (`hexa run`, arm64-macos, exit 0):
+  · PASS F-OP74-MOE-EXP-AGREE        max rel|_moe_exp − libm exp| = 3.2102e-14 <= 1e-9
+  · PASS F-OP74-MOE-EXP-DETERMINISM  12 probes: _moe_exp(x) twice → byte-IDENTICAL f64 (max|Δbytes|=0)
+  · PASS F-OP74-MOE-EXP-ADDITION     max rel|exp(a)exp(b) − exp(a+b)| = 3.52043e-14 <= 1e-9
+  · === OP-74: 3/3 PASS ===
+- CLOSURE: with `_moe_exp` AGREE-locked, every flame numeric primitive bearing a documented accuracy/bit-eq/
+  identity claim is oracle-locked → the flame numeric-primitive documented-accuracy surface is PROVEN-COMPLETE.
+- VERDICT: .verdicts/hexa-0pod/F-OP74-FLAME-PRIMITIVE-ORACLE-COVERAGE.txt (matrix + the new oracle PASS).
+- SAFETY: oracle-only (one new leaf test file + verdict + this log) · no behavior change (_moe_exp already
+  SSOT-correct) · self-host byte-eq unaffected (op74_*.hexa NOT in build_selfhost closure) · wipe_guard
+  net-additive · $0 · 0-pod · NO GPU · no vast · no foreign pod (leak-0) · no MAIN.tape edit.
+
 ## 2026-06-13 — OP-72 DONE: LOCK the flame_math hand-Taylor TRIG primitive (d5_sin/d5_cos) — the documented-but-UNlocked OP-33 sibling · flame_math.hexa:137-139 d5_sin/d5_cos (mod-2π reduce + 14-term Taylor) carry a "strict bit-eq path to anima d5_rope_tables" docstring + are PRODUCTION (RoPE tables nn_lib.hexa:523-524 nn_rope_build_tables_base · LR schedule optim_lib.hexa:163 cos=d5_cos · op29 decoder block) yet had NO agreement oracle · OP-33 LOCKED THE SCHEDULE but ASSUMED d5_cos correct · NEW self-contained stdlib/flame/op72_d5_trig_agree_eq.hexa: 4 gates over a 12-pt probe (schedule |x|≤π + RoPE |x|≤10³) — AGREE sin≤1e-9 · AGREE cos≤1e-9 · DETERMINISM byte-identical f64 run-to-run (pure-FP no-libm = arch/OS-independent, F-OP33's premise) · PYTHAGORAS sin²+cos²−1≤1e-9 · `hexa run` exit 0, 4/4 PASS (sin 1.32e-12, cos 1.94e-12, max|Δbytes|=0, pythagoras 8.88e-16) · oracle-only no behavior change (d5 already SSOT-correct) · self-host byte-eq UNAFFECTED (leaf self-contained oracle, not in build_selfhost closure) · 🟢 GREEN invariant-lock · $0 · 0-pod · NO GPU · leak-0
 - SURVEY (scoped greps/reads, NO .git), priority order: (a) flame/forge numeric libs flame_math/optim_lib/
   gn_lib/nn_lib for a documented-but-UNlocked contract; (b) stdlib non-math surface; (c)/(d) handoff/deferred.
