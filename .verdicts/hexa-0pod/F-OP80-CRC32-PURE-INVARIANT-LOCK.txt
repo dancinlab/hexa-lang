@@ -1,0 +1,88 @@
+F-OP80-CRC32-PURE-INVARIANT-LOCK
+================================
+TIER: 🟢 GREEN — invariant-lock (runtime-side, OP-72/77 class)
+DATE: 2026-06-13
+LANE: 1 (0-pod correctness; forge/flame exhausted → broadened to compiler/runtime surface)
+SCOPE: $0 · 0-pod · NO GPU · no vast · no foreign pod · no .tape · no self/env.hexa · leak-0
+
+SURVEY (scoped greps/reads, NO .git — STEP 1 a–d)
+-------------------------------------------------
+(a) self/runtime/*_pure.hexa helper with a documented invariant unlocked by a
+    0-pod oracle — THE ACTIONABLE AXIS. 76 *_pure.hexa runtime helpers ship and
+    NONE of them carries a co-located test (find: zero self/runtime/*_test.hexa).
+    Triaged the round-trip / standard-conformance candidates:
+      · self/runtime/crc32_pure.hexa — claims the STANDARD "CRC-32" variant
+        (IEEE 802.3 / PKZIP / gzip / PNG; poly 0xEDB88320, init/final-XOR
+        0xFFFFFFFF, reflected) + a documented combine invariant. Authoritative
+        cross-check = CPython zlib.crc32. NO TEST → PICKED.
+      · self/runtime/url_pure.hexa — RFC 3986 percent-encode round-trip →
+        PROVEN-CLEAN (see DRY below), not picked.
+      · self/runtime/rle_pure.hexa — string-RLE round-trip is inherently lossy
+        on digit-bearing input (format ambiguity, documented "aaabbc"->"a3b2c1"
+        alphabet contract); array RLE exact. Not a bug → not picked.
+(b) compiler/codegen DOC-vs-CODE comment/contract gap — CLOSED on the surveyed
+    surfaces (OP-71/73 forge claim-honesty @#3206; OP-68/70 core/math). DRY.
+(c) tool/ or CI gate self-consistency gap — none NEW surfaced. DRY.
+(d) HEXA-0POD ## deferred — all build-host (frozen-seed re-pin: OP-46/39b/40/44)
+    or GPU (OP-2b/2c/19b/5c). 0-pod-INFEASIBLE. DRY.
+
+PICK = (a) crc32_pure invariant-lock. WHY: 76 untested runtime *_pure helpers,
+crc32_pure is the one with a SINGLE authoritative reference (zlib.crc32 / the
+canonical 0xCBF43926 vector) AND a documented-but-ungated combine invariant, and
+it RUNS correctly on the shipping interpreter path — a g0-simplest leaf oracle.
+
+THE LOCK
+--------
+NEW self/runtime/crc32_pure_test.hexa (@sentinel __HEXA_RUNTIME_CRC32__),
+`use "self/runtime/crc32_pure"`, 5 gate-families:
+  G1 REFERENCE  crc32("123456789") == 0xCBF43926 (3421780262) — canonical vector
+  G2 GOLDEN     "a"/"abc"/"quick-brown-fox"/"hello world" == zlib.crc32 verbatim
+  G3 EMPTY      crc32("") == 0
+  G4 COMBINE    crc32_combine_pure(crc32(a),b)==crc32(a+b) over 7×7=49 splits
+                (the documented streaming-chunk invariant, module lines 72-75)
+  G5 CLIP       crc32_pure(s,n) clips n to len(s) (n>len full; partial n hashes prefix)
+
+RUN (`hexa run self/runtime/crc32_pure_test.hexa`, arm64-macos, exit 0, VERBATIM):
+  __HEXA_RUNTIME_CRC32__ PASS 9/9
+
+Spot-check (interpreter, VERBATIM):
+  crc=3421780262 want=3421780262          ("123456789" == 0xCBF43926)
+  combine=222957957 full=222957957        (crc32_combine("hello"," world") == crc32("hello world"))
+
+AUTHORITATIVE RAW-BYTE PROOF (faithful Python port of the EXACT module arithmetic
+vs CPython zlib.crc32 — the OP-75/77 cross-check method, since the interpreter's
+from_char_code does codepoint->UTF-8 and cannot construct raw single bytes):
+  check123456789: 0xcbf43926 want 0xcbf43926 MATCH
+  zlib parity mism: 0 of 3006     (empty + 0x00 + 0xFF + all-256-byte buffer + 3000 random len 0..64)
+  combine invariant mism: 0 of 2000   (random a,b len 0..30)
+
+SCOPE NOTE (g5 honesty): the leaf oracle gates use ASCII (<0x80) inputs only —
+the interpreter's from_char_code(255) yields the 2-byte UTF-8 0xC3 0xBF (ord=195),
+NOT a raw 0xFF, so raw single-byte vectors cannot be expressed on `hexa run`. The
+full 0..255 RAW-BYTE + zlib parity coverage is carried by the Python authoritative
+port above (the documented MEMORY "local hexa is a stale oracle" / OP-75 method).
+The leaf oracle locks the standard-conformance reference vector + structural
+combine/clip invariants on the SAME execution path the module ships on.
+
+DRY (PROVEN-CLEAN siblings, evidence-backed)
+--------------------------------------------
+· url_pure (RFC 3986): decode(encode(s))==s for ALL 256 single bytes + 5000
+  random strings → 0 mismatch; tail/invalid %XX boundary (`%4`/`%`/`%2g`) all
+  preserved verbatim as documented; the `i+2 < n` decode boundary is CORRECT
+  (last full %XX at i=n-3 satisfies i+2=n-1<n).
+· rle_pure: array rle_encode∘rle_decode exact; string-RLE digit-ambiguity is a
+  documented format limitation, not a defect.
+
+BYTE-EQ SAFETY
+--------------
+crc32_pure_test.hexa is a LEAF test file (a new standalone @sentinel oracle, run
+via `hexa run`). It is NOT in the build_selfhost reproduce-byte-identical closure
+(codegen/runtime/macho/lexer/parser): zero edits to any closure file, zero
+codegen/runtime bytes changed. crc32_pure.hexa itself is UNTOUCHED. selfhost
+byte-eq / determinism / miscompile-zero / codegen-guard gates UNAFFECTED.
+
+wipe_guard: net-additive (1 new test file, 0 deletions).
+
+VERDICT: 🟢 GREEN invariant-lock. crc32_pure is now standard-conformance-locked
+(0xCBF43926 + zlib parity) and combine-invariant-locked. 76-untested-*_pure-helper
+surface: 1 LOCKED (crc32) + 2 PROVEN-CLEAN (url, rle).
