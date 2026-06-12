@@ -2187,3 +2187,29 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
 - OUTCOME: 🟢 GREEN (docs/spec consolidation). NO seed regen, NO build-host work (that IS the deferred item), NO
   codegen/runtime/.tape edits. Verdict .verdicts/hexa-0pod/F-OP46-PROMOTE-BUNDLE-SPEC.txt.
   $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
+## OP-49 — route-(a) own-GEMM SHAPE-ADAPTIVE tile-selector DESIGN + CPU cost model VALIDATED against measured points (0-pod, no GPU) — 2026-06-13
+- SURVEY: read F-OP45-ROUTEA-D4096-CAP (the (a)-(d) cause decomposition + T1-T5 GPU handoff) + wgmma_tf32_b14.cu
+  MODE 4/5/6/7/8 source + W-ladder verdicts (OG16/OG17/W10) for the on-pod measured TFLOP/s.
+- INVENTORY (step1): 5 in-tree route-(a) modes — MODE4 gemm_og16 (128x128, 2 CTA/SM), MODE5 gemm_og17_t256
+  (128x256, 154 reg/thr → 1 CTA/SM REG-capped, W11/W12 closed-neg), MODE6 gemm_og17 (relaxed wait), MODE7
+  gemm_og17_persist (128x128 PERSISTENT+swizzle, exists but never measured @4096), MODE8 gemm_og17_b14 (128x128
+  DUAL-ISSUE PDEP — frontier). NO split-K (g5 forbids reorder), NO 64x64 small-tile.
+- POLICY (step2a): 3 shape buckets — small-D under-fill (D≤1024, 128x128 leaves device ~90% idle), medium-D
+  parity zone (1024<D≤3072, PARITY met @2048 1.08x), large-D drain-bound (D>3072, -9.9% K-drain + cuBLAS +24.6%).
+- COST MODEL (step2b, self/native/wgmma/routea_cost_model.py): predict_tflops = PEAK_TF32(349) * issue_eff[mode]
+  * occ_factor * wave_eff * drain_penalty * reuse_eff * fill_factor. KEY: occupancy = MIN(smem-limited, REGISTER-
+  limited) CTAs/SM — the 154-reg t256 → 1 CTA/SM (register-cap is LOAD-BEARING; smem-only mispredicts the whole
+  large-D crossover). issue_eff fit ONCE per kernel @D=2048 (per-kernel const, OP-45 finding 1); drain/wave/reuse/
+  fill D-scaling are then a PREDICTION. SELECTOR (step2c): argmax over {mode × NST}.
+- VALIDATION (step3, VERBATIM tool output): model REPRODUCES the measured win-ordering at BOTH D —
+  D=2048 [MODE8,OG17,OG16,t256] MATCH (calibration anchors, exact) · D=4096 [MODE8,OG17,t256,OG16] MATCH (genuine
+  PREDICTION, incl. the non-trivial t256-climbs-above-OG16 crossover). mean |rel.err| = 2.2%. ORDERING = PASS → 🟢.
+  Honest sub-residual: MODE8@4096 absolute +9.2% (310 vs 283.9) — static drain under-credits large-D K-drain;
+  ORDERING unaffected; calibrating the absolute needs OP-45 T2 ncu DRAM%/Tensor%.
+- GAPS (step2d): #1 64x64 small-tile (under-fill) · #2 MODE7 persistent MEASURED @4096 (=OP-45 T3) · #3 bit-exact
+  tree-reduction split-K (=OP-45 T4, highest value) · #4 NST-adaptive launcher (host-only). The selector's argmax
+  is always MODE8 over existing modes yet MODE8 still loses to cuBLAS at the extremes — the gaps ARE the build-work.
+- OUTCOME: 🟢 GREEN (cost-model ORDERING validation PASSES at both measured D). Milestone OP-49 [x]. Deliverables:
+  docs/forge-routea-shape-adaptive.md · self/native/wgmma/routea_cost_model.py · F-OP49-SHAPE-ADAPTIVE-DESIGN.txt.
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
