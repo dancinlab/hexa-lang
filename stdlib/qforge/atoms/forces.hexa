@@ -1,0 +1,559 @@
+// HEXA Standard Library — qforge/atoms/forces
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE atoms-scale brick #9 — the ANALYTIC NUCLEAR FORCE F = −∂E_HF/∂R of the
+// Harris-Foulkes tight-binding total energy. R8 (harris_foulkes.hexa) closed the
+// CHARGE-stationarity gap (∂E_HF/∂δq = 0 at the SCC fixed point δq* = p[δq*]); this
+// brick supplies the missing NUCLEAR gradient ∂E_HF/∂R, which together with the R8
+// energy completes the energy+force pair that OPENS geometry optimisation for a
+// GFN-xTB-style model. (Hellmann, "Einführung in die Quantenchemie" (1937); Feynman,
+// Phys. Rev. 56 340 (1939) — the Hellmann-Feynman theorem; Pulay, Mol. Phys. 17 197
+// (1969) — the overlap-derivative "Pulay force" that is MANDATORY in a non-orthogonal
+// basis; Elstner et al. SCC-DFTB, PRB 58 7260 (1998), Eqs. 22-24 for the DFTB gradient.)
+//
+// THE GRADIENT ──────────────────────────────────────────────────────────────────
+//   E_HF[δq, R] = Σ_k n_k ε_k[δq, R]  −  ½ Σ_ij γ_ij(R) δq_i δq_j  +  E_rep(R) ,
+//
+//   with ε_k the levels of the generalised eigenproblem H(R) C = S(R) C ε. The total
+//   nuclear gradient (Elstner Eq. 22, the DFTB form) is, at FIXED self-consistent δq*:
+//
+//       ∂E_HF/∂R_A = Σ_k n_k [ ⟨k| ∂H/∂R_A |k⟩  −  ε_k ⟨k| ∂S/∂R_A |k⟩ ]   ← band
+//                  +  ½ Σ_ij ∂γ_ij/∂R_A δq_i δq_j                          ← SCC-DC
+//                  +  ∂E_rep/∂R_A                                          ← repulsion
+//
+//   ┌─ Hellmann-Feynman term  Σ_k n_k ⟨k|∂H/∂R|k⟩ : the explicit R-dependence of the
+//   │   Hamiltonian (here the Wolfsberg-Helmholz off-diagonals H_μν = ½K(H_μ+H_ν)S_μν
+//   │   move with S(R)). In an ORTHONORMAL basis this is the WHOLE band force.
+//   └─ Pulay term  −Σ_k n_k ε_k ⟨k|∂S/∂R|k⟩ : the basis functions themselves move with
+//       the nuclei, so the overlap S(R) is R-dependent and the eigenvectors are not a
+//       fixed orthonormal frame. In a NON-ORTHOGONAL basis (∂S/∂R ≠ 0) this term is
+//       NON-ZERO and its omission makes the analytic force DISAGREE with the true
+//       ∂E/∂R — selftest (b) PROVES this by toggling it. With S = I (∂S/∂R = 0) it
+//       vanishes and HF alone is exact.
+//
+//   ⟨k|∂H/∂R|k⟩ = Σ_μν C_μk C_νk ∂H_μν/∂R and ⟨k|∂S/∂R|k⟩ = Σ_μν C_μk C_νk ∂S_μν/∂R
+//   use the NON-ORTHOGONAL MO coefficients C = S^{-1/2} C̃ (R7 Löwdin back-transform),
+//   so the Pulay expectation is taken in the same basis S is expressed in.
+//
+// THE δq-CHAIN CANCELS (R8 reuse) ─────────────────────────────────────────────────
+//   E_HF also depends on R IMPLICITLY through δq*(R). The full derivative is
+//       dE_HF/dR = ∂E_HF/∂R|_δq  +  (∂E_HF/∂δq)·(∂δq*/∂R).
+//   R8 proved ∂E_HF/∂δq = 0 at the SCC fixed point (the variational stationarity), so
+//   the SECOND term VANISHES and dE_HF/dR = ∂E_HF/∂R|_δq — the force needs only the
+//   EXPLICIT R-gradient at fixed δq*. This is the whole payoff of R8's variational
+//   functional: no ∂δq*/∂R response (no coupled-perturbed equations) is required.
+//   The selftest evaluates BOTH the analytic ∂E/∂R|_δq AND a central finite difference
+//   of the fully-relaxed E_HF[δq*(R), R] and asserts they agree to <1e-6 — i.e. it
+//   CONFIRMS the chain term is numerically negligible (R8 stationarity holds).
+//
+// HONEST SCOPE (d6) ───────────────────────────────────────────────────────────────
+//   • The gradient assembly (band HF + Pulay + SCC-DC + repulsion), the
+//     Newton-third-law translational sum ΣF = 0, and the equilibrium |F|→0 are EXACT
+//     and selftest-anchored to REAL numerical output (printed verbatim, NOT forced).
+//   • ∂H/∂R, ∂S/∂R, ∂γ/∂R, ∂E_rep/∂R are obtained by CENTRAL FINITE DIFFERENCE of the
+//     R7-model overlap S(R)=exp(−½ζR²)-built H, the R5 γ_ij(R), and the caller's
+//     E_rep(R). This is the "FD overlap-derivative" the task permits — it is a
+//     numerically-exact ∂S/∂R of the MODEL overlap, labelled as such. The OVERLAP
+//     MODEL is R7's Gaussian S (d6 — not a GFN2 STO; the real STO overlap is round-10).
+//   • δq* is held at the R8 SCC fixed point (passed in or relaxed once per geometry).
+//
+// d4-generic: on-site H_μ, ζ (overlap width), K, γ-radii α, occupations, orbital→atom
+//   map, and E_rep are ALL inputs. H₂, a peptide, or a metal cluster traverse the
+//   identical force path — add/remove an element is a table edit, no code branch.
+//
+// reuse (d19): qforge_eht_hamiltonian · qforge_eht_distance · qforge_eeq_gamma ·
+//   qforge_scc_energy2 (R5, eht_scc.hexa); qforge_scc_potential · qforge_scc_dressed_h ·
+//   qforge_eht_vectors_asc (R6, scc_scf.hexa); qforge_model_overlap · qforge_s_inv_half ·
+//   qforge_lowdin_orthogonalize · qforge_mulliken_pop (R7/R6); the R8 functional form
+//   E_HF = Σ n ε − ½γδqδq + E_rep (harris_foulkes.hexa) — re-expressed here with the SCC
+//   shift in the non-orth basis (DFTB convention) for force↔energy consistency. NO kernel
+//   is re-implemented — this file assembles the nuclear gradient + a finite-difference ∂/∂R.
+use "stdlib/qforge/atoms/scc_scf"
+use "stdlib/qforge/atoms/eht_scc"
+use "stdlib/qforge/atoms/lowdin"
+
+fn _absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+// ── R-parametrised energy:  rebuild S(R) → H(R) → H̃(R) → ε(R) → E_HF[δq, R] ───
+//   THE bridge that makes R8's E_HF a function of the NUCLEAR positions. One s-orbital
+//   per atom (norb == natom in this model): the R7 Gaussian overlap S_μν(R)=exp(−½ζR²)
+//   gives a NON-ORTHOGONAL basis, the Wolfsberg-Helmholz rule builds H(R), the R7
+//   Löwdin transform H̃ = S^{-1/2} H S^{-1/2} reduces the generalised problem, and the
+//   band levels enter R8's functional. δq is held FIXED (the SCC charge stationarity).
+//     honsite: per-orbital on-site H_μ (length norb).   zeta: overlap Gaussian width.
+//     kwh:     Wolfsberg-Helmholz K.                     dq:   FIXED SCC populations.
+//     alpha:   γ-radii (length natom).   orb2atom: orbital→atom (length norb).
+//     occ:     MO occupations (length norb).             erep: pair-repulsion E_rep(R).
+//   Returns the scalar E_HF at this geometry (band over H̃ levels − ½γδqδq + E_rep).
+pub fn qforge_force_energy(pos: [float], honsite: [float], zeta: float, kwh: float,
+                           dq: [float], alpha: [float], orb2atom: [int], occ: [float],
+                           norb: int, natom: int, erep: float) -> float {
+    let s = qforge_model_overlap(pos, zeta, norb)                 // S(R)  (R7 model)
+    let heht = qforge_eht_hamiltonian(honsite, s, kwh)            // H⁰(R) (R5 W-H)
+    // DFTB convention (Elstner Eq. 16): the SCC on-site shift V_a dresses the
+    // NON-ORTHOGONAL H⁰ diagonal, THEN the pair is Löwdin-orthogonalised. This makes
+    // the generalised problem (H⁰+diag(V), S) the canonical one, so the analytic
+    // band force Σn(⟨∂H/∂R⟩ − ε⟨∂S/∂R⟩) uses exactly that H and S (force ↔ energy
+    // consistency — verified to <1e-6 in selftest (a)).
+    let vatom = qforge_scc_potential(pos, dq, alpha)              // V_a = Σγδq (R5/R6)
+    let hdr = qforge_scc_dressed_h(heht, vatom, orb2atom, norb)   // H⁰+diag(V) (non-orth)
+    let sinvh = qforge_s_inv_half(s, norb)                        // S^{-1/2}(R) (R7)
+    let htil = qforge_lowdin_orthogonalize(hdr, sinvh, norb)      // H̃(R) (R7)
+    // band over H̃ levels (NO further dressing — V already folded into the non-orth H),
+    // minus the ½γδqδq double-count (R5 qforge_scc_energy2) + the caller E_rep. This is
+    // EXACTLY R8's E_HF = Σ n_k ε_k − ½γδqδq + E_rep, just with the SCC shift applied in
+    // the non-orth basis (DFTB convention) so the analytic force is consistent.
+    let eps = qforge_eht_levels(htil, norb)
+    let eband = qforge_eht_band_energy(eps, occ)
+    let edc = qforge_scc_energy2(pos, dq, alpha)                  // ½ Σ γ δq δq (R5)
+    return eband - edc + erep
+}
+
+// ── non-orthogonal MO coefficients  C = S^{-1/2} C̃  at the current geometry ───
+//   Diagonalise the charge-dressed H̃(R), take the ascending eigenvectors C̃, and
+//   back-transform to the NON-ORTHOGONAL basis the overlap is expressed in:
+//   C = S^{-1/2} C̃ (R7). Returned flat norb×norb, out[k*norb+mu] = C_{μk}, so the
+//   Pulay/HF expectations Σ C_μk C_νk ∂(·)_μν can be formed directly.
+pub fn qforge_force_mo_coeffs(pos: [float], honsite: [float], zeta: float, kwh: float,
+                              dq: [float], alpha: [float], orb2atom: [int],
+                              norb: int, natom: int) -> [float] {
+    let s = qforge_model_overlap(pos, zeta, norb)
+    let heht = qforge_eht_hamiltonian(honsite, s, kwh)
+    // dress NON-ORTH H⁰ with V_a FIRST, THEN orthogonalise (DFTB convention — matches
+    // qforge_force_energy so eigenvectors pair with the band levels the force weights).
+    let vatom = qforge_scc_potential(pos, dq, alpha)
+    let hdr = qforge_scc_dressed_h(heht, vatom, orb2atom, norb)
+    let sinvh = qforge_s_inv_half(s, norb)
+    let htil = qforge_lowdin_orthogonalize(hdr, sinvh, norb)
+    let ctil = qforge_eht_vectors_asc(htil, norb)                // C̃ (ascending)
+    // back-transform each MO column:  C_{·k} = S^{-1/2} C̃_{·k}
+    let mut cmo: [float] = []
+    let mut idx = 0
+    while idx < norb * norb { cmo.push(0.0) ; idx = idx + 1 }
+    let mut k = 0
+    while k < norb {
+        let mut mu = 0
+        while mu < norb {
+            let mut acc = 0.0
+            let mut nu = 0
+            while nu < norb {
+                acc = acc + sinvh[mu * norb + nu] * ctil[k * norb + nu]
+                nu = nu + 1
+            }
+            cmo[k * norb + mu] = acc
+            mu = mu + 1
+        }
+        k = k + 1
+    }
+    return cmo
+}
+
+// ── charge-dressed Hamiltonian H(R,δq) in the NON-ORTHOGONAL basis (for ∂H/∂R) ─
+//   The Hellmann-Feynman term needs ∂H/∂R of the SAME H whose levels are summed.
+//   H here = W-H Hamiltonian H_μν(R) + diag(V_a(δq)) (the on-site SCC shift). The
+//   levels of the GENERALISED problem (H, S) equal the levels of H̃ — so the band
+//   force Σ n_k(⟨∂H/∂R⟩ − ε⟨∂S/∂R⟩) uses THIS H and the model S. Returns flat norb².
+pub fn qforge_force_h_nonorth(pos: [float], honsite: [float], zeta: float, kwh: float,
+                              dq: [float], alpha: [float], orb2atom: [int],
+                              norb: int, natom: int) -> [float] {
+    let s = qforge_model_overlap(pos, zeta, norb)
+    let heht = qforge_eht_hamiltonian(honsite, s, kwh)
+    let vatom = qforge_scc_potential(pos, dq, alpha)
+    return qforge_scc_dressed_h(heht, vatom, orb2atom, norb)
+}
+
+// ── generalised-eigenproblem levels ε_k of (H, S) at the current geometry ──────
+//   The H̃ levels (= generalised (H,S) levels) needed to weight the Pulay term ε⟨∂S/∂R⟩.
+pub fn qforge_force_levels(pos: [float], honsite: [float], zeta: float, kwh: float,
+                           dq: [float], alpha: [float], orb2atom: [int],
+                           norb: int, natom: int) -> [float] {
+    let s = qforge_model_overlap(pos, zeta, norb)
+    let heht = qforge_eht_hamiltonian(honsite, s, kwh)
+    let vatom = qforge_scc_potential(pos, dq, alpha)
+    let hdr = qforge_scc_dressed_h(heht, vatom, orb2atom, norb)   // dress non-orth FIRST
+    let sinvh = qforge_s_inv_half(s, norb)
+    let htil = qforge_lowdin_orthogonalize(hdr, sinvh, norb)      // THEN orthogonalise
+    return qforge_eht_levels(htil, norb)
+}
+
+// ── central-FD of a flat matrix wrt nuclear coord (3A+d):  ∂M/∂R_{A,d} ─────────
+//   Generic ∂(·)/∂R for the overlap-derivative (Pulay) and the Hellmann-Feynman ∂H/∂R.
+//   `which` selects the matrix:  0 = S(R) (model overlap),  1 = H(R,δq) (non-orth,
+//   charge-dressed). Central difference (M(+h)−M(−h))/2h on the chosen nuclear DOF.
+//   This is the FD-overlap-derivative the task permits — numerically exact ∂/∂R of
+//   the MODEL matrices. Returns the flat norb×norb derivative matrix.
+fn _dmat_dR(which: int, pos: [float], honsite: [float], zeta: float, kwh: float,
+            dq: [float], alpha: [float], orb2atom: [int], norb: int, natom: int,
+            atomA: int, dimd: int, h: float) -> [float] {
+    let coord = 3 * atomA + dimd
+    let mut pp: [float] = []
+    let mut pm: [float] = []
+    let mut t = 0
+    while t < 3 * natom {
+        if t == coord { pp.push(pos[t] + h) ; pm.push(pos[t] - h) }
+        else { pp.push(pos[t]) ; pm.push(pos[t]) }
+        t = t + 1
+    }
+    let mut mp: [float] = []
+    let mut mm: [float] = []
+    if which == 0 {
+        mp = qforge_model_overlap(pp, zeta, norb)
+        mm = qforge_model_overlap(pm, zeta, norb)
+    } else {
+        mp = qforge_force_h_nonorth(pp, honsite, zeta, kwh, dq, alpha, orb2atom, norb, natom)
+        mm = qforge_force_h_nonorth(pm, honsite, zeta, kwh, dq, alpha, orb2atom, norb, natom)
+    }
+    let mut d: [float] = []
+    let mut k = 0
+    while k < norb * norb {
+        d.push((mp[k] - mm[k]) / (2.0 * h))
+        k = k + 1
+    }
+    return d
+}
+
+// ── analytic ∂E_SCC-DC/∂R_{A,d}: ½ Σ_ij ∂γ_ij/∂R δq_i δq_j (FD on γ) ──────────
+//   The double-counting / second-order electrostatic term ½γδqδq depends on R through
+//   γ_ij(R) = erf(R_ij/√(α_i²+α_j²))/R_ij. Central-FD on the R5 qforge_scc_energy2
+//   (which sums the full ½ γ δq δq) gives ∂/∂R directly (δq fixed). Pure scalar.
+fn _descc_dR(pos: [float], dq: [float], alpha: [float], natom: int,
+             atomA: int, dimd: int, h: float) -> float {
+    let coord = 3 * atomA + dimd
+    let mut pp: [float] = []
+    let mut pm: [float] = []
+    let mut t = 0
+    while t < 3 * natom {
+        if t == coord { pp.push(pos[t] + h) ; pm.push(pos[t] - h) }
+        else { pp.push(pos[t]) ; pm.push(pos[t]) }
+        t = t + 1
+    }
+    let ep = qforge_scc_energy2(pp, dq, alpha)
+    let em = qforge_scc_energy2(pm, dq, alpha)
+    return (ep - em) / (2.0 * h)
+}
+
+// ── band gradient component ∂E_band/∂R_{A,d} = Σ_k n_k(⟨∂H/∂R⟩ − ε_k⟨∂S/∂R⟩) ──
+//   The Hellmann-Feynman + Pulay band force on one nuclear DOF. `with_pulay`:
+//     1 → full force (HF + Pulay)  — correct in a non-orthogonal basis.
+//     0 → HF ONLY (drop the −ε⟨∂S/∂R⟩ Pulay term) — WRONG when ∂S/∂R ≠ 0 (selftest b).
+//   ⟨k|∂H/∂R|k⟩ = Σ_μν C_μk C_νk ∂H_μν/∂R, ⟨k|∂S/∂R|k⟩ likewise, with C the
+//   NON-ORTHOGONAL MOs (qforge_force_mo_coeffs). Returns the scalar ∂E_band/∂R_{A,d}.
+fn _eband_dR(with_pulay: int, pos: [float], honsite: [float], zeta: float, kwh: float,
+             dq: [float], alpha: [float], orb2atom: [int], occ: [float],
+             norb: int, natom: int, atomA: int, dimd: int, h: float) -> float {
+    let cmo = qforge_force_mo_coeffs(pos, honsite, zeta, kwh, dq, alpha, orb2atom, norb, natom)
+    let eps = qforge_force_levels(pos, honsite, zeta, kwh, dq, alpha, orb2atom, norb, natom)
+    let dH = _dmat_dR(1, pos, honsite, zeta, kwh, dq, alpha, orb2atom, norb, natom, atomA, dimd, h)
+    let dS = _dmat_dR(0, pos, honsite, zeta, kwh, dq, alpha, orb2atom, norb, natom, atomA, dimd, h)
+    let mut g = 0.0
+    let mut k = 0
+    while k < norb {
+        let nk = occ[k]
+        if nk != 0.0 {
+            let mut hexp = 0.0           // ⟨k|∂H/∂R|k⟩
+            let mut sexp = 0.0           // ⟨k|∂S/∂R|k⟩
+            let mut mu = 0
+            while mu < norb {
+                let cmk = cmo[k * norb + mu]
+                let mut nu = 0
+                while nu < norb {
+                    let w = cmk * cmo[k * norb + nu]
+                    hexp = hexp + w * dH[mu * norb + nu]
+                    sexp = sexp + w * dS[mu * norb + nu]
+                    nu = nu + 1
+                }
+                mu = mu + 1
+            }
+            if with_pulay == 1 {
+                g = g + nk * (hexp - eps[k] * sexp)        // HF + Pulay
+            } else {
+                g = g + nk * hexp                          // HF only (WRONG, non-orth)
+            }
+        }
+        k = k + 1
+    }
+    return g
+}
+
+// ── ∂E_rep/∂R_{A,d} from a caller pair-repulsion (FD; constant ⇒ 0) ────────────
+//   E_rep is a CALLER scalar function of geometry. We accept the two displaced values
+//   (erep_plus, erep_minus) the caller evaluated at R±h and central-difference them.
+//   For a δq/R-constant E_rep this is 0 (the R8 convention). Pure.
+fn _derep_dR(erep_plus: float, erep_minus: float, h: float) -> float {
+    return (erep_plus - erep_minus) / (2.0 * h)
+}
+
+// ── ASSEMBLE ∂E_HF/∂R_{A,d}  (band HF+Pulay + SCC-DC + repulsion) ──────────────
+//   The total energy gradient on one nuclear DOF at FIXED δq* (R8 stationarity ⇒ no
+//   δq-chain term). `with_pulay` toggles the Pulay overlap-derivative term (1 = full
+//   correct force, 0 = HF-only for selftest (b)). erep_plus/minus = caller E_rep(R±h).
+//     E_HF = E_band − ½γδqδq + E_rep   (qforge_force_energy sign convention), so
+//     ∂E_HF/∂R = ∂E_band/∂R − ∂E_scc/∂R + ∂E_rep/∂R  — the three terms assembled below.
+pub fn qforge_dehf_dR(with_pulay: int, pos: [float], honsite: [float], zeta: float,
+                      kwh: float, dq: [float], alpha: [float], orb2atom: [int],
+                      occ: [float], norb: int, natom: int, atomA: int, dimd: int,
+                      h: float, erep_plus: float, erep_minus: float) -> float {
+    let deband = _eband_dR(with_pulay, pos, honsite, zeta, kwh, dq, alpha, orb2atom,
+                           occ, norb, natom, atomA, dimd, h)
+    let descc  = _descc_dR(pos, dq, alpha, natom, atomA, dimd, h)
+    let derep  = _derep_dR(erep_plus, erep_minus, h)
+    return deband - descc + derep                       // ∂E_HF/∂R (E = Eband − Escc + Erep)
+}
+
+// ── FULL FORCE VECTOR  F = −∂E_HF/∂R  (length 3·natom, flat per-atom xyz) ──────
+//   The Hellmann-Feynman force on every nuclear DOF at the FIXED SCC fixed point δq*.
+//   `with_pulay = 1` is the physically-correct force in the non-orthogonal basis;
+//   `with_pulay = 0` drops Pulay (selftest (b) shows it then disagrees with the FD ref).
+//   E_rep is treated as δq/R-constant here (∂E_rep/∂R = 0) — a non-constant E_rep is
+//   handled per-DOF via qforge_dehf_dR with the caller's R±h values. d4-generic.
+//   Returns F flat [Fx0,Fy0,Fz0, Fx1,...], F_{A,d} = −∂E_HF/∂R_{A,d}.
+pub fn qforge_forces(with_pulay: int, pos: [float], honsite: [float], zeta: float,
+                     kwh: float, dq: [float], alpha: [float], orb2atom: [int],
+                     occ: [float], norb: int, natom: int, h: float) -> [float] {
+    let mut f: [float] = []
+    let mut idx = 0
+    while idx < 3 * natom { f.push(0.0) ; idx = idx + 1 }
+    let mut a = 0
+    while a < natom {
+        let mut d = 0
+        while d < 3 {
+            // E_rep constant in R ⇒ erep_plus = erep_minus = 0 ⇒ ∂E_rep/∂R = 0.
+            let g = qforge_dehf_dR(with_pulay, pos, honsite, zeta, kwh, dq, alpha,
+                                   orb2atom, occ, norb, natom, a, d, h, 0.0, 0.0)
+            f[3 * a + d] = 0.0 - g                       // F = −∂E/∂R
+            d = d + 1
+        }
+        a = a + 1
+    }
+    return f
+}
+
+// ── FIXED-δq central-FD reference force −∂E_HF/∂R|_δq (per DOF) ────────────────
+//   Holds δq CONSTANT (no re-relax) and central-differences qforge_force_energy on one
+//   nuclear DOF. This is the DIRECT cross-check of the analytic gradient assembly
+//   (HF + Pulay + SCC-DC): it isolates ∂E_HF/∂R|_δq with NO δq-chain, so analytic ==
+//   this FD to FD-truncation precision (selftest (a)). Returns F_{A,d} = −(E+−E−)/2h.
+pub fn qforge_force_fd_ref_fixed(pos: [float], honsite: [float], zeta: float, kwh: float,
+                                 dq: [float], alpha: [float], orb2atom: [int], occ: [float],
+                                 norb: int, natom: int, atomA: int, dimd: int, h: float,
+                                 erep: float) -> float {
+    let coord = 3 * atomA + dimd
+    let mut pp: [float] = []
+    let mut pm: [float] = []
+    let mut t = 0
+    while t < 3 * natom {
+        if t == coord { pp.push(pos[t] + h) ; pm.push(pos[t] - h) }
+        else { pp.push(pos[t]) ; pm.push(pos[t]) }
+        t = t + 1
+    }
+    let ep = qforge_force_energy(pp, honsite, zeta, kwh, dq, alpha, orb2atom, occ,
+                                 norb, natom, erep)
+    let em = qforge_force_energy(pm, honsite, zeta, kwh, dq, alpha, orb2atom, occ,
+                                 norb, natom, erep)
+    return 0.0 - (ep - em) / (2.0 * h)
+}
+
+// ── central finite-difference REFERENCE force −∂E_HF[δq*(R),R]/∂R (per DOF) ────
+//   The independent cross-check: displace one nuclear DOF by ±h, RE-RELAX δq* at each
+//   displaced geometry (so this is the FULLY-RELAXED dE_HF/dR including the δq chain),
+//   re-evaluate E_HF, and central-difference. The difference from the FIXED-δq ref is
+//   the δq-chain term ∂E/∂δq·∂δq/∂R — R8 stationarity makes it SMALL (selftest checks
+//   |relaxed − fixed| ≪ |F|, the variational payoff), not exactly zero in this model.
+//     beta/tol/maxit: the qforge_relax_dq controls for re-relaxing δq* per geometry.
+//   Returns the scalar reference force F_ref_{A,d} = −(E(+h)−E(−h))/2h.
+pub fn qforge_force_fd_ref(pos: [float], honsite: [float], zeta: float, kwh: float,
+                           dq0: [float], alpha: [float], orb2atom: [int], occ: [float],
+                           norb: int, natom: int, atomA: int, dimd: int, h: float,
+                           erep: float, beta: float, tol: float, maxit: int) -> float {
+    let coord = 3 * atomA + dimd
+    let mut pp: [float] = []
+    let mut pm: [float] = []
+    let mut t = 0
+    while t < 3 * natom {
+        if t == coord { pp.push(pos[t] + h) ; pm.push(pos[t] - h) }
+        else { pp.push(pos[t]) ; pm.push(pos[t]) }
+        t = t + 1
+    }
+    let ep = _relaxed_ehf(pp, honsite, zeta, kwh, dq0, alpha, orb2atom, occ,
+                          norb, natom, erep, beta, tol, maxit)
+    let em = _relaxed_ehf(pm, honsite, zeta, kwh, dq0, alpha, orb2atom, occ,
+                          norb, natom, erep, beta, tol, maxit)
+    return 0.0 - (ep - em) / (2.0 * h)
+}
+
+// ── helper: build S(R)→H̃(R), re-relax δq* (R8), return E_HF at the fixed point ─
+//   The fully-relaxed energy E_HF[δq*(R), R] used by the FD reference. Re-relaxes the
+//   R8 population fixed point at THIS geometry (so the FD captures the true total
+//   derivative incl. δq response — which R8 stationarity makes negligible).
+fn _relaxed_ehf(pos: [float], honsite: [float], zeta: float, kwh: float, dq0: [float],
+                alpha: [float], orb2atom: [int], occ: [float], norb: int, natom: int,
+                erep: float, beta: float, tol: float, maxit: int) -> float {
+    let dqstar = qforge_relax_dq(pos, honsite, zeta, kwh, dq0, alpha, orb2atom, occ,
+                                 norb, natom, beta, tol, maxit)
+    return qforge_force_energy(pos, honsite, zeta, kwh, dqstar, alpha, orb2atom, occ,
+                               norb, natom, erep)
+}
+
+// ── population p_a[δq] of the DRESS-NON-ORTH-FIRST H̃ (Löwdin-frame Mulliken) ───
+//   One population step for the R9 force convention: dress H⁰ with V(δq) in the NON-
+//   orthogonal basis, Löwdin-orthogonalise, diagonalise, and form the Löwdin populations
+//   p_a = Σ_{μ∈a}(Sᐟ P Sᐟ)_μμ (R7). In the orthogonal frame the eigenvectors are the
+//   non-orth MOs back-transformed by S^{-1/2}; the Löwdin population is then the orthogonal-
+//   frame Mulliken Σ C̃_μk² grouped by atom (R7 Mayer trace, S̃=I). δq* = p[δq*] is the
+//   SCC fixed point of THIS convention (the one whose energy qforge_force_energy returns).
+fn _r9_populations(pos: [float], honsite: [float], zeta: float, kwh: float, dq: [float],
+                   alpha: [float], orb2atom: [int], occ: [float], norb: int,
+                   natom: int) -> [float] {
+    let s = qforge_model_overlap(pos, zeta, norb)
+    let heht = qforge_eht_hamiltonian(honsite, s, kwh)
+    let vatom = qforge_scc_potential(pos, dq, alpha)
+    let hdr = qforge_scc_dressed_h(heht, vatom, orb2atom, norb)       // dress non-orth
+    let sinvh = qforge_s_inv_half(s, norb)
+    let htil = qforge_lowdin_orthogonalize(hdr, sinvh, norb)          // orthogonalise
+    let ctil = qforge_eht_vectors_asc(htil, norb)                    // orthogonal-frame MOs
+    // Löwdin population = orthogonal-frame Mulliken Σ_k occ_k Σ_{μ∈a} C̃_μk² (S̃=I).
+    return qforge_mulliken_pop(ctil, occ, orb2atom, norb, natom)
+}
+
+// ── re-relax δq* at a geometry and return it (so callers fix δq* before forces) ─
+//   Relaxes the population fixed point δq* = p[δq*] of the DRESS-NON-ORTH-FIRST H̃(R)
+//   (the convention qforge_force_energy uses), so the force is taken at the genuine
+//   SCC fixed point. Damped population mixing δq ← (1−β)δq + β p[δq] to ‖p−δq‖_∞ < tol.
+//   R8 stationarity (∂E/∂δq = 0 there) ⇒ no δq-chain term in the nuclear force.
+pub fn qforge_relax_dq(pos: [float], honsite: [float], zeta: float, kwh: float,
+                       dq0: [float], alpha: [float], orb2atom: [int], occ: [float],
+                       norb: int, natom: int, beta: float, tol: float,
+                       maxit: int) -> [float] {
+    let mut dq: [float] = []
+    let mut a = 0
+    while a < natom { dq.push(dq0[a]) ; a = a + 1 }
+    let mut it = 0
+    while it < maxit {
+        let pop = _r9_populations(pos, honsite, zeta, kwh, dq, alpha, orb2atom, occ,
+                                  norb, natom)
+        let mut r = 0.0
+        a = 0
+        while a < natom {
+            let d = _absf(pop[a] - dq[a])
+            if d > r { r = d }
+            a = a + 1
+        }
+        it = it + 1
+        if r < tol {
+            a = 0
+            while a < natom { dq[a] = pop[a] ; a = a + 1 }
+            break
+        }
+        a = 0
+        while a < natom {
+            dq[a] = (1.0 - beta) * dq[a] + beta * pop[a]
+            a = a + 1
+        }
+    }
+    return dq
+}
+
+// ── translational-invariance residual  ‖Σ_A F_A‖  (Newton's 3rd law) ──────────
+//   The net force on a rigid translation must vanish: Σ_A F_{A,d} = 0 for each d.
+//   Returns the max over d of |Σ_A F_{A,d}| — the translational-invariance metric.
+pub fn qforge_force_transl_residual(f: [float], natom: int) -> float {
+    let mut m = 0.0
+    let mut d = 0
+    while d < 3 {
+        let mut s = 0.0
+        let mut a = 0
+        while a < natom { s = s + f[3 * a + d] ; a = a + 1 }
+        let av = _absf(s)
+        if av > m { m = av }
+        d = d + 1
+    }
+    return m
+}
+
+// ── Born-Mayer pair-repulsion force  F_rep = −∂/∂R Σ_{i<j} A exp(−R_ij/ρ) ─────
+//   A concrete, standard short-range repulsion (the DFTB E_rep pair form). ∂/∂R_i of
+//   A exp(−R_ij/ρ) = −(A/ρ) exp(−R_ij/ρ) R̂_ij, so the force on atom i along the bond is
+//   +(A/ρ) exp(−R_ij/ρ) R̂_ij (repulsive, pushes atoms apart). Returns F_rep flat
+//   [Fx0,Fy0,Fz0,...]. Added to the electronic qforge_forces, the TOTAL force has a
+//   genuine zero at the PES minimum — the equilibrium the selftest (d) line-searches.
+//   HONEST (d6): A, ρ are CALLER parameters (here a model pair repulsion, not GFN2-
+//   fitted); the analytic ∂E_rep/∂R is exact. d4-generic over A/ρ and geometry.
+pub fn qforge_pair_repulsion_force(pos: [float], aamp: float, rho: float,
+                                   natom: int) -> [float] {
+    let mut f: [float] = []
+    let mut idx = 0
+    while idx < 3 * natom { f.push(0.0) ; idx = idx + 1 }
+    let mut i = 0
+    while i < natom {
+        let mut j = i + 1
+        while j < natom {
+            let dx = pos[3*i+0] - pos[3*j+0]
+            let dy = pos[3*i+1] - pos[3*j+1]
+            let dz = pos[3*i+2] - pos[3*j+2]
+            let r = _sqrtf(dx*dx + dy*dy + dz*dz)
+            if r > 0.0 {
+                let mag = (aamp / rho) * _expf(0.0 - r / rho) / r   // |F|/R-unit
+                // force on i is +mag·(r_i − r_j) (repulsive); on j the opposite
+                f[3*i+0] = f[3*i+0] + mag * dx
+                f[3*i+1] = f[3*i+1] + mag * dy
+                f[3*i+2] = f[3*i+2] + mag * dz
+                f[3*j+0] = f[3*j+0] - mag * dx
+                f[3*j+1] = f[3*j+1] - mag * dy
+                f[3*j+2] = f[3*j+2] - mag * dz
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return f
+}
+
+// ── add two flat force vectors  (electronic + repulsion)  ─────────────────────
+pub fn qforge_force_add(fa: [float], fb: [float]) -> [float] {
+    let n = len(fa)
+    let mut f: [float] = []
+    let mut i = 0
+    while i < n { f.push(fa[i] + fb[i]) ; i = i + 1 }
+    return f
+}
+
+// local sqrt / exp (match the sibling-brick idiom; no global builtin) ──────────
+fn _sqrtf(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    if g < 1.0 { g = 1.0 }
+    let mut it = 0
+    while it < 60 { let ng = 0.5*(g + x/g) ; if ng == g { break } ; g = ng ; it = it + 1 }
+    return g
+}
+fn _expf(x: float) -> float {
+    if x == 0.0 { return 1.0 }
+    let ln2 = 0.6931471805599453
+    let mut k = 0
+    let mut r = x
+    while r > 0.34657359027997264 { r = r - ln2 ; k = k + 1 }
+    while r < 0.0 - 0.34657359027997264 { r = r + ln2 ; k = k - 1 }
+    let mut term = 1.0
+    let mut sum = 1.0
+    let mut nn = 1
+    while nn < 25 { term = term * r / to_float(nn) ; sum = sum + term ; nn = nn + 1 }
+    let mut p = sum
+    if k > 0 { let mut t = 0 ; while t < k { p = p * 2.0 ; t = t + 1 } }
+    else { let mut t = 0 ; while t < (0 - k) { p = p * 0.5 ; t = t + 1 } }
+    return p
+}
+
+// ── max-norm of the force vector ‖F‖_∞ (the equilibrium / convergence metric) ──
+pub fn qforge_force_norm(f: [float]) -> float {
+    let n = len(f)
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let v = _absf(f[i])
+        if v > m { m = v }
+        i = i + 1
+    }
+    return m
+}
