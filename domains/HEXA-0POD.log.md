@@ -1,5 +1,40 @@
 # HEXA-0POD — log
 
+## 2026-06-12 — OP-37b DONE: host-atof residual cured — computed const-folds re-parse operands via correctly-rounded strtod (3→1 ULP, fixpoint byte-identical) · $0 · 0-pod
+- SURVEY-FIRST (mandatory). Read OP-37's verdict (.verdicts/hexa-0pod/F-OP37-FLOAT-CONSTFOLD-VERIFY.txt) + the landed
+  fix in self/codegen.hexa (_cf_float_node / _cf_negate_float_text / comptime_eval float BinOp folds), then traced
+  to_float: const-folder `_cf_as_float` (codegen.hexa:9874) calls `to_float(lit.value)` → emitted C
+  `hexa_float(__hx_to_double(...))` → __hx_to_double(STR) → `hxlcl_atof` (runtime.c:270). CONFIRMED hxlcl_atof is the
+  naive accumulator (n=n*10.0+d; frac*=0.1; exp via repeated *10) — NOT correctly-rounded.
+- CHARACTERIZE (measured, NOT assumed). Built two hexats from CURRENT source via tool/regen_cc_manual (HEXA_V2=Jun-8
+  ~/.hx/bin/build/hexat) → clang. Self-contained /tmp/op37b_const.hexa forces COMPUTED comptime-const folds (re-parse
+  operands then `*`/`+`/`/`, NOT the pass-through negation OP-37 fixed); f64_to_bytes_le byte dump vs python
+  struct.pack('<d', A op B). BEFORE (OP-37 source): MAX 3 ULP — `0.254829592 * 0.284496736` = 3 ULP (both operands
+  1 ULP off), `1.421413741 * 0.5` = 1 ULP. Real on current source, reproduced on from-source rebuild — not a ghost.
+- ROOT CAUSE (two parse paths). The host runtime has BOTH `to_float`→hxlcl_atof (naive, lossy) AND
+  `str.parse_float()`→hexa_str_parse_float→libc `strtod` (runtime.c:3034, C-standard CORRECTLY-ROUNDED). _cf_as_float
+  used the lossy one. (hxlcl_atof's C body lives only in the untracked build-assembled self/runtime.c bootstrap
+  substrate — NOT tracked-source-editable; self/runtime.hexa is a marker. So Eisel-Lemire/strtod-reimpl is neither
+  needed nor in-tree.)
+- DECIDE (g0 Occam, option (a)). The simplest correct fix is to route the const-folder operand parse through the
+  ALREADY-PRESENT correctly-rounded strtod path — one expression in tracked source, no runtime edit, no new parser.
+- FIX (self/codegen.hexa, additive, no deletions). (1) `_cf_as_float`: FloatLit parses via `lit.value.parse_float()`
+  (→ hexa_str_parse_float → strtod) instead of `to_float(lit.value)`; IntLit branch unchanged (integers agree). (2)
+  `abs` float-fold (comptime_eval Call path): preserve EXACT operand source text (abs = same magnitude, sign stripped)
+  instead of to_float-parse + re-serialize — the one remaining direct to_float site in the computed-fold family.
+- AFTER (measured): MAX 3→1 ULP. Operands now byte-EXACT vs python correctly-rounded doubles (a=0.254829592 bits
+  4598262221740202622, b=0.284496736 bits 4598796657494856809 — both exact). The lone remaining 1 ULP on `a*b` is the
+  host comptime `*` (rt_mul) rounding 1 ULP differently from clang's own fold (clang gives .555e compile-time AND
+  runtime; hexat comptime gives .555f) — a comptime-vs-runtime HOST-MULTIPLY parity question, NOT a parse error,
+  separate + smaller, logged out of scope.
+- SELF-HOST FIXPOINT GREEN (paramount). Fixed hexat re-compiling fixed SSOT → gen-N==gen-N+1 C BYTE-IDENTICAL
+  (cmp hexa_cc v2.c==v3.c parse_float-only; v4.c==v5.c with +abs, 2098186 B both) + object byte-identical
+  (v2.o==v3.o). Embedded self/type_checker self-tests 15/15 PASS each regen. OP-37 negation idiom regression byte-
+  exact (0.0-0.254829592 → -0.254829592 exact text); abs regression byte-exact (abs(0.254829592)→0.254829592,
+  abs(0.0-1.421413741)→1.421413741). The patch is fixpoint-stable; CI selfhost gen3→gen4 byte-eq not at risk.
+- Milestone OP-37b flipped [x]. Verdict .verdicts/hexa-0pod/F-OP37B-HOST-ATOF-CORRECT-ROUND.txt.
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
 ## 2026-06-12 — OP-38 DONE: deterministic checkpoint (ckpt_lib FCK v1) reflected into the determinism contract + dojo recipe (DOCS-ONLY · $0 · 0-pod)
 - SURVEY-FIRST (mandatory). Read the SSOTs before touching: docs/flame-determinism-contract.md (CONFIRMED it already
   has an accurate CHECKPOINT row + "what breaks it" bullet from OP-35 — REFINE not duplicate), docs/hexa-dojo.md (the

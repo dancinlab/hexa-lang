@@ -9871,8 +9871,16 @@ fn _make_bool_lit_node(b) {
 }
 
 // Extract numeric value as float (safe for mixed int/float arithmetic).
+//
+// HEXA-0POD OP-37b: parse the literal TEXT via `str.parse_float()`
+// (`hexa_str_parse_float` → libc `strtod`, C-standard CORRECTLY-ROUNDED)
+// instead of `to_float` (`__hx_to_double` → the naive `hxlcl_atof` digit-
+// accumulator, which lands the operand up to 1 ULP off the true value and
+// compounds to ~3 ULP through a computed fold — OP-37's measured residual).
+// `to_float` and `parse_float` agree for the integer branch (no fraction to
+// mis-round), so only the FloatLit text needs the correctly-rounded path.
 fn _cf_as_float(lit) {
-    if lit.kind == "FloatLit" { return to_float(lit.value) }
+    if lit.kind == "FloatLit" { return lit.value.parse_float() }
     return to_float(to_string(to_int(lit.value)))
 }
 
@@ -10094,10 +10102,14 @@ fn comptime_eval(node) {
                     let ar = if iv < 0 { -iv } else { iv }
                     return _make_int_lit_node(to_string(ar))
                 }
-                // Float abs — emit float literal; negative sign handled via subtract.
-                let fv = to_float(a.value)
-                let fr = if fv < 0.0 { 0.0 - fv } else { fv }
-                return _cf_float_node(fr)
+                // Float abs — preserve the operand's EXACT source text (abs of a
+                // literal is the same magnitude, sign stripped), so no lossy
+                // parse/re-serialize. HEXA-0POD OP-37b: matches the OP-37
+                // additive-identity discipline; byte-exact, no host-atof error.
+                if len(a.value) > 0 && a.value.char_at(0) == "-" {
+                    return _make_float_lit_node(a.value.substring(1, len(a.value)))
+                }
+                return a
             }
             if fname == "sqrt" {
                 // sqrt of negatives undefined → silent skip.

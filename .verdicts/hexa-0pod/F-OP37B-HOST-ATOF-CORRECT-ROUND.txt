@@ -1,0 +1,184 @@
+F-OP37B-HOST-ATOF-CORRECT-ROUND — the OP-37 host-atof residual: computed float
+                                  const-folds re-parse operands 1 ULP off (naive
+                                  hxlcl_atof) → FIXED by routing the const-folder
+                                  operand parse through libc strtod (parse_float)
+══════════════════════════════════════════════════════════════════════════════
+DATE: 2026-06-12 · HEXA-0POD OP-37b · 0-pod ($0, NO GPU, NO vast, NO pod)
+HOST: local arm64-macos (Darwin 25.5.0), CPU-only
+STATUS: GREEN — 🟢 the OP-37 documented residual is REAL and MEASURED at MAX 3 ULP
+        on the CURRENT source; cured to MAX 1 ULP (operands now byte-exact) by the
+        g0/g4 minimal fix: route the const-folder operand parse through the already-
+        present correctly-rounded `str.parse_float()` (→ libc strtod) instead of
+        `to_float` (→ the naive `hxlcl_atof` digit-accumulator). Self-host fixpoint
+        stays BYTE-IDENTICAL (gen-N == gen-N+1, object byte-identical).
+
+────────────────────────────────────────────────────────────────────────────
+THE RESIDUAL (decisive — flagged by OP-37 / PR #3069 HONEST RESIDUALS §1)
+────────────────────────────────────────────────────────────────────────────
+OP-37 fixed the `0.0 - <float literal>` NEGATION idiom byte-exact by preserving
+the operand's exact source TEXT (additive-identity special-cases). It left a
+documented residual: folds that actually COMPUTE a new value from RE-PARSED
+operands (e.g. `let a = 1.5 * 0.1`) re-parse via `to_float` → `__hx_to_double`
+→ `hxlcl_atof`, a naive digit-accumulator (n=n*10+d; frac*=0.1), NOT a
+correctly-rounded strtod. OP-37 narrowed the SERIALIZE side to %.17e but left
+the PARSE side at ≤1 ULP per operand. OP-37b asks: is it real on current source,
+how large exactly, and is a correctly-rounded host parse tractable without
+breaking the self-host byte-eq fixpoint?
+
+────────────────────────────────────────────────────────────────────────────
+TOOLCHAINS (provenance — clearly labeled)
+────────────────────────────────────────────────────────────────────────────
+· FRESHEST hexat   ~/.hx/bin/build/hexat (Jun-8 01:17, 2027336 B) — C-transpile
+                   self-hosted compiler. The v2 DRIVER for the from-source rebuild.
+· hexat_op37b (v1) /tmp — current-repo source (codegen.hexa UNCHANGED) rebuilt via
+                   tool/regen_cc_manual (HEXA_V2=Jun-8 hexat) → clang. Confirms the
+                   OP-37 SERIALIZE fix is in source (%.17e), measures the PARSE
+                   residual = MAX 3 ULP.
+· hexat_op37b_v2  /tmp — current-repo source + the OP-37b patch (parse_float route)
+   /v4            rebuilt the same way. Measures the cured residual = MAX 1 ULP +
+                   proves the self-host fixpoint byte-identical.
+
+────────────────────────────────────────────────────────────────────────────
+MEASUREMENT (self-contained /tmp/op37b_const.hexa — computed comptime CONSTS,
+re-parse operands then arithmetic; dumps IEEE-754 LE bytes via f64_to_bytes_le.
+Each `let cN = A op B` folds at codegen time, then inline-substitutes the value)
+────────────────────────────────────────────────────────────────────────────
+Emitted C const (FloatLit text the C compiler then parses correctly-rounded) vs
+python ground truth `struct.pack('<d', A_dbl op B_dbl)` (operands = correctly-
+rounded doubles). ULP = abs bit difference.
+
+BEFORE (hexat_op37b v1 — OP-37 source, to_float/hxlcl_atof parse):
+  M 1.5 * 0.1             1.50000000000000018e-01   ULP=0
+  M 1.421413741 * 0.5     7.10706870499999965e-01   ULP=1   ← operand off
+  M 0.254829592*0.284…    7.24981871602117334e-02   ULP=3   ← both operands off
+  A 0.1 + 0.2             3.00000000000000044e-01   ULP=0
+  A 1.421413741+1.453…    2.87456576800000008e+00   ULP=0
+  D 1.0 / 3.0             3.33333333333333304e-01   ULP=0
+  MAX ULP = 3  (real, reproduced on CURRENT source — NOT a stale ghost)
+
+AFTER (hexat_op37b_v2 — OP-37b patch, str.parse_float()/strtod parse):
+  M 1.5 * 0.1             1.50000000000000018e-01   ULP=0
+  M 1.421413741 * 0.5     7.10706870500000054e-01   ULP=0   ← operand now exact
+  M 0.254829592*0.284…    7.24981871602117067e-02   ULP=1   ← operands exact
+  A 0.1 + 0.2             3.00000000000000044e-01   ULP=0
+  A 1.421413741+1.453…    2.87456576800000008e+00   ULP=0
+  D 1.0 / 3.0             3.33333333333333304e-01   ULP=0
+  MAX ULP = 1
+
+The PARSE error is FULLY cured: each re-parsed operand now matches python's
+correctly-rounded double BIT-FOR-BIT (verified: operand a=0.254829592 bits
+4598262221740202622, b=0.284496736 bits 4598796657494856809 — both exact).
+The remaining 1 ULP on the `a*b` PRODUCT is NOT a parse error — it is the host
+running-hexat `*` (rt_mul) rounding the product 1 ULP differently from clang's
+own fold of `(0.254829592)*(0.284496736)` (clang gives .555e at both -O0/-O2
+compile-time AND runtime; hexat's comptime rt_mul gives .555f). That is a
+comptime-vs-runtime HOST-MULTIPLY consistency question, a DIFFERENT and much
+smaller surface than "host atof correct-round" — OUT OF SCOPE here, logged below.
+
+────────────────────────────────────────────────────────────────────────────
+ROOT CAUSE (the two parse paths in the runtime — the smoking gun)
+────────────────────────────────────────────────────────────────────────────
+The compiler's const-folder ran in the hexat host binary. The host runtime has
+TWO string→double paths:
+  · `to_float(x)` → `__hx_to_double(STR)` → `hxlcl_atof(HX_STR(v))`
+       hxlcl_atof = NAIVE accumulator (runtime.c:270, n=n*10.0+d; frac*=0.1;
+       exp via repeated *10.0) — NOT correctly-rounded, up to 1 ULP off.
+  · `str.parse_float()` → `hexa_str_parse_float(STR)` → `strtod(HX_STR(s),NULL)`
+       (runtime.c:3034) — C-standard CORRECTLY-ROUNDED.
+`_cf_as_float` (self/codegen.hexa:9874) used `to_float(lit.value)` — the lossy
+path. Routing the FloatLit text through `parse_float()` selects the correctly-
+rounded strtod path that already exists in the SAME runtime.
+
+WHY this is the g0/g4 winner (Occam): hxlcl_atof's C body lives only in the
+untracked, build-time-assembled `self/runtime.c` (gitignored; `self/runtime.hexa`
+is the marker SSOT, and the hxlcl_atof body is part of the irreducible C
+bootstrap substrate — NOT editable from tracked repo source). So fixing
+hxlcl_atof itself, or porting Eisel-Lemire, would touch a non-tracked foundation
+file and is unnecessary: the correctly-rounded strtod path is ALREADY present
+and is selected purely by which tracked-source codegen builtin the folder calls.
+The fix is one expression in self/codegen.hexa — no runtime edit, no new algo.
+
+────────────────────────────────────────────────────────────────────────────
+THE FIX (self/codegen.hexa — additive, minimal, no deletions)
+────────────────────────────────────────────────────────────────────────────
+1. `_cf_as_float(lit)` — for a FloatLit, parse via `lit.value.parse_float()`
+   (→ hexa_str_parse_float → strtod, correctly-rounded) instead of
+   `to_float(lit.value)` (→ hxlcl_atof). The IntLit branch is unchanged
+   (to_float and parse_float agree on integers — no fraction to mis-round).
+   Cures the computed-fold operand parse for * / + - and sqrt/min/max
+   (all reach operands through _cf_as_float).
+2. `abs` float fold (comptime_eval Call path) — preserve the operand's EXACT
+   source text (abs of a literal is the same magnitude, sign stripped) instead
+   of `to_float`-parse + `_cf_float_node`-reserialize. Byte-exact, matching
+   the OP-37 additive-identity discipline. (Was the one remaining direct
+   `to_float(a.value)` site in the computed-fold family.)
+
+────────────────────────────────────────────────────────────────────────────
+SELF-HOST FIXPOINT (paramount — must stay byte-identical) — GREEN
+────────────────────────────────────────────────────────────────────────────
+· gen-N C  : hexat_op37b_v2 (built by Jun-8 hexat from PATCHED source) re-
+             transpiles the 4 SSOT modules → /tmp/hexa_cc_op37b_v3.c.
+· gen-N+1 C: cmp /tmp/hexa_cc_op37b_v2.c /tmp/hexa_cc_op37b_v3.c → BYTE-IDENTICAL.
+· With BOTH edits (parse_float + abs): hexat_op37b_v4 → /tmp/hexa_cc_op37b_v5.c
+             vs /tmp/hexa_cc_op37b_v4.c → BYTE-IDENTICAL (2098186 B both).
+· Object   : cmp hexa_cc_op37b_v2.o hexa_cc_op37b_v3.o → OBJ BYTE-IDENTICAL.
+· Self-tests: self/type_checker.hexa embedded 15/15 PASS on every regen.
+The patch is fixpoint-STABLE: the fixed compiler compiling the fixed source
+reproduces itself bit-for-bit. CI selfhost gen3→gen4 byte-eq + miscompile-zero
++ determinism gates are not at risk.
+
+────────────────────────────────────────────────────────────────────────────
+REGRESSION — OP-37 NEGATION idiom stays BYTE-EXACT (untouched)
+────────────────────────────────────────────────────────────────────────────
+/tmp/op37_negcheck.hexa via the fixed hexat:
+  let a2 = 0.0 - 0.254829592  → emitted  hexa_float(-0.254829592)   (exact text)
+  let a4 = 0.0 - 1.421413741  → emitted  hexa_float(-1.421413741)   (exact text)
+The `_cf_negate_float_text` + additive-identity special-cases are unchanged;
+the negation idiom that triggered OP-36/OP-37 remains max|Δ|=0.
+abs regression: abs(0.254829592) → 0.254829592 (exact), abs(0.0 - 1.421413741)
+→ 1.421413741 (exact) — both byte-exact source-text now.
+
+────────────────────────────────────────────────────────────────────────────
+TIER VERDICT (g5)
+────────────────────────────────────────────────────────────────────────────
+🟢 GREEN. The OP-37 residual is REAL and MEASURED at MAX 3 ULP on current
+source (operands 1 ULP off, compounding). Fixed via the smallest correct
+change — route the const-folder operand parse through the already-present
+correctly-rounded strtod path (`str.parse_float()`), no runtime edit, no new
+parser. Operands are now byte-exact; residual drops to MAX 1 ULP. Self-host
+fixpoint proven byte-identical (gen-N==gen-N+1 C + object), OP-37 negation
+idiom + abs verified byte-exact, embedded self-tests 15/15. Evidence is the
+verbatim f64_to_bytes_le byte dumps + cmp results above (self-measured).
+
+HONEST RESIDUALS (logged, NOT a half-fix)
+· The remaining MAX 1 ULP on COMPUTED products is the host comptime `*`/`/`
+  (rt_mul/rt_div) rounding 1 ULP differently from clang's own fold of the same
+  expression — a comptime-vs-runtime HOST-ARITHMETIC consistency question, NOT
+  a parse error (operands are now byte-exact). It is a separate, smaller surface
+  (host float-op rounding parity) and is OUT OF SCOPE for "host atof correct-
+  round". Note: most real const-folds in stdlib are the additive/negation idioms
+  OP-37 already made byte-exact (0 ULP); the 1-ULP product residual only bites
+  genuine compile-time `*`/`/` of two non-trivial float literals — rare.
+· The hxlcl_atof naive accumulator is LEFT as-is: its C body is in the untracked
+  build-time-assembled self/runtime.c (bootstrap substrate, not tracked) and
+  fixing it is unnecessary given the strtod path already exists. Other callers of
+  `to_float`-on-string outside the const-folder (anima_bridge, ai_native_pass,
+  consciousness_bridge) keep the old path — they are runtime data parses, not
+  determinism-sensitive const-folds, and out of OP-37b's const-folder scope.
+· The promoted `hexa run` CLI still delegates to the Jun-7 shipped dispatch
+  binary; landing the fix into the DEPLOYED toolchain is a separate promote/
+  rebuild step (this verdict fixes REPO SOURCE + proves it on a from-source
+  rebuild + fixpoint). Same boundary OP-37 noted.
+
+PROVENANCE
+  residual repro: /tmp/op37b_const.hexa (computed comptime-const folds, byte dump)
+  measure:        emitted C FloatLit vs python struct.pack('<d', A op B)
+  fix:            self/codegen.hexa — _cf_as_float (parse_float route) + abs
+                  float-fold exact-text (comptime_eval Call path)
+  rebuild:        tool/regen_cc_manual (HEXA_V2=~/.hx/bin/build/hexat) → clang →
+                  /tmp/hexat_op37b_v2 (parse_float only) and v4 (+abs)
+  fixpoint:       cmp /tmp/hexa_cc_op37b_v2.c v3.c (v2-fixed self-recompile) and
+                  v4.c v5.c (v4-fixed self-recompile) → BYTE-IDENTICAL; v2.o==v3.o
+  ground:         python struct.pack('<d', ...) IEEE-754 LE bytes
+  pattern:        project_local_hexa_stale_oracle — measured on from-source rebuild
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.

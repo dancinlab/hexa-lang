@@ -10,6 +10,22 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-37B-HOST-ATOF-CORRECT-ROUND (unique anchor — OP-37 (#3069) fixed the `0.0 - X` NEGATION idiom byte-exact by preserving operand source TEXT, but left a documented residual: folds that COMPUTE a value from RE-PARSED operands (e.g. `let a = 1.5 * 0.1`) re-parse via to_float→hxlcl_atof, a naive digit-accumulator 1 ULP off the correctly-rounded value. OP-37b settles whether a correctly-rounded host parse is tractable WITHOUT risking the self-host byte-eq fixpoint: measure the residual exactly on from-source rebuild, then find the smallest correct fix) -->
+- [x] **OP-37b — host-atof residual: computed const-folds re-parse operands 1 ULP off → FIXED via correctly-rounded strtod route (parse_float); fixpoint byte-identical** —
+  🟢 the OP-37 residual is REAL on CURRENT source: MEASURED MAX 3 ULP (operands 1 ULP off via to_float/hxlcl_atof,
+  compounding through `*`) on a from-source rebuild (NOT assumed). ROOT CAUSE = the host runtime has TWO string→double
+  paths: `to_float`→__hx_to_double→`hxlcl_atof` (naive n=n*10+d accumulator, NOT correctly-rounded) vs
+  `str.parse_float()`→hexa_str_parse_float→libc `strtod` (C-standard correctly-rounded) — `_cf_as_float` used the lossy
+  one. FIX (g0/g4, additive, no deletions): route the const-folder operand parse through `lit.value.parse_float()` (the
+  already-present strtod path — no runtime edit, no new parser, hxlcl_atof's C body lives in the untracked build-assembled
+  runtime.c bootstrap substrate so editing it is neither needed nor in-tree) + make the `abs` float-fold preserve exact
+  source text (the one remaining direct to_float site). RESULT: operands now byte-exact vs python correctly-rounded
+  doubles; residual MAX 3→1 ULP (the lone remaining 1 ULP is host comptime `*` rounding vs clang, NOT a parse error — a
+  separate smaller host-arithmetic-parity surface, logged out of scope). SELF-HOST FIXPOINT GREEN: fixed hexat re-
+  compiling fixed source → gen-N==gen-N+1 SSOT C BYTE-IDENTICAL (+ object byte-identical), embedded self-tests 15/15,
+  OP-37 negation idiom + abs regression byte-exact. Verdict .verdicts/hexa-0pod/F-OP37B-HOST-ATOF-CORRECT-ROUND.txt.
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
 <!-- ANCHOR:OP-38-CKPT-RECIPE-REFLECT (unique anchor — OP-35 (#3062) BUILT + PROVED the 6th determinism surface, a deterministic training checkpoint (stdlib/flame/ckpt_lib.hexa, "FCK\x01" v1 — binary fp64 little-endian bit-pattern reinterpret, full [t][n_params][W,m,v] state, resume==uninterrupted max|Δ|=0). The capability existed + was oracle-locked but its discoverability across the two contributor doc SSOTs was incomplete: the determinism contract's CHECKPOINT row asserted "not shortest-round-trip text" without tying it to OP-37's MEASURED to_string/%g lossiness, and the dojo had NO practical checkpoint recipe. OP-38 reflects the capability into both surfaces — docs-only, NO new code/oracle, NO .tape, g84 no-paper) -->
 - [x] **OP-38 — deterministic checkpoint (ckpt_lib FCK v1) reflected into the determinism contract + dojo recipe (docs-only)** —
   docs/flame-determinism-contract.md REFINED (no duplicate): the CHECKPOINT row + "what breaks it" bullet now tie the
