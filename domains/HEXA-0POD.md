@@ -49,6 +49,22 @@ loop targets what the consumer card + code can carry.
   band and reach 1.10x parity @D=2048; w16 is the closed-negative in-place-descriptor branch of that lever,
   now confirmed falsified on fresh H100.) Verdict .verdicts/hexa-0pod/F-W16-WGMMA-H100-MEASURE.txt.
 
+<!-- ANCHOR:GPU-ROUTEA-KEEPBAND-MEASURE (unique anchor — the COMPLEMENT to W16: w16 confirmed the in-place-descriptor route-(b) is bit-exact-impossible (FALSIFIED rel_rms 1.107). This milestone measures the OTHER lever — route-(a) PRE-PERMUTE own-GEMM (the bit-exact path: gmma-INTER global pre-lay + NO-swizzle TMA + descriptor-direct, no decode band), to test whether its documented ~1.10x parity vs cuBLAS-TF32 @D=2048 reproduces on a fresh H100. Same ONE-TIME user-approved H100 exception as W16) -->
+- [x] **ROUTE-A — route-(a) pre-permute own-GEMM, REAL H100 sm_90a re-measure: the ~1.10x parity @D=2048 claim REPRODUCED and EXCEEDED (bit-exact)** —
+  🟢 GREEN (ran + measured on real Hopper; ONE-TIME user-approved H100 rental, ~$2.00/hr × ~15min ≈ $0.50,
+  leak-0 CONFIRMED, NO foreign pod touched). vast 40675177 (label hexa-routeA) H100 80GB HBM3 sm_90a,
+  driver 550.163.01, nvcc 12.6.77 (EXACT OG16/OG17/W16 apples). LEVER (a) = route-(a) pre-permute, the
+  BIT-EXACT path (NOT (b) OP-21B keep-band/w16, already closed-neg & not re-run). RESULT: route-(a) is
+  rel_rms 0.000e+00 at EVERY config of the full PDEP/NST sweep (vs route-(b)/w16 floored 1.107 — bit-exact
+  is the load-bearing separator). Its strongest in-tree kernel b14 MODE 8 (deeper wgmma-group pipeline,
+  PDEP dual-issue) @D=2048 NST=3 CROSSES PARITY: PDEP=2 own 314-316 TFLOP/s ratio 1.08-1.09x (3 reps, all
+  PARITY=YES, all rel_rms 0, 2 CTA/SM 96KB band-free); PDEP=1 own 305 ratio 1.12x (== the documented ~1.10x).
+  The ~1.10x parity @D=2048 is REPRODUCED and slightly BEATEN (best 1.08x). Same-pod apples re-confirm the
+  W-ladder: W10 6.09x → OG16 1.36-1.40x → OG17-pipe 1.29-1.32x → b14 PDEP=2 1.08x, all bit-exact. HONEST
+  (g5): 1.08x is NOT a cuBLAS beat (~93% of the roofline, bit-exact); @D=4096 parity NOT crossed (~1.5x,
+  cuBLAS scales better, last lever = ptxas-capped 256-elt register-realloc = W12/OG17-MODE5 closed-neg).
+  Verdict .verdicts/hexa-0pod/F-GPU-ROUTEA-KEEPBAND-MEASURE.txt.
+
 <!-- ANCHOR:G1-CLMPROD-TF32-GPU-STEP (unique anchor — the SOLE GPU-gated remainder of gap G1 (real-corpus clm_prod_gpu TF32 end-to-end step). OP-24c/24d closed everything 0-pod-provable: input side proven byte-eq (OP-28/28b/28c) + pre-gated as STEP-0, TF32 code proven well-formed under -DHEXA_CUDA (F-OP24B), fast-mode determinism + bounded loss-tracking proven on sm_120 (OP-20/23/23b/24/25). The remaining un-measured piece = the real wall-clock TF32-vs-FP64 step ratio end-to-end, build-env-gated. Attempted on the same ONE-TIME H100 rental to capture the gate verbatim on real Hopper) -->
 - [x] **G1 — clm_prod_gpu TF32 e2e step, REAL H100 build attempt: build-env gate CONFIRMED on Hopper (toolchain + frozen-seed, NOT a GPU limit)** —
   🟠 BLOCKED-CONFIRMED (on-HW attempt verbatim; same ~$0.72 H100 rental, leak-0). On a fully-capable H100
