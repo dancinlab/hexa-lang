@@ -10,6 +10,24 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-50-ROUTEA-BOUNDARY-DOCS (unique anchor — the route-(a) own-GEMM perf story has a precise, hard-won boundary scattered across OP-45 #3096 + the GPU route-(a) measurement #3094 + OP-49 #3103: route-(a) pre-permute own-GEMM is bit-exact (rel_rms 0) AND reaches cuBLAS-TF32 PARITY (~1.08x, ~93% roofline, 315 TFLOP/s) @D=2048 but is NOT a cuBLAS BEAT and falls to ~1.50x @D=4096 because it is SHAPE-RIGID (one fixed 128x128 tile) vs cuBLAS SHAPE-ADAPTIVE. OP-50 REFLECTS that boundary into the canonical forge doc (docs/forge-routea-shape-adaptive.md, the file OP-49 authored — extend > duplicate per Occam g0) as a "§0 perf boundary / honest scope" section: what own-GEMM IS (bit-exact-parity-not-beat), what it ISN'T (cuBLAS beat; W14 FP16 11.5x off, W10 6.09x off), its VALUE (bit-exactness + device-residency + no-LLVM, NOT raw TFLOP/s — mirrors flame closeout framing), and the path forward (OP-49 selector + 4 config gaps). DOCS-ONLY, every number traces to a verdict) -->
+- [x] **OP-50 — route-(a) own-GEMM perf BOUNDARY reflected into the canonical forge doc (docs/forge-routea-shape-adaptive.md §0): bit-exact (rel_rms 0) + cuBLAS-TF32 PARITY (1.08x, ~93% roofline, 315 TFLOP/s) @D=2048 — NOT a beat; ~1.50x @D=4096 because SHAPE-RIGID (fixed 128x128) vs cuBLAS SHAPE-ADAPTIVE; VALUE = bit-exactness + device-residency + no-LLVM, not raw TFLOP/s; path-forward = OP-49 selector + 4 gaps. DOCS-ONLY, $0, 0-pod** —
+  🟢 DOCS-ONLY reflection (no code/runtime/.tape). Added a "## 0. Perf boundary / honest scope — what own-GEMM
+  IS and ISN'T" section to docs/forge-routea-shape-adaptive.md (the OP-49 file; extend > duplicate, Occam g0),
+  placed FIRST so a contributor reads the settled boundary before treating "beat cuBLAS" as a goal. STATES:
+  (IS) route-(a) pre-permute = bit-exact rel_rms 0.000e+00 @every config + cuBLAS-TF32 PARITY @D=2048 (b14 MODE8
+  NST3 PDEP2: own ~315 TFLOP/s, ratio 1.08x, PARITY=YES = ~93% of roofline), no-LLVM/no-cuBLAS-call, device-
+  resident. (ISN'T) NOT a beat — cuBLAS-TF32 is the roofline; @D=4096 own falls to ~1.50x (own ~284 vs cuBLAS
+  ~427, PARITY=NO) because SHAPE-RIGID (one fixed 128x128 plain-launch tile) vs cuBLAS SHAPE-ADAPTIVE (+24.6%
+  @4096 via large-tile/split-K/persistent); spill/occupancy/D-indep-ptxas-ceiling all statically EXCLUDED, cause
+  = (d) large-D scheduling roofline (OP-45). FP16 W14 ~11.5x off · W10 summit 70.7 TFLOP/s 6.09x off — neither a
+  beat. (VALUE) bit-exactness + device-residency + no-LLVM-compile-theorem (a GEMM a persistent megakernel can
+  call where it can never call the cuBLAS host API), NOT raw TFLOP/s-vs-cuBLAS — mirrors project_flame_h100_h200_
+  closeout framing. (PATH-FORWARD) OP-49 shape-adaptive selector + 4 config gaps (64x64 small-tile · MODE7
+  persistent @4096 · bit-exact split-K · NST-adaptive launcher), each a gated GPU-session build mapped to OP-45
+  T1-T5 — IF a beat is ever pursued (not a standing goal). Every number traces to a verdict (#3094/#3096/#3103
+  + W10/W14). $0 · 0-pod · no vast · no foreign-pod · no .tape. Verdict .verdicts/hexa-0pod/F-OP50-ROUTEA-BOUNDARY-DOCS.txt.
+
 <!-- ANCHOR:OP-49-SHAPE-ADAPTIVE-DESIGN (unique anchor — OP-45 found route-(a) own-GEMM is SHAPE-RIGID (one fixed 128x128 plain-launch tile, parity @D=2048 1.08x but ~1.50x @D=4096) while cuBLAS is SHAPE-ADAPTIVE (+24.6% @D=4096 via large-tile/split-K/persistent kernel selection). OP-49 DESIGNS (0-pod, no GPU) a shape-adaptive tile-selector — a D-bucketed kernel-mode policy + a CPU analytical cost model that PREDICTS which existing kernel mode to launch per shape — and VALIDATES the cost model against the already-measured OG16/OG17/MODE8/MODE5 verdict points (no new GPU run). DOCS/DESIGN + a CPU reference cost-model script; the policy SPECS the kernels, building new modes is the GPU-session follow-up) -->
 - [x] **OP-49 — route-(a) own-GEMM SHAPE-ADAPTIVE tile-selector DESIGN + CPU analytical cost model that PREDICTS the launch config per shape; cost-model ORDERING VALIDATED against measured OG16/OG17/MODE8/MODE5 points (PASS both D, mean |rel.err| 2.2%) → 🟢; 4 config-gaps flagged for the GPU session** —
   🟢 0-pod DESIGN (no GPU, no nvcc; all measured numbers CITED from F-OP45 + W-ladder verdicts). INVENTORY: 5

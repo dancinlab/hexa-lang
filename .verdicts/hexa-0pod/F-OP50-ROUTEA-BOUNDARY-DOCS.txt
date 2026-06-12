@@ -1,0 +1,99 @@
+F-OP50-ROUTEA-BOUNDARY-DOCS — DOCS-ONLY (0-pod, NO GPU) reflection of the route-(a) own-GEMM
+perf BOUNDARY — the hard-won "what own-GEMM IS and ISN'T" statement — into the canonical forge
+doc, so contributors stop re-litigating "beat cuBLAS" as a goal. The boundary lived only in
+scattered verdicts (#3094 GPU measurement + #3096 cause decomposition + #3103 selector design);
+OP-50 consolidates it into docs/forge-routea-shape-adaptive.md as a new FIRST section.
+================================================================================================
+TIER: 🟢 GREEN (docs reflection complete; every number written traces VERBATIM to a source
+      verdict — no invention, no round-mangle; the boundary is now discoverable in one durable
+      place, ahead of the design it bounds). DOCS-ONLY: no code, no runtime, no .tape edits.
+
+DATE: 2026-06-13
+HW:   NONE (0-pod, docs-only). $0, no vast, no foreign pod, leak-0.
+
+SCOPE: This is a g3-terse, g5-cited REFLECTION task, not a new measurement. The measurements it
+       reflects were already made (#3094 on a fresh H100, leak-0) and characterized (#3096/#3103,
+       0-pod). OP-50 only moves the SETTLED boundary into the durable forge doc.
+
+================================================================================================
+SOURCE VERDICTS CITED (the 3 the boundary is consolidated FROM):
+================================================================================================
+  - .verdicts/hexa-0pod/F-GPU-ROUTEA-KEEPBAND-MEASURE.txt  (#3094) — the GPU measurement:
+      route-(a) b14 MODE8 NST3 PDEP2 @D=2048 own ~315 TFLOP/s, ratio 1.08x, PARITY=YES,
+      rel_rms 0.000e+00 at EVERY config; @D=4096 own ~284 TFLOP/s vs cuBLAS ~427, ratio ~1.50x,
+      PARITY=NO. "1.08x is NOT a beat; ~93% of cuBLAS-TF32, bit-exact."
+  - .verdicts/hexa-0pod/F-OP45-ROUTEA-D4096-CAP.txt        (#3096) — the cause decomposition:
+      (a) register-spill / (b) occupancy-drop / (c) D-independent ptxas ceiling ALL statically
+      EXCLUDED; surviving cause = (d) cuBLAS scales UP +24.6% @D=4096 (shape-adaptive large-tile/
+      split-K/persistent) while the fixed-128x128 MODE8 scales DOWN -9.9% (2x K-loop drain). The
+      own-GEMM is SHAPE-RIGID; cuBLAS is SHAPE-ADAPTIVE.
+  - .verdicts/hexa-0pod/F-OP49-SHAPE-ADAPTIVE-DESIGN.txt   (#3103) — the path-forward: a shape-
+      adaptive tile-selector + CPU cost model (ORDERING validated PASS both D, mean |rel.err|
+      2.2%) + 4 config gaps (64x64 small-tile, MODE7 persistent measured @4096, bit-exact split-K,
+      NST-adaptive launcher). Created docs/forge-routea-shape-adaptive.md.
+  Cross-checked for consistency (W-ladder summit numbers):
+  - .verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W10.txt — W10 composed-swizzle-decode 70.7 TFLOP/s,
+      6.09x off cuBLAS-TF32, rel_rms 0 (the bit-exact pre-route-(a) frontier).
+  - .verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W14-FP16.txt — FP16/BF16 W14 line ~11.5x off
+      cuBLAS-FP16 (roofline doubled to ~827 TFLOP/s), PARITY=NO.
+  - docs/hexa-dojo.md (own-GEMM war story) — same framing (cuBLAS = roofline; value = bit-exact
+      + device-resident + no-vendor-call, not step-rate). project_flame_h100_h200_closeout (the
+      mirrored "value is correctness/residency, not raw throughput" framing).
+
+================================================================================================
+WHAT DOC GAINED THE BOUNDARY STATEMENT:
+================================================================================================
+  docs/forge-routea-shape-adaptive.md  — NEW section "## 0. Perf boundary / honest scope —
+  what own-GEMM IS and ISN'T", inserted FIRST (before §1 Inventory) so a contributor reads the
+  settled boundary BEFORE the design it bounds. Occam g0: EXTENDED the OP-49 file rather than
+  authoring a new doc (the design + the boundary belong together; the boundary is the honest
+  preface to the "if a beat is ever pursued" levers).
+
+The §0 statement, in 4 parts (all numbers traced to the verdicts above):
+  (a) WHAT IT IS  — route-(a) pre-permute own-GEMM is bit-exact (rel_rms 0.000e+00 dev-vs-dev at
+      every config — an equality, not a tolerance; the gate route-(b)/w16 FAILED at 1.107) AND at
+      cuBLAS-TF32 PARITY @D=2048 (b14 MODE8 NST3 PDEP2: own ~315 TFLOP/s, ratio 1.08x, PARITY=YES
+      = ~93% of the cuBLAS-TF32 roofline), no-LLVM / no-cuBLAS-call, device-resident.
+  (b) WHAT IT ISN'T — NOT a cuBLAS beat. cuBLAS-TF32 is the roofline; 1.08x is parity-seeking.
+      @D=4096 own falls to ~1.50x slower (own ~284 vs cuBLAS ~427, PARITY=NO) because route-(a)
+      is SHAPE-RIGID (one fixed 128x128 plain-launch tile) vs cuBLAS SHAPE-ADAPTIVE (+24.6% @4096
+      via large-tile/split-K/persistent; own -9.9% from 2x K-drain). spill/occupancy/D-indep-ptxas
+      all statically EXCLUDED (OP-45). FP16 W14 ~11.5x off; W10 summit 70.7 TFLOP/s 6.09x off —
+      neither a beat.
+  (c) THE VALUE — bit-exactness + device-residency + no-LLVM-compile-theorem (a GEMM a persistent
+      megakernel can call in-line where it can NEVER call the cuBLAS host API, end-to-end, bit-
+      exact gate), NOT raw TFLOP/s-vs-cuBLAS. Mirrors the flame-side framing
+      (project_flame_h100_h200_closeout): worth = correctness/residency/no-vendor-dependency, not
+      step-rate. Do not pursue "beat cuBLAS" as a forge goal.
+  (d) PATH FORWARD (IF a beat is ever pursued — NOT a standing goal) — the OP-49 shape-adaptive
+      selector + cost model (§2-§6) + the 4 concrete config gaps (64x64 small-tile for small-D
+      under-fill · MODE7 persistent measured @4096 · bit-exact tree-reduction split-K · NST-
+      adaptive launcher), each a gated GPU-session build mapped to OP-45 T1-T5 (§7).
+
+================================================================================================
+CONSISTENCY CHECK (every written number == a verdict number; g5):
+================================================================================================
+  1.08x parity @D=2048 ........... F-GPU-ROUTEA #3094 line 35/76  ✓
+  rel_rms 0.000e+00 (bit-exact) .. F-GPU-ROUTEA #3094 line 41 ("at EVERY config")  ✓
+  ~93% of cuBLAS-TF32 roofline ... F-GPU-ROUTEA #3094 line 15/107  ✓
+  ~315 TFLOP/s @D=2048 ........... F-GPU-ROUTEA #3094 line 35 (314-316)  ✓
+  ~1.50x @D=4096, own ~284 ....... F-GPU-ROUTEA #3094 line 40/82-83  ✓
+  cuBLAS +24.6% / own -9.9% ...... F-OP45 #3096 line 72-73  ✓
+  shape-rigid vs shape-adaptive .. F-OP45 #3096 line 123/165-167  ✓
+  (a)/(b)/(c) EXCLUDED, (d) cause  F-OP45 #3096 line 106-123  ✓
+  W10 70.7 TFLOP/s, 6.09x ........ F-FUSION-SM90-WGMMA-W10 + memory + dojo line 86/100  ✓
+  W14 FP16 ~11.5x off ............ F-FUSION-SM90-WGMMA-W14-FP16 (memory: "11.5x off cuBLAS-FP16")  ✓
+  selector + 4 gaps .............. F-OP49 #3103 line 97-108  ✓
+  => NO invention, NO round-mangle. Every figure in §0 has a verdict source.
+
+================================================================================================
+SUMMARY (g5):
+- The route-(a) own-GEMM perf boundary — bit-exact (rel_rms 0) + cuBLAS-TF32 PARITY (1.08x,
+  ~93% roofline, ~315 TFLOP/s) @D=2048, NOT a beat, ~1.50x @D=4096 because SHAPE-RIGID vs
+  cuBLAS SHAPE-ADAPTIVE — is now a durable, discoverable §0 in docs/forge-routea-shape-adaptive.md,
+  ahead of the design that bounds it. Value = bit-exactness + device-residency + no-LLVM, not raw
+  TFLOP/s. Path-forward = OP-49 selector + 4 gaps, IF a beat is ever pursued (not a standing goal).
+- Occam g0: extended the OP-49 doc, did not duplicate. DOCS-ONLY: no code/runtime/.tape edits.
+- $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · g84 (no /paper scaffold).
+- Sources: F-GPU-ROUTEA-KEEPBAND-MEASURE (#3094) · F-OP45-ROUTEA-D4096-CAP (#3096) ·
+  F-OP49-SHAPE-ADAPTIVE-DESIGN (#3103) · W10/W14 W-ladder verdicts.

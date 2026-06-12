@@ -14,6 +14,55 @@ validation table + the selector picks).
 
 ---
 
+## 0. Perf boundary / honest scope — what own-GEMM IS and ISN'T
+
+> **Read this before treating "beat cuBLAS" as a goal.** This is the hard-won, measured
+> boundary of the route-(a) own-GEMM. It is settled; do not re-litigate it. Every number
+> below traces to a verdict (cited inline).
+
+**What it IS** — `route-(a)` pre-permute own-GEMM (gmma-INTER global pre-lay + no-swizzle TMA +
+descriptor-direct, no in-kernel decode band) is a **bit-exact, device-resident, no-LLVM /
+no-cuBLAS-call** TF32 GEMM:
+
+- **Bit-exact**: `rel_rms 0.000e+00` (dev-vs-dev, f32-accum order) at **every** config across the
+  entire PDEP/NST sweep — not a tolerance, an equality. This is the gate the in-place-descriptor
+  route-(b)/w16 *failed* (floored at `rel_rms 1.107`, FALSIFIED).
+- **At cuBLAS-TF32 PARITY @D=2048**: the frontier kernel (b14 MODE 8, NST=3, PDEP=2) measures
+  **own ≈ 315 TFLOP/s, ratio 1.08×, PARITY=YES** — i.e. **~93% of the cuBLAS-TF32 roofline**,
+  bit-exact, with no vendor call. (`F-GPU-ROUTEA-KEEPBAND-MEASURE.txt`, #3094, fresh H100 sm_90a,
+  median of 3 reps.)
+
+**What it ISN'T — NOT a cuBLAS BEAT.** cuBLAS-TF32 is the **roofline**; 1.08× is parity-seeking,
+*not* superiority. And parity does **not** hold at all shapes:
+
+- **@D=4096 it falls to ~1.50× slower** (own ≈ 284 TFLOP/s vs cuBLAS ≈ 427, PARITY=NO). The cause
+  is **shape-rigidity**: route-(a) is **one fixed 128×128 plain-launch tile** at every D, while
+  cuBLAS is **shape-adaptive** — at D=4096 cuBLAS scales UP +24.6% (larger tiles / split-K /
+  persistent rasterization tuned to 132 SMs) while the fixed MODE 8 scales DOWN −9.9% (2× K-loop
+  drain). Register-spill, occupancy-drop, and a D-independent ptxas ceiling are all **statically
+  EXCLUDED** as the cause; the surviving classification is (d) large-D scheduling roofline =
+  *shape-rigid vs shape-adaptive*. (`F-OP45-ROUTEA-D4096-CAP.txt`, #3096.)
+- The **FP16/BF16 W14 line is ~11.5× off** cuBLAS-FP16 (PARITY=NO; cuBLAS-FP16 roofline doubled to
+  ~827 TFLOP/s). The **W10 composed-swizzle-decode summit is 70.7 TFLOP/s, 6.09× off** cuBLAS-TF32
+  (the bit-exact pre-route-(a) frontier). Neither is a beat. (`.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W10.txt`,
+  `F-FUSION-W14-*`.)
+
+**The VALUE proposition** (mirrors the flame-side framing in
+`project_flame_h100_h200_closeout`): own-GEMM's worth is **bit-exactness + device-residency +
+no-LLVM compile-theorem** — a device GEMM we can call in-line where a persistent megakernel can
+*never* call cuBLAS (a host API), end-to-end, with no vendor call and a bit-exact gate. It is
+**NOT raw TFLOP/s-vs-cuBLAS**. Do not pursue "beat cuBLAS" as a forge goal; pursue completeness
+(a path cuBLAS structurally cannot take), bit-exactness, and no-vendor-dependency.
+
+**The path forward — IF a beat is ever pursued** (not a standing goal): the shape-adaptive
+selector design below (§2–§6) + its CPU cost model + the **4 concrete config gaps** (64×64
+small-tile for small-D under-fill · MODE 7 persistent measured @4096 · bit-exact split-K · NST-
+adaptive launcher) are the levers. None exist in-tree today; each maps to a gated GPU-session
+build mapped to OP-45 T1–T5 (§7). Until then, the boundary stands: **bit-exact parity @D=2048,
+not a beat, shape-rigid @D=4096.**
+
+---
+
 ## 1. Inventory — the kernel CONFIGS that already exist in-tree
 
 All in `wgmma_tf32_b14.cu`, route-(a) pre-permute family, TF32, bit-exact (rel_rms 0 vs
