@@ -1,0 +1,675 @@
+// HEXA Standard Library — qforge/atoms/ccsd
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE-ATOMS brick #17 — CCSD (coupled-cluster singles & doubles) correlation
+// energy on the SAME converged RHF + MO-basis ERI tensor that brick #16 (mp2.hexa)
+// builds. RHF is mean-field (misses correlation); MP2 (r16) is the FIRST-order
+// perturbative correction; CCSD is the GOLD-STANDARD correlated method — an
+// INFINITE-ORDER resummation of the Møller-Plesset series via the exponential
+// ansatz |Ψ⟩ = e^{T1+T2}|Φ₀⟩. The cluster amplitudes t_i^a (singles) and t_ij^ab
+// (doubles) are solved iteratively to self-consistency; the converged amplitudes
+// give E_corr^CCSD ⊃ E_corr^MP2 (CCSD captures strictly more correlation).
+//
+// ── spin-orbital formulation (Stanton, Gauss, Watts, Bartlett, JCP 94, 4334 (1991);
+//    Crawford prog-proj Project #05) ─────────────────────────────────────────────
+// The cleanest CCSD equations are in the SPIN-ORBITAL basis. Each spatial MO p
+// (0..n−1) splits into TWO spin-orbitals: 2p (α) and 2p+1 (β). nso = 2n. Occupied
+// spin-orbitals = 0..2·n_occ−1, virtual = 2·n_occ..nso−1. The antisymmetrized
+// physicist two-electron integral is built from the spatial chemists' MO tensor:
+//   ⟨pq|rs⟩_phys = (pr|qs)_chem · δ(σp,σr)·δ(σq,σs)        (spin-conserving)
+//   ⟨pq||rs⟩      = ⟨pq|rs⟩ − ⟨pq|sr⟩                       (antisymmetrized)
+// The spin-orbital Fock is DIAGONAL for canonical RHF orbitals: f_pp = ε_{p//2},
+// off-diagonal = 0 (the converged RHF Fock is diagonal in its own MO basis).
+//
+// ── the CCSD amplitude equations (Stanton 1991 eqs. 1–13) ────────────────────────
+//   intermediates  F_ae, F_mi, F_me  (one-body) and  W_mnij, W_abef, W_mbej (two-body)
+//   are built from the current T1, T2 and the antisymmetrized integrals; the new T1,
+//   T2 follow from eqs. (1)/(2) divided by the orbital-energy denominators
+//   D_i^a = f_ii−f_aa,  D_ij^ab = f_ii+f_jj−f_aa−f_bb (Møller-Plesset denominators).
+//   The CCSD correlation energy (Stanton eq. for E_CC) is
+//     E_CCSD = Σ_{ia} f_ia t_i^a
+//            + ¼ Σ_{ijab} ⟨ij||ab⟩ t_ij^ab
+//            + ½ Σ_{ijab} ⟨ij||ab⟩ t_i^a t_j^b
+//   (for canonical RHF f_ia = 0, so the first term vanishes; kept for generality.)
+//
+// ── MP2 recovery (free internal consistency check) ───────────────────────────────
+//   With T1 = 0 and T2 = MP2 guess  t_ij^ab = ⟨ij||ab⟩ / D_ij^ab, the energy
+//   expression's ¼-doubles term ALONE reproduces the spin-orbital MP2 correlation
+//   energy — which equals the spatial-orbital r16 MP2 E_corr exactly. The FIRST
+//   CCSD iteration energy (before the amplitudes update) IS E_MP2 (g5 anchor a).
+//
+// ── honest scope (d6) ────────────────────────────────────────────────────────────
+//   CCSD is iterative O(N⁶). On H₂/H₂O STO-3G (nso = 4 / 14) it is tiny & tractable.
+//   CCSD STILL misses: connected TRIPLES — CCSD(T), the "gold-standard" perturbative
+//   triples correction (round-18); and the STO-3G minimal-basis incompleteness (the
+//   basis-set limit needs cc-pVXZ). For H₂ (2 electrons) CCSD is EXACT within the
+//   basis (== FCI) — a strong anchor. Every number is REAL: amplitudes iterated to a
+//   genuine residual floor, energy summed from the converged amplitudes; none forced.
+//
+// reuse (d19 · d3): consumes mp2_ao_to_mo's MO-basis (pq|rs) tensor + the converged
+//   RHF MO energies ε + n_occ VERBATIM (mp2_corr_from_rhf already returns all three).
+//   No new transform, eigensolver, or RHF primitive minted — CCSD is pure
+//   post-processing on the r16 MO-ERI tensor.
+
+use "stdlib/qforge/atoms/mp2"
+
+// ════════════════════════════════════════════════════════════════════════════
+//   spin-orbital antisymmetrized integrals  ⟨pq||rs⟩  from the spatial MO tensor
+// ════════════════════════════════════════════════════════════════════════════
+
+// Flat index into a chemists' spatial tensor T[((p*n+q)*n+r)*n+s].
+fn _ct4(T: [float], n: int, p: int, q: int, r: int, s: int) -> float {
+    return T[((p * n + q) * n + r) * n + s]
+}
+
+// One spin-orbital physicist integral ⟨pq|rs⟩ from the spatial chemists' tensor.
+//   spin-orbital index P -> spatial P/2, spin P%2 (0=α,1=β).
+//   ⟨pq|rs⟩_phys = (P_spatial R_spatial | Q_spatial S_spatial)_chem · δ(σp,σr)δ(σq,σs)
+fn _so_phys(eri: [float], n: int, p: int, q: int, r: int, s: int) -> float {
+    // spin must be conserved on each electron: (p,r) same spin AND (q,s) same spin
+    if (p % 2) != (r % 2) { return 0.0 }
+    if (q % 2) != (s % 2) { return 0.0 }
+    return _ct4(eri, n, p / 2, r / 2, q / 2, s / 2)
+}
+
+// Antisymmetrized spin-orbital integral ⟨pq||rs⟩ = ⟨pq|rs⟩ − ⟨pq|sr⟩.
+fn _so_asym(eri: [float], n: int, p: int, q: int, r: int, s: int) -> float {
+    return _so_phys(eri, n, p, q, r, s) - _so_phys(eri, n, p, q, s, r)
+}
+
+// Build the full nso⁴ antisymmetrized spin-orbital tensor ⟨pq||rs⟩ (physicist
+// layout, flat index ((p*nso+q)*nso+r)*nso+s). nso = 2n. Done ONCE up front so the
+// O(N⁶) amplitude iteration reads pre-antisymmetrized integrals (no repeat δ/spin).
+pub fn ccsd_spinorb_eri(eri_mo: [float], n: int) -> [float] {
+    let nso = 2 * n
+    let mut W: [float] = []
+    let mut p = 0
+    while p < nso {
+        let mut q = 0
+        while q < nso {
+            let mut r = 0
+            while r < nso {
+                let mut s = 0
+                while s < nso {
+                    W.push(_so_asym(eri_mo, n, p, q, r, s))
+                    s = s + 1
+                }
+                r = r + 1
+            }
+            q = q + 1
+        }
+        p = p + 1
+    }
+    return W
+}
+
+// Spin-orbital energies: ε_so[P] = ε_spatial[P/2]. nso entries.
+pub fn ccsd_spinorb_eps(eps: [float], n: int) -> [float] {
+    let nso = 2 * n
+    let mut e: [float] = []
+    let mut p = 0
+    while p < nso { e.push(eps[p / 2]) ; p = p + 1 }
+    return e
+}
+
+// Read ⟨pq||rs⟩ from the pre-built spin-orbital tensor (flat physicist layout).
+fn _w(W: [float], nso: int, p: int, q: int, r: int, s: int) -> float {
+    return W[((p * nso + q) * nso + r) * nso + s]
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   CCSD amplitude solver (Stanton-Gauss-Watts-Bartlett 1991 spin-orbital)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Conventions: nso spin-orbitals, occupied o = 0..nocc_so−1, virtual everything
+// else. T1 stored as t1[i*nso + a] (i,a full nso range; only occ→virt nonzero), T2
+// as t2[((i*nso+j)*nso+a)*nso+b]. τ and τ̃ (tau) are the standard amplitude combos
+// (Stanton eqs. 9,10). All sums run over the FULL spin-orbital range with occupied/
+// virtual masks; the integrals/denominators zero out the disallowed blocks.
+
+fn _idx2(nso: int, i: int, a: int) -> int { return i * nso + a }
+fn _idx4(nso: int, i: int, j: int, a: int, b: int) -> int {
+    return ((i * nso + j) * nso + a) * nso + b
+}
+
+// τ and τ̃ (Stanton eqs. 9,10) are NOT computed via per-element helper fns: they are
+// materialized ONCE as flat tensors at the top of ccsd_iterate (single-statement array
+// writes). A multi-LINE arithmetic continuation (`= A*B\n − C*D`) is mis-parsed by the
+// current hexa front-end (the trailing `− C*D` line is silently dropped), so every τ /
+// τ̃ assignment is kept on ONE physical line. This is a deliberate workaround, not
+// stylistic — see the precompute block in ccsd_iterate.
+
+// CCSD correlation energy from current amplitudes (Stanton energy eq.).
+//   E = Σ_ia f_ia t_i^a + ¼ Σ_ijab ⟨ij||ab⟩ t_ij^ab + ½ Σ_ijab ⟨ij||ab⟩ t_i^a t_j^b
+//   For canonical RHF f_ia = 0 (Fock diagonal in its own MO basis) ⇒ first term = 0.
+pub fn ccsd_energy(W: [float], t1: [float], t2: [float], nso: int, nocc: int) -> float {
+    let mut e = 0.0
+    let mut i = 0
+    while i < nocc {
+        let mut j = 0
+        while j < nocc {
+            let mut a = nocc
+            while a < nso {
+                let mut b = nocc
+                while b < nso {
+                    let wijab = _w(W, nso, i, j, a, b)
+                    e = e + 0.25 * wijab * t2[_idx4(nso,i,j,a,b)]
+                    e = e + 0.5 * wijab * t1[_idx2(nso,i,a)] * t1[_idx2(nso,j,b)]
+                    b = b + 1
+                }
+                a = a + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return e
+}
+
+// One CCSD iteration: from (t1,t2) build the Stanton intermediates, then the new
+// (t1,t2). Returns [t1_new, t2_new]. The diagonal-Fock simplification (canonical
+// RHF) drops every f_pq off-diagonal term — only f_pp = ε_so[p] survives, so the
+// F_ae/F_mi/F_me intermediates start from 0 (no bare-Fock off-diagonal seed).
+pub fn ccsd_iterate(W: [float], eps_so: [float], t1: [float], t2: [float],
+                    nso: int, nocc: int) -> [any] {
+    // ── precompute τ and τ̃ as flat tensors (Stanton eqs. 9,10) ────────────────
+    //   τ_ij^ab  = t_ij^ab + t_i^a t_j^b − t_i^b t_j^a
+    //   τ̃_ij^ab = t_ij^ab + ½(t_i^a t_j^b − t_i^b t_j^a)
+    //   Materialized ONCE here (not via per-call helpers in the hot loops): the
+    //   t1-product corrections must be applied as plain inline array writes so they
+    //   are not dropped, and a single build is also far cheaper than O(N⁶) recompute.
+    let mut tau: [float] = []
+    let mut taut: [float] = []
+    let mut iT = 0
+    let n4t = nso * nso * nso * nso
+    while iT < n4t { tau.push(0.0) ; taut.push(0.0) ; iT = iT + 1 }
+    let mut ti = 0
+    while ti < nso {
+        let mut tj = 0
+        while tj < nso {
+            let mut ta = 0
+            while ta < nso {
+                let mut tb = 0
+                while tb < nso {
+                    let base = t2[_idx4(nso,ti,tj,ta,tb)]
+                    let prod = t1[_idx2(nso,ti,ta)] * t1[_idx2(nso,tj,tb)] - t1[_idx2(nso,ti,tb)] * t1[_idx2(nso,tj,ta)]
+                    tau[_idx4(nso,ti,tj,ta,tb)]  = base + prod
+                    taut[_idx4(nso,ti,tj,ta,tb)] = base + 0.5 * prod
+                    tb = tb + 1
+                }
+                ta = ta + 1
+            }
+            tj = tj + 1
+        }
+        ti = ti + 1
+    }
+    // ── one-body intermediates F (Stanton eqs. 3,4,5; bare-Fock off-diag = 0) ──
+    // F_ae = − ½ Σ_m f_me t_m^a + Σ_mf t_m^f ⟨ma||fe⟩ − ½ Σ_mnf τ̃_mn^af ⟨mn||ef⟩
+    //  (f_me = 0 for canonical RHF, so the first term drops)
+    let mut Fae: [float] = []
+    let mut ii = 0
+    while ii < nso * nso { Fae.push(0.0) ; ii = ii + 1 }
+    let mut a = nocc
+    while a < nso {
+        let mut e = nocc
+        while e < nso {
+            let mut v = 0.0
+            let mut m = 0
+            while m < nocc {
+                let mut f = nocc
+                while f < nso {
+                    v = v + t1[_idx2(nso,m,f)] * _w(W, nso, m, a, f, e)
+                    let mut nn = 0
+                    while nn < nocc {
+                        v = v - 0.5 * taut[_idx4(nso,m,nn,a,f)] * _w(W,nso,m,nn,e,f)
+                        nn = nn + 1
+                    }
+                    f = f + 1
+                }
+                m = m + 1
+            }
+            Fae[a * nso + e] = v
+            e = e + 1
+        }
+        a = a + 1
+    }
+    // F_mi = ½ Σ_e f_me t_i^e + Σ_en t_n^e ⟨mn||ie⟩ + ½ Σ_nef τ̃_in^ef ⟨mn||ef⟩
+    let mut Fmi: [float] = []
+    ii = 0
+    while ii < nso * nso { Fmi.push(0.0) ; ii = ii + 1 }
+    let mut m = 0
+    while m < nocc {
+        let mut i = 0
+        while i < nocc {
+            let mut v = 0.0
+            let mut nn = 0
+            while nn < nocc {
+                let mut e = nocc
+                while e < nso {
+                    v = v + t1[_idx2(nso,nn,e)] * _w(W, nso, m, nn, i, e)
+                    let mut f = nocc
+                    while f < nso {
+                        v = v + 0.5 * taut[_idx4(nso,i,nn,e,f)] * _w(W,nso,m,nn,e,f)
+                        f = f + 1
+                    }
+                    e = e + 1
+                }
+                nn = nn + 1
+            }
+            Fmi[m * nso + i] = v
+            i = i + 1
+        }
+        m = m + 1
+    }
+    // F_me = f_me + Σ_nf t_n^f ⟨mn||ef⟩   (f_me = 0)
+    let mut Fme: [float] = []
+    ii = 0
+    while ii < nso * nso { Fme.push(0.0) ; ii = ii + 1 }
+    m = 0
+    while m < nocc {
+        let mut e = nocc
+        while e < nso {
+            let mut v = 0.0
+            let mut nn = 0
+            while nn < nocc {
+                let mut f = nocc
+                while f < nso {
+                    v = v + t1[_idx2(nso,nn,f)] * _w(W, nso, m, nn, e, f)
+                    f = f + 1
+                }
+                nn = nn + 1
+            }
+            Fme[m * nso + e] = v
+            e = e + 1
+        }
+        m = m + 1
+    }
+
+    // ── two-body intermediates W (Stanton eqs. 6,7,8) ─────────────────────────
+    // W_mnij = ⟨mn||ij⟩ + P(ij) Σ_e t_j^e ⟨mn||ie⟩ + ¼ Σ_ef τ_ij^ef ⟨mn||ef⟩
+    let mut Wmnij: [float] = []
+    ii = 0
+    while ii < nocc*nocc*nocc*nocc { Wmnij.push(0.0) ; ii = ii + 1 }
+    m = 0
+    while m < nocc {
+        let mut nn = 0
+        while nn < nocc {
+            let mut i = 0
+            while i < nocc {
+                let mut j = 0
+                while j < nocc {
+                    let mut v = _w(W, nso, m, nn, i, j)
+                    let mut e = nocc
+                    while e < nso {
+                        // P(ij): + t_j^e ⟨mn||ie⟩ − t_i^e ⟨mn||je⟩
+                        v = v + t1[_idx2(nso,j,e)] * _w(W,nso,m,nn,i,e)
+                        v = v - t1[_idx2(nso,i,e)] * _w(W,nso,m,nn,j,e)
+                        let mut f = nocc
+                        while f < nso {
+                            v = v + 0.25 * tau[_idx4(nso,i,j,e,f)] * _w(W,nso,m,nn,e,f)
+                            f = f + 1
+                        }
+                        e = e + 1
+                    }
+                    Wmnij[((m*nocc+nn)*nocc+i)*nocc+j] = v
+                    j = j + 1
+                }
+                i = i + 1
+            }
+            nn = nn + 1
+        }
+        m = m + 1
+    }
+    // W_abef = ⟨ab||ef⟩ − P(ab) Σ_m t_m^b ⟨am||ef⟩ + ¼ Σ_mn τ_mn^ab ⟨mn||ef⟩
+    let nvir = nso - nocc
+    let mut Wabef: [float] = []
+    ii = 0
+    while ii < nvir*nvir*nvir*nvir { Wabef.push(0.0) ; ii = ii + 1 }
+    a = nocc
+    while a < nso {
+        let mut b = nocc
+        while b < nso {
+            let mut e = nocc
+            while e < nso {
+                let mut f = nocc
+                while f < nso {
+                    let mut v = _w(W, nso, a, b, e, f)
+                    let mut mm = 0
+                    while mm < nocc {
+                        // −P(ab): − t_m^b ⟨am||ef⟩ + t_m^a ⟨bm||ef⟩
+                        v = v - t1[_idx2(nso,mm,b)] * _w(W,nso,a,mm,e,f)
+                        v = v + t1[_idx2(nso,mm,a)] * _w(W,nso,b,mm,e,f)
+                        let mut nn = 0
+                        while nn < nocc {
+                            v = v + 0.25 * tau[_idx4(nso,mm,nn,a,b)] * _w(W,nso,mm,nn,e,f)
+                            nn = nn + 1
+                        }
+                        mm = mm + 1
+                    }
+                    Wabef[(((a-nocc)*nvir+(b-nocc))*nvir+(e-nocc))*nvir+(f-nocc)] = v
+                    f = f + 1
+                }
+                e = e + 1
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    // W_mbej = ⟨mb||ej⟩ + Σ_f t_j^f ⟨mb||ef⟩ − Σ_n t_n^b ⟨mn||ej⟩
+    //          − Σ_nf (½ t_jn^fb + t_j^f t_n^b) ⟨mn||ef⟩
+    let mut Wmbej: [float] = []
+    ii = 0
+    while ii < nso*nso*nso*nso { Wmbej.push(0.0) ; ii = ii + 1 }
+    m = 0
+    while m < nocc {
+        let mut b = nocc
+        while b < nso {
+            let mut e = nocc
+            while e < nso {
+                let mut j = 0
+                while j < nocc {
+                    let mut v = _w(W, nso, m, b, e, j)
+                    let mut f = nocc
+                    while f < nso {
+                        v = v + t1[_idx2(nso,j,f)] * _w(W,nso,m,b,e,f)
+                        f = f + 1
+                    }
+                    let mut nn = 0
+                    while nn < nocc {
+                        v = v - t1[_idx2(nso,nn,b)] * _w(W,nso,m,nn,e,j)
+                        let mut f2 = nocc
+                        while f2 < nso {
+                            let amp = 0.5 * t2[_idx4(nso,j,nn,f2,b)] + t1[_idx2(nso,j,f2)] * t1[_idx2(nso,nn,b)]
+                            v = v - amp * _w(W,nso,m,nn,e,f2)
+                            f2 = f2 + 1
+                        }
+                        nn = nn + 1
+                    }
+                    Wmbej[((m*nso+b)*nso+e)*nso+j] = v
+                    j = j + 1
+                }
+                e = e + 1
+            }
+            b = b + 1
+        }
+        m = m + 1
+    }
+
+    // ── T1 update (Stanton eq. 1) ─────────────────────────────────────────────
+    // D_i^a t_i^a = f_ia + Σ_e t_i^e F_ae − Σ_m t_m^a F_mi
+    //   + Σ_me t_im^ae F_me − Σ_nf t_n^f ⟨na||if⟩
+    //   − ½ Σ_mef t_im^ef ⟨ma||ef⟩ − ½ Σ_men t_mn^ae ⟨nm||ei⟩
+    let mut t1n: [float] = []
+    ii = 0
+    while ii < nso*nso { t1n.push(0.0) ; ii = ii + 1 }
+    let mut i = 0
+    while i < nocc {
+        a = nocc
+        while a < nso {
+            let mut v = 0.0
+            let mut e = nocc
+            while e < nso { v = v + t1[_idx2(nso,i,e)] * Fae[a*nso+e] ; e = e + 1 }
+            let mut mm = 0
+            while mm < nocc { v = v - t1[_idx2(nso,mm,a)] * Fmi[mm*nso+i] ; mm = mm + 1 }
+            mm = 0
+            while mm < nocc {
+                e = nocc
+                while e < nso {
+                    v = v + t2[_idx4(nso,i,mm,a,e)] * Fme[mm*nso+e]
+                    e = e + 1
+                }
+                mm = mm + 1
+            }
+            let mut nn = 0
+            while nn < nocc {
+                let mut f = nocc
+                while f < nso {
+                    v = v - t1[_idx2(nso,nn,f)] * _w(W,nso,nn,a,i,f)
+                    f = f + 1
+                }
+                nn = nn + 1
+            }
+            mm = 0
+            while mm < nocc {
+                e = nocc
+                while e < nso {
+                    let mut f = nocc
+                    while f < nso {
+                        v = v - 0.5 * t2[_idx4(nso,i,mm,e,f)] * _w(W,nso,mm,a,e,f)
+                        f = f + 1
+                    }
+                    e = e + 1
+                }
+                mm = mm + 1
+            }
+            mm = 0
+            while mm < nocc {
+                nn = 0
+                while nn < nocc {
+                    e = nocc
+                    while e < nso {
+                        v = v - 0.5 * t2[_idx4(nso,mm,nn,a,e)] * _w(W,nso,nn,mm,e,i)
+                        e = e + 1
+                    }
+                    nn = nn + 1
+                }
+                mm = mm + 1
+            }
+            let d = eps_so[i] - eps_so[a]
+            t1n[_idx2(nso,i,a)] = v / d
+            a = a + 1
+        }
+        i = i + 1
+    }
+
+    // ── T2 update (Stanton eq. 2) ─────────────────────────────────────────────
+    let mut t2n: [float] = []
+    ii = 0
+    while ii < nso*nso*nso*nso { t2n.push(0.0) ; ii = ii + 1 }
+    i = 0
+    while i < nocc {
+        let mut j = 0
+        while j < nocc {
+            a = nocc
+            while a < nso {
+                let mut b = nocc
+                while b < nso {
+                    let mut v = _w(W, nso, i, j, a, b)
+                    // P(ab) [ t_ij^ae ( F_be − ½ Σ_m t_m^b F_me ) ]
+                    let mut e = nocc
+                    while e < nso {
+                        let mut fbe = Fae[b*nso+e]
+                        let mut fae = Fae[a*nso+e]
+                        let mut mm = 0
+                        while mm < nocc {
+                            fbe = fbe - 0.5 * t1[_idx2(nso,mm,b)] * Fme[mm*nso+e]
+                            fae = fae - 0.5 * t1[_idx2(nso,mm,a)] * Fme[mm*nso+e]
+                            mm = mm + 1
+                        }
+                        v = v + t2[_idx4(nso,i,j,a,e)] * fbe
+                        v = v - t2[_idx4(nso,i,j,b,e)] * fae
+                        e = e + 1
+                    }
+                    // −P(ij) [ t_im^ab ( F_mj + ½ Σ_e t_j^e F_me ) ]
+                    let mut mm = 0
+                    while mm < nocc {
+                        let mut fmj = Fmi[mm*nso+j]
+                        let mut fmi = Fmi[mm*nso+i]
+                        e = nocc
+                        while e < nso {
+                            fmj = fmj + 0.5 * t1[_idx2(nso,j,e)] * Fme[mm*nso+e]
+                            fmi = fmi + 0.5 * t1[_idx2(nso,i,e)] * Fme[mm*nso+e]
+                            e = e + 1
+                        }
+                        v = v - t2[_idx4(nso,i,mm,a,b)] * fmj
+                        v = v + t2[_idx4(nso,j,mm,a,b)] * fmi
+                        mm = mm + 1
+                    }
+                    // ½ Σ_mn τ_mn^ab W_mnij
+                    mm = 0
+                    while mm < nocc {
+                        let mut nn = 0
+                        while nn < nocc {
+                            v = v + 0.5 * tau[_idx4(nso,mm,nn,a,b)]
+                                  * Wmnij[((mm*nocc+nn)*nocc+i)*nocc+j]
+                            nn = nn + 1
+                        }
+                        mm = mm + 1
+                    }
+                    // ½ Σ_ef τ_ij^ef W_abef
+                    e = nocc
+                    while e < nso {
+                        let mut f = nocc
+                        while f < nso {
+                            v = v + 0.5 * tau[_idx4(nso,i,j,e,f)]
+                                  * Wabef[(((a-nocc)*nvir+(b-nocc))*nvir+(e-nocc))*nvir+(f-nocc)]
+                            f = f + 1
+                        }
+                        e = e + 1
+                    }
+                    // P(ij)P(ab) [ t_im^ae W_mbej − t_i^e t_m^a ⟨mb||ej⟩ ]
+                    mm = 0
+                    while mm < nocc {
+                        e = nocc
+                        while e < nso {
+                            // base (i,j,a,b)
+                            v = v + t2[_idx4(nso,i,mm,a,e)] * Wmbej[((mm*nso+b)*nso+e)*nso+j]
+                            v = v - t1[_idx2(nso,i,e)] * t1[_idx2(nso,mm,a)] * _w(W,nso,mm,b,e,j)
+                            // −P(ij): swap i<->j  (parens expanded to flat ± terms)
+                            v = v - t2[_idx4(nso,j,mm,a,e)] * Wmbej[((mm*nso+b)*nso+e)*nso+i]
+                            v = v + t1[_idx2(nso,j,e)] * t1[_idx2(nso,mm,a)] * _w(W,nso,mm,b,e,i)
+                            // −P(ab): swap a<->b
+                            v = v - t2[_idx4(nso,i,mm,b,e)] * Wmbej[((mm*nso+a)*nso+e)*nso+j]
+                            v = v + t1[_idx2(nso,i,e)] * t1[_idx2(nso,mm,b)] * _w(W,nso,mm,a,e,j)
+                            // +P(ij)P(ab): swap both
+                            v = v + t2[_idx4(nso,j,mm,b,e)] * Wmbej[((mm*nso+a)*nso+e)*nso+i]
+                            v = v - t1[_idx2(nso,j,e)] * t1[_idx2(nso,mm,b)] * _w(W,nso,mm,a,e,i)
+                            e = e + 1
+                        }
+                        mm = mm + 1
+                    }
+                    // P(ij) [ t_i^e ⟨ab||ej⟩ ]   (e over virt)
+                    e = nocc
+                    while e < nso {
+                        v = v + t1[_idx2(nso,i,e)] * _w(W,nso,a,b,e,j)
+                        v = v - t1[_idx2(nso,j,e)] * _w(W,nso,a,b,e,i)
+                        e = e + 1
+                    }
+                    // −P(ab) [ t_m^a ⟨mb||ij⟩ ]
+                    mm = 0
+                    while mm < nocc {
+                        v = v - t1[_idx2(nso,mm,a)] * _w(W,nso,mm,b,i,j)
+                        v = v + t1[_idx2(nso,mm,b)] * _w(W,nso,mm,a,i,j)
+                        mm = mm + 1
+                    }
+                    let d = eps_so[i] + eps_so[j] - eps_so[a] - eps_so[b]
+                    t2n[_idx4(nso,i,j,a,b)] = v / d
+                    b = b + 1
+                }
+                a = a + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    return [t1n, t2n]
+}
+
+// MP2 doubles guess  t_ij^ab = ⟨ij||ab⟩ / D_ij^ab  (T1 = 0). The natural CCSD
+// initial amplitudes; the ¼-doubles energy term at this guess == E_MP2 (anchor a).
+pub fn ccsd_mp2_guess(W: [float], eps_so: [float], nso: int, nocc: int) -> [float] {
+    let mut t2: [float] = []
+    let mut ii = 0
+    while ii < nso*nso*nso*nso { t2.push(0.0) ; ii = ii + 1 }
+    let mut i = 0
+    while i < nocc {
+        let mut j = 0
+        while j < nocc {
+            let mut a = nocc
+            while a < nso {
+                let mut b = nocc
+                while b < nso {
+                    let d = eps_so[i] + eps_so[j] - eps_so[a] - eps_so[b]
+                    t2[_idx4(nso,i,j,a,b)] = _w(W,nso,i,j,a,b) / d
+                    b = b + 1
+                }
+                a = a + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return t2
+}
+
+// ‖ΔT2‖ (Frobenius) between two doubles tensors — the iteration residual.
+fn _sqrtf(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    if g < 1.0 { g = 1.0 }
+    let mut it = 0
+    while it < 60 { let ng = 0.5*(g + x/g) ; if ng == g { break } ; g = ng ; it = it + 1 }
+    return g
+}
+pub fn ccsd_t2_rmsd(a: [float], b: [float], nso: int) -> float {
+    let mut s = 0.0
+    let mut k = 0
+    let n4 = nso*nso*nso*nso
+    while k < n4 { let d = a[k] - b[k] ; s = s + d*d ; k = k + 1 }
+    return _sqrtf(s)
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   driver — converged MO-ERI tensor + ε + n_occ  →  CCSD correlation energy
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Consume EXACTLY what mp2_corr_from_rhf returns (eri_mo, eps, n_occ) — no RHF
+// rerun, no transform rebuild (d19). Iterate T1/T2 to convergence.
+// Returns [ e_ccsd, e_mp2_first, iters, residual, converged ]:
+//   e_ccsd       = converged CCSD correlation energy (< E_MP2 < 0)
+//   e_mp2_first  = the FIRST-iteration energy at (T1=0, T2=MP2 guess) == E_MP2 (anchor a)
+//   iters        = iterations to convergence
+//   residual     = final ‖ΔT2‖
+//   converged    = residual < tol within max_iter
+pub fn ccsd_from_mo_eri(
+    eri_mo: [float], eps: [float], n: int, n_occ: int,
+    max_iter: int, e_tol: float
+) -> [any] {
+    let nso = 2 * n
+    let nocc = 2 * n_occ
+    let W = ccsd_spinorb_eri(eri_mo, n)
+    let eps_so = ccsd_spinorb_eps(eps, n)
+
+    // initial amplitudes: T1 = 0, T2 = MP2 guess
+    let mut t1: [float] = []
+    let mut ii = 0
+    while ii < nso*nso { t1.push(0.0) ; ii = ii + 1 }
+    let mut t2 = ccsd_mp2_guess(W, eps_so, nso, nocc)
+
+    // anchor (a): energy at the MP2 guess (T1=0) == spin-orbital MP2 == E_MP2
+    let e_mp2_first = ccsd_energy(W, t1, t2, nso, nocc)
+
+    let mut e_old = e_mp2_first
+    let mut iters = 0
+    let mut residual = 1.0
+    let mut converged = false
+    while iters < max_iter {
+        let res = ccsd_iterate(W, eps_so, t1, t2, nso, nocc)
+        let t1new: [float] = res[0]
+        let t2new: [float] = res[1]
+        residual = ccsd_t2_rmsd(t2new, t2, nso)
+        t1 = t1new
+        t2 = t2new
+        let e_new = ccsd_energy(W, t1, t2, nso, nocc)
+        iters = iters + 1
+        let de = e_new - e_old
+        let ade = if de < 0.0 { 0.0 - de } else { de }
+        e_old = e_new
+        if ade < e_tol && residual < e_tol { converged = true ; break }
+    }
+    let e_ccsd = ccsd_energy(W, t1, t2, nso, nocc)
+    return [e_ccsd, e_mp2_first, iters, residual, converged]
+}
