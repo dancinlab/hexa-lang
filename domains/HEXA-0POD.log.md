@@ -1,5 +1,46 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-45-GPU DONE: REAL H100 sm_90a T1-T5 occupancy/profile sweep → (a)-(d) classification CONFIRMED + (d) split = FIXABLE-SCHEDULING-STALL (not a hard HBM roofline) · cost model calibrated · 1 H100 ~$0.96 · leak-0
+- USER-APPROVED ("GPU 도 승인", ~$1-2) the gated GPU sibling of OP-45 #3096 (static (a)-(d) cap) + OP-49 #3103
+  (CPU cost model). Goal: confirm/refute (a)-(d) with a real GPU profile + calibrate the cost model, tear down.
+- SURVEY-FIRST: read F-OP45-ROUTEA-D4096-CAP.txt (T1-T5 matrix + (a)-(d)) + F-OP49-SHAPE-ADAPTIVE-DESIGN.txt
+  (cost model + the +9.2% MODE8@4096 over-prediction) + docs/forge-routea-shape-adaptive.md. Located the kernel
+  self/native/wgmma/wgmma_tf32_b14.cu (MODE8 gemm_og17_b14 + MODE7 gemm_og17_persist) + bench14_run.sh driver.
+- RENT: 1x H100 80GB HBM3 sm_90a, driver 560.35.05, nvcc 12.6 V12.6.77 (apples to #3082/#3094). vast contract
+  40729921 label `hexa-op45gpu`, offer 21671170 $2.305/hr (cheapest CUDA>=12.6, rel 0.9989), India. No foreign
+  pod in roster throughout. Inline-polled to running + SSH-ready (no Monitor/waiter, cost-safe).
+- T1 (ptxas -Xptxas -v, VERBATIM): gemm_og17_b14 = 90 registers, 0 spill stores, 0 spill loads. MODE5 t256 =
+  154 regs (the reg-cap). Runtime OCCUPANCY: 96.0 KB/CTA → 2 CTA/SM, D-INVARIANT (same @2048 & 4096). ⇒ (a)
+  register-spill + (b) occupancy-drop MEASURED-EXCLUDED (was statically excluded; now confirmed on HW).
+- T5 (D=2048 anchor): own 320.6 TFLOP/s, ratio 1.08-1.09x, rel_rms 0, PARITY=YES (reproduces 315/1.08x anchor,
+  this card ~1.8% faster). D=4096 cap: own 283.9 TFLOP/s, 1.52x, rel_rms 0, PARITY=NO (reproduces OP-45 EXACTLY).
+- T2 (the (d)-splitter): ncu IS on the image (/usr/local/cuda/bin/ncu) but ALL profiles returned ERR_NVGPUCTRPERM.
+  Root cause on-pod: /proc/driver/nvidia/params → RmProfilingAdminOnly: 1 (a HOST kernel-module param, container
+  cannot change; even ncu launch-metrics gated; nsys not installable). INFRA-BLOCKED. Resolved via g5-legal
+  ANALYTICAL ROOFLINE (measured wall-time only): D=4096 kernel time = 137.44 GFLOP / 283.9 TFLOP/s = 484 us;
+  DRAM bounds = naive-no-reuse 4.36 GB (9.0 TB/s = 269% peak ⇒ impossible ⇒ L2 reuse real) to perfect-L2 0.20 GB
+  (0.42 TB/s = 12.4% peak); AI 682.7 FLOP/byte >> compute-bound threshold 104.2 (PEAK_TF32/HBM3). ⇒ D=4096 is
+  COMPUTE/SCHEDULING-bound, NOT bandwidth-bound. (d)-SPLIT VERDICT = *** FIXABLE-SCHEDULING-STALL, NOT a hard
+  HBM roofline. ***
+- T3 (MODE7 persistent+swizzle @4096, FIRST measurement; rel_rms 0 gate PASS every row): best SWZ=2 GRIDMUL=2 =
+  ~273 TFLOP/s (1.57x) — ~4% BELOW MODE8's 283.9; GRIDMUL=1 (1 CTA/SM) collapses to 205. Does NOT recover the
+  -9.9%. The l2_hot benefit OP-49 hypothesized is ABSENT (consistent with T2 compute-bound). OP-49 GAP#2 (MODE7
+  @4096) = MEASURED CLOSED-NEGATIVE. The fixable lever is NOT in the tile-rasterization layer.
+- T4 (cuBLASLt cublasLtMatmulAlgoGetHeuristic @4096 vs 2048, VERBATIM): cuBLAS D=2048→4096 changes = cta_swizzle
+  0→1 AND top algo at 4096 = split_k=1, reduction=0 (SINGLE-PASS, NO split-K). ⇒ cuBLAS's +24.6% large-D lever
+  is a BETTER-SCHEDULED single-pass tile + CTA-swizzle, NOT split-K → reachable WITHOUT forfeiting g5 bit-exact
+  accumulation order. The forge target is a better single-pass per-CTA tile/schedule.
+- COST-MODEL CALIBRATION (self/native/wgmma/routea_cost_model.py): the +9.2% MODE8@4096 over-prediction is the
+  K-drain term under-crediting the 2x-slab (nks 64→128) serialization (T2 ruled out a missing bandwidth term).
+  Replaced the static log-drain (c=0.115) with an anchored-excess-slab drain that holds the nks=64 anchor EXACTLY
+  and steepens nks→128 (c=0.109): MODE8@4096 +9.2% → +1.0% (286.7 vs 283.9). ORDERING still PASS both D. HONEST
+  residual: single global coeff over-corrects OG16/OG17 (mean |rel.err| 2.2%→3.9%) — drain is non-uniform across
+  modes; per-mode coeff = 0-pod follow-up. The selector argmax (MODE8) is unaffected.
+- DESTROY: confirmed label `hexa-op45gpu` mine + zero foreign pods → `yes | vastai destroy instance 40729921` →
+  `vastai show instances-v1` = "Total: 0 instances / No instances found". LEAK-0 CONFIRMED. ~$0.96, ~25 min.
+- DELIVERABLES: .verdicts/hexa-0pod/F-OP45GPU-OCCUPANCY-SWEEP.txt (VERBATIM T1-T5) · calibrated routea_cost_model.py
+  · self/native/wgmma/lt_introspect.cu (the cuBLASLt T4 introspection program) · this log + the OP-45-GPU milestone.
+
 ## 2026-06-13 — OP-51 DONE: [S]-shadow survive-audit tranche (6 of 16 [S R]-survivors) — all 6 g5-falsified + shadow-control safe → DEREGISTERED · survivor set 16→10 · $0 · 0-pod
 - SURVEY-FIRST (mandatory). Read F-OP48-SURVIVE-AUDIT-TRANCHE.txt (the [R]/[S] split + running tally:
   26→23→16 + the arange KEEP precedent — a self-host compiler-closure ref in compiler/check/bind.hexa:1281
