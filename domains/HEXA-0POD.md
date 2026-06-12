@@ -142,6 +142,27 @@ loop targets what the consumer card + code can carry.
   3rd instance of the frozen-seed-promote dependency after OP-39b/OP-40). Verdict
   .verdicts/hexa-0pod/F-OP44-VSNPRINTF-CORRECT-ROUND.txt. $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
 
+<!-- ANCHOR:OP-43-ML-FAMILY-FALSIFIED (unique anchor — OP-41 deferred ~101 non-optimizer falsified roster builtins conservatively. OP-43 takes the ML-FAMILY subset (conv/quant/activation/attention/array-ML cluster) and audits it ONE LAYER DEEPER with OP-41's exact per-builtin g5 method (AOT probe with CORRECT args + arg-shape-trap control + local-fn-shadow vs builtin distinction + dead/live caller classification) to either safely deregister the truly-dead or document precisely why each survives) -->
+- [x] **OP-43 — ML-family falsified-builtin deeper audit: 42-builtin sub-matrix (all 42 AOT-falsified); 16 truly-dead DEREGISTERED, 26 SURVIVE-WITH-REASON** —
+  🟢 re-applied OP-41's RIGOROUS g5 method to the 42-member ML family. Built AOT probe harness (fresh hexat
+  ~/.hx/bin/build/hexat <in> <out.c> → clang -fsyntax-only) with the arg-shape-trap CONTROLLED (verified 0
+  codegen-inline guards for all 42 → probe robust to arg shape) and the substring-over-count hazard REFUTED
+  (sigmoid/cross_entropy/transpose/zeros/ones/attention/dot static grep-hits all empirically FALSIFIED). ALL 42
+  emit "use of undeclared identifier 'NAME'". DEREGISTERED 16 (tanh_ ones ema batch_matvec batch_norm dropout
+  gru_cell sinusoidal_pe multi_head_attention max_pool1d attention_cached beam_search_step xavier_init kaiming_init
+  sparsity weight_dict) — each falsified + ZERO local-fn shadow repo-wide + EVERY caller a baseline-dead example/
+  demo (tool/examples_baseline.json exit_code=-1), weight_dict a pure 0-call orphan. SURVIVE-WITH-REASON 26 (relu
+  sigmoid cross_entropy transpose normalize zeros arange clip attention topk sample_token mse_loss conv1d
+  kv_cache_append save_array load_array quantize_int8 dequantize_int8 magnitude_prune tensor_fill repeat_kv dot
+  mat_add_inplace matmul_into rope rope_inplace) — local-fn shadows in real programs [S] and/or substantial broken
+  self//stdlib caller surfaces [R] (matmul_into 50, dot 55, mat_add_inplace 33) → conservative g0 blast-radius bound,
+  documented. CONTROL: a local `fn relu` emits `HexaVal relu(...)` (bare-name local def) compiling clean → shadows
+  provide their own symbol, don't depend on the roster. SELF-HOST SAFE: compiler/** (byte-eq core) has ZERO refs to
+  any removed name (only a `// sigmoid(x)=...` comment); no CI compiles example//self/ml. env.hexa transpiles clean
+  after removal. CLOSURE: truly-dead ML-family subset is now EMPTY; the falsified ML family is bounded-with-reason
+  to the 26 survivors. wipe_guard: net +22/−12 « 50. Verdict .verdicts/hexa-0pod/F-OP43-ML-FAMILY-FALSIFIED.txt.
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
 <!-- ANCHOR:OP-37B-HOST-ATOF-CORRECT-ROUND (unique anchor — OP-37 (#3069) fixed the `0.0 - X` NEGATION idiom byte-exact by preserving operand source TEXT, but left a documented residual: folds that COMPUTE a value from RE-PARSED operands (e.g. `let a = 1.5 * 0.1`) re-parse via to_float→hxlcl_atof, a naive digit-accumulator 1 ULP off the correctly-rounded value. OP-37b settles whether a correctly-rounded host parse is tractable WITHOUT risking the self-host byte-eq fixpoint: measure the residual exactly on from-source rebuild, then find the smallest correct fix) -->
 - [x] **OP-37b — host-atof residual: computed const-folds re-parse operands 1 ULP off → FIXED via correctly-rounded strtod route (parse_float); fixpoint byte-identical** —
   🟢 the OP-37 residual is REAL on CURRENT source: MEASURED MAX 3 ULP (operands 1 ULP off via to_float/hxlcl_atof,
