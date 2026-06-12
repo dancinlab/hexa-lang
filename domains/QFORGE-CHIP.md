@@ -14,7 +14,7 @@
       ε(k)=ε₀−2t·cos(ka) (bandwidth=4t · 밴드edge v_g=0 · van-Hove), diatomic-chain GAP
       via generic `eigh` (반도체 vs 금속), Landauer-Büttiker G=G₀·ΣTₙ 양자화 (G₀=2e²/h ·
       QPC 계단), 보편 열전도 양자 g₀=π²k_B²T/3h (Schwab Nature 404,974). 전부 exact
-      closed-form anchor (d6). PR #<TBD>.
+      closed-form anchor (d6). PR #3127.
 - [ ] **round-2 ① k-mesh band sweep** — H(k) 를 MP-mesh(`mpgrid` 재사용)에서 평가 → ε_n(k)
       밴드 manifold · Γ→X 경로 + DOS van-Hove anchor.
 - [ ] **round-2 ② 2-terminal NEGF transmission** — T(E)=Tr[ΓL G^r ΓR G^a], 1D TB chain +
@@ -30,7 +30,7 @@
       극한, ratio 0.975→0.99998 as V_g→0; finite-V 는 2nd-order 로 < 2|V_g|, basis-수렴) ·
       (C) R2 DOS 일관 (band-edge dε/dk→0 van-Hove + 갭내 DOS=0) · (D) Hermiticity + V(0)
       uniform shift. HONEST(d6): 운동에너지=실 SCF brick (배선 LIVE), 포텐셜=해석 Fourier 극한
-      (empty+Bragg) — 수렴 real-cell scf_pw V_scr 는 데이터 swap (round-4). PR #<TBD>.
+      (empty+Bragg) — 수렴 real-cell scf_pw V_scr 는 데이터 swap (round-4). PR #3127.
 - [ ] **round-2 ④ phonon-Landauer κ** — DFPT ω(q)(`dfpt`·`realcell_phonon`) 를 포논
       transmission 으로 재사용 · ballistic κ → N·g₀ 저온 floor anchor.
 - [ ] **verify-adapter (chip=TCAD)** — 밴드갭/effective-mass/컨덕턴스/κ 를 측정·TCAD ref
