@@ -1,0 +1,91 @@
+// HEXA Standard Library — codec/utf8 self-test (@ci_gate).
+// Golden vectors = RFC 3629 byte sequences (authoritative; identical to
+// CPython `str.encode('utf-8')`). Locks the codepoints∘from_codepoints
+// round-trip across the 1/2/3/4-byte boundaries + validity detection, and
+// the OP-77 fix where from_codepoints wrapped its raw UTF-8 bytes with the
+// un-imported ckpt/format bytes_to_str (which double-encoded every byte
+// >=0x80 into mojibake AND failed a standalone codec build).
+// @sentinel(__HEXA_CODEC_UTF8__ <PASS|FAIL> N/N)
+
+use "stdlib/codec/utf8"
+
+let SENT_T = "__HEXA_CODEC_UTF8__"
+
+fn _eqi(a: [int], b: [int]) -> int {
+    if len(a) != len(b) { return 0 }
+    let mut i = 0
+    while i < len(a) { if a[i] != b[i] { return 0 }; i = i + 1 }
+    return 1
+}
+
+fn _bytes(s: string) -> [int] {
+    let n = byte_len(s)
+    let mut out: [int] = []
+    let mut i = 0
+    while i < n { out = out + [s.byte_at(i)]; i = i + 1 }
+    return out
+}
+
+fn main() {
+    // Boundary codepoints across the 1/2/3/4-byte sizes + astral.
+    //   0x41 'A'(1B) · 0xE9 'é'(2B) · 0x20AC '€'(3B) · 0xD55C '한'(3B,Hangul)
+    //   · 0x65E5 '日'(3B) · 0x1F30C '🌌'(4B,astral)
+    let cps    = [0x41, 0xE9, 0x20AC, 0xD55C, 0x65E5, 0x1F30C]
+    // golden UTF-8 byte sequences (CPython str.encode('utf-8')).
+    let golden = [[0x41], [0xC3,0xA9], [0xE2,0x82,0xAC], [0xED,0x95,0x9C], [0xE6,0x97,0xA5], [0xF0,0x9F,0x8C,0x8C]]
+
+    let mut pass = 0
+    let mut total = 0
+
+    let mut i = 0
+    while i < len(cps) {
+        let s = utf8_from_codepoints([cps[i]])
+
+        // encoded bytes match the golden RFC 3629 sequence (this is the OP-77
+        // double-encode lock — bytes_to_str(ckpt) would mangle bytes >=0x80).
+        total = total + 1
+        if _eqi(_bytes(s), golden[i]) == 1 { pass = pass + 1 } else { eprintln("FAIL encode idx " + str(i)) }
+
+        // round-trip: codepoints(from_codepoints([cp])) == [cp]
+        total = total + 1
+        if _eqi(utf8_codepoints(s), [cps[i]]) == 1 { pass = pass + 1 } else { eprintln("FAIL roundtrip idx " + str(i)) }
+
+        // each boundary glyph is valid UTF-8
+        total = total + 1
+        if utf8_is_valid(s) { pass = pass + 1 } else { eprintln("FAIL valid idx " + str(i)) }
+
+        i = i + 1
+    }
+
+    // multi-codepoint round-trip (mixed widths) + count.
+    let mixed = utf8_from_codepoints([0x41, 0xD55C, 0x1F30C, 0x42])
+    total = total + 1
+    if _eqi(utf8_codepoints(mixed), [0x41, 0xD55C, 0x1F30C, 0x42]) == 1 { pass = pass + 1 } else { eprintln("FAIL mixed roundtrip") }
+    total = total + 1
+    if utf8_codepoint_count(mixed) == 4 { pass = pass + 1 } else { eprintln("FAIL count") }
+
+    // empty round-trip.
+    total = total + 1
+    if utf8_codepoint_count(utf8_from_codepoints([])) == 0 { pass = pass + 1 } else { eprintln("FAIL empty") }
+
+    // surrogate codepoint is SKIPPED by the encoder (cannot be UTF-8).
+    total = total + 1
+    if _eqi(utf8_codepoints(utf8_from_codepoints([0x41, 0xD800, 0x42])), [0x41, 0x42]) == 1 { pass = pass + 1 } else { eprintln("FAIL surrogate skip") }
+
+    // invalid byte sequences -> utf8_is_valid false (RFC 3629 rejects).
+    //   lone continuation · overlong 2B · overlong 3B · surrogate U+D800 ·
+    //   > U+10FFFF · truncated lead.
+    let bads = [[0x80], [0xC0,0x80], [0xE0,0x80,0x80], [0xED,0xA0,0x80], [0xF4,0x90,0x80,0x80], [0xC2]]
+    let mut bidx = 0
+    while bidx < len(bads) {
+        total = total + 1
+        if !utf8_is_valid(bytes_to_str_raw(bads[bidx])) { pass = pass + 1 } else { eprintln("FAIL invalid-detect idx " + str(bidx)) }
+        // invalid -> codepoint_count == -1 (distinct from empty 0).
+        total = total + 1
+        if utf8_codepoint_count(bytes_to_str_raw(bads[bidx])) == -1 { pass = pass + 1 } else { eprintln("FAIL invalid-count idx " + str(bidx)) }
+        bidx = bidx + 1
+    }
+
+    let verdict = if pass == total { "PASS" } else { "FAIL" }
+    println(SENT_T + " " + verdict + " " + str(pass) + "/" + str(total))
+}

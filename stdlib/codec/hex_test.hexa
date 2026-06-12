@@ -1,0 +1,96 @@
+// HEXA Standard Library — codec/hex self-test (@ci_gate).
+// Golden vectors = RFC 4648 §8 base16 (authoritative; identical to CPython
+// `binascii.hexlify`). Locks the encode∘decode round-trip across every
+// byte value + boundary (empty, all-0x00, all-0xFF, high bytes) and the
+// OP-77 standalone-build fix (bytes_to_str_raw, not the un-imported
+// ckpt/format bytes_to_str).
+// @sentinel(__HEXA_CODEC_HEX__ <PASS|FAIL> N/N)
+
+use "stdlib/codec/hex"
+
+let SENT_T = "__HEXA_CODEC_HEX__"
+
+fn _bytes(s: string) -> [int] {
+    let n = byte_len(s)
+    let mut out: [int] = []
+    let mut i = 0
+    while i < n { out = out + [s.byte_at(i)]; i = i + 1 }
+    return out
+}
+
+fn _eq(a: [int], b: [int]) -> int {
+    if len(a) != len(b) { return 0 }
+    let mut i = 0
+    while i < len(a) { if (a[i] & 0xFF) != (b[i] & 0xFF) { return 0 }; i = i + 1 }
+    return 1
+}
+
+fn main() {
+    // RFC 4648 §8 vectors — lowercase encode of the canonical plaintexts.
+    let plains = ["", "f", "fo", "foo", "foob", "fooba", "foobar"]
+    let hexlo  = ["", "66", "666f", "666f6f", "666f6f62", "666f6f6261", "666f6f626172"]
+    let hexup  = ["", "66", "666F", "666F6F", "666F6F62", "666F6F6261", "666F6F626172"]
+
+    let mut pass = 0
+    let mut total = 0
+
+    let mut i = 0
+    while i < len(plains) {
+        // lowercase encode matches the golden vector
+        total = total + 1
+        if hex_encode_str(plains[i]) == hexlo[i] { pass = pass + 1 } else { eprintln("FAIL enc-lo " + plains[i]) }
+
+        // uppercase encode matches the golden vector
+        total = total + 1
+        if hex_encode_upper(_bytes(plains[i])) == hexup[i] { pass = pass + 1 } else { eprintln("FAIL enc-up " + plains[i]) }
+
+        // decode of the golden vector matches the plaintext bytes
+        total = total + 1
+        if _eq(hex_decode(hexlo[i]), _bytes(plains[i])) == 1 { pass = pass + 1 } else { eprintln("FAIL decode " + hexlo[i]) }
+
+        // round-trip identity: decode(encode(p)) == p
+        total = total + 1
+        if hex_decode_str(hex_encode_str(plains[i])) == plains[i] { pass = pass + 1 } else { eprintln("FAIL roundtrip " + plains[i]) }
+
+        i = i + 1
+    }
+
+    // case-insensitive decode: upper and lower decode identically.
+    total = total + 1
+    if _eq(hex_decode("DEADBEEF"), hex_decode("deadbeef")) == 1 { pass = pass + 1 } else { eprintln("FAIL case-insensitive") }
+
+    // whitespace + ':' separator tolerance.
+    total = total + 1
+    if _eq(hex_decode("de ad:be\nef"), [0xde, 0xad, 0xbe, 0xef]) == 1 { pass = pass + 1 } else { eprintln("FAIL whitespace/colon") }
+
+    // odd-length input -> [] (empty).
+    total = total + 1
+    if len(hex_decode("abc")) == 0 { pass = pass + 1 } else { eprintln("FAIL odd-length") }
+
+    // non-hex digit -> [] (empty).
+    total = total + 1
+    if len(hex_decode("xy")) == 0 { pass = pass + 1 } else { eprintln("FAIL non-hex") }
+
+    // boundary byte arrays: empty, all-0x00, all-0xFF.
+    total = total + 1
+    if _eq(hex_decode(hex_encode([])), []) == 1 { pass = pass + 1 } else { eprintln("FAIL empty array") }
+    total = total + 1
+    if _eq(hex_decode(hex_encode([0, 0, 0])), [0, 0, 0]) == 1 { pass = pass + 1 } else { eprintln("FAIL all-0x00") }
+    total = total + 1
+    if _eq(hex_decode(hex_encode([255, 255, 255])), [255, 255, 255]) == 1 { pass = pass + 1 } else { eprintln("FAIL all-0xFF") }
+
+    // FULL single-byte sweep 0..255 — encode∘decode == identity for every byte
+    // value (high bytes >=0x80 exercise the OP-77 bytes_to_str_raw fix).
+    let mut bad = 0
+    let mut k = 0
+    while k < 256 {
+        let dec = hex_decode(hex_encode([k]))
+        if _eq(dec, [k]) != 1 { bad = bad + 1 }
+        k = k + 1
+    }
+    total = total + 1
+    if bad == 0 { pass = pass + 1 } else { eprintln("FAIL single-byte sweep count=" + str(bad)) }
+
+    let verdict = if pass == total { "PASS" } else { "FAIL" }
+    println(SENT_T + " " + verdict + " " + str(pass) + "/" + str(total))
+}

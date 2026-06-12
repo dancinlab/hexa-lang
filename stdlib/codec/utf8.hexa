@@ -139,5 +139,11 @@ pub fn utf8_from_codepoints(cps: [int]) -> string {
         }
         i = i + 1
     }
-    return bytes_to_str(out)
+    // out is ALREADY a raw UTF-8 byte sequence (assembled above), so wrap it
+    // with bytes_to_str_raw (a registered codegen builtin = raw byte buffer).
+    // The ckpt/format bytes_to_str this module never imports treats each byte
+    // as a CODEPOINT and re-UTF-8-encodes it — double-encoding every byte >=0x80
+    // into mojibake (latent correctness bug) AND failing to resolve in a
+    // standalone codec build (the OP-75 unregistered-builtin class).
+    return bytes_to_str_raw(out)
 }

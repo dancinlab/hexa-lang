@@ -1,0 +1,140 @@
+F-OP77-CODEC-ROUNDTRIP-AUDIT
+============================
+TIER: 🔴→fix + 🟢 PROVEN-CLEAN
+  🔴→fix : hex.hexa + utf8.hexa wrapped raw byte arrays with the un-imported
+           ckpt/format bytes_to_str (the OP-75 unregistered-builtin class) —
+           a standalone-build failure PLUS, for utf8, a latent mojibake
+           double-encode. Fixed + machine-locked with new test files.
+  🟢      : the remaining 7 sibling codecs (base64 already OP-75; euc_kr,
+           cp949, shift_jis, gbk, big5 multibyte; unicode_normalize) are
+           PROVEN-CLEAN — every table entry + boundary round-trips, with
+           CPython-authoritative parity and full closure (0 mismatches).
+SCOPE: 0-pod · $0 · local CPU · NO GPU · no vast · no foreign pod · leak-0
+       (source-logic fix + 2 new self-tests; leaf stdlib codec modules, NOT in
+        the build_selfhost closure → self-host byte-eq fixpoint UNTOUCHED).
+
+CONTEXT
+-------
+OP-75 (#3207) fixed stdlib/codec/base64.hexa: base64_decode dropped the trailing
+2/3-char group (encode∘decode was identity ONLY for multiple-of-3 byte-lengths),
+plus a co-located unregistered-builtin compile bug (it called bytes_to_str, which
+is neither a registered builtin nor imported). OP-77 audits the SIBLING codec
+modules for the SAME class.
+
+ENUMERATION (stdlib/codec/* — scoped reads, NO .git; there is no stdlib/encoding/)
+---------------------------------------------------------------------------------
+  base64           — RFC 4648 base64                 (DONE by OP-75)
+  hex              — RFC 4648 §8 base16               [int]↔string round-trip
+  utf8             — RFC 3629 UTF-8                   codepoints↔from_codepoints
+  euc_kr           — EUC-KR / KS X 1001 (Korean)      string↔bytes, 2-byte set
+  cp949            — CP949 / UHC (Korean)             string↔bytes, full Hangul
+  shift_jis        — Shift-JIS (Japanese)             string↔bytes, 1B kana + 2B
+  gbk              — GBK / GB2312 (Chinese simpl.)    string↔bytes, 2-byte
+  big5             — Big5 (Chinese trad.)             string↔bytes, 2-byte
+  unicode_normalize— UAX #15 NFC/NFD/NFKC/NFKD        normalization (idempotent,
+                                                       NOT a bijective round-trip)
+
+VERIFY METHOD (OP-75 method — the installed Jun-1 seed is a stale-oracle that
+SIGABRTs running fixed leaf modules; correctness locked by faithful Python ports
+cross-checked vs Python's authoritative codecs, NOT the local runtime).
+
+THE BUG (🔴) — hex.hexa + utf8.hexa: un-imported ckpt bytes_to_str
+-----------------------------------------------------------------
+Both modules call bytes_to_str(out) to turn a byte array into a string:
+  hex.hexa:43   _hex_encode_table  → return bytes_to_str(out)
+  hex.hexa:98   hex_decode_str     → return bytes_to_str(hex_decode(s))
+  utf8.hexa:142 utf8_from_codepoints→ return bytes_to_str(out)
+bytes_to_str is defined ONLY in stdlib/ckpt/format.hexa (a `pub fn`, NOT a
+registered codegen builtin) and is NEVER imported by hex.hexa / utf8.hexa. Every
+sibling multibyte codec EXPLICITLY noted this and inlined its own converter to
+dodge it (verbatim from euc_kr.hexa:12-13 / cp949.hexa:11 / gbk / big5 / shift_jis
+/ unicode_normalize: "utf8 references bytes_to_str (defined in stdlib/ckpt/format)
+without importing it, which only resolves in a full-stdlib build, not a standalone
+codec build"). hex and utf8 did NOT — exactly the OP-75 co-located build bug.
+
+TWO defects, both cured by switching to the REGISTERED builtin bytes_to_str_raw
+(raw byte buffer; self/codegen.hexa:7209 `if name == "bytes_to_str_raw"`):
+  (1) STANDALONE-BUILD FAILURE: `hexa build stdlib/codec/{hex,utf8}.hexa` cannot
+      resolve bytes_to_str (it is only in scope in a full-stdlib closure).
+  (2) utf8 DOUBLE-ENCODE (latent CORRECTNESS bug): utf8_from_codepoints assembles
+      a RAW UTF-8 byte sequence in `out`. The ckpt/format bytes_to_str does
+      `to_string(from_char_code(b & 0xFF))` per byte — i.e. it treats each RAW
+      BYTE as a CODEPOINT and re-UTF-8-encodes it, double-encoding every byte
+      >=0x80 into mojibake. Verbatim cross-check (faithful Python port):
+        utf8_from_codepoints([0xD55C])  → raw bytes ED 95 9C
+          via bytes_to_str_raw (raw buffer)      → '한'  CORRECT
+          via bytes_to_str(ckpt, per-codepoint)  → 3 mojibake chars  WRONG
+  hex output is pure ASCII (<0x80) so raw == per-codepoint there (encode result
+  byte-identical); raw is ALSO the correct "bytes-as-string" semantics for
+  hex_decode_str's high bytes.
+
+THE FIX (source) — 3 call sites:
+  hex.hexa:43,98  bytes_to_str → bytes_to_str_raw
+  utf8.hexa:142   bytes_to_str → bytes_to_str_raw
+NEW stdlib/codec/hex_test.hexa  (@sentinel __HEXA_CODEC_HEX__)
+NEW stdlib/codec/utf8_test.hexa (@sentinel __HEXA_CODEC_UTF8__)
+matching the stdlib/codec/*_test.hexa convention (RFC golden vectors + boundary
+sweep + the OP-77 fix lock).
+
+CROSS-CHECK (faithful Python ports vs binascii / 'utf-8' — 0 mismatches)
+-----------------------------------------------------------------------
+hex (port of _hex_nibble/_hex_encode_table/hex_decode):
+  · encode parity vs binascii.hexlify on: empty, [0x00], [0xFF], [0x00]*5,
+    [0xFF]*5, range(256), [de ad be ef], + every single byte 0..255 → 0 mismatch
+  · encode∘decode == identity (lower AND upper) for all of the above → 0 mismatch
+  · odd-length / non-hex → []  ;  whitespace+':' tolerance "de ad:be\nef" → ok
+utf8 (port of _utf8_leading_size/utf8_is_valid/utf8_codepoints/utf8_from_codepoints):
+  · encode parity vs str.encode('utf-8') on the 1/2/3/4-byte boundary set +
+    Hangul/Japanese/emoji + ASCII range → 0 mismatch
+  · codepoints∘from_codepoints == identity for the FULL 0..0x10FFFF codepoint
+    sweep (minus surrogates) → 0 mismatch   (the round-trip invariant, exhaustive)
+  · utf8_is_valid parity vs Python decode on every encoded glyph → 0 mismatch
+  · invalid-detection parity (lone-continuation, overlong 2B/3B, surrogate U+D800,
+    >U+10FFFF, truncated, invalid-lead 0xF5) all agree with Python → 0 mismatch
+  · surrogate codepoint SKIPPED by encoder: [0x41,0xD800,0x42] → "AB"
+
+🟢 PROVEN-CLEAN — the 7 sibling codecs (per-codec round-trip matrix)
+-------------------------------------------------------------------
+Maps rebuilt EXACTLY as the .hexa modules build them from the *_table.gen.hexa
+blobs (8-hex records cp|b0|b1; 10-hex for shift_jis with the 1/2-byte width flag),
+cross-checked vs the CPython codec of the same name + full round-trip closure:
+
+  codec   | records | enc≡CPython | dec_rt | enc∘dec_rt | closure | verdict
+  --------+---------+-------------+--------+------------+---------+---------
+  euc_kr  |   8226  |      0 mism |   0    |     0      |    0    | 🟢 clean
+  cp949   |  17048  |      0 mism |   0    |     0      |    0    | 🟢 clean
+  gbk     |  21791  |      0 mism |   0    |     0      |    0    | 🟢 clean
+  big5    |  13706  |      0 mism |   0    |     0      |    0    | 🟢 clean
+  shift_jis|  6942  |      0 mism |   0    |     0      |    0    | 🟢 clean
+  (enc≡CPython = our enc map == ch.encode(<codec>); enc/dec unique counts EQUAL
+   records for all five → NO codepoint↔bytepair aliasing collision that could
+   break a round-trip.)
+  shift_jis lead-byte disjointness (the decode's "try 1-byte before 2-byte"
+   relies on it): 1-byte katakana leads (63, 0xA1-0xDF) ∩ 2-byte leads (39) = ∅
+   → decode order PROVABLY safe.
+  unicode_normalize — NFC/NFD/NFKC/NFKD; idempotent normalization, NOT a bijective
+   encode∘decode codec → out of OP-77's round-trip scope, and already locked by
+   17 CPython unicodedata golden vectors in unicode_normalize_test.hexa.
+  base64 — already OP-75 (#3207) GREEN.
+All five multibyte modules ALREADY carry CPython golden-vector + round-trip +
+boundary tests (euc_kr_test/cp949_test/gbk_test/big5_test/shift_jis_test); this
+audit re-confirms them at FULL-TABLE scale (no per-glyph sampling).
+
+LOCAL-ORACLE NOTE (g5 honesty)
+------------------------------
+Per MEMORY ("local hexa is a stale oracle") + OP-75, the installed Jun-1 seed
+SIGABRTs running fixed leaf codec modules, so correctness is locked by the
+faithful-Python-port cross-check vs Python's authoritative codecs (binascii /
+'utf-8' / euc-kr / cp949 / gbk / big5 / shift_jis), NOT the stale local runtime.
+
+IMPACT / SAFETY
+---------------
+Self-host byte-eq UNAFFECTED — hex/utf8 are leaf codec modules NOT in the
+build_selfhost closure (zero codegen/runtime bytes touched). wipe_guard: net
+ADDITIVE (3 call-site edits + 2 new test files; 0 substantive deletions).
+
+VERDICT: 🔴→fix (hex+utf8 un-imported bytes_to_str → standalone-build failure +
+utf8 mojibake double-encode; fixed via the registered bytes_to_str_raw + locked
+by hex_test/utf8_test) + 🟢 PROVEN-CLEAN (euc_kr/cp949/gbk/big5/shift_jis full-
+table CPython parity + closure 0 mism; unicode_normalize out-of-scope/covered;
+base64 OP-75). $0, 0-pod, NO GPU, no vast, no foreign pod, no .tape, leak-0.
