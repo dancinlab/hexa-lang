@@ -1,8 +1,8 @@
 #!/bin/sh
 # ─────────────────────────────────────────────────────────────────────────────
-# tool/op39_constfold_gate.sh — HEXA-0POD OP-39: float const-fold byte-eq
-# REGRESSION tripwire. Locks the OP-37 (#3069) + OP-37b (#3073) compile-time
-# float const-fold fixes so they can NEVER silently regress.
+# tool/op39_constfold_gate.sh — HEXA-0POD OP-39/OP-42: float const-fold byte-eq
+# REGRESSION tripwire. Locks the OP-37 (#3069) + OP-37b (#3073) + OP-40 (#3084)
+# compile-time float const-fold fixes so they can NEVER silently regress.
 #
 # THE BUGS THIS GUARDS (silent — no crash, just subtly wrong float bytes):
 #   OP-37  — `let a = 0.0 - <float literal>` const-folded through `%g`
@@ -14,6 +14,13 @@
 #            via the naive hxlcl_atof accumulator (≤1 ULP/operand, MAX 3 ULP
 #            compounded). Fixed: route the operand parse through the correctly-
 #            rounded strtod path (str.parse_float()) — operands byte-exact.
+#   OP-40  — the remaining 1 ULP on computed products was the host's hand-rolled
+#            %.17e fold SERIALIZE (rt_format_float_sci / hxlcl_vsnprintf — not
+#            correctly-rounded; drifted ≈13% of folds). Fixed: serialize the
+#            folded double as a bit-exact C99 hex-float literal (0x1.<mant>p<exp>,
+#            integer ops only) — clang re-parses with ZERO loss → MAX 0 ULP. The
+#            MUL_HF* cases exercise this path (correctly-rounded products the old
+#            %.17e mis-served).
 #
 # Runs the SELF-CONTAINED oracle stdlib/flame/op39_constfold_byteeq.hexa via
 # `hexa run` and asserts each compile-time-folded float's IEEE-754 LE bit
@@ -37,7 +44,7 @@
 # LOW BLAST RADIUS (the OP-19f/OP-34 gate discipline):
 #   * Runs ONLY this one self-contained oracle (no `use`, no flame import) —
 #     unrelated code can never fail this gate.
-#   * Asserts ONLY the 13 const-fold bits lines below.
+#   * Asserts ONLY the 18 const-fold bits lines below.
 #   * This script is the SSOT (also runnable locally:
 #       sh tool/op39_constfold_gate.sh [hexa-bin]); the CI step is a thin wrapper.
 #
@@ -72,6 +79,19 @@ GOLD_MUL1=4589888465602041182
 GOLD_MUL2=4604576697939583319
 GOLD_ADD1=4599075939470750516
 GOLD_DIV1=4599676419421066581
+# (c) HEX-FLOAT serialize path (OP-40, #3084). These products are the ones whose
+# correctly-rounded IEEE value the OLD hand-rolled %.17e fold serialize MIS-rounded
+# by 1 ULP (≈13% of computed folds drifted; rt_format_float_sci / hxlcl_vsnprintf
+# are not correctly-rounded). The fixed compiler emits each as a bit-exact hex-float
+# (`0x1.<mant>p<exp>`) that clang re-parses with ZERO loss, so the golden is python
+# struct.pack('<d', a*b) — the correctly-rounded value. A regression to %g/%.17e
+# serialize drifts these away from the golden (verified: ~/.hx/bin/build/hexat
+# emitted the lossy hexa_float(0.0834799) for MUL_HF1 vs the fixed 0x1.55ef06babe355p-4).
+GOLD_MUL_HF1=4590679781865677653
+GOLD_MUL_HF2=4599111362625910598
+GOLD_MUL_HF3=-4633483571252734626
+GOLD_MUL_HF4=4599935351876617150
+GOLD_MUL_HF5=4602247188257481376
 
 # .c=0 seam: on a seeds-removed checkout the `hexa build` final link consumes the
 # prebuilt runtime archive instead of compiling self/runtime.c (absent). No-op
@@ -98,6 +118,8 @@ NEG1="$(get NEG1)";  NEG2="$(get NEG2)";  NEG3="$(get NEG3)"
 NEG4="$(get NEG4)";  NEG5="$(get NEG5)";  NEG6="$(get NEG6)"
 SUB0="$(get SUB0)";  ADD0a="$(get ADD0a)"; ADD0b="$(get ADD0b)"
 MUL1="$(get MUL1)";  MUL2="$(get MUL2)";  ADD1="$(get ADD1)";  DIV1="$(get DIV1)"
+HF1="$(get MUL_HF1)"; HF2="$(get MUL_HF2)"; HF3="$(get MUL_HF3)"
+HF4="$(get MUL_HF4)"; HF5="$(get MUL_HF5)"
 
 FAIL=0
 check() { # name actual golden
@@ -122,6 +144,13 @@ check "MUL1 (0.254829592 * 0.284496736)" "$MUL1" "$GOLD_MUL1"
 check "MUL2 (1.421413741 * 0.5)"        "$MUL2"  "$GOLD_MUL2"
 check "ADD1 (0.1 + 0.2)"                "$ADD1"  "$GOLD_ADD1"
 check "DIV1 (1.0 / 3.0)"                "$DIV1"  "$GOLD_DIV1"
+# (c) hex-float serialize path (OP-40) — correctly-rounded products the old %.17e
+# fold mis-served; the gate locks the exact IEEE value the hex-float emit produces.
+check "MUL_HF1 (0.254829592 * 0.3275911)"    "$HF1" "$GOLD_MUL_HF1"
+check "MUL_HF2 (0.284496736 * 1.061405429)"  "$HF2" "$GOLD_MUL_HF2"
+check "MUL_HF3 (0.254829592 * -0.284496736)" "$HF3" "$GOLD_MUL_HF3"
+check "MUL_HF4 (1.061405429 * 0.3275911)"    "$HF4" "$GOLD_MUL_HF4"
+check "MUL_HF5 (1.453152027 * 0.3275911)"    "$HF5" "$GOLD_MUL_HF5"
 
 if [ "$FAIL" -ne 0 ]; then
   echo "op39_constfold_gate: FAIL — float const-fold byte-eq REGRESSION detected." >&2
@@ -132,4 +161,4 @@ if [ "$FAIL" -ne 0 ]; then
   echo "  const-folder operand parse re-routed through the naive hxlcl_atof." >&2
   exit 1
 fi
-echo "op39_constfold_gate: PASS — all 13 float const-folds match the recorded goldens."
+echo "op39_constfold_gate: PASS — all 18 float const-folds match the recorded goldens."

@@ -10,6 +10,28 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-42-HEXFLOAT-CONTRACT-GATE (unique anchor — OP-40 (#3084) FIXED the comptime float const-fold to serialize folded doubles as bit-exact C99 hex-float literals (0x1.<mant>p<exp>, integer ops) instead of the lossy host %.17e path, closing a max-1-ULP residual to 0 across 125 cases. That is a determinism-relevant COMPILE-STEP guarantee whose discoverability + regression-lock were incomplete: OP-40's verdict explicitly deferred the contract clause ("docs milestone") and the OP-39 gate locked the fold bits but had no case NAMED for the hex-float path. OP-42 reflects the guarantee into the determinism contract (new compile-time-const-folding subsection) + extends the OP-39 gate with hex-float-specific cases — docs+test+workflow-comment only, NO codegen, NO .tape, g84 no-paper) -->
+- [x] **OP-42 — OP-40 hex-float fold-serialize reflected into the determinism contract (new compile-time-const-folding §) + OP-39 const-fold gate extended with 5 hex-float regression cases (13→18)** —
+  🟢 docs+gate, fully verified BOTH ways on the freshest local hexat (built from current source). CONTRACT
+  (docs/flame-determinism-contract.md): new §1 subsection "compile-time constant folding — bit-exact hex-float serialize"
+  framed as a COMPILE-STEP sibling of the 3 run-step layers — (a) compiler const-folds let-bound float-literal exprs at
+  comptime + inlines the folded literal at every use-site; (b) RULE: folded const serialized as a bit-exact C99 hex-float
+  literal (0x1.<mant>p<exp>, integer ops only) so clang re-parses ZERO-loss, NOT decimal %g/%e (hand-rolled formatter not
+  correctly-rounded → drifts); (c) WHY: a 1-ULP fold drift makes the SAME source compile to different float bytes per host's
+  printf, breaking machine-independence at the COMPILE step — tied to OP-37/40 MEASURED evidence + explicitly INDEPENDENT of
+  the FMA layer (cross-ISA policy unaffected) + cross-linked to CHECKPOINT's fp64-reinterpret. + one "what breaks the
+  contract" bullet. GATE (stdlib/flame/op39_constfold_byteeq.hexa + tool/op39_constfold_gate.sh): +5 MUL_HF* hex-float cases
+  — products the OLD %.17e/%g serialize mis-rounded (MUL_HF1 0.254829592*0.3275911 emitted lossy 0.0834799 pre-fix vs exact
+  0x1.55ef06babe355p-4 post-fix), goldens = python struct.pack correctly-rounded. VERIFIED: built the OP-40-fixed hexat from
+  current source (tool/regen_cc_manual, HEXA_V2=Jun-8 hexat + restored frozen runtime.c) → emits hex-floats, self-tests
+  15/15; gate PASS all 18 on fixed compiler (exit 0); hand-corrupt MUL_HF1 golden by 1 ULP → FAIL (exit 1, teeth). SEED
+  ADVISORY: pre-fix Jun-8 hexat (= CI's frozen-seed generation) DRIFTs on all 5 new cases identically to the existing 13 →
+  they stay under OP-39's continue-on-error advisory (NO yaml change, NO enforcing flip — that's OP-39b's deferred
+  frozen-anchor re-pin; whole gate auto-goes-GREEN on promote). SCOPE: test oracle + gate script + doc + CI comments only —
+  NO codegen/SSOT-module touch → self-host fixpoint unaffected (OP-40 proved it on main). Verdict
+  .verdicts/hexa-0pod/F-OP42-HEXFLOAT-CONTRACT-GATE.txt.
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
 <!-- ANCHOR:W16-WGMMA-H100-MEASURE (unique anchor — the GPU-gated remainder of OP-21A: the w16 descriptor-direct own-GEMM kernel (canonical-atom re-encode -> delete the 32KB decode band) was CPU-de-risked 0-pod (w16_canon/modes/op29_ref checks pass) but its bit-exactness + perf were H100-sm_90a-GATED (aiden 5070 is sm_120, cannot run sm_90a wgmma). Resolved under a ONE-TIME user-approved H100 rental — the documented Hopper-out-of-scope exception. The MODE-1 descriptor-direct read is the PRE-REGISTERED D1 FALSIFIER) -->
 - [x] **W16 — OP-21A w16 descriptor-direct own-GEMM, REAL H100 sm_90a gate: D1 pre-registered falsifier RESOLVED (closed-neg WITH a number)** —
   🟢 GREEN (ran + measured on real Hopper; ONE-TIME user-approved H100 rental, ~$0.72, leak-0 confirmed,
