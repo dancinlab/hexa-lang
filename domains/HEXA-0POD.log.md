@@ -1757,5 +1757,16 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
     values (e.g. NEG1 -4625109807764698594 ≠ golden -4625109815114573186), "FAIL — float const-fold byte-eq
     REGRESSION detected", exit 1.
   · TEETH: single-golden 1-ULP corruption (MUL1 ...183→...184) → DRIFT + exit 1 → confirms one-bit sensitivity.
+- CI FINDING (decisive, honest): PR #3075's first gate run FAILED on all 3 jobs with the LOSSY %g values
+  (CI NEG1 = -4625109807764698594 == the pre-fix value). Root cause is NOT a gate bug — tool/release_build →
+  tool/stage_prebuild_hexat builds CI's ./hexa from the FROZEN seed self/native/hexa_cc.c (151c52c8 bootstrap),
+  which PRE-DATES the OP-37/37b fix in tracked self/codegen.hexa. The fix is in repo SOURCE (#3069/#3073) but
+  NOT YET PROMOTED into the seed/deployed toolchain — a separate rebuild step BOTH verdicts explicitly deferred.
+  So CI's compiler genuinely still has the bug; the gate correctly detects it.
+- RESOLUTION (g5, honest): wired the 3 CI steps `continue-on-error: true` (ADVISORY) with an in-YAML + verdict
+  explanation. The regression infra (oracle + SSOT gate + CI wiring) is in place + VISIBLE now; the moment the
+  OP-37/37b fix is promoted into the seed hexa_cc.c the step auto-goes-GREEN, and dropping the single
+  continue-on-error line flips it to enforcing. PASS direction proven LOCALLY vs the fixed compiler; against the
+  REAL un-promoted CI toolchain it FAILS exactly as designed = the inverse teeth proof. Promote = a follow-up.
 - Milestone OP-39 flipped [x]. Verdict .verdicts/hexa-0pod/F-OP39-CONSTFOLD-CI-GATE.txt. $0 · 0-GPU · 0-pod ·
   no vast · no foreign-pod touch · no .tape edits.

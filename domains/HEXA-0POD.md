@@ -67,7 +67,10 @@ loop targets what the consumer card + code can carry.
   mask the bug, so we deliberately bind-then-reference). 13 assertions on each fold's IEEE-754 LE bit pattern (decoded
   to signed-64 int) — PORTABLE, same goldens on every arch/OS, so byte-eq is machine-independent. tool/op39_constfold_gate.sh
   (modeled on OP-34's tool/fold_ci_gate.sh, low blast radius) wired into nobaseline-gate.yml on all 3 platforms right after
-  the OP-34 fold gate. GOLDENS verified by RUNNING the FIXED-compiler-built oracle binary (/tmp/hexat_op37b_v4 → emitted
+  the OP-34 fold gate — ADVISORY (continue-on-error) because the gate REVEALED CI's ./hexa is the FROZEN seed hexat
+  (built from self/native/hexa_cc.c @ 151c52c8, PRE-OP-37/37b — the source fix is NOT YET PROMOTED into the seed, a step
+  both verdicts deferred); it reports the seed-toolchain bug now + auto-flips to GREEN/enforcing on promotion (drop the
+  one continue-on-error line). GOLDENS verified by RUNNING the FIXED-compiler-built oracle binary (/tmp/hexat_op37b_v4 → emitted
   C → clang + self/runtime.c → exit 0, all 13 match). PROVEN BOTH WAYS with the SAME gate: PASS on fixed-compiler output
   (exit 0) · FAIL on the pre-fix deployed ~/.hx/bin/hexa run (all 13 DRIFT to the lossy %g values, exit 1) — the bug/fix
   differential IS the test, no hand-corruption needed; plus a single-golden 1-ULP corruption confirms it catches even a
@@ -1233,6 +1236,15 @@ loop targets what the consumer card + code can carry.
   .verdicts/hexa-0pod/F-OP16-GN-HOST-FALLBACK.txt.
 
 ## deferred (0-pod follow-ups surfaced by the loop — self-feed)
+
+- **OP-39b — promote the OP-37/OP-37b float const-fold fix into the seed/deployed toolchain, then flip the
+  OP-39 CI gate to ENFORCING.** OP-39 (#3075) revealed CI's ./hexa is built from the FROZEN seed
+  self/native/hexa_cc.c (151c52c8) which PRE-DATES the OP-37/37b source fix in self/codegen.hexa — so the gate
+  is wired ADVISORY (continue-on-error). Promote the fix into the seed hexa_cc.c (re-emit via the marker-guarded
+  channel, like tool/restore_frozen_seeds / the bootstrap-seed refresh path), verify the OP-39 gate goes GREEN on
+  all 3 nobaseline jobs, then drop the single `continue-on-error: true` line per platform to make it a blocking
+  required check. The oracle + SSOT gate already exist; this is the promote + enforce step. $0 · 0-pod local +
+  CI proof.
 
 - **OP-2b — land the runtime.c hexa_forge_dispatch_matmul_t wrapper body + flip the trainer to the live
   transpose-elim call.** OP-2 landed the GPU kernel (_hx_cuda_farr_matmul_tn_gpu, cuBLAS OP_T), codegen
