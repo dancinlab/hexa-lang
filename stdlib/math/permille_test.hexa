@@ -71,8 +71,22 @@ check_eq_int("T4.div_int_zero",  pm_div_int(a, 0).pm,     0)
 check_eq_int("T5.mul_pm.025_0.5", pm_mul_pm(pm_of_permille(500), pm_of_permille(250)).pm, 125)
 // 1/3 × 3.000 ≈ 1.000 (333 × 3000 = 999000, /1000 = 999)
 check_eq_int("T5.mul_pm.1/3×3",   pm_mul_pm(pm_of_permille(333), pm(3)).pm, 999)
-// banker-style half-away: 100 × 5 = 500000 pm² → /1000 = 500
-check_eq_int("T5.mul_pm.0.1×0.005", pm_mul_pm(pm_of_permille(100), pm_of_permille(5)).pm, 1)  // 100*5=500 → /1000 round = 1? 500/1000=0.5 half away = 1
+// half-away-from-zero at the .5 boundary: 100 × 5 = 500 pm² → /1000 = 0.5
+// → rounds AWAY from zero to 1 (round-half-to-even / "banker's" would give 0).
+check_eq_int("T5.mul_pm.0.1×0.005", pm_mul_pm(pm_of_permille(100), pm_of_permille(5)).pm, 1)  // 500/1000 = 0.5 → half-away = 1
+
+// ── T5b: rounding-mode lock — pm_mul_pm is HALF-AWAY, NOT banker's ─────────
+// OP-70 contract-audit lock. The surface doc once claimed pm_mul_pm divides
+// by 1000 "with banker's rounding"; the code uses _div_round_half_away. These
+// modes DIVERGE exactly at half-integer boundaries, so the cases below would
+// FAIL under round-half-to-even and thus machine-pin the documented contract.
+// 50 × 50 = 2500 pm² → /1000 = 2.5 → half-away = 3 (banker's-even = 2).
+check_eq_int("T5b.mul_pm.half_away_pos_2.5", pm_mul_pm(pm_of_permille(50), pm_of_permille(50)).pm, 3)
+// -100 × 5 = -500 pm² → /1000 = -0.5 → half-away = -1 (banker's-even = 0).
+check_eq_int("T5b.mul_pm.half_away_neg_0.5", pm_mul_pm(pm_of_permille(0 - 100), pm_of_permille(5)).pm, 0 - 1)
+// 1500 pm² → /1000 = 1.5 → half-away = 2 (here banker's-even also = 2; tied,
+// but kept as a non-divergent anchor that both modes agree on).
+check_eq_int("T5b.mul_pm.half_away_pos_1.5", pm_mul_pm(pm_of_permille(300), pm_of_permille(5)).pm, 2)
 
 // ── T6: neg / clamp / cmp / eq ────────────────────────────
 check_eq_int("T6.neg",    pm_neg(pm(5)).pm, 0 - 5000)

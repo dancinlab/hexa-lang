@@ -18,7 +18,11 @@
 //   - Arithmetic that preserves the scale (add/sub, mul_int, div_int)
 //     returns PerMille with the same scale.
 //   - `pm_mul_pm(a, b)` reduces the implicit ×10^6 product back to
-//     ×10^3 by dividing by 1000 with banker's rounding.
+//     ×10^3 by dividing by 1000 with half-away-from-zero rounding
+//     (`_div_round_half_away`) — the SAME mode as construction and
+//     `div_int`, NOT round-half-to-even (banker's). A .5 boundary
+//     therefore rounds AWAY from zero (e.g. 500 pm² / 1000 → 1, not 0);
+//     see the T5.mul_pm.0.1×0.005 lock in permille_test.
 //
 // Public API:
 //   pub fn pm(n: int)                        -> PerMille  // 1.000  from int 1
