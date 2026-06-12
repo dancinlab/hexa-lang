@@ -1,0 +1,157 @@
+F-OP33D-ADAM-STEP-SWEEP — systematic sweep of the falsified `adam_step` builtin across
+        ALL self/ml/* + example surfaces (the OP-33c §8 HONEST follow-up). adam_step is
+        FALSIFIED (runtime backs only adamw_step, RFC 034 — a DIFFERENT 11-arg symbol;
+        codegen emits "call to undeclared function 'adam_step'"). NO LIVE caller →
+        deregistered from the self/env.hexa builtin roster (root-cause cleanup, mirroring
+        OP-33c grad_clip_norm / OP-33b cosine_lr·warmup_lr). All dead/local callers NOTE-pointed.
+HEXA-0POD OP-33d · CPU-LOCAL (`hexa run`, hx-selfhost-cli 0.1.0-dispatch) · 0-GPU · $0 · no vast/pod
+════════════════════════════════════════════════════════════════════════════
+
+[0] PROVENANCE
+--------------
+OP-33c's verdict §8 (HONEST) flagged: "`adam_step` LEFT registered in the self/env.hexa
+roster. It is equally falsified (runtime has only `adamw_step`), BUT 12+ OTHER surfaces
+reference it — self/ml/{train_gpu, galore, gpu_optimizer, t2_gpu_bench, distributed_train}
+.hexa + several example/test_* files. ... Flagged as a follow-up (OP-33d? — audit/clean the
+self/ml/ falsified-adam_step surface), NOT touched." This is that follow-up. Per g5, deadness
+is RE-VERIFIED INDEPENDENTLY (not trusted from F-OP33c).
+
+[1] SURVEY — complete `adam_step` reference sweep (grep -rn "adam_step" --include="*.hexa")
+-------------------------------------------------------------------------------------------
+CRITICAL DISAMBIGUATION: most hits are RED HERRINGS — locally-defined functions whose name
+merely CONTAINS "adam_step", NOT the falsified builtin. Only a bare `adam_step(` call (or the
+roster string) targets the builtin.
+
+  RED HERRINGS (local fns / comments — NOT the builtin, left untouched):
+    adam_step_naive / adam_step_fused / adam_step_fused_with_zero
+        self/test_fused_adam.hexa, self/test_optimizer_fuse.hexa,
+        self/ai_native/fused_adam.hexa, self/ai_native/optimizer_fuse.hexa
+        (locally `pub fn`-defined fused-AdamW test oracles — self-contained, def+call in-file)
+    galore_adam_step      self/ml/galore.hexa:428(def), self/test_galore.hexa:440(def)
+    ref_adam_step         self/test_zero_optimizer.hexa:468(def)
+    `// ... adam_step ...` comments  stdlib/optim.hexa:11, stdlib/optim/cpgd.hexa:22,
+        stdlib/flame/clm_learn_while_infer.hexa (streaming-plasticity comment)
+
+[2] CALLER TABLE — every BARE-BUILTIN `adam_step(` reference, classified
+------------------------------------------------------------------------
+  file:line                              | args | resolves to        | live? | baseline
+  ---------------------------------------+------+--------------------+-------+-----------------
+  example/anima_convergence_proof:127    | 9    | falsified BUILTIN  | DEAD  | exit_code=-1
+  example/benchmark_ai_native:90         | 9    | falsified BUILTIN  | DEAD  | exit_code=-1
+  example/test_optimizer:19,32,61,94     | 9    | falsified BUILTIN  | DEAD  | exit_code=-1
+  example/benchmark_all:117(@bench),123  | 9    | falsified BUILTIN  | DEAD  | exit_code=-1
+  self/ml/t2_gpu_bench:166               | 4    | falsified BUILTIN  | DEAD  | not in baseline;
+                                         |      | (no gpu_optimizer  |       | CPU transpile
+                                         |      |  import, no local)  |       | aborts (CUDA-gated)
+  self/ml/train_gpu:134                  | 4    | LOCAL fn (imports  | DEAD  | not in baseline;
+                                         |      | gpu_optimizer.hexa |       | CUDA-only surface
+                                         |      | which DEFINES it)  |       |
+  self/ml/distributed_train:243          | 4    | LOCAL fn (imports  | DEAD  | not in baseline;
+                                         |      | gpu_optimizer.hexa)|       | CUDA-only surface
+  self/ml/gpu_optimizer:41               | def  | DEFINITION (fn)    | n/a   | the local fn itself
+  self/env.hexa:168                      | —    | BUILTIN ROSTER ROW | —     | (the registration)
+
+  KEY: train_gpu + distributed_train both `use "gpu_optimizer"`, and gpu_optimizer.hexa:41
+  DEFINES `fn adam_step(state, grad_gt, lr, t)` (a 4-arg GPU AdamW via cuBLAS sscal/saxpy).
+  Their `adam_step(state, grad, lr, t)` calls bind to that LOCAL module-level fn — NOT the
+  builtin. t2_gpu_bench does NOT import gpu_optimizer (only cuda_ffi + gpu_tensor) and defines
+  no local adam_step → it alone genuinely falls through to the falsified builtin.
+  ⇒ NO surface that PASSES a baseline references the builtin. Zero LIVE callers.
+
+[3] DEADNESS — g5 RE-VERIFIED INDEPENDENTLY (verbatim)
+------------------------------------------------------
+Probe /tmp/op33d_p2.hexa via installed `hexa run` (hx-selfhost-cli → fresh hexat
+~/.hx/bin/build/hexat → clang):
+    fn main() {
+      let p = [1.0, 2.0]; let g = [0.1, 0.2]
+      let m = [0.0, 0.0]; let v = [0.0, 0.0]
+      let r = adam_step(p, g, m, v, 0.001, 0.9, 0.999, 0.00000001, 1)
+      println("unreached")
+    }
+  VERBATIM:
+    build/artifacts/hexa_run.*.c:22:17: error: call to undeclared function 'adam_step';
+      ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+       22 |     HexaVal r = adam_step(p, g, m, v, hexa_float(0.001), ... ((HexaVal){.tag=TAG_INT,.i=(1)}));
+    build/artifacts/hexa_run.*.c:22:17: note: did you mean 'adamw_step'?
+    /Users/mini/.hx/bin/self/runtime.h:1543:9: note: 'adamw_step' declared here
+     1543 | HexaVal adamw_step(HexaVal p, HexaVal g, HexaVal m, HexaVal v,
+    error: clang compile failed — binary not produced
+  ⇒ Runtime backs `adamw_step` (RFC 034), NOT `adam_step`. The roster registers `adam_step`
+    (self/env.hexa:168) so the linter type-checks the call and codegen emits `adam_step(...)`
+    into a runtime that has no such symbol. FALSIFIED.
+  (CAVEAT recorded for reproducibility: a TOP-LEVEL-statement probe form — bare `let r = adam_
+   step(...)` outside any fn — makes hexat print a bogus "OK:" and skip C-compile; wrapping the
+   call in `fn main()` cleanly emits + clang-fails as above. Use the fn-wrapped form.)
+
+[4] SIGNATURE — adamw_step is NOT a drop-in for adam_step
+---------------------------------------------------------
+  adam_step  call sites : (p, g, m, v,    lr, b1, b2, eps, t)          9 args
+  adamw_step runtime    : (p, g, m, v, n, lr, b1, b2, eps, wd, t)     11 args  (RFC 034)
+  Differs by inserting `n` (element count) after v and `wd` (weight decay) before t — NOT a
+  positional drop-in. A faithful repoint would have to synthesize n (array length) + a wd value.
+  Since every adam_step call site is in a DEAD/never-passing surface (and those demos are also
+  dead on the broader randn/zeros/slice/cross_entropy falsified-ML family), faithfully repointing
+  them buys nothing → NOTE pointer comment instead (rule 3, mirroring OP-33c).
+
+[5] DECISION (g0, conservative)
+-------------------------------
+  • All 7 caller sites → NOTE pointer comment (4 examples + t2_gpu_bench + train_gpu +
+    distributed_train). For train_gpu/distributed_train the NOTE explicitly records that the
+    call binds to the LOCAL gpu_optimizer fn, not the builtin, so deregistration is safe there.
+  • adam_step DEREGISTERED from the self/env.hexa env_new() builtin roster (root cause). A local
+    `fn adam_step` is a user function registered separately from the builtin roster — removing
+    the roster string does NOT break the gpu trainers' local binding. No LIVE surface needs the
+    builtin → safe to remove, mirroring OP-33c (grad_clip_norm) and OP-33b (cosine_lr/warmup_lr).
+
+[6] DIFF
+--------
+  self/env.hexa                  : "adam_step" REMOVED from the env_new() builtin roster (line 168)
+                                   + `// adam_step removed (no runtime impl — OP-33d; ...)` comment.
+  example/{anima_convergence_proof, benchmark_ai_native, benchmark_all, test_optimizer}.hexa
+                                 : NOTE pointer comment at the adam_step call site (each
+                                   baseline-broken; real AdamW = stdlib/flame/optim_lib.hexa
+                                   opt_adamw_step / adamw_step).
+  self/ml/t2_gpu_bench.hexa      : NOTE — falsified builtin, CUDA-gated never-passing bench.
+  self/ml/{train_gpu, distributed_train}.hexa
+                                 : NOTE — resolves to the LOCAL gpu_optimizer fn, not the builtin;
+                                   deregistration does not affect it.
+
+  wipe_guard: total deletions = 1 (self/env.hexa roster entry) « 50. Commit subject scoped:
+  `cleanup(env): deregister falsified adam_step builtin — self/ml sweep (OP-33d)`.
+
+[7] POST-EDIT CHECKS
+--------------------
+(a) grep-proof: every remaining bare `adam_step(` call is one of the 7 now-NOTE'd dead/local
+    sites; ZERO live/baseline-passing caller references the builtin.
+(b) env.hexa roster array stays well-formed (`"sgd_step", "numerical_grad",` + comment +
+    `"phase_lr"` — valid comma-separated string list, same shape as OP-33b/33c removals).
+(c) g5 falsification reproduced verbatim against the installed roster (§3) BEFORE the edit; the
+    self/env.hexa edit takes effect on the NEXT compiler build (installed hexat keeps the old
+    roster until rebuilt — same 0-pod caveat as OP-33b/33c).
+
+[8] GATE (g5) — PASS
+--------------------
+  deadness independently verified (verbatim §3)             : YES
+  complete caller sweep + classification (§1,§2)            : YES (7 builtin sites; rest red-herring fns)
+  zero-LIVE-caller confirmed                                : YES (all 7 dead/local-resolved)
+  deregister safe (local fn unaffected, §5)                 : YES
+  signature non-drop-in documented (§4)                     : YES
+
+[9] HONEST
+----------
+  • adam_step is now DEREGISTERED. The next self-host compiler build will reject `adam_step(...)`
+    at the HEXA level (unknown symbol) instead of silently emitting broken C — a strict improvement
+    for the dead surfaces (clear error > undeclared-function-in-generated-C).
+  • The 4 example demos + t2_gpu_bench still do NOT build end-to-end (baseline exit_code=-1 / CUDA-
+    gated transpile abort preserved) — they remain dead on the broader falsified-ML family
+    (randn/zeros/slice/cross_entropy) and/or CUDA deps. The adam_step lines are now documented
+    NOTE pointers, not silent dangling refs.
+  • train_gpu + distributed_train are CUDA-only surfaces (need -DHEXA_CUDA + GPU + cuBLAS +
+    model_100m deps); their `adam_step` binds to the local gpu_optimizer fn. NOT regressed by this
+    change — the NOTE records the binding explicitly so a future reader doesn't mistake it for the
+    deregistered builtin.
+  • self/env.hexa edit affects the NEXT self-host compiler build; the installed hx-selfhost-cli
+    keeps the roster until rebuilt — verified via generated-C inspection (§3), not a from-scratch
+    rebuild (0-pod). CI selfhost gates validate the byte-eq fixpoint; the change is minimal
+    (1 token + comment).
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
