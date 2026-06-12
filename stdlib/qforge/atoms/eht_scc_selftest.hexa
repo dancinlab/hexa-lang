@@ -1,0 +1,170 @@
+// @ci_gate — deterministic · pure analytic anchors
+//
+// qforge/atoms/eht_scc_selftest.hexa — QFORGE atoms brick #5 (EHT-SCC) g5 gate.
+//
+// eht_scc.hexa builds the Wolfsberg-Helmholz EHT Hamiltonian, diagonalises it for
+// the molecular-orbital levels, and adds the SCC second-order charge-fluctuation
+// energy ½ Σ γ_ij δq_i δq_j (γ_ij = the R1 EEQ screened-Coulomb kernel, REUSED).
+// torsion.hexa adds the periodic dihedral V(φ) = ½ Σ V_n (1+cos(nφ−δ)) and its
+// analytic derivative. Every anchor is closed-form (d6 — no fit, no paraphrase):
+//
+//   (a) EHT 2-LEVEL ANALYTIC: a 2-orbital H = [[Ha,Hab],[Hab,Hb]] with
+//       Hab = ½K(Ha+Hb)S has eigenvalues ε± = ½(Ha+Hb) ± √(¼(Ha−Hb)²+Hab²) —
+//       the Wolfsberg-Helmholz closed form. eigh must reproduce both levels.       🔵
+//   (b) SCC SECOND-ORDER: E_scc = ½ Σ_i Σ_j γ_ij δq_i δq_j computed by hand for a
+//       2-atom case must equal qforge_scc_energy2; and δq = 0 ⇒ E_scc = 0 EXACTLY. 🟢
+//   (c) TORSION PERIODICITY: V(φ + 2π/n) = V(φ) for a single n-fold term; the
+//       minimum sits at the phase (n φ−δ = π ⇒ V=0); and ∂V/∂φ == finite-diff.     🟢
+//   (d) γ REUSE CONSISTENCY: qforge_eeq_gamma reproduces the EEQ matrix off-diag
+//       A_ij = erf(R/γ)/R and diagonal self-Coulomb sqrt(2/π)/α VERBATIM (R1).     🔵
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/atoms/eht_scc_selftest.hexa
+// PASS: "qforge_eht_scc_selftest PASS".
+use "stdlib/qforge/atoms/eht_scc"
+use "stdlib/qforge/atoms/eeq"
+use "stdlib/core/special"
+use "stdlib/alloc/math/eigen"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _sqrtf(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    if g < 1.0 { g = 1.0 }
+    let mut it = 0
+    while it < 60 { let ng = 0.5 * (g + x / g) ; if ng == g { break } ; g = ng ; it = it + 1 }
+    return g
+}
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let two_over_pi_sqrt = 0.7978845608028654
+
+    // ══ (a) EHT 2-LEVEL WOLFSBERG-HELMHOLZ CLOSED FORM ═════════════════════════
+    // H = [[Ha, Hab],[Hab, Hb]], Hab = ½ K (Ha+Hb) S.  Build via the atom, then
+    // compare eigh's two levels to ε± = ½(Ha+Hb) ± √(¼(Ha−Hb)²+Hab²).
+    let Ha = -0.65
+    let Hb = -0.95
+    let Sab = 0.30
+    let Kwh = 1.75
+    let honsite = [Ha, Hb]
+    let overlap = [1.0, Sab, Sab, 1.0]
+    let H2 = qforge_eht_hamiltonian(honsite, overlap, Kwh)
+    // off-diagonal Hab must be exactly ½K(Ha+Hb)S.
+    let Hab_want = 0.5 * Kwh * (Ha + Hb) * Sab
+    fails = fails + _ck_close("(a) H_01 = ½K(Ha+Hb)S", H2[1], Hab_want, 1.0e-15)
+    fails = fails + _ck_close("(a) H symmetric (H_10 = H_01)", H2[2], H2[1], 1.0e-15)
+    fails = fails + _ck_close("(a) H_00 = Ha (on-site)", H2[0], Ha, 1.0e-15)
+    // analytic eigenvalues
+    let mean = 0.5 * (Ha + Hb)
+    let disc = _sqrtf(0.25 * (Ha - Hb) * (Ha - Hb) + Hab_want * Hab_want)
+    let eps_minus = mean - disc      // lower (bonding)
+    let eps_plus = mean + disc       // upper (antibonding)
+    // qforge_eht_levels returns ASCENDING — eps[0] = lower, eps[1] = upper.
+    let eps = qforge_eht_levels(H2, 2)
+    fails = fails + _ck_close("(a) lower level ε₋ matches WH closed form", eps[0], eps_minus, 1.0e-12)
+    fails = fails + _ck_close("(a) upper level ε₊ matches WH closed form", eps[1], eps_plus, 1.0e-12)
+    fails = fails + _ck_true("(a) levels ascending (ε₋ < ε₊)", eps[0] < eps[1])
+    // band energy for a closed shell (2 electrons in the lower level)
+    let occ = [2.0, 0.0]
+    let eband = qforge_eht_band_energy(eps, occ)
+    fails = fails + _ck_close("(a) band E = 2·ε₋", eband, 2.0 * eps_minus, 1.0e-12)
+
+    // ══ (b) SCC SECOND-ORDER ENERGY ═══════════════════════════════════════════
+    // 2 atoms, δq = (+0.3, −0.3). E_scc = ½ [ γ00 δq0² + γ11 δq1² + 2 γ01 δq0 δq1 ].
+    let posB = [0.0, 0.0, 0.0,  1.5, 0.0, 0.0]
+    let dqB = [0.3, 0.0 - 0.3]
+    let alpB = [1.10, 0.85]
+    let R01 = 1.5
+    // hand-computed γ's from the R1 kernel (same definition reused).
+    let g00 = two_over_pi_sqrt / alpB[0]
+    let g11 = two_over_pi_sqrt / alpB[1]
+    let gam01 = _sqrtf(alpB[0] * alpB[0] + alpB[1] * alpB[1])
+    let g01 = erf_fn(R01 / gam01) / R01
+    let escc_hand = 0.5 * (g00 * dqB[0] * dqB[0] + g11 * dqB[1] * dqB[1]
+                           + 2.0 * g01 * dqB[0] * dqB[1])
+    let escc = qforge_scc_energy2(posB, dqB, alpB)
+    fails = fails + _ck_close("(b) E_scc matches hand-computed quadratic form", escc, escc_hand, 1.0e-12)
+    // δq = 0 ⇒ E_scc = 0 exactly (reference is the SCC fixed point).
+    let dq0 = [0.0, 0.0]
+    let escc0 = qforge_scc_energy2(posB, dq0, alpB)
+    fails = fails + _ck_close("(b) δq=0 ⇒ E_scc = 0", escc0, 0.0, 1.0e-15)
+    // E_scc > 0 for like-charge / quadratic positive-definite form on this case.
+    fails = fails + _ck_true("(b) E_scc > 0 (positive-definite response)", escc > 0.0)
+    // SCC potential gradient: ∂E/∂δq_i = Σ_j γ_ij δq_j → finite-difference check.
+    let vpot = qforge_scc_potential(posB, dqB, alpB)
+    let hfd = 1.0e-6
+    let dqBp = [dqB[0] + hfd, dqB[1]]
+    let dqBm = [dqB[0] - hfd, dqB[1]]
+    let ep = qforge_scc_energy2(posB, dqBp, alpB)
+    let em = qforge_scc_energy2(posB, dqBm, alpB)
+    let fd0 = (ep - em) / (2.0 * hfd)
+    fails = fails + _ck_close("(b) ∂E_scc/∂δq₀ == finite-diff", vpot[0], fd0, 1.0e-5)
+
+    // ══ (c) TORSION PERIODICITY + EXTREMUM + DERIVATIVE ═══════════════════════
+    // single 3-fold term: V(φ) = ½ V₃ (1 + cos(3φ − δ)).  V(φ + 2π/3) = V(φ).
+    let mult = [3.0]
+    let barrier = [0.018]
+    let phase = [0.0]
+    let pi = 3.141592653589793
+    let phi0 = 0.37
+    let vA = qforge_torsion_energy(phi0, mult, barrier, phase)
+    let vB = qforge_torsion_energy(phi0 + 2.0 * pi / 3.0, mult, barrier, phase)
+    fails = fails + _ck_close("(c) periodicity V(φ+2π/3) = V(φ)", vB, vA, 1.0e-12)
+    // minimum: 3φ−δ = π ⇒ cos = −1 ⇒ V = 0. With δ=0, φ = π/3.
+    let phi_min = pi / 3.0
+    let vmin = qforge_torsion_energy(phi_min, mult, barrier, phase)
+    fails = fails + _ck_close("(c) minimum V(π/3) = 0", vmin, 0.0, 1.0e-12)
+    // maximum: 3φ−δ = 0 ⇒ cos = +1 ⇒ V = V₃. With δ=0, φ = 0.
+    let vmax = qforge_torsion_energy(0.0, mult, barrier, phase)
+    fails = fails + _ck_close("(c) maximum V(0) = V₃", vmax, barrier[0], 1.0e-12)
+    // at an extremum the derivative is zero.
+    let dmin = qforge_torsion_dedphi(phi_min, mult, barrier, phase)
+    fails = fails + _ck_close("(c) ∂V/∂φ = 0 at minimum", dmin, 0.0, 1.0e-9)
+    // analytic ∂V/∂φ vs central finite-difference at a generic φ (multi-term).
+    let multM = [1.0, 2.0, 3.0]
+    let barM = [0.010, 0.006, 0.018]
+    let phaseM = [0.0, pi, 0.5]
+    let phg = 0.83
+    let dana = qforge_torsion_dedphi(phg, multM, barM, phaseM)
+    let hh = 1.0e-6
+    let vp = qforge_torsion_energy(phg + hh, multM, barM, phaseM)
+    let vm = qforge_torsion_energy(phg - hh, multM, barM, phaseM)
+    let dfd = (vp - vm) / (2.0 * hh)
+    fails = fails + _ck_close("(c) ∂V/∂φ == finite-diff (multi-term)", dana, dfd, 1.0e-6)
+    // dihedral geometry: a planar cis (φ=0) and trans (φ=π) config.
+    let posCis = [0.0, 1.0, 0.0,  0.0, 0.0, 0.0,  1.0, 0.0, 0.0,  1.0, 1.0, 0.0]
+    let phiCis = qforge_dihedral_angle(posCis, 0, 1, 2, 3)
+    fails = fails + _ck_close("(c) planar cis dihedral φ = 0", phiCis, 0.0, 1.0e-9)
+    let posTrans = [0.0, 1.0, 0.0,  0.0, 0.0, 0.0,  1.0, 0.0, 0.0,  1.0, 0.0 - 1.0, 0.0]
+    let phiTrans = qforge_dihedral_angle(posTrans, 0, 1, 2, 3)
+    fails = fails + _ck_close("(c) planar trans dihedral |φ| = π", _abs(phiTrans), pi, 1.0e-9)
+
+    // ══ (d) γ REUSE CONSISTENCY (qforge_eeq_gamma == R1 EEQ matrix elements) ══
+    // The EEQ matrix (R1) off-diagonal A_ij = erf(R/γ)/R and diagonal self-Coulomb
+    // (η_i + sqrt(2/π)/α_i with η subtracted) must equal qforge_eeq_gamma exactly.
+    let posD = [0.0, 0.0, 0.0,  1.6, 0.0, 0.0]
+    let chiD = [1.10, 2.05]
+    let etaD = [0.48, 0.66]
+    let alpD = [1.30, 0.75]
+    let Amat = qforge_eeq_matrix(posD, chiD, etaD, alpD)
+    let mD = 3   // n+1 = 3 (2 atoms + border)
+    // off-diagonal A[0][1] == qforge_eeq_gamma(R, α0, α1).
+    let R = qforge_eeq_distance(posD, 0, 1)
+    let gamma_reuse = qforge_eeq_gamma(R, alpD[0], alpD[1])
+    fails = fails + _ck_close("(d) γ_01 reuse == EEQ matrix off-diag", gamma_reuse, Amat[0 * mD + 1], 1.0e-15)
+    // diagonal self-Coulomb: EEQ A[0][0] = η0 + sqrt(2/π)/α0 = η0 + γ_00.
+    let gamma_self0 = qforge_eeq_gamma(0.0, alpD[0], alpD[0])
+    fails = fails + _ck_close("(d) γ_00 self-Coulomb == sqrt(2/π)/α0", gamma_self0, two_over_pi_sqrt / alpD[0], 1.0e-15)
+    fails = fails + _ck_close("(d) EEQ A_00 = η0 + γ_00 (R1 diagonal)", Amat[0 * mD + 0], etaD[0] + gamma_self0, 1.0e-15)
+
+    if fails == 0 { println("qforge_eht_scc_selftest PASS") }
+    else { println("qforge_eht_scc_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
