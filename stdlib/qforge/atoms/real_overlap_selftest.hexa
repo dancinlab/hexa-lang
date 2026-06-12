@@ -1,0 +1,163 @@
+// @ci_gate — deterministic · network-free · REAL STO-3G overlap force (R10)
+//
+// qforge/atoms/real_overlap_selftest.hexa — QFORGE atoms brick #10 g5. R7 ran the
+// Löwdin force machinery on a MODEL Gaussian overlap S_μν=exp(−½ζR²); R9 declared
+// that "model overlap" caveat openly. R10 REPLACES it with the REAL STO-3G
+// contracted-Gaussian overlap from the MOLSCF lane (gint_overlap_contracted,
+// H₂ S=0.6593182001 verified) and supplies the ANALYTIC ∂S/∂R, so the HF+Pulay
+// force now sits on a genuine MOLSCF-grade basis. Four g5 anchors, REAL output (d6):
+//
+//   (a) REAL S == MOLSCF: qforge_real_overlap_matrix[A,B] equals the DIRECT
+//       gint_overlap_contracted(αA,dA,A, αB,dB,B) call, bit-for-bit. This is the
+//       cross-lane reuse PROOF — the atoms force consumes the SAME overlap value
+//       the MOLSCF lane gates (no re-derivation, no drift). The H₂ S(1.4 bohr)
+//       anchor 0.6593182001 also reappears here (same kernel, same number).        🟢
+//   (b) ANALYTIC ∂S/∂R == FD: the closed-form Gaussian-product derivative
+//       qforge_real_doverlap_dR equals a central finite difference of the SAME
+//       real contracted overlap to |Δ|<1e-6 — analytic, not FD. Translational
+//       antisymmetry ∂S/∂A = −∂S/∂B is checked too.                                🟢
+//   (c) REAL-BASIS FORCE == FD: the R9 HF+Pulay force, REBUILT on the real S /
+//       analytic ∂S, equals the fixed-δq central-FD of the real-basis energy to
+//       |Δ|<1e-6. The "model overlap" caveat is RESOLVED — the force is exact on
+//       the real STO-3G basis, and the Pulay (analytic-∂S) term is load-bearing.   🟢
+//   (d) R9 REGRESSION: the real-basis force agrees QUALITATIVELY with the model-S
+//       R9 force — same sign (attractive: F(atom1,x) < 0 at the same geometry),
+//       same ΣF=0 translational invariance, same collinear-vanishing y/z. The
+//       transition model→real preserves the physics (sign · equilibrium · 3rd law). 🟢
+//
+// HONEST (d6): the overlap is the REAL STO-3G contracted-Gaussian S (the MOLSCF
+//   closed form), s-ONLY (one contracted s-shell per atom, STO-3G H 1s convention —
+//   p/d shells are the next round, declared not papered). ∂S/∂R is the EXACT
+//   analytic Gaussian-product derivative. ∂H/∂R, ∂γ/∂R remain central FD of the
+//   real-S-built H / R5 γ (the FD-derivative the task permits). Every number printed
+//   is REAL output; the model→real transition is verified, nothing forced.
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/atoms/real_overlap_selftest.hexa
+// PASS: "qforge_real_overlap_selftest PASS".
+use "stdlib/qforge/atoms/real_overlap"
+use "stdlib/qforge/molscf/gaussian_integrals"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // STO-3G unscaled (ζ=1.0) hydrogen 1s primitives — the MOLSCF lane's H₂ anchor.
+    // One contracted s-shell per atom; flat basis tables + CSR offsets (d4-generic).
+    let h_alpha = [3.42525091, 0.62391373, 0.16885540]
+    let h_coeff = [0.15432897, 0.53532814, 0.44463454]
+    // two H atoms: concatenated primitives + row pointers off=[0,3,6]
+    let alphas = [3.42525091, 0.62391373, 0.16885540, 3.42525091, 0.62391373, 0.16885540]
+    let coeffs = [0.15432897, 0.53532814, 0.44463454, 0.15432897, 0.53532814, 0.44463454]
+    let off = [0, 3, 6]
+
+    // ══ (a) REAL S == MOLSCF (cross-lane reuse proof) ═══════════════════════════
+    let R = 1.4                       // bohr — the H₂ equilibrium anchor
+    let pos = [0.0, 0.0, 0.0,  R, 0.0, 0.0]
+    let s = qforge_real_overlap_matrix(pos, alphas, coeffs, off, 2)
+    // direct MOLSCF call for the same A-B pair
+    let origin = [0.0, 0.0, 0.0]
+    let atomB  = [R, 0.0, 0.0]
+    let s_direct = gint_overlap_contracted(h_alpha, h_coeff, origin, h_alpha, h_coeff, atomB)
+    println("    [a] qforge_real_overlap_matrix S_01=" + to_string(s[1])
+            + "   direct MOLSCF gint_overlap_contracted=" + to_string(s_direct))
+    fails = fails + _ck_close("(a) REAL S_01 == MOLSCF gint_overlap_contracted (bit-for-bit)",
+                              s[1], s_direct, 1.0e-12)
+    fails = fails + _ck_close("(a) REAL S_01 == textbook H2 S(1.4 bohr) = 0.6593182001",
+                              s[1], 0.6593182001, 1.0e-6)
+    fails = fails + _ck_close("(a) S symmetric S_01 == S_10", s[1], s[2], 1.0e-15)
+    fails = fails + _ck_close("(a) S diagonal == 1 (normalized STO-3G self-overlap)",
+                              s[0], 1.0, 1.0e-7)
+
+    // ══ (b) ANALYTIC ∂S/∂R == central FD (Gaussian-product derivative) ══════════
+    let hfd = 0.000001
+    let dsA = qforge_real_doverlap_dR(pos, alphas, coeffs, off, 2, 1, 0)   // ∂S/∂(atom1,x)
+    let dsFD = qforge_real_doverlap_fd(pos, alphas, coeffs, off, 2, 1, 0, hfd)
+    println("    [b] analytic ∂S_01/∂(atom1,x)=" + to_string(dsA[1])
+            + "   FD=" + to_string(dsFD[1]))
+    fails = fails + _ck_close("(b) analytic ∂S_01/∂R == FD (|Δ|<1e-6)",
+                              dsA[1], dsFD[1], 0.000001)
+    // translational antisymmetry: ∂S/∂(atom0,x) = −∂S/∂(atom1,x)
+    let dsB = qforge_real_doverlap_dR(pos, alphas, coeffs, off, 2, 0, 0)   // ∂S/∂(atom0,x)
+    println("    [b] ∂S_01/∂(atom0,x)=" + to_string(dsB[1])
+            + "   −∂S_01/∂(atom1,x)=" + to_string(0.0 - dsA[1]))
+    fails = fails + _ck_close("(b) translational antisymmetry ∂S/∂A == −∂S/∂B",
+                              dsB[1], 0.0 - dsA[1], 1.0e-12)
+    fails = fails + _ck_true("(b) ∂S/∂R is non-trivial (|∂S/∂R| > 1e-3, overlap decays with R)",
+                             _abs(dsA[1]) > 1.0e-3)
+    fails = fails + _ck_close("(b) ∂S_μμ/∂R == 0 (self-overlap geometry-independent)",
+                              dsA[0], 0.0, 1.0e-15)
+
+    // ══ (c) REAL-BASIS FORCE == fixed-δq FD (caveat resolved) ═══════════════════
+    // R9 force assembly (HF + analytic-Pulay) on the REAL overlap, vs the central-FD
+    // of the real-basis energy at FIXED δq. Same DFTB convention as forces.hexa.
+    let kwh = 1.75
+    let dfd = 0.000001
+    // heteronuclear-style on-site energies (distinct levels) so the band force is O(0.1),
+    // R = 1.5 (generic, non-equilibrium) — mirrors R9 System A geometry for regression (d).
+    let posC = [0.0, 0.0, 0.0,  1.5, 0.0, 0.0]
+    let hon = [-0.62, -0.94]
+    let alphaG = [1.05, 0.80]         // γ-radii (R5 second-order electrostatics)
+    let orb2atom = [0, 1]
+    let occ = [2.0, 0.0]
+    let dq = [0.10, -0.10]            // a fixed δq (charge-stationarity tested in R8/R9)
+
+    let f = qforge_real_forces(1, posC, alphas, coeffs, off, hon, kwh, dq, alphaG,
+                               orb2atom, occ, 2, 2, dfd)
+    let fref1x = qforge_real_force_fd_ref_fixed(posC, alphas, coeffs, off, hon, kwh, dq,
+                                                alphaG, orb2atom, occ, 2, 2, 1, 0, hfd, 0.0)
+    let fref0x = qforge_real_force_fd_ref_fixed(posC, alphas, coeffs, off, hon, kwh, dq,
+                                                alphaG, orb2atom, occ, 2, 2, 0, 0, hfd, 0.0)
+    println("    [c] analytic F(atom1,x)=" + to_string(f[3]) + "  FD ref=" + to_string(fref1x))
+    println("    [c] analytic F(atom0,x)=" + to_string(f[0]) + "  FD ref=" + to_string(fref0x))
+    fails = fails + _ck_close("(c) real-basis F(atom1,x) == −∂E/∂R|δq FD (caveat RESOLVED)",
+                              f[3], fref1x, 0.000001)
+    fails = fails + _ck_close("(c) real-basis F(atom0,x) == −∂E/∂R|δq FD",
+                              f[0], fref0x, 0.000001)
+    fails = fails + _ck_close("(c) F(atom1,y) == 0 (collinear)", f[4], 0.0, 0.000001)
+    fails = fails + _ck_close("(c) F(atom1,z) == 0 (collinear)", f[5], 0.0, 0.000001)
+
+    // Pulay necessity on the REAL basis: drop the analytic-∂S Pulay term ⇒ FD disagree.
+    let fHFonly = qforge_real_forces(0, posC, alphas, coeffs, off, hon, kwh, dq, alphaG,
+                                     orb2atom, occ, 2, 2, dfd)
+    let pulay_term = f[3] - fHFonly[3]
+    let err_nopulay = _abs(fHFonly[3] - fref1x)
+    let err_full = _abs(f[3] - fref1x)
+    println("    [c] HF-only F(atom1,x)=" + to_string(fHFonly[3])
+            + "  Pulay term=" + to_string(pulay_term)
+            + "  |HF-only−FD|=" + to_string(err_nopulay) + "  |full−FD|=" + to_string(err_full))
+    fails = fails + _ck_true("(c) analytic-Pulay term non-trivial on real basis (|Pulay|>1e-3)",
+                             _abs(pulay_term) > 1.0e-3)
+    fails = fails + _ck_true("(c) dropping analytic Pulay breaks the force (|HF-only−FD|>1e-3)",
+                             err_nopulay > 1.0e-3)
+    fails = fails + _ck_true("(c) restoring analytic Pulay fixes it (|full−FD|<1e-6)",
+                             err_full < 0.000001)
+
+    // ══ (d) R9 REGRESSION: model→real preserves the physics ═════════════════════
+    // Same geometry / on-site / occupation as R9 System A (model S there gave
+    // F(atom1,x) = −0.701182, attractive). On the REAL STO-3G S the sign and the
+    // 3rd-law / collinear structure must persist (the MAGNITUDE differs — real S ≠
+    // model exp(−½ζR²) — but the PHYSICS is the same). HONEST: we assert the
+    // QUALITATIVE invariants, and print the real-basis magnitude for the record.
+    let translres = qforge_real_force_transl_residual(f, 2)
+    println("    [d] real-basis F(atom1,x)=" + to_string(f[3])
+            + " (R9 model-S was -0.701182)  ΣF_x=" + to_string(f[0] + f[3])
+            + "  ‖ΣF‖=" + to_string(translres))
+    fails = fails + _ck_true("(d) attractive force sign preserved (F(atom1,x) < 0, model→real)",
+                             f[3] < 0.0)
+    fails = fails + _ck_true("(d) equal-and-opposite preserved (F(atom0,x) > 0)", f[0] > 0.0)
+    fails = fails + _ck_true("(d) force non-trivial (|F(atom1,x)| > 0.01)", _abs(f[3]) > 0.01)
+    fails = fails + _ck_true("(d) ΣF=0 translational invariance preserved (‖ΣF‖<1e-6)",
+                             translres < 0.000001)
+
+    if fails == 0 { println("qforge_real_overlap_selftest PASS") }
+    else { println("qforge_real_overlap_selftest FAIL — " + to_string(fails) + " checks failed") }
+}
