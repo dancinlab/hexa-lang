@@ -1,5 +1,30 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-75 DONE: FRESH-SURFACE 0-pod correctness — a base64 round-trip bug in stdlib/codec/base64.hexa (stdlib NON-math encoding contract; the OP-68/70 class on a surface none of the closed threads touched) · SURVEY a–d: (a) stdlib/codec/base64 round-trip invariant broken by the decoder → PICKED · (b) Adam moment-init/bias-correction already covered (OP-6B + OP-69 FMA gate), tokenizer/checkpoint round-trip = RUNTIME byte-eq OP-69-deferred → DRY · (c) no NEW handoff item (OP-66/71 were stale-seed) · (d) deferred = build-host/GPU · THE BUG: base64_decode used `while j+3 < m` over the padding-stripped alphabet-char count m then trimmed pad bytes; a padded message's non-pad count m is never a multiple of 4 (it is 2/3 mod 4) so the trailing 2/3-char group was ALWAYS dropped → encode∘decode is the identity ONLY for byte-lengths multiple-of-3 · CO-LOCATED: the module called `bytes_to_str(...)` (neither builtin nor imported — local to stdlib/ckpt/format.hexa) → did NOT compile standalone, explaining the missing test · FIX (doc+source): full 4-char groups (while j+4<=m) then decode the trailing partial group from the char count alone (2 idxs→1 byte, 3→2 bytes) mirroring self/runtime/base64_pure.hexa; bytes_to_str→bytes_to_str_raw (registered builtin); stale "padding required for roundtrip" invariant corrected · NEW stdlib/codec/base64_test.hexa (@sentinel __HEXA_CODEC_BASE64__) · 🔴→fix GREEN · $0 · 0-pod · NO GPU · leak-0
+- THE BUG (verbatim RFC 4648 §10 trace, faithful Python port of the OLD/buggy decode integer arithmetic):
+  · 'f'       enc=Zg==     OLD_decode=[]                 want=[102]
+  · 'fo'      enc=Zm8=     OLD_decode=[]                 want=[102, 111]
+  · 'foo'     enc=Zm9v     OLD_decode=[102, 111, 111]    want=[102, 111, 111]      (ok — multiple of 3)
+  · 'foob'    enc=Zm9vYg== OLD_decode=[102]              want=[102, 111, 111, 98]
+  · 'fooba'   enc=Zm9vYmE= OLD_decode=[102, 111]         want=[102, 111, 111, 98, 97]
+  · 'foobar'  enc=Zm9vYmFy OLD_decode=[102,111,111,98,97,114]                      (ok — multiple of 3)
+- CO-LOCATED BUILD BUG (verbatim, unmodified installed module): `clang ... base64.hexa.c:99: error: use of
+  undeclared identifier 'bytes_to_str'` — the module called bytes_to_str(out)/bytes_to_str(base64_decode(s))
+  but bytes_to_str is NOT a registered builtin (only bytes_to_str_raw / str_from_bytes_n are) and NOT imported
+  (it is a hexa fn local to stdlib/ckpt/format.hexa). So the module was unbuildable in isolation → no test ever.
+- THE VERIFY (faithful Python port of the FIXED encode/decode arithmetic vs authoritative `base64` codec):
+  · RFC 4648 §10 vectors (encode AND decode, all 7): PASS
+  · singlebyte roundtrip+pyparity bad: 0   (all 256 single-byte messages)
+  · random 2000 mismatches: 0   (len 0..40, encode parity + round-trip + decoding python's own output)
+- LOCAL ORACLE NOTE: the installed Jun-1 seed (~/.hx/bin) SIGABRTs (exit 138) when RUNNING this module — even
+  the unchanged encode path AND base64_decode's pure-[int] path — though bytes_to_str_raw/byte_at run clean
+  standalone (BTR_EXIT=0, BAT_EXIT=0). Documented stale-seed runtime limit (MEMORY "Local hexa is a stale
+  oracle — crashes on already-fixed paths; use ghost for differentials"). Correctness therefore locked by the
+  authoritative Python cross-check + parity with the proven self/runtime/base64_pure.hexa streaming decoder.
+- SCOPE: leaf codec module, NOT in compiler/main.hexa build_selfhost closure; zero codegen/runtime bytes →
+  self-host byte-eq fixpoint UNTOUCHED. wipe_guard net-additive (restructured ~15-line tail + new test).
+  Verdict .verdicts/hexa-0pod/F-OP75-BASE64-DECODE-TRAILING.txt.
+
 ## 2026-06-13 — OP-74 DONE: COMPLETE the flame numeric-primitive oracle coverage (OP-72 follow-on) · AUDIT the FULL flame numeric surface (flame_math/moe_lib/nn_lib/gn_lib/optim_lib) for the documented-but-UNlocked-accuracy gap + build the coverage matrix · THE SINGLE HOLE = moe_lib.hexa:39 `_moe_exp` (the 3rd distinct exp impl, "~12 terms machine-exact" docstring) had only DETERMINISM/replay locks (F-OP8/F-OP11), NO agreement-vs-libm · NEW self-contained stdlib/flame/op74_moe_exp_agree_eq.hexa: 3 gates over a 12-pt softmax-range probe — AGREE max rel|_moe_exp−libm exp|≤1e-9 · DETERMINISM byte-identical f64 run-to-run · ADDITION-LAW exp(a)exp(b)−exp(a+b)≤1e-9 · `hexa run` exit 0, 3/3 PASS (agree 3.21e-14, det max|Δbytes|=0, addition 3.52e-14) · the "machine-exact" claim now LOCKED at the primitive level → flame numeric-primitive documented-accuracy surface PROVEN-COMPLETE · oracle-only no behavior change · self-host byte-eq UNAFFECTED (leaf oracle, not in build_selfhost closure) · 🟢 GREEN invariant-lock · $0 · 0-pod · NO GPU · leak-0
 - COVERAGE MATRIX (primitive → documented claim → locked-by): dt_sqrt/dt_exp/dt_ln(+det)/dt_lcg → F-RFC043-MATH-*
   (flame_math_test) · dt_erf → F-OP19B · dt_rand_unit → trivial (dt_lcg) · d5_sin/d5_cos → F-OP72 · GN reduction

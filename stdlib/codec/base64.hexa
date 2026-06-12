@@ -75,7 +75,7 @@ pub fn base64_encode(bytes: [int]) -> string {
         out.push(_B64_ALPHA.byte_at(i2))
         out.push(61)
     }
-    return bytes_to_str(out)
+    return bytes_to_str_raw(out)
 }
 
 @pure
@@ -153,5 +153,5 @@ pub fn base64_encode_str(s: string) -> string {
 
 @pure
 pub fn base64_decode_str(s: string) -> string {
-    return bytes_to_str(base64_decode(s))
+    return bytes_to_str_raw(base64_decode(s))
 }
