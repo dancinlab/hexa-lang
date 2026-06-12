@@ -1,0 +1,145 @@
+// @ci_gate — deterministic · network-free · generalized-overlap S / ∂S g5 gate
+//
+// paw_overlap_selftest.hexa — QFORGE-PAW Route A brick 2 (the generalized-overlap
+// operator S = 1 + Σ|β⟩q⟨β| and the el-ph S-orthonormalization rescale of |g|).
+// This is the SOLE Route-A lever on |g| left open by round-4 (which only overlaid
+// the BARE augmentation vertex on NC eigenstates and never solved Hψ=εSψ).
+//
+//   (Z)  NC-ZERO ANCHOR: q_ij ≡ 0 (a norm-conserving pseudo) ⇒ S = 1 ⇒ δ_n = 0
+//        for every state ⇒ |g| scale = 1.0 EXACTLY. The strict-superset anchor —
+//        Route A changes NOTHING for the production NC deck.                🔵
+//   (P)  POSITIVE-DEFINITE: a physical USPP q_ij (PD) ⇒ δ_n ≥ 0 ⇒ the S-norm
+//        scale ∈ (0,1] (the soft orbital's norm is restored, |g| can only
+//        shrink, never grow — a SIGN result for the gate direction).        🔵
+//   (S)  S-APPLY CONSISTENCY: δ_n from qforge_paw_delta == ⟨ψ|(S−1)|ψ⟩ formed by
+//        an INDEPENDENT explicit S-matrix-apply, to < 1e-12 (the formula IS the
+//        overlap excess).                                                   🔵
+//   (G)  g-SCALE: qforge_paw_g_scale(δm,δn) == 1/√((1+δm)(1+δn)) to < 1e-14, and
+//        λ-scale (= g-scale²) consistency.                                  🔵
+//   (D)  malformed (size mismatch) → 0.0 / guarded.
+//
+// Run:  hexa run stdlib/qforge/paw_overlap_selftest.hexa
+// PASS: "qforge_paw_overlap_selftest PASS".
+use "stdlib/qforge/paw_overlap"
+use "stdlib/qforge/projector"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+// Independent reference: δ_n = ⟨ψ|(S−1)|ψ⟩ with S−1 = Σ_ij |β_i⟩q_ij⟨β_j| applied
+// as an explicit dense (nq×nq) operator, NO reuse of qforge_paw_delta's bp path.
+fn _ref_delta(qij: [float], betaq: [float], psi: [float], nproj: int, nq: int) -> float {
+    // (S−1)ψ at PW index a = Σ_ij β_i(q_a) q_ij ( Σ_b β_j(q_b)ψ(q_b) )
+    // then δ = Σ_a ψ(q_a)·[(S−1)ψ](a).
+    let mut sp: [float] = []
+    let mut a = 0
+    while a < nq {
+        let mut acc = 0.0
+        let mut i = 0
+        while i < nproj {
+            let mut j = 0
+            while j < nproj {
+                let mut bjp = 0.0
+                let mut b = 0
+                while b < nq { bjp = bjp + betaq[j * nq + b] * psi[b] ; b = b + 1 }
+                acc = acc + betaq[i * nq + a] * qij[i * nproj + j] * bjp
+                j = j + 1
+            }
+            i = i + 1
+        }
+        sp.push(acc)
+        a = a + 1
+    }
+    let mut d = 0.0
+    let mut k = 0
+    while k < nq { d = d + psi[k] * sp[k] ; k = k + 1 }
+    return d
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── l=0 Gaussian projectors (2 — matching the H rrkjus number_of_proj=2) ───
+    let a1 = 1.5 ; let a2 = 2.6
+    let nmesh = 1400 ; let r0 = 0.0002 ; let dx = 0.010
+    let mut r: [float] = [] ; let mut rab: [float] = []
+    let mut betas: [float] = []          // flat [nproj·mesh]
+    let mut b1: [float] = [] ; let mut b2: [float] = []
+    let mut i = 0
+    while i < nmesh {
+        let ri = r0 * exp(to_float(i) * dx)
+        r.push(ri) ; rab.push(ri * dx)
+        b1.push(exp(-a1 * ri * ri))
+        b2.push(ri * exp(-a2 * ri * ri))     // a second, distinct radial shape
+        i = i + 1
+    }
+    let mut t = 0
+    while t < nmesh { betas.push(b1[t]) ; t = t + 1 }
+    t = 0
+    while t < nmesh { betas.push(b2[t]) ; t = t + 1 }
+    let nproj = 2
+    let ls = [0, 0]
+
+    // a small PW q-grid + a normalized real state ψ.
+    let qmag = [0.0, 0.5, 0.9, 1.3, 1.8]
+    let nq = 5
+    let betaq = qforge_paw_betaq(r, rab, betas, ls, nproj, qmag)
+    let mut psi: [float] = []
+    let mut pp = 0
+    while pp < nq { psi.push(0.2 * to_float(pp + 1)) ; pp = pp + 1 }
+    // normalize ψ (Σψ²=1) so δ_n is the physical overlap excess per unit state.
+    let mut nn = 0.0 ; pp = 0
+    while pp < nq { nn = nn + psi[pp] * psi[pp] ; pp = pp + 1 }
+    nn = sqrt(nn) ; pp = 0
+    while pp < nq { psi[pp] = psi[pp] / nn ; pp = pp + 1 }
+
+    // ── (Z) NC-ZERO ANCHOR: q_ij ≡ 0 ⇒ δ=0 ⇒ g-scale = 1.0 ────────────────────
+    let qij_zero = [0.0, 0.0, 0.0, 0.0]
+    let dz = qforge_paw_delta(qij_zero, betaq, psi, nproj, nq)
+    fails = fails + _ck("(Z) NC q_ij≡0 ⇒ δ=0 (δ=" + to_string(dz) + ")", dz == 0.0)
+    fails = fails + _ck("(Z') NC ⇒ g-scale = 1.0 EXACT",
+                        qforge_paw_g_scale(dz, dz) == 1.0)
+
+    // ── REAL-magnitude q_ij (the H rrkjus L=0 monopole moments, brick-1 probe) ──
+    // q_ij[0..3] = [0.00380772, 0.0039112, 0.0039112, 0.00399044] (symmetric).
+    let qij = [0.00380772, 0.0039112, 0.0039112, 0.00399044]
+    let d_real = qforge_paw_delta(qij, betaq, psi, nproj, nq)
+    let g_real = qforge_paw_g_scale(d_real, d_real)
+    println("    [M] δ_n(real H q_ij) = " + to_string(d_real)
+            + "  |g|-scale = " + to_string(g_real)
+            + "  λ-scale = " + to_string(g_real * g_real))
+
+    // ── (P) POSITIVE-DEFINITE: δ ≥ 0 and g-scale ∈ (0,1] ──────────────────────
+    fails = fails + _ck("(P) physical USPP q_ij ⇒ δ ≥ 0 (δ=" + to_string(d_real) + ")",
+                        d_real >= 0.0)
+    fails = fails + _ck("(P') g-scale ∈ (0,1] (soft-orbital norm restored ⇒ |g| shrinks)",
+                        g_real > 0.0 && g_real <= 1.0)
+
+    // ── (S) S-APPLY CONSISTENCY: qforge_paw_delta == explicit ⟨ψ|(S−1)|ψ⟩ ──────
+    let d_ref = _ref_delta(qij, betaq, psi, nproj, nq)
+    fails = fails + _ck("(S) δ == ⟨ψ|(S−1)|ψ⟩ (|Δ|=" + to_string(_abs(d_real - d_ref))
+                        + ")", _abs(d_real - d_ref) < 1.0e-12)
+
+    // ── (G) g-scale formula: 1/√((1+δm)(1+δn)) + λ-scale = g-scale² ────────────
+    let dm = 0.0037 ; let dn = 0.0041
+    let gs = qforge_paw_g_scale(dm, dn)
+    let gref = 1.0 / sqrt((1.0 + dm) * (1.0 + dn))
+    fails = fails + _ck("(G) g-scale == 1/√((1+δm)(1+δn)) (|Δ|=" + to_string(_abs(gs - gref))
+                        + ")", _abs(gs - gref) < 1.0e-14)
+    let snm = qforge_paw_snorm_scale(dm) ; let snn = qforge_paw_snorm_scale(dn)
+    fails = fails + _ck("(G') g-scale = s(δm)·s(δn) (norm factors compose)",
+                        _abs(gs - snm * snn) < 1.0e-14)
+
+    // ── (D) malformed guards ──────────────────────────────────────────────────
+    fails = fails + _ck("(D) δ size mismatch → 0.0",
+                        qforge_paw_delta([1.0, 2.0], betaq, psi, nproj, nq) == 0.0)
+    fails = fails + _ck("(D') beta_psi size mismatch → 0.0",
+                        qforge_paw_beta_psi([1.0], psi, nq) == 0.0)
+    fails = fails + _ck("(D'') snorm(δ≤0) = 1.0", qforge_paw_snorm_scale(-1.0) == 1.0)
+
+    if fails == 0 { println("qforge_paw_overlap_selftest PASS") }
+    else { println("qforge_paw_overlap_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
