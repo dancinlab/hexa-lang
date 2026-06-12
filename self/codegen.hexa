@@ -9844,19 +9844,96 @@ fn _cf_negate_float_text(s: string) -> string {
     return "-" + s
 }
 
+// Single hex digit for a 0..15 nibble (lowercase, matching C `%a`).
+fn _cf_nib_hex(n) -> string {
+    if n == 0 { return "0" }
+    if n == 1 { return "1" }
+    if n == 2 { return "2" }
+    if n == 3 { return "3" }
+    if n == 4 { return "4" }
+    if n == 5 { return "5" }
+    if n == 6 { return "6" }
+    if n == 7 { return "7" }
+    if n == 8 { return "8" }
+    if n == 9 { return "9" }
+    if n == 10 { return "a" }
+    if n == 11 { return "b" }
+    if n == 12 { return "c" }
+    if n == 13 { return "d" }
+    if n == 14 { return "e" }
+    return "f"
+}
+
+// HEXA-0POD OP-40: bit-EXACT C hexadecimal-float literal for a comptime-folded
+// double, built from the raw IEEE-754 bits with INTEGER ops only (no float
+// formatting). Clang parses a C99 hex-float (`0x1.<mant>p<exp>`) to the exact
+// same double it represents — round-trip LOSSLESS for every finite value
+// (subnormal..max, ±0), and inf/NaN map to __builtin_inf/nan. This replaces the
+// `%.17e` decimal serialize, which in the SELF-HOST build routes through the
+// runtime's hand-rolled `rt_format_float_sci` / `hxlcl_vsnprintf` digit
+// formatter (NOT correctly-rounded, runtime.c "Not bit-exact with libc's") and
+// landed a comptime-folded product 1 ULP off its IEEE value (OP-37b residual:
+// `0.254829592 * 0.284496736` host-fold = bits-183, clang/IEEE = bits-182).
+fn _cf_float_hexlit(f: float) -> string {
+    let bits = float_to_bits(f)
+    let sign = (bits >> 63) & 1
+    let expo = (bits >> 52) & 2047
+    // low 52 mantissa bits — 0xFFFFFFFFFFFFF
+    let mant = bits & 4503599627370495
+    let mut s = ""
+    if sign == 1 { s = "-" }
+    if expo == 2047 {
+        // inf / NaN — no finite hex-float form.
+        if mant == 0 {
+            if sign == 1 { return "(-__builtin_inf())" }
+            return "__builtin_inf()"
+        }
+        return "__builtin_nan(\"\")"
+    }
+    if expo == 0 && mant == 0 { return s + "0x0p+0" }
+    let mut lead = "1"
+    let mut e = expo - 1023
+    if expo == 0 {
+        // subnormal: implicit leading 0, fixed unbiased exponent -1022.
+        lead = "0"
+        e = 0 - 1022
+    }
+    // 13 mantissa nibbles, MSB first (bit 48 down to bit 0).
+    let mut nib = ""
+    let mut shift = 48
+    while shift >= 0 {
+        let d = (mant >> shift) & 15
+        nib = nib + _cf_nib_hex(d)
+        shift = shift - 4
+    }
+    // Strip trailing zero nibbles (cosmetic; round-trip-equivalent).
+    let cs = nib.chars()
+    let mut last = len(cs)
+    while last > 0 && to_string(cs[last - 1]) == "0" { last = last - 1 }
+    let mut body = lead
+    if last > 0 { body = lead + "." + nib.substring(0, last) }
+    let mut es = "+"
+    let mut ea = e
+    if e < 0 { es = "-"; ea = 0 - e }
+    return s + "0x" + body + "p" + es + to_string(ea)
+}
+
 // Round-trippable float literal node for COMPTIME-FOLDED values.
 //
+// HEXA-0POD OP-40: serialize the folded double as a bit-EXACT C hex-float
+// literal (`_cf_float_hexlit`) so the emitted `hexa_float(<value>)` reconstructs
+// the IEEE value clang itself would compute — closing the OP-37b 1-ULP residual
+// (the host's hand-rolled `%.17e` decimal formatter was not correctly-rounded in
+// the self-host build, so a folded product re-parsed 1 ULP off its true value).
+//
 // HEXA-0POD OP-37: the default `to_string(<float>)` renders "%g" (6 significant
-// digits) — round-trip-LOSSY (runtime_core.c:6268). When the const-folder
-// re-serialized a folded float through `to_string` (e.g. `0.0 - 0.254829592`
-// → "-0.25483"), the FloatLit it emitted into C carried only ~6 sig-digits, so
-// `hexa_float(-0.25483)` produced a value off the true literal by up to ~4.6e-6
-// (measured on the A&S erf coefficients). Serialize folded floats with
-// `format_float_sci(f, 17)` (== "%.17e") instead — round-trippable for ALL
-// magnitudes (subnormal..1e308, ±0), and the scientific form parses back via
-// `to_float`/strtod and emits verbatim into the C `hexa_float(<value>)` literal.
+// digits) — round-trip-LOSSY (runtime_core.c:6268). OP-37 moved to
+// `format_float_sci(f, 17)` ("%.17e"), which carries enough digits but relies on
+// the formatter being correctly-rounded — true for libc, FALSE for the runtime's
+// hand-rolled `hxlcl_vsnprintf` (the OP-40 finding). The hex-float form needs no
+// decimal rounding at all: it serializes the mantissa bits verbatim.
 fn _cf_float_node(f: float) {
-    return _make_float_lit_node(format_float_sci(f, 17))
+    return _make_float_lit_node(_cf_float_hexlit(f))
 }
 
 fn _make_bool_lit_node(b) {
