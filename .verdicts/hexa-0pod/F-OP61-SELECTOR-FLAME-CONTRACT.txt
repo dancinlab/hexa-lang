@@ -1,0 +1,155 @@
+F-OP61-SELECTOR-FLAME-CONTRACT — 0-pod (NO GPU) DESIGN: the INTEGRATION CONTRACT that operationalizes
+the OP-60 route-(a) own-GEMM shape-adaptive selector TOWARD PRODUCTION — specifying EXACTLY how flame's
+stdlib/flame/clm_prod.hexa GEMM dispatch would route through `selected_config(D,M,N,K)`, so the NEXT GPU
+session implements + validates the wiring WITHOUT re-deriving the design. OP-60 made the selector an
+importable + regression-locked STANDALONE artifact, but NOTHING in flame's production training path
+consumes it yet; OP-61 writes the dispatch-hook + fallback + bit-exact invariant + GPU-validation plan.
+NO code wired this round, NO GPU, NO new measurement — design + the validation plan only.
+================================================================================================
+TIER: 🟠 SUPPORTED-BY-DESIGN (design-tier — the HONEST ceiling for a 0-pod, no-GPU contract round). This
+      is NOT a measured-green result: no code is wired into clm_prod, no kernel built, no GPU run. The
+      contract is grounded in READ source (the dispatch hook is QUOTED from clm_prod.hexa + runtime.h +
+      codegen.hexa + forge_tier_v1_emit.hexa) and the measured anchors are CITED from the OP-45GPU/OP-52/
+      OP-55/OP-58 verdicts (no new measurement). g5: the dispatch point, the fallback rule, the bit-exact
+      invariant, and the validation plan are all traceable to source/verdict; the open MODE_t64-unbuilt
+      residual is stated as a residual, NOT inflated to solved.
+
+DATE: 2026-06-13
+HW:   NONE (0-pod). Pure design + doc. ZERO vast, no GPU, no nvcc, no pod, no foreign pod, leak-0, $0.
+INPUT (READ before writing):
+  - self/native/wgmma/routea_selection.json + routea_cost_model.py::selected_config (OP-60: the
+    importable launch-dict {mode,tile,nst,swizzle,threads,pred_tflops} the contract routes through).
+  - .verdicts/hexa-0pod/F-OP60-SELECTOR-OPERATIONAL.txt (#-, the operational+regression-locked selector).
+  - .verdicts/hexa-0pod/F-OP58-OWNGEMM-PARITY-MAP.txt (the settled 3-regime parity map: PARITY @D2048
+    1.08x bit-exact · own-EDGES @consumer-D768 · parity-not-beat @D4096; the measured anchors the
+    fallback default (MODE 8) cites).
+  - docs/forge-routea-shape-adaptive.md §8.2 (the host-side launcher design) + §8.1 (MODE_t64 64x64
+    UNBUILT spec + its bit-exact K-order constraint) + §9 (bit-exact 128x256 constraint) + §10/§10.1
+    (consumer-card residual; MODE_t64 is Hopper-only, sm_120 can't run wgmma).
+  - SOURCE the dispatch hook was located in (QUOTED in the contract):
+      stdlib/flame/clm_prod.hexa:212/250/262 — the forge_dispatch_matmul GEMM call sites (fwd conv, bwd dW/dX)
+      self/codegen.hexa:7525 — lowers the 5-arg forge_dispatch_matmul builtin to hexa_forge_dispatch_matmul
+      self/runtime.h:1002-1020 — hexa_forge_dispatch_matmul docblock: packs ForgeShapeInfo+ForgeArgs,
+                                 routes through forge_tier_dispatch_v1 (RFC 050 §6.1)
+      self/forge/forge_tier_v1_emit.hexa:306 (forge_tier_dispatch_v1 def) + :169 (CUDA host →
+                                 _hx_cuda_farr_matmul_gpu == cuBLAS today)
+      self/native/wgmma/wgmma_tf32_b14.cu — the route-(a) own-GEMM kernel (MODE 8 128x128 NST=3 = winner)
+DELIVERABLES (net-new):
+  - docs/forge-routea-shape-adaptive.md: NEW section "## selector → flame production integration contract
+    (OP-61, design)" with subsections (a) dispatch hook (b) fallback contract (c) bit-exact invariant
+    (d) next-session GPU validation plan (e) HONEST status + MODE_t64-unbuilt residual.
+  - this verdict.
+
+================================================================================================
+(a) THE DISPATCH HOOK [QUOTED from source]:
+================================================================================================
+Every heavy GEMM in flame's CLMConvMoE step is issued through ONE builtin, forge_dispatch_matmul, e.g.
+in stdlib/flame/clm_prod.hexa:
+    let mm      = forge_dispatch_matmul(xcol, T, Kdim, Wt, Cout)    // :212 (fwd conv→GEMM)
+    let dW_flat = forge_dispatch_matmul(xcolT, Kdim, T, dy, Cout)   // :250 (bwd dW)
+    let dXcol   = forge_dispatch_matmul(dy, T, Cout, w, Kdim)       // :262 (bwd dX)
+codegen.hexa:7525 lowers that 5-arg builtin to a DIRECT hexa_forge_dispatch_matmul(a,m,k,b,n) call,
+whose body (self/runtime.c) packs a ForgeShapeInfo + ForgeArgs and routes through forge_tier_dispatch_v1
+(RFC 050 §6.1; emitted by self/forge/forge_tier_v1_emit.hexa:306). On a CUDA host the tier dispatcher
+today calls cuBLAS (_hx_cuda_farr_matmul_gpu, forge_tier_v1_emit.hexa:169); the route-(a) own-GEMM wgmma
+kernel (wgmma_tf32_b14.cu, MODE 8 128x128 NST=3) is the measured-winner alternative path.
+
+=> THE HOOK IS forge_tier_dispatch_v1 (NOT a clm_prod edit). It already receives ForgeShapeInfo carrying
+   (M,K,N). The integration adds a SINGLE consult at the top of its own-GEMM branch:
+       cfg = selected_config(M, K, N)   # the OP-60 launch-dict, from routea_selection.json / embedded table
+       mode==MODE8    → launch wgmma_tf32_b14.cu MODE 8 (128x128, NST per dict)
+       mode==MODE_t64 → see fallback (b): UNBUILT on Hopper → falls back to MODE 8
+       swizzle        → never (SELECTABLE structurally excludes it; dict.swizzle always False)
+   clm_prod.hexa itself does NOT change — it keeps calling forge_dispatch_matmul; the routing lives in
+   the dispatcher the builtin already funnels through. The {mode,tile,NST} maps 1:1 to a b14.cu MODE.
+
+================================================================================================
+(b) THE FALLBACK CONTRACT — never launch an unbuilt or out-of-range kernel:
+================================================================================================
+The dispatcher MUST fall back to MODE 8 (128x128, NST=3) — the measured 1.08x parity winner @D=2048
+(F-OP45GPU-OCCUPANCY-SWEEP T5) — in EITHER case:
+  1. Selector picks an UNBUILT mode. The only such pick is MODE_t64 (64x64 small-D tile, §8.1 GAP#1) —
+     an UNBUILT SPEC on Hopper sm_90a (only consumer sm_120 64x64 measured, OP-54; wgmma MODE_t64 is a
+     future GPU-lane build). If selected_config returns MODE_t64 and the b14.cu entry point is absent,
+     the dispatcher MUST NOT attempt it → falls back to MODE 8.
+  2. D (or M/N/K) outside the validated range (table covers D∈{256..8192} square; degenerate/highly
+     non-square shapes the cost model was never anchored on) → falls back to MODE 8.
+Rule:
+    cfg = selected_config(M, K, N)
+    if cfg.mode not in BUILT_MODES or shape_out_of_validated_range(M,K,N):
+        cfg = MODE8_DEFAULT       # 128x128, NST=3 — the measured 1.08x parity winner
+    launch(cfg)                   # guaranteed a BUILT, measured-safe kernel
+BUILT_MODES = the kernels actually compiled into the deployed b14.cu object (today {MODE8} + the
+OG16/OG17/MODE6 family sharing the 128x128 launch). SAFE BY CONSTRUCTION: production can NEVER launch an
+unbuilt kernel — worst case degrades to the current measured-good MODE 8 path.
+
+================================================================================================
+(c) THE BIT-EXACTNESS INVARIANT — routing changes the KERNEL, not the bits:
+================================================================================================
+flame's training guarantee is byte-eq/determinism (the clm_prod_*_eq.hexa oracle family + cross-platform
+exact gate). INVARIANT: routing by shape may change WHICH kernel launches, but MUST NOT change the
+accumulation order / result bits vs the current path. Every selectable mode is a 128x128 (or, once built,
+64x64) descriptor-direct wgmma tile running the IDENTICAL per-K-slab FMA reduction
+`for kk in 0..TKSW step TK: WG(d_sub,dA,dB)` — NO split-K, NO cross-CTA reduction (§8.1/§9 constraint).
+The 64x64 sub-tile reduction is byte-identical to MODE 8's per-(band,N-half) d0 reduction by construction;
+swizzle (a pure index permutation, bit-exact but measured-slower) is structurally excluded. So rel_rms
+0.000e+00 dev-vs-dev holds for EVERY routed shape — the same gate the parity map certifies for MODE 8.
+GATE THE NEXT SESSION RUNS: for each routed shape, compare the selector-routed own-GEMM result against the
+FIXED-MODE-8 own-GEMM reference on the SAME device — require rel_rms 0.000e+00 (bit-identical, NOT a
+tolerance). Any non-zero delta = a routed kernel changed the accumulation order → route REJECTED (g5: the
+bit-exact invariant is a hard gate, never a speed-only claim). Stronger than the cuBLAS-vs-own TF32-tolerant
+gate, because all routed kernels share one FMA order.
+
+================================================================================================
+(d) NEXT-SESSION GPU VALIDATION PLAN (no re-design needed):
+================================================================================================
+1. Wire the hook — add the selected_config(M,K,N) consult + (b) fallback to forge_tier_dispatch_v1's
+   own-GEMM branch (embed routea_selection.json or call the cost model once). clm_prod.hexa untouched.
+2. Sweep validated shapes D∈{512,1024,2048,4096} square (the measured-anchored set / json rows).
+   Expected picks (parity map / selection table):
+     D=512  → selector says MODE_t64, BUT MODE_t64 UNBUILT on Hopper → fallback fires → MODE 8 launches.
+     D=1024/2048/4096 → MODE 8 (the table's pick AND the measured winner).
+3. Gate each routed shape — rel_rms 0.000e+00 dev-vs-dev vs the fixed-MODE-8 reference ((c) invariant).
+   Expected: PASS at every shape (all routed kernels share MODE 8's FMA order; where fallback fires it IS
+   MODE 8, so the match is trivially exact).
+4. Confirm parity preserved, not regressed — re-measure routed step vs current fixed-MODE-8 step: expect
+   the SAME ~1.08x @D=2048 and ~1.50x @D=4096 (parity-map numbers), since the routed kernel IS MODE 8 in
+   every currently-built case. The selector adds value only once MODE_t64 is built (§8.1 GAP#1).
+5. (Optional, after MODE_t64 built) re-run D=256/512 with MODE_t64 in BUILT_MODES, measure the predicted
+   small-D fill win (cost model: 64x64 fills 3.1x better at deep under-fill), gating rel_rms 0 vs the
+   MODE-8 reference (the §8.1 K-order constraint guarantees it).
+
+================================================================================================
+(e) HONEST STATUS — DESIGN ONLY; the MODE_t64-unbuilt residual (the open residual, NOT a solved item):
+================================================================================================
+- This round wires NO code into clm_prod.hexa or the dispatcher, runs NO GPU, makes NO new measurement.
+  It is the integration contract + validation plan only — a 🟠 design-tier deliverable, NOT measured-green.
+- HONEST RESIDUAL — the selector's small-D MODE_t64 pick is UNBUILT on Hopper. The cost model picks
+  MODE_t64 (64x64) at small D (D≤512), but the wgmma 64x64 kernel is a FUTURE GPU-build item (§8.1 GAP#1);
+  only consumer sm_120 64x64 was measured (OP-54), and OP-57 showed the smaller-tile lever does NOT
+  transfer to that card. So on HOPPER small-D the contract's FALLBACK-TO-MODE-8 is what actually fires —
+  the selector's small-D pick is, in practice, INERT until MODE_t64 is built. This is the genuine open
+  residual, NOT a solved item: until a GPU lane builds the wgmma MODE_t64 tile, the integration's only
+  live behavior is "MODE 8 everywhere it is already used" (correct + safe, but adds no new perf yet). The
+  perf upside (small-D fill) is gated behind the MODE_t64 build, which this contract scopes but does not
+  perform.
+
+================================================================================================
+SUMMARY (g5):
+================================================================================================
+- OP-60 made the route-(a) own-GEMM shape-adaptive selector importable + regression-locked but STANDALONE;
+  OP-61 writes the INTEGRATION CONTRACT that operationalizes it toward production WITHOUT wiring code yet.
+- (a) Dispatch hook QUOTED from source: forge_dispatch_matmul (clm_prod.hexa:212/250/262) → codegen.hexa:
+  7525 → hexa_forge_dispatch_matmul (runtime.h) → forge_tier_dispatch_v1 (forge_tier_v1_emit.hexa:306;
+  CUDA host = cuBLAS today). The single-consult hook is forge_tier_dispatch_v1's own-GEMM branch; clm_prod
+  untouched; {mode,tile,NST} maps 1:1 to a wgmma_tf32_b14.cu MODE.
+- (b) Fallback contract: MODE_t64-unbuilt OR out-of-range → MODE 8 128x128 (measured 1.08x parity winner).
+  SAFE BY CONSTRUCTION — production can never launch an unbuilt kernel.
+- (c) Bit-exact invariant: routing changes the kernel, not the bits; gate = rel_rms 0.000e+00 dev-vs-dev
+  vs the fixed-MODE-8 reference for each routed shape (hard gate, all routed kernels share MODE 8's FMA order).
+- (d) GPU validation plan: sweep D∈{512,1024,2048,4096}, gate rel_rms 0, confirm parity preserved.
+- (e) HONEST 🟠 DESIGN ceiling: no code, no GPU; the open residual is the Hopper MODE_t64-unbuilt pick →
+  fallback-to-MODE-8 fires on small-D until a GPU lane builds it (NOT inflated to solved).
+- DESIGN + doc only. NO GPU, NO kernel build, NO code into clm_prod, NO new measurement, NO self/env.hexa
+  touched. 0-pod, $0, leak-0, no vast, no pod, no foreign pod. MAIN.tape #-comment SKIPPED (untracked-on-
+  origin, OP-54/57/58/60 precedent — avoids a merge race).
