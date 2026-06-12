@@ -1,0 +1,351 @@
+// @ci_gate — deterministic · network-free · 해석 PES 위 NEB/CI-NEB 메커닉스 g5 게이트
+//
+// neb.hexa — QFORGE `chem` 스케일 front-end 의 첫 brick:
+//   Nudged Elastic Band (NEB) + Climbing-Image NEB (CI-NEB) 반응경로 엔진의
+//   "메커닉스" (improved tangent · spring force · perpendicular projection ·
+//    climbing image) 를 임의차원 구성공간 위에서 generic 하게 구현한다.
+//
+// LIT GROUNDING (round-1):
+//   * G. Henkelman, H. Jónsson, "Improved tangent estimate in the nudged
+//     elastic band method for finding minimum energy paths and saddle points",
+//     J. Chem. Phys. 113, 9978 (2000) — improved (upwind/energy-weighted) tangent.
+//   * G. Henkelman, B. P. Uberuaga, H. Jónsson, "A climbing image nudged elastic
+//     band method for finding saddle points and minimum energy paths",
+//     J. Chem. Phys. 113, 9901 (2000) — CI-NEB climbing image.
+//   * Müller & Brown, Theor. Chim. Acta 53, 75 (1979) — 2D 벤치 PES (saddle ref).
+//
+// 핵심 식 (image i, 이웃 i-1, i+1; 모두 D-차원 벡터):
+//   tangent τ̂_i (improved, J.Chem.Phys. 113, 9978):
+//     τ+ = R_{i+1}-R_i,  τ- = R_i-R_{i-1}
+//     V_{i+1}>V_i>V_{i-1}            → τ = τ+
+//     V_{i+1}<V_i<V_{i-1}            → τ = τ-
+//     else (i 가 극대/극소): ΔVmax=max(|ΔV+|,|ΔV-|), ΔVmin=min(...)
+//       V_{i+1}>V_{i-1} → τ = τ+·ΔVmax + τ-·ΔVmin
+//       else            → τ = τ+·ΔVmin + τ-·ΔVmax
+//     τ̂ = τ/|τ|
+//   spring (perp-nudge 후 평행성분만):  F^s_∥ = k(|τ+| - |τ-|) τ̂
+//   true force perpendicular:  F^⊥ = -∇V + (∇V·τ̂) τ̂
+//   NEB force (regular image):  F_i = F^⊥ + F^s_∥
+//   climbing image (CI-NEB, 최고에너지 image):
+//     F_climb = -∇V + 2(∇V·τ̂) τ̂      (밴드 따라 부호반전 → saddle 로 등반)
+//
+// d4-generic: 엔진은 PES 를 이름으로 분기하지 않는다.  PES = `pes_id` 정수
+// selector 로 `pes_energy`/`pes_grad` 일반 dispatcher 에 위임.  새 PES 추가 =
+// dispatcher 에 manifest 한 줄 (엔진 미접촉).
+//
+// d19 재사용: gradient descent 옵티마이저는 stdlib/qforge MD chain 의
+// forces→step 패턴과 동형; 본 brick 은 외부의존 없이 해석 ∇V 로 self-contained.
+//
+// Run (repo runtime):  hexa run stdlib/qforge/chem/neb_selftest.hexa
+
+// ── 일반 벡터 헬퍼 (D-차원 flat) ───────────────────────────────────
+fn _neb_abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _vsub(a: [float], b: [float]) -> [float] {
+    let mut o: [float] = []
+    let mut i = 0
+    while i < len(a) { o.push(a[i] - b[i]) ; i = i + 1 }
+    return o
+}
+fn _vadd(a: [float], b: [float]) -> [float] {
+    let mut o: [float] = []
+    let mut i = 0
+    while i < len(a) { o.push(a[i] + b[i]) ; i = i + 1 }
+    return o
+}
+fn _vscale(a: [float], s: float) -> [float] {
+    let mut o: [float] = []
+    let mut i = 0
+    while i < len(a) { o.push(a[i] * s) ; i = i + 1 }
+    return o
+}
+fn _vdot(a: [float], b: [float]) -> float {
+    let mut acc = 0.0
+    let mut i = 0
+    while i < len(a) { acc = acc + a[i] * b[i] ; i = i + 1 }
+    return acc
+}
+fn _vnorm(a: [float]) -> float { return sqrt(_vdot(a, a)) }
+
+// 정규화 (영벡터 안전: |a|<tiny → 영벡터 반환).
+fn _vunit(a: [float]) -> [float] {
+    let n = _vnorm(a)
+    if n < 1.0e-30 { return _vscale(a, 0.0) }
+    return _vscale(a, 1.0 / n)
+}
+
+// ── PES dispatcher (d4: 엔진은 pes_id 를 검사하지 않음) ─────────────
+//   manifest:  0 = 1D 대칭 이중우물  V(x)=(x²-1)²   (1차원: coord=[x])
+//              1 = Müller-Brown 2D 표준 PES         (2차원: coord=[x,y])
+//   새 PES = 아래 두 dispatcher 에 케이스 한 줄 추가 (엔진 미접촉).
+
+// 1D 이중우물:  V=(x²-1)²,  최소 x=±1 (V=0), 배리어 x=0 (V=1).
+fn _dw_energy(x: float) -> float { let t = x * x - 1.0 ; return t * t }
+fn _dw_grad(x: float) -> float { return 4.0 * x * (x * x - 1.0) }   // dV/dx
+
+// Müller-Brown 2D PES (Müller & Brown 1979 표준 파라미터).
+//   V(x,y) = Σ_{k=0..3} A_k exp[ a_k(x-x0_k)² + b_k(x-x0_k)(y-y0_k) + c_k(y-y0_k)² ]
+fn _mb_AA(k: int) -> float {
+    if k == 0 { return -200.0 } if k == 1 { return -100.0 }
+    if k == 2 { return -170.0 } return -15.0
+}
+fn _mb_aa(k: int) -> float {
+    if k == 0 { return -1.0 } if k == 1 { return -1.0 }
+    if k == 2 { return -6.5 } return 0.7
+}
+fn _mb_bb(k: int) -> float {
+    if k == 0 { return 0.0 } if k == 1 { return 0.0 }
+    if k == 2 { return 11.0 } return 0.6
+}
+fn _mb_cc(k: int) -> float {
+    if k == 0 { return -10.0 } if k == 1 { return -10.0 }
+    if k == 2 { return -6.5 } return 0.7
+}
+fn _mb_x0(k: int) -> float {
+    if k == 0 { return 1.0 } if k == 1 { return 0.0 }
+    if k == 2 { return -0.5 } return -1.0
+}
+fn _mb_y0(k: int) -> float {
+    if k == 0 { return 0.0 } if k == 1 { return 0.5 }
+    if k == 2 { return 1.5 } return 1.0
+}
+fn _mb_energy(x: float, y: float) -> float {
+    let mut v = 0.0
+    let mut k = 0
+    while k < 4 {
+        let dx = x - _mb_x0(k)
+        let dy = y - _mb_y0(k)
+        let e = _mb_aa(k)*dx*dx + _mb_bb(k)*dx*dy + _mb_cc(k)*dy*dy
+        v = v + _mb_AA(k) * exp(e)
+        k = k + 1
+    }
+    return v
+}
+// ∇V = [dV/dx, dV/dy], 해석 미분 (각 가우시안 항의 곱미분).
+fn _mb_grad(x: float, y: float) -> [float] {
+    let mut gx = 0.0
+    let mut gy = 0.0
+    let mut k = 0
+    while k < 4 {
+        let dx = x - _mb_x0(k)
+        let dy = y - _mb_y0(k)
+        let e = _mb_aa(k)*dx*dx + _mb_bb(k)*dx*dy + _mb_cc(k)*dy*dy
+        let term = _mb_AA(k) * exp(e)
+        gx = gx + term * (2.0*_mb_aa(k)*dx + _mb_bb(k)*dy)
+        gy = gy + term * (_mb_bb(k)*dx + 2.0*_mb_cc(k)*dy)
+        k = k + 1
+    }
+    let mut g: [float] = []
+    g.push(gx) ; g.push(gy)
+    return g
+}
+
+// 일반 dispatcher: coord = D-차원 flat.  엔진은 이 둘만 호출(이름분기 없음).
+pub fn pes_energy(pes_id: int, coord: [float]) -> float {
+    if pes_id == 0 { return _dw_energy(coord[0]) }
+    return _mb_energy(coord[0], coord[1])          // pes_id == 1
+}
+pub fn pes_grad(pes_id: int, coord: [float]) -> [float] {
+    if pes_id == 0 {
+        let mut g: [float] = []
+        g.push(_dw_grad(coord[0]))
+        return g
+    }
+    return _mb_grad(coord[0], coord[1])            // pes_id == 1
+}
+
+// ── NEB band: 이미지 체인 (행=image, 각 행=D-차원 좌표) ─────────────
+pub struct NebBand {
+    nimg: int,                 // 이미지 수 (양끝 고정 endpoint 포함)
+    dim: int,                  // 구성공간 차원 D
+    coords: [[float]],         // nimg × D
+    energies: [float],         // nimg (마지막 평가)
+    converged: bool,           // |F^⊥|max < ftol 도달 여부
+    iters: int,                // 사용 반복수
+    fmax: float                // 마지막 최대 |F^⊥| (수직성분, endpoint 제외)
+}
+
+// 직선 보간 초기 밴드: R0→Rn 사이 nimg-1 등간격.
+pub fn neb_linear_init(start: [float], end: [float], nimg: int) -> [[float]] {
+    let dim = len(start)
+    let mut band: [[float]] = []
+    let mut i = 0
+    while i < nimg {
+        let t = (i * 1.0) / ((nimg - 1) * 1.0)
+        let mut row: [float] = []
+        let mut d = 0
+        while d < dim {
+            row.push(start[d] + t * (end[d] - start[d]))
+            d = d + 1
+        }
+        band.push(row)
+        i = i + 1
+    }
+    return band
+}
+
+// improved tangent τ̂_i (Henkelman-Jónsson 2000, J.Chem.Phys. 113, 9978).
+fn _improved_tangent(rm: [float], ri: [float], rp: [float],
+                     vm: float, vi: float, vp: float) -> [float] {
+    let tp = _vsub(rp, ri)        // τ+ = R_{i+1}-R_i
+    let tm = _vsub(ri, rm)        // τ- = R_i-R_{i-1}
+    if vp > vi {
+        if vi > vm { return _vunit(tp) }       // 단조 상승 → τ+
+    }
+    if vp < vi {
+        if vi < vm { return _vunit(tm) }       // 단조 하강 → τ-
+    }
+    // 극값(i 가 극대/극소): 에너지차 가중 블렌드.
+    let dvp = _neb_abs(vp - vi)
+    let dvm = _neb_abs(vm - vi)
+    let mut dvmax = dvp
+    let mut dvmin = dvm
+    if dvm > dvp { dvmax = dvm ; dvmin = dvp }
+    let mut tau: [float] = []
+    if vp > vm {
+        tau = _vadd(_vscale(tp, dvmax), _vscale(tm, dvmin))
+    } else {
+        tau = _vadd(_vscale(tp, dvmin), _vscale(tm, dvmax))
+    }
+    return _vunit(tau)
+}
+
+// NEB force on a single interior image i (CI-NEB: climb_idx==i → 등반).
+//   반환 = 그 image 의 이동력 (F^⊥ + F^s_∥, 또는 climb 일 땐 F_climb).
+fn _neb_image_force(rm: [float], ri: [float], rp: [float],
+                    vm: float, vi: float, vp: float,
+                    gi: [float], k: float, climbing: bool) -> [float] {
+    let tau = _improved_tangent(rm, ri, rp, vm, vi, vp)
+    let gpar = _vdot(gi, tau)               // ∇V·τ̂
+    if climbing {
+        // F_climb = -∇V + 2(∇V·τ̂)τ̂  → τ̂ 방향으로 부호반전(saddle 등반).
+        return _vadd(_vscale(gi, -1.0), _vscale(tau, 2.0 * gpar))
+    }
+    // F^⊥ = -∇V + (∇V·τ̂)τ̂
+    let fperp = _vadd(_vscale(gi, -1.0), _vscale(tau, gpar))
+    // spring: F^s_∥ = k(|τ+|-|τ-|)τ̂
+    let nplus = _vnorm(_vsub(rp, ri))
+    let nminus = _vnorm(_vsub(ri, rm))
+    let fspr = _vscale(tau, k * (nplus - nminus))
+    return _vadd(fperp, fspr)
+}
+
+// 최고에너지 내부 image 인덱스 (CI-NEB climbing image 선택).
+fn _argmax_interior(energies: [float], nimg: int) -> int {
+    let mut best = 1
+    let mut bestv = energies[1]
+    let mut i = 2
+    while i < nimg - 1 {
+        if energies[i] > bestv { bestv = energies[i] ; best = i }
+        i = i + 1
+    }
+    return best
+}
+
+// ── 메인 드라이버: NEB / CI-NEB 완화 (steepest-descent + 이동제한) ──
+//   endpoint(0, nimg-1) 고정.  내부 image 만 이동.
+//   ci=true 면 최고에너지 image 를 climbing image 로 (climb_after 반복 후 활성).
+//   d4: pes_id 는 dispatcher 로만 흐름 (엔진은 검사 안 함).
+pub fn neb_relax(pes_id: int, band0: [[float]], k: float,
+                 step: float, maxiter: int, ftol: float,
+                 ci: bool, climb_after: int) -> NebBand {
+    let nimg = len(band0)
+    let dim = len(band0[0])
+    // 밴드 깊은 복사.
+    let mut band: [[float]] = []
+    let mut ci0 = 0
+    while ci0 < nimg {
+        let mut row: [float] = []
+        let mut d = 0
+        while d < dim { row.push(band0[ci0][d]) ; d = d + 1 }
+        band.push(row)
+        ci0 = ci0 + 1
+    }
+    let mut iters = 0
+    let mut fmax = 1.0e30
+    let mut converged = false
+    let mut energies: [float] = []
+    let mut e0 = 0
+    while e0 < nimg { energies.push(0.0) ; e0 = e0 + 1 }
+
+    let mut it = 0
+    while it < maxiter {
+        // (1) 모든 image 에너지 갱신.
+        let mut ie = 0
+        while ie < nimg { energies[ie] = pes_energy(pes_id, band[ie]) ; ie = ie + 1 }
+        // (2) climbing image 선택 (ci & climb_after 도달).
+        let mut climb_idx = -1
+        if ci {
+            if it >= climb_after { climb_idx = _argmax_interior(energies, nimg) }
+        }
+        // (3) 내부 image 별 NEB force → steepest-descent step.
+        //     fmax 는 climbing image 의 perp 성분을 제외한 일반 image 의 |F^⊥|max
+        //     로 측정(climb image 는 평행력이 의도적으로 0 이 아니므로 별도).
+        let mut newfmax = 0.0
+        let mut moves: [[float]] = []
+        // endpoint 0 은 이동 없음 — 빈 행으로 자리표시.
+        let mut zrow: [float] = []
+        let mut zd = 0
+        while zd < dim { zrow.push(0.0) ; zd = zd + 1 }
+        moves.push(zrow)
+        let mut i = 1
+        while i < nimg - 1 {
+            let gi = pes_grad(pes_id, band[i])
+            let mut is_climb = false
+            if i == climb_idx { is_climb = true }
+            let f = _neb_image_force(band[i - 1], band[i], band[i + 1],
+                                     energies[i - 1], energies[i], energies[i + 1],
+                                     gi, k, is_climb)
+            // 수렴 측정용 perp force (climb 여부 무관, |F^⊥| 기준).
+            let tau = _improved_tangent(band[i - 1], band[i], band[i + 1],
+                                        energies[i - 1], energies[i], energies[i + 1])
+            let gpar = _vdot(gi, tau)
+            let fperp = _vadd(_vscale(gi, -1.0), _vscale(tau, gpar))
+            let pn = _vnorm(fperp)
+            if pn > newfmax { newfmax = pn }
+            // step (이동제한): 너무 큰 한 스텝 방지 — 표준 SD + cap.
+            let stepvec = _vscale(f, step)
+            moves.push(stepvec)
+            i = i + 1
+        }
+        // endpoint nimg-1 자리표시.
+        let mut zrow2: [float] = []
+        let mut zd2 = 0
+        while zd2 < dim { zrow2.push(0.0) ; zd2 = zd2 + 1 }
+        moves.push(zrow2)
+        // (4) 적용.
+        let mut im = 1
+        while im < nimg - 1 {
+            band[im] = _vadd(band[im], moves[im])
+            im = im + 1
+        }
+        fmax = newfmax
+        iters = it + 1
+        if newfmax < ftol {
+            // CI 모드면 climbing image 가 활성화된 뒤에만 수렴인정.
+            if ci {
+                if it >= climb_after { converged = true ; it = maxiter }
+            } else {
+                converged = true ; it = maxiter
+            }
+        }
+        it = it + 1
+    }
+    // 최종 에너지 1회 갱신.
+    let mut fe = 0
+    while fe < nimg { energies[fe] = pes_energy(pes_id, band[fe]) ; fe = fe + 1 }
+    return NebBand { nimg: nimg, dim: dim, coords: band, energies: energies,
+                     converged: converged, iters: iters, fmax: fmax }
+}
+
+// 밴드의 배리어(최고 image E − start E) 와 saddle image 인덱스.
+pub struct NebBarrier {
+    barrier: float,            // max_i E_i − E_0 (forward barrier 근사)
+    top_idx: int,              // 최고에너지 내부 image
+    top_energy: float
+}
+pub fn neb_barrier(b: NebBand) -> NebBarrier {
+    let top = _argmax_interior(b.energies, b.nimg)
+    return NebBarrier { barrier: b.energies[top] - b.energies[0],
+                        top_idx: top, top_energy: b.energies[top] }
+}
