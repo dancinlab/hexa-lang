@@ -224,30 +224,47 @@ parity-seeking, not superiority. Parity does **not** hold at all shapes:
   **statically EXCLUDED** as the cause; the surviving classification is (d) large-D
   scheduling roofline = *shape-rigid vs shape-adaptive*. (`F-OP45-ROUTEA-D4096-CAP`.)
 
-> **RESOLVED (g5) — a FIXABLE scheduling stall, NOT a hard roofline.** The OP-45-GPU sweep
-> settled the @D=4096 sub-parity: the own kernel runs at **~12–40% of HBM3 peak** with
-> arithmetic intensity **682 FLOP/byte ≫ the 104 FLOP/byte compute-bound threshold**, so it is
-> **COMPUTE/SCHEDULING-bound, NOT DRAM-bandwidth-bound** — i.e. a **fixable scheduling stall
-> recoverable in principle** by a better single-pass tile/schedule, not a hard HBM bandwidth
-> wall. (ncu HW-counters were infra-blocked on the profiling-admin-locked pod; resolved via a
-> g5-legal analytical roofline from the measured kernel wall-time.) MODE 7 persistent does NOT
-> fix it (T3 closed-neg) — the tile-rasterization layer is not where the stall lives.
-> (`F-OP45GPU-OCCUPANCY-SWEEP`.) So the @D=4096 sub-parity is a recoverable scheduling problem,
-> not a roofline ceiling.
+> **SETTLED (g5) — the @D=4096 gap is BIT-EXACTNESS-BOUND; the T4 lever family is exhausted
+> closed-negative.** The OP-45-GPU sweep first scoped the cap: the own kernel runs at **~12–40%
+> of HBM3 peak** with arithmetic intensity **682 FLOP/byte ≫ the 104 FLOP/byte compute-bound
+> threshold**, so it is **COMPUTE/SCHEDULING-bound, NOT DRAM-bandwidth-bound** (ncu was infra-
+> blocked on the profiling-admin-locked pod; resolved via a g5-legal analytical roofline). cuBLAS's
+> +24.6% large-D lever is a **better single-pass tile + CTA-swizzle, `split_k=1` (NOT split-K)** —
+> bit-exact-reachable in principle. **Two GPU builds then exhausted that lever:** (1) **CTA-swizzle
+> in isolation** (MODE 9, non-persistent) **REGRESSES** — best bit-exact swizzled 280.5 vs the
+> SWZ=0 baseline 285.1 TFLOP/s, −1.6%, ratio 1.50× → 1.53× (`F-OP52-TF32-GAP-CLOSE`); this also
+> isolates T3's MODE 7 @4096 regress to the *swizzle*, not the persistent loop. (2) The **NEW
+> 2-CTA/SM-preserving 128×256 tile** (MODE 10 t256e, register-feasible at 90 regs / 2 CTA/SM ==
+> MODE 8) **REGRESSES −7.1%** (263.3 vs 283.5 TFLOP/s, ratio 1.51× → 1.64×): the sequential-halves
+> schedule serializes the wgmma pipeline (ptxas C7515) + doubles the K-drain (`F-OP55-NEWTILE-D4096`).
+> MODE 5 t256 (the only in-tree larger single-pass tile) and MODE 7 persistent were already
+> closed-neg @4096. **No bit-exact 256-N schedule on sm_90a is BOTH 2 CTA/SM AND non-serialized —
+> the @D=4096 own-GEMM TF32 gap is bit-exactness-bound. own-GEMM = bit-exact-PARITY-not-BEAT
+> @D=4096 is the honest, settled final answer**, not a recoverable scheduling problem.
+> (`F-OP45GPU-OCCUPANCY-SWEEP`, `F-OP52-TF32-GAP-CLOSE`, `F-OP55-NEWTILE-D4096`.)
+
+**Consumer-card sibling — own-GEMM EDGES cuBLAS @D=768 (a DIFFERENT kernel, different roofline).**
+The RTX 5070 (sm_120) ISA does **not** carry wgmma; the consumer card runs the **OWN120**
+`mma.sync.m16n8k8.tf32` warp-MMA own-GEMM (64×64 tile). On summer's FREE RTX 5070 the **tuned**
+OWN120 lands at **median 0.95×–1.47× off cuBLAS-TF32 across D=512..2048 — own EDGES cuBLAS at the
+mid shape D=768 (0.95×, bit-exact-tolerant rel-RMS ~1.3e-5)** with D=2048 also near-parity (0.96×),
+**closing the original F-BENCH-5 3.2–6.9× raw gap**. The 64×64 is the consumer optimum — shrinking
+to 32×32 is strictly worse at every small-D (`F-OP54-SUMMER-OWNGEMM-TF32`, `F-OP57-SUMMER-SMALLTILE`).
 
 **The path forward — IF a beat is ever pursued** (not a standing goal): the shape-adaptive
 selector design in `docs/forge-routea-shape-adaptive.md` (§2–§6) + its CPU cost model (which
-reproduces the measured win-ordering at both D, mean |rel.err| 2.2%) + the **4 concrete
-config gaps** (64×64 small-tile · MODE 7 persistent measured @4096 · bit-exact split-K ·
-NST-adaptive launcher) are the levers. None exist in-tree today; each maps to a gated
-GPU-session build (OP-45 T1–T5). (`F-OP49-SHAPE-ADAPTIVE-DESIGN`,
-`docs/forge-routea-shape-adaptive.md`.)
+reproduces the measured win-ordering at both D) is the harness. But the @D=4096 large-D lever is
+now MEASURED-exhausted bit-exact (above); the only remaining cost-model-tractable gap is the
+small-D 64×64 under-fill tile (Hopper-only — wgmma; the sm_120 32×32 proxy showed the more-CTA
+lever does *not* help an already-small-tile consumer kernel). (`F-OP49-SHAPE-ADAPTIVE-DESIGN`,
+`docs/forge-routea-shape-adaptive.md` — see its **own-GEMM parity map** for the one-screen picture.)
 
 **The VALUE proposition** is the same as the flame side: own-GEMM's worth is
 **bit-exactness + device-residency + no-LLVM compile-theorem** — a device GEMM callable
 in-line where a persistent megakernel can *never* call cuBLAS (a host API), end-to-end, with
-no vendor call and a bit-exact gate. It is **NOT raw TFLOP/s-vs-cuBLAS**. Until a beat is
-pursued, the boundary stands: **bit-exact parity @D=2048, not a beat, shape-rigid @D=4096.**
+no vendor call and a bit-exact gate. It is **NOT raw TFLOP/s-vs-cuBLAS**. The boundary is
+SETTLED: **parity @Hopper-D2048 (1.08×, bit-exact) · own-edges-cuBLAS @consumer-D768 (0.95×) ·
+parity-not-beat @Hopper-large-D (~1.50× @D=4096, bit-exactness-bound).**
 
 ---
 
