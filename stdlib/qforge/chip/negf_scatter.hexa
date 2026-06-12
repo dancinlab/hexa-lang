@@ -1,0 +1,427 @@
+// HEXA Standard Library — qforge/chip/negf_scatter
+//
+// QFORGE universal-engine · CHIP scale · round-5 brick.
+//   scale ladder (QFORGE.md §122):  chip = device 밴드·수송·열(TCAD).
+//   round-1 (band_transport.hexa) laid the analytic SPINE (ε(k), diatomic GAP via
+//     generic eigh, Landauer ΣTₙ, thermal quantum g₀).
+//   round-2 (band_kmesh.hexa) promoted the band leg to a k-MESH manifold + a
+//     closed-form 1D van-Hove DOS + a mode-count NEGF transmission T(E)=N(E)
+//     (the reflectionless ballistic LIMIT — Σ(E) deferred, mode count IS T).
+//   round-3 (band_scf.hexa) wired H(k)=T(k)+V to the plane-wave SCF core.
+//   round-4 (phonon_kappa.hexa) closed the thermal leg (ballistic N·g₀ floor).
+//
+// Round-5 GENERALISES round-2's mode-count LIMIT to a REAL coherent-scattering
+// NEGF with an explicit semi-infinite lead self-energy. Round-2 asserted T(E)=N(E)
+// as the reflectionless limit; this brick BUILDS the machinery that PRODUCES that
+// number AND the sub-unity transmission of a scatterer — the Caroli / Fisher-Lee
+// formula
+//       T(E) = Tr[ Γ_L · Gʳ(E) · Γ_R · Gᵃ(E) ],
+// with the device retarded Green's function
+//       Gʳ(E) = ( (E+iη)·I − H_D − Σ_L(E) − Σ_R(E) )⁻¹,
+// the lead self-energy from a semi-infinite 1D tight-binding lead's SURFACE Green's
+// function (Datta · Sancho-Rubio),
+//       Σ_X(E) = τ_X · g_surf(E) · τ_X†,   Γ_X = i( Σ_X − Σ_X† ).
+//
+// ── The semi-infinite 1D lead surface Green's function (the round-5 kernel) ───
+//   A uniform 1D chain (on-site ε₀, hopping t) terminated at one end has a CLOSED
+//   surface GF (the fixed point of g = (E−ε₀−t²g)⁻¹, a quadratic):
+//       g_surf(E) = ( (E−ε₀) − √((E−ε₀)² − 4t²) ) / (2 t²),
+//   with the RETARDED branch selected by E→E+iη so that Im g_surf ≤ 0 inside the
+//   band |E−ε₀|<2|t| (an outgoing/decaying wave). Inside the band the square root
+//   is imaginary → g_surf is complex (open channel, finite Γ); outside the band it
+//   is real (evanescent, Γ=0 — closed channel). We ALSO provide the Sancho-Rubio
+//   decimation iteration and assert it converges to this analytic g_surf (selftest
+//   (d)) — so the analytic form is the anchor, the iteration the general engine.
+//
+// ── d4 generic / d19 reuse contract ──────────────────────────────────────────
+//   • The device Hamiltonian H_D is an INPUT (flat real-symmetric n×n). A clean
+//     n-site chain, a chain with a raised on-site barrier, or a future multi-orbital
+//     H_D(k) from band_scf all traverse THIS one path — no per-device branch (d4).
+//   • The lead coupling τ is an INPUT (which device site the lead attaches to + the
+//     contact hopping). Left/Right leads are the SAME generic builder (d4).
+//   • The mode-count limit (round-2 qforge_chip_negf_modecount) is RECOVERED, not
+//     re-derived: a clean device gives T(E)=N(E) to machine precision (selftest (a)),
+//     so this brick is a strict superset of round-2's transmission (d19 lineage).
+//   • Complex linear algebra (matmul · dagger · Gauss-Jordan inverse) is built here
+//     once (the stdlib eigh is real-symmetric Jacobi — no complex inverse exists);
+//     a complex matrix is a flat interleaved [re00,im00, re01,im01, …] (n×n → 2n²).
+//
+//   pub fn qforge_chip_lead_gsurf_1d(eps0,t, e, eta)         -> [float]  // [Re,Im] g_surf
+//   pub fn qforge_chip_lead_gsurf_sancho(eps0,t,e,eta,iters) -> [float]  // [Re,Im] (iteration)
+//   pub fn qforge_chip_lead_sigma_1d(eps0,t,tc, e, eta)      -> [float]  // [Re,Im] Σ scalar
+//   pub fn qforge_chip_lead_gamma_1d(eps0,t,tc, e, eta)      -> float    // Γ = -2 Im Σ (scalar)
+//   pub fn qforge_chip_negf_greens(hd, n, sigL, sigR, e, eta)-> [float]  // Gʳ (complex flat 2n²)
+//   pub fn qforge_chip_negf_transmission_se(hd,n, eps0,t,tcL,tcR, e, eta) -> float  // T(E)
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/chip/negf_scatter_selftest.hexa
+
+// π unused here; sqrt/builtin math come from the runtime (grep-verified d19).
+
+// ══ complex scalar helpers (a complex z = [re, im]) ═══════════════════════════
+fn _csqrt_re(re: float, im: float) -> float {
+    // principal √(re+i·im): result r = √((|z|+re)/2)
+    let mag = sqrt(re * re + im * im)
+    let t = (mag + re) * 0.5
+    if t <= 0.0 { return 0.0 }
+    return sqrt(t)
+}
+fn _csqrt_im(re: float, im: float) -> float {
+    let mag = sqrt(re * re + im * im)
+    let t = (mag - re) * 0.5
+    let v = if t <= 0.0 { 0.0 } else { sqrt(t) }
+    // sign of imag part of √z follows sign of im (principal branch); im=0 → +.
+    if im < 0.0 { return -v }
+    return v
+}
+
+// ══ (1) semi-infinite 1D lead SURFACE Green's function (analytic) ═════════════
+// g_surf(E) = ( (E−ε₀) − √((E−ε₀)²−4t²) ) / (2t²),  retarded branch via E→E+iη.
+// Inside the band the radicand is negative → g_surf is complex (Im<0, open channel).
+// Returns [Re, Im]. Scalars materialised into fresh locals before the array return
+// (gen3 arena-return guard — the pattern round-2/3 use verbatim).
+pub fn qforge_chip_lead_gsurf_1d(eps0: float, t: float, e: float, eta: float) -> [float] {
+    // z = (E−ε₀+iη); radicand w = z² − 4t².
+    let zr = e - eps0
+    let zi = eta
+    let wr = zr * zr - zi * zi - 4.0 * t * t
+    let wi = 2.0 * zr * zi
+    let sr = _csqrt_re(wr, wi)
+    let si = _csqrt_im(wr, wi)
+    // retarded branch: pick the root sign so Im(g_surf) ≤ 0. g = (z − √w)/(2t²).
+    // Try minus root; if it gives Im>0 flip to plus root.
+    let inv2t2 = 1.0 / (2.0 * t * t)
+    let gr_m = (zr - sr) * inv2t2
+    let gi_m = (zi - si) * inv2t2
+    let gr_p = (zr + sr) * inv2t2
+    let gi_p = (zi + si) * inv2t2
+    if gi_m <= 0.0 {
+        let or = gr_m
+        let oi = gi_m
+        return [or, oi]
+    }
+    let or2 = gr_p
+    let oi2 = gi_p
+    return [or2, oi2]
+}
+
+// Sancho-Rubio decimation (Sancho, Sancho & Rubio, J.Phys.F 15, 851 (1985)): the
+// GENERAL surface-GF engine — QUADRATICALLY convergent, stable down to η→0 where the
+// plain fixed point g=(z−t²g)⁻¹ DIVERGES inside the band. Decimation renormalises an
+// effective on-site (εs for the surface, ε for the bulk) and a transfer coupling
+// (α,β), halving the chain at each step:
+//   g_inv = z − εs(∞),   εs(∞) the fixed point of the recursion below.
+// All quantities are complex scalars here (a 1-orbital lead) — z=(E−ε₀+iη), α₀=β₀=t,
+// ε₀ₛ=ε₀ᵇ=ε₀ (set to 0 relative to z). selftest (d) asserts convergence to the closed
+// g_surf above to machine precision even at η=1e-7 (where the plain iteration fails).
+pub fn qforge_chip_lead_gsurf_sancho(eps0: float, t: float, e: float, eta: float, iters: int) -> [float] {
+    let zr = e - eps0
+    let zi = eta
+    // effective surface/bulk on-site (relative to z) and transfer couplings α,β.
+    // ε_s, ε_b are stored as their values (start 0); α=β=t (real start, become complex).
+    let mut esr = 0.0
+    let mut esi = 0.0
+    let mut ebr = 0.0
+    let mut ebi = 0.0
+    let mut ar = t
+    let mut ai = 0.0
+    let mut br = t
+    let mut bi = 0.0
+    let mut k = 0
+    while k < iters {
+        // g_b = ( z − ε_b )⁻¹
+        let dr = zr - ebr
+        let di = zi - ebi
+        let dd = dr * dr + di * di
+        if dd <= 0.0 { k = iters }                    // guard (degenerate)
+        let gbr = dr / dd
+        let gbi = -di / dd
+        // α·g_b, β·g_b
+        let agr = ar * gbr - ai * gbi
+        let agi = ar * gbi + ai * gbr
+        let bgr = br * gbr - bi * gbi
+        let bgi = br * gbi + bi * gbr
+        // ε_s += α·g_b·β ;  ε_b += α·g_b·β + β·g_b·α
+        let agb_r = agr * br - agi * bi
+        let agb_i = agr * bi + agi * br
+        let bga_r = bgr * ar - bgi * ai
+        let bga_i = bgr * ai + bgi * ar
+        let nesr = esr + agb_r
+        let nesi = esi + agb_i
+        let nebr = ebr + agb_r + bga_r
+        let nebi = ebi + agb_i + bga_i
+        // α ← α·g_b·α ;  β ← β·g_b·β
+        let nar = agr * ar - agi * ai
+        let nai = agr * ai + agi * ar
+        let nbr = bgr * br - bgi * bi
+        let nbi = bgr * bi + bgi * br
+        esr = nesr ; esi = nesi
+        ebr = nebr ; ebi = nebi
+        ar = nar ; ai = nai
+        br = nbr ; bi = nbi
+        k = k + 1
+    }
+    // surface GF g_surf = ( z − ε_s )⁻¹
+    let fr = zr - esr
+    let fi = zi - esi
+    let ff = fr * fr + fi * fi
+    let gr = fr / ff
+    let gi = -fi / ff
+    let or = gr
+    let oi = gi
+    return [or, oi]
+}
+
+// ══ (2) lead self-energy Σ = τ g_surf τ†  (scalar contact, τ = t_c real) ══════
+// A single-orbital contact couples the device end site to the lead surface site via
+// hopping t_c. Σ = t_c · g_surf · t_c = t_c²·g_surf (real τ). Returns [Re,Im].
+pub fn qforge_chip_lead_sigma_1d(eps0: float, t: float, tc: float, e: float, eta: float) -> [float] {
+    let g = qforge_chip_lead_gsurf_1d(eps0, t, e, eta)
+    let tc2 = tc * tc
+    let sr = tc2 * g[0]
+    let si = tc2 * g[1]
+    return [sr, si]
+}
+
+// Broadening Γ = i(Σ − Σ†) = −2·Im(Σ)  (scalar). Γ≥0 inside the band, 0 outside.
+pub fn qforge_chip_lead_gamma_1d(eps0: float, t: float, tc: float, e: float, eta: float) -> float {
+    let s = qforge_chip_lead_sigma_1d(eps0, t, tc, e, eta)
+    let gam = -2.0 * s[1]
+    return gam
+}
+
+// ══ complex dense matrix helpers (flat interleaved [re,im] · row-major) ═══════
+// index of (i,j) real part = 2*(i*n+j); imag part = +1.
+fn _cm_get_re(m: [float], n: int, i: int, j: int) -> float { return m[2 * (i * n + j)] }
+fn _cm_get_im(m: [float], n: int, i: int, j: int) -> float { return m[2 * (i * n + j) + 1] }
+
+// complex matmul C = A·B  (all n×n flat interleaved).
+fn _cmatmul(a: [float], b: [float], n: int) -> [float] {
+    let mut c: [float] = []
+    let mut i = 0
+    while i < n {
+        let mut j = 0
+        while j < n {
+            let mut sr = 0.0
+            let mut si = 0.0
+            let mut kk = 0
+            while kk < n {
+                let ar = _cm_get_re(a, n, i, kk)
+                let ai = _cm_get_im(a, n, i, kk)
+                let br = _cm_get_re(b, n, kk, j)
+                let bi = _cm_get_im(b, n, kk, j)
+                sr = sr + ar * br - ai * bi
+                si = si + ar * bi + ai * br
+                kk = kk + 1
+            }
+            c.push(sr)
+            c.push(si)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return c
+}
+
+// conjugate transpose A† (n×n flat interleaved).
+fn _cdagger(a: [float], n: int) -> [float] {
+    let mut d: [float] = []
+    let mut i = 0
+    while i < n {
+        let mut j = 0
+        while j < n {
+            // (A†)_{ij} = conj(A_{ji})
+            let ar = _cm_get_re(a, n, j, i)
+            let ai = _cm_get_im(a, n, j, i)
+            d.push(ar)
+            d.push(-ai)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return d
+}
+
+// real trace of an n×n complex flat matrix (Re Tr).
+fn _ctrace_re(a: [float], n: int) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < n {
+        s = s + _cm_get_re(a, n, i, i)
+        i = i + 1
+    }
+    return s
+}
+
+// complex Gauss-Jordan inverse (partial pivot on |·|). Returns A⁻¹ (flat 2n²) or []
+// if singular. Builds an augmented [A | I] and reduces — pure, no BLAS.
+fn _cinv(a: [float], n: int) -> [float] {
+    // working copy of A and identity I (mutable flat interleaved).
+    let mut w: [float] = []
+    let mut inv: [float] = []
+    let mut i = 0
+    while i < n {
+        let mut j = 0
+        while j < n {
+            w.push(_cm_get_re(a, n, i, j))
+            w.push(_cm_get_im(a, n, i, j))
+            if i == j { inv.push(1.0) } else { inv.push(0.0) }
+            inv.push(0.0)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    let mut col = 0
+    while col < n {
+        // pivot: largest |w[row][col]| over row ≥ col
+        let mut piv = col
+        let mut best = -1.0
+        let mut r = col
+        while r < n {
+            let pr = w[2 * (r * n + col)]
+            let pi = w[2 * (r * n + col) + 1]
+            let mag = pr * pr + pi * pi
+            if mag > best { best = mag ; piv = r }
+            r = r + 1
+        }
+        if best <= 0.0 { return [] }                  // singular
+        // swap rows piv ↔ col in both w and inv
+        if piv != col {
+            let mut c2 = 0
+            while c2 < n {
+                let a0 = w[2 * (col * n + c2)]
+                let a1 = w[2 * (col * n + c2) + 1]
+                w[2 * (col * n + c2)] = w[2 * (piv * n + c2)]
+                w[2 * (col * n + c2) + 1] = w[2 * (piv * n + c2) + 1]
+                w[2 * (piv * n + c2)] = a0
+                w[2 * (piv * n + c2) + 1] = a1
+                let b0 = inv[2 * (col * n + c2)]
+                let b1 = inv[2 * (col * n + c2) + 1]
+                inv[2 * (col * n + c2)] = inv[2 * (piv * n + c2)]
+                inv[2 * (col * n + c2) + 1] = inv[2 * (piv * n + c2) + 1]
+                inv[2 * (piv * n + c2)] = b0
+                inv[2 * (piv * n + c2) + 1] = b1
+                c2 = c2 + 1
+            }
+        }
+        // normalise pivot row by 1/pivot
+        let dr = w[2 * (col * n + col)]
+        let di = w[2 * (col * n + col) + 1]
+        let dd = dr * dr + di * di
+        let invr = dr / dd
+        let invi = -di / dd
+        let mut c3 = 0
+        while c3 < n {
+            // w row
+            let wr = w[2 * (col * n + c3)]
+            let wi = w[2 * (col * n + c3) + 1]
+            w[2 * (col * n + c3)] = wr * invr - wi * invi
+            w[2 * (col * n + c3) + 1] = wr * invi + wi * invr
+            // inv row
+            let ir = inv[2 * (col * n + c3)]
+            let ii = inv[2 * (col * n + c3) + 1]
+            inv[2 * (col * n + c3)] = ir * invr - ii * invi
+            inv[2 * (col * n + c3) + 1] = ir * invi + ii * invr
+            c3 = c3 + 1
+        }
+        // eliminate column `col` from all other rows
+        let mut rr = 0
+        while rr < n {
+            if rr != col {
+                let fr = w[2 * (rr * n + col)]
+                let fi = w[2 * (rr * n + col) + 1]
+                let mut c4 = 0
+                while c4 < n {
+                    let wr2 = w[2 * (col * n + c4)]
+                    let wi2 = w[2 * (col * n + c4) + 1]
+                    w[2 * (rr * n + c4)] = w[2 * (rr * n + c4)] - (fr * wr2 - fi * wi2)
+                    w[2 * (rr * n + c4) + 1] = w[2 * (rr * n + c4) + 1] - (fr * wi2 + fi * wr2)
+                    let ir2 = inv[2 * (col * n + c4)]
+                    let ii2 = inv[2 * (col * n + c4) + 1]
+                    inv[2 * (rr * n + c4)] = inv[2 * (rr * n + c4)] - (fr * ir2 - fi * ii2)
+                    inv[2 * (rr * n + c4) + 1] = inv[2 * (rr * n + c4) + 1] - (fr * ii2 + fi * ir2)
+                    c4 = c4 + 1
+                }
+            }
+            rr = rr + 1
+        }
+        col = col + 1
+    }
+    return inv
+}
+
+// ══ (3) device retarded Green's function Gʳ = ((E+iη)I − H_D − Σ_L − Σ_R)⁻¹ ═══
+// H_D is a flat REAL-symmetric n×n device Hamiltonian. The lead self-energies are
+// SCALAR (single-orbital contacts): Σ_L = sigL=[Re,Im] attaches to device site 0,
+// Σ_R = sigR attaches to device site n−1 (d4 — the contact sites are the chain ends;
+// a general multi-orbital contact would pass a Σ matrix — superset, future round).
+// Builds A = (E+iη)I − H_D − Σ (complex), then inverts via complex Gauss-Jordan.
+pub fn qforge_chip_negf_greens(hd: [float], n: int, sigL: [float], sigR: [float], e: float, eta: float) -> [float] {
+    let mut a: [float] = []
+    let mut i = 0
+    while i < n {
+        let mut j = 0
+        while j < n {
+            // (E+iη)·δ_ij − H_D[i,j]
+            let mut ar = -hd[i * n + j]
+            let mut ai = 0.0
+            if i == j {
+                ar = ar + e
+                ai = ai + eta
+            }
+            // subtract scalar self-energies on the contact sites
+            if i == 0 && j == 0 {
+                ar = ar - sigL[0]
+                ai = ai - sigL[1]
+            }
+            if i == n - 1 && j == n - 1 {
+                ar = ar - sigR[0]
+                ai = ai - sigR[1]
+            }
+            a.push(ar)
+            a.push(ai)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return _cinv(a, n)
+}
+
+// ══ (4) Caroli / Fisher-Lee transmission T(E)=Tr[Γ_L Gʳ Γ_R Gᵃ] ══════════════
+// Γ_L, Γ_R are n×n complex matrices, here RANK-1: Γ_L has a single nonzero entry
+// (0,0)=γ_L (scalar broadening from the left lead), Γ_R single entry (n−1,n−1)=γ_R.
+// Build them, form the product, take Re Tr. Lead params: each lead is a uniform 1D
+// chain (eps0,t) contacting the device via tcL / tcR. Returns the real scalar T(E).
+pub fn qforge_chip_negf_transmission_se(hd: [float], n: int, eps0: float, t: float, tcL: float, tcR: float, e: float, eta: float) -> float {
+    let sigL = qforge_chip_lead_sigma_1d(eps0, t, tcL, e, eta)
+    let sigR = qforge_chip_lead_sigma_1d(eps0, t, tcR, e, eta)
+    let gamL = -2.0 * sigL[1]                          // Γ_L scalar (site 0)
+    let gamR = -2.0 * sigR[1]                          // Γ_R scalar (site n−1)
+    let gr = qforge_chip_negf_greens(hd, n, sigL, sigR, e, eta)
+    if len(gr) != 2 * n * n { return 0.0 }             // singular → 0
+    let ga = _cdagger(gr, n)                           // Gᵃ = (Gʳ)†
+    // Build Γ_L (only (0,0)=gamL) and Γ_R (only (n−1,n−1)=gamR) as complex flat.
+    let mut gmL: [float] = []
+    let mut gmR: [float] = []
+    let mut i = 0
+    while i < n {
+        let mut j = 0
+        while j < n {
+            let mut lr = 0.0
+            let mut rr2 = 0.0
+            if i == 0 && j == 0 { lr = gamL }
+            if i == n - 1 && j == n - 1 { rr2 = gamR }
+            gmL.push(lr)
+            gmL.push(0.0)
+            gmR.push(rr2)
+            gmR.push(0.0)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    // T = Re Tr[ Γ_L · Gʳ · Γ_R · Gᵃ ].
+    let p1 = _cmatmul(gmL, gr, n)                       // Γ_L Gʳ
+    let p2 = _cmatmul(p1, gmR, n)                       // Γ_L Gʳ Γ_R
+    let p3 = _cmatmul(p2, ga, n)                        // Γ_L Gʳ Γ_R Gᵃ
+    let tval = _ctrace_re(p3, n)
+    return tval
+}
