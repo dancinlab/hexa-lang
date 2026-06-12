@@ -25,6 +25,40 @@
   self-host byte-eq fixpoint UNTOUCHED. wipe_guard net-additive (restructured ~15-line tail + new test).
   Verdict .verdicts/hexa-0pod/F-OP75-BASE64-DECODE-TRAILING.txt.
 
+## 2026-06-13 — OP-76 DONE: LOCK the documented-but-UNGATED SHAPE/BOUNDARY contract of the flame LR scheduler opt_lr_warmup_cosine (the OP-33 sibling hole) · SURVEY (NO .git): (a) forge doc-vs-code honesty DRY (OP-71/73 closed @#3206) · (c) forge cost-model DRY (OP-60/61/63) · (d) deferred build-host/GPU — PICKED (b) the route-(b) actionable axis · GAP: optim_lib.hexa:131-149 documents an explicit shape contract (peak=base@warmup · floor=base·floor@n_steps · linear ramp 0→base · cosine decay base→floor · the byte-critical fold base·(t/warmup) NOT (base·t)/warmup) but the ONLY oracle op33_lr_schedule_determinism_eq locks byte-DETERMINISM + d5-vs-libm divergence, NEVER a shape/boundary promise — OP-33 locked reproducibility ASSUMING shape-correct (the OP-66/68/70/72/74 documented-but-ungated-assumption class) · NEW self-contained stdlib/flame/op76_lr_schedule_shape_contract_eq.hexa (schedule+d5_cos inlined VERBATIM, OP-33/72 pattern; N=500 warmup=50 base=0.001 floor=0.05) · 7 gates · `hexa run` exit 0, 7/7 PASS · scheduler now contract-locked on BOTH axes: determinism (F-OP33) + shape (F-OP76) · oracle-only no behavior change · self-host byte-eq UNAFFECTED (leaf oracle, not in build_selfhost closure) · 🟢 GREEN invariant-lock · $0 · 0-pod · NO GPU · leak-0
+- SURVEY axes (actionable/dry/flag + why): (a) forge DOC-vs-CODE honesty = DRY (nvptx shfl/exp + public-claim
+  surface CLOSED OP-71/73; no new stale contradiction on a fresh forge surface) · (b) flame trainer-glue
+  DOCUMENTED-but-UNLOCKED = ACTIONABLE (GN eps held by flame_gn_test GRAD-EXACT; conv causal no-future-leak
+  ALREADY LOCKED flame_conv_test check_causal; LR-schedule SHAPE = the hole) · (c) forge cost-model
+  self-consistency = DRY (selector provenance + parity-map closed OP-60/61/63) · (d) ## deferred + .log tail =
+  all build-host (SELFHOST-NEXT frozen-anchor) or GPU → out of 0-pod scope.
+- THE HOLE: op33_lr_schedule_determinism_eq.hexa asserts ONLY (1) RUN-TO-RUN max|Δ|==0 + (3) libm-vs-d5
+  bit-diff count → ZERO assertions on peak/floor/monotonicity/range/seam/fold-order. A refold, a warmup-seam
+  off-by-one, a cosine sign flip, or a wrong floor stays byte-DETERMINISTIC (OP-33 green) yet shape-WRONG.
+- THE LOCK: stdlib/flame/op76_lr_schedule_shape_contract_eq.hexa (self-contained, NO `use`). 7 gates:
+  G1 PEAK-EXACT lr(warmup)==base byte-eq · G2 FLOOR-EXACT lr(n_steps)==base·floor byte-eq · G3 WARMUP-RAMP
+  [1..warmup] strictly-incr + byte-eq to closed form base·(t/warmup) · G4 DECAY-MONOTONE [warmup..n_steps]
+  non-increasing · G5 RANGE two-phase (warmup ∈ (0,base], decay ∈ [base·floor,base]) · G6 SEAM-CONTINUITY
+  |lr(warmup)−lr(warmup+1)|≤3·base/warmup · G7 FOLD-ORDER base·(t/warmup) byte-DIFFERS from (base·t)/warmup
+  on ≥1 step (proves the line-148 "float-different" claim is real, not folklore).
+- RUN-TO-RUN VERBATIM (`hexa run`, arm64-macos, exit 0):
+  · G1 PEAK-EXACT      lr(warmup=50) = 0.001  (want base=0.001)  byte-eq=true
+  · G2 FLOOR-EXACT     lr(n_steps=500) = 5e-05  (want base*floor=5e-05)  byte-eq=true
+  · G3 WARMUP-RAMP     lr(1)=2e-05  strictly-incr + closed-form byte-eq over [1..50] = true
+  · G4 DECAY-MONOTONE  non-increasing over [warmup..n_steps] = true  (max upward step = 0.0)
+  · G5 RANGE           whole min_lr=2e-05  max_lr=0.001  decay-tail min=5e-05  (two-phase) = true
+  · G6 SEAM-CONTINUITY |lr(warmup)-lr(warmup+1)| = 1.15754e-08  <= 3*base/warmup=6e-05 -> true
+  · G7 FOLD-ORDER      base*(t/warmup) != (base*t)/warmup on 12 / 50 steps -> claim-real=true
+  · F-OP76-LR-SCHEDULE-SHAPE = 1 · PASS 7/7
+- CONTRACT-PRECISION FINDING (G5): the first oracle draft asserted a single codomain [base·floor,base] and
+  FAILED — min_lr=2e-05 (=lr(1)=base·1/50) sits BELOW the floor base·floor=5e-05. This is CORRECT scheduler
+  behavior, NOT a bug: the warmup ramp deliberately starts near 0 ("linear ramp 0→base"), so the floor binds
+  the COSINE DECAY TAIL only, never the warmup. opt_lr_warmup_cosine is SSOT-correct; the oracle caught an
+  over-broad ASSERTION, then was tightened to the true documented TWO-PHASE codomain.
+- SAFETY: oracle-only (no behavior change); self-host byte-eq UNAFFECTED (leaf self-contained oracle, NOT in
+  compiler/main.hexa build_selfhost closure; 0 codegen/runtime/stdlib-lib bytes). wipe_guard net-additive
+  (one new file). No .tape, no self/env.hexa. Verdict .verdicts/hexa-0pod/F-OP76-LR-SCHEDULE-SHAPE.txt.
+
 ## 2026-06-13 — OP-74 DONE: COMPLETE the flame numeric-primitive oracle coverage (OP-72 follow-on) · AUDIT the FULL flame numeric surface (flame_math/moe_lib/nn_lib/gn_lib/optim_lib) for the documented-but-UNlocked-accuracy gap + build the coverage matrix · THE SINGLE HOLE = moe_lib.hexa:39 `_moe_exp` (the 3rd distinct exp impl, "~12 terms machine-exact" docstring) had only DETERMINISM/replay locks (F-OP8/F-OP11), NO agreement-vs-libm · NEW self-contained stdlib/flame/op74_moe_exp_agree_eq.hexa: 3 gates over a 12-pt softmax-range probe — AGREE max rel|_moe_exp−libm exp|≤1e-9 · DETERMINISM byte-identical f64 run-to-run · ADDITION-LAW exp(a)exp(b)−exp(a+b)≤1e-9 · `hexa run` exit 0, 3/3 PASS (agree 3.21e-14, det max|Δbytes|=0, addition 3.52e-14) · the "machine-exact" claim now LOCKED at the primitive level → flame numeric-primitive documented-accuracy surface PROVEN-COMPLETE · oracle-only no behavior change · self-host byte-eq UNAFFECTED (leaf oracle, not in build_selfhost closure) · 🟢 GREEN invariant-lock · $0 · 0-pod · NO GPU · leak-0
 - COVERAGE MATRIX (primitive → documented claim → locked-by): dt_sqrt/dt_exp/dt_ln(+det)/dt_lcg → F-RFC043-MATH-*
   (flame_math_test) · dt_erf → F-OP19B · dt_rand_unit → trivial (dt_lcg) · d5_sin/d5_cos → F-OP72 · GN reduction
