@@ -1,0 +1,188 @@
+F-OP41-FALSIFIED-BUILTIN-SWEEP — systematic repo-wide audit of EVERY self/env.hexa builtin
+        roster entry (231) for runtime-impl falsification, closing out the OP-33 family. The
+        OPTIMIZER-SCHEDULER family is the verified closure target: 4 remaining残党 (sgd_step,
+        numerical_grad, phase_lr, grad_accumulate) g5-RE-VERIFIED falsified (AOT emits
+        "use of undeclared identifier"), each with ZERO live caller (only never-passing
+        example demos; every self/ml caller binds to its OWN LOCAL `fn sgd_step`) →
+        DEREGISTERED from the env.hexa roster (mirrors OP-33b/c/d). After OP-41 the
+        optimizer-scheduler falsified set is EMPTY. The complete 231-builtin matrix is the
+        core deliverable; the broader non-optimizer falsified set is bounded-with-reason and
+        deferred (conservative g0 — many have local-fn shadows used by real programs).
+HEXA-0POD OP-41 · CPU-LOCAL (`hexa run`, hexa 0.1.0-dispatch) · 0-GPU · $0 · no vast/pod
+════════════════════════════════════════════════════════════════════════════
+
+[0] PROVENANCE + METHOD (from OP-33c/d, re-applied)
+--------------------------------------------------
+OP-33/33b/33c/33d removed falsified optimizer-scheduler builtins one at a time as code
+tripped over them (scheduled_lr · cosine_lr · warmup_lr · adam · safe_update · grad_clip_norm
+· adam_step). OP-41 is the SYSTEMATIC closeout: audit the WHOLE roster, build the definitive
+real-vs-falsified matrix, and deregister any remaining optimizer-family member with no live
+caller. The two sides (per the OP-33 method):
+  (a) the builtin ROSTER — `let builtin_names = [...]` in self/env.hexa env_new() (231 names
+      at baseline 9d3aee960); registration makes the binder/type-checker ACCEPT a call.
+  (b) the IMPL set — codegen-inline lowering (self/codegen.hexa `if name == "X"` guards,
+      ~492 names) ∪ the runtime symbols the emitted C calls (self/runtime.h 636 decls +
+      installed self/runtime.c 1830 defs, incl prefix variants hexa_/rt_/u_/hexa_math_).
+A FALSIFIED builtin = registered in (a) but NO impl in (b) → AOT codegen emits a bare
+`NAME(...)` (or hexa_callN(NAME,…)) into C that has no such symbol → clang: "use of undeclared
+identifier / call to undeclared function 'NAME'". (g5: deadness RE-VERIFIED independently,
+not trusted from prior verdicts.)
+
+[1] HOW THE MATRIX WAS BUILT (g5)
+---------------------------------
+Stage 1 — static cross-ref: each of the 231 roster names vs (codegen-explicit ∪ runtime.h ∪
+  runtime.c, with prefix variants). Names matching → provisional REAL; no match → candidate.
+Stage 2 — EMPIRICAL probe (authoritative): `fn main(){ let _r = NAME(<correct args>); println
+  ("OKMARK") }` compiled+run via the FRESH installed hexat (~/.hx/bin/hexa run → ~/.hx/bin/
+  build/hexat → clang). REAL = prints OKMARK (or fails only with a TYPE error = symbol resolved);
+  FALSIFIED = generated C contains "undeclared identifier/function 'NAME'".
+  The installed binary roster is a SUPERSET (235 = baseline 231 + the 4 names OP-33c/d already
+  removed) so every probe type-checks at the hexa level → any failure is a genuine runtime-impl
+  falsification, not a binder rejection.
+CAVEAT (recorded for reproducibility): a GENERIC-arg probe is UNRELIABLE. codegen-inline
+  lowering is arg-COUNT/SHAPE gated (`if name=="matmul" && len(args)==5`, softmax 1-arg,
+  layer_norm 3-arg, …); a wrong shape falls through to the undeclared-bare-name fallback and
+  yields a FALSE "undeclared" for a REAL builtin (e.g. an initial generic probe mislabeled
+  gelu/silu/randn/argmax/sum/keys as falsified). CORRECT per-builtin args are required. The
+  symmetric hazard: the static cross-ref OVER-counts REAL (a name appearing as a substring of
+  a runtime symbol, e.g. slice/embedding/reduce/to_upper, can still be AOT-falsified). Hence
+  the boundary between REAL and FALSIFIED for arg-shape-gated names carries ± a few entries;
+  the OPTIMIZER-FAMILY closure (§3) was pinned to the strict per-builtin g5 standard and is
+  NOT subject to that uncertainty.
+
+[2] THE COMPLETE ROSTER MATRIX (231 builtins)
+---------------------------------------------
+SUMMARY:  total = 231 | REAL ≈ 126 | FALSIFIED ≈ 105 | deregistered = 4 | remaining-with-reason ≈ 101
+
+REAL (≈126) — codegen-inline lowered OR runtime-backed; builds+runs:
+  print println len type_of to_string to_int to_float try_float? format args env_var exit clock
+  abs min max floor ceil round sqrt pow log log2 log10 exp ln sin cos tan asin acos atan atan2
+  join split trim trim_start trim_end starts_with ends_with contains to_lower str
+  read_file write_file file_exists path_exists delete_file append_file input readline read_stdin
+  keys values has_key json_parse json_stringify http_get base64_encode base64_decode
+  net_listen net_accept net_connect net_read net_read_n net_set_timeout net_write net_close now timestamp
+  Some Ok Err
+  matmul softmax layer_norm rms_norm gelu silu argmax randn matvec mat_add hadamard sum tensor tensor_zeros
+  reduce embedding slice  (NOTE: a few of these last name-mapped/arg-gated entries are boundary —
+    static-REAL but an AOT probe with one shape can still emit undeclared; treated conservatively as REAL
+    because they have a codegen lowering / runtime symbol — see §1 caveat)
+  env exec exec_with_status cstring from_cstring ptr_null ptr_addr deref arena_reset
+  term_raw_enter term_raw_restore term_winsize_rows term_winsize_cols term_poll_stdin term_read_byte
+  term_write_str term_install_sigwinch term_sigwinch_pending term_install_sigint term_sigint_pending
+  term_isatty_stdin term_isatty_stdout term_getppid term_pty_spawn_sh term_fd_read term_fd_write
+  term_fd_close term_fd_poll term_pty_reap
+  random print_err sleep? (boundary)
+
+FALSIFIED (≈105) — registered, NO AOT impl, generated C emits "undeclared 'NAME'":
+  Set channel bigint gcd sigma phi tau is_numeric is_whitespace replace random_int elapsed
+  hex_encode hex_decode http_post http_serve
+  laws meta_laws consciousness_vector phi_predict psi_coupling psi_balance psi_steps psi_entropy
+  psi_frustration consciousness_max_cells consciousness_decoder_dim consciousness_phi
+  hexad_modules hexad_right hexad_left tension_link sopfr
+  mem_stats mem_region mem_budget n6_scan n6_verify n6_omega n6_lenses n6_consensus n6_check
+  evolve_gen sigmoid tanh_ relu cosine_sim run_tests run_benchmarks transpose normalize cross_entropy
+  zeros ones arange ema clip map_arr filter_arr zip_arr enumerate_arr flatten
+  ★sgd_step ★numerical_grad ★phase_lr ★grad_accumulate
+  batch_matvec batch_norm dropout attention gru_cell sinusoidal_pe multi_head_attention topk
+  sample_token mse_loss conv1d max_pool1d kv_cache_append attention_cached save_array load_array
+  quantize_int8 dequantize_int8 beam_search_step xavier_init kaiming_init curiosity_reward
+  dialogue_reward combined_reward magnitude_prune sparsity tensor_fill input_all load_weights_bin
+  mmap_weights to_char repeat_kv dot mat_add_inplace matmul_into rope rope_inplace weight_dict
+  (★ = the optimizer-scheduler family残党 DEREGISTERED by this verdict.)
+
+[3] OPTIMIZER-SCHEDULER FAMILY CLOSEOUT — the verified deregistration (g5)
+--------------------------------------------------------------------------
+The 4 remaining members of the OP-33 family, each g5-RE-VERIFIED falsified (verbatim, correct args):
+
+  sgd_step        : `let _r = sgd_step([1.0],[1.0],0.1)` →
+      build/artifacts/hexa_run.*.c:18:29: error: use of undeclared identifier 'sgd_step'
+  numerical_grad  : `let _r = numerical_grad(|x| x*x,[3.0],0)` →
+      ...c:24:29: error: use of undeclared identifier 'numerical_grad'
+  phase_lr        : `let _r = phase_lr(0.001,5,1000,3)` →
+      ...c:18:29: error: use of undeclared identifier 'phase_lr'
+  grad_accumulate : `let _r = grad_accumulate([0.0],[1.0],1)` →
+      ...c:18:29: error: use of undeclared identifier 'grad_accumulate'
+  (all four: "error: clang compile failed — binary not produced".)
+
+CALLER SWEEP (grep -rn "<name>(" --include="*.hexa", red-herring local-fn shadows excluded):
+  sgd_step        — BUILTIN callers: example/test_optimizer.hexa, example/test_lr_batch.hexa
+                    (both tool/examples_baseline.json exit_code=-1, last_pass="" → DEAD).
+                    self/ml/{train_100m,_ultra,_alpha,_batched,_alphabeta,_v3_inplace,optimizer}
+                    .hexa EACH DEFINE their OWN LOCAL `fn sgd_step` (train_100m:175 W,G,lr;
+                    optimizer:37 param,grad,mom,lr,beta,wd) → bind LOCALLY, NOT the builtin
+                    (the OP-33d red-herring pattern). NOT live builtin callers.
+  numerical_grad  — only example/test_optimizer.hexa (DEAD). No local shadow, no live caller.
+  phase_lr        — only example/test_lr_batch.hexa (DEAD).
+  grad_accumulate — only example/anima_convergence_proof.hexa + example/test_lr_batch.hexa (DEAD).
+  COMPILER-CORE (self/ excl ml/test): ZERO references to any of the 4 → deregistration cannot
+  perturb the self-host bootstrap / byte-eq fixpoint.
+  ⇒ NO live surface needs any of the 4 → DEREGISTERED from the self/env.hexa env_new() roster.
+
+[4] DIFF
+--------
+  self/env.hexa : "sgd_step", "numerical_grad", "phase_lr", "grad_accumulate" REMOVED from the
+                  env_new() builtin_names roster + a scoped comment block recording each removal
+                  reason (mirrors the existing OP-33b/c/d removal comments). Roster array stays
+                  well-formed (comma-separated string list; transpile-verified).
+  example/test_optimizer.hexa / test_lr_batch.hexa / anima_convergence_proof.hexa :
+                  NOTE pointer comment at the file header recording that the optimizer builtins
+                  used are DEREGISTERED falsified (each demo is baseline-broken exit_code=-1 on
+                  the broader falsified-ML family regardless; real path = stdlib/flame/optim_lib
+                  .hexa opt_adamw_step / opt_lr_warmup_cosine, or a local `fn sgd_step`). Faithful
+                  repoint impossible (array-dialect vs handle-dialect signatures) → NOTE per rule 3.
+  wipe_guard: net +18 / −3 lines « 50; commit subject scoped
+  `cleanup(env): deregister falsified sgd_step/numerical_grad/phase_lr/grad_accumulate — OP-41 ...`.
+
+[5] POST-EDIT CHECKS — GREEN
+---------------------------
+(a) env.hexa transpiles clean: `~/.hx/bin/build/hexat self/env.hexa /tmp/env.c` → OK (roster
+    array well-formed after the 4 removals).
+(b) self/ml/optimizer.hexa transpiles OK — its LOCAL `fn sgd_step` binds unaffected (proves the
+    self/ml trainers do not depend on the builtin).
+(c) self/ml/train_100m.hexa transpile "index 1 out of bounds (len 1)" is a PRE-EXISTING hexat
+    quirk (CUDA-gated trainer) — reproduces IDENTICALLY on a checkout that STILL registers the
+    builtins → NOT caused by the deregistration.
+(d) grep-proof: every remaining bare `sgd_step(`/`numerical_grad(`/`phase_lr(`/`grad_accumulate(`
+    is either a NOTE'd dead-example site or a self/ml LOCAL-fn binding; ZERO live program
+    references the removed builtins.
+
+[6] GATE (g5) — PASS
+--------------------
+  complete 231-builtin matrix built (static + empirical)        : YES (§2)
+  optimizer-family残党 deadness RE-VERIFIED verbatim (§3)        : YES (4/4)
+  zero-LIVE-caller for each deregistered builtin                 : YES (dead examples + local shadows)
+  zero compiler-core reference (self-host byte-eq safe)          : YES
+  env.hexa transpiles + roster well-formed                       : YES
+  removal clean, no dangling LIVE ref                            : YES
+
+[7] FAMILY-CLOSURE STATEMENT
+---------------------------
+After OP-41, the OP-33 OPTIMIZER-SCHEDULER falsified-builtin set is EMPTY:
+  scheduled_lr · cosine_lr · warmup_lr · adam · safe_update · grad_clip_norm · adam_step
+  (OP-33/33b/33c/33d)  +  sgd_step · numerical_grad · phase_lr · grad_accumulate (OP-41)
+  = the complete optimizer/scheduler/grad surface — all deregistered or repointed. No
+  optimizer-family "lints-but-won't-link" landmine remains. Real training uses
+  stdlib/flame/optim_lib.hexa (opt_adamw_step → adamw_step RFC 034; opt_lr_warmup_cosine →
+  d5_cos F-OP33) or per-module LOCAL fns.
+
+[8] HONEST + CONSERVATIVE (g0)
+-----------------------------
+  • The matrix surfaces ~101 OTHER falsified roster builtins OUTSIDE the optimizer-scheduler
+    family (ML/array/conv/quant/reward/consciousness/n6/etc.: relu sigmoid tanh_ zeros ones
+    cross_entropy conv1d dropout attention topk quantize_int8 dot rope … + a long n6_*/psi_*/
+    consciousness_* set). These are NOT deregistered by OP-41 — CONSERVATIVE per g0: (i) many
+    have a LOCAL-fn shadow used by real programs (e.g. relu → stdlib/nn.hexa pub fn relu;
+    sgd_step-style binding), so removing the roster row could change binder/error behavior for
+    LIVE code; (ii) some may be interp-path-real or relied on by surfaces not yet swept; (iii)
+    a 100-row removal would exceed a single conservative PR's blast radius and risk the
+    self-host byte-eq fixpoint. They are documented (§2) and deferred to a dedicated future
+    "ML-builtin AOT-impl sweep" — a separate op, classify+repoint+deregister with the same
+    OP-33 live/dead discipline. OP-41's mandate ("close out the OP-33 family") is met: the
+    optimizer-scheduler family is the verified, closed subset.
+  • REAL/FALSIFIED counts are ≈ at the arg-shape-gated boundary (§1 caveat). The load-bearing
+    claims — the 4 optimizer残党 are falsified + zero-live-caller, and the family is now empty —
+    are pinned to the strict per-builtin g5 standard and are exact.
+  • self/env.hexa edit affects the NEXT self-host compiler build; the installed hexat keeps its
+    roster until rebuilt (same 0-pod caveat as OP-33b/c/d — verified via generated-C inspection
+    + env.hexa transpile, not a from-scratch rebuild).
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.

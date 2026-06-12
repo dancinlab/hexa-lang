@@ -4,6 +4,10 @@
 // LR schedule = opt_lr_warmup_cosine (stdlib/flame/optim_lib.hexa,
 // deterministic d5_cos, F-OP33); floor_frac=1.0 degenerates to warmup-only.
 // ══════════════════════════════════════════════════════════
+// NOTE (HEXA-0POD OP-41): phase_lr / sgd_step / grad_accumulate are DEREGISTERED falsified
+// builtins (no runtime impl — AOT emits "undeclared identifier"). This demo is baseline-broken
+// (exit_code=-1) regardless. Real LR schedule = opt_lr_warmup_cosine (imported below);
+// real SGD = a local fn (cf. self/ml/optimizer.hexa). Left as a documented pointer, not a fix.
 
 use "../stdlib/flame/optim_lib"
 

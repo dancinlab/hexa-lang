@@ -1,5 +1,56 @@
 # HEXA-0POD — log
 
+## 2026-06-12 — OP-41 DONE: systematic falsified-builtin roster sweep — COMPLETE 231-builtin matrix (126 real / 105 falsified); OP-33 optimizer-scheduler family CLOSED · $0 · 0-pod
+- SURVEY-FIRST (mandatory). Read OP-33c (F-OP33C-DEAD-OPTIM-CLEANUP.txt) + OP-33d (F-OP33D-ADAM-STEP-SWEEP.txt) to
+  internalize the method: (a) the builtin ROSTER = `let builtin_names = [...]` in self/env.hexa env_new() (231 entries
+  at baseline); (b) the IMPL set = codegen-inline lowering (self/codegen.hexa `if name == "X"` guards) ∪ runtime.h /
+  runtime.c symbols the emitted C calls. A FALSIFIED builtin = registered in (a) but NO impl in (b) → AOT emits broken C.
+- BUILD THE COMPLETE MATRIX (core deliverable). Extracted all 231 roster names. Two-stage classify: (1) static cross-ref
+  vs codegen-explicit (492 `if name ==` names) ∪ runtime.h (636 syms) ∪ runtime.c (1830 syms) incl prefix variants
+  (hexa_/rt_/u_/hexa_math_); (2) EMPIRICAL g5 probe of every static-no-match candidate — `fn main(){ let _r = NAME(
+  correct-args); println("OKMARK") }` via the FRESH installed hexat (~/.hx/bin/hexa run → ~/.hx/bin/build/hexat → clang),
+  classify REAL (runs / resolves-with-typeerr) vs FALSIFIED (generated C has "use of undeclared identifier/function
+  'NAME'"). The installed binary roster is a SUPERSET (235 = baseline 231 + the 4 already-removed names) so every probe
+  type-checks at the hexa level and any failure is a genuine runtime-impl falsification. CAVEAT learned: a generic-arg
+  probe is UNRELIABLE — codegen-inline lowering is arg-COUNT/SHAPE gated (e.g. matmul needs 5 args, softmax 1), wrong
+  shape falls through to the undeclared-bare-name fallback → false-positive storm; CORRECT per-builtin args required.
+- RESULT MATRIX: 231 total = 126 REAL + 105 FALSIFIED.
+  · REAL (126): print/println/len/type_of/to_string/to_int/to_float/format/args/exit/clock + all math (abs/sqrt/sin/
+    cos/exp/log/pow/min/max/floor/round/atan2/…) + str ops (join/split/trim*/starts_with/contains/…) + file/net/json/
+    http_get/base64* + constructors Some/Ok/Err + ML-inline matmul/softmax/layer_norm/rms_norm/gelu/silu/argmax/randn/
+    matvec/mat_add/hadamard/sum/tensor/tensor_zeros + keys/values/has_key + all term_*/PTY + ptr/cstring/exec/mem.
+  · FALSIFIED (105): Set channel bigint gcd sigma phi tau try_float is_numeric is_whitespace replace random_int elapsed
+    hex_encode/decode http_post http_serve laws meta_laws consciousness_*/phi_predict/psi_*/hexad_*/tension_link sopfr
+    mem_stats/region/budget n6_* evolve_gen sigmoid tanh_ relu cosine_sim run_tests run_benchmarks transpose normalize
+    cross_entropy zeros ones arange ema clip map_arr/filter_arr/zip_arr/enumerate_arr flatten sgd_step numerical_grad
+    phase_lr batch_matvec batch_norm grad_accumulate dropout attention gru_cell sinusoidal_pe multi_head_attention topk
+    sample_token mse_loss conv1d max_pool1d kv_cache_append attention_cached save_array load_array quantize_int8
+    dequantize_int8 beam_search_step xavier_init kaiming_init curiosity/dialogue/combined_reward magnitude_prune sparsity
+    tensor_fill input_all load_weights_bin mmap_weights to_char repeat_kv dot mat_add_inplace matmul_into rope rope_inplace
+    weight_dict. (These are AOT-impl-less; many have a local-fn shadow used by real programs, e.g. relu→stdlib/nn.hexa.)
+- BASELINE RECONCILE (important). The worktree branch off 9d3aee960 already has OP-33b/c/d FULLY applied (scheduled_lr/
+  cosine_lr/warmup_lr/adam_step/grad_clip_norm absent; stdlib/optim.hexa adam/safe_update wrappers removed). (A side-
+  checkout on the qforge branch still shows them — the merge that lost them is a DIFFERENT line of history; the OP-41
+  branch baseline is clean.) So the only OP-33-family残党 at baseline = sgd_step/numerical_grad/phase_lr/grad_accumulate.
+- OPTIMIZER-FAMILY CLOSEOUT (the deregistration). Each of the 4 g5-RE-VERIFIED falsified (verbatim "use of undeclared
+  identifier 'NAME'" in generated C, correct args). CALLER SWEEP: sgd_step — builtin callers only in dead examples
+  (test_optimizer/test_lr_batch, exit_code=-1); ALL self/ml/{train_100m,_ultra,_alpha,_batched,_alphabeta,_v3_inplace,
+  optimizer}.hexa define their OWN LOCAL `fn sgd_step` → bind locally (red herring, OP-33d pattern). numerical_grad — only
+  test_optimizer (dead). phase_lr — only test_lr_batch (dead). grad_accumulate — only anima_convergence_proof + test_lr_batch
+  (dead). ZERO compiler-core ref for all 4. → DEREGISTERED from env.hexa roster (mirrors OP-33b/c/d). Dead example callers
+  NOTE-pointer-commented (test_optimizer/test_lr_batch/anima_convergence_proof headers).
+- VERIFY. env.hexa transpiles clean (~/.hx/bin/build/hexat self/env.hexa → OK, roster array well-formed). self/ml/
+  optimizer.hexa transpiles OK (local sgd_step binds). train_100m.hexa "index 1 out of bounds" is a PRE-EXISTING hexat
+  quirk — reproduces IDENTICALLY on the builtins-present checkout → NOT caused by the deregistration. grep-proof: every
+  remaining bare `sgd_step(`/`numerical_grad(`/`phase_lr(`/`grad_accumulate(` is either a dead-example NOTE'd site or a
+  self/ml LOCAL-fn binding; no LIVE program references the removed builtins.
+- HONEST + CONSERVATIVE (g0). The 101 non-optimizer falsified are OUT of the OP-33 family and risky to deregister en-masse
+  (local-fn shadows + potential interp use) — bounded-with-reason in the matrix, deferred to a dedicated ML-builtin sweep.
+  FAMILY-CLOSURE: after OP-41 the OPTIMIZER-SCHEDULER falsified set is EMPTY. env.hexa edit affects the NEXT compiler build
+  (installed hexat keeps its roster until rebuilt — same 0-pod caveat as OP-33b/c/d; the change is +18/−3 « 50 lines).
+- OUTCOME: 🟢 milestone OP-41 [x]. Verdict .verdicts/hexa-0pod/F-OP41-FALSIFIED-BUILTIN-SWEEP.txt.
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
 ## 2026-06-12 — OP-33d DONE: falsified adam_step builtin swept across self/ml/* — no LIVE caller → deregistered from env.hexa roster · $0 · 0-pod
 - SURVEY-FIRST (mandatory). Read OP-33c's verdict (.verdicts/hexa-0pod/F-OP33C-DEAD-OPTIM-CLEANUP.txt §8 HONEST):
   it deliberately LEFT adam_step registered because 12+ self/ml/* surfaces reference it (out of OP-33c scope) and

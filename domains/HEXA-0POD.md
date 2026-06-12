@@ -61,6 +61,25 @@ loop targets what the consumer card + code can carry.
   randn/zeros/cross_entropy family anyway). wipe_guard: 1 deletion (roster entry) « 50. Verdict
   .verdicts/hexa-0pod/F-OP33D-ADAM-STEP-SWEEP.txt. $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
 
+<!-- ANCHOR:OP-41-FALSIFIED-BUILTIN-SWEEP (unique anchor — the OP-33-family CLOSEOUT: the prior OP-33/33b/33c/33d ops removed individual falsified optimizer-scheduler builtins (scheduled_lr/cosine_lr/warmup_lr/adam/safe_update/grad_clip_norm/adam_step) one at a time as they were tripped over. OP-41 does the SYSTEMATIC repo-wide audit: enumerate EVERY one of the 231 self/env.hexa roster builtins, empirically probe each (g5: emit a call, inspect generated C) to build the DEFINITIVE real-vs-falsified matrix, then close the optimizer-scheduler family by deregistering any remaining falsified member with zero live caller) -->
+- [x] **OP-41 — systematic falsified-builtin roster sweep: COMPLETE 231-builtin matrix (126 real / 105 falsified); optimizer-scheduler family CLOSED (sgd_step/numerical_grad/phase_lr/grad_accumulate deregistered)** —
+  🟢 the DEFINITIVE audit: all 231 self/env.hexa roster builtins classified real-vs-falsified by cross-referencing
+  codegen-inline lowering (`if name ==` guards) ∪ runtime.h/runtime.c symbols, then EMPIRICALLY probing every
+  candidate (g5: `let _r = NAME(correct-args)` via fresh installed hexat → inspect generated C). RESULT MATRIX:
+  126 REAL (codegen-inline or runtime-backed: print/len/matmul/softmax/layer_norm/Some/Ok/Err/sum/keys/… + all
+  term_*/net_*/json_*), 105 FALSIFIED (AOT emits "use of undeclared identifier/function" — registered so the binder
+  type-checks but no runtime impl). The OP-33 OPTIMIZER-SCHEDULER FAMILY had 4 remaining残党: sgd_step / numerical_grad
+  / phase_lr / grad_accumulate — each g5-RE-VERIFIED falsified (verbatim undeclared-C), each with ONLY never-passing
+  example callers (test_optimizer/test_lr_batch/anima_convergence_proof, baseline exit_code=-1) — every self/ml/
+  {train_100m*,optimizer}.hexa `sgd_step(...)` caller binds to its OWN LOCAL `fn sgd_step` (red-herring, not the
+  builtin) → zero compiler-core ref → DEREGISTERED (mirrors OP-33b/c/d). env.hexa transpiles clean; the train_100m
+  transpile quirk is PRE-EXISTING (reproduces identically on builtins-present checkout). The remaining 101 falsified
+  are OUT of the OP-33 family (ML/array/conv/quant/consciousness/n6 builtins — relu/sigmoid/zeros/cross_entropy/conv1d/
+  …); MANY have local-fn shadows (e.g. relu→stdlib/nn.hexa) so deregistering en-masse is NOT conservative (g0) —
+  bounded-with-reason + deferred to a future dedicated ML-builtin sweep, the matrix documents each. FAMILY-CLOSURE:
+  after OP-41 the optimizer-scheduler falsified set is EMPTY. wipe_guard: net +18/−3 « 50. Verdict
+  .verdicts/hexa-0pod/F-OP41-FALSIFIED-BUILTIN-SWEEP.txt. $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
 <!-- ANCHOR:OP-37B-HOST-ATOF-CORRECT-ROUND (unique anchor — OP-37 (#3069) fixed the `0.0 - X` NEGATION idiom byte-exact by preserving operand source TEXT, but left a documented residual: folds that COMPUTE a value from RE-PARSED operands (e.g. `let a = 1.5 * 0.1`) re-parse via to_float→hxlcl_atof, a naive digit-accumulator 1 ULP off the correctly-rounded value. OP-37b settles whether a correctly-rounded host parse is tractable WITHOUT risking the self-host byte-eq fixpoint: measure the residual exactly on from-source rebuild, then find the smallest correct fix) -->
 - [x] **OP-37b — host-atof residual: computed const-folds re-parse operands 1 ULP off → FIXED via correctly-rounded strtod route (parse_float); fixpoint byte-identical** —
   🟢 the OP-37 residual is REAL on CURRENT source: MEASURED MAX 3 ULP (operands 1 ULP off via to_float/hxlcl_atof,

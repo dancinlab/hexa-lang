@@ -2,6 +2,11 @@
 // SGD/Adam 옵티마이저 + numerical_grad 테스트
 // Anima 학습 루프 완성 — 완전 gradient descent
 // ══════════════════════════════════════════════════════════
+// NOTE (HEXA-0POD OP-41): sgd_step / numerical_grad / adam_step are DEREGISTERED falsified
+// builtins (no runtime impl — AOT codegen emits "undeclared identifier"). This demo is
+// baseline-broken (exit_code=-1) on the broader falsified-ML family regardless. Real
+// optimizers = stdlib/flame/optim_lib.hexa (opt_adamw_step / opt_lr_warmup_cosine) or a
+// local `fn sgd_step` (cf. self/ml/optimizer.hexa). Left as a documented pointer, not a fix.
 
 // ═══ [1] SGD Step ═══
 let params = [1.0, 2.0, 3.0, 4.0]
