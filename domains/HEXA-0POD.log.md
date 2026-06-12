@@ -44,6 +44,42 @@
   fail-on-regression. NO codegen/runtime/stdlib edit → self-host byte-eq fixpoint untouched. Milestone
   OP-66 [x]. $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape · no self/env.hexa.
 
+## 2026-06-13 — OP-67 DONE: COMPLETE the dereg-loop closure across EVERY builtin-ADVERTISING surface · 6 surfaces enumerated + verbatim-grepped all 10 OP-62 orphans per surface · lsp.hexa get_builtins() was the SOLE surface that ever advertised any orphan (OP-65 already pruned `tension_link`); ALL 5 others verbatim 0-hit CLEAN · 🟢 PROVEN-COMPLETE, 0 new stale entries this round (honest all-clean = SUCCESS) · no code edited · $0 · 0-pod · NO GPU
+- TASK: OP-62 (#3175) deregistered 10 pure-orphan builtins from self/env.hexa env_new() (try_float,
+  is_whitespace, meta_laws, phi_predict, tension_link, zip_arr, enumerate_arr, input_all,
+  load_weights_bin, mmap_weights) but its caller sweep EXPLICITLY EXCLUDED the roster files. OP-65
+  (#3184) then found `tension_link` still LIVE in self/lsp.hexa get_builtins() — ONE advertising
+  surface — and pruned it. lsp.hexa is only one surface that ADVERTISES (lists builtin names as DATA,
+  vs calls them). OP-67 sweeps EVERY advertising surface to close the dereg loop completely.
+- ENUMERATED ADVERTISING SURFACES (scoped find/grep, NO .git) — 6 genuine builtin-name rosters:
+  · S1 self/lsp.hexa — LSP roster fns: get_builtins() (completion source), builtin_doc() (hover),
+    get_keywords/get_n6_constants/get_gpu_intrinsics + semantic-token type/modifier lists
+  · S2 self/stdlib/syntax_highlight.hexa — syntax-highlight token classifier
+  · S3 compiler/atlas/n6.tmLanguage.json — n6 TextMate grammar
+  · S4 editor/vscode/syntaxes/hexa.tmLanguage.json — VSCode TextMate grammar
+  · S5 self/attrs/pure.hexa — pure_whitelist_builtins() (@pure-effect builtin whitelist)
+  · S6 docs/notes/2026-05-22-tma-runtime-builtin-requirements.md + docs/rfc/.../rfc_032_farr_matmul_native_builtin.md
+- PER-SURFACE SCAN (all 10 orphans, verbatim grep per name, NO .git):
+  · S1 lsp.hexa — ONLY hit = line 116 `// OP-65: tension_link removed — OP-62 (#3175) deregistered it`
+    (a COMMENT). get_builtins() DATA list (101-121) + builtin_doc() hover (618-627: only print/println/
+    len/type_of/sigma/phi/tau/sqrt/pow) carry ZERO orphan. ⇒ S1 advertising data CLEAN.
+  · S2 [0 hits — CLEAN] · S3 [0 hits — CLEAN] · S4 [0 hits — CLEAN] · S5 [0 hits — CLEAN] · S6 [0 hits — CLEAN]
+  (self/env.hexa hits are ALL OP-62 deregistration COMMENTS + the surviving live-sibling roster lines.)
+- OUT OF SCOPE (recorded so it is not re-flagged): compiler/lens_taxonomy/embedded.gen.hexa:268
+  `LensEntry { name: "tension_link", file: "tension_link_lens.rs", category: "meta_system", ... }` — the
+  REASONING-LENS taxonomy namespace (sibling of tension_lens/telepathy/thermo), a coincidental name
+  collision with the deregistered BUILTIN, NOT a builtin roster.
+- CLOSURE STATEMENT: dereg-loop CLOSED across 6 advertising surfaces; 1 stale entry pruned IN TOTAL
+  (OP-65 lsp.hexa tension_link), 0 THIS round; the 10 OP-62 orphans are now ABSENT from every call site
+  AND every advertising surface. 🟢 PROVEN-COMPLETE: self/lsp.hexa get_builtins() was the ONLY surface
+  that ever advertised any orphan; OP-65 already pruned it; all other surfaces NEVER advertised any of the
+  10 (verbatim per-name 0-hit). The dereg loop is COMPLETE across the entire advertising frontier.
+- FIX: NO code edited. An honest all-surfaces-clean scan IS the deliverable (g63 — make-work rejected;
+  no fabricated stale entries). DELIVERABLE = verdict + milestone + this log entry.
+- VERDICT: .verdicts/hexa-0pod/F-OP67-DEREG-LOOP-COMPLETE.txt (per-surface scan + verbatim hits/clean +
+  closure statement + 🟢 GREEN PROVEN-COMPLETE).
+- BASE: origin/main e6b88489842239c8a4c470c762d2e7f08a54345f. $0 · 0-pod · NO GPU · no vast · no foreign pod · leak-0.
+
 ## 2026-06-13 — OP-64 DONE: EXTEND the honest-number discipline to the own-GEMM DTYPE axis — the parity claim is now explicitly DTYPE-SCOPED to TF32 · FP16/BF16 (W14) = correct (rel_rms ≤ 1e-2 same-dtype) but PARITY=NO, 11.5x off cuBLAS-FP16 (roofline doubled) · docs-only, cited-not-re-measured · $0 · 0-pod · NO GPU
 - TASK: the public comparison doc + README led the own-GEMM story with the TF32 route-(a) result
   (1.08x cuBLAS-TF32 PARITY @D=2048, bit-exact) WITHOUT a dtype qualifier. But the campaign also
@@ -2908,3 +2944,33 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   selfhost-byteeq-real INLINE-polled (env.hexa edit → next compiler build; the 3 removed have 0 compiler-core
   refs → byte-eq fixpoint safe). $0 · 0-GPU · 0-pod · no vast · no foreign-pod · no .tape. Verdict
   F-OP59-FALSIFIED-FAMILY-CLOSED.txt.
+
+## OP-65 — SURVEY the 0-pod correctness frontier + execute the single best item: const-fold class DRY, deferred build-host/GPU; PICKED the OP-62 10-orphan dereg regression-proof → found+fixed a REAL stale LSP advert of the deregistered `tension_link` — 2026-06-13
+- MANDATE: the falsified-builtin thread is CLOSED (OP-59 ML + OP-62 non-ML = whole env.hexa roster). Rather than
+  re-litigate it (make-work), SURVEY the actual 0-pod correctness frontier and execute the ONE best genuine item.
+- SURVEY (measurement beats assumption): (a) CONST-FOLD codegen-bug class (OP-37/37b/40/44) is GENUINELY DRY —
+  re-read self/codegen.hexa comptime_eval (9959-10247): every float-fold serialize routes through bit-exact
+  _cf_float_node, every operand parse through _cf_as_float→parse_float (OP-37b strtod) or exact source text; the
+  only residual to_float() calls (9961, 10204) are INT-STRING-only = byte-exact by construction → NO sibling
+  %g/narrowing bug. (c) `## deferred` is all build-host (SELFHOST-NEXT frozen-anchor 151c52c8 re-pin) or GPU —
+  out of 0-pod scope. (b) the OP-62 10-orphan DEREG regression-proof: OP-62's §3 caller sweep EXPLICITLY EXCLUDED
+  the roster files (env.hexa/type_checker.hexa/LSP.HEXA) → the dereg was never proven against lsp.hexa.
+- PICK (g0): (b) beats (a)+(c) — the only axis with an actionable, decisive, 0-pod outcome (a clean scan closes
+  the dereg loop; a live caller = a real bug to fix). It found a bug.
+- FINDING (verbatim): scoped grep (self/ stdlib/ example/ compiler/ bench/, --include="*.hexa", excl *.gen.hexa +
+  .git) for all 10 orphans → all hits are OP-62 dereg COMMENTS in env.hexa EXCEPT one non-comment hit:
+  `self/lsp.hexa:116: "tension_link",` — a LIVE entry in get_builtins(), consumed at lsp.hexa:277 (semantic
+  token = "builtin" highlight), 901 (completion_item kind 3 "builtin"), 971 (export). tension_link was
+  DEREGISTERED by OP-62 (#3175), so the LSP still advertised/suggested a builtin that no longer links (the exact
+  lints-but-won't-link landmine OP-62 removed). The other 9 orphans = 0 occurrences in lsp.hexa.
+- FIX: self/lsp.hexa get_builtins() — pruned the `"tension_link"` entry + OP-65 provenance comment (net +4/−1,
+  wipe_guard-safe).
+- VERIFY: post-fix 0 non-comment tension_link in lsp.hexa (the 3 remaining repo orphan-name hits are
+  TRAILING-COMMENT mentions only — code token = kept neighbor builtin to_float/is_alpha/input). hexat transpile
+  `OK: /tmp/op65_lsp.c` rc=0 112954B; the 3 "[codegen_c2] ERROR: unknown builtin method: index_of_from" lines
+  PRE-EXIST on the git-stash baseline (count=3) → non-regressive. Self-host byte-eq SAFE — lsp.hexa is the LSP
+  tool, NOT in compiler/main.hexa build_selfhost closure; data-list-only edit (no codegen/runtime/env).
+- OUTCOME: 🟢 GREEN. Milestone OP-65 [x]. Dereg loop CLOSED for the LSP surface. Honest residual: env_new()
+  builtin_names vs lsp.hexa get_builtins() are two hand-lists with no compile-time consistency check (latent drift;
+  a future 0-pod test get_builtins() ⊆ roster would catch this automatically). $0 · 0-GPU · 0-pod · no vast ·
+  no foreign-pod · no .tape. Verdict F-OP65-LSP-ORPHAN-PRUNE.txt.

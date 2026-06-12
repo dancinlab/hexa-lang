@@ -1,0 +1,109 @@
+F-OP67-DEREG-LOOP-COMPLETE — COMPLETE the dereg-loop closure across EVERY
+        builtin-ADVERTISING surface. OP-62 (#3175) deregistered 10 pure-orphan
+        builtins from self/env.hexa env_new() (try_float, is_whitespace, meta_laws,
+        phi_predict, tension_link, zip_arr, enumerate_arr, input_all,
+        load_weights_bin, mmap_weights) but EXCLUDED the roster files from its
+        caller sweep. OP-65 (#3184) then caught `tension_link` still LIVE in
+        self/lsp.hexa get_builtins() (one advertising surface) and pruned it.
+        lsp.hexa is only ONE advertising surface. OP-67 sweeps EVERY surface that
+        LISTS builtin names AS DATA (not just calls them) to close the loop fully.
+HEXA-0POD OP-67 · CPU-LOCAL (scoped grep-per-name, NO .git) · 0-GPU · $0 · no vast/pod
+════════════════════════════════════════════════════════════════════════════
+DATE: 2026-06-13 · HEXA-0POD OP-67 · 0-pod ($0, NO GPU, NO vast, NO pod)
+HOST: local arm64-macos (Darwin 25.5.0), CPU-only
+BASE: origin/main e6b88489842239c8a4c470c762d2e7f08a54345f
+      (== tip; OP-65 lsp-prune #3184 is HEAD~0 — the dereg frontier)
+STATUS: 🟢 GREEN — PROVEN-COMPLETE. EVERY builtin-advertising surface scanned for
+        ALL 10 deregistered orphans. lsp.hexa get_builtins() was the ONLY surface
+        that ever advertised any orphan (tension_link), and OP-65 already pruned it.
+        ALL OTHER advertising surfaces are CLEAN (verbatim 0-hit per surface).
+        ZERO new stale entries found this round → an all-clean closure PR (the g63
+        honest "all other surfaces clean = SUCCESS" outcome). No code edited.
+
+────────────────────────────────────────────────────────────────────────────
+[1] ENUMERATED ADVERTISING SURFACES (scoped greps, NO .git)
+────────────────────────────────────────────────────────────────────────────
+"Advertising" = LISTS builtin NAMES as data (completion/semantic-token/hover/
+grammar/whitelist roster), distinct from CALLING them. Enumeration via:
+  find . \( -name "*.tmGrammar*" -o -name "*.sublime-syntax" -o -iname "syntax*"
+            -o -name "*.tmLanguage*" -o -iname "*builtin*" \)  (NO .git)
+  + grep for roster-producing fns (get_builtins / *whitelist* / completion / hover)
+
+The 6 genuine builtin-advertising surfaces:
+  S1  self/lsp.hexa                          — LSP roster fns: get_builtins()
+                                                (completion source), builtin_doc()
+                                                (hover), get_keywords(),
+                                                get_n6_constants(), get_gpu_intrinsics(),
+                                                semantic-token type/modifier lists
+  S2  self/stdlib/syntax_highlight.hexa      — syntax-highlight token classifier
+  S3  compiler/atlas/n6.tmLanguage.json      — n6 TextMate grammar (builtin patterns)
+  S4  editor/vscode/syntaxes/hexa.tmLanguage.json — VSCode TextMate grammar
+  S5  self/attrs/pure.hexa                   — pure_whitelist_builtins() roster
+                                                (the @pure-effect builtin whitelist)
+  S6  docs/notes/2026-05-22-tma-runtime-builtin-requirements.md
+      docs/rfc/.../rfc_032_farr_matmul_native_builtin.md — builtin doc/RFC manifests
+
+OUT OF SCOPE (NOT a builtin roster — disambiguated, recorded so it is not re-flagged):
+  compiler/lens_taxonomy/embedded.gen.hexa:268
+    LensEntry { name: "tension_link", file: "tension_link_lens.rs",
+                category: "meta_system", status: "implemented", ... }
+  → This is the REASONING-LENS taxonomy namespace (a tension_link_lens.rs lens,
+    sibling of tension_lens / telepathy / thermo), NOT the deregistered BUILTIN.
+    A coincidental name collision. Correctly excluded.
+  Prose roadmaps (stdlib/xeno/docs/anima_origin/*.md, docs/notes/archive/*.md) that
+    MENTION the names in narrative — not rosters; excluded.
+
+────────────────────────────────────────────────────────────────────────────
+[2] PER-SURFACE SCAN — ALL 10 orphans, verbatim grep (NO .git)
+────────────────────────────────────────────────────────────────────────────
+Names: try_float is_whitespace meta_laws phi_predict tension_link zip_arr
+       enumerate_arr input_all load_weights_bin mmap_weights
+
+S1 self/lsp.hexa — ONLY hit:
+     116:        // OP-65: tension_link removed — OP-62 (#3175) deregistered it from
+   → COMMENT ONLY (OP-65's documenting note). get_builtins() data list
+     (lines 101-121) contains ZERO orphan. builtin_doc() hover (618-627) docs only
+     print/println/len/type_of/sigma/phi/tau/sqrt/pow — ZERO orphan.
+     ⇒ S1 advertising data CLEAN (tension_link already pruned by OP-65 #3184).
+
+S2 self/stdlib/syntax_highlight.hexa        — [0 hits — CLEAN]
+S3 compiler/atlas/n6.tmLanguage.json        — [0 hits — CLEAN]
+S4 editor/vscode/syntaxes/hexa.tmLanguage.json — [0 hits — CLEAN]
+S5 self/attrs/pure.hexa                      — [0 hits — CLEAN]
+S6 docs/notes/2026-05-22-tma-runtime-builtin-requirements.md — [0 hits — CLEAN]
+   docs/rfc/.../rfc_032_farr_matmul_native_builtin.md         — [0 hits — CLEAN]
+
+(self/env.hexa hits are ALL OP-62 deregistration COMMENTS documenting the removal,
+ plus the surviving roster lines that KEEP the live siblings — no orphan re-advertised.)
+
+────────────────────────────────────────────────────────────────────────────
+[3] FIX
+────────────────────────────────────────────────────────────────────────────
+NO code edited. OP-65 already performed the single real prune (lsp.hexa
+tension_link). Every other advertising surface was already clean. This round is a
+PROVEN-COMPLETE verification closure, not a fix round (g63: an honest all-clean
+scan IS the deliverable; no make-work).
+
+────────────────────────────────────────────────────────────────────────────
+[4] CLOSURE STATEMENT
+────────────────────────────────────────────────────────────────────────────
+dereg-loop CLOSED across 6 advertising surfaces — {self/lsp.hexa,
+self/stdlib/syntax_highlight.hexa, compiler/atlas/n6.tmLanguage.json,
+editor/vscode/syntaxes/hexa.tmLanguage.json, self/attrs/pure.hexa,
+docs builtin/RFC manifests}; 1 stale entry pruned in total (OP-65 lsp.hexa
+tension_link), 0 pruned THIS round; the 10 OP-62 orphans (try_float, is_whitespace,
+meta_laws, phi_predict, tension_link, zip_arr, enumerate_arr, input_all,
+load_weights_bin, mmap_weights) are now ABSENT from every call site AND every
+advertising surface.
+
+🟢 PROVEN-COMPLETE finding: self/lsp.hexa get_builtins() was the ONLY surface that
+ever advertised any deregistered orphan; OP-65 (#3184) already pruned it. ALL OTHER
+advertising surfaces (syntax-highlight, both TextMate grammars, the @pure builtin
+whitelist, docs/RFC manifests) NEVER advertised any of the 10 — verified by
+verbatim per-name 0-hit grep. The dereg loop is now COMPLETE across the entire
+advertising frontier.
+
+────────────────────────────────────────────────────────────────────────────
+TIER: 🟢 GREEN — PROVEN-COMPLETE (all-surfaces-clean; OP-65 was the sole real
+prune; 0 residual this round; no fabricated stale entries).
+════════════════════════════════════════════════════════════════════════════

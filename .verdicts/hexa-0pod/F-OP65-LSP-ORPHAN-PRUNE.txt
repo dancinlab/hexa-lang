@@ -1,0 +1,151 @@
+F-OP65-LSP-ORPHAN-PRUNE — SURVEY the 0-pod correctness frontier + execute the single
+        highest-genuine-value item. The const-fold codegen-bug class (a) is genuinely
+        DRY (OP-37/37b/40/44 already fixed every float-fold serialize/parse site; the
+        residual to_float calls are int-only = byte-exact by construction). The OP-62
+        10-orphan DEREG regression-proof (b) is NOT clean: it surfaced a REAL stale
+        reference the OP-62 audit MISSED — `tension_link` (one of the 10 deregistered
+        orphans) was still advertised as a live builtin by self/lsp.hexa get_builtins(),
+        because OP-62 EXPLICITLY EXCLUDED lsp.hexa from its caller sweep. The LSP thus
+        offered completion / semantic-token / hover for a builtin that no longer links
+        (the exact landmine OP-62 removed). FIXED (one-line prune). The dereg loop for
+        the LSP surface is now CLOSED; the other 9 orphans were never in the LSP list.
+HEXA-0POD OP-65 · CPU-LOCAL (scoped grep + hexat AOT transpile) · 0-GPU · $0 · no vast/pod
+════════════════════════════════════════════════════════════════════════════
+DATE: 2026-06-13 · HEXA-0POD OP-65 · 0-pod ($0, NO GPU, NO vast, NO pod)
+HOST: local arm64-macos (Darwin 25.5.0), CPU-only
+STATUS: 🟢 GREEN — a REAL residual found by the regression-proof scan and FIXED
+        minimally; non-regressive (lsp.hexa transpiles clean before+after);
+        dereg loop closed for the LSP surface.
+
+────────────────────────────────────────────────────────────────────────────
+[0] SURVEY (measurement beats assumption) — the 0-pod correctness frontier
+────────────────────────────────────────────────────────────────────────────
+Base: origin/main af2d18479 (== HEAD; the OP-62 dereg #3175 is the tip).
+
+(a) CONST-FOLD CODEGEN-BUG CLASS — GENUINELY DRY (no sibling bug).
+    OP-37 (serialize+parse), OP-37b (atof→strtod operand parse), OP-40 (bit-exact
+    hex-float const-fold serialize), OP-44 (vsnprintf, DEFERRED — frozen-seed blob)
+    already mined this thread. Re-read self/codegen.hexa comptime_eval const-folder
+    (lines 9959-10247). EVERY float-fold serialize routes through the bit-exact
+    helpers (_cf_float_node → _cf_float_hexlit) and EVERY float-fold operand parse
+    routes through _cf_as_float → lit.value.parse_float() (correctly-rounded strtod,
+    the OP-37b fix) or preserves exact source text (_cf_negate_float_text / abs /
+    additive-identity). The ONLY remaining to_float() calls in the folder are:
+      · _cf_as_float IntLit branch (9961): to_float(to_string(to_int(lit.value)))
+      · sqrt int-perfect-square (10204): _cf_float_node(to_float(to_string(s)))
+    BOTH operate on INTEGER strings only — OP-37b proved "to_float and parse_float
+    agree on integers (no fraction to mis-round)" → byte-exact by construction. No
+    float string ever reaches the lossy to_float path. ⇒ NO sibling %g/narrowing
+    const-fold bug. Axis (a) is closed-clean (not make-work to re-litigate).
+
+(c) DEFERRED + .log.md TAIL — no 0-pod-feasible correctness DEFER.
+    The `## deferred` section is dominated by the SELFHOST-NEXT const-fold+atof+
+    vsnprintf seed-promote BUNDLE (OP-46): explicitly NOT 0-pod (a wholesale
+    frozen-anchor 151c52c8 RE-PIN + ~3.5h build_selfhost.sh ladder on a build host).
+    The remaining DEFERs (OP-2b/2c forge transpose-elim, OP-19b deterministic erf,
+    OP-5c forge hardening) all NEED a GPU (aiden 5070) — out of 0-pod scope.
+
+(b) THE 10-ORPHAN DEREG REGRESSION-PROOF — the dispositive item. ★ PICKED ★
+    OP-62 deregistered 10 pure orphans (try_float is_whitespace meta_laws phi_predict
+    tension_link zip_arr enumerate_arr input_all load_weights_bin mmap_weights) from
+    self/env.hexa env_new(). The dereg is SAFE only if ZERO live reference remains.
+    OP-62's own audit §3 sweep EXPLICITLY EXCLUDED the roster files "(excl the
+    env.hexa/type_checker.hexa/LSP.HEXA roster files themselves)". OP-65 closes that
+    gap: an independent regression-proof on CURRENT main, INCLUDING lsp.hexa.
+
+WHY (b) BEATS (a)+(c) (g0): it is the ONLY axis with an actionable, decisive,
+0-pod outcome. (a) is proven-closed, (c) is out-of-scope build-host/GPU. (b)
+either confirms the dereg clean (a valid 🟢 PROVEN-CLEAN closure) OR finds a real
+caller of a removed builtin (🔴 fix). It found the latter.
+
+────────────────────────────────────────────────────────────────────────────
+[1] THE FINDING (verbatim) — stale LSP advertisement of a deregistered builtin
+────────────────────────────────────────────────────────────────────────────
+Word-boundary scan (self/ stdlib/ example/ compiler/ bench/, --include="*.hexa",
+EXCL *.gen.hexa, EXCL .git) for each of the 10 orphans. All hits were OP-62's own
+dereg COMMENTS in self/env.hexa (benign documentation) EXCEPT ONE non-comment hit:
+
+  self/lsp.hexa:116:        "tension_link",
+
+This is a LIVE entry in get_builtins() — the LSP's builtin completion/classification
+list. tension_link was DEREGISTERED from env_new() by OP-62 (#3175). get_builtins()
+is consumed at THREE user-visible sites:
+  · semantic_tokenize (lsp.hexa:277) — classifies `tension_link` as a `builtin`
+    semantic token (special editor highlight).
+  · handle_completion (lsp.hexa:901)  — offers `tension_link` as completion_item
+    kind 3 ("builtin") — actively suggesting the user type a builtin that WON'T LINK.
+  · builtin export list (lsp.hexa:971).
+So the IDE still advertised/highlighted `tension_link` as a valid builtin even
+though it was removed — re-exposing the exact "lints-but-won't-link" landmine OP-62
+deregistered. A real correctness inconsistency, left because OP-62 excluded lsp.hexa.
+
+Of the 10 orphans, ONLY tension_link was ever in the LSP builtin list (verified:
+the other 9 = 0 occurrences in lsp.hexa). So the LSP residual is exactly this one line.
+
+────────────────────────────────────────────────────────────────────────────
+[2] THE FIX (self/lsp.hexa — minimal, one-line prune + provenance comment)
+────────────────────────────────────────────────────────────────────────────
+get_builtins(): the bare `"tension_link",` array entry REMOVED, replaced by a
+4-line OP-65 provenance comment pointing at OP-62 (#3175). net +4/−1 (wipe_guard-safe).
+
+────────────────────────────────────────────────────────────────────────────
+[3] VERIFICATION (verbatim) — post-fix scan + transpile non-regression
+────────────────────────────────────────────────────────────────────────────
+POST-FIX scan: `tension_link` has ZERO non-comment occurrences in lsp.hexa
+(grep -n "tension_link" self/lsp.hexa | grep -v full-line-comment → none). The 3
+remaining orphan-name appearances repo-wide (try_float / is_whitespace / input_all
+in self/env.hexa) are TRAILING-COMMENT mentions only — proven by stripping the
+`//...` portion of each line: the CODE token on each is the KEPT neighbor builtin
+("to_float" / "is_alpha" / "input"), NOT the orphan. So NO orphan has any live
+code reference anywhere after the fix.
+
+TRANSPILE (non-regression): ~/.hx/bin/build/hexat self/lsp.hexa /tmp/op65_lsp.c
+  → "OK: /tmp/op65_lsp.c", rc=0, 112954 bytes emitted (CLEAN).
+The 3 "[codegen_c2] ERROR: unknown builtin method: index_of_from" lines are
+PRE-EXISTING (count=3 on the unmodified baseline via git stash too — unrelated to
+this edit; elsewhere in lsp.hexa). My change neither adds nor removes any.
+
+────────────────────────────────────────────────────────────────────────────
+[4] TIER VERDICT (g5)
+────────────────────────────────────────────────────────────────────────────
+🟢 GREEN. The frontier survey was honest: axis (a) const-fold is genuinely dry
+(re-read proves every float-fold site already routes through the OP-37/37b/40
+bit-exact helpers; residual to_float is int-only = byte-exact), axis (c) deferred
+is build-host/GPU (out of 0-pod scope). The 10-orphan dereg regression-proof (b)
+was NOT clean — it surfaced ONE real stale reference OP-62's audit explicitly
+excluded: self/lsp.hexa get_builtins() still advertised the deregistered
+`tension_link` to completion/semantic-token/hover. Minimal one-line prune; the
+LSP no longer offers a non-linking builtin; the dereg loop is now CLOSED for the
+LSP surface (the other 9 orphans were never in the list — verified 0). Evidence is
+the verbatim scan + transpile output above (self-measured, not self-judged).
+Self-host byte-eq UNPERTURBED: self/lsp.hexa is the language-server tool, NOT in
+the compiler/main.hexa build_selfhost walk closure (cc-gen3==cc-gen4 fixpoint
+untouched); the edit is data-list-only (no codegen/runtime/env change).
+
+HONEST RESIDUALS (logged, not a half-fix)
+· OP-62's exclusion of the roster files (env.hexa/type_checker.hexa/lsp.hexa) from
+  its caller sweep was correct for env.hexa+type_checker (those ARE the roster),
+  but lsp.hexa is a CONSUMER (a separate advertisement surface), not the roster —
+  it should have been swept. OP-65 closes that one residual. No further LSP orphan
+  exists (the other 9 verified absent from lsp.hexa).
+· lsp.hexa's get_builtins() vs env_new() builtin_names are two hand-maintained
+  lists with no compile-time consistency check — a latent drift surface. A future
+  0-pod item could add a test asserting get_builtins() ⊆ env_new() roster (would
+  have caught this automatically). Logged to ## deferred as a candidate; NOT done
+  here (OP-65 is the targeted fix for the one known drift).
+
+PROVENANCE
+  base:     origin/main af2d18479 (OP-62 dereg #3175 = tip)
+  finding:  self/lsp.hexa:116 `"tension_link",` — live builtin advert of a
+            deregistered (OP-62) pure-orphan; get_builtins() consumed at
+            lsp.hexa:277 (semantic token) / 901 (completion) / 971 (export)
+  scan:     grep -rEn "\bNAME\b" self/ stdlib/ example/ compiler/ bench/
+            --include="*.hexa" (EXCL *.gen.hexa, EXCL .git) for all 10 orphans;
+            trailing-comment vs code-token disambiguation per residual line
+  fix:      self/lsp.hexa get_builtins() — prune the "tension_link" entry (+4/−1)
+  verify:   post-fix scan (0 non-comment tension_link in lsp.hexa) + hexat
+            transpile OK rc=0 112954B + baseline-stash confirming index_of_from
+            errors pre-exist (non-regressive)
+  pattern:  project_local_hexa_stale_oracle (differential discipline) — here the
+            bug is REAL on current source (a dereg the LSP surface didn't follow)
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
