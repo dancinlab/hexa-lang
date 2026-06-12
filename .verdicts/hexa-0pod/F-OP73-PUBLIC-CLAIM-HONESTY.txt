@@ -1,0 +1,110 @@
+F-OP73-PUBLIC-CLAIM-HONESTY — DEFINITIVE public-facing forge/flame claim-surface honesty audit
+==============================================================================================
+verdict-tier: 🔴→fix GREEN (one genuine STALE residual corrected) + 🟢 PROVEN-HONEST (the rest of
+              the surface is verdict-traced, no fabricated correction — g63 honest-success). DOCS-ONLY,
+              0-pod, NO GPU, no new measurement: every number below is CITED VERBATIM from an existing
+              verdict; the deliverable is the complete claim→verdict trace table + the single correction.
+
+date: 2026-06-13
+mode: HEXA-0POD OP-73 — 0-pod, $0, NO GPU, NO vast, NO foreign pod (leak 0). CPU/local docs only.
+scope: the campaign-flagship value (honest numbers). Audit the ENTIRE public forge/flame claim surface
+       against the .verdicts/** corpus — find remaining overstated/stale/unsupported/apples-to-oranges
+       claims (correct them) OR prove the surface honest + verdict-traced (definitive closure).
+
+================= ENUMERATED PUBLIC CLAIM SURFACE (scoped reads, NO .git) ======================
+- README.md — §"hexa GPU stack" perf table (L125/135/137), honest-axis subsection (L143/145), the
+  own-GEMM OG-ladder block (L190-209), honest-limits (L213), trade table (L215-226), summary (L471).
+- FLAME+FORGE-vs-PYTORCH+CUBLAS.md — TL;DR + §1 (speed, F-BENCH-1) + §2 (reproducibility) + §3
+  (decision guide) + §4 (own-GEMM boundary) + §4.1 (dtype scope) + §5 (provenance).
+- docs/forge-routea-shape-adaptive.md — §0 boundary + own-GEMM parity map (L101-128) + dtype scope.
+- docs/flame-determinism-contract.md — per-phase determinism index + 18-fold golden-fold CI tripwire.
+- stdlib/flame/README.md — the RETRACTED 2.95× / 1.26-1.76× PyTorch-speedup correction (2026-05-19).
+
+================= THE CLAIM→VERDICT TRACE TABLE (every quantitative/capability claim) ==========
+CLAIM (verbatim public framing)                                  | VERDICT (verbatim source)             | STATUS
+-----------------------------------------------------------------+---------------------------------------+--------
+matched-dtype gap SINGLE-DIGIT: FP64 flame ties/wins (B=2 0.98×, | F-BENCH-1 ("FP64 2 357.88 … 0.98x    | 🟢
+B=4 0.93× B=8 0.90× flame faster); TF32 torch 3.03×→7.88×; FP32  |  (flame ties); FP64 8 … 0.90x (FLAME  | exact
+2.15×→6.60×ahead (README L137/143, comparison §1.1)              |  WINS); TF32 1 3.03x … 8 7.88x; FP32   | cell
+                                                                 |  1 2.15x … 8 6.60x"); byte max|Δ|=0   | match
+old ~1656×/~2207× headline RETIRED — flame-FP64-vs-torch-TF32    | F-FUSION-VS-PYTORCH ("torch is ~1656x  | 🟢
+(unfair dtype) + interpreted full trainer + 2-pt extrapolation   |  (eager)/~2207x (compile) FASTER";     | honest-
+(README L137/143, comparison §1 callout + honest-number §)       |  "flame FP64 … torch TF32"); re-context | corr
+                                                                 |  by F-BENCH-1 + F-FUSION-INTERP-ELIM   | held
+own-GEMM PARITY 1.08× @D=2048, ~315 TFLOP/s, bit-exact rel_rms 0 | F-GPU-ROUTEA-KEEPBAND-MEASURE         | 🟢
+(comparison §1.3/§4, forge parity map, README L143)              |  ("D=2048 route-(a) summit own ~315    |
+                                                                 |  TFLOP/s ratio 1.08x PARITY=YES")      |
+own-GEMM @D=4096 ~1.50× sub-parity, bit-exactness-bound, lever    | F-OP45GPU-OCCUPANCY-SWEEP +           | 🟢
+family exhausted closed-neg (comparison §4 SETTLED, forge §0)    |  F-OP52-TF32-GAP-CLOSE + F-OP55       |
+own EDGES cuBLAS @consumer-D768 0.95× (RTX 5070, OWN120 64×64)   | F-OP54-SUMMER-OWNGEMM-TF32 + F-OP57    | 🟢
+parity DTYPE-SCOPED to TF32; FP16/BF16 W14 correct (rel_rms≤1e-2 | F-FUSION-SM90-WGMMA-W14-FP16 +        | 🟢
+same-dtype) but PARITY=NO 11.5× off cuBLAS-FP16 (roofline→827)   |  F-OP64-OWNGEMM-DTYPE-HONEST          |
+flame batch-fill ≥1.3× @B=2 → 2.95× @B=32, ~3× cap structural    | F-FUSION-BATCHFILL + F-FUSION-M5      | 🟢
+flame TF32 fast-mode 4.2× @B=1 (self-speedup); BF16 Pareto-domin | F-OP20-TF32-FASTMODE + F-OP25         | 🟢
+byte-identical across 6 env / 4 arch-libc; no libm on step path; | F-OP19{,B,C,D,E,F,G} + F-OP29 +       | 🟢
+whole-step max|Δ|=0; 18-fold golden CI tripwire (comparison §2)  |  F-OP15-STEP-DETERMINISM + F-OP39/40/42|
+forge 12 byte-equal substrate fires + 4 layer fires, max|Δ|=0    | forge correctness verdict set         | 🟢
+prior flame "2.95× / 1.26-1.76× faster than PyTorch" RETRACTED   | stdlib/flame/README.md CORRECTION     | 🟢
+(README L135 + L471 "wall speedup not yet measured")             |  2026-05-19 (unit mismatch, honest)   | held
+
+================= THE ONE FLAG (STALE — OP-71 class, the only finding) =========================
+WHERE: README.md OG-ladder block (lines 190-209) — the detailed sm_90a wgmma+TMA own-GEMM narrative.
+VERBATIM STALE LINES (before fix):
+  · ladder row:   "OG17  + relaxed-pipeline ping-pong (S=2048)      280               1.24× off  ★ PARITY"
+  · footnote:     "cuBLAS-TF32 = ~431 TFLOP/s roofline — OG17 CROSSES PARITY (≤1.3×) @ S=2048"
+  · prose close:  "OG17 … own 280 TFLOP/s, ratio 1.24× = PARITY (≤1.3×) @ S=2048 … wall is CLOSED."
+WHY STALE (not overstated — 1.24× is honest FOR OG17 — but NOT the frontier):
+  F-GPU-ROUTEA-KEEPBAND-MEASURE (a LATER route-(a) b14 MODE 8 measurement) supersedes OG17 @D=2048:
+    VERBATIM: "D=2048 route-(a) summit (b14 MODE8 NST=3 PDEP=2): own ~315 TFLOP/s  ratio 1.08x PARITY=YES ★"
+              "D=2048 OG17-pipe (MODE 6):                       own ~262 TFLOP/s  ratio 1.29-1.32x"
+  The README's OWN line-143 headline + docs/forge-routea-shape-adaptive.md (L158 "current FRONTIER",
+  L110 parity map "1.08× — PARITY") + FLAME+FORGE-vs-PYTORCH+CUBLAS.md §1.3 ALREADY carried 1.08×.
+  ROOT CAUSE: F-OP58-OWNGEMM-PARITY-MAP updated only the README §honest-axis SUMMARY (verbatim its
+  "WHAT WAS CONSOLIDATED" item 3: "README.md §honest-axis (the 'flame + forge vs PyTorch + cuBLAS — the
+  honest axis' note)") + the forge doc, leaving the detailed README OG-ladder narrative at OG17 1.24×.
+  => INTERNAL INCONSISTENCY: the README's detailed claim lagged its own headline + the other two docs.
+
+================= THE FIX (doc-only, README.md, 5 insertions / 3 deletions — wipe_guard OK) ====
+(a) Ladder table — ADDED the route-(a) frontier rung + corrected the roofline footnote:
+    "route-(a) b14 MODE 8 NST=3 PDEP=2 (@D=2048)      ~315              1.08× off ★★FRONTIER 2 CTA/SM"
+    "cuBLAS-TF32 ≈ 431 (@4096) / ≈342 (@D=2048) roofline — route-(a) is the @D=2048 FRONTIER (1.08×,
+     ≈93% of roofline) SUPERSEDING the OG17 1.24× rung; both bit-exact rel-RMS 0 (NOT beaten, no superiority)"
+(b) OG17 closing paragraph — carried forward: "The route-(a) b14 MODE 8 kernel … then SUPERSEDES OG17 as
+    the @D=2048 frontier — own ≈315 TFLOP/s, ratio 1.08× (≈93 % of the cuBLAS-TF32 roofline), bit-exact
+    rel-RMS 0 … (F-GPU-ROUTEA-KEEPBAND-MEASURE; this is the 1.08× headline …). Honest residual: @4096 stays
+    1.50× … bit-exactness-bound … exhausted closed-neg (F-OP45GPU-OCCUPANCY-SWEEP, F-OP52, F-OP55)."
+(c) Line-471 summary — own-GEMM line gained the frontier headline: "the route-(a) wgmma own-GEMM reaches
+    TF32 PARITY 1.08× @D=2048 (≈93 % of the cuBLAS-TF32 roofline, bit-exact rel-RMS 0 —
+    F-GPU-ROUTEA-KEEPBAND-MEASURE)" + scoped the older 1.13× iso (Blackwell-sm_120-only) and 1.24×
+    full-step (F-FUSION-THRU-PARITY) as the non-frontier numbers they are.
+All numbers CITED VERBATIM from F-GPU-ROUTEA-KEEPBAND-MEASURE / F-OP58 / F-OP45GPU-OCCUPANCY-SWEEP —
+no new measurement, no GPU. wipe_guard: 5 insertions / 3 deletions, net-additive, well under 50.
+
+================= HONEST CLOSURE (g5 / g63) ===================================================
+The public forge/flame claim surface is PROVEN-HONEST + verdict-traced apart from the single stale
+OG-ladder framing (the README detail lagging its own headline), now corrected forward. The OP-64 dtype
+scope + OP-71 stale-comment + the ~1656× retirement + the 2.95× retraction all HELD — no overstatement
+was found in those, and NO correction was manufactured where the surface was already honest (g63: an
+evidence-backed all-else-honest IS the success). The deliverable is the complete claim→verdict trace
+table above + the one stale-narrative correction.
+
+Governance: per project.tape g84 (PAPER OPT-IN) no /paper scaffolded, no PAPER.tape/PAPER.md created.
+No .tape edit, no self/env.hexa touch. $0, 0-pod, NO GPU, no vast, no foreign pod, leak 0.
+
+SOURCES (verdict-traced):
+- .verdicts/hexa-bench/F-BENCH-1.txt — matched-dtype compiled step authority (the speed table).
+- .verdicts/hexa-fusion/F-FUSION-VS-PYTORCH.txt — the retired ~1656×/~2207× provenance.
+- .verdicts/hexa-0pod/F-GPU-ROUTEA-KEEPBAND-MEASURE.txt — own-GEMM 1.08× @D=2048 / 1.50× @D=4096, the
+  route-(a) ~315 TFLOP/s frontier that supersedes OG17 (the FIX source).
+- .verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-OG17.txt — OG17 280 TFLOP/s 1.24× (the superseded rung).
+- .verdicts/hexa-0pod/F-OP58-OWNGEMM-PARITY-MAP.txt — the consolidation that updated only the summary.
+- .verdicts/hexa-0pod/F-OP45GPU-OCCUPANCY-SWEEP.txt + F-OP52-TF32-GAP-CLOSE.txt + F-OP55-NEWTILE-D4096.txt
+  — @D=4096 bit-exactness-bound, lever family exhausted closed-neg.
+- .verdicts/hexa-0pod/F-OP54-SUMMER-OWNGEMM-TF32.txt + F-OP57-SUMMER-SMALLTILE.txt — consumer-D768 edge.
+- .verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W14-FP16.txt + .verdicts/hexa-0pod/F-OP64-OWNGEMM-DTYPE-HONEST.txt
+  — the dtype-scope (FP16/BF16 PARITY=NO).
+- .verdicts/hexa-fusion/F-FUSION-BATCHFILL.txt + F-FUSION-M5-BATCHFILL-UTIL.txt — batch-fill ~3× cap.
+- .verdicts/hexa-0pod/F-OP20-TF32-FASTMODE.txt + F-OP25-BF16-FASTMODE.txt — TF32 fast-mode 4.2×.
+- .verdicts/hexa-0pod/F-OP19{,B,C,D,E,F,G}.txt + F-OP29 + F-OP15-STEP-DETERMINISM + F-OP39/40/42 —
+  cross-machine bit-exact (6 env / 4 arch-libc) + no-libm step + golden-fold CI tripwire.
+- docs/flame-determinism-contract.md + docs/forge-routea-shape-adaptive.md + stdlib/flame/README.md.
