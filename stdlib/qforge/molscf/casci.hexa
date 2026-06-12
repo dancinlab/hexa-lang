@@ -1,0 +1,225 @@
+// HEXA Standard Library — qforge/molscf/casci
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE MOLSCF front-end brick 13/N (round-10) — CASCI: a full-CI within a
+// chosen active space, on top of the RHF/ROHF orbitals. This breaks the ONE
+// remaining fundamental method-class wall named by round-9: MULTI-REFERENCE /
+// STATIC CORRELATION. A SINGLE Slater determinant (RHF) — and even CCSD on top
+// of it — fundamentally fails at bond dissociation, biradicals, Cr₂, etc.: at a
+// stretched bond the wavefunction is an EQUAL mix of two determinants, which no
+// single-reference method can represent. CASCI diagonalizes the exact Hamiltonian
+// in the determinant basis of the active space, capturing that static correlation.
+//
+// ── scope (d6 HONEST) ────────────────────────────────────────────────────────
+//   This ships CASCI — CI in the determinant basis over FIXED RHF orbitals
+//   (orbitals NOT re-optimized). The active space here is 2 electrons in m active
+//   orbitals (the σ_g/σ_u pair for H₂ → CAS(2,2)). CAS(2,m) with ALL orbitals
+//   active == FCI for a 2-electron system, so the H₂/STO-3G CAS(2,2) result is
+//   EXACT-in-basis at every bond length — a rigorous anchor (== FCI == CCSD-2e).
+//   CASSCF orbital-optimization (the MCSCF orbital-rotation step) = round-11.
+//
+// ── the active-space integral transform (d19 reuse) ──────────────────────────
+//   The RHF gives AO MO-coefficients C (C_μp = C[μ*n+p]) + the AO ERIs (μν|σλ)
+//   from coulomb_/md_integrals. CASCI needs the MO-basis integrals over the
+//   active orbitals:
+//     h_pq = Σ_μν C_μp H_core_μν C_νq                     (1-electron, MO basis)
+//     (pq|rs) = Σ_μνσλ C_μp C_νq C_σr C_λs (μν|σλ)        (2-electron, MO basis)
+//   The 4-index transform is the textbook AO→MO contraction (here direct N^8 over
+//   the small active set — H₂/STO-3G n=2; a sparse-friendly N^5 staging is a perf
+//   refinement, not a correctness change). H_core + the AO ERIs are reused
+//   verbatim from the sealed brick-1/2/3 integrals.
+//
+// ── the 2-electron full-CI Hamiltonian (Slater–Condon) ───────────────────────
+//   Determinant basis: |a_α b_β⟩ — electron α in active MO a, electron β in
+//   active MO b — a full m×m grid of m² determinants. The exact 2-electron
+//   matrix element (spatial-MO Slater–Condon, opposite-spin pair):
+//     ⟨a_α b_β | H | c_α d_β⟩ =
+//        [ δ_bd δ_ac (h_aa+h_bb) + δ_bd(1−δ_ac) h_ac + δ_ac(1−δ_bd) h_bd ]
+//        + (ac|bd)
+//   The α and β electrons are opposite-spin, so the two-electron term is the bare
+//   Coulomb coupling (ac|bd) (chemists' convention) with NO exchange — exchange
+//   only couples same-spin electrons, of which there is one of each here. eigh
+//   diagonalizes; the lowest eigenvalue is the singlet ground state, its
+//   eigenvector gives the determinant weights c_a² (the multi-reference signature).
+//
+// reuse (d19 · d3): eigh from stdlib/alloc/math/eigen (the CI-Hamiltonian
+//   diagonalizer — same primitive RHF uses for F'); rhf_diagonalize +
+//   rhf_s_inv_sqrt from molscf/rhf to recover the converged RHF MO-coefficients;
+//   the AO H_core + ERIs from brick 1/2/3. NO new eigensolver/integral minted —
+//   only the AO→MO transform + the Slater–Condon CI matrix are new.
+
+use "stdlib/alloc/math/eigen"
+use "stdlib/qforge/molscf/rhf"
+
+// ════════════════════════════════════════════════════════════════════════════
+//   MO-basis integral transform  (AO C-coeffs  →  active-MO h, (pq|rs))
+// ════════════════════════════════════════════════════════════════════════════
+
+// 1-electron MO transform  h_pq = Σ_μν C_μp H_μν C_νq   over the first m MOs.
+//   C is n×n AO MO-coeffs (C_μp = C[μ*n+p]); returns m×m flat (h[p*m+q]).
+pub fn casci_mo_hcore(C: [float], hcore: [float], n: int, m: int) -> [float] {
+    let mut h = []
+    let mut p = 0
+    while p < m {
+        let mut q = 0
+        while q < m {
+            let mut acc = 0.0
+            let mut mu = 0
+            while mu < n {
+                let mut nu = 0
+                while nu < n {
+                    acc = acc + C[mu * n + p] * hcore[mu * n + nu] * C[nu * n + q]
+                    nu = nu + 1
+                }
+                mu = mu + 1
+            }
+            h.push(acc)
+            q = q + 1
+        }
+        p = p + 1
+    }
+    return h
+}
+
+// 2-electron MO transform  (pq|rs) = Σ_μνσλ C_μp C_νq C_σr C_λs (μν|σλ).
+//   eri is the AO n^4 chemists' tensor; returns the active-MO m^4 tensor
+//   moeri[ ((p*m+q)*m+r)*m+s ] = (pq|rs). Direct contraction (small active set).
+pub fn casci_mo_eri(C: [float], eri: [float], n: int, m: int) -> [float] {
+    let mut moeri = []
+    let mut p = 0
+    while p < m {
+        let mut q = 0
+        while q < m {
+            let mut r = 0
+            while r < m {
+                let mut s = 0
+                while s < m {
+                    let mut acc = 0.0
+                    let mut mu = 0
+                    while mu < n {
+                        let cmp = C[mu * n + p]
+                        let mut nu = 0
+                        while nu < n {
+                            let cnq = C[nu * n + q]
+                            let mut sg = 0
+                            while sg < n {
+                                let csr = C[sg * n + r]
+                                let mut lm = 0
+                                while lm < n {
+                                    let cls = C[lm * n + s]
+                                    let ao = eri[((mu * n + nu) * n + sg) * n + lm]
+                                    acc = acc + cmp * cnq * csr * cls * ao
+                                    lm = lm + 1
+                                }
+                                sg = sg + 1
+                            }
+                            nu = nu + 1
+                        }
+                        mu = mu + 1
+                    }
+                    moeri.push(acc)
+                    s = s + 1
+                }
+                r = r + 1
+            }
+            q = q + 1
+        }
+        p = p + 1
+    }
+    return moeri
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   2-electron full-CI in the active space  (Slater–Condon determinant basis)
+// ════════════════════════════════════════════════════════════════════════════
+
+// Recover the converged RHF MO-coefficient matrix C (n×n AO MO-coeffs) from the
+//   sealed SCF outputs (S, the converged Fock F). C = X C' via rhf_diagonalize —
+//   reuses the exact diagonalization path RHF itself uses (no re-implementation).
+pub fn casci_mo_coeff(S: [float], F: [float], n: int) -> [float] {
+    let xmat = rhf_s_inv_sqrt(S, n)
+    let dg = rhf_diagonalize(F, xmat, n)
+    return dg[0]
+}
+
+// Build the m²×m² CI Hamiltonian over determinants |a_α b_β⟩ and diagonalize.
+//   h    : m×m MO 1-electron integrals (casci_mo_hcore)
+//   moeri: m^4 MO 2-electron tensor   (casci_mo_eri, chemists' (pq|rs))
+//   e_nuc: nuclear repulsion (added to the electronic CI eigenvalue)
+//   Returns [ e_total, e_ci_elec, weights(length m², c_ab²), c_diag(length m,
+//            the closed-shell determinant weights c_aa²) ].
+//   The lowest eigenvalue is the singlet ground state; c_diag[a] = c_aa² is the
+//   weight of the |a_α a_β⟩ closed-shell determinant — TWO large c_diag entries
+//   at a stretched bond is the multi-reference (static-correlation) signature.
+pub fn casci_2e_solve(h: [float], moeri: [float], m: int, e_nuc: float) -> [any] {
+    let dim = m * m
+    // assemble the CI Hamiltonian H_{(a,b),(c,d)}
+    let mut H = []
+    let mut a = 0
+    while a < m {
+        let mut b = 0
+        while b < m {
+            let mut c = 0
+            while c < m {
+                let mut d = 0
+                while d < m {
+                    // one-electron part (δ_bd on β, δ_ac on α)
+                    let mut one = 0.0
+                    if b == d {
+                        if a == c { one = h[a * m + a] + h[b * m + b] } else { one = h[a * m + c] }
+                    } else {
+                        if a == c { one = h[b * m + d] }
+                    }
+                    // two-electron part: opposite-spin Coulomb (ac|bd), no exchange
+                    let two = moeri[((a * m + c) * m + b) * m + d]
+                    H.push(one + two)
+                    d = d + 1
+                }
+                c = c + 1
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    let eg = eigh(H, dim)
+    let vals = eg[0]                       // descending
+    let vecs = eg[1]                       // vecs[k] = k-th eigvec (length dim)
+    // lowest eigenvalue = ascending index 0 = descending index dim-1
+    let e_ci_elec = vals[dim - 1]
+    let gs = vecs[dim - 1]                 // ground-state CI vector
+    let mut weights = []
+    let mut k = 0
+    while k < dim {
+        weights.push(gs[k] * gs[k])
+        k = k + 1
+    }
+    // closed-shell determinant weights c_aa² (the |a_α a_β⟩ diagonal of the grid)
+    let mut c_diag = []
+    let mut aa = 0
+    while aa < m {
+        let idx = aa * m + aa
+        c_diag.push(gs[idx] * gs[idx])
+        aa = aa + 1
+    }
+    let e_total = e_ci_elec + e_nuc
+    return [e_total, e_ci_elec, weights, c_diag]
+}
+
+// End-to-end CASCI driver: AO inputs + converged RHF Fock → active-space full-CI.
+//   S, hcore : n×n AO overlap & core Hamiltonian
+//   F        : converged RHF Fock (n×n) — recovers the RHF MO-coeffs
+//   eri      : AO n^4 chemists' (μν|σλ) tensor
+//   m        : number of active orbitals (the first m MOs; CAS(2,m) singlet, 2 e)
+//   e_nuc    : nuclear repulsion
+//   Returns the casci_2e_solve tuple [e_total, e_ci_elec, weights, c_diag].
+pub fn casci_2e_rhf(
+    S: [float], hcore: [float], F: [float], eri: [float],
+    n: int, m: int, e_nuc: float
+) -> [any] {
+    let C = casci_mo_coeff(S, F, n)
+    let h = casci_mo_hcore(C, hcore, n, m)
+    let moeri = casci_mo_eri(C, eri, n, m)
+    return casci_2e_solve(h, moeri, m, e_nuc)
+}

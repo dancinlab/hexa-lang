@@ -1,0 +1,198 @@
+// @ci_gate — deterministic · network-free · MOLSCF CASCI g5 gate
+//
+// casci_selftest.hexa — QFORGE MOLSCF brick 13/N (round-10) CASCI g5 gate. The
+// MULTI-REFERENCE / static-correlation brick. It assembles the H₂/STO-3G integral
+// set LIVE from brick 1/2/3 at TWO geometries (equilibrium R=1.4 bohr and a
+// STRETCHED R=5.0 bohr), runs RHF, then runs CAS(2,2) full-CI on top, and shows:
+//
+//   (a) CASCI == FCI anchor: H₂/STO-3G CAS(2,2) E @1.4 bohr == FCI/STO-3G        🔵
+//       (CAS(2,2) IS the full 2-orbital space for H₂ → exact-in-basis == CCSD-2e)
+//   (b) STATIC-CORRELATION WIN: at R=5.0 bohr RHF is qualitatively WRONG (far too
+//       high) while CAS(2,2)=FCI is correct; the CI ground state has TWO large    🔵
+//       determinant weights at stretch (multi-reference signature) vs ~1 at eq.
+//   (c) CASCI ≤ RHF at every geometry (CI is variational over the determinants)  🔵
+//   (d) regression: r1..r9 selftests untouched (checked by the suite runner)     🔵
+//
+// Independent reference (pyscf 2.13.1 RHF+FCI/STO-3G, ζ=1.0 H1s):
+//   R=1.4 bohr:  E_RHF=−1.11671433  E_FCI=−1.13727594  c0²=0.9873 c1²=0.0127
+//   R=5.0 bohr:  E_RHF=−0.68641592  E_FCI=−0.93488935  c0²=0.5728 c1²=0.4272
+//   (the 2×2 CAS(2,2) Slater–Condon model reproduces FCI to |Δ|≤4e-16 at both —
+//    verified in python against pyscf FCI before this hexa port; see commit body)
+//
+// HONEST (d6): every CASCI energy is printed VERBATIM. This is CASCI (CI over
+// FIXED RHF orbitals), NOT full CASSCF (no orbital re-optimization) — named as
+// round-11. The CAS(2,2)==FCI anchor + the RHF-breaks/CAS-fixes demonstration is
+// the wall-breaking multi-reference content.
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/molscf/casci_selftest.hexa
+// PASS: "qforge_molscf_casci_selftest PASS".
+use "stdlib/qforge/molscf/gaussian_integrals"
+use "stdlib/qforge/molscf/coulomb_integrals"
+use "stdlib/qforge/molscf/rhf"
+use "stdlib/qforge/molscf/casci"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+// contracted ERI (μν|σλ) — 4-fold primitive sum (same as the RHF selftest).
+fn eri_contracted(
+    al: [float], co: [float], ax: [float],
+    bl: [float], bo: [float], bx: [float],
+    cl: [float], cco: [float], cx: [float],
+    dl: [float], dco: [float], dx: [float]
+) -> float {
+    let mut v = 0.0
+    let mut i = 0
+    while i < len(al) {
+        let mut j = 0
+        while j < len(bl) {
+            let mut k = 0
+            while k < len(cl) {
+                let mut l = 0
+                while l < len(dl) {
+                    let w = co[i] * bo[j] * cco[k] * dco[l]
+                    v = v + w * cint_eri_s(al[i], ax, bl[j], bx, cl[k], cx, dl[l], dx)
+                    l = l + 1
+                }
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return v
+}
+
+// Build the full H₂/STO-3G integral set at bond length R (bohr) + run RHF + CASCI.
+//   Returns [ e_rhf, e_cas, e_ci_elec, c_diag (length 2: c0² c1²) ].
+fn h2_rhf_casci(R: float) -> [any] {
+    let alpha = [3.42525091, 0.62391373, 0.16885540]
+    let coeff = [0.15432897, 0.53532814, 0.44463454]
+    let A = [0.0, 0.0, 0.0]
+    let B = [R, 0.0, 0.0]
+    let n = 2
+    let z = 1.0
+    let n_occ = 1
+
+    let s11 = gint_overlap_contracted(alpha, coeff, A, alpha, coeff, A)
+    let s12 = gint_overlap_contracted(alpha, coeff, A, alpha, coeff, B)
+    let s22 = gint_overlap_contracted(alpha, coeff, B, alpha, coeff, B)
+    let S = [s11, s12, s12, s22]
+
+    let t11 = gint_kinetic_contracted(alpha, coeff, A, alpha, coeff, A)
+    let t12 = gint_kinetic_contracted(alpha, coeff, A, alpha, coeff, B)
+    let t22 = gint_kinetic_contracted(alpha, coeff, B, alpha, coeff, B)
+
+    let v11 = cint_nuclear_contracted(alpha, coeff, A, alpha, coeff, A, z, A) + cint_nuclear_contracted(alpha, coeff, A, alpha, coeff, A, z, B)
+    let v12 = cint_nuclear_contracted(alpha, coeff, A, alpha, coeff, B, z, A) + cint_nuclear_contracted(alpha, coeff, A, alpha, coeff, B, z, B)
+    let v22 = cint_nuclear_contracted(alpha, coeff, B, alpha, coeff, B, z, A) + cint_nuclear_contracted(alpha, coeff, B, alpha, coeff, B, z, B)
+
+    let hcore = [t11 + v11, t12 + v12, t12 + v12, t22 + v22]
+
+    let centers = [A, B]
+    let mut eri = []
+    let mut mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu < n {
+            let mut sg = 0
+            while sg < n {
+                let mut lm = 0
+                while lm < n {
+                    let e = eri_contracted(alpha, coeff, centers[mu], alpha, coeff, centers[nu], alpha, coeff, centers[sg], alpha, coeff, centers[lm])
+                    eri.push(e)
+                    lm = lm + 1
+                }
+                sg = sg + 1
+            }
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+
+    let e_nuc = z * z / R
+
+    let out = rhf_scf(S, hcore, eri, n, n_occ, e_nuc, 100, 1.0e-10, 1.0)
+    let e_rhf = out[0]
+    let F = out[4]
+
+    // CAS(2,2): m=2 active orbitals (both MOs), 2 electrons → full space → FCI.
+    let cas = casci_2e_rhf(S, hcore, F, eri, n, 2, e_nuc)
+    let e_cas = cas[0]
+    let e_ci_elec = cas[1]
+    let c_diag = cas[3]
+    return [e_rhf, e_cas, e_ci_elec, c_diag]
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ══ equilibrium R = 1.4 bohr ══════════════════════════════════════════════
+    let eq = h2_rhf_casci(1.4)
+    let e_rhf_eq = eq[0]
+    let e_cas_eq = eq[1]
+    let cd_eq = eq[3]
+    println("── H₂/STO-3G CAS(2,2) @ R=1.4 bohr (equilibrium) ──")
+    println("  E_RHF      = " + to_string(e_rhf_eq) + "  Ha   (pyscf −1.11671433)")
+    println("  E_CAS(2,2) = " + to_string(e_cas_eq) + "  Ha   (pyscf FCI −1.13727594)")
+    println("  c0² = " + to_string(cd_eq[0]) + "   c1² = " + to_string(cd_eq[1]) + "   (pyscf 0.9873 / 0.0127)")
+
+    // ══ stretched R = 5.0 bohr (the static-correlation WALL) ══════════════════
+    let st = h2_rhf_casci(5.0)
+    let e_rhf_st = st[0]
+    let e_cas_st = st[1]
+    let cd_st = st[3]
+    println("── H₂/STO-3G CAS(2,2) @ R=5.0 bohr (STRETCHED — RHF breaks) ──")
+    println("  E_RHF      = " + to_string(e_rhf_st) + "  Ha   (pyscf −0.68641592)")
+    println("  E_CAS(2,2) = " + to_string(e_cas_st) + "  Ha   (pyscf FCI −0.93488935)")
+    println("  c0² = " + to_string(cd_st[0]) + "   c1² = " + to_string(cd_st[1]) + "   (pyscf 0.5728 / 0.4272)")
+    println("  E_RHF − E_CAS (RHF error) = " + to_string(e_rhf_st - e_cas_st) + "  Ha (RHF too high)")
+
+    // ══ (a) CAS(2,2) == FCI anchor @ equilibrium ══════════════════════════════
+    //   tol 1e-5 = the INTEGRAL-limited precision (brick-3 contracted ERIs agree
+    //   with Szabo to ~1e-5, same as the sealed RHF anchor |Δ|=1.2e-5). The CAS(2,2)
+    //   Slater–Condon CI itself is EXACT (|Δ|≤4e-16 vs pyscf FCI in the python xval).
+    fails = fails + _ck_close("(a) CAS(2,2) E @1.4 == FCI/STO-3G −1.13727594", e_cas_eq, 0.0 - 1.13727594, 1.0e-5)
+    fails = fails + _ck_close("(a) RHF E @1.4 == pyscf −1.11671433 (baseline)", e_rhf_eq, 0.0 - 1.11671433, 1.0e-4)
+
+    // ══ (b) static-correlation WIN @ stretch ══════════════════════════════════
+    //   CAS(2,2) == FCI at stretch (exact); RHF is far too high.
+    fails = fails + _ck_close("(b) CAS(2,2) E @5.0 == FCI/STO-3G −0.93488935", e_cas_st, 0.0 - 0.93488935, 1.0e-6)
+    fails = fails + _ck_close("(b) RHF E @5.0 == pyscf −0.68641592 (single-det, WRONG)", e_rhf_st, 0.0 - 0.68641592, 1.0e-4)
+    //   RHF is too HIGH by ~0.25 Ha at stretch — the qualitative single-determinant failure.
+    fails = fails + _ck_true("(b) RHF error @5.0 > 0.2 Ha (qualitative single-det failure)", (e_rhf_st - e_cas_st) > 0.2)
+    //   MULTI-REFERENCE signature: BOTH determinant weights large at stretch (c0² near 0.57, c1² near 0.43).
+    fails = fails + _ck_true("(b) MULTI-REF @5.0: c1² > 0.3 (second det significant)", cd_st[1] > 0.3)
+    fails = fails + _ck_true("(b) MULTI-REF @5.0: c0² < 0.65 (NOT single-determinant)", cd_st[0] < 0.65)
+    fails = fails + _ck_close("(b) det weights @5.0 normalized c0²+c1²≈1", cd_st[0] + cd_st[1], 1.0, 1.0e-9)
+    //   contrast: at EQUILIBRIUM the ground state IS essentially single-reference (c0²≈0.99).
+    fails = fails + _ck_true("(b) SINGLE-REF @1.4: c0² > 0.95 (dominant det, contrast)", cd_eq[0] > 0.95)
+    fails = fails + _ck_true("(b) SINGLE-REF @1.4: c1² < 0.05 (second det tiny, contrast)", cd_eq[1] < 0.05)
+
+    // ══ (c) CASCI variational: E_CAS ≤ E_RHF at every geometry ════════════════
+    fails = fails + _ck_true("(c) E_CAS ≤ E_RHF @1.4 (variational, eq)", e_cas_eq <= e_rhf_eq)
+    fails = fails + _ck_true("(c) E_CAS ≤ E_RHF @5.0 (variational, stretch)", e_cas_st <= e_rhf_st)
+    //   the static-correlation energy recovered is FAR larger at stretch than at eq.
+    fails = fails + _ck_true("(c) correlation @5.0 ≫ @1.4 (static corr grows on stretch)", (e_rhf_st - e_cas_st) > (e_rhf_eq - e_cas_eq))
+
+    // ══ (d) generic CASCI guards — MO integral transform sanity ═══════════════
+    //   Identity transform: C=I → MO h == AO hcore (the transform reduces correctly).
+    let I2 = [1.0, 0.0, 0.0, 1.0]
+    let hao = [-1.2, -0.5, -0.5, -1.1]
+    let hmo = casci_mo_hcore(I2, hao, 2, 2)
+    fails = fails + _ck_close("(d) MO transform C=I reduces h_mo==h_ao [0]", hmo[0], hao[0], 1.0e-12)
+    fails = fails + _ck_close("(d) MO transform C=I reduces h_mo==h_ao [1]", hmo[1], hao[1], 1.0e-12)
+
+    if fails == 0 {
+        println("qforge_molscf_casci_selftest PASS")
+    } else {
+        println("qforge_molscf_casci_selftest FAIL (" + to_string(fails) + ")")
+    }
+}
