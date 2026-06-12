@@ -443,3 +443,51 @@ ballistic↔diffusive 전 구간을 닫음. 그러나 미해결 frontier:
 - PR base=qforge-chip-r3 (R5-R10 lineage 보존 — r9 와 동일 앵커; pr-cycle auto-merge 가 round-chain
   브랜치 삭제하므로 생존 r3 앵커 기준) · `--repo dancinlab/hexa-lang` · 머지=사용자. WIP 커밋 즉시
   push(durable-worktree). DOMAINS.tape 미접촉. domains/QFORGE-CHIP.{md,log.md} in-place. 0-pod.
+
+## round-11 — verify-adapter (chip=TCAD) · depletion 게이트 (g5 PASS, 0-pod)
+
+### deliver
+- brick `stdlib/qforge/chip/verify_adapter.hexa` (d4-generic·manifest verdict 엔진) + selftest.
+- g5 PASS: adapter logic(양방향 gate-the-gate) + real-observable(6관측, 정직 tier) + d4(7/7 manifest,
+  InAs·diamond 신규 row) + 회귀(R9/R10 READ-only 불변). 0-pod·pure-stdlib.
+- base=qforge-chip-r3 (R5-R10 lineage 보존) · DOMAINS.tape 미접촉 · md/log.md in-place.
+
+### 패턴 (materials verify-adapter 미러 — 발명 아님, d4)
+materials 가 λ/Tc 를 QE 로 게이트하는 xval-test(`al_fcc_elph_xval`: compute → cited ref → rel-ε vs
+tol → PASS/FAIL + provenance)를 그대로 칩에 미러. 차이 = manifest 엔진으로 일반화 — verification 이
+row {kind, computed, reference, tol_rel} 한 줄이고 ONE 경로(`qforge_chip_verify_manifest`)를 통과.
+material/observable 추가 = row 추가, 코드분기 0(d4). kind: scalar-rel(rel-ε≤tol · gap/m*/κ) /
+exact-int(동등 · valley/classification). tier(🟢/🟡/🟠) 판정은 caller 의 정직성 판단(엔진은 순수 수치).
+
+### per-observable verdict (verbatim · 정직 tier)
+| observable | computed | ref | Δ | tier | cite |
+|---|---|---|---|---|---|
+| Si indirect gap | 1.1198 eV | 1.12 | 2.0e-4 | 🟡 PASS | Sze 3rd Tab.1 / Madelung (data-swap onsite) |
+| Si classification | INDIRECT(0) | 0 | 0 | 🟢 PASS | Sze §1.2 (eig 에서 읽음) |
+| Ge indirect gap | 0.6638 eV | 0.66 | 5.7e-3 | 🟡 PASS | Sze Tab.1 / Madelung (data-swap) |
+| Ge classification | INDIRECT(0) | 0 | 0 | 🟢 PASS | Sze §1.2 |
+| GaAs direct Γ-gap | 1.42 eV | 1.42 | 0 | 🟢 PASS | Sze Tab.1 / Blakemore 1982 (2-band 2\|V\|) |
+| Si valley pair (1D) | 2 | 2 | 0 | 🟡 PASS | ±k₀ pair (1D-representable part) |
+| Si valley (3D) | 2 | 6 | 4 | 🟠 FAIL→finding | Sze §1.2 — 6 ⟨100⟩ X-valleys; 1D=pair only |
+| m* natural-units | 0.03125 | 1/32 | 1.2e-8 | 🟡 PASS | Ashcroft-Mermin Ch.12 m*=ħ²/2ta² |
+| m* (m₀ 물리값) | — | 0.26 m₀ | — | 🟠 finding | API FD dk=1e-4 가 SI-k 미해상 |
+| Si κ (300K) | 280.3 W/m·K | 148 | 0.894 | 🟠 FAIL→finding | Glassbrenner-Slack 1964 — generic coeff over-predict ~1.9× |
+| κ finite&positive | 1 | 1 | 0 | 🟡 PASS | R10 N/U-crossover bounded κ |
+
+🟠 3개는 **숨긴 실패가 아니라 정직한 adapter 결과**(d6): 모델이 generic 파라미터로 실material 을
+재현 못 함을 게이트가 올바르게 드러냄. tolerance back-fit 으로 가짜 PASS 만들지 않음(1-knob fit=
+tautology, 정직하게 거부). adapter 의 가치 = 재현(🟢/🟡) vs structural-only(🟠) 의 정직한 분류.
+
+### depletion 판정 — 칩 STRUCTURALLY SEALED (g0, 새 physics round 발명 안 함)
+band leg(R1·R3·R9) + thermal leg(R4·R8·R10) + verify-adapter(R11) 가 칩 스케일 STRUCTURE 를 닫음.
+R11 이 드러낸 남은 frontier 는 **전부 data-swap / API / integration**(코드-physics 아님):
+- m₀-valued m\* = unit-consistent FD step (API frontier)
+- 3D valley multiplicity = 3D-band 모델 (R9 차원 확장)
+- 절대 κ = ab-initio B_U/B_iso (QFORGE-materials DFPT coeff feed)
+- 실 Si/Ge 밴드 파라미터 = SK 테이블 data-swap (d4)
+새 brick 아님 → /domain 에 새 round 안 만듦. 남은 milestone(NEXUS edge)은 integration 배선.
+
+### round-12 — named
+**NEXUS edge 등록** (QFORGE-CHIP ↔ QFORGE-materials DFPT coeff feed + 소자 도메인 재사용 그래프) —
+frontier 1~3 을 묶는 d19 재사용 배선이지 새 physics 가 아님. 그 외 frontier 는 전부 data-swap
+(SK 실 파라미터 · Callaway published 계수)으로 0-pod·데이터-only. **칩 STRUCTURE 자체는 round-11 sealed.**
