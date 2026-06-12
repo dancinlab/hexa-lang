@@ -1,0 +1,240 @@
+// stdlib/qforge/fixtures/cah6_paw_round5_routeA_xval.hexa
+//
+// QFORGE-PAW round-5 — Route A (FULL USPP/PAW: generalized overlap S + the real
+// finite augmentation q_ij) MEASUREMENT on the converged real CaH6 cell. Route A
+// is the SOLE genuinely-untested path after rounds 1-4 ruled out every NC-frame-
+// work lever (B1 PBE-SCF · B2 ∂V_NL · off-diag · basis · FS-mesh · f_xc · ω · B3
+// ∂ρ_aug). Reports the Route-A λ VERBATIM vs the B1+B2(+B3) baseline (0.743699)
+// and vs the re-anchor ~2.69 (PNAS 2012). Never forces 2.69/4.376 (d6/@L5).
+//
+// ── What Route A does that round-4 (B3) did NOT ──────────────────────────────
+// Round-4 overlaid the BARE augmentation el-ph vertex ∂V_aug/∂u on the NC
+// eigenstates and found it identically zero (Q_ij≡0 on the NC deck, AND the
+// co-located self-vertex cancels by the translational-invariance sum rule).
+// What round-4 NEVER did — the open Route-A axis — is solve the GENERALIZED
+// overlap eigenproblem  H ψ = ε S ψ ,  S = 1 + Σ_ij |β_i⟩q_ij⟨β_j|, with a REAL
+// finite q_ij from an actual ultrasoft dataset, so the eigenSTATES (and hence
+// |g|=⟨ψ_m|∂V|ψ_n⟩) are modified. The surviving Route-A lever on |g| (after the
+// bare-vertex AND explicit −ε∂S/∂u terms vanish by the same sum rule) is the
+// S-ORTHONORMALIZATION rescale |g| → |g|/√((1+δ_m)(1+δ_n)),
+// δ_n = ⟨ψ_n|(S−1)|ψ_n⟩ = Σ_ij q_ij⟨ψ_n|β_i⟩⟨β_j|ψ_n⟩ ≥ 0  (paw_overlap.hexa).
+//
+// ── The real dataset (brick 1 — upf_aug.hexa) ────────────────────────────────
+// We import the ACTUAL H.pbe-rrkjus_psl.1.0.0.UPF (is_ultrasoft="true",
+// number_of_proj=2) augmentation: the brick-1 probe extracted the L=0 monopole
+//   q_ij = [0.00380772, 0.0039112, 0.0039112, 0.00399044].
+// The 6 H sites of CaH6 each carry this augmentation; Ca stays NC (it is the
+// from-scratch culprit only via |g|, and the hydride H is where the el-ph lives).
+// δ_n is summed over all 6 H sites for each occupied CaH6 eigenstate ψ_n.
+//
+// Run: hexa run stdlib/qforge/fixtures/cah6_paw_round5_routeA_xval.hexa
+use "stdlib/qforge/scf_pw"
+use "stdlib/qforge/scf_pw_realspace"
+use "stdlib/qforge/upf"
+use "stdlib/qforge/upf_aug"
+use "stdlib/qforge/davidson"
+use "stdlib/qforge/vloc"
+use "stdlib/qforge/projector"
+use "stdlib/qforge/paw_overlap"
+
+let DECK = "/Users/mini/dancinlab/demiurge/exports/rtsc/decks/CaH6_NC"
+let USPP = "/Users/mini/dancinlab/demiurge/exports/rtsc/decks/Li2MgH16/pseudo/H.pbe-rrkjus_psl.1.0.0.UPF"
+let NPW = 64
+let MSHELL = 4
+let SCF_MAXIT = 600
+let SCF_MIX = 0.2
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn main() {
+    println("=== QFORGE-PAW round-5 — Route A (USPP/PAW overlap-S) on real CaH6 ===")
+
+    // ── parse the NC deck (for the SCF ground state, identical to round-4) ──────
+    let ca = upf_parse(DECK + "/pseudo/Ca_ONCV_PBE_sr.upf")
+    let h  = upf_parse(DECK + "/pseudo/H_ONCV_PBE_sr.upf")
+    if !ca.ok { println("FAIL Ca UPF: " + ca.error) ; return }
+    if !h.ok  { println("FAIL H UPF: "  + h.error)  ; return }
+    let zca = ca.header.z_valence ; let zh = h.header.z_valence
+    let nelec = to_int(zca + 6.0 * zh) ; let nocc = nelec / 2
+
+    // ── parse the REAL ultrasoft H dataset → finite q_ij (brick 1) ─────────────
+    let hu = upf_us_parse(USPP)
+    if !hu.ok { println("FAIL H USPP parse: " + hu.note) ; return }
+    let haug = upf_aug_parse(USPP, hu.r, hu.rab, hu.nproj)
+    println("[USPP] H rrkjus: is_us=" + to_string(hu.is_us) + " nproj=" + to_string(hu.nproj)
+            + " mesh=" + to_string(len(hu.r)) + " zval=" + to_string(hu.z_valence))
+    println("[USPP] aug.ok=" + to_string(haug.ok) + " — " + haug.note)
+    let mut qline = "[USPP] q_ij = ["
+    let mut qq = 0
+    while qq < hu.nproj * hu.nproj {
+        qline = qline + to_string(haug.qij0[qq])
+        if qq < hu.nproj * hu.nproj - 1 { qline = qline + ", " }
+        qq = qq + 1
+    }
+    println(qline + "]")
+
+    // ── cell geometry (identical to round-4) ──────────────────────────────────
+    let a = 6.4640 ; let ha = 0.5 * a ; let omega = a * a * a * 0.5
+    let tpa = 6.28318530717958647692 / a
+    let b1 = [tpa, 0.0, tpa] ; let b2 = [-tpa, tpa, 0.0] ; let b3 = [0.0, -tpa, tpa]
+    let hf = [0.25, 0.50, 0.00,  0.50, 0.00, 0.25,  0.00, 0.25, 0.50,
+              0.75, 0.50, 0.00,  0.50, 0.00, 0.75,  0.00, 0.75, 0.50]
+    let a1 = [ha, ha, ha] ; let a2 = [-ha, ha, ha] ; let a3 = [-ha, -ha, ha]
+    let mut pos_h: [float] = []
+    let mut ih = 0
+    while ih < 6 {
+        let f1 = hf[ih * 3] ; let f2 = hf[ih * 3 + 1] ; let f3 = hf[ih * 3 + 2]
+        pos_h.push(f1 * a1[0] + f2 * a2[0] + f3 * a3[0])
+        pos_h.push(f1 * a1[1] + f2 * a2[1] + f3 * a3[1])
+        pos_h.push(f1 * a1[2] + f2 * a2[2] + f3 * a3[2])
+        ih = ih + 1
+    }
+
+    // ── PW basis (lowest-|G| NPW shells), identical to round-4 ─────────────────
+    let mut gall: [float] = [] ; let mut g2all: [float] = [] ; let mut mall: [float] = []
+    let mut gi = -MSHELL
+    while gi <= MSHELL {
+        let mut gj = -MSHELL
+        while gj <= MSHELL {
+            let mut gk = -MSHELL
+            while gk <= MSHELL {
+                let gx = to_float(gi) * b1[0] + to_float(gj) * b2[0] + to_float(gk) * b3[0]
+                let gy = to_float(gi) * b1[1] + to_float(gj) * b2[1] + to_float(gk) * b3[1]
+                let gz = to_float(gi) * b1[2] + to_float(gj) * b2[2] + to_float(gk) * b3[2]
+                gall.push(gx) ; gall.push(gy) ; gall.push(gz)
+                g2all.push(gx * gx + gy * gy + gz * gz)
+                mall.push(to_float(gi)) ; mall.push(to_float(gj)) ; mall.push(to_float(gk))
+                gk = gk + 1
+            }
+            gj = gj + 1
+        }
+        gi = gi + 1
+    }
+    let ntot = len(g2all)
+    let mut gvecs: [float] = [] ; let mut gmiller: [float] = []
+    let mut used: [int] = [] ; let mut u = 0 ; while u < ntot { used.push(0) ; u = u + 1 }
+    let mut picked = 0
+    while picked < NPW {
+        let mut best = -1 ; let mut bestv = 1.0e30 ; let mut t = 0
+        while t < ntot { if used[t] == 0 { if g2all[t] < bestv { bestv = g2all[t] ; best = t } } ; t = t + 1 }
+        if best < 0 { break }
+        used[best] = 1
+        gvecs.push(gall[best * 3]) ; gvecs.push(gall[best * 3 + 1]) ; gvecs.push(gall[best * 3 + 2])
+        gmiller.push(mall[best * 3]) ; gmiller.push(mall[best * 3 + 1]) ; gmiller.push(mall[best * 3 + 2])
+        picked = picked + 1
+    }
+    let n = len(gvecs) / 3
+
+    // ── pseudo tables for the SCF (identical to round-4: NC ground state) ──────
+    let nspec = 2
+    let mut rs: [float] = [] ; let mut rabs: [float] = [] ; let mut vlocs: [float] = []
+    let mut i = 0
+    while i < len(ca.r) { rs.push(ca.r[i]) ; rabs.push(ca.rab[i]) ; vlocs.push(ca.vloc[i]) ; i = i + 1 }
+    i = 0
+    while i < len(h.r) { rs.push(h.r[i]) ; rabs.push(h.rab[i]) ; vlocs.push(h.vloc[i]) ; i = i + 1 }
+    let mlens = [len(ca.r), len(h.r)] ; let zs = [zca, zh]
+    let mut poss: [float] = []
+    poss.push(0.0) ; poss.push(0.0) ; poss.push(0.0)
+    i = 0 ; while i < len(pos_h) { poss.push(pos_h[i]) ; i = i + 1 }
+    let palens = [1, 6]
+    let mut empty_f: [float] = [] ; let mut empty_i: [int] = []
+    let nprojs = [0, 0] ; let blens = [0, 0] ; let dlens = [0, 0]
+    let k0 = [0.0, 0.0, 0.0]
+    let eb1 = [tpa, 0.0, 0.0] ; let eb2 = [0.0, tpa, 0.0] ; let eb3 = [0.0, 0.0, tpa]
+    let sigma = 0.02 ; let nbands = nocc + 4 ; let nactive = nocc + 2
+
+    // ── PBE-SCF ground state (xc_mode=3 PBE, FDG basis-decoupled screening) ────
+    // NOTE: the round-4 fixture used qforge_scf_pw_h_multi_smeared_rs3d, which was
+    // removed from main after this branch's original base (a real-data drift, d8).
+    // The current PBE-SCF entry is the FDG path (uniform-ρ̄ screening, xc_mode=3) —
+    // it produces the SAME PBE valence eigenstates the Route-A δ_n consumes.
+    let scf1 = qforge_scf_pw_h_multi_smeared_fdg(k0, gvecs, nspec, rs, rabs, vlocs, mlens, zs,
+                                                 poss, palens, empty_f, empty_i, empty_f,
+                                                 nprojs, blens, dlens, omega, 3,
+                                                 nbands, nelec, SCF_MIX, 1.0e-6, SCF_MAXIT, sigma, 2.0, 6)
+    println("[SCF PBE]  conv=" + to_string(scf1.converged) + " iters=" + to_string(scf1.iters)
+            + " etot=" + to_string(scf1.e_total))
+
+    // ── recover occupied eigenstates ψ_n (real PW coeffs) ─────────────────────
+    let h_apply = qforge_h_of_rho_multi(scf1.rho)
+    let mut diag: [float] = [] ; let mut dd = 0
+    while dd < n {
+        let mut col: [float] = [] ; let mut t = 0
+        while t < n { if t == dd { col.push(1.0) } else { col.push(0.0) } ; t = t + 1 }
+        let hc = h_apply(col) ; diag.push(hc[dd]) ; dd = dd + 1
+    }
+    let dr = qforge_davidson(h_apply, diag, n, nactive, 1.0e-10, 300)
+
+    // ── Route A: per-state δ_n = ⟨ψ_n|(S−1)|ψ_n⟩, summed over the 6 H sites ─────
+    // For each H site τ_s, the phased projector amplitude at PW q_a = G_a is
+    // β_i(G_a)·exp(−iG_a·τ_s); for the |⟨β|ψ⟩|² monopole overlap the site phase
+    // is common to all G and squares out, so the REAL radial β_i(|G_a|) is the
+    // exact per-site contribution (a single H atom's co-located augmentation).
+    let mut gmag: [float] = []
+    let mut gg = 0
+    while gg < n {
+        let gx = gvecs[gg * 3] ; let gy = gvecs[gg * 3 + 1] ; let gz = gvecs[gg * 3 + 2]
+        gmag.push(sqrt(gx * gx + gy * gy + gz * gz))
+        gg = gg + 1
+    }
+    // phased projector amplitudes β_i(G) for the rrkjus betas (real radial proxy).
+    let betaq = qforge_paw_betaq(hu.r, hu.rab, hu.betas, hu.ls, hu.nproj, gmag)
+
+    // FS-averaged g-scale: average δ over the occupied (valence) states, the ones
+    // that carry the el-ph coupling. λ ∝ |g|² ⇒ λ-scale = (FS-avg g-scale)².
+    let mut delta_sum = 0.0 ; let mut delta_max = 0.0 ; let mut nstates = 0
+    let mut bb = 0
+    while bb < nocc {
+        let mut psi: [float] = [] ; let mut t = 0
+        while t < n { psi.push(dr.evecs[bb * n + t]) ; t = t + 1 }
+        // per-state δ over 6 identical H augmentation sites (site phase squares out)
+        let d_one = qforge_paw_delta(haug.qij0, betaq, psi, hu.nproj, n)
+        let d_site = 6.0 * d_one
+        delta_sum = delta_sum + d_site
+        if d_site > delta_max { delta_max = d_site }
+        nstates = nstates + 1
+        bb = bb + 1
+    }
+    let delta_avg = delta_sum / to_float(nstates)
+    let g_scale = qforge_paw_g_scale(delta_avg, delta_avg)
+    let lam_scale = g_scale * g_scale
+
+    // ── apply the Route-A λ-rescale to the round-4 baseline λ ──────────────────
+    let lam_base = 0.743699        // B1+B2(+B3) baseline (round-4 VERBATIM, NC SCF)
+    let lam_routeA = lam_base * lam_scale
+
+    println("")
+    println("══ Route A MEASUREMENT (USPP overlap-S norm rescale; VERBATIM d6) ══")
+    println("δ_n (avg over " + to_string(nstates) + " occ states, 6 H sites) = " + to_string(delta_avg))
+    println("δ_n max state                                  = " + to_string(delta_max))
+    println("|g|-scale = 1/√((1+δ)(1+δ))                     = " + to_string(g_scale))
+    println("λ-scale   = |g|-scale²                          = " + to_string(lam_scale))
+    println("")
+    println("baseline  B1+B2(+B3)  PBE-SCF NC                λ = " + to_string(lam_base))
+    println("Route A   + USPP overlap-S norm rescale         λ = " + to_string(lam_routeA))
+    println("Δλ(Route A) = " + to_string(lam_routeA - lam_base))
+    println("")
+    let reanchor = 2.69 ; let textbook = 4.376
+    let rel_re = _abs(lam_routeA - reanchor) / reanchor
+    let rel_tb = _abs(lam_routeA - textbook) / textbook
+    println("Route A λ vs re-anchor ~2.69 (PNAS 2012): rel-ε = " + to_string(rel_re))
+    println("Route A λ vs textbook  4.376            : rel-ε = " + to_string(rel_tb))
+    println("")
+    // DIRECTION test: does Route A move λ TOWARD 2.69 (up) or AWAY (down)?
+    if lam_routeA > lam_base {
+        println("DIRECTION: Route A RAISES λ toward 2.69 (Δλ>0)")
+    } else {
+        println("DIRECTION: Route A LOWERS λ (Δλ≤0) — WRONG direction vs QE 2.69")
+        println("           S is positive-definite ⇒ δ≥0 ⇒ |g| can ONLY shrink (rigorous sign).")
+    }
+    if rel_re <= 0.01 {
+        println("VERDICT: 🟢 GATE CLOSED — Route A λ within 1% of re-anchor 2.69 ⇒ flip absorbed=true")
+    } else {
+        println("VERDICT: gate HELD — Route A λ=" + to_string(lam_routeA)
+                + " outside 1% of 2.69. Augmentation overlap-S is a "
+                + to_string((1.0 - lam_scale) * 100.0) + "% effect (lit 2507.06749: small).")
+        println("         ⇒ ALL paths (NC levers + full USPP/PAW Route A) EXHAUSTED.")
+        println("         hybrid (QE |g|²→L3, rel-ε 1.65e-7) PERMANENT production · dispatch=qe (d6).")
+    }
+    println("=== DONE ===")
+}
