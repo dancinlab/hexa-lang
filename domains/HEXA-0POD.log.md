@@ -1,5 +1,41 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-67 DONE: COMPLETE the dereg-loop closure across EVERY builtin-ADVERTISING surface · 6 surfaces enumerated + verbatim-grepped all 10 OP-62 orphans per surface · lsp.hexa get_builtins() was the SOLE surface that ever advertised any orphan (OP-65 already pruned `tension_link`); ALL 5 others verbatim 0-hit CLEAN · 🟢 PROVEN-COMPLETE, 0 new stale entries this round (honest all-clean = SUCCESS) · no code edited · $0 · 0-pod · NO GPU
+- TASK: OP-62 (#3175) deregistered 10 pure-orphan builtins from self/env.hexa env_new() (try_float,
+  is_whitespace, meta_laws, phi_predict, tension_link, zip_arr, enumerate_arr, input_all,
+  load_weights_bin, mmap_weights) but its caller sweep EXPLICITLY EXCLUDED the roster files. OP-65
+  (#3184) then found `tension_link` still LIVE in self/lsp.hexa get_builtins() — ONE advertising
+  surface — and pruned it. lsp.hexa is only one surface that ADVERTISES (lists builtin names as DATA,
+  vs calls them). OP-67 sweeps EVERY advertising surface to close the dereg loop completely.
+- ENUMERATED ADVERTISING SURFACES (scoped find/grep, NO .git) — 6 genuine builtin-name rosters:
+  · S1 self/lsp.hexa — LSP roster fns: get_builtins() (completion source), builtin_doc() (hover),
+    get_keywords/get_n6_constants/get_gpu_intrinsics + semantic-token type/modifier lists
+  · S2 self/stdlib/syntax_highlight.hexa — syntax-highlight token classifier
+  · S3 compiler/atlas/n6.tmLanguage.json — n6 TextMate grammar
+  · S4 editor/vscode/syntaxes/hexa.tmLanguage.json — VSCode TextMate grammar
+  · S5 self/attrs/pure.hexa — pure_whitelist_builtins() (@pure-effect builtin whitelist)
+  · S6 docs/notes/2026-05-22-tma-runtime-builtin-requirements.md + docs/rfc/.../rfc_032_farr_matmul_native_builtin.md
+- PER-SURFACE SCAN (all 10 orphans, verbatim grep per name, NO .git):
+  · S1 lsp.hexa — ONLY hit = line 116 `// OP-65: tension_link removed — OP-62 (#3175) deregistered it`
+    (a COMMENT). get_builtins() DATA list (101-121) + builtin_doc() hover (618-627: only print/println/
+    len/type_of/sigma/phi/tau/sqrt/pow) carry ZERO orphan. ⇒ S1 advertising data CLEAN.
+  · S2 [0 hits — CLEAN] · S3 [0 hits — CLEAN] · S4 [0 hits — CLEAN] · S5 [0 hits — CLEAN] · S6 [0 hits — CLEAN]
+  (self/env.hexa hits are ALL OP-62 deregistration COMMENTS + the surviving live-sibling roster lines.)
+- OUT OF SCOPE (recorded so it is not re-flagged): compiler/lens_taxonomy/embedded.gen.hexa:268
+  `LensEntry { name: "tension_link", file: "tension_link_lens.rs", category: "meta_system", ... }` — the
+  REASONING-LENS taxonomy namespace (sibling of tension_lens/telepathy/thermo), a coincidental name
+  collision with the deregistered BUILTIN, NOT a builtin roster.
+- CLOSURE STATEMENT: dereg-loop CLOSED across 6 advertising surfaces; 1 stale entry pruned IN TOTAL
+  (OP-65 lsp.hexa tension_link), 0 THIS round; the 10 OP-62 orphans are now ABSENT from every call site
+  AND every advertising surface. 🟢 PROVEN-COMPLETE: self/lsp.hexa get_builtins() was the ONLY surface
+  that ever advertised any orphan; OP-65 already pruned it; all other surfaces NEVER advertised any of the
+  10 (verbatim per-name 0-hit). The dereg loop is COMPLETE across the entire advertising frontier.
+- FIX: NO code edited. An honest all-surfaces-clean scan IS the deliverable (g63 — make-work rejected;
+  no fabricated stale entries). DELIVERABLE = verdict + milestone + this log entry.
+- VERDICT: .verdicts/hexa-0pod/F-OP67-DEREG-LOOP-COMPLETE.txt (per-surface scan + verbatim hits/clean +
+  closure statement + 🟢 GREEN PROVEN-COMPLETE).
+- BASE: origin/main e6b88489842239c8a4c470c762d2e7f08a54345f. $0 · 0-pod · NO GPU · no vast · no foreign pod · leak-0.
+
 ## 2026-06-13 — OP-64 DONE: EXTEND the honest-number discipline to the own-GEMM DTYPE axis — the parity claim is now explicitly DTYPE-SCOPED to TF32 · FP16/BF16 (W14) = correct (rel_rms ≤ 1e-2 same-dtype) but PARITY=NO, 11.5x off cuBLAS-FP16 (roofline doubled) · docs-only, cited-not-re-measured · $0 · 0-pod · NO GPU
 - TASK: the public comparison doc + README led the own-GEMM story with the TF32 route-(a) result
   (1.08x cuBLAS-TF32 PARITY @D=2048, bit-exact) WITHOUT a dtype qualifier. But the campaign also
