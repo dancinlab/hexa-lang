@@ -190,19 +190,27 @@ fn main() {
     // ════════════════════════════════════════════════════════════════════════
     // (E) VALLEY COUNT — conduction-band minima over the zone.
     // ════════════════════════════════════════════════════════════════════════
+    // valley count is taken over the FULL zone [−π/a,π/a) (a min at k₀≠0 has a partner at
+    // −k₀ — the degenerate valley pair). nkv even so the ±π/a boundary folds to one point.
+    let nkv = 60
     // single-minimum conduction band ε_c=Eg−cos(ka) (min at k=0) → 1 valley.
-    let nv1 = qforge_chip_mo_valley_count(2, onsiteDir, hopsDir, a, nk)
-    fails = fails + _ck_int("(E) single-well conduction band → 1 valley", nv1, 1)
+    let nv1 = qforge_chip_mo_valley_count(2, onsiteDir, hopsDir, a, nkv)
+    fails = fails + _ck_int("(E) single-well conduction band (min Γ) → 1 valley", nv1, 1)
+    // a conduction band whose minimum sits at the zone BOUNDARY ±π/a (+cos band): the two
+    // endpoints are EQUIVALENT (one folded point) → still 1 valley.
+    let nvb = qforge_chip_mo_valley_count(2, onsiteInd, hopsInd, a, nkv)
+    fails = fails + _ck_int("(E) boundary-min conduction band (±π/a equiv) → 1 valley", nvb, 1)
     // a frustrated conduction band with BOTH cos and cos2 components → double well.
-    //   ε_c = Eg + cos(ka) + γ·cos(2ka).  pick γ so two minima appear away from k=0,π/a.
-    //   encode cos(2ka) via a dx=2 self-hop {1,1,2,γ}.
+    //   ε_c = Eg + cos(ka) + γ·cos(2ka):  an interior minimum at +k₀ AND its partner −k₀
+    //   over the full zone → 2 degenerate valleys (the Si-like multiplicity). γ via a dx=2
+    //   self-hop {1,1,2,γ}.
     let gamma = 0.9
     let onsiteW = [0.0, 3.0]
     let hopsW = [0.0, 0.0, 1.0, 1.0,             // valence
                  1.0, 1.0, 1.0, 1.0,             // conduction +cos(ka)
                  1.0, 1.0, 2.0, gamma]           // conduction +γcos(2ka) → double well
-    let nv2 = qforge_chip_mo_valley_count(2, onsiteW, hopsW, a, nk)
-    fails = fails + _ck_true("(E) double-well conduction band → ≥2 valleys", nv2 >= 2)
+    let nv2 = qforge_chip_mo_valley_count(2, onsiteW, hopsW, a, nkv)
+    fails = fails + _ck_int("(E) double-well conduction band → 2 valleys (±k₀ pair)", nv2, 2)
 
     // ════════════════════════════════════════════════════════════════════════
     if fails == 0 {

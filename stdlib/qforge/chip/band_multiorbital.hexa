@@ -254,37 +254,42 @@ pub fn qforge_chip_mo_gap_scan(norb: int, onsite: [float], hops: [float], a: flo
     return [gap, k_vbm, k_cbm, direct]
 }
 
-// ── Valley count: number of conduction-band minima over a k-mesh ──────────────
-// A "valley" is a local minimum of the conduction band (band norb−1) over [0, π/a].
-// Counts interior local minima + an edge minimum (a CBM pinned at k=0 or k=π/a). The
-// degenerate-valley count (e.g. Si's pair of equivalent X-valleys mapped into the
-// reduced 1D zone) is the multiplicity of the conduction minimum — read off eig (d4).
+// ── Valley count: number of conduction-band minima over the FULL zone ─────────
+// A "valley" is a local minimum of the conduction band (band norb−1). The valley
+// MULTIPLICITY (e.g. Si's pair of equivalent X-valleys) is a degeneracy of inequivalent
+// conduction minima, so it MUST be counted over the FULL Brillouin zone [−π/a, π/a):
+// a conduction minimum at a generic k₀≠0 has a SYMMETRY PARTNER at −k₀ (time-reversal /
+// inversion ε(k)=ε(−k)) — the pair is TWO equivalent valleys. Counting only the half-
+// zone [0,π/a] would miss the partner (the single-band R1/R3 view). We sample k over the
+// full zone with the two equivalent endpoints ±π/a FOLDED to one (a periodic ring), and
+// count strict local minima — read off eig[H(k)] (d4, generic over norb).
+//   • min at k=0 (single well, e.g. −cos band)           → 1 valley
+//   • min at the zone boundary ±π/a (e.g. +cos band)      → 1 valley (endpoints equivalent)
+//   • two interior minima at ±k₀ (double well)            → 2 valleys (the degenerate pair)
 pub fn qforge_chip_mo_valley_count(norb: int, onsite: [float], hops: [float], a: float, nk: int) -> int {
     let kmax = _pi() / a
     let last = norb - 1
-    // sample the conduction band.
+    // sample the conduction band over the FULL zone [−π/a, +π/a), nk points (periodic ring:
+    // index nk wraps to index 0, so the ±π/a boundary is a single folded point).
     let mut cb: [float] = []
     let mut i = 0
     while i < nk {
-        let frac = if nk > 1 { to_float(i) / to_float(nk - 1) } else { 0.0 }
-        let k = frac * kmax
+        let frac = if nk > 1 { to_float(i) / to_float(nk) } else { 0.0 }   // [0,1) — periodic
+        let k = -kmax + 2.0 * kmax * frac                                  // k ∈ [−π/a, +π/a)
         let eps = qforge_chip_mo_bands(norb, onsite, hops, k, a)
         cb.push(eps[last])
         i = i + 1
     }
-    // count strict local minima (interior) + edge minima.
+    // strict local minima on the periodic ring (neighbours wrap modulo nk).
     let mut nv = 0
     let mut j = 0
     while j < nk {
         let here = cb[j]
-        let mut is_min = true
-        if j > 0 {
-            if cb[j - 1] <= here { is_min = false }
+        let prev = if j > 0 { cb[j - 1] } else { cb[nk - 1] }     // wrap
+        let next = if j < nk - 1 { cb[j + 1] } else { cb[0] }     // wrap
+        if prev > here {
+            if next > here { nv = nv + 1 }
         }
-        if j < nk - 1 {
-            if cb[j + 1] < here { is_min = false }
-        }
-        if is_min { nv = nv + 1 }
         j = j + 1
     }
     return nv
