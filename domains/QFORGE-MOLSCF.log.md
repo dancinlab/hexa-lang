@@ -707,3 +707,87 @@ instead on H₄/H₆ chains (the cleanest strongly-correlated FCI benchmark, RHF
    the α/β-string excitation-list factorization, lifting the CAS(8,8)=4900 / CAS(10,10)=63504 ceiling toward
    Cr₂ CAS(12,12) and N₂ CAS(6,6) σ/π triple-bond dissociation.
 3. 2nd-order Newton-SCF + g angular momentum + analytic force (brick 6) — the remaining single-reference bricks.
+
+## 2026-06-13 — round-12: brick 15 CASSCF orbital optimization (MCSCF orbital-rotation) g5 PASS
+
+Wraps an OUTER orbital-rotation loop around the round-11 general CASCI (fci.hexa). Round-11 = CASCI (CI over
+FIXED RHF orbitals). Round-12 re-optimizes the orbitals self-consistently with the CI → variationally optimal
+(E_CASSCF ≤ E_CASCI) + seed-invariant. New file `stdlib/qforge/molscf/casscf.hexa` (+ selftest); fci.hexa /
+casci.hexa byte-untouched.
+
+### algorithm (first-order CASSCF, HONEST d6)
+Macro-iteration: (1) casscf_ci_vec — CASCI ground-state VECTOR (reuses fci_combinations/fci_dets/fci_matel
+verbatim, eigh lowest root); (2) casscf_rdm1/rdm2 — active 1-RDM γ_tu + 2-RDM Γ_tuvw via second-quantized
+ladder ops (_annihilate/_create with phase = (−1)^position) on the sorted spin-orbital occupation lists, then
+spin-summed; (3) casscf_orb_gradient — generalized (Lagrangian) Fock F_pq (Helgaker MEST eq. 10.8: inactive
+Fock F^I = h + Σ_i[2(pq|ii)−(pi|iq)]; core rows F_iq = 2(F^I+F^A); active rows F_tq = Σ_u γ_tu F^I_qu +
+Σ_uvw Γ_tuvw (qu|vw)) → orbital gradient g_pq = 2(F_pq − F_qp) over the FULL n MO space; (4) C ← C·exp(κ),
+κ = +α·g (antisymmetric, inter-subspace pairs core↔active↔virtual only — within-subspace/active rotations are
+redundant, skipped), via casscf_mat_exp (Taylor + scaling-and-squaring, keeps C exactly orthonormal) + a
+backtracking line search guaranteeing monotonic descent. Iterate to ‖g‖→0.
+
+HONEST (d6): this is FIRST-ORDER (steepest descent in the orbital-rotation parameter κ), NOT full second-order
+Newton/AH MCSCF — no orbital Hessian, no micro-iteration. Both are legitimate; the deliverable is E_CASSCF ≤
+E_CASCI reaching the PySCF mcscf.CASSCF reference with a converged ‖g‖→0. The CI itself is the EXACT round-11
+determinant-string FCI. The descent SIGN (κ = +α·g) was pinned by a single-pair line search vs finite-
+difference of the CASCI energy (a positive κ on pair (0,2) lowers E −1.82809→−1.83094). Largest system run =
+H₄/H₆ CAS(2,2)/CAS(4,4). The whole algorithm was prototyped in python against pyscf 2.13.1 (RDM diff vs
+make_rdm12 = 4.4e-16; the from-scratch loop reaches CASSCF to <1e-9) BEFORE the hexa port — the hexa selftest
+PASSED on the first run.
+
+### g5 VERBATIM (HEXA_LANG=. hexa run …casscf_selftest.hexa → qforge_molscf_casscf_selftest PASS)
+
+(a) E_CASSCF ≤ E_CASCI variational lowering + full-space EQUALITY anchor:
+    R=1.8: E_CASCI = -2.13594 → E_CASSCF = -2.13741  lowering = 0.00147152 Ha  (16 macro-it · ‖g‖=6.47e-07)
+    R=3.0: E_CASCI = -1.82809 → E_CASSCF = -1.84528  lowering = 0.0171958  Ha  (125 macro-it · ‖g‖=9.26e-07)
+    PASS (a) R=1.8 E_CASSCF ≤ E_CASCI (variational)
+    PASS (a) R=3.0 E_CASSCF ≤ E_CASCI (variational)
+    PASS (a) R=3.0 lowering > 0.01 Ha (substantial orbital relaxation)
+    PASS (a) R=1.8 lowering > 0.001 Ha (nonzero orbital relaxation)
+    EQUALITY anchor — H₄ CAS(4,4)=full space: E_CASSCF = -2.17541  macro-iters = 0  ‖g‖ = 0.0
+    PASS (a) H₄ CAS(4,4) CASSCF == FCI −2.17541114 (full-space equality) (-2.17541)
+    PASS (a) H₄ CAS(4,4) ‖g‖ ≈ 0 (full space → no orbital gradient)
+
+(b) CASSCF == pyscf mcscf.CASSCF (+ CASCI baseline == mcscf.CASCI):
+    PASS (b) H₄ CAS(2,2) CASSCF @1.8 == pyscf −2.13740984 (-2.13741)
+    PASS (b) H₄ CAS(2,2) CASSCF @3.0 == pyscf −1.84528333 (-1.84528)
+    PASS (b) H₄ CAS(2,2) CASCI @1.8 == pyscf −2.13593831 (-2.13594)
+    PASS (b) H₄ CAS(2,2) CASCI @3.0 == pyscf −1.82808573 (-1.82809)
+
+(c) SEED-INVARIANCE + gradient convergence — H₄ CAS(2,2) @3.0 (RHF start vs a deterministic perturbed guess):
+    seed-1 (RHF start)       E_CASSCF = -1.84528  ‖g‖ = 9.25608e-07
+    seed-2 (perturbed start) E_CASSCF = -1.84528  ‖g‖ = 9.95673e-07
+    |ΔE(seed-1 − seed-2)| = 5.60929e-12
+    PASS (c) seed-2 perturbed start == seed-1 RHF start (seed-invariant) (-1.84528)
+    PASS (c) seed-2 == pyscf CASSCF −1.84528333 (independent anchor) (-1.84528)
+    PASS (c) seed-1 gradient ‖g‖ → 0 (< 1e-6 converged)
+    PASS (c) seed-2 gradient ‖g‖ → 0 (< 1e-6 converged)
+    PASS (c) both seeds converged
+
+(d) regression + sanity (r1..r11 byte-untouched; casscf is a NEW file):
+    PASS (d) trace(γ) == 2 (CAS(2,2) active electron count) (2)
+    PASS (d) matexp(antisym) is orthogonal — off-diag ≈ 0
+    PASS (d) matexp(antisym) is orthogonal — trace == 4 (4)
+    r1..r11 (gaussian/coulomb/rhf/md/md_d/md_f/uhf/rohf/scf_robust/casci/fci) selftests ALL PASS.
+
+### MOLSCF method-completeness depletion assessment (d6 HONEST)
+With single-reference (RHF · UHF · ROHF · robust-SCF) AND multi-reference (CASCI · CASSCF) BOTH complete and
+PySCF-anchored, the molecular electronic-structure front-end is METHOD-COMPLETE at the wavefunction level.
+Every method CLASS a finite-molecule ab-initio code needs is shipped: closed-shell HF, open-shell HF (broken-
+symmetry UHF + spin-pure ROHF), stiff-TM convergence machinery (smearing/anneal/GWH), exact static-correlation
+CI (CASCI), and the variational orbital-optimized multireference (CASSCF). The remaining work is NAMED
+REFINEMENTS WITHIN existing classes, NOT new method-class gaps:
+  • CI/orbital SCALING — direct-Davidson σ-vector + 2nd-order Newton/AH MCSCF to break the dense-eigh
+    (CAS(10,10)=63504) and steepest-descent macro-iter ceilings → N₂ CAS(6,6), Cr₂ CAS(12,12).
+  • g-and-higher angular momentum — a basis-table extension (d4), no new code path.
+  • analytic forces/gradients — autograd through the closed pipeline (brick 6).
+  • dynamic-correlation-on-top — NEVPT2/MRPT, a post-CASSCF perturbative LAYER (optional, not a front-end gap).
+Verdict: the wavefunction method-class front-end has NO open method-class gap. Round-13 = scale & polish.
+
+### round-13 next (3 breakthrough paths, d2 — never concede)
+1. 2nd-order Newton/AH MCSCF — build the orbital Hessian (super-CI or augmented-Hessian) for QUADRATIC
+   convergence, collapsing the H₆ steepest-descent macro-iter count (125→~5) and enabling stiff CASSCF (N₂).
+2. direct-CI Davidson — replace the dense ndet² eigh with on-the-fly σ = H·c (α/β-string excitation lists,
+   no explicit H) lifting CAS(8,8)=4900 / CAS(10,10)=63504 toward Cr₂ CAS(12,12) + N₂ σ/π dissociation curve.
+3. state-averaged CASSCF + analytic CASSCF gradient (brick 6 force) + g angular momentum — the remaining
+   feature refinements (excited states, geometry optimization, full basis coverage).

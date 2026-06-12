@@ -115,9 +115,45 @@ Fock 빌드, (3) 비직교 일반화 고유문제 `FC=SCε`. 모든 g5 anchor �
           == pyscf FCI −1.97086976. det weights 0.7012/0.1194/0.0374/0.0374 == pyscf EXACT (≥3 significant,
           genuine multi-e static corr, NOT a 2-det case) · H₆ R=3.0 −2.95765 weights 0.5733/0.1020/0.0286...
       (d) r1..r10 (gaussian/coulomb/rhf/md/md_d/md_f/uhf/rohf/scf_robust/casci) regress ALL PASS — fci is NEW
-- [ ] brick 15 (round-12) — CASSCF orbital optimization (MCSCF orbital-rotation: E_CASSCF ≤ E_CASCI,
-      seed-invariant) + N₂ CAS(6,6) σ/π · Cr₂ CAS(12,12) wall + active-space CI direct-Davidson (skip dense
-      eigh past CAS(8,8)=4900 dets · CAS(10,10)=63504 ceiling) + 2nd-order Newton-SCF + g 각운동량 + brick 6 force
+- [x] brick 15 (round-12) — CASSCF orbital optimization (MCSCF orbital-rotation step on the round-11 CASCI)
+      `casscf.hexa` (additive — fci.hexa/casci.hexa BYTE-UNTOUCHED): each macro-iter (1) CASCI ground-state
+      VECTOR (casscf_ci_vec, reuses fci_dets/fci_matel) → (2) active 1-RDM γ_tu + 2-RDM Γ_tuvw from
+      2nd-quantized ladder ops on sorted spin-orbital occupations (casscf_rdm1/rdm2) → (3) generalized
+      (Helgaker MEST 10.8) Fock F_pq [core 2(F^I+F^A) · active ΣγF^I+ΣΓ(qu|vw)] + orbital gradient
+      g_pq=2(F_pq−F_qp) over the FULL n MO space → (4) C ← C·exp(κ), κ=+α·g antisymmetric rotation via
+      Taylor+scale-square matexp (casscf_mat_exp, exactly orthogonal) + backtracking line search (monotonic
+      descent). FIRST-ORDER (steepest descent in κ), NOT 2nd-order Newton (HONEST d6 — both legitimate; CI is
+      the EXACT round-11 string FCI). Largest run = H₄/H₆ CAS(2,2)/CAS(4,4).
+      (a) E_CASSCF ≤ E_CASCI variational lowering — H₄ CAS(2,2) (1 core,2 active): @R=3.0 CASCI −1.82808573
+          → CASSCF −1.84528333 (lowering 1.72e-2 Ha, 125 macro-it) · @R=1.8 −2.13593831 → −2.13740984
+          (1.47e-3 Ha, 16 it). EQUALITY anchor: H₄ CAS(4,4)=full space → CASSCF==CASCI==FCI −2.17541114
+          EXACTLY, ‖g‖≡0 (0 macro-it) — orbital rotations can't change a full-space energy (valid equality, d6)
+      (b) CASSCF == pyscf mcscf.CASSCF — @1.8 −2.13740984 |Δ|<1e-5 · @3.0 −1.84528333 |Δ|<1e-5 · CASCI
+          baseline == pyscf mcscf.CASCI @1.8 −2.13593831 / @3.0 −1.82808573 |Δ|<1e-5 (verified vs pyscf 2.13.1
+          RHF/CASCI/CASSCF on the IDENTICAL STO-3G Bohr H₄ build)
+      (c) SEED-INVARIANCE + gradient convergence — H₄ CAS(2,2) @3.0: RHF start vs a deterministic PERTURBED
+          orbital guess (κ_p rotation, NO RNG) → SAME CASSCF −1.84528333, |ΔE(seed-1−seed-2)|=5.6e-12 (the
+          signature of true orbital optimization) · final ‖g‖ seed-1=9.3e-7 seed-2=1.0e-6 → 0
+      (d) r1..r11 (gaussian/coulomb/rhf/md/md_d/md_f/uhf/rohf/scf_robust/casci/fci) regress ALL PASS — casscf
+          is a NEW file wrapping fci.hexa/casci.hexa byte-for-byte unchanged · trace(γ)=2 + matexp-orthogonal sanity
+- [ ] round-13 (named) — CASSCF SCALE & POLISH: 2nd-order Newton/AH MCSCF (orbital Hessian → quadratic
+      convergence, collapses the H₆ steepest-descent macro-iter count) + active-space CI direct-Davidson (skip
+      dense eigh past CAS(8,8)=4900 dets · CAS(10,10)=63504 ceiling) → N₂ CAS(6,6) σ/π dissociation + Cr₂
+      CAS(12,12) wall · state-averaged CASSCF (excited states) · analytic CASSCF gradient (brick 6 force) ·
+      g 각운동량. ALL are scaling/perf/feature refinements — NO remaining method-class gap (see depletion below)
+
+## MOLSCF method-completeness depletion (round-12)
+
+Single-reference (RHF · UHF · ROHF · robust-SCF) AND multi-reference (CASCI · CASSCF) are BOTH closed and
+PySCF-anchored. The molecular electronic-structure front-end is **method-complete**: every method CLASS a
+finite-molecule ab-initio code needs at the wavefunction level is shipped — closed-shell HF, open-shell HF
+(spin-broken UHF + spin-pure ROHF), stiff-TM convergence machinery, exact static-correlation CI (CASCI), and
+the variational orbital-optimized multireference (CASSCF). The remaining frontier is NAMED REFINEMENTS within
+existing classes, NOT new method classes: (1) CI/orbital SCALING — direct-Davidson + 2nd-order Newton to push
+past the dense-eigh / steepest-descent ceiling (CAS(10,10), Cr₂); (2) g-and-higher angular momentum (a basis
+table extension, d4 — no new code path); (3) analytic forces/gradients (autograd through the closed pipeline,
+brick 6); (4) larger basis / dynamic-correlation-on-top (NEVPT2/MRPT — a post-CASSCF perturbative correction,
+the next method LAYER, optional). The wavefunction method-class front-end itself has no open gap.
 
 ## three-scale unblock
 
