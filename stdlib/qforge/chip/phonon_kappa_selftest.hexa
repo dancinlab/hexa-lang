@@ -1,0 +1,132 @@
+// @ci_gate — deterministic · pure analytic anchors
+//
+// qforge_chip_phonon_kappa_selftest.hexa — QFORGE CHIP round-4 g5 gate.
+//
+// phonon_kappa.hexa closes the THERMAL ('열') leg of the chip front-end: a ballistic
+// phonon-Landauer thermal conductance  κ(T)=(1/2π)∫dω ħω T_ph(ω) ∂n_BE/∂T  whose
+// universal low-T floor is N·g₀ — the SAME thermal conductance quantum round-1
+// established for electrons (heat is statistics-blind, Pendry bound).  Every anchor
+// is an EXACT closed form (d6 — derivable, none tuned):
+//
+//   (A) LOW-T QUANTUM LIMIT — κ/T of N reflectionless acoustic channels → N·π²k_B²/3h
+//       (= N·g₀/T) as T→0; the dispersion-blind universal floor.                   🔵
+//   (B) g₀ VALUE — 1 channel κ(1 K) = 9.46431…e-13 W/K, matching round-1's
+//       qforge_chip_thermal_quantum (the heat-quantum cross-check, d19).           🔵
+//   (C) BOSE-EINSTEIN — ∂n_BE/∂T > 0 (raising T fills modes); high-T classical
+//       limit ħω·∂n_BE/∂T → k_B per mode (Dulong-Petit heat-capacity quantum).    🔵
+//   (D) CHANNEL-COUNT PLATEAU — κ scales LINEARLY in N (κ(N)=N·g₀): the quantized
+//       thermal staircase, the heat analogue of round-1's Landauer N·G₀.           🔵
+//
+// HONEST SCOPE (d6): ballistic / reflectionless quantum limit — NO phonon-phonon /
+// Umklapp scattering, NO diffusive BTE.  Anchors test the EXACT quantum floor, not a
+// device diffusive κ.  Numerical Simpson integral recovers π²/3 to ~1e-6 (asserted).
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/chip/phonon_kappa_selftest.hexa
+// PASS: "qforge_chip_phonon_kappa_selftest PASS".
+use "stdlib/qforge/chip/phonon_kappa"
+use "stdlib/qforge/chip/band_transport"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _pi() -> float { return 3.14159265358979323846 }
+fn _kb() -> float { return 1.380649e-23 }
+
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_rel(name: str, got: float, want: float, rel: float) -> int {
+    let denom = _abs(want)
+    let tol = rel * denom
+    if _abs(got - want) <= tol { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let pi = _pi()
+    let kb = _kb()
+    let nq = 4000        // Simpson resolution (even) — recovers π²/3 to ~1e-6.
+
+    // ══ (A) LOW-T QUANTUM LIMIT — κ/T → N·g₀/T as T→0 ══════════════════════════
+    // The ballistic κ of N reflectionless acoustic channels is N·g₀, so κ/T is the
+    // T-INDEPENDENT plateau N·π²k_B²/3h.  We verify κ/T at three decreasing T all
+    // collapse to the SAME N·g₀/T plateau (T→0 floor is reached at every T here —
+    // the universal integral is exact for a constant-transmission acoustic channel).
+    let plateau_want = (pi * pi * kb * kb) / (3.0 * 6.62607015e-34)   // N=1: g₀/T = π²k_B²/3h
+    let mut t = 0
+    let temps = [10.0, 1.0, 0.1]
+    while t < 3 {
+        let tk = temps[t]
+        let kappa1 = qforge_chip_phonon_kappa_ballistic(1.0, tk, nq)
+        let kappa_over_t = kappa1 / tk
+        fails = fails + _ck_rel("A.kappa/T plateau @T=" + to_string(tk) + "K → π²k_B²/3h",
+                                kappa_over_t, plateau_want, 1.0e-5)
+        t = t + 1
+    }
+
+    // ══ (B) g₀ VALUE — 1 channel κ(1 K) = 9.46431e-13 W/K (round-1 consistent) ══
+    let kappa_1k = qforge_chip_phonon_kappa_ballistic(1.0, 1.0, nq)
+    fails = fails + _ck_rel("B.kappa(1ch,1K) = 9.4643e-13 W/K", kappa_1k, 9.46431151638664e-13, 1.0e-5)
+    // cross-check vs round-1's closed-form thermal quantum (d19 reuse) — must agree.
+    let g0_r1 = qforge_chip_thermal_quantum(1.0)
+    fails = fails + _ck_rel("B.kappa(1ch,1K) == round-1 g₀ (d19)", kappa_1k, g0_r1, 1.0e-5)
+    // and the closed-form floor helper returns g₀ exactly.
+    let floor_1k = qforge_chip_phonon_kappa_quantum_floor(1.0, 1.0)
+    fails = fails + _ck_close("B.quantum_floor(1ch,1K) == g₀ exact", floor_1k, g0_r1, 1.0e-30)
+
+    // ══ (C) BOSE-EINSTEIN — ∂n_BE/∂T > 0 + high-T classical limit ══════════════
+    // ω chosen so ħω/k_BT is O(1) at T=300K: ω = k_B·300/ħ ≈ 3.93e13 rad/s.
+    let hbar = 6.62607015e-34 / (2.0 * pi)
+    let omega = (kb * 300.0) / hbar          // x=ħω/k_BT = 1 at T=300K
+    // (C1) sign: ∂n_BE/∂T > 0 — heating fills modes.
+    let dndt = qforge_chip_dnbe_dt(omega, 300.0)
+    fails = fails + _ck_true("C.∂n_BE/∂T > 0 (heating fills modes)", dndt > 0.0)
+    // (C2) BE occupation positive and finite at x=1: n=1/(e−1)=0.58198.
+    let nbe = qforge_chip_bose_einstein(omega, 300.0)
+    fails = fails + _ck_close("C.n_BE(x=1) = 1/(e−1)", nbe, 1.0 / (exp(1.0) - 1.0), 1.0e-9)
+    // (C3) HIGH-T CLASSICAL LIMIT (Dulong-Petit): for ħω≪k_BT (x→0),
+    //   ħω·∂n_BE/∂T → k_B  (each mode contributes k_B to heat capacity / response).
+    //   Take a LOW ω so x=ħω/k_BT≈1e-3 at T=300K → ħω·∂n/∂T ≈ k_B(1−x²/12+…) ≈ k_B.
+    let omega_lo = (kb * 300.0 * 1.0e-3) / hbar    // x≈1e-3
+    let dndt_lo = qforge_chip_dnbe_dt(omega_lo, 300.0)
+    let heat_quantum = (hbar * omega_lo) * dndt_lo  // ħω·∂n/∂T → k_B
+    fails = fails + _ck_rel("C.high-T limit ħω·∂n_BE/∂T → k_B (Dulong-Petit)", heat_quantum, kb, 1.0e-3)
+
+    // ══ (D) CHANNEL-COUNT PLATEAU — κ(N) = N·g₀ (quantized thermal staircase) ══
+    // κ scales LINEARLY in channel count: 1,2,3,4 channels → N·g₀, the heat analogue
+    // of round-1's Landauer N·G₀ conductance staircase.  Monotone + exact ratio.
+    let mut prev = 0.0
+    let mut n = 1
+    while n <= 4 {
+        let kn = qforge_chip_phonon_kappa_ballistic(n + 0.0, 1.0, nq)
+        let want_n = (n + 0.0) * g0_r1
+        fails = fails + _ck_rel("D.kappa(" + to_string(n) + "ch,1K) = " + to_string(n) + "·g₀",
+                                kn, want_n, 1.0e-5)
+        fails = fails + _ck_true("D.monotone N=" + to_string(n) + " (κ increases w/ channels)", kn > prev)
+        prev = kn
+        n = n + 1
+    }
+
+    // ══ (E) GENERIC MODE-LIST κ — DFPT ω(q,ν) channels (d4/d19 path) ═══════════
+    // The generic mode-list form: 3 ACOUSTIC modes (ω≈0, reflectionless) → 3·g₀
+    // (each acoustic branch reaches ω=0, full quantum floor).  This is the path a
+    // real DFPT PhononResult.omega feeds (d19) — here analytic acoustic modes.
+    let omegas_ac = [1.0e6, 2.0e6, 3.0e6]     // ~0 vs k_BT/ħ@1K(~1.3e11) → all acoustic
+    let trans_ac = [1.0, 1.0, 1.0]            // reflectionless
+    let kappa_modes = qforge_chip_phonon_kappa(omegas_ac, trans_ac, 1.0, nq)
+    fails = fails + _ck_rel("E.mode-list 3 acoustic reflectionless → 3·g₀", kappa_modes, 3.0 * g0_r1, 1.0e-4)
+    // a FROZEN optical mode (ħω ≫ k_BT) contributes ≈0 at low T (BE-suppressed).
+    let omega_opt = 100.0 * (kb * 1.0) / hbar   // x=100 at T=1K → S(100)≈0
+    let omegas_mix = [1.0e6, omega_opt]
+    let trans_mix = [1.0, 1.0]
+    let kappa_mix = qforge_chip_phonon_kappa(omegas_mix, trans_mix, 1.0, nq)
+    fails = fails + _ck_rel("E.1 acoustic + 1 frozen-optical → ≈1·g₀ (optical BE-suppressed)",
+                            kappa_mix, 1.0 * g0_r1, 1.0e-3)
+
+    if fails == 0 { println("qforge_chip_phonon_kappa_selftest PASS") }
+    else { println("qforge_chip_phonon_kappa_selftest FAIL (" + to_string(fails) + ")") }
+}
