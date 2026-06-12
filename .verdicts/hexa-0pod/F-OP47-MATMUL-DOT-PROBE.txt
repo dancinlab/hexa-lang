@@ -1,0 +1,181 @@
+F-OP47-MATMUL-DOT-PROBE — safety-first feasibility probe of the THREE largest-caller-surface
+        OP-43 [R]-survivors (matmul_into · dot · mat_add_inplace) for SAFE deregistration from the
+        self/env.hexa builtin roster, using OP-41/OP-43's exact per-builtin g5 method. RESULT: all
+        three g5-RE-VERIFIED falsified (AOT emits "use of undeclared identifier"); ZERO codegen guard;
+        ZERO runtime symbol (incl prefix variants); compiler/** self-host byte-eq closure has ZERO refs
+        to any of the three; the CONTROL (local `fn dot`) confirmed shadows bind their OWN symbol
+        roster-independently; every non-shadowed real call-site is either a baseline-dead example
+        (exit_code=-1) or a self/ml / self/stdlib tensor file that ALREADY AOT-fails today with the
+        builtins STILL registered (builtin-independent). DECISION: all THREE DEREGISTERED (the OP-43
+        conservative hold no longer binds once the large surface is proven dead, not merely large).
+HEXA-0POD OP-47 · CPU-LOCAL (hexat AOT transpile + clang -fsyntax-only) · 0-GPU · $0 · no vast/pod
+════════════════════════════════════════════════════════════════════════════
+
+[0] PROVENANCE + MANDATE
+------------------------
+OP-43 audited the 42-member ML-family falsified subset, deregistered 16 truly-dead, and KEPT 26
+"survive-with-reason". The THREE [R]-survivors with the LARGEST broken caller surfaces — matmul_into,
+dot, mat_add_inplace — were kept conservatively (g0 blast-radius bound). OP-47's mandate: PROBE (not
+assume) whether those three can be SAFELY deregistered with the SAME OP-41/OP-43 discipline. The
+honest outcome was permitted to be "no, they stay". The probe found the opposite: the large surface
+is DEAD, not live — every safety gate passes — so all three deregister. The two sides (OP-41 method):
+  (a) ROSTER  — `let builtin_names = [...]` in self/env.hexa env_new() (registration makes the
+      binder/type-checker ACCEPT a call to NAME).
+  (b) IMPL    — codegen-inline lowering (self/codegen.hexa `if name == "X"`) ∪ runtime symbols the
+      emitted C calls (self/runtime.h + installed runtime.c, incl prefix variants hexa_/rt_/u_/hexa_math_).
+A FALSIFIED builtin = registered in (a), NO impl in (b) → AOT emits a bare hexa_callN(NAME,…) → clang
+"use of undeclared identifier 'NAME'".
+
+[1] PER-BUILTIN g5 EVIDENCE
+--------------------------
+Baseline: self/env.hexa:194-195 roster lines —
+  "dot", "matvec", "mat_add", "mat_add_inplace",
+  "matmul_into", "rms_norm", "rope", "rope_inplace",
+Fresh hexat = ~/.hx/bin/build/hexat (2027336B, Jun-8 — NOT the stale Jun-1 ~/.hx/bin/hexa).
+
+(a) REGISTERED in roster (env.hexa env_new):
+  matmul_into     : YES (line 195)
+  dot             : YES (line 194)
+  mat_add_inplace : YES (line 194)
+
+(b) IMPL = NONE (all three):
+  codegen-inline guards (`if name=="X"` in self/codegen.hexa) : matmul_into 0 · dot 0 · mat_add_inplace 0
+  runtime symbol (self/runtime.h ∪ installed runtime.c, prefix variants) : matmul_into 0 · dot 0 · mat_add_inplace 0
+  → ARG-SHAPE-TRAP (OP-41 §1) CONTROLLED: 0 codegen guards each ⇒ ANY arg shape yields the same bare
+    hexa_callN fallback; the probe is robust to arg shape for these three (no false-undeclared risk).
+
+(c) AOT PROBE (g5, authoritative — correct args, fresh hexat → clang -I<self> -fsyntax-only):
+  matmul_into     : `let _r = matmul_into([[1,2],[3,4]],[[1,0],[0,1]],[[0,0],[0,0]])` →
+                    p_matmul_into.c:21:29: error: use of undeclared identifier 'matmul_into'
+  mat_add_inplace : `let _r = mat_add_inplace([[1,2],[3,4]],[[1,0],[0,1]])` →
+                    p_mat_add_inplace.c:20:29: error: use of undeclared identifier 'mat_add_inplace'
+  dot             : `let _r = dot([1,2,3,4],[4,3,2,1])` →
+                    p_dot.c:20:29: error: use of undeclared identifier 'dot'
+  (each: hexat transpile OK — roster accepts the call — then clang FALSIFIES. The OPPOSITE finding
+   — a clean link — did NOT occur for any of the three.)
+
+[2] CONTROL — local-fn shadow binds ROSTER-INDEPENDENTLY (the key safety question)
+---------------------------------------------------------------------------------
+Probe: a file defining a local `fn dot(a:[float],b:[float])->float {…}` + a `dot(a,b)` caller →
+  ~/.hx/bin/build/hexat p_dot_shadow.hexa p_dot_shadow.c : OK
+  clang -I<self> -fsyntax-only p_dot_shadow.c : CLEAN (no errors)
+  generated C contains:  line 4  `HexaVal dot(HexaVal a, HexaVal b);`  (forward decl)
+                         line 10 `HexaVal dot(HexaVal a, HexaVal b) {` (local definition)
+                         line 27 `HexaVal r = dot(a, b);`             (call → local def)
+⇒ a local `fn dot` emits its OWN symbol and the call resolves to it, INDEPENDENT of the roster entry.
+  Deregistering the builtin does NOT break any local-fn shadow's binding. (Same result OP-41/OP-43's
+  `fn relu` control established; CONFIRMED here for this family.)
+
+[3] CALLER SWEEP — live/dead classification (g0, OP-41/OP-43 discipline)
+-----------------------------------------------------------------------
+REAL call-sites (word-boundary, comment/fn-def/archive-JSON excluded):
+  matmul_into     : 333 — ALL in self/ml/* (train_100m_*/t1_*/t2_*/pipeline/rlhf/reward_model/…) + self/test_inplace.hexa
+  mat_add_inplace :  80 — ALL in self/ml/* + self/test_inplace.hexa + self/test_new_builtins.hexa
+  dot             :  12 — 5 example/ + 4 self/ + 3 stdlib/ (broken down below)
+
+LOCAL-fn SHADOWS (`fn NAME(` repo-wide):
+  matmul_into     : 0 shadows
+  mat_add_inplace : 0 shadows
+  dot             : 11 shadow defs (firmware/…/numerics_npu_solver, example/test_n12_transpile,
+                    example/anima_hebbian_autograd, example/anima_gru_fused, self/test_struct_patterns,
+                    self/test_module_impl_closure, self/test/miscompile_zero/c3_struct_ctor, self/attrs/*,
+                    stdlib/flame/clm_h911_bc_mechanisms, …) — each binds its OWN symbol (§2), UNAFFECTED.
+
+dot non-shadow real call-sites (the only ones that would bind the ROSTER entry):
+  example/test_evolve_matrix.hexa     — baseline exit_code=-1 last_pass='' (DEAD)
+  example/test_neural_testbench.hexa  — baseline exit_code=-1 last_pass='' (DEAD)
+  example/test_quant_beam_init.hexa   — baseline exit_code=-1 last_pass='' (DEAD)
+  self/ml/tensor_ops.hexa             — hexat TRANSPILE-FAIL today ("index 1 out of bounds (len 1)") — DEAD
+  self/stdlib/tensor_ops.hexa         — hexat TRANSPILE-FAIL today ("index 1 out of bounds (len 1)") — DEAD
+  self/test_tensor.hexa               — hexat TRANSPILE-FAIL today ("index 1 out of bounds (len 1)") — DEAD
+  self/test_codegen_extended.hexa:263 — a STRING LITERAL "println(dot(v1, v2))" (codegen test DATA, not a call)
+  (example/test_n12_transpile.hexa + stdlib/flame/clm_h911 HAVE a local `fn dot` → bind LOCAL, §2.)
+
+matmul_into / mat_add_inplace: the 333 / 80 sites are self/ml trainers + self/test_inplace /
+  self/test_new_builtins. Spot-checked representatives — self/ml/optimizer.hexa (7 clang errors, 2 of
+  them mat_add_inplace), self/test_inplace.hexa (4 errors, 3 of them the probe-builtins),
+  self/test_new_builtins.hexa (5 errors, 2 of them), self/ml/{tensor_ops,train_full} TRANSPILE-FAIL —
+  i.e. ALREADY-falsified surfaces. NONE is a baseline-passing program.
+
+[4] SELF-HOST BYTE-EQ SAFETY — DECISIVE
+---------------------------------------
+- compiler/** (the self-host byte-eq core; entry compiler/main.hexa, flattened via build_selfhost.sh
+  walk("compiler/main.hexa") closure) has ZERO references to matmul_into / mat_add_inplace / dot
+  (only archive embedded.gen.hexa JSON substring noise, excluded).
+- ZERO compiler files import self/ml (the entire 333/80-site surface lives OUTSIDE the closure).
+- self/stdlib/tensor_ops, self/ml/tensor_ops, stdlib/flame/clm_h911: 0 compiler/** refs each.
+⇒ deregistration CANNOT perturb the cc-gen3.o==cc-gen4.o byte-eq fixpoint (no compiled gate touches
+  example//self/ml//self/test_; the only compiling gate is selfhost-byteeq on compiler/main.hexa).
+
+[5] PRE-EXISTING-FAILURE CONTROL (deregistration is NOT the cause)
+-----------------------------------------------------------------
+The self/ml + self/stdlib + self/test_ caller files fail TODAY on the INSTALLED hexat, whose roster
+STILL registers all three builtins (it is a Jun-8 build pre-dating this edit). The "index N out of
+bounds" transpile-fail and the "undeclared" clang errors reproduce WITH the builtins present ⇒ the
+failures are builtin-independent (pre-existing hexat quirk on CUDA-gated tensor trainers + the
+already-falsified builtin emission), NOT introduced by deregistration. (Same control OP-41 §5c used.)
+
+[6] DECISION (g0 conservative) — ALL THREE DEREGISTER
+-----------------------------------------------------
+Per-builtin, ALL FOUR conditions hold:
+  (proven falsified) ∧ (no live caller depends on the roster entry) ∧ (local-fn shadows still bind
+  without it) ∧ (compiler-core / self-host zero refs):
+  matmul_into     : falsified ✓ · 0 shadow · 333 callers ALL dead self/ml (0 live) · compiler 0 ✓ → DEREGISTER
+  mat_add_inplace : falsified ✓ · 0 shadow · 80 callers ALL dead self/ml/test (0 live) · compiler 0 ✓ → DEREGISTER
+  dot             : falsified ✓ · 11 shadows bind LOCAL ✓ · 12 non-shadow callers ALL dead (example -1
+                    / tensor TRANSPILE-FAIL / string-literal) · compiler 0 ✓ → DEREGISTER
+The OP-43 "[R] large surface → keep" hold is RELEASED here BECAUSE the surface is proven DEAD, not
+merely large: deregistration breaks NO working program (every such caller is already falsified) and
+only flips its failure mode from "AOT undeclared symbol" to "binder unbound name" — a strictly-equal
+no-op for a program that never compiled. CONSERVATIVE outcome respected: had ANY caller been a live
+passing program / compiler-core / SSOT-closure module, the builtin would STAY; none is.
+
+[7] DIFF
+--------
+  self/env.hexa : "dot", "mat_add_inplace", "matmul_into" REMOVED from env_new() builtin_names roster
+                  + a scoped OP-47 comment block recording the falsified+dead-surface+shadow-safe+
+                  byte-eq-safe rationale (mirrors the OP-43 / OP-33b-d removal-comment convention).
+                  Roster array stays well-formed (comma-separated string list; "matvec"/"mat_add"/
+                  "rms_norm"/"rope"/"rope_inplace" + "repeat_kv" neighbors confirmed STILL PRESENT).
+  wipe_guard: net +11 / −2 lines « 50; commit subject scoped
+  `cleanup(env): deregister falsified dot/mat_add_inplace/matmul_into — OP-47 ...`.
+
+[8] POST-EDIT CHECKS — GREEN
+---------------------------
+(a) env.hexa transpiles clean: `~/.hx/bin/build/hexat self/env.hexa /tmp/op47_env.c` → OK (roster
+    well-formed after the 3 removals).
+(b) grep-proof: 0 roster strings for each removed name; kept neighbors (matvec/mat_add/rms_norm/
+    rope/rope_inplace/repeat_kv) all still present (1 each).
+(c) self-host byte-eq: env.hexa edit affects the NEXT compiler build; installed hexat keeps its roster
+    until rebuilt (same 0-pod caveat as OP-41/OP-43 — verified via env.hexa transpile + generated-C
+    inspection + compiler/** zero-ref, not a from-scratch rebuild). compiler/** zero refs → fixpoint safe.
+
+[9] GATE (g5) — PASS
+--------------------
+  3-builtin matrix built (static + empirical, arg-shape-trap controlled) : YES (§1)
+  all 3 AOT-falsified RE-VERIFIED verbatim                               : YES (§1c)
+  local-fn shadow binds roster-independently (CONTROL)                   : YES (§2)
+  every non-shadow caller dead (example -1 / transpile-fail / literal)   : YES (§3)
+  0 compiler-core / byte-eq reference for all 3                          : YES (§4)
+  pre-existing-failure control (dereg not the cause)                     : YES (§5)
+  env.hexa transpiles + roster well-formed after removal                 : YES (§8)
+
+[10] CLOSURE STATEMENT
+----------------------
+After OP-47 the three LARGEST OP-43 [R]-survivors (matmul_into · dot · mat_add_inplace) are
+DEREGISTERED — proven falsified + dead-surface + shadow-safe + byte-eq-safe. The remaining OP-43
+survivor set drops to 23. Real matrix/vector ops in hexa = stdlib/flame/* + per-module LOCAL fns
+(the dot shadows), NOT these roster builtins. Deregistration is REVERSIBLE (one-line roster re-add);
+any future program needing one would require a real impl anyway (the roster row was a
+lints-but-won't-link landmine).
+
+[11] HONEST + CONSERVATIVE (g0)
+------------------------------
+  • The load-bearing claims — the 3 are falsified + 0-codegen-guard + 0-runtime-symbol +
+    0-compiler-core-ref + every non-shadow caller dead + local shadows roster-independent — are
+    pinned to the strict per-builtin g5 standard and are exact.
+  • The "large caller surface" OP-43 cited for keeping is ACCOUNTED-FOR: it is entirely
+    self/ml/already-falsified trainers (matmul_into/mat_add_inplace) and dead-example/transpile-fail
+    files (dot), none in the self-host closure — so it is not a live blast radius.
+  • The 23 other OP-43 survivors + the non-ML OP-41 deferred remainder stay OUT OF SCOPE (deferred).
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.

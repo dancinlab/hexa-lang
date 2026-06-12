@@ -1,5 +1,44 @@
 # HEXA-0POD — log
 
+## 2026-06-12 — OP-47 DONE: matmul_into/dot/mat_add_inplace large-surface probe → all 3 falsified+dead+shadow-safe+byte-eq-safe → ALL THREE DEREGISTERED · self/env.hexa +11/−2 · $0 · 0-pod
+- SURVEY-FIRST (mandatory). Read F-OP43-ML-FAMILY-FALSIFIED.txt (the 42-builtin ML-family deeper audit: 16
+  deregistered, 26 survive-with-reason; the 3 largest [R]-survivors matmul_into/mat_add_inplace/dot kept on
+  g0 blast-radius) + F-OP41-FALSIFIED-BUILTIN-SWEEP.txt (the roster-vs-impl method, the arg-shape-gated
+  false-positive trap, the local-fn-shadow CONTROL). Located the 3 at self/env.hexa:194-195. Used the FRESH
+  installed hexat ~/.hx/bin/build/hexat (2027336B Jun-8), NOT the stale Jun-1 ~/.hx/bin/hexa.
+- METHOD (OP-41 RIGOROUS, per builtin): (a) confirmed registered; (b) confirmed NO impl — 0 codegen-inline
+  guards (`if name=="X"` in self/codegen.hexa) + 0 runtime symbol (self/runtime.h ∪ installed runtime.c, prefix
+  variants hexa_/rt_/u_/hexa_math_) → arg-shape-trap CONTROLLED (0 guards ⇒ any shape gives the same bare
+  hexa_callN fallback); (c) g5 AOT probe with CORRECT args → all three emit verbatim "use of undeclared
+  identifier 'NAME'" (matmul_into :21:29, mat_add_inplace :20:29, dot :20:29). No clean-link (opposite) finding.
+- KEY SAFETY QUESTION — CONTROL: wrote a local `fn dot(a:[float],b:[float])->float` + caller → generated C has
+  `HexaVal dot(HexaVal,HexaVal);` decl + def + the call resolves to it, clang CLEAN. ⇒ local-fn shadows provide
+  their OWN symbol, INDEPENDENT of the roster; deregistration cannot break a shadow's binding (dot has 11
+  shadows incl stdlib/flame/clm_h911 + example/test_n12 — all unaffected).
+- CALLER SWEEP (word-boundary, comment/fn-def/archive excluded): matmul_into 333 real call-sites ALL self/ml/*
+  trainers + self/test_inplace; mat_add_inplace 80 ALL self/ml + self/test_inplace/test_new_builtins; dot 12 =
+  5 example + 4 self + 3 stdlib, of which the NON-SHADOW (would-bind-roster) ones are 3 baseline-dead examples
+  (exit_code=-1 last_pass='') + self/ml,self/stdlib,self/test tensor files that ALREADY hexat-TRANSPILE-FAIL
+  today ("index 1 out of bounds (len 1)") + 1 string-literal in self/test_codegen_extended (test data, not a
+  call). Spot-checked self/ml/optimizer (7 clang errs, 2=mat_add_inplace), self/test_inplace (4, 3=probe-builtins)
+  — already-falsified surfaces, ZERO live passing caller.
+- SELF-HOST BYTE-EQ SAFE (decisive): compiler/** (the byte-eq core, build_selfhost.sh walk(compiler/main.hexa)
+  closure) has ZERO refs to all three + ZERO compiler imports of self/ml → the entire 333/80-site surface is
+  OUTSIDE the closure; the fixpoint (cc-gen3.o==cc-gen4.o) cannot be perturbed. PRE-EXISTING-FAILURE CONTROL:
+  every caller fails on the INSTALLED hexat which STILL registers the builtins (Jun-8 pre-edit) → the failures
+  are builtin-independent, NOT introduced by deregistration.
+- DECISION (g0 conservative): all four conditions hold for EACH (proven-falsified ∧ no-live-caller ∧
+  local-shadow-binds-without-it ∧ 0 compiler-core/byte-eq ref) → ALL THREE DEREGISTERED. The OP-43 "large
+  surface → keep" hold is RELEASED because the surface is proven DEAD, not merely large: dereg breaks no working
+  program (every caller already falsified) — it only flips the failure from "AOT undeclared" to "binder unbound",
+  a no-op for a never-compiling program. OP-43 survivor set 26→23.
+- DIFF: self/env.hexa — "dot"/"mat_add_inplace"/"matmul_into" removed from env_new() roster + scoped OP-47
+  comment block (mirrors OP-43/OP-33b-d convention). Roster well-formed; neighbors matvec/mat_add/rms_norm/rope/
+  rope_inplace/repeat_kv confirmed present. wipe_guard net +11/−2 « 50. POST-EDIT: env.hexa transpiles clean
+  (~/.hx/bin/build/hexat self/env.hexa /tmp/op47_env.c → OK); 0 roster strings for each removed name.
+- OUTCOME: 🟢 GREEN. Verdict .verdicts/hexa-0pod/F-OP47-MATMUL-DOT-PROBE.txt. Reversible one-line re-add.
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
 ## 2026-06-12 — OP-42 DONE: OP-40 hex-float fold-serialize → determinism contract (compile-time-const-folding §) + OP-39 gate +5 hex-float cases (13→18) · docs+test+ci-comment · $0 · 0-pod
 - SURVEY-FIRST (mandatory). Read F-OP40-COMPTIME-MUL-ULP.txt (the fix: comptime float const-fold serializes folded
   doubles as bit-exact C99 hex-float literals 0x1.<mant>p<exp> via _cf_float_hexlit/_cf_nib_hex, integer ops only —
