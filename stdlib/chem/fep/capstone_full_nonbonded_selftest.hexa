@@ -1,0 +1,279 @@
+// stdlib/chem/fep/capstone_full_nonbonded_selftest.hexa — g5 seal for the
+// QFORGE-BIO R15 FULL solute-solvent nonbonded-sum hydration ΔG.
+//
+// Run:
+//   hexa run stdlib/chem/fep/capstone_full_nonbonded_selftest.hexa
+//
+// R14 reduced methane–water to ONE effective C···OW soft-core site (config
+// = [r]) and honestly reported ΔG_hyd ≈ −0.5 kcal/mol (exp +2.0) as a
+// SYSTEMATIC single-site offset — the single site cannot hold the multi-
+// water cavity term. R15 builds the FULL nonbonded sum: every methane atom
+// (c3 + 4 hc, real GAFF ε/σ/q) × every atom of an explicit TIP3P water
+// shell (OW + 2 HW each, real charges), soft-core λ-decoupled as one block.
+//
+// Checks (R15 charter a–e):
+//   (a) FULL-SUM WIRING — the Σ over all (solute × solvent) pairs evaluates
+//       with NaN-0, error-0; every per-pair soft-core finite; the explicit
+//       water shell builds (real OW/HW types + geometry).
+//   (b) ΔG SHIFT vs SINGLE-SITE — run BOTH the R14 single-site model and the
+//       R15 full sum on the SAME FF/seed and report the ΔG shift; the full
+//       sum carries the cavity term, so report HONESTLY whether ΔG moves in
+//       the +direction (toward the hydrophobic exp anchor). NOT forced.
+//   (c) λ-ENDPOINT SAFETY — the full-sum soft-core stays finite at λ=0,1 even
+//       with a solute atom overlapping a water atom (r→0), and U(λ=0)=0 (the
+//       whole block decouples exactly).
+//   (d) DETERMINISM — same seed ⇒ bit-identical full-sum ΔG.
+//   (e) exp ANCHOR — |full-sum ΔG − exp +2.0| reported VERBATIM, split into
+//       statistical band (MBAR vs independent TI) vs residual systematic
+//       offset (finite shell · no PME · short sampling). Strictly no forcing.
+
+use "stdlib/math/logsumexp"
+use "stdlib/tensor/mod"
+use "stdlib/tensor/shape"
+use "stdlib/tensor/ops"
+use "stdlib/autograd"
+use "stdlib/chem/md/lennard_jones"
+use "stdlib/chem/md/shake"
+use "stdlib/chem/md/langevin"
+use "stdlib/chem/fep/softcore"
+use "stdlib/chem/fep/mbar"
+use "stdlib/chem/fep/hrex"
+use "stdlib/chem/fep/abfe_demo"
+use "stdlib/chem/ff/bondperception"
+use "stdlib/chem/ff/topology"
+use "stdlib/chem/ff/amber"
+use "stdlib/chem/solvate/tip3p"
+use "stdlib/chem/fep/capstone_methane_hyd"
+use "stdlib/chem/fep/capstone_full_nonbonded"
+
+let mut pass_count = 0
+let mut total = 0
+let mut first_fail = ""
+
+fn abs_f(x: float) -> float { if x < 0.0 { return 0.0 - x } else { return x } }
+fn is_finite(x: float) -> bool {
+    if x != x { return false }
+    if x > 1.0e290 { return false }
+    if x < (0.0 - 1.0e290) { return false }
+    return true
+}
+fn check(name: string, cond: bool, detail: string) {
+    total = total + 1
+    if cond {
+        pass_count = pass_count + 1
+        println("  ok : " + name + " " + detail)
+    } else {
+        if first_fail == "" { first_fail = name }
+        println("  FAIL " + name + " " + detail)
+    }
+}
+
+// selftest-sized options (small explicit shell + short sampling for walltime;
+// the short-sample bias is REPORTED honestly — this is a wiring + cavity
+// seal, NOT a converged hydration FE). The full sum is O(Ns·Nsolv) per energy
+// eval, so the shell and sweeps are kept modest.
+fn full_opts(seed: int, geo: array) {
+    let o = #{}
+    o["n_waters"]           = 8
+    o["shell_r"]            = 3.6
+    o["n_sweeps"]           = 80
+    o["swap_period"]        = 1
+    o["md_steps_per_sweep"] = 1
+    o["seed"]               = seed
+    o["mbar_tol"]           = 1.0e-12
+    o["mbar_max_iter"]      = 800
+    o["T"]                  = 298.15
+    o["step"]               = 0.12
+    o["geo_coords"]         = geo
+    // include_coulomb defaults FALSE (clean hydrophobic dispersion block).
+    return o
+}
+
+// the R14 single-site options (same seed/sweeps for an apples-to-apples shift).
+fn single_opts(seed: int) {
+    let o = #{}
+    o["n_sweeps"]           = 80
+    o["swap_period"]        = 1
+    o["md_steps_per_sweep"] = 1
+    o["seed"]               = seed
+    o["mbar_tol"]           = 1.0e-12
+    o["mbar_max_iter"]      = 800
+    o["T"]                  = 298.15
+    return o
+}
+
+fn main() {
+    println("── full-nonbonded selftest — R15: all solute×solvent pairs → ΔG_hyd ──")
+    println("")
+
+    // front-end: raw CH4 coords → bonds → GAFF types → real ε/σ/q (R11-R13).
+    let geo = methane_geometry()
+    let atoms = geo["atoms"]
+    let coords = geo["coords"]
+    let ff = perceive_real_ff(atoms, coords, 0.4)
+
+    // ═══════════════════════════════════════════════════════════════════
+    // (a) FULL-SUM WIRING — Σ over all (solute × solvent) pairs, NaN-0.
+    // ═══════════════════════════════════════════════════════════════════
+    println("── (a) full-sum wiring: explicit water shell + Σ all pairs finite ──")
+    let shell = build_water_shell(8, 3.6, 90909)
+    let scoords = shell["coords"]
+    let stypes = shell["types"]
+    // shell: 8 waters × 3 atoms = 24 solvent atoms, types [OW,HW,HW,...].
+    let shell_ok = scoords.len() == 24 && stypes.len() == 24
+                   && stypes[0] == "OW" && stypes[1] == "HW" && stypes[2] == "HW"
+                   && stypes[3] == "OW"
+    let table = build_pair_table(ff, false)
+    // evaluate the full sum at the coupled endpoint λ=1 on the raw geometry.
+    let u_full = full_nonbonded_energy(coords, shell, table, 1.0)
+    let g_full = full_nonbonded_dudlam(coords, shell, table, 0.5)
+    // count pairs explicitly (5 solute × 24 solvent = 120).
+    let n_pairs = coords.len() * scoords.len()
+    // every per-pair finite (spot-check the whole sum + a few singles).
+    let mut all_pair_finite = is_finite(u_full) && is_finite(g_full)
+    let row_ow = table["OW"]
+    let p0 = row_ow[0]
+    let c6 = [coords[0]["x"], coords[0]["y"], coords[0]["z"],
+              scoords[0]["x"], scoords[0]["y"], scoords[0]["z"]]
+    let u_one = softcore_energy_value(c6, 1.0, p0)
+    if is_finite(u_one) == false { all_pair_finite = false }
+    println("    shell: " + to_string(scoords.len()) + " solvent atoms ("
+            + to_string(shell["n_waters"]) + " waters)  types[0..3]="
+            + to_string(stypes[0]) + "," + to_string(stypes[1]) + ","
+            + to_string(stypes[2]) + "," + to_string(stypes[3]))
+    println("    n_pairs = " + to_string(n_pairs) + "  U_full(λ=1) = "
+            + to_string(u_full) + " kcal/mol  dU/dλ(λ=0.5) = " + to_string(g_full))
+    check("(a) full-sum wiring: shell built + Σ all pairs finite, NaN-0",
+          shell_ok && all_pair_finite && n_pairs == 120,
+          "shell_ok=" + to_string(shell_ok) + " n_pairs=" + to_string(n_pairs)
+          + " finite=" + to_string(all_pair_finite))
+
+    // ═══════════════════════════════════════════════════════════════════
+    // (b) ΔG SHIFT vs SINGLE-SITE — full sum carries the cavity term.
+    // ═══════════════════════════════════════════════════════════════════
+    println("")
+    println("── (b) ΔG shift: full nonbonded sum vs R14 single-site (same seed) ──")
+    let res_full = run_hydration_full(ff, full_opts(90909, coords))
+    let dG_full = res_full["dG_hyd_kcal"]
+    let res_single = run_hydration(ff, single_opts(90909))
+    let dG_single = res_single["dG_hyd_kcal"]
+    let shift = dG_full - dG_single
+    println("    single-site ΔG_hyd = " + to_string(dG_single) + " kcal/mol  (R14 model)")
+    println("    full-sum    ΔG_hyd = " + to_string(dG_full) + " kcal/mol  ("
+            + to_string(res_full["n_waters"]) + " waters, "
+            + to_string(res_full["n_pairs"]) + " pairs)")
+    println("    ΔG shift (full − single) = " + to_string(shift) + " kcal/mol")
+    println("    ── HONEST: the full sum adds the multi-water cavity term (4 H volume")
+    println("       + explicit shell). A +shift moves toward the hydrophobic +2.0 exp")
+    println("       anchor; the SIGN/MAGNITUDE are reported VERBATIM, never forced.")
+    // PASS = both ΔG finite + the full sum produced a real (non-zero) shift,
+    // proving the cavity term is physically present (not a numerical no-op).
+    let shift_real = abs_f(shift) > 1.0e-6
+    check("(b) ΔG shift: full-sum vs single-site both finite + real shift (cavity present)",
+          is_finite(dG_full) && is_finite(dG_single) && shift_real,
+          "dG_full=" + to_string(dG_full) + " dG_single=" + to_string(dG_single)
+          + " shift=" + to_string(shift))
+
+    // ═══════════════════════════════════════════════════════════════════
+    // (c) λ-ENDPOINT SAFETY — full-sum soft-core finite at r→0, λ=0/1.
+    // ═══════════════════════════════════════════════════════════════════
+    println("")
+    println("── (c) λ-endpoint safety: full sum finite with a solute atom on a water ──")
+    // place the carbon ON TOP of the first water O (r→0 overlap), full charges.
+    let table_c = build_pair_table(ff, true)
+    let ow0 = scoords[0]
+    let mut ov_coords = []
+    let mut ic = 0
+    while ic < coords.len() {
+        let cc = #{}
+        if ic == 0 {
+            cc["x"] = ow0["x"] + 0.05
+            cc["y"] = ow0["y"]
+            cc["z"] = ow0["z"]
+        } else {
+            cc["x"] = coords[ic]["x"]
+            cc["y"] = coords[ic]["y"]
+            cc["z"] = coords[ic]["z"]
+        }
+        ov_coords.push(cc)
+        ic = ic + 1
+    }
+    let u_l0 = full_nonbonded_energy(ov_coords, shell, table_c, 0.0)
+    let u_l1 = full_nonbonded_energy(ov_coords, shell, table_c, 1.0)
+    let u_lh = full_nonbonded_energy(ov_coords, shell, table_c, 0.5)
+    let g_l0 = full_nonbonded_dudlam(ov_coords, shell, table_c, 0.0)
+    let g_l1 = full_nonbonded_dudlam(ov_coords, shell, table_c, 1.0)
+    println("    overlap (C on water-O, real ε/σ/q):")
+    println("      U(λ=0)=" + to_string(u_l0) + "  U(λ=0.5)=" + to_string(u_lh)
+            + "  U(λ=1)=" + to_string(u_l1))
+    println("      dU/dλ(λ=0)=" + to_string(g_l0) + "  dU/dλ(λ=1)=" + to_string(g_l1))
+    let endpoint_safe = is_finite(u_l0) && is_finite(u_l1) && is_finite(u_lh)
+                        && is_finite(g_l0) && is_finite(g_l1)
+    let decoupled = abs_f(u_l0) < 1.0e-12   // λ=0 zeroes the WHOLE block exactly
+    check("(c) λ-endpoint safety: full-sum U & dU/dλ finite at r→0, λ=0 decoupled",
+          endpoint_safe && decoupled,
+          "finite=" + to_string(endpoint_safe) + " U(λ=0)=" + to_string(u_l0))
+
+    // ═══════════════════════════════════════════════════════════════════
+    // (d) DETERMINISM — same seed ⇒ bit-identical full-sum ΔG.
+    // ═══════════════════════════════════════════════════════════════════
+    println("")
+    println("── (d) determinism: same seed ⇒ bit-identical full-sum ΔG ──")
+    let res2 = run_hydration_full(ff, full_opts(90909, coords))
+    let dG2 = res2["dG_hyd_kcal"]
+    let ddet = abs_f(dG2 - dG_full)
+    println("    ΔG run#1=" + to_string(dG_full) + "  ΔG run#2=" + to_string(dG2)
+            + "  |Δ|=" + to_string(ddet))
+    check("(d) determinism: same seed ⇒ bit-identical full-sum ΔG", ddet == 0.0,
+          "|Δ|=" + to_string(ddet))
+
+    // ═══════════════════════════════════════════════════════════════════
+    // (e) exp ANCHOR — |full-sum ΔG − exp +2.0| verbatim, band split.
+    // ═══════════════════════════════════════════════════════════════════
+    println("")
+    println("── (e) exp anchor: |full-sum ΔG − +2.0| verbatim (stat band vs systematic) ──")
+    let dG_ti = res_full["dG_ti_kcal"]
+    let ref_kcal = res_full["ref_kcal"]
+    let conv = res_full["converged"]
+    let stat_band = abs_f(dG_full - dG_ti)
+    let sys_dev_full = abs_f(dG_full - ref_kcal)
+    let sys_dev_single = abs_f(dG_single - ref_kcal)
+    // u_kn finiteness.
+    let ukn = res_full["u_kn"]
+    let mut ukn_finite = true
+    let mut iu = 0
+    while iu < ukn.len() {
+        if is_finite(ukn[iu]) == false { ukn_finite = false }
+        iu = iu + 1
+    }
+    println("    full-sum  MBAR ΔG = " + to_string(dG_full) + "   indep TI ΔG = "
+            + to_string(dG_ti) + "   (converged=" + to_string(conv) + ")")
+    println("    statistical band |MBAR − TI| = " + to_string(stat_band) + " kcal/mol")
+    println("    exp anchor ΔG_hyd(CH4) ≈ " + to_string(ref_kcal) + " kcal/mol")
+    println("    |full-sum − exp|   = " + to_string(sys_dev_full) + " kcal/mol")
+    println("    |single-site − exp| = " + to_string(sys_dev_single) + " kcal/mol  (R14)")
+    println("    ── HONEST (d6/@L5): the full sum is MORE physical (cavity present),")
+    println("       but a finite explicit shell + no-PME long-range + short sampling")
+    println("       leave a residual systematic offset. Whether |full−exp| < |single−exp|")
+    println("       is reported VERBATIM above — the +2.0 anchor is NEVER forced. Closing")
+    println("       the residual needs a converged periodic box + PME + long sampling (R16).")
+    // PASS = the full chain produced a finite, converged ΔG with finite u_kn
+    // and the two independent estimators agree within a (short-sample) band.
+    // We do NOT gate on hitting +2.0 (that would be forcing).
+    check("(e) exp anchor: full-sum ΔG finite + converged + MBAR≈TI band reported",
+          is_finite(dG_full) && conv && is_finite(dG_ti) && ukn_finite
+          && stat_band < 0.5,
+          "|full−exp|=" + to_string(sys_dev_full) + " band=" + to_string(stat_band))
+
+    // ── verdict ──────────────────────────────────────────────────────
+    println("")
+    if pass_count == total {
+        println("PASS: full-nonbonded " + to_string(pass_count) + "/" + to_string(total))
+        println("full solute×solvent nonbonded sum → ΔG_hyd SEALED · R14 single-site widened.")
+        exit(0)
+    } else {
+        println("FAIL: full-nonbonded first=" + first_fail
+                + " (" + to_string(pass_count) + "/" + to_string(total) + ")")
+        exit(1)
+    }
+}

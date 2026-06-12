@@ -1,0 +1,473 @@
+// stdlib/chem/fep/capstone_full_nonbonded.hexa — FULL solute-solvent
+// nonbonded sum hydration ΔG (QFORGE-BIO round-15).
+//
+// @version 0.1.0
+// @capabilities [pure, randomness]
+//
+// ── PURPOSE ──────────────────────────────────────────────────────────
+// R14 (capstone_methane_hyd.hexa) sealed the raw-molecule → real-GAFF-FF
+// → end-to-end ΔG_hyd full chain, but the methane–water interaction was
+// reduced to ONE effective soft-core site (the dominant C···OW dispersion
+// pair, config = [r], a single solute-solvent separation). That single
+// site CANNOT represent the multi-water CAVITY term that makes methane
+// net-hydrophobic — R14 honestly reported ΔG_hyd ≈ −0.5 kcal/mol (exp
+// +2.0) as a SYSTEMATIC single-site reduced-model offset.
+//
+// R15 removes that reduction. It builds the FULL solute-solvent nonbonded
+// sum: EVERY methane atom (c3 + 4 hc, real GAFF ε/σ/q) against EVERY atom
+// of an explicit TIP3P water shell (each water = OW + 2 HW, real charges,
+// OW the only LJ site), soft-core LJ + (optional) charge, λ-decoupling the
+// WHOLE solute-solvent block at once. The cavity term is now PHYSICALLY
+// present: the four H's contribute repulsive volume, and the multi-water
+// shell supplies the many-body dispersion/packing the single site omits.
+//
+// ── WHAT CHANGED vs R14 (honest, d6/@L5) ─────────────────────────────
+//   R14 single-site            →  R15 full nonbonded sum
+//   1 effective C···OW pair    →  Σ over (5 solute atoms)×(3·Nwater atoms)
+//   config = [r]               →  config = flattened 5-atom solute coords
+//   water = implicit           →  EXPLICIT TIP3P shell (real OW/HW q, LJ)
+//   cavity term ABSENT         →  cavity term present (H volume + N waters)
+// The ε/σ/q are STILL the real GAFF/TIP3P literature values reached through
+// the perception front-end — R15 widens the SUM, it does not change the FF.
+//
+// ── d3 / d4 compliance ───────────────────────────────────────────────
+// d3: NO new physics. The per-pair soft-core energy / dU/dλ is the R3
+//     softcore brick (softcore_energy_value / softcore_dUdlam_autograd),
+//     the LB-combine is amber.hexa (lb_epsilon / lb_sigma), the water shell
+//     is the R6 tip3p brick (tip3p_molecule), the sampling is run_abfe
+//     (R5 HREX + R4 MBAR). This file SUMS sealed bricks, it re-derives none.
+// d4: the solute (atoms+coords+types), the water shell (count+placement),
+//     λ ladder, sweeps and step are GENERIC arguments. NO molecule name is
+//     branched on; swap the solute and the SAME path yields its ΔG.
+//
+// ── Public surface ───────────────────────────────────────────────────
+//   pub fn pair_params(ff, si, solvent_type, include_coulomb) -> dict
+//        the real LB-combined soft-core pair `p` for solute atom `si`
+//        against a solvent atom of `solvent_type` (OW or HW). ε/σ are
+//        ALWAYS real LB values; q1·q2 the real cross-term iff include_coulomb.
+//   pub fn build_water_shell(n_waters, shell_r, seed) -> dict
+//        an explicit TIP3P shell: `n_waters` rigid waters placed on a
+//        spherical-ish lattice around the origin at ~shell_r Å. Returns
+//        { coords: [Nw*3 atoms ×{x,y,z}], types: [OW,HW,HW,...] }.
+//   pub fn full_nonbonded_energy(sol_coords, sol_types, shell, ff, lam,
+//                                solvent_pairs) -> float
+//        Σ_{i∈solute} Σ_{j∈solvent} U_sc(r_ij, λ; p_ij)  (kcal/mol).
+//   pub fn full_nonbonded_dudlam(...) -> float   // Σ ∂U_sc/∂λ
+//   pub fn run_hydration_full(ff, opts) -> dict
+//        the end-to-end full-sum ΔG_hyd via run_abfe. The raw solute coords
+//        come in generically via opts["geo_coords"] (the geometry the FF was
+//        perceived from). Returns the run_abfe bundle plus { dG_hyd_kcal,
+//        dG_ti_kcal, ref_kcal, abs_dev, n_waters, n_pairs }.
+
+use "stdlib/math/logsumexp"
+use "stdlib/chem/md/lennard_jones"
+use "stdlib/chem/md/shake"
+use "stdlib/chem/md/langevin"
+use "stdlib/chem/fep/softcore"
+use "stdlib/chem/fep/mbar"
+use "stdlib/chem/fep/hrex"
+use "stdlib/chem/fep/abfe_demo"
+use "stdlib/chem/ff/bondperception"
+use "stdlib/chem/ff/topology"
+use "stdlib/chem/ff/amber"
+use "stdlib/chem/solvate/tip3p"
+use "stdlib/chem/fep/capstone_methane_hyd"
+
+// methane experimental hydration free energy ≈ +2.0 kcal/mol (FreeSolv).
+let METHANE_HYD_REF_KCAL_FULL = 2.0
+
+fn _absf(x: float) -> float { if x < 0.0 { return 0.0 - x } else { return x } }
+
+// ── real soft-core pair params for one solute atom × one solvent type ──
+// ε/σ are the LB-combine of the solute atom's GAFF type and the solvent
+// type (OW/HW). q1·q2 the real GAFF/TIP3P charge cross-term iff include
+// (HW has no LJ — its ε=0 → ε_ij=0, so an HW pair is charge-only, exactly
+// the TIP3P convention). d4: solvent_type / include_coulomb are arguments.
+pub fn pair_params(ff: dict, si: int, solvent_type: string,
+                   include_coulomb: bool) -> dict {
+    let db = gaff_tip3p_types()
+    let types = ff["types"]
+    let stype = types[si]
+
+    let eps_s  = ff_atom_eps(db, stype)
+    let rmin_s = ff_atom_rmin_half(db, stype)
+    let q_s    = ff_atom_charge(db, stype)
+    let eps_w  = ff_atom_eps(db, solvent_type)
+    let rmin_w = ff_atom_rmin_half(db, solvent_type)
+    let q_w    = ff_atom_charge(db, solvent_type)
+
+    let sig_s  = amber_rmin_half_to_sigma(rmin_s)
+    let sig_w  = amber_rmin_half_to_sigma(rmin_w)
+    let eps_ij = lb_epsilon(eps_s, eps_w)             // √(ε_s·ε_w)
+    // HW (and any ε=0 site) has rmin_half=0 → σ_w=0; guard σ_ij>0 so the
+    // soft-core (r/σ)⁶ stays finite. A zero-ε pair contributes no LJ anyway.
+    let mut sig_ij = lb_sigma(sig_s, sig_w)
+    if sig_ij < 1.0e-6 { sig_ij = sig_s }
+
+    let mut qa = 0.0
+    let mut qb = 0.0
+    if include_coulomb {
+        qa = q_s
+        qb = q_w
+    }
+
+    let p = #{}
+    p["eps"]      = eps_ij
+    p["sigma"]    = sig_ij
+    p["q1"]       = qa
+    p["q2"]       = qb
+    p["ke"]       = 332.0637
+    p["alpha_lj"] = 0.5
+    p["alpha_c"]  = 0.5
+    p["n"]        = 1.0
+    p["m"]        = 1.0
+    return p
+}
+
+// ── precompute the per-(solute-atom, solvent-type) pair table ─────────
+// Indexed [si][st] where st: 0=OW, 1=HW. Built ONCE (ε/σ/q are config-
+// independent) and threaded through every energy evaluation. d4-generic.
+pub fn build_pair_table(ff: dict, include_coulomb: bool) -> dict {
+    let types = ff["types"]
+    let mut ow = []
+    let mut hw = []
+    let mut i = 0
+    while i < types.len() {
+        ow.push(pair_params(ff, i, "OW", include_coulomb))
+        hw.push(pair_params(ff, i, "HW", include_coulomb))
+        i = i + 1
+    }
+    let out = #{}
+    out["OW"] = ow
+    out["HW"] = hw
+    return out
+}
+
+// ── explicit TIP3P water shell around the origin (real geometry) ──────
+// Places `n_waters` rigid TIP3P molecules (R6 tip3p_molecule, real OW/HW
+// geometry + charges) with their O sites on a deterministic Fibonacci-
+// sphere lattice at radius ~shell_r Å. The solute sits at the origin; the
+// shell supplies the MULTI-WATER environment the single site omitted.
+// Returns flat atom coords ([Nw*3]×{x,y,z}) + parallel type list
+// ([OW,HW,HW,...]). d4: count + radius are arguments, no name branch.
+pub fn build_water_shell(n_waters: int, shell_r: float, seed: int) -> dict {
+    let mut coords = []
+    let mut wtypes = []
+    let golden = 2.399963229728653          // golden-angle (rad) ≈ π(3−√5)
+    let mut k = 0
+    while k < n_waters {
+        // Fibonacci sphere: even angular spread, deterministic.
+        let fk = to_float(k)
+        let fn_ = to_float(n_waters)
+        let y = 1.0 - 2.0 * (fk + 0.5) / fn_         // y ∈ (−1,1)
+        let mut rxy = 1.0 - y * y
+        if rxy < 0.0 { rxy = 0.0 }
+        let rad = sqrt(rxy)
+        let theta = golden * fk
+        let ox = shell_r * rad * cos(theta)
+        let oy = shell_r * y
+        let oz = shell_r * rad * sin(theta)
+        // R6 closed-form rigid TIP3P molecule at this O centre.
+        let mol = tip3p_molecule(ox, oy, oz)
+        let mut a = 0
+        while a < 3 {
+            let at = mol[a]
+            let c = #{}
+            c["x"] = at.x
+            c["y"] = at.y
+            c["z"] = at.z
+            coords.push(c)
+            if a == 0 { wtypes.push("OW") } else { wtypes.push("HW") }
+            a = a + 1
+        }
+        k = k + 1
+    }
+    let out = #{}
+    out["coords"] = coords
+    out["types"]  = wtypes
+    out["n_waters"] = n_waters
+    return out
+}
+
+// ── full solute-solvent soft-core sum (energy) ───────────────────────
+// sol_coords : [Ns]×{x,y,z} current solute atom positions.
+// shell      : build_water_shell output (fixed solvent atoms + types).
+// table      : build_pair_table output (real per-pair ε/σ/q).
+// lam        : decoupling λ (1=coupled, 0=decoupled).
+// U = Σ_{i solute} Σ_{j solvent} U_sc(r_ij, λ; p_ij)   in kcal/mol.
+// Each pair feeds the R3 softcore brick with the real LB-combined `p`.
+// d3: NO LJ/Coulomb re-implemented — softcore_energy_value does the pair.
+pub fn full_nonbonded_energy(sol_coords: array, shell: dict, table: dict,
+                             lam: float) -> float {
+    let scoords = shell["coords"]
+    let stypes  = shell["types"]
+    let ns = sol_coords.len()
+    let nsolv = scoords.len()
+    let mut u = 0.0
+    let mut i = 0
+    while i < ns {
+        let pi = sol_coords[i]
+        let row_ow = table["OW"]
+        let row_hw = table["HW"]
+        let p_ow = row_ow[i]
+        let p_hw = row_hw[i]
+        let mut j = 0
+        while j < nsolv {
+            let pj = scoords[j]
+            let coords6 = [pi["x"], pi["y"], pi["z"], pj["x"], pj["y"], pj["z"]]
+            let mut p = p_hw
+            if stypes[j] == "OW" { p = p_ow }
+            u = u + softcore_energy_value(coords6, lam, p)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return u
+}
+
+// ── full solute-solvent soft-core sum (alchemical gradient ∂U/∂λ) ────
+// Σ over the same pairs of the R3 autograd dU/dλ — for the independent TI
+// cross-check anchor. d3: softcore_dUdlam_autograd does each pair.
+pub fn full_nonbonded_dudlam(sol_coords: array, shell: dict, table: dict,
+                             lam: float) -> float {
+    let scoords = shell["coords"]
+    let stypes  = shell["types"]
+    let ns = sol_coords.len()
+    let nsolv = scoords.len()
+    let mut g = 0.0
+    let mut i = 0
+    while i < ns {
+        let pi = sol_coords[i]
+        let row_ow = table["OW"]
+        let row_hw = table["HW"]
+        let p_ow = row_ow[i]
+        let p_hw = row_hw[i]
+        let mut j = 0
+        while j < nsolv {
+            let pj = scoords[j]
+            let coords6 = [pi["x"], pi["y"], pi["z"], pj["x"], pj["y"], pj["z"]]
+            let mut p = p_hw
+            if stypes[j] == "OW" { p = p_ow }
+            g = g + softcore_dUdlam_autograd(coords6, lam, p)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return g
+}
+
+// ── config ↔ solute-coords flattening (generic; config = [Ns*3] floats) ─
+fn _flatten_coords(coords: array) -> array {
+    let mut out = []
+    let mut i = 0
+    while i < coords.len() {
+        let c = coords[i]
+        out.push(c["x"])
+        out.push(c["y"])
+        out.push(c["z"])
+        i = i + 1
+    }
+    return out
+}
+fn _unflatten_coords(flat: array, ns: int) -> array {
+    let mut out = []
+    let mut i = 0
+    while i < ns {
+        let c = #{}
+        c["x"] = flat[i * 3 + 0]
+        c["y"] = flat[i * 3 + 1]
+        c["z"] = flat[i * 3 + 2]
+        out.push(c)
+        i = i + 1
+    }
+    return out
+}
+
+// ── reduced-potential factory: ufn(config, lam) = β·U_full ────────────
+// config = flattened solute coords [Ns*3]. The water shell + pair table +
+// β are captured. β folds kcal/mol → reduced (dimensionless) potential for
+// MBAR/HREX. d3: full_nonbonded_energy does the physics.
+fn _full_ufn_factory(shell, table, ns: int, beta: float) {
+    return fn(config, lam) {
+        let sc = _unflatten_coords(config, ns)
+        return beta * full_nonbonded_energy(sc, shell, table, lam)
+    }
+}
+fn _full_dudl_factory(shell, table, ns: int, beta: float) {
+    return fn(config, lam) {
+        let sc = _unflatten_coords(config, ns)
+        return beta * full_nonbonded_dudlam(sc, shell, table, lam)
+    }
+}
+
+// ── MC propagator: rigid solute translation vs the fixed water shell ──
+// A rigid-body translation of the WHOLE solute (all atoms shift by the same
+// δ) preserves the methane internal geometry exactly (intramolecular terms
+// are unchanged and excluded from the alchemical sum), so the move samples
+// only the solute–solvent relative configuration — the decoupling DOF.
+// Metropolis on ΔU via hrex_accept_prob; threads the HREX LCG. (reuse of
+// the abfe_demo / R14 propagator structure, not a re-derive.)
+fn _f_lcg(state: int) -> array {
+    let nx = (1664525 * state + 1013904223) & 0xFFFFFFFF
+    return [nx, to_float(nx) / 4294967296.0]
+}
+fn _f_gauss(state: int) -> array {
+    let a = _f_lcg(state)
+    let b = _f_lcg(to_int(a[0]))
+    let mut u1 = a[1]
+    if u1 < 1.0e-12 { u1 = 1.0e-12 }
+    let z = sqrt(0.0 - 2.0 * ln(u1)) * cos(6.283185307179586 * b[1])
+    return [b[0], z]
+}
+fn _full_prop_factory(ufn, step: float, ns: int) {
+    return fn(config, lam, lcg) {
+        // one rigid translation along a random axis-mix (3 gaussian deltas).
+        let g1 = _f_gauss(lcg)
+        let s1 = to_int(g1[0])
+        let g2 = _f_gauss(s1)
+        let s2 = to_int(g2[0])
+        let g3 = _f_gauss(s2)
+        let s3 = to_int(g3[0])
+        let dx = step * g1[1]
+        let dy = step * g2[1]
+        let dz = step * g3[1]
+        let mut trial = []
+        let mut i = 0
+        while i < ns {
+            trial.push(config[i * 3 + 0] + dx)
+            trial.push(config[i * 3 + 1] + dy)
+            trial.push(config[i * 3 + 2] + dz)
+            i = i + 1
+        }
+        let du = ufn(trial, lam) - ufn(config, lam)
+        let acc = _f_lcg(s3)
+        let s4 = to_int(acc[0])
+        if acc[1] < hrex_accept_prob(du) {
+            return [trial, s4]
+        }
+        return [config, s4]
+    }
+}
+
+fn _optf(opts, key: string, dflt) {
+    if opts.contains_key(key) { return opts[key] }
+    return dflt
+}
+
+// ── run_hydration_full: end-to-end full-sum ΔG_hyd ───────────────────
+// ff   : perceive_real_ff output (real per-atom params + perceived types).
+// opts : generic dict — n_waters, shell_r, include_coulomb, ladder,
+//        n_sweeps, swap_period, md_steps_per_sweep, seed, mbar_tol,
+//        mbar_max_iter, T, step, sol_offset. Every knob is data (d4).
+// Decouples the FULL methane···(water shell) soft-core block λ:1→0 through
+// HREX + MBAR (run_abfe). ΔG_hyd reported vs +2.0 kcal/mol exp anchor.
+pub fn run_hydration_full(ff: dict, opts) -> dict {
+    let inc_coul = _optf(opts, "include_coulomb", false)
+    let n_waters = _optf(opts, "n_waters", 12)
+    let shell_r  = _optf(opts, "shell_r", 3.6)
+    let table = build_pair_table(ff, inc_coul)
+    let shell = build_water_shell(n_waters, shell_r, _optf(opts, "seed", 90909))
+
+    // solute coords: the raw Cartesian geometry the FF was perceived from.
+    // Supplied generically via opts["geo_coords"] (or ff["geo_coords"] if the
+    // caller folded it in). The methane carbon is at the origin = shell centre.
+    let mut geo = _optf(opts, "geo_coords", [])
+    if geo.len() == 0 {
+        if ff.contains_key("geo_coords") { geo = ff["geo_coords"] }
+    }
+    let ns = geo.len()
+    let flat0 = _flatten_coords(geo)
+
+    let T    = _optf(opts, "T", 298.15)
+    let kT   = 0.0019872041 * T
+    let beta = 1.0 / kT
+
+    let ufn  = _full_ufn_factory(shell, table, ns, beta)
+    let dudl = _full_dudl_factory(shell, table, ns, beta)
+    let step = _optf(opts, "step", 0.12)
+    let prop = _full_prop_factory(ufn, step, ns)
+
+    // λ ladder 1→0 (coupled → decoupled): ΔG = G(off) − G(on).
+    let ladder = _optf(opts, "ladder", [1.0, 0.8, 0.6, 0.4, 0.2, 0.0])
+    let K = ladder.len()
+    let mut configs0 = []
+    let mut i = 0
+    while i < K { configs0.push(flat0) i = i + 1 }
+
+    let cfg = abfe_config(ladder,
+                          _optf(opts, "n_sweeps", 200),
+                          _optf(opts, "swap_period", 1),
+                          _optf(opts, "md_steps_per_sweep", 2),
+                          0.0,
+                          kT,
+                          _optf(opts, "seed", 90909),
+                          _optf(opts, "mbar_tol", 1.0e-12),
+                          _optf(opts, "mbar_max_iter", 800))
+    let res = run_abfe(ufn, prop, configs0, cfg)
+    let dG_hyd = res["dG"]
+
+    // independent TI cross-check over the real samples.
+    let sbr = res["samples_by_rung"]
+    let mut dudl_nodes = []
+    let mut rb = 0
+    while rb < K {
+        let lst = sbr[rb]
+        let mut s = 0.0
+        let mut c = 0
+        while c < lst.len() {
+            s = s + dudl(lst[c], ladder[rb])
+            c = c + 1
+        }
+        let mut avg = 0.0
+        if lst.len() > 0 { avg = s / to_float(lst.len()) }
+        dudl_nodes.push(avg)
+        rb = rb + 1
+    }
+    let mut dG_ti_kT = 0.0
+    let mut it = 0
+    while it < K - 1 {
+        let l0 = ladder[it]
+        let l1 = ladder[it + 1]
+        dG_ti_kT = dG_ti_kT + 0.5 * (dudl_nodes[it + 1] + dudl_nodes[it]) * (l1 - l0)
+        it = it + 1
+    }
+    let dG_ti = dG_ti_kT * kT
+
+    let n_pairs = ns * shell["coords"].len()
+
+    let out = #{}
+    out["dG"]            = res["dG"]
+    out["dG_kT"]         = res["dG_kT"]
+    out["dG_hyd_kcal"]   = dG_hyd
+    out["dG_ti_kcal"]    = dG_ti
+    out["ref_kcal"]      = METHANE_HYD_REF_KCAL_FULL
+    out["abs_dev"]       = _absf(dG_hyd - METHANE_HYD_REF_KCAL_FULL)
+    out["kT_kcal"]       = kT
+    out["converged"]     = res["converged"]
+    out["acc_rate"]      = res["acc_rate"]
+    out["round_trips"]   = res["round_trips"]
+    out["K"]             = res["K"]
+    out["Ntot"]          = res["Ntot"]
+    out["overlap"]       = res["overlap"]
+    out["partial_dG"]    = res["partial_dG"]
+    out["u_kn"]          = res["u_kn"]
+    out["N_k"]           = res["N_k"]
+    out["n_waters"]      = n_waters
+    out["n_pairs"]       = n_pairs
+    out["samples_by_rung"] = res["samples_by_rung"]
+    return out
+}
+
+println("[capstone_full_nonbonded loaded]")
+
+// ── HONEST SCOPE (d6/@L5) ─────────────────────────────────────────────
+// PASS = "the FULL solute-solvent nonbonded sum (every methane atom × every
+// explicit-water atom, real GAFF/TIP3P ε/σ/q, soft-core λ-decoupled) wires
+// end-to-end and yields a finite ΔG_hyd that includes the multi-water cavity
+// term the R14 single site omitted." The full sum is MORE physical than the
+// single site (cavity present), and its ΔG is reported VERBATIM against the
+// +2.0 kcal/mol anchor — the |Δ| split into the statistical band (MBAR vs
+// independent TI) vs the residual systematic offset (finite explicit shell,
+// no PME long-range, short sampling). The +2.0 anchor is NEVER forced. Full
+// quantitative parity still needs a converged periodic box + PME + long
+// sampling (d17 GPU + neighbour-list efficiency) — the explicit R16 milestone.
