@@ -119,6 +119,34 @@ loop targets what the consumer card + code can carry.
   conservative live-shadow KEEP. Reservoir depleting; expect the next tranche to dereg FEWER than 6. $0 ·
   0-GPU · 0-pod · no vast · no foreign-pod · no .tape. Verdict .verdicts/hexa-0pod/F-OP51-SURVIVE-SHADOW-TRANCHE.txt.
 
+<!-- ANCHOR:OP-56-SURVIVE-TRANCHE (unique anchor — OP-51 dropped the OP-43 survivor set 16→10 by deregistering 6 [S]-shadow survivors. The remaining 10 = 9 [S R] survivors (relu sigmoid transpose normalize zeros attention topk sample_token mse_loss) + arange (a hard compiler-closure KEEP). OP-56 audits the NEXT tranche of 5 of those 9 (transpose · normalize · zeros · topk · mse_loss) with OP-51's EXACT rigorous method: per-builtin g5-falsify (AOT correct-args probe → "use of undeclared identifier") + 0-codegen-guard/0-runtime-symbol cross-ref (prefix-variant + bare-token-comment controlled) + the [S] shadow-binding CONTROL (a local `fn NAME` emits its OWN def+call and binds roster-INDEPENDENTLY) + dead/live caller classification (string-literal/different-symbol false-positive control: stdlib/dojo/rl `t_zeros(` only-in-strings, test_graph_pattern `transpose` only-in-comments/hexa_str, test_galore gal_normalize) + imported-shadow control (rag_test `use "embedding"` binds the imported normalize local) + compiler/** zero-bind-ref check (the arange lesson). CONSERVATIVE; "more keeps" was the expected/permitted outcome per OP-51's frontier note) -->
+- [x] **OP-56 — [S]-shadow survive-audit tranche (5 of 9 remaining [S R]-survivors): all 5 g5-falsified + [S] shadow-binding CONTROL proven roster-independent per name + every compiling caller resolves to a local/imported shadow + every builtin-dep call-site dead (example AOT-fail / already-failing self file) + string-literal/different-symbol false-positives controlled + compiler/** ZERO bind refs → ALL 5 DEREGISTERED. Survivor set 10→5** —
+  🟢 audited transpose·normalize·zeros·topk·mse_loss. Per builtin: 0 codegen guard (`if name=="X"`) + 0
+  callable runtime symbol — bare runtime.c hits for transpose/normalize are COMMENTS, the real symbols are
+  prefixed (farr_transpose_2d, t_zeros, tensor_zeros — note tensor_zeros is a SEPARATE kept builtin). AOT
+  probe correct-args RE-VERIFIED FALSIFIED verbatim ("use of undeclared identifier 'NAME'" each, p_*.c:20:29).
+  THE [S] CONTROL: a minimal `fn NAME(x){…}` + caller emits `HexaVal NAME(...)` forward-decl+def+call and
+  binds roster-INDEPENDENTLY (clang CLEAN per name). Every COMPILING caller resolves to a shadow: transpose
+  → self/test_collection_advanced (local); normalize → self/ml/embedding + @vectorize/@noalias local defs in
+  anima_online_learner/test_noalias + IMPORTED shadow (self/ml/rag_test `use "embedding"` → `extern HexaVal
+  normalize(_)` binds embedding.hexa's local, NOT the builtin); zeros → self/ml/transformer+serve+test_*;
+  topk → self/{test_,ml/}moe_active; mse_loss → self/test_anima_lm+ml/{lora,anima_lm_finetune}+titan_memory+
+  bench/qforge. Every builtin-dep (no-shadow) caller DEAD: example callers AOT-fail today with the builtins
+  STILL registered (test_matmul_loss already fails on the OP-47/48-removed cross_entropy/dot too —
+  builtin-independent); self/{fix_array_push_nested,ml/train_decoder_cpu_b,test_tensor_ops_deep,
+  test_score_diffusion} ALREADY AOT/transpile-fail today. FALSE-POSITIVE CONTROL: stdlib/dojo/rl emits
+  `t_zeros(`/`torch.zeros(` only inside generated-source STRINGS; test_graph_pattern `transpose` only in
+  comments+`hexa_str(...)`; test_galore calls gal_normalize (different fn) — none calls the builtin.
+  compiler/** ZERO bind/codegen refs to all 5 (every hit = comment / PLAN.md prose / atlas archive — NOT
+  compiler/check/bind.hexa allow-list, unlike arange) → byte-eq fixpoint safe. env.hexa transpiles clean
+  after the 5 removals (wipe_guard net +30/−3). HONEST FRONTIER: 4 [S R] survivors remain (relu sigmoid
+  attention sample_token) + arange pinned. These are the HARDEST: sigmoid (shadow=8/self=102, +compiler
+  comment ref) and relu (shadow=3/self=23) are large-surface live-shadow KEEP candidates; attention/
+  sample_token need per-name baseline-PASS verification of every unshadowed call-site. The reservoir is
+  near-depleted — the residual is increasingly dominated by live-shadow KEEPs (sigmoid-class) and the
+  compiler-closure KEEP (arange); expect the next tranche to dereg FEWER than 5, possibly 0. $0 · 0-GPU ·
+  0-pod · no vast · no foreign-pod · no .tape. Verdict .verdicts/hexa-0pod/F-OP56-SURVIVE-TRANCHE.txt.
+
 <!-- ANCHOR:OP-50-ROUTEA-BOUNDARY-DOCS (unique anchor — the route-(a) own-GEMM perf story has a precise, hard-won boundary scattered across OP-45 #3096 + the GPU route-(a) measurement #3094 + OP-49 #3103: route-(a) pre-permute own-GEMM is bit-exact (rel_rms 0) AND reaches cuBLAS-TF32 PARITY (~1.08x, ~93% roofline, 315 TFLOP/s) @D=2048 but is NOT a cuBLAS BEAT and falls to ~1.50x @D=4096 because it is SHAPE-RIGID (one fixed 128x128 tile) vs cuBLAS SHAPE-ADAPTIVE. OP-50 REFLECTS that boundary into the canonical forge doc (docs/forge-routea-shape-adaptive.md, the file OP-49 authored — extend > duplicate per Occam g0) as a "§0 perf boundary / honest scope" section: what own-GEMM IS (bit-exact-parity-not-beat), what it ISN'T (cuBLAS beat; W14 FP16 11.5x off, W10 6.09x off), its VALUE (bit-exactness + device-residency + no-LLVM, NOT raw TFLOP/s — mirrors flame closeout framing), and the path forward (OP-49 selector + 4 config gaps). DOCS-ONLY, every number traces to a verdict) -->
 - [x] **OP-50 — route-(a) own-GEMM perf BOUNDARY reflected into the canonical forge doc (docs/forge-routea-shape-adaptive.md §0): bit-exact (rel_rms 0) + cuBLAS-TF32 PARITY (1.08x, ~93% roofline, 315 TFLOP/s) @D=2048 — NOT a beat; ~1.50x @D=4096 because SHAPE-RIGID (fixed 128x128) vs cuBLAS SHAPE-ADAPTIVE; VALUE = bit-exactness + device-residency + no-LLVM, not raw TFLOP/s; path-forward = OP-49 selector + 4 gaps. DOCS-ONLY, $0, 0-pod** —
   🟢 DOCS-ONLY reflection (no code/runtime/.tape). Added a "## 0. Perf boundary / honest scope — what own-GEMM
