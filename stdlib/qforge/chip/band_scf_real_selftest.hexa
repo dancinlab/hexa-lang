@@ -1,0 +1,232 @@
+// @ci_gate — deterministic · real-SCF V_scr drop-in vs R3 analytic-limit + R5 NEGF
+//
+// qforge_chip_band_scf_real_selftest.hexa — QFORGE CHIP round-6 g5 gate.
+//
+// band_scf_real.hexa CLOSES round-3's honest gap (R3 fed V as an ANALYTIC Fourier map,
+// NOT a converged real-cell scf_pw V_scr). Round-6 runs the REAL stdlib qforge_scf_pw on
+// a small cell to a CONVERGED self-consistent density, extracts the self-consistent G=0
+// screening V_scr(G=0)=V_xc(ρ̄_sc) off the converged ρ, DROPS IT IN to the SAME R3
+// H(k)=T(k)+V eig path (data swap, d4), and hands the band-derived device H_D to the R5
+// Σ-NEGF. Four anchors, each closed-form / exact-reproduction (d6 — none tuned):
+//
+//   (a) V_scr WIRING (real self-consistent leg) — a CONVERGED qforge_scf_pw run
+//       (scf.converged asserted, NOT a fixed potential) yields a self-consistent G=0
+//       screening; feeding it to R3's H(k) shifts ε₀(k) by EXACTLY that screening, and
+//       the extracted value REPRODUCES the SCF's own qforge_vscr_diag mean to 1e-12. The
+//       converged number drops into the band's potential with zero error.            🟢
+//   (b) R3 ANALYTIC-LIMIT CONTINUITY — with vscr_g0=0 the R6 path REDUCES EXACTLY to R3
+//       (the single-Bragg-shell vshell [0, vbragg]): ε_n(k) is identical to R3's
+//       qforge_chip_scf_band_eps and the zone-boundary gap equals R3's
+//       qforge_chip_scf_bragg_gap to machine precision (the data swap is continuous —
+//       turning the SCF screening OFF recovers the R3 analytic limit verbatim).        🔵
+//   (c) NEGF DROP-IN — the band-derived device H_D (built from the self-consistent
+//       lowest band) feeds the R5 Caroli/Fisher-Lee transmission and PRODUCES a valid
+//       T(E): a clean matched chain transmits the integer channel count inside the band
+//       (T=1 for the 1-mode chain) and 0 outside — the wiring works end to end.        🔵
+//   (d) PHYSICS SANITY — H(k) with the self-consistent screening is real-symmetric →
+//       ε_n(k) real & ascending; the gap sign is correct (vbragg≠0 → gap>0, vbragg=0 →
+//       gap=0); the G=0 screening is a pure UNIFORM shift (band shape invariant under it).🔵
+//
+// HONEST SCOPE (d6 / @L5): the G=0 screening leg (vshell[0]) is REAL SELF-CONSISTENT —
+// extracted from a converged qforge_scf_pw (converged=true asserted). The OFF-diagonal
+// Bragg shell (vbragg, G≠0) is a FIXED analytic leg — the G≠0 self-consistent screening
+// needs the dense FFT-grid G-space term (scf_pw's documented next piece; the assembler
+// only carries G=0 screening on the diagonal). This gate proves the WIRING + the self-
+// consistent G=0 leg; G≠0 self-consistent screening is round-7+. The split is explicit.
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/chip/band_scf_real_selftest.hexa
+// PASS: "qforge_chip_band_scf_real_selftest PASS".
+use "stdlib/qforge/chip/band_scf_real"
+use "stdlib/qforge/chip/band_scf"
+use "stdlib/qforge/chip/negf_scatter"
+use "stdlib/qforge/scf_pw"
+use "stdlib/qforge/screening"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _pi() -> float { return 3.14159265358979323846 }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_int(name: str, got: int, want: int) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let pi = _pi()
+
+    // 1D toy crystal: a=4 bohr, mmax=3 → 7 plane waves. Zone boundary k=π/a.
+    let a = 4.0
+    let mmax = 3
+    let kbz = pi / a
+
+    // small REAL SCF cell: the 7-PW cubic G-set (the scf_pw selftest's free-electron
+    // cell — the smallest plane-wave cell whose self-consistent fixed point is the
+    // uniform-gas LDA screening). nelec=2, nbands=3, omega=100, x-only xc (mode 0).
+    let gset = [0.0, 0.0, 0.0,
+                1.0, 0.0, 0.0,  -1.0, 0.0, 0.0,
+                0.0, 1.0, 0.0,  0.0, -1.0, 0.0,
+                0.0, 0.0, 1.0,  0.0, 0.0, -1.0]
+
+    // ══ (a) V_scr WIRING — REAL self-consistent SCF → G=0 screening → band shift ══
+    // Run the REAL stdlib qforge_scf_pw to a CONVERGED self-consistent density.
+    let sc = qforge_chip_scf_vscr_g0(gset, 100.0, 3, 2, 0, 0.5, 1.0e-9, 200)
+    let conv = sc[0]
+    let vscr_g0 = sc[1]
+    // (i) the SCF actually CONVERGED — a TRUE self-consistent fixed point, not a fixed
+    //     potential. This is the d6 honesty gate: a non-converged run would surface 0.0.
+    fails = fails + _ck_close("(a) real qforge_scf_pw CONVERGED (self-consistent, not fixed)",
+                              conv, 1.0, 1.0e-12)
+    // (ii) the extracted V_scr(G=0) REPRODUCES the SCF's own screening: re-run the SCF
+    //      independently, take the mean of qforge_vscr_diag(ρ_conv) — must equal vscr_g0
+    //      to machine precision (the extraction is the SCF screening, not a re-derivation).
+    let mut ef: [float] = []
+    let mut ei: [int] = []
+    let k0 = [0.0, 0.0, 0.0]
+    let scf2 = qforge_scf_pw(k0, gset, ef, ef, ef, ef, 0.0, ef, ei, ef, 0, 100.0, ef, 0,
+                             3, 2, 0.5, 1.0e-9, 200)
+    let vscr_diag = qforge_vscr_diag(scf2.rho, ef, 0)
+    let mut vsum = 0.0
+    let mut vi = 0
+    while vi < len(vscr_diag) { vsum = vsum + vscr_diag[vi] ; vi = vi + 1 }
+    let vmean = vsum / to_float(len(vscr_diag))
+    fails = fails + _ck_close("(a) extracted V_scr(G=0) == SCF qforge_vscr_diag mean",
+                              vscr_g0, vmean, 1.0e-12)
+    // (iii) the converged screening is NONZERO (a real screened cell, xc is on) and
+    //       NEGATIVE (LDA exchange potential V_x<0 — an attractive screening).
+    fails = fails + _ck_true("(a) V_scr(G=0) is real, nonzero & negative (LDA V_x<0)",
+                             vscr_g0 < -1.0e-3)
+    // (iv) feeding vscr_g0 into R3's H(k) shifts ε₀(k) by EXACTLY V_scr(G=0): at k=0 the
+    //      kinetic is 0, so ε₀(0) = V_scr(G=0). The self-consistent screening lands in
+    //      the band's potential with ZERO error (the drop-in is exact).
+    let eps0_at0 = qforge_chip_scf_real_band_min(a, mmax, 0.0, vscr_g0, 0.0)
+    fails = fails + _ck_close("(a) ε₀(k=0) = V_scr(G=0) (SCF screening wired into band)",
+                              eps0_at0, vscr_g0, 1.0e-12)
+    // (v) the screening is a UNIFORM shift: ε₀(k) − ½k² = V_scr(G=0) at every k (the G=0
+    //     gauge shifts every band rigidly — R3 selftest (D) physics, now from a real SCF).
+    let kp = 0.3
+    let eps0_kp = qforge_chip_scf_real_band_min(a, mmax, kp, vscr_g0, 0.0)
+    fails = fails + _ck_close("(a) ε₀(k)−½k² = V_scr(G=0) (uniform SCF G=0 shift)",
+                              eps0_kp - 0.5 * kp * kp, vscr_g0, 1.0e-12)
+
+    // ══ (b) R3 ANALYTIC-LIMIT CONTINUITY — vscr_g0=0 ⇒ R6 == R3 verbatim ═══════════
+    // Turning the SCF screening OFF (vscr_g0=0) and feeding a single Bragg shell vbragg
+    // must reduce the R6 path EXACTLY to R3 (the data swap is continuous). ε_n(k) and the
+    // zone-boundary gap must equal R3's own functions to machine precision.
+    let vbragg = 0.4
+    // ε_n(k) at the zone boundary: R6 (vscr_g0=0) vs R3 [0, vbragg].
+    let epsR6 = qforge_chip_scf_real_band_eps(a, mmax, kbz, 0.0, vbragg)
+    let epsR3 = qforge_chip_scf_band_eps(a, mmax, kbz, [0.0, vbragg])
+    let ng = 2 * mmax + 1
+    fails = fails + _ck_int("(b) R6 ε_n(k) spectrum dim == R3", len(epsR6), ng)
+    let mut contOk = true
+    let mut bi = 0
+    while bi < ng {
+        if _abs(epsR6[bi] - epsR3[bi]) > 1.0e-13 { contOk = false }
+        bi = bi + 1
+    }
+    fails = fails + _ck_true("(b) R6(vscr_g0=0) ε_n(k) == R3 ε_n(k) verbatim (continuous)", contOk)
+    // the gap: R6 lowest-two split at k=π/a (vscr_g0=0) == R3 qforge_chip_scf_bragg_gap.
+    let gapR6 = epsR6[1] - epsR6[0]
+    let gapR3 = qforge_chip_scf_bragg_gap(a, mmax, vbragg)
+    fails = fails + _ck_close("(b) R6 zone-boundary gap == R3 Bragg gap (analytic limit)",
+                              gapR6, gapR3, 1.0e-13)
+    // CONTINUITY of the SCF leg: adding the converged vscr_g0 shifts the WHOLE spectrum
+    // by vscr_g0 vs the vscr_g0=0 limit (the G=0 leg is a rigid shift — continuous in it).
+    let epsR6s = qforge_chip_scf_real_band_eps(a, mmax, kbz, vscr_g0, vbragg)
+    let mut shiftOk = true
+    let mut si = 0
+    while si < ng {
+        if _abs((epsR6s[si] - epsR6[si]) - vscr_g0) > 1.0e-12 { shiftOk = false }
+        si = si + 1
+    }
+    fails = fails + _ck_true("(b) SCF leg continuous: spectrum shifts by exactly V_scr(G=0)", shiftOk)
+
+    // ══ (c) NEGF DROP-IN — band-derived H_D → R5 Σ-NEGF T(E) ══════════════════════
+    // Build the self-consistent band-derived device H_D and feed it to the R5 NEGF.
+    let nsite = 5
+    let hd = qforge_chip_scf_real_hd_chain(a, mmax, vscr_g0, vbragg, nsite)
+    fails = fails + _ck_int("(c) band-derived H_D is nsite×nsite", len(hd), nsite * nsite)
+    // H_D on-site = self-consistent band bottom ε₀(Γ) (incl. vscr_g0 + Bragg G=0 part).
+    let eps_d = hd[0]
+    let epsGamma = qforge_chip_scf_real_band_min(a, mmax, 0.0, vscr_g0, vbragg)
+    fails = fails + _ck_close("(c) H_D on-site == self-consistent band bottom ε₀(Γ)",
+                              eps_d, epsGamma, 1.0e-12)
+    // H_D is real-symmetric (valid device for the NEGF).
+    let mut hdSym = true
+    let mut hi = 0
+    while hi < nsite {
+        let mut hj = 0
+        while hj < nsite {
+            if _abs(hd[hi * nsite + hj] - hd[hj * nsite + hi]) > 1.0e-15 { hdSym = false }
+            hj = hj + 1
+        }
+        hi = hi + 1
+    }
+    fails = fails + _ck_true("(c) band-derived H_D real-symmetric (valid NEGF device)", hdSym)
+    // T(E) at the device on-site (band centre): a clean MATCHED chain → 1 open channel.
+    let eta = 1.0e-9
+    let tCenter = qforge_chip_scf_real_transmission(a, mmax, vscr_g0, vbragg, nsite, eps_d, eta)
+    fails = fails + _ck_close("(c) NEGF T(E=ε_d) = 1 (clean matched chain, 1 channel)",
+                              tCenter, 1.0, 1.0e-6)
+    // T(E) FAR outside the lead band → 0 (no open channel). The lead band is
+    // [ε_d−2|t_d|, ε_d+2|t_d|]; probe well above it. OUTSIDE the band Σ is REAL so the
+    // broadening Γ=−2 Im Σ vanishes only as η→0 — the residual T is the η evanescent
+    // floor (a CLOSED channel, not an open mode). Two honest anchors (d6): (i) at a
+    // tight η the residual is ≪1 (closed channel), and (ii) it DECAYS as η shrinks
+    // (Σ→real outside the band ⇒ Γ→0 ⇒ T→0 — the defining closed-channel behaviour).
+    let tHop = hd[1]
+    let eOut = eps_d + 1.0                                 // ≫ band (band half-width 2|t_d|≈0.04)
+    let tOut = qforge_chip_scf_real_transmission(a, mmax, vscr_g0, vbragg, nsite, eOut, 1.0e-12)
+    fails = fails + _ck_true("(c) NEGF T(E≫band) ≪ 1 (closed channel, no open mode)",
+                             tOut < 1.0e-6)
+    let tOut2 = qforge_chip_scf_real_transmission(a, mmax, vscr_g0, vbragg, nsite, eOut, 1.0e-9)
+    fails = fails + _ck_true("(c) NEGF T(E≫band) → 0 as η→0 (Σ real outside band ⇒ Γ→0)",
+                             tOut < tOut2)
+    // T(E) is bounded 0 ≤ T ≤ 1 across an energy scan (unitarity — probability bound).
+    let mut unitOk = true
+    let mut es = 0
+    while es < 9 {
+        let escan = eps_d - 2.0 * _abs(tHop) + 0.5 * _abs(tHop) * to_float(es)
+        let tt = qforge_chip_scf_real_transmission(a, mmax, vscr_g0, vbragg, nsite, escan, eta)
+        if tt < -1.0e-9 { unitOk = false }
+        if tt > 1.0 + 1.0e-6 { unitOk = false }
+        es = es + 1
+    }
+    fails = fails + _ck_true("(c) NEGF T(E) bounded 0≤T≤1 across the band (unitarity)", unitOk)
+
+    // ══ (d) PHYSICS SANITY — Hermiticity, ascending spectrum, gap sign ════════════
+    // ε_n(k) ascending under the real self-consistent screening + Bragg shell.
+    let epsD = qforge_chip_scf_real_band_eps(a, mmax, kbz, vscr_g0, vbragg)
+    fails = fails + _ck_int("(d) ε_n(k) full spectrum (nG eigenvalues)", len(epsD), ng)
+    let mut sortedOk = true
+    let mut p = 1
+    while p < ng {
+        if epsD[p] < epsD[p - 1] - 1.0e-12 { sortedOk = false }
+        p = p + 1
+    }
+    fails = fails + _ck_true("(d) ε_n(k) ascending & real (Hermitian H, valid KS)", sortedOk)
+    // gap sign: vbragg≠0 → gap>0 (insulator opened); vbragg=0 → gap=0 (metal). The
+    // self-consistent G=0 screening does NOT open a gap (it is a uniform shift).
+    let gapOn = qforge_chip_scf_real_band_eps(a, mmax, kbz, vscr_g0, 0.4)
+    let gapWidthOn = gapOn[1] - gapOn[0]
+    fails = fails + _ck_true("(d) vbragg≠0 opens a gap (gap>0)", gapWidthOn > 1.0e-6)
+    let gapOff = qforge_chip_scf_real_band_eps(a, mmax, kbz, vscr_g0, 0.0)
+    let gapWidthOff = gapOff[1] - gapOff[0]
+    fails = fails + _ck_close("(d) vbragg=0 → no gap (G=0 screening is a uniform shift)",
+                              gapWidthOff, 0.0, 1.0e-9)
+    // the gap is INVARIANT under the G=0 screening (a rigid shift cannot change a level
+    // SPACING): gap with vscr_g0 == gap with vscr_g0=0 at the same vbragg.
+    let gapNoScr = qforge_chip_scf_bragg_gap(a, mmax, 0.4)
+    fails = fails + _ck_close("(d) gap invariant under G=0 screening (shift ⇏ gap change)",
+                              gapWidthOn, gapNoScr, 1.0e-12)
+
+    if fails == 0 { println("qforge_chip_band_scf_real_selftest PASS") }
+    else { println("qforge_chip_band_scf_real_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

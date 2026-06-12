@@ -1,0 +1,197 @@
+// HEXA Standard Library — qforge/chip/phonon_kappa
+//
+// QFORGE universal-engine · CHIP scale · round-4 brick.
+//   scale ladder (QFORGE.md §122):  chip = device 밴드·수송·열(TCAD).
+//   round-1 (band_transport.hexa)  laid the analytic SPINE — ε(k), diatomic GAP,
+//       Landauer ΣTₙ, and the UNIVERSAL thermal conductance quantum g₀=π²k_B²T/3h.
+//   round-2 (band_kmesh.hexa)      k-MESH band manifold + van-Hove DOS + NEGF mode-count.
+//   round-3 (band_scf.hexa)        SCF-fed band ε_n(k)=eig[T(k)+V] (electronic-structure reuse).
+//
+// Round-4 closes the THERMAL ('열') leg — the third leg of the chip front-end.
+// It promotes round-1's bare thermal quantum g₀ (a single number) into a full
+// BALLISTIC PHONON-LANDAUER thermal conductance: heat carried by phonon modes
+// transmitted through a device, in exact analogy to the Landauer electron transport
+// of round-1/2.  The Landauer-form phonon thermal conductance (Rego-Kirczenow,
+// PRL 81, 232 (1998); Schwab et al., Nature 404, 974 (2000)) is
+//
+//     κ(T) = (1/2π) ∫₀^∞ dω · ħω · T_ph(ω) · ∂n_BE/∂T,
+//
+//   • ħω           — energy quantum carried by a phonon of frequency ω,
+//   • T_ph(ω)      — phonon transmission (number of open modes × per-mode transmission),
+//   • n_BE(ω,T)    — Bose-Einstein occupation 1/(e^{ħω/k_BT} − 1),
+//   • ∂n_BE/∂T     — the thermal-population derivative (the heat-flux response kernel).
+//
+// The DFPT ω(q,ν) frequencies (stdlib/qforge/dfpt · realcell_phonon, d19 REUSE) ARE
+// the transmission channels: each phonon branch that propagates through the device is
+// one open mode at its ω(q).  This brick takes ω(q,ν) (an INPUT — d4-generic, no
+// per-material branch) and per-mode transmission, and integrates the Landauer form.
+//
+// ── The universal LOW-T QUANTUM FLOOR (d6 — the exact closed-form anchor) ──────
+//   For N reflectionlessly-transmitting channels whose dispersion is acoustic
+//   (linear ω→0, so the mode is open from ω=0 upward, T_ph(ω)=N), the integral has
+//   a UNIVERSAL value INDEPENDENT of the dispersion details, carrier statistics, and
+//   the high-ω cutoff (which the BE derivative exponentially suppresses):
+//
+//     κ(T) = (1/2π)·(k_B²T/ħ)·∫₀^∞ x²e^x/(e^x−1)² dx,   x ≡ ħω/k_BT
+//          = (1/2π)·(k_B²T/ħ)·(π²/3)                    [∫ = π²/3, EXACT]
+//          = π²k_B²T/(3h)·N  =  N·g₀.
+//
+//   So the per-channel ballistic phonon thermal conductance equals the SAME universal
+//   thermal conductance quantum g₀ = π²k_B²T/3h that round-1 established for electrons —
+//   the heat quantum is statistics-blind (Pendry bound).  At T→0 only the linear
+//   (acoustic) modes survive and κ/T → N·π²k_B²/3h, the quantized plateau.
+//   g₀(1 K) = 9.464311…e-13 W/K (round-1 consistent).
+//
+// ── HONEST SCOPE (d6) ─────────────────────────────────────────────────────────
+//   This is the BALLISTIC (reflectionless) quantum limit — NO phonon-phonon /
+//   isotope / boundary scattering, NO full Boltzmann transport (BTE), NO Umklapp.
+//   It is EXACT in the low-T / clean / short-device regime where the quantum floor
+//   N·g₀ governs; it is the correctness anchor a later scattering-NEGF / BTE κ must
+//   reproduce when the mean-free-path ≫ device length.  At high T it gives the
+//   ballistic ceiling (∂n_BE/∂T → k_B per mode-quantum), NOT the diffusive κ that
+//   Umklapp scattering pulls down — we do not claim the diffusive number (round-5).
+//
+// ── d4 generic / d19 reuse contract ──────────────────────────────────────────
+//   • ω(q,ν) is an INPUT — analytic (selftest) OR dfpt/realcell_phonon PhononResult
+//     .omega (d19); empty-lattice acoustic, a real DFPT spectrum, and a device mode
+//     list all traverse ONE path (d4).  No per-material / per-domain branch.
+//   • g₀ reuses round-1's qforge_chip_thermal_quantum (NO re-derived π²k_B²T/3h, d19).
+//   • the Bose-Einstein kernel is a pure (ω,T) map; the integral is one generic loop.
+//
+//   pub fn qforge_chip_bose_einstein(omega, temp_k)            -> float  // n_BE
+//   pub fn qforge_chip_dnbe_dt(omega, temp_k)                  -> float  // ∂n_BE/∂T
+//   pub fn qforge_chip_phonon_kappa(omegas, trans, temp_k, nq) -> float  // Landauer κ (mode list)
+//   pub fn qforge_chip_phonon_kappa_ballistic(n_ch, temp_k, nq)-> float  // N reflectionless ch.
+//   pub fn qforge_chip_phonon_kappa_quantum_floor(n_ch, temp_k)-> float  // closed form N·g₀
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/chip/phonon_kappa_selftest.hexa
+use "stdlib/qforge/chip/band_transport"
+
+// SI constants (exact) — match round-1's qforge_chip_thermal_quantum verbatim.
+fn _kb()   -> float { return 1.380649e-23 }     // Boltzmann   J/K
+fn _h()    -> float { return 6.62607015e-34 }   // Planck      J·s
+fn _hbar() -> float { return 6.62607015e-34 / (2.0 * 3.14159265358979323846) } // ħ = h/2π
+fn _pi()   -> float { return 3.14159265358979323846 }
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// ── Bose-Einstein occupation  n_BE(ω,T) = 1/(e^{ħω/k_BT} − 1) ────────────────
+// Diverges as ω→0 (acoustic) and decays exponentially for ħω ≫ k_BT.
+pub fn qforge_chip_bose_einstein(omega: float, temp_k: float) -> float {
+    let x = (_hbar() * omega) / (_kb() * temp_k)
+    return 1.0 / (exp(x) - 1.0)
+}
+
+// ── ∂n_BE/∂T  — the heat-flux response kernel ────────────────────────────────
+//   With x = ħω/k_BT:   ∂n_BE/∂T = (x/T)·e^x/(e^x − 1)²   ( > 0 for ω>0, T>0 —
+//   raising T always increases mode occupation: the BE sign anchor ).
+//   The factor ħω·∂n_BE/∂T = (k_B x)·… collapses to (k_B/T)·x²e^x/(e^x−1)² inside
+//   the integral — the dimensionless Landauer thermal kernel K(x).
+pub fn qforge_chip_dnbe_dt(omega: float, temp_k: float) -> float {
+    let x  = (_hbar() * omega) / (_kb() * temp_k)
+    let ex = exp(x)
+    let d  = ex - 1.0
+    return (x / temp_k) * ex / (d * d)
+}
+
+// ── dimensionless Landauer thermal kernel  K(x) = x²·e^x/(e^x − 1)² ───────────
+// ħω·∂n_BE/∂T = (k_B/T)·K(x).   ∫₀^∞ K(x) dx = π²/3 (EXACT) → quantum floor.
+fn _kernel(x: float) -> float {
+    let ex = exp(x)
+    let d  = ex - 1.0
+    return x * x * ex / (d * d)
+}
+
+// ── (core) Landauer ballistic phonon thermal conductance ──────────────────────
+//   κ(T) = (1/2π) ∫₀^∞ dω ħω T_ph(ω) ∂n_BE/∂T
+//        = (k_B²T / (2π ħ)) ∫₀^∞ T_ph(x) K(x) dx ,   x = ħω/k_BT.
+//   For a CONSTANT transmission T_ph = N (N reflectionless acoustic channels) the
+//   x-integral is the universal π²/3 and κ = N·(k_B²T/2πħ)(π²/3) = N·π²k_B²T/3h = N·g₀.
+//
+//   Numerical integration: composite Simpson on x∈[lo,xmax] with `nq` sub-intervals
+//   (nq EVEN for Simpson).  The integrand decays like x²e^{-x}; xmax=40 captures the
+//   full BE tail to ~1e-15.  `nq` = quadrature resolution (d4: an input, not hardcoded).
+//
+// Returns κ in W/K.
+pub fn qforge_chip_phonon_kappa_ballistic(n_ch: float, temp_k: float, nq: int) -> float {
+    let kb = _kb()
+    let hbar = _hbar()
+    let pi = _pi()
+    let xmax = 40.0
+    let n = nq
+    let lo = 1.0e-9        // K(0)=1 finite; [0,lo] contributes O(lo), negligible.
+    let h_step = (xmax - lo) / (n + 0.0)
+    let mut acc = _kernel(lo) + _kernel(xmax)
+    let mut i = 1
+    while i < n {
+        let x = lo + (i + 0.0) * h_step
+        // composite Simpson: weight 4 on odd nodes, 2 on even interior nodes.
+        if (i / 2) * 2 == i { acc = acc + 2.0 * _kernel(x) }
+        else { acc = acc + 4.0 * _kernel(x) }
+        i = i + 1
+    }
+    let integral = acc * h_step / 3.0
+    // κ = N · (k_B²T / (2π ħ)) · integral.   (1/(2πħ)=1/h ⇒ prefactor = N k_B²T/h.)
+    return n_ch * (kb * kb * temp_k) / (2.0 * pi * hbar) * integral
+}
+
+// ── (core) generic mode-list Landauer κ — ω(q,ν) channels with per-mode trans ─
+//   In the BALLISTIC mode picture each propagating branch is ONE open channel whose
+//   low-T contribution is governed by the universal quantum floor (mode-COUNT, not
+//   ω-detail — the integral is dispersion-blind for an acoustic branch).  A mode
+//   gapped at ω_g contributes a BE-suppressed fraction at low T.
+//
+//   This generic form sums, over the supplied ω(q,ν) list, each mode's transmission-
+//   weighted ballistic contribution:
+//       κ = Σ_modes  g₀ · trans_m · S(ħω_m / k_BT),
+//   where S(y)=∫_y^∞ K dx / (π²/3) is the BE high-pass: S→1 as y→0 (acoustic mode
+//   reaches ω=0, full quantum floor g₀) and S→0 as y→∞ (frozen optical mode).
+//
+//   `omegas` = ω(q,ν) (rad/s) from DFPT (.omega, d19) or analytic; `trans` = per-mode
+//   transmission ∈[0,1] (1 = reflectionless).  `nq` = Simpson resolution.  Returns W/K.
+pub fn qforge_chip_phonon_kappa(omegas: [float], trans: [float], temp_k: float, nq: int) -> float {
+    let kb = _kb()
+    let hbar = _hbar()
+    let g0 = qforge_chip_thermal_quantum(temp_k)   // d19 — round-1's π²k_B²T/3h
+    let nmodes = len(omegas)
+    let mut kappa = 0.0
+    let mut m = 0
+    while m < nmodes {
+        let w = omegas[m]
+        let tn = trans[m]
+        // gap position in x-units: y = ħω/k_BT (acoustic ω≈0 → y≈0 → S=1).
+        let y = (hbar * _abs(w)) / (kb * temp_k)
+        let s = _supp_fraction(y, nq)
+        kappa = kappa + g0 * tn * s
+        m = m + 1
+    }
+    return kappa
+}
+
+// S(y) = ∫_y^∞ K(x) dx / (π²/3).  Simpson on [y, xmax], normalised by π²/3.
+fn _supp_fraction(y: float, nq: int) -> float {
+    let pi = _pi()
+    let xmax = 40.0
+    if y >= xmax { return 0.0 }
+    let n = nq
+    let lo = y
+    if lo < 1.0e-9 { return 1.0 }   // acoustic limit — full quantum floor (avoids 0-width)
+    let h_step = (xmax - lo) / (n + 0.0)
+    let mut acc = _kernel(lo) + _kernel(xmax)
+    let mut i = 1
+    while i < n {
+        let x = lo + (i + 0.0) * h_step
+        if (i / 2) * 2 == i { acc = acc + 2.0 * _kernel(x) }
+        else { acc = acc + 4.0 * _kernel(x) }
+        i = i + 1
+    }
+    let integral = acc * h_step / 3.0
+    let total = (pi * pi) / 3.0
+    return integral / total
+}
+
+// ── closed-form LOW-T QUANTUM FLOOR  κ → N·g₀  (the exact anchor, d6) ─────────
+//   N reflectionless acoustic channels: κ = N·g₀ = N·π²k_B²T/(3h).  Reuses
+//   round-1's qforge_chip_thermal_quantum (d19 — single g₀ definition).
+pub fn qforge_chip_phonon_kappa_quantum_floor(n_ch: float, temp_k: float) -> float {
+    return n_ch * qforge_chip_thermal_quantum(temp_k)
+}
