@@ -1,8 +1,21 @@
-// t51_arena_return_late_index — regression for handoff aededed6 (gen3 arena bug)
+// t51_arena_return_late_index — WITNESS/guard for handoff aededed6 (gen3 arena).
 //
-// An array returned via __hexa_fn_arena_return, bound to a `let`, then INDEXED
-// LATE after many subsequent allocations, was reported to read back WRONG /
-// swapped element values (silent, no crash) under HEXA_VAL_ARENA=1 (default).
+// HANDOFF (aededed6): an array returned via __hexa_fn_arena_return, bound to a
+// `let`, then INDEXED LATE after many subsequent allocations, was reported to
+// read back WRONG / swapped element values (silent, no crash) under
+// HEXA_VAL_ARENA=1 (default). QFORGE-CHIP applied a workaround (immediate scalar
+// materialize) in band_transport_selftest.hexa.
+//
+// STATUS (this test, 2026-06-13): NON-REPRODUCIBLE on origin/main HEAD. This
+// test models the EXACT triggering shape and PASSES on both `hexa run`
+// (compile-then-exec) and a native `hexa build` binary with the arena ON.
+// The real qforge_chip_diatomic_gap → eigh → eigh_jacobi path, with the
+// workaround REMOVED + maximal churn + a 200-deep held-array stress, ALSO
+// passes. No arena/codegen fix landed in main between the workaround commit
+// (be750e27d) and HEAD, so this guards the shape rather than flipping a live
+// FAIL. If the bug recurs (compiler change reseats arena-returned aggregates),
+// this test FAILS — that is its job.
+//
 // Repro shape mirrors QFORGE-CHIP qforge_chip_diatomic_gap → eigh → eigh_jacobi:
 //   * nested arrays grown via .push() (arena items buffer, cap<0)
 //   * heterogeneous return [vals, vectors, sweeps]
@@ -81,5 +94,3 @@ fn main() {
     if ok { println("PASS") }
     else { println("FAIL — arena-return array read back swapped/stale (aededed6)") }
 }
-
-main()
