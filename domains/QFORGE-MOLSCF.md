@@ -48,7 +48,16 @@ Fock 빌드, (3) 비직교 일반화 고유문제 `FC=SCε`. 모든 g5 anchor �
       (c) ScH/STO-3G E_total vs PySCF 2.13.1 RHF −752.638702408 |Δ| VERBATIM · Sc 3d Mulliken pop 실engage
           (3d = 유일 valence d-shell · 0.4 e via Sc–H bond — spectator polarization 아님) · closed-shell 22e
       (d) f-engaging fixture (STO-3G Sc 엔 f 無 → f 별도 게이트): f AO self-norm·⟂·virial 4.5 symmetric-PD
-- [ ] brick 10 (round-7) — closed-shell valence-d TM SCF 확장 (open-shell → UHF/level-shift/DIIS) +
+- [x] brick 10 (round-7) — open-shell UHF + DIIS + level-shift (breaks the closed-shell wall) g5 PASS
+      `uhf.hexa` separate α/β densities P^α/P^β · F^s=H+J[P_tot]−K[P^s] · ⟨S²⟩ contamination diagnostic ·
+      Pulay DIIS (e=X(FPS−SPF)X · B-matrix Gaussian-elim solve) · Saunders-Hillier virtual level-shift
+      (a) H₂/STO-3G closed-shell via UHF (n_α=n_β=1) == sealed RHF anchor −1.11671 Ha |Δ|=2.7e-6 ⟨S²⟩=0
+      (b) H atom open-shell (n_α=1,n_β=0) E_UHF=−0.466582 Ha vs PySCF STO-3G −0.466582 |Δ|=1.5e-7 ⟨S²⟩=0.75
+          exact · bonus triplet H₂ (n_α=2,n_β=0) ⟨S²⟩=2.0 exact (S=1) — genuine α≠β path
+      (c) DIIS accel — linear H₃ doublet radical (R=1.8): plain-mix 18 iters → DIIS 8 iters (same E=
+          −1.545843 · ‖FPS−SPF‖=9.1e-7) · ⟨S²⟩=0.7957 (contamination +0.046 reported, not hidden)
+      (d) r1..r6 (gaussian/coulomb/rhf/md/md_d/md_f) regress ALL PASS — rhf.hexa byte-untouched (new file)
+- [ ] brick 11 (round-8) — ROHF + TM open-shell SCF (TiO triplet · ScH⁺ d¹) via UHF+DIIS+level-shift +
       g 각운동량 (15 Cartesian → 9 spherical, 동일 _md_harm_ao 테이블) + brick 6 analytic force ∇_R E
 
 ## three-scale unblock

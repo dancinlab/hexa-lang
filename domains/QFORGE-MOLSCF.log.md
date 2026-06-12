@@ -414,3 +414,68 @@ radially-normalized primitive (standard basis-library convention). After fix: d_
    UHF / ROHF + level-shift + DIIS (RHF is closed-shell only — the honest wall, breakthrough = UHF).
 2. g angular momentum (15 Cartesian → 9 spherical) via the SAME `_md_harm_ao` (cart,harm) table.
 3. brick 6 analytic molecular force ∇_R E via autograd through brick 1-9 (NOVEL lane).
+
+## 2026-06-13 — round-7: brick 10 — UHF + DIIS + level-shift (BREAKS the closed-shell wall) g5 PASS
+
+The r6 agent named the HONEST WALL: `rhf_scf` (rhf.hexa) is RHF — doubly-occupied orbitals only, so it
+cannot touch ANY open-shell system (radicals, the H atom, triplet O₂/TiO, doublet d¹ ions). Round-7
+breaks it with `stdlib/qforge/molscf/uhf.hexa` — Pople–Nesbet UHF (separate α/β spin densities + Fock
+matrices) + Pulay DIIS + Saunders–Hillier level-shift. rhf.hexa is BYTE-UNTOUCHED (UHF is a new file;
+closed-shell RHF stays the spin-restricted special case + regression baseline). UHF-only this round;
+ROHF + TM open-shell named round-8 (honest brick boundary — no faked converged TM energy).
+
+### UHF generalization (d4-generic — same integral consumer as rhf_scf)
+- P^α_μν = Σ_{a∈occα} C^α_μa C^α_νa  (SINGLE occupation per spin, no ×2);  P^β similarly;  P_tot=P^α+P^β.
+- F^α = H_core + J[P_tot] − K[P^α],  F^β = H_core + J[P_tot] − K[P^β]  (Coulomb couples the spins; the
+  exchange is spin-resolved). RHF is the EXACT special case P^α=P^β=½P → F^α=F^β=H+J−½K (g5 verdict a).
+- E_elec = ½ Σ_μν [ P_tot H_core + P^α F^α + P^β F^β ];  E_total = E_elec + E_nuc.
+- ⟨S²⟩ = S_z(S_z+1) + n_β − Σ_{i∈α,j∈β}|⟨α_i|β_j⟩|²  (Szabo), ⟨α_i|β_j⟩ = C^αᵀ S C^β — UHF's HONEST
+  spin-contamination diagnostic, reported NEVER hidden.
+- DIIS: error e^s = X(F^s P^s S − S P^s F^s)X (Löwdin-orthonormal so the B-matrix inner products are
+  metric-free); α||β concatenated → one Pulay coefficient set; B-matrix solved by a self-contained
+  Gaussian-elim (no linsolve primitive in stdlib to reuse — d3). Level-shift adds shift·(S C_virt)(S C_virt)ᵀ
+  to the orthonormal Fock while DIIS history is short, then releases.
+
+### g5 verdicts (VERBATIM — d6, no LLM self-judge)
+- (a) UHF==RHF closed-shell: H₂/STO-3G @1.4 bohr through uhf_scf with n_α=n_β=1 → E_UHF=−1.11671 Ha,
+  |Δ| vs sealed RHF anchor −1.11671 = 2.667e-6, ⟨S²⟩=0.0 (singlet exact). UHF reduces correctly to RHF.
+- (b) open-shell energy: H atom (1 electron, doublet, n_α=1 n_β=0, STO-3G) → E_UHF=−0.466582 Ha vs
+  PySCF/Gaussian UHF/STO-3G −0.466582, |Δ|=1.504e-7, ⟨S²⟩=0.75 = exact S(S+1) (1-electron doublet is
+  contamination-free). Bonus triplet H₂ (n_α=2,n_β=0): E=−0.531812 Ha, ⟨S²⟩=2.0 = exact S=1 — genuine
+  two-same-spin α≠β path exercised.
+- (c) DIIS acceleration: stiff linear H₃ doublet radical (3 H on x-axis, R=1.8 bohr, n_α=2 n_β=1).
+  WITHOUT DIIS (plain mix=1.0): 18 iters. WITH DIIS: 8 iters — DIIS more than halves the count; both
+  converge to the SAME E=−1.545843 Ha; DIIS residual ‖FPS−SPF‖=9.08e-7 at convergence. ⟨S²⟩=0.795721
+  vs exact doublet 0.75 → spin contamination +0.0457 (REPORTED honestly, not hidden — d6). (Sweep
+  R=1.0..2.5 all show DIIS≈½ the iters; plain mixing converges, does not diverge — reported as such.)
+- (d) regression: r1..r6 selftests (gaussian/coulomb/rhf/md/md_d/md_f) ALL PASS — `git diff rhf.hexa`
+  is EMPTY (closed-shell path byte-untouched); UHF is purely additive (2 new files).
+
+### honest scope / wall (d6)
+- UHF-only this round. ROHF (spin-pure restricted-open variant — removes the ⟨S²⟩ contamination) and
+  a real TM open-shell SCF (TiO triplet, ScH⁺ d¹) deferred to round-8 — a clean honest brick boundary.
+  I did NOT attempt+fake a converged TM-UHF energy; the demonstrated open-shells (H atom, triplet H₂,
+  H₃ radical) genuinely exercise the α≠β path + DIIS, which is the wall-breaking brick.
+- TM-UHF SCF stiffness is the named round-8 wall. Breakthrough paths (d2, never concede):
+  1. ROHF — single orbital set + coupling operator: spin-pure (⟨S²⟩ exact by construction), often more
+     stable than UHF for high-spin TM ground states; build on the same J/K + DIIS machinery.
+  2. fractional-occupation / finite-T smearing on the near-degenerate d-manifold (Fermi-Dirac occ) to
+     damp root-flipping that even DIIS+level-shift can't catch on a dense d-shell.
+  3. better initial guess — superposition-of-atomic-densities (SAD) or a GWH/Hückel guess instead of the
+     bare H_core guess, plus a stronger early level-shift released as DIIS warms.
+
+### SEALED vs OPEN (updated)
+- **SEALED**: + open-shell UHF (separate α/β P^s & F^s) with Pulay DIIS + Saunders–Hillier level-shift +
+  ⟨S²⟩ contamination diagnostic; UHF==RHF for closed-shell (exact reduction); the H atom open-shell
+  anchor −0.466582 Ha (PySCF-exact), triplet H₂ ⟨S²⟩=2.0, H₃ doublet radical with DIIS (18→8 iters);
+  full r1..r6 regression green; rhf.hexa byte-untouched.
+- **OPEN (round-8)**: ROHF (spin-pure open-shell); a real transition-metal open-shell SCF (TiO triplet,
+  ScH⁺ d¹) on the UHF+DIIS+level-shift path (d-manifold stiffness — breakthrough paths above); g angular
+  momentum (15 Cartesian → 9 spherical, the SAME `_md_harm_ao` table); brick 6 analytic force ∇_R E.
+
+### round-8 next
+1. brick 11 — ROHF (spin-pure restricted-open: single orbital set + coupling operator, removes UHF ⟨S²⟩
+   contamination) + a real TM open-shell SCF (TiO triplet / ScH⁺ d¹) on UHF+DIIS+level-shift, with the
+   d2 breakthrough paths (ROHF · fractional-occ smearing · SAD/GWH guess) for d-manifold stiffness.
+2. g angular momentum (15 Cartesian → 9 spherical) via the SAME `_md_harm_ao` (cart,harm) table.
+3. brick 6 analytic molecular force ∇_R E via autograd through brick 1-10 (NOVEL lane).
