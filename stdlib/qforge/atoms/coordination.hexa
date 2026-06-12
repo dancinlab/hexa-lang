@@ -112,6 +112,37 @@ pub fn qforge_cn_rcov_pair(rcov: [float], i: int, j: int) -> float {
     return rcov[i] + rcov[j]
 }
 
+// ── d/dz of the A&S erf approximation, CONSISTENT with stdlib erf_fn ──────────
+//   stdlib/core/special.erf_fn is the Abramowitz-Stegun 7.1.26 RATIONAL×exp
+//   approximation, NOT the exact integral. Its analytic slope is therefore NOT
+//   the textbook (2/√π)e^{−z²}; using that would leave a ~1e-5 mismatch against a
+//   finite-difference of erf_fn. To keep the CN derivative EXACT w.r.t. the very
+//   function the counter uses (so analytic == FD to machine precision — d6, no
+//   paraphrased kernel), we differentiate the SAME A&S form here:
+//     erf(z) = sign·[ 1 − poly(t)·e^{−z²} ] ,  t = 1/(1+p|z|) ,
+//     poly(t) = a1 t + a2 t² + a3 t³ + a4 t⁴ + a5 t⁵
+//   d/dz (z>0): dt/dz = −p t² ; poly'(t) = a1+2a2 t+3a3 t²+4a4 t³+5a5 t⁴ ;
+//     d/dz[poly·e^{−z²}] = (poly'(t)·dt/dz − 2z·poly)·e^{−z²}
+//     d erf/dz = −(poly'(t)·(−p t²) − 2z·poly)·e^{−z²}        (even in z ⇒ sign-safe)
+pub fn qforge_cn_derf_dz(x: float) -> float {
+    let two_over_sqrtpi = 1.1283791670955126   // 2/√π — the z→0 exact slope
+    if x == 0.0 { return two_over_sqrtpi }      // erf_fn special-cases 0; slope is the true value
+    let mut z = x
+    if z < 0.0 { z = 0.0 - z }                  // erf' is even ⇒ derivative same for ±z
+    let p = 0.3275911
+    let t = 1.0 / (1.0 + p * z)
+    let a1 = 0.254829592
+    let a2 = 0.0 - 0.284496736
+    let a3 = 1.421413741
+    let a4 = 0.0 - 1.453152027
+    let a5 = 1.061405429
+    let poly = ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t
+    let dpoly = ((((5.0 * a5 * t + 4.0 * a4) * t + 3.0 * a3) * t + 2.0 * a2) * t + a1)
+    let dt = 0.0 - p * t * t
+    let e = _cexp(0.0 - z * z)
+    return 0.0 - (dpoly * dt - 2.0 * z * poly) * e
+}
+
 // ── single soft-counting term  ½(1 + erf(−k_cn (R−R_cov)/R_cov)) ──────────────
 //   the contribution of one neighbour at distance r to a coordination number.
 //   r = R_cov ⇒ argument 0 ⇒ exactly ½ (the bond half-on point). r ≪ R_cov ⇒ →1,
@@ -121,14 +152,17 @@ pub fn qforge_cn_term(r: float, rcov: float, kcn: float) -> float {
     return 0.5 * (1.0 + erf_fn(u))
 }
 
-// ── d/dR of one counting term  s_ij = −(k_cn/(√π·R_cov)) e^{−u²}  (≤ 0) ───────
-//   derivative of ½(1+erf(u(R))) w.r.t. R: ½·(2/√π)e^{−u²}·du/dR with
-//   du/dR = −k_cn/R_cov, so s = −(k_cn/(√π R_cov)) e^{−u²}. Always ≤ 0 (a
-//   stretch lowers the count) — the monotonicity the selftest pins.
+// ── d/dR of one counting term  s_ij = ½·erf'(u)·du/dR  (≤ 0) ──────────────────
+//   derivative of ½(1+erf(u(R))) w.r.t. R: ½·erf'(u)·du/dR with u=−k(R−Rcov)/Rcov,
+//   du/dR = −k_cn/R_cov. erf'(u) is taken from qforge_cn_derf_dz — the EXACT slope
+//   of the A&S erf_fn the counter uses (not the textbook (2/√π)e^{−u²}), so this
+//   matches a finite-difference of qforge_cn_numbers to machine precision. The
+//   −k/R_cov factor is <0 and erf'>0, so s ≤ 0 — a stretch lowers the count
+//   (the monotonicity the selftest pins).
 pub fn qforge_cn_term_dR(r: float, rcov: float, kcn: float) -> float {
-    let inv_sqrtpi = 0.5641895835477563   // 1/√π
     let u = 0.0 - kcn * (r - rcov) / rcov
-    return 0.0 - (kcn * inv_sqrtpi / rcov) * _cexp(0.0 - u * u)
+    let du_dr = 0.0 - kcn / rcov
+    return 0.5 * qforge_cn_derf_dz(u) * du_dr
 }
 
 // ── coordination number CN_i for every atom (length n) ───────────────────────

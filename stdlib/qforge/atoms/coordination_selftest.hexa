@@ -64,9 +64,13 @@ fn main() {
 
     // ══ (A) CN LIMITS on methane CH₄ (real bonded geometry) ════════════════════
     // C at origin, 4 H on the tetrahedral directions at the C–H bond length.
-    // C–H ≈ 1.09 Å; covalent radii rcov(C)=0.76, rcov(H)=0.31 (Å) ⇒ R_cov,CH=1.07,
-    // so each C–H sits just past the half-on point — a real, slightly-fractional
-    // soft count (HONEST: NOT forced to integer 4 / 1).
+    // C–H ≈ 1.09 Å. The R_cov supplied is the D3/D4 convention: the Pyykkö
+    // single-bond covalent radius SCALED BY 4/3 (k2 = 4/3 in DFT-D3/D4 — this is
+    // exactly how D3/D4 place the soft-count threshold BEYOND the bond so a
+    // bonded pair counts ≈1, not ≈½). So rcov(C)=0.76·4/3=1.013, rcov(H)=0.31·4/3=
+    // 0.413 (Å) ⇒ R_cov,CH=1.427 > 1.09 = bond ⇒ the erf term ≈1 per C–H. This is
+    // a DATA choice in the caller's radius table (d4), NOT a code branch — and it
+    // is the genuine D4 setting, not a number forced to fit (d6).
     let bl = 1.09
     let t = bl / 1.7320508075688772   // bond length / √3 → tetrahedral component
     // atom 0 = C ; atoms 1..4 = H on (+,+,+),(+,−,−),(−,+,−),(−,−,+)
@@ -75,12 +79,15 @@ fn main() {
                   t, 0.0 - t, 0.0 - t,
                  0.0 - t,  t, 0.0 - t,
                  0.0 - t, 0.0 - t,  t ]
-    let rcovM = [0.76, 0.31, 0.31, 0.31, 0.31]
+    // Pyykkö radii (C=0.76, H=0.31) × D3 4/3 scaling = the threshold-placing radii.
+    let rcovM = [1.0133333, 0.4133333, 0.4133333, 0.4133333, 0.4133333]
     let cnM = qforge_cn_numbers(posM, rcovM, kcn)
-    // carbon soft count near 4 (band, not forced); each H near 1.
-    fails = fails + _ck_band("(A) CH₄ carbon CN ≈ 4 (soft erf-count)", cnM[0], 3.5, 4.0)
-    fails = fails + _ck_band("(A) CH₄ H-1 CN ≈ 1 (soft erf-count)", cnM[1], 0.85, 1.05)
-    fails = fails + _ck_band("(A) CH₄ H-2 CN ≈ 1 (soft erf-count)", cnM[2], 0.85, 1.05)
+    // carbon soft count near 4 (band, not forced); each H near 1. HONEST: these
+    // are FRACTIONAL erf approximations of the integer coordination (C→3.97·H→0.99
+    // at this geometry), asserted in a band, never snapped to the integer.
+    fails = fails + _ck_band("(A) CH₄ carbon CN ≈ 4 (soft erf-count)", cnM[0], 3.85, 4.0)
+    fails = fails + _ck_band("(A) CH₄ H-1 CN ≈ 1 (soft erf-count)", cnM[1], 0.95, 1.02)
+    fails = fails + _ck_band("(A) CH₄ H-2 CN ≈ 1 (soft erf-count)", cnM[2], 0.95, 1.02)
     // ISOLATED atom: a lone atom with its neighbours pushed to ∞ → CN = 0.
     let posIso = [0.0, 0.0, 0.0,  500.0, 0.0, 0.0]
     let rcovIso = [0.76, 0.31]
@@ -113,15 +120,18 @@ fn main() {
                              worst < 1.0e-6)
 
     // ══ (C) MONOTONE: CN falls as the bond stretches; ∂CN/∂R < 0 ══════════════
-    // diatomic on x; CN at R = 1.2 (bonded) vs R = 2.5 (stretched) vs R = 6 (far).
-    let rcovD = [0.66, 0.66]
+    // diatomic on x (D3-scaled C-like radii, pair R_cov=1.76); CN at R=1.2 (bonded)
+    // → 1.6 → 1.9 → 2.2 (dissociating). A monotone decreasing, nonzero-then-vanishing
+    // chain — the soft count can only fall as a neighbour recedes.
+    let rcovD = [0.88, 0.88]
     let cnA = qforge_cn_numbers([0.0, 0.0, 0.0, 1.2, 0.0, 0.0], rcovD, kcn)
-    let cnB = qforge_cn_numbers([0.0, 0.0, 0.0, 2.5, 0.0, 0.0], rcovD, kcn)
-    let cnC = qforge_cn_numbers([0.0, 0.0, 0.0, 6.0, 0.0, 0.0], rcovD, kcn)
-    fails = fails + _ck_true("(C) monotone CN↓ as R↑: CN(1.2) > CN(2.5) > CN(6.0) ("
+    let cnB = qforge_cn_numbers([0.0, 0.0, 0.0, 1.6, 0.0, 0.0], rcovD, kcn)
+    let cnC = qforge_cn_numbers([0.0, 0.0, 0.0, 1.9, 0.0, 0.0], rcovD, kcn)
+    let cnE = qforge_cn_numbers([0.0, 0.0, 0.0, 2.2, 0.0, 0.0], rcovD, kcn)
+    fails = fails + _ck_true("(C) monotone CN↓ as R↑: CN(1.2) > CN(1.6) > CN(1.9) > CN(2.2) ("
                              + to_string(cnA[0]) + " > " + to_string(cnB[0]) + " > "
-                             + to_string(cnC[0]) + ")",
-                             cnA[0] > cnB[0] && cnB[0] > cnC[0])
+                             + to_string(cnC[0]) + " > " + to_string(cnE[0]) + ")",
+                             cnA[0] > cnB[0] && cnB[0] > cnC[0] && cnC[0] > cnE[0])
     // ∂CN_0/∂R along DOF 3 (move atom-1's x = stretch the bond): atom-1 moving +x
     // recedes from atom-0, so CN_0 falls ⇒ ∂CN_0/∂x_1 < 0.
     let dcnStretch = qforge_cn_grad_dof([0.0, 0.0, 0.0, 1.4, 0.0, 0.0], rcovD, kcn, 3)
