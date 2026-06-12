@@ -350,3 +350,96 @@ hopping 은 **Slater-Koster / generic 2-band 모델** 파라미터다 — 경험
   `--repo dancinlab/hexa-lang` · 머지=사용자. WIP 커밋 즉시 push (durable-worktree — 호스트
   디스크 ENOSPC 도중 발생, push 된 커밋만 생존해 복구). DOMAINS.tape 미접촉.
   domains/QFORGE-CHIP.{md,log.md} in-place.
+
+## 2026-06-13 — round-10 (Callaway BTE — N/U-separated phonon scattering, ballistic↔diffusive crossover)
+
+R9 multi-orbital H(k) 봉인 후 산란 정밀화 lane(α) 진입. R4 ballistic κ(N·g₀) + R8 RTA-BTE κ
+(Matthiessen Umklapp/isotope/boundary) 위에 **Callaway 모델**(Callaway, Phys Rev 113, 1046
+(1959)) 로 ballistic↔diffusive crossover 를 정밀화. 0-pod pure-stdlib + verify. ISOLATED
+worktree `qforge-chip-r10-callaway` (base origin/qforge-chip-r3 — R5-R10 lineage 보존).
+
+### 핵심 — Normal/Umklapp 분리 + β-보정 (RTA 의 N over-damp 결함 복원)
+RTA-BTE(R8)의 알려진 결함: **Normal(N) 3-phonon** 과정(모멘텀 보존)을 단순 저항처럼 over-damp
+한다 — 실제로 N 은 crystal momentum 을 **재분배**할 뿐 heat flux 를 직접 relax 하지 않는다. 그래서
+고순도/저온(N 지배) 결정의 κ 를 과소평가한다. Callaway 는 N 과 resistive(R=Umklapp+isotope+
+boundary)를 **분리**하고 β-보정항으로 N 이 재분배한 모멘텀을 복원한다. Debye-적분형:
+- K(x)=x⁴eˣ/(eˣ−1)² (Debye κ integrand — R4/R8 conductance kernel 의 x² 가 아닌 **x⁴**: Debye
+  DOS g(ω)∝ω² × v² weighting 이 ∫dω→∫dx 에서 x² 추가; Bose factor eˣ/(eˣ−1)² 는 동일·d19).
+- κ_RTA  = pref ∫₀^{Θ/T} τ_c K dx,  1/τ_c = 1/τ_N + 1/τ_R  (N·R Matthiessen).
+- κ_corr = pref [∫(τ_c/τ_N)K]² / [∫(τ_c/(τ_N τ_R))K],  pref=(k_B/2π²v)(k_BT/ħ)³.
+- κ_Callaway = κ_RTA + κ_corr.
+τ_U/τ_iso/τ_bd/Matthiessen = **R8 bte_kappa primitive 재사용**(d19, 재유도 없음); τ_N 은 채널 하나
+더(d4 — Matthiessen 이 generic 하게 합산). Simpson 적분 = R4 quadrature 스킴 재사용(d19).
+
+### g5 VERBATIM (19/19 PASS · LLM self-judge 없음)
+```
+PASS (a) τ_N→∞: κ_Callaway → κ_RTA(τ_R) exact [round-8 baseline] (419.12)
+PASS (a) τ_N→∞: β-correction κ_corr → 0 (vanishes vs κ_RTA scale)
+PASS (a) κ_RTA part == round-8 RTA Debye κ (τ_c→τ_R reduction) (419.12)
+PASS (b) low-T pure-N κ_Callaway BOUNDED by boundary ballistic ceiling
+PASS (b) κ_Callaway/κ_ceiling ∈ (0,1] (finite, no κ→∞)
+    [b] low-T(15K) pure-N κ_Callaway=5.50398  ceiling κ_ball=5.50398  ratio=1.0 (=1: N is flux-NEUTRAL, β-corr restores boundary κ)
+PASS (b) +Umklapp: κ_Callaway STRICTLY below ceiling (non-trivial bound)
+    [b] round-4 ballistic N·g₀(1ch,15K)=1.41965e-11 W/K (Landauer floor anchor)
+PASS (c) high-T κ(2T)/κ(T) → 1/2 (Umklapp κ∝1/T, Peierls) (0.493984)
+    [c] high-T κ(6000.0K)=11.2102  κ(2T)=5.53765  ratio=0.493984 (→1/2)
+PASS (c) low-T κ(2T)/κ(T) → 8 (=2³, Debye boundary plateau κ∝T³) (8)
+    [c] low-T κ(4.0K)=0.104372  κ(8.0K)=0.834974  ratio=8 (→8=2³)
+PASS (c) β-correction LOAD-BEARING: κ_full > κ_RTA-only (N-dominated)
+    [c] N-dominated κ_full=5.47858  κ_RTA-only=2.67202e-08  κ_corr=5.47858 (>0, load-bearing)
+PASS (d) round-8 τ_bd=F·L/v unchanged (2e-10)
+PASS (d) round-8 isotope ω⁴ ratio(2ω/ω)=16 unchanged (16.0)
+PASS (d) round-8 Umklapp ω² ratio(2ω/ω)=4 unchanged (4.0)
+PASS (d) round-8 Matthiessen 1/τ=Σ1/τ_i unchanged (5.22903e+09)
+PASS (d) round-4 g₀(1ch,1K)=9.46431e-13 W/K unchanged (9.46431e-13)
+qforge_chip_callaway_bte_selftest PASS
+```
+regression VERBATIM:
+```
+qforge_chip_phonon_kappa_selftest PASS   (R4 ballistic g₀)
+qforge_chip_bte_kappa_selftest PASS      (R8 RTA-BTE)
+```
+
+### 저온 κ vs N·g₀ ceiling + 두 T-극한 멱법칙
+- 저온(15K) pure-N κ_Callaway = **5.50398 W·m⁻¹·K⁻¹** = boundary-limited ballistic ceiling
+  (ratio=1.0). 이건 Callaway 의 **시그니처 결과**: pure-N 은 flux 를 relax 하지 않으므로(flux-
+  neutral) boundary+N 만 있으면 κ 는 N 세기와 무관하게 boundary-limited ceiling 과 정확히 같다 —
+  β-보정이 RTA 가 부당하게 제거할 모멘텀을 정확히 복원. R4 Landauer N·g₀(1ch,15K)=1.41965e-11 W/K
+  은 동일 thermal-leg 의 ballistic floor 앵커(per-channel 양자; Debye boundary ceiling 과 diffusive
+  bridge·d19). +Umklapp 시 κ 는 ceiling 보다 STRICTLY 아래(non-trivial bound).
+- **고온 극한**(T≫Θ_D=645, T=6000K): κ∝**1/T** — κ(2T)/κ(T)=0.4940→1/2 (Peierls–Eucken;
+  1/τ_U∝ω²T 포화 → τ_R∝1/T).
+- **저온 극한**(T≪Θ_D, T=4→8K, boundary plateau): κ∝**T³** — κ(2T)/κ(T)=8.000=2³ EXACT
+  (Debye prefactor∝T³, ∫K 포화, τ→τ_bd const). 두 극한이 닫힌형 Debye-적분 점근과 일치.
+
+### SEALED vs OPEN (정직 — 모델계수 caveat)
+- **SEALED**: Callaway N/U-분리 crossover **구조** — (a) RTA 회복(τ_N→∞ ⇒ R8 baseline EXACT),
+  (b) ballistic ceiling boundedness(발산 X), (c) T³–1/T 극한 + β-보정 load-bearing, (d) R4/R8 회귀.
+  전부 유도가능 closed-form 극한·항등식에 앵커(d6). g5 19/19 + 회귀 2/2 PASS.
+- **OPEN / HONEST caveat (d6)**: τ_N/τ_U = 표준 Callaway 멱법칙 **모델 계수**(1/τ_N=B_N ω²T³ ·
+  1/τ_U=B_U ω²T·exp(−Θ/3T)) — first-principles ab-initio el-ph 아님(그건 QE/QFORGE-materials
+  DFPT lane). deliverable = N/U-분리 crossover **구조** + 올바른 극한; 실 Si/Ge κ(T) **fit 곡선은
+  주장하지 않음**(published 계수 + 인용 없이는). 실 material = 같은 brick 에 (B_N,B_U,a,b,α,Θ_D,v)
+  데이터 swap(d4) 이지 코드 경로 아님. 날조 없음.
+
+### chip depletion 판정 — 여전히 NOT depleted (도메인 open)
+열(thermal) leg 은 R4(ballistic floor) → R8(RTA diffusive) → **R10(Callaway N/U crossover)** 으로
+ballistic↔diffusive 전 구간을 닫음. 그러나 미해결 frontier:
+- (1) **p-d 혼성 실 파라미터화** — R9 OrbitalModel 에 d-궤도(ddσ/ddπ/ddδ) + R3 가 미룬 수렴 real-cell
+  scf_pw V_scr(G) 데이터 투입 → self-consistent multi-band ε_n(k) (R3/R9 정직보고 데이터-swap).
+- (2) **verify-adapter (chip=TCAD)** — 밴드갭/m*/직접·간접/valley/κ 를 측정·TCAD ref 로 표준화.
+- (3) **NEXUS edge** — QFORGE-CHIP → {소자 도메인} 재사용 그래프 등록 (materials c7 패턴).
+- (4) Callaway 계수 published-fit 실material 데이터-swap(Si/Ge·Morelli 2002 계수) — 0-pod, 데이터만.
+
+### round-11 다음 — named
+(α) **verify-adapter(chip=TCAD)** ← 우선 지정. 밴드갭·m*·직접/간접·valley·κ(Callaway) 를 측정/
+  TCAD ref 표준화 → chip 전 leg 의 verify-adapter 일반화 축 닫기 (verdict 표준화 = depletion 게이트).
+(β) **p-d 혼성 + SCF V_scr drop-in** — R9 OrbitalModel d-궤도 + R3 수렴 real-cell V_scr(G) 데이터.
+(γ) **Callaway 실material 계수 swap** — Si/Ge published 계수(Morelli/Slack) 데이터 투입 + 인용 →
+  fitted κ(T) 곡선(0-pod 데이터-only; 본 round 의 구조 위 데이터 swap·d4).
+
+### deliver (round-10)
+- brick `stdlib/qforge/chip/callaway_bte.hexa` + selftest (g5 19/19 PASS · 회귀 R4/R8 PASS).
+- PR base=qforge-chip-r3 (R5-R10 lineage 보존 — r9 와 동일 앵커; pr-cycle auto-merge 가 round-chain
+  브랜치 삭제하므로 생존 r3 앵커 기준) · `--repo dancinlab/hexa-lang` · 머지=사용자. WIP 커밋 즉시
+  push(durable-worktree). DOMAINS.tape 미접촉. domains/QFORGE-CHIP.{md,log.md} in-place. 0-pod.
