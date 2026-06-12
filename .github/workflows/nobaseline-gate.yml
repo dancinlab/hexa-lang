@@ -105,6 +105,20 @@ jobs:
           set -euo pipefail
           sh tool/fold_ci_gate.sh ./hexa
 
+      # ── OP-39: float const-fold byte-eq tripwire ──────────────────────────
+      # Locks the OP-37 (#3069) + OP-37b (#3073) SILENT float const-fold fixes
+      # (0.0-X negation idiom byte-exact + computed-fold operands correctly-
+      # rounded). The built ./hexa runs one self-contained oracle and asserts
+      # each compile-time-folded float's IEEE-754 LE bit pattern == golden
+      # (machine-independent; same goldens on every arch). LOW BLAST RADIUS:
+      # tool/op39_constfold_gate.sh is the SSOT; only a REAL const-fold drift
+      # (re-broken %g serialize / naive-atof parse) can fail it. <1 s.
+      - name: OP-39 — float const-fold byte-eq gate (darwin-arm64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh tool/op39_constfold_gate.sh ./hexa
+
       - name: Package — shared release_package (seeds removed)
         shell: bash
         env:
@@ -157,6 +171,15 @@ jobs:
           set -euo pipefail
           sh tool/fold_ci_gate.sh ./hexa
 
+      # ── OP-39: float const-fold byte-eq tripwire (see darwin job for full
+      # rationale). SSOT = tool/op39_constfold_gate.sh; <1 s; fails ONLY on a
+      # real const-fold drift vs the recorded goldens.
+      - name: OP-39 — float const-fold byte-eq gate (linux-x86_64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh tool/op39_constfold_gate.sh ./hexa
+
       - name: Package — shared release_package (seeds removed)
         shell: bash
         env:
@@ -207,6 +230,15 @@ jobs:
         run: |
           set -euo pipefail
           sh tool/fold_ci_gate.sh ./hexa
+
+      # ── OP-39: float const-fold byte-eq tripwire (see darwin job for full
+      # rationale). SSOT = tool/op39_constfold_gate.sh; <1 s; fails ONLY on a
+      # real const-fold drift vs the recorded goldens.
+      - name: OP-39 — float const-fold byte-eq gate (linux-arm64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh tool/op39_constfold_gate.sh ./hexa
 
       - name: Package — shared release_package (seeds removed)
         shell: bash
