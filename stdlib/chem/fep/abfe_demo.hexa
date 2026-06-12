@@ -78,17 +78,28 @@ use "stdlib/chem/md/langevin"
 use "stdlib/chem/fep/mbar"
 use "stdlib/chem/fep/hrex"
 
-// ── config struct (every knob is generic — d4) ───────────────────────
-pub struct AbfeConfig {
-    ladder: array,            // λ-schedule [λ_0 … λ_{K-1}]
-    n_sweeps: int,            // HREX exchange sweeps (incl. burn-in)
-    swap_period: int,         // attempt exchanges every swap_period sweeps
-    md_steps_per_sweep: int,  // MD propagation steps between exchange attempts
-    dt: float,                // MD timestep
-    kT: float,                // thermal energy (energy units of ΔG output)
-    seed: int,                // LCG seed (reproducible)
-    mbar_tol: float,          // MBAR self-consistency tolerance
-    mbar_max_iter: int,       // MBAR fixed-point iteration cap
+// ── config (a DICT, every knob generic — d4) ─────────────────────────
+// NOTE: the config is a dict (`#{}`), NOT a struct. A user struct whose
+// field layout overlaps an imported module's struct (autograd Tape/Node)
+// can get its slot→field mapping confused by this interp's struct→C
+// lowering, surfacing as a spurious "map key not found" at field access.
+// A dict uses explicit string keys and is collision-free across modules,
+// so run_abfe reads cfg["..."] unambiguously. abfe_config() is the d4
+// constructor — no field is name-branched, all are pass-through.
+pub fn abfe_config(ladder: array, n_sweeps: int, swap_period: int,
+                   md_steps_per_sweep: int, dt: float, kT: float, seed: int,
+                   mbar_tol: float, mbar_max_iter: int) {
+    let c = #{}
+    c["ladder"]             = ladder
+    c["n_sweeps"]           = n_sweeps
+    c["swap_period"]        = swap_period
+    c["md_steps_per_sweep"] = md_steps_per_sweep
+    c["dt"]                 = dt
+    c["kT"]                 = kT
+    c["seed"]               = seed
+    c["mbar_tol"]           = mbar_tol
+    c["mbar_max_iter"]      = mbar_max_iter
+    return c
 }
 
 fn _abs_f(x: float) -> float { if x < 0.0 { return 0.0 - x } else { return x } }
@@ -137,19 +148,19 @@ pub fn make_langevin_prop(force_factory, prm, dt: float, md_n: int,
 // prop(config, lam, lcg) -> [config', lcg'] : the per-rung MD propagator
 //   (from make_langevin_prop, or any generic sampler for the toy path).
 // configs0 : [K] initial snapshots, one per rung.
-// cfg      : AbfeConfig (ladder + all run knobs).
+// cfg      : config dict from abfe_config() (ladder + all run knobs).
 //
 // Returns the full ABFE bundle (ΔG, free energies, overlap, per-window ΔG,
 // exchange stats, raw u_kn). Single generic path — the SAME code runs the
 // toy harmonic recovery anchor and the soft-core LJ decoupling (d4).
-pub fn run_abfe(ufn, prop, configs0: array, cfg: AbfeConfig) {
-    let ladder = cfg.ladder
+pub fn run_abfe(ufn, prop, configs0: array, cfg) {
+    let ladder = cfg["ladder"]
     let K = ladder.len()
 
     // ── 3. SAMPLE — R5 HREX with the R8/R3-fused propagator + exchange ──
     let hr = hrex_run(ufn, prop, ladder, configs0,
-                      cfg.n_sweeps, cfg.swap_period, cfg.md_steps_per_sweep,
-                      cfg.seed)
+                      cfg["n_sweeps"], cfg["swap_period"], cfg["md_steps_per_sweep"],
+                      cfg["seed"])
 
     // ── 4. ASSEMBLE — R5 cross-evaluation → u_kn (R3 soft-core energy) ──
     let bundle = hrex_assemble_u_kn(ufn, ladder, hr["samples_by_rung"])
@@ -158,10 +169,10 @@ pub fn run_abfe(ufn, prop, configs0: array, cfg: AbfeConfig) {
     let Ntot = bundle["Ntot"]
 
     // ── 5. ESTIMATE — R4 MBAR → f_k, ΔG, statistics ────────────────────
-    let sol = mbar_solve(u_kn, N_k, cfg.mbar_tol, cfg.mbar_max_iter)
+    let sol = mbar_solve(u_kn, N_k, cfg["mbar_tol"], cfg["mbar_max_iter"])
     let f = sol["f"]
     let dG_kT = f[f.len() - 1] - f[0]
-    let dG = dG_kT * cfg.kT
+    let dG = dG_kT * cfg["kT"]
 
     // ── diagnostics: overlap matrix + per-window ΔG ────────────────────
     let overlap = mbar_overlap(u_kn, N_k, f)

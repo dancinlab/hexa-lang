@@ -153,17 +153,7 @@ fn a_run(seed: int) {
     // phantom constraint list: empty ⇒ unconstrained BAOAB. (The constrained
     // path is exercised separately in a_run_constrained below.)
     let prop = make_langevin_prop(a_force_factory, prm, 0.02, 4, [], 1.0e-10, 50)
-    let cfg = AbfeConfig{
-        ladder: ladder,
-        n_sweeps: 300,
-        swap_period: 1,
-        md_steps_per_sweep: 2,
-        dt: 0.02,
-        kT: A_KT,
-        seed: seed,
-        mbar_tol: 1.0e-12,
-        mbar_max_iter: 500,
-    }
+    let cfg = abfe_config(ladder, 300, 1, 2, 0.02, A_KT, seed, 1.0e-12, 500)
     let configs0 = a_make_configs0(ladder)
     return run_abfe(a_ufn, prop, configs0, cfg)
 }
@@ -225,17 +215,7 @@ fn a_run_constrained(seed: int) {
     let cons = [Constraint{ i: 0, j: 1, d: A_BOND }]
     let prop = make_langevin_prop(a_force_factory_c, prm, 0.02, 4,
                                   cons, 1.0e-10, 100)
-    let cfg = AbfeConfig{
-        ladder: ladder,
-        n_sweeps: 250,
-        swap_period: 1,
-        md_steps_per_sweep: 2,
-        dt: 0.02,
-        kT: A_KT,
-        seed: seed,
-        mbar_tol: 1.0e-12,
-        mbar_max_iter: 500,
-    }
+    let cfg = abfe_config(ladder, 250, 1, 2, 0.02, A_KT, seed, 1.0e-12, 500)
     let configs0 = a_make_configs0_c(ladder)
     let res = run_abfe(a_ufn_c, prop, configs0, cfg)
     // also return the final constraint residual across all rung samples.
@@ -474,17 +454,8 @@ fn main() {
     let mut configs0B = []
     let mut ib = 0
     while ib < KB { configs0B.push([1.122]) ib = ib + 1 }
-    let cfgB = AbfeConfig{
-        ladder: ladderB,
-        n_sweeps: 250,
-        swap_period: 1,
-        md_steps_per_sweep: 2,
-        dt: 0.0,                            // unused: b_prop is MC, not MD
-        kT: 1.0,
-        seed: 13579,
-        mbar_tol: 1.0e-12,
-        mbar_max_iter: 800,
-    }
+    // dt unused here (b_prop is MC, not MD).
+    let cfgB = abfe_config(ladderB, 250, 1, 2, 0.0, 1.0, 13579, 1.0e-12, 800)
     let resB = run_abfe(b_ufn, b_prop, configs0B, cfgB)
     let dGB_mbar = resB["dG"]
     println("    MBAR ΔG(decouple, λ:1→0) = " + to_string(dGB_mbar) + " kT")
