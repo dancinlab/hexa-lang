@@ -1904,3 +1904,40 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   OP-37b/OP-39b flagged (🟠 out of 0-pod scope; this fixes REPO SOURCE + proves on from-source rebuild + fixpoint).
   $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
   Verdict .verdicts/hexa-0pod/F-OP40-COMPTIME-MUL-ULP.txt.
+
+## OP-44 — runtime float formatter hxlcl_vsnprintf non-correctly-rounded: MEASURED + libc-delegation fix PROVEN → 🟠 DEFERRED (frozen-seed re-pin) — 2026-06-12
+- TASK (OP-40's HONEST RESIDUAL §1): OP-40 root-caused the comptime const-fold drift to the runtime's hand-rolled
+  %.17e serialize and worked AROUND it for the const-fold path (hex-float literals). But hxlcl_vsnprintf's %g/%e/%f
+  is STILL non-correctly-rounded for ALL runtime float printing. OP-44 = ASSESS + (if tractable+safe 0-pod) FIX the
+  formatter to be correctly-rounded; else DEFER with blocker + recipe.
+- SURVEY: self/runtime.c is GITIGNORED (git check-ignore matches; absent at HEAD) — a frozen-seed blob restored by
+  tool/restore_frozen_seeds from IMMUTABLE anchor FROZEN_SEED_REF=151c52c82 (parent of graduation commit 7906951c0,
+  #2065). hxlcl_vsnprintf body at frozen runtime.c:657, float branch :722 ("Cycle 56 ... Not bit-exact with libc's
+  Grisu/Ryu"), snprintf override :2095. NO tracked SSOT emitter — codegen.hexa refs (:9873-74) are COMMENTS only;
+  runtime.c.hexanoport: "Cannot be ported to .hexa (it IS the bootstrap runtime)". → formatter is irreducible frozen
+  substrate. SAME structural blocker as OP-39b.
+- MEASUREMENT (g5, 5536 deduped finite doubles: A&S erf products + 5000 random magnitude 1e-300..1e300 seed=44 + 500
+  subnormals + edges; EXACT frozen-blob float algorithm extracted verbatim to a standalone C TU vs host libc snprintf
+  + python struct.pack round-trip = correctly-rounded ground truth):
+  · %.17g does NOT round-trip to same double: 3463/5536 (62.6%); != libc string: 5057/5536 (91.3%).
+  · %.17e parses to DIFFERENT double than libc: 3432/5536 (62.0%); MAX 5 ULP (OP-40's narrow A&S sweep saw 1 ULP).
+  · libc %.17g round-trip failures: 0/5536 (sanity). → shortest-round-trip-INCORRECT, REAL + PERVASIVE (every
+    high-precision float print). ROOT = naive digit-extraction (d=(int)dv; dv=(dv-d)*10.0 accumulates error;
+    round-half-up peek-1; no Grisu/Ryū; capped 18 digits).
+- FIX PROVEN (g0): route the float branch to libc snprintf (OP-37b's atof→strtod pattern in REVERSE). libc %e/%g are
+  C-standard correctly-rounded AND machine-independent (the correctly-rounded decimal of a double is unique → identical
+  across glibc/musl/macos → cross-platform deterministic, NOT a platform-dependent decimal). libc IS reachable: runtime
+  #includes <stdio.h>/<math.h> + already calls 36 real libm cos/sin/exp directly (stdlib_trig_libm) — the hxlcl_* layer
+  is deliberate symbol-elimination, not freestanding-hard; build links full libc/-lm. SAME 5521-case sweep with the
+  float branch delegating to libc snprintf → 0/5521 round-trip fail, 0/5521 drift. Recipe VALIDATED.
+- TRACTABILITY → DEFER 🟠: the fix is correct + small + cross-platform-deterministic + does NOT touch the const-fold
+  byte path (OP-40 hex-floats that). BUT it can't land in tracked source 0-pod: the formatter lives ONLY in the
+  gitignored frozen blob → editing = mutate the IMMUTABLE anchor (forbidden) OR a wholesale frozen-anchor RE-PIN
+  (build-host build_selfhost.sh ladder + gen3→gen4 byte-eq + parity + FROZEN_SEED_REF bump — a SELFHOST-NEXT item,
+  not $0 single-PR), PLUS a repo-wide golden re-bake (91% of float strings shift). Per task guidance, clean DEFER
+  beats a forbidden anchor mutation / unverified runtime ship.
+- OUTCOME: 🟠 DEFERRED — measured + bounded (≤5 ULP, 62% round-trip-fail) + proven recipe = a COMPLETE honest result.
+  milestone OP-44 [ ] 🟠. NO source/runtime/.tape edit → self-host fixpoint UNTOUCHED (no red-gate risk). 3rd instance
+  of the frozen-seed-promote dependency (after OP-39b gate-flip + OP-40 deploy-boundary); the validated formatter
+  patch is drop-in for the eventual consolidated promote. Verdict .verdicts/hexa-0pod/F-OP44-VSNPRINTF-CORRECT-ROUND.txt.
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.

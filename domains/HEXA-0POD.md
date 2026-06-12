@@ -80,6 +80,30 @@ loop targets what the consumer card + code can carry.
   after OP-41 the optimizer-scheduler falsified set is EMPTY. wipe_guard: net +18/−3 « 50. Verdict
   .verdicts/hexa-0pod/F-OP41-FALSIFIED-BUILTIN-SWEEP.txt. $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
 
+<!-- ANCHOR:OP-44-VSNPRINTF-CORRECT-ROUND (unique anchor — OP-40 (#3084) root-caused the comptime const-fold drift to the runtime's hand-rolled %.17e serialize (hxlcl_vsnprintf / rt_format_float_sci, "Not bit-exact with libc's") and worked AROUND it for the const-fold path via hex-float literals. But hxlcl_vsnprintf's %g/%e/%f is STILL non-correctly-rounded for ALL runtime float printing — every hexa program that prints a float uses it. OP-44 ASSESSES + (if tractable+safe 0-pod) FIXES the runtime float formatter to be correctly-rounded) -->
+- [ ] **OP-44 — runtime float formatter `hxlcl_vsnprintf` non-correctly-rounded: MEASURED (62% of doubles mis-round %.17g/%.17e, ≤5 ULP, NOT shortest-round-trip) + libc-delegation fix PROVEN (→0/0) → 🟠 DEFERRED (frozen-seed runtime.c re-pin, same blocker as OP-39b/OP-40)** —
+  🟠 the OP-40 ROOT cause, generalized. DEFECT MEASURED (g5, 5536 deduped finite doubles: A&S products + 5000 random
+  magnitude 1e-300..1e300 seed=44 + 500 subnormals + edges; the EXACT frozen-blob float-format algorithm extracted
+  verbatim into a standalone C harness vs host libc snprintf + python correctly-rounded ground truth): hxlcl_vsnprintf
+  %.17g does NOT round-trip to the same double in 3463/5536 (62.6%), differs from libc in 5057/5536 (91.3%); %.17e
+  parses to a DIFFERENT double than libc in 3432/5536 (62.0%), MAX 5 ULP (OP-40's narrow A&S sweep saw only 1 ULP —
+  the wide range is worse). libc round-trips 100% (0/5536, sanity). → shortest-round-trip-INCORRECT, REAL + PERVASIVE
+  (every high-precision float print: println/loss/grad-norm logs/to_string). ROOT = naive digit-extraction
+  (`d=(int)dv; dv=(dv-d)*10.0` accumulates fp error; round-half-up peek-1-digit; no Grisu/Ryū; capped 18 digits),
+  frozen self/runtime.c:722. CORRECT FIX = route the float branch to libc snprintf (OP-37b's atof→strtod pattern in
+  REVERSE; libc %e/%g are C-standard correctly-rounded AND machine-independent → cross-platform deterministic). PROVEN:
+  same 5521-case sweep with the float branch delegating to libc snprintf → 0/5521 round-trip fail, 0/5521 drift. libc
+  IS reachable (runtime #includes <stdio.h>/<math.h> + already calls 36 real libm cos/sin/exp directly per
+  stdlib_trig_libm; the hxlcl_* layer is deliberate symbol-elimination, not freestanding-hard). DEFERRED 0-pod: the
+  formatter body lives ONLY in the gitignored frozen-seed self/runtime.c (restored from IMMUTABLE anchor 151c52c82;
+  NO tracked SSOT emitter — codegen.hexa refs are comments; runtime.c.hexanoport: "Cannot be ported to .hexa (it IS
+  the bootstrap runtime)"). A tracked fix needs the OP-39b-class frozen-anchor RE-PIN (build-host self-host ladder +
+  gen3→gen4 byte-eq + FROZEN_SEED_REF bump) + a repo-wide golden re-bake (91% of float strings shift) — out of $0
+  single-PR scope. OP-44 makes NO source/runtime/.tape edit → self-host fixpoint UNTOUCHED (no red-gate risk). The
+  validated formatter patch + unblock recipe are in the verdict (drop-in for the eventual SELFHOST-NEXT promote;
+  3rd instance of the frozen-seed-promote dependency after OP-39b/OP-40). Verdict
+  .verdicts/hexa-0pod/F-OP44-VSNPRINTF-CORRECT-ROUND.txt. $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
 <!-- ANCHOR:OP-37B-HOST-ATOF-CORRECT-ROUND (unique anchor — OP-37 (#3069) fixed the `0.0 - X` NEGATION idiom byte-exact by preserving operand source TEXT, but left a documented residual: folds that COMPUTE a value from RE-PARSED operands (e.g. `let a = 1.5 * 0.1`) re-parse via to_float→hxlcl_atof, a naive digit-accumulator 1 ULP off the correctly-rounded value. OP-37b settles whether a correctly-rounded host parse is tractable WITHOUT risking the self-host byte-eq fixpoint: measure the residual exactly on from-source rebuild, then find the smallest correct fix) -->
 - [x] **OP-37b — host-atof residual: computed const-folds re-parse operands 1 ULP off → FIXED via correctly-rounded strtod route (parse_float); fixpoint byte-identical** —
   🟢 the OP-37 residual is REAL on CURRENT source: MEASURED MAX 3 ULP (operands 1 ULP off via to_float/hxlcl_atof,
