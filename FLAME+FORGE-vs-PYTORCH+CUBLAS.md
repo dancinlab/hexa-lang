@@ -266,6 +266,37 @@ no vendor call and a bit-exact gate. It is **NOT raw TFLOP/s-vs-cuBLAS**. The bo
 SETTLED: **parity @Hopper-D2048 (1.08×, bit-exact) · own-edges-cuBLAS @consumer-D768 (0.95×) ·
 parity-not-beat @Hopper-large-D (~1.50× @D=4096, bit-exactness-bound).**
 
+### 4.1 The parity result is DTYPE-SCOPED to TF32 — FP16/BF16 own-GEMM is NOT parity (honest)
+
+Everything above is the **TF32** own-GEMM. The own-GEMM parity claim (1.08× @D=2048, bit-exact)
+is **dtype-scoped to TF32** — it does **NOT** hold for FP16/BF16, where cuBLAS's tensor-core
+FP16 path is far ahead. The campaign also ported the same composed-decode own-GEMM to 16-bit
+operands (W14, the re-derived 8×8 / 128 B f16 GMMA core), and the honest result is **PARITY=NO**:
+
+| dtype | own-GEMM | cuBLAS roofline | ratio | gate | parity | verdict |
+|-------|----------|-----------------|-------|------|--------|---------|
+| **TF32** (W10, pre-route-(a) summit) | 70.7 TFLOP/s @4096 | cuBLAS-TF32 430.8 | **6.09× off** | `rel_rms 0` bit-exact-vs-FP64 | NO at W10; route-(a) reaches **1.08× @D=2048** (the headline) | `F-FUSION-SM90-WGMMA-W10` |
+| **FP16** (W14) | **71.6 TFLOP/s @4096** | cuBLAS-FP16 **827.2** | **11.55× off** | `rel_rms ≤ 1e-2` vs **same-dtype** cuBLAS-FP16 (measured 0.000e+00); **NOT** bit-exact-vs-FP64 | **NO** | `F-FUSION-SM90-WGMMA-W14-FP16` |
+| **BF16** (W14) | 71.1 TFLOP/s @4096 | cuBLAS-BF16 816.1 | 11.48× off | `rel_rms ≤ 1e-2` vs same-dtype cuBLAS-BF16 (measured 0) | NO | `F-FUSION-SM90-WGMMA-W14-FP16` |
+
+The FP16/BF16 own kernel runs at the **same absolute throughput** as the TF32 kernel (~71–76
+TFLOP/s — the same decode/occupancy-bound design) — but the **cuBLAS-FP16 roofline DOUBLED**
+(827 vs cuBLAS-TF32 431 @4096), so the precision change moved the roofline 2× *away* without
+lifting the own kernel and the same-dtype ratio **WIDENED** (6.09× → 11.5×); it did not close.
+Two further honesty notes traced to the W14 verdict: (1) the gate is **NOT bit-exact-vs-FP64** —
+a 16-bit-operand + f32-accumulate wgmma is a genuinely different numeric, so the W14 gate is a
+precision-appropriate `rel_rms ≤ 1e-2` vs a *same-dtype* cuBLAS-FP16/BF16 oracle (it happened to
+measure 0.000e+00, better than the gate required, but the **gate stays the 1e-2 same-dtype
+tolerance**); (2) the W13 "a 16-bit gmma band is 16 KB → 2 bands fit → reopen the overlap" thesis
+is **deterministically REFUTED** for `.k16` (the band stays 32 KB, same as TF32 — a closed-negative).
+
+> **The honest one-liner (g5):** own-GEMM reaches **bit-exact PARITY with cuBLAS in TF32**
+> (1.08× @D=2048); in **FP16/BF16 it is correct (`rel_rms ≤ 1e-2`, same-dtype) but NOT parity
+> (11.5× off cuBLAS-FP16)** — the **parity result is dtype-scoped to TF32.** Presenting
+> "own-GEMM ≈ cuBLAS parity" without the dtype qualifier would overstate the claim (the same
+> honest-number failure class as the retired ~1656× figure). cuBLAS = roofline throughout, no
+> superiority claim. (`F-FUSION-SM90-WGMMA-W14-FP16`, `F-FUSION-SM90-WGMMA-W10`.)
+
 ---
 
 ## honest-number discipline — ALWAYS compare matched-dtype

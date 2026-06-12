@@ -1,5 +1,40 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-64 DONE: EXTEND the honest-number discipline to the own-GEMM DTYPE axis — the parity claim is now explicitly DTYPE-SCOPED to TF32 · FP16/BF16 (W14) = correct (rel_rms ≤ 1e-2 same-dtype) but PARITY=NO, 11.5x off cuBLAS-FP16 (roofline doubled) · docs-only, cited-not-re-measured · $0 · 0-pod · NO GPU
+- TASK: the public comparison doc + README led the own-GEMM story with the TF32 route-(a) result
+  (1.08x cuBLAS-TF32 PARITY @D=2048, bit-exact) WITHOUT a dtype qualifier. But the campaign also
+  measured an FP16/BF16 own-GEMM (W14, PR #2853) whose honest result is PARITY=NO. Presenting
+  "own-GEMM ≈ cuBLAS parity" without the dtype qualifier OVERSTATES the own-GEMM story — the same
+  honest-number failure class as the retired ~1656x figure (a dtype mismatch). OP-64 documents the
+  dtype axis honestly so the own-GEMM parity claim is dtype-scoped.
+- SURVEY (cited verbatim, NO re-measure — no GPU):
+  · .verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W14-FP16.txt — "own 71.6 @4096" (76.4 @8192),
+    "cuBLAS-FP16 roofline @4096 = 827.2", "11.55x off cuBLAS-FP16 @4096", "PARITY-vs-FP16: NO";
+    BF16 mirror: own 71.1 @4096, cuBLAS-BF16 816.1, 11.48x off. GATE CHANGE stated verbatim — NOT
+    bit-exact-vs-FP64: "the gate REMAINS the 1e-2 same-dtype tolerance, not a bit-exact-vs-FP64 claim"
+    (measured rel_rms 0.000e+00, better than the gate required, but the gate stays 1e-2 same-dtype).
+    Structural: "the precision change moved the cuBLAS roofline 2x AWAY without lifting the own kernel"
+    → the same-dtype ratio WIDENED (6.09x → 11.5x), it did not close. W13 16-KB-band overlap thesis
+    DETERMINISTICALLY REFUTED for .k16 (band stays 32 KB, same as TF32).
+  · .verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W10.txt — TF32 summit: "own ... 70.7 TFLOP/s @S=4096",
+    "cuBLAS-TF32 GFLOP/s: 430.8", "ratio ... 6.09x (W10)", "PARITY (<=1.3x): NO" (pre-route-(a); the
+    route-(a) global-relay then reaches 1.08x @D=2048, the headline).
+  · OP-58 own-GEMM parity map (docs/forge-routea-shape-adaptive.md) — vs cuBLAS-TF32 throughout.
+- DELIVERABLES (0-pod, NO GPU, docs-only, g0 simplest — a subsection + qualifier lines):
+  · FLAME+FORGE-vs-PYTORCH+CUBLAS.md — NEW §4.1 "The parity result is DTYPE-SCOPED to TF32" (a 3-row
+    TF32/FP16/BF16 table each number traced to W10/W14 + the gate-change note + the roofline-doubled
+    explanation + the honest one-liner blockquote). §4 itself NOT rewritten (g0).
+  · docs/forge-routea-shape-adaptive.md — DTYPE-SCOPE blockquote on the OP-58 own-GEMM parity map.
+  · README.md — one-line dtype-scope qualifier appended to the own-GEMM parity line.
+  · .verdicts/hexa-0pod/F-OP64-OWNGEMM-DTYPE-HONEST.txt — the TF32-parity-vs-FP16-no-parity split,
+    each number traced to W14/W10/OP-58, the dtype-scope statement.
+- HONEST ONE-LINER (g5): own-GEMM reaches bit-exact PARITY with cuBLAS in TF32 (1.08x @D=2048); in
+  FP16/BF16 it is correct (rel_rms ≤ 1e-2 same-dtype) but NOT parity (11.5x off cuBLAS-FP16) — the
+  parity result is dtype-scoped to TF32. cuBLAS = roofline throughout, parity-seeking, no superiority.
+- TIER: 🟡 SUPPORTED-BY-CITATION — the FP16/BF16 + TF32 numbers are CITED from W14/W10/OP-58, NOT
+  re-measured (no GPU). The consolidation/labeling/scope split is the deliverable. NO .tape, NO
+  self/env.hexa, NO kernel change, NO new measurement. $0, 0-pod, no vast, no foreign pod, leak 0.
+
 ## 2026-06-13 — OP-62 DONE: GENERALIZE the falsified-builtin audit BEYOND the ML family — 165 non-ML builtins of self/env.hexa audited with the OP-59 5-step g5 method · 10 pure-orphan landmines DEREGISTERED, 155 KEPT (82 real-impl + 29 compiler-closure + 44 live-caller) · whole roster now audited · $0 · 0-pod · NO GPU
 - TASK: OP-59 DEFINITIVELY closed the *ML-family* falsified-builtin thread (OP-43's 42-member ML roster:
   40 deregistered, 2 compiler-closure KEEPs sigmoid·arange). But that thread only ever audited the ML
