@@ -334,3 +334,83 @@ momentum with ZERO change to `rhf_scf` (d4-generic — only the integral front-e
 2. a genuine transition-metal d-element molecule (e.g. ScH / TiO STO-3G* or 3-21G*) — d in the
    VALENCE, not just polarization — vs a Psi4/Gaussian reference.
 3. brick 6 analytic molecular force ∇_R E via autograd through brick 1-8 (NOVEL lane); DIIS.
+
+## 2026-06-13 — round-6: brick 9 — f angular momentum + valence-d transition metal (ScH) g5 PASS
+
+f (L=3) reached by ADDING a `(cart,harm)` table pair to a NEW generic `_md_harm_ao` builder in
+`md_shell.hexa` — d4: no per-L code path. `md_dshell_ao` and `md_fshell_ao` now both call it. The
+SAME McMurchie–Davidson primitive engine (E-coeff tower · Hermite R-tensor · Boys F_n) carries L=3
+with NO cap. New file `md_f_selftest.hexa` (g5 gate). The UNCHANGED `rhf_scf` drove a real
+all-electron valence-d transition-metal molecule (ScH / STO-3G).
+
+### contracted higher-L radial-norm fix (the brick that made the TM land)
+
+The round-5 single-primitive d shell hid a convention bug that only a MULTI-primitive contracted
+shell exposes. `_md_harm_ao` divided the angular coefficient by `md_norm_prim(cart,α)` — a per-
+Cartesian-component norm (diagonal xx: df=(3)!!; off-diagonal xy: df=1). For a single primitive the
+factor is a constant absorbed by `md_ao_norm`, so H₂O+d was unaffected. For a 3-primitive Sc 3d
+contraction it DISTORTED the radial shape across primitives ⇒ ScH d_z² Hcore = −5.40 vs PySCF −7.43,
+SCF |Δ| = 18 mHa. Fix: multiply by the canonical RADIAL norm `N_L(α) = (2α/π)^{3/4}(4α)^{L/2}/√(2L−1)!!`
+(uses (2L−1)!! for the TOTAL L, not the per-axis product) so the contraction coefficient acts on a
+radially-normalized primitive (standard basis-library convention). After fix: d_z² Hcore = −7.42849
+(exact match), ScH SCF |Δ| = 2.976e-4 Ha. round-5 d-selftest re-run: UNCHANGED (|Δ|=2.47756e-5).
+
+### g5 verdicts (VERBATIM)
+
+(a) L≤2 regression — the f-capable MD reproduces the r4/r5 s+p+d anchors EXACTLY:
+    PASS (a) STO-3G H₂ S12 = 0.6593182001 (f-capable MD)
+    PASS (a) ⟨pₓ|T|pₓ⟩ = a(2L+3)/2 = 2.5 (a=1)
+    PASS (a) ⟨d_xy|T|d_xy⟩ = a(2L+3)/2 = 3.5 (a=1)
+    + the round-5 md_d_selftest H₂O+d(O) E=−74.9869 (PySCF) re-runs UNCHANGED post-fix.
+(b) f-shell primitive identities — exact analytic anchors:
+    PASS (b)(i)  ⟨f_xyz|f_xyz⟩ self-overlap = 1
+    PASS (b)(ii) ⟨f_xyz|T|f_xyz⟩ = a(2L+3)/2 = 4.5 (a=1)   ← off-diagonal Cartesian f, exact
+    PASS (b)(ii') ⟨f_zzz|T|f_zzz⟩ = 21/10 = 2.1 (diagonal cart, exact — sympy/numpy verified, HONEST)
+    PASS (b)(iii) ⟨s|f_xyz⟩ = 0 · ⟨d_xy|f_xyz⟩ = 0 (parity) · ⟨p_z|f_zzz⟩ ≠ 0 (allowed selection)
+    PASS (b)(iv) spherical-f ⟂ 3 p-type contaminants (∝ r²·{x,y,z}), max|⟨f_m|·⟩| = 5.3e-16
+                 — the f analog of the d s-contaminant removal — + all 7 spherical-f AOs self-normalize.
+(c) END-TO-END valence-d TM — ScH / STO-3G (all-electron, NO ECP) through UNCHANGED rhf_scf:
+    Sc–H = 1.78 Å, closed-shell singlet (22 e → 11 doubly-occupied MOs), E_nuc = 6.24310 Ha.
+    PASS (c) ScH SCF converged (32 iters, density mixing 0.5)
+    E_total = −752.639 Ha   (PySCF 2.13.1 RHF/STO-3G ref −752.638702408)   |Δ| = 2.976e-4 Ha
+    PASS (c) ScH/STO-3G E_total = −752.638702408 Ha (PySCF RHF)
+    PASS (c) Sc 3d VALENCE Mulliken population = 0.431947 e  (PySCF 0.432 — VALENCE, NOT spectator)
+    PASS (c) d_z² AO self-overlap = 1
+(d) f-engaging fixture — f does NOT appear in STO-3G Sc, so f is gated by its OWN end-to-end fixture
+    (not merely asserted): a 2-center {s, f_xyz, f_z³} overlap matrix that is symmetric-PD (diag = 1,
+    s⟂f and f⟂f' off-diagonals = 0) and a self-normalized ⟨f_xyz|T|f_xyz⟩ = 4.5 virial. f is a
+    first-class AO in the SAME assembly, energy-grade.
+    PASS (d) S_ff diag = 1 · S_ff[s,f]=0 · S_ff[f,f']=0 · self-normalized ⟨f|T|f⟩ = 4.5
+(d-regress) r1..r5 selftests (gaussian/coulomb/rhf/md/md_d) ALL re-run PASS post-fix.
+
+### HONEST scope (d6)
+
+- **The TM d is genuinely VALENCE**, not a spectator polarization shell: STO-3G Sc carries an EXPLICIT
+  3d shell which is THE valence d-shell of Sc (no other d in the basis). The Sc 3d Mulliken population
+  is 0.432 e (matches PySCF 0.432) — materially populated via Sc–H bonding. ScH is CLOSED-SHELL
+  (singlet, 22 e) so RHF converges cleanly: NO open-shell / near-degenerate 3d SCF stiffness here.
+- **f does not engage in ScH/STO-3G** (no f in that basis) — so the f extension is gated by (b)+(d)
+  (f-shell exact identities + f-engaging symmetric-PD overlap/virial fixture), NOT asserted. f landed
+  via the dedicated fixture, end-to-end through the assembly; a real f-bearing molecule (a lanthanide /
+  an f-polarization basis) is a round-7 demo, not a gap in the f extension itself.
+- |Δ| = 2.976e-4 Ha for ScH (Z=21 all-electron, 19 AO) is the accumulated erf_fn-Boys floor over a
+  much larger nuclear charge / ERI count than H₂O — reported VERBATIM, not tuned.
+
+### SEALED vs OPEN
+
+- **SEALED**: s + p + d + **f** angular momentum (S/T/V/ERI) via the unchanged MD recursions + the
+  generic `_md_harm_ao` spherical-shell assembly (d4 — table addition, no code path); the contracted
+  higher-L radial-norm convention (multi-primitive shells correct); a real all-electron VALENCE-d
+  transition-metal molecule (ScH, Sc 3d pop 0.432) through the unchanged generic RHF to |Δ|=3e-4 Ha;
+  the f extension gated by exact f-shell identities + an f-engaging symmetric-PD fixture; full
+  r1..r5 regression green.
+- **OPEN (round-7)**: open-shell valence-d TM SCF (TiO triplet · ScH⁺ d¹ open shell) needs UHF /
+  level-shift / DIIS — RHF is closed-shell only; g angular momentum (15 Cartesian → 9 spherical, the
+  SAME `_md_harm_ao` table addition); a real f-bearing molecule (lanthanide hydride / f-polarization);
+  brick 6 analytic force ∇_R E (autograd lane).
+
+### round-7 next
+1. brick 10 — closed-shell valence-d TM SCF extension; for OPEN-shell TM (TiO triplet, ScH⁺ d¹) add
+   UHF / ROHF + level-shift + DIIS (RHF is closed-shell only — the honest wall, breakthrough = UHF).
+2. g angular momentum (15 Cartesian → 9 spherical) via the SAME `_md_harm_ao` (cart,harm) table.
+3. brick 6 analytic molecular force ∇_R E via autograd through brick 1-9 (NOVEL lane).

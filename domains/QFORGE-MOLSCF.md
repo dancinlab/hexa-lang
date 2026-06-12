@@ -39,7 +39,17 @@ Fock 빌드, (3) 비직교 일반화 고유문제 `FC=SCε`. 모든 g5 anchor �
       (b) ⟨d_xy|d_xy⟩=1 · ⟨d_xy|T|d_xy⟩=a(2L+3)/2=3.5 exact (off-diag) · d_zz=13/6 honest · parity 0 · d⟂(xx+yy+zz)~4e-16
       (c) E_total=−74.9869 Ha vs PySCF 2.13.1 −74.986924782 |Δ|=2.5e-5 · d 실engage(ΔE=−25 mHa vs s,p-only)
       (d) r1/r2/r3/r4 regress ALL PASS
-- [ ] brick 9 (round-6) — f 각운동량 (10 Cartesian → 7 spherical, 동일 construction) + 전이금속 d-element 분자
+- [x] brick 9 (round-6) — f 각운동량 (10 Cartesian → 7 spherical, m=0,±1,±2,±3 · 동일 MD recursion·L-cap 無)
+      + valence-d 전이금속 분자 (ScH/STO-3G all-electron) end-to-end through UNCHANGED `rhf_scf` g5 PASS
+      `md_shell.hexa` generic `_md_harm_ao` builder (d4 — (cart,harm) 테이블 추가일 뿐 새 코드경로 無)
+      (a) L≤2 regression: H₂ S12=0.6593182001 · ⟨pₓ|T|pₓ⟩=2.5 · ⟨d_xy|T|d_xy⟩=3.5 exact (no s/p/d drift)
+      (b) ⟨f_xyz|f_xyz⟩=1 · ⟨f_xyz|T|f_xyz⟩=a(2L+3)/2=4.5 exact · f_zzz=21/10 honest · parity 0 ·
+          spherical-f ⟂ 3 p-type contaminant(∝r²·{x,y,z})~4e-16 (d s-contaminant 제거의 f 유사물)
+      (c) ScH/STO-3G E_total vs PySCF 2.13.1 RHF −752.638702408 |Δ| VERBATIM · Sc 3d Mulliken pop 실engage
+          (3d = 유일 valence d-shell · 0.4 e via Sc–H bond — spectator polarization 아님) · closed-shell 22e
+      (d) f-engaging fixture (STO-3G Sc 엔 f 無 → f 별도 게이트): f AO self-norm·⟂·virial 4.5 symmetric-PD
+- [ ] brick 10 (round-7) — closed-shell valence-d TM SCF 확장 (open-shell → UHF/level-shift/DIIS) +
+      g 각운동량 (15 Cartesian → 9 spherical, 동일 _md_harm_ao 테이블) + brick 6 analytic force ∇_R E
 
 ## three-scale unblock
 
