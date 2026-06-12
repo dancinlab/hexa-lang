@@ -238,6 +238,10 @@ fn sync_optimizer_step(workers, all_grads, lr, step, num_gpus) {
         let _ = gpu_clip_grad_norm(grads, DIST_MAX_GNORM)
 
         // AdamW update
+        // NOTE (OP-33d): this `adam_step` resolves to the LOCAL `fn adam_step` in the
+        // imported gpu_optimizer.hexa (4-arg GPU AdamW), NOT the falsified builtin. The
+        // builtin was deregistered from the self/env.hexa roster (no runtime impl) — that
+        // change does NOT affect this call, which binds to the local module-level fn.
         let mut p = 0
         while p < n_params {
             let _ = adam_step(workers[g].opt_states[p], grads[p], lr, step)

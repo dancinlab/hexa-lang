@@ -1,5 +1,39 @@
 # HEXA-0POD — log
 
+## 2026-06-12 — OP-33d DONE: falsified adam_step builtin swept across self/ml/* — no LIVE caller → deregistered from env.hexa roster · $0 · 0-pod
+- SURVEY-FIRST (mandatory). Read OP-33c's verdict (.verdicts/hexa-0pod/F-OP33C-DEAD-OPTIM-CLEANUP.txt §8 HONEST):
+  it deliberately LEFT adam_step registered because 12+ self/ml/* surfaces reference it (out of OP-33c scope) and
+  flagged this exact follow-up. `grep -rn "adam_step" --include="*.hexa"` → complete reference list.
+- CLASSIFY (the key disambiguation). Most hits are RED HERRINGS — locally-defined fns, NOT the builtin:
+  adam_step_naive / adam_step_fused / adam_step_fused_with_zero (self/test_fused_adam, self/test_optimizer_fuse,
+  self/ai_native/{fused_adam,optimizer_fuse}), galore_adam_step (self/ml/galore, self/test_galore), ref_adam_step
+  (self/test_zero_optimizer). Bare-BUILTIN call sites = 4 example demos + 3 self/ml/* + the roster row.
+- g5 RE-VERIFY falsified (independent, not trusted from OP-33c). /tmp/op33d_p2.hexa `fn main(){ ... adam_step(p,g,m,v,
+  0.001,0.9,0.999,1e-8,1) }` via installed `hexa run` (hx-selfhost-cli, fresh hexat ~/.hx/bin/build/hexat). VERBATIM:
+  "error: call to undeclared function 'adam_step'; ... note: did you mean 'adamw_step'? /Users/mini/.hx/bin/self/
+  runtime.h:1543:9: note: 'adamw_step' declared here ... error: clang compile failed — binary not produced". (Caveat:
+  a TOP-LEVEL-statement probe form prints a bogus "OK:" — hexat mis-parses it; the `fn main()` form cleanly emits+fails.)
+- SIGNATURE check (drop-in?). adamw_step = 11-arg (p,g,m,v,n,lr,b1,b2,eps,wd,t; RFC 034, runtime.h:1543); adam_step
+  call sites = 9-arg (p,g,m,v,lr,b1,b2,eps,t). NOT a drop-in (inserts n + wd at different positions) → no faithful
+  repoint of dead demos.
+- LIVENESS per caller. 4 examples (anima_convergence_proof:127 / benchmark_ai_native:90 / test_optimizer:19,32,61,94 /
+  benchmark_all:117,123): tool/examples_baseline.json exit_code=-1, last_pass="" → never-passing → DEAD. self/ml/
+  t2_gpu_bench:166 (4-arg): NO `use "gpu_optimizer"`, no local fn → falls to the builtin; `hexa run` on CPU aborts
+  ("index 1 out of bounds") before this → DEAD CUDA bench (not in examples_baseline at all). self/ml/train_gpu:134 +
+  distributed_train:243 (4-arg): BOTH `use "gpu_optimizer"`, which DEFINES `fn adam_step(state,grad,lr,t)` (gpu_
+  optimizer.hexa:41, plain fn) → resolve to the LOCAL fn, not the builtin (also CPU-untranspilable CUDA surfaces).
+- DECIDE (g0 conservative). All DEAD/local → NOTE pointer comments (mirroring OP-33c's example NOTEs); NO faithful
+  repoint. NO live surface references the BUILTIN → root-cause: DEREGISTER adam_step from the self/env.hexa roster
+  (mirrors OP-33c grad_clip_norm / OP-33b cosine_lr·warmup_lr). Conservative check: a local `fn adam_step` is a user
+  function registered separately from the builtin roster — removing the roster row does NOT break the gpu trainers'
+  local binding (so train_gpu/distributed_train are not regressed).
+- EDIT. self/env.hexa: removed "adam_step" from the env_new() builtin roster + multi-clause `// adam_step removed
+  (OP-33d ...)` comment. NOTE comments added at all 7 caller sites (4 examples + 3 self/ml). wipe_guard: 1 deletion « 50.
+- VERIFY. grep-proved zero remaining bare adam_step( builtin caller outside the now-NOTE'd dead/local sites; env.hexa
+  roster array stays well-formed. self/env.hexa edit hits the NEXT compiler build — CI selfhost gates check byte-eq;
+  change is minimal (1 token + comment).
+- LAND. Verdict .verdicts/hexa-0pod/F-OP33D-ADAM-STEP-SWEEP.txt. $0 · 0-GPU · 0-pod · no vast · no foreign-pod · no .tape.
+
 ## 2026-06-12 — OP-37b DONE: host-atof residual cured — computed const-folds re-parse operands via correctly-rounded strtod (3→1 ULP, fixpoint byte-identical) · $0 · 0-pod
 - SURVEY-FIRST (mandatory). Read OP-37's verdict (.verdicts/hexa-0pod/F-OP37-FLOAT-CONSTFOLD-VERIFY.txt) + the landed
   fix in self/codegen.hexa (_cf_float_node / _cf_negate_float_text / comptime_eval float BinOp folds), then traced

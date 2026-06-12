@@ -114,6 +114,9 @@ println("")
 }
 
 // ── Training ──
+// NOTE (OP-33d): `adam_step` was a FALSIFIED builtin (no runtime impl; runtime backs only
+// `adamw_step`, RFC 034) — deregistered from the self/env.hexa roster. This bench suite is
+// baseline-broken (exit_code=-1). Real AdamW = stdlib/flame/optim_lib.hexa opt_adamw_step.
 @bench fn bench_adam_step_64() {
     let p = randn(64, 0.5)
     let g = randn(64, 0.1)

@@ -10,6 +10,23 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-33D-ADAM-STEP-SWEEP (unique anchor — the OP-33c HONEST §8 follow-up: OP-33c cleaned dead adam/safe_update from stdlib/optim.hexa + deregistered grad_clip_norm, but LEFT the falsified adam_step builtin registered in the self/env.hexa roster because 12+ other surfaces (self/ml/*) reference it — out of OP-33c scope. OP-33d does the systematic sweep: classify EVERY adam_step reference as live vs dead, repoint live / NOTE dead, then deregister iff no live surface needs it. Independently RE-VERIFIES (g5) that adam_step is falsified — runtime backs only adamw_step (RFC 034, 11-arg, a DIFFERENT symbol)) -->
+- [x] **OP-33d — falsified adam_step builtin swept across self/ml/* → no LIVE caller → deregistered from the env.hexa roster** —
+  🟢 g5 RE-VERIFIED falsified on CURRENT main (verbatim): `adam_step(...)` → emitted C `call to undeclared
+  function 'adam_step'` / note: did you mean 'adamw_step'? (runtime.h:1543) → clang fails. Full caller sweep
+  (grep -rn over *.hexa) classified EVERY ref: bare-builtin call sites = 4 example demos
+  (anima_convergence_proof/benchmark_ai_native/test_optimizer/benchmark_all, all baseline exit_code=-1 never-passing)
+  + self/ml/t2_gpu_bench.hexa (CUDA-gated bench, no gpu_optimizer import, CPU transpile aborts) — ALL DEAD →
+  NOTE pointer comment. self/ml/{train_gpu,distributed_train}.hexa call `adam_step(state,grad,lr,t)` (4-arg) but
+  `use "gpu_optimizer"` which DEFINES a local `fn adam_step` → resolve LOCALLY, not the builtin → NOTE. The
+  adam_step_naive/_fused/galore_adam_step/ref_adam_step hits in self/test_*/self/ai_native/self/ml/galore are
+  locally-defined fns (red herrings, unrelated to the builtin). NO live surface refs the builtin → DEREGISTERED
+  from the self/env.hexa roster (mirrors OP-33c grad_clip_norm / OP-33b cosine_lr·warmup_lr); removing the builtin
+  does NOT affect the local fn the gpu trainers bind to. adamw_step is 11-arg (p,g,m,v,n,lr,b1,b2,eps,wd,t) — NOT
+  a drop-in for the 9-arg adam_step, so dead demos are NOTE'd not faithfully repointed (they're dead on the broader
+  randn/zeros/cross_entropy family anyway). wipe_guard: 1 deletion (roster entry) « 50. Verdict
+  .verdicts/hexa-0pod/F-OP33D-ADAM-STEP-SWEEP.txt. $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
 <!-- ANCHOR:OP-37B-HOST-ATOF-CORRECT-ROUND (unique anchor — OP-37 (#3069) fixed the `0.0 - X` NEGATION idiom byte-exact by preserving operand source TEXT, but left a documented residual: folds that COMPUTE a value from RE-PARSED operands (e.g. `let a = 1.5 * 0.1`) re-parse via to_float→hxlcl_atof, a naive digit-accumulator 1 ULP off the correctly-rounded value. OP-37b settles whether a correctly-rounded host parse is tractable WITHOUT risking the self-host byte-eq fixpoint: measure the residual exactly on from-source rebuild, then find the smallest correct fix) -->
 - [x] **OP-37b — host-atof residual: computed const-folds re-parse operands 1 ULP off → FIXED via correctly-rounded strtod route (parse_float); fixpoint byte-identical** —
   🟢 the OP-37 residual is REAL on CURRENT source: MEASURED MAX 3 ULP (operands 1 ULP off via to_float/hxlcl_atof,
