@@ -7,17 +7,26 @@
 
 ---
 
-## TL;DR — flame + forge is SLOWER than PyTorch + cuBLAS, and wins on a different axis
+## TL;DR — flame + forge is NOT 3 orders behind PyTorch + cuBLAS; matched-dtype the gap is single-digit, and it wins on a different axis
 
-flame + forge is **not** a speed competitor to PyTorch + cuBLAS. On **raw throughput
-it is slower**:
+**flame + forge is NOT three-orders-of-magnitude behind PyTorch + cuBLAS.** Measuring the
+**compiled** training step at **matched dtype** (interpreter eliminated — the fair comparison,
+`F-BENCH-1`, RTX 5070), the step gap is **SINGLE-DIGIT**:
 
-- The **full training step** at production-proxy shape (CLMConvMoE, D=1536, batch=1, H100)
-  runs at **0.167 step/s** vs PyTorch eager **276.7 step/s** and `torch.compile`
-  **368.5 step/s** — i.e. **PyTorch is ~1656× (eager) / ~2207× (compile) FASTER**.
-  (`F-FUSION-VS-PYTORCH`.)
+- **FP64: flame TIES/WINS.** flame ÷ best-torch = 0.90–1.10×: B=1 1.10× (torch edges via
+  `torch.compile`), **B=2 0.98× (flame ties)**, **B=4 0.93× and B=8 0.90× (flame WINS)** —
+  flame even posts the **highest FP64 throughput** at B=8 (826 vs 745 samp/s). torch has no
+  tensor-core FP64 path; flame's hand-fused deterministic FP64 step is genuinely competitive.
+- **TF32: torch leads 3.03× (B=1) → 7.88× (B=8)** — its cuBLAS/inductor-tuned GEMM beats
+  flame's naive tiled CUDA-core GEMM. (FP32: 2.15× → 6.60×.) A torch win at TF32 is expected.
 - The hexa-owned **own-GEMM** reaches **parity, not a beat**: ~1.08× of cuBLAS-TF32
   @ D=2048 (bit-exact), and **~1.5× slower** @ D=4096. (`F-GPU-ROUTEA-KEEPBAND-MEASURE`.)
+
+> ⚠ The old **~1656× / ~2207×** headline was **misleading** and is **retired**: it compared
+> flame **FP64** to torch **TF32** (an unfair dtype mismatch) on the **interpreted** full
+> trainer at **batch=1**, via a 2-point linear extrapolation of a ~6-second/step glue
+> artifact — NOT the compute gap. See the §1 callout. The fair matched-dtype number is
+> single-digit (FP64 flame ties/wins, TF32 torch 2–8×).
 
 It competes on a **different axis** entirely:
 
@@ -35,32 +44,63 @@ order is vendor-**"unspecified"**. flame closes every one of those holes by cons
 
 ---
 
-## 1. Speed — PyTorch + cuBLAS wins (verbatim, with sources)
+## 1. Speed — matched-dtype the gap is single-digit (verbatim, with sources)
 
-### 1.1 Full training step (the headline gap)
+### 1.1 Full training step — matched-dtype, COMPILED (the FAIR headline) — `F-BENCH-1`
 
-CLMConvMoE, identical shape D=1536 / T=512 / E=2 / K=3 / batch=1, on one idle **H100 80GB
-SXM**. flame runs FP64 cuBLAS; torch runs TF32 (the dtype gap favors torch on GEMM but
-accounts for **< 2×** of the gap below — the dominant term is flame's interpreted per-step
-host glue, not GEMM precision). (`F-FUSION-VS-PYTORCH`.)
+This is the **authoritative** speed number: same step DAG both sides (fwd GEMM → groupnorm +
+tanh-gelu → bwd GEMM → AdamW), **matched dtype**, **compiled** (interpreter eliminated), batch
+swept B=1,2,4,8, on a **free** RTX 5070 (aiden pool, $0, no vast). flame is byte-exact
+run-to-run (`max|Δ|=0` at every cell); torch is tolerance-based. ratio = torch ÷ flame
+(`>1` = torch faster; `<1` = **flame faster**). (`F-BENCH-1`.)
 
 ```
-  runner            dtype   ms/step    step/s      vs flame
-  --------------    -----   --------   --------     ------------------
-  flame (hexa)      FP64    5980.      0.167        1.00× (baseline)
-  torch eager       TF32       3.61   276.673       ~1656× FASTER
-  torch.compile     TF32       2.71   368.538       ~2207× FASTER
+  dtype  B | flame step/s | torch-eager (ratio) | torch-compile (ratio) | best torch÷flame
+  -------+--------------+---------------------+-----------------------+-----------------
+   FP64  1 |     604.84   |  514.31  (0.85×)    |  662.81  (1.10×)      |  1.10×
+   FP64  2 |     357.88   |  299.73  (0.84×)    |  350.01  (0.98×)      |  0.98×  flame TIES
+   FP64  4 |     196.70   |  163.32  (0.83×)    |  182.65  (0.93×)      |  0.93×  FLAME WINS
+   FP64  8 |     103.33   |   85.28  (0.83×)    |   93.12  (0.90×)      |  0.90×  FLAME WINS
+   TF32  1 |    1600.97   | 4856.04  (3.03×)    | 4589.95  (2.87×)      |  3.03×
+   TF32  2 |    1193.69   | 4866.82  (4.08×)    | 3771.85  (3.16×)      |  4.08×
+   TF32  4 |     789.24   | 4375.64  (5.54×)    | 3471.35  (4.40×)      |  5.54×
+   TF32  8 |     470.91   | 2705.13  (5.74×)    | 3708.76  (7.88×)      |  7.88×
+   FP32  1 |    1604.72   | 3457.55  (2.15×)    | 3730.64  (2.32×)      |  2.32×
+   FP32  8 |     470.86   | 2089.92  (4.44×)    | 3106.77  (6.60×)      |  6.60×
 ```
 
-- `flame / torch_eager   = 0.167 / 276.673 = 0.00060×`  → torch eager   **1656× faster**
-- `flame / torch_compile = 0.167 / 368.538 = 0.00045×`  → torch.compile **2207× faster**
+**Matched-dtype, the apparent ~1656× collapses to single digits — ~1× (FP64) to ~8× (TF32 B=8):**
 
-The wall is **not** raw GEMM and **not** kernel fusion. During flame's GEMM bursts the
-GPU peaks 100% — flame's own GEMM is GPU-resident and ≈cuBLAS-class **when it runs**. The
-5.98 s/step is dominated by the GPU sitting at **0% between GEMMs**: host-side serial
-interpreted glue (per-window `t_get`/`t_set` token copy, ~28-call eager AdamW tail,
-CE/softmax-grad host glue). Sibling probes confirm fusion is exhausted: CUDA-graph
-capture/replay ~1.0× and fwd+bwd fusion ~1.0×, both closed-negative. (`F-FUSION-VS-PYTORCH`.)
+- **FP64 — flame ties/wins.** flame ÷ best-torch = 0.90–1.10×: ties at B=2, **wins at B=4 and
+  B=8**, and posts the **highest FP64 throughput** at B=8 (826 vs 745 samp/s). torch has no
+  tensor-core FP64 path; flame's hand-fused deterministic FP64 step is on par or faster.
+- **TF32 — torch leads 3.03× (B=1) → 7.88× (B=8); FP32 — 2.15× → 6.60×.** This residual is
+  cuBLAS/inductor's tuned GEMM vs flame's **naive tiled CUDA-core GEMM** (NOT interpreter glue —
+  that is eliminated here by measuring the kernel directly). A large torch win at TF32 is
+  EXPECTED and fine; its absolute TF32 throughput (up to 29.7k samp/s @ B=8) dwarfs flame's.
+
+The regime where flame is least-far-behind (in fact ahead) is **FP64, B≥2** — exactly the
+precision torch cannot tensor-core-accelerate, and exactly where flame's bit-exact step matters.
+
+> ### ⚠ Why the OLD ~1656× / ~2207× headline was MISLEADING (retired)
+>
+> A prior figure (`F-FUSION-VS-PYTORCH`, #2912) reported flame **0.167 step/s** vs torch eager
+> **276.7** / `torch.compile` **368.5** on an H100 (D=1536, batch=1) — i.e. "**~1656× / ~2207×
+> FASTER**". That number is misleading for **three** compounding reasons and must NOT be quoted
+> as the current compute gap:
+>
+> 1. **Unfair dtype** — it compared flame **FP64** to torch **TF32** (torch on a tensor-core
+>    GEMM path flame's FP64 cannot use). Matched-dtype (`F-BENCH-1`) the FP64 gap is **~1×**.
+> 2. **Interpreted, not compiled** — the 5.98 s/step was the **interpreted** full-trainer's
+>    per-step host glue (per-window `t_get`/`t_set` token copy, ~28-call eager AdamW tail,
+>    CE/softmax-grad host glue) with the GPU at 0% between GEMMs — NOT the step kernels. The
+>    `F-FUSION-INTERP-ELIM` probe later showed AOT-compiling that glue is ~1.0× (the bytecode
+>    interpreter was never the wall), and `F-BENCH-1` measures the compiled step directly.
+> 3. **2-point extrapolation** — the 0.167 step/s was a 2-point linear extrapolation of that
+>    ~6-second/step artifact, not a measured throughput curve.
+>
+> The fair, matched-dtype, compiled number (`F-BENCH-1`) is **single-digit**: FP64 flame
+> ties/wins, TF32 torch 2–8×. Use that.
 
 ### 1.2 flame batch-scaling — a real SELF-speedup, capped ~3× by the interpreter glue
 
@@ -144,7 +184,7 @@ cross-*GPU-architecture* byte measurement is not part of this result. (`flame-ma
 
 | your need | use |
 |---|---|
-| Maximum TFLOP/s, production throughput, large-batch training | **PyTorch + cuBLAS** — it is ~1656–2207× faster per step at batch=1, and cuBLAS is the GEMM roofline |
+| Maximum TFLOP/s, production throughput, large-batch training | **PyTorch + cuBLAS** — matched-dtype it is **2–8× faster at TF32** (cuBLAS GEMM is the roofline); at **FP64 flame ties/wins**, but torch's TF32 throughput dwarfs FP64 |
 | Ecosystem (models, datasets, tooling, community) | **PyTorch + cuBLAS** |
 | Byte-identical replay across machines / architectures / OSes | **hexa flame + forge** — reproducible-everywhere by construction; PyTorch drifts via libm / FMA / cuBLAS-algo selection |
 | Regulated / auditable training (must reproduce a result bit-for-bit, later, elsewhere) | **hexa flame + forge** |
@@ -184,11 +224,16 @@ parity-seeking, not superiority. Parity does **not** hold at all shapes:
   **statically EXCLUDED** as the cause; the surviving classification is (d) large-D
   scheduling roofline = *shape-rigid vs shape-adaptive*. (`F-OP45-ROUTEA-D4096-CAP`.)
 
-> **In flight, NOT resolved (g5):** whether the @D=4096 sub-parity is a **hard HBM-bandwidth
-> roofline** (no scheduling can beat it) or a **fixable scheduling / drain stall** is *pending
-> the OP-45-GPU T2 ncu profile* (achieved DRAM % of HBM3 peak + Tensor-pipe active %). The
-> static analysis classifies the cause as (d)-class shape-rigidity but cannot split that
-> sub-cause without a real GPU profile. Do not claim the split is settled.
+> **RESOLVED (g5) — a FIXABLE scheduling stall, NOT a hard roofline.** The OP-45-GPU sweep
+> settled the @D=4096 sub-parity: the own kernel runs at **~12–40% of HBM3 peak** with
+> arithmetic intensity **682 FLOP/byte ≫ the 104 FLOP/byte compute-bound threshold**, so it is
+> **COMPUTE/SCHEDULING-bound, NOT DRAM-bandwidth-bound** — i.e. a **fixable scheduling stall
+> recoverable in principle** by a better single-pass tile/schedule, not a hard HBM bandwidth
+> wall. (ncu HW-counters were infra-blocked on the profiling-admin-locked pod; resolved via a
+> g5-legal analytical roofline from the measured kernel wall-time.) MODE 7 persistent does NOT
+> fix it (T3 closed-neg) — the tile-rasterization layer is not where the stall lives.
+> (`F-OP45GPU-OCCUPANCY-SWEEP`.) So the @D=4096 sub-parity is a recoverable scheduling problem,
+> not a roofline ceiling.
 
 **The path forward — IF a beat is ever pursued** (not a standing goal): the shape-adaptive
 selector design in `docs/forge-routea-shape-adaptive.md` (§2–§6) + its CPU cost model (which
@@ -206,10 +251,36 @@ pursued, the boundary stands: **bit-exact parity @D=2048, not a beat, shape-rigi
 
 ---
 
+## honest-number discipline — ALWAYS compare matched-dtype
+
+The misleading ~1656× headline was born from a **dtype mismatch**: flame **FP64** vs torch
+**TF32**. The discipline that prevents this recurring:
+
+1. **Match the dtype on both sides.** FP64-vs-TF32 is not a speed comparison — torch's TF32
+   runs on a tensor-core GEMM path flame's FP64 cannot use. Compare FP64-vs-FP64, TF32-vs-TF32.
+   At matched dtype the gap is single-digit (FP64 flame ties/wins, TF32 torch 2–8×).
+2. **Measure the compiled step, not the interpreted trainer.** The old number was the
+   interpreted full-trainer's host glue with the GPU at 0% between GEMMs — not the step kernels.
+   Eliminate the interpreter (or measure the kernel directly) before quoting a gap.
+3. **Use a measured curve, not a 2-point extrapolation.** The 0.167 step/s was extrapolated
+   from a ~6-second/step artifact; `F-BENCH-1` sweeps B=1,2,4,8 with verbatim per-cell numbers.
+
+When in doubt, quote `F-BENCH-1` (matched-dtype, compiled, batch-swept). The FP64-vs-TF32 trap
+is exactly what produced the misleading 1656×; do not reintroduce it.
+
+---
+
 ## 5. Provenance (every number traces to a verdict — g5)
 
-- `.verdicts/hexa-fusion/F-FUSION-VS-PYTORCH.txt` — full-step flame vs torch eager / compile
-  (0.167 vs 276.7 vs 368.5 step/s; ~1656× / ~2207× faster).
+- `.verdicts/hexa-bench/F-BENCH-1.txt` — **THE speed authority**: matched-dtype, compiled,
+  batch-swept step (RTX 5070). FP64 flame ties/wins (B=2 0.98×, B=4/8 flame faster); TF32 torch
+  3.03× (B=1) → 7.88× (B=8); FP32 2.15× → 6.60×. Re-contextualizes the old ~1656× to single-digit.
+- `.verdicts/hexa-fusion/F-FUSION-VS-PYTORCH.txt` — the OLD (retired-as-headline) full-step
+  measurement: flame **FP64** 0.167 vs torch **TF32** 276.7 / 368.5 step/s (the ~1656× / ~2207×
+  figure). MISLEADING as a current gap — unfair dtype + interpreted glue + 2-point extrapolation;
+  superseded by `F-BENCH-1`. Kept only as the provenance of the figure being corrected.
+- `.verdicts/hexa-0pod/F-OP45GPU-OCCUPANCY-SWEEP.txt` — resolves the @D=4096 own-GEMM sub-parity
+  as a FIXABLE compute/scheduling stall (DRAM ~12–40% HBM3 peak, AI 682 ≫ 104), NOT a hard roofline.
 - `.verdicts/hexa-fusion/F-FUSION-BATCHFILL.txt` — flame batch self-speedup (1.504× @B=2 →
   2.954× @B=32, ~3× cap) + `F-FUSION-M5-BATCHFILL-UTIL.txt` (util duty-cycle floor).
 - `.verdicts/hexa-0pod/F-GPU-ROUTEA-KEEPBAND-MEASURE.txt` — own-GEMM 1.08× parity @D=2048 /

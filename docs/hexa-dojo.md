@@ -786,7 +786,9 @@ flame self-speedup vs batch (H100, D1536/T512, samples/s ÷ B=1)
   fwd+bwd kernel-fusion (#2911) both = ~1.0× closed-neg — the wall is the interpreted glue, NOT
   kernel-launch/boundary. own-GEMM ≈ cuBLAS (GPU peaks 100% in GEMM bursts), so GEMM isn't the wall either.
 - **vs PyTorch (honest, #2912)**: at batch=1 torch eager is ~1656× / torch.compile ~2207× faster — flame's
-  interpreted glue dominates. flame's value is byte-exact · device-resident · no-LLVM compile-time-theorem,
+  interpreted glue dominates. ⚠ **That ~1656× is FP64-vs-TF32 + interpreted-glue, NOT the compute gap**:
+  matched-dtype compiled (`F-BENCH-1`) the gap is **single-digit — FP64 flame ties/wins (B=2 0.98×, B=4/8
+  flame faster), TF32 torch 3.03×→7.88×**. Quote `F-BENCH-1`, not the 1656× headline (see §fair-bench below). flame's value is byte-exact · device-resident · no-LLVM compile-time-theorem,
   NOT step-rate-vs-torch. interpreter-elimination FALSIFIED this (#2915 🔴): native-AOT-compiling the per-step driver = ~1.0x
   (byte-eq max|d|=0, H100 util 0.43% = same), because the heavy ops are native-C builtins in BOTH arms. The
   ~3x cap is STRUCTURAL: the serial un-fused FP64 op-DAG + per-op launch/sync dispatch. The ONLY uncap levers
