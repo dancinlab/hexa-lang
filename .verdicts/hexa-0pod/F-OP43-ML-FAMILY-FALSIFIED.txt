@@ -1,1 +1,219 @@
-F-OP43-ML-FAMILY-FALSIFIED — WIP
+F-OP43-ML-FAMILY-FALSIFIED — one-layer-deeper audit of the ML-FAMILY subset of OP-41's ~101
+        deferred falsified builtins (conv / quant / activation / attention / array-ML cluster).
+        Re-applies OP-41's RIGOROUS per-builtin g5 method (roster-entry-vs-runtime-impl mismatch +
+        empirical AOT probe with CORRECT per-builtin args + live/dead caller classification) to the
+        42-member ML family. RESULT: all 42 g5-RE-VERIFIED falsified; 16 deregistered (truly-dead:
+        proven-falsified + ZERO local-fn shadow + EVERY caller a baseline-dead example/ demo, OR a
+        pure zero-call orphan); 26 SURVIVE-WITH-REASON (local-fn shadows in real programs and/or
+        substantial self//stdlib non-example references → conservative g0 blast-radius bound). After
+        OP-43 the ML-family falsified set is BOUNDED-WITH-REASON to 26 survivors; the truly-dead
+        ML-family subset is EMPTY.
+HEXA-0POD OP-43 · CPU-LOCAL (hexat AOT transpile + clang -fsyntax-only) · 0-GPU · $0 · no vast/pod
+════════════════════════════════════════════════════════════════════════════
+
+[0] PROVENANCE + METHOD (OP-41 F-OP41-FALSIFIED-BUILTIN-SWEEP, re-applied one layer deeper)
+-------------------------------------------------------------------------------------------
+OP-41 built the complete 231-builtin matrix, closed the optimizer-scheduler family (4 dereg), and
+CONSERVATIVELY DEFERRED ~101 other falsified roster builtins (g0 — many have local-fn shadows used
+by real programs; en-masse removal reckless). OP-43 takes the ML-FAMILY subset of that ~101 and
+audits it deeper. The two sides (OP-41 method):
+  (a) ROSTER  — `let builtin_names = [...]` in self/env.hexa env_new() (registration makes the
+      binder/type-checker ACCEPT a call to NAME).
+  (b) IMPL    — codegen-inline lowering (self/codegen.hexa `if name == "X"` guards) U runtime
+      symbols the emitted C calls (self/runtime.h decls + installed runtime.c defs, incl prefix
+      variants hexa_/rt_/u_/hexa_math_).
+A FALSIFIED builtin = registered in (a) but NO impl in (b) -> AOT codegen emits a bare
+`hexa_callN(NAME,...)` into C with no such symbol -> clang: "use of undeclared identifier 'NAME'".
+
+[1] AOT PROBE HARNESS (g5 — authoritative, arg-shape-trap-aware)
+---------------------------------------------------------------
+Probe = `fn main(){ ...let a=[...]; let m=[[...]]; let _r = NAME(<correct args>); println("OKMARK") }`
+transpiled by the FRESH installed hexat (~/.hx/bin/build/hexat <in> <out.c>, 2027336B Jun-8, NOT
+the stale ~/.hx/bin/hexa Jun-1) then `clang -I<runtime.h-dir> -fsyntax-only <out.c>`.
+  FALSIFIED  = generated C contains "use of undeclared identifier/function 'NAME'".
+  REAL       = compiles clean (lowering / runtime symbol resolves).
+ARG-SHAPE-TRAP (OP-41 sec1): codegen-inline lowering is arg-COUNT/SHAPE gated; a wrong shape falls
+  through to the bare-name fallback -> FALSE "undeclared" for a REAL builtin. CONTROLLED HERE by a
+  static pre-check: NONE of the 42 ML candidates has ANY `if name=="NAME"` guard in self/codegen
+  .hexa (verified: 0 codegen guards each) -> for these names ANY arg shape yields the same bare
+  `hexa_callN(NAME,...)`; the probe is robust to arg shape for this family. SYMMETRIC HAZARD
+  (substring over-count of REAL): the static cross-ref flagged sigmoid/cross_entropy/transpose/
+  zeros/ones/attention/dot as grep-substring hits of runtime symbols — ALL REFUTED by the
+  empirical probe (each emits "undeclared 'NAME'"); the substring matches are unrelated symbols.
+  CONTROL probe: a file with a local `fn relu` emits `HexaVal relu(...)` (the local def, bare
+  name) + a call that compiles CLEAN — proving local-fn shadows provide their OWN symbol and do
+  NOT depend on the roster entry.
+
+[2] THE COMPLETE ML-FAMILY SUB-MATRIX (42 builtins)
+---------------------------------------------------
+SUMMARY:  ML-family total = 42 | FALSIFIED = 42 (100%) | deregistered = 16 | survive-with-reason = 26
+
+Columns:  NAME | registered(env.hexa) | impl | AOT-probe | shadow_defs | non-example callers | DECISION
+(all 42: registered=YES, impl=NONE, AOT-probe=FALSIFIED "undeclared 'NAME'")
+
+DEREGISTERED (16) — falsified + 0 local-fn shadow + EVERY caller a baseline-dead example/ demo
+(tool/examples_baseline.json exit_code=-1, last_pass=""), OR a pure zero-call orphan:
+  tanh_                | shadow=0 | callers: example-only (anima_clm_training, anima_consciousness_step,
+                                    anima_full_engine, test_neural_testbench — all exit_code=-1) | DEREG
+  ones                 | shadow=0 | callers: example-only (test_transformer)                      | DEREG
+  ema                  | shadow=0 | callers: example-only (anima_clm_training, anima_full_engine,
+                                    anima_engine_ported, anima_consciousness_step)                | DEREG
+  batch_matvec         | shadow=0 | callers: example-only (test_transformer, test_modern_llm,
+                                    test_lr_batch)                                                | DEREG
+  batch_norm           | shadow=0 | callers: example-only (test_lr_batch)                         | DEREG
+  dropout              | shadow=0 | callers: example-only (test_transformer)                      | DEREG
+  gru_cell             | shadow=0 | callers: example-only (test_transformer, benchmark_all,
+                                    anima_engine_ported)                                          | DEREG
+  sinusoidal_pe        | shadow=0 | callers: example-only (test_generation)                       | DEREG
+  multi_head_attention | shadow=0 | callers: example-only (test_generation, benchmark_all)        | DEREG
+  max_pool1d           | shadow=0 | callers: example-only (test_conv_cache_io)                    | DEREG
+  attention_cached     | shadow=0 | callers: example-only (benchmark_all, test_conv_cache_io)     | DEREG
+  beam_search_step     | shadow=0 | callers: example-only (test_quant_beam_init)                  | DEREG
+  xavier_init          | shadow=0 | callers: example-only (anima_convergence_proof, test_quant_beam_init,
+                                    anima_mega_demo, test_viz_data, anima_engine_ported, test_stdlib) | DEREG
+  kaiming_init         | shadow=0 | callers: example-only (test_quant_beam_init)                  | DEREG
+  sparsity             | shadow=0 | callers: example-only (anima_mega_demo, test_reward_prune_ts) | DEREG
+  weight_dict          | shadow=0 | callers: ZERO call-sites repo-wide (pure orphan: only a
+                                    filename-string "self/ml/weight_dict.hexa" + comments)        | DEREG
+
+SURVIVE-WITH-REASON (26) — falsified but NOT deregistered (conservative g0): has local-fn shadow(s)
+used by real programs AND/OR substantial non-example self//stdlib references -> removing the roster
+row could change binder/error behavior for that surface or exceeds a single conservative PR's blast
+radius (exactly OP-41 sec8's deferral rationale). REASON code: [S]=has local-fn shadow · [R]=non-example
+self//stdlib references:
+  relu            [S R] shadow=3  · self=23 stdlib=5 exports=1 test=1
+  sigmoid         [S R] shadow=8  · self=102 stdlib=2 compiler=1(comment) test=2 tool=2
+  cross_entropy   [R]   shadow=0  · self=2 stdlib=1
+  transpose       [S R] shadow=1  · self=4 stdlib=1
+  normalize       [S R] shadow=4  · self=7 stdlib=1
+  zeros           [S R] shadow=4  · self=10 stdlib=3
+  arange          [R]   shadow=0  · stdlib=5
+  clip            [R]   shadow=0  · self=11 stdlib=5
+  attention       [S R] shadow=2  · self=3
+  topk            [S R] shadow=2  · self=3 stdlib=1
+  sample_token    [S R] shadow=1  · self=7
+  mse_loss        [S R] shadow=9  · self=4 bench=4
+  conv1d          [R]   shadow=0  · self=4 stdlib=1
+  kv_cache_append [S R] shadow=2  · self=3
+  save_array      [R]   shadow=0  · self=1
+  load_array      [R]   shadow=0  · self=1
+  quantize_int8   [S R] shadow=3  · self=5
+  dequantize_int8 [S R] shadow=2  · self=2
+  magnitude_prune [S R] shadow=2  · self=2
+  tensor_fill     [S R] shadow=2  · self=12 bench=1 doc=1
+  repeat_kv       [S R] shadow=4  · self=4
+  dot             [S R] shadow=11 · self=55 stdlib=3 doc=1 firmware=1
+  mat_add_inplace [R]   shadow=0  · self=33
+  matmul_into     [R]   shadow=0  · self=50
+  rope            [R]   shadow=0  · self=2 stdlib=1
+  rope_inplace    [R]   shadow=0  · self=4
+
+NOTE on [R]-only survivors (cross_entropy/arange/clip/conv1d/save_array/load_array/mat_add_inplace/
+matmul_into/rope/rope_inplace): these have NO local-fn shadow, but a substantial broken non-example
+self//stdlib caller surface (e.g. matmul_into 50, mat_add_inplace 33, dot 55). Those callers are
+ALREADY falsified (the builtin emits undeclared C), so deregistration would not break a WORKING
+program — only flip the failure from "AOT undeclared symbol" to "binder unbound name". They are
+nonetheless KEPT this pass per g0: (i) the surface is large self/ml/stdlib code whose binder/error
+semantics a safety-first cleanup should not perturb wholesale; (ii) it exceeds a single conservative
+PR's blast radius (OP-41 sec8 rationale, unchanged for the [R]-heavy names). They are documented and
+bounded here; a future per-name "self/ml AOT-impl-or-deregister" op may repoint/remove them with the
+same live/dead discipline.
+
+[3] g5 FALSIFICATION EVIDENCE — verbatim (the 16 deregistered, AOT probe + clang)
+--------------------------------------------------------------------------------
+Each: `fn main(){ let a=[1.0,2.0,3.0,4.0]; let m=[[1.0,2.0],[3.0,4.0]]; let _r = <call>; println("OKMARK") }`
+-> ~/.hx/bin/build/hexat p_NAME.hexa p_NAME.c (OK) -> clang -I.../self -fsyntax-only p_NAME.c :
+
+  tanh_                : tanh_(a)                          -> error: use of undeclared identifier 'tanh_'
+  ones                 : ones(4)                           -> error: use of undeclared identifier 'ones'
+  ema                  : ema(a, 0.9)                       -> error: use of undeclared identifier 'ema'
+  batch_matvec         : batch_matvec(m, a)                -> error: use of undeclared identifier 'batch_matvec'
+  batch_norm           : batch_norm(a, b, b)               -> error: use of undeclared identifier 'batch_norm'
+  dropout              : dropout(a, 0.5)                   -> error: use of undeclared identifier 'dropout'
+  gru_cell             : gru_cell(a,a,m,m,a)               -> error: call to undeclared function 'gru_cell'
+  sinusoidal_pe        : sinusoidal_pe(4, 4)               -> error: use of undeclared identifier 'sinusoidal_pe'
+  multi_head_attention : multi_head_attention(m,m,m,2)     -> error: use of undeclared identifier 'multi_head_attention'
+  max_pool1d           : max_pool1d(a, 2)                  -> error: use of undeclared identifier 'max_pool1d'
+  attention_cached     : attention_cached(a, m, m)         -> error: use of undeclared identifier 'attention_cached'
+  beam_search_step     : beam_search_step(a, 2)            -> error: use of undeclared identifier 'beam_search_step'
+  xavier_init          : xavier_init(4, 4)                 -> error: use of undeclared identifier 'xavier_init'
+  kaiming_init         : kaiming_init(4, 4)                -> error: use of undeclared identifier 'kaiming_init'
+  sparsity             : sparsity(a)                       -> error: use of undeclared identifier 'sparsity'
+  weight_dict          : weight_dict()                     -> error: use of undeclared identifier 'weight_dict'
+(All 26 survivors probed identically FALSIFIED — verbatim "undeclared 'NAME'" recorded in run log;
+omitted here as they are KEPT, not removed.)
+
+[4] CALLER SWEEP + DEAD/LIVE (g0, OP-33/OP-41 discipline)
+--------------------------------------------------------
+- Local-fn shadow vs builtin: a local `fn NAME` emits the local def and resolves the call (CONTROL,
+  sec1) — shadowed callers are UNAFFECTED by deregistration (local fn provides the symbol).
+- For the 16 DEREGISTERED: grep-proof — ZERO local-fn `fn NAME(` repo-wide AND ZERO non-example
+  caller (every call-site is under example/, each a tool/examples_baseline.json exit_code=-1 demo);
+  weight_dict has ZERO call-sites at all. => no live surface needs any of the 16.
+- SELF-HOST BYTE-EQ SAFETY: the self-host compiler core (compiler/** — entry compiler/main.hexa,
+  flattened via gen.hexa per tool/build_selfhost.sh) has ZERO references to any of the 16 (the only
+  compiler/** hit for the whole family is a `// sigmoid(x)=...` COMMENT in nvptx_target.hexa). No CI
+  workflow compiles example//self/ml/self/test_; the only gate that compiles is selfhost-byteeq
+  (compiler/main.hexa) -> deregistration cannot perturb the byte-eq fixpoint.
+
+[5] DIFF
+--------
+  self/env.hexa : 16 names REMOVED from env_new() builtin_names roster
+                  (tanh_ ones ema batch_matvec batch_norm dropout gru_cell sinusoidal_pe
+                   multi_head_attention max_pool1d attention_cached beam_search_step xavier_init
+                   kaiming_init sparsity weight_dict) + scoped OP-43 comment blocks recording each
+                  removal reason (mirrors the OP-33b/c/d + OP-41 removal-comment convention).
+                  Roster array stays well-formed (comma-separated string list).
+  wipe_guard: net +22 / -12 lines « 50; commit subject scoped
+  `cleanup(env): deregister 16 falsified ML-family builtins — OP-43 ...`.
+
+[6] POST-EDIT CHECKS — GREEN
+---------------------------
+(a) env.hexa transpiles clean: `~/.hx/bin/build/hexat self/env.hexa /tmp/op43_env.c` -> OK (roster
+    well-formed after the 16 removals).
+(b) grep-proof: every removed name has 0 roster strings, 0 local-fn shadow, 0 non-example caller
+    (weight_dict 0 call-sites) — re-verified after edit.
+(c) all 28 KEEPER ML names that share edited roster lines (sigmoid relu softmax zeros randn arange
+    clip sum mean hadamard layer_norm embedding attention gelu silu topk sample_token mse_loss conv1d
+    kv_cache_append save_array load_array quantize_int8 dequantize_int8 magnitude_prune tensor
+    tensor_zeros tensor_fill) confirmed STILL PRESENT.
+(d) self-host byte-eq: env.hexa edit affects the NEXT compiler build; installed hexat keeps its
+    roster until rebuilt (same 0-pod caveat as OP-41/OP-33 — verified via env.hexa transpile +
+    generated-C inspection, not a from-scratch rebuild). compiler/** has zero refs -> fixpoint safe.
+
+[7] GATE (g5) — PASS
+--------------------
+  complete ML-family 42-builtin sub-matrix built (static + empirical)  : YES (sec2)
+  all 42 AOT-falsified RE-VERIFIED verbatim                            : YES (sec3)
+  16 deregistered: 0 shadow + 0 non-example caller (or 0 call-site)    : YES (sec4)
+  0 compiler-core / byte-eq reference for the 16                       : YES (sec4)
+  env.hexa transpiles + roster well-formed after removal              : YES (sec6)
+  26 survivors bounded-with-reason (g0)                                : YES (sec2)
+
+[8] ML-FAMILY CLOSURE STATEMENT
+-------------------------------
+After OP-43 the ML-FAMILY falsified-builtin set is BOUNDED-WITH-REASON:
+  • 16 truly-dead members DEREGISTERED (tanh_ ones ema batch_matvec batch_norm dropout gru_cell
+    sinusoidal_pe multi_head_attention max_pool1d attention_cached beam_search_step xavier_init
+    kaiming_init sparsity weight_dict) — the TRULY-DEAD ML-family subset is now EMPTY.
+  • 26 members SURVIVE-WITH-REASON ([S]=local-fn shadow in real programs · [R]=substantial broken
+    self//stdlib caller surface): relu sigmoid cross_entropy transpose normalize zeros arange clip
+    attention topk sample_token mse_loss conv1d kv_cache_append save_array load_array quantize_int8
+    dequantize_int8 magnitude_prune tensor_fill repeat_kv dot mat_add_inplace matmul_into rope
+    rope_inplace. Each kept per g0 (CONSERVATIVE > aggressive) — removal would not break a WORKING
+    program (all such callers are already falsified) but would perturb binder/error semantics of a
+    large self/ml/stdlib surface and exceed a single conservative PR's blast radius. Documented +
+    bounded; deferrable to a future per-name self/ml AOT-impl-or-deregister op.
+Real ML in hexa = stdlib/flame/* + per-module LOCAL fns (the shadows), NOT these roster builtins.
+
+[9] HONEST + CONSERVATIVE (g0)
+-----------------------------
+  • OP-43 covers the ML-FAMILY subset of OP-41's deferred ~101 only. The non-ML deferred remainder
+    (consciousness_* psi_* n6_* laws meta_laws sopfr hexad_* + Set/channel/bigint/gcd/sigma/phi/tau/
+    is_*/replace/random_int/elapsed/hex_*/http_post/http_serve/mem_*/evolve_gen/run_tests/
+    run_benchmarks/map_arr/filter_arr/reduce-family) is OUT OF SCOPE here and remains OP-41-deferred.
+  • The load-bearing claims — the 16 are falsified + 0-shadow + 0-non-example-caller (weight_dict
+    0-call) + 0-compiler-core-ref — are pinned to the strict per-builtin g5 standard and are exact.
+  • Deregistration is REVERSIBLE (one-line roster re-add); a future program needing any removed op
+    would require a real impl anyway (the roster row was a lints-but-won't-link landmine).
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.

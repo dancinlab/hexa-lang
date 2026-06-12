@@ -1904,3 +1904,38 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   OP-37b/OP-39b flagged (🟠 out of 0-pod scope; this fixes REPO SOURCE + proves on from-source rebuild + fixpoint).
   $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
   Verdict .verdicts/hexa-0pod/F-OP40-COMPTIME-MUL-ULP.txt.
+
+## OP-43 — ML-family falsified-builtin deeper audit: 42-builtin sub-matrix; 16 truly-dead DEREGISTERED, 26 SURVIVE-WITH-REASON — 2026-06-12
+- CONTEXT: OP-41 (#3087) built the complete 231-builtin matrix + closed the optimizer-scheduler family, and
+  CONSERVATIVELY DEFERRED ~101 other falsified roster builtins (g0). OP-43 takes the ML-FAMILY subset (conv/quant/
+  activation/attention/array-ML cluster, 42 names) and audits it ONE LAYER DEEPER with OP-41's exact per-builtin g5
+  method, to either safely deregister the truly-dead or document precisely why each survives.
+- METHOD (g5, OP-41 re-applied): AOT probe = `let _r = NAME(correct-args)` → fresh hexat (~/.hx/bin/build/hexat
+  <in> <out.c>, Jun-8 2027336B, NOT stale ~/.hx/bin/hexa Jun-1) → `clang -I.../self -fsyntax-only <out.c>`.
+  FALSIFIED = generated C contains "use of undeclared identifier 'NAME'". ARG-SHAPE-TRAP CONTROLLED: verified 0
+  `if name=="NAME"` codegen-inline guards for all 42 → ANY arg shape yields the same bare hexa_callN(NAME,…) →
+  probe robust to shape. SUBSTRING-OVER-COUNT HAZARD REFUTED: sigmoid/cross_entropy/transpose/zeros/ones/attention/
+  dot static grep-hits of runtime symbols all EMPIRICALLY falsified (unrelated substrings). CONTROL: a local
+  `fn relu` emits `HexaVal relu(...)` (bare-name local def) + a call that compiles CLEAN → shadows provide their
+  OWN symbol, do NOT depend on the roster entry.
+- RESULT: all 42 AOT-FALSIFIED (100%). DEREGISTERED 16 (tanh_ ones ema batch_matvec batch_norm dropout gru_cell
+  sinusoidal_pe multi_head_attention max_pool1d attention_cached beam_search_step xavier_init kaiming_init sparsity
+  weight_dict) — each falsified + ZERO local-fn `fn NAME(` shadow repo-wide + EVERY call-site under example/ (each a
+  tool/examples_baseline.json exit_code=-1 baseline-dead demo); weight_dict a pure 0-call orphan (only a filename
+  string + comments). SURVIVE-WITH-REASON 26 (relu sigmoid cross_entropy transpose normalize zeros arange clip
+  attention topk sample_token mse_loss conv1d kv_cache_append save_array load_array quantize_int8 dequantize_int8
+  magnitude_prune tensor_fill repeat_kv dot mat_add_inplace matmul_into rope rope_inplace) — local-fn shadows in real
+  programs [S] and/or substantial broken self//stdlib caller surfaces [R] (matmul_into 50, dot 55, mat_add_inplace
+  33) → conservative g0 blast-radius bound; deregistering would not break a WORKING program (callers already
+  falsified) but would perturb binder/error semantics of a large self/ml/stdlib surface → KEPT + documented.
+- SELF-HOST BYTE-EQ SAFE: compiler/** (the byte-eq core, entry compiler/main.hexa) has ZERO refs to any removed name
+  (sole family hit = a `// sigmoid(x)=…` COMMENT in nvptx_target.hexa); no CI workflow compiles example//self/ml/
+  self/test_; only selfhost-byteeq compiles (compiler/main.hexa) → fixpoint cannot be perturbed.
+- POST-EDIT: env.hexa transpiles clean (~/.hx/bin/build/hexat self/env.hexa /tmp/op43_env.c → OK, roster well-formed
+  after 16 removals); grep-proof re-verified 0 roster-string / 0 shadow / 0 non-example caller per removed name; all
+  28 keeper ML names sharing edited lines still present. wipe_guard: net +22/−12 « 50; scoped subject.
+- OUTCOME: 🟢 GREEN. milestone OP-43 [x]. CLOSURE: the truly-dead ML-family falsified subset is now EMPTY; the
+  falsified ML family is bounded-with-reason to the 26 documented survivors. Real ML in hexa = stdlib/flame/* +
+  per-module LOCAL fns (the shadows), NOT these roster builtins. Verdict
+  .verdicts/hexa-0pod/F-OP43-ML-FAMILY-FALSIFIED.txt.
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
