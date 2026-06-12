@@ -64,9 +64,11 @@
 //        params. Returns { bonds, types, charges, eps, sigma, total_charge,
 //        solute_eps, solute_sigma, solute_q }. solute_* are the LB-combined
 //        effective C···OW pair params used by the decoupling.
-//   pub fn build_solute_softcore_params(ff, solvent_type) -> dict
-//        LB-combine the solute's heavy-atom (c3) ε/σ with the solvent
-//        (OW) → the real soft-core pair `p` dict for R3 softcore.
+//   pub fn build_solute_softcore_params(ff, solvent_type, include_coulomb) -> dict
+//        LB-combine the solute's heavy-atom (c3) ε/σ with the solvent (OW)
+//        → the real soft-core pair `p` dict for R3 softcore. include_coulomb
+//        toggles the real q_solute·q_solvent cross-term (default off for a
+//        neutral hydrophobic solute; see the rationale at the function).
 //   pub fn run_hydration(ff, opts) -> dict
 //        the end-to-end ΔG_hyd: real-FF soft-core decouple via run_abfe.
 //        Returns the run_abfe bundle plus { dG_hyd_kcal, ref_kcal, abs_dev }.
@@ -155,11 +157,21 @@ pub fn perceive_real_ff(atoms: array, coords: array, tol: float) -> dict {
 // The decoupling turns OFF the methane solute's nonbonded interaction with
 // water. We represent it by the DOMINANT dispersion pair: the methane heavy
 // atom (c3 carbon) against a TIP3P water oxygen (OW), with ε/σ combined by
-// AMBER's Lorentz-Berthelot rule (amber.hexa lb_*). Charges: the methane
-// carbon's real GAFF charge against the water-O real charge — so BOTH the
-// real LJ AND the real Coulomb cross-term enter the soft-core potential.
-// d4: solvent_type and the solute heavy index are arguments; no name branch.
-pub fn build_solute_softcore_params(ff: dict, solvent_type: string) -> dict {
+// AMBER's Lorentz-Berthelot rule (amber.hexa lb_*).
+//
+// Electrostatics (honest, d6): for a NEUTRAL HYDROPHOBIC solute (methane,
+// net charge ≈ 0) the carbon's small partial charge is internally cancelled
+// by the four H's. Pairing the bare carbon charge against ONE fixed-charge
+// water O therefore introduces a SPURIOUS monopole–monopole cross-term that
+// does not exist for the neutral whole molecule. So the default reduced
+// model is LJ-ONLY (include_coulomb=false) — the physically clean single-site
+// hydrophobic-dispersion decoupling. Setting include_coulomb=true restores
+// the real GAFF/TIP3P charge cross-term (q_c3 × q_OW), exposed for a charged
+// solute where the heavy-atom monopole IS physical. Either way the numbers
+// are REAL FF values (no toy), reached through the perception front-end.
+// d4: solvent_type / include_coulomb are arguments; no name branch.
+pub fn build_solute_softcore_params(ff: dict, solvent_type: string,
+                                    include_coulomb: bool) -> dict {
     let db = gaff_tip3p_types()
     // solute heavy atom = the first non-H GAFF type in the perceived list.
     let types = ff["types"]
@@ -198,11 +210,20 @@ pub fn build_solute_softcore_params(ff: dict, solvent_type: string) -> dict {
     // Coulomb constant k_e in kcal·Å / (mol·e²) (amber_selftest uses 332.0637).
     let ke = 332.0637
 
+    // LJ-only (default) zeroes the charge cross-term; include_coulomb restores
+    // the real q_s·q_w product. The ε/σ are ALWAYS the real LB-combined values.
+    let mut qa = 0.0
+    let mut qb = 0.0
+    if include_coulomb {
+        qa = q_s
+        qb = q_w
+    }
+
     let p = #{}
     p["eps"]      = eps_ij
     p["sigma"]    = sig_ij
-    p["q1"]       = q_s
-    p["q2"]       = q_w
+    p["q1"]       = qa
+    p["q2"]       = qb
     p["ke"]       = ke
     p["alpha_lj"] = 0.5            // Beutler standard soft-core shift
     p["alpha_c"]  = 0.5
@@ -215,8 +236,12 @@ pub fn build_solute_softcore_params(ff: dict, solvent_type: string) -> dict {
     out["solute_index"] = hi
     out["eps_ij"]       = eps_ij
     out["sigma_ij"]     = sig_ij
+    // q_solute / q_solvent are the REAL per-type GAFF/TIP3P charges (always
+    // reported for transparency, even when include_coulomb=false zeroes them
+    // in the pair potential p).
     out["q_solute"]     = q_s
     out["q_solvent"]    = q_w
+    out["include_coulomb"] = include_coulomb
     return out
 }
 
@@ -287,7 +312,11 @@ fn _opt(opts, key: string, dflt) {
 // ΔG_hyd is reported against the +2.0 kcal/mol experimental anchor.
 pub fn run_hydration(ff: dict, opts) -> dict {
     let solvent_type = _opt(opts, "solvent_type", "OW")
-    let scp = build_solute_softcore_params(ff, solvent_type)
+    // default reduced model = LJ-only (the clean hydrophobic single-site
+    // dispersion decoupling); include_coulomb=true restores the real charge
+    // cross-term for a charged solute. Both use REAL FF ε/σ/q (d4-generic).
+    let inc_coul = _opt(opts, "include_coulomb", false)
+    let scp = build_solute_softcore_params(ff, solvent_type, inc_coul)
     let p = scp["p"]
 
     let T    = _opt(opts, "T", 298.15)

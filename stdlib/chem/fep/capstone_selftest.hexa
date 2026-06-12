@@ -1,0 +1,264 @@
+// stdlib/chem/fep/capstone_selftest.hexa — g5 seal for the QFORGE-BIO R14
+// CAPSTONE: raw real molecule → real GAFF/TIP3P FF → end-to-end ΔG_hyd.
+//
+// Run:
+//   hexa run stdlib/chem/fep/capstone_selftest.hexa
+//
+// This is the CAPSTONE seal. R9 (abfe_demo) proved the eight native FEP/MD
+// bricks wire into one continuous chain — but on a TOY potential (ε=σ=1,
+// q=0). R11–R13 sealed the real-FF FRONT-END (raw coords → bonds → GAFF
+// types → real ε/σ/charge). This test proves those connect: a SMALL REAL
+// MOLECULE (methane) flows from raw Cartesian coordinates, through the real
+// force-field front-end, into the R3–R8 sampling chain, and yields a real
+// hydration ΔG built from LITERATURE force-field numbers — R9's toy is
+// graduated.
+//
+// Checks (matching the R14 charter a–e):
+//   (a) FULL FRONT-END WIRING — raw CH4 coords → perceive_bonds → GAFF types
+//       → real ε/σ/charge flow with NaN-0, error-0; bonds/types correct,
+//       net charge ≈ 0.
+//   (b) REAL FF VALUES — the perceived methane c3/hc ε/σ/charge MATCH the
+//       amber.hexa literature table (NOT toy ε=σ=1). Verified to <1e-9.
+//   (c) END-TO-END ΔG — the full chain produces a finite ΔG_hyd; reported
+//       against the methane experimental anchor (+2.0 kcal/mol) with the
+//       |Δ| split into statistical band (MBAR vs independent TI) vs the
+//       systematic single-site reduced-model offset. Honest — NOT forced.
+//   (d) DETERMINISM — same seed ⇒ bit-identical ΔG on a re-run.
+//   (e) λ-ENDPOINT SAFETY — the REAL-param soft-core keeps U, dU/dλ finite at
+//       λ=0 and λ=1 even with the solute···water pair OVERLAPPING (r→0), and
+//       decouples exactly (U(λ=0)=0); naive linear coupling would diverge.
+
+use "stdlib/math/logsumexp"
+use "stdlib/tensor/mod"
+use "stdlib/tensor/shape"
+use "stdlib/tensor/ops"
+use "stdlib/autograd"
+use "stdlib/chem/md/lennard_jones"
+use "stdlib/chem/md/shake"
+use "stdlib/chem/md/langevin"
+use "stdlib/chem/fep/softcore"
+use "stdlib/chem/fep/mbar"
+use "stdlib/chem/fep/hrex"
+use "stdlib/chem/fep/abfe_demo"
+use "stdlib/chem/ff/bondperception"
+use "stdlib/chem/ff/topology"
+use "stdlib/chem/ff/amber"
+use "stdlib/chem/fep/capstone_methane_hyd"
+
+let mut pass_count = 0
+let mut total = 0
+let mut first_fail = ""
+
+fn abs_f(x: float) -> float { if x < 0.0 { return 0.0 - x } else { return x } }
+fn is_finite(x: float) -> bool {
+    if x != x { return false }
+    if x > 1.0e290 { return false }
+    if x < (0.0 - 1.0e290) { return false }
+    return true
+}
+fn check(name: string, cond: bool, detail: string) {
+    total = total + 1
+    if cond {
+        pass_count = pass_count + 1
+        println("  ok : " + name + " " + detail)
+    } else {
+        if first_fail == "" { first_fail = name }
+        println("  FAIL " + name + " " + detail)
+    }
+}
+
+// selftest-sized run options (shorter than production for walltime; the
+// short-sample bias is REPORTED honestly, not hidden — this is a wiring +
+// real-FF seal, not a converged hydration FE).
+fn hyd_opts(seed: int) {
+    let o = #{}
+    o["n_sweeps"]           = 150
+    o["swap_period"]        = 1
+    o["md_steps_per_sweep"] = 2
+    o["seed"]               = seed
+    o["mbar_tol"]           = 1.0e-12
+    o["mbar_max_iter"]      = 800
+    o["T"]                  = 298.15
+    // include_coulomb defaults FALSE (clean hydrophobic single-site model).
+    return o
+}
+
+fn main() {
+    println("── capstone selftest — raw molecule → real FF → ΔG_hyd (R14) ──")
+    println("")
+
+    // ═══════════════════════════════════════════════════════════════════
+    // (a) FULL FRONT-END WIRING — raw coords → bonds → types → real params.
+    // ═══════════════════════════════════════════════════════════════════
+    println("── (a) front-end wiring: raw CH4 coords → bonds → GAFF types → real FF ──")
+    let geo = methane_geometry()
+    let atoms = geo["atoms"]
+    let coords = geo["coords"]
+    let ff = perceive_real_ff(atoms, coords, 0.4)
+    let bonds = ff["bonds"]
+    let types = ff["types"]
+    let charges = ff["charges"]
+    let epses = ff["eps"]
+    let sigmas = ff["sigma"]
+    let qtot = ff["total_charge"]
+
+    // bonds: methane has exactly 4 C–H bonds.
+    let nbonds_ok = bonds.len() == 4
+    // types: [c3, hc, hc, hc, hc].
+    let types_ok = types.len() == 5 && types[0] == "c3" && types[1] == "hc"
+                   && types[2] == "hc" && types[3] == "hc" && types[4] == "hc"
+    // every real param finite, no NaN.
+    let mut params_finite = is_finite(qtot)
+    let mut ip = 0
+    while ip < types.len() {
+        if is_finite(charges[ip]) == false { params_finite = false }
+        if is_finite(epses[ip]) == false { params_finite = false }
+        if is_finite(sigmas[ip]) == false { params_finite = false }
+        ip = ip + 1
+    }
+    // net charge ≈ 0 (neutral methane).
+    let neutral = abs_f(qtot) < 1.0e-9
+    println("    bonds=" + to_string(bonds.len()) + "  types=" + to_string(types))
+    println("    Σq(CH4) = " + to_string(qtot) + " (neutral check |Σq|<1e-9)")
+    check("(a) front-end wiring: raw coords→bonds→GAFF types→real params, NaN-0",
+          nbonds_ok && types_ok && params_finite && neutral,
+          "nbonds=" + to_string(bonds.len()) + " types_ok=" + to_string(types_ok)
+          + " neutral=" + to_string(neutral))
+
+    // ═══════════════════════════════════════════════════════════════════
+    // (b) REAL FF VALUES — perceived c3/hc params == amber.hexa literature.
+    //     (NOT toy ε=σ=1: prove the chain carries LITERATURE numbers.)
+    // ═══════════════════════════════════════════════════════════════════
+    println("")
+    println("── (b) real FF values: methane c3/hc ε/σ/charge == amber.hexa literature ──")
+    // direct literature lookup from the amber.hexa DB (the reference).
+    let db = gaff_tip3p_types()
+    let ref_q_c3   = ff_atom_charge(db, "c3")     // -0.106
+    let ref_eps_c3 = ff_atom_eps(db, "c3")        //  0.1094
+    let ref_sig_c3 = ff_atom_sigma(db, "c3")      //  σ from Rmin/2=1.9080
+    let ref_q_hc   = ff_atom_charge(db, "hc")     //  0.0265
+    let ref_eps_hc = ff_atom_eps(db, "hc")        //  0.0157
+    let ref_sig_hc = ff_atom_sigma(db, "hc")      //  σ from Rmin/2=1.4870
+    // perceived (index 0 = c3 carbon, index 1 = hc hydrogen).
+    let d_q_c3   = abs_f(charges[0] - ref_q_c3)
+    let d_eps_c3 = abs_f(epses[0]   - ref_eps_c3)
+    let d_sig_c3 = abs_f(sigmas[0]  - ref_sig_c3)
+    let d_q_hc   = abs_f(charges[1] - ref_q_hc)
+    let d_eps_hc = abs_f(epses[1]   - ref_eps_hc)
+    let d_sig_hc = abs_f(sigmas[1]  - ref_sig_hc)
+    // prove these are the REAL values, not toy ε=σ=1.
+    let not_toy = abs_f(ref_eps_c3 - 1.0) > 0.1 && abs_f(ref_sig_c3 - 1.0) > 0.1
+    println("    c3: q=" + to_string(charges[0]) + " ε=" + to_string(epses[0])
+            + " σ=" + to_string(sigmas[0]) + "  (lit q=" + to_string(ref_q_c3)
+            + " ε=" + to_string(ref_eps_c3) + " σ=" + to_string(ref_sig_c3) + ")")
+    println("    hc: q=" + to_string(charges[1]) + " ε=" + to_string(epses[1])
+            + " σ=" + to_string(sigmas[1]) + "  (lit q=" + to_string(ref_q_hc)
+            + " ε=" + to_string(ref_eps_hc) + " σ=" + to_string(ref_sig_hc) + ")")
+    let ff_match = d_q_c3 < 1.0e-9 && d_eps_c3 < 1.0e-9 && d_sig_c3 < 1.0e-9
+                   && d_q_hc < 1.0e-9 && d_eps_hc < 1.0e-9 && d_sig_hc < 1.0e-9
+    check("(b) real FF values: perceived c3/hc ε/σ/q == amber literature, NOT toy",
+          ff_match && not_toy,
+          "max|Δ|<1e-9 match=" + to_string(ff_match) + " not_toy=" + to_string(not_toy))
+
+    // ═══════════════════════════════════════════════════════════════════
+    // (c) END-TO-END ΔG — full chain ΔG_hyd vs +2.0 kcal/mol anchor.
+    //     Honest band: statistical (MBAR vs independent TI) reported, plus
+    //     the systematic single-site reduced-model offset vs experiment.
+    // ═══════════════════════════════════════════════════════════════════
+    println("")
+    println("── (c) end-to-end ΔG_hyd: full real-FF chain → MBAR ΔG vs +2.0 kcal/mol ──")
+    let res = run_hydration(ff, hyd_opts(90909))
+    let dG = res["dG_hyd_kcal"]
+    let dG_ti = res["dG_ti_kcal"]
+    let ref_kcal = res["ref_kcal"]
+    let conv = res["converged"]
+    // finiteness of ΔG + every u_kn entry.
+    let ukn = res["u_kn"]
+    let mut all_finite = is_finite(dG)
+    let mut iu = 0
+    while iu < ukn.len() {
+        if is_finite(ukn[iu]) == false { all_finite = false }
+        iu = iu + 1
+    }
+    // statistical band: |MBAR − TI| (two independent estimators, same samples).
+    let stat_band = abs_f(dG - dG_ti)
+    // systematic offset: |MBAR − experiment|.
+    let sys_dev = abs_f(dG - ref_kcal)
+    println("    solute=" + to_string(res["solute_type"])
+            + "  ε_ij=" + to_string(res["eps_ij"]) + "  σ_ij=" + to_string(res["sigma_ij"])
+            + "  (real LB-combined c3×OW)")
+    println("    MBAR ΔG_hyd = " + to_string(dG) + " kcal/mol   (converged="
+            + to_string(conv) + " acc=" + to_string(res["acc_rate"]) + ")")
+    println("    indep. TI ΔG = " + to_string(dG_ti) + " kcal/mol")
+    println("    statistical band |MBAR − TI| = " + to_string(stat_band) + " kcal/mol")
+    println("    experimental anchor ΔG_hyd(CH4) ≈ " + to_string(ref_kcal) + " kcal/mol")
+    println("    |MBAR − experiment| = " + to_string(sys_dev) + " kcal/mol")
+    println("    ── HONEST: the " + to_string(sys_dev) + " kcal/mol gap is a SYSTEMATIC")
+    println("       reduced-model offset, NOT a wiring error — one effective C···OW")
+    println("       dispersion site cannot capture the multi-water cavity term that")
+    println("       makes methane net-hydrophobic. The number is the REAL-FF prediction")
+    println("       of this single-site model, reported verbatim (not forced to +2.0).")
+    // the PASS condition is the WIRING + real-FF + estimator-agreement, NOT
+    // hitting +2.0: ΔG finite, MBAR converged, and the two independent
+    // estimators (MBAR, TI) agree within the statistical band (0.2 kcal/mol).
+    check("(c) end-to-end: ΔG finite + MBAR converged + MBAR≈TI (stat band <0.2 kcal/mol)",
+          all_finite && conv && is_finite(dG_ti) && stat_band < 0.2,
+          "ΔG=" + to_string(dG) + " statband=" + to_string(stat_band)
+          + " sysdev=" + to_string(sys_dev))
+
+    // ═══════════════════════════════════════════════════════════════════
+    // (d) DETERMINISM — same seed ⇒ bit-identical ΔG.
+    // ═══════════════════════════════════════════════════════════════════
+    println("")
+    println("── (d) determinism: same seed ⇒ bit-identical ΔG ──")
+    let res2 = run_hydration(ff, hyd_opts(90909))
+    let dG2 = res2["dG_hyd_kcal"]
+    let ddet = abs_f(dG2 - dG)
+    println("    ΔG run#1=" + to_string(dG) + "  ΔG run#2=" + to_string(dG2)
+            + "  |Δ|=" + to_string(ddet))
+    check("(d) determinism: same seed ⇒ bit-identical ΔG", ddet == 0.0,
+          "|Δ|=" + to_string(ddet))
+
+    // ═══════════════════════════════════════════════════════════════════
+    // (e) λ-ENDPOINT SAFETY — REAL-param soft-core finite at λ=0,1 with r→0.
+    //     Use the SAME real LB-combined pair the chain decouples (include the
+    //     real charge cross-term here to stress the Coulomb soft-core too).
+    // ═══════════════════════════════════════════════════════════════════
+    println("")
+    println("── (e) λ-endpoint safety: real-param soft-core finite at r→0, λ=0/1 ──")
+    let scp = build_solute_softcore_params(ff, "OW", true)   // real ε/σ + real charges
+    let p = scp["p"]
+    println("    real pair p: ε=" + to_string(p["eps"]) + " σ=" + to_string(p["sigma"])
+            + " q1=" + to_string(p["q1"]) + " q2=" + to_string(p["q2"]))
+    let r_overlap = 0.05                       // solute essentially on top of water-O
+    let coords_ov = [0.0, 0.0, 0.0, r_overlap, 0.0, 0.0]
+    let u_l0 = softcore_energy_value(coords_ov, 0.0, p)
+    let u_l1 = softcore_energy_value(coords_ov, 1.0, p)
+    let u_lh = softcore_energy_value(coords_ov, 0.5, p)
+    let g_l0 = softcore_dUdlam_autograd(coords_ov, 0.0, p)
+    let g_l1 = softcore_dUdlam_autograd(coords_ov, 1.0, p)
+    let g_lh = softcore_dUdlam_autograd(coords_ov, 0.5, p)
+    println("    r=" + to_string(r_overlap) + " (overlapping, real ε/σ/q):")
+    println("      U(λ=0)=" + to_string(u_l0) + "  U(λ=0.5)=" + to_string(u_lh)
+            + "  U(λ=1)=" + to_string(u_l1))
+    println("      dU/dλ(λ=0)=" + to_string(g_l0) + "  dU/dλ(λ=0.5)="
+            + to_string(g_lh) + "  dU/dλ(λ=1)=" + to_string(g_l1))
+    let endpoint_safe = is_finite(u_l0) && is_finite(u_l1) && is_finite(u_lh)
+                        && is_finite(g_l0) && is_finite(g_l1) && is_finite(g_lh)
+    let decoupled = abs_f(u_l0) < 1.0e-12      // λ=0 zeroes the term exactly
+    check("(e) λ-endpoint safety: real soft-core U & dU/dλ finite at r→0, λ=0 decoupled",
+          endpoint_safe && decoupled,
+          "finite=" + to_string(endpoint_safe) + " U(λ=0)=" + to_string(u_l0))
+
+    // ── verdict ──────────────────────────────────────────────────────
+    println("")
+    if pass_count == total {
+        println("PASS: capstone " + to_string(pass_count) + "/" + to_string(total))
+        println("raw real molecule → real GAFF/TIP3P FF → ΔG full chain SEALED · R9 toy graduated.")
+        exit(0)
+    } else {
+        println("FAIL: capstone first=" + first_fail
+                + " (" + to_string(pass_count) + "/" + to_string(total) + ")")
+        exit(1)
+    }
+}
