@@ -138,6 +138,14 @@ A binary appears only when every fatal stage passes. The atlas (4.2 MB) is baked
 
 > Honest scope: flame's `ag_tape` + nn_lib + opt_* are functionally complete and byte-equal-verified; forge's `farr + cuBLAS Dgemm + 11 .cu` substrate is complete with the BF16-TC mega-kernel landing as the cuBLAS-relative wall path. End-to-end flame ↔ PyTorch wall comparison is **pending an apples-to-apples re-fire** — the substantive cuBLAS-relative win currently sits at the forge layer (BF16-TC 9.67× over FP64-cuBLAS on the FFN-shape mega-kernel).
 
+#### flame + forge vs PyTorch + cuBLAS — the honest axis
+
+**On raw throughput, PyTorch + cuBLAS wins — flame + forge is slower, and that is not the point.** At the full training step (CLMConvMoE, batch=1, H100) PyTorch is **~1656× (eager) / ~2207× (compile) faster** than flame FP64 (`F-FUSION-VS-PYTORCH`), and the hexa-owned own-GEMM reaches **parity (1.08× @D=2048, bit-exact), never a beat** — cuBLAS-TF32 is the roofline (`F-GPU-ROUTEA-KEEPBAND-MEASURE`). The flame batch-fill (≥1.3× @B=2 → 2.95× @B=32) and TF32 fast-mode (4.2× @B=1) above are flame **self**-speedups, not PyTorch beats, capped ~3× by the interpreted per-step glue.
+
+What flame + forge buys instead is a **different axis cuBLAS-using stacks cannot give**: **bit-exact reproducibility · machine-independence · device-residency · no-LLVM / no-Python**. The same fixed-seed step trains **byte-identically across 6 environments / 4 architecture-libc combos** (`flame-machine-independent-training.md`) — PyTorch does *not* guarantee this (libm transcendentals are not correctly-rounded, reductions are order-nondeterministic, cuBLAS DMMA order is vendor-"unspecified"). This is the same structural-ownership win as [§ *Where it beats cuBLAS-using stacks structurally*](#where-it-beats-cublas-using-stacks-structurally-whole-program-fusion--cublas-cannot-express): you pay a speed tax to buy a capability column cuBLAS leaves empty. **Use PyTorch + cuBLAS for throughput; use hexa flame + forge for bit-exact, auditable, vendor-free training.**
+
+→ Full head-to-head with every number and source: [**`FLAME+FORGE-vs-PYTORCH+CUBLAS.md`**](FLAME+FORGE-vs-PYTORCH+CUBLAS.md).
+
 ### We now own the GEMM too — the device stack is 100 % hexa-ownable (CUDA-OWN campaign)
 
 The substrate above calls **cuBLAS** for the GEMM itself — the one piece forge did not own. The CUDA-OWN campaign closes that last gap: an **env-gated own-GEMM** (`HEXA_OWN_GEMM` family) routes every matmul through a hexa-emit kernel instead of cuBLAS. **OFF by default → cuBLAS stays the default path**; flip the env and the entire device GEMM is hexa source — FP64, FP32, and a CUTLASS-grade TF32 WMMA2 tiled kernel.
