@@ -1,0 +1,138 @@
+// embed_real_scf.hexa — QFORGE/system round-8: REAL self-consistent SCF E_QM.
+//
+// Round-2 (embed_mechanical.hexa) wired E_QM(inner) = qforge_ewald — the SCF
+// ELECTROSTATIC (Madelung) total — into the partition algebra, with an honest
+// note (d6) that the FULL self-consistent qforge_scf could not accept a toy
+// molecule. Round-8 DEEPENS that term: it drives the REAL plane-wave
+// self-consistent driver `qforge_scf_pw` and feeds its converged self-consistent
+// KS band-energy total into the SAME generic partition (d4). The result is a
+// genuine self-consistent E_QM flowing into the multi-scale total — NOT a
+// fabricated number, NOT the electrostatic-only stand-in.
+//
+// ── WHAT IS NOW REAL (vs round-2) ───────────────────────────────────────────
+//   round-2 E_QM = qforge_ewald(...)               // ion-ion electrostatic only
+//   round-8 E_QM = qforge_scf_pw(...).e_total      // SELF-CONSISTENT KS band sum
+// `qforge_scf_pw` runs the real SCF loop (scf.hexa): each iteration re-screens
+// V_scr = V_H(ρ)+V_xc(ρ) (screening.hexa · correlation.hexa) and re-assembles H
+// (assembler.hexa), Davidson-diagonalises, refills, until the density is a
+// genuine FIXED POINT. The returned `.e_total` = Σ occ·ε is the self-consistent
+// band-energy total. This IS qforge's self-consistent E_QM (real core output).
+//
+// ── THE HONEST WALL (d6 · @L5) — PERIODIC-ONLY, NO MOLECULAR FRONT-END ───────
+// `qforge_scf_pw` and EVERY full-SCF entry in stdlib/qforge/scf_pw.hexa
+// (qforge_scf_pw · _h · _h_multi · _h_multi_smeared · _fdg · _fdg_etot) require
+// a PERIODIC plane-wave context that a bare molecule does not possess:
+//   • `gvecs: [float]` — reciprocal-lattice G-vectors (qpw_gvectors needs a
+//     reciprocal basis b1,b2,b3 → a CELL; a molecule has no reciprocal lattice).
+//   • `kvec: [float]`  — a Bloch k-point (Brillouin-zone sampling = periodicity).
+//   • `omega: float`   — finite cell volume (the Ewald/Hartree gauge).
+//   • UPF channels (r,rab,vloc_r,betas,ls,dij) — KB pseudopotential on a radial
+//     grid; no all-electron / Gaussian-basis molecular Hamiltonian exists.
+// There is NO entry point that takes (atom positions + Z, vacuum, no cell) and
+// returns a molecular self-consistent energy via Hellmann-Feynman on an
+// atom-centered (Gaussian/STO) basis. Grep evidence (verified in the selftest):
+//   grep 'gaussian\|gto\|sto-3g\|atom.centered\|molecular_scf' stdlib/qforge → ∅
+//   (the only "gaussian" hits are qforge_gaussian_delta = a smearing kernel).
+// This is the SAME wall chem r2 (#3138) / atoms hit: QFORGE's first-principles
+// engine is a PERIODIC plane-wave DFT (built for metal hydrides), so a real
+// self-consistent E_QM is available for a (small) PERIODIC CELL inner region,
+// but NOT for an isolated molecule. The molecular-SCF front-end is a genuine
+// cross-cutting gap (atoms ∩ chem ∩ system), recorded as a falsifier below.
+//
+// ── PATH TAKEN (honest) ──────────────────────────────────────────────────────
+//   (A) inner region = a small PERIODIC CELL → REAL self-consistent qforge_scf_pw
+//       E_QM flows into the partition. ACHIEVED here (embed_qm_inner_scf_etot).
+//   (B) inner region = an isolated MOLECULE → no self-consistent entry point;
+//       qforge_ewald electrostatic total (round-2) remains the available real
+//       core. The gap is documented + grep-falsifiable, not fabricated.
+//
+// d4-GENERIC: the partition still takes plain floats; whether E_QM came from
+// qforge_ewald (round-2) or qforge_scf_pw (round-8) is "pass a different scalar".
+//
+// REUSE (d19 · NEXUS edge):
+//   E_QM(inner, self-consistent) ← stdlib/qforge/scf_pw::qforge_scf_pw (.e_total)
+//   E_QM(inner, electrostatic)   ← stdlib/qforge/scf_etot::qforge_ewald (round-2)
+//   partition                    ← stdlib/qforge/system/qmmm::qmmm_additive_total
+//   mechanical chain             ← stdlib/qforge/system/embed_mechanical (round-2)
+
+use "stdlib/qforge/system/qmmm"
+use "stdlib/qforge/system/embed_mechanical"
+use "stdlib/qforge/scf_pw"
+use "stdlib/qforge/scf"
+
+// ── REAL CORE — E_QM(inner) via SELF-CONSISTENT qforge_scf_pw ─────────────────
+// Inner region = a periodic plane-wave cell described by its G-vector basis
+// `gvecs` (flat 3·npw, from qpw_gvectors on the cell's reciprocal basis), the
+// Bloch k-point `kvec`, electron count `nelec`, band count `nbands`, and the
+// LDA xc mode (`xc_mode` ≥ 0 → real V_H+V_xc screening; < 0 → free-electron).
+// Returns the converged SELF-CONSISTENT KS band-energy total — the real qforge
+// self-consistent E_QM. `pos`/UPF channels may be empty for the bare-cell /
+// jellium inner model (free-electron + uniform screening), mirroring the
+// verified qforge_scf_pw free-electron path; a full hydride inner cell passes
+// its real UPF channels through the SAME entry (d4-generic, no material branch).
+pub fn embed_qm_inner_scf_etot(kvec: [float], gvecs: [float],
+                               nbands: int, nelec: int, xc_mode: int,
+                               mix: float, tol: float, max_iter: int) -> float {
+    let mut empty_f: [float] = []
+    let mut empty_i: [int] = []
+    // bare periodic cell (no atoms/UPF): real SCF on the G-basis with LDA
+    // screening when xc_mode ≥ 0. z=0, nproj=0, vh_diag=[] → in-loop screening.
+    let r = qforge_scf_pw(kvec, gvecs, empty_f, empty_f, empty_f, empty_f, 0.0,
+                          empty_f, empty_i, empty_f, 0, 100.0, empty_f, xc_mode,
+                          nbands, nelec, mix, tol, max_iter)
+    return r.e_total
+}
+
+// Same, but for a FULL pseudopotential inner cell (real UPF channels). Threads
+// the radial-grid pseudopotential straight into the verified multi-channel-free
+// single-species qforge_scf_pw — the inner cell's real self-consistent E_QM.
+pub fn embed_qm_inner_scf_etot_upf(kvec: [float], gvecs: [float], pos: [float],
+                                   r: [float], rab: [float], vloc_r: [float], z: float,
+                                   betas: [float], ls: [int], dij: [float], nproj: int,
+                                   omega: float, xc_mode: int,
+                                   nbands: int, nelec: int,
+                                   mix: float, tol: float, max_iter: int) -> float {
+    let res = qforge_scf_pw(kvec, gvecs, pos, r, rab, vloc_r, z,
+                            betas, ls, dij, nproj, omega, [], xc_mode,
+                            nbands, nelec, mix, tol, max_iter)
+    return res.e_total
+}
+
+// ── FULL-CHAIN — mechanical total with the REAL self-consistent E_QM(inner) ──
+// Identical to embed_mechanical_from_regions, but E_QM(inner) is the converged
+// self-consistent qforge_scf_pw band-energy total (periodic-cell inner region),
+// not the electrostatic Ewald stand-in. The MM(outer) + coupling terms are the
+// SAME real cores (chem/md LJ+bonded · classical LJ+Coulomb) reused from
+// round-2. The three scalars feed the SAME generic partition (d4).
+//   `inner`/`outer` are MdParticle arrays (the coupling geometry); the inner
+//   self-consistent energy comes from the periodic (kvec,gvecs) description.
+pub fn embed_mechanical_scf_from_regions(
+        inner: array, kvec: [float], gvecs: [float], q_inner: [float],
+        nbands: int, nelec: int, xc_mode: int,
+        scf_mix: float, scf_tol: float, scf_max_iter: int,
+        outer: array, q_outer: [float],
+        L: float, eps: float, sigma: float, k_coulomb: float,
+        bonds: array, angles: array, dihedrals: array) -> float {
+    // REAL self-consistent E_QM(inner) — the round-8 upgrade.
+    let e_qm = embed_qm_inner_scf_etot(kvec, gvecs, nbands, nelec, xc_mode,
+                                       scf_mix, scf_tol, scf_max_iter)
+    // SAME real MM + coupling cores as round-2 (reuse, d19/d3).
+    let e_mm = embed_mm_outer_energy(outer, eps, sigma, bonds, angles, dihedrals, L)
+    let e_cp = embed_qmmm_coupling(inner, q_inner, outer, q_outer, eps, sigma, k_coulomb)
+    // SAME generic partition as round-1/round-2 (d4).
+    return embed_mechanical_total(e_qm, e_mm, e_cp)
+}
+
+// ── MOLECULAR-SCF GAP (cross-cutting) — falsifiable marker ────────────────────
+// A no-op that DOCUMENTS the gap inside the code (not just a comment): the
+// molecular self-consistent SCF front-end is ABSENT. The selftest asserts this
+// constant is 0 AND that the grep for a molecular-SCF entry point returns ∅, so
+// the gap is recorded as a FALSIFIER: if a molecular-SCF front-end is ever
+// added (qforge_scf_molecule / gaussian-basis / atom-centered HF), this marker
+// must flip to 1 and round-8's path-B note must be revised. Until then, the
+// available real core for an ISOLATED-MOLECULE inner region is qforge_ewald
+// (round-2), and the available real SELF-CONSISTENT core is qforge_scf_pw for a
+// PERIODIC-CELL inner region (round-8, path A).
+pub fn molecular_scf_frontend_available() -> int {
+    return 0     // ∅ — no atom-centered / Gaussian-basis molecular SCF entry.
+}
