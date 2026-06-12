@@ -392,6 +392,24 @@ table **first** — the intuitive move is often the slower or the broken one.
 > CPU byte-eq oracle invariants (3 load-bearing exp impls · sequential
 > ascending-order reductions) that a "unify/fuse/tree-reduce" refactor silently breaks.
 
+> **deterministic checkpoint/resume:** to STOP a flame run and RESUME it
+> bit-for-bit, use [`stdlib/flame/ckpt_lib.hexa`](../stdlib/flame/ckpt_lib.hexa)
+> (format `"FCK\x01"` v1) — `ckpt_begin(buf, t, n_params)` then
+> `ckpt_save_param(buf, W, m, v, n)` per parameter **in the pinned param order**,
+> and `ckpt_load_param(rb, off, W_out, m_out, v_out)` to restore (resume continues
+> at `ckpt_step(rb) + 1`). Two gotchas: **(1) you MUST save the AdamW moments `m`,
+> `v` AND the applied step `t`, not just weights** — a "weights-only" checkpoint
+> resets bias-correction (`t→1`) and silently diverges (MEASURED 0.042; a missing
+> `t` is the classic "looks fine, isn't" hole). **(2) NEVER serialize through text
+> (`%g`/`to_string`)** — it's not shortest-round-trip and drops low mantissa bits
+> (F-OP37 measured `to_string` corrupt fp64 by up to 2.027e-6). `ckpt_lib`
+> reinterprets the raw fp64 **little-endian bit pattern**, so it is bit-exact
+> (incl. denormals/-0.0/±inf/NaN) AND the bytes are **portable across
+> machines/arches** (write on arm64-macos, resume on x86_64-linux → byte-identical).
+> Proof: `stdlib/flame/op35_ckpt_resume_eq.hexa` (resume == uninterrupted,
+> `max|Δ|=0`, + missing-`t`/fp32-truncation negative controls) +
+> `op35_ckpt_xplat_selfcontained.hexa` (cross-platform `cmp`-identical). (F-OP35.)
+
 | # | lesson | the dojo rule |
 |---|---|---|
 | **1** | **bench before you vectorize** — fusing 30 `ConvExpert` modules into one grouped `nn.Conv1d(E·d, E·d, K, groups=30)` (186 240 channels) ran **~14 min/step** on an H200, vs the plain `ModuleList` of 30 small convs at **~74 s/step**. A grouped conv with many groups *defeats* GPU group-parallelism and cuDNN can't pick a fast algo for that shape. | **Fewer kernel launches ≠ faster.** BENCH the grouped/fused form against the loop on **one step** before adopting it. Do **not** auto-vectorize an expert loop. |

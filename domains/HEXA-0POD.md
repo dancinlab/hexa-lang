@@ -10,6 +10,20 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-38-CKPT-RECIPE-REFLECT (unique anchor — OP-35 (#3062) BUILT + PROVED the 6th determinism surface, a deterministic training checkpoint (stdlib/flame/ckpt_lib.hexa, "FCK\x01" v1 — binary fp64 little-endian bit-pattern reinterpret, full [t][n_params][W,m,v] state, resume==uninterrupted max|Δ|=0). The capability existed + was oracle-locked but its discoverability across the two contributor doc SSOTs was incomplete: the determinism contract's CHECKPOINT row asserted "not shortest-round-trip text" without tying it to OP-37's MEASURED to_string/%g lossiness, and the dojo had NO practical checkpoint recipe. OP-38 reflects the capability into both surfaces — docs-only, NO new code/oracle, NO .tape, g84 no-paper) -->
+- [x] **OP-38 — deterministic checkpoint (ckpt_lib FCK v1) reflected into the determinism contract + dojo recipe (docs-only)** —
+  docs/flame-determinism-contract.md REFINED (no duplicate): the CHECKPOINT row + "what breaks it" bullet now tie the
+  binary-bit-pattern rationale to F-OP37's MEASURED proof that to_string/%g is "%g" 6-digit lossy (corrupts fp64 by up
+  to 2.027e-6) — so the reinterpret exists PRECISELY to avoid text round-trip; the full-state [t][n_params][W,m,v]
+  invariant + bit-for-bit resume==uninterrupted + cross-platform portability were already accurate from OP-35 and left
+  as-is. docs/hexa-dojo.md GAINED a new terse callout in "Training recipe — optimization gotchas": the exact API
+  (ckpt_begin → ckpt_save_param per param in pinned order → ckpt_load_param, resume at ckpt_step+1), the TWO gotchas
+  (MUST save m,v AND step t — weights-only resets bias-correction, MEASURED 0.042; NEVER serialize through text), the
+  bit-exact + machine/arch-portable property, and a one-line proof pointer to ckpt_lib.hexa + the op35 oracles. Every
+  claim verified line-by-line against ckpt_lib.hexa + op35_ckpt_resume_eq.hexa + op35_ckpt_xplat_selfcontained.hexa
+  (magic/header/field-order/API names/guarantees ALL MATCH — no invented API, no invented guarantee). DOCS-ONLY · $0 ·
+  0-GPU · 0-pod · no vast · no .tape · g84 no-paper. Verdict .verdicts/hexa-0pod/F-OP38-CKPT-RECIPE-REFLECT.txt
+
 <!-- ANCHOR:OP-36-DISPATCH-AUDIT (unique anchor — deep-dive round-10 branch ④: the OP-16 (groupnorm_gelu) / OP-18 (gelu2, moe_block2) / OP-32b (stdp_pair) class produced 4 REACTIVE discoveries of "GPU dispatch symbol declared + CUDA emit exists, but NO CPU body → importing the lib fails to link on CPU-only hosts" (hexa codegen emits ALL module fns, no DCE). OP-36 closes the pattern PROACTIVELY: sweep ALL forge dispatch symbols, build the symbol × CUDA-emit × CPU-body matrix, classify each CPU-missing symbol (real lib link hole / GPU-build-only by design / orphan), fix the real holes via the tool/restore_frozen_seeds marker-guarded channel, and CPU-link-probe every flame lib) -->
 - [x] **OP-36 — forge dispatch CPU-fallback systematic audit: full symbol matrix, remaining link holes fixed (OP-16/18/32b class closed proactively)** —
   33-symbol matrix (prototype × CUDA-emit × CPU-body × reach): 33 CUDA-emitted · 8 CPU-covered · 25 CPU-missing
