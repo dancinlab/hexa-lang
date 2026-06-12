@@ -205,6 +205,32 @@ loop targets what the consumer card + code can carry.
   wipe_guard: net +11/−2 « 50. Verdict .verdicts/hexa-0pod/F-OP47-MATMUL-DOT-PROBE.txt.
   $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
 
+<!-- ANCHOR:OP-48-SURVIVE-AUDIT-TRANCHE (unique anchor — OP-47 dropped the OP-43 survivor set to 23. OP-48 audits the NEXT TRANCHE — the 8 [R]-ONLY (no-local-fn-shadow) survivors (cross_entropy · arange · clip · conv1d · save_array · load_array · rope · rope_inplace), the cleanest-to-decide subset — with OP-41/OP-43/OP-47's exact per-builtin g5 method (AOT probe correct-args + arg-shape-trap control + local-fn-shadow binding CONTROL + dead/live caller classification + compiler-core/byte-eq zero-ref + pre-existing-failure control). CONSERVATIVE; honest "most stay" permitted. The conservative compiler-closure safety gate is the load-bearing teeth, not ceremony) -->
+- [x] **OP-48 — next-tranche survive-audit (8 [R]-only survivors): 7 g5-falsified + DEAD-surface + 0-shadow + byte-eq-safe → DEREGISTERED; arange STAYS (self-host compiler-closure ref). Survivor set 23→16** —
+  🟢 audited the 8 [R]-ONLY OP-43 survivors (cross_entropy·arange·clip·conv1d·save_array·load_array·rope·
+  rope_inplace) — the cleanest tranche (no local-fn-shadow ambiguity). ALL 8 g5-RE-VERIFIED falsified (fresh
+  hexat ~/.hx/bin/build/hexat → clang -fsyntax-only, CORRECT args: each emits "use of undeclared identifier
+  'NAME'"); ALL 8 = 0 codegen-inline guard + 0 runtime symbol (cross_entropy's only hit is the DIFFERENT RFC-034
+  ad_softmax_cross_entropy carrier; clip/rope hits are runtime COMMENTS) → arg-shape-trap controlled. CONTROL: a
+  local `fn cross_entropy` emits its OWN `HexaVal cross_entropy(...)` def + a clean-compiling call → shadows bind
+  roster-INDEPENDENTLY (none of the 8 actually has a shadow — 0 each). CALLER SWEEP (word-boundary; comments +
+  "…NAME(…" string-literals excluded): every REAL call-site DEAD — example callers baseline exit_code=-1
+  (anima_convergence_proof/test_matmul_loss/test_conv_cache_io/test_modern_llm/…); stdlib/nn.hexa+self/ml/
+  grad_engine+self/test_nn_stdlib (cross_entropy) ALREADY AOT-fail TODAY with the builtins STILL registered;
+  self/ml/train_decoder_cpu_b (rope) already AOT-fails; train_7b + train_decoder_cpu_c/d/b2 (rope_inplace/save_
+  array/load_array) already transpile-fail; stdlib/flame/clm_prod's `conv1d(` = the LOCAL conv1d_via_forge fn;
+  stdlib bare-clip = formula prose. PRE-EXISTING-FAILURE CONTROL: every non-example caller fails on the INSTALLED
+  hexat which STILL registers all 8 → dereg is not the cause. SELF-HOST: compiler/** has ZERO refs to the 7
+  (byte-eq fixpoint untouched). DECISION (g0): 7 satisfy all four conditions → DEREGISTERED. **arange STAYS** —
+  the safety gate caught a SELF-HOST COMPILER CLOSURE reference (registered in the tier-1 compiler bind allow-list
+  compiler/check/bind.hexa:1281 + a codegen special-path per compiler/PLAN.md:574), failing the byte-eq/
+  compiler-core zero-ref precondition. "Most go, one stays" — the conservative win: the gate actively prevented
+  touching the self-host compiler's own bind surface. OP-43 survivor set 26→23 (OP-47)→16 (OP-48); the [R]-only
+  tranche is now CLOSED (remaining 16 all carry [S] local-fn shadows — a harder later tranche). env.hexa
+  transpiles clean after removal; arange + neighbors intact. REVERSIBLE one-line re-add. wipe_guard: net +33/−5
+  « 50. Verdict .verdicts/hexa-0pod/F-OP48-SURVIVE-AUDIT-TRANCHE.txt.
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
 <!-- ANCHOR:OP-43-ML-FAMILY-FALSIFIED (unique anchor — OP-41 deferred ~101 non-optimizer falsified roster builtins conservatively. OP-43 takes the ML-FAMILY subset (conv/quant/activation/attention/array-ML cluster) and audits it ONE LAYER DEEPER with OP-41's exact per-builtin g5 method (AOT probe with CORRECT args + arg-shape-trap control + local-fn-shadow vs builtin distinction + dead/live caller classification) to either safely deregister the truly-dead or document precisely why each survives) -->
 - [x] **OP-43 — ML-family falsified-builtin deeper audit: 42-builtin sub-matrix (all 42 AOT-falsified); 16 truly-dead DEREGISTERED, 26 SURVIVE-WITH-REASON** —
   🟢 re-applied OP-41's RIGOROUS g5 method to the 42-member ML family. Built AOT probe harness (fresh hexat

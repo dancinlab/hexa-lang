@@ -1,0 +1,211 @@
+F-OP48-SURVIVE-AUDIT-TRANCHE — next-tranche audit of the OP-43 survive-set using OP-41/OP-43/OP-47's
+        exact rigorous per-builtin g5 method. Takes the 8 [R]-ONLY (no-local-fn-shadow) survivors
+        (cross_entropy · arange · clip · conv1d · save_array · load_array · rope · rope_inplace) —
+        the most-clearly-dead candidates — and decides keep-or-deregister per builtin. RESULT: 7 of 8
+        DEREGISTERED (all g5-RE-VERIFIED falsified + dead-surface + 0-shadow + byte-eq-safe); ONE
+        (arange) STAYS — the conservative safety gate caught a SELF-HOST COMPILER CLOSURE reference
+        (registered in the tier-1 compiler bind allow-list compiler/check/bind.hexa:1281 + a codegen
+        special-path per compiler/PLAN.md:574). The OP-43 survivor set drops 23→16. CONSERVATIVE
+        outcome respected — "most go, one stays" with the stay fully evidenced.
+HEXA-0POD OP-48 · CPU-LOCAL (hexat AOT transpile + clang -fsyntax-only) · 0-GPU · $0 · no vast/pod
+════════════════════════════════════════════════════════════════════════════
+
+[0] PROVENANCE + MANDATE
+------------------------
+OP-41 audited 231 builtins (~105 falsified, 4 dereg). OP-43 took the 42-member ML family (16 dereg,
+26 survive-with-reason). OP-47 took the 3 largest-surface OP-43 survivors (matmul_into/dot/mat_add_inplace
+— all 3 dereg, survivor set 26→23). OP-48's mandate: audit the NEXT TRANCHE of the 23-member survive-set
+with the SAME rigorous method, deregistering the truly-dead and KEEPING (with reason) anything with a live
+dependency. CONSERVATIVE; "most stay" permitted. The chosen tranche = the 8 [R]-ONLY survivors (OP-43's
+classification: substantial broken non-example self//stdlib caller surface but ZERO local-fn shadow):
+  cross_entropy · arange · clip · conv1d · save_array · load_array · rope · rope_inplace.
+[R]-only is the cleanest tranche: no local-fn-shadow ambiguity, so the audit reduces to (falsified) ∧
+(every real caller dead) ∧ (compiler-core/byte-eq zero-ref).
+
+The two sides (OP-41 method):
+  (a) ROSTER — `let builtin_names = [...]` in self/env.hexa env_new() (registration makes the
+      binder/type-checker ACCEPT a call to NAME).
+  (b) IMPL   — codegen-inline lowering (self/codegen.hexa `if name == "X"`) ∪ runtime symbols the
+      emitted C calls (self/runtime.h + installed runtime.c, incl prefix variants hexa_/rt_/u_/hexa_math_).
+A FALSIFIED builtin = registered in (a), NO impl in (b) → AOT emits a bare hexa_callN(NAME,…) → clang
+"use of undeclared identifier 'NAME'".
+
+Fresh hexat = ~/.hx/bin/build/hexat (2027336B, Jun-8 — NOT the stale Jun-1 ~/.hx/bin/hexa).
+Baseline roster lines (self/env.hexa, pre-edit):
+  :165 "cross_entropy"  :166 "arange","clip"  :185 "conv1d"  :186 "save_array","load_array"  :204 "rope","rope_inplace"
+
+[1] PER-BUILTIN STATIC IMPL CROSS-REF (arg-shape-trap controlled)
+----------------------------------------------------------------
+codegen-inline guards (`if name=="X"` in self/codegen.hexa): ALL 8 = 0 → ARG-SHAPE-TRAP (OP-41 §1)
+  CONTROLLED: with 0 codegen guards, ANY arg shape yields the same bare hexa_callN fallback (no
+  false-undeclared risk; the probe is arg-shape-robust for this tranche).
+runtime symbol (self/runtime.h ∪ installed /Users/mini/.hx/src/self/runtime.c, prefix variants):
+  cross_entropy : 0 — the only hit is a DIFFERENT symbol `(hexa_)ad_softmax_cross_entropy` (RFC-034
+                      4-arg fused carrier, runtime.c:7861/12184); bare `cross_entropy` has NO symbol.
+  arange        : 0 runtime symbol  (BUT compiler-tier ref — see §4, the reason it STAYS)
+  clip          : 0 — the only `\bclip\b` hit is a code COMMENT (runtime.c:14061 "passes through clip")
+  conv1d        : 0
+  save_array    : 0
+  load_array    : 0
+  rope          : 0 — the only `\brope\b` hit is a code COMMENT (runtime.c:8799 "the rope CPU")
+  rope_inplace  : 0
+
+[2] AOT PROBE (g5, authoritative — correct args, fresh hexat → clang -I<self> -fsyntax-only)
+-------------------------------------------------------------------------------------------
+Each: `fn main(){ let _r = <correct-args call>; println("OKMARK") }` → hexat transpile OK (roster
+accepts) → clang FALSIFIES. Verbatim:
+  cross_entropy : cross_entropy([[1.0,2.0],[3.0,4.0]],[0,1]) →
+                  p_cross_entropy.c:18:29: error: use of undeclared identifier 'cross_entropy'
+  arange        : arange(0,10)                               →
+                  p_arange.c:18:29: error: use of undeclared identifier 'arange'
+  clip          : clip([1.0,2.0,3.0,4.0],0.0,2.0)            →
+                  p_clip.c:18:29: error: use of undeclared identifier 'clip'
+  conv1d        : conv1d([1.0,2.0,3.0,4.0],[1.0,0.0],1)      →
+                  p_conv1d.c:18:29: error: use of undeclared identifier 'conv1d'
+  save_array    : save_array([1.0,2.0,3.0],"/tmp/x.bin")     →
+                  p_save_array.c:20:29: error: use of undeclared identifier 'save_array'
+  load_array    : load_array("/tmp/x.bin")                   →
+                  p_load_array.c:20:29: error: use of undeclared identifier 'load_array'
+  rope          : rope([[1.0,2.0],[3.0,4.0]],0)              →
+                  p_rope.c:18:29: error: use of undeclared identifier 'rope'
+  rope_inplace  : rope_inplace([[1.0,2.0],[3.0,4.0]],0)      →
+                  p_rope_inplace.c:18:29: error: use of undeclared identifier 'rope_inplace'
+ALL 8 g5-RE-VERIFIED FALSIFIED. (The opposite finding — a clean link — did NOT occur for any.)
+
+[3] CONTROL — local-fn shadow binds ROSTER-INDEPENDENTLY
+-------------------------------------------------------
+LOCAL-FN SHADOW counts (`fn NAME(` repo-wide, *.hexa): ALL 8 = 0 (confirms OP-43's [R]-only
+  classification — no shadow exists for any of the 8, so there is no shadow to preserve).
+CONTROL probe (binding mechanism, OP-41/43/47 discipline): a file defining a local `fn cross_entropy`
+  + a call → ~/.hx/bin/build/hexat OK → clang -fsyntax-only CLEAN; generated C contains
+  line 4  `HexaVal cross_entropy(HexaVal logits, HexaVal target);` (fwd decl)
+  line 17 `HexaVal cross_entropy(HexaVal logits, HexaVal target) {` (local def)
+  line 26 `HexaVal r = cross_entropy(...)` (call → local def)
+  ⇒ a local `fn NAME` emits its OWN symbol roster-INDEPENDENTLY; deregistering the builtin can never
+  break a local-fn shadow's binding. (Established for this family; none of the 8 actually has one.)
+
+[4] CALLER SWEEP + DEAD/LIVE + COMPILER-CLOSURE (the decisive gates)
+-------------------------------------------------------------------
+REAL code-line call-sites (word-boundary `(^|[^A-Za-z0-9_])NAME\(`; // comments and "…NAME(…" string
+literals excluded; fn-defs and self/env.hexa roster excluded):
+  cross_entropy : example/{anima_convergence_proof,test_matmul_loss,anima_clm_training,benchmark_all}
+                  (ALL baseline exit_code=-1) + stdlib/nn.hexa:150-151 (fn ce_loss/hex_loss) +
+                  self/test_nn_stdlib + self/ml/grad_engine:68/153
+  arange        : example/{test_viz_data,benchmark_all,anima_clm_training} (baseline -1) +
+                  stdlib/xeno/.../anima_eeg_to_akida_spike.hexa:97 `np.arange(T)` (a PYTHON string-emit
+                  line; that file ALSO transpile-fails today: "unexpected token RBrace")
+  clip          : example/anima_consciousness_step (baseline -1) ONLY (all self/ml/stdlib bare-`clip`
+                  hits in sophia/ppo_clip/bitnet/grpo/distributional_rl/dp_sgd/_lbfgsb_driver are
+                  COMMENTS / formula prose — AOT-verified: those files syntax-check CLEAN, 0 clip error)
+  conv1d        : example/test_conv_cache_io (baseline -1) ONLY (stdlib/flame/clm_prod.hexa uses the
+                  LOCAL `conv1d_via_forge`/`conv1d_bwd_via_forge` fns — different symbol; bare `conv1d(`
+                  there + in self/ml/mamba*/test_mamba* are COMMENTS — AOT-verified clean)
+  save_array    : example/{test_conv_cache_io,anima_mega_demo,test_quant_beam_init,anima_convergence_proof}
+                  (baseline -1) + self/ml/train_7b (ALREADY transpile-fails today)
+  load_array    : same example set (baseline -1) + self/ml/train_7b (ALREADY transpile-fails today)
+  rope          : example/test_modern_llm (baseline -1) + self/ml/train_decoder_cpu_b:49-50 (ALREADY
+                  AOT-fails today: clang "undeclared identifier 'rope'" with the builtin STILL registered)
+  rope_inplace  : self/ml/{train_decoder_cpu_d,train_decoder_cpu_c,train_decoder_cpu_b2,train_7b}
+                  ONLY — ALL FOUR ALREADY transpile-fail today ("index 1 out of bounds"/RBrace/silent-
+                  failure-enforcement) — i.e. zero compiling caller
+
+PRE-EXISTING-FAILURE CONTROL (OP-41 §5c / OP-47 §5): every non-example caller file fails TODAY on the
+  INSTALLED hexat whose roster STILL registers all 8 (Jun-8 build, pre-dates this edit) — stdlib/nn,
+  self/ml/grad_engine, self/test_nn_stdlib emit the "undeclared" clang error; train_7b / train_decoder_
+  cpu_b/c/d/b2 / test_mamba2_ssd / eeg transpile-fail — ALL builtin-INDEPENDENT (the failure reproduces
+  WITH the builtins present). Deregistration is therefore NOT the cause of any failure; it only flips a
+  never-compiling program's failure mode from "AOT undeclared symbol" to "binder unbound name" (a
+  strictly-equal no-op for a program that never compiled).
+
+SELF-HOST BYTE-EQ / COMPILER-CLOSURE (DECISIVE):
+  compiler/** refs (excluding embedded.gen.hexa JSON archive noise + PLAN.md prose):
+    cross_entropy 0 · clip 0 · conv1d 0 · save_array 0 · load_array 0 · rope 0 · rope_inplace 0  → SAFE
+    arange        2 — compiler/check/bind.hexa:1281 `"arange",` (the TIER-1 self-host compiler's OWN
+                      bind allow-list) + compiler/PLAN.md:574 "`arange`…(codegen 특수경로/special-path)".
+  ⇒ the 7 with 0 compiler refs cannot perturb the cc-gen3.o==cc-gen4.o byte-eq fixpoint (no compiling
+    gate touches their dead callers; the only compiling gate is selfhost-byteeq on compiler/main.hexa).
+  ⇒ arange IS referenced by the self-host compiler closure → it FAILS the byte-eq/compiler-core safety
+    gate (OP-47 §4: "0 compiler-core / byte-eq reference" is a hard precondition). CONSERVATIVE → STAYS.
+
+[5] DECISION (g0 conservative) — 7 DEREGISTER, 1 STAYS
+-----------------------------------------------------
+The four OP-47 conditions per builtin: (falsified) ∧ (no live caller depends on the roster entry) ∧
+(local-fn shadows still bind without it — vacuous, 0 shadows) ∧ (compiler-core/self-host zero refs):
+  cross_entropy : falsified ✓ · 0 shadow · callers ALL dead (example -1 / stdlib/nn+grad_engine+test_nn_
+                  stdlib already AOT-fail) · compiler 0 ✓ → DEREGISTER
+  clip          : falsified ✓ · 0 shadow · 1 real caller baseline-dead (rest comments/prose) · compiler 0 ✓ → DEREGISTER
+  conv1d        : falsified ✓ · 0 shadow · 1 real caller baseline-dead (rest = LOCAL conv1d_via_forge /
+                  comments) · compiler 0 ✓ → DEREGISTER
+  save_array    : falsified ✓ · 0 shadow · callers example-dead + train_7b transpile-fail · compiler 0 ✓ → DEREGISTER
+  load_array    : falsified ✓ · 0 shadow · callers example-dead + train_7b transpile-fail · compiler 0 ✓ → DEREGISTER
+  rope          : falsified ✓ · 0 shadow · example-dead + train_decoder_cpu_b already AOT-fails · compiler 0 ✓ → DEREGISTER
+  rope_inplace  : falsified ✓ · 0 shadow · 4 callers ALL already transpile-fail (zero compiling) · compiler 0 ✓ → DEREGISTER
+  ──────────────────────────────────────────────────────────────────────────────────────────────────
+  arange        : falsified ✓ · 0 shadow · callers example-dead + np.arange string-emit · BUT compiler
+                  tier-1 bind allow-list + codegen special-path (compiler/check/bind.hexa:1281,
+                  PLAN.md:574) → byte-eq safety gate FAILS → STAYS. (Exactly the doubt OP-47 §6 says
+                  forces a keep: "had ANY caller been … compiler-core / SSOT-closure module, the builtin
+                  would STAY." arange is in the self-host closure bind surface → conservative keep.)
+
+[6] DIFF
+--------
+  self/env.hexa : 7 names REMOVED from env_new() builtin_names roster (cross_entropy clip conv1d
+                  save_array load_array rope rope_inplace) + 3 scoped OP-48 comment blocks recording the
+                  falsified+dead-surface+0-shadow+byte-eq-safe rationale per group AND the explicit
+                  arange-STAYS note (mirrors OP-43/OP-47 removal-comment convention). Roster stays
+                  well-formed (comma-separated string list). KEPT: arange + neighbors (normalize argmax
+                  zeros sum topk sample_token mse_loss kv_cache_append rms_norm matvec mat_add
+                  quantize_int8 — each 1 roster string, re-verified).
+  wipe_guard: net +33 / −5 « 50; commit subject scoped
+  `cleanup(env): deregister 7 falsified [R]-only ML survivors (arange STAYS) — OP-48 ...`.
+
+[7] POST-EDIT CHECKS — GREEN
+---------------------------
+(a) env.hexa transpiles clean: `~/.hx/bin/build/hexat self/env.hexa /tmp/op48/env_after.c` → OK (roster
+    well-formed after the 7 removals).
+(b) grep-proof: 0 non-comment roster strings for each removed name; arange + all 13 spot-checked
+    neighbors still present (1 each).
+(c) self-host byte-eq: env.hexa edit affects the NEXT compiler build; installed hexat keeps its roster
+    until rebuilt (same 0-pod caveat as OP-41/OP-43/OP-47 — verified via env.hexa transpile +
+    generated-C inspection + compiler/** zero-ref for the 7, not a from-scratch rebuild). The 7 have
+    zero compiler-core refs → fixpoint safe. arange (the ONE compiler-referenced name) was NOT touched.
+
+[8] GATE (g5) — PASS
+--------------------
+  8-builtin tranche matrix built (static + empirical, arg-shape-trap controlled) : YES (§1-2)
+  all 8 AOT-falsified RE-VERIFIED verbatim                                       : YES (§2)
+  local-fn shadow binding mechanism CONTROL (roster-independent)                 : YES (§3)
+  every real caller of the 7 dead (example -1 / already-AOT-fail / transpile-fail) : YES (§4)
+  0 compiler-core / byte-eq reference for the 7 ; arange HAS one → kept           : YES (§4)
+  pre-existing-failure control (dereg not the cause)                             : YES (§4)
+  env.hexa transpiles + roster well-formed after removal                         : YES (§7)
+
+[9] CLOSURE STATEMENT + RUNNING TALLY
+------------------------------------
+After OP-48: 7 of the 8 [R]-only OP-43 survivors (cross_entropy clip conv1d save_array load_array rope
+rope_inplace) DEREGISTERED — proven falsified + dead-surface + 0-shadow + byte-eq-safe. arange STAYS
+(self-host compiler closure reference — conservative).
+  OP-43 survivor set:  26 (OP-43) → 23 (OP-47, −matmul_into/dot/mat_add_inplace) → 16 (OP-48, −7).
+  Remaining 16 ML-family survivors:
+    [S R] relu sigmoid transpose normalize zeros attention topk sample_token mse_loss kv_cache_append
+          quantize_int8 dequantize_int8 magnitude_prune tensor_fill repeat_kv
+    [R]   arange  (NOW PINNED-WITH-EVIDENCE: kept on a HARD compiler-closure dependency, not blast-radius
+          — the remaining [R]-only members are exhausted)
+  The [R]-ONLY tranche is now CLOSED: of the original [R]-only set {cross_entropy arange clip conv1d
+  save_array load_array rope rope_inplace}, 7 dereg + arange pinned-on-compiler-ref. Every future
+  survivor still carries a local-fn shadow ([S]) — a strictly harder audit (must prove shadow-binding
+  per real caller) deferred to a later tranche.
+Real ML in hexa = stdlib/flame/* + per-module LOCAL fns, NOT these roster builtins. Deregistration is
+REVERSIBLE (one-line roster re-add); any future program needing one would require a real impl anyway
+(the roster row was a lints-but-won't-link landmine).
+
+[10] HONEST + CONSERVATIVE (g0)
+------------------------------
+  • The load-bearing claims — the 7 are falsified + 0-codegen-guard + 0-runtime-symbol +
+    0-compiler-core-ref + every real caller dead + 0-shadow — are pinned to the strict per-builtin g5
+    standard and are exact.
+  • arange's KEEP is the CONSERVATIVE win of this pass: the safety gate (compiler-closure zero-ref)
+    actively prevented a removal that would have touched the self-host compiler's own bind surface.
+    "Most go, one stays" — the permitted honest outcome, with the stay fully evidenced.
+  • The 16 remaining survivors + the non-ML OP-41 deferred remainder stay OUT OF SCOPE (deferred).
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.

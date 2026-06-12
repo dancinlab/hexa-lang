@@ -1,5 +1,51 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-48 DONE: next-tranche survive-audit (8 [R]-only survivors) → 7 falsified+dead+0-shadow+byte-eq-safe → DEREGISTERED; arange STAYS (compiler-closure ref) · survivor 23→16 · self/env.hexa +33/−5 · $0 · 0-pod
+- SURVEY-FIRST (mandatory). Read F-OP47-MATMUL-DOT-PROBE.txt (3 largest [R]-survivors deregistered, set 26→23)
+  + F-OP43-ML-FAMILY-FALSIFIED.txt (42-builtin ML matrix; 16 dereg, 26 survive; the [R]-only no-shadow members)
+  + F-OP41-FALSIFIED-BUILTIN-SWEEP.txt (the roster-vs-impl method + arg-shape-trap caveat). Extracted the
+  current 23-survivor set and picked the NEXT tranche = the 8 [R]-ONLY survivors (cross_entropy · arange · clip ·
+  conv1d · save_array · load_array · rope · rope_inplace) — the cleanest-to-decide subset (no local-fn-shadow
+  ambiguity, so the audit reduces to falsified ∧ every-real-caller-dead ∧ compiler-core/byte-eq zero-ref).
+- METHOD (OP-41/43/47 exact, per builtin): (a) confirmed registered in self/env.hexa env_new() roster; (b) IMPL
+  cross-ref — ALL 8 = 0 codegen-inline guard + 0 runtime symbol (cross_entropy's only hit is the DIFFERENT 4-arg
+  RFC-034 carrier hexa_ad_softmax_cross_entropy, runtime.c:7861/12184; bare clip/rope hits are runtime COMMENTS);
+  (c) g5 AOT PROBE — fresh hexat ~/.hx/bin/build/hexat + CORRECT args → clang -I<self> -fsyntax-only: ALL 8 emit
+  verbatim "use of undeclared identifier 'NAME'" (cross_entropy:18, arange:18, clip:18, conv1d:18, save_array:20,
+  load_array:20, rope:18, rope_inplace:18); (d) CALLER SWEEP word-boundary, comments/string-literals/fn-defs
+  excluded.
+- CONTROL (binding mechanism): a file with a local `fn cross_entropy` → generated C emits its OWN forward-decl
+  (line 4) + def (line 17) + the call resolving to it (line 26), clang-CLEAN → local-fn shadow binds its symbol
+  ROSTER-INDEPENDENTLY; deregistering can't break a shadow. (Vacuous here — all 8 have 0 shadows, matching OP-43's
+  [R]-only classification.)
+- DEAD/LIVE per builtin: every real call-site DEAD — example callers baseline exit_code=-1 (anima_convergence_proof
+  /test_matmul_loss/test_conv_cache_io/test_modern_llm/anima_consciousness_step/anima_mega_demo/test_quant_beam_init);
+  stdlib/nn.hexa + self/ml/grad_engine + self/test_nn_stdlib (cross_entropy) ALREADY AOT-fail TODAY with the builtin
+  STILL registered; self/ml/train_decoder_cpu_b (rope) already AOT-fails (undeclared 'rope'); self/ml/train_7b +
+  train_decoder_cpu_c/d/b2 (rope_inplace/save_array/load_array) already transpile-fail; stdlib/flame/clm_prod's
+  `conv1d(` = the LOCAL conv1d_via_forge/conv1d_bwd_via_forge fns (different symbol); self/ml/sophia/ppo_clip/
+  bitnet/grpo/distributional_rl/dp_sgd + stdlib/_lbfgsb_driver bare-`clip` = formula prose COMMENTS (AOT-verified:
+  those files syntax-check CLEAN, 0 clip error); stdlib/dojo + xeno `arange` = torch.arange/np.arange string-emit.
+- PRE-EXISTING-FAILURE CONTROL: every non-example caller fails on the INSTALLED Jun-8 hexat whose roster STILL
+  registers all 8 → dereg is NOT the cause, only flips a never-compiling program's failure mode.
+- SELF-HOST BYTE-EQ (decisive): compiler/** refs (excl embedded.gen archive + PLAN prose) = 0 for cross_entropy/
+  clip/conv1d/save_array/load_array/rope/rope_inplace → fixpoint untouched. **arange = 2 refs**: registered in the
+  TIER-1 self-host compiler bind allow-list compiler/check/bind.hexa:1281 (`"arange",`) + a codegen special-path
+  per compiler/PLAN.md:574 → FAILS the byte-eq/compiler-core zero-ref precondition → arange STAYS (conservative).
+- DECISION (g0): 7 satisfy (falsified ∧ no-live-caller ∧ shadow-binds-without-it ∧ 0-compiler-ref) → DEREGISTERED;
+  arange held on a HARD compiler-closure dependency. "Most go, one stays" — the conservative win: the safety gate
+  actively prevented touching the self-host compiler's own bind surface.
+- DIFF: self/env.hexa — cross_entropy/clip/conv1d/save_array/load_array/rope/rope_inplace removed from env_new()
+  roster + 3 scoped OP-48 comment blocks (per-group falsified+dead+0-shadow+byte-eq-safe rationale + explicit
+  arange-STAYS note). Roster well-formed; arange + neighbors (normalize/argmax/zeros/sum/topk/sample_token/mse_loss
+  /kv_cache_append/rms_norm/matvec/mat_add/quantize_int8) intact (1 roster string each, re-verified). wipe_guard:
+  net +33/−5 « 50. POST-EDIT: `hexat self/env.hexa /tmp/op48/env_after.c` → OK (transpiles clean).
+- TALLY: OP-43 survivor set 26 → 23 (OP-47) → 16 (OP-48, −7). The [R]-ONLY tranche is now CLOSED (the remaining
+  16 survivors all carry [S] local-fn shadows — a strictly harder later tranche). Real ML in hexa = stdlib/flame/*
+  + per-module LOCAL fns, NOT these roster builtins.
+- OUTCOME: 🟢 GREEN. Verdict .verdicts/hexa-0pod/F-OP48-SURVIVE-AUDIT-TRANCHE.txt.
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
 ## 2026-06-12 — OP-47 DONE: matmul_into/dot/mat_add_inplace large-surface probe → all 3 falsified+dead+shadow-safe+byte-eq-safe → ALL THREE DEREGISTERED · self/env.hexa +11/−2 · $0 · 0-pod
 - SURVEY-FIRST (mandatory). Read F-OP43-ML-FAMILY-FALSIFIED.txt (the 42-builtin ML-family deeper audit: 16
   deregistered, 26 survive-with-reason; the 3 largest [R]-survivors matmul_into/mat_add_inplace/dot kept on
