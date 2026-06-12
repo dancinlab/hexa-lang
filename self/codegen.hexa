@@ -9828,6 +9828,37 @@ fn _make_float_lit_node(val_str) {
     }
 }
 
+// Exact-text negation of a FloatLit's source text — toggles a leading "-"
+// without any lossy host round-trip.
+//
+// HEXA-0POD OP-37: the host `to_float`/`hxlcl_atof` (and rt_str_parse_float
+// in the self-host build) is a naive digit-accumulator, NOT a correctly-
+// rounded strtod — `to_float("0.254829592")` lands 1 ULP off the lexer's
+// own (exact) literal. So folding `-X` / `0.0 - X` via `-to_float(X.value)`
+// reintroduced a 1-ULP error even with full-precision serialization. The
+// negation of a literal is the SAME magnitude with a flipped sign, so we
+// preserve the operand's exact source text verbatim and just toggle the
+// sign — byte-EXACT, no parse, no re-serialize.
+fn _cf_negate_float_text(s: string) -> string {
+    if len(s) > 0 && s.char_at(0) == "-" { return s.substring(1, len(s)) }
+    return "-" + s
+}
+
+// Round-trippable float literal node for COMPTIME-FOLDED values.
+//
+// HEXA-0POD OP-37: the default `to_string(<float>)` renders "%g" (6 significant
+// digits) — round-trip-LOSSY (runtime_core.c:6268). When the const-folder
+// re-serialized a folded float through `to_string` (e.g. `0.0 - 0.254829592`
+// → "-0.25483"), the FloatLit it emitted into C carried only ~6 sig-digits, so
+// `hexa_float(-0.25483)` produced a value off the true literal by up to ~4.6e-6
+// (measured on the A&S erf coefficients). Serialize folded floats with
+// `format_float_sci(f, 17)` (== "%.17e") instead — round-trippable for ALL
+// magnitudes (subnormal..1e308, ±0), and the scientific form parses back via
+// `to_float`/strtod and emits verbatim into the C `hexa_float(<value>)` literal.
+fn _cf_float_node(f: float) {
+    return _make_float_lit_node(format_float_sci(f, 17))
+}
+
 fn _make_bool_lit_node(b) {
     let v = if b { "true" } else { "false" }
     return #{
@@ -9881,8 +9912,8 @@ fn comptime_eval(node) {
                 return _make_int_lit_node(to_string(i))
             }
             if v.kind == "FloatLit" {
-                let f = -to_float(v.value)
-                return _make_float_lit_node(to_string(f))
+                // Byte-exact: negate the literal text, no lossy parse/re-serialize.
+                return _make_float_lit_node(_cf_negate_float_text(v.value))
             }
             return ""
         }
@@ -9981,12 +10012,22 @@ fn comptime_eval(node) {
             // Float arithmetic: + - * / supported, % not.
             let lf = _cf_as_float(l)
             let rf = _cf_as_float(r)
-            if op == "+" { return _make_float_lit_node(to_string(lf + rf)) }
-            if op == "-" { return _make_float_lit_node(to_string(lf - rf)) }
-            if op == "*" { return _make_float_lit_node(to_string(lf * rf)) }
+            // Byte-EXACT additive identities — preserve the operand's source
+            // text verbatim instead of round-tripping through the lossy host
+            // parse/serialize (HEXA-0POD OP-37). `0.0 - X` is the dominant form
+            // (sign-flip idiom, e.g. A&S erf coefficients `let a = 0.0 - C`).
+            if op == "-" && lf == 0.0 && rk == "FloatLit" {
+                return _make_float_lit_node(_cf_negate_float_text(r.value))
+            }
+            if op == "-" && rf == 0.0 && lk == "FloatLit" { return l }
+            if op == "+" && lf == 0.0 && rk == "FloatLit" { return r }
+            if op == "+" && rf == 0.0 && lk == "FloatLit" { return l }
+            if op == "+" { return _cf_float_node(lf + rf) }
+            if op == "-" { return _cf_float_node(lf - rf) }
+            if op == "*" { return _cf_float_node(lf * rf) }
             if op == "/" {
                 if rf == 0.0 { return "" }
-                return _make_float_lit_node(to_string(lf / rf))
+                return _cf_float_node(lf / rf)
             }
             return ""
         }
@@ -10056,7 +10097,7 @@ fn comptime_eval(node) {
                 // Float abs — emit float literal; negative sign handled via subtract.
                 let fv = to_float(a.value)
                 let fr = if fv < 0.0 { 0.0 - fv } else { fv }
-                return _make_float_lit_node(to_string(fr))
+                return _cf_float_node(fr)
             }
             if fname == "sqrt" {
                 // sqrt of negatives undefined → silent skip.
@@ -10071,7 +10112,7 @@ fn comptime_eval(node) {
                     while s * s < iv2 && s < 10000 { s = s + 1 }
                     if s * s == iv2 {
                         // Still emit as float per runtime contract (hexa_sqrt → float).
-                        return _make_float_lit_node(to_string(to_float(to_string(s))))
+                        return _cf_float_node(to_float(to_string(s)))
                     }
                     return ""
                 }
@@ -10109,7 +10150,7 @@ fn comptime_eval(node) {
             let f2 = _cf_as_float(a2)
             let pickf = if fname == "min" { f1 < f2 } else { f1 > f2 }
             let outf = if pickf { f1 } else { f2 }
-            return _make_float_lit_node(to_string(outf))
+            return _cf_float_node(outf)
         }
         return ""
     }
