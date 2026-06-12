@@ -1,0 +1,213 @@
+// HEXA Standard Library — qforge/molscf/md_shell
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE MOLSCF front-end brick 7/N — SPHERICAL-HARMONIC SHELL assembly on top of
+// the md_integrals Cartesian primitive engine. Round-4 fed s+p shells straight
+// through as Cartesian AOs (p: px,py,pz ≡ the 3 spherical p, no contamination).
+// d (and higher) need the Cartesian→spherical contraction: a Cartesian d shell has
+// SIX components (xx,yy,zz,xy,xz,yz) but a pure spherical d has only FIVE — the
+// sixth combination (xx+yy+zz) ∝ r² is an s-CONTAMINANT and must be projected out.
+//
+// ── the generalized AO descriptor (d4-generic — no per-L branch) ──────────────
+//   An AO here is ONE center plus a flat list of (lx,ly,lz, alpha, coeff) TERMS.
+//   This single shape subsumes BOTH the radial primitive contraction (several
+//   exponents, one Cartesian power) AND the Cartesian→spherical angular mix
+//   (several Cartesian powers, one exponent). A spherical d_{x²−y²} built on a
+//   contracted radial set is just the outer product flattened into the term list.
+//   Every AO — s, p, d, f, … — traverses the SAME three assembly fns below; the
+//   SCF (rhf_scf) is UNTOUCHED. add a shell ⇒ add terms, never a code path (d4).
+//
+// ── per-AO self-normalization (handles the angular-mix norm) ──────────────────
+//   md_norm_prim normalizes each individual Cartesian primitive (so ⟨xy|xy⟩=1),
+//   but a CONTRACTED / angular-MIXED AO is not unit-normalized by construction.
+//   md_ao_norm divides by √⟨AO|AO⟩ so every basis function is unit self-overlap —
+//   exactly what a standard basis library ships. This makes the spherical-d energy
+//   INVARIANT to the harmonic's overall scale convention (any orthonormal basis of
+//   the pure-d subspace yields the same SCF energy), so we need not match a given
+//   code's internal c2s normalization byte-for-byte — only span the right subspace.
+//
+// ── real solid harmonics (HJO Table 6.3; "Modern Quantum Chemistry" convention) ─
+//   d_{z²}    ∝  2zz − xx − yy        (m=0)
+//   d_{xz}    ∝  xz                   (m=+1)
+//   d_{yz}    ∝  yz                   (m=−1)
+//   d_{x²−y²} ∝  xx − yy              (m=+2)
+//   d_{xy}    ∝  xy                   (m=−2)
+//   Each is ORTHOGONAL to the s-contaminant (xx+yy+zz) — verified in the gate to
+//   machine precision. f (10 Cartesian → 7 spherical) is the same construction and
+//   is named for round-6 (HONEST d6: this brick ships d sealed, f deferred clean).
+//
+// reuse (d3·d19): the per-primitive integrals (md_overlap_prim · md_kinetic_prim ·
+//   md_nuclear_prim · md_eri_prim · md_norm_prim) come UNCHANGED from md_integrals;
+//   this brick only contracts/combines them. No new integral or transcendental.
+
+use "stdlib/qforge/molscf/md_integrals"
+
+// ════════════════════════════════════════════════════════════════════════════
+//   generalized AO = { center C[3], terms[k] = (lx,ly,lz, alpha, coeff) }
+//   Encoded as parallel flat arrays so a basis is a plain list of these records.
+//   pow : [k][3] Cartesian powers · exp : [k] exponents · coef : [k] coefficients.
+// ════════════════════════════════════════════════════════════════════════════
+
+// Overlap of two generalized AOs (UN-self-normalized — the raw contracted sum).
+//   Σ_{ki,kj} c_i c_j · N(prim_i) N(prim_j) · ⟨prim_i|prim_j⟩.
+pub fn md_ao_overlap_raw(
+    powA: [[int]], expA: [float], coA: [float], A: [float],
+    powB: [[int]], expB: [float], coB: [float], B: [float]
+) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < len(expA) {
+        let ni = md_norm_prim(powA[i], expA[i])
+        let mut j = 0
+        while j < len(expB) {
+            let nj = md_norm_prim(powB[j], expB[j])
+            s = s + coA[i] * coB[j] * ni * nj
+                  * md_overlap_prim(powA[i], expA[i], A, powB[j], expB[j], B)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return s
+}
+
+// Self-normalization factor 1/√⟨AO|AO⟩ for one generalized AO.
+pub fn md_ao_norm(pow: [[int]], exps: [float], coef: [float], C: [float]) -> float {
+    let s = md_ao_overlap_raw(pow, exps, coef, C, pow, exps, coef, C)
+    if s <= 0.0 { return 0.0 }
+    return 1.0 / sqrt(s)
+}
+
+// Kinetic of two generalized AOs (raw, before self-norm).
+pub fn md_ao_kinetic_raw(
+    powA: [[int]], expA: [float], coA: [float], A: [float],
+    powB: [[int]], expB: [float], coB: [float], B: [float]
+) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < len(expA) {
+        let ni = md_norm_prim(powA[i], expA[i])
+        let mut j = 0
+        while j < len(expB) {
+            let nj = md_norm_prim(powB[j], expB[j])
+            s = s + coA[i] * coB[j] * ni * nj
+                  * md_kinetic_prim(powA[i], expA[i], A, powB[j], expB[j], B)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return s
+}
+
+// Nuclear attraction (single nucleus Z@Cn) of two generalized AOs (raw).
+pub fn md_ao_nuclear_raw(
+    powA: [[int]], expA: [float], coA: [float], A: [float],
+    powB: [[int]], expB: [float], coB: [float], B: [float],
+    z: float, Cn: [float]
+) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < len(expA) {
+        let ni = md_norm_prim(powA[i], expA[i])
+        let mut j = 0
+        while j < len(expB) {
+            let nj = md_norm_prim(powB[j], expB[j])
+            s = s + coA[i] * coB[j] * ni * nj
+                  * md_nuclear_prim(powA[i], expA[i], A, powB[j], expB[j], B, z, Cn)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return s
+}
+
+// Two-electron (ab|cd) of four generalized AOs (raw, before self-norm).
+pub fn md_ao_eri_raw(
+    powA: [[int]], expA: [float], coA: [float], A: [float],
+    powB: [[int]], expB: [float], coB: [float], B: [float],
+    powC: [[int]], expC: [float], coC: [float], C: [float],
+    powD: [[int]], expD: [float], coD: [float], D: [float]
+) -> float {
+    let mut v = 0.0
+    let mut i = 0
+    while i < len(expA) {
+        let ni = md_norm_prim(powA[i], expA[i])
+        let mut j = 0
+        while j < len(expB) {
+            let nj = md_norm_prim(powB[j], expB[j])
+            let mut k = 0
+            while k < len(expC) {
+                let nk = md_norm_prim(powC[k], expC[k])
+                let mut l = 0
+                while l < len(expD) {
+                    let nl = md_norm_prim(powD[l], expD[l])
+                    let w = coA[i] * coB[j] * coC[k] * coD[l] * ni * nj * nk * nl
+                    v = v + w * md_eri_prim(
+                        powA[i], expA[i], A, powB[j], expB[j], B,
+                        powC[k], expC[k], C, powD[l], expD[l], D)
+                    l = l + 1
+                }
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return v
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   spherical-d shell builder — expand 1 radial contraction × 5 harmonics into
+//   five generalized AOs (each = radial-terms ⊗ harmonic-Cartesian-mix).
+// ════════════════════════════════════════════════════════════════════════════
+
+// The 6 Cartesian-d monomial powers, in the fixed order (xx,yy,zz,xy,xz,yz).
+fn _md_cart_d() -> [[int]] {
+    return [[2,0,0],[0,2,0],[0,0,2],[1,1,0],[1,0,1],[0,1,1]]
+}
+
+// Monomial coefficients of the 5 real solid-harmonic d's over (xx,yy,zz,xy,xz,yz).
+//   row 0 d_{z²}=2zz−xx−yy · 1 d_{xz}=xz · 2 d_{yz}=yz · 3 d_{x²−y²}=xx−yy · 4 d_{xy}=xy
+fn _md_dharm() -> [[float]] {
+    return [
+        [0.0 - 1.0, 0.0 - 1.0, 2.0, 0.0, 0.0, 0.0],   // d_z²
+        [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],               // d_xz
+        [0.0, 0.0, 0.0, 0.0, 0.0, 1.0],               // d_yz
+        [1.0, 0.0 - 1.0, 0.0, 0.0, 0.0, 0.0],         // d_x²−y²
+        [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]                // d_xy
+    ]
+}
+
+// Build the m-th (0..4) spherical-d AO term list from ONE radial contraction.
+//   radExp[r], radCoef[r] = the (possibly contracted) radial primitive set.
+//   Returns [pow ([T][3]), exps ([T]), coef ([T])] with T = 6·R terms: each
+//   Cartesian component × radial primitive, coefficient = harmonic_c × radCoef ×
+//   (1/norm of that Cartesian prim) so the underlying function is the pure
+//   harmonic regardless of the per-Cartesian md_norm_prim weighting. The caller
+//   then applies md_ao_norm for unit self-overlap.
+pub fn md_dshell_ao(m: int, radExp: [float], radCoef: [float]) -> [any] {
+    let cart = _md_cart_d()
+    let harm = _md_dharm()
+    let hc = harm[m]
+    let mut pow = []
+    let mut exps = []
+    let mut coef = []
+    let mut k = 0
+    while k < 6 {
+        if hc[k] != 0.0 {
+            let mut r = 0
+            while r < len(radExp) {
+                // divide by the Cartesian prim norm so the angular coefficient acts
+                // on the bare monomial (md_norm_prim is re-applied inside the raw fns).
+                let nprim = md_norm_prim(cart[k], radExp[r])
+                pow.push(cart[k])
+                exps.push(radExp[r])
+                coef.push(hc[k] * radCoef[r] / nprim)
+                r = r + 1
+            }
+        }
+        k = k + 1
+    }
+    return [pow, exps, coef]
+}
