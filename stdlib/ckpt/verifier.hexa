@@ -192,7 +192,12 @@ pub fn verify_pcc(path: string) {
 
     // ── 5. CERT block (delegate signature logic to meta2_validator) ──────
     let cert_bytes = bytes_slice(buf, header_end, cert_end)
-    let cert_json = bytes_to_str(cert_bytes)
+    // CERT block is on-disk UTF-8 JSON: raw byte buffer -> string unchanged via
+    // the registered codegen builtin bytes_to_str_raw. The ckpt/format
+    // bytes_to_str does to_string(from_char_code(b & 0xFF)) per byte, which
+    // re-UTF-8-encodes every byte >=0x80 (OP-79 mojibake: any non-ASCII cert
+    // field — issuer/reason — would be double-encoded and fail to parse).
+    let cert_json = bytes_to_str_raw(cert_bytes)
     // parse — any parse error → ERR_CERT_SIG_INVALID
     let cert = parse_cert_from_string(cert_json)
     if has_key(cert, "_parse_error") {
