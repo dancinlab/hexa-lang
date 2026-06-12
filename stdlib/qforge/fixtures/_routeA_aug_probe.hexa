@@ -1,0 +1,17 @@
+use "stdlib/qforge/upf_aug"
+
+fn main() {
+    let path = "/Users/mini/dancinlab/demiurge/exports/rtsc/decks/Li2MgH16/pseudo/H.pbe-rrkjus_psl.1.0.0.UPF"
+    let u = upf_us_parse(path)
+    println("us.ok=" + to_string(u.ok) + " is_us=" + to_string(u.is_us))
+    println("nproj=" + to_string(u.nproj) + " mesh=" + to_string(len(u.r)) + " zval=" + to_string(u.z_valence))
+    println("ndij=" + to_string(len(u.dij)) + " nbeta_flat=" + to_string(len(u.betas)))
+    let a = upf_aug_parse(path, u.r, u.rab, u.nproj)
+    println("aug.ok=" + to_string(a.ok) + " is_aug=" + to_string(a.is_aug))
+    println("note=" + a.note)
+    let mut i = 0
+    while i < u.nproj * u.nproj {
+        println("q_ij[" + to_string(i) + "]=" + to_string(a.qij0[i]))
+        i = i + 1
+    }
+}
