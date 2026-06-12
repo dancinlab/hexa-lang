@@ -76,9 +76,35 @@ fn main() {
     check_exact("wrap_pi(-3π)   == +π",   wrap_pi(-3.0 * p), p)
 
     // ── idempotence: wrap_pi(wrap_pi(x)) = wrap_pi(x) ───────────────
-    // Any output is already in (−π, π], so re-wrapping is a no-op.
+    // Any output is already in [−π, π], so re-wrapping is a no-op.
     let r = wrap_pi(2.7 * p)
     check_exact("wrap_pi idempotent on output", wrap_pi(r), r)
+
+    // ── range contract: output ∈ [−π, π] CLOSED (both boundaries) ────
+    // Locks the corrected surface doc: the range is the CLOSED interval
+    // [−π, π] (NOT half-open (−π, π]); −π is a reachable output and is
+    // preserved when supplied as input. A sweep over a full revolution
+    // at irrational step asserts every output stays within bounds, and
+    // an explicit −π membership check pins the lower boundary.
+    let mut k = 0
+    let mut all_in_range = true
+    while k < 400 {
+        // step ≈ 0.0157·2π·… — an irrational-ish stride across many
+        // revolutions, both signs, never landing only on grid points.
+        let x = (to_float(k) - 200.0) * 0.137 * p
+        let w = wrap_pi(x)
+        if w < 0.0 - p || w > p { all_in_range = false }
+        k = k + 1
+    }
+    total_count = total_count + 1
+    if all_in_range {
+        pass_count = pass_count + 1
+    } else {
+        if failed_name == "" { failed_name = "range [−π,π] sweep" }
+        println("FAIL range [−π,π] sweep — an output escaped the closed bound")
+    }
+    // −π is in the codomain (half-open (−π,π] would exclude it).
+    check_exact("wrap_pi(−π) ∈ codomain (closed [−π,π])", wrap_pi(0.0 - p), 0.0 - p)
 
     println("PASS " + to_string(pass_count) + "/" + to_string(total_count))
     if failed_name != "" {

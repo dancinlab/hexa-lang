@@ -10,13 +10,18 @@
 // the same +π-boundary convention.
 //
 // Surface:
-//   pub fn wrap_pi(x: float) -> float    // (−π, π]
+//   pub fn wrap_pi(x: float) -> float    // [−π, π]
 //
 // Convention:
-//   Maps any real x to the unique representative in (−π, π], i.e. +π
-//   stays at +π (NOT at −π). This matches Python `fmod`-based angle
-//   normalization (used by Skyfield, SciPy, pvlib, …) so cross-language
-//   parity tests don't false-flag at the boundary.
+//   Maps any real x into the closed interval [−π, π], preserving BOTH
+//   boundaries: a literal +π input returns +π and a literal −π input
+//   returns −π (the boundary value is multi-valued and selected by the
+//   input's sign — interior outputs all fall in the open (−π, π)). This
+//   matches Python `fmod`-based angle normalization (used by Skyfield,
+//   SciPy, pvlib, …) so cross-language parity tests don't false-flag at
+//   the boundary. NOTE: the convenient floored-modulo form would instead
+//   collapse −π → +π (half-open (−π, π]); this primitive does NOT — see
+//   the fast-path guard below and the wrap_pi(−π) == −π self-test.
 //
 // The natural `x − 2π·floor((x+π)/2π)` formulation would map +π → −π;
 // we instead reduce to [0, 2π) and shift only if `> π` (strict
