@@ -20,8 +20,17 @@
 - [ ] **round-2 ② 2-terminal NEGF transmission** — T(E)=Tr[ΓL G^r ΓR G^a], 1D TB chain +
       반무한 lead 자기에너지 Σ(E); anchor = G(E) → N·G₀ 양자화 + Fisher-Lee↔mode-count
       bridge (NOVEL 가교 live).
-- [ ] **round-2 ③ SCF-fed band hook** — band front-end 을 수렴된 `scf_pw` 포텐셜에 배선
-      (마일스톤의 '전자구조 재사용') · 작은 real cell xval.
+- [x] **round-3 ③ SCF-fed band hook (g5 22/22 PASS)** — `stdlib/qforge/chip/band_scf.hexa`
+      + selftest. ε_n(k)=eig[H(k)], H(k)=T(k)+V: T(k)=½|k+G|² 는 SCF 코어의 REAL
+      `qforge_kinetic_diag` brick (d19 — 밴드/SCF 가 같은 운동에너지 연산자 공유), V 는
+      평면파 Fourier 포텐셜 V_{G,G'}=V(G−G') (assembler.hexa 의 V_ext/V_scr 구조; d4 —
+      empty-lattice·단일 Bragg shell·수렴 scf_pw V_scr 모두 한 경로). 대각화 = generic
+      `eigh` (d19 — round-1 diatomic gap/L1/Davidson 공유). g5: (A) **자유전자 회복** ε₀(k)=½k²
+      (empty-lattice, V≡0) + zone-fold {½|k+G|²} · (B) **Bragg 갭열림** gap→2|V_g| (weak-V
+      극한, ratio 0.975→0.99998 as V_g→0; finite-V 는 2nd-order 로 < 2|V_g|, basis-수렴) ·
+      (C) R2 DOS 일관 (band-edge dε/dk→0 van-Hove + 갭내 DOS=0) · (D) Hermiticity + V(0)
+      uniform shift. HONEST(d6): 운동에너지=실 SCF brick (배선 LIVE), 포텐셜=해석 Fourier 극한
+      (empty+Bragg) — 수렴 real-cell scf_pw V_scr 는 데이터 swap (round-4). PR #<TBD>.
 - [ ] **round-2 ④ phonon-Landauer κ** — DFPT ω(q)(`dfpt`·`realcell_phonon`) 를 포논
       transmission 으로 재사용 · ballistic κ → N·g₀ 저온 floor anchor.
 - [ ] **verify-adapter (chip=TCAD)** — 밴드갭/effective-mass/컨덕턴스/κ 를 측정·TCAD ref
