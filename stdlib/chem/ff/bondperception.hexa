@@ -1,0 +1,96 @@
+// stdlib/chem/ff/bondperception.hexa — coordinate → bond-graph perception.
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE-BIO round-13. topology.hexa (R12) turns a bond GRAPH into GAFF atom
+// types, but it requires the connectivity (the bonds) as input. A raw structure
+// file (PDB / xyz / a docked pose) only carries ELEMENTS + 3D COORDINATES — no
+// explicit bonds. This module perceives the bond graph from geometry, completing
+// the front-end so a raw coordinate set flows all the way to a free energy:
+//
+//   coords+elements ──▶ [THIS] ──▶ bonds ──▶ topology.hexa ──▶ amber.hexa ──▶ …
+//
+// Method: two atoms i,j are bonded iff their interatomic distance is within the
+// sum of their covalent radii plus a tolerance:
+//   d(i,j) <= r_cov(i) + r_cov(j) + tol      (standard distance-based perception)
+//
+// References:
+//   Cordero, B. et al. (2008). Covalent radii revisited. Dalton Trans. 2832.
+//     (single-bond covalent radii used here.)
+//   Standard tolerance 0.4 Å is the common cutoff slack (e.g. OpenBabel/RDKit
+//     distance-based connectivity perception).
+//
+// ── SCOPE (honest, d6) ────────────────────────────────────────────────
+// Distance-based perception is the standard first pass but is NOT bond-order
+// aware: it returns an unweighted connectivity graph (single edges). Double /
+// triple bonds, aromaticity and formal charge are NOT inferred here — the
+// downstream typing (topology.hexa) uses a degree proxy for hybridisation. The
+// PROVEN claim: real Cartesian coordinates yield the correct connectivity for
+// the demo molecules, and that graph feeds topology.hexa → amber.hexa intact.
+//
+// d4-generic: the covalent-radius table is DATA (a dict keyed by element); the
+// perception loop never branches on a molecule or atom name.
+//
+// Public surface:
+//   pub fn default_radii()                    -> dict   // element → r_cov (Å)
+//   pub fn covalent_radius(radii, el)         -> float
+//   pub fn distance(coords, i, j)             -> float  // Euclidean, coords[k]={x,y,z}
+//   pub fn perceive_bonds(atoms, coords, radii, tol) -> array // [{i,j}, …]
+
+// ── covalent-radius table (Cordero 2008, single-bond, Å) ────────────────
+// Subset covering the demo organics; add an element = one dict entry (d4).
+
+pub fn default_radii() -> dict {
+    return #{
+        "H": 0.31,
+        "C": 0.76,
+        "N": 0.71,
+        "O": 0.66,
+        "F": 0.57,
+        "P": 1.07,
+        "S": 1.05,
+        "Cl": 1.02
+    }
+}
+
+pub fn covalent_radius(radii: dict, el: string) -> float {
+    return radii[el]
+}
+
+// ── geometry ────────────────────────────────────────────────────────────
+// coords is an array of #{"x","y","z"} (one per atom, same index as `atoms`).
+
+pub fn distance(coords: array, i: int, j: int) -> float {
+    let a = coords[i]
+    let b = coords[j]
+    let dx = a["x"] - b["x"]
+    let dy = a["y"] - b["y"]
+    let dz = a["z"] - b["z"]
+    return sqrt(dx * dx + dy * dy + dz * dz)
+}
+
+// ── distance-based bond perception ──────────────────────────────────────
+// Returns an array of undirected #{"i","j"} edges (i < j) for every atom pair
+// whose separation is within r_cov(i) + r_cov(j) + tol. Generic over the
+// molecule; the radius table and tolerance are parameters.
+
+pub fn perceive_bonds(atoms: array, coords: array, radii: dict, tol: float) -> array {
+    let mut bonds = []
+    let n = len(atoms)
+    let mut i = 0
+    while i < n {
+        let ri = covalent_radius(radii, atoms[i])
+        let mut j = i + 1
+        while j < n {
+            let rj = covalent_radius(radii, atoms[j])
+            let cutoff = ri + rj + tol
+            if distance(coords, i, j) <= cutoff {
+                bonds = bonds.push(#{ "i": i, "j": j })
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return bonds
+}
