@@ -20,8 +20,10 @@ Fock 빌드, (3) 비직교 일반화 고유문제 `FC=SCε`. 모든 g5 anchor �
 - [x] round-1 설계 — `drafts/qforge-molscf-round1-design.md` (적분→RHF→force 로드맵 + 공통코어 매핑)
 - [x] brick 1 — s-type Gaussian 1-전자 적분(중첩 S · 운동 T) 닫힌형 + g5 PASS
       (STO-3G H₂ S_AB@1.4bohr=0.6593182001 · single-prim exp(−0.98) · self=1 · 운동 self=3μ)
-- [ ] brick 2 — 핵인력 V_ab (Boys F₀ via erf_fn · Szabo A.33)
-- [ ] brick 3 — 2-전자 (ab|cd) (Boys F₀ · 4-index s-only · Szabo A.41)
+- [x] brick 2 — 핵인력 V_ab (Boys F₀ via erf_fn · Szabo A.33) g5 PASS
+      (self V=−2Z√(2a/π) · STO-3G H single-center V=−1.2266137219 · far nuc→−Z/R)
+- [x] brick 3 — 2-전자 (ab|cd) (Boys F₀ · 4-index s-only · Szabo A.41) g5 PASS
+      (same-center (aa|aa)=2√(a/π) · 8-fold symmetry · 두 cloud 멀어지면 (aa|bb)→1/R)
 - [ ] brick 4 — Fock 빌드 F = H_core + G[P]
 - [ ] brick 5 — RHF SCF 루프 FC=SCε (eigh · g5: H₂/STO-3G E≈−1.1167 Ha @1.4bohr)
 - [ ] brick 6 — 분자 force ∇_R E (autograd through brick 1-5 · NOVEL lane)
