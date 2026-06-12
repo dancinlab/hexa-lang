@@ -1,0 +1,106 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  op39_constfold_byteeq.hexa — HEXA-0POD OP-39 float const-fold REGRESSION
+//  tripwire. SELF-CONTAINED (no `use` — runs via `hexa run` on ANY hexa host,
+//  checkout-independent), CPU-only, $0, 0-GPU.
+//
+//  PURPOSE — lock in the OP-37 (#3069) + OP-37b (#3073) compile-time float
+//  const-fold fixes so they can NEVER silently regress. Those PRs fixed REAL
+//  SILENT codegen bugs (no crash, just subtly wrong float bytes):
+//    OP-37  — `let a = 0.0 - <float literal>` was const-folded through `%g`
+//             (6-sig-digit lossy serialize) → corrupt low mantissa, max|Δ|=
+//             2.027e-6 on the A&S erf coefficients. Fixed by preserving the
+//             operand's EXACT source text for the additive-identity idioms
+//             (0.0 - X, X - 0.0, 0.0 + X, X + 0.0) — BYTE-EXACT.
+//    OP-37b — computed folds (`<lit> * <lit>`, `<lit> + <lit>`) re-parsed
+//             operands via the naive hxlcl_atof accumulator (≤1 ULP off, MAX 3
+//             ULP compounded). Fixed by routing the operand parse through the
+//             correctly-rounded strtod path (str.parse_float()) — operands now
+//             byte-exact; computed products at MAX 1 ULP (host comptime rt_mul).
+//
+//  HOW IT WORKS — the IEEE-754 bit pattern of a double is PORTABLE: identical
+//  on every arch/OS iff the float bits are. So a byte-eq assertion on the
+//  emitted const-fold bits is a valid MACHINE-INDEPENDENT tripwire.
+//
+//  TRIGGERING THE FOLDER (decisive) — the bug lives in self/codegen.hexa's
+//  comptime_eval const-folder, which fires on a plain immutable `let` binding
+//  (codegen.hexa:3105 `_let_folded = comptime_eval(node.left)`): the folded
+//  float is registered as a comptime-const and EVERY downstream reference
+//  inlines the FOLDED literal text (via _cf_negate_float_text / _cf_float_node).
+//  So each case here is `let nN = <fold>` and then USED via _bits(label, nN) —
+//  the use-site inlines the comptime-folded literal, exercising exactly the
+//  serialize/parse path OP-37/OP-37b fixed. (A bare inline arg like
+//  _bits(L, 0.0 - X) is NOT registered and gets handed to clang full-precision,
+//  which would mask the bug — so we deliberately bind-then-reference.)
+//
+//  This oracle prints one `*-bits` line per fold (the 8 IEEE-754 LE bytes
+//  decoded back to a signed-64 int); tool/op39_constfold_gate.sh asserts each
+//  equals the recorded golden. Any drift = a REAL const-fold regression.
+//
+//  GOLDENS — the additive-identity (a) cases are python struct.pack('<d', ...)
+//  ground truth (byte-EXACT by construction, max|Δ|=0). The computed (b) cases
+//  are the bits the FIXED compiler produces; within ≤1 ULP of python ground
+//  truth (OP-37b: operands byte-exact, product MAX 1 ULP via host rt_mul) — the
+//  gate locks the compiler's correct output so a re-broken parse/serialize
+//  drifts away from it.
+// ════════════════════════════════════════════════════════════════════════════
+
+// Decode 8 IEEE-754 little-endian bytes → signed-64 int (the raw bit pattern,
+// matching python struct.unpack('<q', struct.pack('<d', x))). Inlined for
+// self-containment (no `use stdlib/core/bytes`). f64_to_bytes_le is a builtin.
+fn f64_bits_le(f: float) -> int {
+    let b = f64_to_bytes_le(f)
+    let mut u = 0
+    let mut i = 7
+    while i >= 0 {
+        u = u * 256 + b[i]
+        i = i - 1
+    }
+    return u
+}
+
+// Print one labeled bits line. f is a comptime-folded const passed by reference;
+// the codegen inlines the folded literal at this call site.
+fn _bits(label: string, f: float) {
+    println("  " + label + " = " + to_string(f64_bits_le(f)))
+}
+
+fn main() {
+    println("op39_constfold_byteeq — OP-39 float const-fold byte-eq tripwire")
+    println("locks OP-37 (#3069) negation idiom + OP-37b (#3073) computed folds")
+
+    // ── (a) NEGATION / additive-identity idioms (OP-37) — full A&S erf set.
+    // `let nN = 0.0 - X` folds + registers a comptime-const; the _bits use-site
+    // inlines the folded literal. Must be the operand sign-flipped at the SAME
+    // magnitude (exact source text preserved) → byte-EXACT vs python ground.
+    let n1 = 0.0 - 0.254829592
+    let n2 = 0.0 - 0.284496736
+    let n3 = 0.0 - 1.421413741
+    let n4 = 0.0 - 1.453152027
+    let n5 = 0.0 - 1.061405429
+    let n6 = 0.0 - 0.3275911
+    _bits("NEG1 (0.0 - 0.254829592) -bits", n1)
+    _bits("NEG2 (0.0 - 0.284496736) -bits", n2)
+    _bits("NEG3 (0.0 - 1.421413741) -bits", n3)
+    _bits("NEG4 (0.0 - 1.453152027) -bits", n4)
+    _bits("NEG5 (0.0 - 1.061405429) -bits", n5)
+    _bits("NEG6 (0.0 - 0.3275911)   -bits", n6)
+
+    // The other three additive-identity forms (value unchanged → same bits).
+    let s0 = 1.421413741 - 0.0
+    let a0a = 0.0 + 1.421413741
+    let a0b = 1.421413741 + 0.0
+    _bits("SUB0 (1.421413741 - 0.0) -bits", s0)
+    _bits("ADD0a (0.0 + 1.421413741) -bits", a0a)
+    _bits("ADD0b (1.421413741 + 0.0) -bits", a0b)
+
+    // ── (b) COMPUTED const-folds (OP-37b) — operands re-parsed (correctly-
+    // rounded strtod), then arithmetic at comptime. Locks the host fold output.
+    let m1 = 0.254829592 * 0.284496736
+    let m2 = 1.421413741 * 0.5
+    let d1 = 0.1 + 0.2
+    let q1 = 1.0 / 3.0
+    _bits("MUL1 (0.254829592 * 0.284496736) -bits", m1)
+    _bits("MUL2 (1.421413741 * 0.5)         -bits", m2)
+    _bits("ADD1 (0.1 + 0.2)                 -bits", d1)
+    _bits("DIV1 (1.0 / 3.0)                 -bits", q1)
+}
