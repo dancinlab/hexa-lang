@@ -161,6 +161,27 @@ loop targets what the consumer card + code can carry.
   validated formatter patch + unblock recipe are in the verdict (drop-in for the eventual SELFHOST-NEXT promote;
   3rd instance of the frozen-seed-promote dependency after OP-39b/OP-40). Verdict
   .verdicts/hexa-0pod/F-OP44-VSNPRINTF-CORRECT-ROUND.txt. $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+  → CONSOLIDATED (OP-46) into the SELFHOST-NEXT promote bundle: docs/selfhost-next-constfold-promote.md §2(c)/§3.
+
+<!-- ANCHOR:OP-46-PROMOTE-BUNDLE-SPEC (unique anchor — three landed source fixes (OP-37b host-atof strtod parse · OP-40 bit-exact hex-float const-fold serialize · OP-44 libc-snprintf float-formatter delegation) are all correct in tracked source / proven-as-recipe but BLOCKED on the SAME frozen-seed-promote dependency: CI's toolchain bootstraps from the IMMUTABLE 151c52c8 anchor that pre-dates them, so each sat as a scattered "out of 0-pod scope" DEFER + OP-39's gate stays advisory (OP-39b). OP-46 CONSOLIDATES the four into ONE SELFHOST-NEXT work item — a single runbook spec + one unified deferred registration — so the next build-host session executes them as one promote bundle, not four scattered re-derivations. DOCS-ONLY: no seed regen, no build-host work, no codegen/runtime/.tape edits) -->
+- [x] **OP-46 — SELFHOST-NEXT const-fold+atof+vsnprintf seed-promote bundle: 3 scattered DEFERs (OP-37b/40/44) + the OP-39b gate-flip CONSOLIDATED into ONE runbook spec + one deferred registration** —
+  🟢 GREEN (DOCS/SPEC, 0-pod). The three float-correctness fixes share ONE blocker (the frozen-seed re-pin:
+  build_selfhost.sh ladder + gen3→gen4 byte-eq + FROZEN_SEED_REF bump), so OP-46 turns 4 scattered "out of
+  0-pod scope" notes into 1 executable build-host work item. DELIVERABLE: **docs/selfhost-next-constfold-promote.md**
+  — the single runbook: (1) the promote MECHANISM (CI's seed = gitignored hexa_cc.c+runtime.c restored from the
+  IMMUTABLE 151c52c8 .c-graduation anchor; re-pin = wholesale anchor refresh, 27,068-line drift measured by
+  OP-39b); (2) the 3 source fixes + exact codegen.hexa/runtime.c sites + golden changes [OP-37b _cf_as_float
+  strtod parse → operands byte-exact · OP-40 _cf_float_node bit-exact hex-float serialize → MAX 0 ULP · OP-44
+  hxlcl_vsnprintf float-branch libc-snprintf delegation → 62.6% mis-round/≤5 ULP → 0/0]; (3) the ONE promote
+  procedure (apply OP-44 to runtime → regen seed → coherent anchor commit → build_selfhost.sh fixpoint+parity →
+  FROZEN_SEED_REF re-pin → ~91% float-string golden re-bake as its own PR); (4) post-promote cleanup (drop the 3
+  nobaseline-gate.yml :129/:193/:256 continue-on-error lines → OP-39 gate enforcing, per OP-39b); (5) per-fix
+  verification checklist (each oracle/gate green post-promote). REGISTERED: domain `## deferred` now opens with the
+  unified "SELFHOST-NEXT — const-fold+atof+vsnprintf seed-promote bundle (OP-37b/40/44/39b)" item pointing at the
+  spec; the OP-39b deferred note marked SUPERSEDED-by-bundle; the OP-44 milestone cross-links the runbook. The
+  individual verdicts (F-OP37B/F-OP40/F-OP44/F-OP39B) are KEPT — OP-46 only unifies the forward-pointer. NO seed
+  regen, NO build-host work (that IS the deferred item), NO codegen/runtime/.tape edits. Verdict
+  .verdicts/hexa-0pod/F-OP46-PROMOTE-BUNDLE-SPEC.txt. $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
 
 <!-- ANCHOR:OP-43-ML-FAMILY-FALSIFIED (unique anchor — OP-41 deferred ~101 non-optimizer falsified roster builtins conservatively. OP-43 takes the ML-FAMILY subset (conv/quant/activation/attention/array-ML cluster) and audits it ONE LAYER DEEPER with OP-41's exact per-builtin g5 method (AOT probe with CORRECT args + arg-shape-trap control + local-fn-shadow vs builtin distinction + dead/live caller classification) to either safely deregister the truly-dead or document precisely why each survives) -->
 - [x] **OP-43 — ML-family falsified-builtin deeper audit: 42-builtin sub-matrix (all 42 AOT-falsified); 16 truly-dead DEREGISTERED, 26 SURVIVE-WITH-REASON** —
@@ -1436,6 +1457,19 @@ loop targets what the consumer card + code can carry.
 
 ## deferred (0-pod follow-ups surfaced by the loop — self-feed)
 
+- **SELFHOST-NEXT — const-fold + atof + vsnprintf seed-promote bundle (OP-37b / OP-40 / OP-44 / OP-39b).**
+  → CONSOLIDATED 2026-06-12 (OP-46). THE SINGLE build-host work item that lands all three float-correctness
+  fixes + flips the OP-39 gate in ONE coherent promote, replacing the three scattered "out of 0-pod scope"
+  DEFERs below (they share ONE blocker: CI's toolchain is built from the IMMUTABLE frozen-seed anchor 151c52c8
+  that pre-dates all three fixes). RUNBOOK: **docs/selfhost-next-constfold-promote.md** — (a) the 3 source fixes
+  + their codegen.hexa/runtime.c sites + golden changes [OP-37b strtod operand parse · OP-40 bit-exact hex-float
+  const-fold serialize · OP-44 libc-snprintf float-formatter delegation], (b) the ONE promote procedure
+  (build_selfhost.sh ladder → cc-gen3.o==cc-gen4.o byte-eq → FROZEN_SEED_REF re-pin → ~91% float-string golden
+  re-bake), (c) post-promote cleanup (drop the 3 nobaseline-gate.yml continue-on-error lines → OP-39 gate
+  enforcing per OP-39b), (d) the per-fix verification checklist. Verdict F-OP46-PROMOTE-BUNDLE-SPEC.txt. NOT
+  0-pod: build-host self-host-anchor refresh (highest blast-radius op in the repo). The individual verdicts
+  (F-OP37B / F-OP40 / F-OP44 / F-OP39B) are KEPT; this is the unified forward-pointer.
+
 - **OP-39b — promote the OP-37/OP-37b float const-fold fix into the seed/deployed toolchain, then flip the
   OP-39 CI gate to ENFORCING.** → ADDRESSED 2026-06-12, 🟠 DEFERRED (promoted to a milestone above; verdict
   F-OP39B-SEED-PROMOTE-FLIP.txt). The deferral note's optimistic "re-emit via the marker-guarded channel"
@@ -1444,6 +1478,8 @@ loop targets what the consumer card + code can carry.
   27,068 lines of unrelated drift, validated by the ~3.5h build_selfhost.sh self-host ladder on a build host —
   out of 0-pod scope. The fix is PROVEN correct + fixpoint-stable + gate-PASSING locally ($0); the gate is left
   advisory (flipping now would red-gate CI). Unblock belongs to a SELFHOST-NEXT / build-host work item.
+  → SUPERSEDED by the SELFHOST-NEXT promote bundle above (OP-46): the gate-flip is step (c) of the unified
+  runbook (docs/selfhost-next-constfold-promote.md), not a standalone item.
 
 - **OP-2b — land the runtime.c hexa_forge_dispatch_matmul_t wrapper body + flip the trainer to the live
   transpose-elim call.** OP-2 landed the GPU kernel (_hx_cuda_farr_matmul_tn_gpu, cuBLAS OP_T), codegen

@@ -1,0 +1,129 @@
+F-OP46-PROMOTE-BUNDLE-SPEC — three landed source fixes (OP-37b host-atof, OP-40
+                          const-fold serialize, OP-44 runtime float formatter) are
+                          all BLOCKED on the SAME frozen-seed-promote dependency,
+                          so they sat as three scattered "out of 0-pod scope"
+                          DEFERs + OP-39's gate stayed advisory (OP-39b). OP-46
+                          CONSOLIDATES the four into ONE SELFHOST-NEXT work item:
+                          a single runbook spec + one unified deferred registration,
+                          so the next build-host session executes them as one
+                          promote bundle, not four scattered re-derivations.
+══════════════════════════════════════════════════════════════════════════════
+DATE: 2026-06-12 · HEXA-0POD OP-46 · 0-pod ($0, NO GPU, NO vast, NO pod) · DOCS/SPEC
+HOST: local arm64-macos (Darwin 25.5.0), CPU-only
+STATUS: GREEN — 🟢 a docs/spec consolidation. Three independently-verified float-
+        correctness fixes share ONE blocker (the frozen-seed re-pin); OP-46 turns
+        the 3+1 scattered DEFERs into 1 executable build-host runbook + 1 unified
+        deferred registration. No seed regen, no build-host work, no source/
+        runtime/.tape edit — the consolidation IS the deliverable.
+
+────────────────────────────────────────────────────────────────────────────
+THE PROBLEM (why these four were scattered)
+────────────────────────────────────────────────────────────────────────────
+OP-37b (F-OP37B-HOST-ATOF-CORRECT-ROUND): const-fold operand PARSE routed through
+  the naive hxlcl_atof → fixed to libc strtod (str.parse_float). Operands byte-
+  exact, MAX 3→1 ULP. CORRECT in tracked self/codegen.hexa; deploy DEFERRED.
+OP-40 (F-OP40-COMPTIME-MUL-ULP): const-fold SERIALIZE through the hand-rolled
+  %.17e → fixed to a bit-exact C99 hex-float literal (integer ops only). MAX 1→0
+  ULP, 16/125→0/125. CORRECT in tracked self/codegen.hexa; deploy DEFERRED.
+OP-44 (F-OP44-VSNPRINTF-CORRECT-ROUND): the runtime float formatter hxlcl_vsnprintf
+  %g/%e/%f is non-correctly-rounded for ALL runtime float printing (62.6% mis-round
+  %.17g, ≤5 ULP %.17e, 91.3% diverge from libc). Fix = libc-snprintf delegation,
+  PROVEN →0/0. But the formatter body lives ONLY in the gitignored frozen-seed
+  self/runtime.c → can't land tracked 0-pod. DEFERRED 🟠.
+OP-39b (F-OP39B-SEED-PROMOTE-FLIP): the OP-39 const-fold CI gate is advisory
+  (continue-on-error) because CI's seed pre-dates the fix. Flip requires the
+  promote. DEFERRED 🟠.
+
+Each verdict separately concluded: "needs the frozen-anchor re-pin (build_selfhost.sh
+ladder + gen3→gen4 byte-eq + FROZEN_SEED_REF bump) — out of 0-pod scope." That is
+the SAME blocker four times — so it should be ONE work item, not four.
+
+────────────────────────────────────────────────────────────────────────────
+THE PROMOTE MECHANISM (surveyed + confirmed, the consolidation's spine)
+────────────────────────────────────────────────────────────────────────────
+· self/native/hexa_cc.c (.gitignore:286) and self/runtime.c are GITIGNORED, absent
+  from HEAD. tool/restore_frozen_seeds restores them via
+  `git checkout 151c52c82502e93d01735c58b43b017d102fee63 -- <seed>`
+  (FROZEN_SEED_REF, line 40). tool/stage_prebuild_hexat clang-builds CI's ./hexa
+  from that frozen blob.
+· 151c52c8 is the IMMUTABLE .c-graduation parent (parent of 7906951c0 / #2065,
+  "tracked .c = 0"). You cannot edit a past commit.
+· "Promote into the seed" = re-pin FROZEN_SEED_REF to a NEW coherent anchor built
+  from current self/codegen.hexa (carries OP-37b + OP-40) + an OP-44-patched
+  self/runtime.c, proven by the ~3.5h build_selfhost.sh ladder to cc-gen3.o==
+  cc-gen4.o + parity, then bump FROZEN_SEED_REF (hardcoded in ~7 scripts:
+  restore_frozen_seeds, stage_resolve_runtime_a, SELFHOST_PROMOTE_RUNBOOK.md,
+  clm/build_clmprod_tf32_e2e.sh, …).
+· Magnitude (OP-39b measured): regen hexa_cc.c = 31,222 lines vs frozen 28,482 →
+  27,068-line drift. Wholesale anchor refresh, not a cherry-pick. Build-host work.
+
+────────────────────────────────────────────────────────────────────────────
+WHAT THE SPEC CONSOLIDATES (the single runbook)
+────────────────────────────────────────────────────────────────────────────
+docs/selfhost-next-constfold-promote.md — sections:
+  §0  Why one item not four (the shared blocker).
+  §1  The promote mechanism (frozen-seed anchor, re-pin, 27k-line drift).
+  §2  The 3 source fixes + exact sites + golden changes:
+        (a) OP-37b — self/codegen.hexa _cf_as_float strtod parse → operands byte-
+            exact (e.g. 0.254829592 → 4598262221740202622), MAX 3→1 ULP.
+        (b) OP-40 — self/codegen.hexa _cf_float_node/_cf_float_hexlit bit-exact
+            hex-float (0x1.<mant>p<exp>) → MAX 0 ULP, 0/125; locks the
+            tool/op39_constfold_gate.sh 13 goldens.
+        (c) OP-44 — self/runtime.c hxlcl_vsnprintf float-branch (:722) libc-snprintf
+            delegation (capture real snprintf above the :2095 #define) → 62.6%
+            mis-round/≤5 ULP → 0/0; cross-platform-deterministic (libc decimal is
+            unique). Does NOT churn the const-fold golden (OP-40 hex-floats it).
+  §3  The ONE promote procedure: apply OP-44 to runtime → regen seed → coherent
+      anchor commit → build_selfhost.sh cc-gen3.o==cc-gen4.o + parity → re-pin
+      FROZEN_SEED_REF → ~91% float-string golden re-bake as its OWN PR (blast radius).
+  §4  Post-promote cleanup: drop the 3 nobaseline-gate.yml :129/:193/:256
+      continue-on-error lines → OP-39 gate enforcing (per OP-39b).
+  §5  Per-fix verification checklist (each oracle/gate pre→post-promote).
+  §6  Scope boundary (build-host self-host-anchor refresh, highest blast radius).
+
+────────────────────────────────────────────────────────────────────────────
+WHERE REGISTERED (the unified forward-pointer)
+────────────────────────────────────────────────────────────────────────────
+· domains/HEXA-0POD.md `## deferred` now OPENS with ONE consolidated item:
+  "SELFHOST-NEXT — const-fold + atof + vsnprintf seed-promote bundle
+   (OP-37b / OP-40 / OP-44 / OP-39b)" → docs/selfhost-next-constfold-promote.md.
+· The OP-39b deferred note is KEPT but marked "SUPERSEDED by the SELFHOST-NEXT
+  promote bundle (OP-46): the gate-flip is step (c) of the unified runbook".
+· The OP-44 milestone block cross-links the runbook (§2(c)/§3).
+· OP-46 milestone [x] added to domains/HEXA-0POD.md; OP-46 block in .log.md.
+· The individual verdicts (F-OP37B / F-OP40 / F-OP44 / F-OP39B) are NOT deleted —
+  OP-46 only unifies the forward-pointer (per task constraint).
+
+────────────────────────────────────────────────────────────────────────────
+SCOPE DISCIPLINE (what OP-46 did NOT do)
+────────────────────────────────────────────────────────────────────────────
+DOCS-ONLY: one spec doc + domain registration. NO seed regen, NO build-host /
+build_selfhost.sh run (that IS the deferred item), NO codegen/runtime edit, NO
+.tape edit, NO .github workflow edit. Self-host fixpoint, gen3→gen4 byte-eq,
+miscompile-zero, determinism gates structurally UNTOUCHED (nothing in the
+toolchain changed). No red-gate risk.
+
+────────────────────────────────────────────────────────────────────────────
+TIER VERDICT (g5)
+────────────────────────────────────────────────────────────────────────────
+🟢 GREEN. Three landed-but-unobserved float-correctness fixes (OP-37b/40/44) plus
+the OP-39b gate-flip share ONE blocker (the frozen-seed re-pin). OP-46 consolidates
+them into a single executable SELFHOST-NEXT runbook (docs/selfhost-next-constfold-
+promote.md) + one unified `## deferred` registration, replacing/cross-linking the
+scattered DEFERs so the backlog shows one coherent build-host work item instead of
+four. The deliverable is the consolidated spec + registration; the actual promote
+remains correctly DEFERRED (build-host, out of 0-pod scope). Evidence = the spec
+doc + the domain diff (deferred head + OP-44 cross-link + OP-46 milestone/log).
+
+PROVENANCE
+  spec:     docs/selfhost-next-constfold-promote.md (the single build-host runbook)
+  consolidates: F-OP37B-HOST-ATOF-CORRECT-ROUND · F-OP40-COMPTIME-MUL-ULP ·
+            F-OP44-VSNPRINTF-CORRECT-ROUND · F-OP39B-SEED-PROMOTE-FLIP (kept;
+            forward-pointer unified, not deleted)
+  gate ctx: F-OP39-CONSTFOLD-CI-GATE.txt (the advisory gate the flip enforces)
+  mechanism: tool/restore_frozen_seeds (FROZEN_SEED_REF=151c52c8) ·
+            tool/SELFHOST_PROMOTE_RUNBOOK.md (build_selfhost.sh ladder, cc-gen3.o==
+            cc-gen4.o) · .github/workflows/nobaseline-gate.yml :129/:193/:256
+  registration: domains/HEXA-0POD.md `## deferred` (unified item) + OP-44 milestone
+            cross-link + OP-46 milestone [x] + domains/HEXA-0POD.log.md OP-46 block
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits · docs-only.
