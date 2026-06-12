@@ -126,6 +126,22 @@ loop targets what the consumer card + code can carry.
   legacy-ML builtin family, incl. slice/zeros/mean/cross_entropy used by the examples) — NOT sanctioned here,
   left as a follow-up candidate. Verdict .verdicts/hexa-0pod/F-OP33B-DEAD-LR-CLEANUP.txt.
 
+<!-- ANCHOR:OP-33C-DEAD-OPTIM-CLEANUP (unique anchor — the OP-33b HONEST §6 follow-up: stdlib/optim.hexa still held adam/safe_update wrapping adam_step/grad_clip_norm. OP-33c independently RE-VERIFIES deadness (g5, not trusted from OP-33b): adam_step → runtime defines only adamw_step (RFC 034, a different symbol) so codegen emits a call to an undeclared 'adam_step' → broken C; grad_clip_norm → no runtime impl AT ALL (undeclared identifier in generated C). Both wrappers are DEAD-FALSIFIED; their only callers are 2 already baseline-broken example files. Removes the wrappers + deregisters grad_clip_norm from the env.hexa roster (root-cause: no other live surface refs it). adam_step LEFT registered — 12+ other surfaces (self/ml/*) reference it, out of scope) -->
+- [x] **OP-33c — dead adam/safe_update wraps removed (falsified adam_step/grad_clip_norm); grad_clip_norm deregistered** —
+  GREEN ($0, CPU `hexa run`, NO GPU/vast/pod). DEADNESS RE-VERIFIED independently (g5): probe `adam_step(...)` →
+  clang `call to undeclared function 'adam_step'` (runtime has only `adamw_step`, RFC 034 — a DIFFERENT symbol);
+  probe `grad_clip_norm(...)` → `use of undeclared identifier 'grad_clip_norm'` (NO runtime impl at all). Both
+  wrappers DEAD-FALSIFIED. CALLER SWEEP: adam ← example/anima_mega_demo.hexa only; safe_update ← example/test_stdlib.hexa
+  only — BOTH examples_baseline.json exit_code=-1 (never-passed, array-dialect demos already broken on the same
+  falsified-ML family: randn/zeros/slice/...); zero LIVE callers. EXECUTED: adam+safe_update removed from
+  stdlib/optim.hexa (pointer comment → opt_adamw_step/opt_lr_warmup_cosine); grad_clip_norm DEREGISTERED from the
+  self/env.hexa roster (only non-roster refs were the 3 baseline-broken examples + the now-removed wrapper — no live
+  surface, so next compiler build rejects at hexa level instead of emitting broken C); the 2 example call sites got
+  NOTE pointer comments (faithful repoint impossible — array-dialect vs handle-dialect opt_adamw_step signature).
+  POST: stdlib/optim.hexa now BUILDS+RUNS clean (`[optim loaded]`, was: undeclared 'adam_step'); canonical flame
+  path unaffected (opt_lr_warmup_cosine 0.0005 ✓). adam_step LEFT registered (12+ self/ml/* surfaces ref it — out
+  of OP-33c scope; honest follow-up). Verdict .verdicts/hexa-0pod/F-OP33C-DEAD-OPTIM-CLEANUP.txt.
+
 <!-- ANCHOR:OP-26C-READINESS-V2 (unique anchor — OP-26b (#3035) wrote docs/flame-machine-independent-SUBMISSION-READINESS.md against the round-5 evidence (1 arch · 4 env · gap G2 open · G1 input-side unproven). Rounds 6-8 grew the evidence: G2 CLOSED ×3-over (OP-29 decoder block #3045 · OP-31 MLP #3048 · OP-32 spiking LIF+STDP #3052 = 4 archs total), the G1 input slice fully proven (OP-28 byte-level #3041 · OP-28b BPE fix #3049 · OP-28c REAL Qwen vocab 151643 entries #3053) + pre-gated into the turnkey kit (OP-24d #3050), and NEW findings landed (OP-30 #3047 3-layer determinism model + cross-ISA FMA-matmul invariant; OP-32 binary-spike FMA-immunity boundary; OP-30b #3051 contract consistency). OP-26c refreshes the readiness doc to the current state: 4-arch claim, refreshed gap list, new evidence rows, sharpened FMA novelty, honest limits; docs-only, NO /paper scaffold per g84) -->
 - [x] **OP-26c — SUBMISSION-READINESS updated: 4-arch G2 closed, real-vocab input, FMA novelty (docs-only, g84)** —
   GREEN (docs-only, $0, NO GPU/vast/pod). docs/flame-machine-independent-SUBMISSION-READINESS.md refreshed (v2)

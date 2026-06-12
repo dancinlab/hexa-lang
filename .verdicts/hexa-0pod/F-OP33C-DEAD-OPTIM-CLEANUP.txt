@@ -1,0 +1,131 @@
+F-OP33C-DEAD-OPTIM-CLEANUP — residual dead adam/safe_update wraps removed from
+        stdlib/optim.hexa (the OP-33b HONEST §6 follow-up); both wrap FALSIFIED builtins
+        adam_step/grad_clip_norm (no runtime impl — codegen emits broken C). grad_clip_norm
+        deregistered from the self/env.hexa roster (root cause, no live surface). adam_step
+        LEFT registered (12+ other self/ml/* surfaces reference it — out of scope).
+HEXA-0POD OP-33c · CPU-LOCAL (`hexa run`, hexa 0.1.0-dispatch) · 0-GPU · $0 · no vast/pod
+════════════════════════════════════════════════════════════════════════════
+
+[0] PROVENANCE
+--------------
+OP-33b's verdict §6 (HONEST) flagged: "stdlib/optim.hexa is still NOT buildable as a
+whole: adam/safe_update wrap adam_step / grad_clip_norm — the SAME falsified legacy-ML
+builtin family ... left as an explicit follow-up candidate (OP-33c?)." This is that
+follow-up. Per g5, deadness is RE-VERIFIED INDEPENDENTLY (not trusted from F-OP33b).
+
+[1] SURVEY — stdlib/optim.hexa public-surface classification (mandatory, per task step 1)
+----------------------------------------------------------------------------------------
+The file is 22 lines, 3 top-level surfaces:
+
+  symbol                       | class           | evidence
+  -----------------------------+-----------------+------------------------------------------
+  fn adam(p,g,m,v,lr,t)        | DEAD-FALSIFIED  | calls builtin `adam_step` — runtime defines
+                               |                 | ONLY `adamw_step` (RFC 034, runtime.h:1543),
+                               |                 | a DIFFERENT symbol → codegen emits call to
+                               |                 | undeclared `adam_step` → broken C (see §2A).
+                               |                 | Only caller = example/anima_mega_demo.hexa
+                               |                 | :69 (baseline exit_code=-1, never-passed).
+  fn safe_update(...,max_norm) | DEAD-FALSIFIED  | calls `grad_clip_norm` (no runtime impl at
+                               |                 | all — undeclared identifier, §2B) THEN adam
+                               |                 | (itself dead). Only caller =
+                               |                 | example/test_stdlib.hexa:35 (baseline
+                               |                 | exit_code=-1, never-passed).
+  println("[optim loaded]")    | LIVE            | top-level libm-free print; builds+runs. KEPT.
+
+[2] DEADNESS — independently RE-VERIFIED (g5)
+---------------------------------------------
+Probe A (adam_step) — /tmp/op33c_probe_adam.hexa, `hexa run`:
+    let r = adam_step(p, g, m, v, 0.001, 0.9, 0.999, 0.00000001, 1)
+  VERBATIM:
+    build/artifacts/hexa_run.*.c:29:9: error: call to undeclared function 'adam_step';
+      ISO C99 and later do not support implicit function declarations
+    note: did you mean 'adamw_step'?
+    /Users/mini/.hx/bin/self/runtime.h:1543:9: note: 'adamw_step' declared here
+    error: clang compile failed — binary not produced
+  ⇒ Runtime backs `adamw_step` (RFC 034 AdamW), NOT `adam_step`. The roster registers
+    `adam_step` (self/env.hexa:168) so the linter type-checks the call and the codegen
+    emits `adam_step(...)` into a runtime that has no such symbol. FALSIFIED.
+
+Probe B (grad_clip_norm) — /tmp/op33c_probe_clip.hexa, `hexa run`:
+    let c = grad_clip_norm([3.0,4.0], 1.0)
+  VERBATIM:
+    build/artifacts/hexa_run.*.c:23:20: error: use of undeclared identifier 'grad_clip_norm'
+    error: clang compile failed — binary not produced
+  grep `grad_clip_norm` over runtime.h ⇒ ZERO matches. No runtime impl whatsoever. FALSIFIED.
+
+[3] CALLER SWEEP — zero LIVE callers (grep -rn over *.hexa)
+----------------------------------------------------------
+  adam(        : example/anima_mega_demo.hexa:69          ← ONLY direct caller
+  safe_update( : example/test_stdlib.hexa:35              ← ONLY direct caller
+  Both files: tool/examples_baseline.json category=UNKNOWN, exit_code=-1, last_pass=""
+  (never-passing array-dialect demos; each ALSO dead on randn/zeros/slice/mean/cross_entropy
+  — the broader falsified-ML family, out of OP-33c scope).
+  Imports of stdlib/optim.hexa: example/anima_mega_demo.hexa, example/test_stdlib.hexa only
+  (stdlib/optim/{mod,cpgd,projector}.hexa are a SEPARATE package `stdlib/optim/` — they only
+  mention stdlib/optim.hexa in a convention comment, never import/call adam/safe_update).
+  NOT a caller (false positive): stdlib/flame/clm_learn_while_infer.hexa:218 — a COMMENT
+  ("// adam (streaming-plasticity) state per param"), no call.
+  ⇒ DECISION: job rule 2(b) — callers exist but none live → REMOVE the dead wraps.
+
+[4] LIVE ALTERNATIVE — confirmed (task step 3)
+----------------------------------------------
+Real flame training uses stdlib/flame/optim_lib.hexa:
+  - pub fn opt_adamw_step(...)        → real builtin `adamw_step` (RFC 034).
+  - pub fn opt_lr_warmup_cosine(...)  → d5_cos schedule (F-OP33, machine-independent).
+grep adamw_step over stdlib/flame/ + self/ml/: 10+ LIVE production trainers (clm_qat, clm_prod,
+train_lib, clm_mitosis, ...) all use `adamw_step`; NONE use the falsified `adam_step`.
+⇒ The removed surface is NOT the path real training takes — safe to delete.
+
+[5] REMOVAL DIFF
+----------------
+  stdlib/optim.hexa : `fn adam` + `fn safe_update` REMOVED (−11 lines net); pointer comment
+                      left → opt_adamw_step (real adamw_step) + opt_lr_warmup_cosine (F-OP33).
+                      `println("[optim loaded]")` KEPT (LIVE).
+  self/env.hexa     : `grad_clip_norm` DEREGISTERED from the env_new() builtin roster (was
+                      line 176). Root-cause fix mirroring OP-33b's cosine_lr/warmup_lr removal:
+                      only non-roster refs were the 3 baseline-broken examples + the removed
+                      wrapper → no live surface → next compiler build rejects at hexa level
+                      instead of emitting broken C. `adam_step` LEFT registered (see §7).
+  example/anima_mega_demo.hexa : NOTE pointer comment at the adam/grad_clip_norm call site
+                      (faithful repoint impossible — array-dialect adam(arr,...) vs
+                      handle-dialect opt_adamw_step(int,...); demo stays baseline-broken on the
+                      rest of the dead family, out of scope).
+  example/test_stdlib.hexa     : NOTE pointer comment at the safe_update call site (same reason).
+
+  wipe_guard: total deletions = 11 (stdlib/optim.hexa) + 1 (self/env.hexa) = 12 lines < 50.
+  Commit subject scoped anyway: `cleanup(optim): remove dead falsified adam/safe_update wraps`.
+
+[6] POST-REMOVAL CHECKS — GREEN
+-------------------------------
+(a) import the cleaned stdlib/optim.hexa (/tmp/op33c_verify_optim.hexa, `hexa run`):
+      → "[optim loaded]" / "optim import ok"   (PRE: "call to undeclared function 'adam_step'")
+      ⇒ stdlib/optim.hexa now BUILDS+RUNS clean; zero falsified-builtin refs remain in it.
+(b) canonical flame path unaffected (/tmp/op33c_verify_flame.hexa):
+      opt_lr_warmup_cosine(0.001, 0.1, 50, 1000, 100) = 0.0005   (warmup ramp ✓ base·50/100)
+(c) removed-symbol grep: zero dangling adam(/safe_update( refs except the 2 baseline-broken
+      examples (now NOTE-commented as known-dead); zero live grad_clip_norm refs anywhere in
+      self/ or stdlib/ (only env.hexa roster row, now removed).
+
+[7] GATE (g5) — PASS
+--------------------
+  deadness independently verified (verbatim §2)             : YES
+  zero-LIVE-caller confirmed (sweep §3)                     : YES (2 dead example callers only)
+  removal clean (optim.hexa builds, no dangling refs §6)    : YES
+  canonical path unaffected (opt_lr_warmup_cosine §6b)      : YES
+
+[8] HONEST
+----------
+  • `adam_step` LEFT registered in the self/env.hexa roster. It is equally falsified (runtime
+    has only `adamw_step`), BUT 12+ OTHER surfaces reference it — self/ml/{train_gpu, galore,
+    gpu_optimizer, t2_gpu_bench, distributed_train}.hexa + several example/test_* files. Those
+    self/ml/* GPU-optimizer files are themselves likely dead on the same builtin, but they are
+    a SEPARATE surface beyond stdlib/optim.hexa (OP-33c's scope). Deregistering adam_step here
+    would change their compile-error class out-of-scope and risks over-reach. Flagged as a
+    follow-up (OP-33d? — audit/clean the self/ml/ falsified-adam_step surface), NOT touched.
+  • The 2 repointed examples still don't build end-to-end (baseline exit_code=-1 preserved) —
+    they remain dead on the broader falsified-ML family (randn/zeros/slice/mean/cross_entropy).
+    The adam/safe_update lines are now documented pointer comments, not silent dangling refs.
+  • self/env.hexa edit affects the NEXT self-host compiler build; the installed hexat
+    (0.1.0-dispatch) keeps the roster until rebuilt — behavior verified via generated-C
+    inspection / the cleaned-file build probe, not a from-scratch compiler rebuild (0-pod).
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
