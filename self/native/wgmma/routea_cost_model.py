@@ -87,9 +87,22 @@ def drain_penalty(K, issue_eff):
     if nks <= 0:
         return 1.0
     # drain cost per slab shrinks with issue depth (dual-issue hides it); grows with nks.
-    # c chosen so MODE8(issue .93): ratio(nks=128)/ratio(nks=64) ~= 0.901 (the measured -9.9%).
-    c = 0.115 * (0.93 / issue_eff)
-    return 1.0 / (1.0 + c * math.log2(nks) / math.log2(64))
+    # CALIBRATED with the OP-45-GPU T1/T2/T3 H100 measurement (F-OP45GPU-OCCUPANCY-SWEEP):
+    # the GPU profile (analytical roofline; ncu HW-counters were infra-blocked) established
+    # D=4096 is COMPUTE/SCHEDULING-bound (DRAM ~12-40% of HBM3 peak, AI 682 >> 104 threshold),
+    # NOT HBM-bound — so the OP-49 +9.2% MODE8@4096 over-prediction is the K-drain term under-
+    # crediting the 2x-slab (nks 64->128) serialization, NOT a missing bandwidth term. The
+    # static log-drain (c=0.115) is replaced by an ANCHORED-EXCESS-SLAB drain that holds the
+    # nks=64 (D=2048) parity calibration EXACTLY and steepens the nks->128 penalty so MODE8@4096
+    # reproduces the measured 283.9 TFLOP/s (over-prediction +9.2% -> +1.0%).
+    # HONEST residual (verdict): a SINGLE global coeff calibrated to MODE 8 slightly over-corrects
+    # the shallower OG16/OG17 pipes (drain is non-uniform across modes); a per-mode coeff is the
+    # 0-pod follow-up. ORDERING (the selector argmax) is unaffected at both D.
+    d64 = 1.0 / (1.0 + 0.115 * (0.93 / issue_eff) * 1.0)   # the held nks=64 anchor value
+    if nks <= 64:
+        return 1.0 / (1.0 + 0.115 * (0.93 / issue_eff) * math.log2(nks) / math.log2(64))
+    c = 0.109 * (0.93 / issue_eff)   # GPU-calibrated excess-slab coefficient (OP-45-GPU T2)
+    return d64 / (1.0 + c * ((nks / 64.0) - 1.0))
 
 def reuse_eff(tn):
     """Arithmetic-intensity / operand-reuse term. A WIDER output tile (TN) reuses each

@@ -42,6 +42,19 @@ no-cuBLAS-call** TF32 GEMM:
   drain). Register-spill, occupancy-drop, and a D-independent ptxas ceiling are all **statically
   EXCLUDED** as the cause; the surviving classification is (d) large-D scheduling roofline =
   *shape-rigid vs shape-adaptive*. (`F-OP45-ROUTEA-D4096-CAP.txt`, #3096.)
+  **GPU-RESOLVED (OP-45-GPU, real H100, `F-OP45GPU-OCCUPANCY-SWEEP.txt`):** the (d) sub-split is a
+  **FIXABLE SCHEDULING STALL, NOT a hard HBM-bandwidth roofline.** T1 measured-confirmed 90 regs /
+  0 spill / 96 KB/CTA / 2 CTA/SM (D-invariant → (a)/(b) measured-excluded). The D=4096 own kernel
+  runs at only **~12–40 % of HBM3 peak** (arithmetic intensity 682 FLOP/byte ≫ the 104 FLOP/byte
+  compute-bound threshold), so it is **compute/scheduling-bound** — there is bandwidth headroom, not
+  a memory wall. (ncu HW-counters were infra-blocked by `RmProfilingAdminOnly=1`; the split was
+  resolved by a g5-legal analytical roofline from the measured kernel wall-time.) MODE 7 persistent
+  +swizzle measured @4096 for the first time does **NOT** recover the −9.9 % (~273 vs 284 TFLOP/s —
+  a slight regress; closed-negative), so the fixable lever is **not** tile-rasterization. cuBLAS's
+  +24.6 % large-D lever is a **better single-pass tile + CTA-swizzle, NOT split-K** (its top D=4096
+  algo is `split_k=1` / `reduction=0`) — i.e. **reachable without forfeiting the bit-exact
+  accumulation order**. Net: a beat path exists in principle (a better single-pass per-CTA tile/
+  schedule, bit-exact-legal), but it is a genuine build, not a memory roofline to close.
 - The **FP16/BF16 W14 line is ~11.5× off** cuBLAS-FP16 (PARITY=NO; cuBLAS-FP16 roofline doubled to
   ~827 TFLOP/s). The **W10 composed-swizzle-decode summit is 70.7 TFLOP/s, 6.09× off** cuBLAS-TF32
   (the bit-exact pre-route-(a) frontier). Neither is a beat. (`.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W10.txt`,
@@ -231,17 +244,27 @@ cuBLAS at the extremes. The policy WANTS these configs that **do not exist in-tr
 
 ---
 
-## 7. Handoff to the GPU session (maps to OP-45 T1–T5)
+## 7. Handoff to the GPU session (maps to OP-45 T1–T5) — **RESOLVED on a real H100 (OP-45-GPU)**
 
-- **T1** (ptxas -v on MODE 8): confirms the 154-reg t256 / ~90-reg MODE8 occupancy the cost
-  model assumes — upgrades the register-cap from "verdict-cited" to "measured".
-- **T2** (ncu DRAM%/Tensor% @4096): calibrates `drain_penalty.c` for deep-K → fixes the
-  +9.2% MODE8@4096 absolute miss; tells whether large-D is a hard HBM roofline (close it) or
-  a fixable drain stall (build MODE 7 / split-K).
-- **T3** (MODE 7 persistent sweep @4096): the `l2_hot` term — adds the only large-D lever the
-  static model can't yet see.
-- **T4** (cuBLAS algo introspection @4096): quantifies which lever is the +24.6% → decides if
-  the split-K gap (#3) is worth building under the g5 bit-exact constraint.
+All five tests ran on one H100 sm_90a (`F-OP45GPU-OCCUPANCY-SWEEP.txt`, ~$0.96, leak-0):
 
-The cost model is the harness: each T-result drops in as one calibrated coefficient, and the
-selector then predicts the new config's placement before it is launched.
+- **T1** (ptxas -v on MODE 8): **DONE** — 90 registers, **0 spill**, 96 KB/CTA → 2 CTA/SM,
+  D-invariant. The (a) register-spill and (b) occupancy-drop exclusions are now **measured**, not
+  just statically argued. MODE 5 t256 = 154 regs (the reg-cap, as assumed).
+- **T2** (DRAM%/Tensor% @4096): **ncu INFRA-BLOCKED** (`RmProfilingAdminOnly=1`, a host kernel-
+  module param a vast renter can't change). Resolved by a g5-legal **analytical roofline** from the
+  measured kernel wall-time: D=4096 runs at **~12–40 % of HBM3 peak**, AI 682 ≫ 104 threshold →
+  **compute/scheduling-bound, NOT a hard HBM roofline → FIXABLE stall.** The `drain_penalty` is
+  recalibrated (anchored steeper K-drain, `c` 0.115→0.109): MODE8@4096 over-prediction **+9.2 % →
+  +1.0 %**, ordering still PASS (honest residual: the drain is non-uniform across modes → a per-mode
+  coefficient is the next 0-pod refinement).
+- **T3** (MODE 7 persistent sweep @4096): **DONE — closed-negative.** Best persistent ~273 TFLOP/s
+  vs MODE 8 284 (a slight regress); the hypothesized `l2_hot` benefit is **absent** (consistent with
+  T2 compute-bound). GAP #2 is measured and does NOT pay; the fixable lever is not rasterization.
+- **T4** (cuBLAS algo introspection @4096): **DONE** — cuBLAS's +24.6 % lever = better single-pass
+  tile + CTA-swizzle, **`split_k=1` (NOT split-K)**. So the lever is **reachable bit-exact** (no
+  reordering split-K needed); GAP #3 (split-K) is **not** the path — a better single-pass per-CTA
+  tile/schedule is.
+
+The cost model remains the harness: T2's drain recalibration dropped in as one coefficient; the
+selector's argmax (MODE 8 at both D) is unchanged and still matches measurement.
