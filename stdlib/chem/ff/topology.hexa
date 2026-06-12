@@ -1,0 +1,153 @@
+// stdlib/chem/ff/topology.hexa — ligand topology → GAFF atom-typing.
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE-BIO round-12. The AMBER/GAFF loader (R11, amber.hexa) maps a PER-ATOM
+// type array (atom_types[]) onto real force-field parameters, but something has
+// to PRODUCE that array from a molecule. This module is the missing structural
+// brick: it perceives a molecular bond graph (elements + connectivity) and
+// ASSIGNS each atom its GAFF atom type — the last code piece before a real
+// ligand can be injected into the abfe_demo.hexa full chain.
+//
+//   structure (elements + bonds) ──▶ [THIS] ──▶ atom_types[] ──▶ amber.hexa
+//
+// References:
+//   Wang, J. et al. (2004). Development and testing of a general amber force
+//     field. J. Comput. Chem. 25, 1157. (GAFF atom types + perception rules.)
+//   Jorgensen, W.L. et al. (1983). TIP3P water (OW/HW types).
+//
+// ── SCOPE (honest, d6) ────────────────────────────────────────────────
+// Full GAFF perception is a large SMARTS-style ruleset (ring detection,
+// aromaticity, conjugation, formal charge). This module implements the
+// TRACTABLE, VERIFIABLE subset that covers the molecules the FEP demo needs:
+// element + connectivity-degree (a hybridization proxy) + neighbour environment.
+//   C deg-4 → c3 (sp³)   ·   C deg-3 → c2 (sp²)
+//   H on sp³-C → hc      ·   H on sp²-C → ha
+//   O deg-2, 2×H → OW (water)   ·   O deg-2, 1×H+heavy → oh (hydroxyl)
+//   H on water-O → HW    ·   H on hydroxyl-O → ho
+// It does NOT do ring/aromatic perception or bond-order inference — those are a
+// downstream extension. The PROVEN claim: a connectivity graph yields a correct
+// GAFF atom_types[] that flows into amber.hexa and conserves molecular charge.
+//
+// d4-generic: the perception keys on element + degree + neighbour element only;
+// it never branches on a molecule NAME. Bonds are passed as data
+// (array of #{"i","j"}); adding a molecule = new data, no code change.
+//
+// Public surface:
+//   pub fn neighbors_of(bonds, i)               -> array   // neighbour indices
+//   pub fn atom_degree(bonds, i)                -> int     // bond count
+//   pub fn neighbor_elements(atoms, bonds, i)   -> array   // neighbour elements
+//   pub fn count_element(elems, el)             -> int
+//   pub fn assign_gaff_type(atoms, bonds, i)    -> string  // one atom's GAFF type
+//   pub fn assign_types(atoms, bonds)           -> array   // structure → types[]
+
+// ── bond-graph queries ──────────────────────────────────────────────────
+//
+// `bonds` is an array of #{"i": int, "j": int} (undirected; order-agnostic).
+// `atoms` is the per-atom element-symbol array, e.g. ["C","H","H","H","H"].
+
+pub fn neighbors_of(bonds: array, i: int) -> array {
+    let mut out = []
+    let mut b = 0
+    while b < len(bonds) {
+        let bd = bonds[b]
+        if bd["i"] == i { out = out.push(bd["j"]) }
+        if bd["j"] == i { out = out.push(bd["i"]) }
+        b = b + 1
+    }
+    return out
+}
+
+pub fn atom_degree(bonds: array, i: int) -> int {
+    return len(neighbors_of(bonds, i))
+}
+
+pub fn neighbor_elements(atoms: array, bonds: array, i: int) -> array {
+    let nb = neighbors_of(bonds, i)
+    let mut out = []
+    let mut k = 0
+    while k < len(nb) {
+        out = out.push(atoms[nb[k]])
+        k = k + 1
+    }
+    return out
+}
+
+pub fn count_element(elems: array, el: string) -> int {
+    let mut c = 0
+    let mut k = 0
+    while k < len(elems) {
+        if elems[k] == el { c = c + 1 }
+        k = k + 1
+    }
+    return c
+}
+
+// ── GAFF atom-type perception (subset) ──────────────────────────────────
+//
+// Element + connectivity degree (hybridization proxy) + neighbour environment.
+// Returns the GAFF atom-type string consumed by amber.hexa's parameter DB.
+
+pub fn assign_gaff_type(atoms: array, bonds: array, i: int) -> string {
+    let el = atoms[i]
+    let nb = neighbors_of(bonds, i)
+    let deg = len(nb)
+
+    if el == "C" {
+        // degree is the sp³/sp² proxy (no explicit bond orders here).
+        if deg == 4 { return "c3" }   // sp³ carbon
+        if deg == 3 { return "c2" }   // sp² carbon
+        return "c3"                   // fallback: treat as sp³
+    }
+
+    if el == "O" {
+        let ne = neighbor_elements(atoms, bonds, i)
+        let nh = count_element(ne, "H")
+        if deg == 2 {
+            if nh == 2 { return "OW" }  // water oxygen
+            return "oh"                  // hydroxyl O (1×H + heavy neighbour)
+        }
+        return "oh"                      // fallback for other O environments
+    }
+
+    if el == "H" {
+        if deg == 1 {
+            let j = nb[0]
+            let jel = atoms[j]
+            if jel == "C" {
+                // distinguish hc (on sp³ C) from ha (on sp² C) by carbon degree.
+                let cdeg = atom_degree(bonds, j)
+                if cdeg == 4 { return "hc" }
+                if cdeg == 3 { return "ha" }
+                return "hc"
+            }
+            if jel == "O" {
+                // water HW vs hydroxyl ho: distinguished by the O's H-count.
+                let oelems = neighbor_elements(atoms, bonds, j)
+                let onh = count_element(oelems, "H")
+                if onh == 2 { return "HW" }  // bonded O carries 2 H → water
+                return "ho"                   // bonded O is a hydroxyl
+            }
+            return "hc"   // fallback: aliphatic-H
+        }
+        return "hc"
+    }
+
+    return "??"   // unsupported element (honest: out of subset scope)
+}
+
+// ── whole-molecule perception ───────────────────────────────────────────
+//
+// The main entry point: a bond graph (elements + connectivity) → the per-atom
+// GAFF type array that amber.hexa's parameter loader consumes.
+
+pub fn assign_types(atoms: array, bonds: array) -> array {
+    let mut out = []
+    let mut i = 0
+    while i < len(atoms) {
+        out = out.push(assign_gaff_type(atoms, bonds, i))
+        i = i + 1
+    }
+    return out
+}

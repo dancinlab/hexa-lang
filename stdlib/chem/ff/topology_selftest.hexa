@@ -1,0 +1,139 @@
+// @ci_gate
+// stdlib/chem/ff/topology_selftest.hexa — g5 seal for ligand→GAFF atom-typing.
+//
+// QFORGE-BIO round-12. amber.hexa (R11) maps a per-atom GAFF type array onto real
+// FF parameters; topology.hexa PRODUCES that array from a molecular bond graph.
+// This seal PROVES the perception assigns correct GAFF types on known molecules
+// AND that the produced atom_types[] flows into amber.hexa and conserves charge —
+// the structural link that lets a real ligand enter the abfe_demo full chain.
+//
+// Run:
+//   hexa run stdlib/chem/ff/topology_selftest.hexa
+//
+// Checks (VERBATIM honest — d6/@L5):
+//   (a) METHANE  CH4 → [c3, hc, hc, hc, hc]   (sp³ C + 4 aliphatic H)
+//   (b) WATER    H2O → [OW, HW, HW]            (water O + 2 water H)
+//   (c) METHANOL CH3OH → [c3, hc, hc, hc, oh, ho] (hydroxyl O/H distinguished)
+//   (d) ETHENE   C2H4 → [c2, c2, ha, ha, ha, ha]  (sp² C via degree-3 + vinyl H)
+//   (e) GRAPH    degree/neighbour queries correct on methane
+//   (f) INTEGRATE perceived types feed amber.hexa → Σq(CH4)=Σq(H2O)=0 (neutral)
+
+use "stdlib/chem/ff/topology"
+use "stdlib/chem/ff/amber"
+
+let mut pass_count = 0
+let mut total = 0
+let mut first_fail = ""
+
+fn abs_f(x: float) -> float { if x < 0.0 { return 0.0 - x } else { return x } }
+
+fn check(name: string, cond: bool, detail: string) {
+    total = total + 1
+    if cond {
+        pass_count = pass_count + 1
+        println("  ok : " + name + "   " + detail)
+    } else {
+        if first_fail == "" { first_fail = name }
+        println("  FAIL " + name + "   " + detail)
+    }
+}
+
+// bond constructor: undirected #{"i","j"} pair.
+fn bond(i: int, j: int) -> dict { return #{ "i": i, "j": j } }
+
+// stringify a string array for VERBATIM detail printing: [a, b, c].
+fn join_arr(a: array) -> string {
+    let mut s = "["
+    let mut k = 0
+    while k < len(a) {
+        if k > 0 { s = s + ", " }
+        s = s + a[k]
+        k = k + 1
+    }
+    return s + "]"
+}
+
+// element-wise string-array equality against an expected array.
+fn arr_eq(a: array, b: array) -> bool {
+    if len(a) != len(b) { return false }
+    let mut k = 0
+    while k < len(a) {
+        if a[k] != b[k] { return false }
+        k = k + 1
+    }
+    return true
+}
+
+fn main() {
+    println("ligand topology → GAFF atom-typing selftest (QFORGE-BIO R12)")
+    println("  perception = element + connectivity-degree (sp proxy) + neighbour env")
+    println("")
+
+    // ── (a) METHANE CH4 ──
+    // atoms: 0=C, 1..4=H. bonds: C-H ×4.
+    let ch4 = ["C", "H", "H", "H", "H"]
+    let ch4_bonds = [ bond(0,1), bond(0,2), bond(0,3), bond(0,4) ]
+    let ch4_types = assign_types(ch4, ch4_bonds)
+    let ch4_exp = ["c3", "hc", "hc", "hc", "hc"]
+    check("a_methane_ch4", arr_eq(ch4_types, ch4_exp),
+          join_arr(ch4_types) + " (exp " + join_arr(ch4_exp) + ")")
+
+    // ── (b) WATER H2O ──
+    // atoms: 0=O, 1,2=H. bonds: O-H ×2.
+    let h2o = ["O", "H", "H"]
+    let h2o_bonds = [ bond(0,1), bond(0,2) ]
+    let h2o_types = assign_types(h2o, h2o_bonds)
+    let h2o_exp = ["OW", "HW", "HW"]
+    check("b_water_h2o", arr_eq(h2o_types, h2o_exp),
+          join_arr(h2o_types) + " (exp " + join_arr(h2o_exp) + ")")
+
+    // ── (c) METHANOL CH3OH ──
+    // atoms: 0=C, 1,2,3=H(on C), 4=O, 5=H(on O). bonds: C-H×3, C-O, O-H.
+    let meoh = ["C", "H", "H", "H", "O", "H"]
+    let meoh_bonds = [ bond(0,1), bond(0,2), bond(0,3), bond(0,4), bond(4,5) ]
+    let meoh_types = assign_types(meoh, meoh_bonds)
+    let meoh_exp = ["c3", "hc", "hc", "hc", "oh", "ho"]
+    check("c_methanol_ch3oh", arr_eq(meoh_types, meoh_exp),
+          join_arr(meoh_types) + " (exp " + join_arr(meoh_exp) + ")")
+
+    // ── (d) ETHENE C2H4 ──
+    // atoms: 0,1=C; 2,3=H(on C0); 4,5=H(on C1). bonds: C-C, C0-H×2, C1-H×2.
+    // Each C has degree 3 → c2 (sp²); each H on a degree-3 C → ha (vinyl H).
+    let c2h4 = ["C", "C", "H", "H", "H", "H"]
+    let c2h4_bonds = [ bond(0,1), bond(0,2), bond(0,3), bond(1,4), bond(1,5) ]
+    let c2h4_types = assign_types(c2h4, c2h4_bonds)
+    let c2h4_exp = ["c2", "c2", "ha", "ha", "ha", "ha"]
+    check("d_ethene_c2h4", arr_eq(c2h4_types, c2h4_exp),
+          join_arr(c2h4_types) + " (exp " + join_arr(c2h4_exp) + ")")
+
+    // ── (e) GRAPH queries on methane ──
+    // C (index 0) has degree 4; each H has degree 1; C's neighbours are all H.
+    let deg_c = atom_degree(ch4_bonds, 0)
+    let deg_h = atom_degree(ch4_bonds, 1)
+    let ne_c = neighbor_elements(ch4, ch4_bonds, 0)
+    let nh_c = count_element(ne_c, "H")
+    let e_ok = (deg_c == 4) && (deg_h == 1) && (nh_c == 4)
+    check("e_graph_degree_neighbours", e_ok,
+          "deg(C)=" + to_string(deg_c) + " deg(H)=" + to_string(deg_h)
+          + " H-neighbours(C)=" + to_string(nh_c))
+
+    // ── (f) INTEGRATION: perceived types → amber.hexa charge conservation ──
+    // The perceived atom_types[] must feed the R11 loader and yield a neutral
+    // molecule (integer net charge) for both methane and water.
+    let types_db = gaff_tip3p_types()
+    let q_ch4 = ff_total_charge(types_db, ch4_types)
+    let q_h2o = ff_total_charge(types_db, h2o_types)
+    let f_ok = (abs_f(q_ch4) < 1.0e-5) && (abs_f(q_h2o) < 1.0e-5)
+    check("f_integrate_amber_neutral", f_ok,
+          "Σq(CH4 via perceived types)=" + to_string(q_ch4)
+          + " Σq(H2O)=" + to_string(q_h2o) + " (both integer-neutral)")
+
+    println("")
+    if first_fail == "" {
+        println("ALL PASS — stdlib/chem/ff topology → GAFF atom-typing " + to_string(pass_count) + "/" + to_string(total))
+        println("Bond graph → atom_types[] → amber.hexa: real-ligand structural link SEALED.")
+    } else {
+        println("FAILURES (" + to_string(total - pass_count) + "/" + to_string(total) + ") first=" + first_fail)
+        exit(1)
+    }
+}
