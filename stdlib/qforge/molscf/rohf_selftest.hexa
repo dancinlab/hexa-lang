@@ -1,0 +1,333 @@
+// @ci_gate — deterministic · network-free · MOLSCF ROHF + transition-metal g5 gate
+//
+// rohf_selftest.hexa — QFORGE MOLSCF brick 8/N (ROHF + real TM open-shell SCF).
+// SEALS the spin-contamination crack round-7 UHF left open: UHF gives a genuine
+// open-shell energy but a contaminated ⟨S²⟩ (H₃ radical 0.7957, +0.046 off the
+// exact doublet 0.75). ROHF uses ONE spatial-orbital set → ⟨S²⟩ = S(S+1) EXACTLY,
+// ZERO contamination, by construction. Four verdicts, each printed VERBATIM
+// (d6 — no LLM judge):
+//
+//   (a) ROHF SPIN-PURITY vs UHF CONTAMINATION (same system) — linear H₃ doublet
+//       radical (R=1.8 bohr) through BOTH paths: UHF ⟨S²⟩=0.7957 (contaminated)   🔵
+//       vs ROHF ⟨S²⟩=0.7500 EXACT. Both energies reported; ROHF E ≥ UHF E
+//       (variational ordering — ROHF is the spin-constrained UHF), gap reported.
+//       PySCF/STO-3G refs: UHF −1.545839/0.795713 · ROHF −1.530672/0.750000.
+//   (b) ROHF == RHF closed-shell reduction — H₂/STO-3G @1.4 bohr with n_open=0
+//       through rohf_scf reduces EXACTLY to the SEALED RHF anchor −1.11671 Ha     🔵
+//       (the open block is empty → R = ½(Fα+Fβ) = F_RHF). |Δ| reported.
+//   (c) REAL TRANSITION-METAL open-shell SCF — ScH⁺ (d¹ doublet, 21 e) all-
+//       electron STO-3G through BOTH UHF and ROHF: UHF E=−752.4903/⟨S²⟩=0.7575    🔵
+//       (contaminated) vs ROHF E=−752.4889/⟨S²⟩=0.7500 EXACT. PySCF 2.13.1 refs
+//       UHF −752.490269326/0.757478 · ROHF −752.488933729/0.750000 · gap
+//       +0.001336. The stiff 3d manifold CONVERGES cleanly with DIIS+level-shift;
+//       ⟨S²⟩ & E reported VERBATIM. (Same integral build as the round-6 neutral
+//       ScH RHF anchor −752.638702408 — removing one e gives the d¹ cation.)
+//   (d) regression — handled by r1..r7 selftests (run separately in CI); rhf.hexa
+//       AND uhf.hexa are byte-untouched (ROHF is a NEW additive file).            🔵
+//
+// HONEST (d6): every energy printed verbatim, references CITED (PySCF 2.13.1 at a
+// stated geometry/basis), ⟨S²⟩ reported for BOTH methods. ROHF's spin-purity is
+// EXACT by construction; UHF's contamination is real and shown side-by-side.
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/molscf/rohf_selftest.hexa
+// PASS: "qforge_molscf_rohf_selftest PASS".
+use "stdlib/qforge/molscf/gaussian_integrals"
+use "stdlib/qforge/molscf/coulomb_integrals"
+use "stdlib/qforge/molscf/rhf"
+use "stdlib/qforge/molscf/uhf"
+use "stdlib/qforge/molscf/rohf"
+use "stdlib/qforge/molscf/md_shell"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+fn _dist(P: [float], Q: [float]) -> float {
+    let dx = P[0]-Q[0]
+    let dy = P[1]-Q[1]
+    let dz = P[2]-Q[2]
+    return sqrt(dx*dx + dy*dy + dz*dz)
+}
+
+// contracted (μν|σλ) over single STO-3G 1s contractions (shared rhf/uhf helper).
+fn eri_contracted(
+    al: [float], co: [float], ax: [float],
+    bl: [float], bo: [float], bx: [float],
+    cl: [float], cco: [float], cx: [float],
+    dl: [float], dco: [float], dx: [float]
+) -> float {
+    let mut v = 0.0
+    let mut i = 0
+    while i < len(al) {
+        let mut j = 0
+        while j < len(bl) {
+            let mut k = 0
+            while k < len(cl) {
+                let mut l = 0
+                while l < len(dl) {
+                    let w = co[i] * bo[j] * cco[k] * dco[l]
+                    v = v + w * cint_eri_s(al[i], ax, bl[j], bx, cl[k], cx, dl[l], dx)
+                    l = l + 1
+                }
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return v
+}
+fn h1s_alpha() -> [float] { return [3.42525091, 0.62391373, 0.16885540] }
+fn h1s_coeff() -> [float] { return [0.15432897, 0.53532814, 0.44463454] }
+
+// Assemble S, H_core, ERI, E_nuc for a chain of N hydrogens on the x-axis.
+fn build_h_chain(cen: [any], n: int) -> [any] {
+    let a = h1s_alpha()
+    let c = h1s_coeff()
+    let z = 1.0
+    let mut S = []
+    let mut H = []
+    let mut i = 0
+    while i < n {
+        let mut j = 0
+        while j < n {
+            S.push(gint_overlap_contracted(a, c, cen[i], a, c, cen[j]))
+            let t = gint_kinetic_contracted(a, c, cen[i], a, c, cen[j])
+            let mut v = 0.0
+            let mut k = 0
+            while k < n {
+                v = v + cint_nuclear_contracted(a, c, cen[i], a, c, cen[j], z, cen[k])
+                k = k + 1
+            }
+            H.push(t + v)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    let mut eri = []
+    let mut mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu < n {
+            let mut sg = 0
+            while sg < n {
+                let mut lm = 0
+                while lm < n {
+                    eri.push(eri_contracted(a, c, cen[mu], a, c, cen[nu], a, c, cen[sg], a, c, cen[lm]))
+                    lm = lm + 1
+                }
+                sg = sg + 1
+            }
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    let mut enuc = 0.0
+    let mut A = 0
+    while A < n {
+        let mut B = A + 1
+        while B < n {
+            let dx = cen[A][0] - cen[B][0]
+            let r = if dx < 0.0 { 0.0 - dx } else { dx }
+            enuc = enuc + z * z / r
+            B = B + 1
+        }
+        A = A + 1
+    }
+    return [S, H, eri, enuc]
+}
+
+// Assemble S, H_core, ERI, E_nuc for ScH / STO-3G all-electron (19 AOs). Same
+// integral build the round-6 ScH RHF anchor used; charge/occupation is set by the
+// SCF call (neutral 22 e RHF → cation 21 e doublet UHF/ROHF), NOT by this build.
+fn build_sch() -> [any] {
+    let ang = 1.8897259886
+    let Sc = [0.0, 0.0, 0.0]
+    let Hsc = [0.0, 0.0, 1.78 * ang]
+    let sc_s1a = [941.662425, 171.5249862, 46.42135516]
+    let sc_s1c = [0.1543289673, 0.5353281423, 0.4446345422]
+    let sc_s2a = [67.17668771, 15.61041754, 5.076992278]
+    let sc_s2c = [0.0 - 0.0999672292, 0.3995128261, 0.7001154689]
+    let sc_s3a = [4.698159231, 1.433088313, 0.552930024]
+    let sc_s3c = [0.0 - 0.2277635023, 0.2175436044, 0.9166769611]
+    let sc_s4a = [0.6309328384, 0.2328538976, 0.1028307363]
+    let sc_s4c = [0.0 - 0.3088441215, 0.0196064117, 1.131034442]
+    let sc_p2a = [67.17668771, 15.61041754, 5.076992278]
+    let sc_p2c = [0.155916275, 0.6076837186, 0.3919573931]
+    let sc_p3a = [4.698159231, 1.433088313, 0.552930024]
+    let sc_p3c = [0.0049515112, 0.5777664691, 0.4846460366]
+    let sc_p4a = [0.6309328384, 0.2328538976, 0.1028307363]
+    let sc_p4c = [0.0 - 0.12154686, 0.5715227604, 0.5498949471]
+    let sc_da  = [0.5517000679, 0.1682861055, 0.0649300112]
+    let sc_dc  = [0.2197679508, 0.6555473627, 0.286573259]
+    let h_a = [3.42525091, 0.62391373, 0.16885540]
+    let h_c = [0.15432897, 0.53532814, 0.44463454]
+    let s0 = [0,0,0]
+    let ss = [s0, s0, s0]
+    let pxp = [[1,0,0],[1,0,0],[1,0,0]]
+    let pyp = [[0,1,0],[0,1,0],[0,1,0]]
+    let pzp = [[0,0,1],[0,0,1],[0,0,1]]
+    let d0 = md_dshell_ao(0, sc_da, sc_dc)
+    let d1 = md_dshell_ao(1, sc_da, sc_dc)
+    let d2 = md_dshell_ao(2, sc_da, sc_dc)
+    let d3 = md_dshell_ao(3, sc_da, sc_dc)
+    let d4 = md_dshell_ao(4, sc_da, sc_dc)
+    let POW = [ss, ss, ss, ss, pxp, pyp, pzp, pxp, pyp, pzp, pxp, pyp, pzp,
+               d0[0], d1[0], d2[0], d3[0], d4[0], ss]
+    let EXP = [sc_s1a, sc_s2a, sc_s3a, sc_s4a,
+               sc_p2a, sc_p2a, sc_p2a, sc_p3a, sc_p3a, sc_p3a, sc_p4a, sc_p4a, sc_p4a,
+               d0[1], d1[1], d2[1], d3[1], d4[1], h_a]
+    let CO = [sc_s1c, sc_s2c, sc_s3c, sc_s4c,
+              sc_p2c, sc_p2c, sc_p2c, sc_p3c, sc_p3c, sc_p3c, sc_p4c, sc_p4c, sc_p4c,
+              d0[2], d1[2], d2[2], d3[2], d4[2], h_c]
+    let CEN = [Sc, Sc, Sc, Sc, Sc, Sc, Sc, Sc, Sc, Sc, Sc, Sc, Sc,
+               Sc, Sc, Sc, Sc, Sc, Hsc]
+    let n = 19
+    let mut NRM = []
+    let mut q = 0
+    while q < n { NRM.push(md_ao_norm(POW[q], EXP[q], CO[q], CEN[q])) ; q = q + 1 }
+    let mut S = []
+    let mut hcore = []
+    let mut mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu < n {
+            let w = NRM[mu] * NRM[nu]
+            let sval = w * md_ao_overlap_raw(POW[mu], EXP[mu], CO[mu], CEN[mu], POW[nu], EXP[nu], CO[nu], CEN[nu])
+            let tval = w * md_ao_kinetic_raw(POW[mu], EXP[mu], CO[mu], CEN[mu], POW[nu], EXP[nu], CO[nu], CEN[nu])
+            let vsc = w * md_ao_nuclear_raw(POW[mu], EXP[mu], CO[mu], CEN[mu], POW[nu], EXP[nu], CO[nu], CEN[nu], 21.0, Sc)
+            let vh  = w * md_ao_nuclear_raw(POW[mu], EXP[mu], CO[mu], CEN[mu], POW[nu], EXP[nu], CO[nu], CEN[nu], 1.0, Hsc)
+            S.push(sval)
+            hcore.push(tval + vsc + vh)
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    let mut eri = []
+    let mut zz = 0
+    while zz < n*n*n*n { eri.push(0.0) ; zz = zz + 1 }
+    mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu <= mu {
+            let mn = mu*(mu+1)/2 + nu
+            let mut sg = 0
+            while sg < n {
+                let mut lm = 0
+                while lm <= sg {
+                    let sl = sg*(sg+1)/2 + lm
+                    if mn >= sl {
+                        let val = NRM[mu]*NRM[nu]*NRM[sg]*NRM[lm] * md_ao_eri_raw(
+                            POW[mu], EXP[mu], CO[mu], CEN[mu], POW[nu], EXP[nu], CO[nu], CEN[nu],
+                            POW[sg], EXP[sg], CO[sg], CEN[sg], POW[lm], EXP[lm], CO[lm], CEN[lm])
+                        eri[((mu*n+nu)*n+sg)*n+lm] = val
+                        eri[((nu*n+mu)*n+sg)*n+lm] = val
+                        eri[((mu*n+nu)*n+lm)*n+sg] = val
+                        eri[((nu*n+mu)*n+lm)*n+sg] = val
+                        eri[((sg*n+lm)*n+mu)*n+nu] = val
+                        eri[((lm*n+sg)*n+mu)*n+nu] = val
+                        eri[((sg*n+lm)*n+nu)*n+mu] = val
+                        eri[((lm*n+sg)*n+nu)*n+mu] = val
+                    }
+                    lm = lm + 1
+                }
+                sg = sg + 1
+            }
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    let e_nuc = 21.0 * 1.0 / _dist(Sc, Hsc)
+    return [S, hcore, eri, e_nuc]
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ══ (a) ROHF spin-purity vs UHF contamination — SAME H₃ doublet radical ═════
+    let R = 1.8
+    let cenH3 = [[0.0, 0.0, 0.0], [R, 0.0, 0.0], [2.0 * R, 0.0, 0.0]]
+    let bh3 = build_h_chain(cenH3, 3)
+    let S3 = bh3[0]
+    // UHF (n_α=2, n_β=1) — contaminated.
+    let uH3 = uhf_scf(S3, bh3[1], bh3[2], 3, 2, 1, bh3[3], 500, 1.0e-9, 1.0, true, 0.0)
+    let s2_uhf = uhf_spin_squared(uH3[9], uH3[10], S3, 3, 2, 1)
+    // ROHF (n_closed=1, n_open=1) — spin-pure.
+    let rH3 = rohf_scf(S3, bh3[1], bh3[2], 3, 1, 1, bh3[3], 500, 1.0e-9, true)
+    let s2_rohf = uhf_spin_squared(rH3[8], rH3[8], S3, 3, 2, 1)
+    println("── (a) H₃ doublet radical (R=1.8 bohr) — ROHF spin-purity vs UHF contamination ──")
+    println("  UHF  E = " + to_string(uH3[0]) + " Ha   ⟨S²⟩ = " + to_string(s2_uhf)
+            + "  (contamination +" + to_string(s2_uhf - 0.75) + ")")
+    println("  ROHF E = " + to_string(rH3[0]) + " Ha   ⟨S²⟩ = " + to_string(s2_rohf) + "  (EXACT 0.75)")
+    println("  PySCF refs: UHF −1.545839/0.795713 · ROHF −1.530672/0.750000")
+    println("  ROHF − UHF gap = " + to_string(rH3[0] - uH3[0]) + " Ha  (ROHF ≥ UHF, variational)")
+    fails = fails + _ck_true("(a) ROHF H₃ converged", rH3[9])
+    fails = fails + _ck_close("(a) ROHF ⟨S²⟩ = 0.75 EXACT (zero contamination)", s2_rohf, 0.75, 1.0e-9)
+    fails = fails + _ck_true("(a) UHF ⟨S²⟩ > 0.75 (real contamination, shown)", s2_uhf > 0.7500001)
+    fails = fails + _ck_close("(a) ROHF H₃ E vs PySCF −1.530672224", rH3[0], 0.0 - 1.530672224, 1.0e-4)
+    fails = fails + _ck_true("(a) ROHF E ≥ UHF E (variational ordering)", rH3[0] >= uH3[0])
+    fails = fails + _ck_true("(a) ROHF spin-purer than UHF (s2_rohf < s2_uhf)", s2_rohf < s2_uhf)
+
+    // ══ (b) ROHF == RHF closed-shell reduction — H₂/STO-3G @1.4 bohr, n_open=0 ═══
+    let cenH2 = [[0.0, 0.0, 0.0], [1.4, 0.0, 0.0]]
+    let bh2 = build_h_chain(cenH2, 2)
+    let S2 = bh2[0]
+    let rH2 = rohf_scf(S2, bh2[1], bh2[2], 2, 1, 0, bh2[3], 100, 1.0e-11, true)
+    let s2_clo = uhf_spin_squared(rH2[8], rH2[8], S2, 2, 1, 1)
+    println("── (b) H₂ closed-shell via ROHF (n_closed=1, n_open=0) — RHF reduction ──")
+    println("  E_ROHF = " + to_string(rH2[0]) + " Ha   (sealed RHF anchor −1.11671)")
+    println("  |Δ| = " + to_string(_abs(rH2[0] - (0.0 - 1.11671))) + "   ⟨S²⟩ = " + to_string(s2_clo) + " (singlet 0)")
+    fails = fails + _ck_close("(b) ROHF(n_open=0) == sealed RHF anchor −1.11671", rH2[0], 0.0 - 1.11671, 1.0e-4)
+    fails = fails + _ck_true("(b) ROHF closed-shell converged", rH2[9])
+    fails = fails + _ck_close("(b) ROHF closed-shell ⟨S²⟩ = 0 (singlet)", s2_clo, 0.0, 1.0e-7)
+
+    // ══ (c) REAL TRANSITION METAL — ScH⁺ d¹ doublet (21 e) UHF + ROHF ═══════════
+    let sch = build_sch()
+    let Ssc = sch[0]
+    let nsc = 19
+    // UHF: n_a=11, n_b=10  (DIIS + level-shift for the stiff 3d manifold).
+    let uSc = uhf_scf(Ssc, sch[1], sch[2], nsc, 11, 10, sch[3], 400, 1.0e-8, 0.5, true, 0.2)
+    let s2_uSc = uhf_spin_squared(uSc[9], uSc[10], Ssc, nsc, 11, 10)
+    // ROHF: n_closed=10, n_open=1.
+    let rSc = rohf_scf(Ssc, sch[1], sch[2], nsc, 10, 1, sch[3], 400, 1.0e-8, true)
+    let s2_rSc = uhf_spin_squared(rSc[8], rSc[8], Ssc, nsc, 11, 10)
+    let ref_uhf = 0.0 - 752.490269326
+    let ref_rohf = 0.0 - 752.488933729
+    println("── (c) ScH⁺ d¹ doublet (21 e) all-electron STO-3G — REAL transition-metal open-shell SCF ──")
+    println("  UHF  E = " + to_string(uSc[0]) + " Ha  conv=" + to_string(uSc[11])
+            + " iters=" + to_string(uSc[1]) + " ‖FPS−SPF‖=" + to_string(uSc[12]))
+    println("       ⟨S²⟩ = " + to_string(s2_uSc) + "  (contamination +" + to_string(s2_uSc - 0.75)
+            + ")   |Δ_PySCF| = " + to_string(_abs(uSc[0] - ref_uhf)))
+    println("  ROHF E = " + to_string(rSc[0]) + " Ha  conv=" + to_string(rSc[9])
+            + " iters=" + to_string(rSc[1]) + " ‖FPS−SPF‖=" + to_string(rSc[10]))
+    println("       ⟨S²⟩ = " + to_string(s2_rSc) + "  (EXACT 0.75)   |Δ_PySCF| = " + to_string(_abs(rSc[0] - ref_rohf)))
+    println("  PySCF 2.13.1 refs: UHF −752.490269326/0.757478 · ROHF −752.488933729/0.750000")
+    println("  ROHF − UHF gap = " + to_string(rSc[0] - uSc[0]) + " Ha  (PySCF +0.001335597)")
+    fails = fails + _ck_true("(c) ScH⁺ UHF converged (stiff 3d, DIIS+shift)", uSc[11])
+    fails = fails + _ck_true("(c) ScH⁺ ROHF converged (stiff 3d, DIIS)", rSc[9])
+    fails = fails + _ck_close("(c) ScH⁺ UHF E vs PySCF −752.490269326", uSc[0], ref_uhf, 2.0e-3)
+    fails = fails + _ck_close("(c) ScH⁺ ROHF E vs PySCF −752.488933729", rSc[0], ref_rohf, 2.0e-3)
+    fails = fails + _ck_close("(c) ScH⁺ ROHF ⟨S²⟩ = 0.75 EXACT (TM spin-pure)", s2_rSc, 0.75, 1.0e-9)
+    fails = fails + _ck_true("(c) ScH⁺ UHF ⟨S²⟩ > 0.75 (TM contamination, shown)", s2_uSc > 0.7500001)
+    fails = fails + _ck_true("(c) ScH⁺ ROHF E ≥ UHF E (variational)", rSc[0] >= uSc[0])
+
+    // ══ generic guard — ROHF effective-Fock class/coupling round-trip ═══════════
+    //   tr(P^α S) = n_α = 11 for the converged ScH⁺ ROHF density (α-electron count).
+    let PaSc = rSc[3]
+    let psSc = rhf_matmul(PaSc, Ssc, nsc)
+    let mut trps = 0.0
+    let mut g = 0
+    while g < nsc { trps = trps + psSc[g * nsc + g] ; g = g + 1 }
+    fails = fails + _ck_close("(guard) tr(P^α S) = n_α = 11 (ScH⁺ ROHF)", trps, 11.0, 1.0e-6)
+
+    if fails == 0 {
+        println("qforge_molscf_rohf_selftest PASS")
+    } else {
+        println("qforge_molscf_rohf_selftest FAIL (" + to_string(fails) + ")")
+    }
+}
