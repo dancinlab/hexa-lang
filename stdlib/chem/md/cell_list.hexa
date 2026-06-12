@@ -1,0 +1,401 @@
+// stdlib/chem/md/cell_list.hexa — 입방박스 cell-list (linked-cell) 이웃탐색
+// O(N²) → O(N) nonbonded 평가.
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// References:
+//   Allen, M.P. & Tildesley, D.J. (2017). Computer Simulation of Liquids,
+//     2nd ed., Oxford. Ch. 5.3.2 (cell structures / linked lists).
+//   Frenkel, D. & Smit, B. (2002). Understanding Molecular Simulation,
+//     2nd ed., Academic. Appendix F (cell lists).
+//   Plimpton, S. (1995). J. Comput. Phys. 117, 1–19 (spatial decomposition,
+//     27-cell stencil for short-range pair search).
+//
+// 순수 알고리즘 — I/O 없음, syscall 없음.
+//
+// 아이디어: 입방 박스를 변 `r_cut` 이상의 정육면체 cell grid 로 분할한다.
+// cell 변이 r_cut 보다 크거나 같으면 컷오프 r_cut 안의 모든 쌍은 같은
+// cell 또는 27개(=3³) 인접 cell(자기 + 26 이웃) 안에만 존재한다. 따라서
+// 각 원자는 자기 cell + 26 이웃 cell 의 원자만 검사하면 되고, 박스가
+// 커져도(원자수 N↑, 밀도 일정) cell 당 원자수는 상수에 머물러
+// 쌍-검사 수가 N 에 선형(O(N))이 된다.
+//
+// PBC: cell 인덱스는 floor((x_wrap)/cellsize) 로 잡고, 이웃 cell 오프셋이
+// 박스를 넘으면 모듈로로 반대편으로 감싼다(주기 wrap). 실제 거리는
+// 최소-이미지(min-image)로 계산하므로 cell 래핑과 일관된다.
+//
+// d4-generic: 박스 변 L · 컷오프 r_cut 은 인자. 좌표는 dict {x,y,z,...}
+// 배열(generic coordinate interface) — 특정 도메인 struct 에 비의존.
+// LJ ε/σ 는 좌표 dict 의 "eps"/"sigma" 필드에서 읽는다(있을 때).
+//
+// Public surface:
+//   pub fn cl_build(coords, L, r_cut) -> dict
+//       cell grid 빌드. 반환 dict:
+//         "ncell"   : 한 축당 cell 수 (nc)
+//         "cellsize": 실제 cell 변 길이 (L / nc ≥ r_cut)
+//         "L"       : 박스 변
+//         "r_cut"   : 컷오프
+//         "buckets" : nc³ 길이 배열, 각 원소 = 그 cell 의 원자 인덱스 배열
+//         "cellof"  : 원자별 평탄 cell-id 배열 (길이 N)
+//   pub fn cl_cell_index(x, y, z, L, nc, cellsize) -> int
+//       wrap 후 좌표의 평탄 cell-id (0..nc³−1).
+//   pub fn cl_neighbor_pairs(coords, cl) -> array
+//       r_cut 안의 모든 (i,j) 쌍(i<j, min-image r ≤ r_cut) 배열.
+//       각 원소 = #{ "i", "j", "r2" }. 27-cell stencil 만 순회.
+//   pub fn cl_pair_count(coords, cl) -> int
+//       cl_neighbor_pairs 의 길이 (= 컷오프 안 쌍 수, scaling 보고용).
+//   pub fn cl_lj_energy(coords, cl) -> float
+//       cell-list 로 Σ_{i<j, r≤r_cut} U_LJ(r_ij). ε/σ 는 LB-결합
+//       (좌표 dict 의 eps/sigma). 컷오프 밖은 0(switch 없음 — hard cutoff).
+//   pub fn cl_lj_energy_switched(coords, cl, r_on) -> float
+//       (r_on, r_cut) 구간에 C¹ switching 적용한 LJ 합(스무딩).
+//
+// 직접 O(N²) 비교(parity ref)용:
+//   pub fn direct_lj_energy_cutoff(coords, L, r_cut) -> float
+//       min-image O(N²) 직접합, 같은 hard cutoff. cl_lj_energy 와 비교.
+//   pub fn direct_pair_count_cutoff(coords, L, r_cut) -> int
+//       min-image O(N²) 직접합으로 센 컷오프 안 쌍 수.
+
+// ── positive modulo (signed % 보정) ──────────────────────────────────
+// hexa `%` 는 C-스타일 signed modulo (-7 % 3 = -1). cell wrap 은 항상
+// [0, m) 가 필요하므로 양수-wrap 모듈로를 제공.
+fn _pmod(a: int, m: int) -> int {
+    let r = a % m
+    if r < 0 { return r + m }
+    return r
+}
+
+// ── 단일 축 최소-이미지 변위 (pbc.hexa pbc_wrap_scalar 와 동일식) ─────
+// d_wrapped = d − L·round(d/L), round(x)=floor(x+0.5) ⇒ (-L/2, L/2].
+fn _mim(d: float, L: float) -> float {
+    if L <= 0.0 { return d }
+    let q = d / L + 0.5
+    return d - L * to_float(floor(q))
+}
+
+// ── 좌표를 1차 박스 [0,L) 로 wrap ────────────────────────────────────
+fn _wrap_into_box(x: float, L: float) -> float {
+    if L <= 0.0 { return x }
+    let k = floor(x / L)
+    let xw = x - L * to_float(k)
+    // 부동소수 경계 보호: 정확히 L 로 떨어지면 0 으로.
+    if xw >= L { return xw - L }
+    if xw < 0.0 { return xw + L }
+    return xw
+}
+
+// ── Lorentz–Berthelot 결합 (amber.hexa 에 의존하지 않도록 인라인) ────
+//   ε_ij = √(ε_i·ε_j),  σ_ij = ½(σ_i+σ_j)
+fn _lb_eps(ei: float, ej: float) -> float { return sqrt(ei * ej) }
+fn _lb_sig(si: float, sj: float) -> float { return 0.5 * (si + sj) }
+
+// ── 좌표 dict 에서 LJ 파라미터 안전 추출 (없으면 0) ──────────────────
+fn _get_or(c: dict, key: string, dflt: float) -> float {
+    if c.has(key) { return c[key] }
+    return dflt
+}
+
+// ── cell 변 길이 / 한축 cell 수 결정 ─────────────────────────────────
+// nc = floor(L / r_cut). r_cut > L 이거나 nc < 1 이면 nc = 1 (단일 cell =
+// 직접 min-image O(N²) 로 안전 강등). nc < 3 이면 27-stencil 이 같은
+// 이웃을 중복 방문할 수 있으나 _pmod wrap + i<j dedup 로 정확성은 유지
+// (단 nc<3 에서는 O(N) 이득이 없음 — 작은 박스라 무관).
+fn _ncell(L: float, r_cut: float) -> int {
+    if r_cut <= 0.0 { return 1 }
+    let nc = to_int(floor(L / r_cut))
+    if nc < 1 { return 1 }
+    return nc
+}
+
+// ── 평탄 cell-id ─────────────────────────────────────────────────────
+fn _flat_id(ix: int, iy: int, iz: int, nc: int) -> int {
+    return (ix * nc + iy) * nc + iz
+}
+
+// ── public: wrap 후 좌표의 평탄 cell-id ──────────────────────────────
+pub fn cl_cell_index(x: float, y: float, z: float,
+                     L: float, nc: int, cellsize: float) -> int {
+    let xw = _wrap_into_box(x, L)
+    let yw = _wrap_into_box(y, L)
+    let zw = _wrap_into_box(z, L)
+    let mut ix = to_int(floor(xw / cellsize))
+    let mut iy = to_int(floor(yw / cellsize))
+    let mut iz = to_int(floor(zw / cellsize))
+    // 경계 floor 보호: index ∈ [0, nc)
+    ix = _pmod(ix, nc)
+    iy = _pmod(iy, nc)
+    iz = _pmod(iz, nc)
+    return _flat_id(ix, iy, iz, nc)
+}
+
+// ── public: cell grid 빌드 ───────────────────────────────────────────
+pub fn cl_build(coords: array, L: float, r_cut: float) -> dict {
+    let nc = _ncell(L, r_cut)
+    let cellsize = L / to_float(nc)
+    let nbuck = nc * nc * nc
+
+    // empty bucket 배열 초기화
+    let mut buckets = []
+    let mut b = 0
+    while b < nbuck {
+        buckets = buckets.push([])
+        b = b + 1
+    }
+
+    let mut cellof = []
+    let n = coords.len()
+    let mut i = 0
+    while i < n {
+        let c = coords[i]
+        let cid = cl_cell_index(c["x"], c["y"], c["z"], L, nc, cellsize)
+        buckets[cid] = buckets[cid].push(i)
+        cellof = cellof.push(cid)
+        i = i + 1
+    }
+
+    let out = #{}
+    out["ncell"]    = nc
+    out["cellsize"] = cellsize
+    out["L"]        = L
+    out["r_cut"]    = r_cut
+    out["buckets"]  = buckets
+    out["cellof"]   = cellof
+    out["n"]        = n
+    return out
+}
+
+// ── public: 27-cell stencil 이웃 쌍 (i<j, min-image r ≤ r_cut) ────────
+pub fn cl_neighbor_pairs(coords: array, cl: dict) -> array {
+    let L     = cl["L"]
+    let r_cut = cl["r_cut"]
+    let nc    = cl["ncell"]
+    let cs    = cl["cellsize"]
+    let buckets = cl["buckets"]
+    let rc2 = r_cut * r_cut
+
+    let mut pairs = []
+
+    // 자기 cell (ix,iy,iz) 의 각 원자에 대해 27 이웃 cell 의 원자를 검사.
+    // i<j dedup: 같은 cell 은 j>i 만; 다른 cell 은 (i in home, j in nb) 를
+    // home cell-id < nb cell-id 일 때만 카운트 → 각 쌍 정확히 1회.
+    let mut ix = 0
+    while ix < nc {
+        let mut iy = 0
+        while iy < nc {
+            let mut iz = 0
+            while iz < nc {
+                let home = _flat_id(ix, iy, iz, nc)
+                let home_atoms = buckets[home]
+                let nh = home_atoms.len()
+
+                // 27 stencil offsets
+                let mut dxi = -1
+                while dxi <= 1 {
+                    let mut dyi = -1
+                    while dyi <= 1 {
+                        let mut dzi = -1
+                        while dzi <= 1 {
+                            let jx = _pmod(ix + dxi, nc)
+                            let jy = _pmod(iy + dyi, nc)
+                            let jz = _pmod(iz + dzi, nc)
+                            let nb = _flat_id(jx, jy, jz, nc)
+
+                            if nb == home {
+                                // 같은 cell: j>i 쌍만 (자기검사 1회)
+                                let mut a = 0
+                                while a < nh {
+                                    let i_idx = home_atoms[a]
+                                    let pi = coords[i_idx]
+                                    let mut bb = a + 1
+                                    while bb < nh {
+                                        let j_idx = home_atoms[bb]
+                                        let pj = coords[j_idx]
+                                        let dx = _mim(pi["x"] - pj["x"], L)
+                                        let dy = _mim(pi["y"] - pj["y"], L)
+                                        let dz = _mim(pi["z"] - pj["z"], L)
+                                        let r2 = dx*dx + dy*dy + dz*dz
+                                        if r2 <= rc2 {
+                                            let rec = #{}
+                                            rec["i"]  = i_idx
+                                            rec["j"]  = j_idx
+                                            rec["r2"] = r2
+                                            pairs = pairs.push(rec)
+                                        }
+                                        bb = bb + 1
+                                    }
+                                    a = a + 1
+                                }
+                            } else {
+                                if home < nb {
+                                    // 서로 다른 cell: home<nb 일 때만 (쌍 1회)
+                                    let nb_atoms = buckets[nb]
+                                    let nn = nb_atoms.len()
+                                    let mut a = 0
+                                    while a < nh {
+                                        let i_idx = home_atoms[a]
+                                        let pi = coords[i_idx]
+                                        let mut bb = 0
+                                        while bb < nn {
+                                            let j_idx = nb_atoms[bb]
+                                            let pj = coords[j_idx]
+                                            let dx = _mim(pi["x"] - pj["x"], L)
+                                            let dy = _mim(pi["y"] - pj["y"], L)
+                                            let dz = _mim(pi["z"] - pj["z"], L)
+                                            let r2 = dx*dx + dy*dy + dz*dz
+                                            if r2 <= rc2 {
+                                                let rec = #{}
+                                                // i<j 정규화 (보고 일관성)
+                                                if i_idx < j_idx {
+                                                    rec["i"] = i_idx
+                                                    rec["j"] = j_idx
+                                                } else {
+                                                    rec["i"] = j_idx
+                                                    rec["j"] = i_idx
+                                                }
+                                                rec["r2"] = r2
+                                                pairs = pairs.push(rec)
+                                            }
+                                            bb = bb + 1
+                                        }
+                                        a = a + 1
+                                    }
+                                }
+                            }
+                            dzi = dzi + 1
+                        }
+                        dyi = dyi + 1
+                    }
+                    dxi = dxi + 1
+                }
+                iz = iz + 1
+            }
+            iy = iy + 1
+        }
+        ix = ix + 1
+    }
+    return pairs
+}
+
+// ── public: 컷오프 안 쌍 수 (scaling 보고) ────────────────────────────
+pub fn cl_pair_count(coords: array, cl: dict) -> int {
+    return cl_neighbor_pairs(coords, cl).len()
+}
+
+// ── LJ 쌍 에너지 (r2 + eps/sigma 인자) ───────────────────────────────
+fn _lj_pair_e(r2: float, eps: float, sigma: float) -> float {
+    if r2 < 1.0e-30 { return 0.0 }
+    let s2 = sigma * sigma
+    let sr2 = s2 / r2
+    let sr6 = sr2 * sr2 * sr2
+    let sr12 = sr6 * sr6
+    return 4.0 * eps * (sr12 - sr6)
+}
+
+// ── public: cell-list LJ 에너지 (hard cutoff) ────────────────────────
+pub fn cl_lj_energy(coords: array, cl: dict) -> float {
+    let pairs = cl_neighbor_pairs(coords, cl)
+    let np = pairs.len()
+    let mut u = 0.0
+    let mut p = 0
+    while p < np {
+        let rec = pairs[p]
+        let i = rec["i"]
+        let j = rec["j"]
+        let r2 = rec["r2"]
+        let ci = coords[i]
+        let cj = coords[j]
+        let eps = _lb_eps(_get_or(ci, "eps", 0.0), _get_or(cj, "eps", 0.0))
+        let sig = _lb_sig(_get_or(ci, "sigma", 0.0), _get_or(cj, "sigma", 0.0))
+        u = u + _lj_pair_e(r2, eps, sig)
+        p = p + 1
+    }
+    return u
+}
+
+// ── C¹ switching function S(r) on (r_on, r_cut) ──────────────────────
+// S=1 for r≤r_on, S=0 for r≥r_cut, smooth (CHARMM-style):
+//   x = (r_cut² − r²)² · (r_cut² + 2r² − 3r_on²) / (r_cut² − r_on²)³
+fn _switch(r2: float, ron2: float, rc2: float) -> float {
+    if r2 <= ron2 { return 1.0 }
+    if r2 >= rc2 { return 0.0 }
+    let a = rc2 - r2
+    let num = a * a * (rc2 + 2.0 * r2 - 3.0 * ron2)
+    let den = (rc2 - ron2) * (rc2 - ron2) * (rc2 - ron2)
+    return num / den
+}
+
+// ── public: switched LJ 에너지 (r_on..r_cut 스무딩) ──────────────────
+pub fn cl_lj_energy_switched(coords: array, cl: dict, r_on: float) -> float {
+    let pairs = cl_neighbor_pairs(coords, cl)
+    let np = pairs.len()
+    let ron2 = r_on * r_on
+    let rc = cl["r_cut"]
+    let rc2 = rc * rc
+    let mut u = 0.0
+    let mut p = 0
+    while p < np {
+        let rec = pairs[p]
+        let i = rec["i"]
+        let j = rec["j"]
+        let r2 = rec["r2"]
+        let ci = coords[i]
+        let cj = coords[j]
+        let eps = _lb_eps(_get_or(ci, "eps", 0.0), _get_or(cj, "eps", 0.0))
+        let sig = _lb_sig(_get_or(ci, "sigma", 0.0), _get_or(cj, "sigma", 0.0))
+        let e = _lj_pair_e(r2, eps, sig)
+        u = u + e * _switch(r2, ron2, rc2)
+        p = p + 1
+    }
+    return u
+}
+
+// ── 직접 O(N²) min-image LJ (same hard cutoff) — parity ref ──────────
+pub fn direct_lj_energy_cutoff(coords: array, L: float, r_cut: float) -> float {
+    let n = coords.len()
+    let rc2 = r_cut * r_cut
+    let mut u = 0.0
+    let mut i = 0
+    while i < n {
+        let ci = coords[i]
+        let mut j = i + 1
+        while j < n {
+            let cj = coords[j]
+            let dx = _mim(ci["x"] - cj["x"], L)
+            let dy = _mim(ci["y"] - cj["y"], L)
+            let dz = _mim(ci["z"] - cj["z"], L)
+            let r2 = dx*dx + dy*dy + dz*dz
+            if r2 <= rc2 {
+                let eps = _lb_eps(_get_or(ci, "eps", 0.0), _get_or(cj, "eps", 0.0))
+                let sig = _lb_sig(_get_or(ci, "sigma", 0.0), _get_or(cj, "sigma", 0.0))
+                u = u + _lj_pair_e(r2, eps, sig)
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return u
+}
+
+// ── 직접 O(N²) min-image 컷오프 쌍 수 — parity ref ───────────────────
+pub fn direct_pair_count_cutoff(coords: array, L: float, r_cut: float) -> int {
+    let n = coords.len()
+    let rc2 = r_cut * r_cut
+    let mut cnt = 0
+    let mut i = 0
+    while i < n {
+        let ci = coords[i]
+        let mut j = i + 1
+        while j < n {
+            let cj = coords[j]
+            let dx = _mim(ci["x"] - cj["x"], L)
+            let dy = _mim(ci["y"] - cj["y"], L)
+            let dz = _mim(ci["z"] - cj["z"], L)
+            let r2 = dx*dx + dy*dy + dz*dz
+            if r2 <= rc2 { cnt = cnt + 1 }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return cnt
+}
