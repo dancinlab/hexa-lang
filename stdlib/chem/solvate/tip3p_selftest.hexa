@@ -1,0 +1,192 @@
+// stdlib/chem/solvate/tip3p_selftest.hexa — g5 seal for the TIP3P
+// solvation-box builder (QFORGE-BIO round-6, real-system infra brick).
+//
+// Run:
+//   hexa run stdlib/chem/solvate/tip3p_selftest.hexa
+//
+// Checks (real-system infrastructure on the sealed native FEP core):
+//   (a) TIP3P GEOMETRY EXACT — built single molecule has r(O-H) and
+//       ∠(H-O-H) matching the defining values |Δr|<1e-6 Å, |Δθ|<1e-4°.
+//   (b) DENSITY ~1 g/cm³ — a filled box has water density near 0.997
+//       g/cm³ (±5%, lattice-fill grid tolerance).
+//   (c) TOTAL CHARGE NEUTRAL — rigid water Σq = 0.834 − 2·0.417 = 0;
+//       whole box (neutral solute) |Σq| < 1e-12.
+//   (d) OVERLAP REMOVED — minimum solute↔water distance ≥ overlap cutoff
+//       (zero clash); min_dist reported.
+//   (e) PBC ENERGY FINITE — LJ + Coulomb (existing stdlib) minimum-image
+//       energy of the filled box is finite, no NaN (no clash confirmed).
+//
+// All oracles are closed-form / point-evaluated; no network, no shell-out,
+// no random seeds.
+
+use "stdlib/chem/solvate/tip3p"
+use "stdlib/chem/md/lennard_jones"
+use "stdlib/chem/md/ewald"
+
+let mut pass_count = 0
+let mut total = 0
+let mut first_fail = ""
+
+fn abs_f(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// finite ⇔ not NaN and not ±inf. NaN != NaN; inf bounded by a big number.
+fn is_finite(x: float) -> bool {
+    if x != x { return false }
+    if x > 1.0e300 { return false }
+    if x < 0.0 - 1.0e300 { return false }
+    return true
+}
+
+fn check(name: string, cond: bool, detail: string) {
+    total = total + 1
+    if cond {
+        pass_count = pass_count + 1
+        println("  ok : " + name + " " + detail)
+    } else {
+        if first_fail == "" { first_fail = name }
+        println("  FAIL " + name + " " + detail)
+    }
+}
+
+// ── (a) TIP3P geometry exact ─────────────────────────────────────────
+
+let c = tip3p_constants()
+let rOH_def = c[0]      // 0.9572
+let theta_def = c[1]    // 104.52
+
+// build a molecule at an arbitrary O position (geometry is translation
+// invariant, so an off-origin O is the stronger test).
+let mol = tip3p_molecule(3.7, 1.1, 2.2)
+let rOH_built = tip3p_bond_length(mol)
+let theta_built = tip3p_angle_deg(mol)
+let dr = abs_f(rOH_built - rOH_def)
+let dtheta = abs_f(theta_built - theta_def)
+
+check("a1 r(O-H) exact", dr < 1.0e-6,
+      "built=" + to_string(rOH_built) + " def=" + to_string(rOH_def)
+      + " |Δr|=" + to_string(dr))
+check("a2 ∠(H-O-H) exact", dtheta < 1.0e-4,
+      "built=" + to_string(theta_built) + " def=" + to_string(theta_def)
+      + " |Δθ|=" + to_string(dtheta))
+
+// second O-H bond also equals rOH (rigid symmetric construction).
+let oA = mol[0]
+let h2 = mol[2]
+let bdx = oA.x - h2.x
+let bdy = oA.y - h2.y
+let bdz = oA.z - h2.z
+let rOH2 = sqrt(bdx * bdx + bdy * bdy + bdz * bdz)
+check("a3 second O-H equal", abs_f(rOH2 - rOH_def) < 1.0e-6,
+      "rOH2=" + to_string(rOH2))
+
+// ── solvation box fixture ────────────────────────────────────────────
+//
+// Empty solute (pure water box) for density/charge/PBC; a small neutral
+// solute for the overlap test. Box edge 18.6 Å (~ standard small WAT box).
+// target 0.997 g/cm³, overlap cut 2.4 Å (typical solute-water clash dist).
+
+let L = 18.6
+let target_density = 0.997
+let overlap_cut = 2.4
+
+// pure-water box (no solute).
+let empty = []
+let box_water = solvate_box(empty, L, target_density, overlap_cut)
+let n_wat = box_water_count(box_water)
+
+// ── (b) density ~1 g/cm³ (±5%) ───────────────────────────────────────
+
+let rho = box_density(box_water, L)
+let rho_err = abs_f(rho - 0.997) / 0.997
+check("b density ~0.997 g/cm³ (±5%)", rho_err < 0.05,
+      "ρ=" + to_string(rho) + " g/cm³  N=" + to_string(n_wat)
+      + "  rel=" + to_string(rho_err))
+
+// ── (c) total charge neutral ─────────────────────────────────────────
+
+let qtot = box_total_charge(box_water)
+check("c total charge Σq=0", abs_f(qtot) < 1.0e-12,
+      "Σq=" + to_string(qtot))
+
+// per-molecule neutrality (0.834 − 2·0.417 = 0).
+let q_mol = mol[0].q + mol[1].q + mol[2].q
+check("c2 per-molecule Σq=0", abs_f(q_mol) < 1.0e-12,
+      "molΣq=" + to_string(q_mol))
+
+// ── (d) overlap removed (solute↔water ≥ cutoff) ──────────────────────
+//
+// neutral 2-atom solute (a +1/−1 pair) placed at the box centre. After
+// solvate_box, no surviving water atom is within overlap_cut of either.
+
+let sol1 = SolvAtom{
+    x: 0.5 * L, y: 0.5 * L, z: 0.5 * L,
+    q: 1.0, eps: 0.1521, sigma: 3.1507, mass: 22.99, is_o: false,
+}
+let sol2 = SolvAtom{
+    x: 0.5 * L + 1.5, y: 0.5 * L, z: 0.5 * L,
+    q: 0.0 - 1.0, eps: 0.1521, sigma: 4.0, mass: 35.45, is_o: false,
+}
+let solute = [sol1, sol2]
+let box_sol = solvate_box(solute, L, target_density, overlap_cut)
+let n_solute = len(solute)
+let min_d = min_solute_water_distance(box_sol, n_solute, L)
+check("d overlap removed (min_dist≥cut)", min_d >= overlap_cut,
+      "min_dist=" + to_string(min_d) + " Å  cut=" + to_string(overlap_cut)
+      + " Å  (waters=" + to_string(box_water_count(box_sol)) + ")")
+
+// ── (e) PBC energy finite (LJ + Coulomb minimum-image) ───────────────
+//
+// Use the existing stdlib: lj_system_energy over O-sites (LJ on O only)
+// and ewald_total_energy over all charged sites. Both minimum-image /
+// periodic. Finite + non-NaN ⇒ no clash, real-system infra holds.
+
+// LJ: O-sites carry the only LJ; build MdParticle list of O's.
+let mut o_particles = []
+let mut i = 0
+while i < len(box_water) {
+    let a = box_water[i]
+    if a.is_o {
+        let p = MdParticle{
+            x: a.x, y: a.y, z: a.z,
+            vx: 0.0, vy: 0.0, vz: 0.0, mass: a.mass,
+            fx: 0.0, fy: 0.0, fz: 0.0,
+        }
+        o_particles = push(o_particles, p)
+    }
+    i = i + 1
+}
+// TIP3P O-O LJ params (single-type system).
+let lj_e = lj_system_energy(o_particles, 0.1521, 3.1507)
+
+// Coulomb: all charged sites → EwaldCharge, periodic Ewald sum.
+let mut charges = []
+let mut j = 0
+while j < len(box_water) {
+    let a = box_water[j]
+    let ec = EwaldCharge{ x: a.x, y: a.y, z: a.z, q: a.q }
+    charges = push(charges, ec)
+    j = j + 1
+}
+let coul_e = ewald_total_energy(charges, L, 1.0e-5)
+let pbc_e = lj_e + coul_e
+
+check("e1 LJ energy finite", is_finite(lj_e),
+      "E_LJ=" + to_string(lj_e) + " kcal/mol (O-sites=" + to_string(len(o_particles)) + ")")
+check("e2 Coulomb (Ewald) energy finite", is_finite(coul_e),
+      "E_coul=" + to_string(coul_e) + " (charges=" + to_string(len(charges)) + ")")
+check("e3 total PBC energy finite (no NaN)", is_finite(pbc_e),
+      "E_pbc=" + to_string(pbc_e))
+
+// ── Verdict ──────────────────────────────────────────────────────────
+println("")
+if pass_count == total {
+    println("PASS: tip3p " + to_string(pass_count) + "/" + to_string(total))
+    exit(0)
+} else {
+    println("FAIL: tip3p first=" + first_fail
+            + " (" + to_string(pass_count) + "/" + to_string(total) + ")")
+    exit(1)
+}
