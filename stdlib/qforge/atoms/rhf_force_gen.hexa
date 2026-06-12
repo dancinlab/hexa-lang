@@ -1,0 +1,573 @@
+// HEXA Standard Library — qforge/atoms/rhf_force_gen
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE atoms-scale brick #14 — the GENUINE first-row ab-initio RHF ENERGY and
+// FULLY-ANALYTIC NUCLEAR FORCE on a d-BEARING molecule (H₂O + d-polarization on O),
+// driven through the atoms geometry front-end with a GENERALIZED per-AO descriptor
+// basis that carries arbitrary angular momentum INCLUDING the spherical-d shell.
+//
+// ── Why a generalized (multi-term) AO front-end (vs r13's single-monomial one) ──
+//   R10–R13 sealed s→p with a per-AO Cartesian-MONOMIAL descriptor (one [lx,ly,lz]
+//   per AO). A pure spherical-d AO is NOT one monomial — d_{z²}=2zz−xx−yy mixes
+//   THREE Cartesian monomials. So an AO here is a LIST of terms, each a
+//   (monomial[3], exp, coef) triple — exactly MOLSCF's `md_dshell_ao` output:
+//     POW[μ] : [T][3] Cartesian monomials   EXP[μ] : [T] exponents
+//     CO[μ]  : [T] coefficients             aom[μ] : parent ATOM index
+//   s/p AOs are the T=R degenerate case (one monomial × R radial prims) — the SAME
+//   path runs them, so this front-end SUBSUMES r13 (verified: (d) regression).
+//
+// ── The energy (MOLSCF r5 recipe, byte-faithful) ───────────────────────────────
+//   Each AO is SELF-normalized once: NRM[μ] = 1/√⟨χ_μ|χ_μ⟩ (md_ao_norm). A single-
+//   center self-overlap is TRANSLATION-INVARIANT → NRM[μ] is a GEOMETRY CONSTANT.
+//   S, H=T+V, the n⁴ ERI tensor assemble as NRM[μ]NRM[ν](…)·md_ao_*_raw(...), then
+//   the UNCHANGED rhf_scf runs. Reproduces PySCF E=−74.986924782 Ha for H₂O+d(O).
+//
+// ── The fully-analytic force (Pulay/Hellmann-Feynman, L-general) ───────────────
+//   F_A = −Σ P ∂H/∂R_A − ½ΣPP ∂[(μν|λσ)−½(μλ|σν)]/∂R_A + Σ W ∂S/∂R_A − ∂E_nuc/∂R_A.
+//   Because NRM is a geometry constant, ∂(NRM·NRM·raw)/∂R = NRM·NRM·∂raw/∂R. The raw
+//   integral of a multi-term AO is LINEAR in its terms, and the shell_grads
+//   translation identity (∂/∂A χ_a^l = 2a χ_a^{l+1} − l_d χ_a^{l−1}) is per-monomial,
+//   so ∂raw/∂R = Σ_{term-pairs} sg_*(monomial_i, …). NO new analytic machinery: each
+//   term is fed to shell_grads as a 1-monomial 1-prim sub-AO and summed. The d AOs'
+//   Pulay W·∂S term is load-bearing (drop it → force breaks) — gated.
+//
+// ── Honest scope (d6) ─────────────────────────────────────────────────────────
+//   • FULLY ANALYTIC, ALL L through d (∂S/∂T/∂V/∂ERI/∂E_nuc all closed form). No FD
+//     in the force; the (b) reference is FD-of-energy only.
+//   • d sealed here on H₂O+d(O) (PySCF-anchored). f (10 Cartesian→7 spherical) is the
+//     IDENTICAL construction (md_*shell_ao + this front-end) — no NEW force machinery.
+//   • r13 rhf_force_pd.hexa + r12 rhf_force.hexa are BYTE-UNTOUCHED (new file only).
+//
+// reuse (d19·d3): MOLSCF md_shell (md_ao_*_raw · md_ao_norm · md_dshell_ao) + rhf_scf
+//   UNCHANGED; the r13 shell_grads translation derivatives UNCHANGED. Nothing re-minted.
+use "stdlib/qforge/molscf/md_shell"
+use "stdlib/qforge/molscf/md_integrals"
+use "stdlib/qforge/molscf/rhf"
+use "stdlib/qforge/atoms/shell_grads"
+
+fn _absr(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+// center [3] of atom a from the flat position vector.
+fn _center(pos: [float], a: int) -> [float] {
+    return [pos[3*a+0], pos[3*a+1], pos[3*a+2]]
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   GEOMETRY-CONSTANT per-AO self-norms. NRM[μ] = 1/√⟨χ_μ|χ_μ⟩. The self-overlap
+//   of a single-center AO does NOT depend on where the atom sits → compute once,
+//   reuse at every geometry (and as a constant in every derivative).
+// ════════════════════════════════════════════════════════════════════════════
+pub fn qf_gen_norms(POW: [[[int]]], EXP: [[float]], CO: [[float]], norb: int) -> [float] {
+    let Z = [0.0, 0.0, 0.0]
+    let mut nrm: [float] = []
+    let mut mu = 0
+    while mu < norb {
+        nrm.push(md_ao_norm(POW[mu], EXP[mu], CO[mu], Z))
+        mu = mu + 1
+    }
+    return nrm
+}
+
+// ── overlap matrix S (norb×norb, flat row-major) ──────────────────────────────
+pub fn qf_gen_overlap(pos: [float], POW: [[[int]]], EXP: [[float]], CO: [[float]],
+                      aom: [int], nrm: [float], norb: int) -> [float] {
+    let mut S: [float] = []
+    let mut mu = 0
+    while mu < norb {
+        let A = _center(pos, aom[mu])
+        let mut nu = 0
+        while nu < norb {
+            let B = _center(pos, aom[nu])
+            let v = nrm[mu] * nrm[nu] * md_ao_overlap_raw(POW[mu], EXP[mu], CO[mu], A, POW[nu], EXP[nu], CO[nu], B)
+            S.push(v)
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    return S
+}
+
+// ── core Hamiltonian H_core = T + Σ_C V^C ─────────────────────────────────────
+pub fn qf_gen_hcore(pos: [float], POW: [[[int]]], EXP: [[float]], CO: [[float]],
+                    aom: [int], nrm: [float], norb: int, z: [float], natom: int) -> [float] {
+    let mut H: [float] = []
+    let mut mu = 0
+    while mu < norb {
+        let A = _center(pos, aom[mu])
+        let mut nu = 0
+        while nu < norb {
+            let B = _center(pos, aom[nu])
+            let t = md_ao_kinetic_raw(POW[mu], EXP[mu], CO[mu], A, POW[nu], EXP[nu], CO[nu], B)
+            let mut v = 0.0
+            let mut c = 0
+            while c < natom {
+                let C = _center(pos, c)
+                v = v + md_ao_nuclear_raw(POW[mu], EXP[mu], CO[mu], A, POW[nu], EXP[nu], CO[nu], B, z[c], C)
+                c = c + 1
+            }
+            H.push(nrm[mu] * nrm[nu] * (t + v))
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    return H
+}
+
+// ── n⁴ ERI tensor (μν|σλ), flat ((μ n+ν)n+σ)n+λ. 8-fold symmetry reuse. ────────
+pub fn qf_gen_eri_tensor(pos: [float], POW: [[[int]]], EXP: [[float]], CO: [[float]],
+                         aom: [int], nrm: [float], norb: int) -> [float] {
+    let n = norb
+    let mut eri: [float] = []
+    let mut zi = 0
+    while zi < n * n * n * n { eri.push(0.0) ; zi = zi + 1 }
+    let mut mu = 0
+    while mu < n {
+        let A = _center(pos, aom[mu])
+        let mut nu = 0
+        while nu <= mu {
+            let B = _center(pos, aom[nu])
+            let mn = mu * (mu + 1) / 2 + nu
+            let mut sg = 0
+            while sg < n {
+                let C = _center(pos, aom[sg])
+                let mut lm = 0
+                while lm <= sg {
+                    let D = _center(pos, aom[lm])
+                    let sl = sg * (sg + 1) / 2 + lm
+                    if mn >= sl {
+                        let val = nrm[mu] * nrm[nu] * nrm[sg] * nrm[lm] * md_ao_eri_raw(
+                            POW[mu], EXP[mu], CO[mu], A, POW[nu], EXP[nu], CO[nu], B,
+                            POW[sg], EXP[sg], CO[sg], C, POW[lm], EXP[lm], CO[lm], D)
+                        eri[((mu*n+nu)*n+sg)*n+lm] = val
+                        eri[((nu*n+mu)*n+sg)*n+lm] = val
+                        eri[((mu*n+nu)*n+lm)*n+sg] = val
+                        eri[((nu*n+mu)*n+lm)*n+sg] = val
+                        eri[((sg*n+lm)*n+mu)*n+nu] = val
+                        eri[((lm*n+sg)*n+mu)*n+nu] = val
+                        eri[((sg*n+lm)*n+nu)*n+mu] = val
+                        eri[((lm*n+sg)*n+nu)*n+mu] = val
+                    }
+                    lm = lm + 1
+                }
+                sg = sg + 1
+            }
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    return eri
+}
+
+// ── nuclear repulsion E_nuc = Σ_{A<B} Z_A Z_B / R_AB ──────────────────────────
+pub fn qf_gen_enuc(pos: [float], z: [float], natom: int) -> float {
+    let mut e = 0.0
+    let mut a = 0
+    while a < natom {
+        let mut b = a + 1
+        while b < natom {
+            let dx = pos[3*a+0]-pos[3*b+0] ; let dy = pos[3*a+1]-pos[3*b+1] ; let dz = pos[3*a+2]-pos[3*b+2]
+            let r = sqrt(dx*dx + dy*dy + dz*dz)
+            if r > 0.0 { e = e + z[a] * z[b] / r }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return e
+}
+
+// ── drive the UNCHANGED rhf_scf from the generalized per-AO front-end ──────────
+pub fn qf_gen_run(pos: [float], POW: [[[int]]], EXP: [[float]], CO: [[float]], aom: [int],
+                  nrm: [float], norb: int, z: [float], natom: int, n_occ: int,
+                  max_iter: int, e_tol: float, mix: float) -> [any] {
+    let S = qf_gen_overlap(pos, POW, EXP, CO, aom, nrm, norb)
+    let H = qf_gen_hcore(pos, POW, EXP, CO, aom, nrm, norb, z, natom)
+    let eri = qf_gen_eri_tensor(pos, POW, EXP, CO, aom, nrm, norb)
+    let e_nuc = qf_gen_enuc(pos, z, natom)
+    return rhf_scf(S, H, eri, norb, n_occ, e_nuc, max_iter, e_tol, mix)
+}
+
+// ── E_RHF scalar at a geometry (central-FD force reference) ───────────────────
+pub fn qf_gen_energy(pos: [float], POW: [[[int]]], EXP: [[float]], CO: [[float]], aom: [int],
+                     nrm: [float], norb: int, z: [float], natom: int, n_occ: int) -> float {
+    let out = qf_gen_run(pos, POW, EXP, CO, aom, nrm, norb, z, natom, n_occ, 200, 1.0e-11, 1.0)
+    return out[0]
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   GENERALIZED-AO integral derivatives. Each AO is a LIST of terms; the raw
+//   integral is LINEAR in its terms and the shell_grads translation is per-
+//   monomial → ∂raw/∂R = Σ_{term-pairs} sg_*(term_i as a 1-monomial 1-prim sub-AO).
+//   The geometry-constant nrm[μ]nrm[ν] multiplies the whole sum.
+//   _t1(x) wraps a scalar into a 1-element float array (single-prim radial set).
+// ════════════════════════════════════════════════════════════════════════════
+fn _t1(x: float) -> [float] { return [x] }
+
+// raw ∂⟨μ|ν⟩/∂(bra A) for two generalized AOs — sum sg_doverlap_dA over term pairs.
+fn _draw_ov_dA(POWa: [[int]], EXPa: [float], COa: [float], A: [float],
+               POWb: [[int]], EXPb: [float], COb: [float], B: [float], dimd: int) -> float {
+    let mut g = 0.0
+    let mut i = 0
+    while i < len(EXPa) {
+        let mut j = 0
+        while j < len(EXPb) {
+            g = g + sg_doverlap_dA(POWa[i], _t1(EXPa[i]), _t1(COa[i]), A, POWb[j], _t1(EXPb[j]), _t1(COb[j]), B, dimd)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return g
+}
+fn _draw_ov_dB(POWa: [[int]], EXPa: [float], COa: [float], A: [float],
+               POWb: [[int]], EXPb: [float], COb: [float], B: [float], dimd: int) -> float {
+    let mut g = 0.0
+    let mut i = 0
+    while i < len(EXPa) {
+        let mut j = 0
+        while j < len(EXPb) {
+            g = g + sg_doverlap_dB(POWa[i], _t1(EXPa[i]), _t1(COa[i]), A, POWb[j], _t1(EXPb[j]), _t1(COb[j]), B, dimd)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return g
+}
+fn _draw_kin_dA(POWa: [[int]], EXPa: [float], COa: [float], A: [float],
+                POWb: [[int]], EXPb: [float], COb: [float], B: [float], dimd: int) -> float {
+    let mut g = 0.0
+    let mut i = 0
+    while i < len(EXPa) {
+        let mut j = 0
+        while j < len(EXPb) {
+            g = g + sg_dkinetic_dA(POWa[i], _t1(EXPa[i]), _t1(COa[i]), A, POWb[j], _t1(EXPb[j]), _t1(COb[j]), B, dimd)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return g
+}
+fn _draw_kin_dB(POWa: [[int]], EXPa: [float], COa: [float], A: [float],
+                POWb: [[int]], EXPb: [float], COb: [float], B: [float], dimd: int) -> float {
+    let mut g = 0.0
+    let mut i = 0
+    while i < len(EXPa) {
+        let mut j = 0
+        while j < len(EXPb) {
+            g = g + sg_dkinetic_dB(POWa[i], _t1(EXPa[i]), _t1(COa[i]), A, POWb[j], _t1(EXPb[j]), _t1(COb[j]), B, dimd)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return g
+}
+fn _draw_nuc_dA(POWa: [[int]], EXPa: [float], COa: [float], A: [float],
+                POWb: [[int]], EXPb: [float], COb: [float], B: [float], z: float, C: [float], dimd: int) -> float {
+    let mut g = 0.0
+    let mut i = 0
+    while i < len(EXPa) {
+        let mut j = 0
+        while j < len(EXPb) {
+            g = g + sg_dnuclear_dA(POWa[i], _t1(EXPa[i]), _t1(COa[i]), A, POWb[j], _t1(EXPb[j]), _t1(COb[j]), B, z, C, dimd)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return g
+}
+fn _draw_nuc_dB(POWa: [[int]], EXPa: [float], COa: [float], A: [float],
+                POWb: [[int]], EXPb: [float], COb: [float], B: [float], z: float, C: [float], dimd: int) -> float {
+    let mut g = 0.0
+    let mut i = 0
+    while i < len(EXPa) {
+        let mut j = 0
+        while j < len(EXPb) {
+            g = g + sg_dnuclear_dB(POWa[i], _t1(EXPa[i]), _t1(COa[i]), A, POWb[j], _t1(EXPb[j]), _t1(COb[j]), B, z, C, dimd)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return g
+}
+fn _draw_nuc_dC(POWa: [[int]], EXPa: [float], COa: [float], A: [float],
+                POWb: [[int]], EXPb: [float], COb: [float], B: [float], z: float, C: [float], dimd: int) -> float {
+    let mut g = 0.0
+    let mut i = 0
+    while i < len(EXPa) {
+        let mut j = 0
+        while j < len(EXPb) {
+            g = g + sg_dnuclear_dC(POWa[i], _t1(EXPa[i]), _t1(COa[i]), A, POWb[j], _t1(EXPb[j]), _t1(COb[j]), B, z, C, dimd)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return g
+}
+
+// ∂S_μν/∂R_{A,d} (flat). AO μ moves if aom[μ]==A; AO ν moves if aom[ν]==A.
+pub fn qf_gen_doverlap_dR(pos: [float], POW: [[[int]]], EXP: [[float]], CO: [[float]],
+                          aom: [int], nrm: [float], norb: int, atomA: int, dimd: int) -> [float] {
+    let mut d: [float] = []
+    let mut mu = 0
+    while mu < norb {
+        let A = _center(pos, aom[mu])
+        let mut nu = 0
+        while nu < norb {
+            let B = _center(pos, aom[nu])
+            let mut g = 0.0
+            if aom[mu] == atomA { g = g + _draw_ov_dA(POW[mu], EXP[mu], CO[mu], A, POW[nu], EXP[nu], CO[nu], B, dimd) }
+            if aom[nu] == atomA { g = g + _draw_ov_dB(POW[mu], EXP[mu], CO[mu], A, POW[nu], EXP[nu], CO[nu], B, dimd) }
+            d.push(nrm[mu] * nrm[nu] * g)
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    return d
+}
+
+// ∂H_μν/∂R_{A,d} (T + Σ_C V^C). bra/ket move; nucleus C==A moves (Hellmann-Feynman).
+pub fn qf_gen_dhcore_dR(pos: [float], POW: [[[int]]], EXP: [[float]], CO: [[float]],
+                        aom: [int], nrm: [float], norb: int, z: [float], natom: int,
+                        atomA: int, dimd: int) -> [float] {
+    let mut d: [float] = []
+    let mut mu = 0
+    while mu < norb {
+        let A = _center(pos, aom[mu])
+        let mut nu = 0
+        while nu < norb {
+            let B = _center(pos, aom[nu])
+            let mut g = 0.0
+            if aom[mu] == atomA { g = g + _draw_kin_dA(POW[mu], EXP[mu], CO[mu], A, POW[nu], EXP[nu], CO[nu], B, dimd) }
+            if aom[nu] == atomA { g = g + _draw_kin_dB(POW[mu], EXP[mu], CO[mu], A, POW[nu], EXP[nu], CO[nu], B, dimd) }
+            let mut c = 0
+            while c < natom {
+                let C = _center(pos, c)
+                if aom[mu] == atomA { g = g + _draw_nuc_dA(POW[mu], EXP[mu], CO[mu], A, POW[nu], EXP[nu], CO[nu], B, z[c], C, dimd) }
+                if aom[nu] == atomA { g = g + _draw_nuc_dB(POW[mu], EXP[mu], CO[mu], A, POW[nu], EXP[nu], CO[nu], B, z[c], C, dimd) }
+                if c == atomA { g = g + _draw_nuc_dC(POW[mu], EXP[mu], CO[mu], A, POW[nu], EXP[nu], CO[nu], B, z[c], C, dimd) }
+                c = c + 1
+            }
+            d.push(nrm[mu] * nrm[nu] * g)
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    return d
+}
+
+// raw ∂(ab|cd)/∂(one of the 4 centers) — sum sg_deri_d* over all 4-term tuples.
+fn _draw_eri(which: int, POWa: [[int]], EXPa: [float], COa: [float], A: [float],
+             POWb: [[int]], EXPb: [float], COb: [float], B: [float],
+             POWc: [[int]], EXPc: [float], COc: [float], C: [float],
+             POWd: [[int]], EXPd: [float], COd: [float], D: [float], dimd: int) -> float {
+    let mut g = 0.0
+    let mut i = 0
+    while i < len(EXPa) {
+        let mut j = 0
+        while j < len(EXPb) {
+            let mut k = 0
+            while k < len(EXPc) {
+                let mut l = 0
+                while l < len(EXPd) {
+                    if which == 0 { g = g + sg_deri_dA(POWa[i],_t1(EXPa[i]),_t1(COa[i]),A, POWb[j],_t1(EXPb[j]),_t1(COb[j]),B, POWc[k],_t1(EXPc[k]),_t1(COc[k]),C, POWd[l],_t1(EXPd[l]),_t1(COd[l]),D, dimd) }
+                    if which == 1 { g = g + sg_deri_dB(POWa[i],_t1(EXPa[i]),_t1(COa[i]),A, POWb[j],_t1(EXPb[j]),_t1(COb[j]),B, POWc[k],_t1(EXPc[k]),_t1(COc[k]),C, POWd[l],_t1(EXPd[l]),_t1(COd[l]),D, dimd) }
+                    if which == 2 { g = g + sg_deri_dC(POWa[i],_t1(EXPa[i]),_t1(COa[i]),A, POWb[j],_t1(EXPb[j]),_t1(COb[j]),B, POWc[k],_t1(EXPc[k]),_t1(COc[k]),C, POWd[l],_t1(EXPd[l]),_t1(COd[l]),D, dimd) }
+                    if which == 3 { g = g + sg_deri_dD(POWa[i],_t1(EXPa[i]),_t1(COa[i]),A, POWb[j],_t1(EXPb[j]),_t1(COb[j]),B, POWc[k],_t1(EXPc[k]),_t1(COc[k]),C, POWd[l],_t1(EXPd[l]),_t1(COd[l]),D, dimd) }
+                    l = l + 1
+                }
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return g
+}
+
+// ∂(μν|σλ)/∂R_{A,d} (flat n⁴). Each of the 4 AO centers contributes if it == A.
+pub fn qf_gen_deri_dR(pos: [float], POW: [[[int]]], EXP: [[float]], CO: [[float]],
+                      aom: [int], nrm: [float], norb: int, atomA: int, dimd: int) -> [float] {
+    let n = norb
+    let mut d: [float] = []
+    let mut mu = 0
+    while mu < n {
+        let A = _center(pos, aom[mu])
+        let mut nu = 0
+        while nu < n {
+            let B = _center(pos, aom[nu])
+            let mut sg = 0
+            while sg < n {
+                let C = _center(pos, aom[sg])
+                let mut lm = 0
+                while lm < n {
+                    let D = _center(pos, aom[lm])
+                    let mut g = 0.0
+                    if aom[mu] == atomA { g = g + _draw_eri(0, POW[mu],EXP[mu],CO[mu],A, POW[nu],EXP[nu],CO[nu],B, POW[sg],EXP[sg],CO[sg],C, POW[lm],EXP[lm],CO[lm],D, dimd) }
+                    if aom[nu] == atomA { g = g + _draw_eri(1, POW[mu],EXP[mu],CO[mu],A, POW[nu],EXP[nu],CO[nu],B, POW[sg],EXP[sg],CO[sg],C, POW[lm],EXP[lm],CO[lm],D, dimd) }
+                    if aom[sg] == atomA { g = g + _draw_eri(2, POW[mu],EXP[mu],CO[mu],A, POW[nu],EXP[nu],CO[nu],B, POW[sg],EXP[sg],CO[sg],C, POW[lm],EXP[lm],CO[lm],D, dimd) }
+                    if aom[lm] == atomA { g = g + _draw_eri(3, POW[mu],EXP[mu],CO[mu],A, POW[nu],EXP[nu],CO[nu],B, POW[sg],EXP[sg],CO[sg],C, POW[lm],EXP[lm],CO[lm],D, dimd) }
+                    d.push(nrm[mu] * nrm[nu] * nrm[sg] * nrm[lm] * g)
+                    lm = lm + 1
+                }
+                sg = sg + 1
+            }
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    return d
+}
+
+// ── ∂E_nuc/∂R_{A,d} (analytic): − Σ_{B≠A} Z_A Z_B (A_d−B_d)/R_AB³ ──────────────
+fn _denuc_dR(pos: [float], z: [float], natom: int, atomA: int, dimd: int) -> float {
+    let mut g = 0.0
+    let mut b = 0
+    while b < natom {
+        if b != atomA {
+            let dx = pos[3*atomA+0]-pos[3*b+0] ; let dy = pos[3*atomA+1]-pos[3*b+1] ; let dz = pos[3*atomA+2]-pos[3*b+2]
+            let r2 = dx*dx + dy*dy + dz*dz
+            if r2 > 0.0 {
+                let r3 = r2 * sqrt(r2)
+                let diff = pos[3*atomA + dimd] - pos[3*b + dimd]
+                g = g - z[atomA] * z[b] * diff / r3
+            }
+        }
+        b = b + 1
+    }
+    return g
+}
+
+// ── energy-weighted density W_μν = Σ_i^occ 2 ε_i C_μi C_νi (closed shell) ──────
+pub fn qf_gen_wdensity(C: [float], eps: [float], n: int, n_occ: int) -> [float] {
+    let mut w: [float] = []
+    let mut mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu < n {
+            let mut s = 0.0
+            let mut a = 0
+            while a < n_occ { s = s + eps[a] * C[mu * n + a] * C[nu * n + a] ; a = a + 1 }
+            w.push(2.0 * s)
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    return w
+}
+
+fn _eri_at(eri: [float], n: int, mu: int, nu: int, sg: int, lm: int) -> float {
+    return eri[((mu * n + nu) * n + sg) * n + lm]
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   the FULLY-ANALYTIC RHF force component  F_{A,d} = −∂E_RHF/∂R_{A,d}
+//   with_pulay: 1 = full RHF force; 0 = DROP the Pulay W·∂S term (gated WRONG).
+// ════════════════════════════════════════════════════════════════════════════
+pub fn qf_gen_force_component(with_pulay: int, pos: [float], POW: [[[int]]], EXP: [[float]],
+                              CO: [[float]], aom: [int], nrm: [float], norb: int, z: [float],
+                              natom: int, n_occ: int, atomA: int, dimd: int) -> float {
+    let n = norb
+    let out = qf_gen_run(pos, POW, EXP, CO, aom, nrm, norb, z, natom, n_occ, 200, 1.0e-11, 1.0)
+    let P = out[3]
+    let eps = out[5]
+    let S = qf_gen_overlap(pos, POW, EXP, CO, aom, nrm, norb)
+    let xmat = rhf_s_inv_sqrt(S, n)
+    let F = out[4]
+    let dg = rhf_diagonalize(F, xmat, n)
+    let C = dg[0]
+    let W = qf_gen_wdensity(C, eps, n, n_occ)
+    let dH = qf_gen_dhcore_dR(pos, POW, EXP, CO, aom, nrm, norb, z, natom, atomA, dimd)
+    let dE = qf_gen_deri_dR(pos, POW, EXP, CO, aom, nrm, norb, atomA, dimd)
+    let dS = qf_gen_doverlap_dR(pos, POW, EXP, CO, aom, nrm, norb, atomA, dimd)
+    // (1) Hellmann-Feynman 1e
+    let mut g1 = 0.0
+    let mut i = 0
+    while i < n * n { g1 = g1 + P[i] * dH[i] ; i = i + 1 }
+    // (2) Hellmann-Feynman 2e: ½ Σ P P ∂[(μν|λσ)−½(μλ|σν)]
+    let mut g2 = 0.0
+    let mut mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu < n {
+            let pmn = P[mu * n + nu]
+            if pmn != 0.0 {
+                let mut lm = 0
+                while lm < n {
+                    let mut sg = 0
+                    while sg < n {
+                        let pls = P[lm * n + sg]
+                        if pls != 0.0 {
+                            let dcoul = _eri_at(dE, n, mu, nu, sg, lm)
+                            let dexch = _eri_at(dE, n, mu, lm, sg, nu)
+                            g2 = g2 + pmn * pls * (dcoul - 0.5 * dexch)
+                        }
+                        sg = sg + 1
+                    }
+                    lm = lm + 1
+                }
+            }
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    g2 = 0.5 * g2
+    // (3) Pulay overlap-derivative: − Σ W_μν ∂S_μν/∂R
+    let mut g3 = 0.0
+    if with_pulay == 1 {
+        let mut k = 0
+        while k < n * n { g3 = g3 - W[k] * dS[k] ; k = k + 1 }
+    }
+    // (4) nuclear repulsion
+    let g4 = _denuc_dR(pos, z, natom, atomA, dimd)
+    return 0.0 - (g1 + g2 + g3 + g4)
+}
+
+// ── FULL analytic RHF force vector F = −∂E_RHF/∂R (flat 3·natom) ───────────────
+pub fn qf_gen_force(with_pulay: int, pos: [float], POW: [[[int]]], EXP: [[float]], CO: [[float]],
+                    aom: [int], nrm: [float], norb: int, z: [float], natom: int, n_occ: int) -> [float] {
+    let mut f: [float] = []
+    let mut idx = 0
+    while idx < 3 * natom { f.push(0.0) ; idx = idx + 1 }
+    let mut a = 0
+    while a < natom {
+        let mut dd = 0
+        while dd < 3 {
+            f[3 * a + dd] = qf_gen_force_component(with_pulay, pos, POW, EXP, CO, aom, nrm, norb, z, natom, n_occ, a, dd)
+            dd = dd + 1
+        }
+        a = a + 1
+    }
+    return f
+}
+
+// ── central-FD reference of the force component −(E(R+h)−E(R−h))/2h ────────────
+pub fn qf_gen_force_fd(pos: [float], POW: [[[int]]], EXP: [[float]], CO: [[float]], aom: [int],
+                       nrm: [float], norb: int, z: [float], natom: int, n_occ: int,
+                       atomA: int, dimd: int, h: float) -> float {
+    let coord = 3 * atomA + dimd
+    let mut pp: [float] = [] ; let mut pm: [float] = []
+    let mut t = 0
+    while t < 3 * natom {
+        if t == coord { pp.push(pos[t] + h) ; pm.push(pos[t] - h) }
+        else { pp.push(pos[t]) ; pm.push(pos[t]) }
+        t = t + 1
+    }
+    let ep = qf_gen_energy(pp, POW, EXP, CO, aom, nrm, norb, z, natom, n_occ)
+    let em = qf_gen_energy(pm, POW, EXP, CO, aom, nrm, norb, z, natom, n_occ)
+    return 0.0 - (ep - em) / (2.0 * h)
+}
+
+// ── translational residual ‖Σ_A F_A‖∞ (Newton's 3rd law) ──────────────────────
+pub fn qf_gen_transl_residual(f: [float], natom: int) -> float {
+    let mut m = 0.0
+    let mut dd = 0
+    while dd < 3 {
+        let mut s = 0.0
+        let mut a = 0
+        while a < natom { s = s + f[3 * a + dd] ; a = a + 1 }
+        let av = _absr(s)
+        if av > m { m = av }
+        dd = dd + 1
+    }
+    return m
+}
