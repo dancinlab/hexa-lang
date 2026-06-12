@@ -1,0 +1,232 @@
+// HEXA Standard Library — qforge/chip/callaway_bte
+//
+// QFORGE universal-engine · CHIP scale · round-10 brick.
+//   scale ladder (QFORGE.md §122):  chip = device 밴드·수송·열(TCAD).
+//   round-4 (phonon_kappa.hexa)  closed the THERMAL leg's BALLISTIC quantum floor —
+//       κ_ball = N·g₀ (the τ→∞ Landauer ceiling, the rigorous UPPER BOUND).
+//   round-8 (bte_kappa.hexa)     closed the DIFFUSIVE side with the single-mode RTA-BTE
+//       κ = (1/V) Σ_qν C v² τ, 1/τ = 1/τ_U + 1/τ_iso + 1/τ_bd (Matthiessen).
+//       RTA's KNOWN flaw (stated honestly in round-8): it over-damps NORMAL (N) 3-phonon
+//       processes — momentum-CONSERVING events that REDISTRIBUTE crystal momentum among
+//       modes rather than DESTROY heat flux.  RTA treats N as just another resistance, so
+//       it UNDER-estimates κ for high-purity / low-T crystals where N dominates.
+//
+// Round-10 refines the ballistic↔diffusive crossover with the CALLAWAY model
+// (Callaway, Phys Rev 113, 1046 (1959)), which SEPARATES Normal (N) from resistive (R =
+// Umklapp + isotope + boundary) scattering and adds a correction term that restores the
+// momentum N-processes redistribute (do not relax).  In the Debye-integral form:
+//
+//   κ = κ_RTA + κ_corr,        x ≡ ħω/k_BT,   K(x) = x⁴ e^x / (e^x − 1)²
+//
+//   κ_RTA  = (k_B/2π²v)(k_BT/ħ)³ ∫₀^{Θ/T} τ_c K(x) dx,     1/τ_c = 1/τ_N + 1/τ_R
+//   κ_corr = (k_B/2π²v)(k_BT/ħ)³ · [∫ (τ_c/τ_N) K dx]²
+//                                  ───────────────────────────
+//                                  [∫ (τ_c/(τ_N τ_R)) K dx]
+//
+//   • τ_c   — COMBINED lifetime, Matthiessen of N and R rates (controls κ_RTA),
+//   • τ_N   — Normal (momentum-conserving) 3-phonon lifetime — does NOT relax flux,
+//   • τ_R   — RESISTIVE lifetime (Umklapp + isotope + boundary; the only flux-relaxers),
+//   • the β-correction κ_corr is the Callaway restoration: N-processes shuffle crystal
+//     momentum among modes; in the absence of resistive processes they cannot relax heat
+//     at all, and κ_corr is exactly the term that prevents the spurious RTA divergence
+//     when only N acts (the displaced-distribution / β-factor of Callaway's 1959 paper).
+//
+//   NOTE the Debye-integral kernel is x⁴ e^x/(e^x−1)² — NOT round-4/8's x² conductance
+//   kernel.  The extra ω² (→ x²) comes from the Debye DOS g(ω) ∝ ω² × the v² group-velocity
+//   weighting collapsing under the ∫dω → ∫dx change of variable: the Callaway/Debye κ
+//   integrand carries x⁴ where the per-mode Landauer conductance integrand carries x².
+//   Both share the SAME Bose thermal factor e^x/(e^x−1)² (d19 — one Bose kernel).
+//
+// ── The two LIMITS this brick is built to satisfy (the g5 anchors) ────────────
+//   (a) τ_N → ∞  (N negligible): 1/τ_N→0 ⇒ τ_c→τ_R, and ∫(τ_c/τ_N)K→0 ⇒ κ_corr→0, so
+//       κ_Callaway → κ_RTA(τ_R) EXACTLY — the round-8 RTA Debye κ.  Callaway REDUCES to
+//       the sealed RTA baseline; the correction is a pure addition that vanishes here.
+//   (b) τ_R → ∞ with a boundary FLOOR (pure-N / clean low-T): RTA alone gives κ_RTA→∞
+//       (the spurious divergence — N treated as resistance but τ_c→τ_N stays finite while
+//       the integral has no resistive cutoff).  Callaway's κ_corr is what tames this:
+//       with the Casimir boundary as the residual τ_R, κ stays BOUNDED by / approaches the
+//       boundary-limited ballistic ceiling (κ_ball = pref·τ_bd·∫K), NOT divergent.
+//   (c) crossover T-scaling: low-T κ ∝ T³ (Debye regime — boundary/N-limited, τ≈const,
+//       prefactor T³ dominates) → peak → high-T κ ∝ 1/T (Umklapp, 1/τ_U∝ω²T so τ∝1/T).
+//
+// ── HONEST SCOPE (d6) ─────────────────────────────────────────────────────────
+//   The N/U lifetimes use the STANDARD Callaway power-laws with MODEL coefficients:
+//       1/τ_N = B_N ω^a T^b           (Normal, momentum-conserving; a,b material-class)
+//       1/τ_U = B_U ω² T exp(−Θ/αT)   (Umklapp, Slack/Morelli form — reused from round-8)
+//   These coefficients (B_N, B_U, a, b, α) are MODEL INPUTS (d4 — supplied, never material-
+//   hardcoded), NOT first-principles ab-initio el-ph (that is the QE/QFORGE-materials DFPT
+//   lane).  The deliverable is the CORRECT N/U-separated Callaway crossover STRUCTURE with
+//   the right RTA-recovery / ballistic-ceiling / T³–1/T limits — a real-material κ(T) curve
+//   is a published-coefficient data swap (d4), NOT claimed here as a fitted Si/Ge number.
+//   The round-4 ballistic N·g₀ is the rigorous UPPER BOUND; the Casimir boundary-limited κ
+//   is the finite low-T ceiling Callaway approaches (and pure-RTA-with-only-N would breach).
+//
+// ── d4 generic / d19 reuse contract ──────────────────────────────────────────
+//   • τ_U / τ_iso / τ_bd REUSE round-8 bte_kappa primitives verbatim (d19 — no re-derived
+//     Umklapp/isotope/boundary law); τ_N is one more rate-channel (d4 — Matthiessen sums it).
+//   • the Bose thermal factor e^x/(e^x−1)² is round-4/8's kernel (d19 — one Bose function).
+//   • Simpson composite integration mirrors round-4's _kernel quadrature (d19 — same scheme).
+//   • when 1/τ_N→0 this brick's κ collapses onto round-8's RTA Debye κ (verified in selftest).
+//
+//   pub fn qforge_chip_callaway_tau_normal(omega, temp_k, b_n, a_pow, b_pow) -> float // τ_N
+//   pub fn qforge_chip_callaway_kappa_rta(temp_k, theta_d, vel, ...) -> float  // Debye RTA κ
+//   pub fn qforge_chip_callaway_kappa_corr(temp_k, theta_d, vel, ...) -> float // β-correction
+//   pub fn qforge_chip_callaway_kappa(temp_k, theta_d, vel, ...) -> float      // κ_RTA+κ_corr
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/chip/callaway_bte_selftest.hexa
+use "stdlib/qforge/chip/bte_kappa"
+use "stdlib/qforge/chip/phonon_kappa"
+
+// SI constants (exact) — match round-4/8 verbatim.
+fn _kb()   -> float { return 1.380649e-23 }     // Boltzmann   J/K
+fn _hbar() -> float { return 6.62607015e-34 / (2.0 * 3.14159265358979323846) } // ħ = h/2π
+fn _pi()   -> float { return 3.14159265358979323846 }
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// ── Normal (N) 3-phonon lifetime  1/τ_N = B_N · ω^a · T^b  → τ_N = 1/(…) ──────
+//   The momentum-CONSERVING 3-phonon rate (Callaway's Normal process).  Standard power
+//   laws: a∈{1,2}, b∈{3,4} by material class (Herring; Callaway 1959).  Crucially N does
+//   NOT directly relax heat flux — it only enters κ through τ_c and the β-correction.
+//   `b_n` = Normal prefactor (d4 input), `a_pow`/`b_pow` = ω / T exponents (d4 inputs).
+pub fn qforge_chip_callaway_tau_normal(omega: float, temp_k: float,
+                                       b_n: float, a_pow: float, b_pow: float) -> float {
+    let w = _abs(omega)
+    let rate = b_n * pow(w, a_pow) * pow(temp_k, b_pow)
+    if rate <= 0.0 { return 1.0e300 }          // no Normal scattering → τ_N→∞
+    return 1.0 / rate
+}
+
+// ── Debye κ integrand kernel  K(x) = x⁴ e^x / (e^x − 1)² ──────────────────────
+//   The Callaway/Debye thermal-conductivity integrand (x⁴, NOT the x² conductance kernel).
+//   x→0: K→x²  (Rayleigh-Jeans, finite-slope at origin);  x→∞: K→x⁴e^{-x}→0 (BE-frozen).
+fn _kK(x: float) -> float {
+    if x < 1.0e-9 { return x * x }             // x⁴e^x/(e^x−1)² → x² as x→0
+    let ex = exp(x)
+    let d  = ex - 1.0
+    return x * x * x * x * ex / (d * d)
+}
+
+// τ_R(x) at fixed T — resistive lifetime via round-8 Matthiessen of {U, iso, bd}.
+//   ω = x·k_BT/ħ recovered from x; reuses round-8 τ primitives verbatim (d19).
+fn _tau_resistive(x: float, temp_k: float, theta_d: float, vel: float, length: float,
+                  fgeom: float, a_u: float, b_iso: float) -> float {
+    let omega = x * _kb() * temp_k / _hbar()
+    let tu  = qforge_chip_bte_tau_umklapp(omega, temp_k, theta_d, a_u)   // d19
+    let ti  = qforge_chip_bte_tau_isotope(omega, b_iso)                  // d19
+    let tb  = qforge_chip_bte_tau_boundary(vel, length, fgeom)           // d19
+    return qforge_chip_bte_matthiessen([tu, ti, tb])                     // d19
+}
+
+// τ_N(x) at fixed T (Normal lifetime as a function of the Debye variable x).
+fn _tau_normal_x(x: float, temp_k: float, b_n: float, a_pow: float, b_pow: float) -> float {
+    let omega = x * _kb() * temp_k / _hbar()
+    return qforge_chip_callaway_tau_normal(omega, temp_k, b_n, a_pow, b_pow)
+}
+
+// Composite Simpson ∫_{lo}^{Θ/T} f·K(x) dx where f∈{τ_c, τ_c/τ_N, τ_c/(τ_N τ_R)}.
+//   `mode`: 0 → τ_c·K   1 → (τ_c/τ_N)·K   2 → (τ_c/(τ_N τ_R))·K.
+//   nq EVEN (Simpson).  Debye upper limit x_D = Θ_D/T (the Debye cutoff).
+fn _debye_integral(mode: int, temp_k: float, theta_d: float, vel: float, length: float,
+                   fgeom: float, a_u: float, b_iso: float,
+                   b_n: float, a_pow: float, b_pow: float, nq: int) -> float {
+    let lo = 1.0e-6
+    let mut xd = theta_d / temp_k
+    if xd <= lo { xd = lo + 1.0e-6 }
+    let n = nq
+    let h_step = (xd - lo) / (n + 0.0)
+    let mut acc = 0.0
+    let mut i = 0
+    while i <= n {
+        let x = lo + (i + 0.0) * h_step
+        let tn = _tau_normal_x(x, temp_k, b_n, a_pow, b_pow)
+        let tr = _tau_resistive(x, temp_k, theta_d, vel, length, fgeom, a_u, b_iso)
+        // τ_c = 1/(1/τ_N + 1/τ_R) (Matthiessen of N and R).
+        let tc = qforge_chip_bte_matthiessen([tn, tr])
+        let mut f = tc
+        if mode == 1 { f = tc / tn }
+        if mode == 2 { f = tc / (tn * tr) }
+        let val = f * _kK(x)
+        // composite Simpson weights: endpoints 1, odd 4, even-interior 2.
+        if i == 0 || i == n { acc = acc + val }
+        else if (i / 2) * 2 == i { acc = acc + 2.0 * val }
+        else { acc = acc + 4.0 * val }
+        i = i + 1
+    }
+    return acc * h_step / 3.0
+}
+
+// Debye κ prefactor  (k_B/2π²v)·(k_BT/ħ)³   [W·m⁻¹·K⁻¹ per unit ∫K].
+fn _debye_prefactor(temp_k: float, vel: float) -> float {
+    let kb = _kb()
+    let hbar = _hbar()
+    let pi = _pi()
+    let kbt_hbar = kb * temp_k / hbar
+    return (kb / (2.0 * pi * pi * vel)) * kbt_hbar * kbt_hbar * kbt_hbar
+}
+
+// ── (core) Callaway κ_RTA  = pref · ∫ τ_c K dx ────────────────────────────────
+//   The relaxation-time part with the COMBINED τ_c (1/τ_c = 1/τ_N + 1/τ_R).  Identical
+//   to the round-8 RTA Debye κ when N is folded into the combined time.  Returns W·m⁻¹·K⁻¹.
+pub fn qforge_chip_callaway_kappa_rta(temp_k: float, theta_d: float, vel: float,
+                                      length: float, fgeom: float, a_u: float, b_iso: float,
+                                      b_n: float, a_pow: float, b_pow: float, nq: int) -> float {
+    let pref = _debye_prefactor(temp_k, vel)
+    let i0 = _debye_integral(0, temp_k, theta_d, vel, length, fgeom, a_u, b_iso, b_n, a_pow, b_pow, nq)
+    return pref * i0
+}
+
+// ── (core) Callaway β-correction  κ_corr = pref · [∫(τ_c/τ_N)K]² / [∫(τ_c/(τ_N τ_R))K] ─
+//   The momentum-redistribution restoration.  →0 as τ_N→∞ (N negligible); blows up the κ
+//   toward the resistive-free ceiling as τ_R→∞ (N-dominated), which the boundary floor caps.
+pub fn qforge_chip_callaway_kappa_corr(temp_k: float, theta_d: float, vel: float,
+                                       length: float, fgeom: float, a_u: float, b_iso: float,
+                                       b_n: float, a_pow: float, b_pow: float, nq: int) -> float {
+    let pref = _debye_prefactor(temp_k, vel)
+    let i1 = _debye_integral(1, temp_k, theta_d, vel, length, fgeom, a_u, b_iso, b_n, a_pow, b_pow, nq)
+    let i2 = _debye_integral(2, temp_k, theta_d, vel, length, fgeom, a_u, b_iso, b_n, a_pow, b_pow, nq)
+    if i2 <= 0.0 { return 0.0 }                // no resistive coupling → correction undefined→0
+    return pref * (i1 * i1) / i2
+}
+
+// ── (core) Callaway κ  = κ_RTA + κ_corr ───────────────────────────────────────
+//   The full N/U-separated Callaway thermal conductivity (Phys Rev 113, 1046).  Reduces
+//   EXACTLY to the round-8 RTA Debye κ when 1/τ_N→0 (κ_corr→0); stays bounded by the
+//   boundary-limited ballistic ceiling as the resistive rates → 0.  Returns W·m⁻¹·K⁻¹.
+pub fn qforge_chip_callaway_kappa(temp_k: float, theta_d: float, vel: float,
+                                  length: float, fgeom: float, a_u: float, b_iso: float,
+                                  b_n: float, a_pow: float, b_pow: float, nq: int) -> float {
+    let krta = qforge_chip_callaway_kappa_rta(temp_k, theta_d, vel, length, fgeom,
+                                              a_u, b_iso, b_n, a_pow, b_pow, nq)
+    let kcorr = qforge_chip_callaway_kappa_corr(temp_k, theta_d, vel, length, fgeom,
+                                                a_u, b_iso, b_n, a_pow, b_pow, nq)
+    return krta + kcorr
+}
+
+// ── boundary-limited ballistic ceiling (Debye form)  κ_ball = pref · τ_bd · ∫K ─
+//   The Casimir / boundary-only κ (all intrinsic rates → 0, τ_R = τ_bd, τ_N → ∞).  This is
+//   the finite low-T ceiling the Callaway κ approaches — the diffusive↔ballistic bridge.
+//   A pure-RTA-with-only-N would diverge PAST this; Callaway stays at/below it.
+pub fn qforge_chip_callaway_ballistic_ceiling(temp_k: float, theta_d: float, vel: float,
+                                              length: float, fgeom: float, nq: int) -> float {
+    let pref = _debye_prefactor(temp_k, vel)
+    // τ_bd is x-independent (Casimir geometric); ∫K with τ_bd factored out.
+    let tau_bd = qforge_chip_bte_tau_boundary(vel, length, fgeom)        // d19
+    // ∫K dx over the Debye range (no τ — pure kernel).
+    let lo = 1.0e-6
+    let mut xd = theta_d / temp_k
+    if xd <= lo { xd = lo + 1.0e-6 }
+    let n = nq
+    let h_step = (xd - lo) / (n + 0.0)
+    let mut acc = 0.0
+    let mut i = 0
+    while i <= n {
+        let x = lo + (i + 0.0) * h_step
+        let val = _kK(x)
+        if i == 0 || i == n { acc = acc + val }
+        else if (i / 2) * 2 == i { acc = acc + 2.0 * val }
+        else { acc = acc + 4.0 * val }
+        i = i + 1
+    }
+    let intK = acc * h_step / 3.0
+    return pref * tau_bd * intK
+}
