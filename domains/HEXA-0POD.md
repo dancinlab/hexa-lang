@@ -112,6 +112,30 @@ loop targets what the consumer card + code can carry.
   value the FIXED compiler emits (the documented OP-37b residual), NOT python's, so a re-broken parse drifts away. $0 ·
   0-GPU · 0-pod · no vast · no .tape. Verdict .verdicts/hexa-0pod/F-OP39-CONSTFOLD-CI-GATE.txt
 
+<!-- ANCHOR:OP-39B-SEED-PROMOTE-FLIP (unique anchor — OP-39's deferred follow-up: promote the OP-37/37b fix into the CI seed self/native/hexa_cc.c, then flip the OP-39 gate advisory→enforcing. OP-39b SURVEYED the seed-regen mechanism and found CI's seed is NOT a tracked/surgical file: hexa_cc.c is gitignored + restored by git checkout of the IMMUTABLE frozen .c-graduation anchor 151c52c8. "Promote into the seed" = a wholesale frozen-anchor RE-PIN, not a fix cherry-pick; validated by the ~3.5h build_selfhost.sh self-host ladder on a build host. g0 tractability STOP for a $0 local single-PR task) -->
+- [ ] **OP-39b — promote OP-37/37b const-fold fix into CI seed + flip gate enforcing → 🟠 DEFERRED (frozen-anchor re-pin, out of 0-pod scope); fix PROVEN correct + fixpoint-stable locally** —
+  🟠 DEFERRED (honest g0 STOP — a clean DEFER beats a broken bootstrap seed). DECISIVE FINDING: "the CI seed" is an
+  IMMUTABLE FROZEN GIT ANCHOR, not a tracked/regenerable/surgically-patchable file. self/native/hexa_cc.c is gitignored
+  (.gitignore:286); CI restores it via `git checkout 151c52c8 -- self/native/hexa_cc.c` (tool/restore_frozen_seeds,
+  FROZEN_SEED_REF = the .c-graduation parent of #2065) → stage_prebuild_hexat clang-builds CI's build/hexat from it. So
+  "promote into the seed" is NOT a marker-guarded re-emit: the ONLY way to put the fix in CI's seed is to RE-PIN
+  FROZEN_SEED_REF to a NEW bootstrap anchor carrying a coherent fresh snapshot of all 23 seeds. MEASURED that this is a
+  wholesale, not surgical, change: regen of hexa_cc.c from current self/codegen.hexa (tool/regen_cc_manual, Jun-8 hexat)
+  = 2,098,186 B / 31,222 lines vs frozen seed 1,854,825 B / 28,482 lines → diff = 27,068 lines of UNRELATED compiler
+  drift (the const-fold helpers _cf_negate_float_text/_cf_float_node don't even EXIST in the frozen seed → nothing to
+  cherry-pick into). Its byte-eq validation is the ~3.5h build_selfhost.sh self-host ladder (cc-gen3.o==cc-gen4.o) on a
+  build host — out of 0-pod scope + the exact "bad seed breaks bootstrap" risk. The task's explicit STOP: regen carries
+  unrelated drift → DEFER. PROVEN LOCALLY ($0, deterministic, arm64-macos) that the FIX is correct + fixpoint-stable:
+  (1) regen builds clean → /tmp/hexat_regen; (2) SELF-HOST FIXPOINT byte-identical (gen-N re-regen == gen-N+1, cmp clean);
+  (3) regen emits the FIXED exact/strtod literals (-0.254829592 · 7.24981871602117067e-02), NOT the lossy %g; (4) the
+  OP-39 gate PASSES all 13 goldens against a binary built from the fixed regen → confirms the gate auto-goes-GREEN the
+  moment the seed carries the fix. GATE FLIP NOT DONE (correct): the 3 continue-on-error lines (nobaseline-gate.yml
+  :129/:193/:256) are LEFT IN PLACE — flipping while CI's frozen seed still has the pre-fix folder would turn all 3 jobs
+  RED, the make-or-break red-gate the task forbids. The flip is correctly coupled to a seed promotion that did not happen.
+  Exact unblock (build-host, NOT 0-pod): new coherent 23-seed anchor commit → build_selfhost.sh fixpoint + parity →
+  re-pin FROZEN_SEED_REF → gate auto-GREEN → drop the 3 continue-on-error lines. $0 · 0-GPU · 0-pod · no vast · no
+  foreign-pod touch · no .tape. Verdict .verdicts/hexa-0pod/F-OP39B-SEED-PROMOTE-FLIP.txt
+
 <!-- ANCHOR:OP-36-DISPATCH-AUDIT (unique anchor — deep-dive round-10 branch ④: the OP-16 (groupnorm_gelu) / OP-18 (gelu2, moe_block2) / OP-32b (stdp_pair) class produced 4 REACTIVE discoveries of "GPU dispatch symbol declared + CUDA emit exists, but NO CPU body → importing the lib fails to link on CPU-only hosts" (hexa codegen emits ALL module fns, no DCE). OP-36 closes the pattern PROACTIVELY: sweep ALL forge dispatch symbols, build the symbol × CUDA-emit × CPU-body matrix, classify each CPU-missing symbol (real lib link hole / GPU-build-only by design / orphan), fix the real holes via the tool/restore_frozen_seeds marker-guarded channel, and CPU-link-probe every flame lib) -->
 - [x] **OP-36 — forge dispatch CPU-fallback systematic audit: full symbol matrix, remaining link holes fixed (OP-16/18/32b class closed proactively)** —
   33-symbol matrix (prototype × CUDA-emit × CPU-body × reach): 33 CUDA-emitted · 8 CPU-covered · 25 CPU-missing
@@ -1272,13 +1296,13 @@ loop targets what the consumer card + code can carry.
 ## deferred (0-pod follow-ups surfaced by the loop — self-feed)
 
 - **OP-39b — promote the OP-37/OP-37b float const-fold fix into the seed/deployed toolchain, then flip the
-  OP-39 CI gate to ENFORCING.** OP-39 (#3075) revealed CI's ./hexa is built from the FROZEN seed
-  self/native/hexa_cc.c (151c52c8) which PRE-DATES the OP-37/37b source fix in self/codegen.hexa — so the gate
-  is wired ADVISORY (continue-on-error). Promote the fix into the seed hexa_cc.c (re-emit via the marker-guarded
-  channel, like tool/restore_frozen_seeds / the bootstrap-seed refresh path), verify the OP-39 gate goes GREEN on
-  all 3 nobaseline jobs, then drop the single `continue-on-error: true` line per platform to make it a blocking
-  required check. The oracle + SSOT gate already exist; this is the promote + enforce step. $0 · 0-pod local +
-  CI proof.
+  OP-39 CI gate to ENFORCING.** → ADDRESSED 2026-06-12, 🟠 DEFERRED (promoted to a milestone above; verdict
+  F-OP39B-SEED-PROMOTE-FLIP.txt). The deferral note's optimistic "re-emit via the marker-guarded channel"
+  framing was WRONG: OP-39b's survey found CI's seed is the IMMUTABLE frozen .c-graduation anchor 151c52c8
+  (gitignored hexa_cc.c, restored by git checkout), so promotion is a wholesale frozen-anchor RE-PIN carrying
+  27,068 lines of unrelated drift, validated by the ~3.5h build_selfhost.sh self-host ladder on a build host —
+  out of 0-pod scope. The fix is PROVEN correct + fixpoint-stable + gate-PASSING locally ($0); the gate is left
+  advisory (flipping now would red-gate CI). Unblock belongs to a SELFHOST-NEXT / build-host work item.
 
 - **OP-2b — land the runtime.c hexa_forge_dispatch_matmul_t wrapper body + flip the trainer to the live
   transpose-elim call.** OP-2 landed the GPU kernel (_hx_cuda_farr_matmul_tn_gpu, cuBLAS OP_T), codegen
