@@ -2645,3 +2645,69 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   adaptive.md §10.1 (consumer-card shrink-negative, union-resolved after §10). No shipped-code change. MAIN.tape
   #-comment SKIPPED (the file is untracked-on-origin, same as OP-54 — avoided a merge race). $0, no vast, no pod,
   no foreign-pod touched.
+
+## OP-59 — DEFINITIVE falsified-builtin family closure (relu·sigmoid·attention·sample_token) — 3 DEREGISTERED, 2 compiler-closure KEEPs, survivor set 5→2 — FAMILY CLOSED — 2026-06-13
+- CONTEXT: the DEFINITIVE close-out of the OP-33/41/43/47/48/51/56 falsified-builtin audit thread. OP-56
+  dropped the OP-43 ML-family survive-set 10→5. The final 5 = 4 [S R] survivors (relu sigmoid attention
+  sample_token) + arange (a hard compiler-closure KEEP since OP-48). OP-59 audits all 4 [S R] survivors with
+  the full rigorous method and states the settled family-closure.
+- METHOD (OP-47/48/51/56 exact, 0-pod CPU-LOCAL — ~/.hx/bin/build/hexat AOT Jun-13 2028152B + clang
+  -fsyntax-only · installed runtime.c /Users/mini/.hx/src/self/runtime.c Jun-12):
+  (a) roster-registered in self/env.hexa; (b) 0 codegen-inline guard + 0 callable runtime symbol; (c) g5 AOT
+  falsify with CORRECT args; (d) caller enumeration shadow-vs-builtin-dep; (e) [S] shadow-binding CONTROL;
+  (f) compiler/** zero-bind-ref check (the arange lesson — the dispositive gate here).
+- IMPL CROSS-REF: codegen `if name=="X"` = 0 for all 4. runtime symbol: relu bare = 0 (only "prelude"
+  substring); sigmoid bare = 0 — the real symbol is the DIFFERENT _hx_sigmoid_d static-inline double helper
+  (runtime.c:9674), NOT a bare HexaVal sigmoid; attention bare = 2 COMMENTS only (real syms farr_attn_dt_fwd/
+  bwd_gpu); sample_token = 0. → all 4 have NO bare callable symbol.
+- AOT g5 PROBE (verbatim): relu(a)/sigmoid(a)/attention(q,k,v)/sample_token(a) → hexat rc=0 → clang
+  p_NAME.c:19-21:29: error: use of undeclared identifier 'NAME' for ALL 4. FALSIFIED.
+- [S] SHADOW CONTROL: minimal `fn NAME(x:float)->float{return x+1.0}` + `NAME(2.0)` → hexat rc=0 → clang
+  CLEAN; generated C line4 `HexaVal NAME(HexaVal x);` + line17 def + call → binds LOCAL roster-independently.
+  Proven for all 4.
+- CALLER SWEEP (the decisive gate):
+  · relu — shadow self/test_nn_stdlib (DEFINES `pub fn relu`; generated C `HexaVal relu(HexaVal);` def,
+    relu-undeclared=0 → binds LOCAL) + stdlib/nn.hexa def. Builtin-dep: example/test_neural_testbench (20-err
+    today, dead) + example/test_transformer (hexat rc=1, transpile-fails today, dead). The self/ml `*_relu`
+    hits (ad_relu/blt_relu/cl_relu/dsmoe_relu/…) are DIFFERENT prefixed local fns. → 0 live builtin-dep caller.
+  · sample_token — shadow self/ml/sampler (defines it). IMPORTED-SHADOW: self/ml/m4_inference + self/serve/
+    serve_alm `use "self/ml/sampler.hexa"` → generated C `extern HexaVal sample_token(_,_,_)` binds the
+    imported sampler.hexa DEF, NOT the builtin. Builtin-dep: self/ml/{batch_inference,generate,streaming,
+    t1_real_bench} emit `hexa_call3(sample_token,...)` — ALL clang-FAIL TODAY (20/20/16/17 err incl
+    sample_token-undeclared, builtin-independent) + example/{test_generation,test_conv_cache_io} dead. The
+    gpu_/ppo_/do_sample_token hits are different fns. → 0 live builtin-dep caller.
+  · attention — shadows self/ml/conscious_lm + self/test_conscious_lm (`@hot fn attention(x,L)` local, the
+    `attention(x,L)` calls bind it). Builtin-dep: self/ml/train_decoder_cpu_b `attention(q,k,v,SEQ,D)` (line
+    13 "attention builtin") emits a bare call → clang 20-err today incl "call to undeclared function
+    'attention'" (dead). example/{test_transformer,test_modern_llm,benchmark_all} bare-attention callers dead.
+    naive_/flash_/ab_/sliding_window_/multi_head_attention = different fns. → 0 live builtin-dep caller.
+  · sigmoid — large live-shadow surface (6 shadow defs incl stdlib/nn, self/ml/dpo) but NOT deregistered; the
+    dispositive gate is its codegen special-path (below).
+- COMPILER-CLOSURE (DISPOSITIVE): compiler/** refs — relu 0, sample_token 0, attention = 2 nvptx COMMENTS
+  ("attention (max)…") + 1 atlas-archive prose node (NO bind.hexa, NO `op=="attention"` dispatch → 0 binding
+  refs, same disposition as zeros in OP-56 which was deregistered). sigmoid = 37 refs INCLUDING A REAL
+  CODEGEN SPECIAL-PATH: compiler/codegen/nvptx_target.hexa:677 `if op=="sigmoid"{return true}` (_nvptx_is_
+  math_op) + :689 arity table + :2203 `if s.op=="sigmoid" && dst_kind==NVPTX_RKIND_F64` (a full PTX f64
+  instruction-sequence lowering sigmoid=0.5+0.5*tanh(x/2)) + nvptx_ptx_ops.hexa:203-204 PTX f64 constants —
+  STRUCTURALLY arange-class. CONTROL: arange IS at compiler/check/bind.hexa:1281 + PLAN.md:574 (why it
+  STAYED, OP-48).
+- DECISION (g0 conservative, [S]-strict): relu/attention/sample_token meet all 4 conditions (falsified ∧ no
+  live builtin-dep caller ∧ shadow binds without it ∧ compiler/** 0 binding refs) → DEREGISTER. sigmoid FAILS
+  the compiler gate (real nvptx codegen special-path) → PERMANENT KEEP (compiler-closure). arange PERMANENT
+  KEEP (bind allow-list) — unmoved.
+- DIFF: self/env.hexa — 3 names removed from env_new() builtin_names (relu from the sigmoid/softmax line;
+  attention from layer_norm/embedding; sample_token its own line) + 1 OP-59 rationale comment block.
+  wipe_guard net additive « 50, scoped subject. env.hexa transpiles clean post-edit (hexat rc=0); env_after.c:
+  relu/attention/sample_token=0, sigmoid/arange=1; all kept neighbors intact.
+- DEFINITIVE FAMILY-CLOSURE STATEMENT: OP-43 survivor set 26→23 (OP-47)→16 (OP-48)→10 (OP-51)→5 (OP-56)→2
+  (OP-59). FINAL survive count = 2, BOTH compiler-closure permanent KEEPs: sigmoid (nvptx codegen special-
+  path) + arange (bind allow-list). No live-shadow KEEP remains — relu/attention/sample_token carried live
+  shadows but the roster ROW was deregisterable (shadows bind independently per [S] control + every
+  builtin-dep caller dead today). ML-family thread total = 40 deregistered (16+3+7+6+5+3), 2 permanent
+  compiler-closure KEEPs. THE FALSIFIED-BUILTIN FAMILY IS CLOSED — the audit thread has reached its honest
+  floor: a 2-member compiler-closure permanent-KEEP set. Real ML in hexa = stdlib/flame/* + per-module LOCAL
+  fns (the shadows), not these roster builtins. Reversible one-line re-add.
+- OUTCOME: 🟢 GREEN. Milestone OP-59 [x]. Survivor set 5→2 (both compiler-closure KEEPs). FAMILY CLOSED.
+  selfhost-byteeq-real INLINE-polled (env.hexa edit → next compiler build; the 3 removed have 0 compiler-core
+  refs → byte-eq fixpoint safe). $0 · 0-GPU · 0-pod · no vast · no foreign-pod · no .tape. Verdict
+  F-OP59-FALSIFIED-FAMILY-CLOSED.txt.

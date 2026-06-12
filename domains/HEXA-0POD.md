@@ -156,6 +156,41 @@ loop targets what the consumer card + code can carry.
   conservative live-shadow KEEP. Reservoir depleting; expect the next tranche to dereg FEWER than 6. $0 ·
   0-GPU · 0-pod · no vast · no foreign-pod · no .tape. Verdict .verdicts/hexa-0pod/F-OP51-SURVIVE-SHADOW-TRANCHE.txt.
 
+<!-- ANCHOR:OP-59-FALSIFIED-FAMILY-CLOSED (unique anchor — OP-56 dropped the OP-43 ML-family survive-set 10→5. The final 5 = 4 [S R] survivors (relu sigmoid attention sample_token) + arange (a hard compiler-closure KEEP, OP-48). OP-59 is the DEFINITIVE closure of the OP-33/41/43/47/48/51/56 falsified-builtin audit thread: it audits all 4 [S R] survivors with the same rigorous per-builtin g5 method (g5-falsify AOT correct-args probe → "use of undeclared identifier" + 0-codegen-guard/0-runtime-symbol cross-ref + the [S] shadow-binding CONTROL + dead/live caller classification + imported-shadow control + the compiler-closure check — the arange lesson) and reaches the settled "family closed" statement: deregister the provably-safe ones, state the precise KEEP reason (live-shadow / compiler-closure) for the rest. CONSERVATIVE; OP-56's frontier note predicted relu/sigmoid as probable live-shadow KEEPs) -->
+- [x] **OP-59 — DEFINITIVE falsified-builtin family closure (final 4 [S R] survivors): relu/attention/sample_token g5-falsified + [S] shadow-safe + every builtin-dep caller dead today + compiler/** ZERO binding refs → DEREGISTERED; sigmoid KEEP (real nvptx codegen special-path `if op=="sigmoid"`, arange-class) + arange KEEP (bind allow-list). Survivor set 5→2 — BOTH residuals are compiler-closure KEEPs. FAMILY CLOSED** —
+  🟢 audited relu·sigmoid·attention·sample_token (the last 4 [S R] survivors). Per builtin: 0 codegen guard
+  (`if name=="X"`) + 0 callable bare runtime symbol (relu bare=0 — only "prelude" substring; sigmoid's real
+  symbol is the DIFFERENT _hx_sigmoid_d static-inline helper, NOT a bare HexaVal sigmoid; attention bare=2
+  COMMENTS only, real syms farr_attn_dt_fwd/bwd_gpu; sample_token=0). AOT probe correct-args RE-VERIFIED
+  FALSIFIED verbatim ("use of undeclared identifier 'NAME'" each, p_*.c:19-21:29). THE [S] CONTROL: a minimal
+  `fn NAME(x){…}` + caller emits `HexaVal NAME(...)` fwd-decl+def+call and binds roster-INDEPENDENTLY (clang
+  CLEAN per name). Every COMPILING caller resolves to a shadow: relu → stdlib/nn + self/test_nn_stdlib (local
+  `HexaVal relu(HexaVal)` def, relu-undeclared=0); attention → self/ml/conscious_lm + self/test_conscious_lm
+  (`@hot fn attention(x,L)` local); sample_token → self/ml/sampler IMPORTED via `use "self/ml/sampler.hexa"`
+  into m4_inference/serve_alm (generated C emits `extern HexaVal sample_token(_,_,_)` binding the imported
+  DEF, NOT the builtin). Every builtin-dep (no-shadow) caller DEAD: example callers (test_transformer rc=1 /
+  test_neural_testbench 20-err / benchmark_all / test_generation / test_modern_llm / test_conv_cache_io)
+  AOT/transpile-fail today; self/ml/{batch_inference,generate,streaming,t1_real_bench} emit `hexa_call3(
+  sample_token,...)` and self/ml/train_decoder_cpu_b emits a bare `attention(...)` (line 13 "attention
+  builtin") — ALL clang-FAIL TODAY (16-20 errors each, incl the NAME-undeclared error) WITH the builtins
+  STILL registered (builtin-independent; dereg only flips "clang: undeclared" → "binder: unbound", a no-op
+  for never-linking files). COMPILER-CLOSURE (dispositive): relu 0 refs, sample_token 0 refs, attention = 2
+  nvptx COMMENTS + 1 atlas-archive prose node (ZERO bind/codegen-op refs, NOT bind.hexa, no `op=="attention"`)
+  → ALL THREE DEREGISTERED. sigmoid = 37 refs INCLUDING a real codegen special-path (compiler/codegen/
+  nvptx_target.hexa:677 `if op=="sigmoid"{return true}` + :689 arity + :2203 full PTX f64 lowering
+  sigmoid=0.5+0.5*tanh(x/2)) — STRUCTURALLY arange-class → PERMANENT KEEP. arange = bind.hexa:1281 +
+  PLAN.md:574 → PERMANENT KEEP (unmoved since OP-48). env.hexa transpiles clean after the 3 removals
+  (env_after.c: relu/attention/sample_token=0, sigmoid/arange=1; wipe_guard net additive « 50).
+  DEFINITIVE FAMILY-CLOSURE: OP-43 survivor set 26→23 (OP-47)→16 (OP-48)→10 (OP-51)→5 (OP-56)→**2 (OP-59)**.
+  FINAL survive count = 2, BOTH compiler-closure KEEPs (sigmoid = nvptx codegen special-path · arange = bind
+  allow-list). No live-shadow KEEP remains — relu/attention/sample_token carried live shadows but the roster
+  ROW was deregisterable (shadows bind independently, builtin-dep callers all dead). ML-family thread total:
+  40 deregistered (16+3+7+6+5+3), 2 permanent compiler-closure KEEPs. THE FALSIFIED-BUILTIN FAMILY IS CLOSED
+  — the audit thread has reached its honest floor: a 2-member compiler-closure permanent-KEEP set. Real ML in
+  hexa = stdlib/flame/* + per-module LOCAL fns (the shadows), not these roster builtins. Reversible one-line
+  re-add. $0 · 0-GPU · 0-pod · no vast · no foreign-pod · no .tape. Verdict
+  .verdicts/hexa-0pod/F-OP59-FALSIFIED-FAMILY-CLOSED.txt.
+
 <!-- ANCHOR:OP-56-SURVIVE-TRANCHE (unique anchor — OP-51 dropped the OP-43 survivor set 16→10 by deregistering 6 [S]-shadow survivors. The remaining 10 = 9 [S R] survivors (relu sigmoid transpose normalize zeros attention topk sample_token mse_loss) + arange (a hard compiler-closure KEEP). OP-56 audits the NEXT tranche of 5 of those 9 (transpose · normalize · zeros · topk · mse_loss) with OP-51's EXACT rigorous method: per-builtin g5-falsify (AOT correct-args probe → "use of undeclared identifier") + 0-codegen-guard/0-runtime-symbol cross-ref (prefix-variant + bare-token-comment controlled) + the [S] shadow-binding CONTROL (a local `fn NAME` emits its OWN def+call and binds roster-INDEPENDENTLY) + dead/live caller classification (string-literal/different-symbol false-positive control: stdlib/dojo/rl `t_zeros(` only-in-strings, test_graph_pattern `transpose` only-in-comments/hexa_str, test_galore gal_normalize) + imported-shadow control (rag_test `use "embedding"` binds the imported normalize local) + compiler/** zero-bind-ref check (the arange lesson). CONSERVATIVE; "more keeps" was the expected/permitted outcome per OP-51's frontier note) -->
 - [x] **OP-56 — [S]-shadow survive-audit tranche (5 of 9 remaining [S R]-survivors): all 5 g5-falsified + [S] shadow-binding CONTROL proven roster-independent per name + every compiling caller resolves to a local/imported shadow + every builtin-dep call-site dead (example AOT-fail / already-failing self file) + string-literal/different-symbol false-positives controlled + compiler/** ZERO bind refs → ALL 5 DEREGISTERED. Survivor set 10→5** —
   🟢 audited transpose·normalize·zeros·topk·mse_loss. Per builtin: 0 codegen guard (`if name=="X"`) + 0
