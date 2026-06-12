@@ -1,0 +1,936 @@
+// HEXA Standard Library — qforge/atoms/ccsd_rhf
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE-ATOMS brick #21 — SPIN-ADAPTED closed-shell (RHF) CCSD — the canonical
+// PRODUCTION form. The r17 ccsd.hexa is correct but SPIN-ORBITAL: every tensor
+// spans nso = 2n spin-orbitals, so for closed-shell systems where α and β share
+// the SAME spatial orbitals it carries a 16× redundant N⁴ footprint (2⁴ on the
+// two-body tensors). For cc-pVDZ H₂O (n=25 → nso=50) the spin-orbital N⁶/N⁷ loops
+// did NOT finish in 741s. This brick reformulates CCSD in SPATIAL orbitals (indices
+// run 0..n−1, NOT 0..2n−1): a 16× cut in the N⁴ tensor footprint BEFORE any matmul
+// routing — the lever that makes cc-pVDZ CCSD live-tractable.
+//
+// ── spin-adapted closed-shell CCSD (Hirata-Bartlett / Scuseria-Schaefer;
+//    Crawford prog-proj "spin-adapted" notes; psi4numpy RHF-CCSD) ────────────────
+// For a closed-shell RHF determinant the singles/doubles equations collapse to
+// SPATIAL indices i,j,k,l (occ, 0..no−1) and a,b,c,d (virt, 0..nv−1). The two-body
+// integrals enter as the closed-shell PHYSICIST tensor ⟨pq|rs⟩ = (pr|qs)_chem (the
+// SAME chemists' MO tensor mp2.hexa builds, re-indexed) and its closed-shell
+// combinations Lᵖᵠʳˢ = 2⟨pq|rs⟩ − ⟨pq|sr⟩ (the [2J−K] form already in MP2).
+//
+// The intermediates (Fae, Fmi, Fme, Wmnij, Wmbej, Wmbje, Zmbij) and the τ̃/τ
+// amplitude combinations are the spin-summed closed-shell analogues of the Stanton
+// spin-orbital intermediates. The energy is the closed-shell spatial form
+//   E_CCSD = Σ_ijab L_ijab ( t_ij^ab + t_i^a t_j^b )
+//          = Σ_ijab ⟨ij|ab⟩ [ 2 τ_ij^ab − τ_ji^ab ]   (τ_ij^ab = t_ij^ab + t_i^a t_j^b)
+//   = Σ_ijab (ia|jb)[ 2 t_ij^ab − t_ji^ab + 2 t_i^a t_j^b − t_j^a t_i^b ]  (chemist)
+// which is bit-identical to the r17 spin-orbital energy on closed-shell systems.
+//
+// ── flame routing (d19 reuse) ───────────────────────────────────────────────────
+// The spatial form makes the N⁶ ring/ladder terms matmul-shaped on the SMALL spatial
+// dimensions. The dominant Wabef·τ "particle-ladder" term Σ_ef τ_ij^ef ⟨ab|ef⟩ is
+// routed through the native flame matmul (stdlib/flame t_matmul — same kernel r20's
+// cc_accel uses for the AO→MO transform): reshaped (no×no)×(nv²) · (nv²)×(nv²), it is
+// one GEMM per CCSD iteration instead of an interpreted O(nv⁴·no²) scalar loop. The
+// spatial dims (cc-pVDZ H₂O: no=5, nv=20) keep this GEMM small + cache-resident.
+//
+// ── correctness anchor (g5 a) ───────────────────────────────────────────────────
+// This MUST reproduce the r17 spin-orbital CCSD bit-compatibly on closed-shell:
+//   H₂/STO-3G   E_corr = −0.0205616  (== FCI, 2e)
+//   H₂O/STO-3G  E_corr = −0.070680088376 (Crawford prog-proj reference)
+// to ≤1e-9. The spin-orbital ccsd.hexa is KEPT byte-untouched as the regression
+// anchor (r17 selftest still passes); this brick is purely ADDITIVE.
+//
+// reuse (d19 · d3): consumes mp2_ao_to_mo's chemists' MO (pq|rs) tensor + the
+//   converged RHF ε + n_occ VERBATIM (same as r17). flame t_matmul reused for the
+//   ladder. No new transform / eigensolver / RHF / contraction kernel minted.
+
+use "stdlib/qforge/atoms/mp2"
+use "stdlib/flame/tensor_lib"
+
+// ════════════════════════════════════════════════════════════════════════════
+//   spatial physicist tensors from the chemists' MO (pq|rs) tensor
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Layout: occ index i in 0..no−1 maps to spatial MO i; virt index a in 0..nv−1
+// maps to spatial MO (no+a). We materialize the BLOCKS of the physicist tensor
+// ⟨pq|rs⟩ = (pr|qs)_chem that the closed-shell equations need, in compact occ/virt
+// dimensions (no NOT nso). Flat chemists' read: (pq|rs) = eri[((p*n+q)*n+r)*n+s].
+
+fn _chem(eri: [float], n: int, p: int, q: int, r: int, s: int) -> float {
+    return eri[((p * n + q) * n + r) * n + s]
+}
+
+// ⟨pq|rs⟩_phys = (pr|qs)_chem  with spatial MO indices.
+fn _phys(eri: [float], n: int, p: int, q: int, r: int, s: int) -> float {
+    return _chem(eri, n, p, r, q, s)
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+//   driver result helpers — flat index into compact occ/virt tensors
+// ──────────────────────────────────────────────────────────────────────────────
+fn _i2(nv: int, i: int, a: int) -> int { return i * nv + a }       // t1[i,a]  (no×nv)
+fn _i4oovv(no: int, nv: int, i: int, j: int, a: int, b: int) -> int {
+    return ((i * no + j) * nv + a) * nv + b                          // t2[i,j,a,b] (no²nv²)
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   pre-built integral blocks (compact spatial occ/virt) — physicist ⟨pq|rs⟩
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Built ONCE per run from the chemists' MO tensor, so the O(N⁶) iteration reads
+// compact spatial blocks (no/nv-dimensioned) instead of re-deriving spin/δ each hit.
+// Notation: o=occ, v=virt. We need the blocks that appear in the closed-shell
+// CCSD equations:  oovv ⟨ij|ab⟩ · ovvv ⟨ia|bc⟩ · ooov ⟨ij|ka⟩ · oooo ⟨ij|kl⟩ ·
+// vvvv ⟨ab|cd⟩ · ovov ⟨ia|jb⟩ · ovvo ⟨ia|bj⟩. All physicist.
+
+pub struct CCRhfInts {
+    pub no: int,
+    pub nv: int,
+    pub oovv: [float],   // ⟨ij|ab⟩  no·no·nv·nv
+    pub ovvv: [float],   // ⟨ia|bc⟩  no·nv·nv·nv
+    pub ooov: [float],   // ⟨ij|ka⟩  no·no·no·nv
+    pub oooo: [float],   // ⟨ij|kl⟩  no⁴
+    pub vvvv: [float],   // ⟨ab|cd⟩  nv⁴
+    pub ovov: [float],   // ⟨ia|jb⟩  no·nv·no·nv
+    pub ovvo: [float],   // ⟨ia|bj⟩  no·nv·nv·no
+    pub vvvo: [float],   // ⟨ab|cj⟩  nv·nv·nv·no
+}
+
+pub fn ccrhf_build_ints(eri_mo: [float], n: int, no: int) -> CCRhfInts {
+    let nv = n - no
+    let mut oovv: [float] = []
+    let mut ovvv: [float] = []
+    let mut ooov: [float] = []
+    let mut oooo: [float] = []
+    let mut vvvv: [float] = []
+    let mut ovov: [float] = []
+    let mut ovvo: [float] = []
+    let mut vvvo: [float] = []
+    // oovv ⟨ij|ab⟩
+    let mut i = 0
+    while i < no {
+        let mut j = 0
+        while j < no {
+            let mut a = 0
+            while a < nv {
+                let mut b = 0
+                while b < nv {
+                    oovv.push(_phys(eri_mo, n, i, j, no + a, no + b))
+                    b = b + 1
+                }
+                a = a + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    // ovov ⟨ia|jb⟩  and  ovvo ⟨ia|bj⟩
+    i = 0
+    while i < no {
+        let mut a = 0
+        while a < nv {
+            let mut j = 0
+            while j < no {
+                let mut b = 0
+                while b < nv {
+                    ovov.push(_phys(eri_mo, n, i, no + a, j, no + b))
+                    b = b + 1
+                }
+                j = j + 1
+            }
+            a = a + 1
+        }
+        i = i + 1
+    }
+    i = 0
+    while i < no {
+        let mut a = 0
+        while a < nv {
+            let mut b = 0
+            while b < nv {
+                let mut j = 0
+                while j < no {
+                    ovvo.push(_phys(eri_mo, n, i, no + a, no + b, j))
+                    j = j + 1
+                }
+                b = b + 1
+            }
+            a = a + 1
+        }
+        i = i + 1
+    }
+    // ovvv ⟨ia|bc⟩
+    i = 0
+    while i < no {
+        let mut a = 0
+        while a < nv {
+            let mut b = 0
+            while b < nv {
+                let mut c = 0
+                while c < nv {
+                    ovvv.push(_phys(eri_mo, n, i, no + a, no + b, no + c))
+                    c = c + 1
+                }
+                b = b + 1
+            }
+            a = a + 1
+        }
+        i = i + 1
+    }
+    // ooov ⟨ij|ka⟩
+    i = 0
+    while i < no {
+        let mut j = 0
+        while j < no {
+            let mut k = 0
+            while k < no {
+                let mut a = 0
+                while a < nv {
+                    ooov.push(_phys(eri_mo, n, i, j, k, no + a))
+                    a = a + 1
+                }
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    // oooo ⟨ij|kl⟩
+    i = 0
+    while i < no {
+        let mut j = 0
+        while j < no {
+            let mut k = 0
+            while k < no {
+                let mut l = 0
+                while l < no {
+                    oooo.push(_phys(eri_mo, n, i, j, k, l))
+                    l = l + 1
+                }
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    // vvvv ⟨ab|cd⟩
+    let mut a = 0
+    while a < nv {
+        let mut b = 0
+        while b < nv {
+            let mut c = 0
+            while c < nv {
+                let mut d = 0
+                while d < nv {
+                    vvvv.push(_phys(eri_mo, n, no + a, no + b, no + c, no + d))
+                    d = d + 1
+                }
+                c = c + 1
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    // vvvo ⟨ab|cj⟩
+    a = 0
+    while a < nv {
+        let mut b = 0
+        while b < nv {
+            let mut c = 0
+            while c < nv {
+                let mut j = 0
+                while j < no {
+                    vvvo.push(_phys(eri_mo, n, no + a, no + b, no + c, j))
+                    j = j + 1
+                }
+                c = c + 1
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return CCRhfInts { no: no, nv: nv, oovv: oovv, ovvv: ovvv, ooov: ooov,
+                       oooo: oooo, vvvv: vvvv, ovov: ovov, ovvo: ovvo, vvvo: vvvo }
+}
+
+// block readers (physicist, compact spatial)
+fn _oovv(I: CCRhfInts, i: int, j: int, a: int, b: int) -> float {
+    return I.oovv[((i * I.no + j) * I.nv + a) * I.nv + b]
+}
+fn _ovov(I: CCRhfInts, i: int, a: int, j: int, b: int) -> float {
+    return I.ovov[((i * I.nv + a) * I.no + j) * I.nv + b]
+}
+fn _ovvo(I: CCRhfInts, i: int, a: int, b: int, j: int) -> float {
+    return I.ovvo[((i * I.nv + a) * I.nv + b) * I.no + j]
+}
+fn _ovvv(I: CCRhfInts, i: int, a: int, b: int, c: int) -> float {
+    return I.ovvv[((i * I.nv + a) * I.nv + b) * I.nv + c]
+}
+fn _ooov(I: CCRhfInts, i: int, j: int, k: int, a: int) -> float {
+    return I.ooov[((i * I.no + j) * I.no + k) * I.nv + a]
+}
+fn _oooo(I: CCRhfInts, i: int, j: int, k: int, l: int) -> float {
+    return I.oooo[((i * I.no + j) * I.no + k) * I.no + l]
+}
+fn _vvvv(I: CCRhfInts, a: int, b: int, c: int, d: int) -> float {
+    return I.vvvv[((a * I.nv + b) * I.nv + c) * I.nv + d]
+}
+fn _vvvo(I: CCRhfInts, a: int, b: int, c: int, j: int) -> float {
+    return I.vvvo[((a * I.nv + b) * I.nv + c) * I.no + j]
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   energy — closed-shell spatial form
+// ════════════════════════════════════════════════════════════════════════════
+//   E = Σ_ijab ⟨ij|ab⟩ ( 2 τ_ij^ab − τ_ji^ab ),  τ_ij^ab = t_ij^ab + t_i^a t_j^b
+pub fn ccrhf_energy(I: CCRhfInts, t1: [float], t2: [float]) -> float {
+    let no = I.no
+    let nv = I.nv
+    let mut e = 0.0
+    let mut i = 0
+    while i < no {
+        let mut j = 0
+        while j < no {
+            let mut a = 0
+            while a < nv {
+                let mut b = 0
+                while b < nv {
+                    let tij = t2[_i4oovv(no,nv,i,j,a,b)] + t1[_i2(nv,i,a)] * t1[_i2(nv,j,b)]
+                    let tji = t2[_i4oovv(no,nv,j,i,a,b)] + t1[_i2(nv,j,a)] * t1[_i2(nv,i,b)]
+                    e = e + _oovv(I,i,j,a,b) * (2.0 * tij - tji)
+                    b = b + 1
+                }
+                a = a + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return e
+}
+
+// MP2 doubles guess  t_ij^ab = ⟨ij|ab⟩ / (ε_i+ε_j−ε_a−ε_b),  t1 = 0.
+pub fn ccrhf_mp2_guess(I: CCRhfInts, eps: [float], no: int) -> [float] {
+    let nv = I.nv
+    let mut t2: [float] = []
+    let mut ii = 0
+    while ii < no * no * nv * nv { t2.push(0.0) ; ii = ii + 1 }
+    let mut i = 0
+    while i < no {
+        let mut j = 0
+        while j < no {
+            let mut a = 0
+            while a < nv {
+                let mut b = 0
+                while b < nv {
+                    let d = eps[i] + eps[j] - eps[no + a] - eps[no + b]
+                    t2[_i4oovv(no,nv,i,j,a,b)] = _oovv(I,i,j,a,b) / d
+                    b = b + 1
+                }
+                a = a + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return t2
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   ONE CCSD iteration — spin-adapted closed-shell (psi4numpy / Hirata RHF-CCSD)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// τ_ij^ab  = t_ij^ab + t_i^a t_j^b                          (full)
+// τ̃_ij^ab = t_ij^ab + ½ t_i^a t_j^b                        (tilde)
+// Intermediates (closed-shell, spin-summed):
+//   Fae = − Σ_mnf (2⟨mn|ef⟩−⟨nm|ef⟩) τ̃_mn^af + Σ_mf t_m^f (2⟨ma|fe⟩−⟨ma|ef⟩)
+//   Fmi = + Σ_nef (2⟨mn|ef⟩−⟨nm|ef⟩) τ̃_in^ef + Σ_ne t_n^e (2⟨mn|ie⟩−⟨nm|ie⟩)
+//   Fme = Σ_nf t_n^f (2⟨mn|ef⟩−⟨nm|ef⟩)
+//   Wmnij = ⟨mn|ij⟩ + Σ_e (t_j^e ⟨mn|ie⟩ + t_i^e ⟨mn|ej⟩) + Σ_ef τ_ij^ef ⟨mn|ef⟩
+//   Wmbej = ⟨mb|ej⟩ + Σ_f t_j^f ⟨mb|ef⟩ − Σ_n t_n^b ⟨mn|ej⟩
+//           − Σ_nf (½ t_jn^fb + t_j^f t_n^b) ⟨mn|ef⟩ + ½ Σ_nf t_nj^fb (2⟨mn|ef⟩−⟨nm|ef⟩)
+//   Wmbje = − ⟨mb|je⟩ − Σ_f t_j^f ⟨bm|ef⟩ + Σ_n t_n^b ⟨mn|je⟩
+//           + Σ_nf (½ t_jn^fb + t_j^f t_n^b) ⟨nm|ef⟩
+// (Crawford prog-proj Project_05 closed-shell spin-adaptation; psi4numpy
+//  Helper_CC RHF-CCSD — same equations, compact spatial indices.)
+//
+// The vvvv "particle-ladder" Σ_ef τ_ij^ef ⟨ab|ef⟩ is ROUTED through flame t_matmul
+// (ccrhf_ladder_vvvv) — the matmul-shaped, dominant-cost N⁶ term — per d19.
+
+// ── L-combination readers: L_pqrs = 2⟨pq|rs⟩ − ⟨pq|sr⟩ over the needed blocks ──
+fn _L_oovv(I: CCRhfInts, i: int, j: int, a: int, b: int) -> float {
+    return 2.0 * _oovv(I,i,j,a,b) - _oovv(I,i,j,b,a)
+}
+fn _L_ovvv(I: CCRhfInts, i: int, a: int, b: int, c: int) -> float {
+    // 2⟨ia|bc⟩ − ⟨ia|cb⟩
+    return 2.0 * _ovvv(I,i,a,b,c) - _ovvv(I,i,a,c,b)
+}
+fn _L_ooov(I: CCRhfInts, m: int, n: int, i: int, e: int) -> float {
+    // 2⟨mn|ie⟩ − ⟨nm|ie⟩
+    return 2.0 * _ooov(I,m,n,i,e) - _ooov(I,n,m,i,e)
+}
+
+// flame-routed particle-ladder:  L2[i,j,a,b] += Σ_ef τ_ij^ef ⟨ab|ef⟩
+//   reshape τ as (no·no)×(nv·nv) matrix Tau[(ij),(ef)], and the vvvv block as
+//   (nv·nv)×(nv·nv) matrix V[(ef),(ab)] with V[(ef),(ab)] = ⟨ab|ef⟩. Then
+//   (Tau·V)[(ij),(ab)] = Σ_ef τ_ij^ef ⟨ab|ef⟩ — exactly the ladder, one GEMM.
+pub fn ccrhf_ladder_vvvv(I: CCRhfInts, tau: [float]) -> [float] {
+    let no = I.no
+    let nv = I.nv
+    let noo = no * no
+    let nvv = nv * nv
+    // marshal Tau (noo × nvv) into flame
+    let Tau = t_zeros(noo * nvv)
+    let mut r = 0
+    while r < noo {
+        let mut c = 0
+        while c < nvv {
+            // tau flat is [i,j,a,b] = ((i*no+j)*nv+a)*nv+b == r*nvv + c  (r=i*no+j, c=a*nv+b)
+            t_set(Tau, r * nvv + c, tau[r * nvv + c])
+            c = c + 1
+        }
+        r = r + 1
+    }
+    // marshal V (nvv × nvv): V[(e,f),(a,b)] = ⟨ab|ef⟩
+    let V = t_zeros(nvv * nvv)
+    let mut e = 0
+    while e < nv {
+        let mut f = 0
+        while f < nv {
+            let row = e * nv + f
+            let mut a = 0
+            while a < nv {
+                let mut b = 0
+                while b < nv {
+                    let col = a * nv + b
+                    t_set(V, row * nvv + col, _vvvv(I,a,b,e,f))
+                    b = b + 1
+                }
+                a = a + 1
+            }
+            f = f + 1
+        }
+        e = e + 1
+    }
+    // GEMM: (noo × nvv) · (nvv × nvv) → (noo × nvv) = Σ_ef τ_ij^ef ⟨ab|ef⟩
+    let M = t_matmul(Tau, noo, nvv, V, nvv)
+    let mut out: [float] = []
+    let mut k = 0
+    while k < noo * nvv { out.push(t_get(M, k)) ; k = k + 1 }
+    t_free(Tau) ; t_free(V) ; t_free(M)
+    return out
+}
+
+pub fn ccrhf_iterate(I: CCRhfInts, eps: [float], t1: [float], t2: [float]) -> [any] {
+    let no = I.no
+    let nv = I.nv
+    let novv = no * no * nv * nv
+
+    // ── τ (tau) and τ̃ (tilde-tau), closed-shell ───────────────────────────────
+    let mut tau: [float] = []
+    let mut taut: [float] = []
+    let mut z = 0
+    while z < novv { tau.push(0.0) ; taut.push(0.0) ; z = z + 1 }
+    let mut i = 0
+    while i < no {
+        let mut j = 0
+        while j < no {
+            let mut a = 0
+            while a < nv {
+                let mut b = 0
+                while b < nv {
+                    let prod = t1[_i2(nv,i,a)] * t1[_i2(nv,j,b)]
+                    let base = t2[_i4oovv(no,nv,i,j,a,b)]
+                    tau[_i4oovv(no,nv,i,j,a,b)]  = base + prod
+                    taut[_i4oovv(no,nv,i,j,a,b)] = base + 0.5 * prod
+                    b = b + 1
+                }
+                a = a + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    // ── Fae[a,e] = Σ_mf t_mf(2⟨ma|fe⟩−⟨ma|ef⟩) − Σ_mnf τ̃_mnaf(2⟨mn|ef⟩−⟨mn|fe⟩) ──
+    //   (canonical RHF Fock diagonal ⇒ bare F_ae = 0, F_me = 0)
+    let mut Fae: [float] = []
+    let mut q = 0
+    while q < nv * nv { Fae.push(0.0) ; q = q + 1 }
+    let mut a = 0
+    while a < nv {
+        let mut e = 0
+        while e < nv {
+            let mut v = 0.0
+            let mut m = 0
+            while m < no {
+                let mut f = 0
+                while f < nv {
+                    v = v + t1[_i2(nv,m,f)] * (2.0 * _ovvv(I,m,a,f,e) - _ovvv(I,m,a,e,f))
+                    let mut nn = 0
+                    while nn < no {
+                        v = v - taut[_i4oovv(no,nv,m,nn,a,f)] * (2.0 * _oovv(I,m,nn,e,f) - _oovv(I,m,nn,f,e))
+                        nn = nn + 1
+                    }
+                    f = f + 1
+                }
+                m = m + 1
+            }
+            Fae[a * nv + e] = v
+            e = e + 1
+        }
+        a = a + 1
+    }
+    // ── Fmi[m,i] = Σ_ne t_ne(2⟨mn|ie⟩−⟨mn|ei⟩) + Σ_nef τ̃_inef(2⟨mn|ef⟩−⟨mn|fe⟩) ──
+    let mut Fmi: [float] = []
+    q = 0
+    while q < no * no { Fmi.push(0.0) ; q = q + 1 }
+    let mut m = 0
+    while m < no {
+        i = 0
+        while i < no {
+            let mut v = 0.0
+            let mut nn = 0
+            while nn < no {
+                let mut e = 0
+                while e < nv {
+                    // ⟨mn|ie⟩=_ooov(m,n,i,e) ; ⟨mn|ei⟩=⟨nm|ie⟩=_ooov(n,m,i,e)
+                    v = v + t1[_i2(nv,nn,e)] * (2.0 * _ooov(I,m,nn,i,e) - _ooov(I,nn,m,i,e))
+                    let mut f = 0
+                    while f < nv {
+                        v = v + taut[_i4oovv(no,nv,i,nn,e,f)] * (2.0 * _oovv(I,m,nn,e,f) - _oovv(I,m,nn,f,e))
+                        f = f + 1
+                    }
+                    e = e + 1
+                }
+                nn = nn + 1
+            }
+            Fmi[m * no + i] = v
+            i = i + 1
+        }
+        m = m + 1
+    }
+    // ── Fme[m,e] = Σ_nf t_nf(2⟨mn|ef⟩−⟨mn|fe⟩) ─────────────────────────────────
+    let mut Fme: [float] = []
+    q = 0
+    while q < no * nv { Fme.push(0.0) ; q = q + 1 }
+    m = 0
+    while m < no {
+        let mut e = 0
+        while e < nv {
+            let mut v = 0.0
+            let mut nn = 0
+            while nn < no {
+                let mut f = 0
+                while f < nv {
+                    v = v + t1[_i2(nv,nn,f)] * (2.0 * _oovv(I,m,nn,e,f) - _oovv(I,m,nn,f,e))
+                    f = f + 1
+                }
+                nn = nn + 1
+            }
+            Fme[m * nv + e] = v
+            e = e + 1
+        }
+        m = m + 1
+    }
+
+    // ── Wmnij[m,n,i,j] = ⟨mn|ij⟩ + t_je⟨mn|ie⟩ + t_ie⟨mn|ej⟩ + τ_ijef⟨mn|ef⟩ ────
+    //   ⟨mn|ej⟩=⟨nm|je⟩=_ooov(n,m,j,e)
+    let mut Wmnij: [float] = []
+    q = 0
+    while q < no * no * no * no { Wmnij.push(0.0) ; q = q + 1 }
+    m = 0
+    while m < no {
+        let mut nn = 0
+        while nn < no {
+            i = 0
+            while i < no {
+                let mut j = 0
+                while j < no {
+                    let mut v = _oooo(I,m,nn,i,j)
+                    let mut e = 0
+                    while e < nv {
+                        v = v + t1[_i2(nv,j,e)] * _ooov(I,m,nn,i,e)
+                        v = v + t1[_i2(nv,i,e)] * _ooov(I,nn,m,j,e)
+                        let mut f = 0
+                        while f < nv {
+                            v = v + tau[_i4oovv(no,nv,i,j,e,f)] * _oovv(I,m,nn,e,f)
+                            f = f + 1
+                        }
+                        e = e + 1
+                    }
+                    Wmnij[((m * no + nn) * no + i) * no + j] = v
+                    j = j + 1
+                }
+                i = i + 1
+            }
+            nn = nn + 1
+        }
+        m = m + 1
+    }
+
+    // ── Wmbej[m,b,e,j] = ⟨mb|ej⟩ + t_jf⟨mb|ef⟩ − t_nb⟨mn|ej⟩
+    //     − (½t_jnfb + t_jf t_nb)⟨mn|ef⟩ + t_njfb⟨mn|ef⟩ − ½t_njfb⟨mn|fe⟩
+    //   ⟨mb|ej⟩=_ovvo(m,b,e,j) ; ⟨mb|ef⟩=_ovvv(m,b,e,f) ; ⟨mn|ej⟩=⟨nm|je⟩=_ooov(n,m,j,e)
+    let mut Wmbej: [float] = []
+    q = 0
+    while q < no * nv * nv * no { Wmbej.push(0.0) ; q = q + 1 }
+    m = 0
+    while m < no {
+        let mut b = 0
+        while b < nv {
+            let mut e = 0
+            while e < nv {
+                let mut j = 0
+                while j < no {
+                    let mut v = _ovvo(I,m,b,e,j)
+                    let mut f = 0
+                    while f < nv {
+                        v = v + t1[_i2(nv,j,f)] * _ovvv(I,m,b,e,f)
+                        f = f + 1
+                    }
+                    let mut nn = 0
+                    while nn < no {
+                        v = v - t1[_i2(nv,nn,b)] * _ooov(I,nn,m,j,e)
+                        let mut f2 = 0
+                        while f2 < nv {
+                            let amp = 0.5 * t2[_i4oovv(no,nv,j,nn,f2,b)] + t1[_i2(nv,j,f2)] * t1[_i2(nv,nn,b)]
+                            v = v - amp * _oovv(I,m,nn,e,f2)
+                            v = v + t2[_i4oovv(no,nv,nn,j,f2,b)] * _oovv(I,m,nn,e,f2)
+                            v = v - 0.5 * t2[_i4oovv(no,nv,nn,j,f2,b)] * _oovv(I,m,nn,f2,e)
+                            f2 = f2 + 1
+                        }
+                        nn = nn + 1
+                    }
+                    Wmbej[((m * nv + b) * nv + e) * no + j] = v
+                    j = j + 1
+                }
+                e = e + 1
+            }
+            b = b + 1
+        }
+        m = m + 1
+    }
+
+    // ── Wmbje[m,b,j,e] = −⟨mb|je⟩ − t_jf⟨bm|ef⟩ + t_nb⟨mn|je⟩
+    //     + (½t_jnfb + t_jf t_nb)⟨mn|fe⟩
+    //   ⟨mb|je⟩=_ovov(m,b,j,e) ; ⟨bm|ef⟩=⟨mb|fe⟩=_ovvv(m,b,f,e) ; ⟨mn|je⟩=_ooov(m,n,j,e)
+    let mut Wmbje: [float] = []
+    q = 0
+    while q < no * nv * no * nv { Wmbje.push(0.0) ; q = q + 1 }
+    m = 0
+    while m < no {
+        let mut b = 0
+        while b < nv {
+            let mut j = 0
+            while j < no {
+                let mut e = 0
+                while e < nv {
+                    let mut v = 0.0 - _ovov(I,m,b,j,e)
+                    let mut f = 0
+                    while f < nv {
+                        v = v - t1[_i2(nv,j,f)] * _ovvv(I,m,b,f,e)
+                        f = f + 1
+                    }
+                    let mut nn = 0
+                    while nn < no {
+                        v = v + t1[_i2(nv,nn,b)] * _ooov(I,m,nn,j,e)
+                        let mut f2 = 0
+                        while f2 < nv {
+                            let amp = 0.5 * t2[_i4oovv(no,nv,j,nn,f2,b)] + t1[_i2(nv,j,f2)] * t1[_i2(nv,nn,b)]
+                            v = v + amp * _oovv(I,m,nn,f2,e)
+                            f2 = f2 + 1
+                        }
+                        nn = nn + 1
+                    }
+                    Wmbje[((m * nv + b) * no + j) * nv + e] = v
+                    e = e + 1
+                }
+                j = j + 1
+            }
+            b = b + 1
+        }
+        m = m + 1
+    }
+
+    // ── T1 update ─────────────────────────────────────────────────────────────
+    //  r1[i,a] = Σ_e t_ie Fae[a,e] − Σ_m t_ma Fmi[m,i]
+    //    + Σ_me (2 t_imae − t_imea) Fme[m,e]
+    //    + Σ_nf t_nf (2⟨nf|ai⟩ − ⟨nf|ia⟩)            ⟨nf|ai⟩=_ovvo(n,f,a,i), ⟨nf|ia⟩=_ovov(n,f,i,a)
+    //    + Σ_mef (2 t_mief − t_mife) ⟨ma|ef⟩         ⟨ma|ef⟩=_ovvv(m,a,e,f)
+    //    − Σ_mne (2 t_mnae − t_nmae) ⟨mn|ie⟩         (⟨nm|ei⟩=⟨mn|ie⟩, ⟨nm|ie⟩=_ooov(n,m,i,e))
+    //   / D_ia = ε_i − ε_a
+    let mut t1n: [float] = []
+    q = 0
+    while q < no * nv { t1n.push(0.0) ; q = q + 1 }
+    i = 0
+    while i < no {
+        a = 0
+        while a < nv {
+            let mut v = 0.0
+            let mut e = 0
+            while e < nv { v = v + t1[_i2(nv,i,e)] * Fae[a * nv + e] ; e = e + 1 }
+            m = 0
+            while m < no { v = v - t1[_i2(nv,m,a)] * Fmi[m * no + i] ; m = m + 1 }
+            m = 0
+            while m < no {
+                e = 0
+                while e < nv {
+                    let u = 2.0 * t2[_i4oovv(no,nv,i,m,a,e)] - t2[_i4oovv(no,nv,i,m,e,a)]
+                    v = v + u * Fme[m * nv + e]
+                    e = e + 1
+                }
+                m = m + 1
+            }
+            let mut nn = 0
+            while nn < no {
+                let mut f = 0
+                while f < nv {
+                    v = v + t1[_i2(nv,nn,f)] * (2.0 * _ovvo(I,nn,a,f,i) - _ovov(I,nn,a,i,f))
+                    f = f + 1
+                }
+                nn = nn + 1
+            }
+            m = 0
+            while m < no {
+                e = 0
+                while e < nv {
+                    let mut f = 0
+                    while f < nv {
+                        let u = 2.0 * t2[_i4oovv(no,nv,m,i,e,f)] - t2[_i4oovv(no,nv,m,i,f,e)]
+                        v = v + u * _ovvv(I,m,a,e,f)
+                        f = f + 1
+                    }
+                    e = e + 1
+                }
+                m = m + 1
+            }
+            m = 0
+            while m < no {
+                nn = 0
+                while nn < no {
+                    e = 0
+                    while e < nv {
+                        // −2 t_mnae ⟨nm|ei⟩ + t_mnae ⟨nm|ie⟩ ; ⟨nm|ei⟩=⟨mn|ie⟩=_ooov(m,n,i,e), ⟨nm|ie⟩=_ooov(n,m,i,e)
+                        v = v - 2.0 * t2[_i4oovv(no,nv,m,nn,a,e)] * _ooov(I,m,nn,i,e)
+                        v = v + t2[_i4oovv(no,nv,m,nn,a,e)] * _ooov(I,nn,m,i,e)
+                        e = e + 1
+                    }
+                    nn = nn + 1
+                }
+                m = m + 1
+            }
+            let d = eps[i] - eps[no + a]
+            t1n[_i2(nv,i,a)] = v / d
+            a = a + 1
+        }
+        i = i + 1
+    }
+
+    // ── Zmbij[m,b,i,j] = Σ_ef τ_ijef ⟨mb|ef⟩  (⟨mb|ef⟩=_ovvv(m,b,e,f)) ──────────
+    let mut Zmbij: [float] = []
+    q = 0
+    while q < no * nv * no * no { Zmbij.push(0.0) ; q = q + 1 }
+    m = 0
+    while m < no {
+        let mut b = 0
+        while b < nv {
+            i = 0
+            while i < no {
+                let mut j = 0
+                while j < no {
+                    let mut v = 0.0
+                    let mut e = 0
+                    while e < nv {
+                        let mut f = 0
+                        while f < nv {
+                            v = v + tau[_i4oovv(no,nv,i,j,e,f)] * _ovvv(I,m,b,e,f)
+                            f = f + 1
+                        }
+                        e = e + 1
+                    }
+                    Zmbij[((m * nv + b) * no + i) * no + j] = v
+                    j = j + 1
+                }
+                i = i + 1
+            }
+            b = b + 1
+        }
+        m = m + 1
+    }
+
+    // ── T2 update: t2n = ⟨ij|ab⟩ + ladder + holeladder + R[i,j,a,b] + R[j,i,b,a] ─
+    let ladder = ccrhf_ladder_vvvv(I, tau)
+    let nvv = nv * nv
+    // pass 1 — unsymmetrized R[i,j,a,b]
+    let mut R: [float] = []
+    q = 0
+    while q < novv { R.push(0.0) ; q = q + 1 }
+    i = 0
+    while i < no {
+        let mut j = 0
+        while j < no {
+            a = 0
+            while a < nv {
+                let mut b = 0
+                while b < nv {
+                    let mut v = 0.0
+                    // + t_ijae ( Fae[b,e] − ½ Σ_m t_mb Fme[m,e] )
+                    let mut e = 0
+                    while e < nv {
+                        let mut Fbe = Fae[b * nv + e]
+                        m = 0
+                        while m < no { Fbe = Fbe - 0.5 * t1[_i2(nv,m,b)] * Fme[m * nv + e] ; m = m + 1 }
+                        v = v + t2[_i4oovv(no,nv,i,j,a,e)] * Fbe
+                        e = e + 1
+                    }
+                    // − t_imab ( Fmi[m,j] + ½ Σ_e t_je Fme[m,e] )
+                    m = 0
+                    while m < no {
+                        let mut Fmj = Fmi[m * no + j]
+                        e = 0
+                        while e < nv { Fmj = Fmj + 0.5 * t1[_i2(nv,j,e)] * Fme[m * nv + e] ; e = e + 1 }
+                        v = v - t2[_i4oovv(no,nv,i,m,a,b)] * Fmj
+                        m = m + 1
+                    }
+                    // − t_ma Zmbij[m,b,i,j]
+                    m = 0
+                    while m < no { v = v - t1[_i2(nv,m,a)] * Zmbij[((m * nv + b) * no + i) * no + j] ; m = m + 1 }
+                    // W-ring:
+                    //  + (t_imae − t_imea) Wmbej[m,b,e,j]
+                    //  + t_imae (Wmbej[m,b,e,j] + Wmbje[m,b,j,e])
+                    //  + t_mjae Wmbje[m,b,i,e]
+                    m = 0
+                    while m < no {
+                        e = 0
+                        while e < nv {
+                            let tdiff = t2[_i4oovv(no,nv,i,m,a,e)] - t2[_i4oovv(no,nv,i,m,e,a)]
+                            v = v + tdiff * Wmbej[((m * nv + b) * nv + e) * no + j]
+                            v = v + t2[_i4oovv(no,nv,i,m,a,e)] * (Wmbej[((m * nv + b) * nv + e) * no + j] + Wmbje[((m * nv + b) * no + j) * nv + e])
+                            v = v + t2[_i4oovv(no,nv,m,j,a,e)] * Wmbje[((m * nv + b) * no + i) * nv + e]
+                            e = e + 1
+                        }
+                        m = m + 1
+                    }
+                    // − t_ie t_ma ⟨mb|ej⟩ − t_ie t_mb ⟨ma|je⟩
+                    //   ⟨mb|ej⟩=_ovvo(m,b,e,j) ; ⟨ma|je⟩=_ovov(m,a,j,e)
+                    e = 0
+                    while e < nv {
+                        m = 0
+                        while m < no {
+                            v = v - t1[_i2(nv,i,e)] * t1[_i2(nv,m,a)] * _ovvo(I,m,b,e,j)
+                            v = v - t1[_i2(nv,i,e)] * t1[_i2(nv,m,b)] * _ovov(I,m,a,j,e)
+                            m = m + 1
+                        }
+                        e = e + 1
+                    }
+                    // + t_ie ⟨ab|ej⟩    (⟨ab|ej⟩=_vvvo(a,b,e,j))
+                    e = 0
+                    while e < nv { v = v + t1[_i2(nv,i,e)] * _vvvo(I,a,b,e,j) ; e = e + 1 }
+                    // − t_ma ⟨mb|ij⟩    (⟨mb|ij⟩=⟨ij|mb⟩=_ooov(i,j,m,b))
+                    m = 0
+                    while m < no { v = v - t1[_i2(nv,m,a)] * _ooov(I,i,j,m,b) ; m = m + 1 }
+                    R[_i4oovv(no,nv,i,j,a,b)] = v
+                    b = b + 1
+                }
+                a = a + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    // pass 2 — assemble
+    let mut t2n: [float] = []
+    q = 0
+    while q < novv { t2n.push(0.0) ; q = q + 1 }
+    i = 0
+    while i < no {
+        let mut j = 0
+        while j < no {
+            a = 0
+            while a < nv {
+                let mut b = 0
+                while b < nv {
+                    let mut v = _oovv(I,i,j,a,b)
+                    v = v + ladder[(i * no + j) * nvv + (a * nv + b)]
+                    m = 0
+                    while m < no {
+                        let mut nn = 0
+                        while nn < no {
+                            v = v + tau[_i4oovv(no,nv,m,nn,a,b)] * Wmnij[((m * no + nn) * no + i) * no + j]
+                            nn = nn + 1
+                        }
+                        m = m + 1
+                    }
+                    v = v + R[_i4oovv(no,nv,i,j,a,b)] + R[_i4oovv(no,nv,j,i,b,a)]
+                    let d = eps[i] + eps[j] - eps[no + a] - eps[no + b]
+                    t2n[_i4oovv(no,nv,i,j,a,b)] = v / d
+                    b = b + 1
+                }
+                a = a + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    return [t1n, t2n]
+}
+
+// ‖ΔT2‖ Frobenius residual
+fn _sqrtf(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    if g < 1.0 { g = 1.0 }
+    let mut it = 0
+    while it < 60 { let ng = 0.5 * (g + x / g) ; if ng == g { break } ; g = ng ; it = it + 1 }
+    return g
+}
+pub fn ccrhf_t2_rmsd(a: [float], b: [float]) -> float {
+    let mut s = 0.0
+    let mut k = 0
+    let n = a.len()
+    while k < n { let d = a[k] - b[k] ; s = s + d * d ; k = k + 1 }
+    return _sqrtf(s)
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   driver — chemists' MO-ERI tensor + ε + n_occ → spatial closed-shell CCSD
+// ════════════════════════════════════════════════════════════════════════════
+//   Returns [ e_ccsd, e_mp2_first, iters, residual, converged ] — same shape as
+//   the r17 spin-orbital ccsd_from_mo_eri (drop-in comparable).
+pub fn ccrhf_from_mo_eri(
+    eri_mo: [float], eps: [float], n: int, n_occ: int,
+    max_iter: int, e_tol: float
+) -> [any] {
+    let I = ccrhf_build_ints(eri_mo, n, n_occ)
+    let nv = I.nv
+    let mut t1: [float] = []
+    let mut z = 0
+    while z < n_occ * nv { t1.push(0.0) ; z = z + 1 }
+    let mut t2 = ccrhf_mp2_guess(I, eps, n_occ)
+    let e_mp2_first = ccrhf_energy(I, t1, t2)
+    let mut e_old = e_mp2_first
+    let mut iters = 0
+    let mut residual = 1.0
+    let mut converged = false
+    while iters < max_iter {
+        let res = ccrhf_iterate(I, eps, t1, t2)
+        let t1new: [float] = res[0]
+        let t2new: [float] = res[1]
+        residual = ccrhf_t2_rmsd(t2new, t2)
+        t1 = t1new
+        t2 = t2new
+        let e_new = ccrhf_energy(I, t1, t2)
+        iters = iters + 1
+        let de = e_new - e_old
+        let ade = if de < 0.0 { 0.0 - de } else { de }
+        e_old = e_new
+        if ade < e_tol && residual < e_tol { converged = true ; break }
+    }
+    let e_ccsd = ccrhf_energy(I, t1, t2)
+    return [e_ccsd, e_mp2_first, iters, residual, converged]
+}
