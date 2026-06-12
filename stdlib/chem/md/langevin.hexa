@@ -1,0 +1,355 @@
+// stdlib/chem/md/langevin.hexa — Langevin thermostat (NVT) for MD.
+//
+// @version 0.1.0
+// @capabilities [pure, randomness]
+//
+// QFORGE-BIO round-8 — the NVT temperature-control layer that turns the
+// sealed native FEP MD stack (R2 autograd-force · R3 soft-core · R4 MBAR
+// · R5 HREX · R6 solvation/TIP3P · R7 SHAKE/RATTLE) from a constant-energy
+// (NVE) engine into a constant-TEMPERATURE (NVT) engine. Real solvated
+// alchemical FEP samples the canonical (NVT) ensemble: the system must be
+// held at a fixed target temperature T while the rigid bonds (R7) stay
+// frozen. The Langevin equation couples each particle to a fictitious heat
+// bath via a friction drag −γ·m·v and a fluctuating random force ξ that
+// together satisfy the fluctuation-dissipation theorem (FDT), driving the
+// kinetic energy to the equipartition value ⟨KE⟩ = (3/2)·N·k_B·T.
+//
+//   m dv/dt = F(x) − γ·m·v + √(2·γ·m·k_B·T) · η(t),   ⟨η(t)η(t')⟩ = δ(t−t')
+//
+// Integrator: BAOAB splitting (Leimkuhler & Matthews 2013) — the
+// configurational-sampling-optimal ordering of the velocity-Verlet
+// half-kicks (B), drifts (A) and the Ornstein-Uhlenbeck bath update (O).
+// One step is the symmetric sequence
+//   B : v += (dt/2)·F/m              (half kick, deterministic force)
+//   A : x += (dt/2)·v                (half drift)
+//   O : v  = c1·v + c2·√(k_B·T/m)·ξ  (Ornstein-Uhlenbeck bath update)
+//   A : x += (dt/2)·v                (half drift)
+//   B : v += (dt/2)·F/m              (half kick, force at new x)
+// where the EXACT OU coefficients are
+//   c1 = exp(−γ·dt) ,  c2 = √(1 − exp(−2·γ·dt))
+// and ξ is a standard-normal 3-vector drawn per particle per step. The
+// O-step is the exact solution of the Ornstein-Uhlenbeck process over the
+// full dt, so it samples the Maxwell-Boltzmann velocity distribution
+// regardless of step size — the FDT is satisfied by construction.
+//
+// References:
+//   Leimkuhler, B. & Matthews, C. (2013). Rational construction of
+//     stochastic numerical methods for molecular sampling.
+//     Appl. Math. Res. Express 2013, 34 (BAOAB splitting).
+//   Bussi, G. & Parrinello, M. (2007). Accurate sampling using Langevin
+//     dynamics. Phys. Rev. E 75, 056707 (OU velocity update; the same
+//     c1/c2 O-step used here).
+//   Box, G.E.P. & Muller, M.E. (1958). A note on the generation of random
+//     normal deviates. Ann. Math. Statist. 29, 610 (Box-Muller Gaussian).
+//
+// Pure algorithmic — no I/O, no syscall. Randomness is a deterministic
+// integer LCG (Numerical Recipes constants, the SAME generator R5 HREX
+// uses) threaded as explicit state, so every trajectory is reproducible.
+// Gaussian deviates ξ come from the Box-Muller transform of two LCG
+// uniforms. Vacuum boundary inside the bath update (the bath is local —
+// per particle — and needs no PBC).
+//
+// d4-GENERIC: NO molecule-name / NO species hardcoding. Temperature T,
+// friction γ, timestep dt and per-particle mass are all parameters; the
+// SAME single-particle O-step loop drives a free particle, a harmonic
+// oscillator, a rigid TIP3P water and an arbitrary N-particle network.
+//
+// SHAKE/RATTLE compatibility (R7): the constrained driver applies the
+// position constraint (SHAKE) after each A drift half and the velocity
+// constraint (RATTLE) after the O bath update and after the final B kick,
+// so the rigid geometry is preserved while the thermostat acts only on
+// the unconstrained DOF.
+//
+// Public surface:
+//   pub struct LangevinParams { temperature, gamma, kB : float }
+//   pub fn langevin_coeffs(gamma, dt) -> [c1, c2]
+//       OU coefficients c1 = exp(−γ·dt), c2 = √(1 − exp(−2·γ·dt)).
+//   pub fn langevin_o_step(particles, prm, dt, lcg) -> [particles', lcg']
+//       The O (Ornstein-Uhlenbeck) bath update on velocities only.
+//   pub fn langevin_step(particles, force_fn, prm, dt, lcg) -> [particles', lcg']
+//       One full BAOAB step (unconstrained). force_fn(particles)->particles
+//       recomputes fx/fy/fz at the supplied positions (generic FF hook).
+//   pub fn langevin_run(initial, force_fn, prm, dt, n_steps, seed)
+//                                                        -> [particles, lcg]
+//       n_steps BAOAB steps, LCG seeded from `seed`.
+//   pub fn langevin_step_constrained(particles, force_fn, prm, dt, cons,
+//                                    tol, maxiter, lcg) -> [particles', lcg']
+//       One BAOAB step with SHAKE (position) + RATTLE (velocity) folded
+//       in — the rigid-MD NVT step.
+//   pub fn langevin_run_constrained(initial, force_fn, prm, dt, n_steps,
+//                                   cons, tol, maxiter, seed)
+//                                                        -> [particles, lcg]
+//   pub fn instantaneous_temperature(particles, kB) -> float
+//       T = 2·KE / (dof · k_B), dof = 3·N (no constraints removed).
+//   pub fn instantaneous_temperature_dof(particles, kB, dof) -> float
+//       T = 2·KE / (dof · k_B) for an explicit DOF count (constraints
+//       reduce dof; rigid water = 6 dof per molecule).
+
+use "stdlib/chem/md/lennard_jones"   // MdParticle layout (SSOT) + kinetic_energy
+use "stdlib/chem/md/shake"           // Constraint, shake_positions, rattle_velocities
+
+// ── deterministic LCG (Numerical Recipes) — SAME generator as R5 HREX ──
+// state ∈ [0, 2^32). u01 = state/2^32 ∈ [0,1). No syscall, reproducible.
+let LV_LCG_A = 1664525
+let LV_LCG_C = 1013904223
+let LV_MASK32 = 0xFFFFFFFF
+let LV_TWO32_F = 4294967296.0
+let LV_TWO_PI = 6.283185307179586
+
+fn _lv_next(state: int) -> int {
+    return (LV_LCG_A * state + LV_LCG_C) & LV_MASK32
+}
+// returns [new_state, u in [0,1)]
+fn _lv_u01(state: int) -> array {
+    let nx = _lv_next(state)
+    return [nx, to_float(nx) / LV_TWO32_F]
+}
+
+// Box-Muller: two uniforms (u1∈(0,1], u2∈[0,1)) → two independent
+// standard-normal deviates. Returns [new_lcg, z0, z1].
+//   z0 = √(−2 ln u1) · cos(2π u2)
+//   z1 = √(−2 ln u1) · sin(2π u2)
+// u1 is floored away from 0 so ln u1 is finite (the LCG can emit 0).
+fn _lv_gauss_pair(lcg: int) -> array {
+    let a = _lv_u01(lcg)
+    let l1 = to_int(a[0])
+    let mut u1 = a[1]
+    if u1 < 1.0e-12 { u1 = 1.0e-12 }
+    let b = _lv_u01(l1)
+    let l2 = to_int(b[0])
+    let u2 = b[1]
+    let r = sqrt(0.0 - 2.0 * log(u1))
+    let z0 = r * cos(LV_TWO_PI * u2)
+    let z1 = r * sin(LV_TWO_PI * u2)
+    return [to_float(l2), z0, z1]
+}
+
+pub struct LangevinParams {
+    temperature: float,   // target T (same energy units as k_B·T below)
+    gamma: float,         // friction coefficient γ  (inverse time)
+    kB: float,            // Boltzmann constant in the working unit system
+}
+
+// ── OU coefficients for the O-step ───────────────────────────────────
+// c1 = exp(−γ·dt)         velocity-retention (deterministic damping)
+// c2 = √(1 − exp(−2γ·dt)) fluctuation amplitude (FDT-balanced with c1)
+pub fn langevin_coeffs(gamma: float, dt: float) -> array {
+    let c1 = exp(0.0 - gamma * dt)
+    let arg = 1.0 - c1 * c1
+    let mut c2 = 0.0
+    if arg > 0.0 { c2 = sqrt(arg) }
+    return [c1, c2]
+}
+
+// ── O-step: Ornstein-Uhlenbeck bath update on velocities ─────────────
+//
+// For each particle and each Cartesian component:
+//   v ← c1·v + c2·√(k_B·T / m)·ξ ,   ξ ~ N(0,1) independent
+// This is the EXACT propagator of the OU process dv = −γ v dt + σ dW over
+// a full step dt, so the stationary velocity distribution is Maxwell-
+// Boltzmann at temperature T with ⟨v²⟩ = k_B·T/m, independent of dt.
+//
+// Three Gaussians per particle are needed; Box-Muller yields two per call,
+// so we draw two pairs (4 deviates) per particle and use the first three.
+// d4-generic: identical body for every particle.
+pub fn langevin_o_step(particles: array, prm: LangevinParams,
+                       dt: float, lcg: int) -> array {
+    let cc = langevin_coeffs(prm.gamma, dt)
+    let c1 = cc[0]
+    let c2 = cc[1]
+    let kT = prm.kB * prm.temperature
+    let n = len(particles)
+    let mut out = []
+    let mut state = lcg
+    let mut i = 0
+    while i < n {
+        let p = particles[i]
+        let g0 = _lv_gauss_pair(state)
+        state = to_int(g0[0])
+        let g1 = _lv_gauss_pair(state)
+        state = to_int(g1[0])
+        let zx = g0[1]
+        let zy = g0[2]
+        let zz = g1[1]
+        // amplitude √(kT/m) per component.
+        let amp = sqrt(kT / p.mass)
+        let vx_new = c1 * p.vx + c2 * amp * zx
+        let vy_new = c1 * p.vy + c2 * amp * zy
+        let vz_new = c1 * p.vz + c2 * amp * zz
+        out = push(out, MdParticle{
+            x: p.x, y: p.y, z: p.z,
+            vx: vx_new, vy: vy_new, vz: vz_new,
+            mass: p.mass, fx: p.fx, fy: p.fy, fz: p.fz,
+        })
+        i = i + 1
+    }
+    return [out, to_float(state)]
+}
+
+// ── B half-kick: v += (dt/2)·F/m ─────────────────────────────────────
+fn _b_kick(particles: array, dt: float) -> array {
+    let n = len(particles)
+    let half = 0.5 * dt
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        let p = particles[i]
+        let inv_m = 1.0 / p.mass
+        out = push(out, MdParticle{
+            x: p.x, y: p.y, z: p.z,
+            vx: p.vx + half * p.fx * inv_m,
+            vy: p.vy + half * p.fy * inv_m,
+            vz: p.vz + half * p.fz * inv_m,
+            mass: p.mass, fx: p.fx, fy: p.fy, fz: p.fz,
+        })
+        i = i + 1
+    }
+    return out
+}
+
+// ── A half-drift: x += (dt/2)·v ──────────────────────────────────────
+fn _a_drift(particles: array, dt: float) -> array {
+    let n = len(particles)
+    let half = 0.5 * dt
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        let p = particles[i]
+        out = push(out, MdParticle{
+            x: p.x + half * p.vx,
+            y: p.y + half * p.vy,
+            z: p.z + half * p.vz,
+            vx: p.vx, vy: p.vy, vz: p.vz,
+            mass: p.mass, fx: p.fx, fy: p.fy, fz: p.fz,
+        })
+        i = i + 1
+    }
+    return out
+}
+
+// ── langevin_step: one full BAOAB step (unconstrained) ───────────────
+//
+// force_fn(particles) -> particles' : recompute fx/fy/fz at the supplied
+// positions (the generic force-field hook — LJ, Coulomb, soft-core, …).
+// The incoming `particles` MUST already carry the force at their current
+// positions (B uses it); langevin_run seeds that on entry.
+//
+//   B : half kick using F(x)
+//   A : half drift
+//   O : OU bath update (stochastic)
+//   A : half drift
+//   recompute F at the new x
+//   B : half kick using F(x_new)
+pub fn langevin_step(particles: array, force_fn, prm: LangevinParams,
+                     dt: float, lcg: int) -> array {
+    let s1 = _b_kick(particles, dt)          // B
+    let s2 = _a_drift(s1, dt)                 // A
+    let ores = langevin_o_step(s2, prm, dt, lcg)   // O
+    let s3 = ores[0]
+    let new_lcg = to_int(ores[1])
+    let s4 = _a_drift(s3, dt)                 // A
+    let s5 = force_fn(s4)                     // F(x_new)
+    let s6 = _b_kick(s5, dt)                  // B
+    return [s6, to_float(new_lcg)]
+}
+
+// ── langevin_run: n_steps BAOAB (unconstrained) ──────────────────────
+//
+// Seeds forces at t=0 via force_fn, then loops n_steps BAOAB steps.
+// Returns [final_particles, final_lcg_state].
+pub fn langevin_run(initial: array, force_fn, prm: LangevinParams,
+                    dt: float, n_steps: int, seed: int) -> array {
+    let mut state = force_fn(initial)        // F(x0)
+    let mut lcg = seed & LV_MASK32
+    if n_steps <= 0 { return [state, to_float(lcg)] }
+    if dt <= 0.0 { return [state, to_float(lcg)] }
+    let mut step = 0
+    while step < n_steps {
+        let r = langevin_step(state, force_fn, prm, dt, lcg)
+        state = r[0]
+        lcg = to_int(r[1])
+        step = step + 1
+    }
+    return [state, to_float(lcg)]
+}
+
+// ── langevin_step_constrained: BAOAB + SHAKE/RATTLE (rigid-MD NVT) ────
+//
+// Constrained BAOAB (Leimkuhler-Matthews g-BAOAB pattern):
+//   B : half kick                         → RATTLE (project velocities)
+//   A : half drift                        → SHAKE  (project positions)
+//   O : OU bath update                    → RATTLE (project velocities)
+//   A : half drift                        → SHAKE  (project positions)
+//   recompute F at the constrained x
+//   B : half kick                         → RATTLE (project velocities)
+// SHAKE uses the pre-drift positions as the reference geometry; RATTLE
+// removes the bond-parallel relative velocity so ṙ_ij·r_ij = 0. The
+// thermostat thus acts only on the constrained-surface (unconstrained)
+// degrees of freedom.
+pub fn langevin_step_constrained(particles: array, force_fn,
+                                 prm: LangevinParams, dt: float,
+                                 cons: array, tol: float, maxiter: int,
+                                 lcg: int) -> array {
+    // B → RATTLE
+    let b1 = _b_kick(particles, dt)
+    let r1 = rattle_velocities(b1, cons, tol, maxiter)
+    let p1 = r1.particles
+    // A → SHAKE (reference = pre-drift positions p1)
+    let a1 = _a_drift(p1, dt)
+    let s1 = shake_positions(p1, a1, cons, tol, maxiter)
+    let p2 = s1.particles
+    // O → RATTLE
+    let ores = langevin_o_step(p2, prm, dt, lcg)
+    let p3 = ores[0]
+    let new_lcg = to_int(ores[1])
+    let r2 = rattle_velocities(p3, cons, tol, maxiter)
+    let p4 = r2.particles
+    // A → SHAKE (reference = pre-drift positions p4)
+    let a2 = _a_drift(p4, dt)
+    let s2 = shake_positions(p4, a2, cons, tol, maxiter)
+    let p5 = s2.particles
+    // recompute force at constrained x, then B → RATTLE
+    let p6 = force_fn(p5)
+    let b2 = _b_kick(p6, dt)
+    let r3 = rattle_velocities(b2, cons, tol, maxiter)
+    return [r3.particles, to_float(new_lcg)]
+}
+
+// ── langevin_run_constrained: n_steps constrained BAOAB ──────────────
+pub fn langevin_run_constrained(initial: array, force_fn,
+                                prm: LangevinParams, dt: float, n_steps: int,
+                                cons: array, tol: float, maxiter: int,
+                                seed: int) -> array {
+    let mut state = force_fn(initial)
+    let mut lcg = seed & LV_MASK32
+    if n_steps <= 0 { return [state, to_float(lcg)] }
+    if dt <= 0.0 { return [state, to_float(lcg)] }
+    let mut step = 0
+    while step < n_steps {
+        let r = langevin_step_constrained(state, force_fn, prm, dt,
+                                          cons, tol, maxiter, lcg)
+        state = r[0]
+        lcg = to_int(r[1])
+        step = step + 1
+    }
+    return [state, to_float(lcg)]
+}
+
+// ── instantaneous temperature from kinetic energy ────────────────────
+// T = 2·KE / (dof · k_B). With no constraints dof = 3·N.
+pub fn instantaneous_temperature(particles: array, kB: float) -> float {
+    let n = len(particles)
+    let dof = to_float(3 * n)
+    if dof <= 0.0 { return 0.0 }
+    let ke = kinetic_energy(particles)
+    return 2.0 * ke / (dof * kB)
+}
+
+// T = 2·KE / (dof · k_B) for an explicit DOF count (rigid molecules
+// remove 3 constraint DOF each → caller passes the reduced dof).
+pub fn instantaneous_temperature_dof(particles: array, kB: float,
+                                     dof: float) -> float {
+    if dof <= 0.0 { return 0.0 }
+    let ke = kinetic_energy(particles)
+    return 2.0 * ke / (dof * kB)
+}
