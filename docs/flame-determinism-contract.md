@@ -170,6 +170,19 @@ provide a **non-FMA accumulation** (e.g. force `-ffp-contract=off`, or split the
 multiply and add into separate statements the backend cannot recombine) and
 re-measure the cross-ISA byte fold. (F-OP29-2ND-ARCH.)
 
+> **TRIPWIRE (OP-69).** The regression gate for this layer-3 invariant is
+> `tool/flame_steppath_fma_gate.sh` (wired BLOCKING in `nobaseline-gate.yml`): a
+> pure source grep asserting the CLMConvMoE production trainer (`clm_prod.hexa` +
+> its matmul-free production libs) never calls the raw FMA-fused `farr_matmul(` /
+> `t_matmul(` kernel directly — every determinism-path matmul must route through
+> the `forge_dispatch_matmul` dispatcher seam (cuBLAS on a CUDA host,
+> cross-ISA-folded on CPU) or an inline ascending dot. The decoder-block 2nd arch
+> (`decoder_block_lib.hexa`) and the attention/SwiGLU decoder path (`nn_lib.hexa`)
+> are intentionally NOT scanned: they are a different model the CLMConvMoE trainer
+> never invokes, and the decoder block's `farr_matmul` use is the
+> documented-deferred cross-ISA case (it matches anima's `d5_proj_batch_g`
+> flame↔anima byte-eq, prioritized over cross-ISA). (`F-OP69-DETERMINISM-GATE-COVERAGE`.)
+
 #### boundary: exact-product operands are FMA-immune
 
 The invariant above has a **precise mathematical boundary**, measured by OP-32's

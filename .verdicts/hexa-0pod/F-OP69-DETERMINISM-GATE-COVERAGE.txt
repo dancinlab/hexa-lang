@@ -1,0 +1,183 @@
+F-OP69-DETERMINISM-GATE-COVERAGE — audit the OTHER flame determinism-contract layers
+        (layer-1, layer-3, the compile-step const-fold, every per-phase sub-invariant) for the
+        same documented-but-UNGATED gap OP-66 closed for layer-2, and add a seed-independent
+        tripwire for each ungated invariant that is 0-pod statically checkable. FINDING: LAYER 3
+        (cross-ISA FMA-free) was DOCUMENTED but enforced by NOTHING. OP-69 adds
+        tool/flame_steppath_fma_gate.sh (pure source grep, no ./hexa, no seed) + wires it BLOCKING
+        in nobaseline-gate.yml (all 3 ISA legs). 🟢 PROVEN: passes clean on main (exit 0), fails on
+        an injected raw farr_matmul in clm_prod.hexa AND a raw t_matmul in moe_lib (exit 1, exact
+        line), exempts the compliant forge_dispatch_matmul dispatcher seam + the decoder-block /
+        attention architectures the CLMConvMoE trainer never invokes.
+HEXA-0POD OP-69 · LANE-1 forge/flame · CPU-LOCAL (grep) · 0-GPU · $0 · no vast/pod
+════════════════════════════════════════════════════════════════════════════
+
+TIER: 🟢 GREEN — a documented-but-unenforced determinism invariant (LAYER 3, cross-ISA FMA-free)
+      is now CI-locked by a tripwire PROVEN to pass-clean-on-main and fail-on-regression. The
+      audit is the deliverable; the new gate is the real gap closed. Honest residual: two
+      invariants are RUNTIME-only (need a hexa run / cross-platform fold), recorded as
+      documented-but-deferred enforcement gaps — NOT faked into static gates.
+
+[0] THE 3-LAYER + COMPILE-STEP COVERAGE MATRIX (STEP 1)
+═══════════════════════════════════════════════════════
+docs/flame-determinism-contract.md enumerates THREE run-step determinism layers plus a 4th
+compile-step surface. For each invariant: {gated-by <job> | UNGATED-now-CLOSED | DEFERRED}.
+
+LAYER 1 — RUN-TO-RUN (same machine twice -> max|Δ|=0; sequential order, no uninit scratch)
+  invariants (per-phase canonical-order locks):
+    · INPUT embed scatter position-ascending     (F-OP13 · clm_prod_embed_scatter_eq.hexa)
+    · FWD conv im2col j-ascending contract        (F-OP7  · clm_prod_conv_im2col_eq.hexa)
+    · NORM two-pass mean/var (t-out,c-in), eps    (F-OP9  · clm_prod_ln_reduction_eq.hexa)
+    · MoE softmax e-asc denom + combine e-asc      (F-OP8  · clm_prod_moe_combine_eq.hexa)
+    · LOSS bwd (softmax-onehot)/T, v-asc denom    (F-OP11 · clm_prod_ce_softmax_grad_eq.hexa)
+    · LOSS fwd mean NLL t-asc, clamp 1e-6          (F-OP11 · clm_prod_ce_softmax_grad_eq.hexa)
+    · BWD dW transpose-elim same-order sum         (F-OP2  · clm_prod_transpose_elim_eq.hexa)
+    · OPTIMIZER AdamW left-assoc / ε-outside-√     (F-OP12 · clm_prod_adamw_update_eq.hexa)
+    · STEP capstone whole-step run-to-run          (F-OP15 · clm_step_determinism_eq.hexa)
+  ENFORCEMENT: ⚠ DEFERRED (honest gap). These are max|Δ|=0 byte-eq oracles that require a
+    BUILT ./hexa to RUN the production op order vs a re-layout reference. They are 0-pod-RUNNABLE
+    (`hexa run`, CPU, $0) but NOT pure-static-grep — they need the seed toolchain, and CI's frozen
+    seed hexat pre-dates parts of the flame source (the same staleness that keeps OP-39 advisory).
+    They are NOT statically checkable, so OP-69 does NOT fake a static gate for them. Recorded as a
+    documented-but-deferred enforcement gap: a blocking layer-1 oracle-runner gate needs the seed
+    promote (the OP-37/39/40/44/46 build-host bundle) to land first, after which the per-phase
+    oracles can run blocking the same way OP-34's fold gate runs the dt_ oracles.
+
+LAYER 2 — libm-FREE (any transcendental -> bit-identical on any IEEE-754)
+  invariant: the CLMConvMoE production step calls NO raw libm exp/erf/cos/sin/log/sqrt/pow —
+    every transcendental is dt_exp/dt_erf/dt_ln/_moe_exp/d5_cos + Newton sqrt.
+  ENFORCEMENT: 🟢 GATED (already). Two complementary gates:
+    · tool/flame_steppath_libm_gate.sh — BLOCKING in nobaseline-gate.yml (darwin-arm64 job).
+      Pure source grep: the production step-path FILES + nn_lib's production-reachable fns call
+      no raw libm transcendental. (OP-66 / F-OP66, #3186.)
+    · tool/fold_ci_gate.sh — BLOCKING in nobaseline-gate.yml (all 3 ISA legs). Asserts the
+      dt_exp/dt_erf golden FOLD VALUES (7679248634312321699 · 4548590605583584556 ·
+      4249661408190172843) — locks that the dt_ twins still produce the cross-platform bytes.
+      (OP-34.)
+    => layer 2 is PROVEN-GATED. No new gate needed (recording the pointers is the deliverable).
+
+LAYER 3 — cross-ISA FMA-FREE (a*b+c contraction -> same bytes on arm64 AND x86)
+  invariant: a determinism-path matmul must NOT route through the raw FMA-fused C farr_matmul
+    kernel (nor t_matmul, its thin wrapper). clang -O2 fuses a*b+c -> single fma on arm64
+    (1 rounding) but mul+add on x86 (2 roundings); an accumulating matmul diverges per ISA on
+    byte-identical fp64 inputs (F-OP29: arm64 ck 241449363 vs x86 ck 1401117690). Compliant path =
+    forge_dispatch_matmul DISPATCHER seam (cuBLAS on CUDA host; cross-ISA-folded on CPU) OR inline
+    ascending dot.
+  ENFORCEMENT (before OP-69): ⛔ UNGATED. grep .github/workflows/ + tool/ for farr_matmul ->
+    NO CI job / script enforced it. The invariant was fully DOCUMENTED (contract §1 cross-ISA
+    invariant + the "what breaks the contract" checklist) and HELD in source — clm_prod.hexa's
+    conv GEMMs route through forge_dispatch_matmul — but enforced by NOTHING. A future edit could
+    wire the cache-friendly raw farr_matmul (it is RIGHT THERE in tensor_lib) into the trainer and
+    silently re-open the cross-ISA divergence. THE GAP (the layer-2 analogue OP-66 closed).
+  ENFORCEMENT (OP-69): 🟢 NOW GATED — tool/flame_steppath_fma_gate.sh, BLOCKING in
+    nobaseline-gate.yml (darwin-arm64 + linux-x86_64 + linux-arm64). See [2]-[4].
+
+COMPILE-STEP — bit-exact hex-float const-fold serialize (4th surface; §1 "compile-time constant
+  folding"): a comptime-folded float literal is baked as a C99 hex-float (0x1.<mant>p<exp>), NOT
+  decimal %g/%e — the hand-rolled formatter is not correctly-rounded and drifts the folded bits.
+  ENFORCEMENT: 🟢 GATED (advisory-until-promote). tool/op39_constfold_gate.sh runs in
+    nobaseline-gate.yml all 3 legs, asserting 18 folds' IEEE-754 LE bit patterns == golden
+    (OP-39 13 + OP-42 5 hex-float MUL_HF*). Wired continue-on-error: true DELIBERATELY — CI's
+    frozen seed hexat pre-dates the OP-37/37b/40 source fixes, so it reports the seed-toolchain bug
+    until the fix is promoted into the seed (a documented build-host step), then auto-goes-blocking.
+    => GATED with an honest advisory rationale; not an OP-69 gap (the gate + SSOT already exist).
+
+OTHER documented invariants (recorded, not new gaps):
+  · SCHEDULE libm-cos ban (F-OP33): the cos/sin in a per-step LR schedule must be d5_cos/d5_sin,
+    NOT libm. SUBSUMED by layer-2's libm gate (cos/sin are in the flame_steppath_libm_gate forbidden
+    set) — PROVEN-GATED via OP-66.
+  · CHECKPOINT binary fp64-LE (F-OP35) + B>1 conv seam (F-OP10): RUNTIME byte-eq properties
+    (save->restore->resume bit-identity; the (K-1)·dil seam band). NOT static-grep-checkable — same
+    DEFERRED class as layer-1 (need a hexa run). Recorded as documented-but-deferred.
+
+[1] THE LAYER-3 INVARIANT HOLDS IN SOURCE TODAY (pre-gate evidence)
+──────────────────────────────────────────────────────────────────
+Raw FMA-fused matmul CALL-SITES (grep -nE '[^A-Za-z0-9_](farr_matmul|t_matmul)\(', code only,
+minus the forge_dispatch_matmul dispatcher seam) across the CLMConvMoE trainer step-path:
+  clm_prod.hexa  : 0  (conv GEMMs route through forge_dispatch_matmul — conv1d_via_forge:212,
+                       conv1d_bwd_via_forge:250/262, batched:286/298; the trainer uses its OWN
+                       inlined conv, NOT conv_lib's nn_conv1d_fwd/t_matmul path)
+  flame_math / gn_lib / optim_lib / moe_lib / quant_lib : 0
+  => the trainer is raw-FMA-matmul-free; every determinism-path matmul goes through the
+     forge_dispatch_matmul seam (the F-OP29-blessed cross-ISA dispatcher).
+The raw farr_matmul/t_matmul call-sites in the tree are all OFF the CLMConvMoE step:
+  · tensor_lib.hexa:61  — DEFINES t_matmul (the primitive wrapper); not a step caller.
+  · conv_lib.hexa:89/113 — nn_conv1d_fwd/_off (NOT used by the trainer; it inlines its own conv).
+  · nn_lib.hexa:389-403/627/889/1040-1050 — nn_swiglu_fwd / nn_lm_head_fwd / nn_matmul_bf16_host /
+    nn_pf_expert_fwd: the attention/SwiGLU/MLP DECODER architecture, a DIFFERENT model.
+  · decoder_block_lib.hexa:149/197 — _db_grad_accum_farr / _db_proj_batch_farr: the OP-29 2nd
+    architecture, which DELIBERATELY routes through farr_matmul to match anima d5_proj_batch_g
+    (flame↔anima byte-eq prioritized over cross-ISA) — its cross-ISA layer is the DOCUMENTED-
+    DEFERRED case (F-OP29 §HOLE-2: "byte-eq run-to-run per platform but NOT machine-independent";
+    the fix landed in the selfcontained oracle twin, the production lib stays anima-byte-eq).
+  All four are intentionally NOT scanned by the gate (LOW BLAST RADIUS — see [2]).
+
+[2] THE GATE — tool/flame_steppath_fma_gate.sh
+──────────────────────────────────────────────
+Pure-lexical grep over the CLMConvMoE production trainer FILES allow-list (clm_prod.hexa +
+flame_math/gn_lib/optim_lib/moe_lib/quant_lib — the matmul-free production libs). Forbids
+whole-word raw farr_matmul( / t_matmul( call-sites; excludes // comments + the
+forge_dispatch_matmul / forge_dispatch_matmul_t / forge_dispatch_matmul_batched dispatcher seam
+(the COMPLIANT path). Exit 0 clean / 1 regression / 2 absent-file (neutral). Modeled exactly on
+tool/flame_steppath_libm_gate.sh (OP-66's allow-list grep gate).
+
+[3] VERBATIM PROOF — pass-clean + fail-on-regression
+────────────────────────────────────────────────────
+CLEAN (main):
+  $ sh tool/flame_steppath_fma_gate.sh ; echo EXIT=$?
+  OP-69 flame trainer step-path FMA-fused-matmul gate — CLMConvMoE determinism LAYER 3
+  forbidden on the trainer step: raw FMA-fused farr_matmul( / t_matmul(
+  compliant: forge_dispatch_matmul dispatcher seam (cross-ISA F-OP29) / inline ascending dot
+    PASS  stdlib/flame/clm_prod.hexa
+    PASS  stdlib/flame/flame_math.hexa
+    PASS  stdlib/flame/gn_lib.hexa
+    PASS  stdlib/flame/optim_lib.hexa
+    PASS  stdlib/flame/moe_lib.hexa
+    PASS  stdlib/flame/quant_lib.hexa
+  GATE PASSED: 6 guarded flame trainer step-path file(s) raw-FMA-matmul-free.
+  EXIT=0
+
+REGRESSION A — inject raw farr_matmul into PRODUCTION clm_prod.hexa:212
+               (forge_dispatch_matmul -> farr_matmul, the conv1d_via_forge GEMM):
+    FAIL  stdlib/flame/clm_prod.hexa  (raw FMA-fused matmul on the production trainer step-path)
+          212:    let mm = farr_matmul(xcol, T, Kdim, Wt, Cout)
+  GATE FAILED ... EXIT=1     (reverted -> EXIT=0)
+
+REGRESSION B — inject raw t_matmul into a production lib (moe_lib.hexa, first fn):
+    FAIL  stdlib/flame/moe_lib.hexa  (raw FMA-fused matmul on the production trainer step-path)
+          59:    let _bogus = t_matmul(0, 1, 1, 0, 1)
+  EXIT=1     (the 5 forge_dispatch_matmul( seam call-sites in clm_prod.hexa are correctly IGNORED —
+              clm_prod.hexa passes clean in BOTH drives; reverted -> EXIT=0)
+
+FALSE-POSITIVE CHECK: the compliant forge_dispatch_matmul dispatcher seam (5 call-sites in
+  clm_prod.hexa) is NOT flagged — clm_prod.hexa PASSES clean. The gate fires ONLY on the raw
+  FMA-fused kernel, not the cross-ISA-folded dispatcher.
+
+[4] WIRING + LOW BLAST RADIUS
+─────────────────────────────
+Wired BLOCKING (no seed dependency — pure grep, runs identically on any ISA) as a step in ALL
+THREE nobaseline-gate jobs (darwin-arm64 after OP-66; linux-x86_64 + linux-arm64 after OP-34) —
+the layer-3 invariant IS the cross-ISA property, so enforcing it on both the arm64 and x86 legs
+makes the lock symmetric. Scans ONLY the explicit CLMConvMoE trainer step-path; the attention/
+SwiGLU decoder path (nn_lib), the OP-29 2nd-arch decoder block (decoder_block_lib — anima-byte-eq
+deferred-cross-ISA), the t_matmul/farr_matmul PRIMITIVE definitions (tensor_lib), and conv_lib's
+unused nn_conv1d_* are intentionally NOT scanned. Cannot false-positive on a doc mention (//
+excluded) or the dispatcher seam (allow-listed). docs/flame-determinism-contract.md §1 updated
+with the OP-69 tripwire pointer.
+
+[5] DIFF (net additive « 50 ; wipe_guard N/A)
+─────────────────────────────────────────────
+  + tool/flame_steppath_fma_gate.sh                     (new gate, ~160 lines)
+  + .github/workflows/nobaseline-gate.yml               (3 steps + rationale comments)
+  + docs/flame-determinism-contract.md                  (OP-69 tripwire pointer block)
+  + .verdicts/hexa-0pod/F-OP69-DETERMINISM-GATE-COVERAGE.txt
+  + domains/HEXA-0POD.{md,log.md}                        (milestone [x] + log)
+No codegen/runtime/stdlib edit -> self-host byte-eq fixpoint UNTOUCHED. No .tape edit. No env.hexa.
+
+OUTCOME: 🟢 GREEN. The flame determinism-contract layer coverage is now AUDITED end-to-end:
+  · LAYER 2 (libm-free) + COMPILE-STEP (const-fold) — PROVEN-GATED (OP-66 + OP-34 + OP-39/42);
+  · LAYER 3 (cross-ISA FMA-free) — was the documented-but-UNGATED gap; OP-69 closes it with a
+    tripwire proven to pass-clean-on-main + fail-on-regression on BOTH ISA legs;
+  · LAYER 1 (run-to-run per-phase byte-eq) + CHECKPOINT + B>1 seam — honestly recorded as
+    documented-but-DEFERRED enforcement gaps (RUNTIME byte-eq, not static-grep-checkable; a
+    blocking oracle-runner gate awaits the seed-promote that keeps OP-39 advisory).
+$0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
