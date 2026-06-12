@@ -31,8 +31,18 @@
       (C) R2 DOS 일관 (band-edge dε/dk→0 van-Hove + 갭내 DOS=0) · (D) Hermiticity + V(0)
       uniform shift. HONEST(d6): 운동에너지=실 SCF brick (배선 LIVE), 포텐셜=해석 Fourier 극한
       (empty+Bragg) — 수렴 real-cell scf_pw V_scr 는 데이터 swap (round-4). PR #3127.
-- [ ] **round-2 ④ phonon-Landauer κ** — DFPT ω(q)(`dfpt`·`realcell_phonon`) 를 포논
-      transmission 으로 재사용 · ballistic κ → N·g₀ 저온 floor anchor.
+- [x] **round-4 ④ phonon-Landauer κ (g5 19/19 PASS)** — `stdlib/qforge/chip/phonon_kappa.hexa`
+      + selftest. ballistic 포논 열전도 κ(T)=(1/2π)∫dω ħω T_ph(ω) ∂n_BE/∂T (Rego-Kirczenow
+      PRL 81,232 · Schwab Nature 404,974). DFPT ω(q,ν)(`dfpt` PhononResult.omega·d19) = 투과
+      채널 (d4 — analytic·real-DFPT·device 모드 한 경로, 이름 하드코딩 없음). 보편 LOW-T floor:
+      N reflectionless acoustic 채널 → κ=(1/2π)(k_B²T/ħ)·(π²/3)=N·g₀ (∫x²e^x/(e^x−1)²dx=π²/3
+      EXACT, dispersion-blind). g₀ = round-1 `qforge_chip_thermal_quantum` 재사용 (d19 — 단일
+      π²k_B²T/3h). g5: (A) **저온 양자극한** κ/T→N·π²k_B²/3h (T=10/1/0.1K plateau) · (B) **g₀값**
+      κ(1ch,1K)=9.46431e-13 W/K (round-1 일관) · (C) **Bose-Einstein** ∂n_BE/∂T>0 + 고전극한
+      ħω·∂n/∂T→k_B (Dulong-Petit) · (D) **채널수 plateau** κ(N)=N·g₀ (N=1..4, 열 staircase =
+      Landauer N·G₀ 의 열 아날로그) · (E) generic 모드리스트 (3 acoustic→3g₀, frozen-optical
+      BE-억제). HONEST(d6): ballistic 양자극한 — 포논-포논/Umklapp 산란·diffusive BTE 아님;
+      앵커 = EXACT 양자 floor (저온/clean), diffusive device κ 아님. PR #<TBD>.
 - [ ] **verify-adapter (chip=TCAD)** — 밴드갭/effective-mass/컨덕턴스/κ 를 측정·TCAD ref
       로 표준화 (verify-adapter 일반화 축).
 - [ ] **NEXUS edge** — QFORGE-CHIP → {소자 도메인} 재사용 그래프 등록 (materials c7 패턴).

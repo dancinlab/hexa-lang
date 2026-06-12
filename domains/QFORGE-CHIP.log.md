@@ -149,3 +149,94 @@ brick 의 H(k) + lead surface-GF Σ(E) → T(E)=Tr[ΓL G^r ΓR G^a] (R2-③ 가 
 ### deliver
 - PR base=qforge-chip-r1 (stacked) · `--repo dancinlab/hexa-lang` · 머지=사용자.
   brick+selftest 커밋 후 즉시 push (durable-worktree). DOMAINS.tape 미접촉.
+
+## 2026-06-13 — round-4 (phonon-Landauer κ — THERMAL leg, g5 19/19 PASS)
+
+R3 보고가 지정한 우선순위 (α) phonon-Landauer κ 구현 — chip front-end 의 **THERMAL('열') leg**
+봉인 (밴드 R1-3 / 수송 R1-2 / **열 R4** = 3-leg 완성). 0-pod analytic. ISOLATED worktree
+`qforge-chip-r4` (base origin/qforge-chip-r3 — R1+R2+R3 lineage tip). brick+selftest 커밋
+즉시 push (durable-worktree, 첫콜 사망 대비 WIP 선커밋).
+
+### lit grounding (d18) + R1/dfpt 인터페이스 감사 (d3/d19)
+- **Landauer 포논 열전도** (Rego-Kirczenow PRL 81,232 (1998) · Schwab et al. Nature 404,974
+  (2000)): κ(T)=(1/2π)∫₀^∞dω ħω T_ph(ω) ∂n_BE/∂T. 전자 Landauer(R1/R2)의 열 아날로그 —
+  ħω=포논 에너지 양자, T_ph=열린 모드 투과, n_BE=Bose-Einstein, ∂n_BE/∂T=열류 응답커널.
+- **R1 g₀ 감사**: `qforge_chip_thermal_quantum(T)`=π²k_B²T/3h (Schwab). R4 가 단일 g₀ 정의
+  **재사용**(d19) — 새 π²k_B²T/3h 안 만듦.
+- **dfpt 감사**: `qforge_phonons() -> PhononResult{omega:[float],...}` (.omega=ω(q,ν), 부호보존
+  sqrt). R4 가 ω(q,ν) 를 **투과 채널 입력**으로 받음 (d4 — analytic·real-DFPT PhononResult.omega·
+  device 모드 한 경로, 이름 하드코딩 없음).
+
+### 핵심 결과 — 보편 LOW-T 양자 floor κ→N·g₀ (closed-form, d6)
+N reflectionless acoustic 채널(linear ω→0, T_ph=N)에서 적분이 dispersion·통계·cutoff 무관
+보편값을 가짐:
+```
+κ(T) = (1/2π)(k_B²T/ħ)∫₀^∞ x²e^x/(e^x−1)² dx,  x≡ħω/k_BT
+     = (1/2π)(k_B²T/ħ)(π²/3)              [∫=π²/3, EXACT]
+     = N·π²k_B²T/3h = N·g₀.
+```
+무차원 적분 ∫x²e^x/(e^x−1)²dx=π²/3 = R1 의 전자 g₀ 와 **같은 양자** (heat statistics-blind,
+Pendry bound). 구현 = `phonon_kappa.hexa`: BE 커널 + composite-Simpson (nq=4000, π²/3 to ~1e-6)
++ generic 모드리스트 (S(y)=∫_y^∞K/(π²/3) BE high-pass — acoustic→g₀, frozen-optical→0).
+
+### g5 VERBATIM (`hexa run stdlib/qforge/chip/phonon_kappa_selftest.hexa`)
+```
+PASS A.kappa/T plateau @T=10.0K → π²k_B²/3h (9.46431e-13)
+PASS A.kappa/T plateau @T=1.0K → π²k_B²/3h (9.46431e-13)
+PASS A.kappa/T plateau @T=0.1K → π²k_B²/3h (9.46431e-13)
+PASS B.kappa(1ch,1K) = 9.4643e-13 W/K (9.46431e-13)
+PASS B.kappa(1ch,1K) == round-1 g₀ (d19) (9.46431e-13)
+PASS B.quantum_floor(1ch,1K) == g₀ exact (9.46431e-13)
+PASS C.∂n_BE/∂T > 0 (heating fills modes)
+PASS C.n_BE(x=1) = 1/(e−1) (0.581977)
+PASS C.high-T limit ħω·∂n_BE/∂T → k_B (Dulong-Petit) (1.38065e-23)
+PASS D.kappa(1ch,1K) = 1·g₀ (9.46431e-13)
+PASS D.monotone N=1 (κ increases w/ channels)
+PASS D.kappa(2ch,1K) = 2·g₀ (1.89286e-12)
+PASS D.monotone N=2 (κ increases w/ channels)
+PASS D.kappa(3ch,1K) = 3·g₀ (2.83929e-12)
+PASS D.monotone N=3 (κ increases w/ channels)
+PASS D.kappa(4ch,1K) = 4·g₀ (3.78572e-12)
+PASS D.monotone N=4 (κ increases w/ channels)
+PASS E.mode-list 3 acoustic reflectionless → 3·g₀ (2.83928e-12)
+PASS E.1 acoustic + 1 frozen-optical → ≈1·g₀ (optical BE-suppressed) (9.46429e-13)
+qforge_chip_phonon_kappa_selftest PASS
+```
+- (A) **저온 양자극한**: κ/T → N·π²k_B²/3h plateau (T=10/1/0.1K 전부 동일 — 상수투과 acoustic
+  채널은 모든 T 에서 보편적분 정확), T→0 floor.
+- (B) **g₀ 값**: κ(1ch,1K)=9.46431e-13 W/K (R1 `qforge_chip_thermal_quantum` 일관, d19) +
+  closed-form floor helper = g₀ exact (1e-30).
+- (C) **Bose-Einstein**: ∂n_BE/∂T>0 (가열→모드충전) + n_BE(x=1)=1/(e−1) + 고전극한
+  ħω·∂n/∂T→k_B (Dulong-Petit 열용량 양자).
+- (D) **채널수 plateau**: κ(N)=N·g₀ (N=1..4) 단조증가 — 열 staircase = R1 Landauer N·G₀ 아날로그.
+- (E) generic 모드리스트 (DFPT ω(q,ν) 경로, d4/d19): 3 acoustic→3g₀ · 1 acoustic+1 frozen-
+  optical → ≈1g₀ (optical BE-억제).
+
+### 정직 보고 (d6) — ballistic 양자극한 vs diffusive
+이건 **ballistic(reflectionless) 양자극한** — 포논-포논/동위원소/경계 산란 없음, full BTE/Umklapp
+없음. 저온/clean/short-device 영역에서 양자 floor N·g₀ EXACT — mean-free-path≫device 일 때
+scattering-NEGF/BTE κ 가 회복해야 할 correctness 앵커. 고온은 ballistic ceiling
+(∂n_BE/∂T→k_B/모드) 이지 Umklapp 이 끌어내리는 diffusive κ 아님 — diffusive 값 주장 안 함(round-5).
+ballistic 양자극한 정확성이 핵심 deliverable, 충족.
+
+### chip 스케일 3-leg 완성도
+- **밴드** (R1 ε(k)·diatomic gap · R2 k-mesh manifold+DOS · R3 SCF-fed ε_n(k)=eig[T(k)+V]) ✓
+- **수송** (R1 Landauer G=G₀ΣTₙ · R2 NEGF mode-count T(E)=N(E) bridge) ✓
+- **열** (R4 phonon-Landauer κ→N·g₀ floor) ✓ ← **본 round 봉인**
+→ 칩 소자 front-end 의 밴드·수송·열 3-leg 가 closed-form 양자극한에서 전부 g5 봉인.
+남은 건 산란(diffusive) 정밀화 + real-cell self-consistent 수치 (아래 round-5).
+
+### round-5 다음
+3-leg ballistic 봉인 완료 → 산란/self-consistent 정밀화:
+(α) **scattering-NEGF** (R3 미룬 풀 자기에너지) — 전자 H(k)(R3) + lead surface-GF Σ(E) →
+T(E)=Tr[ΓL G^r ΓR G^a]; 포논도 동형 phonon-NEGF Σ_ph 로 R4 ballistic κ 를 산란-감쇠로 확장.
+(β) **SCF V_scr drop-in** (R3 정직 보고가 명시한 데이터-swap) — 수렴 real-cell `scf_pw` V_scr(G)
+를 R3 H(k) 의 해석 Fourier 포텐셜 자리에 투입 → self-consistent ε_n(k) real-cell xval.
+(γ) **BTE diffusive κ** — R4 ballistic floor + 포논-포논(Umklapp)/동위원소 산란 → 유한 길이
+device 의 diffusive 열전도 (ballistic↔diffusive crossover, κ_ballistic 가 상한 앵커).
+
+### deliver (round-4)
+- brick `stdlib/qforge/chip/phonon_kappa.hexa` + selftest (g5 19/19 PASS).
+- PR base=qforge-chip-r3 (R1+R2+R3 lineage tip; 지정 r1 은 stale·R2/R3 이미 포함) ·
+  `--repo dancinlab/hexa-lang` · 머지=사용자. brick+selftest+WIP 커밋 즉시 push (durable-worktree).
+  DOMAINS.tape 미접촉. domains/QFORGE-CHIP.{md,log.md} in-place (stage/commit 은 PR 브랜치에서).
