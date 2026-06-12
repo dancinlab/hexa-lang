@@ -1,5 +1,44 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-55 DONE: BUILT + MEASURED the OP-52 surviving lever (NEW 2-CTA/SM-preserving 128x256 own-GEMM tile, MODE 10) on a real H100 → register economy HELD (90 regs, 2 CTA/SM) but REGRESSES -7.1% @D=4096 (serialized) → @D=4096 gap SETTLED bit-exactness-bound · 1 H100 ~$0.55 · leak-0
+- USER-APPROVED paid H100 exception to the @goal free-only rule: build + measure the OP-52 follow-up — a NEW
+  bit-exact 2-CTA/SM-PRESERVING 128x256 single-pass own-GEMM tile (the OP-53 FUTURE-GPU spec) on real Hopper
+  sm_90a, to test if it partially closes the route-(a) @D=4096 ~1.5x TF32 sub-parity gap vs cuBLAS-TF32.
+- KERNEL (net-new): self/native/wgmma/wgmma_tf32_b14.cu MODE 10 = gemm_og17_b14_t256e. 1 CTA owns a 128x256
+  output tile (HALF MODE 8's N-grid). REGISTER-ECONOMY TRICK: process the 256-N as TWO SEQUENTIAL 128-N HALVES,
+  each running the MODE-8-IDENTICAL K-reduction into only 2 live accumulators d0/d1 → 90 regs == MODE 8 (NOT
+  t256's 154-reg/1-CTA/SM trap). Ring is MODE-8-sized (one 128-N half, 96 KB/CTA @NST3); the 256-N lives in the
+  GRID, not in resident smem. Per-half full TMA cycle (A re-loaded L2-hot + this half's 4 B-atoms) + per-half
+  mbarrier re-init (phase 0). Bit-exact by construction: each output element accumulates K in MODE 8's byte-
+  identical FMA order; only the per-CTA tile granularity + intra-CTA half schedule change.
+- HW: 1x H100 80GB HBM3, driver 560.35.05, nvcc 12.6 V12.6.77, sm_90a. vast contract 40738426, label
+  `hexa-newtile`, offer 21671170, $2.2839/hr, reliability 99.9%. ~14 min, ~$0.55.
+- ptxas -v (VERBATIM): gemm_og17_b14_t256e "Used 90 registers", 0 spill stores, 0 spill loads — IDENTICAL to
+  MODE 8's 90 (the in-tree t256 trap = "Used 154 registers" for contrast). + C7515: "wgmma.mma_async
+  instructions are serialized due to non wgmma instructions defining accumulator registers ... in the function
+  'gemm_og17_b14_t256e'" — the half-boundary d0/d1 reset serializes the pipeline (the measured perf cost).
+- OCCUPANCY (measured): MODE 10 NST3 dynsmem=98328B (96.0 KB/CTA) → 2 CTA/SM (the design premise HELD); NST4 →
+  128 KB/CTA → 1 CTA/SM (the NST4 trap, swept for completeness).
+- BASELINE (apples, 3 reps): D=4096 MODE 8 NST3 own ~283.5 TFLOP/s (1.51x, rel_rms 0); D=2048 ~318 (1.08x).
+  Reproduces the OP-45/OP-52 anchor within ~1%.
+- THE NEW TILE (VERBATIM, median of 3): D=4096 MODE 10 NST3 (2 CTA/SM) own 262.7/263.1/262.3 → 263.3 TFLOP/s,
+  ratio 1.64x, rel_rms 0.000e+00 = -7.1% SLOWER than MODE 8 283.5, gap WIDENS 1.51x→1.64x. D=2048 MODE 10 NST3
+  own ~152 (2.28x) = -52%. NST4 (1 CTA/SM) far worse (161 @4096). rel_rms 0 on EVERY row (bit-exact gate HELD).
+- WHY (ptxas C7515 + OP-45 T2): the 2-CTA/SM register economy was bought with a sequential-halves schedule whose
+  half-boundary accumulator reset SERIALIZES the wgmma pipeline + doubles the per-CTA K-drain — costing more than
+  the larger single-pass tile saves on a compute-bound D=4096 (AI 682 >> 104). The only non-serialized bit-exact
+  256-N tile = 4 live accumulators = t256's 1-CTA/SM trap (already closed-neg @4096, 264.9 < 283.9).
+- SETTLED FORGE BOUNDARY: no bit-exact 256-N schedule on sm_90a is BOTH 2 CTA/SM AND non-serialized — (a) 4 live
+  accumulators = 1 CTA/SM (t256), (b) 2 live accumulators via halves = 2 CTA/SM but serialized (this OP-55). The
+  @D=4096 own-GEMM TF32 gap is bit-exactness-bound; own-GEMM = bit-exact-PARITY-not-BEAT @D=4096 is the honest
+  final answer, not an unbuilt lever.
+- DESTROY/LEAK-0: confirmed label `hexa-newtile` MINE → `yes | vastai destroy instance 40738426` → both
+  `vastai show instances` (empty) and `vastai show instances-v1` (Total: 0 instances) = LEAK 0. No foreign pod
+  touched (roster had ZERO instances throughout; only 40738426 ever created/destroyed).
+- VERDICT: 🔴/🟠 CLOSED-NEGATIVE. Milestone OP-55 [x]. Deliverables: wgmma_tf32_b14.cu MODE 10 + op55_t256e_run.sh
+  · F-OP55-NEWTILE-D4096.txt (verbatim ptxas + sweep) · docs/forge-routea-shape-adaptive.md §0+§7 boundary update
+  · routea_cost_model.py MODE10_t256e row (selector still picks MODE8 @4096, cost-model validated PASS).
+
 ## 2026-06-13 — OP-45-GPU DONE: REAL H100 sm_90a T1-T5 occupancy/profile sweep → (a)-(d) classification CONFIRMED + (d) split = FIXABLE-SCHEDULING-STALL (not a hard HBM roofline) · cost model calibrated · 1 H100 ~$0.96 · leak-0
 - USER-APPROVED ("GPU 도 승인", ~$1-2) the gated GPU sibling of OP-45 #3096 (static (a)-(d) cap) + OP-49 #3103
   (CPU cost model). Goal: confirm/refute (a)-(d) with a real GPU profile + calibrate the cost model, tear down.

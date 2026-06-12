@@ -50,6 +50,16 @@ MODES = {
     #      per-(band,N-half) d0 reduction (same for kk in 0..TKSW step TK: WG(d0,dA,dB)), so a future
     #      build is rel_rms 0 by construction.
     "MODE_t64":  dict(tm=64,  tn=64,  threads=128, regs=48,  persistent=False, swz=False, issue_eff=0.8395),  # OP-53 SPEC: small-D under-fill
+    # ---- OP-55 (F-OP55-NEWTILE-D4096, real H100): the 2-CTA/SM-PRESERVING 128x256 tile (MODE 10
+    #      gemm_og17_b14_t256e). Register economy SUCCEEDED (90 regs == MODE8, 2 CTA/SM measured —
+    #      NOT t256's 154/1-CTA/SM) by processing 256-N as TWO SEQUENTIAL 128-N halves (2 live
+    #      accumulators). BUT the half-boundary accumulator reset SERIALIZES the wgmma pipeline
+    #      (ptxas C7515) + doubles the per-CTA K-drain -> MEASURED -7.1% @D=4096 (263.3 vs MODE8
+    #      283.5; ratio 1.51x->1.64x), -52% @D=2048. issue_eff is set BELOW OG16's plain 0.8395 to
+    #      encode the measured serialization so the selector NEVER picks it. The @D=4096 gap is now
+    #      settled BIT-EXACTNESS-BOUND: no bit-exact 256-N schedule is BOTH 2 CTA/SM AND
+    #      non-serialized on sm_90a (t256=1 CTA/SM, this=serialized). rel_rms 0 throughout.
+    "MODE10_t256e":dict(tm=128, tn=256, threads=256, regs=90,  persistent=False, swz=False, issue_eff=0.7340),  # OP-55: 2-CTA/SM 128x256, serialized (measured -7.1% @4096)
 }
 # Peak TF32 tensor throughput the route-(a) 128x128 descriptor-direct path can SUSTAIN at
 # full 2-CTA/SM occupancy, BEFORE issue_eff + wave + drain penalties. Calibrated so that

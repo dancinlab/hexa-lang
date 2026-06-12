@@ -1,0 +1,180 @@
+F-OP55-NEWTILE-D4096 — REAL H100 sm_90a build + measure of the NEW bit-exact 128x256 single-pass
+own-GEMM tile (the OP-52 surviving lever, OP-53 spec): does a 2-CTA/SM-PRESERVING larger N-tile
+close part of the route-(a) own-GEMM @D=4096 ~1.5x TF32 sub-parity gap vs cuBLAS-TF32, bit-exactly?
+The whole point per OP-45/53 = a 256-N tile that does NOT fall to t256's 1-CTA/SM register cap.
+================================================================================================
+TIER: 🟠/🔴 CLOSED-NEGATIVE (honest, decisive). The DESIGN PREMISE HELD — the new tile is register-
+      feasible at 2 CTA/SM (90 regs, 0 spill, 96 KB/CTA -> 2 CTA/SM, byte-identical occupancy to
+      MODE 8, NOT t256's 154-reg/1-CTA/SM trap). Bit-exactness HELD — rel_rms 0.000e+00 at EVERY
+      datapoint. But the new tile DOES NOT CLOSE the @D=4096 gap — it REGRESSES: MODE 8 ~283.5
+      TFLOP/s (1.51x) -> MODE 10 t256e ~263.3 (1.64x), a -7.1% regress; @D=2048 it is far worse
+      (~316 -> ~152, 1.09x -> 2.28x). The @D=4096 own-GEMM gap is now MEASURED to be bit-exactness-
+      bound: a 2-CTA/SM tile cannot use 4 live accumulators (that IS the t256 1-CTA/SM trap), and
+      the register-economical workaround (two SEQUENTIAL 128-N halves, 2 live accumulators) re-
+      introduces wgmma pipeline serialization (ptxas C7515) + doubles the per-CTA K-drain, costing
+      more than the larger single-pass tile saves. own-GEMM = bit-exact-PARITY-not-BEAT is the
+      honest settled forge boundary at D=4096.
+
+DATE: 2026-06-13
+HW:   1x NVIDIA H100 80GB HBM3, compute_cap 9.0, driver 560.35.05, nvcc 12.6 (V12.6.77), sm_90a.
+      vast.ai contract 40738426, label `hexa-newtile`, offer 21671170, $2.2839/hr, reliability
+      99.9%. Runtime ~14 min, cost ~$0.55. Single pod, DESTROYED at end, leak-0 verified (below).
+INPUT: F-OP52-TF32-GAP-CLOSE.txt (#3xxx, the OP-52 follow-up: surviving lever = a NEW bit-exact
+       single-pass per-CTA tile/schedule that is 2-CTA/SM-PRESERVING, NOT a launcher swizzle and
+       NOT split-K) + F-OP45-ROUTEA-D4096-CAP.txt (MODE 5 t256 128x256 = 154 regs -> 1 CTA/SM =
+       the trap to AVOID; MODE 8 128x128 = 90 regs / 2 CTA/SM = the baseline) +
+       docs/forge-routea-shape-adaptive.md §6 GAP-list + self/native/wgmma/wgmma_tf32_b14.cu
+       (MODE 8 gemm_og17_b14 reference; MODE 5 gemm_og17_t256 the 1-CTA/SM trap).
+DELIVERABLE (net-new code): self/native/wgmma/wgmma_tf32_b14.cu MODE 10 = gemm_og17_b14_t256e
+       (NEW 128x256 single-pass tile: 1 CTA owns 256-N = half the N-grid of MODE 8; processes the
+       256-N as TWO SEQUENTIAL 128-N HALVES, each running the MODE-8-IDENTICAL K-reduction into
+       only 2 live accumulators d0/d1 -> 90 regs == MODE 8, the register economy. The ring is
+       MODE-8-sized (one 128-N half, 96 KB/CTA @NST=3 -> 2 CTA/SM); the 256-N lives in the GRID,
+       not in resident smem. Per-half full TMA cycle (A re-loaded, L2-hot; this half's 4 B-atoms).
+       Per-half mbarrier re-init so each half starts at phase 0.) + self/native/wgmma/
+       op55_t256e_run.sh (on-pod driver).
+TOOLCHAIN: nvcc -O3 -arch=sm_90a -Xptxas -v -lcublas -lcuda. BUILD: OK (BUILD-RC=0).
+
+================================================================================================
+T0 — ptxas -v [VERBATIM]: the design premise HOLDS at the register level (90 regs == MODE 8).
+================================================================================================
+ptxas info    : (C7515) Potential Performance Loss: wgmma.mma_async instructions are serialized
+                due to non wgmma instructions defining accumulator registers of a wgmma between
+                start and end of the pipeline stage in the function 'gemm_og17_b14_t256e'
+ptxas info    : Compiling entry function 'gemm_og17_b14_t256e' for 'sm_90a'
+ptxas info    : Function properties for gemm_og17_b14_t256e
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 90 registers, used 1 barriers
+ptxas info    : Compiling entry function 'gemm_og17_b14' for 'sm_90a'   (MODE 8, the baseline)
+ptxas info    : Used 90 registers, used 1 barriers
+  (for contrast, the in-tree t256 trap = gemm_og17_t256: "Used 154 registers" -> 1 CTA/SM)
+=> gemm_og17_b14_t256e = 90 registers, 0 spill — IDENTICAL to MODE 8's 90, NOT t256's 154. The
+   2-CTA/SM-preserving register economy WORKED (the half-split keeps 2 live accumulators). BUT
+   ptxas flags C7515: resetting d0/d1 between the two halves (a "non-wgmma instruction defining
+   accumulator registers") SERIALIZES the wgmma pipeline — the perf cost the measurement confirms.
+OCCUPANCY (runtime, measured): MODE=10 NST=3 dynsmem=98328B (96.0 KB/CTA) -> 2 CTA/SM  [DESIGN HELD]
+                               MODE=10 NST=4 dynsmem=131104B (128.0 KB/CTA) -> 1 CTA/SM (NST=4 trap)
+
+================================================================================================
+STEP 1 — MODE 8 BASELINE reproduced on THIS pod (apples) [VERBATIM, 3 reps each]:
+================================================================================================
+D=4096 MODE8 NST3 PDEP1:  own 284.4 / 283.2 / 283.2 TFLOP/s  cuBLAS 428.2/430.0/430.0  ratio 1.51-1.52x  rel_rms 0  PARITY=NO
+D=4096 MODE8 NST3 PDEP2:  own 283.3 / 284.0 / 283.4 TFLOP/s  cuBLAS 431.4/428.3/428.6  ratio 1.51-1.52x  rel_rms 0  PARITY=NO
+D=2048 MODE8 NST3 PDEP1:  own 306.9 / 306.9 / 308.4 TFLOP/s  cuBLAS 345.7/346.0/346.6  ratio 1.12-1.13x  rel_rms 0  PARITY=YES
+D=2048 MODE8 NST3 PDEP2:  own 319.0 / 316.6 / 318.4 TFLOP/s  cuBLAS 345.0/345.9/346.4  ratio 1.08-1.09x  rel_rms 0  PARITY=YES
+=> D=4096 ~283.5 (1.51x) and D=2048 ~318 (1.08x, PDEP2) — REPRODUCES the OP-45/OP-52 anchor
+   (283.9/1.50x @4096; 315-320/1.08x @2048) within ~1%. Apples OK.
+
+================================================================================================
+STEP 2 — THE NEW TILE: MODE 10 t256e (128x256, 2-CTA/SM) [VERBATIM, 3 reps]:  REGRESSES
+================================================================================================
+   (gate: rel_rms 0.000e+00 on EVERY row FIRST — a non-zero value = a 256-N half-split tiling bug; ALL PASS)
+D=4096 (the target):                                        median own   ratio   rel_rms   CTA/SM
+  MODE10 NST3 PDEP1:  own 262.7 / 263.1 / 262.3             262.7        1.64x   0         2  <- the 2-CTA/SM datapoint
+  MODE10 NST3 PDEP2:  own 263.1 / 264.0 / 263.7             263.7        1.62-1.64x  0      2
+  MODE10 NST4 PDEP1:  own 161.8 / 160.9 / 161.0             161.0        2.66x   0         1 (NST=4 = 1 CTA/SM trap)
+  MODE10 NST4 PDEP2:  own 163.4 / 163.4 / 163.4             163.4        2.62-2.65x  0      1
+
+  BASELINE for comparison (MODE 8, this pod): 283.5 TFLOP/s, 1.51x.
+=> The 2-CTA/SM MODE 10 (NST=3) = 263.3 TFLOP/s = -7.1% SLOWER than MODE 8's 283.5; ratio WIDENS
+   1.51x -> 1.64x. The gap is NOT closed — it OPENS by ~0.13x. (NST=4 falls to 1 CTA/SM and halves
+   throughput further, as expected — the smem-deepened pipeline forfeits occupancy.)
+
+D=2048 cross-check (median of 3):
+  MODE10 NST3 PDEP1:  own 150.3 / 150.2 / 150.0             150.2        2.28-2.31x  0      2
+  MODE10 NST3 PDEP2:  own 152.1 / 152.2 / 152.2             152.2        2.27-2.28x  0      2
+  => far worse than MODE 8's ~318 (1.08x) — the half-split serialization dominates at the smaller D
+     where there is no extra large-D scheduling headroom to recover. own 152 vs 318 = -52%.
+
+================================================================================================
+WHY (g5 interpretation, anchored to OP-45 T2 + the C7515 ptxas evidence):
+================================================================================================
+The OP-53 design hypothesis was: a 256-N single-pass tile amortizes the per-CTA prologue/K-drain
+over 2x the output columns, capturing some of cuBLAS's +24.6% large-D scheduling win, IF it can be
+made register-economical enough to stay 2 CTA/SM. The register economy SUCCEEDED (90 regs, 2 CTA/
+SM measured). But it succeeded by processing the 256-N as TWO SEQUENTIAL 128-N halves sharing 2
+accumulators — and that is EXACTLY what kills it:
+  1. C7515 SERIALIZATION (ptxas, verbatim above): zeroing d0/d1 between the two halves is a "non-
+     wgmma instruction defining accumulator registers", which forces ptxas to SERIALIZE the wgmma
+     async pipeline at the half boundary. The tensor pipe stalls where MODE 8 (single 128-N pass)
+     never does.
+  2. DOUBLED K-DRAIN: each half re-walks the entire K-loop with its own per-slab commit_group +
+     wait_group + __syncthreads(). One 256-N CTA pays the K-drain TWICE (once per half) — so per
+     output element the drain overhead is the SAME as MODE 8, but the per-CTA prologue (the only
+     thing a bigger tile could amortize) is NOT halved, it is re-paid per half. The "bigger tile
+     amortizes the prologue" benefit is structurally cancelled by the sequential-halves schedule.
+  3. This is fully consistent with OP-45 T2 (D=4096 is COMPUTE/SCHEDULING-bound, AI 682 >> 104):
+     a schedule that ADDS serialization points (the half boundary) can only make a compute-bound
+     kernel slower. The larger N-tile gave no DRAM-reuse win to offset the added serialization.
+The ONLY bit-exact way to get a true single-pass 256-N tile (4 simultaneous live accumulators, no
+half boundary, no serialization) is MODE 5 t256 — which is the 154-reg / 1-CTA/SM trap OP-45
+already measured closed-neg (264.9 @4096 < MODE 8 283.9). So both bit-exact 256-N options are now
+measured closed-neg: (a) 4 live accumulators = 1 CTA/SM (t256), (b) 2 live accumulators via
+sequential halves = 2 CTA/SM but serialized (this OP-55). There is no bit-exact 256-N schedule
+that is BOTH 2 CTA/SM AND non-serialized on sm_90a — that is the settled boundary.
+
+================================================================================================
+BIT-EXACTNESS (the non-negotiable gate) — PRESERVED EVERYWHERE:
+================================================================================================
+rel_rms = 0.000e+00 at EVERY datapoint above (MODE 8 baseline + all MODE 10 NST{3,4} x PDEP{1,2}
+x D{4096,2048}). The 256-N half-split preserves the byte-identical per-element K-accumulation order
+of MODE 8 (each output element gets the same wgmma m64n64k8 sequence over the same K walk; only the
+CTA->tile granularity and the intra-CTA half schedule changed). So there is NO faster-but-not-bit-
+exact temptation: the new tile is bit-exact AND slower. own-GEMM's value proposition (bit-exact,
+device-resident, no-vendor-call) is intact; this experiment confirms a larger bit-exact single-pass
+tile is not a perf lever for it at D=4096.
+
+================================================================================================
+VERDICT (the OP-55 deliverable):
+================================================================================================
+  Does the NEW 2-CTA/SM-preserving 128x256 tile CLOSE part of the @D=4096 1.5x TF32 gap?  -> NO.
+  - The 2-CTA/SM register economy WORKED (90 regs, 0 spill, 2 CTA/SM measured — NOT the t256 trap).
+    The design's register premise is CONFIRMED FEASIBLE.
+  - But the tile REGRESSES: MODE 10 (NST=3, 2 CTA/SM) 263.3 TFLOP/s vs MODE 8 283.5 = -7.1%; ratio
+    1.51x -> 1.64x @4096. @2048 -52% (150 vs 318). rel_rms 0 throughout.
+  - ROOT CAUSE (ptxas + g5): the register economy was bought with a SEQUENTIAL-HALVES schedule that
+    SERIALIZES the wgmma pipeline (C7515) + doubles the per-CTA K-drain — costing more than the
+    larger single-pass tile saves. The compute-bound D=4096 GEMM (OP-45 T2) cannot absorb the added
+    serialization.
+  - SETTLED FORGE BOUNDARY: the @D=4096 own-GEMM TF32 gap is BIT-EXACTNESS-BOUND. No bit-exact
+    256-N schedule on sm_90a is BOTH 2 CTA/SM AND non-serialized — (a) 4 live accumulators = 1 CTA/
+    SM (t256, closed-neg) and (b) 2 live accumulators via halves = 2 CTA/SM but serialized (this
+    OP-55, closed-neg). own-GEMM = bit-exact-PARITY-not-BEAT @D=4096 is the honest final answer.
+  Bit-exactness (rel_rms 0): PRESERVED at 100% of datapoints. A faster-but-not-bit-exact variant
+  was never produced (and would not be a win — that defeats own-GEMM's purpose).
+
+================================================================================================
+DESTROY / LEAK-0 (rule) [VERBATIM]:
+================================================================================================
+  $ vastai show instance 40738426 --raw | (label check)  ->  label= hexa-newtile  id= 40738426  (MINE, confirmed)
+  $ yes | vastai destroy instance 40738426
+  Are you sure you want to destroy instance 40738426? This is irreversible ... destroying instance 40738426.
+  $ vastai show instances        -> (empty roster: no rows)
+  $ vastai show instances-v1
+  ╭─ Results Summary ──╮
+  │ Total: 0 instances │
+  ╰────────────────────╯
+  No instances found.
+=> LEAK-0 CONFIRMED. Pod 40738426 (hexa-newtile) destroyed, roster empty (both `show instances`
+   and `show instances-v1`). No foreign pod touched (roster had ZERO instances throughout; only
+   40738426 was ever created/destroyed here).
+
+================================================================================================
+SUMMARY (g5):
+- Built MODE 10 (gemm_og17_b14_t256e): NEW 128x256 single-pass tile, 1 CTA owns 256-N (half MODE
+  8's N-grid), processed as 2 SEQUENTIAL 128-N halves to keep 2 live accumulators -> 90 regs.
+- ptxas: 90 regs / 0 spill / 96 KB/CTA / 2 CTA/SM @NST3 — IDENTICAL occupancy to MODE 8 (the
+  2-CTA/SM-preserving design premise HELD, NOT t256's 154-reg/1-CTA/SM trap). BUT ptxas C7515:
+  the half-boundary accumulator reset SERIALIZES the wgmma pipeline.
+- STEP 1: MODE 8 baseline reproduced (D=4096 ~283.5/1.51x, D=2048 ~318/1.08x, rel_rms 0). Apples OK.
+- STEP 2: MODE 10 t256e @D=4096 (NST3, 2 CTA/SM) = 263.3 TFLOP/s = -7.1% vs 283.5; ratio 1.51x ->
+  1.64x. @D=2048 = 152 (1.09x -> 2.28x, -52%). rel_rms 0 on EVERY row. The gap is NOT closed — it
+  WIDENS.
+- WHY: the register economy required sequential 128-N halves (2 live accumulators) which serialize
+  the wgmma pipeline (C7515) + double the per-CTA K-drain — costing more than the larger tile saves.
+  Compute-bound D=4096 (OP-45 T2) cannot absorb the added serialization. The only non-serialized
+  bit-exact 256-N tile = 4 live accumulators = t256's 1-CTA/SM trap (already closed-neg).
+- SETTLED BOUNDARY: @D=4096 own-GEMM TF32 gap is BIT-EXACTNESS-BOUND. No bit-exact 256-N schedule
+  on sm_90a is both 2 CTA/SM AND non-serialized. own-GEMM = bit-exact-parity-not-beat @D=4096.
+- Bit-exactness rel_rms 0 PRESERVED at 100% of datapoints (gate held; no loose-TF32 win sought).
+- 1x H100 sm_90a, ~$0.55, single pod `hexa-newtile`, DESTROYED, leak-0 confirmed, no foreign pod.
