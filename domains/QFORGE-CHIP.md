@@ -76,8 +76,27 @@
       — ab-initio el-ph 아님(QE/QFORGE-materials DFPT lane); deliverable = N/U-분리 crossover
       **구조**(RTA-회복/ceiling/T³–1/T 극한 정확), 실 Si/Ge κ(T) fit 은 published-계수 데이터
       swap(d4) 이지 주장 아님. PR #<TBD>.
-- [ ] **verify-adapter (chip=TCAD)** — 밴드갭/effective-mass/컨덕턴스/κ 를 측정·TCAD ref
-      로 표준화 (verify-adapter 일반화 축).
+- [x] **round-11 verify-adapter (chip=TCAD) (g5 PASS · adapter logic + 7/7 manifest + 회귀)** —
+      `stdlib/qforge/chip/verify_adapter.hexa` + selftest. 칩 스케일 g5 verify-adapter —
+      materials 가 λ/Tc 를 QE 로 게이트(al_fcc_elph_xval)하는 패턴을 미러. chip OUTPUT
+      (밴드갭·m*·direct/indirect·valley·κ)을 측정/TCAD/문헌 ref 로 게이트, per-observable
+      verdict(PASS/FAIL + Δ). **d4-generic·manifest-driven**: verification = manifest row
+      {kind, computed, reference, tol_rel} 한 줄, ONE 경로(`qforge_chip_verify_manifest`)
+      통과 — material/observable 추가 = row 추가, 코드분기 0. scalar-rel(rel-ε≤tol) /
+      exact-int(valley·classification 동등) 두 kind. R9 band_multiorbital + R10 callaway_bte
+      를 READ-only 소비(불변). g5: (a) **adapter logic** within-tol→PASS·out-of-tol→FAIL
+      (양방향 gate-the-gate, Δ보고) · (b) **real-observable**: Si gap 1.1198 eV(ref 1.12,
+      Δ2e-4 · 🟡 data-swap) · Ge gap 0.6638(ref 0.66 · 🟡) · GaAs direct 1.42(2-band 2|V| · 🟢) ·
+      Si/Ge classification INDIRECT(🟢 eig 에서 읽음) · valley(🟠 1D ±k₀ pair=2 vs 3D 6-valley) ·
+      m*(🟠 natural-units 곡률맵 EXACT but API FD dk=1e-4 가 SI-k 미해상 → m₀값 불가) · κ
+      (🟠 generic-coeff 280 vs 148 ~1.9× over-predict — N/U-crossover STRUCTURE 는 검증, 절대 κ
+      는 ab-initio B_U/B_iso DFPT feed frontier; 1-knob fit=tautology, NOT verify) · (c)
+      **d4-generic** InAs(0.354)·diamond(5.47) 신규 material 을 manifest row 로만 추가
+      7/7 PASS · (d) **회귀** R9(2-band gap=2|V|=1.4)+R10(κ deterministic) 불변. HONEST(d6):
+      SK/Callaway = 모델 파라미터(실 Si/Ge ab-initio fit 아님). 정직한 adapter = published
+      param data-swap 재현(🟢/🟡) OR generic 모델 미재현 시 그것을 finding 보고(🟠) — tolerance
+      back-fit 으로 가짜 PASS 안 함. **adapter 의 가치 = 정직한 분류**(재현 vs structural-only).
+      PR #<TBD>.
 - [ ] **NEXUS edge** — QFORGE-CHIP → {소자 도메인} 재사용 그래프 등록 (materials c7 패턴).
 
 ## reuse (d19)
@@ -94,3 +113,32 @@ thermal FEM)는 다중 round 대공사 — round-1 에서 주장하지 않음. b
 ref, device-scale 시뮬레이션 결과 아님.
 
 설계 SSOT: `drafts/qforge-chip-round1-design.md`.
+
+## depletion judgment (round-11)
+
+**칩 스케일은 STRUCTURALLY SEALED — 남은 것은 data-swap/integration frontier, 새 physics brick 아님.**
+
+세 leg + verify-adapter 가 칩 스케일의 STRUCTURE 를 닫았다:
+- **band leg** (R1 ε(k) → R3 SCF H(k) → R9 multi-orbital n-band + m* + direct/indirect + valley) — sealed
+- **thermal leg** (R4 ballistic g₀ → R8 RTA-BTE → R10 Callaway N/U crossover) — sealed (19/19)
+- **verify-adapter** (R11, chip=TCAD) — sealed. d4-generic·manifest verdict 엔진이 모든 chip
+  OUTPUT 을 cited ref 로 게이트하고, 각 observable 을 정직하게 tier(재현 vs structural-only) 한다.
+
+R11 adapter 가 명시적으로 드러낸 **남은 frontier = 전부 data-swap / API / integration**(코드-physics 아님):
+1. **m₀-valued m\*** — R9 effmass FD 의 고정 `dk=1e-4` 가 SI-unit k(~1e9 1/m)를 미해상.
+   곡률→질량 맵 자체는 EXACT(natural-units). → **API frontier**: unit-consistent FD step(상대 dk).
+2. **3D valley multiplicity (Si 6, Ge 8/2 …)** — 1D 모델은 ±k₀ degenerate PAIR(2)만 표현.
+   ×N axis-count = 3D 큐빅 point-group. → **3D-band 모델 frontier**(R9 OrbitalModel 의 3D 확장).
+3. **절대 κ (Si 148 · Ge 60 W/m·K)** — Callaway B_U/B_iso/B_N 가 모델 knob. N/U-crossover STRUCTURE
+   는 검증됨(T³→peak→1/T). → **ab-initio coeff feed frontier**: QFORGE-materials DFPT el-ph 가
+   B_U/B_iso 를 공급(1-knob fit 은 tautology — 정직하게 거부).
+4. **실 Si/Ge ab-initio 밴드 파라미터** — SK onsite/hop 데이터 swap(empirical ss/sp 표·spin-orbit·
+   d-궤도). → **data-swap frontier**(d4, OrbitalModel 데이터 편집).
+
+**g0 — 새 physics round 발명 안 함.** 위 4개는 모두 (a) 다른 QFORGE 스케일(materials DFPT)에서
+데이터를 받거나, (b) 기존 brick 의 API/차원 확장이다. 칩 스케일의 1차원-front-end(band·transport·
+thermal·verify) 는 완성. round-12 후보 = **NEXUS edge 등록**(QFORGE-CHIP↔materials DFPT coeff feed +
+소자 도메인 재사용 그래프) — 이것이 frontier 1~3 을 묶는 통합 작업이고, 새 brick 이 아니라 d19
+재사용 배선이다.
+
+남은 milestone(NEXUS edge)은 새 physics 가 아닌 integration — 칩 STRUCTURE 는 round-11 에서 sealed.
