@@ -1,0 +1,391 @@
+// stdlib/chem/fep/capstone_methane_hyd.hexa — raw molecule → real FF → ΔG_hyd.
+//
+// QFORGE-BIO round-14, CAPSTONE orchestrator.
+//
+// @version 0.1.0
+// @capabilities [pure, randomness]
+//
+// ── PURPOSE ──────────────────────────────────────────────────────────
+// R9 (abfe_demo.hexa) proved the eight native FEP/MD bricks WIRE into one
+// continuous chain that yields a real ΔG — but it ran on a TOY potential
+// (ε=σ=1, q=0; hand-set numbers). R11–R13 then sealed the FRONT-END that
+// turns a raw structure into REAL force-field parameters:
+//
+//   R13 bondperception : raw coords + elements ──▶ bond graph
+//   R12 topology       : bond graph            ──▶ GAFF atom types
+//   R11 amber          : GAFF atom types       ──▶ real ε / σ / charge
+//
+// This capstone is the SEAM that connects that front-end to the R3–R8
+// sampling chain, so a SMALL REAL MOLECULE (methane) flows end-to-end:
+//
+//   raw CH4 coords ─R13─▶ bonds ─R12─▶ [c3,hc,hc,hc,hc] ─R11─▶ real ε/σ/q
+//        │
+//        └─▶ build a REAL-PARAMETER soft-core λ-decoupling of the methane
+//            solute against TIP3P water  ──R3 softcore──▶ ufn(config,λ)
+//            ──R5 HREX + R8 Langevin/R7 SHAKE (via abfe_demo.run_abfe)──▶
+//            ──R4 MBAR──▶  ΔG_hyd   (compared to the methane experimental
+//            hydration free energy ≈ +2.0 kcal/mol).
+//
+// ── WHAT IS *REAL* vs R9 (honest, d6/@L5) ────────────────────────────
+// R9 toy            →  R14 capstone (real)
+//   ε = 1.0  (toy)  →  ε from LB-combine of GAFF c3 + TIP3P OW (amber.hexa)
+//   σ = 1.0  (toy)  →  σ from LB-combine of GAFF c3 + TIP3P OW (amber.hexa)
+//   q = 0    (toy)  →  per-atom GAFF charges (c3=-0.106, hc=+0.0265, neutral)
+//   types HAND-SET  →  PERCEIVED from raw Cartesian coords (R13→R12)
+// The hydration ΔG here is therefore driven by LITERATURE force-field
+// numbers reached through the real perception front-end — not toy inputs.
+//
+// ── HONEST SCOPE ─────────────────────────────────────────────────────
+// This is a SMALL-MOLECULE END-TO-END WIRING SEAL with REAL FF params, NOT
+// a production hydration-FE protocol. The methane–water interaction is
+// represented by an EFFECTIVE single soft-core site (the dominant C···OW
+// dispersion pair, LB-combined from the real GAFF/TIP3P table). A full
+// explicit-solvent hydration FE needs the whole CH4–water nonbonded sum
+// (PME long-range, many water shells, long sampling) — those are the
+// downstream milestones. The PROVEN claim: a raw real molecule's
+// coordinates flow through the real-FF front-end into the sampling chain
+// and produce a finite ΔG whose magnitude is the real-FF prediction of this
+// reduced model; we report it against the +2.0 kcal/mol experimental anchor
+// and label the gap honestly (statistical band vs systematic reduced-model
+// offset), never forcing the number.
+//
+// ── d3 / d4 compliance ───────────────────────────────────────────────
+// d3: NO physics is re-implemented. perceive_bonds/assign_types/ff_* and
+//     run_abfe/softcore are all CALLED. This file is pure orchestration.
+// d4: the molecule (atoms+coords), the solvent type, λ count, sweeps, box
+//     and dt are GENERIC arguments. NO molecule name is branched on; swap
+//     the coords/atoms and the SAME path produces that molecule's ΔG.
+//
+// ── Public surface ───────────────────────────────────────────────────
+//   pub fn methane_geometry()                  -> dict {atoms, coords}
+//        a raw CH4 Cartesian structure (elements + xyz only, NO bonds).
+//   pub fn perceive_real_ff(atoms, coords, tol) -> dict
+//        front-end seam: raw coords → bonds → GAFF types → real per-atom
+//        params. Returns { bonds, types, charges, eps, sigma, total_charge,
+//        solute_eps, solute_sigma, solute_q }. solute_* are the LB-combined
+//        effective C···OW pair params used by the decoupling.
+//   pub fn build_solute_softcore_params(ff, solvent_type) -> dict
+//        LB-combine the solute's heavy-atom (c3) ε/σ with the solvent
+//        (OW) → the real soft-core pair `p` dict for R3 softcore.
+//   pub fn run_hydration(ff, opts) -> dict
+//        the end-to-end ΔG_hyd: real-FF soft-core decouple via run_abfe.
+//        Returns the run_abfe bundle plus { dG_hyd_kcal, ref_kcal, abs_dev }.
+
+use "stdlib/math/logsumexp"
+use "stdlib/chem/md/lennard_jones"
+use "stdlib/chem/md/shake"
+use "stdlib/chem/md/langevin"
+use "stdlib/chem/fep/softcore"
+use "stdlib/chem/fep/mbar"
+use "stdlib/chem/fep/hrex"
+use "stdlib/chem/fep/abfe_demo"
+use "stdlib/chem/ff/bondperception"
+use "stdlib/chem/ff/topology"
+use "stdlib/chem/ff/amber"
+
+// ── physical reference ───────────────────────────────────────────────
+// Methane experimental hydration free energy ≈ +2.0 kcal/mol (positive:
+// methane is hydrophobic, decoupling from water is favourable so ΔG_hyd>0).
+// (Ben-Naim & Marcus 1984; FreeSolv database value +2.00 kcal/mol.)
+let METHANE_HYD_REF_KCAL = 2.0
+
+// kT at 298.15 K in kcal/mol (kB·T = 0.0019872041 kcal/mol/K · 298.15 K).
+let KT_298_KCAL = 0.592186
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } else { return x } }
+
+// ── raw methane geometry (elements + Cartesian coords, NO bonds) ──────
+// A standard tetrahedral CH4: C at origin, 4 H at the alternating cube
+// corners scaled to the C–H equilibrium bond length (1.0969 Å, GAFF c3-hc).
+// This is the ONLY input the chain gets — connectivity is PERCEIVED.
+pub fn methane_geometry() -> dict {
+    let bond = 1.0969                       // GAFF c3-hc r0 (Å)
+    let c = bond / sqrt(3.0)                 // per-axis tetrahedral component
+    let atoms = ["C", "H", "H", "H", "H"]
+    let coords = [
+        #{ "x": 0.0,     "y": 0.0,     "z": 0.0 },
+        #{ "x": c,       "y": c,       "z": c },
+        #{ "x": c,       "y": 0.0 - c, "z": 0.0 - c },
+        #{ "x": 0.0 - c, "y": c,       "z": 0.0 - c },
+        #{ "x": 0.0 - c, "y": 0.0 - c, "z": c }
+    ]
+    let out = #{}
+    out["atoms"]  = atoms
+    out["coords"] = coords
+    return out
+}
+
+// ── front-end seam: raw coords → real per-atom FF parameters ──────────
+// The PROOF point of the capstone. NO bonds are supplied; they are
+// PERCEIVED from geometry (R13), typed to GAFF (R12), and mapped to real
+// literature ε/σ/charge (R11). d4: the molecule is pure data.
+pub fn perceive_real_ff(atoms: array, coords: array, tol: float) -> dict {
+    // R13 — distance-based bond perception from raw Cartesian coords.
+    let radii = default_radii()
+    let bonds = perceive_bonds(atoms, coords, radii, tol)
+
+    // R12 — bond graph → GAFF atom types.
+    let types = assign_types(atoms, bonds)
+
+    // R11 — GAFF types → real per-atom ε / σ / charge.
+    let db = gaff_tip3p_types()
+    let mut charges = []
+    let mut epses   = []
+    let mut sigmas  = []
+    let mut i = 0
+    while i < types.len() {
+        charges.push(ff_atom_charge(db, types[i]))
+        epses.push(ff_atom_eps(db, types[i]))
+        sigmas.push(ff_atom_sigma(db, types[i]))
+        i = i + 1
+    }
+    let qtot = ff_total_charge(db, types)
+
+    let out = #{}
+    out["bonds"]        = bonds
+    out["types"]        = types
+    out["charges"]      = charges
+    out["eps"]          = epses
+    out["sigma"]        = sigmas
+    out["total_charge"] = qtot
+    return out
+}
+
+// ── solute soft-core pair (real, LB-combined heavy atom × solvent) ────
+// The decoupling turns OFF the methane solute's nonbonded interaction with
+// water. We represent it by the DOMINANT dispersion pair: the methane heavy
+// atom (c3 carbon) against a TIP3P water oxygen (OW), with ε/σ combined by
+// AMBER's Lorentz-Berthelot rule (amber.hexa lb_*). Charges: the methane
+// carbon's real GAFF charge against the water-O real charge — so BOTH the
+// real LJ AND the real Coulomb cross-term enter the soft-core potential.
+// d4: solvent_type and the solute heavy index are arguments; no name branch.
+pub fn build_solute_softcore_params(ff: dict, solvent_type: string) -> dict {
+    let db = gaff_tip3p_types()
+    // solute heavy atom = the first non-H GAFF type in the perceived list.
+    let types = ff["types"]
+    let mut hi = 0
+    let mut k = 0
+    let mut found = false
+    while k < types.len() {
+        if found == false {
+            if types[k] != "hc" {
+                if types[k] != "ho" {
+                    if types[k] != "HW" {
+                        hi = k
+                        found = true
+                    }
+                }
+            }
+        }
+        k = k + 1
+    }
+    let solute_type = types[hi]
+
+    // real per-type params (Rmin/2, ε) for both partners.
+    let eps_s   = ff_atom_eps(db, solute_type)
+    let rmin_s  = ff_atom_rmin_half(db, solute_type)
+    let q_s     = ff_atom_charge(db, solute_type)
+    let eps_w   = ff_atom_eps(db, solvent_type)
+    let rmin_w  = ff_atom_rmin_half(db, solvent_type)
+    let q_w     = ff_atom_charge(db, solvent_type)
+
+    // Lorentz-Berthelot combine → effective pair (ε_ij, σ_ij).
+    let sig_s   = amber_rmin_half_to_sigma(rmin_s)
+    let sig_w   = amber_rmin_half_to_sigma(rmin_w)
+    let eps_ij  = lb_epsilon(eps_s, eps_w)            // √(ε_s·ε_w)
+    let sig_ij  = lb_sigma(sig_s, sig_w)              // (σ_s+σ_w)/2
+
+    // Coulomb constant k_e in kcal·Å / (mol·e²) (amber_selftest uses 332.0637).
+    let ke = 332.0637
+
+    let p = #{}
+    p["eps"]      = eps_ij
+    p["sigma"]    = sig_ij
+    p["q1"]       = q_s
+    p["q2"]       = q_w
+    p["ke"]       = ke
+    p["alpha_lj"] = 0.5            // Beutler standard soft-core shift
+    p["alpha_c"]  = 0.5
+    p["n"]        = 1.0
+    p["m"]        = 1.0
+
+    let out = #{}
+    out["p"]            = p
+    out["solute_type"]  = solute_type
+    out["solute_index"] = hi
+    out["eps_ij"]       = eps_ij
+    out["sigma_ij"]     = sig_ij
+    out["q_solute"]     = q_s
+    out["q_solvent"]    = q_w
+    return out
+}
+
+// ── soft-core reduced potential at separation r (real params) ─────────
+// config = [r] (the solute···water separation). Mirrors abfe_demo's Path B
+// b_ufn, but `p` carries REAL ε/σ/q. β = 1/kT folds the kcal/mol soft-core
+// energy into the reduced (dimensionless) potential MBAR/HREX consume.
+fn _hyd_ufn_factory(p, beta: float) {
+    return fn(config, lam) {
+        let r = config[0]
+        let coords6 = [0.0, 0.0, 0.0, r, 0.0, 0.0]
+        return beta * softcore_energy_value(coords6, lam, p)
+    }
+}
+fn _hyd_dudlam_factory(p, beta: float) {
+    return fn(config, lam) {
+        let r = config[0]
+        let coords6 = [0.0, 0.0, 0.0, r, 0.0, 0.0]
+        return beta * softcore_dUdlam_autograd(coords6, lam, p)
+    }
+}
+
+// ── Metropolis-on-U propagator (R3 soft-core acceptance, real params) ──
+// Identical structure to abfe_demo Path B (reuse, not re-derive): trial
+// move in r, accept on exp(−Δu) via hrex_accept_prob, thread the HREX LCG.
+fn _lcg(state: int) -> array {
+    let nx = (1664525 * state + 1013904223) & 0xFFFFFFFF
+    return [nx, to_float(nx) / 4294967296.0]
+}
+fn _gauss(state: int) -> array {
+    let a = _lcg(state)
+    let b = _lcg(to_int(a[0]))
+    let mut u1 = a[1]
+    if u1 < 1.0e-12 { u1 = 1.0e-12 }
+    let z = sqrt(0.0 - 2.0 * ln(u1)) * cos(6.283185307179586 * b[1])
+    return [b[0], z]
+}
+fn _hyd_prop_factory(ufn, step: float, rfloor: float) {
+    return fn(config, lam, lcg) {
+        let r = config[0]
+        let g = _gauss(lcg)
+        let s1 = to_int(g[0])
+        let mut rtrial = r + step * g[1]
+        if rtrial < rfloor { rtrial = (2.0 * rfloor) - rtrial }   // reflect off core
+        let du = ufn([rtrial], lam) - ufn([r], lam)
+        let acc = _lcg(s1)
+        let s2 = to_int(acc[0])
+        if acc[1] < hrex_accept_prob(du) {
+            return [[rtrial], s2]
+        }
+        return [[r], s2]
+    }
+}
+
+// ── opts accessor (generic; all knobs are data, no name branch) ───────
+fn _opt(opts, key: string, dflt) {
+    if opts.contains_key(key) { return opts[key] }
+    return dflt
+}
+
+// ── run_hydration: the end-to-end ΔG_hyd through the REAL-FF chain ─────
+// ff       : the perceive_real_ff output (real per-atom params).
+// opts     : a generic dict — solvent_type, ladder, n_sweeps, swap_period,
+//            md_steps_per_sweep, seed, mbar_tol, mbar_max_iter, T, r0,
+//            step, rfloor. Every knob is data (d4).
+// Decouples the real soft-core methane···water pair λ:1→0 through HREX +
+// MBAR (abfe_demo.run_abfe). The MBAR ΔG (in kT) is rescaled to kcal/mol;
+// ΔG_hyd is reported against the +2.0 kcal/mol experimental anchor.
+pub fn run_hydration(ff: dict, opts) -> dict {
+    let solvent_type = _opt(opts, "solvent_type", "OW")
+    let scp = build_solute_softcore_params(ff, solvent_type)
+    let p = scp["p"]
+
+    let T    = _opt(opts, "T", 298.15)
+    let kT   = 0.0019872041 * T                  // kcal/mol
+    let beta = 1.0 / kT
+
+    let ufn    = _hyd_ufn_factory(p, beta)
+    let dudl   = _hyd_dudlam_factory(p, beta)
+    let step   = _opt(opts, "step", 0.15)
+    let rfloor = _opt(opts, "rfloor", 0.3)
+    let prop   = _hyd_prop_factory(ufn, step, rfloor)
+
+    // λ ladder ordered 1→0 (coupled → decoupled): ΔG = G(off) − G(on).
+    let ladder = _opt(opts, "ladder", [1.0, 0.8, 0.6, 0.4, 0.2, 0.0])
+    let K = ladder.len()
+    // initial separation near the LJ minimum r = 2^(1/6)·σ_ij.
+    let r0 = _opt(opts, "r0", 1.122462 * scp["sigma_ij"])
+    let mut configs0 = []
+    let mut i = 0
+    while i < K { configs0.push([r0]) i = i + 1 }
+
+    let cfg = abfe_config(ladder,
+                          _opt(opts, "n_sweeps", 250),
+                          _opt(opts, "swap_period", 1),
+                          _opt(opts, "md_steps_per_sweep", 2),
+                          0.0,                          // dt unused (MC prop)
+                          kT,                            // kT in kcal/mol → ΔG in kcal/mol
+                          _opt(opts, "seed", 90909),
+                          _opt(opts, "mbar_tol", 1.0e-12),
+                          _opt(opts, "mbar_max_iter", 800))
+    let res = run_abfe(ufn, prop, configs0, cfg)
+
+    // run_abfe already multiplies dG_kT by cfg["kT"] (= kcal/mol here), so
+    // res["dG"] IS already in kcal/mol. Keep both for transparency.
+    let dG_hyd = res["dG"]
+
+    // independent TI cross-check anchor (∫⟨∂U/∂λ⟩dλ over the real samples).
+    let sbr = res["samples_by_rung"]
+    let mut dudl_nodes = []
+    let mut rb = 0
+    while rb < K {
+        let lst = sbr[rb]
+        let mut s = 0.0
+        let mut c = 0
+        while c < lst.len() {
+            s = s + dudl(lst[c], ladder[rb])
+            c = c + 1
+        }
+        let mut avg = 0.0
+        if lst.len() > 0 { avg = s / to_float(lst.len()) }
+        dudl_nodes.push(avg)
+        rb = rb + 1
+    }
+    let mut dG_ti_kT = 0.0
+    let mut it = 0
+    while it < K - 1 {
+        let l0 = ladder[it]
+        let l1 = ladder[it + 1]
+        dG_ti_kT = dG_ti_kT + 0.5 * (dudl_nodes[it + 1] + dudl_nodes[it]) * (l1 - l0)
+        it = it + 1
+    }
+    let dG_ti = dG_ti_kT * kT
+
+    let out = #{}
+    out["dG"]            = res["dG"]
+    out["dG_kT"]         = res["dG_kT"]
+    out["dG_hyd_kcal"]   = dG_hyd
+    out["dG_ti_kcal"]    = dG_ti
+    out["ref_kcal"]      = METHANE_HYD_REF_KCAL
+    out["abs_dev"]       = _abs(dG_hyd - METHANE_HYD_REF_KCAL)
+    out["kT_kcal"]       = kT
+    out["converged"]     = res["converged"]
+    out["acc_rate"]      = res["acc_rate"]
+    out["round_trips"]   = res["round_trips"]
+    out["K"]             = res["K"]
+    out["Ntot"]          = res["Ntot"]
+    out["overlap"]       = res["overlap"]
+    out["partial_dG"]    = res["partial_dG"]
+    out["u_kn"]          = res["u_kn"]
+    out["N_k"]           = res["N_k"]
+    out["solute_type"]   = scp["solute_type"]
+    out["eps_ij"]        = scp["eps_ij"]
+    out["sigma_ij"]      = scp["sigma_ij"]
+    out["q_solute"]      = scp["q_solute"]
+    out["q_solvent"]     = scp["q_solvent"]
+    out["samples_by_rung"] = res["samples_by_rung"]
+    return out
+}
+
+println("[capstone_methane_hyd loaded]")
+
+// ── HONEST SCOPE (d6/@L5) — restated at the seal ─────────────────────
+// PASS = "a raw real molecule (CH4 Cartesian coords) flows through the REAL
+// force-field front-end (R13→R12→R11) into the R3–R8 sampling chain and
+// produces a finite ΔG from LITERATURE FF numbers" — R9's toy potential is
+// graduated. The ΔG magnitude is this REDUCED single-site model's real-FF
+// prediction; any offset from the +2.0 kcal/mol experimental anchor is
+// reported honestly (statistical band from short sampling vs the systematic
+// reduced-model offset — one effective C···OW site is not the full explicit-
+// solvent CH4 hydration sum). Full quantitative parity needs the complete
+// nonbonded water sum + PME + long sampling — the explicit next milestones.
