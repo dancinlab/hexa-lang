@@ -1,0 +1,258 @@
+F-OP56-SURVIVE-TRANCHE — next-tranche audit of the OP-43 [S]-shadow survive-set using OP-51's exact
+        rigorous per-builtin g5 method (g5-falsify + [S] shadow-binding CONTROL + compiler-closure check).
+        OP-51 dropped the OP-43 survivor set 16→10 (6 [S]-shadow dereg). The remaining 10 = 9 [S R]
+        survivors (relu sigmoid transpose normalize zeros attention topk sample_token mse_loss) + arange
+        (a hard compiler-closure KEEP, pinned in OP-48). OP-56 audits a tranche of 5 of the 9 — transpose,
+        normalize, zeros, topk, mse_loss — the 5 with the cleanest shadow surfaces. RESULT: all 5
+        g5-RE-VERIFIED falsified + the [S] shadow-binding CONTROL proven roster-independent per name +
+        every COMPILING caller resolves to a local/imported shadow (NOT the builtin) + every
+        builtin-dependent (no-shadow) caller dead (example AOT-fail today / already-failing self file) +
+        string-literal/different-symbol false-positives controlled + compiler/** ZERO bind refs → ALL 5
+        DEREGISTERED. The OP-43 survivor set drops 10 → 5. "More keeps than removals" was the OP-51-
+        predicted/permitted outcome; this tranche instead deregistered all 5 because the picked five had
+        clean surfaces (the builtin-dep callers turned out to be string-literal/different-symbol noise,
+        imported shadows, or dead examples — NOT live builtin bindings).
+HEXA-0POD OP-56 · CPU-LOCAL (hexat AOT transpile + clang -fsyntax-only) · 0-GPU · $0 · no vast/pod
+════════════════════════════════════════════════════════════════════════════
+
+[0] PROVENANCE + MANDATE
+------------------------
+OP-41 audited 231 builtins (~105 falsified, 4 dereg). OP-43 took the 42-member ML family (16 dereg, 26
+survive). OP-47 took the 3 largest [R]-survivors (matmul_into/dot/mat_add_inplace, 26→23). OP-48 took the
+8 [R]-ONLY survivors (7 dereg + arange pinned on a self-host compiler-closure ref, 23→16). OP-51 took 6
+[S]-shadow survivors (kv_cache_append repeat_kv quantize_int8 dequantize_int8 magnitude_prune tensor_fill,
+16→10). After OP-51 the survive-set is 10 = 9 [S R] survivors (relu sigmoid transpose normalize zeros
+attention topk sample_token mse_loss) + arange ([R] compiler-closure KEEP). OP-56's mandate: audit a
+tranche of the 9 [S]-survivors with the SAME rigorous per-builtin g5 method PLUS the explicit [S]
+shadow-safety CONTROL — prove the roster row is deregisterable WITHOUT breaking a real local-fn shadow's
+binding. CONSERVATIVE; "more keeps than OP-51" was the expected/permitted outcome. The chosen tranche
+(5, skipping arange the confirmed compiler-closure KEEP):
+  transpose · normalize · zeros · topk · mse_loss.
+
+The two sides (OP-41 method):
+  (a) ROSTER — `let builtin_names = [...]` in self/env.hexa env_new() (registration makes the
+      binder/type-checker ACCEPT an UNSHADOWED call to NAME).
+  (b) IMPL   — codegen-inline lowering (self/codegen.hexa `if name == "X"`) ∪ runtime symbols the
+      emitted C calls (self/runtime.h + installed runtime.c, incl prefix variants hexa_/rt_/u_/farr_/t_).
+A FALSIFIED builtin = registered in (a), NO impl in (b) → AOT emits a bare hexa_callN(NAME,…) → clang
+"use of undeclared identifier 'NAME'".  Fresh hexat = ~/.hx/bin/build/hexat (2028152B, Jun-13 — NOT the
+stale Jun-7 ~/.hx/bin/hexa). Installed runtime.c = /Users/mini/.hx/src/self/runtime.c (Jun-12).
+Baseline roster lines (self/env.hexa, pre-edit): :164 "...transpose", :165 "normalize","argmax","zeros",
+:197 "topk","sample_token","mse_loss".
+
+[1] PER-BUILTIN STATIC IMPL CROSS-REF (arg-shape-trap + bare-token-comment controlled)
+-------------------------------------------------------------------------------------
+codegen-inline guards (`if name=="X"` in self/codegen.hexa): ALL 5 = 0 → ARG-SHAPE-TRAP (OP-41 §1)
+  CONTROLLED: with 0 codegen guards, ANY arg shape yields the same bare hexa_callN fallback (no
+  false-undeclared risk; the probe is arg-shape-robust for this tranche).
+runtime symbol (self/runtime.h ∪ installed runtime.c, prefix-variant scan, BARE-TOKEN COMMENT controlled):
+  transpose : 0 callable bare symbol. Substring matches = COMMENTS in runtime.c (e.g. ":3237 // …no-transpose
+              variant", ":5894 // side transpose copy") + DIFFERENT prefixed symbols (farr_transpose_2d,
+              transpose_2d, _hx_farr_transpose_2d_cpu, transposeLeft/Right). `grep -nE '\btranspose\b'` =
+              comments only; NO `HexaVal transpose(` definition.
+  normalize : 0 callable bare symbol. `\bnormalize\b` in runtime.c = 2 COMMENTS only (":11903 softmax …
+              normalize by sum", ":13657 /* normalize */"); NO callable symbol.
+  zeros     : 0 callable bare symbol. `\bzeros\b` in runtime.c = ONE comment (":485 leading zeros"). Real
+              symbols are DIFFERENT: t_zeros, tensor_zeros, farr_zeros, g_strip_zeros — note tensor_zeros is
+              a SEPARATE registered builtin (KEPT in OP-51); the bare `zeros` builtin has no symbol.
+  topk      : 0 (runtime.h 0, runtime.c 0).
+  mse_loss  : 0 (runtime.h 0, runtime.c 0).
+  ⇒ every distinct callable bare-symbol set EMPTY for all 5.
+
+[2] AOT PROBE (g5, authoritative — correct args, fresh hexat → clang -I<self> -fsyntax-only) — VERBATIM
+------------------------------------------------------------------------------------------------------
+Each: `fn main(){ let a=[1.0,2.0,3.0,4.0]; let m=[[1.0,2.0],[3.0,4.0]]; let _r=<correct-args call>;
+println("OKMARK") }` → ~/.hx/bin/build/hexat OK (roster accepts) → clang FALSIFIES:
+  transpose : transpose(m)        → p_transpose.c:20:29: error: use of undeclared identifier 'transpose'
+  normalize : normalize(a)        → p_normalize.c:20:29: error: use of undeclared identifier 'normalize'
+  zeros     : zeros(4)            → p_zeros.c:20:29: error: use of undeclared identifier 'zeros'
+  topk      : topk(a, 2)          → p_topk.c:20:29: error: use of undeclared identifier 'topk'
+  mse_loss  : mse_loss(a, a)      → p_mse_loss.c:20:29: error: use of undeclared identifier 'mse_loss'
+ALL 5 g5-RE-VERIFIED FALSIFIED. (The opposite finding — a clean link — did NOT occur for any.)
+
+[3] THE CRITICAL [S] CONTROL — local-fn shadow binds ROSTER-INDEPENDENTLY (per name)
+-----------------------------------------------------------------------------------
+For EACH of the 5, a minimal file `fn NAME(x:float)->float { return x+1.0 }` + a `NAME(2.0)` caller →
+~/.hx/bin/build/hexat OK → clang -I<self> -fsyntax-only CLEAN (no errors). Generated C (per name) contains:
+  line 4  `HexaVal NAME(HexaVal x);`        (forward decl)
+  line 17 `HexaVal NAME(HexaVal x) {`       (LOCAL definition)
+  call    `HexaVal r = NAME(hexa_float(2.0));`  (call → local def)
+Verified for all 5 (transpose, normalize, zeros, topk, mse_loss — clang CLEAN, local def + call emitted
+each time). ⇒ a local `fn NAME` emits its OWN symbol and the call resolves to it INDEPENDENT of the roster
+entry. Deregistering the builtin can NEVER break a local-fn shadow's binding. (OP-47/OP-48/OP-51 control,
+here proven for this [S]-family tranche.)
+
+[4] SHADOW DEFS + CALLER SWEEP — shadow-resolved vs builtin-dependent, dead/live (the decisive gate)
+---------------------------------------------------------------------------------------------------
+LOCAL-FN SHADOW DEFS (`(@attr )?(pub )?fn NAME(` repo-wide, *.hexa, excl .claude):
+  transpose : 1 — self/test_collection_advanced.hexa:139
+  normalize : 4 — self/ml/embedding.hexa:54 · stdlib/bio/.../ribozyme_reaction_coordinate_quotient.hexa:189
+                  · @vectorize example/anima_online_learner.hexa:9 · @noalias self/test_noalias.hexa:366
+  zeros     : 4 — self/ml/transformer.hexa:39 · self/serve/serve.hexa:26 · self/test_grad_clip_fused.hexa:520
+                  · self/test_tiny2.hexa:1
+  topk      : 2 — self/test_moe_active.hexa:48 · self/ml/moe_active.hexa:41
+  mse_loss  : 8 — bench/qforge/{delta_ml_correction,active_learning_loop,transfer_reuse,mlip_energy_force}
+                  · self/test_titan_memory.hexa:899 · self/test_anima_lm.hexa:83 · self/ml/anima_lm_finetune.hexa:75
+                  · self/ml/lora.hexa:97
+
+Per-builtin caller classification (each call-site file: SHADOW = file binds/imports a local `fn NAME` →
+roster-independent; BUILTIN-DEP = no shadow → binds the roster entry, must be proven dead):
+
+  topk — shadows self/test_moe_active, self/ml/moe_active (generated C each emits 2 `HexaVal topk(...)` DEFS,
+    clang topk-undeclared=0 → binds LOCAL). BUILTIN-DEP: ONLY example/test_generation.hexa (AOT-fails today,
+    20 errors incl 4 topk-undeclared — dead example). self/ml/moe_layer + stdlib/flame/moe_lib `topk` hits
+    are COMMENTS (real call = topk_indices, a different fn) — NOT callers. ⇒ 0 live builtin-dep caller.
+
+  mse_loss — shadows self/test_anima_lm, self/ml/{lora,anima_lm_finetune}, self/test_titan_memory,
+    bench/qforge/* (each emits `HexaVal mse_loss(...)` DEF, clang mse_loss-undeclared=0). BUILTIN-DEP: ONLY
+    example/{test_generation,test_quant_beam_init,test_autograd} — all AOT-fail today (builtin-independent
+    dead examples; test_autograd's @autograd fn is its own different-shape def, the others fail on many syms).
+    ⇒ 0 live builtin-dep caller.
+
+  transpose — shadow self/test_collection_advanced (emits 2 `HexaVal transpose(...)` DEF, undeclared=0).
+    BUILTIN-DEP: ONLY example/test_matmul_loss.hexa — AOT-fails today on cross_entropy(6)+dot(2)+normalize(2)
+    +transpose(2); cross_entropy/dot were ALREADY removed in OP-47/OP-48 yet this example still lists them
+    undeclared ⇒ a permanently-dead never-linking example (builtin-INDEPENDENT failure). FALSE-POSITIVE
+    CONTROL: self/test_graph_pattern.hexa compiles CLEAN (tot_err=0) but never calls the builtin — every
+    `transpose` is in COMMENTS or `hexa_str("…matmul(Q, transpose(K))…")` STRING LITERALS; the real symbols
+    are e_transpose/gp84_transpose/qkt_transpose_flops_saved (different names). ⇒ 0 live builtin-dep caller.
+
+  normalize — shadows self/ml/embedding (local), bio ribozyme selftest (local), @vectorize
+    example/anima_online_learner (binds its own 3-arg def; its 2 errors are reward_fn_grad, unrelated),
+    @noalias self/test_noalias (binds its own def; 4 unrelated errors). IMPORTED-SHADOW: self/ml/rag_test.hexa
+    `use "embedding"` (line 12) → generated C emits `extern HexaVal normalize(HexaVal)` and the calls
+    (n3=normalize(v3), zero_n=normalize(zero_v)) bind the IMPORTED embedding.hexa `HexaVal normalize(HexaVal v)`
+    DEFINITION at link — clang CLEAN tot_err=0 — NOT the builtin (the OP-51 kv_cache_append/flash_decode
+    imported-shadow pattern). FALSE-POSITIVE: self/test_galore calls gal_normalize (a different local fn),
+    not normalize. BUILTIN-DEP: ONLY example/test_matmul_loss (dead, above). ⇒ 0 live builtin-dep caller.
+
+  zeros — LARGEST surface. shadows self/ml/transformer, self/serve/serve, self/test_{grad_clip_fused,tiny2}
+    (each emits 2 `HexaVal zeros(...)` DEF, undeclared=0). BUILTIN-DEP (18 files): 12 example/* ALL AOT-fail
+    today (tot_err=20, builtin-independent — even those with zeros-undeclared=0 like anima_engine_ported fail
+    on 20 OTHER syms); self/{ml/train_decoder_cpu_b,test_tensor_ops_deep} AOT-fail, self/test_score_diffusion
+    + stdlib/.../anima_eeg_to_akida_spike transpile-FAIL today; self/fix_array_push_nested.hexa is a
+    workaround SCRATCH-PROBE file (header: "ARRAY_PUSH_NESTED workaround") whose ONLY error is `zeros`
+    undeclared (zeros-undeclared=2, tot_err=2) — it FAILS TODAY with the builtin STILL registered (registered
+    + no-impl = pre-existing builtin-independent break; deregistration only flips its failure mode
+    "clang: undeclared zeros" → "binder: unbound zeros", a strict no-op for a never-compiling probe).
+    FALSE-POSITIVE CONTROL: stdlib/dojo/rl.hexa compiles CLEAN (tot_err=0) but never calls the builtin — it
+    is a CODE GENERATOR emitting `t_zeros(` and `torch.zeros(` only INSIDE generated-source STRING LITERALS
+    (`s = s + "...let W = t_zeros(S*A)...\n"`, `s = s + "W = torch.zeros(S, A, ...)"`); generated C confirms
+    the only `zeros` is `hexa_str("W = torch.zeros(...)")`. ⇒ 0 live builtin-dep caller.
+
+PRE-EXISTING-FAILURE CONTROL (OP-41 §5c / OP-47 §5 / OP-51 §4): every non-shadow non-example caller fails
+  TODAY on the INSTALLED Jun-13 hexat whose roster STILL registers all 5 (pre-dates this edit) — the AOT
+  "undeclared" + transpile failures reproduce WITH the builtins present ⇒ builtin-independent. Deregistration
+  is NOT the cause of any failure; for shadowed/imported-shadow/string-literal callers it is a no-op outright,
+  and for never-compiling files it only flips the failure mode (strict no-op).
+
+[5] COMPILER-CLOSURE CHECK (the arange lesson) — ALL 5 CLEAR
+-----------------------------------------------------------
+compiler/** refs (excl embedded.gen.hexa JSON archive noise):
+  transpose 6 — ALL comments: compiler/codegen/metal_target.hexa:853-994 (simdgroup transpose flag) +
+                compiler/lower/{hir_to_mir,mir_test}.hexa (transpose-direction comments).
+  normalize 3 — compiler/PLAN.md:3344/3350 (a DIFFERENT "normalize-path/utf8 normalize" feature, prose) +
+                compiler/smash/phases.hexa:15 (comment "P1 seed normalize — strip/sanitize").
+  zeros    13 — compiler/PLAN.md (ELF symtab "all zeros placeholder" / "18 u32 zeros") + compiler/emit/
+                elf_*.hexa (STN_UNDEF "all zeros" comments) + atlas/by_kind/p.gen.hexa (the atlas node
+                "ZETA-trivial-zeros" archive) + intrinsics.hexa:50 comment — ALL unrelated to a builtin.
+  topk      0 · mse_loss 0.
+CRITICAL: NONE is in compiler/check/bind.hexa (the tier-1 self-host compiler's bind allow-list). CONTROL:
+  arange IS at compiler/check/bind.hexa:1281 `"arange", "clamp", ...` — that is why arange STAYED in OP-48.
+  For all 5 here: compiler/check/bind.hexa count = 0 each. ⇒ none is in the self-host compiler's bind
+  allow-list / codegen special-path; the cc-gen3.o==cc-gen4.o byte-eq fixpoint (compiler/main.hexa closure,
+  which never references any of the 5) is unperturbed.
+
+[6] DECISION (g0 conservative, [S]-strict) — ALL 5 DEREGISTER
+------------------------------------------------------------
+The four conditions per builtin: (proven falsified) ∧ (no live caller depends on the roster entry — every
+builtin-dependent caller dead) ∧ (local-fn shadow binds without it — proven by §3) ∧ (compiler/** ZERO
+bind refs):
+  transpose : falsified ✓ · 1 shadow binds LOCAL ✓ · only builtin-dep = dead example (also fails on removed
+              cross_entropy/dot) · graph_pattern is comment/string-only · compiler 0 bind ✓ → DEREGISTER
+  normalize : falsified ✓ · 4 shadows (incl IMPORTED via rag_test `use "embedding"`) ✓ · only builtin-dep =
+              dead example · galore=different fn · compiler 0 bind ✓ → DEREGISTER
+  zeros     : falsified ✓ · 4 shadows bind LOCAL ✓ · every builtin-dep caller already AOT/transpile-fails
+              today (builtin-independent) · dojo/rl = string-literal codegen only · compiler 0 bind ✓ → DEREGISTER
+  topk      : falsified ✓ · 2 shadows ✓ · only builtin-dep = dead example · moe_layer/lib = comments ·
+              compiler 0 ✓ → DEREGISTER
+  mse_loss  : falsified ✓ · 8 shadows ✓ · only builtin-dep callers = dead examples · compiler 0 ✓ → DEREGISTER
+[S]-STRICT respected: each removal is gated on the §3 control proving the real shadow binds without the
+roster row AND on every non-shadow caller being dead/string-literal/different-symbol. Had ANY caller been a
+live PASSING program binding the unshadowed builtin OR a compiler-closure bind ref, that builtin would STAY.
+None is. (The clean-compiling files — graph_pattern, galore, rag_test, dojo/rl — were each proven to NOT
+call the builtin: comment/string-literal, different-fn-name, or an IMPORTED shadow.)
+
+[7] DIFF
+--------
+  self/env.hexa : 5 names REMOVED from env_new() builtin_names roster — transpose,normalize,zeros from the
+                  "cosine_sim …matmul transpose / normalize argmax zeros randn" line group; topk,mse_loss
+                  from the "gelu silu / topk sample_token mse_loss" group — + 1 scoped OP-56 comment block
+                  recording the falsified + shadow-control + dead-surface + false-positive-control +
+                  compiler-0 + byte-eq-safe rationale (mirrors the OP-43/OP-47/OP-48/OP-51 removal-comment
+                  convention). KEPT (re-verified present): matmul, argmax, randn, sample_token, gelu, silu,
+                  sigmoid, relu, attention, tensor_zeros (the SEPARATE kept builtin), arange (compiler-closure
+                  KEEP). wipe_guard: net +30/−3 « 50; commit subject scoped
+                  `cleanup(env): deregister 5 falsified [S]-shadow ML survivors (shadow-control + compiler-
+                  closure proven) — OP-56`.
+
+[8] POST-EDIT CHECKS — GREEN
+---------------------------
+(a) env.hexa transpiles clean: `~/.hx/bin/build/hexat self/env.hexa /tmp/op56/env_after.c` → OK (roster
+    well-formed after the 5 removals).
+(b) grep-proof: 0 non-comment roster strings for each removed name; kept neighbors all present (matmul,
+    argmax, randn, sample_token, gelu, silu, sigmoid, relu, attention, tensor_zeros, arange = 1 each).
+(c) self-host byte-eq: env.hexa edit affects the NEXT compiler build; installed hexat keeps its roster until
+    rebuilt (same 0-pod caveat as OP-41/43/47/48/51 — verified via env.hexa transpile + generated-C
+    inspection + compiler/** zero-bind-ref for the 5, not a from-scratch rebuild). The CI selfhost-byteeq-real
+    gate compiles compiler/main.hexa (never references any of the 5) and is INLINE-polled on the PR.
+
+[9] GATE (g5) — PASS
+--------------------
+  5-builtin tranche matrix built (static + empirical, arg-shape-trap + bare-token-comment controlled) : YES (§1-2)
+  all 5 AOT-falsified RE-VERIFIED verbatim                                                            : YES (§2)
+  [S] local-fn shadow binding CONTROL proven roster-independent PER NAME                              : YES (§3)
+  every COMPILING caller resolves to a local/imported shadow (not the builtin)                       : YES (§4)
+  every builtin-dependent (no-shadow) caller dead (example AOT-fail / already-failing self file)      : YES (§4)
+  string-literal / different-symbol false-positives controlled (dojo/rl, graph_pattern, galore)       : YES (§4)
+  0 compiler-core bind / byte-eq reference for all 5 (vs arange's bind.hexa:1281)                     : YES (§5)
+  pre-existing-failure control (dereg not the cause)                                                  : YES (§4)
+  env.hexa transpiles + roster well-formed after removal                                             : YES (§8)
+
+[10] CLOSURE STATEMENT + RUNNING TALLY
+-------------------------------------
+After OP-56: 5 of the 9 remaining [S]-shadow OP-43 survivors (transpose normalize zeros topk mse_loss)
+DEREGISTERED — proven falsified + [S]-shadow-control-safe + dead/false-positive-controlled surface +
+compiler-0 + byte-eq-safe.
+  OP-43 survivor set: 26 (OP-43) → 23 (OP-47, −3) → 16 (OP-48, −7) → 10 (OP-51, −6) → 5 (OP-56, −5).
+  Remaining 5 ML-family survivors:
+    [S R] relu sigmoid attention sample_token
+    [R]   arange  (PINNED on a HARD compiler-closure dependency — compiler/check/bind.hexa:1281 +
+          codegen special-path; OP-48 conservative keep, unmoved).
+Real ML in hexa = stdlib/flame/* + per-module LOCAL fns (the shadows), NOT these roster builtins.
+Deregistration is REVERSIBLE (one-line roster re-add); any future program needing one would require a real
+impl anyway (the roster row was a lints-but-won't-link landmine).
+
+[11] HONEST FRONTIER NOTE
+------------------------
+4 [S R] survivors remain (the 5 minus arange, the hard compiler-closure KEEP that will not move):
+  relu · sigmoid · attention · sample_token.
+This pass deregistered all 5 of its tranche — MORE than OP-51's frontier note predicted ("expect FEWER
+than 6") — but that is because the picked five had the CLEANEST surfaces: the apparent live builtin-dep
+callers (test_graph_pattern, test_galore, rag_test, stdlib/dojo/rl) every one resolved to a NON-builtin
+binding (comment/string-literal, a different fn name, or an IMPORTED shadow), and the rest were dead
+examples or already-failing self files. The remaining 4 are now genuinely the HARDEST of the campaign:
+  · sigmoid — the largest live-shadow surface (shadow≈8, self≈102 refs) AND a compiler/** COMMENT ref
+    (nvptx_target.hexa "// sigmoid(x)=…", non-binding) — the most likely conservative KEEP; needs per-name
+    baseline-PASS verification of every unshadowed call-site before any dereg.
+  · relu — shadow≈3, self≈23; large live-shadow surface, probable KEEP.
+  · attention — registered alongside layer_norm/embedding; needs unshadowed-caller baseline-pass audit.
+  · sample_token — needs the same per-caller baseline-pass audit.
+HONEST DEPLETION READ: the deregisterable-builtin reservoir is now NEAR-EXHAUSTED. The residual is
+increasingly dominated by (a) the compiler-closure KEEP (arange, immovable) and (b) live-shadow / large-
+surface KEEP candidates (sigmoid, relu). The next [S] tranche will require the heavier per-name baseline-
+PASS verification of every unshadowed call-site (not just dead/shadow classification), and is expected to
+deregister FEWER than 5 — possibly 0, with sigmoid/relu landing as conservative live-shadow KEEPs and only
+attention/sample_token being potential removals if their unshadowed callers all prove dead. The campaign is
+converging on its honest floor: a small set of compiler-closure + live-shadow KEEPs.
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
