@@ -1770,3 +1770,27 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   REAL un-promoted CI toolchain it FAILS exactly as designed = the inverse teeth proof. Promote = a follow-up.
 - Milestone OP-39 flipped [x]. Verdict .verdicts/hexa-0pod/F-OP39-CONSTFOLD-CI-GATE.txt. $0 · 0-GPU · 0-pod ·
   no vast · no foreign-pod touch · no .tape edits.
+
+## 2026-06-12 W16 + G1 — GPU-gated remainders run on ONE-TIME user-approved H100 (vast 40664227, ~$0.72, leak-0)
+- CONTEXT: user EXPLICITLY approved a one-time vast H100 rental (breaks the standing 0-pod rule with permission)
+  to run the two GPU-gated HEXA-0POD remainders back-to-back on a SINGLE H100, then tear down. Rented exactly
+  ONE H100 SXM (offer 40179475 → contract 40664227, label hexa-g1w16, $2.00/hr, nvidia/cuda:12.6.2-devel),
+  H100 80GB HBM3 sm_90a / driver 550.163.01 / nvcc 12.6.77 (EXACT W10/W12/W13 apples). NO foreign pod touched
+  (confirmed label before destroy). DESTROYED immediately after capture; `vastai show instances` = empty → leak-0.
+- W16 (🟢 GREEN, measured): build_w16.sh on real sm_90a. MODE 0 canonical-decode rel_rms 0.000e+00 PASS
+  (4096/4096 exact). MODE 1 descriptor-direct (the PRE-REGISTERED D1 FALSIFIER) FLOORS rel_rms 1.107 at default
+  AND across the full inline lbo×sbo×boff×swmode sweep — NO config hits 0 → D1 (canonical-atom landing makes the
+  in-place descriptor read bit-exact, deleting the 32KB decode band) FALSIFIED on real H100. Per g5 hard-gate
+  STOP before MODE 4 → no TFLOP/s on a falsified read law; W10 70.7/6.09x frontier KEPT; OP-21B (gemm_w16b, keep
+  band) is the documented fallback. Reproduces the W15 (3200-cfg) + BENCH-12 (1.009) wall on the canonical box.
+  Route-(a) pre-permute (OG16/BENCH-12/14) remains the bit-exact path that DID crack the band to 1.10x @D=2048;
+  w16 is the closed-neg in-place-descriptor branch. Verdict F-W16-WGMMA-H100-MEASURE.txt.
+- G1 (🟠 BLOCKED-CONFIRMED): clm_prod_gpu TF32 e2e build attempted on the SAME pod. On a fully-capable H100 the
+  build STILL fails — gate is BUILD-ENV/TOOLCHAIN/FROZEN-SEED, NOT a GPU limit (the very same pod ran w16's
+  wgmma kernels). Reproduced on-HW: (i) no hexa/hexa-run on a fresh CUDA pod → kit STEP-0 `hexa run FAILED exit
+  127`, clean EXIT; (ii) `git archive HEAD` self/runtime.c = thin stub, 0/31 host marshal wrappers (the complete
+  CUDA runtime.c is the gitignored 151c52c8 blob restore_frozen_seeds fetches from git history, absent in the
+  shallow tarball). Exactly the F-OP24D documented remainder; NEW datapoint = gate confirmed toolchain/seed on
+  real Hopper. Kit-named fixes (NOT pod tasks): re-freeze runtime.c w/ all 31 wrappers, or add a CUDA release.yml
+  job. Input side unchanged (proven 0-pod F-OP28/28b/28c). Verdict F-G1-CLMPROD-TF32-GPU-STEP.txt.
+- Both W16 + G1 milestones flipped [x]. $0.72 total · leak-0 · no foreign pod touched · no .tape edits.
