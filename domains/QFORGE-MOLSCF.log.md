@@ -659,3 +659,51 @@ gaps in the core:
 2. general N-electron CAS — replace the 2e |a_α b_β⟩ grid with α/β determinant-string enumeration +
    generalized Slater–Condon, opening CAS(6,6) → CAS(12,12) for Cr₂ (the genuine multi-reference dimer).
 3. 2nd-order Newton-SCF + g angular momentum + analytic force — the remaining single-reference bricks.
+
+## round-11 — brick 14: GENERAL N-electron CASCI (determinant-string FCI · CAS(6,6) strong correlation) g5 PASS
+Took round-10 next-path #2: generalized the 2-electron `|a_α b_β⟩` grid to the full determinant-string FCI
+over an ARBITRARY active space CAS(n_elec, n_act). NEW file `stdlib/qforge/molscf/fci.hexa` (additive —
+`casci.hexa` BYTE-UNTOUCHED, its 2e grid is now the N=2 special case kept as a regression anchor). The string
+algorithm (Knowles–Handy / standard FCI): α/β-string enumeration (`fci_combinations` C(m,k) iterative
+lexicographic, `fci_dets` merge α-even/β-odd into sorted spin-orbital occupation lists) + the GENERAL
+Slater–Condon matrix element (`fci_matel`: diagonal Σ⟨i|h|i⟩+Σ_{i<j}⟨ij‖ij⟩ · single ±(⟨p|h|q⟩+Σ_common⟨pi‖qi⟩)
+· double ±⟨pq‖rs⟩, phase = (−1)^(orbital-reorder parity from occupation-list positions), zero beyond double)
+→ dense CI Hamiltonian → `eigh` ground state. REUSES the round-10 AO→MO transform
+(`casci_mo_hcore`/`casci_mo_eri`/`casci_mo_coeff`) verbatim — NO integral machinery re-derived (d3/d19). All
+references are pyscf 2.13.1 RHF / fci.FCI / mcscf.CASCI; the hexa STO-3G AO integrals match pyscf int1e_*
+to ≤1e-5 (S[0,1]=0.524878, Hcore[0,0]=−1.46436 vs pyscf identical — apples-to-apples).
+
+(a) 2e REGRESSION — the general solver reproduces round-10 CAS(2,2) H₂ == FCI EXACTLY (the N=2 special case):
+    R=1.4 bohr E_CAS=−1.13727 == pyscf FCI −1.13727594 · R=5.0 bohr E_CAS=−0.93489 == pyscf FCI −0.93488935
+    (|Δ|≤1e-5 integral-limited; ndet=4=C(2,1)²) — the sealed anchor is reproduced by the general algorithm,
+    not broken by the generalization.
+(b) general-CAS == FCI on a MULTI-electron system: H₄ chain CAS(4,4) @R=1.8 E_CAS=−2.17541 (36 dets) ==
+    pyscf fci.FCI / mcscf.CASCI −2.17541114 · H₆ chain CAS(6,6) @R=1.8 E_CAS=−3.24451 (400 dets) == pyscf
+    FCI −3.24451733. |Δ|≤1e-5 (integral-limited). The CAS equals pyscf's CASCI for the SAME active space.
+(c) MULTI-REFERENCE WIN on a REAL strongly-correlated case — symmetric H-chain dissociation, where the static
+    correlation is genuinely MULTI-electron (NOT a 2-determinant special case):
+      H₄ CAS(4,4) @R=3.0 (STRETCHED): E_RHF=−1.77917 (single-det, qualitatively WRONG, +0.192 Ha too high)
+      vs E_CAS=−1.97087 == pyscf FCI −1.97086976. Dominant determinant weights 0.7012 / 0.1194 / 0.0374 /
+      0.0374 == pyscf EXACT (4 decimals) — ≥3 SIGNIFICANT determinants = genuine multi-reference character.
+      H₆ CAS(6,6) @R=3.0: E_RHF=−2.67543 vs E_CAS=−2.95765 == pyscf FCI −2.95764609; weights 0.5733 / 0.1020
+      / 0.0286 / 0.0286 == pyscf EXACT. The determinant-weight match (incl. degenerate pairs) confirms the
+      Slater–Condon PHASE/sign bookkeeping is correct against an independent reference.
+(d) r1..r10 (gaussian/coulomb/rhf/md/md_d/md_f/uhf/rohf/scf_robust/casci) regress ALL PASS — fci.hexa is a
+    NEW file, every existing path byte-untouched (the round-10 casci 2e selftest preserved exactly).
+
+### honest depletion / tractability (d6)
+This is CASCI (CI over FIXED RHF orbitals), NOT full CASSCF (no orbital re-optimization) — named round-12.
+LARGEST CAS actually run = CAS(6,6) (400 determinants, 400×400 dense CI Hamiltonian — fully tractable, runs
+in seconds). FCI scales factorially: CAS(8,8)=4900 dets, CAS(10,10)=63504 is the practical CEILING for this
+DENSE-eigh approach (a 63504² matrix is the wall). Cr₂ = CAS(12,12) is BEYOND this dense approach this round
+(needs direct-CI Davidson, σ-vector on the fly, no explicit H) — named as the round-12 frontier, demonstrated
+instead on H₄/H₆ chains (the cleanest strongly-correlated FCI benchmark, RHF visibly broken).
+
+### round-12 next (3 breakthrough paths, d2 — never concede)
+1. brick 15 — CASSCF orbital optimization: the MCSCF orbital-rotation step (Newton / super-CI) on TOP of this
+   general CASCI, reusing the CI energy + 1-/2-RDM as the gradient/Hessian source. Anchor: H₂ CAS(2,2) CASSCF
+   == CASCI (full active space — orbital-opt cannot lower a complete-active-space CI) + seed-invariance.
+2. direct-CI Davidson — replace the dense ndet² eigh with on-the-fly σ-vector (H·c without storing H) +
+   the α/β-string excitation-list factorization, lifting the CAS(8,8)=4900 / CAS(10,10)=63504 ceiling toward
+   Cr₂ CAS(12,12) and N₂ CAS(6,6) σ/π triple-bond dissociation.
+3. 2nd-order Newton-SCF + g angular momentum + analytic force (brick 6) — the remaining single-reference bricks.
