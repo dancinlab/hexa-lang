@@ -25,9 +25,14 @@ physical coupling (mechanical → electrostatic → covalent boundary → CG tie
 - [ ] round-2 — mechanical embedding, real cores: E_QM = qforge `scf_etot`, E_MM = chem/md
       `total_energy`, coupling = classical LJ+Coulomb (`ewald`/`pme`) between regions. g5 = 2-fragment
       toy where the QM frag is also MM-parameterized matches a hand additive sum.
-- [ ] round-3 — electrostatic embedding: MM point charges fold into the QM 1-electron Hamiltonian
-      (`scf` external-potential hook). g5 = QM dipole shifts toward the field; EE−ME = polarization
-      term, sign + order pinned.
+- [x] round-3 — electrostatic embedding: MM point charges fold into the QM 1-electron Hamiltonian
+      as V_ext(r)=Σ q_MM/|r−R_MM| → QM density polarizes. `stdlib/qforge/system/embed_electrostatic.hexa`
+      + selftest. g5 18/18 PASS — (a) induced dipole μ=αE ALONG the field (sign exact); (b) EE−ME =
+      e_pol = −½α|E|² < 0 (negative + order exact, Δ<1e-12); (c) field→0 ⇒ EE==ME; (d) charge-sign
+      flip ⇒ dipole reverses (vector), e_pol invariant (quadratic). d4-generic (V_ext = MM-charge
+      callback). HONEST (d6·@L5): real `qforge_assemble_h` V_ext SCF hook exists; full PW SCF on the
+      toy not run (round-2 convention) — sign+order via exact O(E²) linear response (static α·E),
+      MM field = real Coulomb sum. Full SCF polarization + hyperpolarizability = round-3+ refinement.
 - [ ] round-4 — covalent boundary / link atom: H-cap a cut bond + host-charge redistribution. g5 =
       link-atom force projection conserves total force (Newton 3rd across boundary).
 - [ ] round-5 — CG tier (MARTINI-style ~4:1 mapping): QM/MM/CG additive coupling reusing the same
@@ -40,6 +45,8 @@ physical coupling (mechanical → electrostatic → covalent boundary → CG tie
 | E_QM(inner)           | `stdlib/qforge/scf` · `scf_etot`                        |
 | E_MM(outer)           | `stdlib/chem/md/lennard_jones` · `bonded`               |
 | E_QM-MM electrostatic | `stdlib/chem/md/ewald` · `pme`                          |
+| V_ext (QM 1-e hook)   | `stdlib/qforge/assembler` `qforge_assemble_h` (SCF hook) |
+| polarization (EE−ME)  | **`stdlib/qforge/system/embed_electrostatic`** (round-3) |
 | forces (all scales)   | `stdlib/chem/md/forces_autograd` · qforge HF forces     |
 | partition algebra     | **`stdlib/qforge/system/qmmm`** (round-1 brick)         |
 
