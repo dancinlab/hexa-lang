@@ -32,6 +32,9 @@ let p = randn(8, 0.5)
 let g = randn(8, 1.0)
 let m = zeros(8)
 let v = zeros(8)
+// NOTE: safe_update wrapped FALSIFIED builtins (grad_clip_norm/adam_step, no runtime
+//   impl) — removed in OP-33c. This array-dialect demo is baseline-broken; real path =
+//   stdlib/flame opt_adamw_step (handle-dialect) + opt_lr_warmup_cosine.
 let r = safe_update(p, g, m, v, 0.001, 1, 1.0)
 let new_p = slice(r, 0, 8)
 println("[4] Adam (clipped): changed=", new_p[0] != p[0])

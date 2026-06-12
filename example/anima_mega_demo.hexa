@@ -65,6 +65,9 @@ while epoch < 20 {
 
     // Simplified gradient: perturb W2 and measure loss change
     let grads = randn(64, 0.01)  // stochastic gradient estimate
+    // NOTE: grad_clip_norm + adam wrap FALSIFIED builtins (no runtime impl) — this
+    //   array-dialect demo is baseline-broken (OP-33c). Real path = stdlib/flame
+    //   opt_adamw_step (handle-dialect) + opt_lr_warmup_cosine.
     let clipped = grad_clip_norm(grads, 1.0)
     let r = adam(W2, clipped, m2, v2, lr, epoch + 1)
     W2 = slice(r, 0, 64)

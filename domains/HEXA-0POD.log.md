@@ -1599,3 +1599,34 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
 - HONEST: adam/safe_update in stdlib/optim.hexa wrap adam_step/grad_clip_norm — equally dead, NOT sanctioned
   in OP-33b; follow-up candidate. Milestone OP-33b flipped [x].
   Verdict .verdicts/hexa-0pod/F-OP33B-DEAD-LR-CLEANUP.txt. $0 · 0-GPU · 0-pod · no vast · no .tape edits.
+
+## OP-33c — dead adam/safe_update wraps removed (falsified adam_step/grad_clip_norm) — 2026-06-12
+- FOLLOW-UP to OP-33b HONEST §6. stdlib/optim.hexa still held `adam`/`safe_update` wrapping
+  `adam_step`/`grad_clip_norm`. SURVEY (mandatory) of all 3 public surfaces:
+  - `adam(params,grads,m,v,lr,t)` → calls `adam_step` → DEAD-FALSIFIED.
+  - `safe_update(...)` → calls `grad_clip_norm` + `adam` → DEAD-FALSIFIED.
+  - top-level `println("[optim loaded]")` → LIVE (kept).
+- DEADNESS RE-VERIFIED independently (g5, `hexa run`, hexa 0.1.0-dispatch):
+  - `adam_step` probe → clang `call to undeclared function 'adam_step'`; runtime.h defines ONLY
+    `adamw_step` (RFC 034) — a DIFFERENT symbol. Roster registers `adam_step` so the lint passes but
+    codegen emits a call into nothing → broken C.
+  - `grad_clip_norm` probe → `use of undeclared identifier 'grad_clip_norm'`; NO runtime impl at all.
+- CALLER SWEEP (grep -rn over *.hexa): adam ← example/anima_mega_demo.hexa:69 ONLY; safe_update ←
+  example/test_stdlib.hexa:35 ONLY. Both examples_baseline.json exit_code=-1 (never-passed; array-dialect
+  demos already broken on the same falsified-ML family randn/zeros/slice/mean/cross_entropy). Zero LIVE callers.
+- LIVE alternative CONFIRMED: real flame training uses stdlib/flame/optim_lib.hexa `opt_adamw_step` (→ real
+  `adamw_step` builtin) + `opt_lr_warmup_cosine` (d5_cos). stdlib/flame/* use `adamw_step`, never `adam_step`.
+- EXECUTED: stdlib/optim.hexa adam+safe_update REMOVED (pointer comment → opt_adamw_step/opt_lr_warmup_cosine).
+  self/env.hexa: `grad_clip_norm` DEREGISTERED from the env_new() builtin roster (root cause — only non-roster
+  refs were the 3 baseline-broken examples + the removed wrapper; no live surface). The 2 example call sites got
+  NOTE pointer comments (faithful repoint impossible: array-dialect adam(arr,...) vs handle-dialect
+  opt_adamw_step(int,...) signature; demos stay baseline-broken on the rest of the dead family — out of scope).
+- POST-CHECKS GREEN: import stdlib/optim.hexa now BUILDS+RUNS clean → `[optim loaded]` (PRE: `call to undeclared
+  function 'adam_step'`). Canonical flame probe unaffected: opt_lr_warmup_cosine(0.001,0.1,50,1000,100) = 0.0005.
+  Removed-symbol grep: zero dangling refs except the 2 documented baseline-broken examples (NOTE-commented).
+- HONEST: `adam_step` LEFT registered in the roster — 12+ OTHER surfaces reference it (self/ml/{train_gpu,galore,
+  gpu_optimizer,t2_gpu_bench,distributed_train} + examples). Those self/ml/* files are themselves likely dead on
+  the same falsified builtin, but they're a SEPARATE surface out of OP-33c's stdlib/optim scope — flagged as a
+  follow-up (OP-33d?), NOT touched. Deregistering adam_step here would change their error class out-of-scope.
+- Milestone OP-33c flipped [x]. Verdict .verdicts/hexa-0pod/F-OP33C-DEAD-OPTIM-CLEANUP.txt.
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
