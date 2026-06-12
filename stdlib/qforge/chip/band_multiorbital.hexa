@@ -1,0 +1,291 @@
+// HEXA Standard Library — qforge/chip/band_multiorbital
+//
+// QFORGE universal-engine · CHIP scale · round-9 brick.
+//   scale ladder (QFORGE.md §122):  chip = device 밴드·수송·열(TCAD).
+//   round-1 (band_transport.hexa) laid the analytic SPINE — a single SINGLE-BAND
+//     ε(k)=ε₀−2t·cos(ka) tight-binding dispersion, the diatomic GAP via generic eigh.
+//   round-2 (band_kmesh.hexa) promoted the band to a k-MESH manifold + 1D van-Hove DOS.
+//   round-3 (band_scf.hexa) wired ε_n(k)=eig[H(k)] to the PLANE-WAVE SCF Hamiltonian
+//     — but still ONE plane-wave channel per G, i.e. a SINGLE orbital per site.
+//
+// Round-9 promotes the band leg from a SINGLE-BAND H(k) to a MULTI-ORBITAL /
+// MULTI-BAND H(k): each lattice site carries n_orb local orbitals (e.g. s + p_x, or
+// a generic 2-band basis), so the Bloch Hamiltonian is a n_orb×n_orb MATRIX at every k
+//
+//     H_{αβ}(k) = Σ_R  t_{αβ}(R) · e^{i k·R}     (α,β = orbital indices),
+//
+// diagonalised by the GENERIC stdlib/alloc/math/eigen `eigh` (d19 — the SAME solver
+// round-1's diatomic gap, round-3's plane-wave H(k), L1 Eliashberg and the Davidson
+// step all share). The hoppings t_{αβ}(R) are SLATER-KOSTER two-centre integrals
+// (ssσ, spσ, ppσ, ppπ) — the textbook orbital-resolved tight-binding parametrisation
+// (Slater & Koster, Phys. Rev. 94, 1498 (1954)). This unlocks the real-semiconductor
+// band features that a single band cannot express:
+//
+//   • MULTIPLE bands ε_n(k), n = 0 … n_orb−1 (s-like, p-like, …) from one eig[H(k)].
+//   • an EFFECTIVE MASS  m* = ħ² / (d²ε/dk²)  at each band edge (curvature of the
+//     band ⇒ the carrier's inertia; flat band → heavy, sharp band → light).
+//   • a DIRECT vs INDIRECT gap verdict — the valence-band maximum (VBM) and the
+//     conduction-band minimum (CBM) may sit at the SAME k (direct, like GaAs) or at
+//     DIFFERENT k (indirect, like Si/Ge): we locate both on a k-mesh and compare.
+//   • a VALLEY count — the number of symmetry-distinct CBM minima (degenerate
+//     conduction valleys, e.g. Si's 6 X-valleys) — read off the conduction band.
+//
+// ── The closed-form g5 anchors (d6 — every reference is derivable, none tuned) ──
+//
+//   (a) MULTI-BAND DIMENSION — H(k) is n_orb×n_orb (n_orb² flat entries) and eig[H(k)]
+//       returns EXACTLY n_orb real eigenvalues at every k (one per orbital channel).
+//       The single-band R1/R3 result is the n_orb=1 special case. Floor of the round.
+//
+//   (b) EFFECTIVE MASS — for a band with a parabolic edge ε(k)≈ε_edge + ½ ε'' (k−k₀)²
+//       the effective mass is  m* = ħ²/ε''  with ε'' = d²ε/dk² the band curvature.
+//       For the closed 1-orbital cosine band ε(k)=ε₀−2t·cos(ka) the curvature at the
+//       band BOTTOM (k=0) is ε''=2t·a², so  m* = ħ²/(2 t a²) EXACTLY (Ashcroft-Mermin
+//       Ch.12). We compute m* by a finite-difference second derivative of the eig band
+//       and check it against this closed form — the curvature→mass map, from real eig.
+//
+//   (c) DIRECT / INDIRECT GAP — scan the lower (valence) and upper (conduction) bands
+//       over a k-mesh; VBM = argmax of the lower band, CBM = argmin of the upper band.
+//       gap = ε_CBM − ε_VBM ≥ 0; the verdict is DIRECT iff k_VBM == k_CBM, else
+//       INDIRECT. A 2-band model with a k-independent off-diagonal coupling keeps both
+//       extrema at the SAME k (direct); a model whose conduction band has its minimum
+//       pushed to the zone boundary by a hopping sign gives an INDIRECT gap. Both are
+//       read off the SAME eig[H(k)] machine (d4 — the verdict is data, not a branch).
+//
+//   (d) 2-BAND CLOSED FORM — a 2×2 Hermitian H(k) = [[E_a, V],[V*, E_b]] has the EXACT
+//       eigenvalues  ε_± = ½(E_a+E_b) ± √( (½(E_a−E_b))² + |V|² )   (the Wolfsberg-
+//       Helmholtz / two-level secular form). At a degeneracy E_a=E_b the gap is 2|V|
+//       (an avoided crossing of width 2|V|); far from it the bands approach E_a,E_b.
+//       We assert eig[H(k)] reproduces this closed form across k, AND that H(k) is
+//       Hermitian (H_{αβ}=H_{βα}* — here real-symmetric) at every k so eig is real.
+//
+// ── d4 generic / d19 reuse contract ──────────────────────────────────────────
+//   • H(k) is diagonalised by the generic eigh — NO per-model solver branch (d4/d19).
+//   • orbitals & hoppings are DATA: an OrbitalModel carries onsite[α] energies and a
+//     list of Hop{ alpha, beta, dx, t } real-space two-centre integrals. Adding an
+//     orbital / a Slater-Koster channel / a neighbour shell is a DATA edit — the
+//     generic builder qforge_chip_mo_hk re-runs unchanged (d4 — no name hardcoding).
+//   • the Slater-Koster helpers emit the standard ss/sp/pp hoppings into that same
+//     Hop list, so a "real" parametrisation is a data swap, not a code path (d4).
+//
+//   model layout (flat encoding — hexa has no struct literals here, so a model is two
+//   flat lists):  onsite : [float]            length n_orb   (onsite energies ε_α)
+//                 hops   : [float]            length 4·n_hop  (α, β, dx, t) per hop,
+//                          α,β orbital indices (as float), dx the neighbour cell index
+//                          (…,−1,0,+1,… in units of a), t the real two-centre integral.
+//   For a 1D chain H_{αβ}(k) = onsite[α]·δ_{αβ} + Σ_hops t·cos(k·dx·a)  (real basis;
+//   the cos comes from summing the +dx and −dx Hermitian partners, e^{ikR}+e^{−ikR}).
+//
+//   pub fn qforge_chip_mo_hk(norb, onsite, hops, k, a)        -> [float]  // dense H(k) flat (norb²)
+//   pub fn qforge_chip_mo_bands(norb, onsite, hops, k, a)     -> [float]  // ε_n(k) ascending, n=norb
+//   pub fn qforge_chip_mo_band_n(norb, onsite, hops, k, a, n) -> float    // ε_n(k) of band n (ascending)
+//   pub fn qforge_chip_mo_effmass(norb, onsite, hops, a, n, k0, hbar) -> float  // m*=ħ²/(d²ε_n/dk²) at k0
+//   pub fn qforge_chip_mo_two_band(Ea, Eb, V)                 -> [float]  // [ε−, ε+] closed form
+//   pub fn qforge_chip_mo_gap_scan(norb, onsite, hops, a, nk) -> [float]  // [gap, kVBM, kCBM, direct]
+//   pub fn qforge_chip_sk_hop_ss / sp / pp(...)               -> float    // Slater-Koster two-centre
+//
+// HONEST(d6): the hoppings are SLATER-KOSTER / generic 2-band MODEL parameters — this
+// brick proves the MULTI-BAND STRUCTURE + EFFECTIVE-MASS curvature + DIRECT/INDIRECT
+// verdict + 2-band closed form on derivable analytic references. It is NOT a fitted
+// Si/Ge parametrisation (no empirical ss/sp tables, no spin-orbit, no d-orbitals) —
+// a real material parametrisation is a DATA swap into the SAME OrbitalModel (d4). The
+// physics machinery (matrix H(k), eig, curvature, valley/gap verdict) is the round's
+// deliverable, the specific numbers are textbook two-level / cosine-band closed forms.
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/chip/band_multiorbital_selftest.hexa
+use "stdlib/alloc/math/eigen"
+
+// π to double precision (no stdlib PI export — local const, grep-verified d19 parity
+// with band_scf.hexa / band_kmesh.hexa).
+fn _pi() -> float { return 3.14159265358979323846 }
+fn _sqrt(x: float) -> float { if x <= 0.0 { return 0.0 } return sqrt(x) }
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// ── Slater-Koster two-centre integrals (1D chain, bond along x̂) ───────────────
+// The two-centre approximation expresses an orbital-pair hopping as a direction-cosine
+// combination of the canonical Slater-Koster parameters (Slater & Koster 1954, Table I).
+// For a bond along x̂ (l=1, m=n=0) the relevant 1D matrix elements are:
+//   ⟨s|H|s⟩        = V_ssσ
+//   ⟨s|H|p_x⟩      = l · V_spσ = V_spσ                  (sign flips with bond direction)
+//   ⟨p_x|H|p_x⟩    = l² V_ppσ + (1−l²) V_ppπ = V_ppσ    (π drops out along the bond axis)
+// These are GENERIC helpers — a caller assembles a Hop list from them (d4: the SK value
+// is data fed into the same hop encoding, no special path).
+pub fn qforge_chip_sk_hop_ss(v_sss: float) -> float { return v_sss }
+// s→p_x along +x̂: +V_spσ ; along −x̂ the direction cosine flips sign → −V_spσ.
+pub fn qforge_chip_sk_hop_sp(v_sps: float, dir: float) -> float {
+    if dir < 0.0 { return -v_sps }
+    return v_sps
+}
+// p_x→p_x along x̂: l²V_ppσ + (1−l²)V_ppπ with l=1 ⇒ V_ppσ (π has no weight on-axis).
+pub fn qforge_chip_sk_hop_pp(v_pps: float, v_ppp: float) -> float {
+    let l = 1.0
+    return l * l * v_pps + (1.0 - l * l) * v_ppp
+}
+
+// ── Dense multi-orbital Bloch H(k) = T(k) (flat row-major norb²) ──────────────
+// H_{αβ}(k) = onsite[α]·δ_{αβ} + Σ_hop[α,β]  t · cos(k · dx · a).
+// The cos arises because each real-space hop t_{αβ}(R=+dx) has its Hermitian partner
+// t_{βα}(R=−dx)=t (real basis), and e^{ik·dx·a}+e^{−ik·dx·a}=2cos — but to keep BOTH
+// the (α,β,+dx) and (β,α,−dx) entries explicit and Hermitian we add t·cos to BOTH the
+// (α,β) and (β,α) slots for each supplied directed hop, so a SINGLE Hop{α,β,dx,t} with
+// dx≠0 contributes t·cos(k dx a) symmetrically (H is real-symmetric). An on-cell hop
+// (dx=0, α≠β) is a k-independent orbital mixing (cos(0)=1). d4: the same loop serves
+// any norb / any hop list — no orbital-name branch.
+//
+// hops encoding: flat [α0,β0,dx0,t0, α1,β1,dx1,t1, …]  (4 floats per hop).
+pub fn qforge_chip_mo_hk(norb: int, onsite: [float], hops: [float], k: float, a: float) -> [float] {
+    // zero-initialise the norb×norb dense matrix.
+    let mut h: [float] = []
+    let mut i = 0
+    while i < norb * norb {
+        h.push(0.0)
+        i = i + 1
+    }
+    // onsite energies on the diagonal.
+    let mut al = 0
+    while al < norb {
+        let idx = al * norb + al
+        h[idx] = h[idx] + onsite[al]
+        al = al + 1
+    }
+    // hoppings: each Hop{α,β,dx,t} adds t·cos(k·dx·a) to (α,β) AND (β,α) (Hermitian).
+    let nh = len(hops) / 4
+    let mut hi = 0
+    while hi < nh {
+        let base = hi * 4
+        let a_idx = to_int(hops[base])         // orbital α
+        let b_idx = to_int(hops[base + 1])     // orbital β
+        let dx = hops[base + 2]                // neighbour cell offset (in units of a)
+        let t = hops[base + 3]                 // two-centre integral
+        let phase = cos(k * dx * a)            // real Bloch phase (e^{ikR}+e^{-ikR})/2 factor folded
+        let contrib = t * phase
+        let ij = a_idx * norb + b_idx
+        h[ij] = h[ij] + contrib
+        if a_idx != b_idx {
+            let ji = b_idx * norb + a_idx
+            h[ji] = h[ji] + contrib            // Hermitian partner (real ⇒ symmetric)
+        }
+        hi = hi + 1
+    }
+    return h
+}
+
+// ── ε_n(k): the norb eigenvalues of H(k), ASCENDING (band 0 = lowest) ─────────
+// Diagonalise dense H(k) with the GENERIC eigh (d19). eigh returns eigenvalues
+// DESCENDING; we reverse to ascending. Each scalar is copied into a fresh local
+// immediately (gen3 arena-return guard — same pattern as band_scf.hexa).
+pub fn qforge_chip_mo_bands(norb: int, onsite: [float], hops: [float], k: float, a: float) -> [float] {
+    let h = qforge_chip_mo_hk(norb, onsite, hops, k, a)
+    if len(h) != norb * norb { return [] }
+    let res = eigh(h, norb)
+    let vals = res[0]                          // descending
+    let mut out: [float] = []
+    let mut i = norb - 1
+    while i >= 0 {
+        let ev = vals[i]                       // materialise scalar (gen3 guard)
+        out.push(ev)
+        i = i - 1
+    }
+    return out
+}
+
+// ── ε of a single band n (ascending index) at k ──────────────────────────────
+pub fn qforge_chip_mo_band_n(norb: int, onsite: [float], hops: [float], k: float, a: float, n: int) -> float {
+    let eps = qforge_chip_mo_bands(norb, onsite, hops, k, a)
+    if n < 0 { return 0.0 }
+    if n >= len(eps) { return 0.0 }
+    return eps[n]
+}
+
+// ── Effective mass m* = ħ² / (d²ε_n/dk²) at k0 ────────────────────────────────
+// Central finite-difference second derivative of band n:
+//   ε'' ≈ [ε(k0+h) − 2ε(k0) + ε(k0−h)] / h²,  then  m* = ħ² / ε''.
+// A heavy/flat band (small ε'') → large m*; a sharp band (large ε'') → small m*. The
+// sign of m* follows the curvature (a band MAXIMUM, ε''<0, gives a negative m* — a
+// hole). Returns m* in the natural units of (ħ²/[energy·length²]) the caller chooses.
+pub fn qforge_chip_mo_effmass(norb: int, onsite: [float], hops: [float], a: float, n: int, k0: float, hbar: float) -> float {
+    let dk = 1.0e-4
+    let ep = qforge_chip_mo_band_n(norb, onsite, hops, k0 + dk, a, n)
+    let e0 = qforge_chip_mo_band_n(norb, onsite, hops, k0, a, n)
+    let em = qforge_chip_mo_band_n(norb, onsite, hops, k0 - dk, a, n)
+    let curv = (ep - 2.0 * e0 + em) / (dk * dk)    // d²ε/dk²
+    if _abs(curv) < 1.0e-300 { return 0.0 }        // flat band → infinite mass (return 0 sentinel)
+    return hbar * hbar / curv
+}
+
+// ── 2-band closed form: eig of [[Ea, V],[V, Eb]]  (Wolfsberg / two-level) ─────
+// ε_± = ½(Ea+Eb) ± √( (½(Ea−Eb))² + V² ).  Returns [ε−, ε+] (ascending).
+pub fn qforge_chip_mo_two_band(ea: float, eb: float, v: float) -> [float] {
+    let avg = 0.5 * (ea + eb)
+    let half = 0.5 * (ea - eb)
+    let disc = _sqrt(half * half + v * v)
+    let em = avg - disc
+    let ep = avg + disc
+    return [em, ep]
+}
+
+// ── Direct / indirect gap scan over a k-mesh ──────────────────────────────────
+// Sample k uniformly over the first BZ [0, π/a] on nk points; the lower band is the
+// VALENCE band (its MAX = VBM), the upper band is the CONDUCTION band (its MIN = CBM).
+// gap = ε_CBM − ε_VBM. DIRECT iff k_VBM == k_CBM (within mesh spacing), else INDIRECT.
+// Returns [gap, kVBM, kCBM, direct] where direct = 1.0 (DIRECT) / 0.0 (INDIRECT).
+// Generic over any norb≥2 (uses band 0 as valence, band norb−1 as conduction); the
+// verdict is DATA read off eig[H(k)], not a per-model branch (d4).
+pub fn qforge_chip_mo_gap_scan(norb: int, onsite: [float], hops: [float], a: float, nk: int) -> [float] {
+    let kmax = _pi() / a
+    let mut vbm = -1.0e300
+    let mut cbm = 1.0e300
+    let mut k_vbm = 0.0
+    let mut k_cbm = 0.0
+    let last = norb - 1
+    let mut i = 0
+    while i < nk {
+        let frac = if nk > 1 { to_float(i) / to_float(nk - 1) } else { 0.0 }
+        let k = frac * kmax
+        let eps = qforge_chip_mo_bands(norb, onsite, hops, k, a)
+        let ev = eps[0]                        // valence (lowest) band at k
+        let ec = eps[last]                     // conduction (highest) band at k
+        if ev > vbm { vbm = ev ; k_vbm = k }
+        if ec < cbm { cbm = ec ; k_cbm = k }
+        i = i + 1
+    }
+    let gap = cbm - vbm
+    let dkmesh = kmax / to_float(if nk > 1 { nk - 1 } else { 1 })
+    let direct = if _abs(k_vbm - k_cbm) <= 0.5 * dkmesh { 1.0 } else { 0.0 }
+    return [gap, k_vbm, k_cbm, direct]
+}
+
+// ── Valley count: number of conduction-band minima over a k-mesh ──────────────
+// A "valley" is a local minimum of the conduction band (band norb−1) over [0, π/a].
+// Counts interior local minima + an edge minimum (a CBM pinned at k=0 or k=π/a). The
+// degenerate-valley count (e.g. Si's pair of equivalent X-valleys mapped into the
+// reduced 1D zone) is the multiplicity of the conduction minimum — read off eig (d4).
+pub fn qforge_chip_mo_valley_count(norb: int, onsite: [float], hops: [float], a: float, nk: int) -> int {
+    let kmax = _pi() / a
+    let last = norb - 1
+    // sample the conduction band.
+    let mut cb: [float] = []
+    let mut i = 0
+    while i < nk {
+        let frac = if nk > 1 { to_float(i) / to_float(nk - 1) } else { 0.0 }
+        let k = frac * kmax
+        let eps = qforge_chip_mo_bands(norb, onsite, hops, k, a)
+        cb.push(eps[last])
+        i = i + 1
+    }
+    // count strict local minima (interior) + edge minima.
+    let mut nv = 0
+    let mut j = 0
+    while j < nk {
+        let here = cb[j]
+        let mut is_min = true
+        if j > 0 {
+            if cb[j - 1] <= here { is_min = false }
+        }
+        if j < nk - 1 {
+            if cb[j + 1] < here { is_min = false }
+        }
+        if is_min { nv = nv + 1 }
+        j = j + 1
+    }
+    return nv
+}
