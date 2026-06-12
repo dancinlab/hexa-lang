@@ -77,6 +77,25 @@ loop targets what the consumer card + code can carry.
   OP-37 negation idiom + abs regression byte-exact. Verdict .verdicts/hexa-0pod/F-OP37B-HOST-ATOF-CORRECT-ROUND.txt.
   $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
 
+<!-- ANCHOR:OP-40-COMPTIME-MUL-ULP (unique anchor — OP-37b (#3073) cured the const-fold operand PARSE (strtod route) but left ONE documented 1-ULP residual on COMPUTED products (e.g. `let a = 1.421413741 * 0.5`) and ASSUMED it was the host comptime `*` (rt_mul) rounding differently from clang. OP-40 MEASURES + CLASSIFIES that residual precisely (g5, measure don't assume) to either close it or bound+document it) -->
+- [x] **OP-40 — comptime float-fold 1-ULP residual: ROOT-CAUSED to the host's hand-rolled %.17e SERIALIZE (not the multiply, not the parse, not clang FMA); FIXED via bit-exact hex-float literal → MAX 1→0 ULP** —
+  🟢 the OP-37b residual is REAL: MEASURED MAX 1 ULP, nonzero in 16/125 computed-fold cases (A&S erf products + seed=40
+  random products/sums/divisions) on a from-source rebuild — ~13%, NOT "rare" as OP-37b estimated. The OP-37b assumption
+  (host comptime `*` rounds differently from clang) is FALSIFIED with evidence: (1) the multiply IS IEEE-correct — same
+  runtime, parse_float·parse_float·* gives the exact python bits, single isolated fp64 `*`, NO FMA, -O0==-O2; (2) the parse
+  is byte-exact (OP-37b strtod). ROOT CAUSE = the comptime fold computes the CORRECT product then SERIALIZES it via
+  format_float_sci (%.17e), which in the self-host build routes through the runtime's hand-rolled snprintf override
+  (hxlcl_vsnprintf, self/runtime.c:2095, "Not bit-exact with libc's") / hexa-source rt_format_float_sci — NOT correctly-
+  rounded, round-trips bits-182 → "…117067" → bits-183 (1 ULP high). DIVERGING SIDE = the host serialize; IEEE-correct side
+  = clang/runtime (the `let`-decl emitted `hexa_float((L)*(R))` is clang-folded, bit-exact). Same fragility class as the
+  `stdlib_trig_libm` directive. FIX (g0/g4, additive +86/−9, no deletions, no runtime edit): `_cf_float_node` serializes the
+  folded double as a bit-EXACT C99 hex-float literal (`0x1.<mant>p<exp>`) via `_cf_float_hexlit` built from raw IEEE-754
+  bits with INTEGER ops only (clang parses hex-floats exactly → no decimal rounding step). RESULT: MAX 0 ULP across all 125
+  folds (python-exact). SELF-HOST FIXPOINT GREEN: 4/4 SSOT modules gen-N (Jun-8 hexat) == gen-N+1 (fixed) BYTE-IDENTICAL,
+  self-tests 15/15, OP-37 negation regression byte-exact. Not a clang-FMA issue → cross-ISA FMA invariant (OP-29/30/31)
+  unaffected. Verdict .verdicts/hexa-0pod/F-OP40-COMPTIME-MUL-ULP.txt.
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
 <!-- ANCHOR:OP-38-CKPT-RECIPE-REFLECT (unique anchor — OP-35 (#3062) BUILT + PROVED the 6th determinism surface, a deterministic training checkpoint (stdlib/flame/ckpt_lib.hexa, "FCK\x01" v1 — binary fp64 little-endian bit-pattern reinterpret, full [t][n_params][W,m,v] state, resume==uninterrupted max|Δ|=0). The capability existed + was oracle-locked but its discoverability across the two contributor doc SSOTs was incomplete: the determinism contract's CHECKPOINT row asserted "not shortest-round-trip text" without tying it to OP-37's MEASURED to_string/%g lossiness, and the dojo had NO practical checkpoint recipe. OP-38 reflects the capability into both surfaces — docs-only, NO new code/oracle, NO .tape, g84 no-paper) -->
 - [x] **OP-38 — deterministic checkpoint (ckpt_lib FCK v1) reflected into the determinism contract + dojo recipe (docs-only)** —
   docs/flame-determinism-contract.md REFINED (no duplicate): the CHECKPOINT row + "what breaks it" bullet now tie the

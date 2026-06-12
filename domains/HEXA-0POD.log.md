@@ -1820,3 +1820,36 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   build-host work item (new coherent anchor → ladder fixpoint+parity → re-pin FROZEN_SEED_REF → gate auto-GREEN →
   drop the 3 continue-on-error lines). $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
   Verdict .verdicts/hexa-0pod/F-OP39B-SEED-PROMOTE-FLIP.txt.
+
+## OP-40 — comptime float-fold 1-ULP residual ROOT-CAUSED (host %.17e serialize, NOT the multiply) + FIXED via bit-exact hex-float → MAX 0 ULP — 2026-06-12
+- TASK (OP-37b's deferred residual): OP-37b cured the const-fold operand PARSE (strtod) → MAX 3→1 ULP, and ASSUMED
+  the remaining 1 ULP on computed products was "host comptime `*` (rt_mul) rounding differently from clang". OP-40 =
+  MEASURE + CLASSIFY that residual precisely (g5, measure don't assume), then close or bound+document.
+- MEASUREMENT (125 FIXED cases: A&S erf products + seed=40 random products/sums/divisions; each `let cN = A op B`
+  comptime fold then USED → triggers the fold-serialize; f64_to_bytes_le vs python struct.pack('<d', A op B)):
+  · BEFORE (OP-37b state, %.17e serialize): MAX 1 ULP, nonzero in 16/125 (~13% — NOT "rare" as OP-37b estimated).
+  · AFTER  (OP-40 hex-float serialize):     MAX 0 ULP, 0/125 — every fold == python correctly-rounded IEEE.
+  · canonical 0.254829592*0.284496736: IEEE bits-182 (=python=clang runtime); BEFORE host emit "…117067"→bits-183
+    (+1 ULP); AFTER "0x1.28f3dbedf555ep-4"→bits-182 (exact).
+- ROOT CAUSE (OP-37b assumption FALSIFIED with evidence): the multiply is IEEE-CORRECT (same runtime parse_float·*
+  gives exact python bits; rt_mul = single isolated fp64 `*`, NO FMA, -O0==-O2) and the parse is byte-exact (strtod).
+  The bug is the SERIALIZE: the fold computes the CORRECT product then format_float_sci(%.17e) routes through the
+  runtime's hand-rolled snprintf override (hxlcl_vsnprintf, self/runtime.c:2095, "Not bit-exact with libc's") /
+  hexa-source rt_format_float_sci — NOT correctly-rounded — round-tripping bits-182→string→bits-183. DIVERGING SIDE
+  = host serialize; IEEE-correct side = clang (the `let`-decl `hexa_float((L)*(R))` is clang-folded, exact). This is
+  the same hand-rolled-arithmetic fragility the `stdlib_trig_libm` directive warns about. NOT a clang-FMA artifact →
+  cross-ISA FMA invariant (OP-29/30/31) and -ffp-contract policy UNAFFECTED.
+- FIX (g0/g4, additive +86/−9, no deletions, no runtime edit, no .tape): `_cf_float_node` now serializes the folded
+  double as a bit-EXACT C99 hex-float literal (`0x1.<mant>p<exp>`) via `_cf_float_hexlit` (+ `_cf_nib_hex`), built
+  from raw IEEE-754 bits with INTEGER ops only (float_to_bits → sign/exp/mantissa via >>/&, 13 nibbles, trailing-zero
+  strip; inf/NaN→__builtin_inf/nan, ±0→±0x0p+0, subnormals handled). clang parses hex-floats EXACTLY → no decimal
+  rounding step → the lossy hand-rolled formatter is bypassed. The integer formatter validated 2013 random doubles
+  (subnormal..1e308) 0 mismatch + matches libc %a.
+- FIXPOINT GREEN: 4/4 SSOT modules (lexer/parser/type_checker/codegen) gen-N (Jun-8 hexat) == gen-N+1 (OP-40-fixed
+  hexat) BYTE-IDENTICAL (cmp clean) — the change does not alter the compiler's own emitted C. self/type_checker
+  self-tests 15/15. OP-37 negation idiom regression byte-exact (preserves source text, never reaches _cf_float_node).
+- OUTCOME: 🟢 GREEN, residual CLOSED (1→0 ULP). milestone OP-40 [x]. Rebuild/measure recipe = tool/regen_cc_manual
+  (HEXA_V2=~/.hx/bin/build/hexat) → clang single-TU (runtime.c inlined). Deploy boundary = same frozen-seed re-pin
+  OP-37b/OP-39b flagged (🟠 out of 0-pod scope; this fixes REPO SOURCE + proves on from-source rebuild + fixpoint).
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+  Verdict .verdicts/hexa-0pod/F-OP40-COMPTIME-MUL-ULP.txt.
