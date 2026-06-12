@@ -38,6 +38,51 @@
   (OP-59) ∪ non-ML AUDITED (OP-62: 82 clean + 29 compiler-closure + 44 live-caller KEEP + 10 dereg). No
   non-ML true-falsified entry with a dead caller remains. $0 · 0-pod · 0-GPU · no vast · no foreign pod ·
   no .tape edit. Verdict .verdicts/hexa-0pod/F-OP62-NONML-ROSTER-AUDIT.txt.
+## 2026-06-13 — OP-63 DONE: HONEST-NUMBER hardening of the OP-60/OP-61 route-(a) own-GEMM selector — TAG each pick provenance ∈ {measured, extrapolated} + verdict ref (only 3 of 8 shapes GPU-measured) + CONSERVATIVE fallback (extrapolated AND non-MODE8 → MODE-8) · regression-lock ALL PASS exit 0 (teeth: false-"measured" mutation → exit 1) · NO measured constant changed · NO GPU · $0 · 0-pod
+- TASK: OP-60 built the importable route-(a) own-GEMM selector + JSON + regression test; OP-61 wrote its
+  flame integration contract. BUT the selector's picks are only GPU-MEASURED at 3 of 8 shapes; the picks at
+  D=256/512/1024/1536/8192 are cost-model EXTRAPOLATIONS, never GPU-run. Presenting extrapolated picks
+  indistinguishably from measured ones violates the honest-number discipline (same class as the retired
+  ~1656x figure). OP-63 (0-pod, NO GPU) tags provenance + makes the integration fallback conservative on
+  unmeasured shapes. It LABELS the unmeasured picks honestly — it does NOT claim them measured.
+- SURVEY (READ before writing): routea_selection.json + routea_cost_model.py (selected_config / select /
+  the cost model) + test_routea_selector.py + F-OP60-SELECTOR-OPERATIONAL + F-OP61-SELECTOR-FLAME-CONTRACT +
+  forge-routea doc "## own-GEMM parity map" (OP-58). MEASURED split established from the parity map: D=768
+  F-OP54 (consumer sm_120 64x64) · D=2048 F-OP45GPU (Hopper MODE8 NST3 winner ~315) · D=4096 F-OP45GPU/
+  F-OP55 (Hopper MODE8 ~283.9). The other 5 (D=256/512/1024/1536/8192) = cost-model EXTRAPOLATIONS.
+- SPLIT (3 measured / 5 extrapolated): 256 MODE_t64 extrap · 512 MODE_t64 extrap · 768 MODE8 MEASURED
+  (F-OP54) · 1024 MODE8 extrap · 1536 MODE8 extrap · 2048 MODE8 MEASURED (F-OP45GPU) · 4096 MODE8 MEASURED
+  (F-OP45GPU/F-OP55) · 8192 MODE8 extrap.
+- DELIVERABLES (additive only):
+  · routea_cost_model.py — NEW MEASURED_SHAPES map + shape_provenance(D); selected_config() now ALSO emits
+    `provenance` ∈ {measured, extrapolated} + `verdict` (cited for measured, "" for extrapolated). The
+    mode/tile/nst/swizzle/threads/pred_tflops fields are UNCHANGED (verified byte-identical vs HEAD).
+  · routea_selection.json — REGENERATED FROM selected_config() (not hand-edited); each selection carries
+    provenance + verdict; + a new "_provenance_policy" header. All 8 original numeric/structural fields
+    verified byte-identical vs HEAD.
+  · CONSERVATIVE FALLBACK — OP-61 doc §(b) gains case 3: extrapolated AND non-MODE8 → fall back to MODE-8
+    128x128 parity winner (never launch a non-MODE8 kernel on a shape whose pick was never GPU-validated).
+    HONEST: changes NOTHING in today's table (every extrapolated pick is MODE8 or the already-fallback
+    MODE_t64) — it HARD-GUARDS future cost-model edits that might extrapolate a non-MODE8 pick onto an
+    unmeasured shape. Updated the dispatch pseudocode.
+  · test_routea_selector.py — NEW OP-63 provenance-lock block: (a) every measured shape→provenance=measured
+    + non-empty verdict; (b) every other→extrapolated + empty verdict; (c) the conservative-fallback
+    predicate (extrapolated AND non-MODE8 → must fall back) holds for the current table. ALL PASS / exit 0.
+- TEST (verbatim): "OP-60 SELECTOR REGRESSION LOCK: ALL PASS (canonical picks match measured reality ·
+  never a swizzle · @D=4096 is MODE8 · small-D 64x64 fill · ordering anchors intact)" + the OP-63 block
+  "GPU-MEASURED shapes: 3 of 8 ... -> OK" + "conservative-fallback predicate ... -> OK". exit 0.
+- TEETH: a deliberate false-"measured" mutation on a COPY (D=1024 tagged "F-FAKE-NEVER-MEASURED") FAILS the
+  lock — "OP-60 SELECTOR REGRESSION LOCK: FAIL (2 assertion(s) broken)" + MUTATED EXIT=1. Copy deleted;
+  shipped file UNTOUCHED (still ALL PASS, exit 0). Cost model's OP-53 harness still "ALL PASS".
+- TIER: 🟢 GREEN for the parts actually RUN/ASSERTED (tagging + lock + regenerated JSON). The EXTRAPOLATED
+  picks remain HONESTLY-LABELED-UNMEASURED — OP-63's whole purpose is to mark them so, NOT to promote them.
+  Only 3 of 8 shapes GPU-measured — stated honestly. NO measured constant changed, NO GPU, NO kernel
+  change, NO new measurement, NO self/env.hexa touched.
+- DELIVERABLES: self/native/wgmma/{routea_cost_model.py, routea_selection.json, test_routea_selector.py} ·
+  docs/forge-routea-shape-adaptive.md (OP-61 §(b) case-3 guard) · .verdicts/hexa-0pod/F-OP63-SELECTOR-
+  PROVENANCE.txt · this log + the OP-63 milestone [x] in the .md.
+- $0, 0-pod, no vast, no pod, no foreign pod, leak-0. MAIN.tape #-comment SKIPPED (untracked-on-origin,
+  OP-54/57/58/60/61 precedent — avoids a merge race).
 
 ## 2026-06-13 — OP-61 DONE: INTEGRATION CONTRACT operationalizing the OP-60 route-(a) own-GEMM shape-adaptive selector toward flame production — dispatch hook (QUOTED from clm_prod.hexa/codegen/runtime/forge_tier_v1) + fallback-to-MODE-8 + bit-exact invariant (rel_rms 0) + next-session GPU validation plan · DESIGN ONLY, 🟠 SUPPORTED-BY-DESIGN · NO code wired · NO GPU · $0 · 0-pod
 - TASK: OP-60 made the route-(a) own-GEMM shape-adaptive selector (selected_config + routea_selection.json

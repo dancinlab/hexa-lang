@@ -266,15 +266,62 @@ def select_config(D, M=None, N=None, K=None):
     t, name, nst = best
     return name, nst, t, ranked
 
+# =====================================================================================
+# OP-63 PROVENANCE — which SHAPES carry a real GPU verdict vs which are cost-model
+# EXTRAPOLATIONS. Honest-number discipline (g5): an extrapolated pick must NEVER be
+# presented indistinguishably from a measured one (the same class of error as the retired
+# ~1656x figure). The selector's PICKS were validated by the cost model at every shape, but
+# the underlying own-GEMM was only GPU-MEASURED at THREE square shapes:
+#   D=768  — F-OP54-SUMMER-OWNGEMM-TF32 (consumer sm_120 64x64 own-GEMM, real RTX 5070)
+#   D=2048 — F-OP45GPU-OCCUPANCY-SWEEP  (Hopper sm_90a MODE8 NST3 measured winner, ~315 TFLOP/s)
+#   D=4096 — F-OP45GPU-OCCUPANCY-SWEEP / F-OP55-NEWTILE-D4096 (Hopper sm_90a MODE8, ~283.9)
+# Every OTHER shape (D=256/512/1024/1536/8192) is a cost-model EXTRAPOLATION — never GPU-run.
+# This is per-SHAPE, NOT per-mode: it records whether THAT shape has a measured anchor, which
+# is what the conservative integration fallback (OP-61 §(b)) keys on.
+MEASURED_SHAPES = {
+    256:  None,                                            # extrapolated
+    512:  None,                                            # extrapolated
+    768:  "F-OP54-SUMMER-OWNGEMM-TF32",                    # measured (consumer sm_120 64x64)
+    1024: None,                                            # extrapolated
+    1536: None,                                            # extrapolated
+    2048: "F-OP45GPU-OCCUPANCY-SWEEP",                     # measured (Hopper MODE8 NST3 winner)
+    4096: "F-OP45GPU-OCCUPANCY-SWEEP/F-OP55-NEWTILE-D4096",# measured (Hopper MODE8 large-D)
+    8192: None,                                            # extrapolated
+}
+
+def shape_provenance(D):
+    """OP-63: return (provenance, verdict_ref) for a SQUARE shape D.
+    provenance ∈ {"measured","extrapolated"}; verdict_ref is the citing verdict for a
+    measured shape, else "" (extrapolated shapes have no GPU verdict to cite). A shape is
+    "measured" ONLY if the own-GEMM was actually GPU-RUN at that D (MEASURED_SHAPES)."""
+    ref = MEASURED_SHAPES.get(D)
+    if ref:
+        return "measured", ref
+    return "extrapolated", ""
+
 def selected_config(D, M=None, N=None, K=None):
-    """OPERATIONAL launch dict — the thin {mode, tile, NST, swizzle, threads, pred_tflops}
-    record a host-side launcher / a build-integration step consumes WITHOUT re-deriving the
-    cost model. Pure projection of select_config over the MODES table (no measured constant
-    is recomputed here). This is the importable artifact OP-60 locks with a regression test
-    and serializes to routea_selection.json. `swizzle` is ALWAYS False by construction — the
-    SELECTABLE set structurally excludes every swizzle mode (OP-52 closed-neg)."""
+    """OPERATIONAL launch dict — the thin {mode, tile, NST, swizzle, threads, pred_tflops,
+    provenance, verdict} record a host-side launcher / a build-integration step consumes
+    WITHOUT re-deriving the cost model. Pure projection of select_config over the MODES table
+    (no measured constant is recomputed here). This is the importable artifact OP-60 locks
+    with a regression test and serializes to routea_selection.json. `swizzle` is ALWAYS False
+    by construction — the SELECTABLE set structurally excludes every swizzle mode (OP-52
+    closed-neg).
+
+    OP-63: each emitted pick now carries an HONEST `provenance` ∈ {measured, extrapolated} +
+    a `verdict` ref (cited for measured shapes, "" for extrapolated). The mode/tile/NST/
+    swizzle/threads/pred_tflops fields are UNCHANGED — provenance is purely additive. M/N/K
+    only carry a measured provenance for a SQUARE shape that matches a measured D; any non-
+    square shape is extrapolated (the cost model was anchored only on square verdicts)."""
     name, nst, t, _ = select_config(D, M, N, K)
     cfg = MODES[name]
+    # provenance is keyed on the SQUARE shape D; a non-square pick (M/N/K diverge from D) was
+    # never GPU-anchored, so it is extrapolated regardless of D.
+    square = (M is None or M == D) and (N is None or N == D) and (K is None or K == D)
+    if square:
+        prov, verdict = shape_provenance(D)
+    else:
+        prov, verdict = "extrapolated", ""
     return {
         "mode": name,
         "tile": [cfg["tm"], cfg["tn"]],
@@ -282,6 +329,8 @@ def selected_config(D, M=None, N=None, K=None):
         "swizzle": bool(cfg.get("swz", False)),
         "threads": cfg.get("threads", THREADS_PER_CTA),
         "pred_tflops": round(t, 1),
+        "provenance": prov,
+        "verdict": verdict,
     }
 
 # ---- shape buckets (the policy) ----

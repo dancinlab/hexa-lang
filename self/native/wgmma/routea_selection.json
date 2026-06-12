@@ -2,13 +2,16 @@
   "_about": "OP-60 (HEXA-0POD) operational route-(a) own-GEMM shape-adaptive selection table. EMITTED by self/native/wgmma/routea_cost_model.py selected_config() \u2014 the validated cost-model picks (OP-49/OP-53), measured-anchored (OP-45GPU/OP-52/OP-55/OP-58). Consumed by a future GPU-build/integration step WITHOUT re-running Python. Regression-locked by self/native/wgmma/test_routea_selector.py.",
   "_hw": "H100 sm_90a (132 SMs, 228KB smem/SM). Square shapes M=N=K=D.",
   "_swizzle_policy": "swizzle is ALWAYS false \u2014 swizzle modes structurally excluded from the SELECTABLE set (OP-52 measured -1.6% closed-neg).",
+  "_provenance_policy": "OP-63: each selection carries provenance \u2208 {measured, extrapolated}. Only D=768 (F-OP54), D=2048 (F-OP45GPU), D=4096 (F-OP45GPU/F-OP55) are GPU-MEASURED; D=256/512/1024/1536/8192 are cost-model EXTRAPOLATIONS (never GPU-run). The integration fallback (OP-61 \u00a7b) is CONSERVATIVE: an extrapolated pick that is NOT MODE8 must fall back to the MODE8 128x128 parity winner \u2014 never launch a non-MODE8 kernel on a shape whose pick was never GPU-validated.",
   "_verdicts": [
     "F-OP45GPU-OCCUPANCY-SWEEP",
     "F-OP52-TF32-GAP-CLOSE",
     "F-OP53-SMALLTILE-LAUNCHER-DESIGN",
+    "F-OP54-SUMMER-OWNGEMM-TF32",
     "F-OP55-NEWTILE-D4096",
     "F-OP58-OWNGEMM-PARITY-MAP",
-    "F-OP60-SELECTOR-OPERATIONAL"
+    "F-OP60-SELECTOR-OPERATIONAL",
+    "F-OP63-SELECTOR-PROVENANCE"
   ],
   "generated": "2026-06-13",
   "selections": [
@@ -22,6 +25,8 @@
       "swizzle": false,
       "threads": 128,
       "pred_tflops": 32.0,
+      "provenance": "extrapolated",
+      "verdict": "",
       "D": 256,
       "regime": "small-D (under-fill)"
     },
@@ -35,6 +40,8 @@
       "swizzle": false,
       "threads": 128,
       "pred_tflops": 125.4,
+      "provenance": "extrapolated",
+      "verdict": "",
       "D": 512,
       "regime": "small-D (under-fill)"
     },
@@ -48,6 +55,8 @@
       "swizzle": false,
       "threads": 256,
       "pred_tflops": 90.6,
+      "provenance": "measured",
+      "verdict": "F-OP54-SUMMER-OWNGEMM-TF32",
       "D": 768,
       "regime": "small-D (under-fill)"
     },
@@ -61,6 +70,8 @@
       "swizzle": false,
       "threads": 256,
       "pred_tflops": 160.0,
+      "provenance": "extrapolated",
+      "verdict": "",
       "D": 1024,
       "regime": "small-D (under-fill)"
     },
@@ -74,6 +85,8 @@
       "swizzle": false,
       "threads": 256,
       "pred_tflops": 178.4,
+      "provenance": "extrapolated",
+      "verdict": "",
       "D": 1536,
       "regime": "medium-D (parity zone)"
     },
@@ -87,6 +100,8 @@
       "swizzle": false,
       "threads": 256,
       "pred_tflops": 315.0,
+      "provenance": "measured",
+      "verdict": "F-OP45GPU-OCCUPANCY-SWEEP",
       "D": 2048,
       "regime": "medium-D (parity zone)"
     },
@@ -100,6 +115,8 @@
       "swizzle": false,
       "threads": 256,
       "pred_tflops": 286.7,
+      "provenance": "measured",
+      "verdict": "F-OP45GPU-OCCUPANCY-SWEEP/F-OP55-NEWTILE-D4096",
       "D": 4096,
       "regime": "large-D (drain/scheduling-bound)"
     },
@@ -113,6 +130,8 @@
       "swizzle": false,
       "threads": 256,
       "pred_tflops": 243.1,
+      "provenance": "extrapolated",
+      "verdict": "",
       "D": 8192,
       "regime": "large-D (drain/scheduling-bound)"
     }
