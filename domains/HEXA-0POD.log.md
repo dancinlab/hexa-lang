@@ -19,6 +19,59 @@
   permille was the LONE contradiction (wrap_pi-style). No 🟠 behavior-bug surfaced. Verdict
   .verdicts/hexa-0pod/F-OP70-MATH-CONTRACT-AUDIT.txt. Milestone OP-70 [x].
 
+## 2026-06-13 — OP-69 DONE: COMPLETE the flame determinism-contract enforcement coverage — audit the OTHER layers for the documented-but-ungated gap OP-66 closed for layer-2 · FINDING: LAYER 3 (cross-ISA FMA-free) was DOCUMENTED + held in source but UNGATED · new tool/flame_steppath_fma_gate.sh (pure grep, no ./hexa/no seed) wired BLOCKING in nobaseline-gate.yml ALL 3 ISA legs · PROVEN pass-clean (exit 0, 6 files) + fail-on-regression (clm_prod.hexa:212 farr_matmul + moe_lib t_matmul, exit 1) · $0 · 0-pod · NO GPU · byte-eq fixpoint untouched
+- SURVEY (STEP 1 — read docs/flame-determinism-contract.md IN FULL; enumerate ALL 3 run-step
+  determinism layers + the 4th compile-step + per-phase sub-invariants; grep .github/workflows +
+  tool/ for an enforcing gate per invariant). COVERAGE MATRIX:
+  · LAYER 1 (RUN-TO-RUN, max|Δ|=0): per-phase byte-eq oracles F-OP2/7/8/9/11/12/13 + OP-15
+    capstone (clm_prod_*_eq.hexa + clm_step_determinism_eq.hexa). ⚠ DEFERRED — these need a BUILT
+    ./hexa to RUN the production op order vs a re-layout reference; 0-pod-RUNNABLE but NOT pure-
+    static-grep (need the seed toolchain; CI's frozen seed predates flame source — same staleness
+    keeping OP-39 advisory). NOT faked into a static gate; recorded as documented-but-deferred.
+  · LAYER 2 (libm-FREE): 🟢 PROVEN-GATED. tool/flame_steppath_libm_gate.sh BLOCKING (OP-66 #3186,
+    F-OP66) + tool/fold_ci_gate.sh BLOCKING all-3-legs (OP-34, dt_exp/dt_erf golden FOLD VALUES).
+    No new gate needed (the pointers ARE the deliverable, g5).
+  · LAYER 3 (cross-ISA FMA-FREE): ⛔ UNGATED → THE GAP. A determinism-path matmul must NOT route
+    through the raw FMA-fused C farr_matmul kernel (clang fuses a*b+c → single fma on arm64 [1
+    rounding] vs mul+add on x86 [2 roundings] → divergent bytes per ISA; F-OP29 measured arm64 ck
+    241449363 vs x86 ck 1401117690). DOCUMENTED in §1 (cross-ISA invariant) + the "what breaks the
+    contract" checklist + HELD in source (clm_prod.hexa routes conv GEMMs through the
+    forge_dispatch_matmul dispatcher seam, NOT raw farr_matmul) — but grep .github/workflows + tool/
+    for farr_matmul found NO enforcing gate. The exact layer-2 analogue OP-66 closed → PICKED.
+  · COMPILE-STEP (hex-float const-fold): 🟢 GATED. tool/op39_constfold_gate.sh all-3-legs, 18 folds
+    (OP-39 13 + OP-42 5 hex-float MUL_HF*), continue-on-error advisory-until-seed-promote (honest
+    rationale: frozen seed pre-dates the OP-37/37b/40 source fix). Not an OP-69 gap.
+  · SCHEDULE libm-cos ban (F-OP33) SUBSUMED by layer-2 (cos/sin in the libm-gate forbidden set).
+    CHECKPOINT (F-OP35) + B>1 conv seam (F-OP10) = RUNTIME byte-eq, same DEFERRED class as layer-1.
+- THE LAYER-3 INVARIANT HOLDS IN SOURCE (pre-gate): raw farr_matmul(/t_matmul( call-sites (code
+  only, minus the forge_dispatch_matmul seam) across the trainer step-path = 0 in clm_prod.hexa +
+  flame_math/gn_lib/optim_lib/moe_lib/quant_lib. The raw-kernel sites in the tree are all OFF the
+  CLMConvMoE step: tensor_lib:61 (DEFINES t_matmul — primitive), conv_lib:89/113 (nn_conv1d_* —
+  trainer uses its OWN inlined conv1d_via_forge instead), nn_lib:389-1050 (attention/SwiGLU/MLP
+  DECODER arch — different model), decoder_block_lib:149/197 (OP-29 2nd arch — DELIBERATELY
+  farr_matmul-routed to match anima d5_proj_batch_g flame↔anima byte-eq, its cross-ISA layer is the
+  documented-DEFERRED case per F-OP29 HOLE-2). All four intentionally NOT scanned (low blast radius).
+- THE GATE: tool/flame_steppath_fma_gate.sh — pure-lexical grep over the trainer FILES allow-list;
+  forbids whole-word raw farr_matmul(/t_matmul(; excludes // comments + the forge_dispatch_matmul/
+  _t/_batched dispatcher seam (compliant). Exit 0 clean / 1 regression / 2 absent (neutral). Modeled
+  EXACTLY on OP-66's flame_steppath_libm_gate.sh (allow-list grep gate, no ./hexa/no seed).
+- PROOF (verbatim): CLEAN main → 6 PASS, GATE PASSED, EXIT=0. REGRESSION A (clm_prod.hexa:212
+  forge_dispatch_matmul→farr_matmul): FAIL clm_prod.hexa "212: let mm = farr_matmul(xcol, T, Kdim,
+  Wt, Cout)" EXIT=1 → reverted EXIT=0. REGRESSION B (raw t_matmul into moe_lib first fn): FAIL
+  moe_lib.hexa "59: let _bogus = t_matmul(0, 1, 1, 0, 1)" EXIT=1 (the 5 forge_dispatch_matmul( seam
+  call-sites in clm_prod.hexa correctly IGNORED — clm_prod.hexa passes clean in both drives) →
+  reverted EXIT=0. False-positive check: dispatcher seam not flagged.
+- WIRING: BLOCKING in nobaseline-gate.yml ALL 3 jobs (darwin-arm64 after OP-66; linux-x86_64 +
+  linux-arm64 after OP-34) — the layer-3 invariant IS the cross-ISA property so the lock is
+  symmetric across the arm64 + x86 legs. No seed dependency (pure grep) → real, not advisory.
+  YAML validated (python yaml.safe_load OK). docs/flame-determinism-contract.md §1 + verdict
+  F-OP69-DETERMINISM-GATE-COVERAGE.txt written. NO codegen/runtime/stdlib edit → byte-eq fixpoint
+  UNTOUCHED. $0 · 0-pod · NO GPU · no vast · no foreign-pod touch · leak-0 · no .tape · no env.hexa.
+- TIER 🟢 GREEN — documented-but-unenforced LAYER 3 now CI-locked by a tripwire proven pass-clean-
+  on-main + fail-on-regression; layer-2 + compile-step PROVEN-GATED (pointers recorded); layer-1 +
+  checkpoint + seam honestly DEFERRED (runtime byte-eq, not static-checkable). An audit that closes
+  the one genuine static gap + honestly records the gated + deferred rest = SUCCESS (g5/g63).
+
 ## 2026-06-13 — OP-66 DONE: WIRE the MISSING CI tripwire enforcing flame determinism-contract LAYER 2 ("NO libm transcendental on the CLMConvMoE production step") · documented (§1) + held in source but UNGATED · new tool/flame_steppath_libm_gate.sh (pure grep, no ./hexa/no seed) wired BLOCKING in nobaseline-gate.yml · PROVEN pass-clean (exit 0) + fail-on-regression (clm_prod.hexa:938 + nn_gelu_fwd, exit 1) · $0 · 0-pod · NO GPU · byte-eq fixpoint untouched
 - SURVEY (broader forge/flame frontier deep-dive; route-(a) own-GEMM GENUINELY CLOSED OP-58..64):
   · (a) flame bit-exact training flagship — docs/flame-determinism-contract.md defines 3 determinism
