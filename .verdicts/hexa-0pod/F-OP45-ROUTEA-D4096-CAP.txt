@@ -1,0 +1,171 @@
+F-OP45-ROUTEA-D4096-CAP — STATIC (0-pod, NO GPU) characterization of WHY route-(a) own-GEMM
+(b14 MODE 8, the bit-exact PDEP dual-issue path) crosses cuBLAS-TF32 parity @D=2048 (1.08x,
+315 TFLOP/s, rel_rms 0) but DOES NOT @D=4096 (~1.50x, 284 TFLOP/s). Source-level register /
+smem / occupancy / wave accounting — nvcc NOT local (CPU-only), so ptxas -Xptxas -v could NOT
+be captured; this is the SOURCE-LEVEL static analysis + the exact GPU test matrix it hands off.
+================================================================================================
+TIER: 🟠 DEFERRED (partial-static-positive + honest GPU handoff). The static analysis DISPROVES
+      the verdict's own one-line "256-elt register-realloc ptxas-cap" attribution as the cause OF
+      THE MEASURED D=4096 NUMBER (that lever is a DIFFERENT kernel — MODE 5 / W11 / W12 — that
+      was never the D=4096 datapoint), and POSITIVELY classifies the residual as (d) memory /
+      large-D-scheduling roofline (cuBLAS GAINS +24.6% at D=4096 while the fixed-config MODE 8
+      kernel does NOT), NOT (a) register-spill, NOT (b) occupancy-drop, NOT (c) a D-independent
+      ptxas instruction-scheduling ceiling. The (a)/(b)/(c) hypotheses are STATICALLY EXCLUDED
+      with source evidence; (d) is the surviving classification but its EXACT split (HBM-BW-bound
+      vs cuBLAS-split-K/large-tile-scheduling) can only be CONFIRMED with a real GPU profile —
+      the precise test matrix for the OP-45-GPU sibling is specified below.
+
+DATE: 2026-06-12
+HW:   NONE (0-pod static). `which nvcc` -> not found (CPU-only macOS Darwin host). ptxas runs on
+      CPU and WOULD give registers/spill/occupancy without a GPU, but no nvcc is installed
+      locally, so the register/smem numbers below are taken from the W-LADDER VERDICTS that DID
+      capture them on-pod (W10/W11/W12/OG16/OG17, .verdicts/hexa-fusion/) + derived from the
+      kernel SOURCE (self/native/wgmma/wgmma_tf32_b14.cu). $0, no vast, no foreign pod, leak-0.
+INPUT: F-GPU-ROUTEA-KEEPBAND-MEASURE.txt (#3094, the D=4096 datapoint + the "ptxas-capped" claim)
+       + self/native/wgmma/wgmma_tf32_b14.cu MODE 8 (gemm_og17_b14, the measured kernel)
+       + .verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-{W10,W11,W12,OG16,OG17}.txt (on-pod reg/occ).
+
+================================================================================================
+THE MEASURED DATAPOINTS (verbatim from F-GPU-ROUTEA-KEEPBAND-MEASURE.txt, median of 3 reps):
+================================================================================================
+  D=2048 b14 MODE8 NST=3 PDEP=2:  own 315.0  cuBLAS-TF32 342.5  ratio 1.08x  rel_rms 0  PARITY=YES
+  D=4096 b14 MODE8 NST=3 PDEP=1:  own 283.9  cuBLAS-TF32 426.8  ratio 1.50x  rel_rms 0  PARITY=NO
+  (verdict footnote: "@4096 cuBLAS scales better; the larger problem stays ~1.5x - the un-attacked
+   residual is the 256-elt-tile register-realloc ptxas cannot grant on TF32, the W12/OG17-MODE5
+   closed-neg.")
+
+================================================================================================
+STATIC FINDING 1 - THE MEASURED KERNEL IS CONFIG-IDENTICAL AT D=2048 AND D=4096 (rules out a/b/c)
+================================================================================================
+gemm_og17_b14 (MODE 8) is the kernel measured at BOTH D. Its tile / register / smem footprint is
+a COMPILE-TIME CONSTANT, INDEPENDENT of the runtime matrix dimension D (M=N=K=D is a kernel
+ARGUMENT, not a template parameter). Source evidence (wgmma_tf32_b14.cu:641, :653, :624-625):
+  - TILE: `const int TM=128,TN=128` - fixed 128x128 output tile at every D.
+  - ACCUMULATORS: `float d0[32],d1[32]` (line 653) = 2 fragments x 32 = 64 accumulator regs/thread.
+    This is HALF the 128-reg footprint of the 4-accumulator (d0..d3) 128x256 tile.
+  - SMEM: SWBUF = (TM+TN)*TKSW*4 = (128+128)*32*4 = 32768 B/stage; at NST=3 = 98304 B ~= 96 KB/CTA
+    + the NST mbarriers. Verdict header confirms: "2 CTA/SM, 96.0 KB/CTA dynsmem" - SAME line for
+    D=2048 AND D=4096 (the D=4096 sweep lines 82-85 use MODE8 NST=3, identical 96 KB/CTA).
+  - OCCUPANCY: 96 KB/CTA -> 2 CTA/SM on H100 (228 KB/SM ceiling; 2*96=192<228). HELD at both D.
+  - PDEP only deepens the wgmma SCOREBOARD depth (wgmma.wait_group PDEP), NOT the smem ring
+    (source comment :623-624: "NO smem growth beyond NST ... occupancy unchanged at the same NST").
+=> The register count, the smem footprint, AND the occupancy (2 CTA/SM) are BYTE-FOR-BYTE THE SAME
+   binary/config at D=2048 and D=4096. The kernel does not recompile or re-tile per D. Therefore:
+   (a) register-SPILL - EXCLUDED. Spill is a property of the compiled binary; the binary is
+       identical at both D. If it didn't spill @2048 (it didn't - 315 TFLOP/s @ 2 CTA/SM), it
+       cannot spill @4096. The "256-elt register-realloc" in the verdict footnote refers to MODE 5
+       (gemm_og17_t256, d0..d3 = 128 regs, line 760), a DIFFERENT kernel that was NOT the D=4096
+       MODE 8 datapoint. Misattribution: the footnote borrowed the W12/MODE5 closed-neg cause.
+   (b) occupancy-DROP at larger D - EXCLUDED. 2 CTA/SM at both D (same 96 KB/CTA). Occupancy is
+       not a function of D for a fixed-tile kernel. (Occupancy DOES halve at NST>=4 -> 1 CTA/SM,
+       verdict line 79, but that is the NST lever, swept and rejected at BOTH D, not a D-effect.)
+   (c) a genuine D-independent ptxas instruction-scheduling CEILING - EXCLUDED as the EXPLANATION
+       of the GAP. A D-independent ceiling would cap own at the SAME TFLOP/s at both D. But own
+       MOVES with D (315 -> 284, a -9.9% CHANGE). A constant ceiling cannot produce a D-dependent
+       number. (ptxas scheduling quality is real and bounds the absolute ~300 TFLOP/s level, but
+       it is NOT what opens the 1.08x->1.50x gap, because it is the same compiled schedule at both.)
+
+================================================================================================
+STATIC FINDING 2 - THE GAP IS DRIVEN BY cuBLAS GAINING +24.6% AND own LOSING -9.9% AT LARGER D
+================================================================================================
+Decompose the ratio change 1.08x -> 1.50x into the two operands (verdict verbatim numbers):
+  cuBLAS-TF32:  342.5 -> 426.8 TFLOP/s   = 1.246x   (+24.6%)   <-- cuBLAS SCALES UP with D
+  own (MODE 8): 315.0 -> 283.9 TFLOP/s   = 0.901x   (-9.9%)    <-- own SCALES DOWN with D
+  ratio:        1.08x  -> 1.50x          (1.50/1.08 = 1.39 = 1.246/0.901, exact decomposition)
+=> ~63% of the gap-widening is cuBLAS getting FASTER at D=4096; ~37% is own getting SLOWER.
+   Neither operand is "flat with a ptxas ceiling" - both MOVE, in OPPOSITE directions.
+
+WHY cuBLAS GAINS at D=4096 (static reasoning, the dominant term):
+  - At D=4096 the GEMM has 8x the FLOPs (4096^3/2048^3 = 8x) but 4x the output tiles (1024 vs 256)
+    and 2x the K-slabs (nks=K/32: 128 vs 64). cuBLAS picks a DIFFERENT, larger, deeper-pipelined
+    kernel/heuristic per shape (split-K, bigger tiles, persistent CTAs, wave quantization tuned to
+    132 SMs). Its arithmetic intensity rises and its fixed per-launch / tail-wave overheads
+    amortize over 8x the work -> it climbs toward its own roofline.
+  - The hexa MODE 8 kernel uses a SINGLE fixed 128x128 plain-launch schedule (gridDim =
+    (D/128)x(D/128) = 32x32 = 1024 CTAs at D=4096), one CTA per output tile, no split-K (forbidden
+    by g5 - split-K forfeits the bit-exact accumulation order), no persistent rasterization in
+    MODE 8 (the persistent + swizzle lever is MODE 7, not MODE 8). It cannot adapt its tile to the
+    larger problem, so it does not capture the large-D scheduling gains cuBLAS does.
+
+WHY own LOSES -9.9% at D=4096 (static reasoning, the secondary term):
+  - 2x the K-slabs (nks 64->128) means 2x the K-loop iterations per tile, each ending in
+    `wgmma.commit_group` + `wait_group PDEP` + `__syncthreads()` (line 692-694). The per-slab
+    pipeline-drain + sync overhead is paid 2x as often relative to a fixed prologue; the deeper-D
+    K-loop has more serialization points. (PDEP=1 was the D=4096 best, not PDEP=2 - the deeper
+    dual-issue that helped @2048 did NOT help @4096, consistent with the K-loop being more
+    drain-bound at larger nks.)
+  - WAVE QUANTIZATION is NOT the cause (computed statically): 132 SMs x 2 CTA/SM = 264 resident
+    CTAs. D=2048: 256 tiles / 264 = 0.97 wave-efficiency. D=4096: 1024 tiles / 264 = 3.879 ->
+    ceil 4 waves -> 1024/(4*264) = 0.970 wave-efficiency. IDENTICAL 0.970 at both D - the tail
+    wave is NOT what differs. (This rules out the naive "D=4096 has a worse partial last wave"
+    story; the plain launch is coincidentally equally well-quantized at both sizes.)
+
+================================================================================================
+CLASSIFICATION (the (a)-(d) deliverable, g5):
+================================================================================================
+  (a) register-spill at larger tile ........ EXCLUDED  (config is D-INVARIANT; same binary @both D;
+                                                        64 accumulator regs/thread, NOT 128; the
+                                                        128-reg/spill story is MODE 5, a different
+                                                        kernel never measured @D=4096)
+  (b) occupancy-limited (too few CTAs/SM) ... EXCLUDED  (2 CTA/SM HELD at both D; 96 KB/CTA fixed;
+                                                        occupancy is not a function of D here)
+  (c) D-independent ptxas scheduling ceiling  EXCLUDED as the GAP CAUSE  (own MOVES with D: 315->284;
+                                                        a constant ceiling cannot produce a
+                                                        D-dependent number. ptxas quality bounds the
+                                                        ABSOLUTE ~300 TFLOP/s plateau but does not
+                                                        OPEN the 1.08->1.50 gap)
+  (d) memory / large-D scheduling roofline .. CLASSIFIED CAUSE (surviving)  - the gap is cuBLAS
+                                                        capturing large-D scheduling headroom
+                                                        (bigger/split-K/persistent kernels, +24.6%)
+                                                        that the fixed-128x128-plain-launch MODE 8
+                                                        kernel structurally cannot (-9.9% from 2x
+                                                        K-loop drain overhead). The own-GEMM is
+                                                        SHAPE-RIGID; cuBLAS is SHAPE-ADAPTIVE.
+
+HONEST RESIDUAL (why this is 🟠 not 🟢): static analysis CONFIRMS (a)/(b)/(c) are excluded and
+the cause is (d)-class shape-rigidity-vs-cuBLAS-adaptivity, but it CANNOT, without a real GPU
+profile, split (d) into its sub-causes - specifically whether the own kernel @D=4096 is
+HBM-bandwidth-bound (a hard roofline no scheduling can beat) vs merely scheduling-inefficient
+(a fixable tail/drain/launch problem). That split decides whether the OP-45-GPU sibling should
+chase a fix (persistent + larger tile) or close the residual as a true roofline. nvcc was not
+local so even the cheap CPU-only ptxas -v register/occupancy confirmation could not be captured.
+
+================================================================================================
+HANDOFF TO OP-45-GPU (the EXACT test matrix the gated GPU occupancy/profile sweep must measure):
+================================================================================================
+On one H100 sm_90a (apples toolchain nvcc 12.6), build wgmma_tf32_b14.cu and capture:
+  T1. ptxas -Xptxas -v --cubin -arch=sm_90a on gemm_og17_b14 (MODE 8) - CONFIRM the static claim:
+      registers/thread (expect ~90, NOT spilling), 0 spill loads/stores, smem 96 KB/CTA @NST=3,
+      max-occupancy 2 CTA/SM. (This single CPU-runnable ptxas line would upgrade (a)/(b) from
+      "statically excluded" to "measured-excluded".)
+  T2. nsys/ncu the MODE 8 kernel @D=4096 NST=3 PDEP=1: report achieved DRAM throughput (% of HBM3
+      peak ~3.35 TB/s) + Tensor pipe active %. IF DRAM% is near-peak -> (d) is a HARD bandwidth
+      roofline, close the residual. IF DRAM% is low AND Tensor% is low -> it is scheduling/drain
+      stall, a FIXABLE (d) sub-case -> proceed to T3.
+  T3. MODE 7 (gemm_og17_persist, the persistent + threadblock-swizzle kernel) @D=4096: does
+      persistent rasterization (gridDim = 2*132 = 264, walk swizzled tiles) recover the -9.9% by
+      smoothing the 4-wave tail + keeping A/B L2-hot? Sweep swz=0,1,2,4,8. rel_rms 0 gate FIRST.
+  T4. cuBLAS introspection @D=4096: cublasLtMatmulAlgoGetHeuristic - log which algo/tile/split-K
+      cuBLAS-TF32 selects at 4096 vs 2048, to quantify EXACTLY which scheduling lever (split-K?
+      bigger tile? persistent?) is the +24.6% (and whether any is reachable without forfeiting the
+      bit-exact accumulation order g5 forbids).
+  T5. (optional) MODE 8 with TN swept while HOLDING 2 CTA/SM via a smem/NST trade - but per W11/W12
+      this needs the warp-spec register-realloc that ptxas IGNORES on TF32 (C7507), so it is
+      EXPECTED-NEGATIVE; run only to re-confirm the W12 closed-neg still binds at D=4096.
+
+================================================================================================
+SUMMARY (g5):
+- The verdict's own "256-elt register-realloc ptxas-cap" attribution for the D=4096 datapoint is
+  a MISATTRIBUTION: it describes MODE 5 (gemm_og17_t256, d0..d3 128-reg, W11/W12 closed-neg), a
+  DIFFERENT kernel that was never the measured D=4096 number. The measured D=4096 kernel is MODE 8
+  (gemm_og17_b14, d0/d1 64-reg), which is CONFIG-IDENTICAL to its D=2048 self.
+- Static evidence EXCLUDES (a) register-spill, (b) occupancy-drop, and (c) a D-independent ptxas
+  ceiling as the gap cause - all three are contradicted by the D-invariant kernel config and/or
+  the D-dependent own-TFLOP/s movement.
+- The surviving classification is (d): the gap = cuBLAS SCALING UP +24.6% at D=4096 (shape-adaptive
+  large-tile/split-K/persistent scheduling) + own SCALING DOWN -9.9% (fixed 128x128 plain-launch,
+  2x K-loop drain), i.e. own-GEMM SHAPE-RIGIDITY vs cuBLAS SHAPE-ADAPTIVITY. Wave-quantization is
+  EXCLUDED (0.970 at both D, computed).
+- The (d) sub-split (hard HBM roofline vs fixable scheduling stall) requires a real GPU ncu/nsys
+  profile + the T1-T5 matrix above; the gated OP-45-GPU sibling now knows EXACTLY what to test.
+- $0 · 0-GPU · 0-pod · no vast · no foreign-pod · no .tape edits.

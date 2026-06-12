@@ -10,6 +10,26 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-45-ROUTEA-D4096-CAP (unique anchor — the route-(a) pre-permute own-GEMM (#3094, F-GPU-ROUTEA-KEEPBAND-MEASURE) crossed cuBLAS-TF32 parity @D=2048 (1.08x, 315 TFLOP/s, rel_rms 0) but did NOT @D=4096 (~1.50x, 284 TFLOP/s), with the verdict footnote attributing the residual to a "256-elt register-realloc ptxas cap". OP-45 STATICALLY (0-pod, no GPU) characterizes WHY @D=4096 misses parity — register-spill (a) / occupancy (b) / D-independent ptxas ceiling (c) / memory-roofline (d) — by source-level register/smem/occupancy/wave accounting of the actual measured kernel (b14 MODE 8 gemm_og17_b14), to either pin the cause or hand a precise GPU test matrix to the gated OP-45-GPU sibling) -->
+- [x] **OP-45 — route-(a) own-GEMM D=4096 sub-parity cap STATICALLY characterized: (a) spill / (b) occupancy / (c) D-independent ptxas-ceiling ALL EXCLUDED; cause = (d) shape-rigidity-vs-cuBLAS-adaptivity (cuBLAS +24.6% / own −9.9% at larger D); 🟠 (d) sub-split needs a GPU profile, T1-T5 matrix handed to OP-45-GPU** —
+  🟠 0-pod static analysis (nvcc not local → no on-CPU ptxas -v capture; numbers from the W-ladder verdicts +
+  kernel source). KEY CORRECTION: the #3094 footnote's "256-elt register-realloc ptxas-cap" describes MODE 5
+  (gemm_og17_t256, d0..d3 = 128 accumulator regs, the W11/W12 closed-neg), a DIFFERENT kernel that was NEVER the
+  measured D=4096 datapoint. The measured kernel is MODE 8 (gemm_og17_b14): fixed 128x128 tile, d0/d1 = 64
+  accumulator regs/thread, NST=3 → 96 KB/CTA → 2 CTA/SM — and this config is COMPILE-TIME CONSTANT, byte-identical
+  at D=2048 AND D=4096 (D is a kernel ARG, not a template param). So (a) register-spill EXCLUDED (same binary both
+  D; if no spill @2048 then none @4096), (b) occupancy-drop EXCLUDED (2 CTA/SM held both D), (c) D-independent
+  ptxas ceiling EXCLUDED as the GAP cause (own MOVES with D 315→284 = −9.9%; a constant ceiling can't make a
+  D-dependent number). The gap 1.08x→1.50x decomposes EXACTLY into cuBLAS scaling UP +24.6% (342.5→426.8, shape-
+  adaptive large-tile/split-K/persistent) + own scaling DOWN −9.9% (315.0→283.9, fixed 128x128 plain-launch, 2x
+  K-loop drain at nks 64→128). Wave-quantization EXCLUDED (0.970 efficiency at BOTH D, computed: 132 SMs x 2 =
+  264 resident; 256/264 vs 1024/(4*264)). Surviving classification = (d) memory/large-D scheduling roofline =
+  own-GEMM SHAPE-RIGIDITY vs cuBLAS SHAPE-ADAPTIVITY. HONEST 🟠: the (d) sub-split (hard HBM-BW roofline vs fixable
+  scheduling/drain stall) needs a real GPU ncu/nsys profile; precise T1-T5 test matrix (ptxas -v confirm, ncu
+  DRAM%/Tensor%, MODE 7 persistent recovery, cuBLAS algo introspection, W12 TN re-confirm) handed to the gated
+  OP-45-GPU sibling. $0 · 0-GPU · 0-pod · no vast · no foreign-pod · no .tape. Verdict
+  .verdicts/hexa-0pod/F-OP45-ROUTEA-D4096-CAP.txt.
+
 <!-- ANCHOR:OP-42-HEXFLOAT-CONTRACT-GATE (unique anchor — OP-40 (#3084) FIXED the comptime float const-fold to serialize folded doubles as bit-exact C99 hex-float literals (0x1.<mant>p<exp>, integer ops) instead of the lossy host %.17e path, closing a max-1-ULP residual to 0 across 125 cases. That is a determinism-relevant COMPILE-STEP guarantee whose discoverability + regression-lock were incomplete: OP-40's verdict explicitly deferred the contract clause ("docs milestone") and the OP-39 gate locked the fold bits but had no case NAMED for the hex-float path. OP-42 reflects the guarantee into the determinism contract (new compile-time-const-folding subsection) + extends the OP-39 gate with hex-float-specific cases — docs+test+workflow-comment only, NO codegen, NO .tape, g84 no-paper) -->
 - [x] **OP-42 — OP-40 hex-float fold-serialize reflected into the determinism contract (new compile-time-const-folding §) + OP-39 const-fold gate extended with 5 hex-float regression cases (13→18)** —
   🟢 docs+gate, fully verified BOTH ways on the freshest local hexat (built from current source). CONTRACT
