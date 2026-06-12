@@ -291,3 +291,169 @@ All five tests ran on one H100 sm_90a (`F-OP45GPU-OCCUPANCY-SWEEP.txt`, ~$0.96, 
 The cost model remains the harness: T2's drain recalibration dropped in as one coefficient; the
 selector's argmax (MODE 8 at both D) is unchanged and still matches measurement. OP-52 confirms the
 selector should NOT add a swizzled mode at D=4096 (it would never be the argmax — swizzle regresses).
+
+---
+
+## 8. OP-53 — the two buildable designs (GAP#1 64×64 small-tile · GAP#4 NST-adaptive launcher)
+
+**0-pod / NO GPU.** OP-53 turns the two cost-model-tractable gaps (GAP#1, GAP#4) into concrete,
+buildable specs and validates them in `routea_cost_model.py` — accounting for the OP-52
+swizzle-negative. The third deliverable (§9) specs the @D=4096 bigger-tile **as a future GPU build**.
+All three validations PASS in the cost model (`python3 self/native/wgmma/routea_cost_model.py`):
+**ordering** (OP-45-GPU positive) · **swizzle anti-preference** (OP-52 negative) · **small-D fill**.
+
+### 8.1 GAP#1 — the 64×64 small-tile (`gemm_og17_t64`, MODE_t64) — small-D under-fill
+
+**Regime / motivation.** At D ≤ 512 the fixed 128×128 tile leaves the 132-SM device catastrophically
+idle: D=512 → ⌈512/128⌉² = **16 tiles spread over 132 SMs = 12.1 % coverage** (≥ 85 % of SMs idle).
+Stacking more CTAs per SM cannot help — there is not even one tile per SM. A 64×64 tile gives **4× the
+tiles** (D=512 → 64 tiles = 48.5 % coverage), so it *lights up 4× more SMs*. This is a genuine
+under-fill win (≠ the @D=4096 compute-bound cap, which is NOT fixable by tiling — OP-45-GPU/OP-52).
+
+**Tile / launch dims.**
+
+| field | value | note |
+|-------|-------|------|
+| tile (TM×TN) | **64×64** | one output tile per CTA |
+| warpgroups / threads | **1 WG / 128 threads** | half of MODE 8's 2-WG/256-thr (no 128-row band split) |
+| wgmma per K-step | **ONE `wgmma.mma_async.sync.aligned.m64n64k8.f32.tf32.tf32`** | vs MODE 8's 4 (2 M-bands × 2 N-halves) — the m64n64k8 core *is* a 64×64 output |
+| accumulator | **one 64×64 fragment = `float d0[32]`** | vs MODE 8's two (`d0,d1` 64-col-wide each); 64×64/128 thr = 32 acc-regs/thr |
+| regs/thread | **~48** (32 accum + ~16 addressing/loop) | vs MODE 8's 96 → reg-cap = 65536/(48·128) = **10 CTA/SM** |
+| smem/stage | **(64+64)·32·4 = 16 KB** | vs MODE 8's 32 KB; at NST=2 = 32 KB/CTA → smem-cap = 228/32 = **7 CTA/SM** |
+| occupancy | **min(7, 10) = 7 CTA/SM** (NST=2) | vs MODE 8's 2 CTA/SM — 3.5× the resident pool |
+| grid | plain 1-CTA/tile, `gridDim = (⌈N/64⌉, ⌈M/64⌉)` | **NO swizzle, NO persistent loop** (OP-52: swizzle regresses) |
+
+**Smem staging.** Identical ring-buffer shape to `gemm_og16`, just halved: `NST` stages of
+`(Asw[64·32] ‖ Bsw[64·32])` SWIZZLE_128B-TMA tiles, `mbarrier`-gated, descriptor-direct
+(`layout_type_`=swmode, SBO=1024 B) — no in-kernel decode band. One `tma_load_2d` for A(64×32) and
+**one** for B(64×32) per stage (vs MODE 8's `NATOM=2` B-loads). NST=2/3 both hold ≥ 4 CTA/SM (16 KB ·
+3 = 48 KB → smem-cap = 4; reg-cap stays 10).
+
+**Bit-exact K-accumulation order (the g5 gate — a future build is `rel_rms 0` by construction).** The
+64×64 tile reuses MODE 8's inner K-loop *verbatim* for its single sub-tile:
+
+```c
+float d0[32]; for(i<32) d0[i]=0.f;            // ONE 64x64 accumulator
+for(ki=0; ki<nks; ++ki){                       // same K-slab order, TKSW=32
+  ...wait stage, fence...
+  #pragma unroll
+  for(kk=0; kk<TKSW; kk+=TK)                    // TK=8 K-sub-step, IDENTICAL to MODE8
+     WG(d0, dA, dB);                            // wgmma m64n64k8 accumulate (scaleD=1)
+  commit_group; wait_group 0; __syncthreads();
+}
+```
+
+This is **byte-identical** to the FMA order MODE 8 applies to *each* of its `(band, N-half)`
+sub-accumulators (`WG(d0,dA,dB0)` per K-sub-step) — the 64×64 kernel simply computes one such
+sub-tile per CTA instead of four. No reduction is reordered, no split-K, no cross-tile accumulation.
+A future build therefore gates `rel_rms 0.000e+00` vs both the 128×128 reference and CPU-f32 — the
+non-negotiable gate — before any speed number is reported.
+
+**Cost-model prediction (VAL-2, validated 0-pod).** `MODE_t64` added to the model predicts:
+
+```
+   D  t64 tiles  t64 cov  t64 pred   m8 tiles  m8 cov  m8 pred   winner
+ 256        16    0.121      32.0          4   0.030     10.3   MODE_t64   (3.1x)
+ 512        64    0.485     125.4         16   0.121     40.7   MODE_t64   (3.1x)
+1024       256    1.000      70.3         64   0.485    160.0   MODE8      (honest crossover)
+2048      1024    1.000     137.9        256   1.000    315.0   MODE8      (filled parity regime)
+```
+
+The 64×64 tile predicts **3.1× better small-D throughput at D ≤ 512** (where the win is genuine),
+with an **honest crossover back to 128×128 by D ≈ 1024** (the 128×128 already covers ~half the device
+there, so the small tile's lower per-tile `issue_eff` 0.84 vs 1.03 begins to lose). Crucially it does
+**NOT** beat 128×128 in the filled parity regime (D ≥ 2048: 137.9 < 315.0) — so adding the tile
+**regresses no measured anchor**. `issue_eff` for MODE_t64 is set conservatively to OG16's plain
+single-issue 0.84 (no PDEP dual-issue, no 2-band overlap in a 1-WG tile) — a deliberately pessimistic
+projection; a real build only ever gates a *speed claim*, never the bit-exact gate.
+
+### 8.2 GAP#4 — the NST-adaptive launcher (`select_config`, host-side, no kernel)
+
+**Pure host-side policy — no kernel change.** `select_config(D, M, N, K)` (and the explicit-shape
+`select(M,N,K)`) scores **every (mode × NST) candidate** with the cost model and launches the argmax.
+The candidate set is `SELECTABLE = {OG16, OG17, MODE6, MODE8, MODE5_t256, MODE_t64}` — the swizzle
+modes **MODE 7 (persistent) and MODE 9 (non-persistent CTA-swizzle) are STRUCTURALLY EXCLUDED** from
+auto-selection because BOTH were measured closed-negative (OP-45-GPU T3 + OP-52). They remain in the
+`MODES` table *only* so the swizzle anti-preference validation can score them against their baseline.
+
+```python
+def select_config(D, M=None, N=None, K=None):       # host calls this before each route-(a) GEMM
+    M, N, K = M or D, N or D, K or D
+    best, ranked = select(M, N, K)                   # argmax over SELECTABLE x {NST 2,3}
+    name, nst = best[1], best[2]
+    return name, nst, best[0], ranked
+```
+
+**Validated picks (the selector output):**
+
+```
+D=  256 [small-D under-fill ] -> MODE_t64 NST=3   (32.0)   <- GAP#1 64x64 picked at deep under-fill
+D=  512 [small-D under-fill ] -> MODE_t64 NST=3   (125.4)  <- GAP#1 64x64 picked
+D= 1024 [small-D under-fill ] -> MODE8    NST=3   (160.0)  <- crossover: 128x128 retakes
+D= 2048 [medium-D parity    ] -> MODE8    NST=3   (315.0)  <- matches OP-45-GPU measured winner
+D= 4096 [large-D drain-bound] -> MODE8    NST=3   (286.7)  <- matches OP-45-GPU; NOT a swizzle mode
+D= 8192 [large-D drain-bound] -> MODE8    NST=3   (243.1)
+```
+
+**The selector matches BOTH measured results (the g5 soundness evidence):**
+
+1. **OP-45-GPU positive ordering** — at D=2048/4096 the argmax is **MODE 8 NST3**, the measured
+   winner (the cost model reproduces the full measured win-order at both D; mean |rel.err| 3.9 %).
+2. **OP-52 swizzle-negative** — encoded as a MEASURED anti-preference, `swz_penalty()`:
+
+   ```
+   D=4096 MODE8 vs MODE9_swz:  MEASURED base 285.1 -> swz 280.5 (REGRESS, -1.6%)
+                               PREDICT  base 286.7 -> swz 282.1 (REGRESS, -1.6%)  -> sign MATCH
+   selector @D=4096 picks MODE8 (NOT a swizzled mode) -> OK
+   ```
+
+   `swz_penalty` applies the OP-52-measured **−1.6 %** factor (0.984) to any swizzled mode in the
+   compute-bound / device-filled regime (`tiles ≥ SM_COUNT`), the exact regime OP-52 measured. Its
+   mechanism is the OP-45-GPU T2 physics: a CTA-swizzle is purely an L2-locality lever, and at
+   D ≥ 2048 the GEMM is compute/scheduling-bound (DRAM ~12–40 % of HBM3 peak), so the swizzle can
+   only add index overhead → a uniform small regress. The penalty is gated to the measured regime
+   (neutral under-fill, where OP-52 made no measurement — no claim beyond the data). Combined with
+   excluding swizzle modes from `SELECTABLE`, the launcher **never** picks a swizzle where it regresses.
+
+---
+
+## 9. OP-53 — the @D=4096 bigger-tile hypothesis (128×256 deeper-K) — **FUTURE GPU-BUILD item**
+
+OP-53 does **NOT** build this — it specs the candidate + the cost-model prediction of whether it
+*could* close the @D=4096 gap, flagged for a GPU lane with the bit-exact constraint.
+
+**Why a bigger tile is the remaining @D=4096 hypothesis.** OP-52 closed the CTA-swizzle lever
+(−1.6 %, the rasterization/L2 layer cannot help a compute-bound kernel). The surviving OP-45-GPU T4
+lever is a **better single-pass per-CTA tile/schedule**. The only in-tree larger single-pass tile,
+MODE 5 t256 (128×256), is already **closed-neg @4096** (264.9 < 283.9) because it is **register-capped
+to 1 CTA/SM** (154 reg/thr). So the candidate is **NOT** "use t256" — it is a *new* tile that gets the
+wide-tile A-reuse advantage **without** dropping below 2 CTA/SM.
+
+**Candidate spec — `gemm_og17_t128x256_2cta` (a 128×256 tile that PRESERVES 2 CTA/SM):**
+
+| lever | target | rationale |
+|-------|--------|-----------|
+| tile | 128×256 (2× B-reuse per A-load) | the +8.5 % `reuse_eff` the cost model credits at TN=256 |
+| occupancy | **must stay 2 CTA/SM** | the whole point — t256's 1 CTA/SM is *why* it lost. Needs ≤ 128 reg/thr (vs t256's 154) and ≤ 114 KB/CTA. Achieved by a **shallower accumulator-register footprint** (e.g. 2-WG-cooperative N-tiling so each WG holds 128×128 of the 128×256, not 4 full N-accumulators) + NST=2 (96 KB) |
+| K-schedule | deeper single-pass K-pipeline (PDEP≥2) to hide the 2×-slab drain @nks=128 | the OP-45-GPU T2 stall lives in the per-CTA K-drain, not rasterization |
+| swizzle | **NONE** (OP-52: regresses, compute-bound) | — |
+| split-K | **FORBIDDEN** (g5) | would reorder the bit-exact accumulation |
+
+**Bit-exact K-order constraint (the gate the GPU lane must hold).** The 128×256 tile must accumulate
+each output element in the **same per-K-slab FMA order** as MODE 8 — i.e. its four 64×64 sub-tiles
+each run the identical `for kk in 0..TKSW step TK: WG(d_sub, dA, dB)` reduction MODE 8 uses, with **no
+split-K and no cross-CTA reduction**. Then `rel_rms 0.000e+00` vs the 128×128 reference holds by
+construction, and only the *throughput* is the open question.
+
+**Cost-model prediction (would it close the gap?) — HONEST: only partially, and only IF 2 CTA/SM holds.**
+If such a tile reaches 2 CTA/SM at TN=256, the model credits `reuse_eff` 1.085 × `occ_factor` 1.0 (vs
+t256's 0.86 @1 CTA/SM), predicting ≈ **286.7 × 1.085 ≈ 311 TFLOP/s @D=4096** — a **+8.5 %** lift over
+MODE 8 (closing ≈ 1.50× → ≈ 1.37×), i.e. a *partial* close, **not** full parity (cuBLAS ≈ 427). The
+model **cannot** predict whether the deeper-K schedule actually hides the drain (that is the measured
+unknown OP-45-GPU T2 flagged as the per-CTA K-drain stall) — so this is a **GPU-lane build+measure
+item**, with the explicit risk that the 2-CTA/SM constraint may not be reg-achievable at 128×256
+(in which case it degenerates to the already-closed-neg t256). Flagged for a future GPU lane;
+**OP-53 specs it but does not build it.**
+
+The cost model is the harness for all three: the 64×64 tile and the NST-adaptive launcher are
+validated 0-pod now; the 128×256-2CTA tile is a scored hypothesis awaiting a GPU build.

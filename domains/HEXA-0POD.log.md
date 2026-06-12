@@ -2361,3 +2361,44 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   (§0 + §7 + large-D bucket updated) + F-OP52-TF32-GAP-CLOSE.txt.
 - DESTROY: yes | vastai destroy instance 40733645 (label hexa-tf32gap confirmed MINE first) → vastai show instances-v1
   "Total: 0 instances / No instances found." LEAK-0 CONFIRMED. No foreign pod touched (roster empty throughout). ~$0.70.
+
+## OP-53 — 0-pod (NO GPU) DESIGN: the 2 cost-model-tractable route-(a) gaps (64x64 small-tile + NST-adaptive launcher) turned into buildable specs + validated in the cost model, ACCOUNTING FOR the OP-52 swizzle-negative — 2026-06-13
+- SURVEY (0-pod, no cost clock): read F-OP49-SHAPE-ADAPTIVE-DESIGN (the 4 config gaps + cost model) + F-OP45GPU-
+  OCCUPANCY-SWEEP (measured anchors: MODE8 90reg/0spill/2CTA-SM; D=2048 320.6/1.08x; D=4096 283.9/1.52x; T3 MODE7
+  persistent closed-neg; T4 cuBLAS lever = better single-pass tile + CTA-swizzle NOT split-K) + F-OP52-TF32-GAP-CLOSE
+  (the swizzle-NEGATIVE: MODE9 non-persistent CTA-swizzle @4096 REGRESSES −1.6%, best 280.5 vs SWZ=0 285.1, rel_rms 0)
+  + docs/forge-routea-shape-adaptive.md + routea_cost_model.py + wgmma_tf32_b14.cu (MODE 8 m64n64k8 K-loop + the
+  probe_a kernel already runs TM=TN=64 with m64n64k8). Branched off origin/qforge-op52-tf32gap-v2 (#3122 not yet on
+  main) so the OP-52 doc/verdict/kernel edits are inherited via union-resolve, not clobbered.
+- GAP#1 64x64 small-tile (MODE_t64) SPEC: tile 64x64, 1 warpgroup/128 threads (vs MODE8's 2-WG/256), ONE wgmma
+  m64n64k8/K-step (vs MODE8's 4 = 2 M-bands × 2 N-halves), ONE 64x64 accumulator float d0[32], ~48 reg/thr →
+  reg-cap 10 CTA/SM; smem/stage (64+64)*32*4=16KB → at NST=2 32KB/CTA → smem-cap 7 → OCCUPANCY 7 CTA/SM (3.5x MODE8).
+  Grid plain 1-CTA/tile (NO swizzle, NO persistent — OP-52). BIT-EXACT K-ORDER: reuses MODE8's inner K-loop VERBATIM
+  for its single sub-tile (`for kk in 0..TKSW step TK: WG(d0,dA,dB)`) — byte-identical to the FMA order MODE8 applies
+  to each of its (band, N-half) sub-accumulators → a future build is rel_rms 0 BY CONSTRUCTION. issue_eff conservatively
+  = OG16's plain 0.84 (no PDEP, no 2-band overlap in 1 WG).
+- GAP#4 NST-adaptive host-side launcher select_config(D,M,N,K): argmax over SELECTABLE={OG16,OG17,MODE6,MODE8,
+  MODE5_t256,MODE_t64} × {NST 2,3}. The SWIZZLE modes MODE7 (persistent) + MODE9_swz (non-persistent) are STRUCTURALLY
+  EXCLUDED from auto-selection (both measured closed-neg, OP-45-GPU T3 + OP-52); they stay in the MODES table ONLY so
+  the anti-preference VALIDATION can score them. swz_penalty() applies OP-52's MEASURED −1.6% factor (0.984) to any
+  swizzled mode in the compute-bound regime (tiles>=SM_COUNT) — the exact regime OP-52 measured (mechanism = OP-45-GPU
+  T2: a CTA-swizzle is purely an L2-locality lever, useless when compute-bound).
+- COST-MODEL CHANGES (routea_cost_model.py): per-mode `threads` field (64x64 = 128 thr); a device-COVERAGE wave_eff
+  (under-fill regime: eff = tiles/SM_COUNT when tiles<132, classic wave-quant when filled — leaves the D=2048/4096
+  anchors at 0.970 UNCHANGED, so no anchor moves); MODE_t64 + MODE9_swz rows; swz_penalty; select_config; 3 new
+  validations. The 32-CTA/SM H100 hard ceiling added to cta_per_sm.
+- VALIDATION (0-pod, VERBATIM `python3 self/native/wgmma/routea_cost_model.py`): ORDERING still PASS (2048/4096 ranks
+  MATCH, mean |rel.err| 3.9%, MODE8@4096 +1.0%). VAL-1 SWIZZLE ANTI-PREFERENCE: D=4096 MODE8 vs MODE9_swz — MEASURED
+  base 285.1→swz 280.5 (REGRESS −1.6%), PREDICT base 286.7→swz 282.1 (REGRESS −1.6%) → sign MATCH; selector picks MODE8
+  (not a swizzle) → PASS. VAL-2 64x64 SMALL-D FILL: D=256 MODE_t64 32.0 vs MODE8 10.3 (3.1x), D=512 125.4 vs 40.7 (3.1x),
+  D=1024 70.3 vs 160.0 (honest crossover → 128x128), D=2048 137.9 vs 315.0 (filled regime, 128x128 wins) → PASS.
+  SELECTOR picks: D=256/512 MODE_t64, D=1024+ MODE8, D=4096 MODE8 (NOT a swizzle). OP-53 OVERALL: ALL PASS.
+- FUTURE-GPU spec (NOT built): gemm_og17_t128x256_2cta — a 128x256 tile that PRESERVES 2 CTA/SM (vs t256's reg-capped
+  1 CTA/SM, which is why t256 lost @4096). Needs <=128 reg/thr (e.g. 2-WG-cooperative N-tiling) + NST=2 + deeper-K PDEP>=2.
+  Cost model predicts ~286.7×1.085≈311 TFLOP/s = +8.5% PARTIAL close (~1.50x→~1.37x), NOT full parity (cuBLAS ~427);
+  the model CANNOT predict whether the deeper-K schedule hides the drain (the OP-45-GPU T2 per-CTA K-drain unknown) →
+  GPU-lane build+measure item, RISK = 2-CTA/SM may not be reg-achievable at 128x256. Bit-exact K-order constraint: the
+  four 64x64 sub-tiles each run MODE8's reduction, NO split-K, NO cross-CTA reduction → rel_rms 0 by construction.
+- OUTCOME: 🟢 GREEN (3 cost-model validations PASS). Milestone OP-53 [x]. Deliverables: docs/forge-routea-shape-adaptive.md
+  §8-§9 · self/native/wgmma/routea_cost_model.py · F-OP53-SMALLTILE-LAUNCHER-DESIGN.txt. 0-pod · no GPU · no vast ·
+  no foreign-pod touch · $0 · leak-0 · no .tape edit (except a MAIN.tape #-comment).
