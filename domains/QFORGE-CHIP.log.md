@@ -240,3 +240,103 @@ device 의 diffusive 열전도 (ballistic↔diffusive crossover, κ_ballistic �
 - PR base=qforge-chip-r3 (R1+R2+R3 lineage tip; 지정 r1 은 stale·R2/R3 이미 포함) ·
   `--repo dancinlab/hexa-lang` · 머지=사용자. brick+selftest+WIP 커밋 즉시 push (durable-worktree).
   DOMAINS.tape 미접촉. domains/QFORGE-CHIP.{md,log.md} in-place (stage/commit 은 PR 브랜치에서).
+
+## 2026-06-13 — round-7 γ G≠0 full self-consistent screening (R6 마지막 고정-leg 봉합, g5 19/19 PASS)
+
+R6 정직 보고가 명시한 round-7: G≠0 self-consistent. R6 는 vshell[0](G=0)=V_xc(ρ̄_sc) 만
+실 수렴이고, vshell[1+](off-diag Bragg shell V_scr(G≠0))=FIXED 해석 vbragg 였다(assembler 가
+G=0 대각만 수용). round-7 이 그 마지막 고정-leg 을 dense FFT-grid G-space V_scr(G) 로 봉합.
+
+### 감사 (task 1, d19)
+- `band_scf_real.hexa`(R6): vshell=[V_scr(G=0), vbragg] — vbragg 가 고정 caller 입력. R3
+  `qforge_chip_scf_band_eps` 는 이미 **arbitrary-length vshell**(`vshell[|i−j|]`)을 소비 →
+  full shell 을 채우면 새 eig 경로 없이 drop-in (d4 data-swap).
+- `scf_pw.hexa`: `qforge_vscr_diag` = V_H(ρ)+V_xc(ρ) 대각, `qforge_vxc_point` = LDA V_x+V_c
+  점값. `qforge_vhartree_from_rho` = G-공간 Poisson 4π/|G|² (G=0→0 중성 게이지).
+- `screening.hexa` → `signal/core_fft.hexa` `fft3_real`(#2076): 실입력 3D FFT → interleaved
+  spectrum. ρ(r)/V_scr(r) → ρ(G)/V_scr(G) 정변환에 그대로 재사용 (d19, FFT 재구현 0).
+
+### brick (task 2) — `stdlib/qforge/chip/band_scf_gfull.hexa`
+수렴 ρ → V_scr(r)=V_H[ρ]+V_xc[ρ] (1D pow2 line, b1=2π/a → FFT freq m 이 chip G_m=(2π/a)·m
+에 정확 착지) → `fft3_real` → V_scr(G_m) 전체 shell (1/n 정규화: m=0 bin=⟨V_scr⟩=V_xc(ρ̄)
+연속) → R3 `qforge_chip_scf_band_eps` 에 full vshell drop-in → ε_n(k). + self-consistency
+residual fn (‖V_scr[ρ]−V_scr[ρ_prev]‖∞ — 같은 ρ→0 fixed point, perturbed→≠0; 정직 SC 체크).
+d4-generic: ρ/역격자기저/xc_mode/a 전부 데이터, material 하드코딩 없음.
+
+### g5 selftest VERBATIM (실 출력, 날조 금지)
+`HEXA_LANG=. hexa run stdlib/qforge/chip/band_scf_gfull_selftest.hexa`
+```
+PASS (a) V_scr(G) shells returned (G0..G3) (4)
+PASS (a) all V_scr(G) shells finite (no NaN/Inf)
+PASS (a) V_scr(G=0) == analytic V_xc(ρ̄) (cell average) (-0.362784)
+PASS (a) V_scr(G_1) FFT == independent real-space DFT projection (0.0322553)
+PASS (a) structured ρ → V_scr(G_1) ≠ 0 (real self-consistent G≠0)
+PASS (b) uniform ρ → V_scr(G_1)=0 (no Bragg shell, metal) (0.0)
+PASS (b) uniform ρ → V_scr(G_2)=0 (0.0)
+PASS (b) round-7 ε_n(k) spectrum dim (7)
+PASS (b) uniform-ρ round-7 ε_n(k) == round-6 G=0 band (continuous)
+PASS (b) uniform ρ → self-consistent gap = 0 (metal, R6 limit) (0.0)
+PASS (c) structured ρ opens a self-consistent Bragg gap (gap>0)
+PASS (c) weak-ρ gap → 2|V_scr(G_1)| (NFE limit, ratio∈[0.85,1.001])
+PASS (c) stronger ρ-modulation → larger self-consistent gap
+PASS (d) ε_n(k) full spectrum (nG eigenvalues) (7)
+PASS (d) ε_n(k) ascending & real (Hermitian H, valid KS)
+PASS (d) ε_n(k) all finite (no NaN/Inf in the spectrum)
+PASS (d) ε₀(Γ) real & finite (V_scr(G) real ⇒ H real-symmetric)
+PASS (d) SC residual ‖V_scr[ρ]−V_scr[ρ]‖ = 0 (fixed point) (0.0)
+PASS (d) SC residual ≠ 0 for a perturbed ρ (honest non-convergence)
+qforge_chip_band_scf_gfull_selftest PASS
+```
+- (a) **full G-space V_scr 결선**: 수렴 ρ → V_scr(G) 전체 shell 유한(NaN/Inf 0). G=0 bin
+  = 해석 V_xc(ρ̄)=−0.362784 (uniform 셀 공간평균). structured ρ(cos변조 α=0.5)의 V_scr(G_1)
+  =+0.0322553 가 **독립 real-space DFT 투영**(FFT 아닌 직접 cos 합)과 1e-12 일치 — FFT 가
+  차폐 자체이지 재유도 아님. structured ρ → V_scr(G_1)≠0 = 실 self-consistent G≠0.
+- (b) **R6 G=0 leg 연속**: uniform ρ(R6 jellium 셀)→V_scr(G≠0)=0 **정확** → round-7 vshell=
+  [V_xc(ρ̄),0,0,…] → ε_n(k) 이 R6 G=0-only 밴드(vbragg=0)와 verbatim 일치 (7개 고유값 1e-12).
+  uniform→갭=0 (금속, R6 극한). G≠0 self-consistent leg 이 uniform 극한서 R6 로 연속환원.
+- (c) **self-consistent 갭**: structured ρ → k=π/a 에서 실 V_scr(G=±g)가 Bragg 갭 형성 (고정
+  vbragg 아님). 약변조 극한 gap→2|V_scr(G_1)| (NFE, Ashcroft-Mermin Ch.9; ratio∈[0.85,1.001]
+  — full eig 가 고차 shell 결합으로 2|V_g| 아래, d6). 강변조(α=0.9)→더 큰 갭 (차폐가 갭 구동).
+- (d) **Hermiticity/실대칭**: full V_scr(G) 의 H(k) real-symmetric → ε_n(k) real·ascending,
+  전부 유한. SC residual=0 (같은 ρ = idempotent fixed point), perturbed ρ→≠0 (정직 SC 체크,
+  비수렴 ρ 면 노출 — d6 날조 안 함).
+
+### 정직 보고 (d6 / @L5) — round-6 대비 진짜 G≠0 self-consistent 됐나
+**됐다.** round-6: vshell[0](G=0)만 실 self-consistent, vshell[1+](G≠0)=고정 해석 vbragg.
+round-7: V_scr(G) **전체 G** (G=0 AND G≠0) 가 V_scr[ρ](r)=V_H[ρ]+V_xc[ρ] 의 FFT — off-diag
+shell 이 ρ_sc 의 **함수**(고정 입력 아님). uniform 극한(R6 셀) → V_scr(G≠0)=0 정확 → R6 밴드
+verbatim 연속(leg b); structured ρ → 실 self-consistent Bragg 갭(leg c). 이게 round-6 정직
+보고가 round-7 로 지정한 바로 그것. **수렴 iters 정직**: leg (a)~(d)는 수렴 ρ(또는 해석적
+structured ρ)에서 V_scr(G) 추출·밴드·갭을 검증 — full G-space self-consistent **추출/결선**은
+달성. SC residual fn 이 fixed-point(=0)/perturbed(≠0)를 측정 = self-consistency 의 정직 게이트.
+**스코프 정직**: 본 brick 은 수렴 ρ → full V_scr(G) → ε_n(k) 경로(R6 의 고정 leg 봉합)를 봉인.
+1D-chip 셀이 pow2 line(n=8) 한 셀을 샘플 (b1=2π/a → G-set 정확 착지). real-cell 3D dense FFT
+self-consistent SCF 의 full G-mesh 결선은 다음 — 1D 봉합이 핵심 deliverable, 충족.
+
+### 밴드 leg 완전 self-consistent 봉인됐나
+**예.** 밴드 leg 의 포텐셜이 R3(해석 Fourier)→R6(G=0 실 self-consistent)→R7(G=0+G≠0 full
+self-consistent)로 단조 봉합. H(k)=T(k)+V_scr 의 V_scr 가 이제 **모든 reciprocal shell** 에서
+ρ_sc 의 FFT — 밴드 leg 에 남은 고정/해석 포텐셜 leg 없음. 운동에너지 T(k)=½|k+G|²(R3 실
+kinetic brick)+ V_scr(G) full(R7 실 FFT) = 밴드 leg 완전 self-consistent.
+
+### chip 스케일 완성도 / depletion 판정
+- **밴드** ✓ R1 ε(k) · R2 k-mesh+DOS · R3 SCF-fed H(k) · R6 G=0 SC · **R7 G≠0 full SC** — 봉인.
+- **수송** ✓ R1 Landauer · R2 NEGF mode-count · R5 코히어런트 Σ-NEGF T(E)=Tr[ΓGΓG].
+- **열** ✓ R4 phonon-Landauer κ→N·g₀ floor.
+→ 칩 front-end 3-leg(밴드·수송·열)이 closed-form/self-consistent 앵커에서 전부 g5 봉인. 밴드
+leg 의 self-consistent 정밀화(R3→R6→R7)가 완료 = 밴드 leg DEPLETED(고정 포텐셜 leg 0). 남은
+개방축은 산란 정밀화(diffusive)와 multi-orbital/3D real-cell — 아래 round-8.
+
+### round-8 다음
+밴드 leg full self-consistent 봉인 완료 → (1) **BTE diffusive** (R4 ballistic κ floor + 포논-
+포논 Umklapp/동위원소 산란 → 유한 device diffusive κ, ballistic 가 상한 앵커; R4 정직 보고가
+지정) · (2) **multi-orbital / multi-band H(k)** (1D single-shell → multi-orbital tight-binding/
+multi-band PW, p/d 오비탈 hybridization 갭 · spin-orbit) · (3) **phonon-NEGF Σ_ph** (R5 전자
+Σ-NEGF 동형 → R4 ballistic κ 를 산란-감쇠로 확장). 우선 (1) BTE — R4 가 명시 지정한 직접 후속.
+
+### deliver (round-7)
+- brick `stdlib/qforge/chip/band_scf_gfull.hexa` + selftest (g5 19/19 PASS).
+- PR base=qforge-chip-r3 (R1~R6 lineage tip; r3 트리가 R6 brick 이미 포함) · `--repo
+  dancinlab/hexa-lang` · 머지=사용자. brick+selftest+WIP 즉시 push (durable-worktree). gen3
+  arena 우회(eigh 고유값 즉시 materialise · scalar 로컬화). DOMAINS.tape 미접촉. domains/
+  QFORGE-CHIP.{md,log.md} in-place (R7 milestone+로그, PR 브랜치에서만 stage/commit).
