@@ -59,6 +59,23 @@
       (single-well→1 · boundary→1 · double-well ±k₀→2). HONEST(d6): SK/2-band **모델** 파라미터 —
       실 Si/Ge fit 아님(경험 ss/sp 표·spin-orbit·d-궤도 없음); 다밴드 구조+유효질량+갭판별+2-band
       닫힌형이 deliverable, 실 material = OrbitalModel 데이터 swap(d4). PR #<TBD>.
+- [x] **round-10 ⑩ Callaway BTE — N/U-separated crossover (g5 19/19 PASS)** —
+      `stdlib/qforge/chip/callaway_bte.hexa` + selftest. R4 ballistic κ(N·g₀) + R8 RTA-BTE κ
+      에 **Callaway 모델**(Phys Rev 113,1046 (1959)) 로 ballistic↔diffusive crossover 정밀화 —
+      Normal(N·모멘텀보존) vs resistive(R=Umklapp+isotope+boundary) 산란을 **분리**하고 β-보정항
+      추가(N-process 는 heat flux 를 직접 relax 안 하고 **재분배**만 함; RTA 의 N over-damp 결함을
+      Callaway 가 복원). Debye-적분형 κ=κ_RTA+κ_corr, K(x)=x⁴eˣ/(eˣ−1)², 1/τ_c=1/τ_N+1/τ_R,
+      κ_corr=pref[∫(τ_c/τ_N)K]²/[∫(τ_c/(τ_N τ_R))K]. τ_U/τ_iso/τ_bd/Matthiessen = **R8 primitive
+      재사용**(d19), τ_N 은 한 채널 더(d4). g5: (a) **RTA 회복** τ_N→∞ ⇒ κ_corr→0 ⇒ κ_Callaway →
+      R8 RTA Debye κ EXACT(419.12) · (b) **ballistic ceiling** pure-N/clean 저온은 Casimir
+      boundary-limited ceiling 에 BOUNDED(발산 X; N=flux-neutral → ratio=1, +Umklapp → strictly
+      below) · (c) **crossover T-scaling** 저온 κ∝T³(ratio 2T/T=8 EXACT) → peak → 고온 κ∝1/T
+      (Umklapp, 2T/T→0.494≈1/2 Peierls) + β-보정 LOAD-BEARING(N-dom 서 κ_full≫κ_RTA-only) ·
+      (d) **회귀** R4(ballistic g₀)+R8(RTA-BTE) selftest 여전히 PASS, 공유 primitive 불변.
+      HONEST(d6): τ_N/τ_U = 표준 Callaway 멱법칙 **모델 계수**(1/τ_N=B_N ω²T³ · 1/τ_U=B_U ω²T·exp)
+      — ab-initio el-ph 아님(QE/QFORGE-materials DFPT lane); deliverable = N/U-분리 crossover
+      **구조**(RTA-회복/ceiling/T³–1/T 극한 정확), 실 Si/Ge κ(T) fit 은 published-계수 데이터
+      swap(d4) 이지 주장 아님. PR #<TBD>.
 - [ ] **verify-adapter (chip=TCAD)** — 밴드갭/effective-mass/컨덕턴스/κ 를 측정·TCAD ref
       로 표준화 (verify-adapter 일반화 축).
 - [ ] **NEXUS edge** — QFORGE-CHIP → {소자 도메인} 재사용 그래프 등록 (materials c7 패턴).

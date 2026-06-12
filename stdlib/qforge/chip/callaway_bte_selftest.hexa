@@ -116,8 +116,8 @@ fn main() {
     let k_rta_ref  = _ref_rta_debye(300.0, theta_d, vs, len, fgeom, a_u, b_iso, nq)
     fails = fails + _ck_rel("(a) τ_N→∞: κ_Callaway → κ_RTA(τ_R) exact [round-8 baseline]",
                             k_call_noN, k_rta_ref, 1.0e-6)
-    fails = fails + _ck_rel("(a) τ_N→∞: β-correction κ_corr → 0 (vanishes)",
-                            k_corr_noN, 0.0, 1.0e-4 * _abs(k_rta_ref))
+    fails = fails + _ck_true("(a) τ_N→∞: β-correction κ_corr → 0 (vanishes vs κ_RTA scale)",
+                             _abs(k_corr_noN) <= 1.0e-6 * _abs(k_rta_ref))
     // and the Callaway κ_RTA part alone EQUALS the round-8 RTA Debye κ (combined τ_c→τ_R).
     let k_call_rta_part = qforge_chip_callaway_kappa_rta(300.0, theta_d, vs, len, fgeom,
                                                          a_u, b_iso, bn_tiny, a_pow, b_pow, nq)
@@ -141,7 +141,15 @@ fn main() {
                              ratio_ceiling > 0.0 && ratio_ceiling <= 1.000001)
     println("    [b] low-T(15K) pure-N κ_Callaway=" + to_string(k_call_pureN)
             + "  ceiling κ_ball=" + to_string(k_ceiling)
-            + "  ratio=" + to_string(ratio_ceiling))
+            + "  ratio=" + to_string(ratio_ceiling) + " (=1: N is flux-NEUTRAL, β-corr restores boundary κ)")
+    // The ratio=1 is the SIGNATURE Callaway result: pure-N processes do NOT relax heat flux,
+    // so with only boundary+N the κ equals the boundary-limited ceiling EXACTLY regardless of
+    // N strength — the β-correction restores precisely the momentum RTA would spuriously remove.
+    // The NON-TRIVIAL bound: add intrinsic Umklapp and κ drops STRICTLY below the ceiling.
+    let k_with_U = qforge_chip_callaway_kappa(t_lo, theta_d, vs, len, fgeom,
+                                              a_u, b_iso, b_n_strong, a_pow, b_pow, nq)
+    fails = fails + _ck_true("(b) +Umklapp: κ_Callaway STRICTLY below ceiling (non-trivial bound)",
+                             k_with_U < k_ceiling && k_with_U > 0.0)
     // ANCHOR vs round-4 Landauer N·g₀: the boundary-limited Debye ceiling is the diffusive
     // bridge to the round-4 ballistic floor.  Report the round-4 N·g₀ (per-channel) for the
     // record — both are ballistic upper-bound anchors of the SAME thermal leg (d19).
