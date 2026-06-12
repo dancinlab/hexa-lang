@@ -1,0 +1,260 @@
+// HEXA Standard Library — qforge/upf_aug
+//
+// @version 0.1.0
+// @capabilities [parse, fs]
+//
+// QFORGE-PAW Route A brick 1/3 — REAL USPP/PAW AUGMENTATION extractor.
+//
+// ── Why this brick (Route A — the genuinely-untested ground-state paradigm) ───
+// QFORGE-PAW rounds 1-4 ruled out every NC-framework DFT lever on |g|. Round-4's
+// B3 (`dvaug_du.hexa`) proved the BARE augmentation el-ph vertex is zero on TWO
+// grounds: (1) the production CaH6 deck is ONCV-NC so Q_ij ≡ 0 (structural), and
+// (2) even with a finite Q_ij the CO-LOCATED self-vertex cancels by the
+// translational-invariance sum-rule (|S+A+B| < 1e-15). What round-4 did NOT do —
+// the SOLE genuinely-untested path (Route A) — is import an ACTUAL USPP/PAW
+// dataset with a FINITE Q_ij and let it change the GROUND STATE itself via the
+// generalized overlap eigenproblem  H ψ = ε S ψ,  S = 1 + Σ_ij |β_i⟩ q_ij ⟨β_j|,
+// q_ij = ∫ Q_ij(r) d³r. Round-4 only overlaid a vertex on NC eigenstates; it
+// never solved the generalized problem, so the eigenSTATES (and hence |g|=⟨ψ|ΔV|ψ⟩)
+// were never modified. THIS brick supplies the real q_ij needed for S.
+//
+// ── What it reads (the rrkjus USPP for H — a real PBE ultrasoft dataset) ──────
+// The QE PSlibrary `H.pbe-rrkjus_psl.1.0.0.UPF` (is_ultrasoft="true",
+// number_of_proj="2") carries a `<PP_AUGMENTATION>` block with `<PP_QIJL.i.j.L>`
+// sub-blocks: the radial augmentation charge Q_ij(r) per projector pair (i,j) and
+// multipole L. The integrated monopole moment
+//
+//   q_ij = ∫ r² Q_ij^{L=0}(r) dr · √(4π)            (the overlap-S coefficient)
+//
+// is what the generalized-overlap operator needs (the L=0 monopole is the only
+// term that contributes to the scalar overlap ⟨β_i|S|β_j⟩ ↔ the norm-restoring
+// charge the soft pseudo-orbital drops). NC ⇒ no PP_AUGMENTATION ⇒ q_ij = [] ⇒
+// the caller falls back to S = 1 (the round-1..4 path), so this brick is a strict
+// superset: it CHANGES NOTHING for an NC deck and supplies REAL q_ij for a USPP.
+//
+// d3/d4 generic: branches only on the UPF header is_ultrasoft/is_paw flag and the
+// presence of PP_AUGMENTATION; never on element. A new USPP is data (a file).
+
+// --- parsed augmentation record ----------------------------------------
+pub struct UpfAug {
+    ok: bool,                // true when a finite augmentation was extracted
+    is_aug: bool,            // header is_ultrasoft || is_paw
+    nproj: int,              // projector count (matches the V_NL projector set)
+    qij0: [float],           // flat [nproj*nproj] integrated L=0 monopole moments q_ij
+    qij_radial: [float],     // flat [nproj*nproj*mesh] radial Q_ij^{L=0}(r) (0 if absent)
+    mesh: int,               // radial sample count of qij_radial rows
+    note: str                // human-readable provenance / scope note
+}
+
+let _UPFAUG_4PI: float = 12.56637061435917295384   // 4π
+
+// √(4π) monopole normalization (Y_00 = 1/√4π ⇒ scalar q_ij = ∫r²Q dr · √4π).
+fn _upfaug_sqrt4pi() -> float { return sqrt(_UPFAUG_4PI) }
+
+// Locate attribute `key="value"` on a tag line (UPF attrs are double-quoted).
+fn _upfaug_attr(text: str, anchor: str, key: str) -> str {
+    let a = text.index_of(anchor)
+    if a < 0 { return "" }
+    let rest = text.substring(a, len(text))
+    let gt = rest.index_of(">")
+    if gt < 0 { return "" }
+    let line = rest.substring(0, gt)
+    let q = chr(34)
+    let needle = key + "=" + q
+    let k = line.index_of(needle)
+    if k < 0 { return "" }
+    let r2 = line.substring(k + len(needle), len(line))
+    let e = r2.index_of(q)
+    if e < 0 { return "" }
+    return r2.substring(0, e)
+}
+
+// Parse the float payload of the FIRST tag whose name starts with `open_tag`,
+// closed by `</close_base`. Mirrors upf.hexa _upf_block_floats but local (no
+// cross-module private import). Returns [] when absent.
+fn _upfaug_block_floats(text: str, open_tag: str, close_base: str) -> [float] {
+    let mut out: [float] = []
+    let o = text.index_of(open_tag)
+    if o < 0 { return out }
+    let after_open = text.substring(o, len(text))
+    let gt = after_open.index_of(">")
+    if gt < 0 { return out }
+    let body_start = o + gt + 1
+    let close = "</" + close_base
+    let tail = text.substring(body_start, len(text))
+    let c = tail.index_of(close)
+    if c < 0 { return out }
+    let body = tail.substring(0, c)
+    // whitespace-split + parse floats
+    let mut cur = ""
+    let mut i = 0
+    let n = len(body)
+    while i < n {
+        let ch = body.substring(i, i + 1)
+        let is_sp = ch == " " || ch == "\t" || ch == "\n" || ch == "\r"
+        if is_sp {
+            if cur != "" { out = out.push(to_float(cur)) ; cur = "" }
+        } else { cur = cur + ch }
+        i = i + 1
+    }
+    if cur != "" { out = out.push(to_float(cur)) }
+    return out
+}
+
+// ── Integrate one radial Q_ij^{L=0}(r) → scalar monopole moment q_ij ──────────
+//   q_ij = √(4π) · ∫ r² Q_ij(r) dr   (log-mesh quadrature with rab weights).
+// QE stores Q_ij(r) already as the radial function (NOT r²-weighted) for q_with_l
+// PSlibrary UPFs; the r² and rab supply the volume element of ∫d³r.
+fn _upfaug_integrate_q0(r: [float], rab: [float], q: [float]) -> float {
+    let n = len(r)
+    if len(rab) != n || len(q) != n { return 0.0 }
+    let mut acc = 0.0
+    let mut i = 0
+    while i < n {
+        let ri = r[i]
+        acc = acc + ri * ri * q[i] * rab[i]
+        i = i + 1
+    }
+    return acc * _upfaug_sqrt4pi()
+}
+
+// ── A self-contained USPP record (the NC upf_parse bails on US scope) ─────────
+// upf.hexa's upf_parse REFUSES ultrasoft (NC-only scope guard). Route A needs the
+// US data, so this struct + parser read the mesh / vloc / betas / dij DIRECTLY.
+pub struct UpfUs {
+    ok: bool,
+    is_us: bool,
+    nproj: int,
+    z_valence: float,
+    r: [float],
+    rab: [float],
+    vloc: [float],
+    rho: [float],
+    dij: [float],          // flat [nproj*nproj] (Ry)
+    betas: [float],        // flat [nproj*mesh]
+    ls: [int],
+    note: str
+}
+
+// Parse a USPP UPF v2 enough for a PW SCF (mesh, vloc, betas, dij). Reads the
+// SAME blocks as upf.hexa but WITHOUT the NC scope guard (Route A consumes US).
+pub fn upf_us_parse(path: str) -> UpfUs {
+    let text = read_file(path)
+    if len(text) == 0 {
+        return UpfUs { ok: false, is_us: false, nproj: 0, z_valence: 0.0,
+            r: [], rab: [], vloc: [], rho: [], dij: [], betas: [], ls: [],
+            note: "empty/unreadable" }
+    }
+    let is_us = _upfaug_attr(text, "<PP_HEADER", "is_ultrasoft") == "true"
+    let nproj = to_int(to_float(_upfaug_attr(text, "<PP_HEADER", "number_of_proj")))
+    let zv = to_float(_upfaug_attr(text, "<PP_HEADER", "z_valence"))
+    let r = _upfaug_block_floats(text, "<PP_R", "PP_R")
+    let rab = _upfaug_block_floats(text, "<PP_RAB", "PP_RAB")
+    let vloc = _upfaug_block_floats(text, "<PP_LOCAL", "PP_LOCAL")
+    let rho = _upfaug_block_floats(text, "<PP_RHOATOM", "PP_RHOATOM")
+    let dij = _upfaug_block_floats(text, "<PP_DIJ", "PP_DIJ")
+    let nmesh = len(r)
+    // per-projector betas (PP_BETA.k), zero-padded to mesh
+    let mut betas: [float] = []
+    let mut ls: [int] = []
+    let mut k = 1
+    while k <= nproj {
+        let tag = "<PP_BETA." + to_string(k)
+        let base = "PP_BETA." + to_string(k)
+        let b = _upfaug_block_floats(text, tag, base)
+        let am = _upfaug_attr(text, "<PP_BETA." + to_string(k), "angular_momentum")
+        if am == "" { ls = ls.push(0) } else { ls = ls.push(to_int(to_float(am))) }
+        let mut t = 0
+        while t < nmesh {
+            if t < len(b) { betas = betas.push(b[t]) } else { betas = betas.push(0.0) }
+            t = t + 1
+        }
+        k = k + 1
+    }
+    return UpfUs { ok: nmesh > 0, is_us: is_us, nproj: nproj, z_valence: zv,
+        r: r, rab: rab, vloc: vloc, rho: rho, dij: dij, betas: betas, ls: ls,
+        note: "USPP self-parsed: nproj=" + to_string(nproj) + " mesh=" + to_string(nmesh) }
+}
+
+// ── Extract the L=0 augmentation from a USPP/PAW UPF v2 file ───────────────────
+//   path  : .UPF file ; r,rab : the radial mesh (from upf_us_parse) ;
+//   nproj : projector count (must match the V_NL set).
+// Returns UpfAug. For an NC file (no PP_AUGMENTATION) ⇒ ok=false, is_aug=false,
+// qij0=[] (caller uses S=1). For a USPP ⇒ qij0 = real finite [nproj²] moments.
+// Only the L=0 (composite_index for angular_momentum="0") channel is read — the
+// scalar overlap monopole, the leading and (for s-channel hydrides) sole term.
+pub fn upf_aug_parse(path: str, r: [float], rab: [float], nproj: int) -> UpfAug {
+    let text = read_file(path)
+    if len(text) == 0 {
+        return UpfAug { ok: false, is_aug: false, nproj: nproj, qij0: [],
+                        qij_radial: [], mesh: 0, note: "empty/unreadable file" }
+    }
+    let is_us = _upfaug_attr(text, "<PP_HEADER", "is_ultrasoft") == "true"
+    let is_paw = _upfaug_attr(text, "<PP_HEADER", "is_paw") == "true"
+    if !is_us && !is_paw {
+        return UpfAug { ok: false, is_aug: false, nproj: nproj, qij0: [],
+                        qij_radial: [], mesh: 0,
+                        note: "NC pseudo (no augmentation) — S=1 fallback" }
+    }
+    if text.index_of("<PP_AUGMENTATION") < 0 {
+        return UpfAug { ok: false, is_aug: true, nproj: nproj, qij0: [],
+                        qij_radial: [], mesh: 0,
+                        note: "USPP/PAW header but no PP_AUGMENTATION block" }
+    }
+    let nmesh = len(r)
+    // Build q_ij0 [nproj²] and radial rows by scanning PP_QIJL.i.j.0 tags.
+    let mut qij0: [float] = []
+    let mut radial: [float] = []
+    let mut i = 0
+    while i < nproj * nproj { qij0 = qij0.push(0.0) ; i = i + 1 }
+    let mut z = 0
+    while z < nproj * nproj * nmesh { radial = radial.push(0.0) ; z = z + 1 }
+    let mut ii = 1
+    while ii <= nproj {
+        let mut jj = ii
+        while jj <= nproj {
+            // PP_QIJL.<i>.<j>.0 — the L=0 monopole for pair (i,j) (i<=j; symmetric).
+            let tag = "<PP_QIJL." + to_string(ii) + "." + to_string(jj) + ".0"
+            let base = "PP_QIJL." + to_string(ii) + "." + to_string(jj) + ".0"
+            let q = _upfaug_block_floats(text, tag, base)
+            if len(q) == nmesh {
+                let m = _upfaug_integrate_q0(r, rab, q)
+                let a = (ii - 1) * nproj + (jj - 1)
+                let b = (jj - 1) * nproj + (ii - 1)
+                qij0 = _upfaug_set(qij0, a, m)
+                qij0 = _upfaug_set(qij0, b, m)       // symmetric Q_ij = Q_ji
+                // stash radial rows for (i,j) and (j,i)
+                radial = _upfaug_set_row(radial, a, nmesh, q)
+                radial = _upfaug_set_row(radial, b, nmesh, q)
+            }
+            jj = jj + 1
+        }
+        ii = ii + 1
+    }
+    let kind = "USPP"
+    return UpfAug { ok: true, is_aug: true, nproj: nproj, qij0: qij0,
+                    qij_radial: radial, mesh: nmesh,
+                    note: kind + " L=0 augmentation: " + to_string(nproj) +
+                          " projectors, finite q_ij extracted" }
+}
+
+// flat-array setters (no in-place index assign on [float] in this dialect path).
+fn _upfaug_set(a: [float], idx: int, v: float) -> [float] {
+    let mut out: [float] = []
+    let mut i = 0
+    let n = len(a)
+    while i < n { if i == idx { out = out.push(v) } else { out = out.push(a[i]) } ; i = i + 1 }
+    return out
+}
+fn _upfaug_set_row(a: [float], row: int, mesh: int, src: [float]) -> [float] {
+    let mut out: [float] = []
+    let base = row * mesh
+    let mut i = 0
+    let n = len(a)
+    while i < n {
+        if i >= base && i < base + mesh { out = out.push(src[i - base]) }
+        else { out = out.push(a[i]) }
+        i = i + 1
+    }
+    return out
+}
