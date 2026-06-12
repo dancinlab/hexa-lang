@@ -1727,3 +1727,35 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   follow-up (OP-33d?), NOT touched. Deregistering adam_step here would change their error class out-of-scope.
 - Milestone OP-33c flipped [x]. Verdict .verdicts/hexa-0pod/F-OP33C-DEAD-OPTIM-CLEANUP.txt.
   $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
+## OP-39 — float const-fold byte-eq CI regression gate (locks OP-37/OP-37b silent float bugs) — 2026-06-12
+- SURVEY FIRST: read F-OP37 + F-OP37b for the EXACT cases (A&S erf coeff set 0.254829592/-0.284496736/
+  1.421413741/-1.453152027/1.061405429/0.3275911 + computed folds 0.254829592*0.284496736 / 1.421413741*0.5 /
+  0.1+0.2 / 1.0/3.0) + golden patterns; studied tool/fold_ci_gate.sh (OP-34), nobaseline-gate.yml,
+  musl_ctor_abi_gate.sh — established pattern = `tool/*_gate.sh` SSOT + thin YAML step on the built ./hexa.
+- TRIGGER (the decisive subtlety): the bug is in self/codegen.hexa comptime_eval. A BARE inline arg
+  `_bits(L, 0.0 - X)` is NOT const-registered → emitted full-precision → clang folds it correctly → MASKS the
+  bug. The folder only fires + inlines a folded literal for a plain immutable `let` (codegen.hexa:3105
+  _register_comptime_const). So the oracle BINDS `let nN = 0.0 - X` then REFERENCES nN — the use-site inlines
+  the folded literal, exercising the exact serialize/parse path. PROVEN: Jun-8 (pre-fix) hexat emits the LOSSY
+  `_bits(..., hexa_float(-0.25483))` / `hexa_float(0.0724982))`; FIXED hexat (/tmp/hexat_op37b_v4) emits exact
+  `hexa_float(-0.254829592)` / `hexa_float(7.24981871602117067e-02)`.
+- GOLDENS — verified by RUNNING the FIXED-compiler-built oracle binary: /tmp/hexat_op37b_v4 (current source,
+  fixpoint byte-identical to a fresh tool/regen_cc_manual rebuild) → emitted C → clang + restored self/runtime.c
+  → /tmp/op39_bin → all 13 lines printed, exit 0. (a) negation/additive = python struct.pack('<d') byte-exact;
+  (b) MUL1 = 4589888465602041183 = the FIXED compiler's +1-ULP value (host rt_mul vs python ...182 — the
+  documented OP-37b host-arithmetic residual), so the gate locks the COMPILER's correct output, not python's.
+- GATE tool/op39_constfold_gate.sh (OP-34/OP-19f low-blast discipline): runs ONLY op39_constfold_byteeq.hexa,
+  asserts ONLY the 13 const-fold bits lines, auto-exports HEXA_PREBUILT_RUNTIME on the .c=0 seam. Wired into
+  nobaseline-gate.yml as a step right after the OP-34 fold gate in all 3 faithful jobs (darwin-arm64,
+  linux-x86_64, linux-arm64) — same ./hexa, <1 s, no GPU, no new job. EXTEND > duplicate (g0): co-located with
+  the existing golden-fold harness, not a parallel workflow.
+- VERIFIED BOTH WAYS with the SAME gate (the bug/fix differential IS the test):
+  · PASS: `sh tool/op39_constfold_gate.sh <fixed-compiler-output>` → all 13 OK → "PASS — all 13 float
+    const-folds match the recorded goldens", exit 0.
+  · FAIL: `sh tool/op39_constfold_gate.sh ~/.hx/bin/hexa` (pre-fix deployed) → all 13 DRIFT to the lossy %g
+    values (e.g. NEG1 -4625109807764698594 ≠ golden -4625109815114573186), "FAIL — float const-fold byte-eq
+    REGRESSION detected", exit 1.
+  · TEETH: single-golden 1-ULP corruption (MUL1 ...183→...184) → DRIFT + exit 1 → confirms one-bit sensitivity.
+- Milestone OP-39 flipped [x]. Verdict .verdicts/hexa-0pod/F-OP39-CONSTFOLD-CI-GATE.txt. $0 · 0-GPU · 0-pod ·
+  no vast · no foreign-pod touch · no .tape edits.
