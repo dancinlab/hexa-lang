@@ -659,12 +659,32 @@ The dispatcher MUST fall back to a **safe default = MODE 8 (128×128, NST=3)** �
    `D ∈ {256 … 8192}` square; for a shape outside the cost-model's validated/measured envelope
    (or a degenerate / highly non-square shape the cost model was never anchored on), the dispatcher
    falls back to **MODE 8** rather than trust an extrapolated pick.
+3. **(OP-63) The pick's `provenance == "extrapolated"` AND it is NOT MODE 8.** Each
+   `selected_config` pick now carries an HONEST `provenance ∈ {measured, extrapolated}` (OP-63):
+   only **D=768** (`F-OP54`), **D=2048** (`F-OP45GPU`), and **D=4096** (`F-OP45GPU`/`F-OP55`) are
+   GPU-**measured** shapes; **D=256/512/1024/1536/8192 are cost-model EXTRAPOLATIONS** (the pick
+   was validated by the cost model but the own-GEMM was never GPU-run at that shape). The
+   conservative rule: **never launch a non-MODE-8 kernel on a shape whose pick was never
+   GPU-validated.** If `provenance == "extrapolated"` and `mode != MODE8`, fall back to MODE 8.
+
+> **What case-3 changes in TODAY's table: NOTHING — and that is the point.** Every extrapolated
+> pick in the current table IS already MODE 8 (D=1024/1536/8192) *except* the small-D `MODE_t64`
+> picks (D=256/512), and those are *already* fallback-to-MODE-8 via case 1 (`MODE_t64` is unbuilt
+> on Hopper). So case 3 is a **no-op on the current table**. Its job is to **hard-guard the
+> FUTURE**: a later cost-model edit (a re-tune, a new mode, a re-anchored coefficient) that
+> happened to make an *extrapolated* shape pick a *non-MODE-8* kernel would, without this rule,
+> silently launch a kernel on a shape the GPU never validated — exactly the honest-number error
+> OP-63 closes. Case 3 makes that structurally impossible: an extrapolated non-MODE-8 pick is
+> *always* downgraded to the measured-safe MODE 8 path until a GPU lane actually measures it (at
+> which point its `provenance` flips to `measured` and the guard lifts for that shape).
 
 Concretely the dispatcher's rule is:
 
 ```
-cfg = selected_config(M, K, N)
-if cfg.mode not in BUILT_MODES  or  shape_out_of_validated_range(M,K,N):
+cfg = selected_config(M, K, N)          # now also carries cfg.provenance + cfg.verdict (OP-63)
+if   cfg.mode not in BUILT_MODES                                  \
+  or shape_out_of_validated_range(M,K,N)                          \
+  or (cfg.provenance == "extrapolated" and cfg.mode != "MODE8"):  # OP-63 conservative guard
     cfg = MODE8_DEFAULT            # 128×128, NST=3 — the measured 1.08× parity winner
 launch(cfg)                        # guaranteed a BUILT, measured-safe kernel
 ```
@@ -672,7 +692,9 @@ launch(cfg)                        # guaranteed a BUILT, measured-safe kernel
 where `BUILT_MODES` is the set of kernels actually compiled into the deployed `b14.cu` object
 (today: `{MODE8}`, and the OG16/OG17/MODE6 family that share the 128×128 launch). This makes the
 contract **safe by construction**: production can **never** launch an unbuilt kernel — the worst
-case degrades to the current measured-good MODE 8 path.
+case degrades to the current measured-good MODE 8 path — **and (OP-63) it can never launch a
+non-MODE-8 kernel on a shape whose pick was a cost-model extrapolation, only on a GPU-measured
+shape.**
 
 ### (c) The bit-exactness invariant — routing changes the KERNEL, not the bits
 
