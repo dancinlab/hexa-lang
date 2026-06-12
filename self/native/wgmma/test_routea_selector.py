@@ -114,6 +114,63 @@ def main():
     print("measured ordering @D=2048 and @D=4096 reproduced (F-OP45GPU anchors intact) -> "
           f"{'OK' if not any('rank' in f for f in fails) else 'FAIL'}")
 
+    # ---- 6. OP-63 PROVENANCE LOCK — honest measured-vs-extrapolated tagging --------------
+    #         (a) every MEASURED shape carries provenance=='measured' + a non-empty verdict;
+    #         (b) every OTHER table shape carries provenance=='extrapolated' (+ empty verdict);
+    #         (c) the conservative-fallback predicate holds: an extrapolated pick that is NOT
+    #             MODE8 must fall back (so production never launches a non-MODE8 kernel on a
+    #             shape whose pick was never GPU-validated). Today this is vacuously satisfied
+    #             (every extrapolated pick is MODE8 or the already-fallback MODE_t64), and this
+    #             test LOCKS that so a future cost-model edit can't extrapolate a non-MODE8 pick
+    #             onto an unmeasured shape without tripping the guard. (g5 honest-number lock.)
+    print("\n" + "="*86)
+    print("OP-63 PROVENANCE LOCK — measured-vs-extrapolated tagging is HONEST (g5)")
+    print("="*86)
+    # the 3 GPU-MEASURED shapes (the ONLY shapes with a real own-GEMM GPU verdict):
+    MEASURED = {768, 2048, 4096}
+    TABLE_DS = [256, 512, 768, 1024, 1536, 2048, 4096, 8192]
+    print(f"{'D':>6} {'mode':>10} {'provenance':>13} {'verdict':>40}  {'':>3}")
+    for D in TABLE_DS:
+        cfg = rc.selected_config(D)
+        prov = cfg.get("provenance"); vref = cfg.get("verdict", "")
+        if D in MEASURED:
+            # (a) measured shapes: provenance=measured + non-empty verdict ref.
+            check(prov == "measured",
+                  f"D={D}: measured shape tagged provenance={prov!r}, expected 'measured'")
+            check(bool(vref),
+                  f"D={D}: measured shape has EMPTY verdict ref (must cite the GPU verdict)")
+        else:
+            # (b) every other shape: provenance=extrapolated + empty verdict ref.
+            check(prov == "extrapolated",
+                  f"D={D}: unmeasured shape tagged provenance={prov!r}, expected 'extrapolated'")
+            check(vref == "",
+                  f"D={D}: extrapolated shape carries a verdict ref {vref!r} (must be empty)")
+        # (c) conservative-fallback predicate: extrapolated AND non-MODE8 => must fall back.
+        must_fallback = (prov == "extrapolated" and cfg["mode"] != "MODE8")
+        # In TODAY's table every extrapolated non-MODE8 pick is MODE_t64, which is ALSO an
+        # unbuilt-fallback (OP-61 §b case 1) — so the conservative guard never changes a built
+        # launch today. We assert the predicate is well-defined and, where it fires, the pick
+        # is exactly the already-fallback small-tile (no NEW non-MODE8 launch is introduced).
+        if must_fallback:
+            check(cfg["mode"] == "MODE_t64",
+                  f"D={D}: an extrapolated NON-MODE8 pick {cfg['mode']} is NOT the known "
+                  f"unbuilt-fallback MODE_t64 — a cost-model edit extrapolated a non-MODE8 "
+                  f"kernel onto an unmeasured shape (OP-63 conservative guard must fall back)")
+        ok = (prov == ("measured" if D in MEASURED else "extrapolated"))
+        mark = "OK" if ok else "FAIL"
+        print(f"{D:>6} {cfg['mode']:>10} {prov:>13} {vref:>40}  {mark:>3}")
+    n_meas = sum(1 for D in TABLE_DS if rc.selected_config(D).get('provenance') == 'measured')
+    print(f"\nGPU-MEASURED shapes: {n_meas} of {len(TABLE_DS)} "
+          f"(only D=768/2048/4096 have a real own-GEMM verdict; the rest are cost-model "
+          f"extrapolations) -> {'OK' if not any('provenance' in f or 'verdict ref' in f for f in fails) else 'FAIL'}")
+    # conservative-fallback predicate summary for the current table:
+    extrap_nonm8 = [D for D in TABLE_DS
+                    if rc.selected_config(D).get('provenance') == 'extrapolated'
+                    and rc.selected_config(D)['mode'] != 'MODE8']
+    print(f"conservative-fallback predicate (extrapolated AND non-MODE8 -> fall back): the only "
+          f"such shapes today are {extrap_nonm8} (all MODE_t64, already unbuilt-fallback) -> "
+          f"{'OK (no NEW non-MODE8 launch on an unmeasured shape)' if not any('conservative' in f.lower() or 'extrapolated a non-MODE8' in f for f in fails) else 'FAIL'}")
+
     print("\n" + "="*86)
     if fails:
         print(f"OP-60 SELECTOR REGRESSION LOCK: FAIL ({len(fails)} assertion(s) broken)")
