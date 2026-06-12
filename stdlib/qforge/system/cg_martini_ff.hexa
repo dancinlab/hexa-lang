@@ -1,0 +1,174 @@
+// cg_martini_ff.hexa — QFORGE/system round-6: CG-TIER REAL ENERGY (MARTINI
+// bead–bead nonbonded LJ table).
+//
+// Round-5 (cg_martini.hexa) sealed the CG SCALE BRIDGE — the MM→CG mass-weighted
+// centroid mapping, the linear-slave force back-map (constant Jacobian), and the
+// THREE-scale additive partition E_tot = E_QM+E_MM+E_CG + couplings — but left the
+// per-bead CG energy E_CG as a plain callback float (a stub). Round-6 FILLS that
+// slot with a REAL coarse-grained energy: the MARTINI bead–bead nonbonded
+// Lennard-Jones interaction.
+//
+//   E_CG = Σ_{a<b} 4 ε_ab [ (σ_ab/r_ab)^12 − (σ_ab/r_ab)^6 ]
+//
+// the SAME LJ 6-12 form chem/md already verifies — so we REUSE
+// `stdlib/chem/md/lennard_jones::lj_pair_energy` (d3 · d19, no rebuilt potential).
+// A bead is just a position; we wrap each bead in the shared `MdParticle` layout
+// (zero velocity/mass — CG nonbonded energy is position-only) and call the
+// verified pair primitive. The CG-specific physics lives ENTIRELY in the σ_ab /
+// ε_ab the pair receives, which come from a MARTINI bead-type interaction TABLE.
+//
+// BEAD-TYPE TABLE (DATA, d4 — no name hardcoding):
+//   A bead carries an integer TYPE index 0..T-1 (P=polar, N=intermediate/nonpolar,
+//   C=apolar/carbon, Q=charged — the MARTINI 3 regular-bead families). The σ and ε
+//   for a pair (type_a, type_b) are looked up from a flat SYMMETRIC T×T table
+//   (row-major, sigma_tab[a*T+b], eps_tab[a*T+b]). Add / rename / re-parameterise a
+//   bead family = pass a different T and table — never a branch in this layer (d4).
+//   The bead TYPE LIST + the σ/ε TABLES are the only data the driver consumes.
+//
+// HONEST (d6 · @L5): the bundled `martini3_*` tables hold REPRESENTATIVE literature
+// values, NOT the full MARTINI 3 interaction matrix (which tabulates ~18 regular
+// bead types across ~10 interaction levels — Souza et al., Nat. Methods 18, 382
+// (2021)). MARTINI 3 regular beads share a single LJ size σ ≈ 0.47 nm; the well
+// depth ε is set per type-pair from a discrete level ladder (level "0" ≈ 4.99 down
+// to the weakest ≈ 2.0 kJ/mol). The four P/N/C/Q diagonal/off-diagonal entries here
+// are representative of that ladder (self-ε ordered C<N<P<Q-ish for the polar
+// gradient), labelled as representative — the VERIFIED CORE of this round is that a
+// real bead–bead LJ energy now FLOWS into the R5 three-scale E_CG slot and sums
+// exactly; full MARTINI 3 parameterisation is downstream data, not this gate.
+//
+// REUSE (d19 · NEXUS edge):
+//   bead–bead LJ 6-12 pair      ← stdlib/chem/md/lennard_jones::lj_pair_energy
+//   three-scale additive total  ← stdlib/qforge/system/cg_martini::cg_threescale_total (R5)
+//   (MdParticle bead layout)    ← stdlib/chem/md/lennard_jones::MdParticle
+
+use "stdlib/chem/md/lennard_jones"
+use "stdlib/qforge/system/cg_martini"
+
+// ── MARTINI 3 regular-bead family TYPE indices (DATA labels, d4) ──────────────
+// Plain integer indices into the σ/ε tables — the driver NEVER branches on these
+// names; they are documentation for the table rows/cols only.
+pub fn martini3_type_P() -> int { return 0 }   // polar
+pub fn martini3_type_N() -> int { return 1 }   // intermediate / nonpolar
+pub fn martini3_type_C() -> int { return 2 }   // apolar / carbon
+pub fn martini3_type_Q() -> int { return 3 }   // charged
+pub fn martini3_n_types() -> int { return 4 }
+
+// ── REPRESENTATIVE σ table (nm) — symmetric T×T, row-major ───────────────────
+// MARTINI 3 regular beads share ONE size σ ≈ 0.47 nm (the "R" bead size); the
+// table is filled uniformly to reflect that (HONEST: a single representative size,
+// not the small per-pair size variations of the full FF). d4: this is just data.
+pub fn martini3_sigma_table() -> [float] {
+    let s = 0.47
+    return [s, s, s, s,
+            s, s, s, s,
+            s, s, s, s,
+            s, s, s, s]
+}
+
+// ── REPRESENTATIVE ε table (kJ/mol) — symmetric T×T, row-major ───────────────
+// Well depths drawn from the MARTINI 3 interaction-level ladder (representative,
+// not the full matrix). Ordering reflects the polar gradient: self-interactions
+// C(apolar) < N(intermediate) < P(polar) < Q(charged); cross terms between unlike
+// families are weaker than the stronger partner's self term (qualitative MARTINI
+// behaviour). Symmetric by construction. d6: labelled REPRESENTATIVE.
+//        P     N     C     Q     (col)
+//  P   3.50  3.10  2.30  4.00
+//  N   3.10  2.99  2.70  3.20
+//  C   2.30  2.70  3.50  2.00
+//  Q   4.00  3.20  2.00  4.99
+pub fn martini3_eps_table() -> [float] {
+    return [3.50, 3.10, 2.30, 4.00,
+            3.10, 2.99, 2.70, 3.20,
+            2.30, 2.70, 3.50, 2.00,
+            4.00, 3.20, 2.00, 4.99]
+}
+
+// ── TABLE LOOKUP — σ_ab / ε_ab for a bead-type pair (symmetric, d4) ──────────
+// Flat row-major index a*T+b. Symmetric table ⇒ (a,b) and (b,a) return the same
+// value; the driver relies only on the lookup, never on the type identity.
+pub fn cg_ff_sigma(type_a: int, type_b: int, sigma_tab: [float], n_types: int) -> float {
+    return sigma_tab[type_a * n_types + type_b]
+}
+pub fn cg_ff_eps(type_a: int, type_b: int, eps_tab: [float], n_types: int) -> float {
+    return eps_tab[type_a * n_types + type_b]
+}
+
+// ── BEAD → MdParticle — wrap a CG bead position in the shared LJ layout ───────
+// A CG nonbonded LJ energy is position-only, so velocity/mass/force fields are
+// zero; this lets us call the VERIFIED chem/md `lj_pair_energy` unchanged (d3).
+pub fn cg_bead_particle(x: float, y: float, z: float) -> MdParticle {
+    return MdParticle{ x: x, y: y, z: z, vx: 0.0, vy: 0.0, vz: 0.0,
+                       mass: 0.0, fx: 0.0, fy: 0.0, fz: 0.0 }
+}
+
+// ── (a) ONE bead–bead LJ pair energy (REUSE lj_pair_energy) ──────────────────
+// E_pair = 4 ε_ab [(σ_ab/r)^12 − (σ_ab/r)^6], with σ_ab/ε_ab from the bead-type
+// table. `ba`/`bb` are flat bead positions [x,y,z]. The numerics are entirely
+// chem/md's verified primitive — this layer only supplies the table parameters.
+pub fn cg_bead_pair_energy(ba: [float], bb: [float],
+                           type_a: int, type_b: int,
+                           sigma_tab: [float], eps_tab: [float], n_types: int) -> float {
+    let eps = cg_ff_eps(type_a, type_b, eps_tab, n_types)
+    let sig = cg_ff_sigma(type_a, type_b, sigma_tab, n_types)
+    let pa = cg_bead_particle(ba[0], ba[1], ba[2])
+    let pb = cg_bead_particle(bb[0], bb[1], bb[2])
+    return lj_pair_energy(pa, pb, eps, sig)
+}
+
+// ── (b) FULL CG ENERGY — E_CG = Σ_{a<b} bead–bead LJ (the R5 callback, REAL) ──
+// `bead_pos` = flat [x0,y0,z0, x1,y1,z1, …]; `bead_types[k]` = type index of bead
+// k. Sums every distinct bead pair through the table-parameterised LJ primitive.
+// This is the concrete value that fills the R5 E_CG slot. d4: bead count / types
+// / σ/ε tables are all data — no per-system branch.
+pub fn cg_martini_energy(bead_pos: [float], bead_types: [int],
+                         sigma_tab: [float], eps_tab: [float], n_types: int) -> float {
+    let n = len(bead_types)
+    let mut e = 0.0
+    let mut a = 0
+    while a < n {
+        let ax = bead_pos[3 * a + 0]
+        let ay = bead_pos[3 * a + 1]
+        let az = bead_pos[3 * a + 2]
+        let mut b = a + 1
+        while b < n {
+            let bx = bead_pos[3 * b + 0]
+            let by = bead_pos[3 * b + 1]
+            let bz = bead_pos[3 * b + 2]
+            e = e + cg_bead_pair_energy([ax, ay, az], [bx, by, bz],
+                                        bead_types[a], bead_types[b],
+                                        sigma_tab, eps_tab, n_types)
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return e
+}
+
+// ── (c) WIRE INTO R5 THREE-SCALE TOTAL — real E_CG flows into E_tot ──────────
+// Computes the REAL CG energy from the bead system, then feeds it as the E_CG
+// argument of the R5 three-scale partition (cg_threescale_total). The other five
+// terms (E_QM, E_MM, the three couplings) remain callback floats, exactly as R5
+// intended (d4). This CLOSES the R5 stub: E_CG is no longer a hand-passed scalar
+// but the computed bead–bead LJ sum.
+pub fn cg_threescale_total_with_ff(
+        e_qm: float, e_mm: float,
+        bead_pos: [float], bead_types: [int],
+        sigma_tab: [float], eps_tab: [float], n_types: int,
+        e_qm_mm: float, e_mm_cg: float, e_qm_cg: float) -> float {
+    let e_cg = cg_martini_energy(bead_pos, bead_types, sigma_tab, eps_tab, n_types)
+    return cg_threescale_total(e_qm, e_mm, e_cg, e_qm_mm, e_mm_cg, e_qm_cg)
+}
+
+// ── (d) LORENTZ-BERTHELOT combining (helper) ─────────────────────────────────
+// MARTINI normally TABLES σ_ab / ε_ab directly (the cg_ff_* lookups above), but
+// where a combining rule is wanted the standard Lorentz-Berthelot mix is
+//   σ_ab = ½(σ_aa + σ_bb) ,  ε_ab = √(ε_aa · ε_bb).
+// Provided so the gate can confirm LB on the DIAGONAL self-terms reproduces the
+// self-σ/ε exactly (σ_aa = ½(σ_aa+σ_aa), ε_aa = √(ε_aa·ε_aa)). HONEST: this is an
+// AUXILIARY rule; the production path is the table, not LB.
+pub fn cg_lb_sigma(sigma_aa: float, sigma_bb: float) -> float {
+    return 0.5 * (sigma_aa + sigma_bb)
+}
+pub fn cg_lb_eps(eps_aa: float, eps_bb: float) -> float {
+    return sqrt(eps_aa * eps_bb)
+}
