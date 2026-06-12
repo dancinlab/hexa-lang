@@ -240,3 +240,113 @@ device 의 diffusive 열전도 (ballistic↔diffusive crossover, κ_ballistic �
 - PR base=qforge-chip-r3 (R1+R2+R3 lineage tip; 지정 r1 은 stale·R2/R3 이미 포함) ·
   `--repo dancinlab/hexa-lang` · 머지=사용자. brick+selftest+WIP 커밋 즉시 push (durable-worktree).
   DOMAINS.tape 미접촉. domains/QFORGE-CHIP.{md,log.md} in-place (stage/commit 은 PR 브랜치에서).
+
+## 2026-06-13 — round-9 β (multi-orbital / multi-band H(k), g5 34/34 PASS)
+
+R8 보고가 지정한 (β) 축 = single-band → **multi-orbital band**. R1/R3 의 밴드 leg 는 site 당
+궤도 1개(단일 평면파/단일 TB band)였다 — R9 는 site 당 n_orb 궤도로 승격해 H(k) 를
+**n_orb×n_orb 행렬**로 만들고 eig 로 다밴드 ε_n(k) 를 얻는다. 0-pod analytic. ISOLATED worktree
+`qforge-chip-r9-multiorbital` (base origin/qforge-chip-r8-bte — R1-R8 lineage tip; r3 가 그
+조상이라 전 lineage 보존). brick+selftest WIP 선커밋 즉시 push (durable-worktree — 첫콜 사망/
+디스크-ENOSPC 대비; 실제로 셀프테스트 중 호스트 디스크 full 발생, push 된 커밋만 생존 → 복구 후 재실행).
+
+### R3 band H(k) 감사 (d3/d19)
+- `band_scf.hexa`: ε_n(k)=eig[H(k)], H(k)=T(k)+V — **single-band per G**. 평면파 G 마다 1채널,
+  궤도-resolved 구조 없음. eig = `stdlib/alloc/math/eigen.eigh(A,n)` → [vals(desc), vecs].
+  V = vshell[|ΔG|] Fourier map (d4 데이터). → R9 가 재사용: **같은 eigh**, 같은 dense-flat 행렬
+  규약, 같은 gen3 arena-return 가드(스칼라 즉시 materialise) 패턴.
+- multi-orbital 승격 = block 구조: H_{αβ}(k), α,β 궤도. real-space hopping t_{αβ}(R) → Bloch
+  H_{αβ}(k)=onsite[α]δ_{αβ}+Σ_R t_{αβ}(R)cos(k·R) (real basis, e^{ikR}+e^{-ikR}).
+
+### brick `stdlib/qforge/chip/band_multiorbital.hexa`
+- `qforge_chip_mo_hk(norb,onsite,hops,k,a)` → dense H(k) flat (norb²). onsite 대각 + hop
+  {α,β,dx,t} 마다 t·cos(k·dx·a) 를 (α,β)·(β,α) 에 Hermitian 추가.
+- `qforge_chip_mo_bands` → eigh → n_orb 밴드 ascending (vals desc reverse, 스칼라 즉시 복사).
+- `qforge_chip_mo_effmass` → m*=ħ²/(d²ε/dk²) FD 2차미분 (band-edge curvature → carrier inertia).
+- `qforge_chip_mo_two_band(Ea,Eb,V)` → [ε−,ε+]=½(Ea+Eb)±√((½ΔE)²+V²) 닫힌형.
+- `qforge_chip_mo_gap_scan(...,nk)` → [gap, kVBM, kCBM, direct]; VBM=valence(band0) max,
+  CBM=conduction(band last) min; direct=1 iff k_VBM==k_CBM (mesh tol).
+- `qforge_chip_mo_valley_count(...,nk)` → 전 BZ [−π/a,π/a) 전도밴드 strict local minima
+  (주기링; ±π/a 경계 1점 fold). min@Γ→1 · min@경계→1 · 이중우물 ±k₀→2.
+- `qforge_chip_sk_hop_ss/sp/pp` → Slater-Koster two-centre (ssσ · spσ dir-cosine sign · ppσ
+  on-axis l=1; ppπ 가중 0). 궤도/hopping = 데이터 → 실 material = OrbitalModel swap (d4).
+- d19 재사용: `eigh` (R1 diatomic gap·R3 PW H(k)·L1·Davidson 공유). d4: norb/hop 무관 단일 builder.
+
+### g5 VERBATIM (34/34 PASS)
+```
+PASS (A) dim H(k) = norb²=4 (2-orbital) (4)
+PASS (A) #bands = norb=2 @k=π/3a (2)
+PASS (A) band0(k=0)=Es−1=−2 (s-like) (-2.0)
+PASS (A) band1(k=0)=Ep−0.5=1.5 (p-like) (1.5)
+PASS (A) dim H(k)=norb²=9 (3-orbital) (9)
+PASS (A) #bands=norb=3 (3)
+PASS (A) norb=1 → 1 band (R1/R3 limit) (1)
+PASS (A) norb=1 band(k=0)=ε₀−2t=0.5−2 (-1.5)
+PASS (B) m*=ħ²/(2 t a²) @band bottom (t=0.5) (0.0625)
+PASS (B) flatter band (t→t/2) → 2× heavier m* (0.125)
+PASS (B) m*(flat) > m*(sharp) (small t = heavy)
+PASS (B) band-top curvature<0 → m*<0 (hole)
+PASS (B) |m*(top)|=|m*(bottom)| (symmetric cosine) (0.0625)
+PASS (C) DIRECT model: k_VBM ≈ k_CBM (both at Γ)
+PASS (C) DIRECT k_VBM = 0 (Γ) (0.0)
+PASS (C) DIRECT k_CBM = 0 (Γ) (0.0)
+PASS (C) DIRECT gap ≥ 0
+PASS (C) DIRECT gap = Eg−2 = 1 (1.0)
+PASS (C) INDIRECT model: k_VBM ≠ k_CBM
+PASS (C) INDIRECT k_VBM = 0 (Γ) (0.0)
+PASS (C) INDIRECT k_CBM = π/a (zone boundary) (0.785398)
+PASS (C) INDIRECT gap ≥ 0
+PASS (C) INDIRECT gap = Eg−2 = 1 (1.0)
+PASS (D) eig ε− = ½(Ea+Eb)−√((½ΔE)²+V²) (0.579063)
+PASS (D) eig ε+ = ½(Ea+Eb)+√((½ΔE)²+V²) (4.42094)
+PASS (D) ε− closed value = 2.5−√3.69 (0.579063)
+PASS (D) ε+ closed value = 2.5+√3.69 (4.42094)
+PASS (D) degenerate Ea=Eb → gap = 2|V| = 1.4 (1.4)
+PASS (D) H(k) Hermitian: H_01 == H_10 (1.2)
+PASS (D) H(k) Hermitian w/ k-dep hop: H_01==H_10 (0.810872)
+PASS (E) single-well conduction band (min Γ) → 1 valley (1)
+PASS (E) boundary-min conduction band (±π/a equiv) → 1 valley (1)
+PASS (E) double-well conduction band → 2 valleys (±k₀ pair) (2)
+qforge_chip_band_multiorbital_selftest PASS
+```
+- (A) **다밴드 차원**: H(k)=norb² flat, eig→정확히 norb 밴드 (2/3-orbital + norb=1 single-band
+  극한 = R1/R3). 단일 밴드 → 다밴드 구조 봉인.
+- (B) **유효질량**: m*=ħ²/(d²ε/dk²) band-edge FD == 닫힌형 ħ²/(2ta²) (cosine band, Ashcroft-
+  Mermin Ch.12); flat band(t→t/2)→2× heavy m*∝1/t; band-top curvature<0→m*<0 (hole, |m*| 대칭).
+- (C) **직접/간접갭**: VBM/CBM k-위치 비교 → DIRECT(둘다 Γ) vs INDIRECT(CBM@π/a) 판별, gap≥0,
+  gap=Eg−2=1 두 모델 동일 (eig 에서 읽음, per-model branch 없음·d4).
+- (D) **2-band 닫힌형**: 2×2 eig == Wolfsberg ½(Ea+Eb)±√((½ΔE)²+V²) (1e-9), 닫힌값 2.5±√3.69
+  (1e-12), degenerate Ea=Eb→gap=2|V|=1.4 avoided-crossing; Hermiticity H_01==H_10 (k-dep hop 포함).
+- (E) **valley count**: 전 BZ minima — single-well→1 · boundary(±π/a equiv)→1 · double-well ±k₀→2.
+
+### 정직 보고 (d6) — Slater-Koster/2-band MODEL, 실 Si/Ge fit 아님
+hopping 은 **Slater-Koster / generic 2-band 모델** 파라미터다 — 경험적 ss/sp 표·spin-orbit·d-궤도
+없는 fitted Si/Ge 파라미터화가 아니다. 이 라운드의 deliverable = **다밴드 행렬 H(k) 구조 +
+유효질량(curvature) + 직접/간접 갭 판별 + valley 다중도 + 2-band 닫힌형** — 전부 유도가능
+해석 ref (cosine-band 곡률·two-level secular). 실 material 파라미터화는 같은 OrbitalModel
+(onsite[] + Hop{α,β,dx,t}[]) 로의 **데이터 swap** 이지 코드 경로가 아니다 (d4). 날조 없음.
+
+### chip 스케일 밴드 leg 상태 — 실밴드 구조 봉인
+- **밴드** leg: R1 ε(k)·diatomic gap · R2 k-mesh manifold+DOS · R3 single-band SCF-fed
+  ε_n(k)=eig[T(k)+V] · **R9 multi-orbital n_orb-band H(k) + m*·직접/간접·valley** ✓ ← 본 round 봉인.
+  → single-band 에서 **다밴드(실 반도체 특징: 다궤도·유효질량·간접갭·valley)** 구조까지 도달.
+- chip front-end **밴드·수송·열 3-leg + 다밴드 구조** = closed-form 양자/해석 극한에서 g5 봉인.
+- **chip depletion 판정**: 아직 NOT depleted. 다밴드 구조는 봉인됐으나 (1) phonon-NEGF/BTE 산란
+  (R10 후보), (2) p-d 혼성 실 파라미터화 + SCF V_scr drop-in(R3 정직보고 데이터-swap),
+  (3) verify-adapter(chip=TCAD) 표준화, (4) NEXUS edge 등록 미해결 → 도메인 open.
+
+### round-10 다음
+다밴드 봉인 → 산란/실파라미터 정밀화:
+(α) **phonon-NEGF / Callaway BTE** — R4 ballistic κ + R8 RTA-BTE 에 phonon-NEGF Σ_ph(ω) 또는
+  Callaway 모델(normal+Umklapp 분리, τ_N 모멘텀보존 보정)로 ballistic↔diffusive crossover
+  정밀화 (저온 floor N·g₀ = 상한 앵커). ← 본 보고 우선 지정.
+(β) **p-d 혼성 + SCF V_scr drop-in** — R9 OrbitalModel 에 d-궤도(ddσ/ddπ/ddδ) + R3 가 미룬
+  수렴 real-cell scf_pw V_scr(G) 데이터 투입 → self-consistent multi-band ε_n(k).
+(γ) **verify-adapter(chip=TCAD)** — 밴드갭·m*·직접/간접·valley·κ 를 측정/TCAD ref 표준화.
+
+### deliver (round-9)
+- brick `stdlib/qforge/chip/band_multiorbital.hexa` + selftest (g5 34/34 PASS).
+- PR base=qforge-chip-r8-bte (R1-R8 lineage tip; r3 가 조상이라 지정 base 의 전 lineage 보존) ·
+  `--repo dancinlab/hexa-lang` · 머지=사용자. WIP 커밋 즉시 push (durable-worktree — 호스트
+  디스크 ENOSPC 도중 발생, push 된 커밋만 생존해 복구). DOMAINS.tape 미접촉.
+  domains/QFORGE-CHIP.{md,log.md} in-place.
