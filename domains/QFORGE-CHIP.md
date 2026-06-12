@@ -113,7 +113,7 @@
       selftest 불변(3-D 경로 additive·등방극한이 R9 재현). HONEST(d6): 단순입방+tight-binding
       **모델** hopping(R9 동일 caveat) — deliverable 은 valley COUNT·anisotropic m* TENSOR·3-D √E
       DOS 가 큐빅대칭에서 emergent 한 것; 실 Si/Ge fitted param 은 같은 hop3 list 로의 DATA-swap(d4),
-      새 brick 아님. 이로써 **R11 이 드러낸 frontier #2(3D valley multiplicity)가 닫힘**. PR #<TBD>.
+      새 brick 아님. 이로써 **R11 이 드러낸 frontier #2(3D valley multiplicity)가 닫힘**. PR #3176.
 - [ ] **NEXUS edge** — QFORGE-CHIP → {소자 도메인} 재사용 그래프 등록 (materials c7 패턴).
 
 ## reuse (d19)
