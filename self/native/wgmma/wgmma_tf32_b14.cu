@@ -727,6 +727,112 @@ extern "C" __global__ void gemm_og17_b14(const __grid_constant__ CUtensorMap tma
 }
 
 // ======================================================================
+// MODE 9 — OP-52: MODE 8 (b14 dual-issue) + NON-PERSISTENT CTA-SWIZZLE (the OP-45-GPU T4 lever).
+//   OP-45-GPU T4 measured that cuBLAS's +24.6% large-D win is a BETTER SINGLE-PASS TILE +
+//   CTA-SWIZZLE (cta_swizzle=1, split_k=1) — NOT split-K. MODE 7 already swizzles, but it ALSO
+//   converts the launch to a PERSISTENT kernel (a grid-stride tile loop over occ*SM CTAs); T3
+//   measured MODE 7 @D=4096 REGRESSED (~273 vs 284). This kernel ISOLATES the swizzle lever from
+//   the persistent-loop confound: it is the b14 MODE 8 kernel VERBATIM (same descriptor-direct
+//   128x128 math, same NST ring, same dual-issue PDEP, same vectorized epilogue) with ONLY the
+//   blockIdx -> (bm,bn) tile mapping replaced by an L2-friendly swizzled rasterization. The grid
+//   is sized 1-CTA-per-tile EXACTLY like MODE 8 (NOT occ*SM) — so the ONLY difference vs MODE 8 is
+//   the CTA->tile assignment order. The FMA accumulation order is byte-identical to MODE 8, so
+//   rel_rms MUST stay 0 (a swizzle that changes any output value is a tile-index bug, g5-rejected).
+//     SWZ=0 -> plain row-major linear order == MODE 8 EXACTLY (apples self-check).
+//     SWZ=w>0 -> grouped column-rasterization width w (reuses tile_unswizzle, the MODE 7 mapper):
+//       `w` consecutive CTAs walk down a column-group, sharing A row-blocks + L2-hot B columns.
+//   The flat tile id is derived from blockIdx in a NON-persistent grid: tid = by*gridDim.x + bx.
+// ======================================================================
+extern "C" __global__ void gemm_og17_b14_swz(const __grid_constant__ CUtensorMap tmapA,
+                                      const __grid_constant__ CUtensorMap tmapB,
+                                      float* __restrict__ gD,int M,int N,int K,int NST,
+                                      int lbo,int sbo,int boff,int swmode,int PDEP,
+                                      int tilesM,int tilesN,int swz){
+    const int TM=128,TN=128,TKSW=32,TK=8;
+    // NON-PERSISTENT swizzle: one CTA per tile, flat id from a row-major grid, remapped to a
+    // swizzled (trow,tcol). Same compute as MODE 8 — only the CTA->tile assignment changes.
+    int flat = blockIdx.y*gridDim.x + blockIdx.x;
+    int trow,tcol; tile_unswizzle(flat,tilesM,tilesN,swz,&trow,&tcol);
+    int bm=trow*TM, bn=tcol*TN;
+    extern __shared__ __align__(128) float sm[];
+    const int ASW=TM*TKSW, BSW=TN*TKSW;
+    const int SWBUF=ASW+BSW;
+    uint64_t* full =(uint64_t*)(sm + (size_t)NST*SWBUF);
+    int tid=threadIdx.x; int wg=tid>>7; int band=wg; int lt=tid&127;
+    int nks=K/TKSW;
+    const int NATOM=TN/TKSW;
+    const uint32_t bytesA=ASW*4, bytesB=BSW*4;
+    if(tid<NST){ mbar_init_tx(&full[tid],1); }
+    __syncthreads();
+    float d0[32],d1[32];
+    #pragma unroll
+    for(int i=0;i<32;++i){d0[i]=0.f;d1[i]=0.f;}
+    uint32_t fph=0;
+    int stages=NST<nks?NST:nks;
+    if(tid==0){
+        for(int st=0;st<stages;++st){
+            float* base=sm+(size_t)st*SWBUF; float* Asw=base; float* Bsw=base+ASW;
+            mbar_expect_tx(&full[st], bytesA+bytesB);
+            tma_load_2d(Asw,&tmapA,st*TKSW,bm,&full[st]);
+            #pragma unroll
+            for(int c=0;c<NATOM;++c)
+                tma_load_2d(Bsw+(size_t)c*(TKSW*TKSW),&tmapB,bn+c*TKSW,st*TKSW,&full[st]);
+        }
+    }
+    for(int ki=0;ki<nks;++ki){
+        int st=ki%NST;
+        mbar_wait(&full[st], fph); if(st==NST-1) fph^=1;
+        float* base=sm+(size_t)st*SWBUF; float* Asw=base; float* Bsw=base+ASW;
+        float* Aband=Asw + band*64*TKSW;
+        float* B0=Bsw;
+        float* B1=Bsw + 2*(TKSW*TKSW);
+        uint32_t aAb=(uint32_t)__cvta_generic_to_shared(Aband);
+        uint32_t a0b=(uint32_t)__cvta_generic_to_shared(B0);
+        uint32_t a1b=(uint32_t)__cvta_generic_to_shared(B1);
+        asm volatile("wgmma.fence.sync.aligned;\n":::"memory");
+        #pragma unroll
+        for(int kk=0;kk<TKSW;kk+=TK){
+            uint32_t off=(uint32_t)((kk>>3)*64*4);
+            uint64_t dA =mk_desc(aAb+off,(uint32_t)lbo,(uint32_t)sbo,(uint32_t)boff,(uint32_t)swmode);
+            uint64_t dB0=mk_desc(a0b+off,(uint32_t)lbo,(uint32_t)sbo,(uint32_t)boff,(uint32_t)swmode);
+            uint64_t dB1=mk_desc(a1b+off,(uint32_t)lbo,(uint32_t)sbo,(uint32_t)boff,(uint32_t)swmode);
+            WG(d0,dA,dB0);
+            WG(d1,dA,dB1);
+        }
+        asm volatile("wgmma.commit_group.sync.aligned;\n":::"memory");
+        wait_group_dyn(PDEP);
+        __syncthreads();
+        if(tid==0){
+            int load_ki=ki+stages;
+            if(load_ki<nks){
+                int lst=load_ki%NST;
+                float* lb=sm+(size_t)lst*SWBUF; float* lAsw=lb; float* lBsw=lb+ASW;
+                mbar_expect_tx(&full[lst], bytesA+bytesB);
+                tma_load_2d(lAsw,&tmapA,load_ki*TKSW,bm,&full[lst]);
+                #pragma unroll
+                for(int c=0;c<NATOM;++c)
+                    tma_load_2d(lBsw+(size_t)c*(TKSW*TKSW),&tmapB,bn+c*TKSW,load_ki*TKSW,&full[lst]);
+            }
+        }
+    }
+    asm volatile("wgmma.wait_group.sync.aligned 0;\n":::"memory");
+    int rbase=bm+band*64;
+    int w=lt>>5,l=lt&31,rb=w*16+(l>>2),cb=(l&3)*2;
+    #pragma unroll
+    for(int c=0;c<8;++c)for(int r=0;r<2;++r){
+        int row=rbase+rb+r*8;
+        int col0=bn+cb+c*8, col1=bn+64+cb+c*8;
+        int i0=c*4+r*2+0, i1=c*4+r*2+1;
+        if(row<M){
+            if(col0+1<N){ float2 v=make_float2(d0[i0],d0[i1]); *reinterpret_cast<float2*>(&gD[row*N+col0])=v; }
+            else { if(col0<N)gD[row*N+col0]=d0[i0]; if(col0+1<N)gD[row*N+col0+1]=d0[i1]; }
+            if(col1+1<N){ float2 v=make_float2(d1[i0],d1[i1]); *reinterpret_cast<float2*>(&gD[row*N+col1])=v; }
+            else { if(col1<N)gD[row*N+col1]=d1[i0]; if(col1+1<N)gD[row*N+col1+1]=d1[i1]; }
+        }
+    }
+}
+
+// ======================================================================
 // MODE 5 — OG17 LEVER 1: FULL GEMM with the 128x256 OUTPUT TILE (band-free, route-a global).
 //   Identical mechanism to gemm_og16 (descriptor-direct, NO decode band, gmma-INTER pre-laid
 //   global) but TN=256: each warpgroup holds FOUR 32-elt accumulators d0..d3 (64x256) and the
@@ -1025,6 +1131,100 @@ int main(int argc,char**argv){
         double tfc=fl/(mc*1e-3)/1e12,ratio=tfc/tfo;
         printf("B14 S=%d MODE=8 NST=%d PDEP=%d b14 own=%.1f TFLOP/s cuBLAS-TF32=%.1f ratio(cuBLAS/own)=%.2fx rel_rms=%.3e PARITY=%s\n",
                S,NST,PDEP,tfo,tfc,ratio,rr,ratio<=1.3?"YES":"NO");
+        return 0;
+    }
+
+    if(MODE==9){
+        // ---- OP-52: MODE 8 (b14 dual-issue) + NON-PERSISTENT CTA-SWIZZLE. The OP-45-GPU T4 lever:
+        // cuBLAS's +24.6% large-D win = cta_swizzle=1 + single-pass (split_k=1), NOT split-K. This
+        // ISOLATES the swizzle from MODE 7's persistent-loop confound: identical b14 math + 1-CTA/
+        // tile grid (NOT occ*SM), ONLY the CTA->tile order swizzled. rel_rms 0 GATE FIRST, THEN perf.
+        // argv: S 9 [NST] [PDEP] [SWZ] [SBO] [BOFF].  SWZ=0 == MODE 8 EXACTLY (apples self-check).
+        int NST =argc>3?atoi(argv[3]):3;
+        int PDEP=argc>4?atoi(argv[4]):2;
+        int SWZ =argc>5?atoi(argv[5]):8;     // CTA-swizzle column-group width (0 = plain == MODE 8)
+        int SBO =argc>6?atoi(argv[6]):1024;
+        int BOFF=argc>7?atoi(argv[7]):0;
+        int SWM =0, LBO =128;
+        int Mx=S,Nx=S,Kx=S;
+        if(Nx%128||Kx%32||Mx%128){printf("MODE9 needs M,N%%128==0 && K%%32==0\n");return 1;}
+        if(PDEP>NST-1)PDEP=NST-1; if(PDEP<0)PDEP=0;
+        size_t szA=(size_t)Mx*Kx,szB=(size_t)Kx*Nx,szD=(size_t)Mx*Nx;
+        float *hA=(float*)malloc(szA*4),*hB=(float*)malloc(szB*4),*hD=(float*)malloc(szD*4),*hR=(float*)malloc(szD*4);
+        srand(7);
+        for(size_t i=0;i<szA;++i)hA[i]=tf(((rand()%17)-8)*0.0625f);
+        for(size_t i=0;i<szB;++i)hB[i]=tf(((rand()%17)-8)*0.0625f);
+        float *dA,*dB,*dD,*dR;
+        CK(cudaMalloc(&dA,szA*4));CK(cudaMalloc(&dB,szB*4));CK(cudaMalloc(&dD,szD*4));CK(cudaMalloc(&dR,szD*4));
+        float *dAo,*dBo; CK(cudaMalloc(&dAo,szA*4));CK(cudaMalloc(&dBo,szB*4));
+        CK(cudaMemcpy(dAo,hA,szA*4,cudaMemcpyHostToDevice));CK(cudaMemcpy(dBo,hB,szB*4,cudaMemcpyHostToDevice));
+        cublasHandle_t h;CB(cublasCreate(&h));CB(cublasSetMathMode(h,CUBLAS_TF32_TENSOR_OP_MATH));
+        float al=1.f,be=0.f;
+        CB(cublasSgemm(h,CUBLAS_OP_N,CUBLAS_OP_N,Nx,Mx,Kx,&al,dBo,Nx,dAo,Kx,&be,dR,Nx));CK(cudaDeviceSynchronize());
+        CK(cudaMemcpy(hR,dR,szD*4,cudaMemcpyDeviceToHost));
+        // pre-lay A,B IDENTICAL to MODE 4/6/8 (128x32 gmma-INTER, B 128-N tiles of 4 atoms).
+        float *hAp=(float*)calloc(szA,4),*hBp=(float*)calloc(szB,4);
+        for(int m=0;m<Mx;++m)for(int k=0;k<Kx;++k){
+            int tile=m>>7, mloc=m&127, a=mloc>>3, r=mloc&7;
+            int katom=k>>5, kk=k&31;
+            int p = a*256 + gmma_phys(r,kk);
+            int srow = tile*128 + (p>>5);
+            int scol = katom*32 + (p&31);
+            hAp[(size_t)srow*Kx + scol] = hA[(size_t)m*Kx + k];
+        }
+        for(int k=0;k<Kx;++k)for(int n=0;n<Nx;++n){
+            int tile=n>>7, nloc=n&127, c=nloc>>5, na=(nloc&31)>>3, r=nloc&7;
+            int katom=k>>5, kk=k&31;
+            int p = na*256 + gmma_phys(r,kk);
+            int gN = tile*128 + c*32 + (p&31);
+            int gK = katom*32 + (p>>5);
+            hBp[(size_t)gK*Nx + gN] = hB[(size_t)k*Nx + n];
+        }
+        CK(cudaMemcpy(dA,hAp,szA*4,cudaMemcpyHostToDevice));CK(cudaMemcpy(dB,hBp,szB*4,cudaMemcpyHostToDevice));
+        CUtensorMap tmapA{},tmapB{};
+        { cuuint64_t gd[2]={(cuuint64_t)Kx,(cuuint64_t)Mx}; cuuint64_t gs[1]={(cuuint64_t)Kx*4};
+          cuuint32_t bd[2]={32,128}; cuuint32_t es[2]={1,1};
+          CUresult r=enc(&tmapA,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dA,gd,gs,bd,es,
+            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_NONE,
+            CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+          if(r!=CUDA_SUCCESS){printf("MODE9 encodeA r=%d\n",(int)r);return 4;} }
+        { cuuint64_t gd[2]={(cuuint64_t)Nx,(cuuint64_t)Kx}; cuuint64_t gs[1]={(cuuint64_t)Nx*4};
+          cuuint32_t bd[2]={32,32}; cuuint32_t es[2]={1,1};
+          CUresult r=enc(&tmapB,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dB,gd,gs,bd,es,
+            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_NONE,
+            CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+          if(r!=CUDA_SUCCESS){printf("MODE9 encodeB r=%d\n",(int)r);return 4;} }
+        const int TM=128,TN=128,TKSW=32;
+        int tilesM=Mx/TM, tilesN=Nx/TN;
+        size_t SWBUF=(size_t)(TM*TKSW + TN*TKSW);
+        size_t smsz=(size_t)NST*SWBUF*4 + (size_t)NST*8;
+        dim3 grid(tilesN,tilesM); int blk=256;   // 1 CTA per tile, SAME total grid as MODE 8
+        CK(cudaFuncSetAttribute(gemm_og17_b14_swz,cudaFuncAttributeMaxDynamicSharedMemorySize,(int)smsz));
+        auto launch=[&](){ gemm_og17_b14_swz<<<grid,blk,smsz>>>(tmapA,tmapB,dD,Mx,Nx,Kx,NST,LBO,SBO,BOFF,SWM,PDEP,tilesM,tilesN,SWZ); };
+        { int occ=0; cudaOccupancyMaxActiveBlocksPerMultiprocessor(&occ,(const void*)gemm_og17_b14_swz,blk,smsz);
+          printf("OCCUPANCY MODE=9 blk=%d dynsmem=%zuB (%.1f KB/CTA) -> %d CTA/SM PDEP=%d SWZ=%d tiles=%dx%d\n",blk,smsz,smsz/1024.0,occ,PDEP,SWZ,tilesM,tilesN); }
+        CK(cudaMemset(dD,0,szD*4));
+        launch();
+        cudaError_t e=cudaGetLastError(); if(e==cudaSuccess)e=cudaDeviceSynchronize();
+        if(e!=cudaSuccess){printf("MODE9 OWN-FAULT PDEP=%d SWZ=%d %s\n",PDEP,SWZ,cudaGetErrorString(e));return 4;}
+        CK(cudaMemcpy(hD,dD,szD*4,cudaMemcpyDeviceToHost));
+        double se=0,sr=0;for(size_t i=0;i<szD;++i){double dd=(double)hD[i]-hR[i];se+=dd*dd;sr+=(double)hR[i]*hR[i];}
+        double rr=sqrt(se/fmax(1e-30,sr));
+        if(rr>3e-3){printf("B14 S=%d MODE=9 NST=%d PDEP=%d SWZ=%d rel_rms=%.3e FAIL — swizzle tile-index bug (g5), no perf\n",
+            S,NST,PDEP,SWZ,rr);return 2;}
+        cudaEvent_t s0,s1;CK(cudaEventCreate(&s0));CK(cudaEventCreate(&s1));int it=20;
+        launch();CK(cudaDeviceSynchronize());
+        CK(cudaEventRecord(s0));for(int i=0;i<it;++i)launch();
+        CK(cudaEventRecord(s1));CK(cudaEventSynchronize(s1));
+        float mo;CK(cudaEventElapsedTime(&mo,s0,s1));mo/=it;
+        double fl=2.0*(double)Mx*Nx*Kx,tfo=fl/(mo*1e-3)/1e12;
+        cublasSgemm(h,CUBLAS_OP_N,CUBLAS_OP_N,Nx,Mx,Kx,&al,dBo,Nx,dAo,Kx,&be,dR,Nx);CK(cudaDeviceSynchronize());
+        CK(cudaEventRecord(s0));for(int i=0;i<it;++i)cublasSgemm(h,CUBLAS_OP_N,CUBLAS_OP_N,Nx,Mx,Kx,&al,dBo,Nx,dAo,Kx,&be,dR,Nx);
+        CK(cudaEventRecord(s1));CK(cudaEventSynchronize(s1));
+        float mc;CK(cudaEventElapsedTime(&mc,s0,s1));mc/=it;
+        double tfc=fl/(mc*1e-3)/1e12,ratio=tfc/tfo;
+        printf("B14 S=%d MODE=9 NST=%d PDEP=%d SWZ=%d b14swz own=%.1f TFLOP/s cuBLAS-TF32=%.1f ratio(cuBLAS/own)=%.2fx rel_rms=%.3e PARITY=%s\n",
+               S,NST,PDEP,SWZ,tfo,tfc,ratio,rr,ratio<=1.3?"YES":"NO");
         return 0;
     }
 

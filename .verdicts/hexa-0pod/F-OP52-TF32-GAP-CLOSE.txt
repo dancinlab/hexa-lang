@@ -1,0 +1,169 @@
+F-OP52-TF32-GAP-CLOSE — REAL H100 sm_90a attempt to CLOSE the route-(a) own-GEMM @D=4096 TF32
+sub-parity gap (~1.5x slower than cuBLAS-TF32) by building the OP-45-GPU T4-identified lever:
+a NON-PERSISTENT CTA-SWIZZLE on the b14 MODE 8 kernel (the "better single-pass tile + CTA-swizzle,
+NOT split-K" the cuBLASLt heuristic showed is cuBLAS's +24.6% large-D win). NEW kernel MODE 9
+(gemm_og17_b14_swz) ISOLATES the swizzle from MODE 7's persistent-loop confound. Every datapoint
+bit-exact (rel_rms 0.000e+00, median of 3 reps). VERDICT: the bit-exact swizzle does NOT close the
+gap — it REGRESSES. The @D=4096 cap is NOT recoverable by CTA-swizzle alone; closed-negative.
+================================================================================================
+TIER: 🔴/🟠 CLOSED-NEGATIVE (honest). The CTA-swizzle lever, built bit-exact and isolated from the
+      persistent-loop, does NOT close any part of the @D=4096 1.5x gap — it makes it slightly WORSE
+      (best swizzled 280.2 TFLOP/s vs the SWZ=0/MODE 8 baseline 285.1, a -1.7% regress; ratio
+      1.53x vs 1.50x). This is a VALID, decisive result: it MEASURES that the "fixable-scheduling-
+      stall" headroom OP-45-GPU's analytical roofline identified is NOT capturable via the
+      rasterization/L2-locality layer — fully consistent with T2's finding (the D=4096 GEMM is
+      COMPUTE/scheduling-bound, DRAM ~12-40% peak, so an L2-friendly CTA order cannot help). It also
+      RE-CONFIRMS and SHARPENS OP-45-GPU T3: MODE 7's @4096 regress was the SWIZZLE itself, not its
+      persistent-loop — MODE 9 isolates the swizzle (same 1-CTA/tile non-persistent launch as MODE 8)
+      and still regresses, so the persistent-loop was not the culprit. Bit-exactness (rel_rms 0) was
+      PRESERVED at every single datapoint — the non-negotiable gate held. The gap is now MEASURED to
+      be NOT closable by CTA-swizzle bit-exact; it requires a genuinely different single-pass per-CTA
+      tile/schedule (a real kernel build, the next lever), not a launcher/index change.
+
+DATE: 2026-06-13
+HW:   1x NVIDIA H100 80GB HBM3, compute_cap 9.0, driver 560.35.05, nvcc 12.6 (V12.6.77), sm_90a.
+      vast.ai contract 40733645, label `hexa-tf32gap`, offer 21671166, $2.311/hr, India IN, rel 0.9989.
+      Runtime ~18 min, cost ~$0.70. Single pod, DESTROYED at end, leak-0 verified (verbatim below).
+INPUT: F-OP45GPU-OCCUPANCY-SWEEP.txt (#3110, the T4 lever: cuBLAS D=4096 top algo = split_k=1
+       single-pass + cta_swizzle=1; the +24.6% lever is a better single-pass tile + CTA-swizzle,
+       g5-bit-exact-reachable; D=4096 is compute/scheduling-bound NOT bandwidth-bound) +
+       F-OP49-SHAPE-ADAPTIVE-DESIGN.txt (#3103, config gaps incl. better single-pass tile + swizzle) +
+       docs/forge-routea-shape-adaptive.md +
+       self/native/wgmma/wgmma_tf32_b14.cu (MODE 8 gemm_og17_b14 baseline + MODE 7 tile_unswizzle).
+DELIVERABLE (net-new code): self/native/wgmma/wgmma_tf32_b14.cu MODE 9 = gemm_og17_b14_swz
+       (b14 MODE 8 math VERBATIM + 1-CTA/tile grid + ONLY the CTA->tile assignment swizzled via the
+       existing tile_unswizzle; flat tile id = blockIdx.y*gridDim.x + blockIdx.x — NON-persistent) +
+       self/native/wgmma/op52_swz_run.sh (on-pod driver). SWZ=0 == MODE 8 EXACTLY (apples self-check).
+TOOLCHAIN: nvcc -O3 -arch=sm_90a -lcublas -lcuda. B14-BUILD: OK (only the pre-existing MODE 1
+       "KSW declared but never referenced" warning; MODE 9 compiles clean).
+
+================================================================================================
+T0 — ptxas -v on MODE 9 (gemm_og17_b14_swz) [VERBATIM]: occupancy IDENTICAL to MODE 8 (as designed)
+================================================================================================
+ptxas info    : Compiling entry function 'gemm_og17_b14_swz' for 'sm_90a'
+ptxas info    : Function properties for gemm_og17_b14_swz
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+  OCCUPANCY MODE=9 blk=256 dynsmem=98328B (96.0 KB/CTA) -> 2 CTA/SM   [at BOTH D=2048 and D=4096]
+=> Same 0-spill, 96 KB/CTA, 2 CTA/SM as MODE 8 — confirming MODE 9 changes ONLY the CTA->tile
+   assignment order, nothing else (smem/regs/occupancy D-invariant, matching the OP-45 T1 binary).
+
+================================================================================================
+STEP 1 — MODE 8 BASELINE reproduced on THIS pod (apples) [VERBATIM, 3 reps each]:
+================================================================================================
+D=2048 MODE8 NST3 PDEP2:  own 315.7 / 315.9 / 316.6 TFLOP/s  cuBLAS 343.7/346.2/347.9  ratio 1.09-1.10x  rel_rms 0  PARITY=YES
+D=4096 MODE8 NST3 PDEP1:  own 286.4 / 285.6 / 284.7 TFLOP/s  cuBLAS 428.6/431.5/428.3  ratio 1.50-1.51x  rel_rms 0  PARITY=NO
+D=4096 MODE8 NST3 PDEP2:  own 282.1 / 284.2 / 282.7 TFLOP/s  cuBLAS 428.6/430.2/430.1  ratio 1.51-1.52x  rel_rms 0  PARITY=NO
+=> D=2048 ~316 (1.09x) and D=4096 ~285.6 (1.50x) — REPRODUCES the OP-45-GPU anchor (320.6/1.08x @2048,
+   283.9/1.52x @4096) within ~1% (this pod runs marginally slower @2048, ~identical @4096). Apples OK.
+
+================================================================================================
+STEP 2 — MODE 9 SWZ=0 APPLES SELF-CHECK (must == MODE 8) [VERBATIM, 3 reps]:
+================================================================================================
+D=2048 MODE9 NST3 PDEP2 SWZ=0:  own 320.8 / 319.2 / 320.3 TFLOP/s  ratio 1.07-1.09x  rel_rms 0  PARITY=YES
+D=4096 MODE9 NST3 PDEP2 SWZ=0:  own 285.1 / 283.6 / 286.2 TFLOP/s  ratio 1.50-1.52x  rel_rms 0  PARITY=NO
+=> SWZ=0 (plain row-major == MODE 8 order) reproduces MODE 8 EXACTLY (285.1 vs 283.9 @4096; 320.3 vs
+   315.7 @2048 — within run-to-run noise). rel_rms 0. The MODE 9 kernel is a faithful MODE 8 + a
+   swizzle knob. This is the apples anchor the swizzled rows are compared against.
+
+================================================================================================
+STEP 3 — THE LEVER: MODE 9 CTA-SWIZZLE SWEEP @D=4096 [VERBATIM, median of 3]:  REGRESSES
+================================================================================================
+   (gate: rel_rms 0.000e+00 on EVERY row FIRST — a swizzle that changed output = tile-index bug; ALL PASS)
+PDEP=1 (the @4096 cap-best depth):                                   median own   ratio   rel_rms
+  SWZ=2   own 276.5/278.0/276.9                                       276.9       1.56x   0  PARITY=NO
+  SWZ=4   own 274.8/275.3/274.3                                       274.8       1.57x   0  PARITY=NO
+  SWZ=6   own 272.9/273.3/273.7                                       273.3       1.57x   0  PARITY=NO
+  SWZ=8   own 274.8/273.6/274.8                                       274.8       1.56x   0  PARITY=NO
+  SWZ=12  own 272.9/272.9/273.5                                       272.9       1.58x   0  PARITY=NO
+  SWZ=16  own 274.9/275.6/274.8                                       274.9       1.57x   0  PARITY=NO
+PDEP=2:
+  SWZ=2   own 280.5/279.6/281.0                                       280.5       1.53x   0  PARITY=NO  <- best swizzled @4096
+  SWZ=4   own 277.0/278.5/277.1                                       277.1       1.55x   0  PARITY=NO
+  SWZ=6   own 275.6/275.8/276.7                                       275.8       1.55x   0  PARITY=NO
+  SWZ=8   own 276.8/277.1/276.1                                       276.8       1.55x   0  PARITY=NO
+  SWZ=12  own 278.4/278.0/278.8                                       278.4       1.54x   0  PARITY=NO
+  SWZ=16  own 280.2/280.2/280.1                                       280.2       1.53x   0  PARITY=NO
+
+  BASELINE for comparison (SWZ=0 / MODE 8, this pod): 285.1 TFLOP/s, 1.50x.
+=> EVERY swizzled config @D=4096 is BELOW the SWZ=0 baseline. Best swizzled = 280.5 (PDEP=2 SWZ=2)
+   and 280.2 (PDEP=2 SWZ=16) = -1.6% / -1.7% SLOWER than 285.1; ratio WIDENS 1.50x -> 1.53x. The
+   PDEP=1 group is worse still (272-277, ratio up to 1.58x). The gap is NOT closed — it OPENS.
+
+D=2048 cross-check (median of 3): SWZ=0 ~320; swizzled SWZ=2..16 PDEP2 = 314.0-319.8 (~flat-to-
+   slightly-down, ratio stays 1.08-1.10x). PDEP1 swizzled = 300-304 (mirrors PDEP1's lower base).
+   => swizzle is neutral-to-negative at 2048 too; it never helps at either D.
+
+================================================================================================
+WHY (g5 interpretation, anchored to OP-45-GPU T2):
+================================================================================================
+OP-45-GPU T2 (analytical roofline) established the D=4096 own kernel is COMPUTE/SCHEDULING-bound:
+DRAM at only ~12-40% of HBM3 peak, arithmetic intensity 682 FLOP/byte >> the 104 FLOP/byte
+compute-bound threshold. A CTA-swizzle's entire mechanism is L2 LOCALITY (reordering which tiles
+are co-resident so they share L2-hot A rows / B columns). If DRAM is NOT the bottleneck, improving
+L2 reuse CANNOT raise throughput — and can only ADD overhead (the tile_unswizzle index math + a
+less-coalesced wave-front of B-column TMA loads). That is exactly what STEP 3 measures: a uniform
+small regress. This is the SAME physics as OP-45-GPU T3 (MODE 7 persistent+swizzle regressed @4096),
+now ISOLATED: MODE 9 strips away MODE 7's persistent-loop and keeps ONLY the swizzle, and the
+regress PERSISTS => the regress was the SWIZZLE, not the persistent loop. The "fixable scheduling
+stall" headroom is real (T2) but it lives in the per-CTA Tensor-pipe ISSUE/K-DRAIN schedule, NOT in
+the inter-CTA rasterization order. Closing it needs a different single-pass per-CTA tile/schedule
+(a genuine kernel rewrite), which a launcher/index swizzle structurally cannot deliver.
+
+NOTE on the "better single-pass tile" half of the T4 lever: the only larger single-pass tile that
+exists in-tree is MODE 5 t256 (128x256), which OP-45/OP-49 already MEASURED closed-neg @D=4096
+(264.9 TFLOP/s < MODE 8's 283.9 — it is register-capped to 1 CTA/SM, the W11/W12 dead lever). So
+the in-tree "better tile" option is already exhausted closed-neg; a NEW bit-exact tile/pipeline
+(e.g. a 2-CTA/SM-preserving deeper-K single-pass schedule) is the remaining unbuild lever — out of
+scope for this launcher-change experiment and recorded as the OP-52 follow-up.
+
+================================================================================================
+BIT-EXACTNESS (the non-negotiable gate) — PRESERVED EVERYWHERE:
+================================================================================================
+rel_rms = 0.000e+00 at EVERY datapoint above (baseline, SWZ=0 self-check, and all 24 swizzled
+configs across both D and both PDEP). Not a single config broke the bit-exact accumulation order —
+as designed (MODE 9 keeps the byte-identical FMA order of MODE 8; only the CTA->tile assignment
+changes). So there is NO "faster-but-not-bit-exact" temptation to report: the swizzle is bit-exact
+AND slower. The own-GEMM value proposition (bit-exact, device-resident, no-vendor-call) is intact;
+this experiment simply confirms CTA-swizzle is not a perf lever for it at D=4096.
+
+================================================================================================
+VERDICT (the OP-52 deliverable):
+================================================================================================
+  Does any bit-exact variant CLOSE part of the @D=4096 1.5x TF32 gap?  -> NO.
+  - CTA-swizzle (MODE 9, all group-widths, both PDEP): REGRESSES (-1.6% to -4.4% vs SWZ=0),
+    ratio 1.50x -> 1.53-1.58x. rel_rms 0 throughout. CLOSED-NEGATIVE.
+  - The fixable-stall headroom (T2) is NOT capturable by the rasterization layer (consistent with
+    compute-bound). MODE 7's @4096 regress is now isolated to the SWIZZLE (not the persistent loop).
+  - The remaining lever is a genuinely new bit-exact single-pass per-CTA tile/schedule (a kernel
+    rewrite), NOT a launcher/index change and NOT split-K (g5). Recorded as the OP-52 follow-up.
+  Bit-exactness (rel_rms 0): PRESERVED at 100% of datapoints. A faster-but-not-bit-exact variant
+  was never produced (and would not be a win — that defeats own-GEMM's purpose).
+
+================================================================================================
+DESTROY / LEAK-0 (rule 3) [VERBATIM]:
+================================================================================================
+  $ vastai show instance 40733645 --raw | (label check)  ->  label= hexa-tf32gap   (MINE, confirmed)
+  $ yes | vastai destroy instance 40733645
+  Are you sure you want to destroy instance 40733645? This is irreversible ... destroying instance 40733645.
+  $ vastai show instances-v1
+  ╭─ Results Summary ──╮
+  │ Total: 0 instances │
+  ╰────────────────────╯
+  No instances found.
+=> LEAK-0 CONFIRMED. Pod 40733645 (hexa-tf32gap) destroyed, roster empty. No foreign pod touched
+   (roster had ZERO instances throughout this run; only 40733645 was ever created/destroyed here).
+
+================================================================================================
+SUMMARY (g5):
+- Built MODE 9 (gemm_og17_b14_swz): b14 MODE 8 VERBATIM + NON-PERSISTENT CTA-swizzle (1-CTA/tile
+  grid, only the CTA->tile order swizzled). Isolates the swizzle from MODE 7's persistent-loop.
+- ptxas: 90-reg-class / 0-spill / 96 KB/CTA / 2 CTA/SM, IDENTICAL to MODE 8 (only the index changed).
+- STEP 1: MODE 8 baseline reproduced (D=2048 ~316/1.09x, D=4096 ~285.6/1.50x, rel_rms 0).
+- STEP 2: MODE 9 SWZ=0 == MODE 8 EXACTLY (D=4096 285.1, rel_rms 0) — faithful apples anchor.
+- STEP 3: MODE 9 CTA-swizzle SWZ in {2,4,6,8,12,16} x PDEP {1,2} @D=4096: ALL REGRESS. Best swizzled
+  = 280.5 TFLOP/s (PDEP2 SWZ2) = -1.6% vs 285.1; ratio 1.53x vs 1.50x. rel_rms 0 on every row.
+  D=2048 also neutral-to-negative. => the @D=4096 gap is NOT closed by CTA-swizzle; it widens.
+- Physics: matches OP-45-GPU T2 (compute-bound => L2-locality swizzle can't help) and isolates T3
+  (the regress is the swizzle, not the persistent loop). Headroom lives in per-CTA K-drain schedule.
+- Bit-exactness rel_rms 0 PRESERVED at 100% of datapoints (the gate held; no loose-TF32 win sought).
+- 1x H100 sm_90a, ~$0.70, single pod `hexa-tf32gap`, DESTROYED, leak-0 confirmed, no foreign pod.
