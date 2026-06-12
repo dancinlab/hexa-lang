@@ -3,6 +3,9 @@
 // 12 attrs + 85 builtins 전체 스택 합성
 // 실제 loss 감소 + 정확도 향상 증명
 // ══════════════════════════════════════════════════════════
+// NOTE (HEXA-0POD OP-41): grad_accumulate (used below) is a DEREGISTERED falsified builtin
+// (no runtime impl). Joins adam_step (OP-33d NOTE at the adam call site) + the broader
+// falsified-ML family this baseline-broken demo (exit_code=-1) already depends on. Pointer only.
 
 println("╔══════════════════════════════════════════╗")
 println("║  Anima Micro-Model Convergence Proof     ║")
