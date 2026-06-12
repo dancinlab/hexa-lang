@@ -72,6 +72,9 @@
 //   use "stdlib/chem/fep/abfe_demo"
 
 use "stdlib/math/logsumexp"
+use "stdlib/chem/md/lennard_jones"
+use "stdlib/chem/md/shake"
+use "stdlib/chem/md/langevin"
 use "stdlib/chem/fep/mbar"
 use "stdlib/chem/fep/hrex"
 
@@ -97,20 +100,22 @@ fn _abs_f(x: float) -> float { if x < 0.0 { return 0.0 - x } else { return x } }
 // MdParticle array (the rung's current snapshot); we run `md_n` constrained
 // BAOAB steps and hand back the propagated snapshot + advanced LCG.
 //
-// force_fn(particles) -> particles' is the generic FF hook (the caller binds
-// the soft-core / LJ force at the rung's λ). When `cons` is empty the
+// force_factory(lam) -> force_fn : the λ-coupled FF hook. HREX hands the
+// propagator the rung's λ, so the propagator asks the factory for the
+// λ-COUPLED force field — i.e. each replica is propagated under its own
+// soft-core Hamiltonian U(·,λ_i), exactly as HREX requires. The returned
+// force_fn(particles) -> particles' recomputes fx/fy/fz at the supplied
+// positions (the R8 generic force hook). When `cons` is empty the
 // unconstrained BAOAB path is used; otherwise R7 SHAKE/RATTLE is folded in.
-// md_n is captured by the closure so the returned fn matches HREX's arity.
-//
-// NOTE: the λ-dependence of the force enters through force_fn, which the
-// caller may close over λ per rung (see the selftest's per-rung binding).
-// This wrapper is itself λ-agnostic (d4) — it forwards whatever force_fn
-// the rung carries; lam is accepted to satisfy the HREX signature.
-pub fn make_langevin_prop(force_fn, prm, dt: float, md_n: int,
+// md_n, prm, dt and the constraint args are captured by the closure so the
+// returned fn matches HREX's prop(config, lam, lcg) arity. d4-generic — NO
+// molecule name, the factory is the single λ→force seam.
+pub fn make_langevin_prop(force_factory, prm, dt: float, md_n: int,
                           cons: array, tol: float, maxiter: int) {
     let use_cons = cons.len() > 0
     return fn(config, lam, lcg) {
-        // config is an MdParticle array; run md_n constrained BAOAB steps.
+        // bind the λ-coupled force field for THIS rung, then run md_n steps.
+        let force_fn = force_factory(lam)
         if use_cons {
             let r = langevin_run_constrained(config, force_fn, prm, dt, md_n,
                                              cons, tol, maxiter, lcg)
