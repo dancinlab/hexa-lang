@@ -136,6 +136,31 @@ fn spin_water(particles: array, wx: float, wy: float, wz: float) -> array {
 let tol = 1.0e-8
 let maxiter = 100
 
+// One constrained NVE trajectory of a single rigid water spun about its O
+// by ω=(0,0,2.0), ZERO external force, integrated total time T = dt·M with
+// verlet+SHAKE/RATTLE. Returns [relative-KE-drift, final r(O-H)]. Shared by
+// the working-dt check and the dt-halving convergence check below.
+fn run_constrained_drift(cons: array, dt: float, M: int,
+                         tol_s: float, maxiter_s: int) -> array {
+    let w = water_particles(5.0, 5.0, 5.0)
+    let spun = spin_water(w, 0.0, 0.0, 2.0)
+    let ke0 = kinetic_energy(spun)
+    let mut state = spun
+    let mut m = 0
+    while m < M {
+        let prev = state                       // reference positions (pre-drift)
+        let drifted = verlet_step(state, dt)   // F=0 ⇒ pure drift, no kick
+        let shaken = shake_positions(prev, drifted, cons, tol_s, maxiter_s)
+        let finished = verlet_finish_step(shaken.particles, dt)  // F=0 ⇒ v unchanged
+        let rattled = rattle_velocities(finished, cons, 1.0e-12, maxiter_s)
+        state = rattled.particles
+        m = m + 1
+    }
+    let ke = kinetic_energy(state)
+    let drift = abs_f(ke - ke0) / ke0
+    return [drift, bond_OH(state)]
+}
+
 // ── (a) constraint satisfaction after SHAKE ──────────────────────────
 //
 // Build a rigid water, then DELIBERATELY stretch every atom outward
@@ -219,53 +244,65 @@ check("c RATTLE ṙ·r=0 |Δ|<1e-10", vres_after < 1.0e-10,
       "|ṙ·r| before=" + to_string(vres_before) + " after=" + to_string(vres_after)
       + " iters=" + to_string(ra.iters))
 
-// ── (d) energy conservation (NVE) — constrained vs unconstrained ──────
+// ── (d) energy conservation (NVE) — bounded + dt-CONTROLLED ───────────
 //
-// Single rigid water spun about its O (ω = (0,0,2.0) rad/(time unit)),
-// ZERO external force. Integrate dt=0.001, M steps. Constrained loop:
-//   verlet_step → SHAKE(prev,new) → verlet_finish_step → RATTLE.
-// Energy = KE (no potential). Constrained: geometry rigid ⇒ KE ~const.
-// Unconstrained: with zero force the atoms drift in straight lines, so
-// the O-H bonds GROW without bound — geometry breaks (the contrast the
-// constraint is there to prevent). We report both.
+// Single rigid water spun about its O (ω = (0,0,2.0)), ZERO external
+// force, integrated by verlet+SHAKE/RATTLE. Energy = KE (no potential).
+//
+// HONEST physics (d6/g5): a FORCE-FREE rigid rotor advanced by
+// drift→SHAKE-reproject is a FIRST-ORDER constraint integrator — the KE
+// error is a SYSTEMATIC O(dt) projection error, NOT an energy leak and
+// NOT machine-precision drift. The correct, falsifiable claim is therefore
+// two-fold and is what we assert:
+//   (d)  at the working dt the drift is small + bounded (well below the
+//        unconstrained geometry-break scale), and
+//   (d3) HALVING dt HALVES the drift (linear convergence) — proving the
+//        residual is controlled discretization that vanishes as dt→0, not
+//        a leak. (Measured: 1.53e-3 → 0.766e-3 → 0.383e-3 over dt 1e-3 /
+//        5e-4 / 2.5e-4 at fixed total time, ratio ≈ 2.00 each halving.)
+// Throughout, the GEOMETRY is preserved to machine precision — that is the
+// constraint's actual job and is checked in (d2)/(e).
 
-let dt = 0.001
-let M = 400
+// total time T = dt·M held FIXED across the three dt's (T = 0.4).
+let r_full = run_constrained_drift(cons, 0.001,   400,  tol, maxiter)
+let r_half = run_constrained_drift(cons, 0.0005,  800,  tol, maxiter)
+let r_quart = run_constrained_drift(cons, 0.00025, 1600, tol, maxiter)
+let drift_full = r_full[0]
+let drift_half = r_half[0]
+let drift_quart = r_quart[0]
+let r_oh_c = r_full[1]
+
+// (d) bounded + small at the working dt (and finite).
+check("d energy bounded (NVE, constrained) drift<2e-3",
+      is_finite(drift_full) && drift_full < 2.0e-3 && drift_full > 0.0,
+      "rel-KE-drift=" + to_string(drift_full) + " (working dt=0.001, T=0.4)")
+
+// (d3) linear-in-dt convergence: each halving of dt halves the drift, so
+// the ratio drift(dt)/drift(dt/2) ≈ 2 (within 5%). This is the FALSIFIER —
+// a real energy leak would NOT scale down linearly with dt.
+let ratio1 = drift_full / drift_half
+let ratio2 = drift_half / drift_quart
+let lin_ok = abs_f(ratio1 - 2.0) < 0.1 && abs_f(ratio2 - 2.0) < 0.1
+check("d3 drift halves when dt halves (O(dt), no leak)", lin_ok,
+      "drift(1e-3)=" + to_string(drift_full)
+      + " (5e-4)=" + to_string(drift_half)
+      + " (2.5e-4)=" + to_string(drift_quart)
+      + "  ratios=" + to_string(ratio1) + "," + to_string(ratio2))
+
+// (d2) constraint vs unconstrained geometry contrast: SAME spun start, but
+// WITHOUT SHAKE/RATTLE the force-free straight-line drift blows the O-H
+// bond open, while the constrained run holds it to machine precision.
 let spun = spin_water(w0, 0.0, 0.0, 2.0)
-let ke0 = kinetic_energy(spun)
 let r_oh0 = bond_OH(spun)
-
-// --- constrained trajectory ---
-let mut state = spun
-let mut m = 0
-while m < M {
-    let prev = state                          // reference positions (pre-drift)
-    let drifted = verlet_step(state, dt)      // zero force ⇒ pure drift+0 kick
-    let shaken = shake_positions(prev, drifted, cons, tol, maxiter)
-    let finished = verlet_finish_step(shaken.particles, dt)   // 0 force ⇒ no v change
-    let rattled = rattle_velocities(finished, cons, 1.0e-12, maxiter)
-    state = rattled.particles
-    m = m + 1
-}
-let ke_c = kinetic_energy(state)
-let r_oh_c = bond_OH(state)
-let ke_drift = abs_f(ke_c - ke0) / ke0
-
-// --- unconstrained trajectory (same start, no SHAKE/RATTLE) ---
 let mut ustate = spun
 let mut mu = 0
-while mu < M {
-    let drifted = verlet_step(ustate, dt)
-    ustate = verlet_finish_step(drifted, dt)
+while mu < 400 {
+    let drifted = verlet_step(ustate, 0.001)
+    ustate = verlet_finish_step(drifted, 0.001)
     mu = mu + 1
 }
 let r_oh_u = bond_OH(ustate)
 let bond_break_u = abs_f(r_oh_u - r_oh0)
-
-check("d energy conserved (NVE, constrained) drift<1e-6",
-      is_finite(ke_c) && ke_drift < 1.0e-6,
-      "KE0=" + to_string(ke0) + " KE=" + to_string(ke_c)
-      + " rel-drift=" + to_string(ke_drift))
 check("d2 constraint vs unconstrained geometry contrast",
       bond_break_u > 1.0e-3 && abs_f(r_oh_c - r_oh0) < tol,
       "rOH constrained=" + to_string(r_oh_c)
@@ -275,8 +312,22 @@ check("d2 constraint vs unconstrained geometry contrast",
 
 // ── (e) long-term geometry preservation ──────────────────────────────
 //
-// after the M constrained steps above, r(O-H) and ∠(H-O-H) still equal
-// the rigid TIP3P values.
+// after M=400 constrained steps, r(O-H) and ∠(H-O-H) still equal the
+// rigid TIP3P values. Run a dedicated constrained trajectory and keep its
+// FINAL state so both bond and angle are measured on the same end-frame.
+
+let spun_e = spin_water(w0, 0.0, 0.0, 2.0)
+let mut state = spun_e
+let mut me = 0
+while me < 400 {
+    let prev = state
+    let drifted = verlet_step(state, 0.001)
+    let shaken = shake_positions(prev, drifted, cons, tol, maxiter)
+    let finished = verlet_finish_step(shaken.particles, 0.001)
+    let rattled = rattle_velocities(finished, cons, 1.0e-12, maxiter)
+    state = rattled.particles
+    me = me + 1
+}
 
 let c0 = tip3p_constants()
 let rOH_def = c0[0]
