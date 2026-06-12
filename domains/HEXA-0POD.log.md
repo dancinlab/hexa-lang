@@ -43,6 +43,39 @@
 - OUTCOME: 🟢 GREEN. determinism-contract LAYER 2 now CI-enforced by a tripwire proven pass-clean +
   fail-on-regression. NO codegen/runtime/stdlib edit → self-host byte-eq fixpoint untouched. Milestone
   OP-66 [x]. $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape · no self/env.hexa.
+## 2026-06-13 — OP-68 DONE: fix a REAL contract-vs-behavior contradiction in stdlib/core/math/wrap_pi.hexa · public surface doc claimed half-open codomain "(−π,π], NOT −π" while body comment + fast-path guard + passing `wrap_pi(−π)==−π` test prove the TRUE codomain is the CLOSED [−π,π] · corrected the 3 stale surface lines + machine-locked with a 400-pt closed-interval sweep + −π-membership check · 🔴→fix GREEN 12/12 → 14/14 PASS · doc+test only, no behavior change, self-host byte-eq unaffected · $0 · 0-pod · NO GPU
+- SURVEY (per axis, scoped greps NO .git): (a) self-host codegen TODOs DRY — `grep
+  unimplemented|unreachable|HEXAT_FAIL|TODO|FIXME` over self/codegen.hexa + macho_arm64.hexa = ONE
+  benign hit (codegen.hexa:5645 "statically unreachable" comment on a const-fold opt). (b) stdlib
+  numeric invariants already tested + PASS clean locally — kahan_sum.hexa 5/5, logsumexp.hexa 5/5
+  (re-locking = redundant make-work, g63). (c) ACTIONABLE — internal contradiction in wrap_pi.hexa
+  (below). (d) HEXA-0POD ## deferred all build-host (SELFHOST-NEXT) or GPU (OP-2b/2c/5c/19b) —
+  none 0-pod-doc-feasible.
+- PICK (g0): wrap_pi.hexa surface-contract range bug. Beats (a) dry / (b) already-correct — a REAL
+  contract-vs-behavior contradiction in a PUBLIC stdlib numeric primitive that angle consumers
+  (control/IK/gyro/SDR phase, orbital Kepler) read as the codomain guarantee.
+- THE BUG (verbatim): wrap_pi(x) reduces into the CLOSED [−π, π], preserving BOTH boundaries —
+  fast-path `if x>=0.0-p && x<=p { return x }` returns −π unchanged; the body comment says "reduce
+  into [−π, π] ... a literal −π input returns −π"; the test `check_exact("wrap_pi(-π) == -π",
+  wrap_pi(0.0-p), 0.0-p)` PASSES. But the PUBLIC SURFACE doc claimed a HALF-OPEN codomain excluding
+  −π: L13 `//   pub fn wrap_pi(x: float) -> float    // (−π, π]`, L16–17 "Maps any real x to the
+  unique representative in (−π, π], i.e. +π stays at +π (NOT at −π)". The (−π, π] form is the
+  FLOORED-MODULO convention which lines 21–23 themselves say the fn does NOT use. A consumer trusting
+  "(−π, π], NOT −π" could branch on −π never being returned = latent lower-boundary trap.
+- FIX (doc + test only, NO behavior change): (1) wrap_pi.hexa — corrected L13/L16–17 to the true
+  CLOSED [−π, π] both-boundary-preserved (sign-selected) contract + a note that the floored-modulo
+  form (which WOULD collapse −π→+π) is explicitly NOT used; line 34's "(−π, π)" (open INTERIOR) is
+  correct, untouched. (2) wrap_pi_test.hexa — fixed the stale "(−π,π]" idempotence comment + ADDED a
+  400-point sweep (both signs, non-grid stride, many revolutions) asserting every output ∈ [−π, π],
+  plus an explicit `check_exact "wrap_pi(−π) ∈ codomain (closed [−π,π])"` pinning the lower boundary.
+- RE-VERIFY (verbatim): `hexa run stdlib/core/math/wrap_pi_test.hexa` → pre-fix `PASS 12/12`,
+  post-fix `PASS 14/14` (+2 new checks: closed-interval sweep + −π codomain membership, both PASS).
+- SELF-HOST BYTE-EQ: unaffected — wrap_pi.hexa is a leaf stdlib module (NOT in compiler/main.hexa
+  build_selfhost closure); comments + a test sweep, zero codegen/runtime bytes touched.
+- WIPE-GUARD: net-additive, no >50-line deletion in stdlib/runtime/codegen/rt, scoped subject.
+- OUTCOME: 🔴→fix GREEN. Real public-contract-vs-behavior contradiction found + corrected +
+  machine-locked by a closed-interval oracle. Milestone OP-68 [x]. Verdict
+  F-OP68-WRAP-PI-RANGE-CONTRACT.txt. $0 · 0-pod · NO GPU · no vast · no foreign pod · no .tape · leak-0.
 
 ## 2026-06-13 — OP-67 DONE: COMPLETE the dereg-loop closure across EVERY builtin-ADVERTISING surface · 6 surfaces enumerated + verbatim-grepped all 10 OP-62 orphans per surface · lsp.hexa get_builtins() was the SOLE surface that ever advertised any orphan (OP-65 already pruned `tension_link`); ALL 5 others verbatim 0-hit CLEAN · 🟢 PROVEN-COMPLETE, 0 new stale entries this round (honest all-clean = SUCCESS) · no code edited · $0 · 0-pod · NO GPU
 - TASK: OP-62 (#3175) deregistered 10 pure-orphan builtins from self/env.hexa env_new() (try_float,

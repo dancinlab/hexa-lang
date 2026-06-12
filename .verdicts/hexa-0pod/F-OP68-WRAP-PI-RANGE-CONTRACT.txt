@@ -1,0 +1,103 @@
+F-OP68-WRAP-PI-RANGE-CONTRACT
+=============================
+TIER: 🔴→fix  (genuine internal-inconsistency correctness bug found + fixed + machine-locked)
+SCOPE: 0-pod · $0 · local CPU · NO GPU · no vast · no foreign pod · leak-0 · doc+test only
+
+CONTEXT
+-------
+OP-59/OP-62/OP-65/OP-67 closed the falsified-builtin roster thread; OP-37/37b/40/65
+closed the const-fold codegen-bug class. Both EXHAUSTED — not re-opened. This round
+self-selects the next genuine 0-pod correctness item on a fresh, not-yet-audited
+surface (stdlib numeric primitives / internal-consistency).
+
+SURVEY (per axis a–d; scoped greps, NO .git)
+--------------------------------------------
+(a) self-host codegen TODOs/unimplemented — DRY. `grep unimplemented|unreachable|
+    HEXAT_FAIL|TODO|FIXME` over self/codegen.hexa + self/macho_arm64.hexa returns
+    ONE hit (codegen.hexa:5645 "elided branch was statically unreachable" — a benign
+    explanatory comment on a const-fold optimization, not a latent path). No
+    actionable byte-eq-uncovered miscompile surfaced.
+
+(b) stdlib numeric invariants — the math primitives are already well-tested and PASS
+    clean locally: stdlib/math/kahan_sum.hexa (KBN compensated sum) 5/5 PASS,
+    stdlib/math/logsumexp.hexa (max-shifted LSE + softmax) 5/5 PASS. No bug; re-locking
+    them would be redundant make-work (g63). NOT picked.
+
+(c) internal-inconsistency / transpile-consistency — ACTIONABLE. Found a genuine
+    contradiction in stdlib/core/math/wrap_pi.hexa between its PUBLIC SURFACE contract
+    and its VERIFIED implementation+test (detail below). PICKED.
+
+(d) HEXA-0POD ## deferred + .log.md tail — all residual items are build-host
+    (SELFHOST-NEXT promote/frozen-anchor) or GPU (OP-2b/2c transpose-elim needs aiden
+    5070; OP-5c forge hardening needs a kernel; OP-19b deterministic-erf is a numeric
+    change needing a runtime rebuild). None 0-pod-doc-feasible this round.
+
+PICK (g0 — clearest real correctness payoff, no GPU)
+----------------------------------------------------
+stdlib/core/math/wrap_pi.hexa surface-contract range bug. Beats (a)/(b): (a) dry,
+(b) already-correct+tested. This is a REAL contract-vs-behavior contradiction in a
+public stdlib primitive that downstream angle consumers (control/IK/gyro/SDR phase,
+orbital Kepler) read as the codomain guarantee — fixable 0-pod, $0, no GPU.
+
+THE BUG (verbatim)
+------------------
+wrap_pi(x) reduces an angle into the CLOSED interval [−π, π], preserving BOTH
+boundaries (fast-path guard returns ±π unchanged; the +π/−π boundary value is
+sign-selected). The body comment + the passing self-test agree:
+
+  src body  : "// ── reduce angle (rad) into [−π, π] ──"  "preserving BOTH boundaries
+              ... a literal +π input returns +π, a literal −π input returns −π."
+  src guard : `if x >= 0.0 - p && x <= p { return x }`   // returns −π unchanged
+  test      : check_exact("wrap_pi(-π) == -π (boundary)", wrap_pi(0.0 - p), 0.0 - p)
+              → PASS (full suite 12/12 PASS pre-fix)
+
+But the SURFACE doc (the contract a consumer reads) claimed a HALF-OPEN codomain
+(−π, π] that EXCLUDES −π, with an explicit false negation:
+
+  L13 : "//   pub fn wrap_pi(x: float) -> float    // (−π, π]"
+  L16 : "//   Maps any real x to the unique representative in (−π, π], i.e. +π
+  L17 :  //   stays at +π (NOT at −π)."        ← FALSE: −π IS preserved, IS reachable
+
+The (−π, π] form is the FLOORED-MODULO convention, which lines 21–23 themselves say
+this primitive does NOT use ("would map +π → −π ... we instead reduce to [0,2π) and
+shift only if > π"). So the surface doc described the WRONG algorithm's codomain. A
+consumer trusting "(−π, π], NOT −π" could write a downstream branch assuming wrap_pi
+never returns −π — a latent correctness trap at the lower boundary.
+
+FIX (doc + test only — NO behavior change)
+------------------------------------------
+1. stdlib/core/math/wrap_pi.hexa — corrected the 3 surface/convention lines (L13,
+   L16–17) from the half-open (−π, π] "NOT −π" claim to the true CLOSED interval
+   [−π, π], stating both boundaries are preserved and sign-selected, and noting the
+   floored-modulo form (which WOULD collapse −π→+π) is explicitly NOT used. Line 34's
+   "(−π, π)" (the open INTERIOR for non-boundary inputs) is correct and untouched.
+
+2. stdlib/core/math/wrap_pi_test.hexa — fixed the stale "(−π, π]" comment on the
+   idempotence check, and ADDED a machine-lock of the corrected contract:
+     · a 400-point sweep across many revolutions (both signs, non-grid stride)
+       asserting every output ∈ [−π, π] (closed bound never escaped);
+     · an explicit check_exact "wrap_pi(−π) ∈ codomain (closed [−π,π])" pinning the
+       lower boundary that the old surface doc wrongly excluded.
+
+RE-VERIFY (verbatim)
+--------------------
+pre-fix : hexa run stdlib/core/math/wrap_pi_test.hexa → "PASS 12/12"
+post-fix: hexa run stdlib/core/math/wrap_pi_test.hexa → "PASS 14/14"
+          (+2 new checks: closed-interval sweep + −π codomain membership, both PASS)
+
+SELF-HOST BYTE-EQ
+-----------------
+Unaffected. wrap_pi.hexa is a leaf stdlib module (not in the compiler/main.hexa
+build_selfhost closure); the change is comments + a test sweep — zero codegen/runtime
+bytes touched. The byte-identical bootstrap invariant holds trivially.
+
+WIPE-GUARD
+----------
+Net additive (doc rewrite ~same size; test gains a ~25-line sweep block). No >50-line
+deletion in stdlib/runtime/codegen/rt. Scoped subject.
+
+OUTCOME
+-------
+🔴→fix GREEN. A real public-contract-vs-behavior contradiction in a stdlib numeric
+primitive, found + corrected + machine-locked by a closed-interval oracle (12→14 PASS).
+$0 · 0-pod · NO GPU · no vast · no foreign pod · no .tape edit · leak-0.
