@@ -2032,3 +2032,44 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   per-module LOCAL fns (the shadows), NOT these roster builtins. Verdict
   .verdicts/hexa-0pod/F-OP43-ML-FAMILY-FALSIFIED.txt.
   $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
+## OP-45 — route-(a) own-GEMM D=4096 sub-parity cap STATICALLY characterized (0-pod, no GPU) — 2026-06-12
+- SURVEY-FIRST (mandatory). Read F-GPU-ROUTEA-KEEPBAND-MEASURE.txt (#3094 ROUTE-A): route-(a) pre-permute own-GEMM
+  (b14 MODE 8, gemm_og17_b14, PDEP dual-issue) CROSSES cuBLAS-TF32 parity @D=2048 (1.08x, own 315 TFLOP/s, rel_rms 0)
+  but NOT @D=4096 (~1.50x, own 284 TFLOP/s), footnote attributing the residual to "the 256-elt-tile register-realloc
+  ptxas cannot grant on TF32, the W12/OG17-MODE5 closed-neg". Read the measured kernel self/native/wgmma/
+  wgmma_tf32_b14.cu MODE 8 (+ MODE 5 t256 + MODE 6 pipe + MODE 7 persist for contrast) + the W-ladder reg/occupancy
+  verdicts .verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-{W10,W11,W12,OG16,OG17}.txt (on-pod ptxas numbers).
+- ENV: `which nvcc` → NOT FOUND (CPU-only Darwin host). ptxas runs on CPU but no nvcc installed locally, so even the
+  cheap GPU-free `-Xptxas -v --cubin` register/occupancy capture was NOT possible — this is a SOURCE-LEVEL static
+  analysis using the kernel source + the on-pod numbers already captured in the W-ladder verdicts.
+- KEY CORRECTION: the #3094 footnote MISATTRIBUTES the D=4096 cause. "256-elt register-realloc" describes MODE 5
+  (gemm_og17_t256, d0..d3 = 4x32 = 128 accumulator regs/thread → 154 regs → 1 CTA/SM → ptxas C7507 setmaxnreg-ignored
+  + C7511 wgmma-serialize, the W11/W12 closed-neg), a DIFFERENT kernel that was NEVER the measured D=4096 datapoint.
+  The MEASURED D=4096 kernel is MODE 8 (gemm_og17_b14): TM=128,TN=128, d0[32]/d1[32] = 2x32 = 64 accumulator regs/
+  thread, NST=3 → SWBUF=(128+128)*32*4*3 = 98304 B ≈ 96 KB/CTA → 2 CTA/SM. This config is COMPILE-TIME CONSTANT (D is
+  a kernel ARG M=N=K, not a template param), BYTE-IDENTICAL at D=2048 and D=4096 (verdict confirms "2 CTA/SM, 96.0
+  KB/CTA" for both; D=4096 sweep uses the same MODE8 NST=3).
+- CLASSIFICATION (g5, (a)-(d)): (a) register-spill EXCLUDED (D-invariant binary; if no spill @2048 then none @4096;
+  64 not 128 regs). (b) occupancy-drop EXCLUDED (2 CTA/SM held both D; occupancy ≠ f(D) for fixed tile). (c)
+  D-independent ptxas ceiling EXCLUDED as the GAP cause (own MOVES with D: 315→284 = −9.9%; a constant ceiling can't
+  produce a D-dependent number — ptxas quality bounds the absolute ~300 TFLOP/s plateau but doesn't OPEN the gap).
+  (d) memory/large-D scheduling roofline = SURVIVING CAUSE.
+- DECOMPOSITION (verbatim #3094 numbers): ratio 1.08x→1.50x = cuBLAS 342.5→426.8 (+24.6%, scales UP: shape-adaptive
+  larger-tile/split-K/persistent) ÷ own 315.0→283.9 (−9.9%, scales DOWN: fixed 128x128 plain-launch gridDim
+  (D/128)^2 = 1024 CTAs @4096, no split-K [g5-forbidden, forfeits bit-exact accum order], 2x K-slabs nks 64→128 → 2x
+  commit_group/wait_group/__syncthreads drain). Exact: 1.246/0.901 = 1.39 = 1.50/1.08. ~63% of the gap = cuBLAS gain,
+  ~37% = own loss. Both operands MOVE — NOT a flat ptxas ceiling.
+- WAVE-QUANTIZATION EXCLUDED (computed): 132 SMs x 2 CTA/SM = 264 resident. D=2048: 256 tiles/264 = 0.970 wave-eff.
+  D=4096: 1024/264 = 3.879 → ceil 4 → 1024/(4*264) = 0.970 wave-eff. IDENTICAL 0.970 both D — tail wave is not the
+  differentiator (the plain launch is coincidentally equally quantized at both sizes).
+- HONEST 🟠: static analysis CONFIRMS (a)/(b)/(c) excluded + cause = (d) shape-rigidity-vs-cuBLAS-adaptivity, but
+  CANNOT split (d) into hard-HBM-BW-roofline vs fixable-scheduling-stall without a real GPU ncu/nsys profile. Handed
+  the OP-45-GPU sibling a precise T1-T5 matrix: T1 ptxas -v confirm (~90 regs/0 spill/96KB/2 CTA/SM — CPU-runnable,
+  upgrades a/b to measured-excluded), T2 ncu DRAM%/Tensor% @4096 (near-peak DRAM → hard roofline, close; low/low →
+  fixable, go T3), T3 MODE 7 persistent+swizzle recovery sweep swz=0,1,2,4,8 (rel_rms 0 gate first), T4 cuBLAS
+  cublasLtMatmulAlgoGetHeuristic introspection (which lever is the +24.6%, and is any g5-legal), T5 W12 TN-sweep
+  re-confirm @4096.
+- OUTCOME: 🟠 DEFERRED (static-positive: a/b/c excluded with source evidence + d classified; the d sub-split is the
+  honest GPU-gated residual). milestone OP-45 [x]. Verdict .verdicts/hexa-0pod/F-OP45-ROUTEA-D4096-CAP.txt.
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
