@@ -42,7 +42,29 @@
       ħω·∂n/∂T→k_B (Dulong-Petit) · (D) **채널수 plateau** κ(N)=N·g₀ (N=1..4, 열 staircase =
       Landauer N·G₀ 의 열 아날로그) · (E) generic 모드리스트 (3 acoustic→3g₀, frozen-optical
       BE-억제). HONEST(d6): ballistic 양자극한 — 포논-포논/Umklapp 산란·diffusive BTE 아님;
-      앵커 = EXACT 양자 floor (저온/clean), diffusive device κ 아님. PR #<TBD>.
+      앵커 = EXACT 양자 floor (저온/clean), diffusive device κ 아님. PR #3135.
+- [x] **round-5 α scattering-NEGF (g5 13/13 PASS)** — `stdlib/qforge/chip/negf_scatter.hexa`
+      + selftest. 코히어런트 Σ-NEGF T(E)=Tr[Γ_L Gʳ Γ_R Gᵃ] (Caroli/Fisher-Lee), 반무한
+      lead surface-GF Σ(E) decimation. PR #3139.
+- [x] **round-6 β SCF V_scr(G=0) drop-in (g5 22/22 PASS)** — `stdlib/qforge/chip/band_scf_real.hexa`
+      + selftest. 실 `qforge_scf_pw` 수렴 ρ → self-consistent G=0 차폐 V_scr(G=0)=V_xc(ρ̄_sc)
+      를 R3 H(k) vshell[0] 에 drop-in (데이터-swap, d4) → real self-consistent ε_n(k) →
+      R5 NEGF. HONEST(d6): G=0 leg = 실 self-consistent (converged=true assert); off-diag
+      Bragg shell vshell[1+] (G≠0) = FIXED 해석 vbragg (assembler 가 G=0 대각만 수용) →
+      round-7. PR #3145.
+- [x] **round-7 γ G≠0 full self-consistent screening (g5 19/19 PASS)** —
+      `stdlib/qforge/chip/band_scf_gfull.hexa` + selftest. R6 의 마지막 고정-leg(off-diag
+      Bragg shell) 봉합: 수렴 ρ → V_scr(r)=V_H[ρ]+V_xc[ρ] dense pow2 FFT line → `fft3` →
+      V_scr(G) **전체 shell** → H(k)_{G,G'}=½|k+G|²δ+V_scr(G−G') full Fourier matrix → `eigh`
+      → ε_n(k). vshell[1+] = 실 V_scr(G≠0) (ρ_sc 의 함수, 고정 vbragg 아님). g5: (a) **full
+      G-space 결선** V_scr(G) 전체 shell NaN0 · G=0==V_xc(ρ̄) · V_scr(G_1) FFT==독립 real-space
+      DFT 1e-12 · structured ρ→V_scr(G_1)≠0 · (b) **R6 G=0 연속** uniform ρ→V_scr(G≠0)=0
+      정확 → ε_n(k)==R6 G=0 밴드 verbatim · (c) **self-consistent 갭** structured ρ→Bragg
+      gap (실 V_scr(G=±g), gap→2|V_g| NFE극한, 강한 변조→큰 갭) · (d) **Hermiticity** ε_n(k)
+      real·ascending + SC residual=0(fixed point)/≠0(perturbed). d19 재사용: `qforge_vhartree_
+      from_rho`(Poisson) · `fft3_real`(#2076) · `qforge_vxc_point`(LDA) · R3 `qforge_chip_scf_
+      band_eps`(arbitrary vshell eig). HONEST(d6): G≠0 leg = 실 self-consistent (V_scr[ρ] FFT).
+      PR #<TBD>.
 - [ ] **verify-adapter (chip=TCAD)** — 밴드갭/effective-mass/컨덕턴스/κ 를 측정·TCAD ref
       로 표준화 (verify-adapter 일반화 축).
 - [ ] **NEXUS edge** — QFORGE-CHIP → {소자 도메인} 재사용 그래프 등록 (materials c7 패턴).
