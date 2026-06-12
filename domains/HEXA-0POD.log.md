@@ -1977,3 +1977,23 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   of the frozen-seed-promote dependency (after OP-39b gate-flip + OP-40 deploy-boundary); the validated formatter
   patch is drop-in for the eventual consolidated promote. Verdict .verdicts/hexa-0pod/F-OP44-VSNPRINTF-CORRECT-ROUND.txt.
   $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
+## ROUTE-A — route-(a) pre-permute own-GEMM, REAL H100 sm_90a re-measure (2026-06-12)
+- LEVER (a) = route-(a) PRE-PERMUTE own-GEMM (gmma-INTER global pre-lay + NO-swizzle TMA + descriptor-direct,
+  NO 32KB decode band) — the BIT-EXACT path. Complement to W16: w16 confirmed route-(b) in-place-descriptor
+  is bit-exact-IMPOSSIBLE (floored rel_rms 1.107); this run measures whether route-(a)'s documented ~1.10x
+  parity vs cuBLAS-TF32 @D=2048 reproduces on a fresh H100. NOT (b) OP-21B keep-band (closed-neg, not re-run).
+- HW: vast 40675177 (label hexa-routeA, ONE-TIME user-approved H100 exception, ~$2/hr × ~15min ≈ $0.50, leak-0).
+  H100 80GB HBM3 sm_90a, driver 550.163.01, nvcc 12.6.77 (EXACT OG16/OG17/W16 apples). image cuda:12.6.2-devel.
+- KIT: self/native/wgmma/wgmma_tf32_b14.cu (carries OG16 MODE4 + OG17-pipe MODE6 + b14 MODE8 verbatim) +
+  wgmma_tf32_w10.cu + wgmma_tf32_w10_lib.h + bench14_run.sh (gate-disciplined: rel_rms 0 FIRST, then perf).
+- RESULT 🟢: route-(a) rel_rms 0.000e+00 at EVERY config of the full PDEP/NST sweep (bit-exact confirmed —
+  the separator vs route-(b)/w16's 1.107 floor). b14 MODE8 @D=2048 NST=3 CROSSES PARITY:
+  PDEP=2 own 314-316 TFLOP/s ratio 1.08-1.09x (3 reps, all PARITY=YES, 2 CTA/SM 96KB band-free) <-- SUMMIT;
+  PDEP=1 own 305 TFLOP/s ratio 1.12x (== documented ~1.10x); PDEP=0 own 287 ratio 1.19x. Same-pod apples:
+  OG16 MODE4 NST=3 250.8/1.36x; OG17-pipe MODE6 ~262/1.29-1.32x; W-ladder re-confirmed (6.09x→1.08x bit-exact).
+  @D=4096 b14 best 283 TFLOP/s 1.50x (no parity — cuBLAS scales better; residual = ptxas-capped 256-elt
+  register-realloc, W12/OG17-MODE5 closed-neg). The ~1.10x parity claim @D=2048 is REPRODUCED and EXCEEDED.
+- HONEST (g5): 1.08x is NOT a cuBLAS beat (~93% of roofline, bit-exact). cuBLAS-TF32 = ROOFLINE, no superiority.
+- DESTROY: leak-0 CONFIRMED (`vastai show instances` empty; 40675177/hexa-routeA gone). No foreign pod touched.
+  Verdict .verdicts/hexa-0pod/F-GPU-ROUTEA-KEEPBAND-MEASURE.txt.
