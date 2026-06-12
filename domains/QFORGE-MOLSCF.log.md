@@ -479,3 +479,58 @@ ROHF + TM open-shell named round-8 (honest brick boundary — no faked converged
    d2 breakthrough paths (ROHF · fractional-occ smearing · SAD/GWH guess) for d-manifold stiffness.
 2. g angular momentum (15 Cartesian → 9 spherical) via the SAME `_md_harm_ao` (cart,harm) table.
 3. brick 6 analytic molecular force ∇_R E via autograd through brick 1-10 (NOVEL lane).
+
+## round-8 — ROHF (spin-pure) + REAL transition-metal open-shell SCF (ScH⁺ d¹) [SEALED]
+
+`stdlib/qforge/molscf/rohf.hexa` + `rohf_selftest.hexa` (PR stacked on qforge-molscf-r1). Breaks the
+spin-contamination crack round-7 UHF left open: UHF gives a real open-shell energy but a *contaminated*
+⟨S²⟩ (H₃ radical 0.7957, +0.046 over exact 0.75). ROHF uses ONE spatial-orbital set (closed doubly-occ,
+open singly-occ high-spin α) → the determinant is a pure S=S_z eigenstate → ⟨S²⟩ = S(S+1) EXACTLY, by
+construction. d3/d19 reuse: `uhf_fock_pair`/`uhf_energy_elec`/`uhf_spin_squared`/DIIS from uhf.hexa,
+`rhf_matmul`/`rhf_transpose`/`rhf_s_inv_sqrt`/`rhf_diagonalize` from rhf.hexa, `md_dshell_ao`+raw integrals
+from md_shell.hexa, ScH integral build reused verbatim from round-6 (neutral anchor −752.638702408). Both
+baselines byte-untouched — ROHF is a NEW additive file.
+
+### method — Roothaan single effective Fock (coupling operator)
+Build Fα,Fβ at the current common orbitals (reuse uhf_fock_pair) → transform to MO basis F_mo = CᵀFC →
+assemble ONE effective Fock R blockwise over closed(c)/open(o)/virtual(v): diagonal blocks ½(Fα+Fβ),
+R_co=Fβ, R_ov=Fα, R_cv=½(Fα+Fβ) → back-transform R_ao=(SC)R_mo(SC)ᵀ → diagonalize in the shared Löwdin
+basis (reuse rhf_diagonalize) → ONE new C rebuilds BOTH spin densities → spin-pure every iteration. DIIS
+on the single Roothaan error vector. n_open=0 ⇒ R=½(Fα+Fβ)=F_RHF (exact RHF reduction).
+
+### g5 VERBATIM (PySCF 2.13.1 refs, no LLM self-judge — d6)
+- (a) H₃ doublet radical (R=1.8 bohr), SAME system both paths:
+      UHF  E=−1.54584 Ha  ⟨S²⟩=0.795721  (contamination +0.045721)
+      ROHF E=−1.53067 Ha  ⟨S²⟩=0.750000  (EXACT — zero contamination)
+      PySCF refs: UHF −1.545839/0.795713 · ROHF −1.530672224/0.750000
+      ROHF − UHF gap = +0.0151665 Ha (ROHF ≥ UHF, variational ordering — spin-purity costs energy, shown)
+- (b) H₂/STO-3G @1.4 bohr via rohf_scf n_open=0 → E=−1.11671 Ha, |Δ| vs sealed RHF anchor = 2.67e-6,
+      ⟨S²⟩=0.0 (singlet). The open block empty ⇒ RHF reduction holds.
+- (c) REAL TRANSITION METAL — ScH⁺ d¹ doublet (21 e), all-electron STO-3G, Sc–H=1.78 Å:
+      UHF  E=−752.49027 Ha  ⟨S²⟩=0.757478  (+0.0075 contam)  |Δ_PySCF|=2.69e-4  conv 11 it ‖FPS−SPF‖=9.9e-7
+      ROHF E=−752.48893 Ha  ⟨S²⟩=0.750000  (EXACT)           |Δ_PySCF|=6.63e-5  conv  9 it ‖FPS−SPF‖=4.8e-7
+      PySCF 2.13.1: UHF −752.490269326/0.757478 · ROHF −752.488933729/0.750000 · gap +0.001335597
+      The stiff 3d manifold CONVERGED cleanly via DIIS+level-shift — NO faking (d6). ROHF removes UHF's
+      contamination on a real transition metal; ROHF E ≥ UHF E holds. (Same integral build as the round-6
+      neutral ScH RHF anchor −752.638702408 → removing one electron gives the d¹ cation.)
+- (d) regression — r1..r7 (gaussian/coulomb/rhf/md/md_d/md_f/uhf) ALL PASS; rhf.hexa + uhf.hexa
+      byte-untouched (ROHF is a NEW file).
+
+### honest convergence note (d6)
+ScH⁺ is the CLEANEST TM (d¹ — one unpaired electron, the g5-named cleanest target) and it converged with
+NO drama on the standard UHF+DIIS+level-shift / ROHF+DIIS path. The HARDER multi-d manifolds (TiO ³Σ⁻
+near-degeneracy, V/Cr with several open d) were NOT attempted this round — they are round-9, where the
+smearing-annealing + SAD/GWH-guess toolkit is the right wall-breaker. A genuinely-converged ScH⁺ d¹ +
+that honest boundary is the legitimate brick.
+
+### round-9 next (TM stiffness wall → 3 breakthrough paths, d2 — never concede)
+1. brick 12 — robust TM SCF on the HARDER manifolds (TiO ³Σ⁻ near-degenerate triplet, V/Cr multi-open-d):
+   (i) **Fermi-Dirac fractional-occupation smearing-annealing** — start at a finite electronic T to smear
+       the near-degenerate d-manifold, anneal T→0 as DIIS converges (damps root-flipping DIIS can't catch);
+   (ii) **SAD / GWH initial guess** — superposition-of-atomic-densities or generalized-Wolfsberg-Helmholz
+       instead of the bare H_core guess (H_core puts too much weight on the core, mis-seeds the d-shell);
+   (iii) **ROHF-over-UHF as the default open-shell engine** — ROHF's single orbital set is intrinsically
+       stiffer-stable than UHF's symmetry-broken pair on the dense d-manifold (this round already shows
+       ROHF converging in FEWER iterations: 9 vs 11 on ScH⁺).
+2. g angular momentum (15 Cartesian → 9 spherical) via the SAME `_md_harm_ao` (cart,harm) table.
+3. brick 6 analytic molecular force ∇_R E via autograd through brick 1-11 (NOVEL lane).

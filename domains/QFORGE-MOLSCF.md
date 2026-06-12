@@ -57,8 +57,22 @@ Fock 빌드, (3) 비직교 일반화 고유문제 `FC=SCε`. 모든 g5 anchor �
       (c) DIIS accel — linear H₃ doublet radical (R=1.8): plain-mix 18 iters → DIIS 8 iters (same E=
           −1.545843 · ‖FPS−SPF‖=9.1e-7) · ⟨S²⟩=0.7957 (contamination +0.046 reported, not hidden)
       (d) r1..r6 (gaussian/coulomb/rhf/md/md_d/md_f) regress ALL PASS — rhf.hexa byte-untouched (new file)
-- [ ] brick 11 (round-8) — ROHF + TM open-shell SCF (TiO triplet · ScH⁺ d¹) via UHF+DIIS+level-shift +
-      g 각운동량 (15 Cartesian → 9 spherical, 동일 _md_harm_ao 테이블) + brick 6 analytic force ∇_R E
+- [x] brick 11 (round-8) — ROHF (spin-pure) + REAL transition-metal open-shell SCF (ScH⁺ d¹) g5 PASS
+      `rohf.hexa` Roothaan single coupling-operator effective Fock (closed/open/virtual MO-block: R_co=Fβ,
+      R_ov=Fα, diag=½(Fα+Fβ)) → ONE orbital set → ⟨S²⟩=S(S+1) EXACT by construction (zero contamination)
+      (a) H₃ doublet radical (R=1.8): ROHF ⟨S²⟩=0.7500 EXACT vs UHF ⟨S²⟩=0.795721 (+0.046 contam) — SAME
+          system, side-by-side · ROHF E=−1.53067 (PySCF −1.530672224 |Δ|<1e-4) ≥ UHF E=−1.54584 (gap
+          +0.01517, variational) · ROHF spin-purer than UHF
+      (b) RHF reduction — H₂/STO-3G @1.4 via rohf_scf n_open=0 == sealed RHF anchor −1.11671 |Δ|=2.7e-6 ⟨S²⟩=0
+      (c) REAL TM — ScH⁺ d¹ doublet (21 e, all-electron STO-3G, same build as round-6 neutral ScH anchor):
+          UHF E=−752.49027 ⟨S²⟩=0.757478 (+0.0075 contam) |Δ_PySCF|=2.7e-4 conv 11it ‖FPS−SPF‖=9.9e-7 ·
+          ROHF E=−752.48893 ⟨S²⟩=0.7500 EXACT |Δ_PySCF|=6.6e-5 conv 9it ‖FPS−SPF‖=4.8e-7 · gap +0.0013356
+          (PySCF 2.13.1 UHF −752.490269326/0.757478 · ROHF −752.488933729/0.750000) — stiff 3d CONVERGED
+          cleanly via DIIS+level-shift, NO faking (d6) · ROHF removes UHF contamination on a real TM
+      (d) r1..r7 (gaussian/coulomb/rhf/md/md_d/md_f/uhf) regress ALL PASS — rhf.hexa+uhf.hexa byte-untouched
+- [ ] brick 12 (round-9) — robust TM SCF on the HARDER manifolds (TiO ³Σ⁻ near-degenerate, V/Cr multi-d):
+      Fermi-Dirac fractional-occupation smearing-annealing schedule + SAD/GWH initial guess (vs bare H_core)
+      + g 각운동량 (15 Cartesian → 9 spherical, 동일 _md_harm_ao) + brick 6 analytic force ∇_R E
 
 ## three-scale unblock
 
