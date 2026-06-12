@@ -1,5 +1,43 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-62 DONE: GENERALIZE the falsified-builtin audit BEYOND the ML family — 165 non-ML builtins of self/env.hexa audited with the OP-59 5-step g5 method · 10 pure-orphan landmines DEREGISTERED, 155 KEPT (82 real-impl + 29 compiler-closure + 44 live-caller) · whole roster now audited · $0 · 0-pod · NO GPU
+- TASK: OP-59 DEFINITIVELY closed the *ML-family* falsified-builtin thread (OP-43's 42-member ML roster:
+  40 deregistered, 2 compiler-closure KEEPs sigmoid·arange). But that thread only ever audited the ML
+  family. OP-62 generalizes the proven method to the REST of self/env.hexa env_new() — the 165 NON-ML
+  builtins (string/array/math/io/net/consciousness/n6/term/misc).
+- METHOD (verbatim from F-OP59): per candidate — (1) g5-FALSIFY (`NAME(arg)`, no shadow → fresh hexat AOT
+  → clang; falsified = bare `hexa_callN(NAME,…)` → "use of undeclared identifier 'NAME'") (2) CALLABLE-BARE-
+  SYMBOL check (runtime.c/.h `HexaVal NAME(` + prefix variants) (3) CODEGEN-GUARD check (self/codegen.hexa
+  `== "NAME"` special-path = compiler-closure KEEP) (4) [S] SHADOW-CONTROL (local `fn NAME` binds roster-
+  independently) (5) CALLER-LIVENESS (every builtin-dep caller dead today). Toolchain: ~/.hx/bin/build/hexat
+  (Jun-13) + /usr/bin/clang -I<self> -fsyntax-only + installed runtime.c (Jun-12).
+- 3-WAY FALSIFY SPLIT of the 165: 82 CLEAN (real runtime impl — print/len/abs/sin/cos/sqrt/exp/read_file/
+  json_parse/http_get/base64_*/Some/Ok/Err/str/deref/exec/term_raw_*/…; incl println void-shape + atan2
+  found-via-u_atan2) + 75 FALSIFIED-on-1arg + 8 HEXAT_FAIL (binary builtins whose codegen indexes args[1] →
+  transpile fails the 1-arg probe = PROOF of a real codegen path: write_file/split/min/max/pow/net_read_n/
+  net_set_timeout/net_write).
+- CODEGEN-GUARD on the 83 (75+8): 29 carry a REAL self/codegen.hexa `== "NAME"` special-path (arg-shape
+  trap → compiler-closure KEEP, sigmoid/arange-class): join split min max pow has_key contains replace
+  to_upper to_lower starts_with ends_with trim_start trim_end slice reduce flatten now timestamp readline
+  write_file append_file net_read_n net_set_timeout net_write term_pty_spawn_sh term_fd_read/write/poll.
+  54 have ZERO codegen path AND ZERO callable bare runtime symbol = TRUE register-but-no-impl landmines
+  (generated C = bare `hexa_call1(phi,…)`/`(gcd,…)`/`(Set,…)`/`(n6_scan,…)`/`(sopfr,…)` clang-undeclared).
+- CALLER-LIVENESS on the 54: 44 carry LIVE callers / repo occurrences (sigma 317calls/10shadows, sopfr
+  122/6, gcd 102/22, phi 181, tau 201, n6_*/psi_*/consciousness_*/hexad_*/laws/Set/elapsed/mem_* — the
+  atlas-identity surface) → conservative g0 KEEP (gate-5 dead-caller NOT provable without re-running each).
+  10 are PURE ORPHANS (falsified + 0 codegen + 0 runtime symbol + ZERO occurrence repo-wide).
+- 10 DEREGISTERED (all 5 gates PASS): try_float is_whitespace meta_laws phi_predict tension_link zip_arr
+  enumerate_arr input_all load_weights_bin mmap_weights. Each verbatim FALSIFIED (clang
+  p_NAME.c:18:29 "use of undeclared identifier 'NAME'") + [S] shadow-control re-proven (local fn emits own
+  fwd-decl line4 / def line10 / call line19, clang 0 errors) + compiler/** 0-ref (NOT bind.hexa allow-list,
+  NO `op==` codegen) + not in type_checker.hexa tc_register_fn. Reversible one-line re-add.
+- POST-EDIT: ~/.hx/bin/build/hexat self/env.hexa → OK (rc=0, roster well-formed). Generated env_after.c
+  builtin_names: the 10 = 0 each; KEPT neighbors (laws/consciousness_vector/sopfr/map_arr/filter_arr/reduce/
+  flatten/slice/to_char/is_numeric/to_float) = 1 each. env.hexa diff +37/-7 (additive, wipe_guard-safe).
+- OUTCOME: 🟢/🔴 closed. Milestone OP-62 [x]. THE ENTIRE self/env.hexa ROSTER IS AUDITED: ML-family CLOSED
+  (OP-59) ∪ non-ML AUDITED (OP-62: 82 clean + 29 compiler-closure + 44 live-caller KEEP + 10 dereg). No
+  non-ML true-falsified entry with a dead caller remains. $0 · 0-pod · 0-GPU · no vast · no foreign pod ·
+  no .tape edit. Verdict .verdicts/hexa-0pod/F-OP62-NONML-ROSTER-AUDIT.txt.
 ## 2026-06-13 — OP-63 DONE: HONEST-NUMBER hardening of the OP-60/OP-61 route-(a) own-GEMM selector — TAG each pick provenance ∈ {measured, extrapolated} + verdict ref (only 3 of 8 shapes GPU-measured) + CONSERVATIVE fallback (extrapolated AND non-MODE8 → MODE-8) · regression-lock ALL PASS exit 0 (teeth: false-"measured" mutation → exit 1) · NO measured constant changed · NO GPU · $0 · 0-pod
 - TASK: OP-60 built the importable route-(a) own-GEMM selector + JSON + regression test; OP-61 wrote its
   flame integration contract. BUT the selector's picks are only GPU-MEASURED at 3 of 8 shapes; the picks at
