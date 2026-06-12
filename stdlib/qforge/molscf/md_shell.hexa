@@ -35,8 +35,11 @@
 //   d_{x²−y²} ∝  xx − yy              (m=+2)
 //   d_{xy}    ∝  xy                   (m=−2)
 //   Each is ORTHOGONAL to the s-contaminant (xx+yy+zz) — verified in the gate to
-//   machine precision. f (10 Cartesian → 7 spherical) is the same construction and
-//   is named for round-6 (HONEST d6: this brick ships d sealed, f deferred clean).
+//   machine precision. f (10 Cartesian → 7 spherical, m=0,±1,±2,±3) is the SAME
+//   construction via the generic _md_harm_ao builder (round-6): adding the f shell
+//   was a (cart,harm) table addition, NOT a new code path (d4). Its 7 harmonics are
+//   orthogonal to the 3 p-type contaminants (∝ r²·{x,y,z}) — the f analog of the d
+//   s-contaminant removal — verified to machine precision in the round-6 gate.
 //
 // reuse (d3·d19): the per-primitive integrals (md_overlap_prim · md_kinetic_prim ·
 //   md_nuclear_prim · md_eri_prim · md_norm_prim) come UNCHANGED from md_integrals;
@@ -187,14 +190,21 @@ fn _md_dharm() -> [[float]] {
 //   harmonic regardless of the per-Cartesian md_norm_prim weighting. The caller
 //   then applies md_ao_norm for unit self-overlap.
 pub fn md_dshell_ao(m: int, radExp: [float], radCoef: [float]) -> [any] {
-    let cart = _md_cart_d()
-    let harm = _md_dharm()
-    let hc = harm[m]
+    return _md_harm_ao(_md_cart_d(), (_md_dharm())[m], radExp, radCoef)
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   GENERIC harmonic-shell builder (d4 — no per-L branch). Given the Cartesian
+//   monomial basis of one L and ONE harmonic's monomial-coefficient row, emit
+//   the generalized-AO term list. md_dshell_ao and md_fshell_ao both call this;
+//   adding a higher shell = adding a (cart,harm) table pair, never a code path.
+// ════════════════════════════════════════════════════════════════════════════
+fn _md_harm_ao(cart: [[int]], hc: [float], radExp: [float], radCoef: [float]) -> [any] {
     let mut pow = []
     let mut exps = []
     let mut coef = []
     let mut k = 0
-    while k < 6 {
+    while k < len(cart) {
         if hc[k] != 0.0 {
             let mut r = 0
             while r < len(radExp) {
@@ -210,4 +220,59 @@ pub fn md_dshell_ao(m: int, radExp: [float], radCoef: [float]) -> [any] {
         k = k + 1
     }
     return [pow, exps, coef]
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   spherical-f shell builder — 10 Cartesian monomials (lx+ly+lz=3) → 7 spherical
+//   harmonics (m = 0,±1,±2,±3). The 3 missing combinations are p-type contaminants
+//   (∝ r²·{x,y,z}); the harmonic rows below are EXACTLY orthogonal to them — the f
+//   analog of the d s-contaminant removal. Same construction, same MD engine, NO
+//   L cap. Adding this shell was a table addition (d4), not a new code path.
+// ════════════════════════════════════════════════════════════════════════════
+
+// The 10 Cartesian-f monomial powers, in the fixed order
+//   (xxx,yyy,zzz,xxy,xxz,xyy,yyz,xzz,yzz,xyz).
+fn _md_cart_f() -> [[int]] {
+    return [[3,0,0],[0,3,0],[0,0,3],[2,1,0],[2,0,1],[1,2,0],[0,2,1],[1,0,2],[0,1,2],[1,1,1]]
+}
+
+// Monomial coefficients of the 7 real solid-harmonic f's over the order above.
+//   (real solid harmonics; HJO Table 6.3 — overall scale absorbed by md_ao_norm)
+//   m= 0  f_z³        = 2zzz − 3xxz − 3yyz
+//   m=+1  f_xz²       = 4xzz − xxx − xyy
+//   m=−1  f_yz²       = 4yzz − xxy − yyy
+//   m=+2  f_z(x²−y²)  = xxz − yyz
+//   m=−2  f_xyz       = xyz
+//   m=+3  f_x(x²−3y²) = xxx − 3xyy
+//   m=−3  f_y(3x²−y²) = 3xxy − yyy
+fn _md_fharm() -> [[float]] {
+    return [
+        //  xxx       yyy       zzz   xxy   xxz       xyy       yyz       xzz  yzz  xyz
+        [ 0.0,      0.0,      2.0,  0.0,  0.0 - 3.0, 0.0,      0.0 - 3.0, 0.0, 0.0, 0.0],  // m=0  f_z³
+        [ 0.0 - 1.0,0.0,      0.0,  0.0,  0.0,       0.0 - 1.0, 0.0,      4.0, 0.0, 0.0],  // m=+1 f_xz²
+        [ 0.0,      0.0 - 1.0,0.0,  0.0 - 1.0, 0.0,  0.0,      0.0,       0.0, 4.0, 0.0],  // m=−1 f_yz²
+        [ 0.0,      0.0,      0.0,  0.0,  1.0,       0.0,      0.0 - 1.0, 0.0, 0.0, 0.0],  // m=+2 f_z(x²−y²)
+        [ 0.0,      0.0,      0.0,  0.0,  0.0,       0.0,      0.0,       0.0, 0.0, 1.0],  // m=−2 f_xyz
+        [ 1.0,      0.0,      0.0,  0.0,  0.0,       0.0 - 3.0, 0.0,      0.0, 0.0, 0.0],  // m=+3 f_x(x²−3y²)
+        [ 0.0,      0.0 - 1.0,0.0,  3.0,  0.0,       0.0,      0.0,       0.0, 0.0, 0.0]   // m=−3 f_y(3x²−y²)
+    ]
+}
+
+// Build the m-th (0..6) spherical-f AO term list from ONE radial contraction.
+//   Same shape / contract as md_dshell_ao — reuses the generic _md_harm_ao.
+pub fn md_fshell_ao(m: int, radExp: [float], radCoef: [float]) -> [any] {
+    return _md_harm_ao(_md_cart_f(), (_md_fharm())[m], radExp, radCoef)
+}
+
+// The 3 p-type f-contaminants (∝ r²·{x,y,z}) — the f analog of the d s-contaminant.
+//   p_x·r² = xxx + xyy + xzz ; p_y·r² = xxy + yyy + yzz ; p_z·r² = xxz + yyz + zzz.
+//   Every spherical-f harmonic above is orthogonal to all three (verified in gate).
+//   Returns the 3 contaminant monomial-coefficient rows over the _md_cart_f order.
+pub fn _md_fcontaminant() -> [[float]] {
+    return [
+        //  xxx  yyy  zzz  xxy  xxz  xyy  yyz  xzz  yzz  xyz
+        [ 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0],  // p_x·r² = xxx+xyy+xzz
+        [ 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],  // p_y·r² = xxy+yyy+yzz
+        [ 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0]   // p_z·r² = xxz+yyz+zzz
+    ]
 }
