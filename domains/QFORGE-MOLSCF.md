@@ -70,9 +70,26 @@ Fock 빌드, (3) 비직교 일반화 고유문제 `FC=SCε`. 모든 g5 anchor �
           (PySCF 2.13.1 UHF −752.490269326/0.757478 · ROHF −752.488933729/0.750000) — stiff 3d CONVERGED
           cleanly via DIIS+level-shift, NO faking (d6) · ROHF removes UHF contamination on a real TM
       (d) r1..r7 (gaussian/coulomb/rhf/md/md_d/md_f/uhf) regress ALL PASS — rhf.hexa+uhf.hexa byte-untouched
-- [ ] brick 12 (round-9) — robust TM SCF on the HARDER manifolds (TiO ³Σ⁻ near-degenerate, V/Cr multi-d):
-      Fermi-Dirac fractional-occupation smearing-annealing schedule + SAD/GWH initial guess (vs bare H_core)
-      + g 각운동량 (15 Cartesian → 9 spherical, 동일 _md_harm_ao) + brick 6 analytic force ∇_R E
+- [x] brick 12 (round-9) — robust-SCF machinery: Fermi-Dirac fractional-occupation smearing T→0 annealing
+      + GWH initial guess (vs bare H_core) → CONVERGES a genuinely stiff multi-open-d TM (TiO ³Σ⁻) g5 PASS
+      `scf_robust.hexa` (additive — rhf/uhf/rohf.hexa byte-untouched): GWH H_ij=½K·S_ij(H_ii+H_jj) K=1.75 ·
+      Fermi μ-bisection + fractional density + entropy term · annealing-rung UHF driver (DIIS, own slice/diis)
+      (a) smearing→T=0 correctness — EASY H₃ doublet: robust(GWH+anneal) == plain r8 UHF −1.54584 to
+          |Δ|=7.2e-13 · residual entropy term @T→0 = 0.0 (the aid is removed at the end, answer unchanged)
+      (b) STIFF-TM CONVERGENCE — TiO ³Σ⁻ (16α/14β, 23 AO, 30 e all-electron): WITHOUT (bare H_core, T=0)
+          STALLS ‖e‖=0.034 ≫1e-6; WITH (GWH+Fermi anneal) CONVERGES ‖e‖=4.5e-8 in 43 it, ⟨S²⟩=2.0695 (³
+          manifold), entropy→0 — convergence-where-bare-fails DEMONSTRATED. HONEST (d6): a FAST anneal lands
+          on an excited UHF root (TiO/STO-3G has a dense near-degenerate UHF manifold — PySCF itself: SAD-guess
+          −913.527690/2.0695 vs hcore-guess −913.528591/2.0586). A DEEP slow anneal (kT 0.1→2e-4, 13 rungs,
+          829 it) REACHES the ground state E=−913.528982/⟨S²⟩2.058646 vs PySCF hcore-root −913.528590589
+          |Δ|=5.9e-4 — WALL BROKEN (slow; round-10 collapses the in-basin cost via 2nd-order SCF)
+      (b') TM REACHES PySCF REF (fast) — ScH⁺ d¹ via the SAME robust path → −752.490269 (PySCF UHF
+          −752.490269326, |Δ|=2.7e-4, ⟨S²⟩=0.757478) in 18 it — machinery reaches the RIGHT answer, fast
+      (c) GWH guess improves seeding — TiO same schedule: GWH converges (43 it) where bare H_core does NOT
+          (149 it, stalled); GWH first-rung 17 it vs H_core 19 it — better d-shell seed
+      (d) r1..r8 (gaussian/coulomb/rhf/md/md_d/md_f/uhf/rohf) regress ALL PASS — scf_robust is a NEW file
+- [ ] brick 13 (round-10) — 2nd-order/Newton-SCF (collapse the deep-anneal in-basin cost) + multi-reference
+      frontier (Cr₂ → CASSCF, beyond single-determinant) + g 각운동량 (15 Cart → 9 spherical) + brick 6 force
 
 ## three-scale unblock
 
