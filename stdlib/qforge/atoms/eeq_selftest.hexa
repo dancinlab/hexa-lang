@@ -94,13 +94,25 @@ fn main() {
     fails = fails + _ck_true("(D) more-EN atom is negative (q[1] < 0)", qD[1] < 0.0)
 
     // ══ (E) DISSOCIATION LIMIT (R → large) ═════════════════════════════════
-    // at large R, A₁₂ → 0, so q[0] → (χ₂−χ₁)/(A₁₁+A₂₂).
+    // The closed form q₀=(χ₂−χ₁)/(A₁₁+A₂₂−2A₁₂) holds at EVERY R (A₁₂=erf(R/γ)/R
+    // is the only R-dependence). As R grows the 1/R Coulomb tail decays, so q₀
+    // MONOTONELY approaches the decoupled value (χ₂−χ₁)/(A₁₁+A₂₂) FROM ABOVE
+    // (A₁₂>0 in the denominator shrinks as R↑ → q↓). Test the exact form at a
+    // large R, then the monotone approach R=50 → R=500.
     let Rbig = 50.0
     let posF = [0.0, 0.0, 0.0,  Rbig, 0.0, 0.0]
     let qF = qforge_eeq_charges(posF, chiD, etaD, alpD, 0.0)
+    let A12big = erf_fn(Rbig / gamma) / Rbig
+    let q1_form_big = (chiD[1] - chiD[0]) / (A11 + A22 - 2.0 * A12big)
+    fails = fails + _ck_close("(E) closed form holds at R=50", qF[0], q1_form_big, 1.0e-7)
+    // decoupled target (A₁₂→0) is the strict lower bound approached from above.
     let q1_decoupled = (chiD[1] - chiD[0]) / (A11 + A22)
-    fails = fails + _ck_close("(E) R→∞: q[0] → decoupled fill", qF[0], q1_decoupled, 1.0e-6)
-    // and the coupled charge has larger magnitude than the decoupled one
+    let Rhuge = 500.0
+    let posG = [0.0, 0.0, 0.0,  Rhuge, 0.0, 0.0]
+    let qG = qforge_eeq_charges(posG, chiD, etaD, alpD, 0.0)
+    fails = fails + _ck_true("(E) monotone decay toward decoupled (q_50 > q_500 > q_∞)",
+                             qF[0] > qG[0] && qG[0] > q1_decoupled)
+    // and the bonded (short-R) charge has larger magnitude than the stretched one
     // (the inter-atom Coulomb A₁₂>0 in the denominator REDUCES the split):
     fails = fails + _ck_true("(E) coupling reduces |q| (|q_R| > |q_∞|)",
                              _abs(qD[0]) > _abs(qF[0]))
