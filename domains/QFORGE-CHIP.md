@@ -43,6 +43,22 @@
       Landauer N·G₀ 의 열 아날로그) · (E) generic 모드리스트 (3 acoustic→3g₀, frozen-optical
       BE-억제). HONEST(d6): ballistic 양자극한 — 포논-포논/Umklapp 산란·diffusive BTE 아님;
       앵커 = EXACT 양자 floor (저온/clean), diffusive device κ 아님. PR #<TBD>.
+- [x] **round-9 β multi-orbital band H(k) (g5 34/34 PASS)** — `stdlib/qforge/chip/band_multiorbital.hexa`
+      + selftest. R1/R3 의 **single-band** ε(k) → **multi-orbital / multi-band** H(k):
+      H_{αβ}(k)=onsite[α]δ_{αβ}+Σ_hop t·cos(k·dx·a) (각 site 가 n_orb 궤도; Slater-Koster
+      ssσ/spσ/ppσ/ppπ two-centre · Slater-Koster PR 94,1498 (1954) — 또는 generic 2-band).
+      ε_n(k)=eig[H(k)] n_orb 밴드 (generic `eigh` 재사용·d19 — R1 diatomic gap/R3 PW H(k)/L1/
+      Davidson 공유). 궤도·hopping = **데이터** (OrbitalModel: onsite[] + Hop{α,β,dx,t}[] — 궤도/
+      SK채널/이웃 추가 = 데이터 편집, builder 불변·d4). g5: (A) **다밴드 차원** H(k) n_orb×n_orb ·
+      ε_n(k) n_orb개 (2/3-orbital + norb=1 single-band 극한) · (B) **유효질량** m*=ħ²/(d²ε/dk²)
+      band-edge FD vs 닫힌형 m*=ħ²/(2ta²) (Ashcroft-Mermin Ch.12; flat band→heavy m*∝1/t · band-top
+      curvature<0→m*<0 hole) · (C) **직접/간접갭** VBM(valence max)/CBM(conduction min) k-위치 비교 →
+      DIRECT(같은 k=Γ)/INDIRECT(다른 k, CBM@π/a) 판별 (eig 에서 읽음·d4) · (D) **2-band 닫힌형**
+      2×2 eig == ½(Ea+Eb)±√((½ΔE)²+V²) (Wolfsberg/two-level · degenerate→gap=2|V| avoided-crossing)
+      + Hermiticity H_{αβ}=H_{βα} · (E) **valley count** 전 BZ [−π/a,π/a) 전도밴드 minima
+      (single-well→1 · boundary→1 · double-well ±k₀→2). HONEST(d6): SK/2-band **모델** 파라미터 —
+      실 Si/Ge fit 아님(경험 ss/sp 표·spin-orbit·d-궤도 없음); 다밴드 구조+유효질량+갭판별+2-band
+      닫힌형이 deliverable, 실 material = OrbitalModel 데이터 swap(d4). PR #<TBD>.
 - [ ] **verify-adapter (chip=TCAD)** — 밴드갭/effective-mass/컨덕턴스/κ 를 측정·TCAD ref
       로 표준화 (verify-adapter 일반화 축).
 - [ ] **NEXUS edge** — QFORGE-CHIP → {소자 도메인} 재사용 그래프 등록 (materials c7 패턴).
