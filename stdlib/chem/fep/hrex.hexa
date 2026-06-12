@@ -1,0 +1,330 @@
+// stdlib/chem/fep/hrex.hexa — Hamiltonian replica-exchange (HREX) sampling.
+//
+// QFORGE-BIO round-5, alchemical sampling brick.
+//
+// @version 0.1.0
+// @capabilities [pure, randomness]
+//
+// ── PURPOSE ──────────────────────────────────────────────────────────
+// Round-3 sealed the soft-core λ-coupled energy (stdlib/chem/fep/softcore):
+// U(x, λ) is a smooth, singularity-free reduced potential at ANY λ on the
+// alchemical ladder. Round-4 sealed the MBAR/BAR estimator (stdlib/chem/
+// fep/mbar): given the reduced-potential matrix u_kn = β·U_k(x_n) over all
+// samples, it returns ΔG self-consistently.
+//
+// The MISSING middle is SAMPLING. A single replica run at one λ can stay
+// trapped in a metastable basin; the per-λ marginals fed to MBAR are then
+// poorly mixed and ΔG is high-variance (or biased if a basin is missed).
+//
+// HAMILTONIAN REPLICA EXCHANGE (HREX) runs K replicas in PARALLEL, one per
+// λ-rung, each propagated under its OWN Hamiltonian U(·, λ_i). Periodically
+// it proposes to SWAP the configurations of two adjacent replicas i, i+1 and
+// accepts with the Metropolis criterion. Because the well-mixed end states
+// (e.g. λ=1 fully-coupled, λ=0 decoupled) feed their fast decorrelation DOWN
+// the ladder via the exchange chain, every rung sees the full phase space —
+// the exact same multi-state samples MBAR was built to reweight. HREX is the
+// sampling stage that connects the R3 ladder to the R4 estimator.
+//
+// ── EXCHANGE CRITERION (Hamiltonian REX, exact) ──────────────────────
+// Replica i sits at λ_i holding config x_i; replica j=i+1 at λ_j holds x_j.
+// Propose the swap x_i ↔ x_j (equivalently swap the λ-labels). The joint
+// target is the PRODUCT Boltzmann density π = ∏_i exp(−β U_i(x_i)); a swap
+// changes the exponent by
+//
+//   Δ = β[ U_i(x_j) + U_j(x_i) − U_i(x_i) − U_j(x_j) ]
+//
+// and is accepted with P = min(1, exp(−Δ)). This is the standard REX/
+// parallel-tempering acceptance specialised to a Hamiltonian (λ) ladder
+// (Sugita & Okamoto 1999, Chem. Phys. Lett. 314, 141; Hamiltonian variant
+// e.g. Fukunishi 2002, J. Chem. Phys. 116, 9058). It satisfies DETAILED
+// BALANCE w.r.t. π because the proposal is symmetric (swap is its own
+// inverse) and the acceptance is the Metropolis ratio of π after/before.
+//
+// Sweeps ALTERNATE even/odd adjacent pairs: even sweep tries (0,1)(2,3)…,
+// odd sweep tries (1,2)(3,4)…. Disjoint pairs within a sweep commute, so a
+// whole sweep is a valid π-preserving composite move; alternating the parity
+// lets a configuration random-walk the full length of the ladder.
+//
+// ── DESIGN (d4-generic, single swap path) ────────────────────────────
+// The energy is supplied as ONE generic reduced-potential function
+//
+//   ufn(config, lam) -> float        (= β·U(config, λ), already reduced)
+//
+// `config` is an opaque flat float array (e.g. a soft-core coordinate
+// vector, or a 1-D toy coordinate as [x]); `lam` is the rung's λ. HREX never
+// inspects config internals and never branches on any state / ligand /
+// domain NAME (d4): K, the λ-ladder, the swap period, the propagator, and
+// ufn are all inputs. K=2 traverses the SAME hrex_run path as K=64. There is
+// exactly ONE swap operator (_try_swap), exercised by both even and odd
+// sweeps.
+//
+// The PROPAGATOR is likewise generic: prop(config, lam, rng_state) ->
+// [new_config, new_rng_state]. Any sampler (toy harmonic MC here; soft-core
+// Verlet/MD in production) plugs in unchanged. Randomness is a deterministic
+// integer LCG state threaded explicitly (no syscall) so every run is
+// reproducible bit-for-bit.
+//
+// ── Public surface ───────────────────────────────────────────────────
+//   pub fn hrex_swap_delta(ufn, xi, xj, li, lj) -> float
+//        Δ = β[U_i(x_j)+U_j(x_i)−U_i(x_i)−U_j(x_j)]  (Hamiltonian REX).
+//   pub fn hrex_accept_prob(delta) -> float
+//        P = min(1, exp(−Δ)).  (Metropolis; Δ≤0 ⇒ 1.)
+//   pub fn hrex_run(ufn, prop, ladder, configs0, n_sweeps, swap_period,
+//                   n_prop_steps, seed) -> dict
+//        full HREX driver. Returns occupancy trajectory + exchange stats +
+//        the per-rung sample list ready for the MBAR assembler. d4-generic.
+//   pub fn hrex_assemble_u_kn(ufn, ladder, samples_by_rung) -> dict
+//        build the u_kn matrix MBAR consumes: u_kn[k*Ntot+n] = U_k(x_n)
+//        over EVERY sample (every rung re-evaluated at every λ). Returns
+//        { u_kn, N_k, Ntot, K }.
+//
+// Import idiom (interp does not chain transitive imports):
+//   use "stdlib/chem/fep/hrex"
+// (the caller also imports whatever ufn/prop they bind, e.g. softcore.)
+
+// ── deterministic LCG (Numerical Recipes), threaded as explicit state ──
+// state ∈ [0, 2^32). float01 = state/2^32 ∈ [0,1). No syscall, reproducible.
+let HREX_LCG_A = 1664525
+let HREX_LCG_C = 1013904223
+let HREX_MASK32 = 0xFFFFFFFF
+let HREX_TWO32_F = 4294967296.0
+
+fn _lcg_next(state: int) -> int {
+    return (HREX_LCG_A * state + HREX_LCG_C) & HREX_MASK32
+}
+// returns [new_state, u in [0,1)]
+fn _lcg_u01(state: int) -> array {
+    let nx = _lcg_next(state)
+    return [nx, to_float(nx) / HREX_TWO32_F]
+}
+
+fn _abs_f(x: float) -> float { if x < 0.0 { return 0.0 - x } else { return x } }
+fn _min_f(a: float, b: float) -> float { if a < b { return a } else { return b } }
+
+// ── public: Hamiltonian-REX swap exponent Δ ──────────────────────────
+// Δ = β[ U_i(x_j) + U_j(x_i) − U_i(x_i) − U_j(x_j) ].
+// ufn already returns REDUCED potentials (β folded in), so no separate β.
+// xi is the config currently at rung i (λ=li); xj at rung j (λ=lj).
+pub fn hrex_swap_delta(ufn, xi: array, xj: array, li: float, lj: float) -> float {
+    let u_i_xi = ufn(xi, li)          // U_i(x_i)  current
+    let u_j_xj = ufn(xj, lj)          // U_j(x_j)  current
+    let u_i_xj = ufn(xj, li)          // U_i(x_j)  swapped
+    let u_j_xi = ufn(xi, lj)          // U_j(x_i)  swapped
+    return (u_i_xj + u_j_xi) - (u_i_xi + u_j_xj)
+}
+
+// ── public: Metropolis acceptance probability P = min(1, exp(−Δ)) ─────
+// Δ ≤ 0 ⇒ exp(−Δ) ≥ 1 ⇒ P = 1 (always accept downhill).
+// Δ > 0 ⇒ P = exp(−Δ) ∈ (0,1).  Overflow-safe (Δ>0 ⇒ −Δ<0 ⇒ exp<1).
+pub fn hrex_accept_prob(delta: float) -> float {
+    if delta <= 0.0 { return 1.0 }
+    return exp(0.0 - delta)
+}
+
+// ── one swap attempt on adjacent pair (i, i+1), detailed-balance safe ──
+// Mutates `configs` IN PLACE on accept (config swap == λ-label swap). Threads
+// the LCG state. Returns [new_lcg_state, accepted(1.0/0.0)]. SINGLE generic
+// swap path — even and odd sweeps both call exactly this (d4).
+fn _try_swap(ufn, configs: array, ladder: array, i: int, lcg: int) -> array {
+    let li = ladder[i]
+    let lj = ladder[i + 1]
+    let xi = configs[i]
+    let xj = configs[i + 1]
+    let delta = hrex_swap_delta(ufn, xi, xj, li, lj)
+    let p = hrex_accept_prob(delta)
+    let draw = _lcg_u01(lcg)
+    let new_lcg = draw[0]
+    let u = draw[1]
+    if u < p {
+        // accept: swap the configurations between the two rungs.
+        configs[i] = xj
+        configs[i + 1] = xi
+        return [new_lcg, 1.0]
+    }
+    return [new_lcg, 0.0]
+}
+
+// ── public: full HREX driver (d4-generic) ────────────────────────────
+// ufn(config, lam) -> float          reduced potential (β folded in)
+// prop(config, lam, lcg) -> [config', lcg']   generic propagator
+// ladder            = [λ_0 … λ_{K-1}]   λ-rungs (any ordering / spacing)
+// configs0          = [x_0 … x_{K-1}]   initial config per rung (each a
+//                                       flat float array)
+// n_sweeps          how many exchange sweeps to run
+// swap_period       attempt exchanges every `swap_period` sweeps (≥1)
+// n_prop_steps      propagation steps between exchange attempts per sweep
+// seed              LCG seed (reproducible)
+//
+// Returns a dict:
+//   "samples_by_rung" : [K] lists; each is the list of configs that
+//                        OCCUPIED that rung over the run (one per sweep) —
+//                        the per-state samples MBAR reweights.
+//   "n_attempt"       : [K-1] exchange attempts per adjacent pair.
+//   "n_accept"        : [K-1] exchange accepts per adjacent pair.
+//   "label_traj"      : [K] lists; label_traj[r][s] = which ORIGINAL replica
+//                        label sits at rung r after sweep s (round-trip /
+//                        mixing diagnostic).
+//   "round_trips"     : count of original labels that visited BOTH ladder
+//                        ends (rung 0 and rung K-1) over the run.
+pub fn hrex_run(ufn, prop, ladder: array, configs0: array,
+                n_sweeps: int, swap_period: int, n_prop_steps: int,
+                seed: int) {
+    let K = ladder.len()
+
+    // working configs per rung (copied so caller's array is untouched).
+    let mut configs = []
+    let mut ci = 0
+    while ci < K { configs.push(configs0[ci]) ci = ci + 1 }
+
+    // labels[r] = the ORIGINAL replica index currently sitting at rung r.
+    // Swapping configs at rungs i,i+1 also swaps their labels — this tracks
+    // each original walker's journey along the ladder (mixing diagnostic).
+    let mut labels = []
+    let mut li0 = 0
+    while li0 < K { labels.push(li0) li0 = li0 + 1 }
+
+    // per-pair exchange counters.
+    let mut n_attempt = []
+    let mut n_accept = []
+    let mut pa = 0
+    while pa < K - 1 { n_attempt.push(0.0) n_accept.push(0.0) pa = pa + 1 }
+
+    // per-rung sample lists + per-rung label trajectory.
+    let mut samples_by_rung = []
+    let mut label_traj = []
+    let mut sr = 0
+    while sr < K { samples_by_rung.push([]) label_traj.push([]) sr = sr + 1 }
+
+    // min/max rung each original label has reached (round-trip detector).
+    let mut lab_min = []
+    let mut lab_max = []
+    let mut lm = 0
+    while lm < K { lab_min.push(lm) lab_max.push(lm) lm = lm + 1 }
+
+    let mut lcg = seed & HREX_MASK32
+
+    let mut sweep = 0
+    while sweep < n_sweeps {
+        // ── 1. PROPAGATE each rung under its own Hamiltonian U(·, λ_r) ──
+        let mut r = 0
+        while r < K {
+            let lam = ladder[r]
+            let mut step = 0
+            while step < n_prop_steps {
+                let res = prop(configs[r], lam, lcg)
+                configs[r] = res[0]
+                lcg = res[1]
+                step = step + 1
+            }
+            r = r + 1
+        }
+
+        // ── 2. EXCHANGE sweep (every swap_period sweeps), even/odd parity ──
+        if swap_period > 0 {
+            if sweep % swap_period == 0 {
+                // parity 0 → start pairs at 0 (0,1)(2,3)…; parity 1 → start
+                // at 1 (1,2)(3,4)…. Alternate so a config can walk the ladder.
+                let parity = (sweep / swap_period) % 2
+                let mut i = parity
+                while i < K - 1 {
+                    let out = _try_swap(ufn, configs, ladder, i, lcg)
+                    lcg = to_int(out[0])
+                    if out[1] > 0.5 {
+                        // accepted → also swap the original-replica labels.
+                        let tmp = labels[i]
+                        labels[i] = labels[i + 1]
+                        labels[i + 1] = tmp
+                        n_accept[i] = n_accept[i] + 1.0
+                    }
+                    n_attempt[i] = n_attempt[i] + 1.0
+                    i = i + 2
+                }
+            }
+        }
+
+        // ── 3. RECORD per-rung sample + label after this sweep ──────────
+        let mut rr = 0
+        while rr < K {
+            let scur = samples_by_rung[rr]
+            scur.push(configs[rr])
+            samples_by_rung[rr] = scur
+            let lcur = label_traj[rr]
+            lcur.push(labels[rr])
+            label_traj[rr] = lcur
+            // update each label's reached-rung extent.
+            let lab = labels[rr]
+            if rr < lab_min[lab] { lab_min[lab] = rr }
+            if rr > lab_max[lab] { lab_max[lab] = rr }
+            rr = rr + 1
+        }
+
+        sweep = sweep + 1
+    }
+
+    // round-trip = original labels that have visited BOTH ends (0 and K-1).
+    let mut round_trips = 0
+    let mut t = 0
+    while t < K {
+        if lab_min[t] == 0 { if lab_max[t] == K - 1 { round_trips = round_trips + 1 } }
+        t = t + 1
+    }
+
+    let out = #{}
+    out["samples_by_rung"] = samples_by_rung
+    out["n_attempt"] = n_attempt
+    out["n_accept"] = n_accept
+    out["label_traj"] = label_traj
+    out["round_trips"] = round_trips
+    out["K"] = K
+    return out
+}
+
+// ── public: assemble u_kn for MBAR from HREX per-rung samples ─────────
+// samples_by_rung[k] = the list of configs that occupied rung k (one per
+// sweep). MBAR needs the FLAT row-major matrix
+//   u_kn[k*Ntot + n] = U_k(x_n)
+// where n runs over EVERY sample of EVERY rung (cross-evaluated at every λ).
+// Ordering: samples are concatenated rung-by-rung (rung 0's, then rung 1's …)
+// so N_k[k] = len(samples_by_rung[k]) and the slices line up with MBAR's
+// row-major convention. Single generic path — no name, pure indexing (d4).
+pub fn hrex_assemble_u_kn(ufn, ladder: array, samples_by_rung: array) {
+    let K = ladder.len()
+
+    // flatten samples in rung order; record N_k.
+    let mut all_samples = []
+    let mut N_k = []
+    let mut k0 = 0
+    while k0 < K {
+        let lst = samples_by_rung[k0]
+        N_k.push(to_float(lst.len()))
+        let mut s = 0
+        while s < lst.len() {
+            all_samples.push(lst[s])
+            s = s + 1
+        }
+        k0 = k0 + 1
+    }
+    let Ntot = all_samples.len()
+
+    // u_kn[k*Ntot + n] = U_k(x_n) = ufn(x_n, λ_k).
+    let mut u_kn = []
+    let mut k = 0
+    while k < K {
+        let lam_k = ladder[k]
+        let mut n = 0
+        while n < Ntot {
+            u_kn.push(ufn(all_samples[n], lam_k))
+            n = n + 1
+        }
+        k = k + 1
+    }
+
+    let out = #{}
+    out["u_kn"] = u_kn
+    out["N_k"] = N_k
+    out["Ntot"] = Ntot
+    out["K"] = K
+    return out
+}
+
+println("[hrex loaded]")
