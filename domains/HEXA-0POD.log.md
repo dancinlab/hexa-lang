@@ -1,5 +1,33 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-50 DONE: route-(a) own-GEMM perf BOUNDARY reflected into the canonical forge doc (docs/forge-routea-shape-adaptive.md §0) · DOCS-ONLY · $0 · 0-pod
+- SURVEY-FIRST (mandatory). Read the 3 source verdicts: F-GPU-ROUTEA-KEEPBAND-MEASURE.txt (#3094 — the GPU
+  measurement: route-(a) b14 MODE8 NST3 PDEP2 @D=2048 own ~315 TFLOP/s, ratio 1.08x, PARITY=YES, rel_rms
+  0.000e+00 at every config; @D=4096 own ~284 vs cuBLAS ~427, ratio ~1.50x, PARITY=NO) + F-OP45-ROUTEA-D4096-CAP
+  (#3096 — the shape-rigidity cause decomposition: (a)spill/(b)occupancy/(c)D-indep-ptxas-ceiling all statically
+  EXCLUDED; cause = (d) cuBLAS scales UP +24.6% via shape-adaptive scheduling while fixed-128x128 MODE8 scales
+  DOWN -9.9% from 2x K-drain) + F-OP49-SHAPE-ADAPTIVE-DESIGN (#3103 — the selector + CPU cost model + 4 config
+  gaps). Confirmed the W10 summit (70.7 TFLOP/s, 6.09x off cuBLAS-TF32) + W14 FP16 (~11.5x off) numbers against
+  .verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-{W10,W14-FP16}.txt + the dojo war-story (docs/hexa-dojo.md) for consistency.
+- HOME (Occam g0, extend > duplicate): docs/forge-routea-shape-adaptive.md (the file OP-49 authored) already
+  carries the design/cost-model/gaps but lacked the explicit honest "what own-GEMM IS and ISN'T" scope. Added a
+  new FIRST section "## 0. Perf boundary / honest scope — what own-GEMM IS and ISN'T" — placed before §1 so a
+  contributor reads the settled boundary before treating "beat cuBLAS" as a goal. NO new file.
+- BOUNDARY STATED (4 parts, every number traces to a verdict): (IS) route-(a) pre-permute = bit-exact rel_rms
+  0.000e+00 @every config + cuBLAS-TF32 PARITY @D=2048 (b14 MODE8 NST3 PDEP2: own ~315 TFLOP/s, ratio 1.08x,
+  PARITY=YES = ~93% of roofline), no-LLVM/no-cuBLAS-call, device-resident. (ISN'T) NOT a beat — cuBLAS-TF32 is
+  the roofline; @D=4096 own falls to ~1.50x (own ~284 vs cuBLAS ~427, PARITY=NO) because SHAPE-RIGID (one fixed
+  128x128 plain-launch tile) vs cuBLAS SHAPE-ADAPTIVE (+24.6% @4096); FP16 W14 ~11.5x off, W10 summit 70.7
+  TFLOP/s 6.09x off — neither a beat. (VALUE) bit-exactness + device-residency + no-LLVM-compile-theorem (a GEMM
+  a persistent megakernel can call where it can NEVER call the cuBLAS host API), NOT raw TFLOP/s-vs-cuBLAS —
+  mirrors project_flame_h100_h200_closeout framing. (PATH-FORWARD) OP-49 shape-adaptive selector (§2-§6) + 4
+  config gaps (64x64 small-tile · MODE7 persistent measured @4096 · bit-exact split-K · NST-adaptive launcher),
+  each a gated GPU build mapped to OP-45 T1-T5 — IF a beat is ever pursued (NOT a standing goal).
+- CONSISTENCY: all written numbers match the verdicts EXACTLY — 1.08x parity · rel_rms 0.000e+00 · ~93% roofline
+  · ~315 TFLOP/s @D=2048 · ~284 vs ~427 / ~1.50x @D=4096 · W10 70.7/6.09x · W14 ~11.5x. No invention, no round-mangle.
+- OUTCOME: 🟢 DOCS-ONLY (no code/runtime/.tape). Milestone OP-50 [x]. Deliverable: docs/forge-routea-shape-adaptive.md
+  §0 + F-OP50-ROUTEA-BOUNDARY-DOCS.txt. $0 · 0-pod · no vast · no foreign-pod touch · no .tape edits · g84 (no /paper).
+
 ## 2026-06-13 — OP-48 DONE: next-tranche survive-audit (8 [R]-only survivors) → 7 falsified+dead+0-shadow+byte-eq-safe → DEREGISTERED; arange STAYS (compiler-closure ref) · survivor 23→16 · self/env.hexa +33/−5 · $0 · 0-pod
 - SURVEY-FIRST (mandatory). Read F-OP47-MATMUL-DOT-PROBE.txt (3 largest [R]-survivors deregistered, set 26→23)
   + F-OP43-ML-FAMILY-FALSIFIED.txt (42-builtin ML matrix; 16 dereg, 26 survive; the [R]-only no-shadow members)
