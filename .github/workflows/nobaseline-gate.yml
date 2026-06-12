@@ -122,6 +122,28 @@ jobs:
           set -euo pipefail
           sh tool/flame_steppath_libm_gate.sh
 
+      # ── OP-69: flame trainer step-path FMA-fused-matmul tripwire ───────────
+      # OP-66 locks determinism LAYER 2 (no libm on the step); OP-69 locks
+      # LAYER 3 — the CLMConvMoE PRODUCTION trainer must NOT route a determinism-
+      # path matmul through the raw FMA-fused C farr_matmul/t_matmul kernel.
+      # clang -O2 fuses a*b+c into a single fma on arm64 (1 rounding) but emits
+      # mul+add on x86 (2 roundings) -> an accumulating matmul returns divergent
+      # bytes per ISA on byte-identical fp64 inputs (F-OP29 measured arm64
+      # 241449363 vs x86 1401117690). The trainer complies by routing every conv
+      # GEMM through the forge_dispatch_matmul DISPATCHER seam (cuBLAS on a CUDA
+      # host, cross-ISA-folded on CPU). A pure source grep (no ./hexa, no seed)
+      # over clm_prod.hexa + its matmul-free production libs; the dispatcher seam
+      # is the compliant path and is NOT flagged; the attention/decoder-block
+      # architectures (a DIFFERENT model + the OP-29 deferred 2nd arch) are not
+      # scanned. LOW BLAST RADIUS: tool/flame_steppath_fma_gate.sh is the SSOT;
+      # verified PASS on the clean tree, fails ONLY if a raw FMA-fused matmul
+      # regresses onto the trainer. <1 s. BLOCKING (no seed dependency).
+      - name: OP-69 — flame step-path FMA-matmul gate (darwin-arm64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh tool/flame_steppath_fma_gate.sh
+
       # ── OP-39: float const-fold byte-eq tripwire (ADVISORY until promote) ──
       # Locks the OP-37 (#3069) + OP-37b (#3073) SILENT float const-fold fixes
       # (0.0-X negation idiom byte-exact + computed-fold operands correctly-
@@ -207,6 +229,19 @@ jobs:
           set -euo pipefail
           sh tool/fold_ci_gate.sh ./hexa
 
+      # ── OP-69: flame trainer step-path FMA-fused-matmul tripwire (LAYER 3 —
+      # cross-ISA). Run on x86_64 too: this gate is the cross-ISA invariant
+      # (arm64 fma vs x86 mul+add), so enforcing it on the x86 leg as well as
+      # the arm64 leg makes the layer-3 lock symmetric. Pure source grep (no
+      # ./hexa, no seed) over clm_prod.hexa + its matmul-free production libs;
+      # forge_dispatch_matmul dispatcher seam is compliant + not flagged. SSOT =
+      # tool/flame_steppath_fma_gate.sh; <1 s. BLOCKING. See darwin job + F-OP29.
+      - name: OP-69 — flame step-path FMA-matmul gate (linux-x86_64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh tool/flame_steppath_fma_gate.sh
+
       # ── OP-39/OP-42: float const-fold byte-eq tripwire (ADVISORY until promote;
       # see darwin job for full rationale). 18 cases: OP-39's 13 + OP-42's 5
       # hex-float MUL_HF* (OP-40 #3084 bit-exact hex-float serialize). continue-on-
@@ -270,6 +305,17 @@ jobs:
         run: |
           set -euo pipefail
           sh tool/fold_ci_gate.sh ./hexa
+
+      # ── OP-69: flame trainer step-path FMA-fused-matmul tripwire (LAYER 3 —
+      # cross-ISA). Pure source grep (no ./hexa, no seed) over clm_prod.hexa + its
+      # matmul-free production libs; forge_dispatch_matmul dispatcher seam compliant
+      # + not flagged. SSOT = tool/flame_steppath_fma_gate.sh; <1 s. BLOCKING. See
+      # darwin job + F-OP29.
+      - name: OP-69 — flame step-path FMA-matmul gate (linux-arm64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh tool/flame_steppath_fma_gate.sh
 
       # ── OP-39/OP-42: float const-fold byte-eq tripwire (ADVISORY until promote;
       # see darwin job for full rationale). 18 cases: OP-39's 13 + OP-42's 5
