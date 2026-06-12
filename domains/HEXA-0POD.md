@@ -19,6 +19,20 @@ loop targets what the consumer card + code can carry.
   (standalone GPU-build-only program, not importable) — documented, no blind math added. 16/16 flame *_lib.hexa
   CPU-link-probed LINK-OK (repo sources, clean sandbox). Verdict .verdicts/hexa-0pod/F-OP36-DISPATCH-AUDIT.txt
 
+<!-- ANCHOR:OP-37-FLOAT-CONSTFOLD-VERIFY (unique anchor — OP-36 HONEST-NOTE #2 follow-up: OP-36 observed the stale Jun-1 hexat MISCOMPILE `let aN = 0.0 - <float literal>` (lossy ~6-sig-digit const-fold roundtrip, a2 -2.64e-7 / a4 +2.027e-6) and deferred it as a presumed stale-toolchain ghost per project_local_hexa_stale_oracle. OP-37 settles the decisive question: does it reproduce on CURRENT main, or is it env-bound? Build a self-contained f64_to_bytes_le byte-dump repro, run it through the FRESHEST local native compiler, compare to IEEE-754 ground truth, and if it reproduces localize+fix the codegen const-folder) -->
+- [x] **OP-37 — `0.0 - <float literal>` const-fold miscompile: REPRODUCED on current main → REAL codegen bug → FIXED byte-exact** —
+  🟢 the miscompile REPRODUCES on the freshest local native compiler (~/.hx/bin/build/hexat, Jun-8) — NOT a
+  stale ghost. Self-contained repro (f64_to_bytes_le byte dump, PLAIN `let a=X` vs NEGATED `0.0-X`) shows the
+  PLAIN block byte-exact but the inline-arg NEGATED block corrupted to ~6 sig-digits (a2 |Δ|=2.64e-7, a4
+  |Δ|=2.027e-6 — matches OP-36 exactly). Root-caused to TWO bugs in self/codegen.hexa comptime_eval: (1)
+  folded floats re-serialized via `to_string` = "%g" 6-digit (round-trip-lossy); (2) operands re-parsed via
+  `to_float`/hxlcl_atof = naive digit-accumulator (1 ULP off the lexer's exact literal). FIX (additive,
+  no deletions): `_cf_float_node` serializes folds at format_float_sci(f,17) = "%.17e"; `_cf_negate_float_text`
+  + additive-identity special-cases (`-X`, `0.0-X`, `X-0.0`, `0.0+X`, `X+0.0`) preserve EXACT operand text
+  (sign-toggle only, zero parse/re-serialize). Rebuilt from-source via tool/regen_cc_manual → clang → fixed
+  hexat: NEGATED block now BYTE-EXACT (max|Δ|=0 across the full A&S erf coefficient set, python-cross-checked);
+  ordinary `* /` folds + identities verified non-regressive. Verdict .verdicts/hexa-0pod/F-OP37-FLOAT-CONSTFOLD-VERIFY.txt
+
 <!-- ANCHOR:OP-19G-SUMMER-5TH-ENV (unique anchor — deep-dive round-10 branch ②: formalize summer as the 5th RECORDED environment row of the machine-independence matrix. Summer (a distinct x86_64-linux glibc host from aiden, possibly a different glibc minor/distro) has been used as a substitute leg (OP-33/35) but was never RECORDED as an environment row with its exact glibc/distro/kernel fingerprint. Adding it diversifies the glibc-version axis and formalizes what OP-33/35 ran ad-hoc. Self-contained oracles only — summer's older hexa miscompiles cross-module imports (F-OP33/35 quirk)) -->
 - [x] **OP-19g — summer recorded as 5th environment (distinct glibc x86 host): golden folds verified + matrix row** —
   summer fingerprinted precisely (Ubuntu 24.04.2 LTS · kernel 6.17.0-35-generic x86_64 · glibc 2.39 Ubuntu

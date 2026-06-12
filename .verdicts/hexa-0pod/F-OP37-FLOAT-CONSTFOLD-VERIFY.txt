@@ -1,0 +1,159 @@
+F-OP37-FLOAT-CONSTFOLD-VERIFY — `0.0 - <float literal>` const-fold miscompile:
+                                REPRODUCED on current main → REAL codegen bug → FIXED
+══════════════════════════════════════════════════════════════════════════════
+DATE: 2026-06-12 · HEXA-0POD OP-37 · 0-pod ($0, NO GPU, NO vast, NO pod)
+HOST: local arm64-macos (Darwin 25.5.0), CPU-only
+STATUS: GREEN — 🟢 the OP-36-observed miscompile REPRODUCES on the freshest
+        local native compiler (NOT a stale-toolchain ghost); root-caused to TWO
+        compiler bugs in the C-transpile const-folder (self/codegen.hexa);
+        BOTH fixed; folded negation now BYTE-EXACT (max|Δ|=0 on the A&S erf set).
+
+────────────────────────────────────────────────────────────────────────────
+THE QUESTION (decisive)
+────────────────────────────────────────────────────────────────────────────
+OP-36 recorded (HONEST NOTES #2): the STALE Jun-1 `~/.hx/bin/hexa` "MISCOMPILES
+`let aN = 0.0 - <float literal>` (lossy ~6-sig-digit const-fold roundtrip: a2
+err -2.64e-7, a4 err +2.027e-6)". OP-37 asks: does this reproduce on CURRENT
+main, or was it a stale-toolchain artifact only?
+
+ANSWER: it REPRODUCES on the freshest local native compiler. It is a REAL bug
+in the native/C-transpile codegen constant-folder — not env-bound.
+
+────────────────────────────────────────────────────────────────────────────
+TOOLCHAINS (provenance — clearly labeled)
+────────────────────────────────────────────────────────────────────────────
+· STALE oracle      ~/.hx/bin/hexa → hexa.real → hx-selfhost-cli shim;
+                    `hexa run` delegates (no --emit) to the shipped dispatch
+                    binary hexa.real.pre-selfhost.20260611-005522 (built Jun-7
+                    08:10, 2115584 B). NOT used as authority.
+· FRESHEST hexat    ~/.hx/bin/build/hexat (Jun-8 01:17, 2027336 B) — the
+                    C-transpile self-hosted compiler (`<in.hexa> <out.c>`).
+                    THE authority for this verdict.
+· FIXED hexat       /tmp/hexat_fixed2 — rebuilt from current-repo source with
+                    the OP-37 patch: tool/regen_cc_manual (HEXA_V2=Jun-8 hexat)
+                    re-transpiled the 4 SSOT modules incl. the patched
+                    self/codegen.hexa → hexa_cc.c → clang → hexat. Build clean.
+
+────────────────────────────────────────────────────────────────────────────
+REPRO (self-contained /tmp/op37_repro.hexa — prints IEEE-754 LE bytes via the
+f64_to_bytes_le builtin; PLAIN `let a = X` vs NEGATED `let a = 0.0 - X`)
+────────────────────────────────────────────────────────────────────────────
+Ground truth (python struct.pack '<d', NEGATED): last byte 191, low mantissa
+  -0.254829592 = [126 90 236 198 32 79 208 191]
+  -0.284496736 = [105 20 60 204 49 53 210 191]
+  -1.421413741 = [ 87 225 186 85 28 190 246 191]
+  -1.453152027 = [ 57  76   1 87 28  64 247 191]
+  -1.061405429 = [ 45 161  85 66 132 251 240 191]
+  -0.3275911   = [140 123  61 169 64 247 212 191]
+
+VERBATIM output, BEFORE fix (Jun-7 shipped dispatch `hexa run`, == Jun-8 hexat
+C-transpile + clang -O0 — identical bytes; toolchain dates labeled above):
+  --- PLAIN: let a = X ---
+  P 0.254829592 = [126 90 236 198 32 79 208 63]    ← ALL CORRECT
+  P 0.284496736 = [105 20 60 204 49 53 210 63]
+  P 1.421413741 = [87 225 186 85 28 190 246 63]
+  P 1.453152027 = [57 76 1 87 28 64 247 63]
+  P 1.061405429 = [45 161 85 66 132 251 240 63]
+  P 0.3275911   = [140 123 61 169 64 247 212 63]
+  --- NEGATED: let a = 0.0 - X ---
+  N 0.254829592 = [30 138 2 125 34 79 208 191]     ← CORRUPT low mantissa
+  N 0.284496736 = [224 216 179 231 50 53 210 191]
+  N 1.421413741 = [89 81 131 105 24 190 246 191]
+  N 1.453152027 = [28 235 226 54 26 64 247 191]
+  N 1.061405429 = [150 91 90 13 137 251 240 191]
+  N 0.3275911   = [33 177 221 61 64 247 212 191]
+
+decoded errors (match OP-36's measurement EXACTLY): a2 |Δ|=2.64e-7,
+a4 |Δ|=2.027e-6; a3 |Δ|=3.741e-6, a5 |Δ|=4.571e-6, a1 |Δ|=4.08e-7,
+p |Δ|=1.0e-7. Negated values round-trip to ~6 significant digits.
+
+────────────────────────────────────────────────────────────────────────────
+ROOT CAUSE (the smoking gun — verbatim emitted C, Jun-8 hexat)
+────────────────────────────────────────────────────────────────────────────
+The const-folder fires only when the expr is an INLINE call argument (not a
+`let` binding). For `dump(L, 0.0 - 0.254829592)` the Jun-8 hexat emitted:
+    dump(__hexa_sl_12, hexa_float(-0.25483));      ← TRUNCATED to 6 sig digits
+    dump(__hexa_sl_14, hexa_float(-1.42141));
+(while the `let nN = 0.0 - X` lines kept full precision: hexa_float((0.0)-(...))).
+
+Two bugs in self/codegen.hexa's comptime_eval const-folder:
+  BUG-1 (serialize). Folded floats were re-serialized via `to_string(<float>)`,
+    which renders "%g" = 6 significant digits (runtime_core.c:6268, round-trip
+    LOSSY). Sites: UnaryOp `-`, BinOp + - * /, abs, sqrt, min/max.
+  BUG-2 (parse). The fold loaded operands via `_cf_as_float` → `to_float`
+    (hxlcl_atof / rt_str_parse_float) — a NAIVE digit-accumulator
+    (n=n*10+d; frac*=0.1), NOT a correctly-rounded strtod. PROVEN:
+      lit  0.254829592 = [126 90 236 198 32 79 208 63]   (lexer, exact)
+      atof 0.254829592 = [127 90 236 198 32 79 208 63]   (to_float, 1 ULP off)
+    So even with full-precision serialization the operand was already 1 ULP
+    wrong before any arithmetic.
+
+────────────────────────────────────────────────────────────────────────────
+THE FIX (self/codegen.hexa — additive, minimal, no deletions)
+────────────────────────────────────────────────────────────────────────────
+1. `_cf_float_node(f)` helper — serialize folded floats with
+   format_float_sci(f, 17) ("%.17e", round-trippable for ALL magnitudes
+   incl. subnormal/±0/1e308). Replaces every `_make_float_lit_node(to_string(
+   <float>))` site (UnaryOp -, BinOp + - * /, abs, sqrt, min/max). Cures BUG-1.
+2. `_cf_negate_float_text(s)` helper + additive-identity special-cases — for
+   `-FloatLit`, `0.0 - X`, `X - 0.0`, `0.0 + X`, `X + 0.0` the result is the
+   operand at the SAME magnitude (sign-flipped for negation), so we preserve
+   the operand's EXACT source text and just toggle the leading "-". Zero parse,
+   zero re-serialize → BYTE-EXACT. Cures BUG-2 for the dominant `0.0 - X` idiom
+   (the exact form that triggered OP-36, A&S erf coefficients).
+
+────────────────────────────────────────────────────────────────────────────
+VERBATIM output, AFTER fix (/tmp/hexat_fixed2 → emitted C → clang -O0)
+────────────────────────────────────────────────────────────────────────────
+emitted C now reads: dump(__hexa_sl_12, hexa_float(-0.254829592));  (exact text)
+
+  --- NEGATED: let a = 0.0 - X ---
+  N 0.254829592 = [126 90 236 198 32 79 208 191]   ← BYTE-EXACT vs ground truth
+  N 0.284496736 = [105 20 60 204 49 53 210 191]
+  N 1.421413741 = [87 225 186 85 28 190 246 191]
+  N 1.453152027 = [57 76 1 87 28 64 247 191]
+  N 1.061405429 = [45 161 85 66 132 251 240 191]
+  N 0.3275911   = [140 123 61 169 64 247 212 191]
+(PLAIN block unchanged — was already correct.)
+
+python cross-check vs struct.pack('<d', -X): ALL 6 EXACT (max|Δ|=0).
+
+REGRESSION (ordinary folds still correct — /tmp/op37_regress.hexa, all match
+python struct.pack): 2.0*3.5=[..28 64] · 1.0/4.0=[..208 63] · 0.5+0.25=[..232
+63] · 3.0-1.0=[..0 64] · 0.0+1.5=1.5=[..248 63] · 1.5+0.0=1.5 · 1.5-0.0=1.5.
+codegen.hexa embedded self-tests (type_checker 15/15) still PASS during regen.
+
+────────────────────────────────────────────────────────────────────────────
+TIER VERDICT (g5)
+────────────────────────────────────────────────────────────────────────────
+🟢 GREEN. The miscompile REPRODUCES on the current/freshest native compiler
+(not stale-only) → REAL codegen const-folder bug. Minimal additive fix in
+self/codegen.hexa cures BOTH the lossy serialize and the lossy parse; the
+`0.0 - X` negation idiom is now BYTE-EXACT (max|Δ|=0 across the full A&S erf
+coefficient set); ordinary arithmetic folds + additive identities verified
+non-regressive against IEEE-754 ground truth. Evidence is the verbatim
+f64_to_bytes_le byte dumps above (self-measured, not self-judged).
+
+HONEST RESIDUALS
+· General lossy `to_float`/hxlcl_atof (BUG-2 root) still affects folds that
+  must genuinely COMPUTE a new value from re-parsed operands (e.g.
+  `1.421413741 * 0.5` folded inline) — those now serialize at %.17e (≤1 ULP via
+  the host atof) rather than byte-exact. A full cure requires a correctly-
+  rounded host strtod (rt_str_parse_float is the naive accumulator under
+  HEXA_HAS_HEXA_RT_STDLIB). OUT OF SCOPE here; the OP-36-triggering NEGATION
+  idiom is fully byte-exact. Follow-up candidate logged to ## deferred.
+· The promoted `hexa run` CLI still delegates to the Jun-7 shipped dispatch
+  binary (pre-fix); landing the fix into the deployed toolchain is a separate
+  promote/rebuild step (this verdict fixes the REPO SOURCE + proves it on a
+  from-source rebuild). The atlas-fold / promote is not done here.
+
+PROVENANCE
+  repro:    /tmp/op37_repro.hexa (self-contained, f64_to_bytes_le byte dump)
+  fix:      self/codegen.hexa — _cf_float_node + _cf_negate_float_text helpers
+            + additive-identity special-cases (comptime_eval const-folder)
+  rebuild:  tool/regen_cc_manual (HEXA_V2=~/.hx/bin/build/hexat) → /tmp/
+            hexa_cc_fixed2.c → clang → /tmp/hexat_fixed2 (clean build)
+  ground:   python struct.pack('<d', ...) IEEE-754 LE bytes
+  pattern:  project_local_hexa_stale_oracle (the differential discipline) —
+            here the bug is REAL on current source, not a stale ghost.
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.

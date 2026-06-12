@@ -1,5 +1,36 @@
 # HEXA-0POD — log
 
+## 2026-06-12 — OP-37 DONE: `0.0 - <float literal>` const-fold miscompile REPRODUCED on current main → REAL codegen bug → FIXED byte-exact ($0 · 0-pod)
+- Settles OP-36 HONEST-NOTE #2 (deferred as a presumed stale-toolchain ghost). DECISIVE: it is NOT a ghost —
+  the miscompile REPRODUCES on the freshest local native compiler (~/.hx/bin/build/hexat, Jun-8 01:17, the
+  C-transpile self-hosted authority). The stale `~/.hx/bin/hexa` promoted CLI delegates `hexa run` to the
+  Jun-7 shipped dispatch binary; both, AND the Jun-8 hexat C-transpile + clang -O0, emit identical corrupt bytes.
+- REPRO: self-contained /tmp/op37_repro.hexa dumps each A&S erf coefficient's IEEE-754 LE bytes via the
+  f64_to_bytes_le builtin, in PLAIN `let a = X` vs NEGATED `let a = 0.0 - X` forms. PLAIN block = all bytes
+  correct; NEGATED block (when the expr is an INLINE call arg, where the const-folder fires) = low mantissa
+  CORRUPT, round-tripping to ~6 sig-digits. Decoded errors match OP-36 EXACTLY (a2 |Δ|=2.64e-7, a4 |Δ|=2.027e-6).
+- ROOT CAUSE (self/codegen.hexa comptime_eval const-folder), TWO bugs: (1) SERIALIZE — folded floats
+  re-emitted via `to_string(<float>)` = "%g" 6-significant-digits (runtime_core.c:6268, round-trip LOSSY);
+  emitted C verbatim showed `hexa_float(-0.25483)` for `0.0 - 0.254829592`. (2) PARSE — `_cf_as_float` loads
+  operands via `to_float`/hxlcl_atof, a naive digit-accumulator (n=n*10+d; frac*=0.1), NOT correctly-rounded
+  strtod; PROVEN: lexer literal 0.254829592=[126..] but to_float("0.254829592")=[127..] (1 ULP off).
+- FIX (additive, no deletions, respects wipe_guard): `_cf_float_node(f)` serializes folds at
+  format_float_sci(f,17) = "%.17e" (round-trippable all magnitudes) at every fold site (UnaryOp -, BinOp + - * /,
+  abs, sqrt, min/max); `_cf_negate_float_text(s)` + additive-identity special-cases (`-X`, `0.0-X`, `X-0.0`,
+  `0.0+X`, `X+0.0`) preserve the operand's EXACT source text (sign-toggle only, ZERO parse/re-serialize) →
+  byte-exact for the dominant OP-36-triggering `0.0 - X` idiom.
+- PROVEN from-source: tool/regen_cc_manual (HEXA_V2=Jun-8 hexat) re-transpiled the 4 SSOT modules incl. the
+  patched codegen.hexa → hexa_cc.c → clang → /tmp/hexat_fixed2 (clean build, codegen self-tests 15/15 pass).
+  Emitted C now reads `hexa_float(-0.254829592)` (exact text); the run prints NEGATED bytes BYTE-EXACT vs
+  python struct.pack('<d') ground truth (max|Δ|=0 over all 6 coefficients). Regression: 2.0*3.5, 1.0/4.0,
+  0.5+0.25, 3.0-1.0, and the additive identities all match IEEE-754 ground truth — non-regressive.
+- HONEST: the general lossy host atof (BUG-2 root) still affects folds that COMPUTE a new value from re-parsed
+  operands (now ≤1 ULP via %.17e, was ~6 sig-digits); full cure needs a correctly-rounded host strtod —
+  logged as a follow-up, OUT OF SCOPE (the negation idiom is fully byte-exact). The deployed `hexa run` still
+  uses the pre-fix Jun-7 binary; promote/rebuild into the install is a separate step (this lands the REPO fix).
+  Milestone OP-37 flipped [x]. Verdict .verdicts/hexa-0pod/F-OP37-FLOAT-CONSTFOLD-VERIFY.txt.
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
 ## 2026-06-12 — OP-36 DONE: forge dispatch CPU-fallback SYSTEMATIC audit — 33-symbol matrix, 2 real link holes + seam fixed byte-eq, 16/16 flame libs CPU-link-probed ($0 · 0-pod)
 - Deep-dive round-10 branch ④: closes the OP-16/18/32b class PROACTIVELY. Swept ALL 33 forge_dispatch_*
   prototypes (runtime.h) × CUDA emit (runtime_cuda_emit.hexa launchers — 33/33 ✓) × CPU body (restored
