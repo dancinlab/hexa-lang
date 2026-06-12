@@ -10,6 +10,22 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-49-SHAPE-ADAPTIVE-DESIGN (unique anchor — OP-45 found route-(a) own-GEMM is SHAPE-RIGID (one fixed 128x128 plain-launch tile, parity @D=2048 1.08x but ~1.50x @D=4096) while cuBLAS is SHAPE-ADAPTIVE (+24.6% @D=4096 via large-tile/split-K/persistent kernel selection). OP-49 DESIGNS (0-pod, no GPU) a shape-adaptive tile-selector — a D-bucketed kernel-mode policy + a CPU analytical cost model that PREDICTS which existing kernel mode to launch per shape — and VALIDATES the cost model against the already-measured OG16/OG17/MODE8/MODE5 verdict points (no new GPU run). DOCS/DESIGN + a CPU reference cost-model script; the policy SPECS the kernels, building new modes is the GPU-session follow-up) -->
+- [x] **OP-49 — route-(a) own-GEMM SHAPE-ADAPTIVE tile-selector DESIGN + CPU analytical cost model that PREDICTS the launch config per shape; cost-model ORDERING VALIDATED against measured OG16/OG17/MODE8/MODE5 points (PASS both D, mean |rel.err| 2.2%) → 🟢; 4 config-gaps flagged for the GPU session** —
+  🟢 0-pod DESIGN (no GPU, no nvcc; all measured numbers CITED from F-OP45 + W-ladder verdicts). INVENTORY: 5
+  in-tree route-(a) modes (MODE4 og16 128x128 2CTA/SM · MODE5 t256 128x256 154-reg→1CTA/SM · MODE6 relaxed · MODE7
+  persist+swizzle (untested @4096) · MODE8 b14 dual-issue = frontier). POLICY: 3 shape buckets (small-D under-fill
+  D≤1024 · medium-D parity 1024<D≤3072 · large-D drain-bound D>3072). COST MODEL (self/native/wgmma/routea_cost_model.py):
+  predict_tflops = PEAK(349)·issue_eff·occ_factor·wave_eff·drain·reuse·fill, occupancy = MIN(smem-limited, REGISTER-
+  limited) — the 154-reg t256→1CTA/SM register-cap is LOAD-BEARING (smem-only mispredicts the large-D crossover);
+  issue_eff fit ONCE/kernel @D=2048 (per-kernel const, OP-45 finding1), D-scaling = PREDICTION. SELECTOR = argmax over
+  {mode×NST}. VALIDATION: reproduces measured win-order at BOTH D — D=2048 [MODE8,OG17,OG16,t256] MATCH (anchors,
+  exact) · D=4096 [MODE8,OG17,t256,OG16] MATCH (PREDICTION, incl. t256-above-OG16 crossover), mean |rel.err| 2.2%,
+  ORDERING=PASS. Honest sub-residual: MODE8@4096 absolute +9.2% (static drain under-credits large-D K-drain; ordering
+  unaffected; calibrate via OP-45 T2 ncu). GAPS: #1 64x64 small-tile · #2 MODE7 measured @4096 (=T3) · #3 bit-exact
+  tree-reduction split-K (=T4) · #4 NST-adaptive launcher. $0 · 0-GPU · 0-pod · no vast · no foreign-pod · no .tape.
+  Verdict .verdicts/hexa-0pod/F-OP49-SHAPE-ADAPTIVE-DESIGN.txt · docs/forge-routea-shape-adaptive.md.
+
 <!-- ANCHOR:OP-45-ROUTEA-D4096-CAP (unique anchor — the route-(a) pre-permute own-GEMM (#3094, F-GPU-ROUTEA-KEEPBAND-MEASURE) crossed cuBLAS-TF32 parity @D=2048 (1.08x, 315 TFLOP/s, rel_rms 0) but did NOT @D=4096 (~1.50x, 284 TFLOP/s), with the verdict footnote attributing the residual to a "256-elt register-realloc ptxas cap". OP-45 STATICALLY (0-pod, no GPU) characterizes WHY @D=4096 misses parity — register-spill (a) / occupancy (b) / D-independent ptxas ceiling (c) / memory-roofline (d) — by source-level register/smem/occupancy/wave accounting of the actual measured kernel (b14 MODE 8 gemm_og17_b14), to either pin the cause or hand a precise GPU test matrix to the gated OP-45-GPU sibling) -->
 - [x] **OP-45 — route-(a) own-GEMM D=4096 sub-parity cap STATICALLY characterized: (a) spill / (b) occupancy / (c) D-independent ptxas-ceiling ALL EXCLUDED; cause = (d) shape-rigidity-vs-cuBLAS-adaptivity (cuBLAS +24.6% / own −9.9% at larger D); 🟠 (d) sub-split needs a GPU profile, T1-T5 matrix handed to OP-45-GPU** —
   🟠 0-pod static analysis (nvcc not local → no on-CPU ptxas -v capture; numbers from the W-ladder verdicts +

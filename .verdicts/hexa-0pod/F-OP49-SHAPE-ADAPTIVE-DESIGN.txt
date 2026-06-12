@@ -1,0 +1,124 @@
+F-OP49-SHAPE-ADAPTIVE-DESIGN — DESIGN (0-pod, NO GPU) of a shape-adaptive tile-selector for
+route-(a) own-GEMM + a CPU analytical cost model that PREDICTS which existing kernel mode to
+launch per problem shape. Turns OP-45's "route-(a) is SHAPE-RIGID (one fixed 128x128 plain-launch
+tile) while cuBLAS is SHAPE-ADAPTIVE (+24.6% @D=4096)" diagnosis into an actionable policy +
+selector. The cost model is VALIDATED against the already-measured OG16/OG17/MODE8/MODE5 verdict
+datapoints (no new GPU run) and REPRODUCES the measured win-ordering at BOTH D.
+================================================================================================
+TIER: 🟢 GREEN (cost-model ORDERING validation PASSES at both measured D). The model reproduces
+      the measured win-order [MODE8, OG17, OG16, MODE5_t256] @D=2048 AND [MODE8, OG17, MODE5_t256,
+      OG16] @D=4096 — INCLUDING the non-trivial D=4096 crossover where the 128x256 t256 tile
+      climbs ABOVE OG16. Mean |rel.err| = 2.2% across the 8 measured points. The D=2048 points are
+      calibration anchors (exact by construction — per-kernel issue_eff fit once); the D=4096
+      ordering is a genuine PREDICTION that PASSES. This is the g5 evidence the policy is sound.
+      HONEST sub-residual (does NOT downgrade the tier — ordering is the deliverable): MODE8 @4096
+      absolute is +9.2% over-predicted (310 vs 283.9) because the static drain_penalty under-
+      credits the large-D K-drain OP-45 flagged; calibrating it needs the OP-45 T2 ncu DRAM%/
+      Tensor% datapoint. The ORDERING (the selector's argmax) is unaffected.
+
+DATE: 2026-06-13
+HW:   NONE (0-pod). Cost model is pure-CPU Python (`python3 routea_cost_model.py`). All measured
+      datapoints are CITED from the OP-45 verdict + the W-ladder verdicts (.verdicts/hexa-fusion/);
+      NO new GPU run, no nvcc, no vast, no foreign pod, leak-0, $0.
+INPUT: .verdicts/hexa-0pod/F-OP45-ROUTEA-D4096-CAP.txt (the (a)-(d) cause decomposition + T1-T5)
+       + self/native/wgmma/wgmma_tf32_b14.cu (MODE 4/5/6/7/8 source — tile/reg/smem/launch configs)
+       + .verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-{W10,OG16,OG17}.txt (on-pod measured TFLOP/s).
+DELIVERABLES:
+  - docs/forge-routea-shape-adaptive.md      (the policy: buckets + cost model + selector + gaps)
+  - self/native/wgmma/routea_cost_model.py   (the CPU reference cost model + validation harness)
+  - this verdict.
+
+================================================================================================
+IN-TREE CONFIG INVENTORY (step 1 — what tile/launch configs ALREADY exist as code):
+================================================================================================
+All in wgmma_tf32_b14.cu, route-(a) pre-permute, TF32, bit-exact (rel_rms 0), TKSW=32, 256 thr/CTA:
+  MODE 4  gemm_og16        128x128  64 accum-reg  32KB/stg  2 CTA/SM  plain        descriptor-direct base
+  MODE 5  gemm_og17_t256   128x256  128 reg(154/thr) 48KB/stg 1 CTA/SM(REG-capped) plain  2x B-reuse (W11/W12 closed-neg)
+  MODE 6  gemm_og17        128x128  64           32KB/stg  2 CTA/SM  plain        relaxed wait_group
+  MODE 7  gemm_og17_persist 128x128 64           32KB/stg  2 CTA/SM  PERSISTENT+swizzle  tail-smooth + L2-hot
+  MODE 8  gemm_og17_b14    128x128  64           32KB/stg  2 CTA/SM  plain DUAL-ISSUE(PDEP)  FRONTIER
+  (NST runtime arg: NST2/3 hold 2 CTA/SM @128x128; NST4 -> 1 CTA/SM regress. NO split-K (g5 forbids
+   reorder of bit-exact accum). NO 64x64 small-tile mode.)
+
+================================================================================================
+THE POLICY — SHAPE BUCKETS (step 2a):
+================================================================================================
+  small-D under-fill   D<=1024   tiles<<264 resident CTAs (D=512: 16 tiles/264 = 0.06 wave-eff).
+                                  policy picks MODE8 NST2 today; WANTS a 64x64 small-tile (gap #1).
+  medium-D parity zone 1024<D<=3072  tiles~=1 wave, PARITY already met (D=2048 1.08x). PICK MODE8 NST3 PDEP2.
+  large-D drain-bound  D>3072    many waves + deep K-loop -9.9% drain; cuBLAS +24.6%. PICK MODE8 NST3 PDEP1;
+                                  WANTS MODE7 persistent (untested @4096) and/or bit-exact split-K (gaps #2,#3).
+  K-axis modifier: large-K / small-M*N (tall-skinny) is the highest-value split-K regime.
+
+================================================================================================
+THE COST MODEL (step 2b) — predict_tflops(mode,M,N,K,nst):
+================================================================================================
+  = PEAK_TF32(349) * issue_eff[mode] * occ_factor * wave_eff * drain_penalty * reuse_eff * fill_factor
+  occupancy = MIN(smem-limited, REGISTER-limited) CTAs/SM:
+    cta_per_sm = min( 228KB/(smem_per_stage*nst),  65536/(regs*256_thr) )
+    -> the register limit is LOAD-BEARING: t256 = 154 reg/thr -> 1 CTA/SM though 96KB smem allows 2
+       (the W11/W12 closed-neg). Modeling smem-only mispredicts the whole large-D crossover.
+  issue_eff fit ONCE per kernel from D=2048 plateau (per-KERNEL const — OP-45 finding 1: D-invariant
+    binary). D-scaling terms (drain/wave/reuse/fill) are then a PREDICTION at all other D.
+  drain_penalty(K) = 1/(1 + c*log2(nks)/log2(64)), c calibrated so MODE8 nks 64->128 drops -9.9%.
+  reuse_eff(TN): +8.5% @TN=256 (wider tile reuses A-loads). fill_factor: wide tiles need >=1 wave.
+
+================================================================================================
+THE SELECTOR (step 2c):  select(M,N,K) = argmax over {every in-tree mode x viable NST} of predict_tflops.
+  With TODAY'S in-tree modes the argmax is MODE8 at every D (the frontier 128x128 kernel dominates
+  the others). That IS the point: the policy WANTS a different config at the extremes but none
+  better exists to select -> the selector makes the missing-config gaps concrete (below).
+
+================================================================================================
+VALIDATION (step 3) — model vs measured verdict points (0-pod, VERBATIM tool output):
+================================================================================================
+     D         mode  nst  measured  predicted  rel.err
+  2048         OG16    3     252.0      252.0   +0.0%    (calibration anchor)
+  2048         OG17    3     279.7      279.7   -0.0%    (calibration anchor)
+  2048        MODE8    3     315.0      315.0   +0.0%    (calibration anchor)
+  2048   MODE5_t256    2     219.0      219.0   +0.0%    (calibration anchor)
+  4096         OG16    2     264.7      247.3   -6.6%    (PREDICTION)
+  4096         OG17    2     275.0      274.9   -0.0%    (PREDICTION)
+  4096        MODE8    3     283.9      310.1   +9.2%    (PREDICTION; the OP-45 large-D drain residual)
+  4096   MODE5_t256    2     264.9      269.3   +1.7%    (PREDICTION)
+  mean |rel.err| = 2.2%
+
+  D=2048 measured rank: ['MODE8','OG17','OG16','MODE5_t256']
+  D=2048 predict  rank: ['MODE8','OG17','OG16','MODE5_t256']   -> MATCH
+  D=4096 measured rank: ['MODE8','OG17','MODE5_t256','OG16']
+  D=4096 predict  rank: ['MODE8','OG17','MODE5_t256','OG16']   -> MATCH
+  ORDERING VALIDATION: PASS (model reproduces measured win-order at both D)
+
+  => The model predicts the non-trivial D=4096 crossover (t256 climbs above OG16) correctly, driven
+     by the register-capped-occupancy + wide-tile-reuse terms. The selector's argmax (MODE8 = the
+     measured winner at both D) is the correct pick. 🟢.
+
+================================================================================================
+CONFIG GAPS (step 2d / 4) — what the policy WANTS that doesn't exist in-tree (GPU-session build-work):
+================================================================================================
+  GAP #1  64x64 small-tile mode (small-D under-fill). 128x128 leaves D<=1024 ~90% idle. Build
+          gemm_og17_t64 (regs~48 -> 2+ CTA/SM); rel_rms 0 gate first. Cost model scores it on add.
+  GAP #2  MODE 7 persistent+swizzle MEASURED @D=4096 (kernel EXISTS, never measured at 4096) = OP-45 T3.
+          Cost model currently scores MODE7==MODE8 (only its wave-eff benefit is modeled, ~0.97 already);
+          the L2-residency benefit needs the T3 measurement to add a calibrated l2_hot term.
+  GAP #3  Bit-exact split-K (large-K/tall-skinny) — highest value. cuBLAS +24.6% is partly split-K
+          (OP-45 T4 quantifies). Needs a DETERMINISTIC tree-reduction split-K to stay g5 bit-exact;
+          build only after T4 confirms split-K is the dominant lever AND a bit-exact order is reachable.
+  GAP #4  NST-adaptive launcher (pure host-side, no new kernel): pick NST per shape (NST3 medium-D,
+          NST2 large-D, matching measured best). Cost model already ranks NST.
+
+================================================================================================
+SUMMARY (g5):
+- Inventoried the 5 in-tree route-(a) modes (4/5/6/7/8) with exact tile/reg/smem/occupancy/launch.
+- Designed a 3-bucket shape-adaptive policy (small-D under-fill / medium-D parity / large-D drain-
+  bound) + a CPU analytical cost model (occupancy=min(smem,REGISTER); issue_eff calibrated per-kernel
+  @2048; drain/wave/reuse/fill D-scaling) + a selector (argmax over modes x NST).
+- VALIDATED 0-pod: the model REPRODUCES the measured win-ordering at BOTH D=2048 and D=4096 (incl.
+  the t256/OG16 large-D crossover), mean |rel.err| 2.2%. ORDERING VALIDATION = PASS -> 🟢.
+- Honest sub-residual: MODE8@4096 absolute +9.2% (large-D K-drain under-credited) -> needs OP-45 T2
+  ncu DRAM%/Tensor% to calibrate the drain coefficient; ORDERING is unaffected.
+- Flagged 4 config GAPS the policy wants but that don't exist in-tree (64x64 small-tile, MODE7-@4096
+  measure, bit-exact split-K, NST-adaptive launcher) = the concrete GPU-session build list, mapped
+  to OP-45 T1-T5.
+- $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+  Deliverables: docs/forge-routea-shape-adaptive.md · self/native/wgmma/routea_cost_model.py · this verdict.
