@@ -1,0 +1,159 @@
+// @ci_gate — deterministic · pure analytic anchors
+//
+// qforge_chip_bte_kappa_selftest.hexa — QFORGE CHIP round-8 g5 gate.
+//
+// bte_kappa.hexa closes the DIFFUSIVE side of the chip THERMAL leg: the phonon Boltzmann
+// transport equation in the relaxation-time approximation (RTA),
+//     κ = (1/V) Σ_qν C_qν v_qν² τ_qν,   1/τ = 1/τ_U + 1/τ_iso + 1/τ_bd (Matthiessen),
+// whose τ→∞ (no-scattering) limit is the round-4 BALLISTIC κ (the UPPER-BOUND anchor).
+// Every anchor below is an EXACT analytic identity or a closed-form scaling law (d6 —
+// derivable, none tuned):
+//
+//   (A) BALLISTIC UPPER BOUND — with ONLY boundary scattering (τ=τ_bd=F·L/v, all
+//       intrinsic rates→0) the mean-free-path ℓ=vτ=F·L equals the device width, the
+//       ballistic ceiling; adding ANY intrinsic scattering can only LOWER κ.  Verifies
+//       κ_bd = C·v²·(F·L/v)/V = C·v·F·L/V exactly, and κ(with Umklapp) < κ_bd.        🔵
+//   (B) MATTHIESSEN — 1/τ_total = Σ_i 1/τ_i exactly (the composite of three independent
+//       lifetimes equals the inverse of the summed rates; fastest channel dominates).   🔵
+//   (C) T-DEPENDENCE — high-T Umklapp-dominated κ ∝ 1/T (Peierls–Eucken); low-T
+//       boundary-dominated κ → a plateau set by the (frozen) heat capacity (Casimir).  🔵
+//   (D) ISOTOPE ω⁴ — 1/τ_iso ∝ ω⁴ (Rayleigh): rate ratio at 2ω vs ω = 16 exactly,
+//       positive sign (a resistance), long-wavelength transparency (τ_iso→∞ as ω→0).   🔵
+//
+// HONEST SCOPE (d6): RELAXATION-TIME APPROXIMATION — single-mode RTA, NOT the full
+// iterative linearised BTE; RTA over-damps Normal 3-phonon processes and UNDER-estimates
+// κ for ultra-pure crystals (Callaway correction deferred).  The ballistic round-4 κ is
+// the rigorous UPPER BOUND the RTA-BTE κ approaches as 1/τ→0; anchors test that bound and
+// the closed-form scattering laws, NOT a measured device κ.
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/chip/bte_kappa_selftest.hexa
+// PASS: "qforge_chip_bte_kappa_selftest PASS".
+use "stdlib/qforge/chip/bte_kappa"
+use "stdlib/qforge/chip/phonon_kappa"
+use "stdlib/qforge/chip/band_transport"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _kb()   -> float { return 1.380649e-23 }
+fn _hbar() -> float { return 6.62607015e-34 / (2.0 * 3.14159265358979323846) }
+
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_rel(name: str, got: float, want: float, rel: float) -> int {
+    let denom = _abs(want)
+    let tol = rel * denom
+    if _abs(got - want) <= tol { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let kb = _kb()
+    let hbar = _hbar()
+
+    // shared device / material parameters (analytic — d4 inputs, none material-hardcoded)
+    let vs   = 5000.0          // acoustic group velocity v_s (m/s) — Si-scale
+    let len  = 1.0e-6          // device width L = 1 µm
+    let fgeom = 1.0            // diffuse-boundary Casimir factor
+    let vol  = 2.0e-29         // cell volume (m³) — Si-scale ~20 Å³
+    let theta_d = 645.0        // Debye temperature (K) — Si-scale
+    let a_u  = 1.0e-19         // Umklapp prefactor (s·K⁻¹, d4 input)
+    let b_iso = 1.0e-45        // isotope prefactor (s³, d4 input)
+    // one representative acoustic mode at ω = k_B·100K/ħ (x=ħω/k_BT O(1) near 100K)
+    let omega = (kb * 100.0) / hbar     // ≈ 1.31e13 rad/s
+
+    // ══ (A) BALLISTIC UPPER BOUND — boundary-only τ → ℓ=F·L (ballistic ceiling) ═══
+    // With ONLY boundary (Casimir) scattering, τ=τ_bd=F·L/v, so the mean-free-path
+    // ℓ=v·τ=F·L equals the device width — the phonon crosses the whole device without
+    // an intrinsic scattering event (the ballistic ceiling).  κ_bd must equal the exact
+    // closed form C·v²·(F·L/v)/V = C·v·F·L/V.
+    let tau_bd = qforge_chip_bte_tau_boundary(vs, len, fgeom)
+    fails = fails + _ck_rel("A.τ_bd = F·L/v (Casimir traversal time)", tau_bd, (fgeom * len) / vs, 1.0e-12)
+    let c_mode = qforge_chip_bte_heat_capacity(omega, 100.0)
+    let kappa_bd = qforge_chip_bte_kappa([omega], [vs], [tau_bd], vol, 100.0)
+    let kappa_bd_closed = c_mode * vs * vs * tau_bd / vol      // = C·v·F·L/V
+    fails = fails + _ck_rel("A.κ(boundary-only) = C·v²·τ_bd/V exact (ballistic ceiling)",
+                            kappa_bd, kappa_bd_closed, 1.0e-9)
+    // adding intrinsic (Umklapp) scattering can ONLY lower κ below the ballistic ceiling.
+    let tau_u   = qforge_chip_bte_tau_umklapp(omega, 100.0, theta_d, a_u)
+    let tau_tot = qforge_chip_bte_matthiessen([tau_u, tau_bd])
+    let kappa_diff = qforge_chip_bte_kappa([omega], [vs], [tau_tot], vol, 100.0)
+    fails = fails + _ck_true("A.κ_diffusive(+Umklapp) < κ_ballistic-ceiling (upper bound)",
+                             kappa_diff < kappa_bd)
+    // and as the device grows (L→∞) with intrinsic OFF, κ_bd grows ∝ L (no saturation —
+    // boundary-limited ballistic transport scales with length): the τ→∞ divergence.
+    let tau_bd_big = qforge_chip_bte_tau_boundary(vs, 1.0e6 * len, fgeom)
+    let kappa_bd_big = qforge_chip_bte_kappa([omega], [vs], [tau_bd_big], vol, 100.0)
+    fails = fails + _ck_rel("A.κ_bd ∝ L (ballistic, no diffusive saturation as L→∞)",
+                            kappa_bd_big / kappa_bd, 1.0e6, 1.0e-6)
+
+    // ══ (B) MATTHIESSEN — 1/τ_total = Σ_i 1/τ_i (rates add, fastest dominates) ════
+    let tau_iso = qforge_chip_bte_tau_isotope(omega, b_iso)
+    let tau_m   = qforge_chip_bte_matthiessen([tau_u, tau_iso, tau_bd])
+    let rate_sum = 1.0 / tau_u + 1.0 / tau_iso + 1.0 / tau_bd
+    fails = fails + _ck_rel("B.1/τ_total = 1/τ_U+1/τ_iso+1/τ_bd (Matthiessen)",
+                            1.0 / tau_m, rate_sum, 1.0e-9)
+    // composite τ is SHORTER than any single channel (resistances add) — fastest wins.
+    let tmin1 = tau_u
+    let mut tmin = tmin1
+    if tau_iso < tmin { tmin = tau_iso }
+    if tau_bd  < tmin { tmin = tau_bd }
+    fails = fails + _ck_true("B.τ_total ≤ min(τ_i) (composite shorter than each channel)",
+                             tau_m <= tmin + 1.0e-30)
+
+    // ══ (C) T-DEPENDENCE — high-T Umklapp κ∝1/T (Peierls) · low-T boundary plateau ═
+    // (C1) HIGH-T Umklapp-dominated: above Θ_D the exp factor saturates and 1/τ_U∝T,
+    // while C→k_B (classical), so κ_U = C·v²·τ_U/V ∝ 1/T.  Verify κ(2T)/κ(T) ≈ 1/2
+    // at T ≫ Θ_D (Umklapp-only, ω fixed; pick ω with x≪1 so C≈k_B at both T).
+    let th = 200000.0                     // T ≫≫ Θ_D=645 → exp factor →1 (saturated), C≈k_B
+    let omega_hi = (kb * th * 0.01) / hbar // x=0.01 → C≈k_B classical at both T,2T
+    let tau_u_t  = qforge_chip_bte_tau_umklapp(omega_hi, th, theta_d, a_u)
+    let tau_u_2t = qforge_chip_bte_tau_umklapp(omega_hi, 2.0 * th, theta_d, a_u)
+    let k_u_t  = qforge_chip_bte_kappa([omega_hi], [vs], [tau_u_t],  vol, th)
+    let k_u_2t = qforge_chip_bte_kappa([omega_hi], [vs], [tau_u_2t], vol, 2.0 * th)
+    fails = fails + _ck_rel("C.high-T Umklapp κ(2T)/κ(T) → 1/2 (Peierls κ∝1/T)",
+                            k_u_2t / k_u_t, 0.5, 5.0e-3)
+    // (C2) LOW-T boundary plateau: below Θ_D/3 Umklapp is exponentially frozen
+    // (1/τ_U→0), so τ→τ_bd (T-independent) and κ → C(T)·v²·τ_bd/V — the Casimir
+    // plateau whose ONLY T-dependence is the heat capacity (no scattering T-dep).
+    // Verify at low T that the Umklapp rate is negligible vs the boundary rate.
+    let t_lo = 20.0                       // ≪ Θ_D/3 ≈ 215 K
+    let tau_u_lo = qforge_chip_bte_tau_umklapp(omega, t_lo, theta_d, a_u)
+    let rate_u_lo  = 1.0 / tau_u_lo
+    let rate_bd_lo = 1.0 / tau_bd
+    fails = fails + _ck_true("C.low-T Umklapp frozen: 1/τ_U ≪ 1/τ_bd (boundary plateau)",
+                             rate_u_lo < 0.01 * rate_bd_lo)
+    // and the low-T conductivity equals the boundary-limited form (Umklapp negligible).
+    let tau_lo_tot = qforge_chip_bte_matthiessen([tau_u_lo, tau_bd])
+    let k_lo       = qforge_chip_bte_kappa([omega], [vs], [tau_lo_tot], vol, t_lo)
+    let c_lo       = qforge_chip_bte_heat_capacity(omega, t_lo)
+    let k_lo_plateau = c_lo * vs * vs * tau_bd / vol
+    fails = fails + _ck_rel("C.low-T κ = boundary plateau C(T)·v²·τ_bd/V (Casimir)",
+                            k_lo, k_lo_plateau, 1.0e-2)
+
+    // ══ (D) ISOTOPE ω⁴ — Rayleigh law: rate ∝ ω⁴, sign +, ω→0 transparency ═══════
+    // (D1) the ω⁴ scaling: 1/τ_iso(2ω) / (1/τ_iso(ω)) = 2⁴ = 16 EXACTLY.
+    let r_w  = 1.0 / qforge_chip_bte_tau_isotope(omega, b_iso)
+    let r_2w = 1.0 / qforge_chip_bte_tau_isotope(2.0 * omega, b_iso)
+    fails = fails + _ck_rel("D.isotope rate ∝ ω⁴ — ratio(2ω/ω)=16 exact", r_2w / r_w, 16.0, 1.0e-9)
+    // (D2) SIGN: the isotope rate is a positive resistance (1/τ_iso > 0).
+    fails = fails + _ck_true("D.isotope rate sign > 0 (a resistance, not a gain)", r_w > 0.0)
+    // (D3) long-wavelength transparency: as ω→0, 1/τ_iso→0 so τ_iso→∞ (acoustic
+    // phonons are nearly transparent to point mass defects — high-ω effect).
+    let r_lo = 1.0 / qforge_chip_bte_tau_isotope(0.01 * omega, b_iso)
+    fails = fails + _ck_true("D.ω→0 isotope transparency: 1/τ_iso(0.01ω) ≪ 1/τ_iso(ω)",
+                             r_lo < 1.0e-6 * r_w)
+    // (D4) Rayleigh ω⁴ vs Umklapp ω²: isotope steepens faster than Umklapp in ω.
+    let ru_w  = 1.0 / qforge_chip_bte_tau_umklapp(omega, 100.0, theta_d, a_u)
+    let ru_2w = 1.0 / qforge_chip_bte_tau_umklapp(2.0 * omega, 100.0, theta_d, a_u)
+    fails = fails + _ck_rel("D.Umklapp rate ∝ ω² — ratio(2ω/ω)=4 (vs isotope 16)",
+                            ru_2w / ru_w, 4.0, 1.0e-9)
+
+    if fails == 0 { println("qforge_chip_bte_kappa_selftest PASS") }
+    else { println("qforge_chip_bte_kappa_selftest FAIL (" + to_string(fails) + ")") }
+}

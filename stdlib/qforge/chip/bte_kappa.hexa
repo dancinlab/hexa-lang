@@ -1,0 +1,178 @@
+// HEXA Standard Library — qforge/chip/bte_kappa
+//
+// QFORGE universal-engine · CHIP scale · round-8 brick.
+//   scale ladder (QFORGE.md §122):  chip = device 밴드·수송·열(TCAD).
+//   round-4 (phonon_kappa.hexa)  closed the THERMAL leg's BALLISTIC quantum floor —
+//       κ_ball = Σ_modes g₀·trans·S(ħω/k_BT) → N·g₀ for N reflectionless acoustic
+//       channels (the exact dispersion-blind low-T anchor, Rego-Kirczenow / Schwab).
+//       That ballistic κ is the INFINITE-τ (no-scattering) limit: heat is capped only
+//       by the number of open Landauer channels, not by any mean-free-path.
+//
+// Round-8 closes the DIFFUSIVE side of the thermal leg with the phonon Boltzmann
+// transport equation in the relaxation-time approximation (RTA-BTE):
+//
+//     κ = (1/V) Σ_{q,ν} C_{qν} · v_{qν}² · τ_{qν}                 (Peierls 1929; Callaway 1959)
+//
+//   • C_{qν}  — per-mode heat capacity  C = k_B · x²e^x/(e^x−1)²,  x ≡ ħω/k_BT
+//               (the SAME dimensionless kernel K(x) the round-4 Landauer integrand uses,
+//                d19 — heat-capacity and thermal-conductance kernels are one function),
+//   • v_{qν}  — phonon group velocity dω/dq (acoustic → sound speed v_s),
+//   • τ_{qν}  — mode relaxation time, the RTA single-mode lifetime,
+//   • V       — crystal (cell) volume; κ is reported per unit volume (W·m⁻¹·K⁻¹).
+//
+// The lifetime is built from independent scattering channels by MATTHIESSEN'S RULE —
+// rates (not times) add, because independent Poisson scatterers compose as a sum of
+// rates (the slowest process does NOT dominate; the FASTEST rate dominates τ):
+//
+//     1/τ_{qν} = 1/τ_U + 1/τ_iso + 1/τ_bd                        (Matthiessen 1864)
+//
+//   • Umklapp (3-phonon, momentum-non-conserving) — the INTRINSIC resistive process:
+//         1/τ_U = A · ω² · T · exp(−Θ_D / (3T))                  (Slack; Morelli 2002)
+//     ∝ ω²T at high T (so κ ∝ 1/T, the Peierls–Eucken law) and exponentially frozen
+//     out below ~Θ_D/3 (the exp factor): Umklapp needs a thermally-populated high-q
+//     partner phonon, absent at low T.
+//   • Mass-disorder / ISOTOPE (point-defect Rayleigh) scattering:
+//         1/τ_iso = B · ω⁴                                       (Klemens 1955; Tamura 1983)
+//     the ω⁴ Rayleigh law — long-wavelength acoustic phonons barely scatter off point
+//     mass defects, so isotope resistance is a HIGH-frequency (optical / zone-edge) effect.
+//   • BOUNDARY (Casimir) scattering — the finite-size / sample-width limit:
+//         1/τ_bd = v / (F·L)                                     (Casimir 1938)
+//     frequency-INDEPENDENT (geometric): a phonon of speed v traverses a sample of
+//     effective width F·L in time F·L/v.  This is what makes a FINITE device diffusive
+//     even when intrinsic (Umklapp/isotope) scattering vanishes — and it is the bridge
+//     to the ballistic limit: as L→∞ (1/τ_bd→0) and Umklapp/isotope→0, τ→∞ and the
+//     BTE flux is capped by the round-4 ballistic Landauer ceiling (the UPPER BOUND).
+//
+// ── HONEST SCOPE (d6) ─────────────────────────────────────────────────────────
+//   This is the RELAXATION-TIME APPROXIMATION (single-mode RTA), NOT the full iterative
+//   linearised BTE: RTA treats each mode's scattering as an independent exponential
+//   relaxation to local equilibrium and does NOT enforce momentum conservation among
+//   Normal (non-Umklapp) 3-phonon events.  RTA OVER-damps Normal scattering (which in
+//   reality redistributes, not dissipates, crystal momentum) and so UNDER-estimates κ
+//   for high-purity crystals where Normal processes dominate (the Callaway correction
+//   restores this — deferred).  The ballistic round-4 κ is the rigorous UPPER BOUND that
+//   the RTA-BTE κ must approach as 1/τ→0; we verify that anchor, and report κ(T) as the
+//   RTA value, not a measured device number.  The scattering COEFFICIENTS (A,B,F) are
+//   material inputs (d4 — supplied, never hardcoded per material).
+//
+// ── d4 generic / d19 reuse contract ──────────────────────────────────────────
+//   • the scattering RATE is a CALLBACK contract, not a fixed formula: 1/τ is assembled
+//     from a list of independent rate-channels (Umklapp · isotope · boundary supplied as
+//     primitives), and Matthiessen sums them generically — a new channel (e.g. electron-
+//     phonon, grain-boundary) is one more rate in the sum, no path edit (d4).
+//   • C_{qν} reuses round-4's K(x) kernel exactly (d19 — one Bose-thermal kernel: the
+//     conductance integrand of the Landauer form and the heat capacity are the SAME K).
+//   • ω(q,ν) and v(q,ν) are INPUTS — analytic acoustic (selftest) OR a DFPT spectrum +
+//     finite-difference group velocity (dfpt / realcell_phonon, d19); empty-lattice,
+//     a real spectrum, and a device mode list all traverse ONE path (d4).
+//   • g₀ / ballistic anchor reuses round-4 qforge_chip_phonon_kappa_ballistic (d19).
+//
+//   pub fn qforge_chip_bte_heat_capacity(omega, temp_k)              -> float  // C_qν
+//   pub fn qforge_chip_bte_tau_umklapp(omega, temp_k, theta_d, a_u)  -> float  // τ_U
+//   pub fn qforge_chip_bte_tau_isotope(omega, b_iso)                 -> float  // τ_iso
+//   pub fn qforge_chip_bte_tau_boundary(velocity, length, f_geom)    -> float  // τ_bd (Casimir)
+//   pub fn qforge_chip_bte_matthiessen(rates)                        -> float  // τ = 1/Σ(1/τ_i)
+//   pub fn qforge_chip_bte_kappa(omegas, vels, taus, volume, temp_k) -> float  // RTA Σ C v² τ /V
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/chip/bte_kappa_selftest.hexa
+use "stdlib/qforge/chip/phonon_kappa"
+use "stdlib/qforge/chip/band_transport"
+
+// SI constants (exact) — match round-1/4 verbatim.
+fn _kb()   -> float { return 1.380649e-23 }     // Boltzmann   J/K
+fn _hbar() -> float { return 6.62607015e-34 / (2.0 * 3.14159265358979323846) } // ħ = h/2π
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// ── per-mode heat capacity  C_qν = k_B · K(x),  x = ħω/k_BT ───────────────────
+//   K(x) = x²e^x/(e^x−1)² is round-4's dimensionless Landauer thermal kernel — the
+//   SAME function (d19): the Einstein heat capacity of one mode IS k_B·K(x).
+//   Limits: x→0 (ħω≪k_BT) → C→k_B (Dulong-Petit, classical equipartition); x→∞
+//   (frozen mode) → C→0 (BE-suppressed).  Units J/K (per mode).
+pub fn qforge_chip_bte_heat_capacity(omega: float, temp_k: float) -> float {
+    let x  = (_hbar() * _abs(omega)) / (_kb() * temp_k)
+    if x < 1.0e-12 { return _kb() }            // classical floor, avoids 0/0
+    let ex = exp(x)
+    let d  = ex - 1.0
+    return _kb() * x * x * ex / (d * d)
+}
+
+// ── Umklapp lifetime  1/τ_U = A·ω²·T·exp(−Θ_D/3T)  → τ_U = 1/(…) ──────────────
+//   The intrinsic 3-phonon resistive rate (Slack form).  ∝ ω²T·exp(−Θ_D/3T):
+//   exponentially frozen below Θ_D/3 (no thermal partner phonon), ∝ T at high T so
+//   that κ_U ∝ 1/T (Peierls law).  `a_u` = material Umklapp prefactor (s·K⁻¹, d4 input).
+pub fn qforge_chip_bte_tau_umklapp(omega: float, temp_k: float, theta_d: float, a_u: float) -> float {
+    let w = _abs(omega)
+    let rate = a_u * w * w * temp_k * exp(-theta_d / (3.0 * temp_k))
+    if rate <= 0.0 { return 1.0e300 }          // no Umklapp (T→0) → τ→∞
+    return 1.0 / rate
+}
+
+// ── isotope / mass-disorder lifetime  1/τ_iso = B·ω⁴  → τ_iso = 1/(B·ω⁴) ──────
+//   Point-defect Rayleigh scattering (Klemens/Tamura).  The ω⁴ law: long-wavelength
+//   acoustic phonons (ω→0) are nearly transparent to point mass defects (τ_iso→∞),
+//   resistance grows steeply toward zone edge / optical ω.  `b_iso` = mass-variance
+//   prefactor (s³, d4 input).  SIGN: rate ≥ 0 (a resistance), τ_iso > 0.
+pub fn qforge_chip_bte_tau_isotope(omega: float, b_iso: float) -> float {
+    let w = _abs(omega)
+    let rate = b_iso * w * w * w * w        // ∝ ω⁴ (Rayleigh)
+    if rate <= 0.0 { return 1.0e300 }
+    return 1.0 / rate
+}
+
+// ── boundary (Casimir) lifetime  1/τ_bd = v/(F·L)  → τ_bd = F·L/v ─────────────
+//   Geometric, frequency-INDEPENDENT: traversal time of a sample of effective width
+//   F·L at group speed v.  `f_geom` = Casimir geometric factor (≈1.12 for a circular
+//   cross-section; 1 for fully diffuse boundaries), `length` = sample width L (m).
+//   This is the finite-size resistance that renders a device DIFFUSIVE and, as L→∞,
+//   τ_bd→∞ — the channel that connects to the ballistic upper bound.
+pub fn qforge_chip_bte_tau_boundary(velocity: float, length: float, f_geom: float) -> float {
+    let v = _abs(velocity)
+    if v <= 0.0 { return 1.0e300 }
+    return (f_geom * length) / v
+}
+
+// ── Matthiessen's rule  τ = 1 / Σ_i (1/τ_i)  — rates add (d4 generic) ─────────
+//   `rates_inv` = list of per-channel times τ_i; the composite lifetime is the inverse
+//   of the SUM of inverse times.  Independent Poisson scatterers compose by rate
+//   addition; the fastest channel (smallest τ_i) dominates the result.  Any new
+//   scattering channel is simply one more entry — no formula edit (d4).
+pub fn qforge_chip_bte_matthiessen(taus: [float]) -> float {
+    let n = len(taus)
+    let mut rate_sum = 0.0
+    let mut i = 0
+    while i < n {
+        let ti = taus[i]
+        if ti > 0.0 { rate_sum = rate_sum + 1.0 / ti }
+        i = i + 1
+    }
+    if rate_sum <= 0.0 { return 1.0e300 }       // no scattering → τ→∞ (ballistic limit)
+    return 1.0 / rate_sum
+}
+
+// ── (core) RTA-BTE thermal conductivity  κ = (1/V) Σ_qν C v² τ ────────────────
+//   Sum over the supplied mode list of C_qν · v_qν² · τ_qν, divided by the cell volume.
+//   `omegas` (rad/s), `vels` (m/s, group velocity), `taus` (s, per-mode RTA lifetime —
+//   pre-composed via Matthiessen) are PARALLEL lists indexed by mode; `volume` (m³) is
+//   the cell volume the q-sum represents.  Returns κ in W·m⁻¹·K⁻¹.
+//
+//   NOTE on the ballistic correspondence (the UPPER-BOUND anchor): a single acoustic
+//   mode of speed v, lifetime τ, mean-free-path ℓ=vτ in a device of length L carries a
+//   diffusive κ that, when ℓ→L (τ_bd-limited, all other rates→0), reduces to the
+//   Landauer per-channel ballistic conductance — i.e. the round-4 κ_ball is the τ→∞
+//   ceiling.  This brick reports the FINITE-τ diffusive κ; the selftest verifies it
+//   approaches κ_ball as 1/τ→0.
+pub fn qforge_chip_bte_kappa(omegas: [float], vels: [float], taus: [float],
+                             volume: float, temp_k: float) -> float {
+    let nmodes = len(omegas)
+    let mut kappa = 0.0
+    let mut m = 0
+    while m < nmodes {
+        let w = omegas[m]
+        let v = vels[m]
+        let tau = taus[m]
+        let c = qforge_chip_bte_heat_capacity(w, temp_k)
+        kappa = kappa + c * v * v * tau
+        m = m + 1
+    }
+    return kappa / volume
+}
