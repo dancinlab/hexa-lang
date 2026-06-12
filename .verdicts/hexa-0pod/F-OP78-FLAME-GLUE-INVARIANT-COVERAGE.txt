@@ -1,0 +1,173 @@
+════════════════════════════════════════════════════════════════════════════════
+ F-OP78-FLAME-GLUE-INVARIANT-COVERAGE — full audit of the flame trainer-GLUE
+ STRUCTURAL/SHAPE/BOUNDARY contract surface; locks the FOUR remaining documented-
+ but-ungated glue shape contracts (RoPE-norm · RoPE-rh² · GN-partition · softmax-
+ shift) + re-locks conv-causal on the production im2col layout (5/5) + the matrix.
+ HEXA-0POD OP-78 · 0-GPU · local arm64-macos only · ZERO vast · no foreign pod · $0
+════════════════════════════════════════════════════════════════════════════════
+date: 2026-06-13   tier: 🟢 GREEN — invariant-lock (5/5 PASS) + coverage closed
+base: origin/main @ 398b75d06 (post #3212 / OP-77 hex/utf8 codec)
+scope: $0 · 0-pod · NO GPU · no vast · no foreign pod · no .tape (domain .md/.log.md
+       only, no MAIN.tape) · oracle+doc only · leak-0
+
+GOAL
+  OP-74 proved the flame NUMERIC-PRIMITIVE oracle coverage complete (the AGREE-vs-
+  libm accuracy locks). OP-76 then found a DISTINCT class still open — the flame
+  trainer-GLUE STRUCTURAL/SHAPE/BOUNDARY contracts (LR-schedule peak/floor/ramp
+  shape, locked F-OP76), as opposed to numeric agreement. OP-78 audits the FULL
+  glue-invariant surface for the SAME documented-but-UNLOCKED-shape-contract gap
+  and locks each remaining one — or proves the glue surface fully covered.
+
+────────────────────────────────────────────────────────────────────────────────
+ 1. THE GLUE-INVARIANT COVERAGE MATRIX (invariant → documented shape/structure/
+    boundary contract → LOCKED-by / UNLOCKED)
+────────────────────────────────────────────────────────────────────────────────
+  Scope = the trainer-GLUE ops carrying a documented STRUCTURE / SHAPE / BOUNDARY
+  contract (NOT numeric accuracy — that is the OP-74 surface). Source: scoped reads
+  of stdlib/flame/{optim_lib,nn_lib,moe_lib,conv_lib,tensor_lib,gn_lib}.hexa.
+
+  GLUE INVARIANT          DOCUMENTED SHAPE/STRUCTURE/BOUNDARY CONTRACT      LOCKED BY
+  ── ALREADY LOCKED (pre-OP78) ───────────────────────────────────────────────────
+  LR warmup+cosine        peak=base@warmup · floor=base·frac@n · linear     🟢 F-OP76
+                          ramp 0→base · cosine-decay monotone · two-phase      (7/7)
+                          range · seam-continuity · fold-order base·(t/w)
+  AdamW update            1−βᵗ bias-correction SEPARATE (not folded into     🟢 F-OP12
+                          lr) · ε OUTSIDE √ (√v̂+ε) · decoupled-wd TWO          (max|Δ|=0)
+                          subtractions · m̂-before-v̂ · βᵗ by repeated mul ·
+                          moments init 0 + in-place state contract
+  MoE gate normalization  Σ_e probs[t,e] == 1 (sum-to-one) AND probs > 0     🟢 F-FLAME-MOE-
+                          (per-position gate)                                   SOFTMAX
+                                                                              (flame_moe_test
+                                                                               check_softmax,
+                                                                               tol 1e-6)
+  GroupNorm normalization per-group xhat mean ~ 0, var ~ 1 (eps-aware tol)   🟢 F-FLAME-GN-
+                                                                               NORMALIZED
+                                                                              (flame_gn_test)
+  GN eps placement        inv = 1/√(var+eps), eps INSIDE √, eps=1e-5         🟢 held by GN
+                                                                               grad test
+                                                                              (F-FLAME-GN-
+                                                                               GRAD-EXACT)
+  conv im2col tap         p = t − dil·(K−1−k) layout identity ==             🟢 F-OP7 / F-OP10
+                          direct sliding-window · seam Δ-map B>1
+  conv causal (direct)    perturb future input → Y unchanged (no future      🟢 F-FLAME-CONV1D-
+                          leak), conv_lib DIRECT path                          CAUSAL
+                                                                              (flame_conv_test)
+  embedding bwd scatter   position-ASCENDING accumulation order              🟢 F-OP13
+  d5-trig primitive       sin²+cos² = 1 (Pythagorean, primitive level)       🟢 F-OP72
+  RoPE table accuracy     d5_sin/d5_cos AGREE libm over RoPE range           🟢 F-OP72
+
+  ── UNLOCKED documented GLUE shape/structure contracts → LOCKED BY OP-78 (THIS) ──
+  G1 RoPE-NORM            nn_rope_apply_fwd is an ORTHOGONAL rotation ⇒      🔴→🟢 F-OP78
+                          |R·q| == |q| (isometry; nn_lib:534-548 RoFormer,     (G1)
+                          Rᵀ=R(−θ)). OP-72 locked the trig PRIMITIVE
+                          (sin²+cos²=1) but NOT the GLUE-level property that
+                          the rope-apply preserves the query norm.
+  G2 RoPE-RH2             rh∘rh == −I : rh([x1,x2])→[−x2,x1] twice → −[x1,   🔴→🟢 F-OP78
+                          x2] (nn_lib:537). The half-rotation structural        (G2)
+                          identity the orthogonal contract rests on.
+  G3 GN-PARTITION         GroupNorm group g's output depends ONLY on group   🔴→🟢 F-OP78
+                          g's Cg channels (gn_lib:9-11 "per group … of THAT     (G3)
+                          group"). flame_gn_test locks the per-group
+                          NORMALIZATION but NOT cross-group INDEPENDENCE —
+                          the GN structural analog of conv-causal.
+  G4 SOFTMAX-SHIFT        the MoE gate max-subtraction is a MATHEMATICAL     🔴→🟢 F-OP78
+                          NO-OP: softmax(x) == softmax(x−c) (moe_lib:57         (G4)
+                          "numerically-stable … per-position max-sub").
+                          F-FLAME-MOE-SOFTMAX locks Σ=1+>0; the SHIFT-
+                          INVARIANCE that JUSTIFIES the max-subtraction was
+                          ungated.
+  G5 CONV-CAUSAL (im2col) re-lock the no-future-leak boundary on the         🟢 (re-lock)
+                          PRODUCTION im2col layout (p = t−dil·(K−1−k)) the      F-OP78 (G5)
+                          OP-7/OP-10 oracles use — flame_conv_test holds it
+                          on the conv_lib DIRECT path only.
+
+  RESULT: every flame trainer-GLUE op bearing a DOCUMENTED structure/shape/
+  boundary contract is now oracle-locked. The FOUR remaining holes (RoPE rotation
+  isometry · RoPE rotate-half² · GN group-partition independence · softmax shift-
+  invariance) are closed by OP-78. The glue-invariant surface is PROVEN-COMPLETE.
+
+────────────────────────────────────────────────────────────────────────────────
+ 2. THE LOCK — stdlib/flame/op78_glue_shape_contract_eq.hexa (self-contained, no `use`)
+────────────────────────────────────────────────────────────────────────────────
+  All five glue ops inlined VERBATIM from their SSOT libs (OP-28/33/72/74/76
+  leaf-oracle pattern — runs on ANY hexa host, no checkout):
+    · nn_rope_apply_fwd + nn_rope_build_tables_base (nn_lib.hexa)  → G1, G2
+    · nn_groupnorm_fwd (gn_lib.hexa) + _gn_sqrt                    → G3
+    · nn_moe_softmax (moe_lib.hexa) + _moe_exp                     → G4
+    · conv1d_im2col + im2col-contraction fwd (conv_lib.hexa)       → G5
+  Gates:
+    G1 RoPE-NORM    : max rel||R·q|²−|q|²| ≤ 1e-9 over 4 positions (isometry; tol
+                      not byte-eq — the residual is the d5-trig ulp, the TRUE
+                      documented contract, NOT over-broadened to byte-eq).
+    G2 RoPE-RH2     : rh(rh(x)) == −x byte-EXACT (rh is pure index+negate → exact).
+    G3 GN-PARTITION : perturb every channel of groups 1..G−1 by +100 → group-0 y
+                      BYTE-IDENTICAL (max|Δbytes|=0 via f64_to_bytes_le).
+    G4 SOFTMAX-SHIFT: max|softmax(x) − softmax(x−c)| ≤ 1e-9, c=7.25 const shift
+                      (the max-subtraction no-op the stability claim rests on).
+    G5 CONV-CAUSAL  : perturb future x[T−1] by +50 → y[0..T−2] BYTE-IDENTICAL
+                      (no-future-leak on the production im2col tap p=t−dil·(K−1−k)).
+
+────────────────────────────────────────────────────────────────────────────────
+ 3. RUN — `hexa run` on local arm64-macos, exit 0 (VERBATIM)
+────────────────────────────────────────────────────────────────────────────────
+  === HEXA-0POD OP-78 · flame GLUE structural/shape/boundary contract oracle ===
+    audits the trainer-GLUE invariant surface for documented-but-ungated
+    SHAPE/STRUCTURE/BOUNDARY contracts (the OP-76 route-(b) class); locks
+    RoPE-norm · RoPE-rh² · GN-partition · softmax-shift · conv-causal.
+    G1 RoPE-NORM       max rel||R·q|²−|q|²| = 2.12781e-16  <= 1e-9 over 4 positions -> true
+    G2 RoPE-RH2        rh(rh(x)) == -x  byte-eq (rh:[x1,x2]->[-x2,x1]) -> true
+    G3 GN-PARTITION    perturb groups 1..3 by +100 -> group-0 y BYTE-IDENTICAL = true
+    G4 SOFTMAX-SHIFT   max|softmax(x)-softmax(x-c)| = 0.0  <= 1e-9 (max-sub stability is a no-op) -> true
+    G5 CONV-CAUSAL     perturb future x[T-1] -> y[0..T-2] BYTE-IDENTICAL = true
+
+  F-OP78-FLAME-GLUE-INVARIANT-COVERAGE = 1
+  PASS 5/5 — documented flame trainer-GLUE structural/shape/boundary
+  contracts LOCKED (RoPE-norm · RoPE-rh² · GN-partition · softmax-shift
+  · conv-causal). The glue-invariant surface is now PROVEN-COMPLETE.
+
+────────────────────────────────────────────────────────────────────────────────
+ 4. FINDINGS (g5 honest)
+────────────────────────────────────────────────────────────────────────────────
+  • G1 RoPE-NORM measured 2.13e-16 relative (sub-ulp) — the rope-apply glue is an
+    isometry to floating-point precision; the rotation preserves |q| exactly modulo
+    the d5-trig ulp, as the orthogonal-rotation docstring promises.
+  • G4 SOFTMAX-SHIFT measured EXACTLY 0.0 — stronger than the asserted 1e-9 tol.
+    The per-position max-subtraction + the Σ-normalization divide out the constant
+    shift BIT-FOR-BIT here (the exp(x−c)=exp(x)·exp(−c) factor cancels in the
+    ratio, and the const shift lands on the same _moe_exp range-reduction branch).
+    The gate is held at tol (not byte-eq) per the OP-76 lesson — the TRUE contract
+    is mathematical shift-invariance, not a guaranteed bitwise property; asserting
+    byte-eq would OVER-BROADEN (a different shift magnitude crossing an _moe_exp
+    range-reduction boundary need not be bit-exact). MEASURED 0.0 is a bonus, not
+    the locked claim.
+  • G2/G3/G5 are byte-EXACT (max|Δbytes|=0) — rh is pure index+negate, group-
+    partition is a disjoint channel range, and causal-conv zero-pads the future
+    tap; all three are structurally exact, not tolerance.
+
+────────────────────────────────────────────────────────────────────────────────
+ 5. SAFETY / SCOPE
+────────────────────────────────────────────────────────────────────────────────
+  • No behavior change — oracle-only (one new self-contained test file). All five
+    glue ops were already SSOT-correct; this LOCKS the documented structure/shape/
+    boundary contracts OP-12/76/74 and the per-op selftests left ungated.
+  • Self-host byte-eq UNAFFECTED — op78_*.hexa is a leaf self-contained oracle
+    (NO `use`), NOT in compiler/main.hexa build_selfhost closure; zero codegen/
+    runtime/stdlib-lib bytes touched.
+  • wipe_guard: net-additive (one oracle + one verdict + domain log), no deletion.
+  • $0 · 0-pod · NO GPU · no vast · no foreign pod (leak-0) · no MAIN.tape edit ·
+    no self/env.hexa edit. code/docs English.
+
+  RESIDUAL (honest): the gates run on local arm64-macos. G2/G3/G5 byte-exactness is
+  a structural property (pure index/disjoint-range/zero-pad) that holds on any ISA;
+  G1/G4 are tol gates whose residual is the d5-trig / _moe_exp ulp (the OP-72/74
+  determinism argument establishes the arch-independence of those primitives). A
+  future round could scp this self-contained oracle to a pool x86 host for a literal
+  cross-ISA byte-diff of G2/G3/G5 — but the structural exactness already holds it.
+
+  CLOSURE: with RoPE-norm · RoPE-rh² · GN-partition · softmax-shift locked, the
+  flame trainer-GLUE documented STRUCTURAL/SHAPE/BOUNDARY surface is PROVEN-COMPLETE
+  (matrix §1 — every contract-bearing glue op oracle-locked). OP-78 closes the last
+  documented-but-ungated glue shape holes left after OP-76. The flame trainer is now
+  contract-locked on BOTH the numeric-primitive axis (OP-74) AND the glue-structural
+  axis (OP-76 + OP-78).
+════════════════════════════════════════════════════════════════════════════════

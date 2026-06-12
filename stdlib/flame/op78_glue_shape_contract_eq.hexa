@@ -1,0 +1,527 @@
+// ════════════════════════════════════════════════════════════════════════
+//  op78_glue_shape_contract_eq.hexa
+//  HEXA-0POD OP-78 — LOCK the documented-but-UNGATED STRUCTURAL/SHAPE/BOUNDARY
+//  contracts of the flame trainer-GLUE surface (the route-(b) class OP-76 opened).
+//
+//  OP-74 proved the flame NUMERIC-PRIMITIVE oracle coverage complete (the
+//  AGREE-vs-libm accuracy locks). OP-76 then found a DISTINCT class — the
+//  trainer-GLUE STRUCTURAL/SHAPE contracts (the LR-schedule peak/floor/ramp
+//  boundary shape, F-OP76), as opposed to numeric agreement. This round audits
+//  the FULL glue-invariant surface for the SAME documented-but-UNLOCKED-shape
+//  gap and locks each remaining one — or proves the surface covered.
+//
+//  THE COVERAGE MATRIX (glue invariant → documented shape/structure contract →
+//  LOCKED-by / UNLOCKED) is in the verdict. The ALREADY-LOCKED shape contracts:
+//    · LR-schedule peak/floor/ramp/seam/range shape ......... F-OP76 (7/7)
+//    · AdamW update structure (1−βᵗ bias-corr SEPARATE not folded into lr,
+//      ε OUTSIDE √, decoupled-wd two-subtraction, m̂-before-v̂) .. F-OP12
+//    · MoE gate Σ_e probs == 1 (normalization) AND probs > 0 .. F-FLAME-MOE-SOFTMAX
+//      (flame_moe_test.check_softmax)
+//    · GN per-group xhat mean~0 var~1 (normalization invariant) F-FLAME-GN-NORMALIZED
+//    · conv im2col tap arithmetic p = t − dil·(K−1−k) identity . F-OP7 / F-OP10
+//    · embedding bwd scatter position-ascending order ......... F-OP13
+//  …leaving FOUR documented GLUE-level STRUCTURAL contracts with NO shape oracle:
+//
+//   G1 RoPE-NORM   nn_rope_apply_fwd is an ORTHOGONAL rotation ⇒ |R·q| == |q|
+//                  (nn_lib.hexa:534-548 doc: "RoFormer rotation", Rᵀ=R(−θ)).
+//                  OP-72 locked the trig PRIMITIVE (sin²+cos²=1); the GLUE-level
+//                  property "the rope-apply GLUE preserves the query norm" — the
+//                  rotation being an isometry — is asserted by NOTHING. A sign
+//                  flip in rh, a wrong cos/sin pairing, or a half-split off-by-one
+//                  could break the rotation yet leave the trig primitive green.
+//   G2 RoPE-RH2    rh∘rh == −I : rh([x1,x2])→[−x2,x1] applied TWICE → [−x1,−x2]
+//                  (nn_lib.hexa:537 doc "rh:[x1,x2]→[−x2,x1]"). The structural
+//                  half-rotation identity the orthogonal-rotation contract rests
+//                  on — documented, ungated.
+//   G3 GN-PARTITION  GroupNorm group g's output depends ONLY on group g's Cg
+//                  channels (gn_lib.hexa:9-11 doc "per group, mean & var over the
+//                  (Cg channels × T) of THAT GROUP"). flame_gn_test locks the
+//                  per-group NORMALIZATION (mean~0 var~1) but NOT cross-group
+//                  INDEPENDENCE — perturbing a channel of group g' must leave
+//                  group g BYTE-IDENTICAL. A reduction that leaked the wrong
+//                  channel range (off-by-cg in c0=g·cg) could normalize fine yet
+//                  mix groups. This is the GN structural analog of conv-causal.
+//   G4 SOFTMAX-SHIFT  the MoE gate softmax max-subtraction is a MATHEMATICAL
+//                  NO-OP (moe_lib.hexa:57 doc "numerically-stable softmax …
+//                  per-position max-subtraction"): softmax(x) == softmax(x − c)
+//                  for any constant shift c. F-FLAME-MOE-SOFTMAX locks Σ=1+>0;
+//                  the SHIFT-INVARIANCE that justifies the max-subtraction is
+//                  ungated. (Tol, not byte-eq: the max-subtract changes the exp
+//                  args, so equality is mathematical not bitwise — assert the
+//                  TRUE documented contract per the OP-76 lesson, no over-broaden.)
+//   G5 CONV-CAUSAL  re-assert at the GLUE level (im2col path) that perturbing a
+//                  strictly-FUTURE input x[t'>t] leaves y[t] BYTE-IDENTICAL
+//                  (conv_lib.hexa:15-18 doc "causal left-pad, no future leak;
+//                  p = t − dil·(K−1−k)"). flame_conv_test.check_causal locks this
+//                  for the conv_lib DIRECT path; here we lock it on the same
+//                  im2col tap arithmetic the OP-7/OP-10 oracles use, closing the
+//                  boundary contract on the production layout.
+//
+//  Oracle-only — all five glue ops are already SSOT-correct; this adds the
+//  missing STRUCTURAL/SHAPE contract locks, no behavior change. Self-host byte-eq
+//  UNAFFECTED (leaf self-contained oracle, NO `use`, NOT in build_selfhost
+//  closure). $0, `hexa run`, CPU-only, no GPU/vast/pod.
+//
+//  F-OP78-FLAME-GLUE-INVARIANT-COVERAGE :
+//    .verdicts/hexa-0pod/F-OP78-FLAME-GLUE-INVARIANT-COVERAGE.txt
+// ════════════════════════════════════════════════════════════════════════
+
+// ── tensor helpers (inlined; farr builtins, no `use`) ────────────────────
+fn t_zeros(n: int) -> int { return farr_zeros(n) }
+fn t_get(t: int, i: int) -> float { return farr_get(t, i) }
+fn t_set(t: int, i: int, v: float) { let _ = farr_set(t, i, v) }
+fn t_free(t: int) { let _ = farr_free(t) }
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+// deterministic LCG fixture fill (reproducible bytes, no rng dep)
+fn fill_lcg(t: int, n: int, seed: int, scale: float) {
+    let mut st = seed
+    let mut i = 0
+    while i < n {
+        st = (st * 1103515245 + 12345) % 2147483648
+        let u = (to_float(st) / 2147483648.0) - 0.5
+        t_set(t, i, u * scale)
+        i = i + 1
+    }
+}
+
+// byte-equality over a farr buffer (max|Δbytes|=0)
+fn buf_bits_eq(a: int, b: int, n: int) -> bool {
+    let mut i = 0
+    while i < n {
+        let ba = f64_to_bytes_le(t_get(a, i))
+        let bb = f64_to_bytes_le(t_get(b, i))
+        let mut k = 0
+        while k < len(ba) {
+            if ba[k] != bb[k] { return false }
+            k = k + 1
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// ── d5 trig (inlined VERBATIM from flame_math, keep in sync w/ op72) ──────
+fn d5_two_pi() -> float { return 6.283185307179586 }
+fn d5_pi() -> float { return 3.141592653589793 }
+fn d5_reduce(x: float) -> float {
+    let tp = d5_two_pi()
+    let mut r = x
+    while r > d5_pi()  { r = r - tp }
+    while r < 0.0 - d5_pi() { r = r + tp }
+    return r
+}
+fn d5_cos(x: float) -> float {
+    let r = d5_reduce(x)
+    let r2 = r * r
+    let mut term = 1.0
+    let mut acc = 1.0
+    let mut k = 1
+    while k < 14 {
+        term = 0.0 - term * r2 / to_float((2*k-1) * (2*k))
+        acc = acc + term
+        k = k + 1
+    }
+    return acc
+}
+fn d5_sin(x: float) -> float {
+    let r = d5_reduce(x)
+    let r2 = r * r
+    let mut term = r
+    let mut acc = r
+    let mut k = 1
+    while k < 14 {
+        term = 0.0 - term * r2 / to_float((2*k) * (2*k+1))
+        acc = acc + term
+        k = k + 1
+    }
+    return acc
+}
+
+// ── _moe_exp (inlined VERBATIM from moe_lib.hexa) ────────────────────────
+fn moe_exp(x: float) -> float {
+    let ln2 = 0.6931471805599453
+    let mut n = 0
+    let mut r = x
+    while r > 0.34657359 { r = r - ln2; n = n + 1 }
+    while r < 0.0 - 0.34657359 { r = r + ln2; n = n - 1 }
+    let mut term = 1.0
+    let mut sum = 1.0
+    let mut k = 1
+    while k < 14 {
+        term = term * r / to_float(k)
+        sum = sum + term
+        k = k + 1
+    }
+    let mut p = sum
+    if n >= 0 {
+        let mut i = 0
+        while i < n { p = p * 2.0; i = i + 1 }
+    } else {
+        let mut i = 0
+        while i < (0 - n) { p = p / 2.0; i = i + 1 }
+    }
+    return p
+}
+
+// ── _gn_sqrt (inlined VERBATIM from gn_lib.hexa) ─────────────────────────
+fn gn_sqrt(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    let mut i = 0
+    while i < 40 {
+        g = 0.5 * (g + x / g)
+        i = i + 1
+    }
+    return g
+}
+
+// ── nn_moe_softmax (inlined VERBATIM from moe_lib.hexa) ──────────────────
+fn moe_softmax(logits: int, probs_out: int, T: int, E: int) {
+    let mut t = 0
+    while t < T {
+        let base = t * E
+        let mut mx = t_get(logits, base)
+        let mut e = 1
+        while e < E {
+            let v = t_get(logits, base + e)
+            if v > mx { mx = v }
+            e = e + 1
+        }
+        let mut s = 0.0
+        let mut e2 = 0
+        while e2 < E {
+            let ev = moe_exp(t_get(logits, base + e2) - mx)
+            t_set(probs_out, base + e2, ev)
+            s = s + ev
+            e2 = e2 + 1
+        }
+        let mut e3 = 0
+        while e3 < E {
+            t_set(probs_out, base + e3, t_get(probs_out, base + e3) / s)
+            e3 = e3 + 1
+        }
+        t = t + 1
+    }
+}
+
+// ── nn_groupnorm_fwd (inlined VERBATIM from gn_lib.hexa) ─────────────────
+fn groupnorm_fwd(x: int, gamma: int, beta: int,
+                 y_out: int, mean_out: int, inv_out: int, xhat_out: int,
+                 T: int, C: int, G: int) {
+    let eps = 0.00001
+    let cg = C / G
+    let m = to_float(cg * T)
+    let mut g = 0
+    while g < G {
+        let c0 = g * cg
+        let mut sum = 0.0
+        let mut t = 0
+        while t < T {
+            let mut c = 0
+            while c < cg {
+                sum = sum + t_get(x, t * C + (c0 + c))
+                c = c + 1
+            }
+            t = t + 1
+        }
+        let mu = sum / m
+        let mut vs = 0.0
+        let mut t2 = 0
+        while t2 < T {
+            let mut c2 = 0
+            while c2 < cg {
+                let d = t_get(x, t2 * C + (c0 + c2)) - mu
+                vs = vs + d * d
+                c2 = c2 + 1
+            }
+            t2 = t2 + 1
+        }
+        let var = vs / m
+        let inv = 1.0 / gn_sqrt(var + eps)
+        t_set(mean_out, g, mu)
+        t_set(inv_out, g, inv)
+        let mut t3 = 0
+        while t3 < T {
+            let mut c3 = 0
+            while c3 < cg {
+                let ch = c0 + c3
+                let xh = (t_get(x, t3 * C + ch) - mu) * inv
+                t_set(xhat_out, t3 * C + ch, xh)
+                t_set(y_out, t3 * C + ch, t_get(gamma, ch) * xh + t_get(beta, ch))
+                c3 = c3 + 1
+            }
+            t3 = t3 + 1
+        }
+        g = g + 1
+    }
+}
+
+// ── nn_rope_apply_fwd (inlined VERBATIM from nn_lib.hexa) ────────────────
+//   q_out[c] = q[c]·cos[bse+c] + rh(q)[c]·sin[bse+c]
+//   rh(q)[c] = if c<half: -q[half+c] ; else: q[c-half]
+fn rope_apply_fwd(q: int, cos_tab: int, sin_tab: int,
+                  q_out: int, p: int, hd: int) {
+    let half = hd / 2
+    let bse = p * hd
+    let mut c = 0
+    while c < hd {
+        let rh_c = if c < half {
+            0.0 - t_get(q, half + c)
+        } else {
+            t_get(q, c - half)
+        }
+        let q_out_c = t_get(q, c) * t_get(cos_tab, bse + c)
+                    + rh_c * t_get(sin_tab, bse + c)
+        t_set(q_out, c, q_out_c)
+        c = c + 1
+    }
+}
+
+// nn_rope_build_tables_base (inlined VERBATIM from nn_lib.hexa; base=10000)
+fn rope_build_tables(T: int, hd: int, cos_out: int, sin_out: int, base: float) {
+    let half = hd / 2
+    let lnb = ln(base)
+    let mut p = 0
+    while p < T {
+        let mut c = 0
+        while c < hd {
+            let fi = if c < half { c } else { c - half }
+            let ex = (to_float(2 * fi) / to_float(hd)) * lnb
+            let invf = 1.0 / exp(ex)
+            let ang = to_float(p) * invf
+            t_set(cos_out, p * hd + c, d5_cos(ang))
+            t_set(sin_out, p * hd + c, d5_sin(ang))
+            c = c + 1
+        }
+        p = p + 1
+    }
+}
+
+// rh applied standalone (rh:[x1,x2]→[−x2,x1]) for G2
+fn rh_apply(x: int, out: int, hd: int) {
+    let half = hd / 2
+    let mut c = 0
+    while c < hd {
+        let rh_c = if c < half { 0.0 - t_get(x, half + c) } else { t_get(x, c - half) }
+        t_set(out, c, rh_c)
+        c = c + 1
+    }
+}
+
+// ── conv im2col tap (inlined VERBATIM from conv_lib.hexa) ─────────────────
+//   xcol[t, ci*K+k] = x[p, ci], p = t − dil·(K−1−k), zero where p<0.
+fn conv1d_im2col(x: int, xcol: int, T: int, Cin: int, K: int, dil: int) {
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                let v = if p >= 0 { t_get(x, p * Cin + ci) } else { 0.0 }
+                t_set(xcol, t * (Cin * K) + (ci * K + k), v)
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+}
+// causal conv fwd via im2col + direct contraction (y[t,co]) for G5
+fn conv1d_fwd(x: int, w: int, b: int, y: int,
+              T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let xcol = t_zeros(T * Kdim)
+    conv1d_im2col(x, xcol, T, Cin, K, dil)
+    let mut t = 0
+    while t < T {
+        let mut co = 0
+        while co < Cout {
+            let mut acc = t_get(b, co)
+            let mut j = 0
+            while j < Kdim {
+                acc = acc + t_get(xcol, t * Kdim + j) * t_get(w, co * Kdim + j)
+                j = j + 1
+            }
+            t_set(y, t * Cout + co, acc)
+            co = co + 1
+        }
+        t = t + 1
+    }
+    t_free(xcol)
+}
+
+// ════════════════════════════════════════════════════════════════════════
+println("=== HEXA-0POD OP-78 · flame GLUE structural/shape/boundary contract oracle ===")
+println("  audits the trainer-GLUE invariant surface for documented-but-ungated")
+println("  SHAPE/STRUCTURE/BOUNDARY contracts (the OP-76 route-(b) class); locks")
+println("  RoPE-norm · RoPE-rh² · GN-partition · softmax-shift · conv-causal.")
+
+let mut fail = 0
+
+// ── G1 RoPE-NORM : |R·q| == |q| (orthogonal rotation is an isometry) ─────
+//   tol, not byte-eq: norm is a √-of-sum; rotation preserves it mathematically,
+//   the FP residual is the d5-trig ulp (the TRUE documented contract).
+let hd = 8
+let Tr = 4
+let cosT = t_zeros(Tr * hd)
+let sinT = t_zeros(Tr * hd)
+rope_build_tables(Tr, hd, cosT, sinT, 10000.0)
+let q = t_zeros(hd)
+fill_lcg(q, hd, 777, 2.0)
+// |q|²
+let mut nq2 = 0.0
+let mut ci = 0
+while ci < hd { let qi = t_get(q, ci); nq2 = nq2 + qi * qi; ci = ci + 1 }
+let qrot = t_zeros(hd)
+let mut g1_maxrel = 0.0
+let mut pp = 0
+while pp < Tr {
+    rope_apply_fwd(q, cosT, sinT, qrot, pp, hd)
+    let mut nr2 = 0.0
+    let mut ck = 0
+    while ck < hd { let ri = t_get(qrot, ck); nr2 = nr2 + ri * ri; ck = ck + 1 }
+    let rel = _abs(nr2 - nq2) / nq2
+    if rel > g1_maxrel { g1_maxrel = rel }
+    pp = pp + 1
+}
+let g1 = g1_maxrel <= 0.000000001
+print("  G1 RoPE-NORM       max rel||R·q|²−|q|²| = "); print(g1_maxrel)
+print("  <= 1e-9 over "); print(Tr); print(" positions -> "); println(g1)
+if !g1 { fail = fail + 1 }
+
+// ── G2 RoPE-RH2 : rh∘rh == −I  (byte-exact: rh is pure index+negate) ─────
+let xv = t_zeros(hd)
+fill_lcg(xv, hd, 99, 3.0)
+let rh1 = t_zeros(hd)
+let rh2 = t_zeros(hd)
+rh_apply(xv, rh1, hd)
+rh_apply(rh1, rh2, hd)
+let negx = t_zeros(hd)
+let mut cn = 0
+while cn < hd { t_set(negx, cn, 0.0 - t_get(xv, cn)); cn = cn + 1 }
+let g2 = buf_bits_eq(rh2, negx, hd)
+print("  G2 RoPE-RH2        rh(rh(x)) == -x  byte-eq (rh:[x1,x2]->[-x2,x1]) -> ")
+println(g2)
+if !g2 { fail = fail + 1 }
+
+// ── G3 GN-PARTITION : group g output INDEPENDENT of other groups' channels ─
+//   perturb a channel in group g'≠0, assert group 0's y is BYTE-IDENTICAL.
+let Tg = 5
+let Cg = 8
+let Gg = 4   // cg = 2 channels/group
+let xg = t_zeros(Tg * Cg)
+fill_lcg(xg, Tg * Cg, 314, 1.5)
+let gamma = t_zeros(Cg); fill_lcg(gamma, Cg, 11, 1.0)
+let beta  = t_zeros(Cg); fill_lcg(beta,  Cg, 22, 0.3)
+let y0  = t_zeros(Tg * Cg); let m0 = t_zeros(Gg); let i0 = t_zeros(Gg); let h0 = t_zeros(Tg * Cg)
+groupnorm_fwd(xg, gamma, beta, y0, m0, i0, h0, Tg, Cg, Gg)
+// perturb every channel of groups 1..G-1 (a different group than 0); group 0 = ch[0,1]
+let xp = t_zeros(Tg * Cg)
+let mut ii = 0
+while ii < Tg * Cg { t_set(xp, ii, t_get(xg, ii)); ii = ii + 1 }
+let cgw = Cg / Gg   // channels/group
+let mut tt = 0
+while tt < Tg {
+    let mut ch = cgw   // start AFTER group 0's channels
+    while ch < Cg {
+        t_set(xp, tt * Cg + ch, t_get(xp, tt * Cg + ch) + 100.0)  // big perturbation
+        ch = ch + 1
+    }
+    tt = tt + 1
+}
+let y1  = t_zeros(Tg * Cg); let m1 = t_zeros(Gg); let i1 = t_zeros(Gg); let h1 = t_zeros(Tg * Cg)
+groupnorm_fwd(xp, gamma, beta, y1, m1, i1, h1, Tg, Cg, Gg)
+// group 0 occupies channels [0, cgw); assert byte-identical there
+let mut g3 = true
+let mut tt2 = 0
+while tt2 < Tg {
+    let mut ch2 = 0
+    while ch2 < cgw {
+        let ba = f64_to_bytes_le(t_get(y0, tt2 * Cg + ch2))
+        let bb = f64_to_bytes_le(t_get(y1, tt2 * Cg + ch2))
+        let mut kk = 0
+        while kk < len(ba) { if ba[kk] != bb[kk] { g3 = false } kk = kk + 1 }
+        ch2 = ch2 + 1
+    }
+    tt2 = tt2 + 1
+}
+print("  G3 GN-PARTITION    perturb groups 1.."); print(Gg - 1)
+print(" by +100 -> group-0 y BYTE-IDENTICAL = "); println(g3)
+if !g3 { fail = fail + 1 }
+
+// ── G4 SOFTMAX-SHIFT : softmax(x) == softmax(x − c)  (max-sub is a no-op) ─
+//   tol, not byte-eq: the shift changes exp args (the documented stability
+//   premise), so equality is mathematical. Assert the TRUE contract.
+let Ts = 4
+let Es = 6
+let logits = t_zeros(Ts * Es)
+fill_lcg(logits, Ts * Es, 555, 5.0)
+let shifted = t_zeros(Ts * Es)
+let CSHIFT = 7.25   // arbitrary constant shift, per position
+let mut si = 0
+while si < Ts * Es { t_set(shifted, si, t_get(logits, si) - CSHIFT); si = si + 1 }
+let pa = t_zeros(Ts * Es)
+let pb = t_zeros(Ts * Es)
+moe_softmax(logits, pa, Ts, Es)
+moe_softmax(shifted, pb, Ts, Es)
+let mut g4_max = 0.0
+let mut pi = 0
+while pi < Ts * Es {
+    let d = _abs(t_get(pa, pi) - t_get(pb, pi))
+    if d > g4_max { g4_max = d }
+    pi = pi + 1
+}
+let g4 = g4_max <= 0.000000001
+print("  G4 SOFTMAX-SHIFT   max|softmax(x)-softmax(x-c)| = "); print(g4_max)
+print("  <= 1e-9 (max-sub stability is a no-op) -> "); println(g4)
+if !g4 { fail = fail + 1 }
+
+// ── G5 CONV-CAUSAL : perturbing strictly-future input leaves y[t] BYTE-EQ ──
+let Tc = 6
+let Cinp = 3
+let Coutp = 4
+let Kk = 3
+let dilc = 2
+let xc = t_zeros(Tc * Cinp); fill_lcg(xc, Tc * Cinp, 808, 1.0)
+let wc = t_zeros(Coutp * Cinp * Kk); fill_lcg(wc, Coutp * Cinp * Kk, 1212, 0.5)
+let bc = t_zeros(Coutp); fill_lcg(bc, Coutp, 13, 0.2)
+let yc0 = t_zeros(Tc * Coutp)
+conv1d_fwd(xc, wc, bc, yc0, Tc, Cinp, Coutp, Kk, dilc)
+// perturb the LAST timestep (strictly future for every t < Tc-1)
+let xc2 = t_zeros(Tc * Cinp)
+let mut ic = 0
+while ic < Tc * Cinp { t_set(xc2, ic, t_get(xc, ic)); ic = ic + 1 }
+let mut cc = 0
+while cc < Cinp { t_set(xc2, (Tc - 1) * Cinp + cc, t_get(xc2, (Tc - 1) * Cinp + cc) + 50.0); cc = cc + 1 }
+let yc1 = t_zeros(Tc * Coutp)
+conv1d_fwd(xc2, wc, bc, yc1, Tc, Cinp, Coutp, Kk, dilc)
+// assert y[t] for t in [0, Tc-2] (strictly before the perturbed step) byte-eq
+let mut g5 = true
+let mut tc = 0
+while tc < Tc - 1 {
+    let mut co = 0
+    while co < Coutp {
+        let ba = f64_to_bytes_le(t_get(yc0, tc * Coutp + co))
+        let bb = f64_to_bytes_le(t_get(yc1, tc * Coutp + co))
+        let mut kk = 0
+        while kk < len(ba) { if ba[kk] != bb[kk] { g5 = false } kk = kk + 1 }
+        co = co + 1
+    }
+    tc = tc + 1
+}
+print("  G5 CONV-CAUSAL     perturb future x[T-1] -> y[0..T-2] BYTE-IDENTICAL = ")
+println(g5)
+if !g5 { fail = fail + 1 }
+
+println("")
+if fail == 0 {
+    println("F-OP78-FLAME-GLUE-INVARIANT-COVERAGE = 1")
+    println("PASS 5/5 — documented flame trainer-GLUE structural/shape/boundary")
+    println("contracts LOCKED (RoPE-norm · RoPE-rh² · GN-partition · softmax-shift")
+    println("· conv-causal). The glue-invariant surface is now PROVEN-COMPLETE.")
+} else {
+    print("FAIL — "); print(fail); println(" glue-shape contract(s) violated")
+}
