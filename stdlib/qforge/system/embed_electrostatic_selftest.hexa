@@ -1,0 +1,191 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// embed_electrostatic_selftest.hexa — QFORGE/system round-3 g5 gate:
+// ELECTROSTATIC EMBEDDING. The MM point charges fold into the QM external
+// potential (V_ext) and POLARIZE the QM density. Every reference below is an
+// ANALYTIC/TOY closed form (single-charge field, second-order response), so the
+// gate is a pure numerical identity — no LLM judge. VERBATIM run output.
+//
+// FOUR g5 CHECKS (task-mandated):
+//  (a) POLARIZATION DIRECTION (sign exact) — turn the MM field ON; the induced
+//      QM dipole μ = αE points ALONG the field. For a +q MM charge sitting at
+//      −x of the QM point, the field at the QM point is +x (away from the +
+//      charge), so μ_x > 0 and the dipole·field projection is +α|E|² > 0.
+//  (b) EE − ME = POLARIZATION TERM (negative, order exact) — the electrostatic
+//      total minus the mechanical total equals e_pol = −½α|E|² < 0, the
+//      second-order stabilization. Both sign (negative) and order (== −½α|E|²
+//      to round-off) are pinned.
+//  (c) FIELD → 0 LIMIT (EE == ME) — push the MM charges to infinity; the field
+//      → 0, e_pol → 0, so the electrostatic total collapses onto the mechanical
+//      total. |EE − ME| < 1e-9.
+//  (d) CHARGE-SIGN REVERSAL ⇒ POLARIZATION REVERSES — flip every MM charge
+//      sign; the field vector and the induced dipole NEGATE (direction
+//      reverses, component-exact), while the stabilization e_pol = −½α|E|² is
+//      INVARIANT (quadratic in the field — physically correct: flipping the
+//      environment reverses the induced dipole but still stabilizes).
+//
+// d4-GENERIC — embed_electrostatic_total takes plain floats; V_ext / field are
+// CALLBACKS over the MM charge array. This gate exercises both the generic core
+// (a–c on hand scalars) and the full real-core chain (b,c via *_from_regions).
+//
+// Run: HEXA_MAC_BUILD_OK=1 hexa build stdlib/qforge/system/embed_electrostatic_selftest.hexa -o /tmp/qf_embe && /tmp/qf_embe
+// PASS: prints "embed_electrostatic_selftest PASS".
+
+use "stdlib/qforge/system/embed_electrostatic"
+use "stdlib/qforge/system/embed_mechanical"
+use "stdlib/qforge/system/qmmm"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _ck(name: str, got: float, want: float, tol: float) -> int {
+    let d = _abs(got - want)
+    if d <= tol {
+        println("PASS " + name + " (got " + to_string(got) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want) + " |Δ|=" + to_string(d))
+    return 1
+}
+
+fn _ck0(name: str, got: float, tol: float) -> int {
+    if _abs(got) <= tol {
+        println("PASS " + name + " (|got|=" + to_string(_abs(got)) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — |got|=" + to_string(_abs(got)) + " not <= " + to_string(tol))
+    return 1
+}
+
+// assert got > 0 strictly (with a tiny floor) — for the stabilization SIGN.
+fn _ck_neg(name: str, got: float) -> int {
+    if got < -1.0e-300 {
+        println("PASS " + name + " (got " + to_string(got) + " < 0)")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " not < 0")
+    return 1
+}
+
+fn _ck_pos(name: str, got: float) -> int {
+    if got > 1.0e-300 {
+        println("PASS " + name + " (got " + to_string(got) + " > 0)")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " not > 0")
+    return 1
+}
+
+fn _mkp(x: float, y: float, z: float) -> MdParticle {
+    return MdParticle{ x: x, y: y, z: z, vx: 0.0, vy: 0.0, vz: 0.0,
+                       mass: 1.0, fx: 0.0, fy: 0.0, fz: 0.0 }
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── shared toy system (same geometry family as round-2) ─────────────
+    let L = 10.0
+    let eta = 0.30
+    let kmax = 6
+    let eps = 0.5
+    let sigma = 2.0
+    let kc = 1.0
+
+    // INNER region (QM): 2 charges.
+    let pos_inner = [2.0, 2.0, 2.0,  3.5, 2.0, 2.0]
+    let q_inner = [1.0, -1.0]
+    let inner = [_mkp(2.0, 2.0, 2.0), _mkp(3.5, 2.0, 2.0)]
+    // OUTER region (MM): 2 particles, one bond.
+    let outer = [_mkp(6.0, 5.0, 5.0), _mkp(7.1, 5.0, 5.0)]
+    let q_outer = [0.4, -0.4]
+    let bond0 = BondTerm{ i: 0, j: 1, k_b: 100.0, r0: 1.0 }
+    let bonds = [bond0]
+    let angles = []
+    let dihedrals = []
+
+    // QM polarizability + evaluation point (inner centroid).
+    let alpha = 4.5                      // isotropic α > 0 (toy Ha-bohr³ units)
+    let rq = [2.75, 2.0, 2.0]            // centroid of the two inner sites
+
+    // ── CHECK (a) — POLARIZATION DIRECTION (sign exact) ─────────────────
+    // ONE positive MM charge on the −x side of rq (at x=−1.25, i.e. 4.0 bohr to
+    // the −x of rq). Field at rq points +x (away from the + charge); the induced
+    // dipole μ = αE has μ_x > 0 and μ·Ê = +α|E| > 0.
+    let q_mm_a = [2.0]
+    let pos_mm_a = [-1.25, 2.0, 2.0]     // dx = rq − R = +4.0 x̂  ⇒ field +x̂
+    let fld_a = embed_ee_field_at(rq, q_mm_a, pos_mm_a)
+    // analytic: E = q dx/|dx|³ = 2.0 * 4.0 / 4.0³ = 8/64 = 0.125 x̂
+    fails = fails + _ck("(a) field_x analytic (single +q, −x side)", fld_a[0], 0.125, 1.0e-12)
+    fails = fails + _ck0("(a) field_y == 0", fld_a[1], 1.0e-15)
+    fails = fails + _ck0("(a) field_z == 0", fld_a[2], 1.0e-15)
+    let mu_a = embed_ee_induced_dipole(alpha, fld_a)
+    // μ_x = α·E_x = 4.5·0.125 = 0.5625, points +x (ALONG the field) — sign exact.
+    fails = fails + _ck("(a) induced dipole μ_x = α·E_x (along field)", mu_a[0], 0.5625, 1.0e-12)
+    fails = fails + _ck_pos("(a) μ·field projection > 0 (dipole ALONG field)",
+                            mu_a[0]*fld_a[0] + mu_a[1]*fld_a[1] + mu_a[2]*fld_a[2])
+    // also V_ext at rq from a + charge is positive (Hartree potential of +q).
+    fails = fails + _ck_pos("(a) V_ext(+q) > 0 at QM point", embed_ee_vext_at(rq, q_mm_a, pos_mm_a))
+
+    // ── CHECK (b) — EE − ME = POLARIZATION TERM (negative, order exact) ──
+    // Full mechanical total (round-2) + linear-response polarization in the MM
+    // field. EE − ME must equal e_pol = −½α|E|² < 0, sign + order pinned.
+    let q_mm_b = q_outer                 // the real outer charges polarize the QM
+    let pos_mm_b = [6.0, 5.0, 5.0,  7.1, 5.0, 5.0]
+    let e_me = embed_mechanical_from_regions(
+                  inner, pos_inner, q_inner, outer, q_outer,
+                  L, eta, kmax, eps, sigma, kc, bonds, angles, dihedrals)
+    let e_ee = embed_electrostatic_from_regions(
+                  inner, pos_inner, q_inner, outer, q_outer,
+                  L, eta, kmax, eps, sigma, kc, bonds, angles, dihedrals,
+                  alpha, rq, q_mm_b, pos_mm_b)
+    let diff = embed_ee_minus_me(e_ee, e_me)
+    let fld_b = embed_ee_field_at(rq, q_mm_b, pos_mm_b)
+    let e_pol_ref = -0.5 * alpha * embed_ee_field_sq(fld_b)
+    println("E_ME=" + to_string(e_me) + "  E_EE=" + to_string(e_ee)
+            + "  EE−ME=" + to_string(diff) + "  e_pol_ref=" + to_string(e_pol_ref))
+    fails = fails + _ck("(b) EE − ME == e_pol = −½α|E|² (order exact)", diff, e_pol_ref, 1.0e-12)
+    fails = fails + _ck_neg("(b) polarization term is NEGATIVE (stabilizing)", diff)
+    // and the standalone polarization helper agrees with the chain difference.
+    let e_pol_helper = embed_ee_polarization_from_charges(alpha, rq, q_mm_b, pos_mm_b)
+    fails = fails + _ck("(b) helper e_pol == EE − ME", e_pol_helper, diff, 1.0e-12)
+
+    // ── CHECK (c) — FIELD → 0 LIMIT (EE == ME) ──────────────────────────
+    // Push the MM charges to infinity: field → 0, e_pol → 0, EE → ME.
+    let far = 1.0e6
+    let pos_mm_far = [6.0 + far, 5.0, 5.0,  7.1 + far, 5.0, 5.0]
+    let fld_far = embed_ee_field_at(rq, q_mm_b, pos_mm_far)
+    fails = fails + _ck0("(c) |field| → 0 at separation", embed_ee_field_sq(fld_far), 1.0e-9)
+    let e_ee_far = embed_electrostatic_from_regions(
+                      inner, pos_inner, q_inner, outer, q_outer,
+                      L, eta, kmax, eps, sigma, kc, bonds, angles, dihedrals,
+                      alpha, rq, q_mm_b, pos_mm_far)
+    fails = fails + _ck("(c) EE == ME when field → 0", e_ee_far, e_me, 1.0e-9)
+
+    // ── CHECK (d) — CHARGE-SIGN REVERSAL ⇒ POLARIZATION REVERSES ────────
+    // Flip every MM charge: the field + induced dipole NEGATE (direction
+    // reverses, component-exact); e_pol = −½α|E|² is INVARIANT (quadratic).
+    let q_mm_rev = [-2.0]                // reversed sign of the (a) +q charge
+    let fld_rev = embed_ee_field_at(rq, q_mm_rev, pos_mm_a)
+    fails = fails + _ck("(d) field_x reverses (== −original)", fld_rev[0], -fld_a[0], 1.0e-12)
+    let mu_rev = embed_ee_induced_dipole(alpha, fld_rev)
+    fails = fails + _ck("(d) induced dipole μ_x reverses (== −original)", mu_rev[0], -mu_a[0], 1.0e-12)
+    // The reversal we PIN is the VECTOR negation above. The induced dipole still
+    // tracks the (now reversed) field, so μ_rev·field_rev = α|E|² stays > 0, and
+    // the stabilization e_pol = −½α|E|² is INVARIANT (quadratic in the field).
+    fails = fails + _ck_pos("(d) μ_rev · field_rev > 0 (tracks reversed field)",
+                            mu_rev[0]*fld_rev[0] + mu_rev[1]*fld_rev[1] + mu_rev[2]*fld_rev[2])
+    let e_pol_a   = embed_ee_polarization_energy(alpha, fld_a)
+    let e_pol_rev = embed_ee_polarization_energy(alpha, fld_rev)
+    fails = fails + _ck("(d) e_pol INVARIANT under charge-sign flip (quadratic)", e_pol_rev, e_pol_a, 1.0e-12)
+    fails = fails + _ck_neg("(d) e_pol still stabilizing (< 0) after flip", e_pol_rev)
+    // V_ext flips sign with the charge (linear term — the field's parent).
+    fails = fails + _ck("(d) V_ext sign-flips with the charge",
+                        embed_ee_vext_at(rq, q_mm_rev, pos_mm_a),
+                        -embed_ee_vext_at(rq, q_mm_a, pos_mm_a), 1.0e-12)
+
+    if fails == 0 {
+        println("embed_electrostatic_selftest PASS")
+    } else {
+        println("embed_electrostatic_selftest FAIL — " + to_string(fails) + " case(s)")
+    }
+}
