@@ -2361,3 +2361,37 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   (§0 + §7 + large-D bucket updated) + F-OP52-TF32-GAP-CLOSE.txt.
 - DESTROY: yes | vastai destroy instance 40733645 (label hexa-tf32gap confirmed MINE first) → vastai show instances-v1
   "Total: 0 instances / No instances found." LEAK-0 CONFIRMED. No foreign pod touched (roster empty throughout). ~$0.70.
+
+## OP-54 — sm_120 OWN120 own-GEMM (mma.sync, OP-1/OP-1b-tuned) vs cuBLAS-TF32 shape sweep on the FREE pool RTX 5070 `summer`: bit-exact gate PASS, median 0.95x-1.47x off cuBLAS, closest @D=768 (0.95x), $0, no leak — 2026-06-13
+- SURVEY-FIRST: read F-BENCH-5 (raw OWN120 baseline 3.16-6.85x off cuBLAS, the mma.sync.m16n8k8 sm_120 kernel; wgmma
+  is sm_90a-only, ptxas-rejects sm_120) + F-BENCH-3 (the cuBLAS-TF32 proxy + ISA finding) + F-BENCH-1 (matched-dtype
+  harness) + docs/forge-routea-shape-adaptive.md (Hopper route-(a), §0-§7). Located the bench source
+  self/native/mma_sm120/owngemm_sm120.cu (gemm_sm120 + OWNGEMM_MAIN gate+perf harness) + build_owngemm.sh. The kernel
+  is the OP-1/OP-1b-TUNED version (cp.async double-buffer + .v4 loads + .v2 epilogue) whose source note already claims
+  ~1.0-1.12x off cuBLAS (down from F-BENCH-5's raw 3.2-6.9x). OP-54 = independently re-measure that on a 2nd free card.
+- HOST: summer (sidecar pool, RTX 5070 sm_120/cc12.0, driver 580.159.03, FREE — NOT vast, $0). Existing checkout at
+  ~/dancinlab/hexa-lang; owngemm_sm120.cu on summer = sha256 a963ee55… = BYTE-IDENTICAL to origin/main (no stale-src).
+- TOOLCHAIN GOTCHA (load-bearing): summer's default /usr/bin/nvcc = CUDA 12.0.140 whose ptxas TOPS OUT at sm_90a
+  (verbatim arch list: …sm_89 sm_90 sm_90a, NO sm_12x) — CUDA 12.0 predates consumer Blackwell. Built instead with
+  summer's CUDA 12.9 toolkit (/usr/local/cuda-12.9, the /usr/local/cuda symlink) whose ptxas DOES list sm_120.
+  nvcc -arch=sm_120 -O3 -DOWNGEMM_MAIN owngemm_sm120.cu -lcublas → BUILD_OK (1054064 B). mma.sync.m16n8k8.tf32
+  assembles for sm_120 on CUDA 12.9 (re-confirms F-BENCH-5 ISA: portable warp MMA = YES, wgmma = NO).
+- SHARED-HOST CONTENTION (g5 honesty): summer GPU at 91-99% util / 215W throughout, SATURATED by a FOREIGN sibling
+  job (nvidia-smi: PID 110588 python 7190MiB) — left ALIVE/untouched per g9. So ABSOLUTE TFLOP/s of both kernels are
+  suppressed (cuBLAS @2048 measured 14.9-19.4 here vs ~30.8 idle in F-BENCH-5); the off-cuBLAS RATIO (own÷cuBLAS,
+  same loaded card back-to-back) is the contention-robust metric and is what's reported.
+- GATE (VERBATIM, all PASS, contention-independent): S=512 rel-RMS 1.961e-05 · S=768 1.332e-05 · S=1024 3.019e-05 ·
+  S=1536 2.342e-05 · S=2048 1.743e-05 (gate<=1e-2, all PASS). Matches F-BENCH-5 §2 exactly (same kernel). The
+  established same-dtype check (vs cuBLAS-TF32; cuBLAS doesn't expose accum order → no rel-RMS 0 dev-vs-dev possible).
+- SWEEP (median off-cuBLAS over 4 measures): S=512 1.15x · S=768 0.95x (CLOSEST, own EDGES cuBLAS, 24.5/23.3 TFLOP/s
+  stable every rep) · S=1024 1.47x (worst+noisiest, 64x64-tile under-fill soft spot, contention-amplified) ·
+  S=1536 1.20x · S=2048 0.96x (near-parity runner-up). NO small-D-closer monotone trend — sweet spot is MID-D, not
+  the smallest D. The "simpler kernel loses less at small D" under-fill hypothesis is NOT borne out on the 5070.
+- FINDING: the tuned OWN120 has CLOSED F-BENCH-5's raw 3.2-6.9x gap to ~0.95-1.47x off cuBLAS-TF32 — REPRODUCED on a
+  SECOND free consumer card (summer; was aiden in F-BENCH-5/OP-1). Value = bit-exactness + device-residency + no-
+  vendor-call on the free card, parity-seeking not a beat.
+- CLEANUP: temp build dir /tmp/op54-owngemm.* rm -rf'd → CLEAN; no own-GEMM binary left running; nvidia-smi
+  compute-apps = ONLY the foreign python (untouched). summer left clean, foreign proc alive. $0, no pod, nothing to leak.
+- VERDICT: 🟢 GREEN. Milestone OP-54 [x]. Deliverables: F-OP54-SUMMER-OWNGEMM-TF32.txt (verbatim sweep + 3-rep raw) +
+  docs/forge-routea-shape-adaptive.md §8 (consumer-sm_120 row) + this log + MAIN.tape #-comment. No code change (the
+  OWN120 kernel was already in-tree + tuned; OP-54 is a fresh independent MEASUREMENT on a 2nd free card).

@@ -291,3 +291,43 @@ All five tests ran on one H100 sm_90a (`F-OP45GPU-OCCUPANCY-SWEEP.txt`, ~$0.96, 
 The cost model remains the harness: T2's drain recalibration dropped in as one coefficient; the
 selector's argmax (MODE 8 at both D) is unchanged and still matches measurement. OP-52 confirms the
 selector should NOT add a swizzled mode at D=4096 (it would never be the argmax — swizzle regresses).
+
+---
+
+## 8. Consumer-card sibling — the sm_120 OWN120 own-GEMM (a DIFFERENT kernel, different roofline)
+
+> **Scope boundary.** §0–§7 are the **route-(a) Hopper sm_90a wgmma** own-GEMM (`wgmma.mma_async`,
+> the 128×128 descriptor-direct kernel). The **consumer RTX 5070 (sm_120)** ISA does **not** carry
+> wgmma (ptxas rejects it). The consumer card runs a **separate kernel** — **OWN120**
+> (`self/native/mma_sm120/owngemm_sm120.cu`, `gemm_sm120`) built on the portable Ampere+
+> **`mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32`** warp-MMA, 64×64 / BK=16 tiling +
+> cp.async double-buffer + .v4 loads + .v2 epilogue (the OP-1/OP-1b tuning). Treat the two as
+> distinct rooflines: the §0–§7 numbers are **Hopper H100**, the row below is **consumer 5070**.
+
+**Consumer sm_120 datapoint (HEXA-0POD OP-54, `F-OP54-SUMMER-OWNGEMM-TF32.txt`, FREE pool RTX 5070
+`summer`, CUDA 12.9, $0, bit-exact-tolerant gate PASS at every shape, rel-RMS ~1.3e-5..3.0e-5 vs
+cuBLAS-TF32):**
+
+| D (square) | OWN120 off-cuBLAS-TF32 (median ratio) | note |
+|------------|---------------------------------------|------|
+| 512  | 1.15× | small-D, NOT the closest |
+| 768  | **0.95× ← CLOSEST** | own EDGES cuBLAS (24.5/23.3 TFLOP/s, stable every rep) |
+| 1024 | 1.47× (noisiest) | 64×64-tile under-fill soft spot, contention-amplified |
+| 1536 | 1.20× | mild K-drain |
+| 2048 | 0.96× | near-parity (runner-up to D=768) |
+
+- **The tuned OWN120 has CLOSED the original F-BENCH-5 gap.** F-BENCH-5's *raw* OWN120 baseline was
+  **3.16×–6.85× off** cuBLAS-TF32 (S=768..4096). The OP-1/OP-1b tuning (cp.async double-buffer + .v4
+  vectorized loads + .v2 epilogue, all bit-exact-preserving) brought it to **~0.95×–1.47×** off
+  cuBLAS-TF32 — **reproduced on a second free consumer card** (summer) by OP-54.
+- **No small-D-closer monotone trend on the consumer card.** The closest shape is the **mid** D=768
+  (0.95×), NOT the smallest D=512 (1.15×); D=1024 is the WORST (under-fill + contention). The "simpler
+  kernel loses less at small D" intuition does **not** hold here — the 64×64-tile OWN120's sweet spot
+  is mid-D where the tiles fill the 50-SM RTX 5070 without smem/occupancy pressure (1024) or deep
+  K-drain (1536).
+- **Honest caveat:** summer was at **98% foreign contention** (a sibling job, untouched per g9) during
+  the sweep, so the **absolute** TFLOP/s of both kernels are suppressed; the **off-cuBLAS ratio**
+  (own÷cuBLAS, same loaded card, back-to-back) is the contention-robust metric. The gate is the
+  same-dtype TF32-tolerant check (rel-RMS vs cuBLAS-TF32), NOT rel-RMS 0 dev-vs-dev — cuBLAS-TF32 does
+  not expose its accumulation order. **Value = bit-exactness + device-residency + no-vendor-call on the
+  FREE consumer card**, same framing as §0 — parity-seeking, not a beat.
