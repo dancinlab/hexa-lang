@@ -1,0 +1,120 @@
+{
+  "_about": "OP-60 (HEXA-0POD) operational route-(a) own-GEMM shape-adaptive selection table. EMITTED by self/native/wgmma/routea_cost_model.py selected_config() \u2014 the validated cost-model picks (OP-49/OP-53), measured-anchored (OP-45GPU/OP-52/OP-55/OP-58). Consumed by a future GPU-build/integration step WITHOUT re-running Python. Regression-locked by self/native/wgmma/test_routea_selector.py.",
+  "_hw": "H100 sm_90a (132 SMs, 228KB smem/SM). Square shapes M=N=K=D.",
+  "_swizzle_policy": "swizzle is ALWAYS false \u2014 swizzle modes structurally excluded from the SELECTABLE set (OP-52 measured -1.6% closed-neg).",
+  "_verdicts": [
+    "F-OP45GPU-OCCUPANCY-SWEEP",
+    "F-OP52-TF32-GAP-CLOSE",
+    "F-OP53-SMALLTILE-LAUNCHER-DESIGN",
+    "F-OP55-NEWTILE-D4096",
+    "F-OP58-OWNGEMM-PARITY-MAP",
+    "F-OP60-SELECTOR-OPERATIONAL"
+  ],
+  "generated": "2026-06-13",
+  "selections": [
+    {
+      "mode": "MODE_t64",
+      "tile": [
+        64,
+        64
+      ],
+      "nst": 3,
+      "swizzle": false,
+      "threads": 128,
+      "pred_tflops": 32.0,
+      "D": 256,
+      "regime": "small-D (under-fill)"
+    },
+    {
+      "mode": "MODE_t64",
+      "tile": [
+        64,
+        64
+      ],
+      "nst": 3,
+      "swizzle": false,
+      "threads": 128,
+      "pred_tflops": 125.4,
+      "D": 512,
+      "regime": "small-D (under-fill)"
+    },
+    {
+      "mode": "MODE8",
+      "tile": [
+        128,
+        128
+      ],
+      "nst": 3,
+      "swizzle": false,
+      "threads": 256,
+      "pred_tflops": 90.6,
+      "D": 768,
+      "regime": "small-D (under-fill)"
+    },
+    {
+      "mode": "MODE8",
+      "tile": [
+        128,
+        128
+      ],
+      "nst": 3,
+      "swizzle": false,
+      "threads": 256,
+      "pred_tflops": 160.0,
+      "D": 1024,
+      "regime": "small-D (under-fill)"
+    },
+    {
+      "mode": "MODE8",
+      "tile": [
+        128,
+        128
+      ],
+      "nst": 3,
+      "swizzle": false,
+      "threads": 256,
+      "pred_tflops": 178.4,
+      "D": 1536,
+      "regime": "medium-D (parity zone)"
+    },
+    {
+      "mode": "MODE8",
+      "tile": [
+        128,
+        128
+      ],
+      "nst": 3,
+      "swizzle": false,
+      "threads": 256,
+      "pred_tflops": 315.0,
+      "D": 2048,
+      "regime": "medium-D (parity zone)"
+    },
+    {
+      "mode": "MODE8",
+      "tile": [
+        128,
+        128
+      ],
+      "nst": 3,
+      "swizzle": false,
+      "threads": 256,
+      "pred_tflops": 286.7,
+      "D": 4096,
+      "regime": "large-D (drain/scheduling-bound)"
+    },
+    {
+      "mode": "MODE8",
+      "tile": [
+        128,
+        128
+      ],
+      "nst": 3,
+      "swizzle": false,
+      "threads": 256,
+      "pred_tflops": 243.1,
+      "D": 8192,
+      "regime": "large-D (drain/scheduling-bound)"
+    }
+  ]
+}

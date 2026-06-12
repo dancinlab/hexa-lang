@@ -266,6 +266,24 @@ def select_config(D, M=None, N=None, K=None):
     t, name, nst = best
     return name, nst, t, ranked
 
+def selected_config(D, M=None, N=None, K=None):
+    """OPERATIONAL launch dict — the thin {mode, tile, NST, swizzle, threads, pred_tflops}
+    record a host-side launcher / a build-integration step consumes WITHOUT re-deriving the
+    cost model. Pure projection of select_config over the MODES table (no measured constant
+    is recomputed here). This is the importable artifact OP-60 locks with a regression test
+    and serializes to routea_selection.json. `swizzle` is ALWAYS False by construction — the
+    SELECTABLE set structurally excludes every swizzle mode (OP-52 closed-neg)."""
+    name, nst, t, _ = select_config(D, M, N, K)
+    cfg = MODES[name]
+    return {
+        "mode": name,
+        "tile": [cfg["tm"], cfg["tn"]],
+        "nst": nst,
+        "swizzle": bool(cfg.get("swz", False)),
+        "threads": cfg.get("threads", THREADS_PER_CTA),
+        "pred_tflops": round(t, 1),
+    }
+
 # ---- shape buckets (the policy) ----
 def bucket(D):
     if D <= 1024:  return "small-D (under-fill)"

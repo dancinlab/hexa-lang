@@ -1,5 +1,42 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-60 DONE: OPERATIONALIZED the OP-49/OP-53 cost-model-validated route-(a) own-GEMM shape-adaptive selector — importable launch-dict + REGRESSION-LOCK test (ALL PASS, exit 0; teeth proven via measured-bad mutation → exit 1) + machine-readable selection table · NO measured constant changed · NO GPU · $0 · 0-pod
+- TASK: the OP-49/OP-53 `select_config(D,M,N,K)` selector was COST-MODEL-VALIDATED (matches the measured
+  OP-45GPU ordering + OP-52 swizzle-negative + OP-58 parity map) but lived ONLY as an inline Python
+  cost-model function with a self-validation harness — not an operational, regression-protected artifact.
+  OP-60 turns the validated design into a usable + TESTED + machine-readable artifact (g0 simplest form).
+- OPERATIONALIZED (3 net-new pieces, NO measured constant touched):
+  · self/native/wgmma/routea_cost_model.py — NEW `selected_config(D,M,N,K)`: a thin {mode,tile,NST,swizzle,
+    threads,pred_tflops} launch-dict over the EXISTING select_config (PURE projection; swizzle always False
+    by construction — SELECTABLE structurally excludes the swizzle modes). The validated cost model + the
+    OP-53 self-validation harness are UNCHANGED (still print "OP-53 OVERALL: ALL PASS").
+  · self/native/wgmma/test_routea_selector.py — the REGRESSION LOCK: asserts the canonical-shape picks match
+    measured reality (MODE8 @D>=768/1024 · MODE_t64 64x64 @D<=512 · NEVER a swizzle mode (OP-52 closed-neg) ·
+    @D=4096 is MODE8 NOT t256/t256e (OP-55/OP-45GPU closed-neg)) + the measured-ORDERING anchors @D=2048/4096
+    + a negative-control that swizzle modes score below MODE8 @D=4096. Prints ALL PASS / exit 0 on success.
+  · self/native/wgmma/routea_selection.json — the machine-readable selection table EMITTED by selected_config
+    (NOT hand-typed): D in {256,512,768,1024,1536,2048,4096,8192} → the launch dict, for a future GPU-build/
+    integration step to consume without re-running Python.
+- REGRESSION-TEST PASS [VERBATIM `python3 self/native/wgmma/test_routea_selector.py`, exit 0]:
+    D=256/512 → MODE_t64 64x64 (small-D under-fill fill win, F-OP53 VAL-2)
+    D=768/1024/1536/2048/4096 → MODE8 128x128 (F-OP45GPU/F-OP53/F-OP58)
+    @D=4096 pick = MODE8 (NOT a measured-bad 256-N tile) -> OK
+    swizzle modes ['MODE7','MODE9_swz'] all score < MODE8 @D=4096 (OP-52 anti-pref intact) -> OK
+    measured ordering @D=2048 and @D=4096 reproduced (F-OP45GPU anchors intact) -> OK
+    OP-60 SELECTOR REGRESSION LOCK: ALL PASS
+- LOCK HAS TEETH (negative control): mutated a COPY of the cost model (removed swz_penalty, boosted
+  MODE10_t256e issue_eff 0.7340→2.0, added swizzle+t256e to SELECTABLE) → the test FAILED with exit 1 and 13
+  broken assertions (selector picked MODE9_swz @D=768/1024 + MODE10_t256e @D=4096). The mutated copy was
+  deleted; the shipped cost model is UNTOUCHED (still ALL PASS, exit 0). So a future cost-model edit cannot
+  silently regress the measured-correct selection.
+- CANONICAL SELECTION TABLE (EMITTED → routea_selection.json): 256→MODE_t64 64x64 · 512→MODE_t64 64x64 ·
+  768→MODE8 128x128 · 1024→MODE8 · 1536→MODE8 · 2048→MODE8 (1.08x parity winner) · 4096→MODE8 (NOT t256/t256e)
+  · 8192→MODE8. swizzle ALWAYS false (OP-52 closed-neg). Each pick verdict-traced (g5).
+- DELIVERABLES: .verdicts/hexa-0pod/F-OP60-SELECTOR-OPERATIONAL.txt + the 3 code/data files above.
+  Milestone OP-60 [x]. NO GPU, NO kernel change, NO new measurement, NO self/env.hexa. MAIN.tape #-comment
+  SKIPPED (untracked-on-origin, OP-54/57/58 precedent — avoids a merge race). $0, 0-pod, no vast, no pod,
+  nothing to leak.
+
 ## 2026-06-13 — OP-58 DONE: DOCS-ONLY consolidation of the COMPLETE own-GEMM-vs-cuBLAS-TF32 parity story into ONE authoritative "own-GEMM parity map" (both regimes settled) reflected across the forge doc + comparison doc + README · every number verdict-traced (g5) · $0 · 0-pod · no code change
 - TASK: the own-GEMM-vs-cuBLAS-TF32 question is fully measured + settled THIS SESSION across BOTH hardware
   regimes (Hopper sm_90a wgmma route-(a) + consumer sm_120 OWN120 mma.sync), but the measurements live in 6

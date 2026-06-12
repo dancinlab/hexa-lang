@@ -1,0 +1,127 @@
+F-OP60-SELECTOR-OPERATIONAL — 0-pod (NO GPU) OPERATIONALIZATION of the OP-49/OP-53 cost-model-
+validated route-(a) own-GEMM shape-adaptive selector: turn the `select_config(D,M,N,K)` cost-model
+function (which lived ONLY as inline Python) into a usable, importable host-side artifact + a
+REGRESSION TEST that LOCKS the validated/measured selection so a future edit can't silently make
+the selector pick a measured-BAD config + a machine-readable selection table for the GPU-build/
+integration handoff. NO new measurement, NO kernel change, NO GPU — the selector ENCODES the
+ALREADY-measured ordering (OP-45GPU/OP-52/OP-55/OP-58); OP-60 makes it operational + regression-protected.
+================================================================================================
+TIER: 🟢 GREEN (the selector is now importable + regression-LOCKED + serialized; the lock's TEETH
+      are demonstrated — a deliberate measured-bad mutation FAILS the test with exit 1). 0-pod,
+      pure-CPU Python. Built ON TOP of OP-53 (#3134, the cost model + select_config) and OP-58
+      (#3163, the consolidated parity map) — adds ONLY the operational + regression artifacts; the
+      validated cost model + every measured constant are IDENTICAL (no measured number touched).
+      g5: every asserted pick traces to a cited verdict; the PASS output below is the verbatim
+      harness output, not a self-judgment.
+
+DATE: 2026-06-13
+HW:   NONE (0-pod). Pure-CPU Python (`python3 self/native/wgmma/{routea_cost_model,test_routea_selector}.py`).
+      ZERO vast, no GPU, no nvcc, no foreign pod, leak-0, $0. All measured anchors CITED from the
+      OP-45GPU / OP-52 / OP-55 / OP-58 verdicts (no new GPU run).
+INPUT: self/native/wgmma/routea_cost_model.py (the OP-49/OP-53 cost model + select_config — extended
+         here with a thin selected_config() dict-returning convenience; NO measured constant changed) +
+       .verdicts/hexa-0pod/F-OP53-SMALLTILE-LAUNCHER-DESIGN.txt (#3134 — the validated picks the lock
+         asserts: MODE8 @D>=1024, MODE_t64 64x64 @small-D, swizzle EXCLUDED, the OP-45-GPU/OP-52 ordering) +
+       .verdicts/hexa-0pod/F-OP58-OWNGEMM-PARITY-MAP.txt (#3163 — the settled 3-regime map) +
+       .verdicts/hexa-0pod/F-OP45GPU-OCCUPANCY-SWEEP.txt (MODE8 NST3 measured winner @2048/4096) +
+       .verdicts/hexa-0pod/F-OP52-TF32-GAP-CLOSE.txt (CTA-swizzle measured -1.6% closed-neg) +
+       .verdicts/hexa-0pod/F-OP55-NEWTILE-D4096.txt (128x256 2-CTA/SM MODE10 t256e measured -7.1% closed-neg) +
+       docs/forge-routea-shape-adaptive.md §8-§9 (the launcher design).
+DELIVERABLES (net-new):
+  - self/native/wgmma/routea_cost_model.py: NEW `selected_config(D,M,N,K)` — a thin {mode, tile, NST,
+    swizzle, threads, pred_tflops} dict over the existing select_config (PURE projection; no measured
+    constant recomputed; `swizzle` always False by construction — SELECTABLE excludes swizzle modes).
+    The validated cost model + the OP-53 self-validation harness are UNCHANGED (still print ALL PASS).
+  - self/native/wgmma/test_routea_selector.py: the REGRESSION LOCK — asserts the canonical-shape picks
+    match measured reality (MODE8 @D>=768/1024, MODE_t64 @D<=512, NEVER a swizzle, @D=4096 is MODE8 not
+    t256/t256e) + the measured-ORDERING anchors @D=2048/4096 + a negative-control that swizzle modes
+    score below MODE8 @D=4096. Prints "ALL PASS" / exits 0 on success; exits 1 on any broken assertion.
+  - self/native/wgmma/routea_selection.json: the machine-readable selection table (EMITTED by
+    selected_config, NOT hand-typed) for a future GPU-build/integration step to consume without re-
+    running Python — D in {256,512,768,1024,1536,2048,4096,8192} -> {mode,tile,nst,swizzle,threads,pred}.
+  - this verdict.
+
+================================================================================================
+THE OPERATIONALIZATION (g0 — simplest sufficient form):
+================================================================================================
+The selector was already a clean function (`select_config(D,M,N,K)` returning the argmax mode/NST/
+pred + the ranked table) with a self-validation harness printing ALL PASS. OP-49/OP-53 VALIDATED its
+PICKS against the measured anchors; OP-58 CONSOLIDATED the regime map. What was missing: (1) a launch-
+dict form a launcher/build step can consume directly, (2) a STANDALONE regression test that locks the
+validated behavior so a future cost-model edit can't silently regress the selection, (3) a machine-
+readable table for the GPU handoff. OP-60 adds exactly those three — nothing more (no full dispatcher;
+a tested selector function + lock + table suffices). NO measured constant was changed; the cost model's
+own harness still prints "OP-53 OVERALL: ALL PASS — ordering=True swizzle-anti-pref=True small-D-fill=True".
+
+================================================================================================
+REGRESSION-TEST PASS [VERBATIM `python3 self/native/wgmma/test_routea_selector.py`, exit 0]:
+================================================================================================
+======================================================================================
+OP-60 REGRESSION LOCK — route-(a) own-GEMM shape-adaptive selector canonical picks
+======================================================================================
+     D       expect          got       tile  NST   swz      pred
+   256     MODE_t64     MODE_t64      64x64    3 False      32.0   OK
+   512     MODE_t64     MODE_t64      64x64    3 False     125.4   OK
+   768        MODE8        MODE8    128x128    3 False      90.6   OK
+  1024        MODE8        MODE8    128x128    3 False     160.0   OK
+  1536        MODE8        MODE8    128x128    3 False     178.4   OK
+  2048        MODE8        MODE8    128x128    3 False     315.0   OK
+  4096        MODE8        MODE8    128x128    3 False     286.7   OK
+
+@D=4096 pick = MODE8 (tile 128x128, NST=3) -> OK (MODE8, not a measured-bad 256-N tile)
+small-D under-fill: MODE_t64 picked @D=256 and D=512 -> OK
+swizzle modes ['MODE7', 'MODE9_swz'] all score < MODE8 @D=4096 (OP-52 anti-pref intact) -> OK
+measured ordering @D=2048 and @D=4096 reproduced (F-OP45GPU anchors intact) -> OK
+
+======================================================================================
+OP-60 SELECTOR REGRESSION LOCK: ALL PASS (canonical picks match measured reality · never a swizzle · @D=4096 is MODE8 · small-D 64x64 fill · ordering anchors intact)
+======================================================================================
+
+================================================================================================
+THE LOCK HAS TEETH (negative control — a deliberate measured-BAD mutation FAILS, exit 1):
+================================================================================================
+Mutated a COPY of the cost model (NOT the shipped file) three ways — removed swz_penalty (return 1.0),
+boosted MODE10_t256e issue_eff 0.7340->2.0, and added the swizzle + t256e modes to SELECTABLE — i.e.
+exactly the kind of future edit that would let the selector pick a measured-bad config. The test then
+FAILED with exit 1 and 13 broken assertions, e.g. [VERBATIM excerpt]:
+  D=768: selector picked MODE9_swz, expected MODE8  (crossover zone: 128x128 retakes ...)
+  D=768: selector returned a SWIZZLE mode MODE9_swz (OP-52 closed-neg)
+  @D=4096: selector picked a measured-bad 256-N tile MODE10_t256e (F-OP55 -7.1%)
+  @D=4096: swizzle mode MODE9_swz (286.7) scored >= MODE8 (286.7) — swz_penalty broken (F-OP52 ...)
+  OP-60 SELECTOR REGRESSION LOCK: FAIL (13 assertion(s) broken)   ->   MUTATED EXIT=1
+=> the lock CATCHES a measured-bad selector regression (swizzle pick, t256e @4096 pick, ordering break).
+   The mutated copy was deleted; the shipped cost model is UNTOUCHED (still ALL PASS, exit 0).
+
+================================================================================================
+CANONICAL SELECTION TABLE (EMITTED by selected_config -> routea_selection.json; the operational handoff):
+================================================================================================
+   D     regime                          mode        tile      NST  swz   pred(TFLOP/s)  verdict-trace
+  256    small-D (under-fill)            MODE_t64    64x64      3   no     32.0           F-OP53 VAL-2 (64x64 fills 3.1x better)
+  512    small-D (under-fill)            MODE_t64    64x64      3   no    125.4           F-OP53 VAL-2 (64x64 fills 3.1x better)
+  768    small-D (under-fill)            MODE8       128x128    3   no     90.6           F-OP53 honest crossover by D~1024
+ 1024    small-D (under-fill)            MODE8       128x128    3   no    160.0           F-OP53 crossover -> 128x128 retakes
+ 1536    medium-D (parity zone)          MODE8       128x128    3   no    178.4           F-OP58 parity map (medium-D)
+ 2048    medium-D (parity zone)          MODE8       128x128    3   no    315.0           F-OP45GPU T5 measured winner (1.08x)
+ 4096    large-D (drain/scheduling-bound) MODE8      128x128    3   no    286.7           F-OP45GPU/F-OP55 (NOT t256/t256e)
+ 8192    large-D (drain/scheduling-bound) MODE8      128x128    3   no    243.1           extrapolation (MODE8, drain-bound)
+NOTES: swizzle is ALWAYS "no" by construction (SELECTABLE structurally excludes MODE7/MODE9_swz —
+  OP-52 measured -1.6% closed-neg). @D=4096 is MODE8, explicitly NOT the measured-bad 256-N tiles
+  (MODE5_t256 1-CTA/SM closed-neg @F-OP45GPU T1; MODE10_t256e -7.1% closed-neg @F-OP55). The small-D
+  MODE_t64 64x64 tile is an UNBUILT SPEC (F-OP53 GAP#1) the selector picks where the cost model predicts
+  the under-fill win; a future GPU lane builds it (rel_rms 0 by construction per the F-OP53 K-order constraint).
+
+================================================================================================
+SUMMARY (g5):
+================================================================================================
+- Operationalized the OP-49/OP-53 cost-model-validated route-(a) own-GEMM selector: it was an inline
+  Python function; OP-60 makes it (a) cleanly importable as a launch-dict (selected_config), (b)
+  regression-LOCKED (test_routea_selector.py asserts the validated/measured picks), (c) serialized to a
+  machine-readable table (routea_selection.json) for the GPU-build/integration handoff.
+- The regression lock REPRODUCES the validated selection (MODE8 @D>=768, MODE_t64 64x64 @D<=512, NEVER a
+  swizzle mode, @D=4096 MODE8 not t256/t256e) AND the measured-ordering anchors @D=2048/4096 — ALL PASS,
+  exit 0. The lock's TEETH are demonstrated: a deliberate measured-bad mutation FAILS it (exit 1, 13
+  broken assertions). So a future cost-model edit cannot silently regress the measured-correct selection.
+- NO measured constant changed; the cost model's own OP-53 harness still prints ALL PASS.
+- This is host-side Python + a test + a JSON table. NO GPU, NO kernel change, NO new measurement, NO
+  self/env.hexa touched. 0-pod, $0, leak-0, no vast, no foreign pod.
+- MAIN.tape #-comment SKIPPED (untracked-on-origin, same as OP-54/OP-57/OP-58 — avoids a merge race).
