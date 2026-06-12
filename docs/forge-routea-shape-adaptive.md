@@ -98,6 +98,45 @@ not a beat, shape-rigid @D=4096.**
 
 ---
 
+## own-GEMM parity map (COMPLETE — both regimes settled)
+
+> **The one-screen authoritative picture (OP-58 consolidation).** The own-GEMM-vs-cuBLAS-TF32
+> question is fully measured and SETTLED across BOTH hardware regimes (Hopper sm_90a wgmma +
+> consumer sm_120 mma.sync). Every number traces to a verdict (cited in the table); the dense
+> narrative in §0 and the per-regime detail in §7/§10 unpack each row. Read this map first.
+
+| regime / kernel | shape | own vs cuBLAS-TF32 | bit-exactness | verdict |
+|-----------------|-------|--------------------|---------------|---------|
+| **Hopper sm_90a** route-(a) wgmma (b14 MODE 8) | **D=2048** | **1.08× — PARITY** (own ~315 TFLOP/s, ~93% of roofline) | `rel_rms 0.000e+00` (dev-vs-dev, every config) | `F-GPU-ROUTEA-KEEPBAND-MEASURE` · `F-OP45GPU-OCCUPANCY-SWEEP` |
+| **Hopper sm_90a** route-(a) wgmma (b14 MODE 8) | **D=4096** | **~1.50× — sub-parity, SETTLED** (own ~284 vs cuBLAS ~427) | `rel_rms 0.000e+00` | `F-OP45GPU-OCCUPANCY-SWEEP` · `F-OP52-TF32-GAP-CLOSE` · `F-OP55-NEWTILE-D4096` |
+| **Consumer sm_120** OWN120 mma.sync (64×64) | **D=768** | **0.95–0.96× — own EDGES cuBLAS** (own ~24.5 vs cuBLAS ~23.3 TFLOP/s) | rel-RMS ~1.3e-5 (same-dtype TF32 gate; cuBLAS-TF32 hides its accum order) | `F-OP54-SUMMER-OWNGEMM-TF32` |
+
+**The settled conclusion (one line):** own-GEMM is **PARITY @Hopper-D2048** (1.08×, bit-exact),
+**own-EDGES-cuBLAS @consumer-D768** (0.95×, the tuned OWN120 closes the old F-BENCH-5 3.2–6.9×
+raw gap), and **parity-not-beat @Hopper-large-D** (~1.50× @D=4096), where the large-D gap is now
+**bit-exactness-bound** — the whole T4 "better-single-pass-tile" lever family is exhausted
+closed-negative:
+
+- **CTA-swizzle** (MODE 9, non-persistent, isolated from the persistent loop) **REGRESSES**
+  (best 280.5 vs 285.1 TFLOP/s @D=4096, −1.6%; ratio 1.50× → 1.53×) — `F-OP52-TF32-GAP-CLOSE`.
+- **The 2-CTA/SM-preserving 128×256 new tile** (MODE 10 t256e) is register-feasible (90 regs,
+  2 CTA/SM == MODE 8) but **REGRESSES −7.1%** (263.3 vs 283.5 @D=4096; ratio 1.51× → 1.64×): the
+  sequential-halves schedule serializes the wgmma pipeline (ptxas C7515) + doubles the K-drain —
+  `F-OP55-NEWTILE-D4096`.
+- **MODE 5 t256** (the only in-tree larger single-pass tile) + **MODE 7 persistent** were already
+  closed-neg @D=4096 (`F-OP45GPU-OCCUPANCY-SWEEP` T3, register-cap to 1 CTA/SM). No bit-exact 256-N
+  schedule on sm_90a is BOTH 2 CTA/SM AND non-serialized — that is the settled wall.
+- **Consumer-card 32×32 smaller-tile** (the sm_120 analog of the Hopper 64×64-fills-better
+  hypothesis) is strictly WORSE at every small-D (D=768 0.96× → 4.13× collapse); the **64×64 is
+  the consumer optimum** — `F-OP57-SUMMER-SMALLTILE`.
+
+**Value framing** (mirrors `project_flame_h100_h200_closeout`): own-GEMM's worth is
+**bit-exactness + device-residency + no-LLVM / no-cuBLAS-call**, NOT a raw TFLOP/s-beat. Parity@
+D2048 and own-edges-cuBLAS@consumer-D768 are parity-*seeking* wins; the @D=4096 gap is a settled
+bit-exactness-bound boundary, not an unbuilt lever.
+
+---
+
 ## 1. Inventory — the kernel CONFIGS that already exist in-tree
 
 All in `wgmma_tf32_b14.cu`, route-(a) pre-permute family, TF32, bit-exact (rel_rms 0 vs

@@ -1,5 +1,42 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-58 DONE: DOCS-ONLY consolidation of the COMPLETE own-GEMM-vs-cuBLAS-TF32 parity story into ONE authoritative "own-GEMM parity map" (both regimes settled) reflected across the forge doc + comparison doc + README · every number verdict-traced (g5) · $0 · 0-pod · no code change
+- TASK: the own-GEMM-vs-cuBLAS-TF32 question is fully measured + settled THIS SESSION across BOTH hardware
+  regimes (Hopper sm_90a wgmma route-(a) + consumer sm_120 OWN120 mma.sync), but the measurements live in 6
+  scattered verdicts. OP-58 consolidates them into a single one-screen "parity map" so a reader gets the complete
+  settled picture in one place + brings the comparison doc + README into agreement with the per-regime verdicts.
+- THE COMPLETE MEASURED PICTURE (every number READ from its verdict before writing — g5, no fabrication):
+  · Hopper sm_90a @D=2048: route-(a) b14 MODE 8 = 1.08x cuBLAS-TF32 PARITY, own ~315 TFLOP/s (~93% roofline),
+    rel_rms 0.000e+00 (F-GPU-ROUTEA-KEEPBAND-MEASURE; F-OP45GPU T5 reanchor 320.6/1.08x).
+  · Hopper sm_90a @D=4096: ~1.50x sub-parity (own ~284 vs cuBLAS ~427), rel_rms 0, SETTLED bit-exactness-bound —
+    the whole T4 "better-single-pass-tile" lever family is exhausted closed-neg: CTA-swizzle MODE 9 -1.6%
+    (F-OP52, best 280.5 vs 285.1) · 128x256 MODE 10 t256e -7.1% (F-OP55, 263.3 vs 283.5, ptxas C7515 serializes) ·
+    t256 (154 regs/1 CTA-SM) + MODE 7 persistent already closed-neg (F-OP45GPU T1/T3). No bit-exact 256-N
+    schedule on sm_90a is BOTH 2 CTA/SM AND non-serialized.
+  · Consumer sm_120 (RTX 5070) @D=768: OWN120 mma.sync 64x64 = 0.95-0.96x cuBLAS-TF32 (own EDGES cuBLAS), bit-
+    exact-tolerant rel-RMS ~1.3e-5 (F-OP54). 64x64 = consumer optimum; 32x32 shrink strictly worse (F-OP57). The
+    F-BENCH-5 raw 3.2-6.9x gap is CLOSED.
+  · Value framing (project_flame_h100_h200_closeout): own-GEMM's worth = bit-exactness + device-residency +
+    no-LLVM/no-cuBLAS-call, NOT raw TFLOP/s-beat.
+- CONSOLIDATED INTO 3 DOCS:
+  · docs/forge-routea-shape-adaptive.md — NEW "## own-GEMM parity map (COMPLETE — both regimes settled)" section
+    right after §0 (before §1): compact 3-row table (regime | shape | own-vs-cuBLAS-TF32 | bit-exactness | verdict)
+    + settled one-line conclusion + the exhausted-lever bullet list, each row cross-linked to its per-regime
+    verdict. Terse (g3); §0 narrative + §7/§10 detail unpack each row (pointed-into, NOT duplicated).
+  · FLAME+FORGE-vs-PYTORCH+CUBLAS.md §4 — UPDATED the @D=4096 RESOLVED block from the pre-OP-52/55 "fixable
+    scheduling stall, recoverable in principle" framing → the SETTLED "bit-exactness-bound, T4 lever family
+    exhausted closed-neg" framing (cites OP-52 swizzle regress + OP-55 t256e regress + ptxas C7515) + ADDED the
+    consumer own-EDGES-cuBLAS @D=768 datapoint (F-OP54/F-OP57). Closing boundary line now states all 3 settled
+    regimes. Did NOT touch the FAIR matched-dtype framing in §1/§1.3 (left accurate, not contradicted).
+  · README.md honest-axis — SHARPENED the own-GEMM line to add the settled 3-regime summary (parity@Hopper-D2048 ·
+    own-edges-cuBLAS@consumer-D768 · parity-not-beat@Hopper-large-D bit-exactness-bound) + consolidation pointer.
+    Did NOT contradict the existing matched-dtype FAIR framing.
+- CONSISTENCY (g5): every number traces to a verdict, confirmed by READ before writing; no new measurement, no
+  fabrication. Where an existing doc already had a number it matched the verdict and was preserved.
+- DELIVERABLES: .verdicts/hexa-0pod/F-OP58-OWNGEMM-PARITY-MAP.txt (verdict-trace table) + the 3 docs above.
+  Milestone OP-58 [x]. No shipped-code change. MAIN.tape #-comment SKIPPED (untracked-on-origin, same as OP-54/
+  OP-57 — avoids a merge race). $0, 0-pod, no vast, no pod, nothing to leak.
+
 ## 2026-06-13 — OP-55 DONE: BUILT + MEASURED the OP-52 surviving lever (NEW 2-CTA/SM-preserving 128x256 own-GEMM tile, MODE 10) on a real H100 → register economy HELD (90 regs, 2 CTA/SM) but REGRESSES -7.1% @D=4096 (serialized) → @D=4096 gap SETTLED bit-exactness-bound · 1 H100 ~$0.55 · leak-0
 - USER-APPROVED paid H100 exception to the @goal free-only rule: build + measure the OP-52 follow-up — a NEW
   bit-exact 2-CTA/SM-PRESERVING 128x256 single-pass own-GEMM tile (the OP-53 FUTURE-GPU spec) on real Hopper
