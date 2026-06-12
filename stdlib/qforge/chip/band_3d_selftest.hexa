@@ -1,0 +1,304 @@
+// @ci_gate — deterministic · 3-D k-space band: valley sextet + anisotropic m* tensor + 3-D √E DOS
+//
+// qforge_chip_band_3d_selftest.hexa — QFORGE CHIP round-12 g5 gate.
+//
+// band_3d.hexa promotes the band leg from a 1-D-in-k H(k) (R9 multi-orbital — a single
+// kx axis) to a true 3-D Brillouin-zone H(k) over k=(kx,ky,kz) on a 3-D mesh, with the
+// Bloch phase summed over REAL 3-D lattice vectors R=(nx,ny,nz)·a (simple-cubic):
+//   H_{αβ}(k) = onsite[α]·δ_{αβ} + Σ_R t·cos(k·R),   ε_n(k) = eig[H(k)]  (generic eigh, d19).
+// This unlocks the three features a 1-D-in-k band can NEVER express, all EMERGENT from
+// the 3-D band + cubic point-group symmetry (d6 — model hoppings, emergent structure):
+//
+//   (a) VALLEY MULTIPLICITY = 6 — a cubic conduction band with minima along ⟨100⟩ yields
+//       EXACTLY 6 equivalent valleys ( (±k₀,0,0),(0,±k₀,0),(0,0,±k₀) — the Si X-valley
+//       count ), COUNTED as the degeneracy of the GLOBAL conduction-band minimum over the
+//       3-D BZ. The count EMERGES from the 3-D band + cubic symmetry, NOT hardcoded. A
+//       1-D-in-k band sees only a ±k₀ PAIR (2). We also confirm the isotropic single-well
+//       band → 1 valley (Γ) as a sanity floor.                                         🔵
+//   (b) ANISOTROPIC m* TENSOR — at a ⟨100⟩ valley the 3×3 curvature/mass tensor is
+//       DIAGONAL in the valley frame (off-diagonals ≈ 0) with m*_l (longitudinal, along
+//       the valley axis) ≠ m*_t (transverse, the two ⊥ axes, equal by cubic symmetry).
+//       The ISOTROPIC limit (equal hopping all 3 axes) recovers m*_l=m*_t == the R9
+//       scalar m*=ħ²/(2t a²) (the regression bridge).                                   🔵
+//   (c) 3-D DOS — histogram DOS over the 3-D mesh shows √(E−E_c) band-edge behaviour
+//       (the 3-D parabolic van-Hove EDGE, log-log slope → +0.5, vs 1-D's 1/√ divergence),
+//       and ∫DOS = Σbins = nk³ = total states (band-filling normalisation).            🔵
+//   (d) REGRESSION — the isotropic 3-D limit reproduces the R9 scalar m*, and the 3-D
+//       path is ADDITIVE (R9 / R3 selftests unchanged — run separately).               🔵
+//
+// HONEST SCOPE (d6): simple-cubic lattice + tight-binding MODEL hoppings (same caveat as
+// R9). The deliverable is the 3-D band STRUCTURE — valley COUNT, anisotropic m* TENSOR,
+// 3-D √E DOS — EMERGENT from cubic symmetry, parameterised by model hoppings. A real
+// Si/Ge fitted parametrisation is a DATA swap into the same hop3 list (d4), NOT a new
+// brick. The 3-D symmetry machinery is the round's physics; the numbers are model.
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/chip/band_3d_selftest.hexa
+// PASS: "qforge_chip_band_3d_selftest PASS".
+use "stdlib/qforge/chip/band_3d"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _pi() -> float { return 3.14159265358979323846 }
+fn _ln(x: float) -> float { if x <= 0.0 { return -1.0e300 } return log(x) }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_int(name: str, got: int, want: int) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let pi = _pi()
+    let a = 4.0
+    let hbar = 1.0
+
+    // ════════════════════════════════════════════════════════════════════════
+    // (0) 3-D H(k) DIMENSION + REAL R-VECTOR PHASE — the floor of the round.
+    // ════════════════════════════════════════════════════════════════════════
+    // single-orbital simple-cubic NN band ε(k) = −2t·Σ_d cos(k_d a) (the isotropic 3-D
+    // cosine band). hop3 encoding [α,β,nx,ny,nz,t]; three NN hops along x̂,ŷ,ẑ.
+    let t_iso = 0.5
+    let hop_iso = [0.0, 0.0, 1.0, 0.0, 0.0, -2.0 * t_iso,    // +x̂ NN
+                   0.0, 0.0, 0.0, 1.0, 0.0, -2.0 * t_iso,    // +ŷ NN
+                   0.0, 0.0, 0.0, 0.0, 1.0, -2.0 * t_iso]    // +ẑ NN
+    let hk = qforge_chip_b3_hk(1, [0.0], hop_iso, 0.0, 0.0, 0.0, a)
+    fails = fails + _ck_int("(0) dim H(k) = norb²=1 (single-orbital 3-D)", len(hk), 1)
+    // at Γ: ε = −2t·3 = −3 (all cos=1).
+    let bG = qforge_chip_b3_bands(1, [0.0], hop_iso, 0.0, 0.0, 0.0, a)
+    fails = fails + _ck_close("(0) ε(Γ) = −2t·3 = −3 (isotropic 3-D)", bG[0], -2.0 * t_iso * 3.0, 1.0e-9)
+    // along a real 3-D direction: ε(kx=π/a,0,0) = −2t(cos π + 1 + 1) = −2t·1 = −1.
+    let bX = qforge_chip_b3_bands(1, [0.0], hop_iso, pi / a, 0.0, 0.0, a)
+    fails = fails + _ck_close("(0) ε(π/a,0,0)=−2t(cosπ+2)=−1 (R-vector phase)", bX[0], -2.0 * t_iso * 1.0, 1.0e-9)
+    // band top at the cubic corner (π/a,π/a,π/a): ε = −2t(−1−1−1) = +6t = +3.
+    let bR = qforge_chip_b3_bands(1, [0.0], hop_iso, pi / a, pi / a, pi / a, a)
+    fails = fails + _ck_close("(0) ε(π/a,π/a,π/a)=+6t=+3 (3-D zone corner)", bR[0], 6.0 * t_iso, 1.0e-9)
+
+    // ════════════════════════════════════════════════════════════════════════
+    // (a) VALLEY MULTIPLICITY = 6 — ⟨100⟩ X-valley sextet from 3-D cubic symmetry.
+    // ════════════════════════════════════════════════════════════════════════
+    // The ⟨100⟩-valley conduction band is genuinely NON-SEPARABLE (a separable per-axis
+    // double-well gives ⟨111⟩ = 8): the well along one axis is GATED OFF when the other two
+    // axes displace. We realise it as a band function whose 6 GLOBAL minima sit at
+    // (±k₀,0,0),(0,±k₀,0),(0,0,±k₀). Encoded as a hop3 list of real R-vectors whose cos-sum
+    // reproduces  E_c(k) = Σ_d gn(k_d)·G(k_e)·G(k_f),  gn = double-well, G = ⟨100⟩ gate.
+    //   gn(u) = (−A cos u + C cos2u) − (−A + C),   A=−2.35, C=1   (min at cos u=A/4C ⇒ k₀≈0.7π)
+    //   G(u)  = ½(1+cos u)                         (gate: 1 at Γ, ½(1+cos k₀)≈0.21 at the well)
+    // Expanding gn(k_x)·G(k_y)·G(k_z) into cos products gives a finite set of R-vector hops
+    // (NN, ⟨110⟩, ⟨111⟩, ⟨200⟩, ⟨210⟩, ⟨211⟩ …). We supply that expanded hop3 list below as a
+    // single-orbital conduction band (onsite Eg) — the 6-valley COUNT then EMERGES from
+    // eig[H(k)] over the 3-D mesh + cubic symmetry, it is NOT hardcoded.
+    let eg = 4.0
+    let hop_v = _valley100_hops()
+    // valley count = degeneracy of the GLOBAL CBM over the 3-D BZ (tol absorbs FD/mesh noise).
+    let nkv = 24
+    let nv6 = qforge_chip_b3_valley(1, [eg], hop_v, a, nkv, 1.0e-3)
+    fails = fails + _ck_int("(a) ⟨100⟩ conduction band → 6 valleys (Si X-valley count)", nv6, 6)
+    // the 6 global minima are degenerate (same E) — confirm two ⟨100⟩ points share E_cbm.
+    let k0 = (0.7) * pi / a                       // k₀ ≈ 0.7·π/a (the ⟨100⟩ valley position)
+    let e_x = qforge_chip_b3_band_n(1, [eg], hop_v, k0, 0.0, 0.0, a, 0)
+    let e_y = qforge_chip_b3_band_n(1, [eg], hop_v, 0.0, k0, 0.0, a, 0)
+    let e_z = qforge_chip_b3_band_n(1, [eg], hop_v, 0.0, 0.0, k0, a, 0)
+    fails = fails + _ck_close("(a) valleys degenerate: E(k₀x̂)=E(k₀ŷ) (cubic symmetry)", e_x, e_y, 1.0e-6)
+    fails = fails + _ck_close("(a) valleys degenerate: E(k₀x̂)=E(k₀ẑ) (cubic symmetry)", e_x, e_z, 1.0e-6)
+    // a ⟨100⟩ valley is LOWER than the ⟨111⟩ corner of the same band (it IS the global min).
+    let e_111 = qforge_chip_b3_band_n(1, [eg], hop_v, k0, k0, k0, a, 0)
+    fails = fails + _ck_true("(a) ⟨100⟩ valley deeper than ⟨111⟩ (genuine X-valley)", e_x < e_111)
+    // isotropic single-well band (NN −2t·Σcos) → 1 valley at Γ (the sanity floor).
+    let nv1 = qforge_chip_b3_valley(1, [0.0], hop_iso, a, nkv, 1.0e-6)
+    fails = fails + _ck_int("(a) isotropic single-well band → 1 valley (Γ)", nv1, 1)
+
+    // ════════════════════════════════════════════════════════════════════════
+    // (b) ANISOTROPIC m* TENSOR — m*_l ≠ m*_t, diagonal in the valley frame.
+    // ════════════════════════════════════════════════════════════════════════
+    // m* tensor at the ⟨100⟩ valley centre (k₀,0,0): longitudinal = m*_xx, transverse = m*_yy=m*_zz.
+    let dk = 1.0e-3
+    let mt = qforge_chip_b3_mtensor(1, [eg], hop_v, a, 0, k0, 0.0, 0.0, hbar, dk)
+    let m_l = mt[0]                                // m*_xx (longitudinal, along valley axis)
+    let m_t1 = mt[4]                               // m*_yy (transverse)
+    let m_t2 = mt[8]                               // m*_zz (transverse)
+    // off-diagonals (curvature mixed terms) ≈ 0 ⇒ tensor diagonal in the valley frame.
+    fails = fails + _ck_close("(b) tensor diagonal: m*_xy ≈ 0", mt[1], 0.0, 1.0e-3)
+    fails = fails + _ck_close("(b) tensor diagonal: m*_xz ≈ 0", mt[2], 0.0, 1.0e-3)
+    fails = fails + _ck_close("(b) tensor diagonal: m*_yz ≈ 0", mt[5], 0.0, 1.0e-3)
+    // two transverse masses EQUAL by cubic symmetry.
+    fails = fails + _ck_close("(b) cubic symmetry: m*_t(y) == m*_t(z)", m_t1, m_t2, 1.0e-6)
+    // ANISOTROPY: m*_l ≠ m*_t (the whole point — a 1-D band cannot show this). Test the
+    // RATIO (the masses are small in these natural units; the anisotropy is in their ratio):
+    // m_t/m_l ≈ 2.16 here, departing from the isotropic 1.0 by > 30% (Si: m_l/m_t≈4.8).
+    let m_ratio = m_t1 / m_l
+    fails = fails + _ck_true("(b) anisotropic: m*_t/m*_l ≠ 1 (longitudinal vs transverse)", _abs(m_ratio - 1.0) > 0.3)
+    println("    m*_l = " + to_string(m_l) + " · m*_t = " + to_string(m_t1) + " (ratio m_t/m_l = " + to_string(m_t1 / m_l) + ")")
+    // ISOTROPIC regression bridge: equal hopping all axes → m*_l=m*_t = R9 scalar m*=ħ²/(2t a²).
+    // use the R9 self-hop encoding T=−2t per axis ⇒ ε=−2t·Σcos, curvature per axis 2t a².
+    let m_isoT = qforge_chip_b3_mtensor(1, [0.0], hop_iso, a, 0, 0.0, 0.0, 0.0, hbar, 1.0e-4)
+    let m_iso_xx = m_isoT[0]
+    let m_iso_yy = m_isoT[4]
+    let m_iso_zz = m_isoT[8]
+    let m_r9 = hbar * hbar / (2.0 * t_iso * a * a)   // R9 scalar m* (Ashcroft-Mermin)
+    fails = fails + _ck_close("(b) ISOTROPIC limit m*_xx == R9 scalar ħ²/(2t a²)", m_iso_xx, m_r9, 1.0e-4)
+    fails = fails + _ck_close("(b) ISOTROPIC m*_xx==m*_yy (no anisotropy)", m_iso_xx, m_iso_yy, 1.0e-9)
+    fails = fails + _ck_close("(b) ISOTROPIC m*_xx==m*_zz (no anisotropy)", m_iso_xx, m_iso_zz, 1.0e-9)
+
+    // ════════════════════════════════════════════════════════════════════════
+    // (c) 3-D DOS — √E band edge + band-filling integral ∫DOS = nk³.
+    // ════════════════════════════════════════════════════════════════════════
+    // histogram DOS of the isotropic 3-D parabolic band over the BZ mesh.
+    let nkd = 50
+    let nbin = 120
+    let dos = qforge_chip_b3_dos_hist(1, [0.0], hop_iso, a, nkd, 0, nbin)
+    // ∫DOS = Σbins = nk³ (band-filling normalisation — exactly one band, nk³ states).
+    let mut total = 0.0
+    let mut bi = 2
+    while bi < len(dos) {
+        total = total + dos[bi]
+        bi = bi + 1
+    }
+    let nk3 = to_float(nkd * nkd * nkd)
+    fails = fails + _ck_close("(c) ∫DOS = Σbins = nk³ = total states", total, nk3, 0.5)
+    // √E edge: near the band minimum the bin count rises as √(E−E_c); a log-log fit of
+    // (bin count) vs (E−E_c) over the first few non-empty edge bins has slope ≈ +0.5.
+    let emin = dos[0]
+    let emax = dos[1]
+    let width = (emax - emin) / to_float(nbin)
+    // accumulate Σx, Σy, Σxy, Σxx, n over edge bins (E−E_c ∈ (0, 0.2·bandwidth], bin>0).
+    let win = 0.2 * (emax - emin)
+    let mut sx = 0.0
+    let mut sy = 0.0
+    let mut sxy = 0.0
+    let mut sxx = 0.0
+    let mut nfit = 0
+    let mut j = 0
+    while j < nbin {
+        let ec = width * (to_float(j) + 0.5)       // bin-centre energy above emin
+        let cnt = dos[j + 2]
+        if ec > 0.0 {
+            if ec <= win {
+                if cnt > 0.0 {
+                    let lx = _ln(ec)
+                    let ly = _ln(cnt)
+                    sx = sx + lx
+                    sy = sy + ly
+                    sxy = sxy + lx * ly
+                    sxx = sxx + lx * lx
+                    nfit = nfit + 1
+                }
+            }
+        }
+        j = j + 1
+    }
+    let nf = to_float(nfit)
+    let slope = (nf * sxy - sx * sy) / (nf * sxx - sx * sx)
+    println("    3-D DOS edge log-log slope = " + to_string(slope) + " (ideal √E ⇒ +0.5, nfit=" + to_string(nfit) + ")")
+    // honest tolerance: tight-binding warping above the parabolic regime + finite mesh push
+    // the slope slightly above 0.5; assert it is within [0.35, 0.75] of the 3-D √E exponent
+    // (and emphatically POSITIVE — a RISING edge, the 3-D signature vs 1-D's 1/√ divergence).
+    fails = fails + _ck_true("(c) 3-D √E edge: slope ∈ [0.35,0.75] (rises as √E)", slope > 0.35 && slope < 0.75)
+    fails = fails + _ck_true("(c) edge RISES (3-D, not 1-D 1/√ divergence): slope > 0", slope > 0.0)
+
+    // ════════════════════════════════════════════════════════════════════════
+    if fails == 0 {
+        println("qforge_chip_band_3d_selftest PASS")
+    } else {
+        println("qforge_chip_band_3d_selftest FAIL — " + to_string(fails) + " check(s)")
+    }
+}
+
+// ── ⟨100⟩-valley conduction band as a real-R-vector hop3 list ─────────────────
+// E_c(k) = Σ_d gn(k_d)·G(k_e)·G(k_f) expanded into cos(k·R) products.
+//   gn(u) = (−A cos u + C cos2u) + (A − C),     A=−2.35, C=1   ⇒ gn(0)=0, min at k₀≈0.7π
+//   G(u)  = ½ + ½cos u
+// Product of three single-axis cos-series ⇒ a finite sum of cos(a·(nx kx+ny ky+nz kz))
+// terms with integer (nx,ny,nz). We build the term coefficients in code so the band is
+// DATA (d4) — adding/altering a hop is a list edit, the same eigh path runs unchanged.
+// (Derivation of the coefficients: gn has cos(0),cos(u),cos(2u) parts; G has cos(0),cos(u).
+//  The triple product gn(kx)G(ky)G(kz) folds into cos-products of total order ≤ 4 per axis,
+//  i.e. R-vectors with |n_d| ≤ 2. We emit every nonzero (R, coeff) into the flat hop3 list.)
+fn _valley100_hops() -> [float] {
+    let aa = -2.35                                 // A (negative — pushes the per-axis well to k₀≈0.7π)
+    let cc = 1.0                                    // C
+    // gn(u) = (−A cos u + C cos2u) − (−A + C), so gn(0)=0:
+    //   gn(u) = a0g + a1g·cos(u) + a2g·cos(2u),  a0g = A − C ,  a1g = −A ,  a2g = C.
+    //   with A=−2.35, C=1 ⇒ a0g=−3.35, a1g=+2.35, a2g=+1.0 (min at cos u=A/4C ⇒ k₀≈0.7π).
+    let a0g = aa - cc                              // −3.35
+    let a1g = -aa                                  // +2.35
+    let a2g = cc                                   // +1.0
+    // G(u) = g0 + g1·cos(u),  g0=0.5, g1=0.5  (gate: G(0)=1, G(k₀)≈0.21 — switches the well off).
+    let g0 = 0.5
+    let g1 = 0.5
+    // E_c(k) = Σ_cyc gn(k_a)·G(k_b)·G(k_c).  gn(k_a)=Σ_p A_p cos(p k_a) (p=0,1,2),
+    // G(k_b)=Σ_q B_q cos(q k_b) (q=0,1), G(k_c)=Σ_r B_r cos(r k_c). Each (p,q,r) term =
+    //   A_p B_q B_r · cos(p k_a)·cos(q k_b)·cos(r k_c)  — a PRODUCT of three cosines, expanded
+    // below by product-to-sum into four R-vector cosines. Summed cyclically over the three
+    // axis-roles into a flat hop3 list (d4: pure data, the same eigh path runs unchanged).
+    // gn coeff by order p: [a0g(0), a1g(1), a2g(2)] ; G coeff by order q: [g0(0), g1(1)].
+    let mut hops: [float] = []
+    // Iterate the cyclic role assignment of (gn,G,G) over (x,y,z),(y,z,x),(z,x,y). For each
+    // role pick gn on one axis (orders p=0,1,2) and G on the other two (orders q,r=0,1). The
+    // term is  A_p B_q B_r · cos(p·θ_a)·cos(q·θ_b)·cos(r·θ_c)  where θ are the per-axis phases.
+    // A PRODUCT of three cosines is NOT cos of the summed argument — it expands by product-to-
+    // sum into FOUR genuine R-vector cosines:
+    //   cos(α)cos(β)cos(γ) = ¼[cos(α+β+γ)+cos(α+β−γ)+cos(α−β+γ)+cos(α−β−γ)],
+    // i.e. the four R-vectors (p, ±q, ±r) (leading sign fixed +, cos is even). We emit all
+    // four with weight coeff/4; H(k) uses cos(k·R) directly so each maps to one R-vector hop.
+    // Duplicate R-vectors (when q or r is 0, the ± collapse) simply ADD in H(k)'s sum loop —
+    // exactly reconstructing the correct total coefficient (d4 — pure data, no special path).
+    let mut role = 0
+    while role < 3 {
+        let mut p = 0
+        while p <= 2 {
+            let ap = if p == 0 { a0g } else { if p == 1 { a1g } else { a2g } }
+            let mut q = 0
+            while q <= 1 {
+                let bq = if q == 0 { g0 } else { g1 }
+                let mut r = 0
+                while r <= 1 {
+                    let br = if r == 0 { g0 } else { g1 }
+                    let coeff = ap * bq * br
+                    if _absf(coeff) > 1.0e-15 {
+                        let w = 0.25 * coeff                 // product-to-sum ¼ weight
+                        // the four sign combos (sy,sz) ∈ {+,−}² of (p, sy·q, sz·r).
+                        let mut sy = 0
+                        while sy < 2 {
+                            let qq = if sy == 0 { to_float(q) } else { -to_float(q) }
+                            let mut sz = 0
+                            while sz < 2 {
+                                let rr = if sz == 0 { to_float(r) } else { -to_float(r) }
+                                // map (gn-order p, G-orders qq,rr) onto axes per the cyclic role.
+                                // role 0: gn→x,G→y,G→z ; role 1: gn→y,G→z,G→x ; role 2: gn→z,G→x,G→y.
+                                let mut nx = 0.0
+                                let mut ny = 0.0
+                                let mut nz = 0.0
+                                if role == 0 { nx = to_float(p) ; ny = qq ; nz = rr }
+                                if role == 1 { ny = to_float(p) ; nz = qq ; nx = rr }
+                                if role == 2 { nz = to_float(p) ; nx = qq ; ny = rr }
+                                hops.push(0.0)               // α
+                                hops.push(0.0)               // β
+                                hops.push(nx)
+                                hops.push(ny)
+                                hops.push(nz)
+                                hops.push(w)
+                                sz = sz + 1
+                            }
+                            sy = sy + 1
+                        }
+                        r = r + 1
+                    } else {
+                        r = r + 1
+                    }
+                }
+                q = q + 1
+            }
+            p = p + 1
+        }
+        role = role + 1
+    }
+    return hops
+}
+
+fn _absf(x: float) -> float { if x < 0.0 { return -x } return x }
