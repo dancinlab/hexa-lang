@@ -2329,3 +2329,35 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
 - OUTCOME: 🟢 GREEN (cost-model ORDERING validation PASSES at both measured D). Milestone OP-49 [x]. Deliverables:
   docs/forge-routea-shape-adaptive.md · self/native/wgmma/routea_cost_model.py · F-OP49-SHAPE-ADAPTIVE-DESIGN.txt.
   $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
+## OP-52 — BUILT the OP-45-GPU T4 CTA-swizzle lever (MODE 9 non-persistent CTA-swizzle on b14 MODE 8) + measured on a real H100: does NOT close the @D=4096 TF32 gap — REGRESSES, bit-exact (CLOSED-NEG) — 2026-06-13
+- SURVEY (pre-rent, cost clock): read F-OP45GPU-OCCUPANCY-SWEEP (T4 = cuBLAS D=4096 top algo split_k=1 + cta_swizzle=1,
+  the +24.6% lever = better single-pass tile + CTA-swizzle, g5-bit-exact-reachable; T2 D=4096 compute/scheduling-bound,
+  DRAM ~12-40% peak; T3 MODE7 persistent+swizzle @4096 closed-neg) + F-OP49-SHAPE-ADAPTIVE-DESIGN + docs/forge-routea-
+  shape-adaptive.md + wgmma_tf32_b14.cu (MODE 8 gemm_og17_b14 + MODE 7 tile_unswizzle). Branched off origin/main (the
+  OP-45-GPU/OP-49/OP-50 work had just merged via #3110; local checkout was behind).
+- BUILT (net-new code): MODE 9 = gemm_og17_b14_swz = b14 MODE 8 math VERBATIM + a NON-PERSISTENT CTA-swizzle. The ONLY
+  change vs MODE 8 is the CTA→tile assignment: flat id = blockIdx.y*gridDim.x+blockIdx.x, remapped via the existing
+  tile_unswizzle (the MODE 7 mapper), 1-CTA/tile grid (NOT occ*SM persistent). This ISOLATES the swizzle from MODE 7's
+  persistent-loop confound. SWZ=0 ≡ MODE 8 exactly (apples self-check). + op52_swz_run.sh driver. nvcc -O3 -arch=sm_90a.
+- RENT: ONE H100 SXM, label hexa-tf32gap, contract 40733645, offer 21671166, $2.311/hr India IN (cuda 12.6, rel 0.9989,
+  same machine family as the OP-45-GPU pod). Inline-polled to running+SSH-ready. nvidia/cuda:12.6.2-devel-ubuntu22.04.
+- ptxas -v: gemm_og17_b14_swz = 0 spill, 96 KB/CTA, 2 CTA/SM — IDENTICAL to MODE 8 (only the index changed, as designed).
+- STEP 1 (apples): MODE 8 baseline reproduced — D=2048 ~316 TFLOP/s 1.09x, D=4096 ~285.6 TFLOP/s 1.50x, rel_rms 0
+  (reproduces OP-45-GPU's 320.6/1.08x @2048, 283.9/1.52x @4096 within ~1%).
+- STEP 2 (self-check): MODE 9 SWZ=0 == MODE 8 EXACTLY — D=4096 285.1, rel_rms 0 — faithful MODE 8 + swizzle knob.
+- STEP 3 (THE LEVER, VERBATIM median of 3): MODE 9 CTA-swizzle SWZ∈{2,4,6,8,12,16} × PDEP∈{1,2} @D=4096 ALL REGRESS.
+  Best bit-exact swizzled = 280.5 TFLOP/s (PDEP=2 SWZ=2) and 280.2 (PDEP=2 SWZ=16) = −1.6%/−1.7% vs SWZ=0's 285.1;
+  ratio WIDENS 1.50x→1.53x. PDEP=1 worse still (272-277, up to 1.58x). D=2048 also neutral-to-negative. rel_rms 0 on
+  EVERY one of the 24 swizzled configs (bit-exactness preserved — the gate held; no loose-TF32 win sought).
+- WHY (g5, anchored to T2): D=4096 is compute/scheduling-bound (DRAM ~12-40% peak, AI 682 >> 104 threshold). A CTA-
+  swizzle's whole mechanism is L2 LOCALITY; if DRAM isn't the bottleneck, L2 reuse cannot raise throughput and only adds
+  index overhead → the measured small regress. SAME physics as T3 (MODE 7 @4096 regress), now ISOLATED: MODE 9 strips
+  the persistent loop and keeps ONLY the swizzle → regress persists → the regress was the SWIZZLE, not the loop.
+- VERDICT: 🔴/🟠 CLOSED-NEGATIVE. No bit-exact variant closes any part of the @D=4096 1.5x gap (CTA-swizzle regresses;
+  the in-tree larger single-pass tile MODE 5 t256 is already closed-neg @4096). The surviving lever is a NEW bit-exact
+  single-pass per-CTA tile/schedule (2-CTA/SM-preserving kernel rewrite), NOT a launcher/index swizzle, NOT split-K (g5).
+  Milestone OP-52 [x]. Deliverables: wgmma_tf32_b14.cu MODE 9 + op52_swz_run.sh + docs/forge-routea-shape-adaptive.md
+  (§0 + §7 + large-D bucket updated) + F-OP52-TF32-GAP-CLOSE.txt.
+- DESTROY: yes | vastai destroy instance 40733645 (label hexa-tf32gap confirmed MINE first) → vastai show instances-v1
+  "Total: 0 instances / No instances found." LEAK-0 CONFIRMED. No foreign pod touched (roster empty throughout). ~$0.70.

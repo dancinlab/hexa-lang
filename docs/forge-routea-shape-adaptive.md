@@ -55,6 +55,18 @@ no-cuBLAS-call** TF32 GEMM:
   algo is `split_k=1` / `reduction=0`) — i.e. **reachable without forfeiting the bit-exact
   accumulation order**. Net: a beat path exists in principle (a better single-pass per-CTA tile/
   schedule, bit-exact-legal), but it is a genuine build, not a memory roofline to close.
+  **OP-52 (real H100, `F-OP52-TF32-GAP-CLOSE.txt`) BUILT and MEASURED the CTA-swizzle half of that
+  lever in ISOLATION** — a new MODE 9 (`gemm_og17_b14_swz`) = b14 MODE 8 math VERBATIM + a
+  NON-persistent CTA-swizzle (1-CTA/tile grid, only the CTA→tile assignment order changed), which
+  strips away MODE 7's persistent-loop confound. **Result: CTA-swizzle does NOT close the gap — it
+  REGRESSES.** Best bit-exact swizzled @D=4096 = 280.5 TFLOP/s (vs the SWZ=0/MODE 8 baseline 285.1,
+  −1.6 %; ratio 1.50× → 1.53×); every group-width SWZ∈{2,4,6,8,12,16} × PDEP∈{1,2} regressed, all at
+  `rel_rms 0.000e+00`. This isolates OP-45-GPU T3 (MODE 7's @4096 regress was the **swizzle itself**,
+  not the persistent loop) and matches T2's physics (compute-bound ⇒ an L2-locality CTA order cannot
+  help). The in-tree "better single-pass tile" option (MODE 5 t256, 128×256) is **already measured
+  closed-neg** @4096 (264.9 < 283.9, register-capped to 1 CTA/SM). So the surviving lever is a
+  genuinely NEW bit-exact single-pass per-CTA tile/schedule (a kernel rewrite preserving 2 CTA/SM),
+  **not** a launcher/index swizzle and **not** split-K — recorded as the OP-52 follow-up.
 - The **FP16/BF16 W14 line is ~11.5× off** cuBLAS-FP16 (PARITY=NO; cuBLAS-FP16 roofline doubled to
   ~827 TFLOP/s). The **W10 composed-swizzle-decode summit is 70.7 TFLOP/s, 6.09× off** cuBLAS-TF32
   (the bit-exact pre-route-(a) frontier). Neither is a beat. (`.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W10.txt`,
@@ -114,7 +126,7 @@ is D-invariant (same binary). So the policy is bucketed by **how the fixed tile 
 |--------|---------|--------|---------|---------------------|-------------------|
 | **small-D under-fill** | D ≤ 1024 | tiles ≪ 264 resident CTAs | catastrophic wave under-fill (D=512: 16 tiles / 264 = 0.06 wave-eff) | MODE 8 NST2 (least smem) | **64×64 small-tile** (4× more tiles → fills device) — *does not exist* |
 | **medium-D parity zone** | 1024 < D ≤ 3072 | tiles ≈ 1 wave, well-quantized | already at PARITY (D=2048 1.08×) | **MODE 8 NST3 PDEP2** (frontier) | — (parity met) |
-| **large-D drain/scheduling-bound** | D > 3072 | many waves, deep K-loop | −9.9% K-drain; cuBLAS pulls +24.6% ahead | MODE 8 NST3 PDEP1 | **MODE 7 persistent+swizzle** (smooth tail, L2-hot) AND/OR a bit-exact split-K — *persistent untested @4096, split-K does not exist* |
+| **large-D drain/scheduling-bound** | D > 3072 | many waves, deep K-loop | −9.9% K-drain; cuBLAS pulls +24.6% ahead | MODE 8 NST3 PDEP1 | a **NEW bit-exact single-pass per-CTA tile/schedule** (2 CTA/SM, deeper-K) — *MODE 7 persistent (T3) AND MODE 9 non-persistent CTA-swizzle (OP-52) both measured closed-neg @4096; split-K forbidden by g5* |
 
 The K-axis modifier (independent of M/N): when **K is large but M·N small** (tall-skinny,
 e.g. a 7B FFN down-proj at small batch), the under-fill bucket applies on M·N but the K-loop
@@ -265,6 +277,17 @@ All five tests ran on one H100 sm_90a (`F-OP45GPU-OCCUPANCY-SWEEP.txt`, ~$0.96, 
   tile + CTA-swizzle, **`split_k=1` (NOT split-K)**. So the lever is **reachable bit-exact** (no
   reordering split-K needed); GAP #3 (split-K) is **not** the path — a better single-pass per-CTA
   tile/schedule is.
+- **OP-52** (build + measure the T4 CTA-swizzle half, isolated): **DONE — closed-negative**
+  (`F-OP52-TF32-GAP-CLOSE.txt`, real H100, ~$0.70, leak-0). New MODE 9 (`gemm_og17_b14_swz`) = b14
+  MODE 8 VERBATIM + a NON-persistent CTA-swizzle (1-CTA/tile grid; only the CTA→tile order changed;
+  SWZ=0 ≡ MODE 8 exactly). **CTA-swizzle does NOT close the @D=4096 gap — it REGRESSES**: best
+  bit-exact swizzled 280.5 TFLOP/s (vs 285.1 SWZ=0, −1.6 %; ratio 1.50× → 1.53×), every SWZ × PDEP
+  worse, all `rel_rms 0`. This **isolates T3** (the regress was the swizzle, not MODE 7's persistent
+  loop) and matches T2 (compute-bound ⇒ L2-locality reorder can't help). MODE 5 t256 (the only
+  in-tree larger single-pass tile) is already closed-neg @4096. **The surviving lever is a NEW
+  bit-exact single-pass per-CTA tile/schedule (a 2-CTA/SM-preserving kernel rewrite)** — the OP-52
+  follow-up; NOT a launcher swizzle and NOT split-K.
 
 The cost model remains the harness: T2's drain recalibration dropped in as one coefficient; the
-selector's argmax (MODE 8 at both D) is unchanged and still matches measurement.
+selector's argmax (MODE 8 at both D) is unchanged and still matches measurement. OP-52 confirms the
+selector should NOT add a swizzled mode at D=4096 (it would never be the argmax — swizzle regresses).
