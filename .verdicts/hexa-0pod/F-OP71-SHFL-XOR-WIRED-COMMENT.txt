@@ -1,0 +1,107 @@
+F-OP71-SHFL-XOR-WIRED-COMMENT
+=============================
+TIER: 🔴→fix  (genuine doc-vs-code honesty bug: a tracked source comment claims a
+              compiler capability is [NOT WIRED] when it is in fact fully wired)
+SCOPE: 0-pod · $0 · local CPU · NO GPU · no vast · no foreign pod · leak-0 · comment-only
+
+CONTEXT
+-------
+Two prior LANE-1 forge/flame threads are CLOSED at 0-pod and were NOT re-opened:
+(1) route-(a) own-GEMM (OP-58..64) — settled, next step is paid-Hopper validation.
+(2) flame determinism-contract enforcement gates (OP-66 layer-2 libm · OP-69 layer-3
+    FMA · OP-39 const-fold) — all GATED; layer-1/checkpoint/B>1-seam honestly DEFERRED
+    as runtime-byte-eq (not static-grep-checkable).
+This round self-selects the next genuine 0-pod item on a DIFFERENT forge/flame surface
+(forge GPU-emit honesty), measured not assumed.
+
+SURVEY (candidate axes a–d; scoped greps/reads, NO .git)
+--------------------------------------------------------
+(a) forge GPU-emit correctness that is 0-pod READABLE.
+    - The handoff-flagged `nvptx codegen f64 exp() underflow garbage below x≈−745` is
+      ALREADY FIXED: nvptx_target.hexa:2009-2024 carries the DOJO-A4 / d631a08f
+      `max.s64 b,b,0` underflow clamp (b=k+1023 clamped ≥0 → b<<52 = +0.0 bit-pattern,
+      no NaN/garbage); the CPU falsifier nvptx_expf64_underflow_clamp_probe.hexa
+      replicates the exact codegen incl. the clamp and gates exp(-800)==0.0. NOT a bug.
+    - The handoff-flagged `RFC071 gpu_warp_shuffle_xor NVPTX lowering FIXME` is ALSO
+      ALREADY WIRED: nvptx_target.hexa:1694-1771 lowers `gpu_warp_shuffle_xor` to
+      `shfl.sync.bfly.b32` (u32 single-instr path AND f64 decompose/shuffle/recompose
+      path), with register-kind (3667) + scratch-reg sweep (4103/4293) all present;
+      PTX_OP_SHFL_SYNC_BFLY_B32 defined (nvptx_ptx_ops.hexa:271); the handler returns
+      real instrs and short-circuits BEFORE the `unsupported call` fallthrough (3207).
+      Wired by #1200 ("NVPTX FP64 warp-shuffle composition N71-B / N70 GAP-C", commit
+      b1564fa37) + fired hand-MIR by nvptx_n71b_fire_emit.hexa. So no FIXME survives.
+    => ACTIONABLE on a SECOND-ORDER axis: the wiring is done, but a TRACKED FIXTURE
+       comment still ADVERTISES the builtin as missing (see PICK). This is the OP-64
+       doc-vs-code honesty class on a forge GPU-emit surface.
+(b) forge/flame DOC-vs-CODE honesty — see PICK; the fixture header below is a concrete
+    code-comment vs codegen-reality contradiction (the OP-64 class). PICKED.
+(c) flame stdlib CPU-oracle invariant — none surfaced unlocked this round; the
+    determinism-path libm/FMA/const-fold invariants are GATED (OP-66/69/39); the
+    per-phase byte-eq oracles are runtime-checked (not 0-pod static). Not picked.
+(d) HEXA-0POD `## deferred` — all remaining items are build-host (SELFHOST-NEXT frozen
+    -anchor 151c52c8 re-pin: OP-2b/2c/19b/37b/40/44/46) or GPU (OP-5c) — OUT of 0-pod
+    scope. Not picked.
+
+PICK (g0 — simplest genuine 0-pod item)
+---------------------------------------
+(b) STALE PROVENANCE COMMENT in compiler/codegen/nvptx_p9_warp_reduce_test.hexa.
+WHY: the only axis with an actionable, decisive, $0/0-GPU outcome — a tracked source
+file makes a verifiably FALSE capability claim that would mislead a future cycle into
+reporting "HONEST BLOCKED" for an already-shipped feature. g0-simplest (comment-only,
+no behavior change, no codegen byte touched).
+
+FINDING (verbatim)
+------------------
+nvptx_p9_warp_reduce_test.hexa (a `@phase("parse_only")` RFC 071 P9 fixture) header,
+lines 22-30 PRE-FIX:
+  //   - `gpu_warp_shuffle_xor(v, mask)`  [NOT WIRED — XOR butterfly variant of
+  //                                       existing `gpu_warp_shuffle(v, lane)` ...]
+  //
+  // Per task `@D g3` scope: if `gpu_warp_shuffle_xor` is not wired, this
+  // fixture's PTX emit will contain `// unsupported` markers for the shuffle
+  // calls — the cycle reports HONEST BLOCKED + names the missing builtin.
+  // DO NOT touch compiler source this round.
+This is FALSE on current main:
+  - nvptx_target.hexa:1700 `if s.op == "gpu_warp_shuffle_xor" { ... return out }`
+    emits PTX_OP_SHFL_SYNC_BFLY_B32 (line 1742/1749/1767) and RETURNS before the
+    `unsupported call` stub (line 3207) — so the shuffle calls do NOT emit `// unsupported`.
+  - f64 source is handled (decompose `mov.b64 {lo,hi}` → 2× bfly → recompose, 1709-1755);
+    u32 source is the single-instr path (1757-1768); u64 mask narrowed via cvt.u32.u64.
+TIMELINE PROOF: the `[NOT WIRED]` header dates to commit 9f343d1bb (wip); the wiring
+landed later in #1200 / b1564fa37 ("NVPTX FP64 warp-shuffle composition N71-B / N70
+GAP-C"). The comment is genuinely STALE, not a still-open gap.
+
+FIX (comment-only; doc+provenance, NO behavior change)
+------------------------------------------------------
+Rewrote the fixture's "Required intrinsics" entry for gpu_warp_shuffle_xor from
+[NOT WIRED] to [WIRED] with the exact lowering (shfl.sync.bfly.b32 ... 0x1f,0xffffffff;
+f64 decompose/recompose per PTX ISA §9.7.13.4; closed by N71-B/#1200; emitter site +
+n71b fire fixture cited), and replaced the now-false "@D g3 ... PTX emit will contain
+`// unsupported` markers ... DO NOT touch compiler source" paragraph with a STALE-
+COMMENT-FIX note stating the wiring short-circuits before the unsupported fallthrough,
+so the fixture is fully lowerable (no longer a HONEST-BLOCKED probe).
+
+VERIFY (verbatim)
+-----------------
+git diff --stat: 1 file changed, 15 insertions(+), 8 deletions(-).
+Comment-only proof: `git diff | grep '^[+-]' | grep -vE '^[+-]//' | grep -vE '^(\+\+\+|---)'`
+=> EMPTY (zero non-comment line added or removed). All changed lines are `//` comments;
+the @gpu_kernel body (lines 34-57) is byte-identical. The `parse_only` fixture's parse
+correctness is preserved (comments do not affect parsing).
+
+SELF-HOST BYTE-EQ
+-----------------
+UNTOUCHED. nvptx_p9_warp_reduce_test.hexa is a codegen TEST FIXTURE, not in the
+compiler/main.hexa build_selfhost closure; zero codegen/runtime/stdlib bytes changed
+(comment-only). The cc-gen3.o==cc-gen4.o fixpoint is unaffected.
+
+WIPE_GUARD
+----------
+Net-additive (15+/8−), no >50-line deletion, scoped subject. Clean.
+
+OUTCOME
+-------
+🔴→fix GREEN. A tracked forge GPU-emit fixture's false [NOT WIRED] capability claim is
+corrected to the true [WIRED] state with the exact lowering + provenance, preventing a
+future cycle from re-reporting an already-shipped builtin as blocked. $0 · 0-pod · NO
+GPU · no vast · no foreign pod · no .tape · no self/env.hexa · leak-0.
