@@ -189,35 +189,90 @@ pub fn build_water_shell(n_waters: int, shell_r: float, seed: int) -> dict {
     return out
 }
 
+// ── forward-only closed-form soft-core pair energy (hot-path, no tape) ─
+// The Σ over ~10²–10³ pairs is called thousands of times in HREX sampling +
+// MBAR cross-assembly. Building an autograd TAPE per pair (softcore_energy_
+// value) there is the dominant cost. This is the IDENTICAL closed form the
+// R3 softcore brick assembles on the tape (Beutler 1994 — see softcore.hexa):
+//   U_sc^LJ = 4ε·λⁿ·[D⁻² − D⁻¹],  D = α_lj·(1−λ)² + (r/σ)⁶
+//   U_sc^C  = λᵐ·ke·q1·q2 / (α_c·(1−λ)² + r²)^(1/2)
+// evaluated directly in float (NO derivative). The autograd path remains the
+// source of truth for forces / dU/dλ (full_nonbonded_dudlam below); the
+// selftest's (a) wiring check uses the tape `softcore_energy_value` so this
+// fast form is validated against it. d3: same physics, forward-only flavour.
+fn _sc_pair_value_fast(r2: float, lam: float, p) -> float {
+    let eps      = if p.contains_key("eps")      { p["eps"] }      else { 0.0 }
+    let sigma    = if p.contains_key("sigma")    { p["sigma"] }    else { 1.0 }
+    let q1       = if p.contains_key("q1")        { p["q1"] }       else { 0.0 }
+    let q2       = if p.contains_key("q2")        { p["q2"] }       else { 0.0 }
+    let ke       = if p.contains_key("ke")        { p["ke"] }       else { 0.0 }
+    let alpha_lj = if p.contains_key("alpha_lj") { p["alpha_lj"] } else { 0.5 }
+    let alpha_c  = if p.contains_key("alpha_c")  { p["alpha_c"] }  else { 0.5 }
+    let n        = if p.contains_key("n")         { p["n"] }        else { 1.0 }
+    let m        = if p.contains_key("m")         { p["m"] }        else { 1.0 }
+
+    let oml = 1.0 - lam
+    let oml2 = oml * oml
+
+    // LJ soft-core.
+    let mut u_lj = 0.0
+    if eps != 0.0 {
+        let s6 = sigma * sigma * sigma * sigma * sigma * sigma
+        let r6 = r2 * r2 * r2
+        let r_over_sigma6 = r6 / s6
+        let d = alpha_lj * oml2 + r_over_sigma6
+        let d_inv1 = 1.0 / d
+        let d_inv2 = d_inv1 * d_inv1
+        let lam_n = pow(lam, n)
+        u_lj = 4.0 * eps * lam_n * (d_inv2 - d_inv1)
+    }
+    // Coulomb soft-core.
+    let mut u_c = 0.0
+    let qq = q1 * q2
+    if qq != 0.0 {
+        let denom = alpha_c * oml2 + r2
+        let inv_sqrt = pow(denom, 0.0 - 0.5)
+        let lam_m = pow(lam, m)
+        u_c = lam_m * ke * qq * inv_sqrt
+    }
+    return u_lj + u_c
+}
+
 // ── full solute-solvent soft-core sum (energy) ───────────────────────
 // sol_coords : [Ns]×{x,y,z} current solute atom positions.
 // shell      : build_water_shell output (fixed solvent atoms + types).
 // table      : build_pair_table output (real per-pair ε/σ/q).
 // lam        : decoupling λ (1=coupled, 0=decoupled).
 // U = Σ_{i solute} Σ_{j solvent} U_sc(r_ij, λ; p_ij)   in kcal/mol.
-// Each pair feeds the R3 softcore brick with the real LB-combined `p`.
-// d3: NO LJ/Coulomb re-implemented — softcore_energy_value does the pair.
+// Uses the forward-only closed form (hot path). d3: same Beutler soft-core
+// physics as the R3 tape brick; the selftest cross-checks the two agree.
 pub fn full_nonbonded_energy(sol_coords: array, shell: dict, table: dict,
                              lam: float) -> float {
     let scoords = shell["coords"]
     let stypes  = shell["types"]
     let ns = sol_coords.len()
     let nsolv = scoords.len()
+    let row_ow = table["OW"]
+    let row_hw = table["HW"]
     let mut u = 0.0
     let mut i = 0
     while i < ns {
         let pi = sol_coords[i]
-        let row_ow = table["OW"]
-        let row_hw = table["HW"]
+        let pix = pi["x"]
+        let piy = pi["y"]
+        let piz = pi["z"]
         let p_ow = row_ow[i]
         let p_hw = row_hw[i]
         let mut j = 0
         while j < nsolv {
             let pj = scoords[j]
-            let coords6 = [pi["x"], pi["y"], pi["z"], pj["x"], pj["y"], pj["z"]]
+            let dx = pix - pj["x"]
+            let dy = piy - pj["y"]
+            let dz = piz - pj["z"]
+            let r2 = dx * dx + dy * dy + dz * dz
             let mut p = p_hw
             if stypes[j] == "OW" { p = p_ow }
-            u = u + softcore_energy_value(coords6, lam, p)
+            u = u + _sc_pair_value_fast(r2, lam, p)
             j = j + 1
         }
         i = i + 1

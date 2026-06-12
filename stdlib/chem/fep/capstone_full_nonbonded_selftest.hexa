@@ -132,21 +132,45 @@ fn main() {
     // every per-pair finite (spot-check the whole sum + a few singles).
     let mut all_pair_finite = is_finite(u_full) && is_finite(g_full)
     let row_ow = table["OW"]
+    let row_hw = table["HW"]
     let p0 = row_ow[0]
     let c6 = [coords[0]["x"], coords[0]["y"], coords[0]["z"],
               scoords[0]["x"], scoords[0]["y"], scoords[0]["z"]]
     let u_one = softcore_energy_value(c6, 1.0, p0)
     if is_finite(u_one) == false { all_pair_finite = false }
+    // CROSS-CHECK the hot-path closed form vs the R3 autograd-tape brick:
+    // re-sum the SAME pairs through softcore_energy_value (the sealed tape
+    // energy) and assert it matches full_nonbonded_energy (fast) to <1e-9.
+    // This proves the forward-only fast form is the IDENTICAL Beutler physics.
+    let mut u_tape = 0.0
+    let mut ti2 = 0
+    while ti2 < coords.len() {
+        let pi = coords[ti2]
+        let mut tj = 0
+        while tj < scoords.len() {
+            let pj = scoords[tj]
+            let cc6 = [pi["x"], pi["y"], pi["z"], pj["x"], pj["y"], pj["z"]]
+            let mut pp = row_hw[ti2]
+            if stypes[tj] == "OW" { pp = row_ow[ti2] }
+            u_tape = u_tape + softcore_energy_value(cc6, 1.0, pp)
+            tj = tj + 1
+        }
+        ti2 = ti2 + 1
+    }
+    let fast_vs_tape = abs_f(u_full - u_tape)
     println("    shell: " + to_string(scoords.len()) + " solvent atoms ("
             + to_string(shell["n_waters"]) + " waters)  types[0..3]="
             + to_string(stypes[0]) + "," + to_string(stypes[1]) + ","
             + to_string(stypes[2]) + "," + to_string(stypes[3]))
     println("    n_pairs = " + to_string(n_pairs) + "  U_full(λ=1) = "
             + to_string(u_full) + " kcal/mol  dU/dλ(λ=0.5) = " + to_string(g_full))
-    check("(a) full-sum wiring: shell built + Σ all pairs finite, NaN-0",
-          shell_ok && all_pair_finite && n_pairs == 120,
+    println("    fast closed-form vs R3 autograd-tape sum: |Δ| = "
+            + to_string(fast_vs_tape) + " (must be <1e-9 — identical physics)")
+    check("(a) full-sum wiring: shell built + Σ all pairs finite + fast==tape, NaN-0",
+          shell_ok && all_pair_finite && n_pairs == 120 && fast_vs_tape < 1.0e-9,
           "shell_ok=" + to_string(shell_ok) + " n_pairs=" + to_string(n_pairs)
-          + " finite=" + to_string(all_pair_finite))
+          + " finite=" + to_string(all_pair_finite)
+          + " fast_vs_tape=" + to_string(fast_vs_tape))
 
     // ═══════════════════════════════════════════════════════════════════
     // (b) ΔG SHIFT vs SINGLE-SITE — full sum carries the cavity term.
