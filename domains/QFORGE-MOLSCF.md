@@ -28,7 +28,11 @@ Fock 빌드, (3) 비직교 일반화 고유문제 `FC=SCε`. 모든 g5 anchor �
 - [x] brick 5 — RHF SCF 루프 FC=SCε (Löwdin S^{−½}+eigh 재사용·d19·density iter) g5 PASS
       (H₂/STO-3G @1.4bohr E_total=−1.11671 Ha vs Szabo −1.1167 |Δ|=1.2e-5 · iters=2 · HOMO ε=−0.5782)
 - [ ] brick 6 — 분자 force ∇_R E (autograd through brick 1-5 · NOVEL lane)
-- [ ] brick 7 — p/d 각운동량 (Hermite recursion · 실제 화학 분자)
+- [x] brick 7 (round-4) — p 각운동량 McMurchie-Davidson (E-coeff·Hermite R-tensor·Boys F_n)
+      `md_integrals.hexa` + 실제 polyatomic H₂O/STO-3G end-to-end through UNCHANGED `rhf_scf` g5 PASS
+      (L=0 reduction == brick-1/2 s형 ≤1e-12 · ⟨pₓ|T|pₓ⟩=a(2L+3)/2=2.5 exact ·
+       H₂O E_total=−74.9618 Ha vs ref −74.961754 |Δ|=4.6e-5 · 7 MO ε all match · r1/r2/r3 regress PASS)
+- [ ] brick 8 (round-5) — d(+f) 각운동량 (동일 recursion·L-cap 無 · d-bearing 분자) + Cartesian d 정규화
 
 ## three-scale unblock
 

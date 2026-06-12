@@ -205,3 +205,58 @@ for s-type; p/d angular momentum (brick 7) extends it to real polyatomic chemist
 2. brick 7 — p/d angular momentum (Hermite/McMurchie-Davidson recursion) → real polyatomics (H₂O).
 3. DIIS convergence accelerator (round-3 uses simple density mixing — correct but not optimal for
    stiff/larger systems); add Pulay DIIS over the F·P·S−S·P·F error vector.
+
+## round-4 — p angular momentum (McMurchie-Davidson) + real polyatomic H₂O SEALED
+
+`stdlib/qforge/molscf/md_integrals.hexa` (new, brick 6/7-of-file) — the general McMurchie-Davidson
+recursion that lifts the s-only closed forms (brick 1/2) to ARBITRARY Cartesian angular momentum.
+Pure recursion, NO change to `rhf_scf` (rhf.hexa) — the higher-L front-end simply feeds it bigger
+S/H_core/ERI matrices (d4 generic dispatch).
+
+### what landed
+- **E-coefficient tower** `md_hermite_e(i,j,t,…)` — the Hermite-expansion coefficient recursion
+  (Helgaker-Jørgensen-Olsen "Molecular Electronic-Structure Theory" eq. 9.5.6), seeded at
+  E^{00}_0 = K_AB = exp(−μX_AB²) (the s·s Gaussian prefactor). One independent tower per Cartesian axis.
+- **Boys F_n table** `md_boys(nmax,t)` — two stable regimes: small-t ascending-series seed + downward
+  recursion; large-t (≥35) exact F_0 + upward recursion. The naive single-regime version DIVERGED at
+  t≳200 (O 1s α=130 reaches p·R²≈400) — fixed (HJO §9.8.1). F_n exact vs direct F_0 to ≤1e-9 across t.
+- **Hermite Coulomb R-tensor** `md_hermite_r(t,u,v,n,…)` (HJO 9.9.9) → V (nuclear) and (ab|cd) (ERI)
+  for any L via E⊗R contractions.
+- **Cartesian normalization** `md_norm_prim(l,a)` = (2a/π)^¾ (4a)^{L/2}/√[(2lₓ−1)!!(2lᵧ−1)!!(2l_z−1)!!];
+  L=0 reduces to the brick-1 s norm exactly.
+
+### g5 (4 verdicts, VERBATIM — `md_selftest.hexa`)
+- **(a) L=0 reduction** — MD S/T == brick gaussian_integrals to 8e-17/7e-17; MD V/ERI == brick
+  coulomb_integrals to ≤1e-7 (shared erf_fn Boys floor). STO-3G H₂ S₁₂=0.6593182001 via MD.
+- **(b) p-shell vs independent values** — ⟨pₓ|pₓ⟩ self-overlap = 1.0 (Cartesian norm);
+  ⟨pₓ|−½∇²|pₓ⟩ = a(2L+3)/2 = 2.5 (a=1, EXACT analytic, L=1); ⟨pₓ|pᵧ⟩=0, ⟨s|pₓ⟩=0 parity;
+  p-nuclear rotational symmetry ⟨pₓ|V|pₓ⟩(nuc@x)=⟨p_z|V|p_z⟩(nuc@z) to 1e-12.
+- **(c) END-TO-END H₂O/STO-3G** through the UNCHANGED rhf_scf — 7×7 (S,H_core) + 7⁴ ERI tensor
+  (8-fold symmetry, 406 unique) with the O 2p shell, 10 e⁻ / 5 occ MOs. Converged in 12 iters to
+  **E_total = −74.9618 Ha** vs reference **−74.961754 Ha** (Standard, "A Hartree-Fock Calculation of
+  the Water Molecule", CHMY-564 MSU 2015; Gaussian-09 STO-3G, R(O-H)=0.95 Å ∠=104.5°),
+  **|Δ| = 4.6e-5 Ha** (inside 1e-4). All 7 MO eigenvalues match the reference to printed precision
+  (−20.24094 −1.27218 −0.62173 −0.45392 −0.39176 | 0.61293 0.75095). H_core diagonals match the ref
+  matrices (H₀₀=−32.729 vs −32.730).
+- **(d) regression** — gaussian_/coulomb_/rhf selftests (r1/r2/r3) all PASS unchanged; H₂
+  E_total=−1.11671 Ha untouched.
+
+### honest note (d6)
+The reference PDF's printed V(2pₓ) tableau entry (−9.926) is a transcription error: an INDEPENDENT
+scipy McMurchie-Davidson reproduces THIS code's value (−9.9926) to all digits, and the in-plane
+V(2pᵧ)/V(2p_z) (−10.152/−10.088) match the reference exactly. The converged Gaussian-09 energy
+(−74.961754, from the SCF not the tableau) is the authoritative anchor and is what (c) gates on. The
+printed value is NOT trusted over the recompute.
+
+### SEALED vs OPEN
+- **SEALED**: s + **p** angular momentum (S/T/V/ERI), full McMurchie-Davidson machinery (E-coeff,
+  R-tensor, F_n), real polyatomic H₂O/STO-3G end-to-end through the unchanged generic RHF.
+- **OPEN (round-5)**: **d (+ f)** angular momentum — the SAME recursions carry NO L cap, so d is
+  reachable by adding the Cartesian-d normalization (6 Cartesian → 5 spherical contraction) + a
+  d-bearing molecule fixture; brick 6 analytic force ∇_R E (autograd lane); DIIS accelerator.
+
+### round-5 next
+1. brick 8 — d(+f) angular momentum: validate against a d-bearing molecule (e.g. H₂S / SO₂ STO-3G,
+   or a first-row transition-metal hydride) + Cartesian-d → spherical-harmonic normalization.
+2. brick 6 — analytic molecular force ∇_R E via autograd through brick 1-7 (NOVEL lane).
+3. DIIS convergence accelerator over the F·P·S−S·P·F error vector (round-3/4 use simple mixing).
