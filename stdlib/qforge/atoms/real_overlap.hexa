@@ -1,0 +1,442 @@
+// HEXA Standard Library — qforge/atoms/real_overlap
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE atoms-scale brick #10 — REAL contracted-Gaussian overlap S_μν and its
+// ANALYTIC nuclear derivative ∂S_μν/∂R, REPLACING the R7 MODEL Gaussian overlap
+// (S_μν = exp(−½ζR²)) that R9's Hellmann-Feynman + Pulay force ran on. This is the
+// d19 cross-lane convergence: the MOLSCF front-end already supplies the REAL
+// STO-3G contracted-Gaussian overlap in closed form (stdlib/qforge/molscf/
+// gaussian_integrals.hexa, gint_overlap_contracted, H₂ S=0.6593182001 verified),
+// and R10 CONSUMES that exact same kernel as the overlap layer the atoms-scale
+// force machinery is driven by. The "model overlap" caveat that R9 declared
+// (forces.hexa HONEST SCOPE) is hereby DISSOLVED: the atoms force now sits on a
+// genuine MOLSCF-grade STO-3G basis, not a Gaussian toy.
+//
+// ── What is reused vs what is new ─────────────────────────────────────────────
+//   REUSED verbatim (d19, cross-lane):
+//     gint_overlap_contracted(α,d,A, α',d',B)  — MOLSCF lane, the real S_μν.
+//     gint_overlap_s / gint_norm_s / gint_mu    — its primitive building blocks.
+//   NEW here:
+//     qforge_real_overlap_matrix     — assemble the per-atom S matrix from the
+//                                      MOLSCF contracted overlap (S_μμ = 1 exactly
+//                                      for the normalized STO-3G contraction).
+//     qforge_real_doverlap_dR        — the ANALYTIC ∂S_μν/∂R (Gaussian-product
+//                                      derivative, closed form — NOT a finite
+//                                      difference). See the derivation below.
+//
+// ── Analytic ∂S/∂R (Gaussian product theorem differentiation) ─────────────────
+//   The contracted overlap between atom A (centre A) and atom B (centre B) is
+//
+//     S_AB = Σ_ij d_i d_j N_i N_j (π/p_ij)^{3/2} exp(−μ_ij |A−B|²)
+//          = Σ_ij s_ij^prim ,        μ_ij = a_i b_j/(a_i+b_j),  p_ij = a_i+b_j .
+//
+//   Only the exp(−μ_ij R²) factor carries the geometry (R² = |A−B|²). Differentiating
+//   w.r.t. a Cartesian component A_x of the centre A:
+//
+//     ∂/∂A_x exp(−μ_ij R²) = exp(−μ_ij R²)·(−μ_ij)·∂R²/∂A_x
+//                          = exp(−μ_ij R²)·(−μ_ij)·2(A_x − B_x) .
+//
+//   Hence, term by term, ∂s_ij^prim/∂A_x = −2 μ_ij (A_x − B_x) s_ij^prim, and
+//
+//     ∂S_AB/∂A_x = −2 (A_x − B_x) · Σ_ij μ_ij s_ij^prim .            (closed form)
+//
+//   ∂S_AB/∂B_x = +2 (A_x − B_x) Σ_ij μ_ij s_ij^prim = −∂S_AB/∂A_x (translational
+//   antisymmetry — the overlap depends only on A−B). The diagonal S_μμ ≡ 1 is
+//   geometry-independent ⇒ ∂S_μμ/∂R = 0. This is the EXACT Pulay overlap derivative
+//   the non-orthogonal-basis force needs (Pulay, Mol. Phys. 17 197 (1969)); it
+//   REPLACES R9's central finite difference of the model overlap.
+//
+// HONEST SCOPE (d6) ───────────────────────────────────────────────────────────
+//   • The overlap is the REAL STO-3G contracted-Gaussian S (the MOLSCF lane's
+//     closed form), NOT a model exp(−½ζR²). Every S_μν is the d19-shared MOLSCF
+//     value (selftest (a) asserts qforge_real_overlap_matrix[μν] == the direct
+//     gint_overlap_contracted call, bit-for-bit — the cross-lane reuse PROOF).
+//   • ∂S_μν/∂R is the ANALYTIC Gaussian-product derivative above, gated against a
+//     central finite difference of the SAME MOLSCF contracted overlap to |Δ|<1e-6
+//     (selftest (b)) — analytic, not FD.
+//   • s-ONLY: one contracted s-shell per atom (STO-3G H 1s convention). p/d shells
+//     and multi-shell atoms are the next round; this is declared, not papered over.
+//     The basis tables (exponents α, contraction coeffs d) are CALLER inputs — H,
+//     a heavier s-shell, or a different STO-nG traverse the identical path (d4).
+//
+// d4-generic: the per-atom basis (αs, ds), the atom positions, and the atom count
+//   are ALL inputs. No element name is branched on — add/replace an atom's s-shell
+//   table and the same matrix/derivative path runs. One s-orbital per atom here
+//   (norb == natom), matching the R9 force model so it is a drop-in overlap swap.
+//
+// reuse (d19): stdlib/qforge/molscf/gaussian_integrals (the REAL overlap, brought
+//   in cross-lane from the MOLSCF front-end) — the whole point of this brick. The
+//   primitive μ_ij and per-primitive overlap are the MOLSCF gint_mu / gint_overlap_s
+//   so the analytic ∂S/∂R is built from the SAME primitives the value is, guaranteeing
+//   ∂S/∂R is the derivative of exactly the S the force consumes. No kernel re-minted.
+use "stdlib/qforge/molscf/gaussian_integrals"
+use "stdlib/qforge/atoms/scc_scf"
+use "stdlib/qforge/atoms/eht_scc"
+use "stdlib/qforge/atoms/lowdin"
+
+fn _absr(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+// ── per-atom basis accessor: row a of a flat basis table ──────────────────────
+//   The basis is supplied as two flat arrays + an offset table so any number of
+//   primitives per atom is handled without a ragged type (d4-generic, no element
+//   branch). For atom a: its primitives are alphas[off[a] .. off[a+1]) and the
+//   matching contraction coeffs coeffs[off[a] .. off[a+1]). `off` has length
+//   natom+1 (CSR-style row pointers). The helpers below slice one atom's shell.
+fn _slice(arr: [float], lo: int, hi: int) -> [float] {
+    let mut out: [float] = []
+    let mut i = lo
+    while i < hi { out.push(arr[i]) ; i = i + 1 }
+    return out
+}
+
+// ── REAL contracted-Gaussian overlap matrix S (one s-shell per atom) ──────────
+//   Assemble the natom×natom overlap by calling the MOLSCF gint_overlap_contracted
+//   for every atom pair (the SAME kernel the molscf lane gates at H₂ S=0.6593). The
+//   diagonal is the self-overlap (=1 for a normalized STO-3G contraction); off-diag
+//   is the genuine STO-3G S_AB at the current geometry.
+//     pos    : flat xyz per atom (bohr), length 3*natom.
+//     alphas : flat primitive exponents of ALL atoms, concatenated.
+//     coeffs : matching contraction coeffs (same length as alphas).
+//     off    : CSR row pointers, length natom+1 (off[a]..off[a+1) = atom a's prims).
+//   Returns the flat natom×natom symmetric overlap (row-major). d4-generic.
+pub fn qforge_real_overlap_matrix(pos: [float], alphas: [float], coeffs: [float],
+                                  off: [int], natom: int) -> [float] {
+    let mut s: [float] = []
+    let mut idx = 0
+    while idx < natom * natom { s.push(0.0) ; idx = idx + 1 }
+    let mut a = 0
+    while a < natom {
+        let ax = [pos[3*a+0], pos[3*a+1], pos[3*a+2]]
+        let aa = _slice(alphas, off[a], off[a+1])
+        let ca = _slice(coeffs, off[a], off[a+1])
+        // diagonal: self-overlap of the contraction (= 1 for normalized STO-3G)
+        s[a * natom + a] = gint_overlap_contracted(aa, ca, ax, aa, ca, ax)
+        let mut b = a + 1
+        while b < natom {
+            let bx = [pos[3*b+0], pos[3*b+1], pos[3*b+2]]
+            let ab = _slice(alphas, off[b], off[b+1])
+            let cb = _slice(coeffs, off[b], off[b+1])
+            let sab = gint_overlap_contracted(aa, ca, ax, ab, cb, bx)   // REAL MOLSCF S
+            s[a * natom + b] = sab
+            s[b * natom + a] = sab
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return s
+}
+
+// ── ANALYTIC ∂S_μν/∂R_{A,d}: Gaussian-product derivative (NOT finite difference) ─
+//   ∂S_AB/∂A_d = −2 (A_d − B_d) Σ_ij μ_ij s_ij^prim   (derivation in the header).
+//   We rebuild the per-primitive contracted sum Σ_ij μ_ij d_i d_j N_i N_j (π/p)^{3/2}
+//   exp(−μ R²) from the MOLSCF primitives (gint_mu + gint_overlap_s), so the
+//   derivative is of EXACTLY the S the force consumes. Only pairs involving the
+//   moved atom `atomA` have a non-zero derivative; the diagonal (S_μμ=1) is constant.
+//     atomA : the nucleus being displaced.   dimd : 0/1/2 = x/y/z.
+//   Returns the flat natom×natom ∂S/∂R_{A,d}. d4-generic.
+pub fn qforge_real_doverlap_dR(pos: [float], alphas: [float], coeffs: [float],
+                               off: [int], natom: int, atomA: int, dimd: int) -> [float] {
+    let mut ds: [float] = []
+    let mut idx = 0
+    while idx < natom * natom { ds.push(0.0) ; idx = idx + 1 }
+    // Only the row/col of atomA move; the diagonal S_μμ ≡ 1 is geometry-independent.
+    let mut b = 0
+    while b < natom {
+        if b != atomA {
+            let ax = [pos[3*atomA+0], pos[3*atomA+1], pos[3*atomA+2]]
+            let bx = [pos[3*b+0], pos[3*b+1], pos[3*b+2]]
+            let aa = _slice(alphas, off[atomA], off[atomA+1])
+            let ca = _slice(coeffs, off[atomA], off[atomA+1])
+            let ab = _slice(alphas, off[b], off[b+1])
+            let cb = _slice(coeffs, off[b], off[b+1])
+            // Σ_ij μ_ij s_ij^prim  (contracted, MOLSCF primitives)
+            let mut acc = 0.0
+            let na = len(aa)
+            let nb = len(ab)
+            let mut i = 0
+            while i < na {
+                let mut j = 0
+                while j < nb {
+                    let mu = gint_mu(aa[i], ab[j])
+                    let sij = gint_overlap_s(aa[i], ab[j], ax, bx)   // normalized prim overlap
+                    acc = acc + ca[i] * cb[j] * mu * sij
+                    j = j + 1
+                }
+                i = i + 1
+            }
+            // ∂S_AB/∂A_d = −2 (A_d − B_d) Σ μ s ; ∂S_AB/∂B_d = +2 (A_d − B_d) Σ μ s
+            let diff = pos[3*atomA + dimd] - pos[3*b + dimd]
+            let dval = 0.0 - 2.0 * diff * acc                        // ∂S/∂A_d (atomA moved)
+            ds[atomA * natom + b] = dval
+            ds[b * natom + atomA] = dval                             // symmetric matrix
+        }
+        b = b + 1
+    }
+    return ds
+}
+
+// ── central-FD reference of the REAL contracted overlap (gate for the analytic ∂S) ─
+//   (M(+h) − M(−h))/2h of qforge_real_overlap_matrix on one nuclear DOF — the
+//   independent numerical check the analytic ∂S/∂R is asserted equal to (selftest b).
+pub fn qforge_real_doverlap_fd(pos: [float], alphas: [float], coeffs: [float],
+                               off: [int], natom: int, atomA: int, dimd: int,
+                               h: float) -> [float] {
+    let coord = 3 * atomA + dimd
+    let mut pp: [float] = []
+    let mut pm: [float] = []
+    let mut t = 0
+    while t < 3 * natom {
+        if t == coord { pp.push(pos[t] + h) ; pm.push(pos[t] - h) }
+        else { pp.push(pos[t]) ; pm.push(pos[t]) }
+        t = t + 1
+    }
+    let mp = qforge_real_overlap_matrix(pp, alphas, coeffs, off, natom)
+    let mm = qforge_real_overlap_matrix(pm, alphas, coeffs, off, natom)
+    let mut d: [float] = []
+    let mut k = 0
+    while k < natom * natom {
+        d.push((mp[k] - mm[k]) / (2.0 * h))
+        k = k + 1
+    }
+    return d
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  REAL-BASIS FORCE PATH — R9's Hellmann-Feynman + Pulay nuclear force, driven by
+//  the REAL STO-3G contracted overlap S(R) and its ANALYTIC ∂S/∂R (above) instead
+//  of R7's model Gaussian S. Mirrors forces.hexa exactly (same DFTB convention:
+//  dress non-orth H⁰ with V_a, Löwdin-orthogonalise, band over H̃ − ½γδqδq + E_rep)
+//  but every S/∂S comes from the MOLSCF lane. The "model overlap" caveat is gone.
+//  One contracted s-shell per atom (norb == natom). d4-generic over the basis tables.
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── R-parametrised energy on the REAL overlap:  S(R)→H(R)→H̃(R)→ε→E_HF ────────
+//   Identical assembly to qforge_force_energy (forces.hexa) with S := the REAL
+//   STO-3G contracted overlap. honsite/kwh/dq/alpha/orb2atom/occ/erep as in R9.
+pub fn qforge_real_force_energy(pos: [float], alphas: [float], coeffs: [float],
+                                off: [int], honsite: [float], kwh: float, dq: [float],
+                                alpha: [float], orb2atom: [int], occ: [float],
+                                norb: int, natom: int, erep: float) -> float {
+    let s = qforge_real_overlap_matrix(pos, alphas, coeffs, off, natom)   // REAL S(R)
+    let heht = qforge_eht_hamiltonian(honsite, s, kwh)
+    let vatom = qforge_scc_potential(pos, dq, alpha)
+    let hdr = qforge_scc_dressed_h(heht, vatom, orb2atom, norb)           // dress non-orth
+    let sinvh = qforge_s_inv_half(s, norb)
+    let htil = qforge_lowdin_orthogonalize(hdr, sinvh, norb)
+    let eps = qforge_eht_levels(htil, norb)
+    let eband = qforge_eht_band_energy(eps, occ)
+    let edc = qforge_scc_energy2(pos, dq, alpha)
+    return eband - edc + erep
+}
+
+// ── non-orth MO coefficients C = S^{-1/2} C̃ on the REAL overlap ───────────────
+pub fn qforge_real_mo_coeffs(pos: [float], alphas: [float], coeffs: [float],
+                             off: [int], honsite: [float], kwh: float, dq: [float],
+                             alpha: [float], orb2atom: [int], norb: int,
+                             natom: int) -> [float] {
+    let s = qforge_real_overlap_matrix(pos, alphas, coeffs, off, natom)
+    let heht = qforge_eht_hamiltonian(honsite, s, kwh)
+    let vatom = qforge_scc_potential(pos, dq, alpha)
+    let hdr = qforge_scc_dressed_h(heht, vatom, orb2atom, norb)
+    let sinvh = qforge_s_inv_half(s, norb)
+    let htil = qforge_lowdin_orthogonalize(hdr, sinvh, norb)
+    let ctil = qforge_eht_vectors_asc(htil, norb)
+    let mut cmo: [float] = []
+    let mut idx = 0
+    while idx < norb * norb { cmo.push(0.0) ; idx = idx + 1 }
+    let mut k = 0
+    while k < norb {
+        let mut mu = 0
+        while mu < norb {
+            let mut acc = 0.0
+            let mut nu = 0
+            while nu < norb {
+                acc = acc + sinvh[mu * norb + nu] * ctil[k * norb + nu]
+                nu = nu + 1
+            }
+            cmo[k * norb + mu] = acc
+            mu = mu + 1
+        }
+        k = k + 1
+    }
+    return cmo
+}
+
+// ── charge-dressed non-orth H(R,δq) on the REAL overlap (for ⟨∂H/∂R⟩) ─────────
+pub fn qforge_real_h_nonorth(pos: [float], alphas: [float], coeffs: [float],
+                             off: [int], honsite: [float], kwh: float, dq: [float],
+                             alpha: [float], orb2atom: [int], norb: int,
+                             natom: int) -> [float] {
+    let s = qforge_real_overlap_matrix(pos, alphas, coeffs, off, natom)
+    let heht = qforge_eht_hamiltonian(honsite, s, kwh)
+    let vatom = qforge_scc_potential(pos, dq, alpha)
+    return qforge_scc_dressed_h(heht, vatom, orb2atom, norb)
+}
+
+// ── generalised (H,S) levels ε_k on the REAL overlap ──────────────────────────
+pub fn qforge_real_levels(pos: [float], alphas: [float], coeffs: [float],
+                          off: [int], honsite: [float], kwh: float, dq: [float],
+                          alpha: [float], orb2atom: [int], norb: int,
+                          natom: int) -> [float] {
+    let s = qforge_real_overlap_matrix(pos, alphas, coeffs, off, natom)
+    let heht = qforge_eht_hamiltonian(honsite, s, kwh)
+    let vatom = qforge_scc_potential(pos, dq, alpha)
+    let hdr = qforge_scc_dressed_h(heht, vatom, orb2atom, norb)
+    let sinvh = qforge_s_inv_half(s, norb)
+    let htil = qforge_lowdin_orthogonalize(hdr, sinvh, norb)
+    return qforge_eht_levels(htil, norb)
+}
+
+// ── central-FD of the charge-dressed non-orth H on the REAL overlap (∂H/∂R) ────
+//   ∂H/∂R is still FD (the W-H H carries S(R) implicitly + the on-site shift); the
+//   PULAY ∂S/∂R is the ANALYTIC Gaussian-product derivative (qforge_real_doverlap_dR).
+fn _real_dh_dR(pos: [float], alphas: [float], coeffs: [float], off: [int],
+               honsite: [float], kwh: float, dq: [float], alpha: [float],
+               orb2atom: [int], norb: int, natom: int, atomA: int, dimd: int,
+               h: float) -> [float] {
+    let coord = 3 * atomA + dimd
+    let mut pp: [float] = []
+    let mut pm: [float] = []
+    let mut t = 0
+    while t < 3 * natom {
+        if t == coord { pp.push(pos[t] + h) ; pm.push(pos[t] - h) }
+        else { pp.push(pos[t]) ; pm.push(pos[t]) }
+        t = t + 1
+    }
+    let mp = qforge_real_h_nonorth(pp, alphas, coeffs, off, honsite, kwh, dq, alpha, orb2atom, norb, natom)
+    let mm = qforge_real_h_nonorth(pm, alphas, coeffs, off, honsite, kwh, dq, alpha, orb2atom, norb, natom)
+    let mut d: [float] = []
+    let mut k = 0
+    while k < norb * norb { d.push((mp[k] - mm[k]) / (2.0 * h)) ; k = k + 1 }
+    return d
+}
+
+// ── band gradient ∂E_band/∂R = Σ_k n_k(⟨∂H/∂R⟩ − ε_k⟨∂S/∂R⟩) on the REAL overlap ─
+//   The Pulay term uses the ANALYTIC ∂S/∂R (qforge_real_doverlap_dR) — the caveat
+//   resolution: the overlap derivative is now an exact closed form, not an FD model.
+//   with_pulay: 1 = full force (HF+Pulay), 0 = HF-only (drops Pulay; WRONG, non-orth).
+fn _real_eband_dR(with_pulay: int, pos: [float], alphas: [float], coeffs: [float],
+                  off: [int], honsite: [float], kwh: float, dq: [float], alpha: [float],
+                  orb2atom: [int], occ: [float], norb: int, natom: int, atomA: int,
+                  dimd: int, h: float) -> float {
+    let cmo = qforge_real_mo_coeffs(pos, alphas, coeffs, off, honsite, kwh, dq, alpha, orb2atom, norb, natom)
+    let eps = qforge_real_levels(pos, alphas, coeffs, off, honsite, kwh, dq, alpha, orb2atom, norb, natom)
+    let dH = _real_dh_dR(pos, alphas, coeffs, off, honsite, kwh, dq, alpha, orb2atom, norb, natom, atomA, dimd, h)
+    let dS = qforge_real_doverlap_dR(pos, alphas, coeffs, off, natom, atomA, dimd)   // ANALYTIC ∂S/∂R
+    let mut g = 0.0
+    let mut k = 0
+    while k < norb {
+        let nk = occ[k]
+        if nk != 0.0 {
+            let mut hexp = 0.0
+            let mut sexp = 0.0
+            let mut mu = 0
+            while mu < norb {
+                let cmk = cmo[k * norb + mu]
+                let mut nu = 0
+                while nu < norb {
+                    let w = cmk * cmo[k * norb + nu]
+                    hexp = hexp + w * dH[mu * norb + nu]
+                    sexp = sexp + w * dS[mu * norb + nu]
+                    nu = nu + 1
+                }
+                mu = mu + 1
+            }
+            if with_pulay == 1 { g = g + nk * (hexp - eps[k] * sexp) }
+            else { g = g + nk * hexp }
+        }
+        k = k + 1
+    }
+    return g
+}
+
+// ── ∂E_SCC-DC/∂R = ½ Σ ∂γ/∂R δqδq (FD on the R5 γ; geometry-only, overlap-free) ─
+fn _real_descc_dR(pos: [float], dq: [float], alpha: [float], natom: int,
+                  atomA: int, dimd: int, h: float) -> float {
+    let coord = 3 * atomA + dimd
+    let mut pp: [float] = []
+    let mut pm: [float] = []
+    let mut t = 0
+    while t < 3 * natom {
+        if t == coord { pp.push(pos[t] + h) ; pm.push(pos[t] - h) }
+        else { pp.push(pos[t]) ; pm.push(pos[t]) }
+        t = t + 1
+    }
+    let ep = qforge_scc_energy2(pp, dq, alpha)
+    let em = qforge_scc_energy2(pm, dq, alpha)
+    return (ep - em) / (2.0 * h)
+}
+
+// ── ASSEMBLE ∂E_HF/∂R_{A,d} on the REAL overlap (band HF+Pulay + SCC-DC) ───────
+//   E_rep treated as R-constant here (∂E_rep/∂R = 0); the caller folds a non-constant
+//   E_rep via qforge_pair_repulsion_force (forces.hexa) as in R9. with_pulay toggles.
+pub fn qforge_real_dehf_dR(with_pulay: int, pos: [float], alphas: [float], coeffs: [float],
+                           off: [int], honsite: [float], kwh: float, dq: [float],
+                           alpha: [float], orb2atom: [int], occ: [float], norb: int,
+                           natom: int, atomA: int, dimd: int, h: float) -> float {
+    let deband = _real_eband_dR(with_pulay, pos, alphas, coeffs, off, honsite, kwh, dq,
+                                alpha, orb2atom, occ, norb, natom, atomA, dimd, h)
+    let descc  = _real_descc_dR(pos, dq, alpha, natom, atomA, dimd, h)
+    return deband - descc                                  // ∂E_HF/∂R (E_rep R-constant)
+}
+
+// ── FULL FORCE VECTOR F = −∂E_HF/∂R on the REAL overlap (flat 3·natom) ─────────
+pub fn qforge_real_forces(with_pulay: int, pos: [float], alphas: [float], coeffs: [float],
+                          off: [int], honsite: [float], kwh: float, dq: [float],
+                          alpha: [float], orb2atom: [int], occ: [float], norb: int,
+                          natom: int, h: float) -> [float] {
+    let mut f: [float] = []
+    let mut idx = 0
+    while idx < 3 * natom { f.push(0.0) ; idx = idx + 1 }
+    let mut a = 0
+    while a < natom {
+        let mut d = 0
+        while d < 3 {
+            let g = qforge_real_dehf_dR(with_pulay, pos, alphas, coeffs, off, honsite, kwh,
+                                        dq, alpha, orb2atom, occ, norb, natom, a, d, h)
+            f[3 * a + d] = 0.0 - g
+            d = d + 1
+        }
+        a = a + 1
+    }
+    return f
+}
+
+// ── FIXED-δq central-FD reference force −∂E_HF/∂R|_δq on the REAL overlap ──────
+//   The direct cross-check of the analytic real-basis force (selftest c): holds δq
+//   FIXED and central-differences qforge_real_force_energy on one nuclear DOF.
+pub fn qforge_real_force_fd_ref_fixed(pos: [float], alphas: [float], coeffs: [float],
+                                      off: [int], honsite: [float], kwh: float, dq: [float],
+                                      alpha: [float], orb2atom: [int], occ: [float],
+                                      norb: int, natom: int, atomA: int, dimd: int,
+                                      h: float, erep: float) -> float {
+    let coord = 3 * atomA + dimd
+    let mut pp: [float] = []
+    let mut pm: [float] = []
+    let mut t = 0
+    while t < 3 * natom {
+        if t == coord { pp.push(pos[t] + h) ; pm.push(pos[t] - h) }
+        else { pp.push(pos[t]) ; pm.push(pos[t]) }
+        t = t + 1
+    }
+    let ep = qforge_real_force_energy(pp, alphas, coeffs, off, honsite, kwh, dq, alpha, orb2atom, occ, norb, natom, erep)
+    let em = qforge_real_force_energy(pm, alphas, coeffs, off, honsite, kwh, dq, alpha, orb2atom, occ, norb, natom, erep)
+    return 0.0 - (ep - em) / (2.0 * h)
+}
+
+// ── translational residual ‖Σ_A F_A‖ on the REAL-basis force (Newton 3rd law) ──
+pub fn qforge_real_force_transl_residual(f: [float], natom: int) -> float {
+    let mut m = 0.0
+    let mut d = 0
+    while d < 3 {
+        let mut s = 0.0
+        let mut a = 0
+        while a < natom { s = s + f[3 * a + d] ; a = a + 1 }
+        let av = _absr(s)
+        if av > m { m = av }
+        d = d + 1
+    }
+    return m
+}

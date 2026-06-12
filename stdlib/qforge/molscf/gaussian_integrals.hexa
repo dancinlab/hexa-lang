@@ -1,0 +1,165 @@
+// HEXA Standard Library — qforge/molscf/gaussian_integrals
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE MOLSCF front-end brick 1/N — ATOM-CENTERED Gaussian one-electron
+// integrals (overlap S, kinetic T) for s-type primitives.
+//
+// QFORGE's existing SCF (scf_pw.hexa) is a PERIODIC PLANE-WAVE engine: the basis
+// is |k+G⟩, the kinetic operator is the diagonal ½|k+G|² (kinetic.hexa), and the
+// potential lives on a G-grid. That basis is wrong for a finite MOLECULE — there
+// is no Bloch k, the wavefunction decays to zero, and the natural basis is
+// atom-centered Gaussian/STO orbitals (Roothaan 1951; Szabo & Ostlund, Modern
+// Quantum Chemistry). This brick opens the MOLECULAR front-end by supplying the
+// first two one-electron integrals in CLOSED FORM, the analytic foundation of a
+// Roothaan RHF SCF (F C = S C ε) that unblocks the atoms / chem / system scales.
+//
+// ── Gaussian product theorem (Szabo & Ostlund eq. A.4) ───────────────────────
+//   An UNNORMALIZED s-type primitive is  g_a(r) = exp(−a|r−A|²).
+//   The product of two such primitives is itself a Gaussian:
+//
+//     g_a(r) g_b(r) = K_ab · exp(−p|r−P|²),
+//        p   = a + b                         (combined exponent)
+//        P   = (aA + bB) / p                 (combined center)
+//        μ   = a·b / p                        (reduced exponent)
+//        K_ab = exp(−μ |A−B|²)                (the prefactor)
+//
+// ── Overlap integral (Szabo & Ostlund eq. A.9) ───────────────────────────────
+//   For NORMALIZED s primitives (norm N = (2a/π)^¾):
+//
+//     S_ab = N_a N_b (π/p)^{3/2} exp(−μ |A−B|²)
+//
+//   Same center & a=b: S = N² (π/2a)^{3/2} = 1   (the normalization check 🔵).
+//
+// ── Kinetic integral (Szabo & Ostlund eq. A.11) ──────────────────────────────
+//   T_ab = ⟨a| −½∇² |b⟩ for s primitives reduces to a closed form in S_ab:
+//
+//     T_ab = μ · ( 3 − 2 μ |A−B|² ) · S_ab          (Hartree atomic units)
+//
+//   (Same center: |A−B|²=0 → T = 3μ·S = 3μ for the normalized self term.)
+//
+// ── Contraction ──────────────────────────────────────────────────────────────
+//   A contracted GTO is φ = Σ_i d_i · ĝ_i (ĝ_i normalized primitives); the
+//   contracted S/T is the d_i d_j-weighted sum of the primitive integrals. The
+//   STO-3G H 1s anchor (g5) is exactly this 3×3 contraction.
+//
+// ── Honest scope (d6) ────────────────────────────────────────────────────────
+//   round-1 = the two s-type one-electron integrals (S, T) ONLY, in closed form,
+//   gated against Szabo & Ostlund analytic values. NOT the full SCF: nuclear
+//   attraction V (Boys fn), two-electron (ab|cd), Fock build, and the FC=SCε
+//   generalized eigenproblem are round-2+ (see drafts/qforge-molscf-round1-design.md).
+//   No fabricated numbers — every g5 target is a hand-derived closed form.
+//
+// reuse (d19): the SAME ½∇²/integral physics QFORGE already uses in the PW front
+//   end (kinetic.hexa), re-expressed in an atom-centered basis. The generalized
+//   eigenproblem FC=SCε reuses stdlib/alloc/math/eigen (eigh); nuclear/2-e Boys
+//   functions reuse stdlib/core/special (erf_fn). No new primitive is minted.
+
+// ── reduced exponent μ = a·b/(a+b) and combined p = a+b ──────────────────────
+//   The two parameters of the Gaussian product theorem.
+pub fn gint_mu(a: float, b: float) -> float {
+    let p = a + b
+    if p <= 0.0 { return 0.0 }
+    return a * b / p
+}
+
+// ── s-type primitive normalization  N = (2a/π)^{3/4} ─────────────────────────
+//   So that ∫ |N·exp(−a r²)|² d³r = 1.
+pub fn gint_norm_s(a: float) -> float {
+    if a <= 0.0 { return 0.0 }
+    let pi = 3.141592653589793
+    return pow(2.0 * a / pi, 0.75)
+}
+
+// ── squared center separation |A−B|²  (A,B are [3] cartesian, bohr) ──────────
+pub fn gint_r2(ax: [float], bx: [float]) -> float {
+    if len(ax) != 3 { return -1.0 }
+    if len(bx) != 3 { return -1.0 }
+    let dx = ax[0] - bx[0]
+    let dy = ax[1] - bx[1]
+    let dz = ax[2] - bx[2]
+    return dx * dx + dy * dy + dz * dz
+}
+
+// ── overlap of two NORMALIZED s primitives (Szabo & Ostlund A.9) ─────────────
+//   S_ab = N_a N_b (π/p)^{3/2} exp(−μ|A−B|²)
+//   a,b   : primitive exponents (bohr⁻²)
+//   ax,bx : [3] centers (bohr)
+//   Malformed center → 0.0 (sentinel).
+pub fn gint_overlap_s(a: float, b: float, ax: [float], bx: [float]) -> float {
+    let r2 = gint_r2(ax, bx)
+    if r2 < 0.0 { return 0.0 }
+    let p = a + b
+    if p <= 0.0 { return 0.0 }
+    let pi = 3.141592653589793
+    let mu = a * b / p
+    let na = gint_norm_s(a)
+    let nb = gint_norm_s(b)
+    return na * nb * pow(pi / p, 1.5) * exp(0.0 - mu * r2)
+}
+
+// ── kinetic integral of two NORMALIZED s primitives (Szabo & Ostlund A.11) ───
+//   T_ab = μ (3 − 2μ|A−B|²) S_ab            (Hartree)
+pub fn gint_kinetic_s(a: float, b: float, ax: [float], bx: [float]) -> float {
+    let r2 = gint_r2(ax, bx)
+    if r2 < 0.0 { return 0.0 }
+    let p = a + b
+    if p <= 0.0 { return 0.0 }
+    let mu = a * b / p
+    let s = gint_overlap_s(a, b, ax, bx)
+    return mu * (3.0 - 2.0 * mu * r2) * s
+}
+
+// ── contracted-GTO overlap  S = Σ_ij d_i d_j S_ij(prim) ──────────────────────
+//   alphas,coeffs : equal-length primitive exponents & contraction coeffs of φ_A
+//   blphas,boeffs : the same for φ_B
+//   ax,bx         : the two atom centers
+//   The STO-3G H 1s anchor is this with the 3-primitive H 1s contraction.
+//   Length mismatch / empty → 0.0 (sentinel).
+pub fn gint_overlap_contracted(
+    alphas: [float], coeffs: [float], ax: [float],
+    blphas: [float], boeffs: [float], bx: [float]
+) -> float {
+    let na = len(alphas)
+    let nb = len(blphas)
+    if na == 0 { return 0.0 }
+    if nb == 0 { return 0.0 }
+    if len(coeffs) != na { return 0.0 }
+    if len(boeffs) != nb { return 0.0 }
+    let mut s = 0.0
+    let mut i = 0
+    while i < na {
+        let mut j = 0
+        while j < nb {
+            s = s + coeffs[i] * boeffs[j] * gint_overlap_s(alphas[i], blphas[j], ax, bx)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return s
+}
+
+// ── contracted-GTO kinetic  T = Σ_ij d_i d_j T_ij(prim) ──────────────────────
+pub fn gint_kinetic_contracted(
+    alphas: [float], coeffs: [float], ax: [float],
+    blphas: [float], boeffs: [float], bx: [float]
+) -> float {
+    let na = len(alphas)
+    let nb = len(blphas)
+    if na == 0 { return 0.0 }
+    if nb == 0 { return 0.0 }
+    if len(coeffs) != na { return 0.0 }
+    if len(boeffs) != nb { return 0.0 }
+    let mut t = 0.0
+    let mut i = 0
+    while i < na {
+        let mut j = 0
+        while j < nb {
+            t = t + coeffs[i] * boeffs[j] * gint_kinetic_s(alphas[i], blphas[j], ax, bx)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return t
+}
