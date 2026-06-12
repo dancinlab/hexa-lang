@@ -1,0 +1,170 @@
+F-OP42-HEXFLOAT-CONTRACT-GATE — reflect the OP-40 (#3084) bit-exact hex-float
+                                fold-serialize fix into the flame determinism
+                                contract (new compile-time-const-folding
+                                subsection) + extend the OP-39 const-fold CI gate
+                                with 5 hex-float-specific regression cases.
+══════════════════════════════════════════════════════════════════════════════
+DATE: 2026-06-12 · HEXA-0POD OP-42 · 0-pod ($0, NO GPU, NO vast, NO pod)
+HOST: local arm64-macos (Darwin 25.5.0), CPU-only
+STATUS: GREEN — 🟢 docs+gate. The OP-40 hex-float serialize guarantee is now a
+        documented determinism contract clause AND a regression-locked CI case
+        set. The 5 new MUL_HF* cases PASS on the OP-40-fixed compiler (built
+        from current source) and CATCH a 1-ULP corruption; they DRIFT on the
+        pre-fix seed exactly like the existing 13 (so they share OP-39's
+        continue-on-error advisory — no enforcing flip; that stays OP-39b).
+        Touches NO codegen (test oracle + gate script + doc + workflow
+        comments only) — self-host fixpoint unaffected.
+
+────────────────────────────────────────────────────────────────────────────
+CONTEXT (what OP-40 #3084 established, that OP-42 reflects)
+────────────────────────────────────────────────────────────────────────────
+OP-40 root-caused the OP-37b 1-ULP comptime-fold residual NOT to the multiply
+(IEEE-correct) nor the parse (byte-exact post-OP-37b) but to the host's
+hand-rolled %.17e fold SERIALIZE (rt_format_float_sci / hxlcl_vsnprintf — own
+comment "Not bit-exact with libc's"), drifting 16/125 (≈13%) computed folds by
+1 ULP. FIXED by serializing the folded double as a bit-exact C99 hex-float
+literal (0x1.<mant>p<exp>, integer ops only) that clang re-parses with ZERO loss
+→ MAX 0 ULP. OP-40's own DETERMINISM CONTRACT NOTE flagged that the contract MAY
+gain a clause but explicitly deferred it ("out of OP-40's measure+fix scope;
+defer to a docs milestone"). OP-42 IS that milestone.
+
+────────────────────────────────────────────────────────────────────────────
+WHAT THE CONTRACT GAINED (docs/flame-determinism-contract.md)
+────────────────────────────────────────────────────────────────────────────
+NEW subsection "compile-time constant folding — bit-exact hex-float serialize"
+in §1 (right before "per-phase locked identities"), framed as a COMPILE-STEP
+sibling of the 3 run-step layers:
+
+(a) the compiler const-folds let-bound float-literal expressions at comptime
+    (comptime_eval in self/codegen.hexa) and inlines the folded constant at every
+    use-site as a literal the C backend re-parses;
+(b) RULE block — the folded constant is serialized as a bit-exact C99 hex-float
+    literal (0x1.<mant>p<exp>, built from IEEE-754 bits with integer ops only) so
+    clang re-parses it to the EXACT double with ZERO precision loss; NOT via
+    decimal %g/%e (a hand-rolled formatter is not correctly-rounded and drifts
+    the bits) — cites F-OP40 + the tool/op39_constfold_gate.sh tripwire;
+(c) WHY-for-determinism — a const-fold that drifts 1 ULP makes the SAME source
+    compile to different float bytes depending on the host's printf, breaking
+    machine-independence at the COMPILE step (before the program runs). Tied to
+    the OP-37/OP-40 MEASURED evidence (bits-182 → "…117067" → bits-183 1-ULP
+    round-trip; coarser 6-digit %g in OP-37) and to the existing 3-layer model
+    (explicitly INDEPENDENT of the FMA layer — purely host-side serialization,
+    cross-ISA -ffp-contract policy unaffected). Cross-linked to the CHECKPOINT
+    phase (which reinterprets fp64 bit-patterns for the same "decimal text is
+    lossy" reason).
+
+Plus ONE bullet in the "what breaks the contract" checklist: "A lossy
+COMPILE-TIME float const-fold serialize" (bake hex-float not %g/%e; F-OP40;
+locked by the 18-fold gate). Terse, current-state framing (g3, elephant rule —
+states the guarantee, not the bug history).
+
+────────────────────────────────────────────────────────────────────────────
+GATE CASES ADDED (stdlib/flame/op39_constfold_byteeq.hexa + tool/op39_constfold_gate.sh)
+────────────────────────────────────────────────────────────────────────────
+The OP-39 gate already locks 13 folds (incl. MUL1, whose golden OP-40 updated
+…183→…182 when #3084 landed). OP-42 adds 5 NEW (c)-class HEX-FLOAT cases —
+products whose CORRECTLY-ROUNDED IEEE value the OLD %.17e/%g serialize
+MIS-rounded, i.e. the path OP-40 fixed. Each golden = python struct.pack('<d',
+a*b) (the correctly-rounded value the hex-float emit now produces):
+
+  MUL_HF1 (0.254829592 * 0.3275911)    = 4590679781865677653  (0x1.55ef06babe355p-4)
+  MUL_HF2 (0.284496736 * 1.061405429)  = 4599111362625910598  (0x1.3536acbc7b746p-2)
+  MUL_HF3 (0.254829592 * -0.284496736) = -4633483571252734626 (-0x1.28f3dbedf555ep-4)
+  MUL_HF4 (1.061405429 * 0.3275911)    = 4599935351876617150  (0x1.640d4be5e03bep-2)
+  MUL_HF5 (1.453152027 * 0.3275911)    = 4602247188257481376  (0x1.e776f18a0a2a0p-2)
+
+These SPECIFICALLY exercise the OP-40 path: the pre-fix compiler serializes them
+lossily, the fixed compiler emits the exact hex-float. PROVEN differential (the
+bug/fix differential IS the test):
+
+  pre-fix  ~/.hx/bin/build/hexat (Jun-8) emits:
+    _bits(__hexa_sl_2, hexa_float(0.0834799));   ← MUL_HF1, lossy %g 6-digit
+    _bits(__hexa_sl_3, hexa_float(0.301966));    ← MUL_HF2, lossy
+  fixed    /tmp/op42/hexat_op42 (current source via tool/regen_cc_manual) emits:
+    _bits(__hexa_sl_2, hexa_float(0x1.55ef06babe355p-4));  ← MUL_HF1, bit-exact
+    _bits(__hexa_sl_3, hexa_float(0x1.3536acbc7b746p-2));  ← MUL_HF2, bit-exact
+
+Gate count 13→18; header/comments updated to cite OP-40 #3084. Low blast radius
+unchanged (one self-contained oracle, no `use`, asserts only the bits lines).
+
+────────────────────────────────────────────────────────────────────────────
+LOCAL VERIFICATION (both directions, freshest local hexat from current source)
+────────────────────────────────────────────────────────────────────────────
+FIXED compiler built from current repo source (the OP-40 fix lives in
+self/codegen.hexa, NOT yet in the deployed/seed binary): HEXA_V2=~/.hx/bin/
+build/hexat (Jun-8 driver) + tool/regen_cc_manual → /tmp/op42/hexa_cc_op42.c →
+clang single-TU with restored frozen self/runtime.c → /tmp/op42/hexat_op42.
+Confirmed it emits hex-floats (MUL1 → 0x1.28f3dbedf555ep-4 = …182) + self-tests
+15/15. A tiny `hexa run` shim (transpile→clang→run via hexat_op42) feeds the gate.
+
+PASS (fixed compiler, all 18):
+  $ sh tool/op39_constfold_gate.sh /tmp/op42/hexa_run_shim.sh
+  op39_constfold_gate: OK   MUL_HF1 (0.254829592 * 0.3275911) = 4590679781865677653
+  op39_constfold_gate: OK   MUL_HF2 (0.284496736 * 1.061405429) = 4599111362625910598
+  op39_constfold_gate: OK   MUL_HF3 (0.254829592 * -0.284496736) = -4633483571252734626
+  op39_constfold_gate: OK   MUL_HF4 (1.061405429 * 0.3275911) = 4599935351876617150
+  op39_constfold_gate: OK   MUL_HF5 (1.453152027 * 0.3275911) = 4602247188257481376
+  op39_constfold_gate: PASS — all 18 float const-folds match the recorded goldens.
+  (clean gate exit=0; the prior 13 also OK)
+
+TEETH (hand-corrupt MUL_HF1 golden by 1 ULP, …653 → …654):
+  op39_constfold_gate: DRIFT MUL_HF1 (0.254829592 * 0.3275911) =
+                       '4590679781865677653' (golden 4590679781865677654)
+  op39_constfold_gate: FAIL — float const-fold byte-eq REGRESSION detected.
+  (corrupt gate exit=1) → catches a single 1-ULP drift on a new hex-float case.
+
+────────────────────────────────────────────────────────────────────────────
+SEED-ADVISORY DECISION (the OP-39/39b coupling — honest, no flip)
+────────────────────────────────────────────────────────────────────────────
+Per OP-39/OP-39b, CI's ./hexa is built from the FROZEN seed hexa_cc.c (151c52c8
+anchor), which PRE-DATES OP-37/37b/40. MEASURED: running the gate against the
+Jun-8 pre-fix hexat (same generation as the seed) DRIFTs on ALL 5 new MUL_HF
+cases (lossy %g bits), exactly like the existing 13 — pre-fix gate exit=1. So
+the new cases MUST stay under the SAME continue-on-error: true advisory OP-39
+already wired. Because the 3 CI steps invoke the same `sh tool/op39_constfold_
+gate.sh ./hexa`, the 5 new cases inherit the advisory with ZERO yaml change; the
+workflow comment blocks were updated to note OP-42 extended the gate 13→18 and
+that the seed drifts on them identically. NOT flipped to enforcing — that remains
+OP-39b's deferred frozen-anchor re-pin work; the whole gate auto-goes-GREEN
+(incl. these 5) the moment the OP-37/37b/40 source fix is promoted into the seed.
+
+────────────────────────────────────────────────────────────────────────────
+SELF-HOST FIXPOINT / SCOPE
+────────────────────────────────────────────────────────────────────────────
+OP-42 touches ONLY: a `hexa run` test oracle (stdlib/flame/op39_constfold_byteeq
+.hexa), the gate script (tool/op39_constfold_gate.sh), the contract doc, and CI
+workflow COMMENTS. It does NOT touch self/codegen.hexa or any SSOT module, so the
+self-host gen-N==gen-N+1 byte-eq fixpoint (proven on main by OP-40) is unaffected.
+The oracle is standalone (no `use`), so the const-fold byte-eq gate compile does
+not perturb any codegen-adjacent surface. self/type_checker self-tests 15/15 on
+the rebuilt hexat (re-confirmed incidentally during the fixed-compiler build).
+
+────────────────────────────────────────────────────────────────────────────
+TIER VERDICT (g5)
+────────────────────────────────────────────────────────────────────────────
+🟢 GREEN. The OP-40 bit-exact hex-float const-fold-serialize guarantee is now
+(1) a precise, terse, current-state clause in the flame determinism contract
+(new compile-time-const-folding subsection + a what-breaks-it bullet, tied to the
+3-layer model + the OP-37/40 measured evidence) and (2) regression-locked by 5
+new hex-float CI cases that PASS on the OP-40-fixed compiler, catch a 1-ULP
+corruption, and DRIFT on the pre-fix seed identically to the existing 13 (so they
+correctly share the OP-39 continue-on-error advisory — no enforcing flip). Docs +
+test + workflow-comment only; no codegen, fixpoint unaffected. Evidence = the
+verbatim PASS/FAIL gate transcripts + the pre-fix-vs-fixed emitted-C dump above
+(self-measured).
+
+PROVENANCE
+  contract:   docs/flame-determinism-contract.md (new §1 subsection + checklist bullet)
+  oracle:     stdlib/flame/op39_constfold_byteeq.hexa (+5 MUL_HF* cases, 13→18)
+  gate:       tool/op39_constfold_gate.sh (+5 goldens + checks; header cites OP-40)
+  CI:         .github/workflows/nobaseline-gate.yml (comment-only: OP-42 note on
+              all 3 jobs; continue-on-error advisory inherited, NO flip)
+  fixed cc:   /tmp/op42/hexat_op42 = tool/regen_cc_manual(HEXA_V2=Jun-8 hexat) →
+              clang single-TU + restored frozen self/runtime.c (OP-40 fix in source)
+  goldens:    python struct.pack('<d', a*b) IEEE-754 LE bytes (correctly-rounded);
+              re-confirmed by RUNNING the fixed-compiler-built oracle binary
+  pass/fail:  18/18 OK on fixed compiler (exit 0); 1-ULP MUL_HF1 corruption →
+              FAIL (exit 1); pre-fix Jun-8 hexat → DRIFT on all 5 new (exit 1)
+  guards:     F-OP40-COMPTIME-MUL-ULP.txt · F-OP39-CONSTFOLD-CI-GATE.txt ·
+              F-OP39B-SEED-PROMOTE-FLIP.txt · F-OP37-FLOAT-CONSTFOLD-VERIFY.txt
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.

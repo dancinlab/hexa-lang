@@ -16,6 +16,16 @@
 //             ULP compounded). Fixed by routing the operand parse through the
 //             correctly-rounded strtod path (str.parse_float()) — operands now
 //             byte-exact; computed products at MAX 1 ULP (host comptime rt_mul).
+//    OP-40  — that residual 1 ULP was ROOT-CAUSED (#3084) NOT to the multiply but
+//             to the host's hand-rolled %.17e fold SERIALIZE (rt_format_float_sci /
+//             hxlcl_vsnprintf — "Not bit-exact with libc's", drifts ≤1 ULP on
+//             ≈13% of computed folds). Fixed by serializing the folded double as a
+//             bit-EXACT C99 hex-float literal (`0x1.<mant>p<exp>`, integer ops
+//             only) so clang re-parses it with ZERO precision loss → MAX 0 ULP.
+//             The (c) cases below SPECIFICALLY exercise that hex-float path:
+//             products whose correctly-rounded IEEE value the OLD %.17e serialize
+//             MIS-rounded (MUL_HF1 0.254829592*0.3275911 emitted lossy `0.0834799`
+//             pre-fix vs exact `0x1.55ef06babe355p-4` post-fix).
 //
 //  HOW IT WORKS — the IEEE-754 bit pattern of a double is PORTABLE: identical
 //  on every arch/OS iff the float bits are. So a byte-eq assertion on the
@@ -103,4 +113,24 @@ fn main() {
     _bits("MUL2 (1.421413741 * 0.5)         -bits", m2)
     _bits("ADD1 (0.1 + 0.2)                 -bits", d1)
     _bits("DIV1 (1.0 / 3.0)                 -bits", q1)
+
+    // ── (c) HEX-FLOAT serialize path (OP-40) — products whose correctly-rounded
+    // IEEE-754 value the OLD hand-rolled %.17e fold serialize MIS-rounded by 1 ULP
+    // (≈13% of computed folds drifted). The fixed compiler emits each as a bit-
+    // exact hex-float (`0x1.<mant>p<exp>`) so clang re-parses it with ZERO loss;
+    // the golden is therefore python struct.pack('<d', a*b) — the correctly-rounded
+    // value, NOT the old lossy bits. A regression to %g/%.17e serialize drifts
+    // these away from the golden and the gate catches it. (Verified pre-fix:
+    // ~/.hx/bin/build/hexat emitted hexa_float(0.0834799) for MUL_HF1; the fixed
+    // compiler emits hexa_float(0x1.55ef06babe355p-4) = the exact IEEE product.)
+    let h1 = 0.254829592 * 0.3275911     // pre-fix lossy 0.0834799 → exact ...653
+    let h2 = 0.284496736 * 1.061405429   // pre-fix lossy 0.301966  → exact ...598
+    let h3 = 0.254829592 * -0.284496736  // signed product, exact hex-float emit
+    let h4 = 1.061405429 * 0.3275911     // erf-coeff cross product
+    let h5 = 1.453152027 * 0.3275911     // erf-coeff cross product
+    _bits("MUL_HF1 (0.254829592 * 0.3275911)   -bits", h1)
+    _bits("MUL_HF2 (0.284496736 * 1.061405429) -bits", h2)
+    _bits("MUL_HF3 (0.254829592 * -0.284496736)-bits", h3)
+    _bits("MUL_HF4 (1.061405429 * 0.3275911)   -bits", h4)
+    _bits("MUL_HF5 (1.453152027 * 0.3275911)   -bits", h5)
 }

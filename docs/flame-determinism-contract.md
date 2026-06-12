@@ -236,6 +236,50 @@ boundary tells you *why* the rule exists (inexact products are the entire
 failure mode) and the one operand class where it provably cannot fire.
 (F-OP32-4TH-ARCH.)
 
+### compile-time constant folding — bit-exact hex-float serialize
+
+The three layers above are **run-step** guarantees: they pin how the *built*
+program accumulates. There is a fourth, earlier surface where determinism can
+break — the **compile step itself**. The hexa compiler const-folds `let`-bound
+float-literal expressions at comptime (`comptime_eval` in `self/codegen.hexa`):
+`let c = 0.254829592 * 0.284496736` is evaluated once and the folded constant is
+inlined at every use-site as a literal the C backend then re-parses. If that
+literal is serialized lossily, the **same source compiles to different float
+bytes depending on the host** — machine-independence breaks before the program
+ever runs.
+
+> **RULE.** A comptime-folded float constant is serialized as a **bit-exact C99
+> hex-float literal** (`0x1.<mant>p<exp>`, built from the IEEE-754 bits with
+> integer ops only) so clang re-parses it to the **exact** double with ZERO
+> precision loss. It is **NOT** serialized through decimal `%g`/`%e` — a
+> hand-rolled decimal formatter is not correctly-rounded and drifts the folded
+> bits. (`F-OP40-COMPTIME-MUL-ULP`; the regression tripwire is
+> `tool/op39_constfold_gate.sh`, locking 18 folds incl. the OP-40 hex-float
+> cases — `F-OP39` / `F-OP42`.)
+
+**WHY — the measured serialize drift (F-OP37/OP40).** A folded product computes
+the *correct* IEEE double, then the host bakes it into a C literal. In the
+self-host build the runtime's `snprintf` is the freestanding `hxlcl_vsnprintf`
+(own comment: *"Not bit-exact with libc's"*) and `format_float_sci` routes to the
+hand-rolled `rt_format_float_sci` — neither is correctly-rounded. OP-40 MEASURED
+that feeding the **correct** product `0.254829592 * 0.284496736` (bits
+`…182`) through the `%.17e` path emitted `7.24981871602117067e-02`, which
+re-parses to `…183` — a **1-ULP-high round-trip**, drifting **16/125** computed
+folds (≈13%, not "rare"). The earlier OP-37 `%g` path was coarser still
+(6-significant-digit, `0.254829592 * 0.3275911` → lossy `0.0834799`). The fix
+emits the folded double as the hex-float `0x1.28f3dbedf555ep-4` (= `…182`
+exactly, matching libc `%a` and python `struct.pack`), bypassing decimal
+formatting entirely → **MAX 0 ULP** across all 125 cases.
+
+This is a **compile-step** sibling of layer 2: the same "hand-rolled arithmetic
+is fragile" class CLAUDE.md's `stdlib_trig_libm` directive warns about, here in
+the float→text serialize rather than a transcendental. It is **independent** of
+the FMA layer (§1.3) — purely host-side comptime serialization, so the cross-ISA
+`-ffp-contract` policy is unaffected. The same lossiness is why the **CHECKPOINT**
+phase reinterprets fp64 bit-patterns instead of text round-tripping (see the
+per-phase table) — a folded constant and a saved weight both need byte-exact
+serialization, and decimal `%g`/`%e` gives neither.
+
 ## per-phase locked identities
 
 Each row = one step phase, its oracle, the canonical-order invariant it locks,
@@ -344,6 +388,14 @@ A non-exhaustive checklist — any of these silently breaks `max|Δ| = 0`:
   in a warmup+cosine schedule is MEASURED divergent Darwin-arm64 vs glibc-x86:
   10/500 steps differ 1–4 ULP → a different lr enters AdamW on each platform →
   weights diverge from the first such step. (F-OP33.)
+- **A lossy COMPILE-TIME float const-fold serialize.** A folded `let`-bound
+  float constant must be baked as a bit-exact C99 hex-float literal
+  (`0x1.<mant>p<exp>`), NOT decimal `%g`/`%e` — the hand-rolled formatter is not
+  correctly-rounded and drifts the folded bits (MEASURED ≤1 ULP on ≈13% of
+  computed folds, F-OP40; coarser 6-digit `%g` loss in F-OP37). A drift makes the
+  SAME source compile to different float bytes per host. Locked by
+  `tool/op39_constfold_gate.sh` (18 folds). (F-OP40 · the **compile-time constant
+  folding** subsection in §1.)
 - **A lossy or incomplete CHECKPOINT.** Serializing training state through TEXT
   (`%g`/`%f`/`to_string` — not shortest-round-trip; drops low mantissa bits — the
   same "%g 6-digit" lossiness F-OP37 MEASURED in the const-folder, |Δ| up to

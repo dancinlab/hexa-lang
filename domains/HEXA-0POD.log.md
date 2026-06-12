@@ -1,5 +1,41 @@
 # HEXA-0POD — log
 
+## 2026-06-12 — OP-42 DONE: OP-40 hex-float fold-serialize → determinism contract (compile-time-const-folding §) + OP-39 gate +5 hex-float cases (13→18) · docs+test+ci-comment · $0 · 0-pod
+- SURVEY-FIRST (mandatory). Read F-OP40-COMPTIME-MUL-ULP.txt (the fix: comptime float const-fold serializes folded
+  doubles as bit-exact C99 hex-float literals 0x1.<mant>p<exp> via _cf_float_hexlit/_cf_nib_hex, integer ops only —
+  ROOT CAUSE was the host hand-rolled %.17e serialize, NOT the multiply/parse/FMA; closed max-1-ULP residual to 0 across
+  125 cases) + F-OP39-CONSTFOLD-CI-GATE.txt + the gate tool/op39_constfold_gate.sh + oracle op39_constfold_byteeq.hexa +
+  the nobaseline-gate.yml wiring + docs/flame-determinism-contract.md (3-layer model: run-to-run / libm-free / cross-ISA-
+  FMA-free). FINDING: the OP-39 gate's MUL1 golden was ALREADY updated to the OP-40 value (…182) when #3084 landed, but
+  there was NO contract clause for the compile-step guarantee (OP-40 explicitly deferred it) + NO gate case NAMED for the
+  hex-float path.
+- CONTRACT. Added a new §1 subsection "compile-time constant folding — bit-exact hex-float serialize" framed as a
+  COMPILE-STEP sibling of the 3 run-step layers: (a) comptime const-fold of let-bound float-literal exprs + use-site
+  inline; (b) RULE block — bit-exact hex-float serialize (clang ZERO-loss reparse), NOT decimal %g/%e; (c) WHY for
+  determinism — a 1-ULP fold drift makes the SAME source compile to different float bytes per host printf, breaking
+  machine-independence at COMPILE time. Tied to OP-37/40 measured evidence (bits-182→"…117067"→bits-183), explicitly
+  independent of the FMA layer, cross-linked to CHECKPOINT's fp64-reinterpret. + one "what breaks the contract" bullet.
+  Terse, current-state (g3, elephant rule).
+- GATE EXTENSION. Added 5 MUL_HF* hex-float cases to op39_constfold_byteeq.hexa + tool/op39_constfold_gate.sh — products
+  whose correctly-rounded IEEE value the OLD %.17e/%g serialize mis-rounded (the OP-40-fixed path). Goldens = python
+  struct.pack('<d', a*b): MUL_HF1 0.254829592*0.3275911 = …653 (0x1.55ef06babe355p-4), MUL_HF2 …598, MUL_HF3 (signed)
+  …626, MUL_HF4 …150, MUL_HF5 …376. Count 13→18; gate header/comments cite OP-40 #3084.
+- VERIFY (both ways, freshest local hexat from CURRENT SOURCE — the OP-40 fix is in self/codegen.hexa, not the deployed
+  binary). Built /tmp/op42/hexat_op42 via tool/regen_cc_manual (HEXA_V2=~/.hx/bin/build/hexat Jun-8 driver) + clang
+  single-TU + restored frozen self/runtime.c → confirmed it emits hex-floats (MUL1→0x1.28f3dbedf555ep-4=…182) + self-tests
+  15/15. A `hexa run` shim (transpile→clang→run via hexat_op42) feeds the gate. PASS: all 18 OK, clean gate exit=0. TEETH:
+  hand-corrupt MUL_HF1 golden …653→…654 → DRIFT + FAIL, exit=1 (catches a 1-ULP drift on a new hex-float case). DIFFERENTIAL
+  proof: pre-fix Jun-8 hexat emits lossy hexa_float(0.0834799) for MUL_HF1; fixed emits hexa_float(0x1.55ef06babe355p-4).
+- SEED ADVISORY (honest, OP-39/39b coupling). Ran the gate against the pre-fix Jun-8 hexat (= CI's frozen-seed generation):
+  DRIFTs on ALL 5 new MUL_HF cases identically to the existing 13 (lossy %g), pre-fix gate exit=1. So the new cases stay
+  under OP-39's continue-on-error: true advisory — ZERO yaml change (same `sh tool/op39_constfold_gate.sh ./hexa` call), NO
+  enforcing flip (that remains OP-39b's deferred frozen-anchor re-pin). Updated the 3 workflow comment blocks to note OP-42
+  extended the gate 13→18 + that the seed drifts on them too. Whole gate auto-goes-GREEN (incl. these 5) on seed promote.
+- SCOPE. Test oracle + gate script + contract doc + CI comments ONLY — no self/codegen.hexa or SSOT-module touch, so the
+  self-host gen-N==gen-N+1 fixpoint (OP-40 proved it on main) is unaffected; oracle is standalone (no `use`).
+- OUTCOME: 🟢 milestone OP-42 [x]. Verdict .verdicts/hexa-0pod/F-OP42-HEXFLOAT-CONTRACT-GATE.txt. $0 · 0-GPU · 0-pod ·
+  no vast · no foreign-pod touch · no .tape edits.
+
 ## 2026-06-12 — OP-41 DONE: systematic falsified-builtin roster sweep — COMPLETE 231-builtin matrix (126 real / 105 falsified); OP-33 optimizer-scheduler family CLOSED · $0 · 0-pod
 - SURVEY-FIRST (mandatory). Read OP-33c (F-OP33C-DEAD-OPTIM-CLEANUP.txt) + OP-33d (F-OP33D-ADAM-STEP-SWEEP.txt) to
   internalize the method: (a) the builtin ROSTER = `let builtin_names = [...]` in self/env.hexa env_new() (231 entries

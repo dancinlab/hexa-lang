@@ -114,16 +114,23 @@ jobs:
       # tool/op39_constfold_gate.sh is the SSOT; only a REAL const-fold drift
       # (re-broken %g serialize / naive-atof parse) can fail it. <1 s.
       #
+      # OP-42 extended the SAME gate/oracle with 5 hex-float cases (MUL_HF*) that
+      # exercise the OP-40 (#3084) bit-exact hex-float fold-serialize fix — products
+      # the old hand-rolled %.17e serialize mis-rounded by 1 ULP. No YAML change:
+      # they run via the same tool/op39_constfold_gate.sh ./hexa invocation and
+      # share the advisory below (the seed drifts on them identically). See
+      # F-OP42-HEXFLOAT-CONTRACT-GATE.txt + docs/flame-determinism-contract.md.
+      #
       # continue-on-error: TRUE — DELIBERATE. CI's ./hexa is built from the
       # FROZEN seed self/native/hexa_cc.c (151c52c8 bootstrap), which PRE-DATES
-      # the OP-37/OP-37b source fix in self/codegen.hexa — the fix landed in repo
-      # SOURCE (#3069/#3073) but is NOT YET PROMOTED into the seed hexat (the
-      # verdicts flag this as a separate promote/rebuild step). So the gate
-      # currently REPORTS the seed-toolchain bug (DRIFT to the lossy %g bits)
+      # the OP-37/OP-37b/OP-40 source fixes in self/codegen.hexa — the fixes landed
+      # in repo SOURCE (#3069/#3073/#3084) but are NOT YET PROMOTED into the seed
+      # hexat (the verdicts flag this as a separate promote/rebuild step). So the
+      # gate currently REPORTS the seed-toolchain bug (DRIFT to the lossy %g bits)
       # rather than passing. It is wired ADVISORY now so the regression
       # infrastructure is in place + visible; flip to blocking (drop this line)
-      # in the same PR that promotes the OP-37/37b fix into the seed hexa_cc.c,
-      # at which point this step auto-goes-GREEN. See F-OP39-CONSTFOLD-CI-GATE.txt.
+      # in the same PR that promotes the fixes into the seed hexa_cc.c, at which
+      # point this step auto-goes-GREEN. See F-OP39-CONSTFOLD-CI-GATE.txt.
       - name: OP-39 — float const-fold byte-eq gate (darwin-arm64, advisory)
         shell: bash
         continue-on-error: true
@@ -183,11 +190,12 @@ jobs:
           set -euo pipefail
           sh tool/fold_ci_gate.sh ./hexa
 
-      # ── OP-39: float const-fold byte-eq tripwire (ADVISORY until promote;
-      # see darwin job for full rationale). continue-on-error TRUE: CI's ./hexa
-      # is the frozen seed hexat (pre-OP-37/37b); the gate reports the seed-
-      # toolchain bug until the fix is promoted into the seed hexa_cc.c, then
-      # auto-goes-GREEN. SSOT = tool/op39_constfold_gate.sh; <1 s.
+      # ── OP-39/OP-42: float const-fold byte-eq tripwire (ADVISORY until promote;
+      # see darwin job for full rationale). 18 cases: OP-39's 13 + OP-42's 5
+      # hex-float MUL_HF* (OP-40 #3084 bit-exact hex-float serialize). continue-on-
+      # error TRUE: CI's ./hexa is the frozen seed hexat (pre-OP-37/37b/40); the
+      # gate reports the seed-toolchain bug until the fix is promoted into the seed
+      # hexa_cc.c, then auto-goes-GREEN. SSOT = tool/op39_constfold_gate.sh; <1 s.
       - name: OP-39 — float const-fold byte-eq gate (linux-x86_64, advisory)
         shell: bash
         continue-on-error: true
@@ -246,11 +254,12 @@ jobs:
           set -euo pipefail
           sh tool/fold_ci_gate.sh ./hexa
 
-      # ── OP-39: float const-fold byte-eq tripwire (ADVISORY until promote;
-      # see darwin job for full rationale). continue-on-error TRUE: CI's ./hexa
-      # is the frozen seed hexat (pre-OP-37/37b); the gate reports the seed-
-      # toolchain bug until the fix is promoted into the seed hexa_cc.c, then
-      # auto-goes-GREEN. SSOT = tool/op39_constfold_gate.sh; <1 s.
+      # ── OP-39/OP-42: float const-fold byte-eq tripwire (ADVISORY until promote;
+      # see darwin job for full rationale). 18 cases: OP-39's 13 + OP-42's 5
+      # hex-float MUL_HF* (OP-40 #3084 bit-exact hex-float serialize). continue-on-
+      # error TRUE: CI's ./hexa is the frozen seed hexat (pre-OP-37/37b/40); the
+      # gate reports the seed-toolchain bug until the fix is promoted into the seed
+      # hexa_cc.c, then auto-goes-GREEN. SSOT = tool/op39_constfold_gate.sh; <1 s.
       - name: OP-39 — float const-fold byte-eq gate (linux-arm64, advisory)
         shell: bash
         continue-on-error: true
