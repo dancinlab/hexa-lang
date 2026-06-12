@@ -57,6 +57,27 @@ loop targets what the consumer card + code can carry.
   (magic/header/field-order/API names/guarantees ALL MATCH — no invented API, no invented guarantee). DOCS-ONLY · $0 ·
   0-GPU · 0-pod · no vast · no .tape · g84 no-paper. Verdict .verdicts/hexa-0pod/F-OP38-CKPT-RECIPE-REFLECT.txt
 
+<!-- ANCHOR:OP-39-CONSTFOLD-CI-GATE (unique anchor — OP-37 (#3069) + OP-37b (#3073) fixed REAL SILENT float const-fold codegen bugs: `let a = 0.0 - <float lit>` was const-folded through %g (6-sig-digit lossy → max|Δ|=2.027e-6), and computed folds re-parsed operands ≤1 ULP off via naive hxlcl_atof. These don't crash — they emit subtly wrong float bytes — so a future codegen refactor could reintroduce them undetected. OP-39 adds a byte-eq CI tripwire that locks the fixes: a self-contained oracle exercises the exact folder path + a gate asserts each fold's IEEE-754 LE bit pattern == recorded golden, on every push) -->
+- [x] **OP-39 — float const-fold byte-eq CI regression gate: tripwire locking OP-37/OP-37b so the silent float bugs can never re-land** —
+  🟢 self-contained oracle stdlib/flame/op39_constfold_byteeq.hexa binds `let nN = 0.0 - X` (full A&S erf coeff set:
+  0.254829592/-0.284496736/1.421413741/-1.453152027/1.061405429/0.3275911 + the X-0.0/0.0+X/X+0.0 additive-identity
+  forms) and the computed folds (0.254829592*0.284496736, 1.421413741*0.5, 0.1+0.2, 1.0/3.0), then REFERENCES each — the
+  use-site inlines the comptime-folded literal (codegen.hexa:3105 _register_comptime_const path), exercising the EXACT
+  serialize/parse path OP-37/OP-37b fixed (a bare inline arg is NOT registered → handed to clang full-precision → would
+  mask the bug, so we deliberately bind-then-reference). 13 assertions on each fold's IEEE-754 LE bit pattern (decoded
+  to signed-64 int) — PORTABLE, same goldens on every arch/OS, so byte-eq is machine-independent. tool/op39_constfold_gate.sh
+  (modeled on OP-34's tool/fold_ci_gate.sh, low blast radius) wired into nobaseline-gate.yml on all 3 platforms right after
+  the OP-34 fold gate — ADVISORY (continue-on-error) because the gate REVEALED CI's ./hexa is the FROZEN seed hexat
+  (built from self/native/hexa_cc.c @ 151c52c8, PRE-OP-37/37b — the source fix is NOT YET PROMOTED into the seed, a step
+  both verdicts deferred); it reports the seed-toolchain bug now + auto-flips to GREEN/enforcing on promotion (drop the
+  one continue-on-error line). GOLDENS verified by RUNNING the FIXED-compiler-built oracle binary (/tmp/hexat_op37b_v4 → emitted
+  C → clang + self/runtime.c → exit 0, all 13 match). PROVEN BOTH WAYS with the SAME gate: PASS on fixed-compiler output
+  (exit 0) · FAIL on the pre-fix deployed ~/.hx/bin/hexa run (all 13 DRIFT to the lossy %g values, exit 1) — the bug/fix
+  differential IS the test, no hand-corruption needed; plus a single-golden 1-ULP corruption confirms it catches even a
+  one-bit drift. (a) negation/additive cases byte-EXACT vs python struct.pack('<d'); (b) MUL1 locks the +1-ULP host-rt_mul
+  value the FIXED compiler emits (the documented OP-37b residual), NOT python's, so a re-broken parse drifts away. $0 ·
+  0-GPU · 0-pod · no vast · no .tape. Verdict .verdicts/hexa-0pod/F-OP39-CONSTFOLD-CI-GATE.txt
+
 <!-- ANCHOR:OP-36-DISPATCH-AUDIT (unique anchor — deep-dive round-10 branch ④: the OP-16 (groupnorm_gelu) / OP-18 (gelu2, moe_block2) / OP-32b (stdp_pair) class produced 4 REACTIVE discoveries of "GPU dispatch symbol declared + CUDA emit exists, but NO CPU body → importing the lib fails to link on CPU-only hosts" (hexa codegen emits ALL module fns, no DCE). OP-36 closes the pattern PROACTIVELY: sweep ALL forge dispatch symbols, build the symbol × CUDA-emit × CPU-body matrix, classify each CPU-missing symbol (real lib link hole / GPU-build-only by design / orphan), fix the real holes via the tool/restore_frozen_seeds marker-guarded channel, and CPU-link-probe every flame lib) -->
 - [x] **OP-36 — forge dispatch CPU-fallback systematic audit: full symbol matrix, remaining link holes fixed (OP-16/18/32b class closed proactively)** —
   33-symbol matrix (prototype × CUDA-emit × CPU-body × reach): 33 CUDA-emitted · 8 CPU-covered · 25 CPU-missing
@@ -1215,6 +1236,15 @@ loop targets what the consumer card + code can carry.
   .verdicts/hexa-0pod/F-OP16-GN-HOST-FALLBACK.txt.
 
 ## deferred (0-pod follow-ups surfaced by the loop — self-feed)
+
+- **OP-39b — promote the OP-37/OP-37b float const-fold fix into the seed/deployed toolchain, then flip the
+  OP-39 CI gate to ENFORCING.** OP-39 (#3075) revealed CI's ./hexa is built from the FROZEN seed
+  self/native/hexa_cc.c (151c52c8) which PRE-DATES the OP-37/37b source fix in self/codegen.hexa — so the gate
+  is wired ADVISORY (continue-on-error). Promote the fix into the seed hexa_cc.c (re-emit via the marker-guarded
+  channel, like tool/restore_frozen_seeds / the bootstrap-seed refresh path), verify the OP-39 gate goes GREEN on
+  all 3 nobaseline jobs, then drop the single `continue-on-error: true` line per platform to make it a blocking
+  required check. The oracle + SSOT gate already exist; this is the promote + enforce step. $0 · 0-pod local +
+  CI proof.
 
 - **OP-2b — land the runtime.c hexa_forge_dispatch_matmul_t wrapper body + flip the trainer to the live
   transpose-elim call.** OP-2 landed the GPU kernel (_hx_cuda_farr_matmul_tn_gpu, cuBLAS OP_T), codegen
