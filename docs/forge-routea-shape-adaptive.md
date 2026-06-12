@@ -111,6 +111,13 @@ not a beat, shape-rigid @D=4096.**
 | **Hopper sm_90a** route-(a) wgmma (b14 MODE 8) | **D=4096** | **~1.50× — sub-parity, SETTLED** (own ~284 vs cuBLAS ~427) | `rel_rms 0.000e+00` | `F-OP45GPU-OCCUPANCY-SWEEP` · `F-OP52-TF32-GAP-CLOSE` · `F-OP55-NEWTILE-D4096` |
 | **Consumer sm_120** OWN120 mma.sync (64×64) | **D=768** | **0.95–0.96× — own EDGES cuBLAS** (own ~24.5 vs cuBLAS ~23.3 TFLOP/s) | rel-RMS ~1.3e-5 (same-dtype TF32 gate; cuBLAS-TF32 hides its accum order) | `F-OP54-SUMMER-OWNGEMM-TF32` |
 
+> **DTYPE SCOPE (g5).** This parity map is **vs cuBLAS-TF32** throughout — the **parity result
+> is dtype-scoped to TF32.** It does NOT hold for FP16/BF16: the W14 FP16/BF16 own-GEMM is
+> correct (`rel_rms ≤ 1e-2` vs same-dtype cuBLAS-FP16, NOT bit-exact-vs-FP64) but **PARITY=NO,
+> 11.5× off cuBLAS-FP16** (71.6 TFLOP/s @4096 vs cuBLAS-FP16 827 — the roofline DOUBLED vs
+> cuBLAS-TF32 431, so the same-dtype ratio WIDENED vs TF32's 6.09×, not closed).
+> (`F-FUSION-SM90-WGMMA-W14-FP16`; see also FLAME+FORGE-vs-PYTORCH+CUBLAS.md §4.1.)
+
 **The settled conclusion (one line):** own-GEMM is **PARITY @Hopper-D2048** (1.08×, bit-exact),
 **own-EDGES-cuBLAS @consumer-D768** (0.95×, the tuned OWN120 closes the old F-BENCH-5 3.2–6.9×
 raw gap), and **parity-not-beat @Hopper-large-D** (~1.50× @D=4096), where the large-D gap is now
