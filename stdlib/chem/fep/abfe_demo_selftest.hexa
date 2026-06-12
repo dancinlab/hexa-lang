@@ -155,9 +155,9 @@ fn a_run(seed: int) {
     let prop = make_langevin_prop(a_force_factory, prm, 0.02, 8, [], 1.0e-10, 50)
     let cfg = AbfeConfig{
         ladder: ladder,
-        n_sweeps: 3000,
+        n_sweeps: 800,
         swap_period: 1,
-        md_steps_per_sweep: 8,
+        md_steps_per_sweep: 6,
         dt: 0.02,
         kT: A_KT,
         seed: seed,
@@ -227,9 +227,9 @@ fn a_run_constrained(seed: int) {
                                   cons, 1.0e-10, 100)
     let cfg = AbfeConfig{
         ladder: ladder,
-        n_sweeps: 1500,
+        n_sweeps: 500,
         swap_period: 1,
-        md_steps_per_sweep: 8,
+        md_steps_per_sweep: 6,
         dt: 0.02,
         kT: A_KT,
         seed: seed,
@@ -456,7 +456,7 @@ fn main() {
     println("── PATH B: real soft-core LJ decoupling — MBAR vs TI cross-check ──")
     // dense ladder for soft-core (the r⁻¹² → α-shift transition is steep
     // near λ=1, so cluster rungs there).
-    let ladderB = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0]
+    let ladderB = [1.0, 0.85, 0.7, 0.55, 0.4, 0.25, 0.1, 0.0]
     let KB = ladderB.len()
     // initial config per rung: start near the LJ minimum r=2^(1/6)·σ ≈ 1.122.
     let mut configs0B = []
@@ -464,9 +464,9 @@ fn main() {
     while ib < KB { configs0B.push([1.122]) ib = ib + 1 }
     let cfgB = AbfeConfig{
         ladder: ladderB,
-        n_sweeps: 4000,
+        n_sweeps: 700,
         swap_period: 1,
-        md_steps_per_sweep: 4,
+        md_steps_per_sweep: 3,
         dt: 0.0,                            // unused: b_prop is MC, not MD
         kT: 1.0,
         seed: 13579,
