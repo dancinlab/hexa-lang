@@ -1,0 +1,266 @@
+// HEXA Standard Library — qforge/atoms/coordination
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE atoms-scale brick #3 — COORDINATION NUMBER CN_i(R), its ANALYTIC
+// derivative ∂CN_i/∂R_l, and the CN-DRESSED electronegativity χ_i = EN_i − κ·√CN_i.
+// This is the geometry → electronegativity coupling that GFN-xTB and DFT-D4 put
+// in front of the EEQ charge solve (rounds 1–2): the fractional, erf-counted
+// coordination number replaces an integer bond count, so χ moves smoothly as
+// bonds form / break (Caldeweyher et al., J. Chem. Phys. 150, 154122 (2019),
+// the CN definition and the χ = EN − κ_CN·√CN dressing; Grimme DFT-D3/D4 CN).
+//
+// THE PHYSICS (a smooth, differentiable bond count) ────────────────────────────
+//   A discrete coordination number (how many neighbours an atom is bonded to)
+//   is not differentiable — a bond either exists or it does not. EEQ/D4 replace
+//   it with a soft erf-counting function that turns on as a neighbour crosses
+//   the covalent-bond distance:
+//
+//     CN_i(R) = Σ_{j≠i}  ½ ( 1 + erf( −k_cn · (R_ij − R_cov,ij) / R_cov,ij ) )
+//
+//   with R_cov,ij = R_cov,i + R_cov,j the sum of covalent radii (the natural
+//   bond length of the pair) and k_cn a steepness constant (≈7.5 in D4; the
+//   CALLER passes it so the brick hardcodes no fit). The bracket is ≈1 when
+//   R_ij ≪ R_cov,ij (bonded, the neighbour is counted) and ≈0 when R_ij ≫ R_cov
+//   (unbonded, not counted); it crosses ½ exactly at R_ij = R_cov,ij. Summed
+//   over neighbours, CN_i is a smooth real number that limits to the integer
+//   coordination of the bonded structure (CH₄: C → 4, each H → 1).
+//
+//   ANALYTIC DERIVATIVE (closed form, the lever R2 needs). Let
+//     u_ij = −k_cn (R_ij − R_cov,ij)/R_cov,ij ,   d(erf(u))/du = (2/√π) e^{−u²}.
+//   Then for the j-term of CN_i,
+//     d/dR_ij [ ½(1+erf(u_ij)) ] = ½ · (2/√π) e^{−u_ij²} · (−k_cn / R_cov,ij)
+//                                = −(k_cn/√π/R_cov,ij) · e^{−u_ij²}  ≡ s_ij  (<0)
+//   so a stretch (R_ij↑) always lowers the soft count (s_ij<0 — monotone). The
+//   chain rule onto a moved Cartesian DOF R_l = (atom a, component c):
+//     ∂R_ij/∂x_{a,c} = (pos[a,c]−pos[j,c])/R_ij  if a=i ; the opposite sign if
+//     a=j ; 0 if a∉{i,j}. Summing the pair contributions:
+//       ∂CN_i/∂x_{a,c} = Σ_{j≠i} s_ij · ∂R_ij/∂x_{a,c}
+//   Only DOFs on atom i itself or on a neighbour of i are nonzero, and the
+//   counting is pairwise-antisymmetric (moving i toward j raises BOTH CN_i and
+//   CN_j by the same s_ij·(unit vector)).
+//
+//   χ DRESSING. The EEQ electronegativity fed to round-1 is then
+//     χ_i = EN_i − κ_cn,i · √(CN_i)
+//   (EN_i the bare element electronegativity, κ_cn,i the per-element CN-scaling).
+//   √CN is the D4 form; its derivative chains as ∂χ_i/∂R_l = −κ_cn,i/(2√CN_i)·∂CN_i/∂R_l
+//   (handled by qforge_cn_chi_grad). A higher-coordinated atom (larger CN) is
+//   made LESS electronegative (χ falls), shifting EEQ charge onto it — the sign
+//   that makes a bonded carbon less able to pull charge than a bare one.
+//
+// d4-generic: geometry, the per-element covalent radius R_cov, the steepness
+//   k_cn, the bare EN and the κ_cn scaling are ALL inputs / data tables. The
+//   counting branches on NO element name and NO molecule — CH₄, an alane cage,
+//   a metal cluster traverse the identical path (add/rename an element = a row
+//   in the caller's R_cov / EN / κ table, never a code edit).
+//
+// reuse (d19): stdlib/core/special.erf_fn (the SAME error function the EEQ
+//   screened-Coulomb kernel uses in eeq.hexa) and qforge_eeq_distance (the
+//   pairwise distance helper from round-1 — d3: this brick adds ONLY the CN
+//   counting + its derivative + the χ dressing, it re-implements no geometry or
+//   solver primitive). A local range-reduced exp (e^{−u²}, positive-tail) is the
+//   only numeric not already exported, mirroring eeq_grad's _gexp.
+use "stdlib/qforge/atoms/eeq"
+use "stdlib/core/special"
+
+// ── local sqrt + exp (no extra std imports; mirror eeq_grad's helpers) ────────
+fn _csqrt(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    if g < 1.0 { g = 1.0 }
+    let mut it = 0
+    while it < 60 {
+        let ng = 0.5 * (g + x / g)
+        if ng == g { break }
+        g = ng
+        it = it + 1
+    }
+    return g
+}
+
+// exp(x) via range-reduced Taylor (x = k·ln2 + r, |r|≤ln2/2). Pure, no import.
+fn _cexp(x: float) -> float {
+    if x == 0.0 { return 1.0 }
+    let ln2 = 0.6931471805599453
+    let mut k = 0
+    let mut r = x
+    while r > 0.34657359027997264 { r = r - ln2 ; k = k + 1 }
+    while r < 0.0 - 0.34657359027997264 { r = r + ln2 ; k = k - 1 }
+    let mut term = 1.0
+    let mut sum = 1.0
+    let mut nn = 1
+    while nn < 25 {
+        term = term * r / to_float(nn)
+        sum = sum + term
+        nn = nn + 1
+    }
+    let mut p = sum
+    if k > 0 {
+        let mut t = 0
+        while t < k { p = p * 2.0 ; t = t + 1 }
+    } else {
+        let mut t = 0
+        while t < (0 - k) { p = p * 0.5 ; t = t + 1 }
+    }
+    return p
+}
+
+// ── per-pair covalent bond length R_cov,ij = R_cov,i + R_cov,j ────────────────
+//   rcov is the per-ATOM covalent radius vector (caller maps element → radius).
+pub fn qforge_cn_rcov_pair(rcov: [float], i: int, j: int) -> float {
+    return rcov[i] + rcov[j]
+}
+
+// ── single soft-counting term  ½(1 + erf(−k_cn (R−R_cov)/R_cov)) ──────────────
+//   the contribution of one neighbour at distance r to a coordination number.
+//   r = R_cov ⇒ argument 0 ⇒ exactly ½ (the bond half-on point). r ≪ R_cov ⇒ →1,
+//   r ≫ R_cov ⇒ →0. Pure function of (r, R_cov, k_cn) — element-agnostic (d4).
+pub fn qforge_cn_term(r: float, rcov: float, kcn: float) -> float {
+    let u = 0.0 - kcn * (r - rcov) / rcov
+    return 0.5 * (1.0 + erf_fn(u))
+}
+
+// ── d/dR of one counting term  s_ij = −(k_cn/(√π·R_cov)) e^{−u²}  (≤ 0) ───────
+//   derivative of ½(1+erf(u(R))) w.r.t. R: ½·(2/√π)e^{−u²}·du/dR with
+//   du/dR = −k_cn/R_cov, so s = −(k_cn/(√π R_cov)) e^{−u²}. Always ≤ 0 (a
+//   stretch lowers the count) — the monotonicity the selftest pins.
+pub fn qforge_cn_term_dR(r: float, rcov: float, kcn: float) -> float {
+    let inv_sqrtpi = 0.5641895835477563   // 1/√π
+    let u = 0.0 - kcn * (r - rcov) / rcov
+    return 0.0 - (kcn * inv_sqrtpi / rcov) * _cexp(0.0 - u * u)
+}
+
+// ── coordination number CN_i for every atom (length n) ───────────────────────
+//   CN_i = Σ_{j≠i} ½(1+erf(−k_cn (R_ij−R_cov,ij)/R_cov,ij)). d4: pos + per-atom
+//   rcov + scalar kcn are inputs; no element / molecule branching.
+pub fn qforge_cn_numbers(pos: [float], rcov: [float], kcn: float) -> [float] {
+    let n = len(rcov)
+    let mut cn: [float] = []
+    let mut i = 0
+    while i < n { cn.push(0.0) ; i = i + 1 }
+    i = 0
+    while i < n {
+        let mut s = 0.0
+        let mut j = 0
+        while j < n {
+            if j != i {
+                let rij = qforge_eeq_distance(pos, i, j)
+                let rcij = qforge_cn_rcov_pair(rcov, i, j)
+                s = s + qforge_cn_term(rij, rcij, kcn)
+            }
+            j = j + 1
+        }
+        cn[i] = s
+        i = i + 1
+    }
+    return cn
+}
+
+// ── analytic ∂CN_i/∂R_l for a SINGLE moved DOF l (length n) ───────────────────
+//   l = 3·a + c is the moved Cartesian DOF (atom a, component c∈{0,1,2}). A pair
+//   (i,j) contributes to ∂CN_i/∂R_l only when the moved atom a is i or a neighbour
+//   j of i. For the j-term of CN_i:
+//     ∂R_ij/∂x_{a,c} = (pos[a,c]−pos[other,c])/R_ij  with sign + if a=i, − if a=j.
+//   Returns the column dCN[i] = ∂CN_i/∂R_l. Pairwise structure ⇒ exact, no FD.
+pub fn qforge_cn_grad_dof(pos: [float], rcov: [float], kcn: float,
+                          l: int) -> [float] {
+    let n = len(rcov)
+    let a = l / 3
+    let c = l - 3 * a
+    let mut dcn: [float] = []
+    let mut i = 0
+    while i < n { dcn.push(0.0) ; i = i + 1 }
+    // moving atom a affects: (1) CN_a via every neighbour j≠a, and
+    //                        (2) CN_j (j≠a) via its a-term — symmetric pair.
+    let mut j = 0
+    while j < n {
+        if j != a {
+            let raj = qforge_eeq_distance(pos, a, j)
+            let rcaj = qforge_cn_rcov_pair(rcov, a, j)
+            let s = qforge_cn_term_dR(raj, rcaj, kcn)   // d term / dR (shared by both)
+            // ∂R_aj/∂x_{a,c} = (pos[a,c]−pos[j,c]) / R_aj  (moving atom a)
+            let diff = pos[3 * a + c] - pos[3 * j + c]
+            let drdrl = diff / raj
+            let contrib = s * drdrl
+            // CN_a gains the a-side; CN_j gains the (equal & same-sign) j-side,
+            // because ∂R_ja/∂x_{a,c} = −(pos[j,c]−pos[a,c])/R = (pos[a,c]−pos[j,c])/R
+            // — moving a is identical from either endpoint's view.
+            dcn[a] = dcn[a] + contrib
+            dcn[j] = dcn[j] + contrib
+        }
+        j = j + 1
+    }
+    return dcn
+}
+
+// ── full CN-gradient tensor ∂CN_i/∂R_l for ALL 3n DOFs ────────────────────────
+//   Flat (n × 3n) row-major G with G[i*(3n)+l] = ∂CN_i/∂R_l. Reuses the per-DOF
+//   column routine. d4: no element / molecule branching anywhere.
+pub fn qforge_cn_grad(pos: [float], rcov: [float], kcn: float) -> [float] {
+    let n = len(rcov)
+    let ndof = 3 * n
+    let mut g: [float] = []
+    let mut z = 0
+    while z < n * ndof { g.push(0.0) ; z = z + 1 }
+    let mut l = 0
+    while l < ndof {
+        let dcn = qforge_cn_grad_dof(pos, rcov, kcn, l)
+        let mut i = 0
+        while i < n {
+            g[i * ndof + l] = dcn[i]
+            i = i + 1
+        }
+        l = l + 1
+    }
+    return g
+}
+
+// ── CN-dressed electronegativity  χ_i = EN_i − κ_cn,i · √CN_i ─────────────────
+//   en and kappa are per-atom vectors (caller maps element → EN, κ). The √CN
+//   form is D4's; this is the χ vector handed to qforge_eeq_charges / _matrix
+//   (round-1) so the geometry enters the charge solve. d4: data-driven.
+pub fn qforge_cn_dress_chi(en: [float], kappa: [float], cn: [float]) -> [float] {
+    let n = len(en)
+    let mut chi: [float] = []
+    let mut i = 0
+    while i < n {
+        chi.push(en[i] - kappa[i] * _csqrt(cn[i]))
+        i = i + 1
+    }
+    return chi
+}
+
+// ── convenience: χ directly from geometry (CN computed internally) ────────────
+//   one call: pos + rcov + kcn + en + kappa → the CN-dressed χ vector. The exact
+//   χ input path round-1's qforge_eeq_charges expects (closing the geometry →
+//   χ → charge chain that D4 dispersion will ride on in round-4).
+pub fn qforge_cn_chi_from_geometry(pos: [float], rcov: [float], kcn: float,
+                                   en: [float], kappa: [float]) -> [float] {
+    let cn = qforge_cn_numbers(pos, rcov, kcn)
+    return qforge_cn_dress_chi(en, kappa, cn)
+}
+
+// ── analytic ∂χ_i/∂R_l for a SINGLE moved DOF (length n) ──────────────────────
+//   χ_i = EN_i − κ_i √CN_i  ⇒  ∂χ_i/∂R_l = −κ_i/(2√CN_i) · ∂CN_i/∂R_l.
+//   (CN_i>0 for any bonded atom; a fully isolated atom has CN_i→0 and ∂χ→0 too,
+//   guarded by returning 0 when √CN underflows.) This is the lever that, joined
+//   with R2's ∂q/∂R, completes the CN-aware EEQ charge derivative for round-4.
+pub fn qforge_cn_chi_grad_dof(pos: [float], rcov: [float], kcn: float,
+                              kappa: [float], l: int) -> [float] {
+    let n = len(rcov)
+    let cn = qforge_cn_numbers(pos, rcov, kcn)
+    let dcn = qforge_cn_grad_dof(pos, rcov, kcn, l)
+    let mut dchi: [float] = []
+    let mut i = 0
+    while i < n {
+        let sq = _csqrt(cn[i])
+        if sq <= 1.0e-300 {
+            dchi.push(0.0)
+        } else {
+            dchi.push(0.0 - kappa[i] / (2.0 * sq) * dcn[i])
+        }
+        i = i + 1
+    }
+    return dchi
+}
