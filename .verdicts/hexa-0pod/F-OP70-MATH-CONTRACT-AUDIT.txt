@@ -1,0 +1,116 @@
+F-OP70-MATH-CONTRACT-AUDIT
+HEXA-0POD OP-70 — stdlib core/signal math: doc-contract-vs-behavior audit
+date: 2026-06-13   tier: 🔴→fix GREEN (1 contradiction fixed) · 🟢 PROVEN-CONSISTENT (8 modules)
+scope: $0 · 0-pod · NO GPU · no vast · no foreign pod · no .tape · leak-0
+base: origin/main @ 1a462861d (post #3190 / OP-68 wrap_pi fix)
+
+GOAL
+  Generalize OP-68 (#3190)'s wrap_pi contract-vs-behavior audit across the SIBLING
+  stdlib core/signal math modules: find any surface docstring/comment asserting a
+  numeric CONTRACT (codomain/range · domain · boundary/edge · sign convention ·
+  idempotence · rounding mode · units) that the actual code body CONTRADICTS.
+  Fix each genuine contradiction (doc+test only, exactly OP-68's call: when the
+  behavior is SSOT-correct and tested, the DOC is the bug → correct the doc + add a
+  machine-lock; if instead the BEHAVIOR is wrong, FLAG 🟠, do NOT silently change it).
+
+═══════════════════════════════════════════════════════════════════════════════
+AUDIT MATRIX (9 modules)
+─────────────────────────────────────────────────────────────────────────────
+ module                              contract claim                       verdict
+ ----------------------------------- ------------------------------------ -------
+ core/math/wrap_pi.hexa              codomain closed [−π,π], ±π preserved ✓ (OP-68)
+ core/math/float.hexa               pi/e/tau exact consts; isnan/isinf/   ✓
+                                     isfinite/lgamma delegate libm
+ core/math/permille.hexa            pm_mul_pm "/1000 with banker's        ✗ CONTRADICTION
+                                     rounding"                            → FIXED
+ core/math.hexa                     gcd/Euclid · det Miller–Rabin 12-     ✓
+                                     witness <3.3e24 · Liouville/σ*/σ₃
+                                     OEIS values
+ core/special.hexa                  Lanczos g=7 ~1e-13 · A&S 7.1.26 erf   ✓
+                                     ~1.5e-7 · erf odd · Γ pole at 0
+ signal/core_window.hexa            symmetric N−1 denom; Hann/Blackman    ✓
+                                     w[0]=w[N−1]=0; Hamming endpoints 0.08
+ signal/core_filter.hexa            RBJ LPF/HPF cookbook coeffs idx 0-4;  ✓
+                                     a0≡1; Direct-Form-I biquad tick
+ signal/core_resample.hexa          zcr ÷(N−1), 0→sign+; db floor −120;   ✓
+                                     lerp tail-clamp; out len ⌊N·ratio⌋
+ signal/core_mel.hexa / core_pitch  HTK mel curve (log/pow libm); ACF     ✓
+                                     R(τ); lag↔Hz                         (no false contract)
+─────────────────────────────────────────────────────────────────────────────
+ permille was the LONE contradiction (the wrap_pi analogue this round).
+ Honest g63: an all-else-consistent audit = SUCCESS, not a fabricated miss.
+
+═══════════════════════════════════════════════════════════════════════════════
+THE CONTRADICTION — stdlib/core/math/permille.hexa : pm_mul_pm rounding mode
+─────────────────────────────────────────────────────────────────────────────
+FALSE surface-doc line (permille.hexa:20-21, verbatim, before):
+    //   - `pm_mul_pm(a, b)` reduces the implicit ×10^6 product back to
+    //     ×10^3 by dividing by 1000 with banker's rounding.
+
+TRUE behavior (permille.hexa:100-101, verbatim):
+    pub fn pm_mul_pm(a: PerMille, b: PerMille) -> PerMille {
+        return PerMille { pm: _div_round_half_away(a.pm * b.pm, PM_SCALE) }
+    }
+  _div_round_half_away (permille.hexa:60-70) = round-HALF-AWAY-FROM-ZERO:
+        let q = (abs_a + abs_b / 2) / abs_b      // +half then floor on |·|
+  This is NOT round-half-to-EVEN ("banker's rounding"). The two modes DIVERGE at
+  every half-integer boundary: 0.5 → 1 (half-away) vs 0 (banker's-even);
+  2.5 → 3 (half-away) vs 2 (banker's-even); −0.5 → −1 vs 0.
+
+PROOF the BEHAVIOR (not the doc) is SSOT-correct — the pre-existing test already
+locks half-away (stdlib/math/permille_test.hexa, before this round):
+    T5.mul_pm.0.1×0.005 : pm_mul_pm(pm_of_permille(100), pm_of_permille(5)) == 1
+        // 100*5 = 500 pm² → /1000 = 0.5 → half-away = 1  (banker's-even would be 0)
+  Half-away is also the construction/div_int mode (permille.hexa:74,97), so
+  "banker's" was a stray inconsistent word, not the design. ⇒ DOC is the bug.
+
+FIX (doc + test ONLY — no behavior change, exactly OP-68's wrap_pi call):
+  (1) permille.hexa:20-21 doc corrected to state half-away-from-zero
+      (`_div_round_half_away`), NOT banker's, with the .5-boundary example.
+  (2) permille_test.hexa T5 comment "banker-style half-away" (self-contradictory)
+      rewritten to plain half-away.
+  (3) NEW T5b rounding-mode lock — cases that FAIL under round-half-to-even and
+      thus machine-pin the documented contract:
+        T5b.mul_pm.half_away_pos_2.5 : pm_mul_pm(pm_of_permille(50),  pm_of_permille(50)) == 3   // 2.5 → 3 (banker's=2)
+        T5b.mul_pm.half_away_neg_0.5 : pm_mul_pm(pm_of_permille(-100),pm_of_permille(5))  == -1  // -0.5 → -1 (banker's=0)
+        T5b.mul_pm.half_away_pos_1.5 : pm_mul_pm(pm_of_permille(300), pm_of_permille(5))  == 2   // 1.5 → 2 (tie anchor)
+
+LOCK-TEST RE-VERIFY (verbatim):
+    before:  $ hexa run permille_test.hexa  →  PASS: permille 41/41
+    after:   $ hexa run permille_test.hexa  →  PASS: permille 44/44
+
+═══════════════════════════════════════════════════════════════════════════════
+PROVEN-CONSISTENT evidence (8 modules — contract ↔ behavior+test agree)
+─────────────────────────────────────────────────────────────────────────────
+ wrap_pi      already closed by OP-68: surface "[−π,π]" + guard `if x>=−p && x<=p
+              {return x}` + test wrap_pi(−π)==−π all agree on closed both-boundary.
+ float        pi()/e()/tau() = exact IEEE literals; isnan_f/isinf_f/isfinite_f/
+              lgamma_f are thin libm delegators — no contract beyond "= math.*".
+ core math    gcd = Euclid; is_prime_det doc "12-witness MR decides <3.317e24" — the
+              witness set {2..37} in code matches; liouville=(−1)^Ω, σ*(6)=12, σ₃(6)=252
+              match the docstring OEIS values; pisano/fib match (0,1) seed claim.
+ special      lgamma_pos/gamma_fn use the exact Lanczos g=7 n=9 coeffs the doc cites;
+              gamma_fn reflection for x<0.5 + pole-return-0 match; erf_fn is A&S 7.1.26
+              (the 5 cited a-coeffs) + odd-function sign handling + exact 0 at x=0;
+              erfc_fn = 1−erf as documented.
+ core_window  cos(0)=cos(2π)=1 ⇒ Hann/Blackman w[0]=w[N−1]=0, Hamming=0.54−0.46=0.08 —
+              exactly the documented endpoints; denominator is (N−1) (symmetric) as
+              stated; periodic variant uses N as its doc says.
+ core_filter  lpf_coeff/hpf_coeff return the verbatim RBJ-cookbook b0..a2 the header
+              tabulates, indexed 0-4 (else 0.0) with a0 normalised to 1; biquad_tick
+              is the Direct-Form-I sum the doc gives.
+ core_resample zcr divides crossings by (N−1) and treats 0 as sign-+ (prev>=0) as
+              documented; lin_to_db floors sub-silence to −120 dB; lerp clamps the
+              tail to x[N−1]; output length = ⌊N·ratio⌋ via _cr_floor_idx — all match.
+
+🟠 FLAGGED BEHAVIOR-BUGS: none. No audited module had a behavior that violated a
+   doc the doc was the SSOT-correct intent for; the single mismatch was a wrong DOC
+   over correct+tested behavior (fixed by doc correction, OP-68 precedent).
+
+FILES TOUCHED (doc + test only; no behavior, no codegen/runtime/stdlib-build closure):
+  M stdlib/core/math/permille.hexa        (doc line 20-21)
+  M stdlib/math/permille_test.hexa        (T5 comment + new T5b lock block)
+  A .verdicts/hexa-0pod/F-OP70-MATH-CONTRACT-AUDIT.txt
+  M domains/HEXA-0POD.md / .log.md         (OP-70 [x])
+Self-host byte-eq: UNAFFECTED — permille is a leaf stdlib module outside the
+build_selfhost closure; only comments + a test changed. wipe_guard: net-additive.

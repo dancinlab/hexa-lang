@@ -1,5 +1,24 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-70 DONE: GENERALIZE the OP-68 wrap_pi contract-vs-behavior audit across the sibling stdlib core/signal math surface (9 contract-bearing modules) · for each: surface-doc CONTRACT (range·boundary·rounding·sign·idempotence·units) vs BODY+test · RESULT: ONE genuine contradiction (same class) — stdlib/core/math/permille.hexa:21 doc claimed `pm_mul_pm` divides by 1000 "with banker's rounding" while the body calls `_div_round_half_away` (half-away-from-zero) + the passing test already locks 0.5→1 (banker's-even would give 0) · FIX (doc+test only, behavior+test SSOT-correct per OP-68): corrected the doc line to half-away + fixed the test's "banker-style half-away" comment + ADDED a T5b half-away lock (50×50=2.5→3, −100×5=−0.5→−1 FAIL under round-half-to-even) · 41/41 → 44/44 PASS · the OTHER 8 modules PROVEN-CONSISTENT (honest all-else-consistent = SUCCESS, g63) · self-host byte-eq unaffected (leaf stdlib, doc+test only) · 🔴→fix GREEN · $0 · 0-pod · NO GPU
+- AUDIT SET (explicit documented numeric contract): core/math/{wrap_pi,float,permille} · core/{math,special}
+  · signal/core_{window,filter,resample} (+ core_mel curve, core_pitch).
+- THE CONTRADICTION (permille `pm_mul_pm`):
+  · FALSE doc line (permille.hexa:21): "×10^3 by dividing by 1000 with banker's rounding."
+  · TRUE behavior (permille.hexa:101): `_div_round_half_away(a.pm * b.pm, PM_SCALE)` — half-away-from-zero.
+  · The modes DIVERGE at every .5 boundary (2.5 → 3 half-away vs 2 banker's-even). The existing test
+    T5.mul_pm.0.1×0.005 already proved half-away (500/1000=0.5 → 1, banker's-even → 0).
+  · FIX = correct the DOC to the proven-tested behavior (NO behavior change), + a T5b rounding-mode lock.
+  · LOCK-TEST PASS: hexa run permille_test.hexa = "PASS: permille 44/44" (was 41/41).
+- PROVEN-CONSISTENT (8): wrap_pi (closed [−π,π] by OP-68) · float (pi/e/tau exact, isnan/isinf/isfinite
+  delegate libm) · core math (gcd, det Miller-Rabin 12-witness, Liouville/σ*/sigma_3 all match docstrings)
+  · special (Lanczos g=7 ~1e-13 + A&S 7.1.26 erf ~1.5e-7 + erf odd-function + Γ pole-at-0 all match)
+  · core_window (Hann/Blackman w[0]=w[N-1]=0, Hamming 0.08, symmetric N−1 denom — cos(0)=cos(2π)=1)
+  · core_filter (RBJ LPF/HPF coeff formulas idx 0-4 + a0≡1 + Direct-Form-I match the header)
+  · core_resample (zcr ÷(N−1) + 0→sign+, db floor −120, lerp tail-clamp, output len ⌊N·ratio⌋ match).
+  permille was the LONE contradiction (wrap_pi-style). No 🟠 behavior-bug surfaced. Verdict
+  .verdicts/hexa-0pod/F-OP70-MATH-CONTRACT-AUDIT.txt. Milestone OP-70 [x].
+
 ## 2026-06-13 — OP-69 DONE: COMPLETE the flame determinism-contract enforcement coverage — audit the OTHER layers for the documented-but-ungated gap OP-66 closed for layer-2 · FINDING: LAYER 3 (cross-ISA FMA-free) was DOCUMENTED + held in source but UNGATED · new tool/flame_steppath_fma_gate.sh (pure grep, no ./hexa/no seed) wired BLOCKING in nobaseline-gate.yml ALL 3 ISA legs · PROVEN pass-clean (exit 0, 6 files) + fail-on-regression (clm_prod.hexa:212 farr_matmul + moe_lib t_matmul, exit 1) · $0 · 0-pod · NO GPU · byte-eq fixpoint untouched
 - SURVEY (STEP 1 — read docs/flame-determinism-contract.md IN FULL; enumerate ALL 3 run-step
   determinism layers + the 4th compile-step + per-phase sub-invariants; grep .github/workflows +
