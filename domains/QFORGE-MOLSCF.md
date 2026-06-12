@@ -24,8 +24,9 @@ Fock 빌드, (3) 비직교 일반화 고유문제 `FC=SCε`. 모든 g5 anchor �
       (self V=−2Z√(2a/π) · STO-3G H single-center V=−1.2266137219 · far nuc→−Z/R)
 - [x] brick 3 — 2-전자 (ab|cd) (Boys F₀ · 4-index s-only · Szabo A.41) g5 PASS
       (same-center (aa|aa)=2√(a/π) · 8-fold symmetry · 두 cloud 멀어지면 (aa|bb)→1/R)
-- [ ] brick 4 — Fock 빌드 F = H_core + G[P]
-- [ ] brick 5 — RHF SCF 루프 FC=SCε (eigh · g5: H₂/STO-3G E≈−1.1167 Ha @1.4bohr)
+- [x] brick 4 — Fock 빌드 F = H_core + G[P] (G=J−½K · `rhf.hexa` rhf_g_matrix/rhf_fock) g5 PASS
+- [x] brick 5 — RHF SCF 루프 FC=SCε (Löwdin S^{−½}+eigh 재사용·d19·density iter) g5 PASS
+      (H₂/STO-3G @1.4bohr E_total=−1.11671 Ha vs Szabo −1.1167 |Δ|=1.2e-5 · iters=2 · HOMO ε=−0.5782)
 - [ ] brick 6 — 분자 force ∇_R E (autograd through brick 1-5 · NOVEL lane)
 - [ ] brick 7 — p/d 각운동량 (Hermite recursion · 실제 화학 분자)
 
