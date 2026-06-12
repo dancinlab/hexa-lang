@@ -1,0 +1,307 @@
+// HEXA Standard Library — qforge/atoms/mp2
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE-ATOMS brick #16 — MP2 (second-order Møller-Plesset) correlation energy
+// on top of a CONVERGED closed-shell RHF reference. RHF (bricks r3..r15) is a
+// MEAN-FIELD method: it replaces the instantaneous electron-electron repulsion by
+// an average field, so it MISSES electron CORRELATION — the dominant remaining HF
+// error (tens of mHa for these small systems). MP2 is the FIRST post-HF correlated
+// method: a closed-form second-order perturbation correction that reuses the
+// converged RHF orbitals (C, ε) + the AO ERI tensor (μν|λσ) ALREADY built by the
+// MOLSCF lane (rhf_force.hexa / rhf_force_pd.hexa). Nothing in RHF changes — MP2 is
+// purely ADDITIVE on top:  E_total^MP2 = E_RHF + E_corr,  E_corr < 0 always.
+//
+// ── closed-shell spin-restricted MP2 (Szabo & Ostlund eq. 6.74; Crawford prog-proj)
+//   E_corr = Σ_{ia,jb} (ia|jb) [ 2(ia|jb) − (ib|ja) ] / (ε_i + ε_j − ε_a − ε_b)
+//   i,j = OCCUPIED MOs (0 .. n_occ−1);  a,b = VIRTUAL MOs (n_occ .. n−1).
+//   The [2J−K]-style numerator is the spin-summed closed-shell form (same-spin +
+//   opposite-spin contributions collapsed). The denominator (ε_occ − ε_virt) is
+//   STRICTLY NEGATIVE (HOMO < LUMO), and (ia|jb)·[2(ia|jb)−(ib|ja)] ≥ 0 for a real
+//   basis, so EVERY term lowers the energy ⇒ E_corr < 0 (correlation always binds).
+//
+// ── the AO→MO 4-index transform  (ia|jb) = Σ_{μνλσ} C_μi C_νa C_λj C_σb (μν|λσ) ──
+//   Done as FOUR sequential QUARTER-transforms — N⁵ scaling, NOT one N⁸ contraction
+//   (d6 honest: the naive 8-fold loop is intractable; the staged transform is the
+//   standard trick). At each stage one AO index is replaced by one MO index against
+//   the C matrix, the partial tensor carried forward. The chemists' (μν|λσ) layout
+//   eri[((μ*n+ν)*n+σ)*n+λ] is EXACTLY what rhf_eri_at / rhf_g_matrix consume (d19
+//   reuse — same tensor, no rebuild).
+//
+// ── d4 generic dispatch — instance = the supplied (C, ε, eri, n_occ) ─────────────
+//   mp2_corr_from_rhf consumes a converged RHF result + the AO ERI tensor. The
+//   MOLECULE/BASIS is the manifest: H₂/STO-3G (s-only, rhf_force.hexa) and
+//   H₂O/STO-3G (p/d, rhf_force_pd.hexa) traverse the SAME path — only n, n_occ and
+//   the integrals differ. There is NO per-molecule branch.
+//
+// ── honest scope (d6) ────────────────────────────────────────────────────────────
+//   MP2 is the FIRST correlation order — it still misses higher-order correlation
+//   (MP3/MP4, the infinite-order CCSD/CCSD(T) resummation) and is bounded by the
+//   STO-3G minimal-basis incompleteness (the basis-set limit needs cc-pVXZ). This
+//   brick is SPIN-RESTRICTED CLOSED-SHELL only — open-shell/UMP2 needs a UHF
+//   reference (a sibling MOLSCF UHF lane). Every number is REAL: the transform and
+//   the energy sum are exact for the supplied integrals; nothing is fitted/forced.
+//
+// reuse (d19 · d3): the converged RHF (rhf_scf) + S^{-½}/diagonalize (rhf.hexa) +
+//   the AO ERI tensor (the SAME (μν|λσ) the Fock build consumes). No new integral,
+//   eigensolver, or contraction primitive minted — MP2 is pure post-processing.
+
+use "stdlib/qforge/molscf/rhf"
+
+// ════════════════════════════════════════════════════════════════════════════
+//   MO coefficients from a converged Fock (rhf_scf returns P/F/ε, not C)
+// ════════════════════════════════════════════════════════════════════════════
+
+// rhf_scf converges the density and returns [e_total, iters, e_elec, P, F, eps,
+// converged] — it does NOT expose C. At convergence F is the self-consistent Fock,
+// so one Roothaan diagonalization of (S, F) reproduces the converged MO set exactly.
+// Returns C as n×n row-major (C_μa = C[μ*n+a]), columns ASCENDING in energy
+// (occupied a = 0 .. n_occ−1), matching rhf_density / rhf_wdensity ordering.
+pub fn mp2_mo_coeffs(S: [float], F: [float], n: int) -> [float] {
+    let xmat = rhf_s_inv_sqrt(S, n)
+    let dg = rhf_diagonalize(F, xmat, n)
+    return dg[0]                                  // C (n×n row-major)
+}
+
+// Closed-shell density P_μν = 2 Σ_{a∈occ} C_μa C_νa from MO coeffs (d19 reuse of
+// rhf_density — exposed here so the selftest's AO-side E_2e check uses the SAME P
+// the Fock build does, without re-importing rhf internals).
+pub fn mp2_density_from_C(C: [float], n: int, n_occ: int) -> [float] {
+    return rhf_density(C, n, n_occ)
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   AO → MO 4-index transform  (μν|λσ) → (ia|jb)   — N⁵ quarter-transforms
+// ════════════════════════════════════════════════════════════════════════════
+
+// Flat index into a chemists' tensor T[((p*n+q)*n+r)*n+s].
+fn _t4(T: [float], n: int, p: int, q: int, r: int, s: int) -> float {
+    return T[((p * n + q) * n + r) * n + s]
+}
+
+// Full AO→MO transform of the chemists' (μν|λσ) tensor into (pq|rs) over ALL n MOs.
+//   (pq|rs) = Σ_{μνλσ} C_μp C_νq C_λr C_σs (μν|λσ)
+// FOUR sequential quarter-transforms, each O(n⁵):
+//   q1[p,ν,λ,σ] = Σ_μ C_μp (μν|λσ)        (transform index 1: μ→p)
+//   q2[p,q,λ,σ] = Σ_ν C_νq  q1[p,ν,λ,σ]   (index 2: ν→q)
+//   q3[p,q,r,σ] = Σ_λ C_λr  q2[p,q,λ,σ]   (index 3: λ→r)
+//   q4[p,q,r,s] = Σ_σ C_σs  q3[p,q,r,σ]   (index 4: σ→s)
+// C is n×n row-major (C_μp = C[μ*n+p]). Returns the full n⁴ MO tensor (flat).
+pub fn mp2_ao_to_mo(eri: [float], C: [float], n: int) -> [float] {
+    let n4 = n * n * n * n
+    // ── quarter 1: μ→p ───────────────────────────────────────────────────────
+    let mut q1: [float] = []
+    let mut i1 = 0
+    while i1 < n4 { q1.push(0.0) ; i1 = i1 + 1 }
+    let mut p = 0
+    while p < n {
+        let mut nu = 0
+        while nu < n {
+            let mut lm = 0
+            while lm < n {
+                let mut sg = 0
+                while sg < n {
+                    let mut acc = 0.0
+                    let mut mu = 0
+                    while mu < n {
+                        acc = acc + C[mu * n + p] * _t4(eri, n, mu, nu, lm, sg)
+                        mu = mu + 1
+                    }
+                    q1[((p * n + nu) * n + lm) * n + sg] = acc
+                    sg = sg + 1
+                }
+                lm = lm + 1
+            }
+            nu = nu + 1
+        }
+        p = p + 1
+    }
+    // ── quarter 2: ν→q ───────────────────────────────────────────────────────
+    let mut q2: [float] = []
+    let mut i2 = 0
+    while i2 < n4 { q2.push(0.0) ; i2 = i2 + 1 }
+    p = 0
+    while p < n {
+        let mut q = 0
+        while q < n {
+            let mut lm = 0
+            while lm < n {
+                let mut sg = 0
+                while sg < n {
+                    let mut acc = 0.0
+                    let mut nu = 0
+                    while nu < n {
+                        acc = acc + C[nu * n + q] * _t4(q1, n, p, nu, lm, sg)
+                        nu = nu + 1
+                    }
+                    q2[((p * n + q) * n + lm) * n + sg] = acc
+                    sg = sg + 1
+                }
+                lm = lm + 1
+            }
+            q = q + 1
+        }
+        p = p + 1
+    }
+    // ── quarter 3: λ→r ───────────────────────────────────────────────────────
+    let mut q3: [float] = []
+    let mut i3 = 0
+    while i3 < n4 { q3.push(0.0) ; i3 = i3 + 1 }
+    p = 0
+    while p < n {
+        let mut q = 0
+        while q < n {
+            let mut r = 0
+            while r < n {
+                let mut sg = 0
+                while sg < n {
+                    let mut acc = 0.0
+                    let mut lm = 0
+                    while lm < n {
+                        acc = acc + C[lm * n + r] * _t4(q2, n, p, q, lm, sg)
+                        lm = lm + 1
+                    }
+                    q3[((p * n + q) * n + r) * n + sg] = acc
+                    sg = sg + 1
+                }
+                r = r + 1
+            }
+            q = q + 1
+        }
+        p = p + 1
+    }
+    // ── quarter 4: σ→s ───────────────────────────────────────────────────────
+    let mut q4: [float] = []
+    let mut i4 = 0
+    while i4 < n4 { q4.push(0.0) ; i4 = i4 + 1 }
+    p = 0
+    while p < n {
+        let mut q = 0
+        while q < n {
+            let mut r = 0
+            while r < n {
+                let mut s = 0
+                while s < n {
+                    let mut acc = 0.0
+                    let mut sg = 0
+                    while sg < n {
+                        acc = acc + C[sg * n + s] * _t4(q3, n, p, q, r, sg)
+                        sg = sg + 1
+                    }
+                    q4[((p * n + q) * n + r) * n + s] = acc
+                    s = s + 1
+                }
+                r = r + 1
+            }
+            q = q + 1
+        }
+        p = p + 1
+    }
+    return q4
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   MP2 correlation energy from the MO-basis ERI tensor
+// ════════════════════════════════════════════════════════════════════════════
+
+// E_corr = Σ_{ia,jb} (ia|jb)[2(ia|jb)−(ib|ja)] / (ε_i + ε_j − ε_a − ε_b)
+//   eri_mo : full n⁴ MO tensor in chemists' (pq|rs) layout (mp2_ao_to_mo output).
+//   eps    : MO energies ASCENDING (occupied first), length n.
+//   i,j ∈ [0,n_occ);  a,b ∈ [n_occ,n).  Denominator is strictly < 0 (HOMO<LUMO).
+pub fn mp2_corr_energy(eri_mo: [float], eps: [float], n: int, n_occ: int) -> float {
+    let mut e = 0.0
+    let mut i = 0
+    while i < n_occ {
+        let mut a = n_occ
+        while a < n {
+            let mut j = 0
+            while j < n_occ {
+                let mut b = n_occ
+                while b < n {
+                    let iajb = _t4(eri_mo, n, i, a, j, b)   // (ia|jb)
+                    let ibja = _t4(eri_mo, n, i, b, j, a)   // (ib|ja)
+                    let num = iajb * (2.0 * iajb - ibja)
+                    let den = eps[i] + eps[j] - eps[a] - eps[b]
+                    e = e + num / den
+                    b = b + 1
+                }
+                j = j + 1
+            }
+            a = a + 1
+        }
+        i = i + 1
+    }
+    return e
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   driver — converged RHF → MP2 correlation, additive on top
+// ════════════════════════════════════════════════════════════════════════════
+
+// Consume the SAME (S, hcore, eri, n_occ, e_nuc) the RHF lane assembles, run
+// rhf_scf, then add MP2 on top. d4-generic: any molecule/basis whose integrals are
+// supplied runs here unchanged (H₂ s-only and H₂O p/d both flow through it).
+// Returns [ e_rhf, e_corr, e_mp2_total, converged, eps, C, eri_mo ]:
+//   e_rhf       = the UNCHANGED converged RHF total energy (READ-only consume)
+//   e_corr      = MP2 correlation energy (< 0)
+//   e_mp2_total = e_rhf + e_corr  (< e_rhf)
+//   eps, C      = the converged RHF MO energies / coefficients (for audit)
+//   eri_mo      = the MO-basis (pq|rs) tensor (for the AO→MO consistency check)
+pub fn mp2_corr_from_rhf(
+    S: [float], hcore: [float], eri: [float],
+    n: int, n_occ: int, e_nuc: float,
+    max_iter: int, e_tol: float, mix: float
+) -> [any] {
+    let scf = rhf_scf(S, hcore, eri, n, n_occ, e_nuc, max_iter, e_tol, mix)
+    let e_rhf = scf[0]
+    let F = scf[4]
+    let eps = scf[5]
+    let converged = scf[6]
+    let C = mp2_mo_coeffs(S, F, n)
+    let eri_mo = mp2_ao_to_mo(eri, C, n)
+    let e_corr = mp2_corr_energy(eri_mo, eps, n, n_occ)
+    let e_mp2 = e_rhf + e_corr
+    return [e_rhf, e_corr, e_mp2, converged, eps, C, eri_mo]
+}
+
+// ── AO→MO consistency check helper: Hartree energy in the MO basis ───────────
+//   ½ Σ_{i,j ∈ occ} [ 2(ii|jj) − (ij|ji) ] × 2 ... is basis-dependent, so instead
+//   we expose the simplest invariant: the closed-shell two-electron energy rebuilt
+//   from the MO-basis tensor must equal the AO-basis two-electron energy (a true
+//   N-electron invariant under the unitary AO→MO rotation). For a closed-shell
+//   determinant with doubly-occupied MOs i,j, the standard RHF two-electron energy
+//   (Szabo eq. 3.184 split into 1e+2e parts) is:
+//     E_2e^MO = Σ_{i,j∈occ} [ 2(ii|jj) − (ij|ji) ]
+//   (the double occupation + spin-sum already folded into the 2J−K coefficients —
+//   no extra outer factor). This must match E_2e computed in the AO basis from the
+//   density P, proving the 4-index transform is correct (g5 anchor a).
+pub fn mp2_two_electron_energy_mo(eri_mo: [float], n: int, n_occ: int) -> float {
+    let mut e = 0.0
+    let mut i = 0
+    while i < n_occ {
+        let mut j = 0
+        while j < n_occ {
+            let jcoul = _t4(eri_mo, n, i, i, j, j)    // (ii|jj)
+            let kexch = _t4(eri_mo, n, i, j, j, i)    // (ij|ji)
+            e = e + (2.0 * jcoul - kexch)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return e
+}
+
+// AO-basis closed-shell two-electron energy from the density P (the SAME quantity
+// the Fock build's G[P] half-contributes). E_2e = ½ Σ_μν P_μν G[P]_μν, where
+// G = J − ½K. This is the AO-side reference for mp2_two_electron_energy_mo.
+pub fn mp2_two_electron_energy_ao(P: [float], eri: [float], n: int) -> float {
+    let G = rhf_g_matrix(P, eri, n)
+    let mut e = 0.0
+    let mut idx = 0
+    while idx < n * n {
+        e = e + P[idx] * G[idx]
+        idx = idx + 1
+    }
+    return 0.5 * e
+}
