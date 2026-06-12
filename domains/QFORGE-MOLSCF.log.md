@@ -592,3 +592,70 @@ fronts are NAMED frontiers, NOT gaps in the core:
 2. CASSCF / active-space front-end for the genuine multi-reference wall (Cr₂) — the honest method-class
    jump, reusing the integral machinery (the AO ERIs already exist; add the active-space CI + orbital opt).
 3. g angular momentum + analytic force — the two remaining single-reference additive bricks.
+
+## round-10 — brick 13 — CASCI multi-reference / static correlation (CAS(2,2) H₂ dissociation) [SEALED]
+
+`stdlib/qforge/molscf/casci.{hexa,selftest}` — NEW files (additive; rhf/uhf/rohf/scf_robust.hexa
+byte-untouched). BREAKS the ONE remaining fundamental method-class wall named by round-9: multi-reference
+/ STATIC CORRELATION. A single Slater determinant (RHF) — and even CCSD on top of it — fundamentally
+fails at bond dissociation, where the wavefunction becomes an EQUAL mix of two determinants that no
+single-reference method can represent. CASCI diagonalizes the exact Hamiltonian in the determinant basis
+of the active space, capturing that static correlation.
+
+### what shipped (HONEST, d6) — CASCI, not full CASSCF
+This round ships **CASCI**: full-CI in the determinant basis over **FIXED RHF orbitals** (orbitals NOT
+re-optimized). The active space is 2 electrons in m active orbitals; for H₂/STO-3G the active space is
+the σ_g/σ_u pair → CAS(2,2), which IS the full 2-orbital space → exact-in-basis == FCI == CCSD-2e at
+EVERY bond length. **CASSCF orbital-optimization (the MCSCF orbital-rotation step) defers to round-11** —
+an HONEST brick boundary. The static-correlation demonstration (RHF-breaks / CAS-fixes at stretch) is the
+wall-breaking content and is complete with CASCI.
+
+### method
+- AO→MO integral transform: `casci_mo_hcore` (h_pq = Σ_μν C_μp H_μν C_νq) + `casci_mo_eri`
+  ((pq|rs) = Σ_μνσλ C_μp C_νq C_σr C_λs (μν|σλ), direct contraction over the small active set). The AO
+  H_core + ERIs are reused VERBATIM from sealed brick-1/2/3; the RHF MO-coeffs C are recovered from the
+  converged Fock via `rhf_diagonalize` (no re-implementation — d19/d3).
+- 2-electron full-CI: determinant basis |a_α b_β⟩ (m×m grid, m² dets). Slater–Condon matrix element
+  (opposite-spin pair, spatial-MO): ⟨a_α b_β|H|c_α d_β⟩ = [δ_bd δ_ac(h_aa+h_bb) + δ_bd(1−δ_ac)h_ac +
+  δ_ac(1−δ_bd)h_bd] + (ac|bd). Opposite-spin → bare Coulomb coupling (ac|bd), NO exchange. `eigh`
+  (the same primitive RHF uses for F') diagonalizes; lowest eigenvalue = singlet ground state, its
+  eigenvector gives the determinant weights c_a² (the multi-reference signature).
+
+### independent reference (pyscf 2.13.1 RHF+FCI/STO-3G ζ=1.0)
+Verified IN PYTHON against pyscf FCI BEFORE the hexa port: the 2-electron determinant CI reproduces FCI
+to |Δ|≤4e-16 at R=1.4/3.0/5.0 bohr (also cross-checked the general m>2 case on 6-31G H₂, |Δ|=8.9e-16).
+  R=1.4 bohr: E_RHF=−1.11671433  E_FCI=−1.13727594  c0²=0.9873 c1²=0.0127
+  R=5.0 bohr: E_RHF=−0.68641592  E_FCI=−0.93488935  c0²=0.5728 c1²=0.4272
+
+### g5 verdicts (VERBATIM — `casci_selftest.hexa`)
+(a) CAS(2,2)==FCI anchor — H₂/STO-3G @1.4 bohr: E_CAS=−1.13727 == pyscf FCI −1.13727594 |Δ|=1.9e-6
+    (integral-limited, same source as the RHF anchor |Δ|=1.2e-5; the CI itself is exact |Δ|≤4e-16).
+(b) STATIC-CORRELATION WIN @R=5.0 bohr (stretched): E_RHF=−0.68642 (single-det, qualitatively WRONG, too
+    high) vs E_CAS=−0.93489 == pyscf FCI −0.93488935 — RHF error 0.248 Ha. MULTI-REFERENCE signature:
+    c0²=0.573 AND c1²=0.427 BOTH large (the two-determinant wall); at equilibrium c0²=0.987 single-ref.
+(c) variational E_CAS ≤ E_RHF at every R; static correlation @5.0 (0.248 Ha) ≫ @1.4 (0.021 Ha) — grows
+    on stretch exactly as the single-determinant picture breaks down.
+(d) r1..r9 (gaussian/coulomb/rhf/md/md_d/md_f/uhf/rohf/scf_robust) regress ALL PASS — casci is a NEW file,
+    every existing SCF path byte-untouched.
+
+### honest depletion assessment (d6) — with multi-reference added, what genuinely remains?
+The molecular-SCF front-end now spans BOTH method classes: single-reference (RHF/UHF/ROHF/robust-TM) AND
+multi-reference (CASCI static correlation). The wall named "fundamentally beyond single-determinant SCF"
+is now broken for the exact-in-basis case. The remaining fronts are REFINEMENTS / reaches, not method-class
+gaps in the core:
+  1. CASSCF orbital optimization (round-11) — CASCI uses FIXED RHF orbitals; full CASSCF re-optimizes the
+     orbitals (MCSCF orbital-rotation: E_CASSCF ≤ E_CASCI, invariant to the RHF-vs-ROHF seed). This is the
+     "harder part" and the honest next brick.
+  2. larger active spaces — CAS(6,6), CAS(n,m) with >2 active electrons needs the general N-electron
+     determinant/CSF string enumeration (Cr₂ = CAS(12,12)); the 2e engine here is the proof-of-method.
+  3. 2nd-order Newton-SCF (collapse the round-9 deep-anneal in-basin cost) · g angular momentum · brick-6
+     analytic force — all single-reference additive bricks, no new method class.
+
+### round-11 next (3 breakthrough paths, d2 — never concede)
+1. brick 14 — CASSCF orbital optimization: the MCSCF orbital-rotation step (Newton / super-CI), reusing
+   the CASCI energy + 1-/2-RDM as the gradient/Hessian source. Anchor: H₂/STO-3G CASSCF == CASCI (CAS(2,2)
+   is the full space, orbital-opt cannot lower a complete-active-space CI — a rigorous invariance check) +
+   seed-invariance (RHF-seed == ROHF-seed CASSCF).
+2. general N-electron CAS — replace the 2e |a_α b_β⟩ grid with α/β determinant-string enumeration +
+   generalized Slater–Condon, opening CAS(6,6) → CAS(12,12) for Cr₂ (the genuine multi-reference dimer).
+3. 2nd-order Newton-SCF + g angular momentum + analytic force — the remaining single-reference bricks.

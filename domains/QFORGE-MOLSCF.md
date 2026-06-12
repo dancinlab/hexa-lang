@@ -88,8 +88,21 @@ Fock 빌드, (3) 비직교 일반화 고유문제 `FC=SCε`. 모든 g5 anchor �
       (c) GWH guess improves seeding — TiO same schedule: GWH converges (43 it) where bare H_core does NOT
           (149 it, stalled); GWH first-rung 17 it vs H_core 19 it — better d-shell seed
       (d) r1..r8 (gaussian/coulomb/rhf/md/md_d/md_f/uhf/rohf) regress ALL PASS — scf_robust is a NEW file
-- [ ] brick 13 (round-10) — 2nd-order/Newton-SCF (collapse the deep-anneal in-basin cost) + multi-reference
-      frontier (Cr₂ → CASSCF, beyond single-determinant) + g 각운동량 (15 Cart → 9 spherical) + brick 6 force
+- [x] brick 13 (round-10) — CASCI multi-reference / static-correlation (BREAKS the single-determinant wall)
+      `casci.hexa` (additive — rhf/uhf/rohf/scf_robust.hexa byte-untouched): AO→MO 4-index transform
+      (casci_mo_hcore Cᵀ H C · casci_mo_eri Σ C C C C (μν|σλ)) + 2-electron full-CI in the |a_α b_β⟩
+      determinant basis (Slater–Condon ⟨ab|H|cd⟩ = 1e[δ_bd δ_ac(h_aa+h_bb)+δ_bd h_ac+δ_ac h_bd] + (ac|bd)
+      Coulomb, opposite-spin no-exchange) → eigh ground state. CAS(2,2) H₂ = full 2-orbital space → FCI exact.
+      SHIPPED = CASCI (CI over FIXED RHF orbitals); CASSCF orbital-opt = round-11 (HONEST brick boundary, d6).
+      (a) CAS(2,2)==FCI anchor — H₂/STO-3G @1.4 bohr E_CAS=−1.13727 == pyscf FCI −1.13727594 |Δ|=1.9e-6
+          (integral-limited, == RHF anchor |Δ|=1.2e-5 source; the CI itself exact |Δ|≤4e-16 vs pyscf in xval)
+      (b) STATIC-CORR WIN @R=5.0 bohr (stretched): E_RHF=−0.68642 (single-det, WRONG, too high) vs E_CAS=
+          −0.93489 == pyscf FCI −0.93488935 — RHF error 0.248 Ha. MULTI-REF signature: c0²=0.573 + c1²=0.427
+          BOTH large (vs equilibrium c0²=0.987 single-ref) — the two-determinant wall, fixed
+      (c) variational E_CAS ≤ E_RHF at every R · static-corr @5.0 (0.248) ≫ @1.4 (0.021) — grows on stretch
+      (d) r1..r9 (gaussian/coulomb/rhf/md/md_d/md_f/uhf/rohf/scf_robust) regress ALL PASS — casci is a NEW file
+- [ ] brick 14 (round-11) — CASSCF orbital optimization (MCSCF orbital-rotation: E_CASSCF ≤ E_CASCI,
+      seed-invariant) + larger CAS (CAS(6,6) → Cr₂) + 2nd-order Newton-SCF + g 각운동량 + brick 6 force
 
 ## three-scale unblock
 
