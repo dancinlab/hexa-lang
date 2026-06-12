@@ -124,6 +124,10 @@ while epoch < 200 {
     grad_W2 = grad_clip_norm(grad_W2, 5.0)
 
     // Adam update W2
+    // NOTE (OP-33d): `adam_step` was a FALSIFIED builtin (no runtime impl; runtime backs
+    // only `adamw_step`, RFC 034) — deregistered from the self/env.hexa roster. This proof
+    // demo is baseline-broken (exit_code=-1). Real AdamW = stdlib/flame/optim_lib.hexa
+    // opt_adamw_step. (`grad_clip_norm` above was likewise deregistered in OP-33c.)
     let r2 = adam_step(W2, grad_W2, m2, v2, lr, 0.9, 0.999, 0.00000001, epoch + 1)
     W2 = slice(r2, 0, 8)
     m2 = slice(r2, 8, 16)

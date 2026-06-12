@@ -163,6 +163,12 @@ fn bench_training_step() {
 
         i = 0
         while i < n_params {
+            // NOTE (OP-33d): `adam_step` here is the FALSIFIED builtin (4-arg form) — this
+            // file does NOT `use "gpu_optimizer"`, so there's no local `fn adam_step` to
+            // resolve to. The builtin was deregistered from the self/env.hexa roster (no
+            // runtime impl; runtime backs only `adamw_step`). This CUDA-gated bench is a
+            // never-passing surface (transpiles only under -DHEXA_CUDA + GPU + 100M deps;
+            // CPU transpile aborts before this). Real GPU AdamW = gpu_optimizer.hexa adam_step.
             let _ = adam_step(opt_states[i], grads[i], 3.0e-4, step + 1)
             i = i + 1
         }

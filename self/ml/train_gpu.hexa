@@ -129,6 +129,10 @@ fn train() {
         let lr = lr_cosine(step, WARMUP_STEPS, TRAIN_STEPS, PEAK_LR, MIN_LR)
 
         // AdamW update
+        // NOTE (OP-33d): this `adam_step` resolves to the LOCAL `fn adam_step` in the
+        // imported gpu_optimizer.hexa (4-arg GPU AdamW), NOT the falsified builtin. The
+        // builtin was deregistered from the self/env.hexa roster (no runtime impl) — that
+        // change does NOT affect this call, which binds to the local module-level fn.
         i = 0
         while i < n_params {
             let _ = adam_step(opt_states[i], grads[i], lr, step)

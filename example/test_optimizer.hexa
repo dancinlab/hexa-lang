@@ -12,6 +12,10 @@ println("[1] SGD: params", params, "→", updated)
 // Expected: [0.999, 2.002, 2.997, 4.001]
 
 // ═══ [2] Adam Step ═══
+// NOTE (OP-33d): `adam_step` was a FALSIFIED builtin — no runtime impl; the runtime
+// backs only `adamw_step` (RFC 034, 11-arg: p,g,m,v,n,lr,b1,b2,eps,wd,t). Deregistered
+// from the self/env.hexa roster. This demo is baseline-broken (exit_code=-1) and is NOT
+// the path real training takes; real AdamW = stdlib/flame/optim_lib.hexa opt_adamw_step.
 let p = [1.0, 2.0]
 let g = [0.5, -0.3]
 let m = zeros(2)
