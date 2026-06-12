@@ -1,0 +1,262 @@
+F-OP44-VSNPRINTF-CORRECT-ROUND — the OP-40 ROOT-cause, generalized: the runtime's
+                          hand-rolled `hxlcl_vsnprintf` %g/%e/%f float path (the
+                          formatter OP-40 worked AROUND only for the const-fold
+                          path) is NOT correctly-rounded for ANY runtime float
+                          printing. OP-44 MEASURES the full defect (62% of doubles
+                          mis-round at %.17g/%.17e, up to 5 ULP, NOT shortest-
+                          round-trip) and PROVES the correct libc-delegation fix
+                          (→ 0 defect), but the fix is BLOCKED 0-pod: the formatter
+                          body lives ONLY in the gitignored frozen-seed runtime.c
+                          blob → a tracked fix needs the same frozen-seed re-pin as
+                          OP-39b/OP-40's deploy boundary. DEFER 🟠 with the recipe.
+══════════════════════════════════════════════════════════════════════════════
+DATE: 2026-06-12 · HEXA-0POD OP-44 · 0-pod ($0, NO GPU, NO vast, NO pod)
+HOST: local arm64-macos (Darwin 25.5.0), CPU-only
+STATUS: 🟠 DEFERRED (measured + bounded + libc-delegation recipe PROVEN correct).
+        The defect is REAL, PERVASIVE, and MEASURED (62.6% of doubles print a
+        non-round-trip %.17g string; %.17e drifts up to 5 ULP). The correct fix
+        (delegate the float branch to libc snprintf — the OP-37b atof→strtod
+        pattern in reverse) is VALIDATED to close it to 0/0, BUT the formatter
+        body exists ONLY in the gitignored frozen-seed `self/runtime.c` (restored
+        from git anchor 151c52c82). A tracked source fix is NOT directly possible:
+        landing it requires the same frozen-anchor RE-PIN as OP-39b/OP-40's
+        deploy boundary — out of $0 single-PR 0-pod scope. This verdict MEASURES,
+        BOUNDS, and hands off the proven recipe; it does NOT touch the frozen blob.
+
+────────────────────────────────────────────────────────────────────────────
+THE HANDOFF (from OP-40 / F-OP40 HONEST RESIDUALS §1)
+────────────────────────────────────────────────────────────────────────────
+OP-40 root-caused the comptime const-fold 1-ULP drift to the runtime's hand-
+rolled %.17e SERIALIZE (`hxlcl_vsnprintf` / `rt_format_float_sci`, "Not bit-exact
+with libc's") and worked AROUND it for the determinism-sensitive const-fold path
+by emitting hex-float literals (bypassing decimal formatting). OP-40 explicitly
+LEFT the hand-rolled formatter as-is and logged: "the hand-rolled
+rt_format_float_sci / hxlcl_vsnprintf are LEFT as-is ... Other format_float_sci
+callers (print, to_string display) keep the readable decimal — out of scope."
+OP-44 was asked to ASSESS that residual: the `%g`/`%e`/`%f` of `hxlcl_vsnprintf`
+is STILL non-correctly-rounded for ALL RUNTIME float printing (every hexa program
+that prints a float routes through it). MEASURE, then FIX if tractable+safe 0-pod,
+else DEFER with the exact blocker + recipe.
+
+────────────────────────────────────────────────────────────────────────────
+LOCATION + GENERATION CHAIN (mandatory survey)
+────────────────────────────────────────────────────────────────────────────
+· `self/runtime.c` is GITIGNORED (confirmed: `git check-ignore self/runtime.c` →
+  match; `git cat-file -e HEAD:self/runtime.c` → "does not exist in HEAD"). It is
+  a frozen-seed BLOB, restored on demand by `tool/restore_frozen_seeds` from the
+  IMMUTABLE pre-graduation git anchor FROZEN_SEED_REF=151c52c82502e93d01735c58b43b
+  017d102fee63 (the parent of graduation commit 7906951c0 "tracked .c = 0", #2065).
+· `hxlcl_vsnprintf`'s C body lives at `self/runtime.c:657` IN THAT FROZEN BLOB.
+  The float branch (conv=='f'/'g'/'e'/...) is at runtime.c:~722 ("Cycle 56 — real
+  double-to-string ... Not bit-exact with libc's Grisu/Ryu"). The libc symbols are
+  masked at runtime.c:2095 `#define snprintf(b,c,...) hxlcl_snprintf(...)` — part
+  of a deliberate libc-symbol-elimination layer ("Textual override of any residual
+  libc references in subsequent code").
+· The body has NO tracked SSOT emitter. The `hxlcl_vsnprintf` and "Cycle 56" /
+  "Not bit-exact" strings appear in TRACKED `self/codegen.hexa` ONLY as COMMENTS
+  (codegen.hexa:9873-9874, OP-40's explanatory note) — NOT a definition. There is
+  no `static int hxlcl_vsnprintf` / `fn hxlcl_vsnprintf` in any tracked .hexa/.c.
+  `self/runtime.c.hexanoport` (tracked, 209 B) is a placeholder note: "SSOT is
+  self/runtime.hexa; this file provides the C runtime ... Cannot be ported to .hexa
+  (it IS the bootstrap runtime)." → the formatter is irreducible frozen substrate.
+· CONCLUSION: the float formatter is reachable ONLY in the gitignored frozen-seed
+  blob. This is the SAME structural blocker as OP-39b (the seed is the frozen .c-
+  graduation anchor, not a surgical tracked file) — confirmed before touching code.
+
+────────────────────────────────────────────────────────────────────────────
+THE FORMATTER ALGORITHM (verbatim from frozen self/runtime.c:722, why it drifts)
+────────────────────────────────────────────────────────────────────────────
+Naive digit-extraction, NOT correctly-rounded:
+  1. normalize dv into [1,10) by repeated *1e±k (introduces rounding error);
+  2. extract sig_digits (CAPPED AT 18) via `d=(int)dv; dv=(dv-d)*10.0;` — the
+     `(dv-d)*10.0` recurrence ACCUMULATES fp error each iteration;
+  3. round-half-up by peeking ONE next digit `(int)dv >= 5` — not round-to-
+     nearest-even, no full-remainder consideration;
+  4. no shortest-round-trip (Grisu/Ryū/Dragon) — emits a fixed digit count.
+Self-commented: "Not bit-exact with libc's Grisu/Ryu but adequate for training
+observability + diagnostic use." OP-44 quantifies "not bit-exact" precisely.
+
+────────────────────────────────────────────────────────────────────────────
+MEASUREMENT (g5 — measure, don't assume). 5536 deduped finite doubles: A&S erf
+coefficient products + 5000 random doubles uniform over magnitude 1e-300..1e300
+(seed=44) + 500 random subnormals + edge cases (0.1, 1/3, 1e±300, 5e-324, DBL_MAX,
+±0.5/1.5/2.5). The EXACT frozen-blob float-format algorithm extracted verbatim into
+a standalone C harness, run against host libc snprintf + python ground truth.
+ground truth = python struct.pack/unpack round-trip (CPython = correctly-rounded).
+────────────────────────────────────────────────────────────────────────────
+
+  total cases (deduped, finite):                                    5536
+
+  --- %.17g  (full-precision / shortest-round-trip display) ---
+    hxlcl %.17g does NOT round-trip to the same double:     3463/5536  (62.6%)
+    libc  %.17g round-trip failures (sanity, must be 0):       0/5536  (0.0%)
+    hxlcl %.17g string != libc %.17g string:                5057/5536  (91.3%)
+
+  --- %.17e  (the const-fold serialize path OP-40 hex-floated around) ---
+    hxlcl %.17e parses to a DIFFERENT double than libc:     3432/5536  (62.0%)
+    MAX ULP gap (hxlcl vs libc parsed-back):                       5 ULP
+
+  sample %.17e drifts (double-bits | hxlcl emit | libc emit | ulp):
+    13813260502456816990 | -7.24981871602117067e-02 | -7.24981871602116967e-02 | 1
+     4590679781865677653 |  8.34799063558311971e-02 |  8.34799063558312043e-02 | 1
+    17077445262021788483 | -1.07808185391796263e+217| -1.07808185391796231e+217| 3
+     8994602671835313044 |  1.92079148527857502e+293 |  1.92079148527857596e+293| 3
+     1501750894578288418 |  2.83380606190873507e-208 |  2.83380606190873436e-208| 2
+
+DEFECT CLASSIFICATION (g0):
+· It IS shortest-round-trip-INCORRECT: 62.6% of doubles print a %.17g string that
+  parses BACK to a DIFFERENT double — the printed value silently misrepresents the
+  stored bits. (libc is 100% round-trip-correct by the C standard, confirmed 0/5536.)
+· The error is BOUNDED but NON-TRIVIAL: up to 5 ULP at %.17e over the wide
+  magnitude sweep (OP-40's narrow A&S-only sweep saw only 1 ULP; the full range is
+  worse). This is a DISPLAY/SERIALIZE defect, not a compute defect (the stored
+  doubles are correct — only their decimal rendering drifts).
+· Blast radius: EVERY runtime float print at high precision — println(float),
+  step/loss/grad-norm logs, to_string, any %g/%e/%f with >~15 sig digits.
+
+────────────────────────────────────────────────────────────────────────────
+THE CORRECT FIX + PROOF (g0 tractability — the crux)
+────────────────────────────────────────────────────────────────────────────
+The correct fix is the SYMMETRIC inverse of OP-37b (which routed atof→libc strtod):
+route the `hxlcl_vsnprintf` FLOAT branch through the REAL libc snprintf for the
+%e/%f/%g conversions. libc %e/%g are CORRECTLY-ROUNDED by the C standard AND
+machine-independent for round-trip (correctly-rounded decimal of a given double is
+unique → identical across conforming glibc/musl/macos libc — verified the canonical
+case prints "7.24981871602116967e-02" on macos libc; the value is platform-INVARIANT
+because it is the unique correctly-rounded representation). So delegation PRESERVES
+cross-platform determinism (it does NOT introduce a platform-dependent decimal).
+
+LIBC IS REACHABLE FROM THE RUNTIME SUBSTRATE (verified):
+· `self/runtime.c` already `#include <stdio.h>` (line 6) and `<math.h>` (line 11).
+· The runtime ALREADY calls real libc/libm directly: 36 direct libm calls
+  (cos/sin/exp/pow/sqrt/...) — this is the CLAUDE.md `stdlib_trig_libm` directive
+  in action (trig escapes the hxlcl layer to call IEEE-correct libm). Plus direct
+  `write`/`read`/`mmap`/`posix_spawn`/`regcomp`. → libc+libm ARE linked; the
+  `hxlcl_*` layer is a DELIBERATE symbol-elimination choice, NOT a hard freestanding
+  requirement. The float branch could capture the real `snprintf` (a function-pointer
+  taken BEFORE the line-2095 macro, or an unmasked alias) and delegate to it —
+  exactly as the trig path already calls real libm. No nostdlib/ffreestanding flag
+  is in the build (regen_cc_manual / build_selfhost.sh link `-lm`, full libc).
+
+FIX PROVEN CORRECT (same 5521-case sweep, float branch delegating to libc snprintf):
+    %.17g round-trip failures:                    0 / 5521   (was 3463/5536)
+    %.17e vs libc parsed-back drift:              0 / 5521   (was 3432/5536)
+  → the libc-delegation fix CLOSES BOTH defects to ZERO. Recipe validated.
+
+────────────────────────────────────────────────────────────────────────────
+TRACTABILITY DECISION (g0, honest) — DEFER 🟠
+────────────────────────────────────────────────────────────────────────────
+The fix is CORRECT and SMALL (delegate the float branch to libc snprintf, ~10 C
+lines), keeps cross-platform determinism, and would NOT shift the determinism-
+sensitive const-fold path (OP-40 already hex-floats that, bypassing the formatter
+entirely — so this fix only IMPROVES display callers, leaving the const-fold byte
+output unchanged → no const-fold golden churn).
+
+BUT it CANNOT land in a tracked-source 0-pod PR, for the SAME reason as OP-39b:
+· The formatter body lives ONLY in the gitignored frozen-seed `self/runtime.c`,
+  restored by `git checkout 151c52c82:self/runtime.c`. There is no tracked SSOT
+  emitter and runtime.c "Cannot be ported to .hexa (it IS the bootstrap runtime)".
+· Editing it = either (a) mutate the IMMUTABLE frozen anchor (forbidden — it is
+  the .c-graduation reference every platform bootstraps from), or (b) a wholesale
+  frozen-anchor RE-PIN to a NEW coherent runtime revision carrying the fix — which
+  needs the ~3.5h `build_selfhost.sh` self-host ladder + gen3→gen4 byte-eq +
+  parity on a BUILD HOST, then FROZEN_SEED_REF bump. That is a SELFHOST-NEXT /
+  build-host work item, NOT a $0 local single-PR 0-pod task. (Identical boundary
+  to OP-39b's seed-promote and OP-40's deploy caveat.)
+· SECONDARY blast-radius caveat (why this is correctly a SEPARATE, gated change
+  even on a build host): making %g/%e/%f correctly-rounded would shift the EXACT
+  decimal text of EVERY float-printing golden in the repo (91.3% of doubles render
+  differently). Those shifts are TOWARD correctness, but the blast radius (any test
+  asserting a non-round-trip hand-rolled string) means it must be STAGED with a
+  golden re-bake, not slipped into one PR. This reinforces DEFER over a rushed fix.
+
+A tracked fix without the frozen-anchor re-pin is structurally impossible 0-pod;
+forcing it would either corrupt the immutable bootstrap anchor or ship a runtime
+whose self-host fixpoint hasn't been re-proven on a build host. Per the task's own
+guidance ("a clean honest DEFER beats a risky formatter rewrite ... NEVER a red-
+gated runtime merge"), OP-44 DEFERS with the measured defect + the proven recipe.
+
+────────────────────────────────────────────────────────────────────────────
+UNBLOCK RECIPE (the concrete fix, for the eventual build-host / seed-promote PR)
+────────────────────────────────────────────────────────────────────────────
+1. In self/runtime.c (the frozen-blob successor revision), capture the real libc
+   snprintf BEFORE the line-2095 `#define snprintf hxlcl_snprintf` mask — e.g.
+   `static int (*const hxlcl_real_snprintf)(char*,size_t,const char*,...) = snprintf;`
+   placed above the #define (where the libc symbol is still visible).
+2. Replace the `hxlcl_vsnprintf` float branch (conv∈{e,f,g,E,F,G}) body with a
+   delegation: rebuild the format spec (`%`, optional `.<prec>`, conv) and call
+   `hxlcl_real_snprintf(fbuf, sizeof fbuf, spec, dv)` — width/zero/left padding can
+   stay in the existing post-format pad code, OR fold into the spec. (Mirrors the
+   trig-path pattern: escape the hxlcl layer to the IEEE-correct libc primitive.)
+   PROVEN: this closes %.17g round-trip + %.17e drift to 0/0 on the 5521-case sweep.
+3. Re-bake float-printing goldens repo-wide (the strings shift toward correctly-
+   rounded). Stage as its OWN PR (blast radius).
+4. Build-host ladder: build_selfhost.sh → prove gen3→gen4 byte-eq + miscompile-zero
+   + determinism gates GREEN with the new runtime → re-pin FROZEN_SEED_REF → land.
+This is the SAME frozen-seed-promote dependency OP-39b/OP-40 flagged; OP-44 supplies
+the validated formatter patch so that promote PR is drop-in.
+
+────────────────────────────────────────────────────────────────────────────
+SELF-HOST FIXPOINT (paramount) — UNTOUCHED
+────────────────────────────────────────────────────────────────────────────
+OP-44 makes NO change to tracked source, NO change to the frozen blob, NO .tape
+edit. It ships ONLY this verdict + the domain milestone/log. The self-host
+fixpoint, gen3→gen4 byte-eq, miscompile-zero, and determinism gates are
+structurally UNAFFECTED (nothing in the toolchain changed). No red-gate risk.
+
+────────────────────────────────────────────────────────────────────────────
+TIER VERDICT (g5)
+────────────────────────────────────────────────────────────────────────────
+🟠 DEFERRED — measured + bounded + recipe-proven, a COMPLETE honest outcome. The
+runtime float formatter `hxlcl_vsnprintf` %g/%e/%f is MEASURED non-correctly-
+rounded: 62.6% of doubles print a non-round-trip %.17g string, %.17e drifts up to
+5 ULP, 91.3% diverge from libc — REAL, PERVASIVE (every high-precision float print),
+and shortest-round-trip-INCORRECT (vs libc 0/5536, proven). The CORRECT fix (route
+the float branch to libc snprintf — OP-37b's atof→strtod pattern in reverse;
+correctly-rounded AND cross-platform-deterministic) is VALIDATED to close the
+defect to 0/0. NOT LANDED 0-pod because the formatter lives only in the gitignored
+frozen-seed runtime.c → a tracked fix requires the OP-39b-class frozen-anchor
+RE-PIN (build-host self-host ladder + FROZEN_SEED_REF bump), out of $0 single-PR
+scope, plus a repo-wide golden re-bake (91% of float strings shift). DEFER with the
+exact blocker + drop-in recipe beats a forbidden frozen-anchor mutation or an
+unverified runtime ship.
+
+CONNECTION TO THE FROZEN-SEED-PROMOTE DEPENDENCY
+· This is the SAME frozen-anchor blocker as OP-39b (gate-flip promote) and OP-40
+  (deploy boundary): the determinism/format-sensitive runtime substrate lives in
+  the immutable 151c52c82 .c-graduation blob, so any runtime-internal fix is a
+  seed re-pin, not a tracked cherry-pick. OP-44 adds the THIRD instance and supplies
+  the validated formatter patch for the eventual consolidated SELFHOST-NEXT promote.
+· OP-40's hex-float const-fold workaround REMAINS the correct determinism-path fix
+  (it bypasses this formatter entirely for the byte-sensitive path); OP-44 addresses
+  the orthogonal DISPLAY-path defect, which is lower-stakes (readability, not byte
+  determinism) and therefore correctly gated behind the same promote rather than
+  rushed.
+
+HONEST RESIDUALS
+· No fix landed in tracked source (none is possible 0-pod). The defect is left
+  in the frozen blob, now MEASURED + BOUNDED + with a proven recipe — not a silent
+  unknown. Display floats at high precision remain ≤5-ULP-drifting until the
+  seed-promote PR lands.
+· The const-fold byte-determinism path is ALREADY safe (OP-40 hex-float). This
+  verdict does NOT regress it.
+
+PROVENANCE
+  defect repro:   /tmp/op44_harness.c — the EXACT frozen-blob float-format algorithm
+                  (self/runtime.c:722, verbatim) extracted to a standalone C TU,
+                  output vs host libc snprintf.
+  measure:        /tmp/op44_measure.py — 5536 deduped finite doubles (A&S products +
+                  5000 random magnitude 1e-300..1e300 seed=44 + 500 subnormals +
+                  edges); round-trip via python struct.pack/unpack (correctly-rounded
+                  ground truth); %.17g round-trip + %.17e ULP-vs-libc.
+  fix proof:      /tmp/op44_fixproof.c + /tmp/op44_fixmeasure.py — float branch
+                  delegating to libc snprintf → 0/5521 round-trip fail, 0/5521 drift.
+  location:       git check-ignore self/runtime.c (gitignored) + git cat-file -e
+                  HEAD:self/runtime.c (absent) + body at
+                  151c52c82:self/runtime.c:657 (hxlcl_vsnprintf), :722 (float branch),
+                  :2095 (snprintf override). No tracked SSOT emitter (codegen.hexa
+                  refs are comments only).
+  pattern:        OP-39b frozen-anchor re-pin (F-OP39B-SEED-PROMOTE-FLIP) + OP-40
+                  deploy boundary (F-OP40-COMPTIME-MUL-ULP); project_local_hexa_stale
+                  _oracle (measured on the exact frozen algorithm, not a stale build).
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits · no runtime edit.
