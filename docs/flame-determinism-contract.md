@@ -63,6 +63,16 @@ bit-identical).
    libm transcendental left** (exp/erf/ln Taylor, sqrt Newton) → flame is FULLY
    machine-independent byte-exact. (`F-OP19B-DET-ERF`.)
 
+   > **Regression tripwire (OP-66).** This "no libm transcendental on the
+   > production step" invariant is now CI-enforced by `tool/flame_steppath_libm_
+   > gate.sh` (wired BLOCKING in `nobaseline-gate.yml`): a pure source grep over
+   > `clm_prod.hexa` + its production-reachable lib surface that FAILS if a raw
+   > libm `exp`/`erf`/`cos`/`sin`/`log`/`sqrt` regresses onto the step (the
+   > deliberate `_libm`/`_sel_` differential-oracle references are exempt by
+   > name). It does NOT scan the attention/RoPE/SwiGLU decoder path, which is a
+   > different architecture the CLMConvMoE production trainer never calls.
+   > (`F-OP66-FLAME-STEPPATH-LIBM-GATE`.)
+
    These are separate code paths. Swapping one for another (Taylor ↔
    `_moe_exp`) changes the bits. (The hand-rolled `sqrt` impls are
    likewise per-phase and load-bearing: `_gn_sqrt` = 40-iter Newton for GroupNorm

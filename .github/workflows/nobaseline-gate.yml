@@ -105,6 +105,23 @@ jobs:
           set -euo pipefail
           sh tool/fold_ci_gate.sh ./hexa
 
+      # ── OP-66: flame production step-path libm-FREE tripwire ──────────────
+      # OP-34 locks the dt_exp/dt_erf golden VALUES; OP-66 locks that the flame
+      # CLMConvMoE PRODUCTION step actually CALLS those dt_ twins and never a raw
+      # libm exp/erf/cos/sin/log/sqrt — determinism-contract LAYER 2 (libm-free).
+      # libm is not correctly-rounded -> diverges glibc vs Darwin -> breaks the
+      # machine-independent byte-eq training guarantee (F-OP19/19b/33). A pure
+      # source grep (no ./hexa, no seed) over clm_prod.hexa + its production-
+      # reachable lib surface; the deliberate _libm/_sel_ differential-oracle
+      # references are exempt by name. LOW BLAST RADIUS: tool/flame_steppath_libm_
+      # gate.sh is the SSOT; verified PASS on the clean tree, fails ONLY if a raw
+      # libm call regresses onto the step. <1 s. BLOCKING (no seed dependency).
+      - name: OP-66 — flame step-path libm-free gate (darwin-arm64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh tool/flame_steppath_libm_gate.sh
+
       # ── OP-39: float const-fold byte-eq tripwire (ADVISORY until promote) ──
       # Locks the OP-37 (#3069) + OP-37b (#3073) SILENT float const-fold fixes
       # (0.0-X negation idiom byte-exact + computed-fold operands correctly-
