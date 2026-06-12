@@ -113,7 +113,10 @@ fn get_builtins() -> [string] {
         "psi_coupling", "psi_balance", "psi_steps", "psi_entropy", "psi_frustration",
         "consciousness_max_cells", "consciousness_decoder_dim", "consciousness_phi",
         "hexad_modules", "hexad_right", "hexad_left",
-        "tension_link",
+        // OP-65: tension_link removed — OP-62 (#3175) deregistered it from
+        // env_new() as a pure-orphan falsified-builtin landmine, but this LSP
+        // builtin list (excluded from OP-62's caller sweep) still advertised it,
+        // so completion / semantic-token / hover offered a builtin that won't link.
         "exec", "exec_with_status", "input", "readline"
     ]
 }
