@@ -40,7 +40,11 @@ fn _hex_encode_table(bytes: [int], table: string) -> string {
         out.push(table.byte_at(b % 16))
         i = i + 1
     }
-    return bytes_to_str(out)
+    // bytes_to_str_raw (a registered codegen builtin) — NOT the ckpt/format
+    // bytes_to_str, which this module never imports (the OP-75 unregistered-
+    // builtin class). Hex output is pure ASCII (<0x80) so raw == per-codepoint
+    // here, but raw resolves in a STANDALONE codec build, not only full-stdlib.
+    return bytes_to_str_raw(out)
 }
 
 @pure
@@ -95,5 +99,5 @@ pub fn hex_encode_str(s: string) -> string {
 
 @pure
 pub fn hex_decode_str(s: string) -> string {
-    return bytes_to_str(hex_decode(s))
+    return bytes_to_str_raw(hex_decode(s))
 }
