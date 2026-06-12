@@ -1,0 +1,101 @@
+// HEXA Standard Library — qforge/chip/verify_adapter
+//
+// QFORGE universal-engine · CHIP scale · round-11 brick — the g5 VERIFY-ADAPTER.
+//   scale ladder (QFORGE.md §122):  every QFORGE scale = front-end + g5 verify-adapter.
+//   materials gates λ/Tc vs QE (al_fcc_elph_xval / qforge_l3_qe_xval); bio gates ΔG vs
+//   experiment; etc. Round-11 gives the CHIP scale the SAME adapter shape: it CONSUMES
+//   the chip observables (bandgap · m* · direct/indirect · valley · κ — produced by
+//   band_multiorbital + callaway_bte, read-only) and gates each against a MEASURED /
+//   TCAD / literature reference, emitting a per-observable g5 verdict (PASS/FAIL + Δ).
+//
+// ── D4-GENERIC, MANIFEST-DRIVEN (the whole point) ─────────────────────────────
+// There is NO per-material branch. A verification request is a MANIFEST ROW:
+//     { kind, computed_value, reference_value, tol_rel }
+// Every row traverses ONE generic verdict path (qforge_chip_verify_one). Adding a
+// material / observable = adding a manifest row — never a code branch (d4). The
+// adapter is the analogue of the xval-test verdict spine (compute → cited ref →
+// rel-ε vs tolerance → PASS/FAIL), lifted to a reusable manifest engine the chip
+// scale (and any sibling) can drive.
+//
+// ── manifest flat encoding ────────────────────────────────────────────────────
+// hexa has no struct-literal arrays here, so a manifest is a FLAT [float] of N rows,
+// each row = 4 contiguous floats:
+//     [ kind, computed, reference, tol_rel ]  (× N rows)
+//   kind ∈ {0=scalar-rel (gap/m*/κ — compare by rel-ε),
+//           1=exact-int  (valley count / classification code — compare by equality)}
+// A scalar-rel row PASSes iff |computed−reference|/|reference| ≤ tol_rel.
+// An exact-int row PASSes iff round(computed) == round(reference) (tol_rel ignored).
+// The citation/tier metadata is held by the CALLER (the selftest prints it verbatim);
+// the engine is pure numeric verdict logic so it stays d4-generic and material-free.
+//
+// ── verdict encoding ──────────────────────────────────────────────────────────
+// qforge_chip_verify_one(kind, computed, reference, tol_rel) -> [float] of 3:
+//     [ pass(1.0/0.0), delta, margin ]
+//   • scalar-rel:  delta = rel-ε = |c−r|/|r|;  margin = tol_rel − delta  (≥0 ⇒ PASS)
+//   • exact-int:   delta = |round(c)−round(r)| (0 ⇒ match);  margin = (delta==0)?1:−1
+// The engine NEVER decides a tier (🟢/🟡/🟠/🔴) — tiering is an HONESTY judgment the
+// caller makes from provenance (model+real-params vs structural-only). The engine
+// only answers "within tolerance?" — which is exactly what a verify-adapter gates.
+
+let _CHIP_KIND_SCALAR: int = 0
+let _CHIP_KIND_EXACT: int = 1
+let _CHIP_ROW: int = 4                 // floats per manifest row
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _round(x: float) -> float {
+    if x >= 0.0 { return to_float(to_int(x + 0.5)) }
+    return to_float(to_int(x - 0.5))
+}
+
+// ── rel-ε between a computed and a reference value (the xval-test convention) ──
+pub fn qforge_chip_relerr(computed: float, reference: float) -> float {
+    let r = _abs(reference)
+    let d = _abs(computed - reference)
+    if r < 1.0e-300 { return d }       // reference ≈ 0 → absolute Δ
+    return d / r
+}
+
+// ── verify ONE observable (the d4-generic verdict kernel) ─────────────────────
+// Returns [pass, delta, margin]. PASS criterion depends on kind:
+//   scalar-rel (0): rel-ε ≤ tol_rel
+//   exact-int  (1): round(computed) == round(reference)
+pub fn qforge_chip_verify_one(kind: int, computed: float, reference: float,
+                              tol_rel: float) -> [float] {
+    if kind == _CHIP_KIND_EXACT {
+        let d = _abs(_round(computed) - _round(reference))
+        if d < 0.5 { return [1.0, 0.0, 1.0] }
+        return [0.0, d, -1.0]
+    }
+    // scalar-rel (default)
+    let eps = qforge_chip_relerr(computed, reference)
+    let margin = tol_rel - eps
+    if margin >= 0.0 { return [1.0, eps, margin] }
+    return [0.0, eps, margin]
+}
+
+// ── drive a full MANIFEST (flat [float], N rows of 4) → [n_pass, n_fail] ───────
+// ONE generic loop over every row — NO per-material branch (d4). Adding a row
+// (material / observable) changes the manifest data only, never this code.
+pub fn qforge_chip_verify_manifest(manifest: [float]) -> [float] {
+    let total = len(manifest)
+    let nrows = total / _CHIP_ROW
+    let mut npass = 0
+    let mut nfail = 0
+    let mut i = 0
+    while i < nrows {
+        let base = i * _CHIP_ROW
+        let kind = to_int(manifest[base])
+        let computed = manifest[base + 1]
+        let reference = manifest[base + 2]
+        let tol = manifest[base + 3]
+        let v = qforge_chip_verify_one(kind, computed, reference, tol)
+        if v[0] >= 0.5 { npass = npass + 1 } else { nfail = nfail + 1 }
+        i = i + 1
+    }
+    return [to_float(npass), to_float(nfail)]
+}
+
+// ── manifest row count (rows = floats / 4) ────────────────────────────────────
+pub fn qforge_chip_manifest_rows(manifest: [float]) -> int {
+    return len(manifest) / _CHIP_ROW
+}
