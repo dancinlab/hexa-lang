@@ -152,12 +152,12 @@ fn a_run(seed: int) {
     let prm = LangevinParams{ temperature: A_KT, gamma: 2.0, kB: 1.0 }
     // phantom constraint list: empty ⇒ unconstrained BAOAB. (The constrained
     // path is exercised separately in a_run_constrained below.)
-    let prop = make_langevin_prop(a_force_factory, prm, 0.02, 8, [], 1.0e-10, 50)
+    let prop = make_langevin_prop(a_force_factory, prm, 0.02, 4, [], 1.0e-10, 50)
     let cfg = AbfeConfig{
         ladder: ladder,
-        n_sweeps: 800,
+        n_sweeps: 300,
         swap_period: 1,
-        md_steps_per_sweep: 6,
+        md_steps_per_sweep: 2,
         dt: 0.02,
         kT: A_KT,
         seed: seed,
@@ -223,13 +223,13 @@ fn a_run_constrained(seed: int) {
     let ladder = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
     let prm = LangevinParams{ temperature: A_KT, gamma: 2.0, kB: 1.0 }
     let cons = [Constraint{ i: 0, j: 1, d: A_BOND }]
-    let prop = make_langevin_prop(a_force_factory_c, prm, 0.02, 8,
+    let prop = make_langevin_prop(a_force_factory_c, prm, 0.02, 4,
                                   cons, 1.0e-10, 100)
     let cfg = AbfeConfig{
         ladder: ladder,
-        n_sweeps: 500,
+        n_sweeps: 250,
         swap_period: 1,
-        md_steps_per_sweep: 6,
+        md_steps_per_sweep: 2,
         dt: 0.02,
         kT: A_KT,
         seed: seed,
@@ -305,6 +305,18 @@ fn b_prop(config: array, lam: float, lcg: int) -> array {
         return [[rtrial], s2]
     }
     return [[r], s2]
+}
+// per-rung ⟨∂U/∂λ⟩ — average of R3 softcore_dUdlam over the rung's samples.
+// TOP-LEVEL (not nested in main — nested fn-in-main miscompiles here).
+fn _avg_dudlam_at(rung_samples: array, lam: float) -> float {
+    let mut s = 0.0
+    let mut c = 0
+    while c < rung_samples.len() {
+        s = s + b_dudlam(rung_samples[c], lam)
+        c = c + 1
+    }
+    if rung_samples.len() == 0 { return 0.0 }
+    return s / to_float(rung_samples.len())
 }
 
 fn main() {
@@ -464,7 +476,7 @@ fn main() {
     while ib < KB { configs0B.push([1.122]) ib = ib + 1 }
     let cfgB = AbfeConfig{
         ladder: ladderB,
-        n_sweeps: 700,
+        n_sweeps: 400,
         swap_period: 1,
         md_steps_per_sweep: 3,
         dt: 0.0,                            // unused: b_prop is MC, not MD
@@ -481,30 +493,17 @@ fn main() {
             + " round_trips=" + to_string(resB["round_trips"]) + "/" + to_string(KB))
 
     // independent TI reference: ⟨∂U/∂λ⟩_λ = Boltzmann average of dU/dλ over
-    // the rung's samples (the samples HREX collected at that rung).
+    // the rung's samples (the samples HREX collected at that rung). The
+    // per-rung average is computed by the TOP-LEVEL fn _avg_dudlam_at (a
+    // nested fn-in-main miscompiles in this interp — kept at top level).
     let sbr = resB["samples_by_rung"]
-    fn _avg_dudlam_at(rung_samples: array, lam: float) -> float {
-        let mut s = 0.0
-        let mut c = 0
-        while c < rung_samples.len() {
-            s = s + b_dudlam(rung_samples[c], lam)
-            c = c + 1
-        }
-        if rung_samples.len() == 0 { return 0.0 }
-        return s / to_float(rung_samples.len())
-    }
-    // build the ⟨dU/dλ⟩ at each ladder node from THAT rung's samples, then
-    // trapezoid-integrate over the ladder (ti_reference). We pass a closure
-    // that looks up the rung index for a given λ.
     let mut dudl_nodes = []
     let mut irb = 0
     while irb < KB {
         dudl_nodes.push(_avg_dudlam_at(sbr[irb], ladderB[irb]))
         irb = irb + 1
     }
-    // trapezoid over the (descending) ladder; ti_reference handles spacing.
-    fn _node_lookup(lam: float) -> float { return 0.0 }   // placeholder unused
-    // direct trapezoid (ladder is monotone descending 1→0).
+    // direct trapezoid over the (descending) ladder 1→0.
     let mut dG_ti = 0.0
     let mut it = 0
     while it < KB - 1 {
