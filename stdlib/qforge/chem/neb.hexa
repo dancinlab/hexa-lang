@@ -299,8 +299,8 @@ pub fn neb_relax(pes_id: int, band0: [[float]], k: float,
                                      energies[i - 1], energies[i], energies[i + 1],
                                      gi, k, is_climb)
             // 수렴 측정 = 실제 구동력 |f| (climb image 는 |F_climb| 포함).
-            let fn = _vnorm(f)
-            if fn > newfmax { newfmax = fn }
+            let fnorm = _vnorm(f)
+            if fnorm > newfmax { newfmax = fnorm }
             // step (steepest-descent): x ← x + step·F.
             let stepvec = _vscale(f, step)
             moves.push(stepvec)
