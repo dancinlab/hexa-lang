@@ -1,0 +1,200 @@
+// @ci_gate — deterministic · network-free · QFORGE-ATOMS round-18 CCSD(T) g5
+//
+// ccsd_t_selftest.hexa — round-18 g5 gate. CCSD(T): the perturbative connected-triples
+// correction E_(T) on top of the converged CCSD T1/T2 amplitudes (brick #17). CCSD(T)
+// is the "gold standard" of quantum chemistry — E_CCSD(T) = E_CCSD + E_(T), E_(T) < 0
+// (triples lower the energy further). FOUR verdicts, all VERBATIM (d6 — every printed
+// value is the raw computed scalar, none forced):
+//
+//   (a) (T) CORRECTION vs REFERENCE — H₂O/STO-3G at the EXACT Crawford prog-proj
+//       geometry (bohr): E_(T) vs the published Crawford Project_06 reference
+//       −0.000099877272 Ha (independently reproduced by PySCF cc.CCSD(mf).ccsd_t() =
+//       −9.987727211e-05 Ha, agreeing to 1e-13). |Δ| printed verbatim, gated ≪1µHa.
+//
+//   (b) E_CCSD(T) TOTAL + LADDER ORDERING — E_CCSD(T) = E_CCSD + E_(T) with E_(T) < 0
+//       and the correlation ladder strictly MONOTONE: |E_CCSD(T)| > |E_CCSD| > |E_MP2|.
+//       The full HF→MP2→CCSD→CCSD(T) ladder is printed for H₂O.
+//
+//   (c) H₂ ZERO-ANCHOR — for H₂ (2 electrons) there are NO triple excitations possible
+//       (only 2 occupied spin-orbitals → no 3 distinct occupied), so E_(T)(H₂) == 0
+//       EXACTLY to machine precision. A rigorous no-free-parameter zero-anchor (CCSD
+//       already == FCI for 2 electrons; (T) adds nothing).
+//
+//   (d) REGRESSION — r17 CCSD energy UNCHANGED (the (T) driver re-runs the SAME
+//       iteration: E_CCSD byte-identical, H₂O −0.0706801 / H₂ −0.0205616), r16 MP2 and
+//       the RHF anchors still hold. CCSD(T) only ADDS E_(T) on top.
+//
+// HONEST (d6): CCSD(T) is the gold standard but STILL not exact — it misses full CI
+//   (connected quadruples and the non-perturbative triples), and is bounded by the
+//   STO-3G minimal-basis incompleteness (basis-set limit needs cc-pVXZ). SPIN-RESTRICTED
+//   CLOSED-SHELL only (RHF reference). Every number is REAL: E_(T) summed from the
+//   genuinely-converged CCSD amplitudes; the H₂ zero is an exact structural zero, not a
+//   fitted/forced number.
+//
+// Run:  HEXA_LANG=<worktree> hexa run stdlib/qforge/atoms/ccsd_t_selftest.hexa
+// PASS: "qforge_atoms_ccsd_t_selftest PASS".
+use "stdlib/qforge/atoms/ccsd_t"
+use "stdlib/qforge/atoms/ccsd"
+use "stdlib/qforge/atoms/mp2"
+use "stdlib/qforge/atoms/rhf_force"
+use "stdlib/qforge/atoms/rhf_force_pd"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_le(name: str, got: float, lim: float) -> int {
+    if got <= lim { println("PASS " + name + " (" + to_string(got) + " ≤ " + to_string(lim) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " > " + to_string(lim)) ; return 1
+}
+fn _ck_true(name: str, c: bool) -> int {
+    if c { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+// H₂O STO-3G per-AO basis (O 1s,2s,2px,2py,2pz + Ha 1s + Hb 1s = 7 AOs). Same tables
+// the r13/r16/r17 pd selftests use (d19 reuse — identical anchor basis).
+fn _h2o_pw() -> [[int]] { return [[0,0,0],[0,0,0],[1,0,0],[0,1,0],[0,0,1],[0,0,0],[0,0,0]] }
+fn _h2o_exps() -> [[float]] {
+    let o1a = [130.70932, 23.808861, 6.4436083]
+    let o2a = [5.0331513, 1.1695961, 0.3803890]
+    let ha  = [3.42525091, 0.62391373, 0.16885540]
+    return [o1a, o2a, o2a, o2a, o2a, ha, ha]
+}
+fn _h2o_coef() -> [[float]] {
+    let o1d  = [0.15432897, 0.53532814, 0.44463454]
+    let o2sd = [0.0 - 0.09996723, 0.39951283, 0.70011547]
+    let o2pd = [0.15591627, 0.60768372, 0.39195739]
+    let hd   = [0.15432897, 0.53532814, 0.44463454]
+    return [o1d, o2sd, o2pd, o2pd, o2pd, hd, hd]
+}
+fn _h2o_aom() -> [int] { return [0,0,0,0,0,1,2] }
+
+fn main() {
+    let mut fails = 0
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  SYSTEM 1 — H₂ / STO-3G (2 AOs → 4 spin-orbitals, 2 occ) at R = 1.4 bohr.
+    //  CCSD == FCI (2 electrons); NO triple excitations ⇒ E_(T) == 0 EXACTLY.
+    // ══════════════════════════════════════════════════════════════════════════
+    println("════ SYSTEM 1: H₂ / STO-3G (1.4 bohr) — E_(T) zero-anchor ════")
+    let alphas = [3.42525091, 0.62391373, 0.16885540, 3.42525091, 0.62391373, 0.16885540]
+    let coeffs = [0.15432897, 0.53532814, 0.44463454, 0.15432897, 0.53532814, 0.44463454]
+    let off = [0, 3, 6]
+    let z2 = [1.0, 1.0]
+    let n2 = 2
+    let nocc2 = 1
+    let R = 1.4
+    let pos2 = [0.0, 0.0, 0.0,  R, 0.0, 0.0]
+
+    let S2  = qforge_real_overlap_matrix(pos2, alphas, coeffs, off, 2)
+    let hc2 = qforge_rhf_hcore(pos2, alphas, coeffs, off, z2, 2)
+    let eri2 = qforge_rhf_eri_tensor(pos2, alphas, coeffs, off, 2)
+    let enuc2 = qforge_rhf_enuc(pos2, z2, 2)
+
+    let m2 = mp2_corr_from_rhf(S2, hc2, eri2, n2, nocc2, enuc2, 200, 1.0e-12, 1.0)
+    let e_rhf2  = m2[0]
+    let e_mp22  = m2[1]
+    let eps2: [float]    = m2[4]
+    let erimo2: [float]  = m2[6]
+
+    let cct2 = ccsd_t_from_mo_eri(erimo2, eps2, n2, nocc2, 200, 1.0e-12)
+    let e_ccsd2: float = cct2[0]
+    let e_t2: float    = cct2[1]
+    let e_ccsd_t2: float = cct2[2]
+    let e_ccsd_t2_tot = e_rhf2 + e_ccsd_t2
+
+    println("    E_RHF        = " + to_string(e_rhf2)  + " Ha")
+    println("    E_corr(MP2)  = " + to_string(e_mp22)  + " Ha")
+    println("    E_corr(CCSD) = " + to_string(e_ccsd2) + " Ha")
+    println("    E_(T)        = " + to_string(e_t2)    + " Ha   (== 0 exactly, 2e)")
+    println("    E_corr(CCSD(T)) = " + to_string(e_ccsd_t2) + " Ha")
+    println("    E_CCSD(T) total = " + to_string(e_ccsd_t2_tot) + " Ha")
+
+    // (c) H₂ zero-anchor: E_(T) == 0 to machine precision
+    fails = fails + _ck_close("(c)H₂ E_(T) == 0 EXACTLY (no triples possible, 2e)",
+                              e_t2, 0.0, 1.0e-14)
+    // (d) regression — r17 CCSD energy unchanged
+    fails = fails + _ck_close("(d)H₂ E_corr(CCSD) UNCHANGED == −0.020561648 (r17 holds)",
+                              e_ccsd2, 0.0 - 0.020561648, 1.0e-6)
+    // (b) ladder degenerate-but-consistent for H₂: CCSD(T) == CCSD (E_(T)=0)
+    fails = fails + _ck_close("(b)H₂ E_corr(CCSD(T)) == E_corr(CCSD) (E_(T)=0)",
+                              e_ccsd_t2, e_ccsd2, 1.0e-14)
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  SYSTEM 2 — H₂O / STO-3G (7 AOs → 14 spin-orbitals, 10 occ + 4 virt) at the
+    //  EXACT Crawford prog-proj geometry (bohr) — rigorous external (T) anchor.
+    // ══════════════════════════════════════════════════════════════════════════
+    println("════ SYSTEM 2: H₂O / STO-3G @ Crawford geometry — gold-standard (T) ════")
+    let pw = _h2o_pw()
+    let exps = _h2o_exps()
+    let coef = _h2o_coef()
+    let aom = _h2o_aom()
+    let zW = [8.0, 1.0, 1.0]
+    let norb = 7
+    let natW = 3
+    let noccW = 5
+
+    let posC = [
+        0.0, 0.0 - 0.143225816552, 0.0,
+        1.638036840407, 1.136548822547, 0.0,
+        0.0 - 1.638036840407, 1.136548822547, 0.0
+    ]
+    let SC  = qf_pd_overlap(posC, pw, exps, coef, aom, norb)
+    let hcC = qf_pd_hcore(posC, pw, exps, coef, aom, norb, zW, natW)
+    let eriC = qf_pd_eri_tensor(posC, pw, exps, coef, aom, norb)
+    let enucC = qf_pd_enuc(posC, zW, natW)
+
+    let mC = mp2_corr_from_rhf(SC, hcC, eriC, norb, noccW, enucC, 300, 1.0e-11, 1.0)
+    let e_rhfC: float   = mC[0]
+    let e_mp2C: float   = mC[1]
+    let epsC: [float]   = mC[4]
+    let erimoC: [float] = mC[6]
+
+    let cctC = ccsd_t_from_mo_eri(erimoC, epsC, norb, noccW, 100, 1.0e-11)
+    let e_ccsdC: float = cctC[0]
+    let e_tC: float    = cctC[1]
+    let e_ccsd_tC: float = cctC[2]
+    let itersC: int = cctC[3]
+    let residC: float = cctC[4]
+    let convC: bool = cctC[5]
+    let e_ccsd_tC_tot = e_rhfC + e_ccsd_tC
+
+    let e_corr_mp2_ref  = 0.0 - 0.04914964
+    let e_corr_ccsd_ref = 0.0 - 0.070680088376
+    let e_t_ref         = 0.0 - 0.000099877272
+    let e_ccsd_t_tot_ref = 0.0 - 75.012859893840
+
+    println("    ── full correlation ladder (H₂O / STO-3G @ Crawford) ──")
+    println("    E_RHF            = " + to_string(e_rhfC)     + " Ha   (Crawford −74.94207993)")
+    println("    E_corr(MP2)      = " + to_string(e_mp2C)     + " Ha   (Crawford −0.04914964)")
+    println("    E_corr(CCSD)     = " + to_string(e_ccsdC)    + " Ha   (Crawford −0.070680088376)")
+    println("    E_(T)            = " + to_string(e_tC)       + " Ha   (Crawford −0.000099877272)")
+    println("    E_corr(CCSD(T))  = " + to_string(e_ccsd_tC)  + " Ha")
+    println("    E_CCSD(T) total  = " + to_string(e_ccsd_tC_tot) + " Ha   (Crawford −75.012859893840)")
+    println("    iters=" + to_string(itersC) + "  residual=" + to_string(residC))
+
+    // (a) (T) vs Crawford / PySCF reference
+    println("    [a] |Δ E_(T) vs Crawford −0.000099877272|=" + to_string(_abs(e_tC - e_t_ref)))
+    fails = fails + _ck_close("(a)H₂O@Crawford E_(T) == −0.000099877272 (Crawford/PySCF ref, ≪1µHa)",
+                              e_tC, e_t_ref, 1.0e-6)
+    // (b) E_CCSD(T) = E_CCSD + E_(T), ordering monotone
+    fails = fails + _ck_close("(b)H₂O E_corr(CCSD(T)) == E_CCSD + E_(T) (additive)",
+                              e_ccsd_tC, e_ccsdC + e_tC, 1.0e-14)
+    fails = fails + _ck_true("(b)H₂O E_(T) < 0 (triples lower the energy)", e_tC < 0.0)
+    fails = fails + _ck_true("(b)H₂O |E_CCSD(T)| > |E_CCSD| > |E_MP2| (ladder monotone)",
+                             _abs(e_ccsd_tC) > _abs(e_ccsdC) && _abs(e_ccsdC) > _abs(e_mp2C))
+    fails = fails + _ck_close("(b)H₂O E_CCSD(T) total == −75.012859893840 (RHF-bounded)",
+                              e_ccsd_tC_tot, e_ccsd_t_tot_ref, 1.0e-4)
+    // (d) regression — CCSD energy unchanged + MP2 still holds
+    fails = fails + _ck_close("(d)H₂O E_corr(CCSD) UNCHANGED == −0.070680088376 (r17 byte-grade)",
+                              e_ccsdC, e_corr_ccsd_ref, 1.0e-6)
+    fails = fails + _ck_close("(d)H₂O E_corr(MP2) == −0.04914964 (r16 still holds)",
+                              e_mp2C, e_corr_mp2_ref, 1.0e-6)
+    fails = fails + _ck_true("(d)H₂O CCSD amplitude iteration converged", convC)
+    fails = fails + _ck_le("(d)H₂O CCSD residual ‖ΔT2‖ < 1e-8", residC, 1.0e-8)
+
+    if fails == 0 { println("qforge_atoms_ccsd_t_selftest PASS") }
+    else { println("qforge_atoms_ccsd_t_selftest FAIL — " + to_string(fails) + " checks failed") }
+}

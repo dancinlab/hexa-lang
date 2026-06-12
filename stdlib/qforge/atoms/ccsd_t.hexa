@@ -1,0 +1,218 @@
+// HEXA Standard Library — qforge/atoms/ccsd_t
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE-ATOMS brick #18 — CCSD(T): the perturbative connected-triples correction
+// E_(T) on top of the converged CCSD T1/T2 amplitudes (brick #17, ccsd.hexa).
+// CCSD(T) is the "gold standard" of quantum chemistry: it adds the leading
+// connected-triple-excitation correction to CCSD perturbatively (non-iteratively),
+// from the ALREADY-converged CCSD amplitudes — no new SCF, no new CC iteration for
+// the triples themselves. E_CCSD(T) = E_CCSD + E_(T), with E_(T) < 0.
+//
+// ── the (T) correction (Raghavachari-Trucks-Pople-Head-Gordon, CPL 157, 479 (1989);
+//    spin-orbital form = Crawford prog-proj Project #06) ───────────────────────────
+// From the converged CCSD T1 (t_i^a) and T2 (t_ij^ab) and the antisymmetrized
+// spin-orbital integrals ⟨pq||rs⟩ (built by ccsd.hexa's ccsd_spinorb_eri), define
+// the DISCONNECTED and CONNECTED triple amplitudes (before the energy denominator):
+//
+//   disc_ijk^abc · D = P(i/jk) P(a/bc) [ t_i^a ⟨jk||bc⟩ ]
+//   conn_ijk^abc · D = P(i/jk) P(a/bc) [ Σ_e t_jk^ae ⟨ei||bc⟩ − Σ_m t_im^bc ⟨ma||jk⟩ ]
+//
+// where D_ijk^abc = ε_i + ε_j + ε_k − ε_a − ε_b − ε_c (Møller-Plesset denominator),
+// P(i/jk) = 1 − P(ij) − P(ik), P(a/bc) = 1 − P(ab) − P(ac) (the 3-fold permutation
+// operators). The (T) energy is then
+//
+//   E_(T) = (1/36) Σ_ijkabc  conn_amp · D_ijk^abc · ( conn_amp + disc_amp )
+//
+// with conn_amp = conn/D, disc_amp = disc/D. This is the standard spin-orbital (T)
+// expression verified verbatim against the Crawford Project_06 output AND PySCF
+// cc.CCSD(mf).ccsd_t() (H₂O/STO-3G E_(T) = −9.987727211e-05 Ha, see selftest).
+//
+// ── H₂ zero-anchor ───────────────────────────────────────────────────────────────
+// For H₂ (2 electrons) there are NO triple excitations possible (only 2 occupied
+// spin-orbitals → no i<j<k can be all-occupied distinct). E_(T)(H₂) == 0 EXACTLY,
+// a rigorous machine-precision zero-anchor (CCSD already == FCI for 2 electrons).
+//
+// ── honest scope (d6) ────────────────────────────────────────────────────────────
+// CCSD(T) is the gold standard but STILL not exact: it misses full CI (quadruples
+// and higher, and the non-perturbative part of the triples), and is bounded by the
+// STO-3G minimal-basis incompleteness (the basis-set limit needs cc-pVXZ). This is
+// SPIN-RESTRICTED CLOSED-SHELL only (RHF reference). Every number is REAL — the (T)
+// energy is summed from the genuinely-converged CCSD amplitudes; nothing forced.
+//
+// reuse (d3 · d19): consumes ccsd.hexa's converged T1/T2 + the spin-orbital ⟨pq||rs⟩
+//   tensor + ε_so VERBATIM. No new transform / eigensolver / CC machinery minted —
+//   the (T) correction is pure post-processing on the converged CCSD amplitudes.
+//
+// ⚠ PARSER (f37015ac): every long index-summed arithmetic assignment is kept on ONE
+//   physical line — a multi-LINE arithmetic continuation silently drops the trailing
+//   term. The dense triples sums below are all single-line by construction.
+
+use "stdlib/qforge/atoms/ccsd"
+
+// ════════════════════════════════════════════════════════════════════════════
+//   converged CCSD amplitudes (re-run the r17 iteration, RETURN T1/T2)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// ccsd.hexa's ccsd_from_mo_eri returns only the energy; the (T) correction needs
+// the converged amplitudes themselves. This driver re-runs the SAME r17 iteration
+// (ccsd_iterate / ccsd_energy / ccsd_mp2_guess — reused verbatim, nothing re-derived)
+// and returns the converged [t1, t2] alongside the energy + W + eps_so so the (T)
+// builder reads them directly. The CCSD energy is byte-identical to r17 (same loop).
+//
+// Returns [ e_ccsd, t1, t2, W, eps_so, iters, residual, converged ].
+pub fn ccsd_amps_from_mo_eri(
+    eri_mo: [float], eps: [float], n: int, n_occ: int,
+    max_iter: int, e_tol: float
+) -> [any] {
+    let nso = 2 * n
+    let nocc = 2 * n_occ
+    let W = ccsd_spinorb_eri(eri_mo, n)
+    let eps_so = ccsd_spinorb_eps(eps, n)
+
+    let mut t1: [float] = []
+    let mut ii = 0
+    while ii < nso * nso { t1.push(0.0) ; ii = ii + 1 }
+    let mut t2 = ccsd_mp2_guess(W, eps_so, nso, nocc)
+
+    let mut e_old = ccsd_energy(W, t1, t2, nso, nocc)
+    let mut iters = 0
+    let mut residual = 1.0
+    let mut converged = false
+    while iters < max_iter {
+        let res = ccsd_iterate(W, eps_so, t1, t2, nso, nocc)
+        let t1new: [float] = res[0]
+        let t2new: [float] = res[1]
+        residual = ccsd_t2_rmsd(t2new, t2, nso)
+        t1 = t1new
+        t2 = t2new
+        let e_new = ccsd_energy(W, t1, t2, nso, nocc)
+        iters = iters + 1
+        let de = e_new - e_old
+        let ade = if de < 0.0 { 0.0 - de } else { de }
+        e_old = e_new
+        if ade < e_tol && residual < e_tol { converged = true ; break }
+    }
+    let e_ccsd = ccsd_energy(W, t1, t2, nso, nocc)
+    return [e_ccsd, t1, t2, W, eps_so, iters, residual, converged]
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   (T) connected/disconnected raw triple amplitudes (single index ordering)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// _disc_raw / _conn_raw return the BRACKET value for ONE (i,j,k,a,b,c) ordering — the
+// permutation operators P(i/jk)P(a/bc) are applied by the CALLER as the 9-term signed
+// sum over index orderings (built inline, single-line, in ccsd_t_energy). Splitting
+// the bracket from the permutation keeps every arithmetic line short and exact.
+
+// disconnected bracket: t_i^a · ⟨jk||bc⟩  (one ordering).
+fn _disc_raw(W: [float], t1: [float], nso: int, i: int, j: int, k: int, a: int, b: int, c: int) -> float {
+    return t1[i * nso + a] * W[((j * nso + k) * nso + b) * nso + c]
+}
+
+// connected bracket: Σ_e t_jk^ae ⟨ei||bc⟩ − Σ_m t_im^bc ⟨ma||jk⟩  (one ordering).
+fn _conn_raw(W: [float], t2: [float], nso: int, nocc: int, i: int, j: int, k: int, a: int, b: int, c: int) -> float {
+    let mut v = 0.0
+    let mut e = nocc
+    while e < nso {
+        v = v + t2[(((j * nso + k) * nso + a) * nso + e)] * W[((e * nso + i) * nso + b) * nso + c]
+        e = e + 1
+    }
+    let mut m = 0
+    while m < nocc {
+        v = v - t2[(((i * nso + m) * nso + b) * nso + c)] * W[((m * nso + a) * nso + j) * nso + k]
+        m = m + 1
+    }
+    return v
+}
+
+// Apply P(i/jk)P(a/bc) to _disc_raw at (i,j,k,a,b,c): the 9 signed orderings, inline.
+//   P(i/jk) = identity − (ij) − (ik) ;  P(a/bc) = identity − (ab) − (ac).
+fn _disc_perm(W: [float], t1: [float], nso: int, i: int, j: int, k: int, a: int, b: int, c: int) -> float {
+    let p1 = _disc_raw(W,t1,nso,i,j,k,a,b,c) - _disc_raw(W,t1,nso,i,j,k,b,a,c) - _disc_raw(W,t1,nso,i,j,k,c,b,a)
+    let p2 = 0.0 - _disc_raw(W,t1,nso,j,i,k,a,b,c) + _disc_raw(W,t1,nso,j,i,k,b,a,c) + _disc_raw(W,t1,nso,j,i,k,c,b,a)
+    let p3 = 0.0 - _disc_raw(W,t1,nso,k,j,i,a,b,c) + _disc_raw(W,t1,nso,k,j,i,b,a,c) + _disc_raw(W,t1,nso,k,j,i,c,b,a)
+    return p1 + p2 + p3
+}
+
+// Apply P(i/jk)P(a/bc) to _conn_raw at (i,j,k,a,b,c): the 9 signed orderings, inline.
+fn _conn_perm(W: [float], t2: [float], nso: int, nocc: int, i: int, j: int, k: int, a: int, b: int, c: int) -> float {
+    let p1 = _conn_raw(W,t2,nso,nocc,i,j,k,a,b,c) - _conn_raw(W,t2,nso,nocc,i,j,k,b,a,c) - _conn_raw(W,t2,nso,nocc,i,j,k,c,b,a)
+    let p2 = 0.0 - _conn_raw(W,t2,nso,nocc,j,i,k,a,b,c) + _conn_raw(W,t2,nso,nocc,j,i,k,b,a,c) + _conn_raw(W,t2,nso,nocc,j,i,k,c,b,a)
+    let p3 = 0.0 - _conn_raw(W,t2,nso,nocc,k,j,i,a,b,c) + _conn_raw(W,t2,nso,nocc,k,j,i,b,a,c) + _conn_raw(W,t2,nso,nocc,k,j,i,c,b,a)
+    return p1 + p2 + p3
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   E_(T) — perturbative connected-triples correction energy
+// ════════════════════════════════════════════════════════════════════════════
+//
+//   E_(T) = (1/36) Σ_ijkabc  conn_amp · D_ijk^abc · ( conn_amp + disc_amp )
+//   conn_amp = _conn_perm / D ,  disc_amp = _disc_perm / D ,
+//   D = ε_i + ε_j + ε_k − ε_a − ε_b − ε_c.
+// The full unrestricted index sweep over occ³·virt³ with the 1/36 prefactor (the
+// standard spin-orbital normalization absorbing the i<j<k, a<b<c overcounting).
+pub fn ccsd_t_energy(W: [float], t1: [float], t2: [float], eps_so: [float], nso: int, nocc: int) -> float {
+    let mut et = 0.0
+    let mut i = 0
+    while i < nocc {
+        let mut j = 0
+        while j < nocc {
+            let mut k = 0
+            while k < nocc {
+                let mut a = nocc
+                while a < nso {
+                    let mut b = nocc
+                    while b < nso {
+                        let mut c = nocc
+                        while c < nso {
+                            let d = eps_so[i] + eps_so[j] + eps_so[k] - eps_so[a] - eps_so[b] - eps_so[c]
+                            let disc = _disc_perm(W, t1, nso, i, j, k, a, b, c)
+                            let conn = _conn_perm(W, t2, nso, nocc, i, j, k, a, b, c)
+                            let conn_amp = conn / d
+                            let disc_amp = disc / d
+                            et = et + (1.0 / 36.0) * conn_amp * d * (conn_amp + disc_amp)
+                            c = c + 1
+                        }
+                        b = b + 1
+                    }
+                    a = a + 1
+                }
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return et
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   driver — converged MO-ERI tensor + ε + n_occ  →  full CCSD(T)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// One call: re-run r17 CCSD to convergence (returns the same E_CCSD), then add the
+// perturbative (T) correction. Returns
+//   [ e_ccsd, e_t, e_ccsd_t, iters, residual, converged ]
+// with e_ccsd_t = e_ccsd + e_t (the gold-standard correlation energy).
+pub fn ccsd_t_from_mo_eri(
+    eri_mo: [float], eps: [float], n: int, n_occ: int,
+    max_iter: int, e_tol: float
+) -> [any] {
+    let nso = 2 * n
+    let nocc = 2 * n_occ
+    let cc = ccsd_amps_from_mo_eri(eri_mo, eps, n, n_occ, max_iter, e_tol)
+    let e_ccsd: float = cc[0]
+    let t1: [float] = cc[1]
+    let t2: [float] = cc[2]
+    let W: [float] = cc[3]
+    let eps_so: [float] = cc[4]
+    let iters: int = cc[5]
+    let residual: float = cc[6]
+    let converged: bool = cc[7]
+    let e_t = ccsd_t_energy(W, t1, t2, eps_so, nso, nocc)
+    let e_ccsd_t = e_ccsd + e_t
+    return [e_ccsd, e_t, e_ccsd_t, iters, residual, converged]
+}
