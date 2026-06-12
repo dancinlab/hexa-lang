@@ -33,6 +33,10 @@
 //       offset (box size · short sampling). Strictly no forcing of +2.0.
 
 use "stdlib/math/logsumexp"
+use "stdlib/tensor/mod"
+use "stdlib/tensor/shape"
+use "stdlib/tensor/ops"
+use "stdlib/autograd"
 use "stdlib/chem/md/ewald"
 use "stdlib/chem/md/pme"
 use "stdlib/chem/fep/softcore"
