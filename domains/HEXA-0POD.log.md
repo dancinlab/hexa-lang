@@ -2073,3 +2073,32 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
 - OUTCOME: 🟠 DEFERRED (static-positive: a/b/c excluded with source evidence + d classified; the d sub-split is the
   honest GPU-gated residual). milestone OP-45 [x]. Verdict .verdicts/hexa-0pod/F-OP45-ROUTEA-D4096-CAP.txt.
   $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
+## OP-46 — SELFHOST-NEXT const-fold+atof+vsnprintf seed-promote bundle: 3 scattered DEFERs (OP-37b/40/44) + OP-39b gate-flip CONSOLIDATED into ONE runbook spec + one deferred registration (0-pod, DOCS/SPEC) — 2026-06-12
+- SURVEY-FIRST (mandatory). Read the 4 verdicts: F-OP37B-HOST-ATOF-CORRECT-ROUND (strtod operand parse → operands
+  byte-exact, MAX 3→1 ULP), F-OP40-COMPTIME-MUL-ULP (bit-exact hex-float const-fold serialize → MAX 1→0 ULP, 16/125→
+  0/125), F-OP44-VSNPRINTF-CORRECT-ROUND (runtime float formatter 62.6% mis-round %.17g / ≤5 ULP %.17e, libc-snprintf
+  delegation PROVEN → 0/0), F-OP39B-SEED-PROMOTE-FLIP (the gate-flip; the most detailed re-pin recipe: 151c52c8
+  IMMUTABLE .c-graduation anchor, 27,068-line regen drift, ~3.5h build_selfhost.sh ladder, gen3→gen4 byte-eq).
+  Confirmed the EXACT promote mechanism: self/native/hexa_cc.c + self/runtime.c are gitignored, restored from
+  FROZEN_SEED_REF=151c52c8 by tool/restore_frozen_seeds; promoting = re-pinning that ref to a NEW coherent anchor
+  built from current self/codegen.hexa + self/runtime.c via the build-host self-host ladder (FROZEN_SEED_REF hardcoded
+  in ~7 scripts: restore_frozen_seeds, stage_resolve_runtime_a, SELFHOST_PROMOTE_RUNBOOK.md, clm/build_clmprod_tf32_e2e.sh).
+- THE SHARED BLOCKER (the consolidation thesis): all three source fixes are correct in tracked source / proven-as-recipe
+  but UNOBSERVABLE by CI because CI's toolchain bootstraps from the immutable 151c52c8 anchor that pre-dates them; each
+  verdict separately said "needs the frozen-anchor re-pin — out of 0-pod scope" → ONE shared dependency, not three.
+- DELIVERABLE (DOCS-ONLY): docs/selfhost-next-constfold-promote.md — the single build-host runbook: (1) promote
+  MECHANISM (gitignored seed restored from immutable 151c52c8; re-pin = wholesale anchor refresh, 27,068-line drift);
+  (2) the 3 source fixes + exact codegen.hexa/runtime.c sites + golden changes [OP-37b _cf_as_float strtod parse ·
+  OP-40 _cf_float_node/_cf_float_hexlit bit-exact hex-float · OP-44 hxlcl_vsnprintf float-branch libc-snprintf
+  delegation]; (3) the ONE promote procedure (apply OP-44 to runtime → regen seed → coherent anchor commit →
+  build_selfhost.sh cc-gen3.o==cc-gen4.o fixpoint + parity → FROZEN_SEED_REF re-pin → ~91% float-string golden re-bake
+  as its OWN PR); (4) post-promote cleanup (drop the 3 nobaseline-gate.yml :129/:193/:256 continue-on-error lines →
+  OP-39 gate enforcing, per OP-39b); (5) per-fix verification checklist (each oracle/gate green post-promote).
+- REGISTERED: domain `## deferred` now OPENS with the unified item "SELFHOST-NEXT — const-fold+atof+vsnprintf
+  seed-promote bundle (OP-37b/40/44/39b)" → docs/selfhost-next-constfold-promote.md; the OP-39b deferred note marked
+  SUPERSEDED-by-bundle; the OP-44 milestone cross-links the runbook; OP-46 milestone [x] added. Individual verdicts
+  (F-OP37B/F-OP40/F-OP44/F-OP39B) KEPT — OP-46 only unifies the forward-pointer (3+1 scattered DEFERs → 1 coherent item).
+- OUTCOME: 🟢 GREEN (docs/spec consolidation). NO seed regen, NO build-host work (that IS the deferred item), NO
+  codegen/runtime/.tape edits. Verdict .verdicts/hexa-0pod/F-OP46-PROMOTE-BUNDLE-SPEC.txt.
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
