@@ -1,5 +1,41 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-71 DONE: forge GPU-emit doc-vs-code honesty fix (OP-64 class) · the parse_only RFC071 P9 fixture nvptx_p9_warp_reduce_test.hexa still declared `gpu_warp_shuffle_xor` `[NOT WIRED]` + predicted `// unsupported` PTX markers + "DO NOT touch compiler source" — verifiably FALSE on main (#1200/N71-B wired the shfl.sync.bfly.b32 lowering; the comment dates to wip 9f343d1bb, PREDATES the wiring) · 🔴→fix GREEN comment-only · $0 · 0-pod · NO GPU · self-host byte-eq UNTOUCHED
+- SURVEY (STEP 1 — scoped greps/reads, NO .git; candidate axes a–d):
+  · (a) forge GPU-emit 0-pod READABLE — both handoff-flagged bugs are ALREADY CLOSED:
+    nvptx f64 exp() underflow garbage <x≈−745 = FIXED (nvptx_target.hexa:2009-2024 DOJO-A4 /
+    d631a08f `max.s64 b,b,0` clamp → b<<52=+0.0, no NaN; CPU falsifier
+    nvptx_expf64_underflow_clamp_probe.hexa gates exp(-800)==0.0). RFC071 gpu_warp_shuffle_xor
+    NVPTX FIXME = WIRED (nvptx_target.hexa:1700-1771 shfl.sync.bfly.b32, u32 single-instr + f64
+    decompose/recompose; PTX_OP_SHFL_SYNC_BFLY_B32; returns before unsupported-call fallthrough
+    3207; #1200/N71-B b1564fa37 + n71b fire fixture). NEITHER is an open bug.
+  · (b) forge/flame DOC-vs-CODE honesty — PICKED. nvptx_p9_warp_reduce_test.hexa header still
+    advertises the now-wired builtin as [NOT WIRED] (a tracked false capability claim).
+  · (c) flame stdlib CPU-oracle invariant — none unlocked (determinism-path libm/FMA/const-fold
+    GATED by OP-66/69/39; per-phase byte-eq oracles are runtime-checked, not 0-pod static).
+  · (d) `## deferred` — all build-host (frozen-anchor 151c52c8 re-pin: OP-2b/2c/19b/37b/40/44/46)
+    or GPU (OP-5c). Out of 0-pod scope.
+- PICK (g0): (b) — the only axis with an actionable, decisive, $0/0-GPU outcome; g0-simplest
+  (comment-only). A future cycle reading the [NOT WIRED] header would re-report a shipped builtin
+  as HONEST BLOCKED.
+- FINDING (verbatim): lines 22-30 PRE-FIX declared `gpu_warp_shuffle_xor(v, mask)` `[NOT WIRED —
+  XOR butterfly variant ...]` + "if `gpu_warp_shuffle_xor` is not wired ... PTX emit will contain
+  `// unsupported` markers ... DO NOT touch compiler source this round." FALSE: nvptx_target.hexa:
+  1700 lowers it to `shfl.sync.bfly.b32 ... 0x1f, 0xffffffff` and returns at 1770, BEFORE the
+  `unsupported call` stub at 3207. TIMELINE: the `[NOT WIRED]` header = wip 9f343d1bb; the wiring =
+  later #1200 / b1564fa37. The comment is genuinely STALE.
+- FIX (comment-only, no behavior change): rewrote the intrinsic entry [NOT WIRED]→[WIRED] with the
+  exact lowering (shfl.sync.bfly.b32 + f64 decompose/recompose §9.7.13.4; #1200/N71-B; emitter site +
+  n71b fire fixture cited); replaced the false `@D g3 ... unsupported markers ... DO NOT touch` para
+  with a STALE-COMMENT-FIX note.
+- VERIFY: git diff --stat = 1 file, 15+/8−. Comment-only proof: `git diff | grep '^[+-]' |
+  grep -vE '^[+-]//' | grep -vE '^(\+\+\+|---)'` = EMPTY (0 non-comment line changed); the
+  @gpu_kernel body (34-57) byte-identical; parse_only fixture parse-correctness preserved.
+- OUTCOME: 🔴→fix GREEN. Self-host byte-eq UNTOUCHED (codegen TEST FIXTURE, not in
+  compiler/main.hexa build_selfhost closure; 0 codegen/runtime/stdlib bytes). wipe_guard
+  net-additive. Verdict F-OP71-SHFL-XOR-WIRED-COMMENT.txt. $0 · 0-pod · NO GPU · no vast ·
+  no foreign pod · no .tape · no self/env.hexa · leak-0.
+
 ## 2026-06-13 — OP-69 DONE: COMPLETE the flame determinism-contract enforcement coverage — audit the OTHER layers for the documented-but-ungated gap OP-66 closed for layer-2 · FINDING: LAYER 3 (cross-ISA FMA-free) was DOCUMENTED + held in source but UNGATED · new tool/flame_steppath_fma_gate.sh (pure grep, no ./hexa/no seed) wired BLOCKING in nobaseline-gate.yml ALL 3 ISA legs · PROVEN pass-clean (exit 0, 6 files) + fail-on-regression (clm_prod.hexa:212 farr_matmul + moe_lib t_matmul, exit 1) · $0 · 0-pod · NO GPU · byte-eq fixpoint untouched
 - SURVEY (STEP 1 — read docs/flame-determinism-contract.md IN FULL; enumerate ALL 3 run-step
   determinism layers + the 4th compile-step + per-phase sub-invariants; grep .github/workflows +

@@ -19,15 +19,22 @@
 // Required intrinsics:
 //   - `gpu_thread_id_x()` -> u32     [WIRED, %tid.x]
 //   - `gpu_block_dim_x()` -> u32     [WIRED, %ntid.x]
-//   - `gpu_warp_shuffle_xor(v, mask)`  [NOT WIRED — XOR butterfly variant of
-//                                       existing `gpu_warp_shuffle(v, lane)`
-//                                       idx-mode; FP64-shuffle would compose
-//                                       from 2× u32 halves per PTX ISA §9.7.13.4]
+//   - `gpu_warp_shuffle_xor(v, mask)`  [WIRED — XOR-butterfly variant; lowers to
+//                                       `shfl.sync.bfly.b32 ... 0x1f, 0xffffffff`.
+//                                       An f64 source decomposes into 2× u32 halves
+//                                       (`mov.b64 {lo,hi}`), shuffles each, then
+//                                       recomposes, per PTX ISA §9.7.13.4. Closed by
+//                                       N71-B / N70 GAP-C (#1200); the emitter is in
+//                                       nvptx_target.hexa `gpu_warp_shuffle_xor` and
+//                                       fired hand-MIR by nvptx_n71b_fire_emit.hexa.]
 //
-// Per task `@D g3` scope: if `gpu_warp_shuffle_xor` is not wired, this
-// fixture's PTX emit will contain `// unsupported` markers for the shuffle
-// calls — the cycle reports HONEST BLOCKED + names the missing builtin.
-// DO NOT touch compiler source this round.
+// STALE-COMMENT FIX (OP-71, 0-pod doc-vs-code honesty): the prior revision of
+// this header declared `gpu_warp_shuffle_xor` `[NOT WIRED]` and predicted the
+// PTX emit would carry `// unsupported` markers for the shuffle calls. That is
+// now FALSE — #1200 wired the XOR-butterfly lowering (both the u32 single-instr
+// path and the f64 decompose/recompose path) and it short-circuits with a real
+// `shfl.sync.bfly.b32` emit BEFORE the `unsupported call` fallthrough. This
+// fixture is fully lowerable; it is no longer a HONEST-BLOCKED probe.
 
 // ── The kernel (gpu/SPEC.md §2 — @gpu_kernel must return void) ───────
 
