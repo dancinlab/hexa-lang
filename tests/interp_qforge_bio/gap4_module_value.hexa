@@ -1,0 +1,5 @@
+use "tests/interp_qforge_bio/modA"
+fn main() {
+    // qfb_conv runs the division at RUNTIME (param r), full precision on any build.
+    println(format_float(qfb_conv(1.7682), 15))
+}

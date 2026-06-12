@@ -1,0 +1,16 @@
+fn main() {
+    let ux = 7.3
+    let K = 5
+    // path A: float floor, then % on float
+    let gx0_f = floor(ux)          // float 7.0
+    println(to_string(type_of(gx0_f)))   // is floor() float or int?
+    // path B: to_int(floor())
+    let gx0_i = to_int(floor(ux))  // int 7
+    // index via (g0 - j) % K — test float vs int consistency
+    let j = 2
+    // float path
+    let idx_f = gx0_f - to_float(to_string(j))
+    // can we even % a float?
+    println(to_string(gx0_i))
+    println(to_string((gx0_i - j) % K))
+}

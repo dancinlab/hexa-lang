@@ -1,0 +1,15 @@
+fn main() {
+    let ux = 7.3
+    let f = floor(ux)
+    println(to_string(type_of(f)))     // type of floor result
+    println(to_string(f))               // value
+    // does % work directly on floor result mixed with int?
+    let K = 5
+    let m = (f - 2) % K
+    println(to_string(type_of(m)))
+    println(to_string(m))
+    // negative case (the desync risk): floor of negative
+    let g = floor(0.0 - 0.3)
+    println(to_string(g))               // -1.0 or 0?
+    println(to_string(type_of(g)))
+}

@@ -1,0 +1,13 @@
+fn build() -> fn(float) -> float {
+    let a = 2.5
+    let b = a * 4.0          // local derived from another local
+    let c = b + 1.0
+    return fn(x: float) -> float { return x * c }   // capture derived local c=11.0
+}
+fn main() {
+    let f = build()
+    println(format_float(f(2.0), 4))   // expect 22.0
+    // closure over closure
+    let g = build()
+    println(format_float(g(3.0), 4))   // expect 33.0
+}

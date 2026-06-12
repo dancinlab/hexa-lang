@@ -1,0 +1,11 @@
+pub struct Node {
+    value: float,
+    grad: float,
+    ladder: int
+}
+pub fn mk_node(v: float) -> Node {
+    Node { value: v, grad: 0.0, ladder: 3 }   // trailing-expr style
+}
+pub fn node_ladder(n: Node) -> int {
+    n.ladder
+}

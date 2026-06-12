@@ -1,0 +1,20 @@
+use "tests/interp_qforge_bio/mod_grad"
+
+struct AbfeConfig {
+    ladder: int,        // collides with Node.ladder
+    n_sweeps: int,
+    grad: float         // collides with Node.grad
+}
+
+fn mk_cfg() -> AbfeConfig {
+    AbfeConfig { ladder: 7, n_sweeps: 10, grad: 2.5 }   // trailing-expr
+}
+
+fn main() {
+    let n = mk_node(3.0)
+    println(to_string(node_ladder(n)))    // 3
+    let cfg = mk_cfg()
+    println(to_string(cfg.ladder))         // 7 — collision risk
+    println(format_float(cfg.grad, 2))     // 2.5
+    println(to_string(cfg.n_sweeps))       // 10
+}

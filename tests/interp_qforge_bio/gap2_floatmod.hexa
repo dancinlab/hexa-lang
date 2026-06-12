@@ -1,0 +1,8 @@
+fn main() {
+    let a = 7.5
+    let b = 3.0
+    // % on two floats — does it work and give 1.5?
+    let m = a % b
+    println(format_float(m, 3))
+    println(type_of(m))
+}

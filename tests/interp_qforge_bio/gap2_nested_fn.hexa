@@ -1,0 +1,4 @@
+fn main() {
+    fn inner(x: int) -> int { return x * 2 }
+    println(to_string(inner(21)))
+}

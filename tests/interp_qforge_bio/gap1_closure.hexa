@@ -1,0 +1,8 @@
+fn make_adder(base: int) -> fn(int) -> int {
+    let offset = 100          // local let — handoff says this is NOT captured
+    return fn(x: int) -> int { return x + base + offset }
+}
+fn main() {
+    let add = make_adder(5)
+    println(to_string(add(1)))   // expect 1 + 5 + 100 = 106
+}

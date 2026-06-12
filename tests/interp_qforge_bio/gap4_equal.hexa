@@ -1,0 +1,7 @@
+use "tests/interp_qforge_bio/modA"
+fn main() {
+    let r = 1.7682
+    let a = (2.0 * r) / 1.122462048309373
+    let m = qfb_conv(r)
+    if a == m { println("FOLD_EXACT") } else { println("FOLD_LOSSY") }
+}
