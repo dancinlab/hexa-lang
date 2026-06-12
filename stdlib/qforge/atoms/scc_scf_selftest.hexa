@@ -1,0 +1,197 @@
+// @ci_gate — deterministic · SCC self-consistency-loop anchors
+//
+// qforge/atoms/scc_scf_selftest.hexa — QFORGE atoms brick #6 (SCC SCF driver) g5.
+//
+// scc_scf.hexa WIRES the R5 kernels (EHT Hamiltonian · eigh · SCC on-site potential
+// qforge_scc_potential) and R1 seed charges into the actual self-consistency LOOP
+// δq → δq[H(δq)]. NO kernel is re-implemented (d3/d19) — this is the fixed-point
+// driver + mixing + convergence control. The four g5 anchors prove the LOOP, not a
+// re-derived kernel (the kernels are already proved in eht_scc_selftest):
+//
+//   (a) CONVERGENCE: the max-norm residual ‖δq⁽ⁿ⁺¹⁾−δq⁽ⁿ⁾‖_∞ DECREASES MONOTONE to
+//       < tol in a FINITE, REAL iteration count (reported verbatim — d6, not forced). 🟢
+//   (b) FIXED POINT: at the converged δq*, one more bare step G(δq*) reproduces δq*
+//       within tol — δq* IS the fixed point of the charge-coupled Hamiltonian.       🟢
+//   (c) ENERGY STABILITY: the SCC total energy at the fixed point is STABLE / lower
+//       than at the (non-converged) seed — the loop descends a real energy.          🟢
+//   (d) δq=0 TRIVIAL: a neutral, geometrically-symmetric, identical-atom system with
+//       a symmetric seed stays at δq→0 (the symmetric reference IS the fixed point). 🟢
+//
+// HONEST (d6): Mulliken populations use the ORTHONORMAL-BASIS approximation (S=I,
+//   p_a = Σ_k occ_k Σ_{μ∈a} C_{μk}²) — labelled in scc_scf.hexa; the non-orthogonal
+//   P·S trace + Löwdin S^{-1/2} are round-7. Convergence is NOT forced: the driver
+//   reports the REAL iteration count and the REAL residual; this test asserts the
+//   residual sequence it produces is monotone-decreasing and terminates honestly.
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/atoms/scc_scf_selftest.hexa
+// PASS: "qforge_scc_scf_selftest PASS".
+use "stdlib/qforge/atoms/scc_scf"
+use "stdlib/qforge/atoms/eht_scc"
+use "stdlib/alloc/math/eigen"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ══ SYSTEM A — asymmetric 2-atom / 2-orbital (1 s-orbital per atom) ═════════
+    // Two distinct atoms (different on-site H_μ, different α) at R = 1.5. One orbital
+    // per atom ⇒ orb2atom = [0,1]. Closed shell: 2 electrons in the lower MO.
+    // Reference charges qref = 0 (neutral atoms); valence n_val = 1 each (so the
+    // total electron count 2 = Σ n_val, the molecule is neutral overall).
+    let posA = [0.0, 0.0, 0.0,  1.5, 0.0, 0.0]
+    let honA = [-0.62, -0.94]          // on-site levels (atom 0 less electroneg.)
+    let Sab = 0.32
+    let overlapA = [1.0, Sab, Sab, 1.0]
+    let Kwh = 1.75
+    let hehtA = qforge_eht_hamiltonian(honA, overlapA, Kwh)
+    let alphaA = [1.05, 0.80]          // R1 γ-radii
+    let orb2atomA = [0, 1]
+    let occA = [2.0, 0.0]              // closed shell, 2 e⁻ in lower MO
+    let nvalA = [1.0, 1.0]
+    let qrefA = [0.0, 0.0]
+    let dq0A = [0.0, 0.0]              // seed from the reference
+
+    // ── (a) CONVERGENCE — capture the residual at each iter to prove MONOTONE ↓ ──
+    // Re-run the bare map by hand with damped mixing β=0.5, logging the residual
+    // sequence, so the test SEES the decrease (the driver returns only the final).
+    let beta = 0.5
+    let tol = 1.0e-10
+    let maxit = 200
+    let mut dq = [dq0A[0], dq0A[1]]
+    let mut prev_res = 1.0e30
+    let mut monotone = true
+    let mut hand_iters = 0
+    let mut hand_resid = 1.0e30
+    let mut hand_conv = false
+    let mut it = 0
+    while it < maxit {
+        let dqn = qforge_scc_step(hehtA, posA, dq, alphaA, orb2atomA, occA,
+                                  nvalA, qrefA, 2, 2)
+        let r = qforge_scc_residual(dqn, dq)
+        hand_iters = it + 1
+        hand_resid = r
+        // monotone non-increase (allow tiny float wobble at the noise floor)
+        if r > prev_res + 1.0e-14 { monotone = false }
+        prev_res = r
+        if r < tol {
+            dq = [dqn[0], dqn[1]]
+            hand_conv = true
+            it = maxit
+        } else {
+            dq = [(1.0 - beta) * dq[0] + beta * dqn[0],
+                  (1.0 - beta) * dq[1] + beta * dqn[1]]
+            it = it + 1
+        }
+    }
+    fails = fails + _ck_true("(a) residual sequence monotone non-increasing", monotone)
+    fails = fails + _ck_true("(a) converged (residual < tol)", hand_conv)
+    fails = fails + _ck_true("(a) finite iteration count (< maxit)", hand_iters < maxit)
+    println("    [a] hand-loop iters=" + to_string(hand_iters)
+            + " final_resid=" + to_string(hand_resid))
+
+    // ── driver must REPRODUCE the hand loop (same physics, packaged) ─────────────
+    let res = qforge_scc_scf(hehtA, posA, dq0A, alphaA, orb2atomA, occA,
+                             nvalA, qrefA, 2, 2, beta, tol, maxit)
+    let drv_iters = res[2]
+    let drv_resid = res[3]
+    let drv_conv = res[4]
+    println("    [a] driver  iters=" + to_string(drv_iters)
+            + " final_resid=" + to_string(drv_resid)
+            + " converged=" + to_string(drv_conv))
+    fails = fails + _ck_close("(a) driver iters == hand-loop iters",
+                              drv_iters, to_float(hand_iters), 0.5)
+    fails = fails + _ck_true("(a) driver reports converged=1", drv_conv > 0.5)
+    fails = fails + _ck_close("(a) driver fixed point δq*₀ == hand δq₀", res[0], dq[0], 1.0e-9)
+    fails = fails + _ck_close("(a) driver fixed point δq*₁ == hand δq₁", res[1], dq[1], 1.0e-9)
+    // neutrality: Σ δq* = 0 (qref=0, Σ n_val = Σ pop = 2 for the closed shell).
+    fails = fails + _ck_close("(a) charge conservation Σδq* = 0", res[0] + res[1], 0.0, 1.0e-9)
+
+    // ── (b) FIXED POINT — one more bare step at δq* reproduces δq* ───────────────
+    let dqstar = [res[0], res[1]]
+    let gstar = qforge_scc_step(hehtA, posA, dqstar, alphaA, orb2atomA, occA,
+                                nvalA, qrefA, 2, 2)
+    let fp_resid = qforge_scc_residual(gstar, dqstar)
+    fails = fails + _ck_true("(b) G(δq*) == δq* within tol (fixed point)", fp_resid < 1.0e-9)
+    fails = fails + _ck_close("(b) G(δq*)₀ == δq*₀", gstar[0], dqstar[0], 1.0e-9)
+    println("    [b] ‖G(δq*)−δq*‖_∞ = " + to_string(fp_resid))
+
+    // ── (c) ENERGY DESCENT ALONG THE SCC TRAJECTORY ────────────────────────────
+    // HONEST (d6): the converged δq* is the fixed point of the CHARGE MAP, not the
+    // global minimum of qforge_scc_total_energy — in this orthonormal-Mulliken
+    // approximation the second-order-corrected total keeps decreasing past δq* (the
+    // proper variational SCC functional requires populations consistent in BOTH the
+    // band and second-order terms, which the Mulliken/Löwdin step of round-7 closes;
+    // a probe scan confirmed E is monotone in δq, with NO stationary point at δq*).
+    // What IS true and verified here: as the loop ITERATES from the seed toward δq*,
+    // the SCC total energy DESCENDS MONOTONICALLY step by step — the loop is a real
+    // energy-lowering relaxation. We assert that descent, NOT a false minimum claim.
+    let mut etraj_prev = 1.0e30
+    let mut energy_descends = true
+    let mut dqt = [dq0A[0], dq0A[1]]
+    let e_seed = qforge_scc_total_energy(hehtA, posA, dq0A, alphaA, orb2atomA, occA, 2, 2)
+    let mut tit = 0
+    while tit < 40 {
+        let et = qforge_scc_total_energy(hehtA, posA, dqt, alphaA, orb2atomA, occA, 2, 2)
+        if et > etraj_prev + 1.0e-12 { energy_descends = false }
+        etraj_prev = et
+        let dqn = qforge_scc_step(hehtA, posA, dqt, alphaA, orb2atomA, occA,
+                                  nvalA, qrefA, 2, 2)
+        dqt = [(1.0 - beta) * dqt[0] + beta * dqn[0],
+               (1.0 - beta) * dqt[1] + beta * dqn[1]]
+        tit = tit + 1
+    }
+    let e_star = qforge_scc_total_energy(hehtA, posA, dqstar, alphaA, orb2atomA, occA, 2, 2)
+    println("    [c] E(seed)=" + to_string(e_seed) + "  E(δq*)=" + to_string(e_star)
+            + "  (trajectory-monotone-descent)")
+    fails = fails + _ck_true("(c) E descends monotonically along SCC trajectory",
+                             energy_descends)
+    fails = fails + _ck_true("(c) E(δq*) < E(seed) (loop lowered the energy)",
+                             e_star < e_seed - 1.0e-9)
+
+    // ══ SYSTEM B — neutral SYMMETRIC homonuclear dimer (δq → 0 TRIVIAL) ═════════
+    // Two IDENTICAL atoms (same H_μ, same α), symmetric geometry, symmetric seed
+    // δq=0. By symmetry the population splits evenly ⇒ δq stays 0 — the symmetric
+    // reference IS the SCC fixed point. (d): δq=0 trivial.
+    let posB = [0.0, 0.0, 0.0,  1.4, 0.0, 0.0]
+    let honB = [-0.70, -0.70]
+    let overlapB = [1.0, 0.30, 0.30, 1.0]
+    let hehtB = qforge_eht_hamiltonian(honB, overlapB, Kwh)
+    let alphaB = [0.95, 0.95]
+    let orb2atomB = [0, 1]
+    let occB = [2.0, 0.0]
+    let nvalB = [1.0, 1.0]
+    let qrefB = [0.0, 0.0]
+    let dq0B = [0.0, 0.0]
+    let resB = qforge_scc_scf(hehtB, posB, dq0B, alphaB, orb2atomB, occB,
+                              nvalB, qrefB, 2, 2, 1.0, 1.0e-12, 100)
+    println("    [d] symmetric dimer δq* = (" + to_string(resB[0]) + ", "
+            + to_string(resB[1]) + ")  iters=" + to_string(resB[2]))
+    fails = fails + _ck_close("(d) symmetric δq*₀ → 0", resB[0], 0.0, 1.0e-9)
+    fails = fails + _ck_close("(d) symmetric δq*₁ → 0", resB[1], 0.0, 1.0e-9)
+    fails = fails + _ck_close("(d) symmetric δq* antisymmetric (δq₀ = −δq₁)",
+                              resB[0] + resB[1], 0.0, 1.0e-12)
+    // the bonding MO of an identical-atom dimer is (1,1)/√2 ⇒ each atom gets exactly
+    // 1.0 electron ⇒ δq = q_ref = 0 exactly. Verify the Mulliken pop directly.
+    let cvecB = qforge_eht_vectors_asc(hehtB, 2)
+    let popB = qforge_mulliken_pop(cvecB, occB, orb2atomB, 2, 2)
+    fails = fails + _ck_close("(d) symmetric Mulliken pop atom0 = 1.0", popB[0], 1.0, 1.0e-9)
+    fails = fails + _ck_close("(d) symmetric Mulliken pop atom1 = 1.0", popB[1], 1.0, 1.0e-9)
+
+    // ══ Mulliken pop conservation (total electrons preserved) — sanity across A ══
+    let cvecA = qforge_eht_vectors_asc(hehtA, 2)
+    let popA = qforge_mulliken_pop(cvecA, occA, orb2atomA, 2, 2)
+    fails = fails + _ck_close("(sanity) Σ Mulliken pop = Σ occ = 2",
+                              popA[0] + popA[1], 2.0, 1.0e-9)
+
+    if fails == 0 { println("qforge_scc_scf_selftest PASS") }
+    else { println("qforge_scc_scf_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
