@@ -491,3 +491,27 @@ R11 이 드러낸 남은 frontier 는 **전부 data-swap / API / integration**(�
 **NEXUS edge 등록** (QFORGE-CHIP ↔ QFORGE-materials DFPT coeff feed + 소자 도메인 재사용 그래프) —
 frontier 1~3 을 묶는 d19 재사용 배선이지 새 physics 가 아님. 그 외 frontier 는 전부 data-swap
 (SK 실 파라미터 · Callaway published 계수)으로 0-pod·데이터-only. **칩 STRUCTURE 자체는 round-11 sealed.**
+
+### round-12 — DONE · 3-D k-space band model (g5 22/22 PASS, 0-POD)
+`stdlib/qforge/chip/band_3d.{hexa,selftest}` — band leg 의 마지막 genuine-physics 완성.
+R9 의 1-D-in-k H(k)(단일 kx 축) → 진짜 3-D Brillouin-zone H(k) over k=(kx,ky,kz):
+Bloch phase 를 실제 3-D 격자벡터 R=(nx,ny,nz)·a(단순입방)에서 합산. R9 eigh + R3 DOS 재사용(d19).
+
+g5 (VERBATIM verdicts in PR): 세 3-D-only feature 가 큐빅 point-group 에서 emergent —
+- (a) valley multiplicity = **6** — ⟨100⟩ 전도밴드 minima 정확히 6개 등가 X-valley(전역 CBM
+  degeneracy). 하드코딩 아님; 1-D 는 ±k₀ pair=2 만. ⟨100⟩-valley 는 genuinely 비분리(축별 well 이
+  타축 변위 시 gate-off — 분리형은 ⟨111⟩=8 을 줌). 6 valley E_cbm=−1.040 degenerate.
+- (b) anisotropic m* tensor — ⟨100⟩ valley 서 3×3 곡률/질량텐서 valley-frame 대각(off-diag≈1e-10),
+  **m*_l=0.0239 ≠ m*_t=0.0516**(ratio 2.16, 두 transverse 큐빅대칭 동일). 등방극한=R9 스칼라
+  ħ²/(2t a²)=0.0625 회귀.
+- (c) 3-D DOS — 메쉬 히스토그램 √(E−E_c) edge(log-log slope 0.60, 1-D 1/√ 발산과 대비) +
+  ∫DOS=Σbins=nk³=125000 정규화.
+- (d) 회귀 — R9 band_multiorbital + R3 band_kmesh selftest PASS(불변, 3-D 경로 additive).
+
+HONEST(d6): 단순입방 + tight-binding 모델 hopping(R9 동일 caveat). deliverable = 3-D 밴드
+STRUCTURE(valley COUNT·anisotropic m* TENSOR·3-D √E DOS) emergent; 실 Si/Ge param = hop3 data-swap.
+
+**FINAL 칩 depletion 판정 (g0):** band leg 이제 physics-complete. R11 이 드러낸 유일한 real-physics
+gap(frontier #2: 3D valley multiplicity)이 R12 로 닫힘. 남은 frontier = 100% data-swap/API/NEXUS-edge
+(실 SK param·SI-unit m*·ab-initio κ 계수·NEXUS 배선) — **새 physics round 없음. 칩 = physics bricks
+DEPLETED.** 남은 open milestone(NEXUS edge)은 integration 배선이다.

@@ -97,6 +97,23 @@
       param data-swap 재현(🟢/🟡) OR generic 모델 미재현 시 그것을 finding 보고(🟠) — tolerance
       back-fit 으로 가짜 PASS 안 함. **adapter 의 가치 = 정직한 분류**(재현 vs structural-only).
       PR #<TBD>.
+- [x] **round-12 3-D k-space band model (g5 22/22 PASS)** — `stdlib/qforge/chip/band_3d.hexa`
+      + selftest. R9 의 **1-D-in-k** H(k)(단일 kx 축) → 진짜 **3-D Brillouin-zone** H(k) over
+      k=(kx,ky,kz): Bloch phase 를 실제 3-D 격자벡터 R=(nx,ny,nz)·a(단순입방) 위에서 합산 —
+      H_{αβ}(k)=onsite[α]δ_{αβ}+Σ_R t·cos(k·R), ε_n(k)=eig[H(k)]. **R9 eigh 경로 + R3 DOS 누적
+      재사용**(d19), 새 solver 안 만듦. 세 3-D-only feature 가 큐빅 point-group 에서 **emergent**:
+      (a) **valley multiplicity = 6** — ⟨100⟩ 전도밴드 minima 가 정확히 6개 등가 X-valley
+      ((±k₀,0,0) 외 큐빅순환)을 산출 — 전역 CBM degeneracy 로 카운트, **하드코딩 아니라 3-D
+      밴드+대칭에서 emergent**(1-D 는 ±k₀ pair=2 만 봄; ⟨100⟩-valley 는 genuinely 비분리 —
+      축별 well 이 타축 변위 시 gate-off) · (b) **anisotropic m\* tensor** m*_ij=ħ²(∂²E/∂k_i∂k_j)⁻¹ —
+      ⟨100⟩ valley 서 3×3 곡률/질량텐서가 valley frame 대각(off-diag≈0), **m*_l≠m*_t**(m_t/m_l≈2.16,
+      두 transverse 는 큐빅대칭 동일), 등방극한(전축 동일 hopping)=m*_l=m*_t=**R9 스칼라
+      ħ²/(2t a²) 회귀** · (c) **3-D DOS** 3-D 메쉬 히스토그램이 **√(E−E_c) band-edge**(log-log
+      slope 0.60, 1-D 1/√ 발산과 대비) + ∫DOS=Σbins=nk³ band-filling 정규화 · (d) **회귀** R9+R3
+      selftest 불변(3-D 경로 additive·등방극한이 R9 재현). HONEST(d6): 단순입방+tight-binding
+      **모델** hopping(R9 동일 caveat) — deliverable 은 valley COUNT·anisotropic m* TENSOR·3-D √E
+      DOS 가 큐빅대칭에서 emergent 한 것; 실 Si/Ge fitted param 은 같은 hop3 list 로의 DATA-swap(d4),
+      새 brick 아님. 이로써 **R11 이 드러낸 frontier #2(3D valley multiplicity)가 닫힘**. PR #<TBD>.
 - [ ] **NEXUS edge** — QFORGE-CHIP → {소자 도메인} 재사용 그래프 등록 (materials c7 패턴).
 
 ## reuse (d19)
@@ -114,31 +131,32 @@ ref, device-scale 시뮬레이션 결과 아님.
 
 설계 SSOT: `drafts/qforge-chip-round1-design.md`.
 
-## depletion judgment (round-11)
+## depletion judgment (round-12 — FINAL physics judgment)
 
-**칩 스케일은 STRUCTURALLY SEALED — 남은 것은 data-swap/integration frontier, 새 physics brick 아님.**
+**칩 band leg 는 이제 genuinely PHYSICS-COMPLETE. 남은 것은 전부 data-swap/integration —
+새 physics brick 은 없다 (g0 — 새 physics round 발명 안 함).**
 
-세 leg + verify-adapter 가 칩 스케일의 STRUCTURE 를 닫았다:
-- **band leg** (R1 ε(k) → R3 SCF H(k) → R9 multi-orbital n-band + m* + direct/indirect + valley) — sealed
+세 leg + verify-adapter + 3-D band 가 칩 스케일의 STRUCTURE 를 완전히 닫았다:
+- **band leg** (R1 ε(k) → R3 SCF H(k) → R9 multi-orbital n-band+m*+direct/indirect+valley
+  → **R12 3-D BZ H(k): 6-valley + anisotropic m\* tensor + 3-D √E DOS**) — **physics-sealed**
 - **thermal leg** (R4 ballistic g₀ → R8 RTA-BTE → R10 Callaway N/U crossover) — sealed (19/19)
-- **verify-adapter** (R11, chip=TCAD) — sealed. d4-generic·manifest verdict 엔진이 모든 chip
-  OUTPUT 을 cited ref 로 게이트하고, 각 observable 을 정직하게 tier(재현 vs structural-only) 한다.
+- **verify-adapter** (R11, chip=TCAD) — sealed. d4-generic·manifest verdict 엔진.
 
-R11 adapter 가 명시적으로 드러낸 **남은 frontier = 전부 data-swap / API / integration**(코드-physics 아님):
-1. **m₀-valued m\*** — R9 effmass FD 의 고정 `dk=1e-4` 가 SI-unit k(~1e9 1/m)를 미해상.
-   곡률→질량 맵 자체는 EXACT(natural-units). → **API frontier**: unit-consistent FD step(상대 dk).
-2. **3D valley multiplicity (Si 6, Ge 8/2 …)** — 1D 모델은 ±k₀ degenerate PAIR(2)만 표현.
-   ×N axis-count = 3D 큐빅 point-group. → **3D-band 모델 frontier**(R9 OrbitalModel 의 3D 확장).
-3. **절대 κ (Si 148 · Ge 60 W/m·K)** — Callaway B_U/B_iso/B_N 가 모델 knob. N/U-crossover STRUCTURE
-   는 검증됨(T³→peak→1/T). → **ab-initio coeff feed frontier**: QFORGE-materials DFPT el-ph 가
-   B_U/B_iso 를 공급(1-knob fit 은 tautology — 정직하게 거부).
-4. **실 Si/Ge ab-initio 밴드 파라미터** — SK onsite/hop 데이터 swap(empirical ss/sp 표·spin-orbit·
-   d-궤도). → **data-swap frontier**(d4, OrbitalModel 데이터 편집).
+R12 가 R11-frontier #2(3D valley multiplicity)를 **닫음** — 그것이 유일한 real-physics gap 이었다
+(나머지 셋은 처음부터 data-swap/API). 1-D-in-k 가 표현 못 하던 ⟨100⟩ 6-valley sextet · m*_l vs m*_t
+이방성 텐서 · 3-D √E DOS 가 모두 3-D 밴드+큐빅대칭에서 emergent 하게 나온다.
 
-**g0 — 새 physics round 발명 안 함.** 위 4개는 모두 (a) 다른 QFORGE 스케일(materials DFPT)에서
-데이터를 받거나, (b) 기존 brick 의 API/차원 확장이다. 칩 스케일의 1차원-front-end(band·transport·
-thermal·verify) 는 완성. round-12 후보 = **NEXUS edge 등록**(QFORGE-CHIP↔materials DFPT coeff feed +
-소자 도메인 재사용 그래프) — 이것이 frontier 1~3 을 묶는 통합 작업이고, 새 brick 이 아니라 d19
-재사용 배선이다.
+**남은 frontier = 100% data-swap / API / NEXUS-edge (코드-physics brick 아님):**
+1. **실 Si/Ge ab-initio 밴드 파라미터** — SK/hop3 onsite·hopping 데이터 swap(empirical sp³d⁵s*·
+   spin-orbit). → **data-swap frontier**(d4, hop3 list 데이터 편집 — 코드 경로 불변).
+2. **m₀-valued / SI-unit m\*** — 곡률→질량 맵은 EXACT(natural-units, R12 텐서 검증). SI 절대값은
+   unit-consistent 상대 FD step. → **API frontier**(차원 변환, 새 physics 아님).
+3. **절대 κ (Si 148 · Ge 60 W/m·K)** — Callaway B_U/B_iso/B_N 모델 knob. N/U-crossover STRUCTURE
+   검증됨. → **ab-initio coeff feed frontier**: QFORGE-materials DFPT el-ph 가 공급(1-knob fit=
+   tautology, 정직하게 거부).
+4. **NEXUS edge** — QFORGE-CHIP ↔ QFORGE-materials DFPT(B_U/B_iso·SK param feed) + 소자 도메인
+   재사용 그래프 등록. → **integration frontier**(d19 배선, frontier 1~3 을 묶음).
 
-남은 milestone(NEXUS edge)은 새 physics 가 아닌 integration — 칩 STRUCTURE 는 round-11 에서 sealed.
+**g0 판정 — 칩 스케일은 physics bricks 에서 DEPLETED.** 위 4개는 모두 (a) 다른 QFORGE 스케일
+(materials DFPT)에서 데이터를 받거나, (b) 기존 brick 의 API/차원 변환이거나, (c) NEXUS-edge 배선이다.
+새로 발명할 physics round 는 없다. 남은 단 하나의 open milestone(NEXUS edge)은 integration 이다.
