@@ -33,8 +33,15 @@ physical coupling (mechanical → electrostatic → covalent boundary → CG tie
       callback). HONEST (d6·@L5): real `qforge_assemble_h` V_ext SCF hook exists; full PW SCF on the
       toy not run (round-2 convention) — sign+order via exact O(E²) linear response (static α·E),
       MM field = real Coulomb sum. Full SCF polarization + hyperpolarizability = round-3+ refinement.
-- [ ] round-4 — covalent boundary / link atom: H-cap a cut bond + host-charge redistribution. g5 =
-      link-atom force projection conserves total force (Newton 3rd across boundary).
+- [x] round-4 — covalent boundary / link atom: H-cap a cut bond + host-charge redistribution.
+      `stdlib/qforge/system/link_atom.hexa` + selftest. g5 28/28 PASS — (a) force projection
+      conserves total force (net added == F_L exactly, Newton 3rd across the cut; share split
+      (1−g):g = the linear-slave Jacobian); (b) capped→uncut: E_capped == E_uncut when QM≡MM (ONIOM
+      cap cancels), QM≠MM residual = E_QM(cap)−E_MM(cap) = −1.2 reported honestly (not forced 0, d6);
+      (c) charge-shift conserves Σq (|ΣΔq|=0, host zeroed, q_H/n spread to n MM neighbours); (d) H-cap
+      on the Q→H axis (cross-product=0 colinear, |R_L−R_Q|=g·|R_H−R_Q|=d_QL). d4-generic (g, host
+      charge, neighbour set = data). REUSE (d19): shifted charges feed straight into round-3 V_ext
+      (`embed_ee_vext_at`) — verified identical in-gate.
 - [ ] round-5 — CG tier (MARTINI-style ~4:1 mapping): QM/MM/CG additive coupling reusing the same
       partition algebra. g5 = MM→CG coarse-graining preserves the slow-DOF free energy in a toy.
 
@@ -47,6 +54,7 @@ physical coupling (mechanical → electrostatic → covalent boundary → CG tie
 | E_QM-MM electrostatic | `stdlib/chem/md/ewald` · `pme`                          |
 | V_ext (QM 1-e hook)   | `stdlib/qforge/assembler` `qforge_assemble_h` (SCF hook) |
 | polarization (EE−ME)  | **`stdlib/qforge/system/embed_electrostatic`** (round-3) |
+| link atom (H-cap)     | **`stdlib/qforge/system/link_atom`** (round-4)           |
 | forces (all scales)   | `stdlib/chem/md/forces_autograd` · qforge HF forces     |
 | partition algebra     | **`stdlib/qforge/system/qmmm`** (round-1 brick)         |
 
