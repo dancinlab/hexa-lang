@@ -1,0 +1,99 @@
+// @ci_gate — deterministic · network-free · FULLY-ANALYTIC RHF force (R12)
+//
+// qforge/atoms/rhf_force_analytic_selftest.hexa — QFORGE atoms brick #12 g5. R11 sealed
+// a genuine ab-initio Roothaan RHF force but kept ∂H_core/∂R and ∂(μν|λσ)/∂R as CENTRAL
+// FINITE DIFFERENCE of the consumed MOLSCF tensors. R12 swaps in CLOSED-FORM analytic
+// integral derivatives (McMurchie-Davidson s-shell, integral_grads.hexa) so the force is
+// FULLY ANALYTIC — no FD anywhere. Four g5 anchors, REAL output (d6), no LLM self-judge:
+//
+//   (c1) FULLY-ANALYTIC FORCE == FD of E_RHF(R): qforge_rhf_force_analytic (∂H,∂ERI,∂S,
+//        ∂E_nuc ALL closed form) == central-FD of the RELAXED-SCF E_RHF(R) to <1e-6.    🟢
+//   (c2) ANALYTIC == R11 (FD-integral-deriv) force: the analytic-swap force == the R11
+//        force (which used FD ∂H/∂ERI) to <1e-6 — the swap removed FD, changed nothing.  🟢
+//   (c3) TRANSLATIONAL INVARIANCE: ΣF=0 to ~1e-10 (Newton 3rd law on the analytic force). 🟢
+//   (c4) EQUILIBRIUM: F→0 at the RHF-optimal H₂ R* (bisection on the analytic F1x);
+//        report R* + residual |F(R*)|. Same R* the R11 force gave (1.34592 bohr).        🟢
+//
+// HONEST (d6): s-ONLY (STO-3G H 1s). p/d shells RAISE the Hermite index → need the MOLSCF
+//   md_integrals d-extension (sibling lane) → round-13. Every number printed VERBATIM.
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/atoms/rhf_force_analytic_selftest.hexa
+// PASS: "qforge_rhf_force_analytic_selftest PASS".
+use "stdlib/qforge/atoms/rhf_force"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _ck(name: str, got: float, want: float, eps: float, fails: int) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (Δ=" + to_string(_abs(got-want)) + ")") ; return fails }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return fails + 1
+}
+fn _ckt(name: str, cond: bool, fails: int) -> int {
+    if cond { println("PASS " + name) ; return fails }
+    println("FAIL " + name) ; return fails + 1
+}
+
+fn main() {
+    let mut fails = 0
+    let alphas = [3.42525091, 0.62391373, 0.16885540, 3.42525091, 0.62391373, 0.16885540]
+    let coeffs = [0.15432897, 0.53532814, 0.44463454, 0.15432897, 0.53532814, 0.44463454]
+    let off = [0, 3, 6]
+    let z = [1.0, 1.0]
+    let natom = 2
+    let n_occ = 1
+    let hfd = 0.0001                    // FD step for the R11 force + the E_RHF FD ref
+
+    // ══ (c1) FULLY-ANALYTIC FORCE == central-FD of E_RHF(R) ════════════════════
+    let posB = [0.0, 0.0, 0.0,  1.3, 0.0, 0.0]
+    let fA = qforge_rhf_force_analytic(1, posB, alphas, coeffs, off, z, natom, n_occ)
+    let fref1 = qforge_rhf_force_fd(posB, alphas, coeffs, off, z, natom, n_occ, 1, 0, hfd)
+    println("    [c1] analytic F(atom1,x)=" + to_string(fA[3]) + "  FD-of-E_RHF ref=" + to_string(fref1))
+    fails = _ck("(c1) analytic F(atom1,x) == −∂E_RHF/∂R FD (<1e-6)", fA[3], fref1, 1.0e-6, fails)
+    fails = _ck("(c1) analytic F(atom1,y)==0 (collinear)", fA[4], 0.0, 1.0e-6, fails)
+    fails = _ck("(c1) analytic F(atom1,z)==0 (collinear)", fA[5], 0.0, 1.0e-6, fails)
+
+    // ══ (c2) ANALYTIC force == R11 FD-integral-deriv force (the swap is physical no-op) ═
+    let fR11 = qforge_rhf_force(1, posB, alphas, coeffs, off, z, natom, n_occ, hfd)
+    println("    [c2] analytic F(atom1,x)=" + to_string(fA[3]) + "  R11(FD-integ) F=" + to_string(fR11[3]))
+    fails = _ck("(c2) analytic == R11-FD force (atom1,x) (<1e-6)", fA[3], fR11[3], 1.0e-6, fails)
+    fails = _ck("(c2) analytic == R11-FD force (atom0,x) (<1e-6)", fA[0], fR11[0], 1.0e-6, fails)
+
+    // Pulay still load-bearing on the analytic path
+    let fAnp = qforge_rhf_force_analytic(0, posB, alphas, coeffs, off, z, natom, n_occ)
+    let pulay = fA[3] - fAnp[3]
+    println("    [c2] analytic HF-only F=" + to_string(fAnp[3]) + "  Pulay-W·∂S=" + to_string(pulay))
+    fails = _ckt("(c2) Pulay term non-trivial on analytic path (|Pulay|>1e-3)", _abs(pulay) > 1.0e-3, fails)
+    fails = _ckt("(c2) dropping Pulay breaks analytic force (|HF-only−FD|>1e-3)", _abs(fAnp[3] - fref1) > 1.0e-3, fails)
+
+    // ══ (c3) TRANSLATIONAL INVARIANCE: ΣF=0 on the analytic force ══════════════
+    let translres = qforge_rhf_force_transl_residual(fA, 2)
+    println("    [c3] ΣF_x=" + to_string(fA[0] + fA[3]) + "  ‖ΣF‖=" + to_string(translres))
+    fails = _ckt("(c3) ΣF=0 transl invariance (‖ΣF‖<1e-9)", translres < 1.0e-9, fails)
+    fails = _ck("(c3) equal-and-opposite F0x == −F1x", fA[0], 0.0 - fA[3], 1.0e-9, fails)
+
+    // ══ (c4) EQUILIBRIUM: F→0 at R* via bisection on the ANALYTIC F1x ══════════
+    fn _f1x(R: float, al: [float], co: [float], of: [int], zz: [float]) -> float {
+        let p = [0.0, 0.0, 0.0, R, 0.0, 0.0]
+        let ff = qforge_rhf_force_analytic(1, p, al, co, of, zz, 2, 1)
+        return ff[3]
+    }
+    let mut lo = 1.2
+    let mut hi = 2.4
+    let flo = _f1x(lo, alphas, coeffs, off, z)
+    let fhi = _f1x(hi, alphas, coeffs, off, z)
+    fails = _ckt("(c4) analytic F(R) brackets a zero over [1.2,2.4]", (flo > 0.0) != (fhi > 0.0), fails)
+    let mut it = 0
+    while it < 40 {
+        let mid = 0.5 * (lo + hi)
+        let fm = _f1x(mid, alphas, coeffs, off, z)
+        if (fm > 0.0) == (flo > 0.0) { lo = mid } else { hi = mid }
+        it = it + 1
+    }
+    let Rstar = 0.5 * (lo + hi)
+    let fstar = qforge_rhf_force_analytic(1, [0.0,0.0,0.0, Rstar,0.0,0.0], alphas, coeffs, off, z, 2, 1)
+    let resid = _abs(fstar[3])
+    println("    [c4] R* = " + to_string(Rstar) + " bohr   residual |F(R*)| = " + to_string(resid))
+    fails = _ck("(c4) |F(R*)| → 0 (<1e-5)", resid, 0.0, 1.0e-5, fails)
+    fails = _ckt("(c4) R* in physical H2 range (1.3 < R* < 2.2)", Rstar > 1.3 && Rstar < 2.2, fails)
+    fails = _ck("(c4) analytic R* == R11 R* (1.34592 bohr, <1e-4)", Rstar, 1.34592, 1.0e-4, fails)
+
+    if fails == 0 { println("qforge_rhf_force_analytic_selftest PASS") }
+    else { println("qforge_rhf_force_analytic_selftest FAIL — " + to_string(fails) + " checks failed") }
+}

@@ -64,6 +64,7 @@ use "stdlib/qforge/molscf/gaussian_integrals"
 use "stdlib/qforge/molscf/coulomb_integrals"
 use "stdlib/qforge/molscf/rhf"
 use "stdlib/qforge/atoms/real_overlap"
+use "stdlib/qforge/atoms/integral_grads"
 
 fn _absr(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
 
@@ -286,6 +287,119 @@ fn _deri_dR(pos: [float], alphas: [float], coeffs: [float], off: [int],
     return d
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+//   R12 — ANALYTIC contracted ∂H_core/∂R and ∂(μν|σλ)/∂R (closed form, NO FD).
+//   These REPLACE the central-FD _dhcore_dR / _deri_dR above. They consume the
+//   R12 per-primitive closed forms (integral_grads.hexa: ig_dkinetic_s_dA,
+//   ig_dnuclear_s_d{A,B,C}, ig_deri_s_d{A,B,C,D}) and contract them with the SAME
+//   d_i d_j weights the value tensors use. One s-shell per atom ⇒ orbital μ ≡ atom μ.
+//
+//   Chain rule over which center == the moving atom A (atomA): for every primitive
+//   contribution we ADD the per-center derivative whenever that center is atomA.
+//   This is EXACTLY ∂/∂R_A by translational chain rule, and Σ_A of it = 0 (the free
+//   gate), because the per-primitive Σ_centers ∂I = 0 (integral_grads selftest (b)/(c)).
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── ANALYTIC ∂H_core/∂R_{A,d}: ∂(T + Σ_C V^C)/∂R_A, contracted (flat n×n) ──────
+//   H[μν] = T[μν] + Σ_C V^C[μν]. When atom A moves: T contributes if μ==A (∂/∂A-side)
+//   or ν==A (∂/∂B-side); V^C contributes via the bra-center (μ==A), ket-center (ν==A),
+//   AND the nucleus (C==A, Hellmann-Feynman). All co-occurring cases are summed.
+fn _dhcore_dR_analytic(pos: [float], alphas: [float], coeffs: [float], off: [int],
+                       z: [float], natom: int, atomA: int, dimd: int) -> [float] {
+    let n = natom
+    let mut d: [float] = []
+    let mut idx = 0
+    while idx < n * n { d.push(0.0) ; idx = idx + 1 }
+    let mut mu = 0
+    while mu < n {
+        let xm = _center(pos, mu) ; let am = _bslice(alphas, off[mu], off[mu+1]) ; let cm = _bslice(coeffs, off[mu], off[mu+1])
+        let mut nu = 0
+        while nu < n {
+            let xn = _center(pos, nu) ; let an = _bslice(alphas, off[nu], off[nu+1]) ; let cn = _bslice(coeffs, off[nu], off[nu+1])
+            let mut acc = 0.0
+            let mut i = 0
+            while i < len(am) {
+                let mut j = 0
+                while j < len(an) {
+                    let w = cm[i] * cn[j]
+                    // kinetic T: orbital μ on bra (A-side), ν on ket (B-side = −A-side)
+                    if mu == atomA { acc = acc + w * ig_dkinetic_s_dA(am[i], an[j], xm, xn, dimd) }
+                    if nu == atomA { acc = acc - w * ig_dkinetic_s_dA(am[i], an[j], xm, xn, dimd) }  // ∂/∂B = −∂/∂A
+                    // nuclear V summed over ALL nuclei C
+                    let mut cc = 0
+                    while cc < n {
+                        let xc = _center(pos, cc)
+                        if mu == atomA { acc = acc + w * ig_dnuclear_s_dA(am[i], an[j], xm, xn, z[cc], xc, dimd) }
+                        if nu == atomA { acc = acc + w * ig_dnuclear_s_dB(am[i], an[j], xm, xn, z[cc], xc, dimd) }
+                        if cc == atomA { acc = acc + w * ig_dnuclear_s_dC(am[i], an[j], xm, xn, z[cc], xc, dimd) }
+                        cc = cc + 1
+                    }
+                    j = j + 1
+                }
+                i = i + 1
+            }
+            d[mu * n + nu] = acc
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    return d
+}
+
+// ── ANALYTIC ∂(μν|σλ)/∂R_{A,d}: McMurchie-Davidson contracted (flat n⁴) ────────
+//   eri[((μ n+ν)n+σ)n+λ] = (μν|σλ). Centers: μ=A-side, ν=B-side, σ=C-side, λ=D-side
+//   of cint_eri_s (chemists' (11|22): μ@A,ν@B = electron 1; σ@C,λ@D = electron 2).
+//   When atom A moves: add the per-center derivative for every center index == atomA.
+fn _deri_dR_analytic(pos: [float], alphas: [float], coeffs: [float], off: [int],
+                     natom: int, atomA: int, dimd: int) -> [float] {
+    let n = natom
+    let mut d: [float] = []
+    let mut mu = 0
+    while mu < n {
+        let xm = _center(pos, mu) ; let am = _bslice(alphas, off[mu], off[mu+1]) ; let cm = _bslice(coeffs, off[mu], off[mu+1])
+        let mut nu = 0
+        while nu < n {
+            let xn = _center(pos, nu) ; let an = _bslice(alphas, off[nu], off[nu+1]) ; let cn = _bslice(coeffs, off[nu], off[nu+1])
+            let mut sg = 0
+            while sg < n {
+                let xs = _center(pos, sg) ; let as_ = _bslice(alphas, off[sg], off[sg+1]) ; let cs = _bslice(coeffs, off[sg], off[sg+1])
+                let mut lm = 0
+                while lm < n {
+                    let xl = _center(pos, lm) ; let al = _bslice(alphas, off[lm], off[lm+1]) ; let cl = _bslice(coeffs, off[lm], off[lm+1])
+                    let mut acc = 0.0
+                    let mut i = 0
+                    while i < len(am) {
+                        let mut j = 0
+                        while j < len(an) {
+                            let mut kk = 0
+                            while kk < len(as_) {
+                                let mut ll = 0
+                                while ll < len(al) {
+                                    let w = cm[i] * cn[j] * cs[kk] * cl[ll]
+                                    if mu == atomA { acc = acc + w * ig_deri_s_dA(am[i], xm, an[j], xn, as_[kk], xs, al[ll], xl, dimd) }
+                                    if nu == atomA { acc = acc + w * ig_deri_s_dB(am[i], xm, an[j], xn, as_[kk], xs, al[ll], xl, dimd) }
+                                    if sg == atomA { acc = acc + w * ig_deri_s_dC(am[i], xm, an[j], xn, as_[kk], xs, al[ll], xl, dimd) }
+                                    if lm == atomA { acc = acc + w * ig_deri_s_dD(am[i], xm, an[j], xn, as_[kk], xs, al[ll], xl, dimd) }
+                                    ll = ll + 1
+                                }
+                                kk = kk + 1
+                            }
+                            j = j + 1
+                        }
+                        i = i + 1
+                    }
+                    d.push(acc)
+                    lm = lm + 1
+                }
+                sg = sg + 1
+            }
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    return d
+}
+
 // ── ∂E_nuc/∂R_{A,d} (analytic): Σ_{B≠A} Z_A Z_B (A_d − B_d) / R_AB³ ────────────
 fn _denuc_dR(pos: [float], z: [float], natom: int, atomA: int, dimd: int) -> float {
     let mut g = 0.0
@@ -392,6 +506,96 @@ pub fn qforge_rhf_force(with_pulay: int, pos: [float], alphas: [float], coeffs: 
         while d < 3 {
             f[3 * a + d] = qforge_rhf_force_component(with_pulay, pos, alphas, coeffs, off,
                                                       z, natom, n_occ, a, d, h)
+            d = d + 1
+        }
+        a = a + 1
+    }
+    return f
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   R12 — the FULLY-ANALYTIC RHF force (NO FD anywhere): ∂H_core/∂R, ∂(μν|σλ)/∂R,
+//   ∂S/∂R, ∂E_nuc/∂R ALL closed form. The R11 force component above took ∂H/∂R and
+//   ∂ERI/∂R from central-FD of the MOLSCF tensors; this swaps in the R12 analytic
+//   contracted derivatives — physically identical, only the FD is removed.
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── FULLY-ANALYTIC RHF gradient component ∂E_RHF/∂R_{A,d} (returns FORCE = −∂E) ─
+//   Identical assembly to qforge_rhf_force_component but with _dhcore_dR_analytic /
+//   _deri_dR_analytic (closed form) in place of the FD _dhcore_dR / _deri_dR. ∂S/∂R
+//   and ∂E_nuc/∂R were already analytic. NO `h` parameter — there is no FD step.
+pub fn qforge_rhf_force_component_analytic(with_pulay: int, pos: [float], alphas: [float],
+                                           coeffs: [float], off: [int], z: [float], natom: int,
+                                           n_occ: int, atomA: int, dimd: int) -> float {
+    let n = natom
+    let out = qforge_rhf_run(pos, alphas, coeffs, off, z, natom, n_occ, 200, 1.0e-12, 1.0)
+    let P = out[3]
+    let eps = out[5]
+    let s = qforge_real_overlap_matrix(pos, alphas, coeffs, off, natom)
+    let xmat = rhf_s_inv_sqrt(s, n)
+    let F = out[4]
+    let dg = rhf_diagonalize(F, xmat, n)
+    let C = dg[0]
+    let W = qforge_rhf_wdensity(C, eps, n, n_occ)
+    // ALL-ANALYTIC derivative tensors (no FD)
+    let dH = _dhcore_dR_analytic(pos, alphas, coeffs, off, z, natom, atomA, dimd)
+    let dE = _deri_dR_analytic(pos, alphas, coeffs, off, natom, atomA, dimd)
+    let dS = qforge_real_doverlap_dR(pos, alphas, coeffs, off, natom, atomA, dimd)
+    // (1) Hellmann-Feynman 1e:  Σ_μν P_μν ∂H_core/∂R
+    let mut g1 = 0.0
+    let mut i = 0
+    while i < n * n { g1 = g1 + P[i] * dH[i] ; i = i + 1 }
+    // (2) Hellmann-Feynman 2e:  ½ Σ P_μν P_λσ ∂[(μν|λσ) − ½(μλ|σν)]/∂R
+    let mut g2 = 0.0
+    let mut mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu < n {
+            let pmn = P[mu * n + nu]
+            if pmn != 0.0 {
+                let mut lm = 0
+                while lm < n {
+                    let mut sg = 0
+                    while sg < n {
+                        let pls = P[lm * n + sg]
+                        if pls != 0.0 {
+                            let dcoul = _eri_at(dE, n, mu, nu, sg, lm)
+                            let dexch = _eri_at(dE, n, mu, lm, sg, nu)
+                            g2 = g2 + pmn * pls * (dcoul - 0.5 * dexch)
+                        }
+                        sg = sg + 1
+                    }
+                    lm = lm + 1
+                }
+            }
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    g2 = 0.5 * g2
+    // (3) Pulay overlap-derivative:  − Σ_μν W_μν ∂S_μν/∂R
+    let mut g3 = 0.0
+    if with_pulay == 1 {
+        let mut k = 0
+        while k < n * n { g3 = g3 - W[k] * dS[k] ; k = k + 1 }
+    }
+    // (4) nuclear repulsion:  ∂E_nuc/∂R (analytic)
+    let g4 = _denuc_dR(pos, z, natom, atomA, dimd)
+    return 0.0 - (g1 + g2 + g3 + g4)                          // F = −∂E_RHF/∂R
+}
+
+// ── FULLY-ANALYTIC RHF FORCE VECTOR  F = −∂E_RHF/∂R  (flat 3·natom, NO FD) ──────
+pub fn qforge_rhf_force_analytic(with_pulay: int, pos: [float], alphas: [float], coeffs: [float],
+                                 off: [int], z: [float], natom: int, n_occ: int) -> [float] {
+    let mut f: [float] = []
+    let mut idx = 0
+    while idx < 3 * natom { f.push(0.0) ; idx = idx + 1 }
+    let mut a = 0
+    while a < natom {
+        let mut d = 0
+        while d < 3 {
+            f[3 * a + d] = qforge_rhf_force_component_analytic(with_pulay, pos, alphas, coeffs,
+                                                               off, z, natom, n_occ, a, d)
             d = d + 1
         }
         a = a + 1
