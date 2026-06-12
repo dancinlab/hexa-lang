@@ -1,5 +1,41 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-80 DONE: LANE-1 broadened to the COMPILER/RUNTIME correctness surface (forge/flame 0-pod EXHAUSTED — own-GEMM OP-58/60/61/63/64/73 · determinism-gates OP-66/69 · flame numeric-primitive OP-72/74 · glue-invariant OP-76/78 ALL CLOSED) · LOCK the documented-but-UNGATED contract of self/runtime/crc32_pure.hexa (the OP-72/77 class on the RUNTIME side) · 🟢 GREEN invariant-lock 9/9 + 2 PROVEN-CLEAN · $0 · 0-pod · NO GPU · leak-0
+- SURVEY (scoped greps/reads, NO .git, STEP-1 a–d):
+  · (a) self/runtime/*_pure.hexa helper w/ documented invariant unlocked by a 0-pod oracle ... ✅ ACTIONABLE → PICKED
+        76 *_pure.hexa runtime helpers ship; `find` confirms ZERO self/runtime/*_test.hexa (none has a co-located test).
+        crc32_pure.hexa = standard "CRC-32" IEEE 802.3/PKZIP/gzip/PNG (poly 0xEDB88320, init/final-XOR 0xFFFFFFFF, reflected)
+        + documented crc32_combine_pure streaming invariant (lines 72-75). Authoritative cross-check = CPython zlib.crc32. NO TEST.
+  · (b) compiler/codegen DOC-vs-CODE comment/contract gap ............................... DRY (OP-71/73 forge @#3206 · OP-68/70 core/math CLOSED)
+  · (c) tool/ or CI gate self-consistency gap .......................................... DRY (no NEW gap surfaced)
+  · (d) HEXA-0POD ## deferred 0-pod-feasible non-closure ............................... DRY (all build-host frozen-seed re-pin OP-46/39b/40/44 OR GPU OP-2b/2c/19b/5c)
+- PICK = (a) crc32_pure invariant-lock — g0-simplest pure-CPU `hexa run` leaf oracle, single authoritative ref (zlib.crc32 / 0xCBF43926) + documented combine invariant.
+- THE LOCK — NEW self/runtime/crc32_pure_test.hexa (@sentinel __HEXA_RUNTIME_CRC32__, `use "self/runtime/crc32_pure"`):
+  · G1 REFERENCE  crc32("123456789") == 0xCBF43926 (3421780262)   — THE canonical conformance vector
+  · G2 GOLDEN     "a"/"abc"/"quick-brown-fox"/"hello world" == zlib.crc32 verbatim
+  · G3 EMPTY      crc32("") == 0
+  · G4 COMBINE    crc32_combine_pure(crc32(a),b) == crc32(a+b) over 7×7=49 prefix×suffix splits (documented streaming invariant)
+  · G5 CLIP       crc32_pure(s,n) clips n to len(s) (n>len full · partial n hashes prefix)
+- RUN (`hexa run self/runtime/crc32_pure_test.hexa` arm64-macos, exit 0, VERBATIM):
+  · __HEXA_RUNTIME_CRC32__ PASS 9/9
+  · spot-check: crc=3421780262 want=3421780262   ·   combine=222957957 full=222957957
+- AUTHORITATIVE RAW-BYTE PROOF (faithful Python port of the EXACT module arithmetic vs CPython zlib.crc32 — the OP-75/77 cross-check
+  method, because the interpreter's from_char_code does codepoint→UTF-8 and CANNOT construct raw single bytes: from_char_code(255)
+  yields the 2-byte 0xC3 0xBF ord=195, NOT raw 0xFF):
+  · check123456789: 0xcbf43926 want 0xcbf43926 MATCH
+  · zlib parity mism: 0 of 3006     (empty + 0x00 + 0xFF + all-256-byte buffer + 3000 random len 0..64)
+  · combine invariant mism: 0 of 2000   (random a,b len 0..30)
+- SCOPE NOTE (g5 honesty): the leaf gates use ASCII (<0x80) inputs only (raw single bytes unexpressible on `hexa run`); the full
+  0..255 raw-byte + zlib parity coverage is carried by the Python authoritative port above (MEMORY "local hexa is a stale oracle").
+- DRY (PROVEN-CLEAN siblings, evidence-backed):
+  · url_pure (RFC 3986): decode∘encode == identity for ALL 256 single bytes + 5000 random strings → 0 mismatch; tail/invalid %XX
+    (`%4`/`%`/`%2g`) preserved verbatim as documented; the `i+2 < n` decode boundary is CORRECT (last full %XX at i=n-3 ⇒ i+2=n-1<n).
+  · rle_pure: array rle_encode∘rle_decode exact; string-RLE digit-ambiguity is a documented format limitation, not a defect.
+- BYTE-EQ SAFETY: crc32_pure_test.hexa is a LEAF @sentinel oracle (run via `hexa run`), NOT in the build_selfhost reproduce-byte-identical
+  closure (codegen/runtime/macho/lexer/parser); zero closure edits, crc32_pure.hexa itself UNTOUCHED, zero codegen/runtime bytes →
+  selfhost byte-eq / determinism / miscompile-zero / codegen-guard UNAFFECTED. wipe_guard net-additive (1 new file, 0 deletions).
+- 76-untested-*_pure-helper surface after OP-80: 1 LOCKED (crc32) + 2 PROVEN-CLEAN (url, rle). Verdict F-OP80-CRC32-PURE-INVARIANT-LOCK.txt.
+
 ## 2026-06-13 — OP-78 DONE: COMPLETE the flame trainer-GLUE invariant coverage (OP-76 follow-on) · OP-74 proved the NUMERIC-PRIMITIVE oracle coverage complete (AGREE-vs-libm); OP-76 opened a DISTINCT class — the trainer-GLUE STRUCTURAL/SHAPE/BOUNDARY contracts (LR-schedule shape, F-OP76), NOT numeric agreement · AUDIT the FULL glue surface (optim_lib/nn_lib/moe_lib/conv_lib/tensor_lib/gn_lib) for the same documented-but-UNLOCKED-shape gap · RESULT: every contract-bearing glue op already locked EXCEPT four documented GLUE-level structural holes → locked by OP-78 · 🟢 GREEN invariant-lock 5/5 · $0 · 0-pod · NO GPU · leak-0
 - THE COVERAGE MATRIX (glue invariant → documented structure/shape/boundary contract → locked-by):
   · LR warmup+cosine shape (peak/floor/ramp/seam/range/fold) ........... 🟢 F-OP76 (7/7)

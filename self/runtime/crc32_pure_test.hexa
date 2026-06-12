@@ -1,0 +1,93 @@
+// self/runtime/crc32_pure_test.hexa — crc32_pure invariant lock (OP-80).
+//
+// Locks the documented contract of self/runtime/crc32_pure.hexa, which
+// ships WITHOUT a test. The module claims to be the standard "CRC-32"
+// variant (IEEE 802.3 / PKZIP / gzip / PNG: poly 0xEDB88320 reflected,
+// init 0xFFFFFFFF, final-XOR 0xFFFFFFFF, input/output reflected). That
+// variant has a single authoritative cross-checkable surface — every
+// value below is the EXACT output of CPython `zlib.crc32` (the canonical
+// IEEE 802.3 reference), so this oracle pins the module to the standard.
+//
+// Gates:
+//   G1 REFERENCE   crc32("123456789") == 0xCBF43926 (the canonical vector)
+//   G2 GOLDEN      4 ASCII strings == zlib.crc32 (authoritative)
+//   G3 EMPTY       crc32("") == 0 (init^final-XOR cancels, no bytes)
+//   G4 COMBINE     crc32_combine_pure(crc32(a), b) == crc32(a+b) — the
+//                  documented streaming-chunk invariant (module lines 72-75)
+//   G5 CLIP        crc32_pure(s, n) clips n to len(s) (n>len == full string)
+//
+// Runs on the interpreter (`hexa run`) — crc32_pure is written
+// interpreter-safe (no `<<`/`>>`, .substring/ord/type_of only), so this
+// oracle locks correctness on the SAME execution path the module ships on.
+//
+// SCOPE NOTE: the gates use ASCII (<0x80) inputs only. The interpreter's
+// from_char_code does codepoint->UTF-8 (from_char_code(255) yields the
+// 2-byte 0xC3 0xBF, not a raw 0xFF), so raw single-byte vectors cannot be
+// constructed on this path. The full 0..255 RAW-BYTE coverage + zlib.crc32
+// parity over 3000 random buffers was proven by a faithful Python port of
+// this exact arithmetic (0 mismatch incl. empty/0x00/0xFF) — see the OP-80
+// verdict; this leaf oracle locks the standard-conformance + structural
+// invariants on the shipping execution path.
+// @sentinel(__HEXA_RUNTIME_CRC32__ <PASS|FAIL> N/N)
+
+use "self/runtime/crc32_pure"
+
+let SENT_T = "__HEXA_RUNTIME_CRC32__"
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // ── G1 REFERENCE — the canonical CRC-32 check value ──────────────
+    // "123456789" -> 0xCBF43926 == 3421780262. Cited in the RFC/zlib
+    // test suite as THE conformance vector for this CRC variant.
+    total = total + 1
+    if crc32_str_pure("123456789") == 3421780262 { pass = pass + 1 } else { eprintln("FAIL G1 reference-vector") }
+
+    // ── G2 GOLDEN — exact zlib.crc32 outputs (authoritative) ─────────
+    // Each (string, value) pair is `zlib.crc32(s) & 0xffffffff` verbatim.
+    let gs = ["a", "abc", "The quick brown fox jumps over the lazy dog", "hello world"]
+    let gv = [3904355907, 891568578, 1095738169, 222957957]
+    let mut gi = 0
+    while gi < len(gs) {
+        total = total + 1
+        if crc32_str_pure(gs[gi]) == gv[gi] { pass = pass + 1 } else { eprintln("FAIL G2 golden " + gs[gi]) }
+        gi = gi + 1
+    }
+
+    // ── G3 EMPTY — crc32("") == 0 ────────────────────────────────────
+    total = total + 1
+    if crc32_str_pure("") == 0 { pass = pass + 1 } else { eprintln("FAIL G3 empty") }
+
+    // ── G4 COMBINE — streaming chunk invariant (documented) ──────────
+    // crc32_combine_pure(crc32(a), b) == crc32(a+b) for arbitrary splits.
+    let prefixes = ["", "h", "he", "hel", "hello", "hello ", "abc123"]
+    let suffixes = ["", "world", " world", "!", "456", "\n", "the lazy dog"]
+    let mut pi = 0
+    let mut combine_bad = 0
+    while pi < len(prefixes) {
+        let mut si = 0
+        while si < len(suffixes) {
+            let a = prefixes[pi]
+            let b = suffixes[si]
+            let comb = crc32_combine_pure(crc32_str_pure(a), b)
+            let full = crc32_str_pure(a + b)
+            if comb != full { combine_bad = combine_bad + 1 }
+            si = si + 1
+        }
+        pi = pi + 1
+    }
+    total = total + 1
+    if combine_bad == 0 { pass = pass + 1 } else { eprintln("FAIL G4 combine count=" + str(combine_bad)) }
+
+    // ── G5 CLIP — n is clipped to len(s) ─────────────────────────────
+    // crc32_pure("abc", 999) must equal crc32_str_pure("abc").
+    total = total + 1
+    if crc32_pure("abc", 999) == crc32_str_pure("abc") { pass = pass + 1 } else { eprintln("FAIL G5 clip-over") }
+    // partial: crc32_pure("abcXYZ", 3) hashes only "abc".
+    total = total + 1
+    if crc32_pure("abcXYZ", 3) == crc32_str_pure("abc") { pass = pass + 1 } else { eprintln("FAIL G5 clip-partial") }
+
+    let verdict = if pass == total { "PASS" } else { "FAIL" }
+    println(SENT_T + " " + verdict + " " + str(pass) + "/" + str(total))
+}
