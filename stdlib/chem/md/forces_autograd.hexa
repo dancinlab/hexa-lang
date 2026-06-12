@@ -1,0 +1,169 @@
+// stdlib/chem/md/forces_autograd.hexa — autograd reverse-mode forces for MD.
+//
+// QFORGE-BIO round-2, first verify-able brick.
+//
+// @version 0.1.0
+// @capabilities [pure, autograd]
+//
+// ── PURPOSE ──────────────────────────────────────────────────────────
+// Obtain conservative forces F_i = −∂U/∂x_i WITHOUT a hand-coded analytic
+// gradient. The total potential energy U(coords) is assembled as a closed
+// expression over the autograd tape (stdlib/autograd), then ag_backward
+// gives ∂U/∂x_i for every coordinate, and we negate to get the force.
+//
+// This is the load-bearing premise for every downstream potential
+// (soft-core λ, PME real-space, bonded bonds/angles/dihedrals): once
+// autograd-force == analytic == finite-diff is sealed for LJ+Coulomb, no
+// further potential needs a hand-derived force — energy-only is enough.
+//
+// ── DESIGN (d4-generic) ──────────────────────────────────────────────
+// stdlib/autograd ops are strictly ELEMENTWISE over identical-shape
+// Tensors and there is NO reduction op on the tape. So we represent each
+// scalar coordinate as a length-1 Tensor ag_var. Every intermediate
+// (differences, r², r, energy terms) is then a shape-[1] Tensor, and the
+// scalar energy U is itself a shape-[1] Tensor. ag_backward(U) seeds
+// ones_like(U) = [1.0] — exactly d U/dU — so ag_grad(coord_i) = ∂U/∂x_i.
+//
+// The energy is built by a GENERIC accumulator: `u_total_pair` folds an
+// arbitrary list of pairwise term-builders (LJ, Coulomb, …) over one
+// pair. Adding a new potential = appending a term-builder closure; no
+// per-term force code, no branching on potential name. r⁻ⁿ terms use
+// ag_pow(r, -n) (ag has no division primitive, but pow with a negative
+// float exponent covers 1/r, 1/r⁶, 1/r¹²).
+//
+// ── Distance on the tape ─────────────────────────────────────────────
+//   dx = x1 − x2  (ag_sub)            per axis
+//   r2 = dx² + dy² + dz²  (ag_pow 2 + ag_add)
+//   r  = r2^0.5            (ag_pow 0.5)
+//
+// ── Public surface ───────────────────────────────────────────────────
+//   pub fn pair_energy_autograd(coords6, eps, sigma, q1, q2, ke) -> handle
+//        builds U_LJ + U_Coulomb on the tape; returns the energy handle
+//        and the 6 coordinate handles (via the returned dict) so the
+//        caller can read grads.
+//   pub fn pair_force_autograd(coords6, eps, sigma, q1, q2, ke) -> array
+//        F = −∂U/∂coords, length-6 [Fx1,Fy1,Fz1,Fx2,Fy2,Fz2].
+//
+// coords6 = [x1,y1,z1,x2,y2,z2] (flat float array).
+//
+// Import idiom (interp does not chain transitive imports):
+//   use "stdlib/tensor/mod"
+//   use "stdlib/tensor/shape"
+//   use "stdlib/tensor/ops"
+//   use "stdlib/autograd"
+//   use "stdlib/chem/md/forces_autograd"
+
+// ── scalar-as-[1]-Tensor helpers ─────────────────────────────────────
+
+// Wrap a float scalar as a length-1 leaf VARIABLE (requires_grad).
+fn _ag_scalar_var(v: float) {
+    return ag_var(tensor_from_array([1], [v]))
+}
+
+// Wrap a float scalar as a length-1 CONSTANT (no grad).
+fn _ag_scalar_const(v: float) {
+    return ag_const(tensor_from_array([1], [v]))
+}
+
+// Read the single float out of a shape-[1] handle's grad Tensor.
+fn _ag_grad_scalar(h) -> float {
+    let g = ag_grad(h)
+    return g.data[0]
+}
+
+// Read the single float out of a shape-[1] handle's value Tensor.
+fn _ag_value_scalar(h) -> float {
+    let t = ag_value(h)
+    return t.data[0]
+}
+
+// ── tape sub-expressions (all operands shape [1]) ────────────────────
+
+// r2 = (x1−x2)² + (y1−y2)² + (z1−z2²)  — returns the r² energy handle.
+fn _ag_r2(x1, y1, z1, x2, y2, z2) {
+    let dx = ag_sub(x1, x2)
+    let dy = ag_sub(y1, y2)
+    let dz = ag_sub(z1, z2)
+    let sx = ag_pow(dx, 2.0)
+    let sy = ag_pow(dy, 2.0)
+    let sz = ag_pow(dz, 2.0)
+    return ag_add(ag_add(sx, sy), sz)
+}
+
+// ── potential term-builders (energy-only; force is autograd's job) ───
+//
+// Each takes the r and r2 handles plus a parameter dict and returns the
+// term's energy handle. They are GENERIC over the pair — to add a new
+// potential, write one more builder and register it; no force code.
+
+// LJ 6-12: U = 4 ε [ (σ²/r²)⁶ − (σ²/r²)³ ]  = 4ε[ σ¹²·r⁻¹² − σ⁶·r⁻⁶ ].
+// Built via r⁻⁶ and r⁻¹² on the tape (ag_pow negative exponent).
+fn _term_lj(r, r2, eps: float, sigma: float) {
+    let inv_r6  = ag_pow(r2, 0.0 - 3.0)   // (r²)^-3 = r⁻⁶
+    let inv_r12 = ag_pow(r2, 0.0 - 6.0)   // (r²)^-6 = r⁻¹²
+    let s6  = pow(sigma, 6.0)
+    let s12 = pow(sigma, 12.0)
+    let rep = ag_mul(_ag_scalar_const(4.0 * eps * s12), inv_r12)
+    let att = ag_mul(_ag_scalar_const(4.0 * eps * s6),  inv_r6)
+    return ag_sub(rep, att)
+}
+
+// Coulomb: U = ke · q1 q2 / r = (ke q1 q2) · r⁻¹  = (ke q1 q2) · (r²)^(−1/2).
+fn _term_coulomb(r, r2, q1: float, q2: float, ke: float) {
+    let inv_r = ag_pow(r2, 0.0 - 0.5)     // (r²)^(-1/2) = r⁻¹
+    return ag_mul(_ag_scalar_const(ke * q1 * q2), inv_r)
+}
+
+// ── public: assemble U on the tape, return energy + coord handles ────
+//
+// Returns a dict: { "U": energy_handle, "coords": [6 coord handles] }.
+// Generic: U = Σ over the registered term-builders. The caller decides
+// which potentials are active by the (eps,sigma,q1,q2,ke) it passes;
+// a zero charge product drops Coulomb, a zero eps drops LJ — but both
+// terms are always on the tape so the path stays single + generic (d4).
+pub fn pair_energy_autograd(coords6: array, eps: float, sigma: float, q1: float, q2: float, ke: float) {
+    let x1 = _ag_scalar_var(coords6[0])
+    let y1 = _ag_scalar_var(coords6[1])
+    let z1 = _ag_scalar_var(coords6[2])
+    let x2 = _ag_scalar_var(coords6[3])
+    let y2 = _ag_scalar_var(coords6[4])
+    let z2 = _ag_scalar_var(coords6[5])
+
+    let r2 = _ag_r2(x1, y1, z1, x2, y2, z2)
+    let r  = ag_pow(r2, 0.5)
+
+    let u_lj  = _term_lj(r, r2, eps, sigma)
+    let u_cb  = _term_coulomb(r, r2, q1, q2, ke)
+    let u_tot = ag_add(u_lj, u_cb)
+
+    let out = #{}
+    out["U"] = u_tot
+    out["coords"] = [x1, y1, z1, x2, y2, z2]
+    return out
+}
+
+// ── public: force = −∂U/∂coords via reverse-mode autograd ────────────
+pub fn pair_force_autograd(coords6: array, eps: float, sigma: float, q1: float, q2: float, ke: float) -> array {
+    ag_tape_reset()
+    let bundle = pair_energy_autograd(coords6, eps, sigma, q1, q2, ke)
+    let u = bundle["U"]
+    ag_backward(u)
+    let cs = bundle["coords"]
+    let mut f = []
+    let mut i = 0
+    while i < 6 {
+        // F_i = −∂U/∂coord_i
+        f.push(0.0 - _ag_grad_scalar(cs[i]))
+        i = i + 1
+    }
+    return f
+}
+
+// ── public: scalar energy convenience (forward only) ─────────────────
+pub fn pair_energy_value(coords6: array, eps: float, sigma: float, q1: float, q2: float, ke: float) -> float {
+    ag_tape_reset()
+    let bundle = pair_energy_autograd(coords6, eps, sigma, q1, q2, ke)
+    return _ag_value_scalar(bundle["U"])
+}
+
+println("[forces_autograd loaded]")
