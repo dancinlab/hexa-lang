@@ -101,8 +101,23 @@ Fock 빌드, (3) 비직교 일반화 고유문제 `FC=SCε`. 모든 g5 anchor �
           BOTH large (vs equilibrium c0²=0.987 single-ref) — the two-determinant wall, fixed
       (c) variational E_CAS ≤ E_RHF at every R · static-corr @5.0 (0.248) ≫ @1.4 (0.021) — grows on stretch
       (d) r1..r9 (gaussian/coulomb/rhf/md/md_d/md_f/uhf/rohf/scf_robust) regress ALL PASS — casci is a NEW file
-- [ ] brick 14 (round-11) — CASSCF orbital optimization (MCSCF orbital-rotation: E_CASSCF ≤ E_CASCI,
-      seed-invariant) + larger CAS (CAS(6,6) → Cr₂) + 2nd-order Newton-SCF + g 각운동량 + brick 6 force
+- [x] brick 14 (round-11) — GENERAL N-electron CASCI: determinant-string full-CI over arbitrary CAS(n,m)
+      `fci.hexa` (additive — casci.hexa BYTE-UNTOUCHED, the 2e grid is the N=2 special case kept as anchor):
+      α/β-string enumeration (fci_combinations C(m,k) · fci_dets merge to sorted spin-orbital occupations) +
+      GENERAL Slater–Condon (fci_matel: diagonal Σh_ii+Σ⟨ij‖ij⟩ · single ±(h_pq+Σ⟨pi‖qi⟩) · double ±⟨pq‖rs⟩,
+      phase = (−1)^(orbital-reorder parity)) → eigh ground state. CAS(n,m) all-active == FCI. REUSES the
+      round-10 AO→MO transform (casci_mo_hcore/eri/coeff) verbatim. Largest run = CAS(6,6) (400 dets, tractable).
+      (a) 2e REGRESSION — general solver CAS(2,2) H₂ == round-10 == FCI: @1.4 −1.13727594 · @5.0 −0.93488935
+          |Δ|≤1e-5 (ndet=4=C(2,1)²) — the sealed N=2 anchor reproduced by the general algorithm, not broken
+      (b) general-CAS==FCI — H₄ CAS(4,4) @1.8 E=−2.17541114 (36 dets) · H₆ CAS(6,6) @1.8 E=−3.24451733
+          (400 dets) == pyscf 2.13.1 fci.FCI / mcscf.CASCI |Δ|≤1e-5 (integral-limited; same active space)
+      (c) MULTI-REF WIN @stretch — H₄ R=3.0: E_RHF=−1.77917 (WRONG, +0.192 Ha too high) vs E_CAS=−1.97087
+          == pyscf FCI −1.97086976. det weights 0.7012/0.1194/0.0374/0.0374 == pyscf EXACT (≥3 significant,
+          genuine multi-e static corr, NOT a 2-det case) · H₆ R=3.0 −2.95765 weights 0.5733/0.1020/0.0286...
+      (d) r1..r10 (gaussian/coulomb/rhf/md/md_d/md_f/uhf/rohf/scf_robust/casci) regress ALL PASS — fci is NEW
+- [ ] brick 15 (round-12) — CASSCF orbital optimization (MCSCF orbital-rotation: E_CASSCF ≤ E_CASCI,
+      seed-invariant) + N₂ CAS(6,6) σ/π · Cr₂ CAS(12,12) wall + active-space CI direct-Davidson (skip dense
+      eigh past CAS(8,8)=4900 dets · CAS(10,10)=63504 ceiling) + 2nd-order Newton-SCF + g 각운동량 + brick 6 force
 
 ## three-scale unblock
 
