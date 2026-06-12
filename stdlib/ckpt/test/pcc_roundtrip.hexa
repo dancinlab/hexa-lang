@@ -60,7 +60,12 @@ fn main() {
     let n_chunks = 7
     let total_bytes = chunk_sz * n_chunks
     let payload = _gen_payload(total_bytes)
-    let cert_json = "{\"schema_version\":\"2\",\"slug\":\"pcc_roundtrip_fixture\",\"verdict\":\"VERIFIED\"}\n"
+    // OP-79 mojibake lock: a non-ASCII cert field (bytes >=0x80). The writer
+    // stores str_to_bytes(cert_json) = raw UTF-8 bytes; the verifier must
+    // recover them with bytes_to_str_raw (raw-byte passthrough). The ckpt
+    // bytes_to_str — to_string(from_char_code(b & 0xFF)) per byte — would
+    // double-encode each high byte and break this round-trip assertion.
+    let cert_json = "{\"schema_version\":\"2\",\"slug\":\"한글-fixture\",\"verdict\":\"VERIFIED\",\"reason\":\"서명 OK ✓\"}\n"
 
     let opts = #{}
     opts["chunk_size"] = chunk_sz

@@ -1,0 +1,130 @@
+F-OP79-BYTES-TO-STR-SWEEP
+HEXA-0POD OP-79 — repo-wide `bytes_to_str(` misuse sweep (OP-75 base64 + OP-77 hex/utf8 follow-on)
+2026-06-13 · 0-pod · $0 · NO GPU · no vast · no foreign pod · leak-0
+
+═══════════════════════════════════════════════════════════════════════════════
+TASK
+═══════════════════════════════════════════════════════════════════════════════
+OP-75 (base64) and OP-77 (hex, utf8) each found a module calling `bytes_to_str`
+— a `pub fn` LOCAL to stdlib/ckpt/format.hexa (NOT a registered codegen builtin),
+which (i) breaks standalone build when the module does not import it, and
+(ii) DOUBLE-ENCODES raw bytes: `to_string(from_char_code(b & 0xFF))` per byte
+treats each raw byte as a Unicode codepoint and re-UTF-8-encodes it, so every
+byte >=0x80 becomes mojibake. The registered builtin `bytes_to_str_raw`
+(self/codegen.hexa:7209 → hexa_bytes_to_str_raw) is the correct raw-byte→string
+primitive. OP-79 sweeps the WHOLE repo for any remaining `bytes_to_str(` misuse.
+
+═══════════════════════════════════════════════════════════════════════════════
+1. CALL-SITE CENSUS — every unqualified `bytes_to_str(` in stdlib/ self/ compiler/ tool/
+   (scoped grep, .git excluded; `bytes_to_str_raw` / `_bytes_to_str` /
+   `ssh_bytes_to_string` / `bytes_to_string` are DISTINCT identifiers, excluded)
+═══════════════════════════════════════════════════════════════════════════════
+
+  SITE                                     CLASS                        ACTION
+  ────────────────────────────────────────────────────────────────────────────
+  stdlib/ckpt/format.hexa:180              DEFINITION (the pub fn)       KEEP
+    `pub fn bytes_to_str(bs) { ... }`      — its home module; never
+                                             calls itself (only definer).
+
+  stdlib/ckpt/verifier.hexa:195            OP-77 MOJIBAKE class          FIX → _raw
+    `let cert_json = bytes_to_str(cert_bytes)`
+                                           — imports stdlib/ckpt/format
+                                             (line 39) so build-OK, but the
+                                             CERT block is on-disk UTF-8 JSON;
+                                             any non-ASCII cert field
+                                             (issuer/reason) is double-encoded
+                                             → parse/round-trip corruption.
+
+  stdlib/codec/utf8_test.hexa:45           COMMENT (not a call)          n/a
+    `// double-encode lock — bytes_to_str(ckpt) would mangle ...`
+
+  tool/docs/ckpt__format.md:201            GENERATED DOC (not a call)    n/a
+    `pub fn bytes_to_str(bs)`              — auto-doc of the definition.
+
+  Repo-wide there is exactly ONE definition (format.hexa:180) and exactly ONE
+  external caller (verifier.hexa:195). The base64/hex/utf8 sites were already
+  cured by OP-75/OP-77. No other `bytes_to_str(` call exists in the repo.
+
+═══════════════════════════════════════════════════════════════════════════════
+2. TRUE SEMANTICS + VERIFY (OP-77 method — installed Jun-1 seed is a stale-oracle;
+   faithful Python port vs the authoritative byte semantics)
+═══════════════════════════════════════════════════════════════════════════════
+The CERT block is written by stdlib/ckpt/writer.hexa:81 as
+  `let cert_bytes = str_to_bytes(cert_json)`
+and str_to_bytes (format.hexa:168) is `char_code(s,i) & 0xFF` byte-wise = the
+RAW UTF-8 bytes of the string. The correct inverse on read is therefore
+raw-byte→string passthrough = `bytes_to_str_raw`, NOT the ckpt re-encoding
+`bytes_to_str`. The verifier wants raw-byte→string, not a codepoint-list build.
+
+Faithful Python port (str_to_bytes = utf-8 encode; ckpt bytes_to_str = per-byte
+codepoint then re-utf8; bytes_to_str_raw = raw bytes preserved), CERT JSON with
+a Korean field `{"issuer":"한국",...,"reason":"서명 OK"}`:
+    OLD bytes_to_str (ckpt)  round-trips? False   (한 ED 95 9C → C3 AD C2 95 ... mojibake)
+    NEW bytes_to_str_raw     round-trips? True    (raw UTF-8 bytes preserved)
+
+═══════════════════════════════════════════════════════════════════════════════
+3. FIX — verbatim site + class + post-fix proof
+═══════════════════════════════════════════════════════════════════════════════
+FILE  stdlib/ckpt/verifier.hexa:195
+CLASS OP-77 double-encode mojibake (build-OK / output-WRONG for non-ASCII CERT JSON)
+BEFORE
+    let cert_bytes = bytes_slice(buf, header_end, cert_end)
+    let cert_json = bytes_to_str(cert_bytes)
+AFTER
+    let cert_bytes = bytes_slice(buf, header_end, cert_end)
+    // CERT block is on-disk UTF-8 JSON: raw byte buffer -> string unchanged via
+    // the registered codegen builtin bytes_to_str_raw. The ckpt/format
+    // bytes_to_str does to_string(from_char_code(b & 0xFF)) per byte, which
+    // re-UTF-8-encodes every byte >=0x80 (OP-79 mojibake: any non-ASCII cert
+    // field — issuer/reason — would be double-encoded and fail to parse).
+    let cert_json = bytes_to_str_raw(cert_bytes)
+
+TEST (latent behavior bug locked) — stdlib/ckpt/test/pcc_roundtrip.hexa
+The existing write_pcc→verify_pcc round-trip asserts `v["cert_json"] == cert_json`.
+The fixture was pure-ASCII (passes either way). Changed the fixture to carry a
+non-ASCII cert field so the assertion becomes a mojibake regression lock:
+    let cert_json = "{\"schema_version\":\"2\",\"slug\":\"한글-fixture\",
+                      \"verdict\":\"VERIFIED\",\"reason\":\"서명 OK ✓\"}\n"
+
+POST-FIX PROOF (local run; the stale Jun-1 seed resolves `use stdlib/...`
+against ~/.hx/src/stdlib, so the fix was mirrored into that install copy ONLY
+for local verification, then restored to pristine — the committed fix lives in
+the worktree leaf stdlib):
+  BEFORE (bytes_to_str):
+    FAIL cert_json mismatch
+      want: {"schema_version":"2","slug":"한글-fixture",...,"reason":"서명 OK ✓"}
+      got : {"schema_version":"2","slug":"íê¸-fixture",...,"reason":"ìëª OK â"}
+    FAIL: pcc roundtrip 5/6
+  AFTER (bytes_to_str_raw):
+    PASS verify_pcc.ok — code=OK
+    PASS cert_json round-trip
+    PASS: pcc roundtrip 6/6   (exit 0)
+
+  Isolation probe on the same stale binary (proves bytes_to_str_raw is a working
+  registered builtin and the ckpt path is the bug):
+    bytes_to_str_raw([237,149,156]) -> 한        CORRECT (raw passthrough)
+    bytes_to_str([237,149,156])     -> í...      MOJIBAKE (double-encode)
+    str_to_bytes("한") len=3  → bytes_to_str_raw → 한   round-trip CORRECT
+
+═══════════════════════════════════════════════════════════════════════════════
+4. CLOSURE — `bytes_to_str` misuse class CLOSED repo-wide
+═══════════════════════════════════════════════════════════════════════════════
+After this fix, the ONLY remaining unqualified `bytes_to_str(` site is the
+definition in stdlib/ckpt/format.hexa:180 (legitimate, its home module). There
+are ZERO external callers left. The base64 (OP-75), hex+utf8 (OP-77), and the
+ckpt CERT-block verifier (OP-79) were the complete set of misuse sites.
+🔴→fix GREEN + 🟢 PROVEN-CLEAN (no other misuse remains).
+
+═══════════════════════════════════════════════════════════════════════════════
+IMPACT / GATES
+═══════════════════════════════════════════════════════════════════════════════
+- Self-host byte-eq UNAFFECTED: stdlib/ckpt/{verifier,test/pcc_roundtrip}.hexa
+  are leaf stdlib, NOT in the build_selfhost closure (no self/* compiler/*
+  mirror of ckpt exists; verified `find self/ compiler/ -path '*ckpt/verifier*'`
+  is empty). Zero codegen/runtime bytes touched.
+- wipe_guard: net-ADDITIVE (1 call-site edit + a verdict + a test fixture
+  string change + a domain log entry). No substantive deletions.
+- No .tape edited; self/env.hexa NOT touched.
+
+TIER: 🔴→fix GREEN (real latent mojibake bug fixed + test lock) + 🟢 PROVEN-CLEAN
+      (census shows no other misuse remains repo-wide).
