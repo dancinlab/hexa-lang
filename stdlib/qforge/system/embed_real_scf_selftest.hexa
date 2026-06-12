@@ -96,8 +96,8 @@ fn _mkp(x: float, y: float, z: float) -> MdParticle {
 
 // substring scan (deterministic, no I/O) — returns true if `needle` ⊂ `hay`.
 fn _contains(hay: str, needle: str) -> bool {
-    let h = chars(hay)
-    let n = chars(needle)
+    let h = hay.chars()
+    let n = needle.chars()
     let hl = len(h)
     let nl = len(n)
     if nl == 0 { return true }
