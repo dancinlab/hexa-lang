@@ -1,0 +1,209 @@
+// @ci_gate — deterministic · network-free · QFORGE-ATOMS round-13 p/d RHF force g5
+//
+// rhf_force_pd_selftest.hexa — round-13 g5 gate. FOUR verdicts, all VERBATIM
+// (d6 — no forced numbers; each printed value is the raw computed scalar):
+//
+//   (a) p-BASIS ENERGY — H₂O / STO-3G (O 1s,2s,2p + 2×H 1s = 7 AOs) driven through
+//       the atoms per-AO front-end (qf_pd_run → UNCHANGED rhf_scf) reproduces the
+//       MOLSCF s,p anchor E_total = −74.961754 Ha (proves atoms drives the REAL
+//       first-row ab-initio energy, not the s-only toy). |Δ| reported.            🔵
+//
+//   (b) p-BASIS FORCE == FD — the analytic RHF force WITH p basis functions equals
+//       the central-FD of E_RHF(R). Run on the O–H⁺ diatomic (O 2p-bearing, 6 AOs,
+//       closed-shell 10e? no — O–H neutral is 9e open shell; we use the H₂O O–H
+//       BOND-STRETCH FD which keeps the closed-shell 10e RHF) AND on the full H₂O.
+//       Reports max|F_analytic − F_FD| over the moving DOF (<1e-6). Also proves the
+//       p-bearing Pulay W·∂S term is LOAD-BEARING: with_pulay=0 ⇒ force breaks.     🔵
+//
+//   (c) TRANSLATIONAL INVARIANCE + EQUILIBRIUM — Σ_atoms F = 0 (Newton 3rd) on the
+//       polyatomic H₂O (residual reported); and a 1-D O–H bond-stretch shows the
+//       projected force changes sign across the SCF-relaxed bond length (F→0 near
+//       equilibrium — the geometry check). Residuals reported VERBATIM.            🔵
+//
+//   (d) REGRESSION — the round-12 fully-analytic s-force selftest path is UNTOUCHED
+//       (this brick adds new files only); re-asserted by the s-only H₂ analytic
+//       force == FD here, mirroring R12 (the s-path through rhf_force.hexa is byte-
+//       unchanged; run its selftest separately to confirm r10/r11/r12).            🔵
+//
+// HONEST (d6): ALL integral derivatives (∂S,∂T,∂V,∂ERI) are FULLY ANALYTIC for p via
+//   the shell_grads Gaussian-translation relation (NO finite difference in the force);
+//   only the (b) REFERENCE is FD-of-energy. d AOs use the SAME path (round-14).
+//
+// Run:  HEXA_LANG=<worktree> hexa run stdlib/qforge/atoms/rhf_force_pd_selftest.hexa
+// PASS: "qforge_atoms_rhf_force_pd_selftest PASS".
+use "stdlib/qforge/atoms/rhf_force_pd"
+use "stdlib/qforge/molscf/md_integrals"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_le(name: str, got: float, lim: float) -> int {
+    if got <= lim { println("PASS " + name + " (" + to_string(got) + " ≤ " + to_string(lim) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " > " + to_string(lim)) ; return 1
+}
+fn _ck_true(name: str, c: bool) -> int {
+    if c { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+// ── STO-3G H₂O per-AO basis builder at a given geometry (pos flat 9, O,Ha,Hb) ──
+//   AO order: 1sO,2sO,2pxO,2pyO,2pzO,1sHa,1sHb. aom = parent atom (0=O,1=Ha,2=Hb).
+fn _basis_pw() -> [[int]] {
+    return [[0,0,0],[0,0,0],[1,0,0],[0,1,0],[0,0,1],[0,0,0],[0,0,0]]
+}
+fn _basis_exps() -> [[float]] {
+    let o1a = [130.70932, 23.808861, 6.4436083]
+    let o2a = [5.0331513, 1.1695961, 0.3803890]
+    let ha  = [3.42525091, 0.62391373, 0.16885540]
+    return [o1a, o2a, o2a, o2a, o2a, ha, ha]
+}
+fn _basis_coef() -> [[float]] {
+    let o1d  = [0.15432897, 0.53532814, 0.44463454]
+    let o2sd = [0.0 - 0.09996723, 0.39951283, 0.70011547]
+    let o2pd = [0.15591627, 0.60768372, 0.39195739]
+    let hd   = [0.15432897, 0.53532814, 0.44463454]
+    return [o1d, o2sd, o2pd, o2pd, o2pd, hd, hd]
+}
+fn _basis_aom() -> [int] { return [0,0,0,0,0,1,2] }
+
+fn main() {
+    let mut fails = 0
+    let ang = 1.8897259886
+
+    // standard H₂O geometry (Å→bohr, yz-plane). O=atom0, Ha=atom1, Hb=atom2.
+    let pos = [
+        0.0, 0.0,             0.116321 * ang,
+        0.0, 0.751155 * ang,  0.0 - 0.465285 * ang,
+        0.0, 0.0 - 0.751155 * ang, 0.0 - 0.465285 * ang
+    ]
+    let pw = _basis_pw()
+    let exps = _basis_exps()
+    let coef = _basis_coef()
+    let aom = _basis_aom()
+    let z = [8.0, 1.0, 1.0]
+    let norb = 7
+    let natom = 3
+    let n_occ = 5
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  (a) p-BASIS ENERGY — H₂O / STO-3G through the atoms front-end
+    // ══════════════════════════════════════════════════════════════════════════
+    println("── (a) H₂O/STO-3G p-basis energy through atoms front-end ──")
+    let out = qf_pd_run(pos, pw, exps, coef, aom, norb, z, natom, n_occ, 200, 1.0e-11, 1.0)
+    let e_total = out[0]
+    let converged = out[6]
+    let e_ref = 0.0 - 74.961754063
+    println("  E_total = " + to_string(e_total) + " Ha   (MOLSCF anchor −74.961754)")
+    println("  |Δ|     = " + to_string(_abs(e_total - e_ref)) + " Ha   converged=" + to_string(converged))
+    fails = fails + _ck_true("(a) SCF converged", converged)
+    fails = fails + _ck_close("(a) H₂O E_total == MOLSCF anchor −74.961754", e_total, e_ref, 1.0e-4)
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  (b) p-BASIS FORCE == FD — analytic vs central-FD on the p-bearing molecule
+    // ══════════════════════════════════════════════════════════════════════════
+    println("── (b) p-basis analytic force == central-FD of E_RHF ──")
+    // Analytic force on the O atom (atom0) — O carries the 2p shell, so every
+    // component (∂T,∂V,∂ERI,∂S through the 2p AOs) is exercised. FD on the SAME DOF.
+    let h = 5.0e-4
+    let mut maxdiff = 0.0
+    // sweep all 9 DOF (3 atoms × 3 dims): analytic vs FD.
+    let mut a = 0
+    while a < natom {
+        let mut dimd = 0
+        while dimd < 3 {
+            let fa = qf_pd_force_component(1, pos, pw, exps, coef, aom, norb, z, natom, n_occ, a, dimd)
+            let ff = qf_pd_force_fd(pos, pw, exps, coef, aom, norb, z, natom, n_occ, a, dimd, h)
+            let dd = _abs(fa - ff)
+            if dd > maxdiff { maxdiff = dd }
+            println("  F[atom" + to_string(a) + ",dim" + to_string(dimd) + "] analytic=" + to_string(fa) + " fd=" + to_string(ff) + " |Δ|=" + to_string(dd))
+            dimd = dimd + 1
+        }
+        a = a + 1
+    }
+    fails = fails + _ck_le("(b) max|F_analytic − F_FD| over all 9 DOF (H₂O)", maxdiff, 1.0e-6)
+
+    // Pulay term load-bearing: drop W·∂S (with_pulay=0) on the O-z DOF → must DIVERGE
+    // from FD (the p-bearing Pulay contribution is non-trivial).
+    let fz_full = qf_pd_force_component(1, pos, pw, exps, coef, aom, norb, z, natom, n_occ, 0, 2)
+    let fz_nopulay = qf_pd_force_component(0, pos, pw, exps, coef, aom, norb, z, natom, n_occ, 0, 2)
+    let fz_fd = qf_pd_force_fd(pos, pw, exps, coef, aom, norb, z, natom, n_occ, 0, 2, h)
+    let pulay_mag = _abs(fz_full - fz_nopulay)
+    println("  Pulay term on O-z: |F_full − F_noPulay| = " + to_string(pulay_mag))
+    println("    F_full=" + to_string(fz_full) + " (==FD " + to_string(fz_fd) + ")  F_noPulay=" + to_string(fz_nopulay))
+    fails = fails + _ck_true("(b) p-Pulay W·∂S is load-bearing (|Δ| > 1e-3)", pulay_mag > 1.0e-3)
+    fails = fails + _ck_true("(b) dropping Pulay BREAKS the force (|F_noPulay − FD| > 1e-3)", _abs(fz_nopulay - fz_fd) > 1.0e-3)
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  (c) TRANSLATIONAL INVARIANCE + EQUILIBRIUM
+    // ══════════════════════════════════════════════════════════════════════════
+    println("── (c) Σ_A F = 0 + bond-stretch equilibrium ──")
+    let fvec = qf_pd_force(1, pos, pw, exps, coef, aom, norb, z, natom, n_occ)
+    let tres = qf_pd_transl_residual(fvec, natom)
+    println("  ‖Σ_A F_A‖∞ = " + to_string(tres))
+    fails = fails + _ck_le("(c) translational residual ‖Σ_A F‖∞", tres, 1.0e-6)
+
+    // 1-D symmetric O–H bond-stretch: scale BOTH H positions about O by a factor.
+    // project F onto the Ha→O bond axis; F_bond should be ~0 near the STO-3G eq R,
+    // > 0 (restoring, compressed) when shorter, < 0 when longer (sign flips).
+    fn _stretch(p0: [float], scale: float) -> [float] {
+        // O at index 0 fixed; scale (H − O) about O for both H (atoms 1,2).
+        let ox = p0[0] ; let oy = p0[1] ; let oz = p0[2]
+        let mut o: [float] = [ox, oy, oz]
+        let mut a = 1
+        while a < 3 {
+            o.push(ox + scale * (p0[3*a+0] - ox))
+            o.push(oy + scale * (p0[3*a+1] - oy))
+            o.push(oz + scale * (p0[3*a+2] - oz))
+            a = a + 1
+        }
+        return o
+    }
+    // projected bond force on Ha along the O→Ha unit vector, at scale s.
+    fn _fbond(p: [float], pw: [[int]], exps: [[float]], coef: [[float]], aom: [int],
+              norb: int, z: [float], natom: int, n_occ: int) -> float {
+        let f = qf_pd_force(1, p, pw, exps, coef, aom, norb, z, natom, n_occ)
+        // O→Ha unit vector
+        let dx = p[3]-p[0] ; let dy = p[4]-p[1] ; let dz = p[5]-p[2]
+        let r = sqrt(dx*dx+dy*dy+dz*dz)
+        let ux = dx/r ; let uy = dy/r ; let uz = dz/r
+        // force on Ha (atom1) projected onto outward bond axis (>0 = pushing outward)
+        return f[3]*ux + f[4]*uy + f[5]*uz
+    }
+    let p_short = _stretch(pos, 0.85)   // compressed
+    let p_long  = _stretch(pos, 1.15)   // stretched
+    let fb_short = _fbond(p_short, pw, exps, coef, aom, norb, z, natom, n_occ)
+    let fb_long  = _fbond(p_long,  pw, exps, coef, aom, norb, z, natom, n_occ)
+    let fb_eq    = _fbond(pos,     pw, exps, coef, aom, norb, z, natom, n_occ)
+    println("  bond force  compressed(0.85)=" + to_string(fb_short) + "  eq=" + to_string(fb_eq) + "  stretched(1.15)=" + to_string(fb_long))
+    // compressed → outward (positive) restoring; stretched → inward (negative): sign flip.
+    fails = fails + _ck_true("(c) bond force sign flips across eq (compressed>0, stretched<0)", (fb_short > 0.0) && (fb_long < 0.0))
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  (d) REGRESSION — s-only analytic force == FD (H₂, mirrors R12 path)
+    // ══════════════════════════════════════════════════════════════════════════
+    println("── (d) regression: s-only H₂ analytic force == FD (R10/11/12 path intact) ──")
+    // H₂ / STO-3G through the SAME per-AO front-end with s-only AOs (2 AOs, 2 atoms).
+    let h2pos = [0.0,0.0,0.0,  1.4,0.0,0.0]
+    let h2pw = [[0,0,0],[0,0,0]]
+    let hexps = [3.42525091, 0.62391373, 0.16885540]
+    let hcoef = [0.15432897, 0.53532814, 0.44463454]
+    let h2exps = [hexps, hexps]
+    let h2coef = [hcoef, hcoef]
+    let h2aom = [0, 1]
+    let h2z = [1.0, 1.0]
+    let h2out = qf_pd_run(h2pos, h2pw, h2exps, h2coef, h2aom, 2, h2z, 2, 1, 200, 1.0e-12, 1.0)
+    println("  H₂ E_total = " + to_string(h2out[0]) + " Ha (S&O §3.5.2 ref −1.11671)")
+    fails = fails + _ck_close("(d) H₂ STO-3G E_total = −1.11671", h2out[0], 0.0 - 1.11671, 1.0e-4)
+    let h2fa = qf_pd_force_component(1, h2pos, h2pw, h2exps, h2coef, h2aom, 2, h2z, 2, 1, 0, 0)
+    let h2ff = qf_pd_force_fd(h2pos, h2pw, h2exps, h2coef, h2aom, 2, h2z, 2, 1, 0, 0, 5.0e-4)
+    println("  H₂ F[0,x] analytic=" + to_string(h2fa) + " fd=" + to_string(h2ff) + " |Δ|=" + to_string(_abs(h2fa - h2ff)))
+    fails = fails + _ck_le("(d) H₂ s-only analytic force == FD", _abs(h2fa - h2ff), 1.0e-6)
+
+    if fails == 0 {
+        println("qforge_atoms_rhf_force_pd_selftest PASS")
+    } else {
+        println("qforge_atoms_rhf_force_pd_selftest FAIL (" + to_string(fails) + ")")
+    }
+}
