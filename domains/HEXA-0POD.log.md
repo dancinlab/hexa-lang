@@ -1,5 +1,39 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-61 DONE: INTEGRATION CONTRACT operationalizing the OP-60 route-(a) own-GEMM shape-adaptive selector toward flame production — dispatch hook (QUOTED from clm_prod.hexa/codegen/runtime/forge_tier_v1) + fallback-to-MODE-8 + bit-exact invariant (rel_rms 0) + next-session GPU validation plan · DESIGN ONLY, 🟠 SUPPORTED-BY-DESIGN · NO code wired · NO GPU · $0 · 0-pod
+- TASK: OP-60 made the route-(a) own-GEMM shape-adaptive selector (selected_config + routea_selection.json
+  + test_routea_selector.py) an importable + regression-locked STANDALONE artifact — but NOTHING in flame's
+  production training path consumes it yet. OP-61 writes the INTEGRATION CONTRACT (0-pod, NO GPU) specifying
+  exactly how clm_prod's GEMM dispatch would route through the selector, so the NEXT GPU session implements +
+  validates the wiring without re-deriving the design. NO code wired this round (the GPU session's job).
+- SURVEY (READ before writing): routea_selection.json + selected_config (OP-60 launch-dict) ·
+  F-OP60-SELECTOR-OPERATIONAL · F-OP58-OWNGEMM-PARITY-MAP (the measured anchors) · forge-routea doc §8-§10.
+  Located flame's GEMM dispatch: forge_dispatch_matmul (clm_prod.hexa:212 fwd conv / :250 bwd dW / :262 bwd
+  dX) → codegen.hexa:7525 lowers to hexa_forge_dispatch_matmul → packs ForgeShapeInfo+ForgeArgs, routes
+  through forge_tier_dispatch_v1 (RFC 050 §6.1; forge_tier_v1_emit.hexa:306) → CUDA host = cuBLAS today
+  (_hx_cuda_farr_matmul_gpu, :169); own-GEMM = wgmma_tf32_b14.cu MODE 8 128x128.
+- CONTRACT (new "## selector → flame production integration contract" section in forge-routea doc + verdict):
+  · (a) DISPATCH HOOK = forge_tier_dispatch_v1's own-GEMM branch (a SINGLE selected_config(M,K,N) consult);
+    clm_prod.hexa UNTOUCHED (keeps calling forge_dispatch_matmul); {mode,tile,NST} maps 1:1 to a b14.cu MODE.
+  · (b) FALLBACK — MODE_t64-unbuilt OR out-of-validated-range → MODE 8 128x128 (measured 1.08x parity winner,
+    F-OP45GPU T5); safe-by-construction so production NEVER launches an unbuilt kernel.
+  · (c) BIT-EXACT INVARIANT — routing changes the KERNEL not the bits; all routed kernels share MODE 8's
+    per-K-slab FMA order (no split-K/no cross-CTA reduction §8.1/§9); gate = rel_rms 0.000e+00 dev-vs-dev vs
+    the fixed-MODE-8 reference per routed shape (hard gate, g5, never speed-only).
+  · (d) GPU VALIDATION PLAN — wire the hook, sweep D∈{512,1024,2048,4096}, gate rel_rms 0, confirm parity
+    preserved (~1.08x@D2048, ~1.50x@D4096); optional MODE_t64 small-D fill measure once it is built.
+  · (e) HONEST residual — Hopper MODE_t64 (64x64 small-D tile) is UNBUILT (§8.1 GAP#1); on small-D the
+    fallback-to-MODE-8 is what actually fires until a GPU lane builds the wgmma 64x64 tile. So the
+    integration's only live behavior today is "MODE 8 everywhere already used" (correct+safe, no new perf
+    yet) — stated as the open residual, NOT a solved item.
+- TIER: 🟠 SUPPORTED-BY-DESIGN — the honest 0-pod no-GPU ceiling. NO code into clm_prod, NO kernel build,
+  NO GPU run, NO new measurement, NO self/env.hexa touched. The hook is QUOTED from source; the parity
+  numbers are CITED from F-OP45GPU/F-OP58 (not re-measured).
+- DELIVERABLES: docs/forge-routea-shape-adaptive.md (NEW integration-contract section after §10) ·
+  .verdicts/hexa-0pod/F-OP61-SELECTOR-FLAME-CONTRACT.txt · this log + the OP-61 milestone [x] in the .md.
+- $0, 0-pod, no vast, no pod, no foreign pod, leak-0. MAIN.tape #-comment SKIPPED (untracked-on-origin,
+  OP-54/57/58/60 precedent — avoids a merge race).
+
 ## 2026-06-13 — OP-60 DONE: OPERATIONALIZED the OP-49/OP-53 cost-model-validated route-(a) own-GEMM shape-adaptive selector — importable launch-dict + REGRESSION-LOCK test (ALL PASS, exit 0; teeth proven via measured-bad mutation → exit 1) + machine-readable selection table · NO measured constant changed · NO GPU · $0 · 0-pod
 - TASK: the OP-49/OP-53 `select_config(D,M,N,K)` selector was COST-MODEL-VALIDATED (matches the measured
   OP-45GPU ordering + OP-52 swizzle-negative + OP-58 parity map) but lived ONLY as an inline Python
