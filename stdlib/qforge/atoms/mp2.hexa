@@ -48,6 +48,7 @@
 //   eigensolver, or contraction primitive minted — MP2 is pure post-processing.
 
 use "stdlib/qforge/molscf/rhf"
+use "stdlib/qforge/atoms/cc_accel"
 
 // ════════════════════════════════════════════════════════════════════════════
 //   MO coefficients from a converged Fock (rhf_scf returns P/F/ε, not C)
@@ -88,7 +89,21 @@ fn _t4(T: [float], n: int, p: int, q: int, r: int, s: int) -> float {
 //   q3[p,q,r,σ] = Σ_λ C_λr  q2[p,q,λ,σ]   (index 3: λ→r)
 //   q4[p,q,r,s] = Σ_σ C_σs  q3[p,q,r,σ]   (index 4: σ→s)
 // C is n×n row-major (C_μp = C[μ*n+p]). Returns the full n⁴ MO tensor (flat).
+//
+// EXECUTION: this delegates to the ACCELERATED mp2_ao_to_mo_fast (cc_accel.hexa),
+// which routes each O(N⁵) quarter-transform through the native flame matmul kernel
+// (d19 reuse). The interpreted-loop reference below (mp2_ao_to_mo_ref) is KEPT for
+// the bit-faithfulness regression — the fast path reproduces it to the round-off
+// floor (~1e-16/element). Physics/formulas UNCHANGED — only the contraction
+// execution differs (interpreted Σ → native ikj-FMA matmul).
 pub fn mp2_ao_to_mo(eri: [float], C: [float], n: int) -> [float] {
+    return mp2_ao_to_mo_fast(eri, C, n)
+}
+
+// Reference interpreted-loop transform — the ORIGINAL r16 N⁵ quarter-transform
+// (preserved verbatim for the g5(a) bit-faithfulness regression against the fast
+// path). Identical math; scalar interpreted accumulation order.
+pub fn mp2_ao_to_mo_ref(eri: [float], C: [float], n: int) -> [float] {
     let n4 = n * n * n * n
     // ── quarter 1: μ→p ───────────────────────────────────────────────────────
     let mut q1: [float] = []
