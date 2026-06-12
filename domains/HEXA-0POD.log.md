@@ -1,5 +1,49 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-66 DONE: WIRE the MISSING CI tripwire enforcing flame determinism-contract LAYER 2 ("NO libm transcendental on the CLMConvMoE production step") · documented (§1) + held in source but UNGATED · new tool/flame_steppath_libm_gate.sh (pure grep, no ./hexa/no seed) wired BLOCKING in nobaseline-gate.yml · PROVEN pass-clean (exit 0) + fail-on-regression (clm_prod.hexa:938 + nn_gelu_fwd, exit 1) · $0 · 0-pod · NO GPU · byte-eq fixpoint untouched
+- SURVEY (broader forge/flame frontier deep-dive; route-(a) own-GEMM GENUINELY CLOSED OP-58..64):
+  · (a) flame bit-exact training flagship — docs/flame-determinism-contract.md defines 3 determinism
+    layers; layer-2 = libm-FREE: every transcendental on the production step is hand-rolled (dt_exp/
+    dt_erf/dt_ln/_moe_exp/d5_cos + Newton sqrt) because libm is NOT correctly-rounded → diverges
+    glibc vs Darwin (F-OP19 CE-bwd exp 4/4096 grad 1ULP · F-OP19b GELU erf · F-OP33 libm-cos LR
+    10/500 steps 1-4ULP). CI INVENTORY (grep .github/workflows + tool/): OP-34 fold gate locks the
+    dt_ golden VALUES, OP-39/42 the constfold — but NOTHING enforces the step CALLS the dt_ twins
+    rather than raw libm. => layer-2 DOCUMENTED but UNGATED. ACTIONABLE → PICKED.
+  · (b) handoff b65ebe51 "clm_prod.hexa internally INCONSISTENT" — DRY (stale-seed, not a bug).
+    hexa build clm_prod.hexa on local ~/.hx/bin/hexa errors: hexa_call4(forge_dispatch_db_colsum,...)
+    passing a fn-typed value to a HexaVal param (app.c:2296/2561). ROOT: self/codegen.hexa:7592-7603
+    DOES register forge_dispatch_db_colsum + forge_dispatch_int4_quant_bwd for direct-C lowering, and
+    runtime.h:1141/1171 declares both; the FROZEN seed hexat self/native/hexa_cc.c (151c52c8) predates
+    those registrations → the stale local oracle mis-routes the 4-arg call. SAME stale-seed-vs-source
+    class as the deferred seed-promote bundle (OP-37/40/44/46), a BUILD-HOST task — NOT 0-pod source.
+    clm_prod.hexa is CORRECT vs current source codegen.
+  · (c) own-GEMM public framing — DRY (closed OP-58..64; context: do NOT re-doc).
+  · (d) ## deferred + .log tail — DRY for a NEW forge/flame item (open head = seed-promote = build-host).
+- PICK: (a) — the ONLY genuine 0-pod source-truth-aligned hardening (a flagship-central determinism
+  invariant is documented but UNGATED → can silently regress). g0: pure source grep is the simplest
+  sound enforcement (no build, no seed, no GPU, machine-independent, <1s).
+- THE INVARIANT HOLDS TODAY (pre-gate): clm_prod.hexa + flame_math/gn_lib/optim_lib/conv_lib/moe_lib/
+  quant_lib/tensor_lib = 0 raw libm sites; nn_lib has 6 (all attention/RoPE/SwiGLU: _nn_sqrt:56,
+  _nn_softmax_row:204, nn_attn_core_fwd:226, nn_attn_core_bwd:285, _nn_sigmoid:374, nn_rope:521) but
+  clm_prod REACHES only nn_ce_loss_allpos/nn_embedding_*/nn_gelu_*/nn_groupnorm_*/nn_moe_router_*
+  (grep -c each of the 6 libm fns from clm_prod = 0; each reachable fn itself libm-free). The 6 sites
+  are the DECODER-TRANSFORMER architecture, a different model the CLMConvMoE trainer never calls.
+- GATE: tool/flame_steppath_libm_gate.sh — FILES allow-list (clm_prod + 7 libs) + function-scope scan
+  of nn_lib's 9 production-reachable fns. Forbids whole-word libm exp/erf/cos/sin/tanh/log/sqrt/pow/
+  atan/acos/asin call-sites; excludes // comments + dt_/d5_/_moe_/Newton twins + the _libm/_sel_
+  oracle references. Exit 0 clean / 1 regression / 2 absent (neutral). Modeled on forge_runtime_warn_gate.sh.
+- VERBATIM PROOF:
+  · CLEAN: `sh tool/flame_steppath_libm_gate.sh` → "GATE PASSED: 9 guarded ... libm-transcendental-free" EXIT=0
+  · REGRESSION A (clm_prod.hexa:938 dt_exp→exp): "FAIL clm_prod.hexa ... 938: ...sm + exp(t_get(logits..." EXIT=1
+  · REGRESSION B (nn_gelu_fwd += `let _bogus = exp(0.0)`): "FAIL nn_lib.hexa [nn_gelu_fwd] 1014: ...exp(0.0)" EXIT=1;
+    the same exp( injected into the unscanned attention path is correctly IGNORED. Reverted → EXIT=0.
+- WIRED BLOCKING in nobaseline-gate darwin-arm64 job (after OP-34; no seed dependency, so real not advisory).
+  docs/flame-determinism-contract.md §1 gains the OP-66 tripwire pointer. Verdict
+  .verdicts/hexa-0pod/F-OP66-FLAME-STEPPATH-LIBM-GATE.txt.
+- OUTCOME: 🟢 GREEN. determinism-contract LAYER 2 now CI-enforced by a tripwire proven pass-clean +
+  fail-on-regression. NO codegen/runtime/stdlib edit → self-host byte-eq fixpoint untouched. Milestone
+  OP-66 [x]. $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape · no self/env.hexa.
+
 ## 2026-06-13 — OP-64 DONE: EXTEND the honest-number discipline to the own-GEMM DTYPE axis — the parity claim is now explicitly DTYPE-SCOPED to TF32 · FP16/BF16 (W14) = correct (rel_rms ≤ 1e-2 same-dtype) but PARITY=NO, 11.5x off cuBLAS-FP16 (roofline doubled) · docs-only, cited-not-re-measured · $0 · 0-pod · NO GPU
 - TASK: the public comparison doc + README led the own-GEMM story with the TF32 route-(a) result
   (1.08x cuBLAS-TF32 PARITY @D=2048, bit-exact) WITHOUT a dtype qualifier. But the campaign also
