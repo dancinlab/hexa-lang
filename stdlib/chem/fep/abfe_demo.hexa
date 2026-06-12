@@ -1,0 +1,312 @@
+// stdlib/chem/fep/abfe_demo.hexa — end-to-end ABFE pipeline orchestrator.
+//
+// QFORGE-BIO round-9, full-chain absolute-free-energy demo.
+//
+// @version 0.1.0
+// @capabilities [pure, randomness]
+//
+// ── PURPOSE ──────────────────────────────────────────────────────────
+// Rounds R2–R8 sealed EIGHT independent native FEP/MD bricks. R9 is the
+// integration round: it wires them into ONE continuous chain and runs a
+// real absolute-free-energy (ABFE / alchemical decoupling) calculation
+// end-to-end, producing an actual ΔG number, to PROVE the whole pipeline
+// works as a unit. This is a SMALL-SYSTEM WIRING DEMO, not a production
+// protein-ligand parity run (see the HONEST SCOPE note at the bottom).
+//
+// The eight sealed bricks and where they enter the chain:
+//   R2 stdlib/chem/md/forces_autograd  — autograd reverse-mode forces
+//                                          (used inside the soft-core force)
+//   R3 stdlib/chem/fep/softcore        — Beutler soft-core U(x,λ), dU/dλ
+//   R4 stdlib/chem/fep/mbar            — MBAR/BAR ΔG estimator + diagnostics
+//   R5 stdlib/chem/fep/hrex            — Hamiltonian replica exchange driver
+//   R6 stdlib/chem/solvate/tip3p       — TIP3P water + solvation box builder
+//   R7 stdlib/chem/md/shake            — SHAKE/RATTLE rigid-bond constraints
+//   R8 stdlib/chem/md/langevin         — Langevin (BAOAB) NVT thermostat
+//   (+ LJ/MdParticle layout from stdlib/chem/md/lennard_jones)
+//
+// ── THE CHAIN (d4-generic, hardcode-0) ───────────────────────────────
+// One pass of run_abfe does, generically:
+//   1. SOLVATE   — R6 builds (or the caller supplies) the simulation box.
+//   2. LADDER    — a λ-schedule [λ_0 … λ_{K-1}] (caller-supplied, generic).
+//   3. SAMPLE    — R5 hrex_run drives K replicas, one per λ-rung. The
+//                  per-rung PROPAGATOR is the R8 Langevin step (optionally
+//                  R7-constrained); the EXCHANGE energy is the R3 soft-core
+//                  reduced potential. So a single hrex_run call fuses
+//                  R3+R5+R7+R8 into the sampling stage.
+//   4. ASSEMBLE  — R5 hrex_assemble_u_kn cross-evaluates every sample at
+//                  every λ (R3 soft-core energy) → the u_kn matrix.
+//   5. ESTIMATE  — R4 mbar_solve / mbar_delta_g turns u_kn → ΔG + overlap.
+// Every brick is CALLED, never re-implemented (d3). The system (λ count,
+// steps, box, masses, FF params) enters only as generic arguments (d4):
+// NO molecule name, NO per-instance branch anywhere in this file.
+//
+// ── Public surface ───────────────────────────────────────────────────
+//   pub struct AbfeConfig { ladder, n_sweeps, swap_period, md_steps_per_sweep,
+//                           dt, kT, seed, mbar_tol, mbar_max_iter }
+//   pub fn run_abfe(ufn, prop, configs0, cfg) -> dict
+//        the generic orchestrator: HREX-sample → assemble u_kn → MBAR ΔG.
+//        Returns { dG, dG_kT, f, overlap, partial_dG, n_attempt, n_accept,
+//                  acc_rate, round_trips, K, Ntot, converged, iters, u_kn,
+//                  N_k, samples_by_rung }.
+//   pub fn make_langevin_prop(force_fn, prm, dt, cons, tol, maxiter) -> fn
+//        wrap the R8 Langevin (R7-constrained) step into the generic
+//        HREX propagator signature prop(config, lam, lcg) -> [config', lcg'].
+//   pub fn ti_reference(dudlam_avg_fn, ladder) -> float
+//        independent thermodynamic-integration reference ΔG = ∫⟨∂U/∂λ⟩dλ
+//        by the trapezoid rule over the ladder (cross-check anchor).
+//   pub fn mbar_overlap(u_kn, N_k, f) -> array
+//        R4-style overlap matrix O_ij (sampling-overlap diagnostic), flat
+//        K×K row-major. O_ii near 1 / off-diagonal mass ⇒ adjacent λ mix.
+//   pub fn partial_dG(f) -> array
+//        per-window ΔG_i = f_{i+1} − f_i (length K−1) for the convergence map.
+//
+// Import idiom (interp does not chain transitive imports — import every
+// brick the caller touches):
+//   use "stdlib/math/logsumexp"
+//   use "stdlib/chem/md/lennard_jones"
+//   use "stdlib/chem/md/shake"
+//   use "stdlib/chem/md/langevin"
+//   use "stdlib/chem/fep/softcore"
+//   use "stdlib/chem/fep/mbar"
+//   use "stdlib/chem/fep/hrex"
+//   use "stdlib/chem/fep/abfe_demo"
+
+use "stdlib/math/logsumexp"
+use "stdlib/chem/fep/mbar"
+use "stdlib/chem/fep/hrex"
+
+// ── config struct (every knob is generic — d4) ───────────────────────
+pub struct AbfeConfig {
+    ladder: array,            // λ-schedule [λ_0 … λ_{K-1}]
+    n_sweeps: int,            // HREX exchange sweeps (incl. burn-in)
+    swap_period: int,         // attempt exchanges every swap_period sweeps
+    md_steps_per_sweep: int,  // MD propagation steps between exchange attempts
+    dt: float,                // MD timestep
+    kT: float,                // thermal energy (energy units of ΔG output)
+    seed: int,                // LCG seed (reproducible)
+    mbar_tol: float,          // MBAR self-consistency tolerance
+    mbar_max_iter: int,       // MBAR fixed-point iteration cap
+}
+
+fn _abs_f(x: float) -> float { if x < 0.0 { return 0.0 - x } else { return x } }
+
+// ── make_langevin_prop: wrap R8 Langevin into the HREX propagator API ──
+//
+// HREX wants prop(config, lam, lcg) -> [config', lcg']. The R8 thermostat
+// works on an MdParticle array and an integer LCG. `config` here is an
+// MdParticle array (the rung's current snapshot); we run `md_n` constrained
+// BAOAB steps and hand back the propagated snapshot + advanced LCG.
+//
+// force_fn(particles) -> particles' is the generic FF hook (the caller binds
+// the soft-core / LJ force at the rung's λ). When `cons` is empty the
+// unconstrained BAOAB path is used; otherwise R7 SHAKE/RATTLE is folded in.
+// md_n is captured by the closure so the returned fn matches HREX's arity.
+//
+// NOTE: the λ-dependence of the force enters through force_fn, which the
+// caller may close over λ per rung (see the selftest's per-rung binding).
+// This wrapper is itself λ-agnostic (d4) — it forwards whatever force_fn
+// the rung carries; lam is accepted to satisfy the HREX signature.
+pub fn make_langevin_prop(force_fn, prm, dt: float, md_n: int,
+                          cons: array, tol: float, maxiter: int) {
+    let use_cons = cons.len() > 0
+    return fn(config, lam, lcg) {
+        // config is an MdParticle array; run md_n constrained BAOAB steps.
+        if use_cons {
+            let r = langevin_run_constrained(config, force_fn, prm, dt, md_n,
+                                             cons, tol, maxiter, lcg)
+            return [r[0], to_int(r[1])]
+        }
+        let r = langevin_run(config, force_fn, prm, dt, md_n, lcg)
+        return [r[0], to_int(r[1])]
+    }
+}
+
+// ── run_abfe: the end-to-end orchestrator (R3+R4+R5+R6+R7+R8 fused) ───
+//
+// ufn(config, lam) -> float : REDUCED soft-core potential β·U(config,λ) —
+//   used by HREX for the exchange criterion AND by hrex_assemble_u_kn for
+//   the u_kn matrix. The caller binds it (e.g. from R3 softcore).
+// prop(config, lam, lcg) -> [config', lcg'] : the per-rung MD propagator
+//   (from make_langevin_prop, or any generic sampler for the toy path).
+// configs0 : [K] initial snapshots, one per rung.
+// cfg      : AbfeConfig (ladder + all run knobs).
+//
+// Returns the full ABFE bundle (ΔG, free energies, overlap, per-window ΔG,
+// exchange stats, raw u_kn). Single generic path — the SAME code runs the
+// toy harmonic recovery anchor and the soft-core LJ decoupling (d4).
+pub fn run_abfe(ufn, prop, configs0: array, cfg: AbfeConfig) {
+    let ladder = cfg.ladder
+    let K = ladder.len()
+
+    // ── 3. SAMPLE — R5 HREX with the R8/R3-fused propagator + exchange ──
+    let hr = hrex_run(ufn, prop, ladder, configs0,
+                      cfg.n_sweeps, cfg.swap_period, cfg.md_steps_per_sweep,
+                      cfg.seed)
+
+    // ── 4. ASSEMBLE — R5 cross-evaluation → u_kn (R3 soft-core energy) ──
+    let bundle = hrex_assemble_u_kn(ufn, ladder, hr["samples_by_rung"])
+    let u_kn = bundle["u_kn"]
+    let N_k = bundle["N_k"]
+    let Ntot = bundle["Ntot"]
+
+    // ── 5. ESTIMATE — R4 MBAR → f_k, ΔG, statistics ────────────────────
+    let sol = mbar_solve(u_kn, N_k, cfg.mbar_tol, cfg.mbar_max_iter)
+    let f = sol["f"]
+    let dG_kT = f[f.len() - 1] - f[0]
+    let dG = dG_kT * cfg.kT
+
+    // ── diagnostics: overlap matrix + per-window ΔG ────────────────────
+    let overlap = mbar_overlap(u_kn, N_k, f)
+    let pdg = partial_dG(f)
+
+    // exchange acceptance summary.
+    let na = hr["n_attempt"]
+    let nc = hr["n_accept"]
+    let mut tot_att = 0.0
+    let mut tot_acc = 0.0
+    let mut e = 0
+    while e < na.len() {
+        tot_att = tot_att + na[e]
+        tot_acc = tot_acc + nc[e]
+        e = e + 1
+    }
+    let mut acc_rate = 0.0
+    if tot_att > 0.0 { acc_rate = tot_acc / tot_att }
+
+    let out = #{}
+    out["dG"]              = dG
+    out["dG_kT"]           = dG_kT
+    out["f"]               = f
+    out["overlap"]         = overlap
+    out["partial_dG"]      = pdg
+    out["n_attempt"]       = na
+    out["n_accept"]        = nc
+    out["acc_rate"]        = acc_rate
+    out["round_trips"]     = hr["round_trips"]
+    out["K"]               = K
+    out["Ntot"]            = Ntot
+    out["converged"]       = sol["converged"]
+    out["iters"]           = sol["iters"]
+    out["max_df"]          = sol["max_df"]
+    out["u_kn"]            = u_kn
+    out["N_k"]             = N_k
+    out["samples_by_rung"] = hr["samples_by_rung"]
+    return out
+}
+
+// ── partial_dG: per-window ΔG_i = f_{i+1} − f_i (convergence map) ─────
+// A smooth, monotone-ish per-window profile (no single window dominating /
+// no sign-flip jitter) is a healthy-stratification signal (d4-generic).
+pub fn partial_dG(f: array) -> array {
+    let mut out = []
+    let mut i = 0
+    while i < f.len() - 1 {
+        out.push(f[i + 1] - f[i])
+        i = i + 1
+    }
+    return out
+}
+
+// ── mbar_overlap: sampling-overlap matrix O_ij (Klimovich 2015 diag.) ──
+//
+// O_ij = (1/N_tot) Σ_n  W_i(x_n) · N_j W_j(x_n)              ... condensed
+// We use the standard MBAR overlap (Shirts-Chodera / Klimovich-Mobley
+// "overlap matrix"): for each sample n the normalized weight at state i is
+//   W_i(x_n) = exp(f_i − u_i(x_n)) / Σ_j N_j exp(f_j − u_j(x_n))
+// and the overlap is  O_ij = Σ_n  N_i · W_i(x_n) · W_j(x_n).
+// Computed in the log domain via the SAME denom_n logsumexp R4 MBAR uses, so
+// this reuses R4's reduced-potential convention exactly (no new physics).
+// O is K×K row-major; O_ii≈good coverage, adjacent O_{i,i+1} mass ⇒ windows
+// mix (a poorly-overlapped pair ⇒ ΔG_i is high-variance). d4-generic.
+pub fn mbar_overlap(u_kn: array, N_k: array, f: array) -> array {
+    let K = N_k.len()
+    let mut Ntot = 0
+    let mut t = 0
+    while t < K { Ntot = Ntot + to_int(N_k[t]) t = t + 1 }
+
+    let NEG = 0.0 - 1.0e300
+    let mut lnN = []
+    let mut j = 0
+    while j < K {
+        if N_k[j] > 0.0 { lnN.push(ln(N_k[j])) } else { lnN.push(NEG) }
+        j = j + 1
+    }
+
+    // W[i][n] = exp(f_i − u_i(x_n) − denom_n),  denom_n = LSE_j(lnN_j+f_j−u_j).
+    // store W column-by-column implicitly; accumulate O_ij on the fly.
+    // O_ij = Σ_n N_i · W_i(x_n) · W_j(x_n).
+    let mut O = []
+    let mut z = 0
+    while z < K * K { O.push(0.0) z = z + 1 }
+
+    let mut n = 0
+    while n < Ntot {
+        // denom_n
+        let mut terms = []
+        let mut jj = 0
+        while jj < K {
+            terms.push(lnN[jj] + f[jj] - u_kn[jj * Ntot + n])
+            jj = jj + 1
+        }
+        let dn = logsumexp(terms)
+        // weights W_i(x_n)
+        let mut w = []
+        let mut i = 0
+        while i < K {
+            w.push(exp(f[i] - u_kn[i * Ntot + n] - dn))
+            i = i + 1
+        }
+        // O_ij += N_i · W_i · W_j
+        let mut a = 0
+        while a < K {
+            let na_i = N_k[a]
+            let wa = w[a]
+            let mut b = 0
+            while b < K {
+                O[a * K + b] = O[a * K + b] + na_i * wa * w[b]
+                b = b + 1
+            }
+            a = a + 1
+        }
+        n = n + 1
+    }
+    return O
+}
+
+// ── ti_reference: independent ΔG = ∫₀¹ ⟨∂U/∂λ⟩ dλ (trapezoid) ─────────
+// dudlam_avg_fn(lam) -> ⟨∂U/∂λ⟩ : the (analytic or densely-averaged)
+// thermodynamic-integration integrand at λ. ladder = the λ-nodes (any
+// spacing; trapezoid weights handle non-uniform Δλ). This is a SEPARATE
+// estimator from MBAR — used in the selftest as a cross-check anchor for
+// the soft-core decoupling, where no closed-form ΔG exists but ⟨∂U/∂λ⟩ is
+// computable. d4-generic: no physics here, just the quadrature.
+pub fn ti_reference(dudlam_avg_fn, ladder: array) -> float {
+    let K = ladder.len()
+    if K < 2 { return 0.0 }
+    let mut acc = 0.0
+    let mut i = 0
+    while i < K - 1 {
+        let l0 = ladder[i]
+        let l1 = ladder[i + 1]
+        let g0 = dudlam_avg_fn(l0)
+        let g1 = dudlam_avg_fn(l1)
+        acc = acc + 0.5 * (g1 + g0) * (l1 - l0)
+        i = i + 1
+    }
+    return acc
+}
+
+println("[abfe_demo loaded]")
+
+// ── HONEST SCOPE (d6/@L5) ─────────────────────────────────────────────
+// This orchestrator demonstrates that the eight native FEP/MD bricks WIRE
+// into one continuous chain that produces a real ΔG. The selftest validates
+// the chain on (i) a harmonic alchemical transformation with a CLOSED-FORM
+// ΔG = ½·kT·ln(k₁/k₀) [wiring-recovery anchor] and (ii) a soft-core LJ+
+// Coulomb decoupling cross-checked against an INDEPENDENT thermodynamic-
+// integration reference. It is NOT a protein-ligand production run: the
+// electrostatics are O(N²) (no PME), boxes are tiny, sampling is short, and
+// the force field is a toy LJ+Coulomb, not a real biomolecular FF. Reaching
+// quantitative protein-ligand parity (e.g. the external SENOLYX ΔG=−16.64
+// kcal/mol OpenMM anchor) requires PME, longer sampling, and a real FF —
+// the explicit next milestones. R9 proves the PLUMBING; parity is downstream.
