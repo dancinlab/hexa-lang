@@ -1,5 +1,37 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-78 DONE: COMPLETE the flame trainer-GLUE invariant coverage (OP-76 follow-on) · OP-74 proved the NUMERIC-PRIMITIVE oracle coverage complete (AGREE-vs-libm); OP-76 opened a DISTINCT class — the trainer-GLUE STRUCTURAL/SHAPE/BOUNDARY contracts (LR-schedule shape, F-OP76), NOT numeric agreement · AUDIT the FULL glue surface (optim_lib/nn_lib/moe_lib/conv_lib/tensor_lib/gn_lib) for the same documented-but-UNLOCKED-shape gap · RESULT: every contract-bearing glue op already locked EXCEPT four documented GLUE-level structural holes → locked by OP-78 · 🟢 GREEN invariant-lock 5/5 · $0 · 0-pod · NO GPU · leak-0
+- THE COVERAGE MATRIX (glue invariant → documented structure/shape/boundary contract → locked-by):
+  · LR warmup+cosine shape (peak/floor/ramp/seam/range/fold) ........... 🟢 F-OP76 (7/7)
+  · AdamW update structure (1−βᵗ bias-corr SEPARATE not folded into lr · ε OUTSIDE √ · decoupled-wd 2-subtraction · m̂-before-v̂ · βᵗ repeated-mul) ... 🟢 F-OP12 (max|Δ|=0)
+  · MoE gate Σ_e probs==1 (sum-to-one) AND probs>0 .................... 🟢 F-FLAME-MOE-SOFTMAX (flame_moe_test check_softmax tol 1e-6)
+  · GroupNorm per-group xhat mean~0 var~1 (normalization) ............. 🟢 F-FLAME-GN-NORMALIZED (flame_gn_test)
+  · GN eps placement inv=1/√(var+eps) eps INSIDE √ .................... 🟢 held by F-FLAME-GN-GRAD-EXACT
+  · conv im2col tap p=t−dil·(K−1−k) layout identity .................. 🟢 F-OP7 / F-OP10
+  · conv causal (direct path) no-future-leak ......................... 🟢 F-FLAME-CONV1D-CAUSAL
+  · embedding bwd scatter position-ascending order ................... 🟢 F-OP13
+  · d5-trig primitive sin²+cos²=1 (Pythagorean) ..................... 🟢 F-OP72
+- THE FOUR UNLOCKED GLUE-level structural holes → LOCKED by OP-78:
+  · G1 RoPE-NORM    nn_rope_apply_fwd is an ORTHOGONAL rotation ⇒ |R·q|==|q| (isometry; OP-72 locked the trig PRIMITIVE sin²+cos²=1, NOT the glue-level rotation norm-preservation)
+  · G2 RoPE-RH2     rh∘rh==−I : rh:[x1,x2]→[−x2,x1] applied twice → −[x1,x2]
+  · G3 GN-PARTITION group g output INDEPENDENT of other groups' channels (flame_gn_test locks NORMALIZATION, NOT cross-group INDEPENDENCE — the GN structural analog of conv-causal)
+  · G4 SOFTMAX-SHIFT the MoE max-subtraction is a MATHEMATICAL no-op: softmax(x)==softmax(x−c) (F-FLAME-MOE-SOFTMAX locks Σ=1+>0; the shift-invariance that JUSTIFIES the max-sub was ungated)
+- THE LOCK — NEW stdlib/flame/op78_glue_shape_contract_eq.hexa (self-contained, all 5 glue ops inlined VERBATIM from their SSOT libs, OP-76 leaf-oracle pattern, NO `use`):
+  · G1 RoPE-NORM    max rel||R·q|²−|q|²| ≤ 1e-9 over 4 positions (tol — d5-trig ulp; NOT byte-eq)
+  · G2 RoPE-RH2     rh(rh(x)) == −x byte-EXACT (rh = pure index+negate)
+  · G3 GN-PARTITION perturb every channel of groups 1..G−1 by +100 → group-0 y BYTE-IDENTICAL (max|Δbytes|=0)
+  · G4 SOFTMAX-SHIFT max|softmax(x)−softmax(x−c)|≤1e-9, c=7.25 (tol — mathematical shift-invariance)
+  · G5 CONV-CAUSAL  re-lock no-future-leak on the PRODUCTION im2col layout: perturb future x[T−1] by +50 → y[0..T−2] BYTE-IDENTICAL
+- RUN (`hexa run` arm64-macos, exit 0, VERBATIM):
+  · G1 RoPE-NORM       max rel||R·q|²−|q|²| = 2.12781e-16  <= 1e-9 over 4 positions -> true
+  · G2 RoPE-RH2        rh(rh(x)) == -x  byte-eq -> true
+  · G3 GN-PARTITION    perturb groups 1..3 by +100 -> group-0 y BYTE-IDENTICAL = true
+  · G4 SOFTMAX-SHIFT   max|softmax(x)-softmax(x-c)| = 0.0  <= 1e-9 -> true
+  · G5 CONV-CAUSAL     perturb future x[T-1] -> y[0..T-2] BYTE-IDENTICAL = true
+  · F-OP78-FLAME-GLUE-INVARIANT-COVERAGE = 1 · PASS 5/5
+- FINDING (g5, OP-76 lesson — don't over-broaden): G4 measured EXACTLY 0.0 (the const shift divides out bit-for-bit through max-sub + Σ-normalize) but the gate is held at TOL not byte-eq — the TRUE documented contract is mathematical shift-invariance, NOT a guaranteed bitwise property (a different shift magnitude crossing an _moe_exp range-reduction boundary need not be bit-exact); asserting byte-eq would over-broaden. G1 is tol (d5-trig ulp, measured 2.13e-16 sub-ulp isometry); G2/G3/G5 are structurally byte-exact (index/disjoint-range/zero-pad).
+- IMPACT: glue-invariant surface PROVEN-COMPLETE; the flame trainer is now contract-locked on BOTH the numeric-primitive axis (OP-74) AND the glue-structural axis (OP-76 + OP-78). Oracle-only, no behavior change. Self-host byte-eq UNAFFECTED (op78_*.hexa is a leaf self-contained oracle, NOT in build_selfhost closure; zero codegen/runtime bytes). wipe_guard net-ADDITIVE (1 oracle + 1 verdict + domain log). F-OP78-FLAME-GLUE-INVARIANT-COVERAGE.txt
+
 ## 2026-06-13 — OP-77 DONE: SIBLING codec/encoding round-trip audit (OP-75 #3207 follow-on) — audit stdlib/codec/* siblings for the base64 class (encode∘decode ≠ identity on a boundary OR a co-located unregistered-builtin compile bug) · ENUMERATE (no stdlib/encoding/): base64 (DONE OP-75), hex, utf8, euc_kr, cp949, shift_jis, gbk, big5, unicode_normalize · THE BUG (🔴): hex.hexa:43,98 + utf8.hexa:142 call bytes_to_str(out) — defined ONLY in stdlib/ckpt/format.hexa (a `pub fn`, NOT a registered codegen builtin) and NEVER imported by hex/utf8 = the EXACT OP-75 unregistered-builtin class · every SIBLING multibyte codec explicitly inlined its own converter to dodge this (verbatim euc_kr.hexa:12-13 "utf8 references bytes_to_str (defined in stdlib/ckpt/format) without importing it, which only resolves in a full-stdlib build, not a standalone codec build"); hex+utf8 did not · TWO defects cured by the REGISTERED builtin bytes_to_str_raw (self/codegen.hexa:7209): (1) STANDALONE-BUILD FAILURE — `hexa build stdlib/codec/{hex,utf8}` can't resolve bytes_to_str; (2) utf8 DOUBLE-ENCODE latent CORRECTNESS bug — utf8_from_codepoints assembles RAW UTF-8 bytes, then ckpt bytes_to_str does to_string(from_char_code(b&0xFF)) per byte = treats each RAW BYTE as a CODEPOINT and re-UTF-8-encodes it → every byte ≥0x80 becomes mojibake · FIX (source): 3 call sites bytes_to_str→bytes_to_str_raw + NEW hex_test.hexa (@sentinel __HEXA_CODEC_HEX__) + utf8_test.hexa (@sentinel __HEXA_CODEC_UTF8__) · 🔴→fix GREEN + 🟢 PROVEN-CLEAN (euc_kr/cp949/gbk/big5/shift_jis full-table CPython parity + closure; unicode_normalize out-of-scope idempotent normalization) · $0 · 0-pod · NO GPU · leak-0
 - THE BUG (verbatim, faithful Python port of the ckpt vs raw byte-to-string semantics):
   · utf8_from_codepoints([0xD55C]) → raw UTF-8 bytes = ED 95 9C  (the glyph 한)
