@@ -26,6 +26,49 @@
   SSOT-correct) · self-host byte-eq unaffected (op74_*.hexa NOT in build_selfhost closure) · wipe_guard
   net-additive · $0 · 0-pod · NO GPU · no vast · no foreign pod (leak-0) · no MAIN.tape edit.
 
+## 2026-06-13 — OP-73 DONE: DEFINITIVE public-claim honesty audit of the ENTIRE forge/flame claim surface vs the verdict corpus (campaign flagship value) · enumerated README.md + FLAME+FORGE-vs-PYTORCH+CUBLAS.md + docs/forge-routea-shape-adaptive.md + docs/flame-determinism-contract.md + stdlib/flame/README.md, built the claim→verdict trace table · RESULT: surface OVERWHELMINGLY honest + verdict-traced (OP-64/71 + prior corrections held) with ONE genuine STALE residual (OP-71 class) — the README OG-ladder led OG17 (280 TFLOP/s, 1.24× @D=2048) as the parity FRONTIER, superseded by route-(a) b14 MODE 8 ~315 TFLOP/s, 1.08× @D=2048 (F-GPU-ROUTEA-KEEPBAND-MEASURE); OP-58 had updated only the README §honest-axis headline + forge doc, leaving the detailed README narrative stale vs its OWN line-143 headline · FIX (doc-only, 5+/3−): route-(a) FRONTIER rung added to the ladder + ≈342 @D=2048 roofline + OG17-paragraph carry-forward + line-471 1.08× headline · all numbers CITED VERBATIM (no GPU, no new measurement) · rest of surface 🟢 PROVEN-HONEST (g63 — NO fabricated correction) · 🔴→fix GREEN + 🟢 PROVEN-HONEST · $0 · 0-pod · NO GPU · leak-0
+- THE CLAIM→VERDICT TRACE TABLE (every public quantitative/capability claim → its supporting verdict):
+  · README L137/L143 + comparison-doc §1.1 "matched-dtype gap SINGLE-DIGIT; FP64 flame ties/wins B=2 0.98×,
+    B=4/8 flame faster; TF32 torch 3.03×→7.88×; FP32 2.15×→6.60×" → F-BENCH-1 (verbatim cell-match) 🟢
+  · "old ~1656×/~2207× RETIRED (FP64-vs-TF32 unfair dtype + interpreted + 2-pt extrapolation)" →
+    F-FUSION-VS-PYTORCH (verbatim "~1656x (eager)/~2207x (compile) FASTER … flame FP64 0.167, torch TF32
+    276.7/368.5") + re-contextualized by F-BENCH-1 + F-FUSION-INTERP-ELIM 🟢 (honest-correction PRESERVED)
+  · own-GEMM "PARITY 1.08× @D=2048, ~315 TFLOP/s, bit-exact rel_rms 0" → F-GPU-ROUTEA-KEEPBAND-MEASURE
+    ("D=2048 route-(a) summit own ~315 TFLOP/s ratio 1.08x PARITY=YES … rel_rms 0") 🟢
+  · own-GEMM "@D=4096 ~1.50× sub-parity, bit-exactness-bound, lever family exhausted closed-neg" →
+    F-OP45GPU-OCCUPANCY-SWEEP + F-OP52-TF32-GAP-CLOSE + F-OP55-NEWTILE-D4096 🟢
+  · "own EDGES cuBLAS @consumer-D768 0.95× (RTX 5070)" → F-OP54-SUMMER-OWNGEMM-TF32 + F-OP57 (32×32 worse) 🟢
+  · "parity dtype-SCOPED to TF32; FP16/BF16 W14 correct (rel_rms≤1e-2 same-dtype) but PARITY=NO 11.5× off
+    cuBLAS-FP16 (roofline doubled to 827)" → F-FUSION-SM90-WGMMA-W14-FP16 + F-OP64-OWNGEMM-DTYPE-HONEST 🟢
+  · flame "batch-fill ≥1.3× @B=2 → 2.95× @B=32, ~3× cap structural" → F-FUSION-BATCHFILL + F-FUSION-M5 🟢
+  · flame "TF32 fast-mode 4.2× @B=1 (self-speedup, not torch beat); BF16 Pareto-dominated" →
+    F-OP20-TF32-FASTMODE + F-OP25-BF16-FASTMODE 🟢
+  · "byte-identical across 6 environments / 4 arch-libc; no libm on step path; whole-step max|Δ|=0;
+    18-fold golden CI tripwire" → F-OP19{,B,C,D,E,F,G} + F-OP29 + F-OP15-STEP-DETERMINISM + F-OP39/40/42 🟢
+  · forge "12 byte-equal substrate fires + 4 layer fires, max|Δ|=0" → forge correctness verdict set 🟢
+  · stdlib/flame/README.md "prior 2.95× / 1.26-1.76× faster than PyTorch RETRACTED (unit mismatch)" →
+    explicit CORRECTION 2026-05-19 (an honest self-retraction PRESERVED, not re-introduced) 🟢
+- THE ONE FLAG (STALE, OP-71 class): README OG-ladder block (lines 190-209) presented OG17 (280 TFLOP/s,
+  1.24×) as the @D=2048 parity-crossing FRONTIER. The LATER route-(a) verdict supersedes it:
+  · VERBATIM (F-GPU-ROUTEA-KEEPBAND-MEASURE): "D=2048 route-(a) summit (b14 MODE8 NST=3 PDEP=2): own ~315
+    TFLOP/s ratio 1.08x PARITY=YES ★" and "D=2048 OG17-pipe (MODE 6): own ~262 TFLOP/s ratio 1.29-1.32x".
+  · The README's OWN line-143 headline + the forge doc (line 158 "current FRONTIER") + the comparison doc
+    already carried 1.08× — OP-58 updated only the README §honest-axis SUMMARY (verbatim "README.md
+    §honest-axis"), NOT the detailed OG-ladder → an INTERNAL inconsistency where the README detail lagged
+    its own headline. Not an overstatement (1.24× is honest for OG17) but a STALE not-the-frontier framing.
+- FIX (doc-only, README.md, 5 insertions / 3 deletions, well under wipe_guard):
+  · ladder table: added "route-(a) b14 MODE 8 NST=3 PDEP=2 (@D=2048) ~315 1.08× off ★★FRONTIER 2 CTA/SM" +
+    corrected the roofline footnote to "≈431 (@4096) / ≈342 (@D=2048)" + "route-(a) is the @D=2048 FRONTIER
+    … SUPERSEDING the OG17 1.24× rung".
+  · OG17 closing paragraph: carried forward to "route-(a) b14 MODE 8 … SUPERSEDES OG17 … ≈315 TFLOP/s,
+    1.08× (≈93% of roofline), bit-exact rel-RMS 0 (F-GPU-ROUTEA-KEEPBAND-MEASURE)" + @4096 1.50× residual.
+  · line-471 summary: own-GEMM gained the "TF32 PARITY 1.08× @D=2048" headline, scoping the older 1.13× iso
+    (Blackwell-sm_120-only) + 1.24× full-step (F-FUSION-THRU-PARITY) as the non-frontier numbers they are.
+- HONEST CLOSURE (g5/g63): the forge/flame public claim surface is PROVEN-HONEST + verdict-traced apart from
+  this single stale-narrative residual, now corrected. NO fabricated overstatement manufactured. All numbers
+  CITED VERBATIM from existing verdicts — no GPU, no new measurement, no .tape, no self/env.hexa.
+- OUTCOME: 🔴→fix GREEN (stale) + 🟢 PROVEN-HONEST (rest). Milestone OP-73 [x]. Verdict F-OP73-PUBLIC-CLAIM-HONESTY.txt.
+
 ## 2026-06-13 — OP-72 DONE: LOCK the flame_math hand-Taylor TRIG primitive (d5_sin/d5_cos) — the documented-but-UNlocked OP-33 sibling · flame_math.hexa:137-139 d5_sin/d5_cos (mod-2π reduce + 14-term Taylor) carry a "strict bit-eq path to anima d5_rope_tables" docstring + are PRODUCTION (RoPE tables nn_lib.hexa:523-524 nn_rope_build_tables_base · LR schedule optim_lib.hexa:163 cos=d5_cos · op29 decoder block) yet had NO agreement oracle · OP-33 LOCKED THE SCHEDULE but ASSUMED d5_cos correct · NEW self-contained stdlib/flame/op72_d5_trig_agree_eq.hexa: 4 gates over a 12-pt probe (schedule |x|≤π + RoPE |x|≤10³) — AGREE sin≤1e-9 · AGREE cos≤1e-9 · DETERMINISM byte-identical f64 run-to-run (pure-FP no-libm = arch/OS-independent, F-OP33's premise) · PYTHAGORAS sin²+cos²−1≤1e-9 · `hexa run` exit 0, 4/4 PASS (sin 1.32e-12, cos 1.94e-12, max|Δbytes|=0, pythagoras 8.88e-16) · oracle-only no behavior change (d5 already SSOT-correct) · self-host byte-eq UNAFFECTED (leaf self-contained oracle, not in build_selfhost closure) · 🟢 GREEN invariant-lock · $0 · 0-pod · NO GPU · leak-0
 - SURVEY (scoped greps/reads, NO .git), priority order: (a) flame/forge numeric libs flame_math/optim_lib/
   gn_lib/nn_lib for a documented-but-UNlocked contract; (b) stdlib non-math surface; (c)/(d) handoff/deferred.
