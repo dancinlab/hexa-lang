@@ -1,0 +1,149 @@
+F-OP57 — smaller-tile / more-CTA sweep of the sm_120 OWN120 own-GEMM on summer's FREE RTX 5070:
+does shrinking the tile (the consumer-card analog of the Hopper-only 64x64 design) improve small-D?
+=================================================================================================
+DATE 2026-06-13 · HOST summer (sidecar FREE pool, RTX 5070 12GB, sm_120/cc12.0, NOT vast — g1 free
+pool, no leak, $0) · build toolkit CUDA 12.9 (V12.9.86, /usr/local/cuda-12.9; the stray /usr/bin/nvcc
+is 12.0 whose ptxas tops out at sm_90a and CANNOT target sm_120 — only 12.9 ptxas accepts sm_120,
+per OP-54). Backend = the OWN120 mma.sync.m16n8k8.tf32 warp-MMA own-GEMM, tile-PARAMETRIZED clone.
+
+QUESTION (HEXA-0POD OP-57): OP-53 (#3134) designed a 64x64 small-tile (MODE_t64) that the CPU cost
+model predicts FILLS the device 3.1x better at deep under-fill (D<=512) on HOPPER. That design is
+sm_90a wgmma — it does NOT compile on summer's sm_120 (wgmma rejected). On the consumer card the
+in-tree OWN120 is ALREADY a 64x64 tile (BM=BN=64, 2x2 warps). So the sm_120 analog of "smaller tile
+fills better at small-D" is: shrink OWN120 to a 32x32 / 1x1-warp tile (4x the CTAs/tiles at a given D)
+and ask whether the more-CTA fill improves the small-D (D=256/512/768/1024) regime vs the 64x64
+baseline — bit-exact preserved. This is the closest FREE proxy to the Hopper 64x64-fills-better
+hypothesis; the wgmma 64x64 design itself remains a Hopper-only future build.
+
+============================== METHOD (bit-exact-preserving tile param) =========================
+The shipped OWN120 (self/native/mma_sm120/owngemm_sm120.cu) hardcodes BM=BN=64 / BK=16 / 2x2 warps,
+each warp owning a 32x32 output sub-tile (WM_FRAG=2 x WN_FRAG=4 m16n8 fragments). OP-57 made BM/BN/
+WARPS compile-time `-D` overridable in a CLONE (NOT a shipped-kernel edit), letting us build:
+  BASELINE  = 64x64 / 2x2-warp  (the shipped config, -DBM=64 -DBN=64 -DWPM=2 -DWPN=2)
+  SMALLTILE = 32x32 / 1x1-warp  (-DBM=32 -DBN=32 -DWPM=1 -DWPN=1) -> 4x the CTAs/tiles per D.
+BIT-EXACT: in BOTH configs a warp owns exactly a 32x32 sub-tile = the SAME WM_FRAG=2 x WN_FRAG=4
+fragment grid run in the IDENTICAL per-output K-major mma.sync loop. The 32x32 tile is ONE such
+warp-sub-tile per CTA; the 64x64 tile is four. No reduction reordered, no split-K -> the result is
+bit-for-bit the same. PROVEN by the gate: rel-RMS is IDENTICAL between the two configs at every shape
+(below) — a hard confirmation the smaller tile changed only FILL/occupancy, not the math.
+
+Sweep D in {256,512,768,1024}, iters=50, cudaEvent timing, 3 reps. flops=2·M·N·K,
+off-cuBLAS = cuBLAS_TFLOP/s ÷ own_TFLOP/s (>1 = own slower).
+
+================== ⚠ SHARED-HOST CONTENTION (g5 honesty — same as OP-54) ========================
+summer is a SHARED free pool host (g9). Throughout the run the card was SATURATED by a foreign
+sibling job (nvidia-smi verbatim: NVIDIA GeForce RTX 5070, 45% fan, 71C, 234.57W, 9430MiB/12227MiB,
+GPU-Util 98%; compute-apps PID 110588 python 7190MiB + PID 483710 python3 — NOT mine, left untouched
+per g9). So ABSOLUTE TFLOP/s of all kernels are contention-suppressed. The contention-ROBUST metric
+is the off-cuBLAS RATIO measured back-to-back on the same loaded card; BOTH the 64x64 and 32x32 own
+kernels AND cuBLAS eat the same contention in the same instant, so the BASELINE-vs-SMALLTILE
+comparison is the honest one. Absolute TFLOP/s reported as-measured, not extrapolated.
+
+============================= BUILD (VERBATIM) ==================================================
+  === nvcc version ===  Cuda compilation tools, release 12.9, V12.9.86
+  --- build baseline  (BM=64 BN=64 2x2warp) ---  BUILD_OK baseline  1054072 B
+  --- build smalltile (BM=32 BN=32 1x1warp) ---  BUILD_OK smalltile 1066360 B
+Both configs ASSEMBLE for sm_120 on CUDA 12.9 (re-confirms the OWN120 mma.sync path is portable on
+the consumer card; the smaller-tile variant is a valid sm_120 kernel).
+
+==================== (1) GATE — bit-exact-tolerant vs cuBLAS-TF32, BOTH configs (VERBATIM) =======
+The rel-RMS / max|delta| is IDENTICAL between baseline and smalltile at EVERY shape (gate <=1e-2),
+proving the 32x32 tile preserves the exact accumulation order (only FILL changed):
+  S=256  rel-RMS=2.692e-05  max|delta|=1.037e-05  PASS  (baseline == smalltile, identical)
+  S=512  rel-RMS=1.961e-05  max|delta|=1.305e-05  PASS  (baseline == smalltile, identical)
+  S=768  rel-RMS=1.332e-05  max|delta|=1.151e-05  PASS  (baseline == smalltile, identical)
+  S=1024 rel-RMS=3.019e-05  max|delta|=1.406e-05  PASS  (baseline == smalltile, identical)
+→ The smaller-tile config is bit-exact-tolerant CORRECT (rel-RMS ~1.3e-5..3.0e-5, same as OP-54's
+  64x64). The gate is contention-INDEPENDENT (a numerical equality). The smalltile rel-RMS matching
+  the baseline byte-for-byte is the hard proof that the tile shrink is a pure FILL change.
+
+==================== (2) SMALL-D SWEEP — baseline 64x64 vs smalltile 32x32 (VERBATIM) ============
+Median off-cuBLAS ratio over the 3 reps (raw 3-rep below). LOWER ratio = closer to cuBLAS = better.
+
+  D     | baseline 64x64 off-cuBLAS | smalltile 32x32 off-cuBLAS | smalltile vs baseline
+  ------+---------------------------+----------------------------+----------------------
+  256   |   1.34x                   |   1.67x                    |  WORSE  (+0.33x)
+  512   |   1.18x                   |   1.62x                    |  WORSE  (+0.44x)
+  768   |   0.96x  ← own EDGES cuBLAS|   4.13x  ← collapses       |  FAR WORSE (4.3x worse)
+  1024  |   1.44x                   |   2.52x                    |  WORSE  (+1.1x)
+
+→ The smaller 32x32 / more-CTA tile is WORSE at EVERY small-D shape — most dramatically at D=768
+  where the baseline 64x64 EDGES cuBLAS (0.96x) but the 32x32 COLLAPSES to 4.13x (own 5.6 vs cuBLAS
+  23.3 TFLOP/s). The "smaller tile fills better at small-D" hypothesis is REFUTED on the consumer card.
+
+WHY (physics, honest): the 32x32 / 1-warp tile has only ONE warp per CTA, which cannot keep the
+mma.sync m16n8 tensor-core pipeline busy (the 64x64 / 4-warp config has 4 warps issuing MMAs
+concurrently per CTA) AND it HALVES the A/B smem-reuse per global load (a 32x32 tile reuses each
+loaded A-row across 32 N-cols vs 64 for the 64x64). The extra CTAs do light up more SMs, but on the
+50-SM RTX 5070 the 64x64 tile already fills the device adequately at D>=512 (D=512 -> 64 tiles of
+64x64 = well over 50 SMs), so there is NO under-fill for the smaller tile to cure — it only pays the
+warp-underutilization + reuse-loss cost. This is the consumer-card MEASURED counterpart to OP-54's
+finding that there is "NO small-D-closer monotone trend" on the 5070: shrinking the tile makes
+small-D STRICTLY WORSE, not better.
+
+=========================== FULL 3-REP RAW (VERBATIM, under 98% foreign contention) ==============
+##### REP 1  util=98%, 9430 MiB
+  S=256  base own 4.07 (0.0082ms) cuBLAS 5.46 off=1.34x | small own 3.26 (0.0103ms) cuBLAS 5.46 off=1.67x
+  S=512  base own 15.85(0.0169ms) cuBLAS 18.66 off=1.18x| small own 11.58(0.0232ms) cuBLAS 18.71 off=1.62x
+  S=768  base own 24.14(0.0375ms) cuBLAS 23.28 off=0.96x| small own 5.63 (0.1610ms) cuBLAS 23.28 off=4.14x
+  S=1024 base own 9.09 (0.2363ms) cuBLAS 15.71 off=1.73x| small own 5.20 (0.4133ms) cuBLAS 13.02 off=2.51x
+##### REP 2  util=99%, 9430 MiB
+  S=256  base own 4.07 (0.0082ms) cuBLAS 5.46 off=1.34x | small own 3.26 (0.0103ms) cuBLAS 5.46 off=1.67x
+  S=512  base own 15.56(0.0173ms) cuBLAS 18.68 off=1.20x| small own 11.44(0.0235ms) cuBLAS 18.67 off=1.63x
+  S=768  base own 24.50(0.0370ms) cuBLAS 23.28 off=0.95x| small own 5.64 (0.1606ms) cuBLAS 23.28 off=4.13x
+  S=1024 base own 9.12 (0.2356ms) cuBLAS 12.98 off=1.42x| small own 5.19 (0.4135ms) cuBLAS 13.03 off=2.51x
+##### REP 3  util=99%, 9430 MiB
+  S=256  base own 4.08 (0.0082ms) cuBLAS 5.45 off=1.34x | small own 3.26 (0.0103ms) cuBLAS 5.46 off=1.67x
+  S=512  base own 16.06(0.0167ms) cuBLAS 18.67 off=1.16x| small own 11.58(0.0232ms) cuBLAS 18.72 off=1.62x
+  S=768  base own 24.09(0.0376ms) cuBLAS 23.27 off=0.97x| small own 5.83 (0.1555ms) cuBLAS 23.29 off=4.00x
+  S=1024 base own 9.37 (0.2291ms) cuBLAS 13.49 off=1.44x| small own 5.35 (0.4014ms) cuBLAS 13.52 off=2.53x
+
+(The baseline 64x64 numbers reproduce OP-54: D=768 0.95-0.97x own-EDGES-cuBLAS, stable; the 1024
+under-fill soft-spot variance is the same one OP-54 flagged. Both confirmed independently here.)
+
+============================ DID THE SMALL-TILE PREDICTION HOLD ON THE CONSUMER CARD? ============
+NO. The cost-model's small-D fill prediction (OP-53 VAL-2: 64x64 wins 128x128 by 3.1x @D<=512) was a
+HOPPER (132-SM, 128x128-baseline) prediction. On the consumer RTX 5070 (50 SMs, 64x64-baseline) the
+analogous shrink (64x64 -> 32x32) goes the OTHER way: the 64x64 baseline already fills the smaller
+device at small-D, so shrinking further only loses warp-occupancy + smem-reuse and REGRESSES every
+small-D shape (worst at D=768, 0.96x -> 4.13x). The Hopper 64x64-fills-better hypothesis is NOT
+transferable to the consumer card's already-small tile — and the wgmma 64x64 design itself remains a
+HOPPER-ONLY FUTURE BUILD (sm_90a, ptxas-rejected on sm_120; OP-57 could not test it, only its sm_120
+shrink-analog). The 5070's own-GEMM sweet spot stays the SHIPPED 64x64 tile at mid-D (D=768, 0.96x).
+
+============================ VERDICT ===========================================================
+🔴 RED for the hypothesis (honest negative): on summer's FREE RTX 5070 (sm_120, CUDA 12.9), shrinking
+the OWN120 tile to 32x32 / 1-warp (the consumer-card analog of the OP-53 Hopper 64x64-fills-better
+small-tile) makes the small-D regime STRICTLY WORSE at every shape (D=256 1.34->1.67x, D=512
+1.18->1.62x, D=768 0.96->4.13x COLLAPSE, D=1024 1.44->2.52x), bit-exact PRESERVED (rel-RMS identical
+to baseline at every shape, PASS). The cost-model small-D prediction did NOT hold on the consumer
+card: the 64x64 baseline already fills the 50-SM device at small-D, so a smaller tile only pays
+warp-underutilization + halved smem-reuse with no under-fill to cure. The shipped 64x64 OWN120 tile
+remains the consumer-card optimum (D=768 0.96x, own EDGES cuBLAS — OP-54 reproduced here). The
+Hopper-only wgmma 64x64 design (OP-53 MODE_t64) is UNTESTED here (sm_90a, ptxas-rejects sm_120) and
+remains a future Hopper-GPU build item; the sm_120 shrink-proxy showed the more-CTA lever does NOT
+help an already-small-tile consumer kernel. Free pool GPU (summer), $0, no vast, no pod, nothing to
+leak; shared host left untouched (foreign PIDs 110588/483710 not killed) + temp build dir cleaned.
+
+(The verdict is 🔴 for the SPECULATIVE hypothesis being tested, which is the honest, valuable
+outcome: it CLOSES the "maybe a smaller tile helps small-D on the consumer card" question
+NEGATIVELY with a clean bit-exact A/B measurement — saving a future lane from re-attempting it. The
+underlying OWN120 kernel itself is unchanged + still 🟢 at its 64x64 sweet spot per OP-54.)
+
+HONEST CAVEATS (g5): (1) absolute TFLOP/s contention-suppressed (98% foreign load) — the baseline-vs-
+smalltile RATIO is the contention-robust comparison; both eat the same contention. (2) gate is the
+established same-dtype TF32-tolerant check (rel-RMS ~1e-5 vs cuBLAS-TF32, NOT rel-RMS 0 dev-vs-dev;
+cuBLAS-TF32 doesn't expose its accumulation order) — but the smalltile-vs-baseline rel-RMS being
+BYTE-IDENTICAL is a true bit-equality between the two OWN configs, proving the tile shrink is a pure
+fill change. (3) only the 32x32/1-warp shrink was swept; a 32x32/2-warp or 48x48 intermediate was not
+(the 32x32 collapse at D=768 made finer shrink-sweeps clearly unproductive). (4) the Hopper wgmma
+64x64 design is NOT measured here — sm_120 can't run wgmma; this is the closest free sm_120 proxy.
+
+ISA one-liner: sm_120 + CUDA 12.9 ptxas — mma.sync.m16n8k8.tf32 (OWN120, both 64x64 + 32x32 tiles) =
+YES; wgmma (the OP-53 64x64 design) = NO (sm_90a only; Hopper-future).
+
+ARTIFACTS: self/native/mma_sm120/owngemm_sm120.cu (the shipped OWN120, UNCHANGED — OP-57 measured a
+tile-parametrized CLONE off-tree on summer, no shipped-kernel edit) · docs/forge-routea-shape-adaptive.md
+§10 (consumer-sm_120 row, extended with the OP-57 shrink-negative) · .verdicts/hexa-0pod/
+F-OP54-SUMMER-OWNGEMM-TF32.txt (parent, the 64x64 baseline sweep) · F-OP53-SMALLTILE-LAUNCHER-DESIGN.txt
+(the Hopper 64x64 cost-model design this proxy-tests).
