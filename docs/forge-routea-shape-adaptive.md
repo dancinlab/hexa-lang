@@ -64,9 +64,19 @@ no-cuBLAS-call** TF32 GEMM:
   `rel_rms 0.000e+00`. This isolates OP-45-GPU T3 (MODE 7's @4096 regress was the **swizzle itself**,
   not the persistent loop) and matches T2's physics (compute-bound ⇒ an L2-locality CTA order cannot
   help). The in-tree "better single-pass tile" option (MODE 5 t256, 128×256) is **already measured
-  closed-neg** @4096 (264.9 < 283.9, register-capped to 1 CTA/SM). So the surviving lever is a
+  closed-neg** @4096 (264.9 < 283.9, register-capped to 1 CTA/SM). So the surviving lever was a
   genuinely NEW bit-exact single-pass per-CTA tile/schedule (a kernel rewrite preserving 2 CTA/SM),
   **not** a launcher/index swizzle and **not** split-K — recorded as the OP-52 follow-up.
+  **OP-55 (real H100, `F-OP55-NEWTILE-D4096.txt`) BUILT and MEASURED that surviving lever and CLOSED
+  it negative.** A new MODE 10 (`gemm_og17_b14_t256e`) is a 128×256 single-pass tile that processes
+  256-N as two SEQUENTIAL 128-N halves (2 live accumulators) so it stays **90 regs == MODE 8 → 2
+  CTA/SM** (the design's register/occupancy premise CONFIRMED — NOT t256's 1-CTA/SM trap). **But it
+  REGRESSES −7.1 %** (263.3 vs 283.5 TFLOP/s @4096; ratio 1.51× → 1.64×; −52 % @2048), all `rel_rms
+  0`: the half-boundary accumulator reset **serializes the wgmma pipeline** (ptxas C7515) + doubles
+  the per-CTA K-drain, costing more than the bigger tile saves on a compute-bound D=4096. **No
+  bit-exact 256-N schedule on sm_90a is BOTH 2 CTA/SM AND non-serialized** (t256 = 1 CTA/SM;
+  half-split = serialized). **Net SETTLED: the @D=4096 own-GEMM TF32 gap is bit-exactness-bound —
+  own-GEMM = bit-exact-PARITY-not-BEAT at D=4096 is the honest final answer, not an unbuilt lever.**
 - The **FP16/BF16 W14 line is ~11.5× off** cuBLAS-FP16 (PARITY=NO; cuBLAS-FP16 roofline doubled to
   ~827 TFLOP/s). The **W10 composed-swizzle-decode summit is 70.7 TFLOP/s, 6.09× off** cuBLAS-TF32
   (the bit-exact pre-route-(a) frontier). Neither is a beat. (`.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W10.txt`,
@@ -287,10 +297,27 @@ All five tests ran on one H100 sm_90a (`F-OP45GPU-OCCUPANCY-SWEEP.txt`, ~$0.96, 
   in-tree larger single-pass tile) is already closed-neg @4096. **The surviving lever is a NEW
   bit-exact single-pass per-CTA tile/schedule (a 2-CTA/SM-preserving kernel rewrite)** — the OP-52
   follow-up; NOT a launcher swizzle and NOT split-K.
+- **OP-55** (build + measure the OP-52 follow-up — the NEW 2-CTA/SM-preserving 128×256 tile):
+  **DONE — closed-negative** (`F-OP55-NEWTILE-D4096.txt`, real H100, ~$0.55, leak-0). New MODE 10
+  (`gemm_og17_b14_t256e`) is a 128×256 single-pass tile where 1 CTA owns 256-N (half MODE 8's
+  N-grid), processed as **two SEQUENTIAL 128-N halves** sharing only 2 live accumulators so regs
+  stay **90 == MODE 8** (the register economy WORKED — ptxas measured 90 regs / 0 spill / 96 KB/CTA
+  → **2 CTA/SM**, NOT t256's 154-reg/1-CTA/SM trap; the design's occupancy premise is CONFIRMED).
+  **But it REGRESSES**: MODE 10 @4096 (NST3, 2 CTA/SM) **263.3 TFLOP/s vs MODE 8 283.5 = −7.1 %**;
+  ratio **1.51× → 1.64×**. @2048 = 152 (−52 %). All `rel_rms 0`. ROOT CAUSE (ptxas C7515 + g5): the
+  register economy was bought with a sequential-halves schedule whose half-boundary accumulator
+  reset **serializes the wgmma pipeline** + doubles the per-CTA K-drain — costing more than the
+  larger single-pass tile saves on a compute-bound D=4096 (OP-45 T2). **SETTLED BOUNDARY:** no
+  bit-exact 256-N schedule on sm_90a is BOTH 2 CTA/SM AND non-serialized — (a) 4 live accumulators
+  = 1 CTA/SM (t256, closed-neg) and (b) 2 live accumulators via halves = 2 CTA/SM but serialized
+  (this OP-55, closed-neg). **The @D=4096 own-GEMM TF32 gap is bit-exactness-bound: own-GEMM =
+  bit-exact-parity-not-beat at D=4096 is the honest final answer.**
 
 The cost model remains the harness: T2's drain recalibration dropped in as one coefficient; the
 selector's argmax (MODE 8 at both D) is unchanged and still matches measurement. OP-52 confirms the
-selector should NOT add a swizzled mode at D=4096 (it would never be the argmax — swizzle regresses).
+selector should NOT add a swizzled mode at D=4096 (it would never be the argmax — swizzle regresses);
+OP-55 adds the `MODE10_t256e` row with a measured-serialization `issue_eff` so the selector likewise
+never picks the 256-N tile — the @D=4096 gap is now MEASURED bit-exactness-bound, not unbuilt.
 
 ---
 
