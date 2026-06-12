@@ -1,0 +1,135 @@
+// @ci_gate — deterministic · pure analytic anchors
+//
+// qforge_chip_band_transport_selftest.hexa — QFORGE CHIP round-1 g5 gate.
+//
+// band_transport.hexa supplies the analytic SPINE of the chip device front-end:
+// 1D tight-binding bands, the diatomic-chain GAP, Landauer-Büttiker ballistic
+// conductance quantization, and the universal thermal-conductance quantum. Every
+// anchor below is an EXACT closed form (d6 — derivable, none tuned):
+//
+//   (A) ε(k) NODES: ε(0)=ε₀−2t, ε(π/a)=ε₀+2t, ε(π/2a)=ε₀ — defining points.       🔵
+//   (B) BANDWIDTH = ε_max−ε_min = 4t — the tight-binding bandwidth identity.       🔵
+//   (C) GROUP VELOCITY v_g vanishes at BOTH band edges (k=0, π/a) and is
+//       maximal at k=π/2a — the van-Hove / effective-mass structure.              🔵
+//   (D) DIATOMIC GAP: 2-band Bloch eig at the zone boundary k=π/a opens a gap
+//       = |ε_a−ε_b| (off-diagonal → 0 there); equal sublattices (ε_a=ε_b) give a
+//       gapless (metallic) touching — the semiconductor vs metal distinction.     🟢
+//   (E) GAP solver ≡ analytic 2×2: at general k the eigh eigenvalues equal the
+//       closed-form ½(ε_a+ε_b) ± √((Δ/2)²+off²) — generic eigh ≡ analytic.        🟢
+//   (F) LANDAUER QUANTIZATION: N perfect channels (Tₙ=1) → G = N·G₀ EXACTLY;
+//       a partial channel (T=0.5) shifts G by ½G₀ — the QPC staircase.            🔵
+//   (G) THERMAL QUANTUM: g₀(T) = π²k_B²T/3h is T-linear; at T=1K equals the
+//       known 9.464e-13 W/K (Schwab et al. Nature 404, 974); doubling T doubles. 🔵
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/chip/band_transport_selftest.hexa
+// PASS: "qforge_chip_band_transport_selftest PASS".
+use "stdlib/qforge/chip/band_transport"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _pi() -> float { return 3.14159265358979323846 }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let pi = _pi()
+
+    // shared band parameters: on-site ε₀=0.5 eV, hopping t=1.2 eV, lattice a=2.5 Å.
+    let eps0 = 0.5
+    let t = 1.2
+    let a = 2.5
+    let hbar = 1.0   // group-velocity check in natural units (ħ=1)
+
+    // ══ (A) ε(k) defining nodes ════════════════════════════════════════════
+    fails = fails + _ck_close("(A) ε(0) = ε₀−2t", qforge_chip_tb1d_band(eps0, t, a, 0.0), eps0 - 2.0*t, 1.0e-12)
+    fails = fails + _ck_close("(A) ε(π/a) = ε₀+2t", qforge_chip_tb1d_band(eps0, t, a, pi/a), eps0 + 2.0*t, 1.0e-12)
+    fails = fails + _ck_close("(A) ε(π/2a) = ε₀", qforge_chip_tb1d_band(eps0, t, a, pi/(2.0*a)), eps0, 1.0e-12)
+
+    // ══ (B) bandwidth = 4t ═════════════════════════════════════════════════
+    fails = fails + _ck_close("(B) bandwidth = 4t", qforge_chip_tb1d_bandwidth(t), 4.0*t, 1.0e-12)
+    // sign-independent: t<0 gives the same |4t|.
+    fails = fails + _ck_close("(B) bandwidth(−t) = 4|t|", qforge_chip_tb1d_bandwidth(-t), 4.0*t, 1.0e-12)
+    // direct max−min agreement with the dispersion endpoints.
+    let emax = qforge_chip_tb1d_band(eps0, t, a, pi/a)
+    let emin = qforge_chip_tb1d_band(eps0, t, a, 0.0)
+    fails = fails + _ck_close("(B) ε_max−ε_min == bandwidth", emax - emin, qforge_chip_tb1d_bandwidth(t), 1.0e-12)
+
+    // ══ (C) group velocity at edges and zone middle ════════════════════════
+    fails = fails + _ck_close("(C) v_g(k=0) = 0 (band edge)", qforge_chip_tb1d_vg(eps0, t, a, 0.0, hbar), 0.0, 1.0e-12)
+    fails = fails + _ck_close("(C) v_g(k=π/a) = 0 (band edge)", qforge_chip_tb1d_vg(eps0, t, a, pi/a, hbar), 0.0, 1.0e-10)
+    // |v_g| is maximal at k=π/2a where sin(ka)=1 → v_g = 2·t·a / ħ.
+    fails = fails + _ck_close("(C) v_g(π/2a) = 2ta/ħ (max)", qforge_chip_tb1d_vg(eps0, t, a, pi/(2.0*a), hbar), 2.0*t*a/hbar, 1.0e-10)
+
+    // ══ (D) diatomic-chain gap (semiconductor vs metal) ════════════════════
+    // distinct sublattice energies ε_a=−0.8, ε_b=+0.8 → at zone boundary k=π/a the
+    // off-diagonal −2t·cos(π/2)=0, so eigenvalues = {ε_a, ε_b}, gap = |ε_a−ε_b|=1.6.
+    let ea = -0.8
+    let eb = 0.8
+    let kbz = pi / a
+    // bind eigenvalues to scalar locals IMMEDIATELY (materialize before further
+    // allocations) — gen3 corrupts an array held across many later allocs; an
+    // early scalar read is the robust read pattern.
+    // (gen3 arena-return aggregate bug — sidecar handoff aededed6 → hexa-lang.)
+    let gapEvs = qforge_chip_diatomic_gap(ea, eb, t, a, kbz)
+    let gapLo = gapEvs[0]
+    let gapHi = gapEvs[1]
+    fails = fails + _ck_close("(D) lower band at zone bdry = ε_a", gapLo, ea, 1.0e-9)
+    fails = fails + _ck_close("(D) upper band at zone bdry = ε_b", gapHi, eb, 1.0e-9)
+    fails = fails + _ck_close("(D) GAP = |ε_a−ε_b| = 1.6", gapHi - gapLo, _abs(eb - ea), 1.0e-9)
+    // equal sublattices → gapless (metallic) touching at the zone boundary.
+    let metalEvs = qforge_chip_diatomic_gap(0.3, 0.3, t, a, kbz)
+    let metalLo = metalEvs[0]
+    let metalHi = metalEvs[1]
+    fails = fails + _ck_close("(D) equal sublattice → gapless touching", metalHi - metalLo, 0.0, 1.0e-9)
+
+    // ══ (E) generic eigh ≡ analytic 2×2 at a general k ═════════════════════
+    // at k=π/(3a): off = −2t·cos(π/6). Analytic eigs = mean ± √((Δ/2)²+off²).
+    let kg = pi / (3.0 * a)
+    let offg = -2.0 * t * cos(kg * a * 0.5)
+    let mean = 0.5 * (ea + eb)
+    let half = 0.5 * (ea - eb)
+    let disc = (half*half + offg*offg)
+    let root = disc
+    // integer-free sqrt via the builtin
+    let sroot = sqrt(root)
+    let anaLo = mean - sroot
+    let anaHi = mean + sroot
+    let geNg = qforge_chip_diatomic_gap(ea, eb, t, a, kg)
+    let geLo = geNg[0]
+    let geHi = geNg[1]
+    fails = fails + _ck_close("(E) eigh lower ≡ analytic", geLo, anaLo, 1.0e-9)
+    fails = fails + _ck_close("(E) eigh upper ≡ analytic", geHi, anaHi, 1.0e-9)
+
+    // ══ (F) Landauer-Büttiker conductance quantization ═════════════════════
+    let g0 = 7.748091729e-5   // 2e²/h in siemens (von-Klitzing-derived G₀)
+    // 3 perfect channels → exactly 3·G₀.
+    fails = fails + _ck_close("(F) 3 perfect channels → 3G₀",
+                              qforge_chip_landauer_g([1.0, 1.0, 1.0], g0), 3.0*g0, 1.0e-15)
+    // 1 perfect channel → 1·G₀ (the first plateau).
+    fails = fails + _ck_close("(F) 1 perfect channel → G₀",
+                              qforge_chip_landauer_g([1.0], g0), g0, 1.0e-15)
+    // a half-open channel shifts by ½G₀ (between plateaus).
+    fails = fails + _ck_close("(F) [1,1,0.5] → 2.5G₀",
+                              qforge_chip_landauer_g([1.0, 1.0, 0.5], g0), 2.5*g0, 1.0e-15)
+    // closed channels carry nothing.
+    fails = fails + _ck_close("(F) all closed → 0",
+                              qforge_chip_landauer_g([0.0, 0.0], g0), 0.0, 1.0e-18)
+
+    // ══ (G) universal thermal-conductance quantum g₀ = π²k_B²T/3h ══════════
+    // T=1K: g₀ = π²(1.380649e-23)²(1)/(3·6.62607015e-34) ≈ 9.4638e-13 W/K (Schwab).
+    let gth1 = qforge_chip_thermal_quantum(1.0)
+    fails = fails + _ck_close("(G) g₀(1K) ≈ 9.4638e-13 W/K", gth1, 9.4638e-13, 1.0e-16)
+    // strictly T-linear: g₀(2K) = 2·g₀(1K).
+    fails = fails + _ck_close("(G) g₀(2K) = 2·g₀(1K)", qforge_chip_thermal_quantum(2.0), 2.0*gth1, 1.0e-20)
+    fails = fails + _ck_true("(G) g₀ positive and T-monotone",
+                             qforge_chip_thermal_quantum(0.5) < qforge_chip_thermal_quantum(0.5001))
+
+    if fails == 0 { println("qforge_chip_band_transport_selftest PASS") }
+    else { println("qforge_chip_band_transport_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
