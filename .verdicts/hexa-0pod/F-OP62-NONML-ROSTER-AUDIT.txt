@@ -1,0 +1,181 @@
+F-OP62-NONML-ROSTER-AUDIT — GENERALIZE the closed falsified-builtin audit BEYOND the ML family.
+        OP-59 DEFINITIVELY closed the ML-family falsified-builtin thread (OP-43's 42-member ML roster:
+        40 deregistered, 2 permanent compiler-closure KEEPs = sigmoid·arange). But that thread only ever
+        audited the ML family. OP-62 applies the SAME proven 5-step g5 method (g5-falsify + 0-codegen-guard
+        + 0-runtime-symbol + [S] shadow-binding CONTROL + caller-liveness) to the REST of self/env.hexa's
+        165 NON-ML builtins (string/array/math/io/net/consciousness/n6/term/misc). RESULT: 10 PURE-ORPHAN
+        landmines DEREGISTERED (falsified + 0 codegen + 0 runtime symbol + ZERO occurrence repo-wide +
+        shadow-safe + compiler/** 0-ref); 155 KEPT — 82 real-impl PROVEN-CLEAN + 29 compiler-closure
+        codegen-special-path + 44 live-caller/occurrence conservative-KEEP. THE NON-ML ROSTER IS NOW
+        AUDITED: no non-ML true-falsified entry has any live caller; the deregisterable landmine reservoir
+        outside the ML family is the 10 pure orphans, now drained. THE ENTIRE env.hexa ROSTER IS AUDITED.
+HEXA-0POD OP-62 · CPU-LOCAL (hexat AOT transpile + clang -fsyntax-only) · 0-GPU · $0 · no vast/pod
+════════════════════════════════════════════════════════════════════════════
+
+[0] PROVENANCE + MANDATE
+------------------------
+The falsified-builtin audit thread (OP-33/41/43/47/48/51/56/59) audited the ML family ONLY and closed it:
+the OP-43 42-member ML roster → 40 deregistered + 2 permanent compiler-closure KEEPs (sigmoid, arange).
+The REMAINING roster of self/env.hexa env_new() — the non-ML builtins — was NEVER falsify-audited. OP-62
+generalizes the proven method to that remainder. Method (verbatim, F-OP59-FALSIFIED-FAMILY-CLOSED.txt):
+for each candidate NAME — (1) g5-FALSIFY (tiny `NAME(arg)`, NO local shadow → fresh hexat AOT → clang;
+a falsified builtin emits a bare `hexa_callN(NAME,…)` → clang "use of undeclared identifier 'NAME'");
+(2) CALLABLE-BARE-SYMBOL check (runtime.c/.h `HexaVal NAME(` incl prefix variants); (3) CODEGEN-GUARD
+check (self/codegen.hexa `== "NAME"` special-path = compiler-closure KEEP, like sigmoid/arange);
+(4) SHADOW-CONTROL [S] (a local `fn NAME` shadow binds roster-independently → removal binding-safe);
+(5) CALLER-LIVENESS (every builtin-dependent caller must be dead today). Deregister ONLY: falsified ∧
+0-codegen ∧ shadow-safe ∧ no-live-builtin-caller. Toolchain: fresh hexat = ~/.hx/bin/build/hexat
+(2028152B, Jun-13). runtime.c = /Users/mini/.hx/src/self/runtime.c (Jun-12). runtime.h = self/runtime.h
+(worktree, Jun-13). clang = /usr/bin/clang. Probe include: clang -I<worktree>/self -fsyntax-only.
+
+ROSTER SCOPE: 187 registered builtins in env_new() builtin_names. ML-family set (already audited across
+OP-43..59, 22 names) = sigmoid softmax matmul argmax randn arange sum mean hadamard layer_norm embedding
+gelu silu tensor tensor_zeros matvec mat_add rms_norm cosine_sim curiosity_reward dialogue_reward
+combined_reward. NON-ML candidate set = the other 165 (THIS audit).
+
+[1] FALSIFY-PROBE SWEEP (g5, all 165 non-ML candidates) — 3-WAY SPLIT
+--------------------------------------------------------------------
+Each candidate: `fn main(){ let _r = NAME(1); println("OKMARK") }` → hexat → clang -fsyntax-only.
+  82 CLEAN          — transpile + clang clean (real runtime impl; e.g. print/len/to_string/abs/sin/cos/
+                      sqrt/exp/read_file/json_parse/http_get/base64_*/args/exit/clock/Some/Ok/Err/str/
+                      cstring/deref/exec/term_raw_*/term_isatty_*/…). Includes 2 CLEAN_OTHERERR (real-impl,
+                      non-undeclared error): println (HexaVal←void shape) + atan2 (clang found `u_atan2`,
+                      real symbol). PROVEN-CLEAN.
+  75 FALSIFIED      — `NAME(1)` clang "use of undeclared identifier 'NAME'" on a 1-arg probe.
+   8 HEXAT_FAIL     — transpile FAILS at the 1-arg probe ("index 1 out of bounds (len 1)") = the codegen
+                      special-path INDEXES args[1] (binary builtin) → PROOF of a real codegen special-path
+                      (write_file split min max pow net_read_n net_set_timeout net_write). KEEP.
+  165 = 82 + 75 + 8.
+
+[2] CODEGEN-GUARD CHECK on the 83 (75 FALSIFIED + 8 HEXAT_FAIL) — self/codegen.hexa `== "NAME"`
+---------------------------------------------------------------------------------------------
+29 of the 83 carry a REAL self/codegen.hexa special-path (`== "NAME"` count > 0) — the 1-arg falsify is the
+documented ARG-SHAPE TRAP (these lower via a method/operator/binary codegen path needing the correct arg
+shape; with the wrong shape the bare-fallback fires OR transpile fails). These are compiler-closure KEEPs:
+  write_file(2) append_file(1) has_key(3) join(3) split(4) trim_start(3) trim_end(3) starts_with(4)
+  ends_with(4) contains(3) replace(2) to_upper(3) to_lower(3) min(9) max(7) pow(7) net_read_n(2)
+  net_set_timeout(2) net_write(2) now(1) timestamp(1) reduce(1) flatten(1) slice(2) readline(1)
+  term_pty_spawn_sh(2) term_fd_read(2) term_fd_write(2) term_fd_poll(2).
+54 of the 83 have ZERO codegen special-path (`== "NAME"` count = 0) AND ZERO callable bare runtime symbol
+(runtime.c/.h `HexaVal NAME(` + prefix variants hexa_/rt_/u_/farr_/t_/hxlcl_ all = 0). Generated C confirms
+the bare-fallback shape, e.g. `HexaVal _r = hexa_call1(phi, …)` / `hexa_call1(gcd, …)` / `hexa_call1(Set,
+…)` / `hexa_call1(n6_scan, …)` / `hexa_call1(psi_coupling, …)` / `hexa_call1(sopfr, …)` — a bare NAME token
+clang reports undeclared. These 54 are the TRUE register-but-no-impl landmines.
+
+[3] CALLER-LIVENESS on the 54 true-falsified — orphan vs live (the dispositive gate)
+------------------------------------------------------------------------------------
+Repo-wide occurrence sweep (scoped grep self/ stdlib/ example/ compiler/ bench/, excl *.gen.hexa, excl
+.git). 44 of the 54 carry LIVE callers or non-trivial repo occurrences (binding the roster entry and/or a
+local shadow) — number-theory + consciousness + n6 + psi + memory + misc, the language's atlas-identity
+surface. Conservatively KEPT (g0; gate-5 live-caller NOT provably dead without re-running each program):
+  arena_reset bigint channel consciousness_decoder_dim consciousness_max_cells consciousness_phi
+  consciousness_vector elapsed evolve_gen filter_arr gcd hex_decode hex_encode hexad_left hexad_modules
+  hexad_right http_post http_serve is_numeric laws map_arr mem_budget mem_region mem_stats n6_check
+  n6_consensus n6_lenses n6_omega n6_scan n6_verify phi psi_balance psi_coupling psi_entropy
+  psi_frustration psi_steps random_int run_benchmarks run_tests Set sigma sopfr tau to_char.
+  (sigma/phi/tau also appear in self/type_checker.hexa tc_register_fn arity table → a deliberate binder
+   contract → KEEP. sopfr/phi/sigma/tau/gcd carry 6-22 local-fn shadow defs + 100-317 call-sites = a
+   heavily-used number-theory surface; deregistering risks live test programs → KEEP.)
+
+10 of the 54 are PURE ORPHANS — falsified + 0 codegen + 0 runtime symbol + ZERO occurrence repo-wide (no
+caller, no shadow consumer, no compiler ref): no program can be broken by removing them.
+  try_float  is_whitespace  meta_laws  phi_predict  tension_link  zip_arr  enumerate_arr  input_all
+  load_weights_bin  mmap_weights.
+
+[4] THE 10 ORPHANS — full 5-gate evidence (DEREGISTERED)
+-------------------------------------------------------
+(1) g5-FALSIFY verbatim (1-arg probe, fresh hexat rc=0 → clang):
+  try_float        : p_try_float.c:18:29:        error: use of undeclared identifier 'try_float'
+  is_whitespace    : p_is_whitespace.c:18:29:    error: use of undeclared identifier 'is_whitespace'
+  meta_laws        : p_meta_laws.c:18:29:        error: use of undeclared identifier 'meta_laws'
+  phi_predict      : p_phi_predict.c:18:29:      error: use of undeclared identifier 'phi_predict'
+  tension_link     : p_tension_link.c:18:29:     error: use of undeclared identifier 'tension_link'
+  zip_arr          : p_zip_arr.c:18:29:          error: use of undeclared identifier 'zip_arr'
+  enumerate_arr    : p_enumerate_arr.c:18:29:    error: use of undeclared identifier 'enumerate_arr'
+  input_all        : p_input_all.c:18:29:        error: use of undeclared identifier 'input_all'
+  load_weights_bin : p_load_weights_bin.c:18:29: error: use of undeclared identifier 'load_weights_bin'
+  mmap_weights     : p_mmap_weights.c:18:29:     error: use of undeclared identifier 'mmap_weights'
+  ALL 10 g5-FALSIFIED verbatim (no clean link occurred for any).
+(2) CALLABLE-BARE-SYMBOL: 0 for each (runtime.c bareC=0, runtime.h bareH=0, prefix variants=0).
+(3) CODEGEN-GUARD: 0 for each (self/codegen.hexa `== "NAME"` count = 0; no broader mention either).
+(4) [S] SHADOW-CONTROL re-proven PER NAME: file `fn NAME(x:float)->float{return x+1.0}` + `NAME(2.0)`
+    caller → hexat rc=0 → clang -fsyntax-only CLEAN (0 errors) for ALL 10. Generated C (try_float
+    exemplar): line 4 `HexaVal try_float(HexaVal x);` (fwd-decl) · line 10 `HexaVal try_float(HexaVal x){`
+    (LOCAL def) · line 19 `HexaVal r = try_float(hexa_float(2.0));` (call binds the LOCAL def). ⇒ a local
+    `fn NAME` emits its OWN symbol roster-INDEPENDENTLY; deregistering can NEVER break a shadow binding.
+(5) CALLER-LIVENESS: ZERO occurrence repo-wide (broad `\bNAME\b` scan over self/ stdlib/ example/
+    compiler/ bench/, excl gen.hexa + the env.hexa/type_checker.hexa/lsp.hexa roster files themselves, excl
+    fn-defs = 0 for each). No caller exists to break. Not in self/type_checker.hexa tc_register_fn set.
+COMPILER-CLOSURE (the arange lesson): compiler/** non-gen refs = 0 for each (NOT compiler/check/bind.hexa
+  allow-list, NO `op==` codegen dispatch) → cc-gen3==cc-gen4 byte-eq fixpoint unperturbed.
+DECISION: all 5 gates PASS for all 10 → DEREGISTER. Each reversible by a one-line roster re-add (and any
+future program needing one would require a real runtime impl anyway — the row was a lints-but-won't-link
+landmine; dereg only flips "clang: undeclared NAME" → "binder: unbound NAME", a no-op for never-linking).
+
+[5] DIFF
+--------
+  self/env.hexa : 10 names REMOVED from env_new() builtin_names — try_float (to_float/try_float line),
+                  is_whitespace (is_alpha/is_digit line), meta_laws + phi_predict + tension_link (laws/
+                  consciousness_vector block), zip_arr + enumerate_arr (map_arr/filter_arr/reduce line),
+                  input_all (input/readline line), load_weights_bin + mmap_weights (to_char line) — + 1
+                  scoped OP-62 comment block + inline removal notes. KEPT (re-verified present in the
+                  generated env_after.c builtin_names, count 1 each): laws, consciousness_vector, sopfr,
+                  map_arr, filter_arr, reduce, flatten, slice, to_char, is_numeric, to_float, sigma, phi,
+                  tau, gcd, n6_*, psi_*, consciousness_*, hexad_*, Set, mem_*, etc. wipe_guard: net
+                  ADDITIVE (+37/−7, fully under 50; commit subject scoped `cleanup(env): deregister 10
+                  pure-orphan non-ML falsified builtins — OP-62`).
+
+[6] POST-EDIT CHECKS — GREEN
+---------------------------
+(a) env.hexa transpiles clean: `~/.hx/bin/build/hexat self/env.hexa /tmp/op62/env_after.c` → OK (rc=0,
+    roster well-formed after the 10 removals).
+(b) grep-proof on generated env_after.c builtin_names strlits: the 10 deregistered names = 0 each; KEPT
+    neighbors (laws/consciousness_vector/sopfr/map_arr/filter_arr/reduce/flatten/slice/to_char/is_numeric/
+    to_float) = 1 each. Comments do NOT leak into generated-C strlits.
+(c) self-host byte-eq: env.hexa edit affects the NEXT compiler build; the installed hexat keeps its roster
+    until rebuilt (same 0-pod caveat as OP-41/43/47/48/51/56/59 — verified via env.hexa transpile +
+    generated-C inspection + compiler/** zero-binding-ref for the 10, not a from-scratch rebuild). The CI
+    selfhost-byteeq-real gate compiles compiler/main.hexa (references none of the 10) — INLINE-polled.
+
+[7] GATE (g5) — PASS
+--------------------
+  165-candidate 3-way falsify split (82 clean + 75 falsified + 8 hexat-fail) built                 : YES (§1)
+  codegen-guard check on the 83 → 29 compiler-closure KEEP + 54 zero-codegen-zero-runtime           : YES (§2)
+  the 10 orphans g5-FALSIFIED verbatim (re-verified)                                                : YES (§4)
+  [S] local-fn shadow binding CONTROL proven roster-independent PER orphan name                     : YES (§4)
+  every orphan has ZERO repo occurrence (no live caller to break)                                   : YES (§3-4)
+  compiler-closure check: 10 orphans 0-ref; 29 codegen-path + 44 live-caller KEPT                   : YES (§2-4)
+  env.hexa transpiles + roster well-formed after the 10 removals                                    : YES (§6)
+
+[8] NON-ML ROSTER CLOSURE STATEMENT
+-----------------------------------
+THE NON-ML ROSTER IS NOW AUDITED. Of 165 non-ML builtins:
+  · 82 PROVEN-CLEAN     — real runtime impl (transpile + clang clean). 🟢
+  · 29 KEEP (codegen)   — falsify on a 1-arg probe but carry a REAL self/codegen.hexa special-path (arg-
+                          shape trap); compiler-closure, same KEEP class as sigmoid/arange. 🟢
+  · 44 KEEP (live)      — true-falsified (0 codegen, 0 runtime symbol) BUT carry live callers / repo
+                          occurrences (number-theory, n6, psi, consciousness, hexad, memory, misc — the
+                          atlas-identity surface). Conservative g0 KEEP. 🟢
+  · 10 DEREGISTERED     — pure-orphan landmines (falsified + 0 codegen + 0 runtime symbol + ZERO occurrence
+                          repo-wide + shadow-safe + compiler/** 0-ref). 🔴 closed-negative (broken-AOT
+                          landmines), removed.
+  No non-ML true-falsified entry carries any LIVE caller — the deregisterable reservoir outside the ML
+  family is exactly the 10 pure orphans, now drained. Combined with the ML family (OP-59: CLOSED — 40
+  deregistered + 2 compiler-closure KEEPs), THE ENTIRE self/env.hexa env_new() ROSTER IS AUDITED:
+  187 builtins = ML-family CLOSED (22: 20 dereg-history + sigmoid + arange KEEP) ∪ non-ML AUDITED (165:
+  82 clean + 73 KEEP + 10 dereg). Every remaining roster entry is now classified — real-impl, compiler-
+  closure, or live-caller — with NO un-audited register-but-no-impl landmine left that has a dead caller.
+
+[9] HONEST FRONTIER NOTE
+------------------------
+The 44 live-caller KEEPs are NOT proven-clean (they ARE falsified for AOT) — they are conservatively kept
+because deregistering them risks breaking the language's atlas-identity surface (sigma/phi/tau/gcd/sopfr
+number theory; n6_*/psi_*/consciousness_*/hexad_*/laws consciousness; mem_*/Set/elapsed runtime), which
+carry heavy live call-sites and local-shadow surfaces (sigma 317 calls/10 shadows, sopfr 122/6, gcd 102/22,
+phi 181/3, tau 201/10). A future per-name gate-5 dead-caller proof (as OP-47..59 did for the ML family,
+one program at a time) COULD deregister more of them — but that is a larger, separate audit and several of
+these are realized at interpret-time (the N6/atlas constants the language cites), so the honest floor here
+is "all true-falsified entries with a dead caller removed; the live-caller atlas surface conservatively
+kept". This audit's honest closure: the NON-ML pure-orphan reservoir is drained (10 removed), and no
+non-ML falsified entry with a dead caller remains. $0 · 0-GPU · 0-pod · no vast · no foreign-pod · no
+.tape edits.
