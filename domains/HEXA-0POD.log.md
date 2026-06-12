@@ -1,5 +1,33 @@
 # HEXA-0POD — log
 
+## 2026-06-12 — OP-38 DONE: deterministic checkpoint (ckpt_lib FCK v1) reflected into the determinism contract + dojo recipe (DOCS-ONLY · $0 · 0-pod)
+- SURVEY-FIRST (mandatory). Read the SSOTs before touching: docs/flame-determinism-contract.md (CONFIRMED it already
+  has an accurate CHECKPOINT row + "what breaks it" bullet from OP-35 — REFINE not duplicate), docs/hexa-dojo.md (the
+  "Training recipe — optimization gotchas" section — NO checkpoint recipe present), and the source of truth code:
+  stdlib/flame/ckpt_lib.hexa + op35_ckpt_resume_eq.hexa + op35_ckpt_xplat_selfcontained.hexa.
+- CONTRACT (docs/flame-determinism-contract.md) — REFINED in place, NO duplicate subsection:
+  - CHECKPOINT row "what breaks it" cell + the matching "what breaks the contract" bullet now tie the
+    binary-bit-pattern rationale to F-OP37's MEASURED proof: to_string is "%g" 6-digit, MEASURED to corrupt fp64
+    const-folds by up to 2.027e-6 → the f64_to_bytes_le bit-pattern reinterpret exists PRECISELY to avoid lossy text
+    round-trip. (Was asserted "not shortest-round-trip" with no proof pointer.)
+  - Left as-is (already accurate from OP-35): full-state [t][n_params][W,m,v] invariant, resume-at-t+1, bit-for-bit
+    resume==uninterrupted (max|Δ|=0), adversarial round-trip, arm64-macos↔x86_64-linux cmp-portability.
+- DOJO (docs/hexa-dojo.md) — NEW terse "deterministic checkpoint/resume" callout in "Training recipe — optimization
+  gotchas", right after the existing determinism-contract callout (matching the > callout style): the exact API
+  (ckpt_begin → ckpt_save_param per param IN PINNED ORDER → ckpt_load_param, resume at ckpt_step(rb)+1), the TWO
+  gotchas (1: MUST save AdamW m,v AND step t, not just weights — weights-only resets bias-correction t→1, MEASURED
+  0.042 divergence; 2: NEVER serialize through text %g/to_string — F-OP37 2.027e-6 corruption), the bit-exact +
+  machine/arch-portable property, and a one-line pointer to ckpt_lib.hexa + the two op35 oracles as the proof.
+- ACCURACY (g5, TRUST THE CODE): verified every claim line-by-line against ckpt_lib.hexa — magic = "FCK\x01" (bytes
+  70,67,75,1); header [magic][t u32-le][n_params u32-le], body off 12; per-param [len u32-le][W f64-le][m][v]; f64 via
+  f64_to_bytes_le/bytes_to_f64_le (bit-pattern, LE pinned); API names ckpt_begin/ckpt_save_param/ckpt_magic_ok/
+  ckpt_step/ckpt_nparams/ckpt_body_off/ckpt_param_len/ckpt_load_param ALL real pub fns w/ documented signatures — ALL
+  MATCH. Oracles confirm the guarantees (RESUME bit-eq + ROUNDTRIP adversarial + NC-1 missing-t / NC-2 fp32 negative
+  controls; xplat echo/make/resume cmp-identical). No invented API, no invented guarantee; no code↔PR-#3062 discrepancy.
+- DOCS-ONLY: only files touched = the 2 docs + verdict F-OP38-CKPT-RECIPE-REFLECT.txt + this milestone/log. NO new
+  code, NO new oracle, NO .tape edit (no sign token), NO /paper (g84). $0 · 0-GPU · 0-pod · no vast · no foreign pod.
+- Milestone OP-38 flipped [x]. Verdict .verdicts/hexa-0pod/F-OP38-CKPT-RECIPE-REFLECT.txt.
+
 ## 2026-06-12 — OP-37 DONE: `0.0 - <float literal>` const-fold miscompile REPRODUCED on current main → REAL codegen bug → FIXED byte-exact ($0 · 0-pod)
 - Settles OP-36 HONEST-NOTE #2 (deferred as a presumed stale-toolchain ghost). DECISIVE: it is NOT a ghost —
   the miscompile REPRODUCES on the freshest local native compiler (~/.hx/bin/build/hexat, Jun-8 01:17, the

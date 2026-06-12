@@ -1,0 +1,92 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP38-CKPT-RECIPE-REFLECT — the OP-35 deterministic checkpoint capability
+(stdlib/flame/ckpt_lib.hexa, format "FCK\x01" v1) reflected into the two
+canonical contributor surfaces so the determinism story is complete + discoverable
+HEXA-0POD OP-38 · docs-only · 0-pod · $0 · NO GPU · NO vast · NO foreign pod
+════════════════════════════════════════════════════════════════════════════
+
+GAP
+  OP-35 (#3062) BUILT + PROVED the 6th determinism surface: a deterministic
+  training checkpoint (ckpt_lib, "FCK\x01" v1 — binary fp64 little-endian
+  bit-pattern reinterpret, full [t][n_params][W,m,v] state). The capability
+  existed and was locked by oracles, but its discoverability across the two
+  contributor-facing doc SSOTs was incomplete:
+    · docs/flame-determinism-contract.md already had a CHECKPOINT row + a
+      "what breaks it" bullet from OP-35 — accurate, but the bit-pattern
+      rationale ("not shortest-round-trip text") was asserted, not tied to the
+      MEASURED OP-37 proof that to_string/%g is lossy.
+    · docs/hexa-dojo.md had NO checkpoint recipe at all — a dojo user had no
+      practical "how to checkpoint a flame run and resume bit-exactly" note.
+
+WHAT LANDED (docs, surgical — DOCS-ONLY)
+  1. docs/flame-determinism-contract.md (REFINE, no duplicate added):
+     · CHECKPOINT row "what breaks it" cell — the TEXT-serialization hole now
+       cites the F-OP37 measurement: to_string is "%g" 6-digit, MEASURED to
+       corrupt 0.0−X const-folds at ~6 sig-digits, |Δ| up to 2.027e-6 — so the
+       bit-pattern reinterpret exists PRECISELY to avoid this. (Was: "not
+       shortest-round-trip" asserted with no proof pointer.)
+     · "what breaks the contract" CHECKPOINT bullet — same F-OP37 cross-ref
+       added (%g/%f/to_string + the 2.027e-6 measurement), kept consistent
+       with the row.
+     · The full-state invariant ([t][n_params][W,m,v], resume at t+1), the
+       bit-for-bit resume==uninterrupted guarantee, the adversarial round-trip,
+       and the cross-platform portability were ALREADY accurate from OP-35 and
+       were left as-is (verified against the code — see below). NO duplicate
+       subsection added; the existing row/bullet were refined in place.
+
+  2. docs/hexa-dojo.md (NEW callout in "Training recipe — optimization gotchas",
+     placed right after the existing determinism-contract callout, matching the
+     terse > callout style):
+     "deterministic checkpoint/resume" note — the exact API surface
+     (ckpt_begin → ckpt_save_param per param in pinned order → ckpt_load_param,
+     resume at ckpt_step(rb)+1), the TWO gotchas (1: MUST save m,v AND step t,
+     not just weights — weights-only resets bias-correction t→1, MEASURED 0.042
+     divergence; 2: NEVER serialize through text %g/to_string — F-OP37
+     measured 2.027e-6 corruption), the bit-pattern → bit-exact + machine/arch
+     portable property, and a one-line proof pointer to ckpt_lib.hexa +
+     op35_ckpt_resume_eq.hexa + op35_ckpt_xplat_selfcontained.hexa.
+
+ACCURACY — every claim verified against the SOURCE OF TRUTH code (TRUST THE CODE)
+  stdlib/flame/ckpt_lib.hexa:
+    · magic = bytes 70,67,75,1 = "FCK\x01" v1 ........................ MATCH
+    · header = [magic][t_step u32-le][n_params u32-le], body off = 12 . MATCH
+    · per param = [len u32-le][len×f64-le W][len×f64-le m][len×f64-le v] MATCH
+    · f64 stored via f64_to_bytes_le / read via bytes_to_f64_le
+      (IEEE-754 bit-pattern reinterpret, NOT text) .................... MATCH
+    · little-endian PINNED (the _ck_push_u32 / _ck_push_f64 byte order) MATCH
+    · API names: ckpt_begin / ckpt_save_param / ckpt_magic_ok /
+      ckpt_step / ckpt_nparams / ckpt_body_off / ckpt_param_len /
+      ckpt_load_param — all real pub fns, signatures as documented ..... MATCH
+    · resume continues at ckpt_step+1 (header t = applied step) ........ MATCH
+  stdlib/flame/op35_ckpt_resume_eq.hexa:
+    · F-OP35-CKPT-RESUME: save@k=2 → restore FRESH → resume 3..4 ==
+      uninterrupted N=4, float_to_bits-identical + max|Δ|=0 + loss bits .. MATCH
+    · F-OP35-CKPT-ROUNDTRIP: adversarial IEEE-754 (denormal, -0.0, ±inf,
+      qNaN+payload, sNaN, max double) bit-identical round-trip ......... MATCH
+    · NC-1 missing-t resume MUST diverge; NC-2 fp32-truncated MUST
+      diverge (negative controls = comparator-sensitivity proof) ....... MATCH
+    · canonical 17-param clm_step order = the pinned ckpt field order .. MATCH
+  stdlib/flame/op35_ckpt_xplat_selfcontained.hexa:
+    · FORMAT PORTABILITY (echo: write arm64 → re-serialize x86, cmp-eq) . MATCH
+    · RESUME PORTABILITY (make/resume + cmp of final-state files) ...... MATCH
+    · round-trip on adversarial values on BOTH platforms .............. MATCH
+  No invented API names; no invented guarantees. (No discrepancy found between
+  the code and OP-35's PR-#3062 description — the docs describe what the code
+  actually does.)
+
+CONSTRAINTS HONORED
+  DOCS-ONLY: the only files touched are the 2 docs + this verdict + the domain
+  milestone/log. NO new code, NO new oracle, NO .tape edit (no sign token),
+  NO /paper scaffold (g84). $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch.
+
+FILES
+  docs/flame-determinism-contract.md ........ REFINED (CHECKPOINT row + bullet)
+  docs/hexa-dojo.md ......................... NEW checkpoint/resume callout
+  source of truth (read, NOT modified):
+    stdlib/flame/ckpt_lib.hexa
+    stdlib/flame/op35_ckpt_resume_eq.hexa
+    stdlib/flame/op35_ckpt_xplat_selfcontained.hexa
+  prior verdicts cited: F-OP35-CHECKPOINT, F-OP37-FLOAT-CONSTFOLD-VERIFY
+
+STATUS: GREEN — the deterministic-checkpoint determinism story is now complete
+and discoverable on BOTH contributor surfaces; every claim matches the code.
