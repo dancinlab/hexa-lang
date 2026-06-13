@@ -77,8 +77,19 @@ pub fn path_basename(p: string) -> string {
 pub fn path_ext(p: string) -> string {
     let base = path_basename(p)
     let n = len(base)
+    // Skip the leading run of dots: a dot inside that prefix is part of the
+    // name, not an extension separator. Matches POSIX/Python splitext
+    // (".bashrc" -> "", ".." -> "", "..ext" -> ""), not just the i>0 guard
+    // (which only protected a single leading dot, so "..ext" leaked ".ext"
+    // and ".." leaked "."). The dot must sit AFTER at least one leading dot
+    // boundary AND have a non-dot name char before it.
+    let mut lead = 0
+    while lead < n {
+        if base[lead] != '.' { break }
+        lead = lead + 1
+    }
     let mut i = n - 1
-    while i > 0 {
+    while i > lead {
         if base[i] == '.' { return base.substring(i, n) }
         i = i - 1
     }
