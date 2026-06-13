@@ -6,18 +6,37 @@
 #   stdlib/flame/op19_crossplatform_selfcontained.hexa   (CE-bwd dt_exp fold)
 #   stdlib/flame/op19b_crossplatform_erf.hexa            (GELU dt_erf fwd/bwd folds)
 # via `hexa run` and asserts the DETERMINISTIC fold lines equal the RECORDED
-# golden values — proven byte-identical across 4 environments (arm64-macos
-# local+ghost · x86_64-linux glibc aiden · arm64-linux glibc pi5 · musl;
-# F-OP19 #3002 · F-OP19B #3008 · F-OP19C · F-OP19D):
+# golden values — proven byte-identical across every CI platform (darwin-arm64,
+# linux-arm64, linux-x86_64):
 #
 #   CEBWD-TAYLOR-bits  (dt_exp)      = 7679248634312321699
-#   GELUFWD-DET-bits   (dt_erf fwd)  = 4548590605583584556
-#   GELUBWD-DET-bits   (dt_erf bwd)  = 4249661408190172843
+#   GELUFWD-DET-bits   (dt_erf fwd)  = 1088281529475491513   (OP-138 re-pin)
+#   GELUBWD-DET-bits   (dt_erf bwd)  = 2045849491002578884   (OP-138 re-pin)
 #
 # Any drift = a REAL machine-independence regression (compiler codegen changed
 # FP semantics, a deterministic primitive was edited, or someone re-routed a
 # deterministic site through libm). The platform-dependent *-LIBM-bits lines
 # are intentionally NOT asserted (they legitimately differ per libm).
+#
+# ── OP-138: dt_erf golden RE-PIN (compiler-correctness re-baseline) ───────────
+# The dt_erf folds were ORIGINALLY recorded (OP-19B #3008, OP-34 #3060) as
+#   GELUFWD-DET = 4548590605583584556 · GELUBWD-DET = 4249661408190172843
+# under the PRE-float-fix compiler. The compile-time float const-fold then used a
+# LOSSY `%g` / `%.17e` serialize (6-digit truncation), so dt_erf's 9–10-digit
+# rational constants (0.3275911, 0.254829592, 0.284496736, 1.421413741,
+# 1.453152027, 1.061405429) were silently ROUNDED before folding. OP-37/OP-40/
+# OP-132 (#3069/#3073/#3084/#3300) replaced that with a SHORTEST-round-trip
+# serialize (strtod-exact), so those constants now fold to their CORRECT bits →
+# a DIFFERENT, MORE-correct deterministic dt_erf value. dt_exp's CEBWD golden is
+# UNAFFECTED (its constants 0.25/1.0/2.0/12 serialize bit-identically either way).
+#
+# CRITICAL — machine-independence is INTACT, NOT broken: the new value is
+# BYTE-IDENTICAL across all 3 CI platforms (darwin-arm64 · linux-arm64 ·
+# linux-x86_64), confirmed across multiple CI runs — exactly what this gate
+# exists to protect. The OLD golden was the STALE artifact of a now-fixed
+# compiler bug, not a divergence. This is a benign re-pin to the compiler-correct
+# value, NOT green-by-masking. See .verdicts/hexa-0pod/
+# F-OP138-FAITHFUL-NOBASELINE-ERF.txt for the 3-platform byte-eq proof.
 #
 # LOW BLAST RADIUS (the OP-5b/OP-19f gate discipline):
 #   * Runs ONLY the two self-contained oracles (no `use`, no flame stdlib
@@ -33,10 +52,12 @@ set -eu
 
 HEXA_BIN="${1:-./hexa}"
 
-# Golden folds (recorded, 4-environment byte-identical — see header).
+# Golden folds (recorded, 3-CI-platform byte-identical — see header).
+# dt_erf folds re-pinned in OP-138 to the compiler-correct (post-float-fix)
+# value; old pre-fix goldens were 4548590605583584556 / 4249661408190172843.
 GOLD_CEBWD=7679248634312321699
-GOLD_GELUFWD=4548590605583584556
-GOLD_GELUBWD=4249661408190172843
+GOLD_GELUFWD=1088281529475491513
+GOLD_GELUBWD=2045849491002578884
 
 ORACLE_19=stdlib/flame/op19_crossplatform_selfcontained.hexa
 ORACLE_19B=stdlib/flame/op19b_crossplatform_erf.hexa

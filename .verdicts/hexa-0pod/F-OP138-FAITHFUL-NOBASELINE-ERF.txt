@@ -1,0 +1,154 @@
+════════════════════════════════════════════════════════════════════════════════
+ F-OP138-FAITHFUL-NOBASELINE-ERF — root-cause + honest resolution of the
+ persistently-RED `faithful-nobaseline` CI gate (the dt_erf golden-fold drift)
+ HEXA-0POD OP-138 · LANE-1 · 0-GPU · 0-pod · ZERO vast · $0
+════════════════════════════════════════════════════════════════════════════════
+
+VERDICT (one line)
+  ROOT = (b) STALE GOLDEN from a now-FIXED compiler bug (NOT a real regression,
+  NOT a flake). The machine-independence erf invariant is INTACT — all 3 CI
+  platforms compute the SAME byte-exact dt_erf value; only the recorded golden
+  was stale (captured under the pre-float-fix lossy `%g`/`%.17e` const-fold).
+  Resolved by RE-PINNING the golden to the proven 3-platform-byte-identical
+  compiler-correct value — green AND meaningful, NOT green-by-masking.
+
+────────────────────────────────────────────────────────────────────────────────
+ 1. THE GATE (what runs, what it asserts)
+────────────────────────────────────────────────────────────────────────────────
+  Workflow: .github/workflows/nobaseline-gate.yml → the 3 `faithful-nobaseline`
+  jobs (darwin-arm64 · linux-x86_64 · linux-arm64). Each builds a fresh ./hexa
+  via the shared release path, then runs the step
+    "OP-34 — fold gate (dt_exp/dt_erf golden folds)"  =  sh tool/fold_ci_gate.sh ./hexa
+  fold_ci_gate.sh `hexa run`s two self-contained determinism oracles
+    stdlib/flame/op19_crossplatform_selfcontained.hexa   (dt_exp CEBWD fold)
+    stdlib/flame/op19b_crossplatform_erf.hexa            (dt_erf GELU fwd/bwd folds)
+  and asserts 3 deterministic FNV-1a fold lines == recorded goldens. The
+  platform-dependent *-LIBM-bits lines are NOT asserted (they legitimately
+  differ per libm — F-OP33 Darwin-vs-glibc class). faithful-nobaseline is a
+  NON-REQUIRED check, so PRs merged past it — but it was perpetually RED.
+
+────────────────────────────────────────────────────────────────────────────────
+ 2. THE EXACT DRIFT (reproduced from CI; 3-platform evidence)
+────────────────────────────────────────────────────────────────────────────────
+  From the failing main + PR CI runs (gh run 27466630995 push@main,
+  27466956082 PR; both with identical results), the OP-34 fold step output:
+
+    CEBWD-TAYLOR-bits = 7679248634312321699   → OK   (dt_exp golden matches)
+    GELUFWD-DET-bits  = 1088281529475491513   → DRIFT (golden 4548590605583584556)
+    GELUBWD-DET-bits  = 2045849491002578884   → DRIFT (golden 4249661408190172843)
+
+  CROSS-PLATFORM (THE decisive fact) — the DRIFTED dt_erf values are
+  BYTE-IDENTICAL on ALL THREE platforms, across multiple runs:
+
+    platform        GELUFWD-DET-bits       GELUBWD-DET-bits
+    darwin-arm64    1088281529475491513    2045849491002578884
+    linux-arm64     1088281529475491513    2045849491002578884
+    linux-x86_64    1088281529475491513    2045849491002578884
+
+  i.e. dt_erf did NOT diverge between machines — it is still perfectly
+  platform-independent. It drifted from the recorded GOLDEN, identically
+  everywhere. (The platform-DEPENDENT *-LIBM-bits lines DO differ per platform,
+  as expected — but those are not asserted.)
+
+  Corroborating internal consistency: op19's own GELUFWD-TAYLOR-bits (a co-
+  located dt_erf-path dump) ALSO now reads 1088281529475491513 on both legs —
+  the new value is internally consistent across both oracles.
+
+────────────────────────────────────────────────────────────────────────────────
+ 3. ROOT CAUSE — compiler-correctness fix invalidated a stale golden (case (b))
+────────────────────────────────────────────────────────────────────────────────
+  Neither the oracle nor the golden source changed:
+    · stdlib/flame/op19b_crossplatform_erf.hexa — git diff vs its creation
+      commit e9bbcefeb (#3008) is EMPTY (byte-identical).
+    · tool/fold_ci_gate.sh golden — unchanged since abe447aa8 (#3060, OP-34).
+  So the SOURCE is fixed; the drift is purely from the COMPILER that builds
+  ./hexa in CI.
+
+  Mechanism: the golden was recorded (OP-19B #3008 → OP-34 #3060, 2026-06-12)
+  under the PRE-float-fix compiler whose compile-time float const-fold serialized
+  via a LOSSY `%g` (6 sig-digit) / `%.17e` path. dt_erf's rational constants are
+  9–10 significant digits:
+    0.3275911 · 0.254829592 · 0.284496736 · 1.421413741 · 1.453152027 · 1.061405429
+  Under the OLD serialize these were silently TRUNCATED/ROUNDED before folding,
+  so the dt_erf result carried lossy constant bits. OP-37/OP-37b/OP-40/OP-132
+  (#3069/#3073/#3084/#3300, all AFTER the golden was pinned) replaced that with a
+  SHORTEST-round-trip serialize (strtod-exact, IEEE-correct inverse). Those
+  constants now fold to their CORRECT bits → a DIFFERENT, MORE-correct dt_erf
+  value: 1088281529475491513 / 2045849491002578884.
+
+  Why dt_exp (CEBWD) still matches its golden: its constants are 0.25 / 1.0 /
+  2.0 / 12 — all serialize bit-identically under either path → no shift. Only the
+  high-precision dt_erf constants moved. This is exactly the discriminating
+  signature of "lossy-serialize-fixed", not "codegen broke FP semantics".
+
+  → CLASSIFICATION: (b) STALE / MIS-CAPTURED GOLDEN. The OLD golden was the
+  artifact of a now-fixed compiler bug. NOT (a) a machine-independence
+  regression (cross-platform byte-eq holds 3/3). NOT (c) a flake (the new value
+  is stable across runs and platforms).
+
+────────────────────────────────────────────────────────────────────────────────
+ 4. RESOLUTION — re-pin to the compiler-correct, 3-platform-proven invariant
+────────────────────────────────────────────────────────────────────────────────
+  Edited tool/fold_ci_gate.sh (the SSOT; the YAML steps are thin wrappers):
+    GOLD_GELUFWD  4548590605583584556 → 1088281529475491513
+    GOLD_GELUBWD  4249661408190172843 → 2045849491002578884
+    GOLD_CEBWD    7679248634312321699 (UNCHANGED — dt_exp never drifted)
+  + a documented header block recording: the old pre-fix goldens, the float-fix
+  provenance (OP-37/40/132), and the 3-platform byte-eq proof that this is a
+  benign re-pin, NOT green-by-masking.
+
+  HIGH-TRUST GOLDEN EDIT JUSTIFICATION (the bar for touching a golden): the new
+  value is PROVEN the correct platform-independent invariant — it is byte-
+  IDENTICAL on darwin-arm64, linux-arm64 AND linux-x86_64, observed across ≥2
+  independent CI runs (6 concordant observations). That is a STRONGER cross-
+  platform proof than the original golden carried at pin time, and it is the
+  freshly-built release compiler (not a stale local oracle). The gate stays
+  meaningful: it still asserts dt_erf is byte-exact across machines — it now
+  asserts it against the compiler-correct value.
+
+  TEETH PRESERVED: the gate is unchanged in structure — still an exact per-fold
+  string compare; any future 1-bit drift in dt_erf (or a re-introduced libm
+  route, or an FP-semantics codegen change) still fails it with a DRIFT line.
+  Only the target constant was corrected.
+
+────────────────────────────────────────────────────────────────────────────────
+ 5. HONEST LIMITS / RESIDUALS
+────────────────────────────────────────────────────────────────────────────────
+  · 0-pod reproduction note: a fresh `hexa run` of the oracle could NOT be run
+    on this local box — the installed self-hosted CLI (~/.hx/bin/hexa.real) is a
+    stale oracle that mis-parses generated C (known "Local hexa is stale oracle"
+    trap), and build/hexat is a cc (emits C, not `run`). The drift + the new
+    value are taken VERBATIM from the 3 fresh-built CI release binaries, which is
+    the authoritative surface (gate-green ≡ release-green by shared definition).
+    This is stronger than a single local run: it is the real release toolchain on
+    all 3 platforms.
+  · musl (4th env) is not a CI platform; it stays covered by the recorded
+    F-OP19D/OP-19f verdicts. The float-fix changes the const-fold serialize
+    identically regardless of libc (it is compile-time, libm-free), so the same
+    re-pinned value is expected there; not re-measured here (honest limit).
+  · This re-pin tracks the CURRENT release compiler. The OP-39/OP-42 advisory
+    const-fold step in the same workflow is `continue-on-error` precisely because
+    CI's ./hexa is built from a frozen seed; here the dt_erf fold is computed by
+    the BUILT release ./hexa (not the frozen seed), so the new value is the one
+    CI actually produces and the gate now matches it.
+
+────────────────────────────────────────────────────────────────────────────────
+ 6. GATE (g5) SUMMARY
+────────────────────────────────────────────────────────────────────────────────
+  root classification ...... (b) STALE GOLDEN from a now-fixed compiler bug
+  machine-independence ..... INTACT — dt_erf byte-identical 3/3 CI platforms
+  real regression? ......... NO (cross-platform byte-eq holds; only golden stale)
+  flake? ................... NO (value stable across runs + platforms)
+  exact drift .............. GELUFWD 4548590605583584556→1088281529475491513 ·
+                             GELUBWD 4249661408190172843→2045849491002578884 ·
+                             CEBWD (dt_exp) UNCHANGED (still matches)
+  cause .................... float const-fold serialize lossy `%g`/`%.17e` →
+                             shortest-round-trip (OP-37/40/132); dt_erf's 9–10-
+                             digit constants now fold to correct bits
+  resolution ............... re-pin goldens to the 3-platform-proven correct value
+                             + documented header (NOT green-by-masking)
+  gate after fix ........... GREEN and MEANINGFUL (still asserts cross-machine
+                             byte-eq, now vs the compiler-correct dt_erf value)
+  files .................... tool/fold_ci_gate.sh (goldens + header) · this verdict
+  cost ..................... $0 · 0-GPU · 0-pod · no vast · no foreign pod
+════════════════════════════════════════════════════════════════════════════════
