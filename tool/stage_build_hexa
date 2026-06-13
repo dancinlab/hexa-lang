@@ -55,7 +55,14 @@ export HEXA_LANG="$ROOT"
 $CC $CFLAGS -I self build/stage1/module_loader.c "$RT_ARG" -o build/hexa_module_loader $LIBS
 export HEXA_MODULE_LOADER="$ROOT/build/hexa_module_loader"
 ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
-./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
+# Transpiling the large flattened main_expanded.hexa (~11k lines) drives deep
+# recursion in the transpiler that overruns the default 8 MB stack -> SIGKILL
+# (the process is killed by a signal, not a clean nonzero exit; this is NOT host
+# OOM). Raise the stack limit just for this invocation. Linux honours
+# `ulimit -s unlimited`; macOS caps it (~65500 KB), so fall back to large finite
+# values, and finally run unguarded if even those are disallowed (graceful, g1).
+( ulimit -s unlimited 2>/dev/null || ulimit -s 524288 2>/dev/null || ulimit -s 65500 2>/dev/null || true
+  ./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c )
 echo "::endgroup::"
 
 echo "::group::Stage 2 — compile CLI driver ($OUT_HEXA)"
