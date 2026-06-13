@@ -1,0 +1,74 @@
+// Verbatim-inlined leaf lock for stdlib/stats/ks_two_sample.hexa D merge-sweep.
+fn abs_f(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _sorted_asc(a: [float]) -> [float] {
+    let mut out: [float] = []
+    let mut i = 0
+    while i < len(a) { out.push(a[i]) i = i + 1 }
+    let mut p = 1
+    while p < len(out) {
+        let cur = out[p]
+        let mut q = p - 1
+        while q >= 0 && out[q] > cur { out[q + 1] = out[q] q = q - 1 }
+        out[q + 1] = cur
+        p = p + 1
+    }
+    return out
+}
+fn ks_D(xs: [float], ys: [float]) -> float {
+    let n = len(xs)
+    let m = len(ys)
+    if n == 0 || m == 0 { return 0.0 }
+    let sx = _sorted_asc(xs)
+    let sy = _sorted_asc(ys)
+    let nf = (n * 1.0)
+    let mf = (m * 1.0)
+    let mut i = 0
+    let mut j = 0
+    let mut d_max: float = 0.0
+    while i < n && j < m {
+        let xi = sx[i]
+        let yj = sy[j]
+        if xi <= yj {
+            let v = xi
+            while i < n && sx[i] == v { i = i + 1 }
+            while j < m && sy[j] == v { j = j + 1 }
+        } else {
+            let v = yj
+            while j < m && sy[j] == v { j = j + 1 }
+            while i < n && sx[i] == v { i = i + 1 }
+        }
+        let diff = abs_f((i * 1.0) / nf - (j * 1.0) / mf)
+        if diff > d_max { d_max = diff }
+    }
+    while i < n {
+        let v = sx[i]
+        while i < n && sx[i] == v { i = i + 1 }
+        let diff = abs_f((i * 1.0) / nf - (j * 1.0) / mf)
+        if diff > d_max { d_max = diff }
+    }
+    while j < m {
+        let v = sy[j]
+        while j < m && sy[j] == v { j = j + 1 }
+        let diff = abs_f((i * 1.0) / nf - (j * 1.0) / mf)
+        if diff > d_max { d_max = diff }
+    }
+    return d_max
+}
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+    // identical → D=0
+    total=total+1; if abs_f(ks_D([1.0,2.0,3.0],[1.0,2.0,3.0])) < 1e-15 { pass=pass+1 } else { println("FAIL identical") }
+    // disjoint → D=1
+    total=total+1; if abs_f(ks_D([1.0,2.0],[5.0,6.0]) - 1.0) < 1e-15 { pass=pass+1 } else { println("FAIL disjoint") }
+    // textbook xs=1..5 ys=4..8 → D=0.6
+    total=total+1; if abs_f(ks_D([1.0,2.0,3.0,4.0,5.0],[4.0,5.0,6.0,7.0,8.0]) - 0.6) < 1e-12 { pass=pass+1 } else { println("FAIL textbook") }
+    // symmetry D(a,b)==D(b,a) w/ ties + tail
+    let a = [0.1,0.4,0.7,1.2,1.8,2.3]
+    let b = [0.3,0.5,0.6,1.5,2.0,2.1,2.4]
+    total=total+1; if abs_f(ks_D(a,b) - ks_D(b,a)) < 1e-15 { pass=pass+1 } else { println("FAIL symmetry") }
+    // heavy-tie case: xs all equal, ys spread — D = max gap = 1 - 1/3
+    total=total+1; if abs_f(ks_D([2.0,2.0,2.0],[1.0,2.0,3.0]) - 0.3333333333333333) < 1e-12 { pass=pass+1 } else { println("FAIL heavy-tie d=" + str(ks_D([2.0,2.0,2.0],[1.0,2.0,3.0]))) }
+    println("__OP95_KS__: " + str(pass) + "/" + str(total))
+    if pass == total { println("PASS") } else { println("FAILED"); exit(1) }
+}

@@ -1,0 +1,109 @@
+F-OP95-DATASTRUCT-NUMERIC — HEXA-0POD OP-95 (LANE-1, 0-pod correctness)
+======================================================================
+LANE: 1 (0-pod correctness — stdlib DATA-STRUCTURE / NUMERIC / non-net-non-
+string PARSER / alloc-non-path). Sibling LANE-2/OP-94 sweeps net/string/text/
+path. Non-overlapping: OP-95 touched ONLY stdlib/codec + stdlib/stats +
+stdlib/kernels/noc_sim leaf-test surface (NO net/string/text/path module).
+
+THESIS: OP-93 found the top-level numeric/parser leaves mostly clean (bugs
+concentrate in delimiter/index logic). OP-95 self-selects the NEXT untested
+bespoke LANE-1 modules with the highest index/state/arithmetic surface and
+hunts a DISTINCT bug class: OFF-BY-ONE at a boundary, MISSING RANGE-VALIDATION
+(the OP-93 month-13 class), INTEGER SIGN error, or a STATE-MACHINE transition
+bug. Method per module = DIFFERENTIAL (verbatim Python port of the UNFIXED body
+vs a Python reference) + INVARIANT (round-trip / inverse / bijection / bounds)
++ RANGE-VALIDATION (does the docstring-promised reject path fire?) over a
+boundary sweep (empty/single/max/min/negative/overflow/out-of-range/duplicate).
+
+SURVEY (scoped greps, NO .git; LANE-1; SKIP already-audited argparse/hashset/
+collections/path/civil/permille/wrap_pi/correlation/welford + the OP-80/82/85/86
+runtime helpers + iso8601 [routes to libc runtime builtins, not bespoke]):
+the bespoke index/state/arithmetic surface with a Python reference:
+
+  · stdlib/codec/utf8.hexa — UTF-8 validate/encode/decode STATE MACHINE.
+    HIGHEST range-validation surface: RFC-3629 overlong / surrogate (U+D800-
+    DFFF) / >U+10FFFF / truncated / lone-continuation / bad-lead rejection +
+    per-leading-byte size table + 2/3/4-byte codepoint assembly. ← PICK
+  · stdlib/stats/ks_two_sample.hexa — KS D-statistic merge-sweep STATE MACHINE.
+    HIGHEST tie/tail index surface: sorted dual-cursor sweep, tie-consumption
+    loops, two tail loops, supremum tracking. ← PICK
+  · stdlib/kernels/noc_sim/event_queue.hexa — binary MIN-HEAP. HIGHEST sift
+    index surface: sift_up parent=(i-1)/2, sift_down children 2i+1/2i+2,
+    last-to-head + drop-tail + sift on n-1 (classic off-by-one nest). ← PICK
+  · stdlib/kernels/noc_sim/traffic.hexa — permutation-index logic
+    (tornado/transpose/uniform dest, shift=ceil(k/2)-1, LCG sign). ← PICK
+  · stdlib/codec/hex.hexa — base-16 radix round-trip + guards (odd-length /
+    non-hex reject, whitespace+colon skip). ← PICK
+
+RESULT: 🟢 ALL 5 PROVEN-CLEAN — NO shipping bug, NO missing docstring-promised
+guard (NOT fabricated, g5). Each verified by a verbatim Python differential
+of the UNFIXED body vs a Python reference over a wide / exhaustive boundary
+sweep:
+
+  · codec/utf8.hexa — utf8_is_valid vs Python bytes.decode('utf-8',strict):
+    EXHAUSTIVE all 1-byte (256), all 2-byte (65,536), all 3-byte
+    (lead 0xE0-0xEF × b1 × b2 = full 786,432) + boundary 4-byte
+    (lead 0xF0-0xF4 × b1 × {b2,b3 boundaries} = 30,720) → 0 MISMATCH.
+    encode/decode round-trip over ALL 1,112,064 valid codepoints (0..0x10FFFF
+    minus surrogates): utf8_from_codepoints == chr(cp).encode('utf-8') AND
+    utf8_codepoints(enc) == [cp], value-exact → 0 MISMATCH. Every reject path
+    (overlong-2 C0 80, overlong-3 E0 80 80, surrogate ED A0 80, >max
+    F4 90 80 80, truncated, lone-continuation, bad-lead F5) fires correctly.
+
+  · stats/ks_two_sample.hexa — ks_two_sample_D merge-sweep vs a brute-force
+    reference D = max_x|F_n(x)-G_m(x)| over the union of sample points, with
+    SMALL integer ranges to FORCE heavy ties (n,m∈[1,8], values 0..4):
+    20,000 random trials → 0 MISMATCH. Tie-consumption, both tail loops, and
+    supremum at the right-continuous step boundary all correct (incl. the
+    one-sided heavy-tie case xs=[2,2,2] ys=[1,2,3] → D=1/3 exact).
+
+  · kernels/noc_sim/event_queue.hexa — heap sift_up/sift_down/pop ported and
+    stressed vs cpython heapq under INTERLEAVED push/pop (random mix, ops≤40,
+    5,000 trials) + full drain: pop sequence (time, id, seq tiebreak) is
+    bit-identical → 0 MISMATCH. The eq_pop nest (set_head(last) → drop_last →
+    sift_down(n-1)) uses the correct post-shrink heap size; no off-by-one.
+
+  · kernels/noc_sim/traffic.hexa — documented invariants verified against the
+    impl: tornado(0,0)=(3,3) [src0→27], tornado(7,7)=(2,2) [src63→18] for k=8,
+    shift=ceil(8/2)-1=3; tornado is a bijection over 0..63; transpose
+    (i,j)->(j,i) is its own inverse; uniform stays in 0..N-1 (the committed
+    self-test's 400-seed × 64-source = 25,600-draw range check would catch a
+    negative-LCG escape and passes). Self-tested + invariant-confirmed.
+
+  · codec/hex.hexa — hex_decode/hex_encode round-trip: encode(b) then
+    decode == b for ALL b∈0x00..0xFF (256/256), zero-pad correct (0x0F→"0f"),
+    mixed-case+colon decode (A:b→0xAB), and the docstring-promised reject
+    paths fire: odd-length input → [], non-hex digit → [].
+
+🟠 FLAGGED (observations — NOT bugs, NOT fixed):
+  · codec/utf8.hexa utf8_codepoints / event_queue eq_pop and the noc_sim
+    self-tests are all behaviorally correct; no flag warranted.
+  (No closure-side / self-* twin was touched or needed — all modules are
+   outside the self-host closure.)
+
+LOCK (verbatim-inlined leaf oracles — installed `hexa` resolves `use
+"stdlib/..."` to its STALE bundled copy, OP-87/88 lesson — so each leaf
+INLINES the audited body verbatim with no `use`, gated on the shipping
+`hexa run` /Users/mini/.hx/bin/hexa, hexa 0.1.0-dispatch, ran LOCAL):
+  · stdlib/codec/utf8_validate_op95_test.hexa     → __OP95_UTF8__  11/11 PASS
+    (ascii/2B/3B/4B valid + overlong-2/overlong-3/surrogate/max-cp/truncated/
+     lone-continuation/bad-lead all REJECT).
+  · stdlib/stats/ks_two_sample_op95_test.hexa     → __OP95_KS__     5/5  PASS
+    (identical→D=0, disjoint→D=1, textbook 1..5/4..8→D=0.6, symmetry, heavy-tie
+     xs=[2,2,2] ys=[1,2,3]→D=1/3).
+  · stdlib/codec/hex_roundtrip_op95_test.hexa     → __OP95_HEX__    7/7  PASS
+    (enc-ab/zero-pad, dec mixed-case+colon, odd-reject, non-hex-reject, full
+     0x00-0xFF round-trip).
+All three confirmed against the Python differential (0 mismatch) — real locks,
+not tautologies.
+
+BYTE-EQ / FIXPOINT: ZERO compiler-closure (self/*) edits. Only NEW leaf tests
+under stdlib/codec + stdlib/stats + verdict + log. NO stdlib SOURCE changed
+(every audited module proven clean — no fix needed). Self-host fixpoint
+UNAFFECTED. 0 deletions (wipe_guard net-additive). LANE split honored (no
+net/string/text/path).
+
+TIER 🟢 (invariant-lock; honest g5 — no shipping bug, not fabricated; the
+strongest result is the EXHAUSTIVE utf8 clean: ~16.8M byte-sequences + 1.1M
+codepoints vs Python's strict decoder, 0 mismatch). $0 · 0-pod · NO GPU ·
+no vast · no foreign pod · no .tape · leak-0.

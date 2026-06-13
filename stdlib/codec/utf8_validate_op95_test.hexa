@@ -1,0 +1,63 @@
+// Verbatim-inlined leaf lock for stdlib/codec/utf8.hexa validation logic.
+// Bodies copied EXACTLY from the module (no stdlib import → stale-bundle-proof).
+fn _utf8_leading_size(b: int) -> int {
+    if b < 0x80 { return 1 }
+    if b < 0xC2 { return 0 }
+    if b < 0xE0 { return 2 }
+    if b < 0xF0 { return 3 }
+    if b < 0xF5 { return 4 }
+    return 0
+}
+fn _valid_seq(bs: [int]) -> bool {
+    let n = len(bs)
+    let mut i = 0
+    while i < n {
+        let b0 = bs[i]
+        let sz = _utf8_leading_size(b0)
+        if sz == 0 { return false }
+        if i + sz > n { return false }
+        let mut k = 1
+        while k < sz {
+            let bk = bs[i + k]
+            if bk < 0x80 || bk > 0xBF { return false }
+            k = k + 1
+        }
+        if sz >= 2 {
+            let b1 = bs[i + 1]
+            if sz == 3 && b0 == 0xE0 && b1 < 0xA0 { return false }
+            if sz == 3 && b0 == 0xED && b1 >= 0xA0 { return false }
+            if sz == 4 && b0 == 0xF0 && b1 < 0x90 { return false }
+            if sz == 4 && b0 == 0xF4 && b1 >= 0x90 { return false }
+        }
+        i = i + sz
+    }
+    return true
+}
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+    // valid: 'A'
+    total = total + 1; if _valid_seq([0x41]) { pass = pass + 1 } else { println("FAIL ascii") }
+    // valid: 2-byte é = C3 A9
+    total = total + 1; if _valid_seq([0xC3, 0xA9]) { pass = pass + 1 } else { println("FAIL 2byte") }
+    // valid: 3-byte € = E2 82 AC
+    total = total + 1; if _valid_seq([0xE2, 0x82, 0xAC]) { pass = pass + 1 } else { println("FAIL 3byte") }
+    // valid: 4-byte 😀 = F0 9F 98 80
+    total = total + 1; if _valid_seq([0xF0, 0x9F, 0x98, 0x80]) { pass = pass + 1 } else { println("FAIL 4byte") }
+    // INVALID: overlong 2-byte C0 80
+    total = total + 1; if !_valid_seq([0xC0, 0x80]) { pass = pass + 1 } else { println("FAIL overlong-2") }
+    // INVALID: overlong 3-byte E0 80 80
+    total = total + 1; if !_valid_seq([0xE0, 0x80, 0x80]) { pass = pass + 1 } else { println("FAIL overlong-3") }
+    // INVALID: surrogate U+D800 = ED A0 80
+    total = total + 1; if !_valid_seq([0xED, 0xA0, 0x80]) { pass = pass + 1 } else { println("FAIL surrogate") }
+    // INVALID: > U+10FFFF = F4 90 80 80
+    total = total + 1; if !_valid_seq([0xF4, 0x90, 0x80, 0x80]) { pass = pass + 1 } else { println("FAIL max-cp") }
+    // INVALID: truncated 3-byte (only 2 bytes present)
+    total = total + 1; if !_valid_seq([0xE2, 0x82]) { pass = pass + 1 } else { println("FAIL truncated") }
+    // INVALID: lone continuation 0x80
+    total = total + 1; if !_valid_seq([0x80]) { pass = pass + 1 } else { println("FAIL lone-cont") }
+    // INVALID: bad lead 0xF5
+    total = total + 1; if !_valid_seq([0xF5, 0x80, 0x80, 0x80]) { pass = pass + 1 } else { println("FAIL f5-lead") }
+    println("__OP95_UTF8__: " + str(pass) + "/" + str(total))
+    if pass == total { println("PASS") } else { println("FAILED"); exit(1) }
+}
