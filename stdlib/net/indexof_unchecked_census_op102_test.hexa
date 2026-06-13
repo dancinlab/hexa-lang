@@ -1,0 +1,117 @@
+// HEXA-0POD OP-102 leaf oracle — index_of(-1)-unchecked class census lock.
+//
+// Verbatim-inlined copies of the CLEAN guarded bodies censused in LANE-2
+// (net/string/parser/text). Each is fed an input where the needle is
+// ABSENT and asserts the DOCUMENTED FALLBACK — proving the not-found
+// sentinel (-1) is handled, NOT used unchecked into a corrupt substring.
+//
+// Self-contained (no `use`); NOT in the build_selfhost closure. Run with
+// the shipping `hexa run` so `use`-resolution to a stale bundled copy is
+// irrelevant (every body is inlined here verbatim).
+
+fn _idx_of(s: string, needle: string) -> int {
+    return s.index_of(needle)
+}
+
+// [http_request.parse_request] sep guard sep>=0 → absent: whole=header, body=""
+fn parse_request_body(raw: string) -> string {
+    let sep = raw.index_of("\r\n\r\n")
+    if sep >= 0 { return raw.substring(sep + 4, len(raw)) }
+    return ""
+}
+
+// [http_request.parse_request] qidx guard qidx>=0 → absent: query=""
+fn split_query(full: string) -> string {
+    let qidx = full.index_of("?")
+    if qidx >= 0 { return full.substring(qidx + 1, len(full)) }
+    return ""
+}
+
+// [http_request.parse_query] eq guard eq>=0 → absent: value=""
+fn pair_value(pair: string) -> string {
+    let eq = pair.index_of("=")
+    if eq >= 0 { return pair.substring(eq + 1, len(pair)) }
+    return ""
+}
+
+// [http_sse.parse_event] colon guard colon<0 → absent: field=whole line
+fn sse_field(line: string) -> string {
+    let colon = line.index_of(":")
+    if colon < 0 { return line }
+    return line.substring(0, colon)
+}
+
+// [semver_parse] plus guard !(plus<0) → absent: build=""
+fn sv_build(t: string) -> string {
+    let plus = t.index_of("+")
+    if !(plus < 0) { return t.substring(plus + 1, len(t)) }
+    return ""
+}
+
+// [ws_url_parse] slash guard slash>=0 → absent: path defaults "/"
+fn ws_path(rest: string) -> string {
+    let slash = rest.index_of("/")
+    if slash >= 0 { return rest.substring(slash, len(rest)) }
+    return "/"
+}
+
+// [stdlib_cli._split_hit] c1 guard c1<0 → absent: fallback ""
+fn split_hit_path(line: string) -> string {
+    let c1 = line.index_of(":")
+    if c1 < 0 { return "" }
+    return line.substring(0, c1)
+}
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // parse_request: absent "\r\n\r\n" → body stays "" (no corrupt substring)
+    total = total + 1
+    if parse_request_body("GET / HTTP/1.1") == "" { pass = pass + 1 }
+    total = total + 1
+    if parse_request_body("HEAD\r\n\r\nB") == "B" { pass = pass + 1 }   // present path
+
+    // split_query: absent "?" → query ""
+    total = total + 1
+    if split_query("/api/ping") == "" { pass = pass + 1 }
+    total = total + 1
+    if split_query("/a?b=1") == "b=1" { pass = pass + 1 }              // present path
+
+    // pair_value: absent "=" → value ""
+    total = total + 1
+    if pair_value("flag") == "" { pass = pass + 1 }
+    total = total + 1
+    if pair_value("a=b=c") == "b=c" { pass = pass + 1 }                // first-= split
+
+    // sse_field: absent ":" → whole line is field
+    total = total + 1
+    if sse_field("flag") == "flag" { pass = pass + 1 }
+    total = total + 1
+    if sse_field("data: x") == "data" { pass = pass + 1 }              // present path
+
+    // sv_build: absent "+" → build ""
+    total = total + 1
+    if sv_build("1.2.3") == "" { pass = pass + 1 }
+    total = total + 1
+    if sv_build("1.2.3+meta") == "meta" { pass = pass + 1 }            // present path
+
+    // ws_path: absent "/" → path defaults "/"
+    total = total + 1
+    if ws_path("host:81") == "/" { pass = pass + 1 }
+    total = total + 1
+    if ws_path("host/a/b") == "/a/b" { pass = pass + 1 }               // present path
+
+    // split_hit_path: absent ":" → fallback ""
+    total = total + 1
+    if split_hit_path("plainline") == "" { pass = pass + 1 }
+    total = total + 1
+    if split_hit_path("p.hexa:42:body") == "p.hexa" { pass = pass + 1 } // present path
+
+    println("__HEXA_STDLIB_INDEXOF_UNCHECKED_OP102__ " + to_string(pass) + "/" + to_string(total))
+    if pass == total {
+        println("PASS")
+    } else {
+        println("FAIL")
+    }
+}

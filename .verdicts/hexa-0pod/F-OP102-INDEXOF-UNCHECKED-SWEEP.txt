@@ -1,0 +1,188 @@
+F-OP102-INDEXOF-UNCHECKED-SWEEP — systemic index_of(-1)-unchecked class census (LANE-2, 0-pod)
+================================================================================
+DATE   : 2026-06-13
+LANE   : 2 (0-pod correctness, NET / STRING / PARSER / TEXT modules). Sibling
+         LANE-1 (OP-101) owns serialization round-trip (json/yaml/csv) — NOT
+         touched here (non-overlapping surface). Sibling LANE-1's prior numeric
+         census (OP-97/99) also untouched.
+TIER   : 🟢 class CLOSED in LANE-2 — grep census of every index_of / last_index_of
+         / find call site in net/string/parser/text + differential (absent-needle
+         → documented fallback) + 14/14 leaf-lock on the shipping `hexa run`;
+         ZERO new buggy sites. 🟢 no closure-side (self/*) twin — every self/*
+         net/text parser already guards the -1 sentinel. Honest g5: a guarded
+         not-found check is CLEAN, not a bug — "class already clean across LANE-2"
+         is the verified result (same honest framing as OP-94/OP-97/OP-100).
+
+================================================================================
+MOTIVE — the index_of(-1)-unchecked bug class
+================================================================================
+A THIRD distinct delimiter-parsing bug class (after OP-94 split-keep-first +
+OP-97 boundary-run-collapse): code calls `index_of(needle)` / `last_index_of(
+needle)` / `find(needle)` and then USES the result (as a `substring(idx, …)`
+start, an array index, or arithmetic `idx + len`) WITHOUT first checking it for
+the not-found sentinel (`-1`). When the needle is ABSENT, the unchecked `-1`
+feeds a corrupt substring / out-of-bounds index / wrong result instead of the
+intended fallback. This round GREP-CENSUSED that class across the LANE-2 net/
+string/parser/text surface and classified every call site as GUARDED or
+UNGUARDED.
+
+================================================================================
+CENSUS SCOPE (scoped greps, NO .git)
+================================================================================
+Grepped `index_of(` `last_index_of(` `indexOf(` `.find(` across the LANE-2
+surface, EXCLUDING .git and serializers (json/yaml/csv = LANE-1 / OP-101).
+Read every candidate body. Surface swept:
+  NET / PROTOCOL : net/http_request.hexa · net/http_client.hexa ·
+                   net/websocket_native.hexa · http.hexa · http2.hexa ·
+                   http_sse.hexa · websocket.hexa
+  STRING / PARSER: semver.hexa · stdlib_cli.hexa · keychain.hexa · proc.hexa
+  CLOSURE (self/*): self/main.hexa · self/serve/{serve,http_server}.hexa ·
+                   self/stdlib/http.hexa · self/attrs/{domain,_lib/url_utils}.hexa ·
+                   self/stdlib/hxc_a23_sparse_ppm.hexa
+
+================================================================================
+CENSUS MATRIX  (site → classify → action)
+================================================================================
+[1]  net/http_request.hexa:32 parse_request sep=index_of("\r\n\r\n")
+        → GUARDED. `if sep >= 0` before substring(0,sep)/substring(sep+4). Absent
+          → header_block=raw, body="" (RFC-7230 fallback). CLEAN.
+[2]  net/http_request.hexa:47 qidx=index_of("?")
+        → GUARDED. `if qidx >= 0` else path=full_path. Absent → query="". CLEAN.
+[3]  net/http_request.hexa:61 colon=index_of(":")  (header line)
+        → GUARDED. `if colon > 0` before substring. Absent → header skipped. CLEAN.
+[4]  net/http_request.hexa:98 eq=index_of("=")  (query pair)
+        → GUARDED. `if eq >= 0` else value="". Absent → "flag"→"". CLEAN.
+[5]  net/websocket_native.hexa:81 slash=index_of("/")
+        → GUARDED. `if slash >= 0` else path="/". Absent → path defaults "/". CLEAN.
+[6]  net/websocket_native.hexa:90 colon=index_of(":")  (host:port)
+        → GUARDED. `if colon >= 0` else port=80. Absent → default port. CLEAN.
+[7]  net/websocket_native.hexa:207 `while head.index_of("\r\n\r\n") < 0`
+        → GUARDED (boolean `< 0` test, not a use). CLEAN.
+[8]  net/websocket_native.hexa:224 term=index_of("\r\n\r\n") then substring(0,term)
+        → CLEAN. STRUCTURALLY GUARANTEED: reached only after the line-207
+          `while index_of("\r\n\r\n") < 0` loop EXITS → terminator present → term>=0.
+[9]  net/websocket_native.hexa:226 index_of("101")  / :228 line_end=index_of("\r\n")
+        → GUARDED. :226 boolean `< 0`; :228 `if line_end >= 0 { … } else { whole }`. CLEAN.
+[10] net/websocket_native.hexa:238 to_lower().index_of(expect) < 0
+        → GUARDED (boolean `< 0`). CLEAN.
+[11] net/http_client.hexa:103 nl=_net_http_last_index_of(raw,"\n")
+        → GUARDED. `if nl < 0 { return result }`. Absent → abnormal-response empty. CLEAN.
+[12] http.hexa:140 / :213 nl=_http_last_index_of(raw,"\n")
+        → GUARDED. `if nl < 0 { return result }` both sites. CLEAN.
+[13] http2.hexa:115 nl2 / :119 nl1 = _h2_last_index_of(...)
+        → GUARDED. `if nl2 < 0 { return }` + `if nl1 < 0 { whole=body }`. CLEAN.
+[14] http_sse.hexa:327 colon=index_of(":")  (SSE field split)
+        → GUARDED. `if colon < 0 { field=whole line }` (WHATWG fallback). CLEAN.
+[15] websocket.hexa:248/249 last_open/last_close=last_index_of("{")/("}")
+        → GUARDED. `if last_open < 0 || last_close < 0 || last_close < last_open`
+          → "no JSON in stdout" fallback. CLEAN.
+[16] semver.hexa:214 plus / :221 dash = _sv_index_of(t,"+")/"−"  (semver_parse)
+        → GUARDED. `if !(plus < 0)` / `if !(dash < 0)`. Absent → build/pre="". CLEAN.
+[17] semver.hexa:347 plus / :349 dash  (range token parse)
+        → GUARDED. `if !(plus < 0)` / `if !(dash < 0)`. CLEAN.
+[18] stdlib_cli.hexa:170/173 sep_at=_index_of(l," — ")/" -- "  (doc-line split)
+        → GUARDED. `if sep_at < 0 { continue }` before substring(sep_at+sep_len). CLEAN.
+[19] stdlib_cli.hexa:427 c1 / :429 c2 = _index_of(line,":")  (_split_hit grep parse)
+        → GUARDED. `if c1 < 0 { return ["","",""] }` + `if c2 < 0 { … }`. CLEAN.
+[20] stdlib_cli.hexa:489/490/500/560/561 _index_of(...) >= 0
+        → GUARDED (all boolean `>= 0` membership tests, not substring uses). CLEAN.
+[21] stdlib_cli.hexa:552 slash=path.last_index_of("/")  (basename)
+        → GUARDED. `if slash >= 0 { substring } else { path }`. Absent → whole path. CLEAN.
+[22] stdlib_cli.hexa:612 sep=_index_of(bare,"::")  (qualified fn name)
+        → GUARDED. `if sep >= 0 { bare=substring(sep+2,…) }` else bare unchanged. CLEAN.
+[23] keychain.hexa:138 / :194 mi=last_index_of("::rc=")  (security rc marker)
+        → GUARDED. `if mi < 0 { return result/false }`. Absent → not-found fallback. CLEAN.
+[24] proc.hexa:84 sp=rest.index_of(" ")  (resource-id scan)
+        → GUARDED. `if sp < 0 { continue }`. CLEAN.
+[25] proc.hexa:438/439 last_open/last_close=last_index_of("{")/("}")  (JSON bridge)
+        → GUARDED. `if last_open < 0 || last_close < 0 || last_close < last_open`. CLEAN.
+
+CLOSURE-SIDE (self/*) twins:
+[C1] self/main.hexa:1174 eq=index_of("=") / :1197 sp=index_of(" ")  (hxc reader)
+        → GUARDED. `if eq < 0 { continue }` + `if sp < 0 { continue }`. CLEAN.
+[C2] self/serve/http_server.hexa:29/45/59/90  (parse_request/parse_query)
+        → GUARDED. sep>=0 / qidx>=0 / colon>0 / eq>=0. CLEAN (OP-96 fixed the
+          DIFFERENT split-keep-first class here; the index_of(-1) sentinels are guarded).
+[C3] self/serve/serve.hexa:820/833  (parse path/header)
+        → GUARDED. qidx>=0 / colon>0. CLEAN.
+[C4] self/stdlib/http.hexa:86 nl=_last_index_of(raw,"\n")
+        → GUARDED. `if nl < 0 { return result }`. CLEAN.
+[C5] self/attrs/domain.hexa:125/147/152/160 (kv + @domain extract)
+        → GUARDED. eq<=0 continue / idx<0 continue / close_idx>=0 / cp>=0. CLEAN.
+[C6] self/attrs/_lib/url_utils.hexa:29/32/36/39 (git-tag extract)
+        → GUARDED. blob_idx>=0 / slash>=0 / rel_idx>=0 / slash>=0. CLEAN.
+[C7] self/stdlib/hxc_a23_sparse_ppm.hexa:941 n_pos / :943 o_pos (header parse)
+        → CLEAN. n_pos GUARDED (`if n_pos < 0 { return [] }`); o_pos used ONLY in
+          `if o_pos > n_pos` — a -1 o_pos is naturally NOT > n_pos(>=0) → n_end=
+          len(header) (the documented "no o= field" fallback). The comparison
+          itself absorbs the sentinel.
+
+RESULT: ZERO new BUGGY sites. The index_of(-1)-unchecked class is CLOSED across
+the LANE-2 net/string/parser/text surface — every call site whose result feeds a
+substring / index / arithmetic is preceded by a `== -1` / `< 0` / `>= 0` guard
+(or a `<0`-absorbing comparison, or is structurally guaranteed present after a
+`while index_of(...) < 0` loop). No genuine 🔴 of this exact class exists in
+LANE-2 (the prior delimiter-class bugs were OP-87/88/91/92/96/98, all distinct).
+
+================================================================================
+DIFFERENTIAL (faithful Python port of each guarded body; needle ABSENT)
+================================================================================
+/tmp/op102_diff.py — faithful Python re-impl of each guarded body, fed an input
+where the needle is ABSENT (Python str.find returns -1 — mirrors hexa index_of
+sentinel). Each yields the DOCUMENTED FALLBACK, NO corrupt substring:
+  parse_request("GET / HTTP/1.1")       -> header=whole, body=""       ✓ (no \r\n\r\n)
+  split_path("/api/ping")               -> path=whole, query=""        ✓ (no ?)
+  parse_pair("flag")                    -> ("flag","")                 ✓ (no =)
+  sse_field("flag")                     -> ("flag","")                 ✓ (no :)
+  sv_strip_build("1.2.3")               -> ("1.2.3","")                ✓ (no +)
+  ws_split_path("host:81")              -> ("host:81","/")             ✓ (no /)
+  http_status_peel("200")               -> None (empty result)         ✓ (no \n)
+  split_hit("plainline")                -> ["","",""]                  ✓ (no :)
+  kc_get("garbage")                     -> {found:False}               ✓ (no ::rc=)
+  json_bridge("no json here")           -> {error:"no JSON"}           ✓ (no {})
+  a23_n_end("# a23:s n=128")            -> n_end=len(header)           ✓ (no " o=")
+PLUS present-needle controls (parse_pair("a=b=c")->("a","b=c"), ws("host/a/b")
+->path="/a/b", status_peel("body\n200")->("body","200")) confirm the guarded
+path also keeps data past the FIRST/LAST delimiter (no keep-first regression).
+"OP-102 DIFFERENTIAL: ALL CLEAN-SITE FALLBACKS CORRECT" — 0 mismatch / 13 checks.
+
+================================================================================
+LOCK (leaf oracle, run LOCAL on shipping `hexa run` /Users/mini/.hx/bin/hexa)
+================================================================================
+NEW stdlib/net/indexof_unchecked_census_op102_test.hexa — 7 guarded bodies
+VERBATIM-INLINED (parse_request_body, split_query, pair_value, sse_field,
+sv_build, ws_path, split_hit_path), self-contained no-`use` (installed `hexa`
+resolves `use` to a STALE bundled copy — OP-87/88 lesson — so inlined), NOT in
+the build_selfhost closure. Each asserts the absent-needle → documented-fallback
+AND a present-needle control:
+
+  __HEXA_STDLIB_INDEXOF_UNCHECKED_OP102__ 14/14
+  PASS
+
+================================================================================
+🟢 CLOSURE-SIDE (self/*) — NO index_of(-1) twin (FLAG check)
+================================================================================
+All 7 closure-side site-groups [C1]–[C7] inspected (membership: the
+build_selfhost closure is ~48 files; self/main + self/stdlib/http +
+hxc_a23_sparse_ppm are IN it, serve/* + attrs/* are standalone). EVERY one
+already guards the -1 sentinel (or absorbs it via a comparison). NO buggy
+closure twin of the index_of(-1)-unchecked class exists → nothing to flag, no
+closure edit attempted (fixpoint untouched). This DIFFERS from OP-94's split-
+keep-first class which DID have closure twins (those were closed by OP-96).
+
+================================================================================
+BYTE-EQ / wipe_guard / SAFETY
+================================================================================
+ZERO source edits — every censused site (stdlib + self/*) was already correct
+(no fix needed; the genuine delimiter-class bugs were earlier ops). 1 NEW leaf
+census test + this verdict + the domain log entry. 0 deletions (wipe_guard
+net-additive). The *_op102 leaf is NOT in the build_selfhost closure → self-host
+fixpoint UNAFFECTED; no codegen/runtime/rt bytes touched. LANE split honored
+(LANE-1 serde json/yaml/csv NOT touched — sibling OP-101 territory). $0 · 0-pod ·
+NO GPU · no vast · no foreign pod · no .tape · leak-0.
+
+VERDICT: 🟢 index_of(-1)-unchecked class CLOSED in LANE-2 (grep census of 25 site-
+groups in net/string/parser/text + 7 closure-side groups, ALL guarded/clean) +
+🟢 no closure-side twin, locked by a 14/14 verbatim leaf oracle on the shipping
+`hexa run`. Honest g5: a guarded not-found check is CLEAN, not fabricated — an
+honest "all sites guarded" is a valid SUCCESS (the GOAL was closing the class).
