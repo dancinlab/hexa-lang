@@ -24,7 +24,8 @@ use "stdlib/crypto/asn1_der"
 fn _dec(b: [int], off: int, n: int) -> int {
     let mut v = 0
     let mut i = 0
-    while i < n {
+    // Guard the ASCII-digit read against a truncated time TLV (OP-105).
+    while i < n && off + i < len(b) {
         v = v * 10 + ((b[off + i] - 0x30) & 0xFF)
         i = i + 1
     }

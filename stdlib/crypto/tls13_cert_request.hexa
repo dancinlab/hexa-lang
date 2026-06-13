@@ -45,7 +45,8 @@ pub fn tls13_cr_context(body: [int]) -> [int] {
     let n = tls13_cr_context_length(body)
     let mut c: [int] = []
     let mut i = 0
-    while i < n { c.push(body[1 + i]); i = i + 1 }
+    // Guard the wire-declared context length against a truncated body (OP-105).
+    while i < n && 1 + i < len(body) { c.push(body[1 + i]); i = i + 1 }
     return c
 }
 

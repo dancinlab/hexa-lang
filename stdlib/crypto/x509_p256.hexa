@@ -28,7 +28,7 @@ fn _norm32(b: [int], from: int, n: int) -> [int] {
     // skip leading 0x00 bytes
     let mut start = from
     let mut count = n
-    while count > 0 && (b[start] & 0xFF) == 0 {
+    while count > 0 && start < len(b) && (b[start] & 0xFF) == 0 {
         start = start + 1
         count = count - 1
     }
@@ -37,7 +37,8 @@ fn _norm32(b: [int], from: int, n: int) -> [int] {
     let mut i = 0
     while i < pad { out.push(0); i = i + 1 }
     i = 0
-    while i < count { out.push(b[start + i] & 0xFF); i = i + 1 }
+    // Guard the wire-declared coordinate length against a truncated buffer (OP-105).
+    while i < count && start + i < len(b) { out.push(b[start + i] & 0xFF); i = i + 1 }
     return out
 }
 

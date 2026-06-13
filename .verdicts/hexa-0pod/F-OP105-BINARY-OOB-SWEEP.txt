@@ -1,0 +1,143 @@
+F-OP105-BINARY-OOB-SWEEP — systemic OOB-read census of the whole
+                           length-prefixed/framed-binary parser family
+                           (LANE-2, 0-pod) — generalizes OP-104
+================================================================================
+DATE   : 2026-06-13
+LANE   : 2 (0-pod correctness / security). Direct follow-on to OP-104: OP-104
+         fixed ONE cert_authorities OOB; OP-105 censuses the WHOLE family
+         (TLS13 handshake/extension parsers, ASN.1 DER, X.509, http2,
+         websocket) for the same unguarded-inner-read class. Axis b
+         (error-propagation/robustness) — SECURITY-relevant: an OOB read on
+         untrusted wire bytes. Sibling LANE-1 (data/numeric slices) untouched —
+         non-overlapping surface.
+TIER   : 🔴 ×9 → FIXED (real shipping OOB in 9 files) + 🟢 GUARDED census
+         documented (the parsers that already guard correctly — key_share,
+         alpn, websocket, p256, the OP-104 2-byte-pair extensions). Honest g5:
+         verbatim VM repros of the faults below; each fix is minimal
+         (an inner `&& base + i < len(buf)` guard, net-additive) mirroring
+         OP-104/alpn. CLOSES the length-prefixed-binary OOB-read class.
+
+================================================================================
+MOTIVE — the unguarded-inner-read bug class (security)
+================================================================================
+A length-prefixed binary parser reads a LENGTH field from untrusted wire bytes
+then copies that many DATA bytes. The trap: the copy loop trusts the declared
+length WITHOUT checking it fits the buffer. On a truncated/malicious frame the
+loop reads past the array end — a runtime OOB fault (or, in a non-bounds-checked
+runtime, memory disclosure). The correct pattern guards EVERY inner byte read
+against len(buffer), yielding a graceful short/empty value. OP-104 fixed one
+such site (cert_authorities). This round sweeps the entire family.
+
+================================================================================
+CENSUS MATRIX (15 inner-read sites across the family)
+================================================================================
+PARSER (function · file)                                         CLASS    ACTION
+--------------------------------------------------------------- -------- -------
+tls13_ch_random (32B body[o+2+i]) · client_hello_parse           UNGUARD  FIXED
+tls13_ch_session_id (sl body[o+35+i]) · client_hello_parse       UNGUARD  FIXED
+tls13_ch_cipher_suites (cs_bytes body[cso+i]) · client_hello_parse UNGUARD FIXED
+tls13_sh_random (32B body[o+2+i]) · server_hello                  UNGUARD  FIXED
+tls13_sh_session_id (sl body[o+35+i]) · server_hello             UNGUARD  FIXED
+tls13_cr_context (n body[1+i]) · cert_request                    UNGUARD  FIXED
+tls13_cert_entry_data (u24 n body[o+3+i]) · certificate          UNGUARD  FIXED
+tls13_nst_nonce (nl body[9+i]) · new_session_ticket             UNGUARD  FIXED
+tls13_nst_ticket (u16 tl body[to+2+i]) · new_session_ticket      UNGUARD  FIXED
+der_value_len long-form (nbytes b[o+2+i]) · asn1_der             UNGUARD  FIXED
+der_int (vlen b[voff+i]) · asn1_der                              UNGUARD  FIXED
+der_oid_str (vlen + INNER base-128 continuation) · asn1_der      UNGUARD  FIXED
+x509_rsa_modulus (count spki[start+i]) + exponent (e_len) · x509_rsa UNGUARD FIXED
+x509_p256 coord-copy (count b[start+i]) · x509_p256              UNGUARD  FIXED
+x509_validity _dec (n b[off+i] ASCII time) · x509_validity       UNGUARD  FIXED
+--------------------------------------------------------------- -------- -------
+tls13_alpn_parse (inner j<nb && i+j<len) · tls13_alpn             GUARDED  note
+tls13_key_share_parse_x25519 (len(ext_value)<4+n guard) · key_share GUARDED note
+ws_recv_native (_ws_fill+len checks before unmask) · websocket    GUARDED  note
+ws_frame_roundtrip_for_test (locally-built frame, trusted) · ws   N/A-TRUST note
+x509_p256_pubkey/sig fixed-64B (len!=64 guard) · x509_p256        GUARDED  note
+x509_validity_contains d[6+i] (internally-built 12-elem) · x509_validity GUARDED note
+sig_algs/supported_groups/cert_compression/cookie (2-byte pair) · OP-104 GUARDED note
+http2.hexa (curl TEXT-output parser — no binary frame/HPACK loop)  OUT-OF-SCOPE skip
+
+Note on the INNER continuation loop (der_oid_str): the base-128 OID arc loop
+`while more == 1 { ... if (by & 0x80) == 0 { more = 0 } }` had NO buffer bound —
+a truncated OID whose final byte still sets the continuation high bit runs the
+inner loop past the buffer end. The fix bounds it: `while more == 1 && voff + i
+< len(b)`.
+
+================================================================================
+VERBATIM PRE-FIX REPROS (shipping `hexa run` — the buggy bodies standalone)
+================================================================================
+[1] tls13_ch_session_id — body[34]=32 declared, buffer len 35:
+      $ hexa run /tmp/op105_repro_chsid.hexa
+      index 35 out of bounds (len 35)
+
+[2] der_value_len long-form — [0x30, 0x82, 0x01] (0x82 declares 2 length
+    bytes, only 1 present, buffer len 3):
+      $ hexa run /tmp/op105_pre_der.hexa
+      index 3 out of bounds (len 3)
+
+[3] der_oid_str inner continuation — [0x2a, 0x86] vlen=3 (final byte 0x86 has
+    the continuation high bit set, no next byte, buffer len 2):
+      $ hexa run /tmp/op105_pre_oid.hexa
+      index 2 out of bounds (len 2)
+
+[4] tls13_cr_context — [4, 0xAA, 0xBB] (declared context len 4, only 2 present,
+    buffer len 3):
+      $ hexa run /tmp/op105_pre_cr.hexa
+      index 3 out of bounds (len 3)
+
+Each is a HARD VM FAULT on untrusted-wire input.
+
+================================================================================
+FIX (minimal, net-additive — mirrors OP-104 / alpn)
+================================================================================
+Each inner copy/scan loop gains the buffer-end guard
+  while i < declared && base + i < len(buf) { ... }
+so a truncated/malicious declared length yields a graceful SHORT/empty value,
+never an OOB read. Additional leading guards: der_oid_str gets
+`if voff >= len(b) { return "" }` for its `first` byte; der_int gets
+`voff < len(b)` on the sign-bit read; x509_rsa/x509_p256 add `start < len(...)`
+to the strip-leading-zero scans. 9 source files touched, all closure-OUT.
+
+POST-FIX CROSS-CHECK (shipping `hexa run`, fixed bodies):
+  - tls13_ch_session_id on the truncated input → 0 bytes (graceful); on a
+    well-formed 5-byte session_id → [100,101,102,103,104] exact.
+  - der_value_len on [0x30,0x82,0x01] → 0x01 (partial, no fault); well-formed
+    [0x30,0x82,0x01,0x00] → 256; short form [0x04,0x05] → 5.
+  - der_oid_str on [0x2a,0x86] vlen=3 → no fault; well-formed RSA prefix
+    [0x2a,0x86,0x48,0x86,0xf7,0x0d] → "1.2.840.113549" exact.
+  - tls13_cr_context on [4,0xAA,0xBB] → [0xAA,0xBB] (graceful 2 bytes).
+
+================================================================================
+LOCK (hermetic regression guard) + negative control
+================================================================================
+NEW stdlib/crypto/tls13_x509_oob_op105_test.hexa — HERMETIC (no `use`;
+ch_session_id / cr_context / nst_nonce / der_value_len / der_oid_str bodies
+VERBATIM-INLINED post-fix — stale-bundle dodge OP-87/88), closure-OUT. Asserts
+each truncated→graceful-short/empty + well-formed-roundtrip-exact + empty/
+undersized negative controls:
+  $ hexa run stdlib/crypto/tls13_x509_oob_op105_test.hexa
+  [tls13_x509_oob_op105_test] 12/12 asserts passed
+  __HEXA_TLS13_X509_OOB_OP105__ PASS 12/12
+
+NOT a tautology — the pre-fix bodies run standalone on the same truncated
+inputs FAULT verbatim (the four repros above). Existing tests unaffected by the
+guards:
+  $ hexa run stdlib/crypto/asn1_der_test.hexa        → asn1_der self-test: 21/21 PASS
+  $ hexa run stdlib/crypto/tls13_cert_authorities_oob_op104_test.hexa → 7/7 PASS
+
+================================================================================
+CLOSURE / BYTE-EQ / GUARDS
+================================================================================
+CLOSURE (OP-96 method): grep compiler/ + self/ for crypto/tls13 | asn1_der |
+x509 → NONE imported by the build_selfhost (~48-file) closure → non-closure
+fix; cc-genN byte-eq UNAFFECTED, no gate needed.
+BYTE-EQ: 9 source files guarded (tls13_client_hello_parse, tls13_server_hello,
+tls13_cert_request, tls13_certificate, tls13_new_session_ticket, asn1_der,
+x509_rsa, x509_p256, x509_validity — ALL closure-OUT) + 1 NEW leaf test;
+net +39/-20 (every "deletion" is a modified guard line — NO logic removed →
+wipe_guard net-additive); fixpoint UNAFFECTED.
+LANE-2 only (binary parsers; LANE-1 = data/numeric slices — no overlap).
+RESULT: 🔴 ×9 FIXED + 🟢 GUARDED census documented. CLOSES the
+length-prefixed-binary OOB-read class.
+$0 · 0-pod · NO GPU · no vast · no foreign-pod · no .tape · leak-0.

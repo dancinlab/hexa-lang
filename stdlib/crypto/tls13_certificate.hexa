@@ -68,7 +68,8 @@ pub fn tls13_cert_entry_data(body: [int], o: int) -> [int] {
     let n = tls13_cert_entry_data_length(body, o)
     let mut d: [int] = []
     let mut i = 0
-    while i < n { d.push(body[o + 3 + i]); i = i + 1 }
+    // Guard the wire-declared (u24) entry data length against a truncated body (OP-105).
+    while i < n && o + 3 + i < len(body) { d.push(body[o + 3 + i]); i = i + 1 }
     return d
 }
 
