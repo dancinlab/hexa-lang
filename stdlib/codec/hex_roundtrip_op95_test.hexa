@@ -1,0 +1,67 @@
+// Verbatim-inlined leaf lock for stdlib/codec/hex.hexa decode/encode round-trip + guards.
+fn _hex_nibble(c: int) -> int {
+    if c >= 48 && c <= 57  { return c - 48 }
+    if c >= 65 && c <= 70  { return c - 65 + 10 }
+    if c >= 97 && c <= 102 { return c - 97 + 10 }
+    return -1
+}
+let _HEX_LO = "0123456789abcdef"
+fn encode_one(b: int) -> [int] {
+    let bb = b & 0xFF
+    return [_HEX_LO.byte_at(bb / 16), _HEX_LO.byte_at(bb % 16)]
+}
+// decode bytes from a list of nibble source codes (skip ws/colon), -1 marker = bad
+fn decode_codes(codes: [int]) -> [int] {
+    let mut nibbles: [int] = []
+    let mut i = 0
+    while i < len(codes) {
+        let c = codes[i]
+        if c == 9 || c == 10 || c == 13 || c == 32 || c == 58 {
+        } else {
+            let v = _hex_nibble(c)
+            if v < 0 { return [-1] }
+            nibbles.push(v)
+        }
+        i = i + 1
+    }
+    let m = len(nibbles)
+    if m % 2 != 0 { return [-1] }
+    let mut out: [int] = []
+    let mut j = 0
+    while j < m { out.push((nibbles[j] * 16) + nibbles[j+1]) j = j + 2 }
+    return out
+}
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+    // encode 0xAB → "ab" = [97,98]
+    let e = encode_one(0xAB)
+    total=total+1; if e[0]==97 && e[1]==98 { pass=pass+1 } else { println("FAIL enc-ab") }
+    // encode 0x0F → "0f" (zero-pad)
+    let e2 = encode_one(0x0F)
+    total=total+1; if e2[0]==48 && e2[1]==102 { pass=pass+1 } else { println("FAIL enc-pad") }
+    // decode "ab" (97,98) → [171]
+    let d = decode_codes([97,98])
+    total=total+1; if len(d)==1 && d[0]==171 { pass=pass+1 } else { println("FAIL dec-ab") }
+    // decode mixed-case + colon "A:b" → [171]
+    let d2 = decode_codes([65,58,98])
+    total=total+1; if len(d2)==1 && d2[0]==171 { pass=pass+1 } else { println("FAIL dec-colon") }
+    // ODD length "abc" → [-1] reject
+    let d3 = decode_codes([97,98,99])
+    total=total+1; if len(d3)==1 && d3[0]==(-1) { pass=pass+1 } else { println("FAIL dec-odd") }
+    // non-hex 'g' → reject
+    let d4 = decode_codes([103,103])
+    total=total+1; if len(d4)==1 && d4[0]==(-1) { pass=pass+1 } else { println("FAIL dec-nonhex") }
+    // round-trip 0x00..0xFF: encode then decode == original
+    let mut rt_ok = 1
+    let mut b = 0
+    while b < 256 {
+        let enc = encode_one(b)
+        let dec = decode_codes(enc)
+        if len(dec) != 1 || dec[0] != b { rt_ok = 0 }
+        b = b + 1
+    }
+    total=total+1; if rt_ok==1 { pass=pass+1 } else { println("FAIL roundtrip") }
+    println("__OP95_HEX__: " + str(pass) + "/" + str(total))
+    if pass == total { println("PASS") } else { println("FAILED"); exit(1) }
+}
