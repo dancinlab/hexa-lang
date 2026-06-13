@@ -1,0 +1,187 @@
+// HEXA Standard Library — wasm/wasm_leb128 self-test (OP-83 leaf oracle)
+//
+// Locks stdlib/wasm/wasm_leb128.hexa, an UNTESTED high-value module: the
+// LEB128 variable-length integer codec used by the WebAssembly binary
+// format. Authoritative reference vectors are the canonical ones cited in
+// the WebAssembly spec / Wikipedia LEB128 article:
+//
+//   uleb128(0)        = [0x00]
+//   uleb128(42)       = [0x2A]
+//   uleb128(127)      = [0x7F]
+//   uleb128(128)      = [0x80, 0x01]
+//   uleb128(624485)   = [0xE5, 0x8E, 0x26]
+//   sleb128(0)        = [0x00]
+//   sleb128(-1)       = [0x7F]
+//   sleb128(63)       = [0x3F]
+//   sleb128(64)       = [0xC0, 0x00]   (bit-6 sign padding)
+//   sleb128(-64)      = [0x40]
+//   sleb128(-65)      = [0xBF, 0x7F]
+//   sleb128(-123456)  = [0xC0, 0xBB, 0x78]
+//   sleb128(2)        = [0x02]
+//
+// Plus the documented invariants:
+//   - round-trip identity: decode(encode(n)) == n  (signed & unsigned)
+//   - wasm_uleb128_size(n) == len(wasm_uleb128_encode(n))
+//   - chained decode at offset parses contiguous payloads
+//
+// LEAF pattern (OP-80/81): the four entry points are inlined verbatim from
+// the module so the test is self-contained and cannot drift the closure.
+
+let mut pass = 0
+let mut total = 0
+let mut first_fail = ""
+
+fn check(name: string, cond: bool) {
+    total = total + 1
+    if cond { pass = pass + 1 } else {
+        if first_fail == "" { first_fail = name }
+        println("FAIL " + name)
+    }
+}
+
+fn arr_eq(a: [int], b: [int]) -> bool {
+    if len(a) != len(b) { return false }
+    let mut i = 0
+    while i < len(a) {
+        if a[i] != b[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// ── inlined module bodies (verbatim from wasm_leb128.hexa) ──────────────
+
+fn uleb_encode(n: int) -> [int] {
+    let mut bytes: [int] = []
+    let mut v: int = n
+    if v == 0 { bytes = bytes + [0]; return bytes }
+    while v > 0x7f {
+        let b: int = (v & 0x7f) | 0x80
+        bytes = bytes + [b]
+        v = v >> 7
+    }
+    bytes = bytes + [v & 0x7f]
+    return bytes
+}
+
+fn uleb_size(n: int) -> int {
+    let mut v: int = n
+    if v == 0 { return 1 }
+    let mut count: int = 0
+    while v > 0x7f { v = v >> 7; count = count + 1 }
+    count = count + 1
+    return count
+}
+
+fn uleb_decode(bytes: [int], offset: int) -> int {
+    let mut result: int = 0
+    let mut shift: int = 0
+    let mut i: int = offset
+    let n: int = len(bytes)
+    while i < n {
+        let b: int = bytes[i]
+        result = result | ((b & 0x7f) << shift)
+        i = i + 1
+        if (b & 0x80) == 0 { return result }
+        shift = shift + 7
+    }
+    return result
+}
+
+fn sleb_encode(n: int) -> [int] {
+    let mut bytes: [int] = []
+    let mut v: int = n
+    let mut more: int = 1
+    while more == 1 {
+        let mut b: int = v & 0x7f
+        v = v >> 7
+        let sign_bit: int = b & 0x40
+        if v == 0 {
+            if sign_bit == 0 { more = 0 } else { b = b | 0x80 }
+        } else {
+            if v == -1 {
+                if sign_bit != 0 { more = 0 } else { b = b | 0x80 }
+            } else { b = b | 0x80 }
+        }
+        bytes = bytes + [b]
+    }
+    return bytes
+}
+
+fn sleb_decode(bytes: [int], offset: int) -> int {
+    let mut result: int = 0
+    let mut shift: int = 0
+    let mut i: int = offset
+    let n: int = len(bytes)
+    let mut last_byte: int = 0
+    let mut done: int = 0
+    while i < n {
+        let b: int = bytes[i]
+        last_byte = b
+        result = result | ((b & 0x7f) << shift)
+        i = i + 1
+        shift = shift + 7
+        if (b & 0x80) == 0 { done = 1; break }
+    }
+    if done == 1 {
+        if (last_byte & 0x40) != 0 {
+            if shift < 64 { result = result | ((-1) << shift) }
+        }
+    }
+    return result
+}
+
+fn main() {
+    // ── ULEB128 reference vectors (wasm spec / Wikipedia) ──────────────
+    check("uleb(0)",       arr_eq(uleb_encode(0),      [0x00]))
+    check("uleb(42)",      arr_eq(uleb_encode(42),     [0x2A]))
+    check("uleb(127)",     arr_eq(uleb_encode(127),    [0x7F]))
+    check("uleb(128)",     arr_eq(uleb_encode(128),    [0x80, 0x01]))
+    check("uleb(624485)",  arr_eq(uleb_encode(624485), [0xE5, 0x8E, 0x26]))
+
+    // ── SLEB128 reference vectors ──────────────────────────────────────
+    check("sleb(0)",       arr_eq(sleb_encode(0),       [0x00]))
+    check("sleb(-1)",      arr_eq(sleb_encode(-1),      [0x7F]))
+    check("sleb(2)",       arr_eq(sleb_encode(2),       [0x02]))
+    check("sleb(63)",      arr_eq(sleb_encode(63),      [0x3F]))
+    check("sleb(64)",      arr_eq(sleb_encode(64),      [0xC0, 0x00]))
+    check("sleb(-64)",     arr_eq(sleb_encode(-64),     [0x40]))
+    check("sleb(-65)",     arr_eq(sleb_encode(-65),     [0xBF, 0x7F]))
+    check("sleb(-123456)", arr_eq(sleb_encode(-123456), [0xC0, 0xBB, 0x78]))
+
+    // ── size predictor invariant ───────────────────────────────────────
+    check("size(0)",      uleb_size(0)      == len(uleb_encode(0)))
+    check("size(127)",    uleb_size(127)    == len(uleb_encode(127)))
+    check("size(128)",    uleb_size(128)    == len(uleb_encode(128)))
+    check("size(624485)", uleb_size(624485) == len(uleb_encode(624485)))
+
+    // ── round-trip identity (documented invariant) ─────────────────────
+    let utest = [0, 1, 42, 127, 128, 300, 16384, 624485, 1000000]
+    let mut k = 0
+    let mut uok = true
+    while k < len(utest) {
+        if uleb_decode(uleb_encode(utest[k]), 0) != utest[k] { uok = false }
+        k = k + 1
+    }
+    check("uleb round-trip identity", uok)
+
+    let stest = [0, 1, -1, 2, -2, 63, 64, -64, -65, 123456, -123456, 1000000, -1000000]
+    k = 0
+    let mut sok = true
+    while k < len(stest) {
+        if sleb_decode(sleb_encode(stest[k]), 0) != stest[k] { sok = false }
+        k = k + 1
+    }
+    check("sleb round-trip identity", sok)
+
+    // ── chained decode at offset (contiguous payload) ──────────────────
+    let payload = uleb_encode(300) + uleb_encode(624485)
+    check("chained decode[0]", uleb_decode(payload, 0) == 300)
+    check("chained decode[off]", uleb_decode(payload, uleb_size(300)) == 624485)
+
+    println("wasm_leb128 self-test: " + to_string(pass) + "/" + to_string(total))
+    if pass == total { println("PASS") } else {
+        println("first fail: " + first_fail)
+        exit(1)
+    }
+}

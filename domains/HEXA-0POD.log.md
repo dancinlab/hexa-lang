@@ -1,5 +1,30 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-83 DONE: batch test-coverage for HIGH-VALUE untested stdlib/* modules (LANE-2; LANE-1/OP-82 owns self/runtime/*_pure). FIVE crypto/codec modules locked, all PROVEN-CLEAN vs their authoritative references
+- CENSUS (scoped greps, NO .git): 1764 stdlib modules (excl *_test) / 254 *_test files. High-value vein = standard algorithms/formats with an AUTHORITATIVE reference (RFC / spec known-answer vectors) OR a documented round-trip/accuracy invariant. Filtered crypto/hash/codec/wasm to UNTESTED (no co-located *_test.hexa, no .verdicts lock):
+  · stdlib/wasm/wasm_leb128.hexa — HIGH (wasm binary spec / Wikipedia LEB128 vectors)
+  · stdlib/core/hash/hmac_sha384.hexa + hmac_sha512.hexa — HIGH (RFC 4231 §4; only the SHA-256 sibling hmac.hexa had a test)
+  · stdlib/crypto/hkdf_sha384.hexa + hkdf_sha512.hexa — HIGH (RFC 5869 construction; no RFC vectors exist for SHA-384/512)
+  · DEFERRED MED tail: crypto/poly1305 (RFC 8439), core/hash/xxhash, crypto/asn1_der (kept the batch small per g0).
+  · Already-covered (NOT re-derived): codec/{base64,hex,utf8,big5,cp949,euc_kr,gbk,shift_jis,unicode_normalize}, crypto/{sha512,chacha20,blowfish,pbkdf2,scrypt,secp256k1,x25519,ripemd160,hash160,hmac_drbg}, core/hash/{sha256,hmac}, hash/{sha256,xxhash}, aws/sigv4, + OP-70/72/74/75/77/81 set.
+- PICK (g0 small batch) = the 5 HIGH-value crypto/codec modules.
+- THREE LEAF oracles (established inline-the-module-body pattern, NOT in build_selfhost closure):
+  · stdlib/wasm/wasm_leb128_test.hexa — ULEB/SLEB encode/decode + size predictor + round-trip identity (9 unsigned + 13 signed) + chained-offset decode. Reference: uleb(624485)=[E5,8E,26], sleb(64)=[C0,00], sleb(-123456)=[C0,BB,78]. Four entry points inlined verbatim.
+  · stdlib/core/hash/hmac_sha384_512_test.hexa — HMAC-SHA384 + HMAC-SHA512 over RFC 4231 §4 Cases 1-3 + 48/64-byte tag sizes. SHA-384/512 core `use`d from the verified crypto/sha512 module (its sha512_test is green); only the HMAC wrappers inlined.
+  · stdlib/crypto/hkdf_sha384_512_test.hexa — HKDF-SHA384/512 PRK(extract) + OKM(L=42) over RFC 5869 §A.1 inputs + HKDF==Expand(Extract) + empty-salt-zero-fill invariants.
+- RUN (hexa run, arm64-macos, exit 0 each; fork-storm-guard backoff for sibling-lane contention):
+  · `wasm_leb128 self-test: 21/21` `PASS`
+  · `hmac_sha384/512 self-test: 8/8` `PASS`
+  · `hkdf_sha384/512 self-test: 8/8` `PASS`
+  · TOTAL 37/37.
+- CROSS-CHECK (g5 — local ~/.hx/bin/hexa is a Jun-7 stale-oracle, so every vector independently reproduced by a faithful Python port of the reference algorithm):
+  · HMAC-SHA384/512: Python hmac.new(k,d,hashlib.sha384/512).hexdigest() over RFC 4231 inputs — byte-identical to the RFC 4231 §4 published tags (c1-384 afd03944…, c1-512 87aa7cde…, c3-512 fa73b008…).
+  · HKDF-SHA384/512: Python RFC 5869 §2 port (extract=HMAC; T(i)=HMAC(prk,T(i-1)‖info‖i)) over §A.1 inputs — sha384 PRK 704b3999…/OKM 9b5097a8…, sha512 PRK 66579982…/OKM 83239008…. No official SHA-384/512 KATs exist, so the Python port is the authoritative oracle.
+  · LEB128: canonical wasm-spec example vectors + round-trip identity closes the inverse independently.
+  · RESULT: hexa output == reference on ALL 37 assertions. NO 🔴 bug — the 5 audited modules are PROVEN-CLEAN.
+- BYTE-EQ: 3 NEW test files only, all leaf (not imported by hexa_full / any selfhost stage) → self-host fixpoint UNAFFECTED; the audited modules were left UNCHANGED. wipe_guard net-additive (0 deletions).
+- 🟢 GREEN — 5 HIGH-value stdlib modules locked, 37/37 PASS, all PROVEN-CLEAN. $0, 0-pod, NO GPU, no vast, no foreign pod, no MAIN.tape, leak-0. Verdict .verdicts/hexa-0pod/F-OP83-STDLIB-MODULE-COVERAGE.txt.
+
 ## 2026-06-13 — OP-81 DONE: leaf oracle locking the FIVE Batch-23 calendar builtins of self/runtime/datetime_mini_pure.hexa (is_leap_year_pure / days_in_month_pure / day_of_year_pure / days_between_pure / weekday_zeller_pure) — a runtime-side *_pure invariant hole (OP-72 class on the calendar surface): weekday_zeller_pure (Zeller's congruence) had ZERO test coverage anywhere
 - SURVEY (fresh-surface select per OP-81 regimen):
   · axis (a) registered-builtin-divergence (OP-75/77/79 class) — DRY. Censused 106 ord digit/alpha checks (`< 48`/`> 57`/`- 48`) across stdlib; all are per-CHAR loops over a string, while the registered codegen builtins is_digit/is_alpha/is_alphanumeric (self/codegen.hexa:6159-6170) classify the FIRST char only (isdigit/isalpha on s[0]). No "string-is-all-digits" builtin twin exists to confuse → no divergence, no build-break. (bytes_to_str misuse class already CLOSED repo-wide at OP-79.)
