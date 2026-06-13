@@ -3907,3 +3907,56 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   0 deletions (wipe_guard net-additive). The *_op100 leaf is NOT in the build_selfhost closure → self-host fixpoint
   UNAFFECTED. LANE-2 only (no LANE-1 numeric-emitter overlap). $0 · 0-pod · NO GPU · no vast · no foreign-pod ·
   no .tape · leak-0. Milestone OP-100 [x]. Verdict F-OP100-EMITTED-CODE-SWEEP.txt.
+
+## OP-103 — SYSTEMIC slice/window/substring unchecked-bounds class sweep (LANE-1); class CLEAN except ONE 🔴 (FEM bar1d degenerate mesh) → FIXED + locked — 2026-06-13
+- SCOPE: LANE-1 (DATA-STRUCTURE / BUFFER / NUMERIC / SIGNAL-FRAMING / array modules — NOT net/string-parser =
+  LANE-2 / OP-102). CLASS: code computes a slice/window range (start,end) or an array index from arithmetic (a
+  length, stride, k, n-1, center±radius, frame*hop, row*cols+col) and accesses it WITHOUT clamping to [0,len], so
+  a degenerate/boundary input (empty, len-1, k>len, window-past-end, <2-node mesh) goes out of [0,len] → crash/garbage.
+- CENSUS (scoped greps, NO .git): SIGNAL-FRAMING all SAFE — core_stft (frame audio[s] guarded `if s<sig_len`; istft
+  overlap-add `local>=0 && local<n_fft`; Hermitian mirror spec[off+mirror], mirror=n_fft-b∈[1,n_fft-bins] in-frame),
+  core_resample (resample/pitch_shift lerp x[k],x[k+1], `if k>=n-1` clamps to tail), core_mel (bin_points[mi+2],
+  len=n_mels+2), core_griffin (j,i<n_frames*bins), core_pitch/autocorrelation/pearson_autocorr (lag_cap clamped to
+  n-1, loop i<n-k → x[i+k]≤n-1), core_window/voss (loop i<N over farr_zeros(N)), spectral_density (welch x[start+s]
+  max=(n_segs-1)*stride+win-1≤n-1; _sd_onesided k*2+1<2n), core_fft (rev∈[0,n), butterfly stride-bounded).
+  CONSISTENT-CONTRACT-NOT-BUG: signal modules take an `n` PARAMETER = signal length, guard the derived window/lag
+  vs `n` but never re-check n vs len(x); n>len(x) violates the documented "n=signal length" contract (same as the
+  FFT n==len(real) contract) — not a degenerate-boundary input to a clamped range, left as documented.
+- CENSUS cont.: NUMERIC/LINALG/TENSOR all SAFE (linalg/reference sgemm/sgemv, list_matvec, matrix construct/stack,
+  alloc/math/eigen — all i*k+p / r*cols+c loop-bounded by declared dims; math/ode params[0]/r[0] fixed-arity RK;
+  tensor/{ops,shape} shape[0]/data[0]/i*N+j rank≥1 structural + dim loops). DATA/BUFFER all SAFE (alloc/collections
+  zip min-len, combinations Gosper idx∈[0,n), sort/reverse/range/permutations loop-bounded; core/bytes
+  bytes_to_uint64/_le/uint32/f32_le_/f64_le_ ALL guard `offset<0` + `offset+W>len(b)→0/0.0`, int_from_hex /
+  hex_encode_bytes substrings loop-bounded; mc_integrate _find_flag/_engine_path/_qrng_collect/engine _hex_to_int
+  substrings guarded by starts_with/rfind). KERNELS mostly SAFE (signal_proc/dft xr[k] loop k<n; autodiff dual
+  a[0]/a[1] fixed length-2; graph/bfs queue[0] under `while len(queue)>0`; bio_align/needleman_wunsch traceback
+  a[i-1]/b[j-1] each under i>0/j>0; neural/lif loop-bounded; fem/bar1d_assemble_K nodes[e+1]/K[e+1][e+1] e<n_elem=n-1).
+- 🔴 THE ONE BUG — stdlib/kernels/fem/bar1d_kernel.hexa: bar1d_solve_fixed_free (PUBLIC, contract docstring L157
+  "nodes length n≥2") has NO guard on n. A degenerate <2-node mesh gives a reduced system of m=n-1≤0 unknowns, and
+  the private Thomas tridiagonal solver runs its forward sweep UNCONDITIONALLY: cp[0]=c[0]/d[0], dp[0]=b[0]/d[0],
+  back-sub u[m-1]. On an empty diagonal (m=0): c[0]/d[0]/u[-1] index a length-0 array → CRASH.
+- VERBATIM REPRO (shipping `hexa run`, hermetic verbatim-inlined UNFIXED bodies):
+    n=1: bar1d_solve_fixed_free([0.0],1.0,1.0,1.0) → `--- n=1 (single node, contract says n>=2) ---index 0 out of bounds (len 0)`
+    n=0: thomas_tridiag([],[],[],[]) → `n=0 -> thomas([],[],[],[]):index 0 out of bounds (len 0)`
+    root-cause probe: `let e=[]; e[0]` → `len=0index 0 out of bounds (len 0)`
+- FIX (minimal, additive, 0 deletions; clamp the degenerate boundary per the n≥2 contract):
+    bar1d_solve_fixed_free:  `if n<=0 { return [] }`  (no nodes → no displacement vector)
+                             `if n==1 { return [0.0] }` (single FIXED node → only the fixed DOF, zero disp, no free DOF/element/load)
+    thomas_tridiag:          `if m<=0 { return [] }`  (empty system → empty solution, defense-in-depth)
+- POST-FIX CROSS-CHECK (verbatim-inlined FIXED bodies): `OK n=1 -> [0.0]` · `OK n=0 -> []` · `OK n=2 -> [0,1]` ·
+  `OK n=5 analytic match` → pass=4 fail=0. Degenerate inputs clamp to the correct trivial result; the n≥2 analytic
+  FEM solve u(x_k)=P*x_k/(EA) is UNCHANGED (no regression, bit-for-bit).
+- LOCK: NEW stdlib/kernels/fem/bar1d_degenerate_op103_test.hexa — HERMETIC (bar1d_assemble_K / thomas_tridiag /
+  bar1d_solve_fixed_free verbatim-inlined WITH the fix, no `use` — stale-bundle dodge OP-87/88), shipping `hexa run`
+  LOCAL → `OP-103 bar1d degenerate lock: pass=6 fail=0` `ALL GREEN` (n=1→[0.0] · n=0→[] · thomas([])→[] · n=2 analytic
+  [0,1] · n=5 analytic · non-uniform 5-node shape u[0]=0 len=5). NEGATIVE CONTROL (not a tautology): the UNFIXED
+  Thomas body on the empty system gives `index 0 out of bounds (len 0)` (the verbatim repro) — the clamp converts that
+  crash into the correct trivial result; the positive asserts catch any regression of the clamp OR the n≥2 analytic answer.
+- BYTE-EQ / GUARDS: stdlib/kernels/fem/bar1d_kernel.hexa is NOT in the build_selfhost closure (no self/* nor
+  build_selfhost.sh reference — leaf stdlib kernel) → ZERO byte-eq/fixpoint impact, no selfhost gate. Edit purely
+  ADDITIVE (3 guard lines in the public entry + 1 in the private solver), 0 deletions → wipe_guard net-additive. NEW
+  leaf test is closure-OUT → fixpoint UNAFFECTED. LANE-1 only (NO net/string-parser edits — LANE-2 untouched).
+  INVARIANTS LOCKED: bar1d_solve_fixed_free never indexes out of range for any nodes len≥0; degenerate clamp
+  len0→[] len1→[0.0] (matches the fixed-free BC); n≥2 uniform mesh ⇒ u(x_k)=P_tip*x_k/(E*A); thomas_tridiag(empty)→[].
+  $0 · 0-pod · NO GPU · no vast · no foreign-pod · no .tape · leak-0. Milestone OP-103 [x]. Verdict
+  F-OP103-SLICE-BOUNDS-SWEEP.txt.

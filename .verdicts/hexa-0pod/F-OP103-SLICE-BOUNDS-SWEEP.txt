@@ -1,0 +1,133 @@
+F-OP103-SLICE-BOUNDS-SWEEP — LANE-1 slice/window/substring unchecked-bounds class sweep
+========================================================================================
+verdict: 🟢 class CLEAN except ONE 🔴 (FEM bar1d degenerate mesh) — FIXED + locked
+tier:    d5 (boundary-correctness fix + hermetic regression lock, $0 / 0-pod / 0-GPU)
+date:    2026-06-13
+lane:    LANE-1 (DATA-STRUCTURE / BUFFER / NUMERIC / SIGNAL-FRAMING / array modules)
+         NOT net/string-parser (= LANE-2 / OP-102 territory)
+
+CLASS
+-----
+Code computes a slice / window / substring range (start,end) or an array index from
+arithmetic (length, stride, k, n-1, center±radius, frame*hop, row*cols+col) and accesses
+it WITHOUT clamping to [0,len], so a degenerate / boundary input (empty, len-1, k>len,
+window past end, <2-node mesh) drives the index out of [0,len] → crash or garbage.
+
+CENSUS MATRIX  (site → SAFE/UNSAFE → action)
+--------------------------------------------
+SIGNAL-FRAMING / DSP
+  core_stft   stft_native frame audio[s]            SAFE  guard `if s<sig_len` (zero-pad)
+              istft overlap-add win[local]          SAFE  guard `local>=0 && local<n_fft`
+              istft Hermitian mirror spec[off+mirror] SAFE mirror=n_fft-b ∈[1,n_fft-bins]
+  core_resample resample/pitch_shift x[k],x[k+1]    SAFE  `if k>=n-1` clamps to tail
+  core_mel    mel_filterbank bin_points[mi+2]       SAFE  bin_points len=n_mels+2
+              spec_to_mel filterbank[m*bins+b]      SAFE  loop b<bins=len(spec_mag)
+  core_griffin new_spec[j*2], mag_spec[i]           SAFE  j,i<n_frames*bins
+  core_pitch  autocorr x[i+lag]                     SAFE  guard lag<0||lag>=n, loop i<n-lag
+  autocorrelation / pearson_autocorr x[i+k]         SAFE  lag_cap clamped n-1, loop i<n-k
+  core_window hann/hamming/blackman/taper+_arr      SAFE  loop i<N, farr_zeros(N)
+  voss_mccartney gen_1fbeta farr_set(buf,i)         SAFE  loop i<n, buf=farr_zeros(n)
+  spectral_density _sd_onesided spec_flat[k*2..]    SAFE  fft out len=2n, k<=half
+              welch_psd x[start+s]                  SAFE  max idx=(n_segs-1)*stride+win-1 ≤ n-1
+  core_fft    butterfly a/b_idx, real[rev]          SAFE  rev∈[0,n), stride loop in-range
+  NOTE (consistent contract, NOT a bug): signal modules take an `n` PARAMETER = signal
+  length; they guard the derived window/lag vs `n` but never re-check n vs len(x).
+  n>len(x) violates the documented "n=signal length" contract — not a degenerate-boundary
+  input to a clamped range. Left as documented (same as the FFT n==len(real) contract).
+
+NUMERIC / LINALG / TENSOR
+  linalg/reference sgemm/sgemv A[i*k+p] etc          SAFE  loop-bounded by declared dims
+  linalg/list_matvec w[r*cols+c]                     SAFE  loop r<rows,c<cols
+  matrix/{construct,stack} M[i*n+j]                  SAFE  dim-parameterized loops
+  alloc/math/eigen Jacobi i*n+j                      SAFE  dim loops
+  math/ode params[0]/r[0]                            SAFE  fixed-arity RK structural
+  tensor/{ops,shape} shape[0], data[0], i*N+j        SAFE  rank>=1 structural + dim loops
+
+DATA-STRUCTURE / BUFFER
+  alloc/collections zip a[i]/b[i]                    SAFE  n=min(len a,len b)
+              combinations Gosper idx[r]             SAFE  idx kept in [0,n) by recurrence
+              permutations/sort/reverse/range        SAFE  loop-bounded
+  core/bytes (BUFFER) bytes_to_uint64/_le/u32 b[off+i] SAFE guard off<0 + off+W>len(b)→0
+              bytes_to_f32/f64_le_                   SAFE  same off+W>len(b)→0.0
+              int_from_hex t.substring(i,i+1)        SAFE  loop i<len(t)
+              hex_encode_bytes table.substring(hi..) SAFE  hi,lo=v%16 ∈[0,16) per [0..255] contract
+  mc_integrate/{mc_integrate,engine} argv/path substrings (LANE-2-adjacent, clean anyway)
+              _find_flag substring(len(prefix)..)    SAFE  only after starts_with(prefix)
+              _engine_path substring(0,cut)          SAFE  cut=rfind("/") guarded cut>0
+              _qrng_collect substring(9,len)         SAFE  after starts_with("QRNG_HEX:")
+              engine _hex_to_int substring(i,i+1)    SAFE  loop i<len(hex)
+
+KERNELS
+  signal_proc/dft_naive xr[k],xi[k]                  SAFE  loop k<n
+  autodiff/dual_forward a[0],a[1]                    SAFE  dual = fixed length-2
+  graph/bfs_topo queue[0]                            SAFE  guard while len(queue)>0
+  bio_align/needleman_wunsch s[i*stride+j],a[i-1]    SAFE  each access under i>0/j>0
+  neural/lif step loop                               SAFE  loop-bounded
+  fem/bar1d  assemble_K nodes[e+1],K[e+1][e+1]       SAFE  e<n_elem=n-1 ⇒ e+1≤n-1
+  >>> fem/bar1d  solve_fixed_free / thomas_tridiag <<< UNSAFE → 🔴 (below)
+
+THE 🔴 FIX — bar1d FEM degenerate mesh out-of-range
+---------------------------------------------------
+FILE: stdlib/kernels/fem/bar1d_kernel.hexa
+CONTRACT (docstring L157): nodes length n >= 2. The public bar1d_solve_fixed_free has NO
+guard on n. For a degenerate mesh the reduced system has m=n-1<=0 unknowns, and the
+private Thomas solver runs its forward sweep UNCONDITIONALLY:
+    cp[0]=c[0]/d[0]   dp[0]=b[0]/d[0]   ...   u[m-1]=dp[m-1]
+On an empty diagonal (m=0): c[0]/d[0]/u[-1] on a length-0 array → crash.
+
+VERBATIM BOUNDARY REPRO (shipping `hexa run`, hermetic verbatim-inlined UNFIXED bodies):
+  n=1: bar1d_solve_fixed_free([0.0],1.0,1.0,1.0)
+    stdout: --- n=1 (single node, contract says n>=2) ---index 0 out of bounds (len 0)
+  n=0: thomas_tridiag([],[],[],[])
+    stdout: n=0 -> thomas([],[],[],[]):index 0 out of bounds (len 0)
+  root cause probe: `let e=[]; e[0]` → `len=0index 0 out of bounds (len 0)`
+
+MINIMAL FIX (additive, 0 deletions; clamp the degenerate boundary per the n>=2 contract):
+  bar1d_solve_fixed_free:  if n<=0 {return []}   if n==1 {return [0.0]}
+  thomas_tridiag:          if m<=0 {return []}    (defense-in-depth)
+  rationale: n=0 → no displacement vector → []; n=1 → only the fixed DOF (node 0 fixed),
+  zero displacement, no free DOF / element / load → [0.0].
+
+POST-FIX CROSS-CHECK (shipping `hexa run`, verbatim-inlined FIXED bodies):
+    OK n=1 -> [0.0]      OK n=0 -> []      OK n=2 -> [0,1]      OK n=5 analytic match
+    pass=4 fail=0
+  → degenerate inputs clamp to the correct trivial result; the n>=2 analytic FEM solve
+    u(x_k)=P*x_k/(EA) is UNCHANGED (no regression, bit-for-bit).
+
+LOCK (in-tree regression guard, with teeth)
+-------------------------------------------
+NEW stdlib/kernels/fem/bar1d_degenerate_op103_test.hexa — HERMETIC (bodies verbatim-inlined
+WITH the fix, no `use` — stale-bundle dodge OP-87/88), shipping `hexa run` LOCAL:
+    OP-103 bar1d degenerate lock: pass=6 fail=0
+    ALL GREEN
+  asserts n=1→[0.0] · n=0→[] · thomas([])→[] · n=2 analytic [0,1] · n=5 analytic ·
+  non-uniform 5-node shape (u[0]=0,len=5).
+NEGATIVE CONTROL (not a tautology): the UNFIXED Thomas body on the empty system gives
+`index 0 out of bounds (len 0)` (the verbatim repro) — the clamp converts that crash into
+the correct trivial result; the positive asserts catch any regression of clamp OR analytic.
+
+CLOSURE / BYTE-EQ FLAGS
+-----------------------
+- stdlib/kernels/fem/bar1d_kernel.hexa is NOT in the build_selfhost closure (no self/* nor
+  build_selfhost.sh reference — leaf stdlib kernel). Fix has ZERO byte-eq/fixpoint impact;
+  no selfhost gate needed.
+- Edit is purely ADDITIVE (3 guard lines public + 1 private); 0 deletions → wipe_guard
+  net-additive, no scope/WIPE-OK trailer needed.
+- NEW leaf test closure-OUT → fixpoint UNAFFECTED.
+- LANE-1 only (NO net/string-parser edits — LANE-2 territory untouched).
+
+INVARIANTS LOCKED
+-----------------
+- bar1d_solve_fixed_free(nodes) NEVER indexes out of range for any nodes length >= 0.
+- degenerate clamp: len 0 → [], len 1 → [0.0] (matches fixed-free BC: node 0 fixed).
+- n>=2 uniform mesh ⇒ u(x_k)=P_tip*x_k/(E*A) (analytic, unchanged).
+- thomas_tridiag(empty) → [] (no unconditional index on a zero-length diagonal).
+
+HONEST FRAMING (g5)
+-------------------
+The LANE-1 slice/window/substring unchecked-bounds class is otherwise CLEAN: every other
+computed-index site is clamped, loop-bounded, or structurally in-range (or guarded by an
+explicit length/offset check returning a sentinel). The ONE genuine boundary crash was the
+FEM bar1d degenerate mesh — fixed by clamping to the documented contract. A clamped /
+loop-bounded site is reported CLEAN, not a bug; no fabrication. $0, 0-pod, NO GPU, no vast,
+no foreign pod, no .tape, leak-0.
