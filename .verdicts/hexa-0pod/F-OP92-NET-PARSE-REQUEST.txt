@@ -1,0 +1,151 @@
+F-OP92-NET-PARSE-REQUEST — LANE-2 0-pod bug-hunt: stdlib NET parsing family (sibling parsers)
+=============================================================================================
+
+TIER: 🔴 REAL SHIPPING BUG FOUND + FIXED (1 divergence, 1 root edit) + 🟢 invariant-lock
+      + 🟠 FLAGGED closure-side twin (NOT fixed — fixpoint risk)
+LANE: 2 (0-pod correctness; stdlib STRING/PATH/TEXT/URL/NET territory). Sibling LANE-1 owns
+      stdlib data-structure/numeric/parser — no overlap (OP-92 touches ONLY stdlib/net/*).
+SCOPE: $0 · 0-pod · NO GPU · no vast · no foreign pod · no .tape edit · leak-0.
+DATE: 2026-06-13
+FOLLOWS: OP-91 (#3245) did parse_query. This round hunts the SIBLING net parsers.
+
+--------------------------------------------------------------------------------
+SURVEY (scoped greps, NO .git; LANE-2 NET; SKIP self/serve/* = closure, parse_query
+[OP-91 done], _route_match [OP-91 low-surface])
+--------------------------------------------------------------------------------
+Census of every delimiter/boundary/index parsing helper across the stdlib NET surface
+(stdlib/net/*.hexa + stdlib/http*.hexa, NO .git, EXCLUDING self/serve/*). The four
+highest delimiter/index/boundary helpers, with WHY each is high-surface:
+
+  1. stdlib/net/http_request.hexa  parse_request(raw)
+       WHY HIGH: the densest boundary helper in the net surface — request-line
+       split-on-SP, path/query split-on-"?", header Name:Value split-on-":" with
+       case-fold + trim, AND header-block/body split on "\r\n\r\n". Four independent
+       delimiter regions over untrusted wire bytes. (OP-91 mis-classified this as
+       "low surface"; it is the highest.)  -> 🔴 BUG FOUND (body split).
+  2. stdlib/http_sse.hexa           http_sse_parse_event(event, raw_line)
+       WHY HIGH: WHATWG SSE field/value parser — comment lines (":"-prefix), field
+       split on FIRST ":", single-leading-SP strip, multi-`data:` accumulation,
+       no-colon field rule, retry int-coercion. Pure per-line boundary logic.
+  3. stdlib/http2.hexa              _h2_parse_status_block(raw)
+       WHY HIGH: trailing-sentinel status-line parse — split off the last two lines
+       (\n<version>\n<code>) via last_index_of; body may contain its own newlines.
+       Reverse-index boundary arithmetic over the curl transcript.
+  4. self/serve/http_server.hexa    parse_request(raw)  [CLOSURE — survey only]
+       WHY HIGH: the compiler-internal ORIGIN of #1 (stdlib is a port of it). Same
+       four delimiter regions. CLOSURE-side -> FLAG only, never edit.
+
+(http_client.hexa http_get/http_get_status = curl shell-out + a single last_index_of("\n")
+status split — low surface, already mirrors the clean h2 pattern. _build_header_flags /
+_sse_build_header_flags = emit-only, not parse. http2_parse_curl_output = thin wrapper over
+_h2_parse_status_block, covered by #3. No cookie / percent-decode / chunked-length / URL
+scheme-host-port parser EXISTS as a stdlib fn — grep for fn (parse_cookie|parse_url|
+urlsplit|percent_decode|unquote|parse_chunk|parse_status_line) over stdlib returned ZERO.)
+
+--------------------------------------------------------------------------------
+🔴 BUG (parse_request) — DIFFERENTIAL vs an RFC-7230 message-framing reference
+--------------------------------------------------------------------------------
+UNFIXED body (origin/main stdlib/net/http_request.hexa:26-31):
+    let parts = raw.split("\r\n\r\n")     // splits on EVERY blank line
+    let header_block = parts[0]
+    if len(parts) > 1 { body = parts[1] } // keeps ONLY the first body segment
+
+RFC 7230 §3 framing: the FIRST empty line (CRLFCRLF) terminates the header block;
+EVERYTHING after it — embedded blank lines included — is the message body. The
+unfixed code splits on EVERY "\r\n\r\n" and discards parts[2..], TRUNCATING any body
+that contains a blank line (multipart/form-data, nested HTTP, base64 with CRLF wrapping,
+plain text with paragraph breaks — all routine).
+
+VERBATIM differential (faithful Python port of the UNFIXED body vs an RFC reference that
+splits on the FIRST separator only):
+    case                       hexa(unfixed) body      ref body                   match
+    'GET /api/ping ..\r\n\r\n' ''                      ''                         OK
+    'GET /a?b=1&c=2 ..'        ''                      ''                         OK
+    'POST /x ..\r\n\r\nhi\r\n\r\nbye'  'hi'            'hi\r\n\r\nbye'            MISMATCH <-- BUG
+    'GET / ..\r\nDate: Mon, 01 Jan: 2020\r\n\r\n'  (header) OK                    OK
+    ':weird' / 'X-Empty:' / dup-header / Host:port / no-path  ............        OK (all)
+
+So method / path / query / header parsing are all CORRECT (split-on-SP, "?", and
+split-on-first-":" with trim+lowercase all behave per reference across the leading-colon,
+colon-in-value, empty-value, duplicate-header, host:port, and no-path edges). The SINGLE
+divergence is body truncation.
+
+ROOT CAUSE: the same "split-on-every-delimiter, keep one segment" index bug class as
+OP-91's parse_query — here `raw.split("\r\n\r\n")` shatters the message on EVERY blank
+line and `parts[1]` keeps only the first body segment, dropping parts[2..].
+
+--------------------------------------------------------------------------------
+FIX (minimal, provably-correct — matches RFC-7230 first-separator framing; 0 deletions)
+--------------------------------------------------------------------------------
+    let sep = raw.index_of("\r\n\r\n")      // FIRST separator only -> closes the bug
+    let mut header_block = raw
+    if sep >= 0 {
+        header_block = raw.substring(0, sep)
+        body = raw.substring(sep + 4, len(raw))   // whole remainder, CRLFs included
+    }
+Post-fix Python port = 9/9 OK vs the RFC reference (was 8/9). The header-parsing loop
+below it is unchanged.
+
+--------------------------------------------------------------------------------
+🟢 LOCK + POST-FIX CROSS-CHECK
+--------------------------------------------------------------------------------
+NEW stdlib/net/parse_request_test.hexa — verbatim-inlined leaf oracle of the FIXED body
+(self-contained, no `use`; the installed `hexa` resolves `use "stdlib/..."` to its stale
+bundled copy, so the body is inlined and gated on the SHIPPING `hexa run`). Run LOCAL on
+the installed `hexa` (/Users/mini/.hx/bin/hexa):
+
+    __HEXA_STDLIB_PARSE_REQUEST_OP92__ 13/13 ALL-GREEN
+
+13 goldens: body-with-embedded-blank-line (hi\r\n\r\nbye preserved), multipart-style body
+with 3 blank lines (A\r\n\r\nB\r\n\r\nC preserved), plus the already-correct cases as
+regression locks (simple GET method/path/empty-body/header, path+query split, header value
+containing a colon, and the no-separator request-line-only case). Every field matches the
+RFC reference.
+
+The leaf running the UNFIXED body reproduces the divergence verbatim (FAIL
+body-embedded-blankline got=[hi]; FAIL body-multi-blankline got=[A]; PASS 11/13 RED),
+proving the oracle actually catches the bug — it is not a tautology.
+
+--------------------------------------------------------------------------------
+🟢 CLEAN SIBLINGS (invariant-locked by differential, no edit needed)
+--------------------------------------------------------------------------------
+http_sse_parse_event — 17 WHATWG boundary cases (data:/data:hello/data:  doublespace/
+  data:empty/data-no-colon/event:/comment ":"/bare ":"/id:/retry int+neg+nonint+zero/
+  field-with-colon-in-name/value-with-colons/unknown-field/blank) -> 0 mismatch vs a
+  faithful WHATWG per-line reference. The single-leading-SP strip, first-":" split, and
+  multi-data accumulation are all spec-correct.
+_h2_parse_status_block — 6 cases (normal, body-with-own-newline, sentinel-only body,
+  no-newline, empty, empty-body+empty-version) -> 0 mismatch vs a reverse-split reference.
+  Correctly uses last_index_of (reverse split), so body newlines are preserved — the
+  RIGHT pattern parse_request's body split should have used.
+
+--------------------------------------------------------------------------------
+🟠 FLAGGED CLOSURE-SIDE TWIN (NOT fixed — self-host fixpoint risk)
+--------------------------------------------------------------------------------
+self/serve/http_server.hexa:25-29 parse_request carries the IDENTICAL body-truncation bug:
+    let parts = raw.split("\r\n\r\n")
+    let header_block = parts[0]
+    if len(parts) > 1 { body = parts[1] }
+This file IS in the build_selfhost closure (the compiler's own HTTP server), so per the
+0-pod regimen it is FLAGGED 🟠 ONLY and deliberately left UNTOUCHED — a closure-side edit
+risks the self-host byte-eq fixpoint. A future closure-side lane (with a full self-host
+rebuild + byte-eq gate) should port the same `index_of("\r\n\r\n")` first-separator fix.
+(This is the same twin-flag posture OP-91 took on parse_query.)
+
+--------------------------------------------------------------------------------
+BYTE-EQ / FIXPOINT SAFETY
+--------------------------------------------------------------------------------
+stdlib/net/http_request.hexa is a stdlib application module, NOT in the build_selfhost
+closure. 1 function changed (parse_request body split), 1 NEW leaf test file, 0 deletions
+(wipe_guard trivially satisfied, net-additive). The closure-side twin is FLAGGED not fixed.
+Self-host fixpoint UNAFFECTED.
+
+VERDICT: 🔴→FIXED + 🟢 + 🟠 — stdlib/net/http_request.hexa parse_request had a real shipping
+HTTP-parser bug: a request body containing a blank line ("\r\n\r\n", routine in multipart
+and nested-HTTP payloads) was silently TRUNCATED at the first blank line because the code
+split on EVERY separator and kept parts[1]. Fixed to split on the FIRST "\r\n\r\n" only via
+index_of (matches RFC 7230 framing), locked by a 13/13 verbatim leaf oracle on the shipping
+`hexa run`. Three sibling net parsers (SSE event, h2 status-block, and the request-line +
+header regions of parse_request itself) verified CLEAN via boundary differentials. The
+closure-side twin self/serve/http_server.hexa::parse_request carries the same bug and is
+FLAGGED 🟠 (NOT fixed — fixpoint risk). $0 · 0-pod · NO GPU · leak-0.

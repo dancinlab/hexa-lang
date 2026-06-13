@@ -23,11 +23,17 @@ pub fn parse_request(raw) {
     let mut body = ""
     let mut headers = #{}
 
-    // Split header block from body on double CRLF
-    let parts = raw.split("\r\n\r\n")
-    let header_block = parts[0]
-    if len(parts) > 1 {
-        body = parts[1]
+    // Split header block from body on the FIRST double CRLF only.
+    // OP-92: split("\r\n\r\n") then parts[1] truncated any body that
+    // itself contained a blank line (multipart forms, nested HTTP,
+    // plain text with paragraph breaks) — parts[2..] were dropped.
+    // index_of finds the first separator; everything after it (CRLFs
+    // included) is the body, matching RFC 7230 message framing.
+    let sep = raw.index_of("\r\n\r\n")
+    let mut header_block = raw
+    if sep >= 0 {
+        header_block = raw.substring(0, sep)
+        body = raw.substring(sep + 4, len(raw))
     }
 
     // Split header lines
