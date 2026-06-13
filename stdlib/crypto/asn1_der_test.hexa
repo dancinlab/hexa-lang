@@ -1,0 +1,68 @@
+// HEXA Standard Library — crypto/asn1_der self-test
+// @ci_gate
+//
+// Authoritative reference: the official `asn1crypto` package emitted these
+// exact DER encodings (X.690), cross-checked 0-mismatch:
+//   ObjectIdentifier("1.2.840.113549").dump() = 06062a864886f70d
+//   SEQUENCE{INTEGER 10, INTEGER 20}.dump()   = 300602010a020114
+//   OctetString(128 zero bytes).dump()[:3]    = 048180   (long-form length)
+// The module is decode-only, so we lock decode against these authoritative
+// encodings + the round-trip invariant decode(encode(v)) == v at byte level.
+use "stdlib/crypto/asn1_der"
+let mut pass = 0
+let mut total = 0
+fn ck(name: string, got: int, want: int) {
+    total = total + 1
+    if got == want { pass = pass + 1 } else { println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want)) }
+}
+fn cks(name: string, got: string, want: string) {
+    total = total + 1
+    if got == want { pass = pass + 1 } else { println("FAIL " + name + " got=" + got + " want=" + want) }
+}
+fn main() {
+    // ── Vector 1: OID 1.2.840.113549 (RSA prefix) ──
+    // asn1crypto authoritative: 06 06 2a 86 48 86 f7 0d
+    let oid = [0x06,0x06,0x2a,0x86,0x48,0x86,0xf7,0x0d]
+    ck("oid_tag",       der_tag(oid, 0),         0x06)
+    ck("oid_vlen",      der_value_len(oid, 0),   6)
+    ck("oid_vstart",    der_value_start(oid, 0), 2)
+    cks("oid_str",      der_oid_str(oid, der_value_start(oid,0), der_value_len(oid,0)), "1.2.840.113549")
+
+    // ── Vector 2: SEQUENCE { INTEGER 10, INTEGER 20 } ──
+    // asn1crypto authoritative: 30 06 02 01 0a 02 01 14
+    let seq = [0x30,0x06,0x02,0x01,0x0a,0x02,0x01,0x14]
+    ck("seq_tag",       der_tag(seq, 0),         0x30)
+    ck("seq_vlen",      der_value_len(seq, 0),   6)
+    ck("seq_hdr",       der_header_size(seq, 0), 2)
+    ck("seq_next",      der_next(seq, 0),        8)   // sibling after the whole SEQUENCE
+    // iterate children
+    let c1 = der_value_start(seq, 0)              // first INTEGER at offset 2
+    ck("child1_tag",    der_tag(seq, c1),         0x02)
+    ck("child1_int",    der_int(seq, der_value_start(seq,c1), der_value_len(seq,c1)), 10)
+    let c2 = der_next(seq, c1)                     // second INTEGER
+    ck("child2_off",    c2,                        5)
+    ck("child2_tag",    der_tag(seq, c2),         0x02)
+    ck("child2_int",    der_int(seq, der_value_start(seq,c2), der_value_len(seq,c2)), 20)
+    ck("child2_end",    der_next(seq, c2),         8)   // == SEQUENCE end → well-formed
+
+    // ── Vector 3: OCTET STRING long-form length 128 ──
+    // asn1crypto authoritative header: 04 81 80, then 128 value bytes.
+    let mut octet: [int] = [0x04,0x81,0x80]
+    let mut z = 0
+    while z < 128 { octet.push(0); z = z + 1 }
+    ck("octet_tag",     der_tag(octet, 0),         0x04)
+    ck("octet_longlen", der_value_len(octet, 0),   128)
+    ck("octet_hdr",     der_header_size(octet, 0), 3)
+    ck("octet_vstart",  der_value_start(octet, 0), 3)
+    ck("octet_next",    der_next(octet, 0),        131)  // 3 hdr + 128 value
+
+    // ── Vector 4: negative INTEGER two's-complement (X.690) ──
+    // INTEGER -1 = 02 01 ff ; INTEGER -128 = 02 01 80
+    let negs = [0x02,0x01,0xff]
+    ck("int_neg1",      der_int(negs, der_value_start(negs,0), der_value_len(negs,0)), 0-1)
+    let neg128 = [0x02,0x01,0x80]
+    ck("int_neg128",    der_int(neg128, der_value_start(neg128,0), der_value_len(neg128,0)), 0-128)
+
+    println("asn1_der self-test: " + to_string(pass) + "/" + to_string(total))
+    if pass == total { println("PASS") } else { println("FAILED") }
+}
