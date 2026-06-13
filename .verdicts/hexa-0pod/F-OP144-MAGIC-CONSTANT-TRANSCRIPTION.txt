@@ -1,0 +1,101 @@
+F-OP144-MAGIC-CONSTANT-TRANSCRIPTION
+HEXA-0POD · LANE-2 · 2026-06-13
+named-algorithm MAGIC-CONSTANT transcription audit (OP-140 follow-up class)
+
+VERDICT: 🔴 2 WRONG constants FIXED + 🟢 CONVERGED
+  constants audited (named-algorithm magic literals) : 41
+  wrong (silent transcription error)                  :  2
+  fixed                                               :  2
+  already-KAT-locked (re-confirmed, untouched)        : many (xxHash/SHA/FNV/crypto)
+
+THE TWO WRONG CONSTANTS  (both in stdlib/sim_universe/atlas_anu_corr/atlas_constants.hexa
+MATH_CONSTANTS — high-precision decimal expansions of named math constants;
+the OP-140 "named constant in a non-core module" class):
+
+  • zeta3 (Apéry's constant ζ(3), OEIS A002117)
+      LONG decimal-expansion `digits` field (422 frac digits).
+      CORRECT for the first 125 frac digits, then the tail DIVERGED into a
+      wrong-sequence at frac idx 126:
+        file  : ...18491999089171063901758666134401455179997...
+        OEIS  : ...18491995998673283213776396837207900161453...
+      ~297-digit tail was garbage. (The 20-sig-fig SHORT value
+      "1.20205690315959428540" was CLEAN — correctly rounded; only the long
+      field was corrupted.)
+      FIX: replaced the 422-digit field with the verified OEIS A002117 prefix.
+
+  • sqrt3 (√3, OEIS A002194)
+      LONG decimal-expansion `digits` field (479 frac digits).
+      CORRECT for the first 215 frac digits, then DIVERGED at frac idx 216:
+        file  : ...690332474858912012265642912556353818533...
+        OEIS  : ...690332288665067225466892183797122704713...
+      ~263-digit tail was garbage.
+      FIX: replaced the 479-digit field with the verified OEIS A002194 prefix.
+
+METHOD (g5 honest):
+  - Authoritative references = OEIS b-files (canonical digit sequences):
+      π   A000796 · √2 A002193 · √3 A002194 · √5 A002163 · φ A001622
+      e   A001113 · ζ(3) A002117 · γ A001620 · Catalan A006752 · ln2 A002162
+    Fetched the OEIS b-file digit streams and digit-compared each stored
+    expansion frac-by-frac (Python decimal, no float rounding).
+  - Boundary last-digit diffs are NOT errors: π's 500th frac digit (file 3 vs
+    truncated-canon 2) is a CORRECT round-up (501st canon digit = 9); √3/zeta3
+    short 20-digit values are valid truncations/round. Only MID-STRING
+    divergences (a wrong digit followed by a wrong tail) were flagged WRONG.
+  - Corrected strings re-verified byte-for-byte against the OEIS streams
+    (zeta3 422/422 match, sqrt3 479/479 match).
+
+CLEAN (named-algorithm magic constants re-confirmed against published refs):
+  HASH/PRNG
+    xxHash32 PRIME32_1..5  (0x9E3779B1 0x85EBCA77 0xC2B2AE3D 0x27D4EB2F 0x165667B1)
+    xxHash64 PRIME64_1..5  (...85EBCA87 ...27D4EB4F ...9E3779F9 ...C2B2AE63 ...165667C5)
+                            [also OP-84 KAT-locked]
+    FNV-1a 32-bit          offset 2166136261, prime 16777619 (XOR-then-mul order)
+    Numerical-Recipes LCG  a=1664525, c=1013904223, m=2^32 (rng_test.hexa locked)
+  CRC / checksum
+    No standard CRC32/CRC32C/CRC16/Adler-32 polynomial table in stdlib
+    (rp2040 DMA only documents the silicon SNIFF CRC; no hexa polynomial).
+    sscb/ngspice _hash16 = DOCUMENTED custom non-crypto rolling hash
+    (a*31 + ord) % 65521 — explicitly "Not cryptographic", NOT a claimed
+    Adler-32 → CLEAN (deliberate non-standard).
+  CRYPTO (KAT-locked by OP-84/107, re-confirmed not re-derived)
+    SHA-256 H0/K   → runtime C reference impl (no hexa literal), KAT-locked
+    SHA-512 H0/K   (0x6a09e667f3bcc908, 0x428a2f98d728ae22 …) FIPS 180-4, has sha512_test
+    Blowfish P-array init 0x243F6A88 0x85A308D3 0x13198A2E 0x03707344 = digits of π (canonical)
+  MATH constants & series coefficients
+    π 3.14159265358979323846 · e 2.71828182845904523536 · τ 6.283185307179586
+    √(2π) 2.50662827463100050242 · pi() 3.141592653589793 · e() 2.718281828459045
+    Lanczos g=7 n=9 (Godfrey/Boost set, 9 coeffs) — all 9 match exactly
+    erf A&S 7.1.26: p=0.3275911, a1=0.254829592, a2=-0.284496736,
+        a3=1.421413741, a4=-1.453152027, a5=1.061405429 — all match exactly
+    atlas_constants MATH_CONSTANTS short values + the CLEAN long expansions
+        (pi, e, phi, sqrt2, sqrt5, euler_gamma, catalan, ln2) — all match OEIS
+
+REGRESSION LOCK:
+  stdlib/sim_universe/atlas_anu_corr/atlas_constants_test.hexa
+  Pins the leading 60 frac digits of all 10 named constants to their OEIS
+  reference; the stored field MUST start with the published prefix. A single
+  mid-string transcription typo flips a check → FAIL.
+  `hexa run` → PASS atlas_constants transcription KAT — 10/10
+  (cross-checked: each test `stored` string is byte-identical to the module's
+   MATH_CONSTANTS entry, so a drift in EITHER surface is caught.)
+
+CLOSURE / FLAGS:
+  atlas_constants.hexa is a standalone TSV emitter (its own main + file I/O),
+  imported by NOTHING in the compiler/self-host build closure (grep = 0) →
+  closure-OUT, ZERO byte-eq / self-host-fixpoint impact. Net-additive: 2
+  corrected digit fields (equal length, no line-count change) + 1 new test;
+  0 deletions → wipe_guard N/A. No .tape. `hexa parse` clean on both files.
+
+STALE-BINARY CAVEAT: the audit needs NO fresh compiler — the constants are
+  published fixed values verified against OEIS digit streams (reference-vector
+  oracle), compiler-version-independent; the KAT is pure string comparison
+  (no codegen edge cases) and ran green on the installed binary.
+
+$0 · 0-pod · NO GPU · no vast · no foreign-pod · leak-0.
+
+ONE HONEST LINE: yes — two named math constants carried a transcription error:
+the long decimal expansions of ζ(3) (Apéry) and √3 were correct for ~125 / ~215
+frac digits then drifted into wrong-sequence garbage; both are fixed to the OEIS
+canonical digits and reference-locked. Every other named-algorithm constant
+(xxHash/FNV/NR-LCG/SHA/Blowfish-π-init/Lanczos/erf/π/e/τ) matches its published
+reference or is already KAT-locked.
