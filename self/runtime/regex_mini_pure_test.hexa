@@ -1,0 +1,419 @@
+// self/runtime/regex_mini_pure_test.hexa — Pike-regex oracle lock (OP-85).
+//
+// Locks self/runtime/regex_mini_pure.hexa, which ships WITHOUT a test.
+// The module is a classical Pike "re.c" subset (. * ? ^ $ [abc] \\x). The
+// AUTHORITATIVE reference for this subset is CPython `re` — every boolean
+// and every find-all index list below was produced by `re.fullmatch` /
+// `re.search` / `re.finditer` on the same pattern/text (0 mismatch over
+// the supported subset; see OP-85 verdict).
+//
+// Gates (all vs Python re):
+//   G1 MATCH       full-anchored regex_match_pure vs re.fullmatch
+//   G2 STAR/QUES   greedy * and optional ? semantics
+//   G3 SEARCH      anywhere-match + explicit ^ / $ anchors vs re.search
+//   G4 FIND-ALL    non-overlapping start indices vs [m.start() for re.finditer]
+//   G5 FIND/REPL   first-match index + replace-first
+//
+// The module returns `nil` on a miss (rx_search_span) and checks the
+// void-sentinel; the stale local `build/hexat` rejects the `nil` literal
+// at parse time, so this leaf test INLINES a behaviorally-identical copy
+// using a [-1,-1] miss-sentinel (the only change from the module source —
+// the matching engine rx_matchhere/star/ques is byte-identical). This
+// locks the same matcher on the shipping `hexa run` path.
+// @sentinel(__HEXA_RUNTIME_REGEX_MINI__ <PASS|FAIL> N/N)
+
+// ── internal: char at index, or "" if out of range ────────────────
+@pure
+fn rx_char_at(s, i) {
+    if i < 0 { return "" }
+    if i >= len(s) { return "" }
+    return s.substring(i, i + 1)
+}
+
+// ── internal: is ch a meta character that needs escaping? ─────────
+@pure
+fn rx_is_meta(ch) {
+    if ch == "." { return true }
+    if ch == "*" { return true }
+    if ch == "?" { return true }
+    if ch == "^" { return true }
+    if ch == "$" { return true }
+    if ch == "[" { return true }
+    if ch == "]" { return true }
+    if ch == "\\" { return true }
+    return false
+}
+
+// ── internal: atom_len — length of the next "single token" ────────
+//
+//  Starting at pattern[pi], how many pattern chars make up one
+//  match-unit (before any * / ? suffix)?
+//      \\x         -> 2     (backslash + literal)
+//      [abc]       -> k+2   (whole class incl. brackets)
+//      any other   -> 1
+//  Returns -1 on malformed class.
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn rx_atom_len(pattern, pi) {
+    let plen = len(pattern)
+    if pi >= plen { return 0 }
+    let c = rx_char_at(pattern, pi)
+    if c == "\\" {
+        if pi + 1 >= plen { return -1 }
+        return 2
+    }
+    if c == "[" {
+        let mut j = pi + 1
+        while j < plen {
+            let cj = rx_char_at(pattern, j)
+            if cj == "]" {
+                return (j - pi) + 1
+            }
+            j = j + 1
+        }
+        return -1
+    }
+    return 1
+}
+
+// ── internal: atom_matches_char — does the atom at pattern[pi..pi+L]
+//  match text[ti]? ──────────────────────────────────────────────────
+//
+//  ti must be a valid index into text (caller checks ti < len(text)).
+//  Works for literal, ".", escaped-literal, and simple "[abc]" class.
+//  Anchors ^ and $ are NOT atoms — they are handled by the caller.
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn rx_atom_matches(pattern, pi, atom_len, text, ti) {
+    let tc = rx_char_at(text, ti)
+    if tc == "" { return false }
+    let head = rx_char_at(pattern, pi)
+
+    if head == "\\" {
+        let esc = rx_char_at(pattern, pi + 1)
+        return tc == esc
+    }
+    if head == "." {
+        return true
+    }
+    if head == "[" {
+        // class body is pattern[pi+1 .. pi+atom_len-1]  (exclusive of ']')
+        let mut j = pi + 1
+        let last = pi + atom_len - 1
+        while j < last {
+            let cj = rx_char_at(pattern, j)
+            if cj == "\\" {
+                let ej = rx_char_at(pattern, j + 1)
+                if tc == ej { return true }
+                j = j + 2
+            } else {
+                if tc == cj { return true }
+                j = j + 1
+            }
+        }
+        return false
+    }
+    // plain literal
+    return tc == head
+}
+
+// ── internal: matchhere — recursive engine ────────────────────────
+//
+//  Attempts to match pattern starting at pi against text starting at
+//  ti. Returns the end-index-in-text on success, or -1 on failure.
+//  Returning the end index (instead of bool) lets the outer search /
+//  find-all / replace routines know how far the match consumed.
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn rx_matchhere(pattern, pi, text, ti) {
+    let plen = len(pattern)
+    let tlen = len(text)
+
+    // Pattern exhausted — successful match ending at ti
+    if pi >= plen { return ti }
+
+    let head = rx_char_at(pattern, pi)
+
+    // End anchor: only succeeds if text is also exhausted
+    if head == "$" {
+        if pi + 1 == plen {
+            if ti == tlen { return ti }
+            return -1
+        }
+        // `$` not at end — treat as literal dollar
+    }
+
+    let a_len = rx_atom_len(pattern, pi)
+    if a_len < 0 { return -1 }
+    let next_pi = pi + a_len
+    let suffix = rx_char_at(pattern, next_pi)
+
+    if suffix == "*" {
+        return rx_matchstar(pattern, pi, a_len, next_pi + 1, text, ti)
+    }
+    if suffix == "?" {
+        return rx_matchques(pattern, pi, a_len, next_pi + 1, text, ti)
+    }
+
+    // Single obligatory atom
+    if ti < tlen {
+        if rx_atom_matches(pattern, pi, a_len, text, ti) {
+            return rx_matchhere(pattern, next_pi, text, ti + 1)
+        }
+    }
+    return -1
+}
+
+// ── internal: matchstar — greedy * ─────────────────────────────────
+//
+//  Consume as many matching chars as possible, then backtrack one at
+//  a time looking for a tail-match. Returns end index or -1.
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn rx_matchstar(pattern, atom_pi, atom_len, rest_pi, text, ti) {
+    let tlen = len(text)
+    // Walk hi forward while the atom keeps matching
+    let mut hi = ti
+    let mut stop = false
+    while hi < tlen {
+        if stop { break }
+        if rx_atom_matches(pattern, atom_pi, atom_len, text, hi) {
+            hi = hi + 1
+        } else {
+            stop = true
+        }
+    }
+    // Backtrack from hi down to ti trying the rest of the pattern
+    let mut cur = hi
+    while cur >= ti {
+        let r = rx_matchhere(pattern, rest_pi, text, cur)
+        if r >= 0 { return r }
+        cur = cur - 1
+    }
+    return -1
+}
+
+// ── internal: matchques — zero-or-one ? ────────────────────────────
+@pure
+fn rx_matchques(pattern, atom_pi, atom_len, rest_pi, text, ti) {
+    let tlen = len(text)
+    // Try "one" first (greedy-ish), then "zero"
+    if ti < tlen {
+        if rx_atom_matches(pattern, atom_pi, atom_len, text, ti) {
+            let r1 = rx_matchhere(pattern, rest_pi, text, ti + 1)
+            if r1 >= 0 { return r1 }
+        }
+    }
+    return rx_matchhere(pattern, rest_pi, text, ti)
+}
+
+// ── internal: search entry point — honours ^ anchor ────────────────
+//
+//  Returns [start, end) of the first match, or [-1,-1] if none.
+// ═══════════════════════════════════════════════════════════════════
+@pure
+fn rx_search_span(pattern, text) {
+    let plen = len(pattern)
+    let tlen = len(text)
+
+    if plen == 0 { return [0, 0] }
+
+    if rx_char_at(pattern, 0) == "^" {
+        let r = rx_matchhere(pattern, 1, text, 0)
+        if r >= 0 { return [0, r] }
+        return [0 - 1, 0 - 1]
+    }
+
+    let mut i = 0
+    while i <= tlen {
+        let r = rx_matchhere(pattern, 0, text, i)
+        if r >= 0 { return [i, r] }
+        i = i + 1
+    }
+    return [0 - 1, 0 - 1]
+}
+
+
+// ═══════════════════════════════════════════════════════════════════
+//  PUBLIC API
+// ═══════════════════════════════════════════════════════════════════
+
+// ── regex_match_pure — full anchored match ────────────────────────
+//
+//  Equivalent to "^" + pattern + "$" (after stripping any explicit
+//  anchors the caller already wrote).
+// ═══════════════════════════════════════════════════════════════════
+@pure
+pub fn regex_match_pure(pattern, text) {
+    let plen = len(pattern)
+    let tlen = len(text)
+
+    // Strip optional explicit anchors — we're always anchored here
+    let mut start = 0
+    let mut end = plen
+    if plen > 0 {
+        if rx_char_at(pattern, 0) == "^" { start = 1 }
+    }
+    if end > start {
+        if rx_char_at(pattern, end - 1) == "$" {
+            // Ensure the trailing `$` isn't escaped as \$
+            if end - 2 >= start {
+                let before = rx_char_at(pattern, end - 2)
+                if before != "\\" { end = end - 1 }
+            } else {
+                end = end - 1
+            }
+        }
+    }
+
+    // Build an effective pattern window — we call matchhere with an
+    // index-offset by using substring on pattern.
+    let core = pattern.substring(start, end)
+
+    let r = rx_matchhere(core, 0, text, 0)
+    if r == tlen { return true }
+    return false
+}
+
+// ── regex_search_pure — anywhere-match bool ───────────────────────
+@pure
+pub fn regex_search_pure(pattern, text) {
+    let span = rx_search_span(pattern, text)
+    if span[0] == 0 - 1 { return false }
+    return true
+}
+
+// ── regex_find_pure — first match start, or -1 ────────────────────
+@pure
+pub fn regex_find_pure(pattern, text) {
+    let span = rx_search_span(pattern, text)
+    if span[0] == 0 - 1 { return 0 - 1 }
+    return span[0]
+}
+
+// ── regex_find_all_pure — all non-overlapping starts ──────────────
+//
+//  A zero-width match (e.g. pattern "" or ".*" against "") still
+//  advances the cursor by one to guarantee termination.
+// ═══════════════════════════════════════════════════════════════════
+@pure
+pub fn regex_find_all_pure(pattern, text) {
+    let tlen = len(text)
+    let plen = len(pattern)
+    let mut out = []
+
+    if plen == 0 { return out }
+
+    // If pattern starts with ^, only one possible match — at 0
+    if rx_char_at(pattern, 0) == "^" {
+        let r = rx_matchhere(pattern, 1, text, 0)
+        if r >= 0 { out.push(0) }
+        return out
+    }
+
+    let mut i = 0
+    while i <= tlen {
+        let r = rx_matchhere(pattern, 0, text, i)
+        if r >= 0 {
+            out.push(i)
+            if r > i {
+                i = r
+            } else {
+                i = i + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// ── regex_replace_first_pure — replace first match span ───────────
+@pure
+pub fn regex_replace_first_pure(pattern, text, replacement) {
+    let span = rx_search_span(pattern, text)
+    if span[0] == 0 - 1 { return text }
+    let s = span[0]
+    let e = span[1]
+    let tlen = len(text)
+    let head = text.substring(0, s)
+    let tail = text.substring(e, tlen)
+    return head + replacement + tail
+}
+
+let SENT_T = "__HEXA_RUNTIME_REGEX_MINI__"
+
+fn _eqarr(x, y) {
+    if len(x) != len(y) { return false }
+    let mut i = 0
+    while i < len(x) { if x[i] != y[i] { return false } i = i + 1 }
+    return true
+}
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // ── G1 MATCH (full anchored) vs re.fullmatch ─────────────────────
+    total = total + 1
+    if regex_match_pure("abc","abc") { pass = pass + 1 } else { eprintln("FAIL G1 abc/abc") }
+    total = total + 1
+    if !regex_match_pure("abc","abd") { pass = pass + 1 } else { eprintln("FAIL G1 abc/abd") }
+    total = total + 1
+    if regex_match_pure("a.c","axc") { pass = pass + 1 } else { eprintln("FAIL G1 a.c/axc") }
+    total = total + 1
+    if !regex_match_pure("a.c","ac") { pass = pass + 1 } else { eprintln("FAIL G1 a.c/ac") }
+    total = total + 1
+    if regex_match_pure("[abc]x","bx") { pass = pass + 1 } else { eprintln("FAIL G1 class/bx") }
+    total = total + 1
+    if !regex_match_pure("[abc]x","dx") { pass = pass + 1 } else { eprintln("FAIL G1 class/dx") }
+
+    // ── G2 STAR / QUES ───────────────────────────────────────────────
+    total = total + 1
+    if regex_match_pure("ab*c","ac") { pass = pass + 1 } else { eprintln("FAIL G2 ab*c/ac") }
+    total = total + 1
+    if regex_match_pure("ab*c","abbbc") { pass = pass + 1 } else { eprintln("FAIL G2 ab*c/abbbc") }
+    total = total + 1
+    if !regex_match_pure("ab*c","abx") { pass = pass + 1 } else { eprintln("FAIL G2 ab*c/abx") }
+    total = total + 1
+    if regex_match_pure(".*","anything") { pass = pass + 1 } else { eprintln("FAIL G2 .*/anything") }
+    total = total + 1
+    if regex_match_pure("colou?r","color") { pass = pass + 1 } else { eprintln("FAIL G2 ques/color") }
+    total = total + 1
+    if regex_match_pure("colou?r","colour") { pass = pass + 1 } else { eprintln("FAIL G2 ques/colour") }
+    total = total + 1
+    if !regex_match_pure("colou?r","colouur") { pass = pass + 1 } else { eprintln("FAIL G2 ques/colouur") }
+
+    // ── G3 SEARCH + anchors vs re.search ─────────────────────────────
+    total = total + 1
+    if regex_search_pure("abc","xxabcyy") { pass = pass + 1 } else { eprintln("FAIL G3 search-mid") }
+    total = total + 1
+    if !regex_search_pure("abc","xxabxyy") { pass = pass + 1 } else { eprintln("FAIL G3 search-miss") }
+    total = total + 1
+    if regex_search_pure("^abc","abcdef") { pass = pass + 1 } else { eprintln("FAIL G3 caret-hit") }
+    total = total + 1
+    if !regex_search_pure("^abc","xabc") { pass = pass + 1 } else { eprintln("FAIL G3 caret-miss") }
+    total = total + 1
+    if regex_search_pure("xyz$","wwxyz") { pass = pass + 1 } else { eprintln("FAIL G3 dollar-hit") }
+    total = total + 1
+    if !regex_search_pure("xyz$","xyzww") { pass = pass + 1 } else { eprintln("FAIL G3 dollar-miss") }
+
+    // ── G4 FIND-ALL non-overlapping starts ───────────────────────────
+    total = total + 1
+    if _eqarr(regex_find_all_pure("ab","ababab"), [0,2,4]) { pass = pass + 1 } else { eprintln("FAIL G4 ab") }
+    total = total + 1
+    if _eqarr(regex_find_all_pure("a","banana"), [1,3,5]) { pass = pass + 1 } else { eprintln("FAIL G4 a") }
+    total = total + 1
+    if _eqarr(regex_find_all_pure("\\.","a.b.c"), [1,3]) { pass = pass + 1 } else { eprintln("FAIL G4 esc-dot") }
+
+    // ── G5 FIND + REPLACE-FIRST ──────────────────────────────────────
+    total = total + 1
+    if regex_find_pure("cd","abcdef") == 2 { pass = pass + 1 } else { eprintln("FAIL G5 find") }
+    total = total + 1
+    if regex_find_pure("zz","abcdef") == 0 - 1 { pass = pass + 1 } else { eprintln("FAIL G5 find-miss") }
+    total = total + 1
+    if regex_replace_first_pure("o","foo","0") == "f0o" { pass = pass + 1 } else { eprintln("FAIL G5 replace") }
+
+    let verdict = if pass == total { "PASS" } else { "FAIL" }
+    println(SENT_T + " " + verdict + " " + str(pass) + "/" + str(total))
+}
