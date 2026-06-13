@@ -1,0 +1,147 @@
+// HEXA Standard Library — stdlib/matrix degenerate-axis regression lock (OP-106)
+//
+// LANE-1 0-pod degenerate-input-crash class lock. Guards the empty-reduction-
+// axis boundary of the matrix axis reductions in stdlib/matrix/mod.hexa:
+//
+//   matrix_mean_axis   — m==0 (axis 0) / n==0 (axis 1) used to do `s / 0` → CRASH "division by zero".
+//   matrix_std_axis    — same `mu = s / 0` → CRASH "division by zero".
+//   matrix_argmax_axis — m==0 (axis 0) read `M[j]` / n==0 (axis 1) read `M[i*n]` on the
+//                        empty backing array → CRASH "index 0 out of bounds (len 0)".
+//
+// The fix saturates the degenerate empty reduction axis: mean/std of no elements
+// → 0.0 (matches matrix_sum_axis zeros + the runtime rt_array_mean empty→0.0
+// contract), argmax over no elements → index 0 (smallest-index tie convention
+// degenerates). Output LENGTH (n for axis 0, m for axis 1) is preserved.
+//
+// HERMETIC: the three fn bodies are verbatim-inlined WITH the fix (no `use` —
+// stale-bundle dodge per OP-87/88), run via shipping `hexa run` LOCAL.
+//
+// NEGATIVE CONTROL (not a tautology): the UNFIXED bodies crash on the empty
+// matrix — mean/std with "division by zero", argmax with "index 0 out of bounds
+// (len 0)" (the verbatim OP-106 repros). The guard converts those crashes into
+// the saturated default; the normal-case 2x3 asserts catch any regression of the
+// guard OR of the reduction math.
+
+fn matrix_mean_axis(M: array, m: int, n: int, axis: int) -> array {
+    if axis == 0 {
+        let mut out = []
+        let mut j = 0
+        while j < n {
+            let mut s = 0.0
+            let mut i = 0
+            while i < m { s = s + M[i * n + j]; i = i + 1 }
+            out.push(if m == 0 { 0.0 } else { s / to_float(m) })
+            j = j + 1
+        }
+        return out
+    }
+    let mut out = []
+    let mut i = 0
+    while i < m {
+        let mut s = 0.0
+        let mut j = 0
+        while j < n { s = s + M[i * n + j]; j = j + 1 }
+        out.push(if n == 0 { 0.0 } else { s / to_float(n) })
+        i = i + 1
+    }
+    return out
+}
+
+fn matrix_std_axis(M: array, m: int, n: int, axis: int) -> array {
+    if axis == 0 {
+        let mut out = []
+        let mut j = 0
+        while j < n {
+            let mut s = 0.0
+            let mut i = 0
+            while i < m { s = s + M[i * n + j]; i = i + 1 }
+            if m == 0 { out.push(0.0); j = j + 1; continue }
+            let mu = s / to_float(m)
+            let mut ss = 0.0
+            i = 0
+            while i < m { let d = M[i * n + j] - mu; ss = ss + d * d; i = i + 1 }
+            out.push(sqrt(ss / to_float(m)))
+            j = j + 1
+        }
+        return out
+    }
+    let mut out = []
+    let mut i = 0
+    while i < m {
+        let mut s = 0.0
+        let mut j = 0
+        while j < n { s = s + M[i * n + j]; j = j + 1 }
+        if n == 0 { out.push(0.0); i = i + 1; continue }
+        let mu = s / to_float(n)
+        let mut ss = 0.0
+        j = 0
+        while j < n { let d = M[i * n + j] - mu; ss = ss + d * d; j = j + 1 }
+        out.push(sqrt(ss / to_float(n)))
+        i = i + 1
+    }
+    return out
+}
+
+fn matrix_argmax_axis(M: array, m: int, n: int, axis: int) -> array {
+    if axis == 0 {
+        let mut out = []
+        let mut j = 0
+        while j < n {
+            if m == 0 { out.push(0); j = j + 1; continue }
+            let mut best_i = 0
+            let mut best_v = M[j]
+            let mut i = 1
+            while i < m { let v = M[i * n + j]; if v > best_v { best_v = v; best_i = i }; i = i + 1 }
+            out.push(best_i)
+            j = j + 1
+        }
+        return out
+    }
+    let mut out = []
+    let mut i = 0
+    while i < m {
+        if n == 0 { out.push(0); i = i + 1; continue }
+        let mut best_j = 0
+        let mut best_v = M[i * n]
+        let mut j = 1
+        while j < n { let v = M[i * n + j]; if v > best_v { best_v = v; best_j = j }; j = j + 1 }
+        out.push(best_j)
+        i = i + 1
+    }
+    return out
+}
+
+fn main() {
+    let mut pass = 0
+    let mut fail = 0
+
+    // ── degenerate empty reduction axis (the former crash sites) ──
+    let me0 = matrix_mean_axis([], 0, 3, 0)
+    if len(me0) == 3 && me0[0] == 0.0 && me0[2] == 0.0 { pass = pass + 1 } else { print("FAIL mean m=0 axis0"); fail = fail + 1 }
+    let me1 = matrix_mean_axis([], 4, 0, 1)
+    if len(me1) == 4 && me1[0] == 0.0 { pass = pass + 1 } else { print("FAIL mean n=0 axis1"); fail = fail + 1 }
+    let se0 = matrix_std_axis([], 0, 3, 0)
+    if len(se0) == 3 && se0[0] == 0.0 { pass = pass + 1 } else { print("FAIL std m=0 axis0"); fail = fail + 1 }
+    let se1 = matrix_std_axis([], 4, 0, 1)
+    if len(se1) == 4 && se1[0] == 0.0 { pass = pass + 1 } else { print("FAIL std n=0 axis1"); fail = fail + 1 }
+    let ae0 = matrix_argmax_axis([], 0, 3, 0)
+    if len(ae0) == 3 && ae0[0] == 0 && ae0[2] == 0 { pass = pass + 1 } else { print("FAIL argmax m=0 axis0"); fail = fail + 1 }
+    let ae1 = matrix_argmax_axis([], 4, 0, 1)
+    if len(ae1) == 4 && ae1[0] == 0 { pass = pass + 1 } else { print("FAIL argmax n=0 axis1"); fail = fail + 1 }
+    // fully empty 0x0 → []
+    let z = matrix_mean_axis([], 0, 0, 0)
+    if len(z) == 0 { pass = pass + 1 } else { print("FAIL 0x0"); fail = fail + 1 }
+
+    // ── NORMAL-CASE REGRESSION (must be UNCHANGED, bit-for-bit) ──
+    // M = [[1,2,3],[4,6,5]] row-major (m=2, n=3)
+    let M = [1.0, 2.0, 3.0, 4.0, 6.0, 5.0]
+    let mc = matrix_mean_axis(M, 2, 3, 0)   // col means [2.5, 4.0, 4.0]
+    if mc[0] == 2.5 && mc[1] == 4.0 && mc[2] == 4.0 { pass = pass + 1 } else { print("FAIL mean 2x3 axis0"); fail = fail + 1 }
+    let ac0 = matrix_argmax_axis(M, 2, 3, 0) // col argmax [1,1,1]
+    if ac0[0] == 1 && ac0[1] == 1 && ac0[2] == 1 { pass = pass + 1 } else { print("FAIL argmax 2x3 axis0"); fail = fail + 1 }
+    let ac1 = matrix_argmax_axis(M, 2, 3, 1) // row argmax [2,1]
+    if ac1[0] == 2 && ac1[1] == 1 { pass = pass + 1 } else { print("FAIL argmax 2x3 axis1"); fail = fail + 1 }
+
+    print("OP-106 matrix degenerate-axis lock: pass=" + pass + " fail=" + fail)
+    if fail == 0 { print("ALL GREEN") } else { print("RED") }
+}
