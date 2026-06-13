@@ -1,0 +1,1310 @@
+// HEXA Standard Library — qforge/molscf/nevpt2
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE MOLSCF front-end brick 16/N (round-13) — strongly-contracted NEVPT2
+// (SC-NEVPT2): the 2nd-order MULTIREFERENCE perturbation correction on a converged
+// CASSCF reference. CASSCF (round-12) captures STATIC correlation; NEVPT2 adds the
+// DYNAMIC correlation on top — the multireference analog of how MP2 added dynamic
+// correlation to RHF. This completes the multireference description to quantitative
+// accuracy (E_CASSCF + E_NEVPT2 recovers more total correlation than CASSCF alone).
+//
+// ── SC-NEVPT2 (Angeli–Cimiraglia–Malrieu, JCP 114, 10252 (2001); 117, 9138) ──────
+//   Partition MOs into core (i,j) / active (p,q,r,s) / virtual (a,b). The 1st-order
+//   interacting space is spanned by 8 excitation classes S_l^{(k)}. The strongly-
+//   contracted variant uses ONE contracted perturber per class; each class energy is
+//   E_l = − Σ ⟨Ψ0|H|Ψ_l⟩² / (ΔE_l) assembled as norm_to_energy(norm, h, Δ) =
+//   −Σ norm/(Δ + h/norm). The active-space spin-summed RDMs (1-/2-/3-RDM in the
+//   E-product convention dm[p,q,r,s,..] = ⟨E_pq E_rs ..⟩) contract with the MO
+//   integrals to give h/norm. mo_energy of core/virtual = diagonal of the
+//   generalized Fock F^I + F^A (F^A from the 1-RDM).
+//
+// ── scope (d6 HONEST) ────────────────────────────────────────────────────────────
+//   SHIPPED: the 6 classes needing at most the 3-RDM —
+//     Sijrs (0)  : pure MP2-like core²→virt² (NO active RDM — integrals only)
+//     Sijr  (+1) : core²→(active,virt)        — 1-RDM (hole-1-RDM)
+//     Srsi  (−1) : (active,core)→virt²        — 1-/2-RDM (k27)
+//     Srs   (−2) : active²→virt²              — 2-/3-RDM (a7)
+//     Sij   (+2) : core²→active²              — hole 1-/2-/3-RDM (a9)
+//     Sir   (0)' : (active,core)→(active,virt)— 2-/3-RDM (a12,a13) — the dominant class
+//   These 6 classes account for the FULL SC-NEVPT2 energy on any CAS(2,2) reference
+//   (the two 4-RDM classes Sr (S_r^{(−1)}, a16) and Si (S_i^{(+1)}, a22) vanish
+//   identically there). NOT shipped this round: Sr/Si (4-RDM perturbers) — named as
+//   the round-14 brick. Anchor = PySCF mrpt.NEVPT(mc).kernel() on H4 CAS(2,2). The
+//   core/virtual mo_energy here = generalized-Fock DIAGONAL (exact when those blocks
+//   are 1-dim, as in CAS(2,2)); a full block diagonalization is the same round-14
+//   refinement that also opens larger core/virtual spaces.
+//
+// reuse (d19 · d3): fci_combinations / fci_dets from molscf/fci (determinant strings);
+//   the ladder-operator + det-index machinery is the SAME idea as casscf's _annihilate
+//   / _create / _det_index (re-expressed here for the E-product RDM convention PySCF's
+//   NEVPT2 working equations require). casci_mo_hcore / casci_mo_eri (full MO transform)
+//   are reused via casscf_full_hcore / casscf_full_eri. The new machinery is the
+//   E-product 1-/2-/3-RDM build + the 6 SC-NEVPT2 class-energy contractions.
+
+use "stdlib/qforge/molscf/fci"
+use "stdlib/qforge/molscf/casscf"
+
+fn _nv_abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+// ════════════════════════════════════════════════════════════════════════════
+//   E-product reduced density matrices  dm1=⟨E_pq⟩, dm2=⟨E_pq E_rs⟩, dm3=⟨E_pq E_rs E_tu⟩
+//   (PySCF make_dm123 spin-summed convention — the form the NEVPT2 equations use)
+// ════════════════════════════════════════════════════════════════════════════
+
+// Annihilate spin-orbital `so` in sorted occ. Returns [ok, newocc, phase].
+fn _nv_ann(occ: [any], so: int, nocc: int) -> [any] {
+    let mut pos = -1
+    let mut i = 0
+    while i < nocc { if occ[i] == so { pos = i ; i = nocc } else { i = i + 1 } }
+    if pos < 0 { return [0, [], 0] }
+    let mut nw = []
+    let mut j = 0
+    while j < nocc { if j != pos { nw.push(occ[j]) } j = j + 1 }
+    let mut ph = 1
+    if (pos % 2) == 1 { ph = 0 - 1 }
+    return [1, nw, ph]
+}
+
+// Create spin-orbital `so` into sorted occ (length cur). Returns [ok, newocc, phase].
+fn _nv_cre(occ: [any], so: int, cur: int) -> [any] {
+    let mut i = 0
+    while i < cur { if occ[i] == so { return [0, [], 0] } i = i + 1 }
+    let mut pos = 0
+    let mut k = 0
+    while k < cur { if occ[k] < so { pos = pos + 1 } k = k + 1 }
+    let mut nw = []
+    let mut placed = false
+    let mut j = 0
+    while j < cur {
+        if !placed { if occ[j] > so { nw.push(so) ; placed = true } }
+        nw.push(occ[j])
+        j = j + 1
+    }
+    if !placed { nw.push(so) }
+    let mut ph = 1
+    if (pos % 2) == 1 { ph = 0 - 1 }
+    return [1, nw, ph]
+}
+
+// Linear index of a sorted occupation list within `dets` (−1 if absent).
+fn _nv_idx(dets: [any], occ: [any], ndet: int, nocc: int) -> int {
+    let mut d = 0
+    while d < ndet {
+        let cand = dets[d]
+        let mut same = true
+        let mut i = 0
+        while i < nocc { if cand[i] != occ[i] { same = false ; i = nocc } else { i = i + 1 } }
+        if same { return d }
+        d = d + 1
+    }
+    return 0 - 1
+}
+
+// Apply E_pq = Σ_σ a†_{pσ} a_{qσ} to a coefficient vector `c` (length ndet) over the
+//   determinant basis. Returns the new coefficient vector (length ndet).
+pub fn nevpt2_apply_E(c: [any], dets: [any], ndet: int, nocc: int, p: int, q: int) -> [any] {
+    let mut out = []
+    let mut z = 0
+    while z < ndet { out.push(0.0) ; z = z + 1 }
+    let mut spin = 0
+    while spin < 2 {
+        let P = 2 * p + spin
+        let Q = 2 * q + spin
+        let mut J = 0
+        while J < ndet {
+            let cj = c[J]
+            if _nv_abs(cj) > 0.0 {
+                let an = _nv_ann(dets[J], Q, nocc)
+                if an[0] == 1 {
+                    let cr = _nv_cre(an[1], P, nocc - 1)
+                    if cr[0] == 1 {
+                        let I = _nv_idx(dets, cr[1], ndet, nocc)
+                        if I >= 0 {
+                            let ph = to_float(an[2] * cr[2])
+                            out[I] = out[I] + cj * ph
+                        }
+                    }
+                }
+            }
+            J = J + 1
+        }
+        spin = spin + 1
+    }
+    return out
+}
+
+// Inner product Σ_I a[I]·b[I] of two coefficient vectors.
+fn _nv_dot(a: [any], b: [any], ndet: int) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < ndet { s = s + a[i] * b[i] ; i = i + 1 }
+    return s
+}
+
+// 1-RDM dm1[p*m+q] = ⟨gs| E_pq |gs⟩ (m×m flat).
+pub fn nevpt2_dm1(gs: [any], dets: [any], ndet: int, m: int, nocc: int) -> [float] {
+    let mut D = []
+    let mut p = 0
+    while p < m {
+        let mut q = 0
+        while q < m {
+            let v = nevpt2_apply_E(gs, dets, ndet, nocc, p, q)
+            D.push(_nv_dot(gs, v, ndet))
+            q = q + 1
+        }
+        p = p + 1
+    }
+    return D
+}
+
+// 2-RDM dm2[((p*m+q)*m+r)*m+s] = ⟨gs| E_pq E_rs |gs⟩ (m^4 flat).
+pub fn nevpt2_dm2(gs: [any], dets: [any], ndet: int, m: int, nocc: int) -> [float] {
+    let mut D = []
+    let mut p = 0
+    while p < m {
+        let mut q = 0
+        while q < m {
+            // bra = ⟨gs| E_pq  (E_pq is self-adjoint-paired via E_qp on the bra)
+            let bra = nevpt2_apply_E(gs, dets, ndet, nocc, q, p)
+            let mut r = 0
+            while r < m {
+                let mut s = 0
+                while s < m {
+                    let ket = nevpt2_apply_E(gs, dets, ndet, nocc, r, s)
+                    D.push(_nv_dot(bra, ket, ndet))
+                    s = s + 1
+                }
+                r = r + 1
+            }
+            q = q + 1
+        }
+        p = p + 1
+    }
+    return D
+}
+
+// 3-RDM dm3[(((((p*m+q)*m+r)*m+s)*m+t)*m+u)] = ⟨gs| E_pq E_rs E_tu |gs⟩ (m^6 flat).
+//   Operators applied right-to-left to the KET: ket = E_pq(E_rs(E_tu |gs⟩)), then
+//   ⟨gs|ket⟩. (A bra-side trick would transpose the middle operator — avoided here.)
+pub fn nevpt2_dm3(gs: [any], dets: [any], ndet: int, m: int, nocc: int) -> [float] {
+    let mut D = []
+    let mut p = 0
+    while p < m {
+        let mut q = 0
+        while q < m {
+            let mut r = 0
+            while r < m {
+                let mut s = 0
+                while s < m {
+                    let mut t = 0
+                    while t < m {
+                        let mut u = 0
+                        while u < m {
+                            let k1 = nevpt2_apply_E(gs, dets, ndet, nocc, t, u)
+                            let k2 = nevpt2_apply_E(k1, dets, ndet, nocc, r, s)
+                            let k3 = nevpt2_apply_E(k2, dets, ndet, nocc, p, q)
+                            D.push(_nv_dot(gs, k3, ndet))
+                            u = u + 1
+                        }
+                        t = t + 1
+                    }
+                    s = s + 1
+                }
+                r = r + 1
+            }
+            q = q + 1
+        }
+        p = p + 1
+    }
+    return D
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   integral / Fock helpers over the full MO space
+// ════════════════════════════════════════════════════════════════════════════
+
+// Inactive (core) Fock F^I_pq = h_pq + Σ_i [2(pq|ii) − (pi|iq)] (full n×n; i core).
+//   = casscf inactive Fock; here we return the symmetric F^I used as h1eff.
+fn _nv_FI(h: [float], g: [float], n: int, ncore: int) -> [float] {
+    let mut FI = []
+    let mut p = 0
+    while p < n {
+        let mut q = 0
+        while q < n {
+            let mut v = h[p * n + q]
+            let mut i = 0
+            while i < ncore {
+                let coul = g[((p * n + q) * n + i) * n + i]
+                let exch = g[((p * n + i) * n + i) * n + q]
+                v = v + 2.0 * coul - exch
+                i = i + 1
+            }
+            FI.push(v)
+            q = q + 1
+        }
+        p = p + 1
+    }
+    return FI
+}
+
+// Generalized-Fock DIAGONAL element F_pp = F^I_pp + Σ_tu γ_tu [(pp|tu) − ½(pt|up)]
+//   (active F^A from the 1-RDM). Used for the core/virtual orbital energies.
+fn _nv_moe(FI: [float], g: [float], dm1: [float], n: int, ncore: int, m: int, pidx: int) -> float {
+    let mut v = FI[pidx * n + pidx]
+    let mut t = 0
+    while t < m {
+        let mut u = 0
+        while u < m {
+            let tt = ncore + t
+            let uu = ncore + u
+            let coul = g[((pidx * n + pidx) * n + tt) * n + uu]
+            let exch = g[((pidx * n + tt) * n + uu) * n + pidx]
+            v = v + dm1[t * m + u] * (coul - 0.5 * exch)
+            u = u + 1
+        }
+        t = t + 1
+    }
+    return v
+}
+
+// Strong-contraction energy assembler  −norm/(Δ + h/norm), guarded for norm≈0.
+fn _nv_n2e(norm: float, h: float, diff: float) -> float {
+    if _nv_abs(norm) <= 1.0e-14 { return 0.0 }
+    let denom = diff + h / norm
+    return 0.0 - norm / denom
+}
+
+// Inactive (core) Fock F^I (full n×n) — used as the effective active 1e (h1eff).
+pub fn nevpt2_inactive_fock(h: [float], g: [float], n: int, ncore: int) -> [float] {
+    return _nv_FI(h, g, n, ncore)
+}
+
+// Orbital energies = generalized-Fock diagonal F^I_pp + F^A_pp(γ) for ALL n MOs.
+//   Exact for 1-dim core/virtual blocks (CAS(2,2)); a full block-diagonalization
+//   (round-14) generalizes to multi-orbital core/virtual canonicalization.
+pub fn nevpt2_mo_energy(h: [float], g: [float], dm1: [float], n: int, ncore: int, m: int) -> [float] {
+    let FI = _nv_FI(h, g, n, ncore)
+    let mut moe = []
+    let mut p = 0
+    while p < n {
+        moe.push(_nv_moe(FI, g, dm1, n, ncore, m, p))
+        p = p + 1
+    }
+    return moe
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   the 6 SC-NEVPT2 class energies (≤ 3-RDM). Indices: core i,j ; active p,q,r,s ;
+//   virtual a,b. g = full chemist (pq|rs) MO tensor; FI = inactive Fock (h1eff).
+//   active 1e h1e_pq = FI[(ncore+p),(ncore+q)] ; mo-energy moe[full index].
+// ════════════════════════════════════════════════════════════════════════════
+
+// helper: active-active-active-active chemist (tu|vw) from full g.
+fn _nv_gA(g: [float], n: int, c: int, t: int, u: int, v: int, w: int) -> float {
+    return g[(((c + t) * n + (c + u)) * n + (c + v)) * n + (c + w)]
+}
+
+// Sijrs (0): pure MP2-like core²→virt². E = Σ_i t2·θ, no active RDM.
+//   gi[j,a,b]=(ia|jb), djba=eia[i,a]+eia[j,b], θ=2·g−g^T, t2=g/Δ.
+pub fn nevpt2_Sijrs(g: [float], moe: [float], n: int, ncore: int, m: int) -> float {
+    let nocc = ncore + m
+    let nvirt = n - nocc
+    let mut e = 0.0
+    let mut i = 0
+    while i < ncore {
+        let mut j = 0
+        while j < ncore {
+            let mut a = 0
+            while a < nvirt {
+                let mut b = 0
+                while b < nvirt {
+                    let va = nocc + a
+                    let vb = nocc + b
+                    let giab = g[((i * n + va) * n + j) * n + vb]
+                    let giba = g[((i * n + vb) * n + j) * n + va]
+                    let theta = 2.0 * giab - giba
+                    let dd = moe[i] - moe[va] + moe[j] - moe[vb]
+                    let t2 = giab / dd
+                    e = e + t2 * theta
+                    b = b + 1
+                }
+                a = a + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return e
+}
+
+// active 1e effective Ham minus the (mjjn) self-term used by some intermediates:
+//   h1e_pq = FI[(c+p),(c+q)]  (already the inactive Fock active block).
+fn _nv_h1(FI: [float], n: int, c: int, p: int, q: int) -> float {
+    return FI[(c + p) * n + (c + q)]
+}
+
+// hole 1-RDM  hdm1[p*m+a] = 2 δ_pa − dm1[a*m+p].
+fn _nv_hdm1(dm1: [float], m: int) -> [float] {
+    let mut hdm1 = []
+    let mut p0 = 0
+    while p0 < m {
+        let mut a0 = 0
+        while a0 < m {
+            let mut d = 0.0
+            if p0 == a0 { d = 2.0 }
+            hdm1.push(d - dm1[a0 * m + p0])
+            a0 = a0 + 1
+        }
+        p0 = p0 + 1
+    }
+    return hdm1
+}
+
+// a3[p*m+a] = Σ_i h1_ia hdm1_ip + 2 Σ_ik (ik|pa) γ_ik − Σ_ijk (ik|ja) dm2_jpik.
+pub fn nevpt2_a3_debug(g: [float], FI: [float], dm1: [float], dm2: [float], n: int, ncore: int, m: int) -> [float] {
+    let hdm1 = _nv_hdm1(dm1, m)
+    let mut a3 = []
+    let mut p = 0
+    while p < m {
+        let mut a = 0
+        while a < m {
+            let mut v = 0.0
+            let mut i = 0
+            while i < m {
+                let t1 = _nv_h1(FI, n, ncore, i, a) * hdm1[i * m + p]
+                v = v + t1
+                i = i + 1
+            }
+            let mut i2 = 0
+            while i2 < m {
+                let mut k = 0
+                while k < m {
+                    let gv2 = _nv_gA(g, n, ncore, i2, k, p, a)
+                    let t2 = 2.0 * gv2 * dm1[i2 * m + k]
+                    v = v + t2
+                    k = k + 1
+                }
+                i2 = i2 + 1
+            }
+            let mut i3 = 0
+            while i3 < m {
+                let mut j = 0
+                while j < m {
+                    let mut k2 = 0
+                    while k2 < m {
+                        let gv = _nv_gA(g, n, ncore, i3, k2, j, a)
+                        let t3 = gv * dm2[((j * m + p) * m + i3) * m + k2]
+                        v = v - t3
+                        k2 = k2 + 1
+                    }
+                    j = j + 1
+                }
+                i3 = i3 + 1
+            }
+            a3.push(v)
+            a = a + 1
+        }
+        p = p + 1
+    }
+    return a3
+}
+
+// Sijr (+1): core²→(active,virt). 1-RDM via hole-density hdm1=2δ−γ^T.
+//   v_rpji = chemist (vr ci | (c+p) cj). norm/h symmetrized over i≤j.
+pub fn nevpt2_Sijr(g: [float], FI: [float], dm1: [float], dm2: [float], moe: [float], n: int, ncore: int, m: int) -> float {
+    let nocc = ncore + m
+    let nvirt = n - nocc
+    let hdm1 = _nv_hdm1(dm1, m)
+    let a3 = nevpt2_a3_debug(g, FI, dm1, dm2, n, ncore, m)
+    // accumulate over r (virt), i≤j (core). v_rpji = (vr, c+p | cj, ci) = g[vr,c+p,cj,ci]
+    let mut e = 0.0
+    let mut r = 0
+    while r < nvirt {
+        let vr = nocc + r
+        let mut i = 0
+        while i < ncore {
+            let mut j = i
+            while j < ncore {
+                let mut norm = 0.0
+                let mut hh = 0.0
+                let mut pp = 0
+                while pp < m {
+                    let mut aa = 0
+                    while aa < m {
+                        // h2e_v[r,p,j,i] = chemist (vr ci | (c+p) cj) = g[vr, i, c+p, j]
+                        let vrpji = g[((vr * n + i) * n + (ncore + pp)) * n + j]
+                        let vraji = g[((vr * n + i) * n + (ncore + aa)) * n + j]
+                        // h2e_v[r,a,i,j] = g[vr, j, c+a, i]  (swap j↔i)
+                        let vraij = g[((vr * n + j) * n + (ncore + aa)) * n + i]
+                        // (j,i) → (i,j) transpose partner
+                        let vrpij = g[((vr * n + j) * n + (ncore + pp)) * n + i]
+                        let n1a = 2.0 * vrpji * vraji
+                        let n1b = vrpji * vraij
+                        let n1 = n1a - n1b
+                        let n2a = 2.0 * vrpij * vraij
+                        let n2b = vrpij * vraji
+                        let n2 = n2a - n2b
+                        let nsum = n1 + n2
+                        norm = norm + nsum * hdm1[pp * m + aa]
+                        hh = hh + nsum * a3[pp * m + aa]
+                        aa = aa + 1
+                    }
+                    pp = pp + 1
+                }
+                if i == j { norm = norm * 0.5 ; hh = hh * 0.5 }
+                let diff = moe[vr] - moe[i] - moe[j]
+                e = e + _nv_n2e(norm, hh, diff)
+                j = j + 1
+            }
+            i = i + 1
+        }
+        r = r + 1
+    }
+    return e
+}
+
+// k27[p*m+a] = −Σ_i h1_ai γ_pi − Σ_ijk (ia|jk) dm2_pkij + Σ_ij (ia|ji) γ_pj.
+fn _nv_k27(g: [float], FI: [float], dm1: [float], dm2: [float], n: int, ncore: int, m: int) -> [float] {
+    let mut k27 = []
+    let mut p = 0
+    while p < m {
+        let mut a = 0
+        while a < m {
+            let mut v = 0.0
+            let mut i = 0
+            while i < m {
+                let t1 = _nv_h1(FI, n, ncore, a, i) * dm1[p * m + i]
+                v = v - t1
+                i = i + 1
+            }
+            // −Σ_ijk (i a|j k) dm2[p,k,i,j]   h2e[i,a,j,k]=(i j|a k); pyscf 'iajk'=(ia|jk)chem? 
+            //   make_k27 uses h2e in physicist <ij|kl>=(ik|jl). 'iajk,pkij': h2e[i,a,j,k]=(ij|ak)
+            let mut i2 = 0
+            while i2 < m {
+                let mut j = 0
+                while j < m {
+                    let mut k = 0
+                    while k < m {
+                        let gv = _nv_gA(g, n, ncore, i2, j, a, k)
+                        let t2 = gv * dm2[((p * m + k) * m + i2) * m + j]
+                        v = v - t2
+                        k = k + 1
+                    }
+                    j = j + 1
+                }
+                i2 = i2 + 1
+            }
+            // +Σ_ij (i a|j i) γ_pj ; h2e[i,a,j,i]=(ij|ai)
+            let mut i3 = 0
+            while i3 < m {
+                let mut j2 = 0
+                while j2 < m {
+                    let gv2 = _nv_gA(g, n, ncore, i3, j2, a, i3)
+                    let t3 = gv2 * dm1[p * m + j2]
+                    v = v + t3
+                    j2 = j2 + 1
+                }
+                i3 = i3 + 1
+            }
+            k27.push(v)
+            a = a + 1
+        }
+        p = p + 1
+    }
+    return k27
+}
+
+// Srsi (−1): (active,core)→virt². 1-/2-RDM via k27.
+//   h2e_v[r,s,i,p] = chemist (vr ci | vs (c+p)). norm/h symmetrized over r≤s.
+pub fn nevpt2_Srsi(g: [float], FI: [float], dm1: [float], dm2: [float], moe: [float], n: int, ncore: int, m: int) -> float {
+    let nocc = ncore + m
+    let nvirt = n - nocc
+    let k27 = _nv_k27(g, FI, dm1, dm2, n, ncore, m)
+    let mut e = 0.0
+    let mut r = 0
+    while r < nvirt {
+        let mut s = r
+        while s < nvirt {
+            let vr = nocc + r
+            let vs = nocc + s
+            let mut i = 0
+            while i < ncore {
+                let mut norm = 0.0
+                let mut hh = 0.0
+                let mut pp = 0
+                while pp < m {
+                    let mut aa = 0
+                    while aa < m {
+                        // h2e_v[r,s,i,p]=g[vr,i,vs,c+p]; [s,r,i,a]=g[vs,i,vr,c+a]
+                        let rsip = g[((vr * n + i) * n + vs) * n + (ncore + pp)]
+                        let rsia = g[((vr * n + i) * n + vs) * n + (ncore + aa)]
+                        let sria = g[((vs * n + i) * n + vr) * n + (ncore + aa)]
+                        // transpose partner (s,r): h2e_v[s,r,i,p]=g[vs,i,vr,c+p], [r,s,i,a]=g[vr,i,vs,c+a]
+                        let srip = g[((vs * n + i) * n + vr) * n + (ncore + pp)]
+                        let rsia2 = g[((vr * n + i) * n + vs) * n + (ncore + aa)]
+                        let n1a = 2.0 * rsip * rsia
+                        let n1b = rsip * sria
+                        let n1 = n1a - n1b
+                        // (s,r) term uses srip with sria->rsia2 and sria->? mirror
+                        let n2a = 2.0 * srip * rsia2
+                        let n2b = srip * rsia
+                        let n2 = n2a - n2b
+                        let nsum = n1 + n2
+                        norm = norm + nsum * dm1[pp * m + aa]
+                        hh = hh + nsum * k27[pp * m + aa]
+                        aa = aa + 1
+                    }
+                    pp = pp + 1
+                }
+                if r == s { norm = norm * 0.5 ; hh = hh * 0.5 }
+                let diff = moe[vr] + moe[vs] - moe[i]
+                e = e + _nv_n2e(norm, hh, diff)
+                i = i + 1
+            }
+            s = s + 1
+        }
+        r = r + 1
+    }
+    return e
+}
+
+// reordered 2-RDM  rm2[i,l,j,k] form: rm2_ijkl = dm2_iljk − γ_ik δ_jl  (4-index, used by a7).
+//   stored as rm2[((i*m+j)*m+k)*m+l].
+fn _nv_rm2(dm1: [float], dm2: [float], m: int) -> [float] {
+    let mut rm2 = []
+    let mut i = 0
+    while i < m {
+        let mut j = 0
+        while j < m {
+            let mut k = 0
+            while k < m {
+                let mut l = 0
+                while l < m {
+                    // dm2_iljk = dm2[((i*m+l)*m+j)*m+k]
+                    let d2 = dm2[((i * m + l) * m + j) * m + k]
+                    let mut dlt = 0.0
+                    if j == l { dlt = dm1[i * m + k] }
+                    let val = d2 - dlt
+                    rm2.push(val)
+                    l = l + 1
+                }
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return rm2
+}
+
+// Srs (−2): active²→virt². 2-/3-RDM via a7. h2e_v[r,s,q,p]=chemist (vr (c+q)|vs (c+p)).
+//   This class needs the reordered 3-RDM rm3 built on the fly (no full 6-index store
+//   beyond the active block; m is small). norm uses rm2, h uses a7.
+pub fn nevpt2_Srs(g: [float], FI: [float], dm1: [float], dm2: [float], dm3: [float], moe: [float], n: int, ncore: int, m: int) -> float {
+    let nocc = ncore + m
+    let nvirt = n - nocc
+    if nvirt == 0 { return 0.0 }
+    let rm2 = _nv_rm2(dm1, dm2, m)
+    // a7[p,q,a,b] = −Σ_i h1_bi rm2_pqia − Σ_i h1_ai rm2_pqbi − Σ_kij (kb|ij)_phys rm3_pqkija
+    //   − Σ_kij (ka|ij) rm3_pqkibj − Σ_ij (ba|ij) rm2_pqij.  h1_xy=FI active.
+    //   rm3_ijklmn = dm3_injmkl − δ_jn dm2_imkl − δ_km rm2_ijln − δ_kn rm2_ijml.
+    // We compute a7[p,q,a,b] per (p,q,a,b) summing rm3 elements on the fly.
+    let mut e = 0.0
+    let mut r = 0
+    while r < nvirt {
+        let mut s = r
+        while s < nvirt {
+            let vr = nocc + r
+            let vs = nocc + s
+            // norm_rs = 0.5 Σ_pqab v_rsqp v_rsba rm2_pqba ; h_rs = 0.5 Σ v_rsqp v_rsba a7_pqab
+            let mut norm = 0.0
+            let mut hh = 0.0
+            let mut p = 0
+            while p < m {
+                let mut q = 0
+                while q < m {
+                    let mut a = 0
+                    while a < m {
+                        let mut b = 0
+                        while b < m {
+                            // v_rsqp = (vr (c+q)|vs (c+p)) ; v_rsba = (vr (c+b)|vs (c+a))
+                            let vrsqp = g[((vr * n + (ncore + q)) * n + vs) * n + (ncore + p)]
+                            let vrsba = g[((vr * n + (ncore + b)) * n + vs) * n + (ncore + a)]
+                            let prod = vrsqp * vrsba
+                            // rm2_pqba = rm2[((p*m+q)*m+b)*m+a]
+                            let rm2v = rm2[((p * m + q) * m + b) * m + a]
+                            let nterm = prod * rm2v
+                            norm = norm + 0.5 * nterm
+                            // a7 element
+                            let a7v = _nv_a7_elem(g, FI, dm1, dm2, dm3, rm2, m, n, ncore, p, q, a, b)
+                            let hterm = prod * a7v
+                            hh = hh + 0.5 * hterm
+                            b = b + 1
+                        }
+                        a = a + 1
+                    }
+                    q = q + 1
+                }
+                p = p + 1
+            }
+            let diff = moe[vr] + moe[vs]
+            e = e + _nv_n2e(norm, hh, diff)
+            s = s + 1
+        }
+        r = r + 1
+    }
+    return e
+}
+
+// rm3_ijklmn = dm3_injmkl − δ_jn dm2_imkl − δ_km rm2_ijln − δ_kn rm2_ijml.
+fn _nv_rm3(dm2: [float], dm3: [float], rm2: [float], m: int, i: int, j: int, k: int, l: int, mm: int, nn: int) -> float {
+    // dm3 index [i,nn,j,mm,k,l] — build the flat offset stepwise (avoid deep nesting)
+    let mut o = i
+    o = o * m + nn
+    o = o * m + j
+    o = o * m + mm
+    o = o * m + k
+    o = o * m + l
+    let d3 = dm3[o]
+    let mut v = d3
+    if j == nn {
+        let o2 = ((i * m + mm) * m + k) * m + l
+        v = v - dm2[o2]
+    }
+    if k == mm {
+        let o3 = ((i * m + j) * m + l) * m + nn
+        v = v - rm2[o3]
+    }
+    if k == nn {
+        let o4 = ((i * m + j) * m + mm) * m + l
+        v = v - rm2[o4]
+    }
+    return v
+}
+
+// a7[p,q,a,b] element (Srs perturber intermediate).
+fn _nv_a7_elem(g: [float], FI: [float], dm1: [float], dm2: [float], dm3: [float], rm2: [float], m: int, n: int, ncore: int, p: int, q: int, a: int, b: int) -> float {
+    let mut v = 0.0
+    // −Σ_i h1_bi rm2_pqia − Σ_i h1_ai rm2_pqbi
+    let mut i = 0
+    while i < m {
+        let h1b = _nv_h1(FI, n, ncore, b, i)
+        let t1 = h1b * rm2[((p * m + q) * m + i) * m + a]
+        v = v - t1
+        let h1a = _nv_h1(FI, n, ncore, a, i)
+        let t2 = h1a * rm2[((p * m + q) * m + b) * m + i]
+        v = v - t2
+        i = i + 1
+    }
+    // −Σ_kij (k b|i j)... h2e[k,b,i,j]=(ki|bj); rm3_pqkija
+    let mut k = 0
+    while k < m {
+        let mut i2 = 0
+        while i2 < m {
+            let mut j = 0
+            while j < m {
+                let gkb = _nv_gA(g, n, ncore, k, i2, b, j)
+                let r3a = _nv_rm3(dm2, dm3, rm2, m, p, q, k, i2, j, a)
+                let t3 = gkb * r3a
+                v = v - t3
+                let gka = _nv_gA(g, n, ncore, k, i2, a, j)
+                let r3b = _nv_rm3(dm2, dm3, rm2, m, p, q, k, i2, b, j)
+                let t4 = gka * r3b
+                v = v - t4
+                j = j + 1
+            }
+            i2 = i2 + 1
+        }
+        k = k + 1
+    }
+    // −Σ_ij (b a|i j) rm2_pqij ; h2e[b,a,i,j]=(bi|aj)
+    let mut i3 = 0
+    while i3 < m {
+        let mut j2 = 0
+        while j2 < m {
+            let gba = _nv_gA(g, n, ncore, b, i3, a, j2)
+            let r2v = rm2[((p * m + q) * m + i3) * m + j2]
+            let t5 = gba * r2v
+            v = v - t5
+            j2 = j2 + 1
+        }
+        i3 = i3 + 1
+    }
+    return v
+}
+
+
+// hole 2-RDM  hdm2[i,j,k,l] (PySCF make_hdm2). Built from dm1,dm2.
+//   x_ijkl = dm2_ikjl − δ_jk dm1_il ;
+//   hdm2_ijkl = x_klij + δ_il dm1_kj + δ_jk dm1_li − 2δ_ik dm1_lj − 2δ_jl dm1_ki
+//             − 2δ_il δ_jk + 4 δ_ik δ_jl.   stored hdm2[((i*m+j)*m+k)*m+l].
+fn _nv_hdm2(dm1: [float], dm2: [float], m: int) -> [float] {
+    let mut H = []
+    let mut i = 0
+    while i < m {
+        let mut j = 0
+        while j < m {
+            let mut k = 0
+            while k < m {
+                let mut l = 0
+                while l < m {
+                    // x_klij = dm2_kilj − δ_li dm1_kj  (x_abcd=dm2_acbd−δ_bc dm1_ad with a=k,b=l,c=i,d=j)
+                    let d2 = dm2[((k * m + i) * m + l) * m + j]
+                    let mut xt = d2
+                    if l == i { xt = xt - dm1[k * m + j] }
+                    let mut v = xt
+                    if i == l { v = v + dm1[k * m + j] }
+                    if j == k { v = v + dm1[l * m + i] }
+                    if i == k { v = v - 2.0 * dm1[l * m + j] }
+                    if j == l { v = v - 2.0 * dm1[k * m + i] }
+                    if i == l { if j == k { v = v - 2.0 } }
+                    if i == k { if j == l { v = v + 4.0 } }
+                    H.push(v)
+                    l = l + 1
+                }
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return H
+}
+
+// hole 3-RDM element hdm3[p,q,r,a,b,c] (PySCF make_hdm3), built on the fly.
+//   hdm3 = −δ_pb hdm2_qrac − δ_br hdm2_pqac + 2δ_bq hdm2_prac + 2δ_ap dm2_bqcr
+//          − 4δ_ap δ_cr dm1_bq + 2δ_cr dm2_bqap − dm3_bqapcr + 2δ_ar δ_pc dm1_bq
+//          − δ_ar dm2_bqcp.
+fn _nv_hdm3(dm1: [float], dm2: [float], dm3: [float], hdm2: [float], m: int, p: int, q: int, r: int, a: int, b: int, c: int) -> float {
+    let mut v = 0.0
+    if p == b { v = v - hdm2[((q * m + r) * m + a) * m + c] }
+    if b == r { v = v - hdm2[((p * m + q) * m + a) * m + c] }
+    if b == q { v = v + 2.0 * hdm2[((p * m + r) * m + a) * m + c] }
+    if a == p { v = v + 2.0 * dm2[((b * m + q) * m + c) * m + r] }
+    if a == p { if c == r { v = v - 4.0 * dm1[b * m + q] } }
+    if c == r { v = v + 2.0 * dm2[((b * m + q) * m + a) * m + p] }
+    let mut o = b
+    o = o * m + q
+    o = o * m + a
+    o = o * m + p
+    o = o * m + c
+    o = o * m + r
+    v = v - dm3[o]
+    if a == r { if p == c { v = v + 2.0 * dm1[b * m + q] } }
+    if a == r { v = v - dm2[((b * m + q) * m + c) * m + p] }
+    return v
+}
+
+// a9[p,q,a,b] element (Sij perturber intermediate; PySCF make_a9). hole RDMs.
+//   a9 = Σ_i h1_ib hdm2_pqai + 2Σ_ij (ij|ib) hdm2_pqaj − Σ_ij (ij|jb) hdm2_pqai
+//        − Σ_ijk (ij|kb) hdm3_pkqaij + Σ_i h1_ia hdm2_pqib − Σ_ij (ij|ja) hdm2_pqib
+//        − Σ_ij (ij|ba) hdm2_pqji + 2Σ_ij (ij|ia) hdm2_pqjb − Σ_ijk (ij|ka) hdm3_pqkjbi.
+//   h1_xy=FI active; (ab|cd)=_nv_gA. h2e physicist [i,j,k,l]=(ik|jl).
+fn _nv_a9_elem(g: [float], FI: [float], dm1: [float], dm2: [float], dm3: [float], hdm2: [float], m: int, n: int, ncore: int, p: int, q: int, a: int, b: int) -> float {
+    let mut v = 0.0
+    let mut i = 0
+    while i < m {
+        let h1b = _nv_h1(FI, n, ncore, i, b)
+        let t1 = h1b * hdm2[((p * m + q) * m + a) * m + i]
+        v = v + t1
+        let h1a = _nv_h1(FI, n, ncore, i, a)
+        let t5 = h1a * hdm2[((p * m + q) * m + i) * m + b]
+        v = v + t5
+        i = i + 1
+    }
+    // 2Σ_ij (i j|i b) hdm2_pqaj ; h2e[i,j,i,b]=(ii|jb)=_nv_gA(i,i,j,b)
+    let mut i2 = 0
+    while i2 < m {
+        let mut j = 0
+        while j < m {
+            let g2 = _nv_gA(g, n, ncore, i2, i2, j, b)
+            let t2 = 2.0 * g2 * hdm2[((p * m + q) * m + a) * m + j]
+            v = v + t2
+            // −Σ_ij (i j|j b) hdm2_pqai ; h2e[i,j,j,b]=(ij|jb)=_nv_gA(i,j,j,b)
+            let g3 = _nv_gA(g, n, ncore, i2, j, j, b)
+            let t3 = g3 * hdm2[((p * m + q) * m + a) * m + i2]
+            v = v - t3
+            // −Σ_ij (i j|j a) hdm2_pqib ; h2e[i,j,j,a]=(ij|ja)
+            let g6 = _nv_gA(g, n, ncore, i2, j, j, a)
+            let t6 = g6 * hdm2[((p * m + q) * m + i2) * m + b]
+            v = v - t6
+            // −Σ_ij (i j|b a) hdm2_pqji ; h2e[i,j,b,a]=(ib|ja)
+            let g7 = _nv_gA(g, n, ncore, i2, b, j, a)
+            let t7 = g7 * hdm2[((p * m + q) * m + j) * m + i2]
+            v = v - t7
+            // 2Σ_ij (i j|i a) hdm2_pqjb ; h2e[i,j,i,a]=(ii|ja)
+            let g8 = _nv_gA(g, n, ncore, i2, i2, j, a)
+            let t8 = 2.0 * g8 * hdm2[((p * m + q) * m + j) * m + b]
+            v = v + t8
+            j = j + 1
+        }
+        i2 = i2 + 1
+    }
+    // −Σ_ijk (i j|k b) hdm3_pkqaij ; h2e[i,j,k,b]=(ik|jb)=_nv_gA(i,k,j,b)
+    // −Σ_ijk (i j|k a) hdm3_pqkjbi ; h2e[i,j,k,a]=(ik|ja)
+    let mut i3 = 0
+    while i3 < m {
+        let mut j2 = 0
+        while j2 < m {
+            let mut k = 0
+            while k < m {
+                let gkb = _nv_gA(g, n, ncore, i3, k, j2, b)
+                let h3a = _nv_hdm3(dm1, dm2, dm3, hdm2, m, p, k, q, a, i3, j2)
+                let t4 = gkb * h3a
+                v = v - t4
+                let gka = _nv_gA(g, n, ncore, i3, k, j2, a)
+                let h3b = _nv_hdm3(dm1, dm2, dm3, hdm2, m, p, q, k, j2, b, i3)
+                let t9 = gka * h3b
+                v = v - t9
+                k = k + 1
+            }
+            j2 = j2 + 1
+        }
+        i3 = i3 + 1
+    }
+    return v
+}
+
+// Sij (+2): core²→active². hole 1-/2-/3-RDM via a9.
+//   h2e_v[q,p,i,j]=chemist ((c+q) ci|(c+p) cj). norm uses hdm2, h uses a9.
+pub fn nevpt2_Sij(g: [float], FI: [float], dm1: [float], dm2: [float], dm3: [float], moe: [float], n: int, ncore: int, m: int) -> float {
+    if ncore == 0 { return 0.0 }
+    let hdm2 = _nv_hdm2(dm1, dm2, m)
+    let mut e = 0.0
+    let mut i = 0
+    while i < ncore {
+        let mut j = 0
+        while j < ncore {
+            // norm_ij = 0.5 Σ_pqab v_qpij v_baij hdm2_pqab ; h = 0.5 Σ v v a9_pqab
+            let mut norm = 0.0
+            let mut hh = 0.0
+            let mut p = 0
+            while p < m {
+                let mut q = 0
+                while q < m {
+                    let mut a = 0
+                    while a < m {
+                        let mut b = 0
+                        while b < m {
+                            // v_qpij = ((c+q) ci|(c+p) cj) = g[c+q, i, c+p, j]
+                            let vqpij = g[(((ncore + q) * n + i) * n + (ncore + p)) * n + j]
+                            let vbaij = g[(((ncore + b) * n + i) * n + (ncore + a)) * n + j]
+                            let prod = vqpij * vbaij
+                            let h2v = hdm2[((p * m + q) * m + a) * m + b]
+                            let nterm = prod * h2v
+                            norm = norm + 0.5 * nterm
+                            let a9v = _nv_a9_elem(g, FI, dm1, dm2, dm3, hdm2, m, n, ncore, p, q, a, b)
+                            let hterm = prod * a9v
+                            hh = hh + 0.5 * hterm
+                            b = b + 1
+                        }
+                        a = a + 1
+                    }
+                    q = q + 1
+                }
+                p = p + 1
+            }
+            let dsum = moe[i] + moe[j]
+            let diff = 0.0 - dsum
+            e = e + _nv_n2e(norm, hh, diff)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return e
+}
+
+// a12[p,q,a,b] element (Sir perturber; PySCF make_a12). h2e physicist [i,j,k,l]=(ik|jl).
+//   a12 = Σ_i h1_ia dm2_qpib − Σ_i h1_bi dm2_qpai + Σ_ijk (ij|ka) dm3_qpjbik
+//         − Σ_ijk (kb|ij) dm3_qpajki − Σ_jk (bj|ka) dm2_qpjk + Σ_ij (jb|ij) dm2_qpai.
+fn _nv_a12_elem(g: [float], FI: [float], dm1: [float], dm2: [float], dm3: [float], m: int, n: int, ncore: int, p: int, q: int, a: int, b: int) -> float {
+    let mut v = 0.0
+    let mut i = 0
+    while i < m {
+        let h1a = _nv_h1(FI, n, ncore, i, a)
+        let t1 = h1a * dm2[((q * m + p) * m + i) * m + b]
+        v = v + t1
+        let h1b = _nv_h1(FI, n, ncore, b, i)
+        let t2 = h1b * dm2[((q * m + p) * m + a) * m + i]
+        v = v - t2
+        i = i + 1
+    }
+    let mut i2 = 0
+    while i2 < m {
+        let mut j = 0
+        while j < m {
+            let mut k = 0
+            while k < m {
+                // +Σ (i j|k a) dm3_qpjbik ; h2e[i,j,k,a]=(ik|ja)=_nv_gA(i,k,j,a)
+                let g3 = _nv_gA(g, n, ncore, i2, k, j, a)
+                let d3a = _nv_dm3_idx(dm3, m, q, p, j, b, i2, k)
+                let t3 = g3 * d3a
+                v = v + t3
+                // −Σ (k b|i j) dm3_qpajki ; h2e[k,b,i,j]=(ki|bj)=_nv_gA(k,i,b,j)
+                let g4 = _nv_gA(g, n, ncore, k, i2, b, j)
+                let d3b = _nv_dm3_idx(dm3, m, q, p, a, j, k, i2)
+                let t4 = g4 * d3b
+                v = v - t4
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i2 = i2 + 1
+    }
+    let mut j2 = 0
+    while j2 < m {
+        let mut k2 = 0
+        while k2 < m {
+            // −Σ (b j|k a) dm2_qpjk ; h2e[b,j,k,a]=(bk|ja)=_nv_gA(b,k,j,a)
+            let g5 = _nv_gA(g, n, ncore, b, k2, j2, a)
+            let d2a = dm2[((q * m + p) * m + j2) * m + k2]
+            let t5 = g5 * d2a
+            v = v - t5
+            k2 = k2 + 1
+        }
+        j2 = j2 + 1
+    }
+    let mut i3 = 0
+    while i3 < m {
+        let mut j3 = 0
+        while j3 < m {
+            // +Σ (j b|i j) dm2_qpai ; h2e[j,b,i,j]=(ji|bj)=_nv_gA(j,i,b,j)
+            let g6 = _nv_gA(g, n, ncore, j3, i3, b, j3)
+            let d2b = dm2[((q * m + p) * m + a) * m + i3]
+            let t6 = g6 * d2b
+            v = v + t6
+            j3 = j3 + 1
+        }
+        i3 = i3 + 1
+    }
+    return v
+}
+
+// dm3 element accessor dm3[i,j,k,l,mm,nn] (flat, stepwise offset).
+fn _nv_dm3_idx(dm3: [float], m: int, i: int, j: int, k: int, l: int, mm: int, nn: int) -> float {
+    let mut o = i
+    o = o * m + j
+    o = o * m + k
+    o = o * m + l
+    o = o * m + mm
+    o = o * m + nn
+    return dm3[o]
+}
+
+// a13[p,q,a,b] element (Sir perturber; PySCF make_a13).
+fn _nv_a13_elem(g: [float], FI: [float], dm1: [float], dm2: [float], dm3: [float], m: int, n: int, ncore: int, p: int, q: int, a: int, b: int) -> float {
+    let mut v = 0.0
+    // −Σ_i h1_ia dm2_qbip + 2 h1_pa dm1_qb + Σ_i h1_bi dm2_qiap − 2δ_pa Σ_i h1_bi dm1_qi
+    let mut i = 0
+    while i < m {
+        let h1a = _nv_h1(FI, n, ncore, i, a)
+        let t1 = h1a * dm2[((q * m + b) * m + i) * m + p]
+        v = v - t1
+        let h1b = _nv_h1(FI, n, ncore, b, i)
+        let t3 = h1b * dm2[((q * m + i) * m + a) * m + p]
+        v = v + t3
+        if p == a {
+            let t4 = h1b * dm1[q * m + i]
+            v = v - 2.0 * t4
+        }
+        i = i + 1
+    }
+    let h1pa = _nv_h1(FI, n, ncore, p, a)
+    let t2 = h1pa * dm1[q * m + b]
+    v = v + 2.0 * t2
+    // 3-RDM terms: −Σ (ij|ka) dm3_qbjpik + Σ (kb|ij) dm3_qjapki
+    let mut i2 = 0
+    while i2 < m {
+        let mut j = 0
+        while j < m {
+            let mut k = 0
+            while k < m {
+                let g5 = _nv_gA(g, n, ncore, i2, k, j, a)
+                let d5 = _nv_dm3_idx(dm3, m, q, b, j, p, i2, k)
+                let t5 = g5 * d5
+                v = v - t5
+                let g6 = _nv_gA(g, n, ncore, k, i2, b, j)
+                let d6 = _nv_dm3_idx(dm3, m, q, j, a, p, k, i2)
+                let t6 = g6 * d6
+                v = v + t6
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i2 = i2 + 1
+    }
+    // 2-RDM terms: +Σ (bl|ma) dm2_qmlp + 2Σ (kp|ma) dm2_qbkm − 2Σ (bp|ma) dm1_qm
+    //   − Σ (lb|kl) dm2_qkap − 2δ_pa Σ (mb|kl) dm2_qlmk + 2δ_pa Σ (lb|kl) dm1_qk
+    let mut l = 0
+    while l < m {
+        let mut mi = 0
+        while mi < m {
+            // (b l|m a) dm2_qmlp ; h2e[b,l,m,a]=(bm|la)=_nv_gA(b,m,l,a)
+            let g7 = _nv_gA(g, n, ncore, b, mi, l, a)
+            let d7 = dm2[((q * m + mi) * m + l) * m + p]
+            let t7 = g7 * d7
+            v = v + t7
+            // 2(k p|m a) dm2_qbkm summed over k? this is index l=k? rename: term uses k,p,m,a
+            mi = mi + 1
+        }
+        l = l + 1
+    }
+    // (k p|m a) dm2_qbkm  and (b p|m a) dm1_qm
+    let mut k2 = 0
+    while k2 < m {
+        let mut mi2 = 0
+        while mi2 < m {
+            let g8 = _nv_gA(g, n, ncore, k2, mi2, p, a)
+            let d8 = dm2[((q * m + b) * m + k2) * m + mi2]
+            let t8 = 2.0 * g8 * d8
+            v = v + t8
+            mi2 = mi2 + 1
+        }
+        k2 = k2 + 1
+    }
+    let mut mi3 = 0
+    while mi3 < m {
+        let g9 = _nv_gA(g, n, ncore, b, mi3, p, a)
+        let d9 = dm1[q * m + mi3]
+        let t9 = 2.0 * g9 * d9
+        v = v - t9
+        mi3 = mi3 + 1
+    }
+    // −Σ_kl (l b|k l) dm2_qkap ; h2e[l,b,k,l]=(lk|bl)=_nv_gA(l,k,b,l)
+    let mut l2 = 0
+    while l2 < m {
+        let mut k3 = 0
+        while k3 < m {
+            let g10 = _nv_gA(g, n, ncore, l2, k3, b, l2)
+            let d10 = dm2[((q * m + k3) * m + a) * m + p]
+            let t10 = g10 * d10
+            v = v - t10
+            k3 = k3 + 1
+        }
+        l2 = l2 + 1
+    }
+    if p == a {
+        // −2Σ_klm (m b|k l) dm2_qlmk + 2Σ_kl (l b|k l) dm1_qk
+        let mut mi4 = 0
+        while mi4 < m {
+            let mut k4 = 0
+            while k4 < m {
+                let mut l4 = 0
+                while l4 < m {
+                    let g11 = _nv_gA(g, n, ncore, mi4, k4, b, l4)
+                    let d11 = dm2[((q * m + l4) * m + mi4) * m + k4]
+                    let t11 = 2.0 * g11 * d11
+                    v = v - t11
+                    l4 = l4 + 1
+                }
+                k4 = k4 + 1
+            }
+            mi4 = mi4 + 1
+        }
+        let mut l5 = 0
+        while l5 < m {
+            let mut k5 = 0
+            while k5 < m {
+                let g12 = _nv_gA(g, n, ncore, l5, k5, b, l5)
+                let d12 = dm1[q * m + k5]
+                let t12 = 2.0 * g12 * d12
+                v = v + t12
+                k5 = k5 + 1
+            }
+            l5 = l5 + 1
+        }
+    }
+    return v
+}
+
+// Sir (0)': (active,core)→(active,virt) — the DOMINANT class. 2-/3-RDM via a12/a13.
+//   v1[r,p,i,q]=(vr ci|(c+p)(c+q)) ; v2[r,p,q,i]=(vr (c+p)|(c+q) ci) ; h1v[r,i]=FI[vr,ci].
+//   norm/h are 9-term contractions over the active pair (p,q,a,b). diff = −(moe_i − moe_vr).
+pub fn nevpt2_Sir(g: [float], FI: [float], dm1: [float], dm2: [float], dm3: [float], moe: [float], n: int, ncore: int, m: int) -> float {
+    let nocc = ncore + m
+    let nvirt = n - nocc
+    let mut e = 0.0
+    let mut i = 0
+    while i < ncore {
+        let mut r = 0
+        while r < nvirt {
+            let vr = nocc + r
+            let h1v = FI[vr * n + i]
+            // norm: 2 v1_rpiq v1_raib dm2_qpab − v1_rpiq v2_rabi dm2_qpab
+            //   − v2_rpqi v1_raib dm2_qpab + 2 v2_raqi v2_rabi dm1_qb
+            //   − v2_rpqi v2_rabi dm2_qbap + v2_rpqi v2_raai dm1_qp
+            //   + 4 v1_rpiq h1v dm1_qp − 2 v2_rpqi h1v dm1_qp + 2 h1v h1v
+            let mut norm = 0.0
+            let mut hh = 0.0
+            let mut p = 0
+            while p < m {
+                let mut q = 0
+                while q < m {
+                    let mut a = 0
+                    while a < m {
+                        let mut b = 0
+                        while b < m {
+                            // v1[r,X,i,Y]=(vr ci|(c+X)(c+Y)) = g[vr,i,c+X,c+Y]
+                            let v1rpiq = g[((vr * n + i) * n + (ncore + p)) * n + (ncore + q)]
+                            let v1raib = g[((vr * n + i) * n + (ncore + a)) * n + (ncore + b)]
+                            // v2[r,X,Y,i]=(vr (c+X)|(c+Y) ci) = g[vr,c+X,c+Y,i]
+                            let v2rabi = g[((vr * n + (ncore + b)) * n + (ncore + a)) * n + i]
+                            let v2rpqi = g[((vr * n + (ncore + q)) * n + (ncore + p)) * n + i]
+                            let v2raqi = g[((vr * n + (ncore + q)) * n + (ncore + a)) * n + i]
+                            let v2raai = g[((vr * n + (ncore + a)) * n + (ncore + a)) * n + i]
+                            let dm2qpab = dm2[((q * m + p) * m + a) * m + b]
+                            // norm terms
+                            let nn1 = 2.0 * v1rpiq * v1raib * dm2qpab
+                            norm = norm + nn1
+                            let nn2 = v1rpiq * v2rabi * dm2qpab
+                            norm = norm - nn2
+                            let nn3 = v2rpqi * v1raib * dm2qpab
+                            norm = norm - nn3
+                            let dm2qbap = dm2[((q * m + b) * m + a) * m + p]
+                            let nn5 = v2rpqi * v2rabi * dm2qbap
+                            norm = norm - nn5
+                            let nn6 = v2rpqi * v2raai * dm1[q * m + p]
+                            norm = norm + nn6
+                            // h terms: a12/a13 contractions (same integral structure)
+                            let a12v = _nv_a12_elem(g, FI, dm1, dm2, dm3, m, n, ncore, p, q, a, b)
+                            let a13v = _nv_a13_elem(g, FI, dm1, dm2, dm3, m, n, ncore, p, q, a, b)
+                            let hh1 = 2.0 * v1rpiq * v1raib * a12v
+                            hh = hh + hh1
+                            let hh2 = v1rpiq * v2rabi * a12v
+                            hh = hh - hh2
+                            let hh3 = v2rpqi * v1raib * a12v
+                            hh = hh - hh3
+                            let hh4 = v2rpqi * v2rabi * a13v
+                            hh = hh + hh4
+                            b = b + 1
+                        }
+                        a = a + 1
+                    }
+                    q = q + 1
+                }
+                p = p + 1
+            }
+            // t4 = 2 Σ_qab v2_raqi v2_rabi dm1_qb  (NO p index — separate loop)
+            let mut q3 = 0
+            while q3 < m {
+                let mut a3 = 0
+                while a3 < m {
+                    let mut b3 = 0
+                    while b3 < m {
+                        let v2raqi = g[((vr * n + (ncore + q3)) * n + (ncore + a3)) * n + i]
+                        let v2rabi = g[((vr * n + (ncore + b3)) * n + (ncore + a3)) * n + i]
+                        let nn4 = 2.0 * v2raqi * v2rabi * dm1[q3 * m + b3]
+                        norm = norm + nn4
+                        b3 = b3 + 1
+                    }
+                    a3 = a3 + 1
+                }
+                q3 = q3 + 1
+            }
+            // 1-body norm terms (no a,b loop): 4 v1_rpiq h1v dm1_qp − 2 v2_rpqi h1v dm1_qp + 2 h1v²
+            let mut p2 = 0
+            while p2 < m {
+                let mut q2 = 0
+                while q2 < m {
+                    let v1rpiq = g[((vr * n + i) * n + (ncore + p2)) * n + (ncore + q2)]
+                    let v2rpqi = g[((vr * n + (ncore + q2)) * n + (ncore + p2)) * n + i]
+                    let nb1 = 4.0 * v1rpiq * h1v * dm1[q2 * m + p2]
+                    norm = norm + nb1
+                    let nb2 = 2.0 * v2rpqi * h1v * dm1[q2 * m + p2]
+                    norm = norm - nb2
+                    q2 = q2 + 1
+                }
+                p2 = p2 + 1
+            }
+            let nh = 2.0 * h1v * h1v
+            norm = norm + nh
+            let dd = moe[i] - moe[vr]
+            let diff = 0.0 - dd
+            e = e + _nv_n2e(norm, hh, diff)
+            r = r + 1
+        }
+        i = i + 1
+    }
+    return e
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+//   SC-NEVPT2 driver — sum the 6 shipped classes on a converged CASSCF reference
+// ════════════════════════════════════════════════════════════════════════════
+
+// Total SC-NEVPT2 correlation energy (6 classes: Sijrs+Sijr+Srsi+Srs+Sij+Sir).
+//   gs/dets = CASSCF CI ground-state vector + determinant basis (from casscf_ci_vec);
+//   hfull/gfull = full MO 1e/2e integrals at the CASSCF-optimized orbitals
+//   (casscf_full_hcore / casscf_full_eri); ndet/m/nelA/nelB describe the active CI;
+//   n/ncore = total MOs / doubly-occupied core. Returns
+//   [ e_nevpt2, e_Sijrs, e_Sijr, e_Srsi, e_Srs, e_Sij, e_Sir ].
+//   HONEST: the two 4-RDM classes Sr/Si are NOT summed here (zero for CAS(2,2));
+//   on an active space large enough to support them this is a 6-of-8 partial.
+pub fn nevpt2_total(
+    gs: [any], dets: [any], ndet: int, hfull: [float], gfull: [float],
+    n: int, ncore: int, m: int, nelA: int, nelB: int
+) -> [float] {
+    let nocc = nelA + nelB
+    let dm1 = nevpt2_dm1(gs, dets, ndet, m, nocc)
+    let dm2 = nevpt2_dm2(gs, dets, ndet, m, nocc)
+    let dm3 = nevpt2_dm3(gs, dets, ndet, m, nocc)
+    let FI = _nv_FI(hfull, gfull, n, ncore)
+    let moe = nevpt2_mo_energy(hfull, gfull, dm1, n, ncore, m)
+    let e1 = nevpt2_Sijrs(gfull, moe, n, ncore, m)
+    let e2 = nevpt2_Sijr(gfull, FI, dm1, dm2, moe, n, ncore, m)
+    let e3 = nevpt2_Srsi(gfull, FI, dm1, dm2, moe, n, ncore, m)
+    let e4 = nevpt2_Srs(gfull, FI, dm1, dm2, dm3, moe, n, ncore, m)
+    let e5 = nevpt2_Sij(gfull, FI, dm1, dm2, dm3, moe, n, ncore, m)
+    let e6 = nevpt2_Sir(gfull, FI, dm1, dm2, dm3, moe, n, ncore, m)
+    let mut tot = e1
+    tot = tot + e2
+    tot = tot + e3
+    tot = tot + e4
+    tot = tot + e5
+    tot = tot + e6
+    return [tot, e1, e2, e3, e4, e5, e6]
+}
+
+// End-to-end: from a CASSCF-optimized orbital matrix C, build the active CI + the
+//   full MO integrals, then sum the 6 SC-NEVPT2 classes. Returns nevpt2_total's tuple.
+pub fn nevpt2_from_casscf_orbitals(
+    C: [float], hcore: [float], eri: [float],
+    n: int, ncore: int, m: int, nelA: int, nelB: int
+) -> [float] {
+    let hfull = casscf_full_hcore(C, hcore, n)
+    let gfull = casscf_full_eri(C, eri, n)
+    let heff = casscf_heff_active(hfull, gfull, n, ncore, m)
+    let gact = _nv_slice_active(gfull, n, ncore, m)
+    let civ = casscf_ci_vec(heff, gact, m, nelA, nelB)
+    let ndet = civ[1]
+    let gs = civ[2]
+    let dets = civ[3]
+    return nevpt2_total(gs, dets, ndet, hfull, gfull, n, ncore, m, nelA, nelB)
+}
+
+// Slice the active m^4 chemist (tu|vw) block out of the full n^4 gfull.
+fn _nv_slice_active(g: [float], n: int, c: int, m: int) -> [float] {
+    let mut ga = []
+    let mut t = 0
+    while t < m {
+        let mut u = 0
+        while u < m {
+            let mut v = 0
+            while v < m {
+                let mut w = 0
+                while w < m {
+                    let idx = (((c + t) * n + (c + u)) * n + (c + v)) * n + (c + w)
+                    ga.push(g[idx])
+                    w = w + 1
+                }
+                v = v + 1
+            }
+            u = u + 1
+        }
+        t = t + 1
+    }
+    return ga
+}

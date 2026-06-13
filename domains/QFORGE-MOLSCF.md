@@ -136,24 +136,46 @@ Fock 빌드, (3) 비직교 일반화 고유문제 `FC=SCε`. 모든 g5 anchor �
           signature of true orbital optimization) · final ‖g‖ seed-1=9.3e-7 seed-2=1.0e-6 → 0
       (d) r1..r11 (gaussian/coulomb/rhf/md/md_d/md_f/uhf/rohf/scf_robust/casci/fci) regress ALL PASS — casscf
           is a NEW file wrapping fci.hexa/casci.hexa byte-for-byte unchanged · trace(γ)=2 + matexp-orthogonal sanity
-- [ ] round-13 (named) — CASSCF SCALE & POLISH: 2nd-order Newton/AH MCSCF (orbital Hessian → quadratic
-      convergence, collapses the H₆ steepest-descent macro-iter count) + active-space CI direct-Davidson (skip
-      dense eigh past CAS(8,8)=4900 dets · CAS(10,10)=63504 ceiling) → N₂ CAS(6,6) σ/π dissociation + Cr₂
-      CAS(12,12) wall · state-averaged CASSCF (excited states) · analytic CASSCF gradient (brick 6 force) ·
-      g 각운동량. ALL are scaling/perf/feature refinements — NO remaining method-class gap (see depletion below)
+- [x] brick 16 (round-13) — strongly-contracted NEVPT2 (SC-NEVPT2): 2nd-order MULTIREFERENCE perturbation
+      DYNAMIC correlation on the round-12 CASSCF reference (CASSCF=static; NEVPT2=dynamic — the multireference
+      analog of MP2-on-RHF). `nevpt2.hexa` (additive — casscf.hexa/fci.hexa BYTE-UNTOUCHED): E-product
+      active-space RDMs (dm1=⟨E_pq⟩, dm2=⟨E_pq E_rs⟩, dm3=⟨E_pq E_rs E_tu⟩, PySCF make_dm123 convention) built
+      from the CASSCF CI vector via 2nd-quantized E_pq ladder ops (reuses fci_dets) + the 6 SC-NEVPT2 class
+      energies (Sijrs MP2-like · Sijr · Srsi · Srs · Sij · Sir-dominant) with a3/k27/a7/a9/a12/a13 + hole-RDM
+      intermediates, assembled by norm_to_energy = −Σ norm/(Δ+h/norm). mo_energy = generalized-Fock diagonal.
+      SHIPPED = the 6 classes needing ≤ 3-RDM (the FULL NEVPT2 on CAS(2,2)); the two 4-RDM classes Sr/Si vanish
+      on CAS(2,2) and are named round-14 (HONEST d6 — SC, not PC-NEVPT2/CASPT2).
+      (a) NEVPT2 == pyscf mrpt.NEVPT — H₄ CAS(2,2): @1.8 −0.0289165 (pyscf −0.02891631) · @3.0 −0.0719024
+          (pyscf −0.07190352) · ALL 6 per-class match (Sijrs −0.01697 Sijr −0.00147 Srsi −0.00135 Srs −0.00028
+          Sij −0.00031 Sir −0.05152) |Δ|<5e-5 — total AND decomposition anchored to PySCF SC-NEVPT2
+      (b) DYNAMIC-CORR RECOVERY — H₄ @1.8: corr CASSCF −0.02398 → CASSCF+NEVPT2 −0.05290 (2.2×) → FCI −0.06198
+          (NEVPT2 recovers 85% of the FCI−CASSCF dynamic gap, stays above FCI = perturbative not over-correcting)
+      (c) RDM sum rules Σ_p dm2[p,p,r,s]=N·dm1 / Σ_p dm3[p,p,r,s,t,u]=N·dm2 residual ≡ 0 · FULL-SPACE limiting
+          check: H₂ CAS(2,2)=full → CASSCF=FCI → NEVPT2 ≡ 0 EXACTLY (no perturbers) — both limit anchors hold
+      (d) r1..r12 (gaussian/coulomb/rhf/md/md_d/md_f/uhf/rohf/scf_robust/casci/fci/casscf) regress ALL PASS —
+          nevpt2 is a NEW additive file; casscf.hexa/fci.hexa byte-for-byte unchanged
+- [ ] round-14 (named) — NEVPT2 COMPLETE + CASSCF SCALE: (1) the two 4-RDM classes Sr (S_r^{(−1)}, a16) +
+      Si (S_i^{(+1)}, a22) → full 8-class SC-NEVPT2 on large active spaces (CAS(4,4)+) where they are nonzero,
+      via the active 4-RDM ⟨E_pq E_rs E_tu E_vw⟩; (2) core/virtual block canonicalization (multi-orbital
+      generalized-Fock diagonalization, lifting the 1-dim-block mo_energy restriction); (3) PC-NEVPT2 / CASPT2
+      (partially-contracted / 2nd variant). Plus the round-12-named CASSCF scaling (2nd-order Newton MCSCF ·
+      direct-CI Davidson). ALL are within-class refinements — NO remaining method-class gap (see depletion)
 
-## MOLSCF method-completeness depletion (round-12)
+## MOLSCF method-completeness depletion (round-13)
 
-Single-reference (RHF · UHF · ROHF · robust-SCF) AND multi-reference (CASCI · CASSCF) are BOTH closed and
-PySCF-anchored. The molecular electronic-structure front-end is **method-complete**: every method CLASS a
-finite-molecule ab-initio code needs at the wavefunction level is shipped — closed-shell HF, open-shell HF
-(spin-broken UHF + spin-pure ROHF), stiff-TM convergence machinery, exact static-correlation CI (CASCI), and
-the variational orbital-optimized multireference (CASSCF). The remaining frontier is NAMED REFINEMENTS within
-existing classes, NOT new method classes: (1) CI/orbital SCALING — direct-Davidson + 2nd-order Newton to push
-past the dense-eigh / steepest-descent ceiling (CAS(10,10), Cr₂); (2) g-and-higher angular momentum (a basis
-table extension, d4 — no new code path); (3) analytic forces/gradients (autograd through the closed pipeline,
-brick 6); (4) larger basis / dynamic-correlation-on-top (NEVPT2/MRPT — a post-CASSCF perturbative correction,
-the next method LAYER, optional). The wavefunction method-class front-end itself has no open gap.
+Single-reference (RHF · UHF · ROHF · robust-SCF), multi-reference STATIC correlation (CASCI · CASSCF), AND
+multi-reference DYNAMIC correlation (SC-NEVPT2) are ALL closed and PySCF-anchored. With round-13 the molecular
+electronic-structure front-end is **method-complete to quantitative accuracy**: every accuracy CLASS a
+finite-molecule ab-initio wavefunction code needs is shipped — closed-shell HF, open-shell HF (spin-broken UHF
++ spin-pure ROHF), stiff-TM convergence machinery, exact static-correlation CI (CASCI), variational
+orbital-optimized multireference (CASSCF), and now the 2nd-order multireference dynamic-correlation correction
+(NEVPT2). The HF→MP2 and CASSCF→NEVPT2 correlation ladders are BOTH built. The remaining frontier is NAMED
+REFINEMENTS within existing classes — NO new accuracy capability: (1) full 8-class NEVPT2 (the 2 four-RDM
+classes Sr/Si, zero on CAS(2,2)) + PC-NEVPT2/CASPT2 variants; (2) CI/orbital SCALING — direct-Davidson +
+2nd-order Newton past the dense-eigh / steepest-descent ceiling (CAS(10,10), Cr₂); (3) g-and-higher angular
+momentum (basis-table extension, d4 — no new code path); (4) analytic forces/gradients (autograd through the
+closed pipeline, brick 6). The wavefunction method-class front-end — single-ref + multi-ref + static + dynamic
+correlation — has NO open accuracy-capability gap.
 
 ## three-scale unblock
 
