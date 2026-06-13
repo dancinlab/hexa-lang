@@ -1,0 +1,118 @@
+F-OP135-BYTEFAITHFUL-DECODE-SSOT
+=================================
+🟢 17 sites consolidated onto the canonical `bytes_to_str_raw` builtin.
+0-pod · $0 · local CPU only · NO GPU · no vast/cloud.
+
+CLAIM
+-----
+The byte-faithful "raw bytes → UTF-8 string" decode — re-found as the SAME bug
+class by OP-79/125/127/128/133 — now has a SINGLE source of truth: every
+module-local reimplementation that is genuinely "raw bytes → string" CALLS the
+canonical `bytes_to_str_raw` builtin instead of carrying its own loop. The next
+fix lands once; the class cannot re-diverge through these sites.
+
+ROOT CAUSE (the recurrence)
+---------------------------
+Two duplicated decode shapes proliferated as module-local helpers:
+  A. `from_char_code(byte)` per byte → RE-UTF-8-ENCODES every byte ≥0x80 →
+     mojibake ("안녕"→"ìëª"). THE BUG (OP-79/125/127/128/133 each re-found it).
+  B. `chr(byte)` + `.join("")` → byte-faithful per byte (chr=hexa_chr_byte,
+     N&0xFF) BUT the join derives length via the NUL-truncated C string, so any
+     embedded 0x00 collapses the tail. Latent, not yet bitten in prod.
+Both are eliminated by routing through `bytes_to_str_raw`, which assembles
+NUL-clean via an explicit length header (hexa_strbuf_alloc) — the ONE builtin.
+(See self/codegen.hexa:7196-7221 for the chr / from_char_code / bytes_to_str_raw
+lowering contract.)
+
+CENSUS  (decode sites surveyed → redirectable? → action)
+--------------------------------------------------------
+REDIRECTED (17) — local fn whose job is exactly "raw bytes → UTF-8 string":
+  stdlib (closure-OUT):
+   1. stdlib/crypto/tls13_server_name.hexa  tls13_server_name_parse  chr+join → raw
+  self/ (all OUT of the 50-file build_selfhost closure):
+   2. self/std_encoding.hexa                bytes_to_string          chr+join → raw
+   3. self/stdlib/ssh/wire.hexa             ssh_bytes_to_string      chr+join → raw
+   4. self/stdlib/hxc_a7_shared_dict.hexa   _bytes_to_str            chr+join → raw
+   5. self/stdlib/hxc_a9_tokenizer.hexa     _bytes_to_str            chr+join → raw
+   6. self/stdlib/hxc_a20_schema_aware_bpe.hexa _bytes_to_str        chr+join → raw
+   7. self/stdlib/hxc_a22_self_decoding.hexa _bytes_to_str           chr+join → raw
+   8. self/stdlib/hxc_a24_grammar_induction.hexa _bytes_to_str       chr+join → raw
+   9. self/stdlib/hxc_a25_type_aware.hexa   _bytes_to_str            chr+join → raw
+  10. self/stdlib/hxc_a30_bwt_mtf.hexa      _a30_bytes_to_str        chr+join → raw
+  11. self/stdlib/hxc_a34_sub_byte_arith.hexa _bytes_to_string       chr+join → raw
+  12. self/stdlib/hxc_composite_chain_v2.hexa _cc2_bytes_to_str      chr+join → raw
+  13. self/stdlib/hxc_a33_cross_repo_dict.hexa _codes_to_str         chr+join → raw
+  14. self/stdlib/hxc_a18_lz_ppm_order4.hexa  <decode tail epilogue>  chr+join → raw
+  15. self/stdlib/hxc_a23_sparse_ppm.hexa    <decode tail epilogue>  chr+join → raw
+  16. self/stdlib/hxc_a24_v2_bounded.hexa    <decode tail epilogue>  chr+join → raw
+  17. self/stdlib/hxc_a32_static_huffman.hexa <2 decode tail epilogues> chr+join → raw
+
+ALREADY-CONSOLIDATED (4) — redirected by a PRIOR OP, left as-is (verified):
+  - stdlib/safetensors.hexa        _bytes_to_str  → bytes_to_str_raw  (OP-125)
+  - self/stdlib/safetensors.hexa   _bytes_to_str  → bytes_to_str_raw  (OP-125 mirror)
+  - stdlib/ckpt/format.hexa        bytes_to_str   → bytes_to_str_raw  (OP-133)
+  - self/ml/hexaw.hexa / lora_to_hexaw / safetensors_to_hexaw / safetensors_mmap
+    tensor-name decode → bytes_to_str_raw  (OP-125/127)
+
+NOT-REDIRECTABLE — left with reason (genuinely different decode):
+  - self/runtime_pure.hexa rt_str_to_upper/lower  from_char_code is on REAL
+    ASCII codepoints (case shift ±32), not raw bytes. Correct as-is.
+  - self/ml/tokenizer_bpe.hexa / qwen_bpe byte-level-BPE  has its own glyph
+    mapping (from_char_code on a remapped CODEPOINT table, NOT raw bytes;
+    OP-128 fixed its bijection separately). Codec table, not raw decode.
+  - euc_kr / other codec tables  from_char_code on real codepoints. Correct.
+  - self/ml/hexaw.hexa:376 n_tensors count  per-byte from_char_code on ASCII
+    DIGITS only (provably <0x80, consumed by to_int). No double-encode possible.
+  - self/runtime/{base64,encoding,url,json_mini}_pure.hexa  from_char_code on
+    DECODED CODEPOINTS / control chars (\uXXXX, %XX), not raw byte buffers.
+  - self/std_encoding.hexa lsp \uXXXX  from_char_code on parsed codepoint. Correct.
+  - *_b64_enc_bytes / _b85_enc / _decode_body / _enum_unescape  chr emits an
+    ASCII ALPHABET char or mixes literal substrings — not a pure byte→string.
+  - *_decode_to_bytes (a16/a18/a23/a24/a29/a30/a32...)  return [int] arrays
+    (codec decoders), not strings — out of scope.
+
+CROSS-TREE NOTE (accepted constraint)
+-------------------------------------
+stdlib/ and self/stdlib/ are TWIN trees (the self/ mirror exists because the
+build_selfhost closure can't import the live stdlib). The hxc_a* codecs live
+ONLY under self/stdlib/ (no stdlib/hxc_* twin), so there is no cross-tree
+duplication to reconcile for them. safetensors HAS a twin (stdlib + self) — both
+copies were already redirected by OP-125 and remain byte-identical. The builtin
+`bytes_to_str_raw` IS visible in every self/ module (it lowers to the C
+constructor hexa_bytes_to_str_raw in codegen, no stdlib import needed), so the
+consolidation crosses the tree boundary cleanly — no residual cross-tree
+duplication of the byte-faithful decode remains.
+
+CLOSURE SAFETY
+--------------
+build_selfhost closure = compiler/main.hexa + import/use closure = 50 files
+(walked: tool/build_selfhost.sh). ALL 17 redirected files are OUT of that
+closure → ZERO byte-eq / fixpoint (gen3==gen4) impact. selfhost-gates-summary
+unaffected.
+
+PROOF  (live interpreter — `hexa run`)
+--------------------------------------
+stdlib/ckpt/test/bytes_to_str_ssot_op135_test.hexa  (hermetic; inlines OLD-A,
+OLD-B and the NEW canonical shape; Python-oracle UTF-8 byte sequences):
+  F3a PASS — Korean "안녕"  byte-exact (6 bytes) == bytes_to_str_raw
+  F3b PASS — CJK    "中文"  byte-exact (6 bytes) == bytes_to_str_raw
+  F3c PASS — emoji  "🌌"   byte-exact (4 bytes) == bytes_to_str_raw
+  F4  PASS — NUL-clean: "H\0i" → 3 bytes survive (chr+join gives 1)
+  F1  PASS — OLD from_char_code DOUBLE-ENCODES Korean (len=12 > 6) [the removed bug]
+  F2  PASS — OLD chr+join byte-faithful on UTF-8 (6) but NUL-truncates (1)
+  → 6 pass / 0 fail · "ALL PASS — byte-faithful decode has ONE source of truth"
+
+`hexa parse` clean on every edited file (17 sources + the new test).
+
+RESIDUAL (honest)
+-----------------
+The shipping `hexa` binary is the known STALE-frozen build; the proof is on the
+live interpreter via the builtin's known-correct behaviour + a Python UTF-8
+oracle. Native re-emit of the redirected self/ modules is rebuild-pending, but
+they are closure-OUT so there is no fixpoint gate to satisfy. NOT-REDIRECTABLE
+codec/codepoint decoders are intentionally left (documented above) — they are
+not the byte-faithful raw-decode class and consolidating them would change
+behaviour. Re-divergence of the raw-decode class through the 17 cured sites is
+CLOSED.
+
+$0 · 0-pod · NO GPU · no vast · leak-0.

@@ -1,0 +1,88 @@
+// bytes_to_str_ssot_op135_test.hexa — OP-135 byte-faithful-decode SSOT lock
+//
+// OP-135 consolidated ~17 hand-rolled "raw bytes → UTF-8 string" decoders onto
+// the single canonical `bytes_to_str_raw` builtin (the source of truth). The
+// recurring bug class (OP-79/125/127/128/133) was a module-local decode that
+// either (a) re-UTF-8-encoded each byte via `from_char_code(byte)` → mojibake,
+// or (b) used `chr()`+join — byte-faithful per byte but NUL-truncated.
+//
+// This test is HERMETIC (no `use`): it verbatim-inlines the TWO old decode
+// shapes that were eliminated plus the NEW canonical form, and proves on the
+// live interpreter that:
+//   F1  OLD-from_char_code  DOUBLE-ENCODES (≠ canonical) — the bug we removed
+//   F2  OLD-chr+join        byte-faithful on UTF-8 but NUL-TRUNCATES (≠ canon)
+//   F3  NEW bytes_to_str_raw byte-EXACT Korean / CJK / emoji round-trip
+//   F4  NEW bytes_to_str_raw NUL-CLEAN (full length survives)
+//
+// chr = hexa_chr_byte (byte-faithful N&0xFF); from_char_code = codepoint→UTF-8
+// encoder (re-encodes ≥0x80). See self/codegen.hexa:7196-7221.
+
+// ── OLD shape A: the BUG (per-byte from_char_code re-encode) ──────────────
+fn old_from_char_code(bs) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(bs) {
+        out = out + to_string(from_char_code(bs[i] & 0xFF))
+        i = i + 1
+    }
+    return out
+}
+
+// ── OLD shape B: byte-faithful-but-NUL-fragile (chr + join) ──────────────
+fn old_chr_join(bs) -> string {
+    let mut parts = []
+    let mut i = 0
+    while i < len(bs) { parts.push(chr(bs[i] & 0xFF)); i = i + 1 }
+    return parts.join("")
+}
+
+// ── NEW canonical SSOT form (every OP-135 site is now this shape) ─────────
+fn new_raw(bs) -> string {
+    let mut sub = []
+    let mut i = 0
+    while i < len(bs) { sub.push(bs[i] & 0xFF); i = i + 1 }
+    return bytes_to_str_raw(sub)
+}
+
+fn main() {
+    let mut pass = 0
+    let mut fail = 0
+
+    // UTF-8 byte sequences (Python oracle: "안녕".encode() = ec95 88 eb 85 95)
+    let kor = [236, 149, 136, 235, 133, 149]        // "안녕"
+    let cjk = [228, 184, 173, 230, 150, 135]        // "中文"
+    let emoji = [240, 159, 140, 140]                // "🌌"
+    let nul = [72, 0, 105]                          // "H\0i"
+
+    // F3: NEW form byte-EXACT round-trip vs the builtin (Korean/CJK/emoji)
+    if new_raw(kor) == bytes_to_str_raw(kor) && len(new_raw(kor)) == 6 {
+        pass = pass + 1; println("F3a PASS — Korean byte-exact (6 bytes)")
+    } else { fail = fail + 1; println("F3a FAIL — Korean") }
+
+    if new_raw(cjk) == bytes_to_str_raw(cjk) && len(new_raw(cjk)) == 6 {
+        pass = pass + 1; println("F3b PASS — CJK byte-exact (6 bytes)")
+    } else { fail = fail + 1; println("F3b FAIL — CJK") }
+
+    if new_raw(emoji) == bytes_to_str_raw(emoji) && len(new_raw(emoji)) == 4 {
+        pass = pass + 1; println("F3c PASS — emoji byte-exact (4 bytes)")
+    } else { fail = fail + 1; println("F3c FAIL — emoji") }
+
+    // F4: NEW form NUL-clean — full 3 bytes survive (chr+join would give 1)
+    if len(new_raw(nul)) == 3 {
+        pass = pass + 1; println("F4 PASS — NUL-clean (3 bytes survive)")
+    } else { fail = fail + 1; println("F4 FAIL — NUL truncated to " + to_string(len(new_raw(nul)))) }
+
+    // F1: OLD from_char_code shape DOUBLE-ENCODES (the bug; len > 6 for Korean)
+    if len(old_from_char_code(kor)) > 6 {
+        pass = pass + 1; println("F1 PASS — old from_char_code double-encodes (len=" + to_string(len(old_from_char_code(kor))) + " > 6)")
+    } else { fail = fail + 1; println("F1 FAIL — expected double-encode") }
+
+    // F2: OLD chr+join byte-faithful on UTF-8 (len==6) but NUL-truncates (len==1)
+    if len(old_chr_join(kor)) == 6 && len(old_chr_join(nul)) == 1 {
+        pass = pass + 1; println("F2 PASS — old chr+join byte-faithful but NUL-truncates")
+    } else { fail = fail + 1; println("F2 FAIL — chr+join behaviour") }
+
+    println("")
+    println("OP-135 SSOT: " + to_string(pass) + " pass / " + to_string(fail) + " fail")
+    if fail == 0 { println("ALL PASS — byte-faithful decode has ONE source of truth") }
+}

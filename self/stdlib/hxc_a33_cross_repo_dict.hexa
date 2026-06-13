@@ -129,17 +129,20 @@ fn _str_to_codes(s: string) -> array {
 // quadratic memory allocation behavior in the hexa string-arena (each
 // concat allocates a fresh N+1 byte buffer; arena does not free until
 // fn return). On 60 KB output that's O(N^2) = 3.6 GB cumulative arena
-// pressure. Replaced with array.push(chr(c)) + join("") which uses the
-// runtime's hexa_str_join (single O(N) malloc + memcpy fill pass).
+// pressure.
+// OP-135 SSOT: codes are raw byte values (0..255); converge on the canonical
+// `bytes_to_str_raw` builtin (the single byte-faithful source of truth). It is
+// likewise a single O(N) malloc + fill (hexa_strbuf_alloc) so it preserves the
+// PASS 5 RSS fix, and is additionally NUL-clean (chr()+join truncates at 0x00).
 fn _codes_to_str(codes: array) -> string {
     let n: i64 = len(codes)
-    let mut parts = []
+    let mut sub = []
     let mut i: i64 = 0
     while i < n {
-        parts.push(chr(codes[i]))
+        sub.push(codes[i] & 0xFF)
         i = i + 1
     }
-    return parts.join("")
+    return bytes_to_str_raw(sub)
 }
 
 // ───────────────── PASS 2 + PASS 4: ring buffer + hash-chain primitives ─────────────────

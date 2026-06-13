@@ -269,12 +269,20 @@ fn string_to_bytes(s) -> [int] {
     return result
 }
 
+// OP-135 SSOT: raw bytes → UTF-8 string converges on the canonical
+// `bytes_to_str_raw` builtin (the single source of truth for byte-faithful
+// decode). The prior `chr()`+join body was byte-faithful per byte, but the
+// join path derives length via the NUL-truncated C string, collapsing any
+// NUL-bearing payload (base64/hex/url decode CAN yield embedded 0x00) at the
+// first NUL — bytes_to_str_raw assembles NUL-clean via an explicit length
+// header. Behaviour-identical on UTF-8 text (Korean/CJK/emoji), strictly safer
+// on binary payloads. `& 0xFF` clamps to the byte range the builtin expects.
 fn bytes_to_string(bytes) -> string {
-    let mut parts = []
-    let i = 0
+    let mut sub = []
+    let mut i = 0
     while i < len(bytes) {
-        parts.push(chr(bytes[i]))
+        sub.push(bytes[i] & 0xFF)
         i = i + 1
     }
-    return parts.join("")
+    return bytes_to_str_raw(sub)
 }

@@ -1,0 +1,109 @@
+════════════════════════════════════════════════════════════════════════
+ F-OP133-TWIN-FIX-DIVERGENCE — twin/mirror FIX-DIVERGENCE census
+ campaign HEXA-0POD · LANE 2 · 0-pod ($0, local CPU only · NO GPU · no vast)
+ date: 2026-06-13
+ verdict: 🔴 1 LAGGING TWIN FIXED  (census otherwise CONVERGED)
+════════════════════════════════════════════════════════════════════════
+
+GOAL
+  Find duplicated/mirrored code pairs where ONE copy was fixed but its
+  sibling still carries the OLD bug (a latent re-introduction of an
+  already-cured defect). Class precedent: OP-125 (safetensors self/ mirror),
+  OP-128 (qwen_bpe un-fixed copy of tokenizer_bpe), OP-96 (closure twins).
+
+METHOD (honest g5)
+  The shipping local interpreter is the promoted self-hosted native
+  (~/.hx/bin/hexa.real → hx-selfhost-cli). chr/from_char_code semantics were
+  established empirically on it AND cross-checked against the codegen lowering
+  (self/codegen.hexa:7196-7205):
+    • chr            → hexa_chr_byte       = 1 byte (N & 0xFF)   [byte-faithful]
+    • from_char_code → hexa_from_char_code = codepoint→UTF-8     [RE-ENCODES >=0x80]
+  So the double-encode bug class is specifically the per-byte
+  to_string(from_char_code(b & 0xFF)) form; the chr(b) form is byte-faithful
+  and CLEAN. All repros run on the live interpreter; the lagging-twin fix is
+  proved by a hermetic verbatim-inlined regression (no `use` — OP-87/88/125
+  stale-bundle dodge).
+
+────────────────────────────────────────────────────────────────────────
+TWIN-PAIR CENSUS MATRIX
+────────────────────────────────────────────────────────────────────────
+  pair                                            diverged? which-fixed  lagging-fixed?
+  ──────────────────────────────────────────────  ───────── ───────────  ─────────────
+  stdlib/ckpt/format.bytes_to_str                  YES       verifier     ✅ FIXED (this OP)
+    ↔ stdlib/ckpt/verifier.hexa (call site)                  (OP-79)        format.hexa
+    The call site (verifier) was cured to bytes_to_str_raw by OP-79, but the
+    SOURCE pub fn bytes_to_str was left with the old double-encode — a latent
+    re-intro for any future caller. ← THE OP-133 FIND.
+
+  stdlib/safetensors._bytes_to_str                 no        both         CONVERGED
+    ↔ self/stdlib/safetensors._bytes_to_str                 (OP-125)       (byte-identical)
+  self/ml/qwen_bpe (bijection+detok)               no        both         CONVERGED
+    ↔ self/ml/tokenizer_bpe                                 (OP-128)
+  flame op28b/op28c/corpus_lib byte→uni bijection  no        all          CONVERGED (256+n)
+  self/tools/lora_to_hexaw · safetensors_to_hexaw  no        all          CONVERGED
+    · self/alloc/safetensors_mmap · self/ml/hexaw          (OP-127)       (bytes_to_str_raw)
+  recursive JSON parsers (untrusted input):        no        all 3        CONVERGED — no
+    self/serve/http_server · self/rt/json ·                 (OP-120)       un-capped untrusted
+    stdlib/cert/meta2_validator (MAX_DEPTH=512)                            recursive parser left
+  stdlib/json.hexa ↔ self/stdlib/json.hexa         n/a       n/a          CLEAN (delegate to
+    (both call the native builtin json_parse,                              native builtin — no
+    NOT a hexa recursive descent parser)                                  hexa-level recursion)
+  stdlib↔self/stdlib mirror pairs                  varies    —            no encoding-fix
+    (bytes/http/io/json/path/proc/string;                                 divergence; safetensors
+    portable_fs + safetensors byte-identical)                             + portable_fs identical
+  self/stdlib/hxc_a* _bytes_to_str (chr-based)      —         —            CLEAN (chr = byte-
+    + hxc_a34 (documents chr>=128 caveat + offers                         faithful; a34 documents
+    _a34_decode_to_bytes byte variant)                                    the divergence — g5)
+  stdlib/codec/euc_kr._ek_cps_str                   —         —            CLEAN (from_char_code on
+    (from_char_code on real CODEPOINTS, not bytes)                        codepoints = correct use)
+
+  SURVEYED: 10 twin-classes · DIVERGED w/ lagging bug: 1 · LAGGING-FIXED: 1
+
+────────────────────────────────────────────────────────────────────────
+THE LAGGING TWIN — stdlib/ckpt/format.hexa : pub fn bytes_to_str
+────────────────────────────────────────────────────────────────────────
+  REPRODUCE (live interpreter, exact pre-fix body vs raw):
+orig =[{"reason":"서명 OK"}]
+buggy=[{"reason":"ìëª OK"}]  eq=false
+fixed=[{"reason":"서명 OK"}]  eq=true
+
+  '서명' → 'ìëª' is the classic double-UTF-8-encode signature (each 3-byte
+  Hangul → 6 mojibake bytes). bytes_to_str_raw passes raw UTF-8 through.
+
+  FIX: route the pub fn through the raw-byte builtin (matches the verifier
+  call-site fix + the safetensors/hexaw twins). chr-vs-from_char_code note
+  added inline so the function documents its own correctness contract.
+
+  REGRESSION LOCK (hermetic, verbatim-inlined OLD + FIXED bodies):
+    stdlib/ckpt/test/bytes_to_str_twin_op133_test.hexa
+  PASS  FIXED round-trips non-ASCII CERT block byte-eq
+  PASS  OLD double-encode mis-decodes (the cured bug)
+  PASS  ASCII unchanged (both bodies agree)
+  PASS  multi-script (Korean/CJK/emoji/latin1) round-trips
+RESULT  pass=4  fail=0
+OP-133 TWIN-FIX GREEN — ckpt/format.bytes_to_str converged to byte-faithful raw decode
+
+CLOSURE / GATE
+  stdlib/ckpt/format.hexa is a stdlib runtime library — NOT in the compiler
+  self-host closure (compiler/main.hexa import graph does not reach ckpt;
+  tool/build_selfhost.sh closure = compiler/main + drv/flat/gen/out/hexa_ld).
+  → ZERO selfhost byte-eq / fixpoint impact. No GPU, no pod, leak-0.
+  Edit: format.hexa net +9 lines (comment + raw-decode body), 0 large
+  deletions → wipe_guard net-additive. + 1 NEW hermetic test leaf.
+
+🟠 SHARE-SOURCE-OF-TRUTH (flag, not refactored here)
+  The byte-faithful raw-byte decode is now duplicated across ≥5 sites
+  (ckpt/format · ckpt/verifier inline · safetensors ×2 · hexaw tools ×3).
+  These should converge on ONE exported helper (e.g. a single
+  bytes_to_str_raw-backed stdlib decode) so the next fix lands once, not N
+  times. This re-divergence risk is exactly what OP-125/127/128/133 keep
+  re-finding. (Refactor deferred — flag only.)
+
+HONEST g5
+  Duplicated code DOES carry latent already-fixed bugs: one concrete lagging
+  twin found + fixed (format.bytes_to_str, the un-cured source of a bug whose
+  CALL SITE was fixed). The rest of the twin census is genuinely CONVERGED —
+  prior OPs (79/120/125/127/128) closed their classes across all siblings; no
+  fabrication, CLEAN pairs marked CLEAN with evidence (chr byte-faithful;
+  euc_kr codepoint-correct; json delegates to builtin; a34 documents its
+  divergence). $0 · 0-pod · NO GPU · no vast · no foreign pod · leak-0.

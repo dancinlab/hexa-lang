@@ -1,0 +1,84 @@
+// ════════════════════════════════════════════════════════════════════════
+//  OP-133 TWIN-FIX-DIVERGENCE regression lock — stdlib/ckpt/format.hexa
+//  pub fn bytes_to_str
+//
+//  CONTEXT (twin divergence): the CERT-block decode bug — per-byte
+//  `to_string(from_char_code(b & 0xFF))` re-UTF-8-encodes every byte >=0x80,
+//  so a CERT field with non-ASCII text (Korean issuer/reason) double-encodes
+//  ("서명"→"ìëª") and fails to parse. OP-79 cured the CALL SITE in
+//  stdlib/ckpt/verifier.hexa (switched to the byte-faithful builtin
+//  bytes_to_str_raw) but left the SOURCE pub function in format.hexa carrying
+//  the old double-encode — a latent re-introduction for any future caller.
+//  OP-133 routes format.bytes_to_str itself through bytes_to_str_raw to
+//  converge the twin.
+//
+//  HERMETIC (no `use` — stale-bundle dodge, OP-87/88/125): both the OLD buggy
+//  body and the NEW fixed body are verbatim-inlined and run on the local
+//  interpreter, so this test verifies the SOURCE logic, not a frozen bundle.
+//  chr is byte-faithful (hexa_chr_byte = N & 0xFF); from_char_code is the
+//  UTF-8 *encoder* (codepoint→bytes), which is exactly why the per-byte
+//  from_char_code form double-encodes raw bytes >=0x80.
+// ════════════════════════════════════════════════════════════════════════
+
+// byte-faithful str → raw-byte array (char_code is byte-indexed in hexa)
+fn _str_to_bytes(s: string) -> array {
+    let mut out = []
+    let n = len(s)
+    let mut i = 0
+    while i < n { out.push(char_code(s, i) & 0xFF); i = i + 1 }
+    return out
+}
+
+// OLD buggy body (verbatim from pre-OP-133 format.hexa) — re-encodes >=0x80
+fn _bytes_to_str_OLD(bs) {
+    let n = len(bs)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        out = out + to_string(from_char_code(bs[i] & 0xFF))
+        i = i + 1
+    }
+    return out
+}
+
+// NEW fixed body (verbatim from OP-133 format.hexa) — raw bytes through
+fn _bytes_to_str_FIXED(bs) {
+    let n = len(bs)
+    let mut sub = []
+    let mut i = 0
+    while i < n { sub.push(bs[i] & 0xFF); i = i + 1 }
+    return bytes_to_str_raw(sub)
+}
+
+fn main() {
+    let mut pass = 0
+    let mut fail = 0
+
+    // CERT-block-shaped JSON with non-ASCII (the OP-79/125 mojibake fixture)
+    let cert = "{\"schema_version\":\"2\",\"slug\":\"한글-fixture\",\"reason\":\"서명 OK ✓\"}"
+    let cb = _str_to_bytes(cert)
+
+    // 1. FIXED round-trips the non-ASCII CERT block exactly
+    if _bytes_to_str_FIXED(cb) == cert { pass = pass + 1; println("  PASS  FIXED round-trips non-ASCII CERT block byte-eq") }
+    else { fail = fail + 1; println("  FAIL  FIXED round-trip: got [" + _bytes_to_str_FIXED(cb) + "]") }
+
+    // 2. OLD body MIS-decodes the same block (locks the bug it cured)
+    if _bytes_to_str_OLD(cb) != cert { pass = pass + 1; println("  PASS  OLD double-encode mis-decodes (the cured bug)") }
+    else { fail = fail + 1; println("  FAIL  OLD body unexpectedly correct (cannot demonstrate the bug)") }
+
+    // 3. ASCII is unchanged by the fix (no regression for the common path)
+    let ascii = "{\"plain\":\"ascii-only-123\",\"n\":42}"
+    let ab = _str_to_bytes(ascii)
+    if _bytes_to_str_FIXED(ab) == ascii && _bytes_to_str_OLD(ab) == ascii { pass = pass + 1; println("  PASS  ASCII unchanged (both bodies agree)") }
+    else { fail = fail + 1; println("  FAIL  ASCII path diverged") }
+
+    // 4. multi-script: Korean + CJK + emoji all survive the fix
+    let multi = "한 中 😀 ©"
+    let mb = _str_to_bytes(multi)
+    if _bytes_to_str_FIXED(mb) == multi { pass = pass + 1; println("  PASS  multi-script (Korean/CJK/emoji/latin1) round-trips") }
+    else { fail = fail + 1; println("  FAIL  multi-script: got [" + _bytes_to_str_FIXED(mb) + "]") }
+
+    println("RESULT  pass=" + to_string(pass) + "  fail=" + to_string(fail))
+    if fail == 0 { println("OP-133 TWIN-FIX GREEN — ckpt/format.bytes_to_str converged to byte-faithful raw decode") }
+    else { println("OP-133 TWIN-FIX RED") }
+}

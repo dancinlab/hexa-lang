@@ -73,11 +73,14 @@ fn _str_to_bytes(s: string) -> array {
     return out
 }
 
+// OP-135 SSOT: converge on the canonical `bytes_to_str_raw` builtin (single
+// byte-faithful source of truth). chr()+join was already byte-faithful — a
+// consolidation, plus NUL-clean assembly (join truncates at embedded 0x00).
 fn _bytes_to_str(b: array) -> string {
-    let mut parts = []
+    let mut sub = []
     let mut i = 0
-    while i < len(b) { parts.push(chr(b[i])); i = i + 1 }
-    return parts.join("")
+    while i < len(b) { sub.push(b[i] & 0xFF); i = i + 1 }
+    return bytes_to_str_raw(sub)
 }
 
 fn _bytes_eq(a: array, b: array) -> bool {
