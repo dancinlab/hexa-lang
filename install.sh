@@ -198,6 +198,36 @@ install_src() {
     ln -sfn "$HX_SRC/self"   "$HX_BIN/self"
     green "  ✓ $HX_SRC (stdlib/ + self/ linked into $HX_BIN)"
 
+    # Restore the bootstrap runtime seed (handoff 87a5f82e). The clone above is
+    # a `.c=0` tree: self/runtime.c (and its #include fragments) are .gitignore'd
+    # build inputs with NO emitter — absent on a fresh clone. Without them the
+    # module_loader build below has no runtime to link, fails ('module_loader
+    # build failed'), and runtime.c is left ungenerated → every later `hexa run`
+    # dies with 'clang: no such file: self/runtime.c'. The pre-warm rescue lower
+    # down can't break this: it is itself a `hexa build` that needs the same
+    # runtime, and it runs AFTER this point. So restore the frozen seed NOW,
+    # via the canonical tool, into the cloned tree (cwd=$HX_SRC; the tool uses
+    # `git checkout <ref> -- self/runtime.c` and handles the shallow clone by
+    # fetching the ref on demand). This is platform-neutral — it checks out C
+    # text, no clang/-arch involved — so it fixes linux x86_64 and arm64 alike.
+    bold "▸ restoring runtime seed (self/runtime.c)"
+    if [ -x "$HX_SRC/tool/restore_frozen_seeds" ]; then
+        if ( cd "$HX_SRC" && bash tool/restore_frozen_seeds >/dev/null 2>&1 ) \
+            && [ -f "$HX_SRC/self/runtime.c" ]; then
+            green "  ✓ $HX_SRC/self/runtime.c ($(wc -l < "$HX_SRC/self/runtime.c" | tr -d ' ') lines)"
+        else
+            red "  ✗ restore_frozen_seeds failed — self/runtime.c was not produced."
+            red "    \`hexa build\`/\`hexa run\` will fail with 'no such file: self/runtime.c'."
+            red "    Re-run install.sh (needs network to fetch the seed ref on a"
+            red "    shallow clone), or run: cd $HX_SRC && tool/restore_frozen_seeds"
+            return 1
+        fi
+    else
+        red "  ✗ $HX_SRC/tool/restore_frozen_seeds missing — repo layout changed?"
+        red "    Cannot generate self/runtime.c; \`hexa build\` will fail."
+        return 1
+    fi
+
     # The `hexa build` flatten step (resolve_module_loader_compiled in
     # self/main.hexa) needs a COMPILED module_loader binary at
     # <install>/build/hexa_module_loader. It is .gitignored, so the clone
