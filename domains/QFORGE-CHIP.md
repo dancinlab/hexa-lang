@@ -114,6 +114,23 @@
       **모델** hopping(R9 동일 caveat) — deliverable 은 valley COUNT·anisotropic m* TENSOR·3-D √E
       DOS 가 큐빅대칭에서 emergent 한 것; 실 Si/Ge fitted param 은 같은 hop3 list 로의 DATA-swap(d4),
       새 brick 아님. 이로써 **R11 이 드러낸 frontier #2(3D valley multiplicity)가 닫힘**. PR #3176.
+- [x] **R4 absolute-κ — CITED Si/Ge Callaway coefficients (g5 4/4 PASS · 🟠→🟢)** —
+      `stdlib/qforge/chip/callaway_si_ge.hexa` + selftest. R11 이 🟠 로 남긴 **절대 κ frontier**
+      (generic-coeff Si κ=280 vs 148 ~1.9× over-predict)를 진짜 DATA-SWAP(d4)으로 닫음 — back-fit
+      아님(d6). 두 CITED 계수 SET: **Si** = Mingo PRB 68,113308(2003) single-mode EDIP fit
+      (B_N=2.0e-24·B_U=1.73e-19·C=137.39·A_iso=2.2e-45·v=6400·Θ_D=645) · **Ge** = Morelli-Heremans-
+      Slack PRB 66,195304(2002) 1차원리 Grüneisen SET(B_U=ħγ²/M̄v²θ_a · A_iso=V₀Γ/4πv³, γ=1.06·
+      M̄=72.59·θ_a=235·v=3540·Γ=5.87e-4). **R8 τ_iso/τ_bd/Matthiessen + R10 Bose kernel/Simpson 재사용
+      (d19)**; 새 physics 는 cited 독립 C 를 받는 generalised Umklapp 하나뿐(R10 의 C=Θ_D/3 하드코딩
+      ≠ cited 137.39). g5: (a) **Si κ(300K)=146.2 vs 148, rel-ε=1.2%** (β-corr LOAD-BEARING:
+      κ_RTA-only=89 만으로 under-predict, N-복원이 146 으로 올림) · (b) **Ge κ(300K)=68.4 vs 60,
+      rel-ε=14%** (2번째 material, SAME path qforge_chip_callaway_kappa_of() · swapped DATA 만 — d4) ·
+      (c) **κ(T) 곡선** Si 588/245/146/101·Ge 253/114/68/47 @100/200/300/400K (lit Si 884/264/148/98·
+      Ge 232/96/60/43 trend 일치, monotone fall + κ(600)/κ(300)=0.41 Peierls 1/T) · (d) **회귀**
+      R10 callaway_bte + R11 verify_adapter selftest 여전히 PASS, **모델 bytes 불변**(R11 은 여전히
+      280 보고 — R4 는 옆에 cited brick 추가로 🟠 닫음, 편집 아님). HONEST(d6): Callaway 는 MODEL,
+      1-20% 잔차가 cited 계수의 정직한 결과. Si 1.2%(Mingo set 이 Si 에 tightly fit) · Ge 14%(Slack-
+      Morelli 1차원리, Ge-specific fit 없음). 1-knob 으로 148 강제 = tautology, 거부. PR #<TBD>.
 - [ ] **NEXUS edge** — QFORGE-CHIP → {소자 도메인} 재사용 그래프 등록 (materials c7 패턴).
 
 ## reuse (d19)
@@ -139,7 +156,8 @@ ref, device-scale 시뮬레이션 결과 아님.
 세 leg + verify-adapter + 3-D band 가 칩 스케일의 STRUCTURE 를 완전히 닫았다:
 - **band leg** (R1 ε(k) → R3 SCF H(k) → R9 multi-orbital n-band+m*+direct/indirect+valley
   → **R12 3-D BZ H(k): 6-valley + anisotropic m\* tensor + 3-D √E DOS**) — **physics-sealed**
-- **thermal leg** (R4 ballistic g₀ → R8 RTA-BTE → R10 Callaway N/U crossover) — sealed (19/19)
+- **thermal leg** (R4-ball g₀ → R8 RTA-BTE → R10 Callaway N/U crossover → **R4 absolute-κ:
+  CITED Si/Ge 계수, Si 146(1.2%)·Ge 68(14%)**) — sealed + 절대값 closed (🟠→🟢)
 - **verify-adapter** (R11, chip=TCAD) — sealed. d4-generic·manifest verdict 엔진.
 
 R12 가 R11-frontier #2(3D valley multiplicity)를 **닫음** — 그것이 유일한 real-physics gap 이었다
@@ -151,9 +169,9 @@ R12 가 R11-frontier #2(3D valley multiplicity)를 **닫음** — 그것이 유�
    spin-orbit). → **data-swap frontier**(d4, hop3 list 데이터 편집 — 코드 경로 불변).
 2. **m₀-valued / SI-unit m\*** — 곡률→질량 맵은 EXACT(natural-units, R12 텐서 검증). SI 절대값은
    unit-consistent 상대 FD step. → **API frontier**(차원 변환, 새 physics 아님).
-3. **절대 κ (Si 148 · Ge 60 W/m·K)** — Callaway B_U/B_iso/B_N 모델 knob. N/U-crossover STRUCTURE
-   검증됨. → **ab-initio coeff feed frontier**: QFORGE-materials DFPT el-ph 가 공급(1-knob fit=
-   tautology, 정직하게 거부).
+3. ~~**절대 κ (Si 148 · Ge 60 W/m·K)**~~ — **CLOSED by R4** (callaway_si_ge): CITED Si(Mingo
+   PRB 68,113308) + Ge(Morelli-Slack PRB 66,195304) 계수 SET 으로 절대 κ(300K) 재현 — Si 146(rel-ε
+   1.2%)·Ge 68(14%), R11 kernel 게이트 PASS(🟠→🟢). 1-knob back-fit 거부, cited-set 정직한 잔차.
 4. **NEXUS edge** — QFORGE-CHIP ↔ QFORGE-materials DFPT(B_U/B_iso·SK param feed) + 소자 도메인
    재사용 그래프 등록. → **integration frontier**(d19 배선, frontier 1~3 을 묶음).
 

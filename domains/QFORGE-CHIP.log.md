@@ -515,3 +515,43 @@ STRUCTURE(valley COUNT·anisotropic m* TENSOR·3-D √E DOS) emergent; 실 Si/Ge
 gap(frontier #2: 3D valley multiplicity)이 R12 로 닫힘. 남은 frontier = 100% data-swap/API/NEXUS-edge
 (실 SK param·SI-unit m*·ab-initio κ 계수·NEXUS 배선) — **새 physics round 없음. 칩 = physics bricks
 DEPLETED.** 남은 open milestone(NEXUS edge)은 integration 배선이다.
+
+---
+
+## R4 — absolute-κ ab-initio coefficient feed (CITED Si/Ge Callaway, 🟠→🟢)
+
+R11 verify-adapter 가 🟠 STRUCTURAL-ONLY 로 남긴 절대 κ frontier(generic-coeff Si κ≈280 vs
+148 ~1.9× over-predict)를 진짜 DATA-SWAP(d4)으로 닫음 — back-fit 아님(d6). 새 brick =
+`stdlib/qforge/chip/callaway_si_ge.{hexa,selftest}` (R10 callaway_bte + R11 verify_adapter
+MODEL bytes 불변; 옆에 cited-계수 brick 추가).
+
+**두 CITED 계수 SET (모든 값 출처, target 에 fit 한 knob 없음):**
+- **Si** — Mingo PRB 68,113308 (2003) single-mode EDIP fit (nanoHUB 표): 1/τ_N=B_N ω²T³
+  (B_N=2.0e-24), 1/τ_U=B_U ω²T exp(−C/T) (B_U=1.73e-19·C=137.39K), 1/τ_iso=A_iso ω⁴
+  (A_iso=2.2e-45), Θ_D=645K·v=6400m/s·L=7.16mm. CROSS-VAL(d19 독립): Slack-Morelli 1차원리
+  B_U=ħγ²/(M̄v²θ_a)=1.74e-19 가 Mingo fit 1.73e-19 과 <1% 일치, C=θ_a/3≈132 vs 137 (<4%) —
+  무관한 두 출처가 같은 계수로 수렴.
+- **Ge** — Morelli-Heremans-Slack PRB 66,195304 (2002) + Morelli&Slack 2006 Tab.2.2 1차원리:
+  γ=1.06·M̄=72.59·θ_a=235K·v=3540m/s·a=5.658Å·Γ=5.87e-4 → B_U=ħγ²/M̄v²θ_a=3.34e-19·
+  C=θ_a/3=78.3K·A_iso=V₀Γ/4πv³=2.38e-44·B_N=(B_N/B_U)_Si·B_U_Ge=3.86e-24. Θ_D=374K(Itoh, Ge
+  isotope)·L=5mm.
+
+**g5 4/4 VERBATIM:**
+- (a) **Si κ(300K)=146.192 W/m·K vs exp 148, rel-ε=0.0122** (tol 5% → PASS). β-corr
+  LOAD-BEARING: κ_RTA-only=89.4 만으로 under-predict, Callaway N-복원이 146 으로 올림(knob 튜닝
+  아님). cite: Mingo PRB 68,113308(2003); exp Glassbrenner-Slack PR 134,A1058(1964).
+- (b) **Ge κ(300K)=68.386 W/m·K vs exp 60, rel-ε=0.1398** (tol 20% → PASS). 2번째 material =
+  SAME fn qforge_chip_callaway_kappa_of() · swapped DATA 만(d4-generic). cite: Morelli-Slack
+  PRB 66,195304(2002).
+- (c) **κ(T) 곡선 SHAPE**: Si 587.9/244.8/146.2/100.8·Ge 252.9/113.9/68.4/47.5 @100/200/300/400K
+  (lit Si 884/264/148/98·Ge 232/96/60/43 trend 일치). monotone 하강(peak 지나 Umklapp 1/T) +
+  Si κ(600)/κ(300)=0.414 (<0.6, Peierls 1/T-dominated).
+- (d) **REGRESSION**: R10 callaway_bte (τ_N→∞ ⇒ κ_corr→0 EXACT; deterministic) + R11
+  verify_adapter (verdict kernel within→PASS/out→FAIL) selftest 여전히 PASS. R11 은 여전히
+  generic κ=280.337 보고 — 모델 bytes 불변 확인. R11 kernel 이 이제 Si κ(146) vs 148 을 PASS 게이트
+  (🟠 closed).
+
+**HONEST(d6/g63):** Callaway 는 MODEL. 1-20% 잔차가 CITED 독립 계수 SET 의 정직한 결과 —
+single knob 으로 148 강제(tautology) 거부(R11 agent 가 명시 거부했던 것). Si 1.2%(Mingo set 이
+Si 에 tightly fit) · Ge 14%(Slack-Morelli 1차원리, Ge-specific fit 없음). 둘 다 verbatim 보고.
+이로써 R11 frontier #3(절대 κ)이 닫힘 — thermal leg 절대값까지 sealed.
