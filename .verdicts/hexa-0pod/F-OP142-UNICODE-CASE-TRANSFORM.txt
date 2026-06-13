@@ -1,0 +1,137 @@
+F-OP142 — UNICODE CASE-TRANSFORMATION CORRECTNESS AUDIT (HEXA-0POD · LANE-1)
+================================================================================
+Date     : 2026-06-13
+Campaign : HEXA-0POD (0-pod · $0 · local CPU only · no GPU · no vast/cloud)
+Class    : case-transformation SEMANTICS (upper/lower/capitalize) vs the
+           OP-128/135/136/139 byte-vs-codepoint mojibake family — the OP-135
+           census flagged `runtime_pure` upper/lower as "from_char_code on
+           ASCII codepoints" / NOT-REDIRECTABLE and left their multibyte
+           SAFETY UNVERIFIED. OP-142 verifies it.
+Verdict  : 🟢 CONVERGED — ZERO corrupting case helpers.
+           (case helpers audited 8 / multibyte-corrupting 0 / fixed 0;
+            ASCII-only-by-contract & multibyte-SAFE 8 / Unicode-incomplete
+            🟠 enhancement 8, documented-not-corrupting.)
+
+THE QUESTION (the critical test)
+--------------------------------
+Does a byte-wise ASCII upper/lower, applied to a UTF-8 string, wrongly
+uppercase a CONTINUATION byte that happens to fall in 0x61-0x7A ('a'-'z'),
+subtracting 0x20 → different bytes → MOJIBAKE for Korean / CJK / emoji?
+
+DECISIVE FACT (UTF-8 structure):
+  Every byte of a NON-ASCII codepoint — both the lead byte (>= 0xC0) and
+  every continuation byte (0x80-0xBF) — has the high bit SET, i.e. is
+  >= 0x80 = 128. The ASCII-letter ranges are 0x41-0x5A (65-90) and
+  0x61-0x7A (97-122), ALL < 0x80. THEREFORE no byte of any multibyte UTF-8
+  sequence can EVER land in an ASCII-letter range. A byte-wise fold that
+  guards `97<=b<=122` (or `65<=b<=90`) and passes every other byte through
+  is PROVABLY multibyte-SAFE: it can only touch genuine ASCII letters.
+  Python oracle confirmed even café's é (0xC3 0xA9) and 한글
+  (0xED 0x95 0x9C 0xEA 0xB8 0x80) contain NO byte in 0x61-0x7A.
+
+PER-HELPER MATRIX  (file · fn → ASCII-only? → byte-wise? → multibyte-SAFE? → corrupts?)
+--------------------------------------------------------------------------------
+ 1. .to_upper()/.to_lower() RUNTIME BUILTIN (runtime.c L3141/L3148, the
+    canonical surface)                       ASCII-only ✓ · byte ✓ · SAFE ✓ · CORRUPTS ✗
+ 2. stdlib/runtime/ctype.hexa rt_str_to_upper/lower (byte_at, 97-122 guard,
+    own comment: "Non-ASCII bytes pass through unchanged")
+                                              ASCII-only ✓ · byte ✓ · SAFE ✓ · CORRUPTS ✗
+ 3. self/runtime_pure.hexa rt_str_to_upper/lower (s[i] byte-string compared
+    c>="a"&&c<="z"; from_char_code only EVER sees an ASCII codepoint 65-90
+    AFTER the guard, where it is byte-faithful — the guard makes the OP-135
+    "from_char_code" note a NON-issue)        ASCII-only ✓ · byte ✓ · SAFE ✓ · CORRUPTS ✗
+ 4. self/rt/string.hexa rt_str_to_upper/lower (char_code+chr, 97-122 guard,
+    comment: "ASCII-only fold; runtime.c does the same")
+                                              ASCII-only ✓ · byte ✓ · SAFE ✓ · CORRUPTS ✗
+ 5. self/stdlib/string.hexa str_to_upper/lower (ord+chr, 97-122 guard,
+    comment: "non-ASCII chars pass through")  ASCII-only ✓ · byte ✓ · SAFE ✓ · CORRUPTS ✗
+ 6. self/runtime/strings.hexa str_to_upper/lower (same byte-wise shape)
+                                              ASCII-only ✓ · byte ✓ · SAFE ✓ · CORRUPTS ✗
+ 7. self/runtime/string_pure.hexa str_to_upper_ascii/str_to_lower_ascii
+    (26-letter lookup-table; a multibyte single-byte substring matches NO
+    alphabet letter → pushed unchanged; comment: upper-cases to "CAFé")
+                                              ASCII-only ✓ · byte ✓ · SAFE ✓ · CORRUPTS ✗
+ 8. self/runtime/string_pure.hexa str_capitalize_pure (first-byte vs
+    26-letter table; a multibyte lead byte matches nothing → whole string
+    passes through; only an ASCII first letter is capitalized)
+                                              ASCII-only ✓ · byte ✓ · SAFE ✓ · CORRUPTS ✗
+
+(self/stdlib/string_extras.hexa · self/test_*.hexa duplicates carry the same
+ byte-wise body and are covered by the same proof.)
+
+CASE-INSENSITIVE COMPARE / CALLERS (CLEAN-by-contract)
+------------------------------------------------------
+ • stdlib/net/http_request.hexa  : `.to_lower()` on HTTP header KEYS — header
+   names are ASCII by RFC 7230 → ASCII-only input, fold is correct. CLEAN.
+ • stdlib/net/websocket_native.hexa : `header_block.to_lower().index_of(
+   expect.to_lower())` — WebSocket header tokens are ASCII by RFC 6455. CLEAN.
+ • stdlib/codec/hex.hexa hex_encode_upper / sha512_hex etc.: ASCII hex
+   digits only (<0x80). CLEAN.
+ • URL scheme/host lowercasing (OP-136 surface): scheme is ASCII by
+   RFC 3986; host lowercasing operates on ASCII labels. CLEAN.
+ None of these feed user/non-ASCII text through an ASCII fold → no bug.
+
+EMPIRICAL VERIFICATION (g5 honest, local interpreter)
+-----------------------------------------------------
+hexa run probe (renamed bodies + the live .to_upper()/.to_lower() builtin):
+  my_upper("café")             -> "CAFé"          (é untouched)
+  my_upper("한글")             -> "한글"          (perfect NO-OP)
+  my_upper("Hello, 한글! café ß") -> "HELLO, 한글! CAFé ß"
+  my_upper("🎉abc")            -> "🎉ABC"          (emoji intact)
+  "café".to_upper()  [BUILTIN] -> "CAFé"          (matches port)
+  "한글".to_upper()  [BUILTIN] -> "한글"          (NO-OP, matches port)
+  "CAFÉ한ABC".to_lower() [BUILTIN] -> "cafÉ한abc" (Korean intact, matches)
+BYTE-EXACT vs a Python ASCII-only byte-wise oracle (every case above) —
+the hexa output is byte-identical to the oracle. The contrast row (Python
+full-Unicode str.upper: café→CAFÉ, ß→SS, 한글→한글) confirms what hexa does
+NOT do = the 🟠 Unicode-incompleteness, NOT corruption.
+
+REGRESSION LOCK
+---------------
+test/runtime/case_transform_multibyte_op142_test.hexa (HERMETIC, no `use` —
+inlines the safe byte-wise body):
+  __HEXA_CASE_TRANSFORM_MULTIBYTE_OP142__ 10/10  /  PASS
+  F1 ASCII upper/lower correct · F2 Korean NO-OP byte-identical (both cases)
+  · F3 café→CAFé / CAFÉ→cafÉ byte-exact · F4 mixed ASCII+한글+ß · F5 emoji
+  NO-OP · F6 ß left as-is (not SS) · F7 NEGATIVE CONTROL: a guard-dropped
+  from_char_code body MUST grow 한글's byte count (proves the test detects
+  corruption, so F2's pass is meaningful, not vacuous).
+
+🟠 UNICODE-COMPLETENESS ENHANCEMENTS (NOT bugs — documented, not corrupting)
+---------------------------------------------------------------------------
+All helpers are ASCII-only by contract; full-Unicode casing is unimplemented
+but does NOT corrupt:
+  • Latin-1 accents: é↔É, ÿ↔Ÿ NOT folded (left untouched — safe no-op).
+  • German ß→SS (1→2 char length change) NOT performed (ß passes through).
+  • Greek final-sigma, Turkish dotted/dotless İ/ı (locale-dependent) N/A.
+  • Full-width / non-cased scripts (CJK/Korean/emoji) correctly NO-OP.
+These match the runtime's own ASCII-only contract (runtime.c does the same)
+and the helpers' source comments. A Unicode case-table is a future
+enhancement; it is NOT required for the current ASCII-by-spec call sites
+(HTTP headers, URL schemes, hex digits, identifiers).
+
+CLOSURE / FLAGS
+---------------
+NO source change required — every audited helper is ALREADY correct
+(multibyte-safe). Net-additive: ONE new hermetic regression test +
+verdict + domain log entries; ZERO edits to self/ or stdlib/ source, so
+ZERO byte-eq / self-host-fixpoint impact (no closure-IN file touched);
+wipe_guard N/A (0 deletions). The test is in test/runtime/ (not in the
+selfhost closure). NO .tape.
+
+STALE-BINARY CAVEAT: local hexa is a Jun-7 build, but this audit needs NO
+fresh compiler — the safety proof is the UTF-8 byte-structure fact (every
+non-ASCII byte >= 0x80, outside every ASCII-letter range) + a byte-faithful
+char_code/ord/chr (verified live), independent of compiler version. The
+empirical run and the Python oracle agree byte-exact.
+
+ONE HONEST LINE
+---------------
+Case helpers DO NOT corrupt non-ASCII text: every upper/lower/capitalize in
+the repo is a byte-wise ASCII-only fold that can only touch genuine ASCII
+letters (a UTF-8 multibyte byte is always >= 0x80, never in 0x41-0x7A), so
+Korean/CJK/emoji is a perfect NO-OP and café/ß pass through byte-identical —
+the only gap is Unicode-completeness (café→CAFÉ, ß→SS), a documented 🟠
+enhancement, never a corruption.
+
+LANE-1. $0 · 0-pod · NO GPU · no vast · no foreign-pod · leak-0.

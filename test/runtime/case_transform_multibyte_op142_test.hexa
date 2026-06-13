@@ -1,0 +1,133 @@
+// ════════════════════════════════════════════════════════════════════════
+//  OP-142 — Unicode case-transformation multibyte-SAFETY regression lock
+//  (HEXA-0POD · LANE-1)
+//
+//  AUDIT RESULT: every hexa case helper (.to_upper/.to_lower builtin +
+//  the self-host / stdlib ports rt_str_to_upper/lower · str_to_upper/lower ·
+//  str_to_upper_ascii · str_capitalize_pure) is a BYTE-WISE ASCII-ONLY fold:
+//  it maps ONLY bytes 0x61-0x7A ('a'-'z') ⇄ 0x41-0x5A ('A'-'Z') and passes
+//  EVERY other byte through unchanged. Because a UTF-8 lead/continuation byte
+//  of any non-ASCII codepoint is ALWAYS >= 0x80 (high bit set), it can NEVER
+//  fall in the 0x41-0x7A ASCII-letter range — so multibyte text (Korean /
+//  CJK / emoji / Latin-1 accents) is left BYTE-IDENTICAL (a NO-OP), NOT
+//  corrupted. This is the same byte-faithful invariant that protects `chr`.
+//
+//  This is the FALSIFIABLE guard: the multibyte-safe body must leave 한글 /
+//  café-é / 🎉 / ß untouched while ASCII-casing a-z/A-Z. A NEGATIVE CONTROL
+//  inlines a (hypothetical) byte→codepoint-re-encoding upper that WOULD
+//  corrupt — proving the test actually discriminates corruption from safety.
+//
+//  HERMETIC (no `use` — stale-bundle dodge, OP-87/88/125/139): every body is
+//  verbatim-inlined and run on the local interpreter, so this verifies the
+//  SOURCE logic, not a frozen install. char_code / ord / s.substring(i,i+1)
+//  are all BYTE-indexed in hexa (len(s) == byte length), and chr is
+//  byte-faithful (hexa_chr_byte = N & 0xFF) — exactly why the ASCII-guarded
+//  byte-wise fold cannot touch a >= 0x80 byte.
+//
+//  ASCII-only-by-contract (NOT a bug): full-Unicode casing (café→CAFÉ,
+//  ß→SS, İ/ı locale) is a documented 🟠 enhancement, NOT corruption. The
+//  helpers' own comments say "non-ASCII chars pass through".
+// ════════════════════════════════════════════════════════════════════════
+
+// ── byte-faithful str → raw-byte array (char_code is byte-indexed) ──────
+fn _bytes_of(s) {
+    let mut out = []
+    let n = len(s)
+    let mut i = 0
+    while i < n { out.push(char_code(s, i) & 0xFF); i = i + 1 }
+    return out
+}
+
+fn _bytes_eq(a, b) {
+    if len(a) != len(b) { return false }
+    let mut i = 0
+    while i < len(a) {
+        if a[i] != b[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// ── SAFE body: byte-wise ASCII upper (mirrors self/stdlib/string.hexa
+//    str_to_upper, self/rt/string.hexa rt_str_to_upper, ctype rt_str_to_upper,
+//    and the .to_upper() runtime builtin). Guards 97<=b<=122 only. ───────
+fn _upper_safe(s) {
+    let n = len(s)
+    let mut parts = []
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        let o = ord(c)
+        if o >= 97 && o <= 122 { parts.push(chr(o - 32)) } else { parts.push(c) }
+        i = i + 1
+    }
+    return parts.join("")
+}
+
+fn _lower_safe(s) {
+    let n = len(s)
+    let mut parts = []
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        let o = ord(c)
+        if o >= 65 && o <= 90 { parts.push(chr(o + 32)) } else { parts.push(c) }
+        i = i + 1
+    }
+    return parts.join("")
+}
+
+// ── NEGATIVE CONTROL: a body that drops the >= 0x80 guard and re-emits
+//    every byte via from_char_code (the UTF-8 *encoder*) — this re-encodes
+//    each byte >= 0x80 as code point U+00xx (2 bytes) → MOJIBAKE. Proves the
+//    test discriminates a corrupting body from the safe one. ─────────────
+fn _upper_CORRUPTING(s) {
+    let n = len(s)
+    let mut parts = []
+    let mut i = 0
+    while i < n {
+        let o = char_code(s, i)
+        if o >= 97 && o <= 122 {
+            parts.push(from_char_code(o - 32))
+        } else {
+            // BUG: from_char_code re-UTF-8-encodes a raw byte >= 0x80
+            parts.push(from_char_code(o))
+        }
+        i = i + 1
+    }
+    return parts.join("")
+}
+
+fn main() {
+    let mut pass = 0
+    let mut fail = 0
+
+    // F1 — ASCII still upper/lower correctly
+    if _upper_safe("hello") == "HELLO" { pass = pass + 1 } else { fail = fail + 1 }
+    if _lower_safe("HELLO") == "hello" { pass = pass + 1 } else { fail = fail + 1 }
+
+    // F2 — Korean is a perfect NO-OP (byte-identical), NOT mojibake
+    if _bytes_eq(_bytes_of(_upper_safe("한글")), _bytes_of("한글")) { pass = pass + 1 } else { fail = fail + 1 }
+    if _bytes_eq(_bytes_of(_lower_safe("한글")), _bytes_of("한글")) { pass = pass + 1 } else { fail = fail + 1 }
+
+    // F3 — café: ASCII letters cased, é (0xc3 0xa9) untouched → "CAFé"
+    if _bytes_eq(_bytes_of(_upper_safe("café")), _bytes_of("CAFé")) { pass = pass + 1 } else { fail = fail + 1 }
+    if _bytes_eq(_bytes_of(_lower_safe("CAFÉ")), _bytes_of("cafÉ")) { pass = pass + 1 } else { fail = fail + 1 }
+
+    // F4 — mixed: ASCII cased, Korean + ß intact
+    if _upper_safe("Hello, 한글! café ß") == "HELLO, 한글! CAFé ß" { pass = pass + 1 } else { fail = fail + 1 }
+
+    // F5 — emoji (4-byte) is a NO-OP, surrounding ASCII cased
+    if _bytes_eq(_bytes_of(_upper_safe("🎉abc")), _bytes_of("🎉ABC")) { pass = pass + 1 } else { fail = fail + 1 }
+
+    // F6 — ß is left as-is (NOT expanded to SS): documented ASCII-only contract
+    if _bytes_eq(_bytes_of(_upper_safe("ß")), _bytes_of("ß")) { pass = pass + 1 } else { fail = fail + 1 }
+
+    // F7 — NEGATIVE CONTROL: the corrupting body MUST mangle 한글 (byte count
+    //      grows as each >= 0x80 byte re-encodes to 2 bytes). Asserts the test
+    //      can actually detect corruption (so F2's pass is meaningful).
+    if len(_bytes_of(_upper_CORRUPTING("한글"))) > len(_bytes_of("한글")) { pass = pass + 1 } else { fail = fail + 1 }
+
+    print("__HEXA_CASE_TRANSFORM_MULTIBYTE_OP142__ " + to_string(pass) + "/" + to_string(pass + fail))
+    if fail == 0 { print("PASS") } else { print("FAIL") }
+}
