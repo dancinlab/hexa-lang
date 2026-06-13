@@ -100,8 +100,13 @@ fi
 if [ "$(uname -s)" = "Darwin" ]; then
     ARCH_FLAG="-arch arm64"
     SMOKE_TARGET="arm64-apple-darwin"
+    # Apple ld dead-strip spelling (GNU ld rejects `-dead_strip`).
+    DEAD_STRIP="-Wl,-dead_strip"
 else
     ARCH_FLAG=""
+    # GNU ld equivalent of Apple `-dead_strip`; pairs with
+    # -ffunction-sections/-fdata-sections to drop unused code on Linux.
+    DEAD_STRIP="-Wl,--gc-sections"
     # aprime_cc's --emit=asm matches target triples by EXACT string equality
     # (compiler/main.hexa codegen dispatch); its Linux triples are
     # `arm64-linux-gnu` / `x86_64-linux-gnu` — NOT the LLVM `aarch64-` /
@@ -220,7 +225,7 @@ mkdir -p "$(dirname "$OUT")"
 # -fno-stack-protector         : ___stack_chk_fail/_guard
 # These flags are link-equivalent — no source change required.
 CL_ERR="$(clang -Oz $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-    -ffunction-sections -fdata-sections -Wl,-dead_strip \
+    -ffunction-sections -fdata-sections $DEAD_STRIP \
     -fno-builtin-bzero -fno-builtin-memcpy -fno-builtin-strlen \
     -D_FORTIFY_SOURCE=0 -fno-stack-protector \
     -I self -I . "$APPOST" -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
