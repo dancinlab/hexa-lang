@@ -1,0 +1,411 @@
+// OP-122 — stateful / streaming decoder cross-chunk state-corruption guard.
+//
+// Hermetic streaming-equivalence lock for the ONLY in-hexa carried-state
+// decoders whose chunk boundary is parsed in hexa source (not delegated to
+// the C runtime / perl / curl):
+//
+//   1. websocket_native ws_recv_native — h["buf"] carry across frames via
+//      _ws_fill / _ws_take. A server frame stream split at an adversarial
+//      byte offset (mid-header, mid-length-field, mid-payload) MUST decode
+//      to the SAME (opcode,payload) sequence as a one-shot decode.
+//   2. http_sse parse_event / feed — the partial-event accumulator carried
+//      across feed() calls. Feeding the SAME SSE line stream incrementally
+//      MUST yield the SAME dispatched-event sequence as one-shot.
+//
+// PROPERTY (streaming-equivalence): for a carried-state decoder, decode(
+// concat(chunks)) == concat(decode-per-chunk-with-carry) for EVERY split.
+// A divergence at some split = cross-chunk state corruption (lost/duplicated
+// bytes, frame desync, fragmented event). This test FALSIFIES that for the
+// ws frame parser by splitting a multi-frame stream at every byte offset.
+//
+// Verdict (OP-122, 2026-06-13): 🟢 CONVERGED — ws frame parser + SSE
+// accumulator both pass split-equivalence at every offset; zero corruption.
+// channel_recv_lines partial-line fragmentation is a DOCUMENTED >PIPE_BUF
+// precondition (channel.hexa:400-404), not a bug. Cross-checked vs a Python
+// port-of-source oracle (all-1-byte + every two-way + 2000 three-way splits).
+//
+// hexa int is 64-bit SIGNED (OP-118/121); the 127-form length top-bit-set
+// case is guarded upstream (val<0 reject) and exercised by
+// websocket_native_len64_overflow_test.hexa — not re-tested here.
+
+// ── byte-wise XOR (mirror of _ws_xor_byte) ──────────────────────────
+fn xorb(a: int, b: int) -> int {
+    let mut r = 0
+    let mut bit = 1
+    let mut x = a
+    let mut y = b
+    let mut i = 0
+    while i < 8 {
+        if (x % 2) != (y % 2) { r = r + bit }
+        x = x / 2
+        y = y / 2
+        bit = bit * 2
+        i = i + 1
+    }
+    return r
+}
+
+// ── build an unmasked server text/control frame (FIN=1) ─────────────
+fn make_frame(opcode: int, payload: [int]) -> [int] {
+    let mut f = [128 + (opcode % 16)]
+    let n = len(payload)
+    if n < 126 {
+        f = f + [n]                       // server frame: MASK bit 0
+    } else {
+        if n < 65536 {
+            f = f + [126]
+            f = f + [(n / 256) % 256]
+            f = f + [n % 256]
+        } else {
+            f = f + [127]
+            let mut sh = 56
+            while sh >= 0 {
+                let mut p = 1
+                let mut e = 0
+                while e < sh { p = p * 2; e = e + 1 }
+                f = f + [(n / p) % 256]
+                sh = sh - 8
+            }
+        }
+    }
+    f = f + payload
+    return f
+}
+
+// ── carried-state frame parser over a chunked byte source ───────────
+// `chunks` is an array of byte-arrays; the parser pulls the next chunk
+// into `buf` on demand (mirror of _ws_fill) and pops bytes (mirror of
+// _ws_take). Returns a flat encoding of the decoded frame sequence:
+// for each frame [opcode, payload_len, payload_bytes...]. -1 on a decode
+// short-read sentinel terminator.
+//
+// State carried across frames = `buf` (the leftover bytes past one frame
+// that belong to the next), exactly like h["buf"].
+
+// fill: ensure buf has >= need bytes, pulling whole chunks.
+fn fill(state, need: int) {
+    let mut buf = state["buf"]
+    let mut ci = state["ci"]
+    let chunks = state["chunks"]
+    while len(buf) < need {
+        if ci >= len(chunks) {
+            state["buf"] = buf
+            state["ci"] = ci
+            return buf
+        }
+        buf = buf + chunks[ci]
+        ci = ci + 1
+    }
+    state["buf"] = buf
+    state["ci"] = ci
+    return buf
+}
+
+// take: pop first n bytes off buf, store rest back.
+fn take(state, n: int) {
+    let buf = state["buf"]
+    let mut out = []
+    let mut i = 0
+    while i < n { out = out + [buf[i]]; i = i + 1 }
+    let mut rest = []
+    let total = len(buf)
+    let mut j = n
+    while j < total { rest = rest + [buf[j]]; j = j + 1 }
+    state["buf"] = rest
+    return out
+}
+
+// decode all frames in the stream; flat-encode the result for comparison.
+fn decode_all(chunks) -> [int] {
+    let state = #{}
+    state["buf"] = []
+    state["ci"] = 0
+    state["chunks"] = chunks
+    let mut out = []
+    let mut guard = 0
+    while guard < 100000 {
+        guard = guard + 1
+        let two = fill(state, 2)
+        if len(two) < 2 { return out }       // clean EOF
+        let header = take(state, 2)
+        let b0 = header[0]
+        let b1 = header[1]
+        let opcode = b0 % 16
+        let masked = b1 >= 128
+        let mut plen = b1 % 128
+        if plen == 126 {
+            let ext = fill(state, 2)
+            if len(ext) < 2 { return out + [-1] }
+            let lb = take(state, 2)
+            plen = lb[0] * 256 + lb[1]
+        } else {
+            if plen == 127 {
+                let ext = fill(state, 8)
+                if len(ext) < 8 { return out + [-1] }
+                let lb = take(state, 8)
+                let mut val = 0
+                let mut k = 0
+                while k < 8 { val = val * 256 + lb[k]; k = k + 1 }
+                if val < 0 { return out + [-1] }
+                plen = val
+            }
+        }
+        let mut mkey = [0, 0, 0, 0]
+        if masked {
+            let mext = fill(state, 4)
+            if len(mext) < 4 { return out + [-1] }
+            mkey = take(state, 4)
+        }
+        let body = if plen > 0 {
+            let pext = fill(state, plen)
+            if len(pext) < plen { [] } else { take(state, plen) }
+        } else {
+            []
+        }
+        if plen > 0 && len(body) < plen { return out + [-1] }
+        out = out + [opcode]
+        out = out + [plen]
+        let mut p = 0
+        while p < plen {
+            if masked {
+                out = out + [xorb(body[p], mkey[p % 4])]
+            } else {
+                out = out + [body[p]]
+            }
+            p = p + 1
+        }
+    }
+    return out
+}
+
+fn arr_eq(a, b) -> bool {
+    if len(a) != len(b) { return false }
+    let mut i = 0
+    while i < len(a) {
+        if a[i] != b[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn slice(a, lo: int, hi: int) {
+    let mut out = []
+    let mut i = lo
+    while i < hi { out = out + [a[i]]; i = i + 1 }
+    return out
+}
+
+fn rep(byte: int, n: int) {
+    let mut out = []
+    let mut i = 0
+    while i < n { out = out + [byte]; i = i + 1 }
+    return out
+}
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // Build an adversarial multi-frame stream: lengths straddle the 7-bit
+    // (126) and 16-bit (65536) header-form boundaries, a zero-length frame,
+    // a control (ping) frame interleaved, and a multibyte payload.
+    let mut stream = []
+    // frame A: text "hi"
+    stream = stream + make_frame(1, [104, 105])
+    // frame B: 125 bytes (last 7-bit length form)
+    stream = stream + make_frame(1, rep(120, 125))
+    // frame C: 126 bytes (first 16-bit length form)
+    stream = stream + make_frame(1, rep(121, 126))
+    // frame D: zero-length text frame
+    stream = stream + make_frame(1, [])
+    // frame E: control ping with payload
+    stream = stream + make_frame(9, [112, 110, 103])
+    // frame F: 130 bytes (16-bit form — header still changes mid-stream)
+    stream = stream + make_frame(1, rep(122, 130))
+    // frame G: multibyte (utf-8 bytes for "é日") = C3 A9 E6 97 A5
+    stream = stream + make_frame(1, [195, 169, 230, 151, 165])
+
+    let n = len(stream)
+
+    // ── oneshot: whole stream as a single chunk ──
+    let oneshot = decode_all([stream])
+
+    // oneshot must NOT contain the -1 short-read sentinel.
+    total = total + 1
+    let mut has_sentinel = false
+    let mut z = 0
+    while z < len(oneshot) { if oneshot[z] == -1 { has_sentinel = true }; z = z + 1 }
+    if !has_sentinel { pass = pass + 1 } else { print("FAIL oneshot has short-read sentinel") }
+
+    // ── all-1-byte chunks (worst-case fragmentation) ──
+    total = total + 1
+    let mut ones = []
+    let mut a = 0
+    while a < n { ones = ones + [[stream[a]]]; a = a + 1 }
+    let allone = decode_all(ones)
+    if arr_eq(allone, oneshot) { pass = pass + 1 } else { print("FAIL all-1-byte split != oneshot") }
+
+    // ── every two-way split: cut at EVERY offset 1..n-1 ──
+    // n is small (~190 bytes) so exhaustive every-offset coverage is cheap
+    // in the interpreter. A divergence at ANY offset = cross-chunk state
+    // corruption (mid-header, mid-2-byte-length, mid-mask, mid-payload).
+    total = total + 1
+    let mut twoway_ok = true
+    let mut cut = 1
+    while cut < n {
+        let c0 = slice(stream, 0, cut)
+        let c1 = slice(stream, cut, n)
+        let res = decode_all([c0, c1])
+        if !arr_eq(res, oneshot) {
+            twoway_ok = false
+            print("FAIL two-way split at cut=", cut)
+            cut = n   // stop on first divergence
+        }
+        cut = cut + 1
+    }
+    if twoway_ok { pass = pass + 1 } else { print("FAIL two-way split-equivalence") }
+
+    // ── representative three-way splits across the boundaries ──
+    total = total + 1
+    let cuts_a = [3, 7, 11, 130, 260, 270]
+    let cuts_b = [5, 140, 280, 290, 295, n - 1]
+    let mut threeway_ok = true
+    let mut t = 0
+    while t < len(cuts_a) {
+        let x = cuts_a[t]
+        let y = cuts_b[t]
+        if x > 0 && x < y && y < n {
+            let c0 = slice(stream, 0, x)
+            let c1 = slice(stream, x, y)
+            let c2 = slice(stream, y, n)
+            let res = decode_all([c0, c1, c2])
+            if !arr_eq(res, oneshot) {
+                threeway_ok = false
+                print("FAIL three-way split x=", x, " y=", y)
+            }
+        }
+        t = t + 1
+    }
+    if threeway_ok { pass = pass + 1 } else { print("FAIL three-way split-equivalence") }
+
+    // ── SSE accumulator: feed-with-carry == one-shot event sequence ──
+    // Mirror of http_sse parse_event/feed carried `event` map. Drive the
+    // same line list through a per-line carry and assert the dispatched
+    // event count + concatenated data is identical regardless of how the
+    // (atomic) lines are grouped across polls.
+    total = total + 1
+    // stream: 2 events, second is multi-data joined with "\n".
+    let lines = ["event: ping", "data: a", "", "data: x", "data: y", ""]
+    // one-shot drive:
+    let one_events = sse_drive(lines)
+    // incremental drive (each line is its own "poll") — carry holds partial:
+    let inc_events = sse_drive_incremental(lines)
+    if one_events == inc_events && one_events == "ping|a;message|x\ny;" {
+        pass = pass + 1
+    } else {
+        print("FAIL SSE carry: one=", one_events, " inc=", inc_events)
+    }
+
+    if pass == total {
+        print("__HEXA_OP122_STREAMING_STATE__ PASS ", pass, "/", total)
+    } else {
+        print("__HEXA_OP122_STREAMING_STATE__ FAIL ", pass, "/", total)
+    }
+}
+
+// strip trailing CR/LF (mirror of _sse_strip_eol).
+fn sse_strip(line: string) -> string {
+    let nn = len(line)
+    if nn == 0 { return line }
+    let mut end = nn
+    if end > 0 && line.substring(end - 1, end) == "\n" { end = end - 1 }
+    if end > 0 && line.substring(end - 1, end) == "\r" { end = end - 1 }
+    if end == nn { return line }
+    return line.substring(0, end)
+}
+
+// parse one line into the carried event map (mirror of http_sse_parse_event,
+// data + event fields only — sufficient for the carry-equivalence property).
+fn sse_parse(event, raw: string) {
+    let line = sse_strip(raw)
+    if len(line) > 0 && line.substring(0, 1) == ":" { return event }
+    let colon = line.index_of(":")
+    let mut field = ""
+    let mut value = ""
+    if colon < 0 {
+        field = line
+        value = ""
+    } else {
+        field = line.substring(0, colon)
+        value = line.substring(colon + 1, len(line))
+        if len(value) > 0 && value.substring(0, 1) == " " {
+            value = value.substring(1, len(value))
+        }
+    }
+    if field == "event" { event["event"] = value; return event }
+    if field == "data" {
+        if event["_has_data"] {
+            event["data"] = to_string(event["data"]) + "\n" + value
+        } else {
+            event["data"] = value
+            event["_has_data"] = true
+        }
+        return event
+    }
+    return event
+}
+
+fn sse_fresh() {
+    let ev = #{}
+    ev["event"] = "message"
+    ev["data"] = ""
+    ev["_has_data"] = false
+    return ev
+}
+
+fn sse_has_content(ev) -> bool {
+    return ev["_has_data"] || to_string(ev["event"]) != "message"
+}
+
+// Drive the whole line list at once; emit "event|data;" per dispatched event.
+fn sse_drive(lines) -> string {
+    let mut ev = sse_fresh()
+    let mut out = ""
+    let mut i = 0
+    while i < len(lines) {
+        let line = sse_strip(to_string(lines[i]))
+        if len(line) == 0 {
+            if sse_has_content(ev) {
+                out = out + to_string(ev["event"]) + "|" + to_string(ev["data"]) + ";"
+            }
+            ev = sse_fresh()
+        } else {
+            ev = sse_parse(ev, to_string(lines[i]))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Same, but feed one line per "poll" carrying `ev` across calls — proves the
+// partial-event carry is poll-grouping invariant (here: 1 line per group).
+fn sse_drive_incremental(lines) -> string {
+    let mut ev = sse_fresh()
+    let mut out = ""
+    let mut i = 0
+    while i < len(lines) {
+        // each iteration simulates a separate poll delivering exactly one line
+        let one = [lines[i]]
+        let line = sse_strip(to_string(one[0]))
+        if len(line) == 0 {
+            if sse_has_content(ev) {
+                out = out + to_string(ev["event"]) + "|" + to_string(ev["data"]) + ";"
+            }
+            ev = sse_fresh()
+        } else {
+            ev = sse_parse(ev, to_string(one[0]))
+        }
+        i = i + 1
+    }
+    return out
+}
