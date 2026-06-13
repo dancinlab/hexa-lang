@@ -93,7 +93,25 @@ NOT-A-TAUTOLOGY check — the UNFIXED bodies reproduce the divergence verbatim o
 --------------------------------------------------------------------------------
 4. FIXPOINT VERIFICATION (self-host byte-eq gates inline-polled on the PR)
 --------------------------------------------------------------------------------
-[GATE RESULTS — filled in verbatim from the PR check-run poll below]
+PR #3250 → main. ALL 11 required checks GREEN (verbatim from `gh pr checks 3250`):
+  selfhost-byteeq-real ............................................. pass  10m5s
+  selfhost byte-eq (re-emit gen3→gen4, darwin-arm64) ............... pass  1m38s
+  determinism (re-emit + relink byte-eq, darwin-arm64) ............. pass  1m16s
+  miscompile-zero (native emit, darwin-arm64) ..................... pass  2m9s
+  selfhost codegen guard (self-emit + 0x-literal + STP/LDP) ....... pass  1m22s
+  selfhost-gates-summary .......................................... pass  8s
+  faithful-nobaseline (darwin-arm64) .............................. pass  1m28s
+  faithful-nobaseline (linux-arm64) ............................... pass  7m42s
+  faithful-nobaseline (linux-x86_64) .............................. pass  3m53s
+  check @grace consent trailers ................................... pass  1m43s
+  no machine-absolute path in added .hexa lines ................... pass  19s
+
+THE FIXPOINT HELD. Every self-host byte-eq gate (selfhost-byteeq-real, gen3→gen4
+re-emit byte-eq, determinism, miscompile-zero, codegen-guard) passed GREEN at its
+new value — confirming the closure-membership proof: the deterministic source fix
+to self/serve/http_server.hexa (a file proven NOT in the 48-file build_selfhost
+closure) did not perturb the self-host reproduce-byte-identical invariant. No
+revert needed; the bugs are CLOSED, not re-flagged.
 
 --------------------------------------------------------------------------------
 VERDICT
