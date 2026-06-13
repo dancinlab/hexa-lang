@@ -1,0 +1,118 @@
+════════════════════════════════════════════════════════════════════════════════
+ F-OP81-DATETIME-MINI-PURE-ORACLE — leaf oracle locking the FIVE Batch-23 calendar
+ builtins of self/runtime/datetime_mini_pure.hexa (is_leap_year / days_in_month /
+ day_of_year / days_between / weekday_zeller). Closes a runtime-side *_pure invariant
+ hole — weekday_zeller_pure (Zeller's congruence) was ENTIRELY UNTESTED, and the
+ sibling test_date_time_pure.hexa shadow-redefines its OWN day_of_year/days_between
+ copies rather than exercising these definitions.
+ HEXA-0POD OP-81 · 0-GPU · local arm64-macos only · ZERO vast · no foreign pod · $0
+════════════════════════════════════════════════════════════════════════════════
+date: 2026-06-13   tier: 🟢 GREEN — invariant-lock (45/45 PASS) + module PROVEN-CLEAN
+base: origin/main @ 20e201a4c4814db186e794b01ea64d4cf65185d2 (post #3217 / OP-79)
+scope: $0 · 0-pod · NO GPU · no vast · no foreign pod · no .tape (domain .md/.log.md
+       only, no MAIN.tape) · leaf oracle only (NOT in build_selfhost closure) · leak-0
+
+────────────────────────────────────────────────────────────────────────────────
+ 1. SURVEY (fresh-surface selection per the OP-81 regimen)
+────────────────────────────────────────────────────────────────────────────────
+ Axis (a) — `pub fn` LOCAL diverging from a registered builtin (OP-75/77/79 class):
+   DRY. Censused the ord-based digit/alpha checks across stdlib (106 sites of
+   `< 48`/`> 57`/`- 48`). These are per-CHAR loops over a string; the registered
+   codegen builtins is_digit/is_alpha/is_alphanumeric (self/codegen.hexa:6159-6170)
+   classify the FIRST char only (isdigit/isalpha on s[0]). There is NO registered
+   "string-is-all-digits" builtin twin to confuse — the hand-rolled loops are the
+   correct primitive, not a divergent reimplementation. No build-break / divergence
+   found. (bytes_to_str class already CLOSED repo-wide at OP-79.)
+
+ Axis (b) — stdlib parser/collection contract (OP-68/70 class on a fresh module):
+   stdlib/core/parse.hexa (to_int_safe behavior table) — body matches the 17-case
+   table; already covered by stdlib/test/test_parse.hexa. stdlib/semver.hexa — thorough
+   selftest (parse / §11 chain / caret/tilde/x/||). stdlib/time/civil.hexa — Howard
+   Hinnant proleptic-Gregorian; cross-checked vs Python `datetime` over 5840 dates
+   (-400000..400000 days) → round-trip + vs-Python ZERO divergence; parse(format(e))==e
+   PASS over 4103 epochs to year 2100; leap-day 2024-02-29 exact; negative epochs are
+   DOCUMENTED-unsupported (line 23), not a bug. PROVEN-CLEAN, already has a ci_gate test.
+
+ Axis (c) — a self/runtime *_pure.hexa invariant lockable by a LEAF oracle (OP-72
+   class on the runtime side): ACTIONABLE. self/runtime/datetime_mini_pure.hexa exports
+   FIVE pure calendar builtins. Survey of consumers/tests found:
+     · weekday_zeller_pure — ZERO test coverage anywhere (grep self/ stdlib/).
+     · The sibling self/test_date_time_pure.hexa tests a DIFFERENT module
+       (date_time_pure) and SHADOW-REDEFINES its own day_of_year_pure/
+       days_between_pure (lines 52, 77) — so it does NOT exercise these five.
+   → highest-value, non-closure, leaf-lockable item. PICKED.
+
+ Axis (d) — HEXA-0POD `## deferred` tail: the open items (OP-2b/2c/19b/5c/46/39b)
+   are all GPU-bound or build-host-anchor-refresh (out of 0-pod scope), correctly
+   parked. Nothing 0-pod-feasible there.
+
+────────────────────────────────────────────────────────────────────────────────
+ 2. PICK — WHY
+────────────────────────────────────────────────────────────────────────────────
+ self/runtime/datetime_mini_pure.hexa's weekday_zeller_pure (Zeller's congruence —
+ the most error-prone of the five, with a non-trivial mm<3 year-shift + a +5J form
+ chosen specifically to dodge the sign-of-modulo trap) had NO regression lock, and
+ the existing date test exercises a different module via shadowed copies. A LEAF
+ oracle that inlines the module body VERBATIM and asserts Python-verified goldens
+ locks all five invariants with ZERO self-host-fixpoint risk (no closure file
+ touched, net-additive).
+
+────────────────────────────────────────────────────────────────────────────────
+ 3. VERIFY (g5 — faithful Python port vs authoritative `datetime`)
+────────────────────────────────────────────────────────────────────────────────
+ Faithful Python port of all five fns (C trunc-toward-zero `/` and sign-follows-
+ dividend `%` matched to hexa int semantics), cross-checked vs Python's `datetime`:
+
+   Zeller weekday vs Python (years 1..3999, multiple m/d):    PASS (no divergence)
+   is_leap_year_pure vs Gregorian rule (1..3999):             PASS
+   days_between_pure vs Python date diff (1..3998):            PASS
+   day_of_year_pure vs Python tm_yday (1900/2000/2024/...):    PASS
+
+ Documented golden cases (module header §"Golden cases honored") — all match:
+   is_leap(2000)=1 · is_leap(1900)=0 · dim(2024,2)=29 ·
+   zeller(2026,4,17)=6 (Friday) · days_between(2026,1,1, 2026,4,17)=106
+
+ Weekday-convention spot anchors (independently known): unix epoch 1970-01-01 =
+ Thursday → zeller 5 ✓ ; Y2K 2000-01-01 = Saturday → zeller 0 ✓ ; leap day
+ 2024-02-29 = Thursday → zeller 5 ✓.
+
+────────────────────────────────────────────────────────────────────────────────
+ 4. LEAF ORACLE — self/test_datetime_mini_pure.hexa (NEW)
+────────────────────────────────────────────────────────────────────────────────
+ Module body inlined VERBATIM (the established pattern — test_date_time_pure.hexa:7
+ "codegen import not wired for test files; inline the module body"). 45 asserts:
+   is_leap_year_pure        8  (÷4 / ÷100¬400 / ÷400 / early years)
+   days_in_month_pure       9  (leap/non-leap Feb · 30/31 · out-of-range→0)
+   day_of_year_pure         8  (leap Feb29 · leap +1 · 1900¬leap · 2000 leap)
+   days_between_pure        8  (±1 · golden 106 · cross-year/leap · 30y · century)
+   days_between consistency 2  (antisymmetry · in-year span == doy−1)
+   weekday_zeller_pure     10  (golden Fri · epoch Thu · Y2K Sat · leap-day Thu ·
+                                both mm<3 and mm≥3 shift paths · nonneg/in-range)
+
+ RUN (installed seed ~/.hx/bin/hexa, valid for pure-int arithmetic — confirmed by
+ running the sibling test_datetime_pure.hexa first → 68/68 PASS):
+
+   $ ~/.hx/bin/hexa run self/test_datetime_mini_pure.hexa
+   ...
+   datetime_mini_pure leaf oracle: 45/45
+   [ALL PASS] datetime_mini_pure verified
+   (exit 0)
+
+────────────────────────────────────────────────────────────────────────────────
+ 5. BYTE-EQ SAFETY
+────────────────────────────────────────────────────────────────────────────────
+ NEW FILE ONLY (self/test_datetime_mini_pure.hexa) — a standalone leaf test, NOT in
+ the build_selfhost closure (not imported by self/hexa_full.hexa or any compiler
+ stage). Zero source/codegen/runtime bytes changed → self-host fixpoint UNAFFECTED.
+ wipe_guard: net-additive (0 deletions). The audited module datetime_mini_pure.hexa
+ is left UNCHANGED — it is PROVEN-CLEAN, this only adds its missing regression lock.
+
+────────────────────────────────────────────────────────────────────────────────
+ VERDICT
+────────────────────────────────────────────────────────────────────────────────
+ 🟢 GREEN — invariant-lock 45/45 PASS. The runtime-side datetime_mini_pure calendar
+ surface (incl. the previously-untested Zeller weekday) is now leaf-locked, with the
+ module itself PROVEN-CLEAN vs Python `datetime` across years 1..3999. Axes (a)/(b)/(d)
+ dry/parked with per-axis evidence; axis (c) yielded the genuine fresh item. Oracle-only,
+ no behavior change, no self-host risk.
+ $0 · 0-pod · NO GPU · no vast · no foreign pod · no MAIN.tape · no self/env.hexa · leak-0.

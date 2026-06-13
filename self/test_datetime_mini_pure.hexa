@@ -1,0 +1,212 @@
+// ═══════════════════════════════════════════════════════════════════
+//  test_datetime_mini_pure.hexa — coverage for self/runtime/datetime_mini_pure
+//
+//  Locks the five Batch-23 calendar builtins:
+//      is_leap_year_pure, days_in_month_pure, day_of_year_pure,
+//      days_between_pure, weekday_zeller_pure
+//
+//  OP-81 (HEXA-0POD): the runtime-side datetime_mini_pure module had NO
+//  leaf oracle — weekday_zeller_pure (Zeller's congruence, the most
+//  error-prone of the five) was entirely UNTESTED, and the sibling
+//  test_date_time_pure.hexa shadow-redefines its OWN day_of_year/
+//  days_between copies rather than exercising these definitions. Every
+//  golden below is cross-checked against Python's authoritative
+//  `datetime` over years 1..3999 (weekday/leap/day-of-year/days-between
+//  all PASS, no divergence; documented golden cases all match).
+//
+//  (codegen import not wired for test files; inline the module body,
+//   same pattern as test_date_time_pure.hexa / test_datetime_pure.hexa.)
+// ═══════════════════════════════════════════════════════════════════
+
+// ── INLINED VERBATIM from self/runtime/datetime_mini_pure.hexa ──
+
+@pure
+fn _dt_mini_is_leap(year) {
+    if (year % 4) != 0 { return 0 }
+    if (year % 100) != 0 { return 1 }
+    if (year % 400) != 0 { return 0 }
+    return 1
+}
+
+@pure
+fn _dt_mini_dim(year, month) {
+    if month == 1  { return 31 }
+    if month == 3  { return 31 }
+    if month == 5  { return 31 }
+    if month == 7  { return 31 }
+    if month == 8  { return 31 }
+    if month == 10 { return 31 }
+    if month == 12 { return 31 }
+    if month == 4  { return 30 }
+    if month == 6  { return 30 }
+    if month == 9  { return 30 }
+    if month == 11 { return 30 }
+    if month == 2 {
+        if _dt_mini_is_leap(year) == 1 { return 29 }
+        return 28
+    }
+    return 0
+}
+
+@pure
+pub fn is_leap_year_pure(y) {
+    return _dt_mini_is_leap(y)
+}
+
+@pure
+pub fn days_in_month_pure(y, m) {
+    return _dt_mini_dim(y, m)
+}
+
+@pure
+pub fn day_of_year_pure(y, m, d) {
+    let mut total = 0
+    let mut mm = 1
+    while mm < m {
+        total = total + _dt_mini_dim(y, mm)
+        mm = mm + 1
+    }
+    return total + d
+}
+
+@pure
+fn _dt_mini_days_from_civil(y, m, d) {
+    let mut yy = y
+    if m <= 2 { yy = yy - 1 }
+    let mut era = 0
+    if yy >= 0 {
+        era = yy / 400
+    } else {
+        era = (yy - 399) / 400
+    }
+    let yoe = yy - era * 400
+    let mp = (m + 9) % 12
+    let doy = (153 * mp + 2) / 5 + d - 1
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+    return era * 146097 + doe - 719468
+}
+
+@pure
+pub fn days_between_pure(y1, m1, d1, y2, m2, d2) {
+    let a = _dt_mini_days_from_civil(y1, m1, d1)
+    let b = _dt_mini_days_from_civil(y2, m2, d2)
+    return b - a
+}
+
+@pure
+pub fn weekday_zeller_pure(y, m, d) {
+    let mut yy = y
+    let mut mm = m
+    if mm < 3 {
+        mm = mm + 12
+        yy = yy - 1
+    }
+    let k = yy % 100
+    let j = yy / 100
+    let h = (d + (13 * (mm + 1)) / 5 + k + k / 4 + j / 4 + 5 * j) % 7
+    return h
+}
+
+// ── test harness ──────────────────────────────────────────────────
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, actual, expected) {
+    if actual == expected {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected: " + to_string(expected) + ", got: " + to_string(actual))
+        fail_count = fail_count + 1
+    }
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  datetime_mini_pure leaf oracle (OP-81)")
+println("═══════════════════════════════════════════════════════")
+println("")
+
+// ── is_leap_year_pure (1/0) — 4/100/400 rule ──────────────────────
+println("--- is_leap_year_pure ---")
+check("leap 2000 (div400)",      is_leap_year_pure(2000), 1)
+check("leap 1900 (div100 ndiv400)", is_leap_year_pure(1900), 0)
+check("leap 2024 (div4)",        is_leap_year_pure(2024), 1)
+check("leap 2023",               is_leap_year_pure(2023), 0)
+check("leap 1600 (div400)",      is_leap_year_pure(1600), 1)
+check("leap 2100 (div100 ndiv400)", is_leap_year_pure(2100), 0)
+check("leap 4 (early div4)",     is_leap_year_pure(4),    1)
+check("leap 1 (year 1)",         is_leap_year_pure(1),    0)
+
+// ── days_in_month_pure — 28/29/30/31, 0 out-of-range ──────────────
+println("")
+println("--- days_in_month_pure ---")
+check("dim 2024 Feb (leap)",     days_in_month_pure(2024, 2),  29)
+check("dim 2023 Feb (non-leap)", days_in_month_pure(2023, 2),  28)
+check("dim 1900 Feb (non-leap)", days_in_month_pure(1900, 2),  28)
+check("dim 2000 Feb (leap)",     days_in_month_pure(2000, 2),  29)
+check("dim Jan",                 days_in_month_pure(2026, 1),  31)
+check("dim Apr",                 days_in_month_pure(2026, 4),  30)
+check("dim Dec",                 days_in_month_pure(2026, 12), 31)
+check("dim out-of-range 0",      days_in_month_pure(2026, 0),  0)
+check("dim out-of-range 13",     days_in_month_pure(2026, 13), 0)
+
+// ── day_of_year_pure (1..366) ─────────────────────────────────────
+println("")
+println("--- day_of_year_pure ---")
+check("doy 2026-01-01",  day_of_year_pure(2026, 1, 1),   1)
+check("doy 2024-02-29",  day_of_year_pure(2024, 2, 29),  60)   // leap Feb 29
+check("doy 2026-03-01",  day_of_year_pure(2026, 3, 1),   60)   // non-leap
+check("doy 2024-03-01",  day_of_year_pure(2024, 3, 1),   61)   // leap +1
+check("doy 2026-12-31",  day_of_year_pure(2026, 12, 31), 365)  // non-leap
+check("doy 2024-12-31",  day_of_year_pure(2024, 12, 31), 366)  // leap
+check("doy 1900-12-31",  day_of_year_pure(1900, 12, 31), 365)  // 1900 NOT leap
+check("doy 2000-12-31",  day_of_year_pure(2000, 12, 31), 366)  // 2000 IS leap
+
+// ── days_between_pure (signed, b - a) ─────────────────────────────
+println("")
+println("--- days_between_pure ---")
+check("dbw same day",      days_between_pure(2026, 4, 17, 2026, 4, 17), 0)
+check("dbw +1",            days_between_pure(2026, 4, 17, 2026, 4, 18), 1)
+check("dbw -1",            days_between_pure(2026, 4, 18, 2026, 4, 17), -1)
+check("dbw golden 106",    days_between_pure(2026, 1, 1, 2026, 4, 17),  106)  // module-doc golden
+check("dbw cross-year 365", days_between_pure(2025, 4, 17, 2026, 4, 17), 365) // 2025 non-leap
+check("dbw cross-leap 366", days_between_pure(2024, 1, 1, 2025, 1, 1),   366) // 2024 leap
+check("dbw 30-year span",  days_between_pure(1970, 1, 1, 2000, 1, 1),    10957)
+check("dbw century",       days_between_pure(1900, 1, 1, 2000, 1, 1),    36524)
+
+// CROSS-IMPL CONSISTENCY: days_between is antisymmetric, and an in-year
+// span equals the day-of-year delta.
+println("")
+println("--- days_between_pure consistency ---")
+check("dbw antisym",       days_between_pure(2026, 4, 17, 1999, 7, 4)
+                         + days_between_pure(1999, 7, 4, 2026, 4, 17), 0)
+check("dbw in-year = doy-1", days_between_pure(2026, 1, 1, 2026, 4, 17),
+                             day_of_year_pure(2026, 4, 17) - 1)
+
+// ── weekday_zeller_pure (0=Sat..6=Fri) — PREVIOUSLY UNTESTED ───────
+//   Verified vs Python datetime weekday over years 1..3999 (Mon=0
+//   mapped through the Zeller 0=Sat convention).
+println("")
+println("--- weekday_zeller_pure (0=Sat..6=Fri) ---")
+check("wd 2026-04-17 Fri",  weekday_zeller_pure(2026, 4, 17), 6)   // module-doc golden (Friday)
+check("wd 2000-01-01 Sat",  weekday_zeller_pure(2000, 1, 1),  0)   // Y2K was a Saturday
+check("wd 1970-01-01 Thu",  weekday_zeller_pure(1970, 1, 1),  5)   // unix epoch = Thursday
+check("wd 2024-02-29 Thu",  weekday_zeller_pure(2024, 2, 29), 5)   // leap day = Thursday
+check("wd 2024-03-01 Fri",  weekday_zeller_pure(2024, 3, 1),  6)   // day after leap day
+check("wd 1900-01-01 Mon",  weekday_zeller_pure(1900, 1, 1),  2)   // Monday
+check("wd 2026-01-01 Thu",  weekday_zeller_pure(2026, 1, 1),  5)   // Jan/Feb shift path
+check("wd 2026-02-28 Sat",  weekday_zeller_pure(2026, 2, 28), 0)   // mm<3 shift path
+// non-negative / in-range invariant (the +5J-form claim)
+check("wd nonneg 1-1-1",    weekday_zeller_pure(1, 1, 1) >= 0, true)
+check("wd range 2026-04-17", weekday_zeller_pure(2026, 4, 17) < 7, true)
+
+println("")
+let total = pass_count + fail_count
+println("datetime_mini_pure leaf oracle: " + to_string(pass_count) + "/" + to_string(total))
+if fail_count == 0 {
+    println("[ALL PASS] datetime_mini_pure verified")
+} else {
+    println("[FAILED] datetime_mini_pure")
+    exit(1)
+}
