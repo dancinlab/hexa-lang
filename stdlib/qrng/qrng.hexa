@@ -272,7 +272,23 @@ fn main() {
         if argv[i].ends_with(".hexa") { subcmd_idx = i + 1; break }
         i = i + 1
     }
-    if subcmd_idx < 0 { subcmd_idx = 2 }  // direct invocation: argv[0]=interp argv[1]=script
+    // When JIT-compiled (`hexa run`) argv[0] is a tmp binary (no .hexa suffix),
+    // so the .hexa scan misses. Fall back to scanning for the first known verb
+    // rather than a fixed index — handles both [tmpbin, sub, ...] (idx 1) and
+    // [qrng_cli, qrng_dispatch, sub, ...] (idx 2) shapes.
+    if subcmd_idx < 0 || subcmd_idx >= n {
+        let mut k = 1
+        subcmd_idx = -1
+        while k < n {
+            let a = argv[k]
+            if a == "collect" || a == "status" || a == "chain" || a == "meta" || a == "selftest" || a == "--help" || a == "-h" || a == "help" || a == "--version" || a == "-v" || a == "version" {
+                subcmd_idx = k
+                break
+            }
+            k = k + 1
+        }
+        if subcmd_idx < 0 { subcmd_idx = n }  // no recognized verb → selftest default
+    }
 
     // No subcommand → aggregate selftest (default; matches existing qrng.hexa behavior).
     if subcmd_idx >= n {
