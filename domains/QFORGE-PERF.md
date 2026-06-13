@@ -156,3 +156,10 @@ terminal 상태       건수   항목
 ## scope — 정직 (g6/g63)
 
 각 항목의 closure 근거는 `## closure status` 가 SSOT 다. **closed (10):** 5 closed-form + 1 measured (Lanczos · `.verdicts/qforge-perf-roofline/` — SIMD-INERT 🔴 · mixedprec-2× · multigrid-fav · symmetry-48 · threading-10 · lanczos-vs-davidson, 전부 🟢) + 4 측정-grounded 분모 (H_apply 0.140 GFLOP/s · FFT/Davidson/Sternheimer per-call wall · roofline 천장 fp64 139.88 / fp32 279.76 GFLOP/s · 🟢 MEMORY-BOUND verdict · [[QFORGE-PERF.bench]] §2/§3/§7). **GATED (11):** GPU pod(전부 STOPPING) / stdlib/qforge edit(타 에이전트 소유) / ML 학습 infra 외부 의존 — blocker + unblock trigger 가 closure-status 에 명시됨. GATED ⚡항목은 자기 GPU `hexa bench` Δ-vs-분모 를 게시할 때 closed-grounded → closed-measured 로 승격. cross-val gate(d_qforge_engine): QFORGE vs QE λ·Tc 가 LaH10·CaH6·Li2MgH16 에서 g5-일치할 때 full migration. NOVEL kick probe(2026-06-01) verdict = skip(⚪ unverified proposals — g63 정직, fold 된 atom 없음).
+
+## absorbed handoffs (2026-06-14 · handoff-registry → domain SSOT)
+
+qforge SCF feature-roadmap items routed here from the handoff registry as tracked (large, multi-step feature dev — NOT yet built). The handoff-registry copies are closed; this domain is the SSOT.
+
+- [ ] **f376442c** — qforge cell→|g|² front-end: correlation XC landed (PR#2402/#2404, PZ81/PW92+PBE), but atoms→SCF→|g|² still blocked on cell-assembly: structure-factor S(G) from positions + V_loc(G)→V_ext + nonlocal projectors → H_of_rho SCF closure. upf.hexa parses only; no positions→Hamiltonian assembler. Needed for independent CaH6 cross-val (gate blocker #1 full close).
+- [ ] **b143b899** — molecular-SCF front-end gap (atoms∩chem∩system): qforge SCF is PERIODIC plane-wave only — every full-SCF entry in stdlib/qforge/scf_pw.hexa requires gvecs+kvec+omega+UPF; NO atom-centered/Gaussian-basis molecular SCF entry (no gaussian|gto|sto-3g|molecular_scf). Blocks real self-consistent E_QM for an isolated molecule.

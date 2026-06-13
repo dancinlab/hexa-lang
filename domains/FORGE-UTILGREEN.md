@@ -68,3 +68,10 @@ lever-5 closed the **host-feed lever chain** as a HONEST TERMINAL: util-GREEN (M
 ## 측정 잣대 · 교훈 (다음 fire 필수 적용)
 - 깨끗한 single-driver pod: **H100 sm_90**(HEXA_CUDA_ARCH=90 정확, Blackwell sm_120 arch 불일치 회피) · agent 1개·충돌0("Killed"=agent cross-pkill, OOM 아님) · bespoke laneg_*.sh 하네스 금지(삭제됨) · inline 폴링(Monitor waiter 금지) · rate-limit backoff · rent-cap #2507 가 무한 rent 차단 · recover-before-teardown · 보호 pod 무손상.
 - byte-eq 는 hard gate: 드리프트 시 revert, 절대 가짜 GREEN 금지(g5 verbatim).
+
+## absorbed handoffs (2026-06-14 · handoff-registry → domain SSOT)
+
+Cross-repo handoffs routed here as tracked roadmap items (NOT yet done — gated on GPU + the N5 self-host frontier where noted). The handoff-registry copies are closed; this domain is the SSOT.
+
+- [ ] **4a7841fe** — clm_prod forge-GPU fire on a CUDA-devel pod (nvidia/cuda:12.4.1-devel-ubuntu22.04): 4 build blockers. B1 = prebuilt linux release needs GLIBC_2.38 but the CUDA-devel-22.04 base ships glibc 2.35 → `install.sh hexa.real` fails → forces from-source self-host. Ship a glibc-2.35 linux edge asset OR document self-host. B2 = shallow git clone lacks the frozen seed. Gated on GPU pod + (full clm_prod) the N5 self-host frontier (clm_prod compile via current hexa_cc.c).
+- [ ] **c8981556** — forge clm_prod GPU training: device-buffer LEAK + no warm-start block real-corpus CONVERGENCE (LAST blocker, path otherwise works). Repro on summer RTX5070 sm_120 branch `laneg/devfeed-cudalink-integrated`. Needs GPU + clm_prod build (N5-gated). Also see [[da19aa72 verdict]] (.verdicts/d8-arena-pushleak) — the runtime bump-allocator non-reclaim is the same memory-leak family.
