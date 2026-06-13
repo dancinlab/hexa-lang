@@ -1,0 +1,193 @@
+// @ci_gate — deterministic · network-free · QFORGE-ATOMS round-14 d-basis RHF force g5
+//
+// rhf_force_gen_selftest.hexa — round-14 g5 gate. FOUR verdicts, all VERBATIM
+// (d6 — no forced numbers; each printed value is the raw computed scalar):
+//
+//   (a) d-BASIS ENERGY — H₂O / STO-3G + one d-polarization shell on O (5 spherical
+//       d, α=0.8 → 12 AOs) driven through the GENERALIZED atoms per-AO front-end
+//       (qf_gen_run → UNCHANGED rhf_scf) reproduces the MOLSCF r5 / PySCF anchor
+//       E_total = −74.986924782 Ha. |Δ| reported. Also confirms d GENUINELY engages
+//       (E drops ≥10 mHa below the s,p-only −74.961754 baseline — not a spectator). 🔵
+//
+//   (b) d-BASIS FORCE == FD — the analytic RHF force WITH the d shell equals the
+//       central-FD of E_RHF(R) to <1e-6, on a representative d-bearing DOF subset
+//       {O-z, O-y, Ha-y} (CI-tractable; the d AOs all sit on O, so an O DOF
+//       exercises every ∂S/∂T/∂V/∂ERI through the spherical-d AOs + their Pulay
+//       term). The d-bearing Pulay W·∂S is LOAD-BEARING: with_pulay=0 ⇒ force breaks. 🔵
+//
+//   (c) s→p→d CONSISTENCY + Σ_A F = 0 — the SAME generalized front-end run on the
+//       s,p-ONLY H₂O (7 AOs, no d) reproduces the r13 p-force on the O-z DOF to
+//       <1e-9 (the d front-end SUBSUMES r13 — d coeffs absent ⇒ identical force);
+//       AND Σ_atoms F = 0 (Newton 3rd) on the 12-AO d-bearing H₂O (residual). 🔵
+//
+//   (d) REGRESSION — the r13 p-force path (rhf_force_pd) is byte-untouched: the
+//       s,p-only H₂O p-force on O-z through r13's qf_pd_force_component still ==
+//       its own FD <1e-6 (re-asserted here; this brick adds a NEW file only). 🔵
+//
+// HONEST (d6): ALL integral derivatives (∂S,∂T,∂V,∂ERI) are FULLY ANALYTIC for d via
+//   the shell_grads Gaussian-translation relation summed over the spherical-d AO's
+//   Cartesian-monomial terms (NO finite difference in the force); only the (b)/(d)
+//   REFERENCES are FD-of-energy. The self-norm NRM is a geometry CONSTANT (single-
+//   center self-overlap is translation-invariant) so it factors out of every ∂/∂R.
+//   f (10 Cartesian→7 spherical) is the IDENTICAL construction — no NEW force machinery.
+//
+// Run:  HEXA_LANG=<worktree> hexa run stdlib/qforge/atoms/rhf_force_gen_selftest.hexa
+// PASS: "qforge_atoms_rhf_force_gen_selftest PASS".
+use "stdlib/qforge/atoms/rhf_force_gen"
+use "stdlib/qforge/atoms/rhf_force_pd"
+use "stdlib/qforge/molscf/md_shell"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_le(name: str, got: float, lim: float) -> int {
+    if got <= lim { println("PASS " + name + " (" + to_string(got) + " ≤ " + to_string(lim) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " > " + to_string(lim)) ; return 1
+}
+fn _ck_true(name: str, c: bool) -> int {
+    if c { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let ang = 1.8897259886
+    let s0 = [0, 0, 0]
+
+    // standard H₂O geometry (Å→bohr). O=atom0, Ha=atom1, Hb=atom2 (flat pos[9]).
+    let pos = [
+        0.0, 0.0,                   0.116321 * ang,
+        0.0, 0.751155 * ang,        0.0 - 0.465285 * ang,
+        0.0, 0.0 - 0.751155 * ang,  0.0 - 0.465285 * ang
+    ]
+    let z = [8.0, 1.0, 1.0]
+    let natom = 3
+    let n_occ = 5
+
+    // STO-3G radial contractions (O 1s/2s/2p, H 1s) + one d shell on O (α=0.8).
+    let o1a = [130.70932, 23.808861, 6.4436083]
+    let o1d = [0.15432897, 0.53532814, 0.44463454]
+    let o2a = [5.0331513, 1.1695961, 0.3803890]
+    let o2sd = [0.0 - 0.09996723, 0.39951283, 0.70011547]
+    let o2pd = [0.15591627, 0.60768372, 0.39195739]
+    let ha = [3.42525091, 0.62391373, 0.16885540]
+    let hd = [0.15432897, 0.53532814, 0.44463454]
+    let dE = [0.8]
+    let dC = [1.0]
+
+    // 5 spherical-d generalized AOs on O (each a multi-monomial term list).
+    let d0 = md_dshell_ao(0, dE, dC)   // d_z²
+    let d1 = md_dshell_ao(1, dE, dC)   // d_xz
+    let d2 = md_dshell_ao(2, dE, dC)   // d_yz
+    let d3 = md_dshell_ao(3, dE, dC)   // d_x²−y²
+    let d4 = md_dshell_ao(4, dE, dC)   // d_xy
+
+    // 12-AO generalized basis: 1sO,2sO,2px,2py,2pz, d×5, 1sHa,1sHb.
+    // POW[μ] = [[int]] term-monomials, EXP[μ]/CO[μ] = term exps/coefs, aom[μ] = parent atom.
+    let POW = [
+        [s0,s0,s0], [s0,s0,s0],
+        [[1,0,0],[1,0,0],[1,0,0]], [[0,1,0],[0,1,0],[0,1,0]], [[0,0,1],[0,0,1],[0,0,1]],
+        d0[0], d1[0], d2[0], d3[0], d4[0],
+        [s0,s0,s0], [s0,s0,s0]
+    ]
+    let EXP = [o1a, o2a, o2a, o2a, o2a, d0[1], d1[1], d2[1], d3[1], d4[1], ha, ha]
+    let CO  = [o1d, o2sd, o2pd, o2pd, o2pd, d0[2], d1[2], d2[2], d3[2], d4[2], hd, hd]
+    let aom = [0,0,0,0,0, 0,0,0,0,0, 1,2]
+    let norb = 12
+    let nrm = qf_gen_norms(POW, EXP, CO, norb)
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  (a) d-BASIS ENERGY — H₂O/STO-3G+d(O) through the generalized atoms front-end
+    // ══════════════════════════════════════════════════════════════════════════
+    println("── (a) H₂O/STO-3G+d(O) d-basis energy through atoms front-end ──")
+    let out = qf_gen_run(pos, POW, EXP, CO, aom, nrm, norb, z, natom, n_occ, 200, 1.0e-11, 1.0)
+    let e_total = out[0]
+    let converged = out[6]
+    let e_ref = 0.0 - 74.986924782
+    let e_sp = 0.0 - 74.961754063
+    println("  E_total = " + to_string(e_total) + " Ha   (PySCF / MOLSCF r5 anchor −74.986924782)")
+    println("  |Δ|     = " + to_string(_abs(e_total - e_ref)) + " Ha   converged=" + to_string(converged))
+    println("  d-engagement ΔE vs s,p-only −74.961754 = " + to_string(e_total - e_sp) + " Ha (must be ≤ −10 mHa)")
+    fails = fails + _ck_true("(a) SCF converged", converged)
+    fails = fails + _ck_close("(a) H₂O+d(O) E_total == PySCF anchor −74.986924782", e_total, e_ref, 1.0e-4)
+    fails = fails + _ck_true("(a) d engages — E < s,p-only −74.961754 by ≥10 mHa", e_total < e_sp - 0.010)
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  (b) d-BASIS FORCE == FD — analytic vs central-FD on the d-bearing molecule
+    // ══════════════════════════════════════════════════════════════════════════
+    println("── (b) d-basis analytic force == central-FD of E_RHF ──")
+    let h = 5.0e-4
+    // Representative d-bearing DOF set (CI-tractable). All 5 d AOs sit on O (atom0),
+    // so an O DOF exercises ∂S/∂T/∂V/∂ERI + Pulay through EVERY spherical-d AO; the
+    // Ha-y DOF exercises the H s-AO against O's d shell (cross-center d-bearing term).
+    let dof_a = [0, 0, 1]
+    let dof_d = [2, 1, 1]
+    let mut maxdiff = 0.0
+    let mut q = 0
+    while q < 3 {
+        let a = dof_a[q]
+        let dimd = dof_d[q]
+        let fa = qf_gen_force_component(1, pos, POW, EXP, CO, aom, nrm, norb, z, natom, n_occ, a, dimd)
+        let ff = qf_gen_force_fd(pos, POW, EXP, CO, aom, nrm, norb, z, natom, n_occ, a, dimd, h)
+        let dd = _abs(fa - ff)
+        if dd > maxdiff { maxdiff = dd }
+        println("  F[atom" + to_string(a) + ",dim" + to_string(dimd) + "] analytic=" + to_string(fa) + " fd=" + to_string(ff) + " |Δ|=" + to_string(dd))
+        q = q + 1
+    }
+    fails = fails + _ck_le("(b) max|F_analytic − F_FD| over d-bearing DOF (H₂O+d)", maxdiff, 1.0e-6)
+
+    // Pulay load-bearing through the d AOs: drop W·∂S on O-z → must DIVERGE from FD.
+    let fz_full = qf_gen_force_component(1, pos, POW, EXP, CO, aom, nrm, norb, z, natom, n_occ, 0, 2)
+    let fz_nop  = qf_gen_force_component(0, pos, POW, EXP, CO, aom, nrm, norb, z, natom, n_occ, 0, 2)
+    let fz_fd   = qf_gen_force_fd(pos, POW, EXP, CO, aom, nrm, norb, z, natom, n_occ, 0, 2, h)
+    let pulay_mag = _abs(fz_full - fz_nop)
+    println("  Pulay term on O-z: |F_full − F_noPulay| = " + to_string(pulay_mag))
+    println("    F_full=" + to_string(fz_full) + " (==FD " + to_string(fz_fd) + ")  F_noPulay=" + to_string(fz_nop))
+    fails = fails + _ck_true("(b) d-Pulay W·∂S is load-bearing (|Δ| > 1e-3)", pulay_mag > 1.0e-3)
+    fails = fails + _ck_true("(b) dropping Pulay BREAKS the force (|F_noPulay − FD| > 1e-3)", _abs(fz_nop - fz_fd) > 1.0e-3)
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  (c) s→p→d CONSISTENCY + Σ_A F = 0
+    // ══════════════════════════════════════════════════════════════════════════
+    println("── (c) s→p→d consistency (d front-end ⊇ r13 p-force) + Σ_A F = 0 ──")
+    // build the s,p-ONLY 7-AO H₂O in BOTH front-ends; the generalized d front-end with
+    // NO d AOs must reproduce r13's qf_pd force EXACTLY (it subsumes the p path).
+    let POW7 = [
+        [s0,s0,s0], [s0,s0,s0],
+        [[1,0,0],[1,0,0],[1,0,0]], [[0,1,0],[0,1,0],[0,1,0]], [[0,0,1],[0,0,1],[0,0,1]],
+        [s0,s0,s0], [s0,s0,s0]
+    ]
+    let EXP7 = [o1a, o2a, o2a, o2a, o2a, ha, ha]
+    let CO7  = [o1d, o2sd, o2pd, o2pd, o2pd, hd, hd]
+    let aom7 = [0,0,0,0,0,1,2]
+    let nrm7 = qf_gen_norms(POW7, EXP7, CO7, 7)
+    let f_gen_oz = qf_gen_force_component(1, pos, POW7, EXP7, CO7, aom7, nrm7, 7, z, natom, n_occ, 0, 2)
+    // r13 single-monomial front-end (its pw is one [lx,ly,lz] per AO).
+    let pw13 = [[0,0,0],[0,0,0],[1,0,0],[0,1,0],[0,0,1],[0,0,0],[0,0,0]]
+    let f_pd_oz = qf_pd_force_component(1, pos, pw13, EXP7, CO7, aom7, 7, z, natom, n_occ, 0, 2)
+    println("  O-z p-force:  generalized=" + to_string(f_gen_oz) + "  r13 qf_pd=" + to_string(f_pd_oz) + "  |Δ|=" + to_string(_abs(f_gen_oz - f_pd_oz)))
+    fails = fails + _ck_le("(c) generalized d front-end reduces to r13 p-force (s,p subset)", _abs(f_gen_oz - f_pd_oz), 1.0e-9)
+
+    // Σ_A F = 0 on the FULL 12-AO d-bearing H₂O (Newton 3rd law).
+    let fvec = qf_gen_force(1, pos, POW, EXP, CO, aom, nrm, norb, z, natom, n_occ)
+    let tres = qf_gen_transl_residual(fvec, natom)
+    println("  ‖Σ_A F_A‖∞ (12-AO d-bearing H₂O) = " + to_string(tres))
+    fails = fails + _ck_le("(c) translational residual ‖Σ_A F‖∞ (d-bearing)", tres, 1.0e-6)
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  (d) REGRESSION — r13 p-force path byte-untouched (qf_pd O-z == its own FD)
+    // ══════════════════════════════════════════════════════════════════════════
+    println("── (d) regression: r13 p-force (qf_pd) O-z == its own FD (path intact) ──")
+    let pd_fa = qf_pd_force_component(1, pos, pw13, EXP7, CO7, aom7, 7, z, natom, n_occ, 0, 2)
+    let pd_ff = qf_pd_force_fd(pos, pw13, EXP7, CO7, aom7, 7, z, natom, n_occ, 0, 2, h)
+    println("  r13 O-z analytic=" + to_string(pd_fa) + " fd=" + to_string(pd_ff) + " |Δ|=" + to_string(_abs(pd_fa - pd_ff)))
+    fails = fails + _ck_le("(d) r13 p-force qf_pd O-z == FD (rhf_force_pd intact)", _abs(pd_fa - pd_ff), 1.0e-6)
+
+    if fails == 0 {
+        println("qforge_atoms_rhf_force_gen_selftest PASS")
+    } else {
+        println("qforge_atoms_rhf_force_gen_selftest FAIL (" + to_string(fails) + ")")
+    }
+}

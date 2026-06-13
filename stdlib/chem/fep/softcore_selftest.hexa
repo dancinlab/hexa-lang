@@ -1,0 +1,285 @@
+// stdlib/chem/fep/softcore_selftest.hexa — g5 seal for Beutler soft-core.
+//
+// QFORGE-BIO round-3, alchemical core brick.
+//
+// Run:
+//   hexa run stdlib/chem/fep/softcore_selftest.hexa
+//
+// Checks:
+//   (a) ENDPOINT NON-SINGULARITY: at λ<1, r→0 the soft-core U and F stay
+//       FINITE, whereas plain LJ (λ=1, separation-shift off) DIVERGES.
+//       We assert soft-core |U|,|F| are finite and orders of magnitude
+//       below the plain-LJ value at the same tiny r.
+//   (b) λ=1 RECOVERY: soft-core == plain LJ + Coulomb (original potential)
+//       in BOTH energy and force,  |Δ| < 1e-9.
+//   (c) λ=0 DECOUPLED: U_sc = 0 (and F = 0) exactly.
+//   (d) ALCHEMICAL GRADIENT: dU/dλ autograd == analytic hand-derivative,
+//       |Δ| < 1e-6  (round-2 force-seal EXTENDED to the λ leaf).
+//   (e) FORCE: F = −∂U/∂x autograd == central finite-difference, |Δ|<1e-6.
+
+use "stdlib/tensor/mod"
+use "stdlib/tensor/shape"
+use "stdlib/tensor/ops"
+use "stdlib/autograd"
+use "stdlib/chem/fep/softcore"
+
+let mut pass_count = 0
+let mut total = 0
+let mut first_fail = ""
+
+fn abs_f(x: float) -> float { if x < 0.0 { return 0.0 - x } else { return x } }
+
+fn check(name: string, cond: bool, detail: string) {
+    total = total + 1
+    if cond {
+        pass_count = pass_count + 1
+        println("  ok : " + name + " " + detail)
+    } else {
+        if first_fail == "" { first_fail = name }
+        println("  FAIL " + name + " " + detail)
+    }
+}
+
+fn max_abs_diff6(a: array, b: array) -> float {
+    let mut w = 0.0
+    let mut i = 0
+    while i < 6 {
+        let d = abs_f(a[i] - b[i])
+        if d > w { w = d }
+        i = i + 1
+    }
+    return w
+}
+fn max_abs6(a: array) -> float {
+    let mut w = 0.0
+    let mut i = 0
+    while i < 6 {
+        let d = abs_f(a[i])
+        if d > w { w = d }
+        i = i + 1
+    }
+    return w
+}
+fn fmt6(a: array) -> string {
+    return "[" + to_string(a[0]) + "," + to_string(a[1]) + "," + to_string(a[2])
+         + "," + to_string(a[3]) + "," + to_string(a[4]) + "," + to_string(a[5]) + "]"
+}
+
+// ── plain (un-shifted) reference potentials — λ=1 baseline ───────────
+// U_LJ^plain = 4ε[σ¹²/r¹² − σ⁶/r⁶];  U_C^plain = ke q1q2 / r.
+fn plain_energy(coords6: array, eps: float, sigma: float, q1: float, q2: float, ke: float) -> float {
+    let dx = coords6[0] - coords6[3]
+    let dy = coords6[1] - coords6[4]
+    let dz = coords6[2] - coords6[5]
+    let r2 = dx*dx + dy*dy + dz*dz
+    let r  = sqrt(r2)
+    let sr6  = pow(sigma, 6.0) / pow(r, 6.0)
+    let sr12 = sr6 * sr6
+    let u_lj = 4.0 * eps * (sr12 - sr6)
+    let u_c  = ke * q1 * q2 / r
+    return u_lj + u_c
+}
+// analytic plain force (length-6): LJ + Coulomb on p1, negated on p2.
+fn plain_force6(coords6: array, eps: float, sigma: float, q1: float, q2: float, ke: float) -> array {
+    let dx = coords6[0] - coords6[3]
+    let dy = coords6[1] - coords6[4]
+    let dz = coords6[2] - coords6[5]
+    let r2 = dx*dx + dy*dy + dz*dz
+    let r  = sqrt(r2)
+    // LJ: F = 24ε(2σ¹²/r¹² − σ⁶/r⁶)/r² · r⃗
+    let sr6  = pow(sigma, 6.0) / pow(r, 6.0)
+    let sr12 = sr6 * sr6
+    let flj_scalar = 24.0 * eps * (2.0 * sr12 - sr6) / r2
+    // Coulomb: F = ke q1q2 / r³ · r⃗
+    let fc_scalar = ke * q1 * q2 / (r2 * r)
+    let cx = (flj_scalar + fc_scalar) * dx
+    let cy = (flj_scalar + fc_scalar) * dy
+    let cz = (flj_scalar + fc_scalar) * dz
+    return [cx, cy, cz, 0.0 - cx, 0.0 - cy, 0.0 - cz]
+}
+
+// ── analytic dU_sc/dλ reference (independent of softcore.hexa) ────────
+//  LJ : U = 4ε λⁿ (D⁻² − D⁻¹),  D = α_LJ(1−λ)² + (r/σ)⁶
+//       dU/dλ = 4ε[ nλ^(n−1)(D⁻²−D⁻¹) + λⁿ(−2D⁻³+D⁻²)·dD/dλ ]
+//       dD/dλ = α_LJ·2(1−λ)·(−1) = −2 α_LJ (1−λ)
+//  C  : U = λᵐ C S^(−1/2),  C = ke q1q2,  S = α_C(1−λ)² + r²
+//       dU/dλ = C[ mλ^(m−1)S^(−1/2) + λᵐ(−½)S^(−3/2)·dS/dλ ]
+//       dS/dλ = −2 α_C (1−λ)
+fn analytic_dUdlam(coords6: array, lam: float, p) -> float {
+    let eps      = p["eps"]
+    let sigma    = p["sigma"]
+    let q1       = p["q1"]
+    let q2       = p["q2"]
+    let ke       = p["ke"]
+    let alpha_lj = p["alpha_lj"]
+    let alpha_c  = p["alpha_c"]
+    let n        = p["n"]
+    let m        = p["m"]
+
+    let dx = coords6[0] - coords6[3]
+    let dy = coords6[1] - coords6[4]
+    let dz = coords6[2] - coords6[5]
+    let r2 = dx*dx + dy*dy + dz*dz
+    let oml = 1.0 - lam
+
+    // LJ
+    let rs6 = r2*r2*r2 / pow(sigma, 6.0)               // (r/σ)⁶ = r⁶/σ⁶
+    let big_d = alpha_lj * oml*oml + rs6
+    let d1 = 1.0 / big_d
+    let d2 = d1 * d1
+    let d3 = d2 * d1
+    let dDdl = 0.0 - 2.0 * alpha_lj * oml
+    let lam_n  = pow(lam, n)
+    let lam_n1 = pow(lam, n - 1.0)
+    let dUlj = 4.0 * eps * ( n * lam_n1 * (d2 - d1)
+                           + lam_n * (0.0 - 2.0*d3 + d2) * dDdl )
+
+    // Coulomb
+    let s = alpha_c * oml*oml + r2
+    let s_half = pow(s, 0.0 - 0.5)
+    let s_3half = pow(s, 0.0 - 1.5)
+    let dSdl = 0.0 - 2.0 * alpha_c * oml
+    let cc = ke * q1 * q2
+    let lam_m  = pow(lam, m)
+    let lam_m1 = pow(lam, m - 1.0)
+    let dUc = cc * ( m * lam_m1 * s_half
+                   + lam_m * (0.0 - 0.5) * s_3half * dSdl )
+
+    return dUlj + dUc
+}
+
+// ── central FD force from the SAME soft-core energy fn ───────────────
+fn fd_force6(coords6: array, lam: float, p, h: float) -> array {
+    let mut f = []
+    let mut i = 0
+    while i < 6 {
+        let mut cp = []
+        let mut cm = []
+        let mut k = 0
+        while k < 6 {
+            cp.push(coords6[k])
+            cm.push(coords6[k])
+            k = k + 1
+        }
+        cp[i] = coords6[i] + h
+        cm[i] = coords6[i] - h
+        let up = softcore_energy_value(cp, lam, p)
+        let um = softcore_energy_value(cm, lam, p)
+        f.push(0.0 - (up - um) / (2.0 * h))
+        i = i + 1
+    }
+    return f
+}
+
+// ── fixtures ─────────────────────────────────────────────────────────
+let eps   = 0.65
+let sigma = 3.15
+let q1    =  0.84
+let q2    = -0.42
+let ke    = 138.9354859
+let alpha_lj = 0.5
+let alpha_c  = 0.5
+let n = 1.0
+let m = 1.0
+
+let p = #{}
+p["eps"] = eps
+p["sigma"] = sigma
+p["q1"] = q1
+p["q2"] = q2
+p["ke"] = ke
+p["alpha_lj"] = alpha_lj
+p["alpha_c"] = alpha_c
+p["n"] = n
+p["m"] = m
+
+// Off-axis geometry so all 3 components are exercised.
+let coords = [0.0, 0.0, 0.0,  2.6, 1.3, 0.9]
+
+println("── softcore selftest (Beutler λ-coupled LJ+Coulomb) ──")
+println("  fixture: eps=" + to_string(eps) + " sigma=" + to_string(sigma)
+        + " q1=" + to_string(q1) + " q2=" + to_string(q2)
+        + " alpha_lj=" + to_string(alpha_lj) + " alpha_c=" + to_string(alpha_c)
+        + " n=" + to_string(n) + " m=" + to_string(m))
+
+// ── (a) ENDPOINT NON-SINGULARITY at λ<1, r→0 ─────────────────────────
+// Overlap geometry: two atoms almost on top of each other.
+let r_tiny = 1.0e-4
+let coords_overlap = [0.0, 0.0, 0.0,  r_tiny, 0.0, 0.0]
+let lam_partial = 0.3
+let u_sc_tiny = softcore_energy_value(coords_overlap, lam_partial, p)
+let f_sc_tiny = softcore_force_autograd(coords_overlap, lam_partial, p)
+let fmag_sc = max_abs6(f_sc_tiny)
+// plain LJ+Coulomb at the same tiny r (what a naive λ·U would keep) — diverges.
+let u_plain_tiny = plain_energy(coords_overlap, eps, sigma, q1, q2, ke)
+let f_plain_tiny = plain_force6(coords_overlap, eps, sigma, q1, q2, ke)
+let fmag_plain = max_abs6(f_plain_tiny)
+println("  [overlap r=" + to_string(r_tiny) + ", λ=" + to_string(lam_partial) + "]")
+println("    softcore: U=" + to_string(u_sc_tiny) + "  max|F|=" + to_string(fmag_sc))
+println("    plainLJ : U=" + to_string(u_plain_tiny) + "  max|F|=" + to_string(fmag_plain))
+// soft-core finite (well-bounded) AND vastly smaller than the divergent plain value.
+let sc_finite = (abs_f(u_sc_tiny) < 1.0e3) && (fmag_sc < 1.0e6)
+let plain_diverges = (abs_f(u_plain_tiny) > 1.0e30) && (fmag_plain > 1.0e30)
+check("(a) endpoint non-singular (λ<1,r→0)", sc_finite && plain_diverges,
+      "softcore |U|=" + to_string(abs_f(u_sc_tiny)) + " finite vs plain |U|=" + to_string(abs_f(u_plain_tiny)))
+
+// ── (b) λ=1 RECOVERY: soft-core == plain LJ+Coulomb ──────────────────
+let u_sc_1 = softcore_energy_value(coords, 1.0, p)
+let u_pl_1 = plain_energy(coords, eps, sigma, q1, q2, ke)
+let dU_b = abs_f(u_sc_1 - u_pl_1)
+let f_sc_1 = softcore_force_autograd(coords, 1.0, p)
+let f_pl_1 = plain_force6(coords, eps, sigma, q1, q2, ke)
+let dF_b = max_abs_diff6(f_sc_1, f_pl_1)
+println("  [λ=1] U_sc=" + to_string(u_sc_1) + " U_plain=" + to_string(u_pl_1))
+println("        F_sc=" + fmt6(f_sc_1))
+println("        F_pl=" + fmt6(f_pl_1))
+check("(b) λ=1 == plain LJ+Coulomb", (dU_b < 1.0e-9) && (dF_b < 1.0e-9),
+      "|ΔU|=" + to_string(dU_b) + " max|ΔF|=" + to_string(dF_b))
+
+// ── (c) λ=0 DECOUPLED: U_sc = 0, F = 0 ───────────────────────────────
+let u_sc_0 = softcore_energy_value(coords, 0.0, p)
+let f_sc_0 = softcore_force_autograd(coords, 0.0, p)
+let fmag_0 = max_abs6(f_sc_0)
+check("(c) λ=0 ⇒ U_sc=0 (decoupled)", (abs_f(u_sc_0) < 1.0e-12) && (fmag_0 < 1.0e-12),
+      "U=" + to_string(u_sc_0) + " max|F|=" + to_string(fmag_0))
+
+// ── (d) ALCHEMICAL GRADIENT dU/dλ: autograd == analytic ──────────────
+// Sample at several λ in (0,1) where both prefactor and shift derivatives
+// are nonzero — the genuine TI integrand region.
+let lam_grid = [0.15, 0.4, 0.65, 0.9]
+let mut worst_d = 0.0
+let mut gi = 0
+while gi < 4 {
+    let lv = lam_grid[gi]
+    let g_ag = softcore_dUdlam_autograd(coords, lv, p)
+    let g_an = analytic_dUdlam(coords, lv, p)
+    let dd = abs_f(g_ag - g_an)
+    if dd > worst_d { worst_d = dd }
+    println("    λ=" + to_string(lv) + "  dU/dλ_ag=" + to_string(g_ag)
+            + "  dU/dλ_an=" + to_string(g_an) + "  |Δ|=" + to_string(dd))
+    gi = gi + 1
+}
+check("(d) dU/dλ autograd == analytic", worst_d < 1.0e-6,
+      "max|Δ| over λ-grid=" + to_string(worst_d))
+
+// ── (e) FORCE: autograd == central finite-difference ─────────────────
+let lam_e = 0.5
+let f_ag = softcore_force_autograd(coords, lam_e, p)
+let h = 1.0e-5
+let f_fd = fd_force6(coords, lam_e, p, h)
+let dF_e = max_abs_diff6(f_ag, f_fd)
+println("  [λ=" + to_string(lam_e) + "] F_ag=" + fmt6(f_ag))
+println("            F_fd=" + fmt6(f_fd))
+check("(e) F=−∂U/∂x autograd == finite-diff", dF_e < 1.0e-6,
+      "max|Δ|=" + to_string(dF_e))
+
+// ── verdict ──────────────────────────────────────────────────────────
+println("")
+if pass_count == total {
+    println("PASS: softcore " + to_string(pass_count) + "/" + to_string(total))
+    exit(0)
+} else {
+    println("FAIL: softcore first=" + first_fail
+            + " (" + to_string(pass_count) + "/" + to_string(total) + ")")
+    exit(1)
+}

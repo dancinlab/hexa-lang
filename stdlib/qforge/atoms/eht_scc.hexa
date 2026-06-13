@@ -1,0 +1,208 @@
+// HEXA Standard Library — qforge/atoms/eht_scc
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE atoms-scale brick #5 — the EHT-SCC (extended-Hückel + self-consistent-
+// charge) core of a GFN-xTB-style tight-binding Hamiltonian. This is the
+// one-electron band-structure energy (extended Hückel theory, EHT) plus the
+// second-order charge-fluctuation correction (SCC) that together with the R1
+// EEQ electrostatics, R3 CN/χ dressing, and R4 D4 dispersion complete the
+// GFN-xTB total-energy SKELETON. (Elstner et al. SCC-DFTB, PRB 58 7260 (1998);
+// Bannwarth-Ehlert-Grimme GFN2-xTB, JCTC 15 1652 (2019); the Wolfsberg-Helmholz
+// off-diagonal approximation, J. Chem. Phys. 20 837 (1952).)
+//
+// HONEST SCOPE (d6) — this is the EHT eigenvalue + SCC-second-order skeleton, not
+//   a full GFN2 parameterization. The Wolfsberg-Helmholz off-diagonal, the SCC
+//   E = ½ Σ γ_ij δq_i δq_j second-order energy, and the eigensolve are EXACT and
+//   selftest-anchored to closed form. The per-element {H_μ (on-site), shell ζ,
+//   GFN κ, basis} tables are CALLER-SUPPLIED data (d4-generic): no element name is
+//   branched on in this module. We do NOT claim full-GFN2 numerics — we claim a
+//   correct, reusable EHT+SCC kernel that the parameter layer drives.
+//
+// THE PHYSICS ─────────────────────────────────────────────────────────────────
+//   (1) EHT one-electron Hamiltonian (Wolfsberg-Helmholz). Given per-orbital
+//       on-site energies H_μ (the diagonal, an atomic ionization-potential-like
+//       level) and an overlap matrix S_μν, the off-diagonal Hamiltonian element is
+//
+//         H_μν = ½ K (H_μ + H_ν) S_μν                       (μ ≠ ν)
+//         H_μμ = H_μ                                         (diagonal = on-site)
+//
+//       with K the Wolfsberg-Helmholz constant (~1.75 in classical EHT; a single
+//       scalar here, the caller may pass a GFN κ-blend). Diagonalising the
+//       generalised problem H C = S C ε gives the molecular-orbital levels ε; the
+//       band energy is E_band = Σ_occ n_k ε_k over the occupied levels.
+//
+//   (2) SCC second-order charge-fluctuation energy. The deviation of the atomic
+//       partial charges from a reference (δq_i = q_i − q_i^ref) couples through a
+//       screened Coulomb kernel γ_ij:
+//
+//         E_scc = ½ Σ_i Σ_j γ_ij δq_i δq_j
+//
+//       γ_ij is EXACTLY the R1 EEQ screened-Coulomb kernel (REUSE, d19) —
+//       qforge_eeq_gamma below is the single source of truth, called by BOTH the
+//       EEQ assembler (R1) and this SCC term. δq = 0 ⇒ E_scc = 0 (the reference
+//       is the SCC fixed point); the quadratic form is the charge-response energy.
+//
+// d4-generic: H_μ (on-site), S_μν (overlap), K, and γ-parameters (α radii) are ALL
+//   inputs. No orbital-count, element, or shell name is hardcoded; H₂, a peptide,
+//   or a metal cluster traverse the identical path (d4).
+//
+// reuse (d19): qforge_eeq_gamma (this file) is the R1 EEQ screened-Coulomb kernel,
+//   exposed once so eeq.hexa and the SCC term share ONE definition. eigh (the
+//   symmetric Jacobi eigensolver, stdlib/alloc/math/eigen) supplies the EHT
+//   diagonalisation — reused, not rebuilt.
+use "stdlib/core/special"
+use "stdlib/alloc/math/eigen"
+
+// ── sqrt via Newton (positive args only; matches eeq.hexa _sqrt) ──────────────
+fn _sqrt(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    if g < 1.0 { g = 1.0 }
+    let mut it = 0
+    while it < 60 {
+        let ng = 0.5 * (g + x / g)
+        if ng == g { break }
+        g = ng
+        it = it + 1
+    }
+    return g
+}
+
+// ── R1 EEQ screened-Coulomb kernel γ_ij — THE single reusable definition ──────
+//   This is the off-diagonal screened-Coulomb element of the R1 EEQ system:
+//   two Gaussian charge clouds of widths α_i, α_j separated by R_ij interact as
+//
+//       γ_ij = erf( R_ij / sqrt(α_i² + α_j²) ) / R_ij        (i ≠ j)
+//       γ_ii = sqrt(2/π) / α_i                               (i = j, self-Coulomb)
+//
+//   The i≠j branch is IDENTICAL to A_ij = erf(R/γ)/R in qforge_eeq_matrix, and the
+//   i=i branch is the Gaussian self-Coulomb sqrt(2/π)/α on the EEQ diagonal. The
+//   SCC second-order energy reuses this verbatim — one kernel, two consumers (d19).
+pub fn qforge_eeq_gamma(rij: float, alpha_i: float, alpha_j: float) -> float {
+    let two_over_pi_sqrt = 0.7978845608028654   // sqrt(2/π)
+    if rij <= 0.0 {
+        // same-site self-Coulomb (R→0 limit): sqrt(2/π)/α, the EEQ diagonal term.
+        return two_over_pi_sqrt / alpha_i
+    }
+    let gij = _sqrt(alpha_i * alpha_i + alpha_j * alpha_j)
+    return erf_fn(rij / gij) / rij
+}
+
+// ── pairwise distance from flat xyz (3 per atom), matches eeq.hexa ────────────
+pub fn qforge_eht_distance(pos: [float], i: int, j: int) -> float {
+    let dx = pos[3 * i + 0] - pos[3 * j + 0]
+    let dy = pos[3 * i + 1] - pos[3 * j + 1]
+    let dz = pos[3 * i + 2] - pos[3 * j + 2]
+    return _sqrt(dx * dx + dy * dy + dz * dz)
+}
+
+// ── EHT Hamiltonian (Wolfsberg-Helmholz) ─────────────────────────────────────
+//   honsite: per-orbital on-site energies H_μ (length n_orb).
+//   overlap: flat n_orb × n_orb overlap matrix S_μν (row-major; S_μμ = 1 expected).
+//   kwh:     Wolfsberg-Helmholz scalar K (classical EHT ≈ 1.75).
+//   Returns the flat n_orb × n_orb Hamiltonian H, with
+//     H_μμ = H_μ                         (diagonal = on-site)
+//     H_μν = ½ K (H_μ + H_ν) S_μν        (μ ≠ ν).
+//   Symmetric by construction. The caller supplies S (e.g. a GFN STO overlap) —
+//   this routine branches on no element / shell (d4).
+pub fn qforge_eht_hamiltonian(honsite: [float], overlap: [float],
+                              kwh: float) -> [float] {
+    let n = len(honsite)
+    let mut h: [float] = []
+    let mut idx = 0
+    while idx < n * n { h.push(0.0) ; idx = idx + 1 }
+    let mut mu = 0
+    while mu < n {
+        h[mu * n + mu] = honsite[mu]
+        let mut nu = mu + 1
+        while nu < n {
+            let hmn = 0.5 * kwh * (honsite[mu] + honsite[nu]) * overlap[mu * n + nu]
+            h[mu * n + nu] = hmn
+            h[nu * n + mu] = hmn
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    return h
+}
+
+// ── EHT eigenvalues (orthonormal-basis path: S = I) ──────────────────────────
+//   Diagonalises the EHT Hamiltonian and returns the orbital energies ε, SORTED
+//   ASCENDING (lowest level first — the chemistry convention; eigh returns
+//   descending so we reverse). For a non-orthogonal overlap the caller should
+//   pass an already-Löwdin-orthogonalised H (S^{-1/2} H S^{-1/2}); this kernel
+//   diagonalises whatever symmetric H it is given (d4-generic).
+pub fn qforge_eht_levels(h: [float], n: int) -> [float] {
+    let res = eigh(h, n)
+    let vals_desc = res[0]
+    let mut eps: [float] = []
+    let mut k = n - 1
+    while k >= 0 {
+        eps.push(vals_desc[k])
+        k = k - 1
+    }
+    return eps
+}
+
+// ── EHT band energy = Σ_k occ_k · ε_k (occupations supplied by caller) ────────
+//   occ length n, the Aufbau / Fermi occupation of each ASCENDING-ordered level
+//   (e.g. [2,2,0,…] for a closed shell). E_band = Σ_k occ_k ε_k. The caller owns
+//   the occupation rule (closed shell, smearing, …) — d4-generic.
+pub fn qforge_eht_band_energy(eps: [float], occ: [float]) -> float {
+    let n = len(eps)
+    let mut e = 0.0
+    let mut k = 0
+    while k < n {
+        e = e + occ[k] * eps[k]
+        k = k + 1
+    }
+    return e
+}
+
+// ── SCC second-order charge-fluctuation energy ───────────────────────────────
+//   E_scc = ½ Σ_i Σ_j γ_ij δq_i δq_j,  γ_ij = qforge_eeq_gamma (R1 reuse, d19).
+//   dq:    charge deviations δq_i = q_i − q_i^ref (length n).
+//   pos:   flat xyz (3 per atom) for R_ij.
+//   alpha: per-atom Gaussian charge-cloud radii (the R1 EEQ α, length n).
+//   The full double sum (including i=j self terms via γ_ii = sqrt(2/π)/α) times ½
+//   is the standard second-order SCC energy. δq ≡ 0 ⇒ E_scc = 0 exactly.
+pub fn qforge_scc_energy2(pos: [float], dq: [float], alpha: [float]) -> float {
+    let n = len(dq)
+    let mut e = 0.0
+    let mut i = 0
+    while i < n {
+        let mut j = 0
+        while j < n {
+            let rij = qforge_eht_distance(pos, i, j)
+            let gij = qforge_eeq_gamma(rij, alpha[i], alpha[j])
+            e = e + gij * dq[i] * dq[j]
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return 0.5 * e
+}
+
+// ── SCC charge gradient ∂E_scc/∂δq_i = Σ_j γ_ij δq_j (the local potential) ────
+//   The first derivative of the quadratic form — the per-atom electrostatic
+//   potential that enters the SCC self-consistency loop. Returned length n.
+pub fn qforge_scc_potential(pos: [float], dq: [float], alpha: [float]) -> [float] {
+    let n = len(dq)
+    let mut v: [float] = []
+    let mut i = 0
+    while i < n {
+        let mut s = 0.0
+        let mut j = 0
+        while j < n {
+            let rij = qforge_eht_distance(pos, i, j)
+            let gij = qforge_eeq_gamma(rij, alpha[i], alpha[j])
+            s = s + gij * dq[j]
+            j = j + 1
+        }
+        v.push(s)
+        i = i + 1
+    }
+    return v
+}

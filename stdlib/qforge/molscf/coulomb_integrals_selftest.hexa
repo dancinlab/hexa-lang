@@ -1,0 +1,129 @@
+// @ci_gate — deterministic · network-free · MOLSCF Coulomb-integral g5 gate
+//
+// coulomb_integrals_selftest.hexa — QFORGE MOLSCF brick 2/N (Boys F₀, nuclear
+// attraction V_ab, two-electron (ab|cd)) g5 gate.
+//
+// Every target is a HAND-DERIVED analytic value (🔵) or an EXACT point-charge
+// physical limit — no fabrication. The Boys F₀ rests on stdlib/core/special
+// erf_fn (A&S 7.1.26); the resulting F₀ is measured accurate to ≲2.5e-7, so the
+// 1e-6 Boys gate and 1e-5 V gate are met with margin, not by tuning a tolerance.
+//
+//   (A) Boys F₀: F₀(0)=1 exact · F₀(t)=½√(π/t)erf(√t) vs analytic         🔵
+//       F₀(1)=0.7468241328 · F₀(0.5)=0.8556243919 · F₀(2)=0.5981440067
+//   (B) nuclear V_ab self term (a, Z, nucleus on center) = −2Z√(2a/π)     🔵
+//       and STO-3G H single-center V (bra=ket=A, nuc@A) = −1.2266137219   🔵
+//   (C) two-electron (aa|aa) same-center = 2√(a/π) · (ab|ab)=(ba|ba) sym   🔵
+//   (D) limits: nucleus far → V → −Z/R · clouds far → (aa|bb) → 1/R         🔵
+//   (E) malformed center (len≠3) / non-positive exponent → 0 sentinel guard
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/molscf/coulomb_integrals_selftest.hexa
+// PASS: "qforge_molscf_coulomb_integrals_selftest PASS".
+use "stdlib/qforge/molscf/coulomb_integrals"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    let pi = 3.141592653589793
+    let origin = [0.0, 0.0, 0.0]
+
+    // ══ (A) Boys F₀(t) = ½√(π/t)·erf(√t),  F₀(0)=1 ════════════════════════════
+    //   The erf-based F₀ is accurate to ≲2.5e-7; gate at 1e-6.
+    fails = fails + _ck_close("(A) F0(0) = 1 (exact limit)", boys_f0(0.0), 1.0, 1.0e-14)
+    fails = fails + _ck_close("(A) F0(1e-15) → 1 limit", boys_f0(1.0e-15), 1.0, 1.0e-12)
+    fails = fails + _ck_close("(A) F0(1) = 0.7468241328", boys_f0(1.0), 0.7468241328, 1.0e-6)
+    fails = fails + _ck_close("(A) F0(0.5) = 0.8556243919", boys_f0(0.5), 0.8556243919, 1.0e-6)
+    fails = fails + _ck_close("(A) F0(2) = 0.5981440067", boys_f0(2.0), 0.5981440067, 1.0e-6)
+    //   F0 is monotone decreasing in t (Coulomb screening grows with argument)
+    fails = fails + _ck_true("(A) F0 monotone: F0(0.5) > F0(2)", boys_f0(0.5) > boys_f0(2.0))
+
+    // ══ (B) nuclear attraction V_ab ═══════════════════════════════════════════
+    //   self term: a=b, A=B=C ⇒ |A−B|²=0, P=C ⇒ F0(0)=1 ⇒ V = −2Z√(2a/π)
+    let a1 = 1.0
+    let z1 = 1.0
+    let v_self = cint_nuclear_s(a1, a1, origin, origin, z1, origin)
+    let want_vself = 0.0 - 2.0 * z1 * sqrt(2.0 * a1 / pi)   // −1.5957691216
+    fails = fails + _ck_close("(B) V self a=1 Z=1 nuc@center = −2√(2/π)",
+                              v_self, want_vself, 1.0e-12)
+    //   exponent/charge scaling: a=0.8, Z=6 (carbon-like) self term
+    let v_self2 = cint_nuclear_s(0.8, 0.8, origin, origin, 6.0, origin)
+    let want_vself2 = 0.0 - 2.0 * 6.0 * sqrt(2.0 * 0.8 / pi)
+    fails = fails + _ck_close("(B) V self a=0.8 Z=6 = −2·6·√(1.6/π)",
+                              v_self2, want_vself2, 1.0e-11)
+    //   STO-3G H single-center V (bra=ket=A, nucleus at A) = −1.2266137219 (Szabo)
+    let h_alpha = [3.42525091, 0.62391373, 0.16885540]
+    let h_coeff = [0.15432897, 0.53532814, 0.44463454]
+    let v_sto = cint_nuclear_contracted(h_alpha, h_coeff, origin,
+                                        h_alpha, h_coeff, origin, 1.0, origin)
+    fails = fails + _ck_close("(B) STO-3G H single-center V(nuc@A) = −1.2266137219",
+                              v_sto, 0.0 - 1.2266137219, 1.0e-5)
+    //   V is attractive (negative) everywhere
+    fails = fails + _ck_true("(B) V attractive (<0)", v_self < 0.0)
+
+    // ══ (C) two-electron (ab|cd) ══════════════════════════════════════════════
+    //   same-center (aa|aa) = 2√(a/π)
+    let aa = 0.8
+    let eri_aaaa = cint_eri_s(aa, origin, aa, origin, aa, origin, aa, origin)
+    let want_aaaa = 2.0 * sqrt(aa / pi)   // 1.0092530088
+    fails = fails + _ck_close("(C) (aa|aa) a=0.8 = 2√(a/π)", eri_aaaa, want_aaaa, 1.0e-12)
+    //   8-fold symmetry — bra↔ket and a↔b: (ab|ab) = (ba|ba)
+    let cA = [0.0, 0.0, 0.0]
+    let cB = [0.9, 0.0, 0.0]
+    let eri_abab = cint_eri_s(1.0, cA, 1.2, cB, 1.0, cA, 1.2, cB)
+    let eri_baba = cint_eri_s(1.2, cB, 1.0, cA, 1.2, cB, 1.0, cA)
+    fails = fails + _ck_close("(C) (ab|ab) = (ba|ba) symmetry", eri_abab, eri_baba, 1.0e-14)
+    //   bra↔ket swap of a 4-distinct-center integral: (ab|cd) = (cd|ab)
+    let cC = [0.0, 0.5, 0.0]
+    let cD = [0.3, 0.0, 0.7]
+    let eri_abcd = cint_eri_s(1.0, cA, 1.1, cB, 0.9, cC, 1.3, cD)
+    let eri_cdab = cint_eri_s(0.9, cC, 1.3, cD, 1.0, cA, 1.1, cB)
+    fails = fails + _ck_close("(C) (ab|cd) = (cd|ab) bra↔ket", eri_abcd, eri_cdab, 1.0e-14)
+    //   repulsion is positive
+    fails = fails + _ck_true("(C) (aa|aa) repulsive (>0)", eri_aaaa > 0.0)
+
+    // ══ (D) physical limits → point-charge Coulomb ════════════════════════════
+    //   nucleus far away (C at R) ⇒ diffuse term → −Z/R
+    let far = [5.0, 0.0, 0.0]
+    let v_far = cint_nuclear_s(1.0, 1.0, origin, origin, 1.0, far)
+    fails = fails + _ck_close("(D) V nuc@R=5 → −Z/R = −0.2", v_far, 0.0 - 0.2, 1.0e-9)
+    let v_far2 = cint_nuclear_s(1.0, 1.0, origin, origin, 3.0, [50.0, 0.0, 0.0])
+    fails = fails + _ck_close("(D) V Z=3 nuc@R=50 → −0.06", v_far2, 0.0 - 0.06, 1.0e-9)
+    //   two clouds far apart ⇒ (aa|bb) → 1/R (point-charge repulsion)
+    let cFar = [5.0, 0.0, 0.0]
+    let eri_far = cint_eri_s(1.0, origin, 1.0, origin, 1.0, cFar, 1.0, cFar)
+    fails = fails + _ck_close("(D) (aa|bb) R=5 → 1/R = 0.2", eri_far, 0.2, 1.0e-9)
+    let eri_far2 = cint_eri_s(1.0, origin, 1.0, origin, 1.0, [20.0, 0.0, 0.0], 1.0, [20.0, 0.0, 0.0])
+    fails = fails + _ck_close("(D) (aa|bb) R=20 → 1/R = 0.05", eri_far2, 0.05, 1.0e-10)
+    //   V monotone decays toward 0 as nucleus recedes (R=5 vs R=10, |V| shrinks)
+    let v_r10 = cint_nuclear_s(1.0, 1.0, origin, origin, 1.0, [10.0, 0.0, 0.0])
+    fails = fails + _ck_true("(D) |V| decays with R: |V(5)| > |V(10)|", _abs(v_far) > _abs(v_r10))
+
+    // ══ (E) malformed / non-positive → 0 sentinel ═════════════════════════════
+    let bad = [1.0, 2.0]   // len ≠ 3
+    fails = fails + _ck_true("(E) V malformed center → 0",
+                             cint_nuclear_s(1.0, 1.0, bad, origin, 1.0, origin) == 0.0)
+    fails = fails + _ck_true("(E) V malformed nucleus → 0",
+                             cint_nuclear_s(1.0, 1.0, origin, origin, 1.0, bad) == 0.0)
+    fails = fails + _ck_true("(E) ERI malformed center → 0",
+                             cint_eri_s(1.0, bad, 1.0, origin, 1.0, origin, 1.0, origin) == 0.0)
+    fails = fails + _ck_true("(E) F0 negative arg guarded → 1",
+                             boys_f0(0.0 - 1.0) == 1.0)
+    fails = fails + _ck_true("(E) nuclear length-mismatch contraction → 0",
+                             cint_nuclear_contracted([1.0, 2.0], [0.5], origin,
+                                                     [1.0], [0.5], origin, 1.0, origin) == 0.0)
+
+    if fails == 0 {
+        println("qforge_molscf_coulomb_integrals_selftest PASS")
+    } else {
+        println("qforge_molscf_coulomb_integrals_selftest FAIL (" + to_string(fails) + ")")
+    }
+}

@@ -1,0 +1,201 @@
+// link_atom.hexa — QFORGE/system round-4: COVALENT BOUNDARY / LINK ATOM.
+//
+// Rounds 1-3 partitioned a system whose QM/MM boundary cut only NON-bonded
+// space (mechanical → electrostatic embedding across a gap). Round-4 cuts a
+// COVALENT BOND: a bond Q—H crosses the boundary, with the FRONTIER atom Q in
+// the QM region and its bonded HOST atom H in the MM region. A bare cut leaves
+// Q with a dangling valence (an unphysical radical) and a host point charge q_H
+// sitting right on the boundary (it would over-polarize the QM density, round-3
+// V_ext). The canonical fix (Senn & Thiel 2009; Sherwood/ChemShell; the H-cap
+// "link atom" of Field, Bash & Karplus 1990) is:
+//
+//   (1) H-CAP — place a monovalent link atom L (usually H) on the Q—H axis to
+//       satisfy Q's valence. L is NOT an independent DOF: it is a SLAVE of Q and
+//       H, pinned at a fixed scaled distance
+//           R_L = R_Q + g·(R_H − R_Q) = (1−g)·R_Q + g·R_H
+//       with g = d_QL / d_QH (the ratio of the desired Q—L cap bond length to
+//       the live Q—H host distance; g≈0.71 for a C—H cap on a C—C cut).
+//
+//   (2) CHARGE-SHIFT — the host charge q_H must NOT sit on the boundary facing
+//       the QM density (it would be unphysically close in the round-3 V_ext).
+//       Standard charge-shift (the "Z1"/RESP-style redistribution): zero q_H and
+//       spread it EQUALLY onto the n adjacent MM atoms (H's MM neighbours), so
+//       TOTAL CHARGE IS CONSERVED — Σ q stays fixed, |Σ Δq| = 0 to round-off.
+//       These shifted MM charges are exactly the point charges the round-3 V_ext
+//       (`embed_ee_vext_at`) sees: the link-atom host charge IS an MM point
+//       charge the QM now feels electrostatically.
+//
+// THE FORCE CONSTRAINT (the round-4 g5 finding · Newton's 3rd across the cut):
+//   Because L is a linear slave R_L = (1−g)R_Q + g·R_H, the chain rule maps any
+//   force F_L felt by the link atom back onto its two masters EXACTLY:
+//       ∂R_L/∂R_Q = (1−g)·I ,   ∂R_L/∂R_H = g·I
+//       ⇒  F_Q += (1−g)·F_L ,   F_H += g·F_L
+//   The two contributions SUM to (1−g+g)·F_L = F_L: the link atom's force is
+//   fully projected onto the real DOFs with NO net force created or destroyed.
+//   That is Newton's 3rd law surviving the QM/MM bond cut — the brick's gate.
+//
+// d4-GENERIC (no hardcoding): every routine takes positions / charges / forces
+// as plain float arrays — the results of whatever QM (qforge) or MM (chem/md)
+// engine produced them. The placement ratio g, the host charge, the neighbour
+// set are all DATA. Add / move / remove a boundary, change the cap species, or
+// swap the engine = pass different arrays, never a branch in this layer (d4).
+//
+// REUSE (d19 · NEXUS edge):
+//   V_ext over the shifted MM charges ← stdlib/qforge/system/embed_electrostatic
+//                                        `embed_ee_vext_at` (round-3)
+//   partition algebra                 ← stdlib/qforge/system/qmmm (round-1)
+//   (the shifted charges feed straight into the round-3 electrostatic embedding)
+
+use "stdlib/qforge/system/embed_electrostatic"
+
+// ── (1) H-CAP PLACEMENT — L on the Q—H axis at ratio g ───────────────────────
+// R_L = (1−g)·R_Q + g·R_H. `r_q`/`r_h` are 3-vectors [x,y,z]; `g` = d_QL/d_QH.
+// The cap therefore lies EXACTLY on the Q→H line (the g5 (d) axis check), at the
+// fraction g of the way from Q toward H. d4: g is data (cap species sets it).
+pub fn link_cap_position(r_q: [float], r_h: [float], g: float) -> [float] {
+    return [ r_q[0] + g * (r_h[0] - r_q[0]),
+             r_q[1] + g * (r_h[1] - r_q[1]),
+             r_q[2] + g * (r_h[2] - r_q[2]) ]
+}
+
+// Placement ratio from explicit bond lengths: g = d_QL / d_QH. The desired cap
+// bond length d_QL (e.g. C—H 1.09 Å) over the live host distance d_QH.
+pub fn link_cap_ratio(d_ql: float, d_qh: float) -> float {
+    return d_ql / d_qh
+}
+
+// Live Q—H distance |R_H − R_Q| (so a caller can derive g from a target d_QL).
+pub fn link_qh_distance(r_q: [float], r_h: [float]) -> float {
+    let dx = r_h[0] - r_q[0]
+    let dy = r_h[1] - r_q[1]
+    let dz = r_h[2] - r_q[2]
+    return sqrt(dx * dx + dy * dy + dz * dz)
+}
+
+// ── (2) FORCE PROJECTION — chain-rule the link-atom force onto Q and H ────────
+// L = (1−g)R_Q + g·R_H is a linear slave ⇒ the Jacobian is constant:
+//   ∂R_L/∂R_Q = (1−g)I ,  ∂R_L/∂R_H = g·I.
+// So the force F_L on the link atom is distributed as
+//   ΔF_Q = (1−g)·F_L  (the share that flows to the QM frontier atom)
+//   ΔF_H =     g ·F_L  (the share that flows to the MM host atom)
+// These two helpers return those shares; their SUM is F_L exactly (conservation).
+pub fn link_force_share_q(f_l: [float], g: float) -> [float] {
+    let w = 1.0 - g
+    return [w * f_l[0], w * f_l[1], w * f_l[2]]
+}
+
+pub fn link_force_share_h(f_l: [float], g: float) -> [float] {
+    return [g * f_l[0], g * f_l[1], g * f_l[2]]
+}
+
+// Project F_L onto Q and H and ADD the shares onto pre-existing forces f_q / f_h.
+// Returns the updated [f_q ; f_h] packed as a 6-vector [qx,qy,qz, hx,hy,hz].
+// After this, the link atom carries NO independent force — Newton's 3rd holds
+// across the boundary (the net force added to the real DOFs equals F_L exactly).
+pub fn link_project_force(f_q: [float], f_h: [float], f_l: [float], g: float) -> [float] {
+    let sq = link_force_share_q(f_l, g)
+    let sh = link_force_share_h(f_l, g)
+    return [ f_q[0] + sq[0], f_q[1] + sq[1], f_q[2] + sq[2],
+             f_h[0] + sh[0], f_h[1] + sh[1], f_h[2] + sh[2] ]
+}
+
+// The NET force the projection added to the real DOFs = ΔF_Q + ΔF_H. This must
+// equal F_L component-wise (|Σ| conservation) — that IS the g5 force-conservation
+// finding, isolated as a single returnable 3-vector.
+pub fn link_force_net_added(f_l: [float], g: float) -> [float] {
+    let sq = link_force_share_q(f_l, g)
+    let sh = link_force_share_h(f_l, g)
+    return [sq[0] + sh[0], sq[1] + sh[1], sq[2] + sh[2]]
+}
+
+// ── (2b) CHARGE-SHIFT — zero q_H, spread it onto n MM neighbours, Σq conserved ─
+// Standard charge-shift redistribution: the host charge q_H is removed from the
+// boundary (so it does not over-polarize the QM density in the round-3 V_ext) and
+// added EQUALLY to its `n_nbr` adjacent MM atoms. `q_mm` is the FULL MM charge
+// array; `host_idx` indexes the host atom H; `nbr_idx` are the MM neighbour
+// indices the host charge is shifted onto. Returns the NEW MM charge array.
+// d4: any neighbour set, any count — all data. Σ q is invariant by construction.
+pub fn link_charge_shift(q_mm: [float], host_idx: int, nbr_idx: [int]) -> [float] {
+    let n = len(q_mm)
+    let n_nbr = len(nbr_idx)
+    // copy the input charges
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        out = out.push(q_mm[i])
+        i = i + 1
+    }
+    if n_nbr == 0 {
+        // no acceptor — leave the host charge in place (Σq trivially conserved).
+        return out
+    }
+    let q_host = q_mm[host_idx]
+    let share = q_host / to_float(n_nbr)
+    // zero the host charge
+    out[host_idx] = 0.0
+    // spread it equally onto the neighbours
+    let mut k = 0
+    while k < n_nbr {
+        let j = nbr_idx[k]
+        out[j] = out[j] + share
+        k = k + 1
+    }
+    return out
+}
+
+// Total charge of an MM charge array (Σ q) — the conservation probe.
+pub fn link_total_charge(q_mm: [float]) -> float {
+    let n = len(q_mm)
+    let mut s = 0.0
+    let mut i = 0
+    while i < n {
+        s = s + q_mm[i]
+        i = i + 1
+    }
+    return s
+}
+
+// Charge-conservation residual: Σ q_after − Σ q_before. Must be 0 to round-off
+// (|ΣΔq| < 1e-12) — the g5 charge-conservation gate. The shift only MOVES charge.
+pub fn link_charge_residual(q_before: [float], q_after: [float]) -> float {
+    return link_total_charge(q_after) - link_total_charge(q_before)
+}
+
+// ── (3) CAPPED ENERGY — capped → uncut reference when QM≡MM on the boundary ───
+// The link-atom scheme's correctness limit: if the cap species is identical to
+// the real host atom AND the QM and MM models agree on the boundary bond, the
+// CAPPED energy must reproduce the UNCUT reference (no spurious cap energy). We
+// express this as the SUBTRACTIVE/ONIOM correction the cap introduces:
+//
+//   E_capped = E_QM(model+cap) + E_MM(real) − E_MM(model+cap)
+//
+// where "model+cap" is the QM region with the link atom. When the high (QM) and
+// low (MM) levels DESCRIBE the capped model IDENTICALLY — i.e. E_QM(model+cap)
+// == E_MM(model+cap) — the two model terms CANCEL and E_capped collapses to
+// E_MM(real): the bare uncut MM reference. That cancellation is exact (it is the
+// round-1 ONIOM identity applied to the link atom), so the g5 (b) check holds to
+// round-off in the QM≡MM limit; for a GENERAL QM≠MM the residual cap energy is a
+// real physical correction, NOT zero (reported honestly, not forced — d6).
+//
+// d4: the three energies are plain floats (callback results). This is the round-1
+// ONIOM subtractive total specialised to the capped model region.
+pub fn link_capped_energy(e_qm_model_cap: float, e_mm_real: float, e_mm_model_cap: float) -> float {
+    return e_qm_model_cap + e_mm_real - e_mm_model_cap
+}
+
+// Residual of the capped energy vs the uncut MM reference. In the QM≡MM limit
+// (e_qm_model_cap == e_mm_model_cap) this is 0 to round-off; for QM≠MM it is the
+// genuine cap correction (honest, non-zero — the value, not a forced zero).
+pub fn link_capped_minus_uncut(e_qm_model_cap: float, e_mm_real: float, e_mm_model_cap: float) -> float {
+    let capped = link_capped_energy(e_qm_model_cap, e_mm_real, e_mm_model_cap)
+    return capped - e_mm_real
+}
+
+// ── BOUNDARY V_ext CONSISTENCY (d19 reuse) ───────────────────────────────────
+// The shifted MM charges are precisely the point charges the round-3 V_ext sees.
+// This convenience evaluates `embed_ee_vext_at` (round-3) over the POST-shift MM
+// charge array at a QM point `rq` — so a caller can confirm the link-atom charge
+// model feeds straight into the electrostatic embedding (no separate charge set).
+pub fn link_vext_after_shift(rq: [float], q_after: [float], pos_mm: [float]) -> float {
+    return embed_ee_vext_at(rq, q_after, pos_mm)
+}

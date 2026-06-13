@@ -1,0 +1,260 @@
+// HEXA Standard Library — qforge/atoms/harris_foulkes
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE atoms-scale brick #8 — the Harris-Foulkes / Mermin VARIATIONAL FUNCTIONAL
+// that CLOSES the round-6/round-7 energy-stationarity gap. R6 (scc_scf.hexa) ran the
+// SCC fixed-point loop and stated plainly (its (c) anchor) that the SCC total energy
+// had NO stationary point at the fixed point — dE/dδq ≠ 0 there — because the energy
+// it reported (E_band + E_scc − double-count) was NOT a variational functional whose
+// gradient vanishes. R7 (lowdin.hexa) supplied the S^{-1/2} populations but left the
+// energy-stationarity itself unclosed (the R7 report measured dE/dδq = −1.33 at δq*).
+// This brick supplies the missing functional: the Harris-Foulkes band-structure
+// energy with the SECOND-ORDER DOUBLE-COUNTING CORRECTION,
+//
+//     E_HF[δq] = Σ_occ n_k ε_k[δq]  −  ½ Σ_ij γ_ij δq_i δq_j  +  E_rep ,
+//
+// whose gradient ∂E_HF/∂δq vanishes EXACTLY at the SCC fixed point. (Harris, PRB 31
+// 1770 (1985); Foulkes & Haydock, PRB 39 12520 (1989) — the non-self-consistent
+// "Harris-Foulkes" functional stationary about the self-consistent density; Mermin,
+// PRB 137 A1441 (1965) for the finite-T grand potential whose T→0 limit this is;
+// Elstner et al. SCC-DFTB, PRB 58 7260 (1998), Eqs. 16-18 for the γ-kernel form.)
+//
+// THE STATIONARITY THEOREM ──────────────────────────────────────────────────────
+//   The SCC variable here is the self-consistent MULLIKEN POPULATION itself: δq is
+//   the per-atom population that BOTH dresses the Hamiltonian on-site levels,
+//
+//       H_μμ[δq] = H⁰_μμ + V_{a(μ)} ,      V_a = Σ_b γ_ab δq_b           (R6 reuse)
+//
+//   AND is the output of the eigen-occupation step, p_a[δq] = Σ_k n_k Σ_{μ∈a} C_μk².
+//   The fixed point is δq_a* = p_a[δq*]  (the population reproduces itself). At that
+//   point the Harris-Foulkes gradient is, by the Hellmann-Feynman theorem,
+//
+//       ∂E_HF/∂δq_c = Σ_k n_k ⟨k| ∂H/∂δq_c |k⟩  −  Σ_a γ_ac δq_a
+//                   = Σ_a p_a[δq] γ_ac           −  Σ_a γ_ac δq_a
+//                   = Σ_a γ_ac ( p_a[δq] − δq_a ) ,
+//
+//   because ∂H_μμ/∂δq_c = γ_{a(μ),c} (the on-site shift V) so the occupied-state
+//   expectation of ∂H/∂δq_c is exactly Σ_a p_a γ_ac. At the fixed point p_a = δq_a,
+//   so EVERY component of the gradient VANISHES:  ∂E_HF/∂δq_c |_{δq*} = 0.  The band
+//   term's Hellmann-Feynman charge response (+Σ γ p) precisely CANCELS the derivative
+//   of the −½ γ δq δq double-counting correction (−Σ γ δq) at self-consistency. This
+//   is the r6/r7 gap closed: the functional is genuinely STATIONARY at δq*.
+//
+//   Curvature (HONEST, d6 — the genuine Foulkes-Haydock result): the Harris-Foulkes
+//   functional is STATIONARY at δq* but it is NOT a minimum. Its Hessian
+//   ∂²E_HF/∂δq² = γ_band_response − γ has the OPPOSITE sign to the true self-consistent
+//   functional (Foulkes & Haydock 1989: E_HF brackets the SCF energy from ABOVE, with
+//   reversed curvature). A ±δ probe about δq* shows E_HF varying to SECOND order
+//   (a symmetric parabola: E(+δ) = E(−δ) ≠ E(δq*), |ΔE| ∝ δ²) — and here that
+//   parabola curves DOWNWARD (δq* is a variational MAXIMUM along the charge
+//   directions). We anchor and PRINT the real second difference verbatim; the
+//   selftest asserts a genuine second-order stationary point (symmetric · |2nd-diff|
+//   > 0 · sign reported), NOT a forced minimum. The first-order content — dE/dδq = 0
+//   — is the r6/r7 closure and is EXACT (selftest |dE/dδq*| < 1e-6).
+//
+// DOUBLE-COUNTING (vs the raw band sum) ──────────────────────────────────────────
+//   The on-site shift V_a folds the second-order electrostatic energy Σ_ab γ_ab δq_a
+//   δq_b ONCE into each occupied eigenvalue, so the bare band sum Σ n_k ε_k OVER-counts
+//   it. The −½ γ δq δq term is the standard double-counting correction (Elstner Eq. 18,
+//   the "−½ Σ γ Δq Δq" repulsive-of-electrostatics term): it leaves the NET second-order
+//   contribution at +½ γ δq δq while restoring stationarity. qforge_hf_double_count
+//   below exposes Δ = E_band − E_HF (= ½ γ δq δq + ... ) so the caller can audit the
+//   correction directly.
+//
+// HONEST SCOPE (d6) — the functional, its analytic gradient, the Hellmann-Feynman
+//   cancellation, and the double-counting bookkeeping are EXACT and selftest-anchored
+//   to the REAL numerical output (the selftest prints dE/dδq verbatim and asserts
+//   |dE/dδq*| < 1e-6, NOT a forced zero). E_rep is a CALLER-SUPPLIED scalar (a pair
+//   repulsion that is constant in δq, so it shifts E_HF without touching the gradient);
+//   we do NOT claim a GFN2-parameterised E_rep, we claim a correct variational
+//   functional that the parameter layer drives. Populations use the orthonormal-basis
+//   Mulliken trace (S = I) reused from R6; for a non-orthogonal S the caller first
+//   Löwdin-orthogonalises H via R7 (lowdin.hexa) and passes H̃ — the functional is
+//   unchanged (d4-generic over whatever symmetric H it is handed).
+//
+// d4-generic: H⁰, the orbital→atom map, the γ-radii α, the occupations, and E_rep are
+//   ALL inputs. H₂, a peptide, or a metal cluster traverse the identical functional —
+//   add/remove an element is a table edit, no code branch.
+//
+// reuse (d19): qforge_scc_potential · qforge_scc_dressed_h · qforge_eht_vectors_asc ·
+//   qforge_mulliken_pop · qforge_eht_levels · qforge_eht_band_energy come from R5/R6
+//   (eht_scc.hexa, scc_scf.hexa); qforge_scc_energy2 (= ½ γ δq δq) · qforge_eeq_gamma ·
+//   qforge_eht_distance from R5. NO kernel is re-implemented here — this file is the
+//   variational ENERGY functional + its analytic gradient assembled from those kernels.
+use "stdlib/qforge/atoms/scc_scf"
+use "stdlib/qforge/atoms/eht_scc"
+
+fn _absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+// ── self-consistent Mulliken populations p_a[δq] at a charge vector ───────────
+//   Build the SCC-dressed Hamiltonian H[δq] = H⁰ + diag(V_atom(μ)) (R6 reuse), get
+//   its ascending eigenvectors, and form the orthonormal-basis Mulliken populations
+//   p_a = Σ_k occ_k Σ_{μ∈a} C_μk² (R6 reuse). This is the band side of the functional;
+//   the fixed point is δq_a = p_a (the population reproduces the SCC variable).
+//     heht:     flat n_orb × n_orb EHT Hamiltonian H⁰ (R5; pass Löwdin H̃ for non-orth).
+//     pos:      flat xyz (3 per atom) for R_ij in V_a.
+//     dq:       SCC population variable (length natom).
+//     alpha:    γ-radii (length natom, R1/R5).
+//     orb2atom: orbital→atom (length norb).   occ: MO occupations (length norb).
+pub fn qforge_hf_populations(heht: [float], pos: [float], dq: [float], alpha: [float],
+                             orb2atom: [int], occ: [float], norb: int,
+                             natom: int) -> [float] {
+    let vatom = qforge_scc_potential(pos, dq, alpha)                 // V_a = Σ γ_ab δq_b
+    let h = qforge_scc_dressed_h(heht, vatom, orb2atom, norb)        // H⁰ + diag(V)
+    let cvec = qforge_eht_vectors_asc(h, norb)                       // ascending C_μk
+    return qforge_mulliken_pop(cvec, occ, orb2atom, norb, natom)     // p_a
+}
+
+// ── Harris-Foulkes energy  E_HF[δq] = E_band − ½ γ δq δq + E_rep ──────────────
+//   The variational functional. E_band = Σ_k occ_k ε_k[δq] over the levels of the
+//   SCC-dressed Hamiltonian (R6 reuse), MINUS the second-order double-counting
+//   correction ½ Σ_ij γ_ij δq_i δq_j (= qforge_scc_energy2, R5 reuse), PLUS the
+//   caller's repulsive constant E_rep. Stationary at δq* = p[δq*] (see header).
+//     erep: scalar pair-repulsion energy (constant in δq; shifts E_HF, not ∂E/∂δq).
+pub fn qforge_hf_energy(heht: [float], pos: [float], dq: [float], alpha: [float],
+                        orb2atom: [int], occ: [float], norb: int, natom: int,
+                        erep: float) -> float {
+    let vatom = qforge_scc_potential(pos, dq, alpha)
+    let h = qforge_scc_dressed_h(heht, vatom, orb2atom, norb)
+    let eps = qforge_eht_levels(h, norb)
+    let eband = qforge_eht_band_energy(eps, occ)
+    let edc = qforge_scc_energy2(pos, dq, alpha)        // ½ Σ γ δq δq (double-count)
+    return eband - edc + erep
+}
+
+// ── double-counting correction Δ = E_band − E_HF (= ½ γ δq δq − E_rep) ────────
+//   The amount the bare band sum Σ n_k ε_k over-counts the second-order energy.
+//   Exposed so the caller can audit the correction directly (selftest (b)). Equals
+//   qforge_scc_energy2 minus E_rep by construction.
+pub fn qforge_hf_double_count(heht: [float], pos: [float], dq: [float], alpha: [float],
+                              orb2atom: [int], occ: [float], norb: int, natom: int,
+                              erep: float) -> float {
+    let vatom = qforge_scc_potential(pos, dq, alpha)
+    let h = qforge_scc_dressed_h(heht, vatom, orb2atom, norb)
+    let eps = qforge_eht_levels(h, norb)
+    let eband = qforge_eht_band_energy(eps, occ)
+    let ehf = qforge_hf_energy(heht, pos, dq, alpha, orb2atom, occ, norb, natom, erep)
+    return eband - ehf
+}
+
+// ── analytic gradient ∂E_HF/∂δq_c = Σ_a γ_ac ( p_a[δq] − δq_a ) ───────────────
+//   The Hellmann-Feynman gradient of the Harris-Foulkes functional. The band term
+//   contributes +Σ_a p_a γ_ac (the on-site shift response, ∂H_μμ/∂δq_c = γ_{a(μ),c});
+//   the double-counting correction contributes −Σ_a γ_ac δq_a. E_rep is constant in
+//   δq ⇒ zero gradient. At the fixed point p_a = δq_a every component VANISHES — this
+//   is the analytic statement of the r6/r7 stationarity closure. γ_ac is the R5 EEQ
+//   screened-Coulomb kernel (qforge_eeq_gamma, d19 reuse). Returns length natom.
+pub fn qforge_hf_gradient(heht: [float], pos: [float], dq: [float], alpha: [float],
+                          orb2atom: [int], occ: [float], norb: int,
+                          natom: int) -> [float] {
+    let pop = qforge_hf_populations(heht, pos, dq, alpha, orb2atom, occ, norb, natom)
+    let mut g: [float] = []
+    let mut c = 0
+    while c < natom {
+        let mut s = 0.0
+        let mut a = 0
+        while a < natom {
+            let rac = qforge_eht_distance(pos, a, c)
+            let gac = qforge_eeq_gamma(rac, alpha[a], alpha[c])
+            s = s + gac * (pop[a] - dq[a])
+            a = a + 1
+        }
+        g.push(s)
+        c = c + 1
+    }
+    return g
+}
+
+// ── max-norm of the gradient ‖∂E_HF/∂δq‖_∞ (the stationarity metric) ──────────
+pub fn qforge_hf_grad_norm(g: [float]) -> float {
+    let n = len(g)
+    let mut m = 0.0
+    let mut c = 0
+    while c < n {
+        let v = _absf(g[c])
+        if v > m { m = v }
+        c = c + 1
+    }
+    return m
+}
+
+// ── the Harris-Foulkes SCC driver — relax δq to the stationary point ──────────
+//   Iterates the population fixed point δq ← (1−β) δq + β p[δq] from the seed dq0
+//   until the gradient max-norm ‖∂E_HF/∂δq‖_∞ < tol or maxit iterations elapse.
+//   Because the fixed point is δq = p[δq], driving the population residual to zero
+//   drives the variational gradient to zero (they vanish together — see the
+//   stationarity theorem). Returns a FLAT diagnostics array, length natom + 4:
+//     out[0 .. natom-1]  = stationary δq*  (= p[δq*])
+//     out[natom + 0]     = iterations actually run (REAL count — d6, not forced)
+//     out[natom + 1]     = final population residual ‖p[δq*] − δq*‖_∞
+//     out[natom + 2]     = final gradient max-norm ‖∂E_HF/∂δq*‖_∞ (the stationarity)
+//     out[natom + 3]     = 1.0 if converged (residual < tol) else 0.0
+//   The driver branches on NO element / size — d4-generic over every input.
+pub fn qforge_hf_relax(heht: [float], pos: [float], dq0: [float], alpha: [float],
+                       orb2atom: [int], occ: [float], norb: int, natom: int,
+                       beta: float, tol: float, maxit: int) -> [float] {
+    let mut dq: [float] = []
+    let mut a = 0
+    while a < natom { dq.push(dq0[a]) ; a = a + 1 }
+
+    let mut it = 0
+    let mut resid = 0.0
+    let mut converged = 0.0
+    while it < maxit {
+        let pop = qforge_hf_populations(heht, pos, dq, alpha, orb2atom, occ, norb, natom)
+        // population residual ‖p − δq‖_∞ (the fixed-point metric)
+        let mut r = 0.0
+        a = 0
+        while a < natom {
+            let d = _absf(pop[a] - dq[a])
+            if d > r { r = d }
+            a = a + 1
+        }
+        resid = r
+        it = it + 1
+        if r < tol {
+            a = 0
+            while a < natom { dq[a] = pop[a] ; a = a + 1 }   // accept the fixed point
+            converged = 1.0
+            break
+        }
+        // damped population mixing: δq ← (1−β) δq + β p[δq]
+        a = 0
+        while a < natom {
+            dq[a] = (1.0 - beta) * dq[a] + beta * pop[a]
+            a = a + 1
+        }
+    }
+
+    let gfin = qforge_hf_gradient(heht, pos, dq, alpha, orb2atom, occ, norb, natom)
+    let gnorm = qforge_hf_grad_norm(gfin)
+
+    let mut out: [float] = []
+    a = 0
+    while a < natom { out.push(dq[a]) ; a = a + 1 }
+    out.push(to_float(it))
+    out.push(resid)
+    out.push(gnorm)
+    out.push(converged)
+    return out
+}
+
+// ── bridge to the R6 charge convention  δq^R6 = n_val − p − q_ref ─────────────
+//   R6 (scc_scf.hexa) ran the SCC loop in the CHARGE convention δq^R6_a = (n_val_a −
+//   p_a) − q_ref_a (electron-deficit). The Harris-Foulkes variable here is the
+//   POPULATION δq^HF_a = p_a itself. The two fixed points describe the SAME self-
+//   consistent state — this helper maps an HF population vector to the matching R6
+//   charge so the selftest can assert agreement (anchor (d)). q_a = n_val_a − δq^HF_a
+//   − q_ref_a. d4-generic.
+pub fn qforge_hf_to_scc_charge(dq_hf: [float], nval: [float], qref: [float],
+                               natom: int) -> [float] {
+    let mut q: [float] = []
+    let mut a = 0
+    while a < natom {
+        q.push(nval[a] - dq_hf[a] - qref[a])
+        a = a + 1
+    }
+    return q
+}

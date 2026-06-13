@@ -1,0 +1,112 @@
+// HEXA Standard Library — qforge/chip/band_transport
+//
+// QFORGE universal-engine · CHIP scale · round-1 first brick.
+//   scale ladder (QFORGE.md §122):  chip = device 밴드·수송·열(TCAD)  <- verify: 측정/TCAD ref
+//   chip 마일스톤 (QFORGE.md line 141): "밴드·수송·열 front-end (SCF 전자구조 재사용)".
+//
+// This brick lays the analytic SPINE that the SCF-electronic-structure front-end
+// will plug into — two device-physics primitives whose values are EXACT closed
+// forms (d6: every number derivable, none tuned), so they form a g5 anchor that a
+// later empirical-pseudopotential / SCF-fed band machine must reproduce:
+//
+//   (1) BAND  — 1D nearest-neighbour tight-binding dispersion ε(k) = ε₀ − 2t·cos(ka).
+//       The textbook semiconductor band-structure kernel (Slater-Koster / empirical
+//       tight-binding · LCAO). Exact anchors: bandwidth = 4t, band edges at k=0,π/a,
+//       group velocity v_g = (1/ħ)dε/dk vanishing at both edges (the van-Hove DOS
+//       divergence that fixes effective mass), and a two-orbital chain reproducing a
+//       finite GAP (the semiconductor — insulator vs metal distinction).
+//
+//   (2) TRANSPORT — Landauer-Büttiker ballistic conductance G = (2e²/h)·ΣTₙ.
+//       N perfectly-transmitting channels (Tₙ=1) quantize G into plateaus of the
+//       conductance quantum G₀ = 2e²/h (Schwab/van Wees QPC staircase). The band↔
+//       transport BRIDGE: the number of plateaus equals the number of sub-bands the
+//       Fermi level cuts — so the SAME band kernel above DRIVES the transport count.
+//
+//   (3) THERMAL (NOVEL probe, analytic) — the UNIVERSAL thermal conductance quantum
+//       g₀ = π²k_B²T/(3h) (Pendry bound; Schwab et al., Nature 404, 974 (2000)).
+//       A ballistic phonon/electron channel carries heat at this T-linear quantum
+//       INDEPENDENT of carrier statistics — the heat analogue of G₀. This seeds the
+//       '열' (thermal) leg of the chip front-end with its closed-form reference.
+//
+// ── d4 generic / d19 reuse contract ──────────────────────────────────────────
+//   The dispersion is a pure (ε₀, t, a, k) → ε map; the multi-orbital band solver
+//   is a generic Hermitian-Bloch eigenproblem dispatched through ONE path
+//   (no per-material branch). When the SCF front-end lands, H(k) is fed from the
+//   plane-wave / projector core (stdlib/qforge/scf_pw · davidson · projector) and
+//   diagonalised by the SAME stdlib/alloc/math/eigen `eigh` used by L1 Eliashberg
+//   and the Davidson subspace step — this brick reuses that solver for the 2-band k.
+//
+//   pub fn qforge_chip_tb1d_band(eps0, t, a, k)            -> float   // ε(k)
+//   pub fn qforge_chip_tb1d_bandwidth(t)                   -> float   // 4|t|
+//   pub fn qforge_chip_tb1d_vg(eps0, t, a, k, hbar)        -> float   // group velocity
+//   pub fn qforge_chip_diatomic_gap(eps_a, eps_b, t, a, k) -> [float] // 2-band Bloch eigs
+//   pub fn qforge_chip_landauer_g(channels, g0)            -> float   // G = G₀·ΣTₙ
+//   pub fn qforge_chip_thermal_quantum(temp_k)             -> float   // g₀ = π²k_B²T/3h
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/chip/band_transport_selftest.hexa
+use "stdlib/alloc/math/eigen"
+
+// π to double precision (no stdlib PI export — local const, grep-verified d19).
+fn _pi() -> float { return 3.14159265358979323846 }
+
+// ── (1) 1D nearest-neighbour tight-binding dispersion ────────────────────────
+// ε(k) = ε₀ − 2t·cos(k·a).  One orbital per site, hopping t to nearest neighbours.
+pub fn qforge_chip_tb1d_band(eps0: float, t: float, a: float, k: float) -> float {
+    return eps0 - 2.0 * t * cos(k * a)
+}
+
+// Bandwidth = ε_max − ε_min = (ε₀+2t) − (ε₀−2t) = 4t  (use |t|, sign-independent).
+pub fn qforge_chip_tb1d_bandwidth(t: float) -> float {
+    let bw = 4.0 * t
+    if bw < 0.0 { return -bw }
+    return bw
+}
+
+// Group velocity v_g = (1/ħ) dε/dk = (1/ħ)·2t·a·sin(k·a).
+// Vanishes at band edges k=0 and k=π/a (the van-Hove / flat-band-edge points).
+pub fn qforge_chip_tb1d_vg(eps0: float, t: float, a: float, k: float, hbar: float) -> float {
+    return (2.0 * t * a * sin(k * a)) / hbar
+}
+
+// ── (1b) two-orbital diatomic chain → finite GAP (semiconductor/insulator) ───
+// Bloch Hamiltonian at k (2×2 Hermitian, real here):
+//     H(k) = [[ε_a,            −2t·cos(k·a/2)],
+//             [−2t·cos(k·a/2),  ε_b          ]]
+// The two sublattice on-site energies ε_a≠ε_b open a gap; the off-diagonal is the
+// inter-sublattice Bloch hop. Diagonalised by the GENERIC stdlib eigh (d4/d19) —
+// the same solver the SCF-fed band machine will call. Returns [E_lower, E_upper]
+// (sorted explicitly — the contract does not depend on eigh's eigenvalue order).
+pub fn qforge_chip_diatomic_gap(eps_a: float, eps_b: float, t: float, a: float, k: float) -> [float] {
+    let off = -2.0 * t * cos(k * a * 0.5)
+    // row-major 2×2: [H00, H01, H10, H11]
+    let hk = [eps_a, off, off, eps_b]
+    let res = eigh(hk, 2)        // res[0] = eigenvalue pair (order solver-dependent)
+    let evs = res[0]
+    // Return [E_lower, E_upper] explicitly — do NOT assume eigh's ordering (d4:
+    // contract is order-independent; this 2×2 solver returns the pair unsorted).
+    if evs[0] <= evs[1] { return [evs[0], evs[1]] }
+    return [evs[1], evs[0]]
+}
+
+// ── (2) Landauer-Büttiker ballistic conductance ──────────────────────────────
+// G = G₀ · Σ Tₙ,  G₀ = 2e²/h (conductance quantum).  `channels` = per-mode
+// transmission probabilities Tₙ∈[0,1]; perfect channels (Tₙ=1) quantize G to N·G₀.
+pub fn qforge_chip_landauer_g(channels: [float], g0: float) -> float {
+    let n = len(channels)
+    let mut sumT = 0.0
+    let mut i = 0
+    while i < n {
+        sumT = sumT + channels[i]
+        i = i + 1
+    }
+    return g0 * sumT
+}
+
+// ── (3) universal thermal conductance quantum  g₀ = π²·k_B²·T / (3h) ─────────
+// k_B = 1.380649e-23 J/K, h = 6.62607015e-34 J·s (SI exact).  Returns W/K.
+pub fn qforge_chip_thermal_quantum(temp_k: float) -> float {
+    let kb = 1.380649e-23
+    let h  = 6.62607015e-34
+    let pi = _pi()
+    return (pi * pi * kb * kb * temp_k) / (3.0 * h)
+}

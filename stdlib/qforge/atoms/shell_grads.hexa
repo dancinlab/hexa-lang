@@ -1,0 +1,350 @@
+// HEXA Standard Library — qforge/atoms/shell_grads
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE atoms-scale brick #13 — ANALYTIC integral derivatives ∂S/∂R, ∂T/∂R,
+// ∂V/∂R, ∂(ab|cd)/∂R for ARBITRARY angular momentum (s, p, d, …), generalizing
+// R12's s-ONLY closed forms (integral_grads.hexa) to the higher-L shells a real
+// first-row molecule needs (H₂O / STO-3G requires the O 2p shell). With these the
+// atoms RHF force runs on a GENUINE first-row molecule — energy AND analytic force.
+//
+// ── The one identity that lifts s → any L (Gaussian translation, exact) ────────
+//   A Cartesian Gaussian's derivative w.r.t. its OWN center raises/lowers its
+//   Cartesian power by one (HJO eq. 9.2.31; the McMurchie-Davidson index-raising):
+//
+//     ∂/∂A_d  χ_a^{(lx,ly,lz)}(r;A) = 2a · χ_a^{(l+e_d)}(r;A) − l_d · χ_a^{(l−e_d)}(r;A)
+//
+//   Therefore, for ANY one-/two-electron integral I that is LINEAR in the bra AO,
+//   the derivative w.r.t. the bra center A is, PER PRIMITIVE of exponent a:
+//
+//     ∂I/∂A_d = 2a · I[ la→la+e_d ]  −  l_{a,d} · I[ la→la−e_d ]
+//
+//   evaluated on the SAME md_*_prim value kernel (only the bra Cartesian power
+//   index changes). The AO normalization constant N(la) is held FIXED (the basis
+//   function's contraction/norm does not move with the nucleus — only its center
+//   does), which is exactly the Pulay/Hellmann-Feynman gradient convention. This is
+//   the SAME translation R12 used implicitly for s (where the −l_d term vanishes
+//   and the +2a term reduces to the single closed form); here it carries to p, d, …
+//
+//   The ket center B uses the identical relation on the ket index. The nucleus C of
+//   the nuclear-attraction integral (and the analogous ERI translational closure) is
+//   obtained by TRANSLATIONAL INVARIANCE — Σ_centers ∂I/∂R = 0 (the integral depends
+//   only on center DIFFERENCES) — so ∂V/∂C = −(∂V/∂A + ∂V/∂B). This is exact and
+//   reuses ONLY the bra/ket index-raised md_*_prim values (no R-tensor re-derivation).
+//
+// ── Honest scope (d6) ─────────────────────────────────────────────────────────
+//   • FULLY ANALYTIC for ALL L — no finite difference anywhere. Each derivative is
+//     the exact translation of the SAME md_*_prim value kernel the energy consumes,
+//     so analytic == FD-of-E_RHF is a derivative identity, not a fit.
+//   • The nucleus-C / 4-center translational closure (∂/∂C = −Σ_others) is EXACT for
+//     a translationally-invariant integral; it is gated against the direct FD too.
+//   • d is reachable by the SAME relation (raises a d index to f, lowers to p) — the
+//     md_integrals recursion carries no L cap. d-bearing molecules: round-14.
+//
+// reuse (d19·d3): the per-primitive value kernels md_overlap_prim / md_kinetic_prim
+//   / md_nuclear_prim / md_eri_prim / md_norm_prim come UNCHANGED from the MOLSCF
+//   md_integrals lane (read-only consume). No integral, transcendental, or Boys
+//   table re-minted — only the bra/ket Cartesian index is translated.
+use "stdlib/qforge/molscf/md_integrals"
+
+// raise (+1) / lower (−1) the d-th Cartesian power of an L-vector (pure copy).
+fn _shift(l: [int], dimd: int, delta: int) -> [int] {
+    let mut o = [l[0], l[1], l[2]]
+    o[dimd] = o[dimd] + delta
+    return o
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   ∂S / ∂(bra center A)  — contracted, self-norm applied by the caller
+//   sg_doverlap_dA(la,al,co,A, lb,bl,bo,B, d) = ∂⟨la|lb⟩/∂A_d (raw, per-prim norm)
+// ════════════════════════════════════════════════════════════════════════════
+pub fn sg_doverlap_dA(la: [int], al: [float], co: [float], A: [float],
+                      lb: [int], bl: [float], bo: [float], B: [float], dimd: int) -> float {
+    let lap = _shift(la, dimd, 1)
+    let lam = _shift(la, dimd, 0 - 1)
+    let mut s = 0.0
+    let mut i = 0
+    while i < len(al) {
+        let ni = md_norm_prim(la, al[i])
+        let mut j = 0
+        while j < len(bl) {
+            let nj = md_norm_prim(lb, bl[j])
+            let plus = 2.0 * al[i] * md_overlap_prim(lap, al[i], A, lb, bl[j], B)
+            let mut minus = 0.0
+            if la[dimd] > 0 { minus = float(la[dimd]) * md_overlap_prim(lam, al[i], A, lb, bl[j], B) }
+            s = s + co[i] * bo[j] * ni * nj * (plus - minus)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return s
+}
+
+// ∂S/∂(ket center B) — same relation on the ket index.
+pub fn sg_doverlap_dB(la: [int], al: [float], co: [float], A: [float],
+                      lb: [int], bl: [float], bo: [float], B: [float], dimd: int) -> float {
+    let lbp = _shift(lb, dimd, 1)
+    let lbm = _shift(lb, dimd, 0 - 1)
+    let mut s = 0.0
+    let mut i = 0
+    while i < len(al) {
+        let ni = md_norm_prim(la, al[i])
+        let mut j = 0
+        while j < len(bl) {
+            let nj = md_norm_prim(lb, bl[j])
+            let plus = 2.0 * bl[j] * md_overlap_prim(la, al[i], A, lbp, bl[j], B)
+            let mut minus = 0.0
+            if lb[dimd] > 0 { minus = float(lb[dimd]) * md_overlap_prim(la, al[i], A, lbm, bl[j], B) }
+            s = s + co[i] * bo[j] * ni * nj * (plus - minus)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return s
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   ∂T / ∂(bra A) and ∂(ket B)  — same translation on md_kinetic_prim.
+// ════════════════════════════════════════════════════════════════════════════
+pub fn sg_dkinetic_dA(la: [int], al: [float], co: [float], A: [float],
+                      lb: [int], bl: [float], bo: [float], B: [float], dimd: int) -> float {
+    let lap = _shift(la, dimd, 1)
+    let lam = _shift(la, dimd, 0 - 1)
+    let mut s = 0.0
+    let mut i = 0
+    while i < len(al) {
+        let ni = md_norm_prim(la, al[i])
+        let mut j = 0
+        while j < len(bl) {
+            let nj = md_norm_prim(lb, bl[j])
+            let plus = 2.0 * al[i] * md_kinetic_prim(lap, al[i], A, lb, bl[j], B)
+            let mut minus = 0.0
+            if la[dimd] > 0 { minus = float(la[dimd]) * md_kinetic_prim(lam, al[i], A, lb, bl[j], B) }
+            s = s + co[i] * bo[j] * ni * nj * (plus - minus)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return s
+}
+pub fn sg_dkinetic_dB(la: [int], al: [float], co: [float], A: [float],
+                      lb: [int], bl: [float], bo: [float], B: [float], dimd: int) -> float {
+    let lbp = _shift(lb, dimd, 1)
+    let lbm = _shift(lb, dimd, 0 - 1)
+    let mut s = 0.0
+    let mut i = 0
+    while i < len(al) {
+        let ni = md_norm_prim(la, al[i])
+        let mut j = 0
+        while j < len(bl) {
+            let nj = md_norm_prim(lb, bl[j])
+            let plus = 2.0 * bl[j] * md_kinetic_prim(la, al[i], A, lbp, bl[j], B)
+            let mut minus = 0.0
+            if lb[dimd] > 0 { minus = float(lb[dimd]) * md_kinetic_prim(la, al[i], A, lbm, bl[j], B) }
+            s = s + co[i] * bo[j] * ni * nj * (plus - minus)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return s
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   ∂V / ∂(bra A), ∂(ket B), ∂(nucleus C)  — nuclear attraction (one nucleus Z@Cn)
+//   A/B: translate the bra/ket index of md_nuclear_prim. C: translational closure.
+// ════════════════════════════════════════════════════════════════════════════
+pub fn sg_dnuclear_dA(la: [int], al: [float], co: [float], A: [float],
+                      lb: [int], bl: [float], bo: [float], B: [float],
+                      z: float, Cn: [float], dimd: int) -> float {
+    let lap = _shift(la, dimd, 1)
+    let lam = _shift(la, dimd, 0 - 1)
+    let mut s = 0.0
+    let mut i = 0
+    while i < len(al) {
+        let ni = md_norm_prim(la, al[i])
+        let mut j = 0
+        while j < len(bl) {
+            let nj = md_norm_prim(lb, bl[j])
+            let plus = 2.0 * al[i] * md_nuclear_prim(lap, al[i], A, lb, bl[j], B, z, Cn)
+            let mut minus = 0.0
+            if la[dimd] > 0 { minus = float(la[dimd]) * md_nuclear_prim(lam, al[i], A, lb, bl[j], B, z, Cn) }
+            s = s + co[i] * bo[j] * ni * nj * (plus - minus)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return s
+}
+pub fn sg_dnuclear_dB(la: [int], al: [float], co: [float], A: [float],
+                      lb: [int], bl: [float], bo: [float], B: [float],
+                      z: float, Cn: [float], dimd: int) -> float {
+    let lbp = _shift(lb, dimd, 1)
+    let lbm = _shift(lb, dimd, 0 - 1)
+    let mut s = 0.0
+    let mut i = 0
+    while i < len(al) {
+        let ni = md_norm_prim(la, al[i])
+        let mut j = 0
+        while j < len(bl) {
+            let nj = md_norm_prim(lb, bl[j])
+            let plus = 2.0 * bl[j] * md_nuclear_prim(la, al[i], A, lbp, bl[j], B, z, Cn)
+            let mut minus = 0.0
+            if lb[dimd] > 0 { minus = float(lb[dimd]) * md_nuclear_prim(la, al[i], A, lbm, bl[j], B, z, Cn) }
+            s = s + co[i] * bo[j] * ni * nj * (plus - minus)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return s
+}
+// ∂V/∂C_d (nucleus moves) = −(∂V/∂A_d + ∂V/∂B_d) by translational invariance.
+//   (md_nuclear_prim depends only on A−Cn, B−Cn, A−B differences → Σ ∂ = 0.)
+pub fn sg_dnuclear_dC(la: [int], al: [float], co: [float], A: [float],
+                      lb: [int], bl: [float], bo: [float], B: [float],
+                      z: float, Cn: [float], dimd: int) -> float {
+    let da = sg_dnuclear_dA(la, al, co, A, lb, bl, bo, B, z, Cn, dimd)
+    let db = sg_dnuclear_dB(la, al, co, A, lb, bl, bo, B, z, Cn, dimd)
+    return 0.0 - (da + db)
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   ∂(ab|cd) / ∂(each of the 4 centers A,B,C,D) — two-electron repulsion.
+//   Each is the translation of the corresponding bra/ket index of md_eri_prim.
+// ════════════════════════════════════════════════════════════════════════════
+pub fn sg_deri_dA(la: [int], al: [float], ao: [float], A: [float],
+                  lb: [int], bl: [float], bo: [float], B: [float],
+                  lc: [int], cl: [float], cco: [float], C: [float],
+                  ld: [int], dl: [float], dco: [float], D: [float], dimd: int) -> float {
+    let lap = _shift(la, dimd, 1)
+    let lam = _shift(la, dimd, 0 - 1)
+    let mut v = 0.0
+    let mut i = 0
+    while i < len(al) {
+        let ni = md_norm_prim(la, al[i])
+        let mut j = 0
+        while j < len(bl) {
+            let nj = md_norm_prim(lb, bl[j])
+            let mut k = 0
+            while k < len(cl) {
+                let nk = md_norm_prim(lc, cl[k])
+                let mut l = 0
+                while l < len(dl) {
+                    let nl = md_norm_prim(ld, dl[l])
+                    let w = ao[i] * bo[j] * cco[k] * dco[l] * ni * nj * nk * nl
+                    let plus = 2.0 * al[i] * md_eri_prim(lap, al[i], A, lb, bl[j], B, lc, cl[k], C, ld, dl[l], D)
+                    let mut minus = 0.0
+                    if la[dimd] > 0 { minus = float(la[dimd]) * md_eri_prim(lam, al[i], A, lb, bl[j], B, lc, cl[k], C, ld, dl[l], D) }
+                    v = v + w * (plus - minus)
+                    l = l + 1
+                }
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return v
+}
+pub fn sg_deri_dB(la: [int], al: [float], ao: [float], A: [float],
+                  lb: [int], bl: [float], bo: [float], B: [float],
+                  lc: [int], cl: [float], cco: [float], C: [float],
+                  ld: [int], dl: [float], dco: [float], D: [float], dimd: int) -> float {
+    let lbp = _shift(lb, dimd, 1)
+    let lbm = _shift(lb, dimd, 0 - 1)
+    let mut v = 0.0
+    let mut i = 0
+    while i < len(al) {
+        let ni = md_norm_prim(la, al[i])
+        let mut j = 0
+        while j < len(bl) {
+            let nj = md_norm_prim(lb, bl[j])
+            let mut k = 0
+            while k < len(cl) {
+                let nk = md_norm_prim(lc, cl[k])
+                let mut l = 0
+                while l < len(dl) {
+                    let nl = md_norm_prim(ld, dl[l])
+                    let w = ao[i] * bo[j] * cco[k] * dco[l] * ni * nj * nk * nl
+                    let plus = 2.0 * bl[j] * md_eri_prim(la, al[i], A, lbp, bl[j], B, lc, cl[k], C, ld, dl[l], D)
+                    let mut minus = 0.0
+                    if lb[dimd] > 0 { minus = float(lb[dimd]) * md_eri_prim(la, al[i], A, lbm, bl[j], B, lc, cl[k], C, ld, dl[l], D) }
+                    v = v + w * (plus - minus)
+                    l = l + 1
+                }
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return v
+}
+pub fn sg_deri_dC(la: [int], al: [float], ao: [float], A: [float],
+                  lb: [int], bl: [float], bo: [float], B: [float],
+                  lc: [int], cl: [float], cco: [float], C: [float],
+                  ld: [int], dl: [float], dco: [float], D: [float], dimd: int) -> float {
+    let lcp = _shift(lc, dimd, 1)
+    let lcm = _shift(lc, dimd, 0 - 1)
+    let mut v = 0.0
+    let mut i = 0
+    while i < len(al) {
+        let ni = md_norm_prim(la, al[i])
+        let mut j = 0
+        while j < len(bl) {
+            let nj = md_norm_prim(lb, bl[j])
+            let mut k = 0
+            while k < len(cl) {
+                let nk = md_norm_prim(lc, cl[k])
+                let mut l = 0
+                while l < len(dl) {
+                    let nl = md_norm_prim(ld, dl[l])
+                    let w = ao[i] * bo[j] * cco[k] * dco[l] * ni * nj * nk * nl
+                    let plus = 2.0 * cl[k] * md_eri_prim(la, al[i], A, lb, bl[j], B, lcp, cl[k], C, ld, dl[l], D)
+                    let mut minus = 0.0
+                    if lc[dimd] > 0 { minus = float(lc[dimd]) * md_eri_prim(la, al[i], A, lb, bl[j], B, lcm, cl[k], C, ld, dl[l], D) }
+                    v = v + w * (plus - minus)
+                    l = l + 1
+                }
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return v
+}
+pub fn sg_deri_dD(la: [int], al: [float], ao: [float], A: [float],
+                  lb: [int], bl: [float], bo: [float], B: [float],
+                  lc: [int], cl: [float], cco: [float], C: [float],
+                  ld: [int], dl: [float], dco: [float], D: [float], dimd: int) -> float {
+    let ldp = _shift(ld, dimd, 1)
+    let ldm = _shift(ld, dimd, 0 - 1)
+    let mut v = 0.0
+    let mut i = 0
+    while i < len(al) {
+        let ni = md_norm_prim(la, al[i])
+        let mut j = 0
+        while j < len(bl) {
+            let nj = md_norm_prim(lb, bl[j])
+            let mut k = 0
+            while k < len(cl) {
+                let nk = md_norm_prim(lc, cl[k])
+                let mut l = 0
+                while l < len(dl) {
+                    let nl = md_norm_prim(ld, dl[l])
+                    let w = ao[i] * bo[j] * cco[k] * dco[l] * ni * nj * nk * nl
+                    let plus = 2.0 * dl[l] * md_eri_prim(la, al[i], A, lb, bl[j], B, lc, cl[k], C, ldp, dl[l], D)
+                    let mut minus = 0.0
+                    if ld[dimd] > 0 { minus = float(ld[dimd]) * md_eri_prim(la, al[i], A, lb, bl[j], B, lc, cl[k], C, ldm, dl[l], D) }
+                    v = v + w * (plus - minus)
+                    l = l + 1
+                }
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return v
+}

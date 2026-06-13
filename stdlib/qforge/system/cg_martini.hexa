@@ -1,0 +1,212 @@
+// cg_martini.hexa — QFORGE/system round-5: COARSE-GRAINED (MARTINI) TIER.
+//
+// Rounds 1-4 bridged TWO scales (QM ↔ MM) across a non-bonded gap (mechanical →
+// electrostatic embedding) and then a covalent bond (link atom). Round-5 adds a
+// THIRD, COARSER scale below MM: a MARTINI-style coarse-grained (CG) tier in
+// which a group of ~4 heavy atoms (MARTINI 3, ~4:1 mapping; P/N/C/Q bead family)
+// is replaced by a SINGLE bead. The whole-system energy becomes a THREE-scale
+// additive partition (an R1 extension), and the CG↔MM junction reuses EXACTLY
+// the R4 link-atom linear-slave projection (constant Jacobian) — this time the
+// "slave" is the CG bead and its "masters" are the atoms it maps.
+//
+// MAPPING (MM → CG): a bead is the MASS-WEIGHTED CENTROID of its atom group
+//     R_b = Σ_i m_i r_i / Σ_i m_i ,   w_i := m_i / Σ_j m_j  (Σ_i w_i = 1)
+//   This is LINEAR in the atom positions, so ∂R_b/∂r_i = w_i·I is a CONSTANT
+//   Jacobian — the SAME structure as the R4 link atom L = (1−g)R_Q + g·R_H, only
+//   with an n-atom weight vector w instead of the 2-atom (1−g, g) pair. The
+//   centroid is the natural slow collective coordinate the CG tier resolves; the
+//   fast intra-group DOFs (relative atom displacements) are integrated out.
+//
+// FORCE BACK-MAPPING (CG → atoms): a force F_b felt by the bead distributes onto
+// its constituent atoms by the chain rule through the constant Jacobian
+//     F_i += w_i · F_b ,   Σ_i F_i = (Σ_i w_i)·F_b = F_b
+//   so the total force is conserved EXACTLY (no net force created/destroyed) —
+//   Newton's 3rd law across the MM/CG mapping, the round-4 conservation gate
+//   generalised from 2 masters to n. This is the R4→R5 REUSE EDGE: the link
+//   atom's (1−g):g share split IS the n=2 special case of this w_i split.
+//
+// THREE-SCALE ADDITIVE ENERGY (an R1 extension):
+//     E_tot = E_QM + E_MM + E_CG + E_QM-MM + E_MM-CG + E_QM-CG
+//   the three intra-scale energies plus the three pairwise scale-couplings. With
+//   no CG region this collapses to the R1 two-scale additive total (E_CG=E_MM-CG=
+//   E_QM-CG=0 ⇒ E_tot = E_QM+E_MM+E_QM-MM): the R5 partition is a strict
+//   superset, consistent with R1 (the g5 (d) check).
+//
+// d4-GENERIC (no hardcoding): a mapping group is DATA — a list of atom indices +
+// their masses. Energies are plain floats (QM/MM/CG engine callback results).
+// Add / move / remove a bead, change the mapping ratio (4:1, 3:1, …), or swap the
+// CG force-field = pass different arrays, never a branch in this layer (d4).
+//
+// REUSE (d19 · NEXUS edge):
+//   linear-slave force projection (constant Jacobian) ← stdlib/qforge/system/link_atom (round-4)
+//   additive partition algebra                        ← stdlib/qforge/system/qmmm  (round-1)
+//
+// HONEST (d6 · @L5): this is NOT the full MARTINI 3 force field (no bead-type
+// nonbonded table, no elastic-network bonded terms). The brick's verified core is
+// the MAPPING + BACK-MAPPING LINEAR ALGEBRA and the THREE-SCALE additive
+// partition — the geometric/force bridge between scales — proven exact (analytic
+// identities), with the per-bead CG energy left as a callback. The MARTINI FF
+// itself is downstream parameterisation, not part of this gate.
+
+use "stdlib/qforge/system/link_atom"
+use "stdlib/qforge/system/qmmm"
+
+// ── MAPPING WEIGHTS — w_i = m_i / Σ m_j (the constant Jacobian diagonal) ──────
+// Normalised mass weights of a bead's atom group. Σ w_i = 1 by construction, so
+// the centroid map is affine-invariant (a partition of unity). d4: masses = data.
+pub fn cg_map_weights(masses: [float]) -> [float] {
+    let n = len(masses)
+    let mut total = 0.0
+    let mut i = 0
+    while i < n {
+        total = total + masses[i]
+        i = i + 1
+    }
+    let mut w = []
+    let mut k = 0
+    while k < n {
+        w = w.push(masses[k] / total)
+        k = k + 1
+    }
+    return w
+}
+
+// Total mass of a bead's atom group (Σ m_i) — used to normalise the centroid.
+pub fn cg_group_mass(masses: [float]) -> float {
+    let n = len(masses)
+    let mut s = 0.0
+    let mut i = 0
+    while i < n {
+        s = s + masses[i]
+        i = i + 1
+    }
+    return s
+}
+
+// ── (a) MAPPING — bead = mass-weighted centroid of its atom group ─────────────
+// R_b = Σ_i m_i r_i / Σ_j m_j. `pos` is the group's atom positions packed as a
+// flat 3·n vector [x0,y0,z0, x1,y1,z1, …]; `masses[i]` is atom i's mass. Returns
+// the bead position [bx,by,bz]. LINEAR in pos ⇒ constant Jacobian (the (c)/(d)
+// reuse). d4: any group size n (4:1, 3:1, …), any masses — all data.
+pub fn cg_bead_position(pos: [float], masses: [float]) -> [float] {
+    let n = len(masses)
+    let total = cg_group_mass(masses)
+    let mut bx = 0.0
+    let mut by = 0.0
+    let mut bz = 0.0
+    let mut i = 0
+    while i < n {
+        let m = masses[i]
+        bx = bx + m * pos[3 * i + 0]
+        by = by + m * pos[3 * i + 1]
+        bz = bz + m * pos[3 * i + 2]
+        i = i + 1
+    }
+    return [bx / total, by / total, bz / total]
+}
+
+// ── (b) MOMENT PRESERVATION — the slow-DOF the map carries ────────────────────
+// 1st moment: the mass-weighted MEAN of the group along one axis IS the bead
+// coordinate on that axis — the map preserves the 1st moment by construction.
+// `coord` is the n atom coordinates on ONE axis; this returns Σ m_i x_i / Σ m_i,
+// which must equal the corresponding bead component (the g5 (b) 1st-moment check).
+pub fn cg_mass_weighted_mean(coord: [float], masses: [float]) -> float {
+    let n = len(masses)
+    let total = cg_group_mass(masses)
+    let mut s = 0.0
+    let mut i = 0
+    while i < n {
+        s = s + masses[i] * coord[i]
+        i = i + 1
+    }
+    return s / total
+}
+
+// 2nd central moment: the mass-weighted VARIANCE of the group about its mean on
+// one axis — Σ m_i (x_i − x̄)² / Σ m_i. This is the fast-DOF spread the CG tier
+// integrates out; preserving it (mapping the same atoms gives the same variance,
+// independent of how the bead is placed) is the slow-DOF consistency the (b)
+// gate pins. Computed about the mass-weighted mean (the bead coordinate).
+pub fn cg_mass_weighted_variance(coord: [float], masses: [float]) -> float {
+    let n = len(masses)
+    let total = cg_group_mass(masses)
+    let mean = cg_mass_weighted_mean(coord, masses)
+    let mut s = 0.0
+    let mut i = 0
+    while i < n {
+        let d = coord[i] - mean
+        s = s + masses[i] * d * d
+        i = i + 1
+    }
+    return s / total
+}
+
+// ── (c) FORCE BACK-MAPPING — CG force → atom forces (linear-slave projection) ──
+// F_i = w_i · F_b, with w_i = m_i/Σm the constant-Jacobian diagonal. `f_b` is the
+// bead force [bx,by,bz]; `masses` the group masses. Returns a flat 3·n atom-force
+// array. This is the R4 link_force_share_* projection generalised from 2 masters
+// (weights 1−g, g) to n masters (weights w_i) — same chain rule, same Jacobian.
+pub fn cg_backmap_force(f_b: [float], masses: [float]) -> [float] {
+    let w = cg_map_weights(masses)
+    let n = len(masses)
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        out = out.push(w[i] * f_b[0])
+        out = out.push(w[i] * f_b[1])
+        out = out.push(w[i] * f_b[2])
+        i = i + 1
+    }
+    return out
+}
+
+// Net force the back-map adds to the atom DOFs = Σ_i w_i·F_b = F_b exactly (since
+// Σ w_i = 1). Returned as a 3-vector — must equal F_b component-wise to round-off
+// (the (c) conservation gate, Newton's 3rd across the MM/CG mapping).
+pub fn cg_backmap_net_force(f_b: [float], masses: [float]) -> [float] {
+    let atom_f = cg_backmap_force(f_b, masses)
+    let n = len(masses)
+    let mut sx = 0.0
+    let mut sy = 0.0
+    let mut sz = 0.0
+    let mut i = 0
+    while i < n {
+        sx = sx + atom_f[3 * i + 0]
+        sy = sy + atom_f[3 * i + 1]
+        sz = sz + atom_f[3 * i + 2]
+        i = i + 1
+    }
+    return [sx, sy, sz]
+}
+
+// REUSE PROOF (d19): for a 2-atom group, w = [1−g, g] with g = m_1/(m_0+m_1), and
+// cg_backmap_force reduces to [link_force_share_q(F_b, g) ; link_force_share_h(
+// F_b, g)] — i.e. the round-4 link atom is the n=2 special case of the CG
+// back-map. This helper returns the R4 link projection for the 2-atom group so the
+// gate can confirm the two are NUMERICALLY identical (no rebuilt primitive).
+pub fn cg_backmap_force_2atom_via_link(f_b: [float], masses: [float]) -> [float] {
+    // g = mass-fraction on the SECOND atom (the R4 "host" weight share).
+    let g = masses[1] / (masses[0] + masses[1])
+    let sq = link_force_share_q(f_b, g)   // weight (1−g) = m_0/M → atom 0
+    let sh = link_force_share_h(f_b, g)   // weight  g   = m_1/M → atom 1
+    return [sq[0], sq[1], sq[2], sh[0], sh[1], sh[2]]
+}
+
+// ── (d) THREE-SCALE ADDITIVE ENERGY (R1 extension) ────────────────────────────
+// E_tot = E_QM + E_MM + E_CG + E_QM-MM + E_MM-CG + E_QM-CG. The three intra-scale
+// energies plus the three pairwise scale-couplings — all plain floats (engine
+// callback results, d4). The R1 two-scale additive total is the special case
+// E_CG = E_MM-CG = E_QM-CG = 0 (see cg_collapses_to_r1 below).
+pub fn cg_threescale_total(e_qm: float, e_mm: float, e_cg: float,
+                           e_qm_mm: float, e_mm_cg: float, e_qm_cg: float) -> float {
+    return e_qm + e_mm + e_cg + e_qm_mm + e_mm_cg + e_qm_cg
+}
+
+// Residual between the 3-scale total with NO CG content and the R1 2-scale
+// additive total (qmmm_additive_total on the same QM/MM/coupling inputs). Must be
+// 0 to round-off: the R5 partition is a strict superset of R1 (the (d) gate).
+pub fn cg_collapses_to_r1(e_qm: float, e_mm: float, e_qm_mm: float) -> float {
+    let three = cg_threescale_total(e_qm, e_mm, 0.0, e_qm_mm, 0.0, 0.0)
+    let two = qmmm_additive_total(e_qm, e_mm, e_qm_mm)   // R1 additive total (d19 reuse)
+    return three - two
+}

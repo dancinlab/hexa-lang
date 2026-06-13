@@ -1,0 +1,192 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// cg_martini_bonded_selftest.hexa — QFORGE/system round-7 g5 gate: CG-TIER BONDED
+// ENERGY (MARTINI bead–bead harmonic bond + angle + periodic dihedral). Round-6
+// filled the CG E_CG slot with a real bead–bead NONBONDED LJ sum; round-7 adds the
+// BONDED contribution (REUSING chem/md bonded primitives, d3·d19) so the CG energy
+// is COMPLETE: E_CG = E_CG_nb + E_CG_bonded, and that completed E_CG flows into the
+// R5 three-scale total. Every reference below is an ANALYTIC closed form (the exact
+// ½k(r−r₀)² stretch, ½k(θ−θ₀)² bend, the periodic-dihedral cos series, exact
+// additive bookkeeping), so the gate is a pure numerical identity — no LLM judge.
+// VERBATIM run output.
+//
+// FOUR g5 CHECKS (task-mandated):
+//  (a) BOND HARMONIC == HAND-CALC — one bead–bead bond stretched by Δr has energy
+//      exactly ½ k_b (r − r₀)² = ½ k_b Δr² (independent hand recompute, |Δ|<1e-9).
+//  (b) BONDED FLOW (no double-count) — the CG bonded energy enters E_CG (= nb +
+//      bonded) and that flows into the R5 three-scale total; the total minus the
+//      five non-CG terms equals the COMPLETE E_CG, and equals nb + bonded exactly.
+//  (c) EQUILIBRIUM — at r = r₀ the bond energy is 0; the WHOLE bonded network at
+//      its equilibrium geometry (every bond at r₀, every angle at θ₀) is exactly 0.
+//  (d) ANGLE/DIHEDRAL — harmonic angle bent by Δθ has energy ½ k_θ (θ−θ₀)² = ½ k_θ
+//      Δθ²; a periodic dihedral k_n[1+cos(nφ−δ)] matches its closed form at φ=0.
+//
+// d4-GENERIC — the bonded topology (BondTerm/AngleTerm/DihedralTerm arrays over
+// bead indices) is DATA (no name branch). HONEST (d6): the bonded constants are
+// REPRESENTATIVE MARTINI values, NOT a per-molecule table; the verified core is
+// that a real bead–bead BONDED energy FLOWS into the R5 E_CG slot and sums with the
+// R6 nonbonded term cleanly (no double-count) — full FF bonded data is downstream.
+// Dihedral is the chem/md PERIODIC form (a strictly-harmonic improper is downstream).
+//
+// Run: HEXA_MAC_BUILD_OK=1 hexa build stdlib/qforge/system/cg_martini_bonded_selftest.hexa -o /tmp/qf_cgbd && /tmp/qf_cgbd
+// PASS: prints "cg_martini_bonded_selftest PASS".
+
+use "stdlib/qforge/system/cg_martini_bonded"
+use "stdlib/qforge/system/cg_martini_ff"
+use "stdlib/qforge/system/cg_martini"
+use "stdlib/chem/md/bonded"
+use "stdlib/chem/md/lennard_jones"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _ck(name: str, got: float, want: float, tol: float) -> int {
+    let d = _abs(got - want)
+    if d <= tol {
+        println("PASS " + name + " (got " + to_string(got) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want) + " |Δ|=" + to_string(d))
+    return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let tf = 1.0e-4    // f32 floor for trig/sqrt-laden references (angle, dihedral)
+    let t9 = 1.0e-9    // tight target — met by f32-exact (polynomial) references
+    let pi = 3.141592653589793
+    let no_pbc = 0.0 - 1.0   // L ≤ 0 ⇒ raw displacement (no PBC)
+
+    // Empty-topology sentinels reused across checks.
+    let no_bonds = []
+    let no_angles = []
+    let no_dihedrals = []
+
+    // ── CHECK (a) — BOND HARMONIC == HAND-CALC ½k(r−r₀)² ────────────────────
+    // Two beads on the x-axis; bond r₀ = 0.47 (regular bead), k_b = 1250. Stretch
+    // by Δr = 0.03 ⇒ r = 0.50. Hand E = ½·1250·0.03² = 0.5625.
+    let kb = martini3_bond_kb()
+    let r0 = martini3_bond_r0()
+    let dr = 0.03
+    let bond = BondTerm{ i: 0, j: 1, k_b: kb, r0: r0 }
+    let bonds_a = [bond]
+    let bead_pos_a = [0.0, 0.0, 0.0,
+                      r0 + dr, 0.0, 0.0]
+    let e_bond = cg_martini_bonded_energy(bead_pos_a, bonds_a, no_angles, no_dihedrals, no_pbc)
+    let e_bond_ref = 0.5 * kb * dr * dr   // ½ k_b Δr²
+    println("bond stretch: k_b=" + to_string(kb) + " r₀=" + to_string(r0) + " Δr=" + to_string(dr))
+    println("E_bond(r=r₀+Δr) = " + to_string(e_bond) + "  hand ½k_bΔr² = " + to_string(e_bond_ref))
+    fails = fails + _ck("(a) CG bond == hand ½k_b(r−r₀)²", e_bond, e_bond_ref, t9)
+
+    // ── CHECK (c) — EQUILIBRIUM: r = r₀ ⇒ bonded = 0 ────────────────────────
+    // Same bond AT equilibrium (r = r₀) ⇒ exactly 0. Then a full network (2 bonds
+    // + 1 angle) all at their equilibria ⇒ exactly 0 (no spurious offset).
+    let bead_pos_eq1 = [0.0, 0.0, 0.0,
+                        r0, 0.0, 0.0]
+    let e_eq1 = cg_martini_bonded_energy(bead_pos_eq1, bonds_a, no_angles, no_dihedrals, no_pbc)
+    fails = fails + _ck("(c) bond at r=r₀ ⇒ 0", e_eq1, 0.0, t9)
+    // 3-bead bent chain 0–1–2 at equilibrium: |0-1| = |1-2| = r₀, angle θ₀ = π
+    // (linear). Place collinear so both bonds = r₀ AND angle = π exactly.
+    let kth = martini3_angle_ktheta()
+    let th0 = martini3_angle_theta0()   // π
+    let bonds_chain = [ BondTerm{ i: 0, j: 1, k_b: kb, r0: r0 },
+                        BondTerm{ i: 1, j: 2, k_b: kb, r0: r0 } ]
+    let angles_chain = [ AngleTerm{ i: 0, j: 1, k: 2, k_theta: kth, theta0: th0 } ]
+    let bead_pos_eq2 = [0.0,      0.0, 0.0,
+                        r0,       0.0, 0.0,
+                        2.0 * r0, 0.0, 0.0]   // collinear ⇒ angle = π = θ₀, bonds = r₀
+    let e_eq2 = cg_martini_bonded_energy(bead_pos_eq2, bonds_chain, angles_chain, no_dihedrals, no_pbc)
+    println("equilibrium chain (bonds=r₀, angle=π): E_bonded = " + to_string(e_eq2))
+    fails = fails + _ck("(c) full network at equilibrium ⇒ 0", e_eq2, 0.0, tf)
+
+    // ── CHECK (d) — ANGLE HARMONIC ½k(θ−θ₀)² + DIHEDRAL ─────────────────────
+    // Angle 0–1–2, j=1 centre, θ₀ = π/2, k_θ = 25. Bend by Δθ = 0.1 ⇒ θ = π/2+0.1.
+    // p0=(1,0,0), p1=(0,0,0), p2=(cos θ, sin θ, 0). Hand E = ½·25·0.1² = 0.125.
+    let th0_d = 0.5 * pi
+    let dth = 0.1
+    let angle_d = AngleTerm{ i: 0, j: 1, k: 2, k_theta: kth, theta0: th0_d }
+    let theta = th0_d + dth
+    let bead_pos_ang = [1.0, 0.0, 0.0,
+                        0.0, 0.0, 0.0,
+                        cos(theta), sin(theta), 0.0]
+    let e_ang = cg_martini_bonded_energy(bead_pos_ang, no_bonds, [angle_d], no_dihedrals, no_pbc)
+    let e_ang_ref = 0.5 * kth * dth * dth   // ½ k_θ Δθ²
+    println("angle bend: k_θ=" + to_string(kth) + " θ₀=π/2 Δθ=" + to_string(dth))
+    println("E_angle = " + to_string(e_ang) + "  hand ½k_θΔθ² = " + to_string(e_ang_ref))
+    fails = fails + _ck("(d) CG angle == hand ½k_θ(θ−θ₀)²", e_ang, e_ang_ref, tf)
+    // angle at θ₀ ⇒ 0 (equilibrium, complements (c))
+    let bead_pos_ang0 = [1.0, 0.0, 0.0,
+                         0.0, 0.0, 0.0,
+                         cos(th0_d), sin(th0_d), 0.0]
+    let e_ang0 = cg_martini_bonded_energy(bead_pos_ang0, no_bonds, [angle_d], no_dihedrals, no_pbc)
+    fails = fails + _ck("(d) angle at θ=θ₀ ⇒ 0", e_ang0, 0.0, tf)
+    // periodic dihedral k_n[1+cos(nφ−δ)] at φ=0, n=3, δ=0 ⇒ k_n[1+cos0] = 2k_n.
+    // Standard placement (matches chem/md bonded_test T3): i=(0,1,0), j=(0,0,0),
+    // k=(1,0,0), l=(1,cos φ, sin φ) ⇒ φ_dih = φ. At φ=0, k_n=1 ⇒ E = 2.
+    let dih = DihedralTerm{ i: 0, j: 1, k: 2, l: 3, k_n: 1.0, n: 3, delta: 0.0 }
+    let phi = 0.0
+    let bead_pos_dih = [0.0, 1.0, 0.0,
+                        0.0, 0.0, 0.0,
+                        1.0, 0.0, 0.0,
+                        1.0, cos(phi), sin(phi)]
+    let e_dih = cg_martini_bonded_energy(bead_pos_dih, no_bonds, no_angles, [dih], no_pbc)
+    println("dihedral φ=0, n=3, k_n=1, δ=0: E = " + to_string(e_dih) + " (want 2k_n=2)")
+    fails = fails + _ck("(d) periodic dihedral k_n[1+cos(nφ−δ)] @φ=0 == 2", e_dih, 2.0, tf)
+
+    // ── CHECK (b) — BONDED FLOW into E_CG → R5 three-scale total (no double) ──
+    // A 3-bead CG system carrying BOTH nonbonded (R6 LJ) and bonded (R7) energy.
+    // Beads: P,N,Q. Bond 0–1 stretched, angle 0–1–2 bent ⇒ nonzero E_CG_bonded.
+    let n_types = martini3_n_types()
+    let sig_tab = martini3_sigma_table()
+    let eps_tab = martini3_eps_table()
+    let tP = martini3_type_P()
+    let tN = martini3_type_N()
+    let tQ = martini3_type_Q()
+    let bead_pos = [0.0,  0.0,  0.0,
+                    0.55, 0.0,  0.0,
+                    0.0,  0.62, 0.0]
+    let bead_types = [tP, tN, tQ]
+    let bonds_b = [ BondTerm{ i: 0, j: 1, k_b: kb, r0: r0 },
+                    BondTerm{ i: 1, j: 2, k_b: kb, r0: r0 } ]
+    let angles_b = [ AngleTerm{ i: 0, j: 1, k: 2, k_theta: kth, theta0: th0_d } ]
+
+    // independent witnesses: nonbonded (R6) and bonded (R7) computed separately
+    let e_nb = cg_martini_energy(bead_pos, bead_types, sig_tab, eps_tab, n_types)
+    let e_bonded = cg_martini_bonded_energy(bead_pos, bonds_b, angles_b, no_dihedrals, no_pbc)
+    let e_cg_complete = cg_energy_complete(bead_pos, bead_types, sig_tab, eps_tab, n_types,
+                                           bonds_b, angles_b, no_dihedrals, no_pbc)
+    println("E_CG_nb (R6 LJ) = " + to_string(e_nb))
+    println("E_CG_bonded (R7) = " + to_string(e_bonded))
+    println("E_CG complete   = " + to_string(e_cg_complete) + "  (nb+bonded = " + to_string(e_nb + e_bonded) + ")")
+    // (b1) complete E_CG == nb + bonded EXACTLY (disjoint, no double-count)
+    fails = fails + _ck("(b) E_CG complete == E_CG_nb + E_CG_bonded (no double-count)",
+                        e_cg_complete, e_nb + e_bonded, t9)
+    // (b2) bonded is a NONZERO contribution here (the term genuinely flows, not a no-op)
+    let bonded_nonzero = if _abs(e_bonded) > 1.0e-6 { 1.0 } else { 0.0 }
+    fails = fails + _ck("(b) E_CG_bonded is nonzero (genuinely contributes)", bonded_nonzero, 1.0, t9)
+
+    // wire the COMPLETE E_CG into the R5 three-scale total
+    let e_qm = -10.5
+    let e_mm = -4.2
+    let e_qm_mm = 0.7
+    let e_mm_cg = -0.4
+    let e_qm_cg = 0.15
+    let e_tot = cg_threescale_total_complete(e_qm, e_mm, bead_pos, bead_types,
+                                             sig_tab, eps_tab, n_types,
+                                             bonds_b, angles_b, no_dihedrals, no_pbc,
+                                             e_qm_mm, e_mm_cg, e_qm_cg)
+    // independent witness: R5 generic total with the COMPLETE E_CG hand-passed
+    let e_tot_ref = cg_threescale_total(e_qm, e_mm, e_cg_complete, e_qm_mm, e_mm_cg, e_qm_cg)
+    println("E_tot (3-scale, complete E_CG) = " + to_string(e_tot))
+    fails = fails + _ck("(b) complete E_CG flows into R5 total (== R5 generic w/ E_CG)",
+                        e_tot, e_tot_ref, t9)
+    // total minus the five non-CG terms == complete E_CG (== nb + bonded) — clean flow
+    let non_cg = e_qm + e_mm + e_qm_mm + e_mm_cg + e_qm_cg
+    fails = fails + _ck("(b) E_tot − non-CG == E_CG_nb + E_CG_bonded (additive, clean)",
+                        e_tot - non_cg, e_nb + e_bonded, t9)
+
+    if fails == 0 {
+        println("cg_martini_bonded_selftest PASS")
+    } else {
+        println("cg_martini_bonded_selftest FAIL — " + to_string(fails) + " case(s)")
+    }
+}

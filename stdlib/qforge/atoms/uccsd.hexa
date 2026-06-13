@@ -1,0 +1,254 @@
+// HEXA Standard Library — qforge/atoms/uccsd
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE-ATOMS brick #26 — UNRESTRICTED CCSD (UCCSD), coupled-cluster singles &
+// doubles on top of a converged UHF reference. The r17 spin-orbital CCSD brick
+// (ccsd.hexa) is the GOLD-STANDARD correlated method, but its driver (ccsd_from_mo_eri)
+// assumes a RESTRICTED reference: a SINGLE spatial MO basis with ε^α=ε^β and C^α=C^β,
+// so it only touches closed-shell chemistry. UCCSD extends that same Stanton-Gauss-
+// Watts-Bartlett (JCP 94, 4334 (1991)) spin-orbital machinery to a SPIN-POLARIZED UHF
+// reference with SEPARATE α/β orbitals — bringing RADICALS (CH₃, OH), doublet ions and
+// triplets (O₂, CH₂) to coupled-cluster accuracy, the open-shell analogue of the r17/r18
+// closed-shell CCSD / CCSD(T) ceiling.
+//
+// ── the key realization (d19 — REUSE the r17 amplitude solver verbatim) ──────────────
+//   The spin-orbital CCSD amplitude equations (ccsd_iterate / ccsd_energy / the MP2
+//   guess / the residual) are ALREADY spin-general: they read ONLY the antisymmetrized
+//   spin-orbital tensor ⟨pq||rs⟩ and the spin-orbital energies ε_so. They never assume
+//   the reference is restricted. So UCCSD = feed the UHF spin-orbital integrals + energies
+//   into the EXISTING r17 ccsd_iterate. The ONLY new piece is building those spin-orbital
+//   quantities from the SEPARATE α/β UHF orbitals — exactly what r25 UMP2's αβ transform
+//   already does. ccsd.hexa is BYTE-UNTOUCHED.
+//
+// ── spin-orbital integrals on a UHF reference ────────────────────────────────────────
+//   Spin-orbital index P → spatial P/2, spin P%2 (0=α, 1=β). The chemists' MO integral
+//   needed for ⟨pq|rs⟩_phys is (p_spat r_spat | q_spat s_spat), and spin-conservation
+//   forces (p,r) same spin AND (q,s) same spin. So the chemists' tensor splits into FOUR
+//   spin blocks by the (electron-1 spin, electron-2 spin) pair:
+//     (αα): (p,r) α, (q,s) α  → transform the AO ERI with Cα on ALL four indices   (eri_aa)
+//     (ββ): (p,r) β, (q,s) β  → transform with Cβ on all four                       (eri_bb)
+//     (αβ): (p,r) α, (q,s) β  → mixed: Cα on the (p,r) pair, Cβ on the (q,s) pair   (eri_ab)
+//     (βα): (p,r) β, (q,s) α  → mixed: Cβ on the (p,r) pair, Cα on the (q,s) pair   (eri_ba)
+//   Each (PR|QS) chemists' value picks the block by (σp,σq). ⟨pq||rs⟩=⟨pq|rs⟩−⟨pq|sr⟩;
+//   note the EXCHANGE term ⟨pq|sr⟩ needs (p,s) same spin & (q,r) same spin (a DIFFERENT
+//   block selection), handled per-term. ε_so[P] = ε^α[P/2] if P even else ε^β[P/2].
+//   When n_α=n_β and Cα=Cβ, εα=εβ, all four blocks collapse to the SAME restricted tensor
+//   and UCCSD reduces EXACTLY to RCCSD (g5 verdict a).
+//
+// ── honest scope (d6) ────────────────────────────────────────────────────────────────
+//   UCCSD sits on a SPIN-CONTAMINATED UHF reference (⟨S²⟩≠S(S+1) exactly — the selftest
+//   REPORTS the UHF ⟨S²⟩, never hides it). CCSD PARTIALLY heals contamination through the
+//   exponential ansatz but does NOT fully restore spin symmetry; the spin-adapted RHF-CCSD
+//   or an ROHF-CCSD reference is the cleaner variant (the natural round-27). Connected
+//   open-shell TRIPLES — UCCSD(T) — is the next accuracy rung. The amplitude iteration and
+//   the energy sums are EXACT for the supplied integrals; nothing is fitted or forced.
+//
+// reuse (d19 · d3): the r17 ccsd_iterate / ccsd_energy / ccsd_mp2_guess / ccsd_t2_rmsd
+//   (BYTE-UNTOUCHED — UCCSD only supplies a UHF spin-orbital tensor) + the r25 UMP2 αβ
+//   transform (mp2_ao_to_mo same-spin, ump2_ao_to_mo_mixed opposite-spin) + the converged
+//   UHF reference (molscf/uhf.uhf_scf → Cα,Cβ,εα,εβ). No new amplitude solver minted.
+
+use "stdlib/qforge/atoms/ccsd"
+use "stdlib/qforge/atoms/ump2"
+use "stdlib/qforge/atoms/mp2"
+
+// Flat index into a chemists' spatial MO tensor T[((p*n+q)*n+r)*n+s].
+fn _uc4(T: [float], n: int, p: int, q: int, r: int, s: int) -> float {
+    return T[((p * n + q) * n + r) * n + s]
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   UHF spin-orbital antisymmetrized integrals  ⟨pq||rs⟩  from the four spin blocks
+// ════════════════════════════════════════════════════════════════════════════
+
+// One spin-orbital physicist integral ⟨pq|rs⟩ on a UHF reference, selecting the
+// correct spatial MO tensor by the spin of each index. Spin must be conserved on each
+// electron: (p,r) same spin AND (q,s) same spin, else 0. The chemists' value is
+// (p_spat r_spat | q_spat s_spat); the (electron-1 spin = σp, electron-2 spin = σq)
+// pair picks the block:  αα→eri_aa, ββ→eri_bb, αβ→eri_ab, βα→eri_ba.
+fn _uso_phys(
+    eri_aa: [float], eri_bb: [float], eri_ab: [float], eri_ba: [float],
+    n: int, p: int, q: int, r: int, s: int
+) -> float {
+    if (p % 2) != (r % 2) { return 0.0 }
+    if (q % 2) != (s % 2) { return 0.0 }
+    let pp = p / 2
+    let qq = q / 2
+    let rr = r / 2
+    let ss = s / 2
+    let sp = p % 2
+    let sq = q % 2
+    if sp == 0 {
+        if sq == 0 { return _uc4(eri_aa, n, pp, rr, qq, ss) }
+        return _uc4(eri_ab, n, pp, rr, qq, ss)
+    }
+    if sq == 0 { return _uc4(eri_ba, n, pp, rr, qq, ss) }
+    return _uc4(eri_bb, n, pp, rr, qq, ss)
+}
+
+// Antisymmetrized UHF spin-orbital integral ⟨pq||rs⟩ = ⟨pq|rs⟩ − ⟨pq|sr⟩. The exchange
+// term swaps r<->s, which re-selects the spin block (its spin conservation is on (p,s)
+// and (q,r)) — handled automatically by the second _uso_phys call.
+fn _uso_asym(
+    eri_aa: [float], eri_bb: [float], eri_ab: [float], eri_ba: [float],
+    n: int, p: int, q: int, r: int, s: int
+) -> float {
+    let dir = _uso_phys(eri_aa, eri_bb, eri_ab, eri_ba, n, p, q, r, s)
+    let exc = _uso_phys(eri_aa, eri_bb, eri_ab, eri_ba, n, p, q, s, r)
+    return dir - exc
+}
+
+// Build the full nso⁴ antisymmetrized UHF spin-orbital tensor ⟨pq||rs⟩ (physicist
+// layout, flat index ((p*nso+q)*nso+r)*nso+s, nso = 2n) — the SAME layout the r17
+// ccsd_iterate/ccsd_energy consume. From the AO ERI tensor + the α/β UHF MO coeffs:
+// builds the four spin-block chemists' MO tensors ONCE (r25 reuse), then assembles the
+// antisymmetrized spin-orbital tensor. The output drops straight into the r17 solver.
+pub fn uccsd_spinorb_eri_uhf(eri_ao: [float], Ca: [float], Cb: [float], n: int) -> [float] {
+    // four spin-block chemists' MO tensors (d19 — r16/r25 transforms, unmodified)
+    let eri_aa = mp2_ao_to_mo(eri_ao, Ca, n)
+    let eri_bb = mp2_ao_to_mo(eri_ao, Cb, n)
+    let eri_ab = ump2_ao_to_mo_mixed(eri_ao, Ca, Cb, n)
+    let eri_ba = ump2_ao_to_mo_mixed(eri_ao, Cb, Ca, n)
+    let nso = 2 * n
+    let mut W: [float] = []
+    let mut p = 0
+    while p < nso {
+        let mut q = 0
+        while q < nso {
+            let mut r = 0
+            while r < nso {
+                let mut s = 0
+                while s < nso {
+                    W.push(_uso_asym(eri_aa, eri_bb, eri_ab, eri_ba, n, p, q, r, s))
+                    s = s + 1
+                }
+                r = r + 1
+            }
+            q = q + 1
+        }
+        p = p + 1
+    }
+    return W
+}
+
+// UHF spin-orbital energies: ε_so[P] = ε^α[P/2] for P even (α), ε^β[P/2] for P odd (β).
+// nso = 2n entries, the diagonal spin-orbital Fock the r17 solver expects.
+pub fn uccsd_spinorb_eps_uhf(eps_a: [float], eps_b: [float], n: int) -> [float] {
+    let nso = 2 * n
+    let mut e: [float] = []
+    let mut p = 0
+    while p < nso {
+        if (p % 2) == 0 { e.push(eps_a[p / 2]) }
+        else { e.push(eps_b[p / 2]) }
+        p = p + 1
+    }
+    return e
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   driver — converged UHF MO data  →  UCCSD correlation energy
+// ════════════════════════════════════════════════════════════════════════════
+//
+// UHF spin-orbital occupation: the n_α α-spin-orbitals (even indices) AND the n_β
+// β-spin-orbitals (odd indices) are occupied. With the spin-orbital index P=2k+σ, the
+// occupied set is {2k | k<n_α} ∪ {2k+1 | k<n_β}. The r17 ccsd_iterate uses a SINGLE
+// nocc cut (occupied = 0..nocc−1) — valid only if occupied spin-orbitals are CONTIGUOUS
+// from 0. For UHF n_α≠n_β the α/β occupied counts differ, so we REORDER the spin-orbital
+// basis (and the tensor + energies) to put ALL occupied spin-orbitals first, virtual last
+// — a pure index permutation that makes the UHF case fit the contiguous-occ r17 solver
+// EXACTLY. nocc = n_α + n_β, nso = 2n.
+//
+// Consumes EXACTLY what uhf_scf returns (eri_ao, Ca=9, Cb=10, eps_a=7, eps_b=8) + n_a,n_b
+// + e_uhf. Returns [ e_uccsd, e_mp2_first, iters, residual, converged, e_uccsd_total ]:
+//   e_uccsd      = converged UCCSD correlation energy (< E_UMP2 < 0)
+//   e_mp2_first  = first-iteration energy at (T1=0, T2=MP2 guess) == E_UMP2 (anchor c)
+//   iters        = iterations to convergence
+//   residual     = final ‖ΔT2‖
+//   converged    = residual + ΔE under tol within max_iter
+//   e_uccsd_total = e_uhf + e_uccsd
+pub fn uccsd_from_uhf(
+    eri_ao: [float], Ca: [float], Cb: [float],
+    eps_a: [float], eps_b: [float],
+    n: int, na: int, nb: int, e_uhf: float,
+    max_iter: int, e_tol: float
+) -> [any] {
+    let nso = 2 * n
+    let nocc = na + nb
+    // UHF spin-orbital integrals + energies in the NATURAL (2k+σ) order.
+    let W0 = uccsd_spinorb_eri_uhf(eri_ao, Ca, Cb, n)
+    let eps0 = uccsd_spinorb_eps_uhf(eps_a, eps_b, n)
+
+    // ── permutation: occupied spin-orbitals first (contiguous), virtual last ──
+    // occ α = {2k | k<na}, occ β = {2k+1 | k<nb}; the rest are virtual. perm[new]=old.
+    let mut perm: [int] = []
+    let mut k = 0
+    while k < na { perm.push(2 * k) ; k = k + 1 }
+    k = 0
+    while k < nb { perm.push(2 * k + 1) ; k = k + 1 }
+    // virtual α: k>=na, virtual β: k>=nb (natural order among virtuals is irrelevant)
+    k = na
+    while k < n { perm.push(2 * k) ; k = k + 1 }
+    k = nb
+    while k < n { perm.push(2 * k + 1) ; k = k + 1 }
+
+    // permuted energies
+    let mut eps_so: [float] = []
+    let mut a0 = 0
+    while a0 < nso { eps_so.push(eps0[perm[a0]]) ; a0 = a0 + 1 }
+    // permuted antisymmetrized tensor: W[(p,q,r,s)] = W0[(perm[p],perm[q],perm[r],perm[s])]
+    let mut W: [float] = []
+    let mut p = 0
+    while p < nso {
+        let op = perm[p]
+        let mut q = 0
+        while q < nso {
+            let oq = perm[q]
+            let mut r = 0
+            while r < nso {
+                let or0 = perm[r]
+                let mut s = 0
+                while s < nso {
+                    let os = perm[s]
+                    W.push(W0[((op * nso + oq) * nso + or0) * nso + os])
+                    s = s + 1
+                }
+                r = r + 1
+            }
+            q = q + 1
+        }
+        p = p + 1
+    }
+
+    // ── reuse the r17 spin-orbital CCSD solver VERBATIM ──
+    let mut t1: [float] = []
+    let mut ii = 0
+    while ii < nso * nso { t1.push(0.0) ; ii = ii + 1 }
+    let mut t2 = ccsd_mp2_guess(W, eps_so, nso, nocc)
+
+    // first-iteration energy at the MP2 guess (T1=0) == spin-orbital UMP2 == E_UMP2
+    let e_mp2_first = ccsd_energy(W, t1, t2, nso, nocc)
+
+    let mut e_old = e_mp2_first
+    let mut iters = 0
+    let mut residual = 1.0
+    let mut converged = false
+    while iters < max_iter {
+        let res = ccsd_iterate(W, eps_so, t1, t2, nso, nocc)
+        let t1new: [float] = res[0]
+        let t2new: [float] = res[1]
+        residual = ccsd_t2_rmsd(t2new, t2, nso)
+        t1 = t1new
+        t2 = t2new
+        let e_new = ccsd_energy(W, t1, t2, nso, nocc)
+        iters = iters + 1
+        let de = e_new - e_old
+        let ade = if de < 0.0 { 0.0 - de } else { de }
+        e_old = e_new
+        if ade < e_tol && residual < e_tol { converged = true ; break }
+    }
+    let e_uccsd = ccsd_energy(W, t1, t2, nso, nocc)
+    let e_total = e_uhf + e_uccsd
+    return [e_uccsd, e_mp2_first, iters, residual, converged, e_total]
+}

@@ -1,0 +1,128 @@
+// cg_martini_bonded.hexa — QFORGE/system round-7: CG-TIER BONDED ENERGY
+// (MARTINI bead–bead harmonic bond + angle + periodic dihedral).
+//
+// Round-5 (cg_martini.hexa) sealed the CG SCALE BRIDGE (mapping + back-map +
+// three-scale additive partition). Round-6 (cg_martini_ff.hexa) filled the E_CG
+// slot with a REAL bead–bead NONBONDED Lennard-Jones sum. But a MARTINI bead
+// network also carries BONDED terms — the harmonic bonds, angles and (periodic)
+// dihedrals that hold a coarse-grained molecule together. Round-7 ADDS that
+// bonded contribution, so the CG energy is finally COMPLETE:
+//
+//     E_CG = E_CG_nb (R6 LJ)  +  E_CG_bonded (R7)
+//
+//   E_CG_bonded = Σ_bonds  ½ k_b (r − r₀)²                (harmonic stretch)
+//               + Σ_angles ½ k_θ (θ − θ₀)²               (harmonic bend)
+//               + Σ_dih    k_n [1 + cos(n·φ − δ)]        (periodic torsion)
+//
+// the SAME harmonic primitives the MM tier already verifies — so we REUSE
+// `stdlib/chem/md/bonded::{bond_energy,angle_energy,dihedral_energy,
+// bonded_total_energy}` UNCHANGED (d3 · d19, no rebuilt potential). A CG bead is
+// just a position; we wrap each bead in the shared `MdParticle` layout (the SAME
+// wrap R6 uses for the nonbonded LJ — `cg_bead_particle`) and hand the verified
+// bonded oracle a list of bead-index BondTerm / AngleTerm / DihedralTerm records.
+//
+// d4-GENERIC (no hardcoding): a CG bonded network is DATA — arrays of BondTerm
+// (i,j,k_b,r₀), AngleTerm (i,j,k,k_θ,θ₀), DihedralTerm (i,j,k,l,k_n,n,δ) over bead
+// indices. Add / move / remove a bond, retune k_b/r₀, swap the whole topology =
+// pass different arrays, never a branch in this layer (d4). The bead force-field
+// (R6 σ/ε table) AND the bonded topology are BOTH pure data the driver consumes.
+//
+// THREE-SCALE TOTAL: the completed E_CG (nb + bonded) flows into the R5 partition
+//     E_tot = E_QM + E_MM + E_CG + E_QM-MM + E_MM-CG + E_QM-CG
+// exactly as R6 wired E_CG_nb — only now E_CG carries the bonded term too (no
+// double count: nb and bonded are disjoint contributions to the SAME E_CG slot).
+//
+// HONEST (d6 · @L5): this is NOT the full MARTINI 3 bonded parameterisation (no
+// per-molecule bond/angle/dihedral tables, no elastic-network restraints). The
+// `martini3_bonded_*` helpers below carry REPRESENTATIVE bead-bond constants
+// (k_b ≈ 1250 kJ/mol·nm², r₀ ≈ 0.47 nm; k_θ ≈ 25 kJ/mol·rad², θ₀ ≈ 180° — the
+// order of the MARTINI bonded ladder, Souza et al., Nat. Methods 18, 382 (2021)).
+// The VERIFIED CORE of this round is that a real bead–bead BONDED energy — the
+// exact ½k(r−r₀)² stretch, ½k(θ−θ₀)² bend — now FLOWS into the R5 three-scale E_CG
+// slot and sums with the R6 nonbonded term cleanly (no double-count); full MARTINI
+// bonded parameterisation is downstream data, not this gate. Dihedral uses the
+// chem/md PERIODIC form (k_n[1+cos(nφ−δ)]); a strictly harmonic improper-dihedral
+// variant is a downstream term, not built here.
+//
+// REUSE (d19 · NEXUS edge):
+//   harmonic bond/angle + periodic dihedral  ← stdlib/chem/md/bonded (MM-tier primitive)
+//   bead → MdParticle wrap                    ← stdlib/qforge/system/cg_martini_ff::cg_bead_particle (R6)
+//   real nonbonded E_CG_nb                    ← stdlib/qforge/system/cg_martini_ff::cg_martini_energy (R6)
+//   three-scale additive total                ← stdlib/qforge/system/cg_martini::cg_threescale_total (R5)
+
+use "stdlib/chem/md/bonded"
+use "stdlib/chem/md/lennard_jones"
+use "stdlib/qforge/system/cg_martini_ff"
+use "stdlib/qforge/system/cg_martini"
+
+// ── BEAD POSITIONS → MdParticle ARRAY (the bonded oracle's input layout) ──────
+// chem/md `bonded.hexa` indexes into a `particles: array` of MdParticle by the
+// integer i/j/k/l of each term. A CG bonded energy is position-only, so we reuse
+// R6's `cg_bead_particle` (zero velocity/mass) for every bead. `bead_pos` is the
+// flat [x0,y0,z0, x1,y1,z1, …] layout R6 already uses. d4: bead count = len/3.
+pub fn cg_bead_particles(bead_pos: [float]) -> array {
+    let n = len(bead_pos) / 3
+    let mut ps = []
+    let mut k = 0
+    while k < n {
+        ps.push(cg_bead_particle(bead_pos[3 * k + 0],
+                                 bead_pos[3 * k + 1],
+                                 bead_pos[3 * k + 2]))
+        k = k + 1
+    }
+    return ps
+}
+
+// ── (a) CG BONDED ENERGY — E_CG_bonded over the bead network (REUSE bonded) ───
+// E_CG_bonded = Σ ½k_b(r−r₀)² + Σ ½k_θ(θ−θ₀)² + Σ k_n[1+cos(nφ−δ)], computed by
+// the VERIFIED chem/md `bonded_total_energy` over the bead MdParticle array.
+// `bonds`/`angles`/`dihedrals` are arrays of BondTerm/AngleTerm/DihedralTerm whose
+// indices refer to BEADS (not atoms). L ≤ 0 ⇒ no PBC (raw displacement). d4: the
+// whole topology is data — this layer adds no per-system branch.
+pub fn cg_martini_bonded_energy(bead_pos: [float],
+                                bonds: array, angles: array, dihedrals: array,
+                                L: float) -> float {
+    let ps = cg_bead_particles(bead_pos)
+    return bonded_total_energy(ps, bonds, angles, dihedrals, L)
+}
+
+// ── (b) COMPLETE CG ENERGY — E_CG = E_CG_nb (R6) + E_CG_bonded (R7) ───────────
+// The MARTINI bead energy in full: the R6 nonbonded bead–bead LJ sum PLUS the R7
+// bonded network. These are DISJOINT contributions to the SAME E_CG slot — nb is
+// the through-space pair sum, bonded is the topological term — so they ADD with no
+// double-count. This is the value that now fills the R5 E_CG slot (completed).
+pub fn cg_energy_complete(bead_pos: [float], bead_types: [int],
+                          sigma_tab: [float], eps_tab: [float], n_types: int,
+                          bonds: array, angles: array, dihedrals: array,
+                          L: float) -> float {
+    let e_nb = cg_martini_energy(bead_pos, bead_types, sigma_tab, eps_tab, n_types)
+    let e_bonded = cg_martini_bonded_energy(bead_pos, bonds, angles, dihedrals, L)
+    return e_nb + e_bonded
+}
+
+// ── (c) WIRE COMPLETE E_CG INTO R5 THREE-SCALE TOTAL ─────────────────────────
+// Computes the COMPLETE CG energy (nb + bonded) from the bead system + topology,
+// then feeds it as the E_CG argument of the R5 three-scale partition. The other
+// five terms (E_QM, E_MM, the three couplings) remain callback floats, exactly as
+// R5/R6 intended (d4). This SEALS the R5 E_CG slot — the CG tier now contributes a
+// real nonbonded AND bonded energy into the whole-system additive total.
+pub fn cg_threescale_total_complete(
+        e_qm: float, e_mm: float,
+        bead_pos: [float], bead_types: [int],
+        sigma_tab: [float], eps_tab: [float], n_types: int,
+        bonds: array, angles: array, dihedrals: array, L: float,
+        e_qm_mm: float, e_mm_cg: float, e_qm_cg: float) -> float {
+    let e_cg = cg_energy_complete(bead_pos, bead_types, sigma_tab, eps_tab, n_types,
+                                  bonds, angles, dihedrals, L)
+    return cg_threescale_total(e_qm, e_mm, e_cg, e_qm_mm, e_mm_cg, e_qm_cg)
+}
+
+// ── REPRESENTATIVE MARTINI bonded constants (DATA, d4 · d6 honest) ────────────
+// Order-of-magnitude MARTINI bead-bonded ladder values (NOT a per-molecule table).
+// k_b ≈ 1250 kJ/mol·nm², r₀ ≈ 0.47 nm (the regular bead bond length); k_θ ≈ 25
+// kJ/mol·rad², θ₀ = π (linear default). Returned as plain floats — a caller builds
+// BondTerm/AngleTerm records from them, or supplies its own (d4: all data).
+pub fn martini3_bond_kb() -> float { return 1250.0 }      // kJ/mol·nm²
+pub fn martini3_bond_r0() -> float { return 0.47 }        // nm (regular bead size)
+pub fn martini3_angle_ktheta() -> float { return 25.0 }   // kJ/mol·rad²
+pub fn martini3_angle_theta0() -> float { return 3.141592653589793 }  // π rad (linear)

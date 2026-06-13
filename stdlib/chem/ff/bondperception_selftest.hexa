@@ -1,0 +1,151 @@
+// @ci_gate
+// stdlib/chem/ff/bondperception_selftest.hexa — g5 seal for coordinate → bond
+// perception (QFORGE-BIO R13).
+//
+// topology.hexa (R12) needs a bond graph; bondperception.hexa derives that graph
+// from raw Cartesian coordinates + elements. This seal PROVES the full front-end:
+// real 3D coordinates → perceived bonds → GAFF atom types → amber.hexa, with the
+// connectivity correct on known molecules AND a true non-bond rejected.
+//
+//   coords + elements ─▶ perceive_bonds ─▶ assign_types ─▶ amber charge
+//
+// Run:
+//   hexa run stdlib/chem/ff/bondperception_selftest.hexa
+//
+// Checks (VERBATIM honest — d6/@L5):
+//   (a) METHANE  CH4 geometry → 4 bonds → [c3,hc,hc,hc,hc] (H-H correctly absent)
+//   (b) WATER    H2O geometry → 2 bonds → [OW,HW,HW]
+//   (c) ETHENE   C2H4 geometry → 5 bonds → [c2,c2,ha,ha,ha,ha] (C=C as 1 edge)
+//   (d) NON-BOND two O at 3.0 Å → 0 bonds (beyond r_cov+r_cov+tol)
+//   (e) END-TO-END coords→bonds→types→amber: Σq(CH4)=0 (full front-end neutral)
+
+use "stdlib/chem/ff/bondperception"
+use "stdlib/chem/ff/topology"
+use "stdlib/chem/ff/amber"
+
+let mut pass_count = 0
+let mut total = 0
+let mut first_fail = ""
+
+fn abs_f(x: float) -> float { if x < 0.0 { return 0.0 - x } else { return x } }
+
+fn check(name: string, cond: bool, detail: string) {
+    total = total + 1
+    if cond {
+        pass_count = pass_count + 1
+        println("  ok : " + name + "   " + detail)
+    } else {
+        if first_fail == "" { first_fail = name }
+        println("  FAIL " + name + "   " + detail)
+    }
+}
+
+fn xyz(x: float, y: float, z: float) -> dict { return #{ "x": x, "y": y, "z": z } }
+
+fn join_arr(a: array) -> string {
+    let mut s = "["
+    let mut k = 0
+    while k < len(a) {
+        if k > 0 { s = s + ", " }
+        s = s + a[k]
+        k = k + 1
+    }
+    return s + "]"
+}
+
+fn arr_eq(a: array, b: array) -> bool {
+    if len(a) != len(b) { return false }
+    let mut k = 0
+    while k < len(a) {
+        if a[k] != b[k] { return false }
+        k = k + 1
+    }
+    return true
+}
+
+fn main() {
+    println("coordinate → bond perception selftest (QFORGE-BIO R13)")
+    println("  d(i,j) <= r_cov(i)+r_cov(j)+tol  (Cordero 2008 radii, tol=0.4 Å)")
+    println("")
+
+    let radii = default_radii()
+    let tol = 0.4
+
+    // ── (a) METHANE CH4 — tetrahedral, C-H = 1.09 Å ──
+    // C at origin; 4 H on tetrahedral directions (1.09/√3 = 0.6293 per axis).
+    let ch4 = ["C", "H", "H", "H", "H"]
+    let ch4_xyz = [
+        xyz(0.0, 0.0, 0.0),
+        xyz(0.6293, 0.6293, 0.6293),
+        xyz(0.6293, 0.0 - 0.6293, 0.0 - 0.6293),
+        xyz(0.0 - 0.6293, 0.6293, 0.0 - 0.6293),
+        xyz(0.0 - 0.6293, 0.0 - 0.6293, 0.6293)
+    ]
+    let ch4_bonds = perceive_bonds(ch4, ch4_xyz, radii, tol)
+    let ch4_types = assign_types(ch4, ch4_bonds)
+    let ch4_exp = ["c3", "hc", "hc", "hc", "hc"]
+    let a_ok = (len(ch4_bonds) == 4) && arr_eq(ch4_types, ch4_exp)
+    check("a_methane_coords", a_ok,
+          "bonds=" + to_string(len(ch4_bonds)) + " (exp 4, H-H absent) types="
+          + join_arr(ch4_types))
+
+    // ── (b) WATER H2O — O-H = 0.957 Å, H-O-H = 104.52° ──
+    let h2o = ["O", "H", "H"]
+    let h2o_xyz = [
+        xyz(0.0, 0.0, 0.0),
+        xyz(0.957, 0.0, 0.0),
+        xyz(0.0 - 0.2397, 0.9265, 0.0)
+    ]
+    let h2o_bonds = perceive_bonds(h2o, h2o_xyz, radii, tol)
+    let h2o_types = assign_types(h2o, h2o_bonds)
+    let h2o_exp = ["OW", "HW", "HW"]
+    let b_ok = (len(h2o_bonds) == 2) && arr_eq(h2o_types, h2o_exp)
+    check("b_water_coords", b_ok,
+          "bonds=" + to_string(len(h2o_bonds)) + " (exp 2) types=" + join_arr(h2o_types))
+
+    // ── (c) ETHENE C2H4 — planar, C=C = 1.33 Å, C-H = 1.087 Å ──
+    // atoms: 0,1=C; 2,3=H on C0; 4,5=H on C1. The C=C double bond is ONE edge.
+    let c2h4 = ["C", "C", "H", "H", "H", "H"]
+    let c2h4_xyz = [
+        xyz(0.0, 0.0, 0.0),
+        xyz(1.33, 0.0, 0.0),
+        xyz(0.0 - 0.5435, 0.9415, 0.0),
+        xyz(0.0 - 0.5435, 0.0 - 0.9415, 0.0),
+        xyz(1.8735, 0.9415, 0.0),
+        xyz(1.8735, 0.0 - 0.9415, 0.0)
+    ]
+    let c2h4_bonds = perceive_bonds(c2h4, c2h4_xyz, radii, tol)
+    let c2h4_types = assign_types(c2h4, c2h4_bonds)
+    let c2h4_exp = ["c2", "c2", "ha", "ha", "ha", "ha"]
+    let c_ok = (len(c2h4_bonds) == 5) && arr_eq(c2h4_types, c2h4_exp)
+    check("c_ethene_coords", c_ok,
+          "bonds=" + to_string(len(c2h4_bonds)) + " (exp 5: C=C +4 C-H) types="
+          + join_arr(c2h4_types))
+
+    // ── (d) NON-BOND: two O atoms 3.0 Å apart → no edge ──
+    // r_cov(O)+r_cov(O)+tol = 0.66+0.66+0.4 = 1.72 Å < 3.0 → must reject.
+    let oo = ["O", "O"]
+    let oo_xyz = [ xyz(0.0, 0.0, 0.0), xyz(3.0, 0.0, 0.0) ]
+    let oo_bonds = perceive_bonds(oo, oo_xyz, radii, tol)
+    let d_ok = (len(oo_bonds) == 0)
+    check("d_nonbond_rejected", d_ok,
+          "O···O @3.0Å bonds=" + to_string(len(oo_bonds))
+          + " (exp 0, cutoff=1.72Å)")
+
+    // ── (e) END-TO-END: coords → bonds → types → amber charge ──
+    // The perceived-from-coordinates methane must reach amber.hexa neutral.
+    let types_db = gaff_tip3p_types()
+    let q_ch4 = ff_total_charge(types_db, ch4_types)
+    let e_ok = abs_f(q_ch4) < 1.0e-5
+    check("e_end_to_end_amber_neutral", e_ok,
+          "Σq(CH4 from raw coords→bonds→types→amber)=" + to_string(q_ch4) + " (integer-neutral)")
+
+    println("")
+    if first_fail == "" {
+        println("ALL PASS — stdlib/chem/ff coordinate → bond perception " + to_string(pass_count) + "/" + to_string(total))
+        println("Raw coords → bonds → GAFF types → amber: full structure front-end SEALED.")
+    } else {
+        println("FAILURES (" + to_string(total - pass_count) + "/" + to_string(total) + ") first=" + first_fail)
+        exit(1)
+    }
+}

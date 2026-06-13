@@ -1,0 +1,226 @@
+// @ci_gate — deterministic · network-free · MOLSCF RHF SCF g5 gate
+//
+// rhf_selftest.hexa — QFORGE MOLSCF brick 4+5/N (Fock build + closed-shell RHF
+// SCF, F C = S C ε) g5 gate. The KEYSTONE test: it assembles the full H₂/STO-3G
+// integral set LIVE from brick 1/2/3 (S, T, V from gaussian_/coulomb_integrals;
+// the contracted ERI 4-fold-summed here) and drives the RHF loop to convergence,
+// then checks the converged total energy against the Szabo & Ostlund worked
+// example (Modern Quantum Chemistry §3.5.2): E_total(H₂, STO-3G, R=1.4 bohr).
+//
+//   (A) H₂ STO-3G E_total @1.4 bohr vs Szabo ≈ −1.1167 Ha   (|Δ| reported)  🔵
+//   (B) SCF convergence: iters reported, |ΔE| → below tol                    🔵
+//   (C) orbital energies: HOMO ε (occupied) vs Szabo, ε ascending            🔵
+//   (D) Fock symmetry (F = Fᵀ) · density idempotency P S P = 2 P (closed-     🔵
+//       shell normalization: tr(P S) = N_elec; (PS)² = 2 PS) · S^{-½} S S^{-½}=I
+//   (E) generic guards: matmul/transpose round-trips, eigh reuse
+//
+// HONEST (d6): the converged E_total is printed VERBATIM. The −1.1167 Ha target
+// is NOT forced — if the live integrals + SCF reproduce it, |Δ| is reported; if
+// not, the gap is diagnosed (integral vs Fock vs convergence). No fabrication.
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/molscf/rhf_selftest.hexa
+// PASS: "qforge_molscf_rhf_selftest PASS".
+use "stdlib/qforge/molscf/gaussian_integrals"
+use "stdlib/qforge/molscf/coulomb_integrals"
+use "stdlib/qforge/molscf/rhf"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+// ── contracted ERI (μν|σλ) for two atoms, each a single STO-3G contraction ───
+//   4-fold sum over primitives with the contraction coefficients. (Brick R2
+//   supplied the primitive cint_eri_s + the contracted NUCLEAR helper; the
+//   contracted ERI is assembled here — the SCF's only 2-electron consumer.)
+fn eri_contracted(
+    al: [float], co: [float], ax: [float],
+    bl: [float], bo: [float], bx: [float],
+    cl: [float], cco: [float], cx: [float],
+    dl: [float], dco: [float], dx: [float]
+) -> float {
+    let mut v = 0.0
+    let mut i = 0
+    while i < len(al) {
+        let mut j = 0
+        while j < len(bl) {
+            let mut k = 0
+            while k < len(cl) {
+                let mut l = 0
+                while l < len(dl) {
+                    let w = co[i] * bo[j] * cco[k] * dco[l]
+                    v = v + w * cint_eri_s(al[i], ax, bl[j], bx, cl[k], cx, dl[l], dx)
+                    l = l + 1
+                }
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return v
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ══ H₂ / STO-3G, R = 1.4 bohr (Szabo & Ostlund §3.5.2 worked example) ═════
+    //   STO-3G H 1s (unscaled ζ=1.0): the textbook anchor used by brick 1/2/3.
+    let alpha = [3.42525091, 0.62391373, 0.16885540]
+    let coeff = [0.15432897, 0.53532814, 0.44463454]
+    let A = [0.0, 0.0, 0.0]
+    let B = [1.4, 0.0, 0.0]
+    let n = 2
+    let z = 1.0
+    let n_occ = 1                      // 2 electrons → one doubly-filled MO
+
+    // ── overlap S (brick 1) ──
+    let s11 = gint_overlap_contracted(alpha, coeff, A, alpha, coeff, A)
+    let s12 = gint_overlap_contracted(alpha, coeff, A, alpha, coeff, B)
+    let s22 = gint_overlap_contracted(alpha, coeff, B, alpha, coeff, B)
+    let S = [s11, s12, s12, s22]
+
+    // ── kinetic T (brick 1) ──
+    let t11 = gint_kinetic_contracted(alpha, coeff, A, alpha, coeff, A)
+    let t12 = gint_kinetic_contracted(alpha, coeff, A, alpha, coeff, B)
+    let t22 = gint_kinetic_contracted(alpha, coeff, B, alpha, coeff, B)
+
+    // ── nuclear attraction V = V@A + V@B (brick 2) ──
+    let v11 = cint_nuclear_contracted(alpha, coeff, A, alpha, coeff, A, z, A)
+           + cint_nuclear_contracted(alpha, coeff, A, alpha, coeff, A, z, B)
+    let v12 = cint_nuclear_contracted(alpha, coeff, A, alpha, coeff, B, z, A)
+           + cint_nuclear_contracted(alpha, coeff, A, alpha, coeff, B, z, B)
+    let v22 = cint_nuclear_contracted(alpha, coeff, B, alpha, coeff, B, z, A)
+           + cint_nuclear_contracted(alpha, coeff, B, alpha, coeff, B, z, B)
+
+    // ── core Hamiltonian H_core = T + V ──
+    let h11 = t11 + v11
+    let h12 = t12 + v12
+    let h22 = t22 + v22
+    let hcore = [h11, h12, h12, h22]
+
+    // ── two-electron tensor (μν|σλ), 2^4 = 16 entries, chemists' convention ──
+    //   centers per index: 0→A, 1→B.
+    let centers = [A, B]
+    let mut eri = []
+    let mut mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu < n {
+            let mut sg = 0
+            while sg < n {
+                let mut lm = 0
+                while lm < n {
+                    let cm = centers[mu]
+                    let cn = centers[nu]
+                    let cs = centers[sg]
+                    let cl = centers[lm]
+                    let e = eri_contracted(
+                        alpha, coeff, cm, alpha, coeff, cn,
+                        alpha, coeff, cs, alpha, coeff, cl)
+                    eri.push(e)
+                    lm = lm + 1
+                }
+                sg = sg + 1
+            }
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+
+    // ── nuclear repulsion E_nuc = Z_A Z_B / R_AB ──
+    let r_ab = 1.4
+    let e_nuc = z * z / r_ab
+
+    // print the assembled integrals (provenance / honest verbatim)
+    println("── H₂ STO-3G integrals (R=1.4 bohr, live from brick 1/2/3) ──")
+    println("  S12 = " + to_string(s12) + "   (Szabo 0.6593)")
+    println("  H11 = " + to_string(h11) + "   H12 = " + to_string(h12))
+    //   Szabo & Ostlund §3.5.2 worked-example two-electron integrals:
+    //   (11|11)=0.7746 · (11|22)=0.5697 · (12|12)≡(AB|AB)=0.2970 · (11|12)≡(AA|AB)=0.4441
+    println("  (11|11)≡(AA|AA) = " + to_string(eri[0]) + "   (Szabo 0.7746)")
+    println("  (11|22)≡(AA|BB) = " + to_string(eri[((0*n+0)*n+1)*n+1]) + "   (Szabo 0.5697)")
+    println("  (12|12)≡(AB|AB) = " + to_string(eri[((0*n+1)*n+0)*n+1]) + "   (Szabo 0.2970)")
+    println("  (11|12)≡(AA|AB) = " + to_string(eri[((0*n+0)*n+0)*n+1]) + "   (Szabo 0.4441)")
+    println("  E_nuc = " + to_string(e_nuc))
+
+    // ══ run RHF SCF ═══════════════════════════════════════════════════════════
+    let out = rhf_scf(S, hcore, eri, n, n_occ, e_nuc, 100, 1.0e-10, 1.0)
+    let e_total = out[0]
+    let iters = out[1]
+    let e_elec = out[2]
+    let P = out[3]
+    let F = out[4]
+    let eps = out[5]
+    let converged = out[6]
+
+    println("── RHF SCF result (VERBATIM) ──")
+    println("  iters       = " + to_string(iters))
+    println("  converged   = " + to_string(converged))
+    println("  E_elec      = " + to_string(e_elec))
+    println("  E_total     = " + to_string(e_total) + "  Ha")
+    println("  eps[0] HOMO = " + to_string(eps[0]) + "  eps[1] LUMO = " + to_string(eps[1]))
+    println("  Δ(E_total − (−1.1167)) = " + to_string(e_total - (0.0 - 1.1167)))
+
+    // ══ (A) H₂ E_total vs Szabo ≈ −1.1167 Ha ══════════════════════════════════
+    fails = fails + _ck_close("(A) H2 STO-3G E_total @1.4 bohr ≈ −1.1167 Ha",
+                              e_total, 0.0 - 1.1167, 1.0e-4)
+
+    // ══ (B) SCF converged ═════════════════════════════════════════════════════
+    fails = fails + _ck_true("(B) SCF converged", converged)
+    fails = fails + _ck_true("(B) iters > 0 and finite (≤ 100)", iters > 0)
+    fails = fails + _ck_true("(B) iters < 50 (fast for symmetric H2)", iters < 50)
+
+    // ══ (C) orbital energies: ε ascending, HOMO occupied ══════════════════════
+    //   Szabo H₂/STO-3G: ε_occ (HOMO, 1σ_g) ≈ −0.578 Ha, ε_virt (1σ_u) ≈ +0.670.
+    fails = fails + _ck_true("(C) eps ascending (HOMO < LUMO)", eps[0] < eps[1])
+    fails = fails + _ck_close("(C) HOMO ε (1σ_g) ≈ −0.578 Ha (Szabo)",
+                              eps[0], 0.0 - 0.578, 5.0e-3)
+    fails = fails + _ck_true("(C) HOMO occupied energy < 0 (bound)", eps[0] < 0.0)
+
+    // ══ (D) Fock symmetry · density idempotency · Löwdin orthogonality ════════
+    //   F symmetric (F_01 = F_10).
+    fails = fails + _ck_close("(D) Fock symmetric F[0,1]=F[1,0]", F[1], F[2], 1.0e-12)
+    //   tr(P S) = N_elec = 2  (the closed-shell density normalization).
+    let ps = rhf_matmul(P, S, n)
+    let tr_ps = ps[0] + ps[3]
+    fails = fails + _ck_close("(D) tr(P·S) = N_elec = 2", tr_ps, 2.0, 1.0e-8)
+    //   closed-shell idempotency in the S-metric: (P S)² = 2 (P S).
+    let psps = rhf_matmul(ps, ps, n)
+    let mut idem_ok = true
+    let mut i = 0
+    while i < n * n {
+        if _abs(psps[i] - 2.0 * ps[i]) > 1.0e-7 { idem_ok = false }
+        i = i + 1
+    }
+    fails = fails + _ck_true("(D) idempotent (P S)² = 2 P S (closed-shell)", idem_ok)
+    //   Löwdin: S^{-½} S S^{-½} = I.
+    let X = rhf_s_inv_sqrt(S, n)
+    let xs = rhf_matmul(X, S, n)
+    let xsx = rhf_matmul(xs, X, n)
+    fails = fails + _ck_close("(D) S^{-½} S S^{-½} = I (diag)", xsx[0], 1.0, 1.0e-9)
+    fails = fails + _ck_close("(D) S^{-½} S S^{-½} = I (offdiag→0)", xsx[1], 0.0, 1.0e-9)
+
+    // ══ (E) generic linear-algebra guards ═════════════════════════════════════
+    //   transpose round-trip of an asymmetric matrix.
+    let M = [1.0, 2.0, 3.0, 4.0]
+    let Mt = rhf_transpose(M, 2)
+    fails = fails + _ck_true("(E) transpose [1,2;3,4] → [1,3;2,4]",
+                             Mt[0] == 1.0 && Mt[1] == 3.0 && Mt[2] == 2.0 && Mt[3] == 4.0)
+    //   matmul I·M = M.
+    let I2 = [1.0, 0.0, 0.0, 1.0]
+    let IM = rhf_matmul(I2, M, 2)
+    fails = fails + _ck_true("(E) I · M = M",
+                             IM[0] == 1.0 && IM[1] == 2.0 && IM[2] == 3.0 && IM[3] == 4.0)
+
+    if fails == 0 {
+        println("qforge_molscf_rhf_selftest PASS")
+    } else {
+        println("qforge_molscf_rhf_selftest FAIL (" + to_string(fails) + ")")
+    }
+}

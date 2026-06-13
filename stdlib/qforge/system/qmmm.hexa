@@ -1,0 +1,98 @@
+// qmmm.hexa — QFORGE/system scale-bridge: QM/MM energy partition (round-1 brick).
+//
+// The QFORGE/system milestone joins the scales QFORGE already verifies in
+// isolation — QM (stdlib/qforge SCF / DFPT) and MM (stdlib/chem/md
+// lennard_jones · bonded · ewald · pme) — into ONE multi-scale energy. This
+// file is the FIRST g5-verifiable brick of that bridge: the energy-partition
+// algebra that every QM/MM driver rests on, proven scale-CONSISTENT before
+// any wet coupling (electrostatic embedding · link atoms) is built on top.
+//
+// d4-GENERIC (no engine hardcoding): every function below takes ENERGIES as
+// plain floats — the *results* of a QM callback (qforge SCF total) and an MM
+// callback (chem/md total_energy). The partition algebra is agnostic to how
+// each scalar was produced, so QM=qforge / MM=chem-md / a toy / a future CG
+// engine all traverse the SAME path. Swapping an engine is "pass a different
+// number", never a branch in this layer (d4).
+//
+// TWO published partition schemes (Senn & Thiel 2009, Angew. Chem. 48 1198;
+// the ONIOM identity, Svensson et al. 1996 / Chung et al. 2015 Chem.Rev.):
+//
+//   ADDITIVE (the standard QM/MM expression):
+//       E_tot = E_QM(inner) + E_MM(outer) + E_QM-MM(coupling)
+//     — inner region by QM, the rest by MM, plus an explicit inner↔outer
+//       coupling term. At MECHANICAL embedding the coupling is itself an MM
+//       energy evaluated on the full geometry minus the two intra-region MM
+//       pieces (so no term is double-counted).
+//
+//   SUBTRACTIVE / ONIOM 2-layer (Our-own-N-layer Integrated MO+MM):
+//       E_tot = E_high(model) + E_low(real) − E_low(model)
+//     — the WHOLE (real) system at the cheap level, then the model region
+//       corrected up to the high level. No explicit coupling term: the
+//       coupling is carried implicitly by the low-level real calc.
+//
+// CONSISTENCY IDENTITY (the round-1 finding · NOVEL-probe grounded):
+//   At MECHANICAL embedding, with the additive coupling defined as the
+//   low-level interaction
+//       E_QM-MM := E_low(real) − E_low(inner) − E_low(outer)
+//   and the additive intra terms taken at their native levels
+//       E_QM(inner) = E_high(inner),   E_MM(outer) = E_low(outer)
+//   the ADDITIVE and SUBTRACTIVE totals are ALGEBRAICALLY EQUAL:
+//       E_high(inner) + E_low(outer) + [E_low(real)−E_low(inner)−E_low(outer)]
+//     = E_high(inner) + E_low(real) − E_low(inner)
+//     = E_high(model) + E_low(real) − E_low(model)   (model ≡ inner)   ∎
+//   So the two schemes are not rivals — they are the same partition, and the
+//   bridge is internally CONSISTENT. This is the brick the higher scales reuse.
+//
+// TOY LIMITS the selftest pins (analytic, no engine needed):
+//   • whole-system MM-only limit — if high≡low everywhere, E_tot collapses to
+//     E_low(real): a QM/MM partition of a purely-MM system must reproduce the
+//     plain MM energy (no spurious bridge energy).
+//   • partition-boundary invariance — moving an atom between inner/outer must
+//     leave E_tot unchanged when its high and low contributions agree on that
+//     atom (the partition is a bookkeeping choice, not physics).
+
+// ── ADDITIVE scheme ─────────────────────────────────────────────────────────
+// E_tot = E_QM(inner) + E_MM(outer) + E_QM-MM(coupling).  All three are
+// pre-evaluated scalars (d4 — QM/MM engines are the callbacks that produced
+// them). Pure addition: the additive expression is, by construction, additive.
+pub fn qmmm_additive_total(e_qm_inner: float, e_mm_outer: float, e_coupling: float) -> float {
+    return e_qm_inner + e_mm_outer + e_coupling
+}
+
+// Mechanical-embedding coupling term, derived (not assumed) from the low-level
+// energies: the inner↔outer interaction = whole − the two isolated pieces.
+// This is what makes the additive total exact rather than double-counted.
+pub fn qmmm_mechanical_coupling(e_low_real: float, e_low_inner: float, e_low_outer: float) -> float {
+    return e_low_real - e_low_inner - e_low_outer
+}
+
+// ── SUBTRACTIVE / ONIOM 2-layer scheme ──────────────────────────────────────
+// E_tot = E_high(model) + E_low(real) − E_low(model).  "model" is the inner
+// (QM) region; "real" is the whole system. The defining ONIOM identity.
+pub fn qmmm_oniom2_total(e_high_model: float, e_low_real: float, e_low_model: float) -> float {
+    return e_high_model + e_low_real - e_low_model
+}
+
+// ── BRIDGE: additive built from the SAME low-level inputs as ONIOM ───────────
+// Assembles the additive total under mechanical embedding from the high/low
+// region energies, so it can be compared term-for-term against ONIOM. Here
+// E_QM(inner)=e_high_inner, E_MM(outer)=e_low_outer, and the coupling is the
+// mechanical-embedding low-level interaction. Returns the additive E_tot that
+// the consistency identity proves equals qmmm_oniom2_total on these inputs.
+pub fn qmmm_additive_from_levels(e_high_inner: float, e_low_real: float,
+                                 e_low_inner: float, e_low_outer: float) -> float {
+    let coupling = qmmm_mechanical_coupling(e_low_real, e_low_inner, e_low_outer)
+    return qmmm_additive_total(e_high_inner, e_low_outer, coupling)
+}
+
+// Residual between the two schemes on shared inputs — the consistency metric.
+// Must be ~0 (to float round-off) for any inputs: that IS the round-1 finding.
+// model ≡ inner, so e_high_model = e_high_inner and e_low_model = e_low_inner.
+pub fn qmmm_scheme_residual(e_high_inner: float, e_low_real: float,
+                            e_low_inner: float, e_low_outer: float) -> float {
+    let add = qmmm_additive_from_levels(e_high_inner, e_low_real, e_low_inner, e_low_outer)
+    let oni = qmmm_oniom2_total(e_high_inner, e_low_real, e_low_inner)
+    let d = add - oni
+    if d < 0.0 { return -d }
+    return d
+}

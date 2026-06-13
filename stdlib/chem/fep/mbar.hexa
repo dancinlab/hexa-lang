@@ -1,0 +1,317 @@
+// stdlib/chem/fep/mbar.hexa — MBAR / BAR free-energy estimator for FEP.
+//
+// QFORGE-BIO round-4, alchemical estimator brick.
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// ── PURPOSE ──────────────────────────────────────────────────────────
+// Round-3 sealed the soft-core λ-coupled energy (stdlib/chem/fep/softcore).
+// softcore_energy_value(coords, λ, p) gives a forward scalar U_sc at ANY λ,
+// so a sample x_n drawn at state k can be RE-EVALUATED at every state j —
+// that is exactly the reduced-potential matrix
+//
+//     u_kn  =  β_k · U_k(x_n)                    (state k, sample n)
+//
+// the input MBAR consumes. (β = 1/kT; if the energies fed in are already
+// reduced — divided by kT — the caller passes them as-is.) This brick
+// turns that matrix into the dimensionless free energies f_k and hence
+// ΔG, closing the soft-core → ΔG chain of the native FEP pipeline.
+//
+// ── METHOD (Shirts & Chodera 2008, J. Chem. Phys. 129, 124105) ───────
+// DOI 10.1063/1.2978177 (arXiv 0801.1426). The MBAR self-consistent
+// equation (their Eq. 11) for the dimensionless free energies f_k is
+//
+//     f_k = −ln Σ_n  exp(−u_k(x_n))
+//                    ──────────────────────────────────────
+//                    Σ_j N_j exp(f_j − u_j(x_n))
+//
+// where the sum over n runs over ALL samples from ALL states (n = 1..N_tot,
+// N_tot = Σ_j N_j), N_j is the sample count of state j, and u_k(x_n) is the
+// reduced potential of sample n evaluated at state k. This is a fixed-point
+// map f ← G(f); we iterate to self-consistency. The equation is invariant
+// to a global shift of all f_k (gauge), so we re-anchor f_0 := 0 each sweep
+// — only DIFFERENCES f_k − f_0 are physical.
+//
+// In the log domain (numerically stable, logsumexp over both sums):
+//
+//     denom_n = LSE_j ( ln N_j + f_j − u_j(x_n) )         (log Σ_j …)
+//     f_k     = − LSE_n ( −u_k(x_n) − denom_n )           (− log Σ_n …)
+//
+// ── BAR (Bennett 1976) = the K=2 special case ────────────────────────
+// With two states the MBAR equation reduces to BAR (Shirts-Chodera:
+// "reduces to BAR in the limit that only two states are sampled"). The
+// classic Bennett self-consistent form solves for Δf = f_1 − f_0 via
+//
+//     Σ_{n∈0} fermi( (u_0−u_1)(x_n) + M )  =  Σ_{n∈1} fermi( (u_1−u_0)(x_n) − M )
+//     M = ln(N_1/N_0) + Δf ,   fermi(x) = 1/(1+e^x) ,   Δf = M − ln(N_1/N_0)
+//
+// We provide BAR directly (Fermi self-consistent root) AND verify it
+// equals the K=2 MBAR answer — single generic path, no duplicate physics.
+//
+// ── ZWANZIG limit (one-directional FEP) ──────────────────────────────
+// If samples come from ONE state only (state 0), MBAR for a target state 1
+// collapses to the Zwanzig exponential-average estimator
+//     Δf = − ln ⟨ exp(−(u_1 − u_0)) ⟩_0      (= −ln mean over samples)
+// which is a closed-form anchor checked in the selftest.
+//
+// ── DESIGN (d4-generic) ──────────────────────────────────────────────
+// Inputs are pure arrays: K (#states), N_k (samples-per-state list),
+// u_kn (K × N_tot reduced-potential matrix), tol, max_iter. NO state /
+// ligand / domain name is hardcoded; K=2 traverses the SAME mbar_solve
+// path and returns the SAME number BAR does (verified). ΔG = (f_last −
+// f_first)·kT for whatever ordering the caller supplies.
+//
+// ── Public surface ───────────────────────────────────────────────────
+//   pub fn mbar_solve(u_kn, N_k, tol, max_iter) -> dict
+//        self-consistent f_k. returns { f: [K floats], iters, max_df, converged }.
+//   pub fn mbar_delta_f(u_kn, N_k, tol, max_iter) -> float
+//        f_last − f_first  (dimensionless ΔG).
+//   pub fn mbar_delta_g(u_kn, N_k, kT, tol, max_iter) -> float
+//        (f_last − f_first)·kT   (energy units of kT).
+//   pub fn bar_delta_f(w_f, w_r, tol, max_iter) -> dict
+//        2-state Bennett: w_f = (u_1−u_0)(x_n∈0), w_r = (u_0−u_1)(x_n∈1).
+//        returns { df, iters, converged }.
+//   pub fn zwanzig_delta_f(du) -> float
+//        −ln ⟨exp(−du)⟩  over a single-state sample list du = (u_1−u_0)(x_n∈0).
+//
+// Import idiom (interp does not chain transitive imports):
+//   use "stdlib/math/logsumexp"
+//   use "stdlib/chem/fep/mbar"
+
+use "stdlib/math/logsumexp"
+
+// ── small helpers (bare builtins; non-strict dialect, matches softcore) ──
+
+fn _abs_f(x: float) -> float { if x < 0.0 { return 0.0 - x } else { return x } }
+
+// max_n column index helper not needed — logsumexp handles the reduction.
+
+// Σ_k N_k  (total sample count, used to slice the flat u_kn matrix).
+fn _ntot(N_k: array) -> float {
+    let mut s = 0.0
+    let mut k = 0
+    while k < N_k.len() {
+        s = s + N_k[k]
+        k = k + 1
+    }
+    return s
+}
+
+// u_kn is stored ROW-MAJOR flat: u_kn[k*Ntot + n] = u_k(x_n).
+// _row(u_kn, k, Ntot) extracts the length-Ntot reduced potentials of
+// state k over every sample. Kept generic — no name, pure indexing.
+fn _row(u_kn: array, k: int, Ntot: int) -> array {
+    let mut out = []
+    let mut n = 0
+    while n < Ntot {
+        out.push(u_kn[k * Ntot + n])
+        n = n + 1
+    }
+    return out
+}
+
+// ── MBAR core: one self-consistent sweep f ← G(f) ────────────────────
+// Given current f (length K), compute the next f via the log-domain
+// Shirts-Chodera Eq. 11. Returns the new f (gauge-fixed to f[0]=0).
+fn _mbar_sweep(u_kn: array, N_k: array, f: array, K: int, Ntot: int) -> array {
+    // log N_j (with N_j=0 → −∞ sentinel so empty states drop out).
+    let NEG = 0.0 - 1.0e300
+    let mut lnN = []
+    let mut j = 0
+    while j < K {
+        if N_k[j] > 0.0 { lnN.push(ln(N_k[j])) } else { lnN.push(NEG) }
+        j = j + 1
+    }
+
+    // denom_n = LSE_j ( ln N_j + f_j − u_j(x_n) )   for every sample n.
+    let mut denom = []
+    let mut n = 0
+    while n < Ntot {
+        let mut terms = []
+        let mut jj = 0
+        while jj < K {
+            terms.push(lnN[jj] + f[jj] - u_kn[jj * Ntot + n])
+            jj = jj + 1
+        }
+        denom.push(logsumexp(terms))
+        n = n + 1
+    }
+
+    // f_k = − LSE_n ( −u_k(x_n) − denom_n )
+    let mut fnew = []
+    let mut k = 0
+    while k < K {
+        let mut tn = []
+        let mut nn = 0
+        while nn < Ntot {
+            tn.push((0.0 - u_kn[k * Ntot + nn]) - denom[nn])
+            nn = nn + 1
+        }
+        fnew.push(0.0 - logsumexp(tn))
+        k = k + 1
+    }
+
+    // gauge-fix: subtract f[0] so f[0]=0 (only differences are physical).
+    let f0 = fnew[0]
+    let mut out = []
+    let mut kk = 0
+    while kk < K {
+        out.push(fnew[kk] - f0)
+        kk = kk + 1
+    }
+    return out
+}
+
+// ── public: solve f_k to self-consistency ────────────────────────────
+pub fn mbar_solve(u_kn: array, N_k: array, tol: float, max_iter: int) {
+    let K = N_k.len()
+    let Ntot = to_int(_ntot(N_k))
+
+    // init f_k = 0 (any gauge; the fixed point is gauge-independent).
+    let mut f = []
+    let mut i0 = 0
+    while i0 < K { f.push(0.0) i0 = i0 + 1 }
+
+    let mut iters = 0
+    let mut max_df = 1.0e300
+    let mut converged = false
+    while iters < max_iter {
+        let fnew = _mbar_sweep(u_kn, N_k, f, K, Ntot)
+        // self-consistency residual = max_k |f_new − f_old| (gauge-fixed both).
+        let mut w = 0.0
+        let mut k = 0
+        while k < K {
+            let d = _abs_f(fnew[k] - f[k])
+            if d > w { w = d }
+            k = k + 1
+        }
+        max_df = w
+        f = fnew
+        iters = iters + 1
+        if w < tol { converged = true break }
+    }
+
+    let out = #{}
+    out["f"] = f
+    out["iters"] = iters
+    out["max_df"] = max_df
+    out["converged"] = converged
+    return out
+}
+
+// ── public: dimensionless ΔG = f_last − f_first ──────────────────────
+pub fn mbar_delta_f(u_kn: array, N_k: array, tol: float, max_iter: int) -> float {
+    let r = mbar_solve(u_kn, N_k, tol, max_iter)
+    let f = r["f"]
+    return f[f.len() - 1] - f[0]
+}
+
+// ── public: ΔG in energy units = (f_last − f_first)·kT ───────────────
+pub fn mbar_delta_g(u_kn: array, N_k: array, kT: float, tol: float, max_iter: int) -> float {
+    return mbar_delta_f(u_kn, N_k, tol, max_iter) * kT
+}
+
+// ── BAR: 2-state Bennett Fermi self-consistent root ──────────────────
+// w_f = (u_1 − u_0)(x_n)  over samples drawn from state 0   (N0 of them)
+// w_r = (u_0 − u_1)(x_n)  over samples drawn from state 1   (N1 of them)
+// Solve for Δf = f_1 − f_0 such that
+//   Σ_{n∈0} fermi(w_f[n] + (ln(N1/N0)+Δf) − ln(N1/N0))   ... condensed:
+// Bennett: define M = ln(N1/N0) + Δf. The balance condition
+//   Σ_{0} fermi(M − w_f)  −  Σ_{1} fermi(w_r − M) = 0   ... (standard form)
+// We iterate Δf via the self-consistent update derived from the implicit
+// equation; it has a unique root, so simple fixed-point bisection-free
+// damping converges. We use the log-mean update (Shirts 2003 form):
+//   Δf_new = Δf_old + ln[ Σ_0 fermi(w_f − ΔA)  /  Σ_1 fermi(ΔA − w_r) ]^?
+// To stay robust we solve the scalar root g(Δf)=0 by bisection on the
+// monotone balance function (no overflow: fermi is in (0,1)).
+fn _fermi(x: float) -> float {
+    // 1/(1+e^x), overflow-safe.
+    if x > 0.0 {
+        let e = exp(0.0 - x)
+        return e / (1.0 + e)
+    }
+    return 1.0 / (1.0 + exp(x))
+}
+
+// Bennett balance function (Bennett 1976; Shirts 2003 self-consistent form):
+//   B(Δf) = Σ_{n∈0} fermi( w_f[n] − Δf + C0 )
+//         − Σ_{n∈1} fermi( w_r[n] + Δf − C0 )
+//   with  C0 = ln(N1/N0),  fermi(x)=1/(1+eˣ).
+// w_f = (u_1−u_0)(x_n) over state-0 samples; w_r = (u_0−u_1)(x_n) over
+// state-1 samples. B is monotone INCREASING in Δf (as Δf→+∞ every state-0
+// fermi → 1 ⇒ s0→N0 and every state-1 fermi → 0 ⇒ s1→0, so B→+N0; →−N1 as
+// Δf→−∞), so it has a unique root B(Δf)=0 — the Bennett acceptance balance.
+// At that root Δf equals the K=2 MBAR free-energy difference EXACTLY (the
+// two are the same equation; verified algebraically in mbar_selftest (b)).
+fn _bar_balance(w_f: array, w_r: array, df: float, c0: float) -> float {
+    let mut s0 = 0.0
+    let mut i = 0
+    while i < w_f.len() {
+        s0 = s0 + _fermi((w_f[i] - df) + c0)
+        i = i + 1
+    }
+    let mut s1 = 0.0
+    let mut j = 0
+    while j < w_r.len() {
+        s1 = s1 + _fermi((w_r[j] + df) - c0)
+        j = j + 1
+    }
+    return s0 - s1
+}
+
+pub fn bar_delta_f(w_f: array, w_r: array, tol: float, max_iter: int) {
+    let N0 = w_f.len()
+    let N1 = w_r.len()
+    let c0 = ln(to_float(N1) / to_float(N0))   // C0 = ln(N1/N0)
+
+    // Bracket the root: B is monotone INCREASING in Δf. Expand symmetric
+    // bounds until they straddle a sign change, then bisect.
+    let mut lo = -1.0e3
+    let mut hi = 1.0e3
+    let mut blo = _bar_balance(w_f, w_r, lo, c0)
+    let mut bhi = _bar_balance(w_f, w_r, hi, c0)
+    let mut tries = 0
+    while blo * bhi > 0.0 {
+        lo = lo * 2.0
+        hi = hi * 2.0
+        blo = _bar_balance(w_f, w_r, lo, c0)
+        bhi = _bar_balance(w_f, w_r, hi, c0)
+        tries = tries + 1
+        if tries > 60 { break }
+    }
+
+    let mut iters = 0
+    let mut converged = false
+    let mut mid = 0.5 * (lo + hi)
+    while iters < max_iter {
+        mid = 0.5 * (lo + hi)
+        if (hi - lo) < tol { converged = true break }
+        let bm = _bar_balance(w_f, w_r, mid, c0)
+        // B increasing: bm>0 ⇒ overshot, root is to the LEFT (smaller Δf).
+        if bm > 0.0 { hi = mid } else { lo = mid }
+        iters = iters + 1
+    }
+
+    let out = #{}
+    out["df"] = mid
+    out["iters"] = iters
+    out["converged"] = converged
+    return out
+}
+
+// ── Zwanzig single-direction exponential average ─────────────────────
+// du = (u_1 − u_0)(x_n) over samples drawn from state 0.
+// Δf = − ln ⟨ exp(−du) ⟩  computed stably as −[ LSE_n(−du_n) − ln N ].
+pub fn zwanzig_delta_f(du: array) -> float {
+    let mut terms = []
+    let mut i = 0
+    while i < du.len() {
+        terms.push(0.0 - du[i])
+        i = i + 1
+    }
+    let lse = logsumexp(terms)
+    return 0.0 - (lse - ln(to_float(du.len())))
+}
+
+println("[mbar loaded]")

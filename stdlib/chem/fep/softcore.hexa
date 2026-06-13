@@ -1,0 +1,218 @@
+// stdlib/chem/fep/softcore.hexa — Beutler soft-core λ-coupled energy for FEP.
+//
+// QFORGE-BIO round-3, alchemical core brick.
+//
+// @version 0.1.0
+// @capabilities [pure, autograd]
+//
+// ── PURPOSE ──────────────────────────────────────────────────────────
+// Alchemical free-energy (FEP) transforms a pair interaction smoothly
+// from fully coupled (λ=1) to decoupled (λ=0). A naive linear scaling
+// λ·U_LJ keeps the bare r⁻¹² / r⁻¹ singularity, so when a particle is
+// nearly decoupled (λ small) but two atoms overlap (r→0) the integrand
+// dU/dλ blows up and the thermodynamic integral / exponential average
+// diverges (endpoint catastrophe).
+//
+// Beutler et al. (1994), Chem. Phys. Lett. 222, 529–539,
+// DOI 10.1016/0009-2614(94)00397-1, remove the singularity by a
+// SEPARATION-SHIFTED (soft-core) potential — the radial denominator is
+// shifted by α·(1−λ)² so it stays finite as r→0 whenever λ<1:
+//
+//   U_sc^LJ = 4 ε λⁿ [ ( α_LJ (1−λ)² + (r/σ)⁶ )⁻²
+//                     − ( α_LJ (1−λ)² + (r/σ)⁶ )⁻¹ ]
+//
+//   U_sc^C  = λᵐ k_e q₁ q₂ / ( α_C (1−λ)² + r² )^(1/2)
+//
+// At λ=1 the shift vanishes ⇒ exactly plain LJ+Coulomb (potential
+// recovered). At λ=0 the λⁿ / λᵐ prefactor zeroes the term (decoupled).
+// For 0<λ<1 and r→0 the denominator → α(1−λ)² > 0, so both U and the
+// force −∂U/∂x and the alchemical gradient ∂U/∂λ stay FINITE.
+//
+// ── DESIGN (d4-generic, round-2 seal consumed) ──────────────────────
+// ENERGY-ONLY. We assemble U_sc on the stdlib/autograd tape as a closed
+// expression and write NO derivative code. Because round-2 sealed
+// (forces_autograd: autograd-force == analytic == finite-diff), once the
+// energy is on the tape:
+//   • F_i = −∂U/∂x_i        comes from ag_backward over the COORD leaves
+//   • dU/dλ                 comes from ag_backward over the λ LEAF
+// Both are autograd's job. We extend the seal: λ is just one more tape
+// VARIABLE leaf, so the same reverse pass that gives forces also gives
+// the alchemical gradient — no hand-derived dU/dλ.
+//
+// Same scalar-as-[1]-Tensor idiom as round-2: stdlib/autograd ops are
+// elementwise over identical-shape Tensors with no reduction op, so every
+// scalar (coord, λ, intermediate, energy) is a shape-[1] Tensor. r⁻ⁿ and
+// (·)^p use ag_pow with a constant float exponent; the base may be any
+// tape expression (e.g. the shifted denominator), so the WHOLE soft-core
+// denominator (α(1−λ)² + (r/σ)⁶) is differentiable in BOTH x AND λ.
+//
+// The parameters λ, α_LJ, α_C, n, m are GENERIC inputs (d4): no name
+// hardcoding, no per-instance branch. A linear-coupling variant is just
+// α=0, n=m=1; the standard Beutler default is α_LJ=0.5, α_C≈ (handled by
+// the caller's choice); soft-core exponents n,m are caller-chosen.
+//
+// ── Public surface ───────────────────────────────────────────────────
+//   pub fn softcore_energy_autograd(coords6, lam, p) -> dict
+//        builds U_sc^LJ + U_sc^C on the tape; returns
+//        { "U": handle, "coords": [6 handles], "lam": handle }.
+//   pub fn softcore_force_autograd(coords6, lam, p)   -> array(6)
+//        F = −∂U_sc/∂coords.
+//   pub fn softcore_dUdlam_autograd(coords6, lam, p)  -> float
+//        ∂U_sc/∂λ  (alchemical gradient, for TI ⟨dU/dλ⟩).
+//   pub fn softcore_energy_value(coords6, lam, p)     -> float
+//        forward-only scalar U_sc.
+//
+// `p` is a param dict: { eps, sigma, q1, q2, ke, alpha_lj, alpha_c, n, m }.
+// coords6 = [x1,y1,z1,x2,y2,z2] (flat float array).
+//
+// Import idiom (interp does not chain transitive imports):
+//   use "stdlib/tensor/mod"
+//   use "stdlib/tensor/shape"
+//   use "stdlib/tensor/ops"
+//   use "stdlib/autograd"
+//   use "stdlib/chem/fep/softcore"
+
+// ── scalar-as-[1]-Tensor helpers (round-2 idiom) ─────────────────────
+
+fn _sc_var(v: float) {
+    return ag_var(tensor_from_array([1], [v]))
+}
+fn _sc_const(v: float) {
+    return ag_const(tensor_from_array([1], [v]))
+}
+fn _sc_grad(h) -> float {
+    let g = ag_grad(h)
+    return g.data[0]
+}
+fn _sc_value(h) -> float {
+    let t = ag_value(h)
+    return t.data[0]
+}
+
+// ── param-dict accessor (generic; defaults applied here, not by name) ─
+// Beutler standard defaults: alpha_lj=0.5, alpha_c=0.5 (separation-shift
+// in r² for Coulomb), n=m=1. Override any of them via the dict.
+fn _p_get(p, key: string, dflt: float) -> float {
+    if p.contains_key(key) { return p[key] }
+    return dflt
+}
+
+// ── tape sub-expressions ─────────────────────────────────────────────
+
+// r2 handle = Σ (x1−x2)²  (all operands shape [1]).
+fn _sc_r2(x1, y1, z1, x2, y2, z2) {
+    let dx = ag_sub(x1, x2)
+    let dy = ag_sub(y1, y2)
+    let dz = ag_sub(z1, z2)
+    let sx = ag_pow(dx, 2.0)
+    let sy = ag_pow(dy, 2.0)
+    let sz = ag_pow(dz, 2.0)
+    return ag_add(ag_add(sx, sy), sz)
+}
+
+// (1−λ)² handle.
+fn _sc_one_minus_lam_sq(lam) {
+    let oml = ag_sub(_sc_const(1.0), lam)
+    return ag_pow(oml, 2.0)
+}
+
+// ── soft-core LJ term-builder (energy-only) ──────────────────────────
+//   U_sc^LJ = 4 ε λⁿ [ D⁻² − D⁻¹ ],  D = α_LJ (1−λ)² + (r/σ)⁶
+// Built entirely on the tape so ∂/∂x and ∂/∂λ both flow through D.
+fn _sc_term_lj(r2, lam, eps: float, sigma: float, alpha_lj: float, n: float) {
+    // (r/σ)⁶ = r² ^3 / σ⁶  → use r6 = (r²)^3, then divide by σ⁶ via const mul.
+    let r6      = ag_pow(r2, 3.0)
+    let inv_s6  = _sc_const(1.0 / pow(sigma, 6.0))
+    let r_over_sigma6 = ag_mul(r6, inv_s6)              // (r/σ)⁶
+
+    let shift   = ag_mul(_sc_const(alpha_lj), _sc_one_minus_lam_sq(lam))
+    let denom   = ag_add(shift, r_over_sigma6)          // D = α(1−λ)² + (r/σ)⁶
+
+    let d_inv1  = ag_pow(denom, 0.0 - 1.0)              // D⁻¹
+    let d_inv2  = ag_pow(denom, 0.0 - 2.0)              // D⁻²
+    let bracket = ag_sub(d_inv2, d_inv1)                // D⁻² − D⁻¹
+
+    let lam_n   = ag_pow(lam, n)                         // λⁿ
+    let pref    = ag_mul(_sc_const(4.0 * eps), lam_n)    // 4ε λⁿ
+    return ag_mul(pref, bracket)
+}
+
+// ── soft-core Coulomb term-builder (energy-only) ─────────────────────
+//   U_sc^C = λᵐ k_e q₁ q₂ / ( α_C (1−λ)² + r² )^(1/2)
+fn _sc_term_coulomb(r2, lam, q1: float, q2: float, ke: float, alpha_c: float, m: float) {
+    let shift   = ag_mul(_sc_const(alpha_c), _sc_one_minus_lam_sq(lam))
+    let denom   = ag_add(shift, r2)                     // α_C (1−λ)² + r²
+    let inv_sqrt = ag_pow(denom, 0.0 - 0.5)             // (·)^(−1/2)
+
+    let lam_m   = ag_pow(lam, m)                         // λᵐ
+    let pref    = ag_mul(_sc_const(ke * q1 * q2), lam_m) // λᵐ k_e q₁ q₂
+    return ag_mul(pref, inv_sqrt)
+}
+
+// ── public: assemble U_sc on the tape; return energy + coord + λ handles ──
+// Generic: U_sc = U_sc^LJ + U_sc^C. λ and every coord are VARIABLE leaves,
+// so one reverse pass yields BOTH forces (coord grads) and the alchemical
+// gradient (λ grad). Single path, no name branch (d4).
+pub fn softcore_energy_autograd(coords6: array, lam: float, p) {
+    let x1 = _sc_var(coords6[0])
+    let y1 = _sc_var(coords6[1])
+    let z1 = _sc_var(coords6[2])
+    let x2 = _sc_var(coords6[3])
+    let y2 = _sc_var(coords6[4])
+    let z2 = _sc_var(coords6[5])
+    let lh = _sc_var(lam)                                // λ as a tape variable
+
+    let eps      = _p_get(p, "eps", 0.0)
+    let sigma    = _p_get(p, "sigma", 1.0)
+    let q1       = _p_get(p, "q1", 0.0)
+    let q2       = _p_get(p, "q2", 0.0)
+    let ke       = _p_get(p, "ke", 0.0)
+    let alpha_lj = _p_get(p, "alpha_lj", 0.5)
+    let alpha_c  = _p_get(p, "alpha_c", 0.5)
+    let n        = _p_get(p, "n", 1.0)
+    let m        = _p_get(p, "m", 1.0)
+
+    let r2 = _sc_r2(x1, y1, z1, x2, y2, z2)
+
+    let u_lj = _sc_term_lj(r2, lh, eps, sigma, alpha_lj, n)
+    let u_cb = _sc_term_coulomb(r2, lh, q1, q2, ke, alpha_c, m)
+    let u_tot = ag_add(u_lj, u_cb)
+
+    let out = #{}
+    out["U"]      = u_tot
+    out["coords"] = [x1, y1, z1, x2, y2, z2]
+    out["lam"]    = lh
+    return out
+}
+
+// ── public: force = −∂U_sc/∂coords (round-2 seal) ────────────────────
+pub fn softcore_force_autograd(coords6: array, lam: float, p) -> array {
+    ag_tape_reset()
+    let bundle = softcore_energy_autograd(coords6, lam, p)
+    ag_backward(bundle["U"])
+    let cs = bundle["coords"]
+    let mut f = []
+    let mut i = 0
+    while i < 6 {
+        f.push(0.0 - _sc_grad(cs[i]))                   // F_i = −∂U/∂x_i
+        i = i + 1
+    }
+    return f
+}
+
+// ── public: alchemical gradient dU_sc/dλ (seal EXTENDED to λ) ─────────
+pub fn softcore_dUdlam_autograd(coords6: array, lam: float, p) -> float {
+    ag_tape_reset()
+    let bundle = softcore_energy_autograd(coords6, lam, p)
+    ag_backward(bundle["U"])
+    return _sc_grad(bundle["lam"])                      // ∂U/∂λ
+}
+
+// ── public: forward-only scalar U_sc ─────────────────────────────────
+pub fn softcore_energy_value(coords6: array, lam: float, p) -> float {
+    ag_tape_reset()
+    let bundle = softcore_energy_autograd(coords6, lam, p)
+    return _sc_value(bundle["U"])
+}
+
+println("[softcore loaded]")

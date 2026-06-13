@@ -1,0 +1,278 @@
+// HEXA Standard Library — qforge/atoms/lowdin
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE atoms-scale brick #7 — the Löwdin symmetric orthogonalisation S^{-1/2}
+// that closes the round-6 honesty gap. R6 (scc_scf.hexa) ran the SCC fixed-point
+// loop with the ORTHONORMAL-BASIS Mulliken approximation (S = I), and stated
+// plainly that (c) the SCC total energy had NO stationary point at the fixed
+// point because the population step ignored the real overlap S. This brick
+// supplies the missing piece: the Löwdin transform S^{-1/2} that orthogonalises
+// the EHT Hamiltonian (H̃ = S^{-1/2} H S^{-1/2}) and the Löwdin populations
+// q_a = Σ_{μ∈a} (S^{1/2} P S^{1/2})_{μμ} that make the second-order SCC energy a
+// genuine variational functional of the charges. (Löwdin, J. Chem. Phys. 18 365
+// (1950); Mayer, Int. J. Quantum Chem. 90 63 (2002) for the Löwdin-population
+// trace; Elstner et al. SCC-DFTB, PRB 58 7260 (1998).)
+//
+// THE PHYSICS ─────────────────────────────────────────────────────────────────
+//   (1) Symmetric (Löwdin) orthogonalisation. The generalised eigenproblem
+//       H C = S C ε is reduced to a standard one by the symmetric square root of
+//       the overlap. Diagonalise the (symmetric, positive-definite) overlap
+//       S = U s Uᵀ (s the eigenvalues, U the eigenvectors), then
+//
+//         S^{±1/2} = U s^{±1/2} Uᵀ ,        S^{-1/2} S S^{-1/2} = I .
+//
+//       The orthogonalised Hamiltonian is  H̃ = S^{-1/2} H S^{-1/2}; its
+//       eigenvectors C̃ map back to the non-orthogonal MO coefficients via
+//       C = S^{-1/2} C̃. Because S^{-1/2} is symmetric, H̃ is symmetric and the
+//       R5/R6 symmetric eigensolver (eigh) applies directly.
+//
+//   (2) Löwdin atomic populations. The Mulliken population uses the non-symmetric
+//       trace (P S)_{μμ}, which can give >2 or <0 occupations and is basis-split
+//       biased. The Löwdin population symmetrises it:
+//
+//         q_a = Σ_{μ∈a} (S^{1/2} P S^{1/2})_{μμ} ,
+//
+//       where P_{μν} = Σ_k n_k C_{μk} C_{νk} is the (non-orthogonal) density
+//       matrix. Σ_a q_a = Σ_k n_k = N_elec EXACTLY (trace invariance), and in the
+//       orthonormal limit S = I this reduces to the R6 Mulliken q_a = Σ C_{μk}².
+//
+// HONEST SCOPE (d6) — the S^{-1/2} construction (eigh of S, eigenvalue^{-1/2},
+//   reassembly), the orthogonalised H̃, the back-transform, and the Löwdin
+//   population trace are EXACT and selftest-anchored to closed form. The overlap
+//   matrix S itself is CALLER-SUPPLIED (a GFN STO overlap, a model Gaussian
+//   overlap, or S = I): no element / shell is branched on here (d4). When the
+//   caller has no real S, a Gaussian-overlap MODEL is provided below and labelled
+//   as a model — we do NOT claim a GFN2-parameterised overlap, we claim a correct
+//   reusable S^{-1/2} kernel that the overlap layer drives.
+//
+// d4-generic: S, H, the density matrix, occupations and orbital→atom map are ALL
+//   inputs. H₂, a peptide, or a metal cluster traverse the identical S^{-1/2}
+//   path — add/remove an element is a table edit, no code branch.
+//
+// reuse (d19): eigh (the symmetric Jacobi eigensolver, stdlib/alloc/math/eigen)
+//   supplies BOTH the S-diagonalisation here and the H̃-diagonalisation in R5/R6 —
+//   reused, not rebuilt. The Gaussian-overlap model reuses the same _sqrt /
+//   distance idiom as eht_scc.hexa.
+use "stdlib/alloc/math/eigen"
+
+// ── sqrt via Newton (positive args only; matches eht_scc.hexa _sqrt) ──────────
+fn _sqrt(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    if g < 1.0 { g = 1.0 }
+    let mut it = 0
+    while it < 60 {
+        let ng = 0.5 * (g + x / g)
+        if ng == g { break }
+        g = ng
+        it = it + 1
+    }
+    return g
+}
+
+// exp(x) via range-reduced Taylor (x = k·ln2 + r, |r|≤ln2/2). Pure, no import —
+// matches the sibling eeq_grad.hexa/d4_disp.hexa idiom (exp is not a global builtin).
+fn _exp(x: float) -> float {
+    if x == 0.0 { return 1.0 }
+    let ln2 = 0.6931471805599453
+    let mut k = 0
+    let mut r = x
+    while r > 0.34657359027997264 { r = r - ln2 ; k = k + 1 }
+    while r < 0.0 - 0.34657359027997264 { r = r + ln2 ; k = k - 1 }
+    let mut term = 1.0
+    let mut sum = 1.0
+    let mut nn = 1
+    while nn < 25 {
+        term = term * r / to_float(nn)
+        sum = sum + term
+        nn = nn + 1
+    }
+    let mut p = sum
+    if k > 0 {
+        let mut t = 0
+        while t < k { p = p * 2.0 ; t = t + 1 }
+    } else {
+        let mut t = 0
+        while t < (0 - k) { p = p * 0.5 ; t = t + 1 }
+    }
+    return p
+}
+
+// ── flat matrix multiply C = A·B (all n×n, row-major) ────────────────────────
+//   The one small local helper this brick needs (no BLAS dependency, matching the
+//   inline-rotation style of eigen.hexa). Pure; returns a fresh length-n*n array.
+pub fn qforge_matmul(a: [float], b: [float], n: int) -> [float] {
+    let mut c: [float] = []
+    let mut idx = 0
+    while idx < n * n { c.push(0.0) ; idx = idx + 1 }
+    let mut i = 0
+    while i < n {
+        let mut k = 0
+        while k < n {
+            let aik = a[i * n + k]
+            if aik != 0.0 {
+                let mut j = 0
+                while j < n {
+                    c[i * n + j] = c[i * n + j] + aik * b[k * n + j]
+                    j = j + 1
+                }
+            }
+            k = k + 1
+        }
+        i = i + 1
+    }
+    return c
+}
+
+// ── symmetric power of the overlap  S^p = U s^p Uᵀ  (p = ±1/2) ────────────────
+//   Diagonalise the symmetric positive-definite overlap S = U s Uᵀ via eigh,
+//   raise each eigenvalue to the power `expo` (e.g. +0.5 for S^{1/2}, −0.5 for
+//   S^{-1/2}), and reassemble U s^expo Uᵀ. Returns the flat n×n symmetric result.
+//   eigh returns [values(desc), vectors] with vectors[k] the eigenvector of the
+//   k-th eigenvalue (row form vectors[k][row] = U_{row,k}); we reassemble directly.
+//   d4-generic: branches on NO element — any symmetric SPD S of any size.
+pub fn qforge_overlap_power(s: [float], n: int, expo: float) -> [float] {
+    let res = eigh(s, n)
+    let vals = res[0]               // eigenvalues s_k (descending)
+    let vecs = res[1]               // vecs[k][row] = U_{row,k}
+    // s_k^expo per eigenvalue. expo = ±0.5 ⇒ √ or 1/√ (positive-definite S ⇒ s_k>0)
+    let mut sp: [float] = []
+    let mut k = 0
+    while k < n {
+        let sk = vals[k]
+        let root = _sqrt(sk)        // √s_k  (s_k > 0 for SPD overlap)
+        if expo > 0.0 {
+            sp.push(root)           // s_k^{+1/2}
+        } else {
+            // s_k^{-1/2} = 1/√s_k  (guard against a numerically-zero eigenvalue)
+            if root > 0.0 { sp.push(1.0 / root) } else { sp.push(0.0) }
+        }
+        k = k + 1
+    }
+    // reassemble  (S^p)_{ab} = Σ_k U_{a,k} s_k^p U_{b,k}
+    let mut out: [float] = []
+    let mut idx = 0
+    while idx < n * n { out.push(0.0) ; idx = idx + 1 }
+    let mut a = 0
+    while a < n {
+        let mut b = 0
+        while b < n {
+            let mut acc = 0.0
+            k = 0
+            while k < n {
+                acc = acc + vecs[k][a] * sp[k] * vecs[k][b]
+                k = k + 1
+            }
+            out[a * n + b] = acc
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return out
+}
+
+// ── convenience wrappers: S^{-1/2} and S^{1/2} ───────────────────────────────
+pub fn qforge_s_inv_half(s: [float], n: int) -> [float] {
+    return qforge_overlap_power(s, n, -0.5)
+}
+pub fn qforge_s_half(s: [float], n: int) -> [float] {
+    return qforge_overlap_power(s, n, 0.5)
+}
+
+// ── Löwdin-orthogonalised Hamiltonian  H̃ = S^{-1/2} H S^{-1/2} ───────────────
+//   Reduces the generalised problem H C = S C ε to the standard symmetric problem
+//   H̃ C̃ = C̃ ε. The returned H̃ is symmetric (S^{-1/2} symmetric, H symmetric) so
+//   the R5/R6 eigh path applies verbatim. d4-generic over H and S.
+pub fn qforge_lowdin_orthogonalize(h: [float], sinvhalf: [float], n: int) -> [float] {
+    let tmp = qforge_matmul(sinvhalf, h, n)        // S^{-1/2} H
+    return qforge_matmul(tmp, sinvhalf, n)         // (S^{-1/2} H) S^{-1/2}
+}
+
+// ── density matrix  P_{μν} = Σ_k n_k C_{μk} C_{νk}  (non-orthogonal basis) ────
+//   cvec:  flat n×n eigenvectors, cvec[k*n + mu] = C_{μk} (ascending-MO block, as
+//          produced by qforge_eht_vectors_asc in R6).
+//   occ:   occupation n_k of each MO k (length n).
+//   Returns the flat n×n symmetric density matrix. d4-generic.
+pub fn qforge_density_matrix(cvec: [float], occ: [float], n: int) -> [float] {
+    let mut p: [float] = []
+    let mut idx = 0
+    while idx < n * n { p.push(0.0) ; idx = idx + 1 }
+    let mut k = 0
+    while k < n {
+        let nk = occ[k]
+        if nk != 0.0 {
+            let mut mu = 0
+            while mu < n {
+                let cmk = cvec[k * n + mu]
+                let mut nu = 0
+                while nu < n {
+                    p[mu * n + nu] = p[mu * n + nu] + nk * cmk * cvec[k * n + nu]
+                    nu = nu + 1
+                }
+                mu = mu + 1
+            }
+        }
+        k = k + 1
+    }
+    return p
+}
+
+// ── Löwdin atomic populations  q_a = Σ_{μ∈a} (S^{1/2} P S^{1/2})_{μμ} ─────────
+//   p:        flat n×n density matrix (qforge_density_matrix).
+//   shalf:    flat n×n S^{1/2} (qforge_s_half).
+//   orb2atom: orbital→atom map (length n).   natom: number of atoms.
+//   Returns per-atom Löwdin population q_a (length natom). The diagonal of the
+//   symmetrised product M = S^{1/2} P S^{1/2} is the Löwdin orbital occupation;
+//   summing μ∈a gives the atomic charge basis. Σ_a q_a = tr(M) = tr(P S) = N_elec
+//   EXACTLY (trace invariance under the symmetric similarity). d4-generic.
+pub fn qforge_lowdin_pop(p: [float], shalf: [float], orb2atom: [int],
+                         norb: int, natom: int) -> [float] {
+    let tmp = qforge_matmul(shalf, p, norb)         // S^{1/2} P
+    let m = qforge_matmul(tmp, shalf, norb)         // (S^{1/2} P) S^{1/2}
+    let mut pop: [float] = []
+    let mut a = 0
+    while a < natom { pop.push(0.0) ; a = a + 1 }
+    let mut mu = 0
+    while mu < norb {
+        let at = orb2atom[mu]
+        pop[at] = pop[at] + m[mu * norb + mu]       // diagonal Löwdin occupation
+        mu = mu + 1
+    }
+    return pop
+}
+
+// ── MODEL Gaussian overlap (when no real GFN STO overlap is supplied) ─────────
+//   HONEST (d6): this is a MODEL overlap, NOT a GFN2-parameterised one. Two
+//   normalised s-type Gaussians of common exponent ζ centred R apart overlap as
+//
+//       S_μν = exp( −½ ζ R_μν² ) ,     S_μμ = 1 ,
+//
+//   a smooth, symmetric, positive-definite matrix that captures the essential
+//   R-decay of a real overlap so the S^{-1/2} machinery can be exercised on a
+//   concrete S. pos = flat xyz (3 per ORBITAL here, one s-orbital per atom in the
+//   selftest). The caller should pass a real S whenever available; this is the
+//   fallback, labelled as a model. d4-generic in ζ.
+pub fn qforge_model_overlap(pos: [float], zeta: float, n: int) -> [float] {
+    let mut s: [float] = []
+    let mut idx = 0
+    while idx < n * n { s.push(0.0) ; idx = idx + 1 }
+    let mut i = 0
+    while i < n {
+        s[i * n + i] = 1.0
+        let mut j = i + 1
+        while j < n {
+            let dx = pos[3 * i + 0] - pos[3 * j + 0]
+            let dy = pos[3 * i + 1] - pos[3 * j + 1]
+            let dz = pos[3 * i + 2] - pos[3 * j + 2]
+            let r2 = dx * dx + dy * dy + dz * dz
+            let sij = _exp(0.0 - 0.5 * zeta * r2)
+            s[i * n + j] = sij
+            s[j * n + i] = sij
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return s
+}

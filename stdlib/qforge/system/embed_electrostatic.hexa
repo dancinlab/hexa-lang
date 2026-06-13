@@ -1,0 +1,176 @@
+// embed_electrostatic.hexa — QFORGE/system round-3: ELECTROSTATIC EMBEDDING.
+//
+// Round-2 (embed_mechanical.hexa) coupled the QM and MM regions with a purely
+// CLASSICAL LJ+Coulomb cross term — the QM density did NOT feel the MM charges
+// (mechanical embedding). Round-3 turns that on: the MM point charges enter the
+// QM one-electron Hamiltonian as an EXTERNAL POTENTIAL, so the QM density
+// POLARIZES in the MM field. The new physics is the polarization stabilization
+//
+//     E_EE = E_ME  +  E_pol         with   E_pol < 0   (stabilizing)
+//
+// and an induced QM dipole that points ALONG the field (toward a + MM charge,
+// away from a − MM charge). EE − ME = E_pol is exactly that polarization term.
+//
+// ── THE QM external-potential hook (AUDIT, d6 · @L5 HONESTY) ──────────────────
+// QFORGE *does* expose a real V_ext injection site: `qforge_assemble_h`
+// (stdlib/qforge/assembler) folds a local V_ext(G−G') into the dense plane-wave
+// Kohn-Sham H that `qforge_scf` (stdlib/qforge/scf) diagonalizes self-
+// consistently. An MM point-charge field is, in principle, just another local
+// G-space term added on that diagonal — a genuine SCF V_ext hook. BUT driving
+// it to a self-consistent POLARIZED DENSITY needs the full PW stack (G-vectors,
+// UPF channels, screening rho-callbacks); round-2 already established the honest
+// convention that the toy QM region is represented by its `qforge_ewald`
+// electrostatic total, not a converged PW SCF on a molecule. Forcing a full PW
+// SCF on the toy here would fabricate convergence we have not run (d6).
+//
+// So round-3 proves the polarization SIGN + ORDER the rigorous, honest way:
+// LINEAR RESPONSE / STATIC POLARIZABILITY. A QM region of isotropic
+// polarizability α placed in a (slowly varying) external field E acquires an
+// induced dipole and a second-order energy lowering that are EXACT to O(E²):
+//
+//     μ_ind = α E            (Buckingham/Stone; dipole ALONG the field)
+//     E_pol = −½ α |E|²      (second-order perturbation; α>0 ⇒ E_pol<0)
+//
+// This IS the EE−ME polarization term — its sign and leading order are not a
+// model choice, they are the universal O(E²) response of any stable QM system
+// (α>0 for a ground state, the standard sum-over-states result). The MM field
+// E and potential V_ext are computed from the REAL Coulomb sum over MM charges
+// (the same 1/|r−R| the SCF hook would inject), so the field that polarizes the
+// density is the genuine one; only the density response is taken to its exact
+// leading-order (α·E) form rather than from a converged PW SCF we did not run.
+// Higher-order (β, γ hyperpolarizability) and full self-consistent SCF
+// polarization are the round-3+ refinement — flagged, not fabricated.
+//
+// d4-GENERIC: the polarization total `embed_electrostatic_total` takes the
+// mechanical total and the polarization energy as PLAIN FLOATS — the results of
+// whatever field/response engine produced them (here the Coulomb field + linear
+// response; later a converged SCF). V_ext is a CALLBACK over the MM charge set:
+// no MM-charge count, no geometry, no engine name is branched on in the generic
+// layer. Add/remove an MM charge = pass a longer array, never edit this file.
+//
+// REUSE (d19 · NEXUS edge):
+//   E_ME (mechanical total) ← stdlib/qforge/system/embed_mechanical (round-2)
+//   partition algebra       ← stdlib/qforge/system/qmmm (round-1)
+//   MM Coulomb field/pot     = the same 1/|r−R| kernel as qforge_ewald real-space
+
+use "stdlib/qforge/system/qmmm"
+use "stdlib/qforge/system/embed_mechanical"
+
+// ── THE V_ext CALLBACK — MM point charges → external potential at a QM point ──
+// V_ext(r) = Σ_MM q_MM / |r − R_MM|   (Hartree atomic units; the 1-electron-
+// Hamiltonian external potential the SCF hook would inject). `rq` is the QM
+// evaluation point [x,y,z]; `q_mm` the MM charges; `pos_mm` their positions
+// packed [x,y,z,...]. A coincident MM site (r==R) is skipped (no self term).
+// d4: the MM set is data — any number of charges, no name hardcoded.
+pub fn embed_ee_vext_at(rq: [float], q_mm: [float], pos_mm: [float]) -> float {
+    let n = len(q_mm)
+    let mut v = 0.0
+    let mut m = 0
+    while m < n {
+        let dx = rq[0] - pos_mm[m * 3]
+        let dy = rq[1] - pos_mm[m * 3 + 1]
+        let dz = rq[2] - pos_mm[m * 3 + 2]
+        let r2 = dx * dx + dy * dy + dz * dz
+        if r2 > 1.0e-30 {
+            v = v + q_mm[m] / sqrt(r2)
+        }
+        m = m + 1
+    }
+    return v
+}
+
+// ── THE polarizing FIELD — E(r) = −∇V_ext = Σ_MM q_MM (r−R_MM)/|r−R_MM|³ ──────
+// The electric field the MM charges exert at a QM point — what actually
+// polarizes the QM density. Returns the 3-vector [Ex,Ey,Ez]. This is the exact
+// gradient of `embed_ee_vext_at` (a + charge pushes the field outward from it).
+pub fn embed_ee_field_at(rq: [float], q_mm: [float], pos_mm: [float]) -> [float] {
+    let n = len(q_mm)
+    let mut ex = 0.0
+    let mut ey = 0.0
+    let mut ez = 0.0
+    let mut m = 0
+    while m < n {
+        let dx = rq[0] - pos_mm[m * 3]
+        let dy = rq[1] - pos_mm[m * 3 + 1]
+        let dz = rq[2] - pos_mm[m * 3 + 2]
+        let r2 = dx * dx + dy * dy + dz * dz
+        if r2 > 1.0e-30 {
+            let r = sqrt(r2)
+            let inv3 = 1.0 / (r * r * r)
+            ex = ex + q_mm[m] * dx * inv3
+            ey = ey + q_mm[m] * dy * inv3
+            ez = ez + q_mm[m] * dz * inv3
+        }
+        m = m + 1
+    }
+    return [ex, ey, ez]
+}
+
+// ── INDUCED QM DIPOLE — linear response μ_ind = α E (ALONG the field) ─────────
+// Isotropic polarizability α (α>0 for any stable ground state). The induced
+// dipole points along E — that is the polarization DIRECTION the g5 gate pins.
+pub fn embed_ee_induced_dipole(alpha: float, field: [float]) -> [float] {
+    return [alpha * field[0], alpha * field[1], alpha * field[2]]
+}
+
+// |field|² helper (the response is driven by the squared field magnitude).
+pub fn embed_ee_field_sq(field: [float]) -> float {
+    return field[0] * field[0] + field[1] * field[1] + field[2] * field[2]
+}
+
+// ── POLARIZATION ENERGY — E_pol = −½ α |E|²  (second-order, STABILIZING) ──────
+// The exact O(E²) energy lowering of an isotropic-α QM region in field E. α>0 ⇒
+// E_pol < 0 (always stabilizing) and scales as |E|² (quadratic order). This is
+// the EE−ME term: it is ABSENT in mechanical embedding (round-2) and APPEARS
+// only when the MM field reaches the QM density (round-3 electrostatic).
+pub fn embed_ee_polarization_energy(alpha: float, field: [float]) -> float {
+    return -0.5 * alpha * embed_ee_field_sq(field)
+}
+
+// Convenience: polarization energy straight from the MM charge set at a QM point.
+pub fn embed_ee_polarization_from_charges(alpha: float, rq: [float],
+                                          q_mm: [float], pos_mm: [float]) -> float {
+    let field = embed_ee_field_at(rq, q_mm, pos_mm)
+    return embed_ee_polarization_energy(alpha, field)
+}
+
+// ── GENERIC CORE (d4) — electrostatic total = mechanical total + polarization ─
+// Takes the round-2 mechanical total and the polarization energy as PLAIN
+// FLOATS. The driver never looks at how either scalar was produced — swapping
+// the linear-response E_pol for a converged-SCF E_pol later is "pass a different
+// number". EE − ME = e_pol by construction (the round-3 finding, made explicit).
+pub fn embed_electrostatic_total(e_mechanical_total: float, e_pol: float) -> float {
+    return e_mechanical_total + e_pol
+}
+
+// The EE−ME difference, isolated: == e_pol exactly (no hidden coupling change).
+pub fn embed_ee_minus_me(e_ee_total: float, e_me_total: float) -> float {
+    return e_ee_total - e_me_total
+}
+
+// ── FULL-CHAIN electrostatic-embedding total ─────────────────────────────────
+// Builds the round-2 mechanical total from the real cores, then ADDS the
+// linear-response polarization of the QM region (polarizability α, evaluated at
+// the QM centroid `rq`) in the field of the MM charges (q_mm at pos_mm). The MM
+// charges that polarize the QM here are the SAME outer charges the mechanical
+// coupling already uses classically — round-3 lets them additionally reach the
+// QM density (electrostatic embedding), which round-2 (mechanical) did not.
+//   inner/outer  : MdParticle arrays (round-2 geometry)
+//   pos_inner/q_inner, q_outer, L,eta,kmax, eps,sigma,k_coulomb, bonds/angles/dih
+//                : exactly the round-2 mechanical-embedding inputs
+//   alpha        : isotropic QM polarizability (>0)
+//   rq           : QM evaluation point [x,y,z] (e.g. inner-region centroid)
+//   q_mm,pos_mm  : MM point charges + positions packed [x,y,z,...]
+pub fn embed_electrostatic_from_regions(
+        inner: array, pos_inner: [float], q_inner: [float],
+        outer: array, q_outer: [float],
+        L: float, eta: float, kmax: int,
+        eps: float, sigma: float, k_coulomb: float,
+        bonds: array, angles: array, dihedrals: array,
+        alpha: float, rq: [float], q_mm: [float], pos_mm: [float]) -> float {
+    let e_me = embed_mechanical_from_regions(
+                  inner, pos_inner, q_inner, outer, q_outer,
+                  L, eta, kmax, eps, sigma, k_coulomb, bonds, angles, dihedrals)
+    let e_pol = embed_ee_polarization_from_charges(alpha, rq, q_mm, pos_mm)
+    return embed_electrostatic_total(e_me, e_pol)
+}

@@ -1,0 +1,387 @@
+// HEXA Standard Library — qforge/atoms/d4_disp
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE atoms-scale brick #4 — DFT-D4 LONDON DISPERSION energy and its ANALYTIC
+// nuclear gradient ∂E_disp/∂R. This closes the geometry → CN → charge → dispersion
+// chain the previous rounds opened: round-3's coordination number CN_i and round-1's
+// EEQ partial charge q_i BOTH enter the two-body C6_ij(q,CN) coefficient, exactly as
+// in the charge-dependent D4 model (Caldeweyher, Ehlert, Hansen, Neugebauer,
+// Spicher, Bannwarth, Grimme, J. Chem. Phys. 150, 154122 (2019)).
+//
+// THE PHYSICS ──────────────────────────────────────────────────────────────────
+//   Two-body (atom-pair) dispersion with Becke–Johnson (rational) damping:
+//
+//     E_2 = − Σ_{i<j} [ s6·C6_ij/R_ij⁶ + s8·C8_ij/R_ij⁸ ] · BJ-damped
+//
+//   In the BJ scheme the damping is folded into the radius so the term stays finite
+//   at R→0 and decays as 1/R⁶ at large R:
+//
+//     term_n(R) = C_n / ( R^n + (a1·R0_ij + a2)^n ) ,    R0_ij = sqrt(C8_ij/C6_ij)
+//     E_2 = − Σ_{i<j} [ s6·term_6 + s8·term_8 ]
+//
+//   with a1,a2 the BJ range parameters and s6,s8 the functional-dependent scales
+//   (ALL caller-supplied data — d4). C8_ij = 3·C6_ij·sqrt(Q_i·Q_j), Q_i the per-atom
+//   <r⁴>/<r²> multipole expectation (D4's "r4r2", a per-element datum the caller
+//   passes). R0_ij = sqrt(C8/C6) is then the D4 critical radius used in the BJ cutoff.
+//
+//   CHARGE- AND CN-SCALED C6_ij  (the heart of D4). The reference dipole–dipole C6
+//   coefficients are tabulated at a SET of reference coordination-number/charge
+//   states per element. The actual C6_ij at the molecule's geometry is a Gaussian
+//   (in CN) weighted average of the reference pair coefficients, EACH multiplied by
+//   the charge-scaling function ζ that maps the reference charge state onto the
+//   atom's actual EEQ partial charge:
+//
+//     C6_ij(q,CN) = Σ_a Σ_b  w_i^a(CN_i) · w_j^b(CN_j) · ζ_i^a(q_i) · ζ_j^b(q_j) · C6ref_ij^{ab}
+//                   ────────────────────────────────────────────────────────────────────────
+//                                     Σ_a Σ_b  w_i^a(CN_i) · w_j^b(CN_j)
+//
+//     w_i^a(CN_i) = exp( −β · (CN_i − CNref_i^a)² )            (Gaussian CN interpolation)
+//
+//   ζ — the D4 charge-scaling (the term this brick must get sign-exact):
+//
+//     ζ_i^a(q_i) = exp( γ · [ 1 − exp( ga · ( 1 − (q_ref + Z_i)/(q_i + Z_i) ) ) ] )
+//
+//   with Z_i>0 the effective nuclear charge of the element (a chemical-hardness-like
+//   per-element datum), q_ref the reference-state charge, γ (gam) and ga positive
+//   height constants. SIGN: ionising an atom (q_i ↑ above q_ref) makes the ratio
+//   (q_ref+Z)/(q+Z) < 1, so ga·(1−ratio) > 0, the inner exp > 1, the bracket < 0,
+//   and ζ < 1 — the C6 is SUPPRESSED for a cation (a cation is less polarisable, so
+//   its London C6 falls). q_i < q_ref (anion) raises ζ above 1. This is the genuine
+//   D4 zeta function, not a fitted stand-in (d6 — the sign is derived, not forced).
+//
+//   Three-body Axilrod–Teller–Muto (triple-dipole). The leading non-additive term:
+//
+//     E_3 = Σ_{i<j<k}  C9_ijk · (3·cosθ_i·cosθ_j·cosθ_k + 1) / (R_ij·R_jk·R_ik)³ · f_ATM
+//
+//   with C9_ijk ≈ sqrt(C6_ij·C6_jk·C6_ik) (the D4 geometric-mean approximation) and
+//   the same BJ-style triple damping f_ATM. cosθ_i is the interior angle of the
+//   triangle at vertex i (between edges i→j and i→k). For the EQUILATERAL triangle
+//   every angle is 60°, cos = 1/2, so the angular factor 3·(1/2)³ + 1 = 11/8 = 1.375
+//   — the closed analytic value the selftest pins. (Sign convention: with the
+//   standard law-of-cosines cosθ this prefactor is +; the overall E_3 is added with
+//   a + sign in D4, a small repulsive-at-equilibrium 3-body correction.)
+//
+//   ANALYTIC GRADIENT ∂E_disp/∂R. For the two-body part, holding C6_ij,C8_ij fixed
+//   w.r.t. R (the leading D4 gradient term; the implicit CN/q→R coupling is the
+//   higher-order piece deferred below), each term_n(R) differentiates in closed form:
+//
+//     d/dR [ C_n/(R^n + S^n) ] = −C_n · n·R^{n-1} / (R^n + S^n)²  ,   S = a1·R0+a2
+//
+//   chained onto the moved Cartesian DOF via ∂R_ij/∂x_{a,c} = ±(x_{i,c}−x_{j,c})/R_ij
+//   (+ if a=i, − if a=j, 0 else). This per-pair antisymmetric structure is validated
+//   against an independent central finite-difference to <1e-6 in the selftest.
+//
+// HONEST SCOPE (d6). This brick delivers the D4 ARCHITECTURE — BJ-damped two-body
+//   with the genuine charge×CN-scaled C6_ij, the ATM three-body angular term, and the
+//   analytic two-body ∂E/∂R — taking the reference C6 table, the per-element Q/Z and
+//   the s6/s8/a1/a2/β/γ/ga constants as CALLER DATA. The full D4 ships a complete
+//   reference-C6 database and the CN/q-implicit gradient terms; those are data + a
+//   higher-order gradient extension, NOT new physics. What is PROVEN here: the
+//   charge-scaling sign, the ATM equilateral angular constant, the analytic two-body
+//   gradient == FD, and the 1/R⁶ long-range decay + BJ monotonicity.
+//
+// d4-generic: geometry, the reference-C6 table, per-element Q/Z, reference CN/charge
+//   states and every scale constant are ALL inputs / data. The routine branches on NO
+//   element name and NO molecule — H₂, an alane cage, a metal cluster traverse the
+//   identical path (add/rename an element = a row in the caller's tables).
+//
+// reuse (d19): qforge_eeq_distance (round-1 pairwise distance), qforge_cn_numbers /
+//   qforge_cn_grad_dof (round-3 CN + ∂CN/∂R, the CN that weights C6), and the EEQ
+//   charges qforge_eeq_charges / qforge_eeq_charge_grad_dof (round-1/2, the q that
+//   scales C6) — d3: this brick adds ONLY the dispersion kernel (C6 interpolation +
+//   BJ damping + ATM + the two-body gradient), re-implementing no geometry, CN, or
+//   charge primitive. erf_fn is not needed here; a local exp/sqrt mirrors the sibling
+//   bricks (eeq_grad's _gexp/_gsqrt) so no new std import is pulled.
+use "stdlib/qforge/atoms/eeq"
+use "stdlib/qforge/atoms/coordination"
+
+// ── local sqrt + exp (no extra std imports; mirror eeq_grad/coordination) ──────
+fn _dsqrt(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    if g < 1.0 { g = 1.0 }
+    let mut it = 0
+    while it < 60 {
+        let ng = 0.5 * (g + x / g)
+        if ng == g { break }
+        g = ng
+        it = it + 1
+    }
+    return g
+}
+
+// exp(x) via range-reduced Taylor (x = k·ln2 + r, |r|≤ln2/2). Pure, no import.
+fn _dexp(x: float) -> float {
+    if x == 0.0 { return 1.0 }
+    let ln2 = 0.6931471805599453
+    let mut k = 0
+    let mut r = x
+    while r > 0.34657359027997264 { r = r - ln2 ; k = k + 1 }
+    while r < 0.0 - 0.34657359027997264 { r = r + ln2 ; k = k - 1 }
+    let mut term = 1.0
+    let mut sum = 1.0
+    let mut nn = 1
+    while nn < 30 {
+        term = term * r / to_float(nn)
+        sum = sum + term
+        nn = nn + 1
+    }
+    let mut p = sum
+    if k > 0 {
+        let mut t = 0
+        while t < k { p = p * 2.0 ; t = t + 1 }
+    } else {
+        let mut t = 0
+        while t < (0 - k) { p = p * 0.5 ; t = t + 1 }
+    }
+    return p
+}
+
+// integer power R^n for small n (n≥0). Used for the BJ R^6 / R^8 denominators.
+fn _ipow(x: float, n: int) -> float {
+    let mut p = 1.0
+    let mut t = 0
+    while t < n { p = p * x ; t = t + 1 }
+    return p
+}
+
+// ── D4 charge-scaling ζ(q) ─────────────────────────────────────────────────────
+//   ζ(q) = exp( γ·[ 1 − exp( ga·(1 − (q_ref+Z)/(q+Z)) ) ] ). Z>0 the effective
+//   nuclear charge, q_ref the reference-state charge, γ(gam)>0, ga>0 height params.
+//   A cation (q>q_ref) → ζ<1 (C6 suppressed); an anion (q<q_ref) → ζ>1. The (q+Z)
+//   denominator is guarded: with Z>0 and physical |q|<Z it never vanishes.
+pub fn qforge_d4_zeta(gam: float, ga: float, zeff: float,
+                      qref: float, q: float) -> float {
+    let denom = q + zeff
+    let ratio = (qref + zeff) / denom
+    let inner = ga * (1.0 - ratio)
+    let bracket = 1.0 - _dexp(inner)
+    return _dexp(gam * bracket)
+}
+
+// ── Gaussian CN interpolation weight  w(CN) = exp(−β·(CN − CNref)²) ─────────────
+//   the soft selector that turns a reference-state coefficient on when the atom's
+//   coordination number matches that reference state's CN. β>0 caller-supplied.
+pub fn qforge_d4_cn_weight(beta: float, cn: float, cnref: float) -> float {
+    let d = cn - cnref
+    return _dexp(0.0 - beta * d * d)
+}
+
+// ── charge- and CN-scaled pair coefficient C6_ij(q,CN) ────────────────────────
+//   Gaussian(CN)×ζ(q) weighted average over the reference (a,b) state pairs.
+//   c6ref is the flat (na × nb) row-major reference table C6ref_ij^{ab}.
+//   cnref_i/cnref_j and qref_i/qref_j are the per-state reference CN / charge lists
+//   (lengths na / nb). The actual cn_i,cn_j,q_i,q_j select+scale. d4: table = data.
+pub fn qforge_d4_c6_pair(c6ref: [float], na: int, nb: int,
+                         cnref_i: [float], qref_i: [float],
+                         cnref_j: [float], qref_j: [float],
+                         beta: float, gam: float, ga: float,
+                         zeff_i: float, zeff_j: float,
+                         cn_i: float, q_i: float,
+                         cn_j: float, q_j: float) -> float {
+    let mut num = 0.0
+    let mut wsum = 0.0
+    let mut a = 0
+    while a < na {
+        let wi = qforge_d4_cn_weight(beta, cn_i, cnref_i[a])
+        let zi = qforge_d4_zeta(gam, ga, zeff_i, qref_i[a], q_i)
+        let mut b = 0
+        while b < nb {
+            let wj = qforge_d4_cn_weight(beta, cn_j, cnref_j[b])
+            let zj = qforge_d4_zeta(gam, ga, zeff_j, qref_j[b], q_j)
+            let w = wi * wj
+            num = num + w * zi * zj * c6ref[a * nb + b]
+            wsum = wsum + w
+            b = b + 1
+        }
+        a = a + 1
+    }
+    if wsum <= 0.0 { return 0.0 }
+    return num / wsum
+}
+
+// ── BJ-damped single two-body term  C_n / (R^n + (a1·R0+a2)^n) ─────────────────
+//   the Becke–Johnson rational-damped C_n/R^n contribution. S = a1·R0 + a2 is the
+//   BJ cutoff radius; the term → C_n/R^n at R≫S and → C_n/S^n (finite) at R→0.
+pub fn qforge_d4_bj_term(cn_coef: float, r: float, r0: float,
+                         a1: float, a2: float, n: int) -> float {
+    let s = a1 * r0 + a2
+    let denom = _ipow(r, n) + _ipow(s, n)
+    return cn_coef / denom
+}
+
+// ── pair dispersion energy  −[ s6·BJ6 + s8·BJ8 ]  for ONE (i,j) ────────────────
+//   C8 = 3·C6·sqrt(Q_i·Q_j) ; R0 = sqrt(C8/C6). qi4r2/qj4r2 are the per-atom <r4>/<r2>
+//   multipole expectations (Q in the text). Returns the (negative) pair energy.
+pub fn qforge_d4_pair_energy(c6: float, qi4r2: float, qj4r2: float,
+                             r: float, s6: float, s8: float,
+                             a1: float, a2: float) -> float {
+    let c8 = 3.0 * c6 * _dsqrt(qi4r2 * qj4r2)
+    let mut r0 = 0.0
+    if c6 > 0.0 { r0 = _dsqrt(c8 / c6) }
+    let e6 = qforge_d4_bj_term(c6, r, r0, a1, a2, 6)
+    let e8 = qforge_d4_bj_term(c8, r, r0, a1, a2, 8)
+    return 0.0 - (s6 * e6 + s8 * e8)
+}
+
+// ── analytic d/dR of the pair energy (C6,C8 held fixed in R — leading term) ────
+//   d/dR [ −C_n/(R^n+S^n) ] = +C_n·n·R^{n-1}/(R^n+S^n)²  (energy is −, so dE/dR>0
+//   for the attractive tail: the well deepens as R falls). Returns dE_pair/dR.
+pub fn qforge_d4_pair_dEdR(c6: float, qi4r2: float, qj4r2: float,
+                           r: float, s6: float, s8: float,
+                           a1: float, a2: float) -> float {
+    let c8 = 3.0 * c6 * _dsqrt(qi4r2 * qj4r2)
+    let mut r0 = 0.0
+    if c6 > 0.0 { r0 = _dsqrt(c8 / c6) }
+    let s = a1 * r0 + a2
+    // n=6 block
+    let d6 = _ipow(r, 6) + _ipow(s, 6)
+    let dterm6 = c6 * 6.0 * _ipow(r, 5) / (d6 * d6)
+    // n=8 block
+    let d8 = _ipow(r, 8) + _ipow(s, 8)
+    let dterm8 = c8 * 8.0 * _ipow(r, 7) / (d8 * d8)
+    // E = −(s6·C6/(R6+S6) + s8·C8/(R8+S8)) ⇒ dE/dR = +(s6·dterm6 + s8·dterm8)
+    return s6 * dterm6 + s8 * dterm8
+}
+
+// ── ATM angular factor  (3·cosθ_i·cosθ_j·cosθ_k + 1) from the three edge lengths ─
+//   cosθ at a vertex from the law of cosines on the opposite edge. rij,rjk,rik are
+//   the three triangle edge lengths. Equilateral ⇒ every cos = 1/2 ⇒ factor = 11/8.
+pub fn qforge_d4_atm_angle(rij: float, rjk: float, rik: float) -> float {
+    let rij2 = rij * rij
+    let rjk2 = rjk * rjk
+    let rik2 = rik * rik
+    // angle at i (between edges i-j and i-k), opposite edge = jk
+    let ci = (rij2 + rik2 - rjk2) / (2.0 * rij * rik)
+    // angle at j (between j-i and j-k), opposite edge = ik
+    let cj = (rij2 + rjk2 - rik2) / (2.0 * rij * rjk)
+    // angle at k (between k-i and k-j), opposite edge = ij
+    let ck = (rik2 + rjk2 - rij2) / (2.0 * rik * rjk)
+    return 3.0 * ci * cj * ck + 1.0
+}
+
+// ── ATM triple energy for one (i,j,k) ─────────────────────────────────────────
+//   E_3 = C9·angular/(Rij·Rjk·Rik)³ · f_ATM, C9 = sqrt(C6ij·C6jk·C6ik). f_atm is the
+//   caller-supplied triple BJ damping (pass 1.0 for the undamped Axilrod–Teller).
+pub fn qforge_d4_atm_triple(c6ij: float, c6jk: float, c6ik: float,
+                            rij: float, rjk: float, rik: float,
+                            f_atm: float) -> float {
+    let c9 = _dsqrt(c6ij * c6jk * c6ik)
+    let ang = qforge_d4_atm_angle(rij, rjk, rik)
+    let rprod = rij * rjk * rik
+    let r9 = _ipow(rprod, 3)
+    return c9 * ang / r9 * f_atm
+}
+
+// ── full two-body dispersion energy over a structure ──────────────────────────
+//   Sums the BJ-damped pair energy over i<j. C6_ij is precomputed per pair and
+//   passed as the flat upper-triangular (n×n) row-major c6 table (only c6[i*n+j],
+//   i<j read). qr4r2 is the per-atom <r4>/<r2>. d4: every input is data.
+pub fn qforge_d4_energy_2body(pos: [float], c6: [float], qr4r2: [float],
+                              s6: float, s8: float, a1: float, a2: float) -> float {
+    let n = len(qr4r2)
+    let mut e = 0.0
+    let mut i = 0
+    while i < n {
+        let mut j = i + 1
+        while j < n {
+            let r = qforge_eeq_distance(pos, i, j)
+            let c = c6[i * n + j]
+            e = e + qforge_d4_pair_energy(c, qr4r2[i], qr4r2[j], r, s6, s8, a1, a2)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return e
+}
+
+// ── full ATM three-body energy over a structure ───────────────────────────────
+//   Sums over i<j<k. c6 = the same flat (n×n) pair table (c6[i*n+j], i<j). f_atm
+//   is a single scalar triple-damping (caller; 1.0 = undamped ATM). d4: data-driven.
+pub fn qforge_d4_energy_atm(pos: [float], c6: [float], n: int, f_atm: float) -> float {
+    let mut e = 0.0
+    let mut i = 0
+    while i < n {
+        let mut j = i + 1
+        while j < n {
+            let mut k = j + 1
+            while k < n {
+                let rij = qforge_eeq_distance(pos, i, j)
+                let rjk = qforge_eeq_distance(pos, j, k)
+                let rik = qforge_eeq_distance(pos, i, k)
+                e = e + qforge_d4_atm_triple(c6[i * n + j], c6[j * n + k],
+                                             c6[i * n + k], rij, rjk, rik, f_atm)
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return e
+}
+
+// ── analytic ∂E_2body/∂R_l for a SINGLE moved Cartesian DOF (length 1, scalar) ─
+//   l = 3·a + c (atom a, component c). Only pairs (a,j) with the moved atom a in
+//   them contribute. Each chains qforge_d4_pair_dEdR · ∂R_aj/∂x_{a,c}. C6/C8 held
+//   fixed in R (the leading two-body gradient — see HONEST SCOPE). Returns the
+//   scalar ∂E_2/∂R_l. Sweeping l over 3n gives the full force vector.
+pub fn qforge_d4_grad_2body_dof(pos: [float], c6: [float], qr4r2: [float],
+                                s6: float, s8: float, a1: float, a2: float,
+                                l: int) -> float {
+    let n = len(qr4r2)
+    let a = l / 3
+    let c = l - 3 * a
+    let mut g = 0.0
+    let mut j = 0
+    while j < n {
+        if j != a {
+            let r = qforge_eeq_distance(pos, a, j)
+            // c6 table is upper-triangular: read the (min,max) slot
+            let mut lo = a
+            let mut hi = j
+            if a > j { lo = j ; hi = a }
+            let cval = c6[lo * n + hi]
+            let dedr = qforge_d4_pair_dEdR(cval, qr4r2[a], qr4r2[j], r, s6, s8, a1, a2)
+            let diff = pos[3 * a + c] - pos[3 * j + c]
+            let drdrl = diff / r
+            g = g + dedr * drdrl
+        }
+        j = j + 1
+    }
+    return g
+}
+
+// ── convenience: build the C6_ij pair table from geometry + EEQ q + CN ────────
+//   one call that wires round-1 (q via qforge_eeq_charges) and round-3 (CN via
+//   qforge_cn_numbers) into the D4 C6 table. Per element the caller supplies the
+//   reference table block (here a SINGLE shared reference state per atom for the
+//   wiring demo — na=nb=1 — so C6_ij = ζ_i·ζ_j·C6ref_ij; the multi-state Gaussian
+//   path is qforge_d4_c6_pair, exercised directly in the selftest). Returns the
+//   flat (n×n) upper-triangular C6 table. d4: c6ref0 + per-atom Z/qref = data.
+pub fn qforge_d4_c6_table_1state(pos: [float], rcov: [float], kcn: float,
+                                 chi: [float], eta: [float], alpha: [float], qtot: float,
+                                 c6ref0: [float], zeff: [float], qref: [float],
+                                 gam: float, ga: float) -> [float] {
+    let n = len(rcov)
+    let cn = qforge_cn_numbers(pos, rcov, kcn)
+    let q = qforge_eeq_charges(pos, chi, eta, alpha, qtot)
+    let mut tab: [float] = []
+    let mut z = 0
+    while z < n * n { tab.push(0.0) ; z = z + 1 }
+    let mut i = 0
+    while i < n {
+        let zi = qforge_d4_zeta(gam, ga, zeff[i], qref[i], q[i])
+        let mut j = i + 1
+        while j < n {
+            let zj = qforge_d4_zeta(gam, ga, zeff[j], qref[j], q[j])
+            let c = zi * zj * c6ref0[i * n + j]
+            tab[i * n + j] = c
+            tab[j * n + i] = c
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return tab
+}
