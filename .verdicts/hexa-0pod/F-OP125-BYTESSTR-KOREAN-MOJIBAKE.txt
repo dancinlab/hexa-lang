@@ -1,0 +1,117 @@
+F-OP125-BYTESSTR-KOREAN-MOJIBAKE
+HEXA-0POD OP-125 — root-cause + class-sweep of the Korean (multibyte UTF-8)
+bytes→str mojibake bug surfaced by stdlib/ckpt/test/pcc_roundtrip (OP-123 lead)
+2026-06-13 · 0-pod · $0 · NO GPU · no vast · no foreign pod · leak-0 · local CPU only
+
+═══════════════════════════════════════════════════════════════════════════════
+VERDICT — 🔴→FIXED.  ROOT-CAUSE CATEGORY = (c) str_to_bytes/bytes_to_str ASYMMETRY
+  (the OP-77/79 double-encode class) — NOT (a) bytes_to_str_raw, NOT (b) length-count.
+  • The pcc round-trip site itself was ALREADY fixed at source by OP-79 (#3217, today
+    2026-06-13 08:34). bytes_to_str_raw is PROVEN CORRECT (isolation + class-wide oracle).
+  • OP-125's NEW find: a MISSED site in the SAME class — stdlib/safetensors.hexa's
+    local `_bytes_to_str` (+ its self/ mirror) double-encodes the safetensors JSON
+    header, so any safetensors file with non-ASCII __metadata__ (Korean tensor labels)
+    mojibakes on read. OP-79's sweep EXPLICITLY excluded `_bytes_to_str` identifiers
+    (its verdict line: "`bytes_to_str_raw` / `_bytes_to_str` ... are DISTINCT
+    identifiers, excluded"), which is exactly why this site was missed.
+═══════════════════════════════════════════════════════════════════════════════
+
+STEP 1 — REPRODUCE (verbatim, live shipping interpreter ~/.hx/bin/hexa)
+───────────────────────────────────────────────────────────────────────────────
+$ ~/.hx/bin/hexa run stdlib/ckpt/test/pcc_roundtrip.hexa
+  PASS write_pcc.ok
+  PASS write_pcc.chunk_count==7
+  PASS verify_pcc.ok — code=OK
+  FAIL cert_json mismatch
+    want: {"schema_version":"2","slug":"한글-fixture","verdict":"VERIFIED","reason":"서명 OK ✓"}
+    got : {"schema_version":"2","slug":"íê¸-fixture","verdict":"VERIFIED","reason":"ìëª OK â"}
+  PASS payload byte-identical
+  PASS payload_len==1792
+FAIL: pcc roundtrip 5/6
+
+  `한글` → `íê¸` is the classic DOUBLE-UTF-8-ENCODE signature: each raw byte b>=0x80
+  is rendered as to_string(from_char_code(b & 0xFF)) — i.e. b is treated as a Unicode
+  codepoint and re-UTF-8-encoded — so a 3-byte Hangul becomes 3×2 = 6 mojibake bytes.
+
+LOCALIZATION — the repro is a STALE-BINARY artifact, NOT current source:
+  • bytes_to_str_raw in ISOLATION on the SAME live binary is CORRECT:
+      $ ~/.hx/bin/hexa run /tmp/btr_probe.hexa
+      raw=[한글]      RAW_OK
+      emoji=[🌌]      EMOJI_OK
+      len(한글)=6     rt=[한글]   RT_OK
+    (char_code is byte-indexed → raw UTF-8 bytes 237 149 156 = ED 95 9C = 한;
+     str_to_bytes & 0xFF preserves them; bytes_to_str_raw reassembles raw → correct.)
+  • The writer→file→bytes_slice→bytes_to_str_raw path traced directly = CORRECT
+    (bytes survive on disk; bytes_to_str_raw(file slice) = [slug:한글]).
+  • origin/main:stdlib/ckpt/verifier.hexa:245 ALREADY reads
+        let cert_json = bytes_to_str_raw(cert_bytes)
+    (the OP-79 / #3217 fix). So source is fixed; the repro comes from the SHIPPING
+    interpreter, which is the Jun-7 `hexa.real.pre-selfhost.20260611-005522` dispatch
+    binary with a FROZEN-EMBEDDED stdlib snapshot (pre-#3217 verifier line 195 still
+    `bytes_to_str(cert_bytes)`). Proven embedded/frozen: a MARKER inserted into
+    ~/.hx/src/stdlib/ckpt/verifier.hexa, an overlay of the fixed file, and
+    HEXA_STDLIB_ROOT=<worktree> ALL failed to change behavior (binary ignores disk
+    stdlib at runtime). This is the documented stale-oracle trap (MEMORY: "Local hexa
+    is stale oracle"). The OP-79 fix cannot be runtime-confirmed until the binary is
+    rebuilt — per g5 method, a faithful Python-port-of-source is used as oracle.
+
+STEP 2 — FIX (surgical, at the true root of the MISSED site)
+───────────────────────────────────────────────────────────────────────────────
+  stdlib/safetensors.hexa       _bytes_to_str(bs,start,end): replace per-byte
+  self/stdlib/safetensors.hexa  to_string(from_char_code(b & 0xFF)) double-encode
+                                with: slice [start,end) → bytes_to_str_raw(sub).
+  (self/ copy is a mirror — NOT in the build_selfhost closure: compiler/main.hexa
+   does not import safetensors; walk("compiler/main.hexa") never reaches it. No
+   selfhost byte-eq gate impact. No other caller anywhere in the repo.)
+  No change needed to the pcc/ckpt path — already correct in source (#3217).
+
+STEP 3 — CLASS SWEEP (Python UTF-8 oracle = faithful port of FIXED source)
+───────────────────────────────────────────────────────────────────────────────
+  str_to_bytes(s)        := list(s.encode("utf-8"))                    # writer (char_code)
+  bytes_to_str_raw(bs)   := bytes(b&0xFF for b in bs).decode("utf-8")  # FIXED verifier/reader
+  bytes_to_str_STALE(bs) := "".join(chr(b&0xFF) for b in bs)           # the buggy _bytes_to_str
+
+  $ python3 /tmp/pcc_oracle.py
+  FIXED  eq: True
+  STALE  eq: False
+  STALE got: {"schema_version":"2","slug":"íê¸-fixture",...,"reason":"ìëª OK â"}
+            ^ byte-identical to the live-binary mojibake above — oracle faithful.
+  SWEEP total fails: 0
+  CLASS CLEAN
+     (swept: Hangul U+AC00..U+D7A3 [11172 cps] · CJK U+4E00..U+9FFF · combining
+      marks U+0300..U+036F · FULL BMP U+0000..U+FFFF minus surrogates · 4-byte
+      astral/emoji sample 🌌😀🚀🦬🫠 + U+10000/U+10FFFF/U+2A6D6/U+1D11E — every
+      codepoint round-trips str→bytes→bytes_to_str_raw byte-identically.)
+
+  safetensors missed-site (oracle):
+  === safetensors header mojibake (OP-125 missed-site) ===
+  STALE eq: False | FIXED eq: True
+  STALE  : {"__metadata__":{"author":"íêµ­ì´ ë©í","note":"ìëª â"},"w":{"dtype":"F32"}}
+  ASCII unchanged under FIXED: True and STALE: True   (no ASCII-header regression)
+
+REGRESSION LOCK — stdlib/test/test_safetensors.hexa
+───────────────────────────────────────────────────────────────────────────────
+  Added a Hangul+CJK+emoji __metadata__ value ("한국어 메타데이터 ✓ 漢字") to the
+  write→read→re-write round-trip; asserts exact recovery. On the STALE binary
+  (embeds the OLD buggy _bytes_to_str) this NEW lock FAILS — proving the bug
+  end-to-end through the REAL safetensors_write→safetensors_read path (not just
+  the oracle):
+  $ ~/.hx/bin/hexa run stdlib/test/test_safetensors.hexa
+    ...
+    FAIL read.meta.author Korean round-trip (OP-125 mojibake lock)
+    FAIL F-SAFETENSORS-1 byte-identical round-trip   (downstream: read mojibakes → re-write differs)
+    pass=32  fail=4
+  FAIL: safetensors stdlib selftest 32/36
+  Under the FIXED source (oracle-proven) both assertions pass. The lock will go
+  GREEN on the live binary on the next interpreter rebuild that absorbs the fix.
+
+HONEST RESIDUAL
+───────────────────────────────────────────────────────────────────────────────
+  bytes_to_str_raw's multibyte handling is PROVEN CORRECT class-wide (full BMP +
+  Hangul + astral oracle, 0 divergence; live-binary isolation pass). The original
+  pcc site needed NO patch (already fixed by OP-79/#3217). OP-125's contribution =
+  closing the OP-79 sweep GAP: the `_bytes_to_str`-class double-encoder in
+  stdlib/safetensors.hexa (+self mirror) is now fixed + regression-locked. The fix
+  is oracle-verified and parse-clean (`hexa parse` OK ×3); a live `hexa run` GREEN
+  awaits the next interpreter rebuild (the shipping Jun-7 dispatch binary freezes
+  the embedded stdlib and cannot load the disk fix — stale-oracle, per CLAUDE/MEM).
