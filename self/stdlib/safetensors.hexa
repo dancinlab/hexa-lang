@@ -174,14 +174,21 @@ fn _str_to_bytes(s: string) {
     return out
 }
 
+// Decode the on-disk UTF-8 JSON header sub-range [start, end) to a string.
+// OP-125: raw-byte builtin bytes_to_str_raw — the prior per-byte
+// to_string(from_char_code(b & 0xFF)) double-UTF-8-encoded every byte >=0x80,
+// so non-ASCII __metadata__ mojibake'd on read (same class as OP-79 ckpt CERT;
+// OP-79's sweep excluded `_bytes_to_str` identifiers). self/ mirror of the
+// stdlib fix — NOT in the build_selfhost closure (compiler/main.hexa doesn't
+// import safetensors), so this carries no selfhost byte-eq gate impact.
 fn _bytes_to_str(bs, start: int, end: int) -> string {
-    let mut out = ""
+    let mut sub = []
     let mut i = start
     while i < end {
-        out = out + to_string(from_char_code(bs[i] & 0xFF))
+        sub.push(bs[i] & 0xFF)
         i = i + 1
     }
-    return out
+    return bytes_to_str_raw(sub)
 }
 
 fn _bytes_append(dst, src) {

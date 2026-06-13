@@ -115,6 +115,14 @@ fn main() -> void {
     let meta = #{}
     meta["framework"] = "hexa"
     meta["version"]   = "1"
+    // OP-125 mojibake lock: a non-ASCII (3-byte Hangul + 4-byte emoji + CJK)
+    // metadata value. The header is on-disk UTF-8 JSON; safetensors_read must
+    // recover these bytes via bytes_to_str_raw (raw passthrough). The prior
+    // _bytes_to_str — to_string(from_char_code(b & 0xFF)) per byte — would
+    // double-UTF-8-encode every byte >=0x80 and corrupt this round-trip. Same
+    // class as the OP-79 ckpt CERT bug; OP-79's sweep excluded `_bytes_to_str`
+    // identifiers, so this safetensors site was missed until OP-125.
+    meta["author"] = "한국어 메타데이터 ✓ 漢字"
 
     let tensors = #{}
     tensors["weight.big"]   = big
@@ -148,6 +156,9 @@ fn main() -> void {
     let rm = r["__metadata__"]
     chk("read.meta.framework==hexa", rm["framework"] == "hexa")
     chk("read.meta.version==1",      rm["version"]   == "1")
+    // OP-125: Korean/CJK/emoji metadata must survive raw — no double-encode.
+    chk("read.meta.author Korean round-trip (OP-125 mojibake lock)",
+        rm["author"] == "한국어 메타데이터 ✓ 漢字")
 
     // ── 3. F-SAFETENSORS-1: byte-identical re-write ─────────────────────
     let w2 = safetensors_write(path2, r)
