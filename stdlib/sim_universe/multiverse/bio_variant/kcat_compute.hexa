@@ -38,9 +38,14 @@ fn abs_i(x: i64) -> i64 { if x < 0 { return 0 - x } return x }
 
 // Per-variant per-world deterministic pseudo-noise in [-σ, σ]
 // Uses LCG seeded from (variant_idx, world_idx) so reruns reproduce.
+// Each step is reduced mod 2^31 so `state` stays in [0, 2^31): for
+// variant_idx ≥ 4 the unmasked `state * 1103515245` exceeds i63 (~9.22e18)
+// and wraps to a NEGATIVE i64, so the C-truncated `state % 2001` goes
+// negative and `r - 1000` falls outside the documented [-1000, 1000] band
+// (e.g. variant_idx=4 → centered=-2930). The mask keeps `r ∈ [0, 2000]`.
 fn noise_kcal_scaled(variant_idx: i64, world_idx: i64) -> i64 {
-    let mut state = variant_idx * 2654435761 + world_idx * 40503
-    state = state * 1103515245 + 12345
+    let mut state = (variant_idx * 2654435761 + world_idx * 40503) % 2147483648
+    state = (state * 1103515245 + 12345) % 2147483648
     let r = state % 2001     // r ∈ [0, 2000]
     let centered = r - 1000  // ∈ [-1000, 1000]
     // scale to [-σ, σ]
