@@ -1,5 +1,28 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-84 DONE: FINAL authoritative-reference crypto/hash/encoding tranche — CLOSES the OP-83 DEFERRED MED tail (LANE-2; LANE-1/OP-82 owns self/runtime/*_pure). THREE modules locked, all PROVEN-CLEAN. The high-value-with-authoritative-reference stdlib coverage vein is now CLOSED.
+- The LAST 3 untested high-value stdlib modules WITH an authoritative known-answer reference (the OP-83 DEFERRED MED tail). All 3 confirmed UNTESTED (scoped grep, NO .git — no co-located *_test.hexa, no .verdicts lock). None substituted/dropped; all existed at the documented paths.
+  · stdlib/crypto/poly1305.hexa — RFC 8439 §2.5.2 (Poly1305 one-time MAC)
+  · stdlib/core/hash/xxhash.hexa — the official `xxhash` reference (Python pkg 3.7.0, wraps Yann Collet's libxxhash)
+  · stdlib/crypto/asn1_der.hexa — X.690 DER, with `asn1crypto`-authoritative encodings (module is decode-only)
+- THREE LEAF oracles (established inline-the-module-body pattern, NOT in build_selfhost closure):
+  · stdlib/crypto/poly1305_test.hexa — RFC 8439 §2.5.2 tag a8061dc1305136c6c22b8baf0c0127a9 + determinism + empty-msg edge (tag == s == key[16..32] LE = 0103808afb0db2fd4abff6af4149f51b).
+  · stdlib/core/hash/xxhash_test.hexa — official xxhash 3.7.0 vectors: xxh32 {""=02cc5d05, "a"=550d7456, "abc"=32d153ff, "abc"/seed1=aa3da8ff, 16B="abcdefghijklmnop"=9d2d8b62, 17B=b3b873e1} + xxh64 {""=ef46db3751d8e999, "a"=d24ec4f1a98c6e5b, "abc"=44bc2cf5ad770999, "abc"/seed1=bea9ca8199328908, 40B 0..39=f5da40f1b11741e9} + xxh32/64 determinism. xxh64 returns [hi,lo] u32 halves.
+  · stdlib/crypto/asn1_der_test.hexa — asn1crypto-authoritative X.690 DER: OID 1.2.840.113549 (06062a864886f70d → der_oid_str), SEQUENCE{INTEGER 10, INTEGER 20} (300602010a020114 + child TLV iteration via der_next/der_int → 10, 20, end==SEQ end), OCTET STRING long-form length 128 (04 81 80 header), negative INTEGER two's-complement (02 01 ff → -1, 02 01 80 → -128).
+- RUN (hexa run, arm64-macos, exit 0 each; fork-storm-guard backoff for sibling-lane contention — the pgrep -f storm count was self-inflated by this lane's own waiter shells whose argv contained "hexa.real"; 0 real hexa binaries were actually contending):
+  · `poly1305 self-test: 3/3` `PASS`
+  · `xxhash self-test: 13/13` `PASS`
+  · `asn1_der self-test: 21/21` `PASS`
+  · TOTAL 37/37.
+- CROSS-CHECK (g5 — local ~/.hx/bin/hexa is a Jun-7 stale-oracle, so every vector independently reproduced by an authoritative reference; 0-mismatch):
+  · Poly1305: a faithful Python (1<<130)-5 modular reference reproduced the RFC 8439 §2.5.2 published tag EXACTLY + the empty-msg tag == s.
+  · xxHash: the OFFICIAL `xxhash` Python package (3.7.0, wraps libxxhash) emitted every xxh32/xxh64 digest; a hand port matched too. hexa == official == port on all 11 KAT digests.
+  · ASN.1 DER: the OFFICIAL `asn1crypto` package emitted 06062a864886f70d (OID) / 300602010a020114 (SEQUENCE) / 048180 (OCTET long-form header); hexa decode of those exact bytes yields the encoded values, decode(encode(v))==v at byte level; neg-int matched Python int.from_bytes(signed=True).
+  · ALL 37 hexa assertions == reference. NO 🔴 KAT-disagreement bug — 3 modules PROVEN-CLEAN.
+- BYTE-EQ: 3 NEW *_test.hexa LEAF files only (used nowhere; not imported by any build_selfhost stage) → self-host fixpoint UNAFFECTED. Audited modules (poly1305/xxhash/asn1_der.hexa) UNCHANGED — locked via leaf tests, no closure edit. wipe_guard net-additive (0 deletions).
+- VEIN-CLOSURE: the high-value-with-authoritative-reference stdlib coverage vein is CLOSED. Across OP-70/72/74/75/77/81/83/84, every untested stdlib module with an external known-answer reference (RFC / published spec vectors / an official reference implementation) is now locked with a leaf KAT oracle. The remaining untested stdlib modules are internal glue (no external KAT) → low-value to lock against an authoritative vector. This vein is exhausted.
+- 🟢 GREEN — 3 modules locked, 37/37. $0, 0-pod, NO GPU, no vast, no foreign pod, no MAIN.tape, leak-0. Verdict .verdicts/hexa-0pod/F-OP84-CRYPTO-KAT-FINAL.txt.
+
 ## 2026-06-13 — OP-83 DONE: batch test-coverage for HIGH-VALUE untested stdlib/* modules (LANE-2; LANE-1/OP-82 owns self/runtime/*_pure). FIVE crypto/codec modules locked, all PROVEN-CLEAN vs their authoritative references
 - CENSUS (scoped greps, NO .git): 1764 stdlib modules (excl *_test) / 254 *_test files. High-value vein = standard algorithms/formats with an AUTHORITATIVE reference (RFC / spec known-answer vectors) OR a documented round-trip/accuracy invariant. Filtered crypto/hash/codec/wasm to UNTESTED (no co-located *_test.hexa, no .verdicts lock):
   · stdlib/wasm/wasm_leb128.hexa — HIGH (wasm binary spec / Wikipedia LEB128 vectors)

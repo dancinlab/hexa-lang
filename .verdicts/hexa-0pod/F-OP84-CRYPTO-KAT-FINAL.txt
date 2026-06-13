@@ -1,0 +1,114 @@
+F-OP84-CRYPTO-KAT-FINAL — HEXA-0POD OP-84 (LANE-2, 0-pod)
+=========================================================
+FINAL authoritative-reference crypto/hash/encoding coverage tranche.
+Closes the OP-83 DEFERRED MED tail (the last 3 untested high-value stdlib
+modules WITH an authoritative known-answer reference). After this, the
+remaining untested stdlib modules are internal glue with NO external KAT.
+
+TIER: 🟢 GREEN — 3 modules locked, 37/37 assertions, all PROVEN-CLEAN.
+
+LANE: LANE-2 (0-pod correctness/hygiene). Owns stdlib/* (NOT self/runtime/*_pure).
+$0 · 0-pod · NO GPU · no vast · no foreign pod · no MAIN.tape · leak-0.
+
+
+AUTHORITATIVE-REFERENCE COVERAGE MATRIX
+---------------------------------------
+module                         | reference (authoritative)              | leaf test                         | result
+-------------------------------+----------------------------------------+-----------------------------------+--------
+stdlib/crypto/poly1305         | RFC 8439 §2.5.2 (Poly1305 one-time MAC) | crypto/poly1305_test.hexa         | 3/3  🟢
+stdlib/core/hash/xxhash        | official `xxhash` pkg 3.7.0 (libxxhash) | core/hash/xxhash_test.hexa        | 13/13 🟢
+stdlib/crypto/asn1_der         | `asn1crypto` (X.690 DER) + X.690 spec  | crypto/asn1_der_test.hexa         | 21/21 🟢
+-------------------------------+----------------------------------------+-----------------------------------+--------
+                                                                          TOTAL                              | 37/37 🟢
+
+All 3 confirmed UNTESTED before this OP (scoped grep, NO .git): no co-located
+*_test.hexa, no .verdicts lock. None substituted/dropped — all 3 existed at the
+documented paths.
+
+
+ORACLE OUTPUT (hexa run, arm64-macos, exit 0 each; fork-storm-guard backoff for
+sibling-lane contention — note: pgrep -f storm count was self-inflated by waiter
+shells whose argv contained "hexa.real"; 0 real hexa binaries were contending):
+
+  poly1305 self-test: 3/3
+  PASS
+
+  xxhash self-test: 13/13
+  PASS
+
+  asn1_der self-test: 21/21
+  PASS
+
+
+KNOWN-ANSWER VECTORS LOCKED
+---------------------------
+Poly1305 (RFC 8439 §2.5.2):
+  key = 85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b
+  msg = "Cryptographic Forum Research Group"
+  tag = a8061dc1305136c6c22b8baf0c0127a9                         [rfc8439_2.5.2_tag]
+  + determinism (pure fn of msg,key)                            [determinism]
+  + empty-msg edge: tag == s == key[16..32] little-endian
+    = 0103808afb0db2fd4abff6af4149f51b                          [empty_msg_equals_s]
+
+xxHash (official xxhash 3.7.0, wraps Yann Collet's libxxhash):
+  xxh32("",0)                 = 02cc5d05                         [xxh32_empty]
+  xxh32("a",0)                = 550d7456                         [xxh32_a]
+  xxh32("abc",0)              = 32d153ff                         [xxh32_abc]
+  xxh32("abc",1)              = aa3da8ff                         [xxh32_abc_s1]
+  xxh32("abcdefghijklmnop",0) = 9d2d8b62  (exercises 16-byte block path) [xxh32_16]
+  xxh32("abcdefghijklmnopq",0)= b3b873e1                         [xxh32_17]
+  xxh64("",0)                 = ef46db3751d8e999                 [xxh64_empty]
+  xxh64("a",0)                = d24ec4f1a98c6e5b                 [xxh64_a]
+  xxh64("abc",0)              = 44bc2cf5ad770999                 [xxh64_abc]
+  xxh64("abc",1)              = bea9ca8199328908                 [xxh64_abc_s1]
+  xxh64(bytes 0..39,0)        = f5da40f1b11741e9  (32-byte block path) [xxh64_40block]
+  + xxh32/xxh64 determinism                                     [xxh32/64_determinism]
+
+ASN.1 DER decode (asn1crypto authoritative encodings, X.690):
+  OID 1.2.840.113549  = 06 06 2a 86 48 86 f7 0d  → der_oid_str "1.2.840.113549"
+                        + tag/vlen/vstart                       [oid_*]
+  SEQUENCE{INT 10, INT 20} = 30 06 02 01 0a 02 01 14
+                        + tag/vlen/hdr/next + child TLV iteration
+                          (der_next/der_int: 10, 20; end==SEQ end) [seq_*, child*]
+  OCTET STRING long-form len 128 = 04 81 80 ‖128B
+                        + tag/longlen/hdr/vstart/next            [octet_*]
+  negative INTEGER two's-complement: 02 01 ff → -1 ; 02 01 80 → -128 [int_neg*]
+
+
+CROSS-CHECK (g5 — local ~/.hx/bin/hexa is a Jun-7 stale-oracle, so each vector was
+independently reproduced by a faithful reference port; report 0-mismatch):
+
+  • Poly1305: a faithful Python (1<<130)-5 modular reference reproduced the RFC 8439
+    §2.5.2 published tag a8061dc1305136c6c22b8baf0c0127a9 EXACTLY, and the empty-msg
+    tag == s. 0 mismatch.
+  • xxHash: the OFFICIAL `xxhash` Python package (3.7.0, wraps libxxhash) emitted every
+    xxh32/xxh64 digest above; a hand-written Python port reproduced all of them too.
+    hexa output == official == port on all 11 KAT digests. 0 mismatch.
+  • ASN.1 DER: the OFFICIAL `asn1crypto` package emitted 06062a864886f70d (OID),
+    300602010a020114 (SEQUENCE), and 048180 (OCTET long-form header) — hexa decode of
+    those exact bytes yields the encoded values, and decode(encode(v)) == v at byte
+    level. Negative-int two's-complement matched Python int.from_bytes(signed=True).
+    0 mismatch.
+
+  All 37 hexa assertions == reference. NO 🔴 KAT-disagreement bug. 3 modules
+  PROVEN-CLEAN.
+
+
+BYTE-EQ / SELF-HOST FIXPOINT
+---------------------------
+3 NEW *_test.hexa LEAF files only (poly1305_test, xxhash_test, asn1_der_test).
+They are leaf consumers (`use`d nowhere; not imported by any build_selfhost stage)
+→ self-host fixpoint UNAFFECTED. The audited modules (poly1305.hexa, xxhash.hexa,
+asn1_der.hexa) are UNCHANGED — coverage locked via leaf tests, not closure edits.
+wipe_guard: net-additive, 0 deletions.
+
+
+VEIN-CLOSURE STATEMENT
+----------------------
+The high-value-with-authoritative-reference stdlib coverage vein is CLOSED.
+Across OP-70/72/74/75/77/81/83/84, every untested stdlib module that has an
+external known-answer reference (RFC / published spec vectors / an official
+reference implementation) is now locked with a leaf KAT oracle. The remaining
+untested stdlib modules are internal glue (no external KAT — internal data
+plumbing, project-specific wiring, or no published reference algorithm) →
+low-value to lock against an authoritative vector. This vein is exhausted.
