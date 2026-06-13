@@ -177,13 +177,54 @@ Fock 빌드, (3) 비직교 일반화 고유문제 `FC=SCε`. 모든 g5 anchor �
       (d) reduction anchor / regression — 1-dim-block CAS(2,2) (H₂ full space): canon path == r13 path |Δ|=0
           (canonicalizing a 1-dim block IS the identity, NEVPT2 ≡ 0); r13 nevpt2_selftest + r1..r12 regress ALL
           PASS — casscf.hexa/fci.hexa byte-for-byte unchanged
-- [ ] round-15 (named) — NEVPT2 4-RDM CLASSES + CASSCF SCALE: (1) the two 4-RDM classes Sr (S_r^{(−1)}, a16) +
-      Si (S_i^{(+1)}, a22) → full 8-class SC-NEVPT2 on large active spaces (CAS(4,4)+) where they are nonzero,
-      via the active 4-RDM ⟨E_pq E_rs E_tu E_vw⟩ (canonicalization already shipped this round, so CAS(4,4)+ on a
-      real multi-core/virtual molecule then runs end-to-end); (2) PC-NEVPT2 / CASPT2 (partially-contracted / 2nd
-      variant); (3) the round-12-named CASSCF scaling (2nd-order Newton MCSCF · direct-CI Davidson — would also
-      shrink the round-14 (b) |Δ|=4.67e-4 orbital-convergence residual). ALL within-class refinements — NO
-      remaining method-class gap (see depletion)
+- [x] brick 18 (round-15) — NEVPT2 ACTIVE 4-RDM ⟨E_pq E_rs E_tu E_vw⟩ (the one new primitive the two remaining
+      SC-NEVPT2 classes Sr (a16, S_r^{(−1)}) + Si (a22, S_i^{(+1)}) require). `nevpt2.hexa` additive (casscf.hexa/
+      fci.hexa BYTE-UNTOUCHED): nevpt2_dm4 = the literal one-more-excitation-operator extension of the validated
+      nevpt2_dm3 build (E_pq(E_rs(E_tu(E_vw|gs⟩))) with the two innermost excited vectors reused), + nevpt2_dm4_idx
+      accessor. Validated on H₆ STO-3G CAS(4,4) (ncore=1, m=4, 2α2β; 4-RDM = m^8 = 65536 elements, genuinely
+      nonzero) by the number-operator trace sum rules.
+      (a) 4-RDM trace sum rule Σ_p ⟨E_pp E_rs E_tu E_vw⟩ = N·⟨E_rs E_tu E_vw⟩ — residual 9.85e-14 (≈0, PASS)
+      (b) nested 3-RDM reduction Σ_p ⟨E_pp E_tu E_vw⟩ = N·⟨E_tu E_vw⟩ — residual 7.70e-15 (build chain exact)
+      (c) CAS(2,2) reduction anchor — 4-RDM EXISTS (m=2) + sum rule = 0.0 exactly; Sr/Si CLASS energies vanish
+          there (PySCF ~1e-12), so the new 4-RDM classes cannot corrupt the sealed 6-class CAS(2,2) result
+      (d) regression — r13 nevpt2 6-class + r14 canon selftests BOTH stay PASS (6-class driver byte-unchanged;
+          nevpt2_dm4 is purely additive)
+      HONEST (d6 · @L5) — the Sr/Si ENERGY is round-16, NOT this round: PySCF builds a16/a22 from a C-kernel
+      intermediate f3ca/f3ac = (4-RDM ∘ active-eri) computed DIRECTLY from the CI vector (it NEVER forms dm4).
+      This round's investigation proved its full-4-RDM source comments are STALE — matching f3ca to ANY 4-RDM
+      contraction (exhaustive index search) leaves a ~6.5 irreducible residual (an undocumented particle-symmetric
+      normal-ordering correction in the kernel), and the comment einsums on the genuine 4-RDM give Sr=+0.0014 vs
+      PySCF −0.00196 on H₆ CAS(4,4) — a ~3e-3 error, NOT <1e-6. d6 forbids shipping that as a <1e-6 match, so the
+      4-RDM BUILD ships validated and the two class energies are HONESTLY deferred one round.
+- [ ] round-16 (named) — EXACT f3ca/f3ac C-KERNEL PORT → full 8-class Sr/Si: port PySCF's _contract4pdm itself
+      (t2ci pair-excitation E_mn E_ij of the CI vector → active-eri dgemm → particle-symmetric tril2pdm
+      contraction), NOT a 4-RDM einsum — consuming the round-15 nevpt2_dm4. Then Sr/Si match PySCF mrpt.NEVPT
+      per-class to <1e-6 on H₆ CAS(4,4) / N₂ CAS(6,6) → full 8-class SC-NEVPT2 end-to-end. THREE concrete paths
+      (d2): (i) port the kernel's bra-ket-eri contraction operationally on the CI vector (guaranteed-correct,
+      same algorithm); (ii) derive the particle-symmetric normal-ordering correction (the ~6.5 residual) as an
+      explicit dm3-delta term added to the 4-RDM contraction; (iii) cumulant-4-RDM approximation for CAS(8,8)+
+      where the exact m^8 4-RDM is the factorial-cost ceiling. Plus the round-12-named CASSCF scaling (2nd-order
+      Newton MCSCF · direct-CI Davidson — shrinks the round-14 |Δ|=4.67e-4 orbital-convergence residual) and
+      PC-NEVPT2/CASPT2 variants. ALL within-class refinements — NO remaining method-class gap (see depletion)
+
+## MOLSCF method-completeness depletion (round-15)
+
+Round-15 ships + validates the active-space **4-RDM** ⟨E_pq E_rs E_tu E_vw⟩ (nevpt2_dm4) — the one new
+primitive the two remaining SC-NEVPT2 classes Sr/Si need — on H₆ CAS(4,4), exact by the number-operator trace
+sum rule (residual 9.85e-14) and the nested 3-RDM reduction (7.70e-15), and exactly 0 on the CAS(2,2) Sr/Si-
+vanishing space. The **multireference dynamic-correlation capability is NOT yet genuinely complete**: the two
+4-RDM class ENERGIES (Sr, Si) are honestly deferred to round-16 because PySCF assembles their a16/a22
+intermediates from a C-kernel object f3ca/f3ac = (4-RDM ∘ active-eri) built DIRECTLY from the CI vector (it
+never forms dm4), and this round empirically established that PySCF's full-4-RDM source comments are STALE —
+matching f3ca to any 4-RDM contraction leaves a ~6.5 irreducible residual (an undocumented particle-symmetric
+normal-ordering correction), and the comment einsums on the genuine 4-RDM give Sr=+0.0014 vs PySCF −0.00196
+(~3e-3, not <1e-6). d6 forbids shipping that as a match. So as of round-15 the 6 ≤3-RDM classes are the FULL
+SC-NEVPT2 only on CAS(2,2); on CAS(4,4)+ the 8-class total still lacks the two 4-RDM terms. Round-16 closes it
+by porting the C-kernel itself (t2ci + eri-dgemm + particle-symmetric tril2pdm on the CI vector — the
+guaranteed-correct same-algorithm path) on top of the validated round-15 4-RDM. THREE breakthrough paths are
+named (d2): (i) operational CI-vector kernel port; (ii) explicit dm3-delta normal-ordering correction; (iii)
+cumulant-4-RDM for CAS(8,8)+ (the exact m^8 4-RDM is the factorial ceiling). Once Sr/Si land <1e-6, the
+multireference dynamic-correlation front-end is genuinely complete on real active spaces.
 
 ## MOLSCF method-completeness depletion (round-14)
 

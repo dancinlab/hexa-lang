@@ -933,3 +933,43 @@ anchor is unambiguous. Larger active spaces (CAS(4,4)+) additionally need the 4-
 3. CASSCF SCALING — 2nd-order Newton/AH MCSCF + direct-CI Davidson past the dense-eigh / steepest-descent
    ceiling (also shrinks the round-14 (b) |Δ|=4.67e-4 orbital-convergence residual toward the <1e-6 the PySCF-
    orbital anchor already demonstrates) → N₂ CAS(6,6), Cr₂ CAS(12,12).
+
+## round-15 — NEVPT2 active 4-RDM ⟨E_pq E_rs E_tu E_vw⟩ (the Sr/Si primitive) + the f3ca/f3ac wall
+
+SHIPPED (validated): nevpt2_dm4 — the active-space 4-RDM, the one new primitive both remaining SC-NEVPT2
+classes Sr (a16, S_r^{(−1)}) and Si (a22, S_i^{(+1)}) require. It is the literal one-more-excitation-operator
+extension of the validated nevpt2_dm3 build: dm4[p,q,r,s,t,u,v,w]=⟨gs|E_pq E_rs E_tu E_vw|gs⟩, with the two
+innermost excited vectors reused. nevpt2_dm4_idx accessor added. casscf.hexa/fci.hexa BYTE-UNTOUCHED; the
+6-class driver byte-unchanged (purely additive). nevpt2_4rdm_selftest.hexa gates it:
+  (a) H₆ CAS(4,4) (m=4, 4-RDM = m^8 = 65536 elements, nonzero) — number-operator trace sum rule
+      Σ_p ⟨E_pp E_rs E_tu E_vw⟩ = N·⟨E_rs E_tu E_vw⟩ residual = 9.85e-14 (PASS)
+  (b) nested 3-RDM reduction Σ_p ⟨E_pp E_tu E_vw⟩ = N·⟨E_tu E_vw⟩ residual = 7.70e-15 (build chain exact)
+  (c) CAS(2,2) reduction anchor — 4-RDM exists (m=2) + sum rule residual = 0.0 exactly; Sr/Si vanish there
+      (PySCF ~1e-12 — confirmed independently this round on H₄ CAS(2,2): Sr=−1.5e-12, Si=−2.0e-12)
+  (d) regression — r13 nevpt2 6-class + r14 nevpt2_canon selftests BOTH stay PASS.
+
+DEFERRED (HONEST d6 · @L5 — the f3ca/f3ac wall): the Sr/Si ENERGY is round-16, not this round. PySCF builds
+the a16/a22 4-RDM intermediates from a C-kernel object f3ca/f3ac = (4-RDM ∘ active-eri) computed DIRECTLY from
+the CI vector (pyscf/mrpt/nevpt2.py _contract4pdm → NEVPTkern_{cedf_aedf,aedf_ecdf} in lib/mcscf/
+nevpt_contract.c). It NEVER forms the full 4-RDM (`dm4 = dms['4']` is commented out; dms['4'] is None).
+This round's investigation (PySCF 2.13.1, H₆ CAS(4,4), canonical orbitals; anchors Sr=−0.0019571458,
+Si=−0.0025218944, 8-class total −0.0221219083 == mrpt.NEVPT(mc).kernel()) empirically established:
+  • PySCF's OWN full-4-RDM source comments do NOT reproduce f3ca. Exhaustive index search (all eri
+    permutations × all P(8,3) 4-RDM contraction patterns, full-tensor and k≤j-slice) leaves a ~6.49
+    IRREDUCIBLE residual vs the captured kernel f3ca — an undocumented particle-symmetric normal-ordering
+    correction folded into the kernel's t2ci/tril2pdm.
+  • feeding the comment einsums the genuine 4-RDM (E-product AND PySCF reorder convention) gives
+    Sr=+0.0014 vs PySCF −0.00196 on H₆ CAS(4,4) — a ~3e-3 error, NOT the <1e-6 the gate demands.
+d6 forbids forcing that as a <1e-6 match. So the 4-RDM BUILD ships validated and the two class energies are
+honestly deferred ONE round. The fix is to port the C-kernel itself (operational on the CI vector), which
+CONSUMES the round-15 nevpt2_dm4 — NOT a 4-RDM einsum.
+
+### round-16 named (3 breakthrough paths, d2 — never concede)
+1. EXACT f3ca/f3ac C-KERNEL PORT (primary) — replicate _contract4pdm operationally in hexa on the CI vector:
+   t2ci pair-excitation E_mn E_ij|C⟩ (reuse nevpt2_apply_E) → contract 3 indices with active eri → particle-
+   symmetric tril2pdm bra contraction. Guaranteed-correct (same algorithm). Then Sr/Si <1e-6 vs PySCF on H₆
+   CAS(4,4) / N₂ CAS(6,6) → full 8-class SC-NEVPT2 end-to-end.
+2. EXPLICIT NORMAL-ORDERING CORRECTION — derive the ~6.49 residual as an explicit dm3-delta term (E_lk E_ae =
+   δ_ke E_la − a†_l a†_a a_k a_e) added to the 4-RDM contraction, recovering f3ca analytically from dm4+dm3.
+3. CUMULANT-4-RDM APPROXIMATION — for CAS(8,8)+ where the exact m^8 4-RDM is the factorial-cost ceiling,
+   approximate Γ⁴ ≈ (antisymmetrized Γ¹Γ¹Γ¹Γ¹ + Γ²-cumulant terms) — the standard DMRG-NEVPT2 ceiling-breaker.
