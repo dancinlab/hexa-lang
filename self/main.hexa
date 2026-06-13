@@ -3831,13 +3831,19 @@ fn _closure_resolve(imp, caller_dir) {
 // `pub use "X"` / `from "X" import …` directive line. Returns "" if the
 // line is not an import directive.
 fn _closure_parse_import(line) {
-    // trim leading whitespace
+    // trim leading whitespace. NOTE: stop at the first non-whitespace char
+    // WITHOUT clobbering `si` — the prior `else { si = sn }` form jumped `si`
+    // to end-of-line, so `line.substring(si, len)` collapsed to "" for any
+    // NON-indented import (the common top-level `use "x"` case), making the
+    // whole closure walk find zero imports → `_import_closure_hash` returned
+    // "" → the run-cache key silently fell back to the entrypoint-only hash,
+    // so editing a transitively-imported module served a STALE cached binary.
     let mut s = line
     let mut sn = len(s)
     let mut si = 0
     while si < sn {
         let ch = s.substring(si, si + 1)
-        if ch == " " || ch == "\t" { si = si + 1 } else { si = sn }
+        if ch == " " || ch == "\t" { si = si + 1 } else { break }
     }
     s = line.substring(si, len(line))
     // strip optional `pub ` prefix
