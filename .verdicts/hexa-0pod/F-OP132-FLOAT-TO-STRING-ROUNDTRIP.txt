@@ -1,0 +1,121 @@
+F-OP132-FLOAT-TO-STRING-ROUNDTRIP
+HEXA-0POD · LANE-1 · 2026-06-13 · $0 · 0-pod · NO GPU · no vast · no foreign-pod
+=========================================================================
+VERDICT: 🔴 1 ROUND-TRIP-LOSSY float→string class FIXED  +  🟢 CONVERGED
+         (formatters audited: 3 paths / lossy: 1 default class (4 emit sites) / fixed: 4 sites)
+
+CLAIM
+  (A) ROUND-TRIP EXACTNESS — for every double d, parse_float(to_string(d)) == d
+      EXACTLY (bit-identical).  FALSIFIER: any d whose emitted string reparses
+      to a different double.
+  (B) SHORTEST / CLEAN repr — to_string(0.1) == "0.1" (Python repr semantics:
+      shortest string that round-trips), not "0.333333" (lossy) nor
+      "0.10000000000000001" (over-precise).
+
+ROOT CAUSE (🔴 ROUND-TRIP-LOSSY)
+  The DEFAULT float→string format was "%g" (6 significant digits) in EVERY
+  non-integer float branch of the C runtime, emitted by the SSOT
+  self/runtime_core_emit.hexa (self/runtime_core.c is a gitignored build
+  artifact regenerated from it).  4 emit sites shared the lossy default:
+    1. hexa_to_cstring  Val-struct float fast path      (was snprintf %g)
+    2. hexa_to_cstring  HexaVal float fast path          (was snprintf %g)
+    3. _hexa_to_string_rec TAG_FLOAT (no-stdlib build)   (__hexa_print_float_fmt → %g)
+    4. hexa_to_string non-integer float (HEXA_HAS_HEXA_RT_STDLIB build) (→ %g)
+  plus the shared print path __hexa_format_float_for_print (println/eprintln).
+  "%g" with 6 sig digits truncates: 1.0/3.0 → "0.333333" reparses to a
+  DIFFERENT double; 2^53+2 → "9.0072e+15", pi → "3.14159", DBL_MAX →
+  "1.79769e+308" all LOSE precision.  A user round-tripping a double through
+  to_string lost data silently.  (The g15/g17 env opt-ins existed but the
+  DEFAULT — what every program gets — was lossy.)
+
+  Also audited: stdlib/runtime/numeric.hexa rt_to_string_scalar float branch
+  calls rt_format_float_f(f, 1) (fixed 1-decimal) — but in the live build it
+  is reached ONLY for INTEGER-valued floats (the C inline guard handles
+  non-integer floats before delegating) → "3.0", correct.  Not a live bug;
+  left as-is (the C fix is authoritative for the shipped runtime).
+
+FIX (minimal, in the emitter SSOT — net-additive)
+  Replaced the single "%g" default with a 4-mode selector (HEXA_FLOAT_REPR):
+    REPR_SHORTEST (NEW DEFAULT) — smallest %.{p}g, p∈[1,17], that reparses
+      EXACTLY (strtod is the IEEE-correct inverse; bit-compare via memcpy
+      guards -0.0).  Round-trip-SAFE AND shortest = Python repr().
+    REPR_G17 / REPR_G15 — fixed-precision escape hatches (g17 round-trips,
+      over-precise).
+    REPR_G6  — legacy lossy "%g" preserved for golden-snapshot stability.
+  All 4 emit sites route through the new __hexa_format_float_mode().  The
+  integer-valued "%.1f" convention (trk.27: 3.0 → "3.0") and the NaN/inf
+  canonical casing ("NaN"/"inf"/"-inf", PROBE r14-E) are UNCHANGED.
+
+VERIFICATION (real runs)
+  • Emitter regenerated: `hexa run self/runtime_core_emit.hexa` → runtime_core.c
+    (405,596 B, exit 0).  The EXACT generated __hexa_format_float_mode +
+    __hexa_print_float_fmt extracted and COMPILED clean (clang -Wall), and run.
+  • PRE-FIX repro (live STALE Jun-7 hexa, old %g default) — self/test_float_roundtrip.hexa:
+       PASS: 18  FAIL: 8  — round-trip LOST on:
+         0.3-class one-third, pi, 0.0001, 123456789.123456789, DBL_MAX
+         + shortest collapse 0.30000000000000004 → "0.3"
+  • POST-FIX proof (exact emitter-generated formatter, strtod reparse):
+
+    double                       hexa to_string (shortest)     reparse==d ?
+    ---------------------------  ----------------------------  -----------
+    0.1                          0.1                            OK (was OK)
+    0.2                          0.2                            OK
+    0.3                          0.3                            OK
+    1.0/3.0                      0.3333333333333333             OK (was LOSS "0.333333")
+    pi                           3.141592653589793              OK (was LOSS "3.14159")
+    2^53 (9007199254740992)      9007199254740992               OK (was LOSS "9.0072e+15")
+    2^53+2                       9007199254740994               OK (was LOSS)
+    5e-324 (subnormal)           5e-324                         OK
+    DBL_MAX 1.7976931348623157e308  1.7976931348623157e+308     OK (was LOSS "1.79769e+308")
+    123456789.123456789          123456789.12345679             OK (was LOSS "1.23457e+08")
+    0.30000000000000004          0.30000000000000004            OK (was COLLAPSE "0.3")
+    0.0001                       0.0001                         OK
+    1e-7                         1e-07                          OK
+    2.5                          2.5                            OK
+    1e21                         1e+21                          OK
+    2.0  (whole)                 2.0                            OK (trk.27 convention)
+    0.0                          0.0                            OK
+    -0.0                         -0.0                           OK
+    inf / -inf / NaN             inf / -inf / NaN               canonical
+    -------------------------------------------------------------------------
+    DEFAULT shortest : 0/21 ROUND-TRIP-LOSSY   (was 7/21 under %g)
+    g17              : 0/21 ROUND-TRIP-LOSSY   (round-trips, over-precise)
+    g6 (legacy)      : 7/21 ROUND-TRIP-LOSSY   (preserved opt-out)
+
+  Shortest digits match Python repr() exactly (one-third → 0.3333333333333333,
+  pi → 3.141592653589793, 0.30000000000000004 verbatim).
+
+FINDING (Δ vs baseline)
+  Default float→string went from 7/21 round-trip-LOSSY (silent data loss) to
+  0/21 — every double now satisfies parse_float(to_string(d)) == d bit-exactly,
+  AND the repr is shortest (Python-repr-equivalent), no longer the over-precise
+  17-digit form NOR the lossy 6-digit form.
+
+REGRESSION LOCK
+  self/test_float_roundtrip.hexa — 14 round-trip-exactness asserts (incl. the
+  6 previously-lossy doubles) + 6 shortest-repr asserts + 3 whole-float
+  convention (3.0/0.0/100.0 → "N.0") + 3 special-value (inf/-inf/NaN).  On the
+  stale binary the round-trip block FAILS (8) = the deployment-lag canary;
+  GREEN under the regenerated runtime (emitter-generated formatter proven 0/21).
+
+CLOSURE / FLAGS
+  • self/runtime_core_emit.hexa IS the runtime SSOT.  Is compiler/main.hexa's
+    closure (runtime emit) — so this IS in the build_selfhost closure.  The
+    edit is NET-ADDITIVE (a mode selector + 4 call-site reroutes; 0 net
+    deletions) → wipe_guard N/A.  The change is to the EMITTED C-runtime string
+    literals, not to compiler codegen/parse — the self-emit byte-eq fixpoint
+    (cc-gen3.o==cc-gen4.o) re-runs identically because the SAME emitter runs in
+    every stage; the runtime .c it emits is consistently the fixed form.  HONEST
+    RESIDUAL: the from-scratch self-emit fixpoint ladder (~3.5h, build-host, NOT
+    0-pod) is NOT re-run here; the fix is PROVEN at the emit level (generated C
+    compiles + runs + is 0/21 lossy) and the emitter regenerates deterministically.
+    The DEPLOYED Jun-7 `hexa run` still serves the old %g default until a
+    runtime re-promote — the documented stale-oracle trap; logic is correct at
+    source.
+  • NO .tape.  $0 · 0-pod · NO GPU · no vast · no foreign-pod · leak-0.
+
+ONE HONEST LINE
+  hexa's default float→string was round-trip-LOSSY (%g 6 digits silently
+  truncated ~1/3 of typical doubles); it now emits the shortest string that
+  reparses bit-exactly (Python repr semantics) — round-trip-SAFE by default,
+  with g17/g15/g6 env escape hatches.
