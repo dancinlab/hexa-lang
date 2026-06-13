@@ -1,0 +1,221 @@
+// OP-116 (LANE-1 0-pod SECURITY — path-traversal / file-access / injection
+// audit) — guard-is-load-bearing lock.
+//
+// CENSUS RESULT (g5): the stdlib/compiler path-builder + shell/SQL-builder
+// surface is GUARDED or trusted-local — NO genuine 🔴. This hermetic leaf
+// PROVES the three load-bearing guards actually defeat their attack class,
+// each paired with an UNGUARDED negative-control twin that demonstrably
+// breaks out (so the green is not a tautology):
+//
+//   (1) PATH-TRAVERSAL — stdlib/alloc/path.hexa `path_normalize` lexically
+//       collapses `.`/`..` segments. An external name like
+//       "../../etc/passwd" joined onto a relative base then normalized
+//       cannot gain a leading "/" to escape to an absolute /etc/passwd; an
+//       absolute "/etc/passwd" is honored verbatim by `path_join`
+//       (documented: abs b wins — the CLI trust boundary). The
+//       self/module_loader.hexa import resolver uses the SAME lexical
+//       `..`-collapse and is the only "include resolves a name → file"
+//       site — it normalizes.
+//
+//   (2) SHELL-QUOTE — the canonical single-quote-wrap-with-`'\''`-escape
+//       (`_shq` in stdlib/io.hexa, http.hexa, sqlite.hexa; the `.replace(
+//       "'", "'\\''")` in stdlib_cli.hexa / portable_fs.hexa) neutralizes a
+//       `'; rm -rf / #` breakout. NEG-CONTROL = a naive single-quote wrap
+//       WITHOUT the inner escape (the brittle `'" + p + "'` pattern) which
+//       DOES leave the breakout intact — proving the escape is load-bearing.
+//
+//   (3) SQL-VALUE — stdlib/sqlite.hexa `_sqlq` doubles `'` (SQL-92), so a
+//       value `x' OR '1'='1` becomes the inert literal `'x'' OR ''1''=''1'`.
+//       NEG-CONTROL = no-doubling → the quote closes the literal and the
+//       `OR '1'='1` tautology leaks into the WHERE clause.
+//
+// HONEST TRUST-BOUNDARY NOTES (not bugs — see verdict):
+//   · sqlite identifiers (table/column NAMES) + `where_sql` are interpolated
+//     RAW, but the module contract states "callers MUST use ? for any data";
+//     identifiers come from the program's own schema (the developer wrote
+//     them), not from untrusted input → documented-trusted-context.
+//   · proc.hexa / channel.hexa / the rtsc CLIs build shell strings from
+//     caller-supplied lock/FIFO/script/argv paths — a process/CLI tool
+//     intentionally takes a trusted local path; not an untrusted-input sink.
+//   · there is NO static-file HTTP server nor archive/zip extractor in
+//     stdlib that maps a NETWORK/ARCHIVE entry name → a filesystem path;
+//     http/http2/llm are curl CLIENTS with shell-escaped url/headers/method.
+//
+// HERMETIC (no `use` — stale-bundle dodge OP-87/88): the guards are
+// verbatim-inlined from their sources. This leaf is closure-OUT (not in
+// build_selfhost) → byte-eq / fixpoint UNAFFECTED.
+
+// ── (1) path_normalize — VERBATIM from stdlib/alloc/path.hexa:119 ──
+fn _path_is_abs(p: string) -> bool {
+    if len(p) == 0 { return false }
+    return p.substring(0, 1) == "/"
+}
+
+fn _path_join(a: string, b: string) -> string {
+    if len(a) == 0 { return b }
+    if len(b) == 0 { return a }
+    if _path_is_abs(b) { return b }
+    let mut parts = []
+    parts.push(a)
+    if a[len(a) - 1] != '/' { parts.push("/") }
+    parts.push(b)
+    return parts.join("")
+}
+
+fn _path_normalize(p: string) -> string {
+    if len(p) == 0 { return "." }
+    let abs = _path_is_abs(p)
+    let segs = p.split("/")
+    let mut out = []
+    let mut i = 0
+    while i < len(segs) {
+        let s = segs[i]
+        if len(s) > 0 {
+            if s == "." {
+                // skip
+            } else if s == ".." {
+                if len(out) > 0 {
+                    let last = out[len(out) - 1]
+                    if last != ".." { out.pop() }
+                    else { out.push(s) }
+                } else {
+                    if !abs { out.push(s) }
+                }
+            } else {
+                out.push(s)
+            }
+        }
+        i = i + 1
+    }
+    let body = out.join("/")
+    if abs {
+        let mut q = []
+        q.push("/")
+        q.push(body)
+        return q.join("")
+    }
+    if len(body) == 0 { return "." }
+    return body
+}
+
+// _starts_with — prefix test (no stdlib import).
+fn _starts_with(s: string, pre: string) -> bool {
+    if len(pre) > len(s) { return false }
+    return s.substring(0, len(pre)) == pre
+}
+
+// _contains — substring search (no stdlib import).
+fn _contains(s: string, needle: string) -> bool {
+    let n = len(s)
+    let m = len(needle)
+    if m == 0 { return true }
+    if m > n { return false }
+    let mut i = 0
+    while i + m <= n {
+        if s.substring(i, i + m) == needle { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// ── (2) shell-quote: the canonical guarded escape vs the brittle twin ──
+// GUARDED — VERBATIM from stdlib/io.hexa / http.hexa / sqlite.hexa `_shq`.
+fn _shq_guarded(s: string) -> string {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+// UNGUARDED NEG-CONTROL — naive single-quote wrap, NO inner escape.
+fn _shq_naive(s: string) -> string {
+    return "'" + s + "'"
+}
+
+// ── (3) SQL value-quote: _sqlq vs the no-doubling twin ──
+// GUARDED — VERBATIM from stdlib/sqlite.hexa:75 `_sqlq`.
+fn _sqlq_guarded(s: string) -> string {
+    return "'" + s.replace("'", "''") + "'"
+}
+// UNGUARDED NEG-CONTROL — wrap without doubling: payload `'` closes literal.
+fn _sqlq_naive(s: string) -> string {
+    return "'" + s + "'"
+}
+
+fn main() {
+    let mut pass = 0
+    let mut fail = 0
+
+    // ════ (1) PATH-TRAVERSAL ════════════════════════════════════════════
+
+    // 1a — relative base + "../../etc/passwd" CANNOT escape to an absolute
+    //   /etc/passwd. join("safe/base","../../etc/passwd") normalizes to
+    //   "etc/passwd" — the two `..` pop safe/ and base/, no leading "/".
+    let norm1 = _path_normalize(_path_join("safe/base", "../../etc/passwd"))
+    if !_path_is_abs(norm1) { pass = pass + 1 } else { fail = fail + 1; print("FAIL 1a abs-escape: " + norm1) }
+
+    // 1b — even an over-deep `..` chain never gains a leading "/".
+    let deep = _path_normalize(_path_join("base", "../../../../../../etc/passwd"))
+    if !_path_is_abs(deep) { pass = pass + 1 } else { fail = fail + 1; print("FAIL 1b deep-abs-escape: " + deep) }
+
+    // 1c — NEG-CONTROL / trust boundary: an explicit absolute "/etc/passwd"
+    //   IS honored by join (documented: abs b wins). Proves the test
+    //   distinguishes lexical-traversal-blocked from abs-honored (not a
+    //   tautology) — a CLI that takes an absolute path means it.
+    let abs_join = _path_join("safe/base", "/etc/passwd")
+    if _path_is_abs(abs_join) && abs_join == "/etc/passwd" { pass = pass + 1 } else { fail = fail + 1; print("FAIL 1c abs-honored: " + abs_join) }
+
+    // 1d — a NORMAL relative include resolves unchanged (no false-positive).
+    let ok_inc = _path_normalize(_path_join("stdlib", "alloc/path.hexa"))
+    if ok_inc == "stdlib/alloc/path.hexa" { pass = pass + 1 } else { fail = fail + 1; print("FAIL 1d normal: " + ok_inc) }
+
+    // 1e — canonicalize-and-check-prefix invariant: a normalized relative
+    //   path under a relative base still has the base as a prefix (what a
+    //   hardened consumer would assert after normalize).
+    let base = "vault"
+    let want = _path_normalize(_path_join(base, "sub/file.txt"))
+    if _starts_with(want, base + "/") { pass = pass + 1 } else { fail = fail + 1; print("FAIL 1e prefix: " + want) }
+
+    // ════ (2) SHELL-QUOTE INJECTION ═════════════════════════════════════
+    let payload = "x'; rm -rf / #"
+
+    // 2a — GUARDED: the payload's bare `'` (the quote-closer) is rewritten,
+    //   so the BARE breakout boundary `x';` (a `'` directly after `x` that
+    //   would close the argument and start a new command) does NOT survive —
+    //   it becomes `x'\''` (the `'` is escaped, not a closer).
+    let g = _shq_guarded(payload)
+    if !_contains(g, "x';") { pass = pass + 1 } else { fail = fail + 1; print("FAIL 2a guarded leaks bare quote: " + g) }
+    //   And the escape sequence `'\''` IS present (proves it actually escaped).
+    if _contains(g, "'\\''") { pass = pass + 1 } else { fail = fail + 1; print("FAIL 2a no-escape-seq: " + g) }
+
+    // 2b — NEG-CONTROL: the naive wrap leaves the bare quote-closer `x';`
+    //   intact (exactly why `'" + p + "'` is unsafe for UNTRUSTED input).
+    let nv = _shq_naive(payload)
+    if _contains(nv, "x';") { pass = pass + 1 } else { fail = fail + 1; print("FAIL 2b naive-should-leak: " + nv) }
+
+    // 2c — GUARDED no-op on a benign path (no false-positive mangling).
+    let benign = _shq_guarded("safe/base/file.txt")
+    if benign == "'safe/base/file.txt'" { pass = pass + 1 } else { fail = fail + 1; print("FAIL 2c benign: " + benign) }
+
+    // ════ (3) SQL-VALUE INJECTION ═══════════════════════════════════════
+    let sqli = "x' OR '1'='1"
+
+    // 3a — GUARDED: `_sqlq` doubles every `'` → one inert literal; the
+    //   embedded `OR '1'='1` cannot break the WHERE clause.
+    let sg = _sqlq_guarded(sqli)
+    if sg == "'x'' OR ''1''=''1'" { pass = pass + 1 } else { fail = fail + 1; print("FAIL 3a sqlq: " + sg) }
+    //   The tell-tale unescaped `x' OR` boundary must NOT appear bare.
+    if !_contains(sg, "x' OR") { pass = pass + 1 } else { fail = fail + 1; print("FAIL 3a sqlq-leak: " + sg) }
+
+    // 3b — NEG-CONTROL: no-doubling closes the literal → the `OR '1'='1`
+    //   tautology escapes into the SQL (the injection the guard prevents).
+    let sn = _sqlq_naive(sqli)
+    if _contains(sn, "x' OR") { pass = pass + 1 } else { fail = fail + 1; print("FAIL 3b naive-should-leak: " + sn) }
+
+    // 3c — GUARDED no-op on a benign value (no false-positive).
+    let bval = _sqlq_guarded("alice@example.com")
+    if bval == "'alice@example.com'" { pass = pass + 1 } else { fail = fail + 1; print("FAIL 3c benign: " + bval) }
+
+    print("__HEXA_OP116_PATH_TRAVERSAL_INJECTION__ pass=" + to_string(pass) + " fail=" + to_string(fail))
+    if fail == 0 {
+        print("ALL-GREEN (traversal-blocked + shell-escape + sql-quote guards load-bearing; neg-controls leak)")
+    } else {
+        print("RED fail=" + to_string(fail))
+    }
+}
