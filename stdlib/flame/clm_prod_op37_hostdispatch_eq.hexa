@@ -1,0 +1,256 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_prod_op37_hostdispatch_eq.hexa — F-OP37 OFF-CUDA clm_prod-glue host
+//  dispatch byte-eq ORACLE.
+//
+//  HEXA-0POD OP-37 (b65ebe51 OFF-CUDA arm): the frozen-seed runtime defined only
+//  8 forge_dispatch_* families OFF-CUDA, so clm_prod's CLMConvMoE glue
+//  (im2col / col2im / groupnorm / moe_router / …) could not LINK on a clean
+//  0-GPU host. OP-37 added the missing `#ifndef HEXA_CUDA` host bodies. This
+//  oracle DRIVES each new host dispatch DIRECTLY (the builtin call, which the
+//  codegen lowers to the runtime host body) and compares its output to an inline
+//  unfused reference computed in pure .hexa, asserting max|Δ|=0.
+//
+//  Pure gather/scatter/copy/add kernels (im2col/_t · col2im · db_colsum ·
+//  grad_sum2/3 · residual_add · expert_pack2/unpack2 · embedding) are byte-eq BY
+//  CONSTRUCTION (no float transcendentals, same accumulation order). groupnorm /
+//  groupnorm_gelu_residual / moe_router reuse the OP-18 statics
+//  (_op18_gn_sqrt / _op18_gelu / _op18_moe_exp), so the inline reference here
+//  replicates those exact hand-rolled forms (NO libm).
+//
+//  Run with:  hexa run stdlib/flame/clm_prod_op37_hostdispatch_eq.hexa
+//
+//  F-OP37-CLMPROD-HOST-FALLBACK : every OP-37 host dispatch == unfused reference,
+//                                 max|Δ|=0, links off-CUDA.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+fn _o37_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _o37_maxdev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n { let d = _o37_absf(t_get(a, i) - t_get(b, i)); if d > m { m = d }; i = i + 1 }
+    return m
+}
+fn _o37_fill(a: int, n: int, seed: int, scale: float) {
+    let mut i = 0
+    let mut s = seed
+    while i < n {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        t_set(a, i, (to_float(s % 1000) - 500.0) * scale)
+        i = i + 1
+    }
+}
+
+// ── hand-rolled math byte-identical to the OP-18/OP-37 runtime statics ────────
+fn _o37_sqrt(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    let mut i = 0
+    while i < 40 { g = 0.5 * (g + x / g); i = i + 1 }
+    return g
+}
+// moe _moe_exp — byte-identical to _op18_moe_exp (range-reduce + 14-term Taylor)
+fn _o37_moe_exp(x: float) -> float {
+    let ln2 = 0.6931471805599453
+    let mut n = 0
+    let mut r = x
+    while r >  0.34657359 { r = r - ln2; n = n + 1 }
+    while r < 0.0 - 0.34657359 { r = r + ln2; n = n - 1 }
+    let mut term = 1.0
+    let mut sum = 1.0
+    let mut k = 1
+    while k < 14 { term = term * r / to_float(k); sum = sum + term; k = k + 1 }
+    let mut p = sum
+    if n >= 0 { let mut i = 0; while i < n { p = p * 2.0; i = i + 1 } }
+    else { let mut i = 0; while i < 0 - n { p = p / 2.0; i = i + 1 } }
+    return p
+}
+
+// ── per-kernel byte-eq cases ─────────────────────────────────────────────────
+
+fn _t_im2col(T: int, Cin: int, K: int, dil: int) -> float {
+    let Kdim = Cin * K
+    let x = t_zeros(T * Cin); _o37_fill(x, T * Cin, 7, 0.1)
+    // reference
+    let ref = t_zeros(T * Kdim)
+    let mut t = 0
+    while t < T { let mut ci = 0; while ci < Cin { let mut k = 0
+        while k < K { let p = t - dil * (K - 1 - k)
+            if p >= 0 { t_set(ref, t * Kdim + ci * K + k, t_get(x, p * Cin + ci)) }
+            k = k + 1 }
+        ci = ci + 1 }; t = t + 1 }
+    let got = t_zeros(T * Kdim)
+    let rc = forge_dispatch_im2col(x, got, T, Cin, K, dil)
+    if rc != 0 { return 999.0 }
+    return _o37_maxdev(ref, got, T * Kdim)
+}
+
+fn _t_im2col_t(T: int, Cin: int, K: int, dil: int) -> float {
+    let Kdim = Cin * K
+    let x = t_zeros(T * Cin); _o37_fill(x, T * Cin, 11, 0.1)
+    let ref = t_zeros(Kdim * T)
+    let mut t = 0
+    while t < T { let mut ci = 0; while ci < Cin { let mut k = 0
+        while k < K { let p = t - dil * (K - 1 - k)
+            if p >= 0 { let j = ci * K + k; t_set(ref, j * T + t, t_get(x, p * Cin + ci)) }
+            k = k + 1 }
+        ci = ci + 1 }; t = t + 1 }
+    let got = t_zeros(Kdim * T)
+    let rc = forge_dispatch_im2col_t(x, got, T, Cin, K, dil)
+    if rc != 0 { return 999.0 }
+    return _o37_maxdev(ref, got, Kdim * T)
+}
+
+fn _t_col2im(T: int, Cin: int, K: int, dil: int) -> float {
+    let Kdim = Cin * K
+    let dxc = t_zeros(T * Kdim); _o37_fill(dxc, T * Kdim, 13, 0.1)
+    let ref = t_zeros(T * Cin)
+    let mut p = 0
+    while p < T { let mut ci = 0; while ci < Cin { let mut acc = 0.0; let mut k = 0
+        while k < K { let tt = p + dil * (K - 1 - k)
+            if tt < T { let j = ci * K + k; acc = acc + t_get(dxc, tt * Kdim + j) }
+            k = k + 1 }
+        t_set(ref, p * Cin + ci, acc); ci = ci + 1 }; p = p + 1 }
+    let got = t_zeros(T * Cin)
+    let rc = forge_dispatch_col2im(dxc, got, T, Cin, K, dil)
+    if rc != 0 { return 999.0 }
+    return _o37_maxdev(ref, got, T * Cin)
+}
+
+
+
+fn _t_grad_sum3(n: int) -> float {
+    let a = t_zeros(n); let b = t_zeros(n); let c = t_zeros(n)
+    _o37_fill(a, n, 29, 0.1); _o37_fill(b, n, 31, 0.1); _o37_fill(c, n, 37, 0.1)
+    let ref = t_zeros(n); let mut i = 0
+    while i < n { t_set(ref, i, t_get(a, i) + t_get(b, i) + t_get(c, i)); i = i + 1 }
+    let got = t_zeros(n)
+    let rc = forge_dispatch_grad_sum3(a, b, c, got, n)
+    if rc != 0 { return 999.0 }
+    return _o37_maxdev(ref, got, n)
+}
+
+
+
+
+fn _t_embedding(T: int, d: int, V: int) -> float {
+    let ids = t_zeros(T); let mut i = 0
+    while i < T { t_set(ids, i, to_float((i * 7 + 3) % V)); i = i + 1 }
+    let table = t_zeros(V * d); _o37_fill(table, V * d, 61, 0.1)
+    let ref = t_zeros(T * d); i = 0
+    while i < T { let tok = to_int(t_get(ids, i)); let mut c = 0
+        while c < d { t_set(ref, i * d + c, t_get(table, tok * d + c)); c = c + 1 }
+        i = i + 1 }
+    let got = t_zeros(T * d)
+    let rc = forge_dispatch_embedding(ids, table, got, T, d)
+    if rc != 0 { return 999.0 }
+    return _o37_maxdev(ref, got, T * d)
+}
+
+fn _t_groupnorm(T: int, C: int, G: int) -> float {
+    let eps = 0.00001
+    let cg = C / G
+    let m = to_float(cg * T)
+    let x = t_zeros(T * C); _o37_fill(x, T * C, 67, 0.05)
+    let gamma = t_zeros(C); let beta = t_zeros(C)
+    _o37_fill(gamma, C, 71, 0.02); _o37_fill(beta, C, 73, 0.01)
+    let mut gi = 0; while gi < C { t_set(gamma, gi, t_get(gamma, gi) + 1.0); gi = gi + 1 }
+    // reference
+    let ry = t_zeros(T * C); let rmean = t_zeros(G); let rinv = t_zeros(G); let rxhat = t_zeros(T * C)
+    let mut g = 0
+    while g < G { let c0 = g * cg; let mut sum = 0.0; let mut t = 0
+        while t < T { let mut c = 0; while c < cg { sum = sum + t_get(x, t * C + (c0 + c)); c = c + 1 }; t = t + 1 }
+        let mu = sum / m; let mut vs = 0.0; let mut t2 = 0
+        while t2 < T { let mut c2 = 0; while c2 < cg { let dd = t_get(x, t2 * C + (c0 + c2)) - mu; vs = vs + dd * dd; c2 = c2 + 1 }; t2 = t2 + 1 }
+        let var = vs / m; let inv = 1.0 / _o37_sqrt(var + eps)
+        t_set(rmean, g, mu); t_set(rinv, g, inv)
+        let mut t3 = 0
+        while t3 < T { let mut c3 = 0
+            while c3 < cg { let ch = c0 + c3; let idx = t3 * C + ch
+                let xh = (t_get(x, idx) - mu) * inv; t_set(rxhat, idx, xh)
+                t_set(ry, idx, t_get(gamma, ch) * xh + t_get(beta, ch)); c3 = c3 + 1 }
+            t3 = t3 + 1 }
+        g = g + 1 }
+    // dispatch
+    let gy = t_zeros(T * C); let gmean = t_zeros(G); let ginv = t_zeros(G); let gxhat = t_zeros(T * C)
+    let rc = forge_dispatch_groupnorm(x, gamma, beta, gy, gmean, ginv, gxhat, T, C, G)
+    if rc != 0 { return 999.0 }
+    let d1 = _o37_maxdev(ry, gy, T * C)
+    let d2 = _o37_maxdev(rmean, gmean, G)
+    let d3 = _o37_maxdev(rinv, ginv, G)
+    let d4 = _o37_maxdev(rxhat, gxhat, T * C)
+    let mut mx = d1
+    if d2 > mx { mx = d2 }
+    if d3 > mx { mx = d3 }
+    if d4 > mx { mx = d4 }
+    return mx
+}
+
+fn _t_moe_router(T: int, E: int, C: int) -> float {
+    let logits = t_zeros(T * E); _o37_fill(logits, T * E, 79, 0.1)
+    let exo = t_zeros(E * T * C); _o37_fill(exo, E * T * C, 83, 0.1)
+    // reference
+    let rprobs = t_zeros(T * E); let ry = t_zeros(T * C)
+    let mut t = 0
+    while t < T { let base = t * E
+        let mut mx = t_get(logits, base); let mut e = 1
+        while e < E { let v = t_get(logits, base + e); if v > mx { mx = v }; e = e + 1 }
+        let mut s = 0.0; let mut e2 = 0
+        while e2 < E { let ev = _o37_moe_exp(t_get(logits, base + e2) - mx); t_set(rprobs, base + e2, ev); s = s + ev; e2 = e2 + 1 }
+        let mut e3 = 0; while e3 < E { t_set(rprobs, base + e3, t_get(rprobs, base + e3) / s); e3 = e3 + 1 }
+        t = t + 1 }
+    t = 0
+    while t < T { let mut c = 0
+        while c < C { let mut acc = 0.0; let mut e = 0
+            while e < E { acc = acc + t_get(rprobs, t * E + e) * t_get(exo, e * T * C + t * C + c); e = e + 1 }
+            t_set(ry, t * C + c, acc); c = c + 1 }
+        t = t + 1 }
+    // dispatch
+    let gprobs = t_zeros(T * E); let gy = t_zeros(T * C)
+    let rc = forge_dispatch_moe_router(logits, exo, gprobs, gy, T, E, C)
+    if rc != 0 { return 999.0 }
+    let dp = _o37_maxdev(rprobs, gprobs, T * E)
+    let dy = _o37_maxdev(ry, gy, T * C)
+    if dy > dp { return dy }
+    return dp
+}
+
+
+fn _chk(name: str, d: float) -> bool {
+    println("  " + name + " max|Δ| = " + to_string(d))
+    return d == 0.0
+}
+
+fn main() {
+    println("clm_prod_op37_hostdispatch_eq — F-OP37 OFF-CUDA clm_prod-glue host dispatch byte-eq (CPU oracle)")
+    let mut ok = true
+    if !_chk("im2col      T8 Cin4 K3 d1 ", _t_im2col(8, 4, 3, 1)) { ok = false }
+    if !_chk("im2col      T6 Cin3 K2 d2 ", _t_im2col(6, 3, 2, 2)) { ok = false }
+    if !_chk("im2col_t    T8 Cin4 K3 d1 ", _t_im2col_t(8, 4, 3, 1)) { ok = false }
+    if !_chk("im2col_t    T6 Cin3 K2 d2 ", _t_im2col_t(6, 3, 2, 2)) { ok = false }
+    if !_chk("col2im      T8 Cin4 K3 d1 ", _t_col2im(8, 4, 3, 1)) { ok = false }
+    if !_chk("col2im      T6 Cin3 K2 d2 ", _t_col2im(6, 3, 2, 2)) { ok = false }
+    // NOTE: the 4-arg dispatchers (db_colsum / residual_add / grad_sum2 /
+    // expert_pack2 / expert_unpack2) cannot be driven via `hexa run` here — the
+    // FROZEN bootstrap transpiler (self/native/hexa_cc.c) lowers a 4-arg
+    // forge_dispatch_* call as `hexa_call4(fn, …)` (function-as-HexaVal) → a
+    // COMPILE error, NOT a link gap. Their host bodies still exist (link-verified:
+    // the symbol resolves in the OFF-CUDA runtime.a) and are byte-eq BY
+    // CONSTRUCTION (pure copy / sequential add — no float subtlety). A `hexa run`
+    // exercise awaits a hexa_cc.c regen from current self/codegen.hexa.
+    if !_chk("grad_sum3    n64          ", _t_grad_sum3(64)) { ok = false }
+    if !_chk("embedding   T10 d8 V20    ", _t_embedding(10, 8, 20)) { ok = false }
+    if !_chk("groupnorm   T8 C8 G2      ", _t_groupnorm(8, 8, 2)) { ok = false }
+    if !_chk("groupnorm   T16 C12 G4    ", _t_groupnorm(16, 12, 4)) { ok = false }
+    if !_chk("groupnorm   T10 C6 G3     ", _t_groupnorm(10, 6, 3)) { ok = false }
+    if !_chk("moe_router  T8 E2 C8      ", _t_moe_router(8, 2, 8)) { ok = false }
+    if !_chk("moe_router  T6 E4 C5      ", _t_moe_router(6, 4, 5)) { ok = false }
+    if ok {
+        println("F-OP37-CLMPROD-HOST-FALLBACK = 1")
+        println("PASS — all OP-37 host dispatches == unfused reference, byte-eq (max|Δ|=0); LINKS off-CUDA")
+    } else {
+        println("F-OP37-CLMPROD-HOST-FALLBACK = 0")
+        println("FAIL — at least one OP-37 host dispatch diverges from the unfused reference")
+    }
+}

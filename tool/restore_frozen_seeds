@@ -752,8 +752,6 @@ fi
 #                                  the final GELU (same two-pass mean/var, same
 #                                  eps=1e-5, same 40-iter Newton _op18_gn_sqrt,
 #                                  same sequential order) → byte-eq.
-#   groupnorm_gelu_residual      — OP-18 groupnorm_gelu THEN out = r + a (same
-#                                  _op18_gelu / _op18_gn_sqrt, same add order) → byte-eq.
 #   moe_router                   — softmax (max + _op18_moe_exp + normalize, the
 #                                  SAME hand-rolled exp the verified OP-18 moe_block2
 #                                  uses) + sequential gate-weighted combine → byte-eq,
@@ -770,11 +768,15 @@ fi
 # NOT in this set (HONEST remaining, OFF-CUDA): adamw / adamw_keepmv / ce_grad /
 # int4_quant / int4_quant_bwd / groupnorm_bwd / moe_router_bwd / gelu /
 # embedding_bwd_scatter — deferred (need their own byte-eq oracle run, not yet
-# verified this session). AND gelu_bwd / expert_unpack2-as-emitted / grad_sum2-as-
-# emitted hit a SEPARATE wall: the frozen bootstrap transpiler (hexa_cc.c) lowers
-# THOSE THREE as `hexa_call4(forge_dispatch_*, …)` (function-as-HexaVal) → a
-# COMPILE error (not a link gap) that no runtime body can fix; it needs a hexa_cc.c
-# regen from current self/codegen.hexa (the N5 self-host frontier), out of scope here.
+# verified this session). groupnorm_gelu_residual — also deferred: it would inherit
+# the pre-existing OP-16 groupnorm_gelu GELU host-vs-ref ~2.5e-7 divergence (NOT an
+# OP-37 regression), so it is held back to keep OP-37 fully max|Δ|=0-verified.
+# The 4-arg dispatchers (db_colsum / residual_add / grad_sum2 / expert_pack2 /
+# expert_unpack2) ARE defined here + are byte-eq by construction (pure copy/add),
+# but the frozen bootstrap transpiler (hexa_cc.c) lowers a 4-arg forge_dispatch_*
+# call as `hexa_call4(fn, …)` (function-as-HexaVal) → a COMPILE error (not a link
+# gap) that no runtime body can fix; it needs a hexa_cc.c regen from current
+# self/codegen.hexa (the N5 self-host frontier). The same wall blocks gelu_bwd.
 if [ -f "$rt" ] && ! grep -q 'OP-37 (HEXA-0POD' "$rt"; then
   cat >> "$rt" <<'OP37_EOF'
 
@@ -1077,35 +1079,13 @@ HexaVal forge_dispatch_groupnorm(HexaVal x_v, HexaVal gamma_v, HexaVal beta_v,
                                          inv_v, xhat_v, t_v, c_v, g_v);
 }
 
-/* groupnorm_gelu_residual(x,gamma,beta,r,y,a,out,mean,inv,xhat,T,C,G) -> rc.
- * = OP-18 groupnorm_gelu (y=GN affine, a=gelu) THEN out[i] = r[i] + a[i]
- * (same _op18_gelu / _op18_gn_sqrt, same residual add order) → byte-eq to
- * clm_prod _groupnorm_gelu + _residual_add. */
-HexaVal hexa_forge_dispatch_groupnorm_gelu_residual(HexaVal x_v, HexaVal gamma_v,
-                                  HexaVal beta_v, HexaVal r_v, HexaVal y_v, HexaVal a_v,
-                                  HexaVal out_v, HexaVal mean_v, HexaVal inv_v,
-                                  HexaVal xhat_v, HexaVal t_v, HexaVal c_v, HexaVal g_v) {
-    /* delegate the GN+GELU to the verified OP-18 body (fills y, a, mean, inv, xhat). */
-    HexaVal rc = forge_dispatch_groupnorm_gelu(x_v, gamma_v, beta_v, y_v, a_v,
-                                               mean_v, inv_v, xhat_v, t_v, c_v, g_v);
-    if (hexa_as_num(rc) != 0)                                return hexa_int(-1);
-    int64_t r = hexa_as_num(r_v), a = hexa_as_num(a_v), o = hexa_as_num(out_v);
-    int64_t n = hexa_as_num(t_v) * hexa_as_num(c_v);
-    if (n <= 0 || !_OP37_FA(r, n) || !_OP37_FA(a, n) || !_OP37_FA(o, n))
-        return hexa_int(-1);
-    double* R = _hx_farr_table[r].buf;
-    double* A = _hx_farr_table[a].buf;
-    double* O = _hx_farr_table[o].buf;
-    for (int64_t i = 0; i < n; i++) O[i] = R[i] + A[i];
-    return hexa_int(0);
-}
-HexaVal forge_dispatch_groupnorm_gelu_residual(HexaVal x_v, HexaVal gamma_v,
-                                  HexaVal beta_v, HexaVal r_v, HexaVal y_v, HexaVal a_v,
-                                  HexaVal out_v, HexaVal mean_v, HexaVal inv_v,
-                                  HexaVal xhat_v, HexaVal t_v, HexaVal c_v, HexaVal g_v) {
-    return hexa_forge_dispatch_groupnorm_gelu_residual(x_v, gamma_v, beta_v, r_v,
-                                  y_v, a_v, out_v, mean_v, inv_v, xhat_v, t_v, c_v, g_v);
-}
+/* NOTE: groupnorm_gelu_residual is INTENTIONALLY NOT added here. Its GN +
+ * residual parts are byte-eq (verified), but it would delegate the GELU to the
+ * already-shipped OP-18 groupnorm_gelu body, which carries a pre-existing
+ * ~2.5e-7 GELU host-vs-reference divergence (NOT introduced by OP-37 — the OP-16
+ * groupnorm_gelu host fallback already exhibits it on main). To keep OP-37 a
+ * coherent, fully max|Δ|=0-verified set, the *_residual host body is deferred
+ * until that underlying GELU gap is resolved. */
 
 /* moe_router(logits, ex_out, probs, y, T, E, C) -> int rc. softmax gate
  * over E (max + _op18_moe_exp + normalize — the SAME hand-rolled exp the
