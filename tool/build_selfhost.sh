@@ -158,6 +158,17 @@ if [ ! -x build/hexat ]; then
 fi
 log "hexat: $(file -b build/hexat 2>/dev/null)"
 
+# ── stage: runtime REGEN — close the from-scratch promote rot ─────────────────
+# restore_frozen_seeds (above) leaves the STALE frozen self/runtime_core.c, and
+# build_aprime.sh SKIPS its own regen when self/runtime.c is present (warm-tree
+# guard, build_aprime.sh:62). Without this, rt.o + gen2+ link that stale runtime
+# and gen2 dyld-FAILS at load on __map_raw_len / __raw_d2i (the helper family the
+# current emitter SSOT owns but the 2026-05-29 frozen seed predates) -> stage2
+# self-emit aborts rc=134 -> no byte-eq fixpoint. Regenerate runtime_core.c from
+# the emitter SSOT (self/runtime_core_emit.hexa) so every stage links COMPLETE.
+log "runtime: regen runtime_core.c from emitter SSOT (stage_resolve_runtime_a)"
+CC="${CC:-clang}" bash tool/stage_resolve_runtime_a >/dev/null 2>&1 || fail seed runtime-regen
+
 # ── stage 0: aprime_cc (the proven canonical recipe) ─────────────────────────
 log "stage0: build_aprime.sh -> aprime_cc"
 bash tool/build_aprime.sh -r "$REPO" -o "$WORK/aprime_cc" -v "$REPO/build/hexat" \
