@@ -42,6 +42,18 @@ fn main() {
     check("group",       regex_full_match_native("(ab)+", "ababab"), true)
     check("dotany",      regex_full_match_native("a.c", "axc"), true)
 
+    // OP-113 ReDoS cap (CWE-1333 / CWE-400): a counted repeat `{n}` expands to
+    // `n` mandatory matcher iterations + `n` marker pushes, so an uncapped count
+    // is a denial-of-service vector. A tiny pattern `a{999999999}` must be
+    // REJECTED (parse fails → match returns false) rather than allocating ~1e9
+    // nodes / looping ~1e9 times. Negative control: a count AT the limit and a
+    // normal small count must still parse and match correctly.
+    check("redos-cap-exact", regex_full_match_native("a{999999999}", "aaa"), false)   // bomb rejected
+    check("redos-cap-lo",    regex_full_match_native("a{999999999,}", "aaa"), false)  // bomb rejected
+    check("redos-cap-hi",    regex_full_match_native("a{0,999999999}", "aaa"), false) // bomb rejected
+    check("redos-ok-small",  regex_full_match_native("a{3}", "aaa"), true)            // normal still works
+    check("redos-ok-range",  regex_full_match_native("a{2,4}", "aaa"), true)          // normal still works
+
     let f = regex_find_native("[0-9]+", "abc123def")
     total_count = total_count + 1
     if len(f) == 2 && f[0] == 3 && f[1] == 6 { pass_count = pass_count + 1 }
