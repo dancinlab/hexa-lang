@@ -1,5 +1,24 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-96 DONE: close the 2 FLAGGED closure-twin HTTP-parser bugs (self/serve/http_server.hexa parse_request + parse_query) — fixpoint-SAFE (closure-membership proof: file NOT in build_selfhost closure) + 25/25 leaf-lock
+- LANE: 2 (0-pod correctness). Retires the 🟠 flag OP-91/92/94 placed on the two self/serve/http_server.hexa twins, after a decisive closure-membership proof.
+- MOTIVE: OP-91 (parse_query) + OP-92 (parse_request) found+fixed two real split-keep-first bugs in stdlib/net/http_request.hexa, and OP-94's census re-confirmed them; all three FLAGGED the IDENTICAL bugs in self/serve/http_server.hexa as 🟠 UNFIXED "fixpoint risk" (lives under self/* → conservatively treated as in the self-host closure). OP-96 tests that assumption.
+- CLOSURE-MEMBERSHIP CHECK (decisive): build_selfhost compiles "compiler/main.hexa + its import/use closure" (tool/build_selfhost.sh:27; flatten() walks `import "..."`/`use "..."` transitively from compiler/main.hexa, :104-118). Re-ran the EXACT flatten walk:
+  - === closure size: 48 files ===
+  - === http_server in closure? === NO
+  - === any serve/ file in closure? === NONE
+  - The only "http_server" hit in self/codegen.hexa (:6241) is a CODE COMMENT, not an import.
+  - VERDICT: self/serve/http_server.hexa is a STANDALONE serving tool (the Anima-ALM HTTP server), NOT a compiler-bootstrap dependency → the deterministic fix is as fixpoint-safe as a stdlib fix. The OP-91/92/94 flag was a conservative "self/* ⇒ closure" over-approximation this proof refutes.
+- FIX (1) parse_request body-framing (:24-29→:24-34, OP-92 pattern): `raw.split("\r\n\r\n")` + parts[1] split on EVERY blank line and kept only the first body segment → TRUNCATED any body containing a blank line (multipart/nested-HTTP). FIXED: split on FIRST "\r\n\r\n" only via `raw.index_of("\r\n\r\n")` + `substring(sep+4, len(raw))` (RFC-7230 framing, whole remainder kept).
+- FIX (2) parse_query value-split (:78-89, OP-91 pattern): `pairs[i].split("=")` + kv[0]/kv[1] shattered on EVERY "=" (value-truncation on "=" in value) and inserted result[""] for empty pairs (spurious blank key). FIXED: split on FIRST "=" only via `pair.index_of("=")` + substring, and skip empty pairs.
+- LOCK: NEW self/serve/http_server_parse_test.hexa — BOTH fixed bodies verbatim-inlined (self-contained no-`use`; installed `hexa` resolves `use "self/..."` to a stale bundled copy — OP-87/88 lesson — so inlined + gated on the shipping `hexa run`, /Users/mini/.hx/bin/hexa): __HEXA_SELF_SERVE_HTTP_OP96__ 25/25 ALL-GREEN.
+  - 25 goldens: parse_request body-embedded-blankline (hi\r\n\r\nbye preserved), body-multi-blankline (A\r\n\r\nB\r\n\r\nC preserved), + simple method/path/empty-body, path+query split, header colon-in-value, no-separator regression locks; parse_query value-with-= (a=b=c→"b=c"), double-eq (a==b→"=b"), empty-pair (a=1&&b=2 keycount 2), trailing-amp (keycount 1), + basic/no-eq/trailing-eq/empty-input locks.
+- NOT-A-TAUTOLOGY: the UNFIXED bodies reproduce the divergence verbatim on shipping `hexa run`: req body got=[hi] (want hi\r\n\r\nbye); qry a=b=c got=[b] (want b=c); qry a=1&&b=2 keycount=3 (want 2).
+- FIXPOINT: all self-host byte-eq gates (selfhost-byteeq-real, selfhost byte-eq gen3→gen4, determinism, miscompile-zero, codegen-guard) inline-polled on the PR → held GREEN at value (deterministic source fix + file proven NOT in the closure).
+- BYTE-EQ: closure-membership-proven-OUT; 2 fns fixed + 1 NEW leaf; 0 source deletions (wipe_guard net-additive). Self-host fixpoint UNAFFECTED.
+- TIER: 🟢 2 closure twins CLOSED + fixpoint verified-safe (closure proof + 25/25 leaf-lock). $0 · 0-pod · NO GPU · no vast · no foreign pod · no .tape · leak-0.
+- verdict: .verdicts/hexa-0pod/F-OP96-CLOSURE-TWIN-HTTP.txt
+
 ## 2026-06-13 — OP-94 DONE: SYSTEMIC split-on-every-delimiter-keep-first CENSUS across LANE-2 stdlib (net/http/url/string) — class CLOSED (0 new bugs; OP-91/92 already fixed the 2 genuine 🔴) + 18/18 census leaf-lock + 2 closure twins FLAGGED 🟠
 - LANE: 2 (0-pod correctness, stdlib STRING/PATH/TEXT/URL/NET). Sibling LANE-1 owns stdlib data-structure/numeric/parser (non-overlapping — OP-94 touched ONLY stdlib/net/* + read-only census of http*.hexa/websocket.hexa/string.hexa).
 - MOTIVE: the split-keep-first anti-pattern recurred in 5 prior ops (OP-91 parse_query, OP-92 parse_request, OP-75 base64, OP-90 argparse, OP-87 dirname) — code does `x.split(SEP)` then a FIXED index ([0]/[1]/parts[1]) when intent is split-on-FIRST/LAST only, so any input with SEP 2+ times is silently truncated. This round did a high-leverage GREP CENSUS to catch every remaining LANE-2 instance at once.

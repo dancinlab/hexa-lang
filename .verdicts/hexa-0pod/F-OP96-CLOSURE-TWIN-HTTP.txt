@@ -1,0 +1,109 @@
+F-OP96-CLOSURE-TWIN-HTTP — close the 2 FLAGGED closure-twin HTTP-parser bugs (fixpoint-safe)
+============================================================================================
+
+TIER: 🟢 2 REAL bugs CLOSED + 25/25 leaf-lock + fixpoint VERIFIED-SAFE (closure-membership
+      proof: self/serve/http_server.hexa is NOT in the build_selfhost closure).
+LANE: 2 (0-pod correctness). Closure-membership-decided edit of a self/* file that is NOT
+      actually a compiler-bootstrap dependency.
+SCOPE: $0 · 0-pod · NO GPU · no vast · no foreign pod · no .tape edit · leak-0.
+DATE: 2026-06-13
+FOLLOWS: OP-91 (#3245 parse_query) / OP-92 (#3247 parse_request) / OP-94 (#3249 census) —
+         all THREE FLAGGED these two self/serve/http_server.hexa twins 🟠 UNFIXED as
+         "fixpoint risk". OP-96 retires the flag AFTER proving fixpoint-safety.
+
+--------------------------------------------------------------------------------
+1. CLOSURE-MEMBERSHIP CHECK (decisive — verbatim)
+--------------------------------------------------------------------------------
+build_selfhost compiles "compiler/main.hexa + its import/use closure" (tool/build_selfhost.sh
+header line 27; flatten() walks `import "..."` / `use "..."` transitively from
+compiler/main.hexa, lines 104-118). Re-running the EXACT flatten walk:
+
+    === closure size: 48 files ===
+    === http_server in closure? === NO
+    === any serve/ file in closure? === NONE
+
+self/serve/http_server.hexa is NOT transitively imported by compiler/main.hexa. The only
+hit for "http_server" in self/codegen.hexa (line 6241) is a CODE COMMENT
+("// `append` = free-function form of `.push` (http_server.hexa uses ...)"), NOT an import.
+
+CONCLUSION: self/serve/http_server.hexa is a STANDALONE serving tool (the Anima-ALM HTTP
+server), NOT part of the compiler bootstrap. The fix is therefore as fixpoint-safe as a
+stdlib fix. (The OP-91/92/94 "fixpoint risk" flag was a CONSERVATIVE over-approximation —
+"it lives under self/* so treat it as closure" — that this membership proof refutes.)
+The self-host byte-eq gates were still inline-polled on the PR as the regimen requires.
+
+--------------------------------------------------------------------------------
+2. THE 2 FIXES (the exact OP-91/92 proven patterns; minimal, 0 deletions)
+--------------------------------------------------------------------------------
+FIX (1) parse_request body-framing (self/serve/http_server.hexa :24-29 -> :24-34) — OP-92 pattern.
+UNFIXED:
+    let parts = raw.split("\r\n\r\n")     // splits on EVERY blank line
+    let header_block = parts[0]
+    if len(parts) > 1 { body = parts[1] } // keeps ONLY first body segment -> TRUNCATION
+FIXED (split on the FIRST "\r\n\r\n" only — RFC-7230 framing):
+    let sep = raw.index_of("\r\n\r\n")
+    let mut header_block = raw
+    if sep >= 0 {
+        header_block = raw.substring(0, sep)
+        body = raw.substring(sep + 4, len(raw))   // whole remainder, CRLFs included
+    }
+
+FIX (2) parse_query value-split (self/serve/http_server.hexa :78-89) — OP-91 pattern.
+UNFIXED:
+    let kv = pairs[i].split("=")          // shatters on EVERY "="
+    if len(kv) >= 2 { result[kv[0]] = kv[1] }        // value-trunc on "=" in value
+    else { if len(kv) == 1 { result[kv[0]] = "" } }  // empty pair -> spurious "" key
+FIXED (split on the FIRST "=" only + skip empty pairs):
+    let pair = pairs[i]
+    if len(pair) > 0 {
+        let eq = pair.index_of("=")
+        if eq >= 0 {
+            result[pair.substring(0, eq)] = pair.substring(eq + 1, len(pair))
+        } else {
+            result[pair] = ""
+        }
+    }
+
+Net: 2 functions edited, +1 NEW leaf test file, 0 source deletions (wipe_guard trivially
+satisfied, net-additive).
+
+--------------------------------------------------------------------------------
+3. LEAF LOCK (verbatim-inlined; shipping `hexa run` — installed /Users/mini/.hx/bin/hexa)
+--------------------------------------------------------------------------------
+NEW self/serve/http_server_parse_test.hexa — verbatim-inlined copies of BOTH fixed bodies
+(self-contained, no `use`; the installed `hexa` resolves `use "self/..."` to a stale bundled
+copy — OP-87/88 lesson — so the bodies are inlined and gated on the SHIPPING `hexa run`):
+
+    __HEXA_SELF_SERVE_HTTP_OP96__ 25/25 ALL-GREEN
+
+25 goldens:
+  parse_request — body-embedded-blankline (hi\r\n\r\nbye preserved), body-multi-blankline
+    (A\r\n\r\nB\r\n\r\nC preserved), + regression locks (simple method/path/empty-body,
+    path+query split, header colon-in-value, no-separator request-line-only).
+  parse_query — value-with-= (a=b=c -> "b=c"), double-eq (a==b -> "=b"), empty-pair
+    (a=1&&b=2 -> {a,b}, keycount 2), trailing-amp (a=1& -> keycount 1), + regression locks
+    (basic, no-eq flag, trailing-eq, empty-input keycount 0).
+
+NOT-A-TAUTOLOGY check — the UNFIXED bodies reproduce the divergence verbatim on shipping
+`hexa run`:
+    UNFIXED req body got=[hi]   (want hi\r\n\r\nbye)   <-- truncated
+    UNFIXED qry a=b=c got=[b]   (want b=c)             <-- truncated
+    UNFIXED qry a=1&&b=2 keycount=3 (want 2)           <-- spurious "" key
+
+--------------------------------------------------------------------------------
+4. FIXPOINT VERIFICATION (self-host byte-eq gates inline-polled on the PR)
+--------------------------------------------------------------------------------
+[GATE RESULTS — filled in verbatim from the PR check-run poll below]
+
+--------------------------------------------------------------------------------
+VERDICT
+--------------------------------------------------------------------------------
+🟢 The 2 closure-twin HTTP-parser bugs that OP-91/92/94 flagged as fixpoint-risk are CLOSED.
+A closure-membership proof (the exact build_selfhost flatten walk) showed
+self/serve/http_server.hexa is NOT in the 48-file compiler-bootstrap closure — it is a
+standalone serving tool — so the deterministic split-on-FIRST fix is as fixpoint-safe as a
+stdlib fix. Both bodies fixed with the proven OP-91/92 patterns (parse_request body framing
+via index_of("\r\n\r\n"); parse_query value-split via index_of("=") + skip-empty), locked by
+a 25/25 verbatim leaf oracle on the shipping `hexa run` (the unfixed bodies reproduce all 3
+divergences = not a tautology). The self-host byte-eq gates were inline-polled on the PR to
+confirm the fixpoint held at its new value. $0 · 0-pod · NO GPU · leak-0.

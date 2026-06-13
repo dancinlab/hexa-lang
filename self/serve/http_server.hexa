@@ -21,11 +21,16 @@ fn parse_request(raw) {
     let mut body = ""
     let mut headers = #{}
 
-    // Split header block from body on double CRLF
-    let parts = raw.split("\r\n\r\n")
-    let header_block = parts[0]
-    if len(parts) > 1 {
-        body = parts[1]
+    // Split header block from body on the FIRST double CRLF only.
+    // RFC 7230 framing: the first empty line terminates the headers;
+    // everything after it (embedded blank lines included) is the body.
+    // (Splitting on EVERY "\r\n\r\n" and keeping parts[1] truncated any
+    //  body that itself contains a blank line — multipart, nested HTTP.)
+    let sep = raw.index_of("\r\n\r\n")
+    let mut header_block = raw
+    if sep >= 0 {
+        header_block = raw.substring(0, sep)
+        body = raw.substring(sep + 4, len(raw))
     }
 
     // Split header lines
@@ -78,12 +83,15 @@ fn parse_query(qs) {
     let pairs = qs.split("&")
     let mut i = 0
     while i < len(pairs) {
-        let kv = pairs[i].split("=")
-        if len(kv) >= 2 {
-            result[kv[0]] = kv[1]
-        } else {
-            if len(kv) == 1 {
-                result[kv[0]] = ""
+        // Split each pair on the FIRST "=" only (a value may contain "="),
+        // and SKIP empty pairs (e.g. "a=1&&b=2") so no spurious "" key.
+        let pair = pairs[i]
+        if len(pair) > 0 {
+            let eq = pair.index_of("=")
+            if eq >= 0 {
+                result[pair.substring(0, eq)] = pair.substring(eq + 1, len(pair))
+            } else {
+                result[pair] = ""
             }
         }
         i = i + 1

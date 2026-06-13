@@ -1,0 +1,178 @@
+// OP-96 leaf lock for self/serve/http_server.hexa parse_request + parse_query.
+//
+// Verbatim-inlined copies of the FIXED parse_request + parse_query bodies
+// (the installed `hexa` resolves `use "self/..."` to its stale bundled copy,
+// so this test inlines the leaves and gates them on the SHIPPING `hexa run`).
+// These are the closure-side twins of the stdlib OP-91/OP-92 bugs. They were
+// FLAGGED unfixed as fixpoint-risk; OP-96 fixes them after proving
+// self/serve/http_server.hexa is NOT in the build_selfhost closure.
+//
+// parse_request bug (closed): a body containing a blank line ("\r\n\r\n",
+//   routine in multipart / nested HTTP) was TRUNCATED at the first blank
+//   line. split("\r\n\r\n") + parts[1] dropped parts[2..]; the fix splits
+//   on the FIRST separator only via index_of, so the whole body is kept.
+// parse_query bug (closed):
+//   - "a=b=c"    -> a="b=c"  (value keeps "=", was truncated to "b")
+//   - "a==b"     -> a="=b"   (was truncated to "")
+//   - "a=1&&b=2" -> {a:1,b:2} (empty pair skipped, was spurious "" key)
+
+fn parse_request(raw) {
+    let mut method = "GET"
+    let mut path = "/"
+    let mut query = ""
+    let mut body = ""
+    let mut headers = #{}
+
+    // Split header block from body on the FIRST double CRLF only.
+    let sep = raw.index_of("\r\n\r\n")
+    let mut header_block = raw
+    if sep >= 0 {
+        header_block = raw.substring(0, sep)
+        body = raw.substring(sep + 4, len(raw))
+    }
+
+    let lines = header_block.split("\r\n")
+    if len(lines) > 0 {
+        let req_parts = lines[0].split(" ")
+        if len(req_parts) >= 2 {
+            method = req_parts[0]
+            let full_path = req_parts[1]
+            let qidx = full_path.index_of("?")
+            if qidx >= 0 {
+                path = full_path.substring(0, qidx)
+                query = full_path.substring(qidx + 1, len(full_path))
+            } else {
+                path = full_path
+            }
+        }
+    }
+
+    let mut i = 1
+    while i < len(lines) {
+        let line = lines[i]
+        let colon = line.index_of(":")
+        if colon > 0 {
+            let key = line.substring(0, colon).trim().to_lower()
+            let val = line.substring(colon + 1, len(line)).trim()
+            headers[key] = val
+        }
+        i = i + 1
+    }
+
+    let result = #{}
+    result["method"] = method
+    result["path"] = path
+    result["query"] = query
+    result["body"] = body
+    result["headers"] = headers
+    return result
+}
+
+fn parse_query(qs) {
+    let result = #{}
+    if len(qs) == 0 { return result }
+    let pairs = qs.split("&")
+    let mut i = 0
+    while i < len(pairs) {
+        let pair = pairs[i]
+        if len(pair) > 0 {
+            let eq = pair.index_of("=")
+            if eq >= 0 {
+                result[pair.substring(0, eq)] = pair.substring(eq + 1, len(pair))
+            } else {
+                result[pair] = ""
+            }
+        }
+        i = i + 1
+    }
+    return result
+}
+
+fn check_str(name, got, want) {
+    if got == want {
+        println("ok   " + name)
+        return 1
+    }
+    println("FAIL " + name + " got=[" + got + "] want=[" + want + "]")
+    return 0
+}
+
+fn check_int(name, got, want) {
+    if got == want {
+        println("ok   " + name)
+        return 1
+    }
+    println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want))
+    return 0
+}
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // ===== parse_request — body framing (the closed bug) =====
+    let q1 = parse_request("POST /x HTTP/1.1\r\nHost: a\r\n\r\nhi\r\n\r\nbye")
+    total = total + 1; pass = pass + check_str("req body-embedded-blankline", q1["body"], "hi\r\n\r\nbye")
+    total = total + 1; pass = pass + check_str("req method POST", q1["method"], "POST")
+    total = total + 1; pass = pass + check_str("req path /x", q1["path"], "/x")
+
+    let q2 = parse_request("PUT /m HTTP/1.1\r\n\r\nA\r\n\r\nB\r\n\r\nC")
+    total = total + 1; pass = pass + check_str("req body-multi-blankline", q2["body"], "A\r\n\r\nB\r\n\r\nC")
+
+    // ===== parse_request — regression locks (already-correct cases) =====
+    let q3 = parse_request("GET /api/ping HTTP/1.1\r\nHost: x\r\n\r\n")
+    total = total + 1; pass = pass + check_str("req simple method", q3["method"], "GET")
+    total = total + 1; pass = pass + check_str("req simple path", q3["path"], "/api/ping")
+    total = total + 1; pass = pass + check_str("req simple empty-body", q3["body"], "")
+
+    let q4 = parse_request("GET /a?b=1&c=2 HTTP/1.1\r\nHost: x\r\n\r\n")
+    total = total + 1; pass = pass + check_str("req path-split", q4["path"], "/a")
+    total = total + 1; pass = pass + check_str("req query-split", q4["query"], "b=1&c=2")
+
+    let q5 = parse_request("GET / HTTP/1.1\r\nX-Note: a: b: c\r\n\r\n")
+    let h5 = q5["headers"]
+    total = total + 1; pass = pass + check_str("req header colon-in-value", h5["x-note"], "a: b: c")
+
+    let q6 = parse_request("GET / HTTP/1.1")
+    total = total + 1; pass = pass + check_str("req no-separator path", q6["path"], "/")
+    total = total + 1; pass = pass + check_str("req no-separator body", q6["body"], "")
+
+    // ===== parse_query — value-with-= + empty-pair (the closed bug) =====
+    let r1 = parse_query("a=b=c")
+    total = total + 1; pass = pass + check_str("qry value-with-= a=b=c", r1["a"], "b=c")
+
+    let r2 = parse_query("a==b")
+    total = total + 1; pass = pass + check_str("qry double-eq a==b", r2["a"], "=b")
+
+    let r3 = parse_query("a=1&&b=2")
+    total = total + 1; pass = pass + check_str("qry empty-pair a", r3["a"], "1")
+    total = total + 1; pass = pass + check_str("qry empty-pair b", r3["b"], "2")
+    total = total + 1; pass = pass + check_int("qry empty-pair keycount", len(r3), 2)
+
+    let r10 = parse_query("a=1&")
+    total = total + 1; pass = pass + check_str("qry trailing-amp a", r10["a"], "1")
+    total = total + 1; pass = pass + check_int("qry trailing-amp keycount", len(r10), 1)
+
+    // ===== parse_query — regression locks =====
+    let r4 = parse_query("a=1&b=2")
+    total = total + 1; pass = pass + check_str("qry basic a", r4["a"], "1")
+    total = total + 1; pass = pass + check_str("qry basic b", r4["b"], "2")
+
+    let r5 = parse_query("key")
+    total = total + 1; pass = pass + check_str("qry no-eq flag", r5["key"], "")
+    total = total + 1; pass = pass + check_int("qry no-eq keycount", len(r5), 1)
+
+    let r6 = parse_query("key=")
+    total = total + 1; pass = pass + check_str("qry trailing-eq", r6["key"], "")
+
+    let r0 = parse_query("")
+    total = total + 1; pass = pass + check_int("qry empty-input keycount", len(r0), 0)
+
+    println("---")
+    println("PASS " + to_string(pass) + "/" + to_string(total))
+    if pass == total {
+        println("__HEXA_SELF_SERVE_HTTP_OP96__ " + to_string(pass) + "/" + to_string(total) + " ALL-GREEN")
+    } else {
+        println("RED")
+    }
+}
