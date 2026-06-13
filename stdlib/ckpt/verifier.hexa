@@ -99,9 +99,54 @@ pub fn verify_pcc(path: string) {
         return _mk_result(false, err_header_corrupt(),
             "non-positive chunk_size: " + to_string(chunk_size))
     }
+    // chunk_size cannot exceed the file (the payload it tiles is a subset of
+    // the file). Bounding it here keeps chunk_count*chunk_size wrap-free
+    // below (OP-123). Checked before chunk_count*chunk_size is formed.
+    if chunk_size > total_bytes {
+        return _mk_result(false, err_header_corrupt(),
+            "chunk_size exceeds file size")
+    }
     if cert_block_len < 0 {
         return _mk_result(false, err_header_corrupt(),
             "negative cert_block_len")
+    }
+    // ── Wrap-safe bound (OP-123) ─────────────────────────────────────────
+    // hexa int is 64-bit SIGNED. A malicious header can declare chunk_count
+    // / payload_len near 2^62 so that the layout products below
+    // (chunk_count * 20, chunk_count * chunk_size, payload_start +
+    // payload_len) OVERFLOW and wrap, sneaking a nonsense layout past the
+    // `expected_total == total_bytes` structural guard (which then compares
+    // a wrapped sum). Downstream the wrapped payload_start/payload_end turn
+    // the per-chunk bounds checks into no-ops, and the dir-entry walk
+    // (`while ci < chunk_count`) can index `buf` out of bounds → an
+    // uncontrolled runtime OOB trap instead of a graceful ERR_HEADER_CORRUPT.
+    //
+    // Every declared region (cert block, chunk directory, payload) is a
+    // subset of the file, so each field is individually bounded by
+    // total_bytes BEFORE any multiplication. Reject anything that cannot
+    // physically fit; this keeps every product below well under 2^62, so
+    // the arithmetic that follows cannot wrap.
+    if chunk_count < 0 {
+        return _mk_result(false, err_header_corrupt(),
+            "negative chunk_count")
+    }
+    if payload_len < 0 {
+        return _mk_result(false, err_header_corrupt(),
+            "negative payload_len")
+    }
+    if cert_block_len > total_bytes {
+        return _mk_result(false, err_header_corrupt(),
+            "cert_block_len exceeds file size")
+    }
+    if payload_len > total_bytes {
+        return _mk_result(false, err_header_corrupt(),
+            "payload_len exceeds file size")
+    }
+    // chunk_count * DIR_ENTRY_SIZE must fit the file; check the count cap
+    // via division (wrap-free) rather than the product.
+    if chunk_count > total_bytes / pcc_dir_entry_size() {
+        return _mk_result(false, err_header_corrupt(),
+            "chunk_count too large for file size")
     }
     // Consistency: if chunk_count > 0 then (chunk_count - 1) * chunk_size
     // must be strictly less than payload_len, AND chunk_count * chunk_size
