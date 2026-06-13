@@ -673,3 +673,414 @@ pub fn ccsd_from_mo_eri(
     let e_ccsd = ccsd_energy(W, t1, t2, nso, nocc)
     return [e_ccsd, e_mp2_first, iters, residual, converged]
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+//   Fock-GENERAL siblings (semicanonical references — e.g. ROHF-CCSD(T), r28)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// The canonical ccsd_energy / ccsd_iterate above DROP every off-diagonal Fock f_pq
+// (only f_pp = ε survives) — exact for canonical RHF/UHF. A SEMICANONICAL reference
+// (ROHF, r28) diagonalizes only the occ-occ and virt-virt blocks per spin, leaving a
+// NON-ZERO occ-virt Fock block f_ia (~0.04 Ha for CH₃). These siblings thread that
+// block (foff, the FULL nso×nso spin-orbital Fock with occ-virt/virt-occ entries) into
+// the FOUR places it enters the Stanton equations — the canonical functions are BYTE-
+// UNTOUCHED so r16/r17/r18/r25/r26/r27 are unaffected. foff[p*nso+q] = f_pq (the bare
+// spin-orbital Fock); only the occ-virt block is non-zero for a semicanonical reference,
+// but the code reads it generically (d4). The diagonal is still ε_so (denominators).
+
+// CCSD energy WITH the bare-Fock singles term  +Σ_ia f_ia t_i^a  (foff = nso×nso Fock).
+pub fn ccsd_energy_foff(W: [float], foff: [float], t1: [float], t2: [float],
+                        nso: int, nocc: int) -> float {
+    let mut e = ccsd_energy(W, t1, t2, nso, nocc)
+    let mut i = 0
+    while i < nocc {
+        let mut a = nocc
+        while a < nso { e = e + foff[i*nso+a] * t1[_idx2(nso,i,a)] ; a = a + 1 }
+        i = i + 1
+    }
+    return e
+}
+
+// One Fock-GENERAL CCSD iteration (semicanonical reference). Identical to ccsd_iterate
+// except the bare occ-virt Fock foff seeds the Stanton intermediates F_me (eq.5), F_ae
+// (eq.3, −½Σ_m f_me t_m^a) and F_mi (eq.4, +½Σ_e f_me t_i^e) and the T1 residual (+f_ia).
+// foff = nso×nso spin-orbital Fock (occ-virt block non-zero); diagonal = ε_so (unused —
+// the denominators use eps_so directly, as in the canonical kernel).
+pub fn ccsd_iterate_foff(W: [float], eps_so: [float], foff: [float],
+                         t1: [float], t2: [float], nso: int, nocc: int) -> [any] {
+    let mut tau: [float] = []
+    let mut taut: [float] = []
+    let mut iT = 0
+    let n4t = nso * nso * nso * nso
+    while iT < n4t { tau.push(0.0) ; taut.push(0.0) ; iT = iT + 1 }
+    let mut ti = 0
+    while ti < nso {
+        let mut tj = 0
+        while tj < nso {
+            let mut ta = 0
+            while ta < nso {
+                let mut tb = 0
+                while tb < nso {
+                    let base = t2[_idx4(nso,ti,tj,ta,tb)]
+                    let prod = t1[_idx2(nso,ti,ta)] * t1[_idx2(nso,tj,tb)] - t1[_idx2(nso,ti,tb)] * t1[_idx2(nso,tj,ta)]
+                    tau[_idx4(nso,ti,tj,ta,tb)]  = base + prod
+                    taut[_idx4(nso,ti,tj,ta,tb)] = base + 0.5 * prod
+                    tb = tb + 1
+                }
+                ta = ta + 1
+            }
+            tj = tj + 1
+        }
+        ti = ti + 1
+    }
+    // F_ae : SEED with −½ Σ_m f_me t_m^a  (the bare-Fock term, non-zero for semicanonical)
+    let mut Fae: [float] = []
+    let mut ii = 0
+    while ii < nso * nso { Fae.push(0.0) ; ii = ii + 1 }
+    let mut a = nocc
+    while a < nso {
+        let mut e = nocc
+        while e < nso {
+            let mut v = 0.0
+            let mut ms = 0
+            while ms < nocc { v = v - 0.5 * foff[ms*nso+e] * t1[_idx2(nso,ms,a)] ; ms = ms + 1 }
+            let mut m = 0
+            while m < nocc {
+                let mut f = nocc
+                while f < nso {
+                    v = v + t1[_idx2(nso,m,f)] * _w(W, nso, m, a, f, e)
+                    let mut nn = 0
+                    while nn < nocc {
+                        v = v - 0.5 * taut[_idx4(nso,m,nn,a,f)] * _w(W,nso,m,nn,e,f)
+                        nn = nn + 1
+                    }
+                    f = f + 1
+                }
+                m = m + 1
+            }
+            Fae[a * nso + e] = v
+            e = e + 1
+        }
+        a = a + 1
+    }
+    // F_mi : SEED with +½ Σ_e f_me t_i^e
+    let mut Fmi: [float] = []
+    ii = 0
+    while ii < nso * nso { Fmi.push(0.0) ; ii = ii + 1 }
+    let mut m = 0
+    while m < nocc {
+        let mut i = 0
+        while i < nocc {
+            let mut v = 0.0
+            let mut es = nocc
+            while es < nso { v = v + 0.5 * foff[m*nso+es] * t1[_idx2(nso,i,es)] ; es = es + 1 }
+            let mut nn = 0
+            while nn < nocc {
+                let mut e = nocc
+                while e < nso {
+                    v = v + t1[_idx2(nso,nn,e)] * _w(W, nso, m, nn, i, e)
+                    let mut f = nocc
+                    while f < nso {
+                        v = v + 0.5 * taut[_idx4(nso,i,nn,e,f)] * _w(W,nso,m,nn,e,f)
+                        f = f + 1
+                    }
+                    e = e + 1
+                }
+                nn = nn + 1
+            }
+            Fmi[m * nso + i] = v
+            i = i + 1
+        }
+        m = m + 1
+    }
+    // F_me : SEED with the bare f_me  (eq.5 first term)
+    let mut Fme: [float] = []
+    ii = 0
+    while ii < nso * nso { Fme.push(0.0) ; ii = ii + 1 }
+    m = 0
+    while m < nocc {
+        let mut e = nocc
+        while e < nso {
+            let mut v = foff[m*nso+e]
+            let mut nn = 0
+            while nn < nocc {
+                let mut f = nocc
+                while f < nso {
+                    v = v + t1[_idx2(nso,nn,f)] * _w(W, nso, m, nn, e, f)
+                    f = f + 1
+                }
+                nn = nn + 1
+            }
+            Fme[m * nso + e] = v
+            e = e + 1
+        }
+        m = m + 1
+    }
+    // two-body intermediates (IDENTICAL to the canonical kernel — no bare-Fock seed)
+    let mut Wmnij: [float] = []
+    ii = 0
+    while ii < nocc*nocc*nocc*nocc { Wmnij.push(0.0) ; ii = ii + 1 }
+    m = 0
+    while m < nocc {
+        let mut nn = 0
+        while nn < nocc {
+            let mut i = 0
+            while i < nocc {
+                let mut j = 0
+                while j < nocc {
+                    let mut v = _w(W, nso, m, nn, i, j)
+                    let mut e = nocc
+                    while e < nso {
+                        v = v + t1[_idx2(nso,j,e)] * _w(W,nso,m,nn,i,e)
+                        v = v - t1[_idx2(nso,i,e)] * _w(W,nso,m,nn,j,e)
+                        let mut f = nocc
+                        while f < nso {
+                            v = v + 0.25 * tau[_idx4(nso,i,j,e,f)] * _w(W,nso,m,nn,e,f)
+                            f = f + 1
+                        }
+                        e = e + 1
+                    }
+                    Wmnij[((m*nocc+nn)*nocc+i)*nocc+j] = v
+                    j = j + 1
+                }
+                i = i + 1
+            }
+            nn = nn + 1
+        }
+        m = m + 1
+    }
+    let nvir = nso - nocc
+    let mut Wabef: [float] = []
+    ii = 0
+    while ii < nvir*nvir*nvir*nvir { Wabef.push(0.0) ; ii = ii + 1 }
+    a = nocc
+    while a < nso {
+        let mut b = nocc
+        while b < nso {
+            let mut e = nocc
+            while e < nso {
+                let mut f = nocc
+                while f < nso {
+                    let mut v = _w(W, nso, a, b, e, f)
+                    let mut mm = 0
+                    while mm < nocc {
+                        v = v - t1[_idx2(nso,mm,b)] * _w(W,nso,a,mm,e,f)
+                        v = v + t1[_idx2(nso,mm,a)] * _w(W,nso,b,mm,e,f)
+                        let mut nn = 0
+                        while nn < nocc {
+                            v = v + 0.25 * tau[_idx4(nso,mm,nn,a,b)] * _w(W,nso,mm,nn,e,f)
+                            nn = nn + 1
+                        }
+                        mm = mm + 1
+                    }
+                    Wabef[(((a-nocc)*nvir+(b-nocc))*nvir+(e-nocc))*nvir+(f-nocc)] = v
+                    f = f + 1
+                }
+                e = e + 1
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    let mut Wmbej: [float] = []
+    ii = 0
+    while ii < nso*nso*nso*nso { Wmbej.push(0.0) ; ii = ii + 1 }
+    m = 0
+    while m < nocc {
+        let mut b = nocc
+        while b < nso {
+            let mut e = nocc
+            while e < nso {
+                let mut j = 0
+                while j < nocc {
+                    let mut v = _w(W, nso, m, b, e, j)
+                    let mut f = nocc
+                    while f < nso {
+                        v = v + t1[_idx2(nso,j,f)] * _w(W,nso,m,b,e,f)
+                        f = f + 1
+                    }
+                    let mut nn = 0
+                    while nn < nocc {
+                        v = v - t1[_idx2(nso,nn,b)] * _w(W,nso,m,nn,e,j)
+                        let mut f2 = nocc
+                        while f2 < nso {
+                            let amp = 0.5 * t2[_idx4(nso,j,nn,f2,b)] + t1[_idx2(nso,j,f2)] * t1[_idx2(nso,nn,b)]
+                            v = v - amp * _w(W,nso,m,nn,e,f2)
+                            f2 = f2 + 1
+                        }
+                        nn = nn + 1
+                    }
+                    Wmbej[((m*nso+b)*nso+e)*nso+j] = v
+                    j = j + 1
+                }
+                e = e + 1
+            }
+            b = b + 1
+        }
+        m = m + 1
+    }
+    // ── T1 update : SEED the residual with the bare occ-virt Fock  v = f_ia ──
+    let mut t1n: [float] = []
+    ii = 0
+    while ii < nso*nso { t1n.push(0.0) ; ii = ii + 1 }
+    let mut i = 0
+    while i < nocc {
+        a = nocc
+        while a < nso {
+            let mut v = foff[i*nso+a]
+            let mut e = nocc
+            while e < nso { v = v + t1[_idx2(nso,i,e)] * Fae[a*nso+e] ; e = e + 1 }
+            let mut mm = 0
+            while mm < nocc { v = v - t1[_idx2(nso,mm,a)] * Fmi[mm*nso+i] ; mm = mm + 1 }
+            mm = 0
+            while mm < nocc {
+                e = nocc
+                while e < nso {
+                    v = v + t2[_idx4(nso,i,mm,a,e)] * Fme[mm*nso+e]
+                    e = e + 1
+                }
+                mm = mm + 1
+            }
+            let mut nn = 0
+            while nn < nocc {
+                let mut f = nocc
+                while f < nso {
+                    v = v - t1[_idx2(nso,nn,f)] * _w(W,nso,nn,a,i,f)
+                    f = f + 1
+                }
+                nn = nn + 1
+            }
+            mm = 0
+            while mm < nocc {
+                e = nocc
+                while e < nso {
+                    let mut f = nocc
+                    while f < nso {
+                        v = v - 0.5 * t2[_idx4(nso,i,mm,e,f)] * _w(W,nso,mm,a,e,f)
+                        f = f + 1
+                    }
+                    e = e + 1
+                }
+                mm = mm + 1
+            }
+            mm = 0
+            while mm < nocc {
+                nn = 0
+                while nn < nocc {
+                    e = nocc
+                    while e < nso {
+                        v = v - 0.5 * t2[_idx4(nso,mm,nn,a,e)] * _w(W,nso,nn,mm,e,i)
+                        e = e + 1
+                    }
+                    nn = nn + 1
+                }
+                mm = mm + 1
+            }
+            let d = eps_so[i] - eps_so[a]
+            t1n[_idx2(nso,i,a)] = v / d
+            a = a + 1
+        }
+        i = i + 1
+    }
+    // ── T2 update : IDENTICAL to the canonical kernel (the off-diagonal Fock enters
+    //   T2 ONLY through Fae/Fmi/Fme, already seeded above) ──
+    let mut t2n: [float] = []
+    ii = 0
+    while ii < nso*nso*nso*nso { t2n.push(0.0) ; ii = ii + 1 }
+    i = 0
+    while i < nocc {
+        let mut j = 0
+        while j < nocc {
+            a = nocc
+            while a < nso {
+                let mut b = nocc
+                while b < nso {
+                    let mut v = _w(W, nso, i, j, a, b)
+                    let mut e = nocc
+                    while e < nso {
+                        let mut fbe = Fae[b*nso+e]
+                        let mut fae = Fae[a*nso+e]
+                        let mut mm = 0
+                        while mm < nocc {
+                            fbe = fbe - 0.5 * t1[_idx2(nso,mm,b)] * Fme[mm*nso+e]
+                            fae = fae - 0.5 * t1[_idx2(nso,mm,a)] * Fme[mm*nso+e]
+                            mm = mm + 1
+                        }
+                        v = v + t2[_idx4(nso,i,j,a,e)] * fbe
+                        v = v - t2[_idx4(nso,i,j,b,e)] * fae
+                        e = e + 1
+                    }
+                    let mut mm = 0
+                    while mm < nocc {
+                        let mut fmj = Fmi[mm*nso+j]
+                        let mut fmi = Fmi[mm*nso+i]
+                        e = nocc
+                        while e < nso {
+                            fmj = fmj + 0.5 * t1[_idx2(nso,j,e)] * Fme[mm*nso+e]
+                            fmi = fmi + 0.5 * t1[_idx2(nso,i,e)] * Fme[mm*nso+e]
+                            e = e + 1
+                        }
+                        v = v - t2[_idx4(nso,i,mm,a,b)] * fmj
+                        v = v + t2[_idx4(nso,j,mm,a,b)] * fmi
+                        mm = mm + 1
+                    }
+                    mm = 0
+                    while mm < nocc {
+                        let mut nn = 0
+                        while nn < nocc {
+                            v = v + 0.5 * tau[_idx4(nso,mm,nn,a,b)]
+                                  * Wmnij[((mm*nocc+nn)*nocc+i)*nocc+j]
+                            nn = nn + 1
+                        }
+                        mm = mm + 1
+                    }
+                    e = nocc
+                    while e < nso {
+                        let mut f = nocc
+                        while f < nso {
+                            v = v + 0.5 * tau[_idx4(nso,i,j,e,f)]
+                                  * Wabef[(((a-nocc)*nvir+(b-nocc))*nvir+(e-nocc))*nvir+(f-nocc)]
+                            f = f + 1
+                        }
+                        e = e + 1
+                    }
+                    mm = 0
+                    while mm < nocc {
+                        e = nocc
+                        while e < nso {
+                            v = v + t2[_idx4(nso,i,mm,a,e)] * Wmbej[((mm*nso+b)*nso+e)*nso+j]
+                            v = v - t1[_idx2(nso,i,e)] * t1[_idx2(nso,mm,a)] * _w(W,nso,mm,b,e,j)
+                            v = v - t2[_idx4(nso,j,mm,a,e)] * Wmbej[((mm*nso+b)*nso+e)*nso+i]
+                            v = v + t1[_idx2(nso,j,e)] * t1[_idx2(nso,mm,a)] * _w(W,nso,mm,b,e,i)
+                            v = v - t2[_idx4(nso,i,mm,b,e)] * Wmbej[((mm*nso+a)*nso+e)*nso+j]
+                            v = v + t1[_idx2(nso,i,e)] * t1[_idx2(nso,mm,b)] * _w(W,nso,mm,a,e,j)
+                            v = v + t2[_idx4(nso,j,mm,b,e)] * Wmbej[((mm*nso+a)*nso+e)*nso+i]
+                            v = v - t1[_idx2(nso,j,e)] * t1[_idx2(nso,mm,b)] * _w(W,nso,mm,a,e,i)
+                            e = e + 1
+                        }
+                        mm = mm + 1
+                    }
+                    e = nocc
+                    while e < nso {
+                        v = v + t1[_idx2(nso,i,e)] * _w(W,nso,a,b,e,j)
+                        v = v - t1[_idx2(nso,j,e)] * _w(W,nso,a,b,e,i)
+                        e = e + 1
+                    }
+                    mm = 0
+                    while mm < nocc {
+                        v = v - t1[_idx2(nso,mm,a)] * _w(W,nso,mm,b,i,j)
+                        v = v + t1[_idx2(nso,mm,b)] * _w(W,nso,mm,a,i,j)
+                        mm = mm + 1
+                    }
+                    let d = eps_so[i] + eps_so[j] - eps_so[a] - eps_so[b]
+                    t2n[_idx4(nso,i,j,a,b)] = v / d
+                    b = b + 1
+                }
+                a = a + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return [t1n, t2n]
+}
