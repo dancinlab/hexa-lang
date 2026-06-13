@@ -1,0 +1,91 @@
+F-OP93-PARSER-NUMERIC — HEXA-0POD OP-93 (LANE-1, 0-pod correctness)
+=====================================================================
+LANE: 1 (0-pod correctness — stdlib DATA-STRUCTURE / NUMERIC-FORMAT / PARSER,
+NON string/path/text/url = LANE-2). Sibling LANE-2/OP-92 owns stdlib/net/*.
+Non-overlapping (OP-93 touched ONLY stdlib/time + stdlib/core/math leaf tests).
+
+THESIS: OP-90 found stdlib/alloc/argparse.hexa silently dropped `--key=value`;
+the parser/delimiter surface is proven bug-rich. OP-93 hunts the SIBLING
+bespoke PARSERS + NUMERIC FORMATTERS + hand-rolled `=`/delimiter duplications.
+
+SURVEY (scoped greps, NO .git; LANE-1; SKIP net/* + already-audited
+argparse/hashset/core/parse/semver/codec/crypto/core-math/flame):
+  PARSERS examined:
+    · stdlib/time/civil.hexa     — pure-hexa ISO-8601/RFC-3339 parse+format
+                                    (iso8601_parse_native + days_from_civil)
+                                    — HIGHEST surface: round-trip invariant,
+                                    fixed-offset digit extraction, leading-zero,
+                                    out-of-range, too-short, non-digit garbage.
+    · stdlib/yaml.hexa           — flat key:value/frontmatter parser
+                                    (yaml_parse_flat, _yaml_unquote) — the
+                                    argparse `=`/`:`-delimiter class.
+    · stdlib/dojo/cli.hexa       — hand-rolled `--lang=` extractor (the
+                                    easy/cli.hexa:99 `--out=` dup class).
+    · stdlib/cockpit/cellrun.hexa— hand-rolled `key = value` (index_of("="))
+                                    config parser.
+    · stdlib/core/parse.hexa     — to_int_safe (re-confirmed; OP-90 territory).
+  NUMERIC-FORMATTERS examined:
+    · stdlib/core/math/permille.hexa — fixed-point ×1000 format + half-away
+                                    rounding (_div_round_half_away, pm_of_ratio,
+                                    pm_to_string, pm_to_int_floor).
+    · stdlib/core/math/wrap_pi.hexa  — angle [−π,π] normalizer (boundary-pre-
+                                    serving floored-modulo).
+    · stdlib/stats/correlation.hexa  — Spearman average-rank tie formula.
+    · stdlib/easy/cli.hexa       — hand-rolled _permille / _permille_str dup.
+
+METHOD per module: DIFFERENTIAL vs a verbatim Python port of the body against
+a Python reference (datetime / PyYAML safe_load / fractions half-away /
+math.fmod / scipy mean-rank) over a wide boundary sweep, + INVARIANT
+(parse∘format == id, format∘parse == id) + DOCSTRING-vs-BEHAVIOR.
+
+RESULT — 🟢 ALL CLEAN (NO shipping bug found; NOT fabricated, g5):
+
+1. stdlib/time/civil.hexa — 🟢 CLEAN.
+   · iso8601_format_native vs Python datetime over 64,291 epochs (0..4.1e9,
+     incl. leap-day/year/Y2K boundaries, C-truncation-faithful port): 0 mismatch.
+   · parse∘format round-trip over 220,000+ epochs: 0 mismatch.
+   · format∘parse idempotence over well-formed canonical strings: 0 mismatch.
+   · too-short ("1970-01-01") → -1; non-digit ("abcd-..") → -1 (contract met).
+   · days_from_civil / civil_from_days are exact mutual inverses.
+   FLAGGED (lenient-validation, NOT a bug — documented design, NOT fixed):
+     iso8601_parse_native does FIXED-OFFSET digit extraction and does NOT
+     validate field separators or field RANGES, so "1970-13-01T00:00:00Z"
+     (month 13) parses to a NORMALIZED epoch (Howard-Hinnant days_from_civil
+     is mathematically valid for any int) rather than returning -1. The header
+     documents "Fixed-offset field extraction (ISO 8601 basic UTC form)" and
+     "-1 on a malformed/too-short input" where malformed = non-parseable SHAPE.
+     Adding range-validation would change the locked round-trip contract and is
+     a behavior CHANGE not provably matching a stated reference → FLAGGED only.
+
+2. stdlib/core/math/permille.hexa — 🟢 CLEAN.
+   · _div_round_half_away vs true round-half-away-from-zero (fractions) over
+     a=-200..200 × b=-50..50: 0 mismatch.
+   · pm_to_string format incl. negative (-1.230) + sub-milli pad (5 → 0.005):
+     correct. pm_to_int_floor floors toward -inf correctly.
+
+3. stdlib/core/math/wrap_pi.hexa — 🟢 CLEAN: boundary-preserving (+π→+π, −π→−π)
+   per its own documented fmod-parity contract; fast-path guard correct.
+
+4. stdlib/stats/correlation.hexa — 🟢 CLEAN: _rank average-rank tie formula
+   (#less+1)+(#equal−1)/2 == scipy mean-rank; co-located test already present.
+
+5. stdlib/yaml.hexa flat parser, dojo/cli.hexa `--lang=`, cockpit/cellrun.hexa
+   `key=value`, easy/cli.hexa _permille — 🟢 CLEAN: all split on the FIRST
+   delimiter and handle empty-value/`=`-in-value/comment per their documented
+   contracts (the OP-90 argparse `--key=value` defect is NOT present in these
+   siblings — they already split correctly).
+
+LOCK: NEW stdlib/time/civil_parse_numeric_op93_test.hexa — the audited civil +
+permille bodies VERBATIM-INLINED (installed `hexa` resolves `use "stdlib/..."`
+to its STALE bundled copy, OP-87/88 lesson) and gated on the shipping `hexa run`.
+__OP93_LOCK__ PASS 25/25 (civil parse∘format round-trip ×6 epochs both
+directions + epoch0/Y2K anchors + days_from_civil + too-short/non-digit → -1;
+permille half-away 1/3→333, 2/3→667, -1/3→-333 + format 0.500/1.230/-1.230/0.005).
+
+BYTE-EQ / FIXPOINT SAFETY: ZERO compiler-closure (self/*) edits. Only a NEW leaf
+test added under stdlib/time/ + a verdict + domain log. No stdlib SOURCE changed
+(every module proven clean — no fix needed). Self-host fixpoint UNAFFECTED.
+0 deletions (wipe_guard net-additive). LANE split honored (no net/string/path).
+
+TIER: 🟢 (invariant-lock; no shipping bug — honest g5, not fabricated).
+$0 · 0-pod · NO GPU · no vast · no foreign pod · no .tape · leak-0.
