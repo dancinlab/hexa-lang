@@ -58,6 +58,18 @@ fn hmac_shr(x, n) -> int {
 // ── SHA-256 over a raw byte array (FIPS 180-4) ───────────────────────
 // Returns the 32-byte digest. Pure; identical to the runtime `sha256`
 // builtin's pre-hex digest (verified in hmac_test.hexa).
+//
+// PERF NOTE (handoff 0b23189b, measured 2026-06-14 on pool `summer`): this
+// pure-hexa core runs ~56× slower than CPython's C hashlib (~11,300 vs ~200
+// ns/hash) because the C-transpile codegen lowers every 32-bit int op to a
+// boxed HexaVal dispatch call — a GENERAL codegen-substrate wall, NOT a fixable
+// algorithm flaw (the modulo→mask micro-opt was measured 0%). For crypto-bound
+// HOT PATHS (e.g. forge UTXO double-sha256) call the runtime C `sha256` builtin
+// instead — `sha256_hex`/`sha256_of_string` (strings) or `sha256_bytes`
+// (raw bytes) in sha256.hexa run at C/OpenSSL parity (~200 ns/hash). Keep this
+// pure core for the libsodium-free correctness reference + the HMAC ipad/opad
+// intermediate-block path the string builtin cannot express. Closed-negative
+// finding: .verdicts/sha256-pure-hexa-perf/F-SHA256-PURE-HEXA-CODEGEN-WALL.md
 // @cite FIPS 180-4 §6.2 — SHA-256 message schedule + compression.
 pub fn sha256_digest_bytes(data: [int]) -> [int] {
     // 2026-05-27 #1506 fix: this fn previously used immutable `let` with
