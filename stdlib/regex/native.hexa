@@ -131,6 +131,16 @@ fn _re_parse_concat(p: ReParse) -> int {
     return left
 }
 
+// Maximum accepted `{n,m}` counted-repeat bound. A counted repeat expands to
+// `n` mandatory matcher iterations (each pushing a marker node), so an
+// uncapped count is a denial-of-service vector — a malicious 11-byte pattern
+// `a{999999999}` would force ~1e9 iterations + ~1e9 allocations. 100000 is far
+// above any realistic stdlib/config/lint pattern yet bounds worst-case work;
+// over-limit counts FAIL the parse (callers reject via `!p.ok`). Comparable
+// caps: RE2 = 1000, Java/.NET/Python similar small bounds.
+@pure
+fn _RE_MAX_REPEAT() -> int { return 100000 }
+
 // repeat := atom ('*' | '+' | '?' | '{n,m}')?
 fn _re_parse_repeat(p: ReParse) -> int {
     let atom = _re_parse_atom(p)
@@ -144,6 +154,14 @@ fn _re_parse_repeat(p: ReParse) -> int {
         let mut have_lo = false
         while _re_peek(p) >= 48 && _re_peek(p) <= 57 {
             lo = lo * 10 + (_re_peek(p) - 48); p.pos = p.pos + 1; have_lo = true
+            // DoS cap (CWE-1333 / CWE-400): a counted repeat `{n}` drives `n`
+            // mandatory matcher iterations in `_re_run_repeat`, each pushing a
+            // marker node — so a tiny pattern like `a{999999999}` would force
+            // ~1e9 iterations + ~1e9 array growths (multi-GB / near-infinite
+            // loop) from 11 bytes. Cap the count well above any realistic use
+            // (RE2 caps at 1000, Java/Python similar) and FAIL the parse on
+            // overflow rather than silently truncating to a wrong count.
+            if lo > _RE_MAX_REPEAT() { p.ok = false; return -1 }
         }
         let mut hi = lo
         if _re_peek(p) == 44 {  // ','
@@ -154,6 +172,7 @@ fn _re_parse_repeat(p: ReParse) -> int {
                 hi = 0
                 while _re_peek(p) >= 48 && _re_peek(p) <= 57 {
                     hi = hi * 10 + (_re_peek(p) - 48); p.pos = p.pos + 1
+                    if hi > _RE_MAX_REPEAT() { p.ok = false; return -1 }
                 }
             }
         }

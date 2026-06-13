@@ -1,0 +1,97 @@
+F-OP113-REGEX-REDOS-REPEAT-CAP — cap the native regex `{n,m}` counted-repeat to close a ReDoS / resource-exhaustion vector
+========================================================================================================================
+
+GOAL (g5): SELF-SELECT a genuinely FRESH (non-crypto, not-yet-audited) high-value
+security surface and find the RESOURCE-EXHAUSTION / DoS side OP-105 did not touch —
+a parser/matcher that ALLOCATES or LOOPS proportional to an untrusted declared
+count WITHOUT a sanity cap (the unbounded-WORK side, distinct from OP-105's
+read-OOB which we bounded to the buffer). Surveyed axes below.
+
+RESULT: 🔴 → FIXED. stdlib/regex/native.hexa (the pure-hexa, zero-libc backtracking
+regex engine — the matcher behind compiler/lint/config pattern matching) parses the
+`{n,m}` counted-repeat with NO upper bound on the count. A counted repeat expands in
+`_re_run_repeat` to `n` MANDATORY matcher iterations, each calling `_re_repeat_marker`
+which does `nodes.push([12,...])` — so the parsed count `n` is BOTH the loop bound AND
+the allocation count. A malicious 11-byte pattern `a{999999999}` therefore forces
+~1e9 iterations + ~1e9 array growths (multi-GB allocation + near-infinite loop) =
+CWE-1333 (ReDoS) / CWE-400 (uncontrolled resource consumption). FIXED by capping the
+parsed bound at `_RE_MAX_REPEAT()` = 100000 (far above any realistic stdlib/config use;
+RE2 caps at 1000, Java/.NET/Python at small bounds) and FAILING the parse on overflow
+(`p.ok = false` → all three entry points return false via their `!p.ok` guard) rather
+than silently truncating to a wrong count. Pure-additive (+20 / −1 lines); no valid
+match semantics change (every previously-accepted realistic pattern still parses;
+only DoS-scale counts are rejected).
+
+NOTE (OP-87/88/107 lesson): the installed ~/.hx/bin/hexa resolves `use` to a STALE
+Jun-1 bundle that lacks this edit, so the verification surface is a VERBATIM-INLINED
+hermetic leaf oracle (`hexa run`, no `use`) of the patched parse logic — trust the
+port-of-source over the stale binary.
+
+──────────────────────────────────────────────────────────────────────────────────────
+SURVEYED AXES (this round self-selected the DoS / unbounded-WORK surface)
+──────────────────────────────────────────────────────────────────────────────────────
+(a) RESOURCE-EXHAUSTION / DoS  → ACTIONABLE → PICKED (g0: simplest real bug; tiny input,
+    enormous forced work, one-line-per-site surgical cap, zero semantics change).
+    • stdlib/regex/native.hexa `_re_parse_repeat` {n,m} count — UNCAPPED → FIXED (this verdict).
+(b) FRESH FORMAT PARSER (wasm) → CLEAN-by-design / bounded:
+    • stdlib/wasm/wasm_leb128.hexa decoders (`wasm_uleb128_decode` / `wasm_sleb128_decode`)
+      loop is bounded by `len(bytes)` — no OOB, no unbounded loop. They DO accept overlong
+      encodings (no minimum-length / max-byte rule) but the header DOCUMENTS this as an
+      intentional non-goal ("does NOT enforce the minimum-length encoding rule") — a
+      documented design omission is not a bug (per the regimen).
+    • stdlib/wasm/wasm_type_section.hexa / wasm_section_header.hexa are EMITTERS (encode
+      trusted local arrays) — no untrusted-count-driven allocation. Not a DoS surface.
+(c) catastrophic backtracking (exponential-time) in the SAME engine — INHERENT to a
+    backtracking matcher and a DOCUMENTED design tradeoff ("backtracking NFA-simulation");
+    the engine's STAR/PLUS progress guard (`more > si`) limits empty-loop blowup, and a
+    general step-budget is a larger redesign, not a one-line cap. Left as a known property,
+    NOT claimed fixed. The CONCRETE, small-fix, definite-bug member of this class is the
+    counted-repeat count — which is what this round closes.
+
+──────────────────────────────────────────────────────────────────────────────────────
+VERBATIM REPRO (pre-fix) — hermetic leaf oracle inlining _re_parse_repeat + _re_run_repeat
+──────────────────────────────────────────────────────────────────────────────────────
+  parsed count from a{999999999} = 999999999
+  a{1000000} -> matcher iterations = 1000000
+  a{999999999} -> matcher iterations EXCEED oracle sentinel (>= 5,000,000); real code
+                  would run 999999999 iterations + push that many marker nodes (multi-GB).
+
+  → A 9-byte digit run parses to count 999,999,999 with NO cap (`lo = lo*10 + digit`,
+    unbounded), and `_re_run_repeat`'s `lo>0` branch recurses that many times, each pushing
+    a `[12,...]` marker node onto `nodes`. Tiny pattern → near-infinite loop + OOM.
+
+──────────────────────────────────────────────────────────────────────────────────────
+FIX (stdlib/regex/native.hexa) — surgical cap, fail-closed
+──────────────────────────────────────────────────────────────────────────────────────
+  + @pure fn _RE_MAX_REPEAT() -> int { return 100000 }
+  in the {n,m} lo-accumulate loop:   if lo > _RE_MAX_REPEAT() { p.ok = false; return -1 }
+  in the {n,m} hi-accumulate loop:   if hi > _RE_MAX_REPEAT() { p.ok = false; return -1 }
+  `{n,}` unbounded (hi = -1) is still allowed — its mandatory part `lo` is capped above,
+  and the open-ended tail is bounded by input length in _re_run_repeat (progress guard).
+
+──────────────────────────────────────────────────────────────────────────────────────
+VERBATIM PROOF (post-fix) — hermetic leaf oracle of the PATCHED parse
+──────────────────────────────────────────────────────────────────────────────────────
+  a{999999999}    -> ok=0  REJECTED (match=false, no alloc/loop)   ← bomb closed
+  a{999999999,}   -> ok=0  REJECTED (match=false, no alloc/loop)   ← bomb closed
+  a{0,999999999}  -> ok=0  REJECTED (match=false, no alloc/loop)   ← bomb closed
+  a{3}   (normal) -> ok=1 lo=3 hi=3  PARSE-OK                      ← negative control
+  a{2,4} (normal) -> ok=1 lo=2 hi=4  PARSE-OK                      ← negative control
+  a{100000} (=cap)-> ok=1 lo=100000 PARSE-OK                       ← boundary inclusive
+  a{100001} (>cap)-> ok=0  REJECTED                                ← just over → rejected
+
+  The over-limit guard fires the MOMENT the running total exceeds the cap (before any
+  expansion), so no allocation/loop ever occurs for a bomb. Valid patterns unchanged.
+
+──────────────────────────────────────────────────────────────────────────────────────
+LOCK (stdlib/regex/native_test.hexa, @ci_gate) — 5 new checks
+──────────────────────────────────────────────────────────────────────────────────────
+  redos-cap-exact  a{999999999}      → false (bomb rejected)
+  redos-cap-lo     a{999999999,}     → false (bomb rejected)
+  redos-cap-hi     a{0,999999999}    → false (bomb rejected)
+  redos-ok-small   a{3}    on "aaa"  → true  (negative control: normal still matches)
+  redos-ok-range   a{2,4}  on "aaa"  → true  (negative control: normal still matches)
+
+TIER: 🔴 real fresh-surface DoS bug → FIXED + locked + negative-controlled. Pure-additive
+(+31 / −1 across both files; wipe_guard not triggered). 0-pod, $0, CPU/local, no GPU/vast.
+Does NOT re-open any closed crypto/delimiter class; orthogonal to OP-112 (numeric NaN/Inf).
