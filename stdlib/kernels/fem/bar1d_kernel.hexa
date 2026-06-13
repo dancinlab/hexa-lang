@@ -219,6 +219,11 @@ pub fn bar1d_assemble_K(nodes: [float], E: float, A: float) -> [[float]] {
 fn thomas_tridiag(a: [float], d: [float], c: [float],
                   b: [float]) -> [float] {
     let m = len(d)
+    // Empty system → empty solution. Without this guard the forward sweep's
+    // unconditional `cp[0] = c[0]/d[0]` (and the back-sub `u[m-1]`) would
+    // index out of bounds on a zero-length system (reached when a degenerate
+    // bar mesh has < 2 nodes, so the reduced system has m ≤ 0 unknowns).
+    if m <= 0 { return [] }
     // working copies (the algorithm overwrites c and b in canonical
     // texts; the kernel keeps a separate buffer for clarity).
     let mut cp: [float] = []
@@ -281,6 +286,14 @@ fn thomas_tridiag(a: [float], d: [float], c: [float],
 pub fn bar1d_solve_fixed_free(nodes: [float], E: float, A: float,
                               P_tip: float) -> [float] {
     let n = len(nodes)
+    // Degenerate-mesh guards (contract: nodes length n ≥ 2). Without these the
+    // reduced system has m = n-1 ≤ 0 unknowns, so the Thomas solver indexes an
+    // empty diagonal out of bounds (crash) instead of returning a result.
+    //   n = 0 (no nodes)            → no displacement vector at all → [].
+    //   n = 1 (single fixed node)   → only the fixed DOF, zero displacement →
+    //                                 [0.0] (no free DOF, no element, no load).
+    if n <= 0 { return [] }
+    if n == 1 { return [0.0] }
     // assemble global K, then condense out node 0 (drop row 0 + col 0).
     let K = bar1d_assemble_K(nodes, E, A)
     let m = n - 1                       // reduced-system size

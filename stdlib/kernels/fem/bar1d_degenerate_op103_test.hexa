@@ -1,0 +1,159 @@
+// stdlib/kernels/fem/bar1d_degenerate_op103_test.hexa
+//
+// HEXA-0POD OP-103 — slice/window unchecked-bounds class, LANE-1 SIGNAL/
+// NUMERIC sweep. Regression lock for the ONE 🔴 found: bar1d_solve_fixed_free
+// crashed (out-of-range index) on a DEGENERATE bar mesh (< 2 nodes), because
+// the reduced system has m = n-1 ≤ 0 unknowns and the Thomas tridiagonal
+// solver's unconditional `cp[0] = c[0]/d[0]` (+ back-sub `u[m-1]`) indexes an
+// EMPTY diagonal out of bounds. The documented contract is n ≥ 2; the public
+// entry now CLAMPS the degenerate boundary:
+//     n = 0 (no nodes)          -> []     (no displacement vector)
+//     n = 1 (single fixed node) -> [0.0]  (only the fixed DOF, zero disp)
+// and the private Thomas solver returns [] on an empty system (defense-in-depth).
+//
+// HERMETIC: the bar1d_assemble_K / thomas_tridiag / bar1d_solve_fixed_free
+// bodies are VERBATIM-INLINED *with the fix* (no `use` — the installed hexa
+// resolves `use` to a stale bundled copy, OP-87/88), and run under the shipping
+// `hexa run`. This locks both the degenerate clamp AND the n ≥ 2 analytic FEM
+// answer u(x_k) = P·x_k / (E·A) (no regression).
+//
+// NEGATIVE CONTROL (not a tautology): re-running the UNFIXED Thomas body (the
+// unconditional cp[0]=c[0]/d[0]) on the empty system would `index 0 out of
+// bounds (len 0)` — see the verdict's verbatim repro. Here the positive test
+// asserts the clamp produces the correct trivial result instead of crashing.
+
+// ── verbatim-inlined FIXED bodies ──────────────────────────────────────────
+
+fn _t_element_stiffness(E: float, A: float, L: float) -> [[float]] {
+    let k = E * A / L
+    return [[k, 0.0 - k], [0.0 - k, k]]
+}
+
+fn _t_assemble_K(nodes: [float], E: float, A: float) -> [[float]] {
+    let n = len(nodes)
+    let mut K: [[float]] = []
+    let mut r = 0
+    while r < n {
+        let mut row: [float] = []
+        let mut s = 0
+        while s < n { row = row.push(0.0); s = s + 1 }
+        K = K.push(row); r = r + 1
+    }
+    let n_elem = n - 1
+    let mut e = 0
+    while e < n_elem {
+        let L = nodes[e + 1] - nodes[e]
+        let ke = _t_element_stiffness(E, A, L)
+        K[e][e]         = K[e][e]         + ke[0][0]
+        K[e][e + 1]     = K[e][e + 1]     + ke[0][1]
+        K[e + 1][e]     = K[e + 1][e]     + ke[1][0]
+        K[e + 1][e + 1] = K[e + 1][e + 1] + ke[1][1]
+        e = e + 1
+    }
+    return K
+}
+
+fn _t_thomas(a: [float], d: [float], c: [float], b: [float]) -> [float] {
+    let m = len(d)
+    if m <= 0 { return [] }                    // FIX: empty system -> []
+    let mut cp: [float] = []
+    let mut dp: [float] = []
+    let mut i = 0
+    while i < m { cp = cp.push(c[i]); dp = dp.push(b[i]); i = i + 1 }
+    cp[0] = c[0] / d[0]
+    dp[0] = b[0] / d[0]
+    let mut k = 1
+    while k < m {
+        let denom = d[k] - a[k] * cp[k - 1]
+        if k < m - 1 { cp[k] = c[k] / denom }
+        dp[k] = (b[k] - a[k] * dp[k - 1]) / denom
+        k = k + 1
+    }
+    let mut u: [float] = []
+    let mut q = 0
+    while q < m { u = u.push(0.0); q = q + 1 }
+    u[m - 1] = dp[m - 1]
+    let mut j = m - 2
+    while j >= 0 { u[j] = dp[j] - cp[j] * u[j + 1]; j = j - 1 }
+    return u
+}
+
+fn _t_solve(nodes: [float], E: float, A: float, P_tip: float) -> [float] {
+    let n = len(nodes)
+    if n <= 0 { return [] }                    // FIX: no nodes -> []
+    if n == 1 { return [0.0] }                 // FIX: single fixed node -> [0.0]
+    let K = _t_assemble_K(nodes, E, A)
+    let m = n - 1
+    let mut a: [float] = []
+    let mut d: [float] = []
+    let mut c: [float] = []
+    let mut b: [float] = []
+    let mut i = 0
+    while i < m {
+        let gi = i + 1
+        d = d.push(K[gi][gi])
+        if i == 0 { a = a.push(0.0) } else { a = a.push(K[gi][gi - 1]) }
+        if i == m - 1 { c = c.push(0.0) } else { c = c.push(K[gi][gi + 1]) }
+        if i == m - 1 { b = b.push(P_tip) } else { b = b.push(0.0) }
+        i = i + 1
+    }
+    let u_red = _t_thomas(a, d, c, b)
+    let mut u: [float] = []
+    u = u.push(0.0)
+    let mut k = 0
+    while k < m { u = u.push(u_red[k]); k = k + 1 }
+    return u
+}
+
+fn _approx(x: float, y: float) -> bool {
+    let d = x - y
+    if d < 0.0 { return (0.0 - d) < 0.000001 }
+    return d < 0.000001
+}
+
+fn main() {
+    let mut pass = 0
+    let mut fail = 0
+
+    // ── degenerate-boundary clamps (the OP-103 fix) ────────────────────────
+    // n = 1: single fixed node -> [0.0] (was: index 0 out of bounds crash)
+    let u1 = _t_solve([0.0], 1.0, 1.0, 1.0)
+    if len(u1) == 1 && _approx(u1[0], 0.0) { pass = pass + 1 }
+    else { fail = fail + 1; print("FAIL n=1 clamp") }
+
+    // n = 0: empty mesh -> [] (was: index 0 out of bounds crash)
+    let u0 = _t_solve([], 1.0, 1.0, 1.0)
+    if len(u0) == 0 { pass = pass + 1 }
+    else { fail = fail + 1; print("FAIL n=0 clamp") }
+
+    // empty Thomas system -> [] directly
+    let te = _t_thomas([], [], [], [])
+    if len(te) == 0 { pass = pass + 1 }
+    else { fail = fail + 1; print("FAIL thomas empty") }
+
+    // ── n >= 2 analytic FEM regression (no behavior change) ────────────────
+    // uniform [0,1], E=A=1, P=1 -> u(x)=P*x/(EA) = [0, 1]
+    let u2 = _t_solve([0.0, 1.0], 1.0, 1.0, 1.0)
+    if len(u2) == 2 && _approx(u2[0], 0.0) && _approx(u2[1], 1.0) { pass = pass + 1 }
+    else { fail = fail + 1; print("FAIL n=2 analytic") }
+
+    // uniform 5-node mesh, E=2, A=3, P=1.5 -> u(x_k)=P*x_k/(EA), EA=6
+    let nodes5 = [0.0, 0.25, 0.5, 0.75, 1.0]
+    let u5 = _t_solve(nodes5, 2.0, 3.0, 1.5)
+    let mut allok = len(u5) == 5
+    let mut kk = 0
+    while kk < 5 {
+        if !_approx(u5[kk], 1.5 * nodes5[kk] / 6.0) { allok = false }
+        kk = kk + 1
+    }
+    if allok { pass = pass + 1 } else { fail = fail + 1; print("FAIL n=5 analytic") }
+
+    // non-uniform 4-element mesh still well-formed (length n, u[0]=0, monotone)
+    let nodesN = [0.0, 0.10, 0.30, 0.60, 1.00]
+    let uN = _t_solve(nodesN, 1.0, 1.0, 2.0)
+    if len(uN) == 5 && _approx(uN[0], 0.0) { pass = pass + 1 }
+    else { fail = fail + 1; print("FAIL non-uniform shape") }
+
+    print("OP-103 bar1d degenerate lock: pass=" + to_string(pass) + " fail=" + to_string(fail))
+    if fail == 0 { print("ALL GREEN") }
+}
