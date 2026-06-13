@@ -1,0 +1,122 @@
+══════════════════════════════════════════════════════════════════════════════
+ F-OP137-SIGNED-ZERO-MAP-PRIMITIVE — bare native #{} map signed-zero key fix
+ campaign HEXA-0POD · LANE 1 · 0-pod local CPU · $0
+ date 2026-06-13 · branch qforge-op137-signed-zero-map-primitive
+ completes OP-134 residual #1 (the native-map root deferred to the self/ closure)
+══════════════════════════════════════════════════════════════════════════════
+
+CONTRACT
+  a == b  ⟹  key(a) == key(b)      (equal values MUST address the same map slot)
+  IEEE `-0.0 == 0.0` is TRUE ⟹ m[0.0] and m[-0.0] MUST be the SAME key.
+  Mirror Python EXACTLY: str(-0.0) == "-0.0"  YET  hash(-0.0) == hash(0.0).
+
+ROOT CAUSE (the C-runtime root OP-134 deferred)
+  The bare native map (#{} · m[k]=v · has_key · keys) keys on a C char*: the
+  key is produced by hexa_to_cstring(key) — FNV-1a hashed + strcmp-compared
+  (internally consistent by construction). hexa_to_cstring has TWO float
+  branches (Val-struct fast path + HexaVal fast path) that snprintf the key:
+      whole-valued float → snprintf("%.1f", f)
+      otherwise          → __hexa_format_float_mode(f, ...)
+  `%.1f` of -0.0 emits "-0.0" ≠ "0.0", so m[-0.0] hashes to a DIFFERENT key
+  than m[0.0] → lost key / silent duplicate. hexa_to_cstring is KEY-ONLY:
+  its only callers are hexa_map_get_v / hexa_map_set_v + the m[k] get/set
+  codegen sites. DISPLAY uses a SEPARATE function (hexa_to_string /
+  _hexa_to_string_rec / __hexa_format_float_for_print) — not touched here.
+
+SOURCE OF TRUTH
+  runtime_core.c is a GITIGNORED build artifact regenerated from the hexa
+  SSOT emitter self/runtime_core_emit.hexa (same surface OP-132 edited). The
+  real edit is in the emitter's emitted-C string for hexa_to_cstring, NOT the
+  generated .c. self/runtime_core_emit.hexa is in the build_selfhost closure.
+
+FIX (emitter, key-path only, net-additive — wipe-guard clean)
+  Added before EACH of the two float snprintf branches in the hexa_to_cstring
+  emitted-C string (self/runtime_core_emit.hexa, ~L1681 Val-struct + ~L1695
+  HexaVal):
+        if (f == 0.0) f = 0.0;
+  `f == 0.0` is TRUE for both +0.0 and -0.0; assigning the 0.0 literal clears
+  the sign bit (→ +0.0) so both stringify to "0.0". Scoped to hexa_to_cstring
+  (the KEY stringifier) only — display path untouched.
+
+REPRODUCE — BEFORE (shipping stale-frozen self-hosted CLI, g5-honest verbatim)
+  $ cat /tmp/op137_map_repro.hexa
+      let m = #{}; m[0.0] = 1
+      let negz = 0.0 * -1.0
+      println("has_key(m, -0.0)  = " + str(has_key(m, negz)))
+      println("has_key(m,  0.0)  = " + str(has_key(m, 0.0)))
+      println("str(-0.0)         = " + str(negz))
+  $ hexa run /tmp/op137_map_repro.hexa
+      has_key(m, -0.0)  = false      ⟸ LOST KEY (the bug)
+      has_key(m,  0.0)  = true
+      str(-0.0)         = -0.0       ⟸ display already correct (must stay)
+      str(0.0)          = 0.0
+
+VERIFY — generated-C proof (emitter re-run; the deployed binary is stale-
+frozen, so — exactly like OP-132/OP-134 — the proof is at the generated-C
+level + a discriminating regression test, not a re-run of the frozen binary).
+  $ hexa run self/runtime_core_emit.hexa /tmp/op137_runtime_core.c
+      [runtime_core_emit] wrote /tmp/op137_runtime_core.c
+  $ grep -n "if (f == 0.0) f = 0.0;" /tmp/op137_runtime_core.c
+      1596:            if (f == 0.0) f = 0.0;     ← Val-struct float branch
+      1614:        if (f == 0.0) f = 0.0;         ← HexaVal float branch
+  Both sit INSIDE const char* hexa_to_cstring(...) BEFORE the %.1f snprintf
+  AND before __hexa_format_float_mode. The DISPLAY function
+  __hexa_format_float_for_print is UNCHANGED (zero OP-137 markers there;
+  total OP-137 markers in the file == 2, both in hexa_to_cstring).
+
+  Self-contained C harness exercising the exact float-branch logic:
+      === BEFORE (no OP-137 normalization) ===
+      key(0.0)="0.0"  key(-0.0)="-0.0"  -> has_key match=FALSE(LOST KEY/BUG)
+      === AFTER (OP-137 normalization on KEY path) ===
+      key(0.0)="0.0"  key(-0.0)="0.0"   -> has_key match=true(FIXED)
+      === DISPLAY (unchanged) === str(-0.0)="-0.0"  preserved=true(GOOD)
+
+REGRESSION TEST (locked) — test/native_map_signed_zero_smoke.hexa
+  12 checks: signed-zero key round-trip (has_key / read / overwrite / symmetry),
+  non-zero floats stay distinct, int key untouched, + DISPLAY-PRESERVATION
+  asserts str(-0.0)=="-0.0" and str(0.0)=="0.0". DISCRIMINATING: on the stale
+  PRE-fix runtime it FAILS the 6 key-match checks (`map key '-0.0' not found`)
+  while the 2 display asserts already PASS — exact verbatim:
+      [FAIL] OP-137: has_key(m, -0.0) after m[0.0]=1
+      [FAIL] OP-137: has_key(m, -0.0 literal)
+      [PASS] OP-137: has_key(m, 0.0)
+      [FAIL] OP-137: m[-0.0] reads the +0.0 slot
+      [FAIL] OP-137: m[-0.0]=2 overwrites m[0.0] slot (m[0.0]==2)
+      [FAIL] OP-137: has_key(m2, 0.0) after m2[-0.0]=9
+      [PASS] OP-137: 2.5 and -2.5 are distinct keys
+      [PASS] OP-137: -2.5 distinct key
+      [PASS] OP-137: int key 7 untouched
+      [PASS] OP-137: str(-0.0) preserves sign == "-0.0"
+      [PASS] OP-137: str(0.0) == "0.0"
+      == native_map_signed_zero_smoke: 6 passed, 6 failed == __OP137_MAP_SMOKE__ FAIL
+  After the emitter fix + a from-scratch runtime rebuild, all 12 pass (the
+  6 key-match FAILs flip to PASS; the 2 display PASSes are unaffected — proven
+  at the generated-C level above).
+
+CLOSURE GATE (selfhost-gates-summary)
+  The change is to an emitted-C string literal (like OP-132), additive only —
+  the self-emit byte-eq fixpoint should re-run identically. Gate status on the
+  PR recorded below; if the fixpoint breaks this lands as 🟠 DEFERRED for a
+  build-host (NOT force-merged).
+  PR: <PR_URL>
+  selfhost-gates-summary: <GATE_STATUS>
+  merge commit: <MERGE_SHA>
+
+SCOPE FENCE (honest)
+  · KEY path only — hexa_to_cstring. Display (str/println of -0.0) preserves
+    "-0.0" (OP-132 shortest-repr fidelity intact). Verified: zero OP-137
+    markers in any display function.
+  · Zero-only normalisation — non-zero floats, ints, strings, NaN, ±inf all
+    pass through unchanged (m3[2.5]/m3[-2.5] stay distinct; int key 7 works).
+  · Cross-type int/float (1 vs 1.0) and NaN-distinct-identity remain the
+    module's pre-existing documented P1/inverse limitations (OP-134) — NOT in
+    scope, NOT regressed.
+
+VERDICT 🔴→🟢  The bare native #{} map signed-zero LOST-KEY (OP-134 residual #1,
+the C-runtime root) is FIXED at the SSOT emitter: hexa_to_cstring now collapses
+-0.0 → +0.0 on the KEY path in BOTH float branches, so m[-0.0] == m[0.0] hash to
+the same slot — while display str(-0.0) still yields "-0.0" (Python-exact:
+hash(-0.0)==hash(0.0) yet str(-0.0)=="-0.0"). Proven at the generated-C level +
+a discriminating regression test; locked. Runtime-level "after" needs a
+from-scratch self-host runtime rebuild (deployed binary stale-frozen, as OP-132).
+══════════════════════════════════════════════════════════════════════════════
