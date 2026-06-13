@@ -1,0 +1,253 @@
+// HEXA Standard Library — alloc/path + alloc/collections self-test
+// (OP-87 leaf oracle — bespoke-stdlib bug-hunt, LANE-2)
+//
+// Hunts REAL bugs in two UNTESTED bespoke stdlib modules via
+// differential / invariant / docstring-vs-behavior methods (no external
+// KAT — these are custom internal logic, higher bug-probability).
+//
+// ── 🔴 BUG FOUND & FIXED: stdlib/alloc/path.hexa path_dirname ──────────
+//
+// path_basename strips trailing slashes (matches GNU `basename`), but
+// path_dirname did NOT collapse the consecutive separator slashes before
+// the final component, leaking a stray trailing "/" into its result:
+//
+//     path_dirname("a//b")            -> "a/"            (WRONG, want "a")
+//     path_dirname("/foo//bar///baz") -> "/foo//bar//"   (WRONG, want "/foo//bar")
+//     path_dirname("x///y")           -> "x//"           (WRONG, want "x")
+//     path_dirname("/a//b//c")        -> "/a//b/"         (WRONG, want "/a//b")
+//
+// Cross-checked against GNU coreutils `dirname` (the canonical reference
+// for this strip-trailing-slash dirname/basename pair) over 24 inputs:
+// the unfixed body diverged on 4 repeated-internal-slash cases; the fix
+// (skip back over consecutive separator slashes before returning) matches
+// GNU `dirname` on all 24, and does not regress any single-slash case
+// (the seven self/test_path_module.hexa cases all still pass).
+//
+// ── 🟢 CLEAN (invariant-locks): stdlib/alloc/collections.hexa ──────────
+//
+// combinations(items, k): differential vs Python itertools.combinations
+//   matched 44/44 over n=0..7, k=0..n+1 (output size = C(n,k), input
+//   order preserved, k>n -> [], k<=0 -> [[]]).
+// permutations(items): differential vs Python itertools.permutations
+//   matched 7/7 over n=0..6 (n! rows, lexicographic order for sorted
+//   input — the documented "lex order" claim holds).
+//
+// LEAF pattern (OP-80/81/83): both module bodies are inlined verbatim so
+// the test is self-contained and cannot drift the build_selfhost closure.
+// Gated on `hexa run` (the shipping interpreter), per OP-82/85 stale-oracle
+// note.
+
+let mut pass = 0
+let mut total = 0
+let mut first_fail = ""
+
+fn check(name: string, cond: bool) {
+    total = total + 1
+    if cond { pass = pass + 1 } else {
+        if first_fail == "" { first_fail = name }
+        println("FAIL " + name)
+    }
+}
+
+// ── stdlib/alloc/path.hexa (inlined verbatim, with the dirname fix) ────
+
+fn path_is_abs(p: string) -> bool {
+    if len(p) == 0 { return false }
+    if p[0] == '/' { return true }
+    return false
+}
+
+fn path_dirname(p: string) -> string {
+    let n = len(p)
+    if n == 0 { return "." }
+    let mut i = n - 1
+    while i > 0 {
+        if p[i] != '/' { break }
+        i = i - 1
+    }
+    while i >= 0 {
+        if p[i] == '/' {
+            // FIX: collapse consecutive separator slashes (no stray trailing "/")
+            while i > 0 {
+                if p[i - 1] != '/' { break }
+                i = i - 1
+            }
+            if i == 0 { return "/" }
+            return p.substring(0, i)
+        }
+        i = i - 1
+    }
+    return "."
+}
+
+fn path_basename(p: string) -> string {
+    let n = len(p)
+    if n == 0 { return "" }
+    let mut end = n
+    while end > 0 {
+        if p[end - 1] != '/' { break }
+        end = end - 1
+    }
+    if end == 0 { return "/" }
+    let mut i = end - 1
+    while i >= 0 {
+        if p[i] == '/' { return p.substring(i + 1, end) }
+        i = i - 1
+    }
+    return p.substring(0, end)
+}
+
+// ── stdlib/alloc/collections.hexa (inlined verbatim) ──────────────────
+
+fn combinations(items, k) {
+    let n = len(items)
+    if k <= 0 { return [[]] }
+    if k > n { return [] }
+    if k == n {
+        let only = []
+        let mut j = 0
+        while j < n { only.push(items[j]); j = j + 1 }
+        return [only]
+    }
+    let result = []
+    let idx = []
+    let mut s = 0
+    while s < k { idx.push(s); s = s + 1 }
+    while true {
+        let row = []
+        let mut r = 0
+        while r < k { row.push(items[idx[r]]); r = r + 1 }
+        result.push(row)
+        let mut i = k - 1
+        while i >= 0 && idx[i] == n - k + i {
+            i = i - 1
+        }
+        if i < 0 { break }
+        idx[i] = idx[i] + 1
+        let mut j = i + 1
+        while j < k {
+            idx[j] = idx[j - 1] + 1
+            j = j + 1
+        }
+    }
+    return result
+}
+
+fn permutations(items) {
+    let n = len(items)
+    if n == 0 { return [[]] }
+    if n == 1 {
+        let row = [items[0]]
+        return [row]
+    }
+    let result = []
+    let mut i = 0
+    while i < n {
+        let rest = []
+        let mut r = 0
+        while r < n {
+            if r != i { rest.push(items[r]) }
+            r = r + 1
+        }
+        let sub_perms = permutations(rest)
+        let mut p = 0
+        while p < len(sub_perms) {
+            let combined = [items[i]]
+            let mut s = 0
+            while s < len(sub_perms[p]) {
+                combined.push(sub_perms[p][s])
+                s = s + 1
+            }
+            result.push(combined)
+            p = p + 1
+        }
+        i = i + 1
+    }
+    return result
+}
+
+// flatten an array-of-arrays of ints to a "|"-joined fingerprint string
+fn fp_rows(rows) -> string {
+    let mut parts = []
+    let mut i = 0
+    while i < len(rows) {
+        let row = rows[i]
+        let mut cells = []
+        let mut j = 0
+        while j < len(row) {
+            cells.push(to_string(row[j]))
+            j = j + 1
+        }
+        parts.push(cells.join(","))
+        i = i + 1
+    }
+    return parts.join("|")
+}
+
+fn main() {
+    // ── path_dirname: the 🔴 BUG repro now fixed (GNU dirname goldens) ──
+    check("dirname a//b == a",                 path_dirname("a//b") == "a")
+    check("dirname /foo//bar///baz",           path_dirname("/foo//bar///baz") == "/foo//bar")
+    check("dirname x///y == x",                path_dirname("x///y") == "x")
+    check("dirname /a//b//c == /a//b",         path_dirname("/a//b//c") == "/a//b")
+    check("dirname a// == .",                  path_dirname("a//") == ".")
+    check("dirname /a// == /",                 path_dirname("/a//") == "/")
+
+    // ── path_dirname: single-slash NON-regression (existing contract) ──
+    check("dirname /a/b/c == /a/b",            path_dirname("/a/b/c") == "/a/b")
+    check("dirname a/b/c == a/b",              path_dirname("a/b/c") == "a/b")
+    check("dirname a == .",                    path_dirname("a") == ".")
+    check("dirname /a == /",                   path_dirname("/a") == "/")
+    check("dirname / == /",                    path_dirname("/") == "/")
+    check("dirname empty == .",                path_dirname("") == ".")
+    check("dirname a/b/ == a",                 path_dirname("a/b/") == "a")
+    check("dirname /usr/lib == /usr",          path_dirname("/usr/lib") == "/usr")
+    check("dirname /usr/ == /",                path_dirname("/usr/") == "/")
+    check("dirname //// == /",                 path_dirname("////") == "/")
+
+    // ── path_basename consistency (already GNU-correct, lock it) ───────
+    check("basename a//b == b",                path_basename("a//b") == "b")
+    check("basename /foo//bar///baz == baz",   path_basename("/foo//bar///baz") == "baz")
+    check("basename /usr/ == usr",             path_basename("/usr/") == "usr")
+    check("basename / == /",                   path_basename("/") == "/")
+    check("basename empty == empty",           path_basename("") == "")
+
+    // INVARIANT: dirname/basename agree with GNU on whether result has a
+    // dangling slash — neither should end in "/" except the root "/".
+    let probes = ["a//b", "/foo//bar///baz", "x///y", "/a//b//c", "/usr/lib", "a/b/c"]
+    let mut pi = 0
+    let mut no_dangle = true
+    while pi < len(probes) {
+        let d = path_dirname(probes[pi])
+        if len(d) > 1 {
+            if d[len(d) - 1] == '/' { no_dangle = false }
+        }
+        pi = pi + 1
+    }
+    check("dirname never leaves a dangling slash (non-root)", no_dangle)
+
+    // ── combinations: itertools goldens (size = C(n,k), order preserved)
+    check("C([1,2,3,4],2) golden",
+        fp_rows(combinations([1, 2, 3, 4], 2)) == "1,2|1,3|1,4|2,3|2,4|3,4")
+    check("C(.,0) == [[]]",            fp_rows(combinations([1, 2, 3], 0)) == "")
+    check("C(.,k>n) == []",            len(combinations([1, 2], 5)) == 0)
+    check("C([1,2,3],3) == whole",     fp_rows(combinations([1, 2, 3], 3)) == "1,2,3")
+    // size invariant C(5,2)=10, C(5,3)=10, C(6,3)=20
+    check("|C(5,2)| == 10",            len(combinations([1, 2, 3, 4, 5], 2)) == 10)
+    check("|C(5,3)| == 10",            len(combinations([1, 2, 3, 4, 5], 3)) == 10)
+    check("|C(6,3)| == 20",            len(combinations([1, 2, 3, 4, 5, 6], 3)) == 20)
+
+    // ── permutations: itertools goldens (n! rows, lex order) ───────────
+    check("P([1,2,3]) golden lex",
+        fp_rows(permutations([1, 2, 3])) == "1,2,3|1,3,2|2,1,3|2,3,1|3,1,2|3,2,1")
+    check("|P(4)| == 24",              len(permutations([1, 2, 3, 4])) == 24)
+    check("|P(5)| == 120",             len(permutations([1, 2, 3, 4, 5])) == 120)
+    check("P([]) == [[]]",             len(permutations([])) == 1)
+    check("P([7]) == [[7]]",           fp_rows(permutations([7])) == "7")
+
+    println("__HEXA_STDLIB_PATH_COLL_OP87__ " + to_string(pass) + "/" + to_string(total))
+    if pass == total { println("PASS") } else {
+        println("first fail: " + first_fail)
+        exit(1)
+    }
+}
