@@ -1,0 +1,185 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/ckpt/test/pcc_overflow_op123_test.hexa
+//
+//  OP-123 — container-parser robustness: integer-overflow / wrap guard in the
+//  .pcc proof-carrying-checkpoint header parser (stdlib/ckpt/verifier.hexa).
+//
+//  THE BUG (pre-fix)
+//    hexa int is 64-bit SIGNED. verify_pcc trusts chunk_count / payload_len /
+//    chunk_size / cert_block_len declared in the (untrusted) header, then
+//    forms the layout via raw multiplication:
+//        dir_size      = chunk_count * pcc_dir_entry_size()   // *20
+//        upper         = chunk_count * chunk_size
+//        payload_end   = payload_start + payload_len
+//        expected_total= ... + pcc_trailer_size()
+//    A crafted chunk_count near 2^62 makes chunk_count*20 OVERFLOW and wrap,
+//    so the primary structural guard `expected_total == total_bytes` compares
+//    a WRAPPED sum and passes a nonsense layout. Downstream the wrapped
+//    payload_start/payload_end neuter the per-chunk bounds checks, and the
+//    `while ci < chunk_count` directory walk can index `buf` out of bounds →
+//    an uncontrolled runtime OOB trap (process abort) instead of the
+//    contractual graceful `ERR_HEADER_CORRUPT` dict.
+//
+//  THE FIX
+//    Bound every declared field against the real file size BEFORE any
+//    multiplication (each region is a subset of the file, so each field is
+//    individually ≤ total_bytes; chunk_count ≤ total_bytes/DIR_ENTRY_SIZE via
+//    wrap-free division). Reject impossible declarations up front so the
+//    arithmetic that follows cannot wrap.
+//
+//  THIS TEST
+//    1. VALID-ACCEPT: a well-formed small .pcc still verifies clean.
+//    2. MALFORMED-REJECT: three wrap-crafted headers (the 2^62 chunk_count
+//       bypass found by the OP-123 sweep, plus an oversized payload_len and
+//       an oversized cert_block_len) are each rejected gracefully with
+//       ok=false and code ERR_HEADER_CORRUPT — NO crash, NO wrong-region code.
+//
+//  Run:
+//      ./hexa run stdlib/ckpt/test/pcc_overflow_op123_test.hexa
+//  Exits 0 on success, 1 on any failure.
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/ckpt/writer"
+use "stdlib/ckpt/verifier"
+use "stdlib/ckpt/format"
+
+fn _gen_payload(n) {
+    let mut out = []
+    let mut s = 0x12345678
+    let mut i = 0
+    while i < n {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        out.push((s / 0x10000) & 0xFF)
+        i = i + 1
+    }
+    return out
+}
+
+// Overwrite a u64 little-endian field (8 bytes) at `off` in `path` with the
+// [hi, lo] u32 pair `pair`.
+fn _set_u64(path, off, pair) {
+    let bs = read_file_bytes(path)
+    if off < 0 || off + 8 > len(bs) { return false }
+    let enc = enc_u64_le(pair[0], pair[1])
+    let mut i = 0
+    while i < 8 {
+        bs[off + i] = enc[i] & 0xFF
+        i = i + 1
+    }
+    return write_bytes(path, bs)
+}
+
+// Overwrite a u32 little-endian field (4 bytes) at `off`.
+fn _set_u32(path, off, v) {
+    let bs = read_file_bytes(path)
+    if off < 0 || off + 4 > len(bs) { return false }
+    let enc = enc_u32_le(v)
+    let mut i = 0
+    while i < 4 {
+        bs[off + i] = enc[i] & 0xFF
+        i = i + 1
+    }
+    return write_bytes(path, bs)
+}
+
+fn _copy(src, dst) {
+    let bs = read_file_bytes(src)
+    write_bytes(dst, bs)
+}
+
+fn _assert(label, cond, tracker) {
+    if cond {
+        println("  PASS " + label)
+        tracker["pass"] = tracker["pass"] + 1
+    } else {
+        println("  FAIL " + label)
+        tracker["fail"] = tracker["fail"] + 1
+    }
+}
+
+fn main() {
+    let pid = exec("echo $$").trim()
+    let good = "/tmp/hexa_pcc_op123_good_" + pid + ".pcc"
+
+    let tracker = #{}
+    tracker["pass"] = 0
+    tracker["fail"] = 0
+
+    // ── Build a valid baseline checkpoint ────────────────────────────────
+    let chunk_sz = 256
+    let n_chunks = 4
+    let payload = _gen_payload(chunk_sz * n_chunks)
+    let cert_json = "{\"schema_version\":\"2\",\"slug\":\"pcc_op123_fixture\",\"verdict\":\"VERIFIED\"}\n"
+    let opts = #{}
+    opts["chunk_size"] = chunk_sz
+    let w = write_pcc(good, payload, cert_json, opts)
+    if !w["ok"] {
+        println("FAIL: baseline write_pcc did not succeed")
+        exit(1)
+    }
+
+    // (1) VALID-ACCEPT — baseline verifies clean.
+    let v0 = verify_pcc(good)
+    _assert("valid-accept: clean .pcc verifies ok", v0["ok"], tracker)
+
+    // Header field offsets (see stdlib/ckpt/format.hexa FILE LAYOUT):
+    //   [8] version u16  [10] flags u16  [12] chunk_size u32
+    //   [16] chunk_count u64  [24] cert_block_len u32  [28] payload_len u64
+    let OFF_CHUNK_SIZE = 12
+    let OFF_CHUNK_COUNT = 16
+    let OFF_CERT_LEN = 24
+    let OFF_PAYLOAD_LEN = 28
+
+    // ── (2a) 2^62 chunk_count wrap bypass ────────────────────────────────
+    // chunk_count chosen so chunk_count*20 overflows; pre-fix this slipped
+    // past `expected_total == total_bytes`. The fix caps chunk_count at
+    // total_bytes/20 → ERR_HEADER_CORRUPT, no OOB trap.
+    let bad1 = "/tmp/hexa_pcc_op123_wrapcc_" + pid + ".pcc"
+    _copy(good, bad1)
+    // 4392081922311798020 = [hi, lo] u32 pair: hi=1022611260 lo=4090445060
+    _set_u64(bad1, OFF_CHUNK_COUNT, [1022611260, 4090445060])
+    let r1 = verify_pcc(bad1)
+    _assert("wrap chunk_count: graceful reject (ok=false)", !r1["ok"], tracker)
+    _assert("wrap chunk_count: code == ERR_HEADER_CORRUPT",
+            r1["code"] == err_header_corrupt(), tracker)
+
+    // ── (2b) oversized payload_len ───────────────────────────────────────
+    // payload_len far larger than the file → rejected before the wrapping
+    // payload_start + payload_len arithmetic.
+    let bad2 = "/tmp/hexa_pcc_op123_payload_" + pid + ".pcc"
+    _copy(good, bad2)
+    _set_u64(bad2, OFF_PAYLOAD_LEN, [1022611260, 4090445060])
+    let r2 = verify_pcc(bad2)
+    _assert("oversized payload_len: graceful reject (ok=false)", !r2["ok"], tracker)
+    _assert("oversized payload_len: code == ERR_HEADER_CORRUPT",
+            r2["code"] == err_header_corrupt(), tracker)
+
+    // ── (2c) oversized chunk_size ────────────────────────────────────────
+    // chunk_size near u32 max → chunk_count*chunk_size would wrap; capped at
+    // total_bytes.
+    let bad3 = "/tmp/hexa_pcc_op123_csize_" + pid + ".pcc"
+    _copy(good, bad3)
+    _set_u32(bad3, OFF_CHUNK_SIZE, 0xFFFFFFFF)
+    let r3 = verify_pcc(bad3)
+    _assert("oversized chunk_size: graceful reject (ok=false)", !r3["ok"], tracker)
+    _assert("oversized chunk_size: code == ERR_HEADER_CORRUPT",
+            r3["code"] == err_header_corrupt(), tracker)
+
+    // ── (2d) oversized cert_block_len ────────────────────────────────────
+    let bad4 = "/tmp/hexa_pcc_op123_cert_" + pid + ".pcc"
+    _copy(good, bad4)
+    _set_u32(bad4, OFF_CERT_LEN, 0xFFFFFFFF)
+    let r4 = verify_pcc(bad4)
+    _assert("oversized cert_block_len: graceful reject (ok=false)", !r4["ok"], tracker)
+    _assert("oversized cert_block_len: code == ERR_HEADER_CORRUPT",
+            r4["code"] == err_header_corrupt(), tracker)
+
+    println("")
+    println("OP-123 pcc overflow guard: " + to_string(tracker["pass"]) +
+            " pass / " + to_string(tracker["fail"]) + " fail")
+    if tracker["fail"] > 0 {
+        exit(1)
+    }
+    println("ALL PASS")
+    exit(0)
+}

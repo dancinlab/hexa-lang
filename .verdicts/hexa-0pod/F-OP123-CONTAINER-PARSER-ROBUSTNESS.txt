@@ -1,0 +1,164 @@
+F-OP123-CONTAINER-PARSER-ROBUSTNESS
+HEXA-0POD · LANE 2 · OP-123 — malformed binary container / media / archive parser robustness sweep
+$0 · 0-pod · NO GPU · no vast · no cloud · no foreign pod · leak-0
+
+VERDICT: 🔴 1 FIXED (integer-overflow / wrap bypass of a container header guard)
+         + 🟢 CONVERGED coverage matrix over the in-repo container/chunked-binary parser surface.
+
+═══════════════════════════════════════════════════════════════════════════
+CLASS HUNTED
+  Parsers of CONTAINER / CHUNKED-BINARY formats — (magic) + repeated
+  (type/offset, length, payload) records — that TRUST a declared chunk
+  length/count/offset read from untrusted bytes, then read/slice past the
+  buffer, loop unboundedly, or WRAP on the length/offset arithmetic.
+  hexa int is 64-bit SIGNED (wrap is REAL — confirmed OP-118/121).
+
+  EXCLUDED per scope fences: net/HTTP (OP-122 lane), crypto/TLS/x509/asn1
+  (OP-105/118 swept), JSON recursive parsers (OP-120).
+
+═══════════════════════════════════════════════════════════════════════════
+IN-REPO CONTAINER-PARSER CENSUS (only real parsers — nothing invented)
+
+  PARSER                                    UNTRUSTED-INPUT?   VERDICT
+  stdlib/ckpt/verifier.hexa  verify_pcc      YES (.pcc file)    🔴 FIXED
+  stdlib/ckpt/format.hexa    decode_header/                     (guard
+                             decode_dir_entry/decode_trailer    lives in
+                                              YES (callee)      verifier)
+  stdlib/safetensors.hexa    safetensors_read YES (.safetensors) 🟢 CLEAN
+  stdlib/wasm/wasm_leb128    *_decode         (scaffold)         🟢 CLEAN
+  stdlib/wasm/wasm_section_header / _type_section / _export      🟢 EMIT-ONLY
+  stdlib/ckpt/merkle.hexa / chunk_store.hexa  in-mem (not wire)  🟢 N/A
+
+═══════════════════════════════════════════════════════════════════════════
+🔴 FINDING — stdlib/ckpt/verifier.hexa  verify_pcc  (the .pcc proof-carrying
+            checkpoint header parser): INTEGER-OVERFLOW WRAP bypasses the
+            primary structural guard.
+
+  THE PARSER
+    .pcc layout = MAGIC + header{version,flags,chunk_size:u32,
+    chunk_count:u64,cert_block_len:u32,payload_len:u64} + cert_block +
+    (chunk_count × 20-byte dir entries) + payload + trailer. verify_pcc
+    reads the header from an untrusted file and computes the layout via
+    RAW MULTIPLICATION:
+        dir_size       = chunk_count * pcc_dir_entry_size()   // *20
+        upper          = chunk_count * chunk_size
+        payload_end    = payload_start + payload_len
+        expected_total = ... + pcc_trailer_size()
+    then gates on the SINGLE primary structural guard
+        if expected_total != total_bytes -> ERR_HEADER_CORRUPT.
+
+  THE BUG (CWE-190 -> CWE-125/CWE-787 / DoS)
+    A crafted chunk_count near 2^62 makes chunk_count*20 OVERFLOW the
+    64-bit signed domain and WRAP, so `expected_total` is a WRAPPED sum.
+    A SOLVED instance (Python oracle, s64 model):
+        chunk_count = 4392081922311798020   (~2^62.4)
+        chunk_size  = 1, cert_block_len = 0, payload_len = chunk_count
+      => dir_size       = s64(chunk_count*20) = -6148914691236517072
+         payload_start  = -6148914691236517036   (NONSENSE NEGATIVE)
+         payload_end    = 176
+         expected_total = 200   <-- a 200-byte crafted file PASSES the guard
+    The primary defense is DEFEATED by the wrap. Downstream the wrapped
+    payload_start/payload_end turn the per-chunk bounds checks
+    (`declared_offset < payload_start`, `+len > payload_end`) into no-ops
+    (any offset>=0 is < a negative payload_start), and the directory walk
+    `while ci < chunk_count` (loop bound = the 4.4e18 chunk_count) can
+    index `buf` out of bounds.
+
+  RUNTIME OOB SEMANTICS (probed verbatim, `hexa run`)
+    `buf[100]` on a len-3 array → HARD FAULT `index 100 out of bounds
+    (len 3)` (process abort), NOT a silent garbage read. So the wrap
+    yields a graceful-but-WRONG reject when downstream checks happen to
+    catch the nonsense first, and an UNCONTROLLED RUNTIME ABORT (DoS —
+    the verifier's whole contract is to return a tamper-code DICT, never
+    crash) when a crafted dir/trailer alignment lets the walk advance to
+    an out-of-bounds de_off. Either way the wrap-bypass of the structural
+    guard is the load-bearing defect.
+
+  THE FIX (defense-in-depth, fail-closed, surgical)
+    Every declared region (cert block, chunk directory, payload) is a
+    SUBSET of the file, so each field is individually <= total_bytes.
+    Bound them BEFORE any multiplication — WRAP-FREE (division for the
+    count cap):
+        chunk_size      in (0, total_bytes]
+        cert_block_len  in [0, total_bytes]
+        chunk_count     in [0, total_bytes / DIR_ENTRY_SIZE]   (division)
+        payload_len     in [0, total_bytes]
+    Reject impossible declarations up front; every subsequent product is
+    then bounded by ~total_bytes (and total_bytes^2/20 for upper), far
+    under 2^62 for any realistically-sized checkpoint → the layout
+    arithmetic CANNOT wrap and the structural guard is no longer
+    bypassable.
+
+═══════════════════════════════════════════════════════════════════════════
+🟢 CENSUS — REST CLEAN (honest g5; no 🔴 fabricated)
+
+  stdlib/safetensors.hexa  safetensors_read — ALREADY HARDENED:
+    header_len<=0 reject · 8+header_len>n reject · per-tensor
+    `s>=0 && e>=s && data_start+e<=n` before every slice. No wrap path on
+    practical inputs (offsets come from a header whose length is itself
+    bounded by n). CLEAN.
+
+  stdlib/wasm/wasm_leb128  wasm_uleb128_decode / wasm_sleb128_decode —
+    both loop `while i < n` (bounded by buffer length, no OOB read) and
+    return at buffer end. Doc'd @pure scaffold with ZERO in-repo callers
+    that feed a decoded LEB into an alloc/offset sink (same disposition
+    OP-118 recorded). The unbounded-shift on an overlong encoding is a
+    range/value artifact, not an OOB. CLEAN.
+
+  stdlib/wasm/wasm_section_header / wasm_type_section / wasm_export —
+    EMIT-ONLY (encoders + id<->name tables). No untrusted-byte walker.
+    CLEAN.
+
+  stdlib/ckpt/merkle.hexa / chunk_store.hexa — operate on in-memory leaf
+    arrays / program-owned data, NOT a wire byte stream. N/A.
+
+═══════════════════════════════════════════════════════════════════════════
+LOCK — stdlib/ckpt/test/pcc_overflow_op123_test.hexa  (hermetic, `hexa run`)
+
+  PASS valid-accept: clean .pcc verifies ok
+  PASS wrap chunk_count: graceful reject (ok=false)
+  PASS wrap chunk_count: code == ERR_HEADER_CORRUPT
+  PASS oversized payload_len: graceful reject (ok=false)
+  PASS oversized payload_len: code == ERR_HEADER_CORRUPT
+  PASS oversized chunk_size: graceful reject (ok=false)
+  PASS oversized chunk_size: code == ERR_HEADER_CORRUPT
+  PASS oversized cert_block_len: graceful reject (ok=false)
+  PASS oversized cert_block_len: code == ERR_HEADER_CORRUPT
+  OP-123 pcc overflow guard: 9 pass / 0 fail
+  ALL PASS
+  EXIT=0
+
+  Builds a valid baseline via write_pcc (valid-accept), then overwrites
+  the header chunk_count / payload_len / chunk_size / cert_block_len
+  fields with the 2^62 wrap / oversized values on copies and asserts each
+  is rejected gracefully (ok=false, ERR_HEADER_CORRUPT) — no crash, no
+  wrong-region code.
+
+REGRESSION — existing stdlib/ckpt tests after the fix:
+  pcc_tamper.hexa  : 5/5 PASS — all five distinct tamper codes preserved
+      PASS tamper 1 MAGIC  — ERR_MAGIC_MISMATCH
+      PASS tamper 2 HEADER — ERR_HEADER_CORRUPT
+      PASS tamper 3 CHUNK  — ERR_CHUNK_HASH_MISMATCH
+      PASS tamper 4 MERKLE — ERR_MERKLE_MISMATCH
+      PASS tamper 5 CERT   — ERR_CERT_SIG_INVALID
+  pcc_roundtrip.hexa : 5/6 — payload byte-identical + payload_len + verify
+      ok; the ONE non-passing check is the OP-79 non-ASCII cert_json
+      round-trip (Korean "한글-fixture" mojibakes to "íê¸-fixture").
+      CONFIRMED PRE-EXISTING and UNRELATED to OP-123: running the SAME
+      test against the PRISTINE origin/main verifier (without this fix)
+      reproduces the IDENTICAL mojibake / identical 5/6. The defect is in
+      the `bytes_to_str_raw` UTF-8 builtin on the local interpreter, NOT
+      in the header arithmetic — this OP-123 diff touches only integer
+      bounds clauses (grep of the diff for cert/bytes_to_str = empty).
+
+═══════════════════════════════════════════════════════════════════════════
+FLAGS
+  · 1 source edit: stdlib/ckpt/verifier.hexa — build_selfhost-closure-OUT
+    (stdlib leaf parser, NOT self/*; not referenced by compiler/ or self/)
+    → ZERO byte-eq / self-host-fixpoint impact, no selfhost gate touched.
+  · Net-ADDITIVE (guard clauses only, 0 deletions) → wipe_guard N/A.
+  · 1 NEW leaf test (stdlib/ckpt/test) — closure-OUT.
+  · NO .tape. Repro logic verbatim-INLINED / oracle-modelled
+    (stale-bundle-immune).
+  · LANE-2 only — disjoint from sibling lanes (OP-122 streaming/HTTP).
+  · $0 · 0-pod · NO GPU · no vast · no foreign pod · leak-0.
