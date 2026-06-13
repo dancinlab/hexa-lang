@@ -50,8 +50,10 @@ W="$PWD/build/op126-scratch"; mkdir -p "$W"
 # (1) restore frozen bootstrap seeds (hexa_cc.c + runtime.c; gitignored)
 bash tool/restore_frozen_seeds
 
-# (2) build hexat — ROT WORKAROUND: build_selfhost.sh omits runtime.c here, so its
-#     clang link fails `Undefined symbols … ___hexa_last_error`. Compile BOTH in 1 TU:
+# (2) build hexat — links self/native/hexa_cc.c WITH self/runtime.c + -lm in one TU
+#     (the runtime ABI ___hexa_last_error/… is required). build_selfhost.sh now links
+#     the runtime correctly itself as of OP-129, so a from-scratch `tool/build_selfhost.sh`
+#     no longer needs this manual step — it is shown here only for the standalone proof:
 clang -O2 -arch arm64 -std=gnu11 -D_GNU_SOURCE -D_DARWIN_C_SOURCE -Wno-trigraphs \
       -I self -I . self/native/hexa_cc.c self/runtime.c -o build/hexat -lm
 
