@@ -1,5 +1,17 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-141 DONE: census of pre-float-fix float-derived gate goldens → 🟢 CONVERGED (erf was the only one, already OP-138-resolved)
+- TASK (LANE-1): OP-138 follow-up. Census every CI golden/baseline that could encode a value from compile-time FLOAT const-folding (9-10+ sig-digit rationals/transcendentals) pinned BEFORE the float-fix commits (OP-37 #3069 / OP-40 #3084 / OP-42 gate #3091, all 2026-06-12) → which silently encode a stale (lossy %g/%.17e) value?
+- DISCRIMINATOR: integer/simple-fraction goldens (0.25/1.0/2.0/12, dt_exp) serialize bit-identically under lossy AND shortest-round-trip → UNAFFECTED; only 9-10-digit float folds (A&S erf coeffs) shift.
+- 🟢 RESULT: only 2 float-derived GATE goldens exist — (1) tool/fold_ci_gate.sh dt_erf FWD/BWD = stale, ALREADY re-pinned by OP-138 #3307 (3-platform byte-eq correct value); (2) tool/op39_constfold_gate.sh = CLEAN BY CONSTRUCTION (created post-fix #3091; goldens ARE the fixed-compiler hex-float output). dt_exp CEBWD unaffected.
+- 🟢 EVERY OTHER golden NOT float-derived or NOT stale: fixtures/**/golden_*.json = integer/byte folds (pure arithmetic); bench/snapshots = codegen-shape; determinism/miscompile_zero gates = byte-IDENTITY (no number); flame_steppath_{fma,libm} = lexical grep; dojo_rent_preflight 2^31/3B = int config.
+- 🟢 *_eq.hexa oracles (op29/33/72/74/76/78 · clm_prod_crossplatform_exact · op35) STRUCTURALLY MASKING-IMMUNE — compute two values, assert DELTA in tolerance (no pinned constant); NONE wired into a gate with a pinned value (grep tool/+.github/ = 0). op19b_crossplatform_erf has NO internal golden (prints bits for fold_ci_gate to assert externally; git diff vs creation empty).
+- MASKING CHECK: NONE — no surface passes by recomputing a stale value; the 2 pinned gates compare hard-coded GOLD_* strings (go RED on drift, as fold_ci did → OP-138).
+- ONE RESIDUE FOUND + FIXED (doc-only): .github/workflows/nobaseline-gate.yml OP-34 step header COMMENT still cited the OLD pre-fix dt_erf goldens (4548590605583584556 / 4249661408190172843) — documentary echo from OP-138, NOT an assertion (real gate = sh tool/fold_ci_gate.sh ./hexa, already fixed). Corrected to OP-138 re-pin 1088281529475491513 / 2045849491002578884 + provenance. ZERO gate-behavior change.
+- CLOSURE: workflow-comment edit = build-infra, no byte-eq impact; net-additive, 0 source deletions → wipe_guard N/A. No asserted golden re-pinned → no cross-platform proof needed (no new golden value).
+- ONE HONEST LINE: after OP-138, NO other CI gate golden silently encodes a pre-float-fix lossy value — erf was genuinely the only one; every other golden is integer/byte, a codegen-shape snapshot, or a delta-tolerance equality oracle. Lone residue = a stale doc comment, now honest.
+- LANE-1. $0 · 0-pod · NO GPU · no vast · no foreign-pod · leak-0. Verdict .verdicts/hexa-0pod/F-OP141-STALE-GOLDEN-CENSUS.txt.
+
 ## 2026-06-13 — OP-139 DONE: byte-producing escape/codec-decoder multibyte sweep → 🔴 1 FIXED (base64_decode_pure) + 🟢 CONVERGED
 - TASK (LANE-2): OP-128/135/136 cross-token byte-vs-codepoint class, applied to ESCAPE decoders. Sweep every "parse escape → produce raw byte 0-255 → append" decoder (%XX · \xHH · base64 · octal · =XX QP) for the per-byte from_char_code mojibake; classify vs codepoint decoders (\uXXXX · &#…). Oracle = Python base64/urllib/quopri.
 - HUNT: grepped all from_char_code/unescape/unquote/\x/\u/hex_to_bytes decoders. 18 surveyed; 5 byte-producing string-builders; 3 already fixed by OP-136 (url_decode_pure ×3).
