@@ -137,13 +137,25 @@ pub fn reverse_arr(arr) {
 // row category) and weave_pi_p2_verifier_v3_exhaustive.py (combinations
 // for NP-solver exhaustive enumeration).
 
+// _counter_norm: OP-134 hash↔eq contract. Keys are coerced via to_string,
+// so equal values MUST stringify equal. IEEE `-0.0 == 0.0` is TRUE, yet a
+// runtime `-0.0` stringifies to "-0.0" vs "0.0" — without this collapse a
+// 0.0 and a -0.0 in `items` would be counted as TWO distinct keys. `0.0+0.0`
+// forces +0.0 (clears the sign bit). All non-zero-float values pass through.
+fn _counter_norm(x) {
+    if type_of(x) == "float" {
+        if x == 0.0 { return 0.0 + 0.0 }
+    }
+    return x
+}
+
 // counter(items): items array → map { item_str: int_count }
 // Keys are coerced to string via to_string for map compatibility.
 pub fn counter(items) {
     let m = {}
     let i = 0
     while i < len(items) {
-        let k = to_string(items[i])
+        let k = to_string(_counter_norm(items[i]))
         if has_key(m, k) {
             m[k] = m[k] + 1
         } else {

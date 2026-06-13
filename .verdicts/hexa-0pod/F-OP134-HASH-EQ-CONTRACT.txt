@@ -1,0 +1,112 @@
+══════════════════════════════════════════════════════════════════════════════
+ F-OP134-HASH-EQ-CONTRACT — hash ↔ equality contract consistency audit
+ campaign HEXA-0POD · LANE 1 · 0-pod local CPU · $0
+ date 2026-06-13 · branch qforge-op134-hash-eq-contract
+══════════════════════════════════════════════════════════════════════════════
+
+CONTRACT AUDITED
+  a == b  ⟹  hash(a) == hash(b)      (equal values MUST hash/key equal)
+  Violation ⇒ a hashmap/hashset silently LOSES or DUPLICATES keys.
+
+ARCHITECTURE (how hexa hashes container keys)
+  The native map primitive (#{} · m[k]=v · has_key · keys) is keyed on a
+  C `char*` string: hashed with FNV-1a (hexa_fnv1a_str) + compared with
+  strcmp (hmap_find, self/runtime_core.c:2565). Hash and eq are BOTH over
+  the SAME key bytes → INTERNALLY CONSISTENT BY CONSTRUCTION. Any non-string
+  key is stringified to its char* key first. So the WHOLE contract reduces to:
+        equal values MUST stringify to the same key string.
+  stdlib HashSet / counter key via to_string(item); the native map keys via
+  hexa_to_cstring(key) (self/runtime_core.c:1580, the m[5]==m["5"] path).
+
+CONTRACT MATRIX  (key type → eq → key-string → consistent?)
+  ┌───────────────────┬──────────────────┬───────────────────────┬───────────┐
+  │ key type          │ == says          │ key string            │ consistent│
+  ├───────────────────┼──────────────────┼───────────────────────┼───────────┤
+  │ int               │ value eq         │ "%lld" of value       │ YES ✓     │
+  │ string            │ byte eq          │ identity (char*)      │ YES ✓     │
+  │ bool              │ value eq         │ "true"/"false"        │ YES ✓     │
+  │ float non-zero    │ IEEE eq          │ %.1f / %g of value    │ YES ✓     │
+  │ float +0.0 / -0.0 │ 0.0 == -0.0 TRUE │ "0.0"  vs  "-0.0"     │ NO  🔴    │  ← VIOLATION (FIXED)
+  │ float NaN         │ NaN != NaN FALSE │ "NaN" (all NaNs)      │ collision │  ← 🟠 inverse-dir, allowed
+  │ +inf / -inf       │ IEEE eq          │ "inf" / "-inf"        │ YES ✓     │
+  │ int 1 vs float 1.0│ 1 == 1.0 TRUE    │ "1"   vs  "1.0"       │ NO* 🟠    │  ← documented P1 (cross-type)
+  └───────────────────┴──────────────────┴───────────────────────┴───────────┘
+  * cross-type int/float and `1`/"1" collisions are the module's PRE-EXISTING
+    documented P1 limitation (stringified-key model, hashset.hexa header).
+    NOT introduced here; callers partition cross-type keys upstream. Flagged
+    🟠, not regressed.
+
+🔴 VIOLATION FOUND & FIXED — signed zero
+  IEEE `-0.0 == 0.0` is TRUE, but a runtime-computed -0.0 (e.g. 0.0 * -1.0)
+  stringifies to "-0.0" while 0.0 → "0.0". REPRODUCED on the shipping
+  self-hosted CLI (hx-selfhost-cli), all g5-honest verbatim:
+
+    --- HashSet (stdlib/hashset.hexa) — BEFORE fix ---
+    let s = hashset_new(); hashset_insert(s, 0.0)
+    let negz = 0.0 * -1.0
+    hashset_contains(s, negz)   → false   ⟸ LOST KEY (should be true)
+    hashset_insert(s, negz)     → true    ⟸ DUPLICATE (should be false)
+    hashset_len(s)              → 2       ⟸ should be 1
+
+    --- native map (#{}) — BEFORE fix (same root cause, runtime.c) ---
+    let m = #{}; m[0.0] = 1
+    has_key(m, 0.0 * -1.0)      → false   ⟸ LOST KEY
+    has_key(m, 0.0)             → true
+
+  Real consequence: any set/map keyed on a float that can compute to -0.0
+  (gradients, x*-1, -1.0/inf, subtraction) silently loses/duplicates entries.
+
+FIX (LANE-1 stdlib scope — pure hexa, no C/self-host edit)
+  Added a zero-collapse key-normaliser at the container boundary:
+    _hashset_norm(item) / _counter_norm(x): for a float == 0.0, return
+    `0.0 + 0.0` (IEEE round-to-nearest clears the sign bit → +0.0). All
+    other values (ints, strings, NaN, ±inf, non-zero floats) pass through.
+  Applied in:
+    · stdlib/hashset.hexa        — hashset_insert / hashset_remove / hashset_contains
+    · stdlib/alloc/collections.hexa — counter()
+  Matches how `==` already treats signed zero, and Python (str(-0.0)=="-0.0"
+  yet hash(-0.0)==hash(0.0)). Display to_string is UNCHANGED → -0.0 still
+  prints "-0.0", OP-132 float round-trip fidelity intact (key-path only).
+
+VERIFY (g5 honest, shipping self-hosted CLI, AOT cache busted, real `use` path)
+  test/hashset_smoke.hexa  — 73 passed, 0 failed   __HASHSET_SMOKE__ PASS
+    incl. 10 new T17 OP-134 checks, all PASS:
+      [PASS] OP-134: contains(-0.0) after insert(0.0)
+      [PASS] OP-134: contains(-0.0 literal)
+      [PASS] OP-134: re-insert(-0.0) is NOT new
+      [PASS] OP-134: len stays 1 (no duplicate zero key)
+      [PASS] OP-134: contains(0.0) after insert(-0.0)
+      [PASS] OP-134: len stays 1 (reverse)
+      [PASS] OP-134: non-zero floats stay distinct
+      [PASS] OP-134: contains 2.5 / contains -2.5
+      [PASS] OP-134: int key 7 still works
+  Discriminating: same test FAILS pre-fix (contains→false, len→2).
+
+🟠 FLAGGED RESIDUALS (out of LANE-1 stdlib scope — handoff)
+  1. native map #{} signed-zero: same -0.0 bug lives in the C runtime key
+     stringifier hexa_to_cstring (self/runtime_core.c, BOTH float branches
+     ~L1587 valstruct + ~L1601 HexaVal: `%.1f` of -0.0 → "-0.0"). FIX =
+     insert `if (f == 0.0) f = 0.0;` before each snprintf (key-path only,
+     NOT _hexa_to_string_rec display). Gated by self-host byte-eq + wipe/
+     diff guards → deferred to a self/ closure PR. stdlib surface is now
+     correct; the bare #{} primitive remains affected until that lands.
+  2. NaN keys: to_string(NaN)=="NaN" for every NaN, so a NaN key is findable
+     as itself (collision, ALLOWED by the contract's inverse direction) but
+     diverges from distinct-NaN-identity. Left deterministic-not-corrupt;
+     documented in _hashset_norm. No fix (string-keyed model limitation).
+  3. self/rt/array_ops.hexa group_by/frequencies key on to_string too (same
+     latent -0.0). In the self-host closure → flagged, not edited here.
+
+CLASSIFICATION
+  containers/keytypes audited : native map + HashSet + counter ×8 key classes
+  violating (real, reachable)  : 1  (float signed-zero) — in 2 stdlib surfaces
+  fixed                        : 2 stdlib surfaces (hashset + counter)
+  theoretical/inverse 🟠       : 3 (NaN collision · cross-type int/float P1 · native-map root + self/rt — handed off)
+
+VERDICT 🔴→🟢  ONE real contract violation found (signed-zero lost-key) and
+FIXED in the public stdlib container surface + locked with a regression test.
+After the fix, hash↔equality is CONSISTENT for stdlib HashSet/counter — they
+can no longer silently lose or duplicate a signed-zero key. The bare native
+#{} primitive carries the same root cause in the guarded C runtime (handed
+off); int/string/bool keys were already consistent by construction.
+══════════════════════════════════════════════════════════════════════════════

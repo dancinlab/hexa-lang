@@ -158,6 +158,30 @@ check("union with empty preserves", hashset_len(hashset_union(hashset_from_array
 // ── T16 : stringified collision (documented P1 limitation, not a bug) ─────
 check("P1 stringified: set([1]) contains \"1\"", hashset_contains(hashset_from_array([1]), "1"))
 
+// ── T17 : OP-134 hash↔eq contract — signed-zero key normalisation ─────────
+// `-0.0 == 0.0` is TRUE → they MUST share one slot. A runtime-computed -0.0
+// (0.0 * -1.0) previously stringified to "-0.0" ≠ "0.0", so a 0.0-inserted
+// entry was unfindable by a -0.0 lookup (lost key) and re-insert duplicated.
+let sz = hashset_new()
+hashset_insert(sz, 0.0)
+let neg_zero = 0.0 * -1.0
+check("OP-134: contains(-0.0) after insert(0.0)", hashset_contains(sz, neg_zero))
+check("OP-134: contains(-0.0 literal)", hashset_contains(sz, -0.0))
+check("OP-134: re-insert(-0.0) is NOT new", !hashset_insert(sz, neg_zero))
+check("OP-134: len stays 1 (no duplicate zero key)", hashset_len(sz) == 1)
+// symmetry: insert -0.0 first, find via 0.0
+let sz2 = hashset_new()
+hashset_insert(sz2, 0.0 * -1.0)
+check("OP-134: contains(0.0) after insert(-0.0)", hashset_contains(sz2, 0.0))
+check("OP-134: len stays 1 (reverse)", hashset_len(sz2) == 1)
+// non-zero floats remain distinct (normalisation is zero-only)
+let sz3 = hashset_from_array([2.5, -2.5, 0.0])
+check("OP-134: non-zero floats stay distinct", hashset_len(sz3) == 3)
+check("OP-134: contains 2.5", hashset_contains(sz3, 2.5))
+check("OP-134: contains -2.5", hashset_contains(sz3, -2.5))
+// ints/strings untouched by normalisation
+check("OP-134: int key 7 still works", hashset_contains(hashset_from_array([7]), 7))
+
 // ── summary ──────────────────────────────────────────────────────────────
 println("")
 println("== hashset_smoke: " + to_string(PASS) + " passed, " + to_string(FAIL) + " failed ==")
