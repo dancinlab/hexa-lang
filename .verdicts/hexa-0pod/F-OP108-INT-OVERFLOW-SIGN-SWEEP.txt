@@ -1,0 +1,151 @@
+F-OP108-INT-OVERFLOW-SIGN-SWEEP — LANE-1 integer-overflow / signedness class sweep
+==================================================================================
+verdict: 🟢 class CLEAN except TWO sites (FNV-1a 32-bit fixture · kcat-noise LCG) — FIXED + locked
+tier:    d5 (overflow/signedness correctness fix vs documented semantics + hermetic regression lock, $0 / 0-pod / 0-GPU)
+date:    2026-06-13
+lane:    LANE-1 (hash / checksum / fixed-point / accumulator / bit-packing / LCG-PRNG numeric)
+         NOT crypto-verify / binary-parser (= LANE-2 territory)
+
+CLASS
+-----
+Arithmetic that OVERFLOWS (a sum/product/shift/hash-mix exceeding i63 → wraps to a
+wrong/NEGATIVE value) OR has a SIGNEDNESS bug (a `% n` of a negative dividend giving a
+negative result where a non-negative index/range was intended; a right-shift sign-
+extension). Hexa ints are 64-bit signed (i63 effective in the interp). The bug surface
+is where a 32-bit-style mask/wrap is intended (hash/checksum/fixed-point/bit-packing) or
+where a modulo of a possibly-negative operand must be normalized. Per g5: a value
+INTENDED to be full-width (no mask needed, stays within i63) is CLEAN; a `% n` of
+always-non-negative operands is CLEAN; only a plausible input driving an overflow-wrap or
+a negative-modulo that the DOCUMENTED/INTENDED semantics forbid is a real 🔴.
+
+CENSUS MATRIX  (site → correct/buggy → action)
+----------------------------------------------
+HASH — 32-bit / 64-bit (stdlib/core/hash, akida, dual_track)
+  xxhash.hexa xxh32/xxh64          CORRECT  every step `& 0xFFFFFFFF`; 32-bit mul via 16-bit
+                                            split + 64-bit via 16-bit limbs (no i63 overflow). CLEAN.
+  akida_delta_spatial _fold        CORRECT  FNV-1a, `h = h & 4294967295` each step. CLEAN.
+  akida_alpha_reencoding _fold     CORRECT  same masked FNV-1a. CLEAN.
+  akida_theta_counterfactual       CORRECT  same masked FNV-1a; final `200 + (raw % 700)` on
+                                            non-neg raw. CLEAN.
+  akida_qrng_bridge _fold          CORRECT  masked FNV-1a 8-bit. CLEAN.
+  akida_neuromorphic_module        CORRECT  masked FNV-1a 8-bit. CLEAN.
+  policy/dual_track route_bucket   CORRECT  xxh32 (masked) → `h - (h/n)*n` non-negative modulo,
+                                            explicitly documented. CLEAN.
+  core/trait_hash_fixture hash_str       🔴 BUGGY → FIXED  documented "FNV-1a 32-bit" but multiply
+  core/trait_hash_fixture hash_array_int 🔴 BUGGY → FIXED  was UNMASKED → i64 overflow to NEGATIVE.
+
+CHECKSUM (qforge adler32, flame, squid)
+  qforge/checkpoint _ckpt_adler32        CORRECT  `a,b` mod 65521 each step → b*65536+a < 4.29e9. CLEAN.
+  qforge/scratch_bank{,_store} adler32   CORRECT  identical mod-65521 pattern. CLEAN.
+  qforge/checkpoint_selftest _self_adler CORRECT  identical. CLEAN.
+  flame/op28 _pack_checksum              CORRECT  `(acc*131 + v*(i+7)) % 1000000007`, mod each step
+                                                  → acc<1e9, acc*131<1.31e11 ≪ i63. CLEAN.
+  flame/op2{9}/3{1,2,3} _farr_checksum   CORRECT  `(acc*131 + b[k] + i) % 2147483647`, mod each step. CLEAN.
+  flame/clm_interp_elim ie_checksum      CORRECT  float accumulation (no int overflow). CLEAN.
+  rtsc/.../squid_daq xor_checksum        CORRECT  `(acc + bytes[i]) % 256`, non-neg. CLEAN.
+
+LCG / PRNG (rng, rng_ctx, vina, ie, noc_sim, bio)
+  core/math/rng lcg_next                 CORRECT  `(1664525*state + 1013904223) & 0xFFFFFFFF`; max
+                                                  intermediate ≈7.15e15 ≪ i63; mask = 2^32 modulus. CLEAN.
+  alloc/math/rng_ctx (_mix_seed,_le8)    CORRECT  all `& 0xFFFFFFFF`; `v >> 8` on masked non-neg. CLEAN.
+  chem/vina/search vina_search           CORRECT  seed `& 0xFFFFFFFF`, delegates to rng (masked). CLEAN.
+  flame/clm_interp_elim ie_fill_lcg      CORRECT  `(st*1103515245 + 12345) % 2147483648`, positive
+                                                  seeds {11..37} → st∈[0,2^31) forever; ≪ i63. CLEAN.
+  kernels/noc_sim/traffic _lcg_next      CORRECT  `seed + source*2654435761`, source = small node idx;
+                                                  feeds masked _lcg_next. CLEAN.
+  bio_variant/kcat_compute noise_kcal_scaled        🔴 BUGGY → FIXED  unmasked LCG overflow → neg modulo.
+  bio_variant/bio_interferometer noise_kcal_scaled  🔴 BUGGY → FIXED  identical (inlined copy).
+
+BIT-PACKING / U64-SPLIT (ckpt, safetensors, brenda)
+  ckpt/writer _int_to_u64_pair           CORRECT  guards `n<0`, `(n/2^32)&0xFFFFFFFF | n&0xFFFFFFFF`,
+                                                  i63-reasoning documented. CLEAN.
+  ckpt/verifier u64 pair decode          CORRECT  `pair[0]&0xFFFFFFFF`, `pair[1]&0xFFFFFFFF`. CLEAN.
+  safetensors u64 LE encode              CORRECT  `v&0xFFFFFFFF`, `(v/0x100000000)&0xFFFFFFFF`, byte
+                                                  emit `&0xFF`. CLEAN.
+  bio/brenda 16-bit-limb mul             CORRECT  mirrors xxhash limb decomposition, BRENDA_MASK32. CLEAN.
+
+MOD-HASH (sim_universe/anu_time h*33)
+  anu_time universe{,_propagation,...}   CORRECT  `(h*33 + v) % 9999999967`, mod each step → h<1e10,
+                                                  h*33<3.3e11 ≪ i63; v non-neg. CLEAN.
+
+🔴 BUG #1 — FNV-1a 32-bit unmasked overflow→negative  (core/trait_hash_fixture.hexa)
+------------------------------------------------------------------------------------
+INTENDED SEMANTICS (file header, verbatim):
+  "a documentation of intended hash semantics per type (FNV-1a 32-bit variant …)"
+  "FNV_PRIME_32 = 16777619 / for each byte b: hash = (hash ^ b) * FNV_PRIME_32"
+  "returns 32-bit hash as int in [0, 0xFFFFFFFF]"  (sibling xxh32 doc, same contract)
+The canonical FNV-1a 32-bit reduces the multiply mod 2^32 EACH step. The pre-fix code
+omitted the mask → the i64 accumulator grows past 2^63 and wraps to a NEGATIVE value,
+off the documented [0, 2^32) range and disagreeing with any FNV-1a 32-bit reference.
+
+VERBATIM REPRO (`hexa run`, input = "hello world!!!" code-points):
+  UNMASKED -2441261701466863720     ← overflowed i63, NEGATIVE
+  MASKED32 3092072344               ← canonical FNV-1a 32-bit
+PYTHON CROSS-CHECK (FNV-1a 32-bit reference):
+  PY FNV-1a 32-bit:      3092072344            == hexa MASKED32  ✓
+  PY unmasked signed64:  -2441261701466863720  == hexa UNMASKED  ✓ (confirms identical wrap)
+
+FIX: `h = ((h ^ x) * 16777619) & 0xFFFFFFFF` in both hash_str and hash_array_int — exactly
+the per-step mask the 5 akida FNV sites already carry. Result now in [0, 2^32), matches ref.
+
+🔴 BUG #2 — kcat noise LCG unmasked overflow → negative modulo  (bio_variant/{kcat_compute,bio_interferometer}.hexa)
+------------------------------------------------------------------------------------------------------------------
+INTENDED SEMANTICS (kcat_compute.hexa, verbatim inline comments):
+  `let r = state % 2001     // r ∈ [0, 2000]`
+  `let centered = r - 1000  // ∈ [-1000, 1000]`
+The `- 1000` only centers correctly if r ∈ [0, 2000]. Pre-fix: `state = state*1103515245+12345`
+with NO reduction → for variant_idx ≥ 4, `state*1103515245` exceeds i63 (~9.22e18) → wraps to a
+NEGATIVE i64 → C-truncated `state % 2001` goes negative → `centered = r - 1000` leaves the
+documented [-1000, 1000] band. Default sim runs M=15 variants (vi=0..14) → REACHABLE for vi∈[4,14].
+(Also vi=1,2,3 pre-fix are a degenerate arithmetic ramp -577,-493,-409 = +84/step, near-zero entropy.)
+
+VERBATIM REPRO (`hexa run`, world_idx=0):
+  vi=0 UNMASKED centered=-661   FIXED centered=-661
+  vi=1 UNMASKED centered=-577   FIXED centered=395
+  vi=2 UNMASKED centered=-493   FIXED centered=-993
+  vi=3 UNMASKED centered=-409   FIXED centered=63
+  vi=4 UNMASKED centered=-2930  FIXED centered=676    ← OUT OF [-1000,1000] BAND
+  vi=5 UNMASKED centered=-2846  FIXED centered=-712
+  vi=6 UNMASKED centered=-2762  FIXED centered=344
+  vi=7 UNMASKED centered=-677   FIXED centered=957
+PYTHON CROSS-CHECK (signed-64 + C-truncated modulo emulation of the UNMASKED path):
+  vi 0..7 → -661,-577,-493,-409,-2930,-2846,-2762,-677  == hexa UNMASKED  ✓ (exact)
+
+FIX: reduce EACH LCG step mod 2^31 (`% 2147483648`) — mirrors the sibling ie_fill_lcg, keeps
+state ∈ [0, 2^31) deterministic and non-negative, so r ∈ [0, 2000] and centered ∈ [-1000, 1000].
+Applied identically to kcat_compute.hexa and the inlined copy in bio_interferometer.hexa.
+
+LOCK (stdlib/core/trait_hash_fnv32_overflow_test.hexa — verbatim-inlined leaf, `hexa run`)
+-----------------------------------------------------------------------------------------
+  __HEXA_OP108_INT_OVERFLOW_SIGN__ PASS 8/8
+Assertions:
+  1. FNV golden: hash_array_int_fixed("hello world!!!") == 3092072344 (Python FNV-1a 32-bit ref)
+  2. FNV range: result ∈ [0, 2^32)
+  3. FNV empty: [] → 2166136261 (offset basis, masked)
+  4. FNV spread: 64 inputs all in [0,2^32) AND deterministic (re-run byte-identical)
+  5. kcat band: centered ∈ [-1000,1000] over 256 vi × 4 wi (pre-fix vi≥4 broke this)
+  6. kcat golden vi=4 → 676 (fixed path, hexa==Python signed-64)
+  7. kcat golden vi=0 → -661 (fixed path)
+  8. NEGATIVE CONTROL: the OLD unmasked kcat path at vi=4 IS < -1000 (proves the bug was real
+     and the fix is load-bearing).
+
+CLOSURE FLAGS
+-------------
+- LANE-1 honored: hash/checksum/fixed-point/accumulator/LCG numeric only; NO crypto-verify,
+  NO binary-parser (LANE-2 OP-107 territory) touched.
+- SELF-HOST: none of the 3 edited files (trait_hash_fixture.hexa, kcat_compute.hexa,
+  bio_interferometer.hexa) is imported by self/* or build_selfhost.sh — OUTSIDE the build_selfhost
+  closure. Self-host fixpoint UNAFFECTED. The new *_test.hexa leaf is also outside the closure.
+- byte-eq: the 3 edited files have NO downstream stdlib importer (greps clean) → no other module's
+  byte output changes. The fix DELIBERATELY changes the (previously-overflowing) output of the two
+  fixed functions to the documented-correct values; no locked oracle/verdict consumed the old buggy
+  output (no gate references these sims/fixture).
+- wipe_guard: net-additive (1 new leaf test ~106L; ~3-line edits ×3 fns) — 0 deletions of substance.
+- NO .tape edit. $0 · 0-pod · NO GPU · no vast · no foreign-pod · leak-0.
+- HONEST g5: the two 🔴 are real overflow→sign defects vs DOCUMENTED intended semantics (32-bit
+  hash range; [-1000,1000] noise band). All other surveyed sites are genuinely CLEAN (full-width
+  i63-safe or already masked/mod-reduced); no mask was added where it would corrupt a correct
+  full-width result. Stale local hexat (0.1.0-dispatch) → verified via verbatim-inlined leaf
+  `hexa run` + Python ports, not via `use`-import through the stale resolver.
+
+Milestone OP-108 [x].
