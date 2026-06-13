@@ -2400,6 +2400,34 @@ fn _cloud_ssh_port(id: str, provider: str) -> int {
     return 1
 }
 
+// _cloud_ssh_port_json — handoff fb0ae653: the `--json` variant of
+// _cloud_ssh_port. Emits exactly ONE stable machine-readable line —
+// {"host":"<ip>","port":"<port>"} — on success (rc 0) so a parser (the
+// hf-recover-guard) gets a contract instead of scraping the human `host=`/
+// `port=` lines and silently degrading if that text drifts. On miss it emits
+// {"host":null,"port":null} and returns 1, mirroring _cloud_ssh_port's exit
+// codes EXACTLY. host/port are JSON-escaped via _mh_json_str (the same escaper
+// the nohup marker uses). The human format is untouched — this is additive.
+fn _cloud_ssh_port_json(id: str, provider: str) -> int {
+    if provider == "runpod" {
+        let api_key = cloud_runpod_must_have_api_key("ssh-port")
+        let r = runpod_get_ssh_port(api_key, id)
+        if r.ok == 1 {
+            println("{\"host\":" + _mh_json_str(r.ip) + ",\"port\":" + _mh_json_str(r.port) + "}")
+            return 0
+        }
+        println("{\"host\":null,\"port\":null}")
+        return 1
+    }
+    let v = vast_ssh_endpoint(id)
+    if v.ok == 1 {
+        println("{\"host\":" + _mh_json_str(v.host) + ",\"port\":" + _mh_json_str(v.port) + "}")
+        return 0
+    }
+    println("{\"host\":null,\"port\":null}")
+    return 1
+}
+
 // _cloud_watch — poll a remote pid every `interval` s until it dies (the
 // auto-loop substitute for repeatedly calling `poll`, P3). Returns 0 when
 // the pid is gone, 124 if `max_wait` s elapse first. `max_wait <= 0` waits
@@ -3195,6 +3223,14 @@ fn main() {
         let mut provider = _flag_val(av, si + 2, "--provider", "")
         if len(provider) == 0 {
             provider = _provider_for_id(id)
+        }
+        // handoff fb0ae653: `--json` is ADDITIVE — emits a single stable
+        // machine-readable {"host":...,"port":...} line so parsers (hf-recover-
+        // guard) stop scraping the human `host=`/`port=` text and silently
+        // degrading if that format drifts. The default human format is
+        // UNCHANGED; --json fully replaces it only when requested.
+        if _has_flag(av, si + 2, "--json") == 1 {
+            exit(_cloud_ssh_port_json(id, provider))
         }
         exit(_cloud_ssh_port(id, provider))
     }
