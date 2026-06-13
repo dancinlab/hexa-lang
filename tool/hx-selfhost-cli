@@ -69,6 +69,45 @@ for a in "$@"; do
     esac
 done
 
+# ── run surface -> native gen3 compile+link+exec (PROVEN current-source) ─────
+# `hexa run <file.hexa> [args...]` : route to the byte-eq self-hosted toolchain
+# so the deployed run reflects current-source fixes (#1747 multi-line additive
+# continuation, immutable-let loop, ...) instead of the stale shipped dispatch.
+# SAFETY: native-first, delegate-fallback. gen3 is the bare compiler; any
+# program it can't compile/link still runs via the old dispatch untouched.
+# Disable entirely with HEXA_NATIVE_RUN=0.
+if [ "$has_emit" != 1 ] && [ "${1:-}" = "run" ] && [ "${HEXA_NATIVE_RUN:-1}" = 1 ] \
+   && [ -n "$src" ] && [ -x "$GEN3" ] && [ -x "$HEXA_LD" ] && [ -f "$RT_O" ]; then
+    # NB: do NOT `shift` $@ here — a native-path failure falls through to the
+    # `delegate "$@"` below, which must still see the literal 'run'. Skip the
+    # first token via a flag instead of mutating the positionals.
+    _nr_ok=1; _nr_seen=0; _nr_args=(); _nr_first=1
+    for a in "$@"; do
+        if [ "$_nr_first" = 1 ]; then _nr_first=0; continue; fi   # skip literal 'run'
+        if [ "$_nr_seen" = 0 ]; then
+            case "$a" in
+                "$src") _nr_seen=1 ;;
+                --*)    _nr_ok=0; break ;;   # unknown run flag before SOURCE -> delegate
+            esac
+        else
+            _nr_args+=("$a")                 # program args after the SOURCE
+        fi
+    done
+    if [ "$_nr_ok" = 1 ] && [ "$_nr_seen" = 1 ]; then
+        _nr_d="$(mktemp -d 2>/dev/null || echo "${TMPDIR:-/tmp}/hx-nr.$$")"; mkdir -p "$_nr_d"
+        _nr_o="$_nr_d/nr.o"; _nr_bin="$_nr_d/nr.bin"
+        if [ -z "${HEXA_ATLAS_EMBED:-}" ]; then
+            _nr_na="$(mktemp -d 2>/dev/null || echo "$_nr_d/noatlas")"; mkdir -p "$_nr_na"
+            export HEXA_ATLAS_EMBED="$_nr_na"
+        fi
+        if "$GEN3" _drv.hexa "$src" --emit=obj -o "$_nr_o" >/dev/null 2>&1 && [ -s "$_nr_o" ] \
+           && "$HEXA_LD" "$_nr_o" "$RT_O" -o "$_nr_bin" >/dev/null 2>&1 && [ -x "$_nr_bin" ]; then
+            exec "$_nr_bin" ${_nr_args[@]+"${_nr_args[@]}"}
+        fi
+        # native compile/link failed -> fall through to delegate (safety)
+    fi
+fi
+
 # Anything that is NOT a bare-compiler emit -> delegate to the full CLI.
 if [ "$has_emit" != 1 ]; then
     delegate "$@"

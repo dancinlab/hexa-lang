@@ -1,0 +1,61 @@
+F-HEXA-RUN-NATIVE-ROUTE — deployed `hexa run` now routes to the byte-eq self-hosted toolchain
+================================================================================================
+
+CLAIM
+  After the self-host promote, the deployed `hexa run <file.hexa>` still returned
+  PRE-#1747 results because the shipped dispatch binary (hexa.real.pre-selfhost.*)
+  compiles in-process with a parser that predates the additive multi-line-minus
+  continuation fix (#1747) and the immutable-let loop fix. The hx-selfhost-cli shim
+  routed ONLY `--emit=<x>` to gen3 and DELEGATED `run` to that stale dispatch.
+
+  FIX: route `hexa run <file.hexa> [args...]` through the PROVEN byte-eq self-hosted
+  toolchain (gen3 --emit=obj -> hexa_ld -> exec), native-first with delegate-fallback.
+
+FALSIFIER (pre-registered)
+  OP-124 multi-line additive continuation:
+      fn main(){ let f = 1
+        - 2
+        + 10
+        print(f) }                      expect 9   (stale dispatch: 1)
+  OP-145 immutable-let while-loop:
+      fn main(){ let i = 0
+        while i < 3 { i = i + 1 }
+        print(i) }                      expect 3   (stale dispatch: hang/empty)
+
+METHOD
+  shim edit (tool/hx-selfhost-cli): before the unconditional `run`->delegate,
+  detect the canonical `run <file.hexa> [prog-args]` surface and:
+    gen3 _drv.hexa <src> --emit=obj -o T.o  &&  hexa_ld T.o rt.o -o T.bin  &&  exec T.bin <prog-args>
+  SAFETY — native-first, delegate-fallback:
+    * gen3 is the bare compiler; any program it can't compile/link falls through
+      to the shipped dispatch UNTOUCHED (full original argv preserved — no $@ shift).
+    * unknown `--flag` before the SOURCE -> delegate (don't guess run options).
+    * HEXA_NATIVE_RUN=0 disables the native route entirely (escape hatch).
+
+VERIFICATION (deployed ~/.hx, real gen3/hexa_ld/rt.o — byte-eq self-host slot, Jun 14)
+  native gen3->ld->exec, manual:        op124 -> 9 ✅    op145 -> 3 ✅
+  deployed `hexa run` (the real CLI):
+      OP-124 (expect 9):                9   ✅   [was 1]
+      OP-145 (expect 3):                3   ✅   [was hang/empty]
+  safety regression:
+      6*7                               42  ✅
+      fn + for + mut (0+2+4+6+8)        20  ✅
+      hexa --version (delegate path)    hexa 0.1.0-dispatch  ✅
+      HEXA_NATIVE_RUN=0 op124           1   ✅   (escape hatch -> old path intact, revertable)
+  routing contract (tool/selfhost_shim_integrity.sh, hermetic stub-gen3 sandbox):
+      compile-routing    : PASS
+      subcmd-delegation  : PASS   (run still delegates verbatim on native-failure fallback)
+      symlink-loop-guard : PASS
+      syntax/lint        : PASS (bash -n clean)
+      shim-integrity: PASS — compile->gen3, every subcmd->shipped verbatim (fallback), loop-guard fires.
+
+FINDING (Δ vs baseline)
+  Deployed `hexa run` reflects current-source compiler fixes for the first time
+  post-promote: OP-124 1->9, OP-145 hang->3, with zero regression on programs the
+  prior path already handled (they now compile via the byte-eq self-host toolchain
+  or fall back verbatim). The promote is end-to-end complete for the run surface,
+  not just the --emit surface.
+
+  Durable: change lives in tool/hx-selfhost-cli (the shim source promote_selfhost.sh
+  installs), so a future `hx install` / re-promote preserves it rather than reverting
+  to the stale-dispatch run path.
