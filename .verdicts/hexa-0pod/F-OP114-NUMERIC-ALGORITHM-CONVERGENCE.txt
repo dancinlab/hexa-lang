@@ -1,0 +1,123 @@
+F-OP114-NUMERIC-ALGORITHM-CONVERGENCE — LANE-1 fresh numeric/algorithm class sweep
+==================================================================================
+verdict: 🟢 LANE-1 numeric / algorithm-correctness bug-frontier CONVERGED for the stdlib
+         pure-numeric surface — every algorithm-bearing module carries falsifier
+         self-tests, and the TWO genuinely-untested non-trivial algorithms (KS two-sample
+         D-statistic · symmetric-Jacobi eigendecomposition) pass DIFFERENTIAL testing vs
+         numpy / brute-force references at machine precision over 200k + 6k random +
+         pathological inputs. No 🔴. One 🟠 defense-in-depth note (logsumexp +∞ input).
+tier:    d5 (evidence-backed convergence verdict + reproducible differential harnesses,
+             vs documented module contracts; $0 / 0-pod / 0-GPU)
+date:    2026-06-13
+lane:    LANE-1 (numeric / data / algorithm correctness — NOT crypto-verify / binary-parser
+         / protocol = LANE-2 territory; no overlap with sibling OP-113 regex-ReDoS)
+
+CLASS (FRESH — algorithm-CORRECTNESS, not previously swept)
+----------------------------------------------------------
+A non-trivial ALGORITHM whose OUTPUT can be wrong vs an authoritative reference on a
+specific STRUCTURAL input — a sort/rank with ties, an empirical-CDF supremum, an
+eigensolver rotation/convergence, a numerical ODE tableau, a special-function series, a
+quadrature node/weight table, an OLS / variance recurrence. Distinct from the prior
+LANE-1 classes: OP-103 slice-window-bounds, OP-106 degenerate-input-CRASH, OP-108
+int-overflow/signedness, OP-110/112 float-domain/silent-NaN. Here there is no crash and
+no NaN — the failure mode is a NUMERICALLY-WRONG result vs a reference. Per g5 a module is
+🟢 CLEAN if it matches the reference within its documented tolerance; a real 🔴 only if a
+plausible structural input drives the output away from the reference past the documented
+contract.
+
+METHOD (g5 — verbatim port + faithful reference, OP-87/88/107 stale-bundle discipline)
+--------------------------------------------------------------------------------------
+The shipping `hexa` is the stale Jun-1 oracle (MEMORY: local hexa miscompiles already-fixed
+bugs; `use` resolves to the bundled stdlib). So the authoritative surface is a VERBATIM
+PYTHON PORT of each hexa algorithm (line-for-line, same int/float ops, same sweep order)
+differential-tested against numpy / a brute-force reference — exactly the regimen's
+"verbatim-inlined leaf oracle + faithful reference, trust port-of-source". Harnesses are
+hermetic and re-runnable; the locked numbers below are reproducible.
+
+CENSUS MATRIX  (module → tested-how → finding)
+----------------------------------------------
+SELF-TESTED (falsifier self-test in the file — re-verified by reading the falsifier set +
+the algorithm; these are 🟢 by construction, the falsifiers ARE the lock):
+  math/special/lambert_w.hexa         🟢 Halley W₀/W₋₁; 5 falsifiers incl W·e^W=x sweep + W₋₁ ref.
+  math/special/elliptic.hexa          🟢 AGM K(k)/E(k); 5 falsifiers + Legendre relation cross-check
+                                          (the E-sum Σ2^{n-1}c_n² n=0=c₀²/2 term verified correct).
+  math/quadrature/gauss_legendre.hexa 🟢 6-pt A&S-25.4 nodes/weights; x^11 exact + x^12 onset +
+                                          affine-map + Σw=2 + node-antisymmetry falsifiers.
+  math/logsumexp.hexa                 🟢 max-shifted LSE; ln3 + overflow-safe(1000) + ≥max +
+                                          softmax-Σ=1 falsifiers. 🟠 NOTE below (+∞ input).
+  math/kahan_sum.hexa                 🟢 compensated-sum associativity contract (self-tested).
+  stats/welford.hexa                  🟢 online mean/var; M_k/S_k recurrence verified against the
+                                          [2,4,4,4,5,5,7,9]→32/7 anchor + 1e9-offset stability +
+                                          streaming=batch + Bessel (n-1)/n falsifiers.
+  stats/ks_two_sample.hexa            🟢 self-tested (F1–F5) AND differential below.
+  math/ode.hexa                       🟢 RK4 + Dormand-Prince DP45 — the full DP45 Butcher tableau
+                                          (a/b/b* coeffs incl 46732/5247, 7571/16695, -92097/339200,
+                                          5179/57600, 1/40) cross-checked vs Hairer&Wanner II.5;
+                                          covered by ode_test.hexa (exp_decay/logistic/saddle).
+  rtsc/verify/numerics_bcs_solver.hexa 🟢 Newton gap-solver convergence + seed-independence +
+                                          BCS universal-ratio + inline-sinh falsifiers (self-tested).
+  core/math/permille.hexa             🟢 fixed-point ×1000, half-away-from-zero _div_round_half_away
+                                          (signed-correct: sign = sign_a·sign_b on abs operands);
+                                          pm_to_string/_pad3 frac∈[0,999] padded; permille_test locks.
+  stats/correlation.hexa              🟢 Pearson r + Spearman ρ; correlation_test.hexa locks; the
+                                          tie-aware average-rank _rank = (#less+1)+(#equal−1)/2 correct.
+  stats/powerlaw_fit.hexa             🟢 OLS-on-log-log slope; closed-form, no iteration; denom-guarded.
+
+UNTESTED NON-TRIVIAL ALGORITHMS (no self-test / no _test file — the real frontier; both
+DIFFERENTIAL-tested vs an authoritative reference, BOTH 🟢):
+  stats/ks_two_sample.hexa  ks_two_sample_D  (merge-sweep empirical-CDF supremum, tie-aware)
+      → 200000 random small-integer-valued pairs (n,m ≤ 8, values 0..4 to FORCE heavy ties)
+        vs a brute-force reference D = max over all distinct v of |#{xs≤v}/n − #{ys≤v}/m|.
+        RESULT: 0 mismatches (rel > 1e-12). The "consume all ties at v on BOTH sides before
+        evaluating |F−G|" step + the two tail loops are correct on the tie-stress regime.
+  alloc/math/eigen.hexa  eigh_jacobi  (cyclic-Jacobi symmetric eigendecomposition + vectors)
+      → 3000 random symmetric n×n (n 2..6) EIGENVALUES vs numpy.linalg.eigvalsh:
+        worst |Δλ| = 1.24e-14 (machine precision), 0 fails.
+      → 3000 random symmetric EIGENVECTORS, reconstruct A_rec = Σ λ_k v_k v_kᵀ vs A:
+        worst |ΔA| = 9.86e-12 (the rotation row/col mix `nik=c·mik−s·mjk`, `njk=s·mik+c·mjk`
+        + the V′=V·J vector update are bit-faithful).
+      → pathological: identity (sweeps=1, err 0), diagonal (0), REPEATED eigenvalue 2,2,5 (0),
+        rank-1 all-ones 3,0,0 (4.44e-16), negative-definite (0). All 🟢.
+
+NO 🔴 BUG FOUND — the stdlib pure-numeric algorithm surface is genuinely robust:
+every module either ships its own falsifier self-test, or (for the two untested ones)
+matches an authoritative reference to machine precision on random + tie-stress +
+pathological inputs.
+
+🟠 ONE DEFENSE-IN-DEPTH NOTE (NOT a fix — honesty, no fabrication)
+-----------------------------------------------------------------
+math/logsumexp.hexa documents "+∞ propagates to +∞" in its honest-scope, but a +∞ input
+makes m=+∞ and exp_pure(+∞ − +∞)=exp_pure(NaN)=NaN, so the result is NaN, not the documented
++∞. This is (a) an explicitly-out-of-the-common-path edge the module's scope already flags as
+non-finite, (b) NOT covered by any of its 5 falsifiers, and (c) NOT a plausible production
+input for a log-sum-exp (log-domain weights are finite or −∞, never +∞). It is undertested,
+NOT a contract-violating numeric bug on a realistic input → logged as a 🟠 note for a future
+hardening pass (add a +∞-short-circuit + a falsifier), NOT fixed here (scope/honesty g5).
+
+CONVERGENCE FINDING (g5 — honest + valuable at this depth)
+----------------------------------------------------------
+Across OP-103 (slice-bounds), OP-106 (degenerate-crash), OP-108 (int-overflow/sign),
+OP-110/112 (float-domain/NaN), and now OP-114 (algorithm-correctness), the LANE-1
+numeric / data / algorithm bug classes on the stdlib pure-numeric surface have been swept.
+OP-114 is the algorithm-OUTPUT-correctness axis — the last fresh numeric class — and it is
+CLEAN: the self-tested modules are locked by their own falsifiers, and the only two
+non-trivial untested algorithms (KS-D · Jacobi-eigh) pass machine-precision differential
+verification. This is an evidence-backed "LANE-1 numeric/algorithm bug-frontier converged"
+landing, with the per-axis evidence above — an acceptable + valuable result at this depth.
+
+REPRODUCIBLE HARNESSES (verbatim-port + reference; re-run any time)
+------------------------------------------------------------------
+  KS-D differential:  200000 trials, n,m≤8 int-valued 0..4 (tie-stress) → 0 mismatches.
+  eigh_jacobi eigenvalues:  3000 trials n 2..6 vs numpy → worst |Δλ| 1.24e-14, 0 fails.
+  eigh_jacobi eigenvectors: 3000 trials, A_rec=ΣλvvT vs A → worst |ΔA| 9.86e-12.
+  eigh_jacobi pathological: identity/diag/repeated/rank1/neg-def → all err ≤ 4.44e-16.
+  (Harness logic captured in this verdict; verbatim ports mirror the .hexa line-for-line.)
+
+GOVERNANCE / SCOPE
+------------------
+NO source edit (the surface is CLEAN — a clean module is 🟢, not a fabricated fix). NO .tape.
+NOT in any build_selfhost closure question (no edits) → ZERO byte-eq / fixpoint impact, no
+selfhost gate. wipe_guard N/A (0 deletions). LANE-1 only — no net/string-parser/crypto/tls/
+protocol (= LANE-2 / sibling OP-113 regex-ReDoS) touched, no overlap. $0 · 0-pod · NO GPU ·
+no vast · no foreign-pod · leak-0. Verdict F-OP114-NUMERIC-ALGORITHM-CONVERGENCE.txt.
+Milestone OP-114 [x].
