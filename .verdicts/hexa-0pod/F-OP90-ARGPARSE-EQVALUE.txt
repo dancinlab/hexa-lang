@@ -1,0 +1,114 @@
+F-OP90-ARGPARSE-EQVALUE
+═══════════════════════════════════════════════════════════════════════
+OP-90 — LANE-1 bespoke-stdlib bug-hunt: index/boundary/state bugs in
+stdlib DATA-STRUCTURE / NUMERIC-FORMAT / PARSER modules (NON-string/path;
+LANE-2 owns those). OP-87/88 proved the boundary-arithmetic bug class is
+live in bespoke stdlib index logic; this round hunts the analogous
+index/state bug in stdlib parsers + data structures.
+═══════════════════════════════════════════════════════════════════════
+
+SURVEY (scoped grep, NO .git; skipping string/path/text=LANE-2 and the
+already-audited set core/math, codec/*, crypto/*, core/hash, wasm_leb128,
+core/parse, semver, time/civil, alloc/collections, alloc/path, stats):
+  Top-level stdlib has FEW bespoke standalone data-structures/numeric-
+  formatters (collections/parse/argparse/bytes are thin re-export shims;
+  the real impls are tested or runtime-routed). Census of UNTESTED bespoke
+  modules with REAL index/boundary/state surface:
+    · stdlib/alloc/argparse.hexa  (PARSER — argv state machine, no test)  ← PICK
+    · stdlib/hashset.hexa         (DATA-STRUCT — set algebra, no test)    ← PICK
+    · stdlib/time/iso8601.hexa    — routes to runtime builtins (OP-86 clean), SKIP
+    · stdlib/stats/welford.hexa   — has 5 closed-form self-tests, CLEAN, SKIP
+  WHY argparse: a hand-rolled argv tokenizer with positional/flag/value
+  state + index arithmetic (i+=1 / i+=2 / pos_consumed) and a documented
+  "Python-argparse subset" contract = highest index/state bug surface,
+  UNTESTED, with in-repo exposure (stdlib/easy/cli.hexa:99 hand-rolls
+  `--out=` parsing because the shared parser lacks it).
+  WHY hashset: union/intersect/difference/symmetric_difference/subset/
+  superset = set-algebra boundary surface (empty, disjoint, duplicate),
+  UNTESTED.
+
+═══════════════════════════════════════════════════════════════════════
+🔴 REAL SHIPPING BUG FOUND + FIXED — stdlib/alloc/argparse.hexa ap_parse
+═══════════════════════════════════════════════════════════════════════
+
+METHOD: DIFFERENTIAL — a verbatim Python port of the UNFIXED ap_parse body
+vs Python's stdlib `argparse` (the module header's stated reference:
+"Python-argparse subset"), over a boundary sweep (attached-value,
+separated-value, flag-before/after-positional, value-at-EOL, extra-pos).
+
+BUG: the `--long=value` / `-o=value` ATTACHED-VALUE form was never
+recognised. `_match_value` only does an EXACT `tok == v["long"]` compare,
+so `--out=foo.txt` matched NOTHING and fell through to POSITIONAL capture.
+One attached-value token then derailed the entire positional assignment:
+
+  VERBATIM (Python port of unfixed body vs argparse, parser =
+   -v/--verbose flag, -o/--out value default "def.txt", positional file):
+
+    ARGV ['--out=foo.txt', 'x']
+      HEXA out: def.txt | verbose: False | file: --out=foo.txt | extras: ['x']
+      PY   out: foo.txt  | verbose: False | file: x
+
+  → out kept its DEFAULT (user's value silently dropped),
+    the `--out=foo.txt` token CORRUPTED the positional `file`,
+    and the real positional `x` overflowed into `_extras`.
+
+ROOT CAUSE: the value-match path never split a token on '=' before
+matching — a structural gap in the documented Python-argparse subset, not
+a one-off (every `--key=value` invocation is mis-parsed).
+
+FIX (minimal, provably-correct — matches Python argparse): before falling
+through to positional, find the first '=' in the token (_eq_index), match
+the key part as a value option, and assign the post-'=' tail. Split on the
+FIRST '=' only (so `--out=a=b=c` → value "a=b=c"). 0 deletions; +1 helper
+(_eq_index) + one branch in ap_parse. @version 0.1.0 → 0.2.0.
+
+CROSS-CHECK (g5): the FIXED Python port vs Python argparse over all
+well-defined cases → 0 mismatch:
+    OK ['--out=foo.txt','x']      -> ('foo.txt', False, 'x')
+    OK ['-o','foo.txt','x']       -> ('foo.txt', False, 'x')   (separated preserved)
+    OK ['-o=foo.txt','x']         -> ('foo.txt', False, 'x')   (short attached)
+    OK ['--out=a=b=c','x']        -> ('a=b=c',   False, 'x')   (first '=' only)
+    OK ['--out=','x']             -> ('',        False, 'x')   (empty attached)
+    OK ['--verbose','x']          -> ('def.txt', True,  'x')
+    OK ['x','--verbose']          -> ('def.txt', True,  'x')
+    OK ['-o','y','--verbose','z'] -> ('y',       True,  'z')
+    OK ['--out=foo.txt','--verbose','f'] -> ('foo.txt', True, 'f')
+    MISMATCHES: 0
+
+LOCK: NEW stdlib/alloc/argparse_eqvalue_test.hexa — the FIXED ap_parse
+body is VERBATIM-INLINED (installed `hexa` resolves `use "stdlib/..."` to
+its STALE bundled copy, OP-87/88 lesson) and gated on shipping `hexa run`.
+VERBATIM exit-0:
+    __OP90_ARGPARSE_EQVALUE__ PASS   (8/8 checks)
+covering --out=foo.txt (out + uncorrupted file + no extras), separated-form
+regression, -o=foo.txt short attached, --out=a=b=c first-'='-only,
+--out= empty value, and a bare `k=v` positional staying a positional.
+
+═══════════════════════════════════════════════════════════════════════
+🟢 CLEAN (invariant-lock) — stdlib/hashset.hexa
+═══════════════════════════════════════════════════════════════════════
+
+METHOD: INVARIANT — set-algebra laws over a boundary sweep (empty,
+disjoint, duplicate-on-insert, subset/superset, idempotence) cross-checked
+against Python `set`.
+
+The map-backed set algebra is logically correct:
+  · union / intersect / difference / symmetric_difference build a NEW set
+    by snapshot-iterate + membership-probe (no index arithmetic to mis-step).
+  · is_subset over an EMPTY `a` returns true (vacuous truth — Python parity).
+  · symmetric_difference = (a\b) ∪ (b\a) by construction.
+  · from_array dedups on insert; insert/remove return correct newly-present
+    / was-present signals (has_key pre-check).
+No boundary/index/state divergence vs Python set semantics. The documented
+stringified-key limitation (`1` and `"1"` collide) is an EXPLICIT P1
+design tradeoff in the header, not a bug. NOT locked with a new leaf (no
+fix needed; logged CLEAN per g5).
+
+═══════════════════════════════════════════════════════════════════════
+BYTE-EQ / fixpoint: stdlib/alloc/argparse.hexa is alloc-tier (NOT in the
+build_selfhost closure) → self-host fixpoint UNAFFECTED. 1 fn region fixed
++ 1 helper + 1 NEW leaf test; 0 deletions (wipe_guard net-additive). LANE
+split honored (stdlib/* only; no string/path/text). hashset UNCHANGED.
+
+🔴→FIXED + 🟢. $0, 0-pod, NO GPU, no vast, no foreign pod, no .tape, leak-0.
+F-OP90-ARGPARSE-EQVALUE
