@@ -1,0 +1,21 @@
+=== d8-arena-pushleak evidence (summer, CPU, origin/main f1832e1ea) ===
+build: transpile via /home/summer/core/hexa-lang/build/hexat; link runtime compiled fresh from worktree (-O2, default config, NO HEXA_RT_SELFEMIT / HEXA_HAS_HEXA_RT_STDLIB).
+--- memory (peak RSS, /usr/bin/time -v) ---
+mem_transient 20k iters:   baseline 1284964 kB | libc 644680 kB | combo(unsound) 3756 kB
+mem_transient 100k iters:  baseline 6409880 kB | libc 3208196 kB | combo(unsound) 3784 kB
+no-array control 100k:     3760 kB (flat) -> leak is the push-array path
+mem output (correctness):  119980000000 (identical all variants that ran)
+--- correctness (must match baseline) ---
+escape_return:        base/libc/combo = 332334000 0 249500 997002 177450600   (ALL MATCH)
+global_store_escape:  base/libc       = 174750 100 599 ; combo = (no output / corrupt)
+global_arena_slice:   base/libc       = 20 60 5 ; combo = SEGV exit 139
+param_grow_escape:    base/combo      = 3496500 1000 0 6993   (return path safe)
+--- test suite (libc vs base byte-equivalence, timeout 15s) ---
+test_arena OK | test_array_ops_suite OK | test_array_pure OK | test_list_to_array OK
+test_array_ext_pure OK | test_array_higher_pure OK | test_arena_pure OK
+test_param_array_type BUILDFAIL (pre-existing in BOTH base+libc; install hexat transpile)
+RESULT: 7 PASS, 0 libc-regressions, 1 pre-existing buildfail
+--- root cause ---
+self/runtime.c hxlcl_free = no-op; hxlcl_realloc never frees old buffer.
+Non-reclaiming bump allocator -> free()/free-on-pop are no-ops at allocator level.
+runtime.c is a frozen seed (FROZEN_SEED_REF=151c52c8...); no emitter SSOT.

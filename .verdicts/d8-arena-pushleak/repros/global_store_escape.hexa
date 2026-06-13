@@ -1,0 +1,31 @@
+// Correctness CRUX repro: a push-grown array escapes via a MODULE-GLOBAL
+// assignment (G = xs), NOT via return. Compiled-mode codegen emits a bare
+// `G = xs;` with NO escape barrier, so hexa_val_heapify NEVER sees it.
+// Any free-on-scope-pop that frees non-heapified arrays CORRUPTS this case.
+// Baseline (and any sound fix) must print 174750 / 100 / 599.
+let mut G = []
+fn stash(n) {
+  let mut xs = []
+  let mut i = 0
+  while i < n { xs = xs.push(i + 100); i = i + 1 }
+  G = xs        // escapes via global, NOT via return -> NO runtime barrier
+  0
+}
+fn churn(m) {
+  let mut acc = 0
+  let mut a = 0
+  while a < m { let mut t = []; let mut b = 0; while b < 30 { t = t.push(a+b); b = b+1 }; acc = acc + t[29]; a = a+1 }
+  acc
+}
+fn main() {
+  let _ = stash(500)
+  let mut s = 0
+  let mut r = 0
+  while r < 100 { s = s + churn(50); r = r + 1 }
+  let mut d = 0
+  let mut q = 0
+  while q < G.len() { d = d + G[q]; q = q + 1 }
+  println(d)       // expect 174750
+  println(G[0])    // 100
+  println(G[499])  // 599
+}

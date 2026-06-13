@@ -1,0 +1,68 @@
+# Gated reclaiming-allocator patch for self/runtime.c (frozen seed at
+# FROZEN_SEED_REF=151c52c82502e93d01735c58b43b017d102fee63).
+#
+# This is the VALIDATED-SAFE partial mitigation for the da19aa72 hot-loop leak.
+# It makes hxlcl_free / hxlcl_realloc / hxlcl_calloc actually RECLAIM (route to
+# libc), gated behind HEXA_RT_LIBC_ALLOC=1 so the DEFAULT build is byte-identical
+# to today (the non-reclaiming bump allocator is preserved).
+#
+# Effect (measured on summer, CPU):
+#   - DEFAULT (flag off): no behavior change.
+#   - HEXA_RT_LIBC_ALLOC=1: realloc frees the grown-away intermediate buffers,
+#     halving peak RSS on push-heavy hot loops (6.4 GB -> 3.2 GB at 100k iters)
+#     with ZERO correctness change (7/7 array+arena tests byte-identical; all
+#     5 escape/correctness repros identical to baseline).
+#
+# This does NOT fully flatten the leak by itself: the FINAL array buffers are
+# still never free()d because nothing calls free on a dropped scope-local array.
+# Full flattening additionally needs free-on-scope-pop, which is UNSOUND without
+# codegen escape barriers on non-return stores (see FINDINGS.md). Do not combine
+# the two without those barriers.
+#
+# Apply against the seed runtime.c, then bump+repin FROZEN_SEED_REF in
+# tool/restore_frozen_seeds (release-pipeline operation).
+
+--- a/self/runtime.c
++++ b/self/runtime.c
+@@ hxlcl_malloc/free/realloc/calloc @@
+ // Reclaiming-allocator gate (handoff da19aa72). Default OFF -> the existing
+ // non-reclaiming bump allocator (byte-identical to today). HEXA_RT_LIBC_ALLOC=1
+ // routes free/realloc/calloc to libc so long-running programs reclaim memory.
++static int __hxlcl_libc_alloc = -1;
++static int hxlcl_libc_alloc_on(void) {
++    if (__hxlcl_libc_alloc < 0) {
++        const char* e = hxlcl_getenv("HEXA_RT_LIBC_ALLOC");
++        __hxlcl_libc_alloc = (e && e[0] && e[0] != '0') ? 1 : 0;
++    }
++    return __hxlcl_libc_alloc;
++}
+
+ HXLCL_MALLOC_SC void *__attribute__((noinline)) hxlcl_malloc(size_t n) {
++    if (hxlcl_libc_alloc_on()) { void* p = malloc(n ? n : 1); return p; }
+     if (n == 0) n = 1;
+     size_t total = n + HXLCL_HDR_BYTES;
+     ... (bump path unchanged) ...
+ }
+ #else
+-static void __attribute__((noinline)) hxlcl_free(void *p) { (void)p; }
++static void __attribute__((noinline)) hxlcl_free(void *p) {
++    if (hxlcl_libc_alloc_on()) { free(p); return; }
++    (void)p;   // bump allocator never reclaims (default)
++}
+ #endif
+-static void *__attribute__((noinline)) hxlcl_realloc(void *p, size_t n) {
++static void *__attribute__((noinline)) hxlcl_realloc(void *p, size_t n) {
++    if (hxlcl_libc_alloc_on()) return realloc(p, n);
+     if (!p) return hxlcl_malloc(n);
+     ... (bump path unchanged) ...
+ }
+-static void *__attribute__((noinline)) hxlcl_calloc(size_t nmemb, size_t size) {
++static void *__attribute__((noinline)) hxlcl_calloc(size_t nmemb, size_t size) {
++    if (hxlcl_libc_alloc_on()) return calloc(nmemb, size);
+     ... (bump path unchanged) ...
+ }
+#
+# NOTE: when HEXA_RT_LIBC_ALLOC=1, hxlcl_malloc must also route to libc so the
+# realloc/free header layout stays consistent (the bump path writes a size
+# header that libc free()/realloc() must not see). The full implementation
+# routes ALL FOUR (malloc/free/realloc/calloc) to libc under the gate.

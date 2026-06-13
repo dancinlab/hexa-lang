@@ -1,0 +1,19 @@
+// Correctness repro: an ARENA-backed (cap<0) slice escapes via a global, NOT
+// via return. Same barrier gap as global_store_escape, but arena-resident:
+// a free-on-pop fix segfaults here (frees an arena pointer / double-free).
+// Baseline (and any sound fix) must print 20 / 60 / 5.
+let mut G = []
+fn stash() {
+  let base = [10,20,30,40,50,60,70,80]
+  G = base[1:6]    // slice_fast -> arena-backed (cap<0) in default config
+  0
+}
+fn churn(m) { let mut acc=0; let mut a=0; while a<m { let mut t=[]; let mut b=0; while b<30 { t=t.push(a+b); b=b+1 }; acc=acc+t[29]; a=a+1 }; acc }
+fn main() {
+  let _ = stash()
+  let mut s = 0; let mut r = 0
+  while r < 50 { s = s + churn(50); r = r+1 }
+  println(G[0])     // expect 20
+  println(G[4])     // 60
+  println(G.len())  // 5
+}

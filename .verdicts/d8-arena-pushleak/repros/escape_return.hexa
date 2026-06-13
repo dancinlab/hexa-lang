@@ -1,0 +1,40 @@
+// Correctness repro: a push-grown array ESCAPES its fn via RETURN, then is
+// indexed later amid many other allocations. Must print IDENTICAL values
+// before/after any reclaim change. (Return path IS covered by the heapify
+// escape barrier in __hexa_fn_arena_return.)
+fn make_arr(n) {
+  let mut xs = []
+  let mut i = 0
+  while i < n { xs = xs.push(i * i - i); i = i + 1 }
+  xs
+}
+fn churn(m) {
+  let mut acc = 0
+  let mut a = 0
+  while a < m {
+    let mut t = []
+    let mut b = 0
+    while b < 50 { t = t.push(a + b); b = b + 1 }
+    acc = acc + t[49]
+    a = a + 1
+  }
+  acc
+}
+fn main() {
+  let held = make_arr(1000)
+  let mut sink = 0
+  let mut r = 0
+  while r < 200 {
+    sink = sink + churn(100)
+    sink = sink + held[r] + held[999 - r] + held[r * 2]
+    r = r + 1
+  }
+  let mut dump = 0
+  let mut q = 0
+  while q < held.len() { dump = dump + held[q]; q = q + 1 }
+  println(dump)        // expect 332334000
+  println(held[0])     // 0
+  println(held[500])   // 249500
+  println(held[999])   // 997002
+  println(sink)        // 177450600
+}
