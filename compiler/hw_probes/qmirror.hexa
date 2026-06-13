@@ -7,12 +7,11 @@
 // Source: `~/core/nexus/cli/qmirror.hexa` + `~/core/nexus/cli/run.hexa
 // ::cmd_qmirror` (line ~924 region).
 //
-// Live path: shells out to the standalone qmirror binary using the
-// 4-tier resolution from nexus:
+// Live path: shells out to the standalone qmirror binary using a
+// 3-tier resolution (no foreign-host literal):
 //   1. $QMIRROR_ROOT env override
-//   2. /Users/ghost/core/qmirror
-//   3. $HOME/core/qmirror
-//   4. PATH-resolved `qmirror`
+//   2. $HOME/core/qmirror
+//   3. PATH-resolved `qmirror`
 //
 // Fallback path: deterministic 8/8 cond closure stub. This mirrors
 // the already-deterministic Phase 1+2 stub the production qmirror
@@ -34,11 +33,6 @@ pub fn _qmirror_resolved_root() -> string {
         let p = envroot + "/cli/qmirror.hexa"
         let r = exec("[ -f " + shq(p) + " ] && echo yes || echo no").trim()
         if r == "yes" { return envroot }
-    }
-    let mac_root = "/Users/ghost/core/qmirror"
-    let mac_p = mac_root + "/cli/qmirror.hexa"
-    if exec("[ -f " + shq(mac_p) + " ] && echo yes || echo no").trim() == "yes" {
-        return mac_root
     }
     let home = env("HOME")
     let home_root = home + "/core/qmirror"

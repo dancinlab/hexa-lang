@@ -8,9 +8,9 @@
 // + git add/commit/push) 이었으며, 단일 진입점은 papers CLI 로 일원화됨.
 //
 // 후속 사용처:
-//   - paper 등록/배포: /Users/ghost/core/papers/upload_all_unpublished.hexa
-//                     /Users/ghost/core/papers/tool/osf_publish.hexa
-//                     /Users/ghost/core/papers/tool/zenodo_publish.hexa
+//   - paper 등록/배포: papers CLI (외부 레포) —
+//                     core/papers/upload_all_unpublished.hexa
+//                     core/papers/tool/{osf,zenodo}_publish.hexa
 //   - .workspace mandate: papers CLI 단일 진입점 (own 9 sister)
 //
 // 폐기 정책:
@@ -40,11 +40,19 @@ use "self/attrs/_publish_registry"
 use "self/stdlib/law_io"
 
 // HX11 AI-native SELF-FORMAT — `.publish-rules.json` (프로젝트) / 글로벌
-// `/Users/ghost/Dev/nexus/tool/config/publish_rules.json` 에서 커밋 메시지
+// nexus `tool/config/publish_rules.json` ($HEXA_NEXUS_ROOT 경유) 에서 커밋 메시지
 // 템플릿 / push 정책 / branch allow list / registry 경로 주입.
 
 fn _global_publish_rules_path() -> string {
-    return "/Users/ghost/Dev/nexus/tool/config/publish_rules.json"
+    return rl_nexus_config_path("publish")
+}
+
+// nexus n6 domains.json registry 경로 — 외부 레포이므로 env-only
+// ($HEXA_DOMAINS_JSON). 미설정이면 "" (graceful no-op, foreign literal 금지).
+fn _nexus_domains_json_path() -> string {
+    let raw = env("HEXA_DOMAINS_JSON")
+    if raw != "" { return raw }
+    return ""
 }
 
 pub fn find_publish_rules(source: string) {
@@ -72,7 +80,7 @@ pub fn publish_registry_path(rules) -> string {
             if has_key(reg, "path") { return reg["path"] }
         }
     }
-    return "/Users/ghost/Dev/nexus/n6/docs/domains.json"
+    return _nexus_domains_json_path()
 }
 
 // rules → commit 메시지 템플릿 (create|update)
@@ -105,7 +113,7 @@ fn meta_publish() {
     m.side_effect = "[DEPRECATED] 과거: domains.json 쓰기 + git add/commit + (opt) git push"
     m.requires = "[DEPRECATED] 과거: @doc(type=paper) 검증 0 위반, git repo 감지 성공"
     m.auto_test = "[DEPRECATED] 과거: dog-robot 시드 도메인 — auto=true push=false"
-    m.example = "// [DEPRECATED] papers CLI 로 이전 — /Users/ghost/core/papers/upload_all_unpublished.hexa"
+    m.example = "// [DEPRECATED] papers CLI 로 이전 — core/papers/upload_all_unpublished.hexa (외부 레포)"
     m.implemented = false
     return m
 }
@@ -341,9 +349,9 @@ fn run_publish(md_path: string, ctx) {
     // papers CLI 단일 진입점으로 위임 (own 9 sister, .workspace mandate).
     notes.push("DEPRECATED: @publish 는 2026-04-28 자로 폐기됨")
     notes.push("paper 배포 단일 진입점: papers CLI")
-    notes.push("  - /Users/ghost/core/papers/upload_all_unpublished.hexa")
-    notes.push("  - /Users/ghost/core/papers/tool/osf_publish.hexa")
-    notes.push("  - /Users/ghost/core/papers/tool/zenodo_publish.hexa")
+    notes.push("  - papers CLI (외부 레포): core/papers/upload_all_unpublished.hexa")
+    notes.push("  - core/papers/tool/osf_publish.hexa")
+    notes.push("  - core/papers/tool/zenodo_publish.hexa")
     notes.push("md_path 인자: " + md_path)
     rv["notes"] = notes
     return rv
@@ -427,7 +435,7 @@ fn _run_publish_deprecated(md_path: string, ctx) {
     // 4. 무관 파일 dirty 검사 (md + domains.json 만 허용)
     //    dry-run 이든 실행이든 일관되게 사전 체크 — 검사만 읽기-전용
     let dirty = _git_status_all(repo)
-    let domains_json_path = "/Users/ghost/Dev/nexus/n6/docs/domains.json"
+    let domains_json_path = _nexus_domains_json_path()
     let mut unrelated = []
     if dirty != "" {
         let dlines = dirty.split("\n")
@@ -568,7 +576,7 @@ fn check_publish(source: string, lines: [string]) {
 
     // [DEPRECATED 2026-04-28] @publish 선언 자체에 대한 deprecation 경고
     // 사용자 directive: "모든 프로젝트에 paper 관련 배포 방법은 폐기"
-    // 단일 진입점: papers CLI (/Users/ghost/core/papers/upload_all_unpublished.hexa)
+    // 단일 진입점: papers CLI (core/papers/upload_all_unpublished.hexa — 외부 레포)
     out.push(mk_msg_k("publish", "warn", source, 1,
         "[DEPRECATED] @publish 폐기 (2026-04-28) — papers CLI 사용 (papers/upload_all_unpublished.hexa)",
         "publish_deprecated"))

@@ -8,11 +8,10 @@
 //          ↓
 //       qrng <subcmd> [flags...]   (standalone CLI from dancinlab/qrng)
 //
-//   The standalone CLI lives at one of (4-tier resolution, standalone-only):
+//   The standalone CLI lives at one of (3-tier resolution, standalone-only):
 //     1. $QRNG_ROOT (env override)              ← preferred
-//     2. /Users/ghost/core/qrng                  ← Mac dev convention
-//     3. $HOME/core/qrng                         ← user-home convention
-//     4. PATH-resolved `qrng` binary             ← hx-installed
+//     2. $HOME/core/qrng                         ← user-home convention
+//     3. PATH-resolved `qrng` binary             ← hx-installed
 //
 //   In-tree modules at $NEXUS/modules/qrng/ + $NEXUS/core/qrng/ are
 //   REMOVED as of this cycle. Recovery via `git log --diff-filter=D`.
@@ -94,11 +93,10 @@ fn _file_exists(p: str) -> bool {
     return r == "yes"
 }
 
-// Resolution order (4 tiers — mirrors qmirror v0.3.0 / honesty / sim / bio):
+// Resolution order (3 tiers — no foreign-host literal):
 //   1. $QRNG_ROOT env
-//   2. /Users/ghost/core/qrng
-//   3. $HOME/core/qrng
-//   4. PATH-resolved `qrng` binary
+//   2. $HOME/core/qrng
+//   3. PATH-resolved `qrng` binary
 //
 // Returns shape: "<route>|<command-prefix>"
 fn _resolve_qrng_invocation() -> str {
@@ -107,11 +105,6 @@ fn _resolve_qrng_invocation() -> str {
         if _file_exists(cli) {
             return "standalone-env|QRNG_ROOT=" + shq(QRNG_ROOT_ENV) + " " + shq(HEXA_BIN) + " run " + shq(cli)
         }
-    }
-    let mac_root = "/Users/ghost/core/qrng"
-    let mac_cli = mac_root + "/cli/qrng.hexa"
-    if _file_exists(mac_cli) {
-        return "standalone-mac|QRNG_ROOT=" + shq(mac_root) + " " + shq(HEXA_BIN) + " run " + shq(mac_cli)
     }
     let home_root = HOME + "/core/qrng"
     let home_cli = home_root + "/cli/qrng.hexa"
@@ -147,15 +140,14 @@ fn _forward(sub: str, extra: [str]) -> str {
     let prefix = if parts.len() >= 2 { parts[1] } else { "" }
 
     if route == "none" {
-        eprintln("nexus qrng: ERROR — qrng standalone not found (4-tier resolution failed)")
+        eprintln("nexus qrng: ERROR — qrng standalone not found (3-tier resolution failed)")
         eprintln("  tier 1 ($QRNG_ROOT env)              : not set or invalid")
-        eprintln("  tier 2 (/Users/ghost/core/qrng)      : not found")
-        eprintln("  tier 3 ($HOME/core/qrng)             : not found")
-        eprintln("  tier 4 (PATH `qrng`)                 : not found")
+        eprintln("  tier 2 ($HOME/core/qrng)             : not found")
+        eprintln("  tier 3 (PATH `qrng`)                 : not found")
         eprintln("")
         eprintln("  remediation: install via `hx install qrng`,")
         eprintln("               or set $QRNG_ROOT to a checkout of dancinlab/qrng,")
-        eprintln("               or clone to /Users/ghost/core/qrng (Mac dev convention).")
+        eprintln("               or clone to $HOME/core/qrng (user-home convention).")
         _audit(sub, "no-qrng-found", 127, "none")
         return route + "|127"
     }
@@ -195,13 +187,12 @@ fn cmd_help() {
     println("")
     println("usage: nexus qrng <subcmd> [flags...]")
     println("")
-    println("ROUTING (4-tier standalone-only):")
+    println("ROUTING (3-tier standalone-only):")
     println("  This router shells out to the qrng standalone CLI (dancinlab/qrng v1.0.0).")
     println("  Resolution order:")
     println("    1. $QRNG_ROOT env")
-    println("    2. /Users/ghost/core/qrng")
-    println("    3. $HOME/core/qrng")
-    println("    4. PATH-resolved `qrng` binary")
+    println("    2. $HOME/core/qrng")
+    println("    3. PATH-resolved `qrng` binary")
     println("  Hard-fails with exit 127 when none resolve.")
     println("")
     println("subcommands (forwarded verbatim to standalone):")

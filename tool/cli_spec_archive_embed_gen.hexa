@@ -16,7 +16,32 @@
 use "compiler/cli_spec_archive/embed"
 
 let DEFAULT_SRC: string = "engine/nexus_cli_spec.json"
-let DEFAULT_OUT: string = "/Users/ghost/core/hexa-lang/compiler/cli_spec_archive/embedded.gen.hexa"
+// Repo-relative out subpath; absolute out derived from repo root at runtime
+// (NEVER a foreign-host literal). See _embed_repo_root() below.
+let DEFAULT_OUT: string = "compiler/cli_spec_archive/embedded.gen.hexa"
+
+// Resolve hexa-lang checkout root WITHOUT a foreign-host literal (PR #2475
+// pattern): $HEXA_LANG / $HEXA_LANG_ROOT env → cwd-ascent to the repo
+// sentinel (self/module_loader.hexa) → cwd.
+fn _embed_repo_root() -> string {
+    let e = env("HEXA_LANG")
+    if e != "" { return e }
+    let e2 = env("HEXA_LANG_ROOT")
+    if e2 != "" { return e2 }
+    let mut cur = env("PWD")
+    if cur == "" { cur = to_string(exec("pwd")).trim() }
+    let start = cur
+    let mut guard = 0
+    while len(cur) > 1 && guard < 64 {
+        let ok = to_string(exec("test -f '" + cur + "/self/module_loader.hexa' && echo y || echo n")).trim()
+        if ok == "y" { return cur }
+        let up = to_string(exec("dirname '" + cur + "'")).trim()
+        if up == cur { break }
+        cur = up
+        guard = guard + 1
+    }
+    return start
+}
 let MODULE_NAME: string = "CLI_SPEC_ARCHIVE"
 let LIST_NAME: string   = "CLI_SPEC_SECTIONS"
 let SUBCMD_LIST_NAME: string = "CLI_SPEC_SUBCOMMAND_NAMES"
@@ -101,8 +126,9 @@ fn main() {
     let av = argv()
     let mut src = ""
     if len(av) >= 3 { src = to_string(av[2]) }
-    if len(src) == 0 { src = env("HOME") + "/core/hexa-lang/" + DEFAULT_SRC }
-    let out_path = DEFAULT_OUT
+    let repo_root = _embed_repo_root()
+    if len(src) == 0 { src = repo_root + "/" + DEFAULT_SRC }
+    let out_path = repo_root + "/" + DEFAULT_OUT
 
     println("phase1-ext cli_spec_archive embed codegen")
     println("  src:  " + src)

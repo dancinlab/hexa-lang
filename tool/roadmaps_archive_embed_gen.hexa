@@ -26,7 +26,32 @@
 
 use "compiler/roadmaps_archive/embed"
 
-let DEFAULT_OUT: string = "/Users/ghost/core/hexa-lang/compiler/roadmaps_archive/embedded.gen.hexa"
+// Repo-relative out subpath; absolute out derived from repo root at runtime
+// (NEVER a foreign-host literal). See _embed_repo_root() below.
+let DEFAULT_OUT: string = "compiler/roadmaps_archive/embedded.gen.hexa"
+
+// Resolve hexa-lang checkout root WITHOUT a foreign-host literal (PR #2475
+// pattern): $HEXA_LANG / $HEXA_LANG_ROOT env → cwd-ascent to the repo
+// sentinel (self/module_loader.hexa) → cwd.
+fn _embed_repo_root() -> string {
+    let e = env("HEXA_LANG")
+    if e != "" { return e }
+    let e2 = env("HEXA_LANG_ROOT")
+    if e2 != "" { return e2 }
+    let mut cur = env("PWD")
+    if cur == "" { cur = to_string(exec("pwd")).trim() }
+    let start = cur
+    let mut guard = 0
+    while len(cur) > 1 && guard < 64 {
+        let ok = to_string(exec("test -f '" + cur + "/self/module_loader.hexa' && echo y || echo n")).trim()
+        if ok == "y" { return cur }
+        let up = to_string(exec("dirname '" + cur + "'")).trim()
+        if up == cur { break }
+        cur = up
+        guard = guard + 1
+    }
+    return start
+}
 let MODULE_NAME: string = "ROADMAPS_ARCHIVE"
 
 // Per-project (key, source path relative to nexus root).
@@ -226,8 +251,8 @@ fn _pass1_meta(repo_root: string) -> array {
 }
 
 fn main() {
-    let out_path = DEFAULT_OUT
-    let repo_root = env("HOME") + "/core/hexa-lang"
+    let repo_root = _embed_repo_root()
+    let out_path = repo_root + "/" + DEFAULT_OUT
 
     println("phase1-ext roadmaps_archive embed codegen")
     println("  repo_root: " + repo_root)
