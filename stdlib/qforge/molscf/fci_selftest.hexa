@@ -1,0 +1,317 @@
+// @ci_gate — deterministic · network-free · MOLSCF general-CASCI g5 gate
+//
+// fci_selftest.hexa — QFORGE MOLSCF brick 14/N (round-11) GENERAL N-electron
+// CASCI g5 gate. Generalizes round-10's 2-electron `|a_α b_β⟩` grid to the full
+// determinant-string FCI over an arbitrary active space CAS(n_elec, n_act):
+// α/β-string enumeration + the GENERAL Slater–Condon rules. It assembles H-chain
+// STO-3G integral sets LIVE from brick 1/2/3 and runs CAS(4,4) / CAS(6,6) full-CI,
+// showing:
+//
+//   (a) 2e REGRESSION: the general solver reproduces the round-10 CAS(2,2) H₂      🔵
+//       == FCI result EXACTLY at R=1.4 and R=5.0 bohr (the N=2 special case).
+//   (b) general-CAS == FCI: CAS(4,4) on H₄ and CAS(6,6) on H₆ == pyscf            🔵/🟢
+//       fci.FCI / mcscf.CASCI for the same active space (full active = FCI).
+//   (c) MULTI-REFERENCE WIN: at a STRETCHED H-chain RHF fails badly while the CAS  🔵
+//       recovers FCI with ≥3 SIGNIFICANT determinant weights (genuine multi-e
+//       static correlation, not a 2-determinant special case).
+//   (d) regression: combination/string-enumeration sanity + r1..r10 untouched.    🔵
+//
+// Independent reference (pyscf 2.13.1 RHF / fci.FCI / mcscf.CASCI · STO-3G · Bohr):
+//   H₄ chain R=1.8:  E_RHF=−2.11342892  E_FCI=E_CAS(4,4)=−2.17541114  |Δ|=0
+//   H₄ chain R=3.0:  E_RHF=−1.77917257  E_FCI=E_CAS(4,4)=−1.97086976  |Δ|=4.4e-16
+//                    top det weights [0.7012, 0.1194, 0.0374, 0.0374, …] (MULTI-REF)
+//   H₆ chain R=1.8:  E_RHF=−3.15231625  E_FCI=E_CAS(6,6)=−3.24451733  |Δ|=0
+//   H₆ chain R=3.0:  E_RHF=−2.67543226  E_FCI=E_CAS(6,6)=−2.95764609  |Δ|=8.9e-16
+//                    top det weights [0.5733, 0.1020, 0.0286, 0.0286, …] (MULTI-REF)
+//   (the hexa STO-3G AO integrals match pyscf's int1e_ovlp/kin/nuc to ≤1e-5 —
+//    verified: S[0,1]=0.524878, Hcore[0,0]=−1.46436 vs pyscf identical.)
+//
+// HONEST (d6): every CASCI energy is printed VERBATIM. This is CASCI (CI over
+// FIXED RHF orbitals), NOT full CASSCF (no orbital re-optimization) — round-12.
+// Largest CAS run here = CAS(6,6) (400 determinants, fully tractable). FCI scales
+// factorially — CAS(8,8)=4900 dets, CAS(10,10)=63504 is the practical ceiling for
+// this dense-matrix approach; named as the frontier for the larger Cr₂ wall.
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/molscf/fci_selftest.hexa
+// PASS: "qforge_molscf_fci_selftest PASS".
+use "stdlib/qforge/molscf/gaussian_integrals"
+use "stdlib/qforge/molscf/coulomb_integrals"
+use "stdlib/qforge/molscf/rhf"
+use "stdlib/qforge/molscf/casci"
+use "stdlib/qforge/molscf/fci"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+// contracted ERI (μν|σλ) — 4-fold primitive sum (same as the RHF/casci selftest).
+fn eri_contracted(
+    al: [float], co: [float], ax: [float],
+    bl: [float], bo: [float], bx: [float],
+    cl: [float], cco: [float], cx: [float],
+    dl: [float], dco: [float], dx: [float]
+) -> float {
+    let mut v = 0.0
+    let mut i = 0
+    while i < len(al) {
+        let mut j = 0
+        while j < len(bl) {
+            let mut k = 0
+            while k < len(cl) {
+                let mut l = 0
+                while l < len(dl) {
+                    let w = co[i] * bo[j] * cco[k] * dco[l]
+                    v = v + w * cint_eri_s(al[i], ax, bl[j], bx, cl[k], cx, dl[l], dx)
+                    l = l + 1
+                }
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return v
+}
+
+// Build a linear H_n / STO-3G chain at spacing R (bohr): RHF then GENERAL CASCI.
+//   nH active orbitals = nH MOs, nH electrons → CAS(nH, nH) = FCI (full space).
+//   Returns [ e_rhf, e_cas, ndet, w0, w1, w2, w3 ] (top-4 sorted det weights).
+fn hchain_rhf_casci(nH: int, R: float) -> [any] {
+    let alpha = [3.42525091, 0.62391373, 0.16885540]
+    let coeff = [0.15432897, 0.53532814, 0.44463454]
+    let n = nH
+    let z = 1.0
+    let n_occ = nH / 2
+
+    // centers along x: atom i at (i*R, 0, 0)
+    let mut centers = []
+    let mut ci = 0
+    while ci < nH { centers.push([(to_float(ci)) * R, 0.0, 0.0]) ; ci = ci + 1 }
+
+    // S, T, V, Hcore  (n×n row-major)
+    let mut S = []
+    let mut hcore = []
+    let mut a = 0
+    while a < n {
+        let mut b = 0
+        while b < n {
+            let sab = gint_overlap_contracted(alpha, coeff, centers[a], alpha, coeff, centers[b])
+            S.push(sab)
+            let tab = gint_kinetic_contracted(alpha, coeff, centers[a], alpha, coeff, centers[b])
+            // nuclear attraction summed over ALL nuclei
+            let mut vab = 0.0
+            let mut nn = 0
+            while nn < nH {
+                vab = vab + cint_nuclear_contracted(alpha, coeff, centers[a], alpha, coeff, centers[b], z, centers[nn])
+                nn = nn + 1
+            }
+            hcore.push(tab + vab)
+            b = b + 1
+        }
+        a = a + 1
+    }
+
+    // AO ERIs (n^4 chemists' (μν|σλ))
+    let mut eri = []
+    let mut mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu < n {
+            let mut sg = 0
+            while sg < n {
+                let mut lm = 0
+                while lm < n {
+                    let e = eri_contracted(alpha, coeff, centers[mu], alpha, coeff, centers[nu], alpha, coeff, centers[sg], alpha, coeff, centers[lm])
+                    eri.push(e)
+                    lm = lm + 1
+                }
+                sg = sg + 1
+            }
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+
+    // nuclear repulsion Σ_{A<B} Z_A Z_B / R_AB  (chain: |i−j|·R)
+    let mut e_nuc = 0.0
+    let mut ii = 0
+    while ii < nH {
+        let mut jj = ii + 1
+        while jj < nH {
+            e_nuc = e_nuc + (z * z) / ((to_float(jj - ii)) * R)
+            jj = jj + 1
+        }
+        ii = ii + 1
+    }
+
+    let out = rhf_scf(S, hcore, eri, n, n_occ, e_nuc, 200, 1.0e-10, 0.7)
+    let e_rhf = out[0]
+    let F = out[4]
+
+    // CAS(nH, nH): all orbitals active, n_occ α + n_occ β = full FCI.
+    let cas = casci_solve_rhf(S, hcore, F, eri, n, nH, n_occ, n_occ, e_nuc)
+    let e_cas = cas[0]
+    let ndet = cas[2]
+    let weights = cas[3]
+
+    // top-4 determinant weights (selection sort over a COPY)
+    let mut wc = []
+    let mut wi = 0
+    while wi < ndet { wc.push(weights[wi]) ; wi = wi + 1 }
+    let mut top = []
+    let mut pick = 0
+    while pick < 4 {
+        let mut best = 0.0
+        let mut bidx = 0
+        let mut s = 0
+        while s < ndet {
+            if wc[s] > best { best = wc[s] ; bidx = s }
+            s = s + 1
+        }
+        top.push(best)
+        wc[bidx] = 0.0 - 1.0
+        pick = pick + 1
+    }
+    return [e_rhf, e_cas, ndet, top[0], top[1], top[2], top[3]]
+}
+
+// H₂/STO-3G CAS(2,2) via the GENERAL solver (2e regression — must == round-10).
+//   Returns [ e_rhf, e_cas, ndet ].
+fn h2_general(R: float) -> [any] {
+    let alpha = [3.42525091, 0.62391373, 0.16885540]
+    let coeff = [0.15432897, 0.53532814, 0.44463454]
+    let A = [0.0, 0.0, 0.0]
+    let B = [R, 0.0, 0.0]
+    let n = 2
+    let z = 1.0
+
+    let s11 = gint_overlap_contracted(alpha, coeff, A, alpha, coeff, A)
+    let s12 = gint_overlap_contracted(alpha, coeff, A, alpha, coeff, B)
+    let s22 = gint_overlap_contracted(alpha, coeff, B, alpha, coeff, B)
+    let S = [s11, s12, s12, s22]
+    let t11 = gint_kinetic_contracted(alpha, coeff, A, alpha, coeff, A)
+    let t12 = gint_kinetic_contracted(alpha, coeff, A, alpha, coeff, B)
+    let t22 = gint_kinetic_contracted(alpha, coeff, B, alpha, coeff, B)
+    let v11 = cint_nuclear_contracted(alpha, coeff, A, alpha, coeff, A, z, A) + cint_nuclear_contracted(alpha, coeff, A, alpha, coeff, A, z, B)
+    let v12 = cint_nuclear_contracted(alpha, coeff, A, alpha, coeff, B, z, A) + cint_nuclear_contracted(alpha, coeff, A, alpha, coeff, B, z, B)
+    let v22 = cint_nuclear_contracted(alpha, coeff, B, alpha, coeff, B, z, A) + cint_nuclear_contracted(alpha, coeff, B, alpha, coeff, B, z, B)
+    let hcore = [t11 + v11, t12 + v12, t12 + v12, t22 + v22]
+    let centers = [A, B]
+    let mut eri = []
+    let mut mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu < n {
+            let mut sg = 0
+            while sg < n {
+                let mut lm = 0
+                while lm < n {
+                    let e = eri_contracted(alpha, coeff, centers[mu], alpha, coeff, centers[nu], alpha, coeff, centers[sg], alpha, coeff, centers[lm])
+                    eri.push(e)
+                    lm = lm + 1
+                }
+                sg = sg + 1
+            }
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    let e_nuc = z * z / R
+    let out = rhf_scf(S, hcore, eri, n, 1, e_nuc, 100, 1.0e-10, 1.0)
+    let e_rhf = out[0]
+    let F = out[4]
+    // CAS(2,2) via the GENERAL solver: m=2 active, 1 α + 1 β electron.
+    let cas = casci_solve_rhf(S, hcore, F, eri, n, 2, 1, 1, e_nuc)
+    let e_cas = cas[0]
+    let ndet = cas[2]
+    return [e_rhf, e_cas, ndet]
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ══ (a) 2e REGRESSION via the general solver — must == round-10 CAS(2,2) ═════
+    let h2eq = h2_general(1.4)
+    let h2st = h2_general(5.0)
+    println("── (a) general-solver CAS(2,2) H₂ (2e regression vs round-10) ──")
+    println("  R=1.4: E_CAS = " + to_string(h2eq[1]) + "  ndet=" + to_string(h2eq[2]) + "  (FCI −1.13727594)")
+    println("  R=5.0: E_CAS = " + to_string(h2st[1]) + "  ndet=" + to_string(h2st[2]) + "  (FCI −0.93488935)")
+    fails = fails + _ck_true("(a) CAS(2,2) det count == 4 (general C(2,1)²)", h2eq[2] == 4)
+    fails = fails + _ck_close("(a) general CAS(2,2) @1.4 == FCI −1.13727594 (== round-10)", h2eq[1], 0.0 - 1.13727594, 1.0e-5)
+    fails = fails + _ck_close("(a) general CAS(2,2) @5.0 == FCI −0.93488935 (== round-10)", h2st[1], 0.0 - 0.93488935, 1.0e-5)
+
+    // ══ (b) general-CAS == FCI: CAS(4,4) H₄ + CAS(6,6) H₆ ═══════════════════════
+    let h4eq = hchain_rhf_casci(4, 1.8)
+    println("── (b) H₄ CAS(4,4) @ R=1.8 bohr (equilibrium) ──")
+    println("  E_RHF = " + to_string(h4eq[0]) + "  (pyscf −2.11342892)")
+    println("  E_CAS = " + to_string(h4eq[1]) + "  ndet=" + to_string(h4eq[2]) + "  (pyscf FCI −2.17541114)")
+    fails = fails + _ck_true("(b) H₄ CAS(4,4) det count == 36 (C(4,2)²)", h4eq[2] == 36)
+    fails = fails + _ck_close("(b) H₄ CAS(4,4) E @1.8 == pyscf FCI −2.17541114", h4eq[1], 0.0 - 2.17541114, 1.0e-5)
+    fails = fails + _ck_close("(b) H₄ RHF E @1.8 == pyscf −2.11342892", h4eq[0], 0.0 - 2.11342892, 1.0e-4)
+
+    let h6eq = hchain_rhf_casci(6, 1.8)
+    println("── (b) H₆ CAS(6,6) @ R=1.8 bohr (equilibrium) ──")
+    println("  E_RHF = " + to_string(h6eq[0]) + "  (pyscf −3.15231625)")
+    println("  E_CAS = " + to_string(h6eq[1]) + "  ndet=" + to_string(h6eq[2]) + "  (pyscf FCI −3.24451733)")
+    fails = fails + _ck_true("(b) H₆ CAS(6,6) det count == 400 (C(6,3)²)", h6eq[2] == 400)
+    fails = fails + _ck_close("(b) H₆ CAS(6,6) E @1.8 == pyscf FCI −3.24451733", h6eq[1], 0.0 - 3.24451733, 1.0e-5)
+    fails = fails + _ck_close("(b) H₆ RHF E @1.8 == pyscf −3.15231625", h6eq[0], 0.0 - 3.15231625, 1.0e-4)
+
+    // ══ (c) MULTI-REFERENCE WIN at a stretched chain (≥3 significant dets) ══════
+    let h4st = hchain_rhf_casci(4, 3.0)
+    println("── (c) H₄ CAS(4,4) @ R=3.0 bohr (STRETCHED — RHF breaks) ──")
+    println("  E_RHF = " + to_string(h4st[0]) + "  (pyscf −1.77917257)")
+    println("  E_CAS = " + to_string(h4st[1]) + "  (pyscf FCI −1.97086976)")
+    println("  E_RHF − E_CAS = " + to_string(h4st[0] - h4st[1]) + "  Ha (RHF too high)")
+    println("  top det weights: " + to_string(h4st[3]) + ", " + to_string(h4st[4]) + ", " + to_string(h4st[5]) + ", " + to_string(h4st[6]) + "  (pyscf 0.7012/0.1194/0.0374/0.0374)")
+    fails = fails + _ck_close("(c) H₄ CAS(4,4) E @3.0 == pyscf FCI −1.97086976", h4st[1], 0.0 - 1.97086976, 1.0e-5)
+    fails = fails + _ck_close("(c) H₄ RHF E @3.0 == pyscf −1.77917257 (WRONG, too high)", h4st[0], 0.0 - 1.77917257, 1.0e-4)
+    fails = fails + _ck_true("(c) RHF error @3.0 > 0.15 Ha (qualitative single-det failure)", (h4st[0] - h4st[1]) > 0.15)
+    fails = fails + _ck_true("(c) E_CAS ≤ E_RHF @3.0 (variational)", h4st[1] <= h4st[0])
+    //   MULTI-REFERENCE: ≥3 SIGNIFICANT determinants (NOT a 2-det special case).
+    fails = fails + _ck_true("(c) MULTI-REF @3.0: 2nd det weight > 0.08 (significant)", h4st[4] > 0.08)
+    fails = fails + _ck_true("(c) MULTI-REF @3.0: 3rd det weight > 0.02 (≥3 significant dets)", h4st[5] > 0.02)
+    fails = fails + _ck_true("(c) MULTI-REF @3.0: leading det < 0.8 (NOT single-determinant)", h4st[3] < 0.8)
+
+    let h6st = hchain_rhf_casci(6, 3.0)
+    println("── (c) H₆ CAS(6,6) @ R=3.0 bohr (STRETCHED) ──")
+    println("  E_RHF = " + to_string(h6st[0]) + "  (pyscf −2.67543226)")
+    println("  E_CAS = " + to_string(h6st[1]) + "  (pyscf FCI −2.95764609)")
+    println("  top det weights: " + to_string(h6st[3]) + ", " + to_string(h6st[4]) + ", " + to_string(h6st[5]) + ", " + to_string(h6st[6]) + "  (pyscf 0.5733/0.1020/0.0286/0.0286)")
+    fails = fails + _ck_close("(c) H₆ CAS(6,6) E @3.0 == pyscf FCI −2.95764609", h6st[1], 0.0 - 2.95764609, 1.0e-5)
+    fails = fails + _ck_true("(c) H₆ MULTI-REF @3.0: 3rd det weight > 0.02 (≥3 significant dets)", h6st[5] > 0.02)
+    fails = fails + _ck_true("(c) H₆ MULTI-REF @3.0: leading det < 0.7 (strong multi-ref)", h6st[3] < 0.7)
+
+    // ══ (d) generic string-enumeration / Slater–Condon sanity ══════════════════
+    //   C(4,2)=6 combinations, each length 2, lexicographic first == [0,1].
+    let cmb = fci_combinations(4, 2)
+    fails = fails + _ck_true("(d) C(4,2) == 6 combinations", len(cmb) == 6)
+    fails = fails + _ck_true("(d) first combination == [0,1]", cmb[0][0] == 0 && cmb[0][1] == 1)
+    fails = fails + _ck_true("(d) last  combination == [2,3]", cmb[5][0] == 2 && cmb[5][1] == 3)
+    let cmb0 = fci_combinations(3, 0)
+    fails = fails + _ck_true("(d) C(3,0) == 1 (the empty string)", len(cmb0) == 1 && len(cmb0[0]) == 0)
+    let cmb3 = fci_combinations(3, 3)
+    fails = fails + _ck_true("(d) C(3,3) == 1 == [0,1,2] (full)", len(cmb3) == 1 && cmb3[0][2] == 2)
+    //   Slater–Condon diagonal sanity: a single det's diagonal == its energy
+    //   expectation; identity-MO h on a closed 2e |0_α 0_β⟩ gives 2 h00 + (00|00).
+    let hI = [-1.5, 0.2, 0.2, -0.9]
+    let mut moeriI = []
+    let mut q = 0
+    while q < 16 { moeriI.push(0.0) ; q = q + 1 }
+    moeriI[0] = 0.625                       // (00|00)
+    let occ = [0, 1]                        // spin-orbitals 0α,0β = closed MO 0
+    let diag = fci_matel(occ, occ, 2, hI, moeriI, 2)
+    fails = fails + _ck_close("(d) SC diagonal |0α0β| == 2·h00 + (00|00)", diag, 2.0 * (0.0 - 1.5) + 0.625, 1.0e-12)
+
+    if fails == 0 {
+        println("qforge_molscf_fci_selftest PASS")
+    } else {
+        println("qforge_molscf_fci_selftest FAIL (" + to_string(fails) + ")")
+    }
+}

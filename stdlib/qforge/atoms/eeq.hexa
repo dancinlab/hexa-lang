@@ -1,0 +1,232 @@
+// HEXA Standard Library — qforge/atoms/eeq
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE atoms-scale brick #1 — EEQ (electronegativity-equilibration) atomic
+// partial charges, the closed-form charge model that GFN2-xTB / DFT-D4 use for
+// the second-order electrostatic energy and the charge-scaled dispersion
+// coefficients (Caldeweyher et al., J. Chem. Phys. 150, 154122 (2019); the
+// charge model section of Bannwarth-Ehlert-Grimme GFN2-xTB, JCTC 15 (2019)).
+//
+// THE PHYSICS (a single-molecule partial-charge model in closed form) ──────────
+//   The EEQ charges are the stationary point of the isotropic electrostatic
+//   energy of a set of Gaussian charge clouds, one per atom:
+//
+//     E(q) = Σ_i [ χ_i q_i + ½ η_i q_i² ]                       (atomic self part)
+//          + ½ Σ_{i≠j} q_i q_j · erf(R_ij / γ_ij) / R_ij         (Coulomb coupling)
+//
+//   minimized under charge conservation Σ_i q_i = Q_tot. χ_i is the (coordination-
+//   number-dressed) electronegativity, η_i the chemical hardness, and the cloud
+//   width enters γ_ij = sqrt(α_i² + α_j²) with α_i the atomic charge-density
+//   radius. Stationarity ∂(E − λ Σq)/∂q_i = 0 plus the constraint is the LINEAR
+//   bordered system  [A 1; 1ᵀ 0] [q; λ] = [−χ; Q_tot] :
+//
+//     A_ii = η_i + sqrt(2/π)/α_i          (hardness + Gaussian self-Coulomb)
+//     A_ij = erf(R_ij / γ_ij) / R_ij      (i≠j, screened Coulomb of two clouds)
+//     b_i  = −χ_i ,   last row/col = charge-conservation Lagrange border.
+//
+//   Solving the (n+1)×(n+1) symmetric system gives the partial charges q
+//   (and the multiplier λ, the molecular electronegativity). EVERY number is
+//   derivable — no SCF, no fit beyond the per-element {χ, η, α} table that the
+//   CALLER supplies as data (d4: the solver branches on no element name).
+//
+// d4-generic: geometry (positions), element parameters (chi/eta/alpha) and the
+//   total charge are ALL inputs. Adding / removing an element is a table edit;
+//   the solver is identical for H₂, CO, a peptide, or a metal cluster.
+//
+// reuse (d19): stdlib/core/special.erf_fn (the screened-Coulomb kernel, already
+//   used by qforge/scf_etot for the Ewald erfc). The dense solve is a small
+//   self-contained Gaussian elimination with partial pivoting — qforge has only
+//   a symmetric-Jacobi EIGEN routine (alloc/math/eigen), no general A x = b
+//   solver, so this adds the missing linear-solve primitive locally rather than
+//   reaching for the eigensolver (which cannot solve an indefinite bordered
+//   system). It is plain numerics, no new dependency.
+use "stdlib/core/special"
+
+// ── sqrt via Newton (no std sqrt import needed; positive args only) ───────────
+fn _sqrt(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    if g < 1.0 { g = 1.0 }
+    let mut it = 0
+    while it < 60 {
+        let ng = 0.5 * (g + x / g)
+        if ng == g { break }
+        g = ng
+        it = it + 1
+    }
+    return g
+}
+
+// ── pairwise distance R_ij from flat xyz coordinates (row-major, 3 per atom) ──
+//   pos has length 3·n; atom k occupies pos[3k], pos[3k+1], pos[3k+2].
+pub fn qforge_eeq_distance(pos: [float], i: int, j: int) -> float {
+    let dx = pos[3 * i + 0] - pos[3 * j + 0]
+    let dy = pos[3 * i + 1] - pos[3 * j + 1]
+    let dz = pos[3 * i + 2] - pos[3 * j + 2]
+    return _sqrt(dx * dx + dy * dy + dz * dz)
+}
+
+// ── assemble the (n+1)×(n+1) bordered EEQ matrix, flattened row-major ─────────
+//   chi/eta/alpha are per-atom parameter vectors (length n) — the caller maps
+//   element → parameters, so the assembler is element-agnostic (d4). The
+//   sqrt(2/π) Gaussian self-Coulomb constant is 0.7978845608028654.
+//   Returns a flat [ (n+1)*(n+1) ] array A and is paired with qforge_eeq_rhs.
+pub fn qforge_eeq_matrix(pos: [float], chi: [float], eta: [float],
+                         alpha: [float]) -> [float] {
+    let n = len(chi)
+    let m = n + 1
+    let two_over_pi_sqrt = 0.7978845608028654   // sqrt(2/π)
+    let mut a: [float] = []
+    let mut idx = 0
+    while idx < m * m { a.push(0.0) ; idx = idx + 1 }
+    let mut i = 0
+    while i < n {
+        // diagonal: hardness + Gaussian self-Coulomb sqrt(2/π)/α_i
+        a[i * m + i] = eta[i] + two_over_pi_sqrt / alpha[i]
+        let mut j = i + 1
+        while j < n {
+            let rij = qforge_eeq_distance(pos, i, j)
+            let gij = _sqrt(alpha[i] * alpha[i] + alpha[j] * alpha[j])
+            // screened Coulomb of two Gaussian clouds: erf(R/γ)/R
+            let aij = erf_fn(rij / gij) / rij
+            a[i * m + j] = aij
+            a[j * m + i] = aij
+            j = j + 1
+        }
+        // charge-conservation border (Lagrange row/col of ones)
+        a[i * m + n] = 1.0
+        a[n * m + i] = 1.0
+        i = i + 1
+    }
+    a[n * m + n] = 0.0   // border corner
+    return a
+}
+
+// ── RHS vector b = [ −χ_0 … −χ_{n-1} , Q_tot ] (length n+1) ───────────────────
+pub fn qforge_eeq_rhs(chi: [float], qtot: float) -> [float] {
+    let n = len(chi)
+    let mut b: [float] = []
+    let mut i = 0
+    while i < n { b.push(0.0 - chi[i]) ; i = i + 1 }
+    b.push(qtot)
+    return b
+}
+
+// ── dense solve A x = b (Gaussian elimination, partial pivoting) ──────────────
+//   a is a flat m×m row-major matrix, b length m. Returns x length m. Robust on
+//   the symmetric-indefinite bordered EEQ system (the zero border corner makes
+//   it indefinite, so an SPD/Cholesky path would fail — pivoting is required).
+pub fn qforge_eeq_solve(a_in: [float], b_in: [float], m: int) -> [float] {
+    // copy so the routine is pure w.r.t. its inputs
+    let mut a: [float] = []
+    let mut k = 0
+    while k < m * m { a.push(a_in[k]) ; k = k + 1 }
+    let mut b: [float] = []
+    k = 0
+    while k < m { b.push(b_in[k]) ; k = k + 1 }
+
+    let mut col = 0
+    while col < m {
+        // partial pivot: largest |a[r][col]| at or below the diagonal
+        let mut piv = col
+        let mut best = a[col * m + col]
+        if best < 0.0 { best = 0.0 - best }
+        let mut r = col + 1
+        while r < m {
+            let mut v = a[r * m + col]
+            if v < 0.0 { v = 0.0 - v }
+            if v > best { best = v ; piv = r }
+            r = r + 1
+        }
+        // swap row piv ↔ row col (in A and b)
+        if piv != col {
+            let mut c = 0
+            while c < m {
+                let t = a[col * m + c]
+                a[col * m + c] = a[piv * m + c]
+                a[piv * m + c] = t
+                c = c + 1
+            }
+            let tb = b[col]
+            b[col] = b[piv]
+            b[piv] = tb
+        }
+        // eliminate below the pivot
+        let pivval = a[col * m + col]
+        r = col + 1
+        while r < m {
+            let factor = a[r * m + col] / pivval
+            if factor != 0.0 {
+                let mut c = col
+                while c < m {
+                    a[r * m + c] = a[r * m + c] - factor * a[col * m + c]
+                    c = c + 1
+                }
+                b[r] = b[r] - factor * b[col]
+            }
+            r = r + 1
+        }
+        col = col + 1
+    }
+    // back-substitution
+    let mut x: [float] = []
+    k = 0
+    while k < m { x.push(0.0) ; k = k + 1 }
+    let mut row = m - 1
+    while row >= 0 {
+        let mut s = b[row]
+        let mut c = row + 1
+        while c < m {
+            s = s - a[row * m + c] * x[c]
+            c = c + 1
+        }
+        x[row] = s / a[row * m + row]
+        row = row - 1
+    }
+    return x
+}
+
+// ── top-level: EEQ partial charges for a molecule ────────────────────────────
+//   Assembles the bordered system and solves it; returns the per-atom charge
+//   vector (length n) — the Lagrange multiplier (molecular electronegativity)
+//   is dropped from the returned vector but is x[n] of the raw solve.
+//   By construction Σ q_i = qtot exactly (the constraint row).
+pub fn qforge_eeq_charges(pos: [float], chi: [float], eta: [float],
+                          alpha: [float], qtot: float) -> [float] {
+    let n = len(chi)
+    let m = n + 1
+    let a = qforge_eeq_matrix(pos, chi, eta, alpha)
+    let b = qforge_eeq_rhs(chi, qtot)
+    let x = qforge_eeq_solve(a, b, m)
+    let mut q: [float] = []
+    let mut i = 0
+    while i < n { q.push(x[i]) ; i = i + 1 }
+    return q
+}
+
+// ── the EEQ isotropic electrostatic energy at a charge vector q ──────────────
+//   E = Σ_i (χ_i q_i + ½ η_i q_i² + ½ (sqrt(2/π)/α_i) q_i²)
+//     + Σ_{i<j} q_i q_j erf(R_ij/γ_ij)/R_ij.
+//   (the self-Coulomb sqrt(2/π)/α_i enters the diagonal like the hardness.)
+pub fn qforge_eeq_energy(pos: [float], chi: [float], eta: [float],
+                         alpha: [float], q: [float]) -> float {
+    let n = len(chi)
+    let two_over_pi_sqrt = 0.7978845608028654
+    let mut e = 0.0
+    let mut i = 0
+    while i < n {
+        let self_coul = two_over_pi_sqrt / alpha[i]
+        e = e + chi[i] * q[i] + 0.5 * (eta[i] + self_coul) * q[i] * q[i]
+        let mut j = i + 1
+        while j < n {
+            let rij = qforge_eeq_distance(pos, i, j)
+            let gij = _sqrt(alpha[i] * alpha[i] + alpha[j] * alpha[j])
+            e = e + q[i] * q[j] * erf_fn(rij / gij) / rij
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return e
+}

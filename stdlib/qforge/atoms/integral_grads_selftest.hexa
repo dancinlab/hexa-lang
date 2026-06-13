@@ -1,0 +1,146 @@
+// @ci_gate — deterministic · network-free · closed-form s-primitive integral derivatives (R12)
+//
+// qforge/atoms/integral_grads_selftest.hexa — QFORGE atoms brick #12 g5, the PER-INTEGRAL
+// proof (the cleanest gate, per R12 plan): each closed-form s-primitive derivative
+// ∂T/∂R, ∂V/∂R, ∂(ab|cd)/∂R MATCHES its own central finite difference to <1e-6, and the
+// FREE translational-invariance gate Σ_centers ∂I/∂R = 0 holds to ~1e-10 (a check FD
+// cannot give cheaply). Boys F₁ is also gated against an FD of boys_f0. REAL output (d6),
+// no LLM self-judge — every residual printed verbatim.
+//
+//   (a) ∂T/∂A == central-FD of gint_kinetic_s                                    🟢
+//   (b) ∂V/∂{A,B,C} == central-FD of cint_nuclear_s  (each center separately)    🟢
+//   (c) ∂(ab|cd)/∂{A,B,C,D} == central-FD of cint_eri_s  (each center)           🟢
+//   (d) F₁(t) == central-FD of −F₀(t)  (the derivative identity F₀'=−F₁)         🟢
+//   (e) TRANSLATIONAL INVARIANCE (free gate): Σ_centers ∂I/∂R = 0 for V and ERI  🟢
+//
+// HONEST (d6): s-ONLY (STO-3G H 1s primitives). p/d = round-13 (md_integrals d-ext).
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/atoms/integral_grads_selftest.hexa
+// PASS: "qforge_integral_grads_selftest PASS".
+use "stdlib/qforge/atoms/integral_grads"
+use "stdlib/qforge/molscf/gaussian_integrals"
+use "stdlib/qforge/molscf/coulomb_integrals"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _ck(name: str, got: float, want: float, eps: float, fails: int) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (Δ=" + to_string(_abs(got-want)) + ")") ; return fails }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return fails + 1
+}
+
+// displace one [3] center by ±h on dim d and rebuild it
+fn _shift(x: [float], dimd: int, h: float) -> [float] {
+    let mut o: [float] = []
+    let mut i = 0
+    while i < 3 { if i == dimd { o.push(x[i] + h) } else { o.push(x[i]) } ; i = i + 1 }
+    return o
+}
+
+fn main() {
+    let mut fails = 0
+    let h = 0.00005
+
+    // STO-3G H 1s primitive exponents (the MOLSCF anchor basis); pick two non-trivial
+    // primitives so μ, the product center, and the Boys argument are all non-degenerate.
+    let a = 3.42525091
+    let b = 0.62391373
+    let c = 0.16885540
+    let d = 1.0
+    let A = [0.0, 0.0, 0.0]
+    let B = [1.3, 0.2, 0.0]
+    let C = [0.0, 1.1, 0.4]    // nucleus / 2nd-pair center
+    let D = [0.7, 0.9, 1.2]
+    let z = 1.0
+
+    // ══ (a) ∂T/∂A_d == central-FD of gint_kinetic_s ════════════════════════════
+    let mut dd = 0
+    while dd < 3 {
+        let ana = ig_dkinetic_s_dA(a, b, A, B, dd)
+        let tp = gint_kinetic_s(a, b, _shift(A, dd, h), B)
+        let tm = gint_kinetic_s(a, b, _shift(A, dd, 0.0 - h), B)
+        let fd = (tp - tm) / (2.0 * h)
+        fails = _ck("(a) ∂T/∂A_" + to_string(dd), ana, fd, 1.0e-6, fails)
+        dd = dd + 1
+    }
+
+    // ══ (b) ∂V/∂{A,B,C}_d == central-FD of cint_nuclear_s ══════════════════════
+    dd = 0
+    while dd < 3 {
+        // ∂/∂A
+        let aA = ig_dnuclear_s_dA(a, b, A, B, z, C, dd)
+        let vAp = cint_nuclear_s(a, b, _shift(A, dd, h), B, z, C)
+        let vAm = cint_nuclear_s(a, b, _shift(A, dd, 0.0 - h), B, z, C)
+        fails = _ck("(b) ∂V/∂A_" + to_string(dd), aA, (vAp - vAm) / (2.0 * h), 1.0e-6, fails)
+        // ∂/∂B
+        let aB = ig_dnuclear_s_dB(a, b, A, B, z, C, dd)
+        let vBp = cint_nuclear_s(a, b, A, _shift(B, dd, h), z, C)
+        let vBm = cint_nuclear_s(a, b, A, _shift(B, dd, 0.0 - h), z, C)
+        fails = _ck("(b) ∂V/∂B_" + to_string(dd), aB, (vBp - vBm) / (2.0 * h), 1.0e-6, fails)
+        // ∂/∂C  (Hellmann-Feynman, nucleus moves)
+        let aC = ig_dnuclear_s_dC(a, b, A, B, z, C, dd)
+        let vCp = cint_nuclear_s(a, b, A, B, z, _shift(C, dd, h))
+        let vCm = cint_nuclear_s(a, b, A, B, z, _shift(C, dd, 0.0 - h))
+        fails = _ck("(b) ∂V/∂C_" + to_string(dd), aC, (vCp - vCm) / (2.0 * h), 1.0e-6, fails)
+        // free translational gate: ∂A+∂B+∂C = 0
+        let tr = aA + aB + aC
+        fails = _ck("(b) Σ_centers ∂V/∂_" + to_string(dd) + " == 0 (transl)", tr, 0.0, 1.0e-9, fails)
+        dd = dd + 1
+    }
+
+    // ══ (c) ∂(ab|cd)/∂{A,B,C,D}_d == central-FD of cint_eri_s ═══════════════════
+    dd = 0
+    while dd < 3 {
+        let gA = ig_deri_s_dA(a, A, b, B, c, C, d, D, dd)
+        let eAp = cint_eri_s(a, _shift(A, dd, h), b, B, c, C, d, D)
+        let eAm = cint_eri_s(a, _shift(A, dd, 0.0 - h), b, B, c, C, d, D)
+        fails = _ck("(c) ∂ERI/∂A_" + to_string(dd), gA, (eAp - eAm) / (2.0 * h), 1.0e-6, fails)
+        let gB = ig_deri_s_dB(a, A, b, B, c, C, d, D, dd)
+        let eBp = cint_eri_s(a, A, b, _shift(B, dd, h), c, C, d, D)
+        let eBm = cint_eri_s(a, A, b, _shift(B, dd, 0.0 - h), c, C, d, D)
+        fails = _ck("(c) ∂ERI/∂B_" + to_string(dd), gB, (eBp - eBm) / (2.0 * h), 1.0e-6, fails)
+        let gC = ig_deri_s_dC(a, A, b, B, c, C, d, D, dd)
+        let eCp = cint_eri_s(a, A, b, B, c, _shift(C, dd, h), d, D)
+        let eCm = cint_eri_s(a, A, b, B, c, _shift(C, dd, 0.0 - h), d, D)
+        fails = _ck("(c) ∂ERI/∂C_" + to_string(dd), gC, (eCp - eCm) / (2.0 * h), 1.0e-6, fails)
+        let gD = ig_deri_s_dD(a, A, b, B, c, C, d, D, dd)
+        let eDp = cint_eri_s(a, A, b, B, c, C, d, _shift(D, dd, h))
+        let eDm = cint_eri_s(a, A, b, B, c, C, d, _shift(D, dd, 0.0 - h))
+        fails = _ck("(c) ∂ERI/∂D_" + to_string(dd), gD, (eDp - eDm) / (2.0 * h), 1.0e-6, fails)
+        // free translational gate: ∂A+∂B+∂C+∂D = 0
+        let tr = gA + gB + gC + gD
+        fails = _ck("(c) Σ_centers ∂ERI/∂_" + to_string(dd) + " == 0 (transl)", tr, 0.0, 1.0e-9, fails)
+        dd = dd + 1
+    }
+
+    // ══ (d) F₁(t) == −F₀'(t) (FD of boys_f0-AS-IMPLEMENTED, machine precision) ══
+    //   ig_boys_f1 differentiates boys_f0 EXACTLY (the A&S erf rational, not the true
+    //   Boys), so it must equal the central-FD of boys_f0 itself to machine precision —
+    //   THIS is the consistency that makes the fully-analytic force match FD-of-E_RHF to
+    //   <1e-9 (both differentiate the same erf approximation). We ALSO print the gap to the
+    //   exact power series (the ~1.5e-7 erf budget) for honesty (d6) — informational, not gated.
+    fn _f1_series(t: float) -> float {
+        let mut s = 0.0
+        let mut term = 1.0          // (−t)^k / k!
+        let mut k = 0
+        while k < 30 {
+            s = s + term / to_float(2 * k + 3)
+            term = term * (0.0 - t) / to_float(k + 1)
+            k = k + 1
+        }
+        return s
+    }
+    let ts = [0.05, 0.5, 2.0, 7.5]
+    let mut k = 0
+    while k < len(ts) {
+        let t = ts[k]
+        let f1 = ig_boys_f1(t)
+        let fd = 0.0 - (boys_f0(t + h) - boys_f0(t - h)) / (2.0 * h)   // −F₀' of boys_f0-as-impl
+        let ser = _f1_series(t)
+        println("    [d] F₁(" + to_string(t) + ")=" + to_string(f1)
+                + "  −FD(boys_f0)=" + to_string(fd)
+                + "  exact-series=" + to_string(ser) + " (erf budget |F₁−series|=" + to_string(_abs(f1-ser)) + ")")
+        fails = _ck("(d) F₁(" + to_string(t) + ") == −FD(boys_f0) (consistent, <1e-6)", f1, fd, 1.0e-6, fails)
+        k = k + 1
+    }
+
+    if fails == 0 { println("qforge_integral_grads_selftest PASS") }
+    else { println("qforge_integral_grads_selftest FAIL — " + to_string(fails) + " checks failed") }
+}

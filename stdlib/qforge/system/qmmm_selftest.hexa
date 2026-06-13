@@ -1,0 +1,142 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// qmmm_selftest.hexa — QFORGE/system g5 gate for the QM/MM energy-partition
+// algebra (the round-1 scale-bridge brick). Pins the additive ↔ ONIOM-
+// subtractive CONSISTENCY identity plus two analytic toy limits. NO engine,
+// NO network — every reference is closed-form, so the gate is a pure
+// numerical identity (no LLM judge).
+//
+// CONTEXT — the QFORGE/system milestone joins QM (stdlib/qforge SCF/DFPT) and
+// MM (stdlib/chem/md) scales. Before any electrostatic-embedding/link-atom
+// coupling is built, the partition algebra itself must be scale-CONSISTENT:
+// the additive QM/MM expression and the ONIOM subtractive expression must
+// give the SAME total on shared inputs. They do (Senn & Thiel 2009; Chung et
+// al. 2015 Chem.Rev. 115 5678 ONIOM identity), and this gate proves it on the
+// hexa implementation.
+//
+// d4-GENERIC — all energies are plain floats (results of QM/MM callbacks);
+// the toy numbers below STAND IN for any engine's output. The identity holds
+// for ALL inputs (it is algebraic), so arbitrary toy values are a valid proof.
+//
+// g5 CHECKS (numerical identity — NO LLM judge):
+//  (1) CONSISTENCY IDENTITY — for arbitrary high/low region energies, the
+//      additive total (mechanical-embedding coupling) EQUALS the ONIOM
+//      2-layer total. Residual ≡ 0 to round-off, on three independent
+//      randomly-chosen input sets. This is the round-1 finding.
+//  (2) WHOLE-SYSTEM MM-ONLY LIMIT — if the high level ≡ the low level on the
+//      inner region (E_high(inner)=E_low(inner)), the QM/MM total collapses
+//      onto the plain whole-system low-level energy E_low(real): a QM/MM
+//      partition of a purely-MM system reproduces the bare MM energy, with no
+//      spurious bridge energy.
+//  (3) PARTITION-BOUNDARY INVARIANCE — reassigning an atom from inner→outer
+//      leaves E_tot unchanged when that atom's high and low contributions
+//      agree (high−low for it = 0). The partition is bookkeeping, not physics.
+//  (4) MECHANICAL-COUPLING SANITY — the derived coupling term equals
+//      E_low(real)−E_low(inner)−E_low(outer), reproducing a hand value, and
+//      vanishes when the inner and outer subsystems do not interact
+//      (E_low(real)=E_low(inner)+E_low(outer)).
+//
+// Run:  HEXA_MAC_BUILD_OK=1 hexa build stdlib/qforge/system/qmmm_selftest.hexa -o /tmp/qf_qmmm && /tmp/qf_qmmm
+// PASS: exits printing "qmmm_selftest PASS".
+
+use "stdlib/qforge/system/qmmm"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _ck(name: str, got: float, want: float, tol: float) -> int {
+    let d = _abs(got - want)
+    let w = _abs(want)
+    let rel = if w < 1e-12 { d } else { d / w }
+    if rel <= tol {
+        println("PASS " + name + " (got " + to_string(got) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+
+fn _ck0(name: str, got: float, tol: float) -> int {
+    if _abs(got) <= tol {
+        println("PASS " + name + " (|got|=" + to_string(_abs(got)) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — |got|=" + to_string(_abs(got)) + " not <= " + to_string(tol))
+    return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── CHECK 1 — CONSISTENCY IDENTITY (additive == ONIOM) ────────────────
+    // Three independent input sets. e_high_inner, e_low_real, e_low_inner,
+    // e_low_outer chosen arbitrarily (toy energies in Hartree-like units).
+    // residual must be 0 to round-off for ALL of them — the identity is
+    // algebraic, so any inputs prove it.
+    fails = fails + _ck0("identity set A residual",
+        qmmm_scheme_residual(-12.5, -40.2, -11.9, -25.0), 1e-12)
+    fails = fails + _ck0("identity set B residual",
+        qmmm_scheme_residual(-200.0, -512.34, -198.7, -300.1), 1e-9)
+    fails = fails + _ck0("identity set C residual",
+        qmmm_scheme_residual(3.14159, 7.0, 2.71828, 4.5), 1e-12)
+    // and term-for-term: the two assembled totals are bit-equal on set A.
+    let addA = qmmm_additive_from_levels(-12.5, -40.2, -11.9, -25.0)
+    let oniA = qmmm_oniom2_total(-12.5, -40.2, -11.9)
+    fails = fails + _ck("identity set A additive==ONIOM total", addA, oniA, 1e-12)
+
+    // ── CHECK 2 — WHOLE-SYSTEM MM-ONLY LIMIT ──────────────────────────────
+    // If high ≡ low on the inner region (e_high_inner == e_low_inner), the
+    // ONIOM total = e_low_inner + e_low_real − e_low_inner = e_low_real:
+    // a purely-MM system's QM/MM total is just its MM energy. No bridge
+    // energy is invented. (e_low_outer irrelevant to ONIOM — sanity that
+    // additive, which DOES use it, also lands on e_low_real.)
+    let e_low_real_2 = -88.0
+    let e_low_inner_2 = -33.0
+    let e_low_outer_2 = -50.0
+    let oni_mm = qmmm_oniom2_total(e_low_inner_2, e_low_real_2, e_low_inner_2)
+    fails = fails + _ck("MM-only ONIOM == E_low(real)", oni_mm, e_low_real_2, 1e-12)
+    let add_mm = qmmm_additive_from_levels(e_low_inner_2, e_low_real_2, e_low_inner_2, e_low_outer_2)
+    fails = fails + _ck("MM-only additive == E_low(real)", add_mm, e_low_real_2, 1e-12)
+
+    // ── CHECK 3 — PARTITION-BOUNDARY INVARIANCE ───────────────────────────
+    // Two partitions of the SAME physical system. Whole-system energies are
+    // fixed (e_high_inner is the high-level energy of whatever is inner;
+    // e_low_real fixed). Move one atom inner→outer: e_low_inner and
+    // e_low_outer change, but their SUM-relation through the coupling keeps
+    // E_tot fixed *provided* the moved atom's high contribution equals its
+    // low contribution (so e_high_inner shifts by the same Δ as e_low_inner).
+    // Partition P: inner={A,B}. Partition Q: inner={A}, B→outer.
+    // Δ = low-level contribution of atom B = -4.0 (= high contribution of B,
+    // the invariance precondition).
+    let dB = -4.0
+    // Partition P
+    let eHI_P = -20.0           // high(inner={A,B})
+    let eLO_inner_P = -18.0     // low(inner={A,B})
+    let eLO_outer_P = -30.0     // low(outer)
+    let eLO_real = -55.0        // low(whole) — fixed across partitions
+    let tot_P = qmmm_additive_from_levels(eHI_P, eLO_real, eLO_inner_P, eLO_outer_P)
+    // Partition Q: B leaves inner → both high(inner) and low(inner) drop by dB,
+    // low(outer) gains dB (B's low contribution moves outward). e_low_real fixed.
+    let eHI_Q = eHI_P - dB
+    let eLO_inner_Q = eLO_inner_P - dB
+    let eLO_outer_Q = eLO_outer_P + dB
+    let tot_Q = qmmm_additive_from_levels(eHI_Q, eLO_real, eLO_inner_Q, eLO_outer_Q)
+    fails = fails + _ck("partition P==Q (boundary invariance)", tot_P, tot_Q, 1e-12)
+    // also confirm both equal the ONIOM total of their own partition.
+    fails = fails + _ck("partition P additive==ONIOM",
+        tot_P, qmmm_oniom2_total(eHI_P, eLO_real, eLO_inner_P), 1e-12)
+
+    // ── CHECK 4 — MECHANICAL-COUPLING SANITY ──────────────────────────────
+    // coupling = low(real) − low(inner) − low(outer). Hand value:
+    //   -55.0 − (-18.0) − (-30.0) = -7.0.
+    let coup = qmmm_mechanical_coupling(-55.0, -18.0, -30.0)
+    fails = fails + _ck("mechanical coupling hand value", coup, -7.0, 1e-12)
+    // non-interacting limit: low(real)=low(inner)+low(outer) → coupling=0.
+    let coup0 = qmmm_mechanical_coupling(-48.0, -18.0, -30.0)
+    fails = fails + _ck0("non-interacting coupling == 0", coup0, 1e-12)
+
+    if fails == 0 {
+        println("qmmm_selftest PASS")
+    } else {
+        println("qmmm_selftest FAIL — " + to_string(fails) + " case(s)")
+    }
+}

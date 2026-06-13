@@ -1,0 +1,203 @@
+// HEXA Standard Library — qforge/chip/band_scf_real
+//
+// QFORGE universal-engine · CHIP scale · round-6 brick.
+//   scale ladder (QFORGE.md §122):  chip = device 밴드·수송·열(TCAD).
+//   round-1 (band_transport.hexa)  analytic SPINE (ε(k), diatomic GAP, Landauer, g₀).
+//   round-2 (band_kmesh.hexa)      k-MESH band + 1D van-Hove DOS + mode-count NEGF.
+//   round-3 (band_scf.hexa)        H(k)=T(k)+V wired to the plane-wave SCF structure,
+//                                  BUT V was fed as an ANALYTIC Fourier map (empty-
+//                                  lattice + single Bragg shell) — NOT a converged
+//                                  real-cell scf_pw V_scr(G).  ← the round-3 honest gap.
+//   round-4 (phonon_kappa.hexa)    thermal leg (ballistic N·g₀ floor).
+//   round-5 (negf_scatter.hexa)    coherent Σ-NEGF  T(E)=Tr[Γ_L Gʳ Γ_R Gᵃ].
+//
+// Round-6 CLOSES round-3's honest gap: it runs the REAL stdlib/qforge plane-wave SCF
+// (qforge_scf_pw) on a small cell to a CONVERGED self-consistent density, extracts the
+// SELF-CONSISTENT screening potential V_scr the converged ρ produces, and DROPS IT IN
+// to the SAME R3 H(k)=T(k)+V assembly — promoting the band's potential from an analytic
+// limit to a real self-consistent ε_n(k). That self-consistent H_D is then handed to
+// the R5 NEGF (qforge_chip_negf_transmission_se) — the band leg is finally wired to the
+// real electronic-structure core, end to end:
+//
+//   qforge_scf_pw (REAL SCF) ─converge→ ρ_sc ─V_scr[ρ_sc]→ R3 H(k)=T(k)+V_scr ─eig→ ε_n(k)
+//                                                                  │
+//                                                       band-derived H_D ──→ R5 NEGF T(E)
+//
+// ── The self-consistent screening drop-in (the round-6 kernel · d4 / d19) ─────────
+//   The plane-wave SCF's screening enters the assembler as a G-DIAGONAL local term
+//   V_scr(i) = V_H(ρ)+V_xc(ρ)  (assembler.hexa: `hab + vscr_diag[a]` on the diagonal).
+//   For a charge-neutral cell in the G=0 gauge ⟨V_H⟩=0, so the converged G=0 (spatial-
+//   average) screening is the uniform-electron-gas LDA shift at the SELF-CONSISTENT
+//   mean density: V_scr(G=0) = V_xc(ρ̄_sc), ρ̄_sc read off the CONVERGED ρ. This is the
+//   EXACT slot R3's vshell[0] occupies (R3 selftest (D): V(0) shifts the spectrum
+//   uniformly — the SCF G=0 gauge). So the converged SCF value drops into vshell[0]
+//   UNCHANGED (a data swap — d4), and the resulting H(k)=T(k)+V_scr is a genuinely
+//   self-consistent operator on its G=0 screening leg, not a fixed analytic potential.
+//
+// ── Honest scope (d6 / @L5) ───────────────────────────────────────────────────────
+//   • SELF-CONSISTENT (real SCF): the G=0 screening V_scr(G=0)=V_xc(ρ̄_sc) is extracted
+//     from a CONVERGED qforge_scf_pw run (scf.converged=true asserted, NOT a fixed
+//     potential) — the vshell[0] leg is a real self-consistent number.
+//   • FIXED / ANALYTIC (honestly labeled): the OFF-diagonal Bragg shells V_scr(±g)
+//     (G≠0 Fourier components of the screened lattice potential) need the dense FFT-grid
+//     G-space screening (scf_pw documents this as the next integration piece — the
+//     assembler only carries the G=0 screening on the diagonal it accepts). So the
+//     off-diagonal lattice structure is supplied as a caller `vbragg` (analytic / a vloc
+//     form-factor), NOT self-consistent. This brick proves the WIRING + the self-
+//     consistent G=0 leg; the G≠0 self-consistent screening is round-7+ (FFT-grid).
+//   The split is explicit in every API: `vscr_g0` is the SCF self-consistent leg,
+//   `vbragg` is the fixed off-diagonal leg.  No fabrication — the range is stated.
+//
+//   pub fn qforge_chip_scf_vscr_g0(...)                         -> [float]  // [conv, V_scr(G=0)]
+//   pub fn qforge_chip_scf_real_vshell(vscr_g0, vbragg)         -> [float]  // [V_scr(G=0), vbragg]
+//   pub fn qforge_chip_scf_real_band_eps(a,mmax,k,vscr_g0,vbragg) -> [float] // ε_n(k) ascending
+//   pub fn qforge_chip_scf_real_band_min(a,mmax,k,vscr_g0,vbragg) -> float   // lowest ε(k)
+//   pub fn qforge_chip_scf_real_hd_chain(a,mmax,vscr_g0,vbragg,nsite) -> [float] // n×n H_D
+//   pub fn qforge_chip_scf_real_transmission(a,mmax,vscr_g0,vbragg,nsite,e,eta) -> float // T(E)
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/chip/band_scf_real_selftest.hexa
+use "stdlib/qforge/chip/band_scf"            // R3 H(k)=T(k)+V eig path (d4 data-swap target)
+use "stdlib/qforge/chip/negf_scatter"        // R5 Σ-NEGF T(E) (drop-in target)
+use "stdlib/qforge/scf_pw"                   // the REAL plane-wave SCF (qforge_scf_pw + vscr)
+
+fn _pi_r6() -> float { return 3.14159265358979323846 }
+
+// ══ (1) extract the SELF-CONSISTENT G=0 screening from a REAL small-cell SCF ═══════
+// Runs the REAL stdlib qforge_scf_pw on a small plane-wave cell (the caller passes the
+// G-set + cell volume + electron count + xc_mode), iterates to a CONVERGED density, then
+// reads the self-consistent G=0 screening V_xc(ρ̄_sc) off the converged ρ via the SAME
+// qforge_vscr_diag the SCF uses each iteration (d19 reuse — no re-derived LDA here).
+//
+// Returns [converged, V_scr(G=0)]:
+//   converged = 1.0 if scf.converged (a TRUE self-consistent fixed point), else 0.0.
+//   V_scr(G=0) = the spatial-average screening from the converged ρ (= vscr_diag mean).
+//
+// d6: if the SCF does NOT converge the caller MUST treat the value as a non-self-
+// consistent estimate — converged=0.0 is surfaced verbatim, never papered over.
+// d4: the cell (gvecs · omega · nelec · xc_mode) is data — no material name hardcoded.
+pub fn qforge_chip_scf_vscr_g0(gvecs: [float], omega: float,
+                               nbands: int, nelec: int, xc_mode: int,
+                               mix: float, tol: float, max_iter: int) -> [float] {
+    let mut empty_f: [float] = []
+    let mut empty_i: [int] = []
+    let k0 = [0.0, 0.0, 0.0]
+    // Real SCF: bare neutral cell (no UPF/projectors here — the jellium/free-electron
+    // small cell whose self-consistent fixed point is the uniform-gas LDA shift). The
+    // screening is rebuilt from ρ EACH iteration inside qforge_scf_pw (density-dependent
+    // H_of_rho closure) — this is a genuine self-consistent loop, not a fixed potential.
+    let scf = qforge_scf_pw(k0, gvecs, empty_f, empty_f, empty_f, empty_f, 0.0,
+                            empty_f, empty_i, empty_f, 0, omega, empty_f, xc_mode,
+                            nbands, nelec, mix, tol, max_iter)
+    let conv = if scf.converged { 1.0 } else { 0.0 }
+    // self-consistent G=0 screening: V_xc(ρ̄_sc). ρ̄_sc = mean of the converged ρ; the
+    // assembler's diagonal screening is V_xc evaluated on ρ (qforge_vscr_diag). For the
+    // uniform converged ρ this is a rigid V_xc(ρ̄_sc) on every G → its G=0 value is the
+    // mean of vscr_diag(ρ_sc) (= V_xc(ρ̄_sc) exactly for uniform ρ). xc_mode<0 → 0.
+    if xc_mode < 0 {
+        let z = 0.0
+        let c = conv
+        return [c, z]
+    }
+    let vscr = qforge_vscr_diag(scf.rho, empty_f, xc_mode)   // self-consistent screening
+    let n = len(vscr)
+    if n == 0 {
+        let c2 = conv
+        let z2 = 0.0
+        return [c2, z2]
+    }
+    let mut sum = 0.0
+    let mut i = 0
+    while i < n { sum = sum + vscr[i] ; i = i + 1 }
+    let g0 = sum / to_float(n)              // V_scr(G=0) = spatial-average screening
+    let cc = conv
+    let gg = g0
+    return [cc, gg]
+}
+
+// ══ (2) assemble the R3 vshell from the self-consistent G=0 + fixed off-diag shell ═══
+// vshell[0] = V_scr(G=0)  (the SCF self-consistent leg, from qforge_chip_scf_vscr_g0)
+// vshell[1] = vbragg      (the fixed off-diagonal Bragg shell V_scr(±g) — honest scope:
+//                          this leg is NOT self-consistent; G≠0 screening is round-7+).
+// d4: this is the SAME [V(0), V(±g)] structure R3's qforge_chip_scf_hk_1d consumes —
+// the converged SCF value drops in as a pure data swap, no new assembly path.
+pub fn qforge_chip_scf_real_vshell(vscr_g0: float, vbragg: float) -> [float] {
+    let a = vscr_g0
+    let b = vbragg
+    return [a, b]
+}
+
+// ══ (3) self-consistent ε_n(k) = eig[ T(k) + V_scr ] via the R3 path (d4 data-swap) ══
+// Drops the [V_scr(G=0), vbragg] vshell into R3's qforge_chip_scf_band_eps — the EXACT
+// same H(k)=T(k)+V eig path, now with the SCF-converged G=0 screening on the diagonal.
+// Returns ε_n(k) ascending.
+pub fn qforge_chip_scf_real_band_eps(a: float, mmax: int, k: float,
+                                     vscr_g0: float, vbragg: float) -> [float] {
+    let vshell = qforge_chip_scf_real_vshell(vscr_g0, vbragg)
+    return qforge_chip_scf_band_eps(a, mmax, k, vshell)
+}
+
+// lowest band ε₀(k) with the self-consistent screening folded in.
+pub fn qforge_chip_scf_real_band_min(a: float, mmax: int, k: float,
+                                     vscr_g0: float, vbragg: float) -> float {
+    let vshell = qforge_chip_scf_real_vshell(vscr_g0, vbragg)
+    return qforge_chip_scf_band_min(a, mmax, k, vshell)
+}
+
+// ══ (4) band-derived device Hamiltonian H_D for the R5 NEGF (the drop-in) ════════════
+// The R5 NEGF (qforge_chip_negf_transmission_se) consumes a flat REAL-symmetric n×n
+// device H_D (a 1D chain with contact sites at the two ends). We build that chain from
+// the SELF-CONSISTENT band the SCF screening produced:
+//   • on-site ε_d = ε₀(k=0)  — the lowest band level at Γ (= ½·0² + V_scr(G=0) + the
+//     G=0 part of the Bragg coupling) = the self-consistent band BOTTOM. This is the
+//     real on-site energy the screened lattice gives the device sites.
+//   • hopping t_d derived from the band WIDTH: a 1D tight-binding band ε(k)=ε_d+2t_d cos(ka)
+//     has bandwidth 4|t_d|; we read the SCF band's Γ→zone-boundary span W = ε₀(π/a)−ε₀(0)
+//     of the LOWEST band and set 2|t_d| = W/2  ⇒  t_d = −W/4 (cosine band, t<0 → bonding
+//     minimum at Γ). So the device chain REPRODUCES the self-consistent lowest band.
+// Returns a flat nsite² real-symmetric tridiagonal chain (ε_d on diag, t_d off-diag).
+// d4: nsite is data; any chain length traverses this one builder. d19: the band comes
+// from R3's eig of the SCF-screened H(k) — not a re-derived dispersion.
+pub fn qforge_chip_scf_real_hd_chain(a: float, mmax: int,
+                                     vscr_g0: float, vbragg: float, nsite: int) -> [float] {
+    // self-consistent band: ε₀(Γ) and ε₀(zone boundary) of the lowest band.
+    let kbz = _pi_r6() / a
+    let eps_d = qforge_chip_scf_real_band_min(a, mmax, 0.0, vscr_g0, vbragg)      // Γ
+    let eps_bz = qforge_chip_scf_real_band_min(a, mmax, kbz, vscr_g0, vbragg)     // π/a
+    let width = eps_bz - eps_d                          // lowest-band Γ→edge span (>0)
+    // cosine TB band ε(k)=ε_d+2t_d(cos ka−1) (anchored ε(Γ)=ε_d); at k=π/a cos=−1 →
+    // span = ε(π/a)−ε(Γ) = 2t_d(−1−1) = −4t_d ⇒ t_d = −width/4. t_d<0 (bonding, min at Γ).
+    let t_d = -width / 4.0
+    let mut hd: [float] = []
+    let mut i = 0
+    while i < nsite {
+        let mut j = 0
+        while j < nsite {
+            let mut v = 0.0
+            if i == j { v = eps_d }                     // on-site (self-consistent band bottom)
+            let d = i - j
+            if d == 1 || d == -1 { v = t_d }            // nearest-neighbour hopping
+            hd.push(v)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return hd
+}
+
+// ══ (5) end-to-end: SCF-screened band → device H_D → R5 NEGF T(E) ════════════════════
+// The full round-6 wiring in one call: build the self-consistent band-derived H_D (4),
+// then hand it to the R5 Caroli/Fisher-Lee transmission (qforge_chip_negf_transmission_se)
+// with matched 1D leads (ε₀=ε_d, t=t_d — the leads continue the device chain). Returns
+// the real scalar T(E). This is the band leg wired into the real electronic-structure
+// core, end to end (d4-generic: cell/band/leads all data; d19: R3 eig + R5 NEGF reused).
+pub fn qforge_chip_scf_real_transmission(a: float, mmax: int,
+                                         vscr_g0: float, vbragg: float, nsite: int,
+                                         e: float, eta: float) -> float {
+    let hd = qforge_chip_scf_real_hd_chain(a, mmax, vscr_g0, vbragg, nsite)
+    if len(hd) != nsite * nsite { return 0.0 }
+    // matched leads = the device chain continued: ε₀=ε_d (diag[0]), t=t_d (off-diag).
+    let eps_lead = hd[0]                                 // on-site ε_d
+    let t_lead = if nsite > 1 { hd[1] } else { 0.0 }     // hopping t_d (entry [0,1])
+    // contact hopping tc = t_lead (reflectionless matched contact → ballistic limit).
+    return qforge_chip_negf_transmission_se(hd, nsite, eps_lead, t_lead, t_lead, t_lead, e, eta)
+}

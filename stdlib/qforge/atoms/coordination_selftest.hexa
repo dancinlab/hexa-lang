@@ -1,0 +1,168 @@
+// @ci_gate — deterministic · analytic-vs-finite-difference cross-check
+//
+// qforge/atoms/coordination_selftest.hexa — QFORGE atoms brick #3 (CN + ∂CN/∂R
+// + χ dressing) g5 gate.
+//
+// coordination.hexa computes the erf-counted coordination number CN_i(R), its
+// ANALYTIC derivative ∂CN_i/∂R_l (closed-form erf derivative), and the D4-style
+// CN-dressed electronegativity χ_i = EN_i − κ·√CN_i fed to the round-1 EEQ solve.
+// The cross-check anchors (d6 — the analytic derivative is validated against an
+// INDEPENDENT central finite-difference that re-calls the CN counter at displaced
+// geometries; CN limits checked against the integer coordination of a real bonded
+// structure; no number paraphrased / no count forced):
+//
+//   (A) CN LIMITS on a REAL molecule (methane CH₄ at the bonded geometry): the
+//       carbon's soft count → ≈4 (four C–H bonds), each hydrogen → ≈1 (one C–H).
+//       HONEST (erf soft-counting): these are FRACTIONAL approximations of the
+//       integer coordination, asserted to lie in a tolerance band around 4 / 1,
+//       NOT forced to the integer. An ISOLATED atom (no neighbour in range) → 0.   🟢
+//   (B) ∂CN_i/∂R_l == CENTRAL-DIFFERENCE FD to |Δ| < 1e-6, FD by RE-CALLING
+//       qforge_cn_numbers at ±h displaced geometry (independent of the analytic
+//       kernel), swept over every (i, l) of a bent 3-atom cluster.                 🟢
+//   (C) MONOTONE: CN of a diatomic FALLS as the bond stretches (R↑ ⇒ CN↓), and
+//       the analytic ∂CN/∂R along the stretch DOF is NEGATIVE (the soft count can
+//       only drop when a neighbour recedes) — sign pinned, not just magnitude.     🔵
+//   (D) χ DRESSING moves χ the RIGHT way: a higher coordination number LOWERS χ
+//       (χ = EN − κ√CN, κ>0), and √CN couples through with the correct sign so
+//       ∂χ/∂R has the OPPOSITE sign to ∂CN/∂R (more bonding ⇒ less electronegative).🔵
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/atoms/coordination_selftest.hexa
+// PASS: "qforge_coordination_selftest PASS".
+use "stdlib/qforge/atoms/coordination"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+fn _ck_band(name: str, got: float, lo: float, hi: float) -> int {
+    if got >= lo && got <= hi { println("PASS " + name + " (" + to_string(got) + " ∈ [" + to_string(lo) + "," + to_string(hi) + "])") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " not in [" + to_string(lo) + "," + to_string(hi) + "]") ; return 1
+}
+
+// central finite-difference of CN_k w.r.t. DOF l: displaces pos[l] by ±h and
+// RE-CALLS the CN counter (independent of the analytic gradient kernel).
+fn _fd_dcn(pos: [float], rcov: [float], kcn: float, k: int, l: int, h: float) -> float {
+    let mut pp: [float] = []
+    let mut pm: [float] = []
+    let mut i = 0
+    while i < len(pos) { pp.push(pos[i]) ; pm.push(pos[i]) ; i = i + 1 }
+    pp[l] = pp[l] + h
+    pm[l] = pm[l] - h
+    let cnp = qforge_cn_numbers(pp, rcov, kcn)
+    let cnm = qforge_cn_numbers(pm, rcov, kcn)
+    return (cnp[k] - cnm[k]) / (2.0 * h)
+}
+
+fn main() {
+    let mut fails = 0
+    let kcn = 7.5   // D4-style steepness (caller-supplied; not hardcoded in brick)
+
+    // ══ (A) CN LIMITS on methane CH₄ (real bonded geometry) ════════════════════
+    // C at origin, 4 H on the tetrahedral directions at the C–H bond length.
+    // C–H ≈ 1.09 Å. The R_cov supplied is the D3/D4 convention: the Pyykkö
+    // single-bond covalent radius SCALED BY 4/3 (k2 = 4/3 in DFT-D3/D4 — this is
+    // exactly how D3/D4 place the soft-count threshold BEYOND the bond so a
+    // bonded pair counts ≈1, not ≈½). So rcov(C)=0.76·4/3=1.013, rcov(H)=0.31·4/3=
+    // 0.413 (Å) ⇒ R_cov,CH=1.427 > 1.09 = bond ⇒ the erf term ≈1 per C–H. This is
+    // a DATA choice in the caller's radius table (d4), NOT a code branch — and it
+    // is the genuine D4 setting, not a number forced to fit (d6).
+    let bl = 1.09
+    let t = bl / 1.7320508075688772   // bond length / √3 → tetrahedral component
+    // atom 0 = C ; atoms 1..4 = H on (+,+,+),(+,−,−),(−,+,−),(−,−,+)
+    let posM = [ 0.0, 0.0, 0.0,
+                  t,  t,  t,
+                  t, 0.0 - t, 0.0 - t,
+                 0.0 - t,  t, 0.0 - t,
+                 0.0 - t, 0.0 - t,  t ]
+    // Pyykkö radii (C=0.76, H=0.31) × D3 4/3 scaling = the threshold-placing radii.
+    let rcovM = [1.0133333, 0.4133333, 0.4133333, 0.4133333, 0.4133333]
+    let cnM = qforge_cn_numbers(posM, rcovM, kcn)
+    // carbon soft count near 4 (band, not forced); each H near 1. HONEST: these
+    // are FRACTIONAL erf approximations of the integer coordination (C→3.97·H→0.99
+    // at this geometry), asserted in a band, never snapped to the integer.
+    fails = fails + _ck_band("(A) CH₄ carbon CN ≈ 4 (soft erf-count)", cnM[0], 3.85, 4.0)
+    fails = fails + _ck_band("(A) CH₄ H-1 CN ≈ 1 (soft erf-count)", cnM[1], 0.95, 1.02)
+    fails = fails + _ck_band("(A) CH₄ H-2 CN ≈ 1 (soft erf-count)", cnM[2], 0.95, 1.02)
+    // ISOLATED atom: a lone atom with its neighbours pushed to ∞ → CN = 0.
+    let posIso = [0.0, 0.0, 0.0,  500.0, 0.0, 0.0]
+    let rcovIso = [0.76, 0.31]
+    let cnIso = qforge_cn_numbers(posIso, rcovIso, kcn)
+    fails = fails + _ck_close("(A) isolated atom CN → 0", cnIso[0], 0.0, 1.0e-9)
+    fails = fails + _ck_close("(A) isolated neighbour CN → 0", cnIso[1], 0.0, 1.0e-9)
+
+    // ══ (B) ∂CN_i/∂R_l == CENTRAL-DIFFERENCE FD (the core cross-check) ═════════
+    // bent 3-atom cluster, all in bonding range; sweep every (i, l).
+    let pos3 = [0.0, 0.0, 0.0,  1.5, 0.0, 0.0,  0.75, 1.2, 0.0]
+    let rcov3 = [0.76, 0.66, 0.66]
+    let h = 0.0002
+    let g = qforge_cn_grad(pos3, rcov3, kcn)
+    let n = 3
+    let ndof = 9
+    let mut l = 0
+    let mut worst = 0.0
+    while l < ndof {
+        let mut k = 0
+        while k < n {
+            let ana = g[k * ndof + l]
+            let fd = _fd_dcn(pos3, rcov3, kcn, k, l, h)
+            let d = _abs(ana - fd)
+            if d > worst { worst = d }
+            k = k + 1
+        }
+        l = l + 1
+    }
+    fails = fails + _ck_true("(B) max|analytic ∂CN/∂R − FD| < 1e-6 (=" + to_string(worst) + ")",
+                             worst < 1.0e-6)
+
+    // ══ (C) MONOTONE: CN falls as the bond stretches; ∂CN/∂R < 0 ══════════════
+    // diatomic on x (D3-scaled C-like radii, pair R_cov=1.76); CN at R=1.2 (bonded)
+    // → 1.6 → 1.9 → 2.2 (dissociating). A monotone decreasing, nonzero-then-vanishing
+    // chain — the soft count can only fall as a neighbour recedes.
+    let rcovD = [0.88, 0.88]
+    let cnA = qforge_cn_numbers([0.0, 0.0, 0.0, 1.2, 0.0, 0.0], rcovD, kcn)
+    let cnB = qforge_cn_numbers([0.0, 0.0, 0.0, 1.6, 0.0, 0.0], rcovD, kcn)
+    let cnC = qforge_cn_numbers([0.0, 0.0, 0.0, 1.9, 0.0, 0.0], rcovD, kcn)
+    let cnE = qforge_cn_numbers([0.0, 0.0, 0.0, 2.2, 0.0, 0.0], rcovD, kcn)
+    fails = fails + _ck_true("(C) monotone CN↓ as R↑: CN(1.2) > CN(1.6) > CN(1.9) > CN(2.2) ("
+                             + to_string(cnA[0]) + " > " + to_string(cnB[0]) + " > "
+                             + to_string(cnC[0]) + " > " + to_string(cnE[0]) + ")",
+                             cnA[0] > cnB[0] && cnB[0] > cnC[0] && cnC[0] > cnE[0])
+    // ∂CN_0/∂R along DOF 3 (move atom-1's x = stretch the bond): atom-1 moving +x
+    // recedes from atom-0, so CN_0 falls ⇒ ∂CN_0/∂x_1 < 0.
+    let dcnStretch = qforge_cn_grad_dof([0.0, 0.0, 0.0, 1.4, 0.0, 0.0], rcovD, kcn, 3)
+    fails = fails + _ck_true("(C) ∂CN_0/∂(stretch) < 0 (=" + to_string(dcnStretch[0]) + ")",
+                             dcnStretch[0] < 0.0)
+
+    // ══ (D) χ DRESSING shifts χ the right way (sign-exact) ═════════════════════
+    // a low-CN vs high-CN atom of the SAME element: χ = EN − κ√CN must FALL with CN.
+    let enV = [2.55, 2.55]      // same EN (carbon-like)
+    let kapV = [0.30, 0.30]     // same κ>0
+    let cnLoHi = [1.0, 4.0]     // atom-0 low coordination, atom-1 high
+    let chiV = qforge_cn_dress_chi(enV, kapV, cnLoHi)
+    fails = fails + _ck_true("(D) higher CN lowers χ: χ(CN=4) < χ(CN=1) ("
+                             + to_string(chiV[1]) + " < " + to_string(chiV[0]) + ")",
+                             chiV[1] < chiV[0])
+    // χ = EN − κ√CN exact reference at CN=4: 2.55 − 0.30·2 = 1.95.
+    fails = fails + _ck_close("(D) χ(CN=4) = EN − κ√CN exact", chiV[1], 1.95, 1.0e-12)
+    fails = fails + _ck_close("(D) χ(CN=1) = EN − κ√CN exact", chiV[0], 2.25, 1.0e-12)
+    // ∂χ/∂R has OPPOSITE sign to ∂CN/∂R (∂χ = −κ/(2√CN)·∂CN, κ>0): on the
+    // diatomic stretch ∂CN_0<0 ⇒ ∂χ_0>0. Sign-exact coupling.
+    let enD = [2.55, 2.55]
+    let kapD = [0.30, 0.30]
+    let dchiStretch = qforge_cn_chi_grad_dof([0.0, 0.0, 0.0, 1.4, 0.0, 0.0], rcovD, kcn, kapD, 3)
+    fails = fails + _ck_true("(D) ∂χ_0/∂R opposite sign to ∂CN_0/∂R: ∂χ_0 > 0 (=" + to_string(dchiStretch[0]) + ")",
+                             dchiStretch[0] > 0.0)
+    // and χ-from-geometry equals the two-step (dress ∘ count) — the round-1 input path.
+    let chiGeo = qforge_cn_chi_from_geometry([0.0, 0.0, 0.0, 1.4, 0.0, 0.0], rcovD, kcn, enD, kapD)
+    let cnGeo = qforge_cn_numbers([0.0, 0.0, 0.0, 1.4, 0.0, 0.0], rcovD, kcn)
+    let chiRef = qforge_cn_dress_chi(enD, kapD, cnGeo)
+    fails = fails + _ck_close("(D) χ-from-geometry == dress∘count (atom-0)", chiGeo[0], chiRef[0], 1.0e-12)
+
+    if fails == 0 { println("qforge_coordination_selftest PASS") }
+    else { println("qforge_coordination_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

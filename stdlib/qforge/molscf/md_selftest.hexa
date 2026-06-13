@@ -1,0 +1,340 @@
+// @ci_gate — deterministic · network-free · MOLSCF McMurchie–Davidson g5 gate
+//
+// md_selftest.hexa — QFORGE MOLSCF brick 6/N (McMurchie–Davidson higher-L
+// integrals) g5 gate. Three verdicts, all VERBATIM (d6 — no forced numbers):
+//
+//   (a) L=0 REDUCTION — the MD overlap/kinetic/nuclear/ERI at L=0 reproduce the
+//       brick-1/2 s-only closed forms (gaussian_/coulomb_integrals) to ≤1e-12
+//       (S/T) / ≤1e-6 (V/ERI, the shared erf_fn Boys floor). Proves the general
+//       recursion is exact on the known s anchor (STO-3G H₂ S=0.6593182001).        🔵
+//
+//   (b) p-SHELL vs INDEPENDENT VALUES — (i) ⟨2pₓ|2pₓ⟩ self-overlap = 1 (Cartesian
+//       normalization), (ii) the single-Gaussian p kinetic self-energy
+//       ⟨pₓ|−½∇²|pₓ⟩ = a(2L+3)/2 = 2.5·a (L=1) — an exact analytic value, here
+//       a=1 ⇒ 2.5 — and (iii) ⟨pₓ|pᵧ⟩=0, ⟨s|pₓ⟩=0 same-center parity.               🔵
+//
+//   (c) END-TO-END H₂O / STO-3G — the FULL 7×7 (S, H_core) + 7⁴ ERI tensor is
+//       assembled from md_integrals (O needs the 2p shell) and driven through the
+//       UNCHANGED rhf_scf (rhf.hexa, brick 4+5). The converged E_total is checked
+//       vs the standard HF/STO-3G water reference E_total = −74.961 754 Ha
+//       (Standard, "A Hartree-Fock Calculation of the Water Molecule", CHMY 564,
+//       MSU 2015; geometry R(O-H)=0.95 Å ∠HOH=104.5°, Gaussian-09 standard
+//       orientation). |Δ| reported VERBATIM. MO eigenvalues vs the same ref.       🔵
+//
+// HONEST (d6): the converged E_total is printed VERBATIM and |Δ| reported — the
+// −74.9618 Ha target is NOT forced. The reference's printed V(2pₓ) tableau entry
+// (−9.926) is a transcription error: an INDEPENDENT scipy McMurchie–Davidson
+// reproduces THIS code's −9.9926, and the in-plane V(2pᵧ)/V(2p_z) (−10.152 /
+// −10.088) match the reference exactly; the converged Gaussian-09 energy
+// (−74.961754) is the authoritative anchor and is what (c) gates on.
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/molscf/md_selftest.hexa
+// PASS: "qforge_molscf_md_selftest PASS".
+use "stdlib/qforge/molscf/gaussian_integrals"
+use "stdlib/qforge/molscf/coulomb_integrals"
+use "stdlib/qforge/molscf/md_integrals"
+use "stdlib/qforge/molscf/rhf"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+// ── contracted MD overlap of two Cartesian shells (per-prim Cartesian norm) ───
+fn md_ov(la: [int], al: [float], co: [float], A: [float],
+         lb: [int], bl: [float], bo: [float], B: [float]) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < len(al) {
+        let mut j = 0
+        while j < len(bl) {
+            let ni = md_norm_prim(la, al[i])
+            let nj = md_norm_prim(lb, bl[j])
+            s = s + co[i] * bo[j] * ni * nj * md_overlap_prim(la, al[i], A, lb, bl[j], B)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return s
+}
+fn md_kin(la: [int], al: [float], co: [float], A: [float],
+          lb: [int], bl: [float], bo: [float], B: [float]) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < len(al) {
+        let mut j = 0
+        while j < len(bl) {
+            let ni = md_norm_prim(la, al[i])
+            let nj = md_norm_prim(lb, bl[j])
+            s = s + co[i] * bo[j] * ni * nj * md_kinetic_prim(la, al[i], A, lb, bl[j], B)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return s
+}
+fn md_nuc(la: [int], al: [float], co: [float], A: [float],
+          lb: [int], bl: [float], bo: [float], B: [float], z: float, C: [float]) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < len(al) {
+        let mut j = 0
+        while j < len(bl) {
+            let ni = md_norm_prim(la, al[i])
+            let nj = md_norm_prim(lb, bl[j])
+            s = s + co[i] * bo[j] * ni * nj * md_nuclear_prim(la, al[i], A, lb, bl[j], B, z, C)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return s
+}
+// ── contracted MD ERI (μν|σλ) of four Cartesian shells ───────────────────────
+fn md_eri(
+    la: [int], al: [float], ao: [float], A: [float],
+    lb: [int], bl: [float], bo: [float], B: [float],
+    lc: [int], cl: [float], cco: [float], C: [float],
+    ld: [int], dl: [float], dco: [float], D: [float]
+) -> float {
+    let mut v = 0.0
+    let mut i = 0
+    while i < len(al) {
+        let mut j = 0
+        while j < len(bl) {
+            let mut k = 0
+            while k < len(cl) {
+                let mut l = 0
+                while l < len(dl) {
+                    let w = ao[i] * bo[j] * cco[k] * dco[l]
+                    let ni = md_norm_prim(la, al[i])
+                    let nj = md_norm_prim(lb, bl[j])
+                    let nk = md_norm_prim(lc, cl[k])
+                    let nl = md_norm_prim(ld, dl[l])
+                    v = v + w * ni * nj * nk * nl
+                        * md_eri_prim(la, al[i], A, lb, bl[j], B, lc, cl[k], C, ld, dl[l], D)
+                    l = l + 1
+                }
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return v
+}
+
+fn main() {
+    let mut fails = 0
+    let pi = 3.141592653589793
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  (a) L=0 REDUCTION — MD == brick-1/2 s closed forms
+    // ══════════════════════════════════════════════════════════════════════════
+    println("── (a) L=0 reduction: MD vs brick-1/2 s closed forms ──")
+    let a = 3.42525091
+    let b = 0.62391373
+    let A0 = [0.0, 0.0, 0.0]
+    let B0 = [1.4, 0.0, 0.0]
+    let s0 = [0, 0, 0]
+    let na = md_norm_prim(s0, a)
+    let nb = md_norm_prim(s0, b)
+    // overlap
+    let s_md = na * nb * md_overlap_prim(s0, a, A0, s0, b, B0)
+    let s_br = gint_overlap_s(a, b, A0, B0)
+    fails = fails + _ck_close("(a) MD overlap == brick S (≤1e-12)", s_md, s_br, 1.0e-12)
+    // STO-3G H₂ S12 contracted anchor S=0.6593182001
+    let alpha = [3.42525091, 0.62391373, 0.16885540]
+    let coeff = [0.15432897, 0.53532814, 0.44463454]
+    let Hb14 = [1.4, 0.0, 0.0]
+    let s12_md = md_ov(s0, alpha, coeff, A0, s0, alpha, coeff, Hb14)
+    fails = fails + _ck_close("(a) STO-3G H₂ S12 = 0.6593182001 (MD)", s12_md, 0.6593182001, 1.0e-9)
+    // kinetic
+    let t_md = na * nb * md_kinetic_prim(s0, a, A0, s0, b, B0)
+    let t_br = gint_kinetic_s(a, b, A0, B0)
+    fails = fails + _ck_close("(a) MD kinetic == brick T (≤1e-12)", t_md, t_br, 1.0e-12)
+    // nuclear (shared erf_fn Boys floor ≤1e-6)
+    let Cc = [0.7, 0.0, 0.0]
+    let v_md = na * nb * md_nuclear_prim(s0, a, A0, s0, b, B0, 1.0, Cc)
+    let v_br = cint_nuclear_s(a, b, A0, B0, 1.0, Cc)
+    fails = fails + _ck_close("(a) MD nuclear == brick V (≤1e-6)", v_md, v_br, 1.0e-6)
+    // ERI
+    let cc = 0.16885540
+    let dd = 3.42525091
+    let CC = [0.0, 1.0, 0.0]
+    let DD = [0.0, 0.0, 1.0]
+    let nc = md_norm_prim(s0, cc)
+    let nd = md_norm_prim(s0, dd)
+    let e_md = na * nb * nc * nd * md_eri_prim(s0, a, A0, s0, b, B0, s0, cc, CC, s0, dd, DD)
+    let e_br = cint_eri_s(a, A0, b, B0, cc, CC, dd, DD)
+    fails = fails + _ck_close("(a) MD ERI == brick (ab|cd) (≤1e-6)", e_md, e_br, 1.0e-6)
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  (b) p-SHELL vs INDEPENDENT VALUES
+    // ══════════════════════════════════════════════════════════════════════════
+    println("── (b) p-shell vs independent analytic values ──")
+    let px = [1, 0, 0]
+    let py = [0, 1, 0]
+    let ap = 1.0
+    let npx = md_norm_prim(px, ap)
+    // (i) ⟨pₓ|pₓ⟩ self-overlap = 1
+    let pp_self = npx * npx * md_overlap_prim(px, ap, A0, px, ap, A0)
+    fails = fails + _ck_close("(b)(i) ⟨pₓ|pₓ⟩ self-overlap = 1", pp_self, 1.0, 1.0e-12)
+    // (ii) ⟨pₓ|−½∇²|pₓ⟩ = a(2L+3)/2 = 2.5·a, a=1 ⇒ 2.5  (exact analytic)
+    let t_pp = npx * npx * md_kinetic_prim(px, ap, A0, px, ap, A0)
+    fails = fails + _ck_close("(b)(ii) ⟨pₓ|T|pₓ⟩ = a(2L+3)/2 = 2.5 (a=1)", t_pp, 2.5, 1.0e-12)
+    // (iii) ⟨pₓ|pᵧ⟩ = 0 and ⟨s|pₓ⟩ = 0 same-center parity
+    let npy = md_norm_prim(py, ap)
+    let pxpy = npx * npy * md_overlap_prim(px, ap, A0, py, ap, A0)
+    fails = fails + _ck_close("(b)(iii) ⟨pₓ|pᵧ⟩ = 0 (parity)", pxpy, 0.0, 1.0e-14)
+    let ns = md_norm_prim(s0, ap)
+    let spx = ns * npx * md_overlap_prim(s0, ap, A0, px, ap, A0)
+    fails = fails + _ck_close("(b)(iii) ⟨s|pₓ⟩ = 0 (parity)", spx, 0.0, 1.0e-14)
+    // p-nuclear rotational symmetry: ⟨pₓ|V|pₓ⟩(nuc@x) == ⟨p_z|V|p_z⟩(nuc@z)
+    let pz = [0, 0, 1]
+    let npz = md_norm_prim(pz, ap)
+    let Cx = [1.3, 0.0, 0.0]
+    let Cz = [0.0, 0.0, 1.3]
+    let vx = npx * npx * md_nuclear_prim(px, ap, A0, px, ap, A0, 1.0, Cx)
+    let vz = npz * npz * md_nuclear_prim(pz, ap, A0, pz, ap, A0, 1.0, Cz)
+    fails = fails + _ck_close("(b) p-nuclear rotational symmetry ⟨pₓ|V|pₓ⟩=⟨p_z|V|p_z⟩", vx, vz, 1.0e-12)
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  (c) END-TO-END  H₂O / STO-3G  through the UNCHANGED rhf_scf
+    // ══════════════════════════════════════════════════════════════════════════
+    println("── (c) H₂O / STO-3G end-to-end (unchanged rhf_scf) ──")
+    // geometry (Å → bohr), Gaussian-09 standard orientation (yz-plane)
+    let ang = 1.8897259886
+    let O  = [0.0,  0.0,            0.116321 * ang]
+    let Ha = [0.0,  0.751155 * ang, 0.0 - 0.465285 * ang]
+    let Hbz = [0.0, 0.0 - 0.751155 * ang, 0.0 - 0.465285 * ang]
+    // STO-3G basis (Pople, EMSL): O 1s, O 2sp (shared exponents), H 1s.
+    let o1a = [130.70932, 23.808861, 6.4436083]
+    let o1d = [0.15432897, 0.53532814, 0.44463454]
+    let o2a = [5.0331513, 1.1695961, 0.3803890]
+    let o2sd = [0.0 - 0.09996723, 0.39951283, 0.70011547]
+    let o2pd = [0.15591627, 0.60768372, 0.39195739]
+    let ha = [3.42525091, 0.62391373, 0.16885540]
+    let hd = [0.15432897, 0.53532814, 0.44463454]
+    let n = 7
+    // per-AO descriptor arrays (basis order 1sO,2sO,2pxO,2pyO,2pzO,1sHa,1sHb)
+    // l (cart powers), alphas, coeffs, center — indexed 0..6.
+    let L0 = [
+        [0,0,0], [0,0,0], [1,0,0], [0,1,0], [0,0,1], [0,0,0], [0,0,0]
+    ]
+    let AL = [o1a, o2a, o2a, o2a, o2a, ha, ha]
+    let CO = [o1d, o2sd, o2pd, o2pd, o2pd, hd, hd]
+    let CEN = [O, O, O, O, O, Ha, Hbz]
+
+    // ── overlap S & core Hamiltonian H = T + V (7×7 flat) ──
+    let mut S = []
+    let mut hcore = []
+    let mut mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu < n {
+            let s = md_ov(L0[mu], AL[mu], CO[mu], CEN[mu], L0[nu], AL[nu], CO[nu], CEN[nu])
+            let t = md_kin(L0[mu], AL[mu], CO[mu], CEN[mu], L0[nu], AL[nu], CO[nu], CEN[nu])
+            // V summed over the 3 nuclei (O Z=8, Ha Z=1, Hb Z=1)
+            let v_o = md_nuc(L0[mu], AL[mu], CO[mu], CEN[mu], L0[nu], AL[nu], CO[nu], CEN[nu], 8.0, O)
+            let v_a = md_nuc(L0[mu], AL[mu], CO[mu], CEN[mu], L0[nu], AL[nu], CO[nu], CEN[nu], 1.0, Ha)
+            let v_b = md_nuc(L0[mu], AL[mu], CO[mu], CEN[mu], L0[nu], AL[nu], CO[nu], CEN[nu], 1.0, Hbz)
+            S.push(s)
+            hcore.push(t + v_o + v_a + v_b)
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    // honest provenance: print the diagonal anchors vs the reference matrices.
+    println("  S[2,1]=" + to_string(S[2 * n + 1]) + " (ref 0.237)  S[5,1]=" + to_string(S[5 * n + 1]) + " (ref 0.479)")
+    println("  H[0,0]=" + to_string(hcore[0]) + " (ref −32.730)  H[1,1]=" + to_string(hcore[1 * n + 1]) + " (ref −9.343)")
+
+    // ── two-electron tensor (μν|σλ), 7⁴ entries, with 8-fold symmetry reuse ──
+    //   Compute only the canonical (μ≥ν, σ≥λ, (μν)≥(σλ)) unique integrals, then
+    //   scatter to all 8 permutations. n⁴=2401 → 406 unique (the SCF cost floor).
+    let mut eri = []
+    let mut z = 0
+    while z < n * n * n * n { eri.push(0.0) ; z = z + 1 }
+    mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu <= mu {
+            let mn = mu * (mu + 1) / 2 + nu
+            let mut sg = 0
+            while sg < n {
+                let mut lm = 0
+                while lm <= sg {
+                    let sl = sg * (sg + 1) / 2 + lm
+                    if mn >= sl {
+                        let val = md_eri(
+                            L0[mu], AL[mu], CO[mu], CEN[mu], L0[nu], AL[nu], CO[nu], CEN[nu],
+                            L0[sg], AL[sg], CO[sg], CEN[sg], L0[lm], AL[lm], CO[lm], CEN[lm])
+                        // scatter to the 8 permutations of (μν|σλ).
+                        eri[((mu*n+nu)*n+sg)*n+lm] = val
+                        eri[((nu*n+mu)*n+sg)*n+lm] = val
+                        eri[((mu*n+nu)*n+lm)*n+sg] = val
+                        eri[((nu*n+mu)*n+lm)*n+sg] = val
+                        eri[((sg*n+lm)*n+mu)*n+nu] = val
+                        eri[((lm*n+sg)*n+mu)*n+nu] = val
+                        eri[((sg*n+lm)*n+nu)*n+mu] = val
+                        eri[((lm*n+sg)*n+nu)*n+mu] = val
+                    }
+                    lm = lm + 1
+                }
+                sg = sg + 1
+            }
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+
+    // ── nuclear repulsion E_nuc = Σ_{A<B} Z_A Z_B / R_AB ──
+    fn _dist(P: [float], Q: [float]) -> float {
+        let dx = P[0]-Q[0]
+        let dy = P[1]-Q[1]
+        let dz = P[2]-Q[2]
+        return sqrt(dx*dx + dy*dy + dz*dz)
+    }
+    let e_nuc = 8.0 * 1.0 / _dist(O, Ha) + 8.0 * 1.0 / _dist(O, Hbz) + 1.0 * 1.0 / _dist(Ha, Hbz)
+    println("  E_nuc = " + to_string(e_nuc) + " Ha")
+
+    // ── run the UNCHANGED rhf_scf (rhf.hexa, brick 4+5) ──
+    //   10 electrons → 5 doubly-occupied MOs. mix=1.0 (no damping), 200 iter cap.
+    let out = rhf_scf(S, hcore, eri, n, 5, e_nuc, 200, 1.0e-9, 1.0)
+    let e_total = out[0]
+    let iters = out[1]
+    let e_elec = out[2]
+    let eps = out[5]
+    let converged = out[6]
+
+    let e_ref = 0.0 - 74.961754063
+    println("── RHF SCF result (VERBATIM) ──")
+    println("  iters     = " + to_string(iters))
+    println("  converged = " + to_string(converged))
+    println("  E_elec    = " + to_string(e_elec) + " Ha")
+    println("  E_total   = " + to_string(e_total) + " Ha   (ref −74.961754)")
+    println("  |Δ|       = " + to_string(_abs(e_total - e_ref)) + " Ha")
+    println("  ε occ = " + to_string(eps[0]) + " " + to_string(eps[1]) + " " + to_string(eps[2]) + " " + to_string(eps[3]) + " " + to_string(eps[4]))
+    println("  ε vir = " + to_string(eps[5]) + " " + to_string(eps[6]))
+    println("  ref ε = −20.24094 −1.27218 −0.62173 −0.45392 −0.39176 | 0.61293 0.75095")
+
+    // ── (c) gates ──
+    fails = fails + _ck_true("(c) SCF converged", converged)
+    fails = fails + _ck_close("(c) H₂O STO-3G E_total = −74.961754 Ha", e_total, e_ref, 1.0e-4)
+    // MO eigenvalues vs the reference (5e-4 — STO-3G basis-printed precision).
+    fails = fails + _ck_close("(c) ε[0] core (1a₁) = −20.24094", eps[0], 0.0 - 20.24094, 5.0e-4)
+    fails = fails + _ck_close("(c) ε[2] (1b₂) = −0.62173", eps[2], 0.0 - 0.62173, 5.0e-4)
+    fails = fails + _ck_close("(c) ε[4] HOMO (1b₁) = −0.39176", eps[4], 0.0 - 0.39176, 5.0e-4)
+    fails = fails + _ck_close("(c) ε[5] LUMO (4a₁) = +0.61293", eps[5], 0.61293, 5.0e-4)
+    fails = fails + _ck_true("(c) ε ascending (occ < vir)", eps[4] < eps[5])
+
+    if fails == 0 {
+        println("qforge_molscf_md_selftest PASS")
+    } else {
+        println("qforge_molscf_md_selftest FAIL (" + to_string(fails) + ")")
+    }
+}

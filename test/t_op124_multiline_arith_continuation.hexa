@@ -1,0 +1,89 @@
+// test/t_op124_multiline_arith_continuation.hexa
+//
+// HEXA-0POD OP-124 · regression guard for handoff f37015ac
+//   "front-end bug: multi-LINE arithmetic continuation drops trailing term"
+//
+// A multi-line arithmetic expression split across physical lines must sum
+// ALL terms — the historical bug (INBOX #1703, fixed by commit 02616b75e
+// `fix(parser): include Minus in additive newline-continuation`) silently
+// dropped the final term. This guard FAILS if continuation regresses.
+//
+// Covers: trailing-operator continuation (`a +\n b`), leading-operator
+// continuation (`a\n + b`), Plus and Minus, long chains, and floats — the
+// exact surfaces of the parser additive-loop newline-continuation (see
+// compiler/parse/parser.hexa:600 + self/parser.hexa:3377).
+//
+// Run:  hexa run test/t_op124_multiline_arith_continuation.hexa
+// Pass = stdout final line `__OP124_MULTILINE__ PASS`.
+
+let mut pass = 0
+let mut fail = 0
+
+fn check(name: string, got: i64, want: i64) {
+    if got == want {
+        pass = pass + 1
+    } else {
+        fail = fail + 1
+        println("[FAIL] " + name + " got=" + str(got) + " want=" + str(want))
+    }
+}
+
+fn checkf(name: string, got: f64, want: f64) {
+    if got == want {
+        pass = pass + 1
+    } else {
+        fail = fail + 1
+        println("[FAIL] " + name)
+    }
+}
+
+// trailing-operator continuation (the reported form)
+let a = 1 +
+    2 +
+    3
+check("trailing 1+2+3", a, 6)
+
+let b = 100 +
+    20 +
+    5
+check("trailing 100+20+5 (no dropped term)", b, 125)
+
+// leading-operator continuation
+let c = 1
+    + 2
+    + 3
+    + 4
+check("leading +", c, 10)
+
+// long chain — drops would compound
+let d = 10 +
+    20 +
+    30 +
+    40 +
+    50
+check("long chain 150", d, 150)
+
+// mixed Plus/Minus (the #1703 Minus-continuation fix)
+let e = 100 -
+    10 +
+    5
+check("mixed -/+ 95", e, 95)
+
+let f = 1
+    - 2
+    + 10
+check("leading minus", f, 9)
+
+// floats
+let g = 1.5 +
+    2.5 +
+    3.0
+checkf("float 7.0", g, 7.0)
+
+println("")
+println("OP-124 multiline arith: PASS=" + str(pass) + " FAIL=" + str(fail))
+if fail > 0 {
+    println("__OP124_MULTILINE__ FAIL")
+} else {
+    println("__OP124_MULTILINE__ PASS")
+}

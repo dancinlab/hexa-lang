@@ -1,0 +1,310 @@
+// HEXA Standard Library — qforge/molscf/rhf
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE MOLSCF front-end brick 4+5/N — the Fock build (H_core + G[P]) and the
+// closed-shell Roothaan RHF SCF loop (F C = S C ε), the keystone that turns the
+// brick-1/2/3 molecular integrals (S, T, V, (ab|cd)) into a real ab-initio
+// molecular total energy. This OPENS the finite-molecule SCF that QFORGE's
+// periodic plane-wave engine (scf_pw.hexa) cannot serve — no Bloch k, the
+// wavefunction decays, the natural basis is atom-centered Gaussians.
+//
+// ── d4 generic dispatch — instance = manifest, no name hardcoding ─────────────
+//   rhf_scf consumes a precomputed integral set (S, H_core, the (ab|cd) tensor)
+//   + occupation + nuclear repulsion. The MOLECULE is the manifest (geometry +
+//   basis → those matrices); there is NO per-molecule branch. H₂, He, H₂O all
+//   traverse rhf_scf unchanged — only the input matrices differ.
+//
+// ── Fock build  F = H_core + G[P]   (Szabo & Ostlund eq. 3.154) ──────────────
+//   H_core = T + V_nuc          (kinetic + summed nuclear attraction)
+//   G[P]_μν = Σ_λσ P_λσ [ (μν|σλ) − ½ (μλ|σν) ]   =  J − ½K
+//   with the density  P_λσ = 2 Σ_a C_λa C_σa  (sum over OCCUPIED MOs; the
+//   factor 2 is the closed-shell double occupation). The ERIs are supplied in
+//   the chemists' (μν|σλ) convention exactly as cint_eri produces them.
+//
+// ── Roothaan generalized eigenproblem  F C = S C ε ───────────────────────────
+//   The AO basis is NON-orthogonal (S ≠ I). We Löwdin-symmetric-orthogonalize:
+//     S^{-½} = U diag(λ^{-½}) Uᵀ      (S = U diag(λ) Uᵀ via eigh, d19 reuse)
+//     F' = S^{-½} F S^{-½}            (orthogonal-basis Fock)
+//     F' C' = C' ε                    (ordinary symmetric eigenproblem, eigh)
+//     C  = S^{-½} C'                  (back-transform to the AO basis)
+//   The occupied C columns rebuild P; iterate to self-consistency.
+//
+// ── Total energy ─────────────────────────────────────────────────────────────
+//   E_elec = ½ Σ_μν P_μν ( H_core_μν + F_μν )      (Szabo eq. 3.184)
+//   E_total = E_elec + E_nuc          (E_nuc = Σ_{A<B} Z_A Z_B / R_AB)
+//
+// ── Honest scope (d6) ────────────────────────────────────────────────────────
+//   round-3 = the Fock build + closed-shell RHF SCF over a SUPPLIED integral set
+//   (any basis/geometry whose S, H_core, ERIs are precomputed by brick 1/2/3).
+//   Simple density mixing (no DIIS yet — DIIS is a convergence accelerator, not
+//   a correctness change; round-4). The g5 anchor is the Szabo H₂/STO-3G worked
+//   example E_total ≈ −1.1167 Ha — the actual converged value is reported
+//   VERBATIM, never forced. p/d angular momentum + analytic force = round-4+.
+//
+// reuse (d19 · d3): eigh from stdlib/alloc/math/eigen (the ONLY linear-algebra
+//   primitive — both the Löwdin S^{-½} and the F' diagonalization); the
+//   integrals from brick 1/2/3. No new eigensolver / matmul primitive minted.
+
+use "stdlib/alloc/math/eigen"
+
+// ════════════════════════════════════════════════════════════════════════════
+//   small dense linear-algebra helpers (row-major flat [n*n], self-contained)
+// ════════════════════════════════════════════════════════════════════════════
+
+// C = A · B   (all n×n, row-major flat).
+pub fn rhf_matmul(A: [float], B: [float], n: int) -> [float] {
+    let mut C = []
+    let mut i = 0
+    while i < n {
+        let mut j = 0
+        while j < n {
+            let mut s = 0.0
+            let mut k = 0
+            while k < n {
+                s = s + A[i * n + k] * B[k * n + j]
+                k = k + 1
+            }
+            C.push(s)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return C
+}
+
+// Aᵀ  (n×n, row-major flat).
+pub fn rhf_transpose(A: [float], n: int) -> [float] {
+    let mut T = []
+    let mut i = 0
+    while i < n {
+        let mut j = 0
+        while j < n {
+            T.push(A[j * n + i])
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return T
+}
+
+// ── Löwdin symmetric orthogonalizer  S^{-½} = U diag(λ^{-½}) Uᵀ ──────────────
+//   S is symmetric positive-definite (an overlap matrix). eigh returns
+//   [vals desc, vecs rows]; vecs[k] is the k-th eigenvector (length n). We
+//   reassemble S^{-½}_μν = Σ_k λ_k^{-½} U_μk U_νk, with U_μk = vecs[k][μ].
+//   A non-positive eigenvalue (linear dependence) is floored to skip its
+//   contribution (kept honest — reported, not silently fabricated).
+pub fn rhf_s_inv_sqrt(S: [float], n: int) -> [float] {
+    let eg = eigh(S, n)
+    let vals = eg[0]
+    let vecs = eg[1]
+    let mut M = []
+    let mut mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu < n {
+            let mut acc = 0.0
+            let mut k = 0
+            while k < n {
+                let lam = vals[k]
+                if lam > 1.0e-12 {
+                    let inv = 1.0 / sqrt(lam)
+                    let vk = vecs[k]
+                    acc = acc + inv * vk[mu] * vk[nu]
+                }
+                k = k + 1
+            }
+            M.push(acc)
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    return M
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   density matrix
+// ════════════════════════════════════════════════════════════════════════════
+
+// Closed-shell density  P_μν = 2 Σ_{a∈occ} C_μa C_νa .
+//   C is n×n row-major (C_μa = C[μ*n + a]); n_occ = number of doubly-filled MOs.
+//   The factor 2 is the closed-shell double occupation.
+pub fn rhf_density(C: [float], n: int, n_occ: int) -> [float] {
+    let mut P = []
+    let mut mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu < n {
+            let mut s = 0.0
+            let mut a = 0
+            while a < n_occ {
+                s = s + C[mu * n + a] * C[nu * n + a]
+                a = a + 1
+            }
+            P.push(2.0 * s)
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    return P
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   Fock build  F = H_core + G[P]
+// ════════════════════════════════════════════════════════════════════════════
+
+// Two-electron index into the flat ERI tensor (chemists' (μν|σλ), n^4 entries).
+//   eri[ ((μ*n + ν)*n + σ)*n + λ ] = (μν|σλ).
+fn rhf_eri_at(eri: [float], n: int, mu: int, nu: int, sg: int, lm: int) -> float {
+    return eri[((mu * n + nu) * n + sg) * n + lm]
+}
+
+// G[P]_μν = Σ_λσ P_λσ [ (μν|σλ) − ½ (μλ|σν) ]  = J − ½K   (Szabo eq. 3.154).
+pub fn rhf_g_matrix(P: [float], eri: [float], n: int) -> [float] {
+    let mut G = []
+    let mut mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu < n {
+            let mut g = 0.0
+            let mut lm = 0
+            while lm < n {
+                let mut sg = 0
+                while sg < n {
+                    // P_λσ with λ=lm, σ=sg
+                    let pls = P[lm * n + sg]
+                    let coul = rhf_eri_at(eri, n, mu, nu, sg, lm)   // (μν|σλ)
+                    let exch = rhf_eri_at(eri, n, mu, lm, sg, nu)   // (μλ|σν)
+                    g = g + pls * (coul - 0.5 * exch)
+                    sg = sg + 1
+                }
+                lm = lm + 1
+            }
+            G.push(g)
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    return G
+}
+
+// F = H_core + G[P]   (both n×n row-major flat).
+pub fn rhf_fock(hcore: [float], P: [float], eri: [float], n: int) -> [float] {
+    let G = rhf_g_matrix(P, eri, n)
+    let mut F = []
+    let mut i = 0
+    while i < n * n {
+        F.push(hcore[i] + G[i])
+        i = i + 1
+    }
+    return F
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   energy
+// ════════════════════════════════════════════════════════════════════════════
+
+// Electronic energy  E_elec = ½ Σ_μν P_μν ( H_core_μν + F_μν )  (Szabo 3.184).
+pub fn rhf_energy_elec(P: [float], hcore: [float], F: [float], n: int) -> float {
+    let mut e = 0.0
+    let mut i = 0
+    while i < n * n {
+        e = e + P[i] * (hcore[i] + F[i])
+        i = i + 1
+    }
+    return 0.5 * e
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   the SCF driver  F C = S C ε
+// ════════════════════════════════════════════════════════════════════════════
+
+// One Roothaan diagonalization step in the orthogonal basis.
+//   Returns [ C (n×n AO MO-coeffs), eps (length-n MO energies, ASCENDING) ].
+//   F' = X F X  (X = S^{-½} symmetric);  F' C' = C' ε;  C = X C'.
+//   eigh returns eigenvalues DESCENDING — we re-emit ascending so column a=0
+//   is the LOWEST orbital (the chemists' occupied-first ordering).
+pub fn rhf_diagonalize(F: [float], xmat: [float], n: int) -> [any] {
+    let fx = rhf_matmul(F, xmat, n)
+    let fp = rhf_matmul(xmat, fx, n)            // F' = X F X  (X symmetric)
+    let eg = eigh(fp, n)
+    let vals = eg[0]                            // descending
+    let vecs = eg[1]                            // vecs[k] = k-th eigvec (length n)
+    // Build C' with columns ASCENDING in energy, then C = X C'.
+    // ascending index a ↔ descending eigh index (n-1-a).
+    let mut cp = []
+    let mut row = 0
+    while row < n {
+        let mut a = 0
+        while a < n {
+            let kdesc = n - 1 - a
+            let vk = vecs[kdesc]
+            cp.push(vk[row])                    // C'_{row, a} = vecs[kdesc][row]
+            a = a + 1
+        }
+        row = row + 1
+    }
+    let C = rhf_matmul(xmat, cp, n)             // C = X C'
+    let mut eps = []
+    let mut a = 0
+    while a < n {
+        eps.push(vals[n - 1 - a])               // ascending MO energies
+        a = a + 1
+    }
+    return [C, eps]
+}
+
+// Closed-shell RHF SCF.
+//   S, hcore : n×n overlap & core-Hamiltonian (row-major flat)
+//   eri      : n^4 chemists' (μν|σλ) tensor (flat)
+//   n_occ    : number of doubly-occupied MOs (electrons / 2)
+//   e_nuc    : nuclear repulsion Σ_{A<B} Z_A Z_B / R_AB
+//   max_iter : iteration cap;  e_tol : |ΔE| convergence gate
+//   mix      : density mixing 0<mix≤1  (P ← mix·P_new + (1−mix)·P_old; 1.0 = none)
+//   Returns [ e_total, iters, e_elec, P, F, eps, converged ].
+//   The whole loop is d4-generic: any molecule whose S/hcore/eri are supplied
+//   runs here unchanged.
+pub fn rhf_scf(
+    S: [float], hcore: [float], eri: [float],
+    n: int, n_occ: int, e_nuc: float,
+    max_iter: int, e_tol: float, mix: float
+) -> [any] {
+    let xmat = rhf_s_inv_sqrt(S, n)
+    // Core-Hamiltonian initial guess: diagonalize H_core (P from its occ MOs).
+    let dg0 = rhf_diagonalize(hcore, xmat, n)
+    let c0 = dg0[0]
+    let mut P = rhf_density(c0, n, n_occ)
+    let mut e_old = 0.0
+    let mut iters = 0
+    let mut converged = false
+    let mut F = hcore
+    let mut eps = dg0[1]
+    while iters < max_iter {
+        F = rhf_fock(hcore, P, eri, n)
+        let e_elec = rhf_energy_elec(P, hcore, F, n)
+        let dg = rhf_diagonalize(F, xmat, n)
+        let C = dg[0]
+        eps = dg[1]
+        let p_new = rhf_density(C, n, n_occ)
+        // simple density mixing
+        let mut p_mix = []
+        let mut i = 0
+        while i < n * n {
+            p_mix.push(mix * p_new[i] + (1.0 - mix) * P[i])
+            i = i + 1
+        }
+        P = p_mix
+        iters = iters + 1
+        let de = if e_elec > e_old { e_elec - e_old } else { e_old - e_elec }
+        if iters > 1 {
+            if de < e_tol { converged = true ; e_old = e_elec ; break }
+        }
+        e_old = e_elec
+    }
+    // Final energy at the converged density (rebuild F once more for consistency).
+    F = rhf_fock(hcore, P, eri, n)
+    let e_elec_final = rhf_energy_elec(P, hcore, F, n)
+    let e_total = e_elec_final + e_nuc
+    return [e_total, iters, e_elec_final, P, F, eps, converged]
+}

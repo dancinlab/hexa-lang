@@ -1,0 +1,550 @@
+// HEXA Standard Library — qforge/molscf/uhf
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE MOLSCF brick 7/N — UNRESTRICTED Hartree–Fock (UHF) + DIIS + level-shift.
+// This BREAKS the closed-shell wall the round-6 agent named: rhf_scf (rhf.hexa)
+// is RHF — doubly-occupied orbitals only, so it cannot touch a single open-shell
+// system (radicals, the H atom, triplet O₂/TiO, doublet d¹ ions). UHF generalizes
+// the Roothaan loop to SEPARATE α/β spin densities and Fock matrices, giving a
+// genuine ab-initio SCF energy for any spin-polarized molecule.
+//
+// ── d4 generic dispatch — instance = manifest, no name hardcoding ─────────────
+//   uhf_scf consumes the SAME precomputed integral set as rhf_scf (S, H_core, the
+//   (μν|σλ) tensor) + the per-spin occupations (n_α, n_β) + E_nuc. The MOLECULE
+//   is the manifest; H atom, triplet O₂, a doublet radical all traverse uhf_scf
+//   unchanged — only (n_α, n_β) and the input matrices differ. The closed-shell
+//   case n_α = n_β reduces EXACTLY to RHF (g5 verdict a).
+//
+// ── UHF Fock build  (Szabo & Ostlund §3.8, Pople–Nesbet eqs. 3.331–3.348) ─────
+//   P^α_μν = Σ_{a∈occ_α} C^α_μa C^α_νa      (SINGLE occupation per spin, no ×2)
+//   P^β_μν = Σ_{a∈occ_β} C^β_μa C^β_νa
+//   P_tot  = P^α + P^β
+//   J[P_tot]_μν = Σ_λσ P_tot_λσ (μν|σλ)              (total Coulomb)
+//   K[P^s ]_μν = Σ_λσ P^s_λσ   (μλ|σν)               (spin-resolved exchange)
+//   F^α = H_core + J[P_tot] − K[P^α]
+//   F^β = H_core + J[P_tot] − K[P^β]
+//   Both are diagonalized in the shared Löwdin basis; the two spin manifolds are
+//   coupled ONLY through J[P_tot]. RHF is the special case P^α = P^β = ½P, where
+//   F^α = F^β = H + J − ½K reproduces the closed-shell Fock exactly.
+//
+// ── UHF energy ───────────────────────────────────────────────────────────────
+//   E_elec = ½ Σ_μν [ P_tot_μν H_core_μν + P^α_μν F^α_μν + P^β_μν F^β_μν ]
+//   E_total = E_elec + E_nuc.
+//
+// ── ⟨S²⟩ spin contamination (HONEST diagnostic — d6) ─────────────────────────
+//   ⟨S²⟩ = S_z(S_z+1) + n_β − Σ_{i∈occα} Σ_{j∈occβ} |⟨α_i|β_j⟩|²        (Szabo)
+//   with the spin-orbital overlap ⟨α_i|β_j⟩ = Σ_μν C^α_μi S_μν C^β_νj (AO metric)
+//   and S_z = (n_α − n_β)/2. The exact value is S(S+1); the gap ⟨S²⟩ − S(S+1) is
+//   UHF's spin contamination — we REPORT it, never hide it. (1-electron / fully
+//   spin-aligned cases like the H atom are contamination-free: ⟨S²⟩ = 0.75.)
+//
+// ── DIIS (Pulay 1980, DIIS/CDIIS) — convergence accelerator ──────────────────
+//   error vector  e^s = (F^s P^s S − S P^s F^s)  per spin, concatenated [e^α;e^β].
+//   At self-consistency [F,P]_S commutator → 0, so ‖e‖→0 is the honest residual.
+//   Store an (e_i, F_i) history; solve the (m+1)-Pulay system
+//       [ ⟨e_i·e_j⟩  −1 ] [c]   [0]
+//       [   −1ᵀ      0 ] [λ] = [−1]
+//   for the extrapolated Fock  F̃ = Σ_i c_i F_i, then diagonalize F̃. This
+//   STABILIZES the stiff open-shell / near-degenerate SCF that plain mixing
+//   oscillates on (g5 verdict c — iters-with vs iters-without).
+//
+// ── level-shift (Saunders & Hillier 1973) — anti-oscillation ─────────────────
+//   add  +shift · (virtual projector)  to the orthonormal-basis Fock before
+//   diagonalizing, raising empty orbitals to prevent root-flipping in the early
+//   iterations. Applied only while DIIS history is short (then released).
+//
+// reuse (d3 · d19): eigh from stdlib/alloc/math/eigen; rhf_matmul / rhf_transpose
+//   / rhf_s_inv_sqrt / rhf_diagonalize / rhf_eri_at-equivalent from rhf.hexa (the
+//   closed-shell path is BYTE-UNTOUCHED — UHF is additive). Integrals from brick
+//   1/2/3. The only new self-contained helper is a tiny Gaussian-elimination
+//   solver for the small DIIS B-matrix (no linsolve primitive exists to reuse).
+
+use "stdlib/alloc/math/eigen"
+use "stdlib/qforge/molscf/rhf"
+
+// ════════════════════════════════════════════════════════════════════════════
+//   spin-resolved density, Coulomb J, exchange K
+// ════════════════════════════════════════════════════════════════════════════
+
+// Single-spin density  P^s_μν = Σ_{a∈occ} C_μa C_νa   (NO factor 2 — one spin).
+pub fn uhf_density_spin(C: [float], n: int, n_occ: int) -> [float] {
+    let mut P = []
+    let mut mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu < n {
+            let mut s = 0.0
+            let mut a = 0
+            while a < n_occ {
+                s = s + C[mu * n + a] * C[nu * n + a]
+                a = a + 1
+            }
+            P.push(s)
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    return P
+}
+
+fn uhf_eri_at(eri: [float], n: int, mu: int, nu: int, sg: int, lm: int) -> float {
+    return eri[((mu * n + nu) * n + sg) * n + lm]
+}
+
+// Total Coulomb  J[P_tot]_μν = Σ_λσ P_tot_λσ (μν|σλ).
+pub fn uhf_j_matrix(ptot: [float], eri: [float], n: int) -> [float] {
+    let mut J = []
+    let mut mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu < n {
+            let mut j = 0.0
+            let mut lm = 0
+            while lm < n {
+                let mut sg = 0
+                while sg < n {
+                    let pls = ptot[lm * n + sg]
+                    j = j + pls * uhf_eri_at(eri, n, mu, nu, sg, lm)
+                    sg = sg + 1
+                }
+                lm = lm + 1
+            }
+            J.push(j)
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    return J
+}
+
+// Spin-resolved exchange  K[P^s]_μν = Σ_λσ P^s_λσ (μλ|σν).
+pub fn uhf_k_matrix(ps: [float], eri: [float], n: int) -> [float] {
+    let mut K = []
+    let mut mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu < n {
+            let mut k = 0.0
+            let mut lm = 0
+            while lm < n {
+                let mut sg = 0
+                while sg < n {
+                    let pls = ps[lm * n + sg]
+                    k = k + pls * uhf_eri_at(eri, n, mu, lm, sg, nu)
+                    sg = sg + 1
+                }
+                lm = lm + 1
+            }
+            K.push(k)
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    return K
+}
+
+// One UHF Fock pair  F^α = H + J[P_tot] − K[P^α],  F^β = H + J[P_tot] − K[P^β].
+//   Returns [Fa, Fb] (both n×n row-major flat).
+pub fn uhf_fock_pair(
+    hcore: [float], pa: [float], pb: [float], eri: [float], n: int
+) -> [any] {
+    let mut ptot = []
+    let mut i = 0
+    while i < n * n { ptot.push(pa[i] + pb[i]) ; i = i + 1 }
+    let J = uhf_j_matrix(ptot, eri, n)
+    let Ka = uhf_k_matrix(pa, eri, n)
+    let Kb = uhf_k_matrix(pb, eri, n)
+    let mut Fa = []
+    let mut Fb = []
+    let mut m = 0
+    while m < n * n {
+        Fa.push(hcore[m] + J[m] - Ka[m])
+        Fb.push(hcore[m] + J[m] - Kb[m])
+        m = m + 1
+    }
+    return [Fa, Fb]
+}
+
+// UHF electronic energy
+//   E_elec = ½ Σ_μν [ P_tot H + P^α F^α + P^β F^β ].
+pub fn uhf_energy_elec(
+    pa: [float], pb: [float], hcore: [float], Fa: [float], Fb: [float], n: int
+) -> float {
+    let mut e = 0.0
+    let mut i = 0
+    while i < n * n {
+        let ptot = pa[i] + pb[i]
+        e = e + ptot * hcore[i] + pa[i] * Fa[i] + pb[i] * Fb[i]
+        i = i + 1
+    }
+    return 0.5 * e
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   ⟨S²⟩ spin contamination (HONEST diagnostic)
+// ════════════════════════════════════════════════════════════════════════════
+
+// ⟨S²⟩ = S_z(S_z+1) + n_β − Σ_{i∈α,j∈β} |⟨α_i|β_j⟩|²,  ⟨α_i|β_j⟩ = Cᵀ_α S C_β.
+//   Ca, Cb : n×n AO MO-coeff matrices (column a = MO a). na, nb : occupations.
+pub fn uhf_spin_squared(
+    Ca: [float], Cb: [float], S: [float], n: int, na: int, nb: int
+) -> float {
+    let sz = (to_float(na) - to_float(nb)) / 2.0
+    // overlap O_ij = Σ_μν Ca_μi S_μν Cb_νj  for i∈occα, j∈occβ.
+    let mut contam = 0.0
+    let mut i = 0
+    while i < na {
+        let mut j = 0
+        while j < nb {
+            let mut o = 0.0
+            let mut mu = 0
+            while mu < n {
+                let mut nu = 0
+                while nu < n {
+                    o = o + Ca[mu * n + i] * S[mu * n + nu] * Cb[nu * n + j]
+                    nu = nu + 1
+                }
+                mu = mu + 1
+            }
+            contam = contam + o * o
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return sz * (sz + 1.0) + to_float(nb) - contam
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   DIIS — tiny Gaussian-elimination solver for the Pulay B-matrix
+// ════════════════════════════════════════════════════════════════════════════
+
+// Solve A x = b for a small dense system (A is m×m row-major, b length m) by
+// Gaussian elimination with partial pivoting. Self-contained: no linsolve
+// primitive exists in stdlib to reuse (only eigh, which is the wrong tool here).
+pub fn uhf_lin_solve(Ain: [float], bin: [float], m: int) -> [float] {
+    let mut A = []
+    let mut i = 0
+    while i < m * m { A.push(Ain[i]) ; i = i + 1 }
+    let mut b = []
+    i = 0
+    while i < m { b.push(bin[i]) ; i = i + 1 }
+    let mut col = 0
+    while col < m {
+        // partial pivot: largest |A[row][col]| at or below the diagonal.
+        let mut piv = col
+        let mut best = if A[col * m + col] < 0.0 { 0.0 - A[col * m + col] } else { A[col * m + col] }
+        let mut r = col + 1
+        while r < m {
+            let v = if A[r * m + col] < 0.0 { 0.0 - A[r * m + col] } else { A[r * m + col] }
+            if v > best { best = v ; piv = r }
+            r = r + 1
+        }
+        if piv != col {
+            let mut c = 0
+            while c < m {
+                let tmp = A[col * m + c] ; A[col * m + c] = A[piv * m + c] ; A[piv * m + c] = tmp
+                c = c + 1
+            }
+            let tb = b[col] ; b[col] = b[piv] ; b[piv] = tb
+        }
+        let diag = A[col * m + col]
+        let adiag = if diag < 0.0 { 0.0 - diag } else { diag }
+        if adiag < 1.0e-14 {
+            // singular pivot — DIIS history degenerate; signal no extrapolation
+            // by returning the trivial last-point solution (c_last = 1, rest 0).
+            let mut x0 = []
+            let mut q = 0
+            while q < m {
+                if q == m - 2 { x0.push(1.0) } else { x0.push(0.0) }
+                q = q + 1
+            }
+            return x0
+        }
+        // eliminate below
+        r = col + 1
+        while r < m {
+            let factor = A[r * m + col] / diag
+            let mut c = col
+            while c < m {
+                A[r * m + c] = A[r * m + c] - factor * A[col * m + c]
+                c = c + 1
+            }
+            b[r] = b[r] - factor * b[col]
+            r = r + 1
+        }
+        col = col + 1
+    }
+    // back-substitute
+    let mut x = []
+    i = 0
+    while i < m { x.push(0.0) ; i = i + 1 }
+    let mut row = m - 1
+    while row >= 0 {
+        let mut s = b[row]
+        let mut c = row + 1
+        while c < m {
+            s = s - A[row * m + c] * x[c]
+            c = c + 1
+        }
+        let drow = A[row * m + row]
+        let adr = if drow < 0.0 { 0.0 - drow } else { drow }
+        x[row] = if adr < 1.0e-300 { 0.0 } else { s / drow }
+        row = row - 1
+    }
+    return x
+}
+
+// DIIS error vector  e = X (F P S − S P F) X   (orthonormal basis, X = S^{-½}).
+//   The Löwdin transform makes the commutator basis-orthonormal so the inner
+//   products ⟨e_i·e_j⟩ are metric-free. Returns a length-n*n flat vector.
+pub fn uhf_diis_error(
+    F: [float], P: [float], S: [float], X: [float], n: int
+) -> [float] {
+    let FP = rhf_matmul(F, P, n)
+    let FPS = rhf_matmul(FP, S, n)
+    let SP = rhf_matmul(S, P, n)
+    let SPF = rhf_matmul(SP, F, n)
+    let mut comm = []
+    let mut i = 0
+    while i < n * n { comm.push(FPS[i] - SPF[i]) ; i = i + 1 }
+    let xc = rhf_matmul(X, comm, n)
+    let e = rhf_matmul(xc, X, n)
+    return e
+}
+
+// ‖e‖∞-style scalar residual (max |e_i|) for the convergence / verbatim report.
+pub fn uhf_err_norm(e: [float], n: int) -> float {
+    let mut mx = 0.0
+    let mut i = 0
+    while i < n * n {
+        let v = if e[i] < 0.0 { 0.0 - e[i] } else { e[i] }
+        if v > mx { mx = v }
+        i = i + 1
+    }
+    return mx
+}
+
+// DIIS extrapolation: given histories of error vectors and Fock matrices
+// (each entry a length-n*n flat vector, concatenated α||β so both spins share
+// one coefficient set), solve the Pulay system and return the extrapolated
+// concatenated Fock  F̃ = Σ_i c_i F_i  (length 2*n*n).
+//   errs / focks : [ [2nn], [2nn], ... ]  (m entries).
+fn uhf_diis_extrapolate(errs: [any], focks: [any], m: int, vlen: int) -> [float] {
+    // B-matrix (m+1)×(m+1):  B_ij = ⟨e_i·e_j⟩, last row/col = −1, corner 0.
+    let dim = m + 1
+    let mut B = []
+    let mut i = 0
+    while i < dim * dim { B.push(0.0) ; i = i + 1 }
+    i = 0
+    while i < m {
+        let ei = errs[i]
+        let mut j = 0
+        while j < m {
+            let ej = errs[j]
+            let mut dot = 0.0
+            let mut k = 0
+            while k < vlen { dot = dot + ei[k] * ej[k] ; k = k + 1 }
+            B[i * dim + j] = dot
+            j = j + 1
+        }
+        B[i * dim + m] = 0.0 - 1.0
+        B[m * dim + i] = 0.0 - 1.0
+        i = i + 1
+    }
+    B[m * dim + m] = 0.0
+    let mut rhs = []
+    i = 0
+    while i < m { rhs.push(0.0) ; i = i + 1 }
+    rhs.push(0.0 - 1.0)
+    let coef = uhf_lin_solve(B, rhs, dim)
+    // F̃ = Σ_i c_i F_i.
+    let mut Ftil = []
+    i = 0
+    while i < vlen { Ftil.push(0.0) ; i = i + 1 }
+    i = 0
+    while i < m {
+        let ci = coef[i]
+        let Fi = focks[i]
+        let mut k = 0
+        while k < vlen { Ftil[k] = Ftil[k] + ci * Fi[k] ; k = k + 1 }
+        i = i + 1
+    }
+    return Ftil
+}
+
+fn uhf_slice(v: [float], start: int, len_: int) -> [float] {
+    let mut out = []
+    let mut i = 0
+    while i < len_ { out.push(v[start + i]) ; i = i + 1 }
+    return out
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   the UHF SCF driver
+// ════════════════════════════════════════════════════════════════════════════
+
+// Unrestricted Hartree–Fock SCF.
+//   S, hcore : n×n overlap & core Hamiltonian (row-major flat)
+//   eri      : n^4 chemists' (μν|σλ) tensor
+//   n_a, n_b : α / β electron counts  (n_a ≥ n_b by convention; n_a = n_b = RHF)
+//   e_nuc    : nuclear repulsion
+//   max_iter, e_tol : iteration cap & |ΔE| gate
+//   mix      : density mixing (used pre-DIIS / when use_diis=false)
+//   use_diis : enable Pulay DIIS extrapolation
+//   shift    : virtual level-shift magnitude (0 = off), released once DIIS warms
+//   Returns [ e_total, iters, e_elec, Pa, Pb, Fa, Fb, eps_a, eps_b,
+//             Ca, Cb, converged, err_final ].
+//   d4-generic: any molecule's supplied integrals + (n_a,n_b) run here unchanged.
+pub fn uhf_scf(
+    S: [float], hcore: [float], eri: [float],
+    n: int, n_a: int, n_b: int, e_nuc: float,
+    max_iter: int, e_tol: float, mix: float,
+    use_diis: bool, shift: float
+) -> [any] {
+    let xmat = rhf_s_inv_sqrt(S, n)
+    // Core-Hamiltonian initial guess (same H_core diagonalization for both spins;
+    // the α/β symmetry is broken purely by the different occupations n_a ≠ n_b).
+    let dg0 = rhf_diagonalize(hcore, xmat, n)
+    let c0 = dg0[0]
+    let mut Pa = uhf_density_spin(c0, n, n_a)
+    let mut Pb = uhf_density_spin(c0, n, n_b)
+    let mut e_old = 0.0
+    let mut iters = 0
+    let mut converged = false
+    let mut Fa = hcore
+    let mut Fb = hcore
+    let mut Ca = c0
+    let mut Cb = c0
+    let mut eps_a = dg0[1]
+    let mut eps_b = dg0[1]
+    let mut err_final = 0.0
+    let vlen = n * n
+    // DIIS histories (concatenated α||β vectors).
+    let mut diis_err = []
+    let mut diis_fock = []
+    let max_diis = 6
+    while iters < max_iter {
+        let fp = uhf_fock_pair(hcore, Pa, Pb, eri, n)
+        Fa = fp[0]
+        Fb = fp[1]
+        let e_elec = uhf_energy_elec(Pa, Pb, hcore, Fa, Fb, n)
+
+        // ── DIIS error vectors (always computed → honest ‖e‖ residual report) ──
+        let ea = uhf_diis_error(Fa, Pa, S, xmat, n)
+        let eb = uhf_diis_error(Fb, Pb, S, xmat, n)
+        let err_a = uhf_err_norm(ea, n)
+        let err_b = uhf_err_norm(eb, n)
+        err_final = if err_a > err_b { err_a } else { err_b }
+
+        // Fock matrices actually diagonalized this step (may be DIIS-extrapolated).
+        let mut Fa_use = Fa
+        let mut Fb_use = Fb
+        if use_diis {
+            // concatenate α||β error & Fock, push to history (cap max_diis).
+            let mut ecat = []
+            let mut k = 0
+            while k < vlen { ecat.push(ea[k]) ; k = k + 1 }
+            k = 0
+            while k < vlen { ecat.push(eb[k]) ; k = k + 1 }
+            let mut fcat = []
+            k = 0
+            while k < vlen { fcat.push(Fa[k]) ; k = k + 1 }
+            k = 0
+            while k < vlen { fcat.push(Fb[k]) ; k = k + 1 }
+            diis_err.push(ecat)
+            diis_fock.push(fcat)
+            if len(diis_err) > max_diis {
+                diis_err = uhf_drop_first(diis_err)
+                diis_fock = uhf_drop_first(diis_fock)
+            }
+            let m = len(diis_err)
+            // skip extrapolation when already at the SCF fixed point (e→0 makes
+            // the Pulay B-matrix singular — nothing to accelerate, take F as-is).
+            if m >= 2 && err_final > 1.0e-11 {
+                let Ftil = uhf_diis_extrapolate(diis_err, diis_fock, m, 2 * vlen)
+                Fa_use = uhf_slice(Ftil, 0, vlen)
+                Fb_use = uhf_slice(Ftil, vlen, vlen)
+            }
+        }
+
+        // ── level-shift (only while DIIS history short / disabled) ──
+        let warm = use_diis && len(diis_err) >= 3
+        if shift > 0.0 && !warm {
+            Fa_use = uhf_level_shift(Fa_use, Ca, S, n, n_a, shift)
+            Fb_use = uhf_level_shift(Fb_use, Cb, S, n, n_b, shift)
+        }
+
+        let dga = rhf_diagonalize(Fa_use, xmat, n)
+        let dgb = rhf_diagonalize(Fb_use, xmat, n)
+        Ca = dga[0]
+        eps_a = dga[1]
+        Cb = dgb[0]
+        eps_b = dgb[1]
+        let pa_new = uhf_density_spin(Ca, n, n_a)
+        let pb_new = uhf_density_spin(Cb, n, n_b)
+        // density mixing (DIIS already extrapolates, so use full step when warm).
+        let m_eff = if use_diis && len(diis_err) >= 2 { 1.0 } else { mix }
+        let mut pa_mix = []
+        let mut pb_mix = []
+        let mut i = 0
+        while i < vlen {
+            pa_mix.push(m_eff * pa_new[i] + (1.0 - m_eff) * Pa[i])
+            pb_mix.push(m_eff * pb_new[i] + (1.0 - m_eff) * Pb[i])
+            i = i + 1
+        }
+        Pa = pa_mix
+        Pb = pb_mix
+        iters = iters + 1
+        let de = if e_elec > e_old { e_elec - e_old } else { e_old - e_elec }
+        if iters > 1 {
+            if de < e_tol && err_final < 1.0e-6 { converged = true ; e_old = e_elec ; break }
+        }
+        e_old = e_elec
+    }
+    // final energy at the converged density.
+    let fpf = uhf_fock_pair(hcore, Pa, Pb, eri, n)
+    Fa = fpf[0]
+    Fb = fpf[1]
+    let e_elec_final = uhf_energy_elec(Pa, Pb, hcore, Fa, Fb, n)
+    let e_total = e_elec_final + e_nuc
+    return [e_total, iters, e_elec_final, Pa, Pb, Fa, Fb,
+            eps_a, eps_b, Ca, Cb, converged, err_final]
+}
+
+// drop the oldest history entry (FIFO cap).
+fn uhf_drop_first(h: [any]) -> [any] {
+    let mut out = []
+    let mut i = 1
+    while i < len(h) { out.push(h[i]) ; i = i + 1 }
+    return out
+}
+
+// Level-shift: F ← F + shift · S Q S,  Q = projector onto VIRTUAL orbitals built
+// from the current C (Q = Σ_{a∈virt} C_·a C_·aᵀ). Raises empty-orbital energies
+// to damp root-flipping. With C the AO coeffs, the AO-basis virtual projector in
+// the S-metric is  (S C_virt)(S C_virt)ᵀ.
+fn uhf_level_shift(F: [float], C: [float], S: [float], n: int, n_occ: int, shift: float) -> [float] {
+    // SC = S · C  (n×n);  virtual columns a = n_occ..n-1.
+    let SC = rhf_matmul(S, C, n)
+    let mut out = []
+    let mut i = 0
+    while i < n * n { out.push(F[i]) ; i = i + 1 }
+    let mut mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu < n {
+            let mut acc = 0.0
+            let mut a = n_occ
+            while a < n {
+                acc = acc + SC[mu * n + a] * SC[nu * n + a]
+                a = a + 1
+            }
+            out[mu * n + nu] = out[mu * n + nu] + shift * acc
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    return out
+}

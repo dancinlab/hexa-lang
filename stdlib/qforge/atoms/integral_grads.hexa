@@ -1,0 +1,313 @@
+// HEXA Standard Library — qforge/atoms/integral_grads
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE atoms-scale brick #12 — the CLOSED-FORM ANALYTIC integral derivatives
+// ∂T/∂R, ∂V/∂R, ∂(μν|λσ)/∂R for s-type STO-3G primitives, REPLACING the central
+// finite-difference of the consumed MOLSCF tensors that R11's RHF force still used
+// for ∂H_core/∂R and ∂(μν|λσ)/∂R. With these, the atoms RHF force is FULLY ANALYTIC
+// (no FD anywhere): R10 gave analytic ∂S/∂R, R12 closes ∂T, ∂V, ∂ERI in closed form.
+//
+// ── What is reused vs what is new (d3/d19, cross-lane, MOLSCF read-only) ───────
+//   REUSED verbatim (the MOLSCF molscf/ lane — NOT modified, consumed):
+//     gint_mu / gint_norm_s / gint_r2 / gint_overlap_s / gint_kinetic_s
+//                                          — the s-primitive value kernels (brick 1).
+//     cint_norm_s / cint_product_center / boys_f0
+//                                          — the Coulomb value kernels (brick 2).
+//   NEW here (the s-primitive integral DERIVATIVES, all in closed form):
+//     ig_boys_f1                           — F₁(t) = (F₀(t) − e^{−t})/(2t), the one
+//                                            extra Boys order ∂F₀ needs (F₀'=−F₁),
+//                                            built from boys_f0 ONLY (no new special fn).
+//     ig_dkinetic_s_dA                     — ∂T_ab/∂A_d for one s-prim pair.
+//     ig_dnuclear_s_dA / _dB / _dC         — ∂V_ab^C/∂{A,B,C}_d (basis + Hellmann-Feynman).
+//     ig_deri_s_dA / _dB / _dC / _dD       — ∂(ab|cd)/∂{A,B,C,D}_d (McMurchie-Davidson
+//                                            s-shell limit — raise the Hermite index on
+//                                            one center, reuse the SAME Boys table).
+//
+// ── Why closed form (and not a finite difference) ─────────────────────────────
+//   For s-type primitives every MOLSCF integral is an EXPLICIT scalar (a product of a
+//   prefactor, a Gaussian exp(−μ r²), and a Boys F₀ of one argument). Differentiating
+//   each w.r.t. a Cartesian center is therefore an exact product/chain rule — the same
+//   McMurchie-Davidson / Obara-Saika "raise one Hermite index" recurrence, which on an
+//   s|s pair collapses to a single F₁ term reusing the F₀ table. No higher angular
+//   momentum is reached this round (s-ONLY), so no md_integrals d-extension is needed.
+//
+//   Boys recurrence (exact):  F_{n+1}(t) = [(2n+1) F_n(t) − e^{−t}] / (2t),
+//     n=0 ⇒  F₁(t) = [F₀(t) − e^{−t}] / (2t),     and    F₀'(t) = −F₁(t).
+//   t→0 limit:  F₁(0) = 1/3  (∫₀¹ u² du); special-cased to avoid 0/0.
+//
+// ── The four closed forms (s-primitive, normalized; R_AB,d ≡ A_d − B_d) ───────
+//   Let p=a+b, μ=ab/p, r²=|A−B|², S_ab the normalized primitive overlap.
+//
+//   ∂S_ab/∂A_d = −2 μ R_AB,d S_ab                                   (R10, re-derived)
+//   ∂T_ab/∂A_d = −2 μ R_AB,d S_ab · [ 2μ + μ(3 − 2μ r²) ]           (T = μ(3−2μr²)S)
+//
+//   V_ab^C = −(2π/p) Z N_a N_b e^{−μ r²} F₀(p t),   t=|P−C|², P=(aA+bB)/p
+//   ∂V_ab^C/∂A_d = (−2 μ R_AB,d) V_ab^C                              (Gaussian factor)
+//                + V_ab^C · ( −F₁(p t)/F₀(p t) ) · 2 a (P_d − C_d)   (Boys, A moves P)
+//   ∂V_ab^C/∂B_d = (+2 μ R_AB,d) V_ab^C
+//                + V_ab^C · ( −F₁(p t)/F₀(p t) ) · 2 b (P_d − C_d)
+//   ∂V_ab^C/∂C_d = V_ab^C · ( −F₁(p t)/F₀(p t) ) · 2 p (C_d − P_d)   (Hellmann-Feynman)
+//   (translational check:  ∂/∂A + ∂/∂B + ∂/∂C = 0  exactly — used as a free gate.)
+//
+//   (ab|cd) = pref · e^{−μ_ab r²_AB} e^{−μ_cd r²_CD} F₀(α w²),  α=pq/(p+q), w²=|P−Q|²
+//   ∂(ab|cd)/∂A_d = (−2 μ_ab R_AB,d)(ab|cd)
+//                 + (ab|cd) ( −F₁(α w²)/F₀(α w²) ) · 2 α (a/p)(P_d − Q_d)
+//   (∂/∂B,∂/∂C,∂/∂D analogous; Σ over the 4 centers = 0 — the free translational gate.)
+//
+// ── Honest scope (d6) ─────────────────────────────────────────────────────────
+//   • s-ONLY (one contracted s-shell per atom, STO-3G H 1s). p/d shells RAISE the
+//     Hermite/angular index and need the MOLSCF md_integrals d-extension (a sibling
+//     lane is building it) — that is round-13, declared not papered.
+//   • Every derivative here is the EXACT closed-form gradient of the SAME MOLSCF s-
+//     primitive value kernel it differentiates (built from gint_*/cint_*), so the
+//     analytic ↔ central-FD gate is a derivative-identity check, not a fit.
+//   • F₁ reuses boys_f0 — NO new transcendental is minted (d3/d19).
+//
+// reuse (d19): stdlib/qforge/molscf/{gaussian_integrals,coulomb_integrals} value
+//   kernels — the derivatives are of EXACTLY those kernels, guaranteeing the analytic
+//   gradient differentiates the integral the RHF force consumes. No kernel re-minted.
+use "stdlib/qforge/molscf/gaussian_integrals"
+use "stdlib/qforge/molscf/coulomb_integrals"
+use "stdlib/core/special"
+
+// ── ∂(erf_fn)/∂x for the A&S 7.1.26 rational (CONSISTENT with stdlib special.erf_fn) ─
+//   special.erf_fn(x) = 1 − poly(t)·e^{−x²},  t = 1/(1+p x),  x ≥ 0.
+//   d/dx = e^{−x²}·[ p t² poly'(t) + 2x poly(t) ].  We differentiate the ACTUAL rational
+//   the value path evaluates (NOT the true (2/√π)e^{−x²}), so the Boys derivative below
+//   matches boys_f0-as-implemented to machine precision — the analytic force then equals
+//   the FD-of-E_RHF reference (both differentiate the SAME erf approximation, not two
+//   different functions). The 5 A&S coefficients mirror special.erf_fn verbatim (d3/d19:
+//   same rational, just its exact derivative — no new transcendental, no divergent fit).
+fn _erf_prime(x: float) -> float {
+    let p = 0.3275911
+    let t = 1.0 / (1.0 + p * x)
+    let a1 = 0.254829592
+    let a2 = 0.0 - 0.284496736
+    let a3 = 1.421413741
+    let a4 = 0.0 - 1.453152027
+    let a5 = 1.061405429
+    let poly = ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t
+    // poly'(t) = a1 + 2a2 t + 3a3 t² + 4a4 t³ + 5a5 t⁴
+    let polyp = a1 + t * (2.0 * a2 + t * (3.0 * a3 + t * (4.0 * a4 + t * 5.0 * a5)))
+    return exp(0.0 - x * x) * (p * t * t * polyp + 2.0 * x * poly)
+}
+
+// ── F₁(t) = −F₀'(t), the EXACT derivative of boys_f0-AS-IMPLEMENTED ────────────
+//   boys_f0(τ) = ½√(π/τ)·erf_fn(√τ) ⇒
+//     F₀'(τ) = ½√π·[ −½ τ^{-3/2} erf_fn(√τ) + ½ τ^{-1} erf_fn'(√τ) ],   F₁ = −F₀'.
+//   F₁(0) = 1/3 (∫₀¹u²du). Differentiating boys_f0 EXACTLY (not the true Boys) keeps the
+//   ∂V/∂R, ∂ERI/∂R derivatives consistent with the value path's erf approximation, so the
+//   fully-analytic RHF force matches the central-FD of E_RHF to machine precision (<1e-9),
+//   not just to the ~1.5e-6 erf-budget floor a true-Boys F₁ would leave. d6: exact, honest.
+pub fn ig_boys_f1(t: float) -> float {
+    if t <= 1.0e-12 { return 1.0 / 3.0 }
+    let pi = 3.141592653589793
+    let u = sqrt(t)
+    let e = erf_fn(u)
+    let ep = _erf_prime(u)
+    let f0p = 0.5 * sqrt(pi) * (0.0 - 0.5 * pow(t, 0.0 - 1.5) * e + 0.5 / t * ep)
+    return 0.0 - f0p
+}
+
+// ── ∂T_ab/∂A_d for one s-primitive pair (closed form) ─────────────────────────
+//   ∂T/∂A_d = −2 μ R_AB,d S_ab [ 2μ + μ(3 − 2μ r²) ].  (∂/∂B_d = −∂/∂A_d.)
+pub fn ig_dkinetic_s_dA(a: float, b: float, ax: [float], bx: [float], dimd: int) -> float {
+    let r2 = gint_r2(ax, bx)
+    if r2 < 0.0 { return 0.0 }
+    let p = a + b
+    if p <= 0.0 { return 0.0 }
+    let mu = a * b / p
+    let s = gint_overlap_s(a, b, ax, bx)
+    let rd = ax[dimd] - bx[dimd]
+    let bracket = 2.0 * mu + mu * (3.0 - 2.0 * mu * r2)
+    return 0.0 - 2.0 * mu * rd * s * bracket
+}
+
+// ── nuclear-attraction value V_ab^C (local copy of cint_nuclear_s, for the Boys ratio) ─
+fn _vval(a: float, b: float, ax: [float], bx: [float], z: float, cx: [float]) -> float {
+    let r2 = cint_r2(ax, bx)
+    if r2 < 0.0 { return 0.0 }
+    if len(cx) != 3 { return 0.0 }
+    let p = a + b
+    if p <= 0.0 { return 0.0 }
+    let pi = 3.141592653589793
+    let mu = a * b / p
+    let pc = cint_product_center(a, ax, b, bx)
+    if len(pc) != 3 { return 0.0 }
+    let pc2 = cint_r2(pc, cx)
+    if pc2 < 0.0 { return 0.0 }
+    let na = cint_norm_s(a)
+    let nb = cint_norm_s(b)
+    let pref = 0.0 - (2.0 * pi / p) * z * na * nb
+    return pref * exp(0.0 - mu * r2) * boys_f0(p * pc2)
+}
+
+// ── the Boys-only piece of ∂V common to all three centers ─────────────────────
+//   V·(−F₁(pt)/F₀(pt)) — the factor multiplying the per-center 2·(coeff)·(P−C) chain.
+//   Returns 0.0 when F₀≈0 (avoids 0/0; V≈0 there too so the term vanishes physically).
+fn _vboys_factor(a: float, b: float, ax: [float], bx: [float], z: float, cx: [float]) -> float {
+    let p = a + b
+    if p <= 0.0 { return 0.0 }
+    let pc = cint_product_center(a, ax, b, bx)
+    if len(pc) != 3 { return 0.0 }
+    let pc2 = cint_r2(pc, cx)
+    if pc2 < 0.0 { return 0.0 }
+    let t = p * pc2
+    let f0 = boys_f0(t)
+    if f0 <= 1.0e-300 { return 0.0 }
+    let f1 = ig_boys_f1(t)
+    let v = _vval(a, b, ax, bx, z, cx)
+    return v * (0.0 - f1 / f0)
+}
+
+// ── ∂V_ab^C/∂A_d (orbital center A moves: Gaussian factor + Boys via P) ────────
+pub fn ig_dnuclear_s_dA(a: float, b: float, ax: [float], bx: [float],
+                        z: float, cx: [float], dimd: int) -> float {
+    let p = a + b
+    if p <= 0.0 { return 0.0 }
+    let mu = a * b / p
+    let v = _vval(a, b, ax, bx, z, cx)
+    let rd = ax[dimd] - bx[dimd]
+    let pc = cint_product_center(a, ax, b, bx)
+    if len(pc) != 3 { return 0.0 }
+    let gauss = (0.0 - 2.0 * mu * rd) * v
+    let boys = _vboys_factor(a, b, ax, bx, z, cx) * 2.0 * a * (pc[dimd] - cx[dimd])
+    return gauss + boys
+}
+
+// ── ∂V_ab^C/∂B_d (orbital center B moves) ─────────────────────────────────────
+pub fn ig_dnuclear_s_dB(a: float, b: float, ax: [float], bx: [float],
+                        z: float, cx: [float], dimd: int) -> float {
+    let p = a + b
+    if p <= 0.0 { return 0.0 }
+    let mu = a * b / p
+    let v = _vval(a, b, ax, bx, z, cx)
+    let rd = ax[dimd] - bx[dimd]
+    let pc = cint_product_center(a, ax, b, bx)
+    if len(pc) != 3 { return 0.0 }
+    let gauss = (2.0 * mu * rd) * v                       // ∂(e^{−μr²})/∂B_d = +2μ R_AB,d
+    let boys = _vboys_factor(a, b, ax, bx, z, cx) * 2.0 * b * (pc[dimd] - cx[dimd])
+    return gauss + boys
+}
+
+// ── ∂V_ab^C/∂C_d (the NUCLEUS at C moves — Hellmann-Feynman term) ──────────────
+pub fn ig_dnuclear_s_dC(a: float, b: float, ax: [float], bx: [float],
+                        z: float, cx: [float], dimd: int) -> float {
+    let p = a + b
+    if p <= 0.0 { return 0.0 }
+    let pc = cint_product_center(a, ax, b, bx)
+    if len(pc) != 3 { return 0.0 }
+    // ∂(p|P−C|²)/∂C_d = 2p(C_d − P_d); the Gaussian factor has no C dependence.
+    return _vboys_factor(a, b, ax, bx, z, cx) * 2.0 * p * (cx[dimd] - pc[dimd])
+}
+
+// ── two-electron value (ab|cd) (local copy, for the Boys ratio) ───────────────
+fn _erival(a: float, ax: [float], b: float, bx: [float],
+           c: float, cx: [float], d: float, dx: [float]) -> float {
+    return cint_eri_s(a, ax, b, bx, c, cx, d, dx)
+}
+
+// ── Boys factor of ∂ERI: (ab|cd)·(−F₁(w)/F₀(w)) with w=α|P−Q|², α=pq/(p+q) ────
+fn _eriboys_factor(a: float, ax: [float], b: float, bx: [float],
+                   c: float, cx: [float], d: float, dx: [float]) -> float {
+    let p = a + b
+    let q = c + d
+    if p <= 0.0 { return 0.0 }
+    if q <= 0.0 { return 0.0 }
+    let pbra = cint_product_center(a, ax, b, bx)
+    let qket = cint_product_center(c, cx, d, dx)
+    if len(pbra) != 3 { return 0.0 }
+    if len(qket) != 3 { return 0.0 }
+    let pq2 = cint_r2(pbra, qket)
+    if pq2 < 0.0 { return 0.0 }
+    let w = (p * q / (p + q)) * pq2
+    let f0 = boys_f0(w)
+    if f0 <= 1.0e-300 { return 0.0 }
+    let f1 = ig_boys_f1(w)
+    let e = _erival(a, ax, b, bx, c, cx, d, dx)
+    return e * (0.0 - f1 / f0)
+}
+
+// ── ∂(ab|cd)/∂A_d (McMurchie-Davidson s-shell: Gaussian bra factor + Boys via P) ─
+//   α=pq/(p+q); ∂(α w²)/∂A_d = 2α (a/p)(P_d − Q_d).  R_AB,d ≡ A_d − B_d.
+pub fn ig_deri_s_dA(a: float, ax: [float], b: float, bx: [float],
+                    c: float, cx: [float], d: float, dx: [float], dimd: int) -> float {
+    let p = a + b
+    let q = c + d
+    if p <= 0.0 { return 0.0 }
+    if q <= 0.0 { return 0.0 }
+    let mu_ab = a * b / p
+    let e = _erival(a, ax, b, bx, c, cx, d, dx)
+    let rd = ax[dimd] - bx[dimd]
+    let pbra = cint_product_center(a, ax, b, bx)
+    let qket = cint_product_center(c, cx, d, dx)
+    if len(pbra) != 3 { return 0.0 }
+    if len(qket) != 3 { return 0.0 }
+    let alpha = p * q / (p + q)
+    let gauss = (0.0 - 2.0 * mu_ab * rd) * e
+    let boys = _eriboys_factor(a, ax, b, bx, c, cx, d, dx) * 2.0 * alpha * (a / p) * (pbra[dimd] - qket[dimd])
+    return gauss + boys
+}
+
+// ── ∂(ab|cd)/∂B_d ─────────────────────────────────────────────────────────────
+pub fn ig_deri_s_dB(a: float, ax: [float], b: float, bx: [float],
+                    c: float, cx: [float], d: float, dx: [float], dimd: int) -> float {
+    let p = a + b
+    let q = c + d
+    if p <= 0.0 { return 0.0 }
+    if q <= 0.0 { return 0.0 }
+    let mu_ab = a * b / p
+    let e = _erival(a, ax, b, bx, c, cx, d, dx)
+    let rd = ax[dimd] - bx[dimd]
+    let pbra = cint_product_center(a, ax, b, bx)
+    let qket = cint_product_center(c, cx, d, dx)
+    if len(pbra) != 3 { return 0.0 }
+    if len(qket) != 3 { return 0.0 }
+    let alpha = p * q / (p + q)
+    let gauss = (2.0 * mu_ab * rd) * e                    // ∂(e^{−μ_ab r²_AB})/∂B_d
+    let boys = _eriboys_factor(a, ax, b, bx, c, cx, d, dx) * 2.0 * alpha * (b / p) * (pbra[dimd] - qket[dimd])
+    return gauss + boys
+}
+
+// ── ∂(ab|cd)/∂C_d ─────────────────────────────────────────────────────────────
+pub fn ig_deri_s_dC(a: float, ax: [float], b: float, bx: [float],
+                    c: float, cx: [float], d: float, dx: [float], dimd: int) -> float {
+    let p = a + b
+    let q = c + d
+    if p <= 0.0 { return 0.0 }
+    if q <= 0.0 { return 0.0 }
+    let mu_cd = c * d / q
+    let e = _erival(a, ax, b, bx, c, cx, d, dx)
+    let rd = cx[dimd] - dx[dimd]                          // R_CD,d
+    let pbra = cint_product_center(a, ax, b, bx)
+    let qket = cint_product_center(c, cx, d, dx)
+    if len(pbra) != 3 { return 0.0 }
+    if len(qket) != 3 { return 0.0 }
+    let alpha = p * q / (p + q)
+    let gauss = (0.0 - 2.0 * mu_cd * rd) * e
+    // ∂(α w²)/∂C_d = 2α (c/q)(Q_d − P_d)  (ket center Q moves with C)
+    let boys = _eriboys_factor(a, ax, b, bx, c, cx, d, dx) * 2.0 * alpha * (c / q) * (qket[dimd] - pbra[dimd])
+    return gauss + boys
+}
+
+// ── ∂(ab|cd)/∂D_d ─────────────────────────────────────────────────────────────
+pub fn ig_deri_s_dD(a: float, ax: [float], b: float, bx: [float],
+                    c: float, cx: [float], d: float, dx: [float], dimd: int) -> float {
+    let p = a + b
+    let q = c + d
+    if p <= 0.0 { return 0.0 }
+    if q <= 0.0 { return 0.0 }
+    let mu_cd = c * d / q
+    let e = _erival(a, ax, b, bx, c, cx, d, dx)
+    let rd = cx[dimd] - dx[dimd]                          // R_CD,d
+    let pbra = cint_product_center(a, ax, b, bx)
+    let qket = cint_product_center(c, cx, d, dx)
+    if len(pbra) != 3 { return 0.0 }
+    if len(qket) != 3 { return 0.0 }
+    let alpha = p * q / (p + q)
+    let gauss = (2.0 * mu_cd * rd) * e                    // ∂(e^{−μ_cd r²_CD})/∂D_d
+    let boys = _eriboys_factor(a, ax, b, bx, c, cx, d, dx) * 2.0 * alpha * (d / q) * (qket[dimd] - pbra[dimd])
+    return gauss + boys
+}

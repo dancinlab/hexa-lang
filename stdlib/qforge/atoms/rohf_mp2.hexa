@@ -1,0 +1,107 @@
+// HEXA Standard Library — qforge/atoms/rohf_mp2
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE-ATOMS brick #29 — semicanonical ROHF-MP2: the open-shell correlation energy
+// on a SPIN-PURE ROHF reference, fed through the larger cc-pVXZ bases for the OPEN-SHELL
+// CBS basis-set-limit. r28 sealed semicanonical ROHF-CCSD(T) on a SPIN-PURE reference
+// (CH₃ ⟨S²⟩=0.75 EXACT). r23 sealed the CLOSED-shell CBS (cc-pVDZ→TZ X⁻³). This brick
+// closes the LAST basis gap — the OPEN-shell CBS — at the level that runs LIVE on the
+// larger basis: semicanonical ROHF-MP2 (the open-shell MP2 correlation energy).
+//
+//   closed shell, CBS:  RHF  → MP2/CCSD(T) → cc-pVDZ→TZ X⁻³ CBS          (r23)
+//   open shell, ref:    ROHF → ROHF-CCSD(T) (STO-3G gold standard)        (r28)
+//   open shell, CBS:    ROHF → ROHF-MP2 → cc-pVDZ→TZ X⁻³ CBS  ← THIS      (r29)
+//
+// ── the realization (d19 — REUSE the r28 semicanonical reference + the r25 UMP2) ────────
+//   PySCF's ROHF-MP2 is semicanonical: take the ROHF spatial orbitals, rotate WITHIN the
+//   per-spin occ/occ and virt/virt blocks so each spin's Fock is diagonal there, and run
+//   spin-resolved MP2 on the resulting (Cα,Cβ,εα,εβ). Those are EXACTLY the semicanonical
+//   orbitals the r28 ROHF-CCSD(T) driver builds (rohf_semicanonical_spin, BYTE-UNTOUCHED),
+//   and ump2_corr_from_uhf (the r25 spin-resolved UMP2, BYTE-UNTOUCHED) is what consumes
+//   them. So ROHF-MP2 = ump2_corr_from_uhf fed SEMICANONICAL ROHF orbitals instead of UHF
+//   orbitals — NO new MP2 kernel, NO new semicanonical rotation. The ONLY new logic is the
+//   one-call wiring: rohf_scf → semicanonicalize α/β → ump2_corr_from_uhf.
+//
+// ── honest scope (d6) ───────────────────────────────────────────────────────────────────
+//   The ROHF *reference* is spin-pure (⟨S²⟩=S(S+1) EXACT). Semicanonical ROHF-MP2 uses the
+//   per-spin semicanonical eigenvalues in the MP2 denominators (the standard production
+//   ROHF-MP2 PySCF/Gaussian ship). The off-diagonal occ-virt Fock coupling that a fully
+//   Fock-general MP2 (RMP2/ZAPT) would carry is dropped from the denominators — semicanonical
+//   = canonical only WITHIN occ/virt; this is the same approximation r28 ROHF-CCSD(T) makes,
+//   and it matches PySCF's mp.MP2(scf.ROHF(...)) to byte grade. All anchors are REAL PySCF
+//   2.13.1 outputs; nothing fitted/forced.
+//
+// reuse (d19 · d3): rohf_scf (the spin-pure reference — vendored molscf brick 8, byte-
+//   untouched) + uhf_fock_pair (the spin Focks at the ROHF densities) + rohf_semicanonical_spin
+//   (the r28 semicanonical rotation, byte-untouched) + ump2_corr_from_uhf (the r25 spin-
+//   resolved UMP2, byte-untouched) + uhf_spin_squared (the ⟨S²⟩ witness). No new kernel minted.
+//
+// ⚠ PARSER (f37015ac): every long index-summed arithmetic assignment is one physical line.
+
+use "stdlib/qforge/molscf/rohf"
+use "stdlib/qforge/molscf/uhf"
+use "stdlib/qforge/atoms/ump2"
+use "stdlib/qforge/atoms/rohf_ccsd_t"
+
+// ════════════════════════════════════════════════════════════════════════════
+//   driver — molecular integrals  →  semicanonical ROHF-MP2 correlation energy
+// ════════════════════════════════════════════════════════════════════════════
+//
+// One call: run the spin-pure ROHF reference (rohf_scf, with DIIS — the r24 DIIS makes the
+// larger cc-pVXZ bases converge), semicanonicalize α and β from the ROHF orbitals (reuse
+// the r28 rohf_semicanonical_spin), then feed the semicanonical (Cα,Cβ,εα,εβ) into the r25
+// spin-resolved UMP2 driver (BYTE-UNTOUCHED). Returns
+//   [ e_rohf, ss_rohf, e_aa, e_bb, e_ab, e_corr, e_total, rohf_conv ]
+// with e_corr = e_aa+e_bb+e_ab (the semicanonical ROHF-MP2 correlation energy) and
+// e_total = e_rohf + e_corr. ss_rohf = the ROHF ⟨S²⟩ (= S(S+1) EXACTLY — spin-pure).
+pub fn rohf_mp2_from_integrals(
+    S: [float], hcore: [float], eri: [float],
+    n: int, n_closed: int, n_open: int, e_nuc: float,
+    scf_iter: int, scf_tol: float
+) -> [any] {
+    let n_a = n_closed + n_open
+    let n_b = n_closed
+    // ── spin-pure ROHF reference (reuse molscf brick 8 + r24 DIIS, byte-untouched) ──
+    let rh = rohf_scf(S, hcore, eri, n, n_closed, n_open, e_nuc, scf_iter, scf_tol, true)
+    let e_rohf: float = rh[0]
+    let Pa: [float] = rh[3]
+    let Pb: [float] = rh[4]
+    let C: [float] = rh[8]
+    let rohf_conv: bool = rh[9]
+    // ⟨S²⟩ exact by construction (reuse uhf_spin_squared — same orbitals → contamination 0)
+    let ss_rohf = uhf_spin_squared(C, C, S, n, n_a, n_b)
+
+    // spin Focks at the converged ROHF densities (reuse uhf_fock_pair)
+    let fp = uhf_fock_pair(hcore, Pa, Pb, eri, n)
+    let Fa: [float] = fp[0]
+    let Fb: [float] = fp[1]
+
+    // ── semicanonicalize each spin from the SAME ROHF orbitals (reuse r28, byte-untouched) ──
+    let sca = rohf_semicanonical_spin(C, Fa, n, n_a)
+    let Ca: [float] = sca[0]
+    let eps_a: [float] = sca[1]
+    let scb = rohf_semicanonical_spin(C, Fb, n, n_b)
+    let Cb: [float] = scb[0]
+    let eps_b: [float] = scb[1]
+
+    // ── spin-resolved semicanonical MP2 (reuse r25 ump2_corr_from_uhf, byte-untouched) ──
+    let um = ump2_corr_from_uhf(eri, Ca, Cb, eps_a, eps_b, n, n_a, n_b, e_rohf)
+    let e_aa: float = um[0]
+    let e_bb: float = um[1]
+    let e_ab: float = um[2]
+    let e_corr: float = um[3]
+    let e_total = e_rohf + e_corr
+    return [e_rohf, ss_rohf, e_aa, e_bb, e_ab, e_corr, e_total, rohf_conv]
+}
+
+// 2-point X⁻³ CBS extrapolation of the correlation energy (Helgaker 1997 / Halkier 1998).
+//   E_corr(CBS) = (X³·E_corr(X) − Y³·E_corr(Y)) / (X³ − Y³), (X,Y)=(3,2) for (TZ,DZ).
+// The SAME formula r23 used for the closed-shell CBS — applied here to the open-shell
+// correlation energy. (X,Y)=(3,2): cc-pVTZ cardinal 3, cc-pVDZ cardinal 2.
+pub fn rohf_cbs_x3(e_dz: float, e_tz: float) -> float {
+    let x3 = 27.0   // 3³ (cc-pVTZ)
+    let y3 = 8.0    // 2³ (cc-pVDZ)
+    return (x3 * e_tz - y3 * e_dz) / (x3 - y3)
+}

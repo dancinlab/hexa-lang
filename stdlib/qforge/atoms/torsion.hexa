@@ -1,0 +1,108 @@
+// HEXA Standard Library — qforge/atoms/torsion
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE atoms-scale brick #5b — the periodic torsion (dihedral) bonded term that
+// completes the GFN-xTB-style bonded energy alongside the EHT-SCC core. This is
+// the standard cosine Fourier-series dihedral potential used by GFN-FF / GFN2-xTB
+// and every classical force field (Grimme, JCTC 13 1989 (2017), GFN-FF;
+// Bannwarth-Ehlert-Grimme GFN2-xTB, JCTC 15 1652 (2019)).
+//
+// THE PHYSICS ─────────────────────────────────────────────────────────────────
+//   A dihedral angle φ (the angle between the planes (i,j,k) and (j,k,l) of four
+//   bonded atoms) carries a periodic torsional energy expressed as a truncated
+//   Fourier cosine series — a sum of barrier terms, one per periodicity n:
+//
+//       V(φ) = ½ Σ_n V_n ( 1 + cos( n φ − δ_n ) )
+//
+//   V_n is the barrier height of the n-fold term, δ_n its phase offset. The ½(1+…)
+//   normalisation makes each term range over [0, V_n] (zero at its minima). The
+//   analytic derivative is
+//
+//       ∂V/∂φ = −½ Σ_n V_n · n · sin( n φ − δ_n ) .
+//
+//   The chain rule ∂V/∂R = (∂V/∂φ)(∂φ/∂R) folds the torsional force onto the
+//   Cartesian coordinates; ∂φ/∂R is the standard dihedral-gradient geometry
+//   (Blondel-Karplus) — this atom owns V(φ) and ∂V/∂φ exactly; the ∂φ/∂R
+//   geometric Jacobian is provided by qforge_dihedral_angle's companion (the
+//   torsion-energy atom is the periodic potential, d4-generic in {V_n, δ_n, n}).
+//
+// d4-generic: the term list (multiplicities n, barriers V_n, phases δ_n) is a
+//   CALLER-SUPPLIED parameter table — no specific dihedral type is hardcoded. A
+//   threefold C–C single bond, a twofold conjugated bond, or a custom GFN term
+//   traverse the identical sum (d4).
+//
+// reuse (d19): pure trig from the language core (cos/sin builtins) — no new
+//   dependency. The dihedral GEOMETRY (φ from four positions) is provided here as
+//   qforge_dihedral_angle so the bonded layer has a single source for φ.
+
+// ── dihedral angle φ from four atom positions (flat xyz, 3 per atom) ──────────
+//   Atoms i-j-k-l. φ is the signed angle (−π,π] between the (i,j,k) and (j,k,l)
+//   planes, computed via the standard cross-product / atan2 construction. Used to
+//   feed V(φ); the energy/derivative routines below take φ directly so they are
+//   independent of the geometry choice (d4-generic).
+fn _vsub(pos: [float], a: int, b: int) -> [float] {
+    return [pos[3*a+0]-pos[3*b+0], pos[3*a+1]-pos[3*b+1], pos[3*a+2]-pos[3*b+2]]
+}
+fn _cross(u: [float], v: [float]) -> [float] {
+    return [u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]]
+}
+fn _dot(u: [float], v: [float]) -> float { return u[0]*v[0]+u[1]*v[1]+u[2]*v[2] }
+fn _norm(u: [float]) -> float {
+    let s = u[0]*u[0]+u[1]*u[1]+u[2]*u[2]
+    if s <= 0.0 { return 0.0 }
+    let mut g = s
+    if g < 1.0 { g = 1.0 }
+    let mut it = 0
+    while it < 60 { let ng = 0.5*(g + s/g) ; if ng == g { break } ; g = ng ; it = it + 1 }
+    return g
+}
+
+pub fn qforge_dihedral_angle(pos: [float], i: int, j: int, k: int, l: int) -> float {
+    let b1 = _vsub(pos, j, i)   // i→j
+    let b2 = _vsub(pos, k, j)   // j→k
+    let b3 = _vsub(pos, l, k)   // k→l
+    let n1 = _cross(b1, b2)     // normal of plane (i,j,k)
+    let n2 = _cross(b2, b3)     // normal of plane (j,k,l)
+    // m1 = n1 × b2/|b2| gives the in-plane axis for a numerically robust atan2.
+    let b2n = _norm(b2)
+    let b2u = [b2[0]/b2n, b2[1]/b2n, b2[2]/b2n]
+    let m1 = _cross(n1, b2u)
+    let x = _dot(n1, n2)
+    let y = _dot(m1, n2)
+    return atan2(y, x)
+}
+
+// ── periodic torsion energy V(φ) = ½ Σ_n V_n (1 + cos(n φ − δ_n)) ─────────────
+//   mult:    the multiplicities n (length T) — e.g. [1.0, 2.0, 3.0].
+//   barrier: the barrier heights V_n (length T).
+//   phase:   the phase offsets δ_n in radians (length T).
+//   φ in radians. The three parameter vectors are CALLER data (d4-generic) — any
+//   number of Fourier terms, any element/bond type, one sum.
+pub fn qforge_torsion_energy(phi: float, mult: [float], barrier: [float],
+                             phase: [float]) -> float {
+    let t = len(mult)
+    let mut e = 0.0
+    let mut k = 0
+    while k < t {
+        e = e + 0.5 * barrier[k] * (1.0 + cos(mult[k] * phi - phase[k]))
+        k = k + 1
+    }
+    return e
+}
+
+// ── analytic torsion derivative ∂V/∂φ = −½ Σ_n V_n n sin(n φ − δ_n) ───────────
+//   The exact angular derivative — the magnitude that the dihedral Jacobian
+//   ∂φ/∂R multiplies to give the Cartesian torsional force.
+pub fn qforge_torsion_dedphi(phi: float, mult: [float], barrier: [float],
+                             phase: [float]) -> float {
+    let t = len(mult)
+    let mut d = 0.0
+    let mut k = 0
+    while k < t {
+        d = d - 0.5 * barrier[k] * mult[k] * sin(mult[k] * phi - phase[k])
+        k = k + 1
+    }
+    return d
+}

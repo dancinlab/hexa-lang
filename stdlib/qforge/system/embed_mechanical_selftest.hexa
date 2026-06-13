@@ -1,0 +1,165 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// embed_mechanical_selftest.hexa — QFORGE/system round-2 g5 gate: MECHANICAL
+// EMBEDDING with REAL CORES (qforge SCF electrostatic total · chem/md LJ+bonded
+// · classical LJ+Coulomb coupling). Every reference below is computed from the
+// SAME real cores composed by hand (or an analytic limit), so the gate is a
+// pure numerical identity — no LLM judge.
+//
+// FOUR g5 CHECKS (task-mandated):
+//  (a) FULL-CHAIN ADDITIVITY — the full real-core E_total equals the hand
+//      additive sum E_QM(inner) + E_MM(outer) + E_QM-MM(coupling), each term
+//      recomputed from its own real core. |Δ| < 1e-9.
+//  (b) NON-INTERACTING (separated) LIMIT — push the outer region far from the
+//      inner region; the LJ+Coulomb coupling → 0, so E_total → E_QM + E_MM.
+//      (Coulomb decays as 1/r, LJ as 1/r^6 — both pinned below tol at large r.)
+//  (c) INNER/OUTER RE-PARTITION CONSISTENCY — re-confirm round-1 partition
+//      invariance with the REAL cores: the round-1 additive==ONIOM identity
+//      holds when its low-level inputs are produced by the real qforge+chem/md
+//      energies. Residual ≡ 0 to round-off.
+//  (d) MM-ONLY LIMIT (inner emptied) — with NO inner particles the QM term is
+//      0 (empty Ewald) and the coupling is 0, so E_total == the full MM energy
+//      of the whole (outer) system.
+//
+// d4-GENERIC — embed_mechanical_total takes plain floats; the *_from_regions
+// wrapper calls the real cores. This gate exercises BOTH: the generic core on
+// hand scalars (a) and the full real-core chain (a–d).
+//
+// Run: HEXA_MAC_BUILD_OK=1 hexa build stdlib/qforge/system/embed_mechanical_selftest.hexa -o /tmp/qf_embm && /tmp/qf_embm
+// PASS: prints "embed_mechanical_selftest PASS".
+
+use "stdlib/qforge/system/embed_mechanical"
+use "stdlib/qforge/system/qmmm"
+use "stdlib/qforge/scf_etot"
+use "stdlib/chem/md/lennard_jones"
+use "stdlib/chem/md/bonded"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _ck(name: str, got: float, want: float, tol: float) -> int {
+    let d = _abs(got - want)
+    if d <= tol {
+        println("PASS " + name + " (got " + to_string(got) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want) + " |Δ|=" + to_string(d))
+    return 1
+}
+
+fn _ck0(name: str, got: float, tol: float) -> int {
+    if _abs(got) <= tol {
+        println("PASS " + name + " (|got|=" + to_string(_abs(got)) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — |got|=" + to_string(_abs(got)) + " not <= " + to_string(tol))
+    return 1
+}
+
+fn _mkp(x: float, y: float, z: float) -> MdParticle {
+    return MdParticle{ x: x, y: y, z: z, vx: 0.0, vy: 0.0, vz: 0.0,
+                       mass: 1.0, fx: 0.0, fy: 0.0, fz: 0.0 }
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── shared toy system ──────────────────────────────────────────────
+    // Cell + Ewald params (qforge SCF electrostatic core).
+    let L = 10.0
+    let eta = 0.30
+    let kmax = 6
+    // LJ + Coulomb params (chem/md + coupling).
+    let eps = 0.5
+    let sigma = 2.0
+    let kc = 1.0          // Coulomb prefactor (toy units)
+
+    // INNER region (QM): 2 charges. positions packed for qforge_ewald, and the
+    // matching MdParticle array for the coupling core.
+    let pos_inner = [2.0, 2.0, 2.0,  3.5, 2.0, 2.0]
+    let q_inner = [1.0, -1.0]
+    let inner = [_mkp(2.0, 2.0, 2.0), _mkp(3.5, 2.0, 2.0)]
+
+    // OUTER region (MM): 2 particles, one bond between them.
+    let outer = [_mkp(6.0, 5.0, 5.0), _mkp(7.1, 5.0, 5.0)]
+    let q_outer = [0.4, -0.4]
+    let bond0 = BondTerm{ i: 0, j: 1, k_b: 100.0, r0: 1.0 }
+    let bonds = [bond0]
+    let angles = []
+    let dihedrals = []
+
+    // ── CHECK (a) — FULL-CHAIN ADDITIVITY vs hand sum ───────────────────
+    // Recompute each region term from its own real core, sum by hand, compare
+    // to the full chain. Identity to 1e-9 (mandated tol).
+    let e_qm_hand  = embed_qm_inner_energy(pos_inner, q_inner, L, eta, kmax)
+    let e_mm_hand  = embed_mm_outer_energy(outer, eps, sigma, bonds, angles, dihedrals, L)
+    let e_cp_hand  = embed_qmmm_coupling(inner, q_inner, outer, q_outer, eps, sigma, kc)
+    let e_hand_sum = e_qm_hand + e_mm_hand + e_cp_hand
+    let e_chain    = embed_mechanical_from_regions(
+                        inner, pos_inner, q_inner, outer, q_outer,
+                        L, eta, kmax, eps, sigma, kc, bonds, angles, dihedrals)
+    println("E_QM(inner)=" + to_string(e_qm_hand) + "  E_MM(outer)=" + to_string(e_mm_hand)
+            + "  E_QM-MM=" + to_string(e_cp_hand))
+    fails = fails + _ck("(a) full chain == hand additive sum", e_chain, e_hand_sum, 1.0e-9)
+    // also confirm the generic core (plain floats) lands on the same number.
+    let e_generic = embed_mechanical_total(e_qm_hand, e_mm_hand, e_cp_hand)
+    fails = fails + _ck("(a) generic core == chain", e_generic, e_chain, 1.0e-12)
+
+    // ── CHECK (b) — NON-INTERACTING (separated) LIMIT ───────────────────
+    // Move the outer region very far away (≫ sigma and large r for Coulomb).
+    // Coupling → 0, so E_total → E_QM + E_MM. The QM term and the intra-outer
+    // MM term are unchanged by translating the WHOLE outer block, so we compare
+    // to E_QM(inner) + E_MM(outer_far).
+    let far = 1.0e6
+    let outer_far = [_mkp(6.0 + far, 5.0, 5.0), _mkp(7.1 + far, 5.0, 5.0)]
+    let e_cp_far = embed_qmmm_coupling(inner, q_inner, outer_far, q_outer, eps, sigma, kc)
+    fails = fails + _ck0("(b) coupling → 0 at separation", e_cp_far, 1.0e-9)
+    let e_mm_far = embed_mm_outer_energy(outer_far, eps, sigma, bonds, angles, dihedrals, L)
+    let e_total_far = embed_mechanical_from_regions(
+                        inner, pos_inner, q_inner, outer_far, q_outer,
+                        L, eta, kmax, eps, sigma, kc, bonds, angles, dihedrals)
+    fails = fails + _ck("(b) E_total(sep) == E_QM + E_MM", e_total_far, e_qm_hand + e_mm_far, 1.0e-9)
+
+    // ── CHECK (c) — INNER/OUTER RE-PARTITION CONSISTENCY (round-1, real) ─
+    // Re-confirm the round-1 additive==ONIOM partition invariance using
+    // REAL-core energies as the low/high-level inputs. We treat:
+    //   e_low_real  = real MM energy of the WHOLE system (inner∪outer as MM)
+    //   e_low_inner = real MM energy of inner-as-MM
+    //   e_low_outer = real MM energy of outer-as-MM
+    //   e_high_inner= real qforge SCF energy of inner (the QM upgrade)
+    // The round-1 identity residual must be 0 to round-off on these REAL
+    // numbers — the partition is a bookkeeping choice, engine-independent.
+    let whole = [inner[0], inner[1], outer[0], outer[1]]
+    let e_low_real  = lj_system_energy(whole, eps, sigma)
+    let e_low_inner = lj_system_energy(inner, eps, sigma)
+    let e_low_outer = lj_system_energy(outer, eps, sigma)
+    let e_high_inner = e_qm_hand   // qforge SCF electrostatic total of inner
+    let resid = qmmm_scheme_residual(e_high_inner, e_low_real, e_low_inner, e_low_outer)
+    fails = fails + _ck0("(c) real-core partition residual (round-1 invariance)", resid, 1.0e-9)
+    // and the mechanical coupling derived from the real low-level MM energies
+    // equals the inner↔outer LJ interaction computed directly (cross-check the
+    // two coupling definitions agree at mechanical embedding, LJ-only).
+    let coup_levels = qmmm_mechanical_coupling(e_low_real, e_low_inner, e_low_outer)
+    let coup_direct = embed_qmmm_coupling(inner, q_inner, outer, q_outer, eps, sigma, 0.0) // kc=0 → LJ-only
+    fails = fails + _ck("(c) low-level coupling == direct inner↔outer LJ", coup_levels, coup_direct, 1.0e-9)
+
+    // ── CHECK (d) — MM-ONLY LIMIT (inner emptied) ───────────────────────
+    // No inner particles: qforge Ewald of an empty charge set = 0, coupling = 0
+    // (no inner↔outer pairs), so E_total == E_MM of the whole (outer) system.
+    let pos_empty = []
+    let q_empty = []
+    let inner_empty = []
+    let e_qm_empty = embed_qm_inner_energy(pos_empty, q_empty, L, eta, kmax)
+    fails = fails + _ck0("(d) empty inner QM energy == 0", e_qm_empty, 1.0e-12)
+    let e_cp_empty = embed_qmmm_coupling(inner_empty, q_empty, outer, q_outer, eps, sigma, kc)
+    fails = fails + _ck0("(d) empty inner coupling == 0", e_cp_empty, 1.0e-12)
+    let e_total_mmonly = embed_mechanical_from_regions(
+                            inner_empty, pos_empty, q_empty, outer, q_outer,
+                            L, eta, kmax, eps, sigma, kc, bonds, angles, dihedrals)
+    fails = fails + _ck("(d) MM-only limit == full MM(outer)", e_total_mmonly, e_mm_hand, 1.0e-12)
+
+    if fails == 0 {
+        println("embed_mechanical_selftest PASS")
+    } else {
+        println("embed_mechanical_selftest FAIL — " + to_string(fails) + " case(s)")
+    }
+}

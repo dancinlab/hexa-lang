@@ -1,0 +1,149 @@
+// HEXA Standard Library — qforge/atoms/torsion_grad
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE atoms-scale brick #7b — the analytic dihedral Jacobian ∂φ/∂R that folds
+// the R5 torsion potential ∂V/∂φ (torsion.hexa, qforge_torsion_dedphi) onto the
+// Cartesian coordinates of the four dihedral atoms. R5 owned V(φ) and ∂V/∂φ
+// exactly but left ∂φ/∂R to round-7; this brick supplies the standard
+// Blondel-Karplus analytic dihedral gradient and completes the torsional force
+//
+//     F_i = − ∂V/∂R_i = − (∂V/∂φ) (∂φ/∂R_i) .
+//
+// (Blondel & Karplus, J. Comput. Chem. 17 1132 (1996) — the closed-form dihedral
+// derivative; Bekker et al. for the equivalent cross-product form; the same
+// gradient used by GROMACS / every MD engine.)
+//
+// THE GEOMETRY ────────────────────────────────────────────────────────────────
+//   Four bonded atoms i-j-k-l with bond vectors (the SAME convention as
+//   qforge_dihedral_angle in torsion.hexa, so ∂φ/∂R is consistent with the φ it
+//   returns — d19, one source for φ):
+//       b1 = r_j − r_i ,  b2 = r_k − r_j ,  b3 = r_l − r_k .
+//   Define the plane normals  n1 = b1 × b2 ,  n2 = b2 × b3 . The Blondel-Karplus
+//   analytic gradient of φ w.r.t. the four positions is
+//
+//       ∂φ/∂r_i = +(|b2| / |n1|²) n1
+//       ∂φ/∂r_l = −(|b2| / |n2|²) n2
+//       ∂φ/∂r_j = −( 1 + (b1·b2)/|b2|² ) ∂φ/∂r_i + ( (b3·b2)/|b2|² ) ∂φ/∂r_l
+//       ∂φ/∂r_k =    ( (b1·b2)/|b2|² )   ∂φ/∂r_i − ( 1 + (b3·b2)/|b2|² ) ∂φ/∂r_l
+//
+//   These four 3-vectors satisfy ∂φ/∂r_i + ∂φ/∂r_j + ∂φ/∂r_k + ∂φ/∂r_l = 0
+//   (translational invariance — a rigid shift of all four atoms leaves φ
+//   unchanged), so the total torsional force on the four-atom cluster is zero.
+//   This is the exact analytic Jacobian; the selftest cross-checks it against a
+//   central finite difference of qforge_dihedral_angle (torsion.hexa) to |Δ|<1e-6.
+//
+// d4-generic: the four atom indices (i,j,k,l) and the flat position array are the
+//   ONLY inputs — no bond type, element, or multiplicity is referenced here. The
+//   force assembly multiplies by the caller's ∂V/∂φ (any V_n, δ_n, n table).
+//
+// reuse (d19): the dihedral ANGLE φ itself comes from qforge_dihedral_angle in
+//   torsion.hexa (one source for φ); ∂V/∂φ from qforge_torsion_dedphi (R5). This
+//   brick adds ONLY the geometric Jacobian ∂φ/∂R and the chain-rule assembly —
+//   no potential, no angle, no element is re-implemented (d3).
+use "stdlib/qforge/atoms/torsion"
+
+// ── small vector helpers (flat 3-vectors) ────────────────────────────────────
+fn _sub3(pos: [float], a: int, b: int) -> [float] {
+    return [pos[3*a+0]-pos[3*b+0], pos[3*a+1]-pos[3*b+1], pos[3*a+2]-pos[3*b+2]]
+}
+fn _cross3(u: [float], v: [float]) -> [float] {
+    return [u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]]
+}
+fn _dot3(u: [float], v: [float]) -> float { return u[0]*v[0]+u[1]*v[1]+u[2]*v[2] }
+fn _sqrtf(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    if g < 1.0 { g = 1.0 }
+    let mut it = 0
+    while it < 60 { let ng = 0.5*(g + x/g) ; if ng == g { break } ; g = ng ; it = it + 1 }
+    return g
+}
+fn _norm3(u: [float]) -> float { return _sqrtf(_dot3(u, u)) }
+
+// ── Blondel-Karplus analytic ∂φ/∂R for atoms i-j-k-l ─────────────────────────
+//   Returns a FLAT length-12 array = the four 3-vectors stacked:
+//     out[0..2]  = ∂φ/∂r_i      out[3..5]  = ∂φ/∂r_j
+//     out[6..8]  = ∂φ/∂r_k      out[9..11] = ∂φ/∂r_l
+//   Exact closed form (above). By translational invariance the four 3-vectors
+//   sum componentwise to zero — verified in the selftest. d4-generic over (i,j,k,l)
+//   and any geometry that is not a degenerate (collinear) dihedral.
+pub fn qforge_dihedral_dphi_dr(pos: [float], i: int, j: int, k: int,
+                               l: int) -> [float] {
+    // bond vectors in EXACTLY qforge_dihedral_angle's convention (torsion.hexa):
+    //   b1 = r_j − r_i ,  b2 = r_k − r_j ,  b3 = r_l − r_k
+    //   n1 = b1 × b2 (plane i,j,k) ,  n2 = b2 × b3 (plane j,k,l)
+    // torsion.hexa returns φ = atan2( (n1×b̂2)·n2 , n1·n2 ); the gradient below is
+    // the closed form for THAT φ, with the overall sign FD-verified to |Δ|<1e-6
+    // against a central difference of qforge_dihedral_angle in the selftest.
+    let b1 = _sub3(pos, j, i)
+    let b2 = _sub3(pos, k, j)
+    let b3 = _sub3(pos, l, k)
+    let n1 = _cross3(b1, b2)
+    let n2 = _cross3(b2, b3)
+    let b2n = _norm3(b2)
+    let n1sq = _dot3(n1, n1)           // |n1|²
+    let n2sq = _dot3(n2, n2)           // |n2|²
+
+    //   ∂φ/∂r_i = +(|b2|/|n1|²) n1
+    //   ∂φ/∂r_l = −(|b2|/|n2|²) n2
+    // (the leading signs are set to match qforge_dihedral_angle's φ — FD-verified.)
+    let mut di: [float] = [0.0, 0.0, 0.0]
+    let mut dl: [float] = [0.0, 0.0, 0.0]
+    if n1sq > 0.0 {
+        let ca = b2n / n1sq
+        di = [ca*n1[0], ca*n1[1], ca*n1[2]]
+    }
+    if n2sq > 0.0 {
+        let cb = 0.0 - b2n / n2sq
+        dl = [cb*n2[0], cb*n2[1], cb*n2[2]]
+    }
+
+    // projection coefficients  p = (b1·b2)/|b2|² ,  q = (b3·b2)/|b2|²
+    let b2sq = b2n * b2n
+    let mut pcoef = 0.0
+    let mut qcoef = 0.0
+    if b2sq > 0.0 {
+        pcoef = _dot3(b1, b2) / b2sq
+        qcoef = _dot3(b3, b2) / b2sq
+    }
+
+    // translational-invariance closure of the two end gradients (Bekker form,
+    // FD-verified component-by-component to |Δ|<1e-6 against qforge_dihedral_angle):
+    //   ∂φ/∂r_j = −(1 + p) ∂φ/∂r_i + q ∂φ/∂r_l
+    //   ∂φ/∂r_k =      p   ∂φ/∂r_i − (1 + q) ∂φ/∂r_l
+    // (di + dj + dk + dl = 0 by construction — translational invariance.)
+    let mut dj: [float] = [0.0, 0.0, 0.0]
+    let mut dk: [float] = [0.0, 0.0, 0.0]
+    let mut c = 0
+    while c < 3 {
+        dj[c] = (0.0 - (1.0 + pcoef)) * di[c] + qcoef * dl[c]
+        dk[c] = pcoef * di[c] - (1.0 + qcoef) * dl[c]
+        c = c + 1
+    }
+
+    return [di[0], di[1], di[2],  dj[0], dj[1], dj[2],
+            dk[0], dk[1], dk[2],  dl[0], dl[1], dl[2]]
+}
+
+// ── Cartesian torsional force on the four dihedral atoms ──────────────────────
+//   Chain rule  F = −∂V/∂φ · ∂φ/∂R, with ∂V/∂φ = qforge_torsion_dedphi (R5) and
+//   ∂φ/∂R = qforge_dihedral_dphi_dr (above). Returns a flat length-12 force array
+//   in the SAME stacked i,j,k,l layout. Σ forces = 0 (Newton's third law over the
+//   four-atom cluster) because Σ ∂φ/∂R = 0. d4-generic in the {mult,barrier,phase}
+//   torsion table.
+pub fn qforge_torsion_force(pos: [float], i: int, j: int, k: int, l: int,
+                            mult: [float], barrier: [float],
+                            phase: [float]) -> [float] {
+    let phi = qforge_dihedral_angle(pos, i, j, k, l)
+    let dvdphi = qforge_torsion_dedphi(phi, mult, barrier, phase)
+    let dphidr = qforge_dihedral_dphi_dr(pos, i, j, k, l)
+    let mut force: [float] = []
+    let mut c = 0
+    while c < 12 {
+        force.push(0.0 - dvdphi * dphidr[c])     // F = −(∂V/∂φ)(∂φ/∂R)
+        c = c + 1
+    }
+    return force
+}

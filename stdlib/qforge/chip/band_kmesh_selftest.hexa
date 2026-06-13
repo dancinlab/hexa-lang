@@ -1,0 +1,163 @@
+// @ci_gate — deterministic · pure analytic anchors
+//
+// qforge_chip_band_kmesh_selftest.hexa — QFORGE CHIP round-2 g5 gate.
+//
+// band_kmesh.hexa promotes the round-1 spine: a single ε(k) → a k-MESH band
+// manifold (mpgrid REUSE), a closed-form 1D van-Hove DOS, and a 2-terminal NEGF
+// transmission whose mode count drives the Landauer conductance — closing the
+// band↔transport bridge round-1 only encoded as an identity. Every anchor is an
+// EXACT closed form (d6 — derivable, none tuned):
+//
+//   (A) k-MESH BANDWIDTH — ε swept on an MP mesh; ε_max−ε_min → 4t. An EVEN-n
+//       unshifted grid samples the zone boundary k=π/a (ε=ε₀+2t) and a point
+//       near the centre, so a dense even mesh recovers bandwidth=4t exactly; an
+//       ODD-n grid is Γ-centred. We assert the dense-mesh bandwidth = 4t and the
+//       van-Hove band edges = ε₀∓2t.                                            🔵
+//   (B) DOS NORMALISATION — ∫g(E)dE over the band = 1 state (closed-form arcsin
+//       antiderivative, no quadrature); g(E) diverges 1/√ at the van-Hove edges
+//       and is 0 outside the band — the 1D singularity structure.              🔵
+//   (C) NEGF TRANSMISSION / CONDUCTANCE — T(E) = open-mode count = integer
+//       plateau; G(E)=T(E)·G₀ quantizes EXACTLY to N·G₀ on each plateau and is 0
+//       in a gap — the reflectionless ballistic limit (Fisher-Lee → mode count). 🔵
+//   (D) BAND↔TRANSPORT BRIDGE — the Landauer plateau count at E_F equals the
+//       number of sub-bands the band manifold puts at E_F: T(E_F) computed from
+//       the bands == the channel count fed to round-1's qforge_chip_landauer_g.
+//       The SAME band kernel drives the transport count — bridge LIVE.          🔵
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/chip/band_kmesh_selftest.hexa
+// PASS: "qforge_chip_band_kmesh_selftest PASS".
+use "stdlib/qforge/chip/band_kmesh"
+use "stdlib/qforge/chip/band_transport"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _pi() -> float { return 3.14159265358979323846 }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_int(name: str, got: int, want: int) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let pi = _pi()
+
+    // shared band parameters (match round-1): ε₀=0.5 eV, t=1.2 eV, a=2.5 Å.
+    let eps0 = 0.5
+    let t = 1.2
+    let a = 2.5
+
+    // ══ (A) k-mesh band sweep — bandwidth=4t + van-Hove edges ═══════════════
+    // HONEST MP fact (d6): the MP coordinate u_r=(2r−n−1)/(2n) means an UNSHIFTED
+    // even-n grid NEVER hits the zone boundary k=π/a — its max u=(n−1)/2n is offset
+    // by 1/(2n), so bandwidth only ASYMPTOTES to 4t (e.g. n=64 → 4.794, not 4.8).
+    // A SHIFTED even grid (shift=1) adds exactly 1/(2n): u_max=n/2n=½ (k=π/a) and
+    // u_min=−½+1/n→ the grid samples BOTH van-Hove edges EXACTLY (true even for
+    // n=2). That shifted-even grid is the correct bandwidth anchor.
+    // Materialise the edge pair to scalar locals immediately (gen3 arena-return
+    // guard, handoff aededed6).
+    let edges = qforge_chip_kmesh_edges(eps0, t, a, 64, 1)
+    let eLo = edges[0]
+    let eHi = edges[1]
+    let bw = eHi - eLo
+    fails = fails + _ck_close("(A) shifted even-mesh bandwidth = 4t (exact)", bw, 4.0*t, 1.0e-12)
+    fails = fails + _ck_close("(A) van-Hove upper edge = ε₀+2t", eHi, eps0 + 2.0*t, 1.0e-12)
+    fails = fails + _ck_close("(A) van-Hove lower edge = ε₀−2t", eLo, eps0 - 2.0*t, 1.0e-12)
+    // even a MINIMAL shifted grid (n=2) hits both edges → bandwidth exact.
+    let edges2 = qforge_chip_kmesh_edges(eps0, t, a, 2, 1)
+    fails = fails + _ck_close("(A) n=2 shifted bandwidth = 4t", edges2[1] - edges2[0], 4.0*t, 1.0e-12)
+    // mesh point count = n1 (1D collapse of the n1×1×1 MP grid) — mpgrid REUSE.
+    let sweep = qforge_chip_kmesh_band(eps0, t, a, 16, 0)
+    fails = fails + _ck_int("(A) mesh point count = n1 (mpgrid reuse)", len(sweep), 16)
+    // an ODD-n Γ-centred (unshifted) grid contains k=0 → ε=ε₀−2t is the exact min.
+    let oddEdges = qforge_chip_kmesh_edges(eps0, t, a, 65, 0)
+    let oddLo = oddEdges[0]
+    fails = fails + _ck_close("(A) odd-n Γ-centred min = ε₀−2t (exact)", oddLo, eps0 - 2.0*t, 1.0e-12)
+    // and the unshifted even grid only ASYMPTOTES (honest d6): n=64 bandwidth < 4t.
+    let unEdges = qforge_chip_kmesh_edges(eps0, t, a, 64, 0)
+    fails = fails + _ck_true("(A) unshifted even-mesh underfills band (bw<4t)",
+                             (unEdges[1] - unEdges[0]) < 4.0*t)
+
+    // ══ (B) 1D DOS — van-Hove 1/√ divergence + normalisation ═══════════════
+    // ∫_{ε₀−2t}^{ε₀+2t} g(E) dE = 1 (one state per band), closed-form arcsin.
+    fails = fails + _ck_close("(B) DOS ∫ over band = 1 state", qforge_chip_dos1d_norm(eps0, t, a), 1.0, 1.0e-12)
+    // DOS is 0 strictly outside the band (|E−ε₀| > 2t).
+    fails = fails + _ck_close("(B) DOS = 0 above band", qforge_chip_dos1d(eps0, t, a, eps0 + 2.0*t + 0.5), 0.0, 1.0e-18)
+    fails = fails + _ck_close("(B) DOS = 0 below band", qforge_chip_dos1d(eps0, t, a, eps0 - 2.0*t - 0.5), 0.0, 1.0e-18)
+    // van-Hove 1/√ DIVERGENCE: g(E) grows without bound approaching the edge.
+    // g at (edge − δ) for shrinking δ must strictly increase → 1/√ blow-up.
+    let gNear = qforge_chip_dos1d(eps0, t, a, eps0 + 2.0*t - 0.01)
+    let gNearer = qforge_chip_dos1d(eps0, t, a, eps0 + 2.0*t - 0.0001)
+    fails = fails + _ck_true("(B) van-Hove DOS diverges at edge (gNearer > gNear)", gNearer > gNear)
+    // exact closed-form value at band centre E=ε₀: g = 1/(π·2t).
+    fails = fails + _ck_close("(B) DOS(ε₀) = 1/(π·2t) (band centre)",
+                              qforge_chip_dos1d(eps0, t, a, eps0), 1.0/(pi*2.0*t), 1.0e-12)
+
+    // ══ (C) 2-terminal NEGF transmission / conductance quantization ════════
+    // three sub-bands (flat [lo,hi] pairs): B0=[-2,-0.5], B1=[0,1.5], B2=[2,3].
+    let bands = [-2.0, -0.5, 0.0, 1.5, 2.0, 3.0]
+    let g0 = 7.748091729e-5   // 2e²/h in siemens (match round-1)
+    // E inside ONE band → T=1 (one open mode); G=G₀.
+    fails = fails + _ck_int("(C) T(E in band0) = 1 mode", qforge_chip_negf_transmission(bands, -1.0), 1)
+    fails = fails + _ck_close("(C) G(E in band0) = 1·G₀", qforge_chip_negf_conductance(bands, -1.0, g0), g0, 1.0e-15)
+    // E in a GAP (between bands) → T=0, G=0.
+    fails = fails + _ck_int("(C) T(E in gap) = 0", qforge_chip_negf_transmission(bands, -0.25), 0)
+    fails = fails + _ck_close("(C) G(E in gap) = 0", qforge_chip_negf_conductance(bands, -0.25, g0), 0.0, 1.0e-18)
+    // E ABOVE all bands → T=0.
+    fails = fails + _ck_int("(C) T(E above all bands) = 0", qforge_chip_negf_transmission(bands, 5.0), 0)
+    // construct an energy inside ALL THREE bands by OVERLAPPING bands → T=3 plateau.
+    let ov = [-1.0, 1.0, -0.5, 1.5, 0.0, 2.0]   // three bands all covering E=0.5
+    fails = fails + _ck_int("(C) overlap → T=3 (3-mode plateau)", qforge_chip_negf_transmission(ov, 0.5), 3)
+    fails = fails + _ck_close("(C) overlap G = 3·G₀ (plateau)", qforge_chip_negf_conductance(ov, 0.5, g0), 3.0*g0, 1.0e-15)
+    // a single-band channel inside its band → T=1 mode-count (per-band primitive).
+    fails = fails + _ck_int("(C) modecount(E in [lo,hi]) = 1", qforge_chip_negf_modecount(-2.0, -0.5, -1.0), 1)
+    fails = fails + _ck_int("(C) modecount(E outside) = 0", qforge_chip_negf_modecount(-2.0, -0.5, 0.0), 0)
+
+    // ══ (D) band↔transport BRIDGE — plateau count == sub-bands at E_F ══════
+    // The NEGF transmission T(E_F) IS the number of bands crossing E_F. Feed that
+    // SAME integer as the perfect-channel count to round-1's Landauer G and the
+    // two conductances must agree EXACTLY: same band kernel → same plateau (LIVE).
+    let efA = 0.5                                   // inside all three overlap bands
+    let nA = qforge_chip_negf_transmission(ov, efA)         // band-derived channel count
+    fails = fails + _ck_int("(D) E_F cuts 3 sub-bands (band manifold)", nA, 3)
+    // build the perfect-channel list [1,1,1] of length nA, feed round-1 Landauer.
+    let chanA = _perfect_channels(nA)
+    let gLandauer = qforge_chip_landauer_g(chanA, g0)       // round-1 transport leg
+    let gNegf = qforge_chip_negf_conductance(ov, efA, g0)   // round-2 NEGF leg
+    fails = fails + _ck_close("(D) NEGF G == Landauer(N·G₀) (bridge)", gNegf, gLandauer, 1.0e-18)
+    fails = fails + _ck_close("(D) bridge value = 3·G₀", gNegf, 3.0*g0, 1.0e-15)
+    // a different E_F cutting ONE band → both legs give 1·G₀ (bridge holds at every E).
+    let efB = -1.0
+    let nB = qforge_chip_negf_transmission(bands, efB)
+    fails = fails + _ck_int("(D) E_F cuts 1 sub-band", nB, 1)
+    let gLandauerB = qforge_chip_landauer_g(_perfect_channels(nB), g0)
+    let gNegfB = qforge_chip_negf_conductance(bands, efB, g0)
+    fails = fails + _ck_close("(D) NEGF G == Landauer at 1-band E_F", gNegfB, gLandauerB, 1.0e-18)
+    // E_F in a gap → BOTH legs give exactly 0 (no open channel).
+    let nGap = qforge_chip_negf_transmission(bands, -0.25)
+    fails = fails + _ck_int("(D) E_F in gap → 0 channels", nGap, 0)
+    fails = fails + _ck_close("(D) gap bridge → 0 conductance",
+                              qforge_chip_negf_conductance(bands, -0.25, g0),
+                              qforge_chip_landauer_g(_perfect_channels(nGap), g0), 1.0e-18)
+
+    if fails == 0 { println("qforge_chip_band_kmesh_selftest PASS") }
+    else { println("qforge_chip_band_kmesh_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
+
+// helper: build a length-n list of perfect channels (Tₙ=1) to feed round-1's
+// Landauer leg from a band-derived integer count (the bridge's data carrier).
+fn _perfect_channels(n: int) -> [float] {
+    let mut ch: [float] = []
+    let mut i = 0
+    while i < n {
+        ch.push(1.0)
+        i = i + 1
+    }
+    return ch
+}

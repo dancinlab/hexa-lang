@@ -1,0 +1,299 @@
+// @ci_gate — deterministic · network-free · MOLSCF SC-NEVPT2 g5 gate
+//
+// nevpt2_selftest.hexa — QFORGE MOLSCF brick 16/N (round-13) SC-NEVPT2 g5 gate. The
+// 2nd-order MULTIREFERENCE perturbation correction on the round-12 CASSCF reference.
+// CASSCF captures STATIC correlation; NEVPT2 adds the DYNAMIC correlation on top (the
+// multireference analog of MP2-on-RHF), completing the multireference description to
+// quantitative accuracy. It assembles H-chain STO-3G integrals LIVE from brick 1/2/3,
+// runs RHF → CASSCF → SC-NEVPT2 (6 of 8 classes — those needing at most the 3-RDM),
+// and shows:
+//
+//   (a) NEVPT2 == PySCF mrpt.NEVPT: the SC-NEVPT2 correlation energy on a CAS(2,2)     🔵
+//       CASSCF reference (H₄ @1.8 and @3.0) matches PySCF's SC-NEVPT2 total AND every
+//       per-class energy (Sijrs · Sijr · Srsi · Srs · Sij · Sir). On CAS(2,2) the two
+//       4-RDM classes Sr/Si vanish identically, so the 6 shipped classes are the FULL
+//       NEVPT2 energy there.
+//   (b) dynamic-correlation recovery: E_NEVPT2 < 0 (dynamic correlation lowers the     🔵
+//       energy below CASSCF), and E_CASSCF+NEVPT2 recovers MORE total correlation than
+//       CASSCF alone, moving toward the FCI benchmark. H₄ @1.8: CASSCF corr −0.02398,
+//       CASSCF+NEVPT2 corr −0.05290 (2.2×), FCI corr −0.06198 (85% of the way).
+//   (c) consistency anchors: the active-space 2-/3-RDM satisfy their trace sum rules   🔵
+//       (Σ_p dm2[p,p,r,s] = N·dm1[r,s] ; Σ_p dm3[p,p,r,s,t,u] = N·dm2[r,s,t,u]); and
+//       the FULL-SPACE limiting check (CAS(2,2)=full space → CASSCF=FCI → NEVPT2 ≡ 0,
+//       no perturbers) checks out exactly.
+//   (d) regression: r1..r12 selftests (incl. r12 casscf, r11 fci) untouched — nevpt2   🔵
+//       is a NEW additive file; casscf.hexa / fci.hexa byte-for-byte unchanged.
+//
+// Independent reference (pyscf 2.13.1 RHF / mcscf.CASSCF / mrpt.NEVPT, STO-3G, Bohr):
+//   H₄ R=1.8 CAS(2,2):  E_CASSCF=−2.13740984  E_NEVPT2=−0.02891631  (CAS+NEV=−2.16632616)
+//     per-class: Sijrs=−0.00315230 Sijr=−0.00004975 Srsi=−0.00003927 Srs=−0.00162786
+//                Sij=−0.00237609 Sir=−0.02167103
+//   H₄ R=3.0 CAS(2,2):  E_CASSCF=−1.84528333  E_NEVPT2=−0.07190352  (CAS+NEV=−1.91718685)
+//     per-class: Sijrs=−0.01697121 Sijr=−0.00146739 Srsi=−0.00134652 Srs=−0.00028471
+//                Sij=−0.00031254 Sir=−0.05152115
+//   H₄ R=1.8 FCI=−2.17541114 ; H₂ R=1.4 CAS(2,2)=full → NEVPT2=0 exactly.
+//
+// HONEST (d6): SC-NEVPT2 is the STRONGLY-contracted variant (one perturber per class —
+// simpler than partially-contracted PC-NEVPT2 or CASPT2; stated as scope). SHIPPED = the
+// 6 classes needing at most the 3-RDM (the FULL NEVPT2 on any CAS(2,2)). NOT shipped =
+// the two 4-RDM classes Sr/Si (zero on CAS(2,2); named as round-14). The core/virtual
+// mo_energy = generalized-Fock diagonal (exact for 1-dim core/virtual blocks as here).
+// Anchor = PySCF mrpt.NEVPT verbatim; tolerances absorb the 1e-5 CASSCF-convergence gap.
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/molscf/nevpt2_selftest.hexa
+// PASS: "qforge_molscf_nevpt2_selftest PASS".
+use "stdlib/qforge/molscf/gaussian_integrals"
+use "stdlib/qforge/molscf/coulomb_integrals"
+use "stdlib/qforge/molscf/rhf"
+use "stdlib/qforge/molscf/casci"
+use "stdlib/qforge/molscf/fci"
+use "stdlib/qforge/molscf/casscf"
+use "stdlib/qforge/molscf/nevpt2"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+// contracted ERI (μν|σλ) — 4-fold primitive sum (same as the casci/casscf selftest).
+fn eri_contracted(
+    al: [float], co: [float], ax: [float],
+    bl: [float], bo: [float], bx: [float],
+    cl: [float], cco: [float], cx: [float],
+    dl: [float], dco: [float], dx: [float]
+) -> float {
+    let mut v = 0.0
+    let mut i = 0
+    while i < len(al) {
+        let mut j = 0
+        while j < len(bl) {
+            let mut k = 0
+            while k < len(cl) {
+                let mut l = 0
+                while l < len(dl) {
+                    let w = co[i] * bo[j] * cco[k] * dco[l]
+                    v = v + w * cint_eri_s(al[i], ax, bl[j], bx, cl[k], cx, dl[l], dx)
+                    l = l + 1
+                }
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return v
+}
+
+// Build a linear H_n / STO-3G chain at spacing R (bohr): [S, hcore, eri, F, e_nuc, e_rhf].
+fn hchain_integrals(nH: int, R: float) -> [any] {
+    let alpha = [3.42525091, 0.62391373, 0.16885540]
+    let coeff = [0.15432897, 0.53532814, 0.44463454]
+    let n = nH
+    let z = 1.0
+    let n_occ = nH / 2
+    let mut centers = []
+    let mut ci = 0
+    while ci < nH { centers.push([(to_float(ci)) * R, 0.0, 0.0]) ; ci = ci + 1 }
+    let mut S = []
+    let mut hcore = []
+    let mut a = 0
+    while a < n {
+        let mut b = 0
+        while b < n {
+            S.push(gint_overlap_contracted(alpha, coeff, centers[a], alpha, coeff, centers[b]))
+            let tab = gint_kinetic_contracted(alpha, coeff, centers[a], alpha, coeff, centers[b])
+            let mut vab = 0.0
+            let mut nn = 0
+            while nn < nH { vab = vab + cint_nuclear_contracted(alpha, coeff, centers[a], alpha, coeff, centers[b], z, centers[nn]) ; nn = nn + 1 }
+            hcore.push(tab + vab)
+            b = b + 1
+        }
+        a = a + 1
+    }
+    let mut eri = []
+    let mut mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu < n {
+            let mut sg = 0
+            while sg < n {
+                let mut lm = 0
+                while lm < n {
+                    eri.push(eri_contracted(alpha, coeff, centers[mu], alpha, coeff, centers[nu], alpha, coeff, centers[sg], alpha, coeff, centers[lm]))
+                    lm = lm + 1
+                }
+                sg = sg + 1
+            }
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    let mut e_nuc = 0.0
+    let mut ii = 0
+    while ii < nH {
+        let mut jj = ii + 1
+        while jj < nH { e_nuc = e_nuc + (z * z) / ((to_float(jj - ii)) * R) ; jj = jj + 1 }
+        ii = ii + 1
+    }
+    let out = rhf_scf(S, hcore, eri, n, n_occ, e_nuc, 200, 1.0e-10, 0.7)
+    return [S, hcore, eri, out[4], e_nuc, out[0]]
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ══ H₄ STO-3G integral sets, CASSCF(2,2) → SC-NEVPT2 ═══════════════════════════
+    let h4eq = hchain_integrals(4, 1.8)
+    let h4st = hchain_integrals(4, 3.0)
+    // CASSCF(2,2): ncore=1, m=2 active, 1α+1β. converge tight for the NEVPT2 anchor.
+    let scf_eq = casscf_from_rhf(h4eq[0], h4eq[1], h4eq[3], h4eq[2], 4, 1, 2, 1, 1, h4eq[4], 400, 1.0e-9, 0.2)
+    let scf_st = casscf_from_rhf(h4st[0], h4st[1], h4st[3], h4st[2], 4, 1, 2, 1, 1, h4st[4], 400, 1.0e-9, 0.2)
+    let casscf_eq = scf_eq[0]
+    let casscf_st = scf_st[0]
+    // SC-NEVPT2 on the CASSCF-optimized orbitals (6-class tuple [tot,Sijrs,Sijr,Srsi,Srs,Sij,Sir]).
+    let nev_eq = nevpt2_from_casscf_orbitals(scf_eq[4], h4eq[1], h4eq[2], 4, 1, 2, 1, 1)
+    let nev_st = nevpt2_from_casscf_orbitals(scf_st[4], h4st[1], h4st[2], 4, 1, 2, 1, 1)
+
+    println("── (a) H₄ CAS(2,2) SC-NEVPT2 vs PySCF mrpt.NEVPT ──")
+    println("  R=1.8: E_CASSCF=" + to_string(casscf_eq) + " E_NEVPT2=" + to_string(nev_eq[0]) + " (pyscf −0.02891631)")
+    println("    Sijrs=" + to_string(nev_eq[1]) + " Sijr=" + to_string(nev_eq[2]) + " Srsi=" + to_string(nev_eq[3]))
+    println("    Srs=" + to_string(nev_eq[4]) + " Sij=" + to_string(nev_eq[5]) + " Sir=" + to_string(nev_eq[6]))
+    println("  R=3.0: E_CASSCF=" + to_string(casscf_st) + " E_NEVPT2=" + to_string(nev_st[0]) + " (pyscf −0.07190352)")
+    println("    Sijrs=" + to_string(nev_st[1]) + " Sijr=" + to_string(nev_st[2]) + " Srsi=" + to_string(nev_st[3]))
+    println("    Srs=" + to_string(nev_st[4]) + " Sij=" + to_string(nev_st[5]) + " Sir=" + to_string(nev_st[6]))
+
+    // (a) total NEVPT2 == PySCF
+    fails = fails + _ck_close("(a) H₄ @1.8 NEVPT2 total == pyscf −0.02891631", nev_eq[0], 0.0 - 0.02891631, 5.0e-5)
+    fails = fails + _ck_close("(a) H₄ @3.0 NEVPT2 total == pyscf −0.07190352", nev_st[0], 0.0 - 0.07190352, 5.0e-5)
+    // (a) per-class == PySCF (R=3.0 — the larger-signal geometry)
+    fails = fails + _ck_close("(a) @3.0 Sijrs == pyscf −0.01697121", nev_st[1], 0.0 - 0.01697121, 5.0e-5)
+    fails = fails + _ck_close("(a) @3.0 Sijr  == pyscf −0.00146739", nev_st[2], 0.0 - 0.00146739, 5.0e-5)
+    fails = fails + _ck_close("(a) @3.0 Srsi  == pyscf −0.00134652", nev_st[3], 0.0 - 0.00134652, 5.0e-5)
+    fails = fails + _ck_close("(a) @3.0 Srs   == pyscf −0.00028471", nev_st[4], 0.0 - 0.00028471, 5.0e-5)
+    fails = fails + _ck_close("(a) @3.0 Sij   == pyscf −0.00031254", nev_st[5], 0.0 - 0.00031254, 5.0e-5)
+    fails = fails + _ck_close("(a) @3.0 Sir   == pyscf −0.05152115", nev_st[6], 0.0 - 0.05152115, 5.0e-5)
+
+    // ══ (b) dynamic-correlation recovery (H₄ @1.8 toward FCI) ══════════════════════
+    //   E_RHF = h4eq[5]; FCI = full-space CASSCF(4,4) (orbital rotations can't change it).
+    let e_rhf = h4eq[5]
+    let fci_full = casscf_from_rhf(h4eq[0], h4eq[1], h4eq[3], h4eq[2], 4, 0, 4, 2, 2, h4eq[4], 50, 1.0e-9, 0.2)
+    let e_fci = fci_full[0]
+    let corr_casscf = casscf_eq - e_rhf
+    let corr_nevpt = casscf_eq + nev_eq[0] - e_rhf
+    let corr_fci = e_fci - e_rhf
+    println("── (b) dynamic-correlation recovery (H₄ @1.8) ──")
+    println("  E_RHF=" + to_string(e_rhf) + " E_CASSCF=" + to_string(casscf_eq) + " E_CAS+NEV=" + to_string(casscf_eq + nev_eq[0]) + " E_FCI=" + to_string(e_fci))
+    println("  corr: CASSCF=" + to_string(corr_casscf) + " CAS+NEV=" + to_string(corr_nevpt) + " FCI=" + to_string(corr_fci))
+    fails = fails + _ck_true("(b) E_NEVPT2 < 0 (dynamic correlation lowers E)", nev_eq[0] < 0.0)
+    fails = fails + _ck_true("(b) CAS+NEVPT2 recovers MORE corr than CASSCF alone", corr_nevpt < corr_casscf - 1.0e-4)
+    fails = fails + _ck_true("(b) CAS+NEVPT2 stays above FCI (perturbative, not over-correcting)", corr_nevpt > corr_fci - 1.0e-6)
+    fails = fails + _ck_true("(b) CAS+NEVPT2 recovers >75% of (FCI−CASSCF) dynamic gap",
+        (corr_casscf - corr_nevpt) > 0.75 * (corr_casscf - corr_fci))
+
+    // ══ (c1) RDM trace sum rules (CAS(2,2) @3.0 active RDMs) ════════════════════════
+    let hfull = casscf_full_hcore(scf_st[4], h4st[1], 4)
+    let gfull = casscf_full_eri(scf_st[4], h4st[2], 4)
+    let heff = casscf_heff_active(hfull, gfull, 4, 1, 2)
+    let gact = nevpt2_test_slice(gfull, 4, 1, 2)
+    let civ = casscf_ci_vec(heff, gact, 2, 1, 1)
+    let gs = civ[2]
+    let dets = civ[3]
+    let ndet = civ[1]
+    let dm1 = nevpt2_dm1(gs, dets, ndet, 2, 2)
+    let dm2 = nevpt2_dm2(gs, dets, ndet, 2, 2)
+    let dm3 = nevpt2_dm3(gs, dets, ndet, 2, 2)
+    // 2-RDM sum rule: Σ_p dm2[p,p,r,s] − N·dm1[r,s] = 0, summed |residual| over r,s (N=2).
+    let mut res2 = 0.0
+    let mut r = 0
+    while r < 2 {
+        let mut s = 0
+        while s < 2 {
+            let mut acc = 0.0
+            let mut p = 0
+            while p < 2 { acc = acc + dm2[((p * 2 + p) * 2 + r) * 2 + s] ; p = p + 1 }
+            res2 = res2 + _abs(acc - 2.0 * dm1[r * 2 + s])
+            s = s + 1
+        }
+        r = r + 1
+    }
+    // 3-RDM sum rule: Σ_p dm3[p,p,r,s,t,u] − N·dm2[r,s,t,u] = 0, summed |residual|.
+    let mut res3 = 0.0
+    let mut r2 = 0
+    while r2 < 2 {
+        let mut s2 = 0
+        while s2 < 2 {
+            let mut t2 = 0
+            while t2 < 2 {
+                let mut u2 = 0
+                while u2 < 2 {
+                    let mut acc3 = 0.0
+                    let mut p2 = 0
+                    while p2 < 2 {
+                        let mut o = p2
+                        o = o * 2 + p2
+                        o = o * 2 + r2
+                        o = o * 2 + s2
+                        o = o * 2 + t2
+                        o = o * 2 + u2
+                        acc3 = acc3 + dm3[o]
+                        p2 = p2 + 1
+                    }
+                    let d2v = dm2[((r2 * 2 + s2) * 2 + t2) * 2 + u2]
+                    res3 = res3 + _abs(acc3 - 2.0 * d2v)
+                    u2 = u2 + 1
+                }
+                t2 = t2 + 1
+            }
+            s2 = s2 + 1
+        }
+        r2 = r2 + 1
+    }
+    println("── (c) RDM sum-rule residuals + full-space limiting check ──")
+    println("  2-RDM Σ_p dm2[p,p,r,s]=N·dm1 residual = " + to_string(res2))
+    println("  3-RDM Σ_p dm3[p,p,r,s,t,u]=N·dm2 residual = " + to_string(res3))
+    fails = fails + _ck_true("(c) 2-RDM trace sum rule residual ≈ 0", res2 < 1.0e-9)
+    fails = fails + _ck_true("(c) 3-RDM trace sum rule residual ≈ 0", res3 < 1.0e-9)
+
+    // ══ (c2) full-space limiting check: CAS(2,2)=full space → NEVPT2 ≡ 0 ════════════
+    //   H₂ CAS(2,2) STO-3G = full space (2 orbitals, ncore=0, nvirt=0). CASSCF=FCI, no
+    //   perturbers exist → every class is 0 → NEVPT2 = 0 exactly.
+    let h2 = hchain_integrals(2, 1.4)
+    let scf_h2 = casscf_from_rhf(h2[0], h2[1], h2[3], h2[2], 2, 0, 2, 1, 1, h2[4], 50, 1.0e-9, 0.2)
+    let nev_h2 = nevpt2_from_casscf_orbitals(scf_h2[4], h2[1], h2[2], 2, 0, 2, 1, 1)
+    println("  H₂ CAS(2,2)=full space: E_CASSCF=" + to_string(scf_h2[0]) + " E_NEVPT2=" + to_string(nev_h2[0]) + " (must be 0)")
+    fails = fails + _ck_close("(c) full-space H₂ CAS(2,2) NEVPT2 ≡ 0 (CASSCF=FCI, no perturbers)", nev_h2[0], 0.0, 1.0e-10)
+
+    if fails == 0 {
+        println("qforge_molscf_nevpt2_selftest PASS")
+    } else {
+        println("qforge_molscf_nevpt2_selftest FAIL (" + to_string(fails) + ")")
+    }
+}
+
+// active m^4 chemist (tu|vw) slice from the full n^4 — selftest helper.
+fn nevpt2_test_slice(g: [float], n: int, c: int, m: int) -> [float] {
+    let mut ga = []
+    let mut t = 0
+    while t < m {
+        let mut u = 0
+        while u < m {
+            let mut v = 0
+            while v < m {
+                let mut w = 0
+                while w < m {
+                    ga.push(g[(((c + t) * n + (c + u)) * n + (c + v)) * n + (c + w)])
+                    w = w + 1
+                }
+                v = v + 1
+            }
+            u = u + 1
+        }
+        t = t + 1
+    }
+    return ga
+}

@@ -1,0 +1,185 @@
+// HEXA Standard Library — qforge/chip/band_scf
+//
+// QFORGE universal-engine · CHIP scale · round-3 brick.
+//   scale ladder (QFORGE.md §122):  chip = device 밴드·수송·열(TCAD).
+//   round-1 (band_transport.hexa) laid the analytic SPINE (a single ε(k), the
+//   diatomic GAP via generic eigh, Landauer ΣTₙ, thermal quantum g₀).
+//   round-2 (band_kmesh.hexa) promoted the band leg to a k-MESH manifold + a
+//   closed-form 1D van-Hove DOS + a mode-count NEGF transmission.
+//
+// Round-3 closes the milestone's "전자구조 재사용" (electronic-structure reuse):
+// it wires the band front-end to the PLANE-WAVE Hamiltonian the SCF core builds,
+// promoting the band from an ANALYTIC tight-binding ε(k) to a REAL first-principles
+// ε_n(k) = eig[ H(k) ],  H(k) = T(k) + V,
+// where
+//   • T(k) is the EXACT plane-wave kinetic diagonal T_G = ½|k+G|² produced by the
+//     SAME stdlib/qforge/kinetic brick the SCF assembler composes (d19 REUSE — not
+//     a re-derivation; band and SCF share one kinetic operator), and
+//   • V is a periodic local potential expressed in the plane-wave basis as the
+//     Fourier-component matrix V_{G,G'} = V(G−G') — exactly the structure the SCF
+//     screening/V_ext term has. The potential is an INPUT (d4-generic): V≡0 is the
+//     empty lattice; a single Fourier shell V_g turns on the Bragg gap; a converged
+//     SCF V_scr(G) (from stdlib/qforge/scf_pw → assembler) drops in unchanged.
+// H(k) is diagonalised by the GENERIC stdlib/alloc/math/eigen `eigh` — the SAME
+// solver L1 Eliashberg, the Davidson subspace step, and round-1's diatomic GAP use.
+//
+// ── The two closed-form g5 anchors (d6 — derivable, none tuned) ───────────────
+//
+//   (a) EMPTY-LATTICE / FREE-ELECTRON LIMIT — with V≡0, H(k) is purely kinetic, so
+//       the eigenvalues are the folded free-electron parabolas ε_n(k)=½|k+G_n|².
+//       The lowest band over k∈(−π/a,π/a] is the bare parabola ½k²; at higher |k+G|
+//       the zone-folded copies appear. This recovers the textbook empty-lattice band
+//       structure EXACTLY (the SCF machine MUST reproduce ½k² when its potential is
+//       switched off) — the correctness floor.
+//
+//   (b) BRAGG GAP (nearly-free-electron) — add a single reciprocal-lattice Fourier
+//       component V(±g)=V_g  (g=2π/a, the first shell). Degenerate perturbation theory
+//       at the zone boundary k=π/a couples the |k⟩ and |k−g⟩ free states (both at
+//       energy ½(π/a)²); the LEADING-ORDER 2×2 secular split is
+//           ε_± = ½(π/a)² ± |V_g|   ⇒   gap → 2|V_g|  (Ashcroft-Mermin Ch.9),
+//       EXACT in the weak-potential limit V_g→0. The FULL plane-wave H(k) eig also
+//       couples the pair to higher |k±2g| states (2nd order), which REDUCE the gap
+//       below 2|V_g| by O(V_g²) — the real spectrum is more accurate than the 2×2 toy
+//       (d6). gap/(2|V_g|)→1 as V_g→0 (verified: 0.975 at V_g=0.4 → 0.99998 at 0.01).
+//       Turning V_g on OPENS a gap at the Bragg plane; V_g→0 closes it back to the
+//       empty lattice — the metal↔insulator lever, recovered from H(k) eig, not assumed.
+//
+// ── d4 generic / d19 reuse contract ──────────────────────────────────────────
+//   • kinetic T_G comes from qforge_kinetic_diag — NO re-derived ½|k+G|² (d19).
+//   • the potential is an INPUT (vfourier map G-index→shell, or a caller V_scr) —
+//     empty-lattice, single-shell Bragg, and a real SCF V all traverse ONE path (d4).
+//   • H(k) is diagonalised by the generic eigh — no per-cell solver branch (d4).
+//   • the 1D G-set is built from one lattice constant a: G_m = (2π/a)·m, m∈[−mmax,mmax].
+//
+//   pub fn qforge_chip_pw_gset_1d(a, mmax)                 -> [float]  // 1D G column (bohr⁻¹ analogue)
+//   pub fn qforge_chip_scf_hk_1d(a, mmax, k, vshell)       -> [float]  // dense H(k) flat (2mmax+1)²
+//   pub fn qforge_chip_scf_band_eps(a, mmax, k, vshell)    -> [float]  // ε_n(k) ascending
+//   pub fn qforge_chip_scf_band_min(a, mmax, k, vshell)    -> float    // lowest ε(k)
+//   pub fn qforge_chip_scf_bragg_gap(a, mmax, vg)          -> float    // gap at k=π/a
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/chip/band_scf_selftest.hexa
+use "stdlib/qforge/kinetic"
+use "stdlib/alloc/math/eigen"
+
+// π to double precision (no stdlib PI export — local const, grep-verified d19).
+fn _pi() -> float { return 3.14159265358979323846 }
+
+// ── 1D plane-wave G-set:  G_m = (2π/a)·m  for m = −mmax … +mmax ──────────────
+// The reciprocal-lattice column of a 1D crystal of constant `a`. The basis dim is
+// nG = 2·mmax+1 (symmetric about G=0). Returned as a flat cartesian [3·nG] list
+// (ky=kz=0) so it feeds qforge_kinetic_diag UNCHANGED (d19 — the same kinetic brick
+// the SCF assembler calls; here ky,kz are pinned 0 for the 1D chain).
+pub fn qforge_chip_pw_gset_1d(a: float, mmax: int) -> [float] {
+    let g0 = 2.0 * _pi() / a            // first reciprocal-lattice vector |g|
+    let mut gv: [float] = []
+    let mut m = -mmax
+    while m <= mmax {
+        gv.push(g0 * to_float(m))       // Gx = (2π/a)·m
+        gv.push(0.0)                    // Gy
+        gv.push(0.0)                    // Gz
+        m = m + 1
+    }
+    return gv
+}
+
+// ── Dense plane-wave H(k) = T(k) + V  (flat row-major (nG)² ) ─────────────────
+// T(k): the EXACT kinetic diagonal T_G=½|k+G|² from qforge_kinetic_diag (d19 reuse).
+// V   : a periodic LOCAL potential in the plane-wave basis. For a 1D crystal the
+//       Fourier matrix element is V_{m,m'} = V(G_m − G_{m'}) = V_{Δ}, Δ=m−m'. The
+//       caller supplies `vshell`, the Fourier amplitudes indexed by |Δ| shell:
+//       vshell[0]=V(0) (G=0 average — a constant diagonal shift), vshell[1]=V(±g),
+//       vshell[2]=V(±2g), … Missing shells (Δ beyond len(vshell)−1) are 0. This is
+//       EXACTLY the structure of the SCF V_scr/V_ext G-difference matrix (assembler
+//       qforge_assemble_h builds V(ΔG)·S(ΔG)); here S≡1 (one atom at the origin) and
+//       V is real → H is real-symmetric. A converged SCF supplies vshell verbatim.
+// k    : the Bloch crystal momentum (scalar; the 1D chain pins ky=kz=0).
+// d4-generic: empty lattice (vshell=[] or [0]), single-shell Bragg (vshell=[0,Vg]),
+// and a full SCF potential all traverse THIS one assembly — no per-case branch.
+pub fn qforge_chip_scf_hk_1d(a: float, mmax: int, k: float, vshell: [float]) -> [float] {
+    let gvecs = qforge_chip_pw_gset_1d(a, mmax)
+    let kvec = [k, 0.0, 0.0]
+    let tdiag = qforge_kinetic_diag(kvec, gvecs)     // T_G = ½|k+G|² (d19 kinetic brick)
+    let ng = len(tdiag)
+    let nshell = len(vshell)
+    let mut h: [float] = []
+    let mut i = 0
+    while i < ng {
+        let mut j = 0
+        while j < ng {
+            let mut hij = 0.0
+            if i == j { hij = hij + tdiag[i] }        // kinetic on the diagonal
+            // periodic potential Fourier element V(G_i − G_j) = V_{|i−j|} shell
+            let d = i - j
+            let ad = if d < 0 { -d } else { d }
+            if ad < nshell { hij = hij + vshell[ad] }
+            h.push(hij)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return h
+}
+
+// ── ε_n(k): eigenvalues of H(k), ascending ───────────────────────────────────
+// Diagonalise the dense H(k) with the GENERIC eigh (d19 — the same solver round-1's
+// diatomic gap, L1 Eliashberg, and the Davidson step use). eigh returns eigenvalues
+// DESCENDING; we reverse to ascending so band 0 is the lowest. Scalars are pushed
+// into a fresh list (materialised immediately — gen3 arena-return guard, handoff
+// aededed6). Empty/degenerate H → [].
+pub fn qforge_chip_scf_band_eps(a: float, mmax: int, k: float, vshell: [float]) -> [float] {
+    let h = qforge_chip_scf_hk_1d(a, mmax, k, vshell)
+    let ng = 2 * mmax + 1
+    if len(h) != ng * ng { return [] }
+    let res = eigh(h, ng)
+    let vals = res[0]                                 // descending
+    // reverse → ascending, copying each scalar into a fresh local immediately.
+    let mut out: [float] = []
+    let mut i = ng - 1
+    while i >= 0 {
+        let ev = vals[i]                              // materialise scalar (gen3 guard)
+        out.push(ev)
+        i = i - 1
+    }
+    return out
+}
+
+// ── Lowest band ε₀(k) — the free-electron parabola in the empty-lattice limit ─
+// Returns the minimum eigenvalue of H(k). With V≡0 and k inside the first BZ this
+// is EXACTLY ½k² (the m=0 plane wave is the ground state for |k|<π/a). Scalar is
+// read into a local immediately (gen3 arena-return guard).
+pub fn qforge_chip_scf_band_min(a: float, mmax: int, k: float, vshell: [float]) -> float {
+    let eps = qforge_chip_scf_band_eps(a, mmax, k, vshell)
+    if len(eps) == 0 { return 0.0 }
+    let mut lo = eps[0]
+    let mut i = 1
+    let n = len(eps)
+    while i < n {
+        let e = eps[i]
+        if e < lo { lo = e }
+        i = i + 1
+    }
+    return lo
+}
+
+// ── Bragg gap at the zone boundary k=π/a ──────────────────────────────────────
+// At the first Bragg plane k=π/a the free states |k⟩ (m=0) and |k−g⟩ (m=−1) are
+// DEGENERATE at ½(π/a)². A single Fourier component V_g=vshell[1] couples them; the
+// leading-order secular 2×2 splits the pair by 2|V_g| (Ashcroft-Mermin Ch.9), EXACT
+// in the weak limit V_g→0. We read the gap off the REAL H(π/a) spectrum: the two
+// lowest bands are split, and gap = ε₁ − ε₀ over those two zone-boundary bands. The
+// full-basis eig couples in higher |k±2g| states (2nd order) → the finite-V_g gap is
+// BELOW 2|V_g| by O(V_g²) (the accurate spectrum, d6). V_g=0 → gap=0 (empty lattice);
+// V_g≠0 → gap>0 (insulator). The metal↔insulator lever, recovered from H(k) eig — not
+// assumed. Returns ε₁−ε₀ at k=π/a.
+pub fn qforge_chip_scf_bragg_gap(a: float, mmax: int, vg: float) -> float {
+    let kbz = _pi() / a                               // zone boundary k=π/a
+    // vshell = [V(0)=0, V(±g)=vg] — single first-shell Fourier component.
+    let vshell = [0.0, vg]
+    let eps = qforge_chip_scf_band_eps(a, mmax, kbz, vshell)
+    if len(eps) < 2 { return 0.0 }
+    let e0 = eps[0]                                   // lowest band at boundary
+    let e1 = eps[1]                                   // next band — the split partner
+    let gap = e1 - e0
+    if gap < 0.0 { return -gap }
+    return gap
+}

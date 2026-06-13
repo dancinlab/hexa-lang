@@ -1,0 +1,341 @@
+// @ci_gate — deterministic · Löwdin S^{-1/2} + dihedral Jacobian anchors
+//
+// qforge/atoms/lowdin_selftest.hexa — QFORGE atoms brick #7 (Löwdin S^{-1/2} +
+// torsion ∂φ/∂R) g5 gate. lowdin.hexa supplies the symmetric orthogonalisation
+// S^{-1/2} (eigh of S → s_k^{-1/2} → reassembly), the orthogonalised Hamiltonian
+// H̃ = S^{-1/2} H S^{-1/2}, and the Löwdin populations q_a = Σ_{μ∈a}(S^{1/2}PS^{1/2})_{μμ}.
+// torsion_grad.hexa supplies the Blondel-Karplus analytic ∂φ/∂R and the torsion
+// force F = −(∂V/∂φ)(∂φ/∂R). Every anchor is closed-form or FD-cross-checked (d6):
+//
+//   (a) S^{-1/2} EXACT: S^{-1/2} S S^{-1/2} = I and (S^{-1/2})² = S^{-1} to
+//       |Δ| < 1e-9 — the symmetric square root is reassembled correctly.          🔵
+//   (b) LÖWDIN POPULATION: Σ_a q_a = N_elec EXACTLY (trace invariance), and at
+//       S = I the Löwdin population reduces to the R6 Mulliken population VERBATIM. 🔵
+//   (c) VARIATIONAL (HONEST PARTIAL — r6 gap NOT fully closed by Löwdin alone):
+//       the Löwdin-population SCC loop HAS a real reproducible fixed point δq*
+//       (G(δq*)=δq* to <1e-9) and electrons are conserved there; the SCC total
+//       energy DESCENDS monotonically along the loop trajectory. BUT the simple
+//       expression E_band(H̃(δq)) + E_scc(δq) − ΣVδq is NOT stationary at δq*
+//       (∂E/∂δq ≠ 0 there) — fixed-occupation EHT band energy is not a variational
+//       functional of δq; the clean Harris-Foulkes self-consistent-occupation
+//       functional is round-8. We REPORT this honestly and do NOT force a false
+//       stationarity claim (d6).                                                   🟢/🟠
+//   (d) DIHEDRAL ∂φ/∂R == FD: the Blondel-Karplus analytic Jacobian matches a
+//       central finite difference of qforge_dihedral_angle to |Δ| < 1e-6 on a
+//       generic non-planar geometry, and Σ_atoms ∂φ/∂R = 0 (total force
+//       conservation / translational invariance).                                 🟢
+//
+// HONEST (d6): the overlap S is CALLER-SUPPLIED; where the test needs a concrete
+//   non-trivial S it uses a MODEL Gaussian overlap (qforge_model_overlap), LABELLED
+//   as a model — NOT a GFN2-parameterised overlap. The variational gate (c) is
+//   reported as a PARTIAL closure with the residual stated plainly, not papered over.
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/atoms/lowdin_selftest.hexa
+//   (NOTE: if iterating, run `hexa cache clean --prune` first — the run cache can
+//    serve a stale compile of an edited `use`d module otherwise.)
+// PASS: "qforge_lowdin_selftest PASS".
+use "stdlib/qforge/atoms/lowdin"
+use "stdlib/qforge/atoms/eht_scc"
+use "stdlib/qforge/atoms/scc_scf"
+use "stdlib/qforge/atoms/torsion"
+use "stdlib/qforge/atoms/torsion_grad"
+use "stdlib/alloc/math/eigen"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+// ── Löwdin-population SCC step (real overlap S, back-transformed eigenvectors) ──
+//   The proper S≠I SCC charge map: dress H_EHT with V(δq), Löwdin-orthogonalise,
+//   diagonalise H̃, back-transform C = S^{-1/2} C̃, form the density P and the
+//   Löwdin populations q_a, return δq_new = (n_val − q_a) − q_ref. Uses ONLY R5/R7
+//   public kernels (d3/d19 — no kernel re-implemented).
+fn lowdin_scc_step(hon: [float], s: [float], dq: [float], pos: [float],
+                   alpha: [float], o2a: [int], occ: [float], nval: [float],
+                   qref: [float], norb: int, natom: int, kwh: float) -> [float] {
+    let heht = qforge_eht_hamiltonian(hon, s, kwh)
+    let vatom = qforge_scc_potential(pos, dq, alpha)
+    let h = qforge_scc_dressed_h(heht, vatom, o2a, norb)
+    let sih = qforge_s_inv_half(s, norb)
+    let sh = qforge_s_half(s, norb)
+    let htil = qforge_lowdin_orthogonalize(h, sih, norb)
+    let ctil = qforge_eht_vectors_asc(htil, norb)        // ctil[k*n+mu] = C̃_{μk}
+    // back-transform C = S^{-1/2} C̃  (per MO column)
+    let mut cvec: [float] = []
+    let mut k = 0
+    while k < norb {
+        let mut mu = 0
+        while mu < norb {
+            let mut acc = 0.0
+            let mut nu = 0
+            while nu < norb { acc = acc + sih[mu * norb + nu] * ctil[k * norb + nu] ; nu = nu + 1 }
+            cvec.push(acc)
+            mu = mu + 1
+        }
+        k = k + 1
+    }
+    let p = qforge_density_matrix(cvec, occ, norb)
+    let pop = qforge_lowdin_pop(p, sh, o2a, norb, natom)
+    let mut dqnew: [float] = []
+    let mut a = 0
+    while a < natom { dqnew.push((nval[a] - pop[a]) - qref[a]) ; a = a + 1 }
+    return dqnew
+}
+
+// ── Löwdin SCC total energy (band of H̃(δq) + second-order − double-count) ─────
+fn lowdin_energy(hon: [float], s: [float], dq: [float], pos: [float],
+                 alpha: [float], o2a: [int], occ: [float], norb: int,
+                 natom: int, kwh: float) -> float {
+    let heht = qforge_eht_hamiltonian(hon, s, kwh)
+    let vatom = qforge_scc_potential(pos, dq, alpha)
+    let h = qforge_scc_dressed_h(heht, vatom, o2a, norb)
+    let sih = qforge_s_inv_half(s, norb)
+    let htil = qforge_lowdin_orthogonalize(h, sih, norb)
+    let eps = qforge_eht_levels(htil, norb)
+    let eband = qforge_eht_band_energy(eps, occ)
+    let escc = qforge_scc_energy2(pos, dq, alpha)
+    let mut dc = 0.0
+    let mut a = 0
+    while a < natom { dc = dc + vatom[a] * dq[a] ; a = a + 1 }
+    return eband + escc - dc
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // (a) S^{-1/2} EXACT — symmetric square root of the overlap
+    // ══════════════════════════════════════════════════════════════════════════
+    // A non-trivial symmetric positive-definite overlap (3×3, off-diagonals < 1).
+    let s3 = [1.0,  0.35, 0.18,
+              0.35, 1.0,  0.27,
+              0.18, 0.27, 1.0]
+    let sih = qforge_s_inv_half(s3, 3)
+    let sh  = qforge_s_half(s3, 3)
+
+    // S^{-1/2} S S^{-1/2} = I
+    let t1 = qforge_matmul(sih, s3, 3)
+    let ish = qforge_matmul(t1, sih, 3)
+    let mut maxoff = 0.0
+    let mut i = 0
+    while i < 3 {
+        let mut j = 0
+        while j < 3 {
+            let want = if i == j { 1.0 } else { 0.0 }
+            let d = _abs(ish[i * 3 + j] - want)
+            if d > maxoff { maxoff = d }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    fails = fails + _ck_true("(a) S^{-1/2} S S^{-1/2} = I  (|Δ|<1e-9)", maxoff < 1.0e-9)
+    println("    [a] max|S^{-1/2} S S^{-1/2} − I| = " + to_string(maxoff))
+
+    // (S^{-1/2})² = S^{-1}  ⇒  (S^{-1/2})² · S = I
+    let sih2 = qforge_matmul(sih, sih, 3)               // = S^{-1}
+    let chkinv = qforge_matmul(sih2, s3, 3)             // = I
+    let mut maxinv = 0.0
+    i = 0
+    while i < 3 {
+        let mut j = 0
+        while j < 3 {
+            let want = if i == j { 1.0 } else { 0.0 }
+            let d = _abs(chkinv[i * 3 + j] - want)
+            if d > maxinv { maxinv = d }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    fails = fails + _ck_true("(a) (S^{-1/2})² = S^{-1}  (|Δ|<1e-9)", maxinv < 1.0e-9)
+
+    // (S^{1/2})² = S
+    let sh2 = qforge_matmul(sh, sh, 3)
+    let mut maxs = 0.0
+    i = 0
+    while i < 9 { let d = _abs(sh2[i] - s3[i]) ; if d > maxs { maxs = d } ; i = i + 1 }
+    fails = fails + _ck_true("(a) (S^{1/2})² = S  (|Δ|<1e-9)", maxs < 1.0e-9)
+    // S^{1/2} · S^{-1/2} = I
+    let prod = qforge_matmul(sh, sih, 3)
+    fails = fails + _ck_close("(a) (S^{1/2}·S^{-1/2})_00 = 1", prod[0], 1.0, 1.0e-9)
+    fails = fails + _ck_close("(a) (S^{1/2}·S^{-1/2})_01 = 0", prod[1], 0.0, 1.0e-9)
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // (b) LÖWDIN POPULATION — N_elec conservation + S=I → Mulliken reduction
+    // ══════════════════════════════════════════════════════════════════════════
+    let hon = [-0.62, -0.94]
+    let kwh = 1.75
+    let occ = [2.0, 0.0]
+    let o2a = [0, 1]
+
+    // S = I : Löwdin pop must equal R6 Mulliken pop EXACTLY.
+    let sI = [1.0, 0.0, 0.0, 1.0]
+    let hI = qforge_eht_hamiltonian(hon, sI, kwh)
+    let cvec6 = qforge_eht_vectors_asc(hI, 2)
+    let pop6 = qforge_mulliken_pop(cvec6, occ, o2a, 2, 2)
+    let sihI = qforge_s_inv_half(sI, 2)
+    let shI = qforge_s_half(sI, 2)
+    let htilI = qforge_lowdin_orthogonalize(hI, sihI, 2)
+    let ctilI = qforge_eht_vectors_asc(htilI, 2)
+    let pI = qforge_density_matrix(ctilI, occ, 2)
+    let pop7 = qforge_lowdin_pop(pI, shI, o2a, 2, 2)
+    fails = fails + _ck_close("(b) S=I  Löwdin pop₀ == Mulliken pop₀", pop7[0], pop6[0], 1.0e-9)
+    fails = fails + _ck_close("(b) S=I  Löwdin pop₁ == Mulliken pop₁", pop7[1], pop6[1], 1.0e-9)
+
+    // S ≠ I (MODEL Gaussian overlap, d6-labelled): Σ q_a = N_elec EXACTLY.
+    let s2 = [1.0, 0.32, 0.32, 1.0]
+    let h2 = qforge_eht_hamiltonian(hon, s2, kwh)
+    let sih2b = qforge_s_inv_half(s2, 2)
+    let sh2b = qforge_s_half(s2, 2)
+    let htil2 = qforge_lowdin_orthogonalize(h2, sih2b, 2)
+    let ctil2 = qforge_eht_vectors_asc(htil2, 2)
+    // back-transform C = S^{-1/2} C̃
+    let mut cv2: [float] = []
+    let mut k = 0
+    while k < 2 {
+        let mut mu = 0
+        while mu < 2 {
+            let mut acc = 0.0
+            let mut nu = 0
+            while nu < 2 { acc = acc + sih2b[mu * 2 + nu] * ctil2[k * 2 + nu] ; nu = nu + 1 }
+            cv2.push(acc)
+            mu = mu + 1
+        }
+        k = k + 1
+    }
+    let p2 = qforge_density_matrix(cv2, occ, 2)
+    let pop2 = qforge_lowdin_pop(p2, sh2b, o2a, 2, 2)
+    fails = fails + _ck_close("(b) S≠I  Σ Löwdin pop = N_elec = 2", pop2[0] + pop2[1], 2.0, 1.0e-9)
+    println("    [b] S≠I Löwdin pop = (" + to_string(pop2[0]) + ", " + to_string(pop2[1]) + ")")
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // (c) VARIATIONAL — HONEST PARTIAL (r6 gap not fully closed by Löwdin alone)
+    // ══════════════════════════════════════════════════════════════════════════
+    let pos = [0.0, 0.0, 0.0,  1.5, 0.0, 0.0]
+    let alpha = [1.05, 0.80]
+    let nval = [1.0, 1.0]
+    let qref = [0.0, 0.0]
+
+    // iterate the Löwdin-population SCC loop to its fixed point δq*.
+    let beta = 0.5
+    let tol = 1.0e-11
+    let mut dq = [0.0, 0.0]
+    let mut it = 0
+    let mut conv = false
+    let mut resid = 1.0e30
+    while it < 300 {
+        let dqn = lowdin_scc_step(hon, s2, dq, pos, alpha, o2a, occ, nval, qref, 2, 2, kwh)
+        resid = _abs(dqn[0] - dq[0])
+        if resid < tol {
+            dq = [dqn[0], dqn[1]]
+            conv = true
+            it = 300
+        } else {
+            dq = [(1.0 - beta) * dq[0] + beta * dqn[0],
+                  (1.0 - beta) * dq[1] + beta * dqn[1]]
+            it = it + 1
+        }
+    }
+    fails = fails + _ck_true("(c) Löwdin SCC loop converged to a fixed point", conv)
+    // fixed-point identity: one more step reproduces δq*.
+    let gstar = lowdin_scc_step(hon, s2, dq, pos, alpha, o2a, occ, nval, qref, 2, 2, kwh)
+    let fp = _abs(gstar[0] - dq[0])
+    fails = fails + _ck_true("(c) G(δq*) == δq* within tol (Löwdin fixed point)", fp < 1.0e-9)
+    // electron conservation at δq*: pop = nval − (δq*+qref), Σ pop = 2.
+    let popstar0 = nval[0] - (dq[0] + qref[0])
+    let popstar1 = nval[1] - (dq[1] + qref[1])
+    fails = fails + _ck_close("(c) Σ pop(δq*) = N_elec = 2", popstar0 + popstar1, 2.0, 1.0e-9)
+    println("    [c] Löwdin δq* = (" + to_string(dq[0]) + ", " + to_string(dq[1])
+            + ")  ‖G(δq*)−δq*‖ = " + to_string(fp))
+
+    // energy DESCENDS along the trajectory (the loop is a real relaxation).
+    let mut dqt = [0.0, 0.0]
+    let e_seed = lowdin_energy(hon, s2, dqt, pos, alpha, o2a, occ, 2, 2, kwh)
+    let mut eprev = 1.0e30
+    let mut descends = true
+    let mut tit = 0
+    while tit < 30 {
+        let et = lowdin_energy(hon, s2, dqt, pos, alpha, o2a, occ, 2, 2, kwh)
+        if et > eprev + 1.0e-12 { descends = false }
+        eprev = et
+        let dqn = lowdin_scc_step(hon, s2, dqt, pos, alpha, o2a, occ, nval, qref, 2, 2, kwh)
+        dqt = [(1.0 - beta) * dqt[0] + beta * dqn[0],
+               (1.0 - beta) * dqt[1] + beta * dqn[1]]
+        tit = tit + 1
+    }
+    let e_star = lowdin_energy(hon, s2, dq, pos, alpha, o2a, occ, 2, 2, kwh)
+    fails = fails + _ck_true("(c) E descends monotonically along the Löwdin SCC trajectory", descends)
+    fails = fails + _ck_true("(c) E(δq*) < E(seed) (loop lowered the energy)", e_star < e_seed - 1.0e-9)
+
+    // HONEST stationarity probe (NOT a forced gate): central-difference dE/dδq at δq*.
+    // Löwdin closes the POPULATION side but the fixed-occupation EHT band energy is
+    // NOT a variational functional of δq, so ∂E/∂δq ≠ 0 at δq*. We MEASURE and REPORT
+    // the residual gradient instead of asserting a false zero (round-8 Harris-Foulkes).
+    let heps = 1.0e-5
+    let ep = lowdin_energy(hon, s2, [dq[0] + heps, dq[1] - heps], pos, alpha, o2a, occ, 2, 2, kwh)
+    let em = lowdin_energy(hon, s2, [dq[0] - heps, dq[1] + heps], pos, alpha, o2a, occ, 2, 2, kwh)
+    let dEdt = (ep - em) / (2.0 * heps)
+    println("    [c] HONEST: dE/dδq at Löwdin δq* = " + to_string(dEdt)
+            + "  (≠0 ⇒ fixed-occupation band E not variational; round-8 Harris-Foulkes)")
+    println("    [c] r6 gap status: POPULATION side CLOSED (Löwdin, S=I↔Mulliken, ΣN cons);"
+            + " ENERGY stationarity PARTIAL (honest, not forced).")
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // (d) DIHEDRAL ∂φ/∂R == FINITE DIFFERENCE  (+ total force conservation)
+    // ══════════════════════════════════════════════════════════════════════════
+    // generic non-planar four-atom geometry (avoid degenerate collinear dihedral).
+    let dpos = [0.2, 0.1, 0.0,   1.0, 0.0, 0.3,
+                1.0, 1.0, 0.1,   1.4, 1.2, 1.0]
+    let grad = qforge_dihedral_dphi_dr(dpos, 0, 1, 2, 3)
+    let fdh = 1.0e-6
+    let mut maxfd = 0.0
+    let mut c = 0
+    while c < 12 {
+        let mut pp: [float] = []
+        let mut pm: [float] = []
+        let mut q = 0
+        while q < 12 { pp.push(dpos[q]) ; pm.push(dpos[q]) ; q = q + 1 }
+        pp[c] = pp[c] + fdh
+        pm[c] = pm[c] - fdh
+        let fd = (qforge_dihedral_angle(pp, 0, 1, 2, 3)
+                  - qforge_dihedral_angle(pm, 0, 1, 2, 3)) / (2.0 * fdh)
+        let d = _abs(fd - grad[c])
+        if d > maxfd { maxfd = d }
+        c = c + 1
+    }
+    fails = fails + _ck_true("(d) analytic ∂φ/∂R == central-FD  (max|Δ|<1e-6)", maxfd < 1.0e-6)
+    println("    [d] max |∂φ/∂R(analytic) − FD| = " + to_string(maxfd))
+
+    // total force conservation: Σ_atoms ∂φ/∂R = 0 (translational invariance).
+    let sx = grad[0] + grad[3] + grad[6] + grad[9]
+    let sy = grad[1] + grad[4] + grad[7] + grad[10]
+    let sz = grad[2] + grad[5] + grad[8] + grad[11]
+    fails = fails + _ck_close("(d) Σ ∂φ/∂R_x = 0", sx, 0.0, 1.0e-9)
+    fails = fails + _ck_close("(d) Σ ∂φ/∂R_y = 0", sy, 0.0, 1.0e-9)
+    fails = fails + _ck_close("(d) Σ ∂φ/∂R_z = 0", sz, 0.0, 1.0e-9)
+
+    // torsion FORCE chain F = −(∂V/∂φ)(∂φ/∂R) also conserves Σ F = 0.
+    let mult = [1.0, 2.0, 3.0]
+    let barrier = [0.4, 0.15, 0.6]
+    let phase = [0.0, 3.141592653589793, 0.0]
+    let force = qforge_torsion_force(dpos, 0, 1, 2, 3, mult, barrier, phase)
+    let fxsum = force[0] + force[3] + force[6] + force[9]
+    let fysum = force[1] + force[4] + force[7] + force[10]
+    let fzsum = force[2] + force[5] + force[8] + force[11]
+    fails = fails + _ck_close("(d) Σ torsion force_x = 0 (Newton 3rd law)", fxsum, 0.0, 1.0e-9)
+    fails = fails + _ck_close("(d) Σ torsion force_y = 0", fysum, 0.0, 1.0e-9)
+    fails = fails + _ck_close("(d) Σ torsion force_z = 0", fzsum, 0.0, 1.0e-9)
+    // and the force magnitude matches −(∂V/∂φ)·(∂φ/∂R) on component 2 directly.
+    let phi = qforge_dihedral_angle(dpos, 0, 1, 2, 3)
+    let dvdphi = qforge_torsion_dedphi(phi, mult, barrier, phase)
+    fails = fails + _ck_close("(d) force[2] == −(∂V/∂φ)·grad[2]",
+                              force[2], 0.0 - dvdphi * grad[2], 1.0e-12)
+
+    if fails == 0 { println("qforge_lowdin_selftest PASS") }
+    else { println("qforge_lowdin_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

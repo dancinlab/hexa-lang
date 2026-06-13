@@ -1,0 +1,152 @@
+// @ci_gate — deterministic · network-free · QFORGE-ATOMS round-24 DIIS-accelerated RHF
+//
+// DIIS (Pulay 1980 / CDIIS) convergence acceleration for the CLOSED-SHELL atoms RHF
+// SCF. Round-23 sealed the cc-pVTZ basis + CBS extrapolation but hit an SCF-ROBUSTNESS
+// wall: the plain-damping rhf_scf (molscf/rhf.hexa) does NOT converge the larger
+// cc-pVTZ basis (65 AOs) — the f-shell integrals are witnessed correct, only the SCF
+// mixer drifts (~1 h, |ΔE|≈1.9 Ha, conv=false). This brick breaks that wall.
+//
+// d19 cross-lane REUSE — NO new DIIS machinery. The Pulay DIIS is already written and
+// proven in the MOLSCF lane (molscf/uhf.hexa, round-7 — it converged stiff transition-
+// metal SCF). We REUSE its public helpers verbatim:
+//   uhf_diis_error(F,P,S,X,n)  — Löwdin-orthonormal commutator e = X(FPS−SPF)X
+//   uhf_lin_solve(A,b,m)       — Gaussian-elimination Pulay B-matrix solver
+//   uhf_err_norm(e,n)          — max|e_i| residual for the honest convergence report
+// The ONLY closed-shell specialization here is the single-Fock loop: one F, one error
+// vector (the UHF driver carries an α‖β concatenated pair), so the B-matrix dot product
+// and the F̃ = Σ c_i F_i extrapolation run on a single length-n*n vector.
+//
+// Same signature + return tuple as rhf_scf (molscf/rhf.hexa) — a DROP-IN accelerated
+// alternative. The plain-damping rhf_scf is KEPT as a fallback/anchor (d6: DIIS is
+// additive, the damping path still passes its r19 cc-pVDZ + STO-3G regression).
+
+use "stdlib/qforge/molscf/rhf"
+use "stdlib/qforge/molscf/uhf"
+
+// Closed-shell Pulay-DIIS extrapolation of a SINGLE Fock matrix.
+//   errs / focks : histories of length-n*n flat vectors (m entries each).
+// Solve the (m+1)×(m+1) Pulay system  [B −1; −1ᵀ 0][c; λ] = [0; −1]  with
+//   B_ij = ⟨e_i·e_j⟩, then return F̃ = Σ_i c_i F_i (length n*n). Reuses the proven
+// uhf_lin_solve for the small B-matrix (same solver the UHF DIIS uses).
+fn rhf_diis_extrapolate(errs: [any], focks: [any], m: int, vlen: int) -> [float] {
+    let dim = m + 1
+    let mut B = []
+    let mut i = 0
+    while i < dim * dim { B.push(0.0) ; i = i + 1 }
+    i = 0
+    while i < m {
+        let ei = errs[i]
+        let mut j = 0
+        while j < m {
+            let ej = errs[j]
+            let mut dot = 0.0
+            let mut k = 0
+            while k < vlen { dot = dot + ei[k] * ej[k] ; k = k + 1 }
+            B[i * dim + j] = dot
+            j = j + 1
+        }
+        B[i * dim + m] = 0.0 - 1.0
+        B[m * dim + i] = 0.0 - 1.0
+        i = i + 1
+    }
+    B[m * dim + m] = 0.0
+    let mut rhs = []
+    i = 0
+    while i < m { rhs.push(0.0) ; i = i + 1 }
+    rhs.push(0.0 - 1.0)
+    let coef = uhf_lin_solve(B, rhs, dim)
+    let mut Ftil = []
+    i = 0
+    while i < vlen { Ftil.push(0.0) ; i = i + 1 }
+    i = 0
+    while i < m {
+        let ci = coef[i]
+        let Fi = focks[i]
+        let mut k = 0
+        while k < vlen { Ftil[k] = Ftil[k] + ci * Fi[k] ; k = k + 1 }
+        i = i + 1
+    }
+    return Ftil
+}
+
+fn rhf_diis_drop_first(h: [any]) -> [any] {
+    let mut out = []
+    let mut i = 1
+    while i < len(h) { out.push(h[i]) ; i = i + 1 }
+    return out
+}
+
+// DIIS-accelerated closed-shell RHF SCF. Same signature/return as rhf_scf:
+//   return [e_total, iters, e_elec, P, F, eps, converged]
+// `mix` is the pre-DIIS density-mixing damping (used while the DIIS history is
+// shorter than 2; once ≥2 error vectors exist the Fock is DIIS-extrapolated and the
+// density is taken at the full step — DIIS already supplies the stabilization).
+pub fn rhf_scf_diis(
+    S: [float], hcore: [float], eri: [float],
+    n: int, n_occ: int, e_nuc: float,
+    max_iter: int, e_tol: float, mix: float
+) -> [any] {
+    let xmat = rhf_s_inv_sqrt(S, n)
+    // Core-Hamiltonian initial guess.
+    let dg0 = rhf_diagonalize(hcore, xmat, n)
+    let c0 = dg0[0]
+    let mut P = rhf_density(c0, n, n_occ)
+    let mut e_old = 0.0
+    let mut iters = 0
+    let mut converged = false
+    let mut F = hcore
+    let mut eps = dg0[1]
+    let vlen = n * n
+    let max_diis = 8
+    // DIIS histories.
+    let mut diis_err = []
+    let mut diis_fock = []
+    while iters < max_iter {
+        // Fock at the current density.
+        let Fraw = rhf_fock(hcore, P, eri, n)
+        let e_elec = rhf_energy_elec(P, hcore, Fraw, n)
+        // DIIS error vector e = X(F P S − S P F) X (reused MOLSCF helper).
+        let e_vec = uhf_diis_error(Fraw, P, S, xmat, n)
+        diis_err.push(e_vec)
+        diis_fock.push(Fraw)
+        if len(diis_err) > max_diis {
+            diis_err = rhf_diis_drop_first(diis_err)
+            diis_fock = rhf_diis_drop_first(diis_fock)
+        }
+        // Fock to diagonalize: DIIS-extrapolated once ≥2 history points exist.
+        let mut Fuse = Fraw
+        let mlen = len(diis_err)
+        if mlen >= 2 {
+            Fuse = rhf_diis_extrapolate(diis_err, diis_fock, mlen, vlen)
+        }
+        F = Fuse
+        let dg = rhf_diagonalize(Fuse, xmat, n)
+        let C = dg[0]
+        eps = dg[1]
+        let p_new = rhf_density(C, n, n_occ)
+        // Density update: full step when DIIS is active, damped while it warms up.
+        let warm = mlen >= 2
+        let mut p_next = []
+        let mut i = 0
+        while i < vlen {
+            if warm {
+                p_next.push(p_new[i])
+            } else {
+                p_next.push(mix * p_new[i] + (1.0 - mix) * P[i])
+            }
+            i = i + 1
+        }
+        P = p_next
+        iters = iters + 1
+        let de = if e_elec > e_old { e_elec - e_old } else { e_old - e_elec }
+        if iters > 1 {
+            if de < e_tol { converged = true ; e_old = e_elec ; break }
+        }
+        e_old = e_elec
+    }
+    // Final energy at the converged density (rebuild F once more for consistency).
+    F = rhf_fock(hcore, P, eri, n)
+    let e_elec_final = rhf_energy_elec(P, hcore, F, n)
+    let e_total = e_elec_final + e_nuc
+    return [e_total, iters, e_elec_final, P, F, eps, converged]
+}
