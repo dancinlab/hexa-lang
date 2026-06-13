@@ -154,23 +154,27 @@ fn jc_skip_ws(b, p) {
 }
 
 fn jc_parse_string(b, p) {
+    // OP-127: accumulate raw header bytes + decode UTF-8 once via
+    // bytes_to_str_raw. Prior per-byte from_char_code double-encoded any
+    // non-ASCII tensor name / __metadata__ value into mojibake (OP-79/OP-125
+    // double-encode class). See self/tools/safetensors_to_hexaw.hexa.
     let mut i = p + 1
     let n = len(b)
-    let mut out = ""
+    let mut sub = []
     while i < n {
         let c = b[i]
-        if c == 34 { return [out, i + 1] }
+        if c == 34 { return [bytes_to_str_raw(sub), i + 1] }
         if c == 92 {
             if i + 1 < n {
-                out = out + to_string(from_char_code(b[i + 1]))
+                sub.push(b[i + 1] & 0xFF)
                 i = i + 2
             } else { i = i + 1 }
         } else {
-            out = out + to_string(from_char_code(c))
+            sub.push(c & 0xFF)
             i = i + 1
         }
     }
-    return [out, i]
+    return [bytes_to_str_raw(sub), i]
 }
 
 fn jc_parse_int(b, p) {
