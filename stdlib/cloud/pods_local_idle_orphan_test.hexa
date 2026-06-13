@@ -62,6 +62,23 @@ fn main() {
     // (d) not-active + reachable + UNKNOWN probe (-1) → BUSY_UNMANIFESTED (fail-safe).
     _eq_str("c10: not-active+reachable+unknown → BUSY_UNMANIFESTED (failsafe)", idle_reap_classify(1, -1), "BUSY_UNMANIFESTED"); n = n + 1
 
+    // ── idle_reap_classify_status — provider-status arm (handoff d1410e5b) ──
+    // THE FIX: a provider-confirmed-dead pod (status STOPPED/GONE) is REAPED even
+    // when the ssh probe is ambiguous (reach=1, busy=-1) — the inst 38711598
+    // actual_status=exited + proxy-ssh-refused case that the 2-arg classifier
+    // stranded as BUSY_UNMANIFESTED (see c10 above) forever.
+    _eq_str("c10a: STOPPED + ambiguous probe → REAP (was stranded)", idle_reap_classify_status(1, -1, "STOPPED"), "REAP"); n = n + 1
+    _eq_str("c10b: GONE + ambiguous probe → REAP", idle_reap_classify_status(1, -1, "GONE"), "REAP"); n = n + 1
+    _eq_str("c10c: STOPPED even when reachable+busy → REAP (provider authoritative)", idle_reap_classify_status(1, 1, "STOPPED"), "REAP"); n = n + 1
+    // SAFETY: a RUNNING/UNKNOWN/MISSING-CRED/"" status NEVER upgrades the
+    // fail-safe HOLD — it defers byte-for-byte to the 2-arg ssh-only classifier.
+    _eq_str("c10d: RUNNING + busy → BUSY_UNMANIFESTED (unchanged)", idle_reap_classify_status(1, 1, "RUNNING"), "BUSY_UNMANIFESTED"); n = n + 1
+    _eq_str("c10e: UNKNOWN + ambiguous probe → BUSY_UNMANIFESTED (no reap on uncertainty)", idle_reap_classify_status(1, -1, "UNKNOWN"), "BUSY_UNMANIFESTED"); n = n + 1
+    _eq_str("c10f: MISSING-CRED + ambiguous probe → BUSY_UNMANIFESTED (degraded query never reaps)", idle_reap_classify_status(1, -1, "MISSING-CRED"), "BUSY_UNMANIFESTED"); n = n + 1
+    _eq_str("c10g: empty status + idle → REAP (defers to ssh idle)", idle_reap_classify_status(1, 0, ""), "REAP"); n = n + 1
+    _eq_str("c10h: empty status + unreachable → REAP (defers to ssh dead)", idle_reap_classify_status(0, -1, ""), "REAP"); n = n + 1
+    _eq_str("c10i: RUNNING but unreachable → REAP (ssh-dead wins; provider not 'dead' but no compute reachable)", idle_reap_classify_status(0, -1, "RUNNING"), "REAP"); n = n + 1
+
     // ── deck-state instance_id extraction (active set beyond job.pod) ───
     let st = "phase=phon\ninstance_id=38815600\nhost=140.150.159.1\nport=29645\n"
     _eq_str("c11: state instance_id parsed", pods_local_state_instance_id(st), "38815600"); n = n + 1
