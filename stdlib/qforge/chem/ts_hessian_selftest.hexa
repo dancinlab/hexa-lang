@@ -1,0 +1,187 @@
+// @ci_gate — deterministic · network-free · TS Hessian 1-음-eigenvalue g5 게이트
+//
+// ts_hessian_selftest.hexa — QFORGE-CHEM round-3 g5.
+//   neb_scf.hexa(R2)가 수렴시킨 H+H₂ 콜리니어 saddle 기하의 Hessian 을
+//   materials 코어 qforge_phonons(eigh) 로 대각화 → 음의 고유치 카운트.
+//
+//   검증 (모두 deterministic · network-free):
+//     (a) TS 1차조건 : H+H₂ 대칭 saddle Hessian 의 음의 고유치 정확히 1개
+//                      (허수모드 1개) — Murrell-Laidler TS 정의.  |∇V|≈0 동반.
+//     (b) minimum    : reactant 골짜기 minimum Hessian 의 음의 고유치 0개
+//                      (전부 안정 · 실주파수).
+//     (c) soft-mode  : 음모드의 ω²<0 & ω<0 정직반환 (qforge_phonons 재사용 일관 —
+//                      materials soft-mode 와 *동일* 부호규약, clamp 없음).
+//     (d) 허수모드방향: TS 음모드 고유벡터 = 반응좌표(콜리니어 H₃ 교환 = 비대칭
+//                      stretch, 두 결합좌표 반대부호 → 성분곱 < 0).
+//
+//   HONEST(d6): PES=LEPS 해석(neb_scf.hexa), ab-initio 아님 — 음의 고유치 카운트가
+//     핵심(절대 진동수 ab-initio 정확도 아님).  ref = LEPS 해석 saddle r≈1.171 Å.
+//
+// Run:  hexa run stdlib/qforge/chem/ts_hessian_selftest.hexa
+// PASS: "qforge_ts_hessian_selftest PASS".
+
+use "stdlib/qforge/chem/ts_hessian"     // ts_classify_at · ts_classify_hessian · ...
+use "stdlib/qforge/chem/neb_scf"        // leps_h3_energy · leps_h3_grad
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_int(name: str, got: int, want: int) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_bool(name: str, got: bool) -> int {
+    if got { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+fn _gnorm(g: [float]) -> float {
+    let mut s = 0.0 ; let mut i = 0
+    while i < len(g) { s = s + g[i] * g[i] ; i = i + 1 } return sqrt(s)
+}
+
+// ── saddle refiner: Newton 보정 (해석 ∇V + FD Hessian) ────────────────
+//   대칭 교환 saddle 근방에서 ∇V=0 으로 수렴 (수렴 saddle 기하 산출).
+//   2×2 선형계 H·δ = −g 를 직접 역행렬로 푼다 (det≠0).
+fn _newton_saddle(r0: [float], iters: int) -> [float] {
+    let mut r: [float] = [] ; let mut k = 0
+    while k < len(r0) { r.push(r0[k]) ; k = k + 1 }
+    let mut it = 0
+    while it < iters {
+        let g = leps_h3_grad(r)
+        let H = ts_hessian_fd(0, r, 1.0e-4)        // hess_id=0 (LEPS)
+        let a = H[0] ; let b = H[1] ; let c = H[2] ; let d = H[3]
+        let det = a * d - b * c
+        if _abs(det) < 1.0e-30 { it = iters }
+        else {
+            // δ = −H⁻¹ g.  H⁻¹ = (1/det)[[d,−b],[−c,a]].
+            let dx = -(d * g[0] - b * g[1]) / det
+            let dy = -(-c * g[0] + a * g[1]) / det
+            r[0] = r[0] + dx
+            r[1] = r[1] + dy
+            it = it + 1
+        }
+    }
+    return r
+}
+
+// ── minimizer: 단순 gradient descent (reactant 골짜기 minimum) ─────────
+fn _min_descent(r0: [float], step: float, iters: int) -> [float] {
+    let mut r: [float] = [] ; let mut k = 0
+    while k < len(r0) { r.push(r0[k]) ; k = k + 1 }
+    let mut it = 0
+    while it < iters {
+        let g = leps_h3_grad(r)
+        r[0] = r[0] - step * g[0]
+        r[1] = r[1] - step * g[1]
+        it = it + 1
+    }
+    return r
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ════════════════════════════════════════════════════════════════
+    // (a) TS 1차조건 — H+H₂ 대칭 saddle Hessian 음의 고유치 정확히 1개.
+    // ════════════════════════════════════════════════════════════════
+    //   R2 수렴 saddle (r_ab=r_bc≈1.171 Å) 근방에서 Newton 보정 → ∇V=0.
+    let saddle = _newton_saddle([1.171, 1.171], 30)
+    let gsad = leps_h3_grad(saddle)
+    let gsadn = _gnorm(gsad)
+    println("    [a] saddle @ (r_ab=" + to_string(saddle[0]) + ", r_bc=" +
+            to_string(saddle[1]) + ")  |∇V|=" + to_string(gsadn))
+    // 수렴 saddle 은 정류점 (|∇V|≈0) — TS 1차조건의 전제.
+    fails = fails + _ck("(a0) saddle |∇V| ≈ 0 (정류점)", gsadn, 0.0, 1.0e-6)
+    // 대칭 교환 saddle: r_ab ≈ r_bc ≈ 1.171 Å (LEPS 해석 ref).
+    fails = fails + _ck("(a0) saddle r_ab ≈ r_bc", saddle[0], saddle[1], 1.0e-6)
+    fails = fails + _ck("(a0) saddle r ≈ 1.171 Å (LEPS 해석)", saddle[0], 1.171, 1.0e-2)
+    //   Hessian → materials qforge_phonons 재사용 대각화 → 분류.
+    let cs = ts_classify_at(0, saddle, 1.0e-4)
+    println("    [a] saddle ω²(오름차순) = [" + to_string(cs.eigvals[0]) + ", " +
+            to_string(cs.eigvals[1]) + "]  n_neg=" + to_string(cs.n_neg))
+    // ★ TS 1차조건: 음의 고유치 정확히 1개.
+    fails = fails + _ck_int("(a1) ★ TS: 음의 고유치 정확히 1개", cs.n_neg, 1)
+    fails = fails + _ck_bool("(a1) ts_is_transition_state", ts_is_transition_state(cs))
+    fails = fails + _ck_bool("(a1) NOT minimum", !ts_is_minimum(cs))
+    fails = fails + _ck_bool("(a1) NOT higher saddle", !ts_is_higher_saddle(cs))
+    // 최저모드 ω²<0 (허수모드), 그 위 모드 ω²>0 (실주파수).
+    fails = fails + _ck_bool("(a2) 최저 ω² < 0 (허수모드)", cs.eigvals[0] < 0.0)
+    fails = fails + _ck_bool("(a2) 차상 ω² > 0 (실주파수)", cs.eigvals[1] > 0.0)
+
+    // ════════════════════════════════════════════════════════════════
+    // (b) minimum — reactant 골짜기 min Hessian 음의 고유치 0개.
+    // ════════════════════════════════════════════════════════════════
+    //   reactant 골짜기: H_b–H_c 결합(r_bc≈0.742, stiff Morse well), H_a 떨어짐.
+    //   [r_ab=2.0, r_bc=0.742] 에서 gradient descent.
+    //   HONEST(d6): r_ab(far-atom) 방향은 H₂+free-H 해리채널의 *극도로 flat 한*
+    //   인력 꼬리(ω²≈0.03 ≪ stiff H₂ 모드 ω²≈10)라, 단순 GD 로 |∇V| 가 machine-0
+    //   까지 떨어지지 않고 ~1e-3 floor 에서 머문다 (물리적 — bound 가 아닌 dissociation
+    //   asymptote).  핵심 검증은 *음의 고유치 0개*(전부 ω²>0)이며, 그것은 robust.
+    let rmin = _min_descent([2.0, 0.742], 1.0e-2, 60000)
+    let gmin = leps_h3_grad(rmin)
+    let gminn = _gnorm(gmin)
+    println("    [b] minimum @ (r_ab=" + to_string(rmin[0]) + ", r_bc=" +
+            to_string(rmin[1]) + ")  |∇V|=" + to_string(gminn))
+    fails = fails + _ck("(b0) minimum |∇V| ≈ 0 (soft 해리채널 floor)", gminn, 0.0, 5.0e-3)
+    let cm = ts_classify_at(0, rmin, 1.0e-4)
+    println("    [b] minimum ω²(오름차순) = [" + to_string(cm.eigvals[0]) + ", " +
+            to_string(cm.eigvals[1]) + "]  n_neg=" + to_string(cm.n_neg))
+    // ★ minimum: 음의 고유치 0개 (전부 안정 · 실주파수).
+    fails = fails + _ck_int("(b1) ★ minimum: 음의 고유치 0개", cm.n_neg, 0)
+    fails = fails + _ck_bool("(b1) ts_is_minimum", ts_is_minimum(cm))
+    fails = fails + _ck_bool("(b1) NOT transition state", !ts_is_transition_state(cm))
+    fails = fails + _ck_bool("(b2) 최저 ω² > 0 (전부 실주파수)", cm.eigvals[0] > 0.0)
+
+    // ════════════════════════════════════════════════════════════════
+    // (c) 고유치 부호 = materials soft-mode 부호규약 (qforge_phonons 재사용 일관).
+    // ════════════════════════════════════════════════════════════════
+    //   허수모드: ω² < 0 ⇒ ω = −√|ω²| < 0 (부호보존 sqrt, clamp 없음).
+    //   이는 materials dfpt.hexa::qforge_phonons 의 soft-mode 규약과 *문자 그대로
+    //   동일*하다 (chem 의 ts_classify 가 그 함수를 import 재사용하기 때문).
+    fails = fails + _ck_bool("(c1) 허수모드 ω² < 0 (soft-mode, 정직)", cs.eigvals[0] < 0.0)
+    fails = fails + _ck_bool("(c2) 허수모드 ω < 0 (부호보존 sqrt, clamp 없음)", cs.omega[0] < 0.0)
+    //   ω = −√|ω²| 정합 (materials 와 동일 변환).
+    let w2 = cs.eigvals[0]
+    let expect_w = -sqrt(_abs(w2))
+    fails = fails + _ck("(c3) ω = −√|ω²| (materials 변환 일치)", cs.omega[0], expect_w, 1.0e-9)
+    //   실주파수 모드: ω² > 0 ⇒ ω = +√ω² > 0 (부호 규약 양방향 확인).
+    fails = fails + _ck_bool("(c4) 실모드 ω > 0", cs.omega[1] > 0.0)
+
+    // ════════════════════════════════════════════════════════════════
+    // (d) 허수모드 방향 = 반응좌표 (콜리니어 H₃ 교환 = 비대칭 stretch).
+    // ════════════════════════════════════════════════════════════════
+    //   교환반응 H_a+H_b–H_c→H_a–H_b+H_c 의 반응좌표 = r_ab↓ & r_bc↑ (또는 반대):
+    //   두 결합좌표가 *반대부호*로 변함 (한 결합 형성 + 다른 결합 끊김).
+    //   ⇒ 허수모드 고유벡터 두 성분 곱 < 0 (비대칭 stretch).
+    //   (대칭 stretch r_ab=r_bc 방향은 *양* ω² 실주파수 — TS 음모드가 아님.)
+    let prod = ts_neg_mode_antisym_product(cs)
+    println("    [d] 허수모드 고유벡터 = [" + to_string(cs.neg_mode[0]) + ", " +
+            to_string(cs.neg_mode[1]) + "]  성분곱=" + to_string(prod))
+    fails = fails + _ck_bool("(d1) ★ 허수모드 = 반응좌표(비대칭 stretch, 성분곱<0)", prod < 0.0)
+    //   차상(실주파수) 모드 = 대칭 stretch (두 성분 같은부호 → 성분곱 > 0).
+    let symprod = cs.modes[1][0] * cs.modes[1][1]
+    fails = fails + _ck_bool("(d2) 실주파수 모드 = 대칭 stretch(성분곱>0)", symprod > 0.0)
+    //   허수모드 ⊥ 실모드 (eigh 직교성 — 동역학행렬 실대칭).
+    let orth = cs.modes[0][0] * cs.modes[1][0] + cs.modes[0][1] * cs.modes[1][1]
+    fails = fails + _ck("(d3) 모드 직교 (eigh 실대칭)", orth, 0.0, 1.0e-9)
+
+    // ── 직접-Hessian 경로 일관성: 해석 2×2 대칭행렬 분류 sanity ──────────
+    //   알려진 부호의 대칭 Hessian 을 ts_classify_hessian 에 직접 넣어
+    //   카운트 로직(콜백 무관 generic) 검증: diag(−1, +4) → n_neg=1 (TS).
+    let hman: [float] = [-1.0, 0.0, 0.0, 4.0]
+    let cman = ts_classify_hessian(hman, 2)
+    fails = fails + _ck_int("(e1) diag(−1,+4) → n_neg=1", cman.n_neg, 1)
+    fails = fails + _ck("(e1) ω²[0]=−1", cman.eigvals[0], -1.0, 1.0e-9)
+    fails = fails + _ck("(e1) ω²[1]=+4", cman.eigvals[1], 4.0, 1.0e-9)
+    //   diag(+2,+3) → n_neg=0 (minimum) · diag(−2,−1) → n_neg=2 (2차 saddle).
+    let cpos = ts_classify_hessian([2.0, 0.0, 0.0, 3.0], 2)
+    fails = fails + _ck_int("(e2) diag(+2,+3) → n_neg=0 (min)", cpos.n_neg, 0)
+    let cneg2 = ts_classify_hessian([-2.0, 0.0, 0.0, -1.0], 2)
+    fails = fails + _ck_int("(e3) diag(−2,−1) → n_neg=2 (2차 saddle)", cneg2.n_neg, 2)
+    fails = fails + _ck_bool("(e3) ts_is_higher_saddle", ts_is_higher_saddle(cneg2))
+
+    if fails == 0 { println("qforge_ts_hessian_selftest PASS") }
+    else { println("qforge_ts_hessian_selftest FAIL (" + to_string(fails) + ")") }
+}

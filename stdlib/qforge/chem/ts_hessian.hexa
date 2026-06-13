@@ -1,0 +1,197 @@
+// @ci_gate — deterministic · network-free · 전이상태(TS) Hessian 1-음-eigenvalue g5 게이트
+//
+// ts_hessian.hexa — QFORGE `chem` 스케일 front-end round-3:
+//   round-2 (neb_scf.hexa) 가 수렴시킨 H+H₂ 콜리니어 saddle 기하에서
+//   Hessian (force-constant / 동역학행렬) H_ij = ∂²V/∂r_i∂r_j 를 만들고,
+//   materials 코어 qforge_phonons (eigh 기반, ω²<0 정직반환) 를 *그대로 재사용*해
+//   대각화하여 음의 고유치 개수를 센다.
+//
+//   ── TS 의 mathematical 정의 (Murrell-Laidler theorem) ──────────────
+//     정류점(∇V=0)의 Hessian 고유치 부호로 분류한다:
+//       음의 고유치 0개  →  minimum (안정점, 모든 모드 실주파수)
+//       음의 고유치 1개  →  1차 saddle = 전이상태 (TS) — 진동분석시 허수모드 1개
+//       음의 고유치 ≥2개  →  고차 saddle (반응경로상 진짜 TS 가 아님)
+//     ⇒ "TS ⟺ Hessian 음의 고유치 정확히 1개" 가 본 brick 의 핵심 검증.
+//
+// ── d19 재사용 (chem ↔ materials reuse edge — NOVEL probe 실현) ────────
+//   materials 의 stdlib/qforge/dfpt.hexa 는 1차 선형응답(DFPT/Sternheimer)으로
+//   만든 실공간 force-constant Φ 를 동역학행렬 D(q) 로 조립(qforge_dynmat)하고,
+//   qforge_phonons 가 eigh(d19)로 대각화해 ω²(오름차순, 부호보존)과 soft-mode
+//   (ω²<0)를 *정직하게* 반환한다 (clamp 안 함).
+//   본 brick 은 chem 의 saddle Hessian 을 *동일한 (mat, eigh, 부호보존) 경로*에
+//   태운다: Hessian = "force-constant 행렬"(질량가중 단위질량 → ω²=eigenvalue),
+//   ⇒ chem TS 의 "허수모드 1개"가 materials 의 "soft-mode ω²<0"와 *문자 그대로
+//   동일한 연산*임을 입증한다.  qforge_phonons 를 재구현하지 않고 import 한다.
+//
+//   Φ(q=Γ) 1셀 ⇒ D = qforge_dynmat(phi=Hessian, masses=1, q=0, ncells=1, R=0).
+//   질량 1 (단위질량) ⇒ ω² = Hessian 고유치 그대로 → 음의 고유치 = soft mode.
+//
+// ── d4-generic (Hessian = 콜백) ───────────────────────────────────────
+//   엔진(ts_classify)은 PES 를 이름분기하지 않는다.  Hessian 은 `hess_id` 정수
+//   selector 로 `ts_hessian_at` 일반 dispatcher 에 위임:
+//     hess_id=0 : LEPS H₃ (해석 2차미분, neb_scf.hexa 의 leps_h3_energy 재사용)
+//   새 PES 추가 = dispatcher 에 케이스 한 줄(엔진 미접촉).  FD-Hessian 경로
+//   (ts_hessian_fd)는 *임의의* energy 콜백 함수포인터를 받아 generic 하게 동작.
+//
+// ── HONEST 범위 (d6) ──────────────────────────────────────────────────
+//   PES = LEPS 표준 해석 PES (neb_scf.hexa 와 동일), *NOT* ab-initio.
+//   따라서 Hessian 도 LEPS 의 해석 2차미분 (또는 그 energy 의 FD) 이지
+//   ab-initio 핵-Hessian 이 아니다.  핵심 검증대상은 *음의 고유치 카운트*
+//   (TS 1차조건) — 절대 진동수의 ab-initio 정확도가 아니다.  실 ab-initio
+//   Hessian (분자 SCF + Hellmann-Feynman force 2차미분) 은 round-4+ 로 정직 이월.
+//
+// Run:  hexa run stdlib/qforge/chem/ts_hessian_selftest.hexa
+
+use "stdlib/qforge/dfpt"               // qforge_dynmat · qforge_phonons (d19 재사용)
+use "stdlib/qforge/chem/neb_scf"       // leps_h3_energy (LEPS PES energy 콜백 재사용)
+
+fn _th_abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// ── 정류점 분류 결과 ──────────────────────────────────────────────────
+//   n_neg : 음의 고유치(ω²<0, 허수모드) 개수 — 0=min · 1=TS · ≥2=고차saddle.
+//   eigvals : ω² 오름차순 (qforge_phonons.omega2 와 동일 의미; 부호보존).
+//   omega   : 부호보존 sqrt (ω²<0 → ω<0 = 허수 표시) — materials 와 동일.
+//   modes   : 고유벡터 행(오름차순) — modes[0] = 최저(가장 음수) 모드.
+//   neg_mode: 음의 고유치가 1개일 때 그 허수모드 고유벡터 (=반응좌표 방향),
+//             음이 0개거나 ≥2개면 빈 배열.
+pub struct TSClass {
+    dim: int,
+    n_neg: int,
+    eigvals: [float],
+    omega: [float],
+    modes: [[float]],
+    neg_mode: [float]
+}
+
+// ── core: Hessian 행렬 → qforge_phonons 재사용 → 음의 고유치 카운트 ────
+//   hess = 평탄 row-major (dim*dim), 실대칭(∂²V/∂r_i∂r_j = ∂²V/∂r_j∂r_i).
+//   질량 = 단위질량(1.0) ⇒ 동역학행렬 D = Hessian, ω² = Hessian 고유치.
+//   ⇒ chem TS 의 "음의 고유치 카운트"가 materials soft-mode 와 동일 연산임을 실증.
+pub fn ts_classify_hessian(hess: [float], dim: int) -> TSClass {
+    // 1) 단위질량 배열 (natoms = dim, 각 자유도에 mass=1).
+    let natoms = dim
+    let mut masses: [float] = []
+    let mut m = 0
+    while m < natoms { masses.push(1.0) ; m = m + 1 }
+    // 2) materials qforge_dynmat 재사용: Γ점(q=0)·1셀(R=0) ⇒ D = (Hessian + Hessianᵀ)/2.
+    //    (Hessian 은 이미 대칭이므로 Hermitize 는 항등 — 수치 비대칭만 평탄화.)
+    //    그런데 qforge_dynmat 의 질량가중은 자유도→원자 매핑(i/3)을 쓰므로,
+    //    각 자유도를 "원자"로 보려면 3N 규약과 어긋난다.  ⇒ 질량 1·단위셀에서
+    //    질량가중·cos위상이 모두 항등(√1=1, cos0=1)이 되도록 직접 DynMat 구성.
+    let block = dim * dim
+    let mut mat: [float] = []
+    let mut z = 0
+    while z < block { mat.push(hess[z]) ; z = z + 1 }
+    // Hermitize (eigh 실대칭 입력 보장 — dfpt.hexa 와 동일 절차).
+    let mut a = 0
+    while a < dim {
+        let mut b = a + 1
+        while b < dim {
+            let avg = 0.5 * (mat[a * dim + b] + mat[b * dim + a])
+            mat[a * dim + b] = avg
+            mat[b * dim + a] = avg
+            b = b + 1
+        }
+        a = a + 1
+    }
+    let dm = DynMat { dim: dim, mat: mat, qx: 0.0, qy: 0.0, qz: 0.0 }
+    // 3) materials qforge_phonons 재사용: eigh → ω²(오름차순, 부호보존) + 모드.
+    //    질량 1 ⇒ ω² = Hessian 고유치 그대로.  음수 ω² = soft/허수 모드(정직).
+    let ph = qforge_phonons(dm, masses, natoms)
+    // 4) 음의 고유치(ω²<0) 카운트 = 허수모드 수.
+    let mut n_neg = 0
+    let mut i = 0
+    while i < dim {
+        if ph.omega2[i] < 0.0 { n_neg = n_neg + 1 }
+        i = i + 1
+    }
+    // 5) TS 1차조건: 정확히 1개 음 → 그 허수모드 고유벡터 = 반응좌표.
+    //    omega2 오름차순이므로 최저모드(modes[0])가 음일 때 그게 허수모드.
+    let mut neg_mode: [float] = []
+    if n_neg == 1 {
+        let mut j = 0
+        while j < dim { neg_mode.push(ph.modes[0][j]) ; j = j + 1 }
+    }
+    return TSClass { dim: dim, n_neg: n_neg, eigvals: ph.omega2,
+                     omega: ph.omega, modes: ph.modes, neg_mode: neg_mode }
+}
+
+// ── 편의 분류자: minimum? / TS? / 고차saddle? ──────────────────────────
+pub fn ts_is_minimum(c: TSClass) -> bool { return c.n_neg == 0 }
+pub fn ts_is_transition_state(c: TSClass) -> bool { return c.n_neg == 1 }
+pub fn ts_is_higher_saddle(c: TSClass) -> bool { return c.n_neg >= 2 }
+
+// ── FD-Hessian (d4-generic): 임의 energy 콜백 → 중심차분 2차미분 ───────
+//   H_ij = [V(r+he_i+he_j) − V(r+he_i−he_j) − V(r−he_i+he_j) + V(r−he_i−he_j)]/(4h²)
+//   대각 i=j 는 표준 2차 중심차분: [V(r+he_i) − 2V(r) + V(r−he_i)]/h².
+//   energy 콜백은 fn([float])->float — neb_scf.hexa 의 leps_h3_energy 가 그 한 예.
+fn _fd_shift(r: [float], i: int, hi: float, j: int, hj: float) -> [float] {
+    let mut o: [float] = []
+    let mut k = 0
+    while k < len(r) {
+        let mut v = r[k]
+        if k == i { v = v + hi }
+        if k == j { v = v + hj }
+        o.push(v)
+        k = k + 1
+    }
+    return o
+}
+
+// hess_id dispatcher (d4: 엔진은 이름분기 없음).  manifest:
+//   hess_id == 0 → LEPS H₃ energy (neb_scf.hexa::leps_h3_energy).
+fn _ts_energy(hess_id: int, coord: [float]) -> float {
+    return leps_h3_energy(coord)           // hess_id == 0 (현재 유일 케이스)
+}
+
+// FD-Hessian 조립 (dispatcher 경유).  반환 = 평탄 row-major dim*dim.
+pub fn ts_hessian_fd(hess_id: int, r0: [float], h: float) -> [float] {
+    let dim = len(r0)
+    let mut hess: [float] = []
+    let mut z = 0
+    while z < dim * dim { hess.push(0.0) ; z = z + 1 }
+    let v0 = _ts_energy(hess_id, r0)
+    let mut i = 0
+    while i < dim {
+        // 대각: [V(+h) − 2V(0) + V(−h)]/h²
+        let rp = _fd_shift(r0, i, h, i, 0.0)
+        let rm = _fd_shift(r0, i, -h, i, 0.0)
+        let vp = _ts_energy(hess_id, rp)
+        let vm = _ts_energy(hess_id, rm)
+        hess[i * dim + i] = (vp - 2.0 * v0 + vm) / (h * h)
+        // 비대각 j>i: 4-점 혼합 중심차분.
+        let mut j = i + 1
+        while j < dim {
+            let rpp = _fd_shift(r0, i, h, j, h)
+            let rpm = _fd_shift(r0, i, h, j, -h)
+            let rmp = _fd_shift(r0, i, -h, j, h)
+            let rmm = _fd_shift(r0, i, -h, j, -h)
+            let mixed = (_ts_energy(hess_id, rpp) - _ts_energy(hess_id, rpm)
+                       - _ts_energy(hess_id, rmp) + _ts_energy(hess_id, rmm)) / (4.0 * h * h)
+            hess[i * dim + j] = mixed
+            hess[j * dim + i] = mixed
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return hess
+}
+
+// ── one-shot: 기하 r0 에서 (dispatcher) Hessian → 분류 ─────────────────
+//   엔진은 hess_id 만 dispatcher 로 흘린다 (d4-generic).
+pub fn ts_classify_at(hess_id: int, r0: [float], h: float) -> TSClass {
+    let hess = ts_hessian_fd(hess_id, r0, h)
+    return ts_classify_hessian(hess, len(r0))
+}
+
+// ── 허수모드 방향 진단: 음모드 고유벡터가 대칭 stretch(반응좌표)인가? ──
+//   콜리니어 H₃ 교환 saddle 의 허수모드는 *비대칭 stretch* (r_ab 와 r_bc 가
+//   반대부호로 변함 = 한 결합 끊김 + 다른 결합 형성 = 반응좌표).
+//   대칭 stretch (r_ab, r_bc 같은부호)는 *실주파수* (양 ω²) 모드.
+//   ⇒ 음모드 고유벡터의 두 성분 부호가 반대(곱<0)면 "반응좌표"임을 확인.
+//   반환: 음모드 두 성분의 곱 (콜리니어 2자유도 전용 진단).
+pub fn ts_neg_mode_antisym_product(c: TSClass) -> float {
+    if c.n_neg != 1 { return 0.0 }
+    if len(c.neg_mode) < 2 { return 0.0 }
+    return c.neg_mode[0] * c.neg_mode[1]
+}

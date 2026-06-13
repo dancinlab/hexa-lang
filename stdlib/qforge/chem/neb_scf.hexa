@@ -1,0 +1,321 @@
+// @ci_gate — deterministic · network-free · 첫 실분자 반응(H+H₂ 콜리니어) NEB g5 게이트
+//
+// neb_scf.hexa — QFORGE `chem` 스케일 front-end round-2:
+//   round-1 의 NEB/CI-NEB 메커닉스 엔진(neb.hexa) 의 PES 콜백 인터페이스에
+//   *첫 실분자 반응계* 의 PES energy+force 를 결선한다 —
+//     H_a + H_b–H_c  →  H_a–H_b + H_c     (콜리니어 수소 교환, H₃ saddle).
+//
+// ── HONEST 범위 (d6 / @L5 / CLAUDE.md d6) ─────────────────────────────
+//   PES 출처 = **LEPS (London-Eyring-Polanyi-Sato) 표준 해석 PES**, *NOT* ab-initio.
+//   round-2 의 본래 의도는 QFORGE 의 자체 평면파 SCF(stdlib/qforge/scf*.hexa)를
+//   PES energy+force 로 결선하는 것이었으나, 감사 결과:
+//     · QFORGE SCF 코어는 *주기계 평면파 DFT* 엔진(k·G 벡터·총에너지·force-constant
+//       via DFPT)으로, 금속수소화물(CaH6/LaH10 등) 캠페인용이다.
+//     · 분자 좌표(결합길이) 대 Hellmann-Feynman *원자력* 을 직접 내주는 진입점
+//       (force_on_atom / nuclear-gradient)이 brick 에 부재 → H₃ 콜리니어 PES 를
+//       SCF 로 *그 자리에서* 산출 불가(핵-그래디언트 적분 미구현).
+//   ∴ d6 정직원칙에 따라, 실분자 반응의 NEB 작동·대칭 saddle·배리어를
+//      H₃ 의 *교과서 표준 해석 PES(LEPS)* 로 입증한다. 이는 ab-initio 가 *아니며*,
+//      LEPS 자체 해석 saddle/배리어와 대조한다. 문헌 ab-initio 9.7 kcal/mol 은
+//      참고로 병기하되 *강제하지 않는다*(LEPS≠CCSD(T)).  실 SCF 결선은 round-3+
+//      (분자 SCF + Hellmann-Feynman force 진입점 추가) 의 과제로 정직 이월.
+//
+// ── LEPS 콜리니어 H₃ PES (London-Eyring-Polanyi-Sato) ─────────────────
+//   콜리니어 3원자 H_a–H_b–H_c, 결합 i∈{ab, bc, ac}, r_ac = r_ab + r_bc.
+//   각 결합의 Morse exp 인자:  E1_i = exp(-α(r_i − r0)),  Morse:
+//     ¹E_i (singlet) = D[E1_i² − 2 E1_i]                              (결합성)
+//     ³E_i (triplet) = (D/2)[E1_i² + 2 E1_i]                          (반결합성)
+//   Sato 파라미터 S 로 Coulomb(Q)·Exchange(J) 적분 분해:
+//     Q_i = ½[ ¹E_i(1+S) + ³E_i(1−S) ] / (1+S)
+//     J_i = ½[ ¹E_i(1+S) − ³E_i(1−S) ] / (1+S)
+//   LEPS 에너지(London 식):
+//     V = Q_ab + Q_bc + Q_ac
+//         − sqrt( ½[ (J_ab−J_bc)² + (J_bc−J_ac)² + (J_ac−J_ab)² ] )
+//   (대칭 교환 saddle 은 r_ab = r_bc 위에 놓인다 — 본 brick 의 핵심 검증.)
+//
+//   파라미터(교과서 표준 콜리니어 H₃, 원자단위 변형 — D=1 정규화 스케일):
+//     D = 4.7466 eV (H₂ De),  α = 1.04435 /Å,  r0 = 0.742 Å,  S = 0.167.
+//   PES 는 eV 단위. 배리어 = V(saddle) − V(reactant asymptote).
+//
+//   ⚠ 해석 PES 이므로 ∇V 도 *해석 미분*(chain rule)으로 내준다 → NEB force 결선이
+//     수치미분 없이 정확. 이것이 "PES energy+force 콜백 결선" 의 실증이다.
+//
+// d4-generic: round-1 엔진(neb_relax)은 PES 를 이름분기하지 않는다. 본 brick 은
+//   neb.hexa 의 pes_id dispatcher 에 *새 케이스를 추가하지 않고*(엔진 미접촉),
+//   동일한 (energy, grad) 콜백 시그니처를 따르는 독립 PES 함수
+//   leps_h3_energy / leps_h3_grad 를 제공하고, NEB 메커닉스를 그대로 재사용하는
+//   얇은 드라이버 neb_relax_leps 를 둔다(neb.hexa 의 force·tangent 식 동형 재구현).
+//   → "PES = 콜백" 인터페이스가 진짜 generic 함을 두 번째 PES 로 입증(d4).
+//
+// d19 재사용: NEB force/tangent/climbing 메커닉스 = neb.hexa 와 동형(검증된 식 재사용).
+//
+// Run:  hexa run stdlib/qforge/chem/neb_scf_selftest.hexa
+
+// ── 벡터 헬퍼 (2D 결합좌표 [r_ab, r_bc]) ──────────────────────────────
+fn _ls_abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ls_sub(a: [float], b: [float]) -> [float] {
+    let mut o: [float] = [] ; let mut i = 0
+    while i < len(a) { o.push(a[i] - b[i]) ; i = i + 1 } return o
+}
+fn _ls_add(a: [float], b: [float]) -> [float] {
+    let mut o: [float] = [] ; let mut i = 0
+    while i < len(a) { o.push(a[i] + b[i]) ; i = i + 1 } return o
+}
+fn _ls_scale(a: [float], s: float) -> [float] {
+    let mut o: [float] = [] ; let mut i = 0
+    while i < len(a) { o.push(a[i] * s) ; i = i + 1 } return o
+}
+fn _ls_dot(a: [float], b: [float]) -> float {
+    let mut acc = 0.0 ; let mut i = 0
+    while i < len(a) { acc = acc + a[i] * b[i] ; i = i + 1 } return acc
+}
+fn _ls_norm(a: [float]) -> float { return sqrt(_ls_dot(a, a)) }
+fn _ls_unit(a: [float]) -> [float] {
+    let n = _ls_norm(a)
+    if n < 1.0e-30 { return _ls_scale(a, 0.0) }
+    return _ls_scale(a, 1.0 / n)
+}
+
+// ── LEPS 파라미터 (교과서 콜리니어 H₃) ────────────────────────────────
+fn _leps_D() -> float { return 4.7466 }      // H₂ dissociation De (eV)
+fn _leps_alpha() -> float { return 1.04435 } // Morse range (1/Å)
+fn _leps_r0() -> float { return 0.742 }      // H₂ eq bond length (Å)
+fn _leps_S() -> float { return 0.167 }       // Sato parameter (dimensionless)
+
+// 단일 결합 길이 r → (Q_i, J_i).  반환 = [Q, J].
+fn _leps_QJ(r: float) -> [float] {
+    let D = _leps_D()
+    let a = _leps_alpha()
+    let r0 = _leps_r0()
+    let S = _leps_S()
+    let e1 = exp(-a * (r - r0))          // exp(-α(r-r0))
+    let e2 = e1 * e1                      // exp(-2α(r-r0))
+    let singlet = D * (e2 - 2.0 * e1)            // ¹E (binding Morse)
+    let triplet = 0.5 * D * (e2 + 2.0 * e1)      // ³E (antibinding)
+    let Q = 0.5 * (singlet * (1.0 + S) + triplet * (1.0 - S)) / (1.0 + S)
+    let J = 0.5 * (singlet * (1.0 + S) - triplet * (1.0 - S)) / (1.0 + S)
+    let mut o: [float] = [] ; o.push(Q) ; o.push(J) ; return o
+}
+
+// d(Q_i)/dr, d(J_i)/dr (해석 미분, chain rule).  반환 = [dQ, dJ].
+fn _leps_dQJ(r: float) -> [float] {
+    let D = _leps_D()
+    let a = _leps_alpha()
+    let r0 = _leps_r0()
+    let S = _leps_S()
+    let e1 = exp(-a * (r - r0))
+    let e2 = e1 * e1
+    // de1/dr = -α e1 ;  de2/dr = -2α e2
+    let dsinglet = D * (-2.0 * a * e2 + 2.0 * a * e1)        // d¹E/dr
+    let dtriplet = 0.5 * D * (-2.0 * a * e2 - 2.0 * a * e1)  // d³E/dr
+    let dQ = 0.5 * (dsinglet * (1.0 + S) + dtriplet * (1.0 - S)) / (1.0 + S)
+    let dJ = 0.5 * (dsinglet * (1.0 + S) - dtriplet * (1.0 - S)) / (1.0 + S)
+    let mut o: [float] = [] ; o.push(dQ) ; o.push(dJ) ; return o
+}
+
+// ── LEPS 에너지 콜백:  coord = [r_ab, r_bc] (콜리니어 → r_ac = r_ab + r_bc) ──
+pub fn leps_h3_energy(coord: [float]) -> float {
+    let rab = coord[0]
+    let rbc = coord[1]
+    let rac = rab + rbc
+    let qj_ab = _leps_QJ(rab)
+    let qj_bc = _leps_QJ(rbc)
+    let qj_ac = _leps_QJ(rac)
+    let Qsum = qj_ab[0] + qj_bc[0] + qj_ac[0]
+    let Jab = qj_ab[1]
+    let Jbc = qj_bc[1]
+    let Jac = qj_ac[1]
+    let dJ1 = Jab - Jbc
+    let dJ2 = Jbc - Jac
+    let dJ3 = Jac - Jab
+    let Jterm = 0.5 * (dJ1 * dJ1 + dJ2 * dJ2 + dJ3 * dJ3)
+    let exch = sqrt(Jterm)
+    return Qsum - exch
+}
+
+// ── LEPS 그래디언트 콜백:  ∇V = [dV/dr_ab, dV/dr_bc] (해석 미분) ──────
+//   rac = rab + rbc → d(rac)/d(rab)=1, d(rac)/d(rbc)=1 (chain rule).
+pub fn leps_h3_grad(coord: [float]) -> [float] {
+    let rab = coord[0]
+    let rbc = coord[1]
+    let rac = rab + rbc
+    let qj_ab = _leps_QJ(rab) ;  let dqj_ab = _leps_dQJ(rab)
+    let qj_bc = _leps_QJ(rbc) ;  let dqj_bc = _leps_dQJ(rbc)
+    let qj_ac = _leps_QJ(rac) ;  let dqj_ac = _leps_dQJ(rac)
+    let Jab = qj_ab[1] ;  let Jbc = qj_bc[1] ;  let Jac = qj_ac[1]
+    let dJab = dqj_ab[1] ;  let dJbc = dqj_bc[1] ;  let dJac = dqj_ac[1]
+    let dJ1 = Jab - Jbc
+    let dJ2 = Jbc - Jac
+    let dJ3 = Jac - Jab
+    let Jterm = 0.5 * (dJ1 * dJ1 + dJ2 * dJ2 + dJ3 * dJ3)
+    let exch = sqrt(Jterm)
+    // d(exch)/dJab etc.  exch = sqrt(0.5[(Jab-Jbc)²+(Jbc-Jac)²+(Jac-Jab)²])
+    //   ∂Jterm/∂Jab = (Jab-Jbc) - (Jac-Jab) = 2Jab - Jbc - Jac
+    //   ∂Jterm/∂Jbc = (Jbc-Jac) - (Jab-Jbc) = 2Jbc - Jab - Jac
+    //   ∂Jterm/∂Jac = (Jac-Jab) - (Jbc-Jac) = 2Jac - Jab - Jbc
+    //   ∂exch/∂J_i = ∂Jterm/∂J_i / (2 exch)
+    let mut dexch_dJab = 0.0
+    let mut dexch_dJbc = 0.0
+    let mut dexch_dJac = 0.0
+    if exch > 1.0e-30 {
+        dexch_dJab = (2.0 * Jab - Jbc - Jac) / (2.0 * exch)
+        dexch_dJbc = (2.0 * Jbc - Jab - Jac) / (2.0 * exch)
+        dexch_dJac = (2.0 * Jac - Jab - Jbc) / (2.0 * exch)
+    }
+    // V = Qab+Qbc+Qac − exch.  rac depends on both rab & rbc.
+    // dV/drab = dQab + dQac − ( dexch_dJab·dJab + dexch_dJac·dJac )
+    // dV/drbc = dQbc + dQac − ( dexch_dJbc·dJbc + dexch_dJac·dJac )
+    let dQab = dqj_ab[0] ;  let dQbc = dqj_bc[0] ;  let dQac = dqj_ac[0]
+    let dV_drab = dQab + dQac - (dexch_dJab * dJab + dexch_dJac * dJac)
+    let dV_drbc = dQbc + dQac - (dexch_dJbc * dJbc + dexch_dJac * dJac)
+    let mut g: [float] = [] ; g.push(dV_drab) ; g.push(dV_drbc) ; return g
+}
+
+// ── NEB band (round-1 NebBand 와 동형 — 결합좌표 위) ──────────────────
+pub struct LepsBand {
+    nimg: int,
+    coords: [[float]],         // nimg × 2  ([r_ab, r_bc])
+    energies: [float],
+    converged: bool,
+    iters: int,
+    fmax: float
+}
+
+pub fn leps_linear_init(start: [float], end: [float], nimg: int) -> [[float]] {
+    let dim = len(start)
+    let mut band: [[float]] = []
+    let mut i = 0
+    while i < nimg {
+        let t = (i * 1.0) / ((nimg - 1) * 1.0)
+        let mut row: [float] = []
+        let mut d = 0
+        while d < dim { row.push(start[d] + t * (end[d] - start[d])) ; d = d + 1 }
+        band.push(row)
+        i = i + 1
+    }
+    return band
+}
+
+// improved tangent (Henkelman-Jónsson 2000) — neb.hexa 와 동형.
+fn _leps_tangent(rm: [float], ri: [float], rp: [float],
+                 vm: float, vi: float, vp: float) -> [float] {
+    let tp = _ls_sub(rp, ri)
+    let tm = _ls_sub(ri, rm)
+    if vp > vi { if vi > vm { return _ls_unit(tp) } }
+    if vp < vi { if vi < vm { return _ls_unit(tm) } }
+    let dvp = _ls_abs(vp - vi)
+    let dvm = _ls_abs(vm - vi)
+    let mut dvmax = dvp ;  let mut dvmin = dvm
+    if dvm > dvp { dvmax = dvm ; dvmin = dvp }
+    let mut tau: [float] = []
+    if vp > vm { tau = _ls_add(_ls_scale(tp, dvmax), _ls_scale(tm, dvmin)) }
+    else       { tau = _ls_add(_ls_scale(tp, dvmin), _ls_scale(tm, dvmax)) }
+    return _ls_unit(tau)
+}
+
+// NEB force on interior image (CI-NEB climbing 지원) — neb.hexa 와 동형.
+//   gi = leps_h3_grad(band[i]) (PES force 콜백 결선).
+fn _leps_image_force(rm: [float], ri: [float], rp: [float],
+                     vm: float, vi: float, vp: float,
+                     gi: [float], k: float, climbing: bool) -> [float] {
+    let tau = _leps_tangent(rm, ri, rp, vm, vi, vp)
+    let gpar = _ls_dot(gi, tau)
+    if climbing {
+        return _ls_add(_ls_scale(gi, -1.0), _ls_scale(tau, 2.0 * gpar))
+    }
+    let fperp = _ls_add(_ls_scale(gi, -1.0), _ls_scale(tau, gpar))
+    let nplus = _ls_norm(_ls_sub(rp, ri))
+    let nminus = _ls_norm(_ls_sub(ri, rm))
+    let fspr = _ls_scale(tau, k * (nplus - nminus))
+    return _ls_add(fperp, fspr)
+}
+
+fn _leps_argmax_interior(energies: [float], nimg: int) -> int {
+    let mut best = 1 ;  let mut bestv = energies[1]
+    let mut i = 2
+    while i < nimg - 1 {
+        if energies[i] > bestv { bestv = energies[i] ; best = i }
+        i = i + 1
+    }
+    return best
+}
+
+// ── 메인 드라이버: LEPS PES energy+force 결선된 NEB/CI-NEB 완화 ──────
+//   endpoint(0, nimg-1) 고정. PES = leps_h3_energy / leps_h3_grad 콜백.
+pub fn neb_relax_leps(band0: [[float]], k: float, step: float,
+                      maxiter: int, ftol: float,
+                      ci: bool, climb_after: int) -> LepsBand {
+    let nimg = len(band0)
+    let dim = len(band0[0])
+    let mut band: [[float]] = []
+    let mut ci0 = 0
+    while ci0 < nimg {
+        let mut row: [float] = []
+        let mut d = 0
+        while d < dim { row.push(band0[ci0][d]) ; d = d + 1 }
+        band.push(row)
+        ci0 = ci0 + 1
+    }
+    let mut iters = 0
+    let mut fmax = 1.0e30
+    let mut converged = false
+    let mut energies: [float] = []
+    let mut e0 = 0
+    while e0 < nimg { energies.push(0.0) ; e0 = e0 + 1 }
+
+    let mut it = 0
+    while it < maxiter {
+        let mut ie = 0
+        while ie < nimg { energies[ie] = leps_h3_energy(band[ie]) ; ie = ie + 1 }
+        let mut climb_idx = -1
+        if ci { if it >= climb_after { climb_idx = _leps_argmax_interior(energies, nimg) } }
+        let mut newfmax = 0.0
+        let mut moves: [[float]] = []
+        let mut zrow: [float] = [] ; let mut zd = 0
+        while zd < dim { zrow.push(0.0) ; zd = zd + 1 }
+        moves.push(zrow)
+        let mut i = 1
+        while i < nimg - 1 {
+            let gi = leps_h3_grad(band[i])             // ← PES force 콜백 결선
+            let mut is_climb = false
+            if i == climb_idx { is_climb = true }
+            let f = _leps_image_force(band[i - 1], band[i], band[i + 1], energies[i - 1], energies[i], energies[i + 1], gi, k, is_climb)
+            let fnorm = _ls_norm(f)
+            if fnorm > newfmax { newfmax = fnorm }
+            let stepvec = _ls_scale(f, step)
+            moves.push(stepvec)
+            i = i + 1
+        }
+        let mut zrow2: [float] = [] ; let mut zd2 = 0
+        while zd2 < dim { zrow2.push(0.0) ; zd2 = zd2 + 1 }
+        moves.push(zrow2)
+        let mut im = 1
+        while im < nimg - 1 { band[im] = _ls_add(band[im], moves[im]) ; im = im + 1 }
+        fmax = newfmax
+        iters = it + 1
+        if newfmax < ftol {
+            if ci { if it >= climb_after { converged = true ; it = maxiter } }
+            else { converged = true ; it = maxiter }
+        }
+        it = it + 1
+    }
+    let mut fe = 0
+    while fe < nimg { energies[fe] = leps_h3_energy(band[fe]) ; fe = fe + 1 }
+    return LepsBand { nimg: nimg, coords: band, energies: energies,
+                      converged: converged, iters: iters, fmax: fmax }
+}
+
+// 배리어(top image E − reactant endpoint E) 와 saddle image 인덱스.
+pub struct LepsBarrier {
+    barrier: float,
+    top_idx: int,
+    top_energy: float
+}
+pub fn leps_barrier(b: LepsBand) -> LepsBarrier {
+    let top = _leps_argmax_interior(b.energies, b.nimg)
+    return LepsBarrier { barrier: b.energies[top] - b.energies[0],
+                         top_idx: top, top_energy: b.energies[top] }
+}
+
+// 단위 변환 헬퍼: eV → kcal/mol (배리어 보고용).
+pub fn ev_to_kcalmol(e_ev: float) -> float { return e_ev * 23.0605 }

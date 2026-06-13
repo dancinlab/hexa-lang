@@ -1,0 +1,126 @@
+// @ci_gate — deterministic · network-free · 첫 실분자 반응(H+H₂ 콜리니어) NEB g5 게이트
+//
+// neb_scf_selftest.hexa — stdlib/qforge/chem/neb_scf.hexa 의 g5 검증.
+//
+// 반응: H_a + H_b–H_c → H_a–H_b + H_c  (콜리니어 수소 교환, H₃ 대칭 saddle).
+//   구성공간 = 결합좌표 [r_ab, r_bc] (콜리니어 → r_ac = r_ab + r_bc).
+//   PES = LEPS (London-Eyring-Polanyi-Sato) 표준 해석 PES (NOT ab-initio).
+//
+// ── 검증 케이스 ───────────────────────────────────────────────────────
+//  (a) PES-force 결선: leps_h3_grad(해석) == 중심차분 (FD) — 콜백 force 정확성.
+//      + reactant/product 점대칭(교환대칭) 에너지 일치.
+//  (b) H+H₂ 배리어: CI-NEB climbing image 가 saddle 로 등반 → 배리어를
+//      LEPS *해석 saddle* (V=-4.0663 eV, 배리어 0.6803 eV = 15.69 kcal/mol) 과 대조.
+//      문헌 ab-initio ≈9.7 kcal/mol 은 *참고병기*(LEPS 가 ~6 kcal/mol 과대 — 정직보고).
+//  (c) 대칭 saddle: 수렴한 climbing image 가 r_ab ≈ r_bc (교환 대칭점) 위에 있고
+//      |∇V| ≈ 0 (TS 1차조건) — H₃ 대칭 saddle 입증.
+//  (d) MEP 단조: 반응좌표 따라 에너지 프로파일이 reactant→saddle 단조증가,
+//      saddle→product 단조감소 (single-barrier MEP).
+//
+// 레퍼런스:
+//   F. London, Z. Elektrochem. 35, 552 (1929); H. Eyring, M. Polanyi,
+//     Z. Phys. Chem. B12, 279 (1931); S. Sato, J. Chem. Phys. 23, 592 (1955)
+//     — LEPS 해석 PES.
+//   콜리니어 H₃ 교환반응 표준 벤치(예: Truhlar & Wyatt, Adv. Chem. Phys. 36, 141
+//     (1977) 외 다수 교과서). LEPS 표준 파라미터 saddle/배리어는 본 brick 내장
+//     파라미터(D=4.7466 eV, α=1.04435/Å, r0=0.742 Å, S=0.167)의 *해석 결과*이다.
+//   ab-initio classical barrier (참고): H+H₂ ≈ 9.7 kcal/mol (Liu/Siegbahn,
+//     CCSD(T)/full-CI 계열) — LEPS 와 *대조*용(강제 일치 아님).
+//
+// Run:  hexa run stdlib/qforge/chem/neb_scf_selftest.hexa
+// PASS: "qforge_neb_scf_selftest PASS".
+
+use "stdlib/qforge/chem/neb_scf"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_bool(name: str, got: bool) -> int {
+    if got { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── (a) PES-force 결선: 해석 grad == 중심차분 (FD) ────────────────
+    //   임의 비대칭 점에서 leps_h3_grad 가 V 의 진짜 기울기인지(콜백 결선 정확성).
+    let p: [float] = [1.0, 0.9]
+    let h = 1.0e-6
+    let pxp: [float] = [1.0 + h, 0.9] ;  let pxm: [float] = [1.0 - h, 0.9]
+    let pyp: [float] = [1.0, 0.9 + h] ;  let pym: [float] = [1.0, 0.9 - h]
+    let fdx = (leps_h3_energy(pxp) - leps_h3_energy(pxm)) / (2.0 * h)
+    let fdy = (leps_h3_energy(pyp) - leps_h3_energy(pym)) / (2.0 * h)
+    let ga = leps_h3_grad(p)
+    fails = fails + _ck("(a) ∂V/∂r_ab 해석==FD", ga[0], fdx, 1.0e-4)
+    fails = fails + _ck("(a) ∂V/∂r_bc 해석==FD", ga[1], fdy, 1.0e-4)
+    //   교환 대칭: V(r_ab,r_bc) == V(r_bc,r_ab).
+    let s1: [float] = [1.3, 0.8] ;  let s2: [float] = [0.8, 1.3]
+    fails = fails + _ck("(a) 교환대칭 V(rab,rbc)=V(rbc,rab)",
+                        leps_h3_energy(s1), leps_h3_energy(s2), 1.0e-12)
+    //   reactant asymptote = −D well 깊이(H₂ eq 결합), ~ -4.7466 eV.
+    let reactant: [float] = [20.0, 0.742]
+    fails = fails + _ck("(a) reactant asymptote ≈ −D (-4.7466 eV)",
+                        leps_h3_energy(reactant), -4.7466, 1.0e-2)
+
+    // ── (b)+(c) H+H₂ CI-NEB: 대칭 saddle 등반 + 배리어 ────────────────
+    //   start = reactant (H_a 멀리, H_b–H_c eq):  [r_ab=6.0, r_bc=0.742]
+    //   end   = product  (H_a–H_b eq, H_c 멀리):  [r_ab=0.742, r_bc=6.0]
+    //   endpoint 를 충분히 멀리(6 Å)두어 reactant/product asymptote(-D=-4.7466 eV)에
+    //   수렴시킨다 → forward 배리어(top − endpoint)가 LEPS 해석 saddle 배리어와 일치.
+    //   직선 보간 → CI-NEB.  climbing image 가 대칭 saddle(r_ab≈r_bc≈1.171)로 등반.
+    let start: [float] = [6.0, 0.742]
+    let end:   [float] = [0.742, 6.0]
+    let band = leps_linear_init(start, end, 21)
+    //   LEPS eV 스케일(|∇V|~수 eV/Å) → step 작게. k=0.5, step=2e-3, climb 3000 후.
+    //   fmax<1e-5 수렴은 ~84k iter (endpoint 6Å · 21 image · climbing 등반 완료).
+    let r = neb_relax_leps(band, 0.5, 2.0e-3, 200000, 1.0e-5, true, 3000)
+    fails = fails + _ck_bool("(b) CI-NEB H+H₂ 수렴", r.converged)
+    let bar = leps_barrier(r)
+    let topc = r.coords[bar.top_idx]
+    println("    [b] climbing image @ (r_ab=" + to_string(topc[0]) + ", r_bc=" +
+            to_string(topc[1]) + ")  V=" + to_string(bar.top_energy) +
+            " eV  iters=" + to_string(r.iters))
+    let bar_kcal = ev_to_kcalmol(bar.barrier)
+    println("    [b] forward barrier = " + to_string(bar.barrier) + " eV = " +
+            to_string(bar_kcal) + " kcal/mol  (LEPS 해석; ab-initio 참고 ≈9.7)")
+    // (b1) 배리어 = LEPS 해석 saddle 배리어 0.6803 eV (이 brick 의 진짜 검증대상).
+    fails = fails + _ck("(b1) 배리어 ≈ 0.6803 eV (LEPS 해석)", bar.barrier, 0.6803, 2.0e-2)
+    // (b2) kcal/mol 환산 = 15.69 (LEPS); 문헌 ab-initio 9.7 과 *대조*(강제 아님).
+    fails = fails + _ck("(b2) 배리어 ≈ 15.69 kcal/mol (LEPS)", bar_kcal, 15.69, 0.5)
+    // (b3) climbing image V = LEPS saddle V (-4.0663 eV).
+    fails = fails + _ck("(b3) saddle V ≈ -4.0663 eV", bar.top_energy, -4.0663, 2.0e-2)
+
+    // (c) 대칭 saddle: climbing image 가 r_ab ≈ r_bc (교환 대칭점) + |∇V|≈0.
+    fails = fails + _ck("(c1) 대칭 saddle r_ab ≈ r_bc", topc[0], topc[1], 3.0e-2)
+    let gtop = leps_h3_grad(topc)
+    let gtopn = sqrt(gtop[0] * gtop[0] + gtop[1] * gtop[1])
+    fails = fails + _ck("(c2) saddle |∇V| ≈ 0 (TS 1차조건)", gtopn, 0.0, 5.0e-2)
+    //   대칭 saddle 좌표 = LEPS 해석 saddle r=1.171 Å.
+    fails = fails + _ck("(c3) saddle r ≈ 1.171 Å", topc[0], 1.171, 4.0e-2)
+
+    // ── (d) MEP 단조: reactant→saddle 증가, saddle→product 감소 ───────
+    //   수렴 밴드의 에너지 프로파일이 single-barrier(top 까지 비감소, 이후 비증가).
+    let mut mono_up = true
+    let mut i = 1
+    while i <= bar.top_idx {
+        if r.energies[i] < r.energies[i - 1] - 1.0e-3 { mono_up = false }
+        i = i + 1
+    }
+    let mut mono_down = true
+    let mut j = bar.top_idx + 1
+    while j < r.nimg {
+        if r.energies[j] > r.energies[j - 1] + 1.0e-3 { mono_down = false }
+        j = j + 1
+    }
+    fails = fails + _ck_bool("(d1) MEP reactant→saddle 단조증가", mono_up)
+    fails = fails + _ck_bool("(d2) MEP saddle→product 단조감소", mono_down)
+    //   끝점이 reactant/product asymptote 근방(교환대칭 → 같은 에너지).
+    fails = fails + _ck("(d3) endpoint 교환대칭 에너지 일치",
+                        r.energies[0], r.energies[r.nimg - 1], 1.0e-6)
+
+    if fails == 0 { println("qforge_neb_scf_selftest PASS") }
+    else { println("qforge_neb_scf_selftest FAIL (" + to_string(fails) + ")") }
+}
