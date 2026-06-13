@@ -1,0 +1,155 @@
+F-OP118-INT-OVERFLOW-SIZE-ARITH — size-arithmetic integer-overflow / signed-length
+                                  confusion in binary/protocol/crypto PARSERS
+                                  (LANE-2, 0-pod) — the size-COMPUTATION-step
+                                  complement of OP-105 (offset-OOB) and OP-115
+                                  (unbounded-work)
+================================================================================
+DATE   : 2026-06-13
+LANE   : 2 (0-pod correctness / security). CWE-190 -> CWE-125/787 chain: a parser
+         reads a length/count FIELD from untrusted bytes then does ARITHMETIC on
+         it (accumulate a big-endian width, add a header, derive der_next) to
+         compute a SIZE / OFFSET / COPY-COUNT. If that arithmetic WRAPS past the
+         int domain (-> negative/garbage) or a parsed length is treated as SIGNED
+         (negative length used as a span / a wrapped `a+b` bypasses `< total`),
+         the computed size is WRONG. Sibling LANE-1 (OP-108 hash/checksum/LCG
+         numeric overflow; OP-119 unchecked-error sentinel in util) — disjoint
+         surface (this is PARSER size-arithmetic only).
+TIER   : d5 — overflow/signedness correctness fix vs documented semantics +
+         hermetic regression locks, $0 / 0-pod / 0-GPU.
+VERDICT: 🟢 class CLOSED. Two overflow-reachable variable/64-bit-width length
+         decoders FIXED + locked (ASN.1 DER long-form · websocket 64-bit form);
+         the rest of the parser family is PROVABLY wrap-immune (every other
+         declared length is a <=24-bit or fixed-32-bit field that cannot exceed
+         i63) OR co-bounded by buffer length, OR a value-decode not a size sink.
+         Honest g5: verbatim VM repros of both wraps; each fix minimal &
+         net-additive; SAFE sites preserved with evidence.
+
+================================================================================
+STEP 1 — INT-SEMANTICS PROBE (GATES the sub-class)  [verbatim `hexa run`]
+================================================================================
+Probe program (/tmp/op118_probe.hexa) output, verbatim:
+  imax=9223372036854775807
+  imax+1=-9223372036854775808              <- 64-bit SIGNED wrap (NOT bignum)
+  a*b=-2446744073709551616                 <- 4e9 * 4e9 overflows to NEGATIVE
+  neg<cap PASSED bound (neg=-5)            <- a negative length PASSES `< cap`
+  total=-9223372036854775716 total<x?=true <- `a+b` wrap makes total<x (bypass)
+
+FINDING: hexa `int` is 64-bit SIGNED (i63 effective in the interp), confirming
+OP-108's model. ALL FOUR OP-118 sub-classes are REAL and reachable:
+  (a) accumulate-overflow: a big-endian width built by `v = v*256 + byte` or
+      `v = (v<<8)|byte` over >=8 bytes wraps past i63 -> negative/garbage.
+  (b) negative-length-as-span / bypassed `< cap`: a negative length passes an
+      upper-bound check and is then used as a span/offset.
+  (c) `a+b` wrap below `a`: a derived `start + len` regresses below `start`.
+  (d) multiply-overflow: `count * stride`. (No reachable parser site found that
+      multiplies an untrusted count by a stride to size an alloc — see census.)
+The bug surface is therefore the VARIABLE / WIDE (>=8-byte) length decoders;
+narrow fixed-width fields (<=4 bytes => max 2^32-1 << i63) are wrap-IMMUNE.
+
+================================================================================
+STEP 2 — CENSUS MATRIX (parser size-arith site -> safe/unsafe -> action)
+================================================================================
+SITE (fn · file)                                              CLASS   ACTION
+------------------------------------------------------------- ------- --------
+crypto/asn1_der der_value_len (long-form `v=(v<<8)|byte`,
+   nbytes = n&0x7F up to 127)                                 UNSAFE  FIXED 🔴
+   -> der_next = value_start + v REGRESSES; n_len/e_len/r_len/
+      s_len go negative into x509_{min,rsa,p256,validity}.
+net/websocket_native ws_recv_native 64-bit 127-form length
+   (`val = val*256 + lb[k]`, 8 bytes, RFC MSB-must-be-0
+   UNENFORCED)                                                UNSAFE  FIXED 🔴
+   -> top-bit-set wraps plen negative (graceful-empty in THIS
+      fn, but RFC-invariant unenforced -> harden to explicit reject).
+
+crypto/asn1_der der_int (value decode, masks `&0xFFFF..FFFF`)  SAFE   value not size; doc'd <=63-bit, big ints keep raw bytes. CLEAN.
+crypto/asn1_der der_oid_str (base-128 -> string parts)         SAFE   produces strings, no size sink. CLEAN.
+crypto/tls13_certificate uint24 list/entry/ext lengths         SAFE   <=24-bit (max 16,777,215) << i63; sums can't wrap; OP-105 co-bounds. CLEAN.
+crypto/tls13_{alpn,cert_authorities,key_share,supported_
+   groups,sig_algs} `end = 2 + list_len` (16-bit field)        SAFE   16-bit list_len; `end`/`i+2+nl` co-bounded by `i < len(ext_value)`. CLEAN.
+crypto/tls13_new_session_ticket u32 lifetime/age              SAFE   fixed 32-bit (max 2^32-1) << i63; a VALUE not a size. CLEAN.
+crypto/tls13_early_data u32 max_early_data_size               SAFE   fixed 32-bit << i63; value, not alloc-driving. CLEAN.
+crypto/tls13_record tls13_record_aad / traffic_key length     SAFE   `inner_len`/`length` are LOCAL-SENDER sizes (|pt|+1+16), not parsed-untrusted. CLEAN.
+crypto/x509_rsa exponent `e=(e<<8)|byte` over e_len           SAFE   exponent VALUE not a size; e_len now bounded by the der_value_len fix + `e_v+i<len`. CLEAN.
+crypto/hkdf_sha{384,512} expand `while len(okm) < length`     SAFE   `length` = caller-supplied key length; negative -> loop exits immediately. CLEAN.
+crypto/poly1305 _ld32 / sha512 / ripemd160 / scrypt 32-bit
+   word loads (`& 0xFFFFFFFF` / `& _M32`)                      SAFE   masked 32-bit crypto-state words, not sizes; max 2^32-1. CLEAN.
+wasm/wasm_leb128 wasm_uleb128_decode (`result |= (b&0x7f)<<
+   shift`, shift UNBOUNDED)                                    NOTE    latent unbounded-shift, but ZERO stdlib consumers + doc'd scaffold ("callers gate range upstream", "NOT a module parser"); NO reachable size->alloc/copy sink. Not a shipping 🔴 (g5 scoped); flagged for the future wasm_module.hexa caller.
+demi/record_loader · cert/loader length math                  SAFE   no untrusted BE-width length->size arithmetic (manifest/iteration counts only). CLEAN.
+
+KEY INVARIANT (why the family is otherwise clean): EVERY fixed-width declared
+length in the TLS13 / X.509 wire family is <=24-bit (most are 16-bit), so
+`length`, `2 + list_len`, `start + len`, and `data_len + ext_len` all stay far
+below i63 and CANNOT wrap; OP-105 already added the `i < len(buf)` co-bounds.
+Overflow is only reachable where the width is VARIABLE (DER long-form, up to 127
+bytes) or a full 64-bit field (websocket 127-form) — exactly the two FIXED sites.
+
+================================================================================
+STEP 3/4 — 🔴 #1: ASN.1 DER long-form length overflow (crypto/asn1_der.hexa)
+================================================================================
+INTENDED SEMANTICS (X.690 §8.1.3 + file header, verbatim):
+  "long form (high bit 1) → low 7 bits = number of subsequent length bytes
+   (big-endian)."  der_value_len returns a DER value length used by der_next
+  (next-sibling offset) and as n_len/e_len/r_len/s_len in X.509 parsing.
+PRE-FIX: `nbytes = n & 0x7F` (up to 127) then `v = (v << 8) | byte` with NO cap.
+For nbytes >= 9 (or an 8-byte form with the high bit set) v shifts/accumulates
+past i63 and WRAPS to a negative value. Then der_next = der_value_start + v
+REGRESSES below der_value_start (TLV iteration loops/regresses backward), and
+the negative n_len/e_len/r_len/s_len feed x509_{min,rsa,p256,validity} reads as
+a huge unsigned span.
+
+VERBATIM REPRO (`hexa run`, inlined der_value_len; pad so OP-105 co-bound passes):
+  9-byte: prefix=-1 fixed=0          <- 9x0xFF long-form WRAPS to -1
+  8-byte-FF: prefix=-1 fixed=0       <- 8x0xFF (high bit set) WRAPS to -1
+  der_next: pre=10 (start=11) fixed=11   <- pre-fix der_next(10) < value_start(11) = BACKWARD
+
+FIX (minimal, net-additive): in der_value_len, reject the overflow class up front
+  `if nbytes > 8 { return 0 }`  (a length needing >8 bytes can't fit non-neg i63)
+  `if v < 0 { return 0 }`       (the 8-byte form can still set the high bit)
+returning 0 = empty value, the same graceful short-read result a truncated buffer
+already yields. ALL valid <=8-byte non-negative lengths preserved.
+
+LOCK (stdlib/crypto/asn1_der_len_overflow_test.hexa — verbatim-inlined leaf):
+  __HEXA_OP118_DER_LEN_OVERFLOW__ PASS 7/7
+  (valid 10/128/256/2147483647 preserved · 9-byte + 8-byte-FF rejected ·
+   der_next regression pre=10<start=11 -> fixed=11)
+
+================================================================================
+STEP 3/4 — 🔴 #2: websocket 64-bit length top-bit (net/websocket_native.hexa)
+================================================================================
+INTENDED SEMANTICS (RFC 6455 §5.2, verbatim in-code comment):
+  "64-bit big-endian; hexa int is 64-bit. Top bit must be 0 (RFC)."
+PRE-FIX: the 127-form length `val = val * 256 + lb[k]` over 8 bytes never
+enforced the RFC MSB=0 rule. A frame with the high bit set wraps plen NEGATIVE.
+(In ws_recv_native a negative plen happens to degrade to empty payload — graceful
+— but the documented RFC invariant is UNENFORCED and a wrapped plen falls through
+the parser; this hardens it to an explicit reject.)
+
+VERBATIM REPRO (`hexa run`, inlined decode64):
+  top-bit-set: prefix=-9223372036854775808 fixed=-1
+  (all-FF -> prefix=-1, fixed=-1)
+
+FIX (minimal): after the 8-byte accumulate, `if val < 0 { return "" }` — enforce
+the RFC top-bit-0 invariant the comment already documents.
+
+LOCK (stdlib/net/websocket_native_len64_overflow_test.hexa — verbatim-inlined leaf):
+  __HEXA_OP118_WS_LEN64_OVERFLOW__ PASS 5/5
+  (valid 300/65536/2^53 preserved · top-bit-set + all-FF rejected)
+
+================================================================================
+STEP 5 — FLAGS / closure
+================================================================================
+- self/* build_selfhost-closure membership of the two edited files: 0 (both are
+  stdlib/crypto + stdlib/net leaf parsers — NOT self/*; no codegen-closure risk).
+- wipe_guard: net-ADDITIVE (guards added; no >50-line deletion). N/A.
+- .tape edits: NONE (no sign token; only .md domain log touched per regimen).
+- Installed `hexa` stale-oracle caveat: repros run via verbatim-INLINED leaf
+  functions through `hexa run` (not via `use` of the stdlib module), so the
+  result is independent of any stale bundled stdlib copy.
+- INVARIANTS LOCKED:
+  (1) DER der_value_len returns a NON-NEGATIVE length for all inputs; an
+      over-long (>8-byte) or high-bit-set long-form is rejected to 0 ->
+      der_next never regresses below der_value_start.
+  (2) websocket 127-form plen honors RFC 6455 §5.2 MSB=0; a top-bit-set length
+      is rejected (return "") instead of wrapping negative.
+================================================================================
