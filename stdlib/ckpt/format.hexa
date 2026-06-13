@@ -177,15 +177,24 @@ pub fn str_to_bytes(s: string) {
 }
 
 // Byte array → string. For CERT block JSON — valid UTF-8 in, UTF-8 out.
+// OP-133 TWIN-FIX: the prior body did `to_string(from_char_code(bs[i] & 0xFF))`
+// per byte, which re-UTF-8-encodes every byte >=0x80 — so a CERT block with a
+// non-ASCII field (e.g. a Korean issuer/reason) double-encoded ("서명"→"ìëª")
+// and failed to parse. ckpt/verifier.hexa's call site was already cured to
+// bytes_to_str_raw (OP-79), but THIS pub function — the source of the bug and
+// still part of the public API — was left carrying the old double-encode for
+// any future caller. Route it through the raw-byte builtin to match the twin.
+// (`chr` is byte-faithful via hexa_chr_byte; `from_char_code` is the UTF-8
+// encoder — bytes_to_str_raw passes the raw UTF-8 bytes through unchanged.)
 pub fn bytes_to_str(bs) {
     let n = len(bs)
-    let mut out = ""
+    let mut sub = []
     let mut i = 0
     while i < n {
-        out = out + to_string(from_char_code(bs[i] & 0xFF))
+        sub.push(bs[i] & 0xFF)
         i = i + 1
     }
-    return out
+    return bytes_to_str_raw(sub)
 }
 
 // ── Header encode / decode ────────────────────────────────────────────────
