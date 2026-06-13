@@ -1,0 +1,108 @@
+// OP-112 (LANE-1 0-pod, float-domain / silent-NaN-propagation class) —
+// solar-elevation asin-domain lock.
+//
+// BUG: stdlib/kernels/solar/solar_kernel.hexa `ephemeris` (and the public
+// solar_elevation / solar_zenith / apparent_zenith wrappers built on it)
+// computed the elevation sine
+//     cosφ·cosδ·cosH + sinφ·sinδ
+// and fed it STRAIGHT to the libm `asin` builtin with NO clamp. That
+// expression equals cos(φ−δ) at H=0 and is ≤ 1 by Cauchy–Schwarz, but the
+// floating-point sum-of-products overshoots 1 by ~1e-16 of roundoff when
+// latitude ≈ declination (the sun overhead at solar noon). The libm asin
+// (unlike rt_asin, which clamps) returns a SILENT NaN that propagates into
+// the returned elevation and into zenith = 90 − elevation. A 900-point
+// lat=dec sweep finds 35 such inputs at runtime (arg = 1.0 + 2.22e-16).
+//
+// FIX: clamp the elevation sine to [-1, 1] before asin (`_solar_clamp_unit`),
+// mirroring the OP-110 crystal lattice_angles guard and the chem/md/bonded
+// angle_energy guard.
+//
+// HERMETIC (no `use` — stale-bundle dodge OP-87/88): the FIXED clamp helper
+// + the elevation-sine→asin step are verbatim-inlined here, plus an UNFIXED
+// twin as the negative control. solar_kernel is closure-OUT (not in
+// build_selfhost) → fixpoint UNAFFECTED.
+
+extern fn asin(x: float) -> float
+extern fn sin(x: float) -> float
+extern fn cos(x: float) -> float
+
+fn _abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// verbatim from stdlib/kernels/solar/solar_kernel.hexa (post-fix)
+fn _solar_clamp_unit(x: float) -> float {
+    if x > 1.0 { return 1.0 }
+    if x < 0.0 - 1.0 { return 0.0 - 1.0 }
+    return x
+}
+
+// FIXED elevation step → asin (radians), mirroring `ephemeris`: take the
+// already-computed elevation sine and clamp before asin.
+fn sun_el_rad_fixed(s: float) -> float {
+    return asin(_solar_clamp_unit(s))
+}
+
+// UNFIXED twin — negative control (must NaN on an out-of-domain sine).
+fn sun_el_rad_unfixed(s: float) -> float {
+    return asin(s)
+}
+
+fn main() {
+    let mut pass = 0
+    let mut fail = 0
+    let pi = 3.141592653589793
+    let pi_half = 1.5707963267948966
+
+    // The elevation sine overshoots 1.0 by 1 ULP at lat ≈ dec, solar noon.
+    // A 900-point lat=dec sweep finds 35 such inputs at runtime; the exact
+    // 1-ULP overshoot is 1.0000000000000002 (== 1.0 + 2.22e-16).
+    let one_plus = 1.0000000000000002
+
+    // ── 1. Overflow case (the bug): FIXED clamps the overshoot sine. ──
+    //    FIXED must be finite (NaN != NaN) and ≈ π/2 (sun straight overhead).
+    let el = sun_el_rad_fixed(one_plus)
+    if el == el && _abs(el - pi_half) < 0.0000001 { pass = pass + 1 } else { fail = fail + 1; println("FAIL overflow el->pi/2") }
+
+    // ── 2. NEGATIVE CONTROL: unfixed twin NaNs on the same sine. ──
+    let bad = sun_el_rad_unfixed(one_plus)
+    if bad != bad { pass = pass + 1 } else { fail = fail + 1; println("FAIL neg-ctrl (unfixed not NaN)") }
+
+    // ── 3. asin(1 + 1 ULP) is itself the silent NaN being guarded. ──
+    let raw = asin(one_plus)
+    let guarded = asin(_solar_clamp_unit(one_plus))
+    if raw != raw && guarded == guarded && _abs(guarded - pi_half) < 0.0000001 { pass = pass + 1 } else { fail = fail + 1; println("FAIL asin(1+ulp) guard") }
+
+    // ── 4. Sweep regression: the UNGUARDED elevation sine NaNs for some
+    //    lat=dec, and the CLAMPED form is NaN-free across all 900. ──
+    let mut i = 0
+    let mut nan_unfixed = 0
+    let mut nan_fixed = 0
+    while i < 900 {
+        let d = 0.0 - (i * 1.0) / 10.0
+        let lr = d * pi / 180.0
+        let s = cos(lr) * cos(lr) * cos(0.0) + sin(lr) * sin(lr)
+        let raw_e = asin(s)
+        if raw_e != raw_e { nan_unfixed = nan_unfixed + 1 }
+        let fix_e = sun_el_rad_fixed(s)
+        if fix_e != fix_e { nan_fixed = nan_fixed + 1 }
+        i = i + 1
+    }
+    // The unguarded sweep MUST surface the bug (≥1 NaN), the fixed one MUST NOT.
+    if nan_unfixed >= 1 && nan_fixed == 0 { pass = pass + 1 } else { fail = fail + 1; println("FAIL sweep unfixed=" + to_string(nan_unfixed) + " fixed=" + to_string(nan_fixed)) }
+
+    // ── 5. Normal regression: sine exactly 1.0 → el = π/2 (sun overhead). ──
+    let eq = sun_el_rad_fixed(1.0)
+    if _abs(eq - pi_half) < 0.0000001 { pass = pass + 1 } else { fail = fail + 1; println("FAIL overhead 90") }
+
+    // ── 6. Normal regression: an in-domain sine round-trips through asin. ──
+    //    sine = cos(23.4°) → el = asin(cos 23.4°) ≈ π/2 − 23.4° (libm-ulp).
+    let lat6 = 23.4 * pi / 180.0
+    let el6 = sun_el_rad_fixed(cos(lat6))
+    let want6 = pi_half - lat6
+    if _abs(el6 - want6) < 0.0000010 { pass = pass + 1 } else { fail = fail + 1; println("FAIL off-overhead exactness " + str((el6 - want6) * 1.0e9)) }
+
+    println("__HEXA_OP112_SOLAR_ASIN__ pass=" + to_string(pass) + " fail=" + to_string(fail))
+    if fail == 0 { println("ALL GREEN") } else { println("RED") }
+}
