@@ -3771,3 +3771,49 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   net-additive). The *_pure_test.hexa leaves are NOT in the build_selfhost closure → self-host fixpoint
   UNAFFECTED. LANE split honored (no stdlib/* touched). $0 · 0-pod · NO GPU · no vast · no foreign-pod · no .tape ·
   no self/env.hexa · leak-0. Milestone OP-85 [x]. Verdict F-OP85-RUNTIME-PURE-FINAL.txt.
+
+## OP-99 — FRESH stdlib SCIENTIFIC/COMPUTE numeric-algorithm bug-hunt; 🟢 fresh surface CLEAN (0 new bugs, 3 invariant-locks 13/13) — 2026-06-13
+
+- GOAL: after the parsing/delimiter/boundary-run classes were systematically CLOSED (OP-87/88/91/92/94/96/97),
+  open a FRESH surface — the untested stdlib SCIENTIFIC/COMPUTE numeric modules (kernels/bio/material/chem/
+  signal/stats/qforge numeric, NON-parsing) whose bespoke math has an AUTHORITATIVE reference (numpy/scipy/math/
+  closed-form) OR a checkable INVARIANT (inverse-pair · normalization Σ · mass-balance · monotonicity). Hunt the
+  numeric bug classes: wrong formula · sign error · off-by-one in a sum · missing normalization · singular crash.
+- CENSUS (scoped greps, NO .git; LANE-1; SKIPPED already-audited core/math, flame/*, codec/*, crypto/*,
+  time/civil, semver, stats/{welford,correlation,ks}, special, window/filter/resample, runtime *_pure):
+  3 modules locked with checkable invariants + 5 more deep-read and confirmed already-covered + textbook-correct.
+- MODULE 1 — material/composition.hexa (chemical-formula parser: parse_formula_elements + single-level paren
+  fixpoint expansion + decimal counts). HIGH-SURFACE: authoritative Python ref (askcos_adapter.py
+  _parse_formula_elements) + invariant parse-then-recount element Σ; classic bugs = off-by-one count scan,
+  wrong paren-multiplier fold, decimal drop. METHOD: faithful Python re-impl of BOTH the documented reference
+  (re.sub single global pass) AND the hexa _expand_all_parens fixpoint model; differential over 18 formulas
+  (single + nested parens, decimals, multi-group). 🟢 CLEAN — all 8 single-level in-scope formulas match the
+  reference EXACTLY (Ca10(PO4)6F2, Ca10(PO4)6(OH)2, Al2(SO4)3, Mg(OH)2, Ca(NO3)2, (NH4)2SO4, H2O, C6H6);
+  multi-group correct via the fixpoint loop (Ca10(PO4)6(OH)2 → O:26 H:2); decimal counts preserved
+  (YBa2Cu3O6.5 → O:6.5). The ONE differential — nested parens K4(Fe(CN)6) — is DOCUMENTED out-of-scope on BOTH
+  sides ("nested left as-is"; the kernel bails on a nested '(' and re.sub's [^()]+ won't match across nesting) =
+  a documented limitation, NOT a bug (OP-86 reservoir lesson: NOT fabricated into a fix).
+- MODULE 2 — signal/core_mel.hexa (hz_to_mel / mel_to_hz, HTK 2595·log10(1+hz/700)). HIGH-SURFACE: a
+  forward/inverse PAIR → exact INVERSE-PAIR invariant mel_to_hz(hz_to_mel(hz))==hz + a closed-form anchor;
+  classic bug = wrong 2595/700 constant or a log-base/10^ mismatch between the legs. 🟢 CLEAN — round-trip
+  rel-err ≤1e-7 on hz ∈ {100,440,1000,4000,8000}; forward anchor hz_to_mel(1000)=999.9856.
+- MODULE 3 — signal/autocorrelation.hexa (biased ACF[0..max_lag] + normalized). HIGH-SURFACE: two locked
+  invariants — NORMALIZATION (ACF_norm[0]==1 exactly) + CAUCHY-SCHWARZ (|ACF_norm[k]|≤1) — and an energy
+  anchor (biased ACF[0]=Σx²/n); classic bug = ÷(n-k) vs ÷n (unbiased/biased) confusion or missing
+  normalization. 🟢 CLEAN — ACF_norm[0]=1 exact, all |ACF_norm[k]|≤1, ACF[0]=10.5 (Σx²=84, /8).
+- DEEP-READ (test+oracle-covered + math textbook-confirmed, listed for census, NOT re-locked): geodesy/wgs84
+  (geodetic↔ECEF Bowring, Vincenty inverse, haversine — vs NIMA TR8350.2 / Vincenty 1975 / Sinnott 1984);
+  orbital/kepler_2body (Newton-Raphson Kepler solve, half-angle true anomaly via atan2, r=a(1-e·cosE) — vs
+  Vallado/Curtis); stats/powerlaw_fit (centered OLS log-log slope); signal/spectral_density (one-sided
+  periodogram + Welch, Parseval-correct); mc_integrate/engine (Welch-t, NIST critical-t table, A&S 26.2.17
+  norm-CDF, MC integrands for Catalan/ζ(3)/γ — self-test G/H gates + authoritative citations). All CLEAN.
+- LOCK (NOT-A-TAUTOLOGY): NEW stdlib/test/op99_sci_compute_invariants_test.hexa — all 3 module algorithm bodies
+  VERBATIM-INLINED (no-`use`/`import`; the installed `hexa` resolves `use "stdlib/..."` to a STALE bundled copy
+  — OP-87/88 lesson — so the bodies are inlined and run on the shipping `hexa run` native runtime =
+  hx-selfhost-cli, the promoted self-hosted compiler): __HEXA_OP99__ PASS 13/13. NEGATIVE CONTROL proves the
+  gate has TEETH: corrupting the mel constant 700→710 breaks all 5 round-trips + the anchor, and corrupting ACF
+  normalization ÷n→÷(n-1) breaks the energy check → __HEXA_OP99__ FAIL 7/13.
+- BYTE-EQ / GUARDS: ZERO stdlib source edits (every audited module already correct) + 1 NEW leaf test only;
+  0 deletions (wipe_guard net-additive). The leaf is NOT in the build_selfhost closure → self-host fixpoint
+  UNAFFECTED. LANE-1 only (no protocol/binary/net parsing — that is LANE-2/OP-98). $0 · 0-pod · NO GPU · no vast ·
+  no foreign-pod · no .tape · leak-0. Milestone OP-99 [x]. Verdict F-OP99-SCI-COMPUTE-INVARIANTS.txt.

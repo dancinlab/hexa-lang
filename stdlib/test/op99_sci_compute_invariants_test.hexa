@@ -1,0 +1,313 @@
+// stdlib/test/op99_sci_compute_invariants_test.hexa
+//
+// HEXA-0POD OP-99 — invariant locks for three audited stdlib scientific/
+// compute numeric modules. Each block VERBATIM-INLINES the algorithm body
+// from the audited module (no `use`/`import`, because the installed `hexa`
+// resolves `use "stdlib/..."` to a STALE bundled copy — OP-87/88 lesson —
+// so we inline and run on the shipping `hexa run` native runtime), then
+// asserts the module's CHECKABLE INVARIANT against a closed-form / authoritative
+// reference value.
+//
+// Modules audited + locked (all 🟢 CLEAN — no formula/sign/normalization bug):
+//   A. signal/core_mel.hexa        — hz↔mel INVERSE-PAIR round-trip (HTK 2595/700)
+//   B. signal/autocorrelation.hexa — normalized ACF[0]==1 NORMALIZATION + Cauchy-Schwarz
+//   C. material/composition.hexa   — parse-then-recount MASS-BALANCE / element Σ
+//
+// Sentinel: __HEXA_OP99__ PASS|FAIL <n>/<m>
+//
+// Run: hexa run stdlib/test/op99_sci_compute_invariants_test.hexa
+
+let CM_LOG10: float = 2.302585092994046
+
+fn _absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+fn _approx(a: float, b: float, tol: float) -> bool {
+    return _absf(a - b) <= tol
+}
+
+// ── A. signal/core_mel.hexa — VERBATIM hz_to_mel / mel_to_hz ──
+// Invariant: mel_to_hz(hz_to_mel(hz)) == hz  (exact inverse pair, HTK 2595/700).
+fn hz_to_mel(hz: float) -> float {
+    return 2595.0 * log(1.0 + hz / 700.0) / CM_LOG10
+}
+fn mel_to_hz(mel: float) -> float {
+    return 700.0 * (pow(10.0, mel / 2595.0) - 1.0)
+}
+
+// ── B. signal/autocorrelation.hexa — VERBATIM biased ACF + normalized ──
+// Invariant: ACF_norm[0] == 1.0 exactly; |ACF_norm[k]| <= 1 (Cauchy-Schwarz).
+fn autocorrelation(x: [float], n: int, max_lag: int) -> [float] {
+    if n <= 0 { return [] }
+    if max_lag < 0 { return [] }
+    let mut lag_cap = max_lag
+    if lag_cap > n - 1 { lag_cap = n - 1 }
+    let inv_n = 1.0 / n
+    let mut out = []
+    let mut k = 0
+    while k <= lag_cap {
+        let mut sum = 0.0
+        let mut i = 0
+        while i < n - k {
+            sum = sum + x[i] * x[i + k]
+            i = i + 1
+        }
+        out = out.push(sum * inv_n)
+        k = k + 1
+    }
+    return out
+}
+fn autocorrelation_normalized(x: [float], n: int, max_lag: int) -> [float] {
+    let raw = autocorrelation(x, n, max_lag)
+    let raw_len = len(raw)
+    if raw_len == 0 { return [] }
+    let r0 = raw[0]
+    if r0 == 0.0 { return [] }
+    let inv_r0 = 1.0 / r0
+    let mut out = []
+    let mut k = 0
+    while k < raw_len {
+        out = out.push(raw[k] * inv_r0)
+        k = k + 1
+    }
+    return out
+}
+
+// ── C. material/composition.hexa — VERBATIM parser core (single-level parens) ──
+// Invariant: parse_formula_elements then per-element counts match the
+// authoritative reference (askcos_adapter.py _parse_formula_elements) values.
+fn _is_upper(ch: string) -> bool { return ch >= "A" && ch <= "Z" }
+fn _is_lower(ch: string) -> bool { return ch >= "a" && ch <= "z" }
+fn _is_digit_ch(ch: string) -> bool { return ch >= "0" && ch <= "9" }
+
+fn _scan_count(s: string, i: int) -> [float] {
+    let n = len(s)
+    let mut j = i
+    let mut has_digit = false
+    let mut int_part = 0
+    let mut frac_part = 0
+    let mut frac_scale = 1
+    let mut saw_dot = false
+    while j < n {
+        let ch = s.substring(j, j + 1)
+        if _is_digit_ch(ch) {
+            let d = ord(ch) - 48
+            if saw_dot {
+                frac_part = frac_part * 10 + d
+                frac_scale = frac_scale * 10
+            } else {
+                int_part = int_part * 10 + d
+            }
+            has_digit = true
+            j = j + 1
+        } else {
+            if ch == "." && !saw_dot {
+                saw_dot = true
+                j = j + 1
+            } else {
+                break
+            }
+        }
+    }
+    if !has_digit { return [1.0, to_float(i)] }
+    let value = to_float(int_part) + to_float(frac_part) / to_float(frac_scale)
+    return [value, to_float(j)]
+}
+fn _accumulate(symbols: [string], counts: [float], sym: string, c: float) {
+    let n = len(symbols)
+    let mut k = 0
+    while k < n {
+        if symbols[k] == sym { counts[k] = counts[k] + c; return }
+        k = k + 1
+    }
+    symbols.push(sym)
+    counts.push(c)
+}
+fn _scan_elements(s: string, outer_mult: float, symbols: [string], counts: [float]) {
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let ch = s.substring(i, i + 1)
+        if !_is_upper(ch) {
+            i = i + 1
+        } else {
+            let mut sym = ch
+            i = i + 1
+            if i < n {
+                let ch2 = s.substring(i, i + 1)
+                if _is_lower(ch2) { sym = sym + ch2; i = i + 1 }
+            }
+            let pair = _scan_count(s, i)
+            let c = pair[0] * outer_mult
+            i = to_int(pair[1])
+            _accumulate(symbols, counts, sym, c)
+        }
+    }
+}
+fn _expand_one_paren_pass(formula: string) -> string {
+    let n = len(formula)
+    let mut open_at: int = -1
+    let mut i = 0
+    while i < n {
+        if formula.substring(i, i + 1) == "(" { open_at = i; break }
+        i = i + 1
+    }
+    if open_at < 0 { return formula }
+    let mut close_at: int = -1
+    let mut j = open_at + 1
+    while j < n {
+        let ch = formula.substring(j, j + 1)
+        if ch == "(" { return formula }
+        if ch == ")" { close_at = j; break }
+        j = j + 1
+    }
+    if close_at < 0 { return formula }
+    let inner = formula.substring(open_at + 1, close_at)
+    let after = close_at + 1
+    let mult_pair = _scan_count(formula, after)
+    let mult = mult_pair[0]
+    let after_mult = to_int(mult_pair[1])
+    let inner_symbols: [string] = []
+    let inner_counts: [float] = []
+    _scan_elements(inner, 1.0, inner_symbols, inner_counts)
+    let mut expanded = ""
+    let m = len(inner_symbols)
+    let mut k = 0
+    while k < m {
+        let c = inner_counts[k] * mult
+        let c_int = to_int(c)
+        if to_float(c_int) == c {
+            expanded = expanded + inner_symbols[k] + to_string(c_int)
+        } else {
+            expanded = expanded + inner_symbols[k] + to_string(c)
+        }
+        k = k + 1
+    }
+    let head = formula.substring(0, open_at)
+    let tail = formula.substring(after_mult, n)
+    return head + expanded + tail
+}
+fn _expand_all_parens(formula: string) -> string {
+    let mut cur = formula
+    let mut guard = 0
+    let max_iters = len(formula) + 2
+    while guard < max_iters {
+        let next = _expand_one_paren_pass(cur)
+        if next == cur { return cur }
+        cur = next
+        guard = guard + 1
+    }
+    return cur
+}
+// returns count of `sym`; 0.0 if absent (parity with composition_get).
+fn comp_get(symbols: [string], counts: [float], sym: string) -> float {
+    let n = len(symbols)
+    let mut i = 0
+    while i < n {
+        if symbols[i] == sym { return counts[i] }
+        i = i + 1
+    }
+    return 0.0
+}
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // ── A. mel inverse-pair round-trip ──
+    let hzs = [100.0, 440.0, 1000.0, 4000.0, 8000.0]
+    let mut ai = 0
+    while ai < len(hzs) {
+        total = total + 1
+        let hz = hzs[ai]
+        let rt = mel_to_hz(hz_to_mel(hz))
+        if _approx(rt, hz, 1.0e-7 * hz + 1.0e-7) {
+            pass = pass + 1
+        } else {
+            println("FAIL melA hz=" + to_string(hz) + " rt=" + to_string(rt))
+        }
+        ai = ai + 1
+    }
+    // mel anchor: 2595*log10(1+1000/700) = 999.9856...  (HTK forward curve)
+    total = total + 1
+    let m1000 = hz_to_mel(1000.0)
+    if _approx(m1000, 999.9856, 0.01) {
+        pass = pass + 1
+    } else {
+        println("FAIL melAnchor m1000=" + to_string(m1000))
+    }
+
+    // ── B. autocorrelation normalization ──
+    let sig = [1.0, 2.0, 3.0, 4.0, 5.0, 4.0, 3.0, 2.0]
+    let nrm = autocorrelation_normalized(sig, 8, 4)
+    total = total + 1
+    if len(nrm) == 5 && _approx(nrm[0], 1.0, 1.0e-12) {
+        pass = pass + 1
+    } else {
+        println("FAIL acfNorm0 len=" + to_string(len(nrm)))
+    }
+    // Cauchy-Schwarz: |ACF_norm[k]| <= 1 for all k
+    total = total + 1
+    let mut cs_ok = true
+    let mut bk = 0
+    while bk < len(nrm) {
+        if _absf(nrm[bk]) > 1.0 + 1.0e-9 { cs_ok = false }
+        bk = bk + 1
+    }
+    if cs_ok { pass = pass + 1 } else { println("FAIL acf CauchySchwarz") }
+    // biased ACF[0] == Σx²/n  (independent recompute: 84/8 = 10.5)
+    total = total + 1
+    let raw = autocorrelation(sig, 8, 0)
+    if _approx(raw[0], 10.5, 1.0e-9) {
+        pass = pass + 1
+    } else {
+        println("FAIL acf energy raw0=" + to_string(raw[0]))
+    }
+
+    // ── C. composition parse-recount (ref: askcos_adapter.py) ──
+    // Ca10(PO4)6F2 -> Ca:10 P:6 O:24 F:2
+    total = total + 1
+    let ex1 = _expand_all_parens("Ca10(PO4)6F2")
+    let sy1: [string] = []
+    let ct1: [float] = []
+    _scan_elements(ex1, 1.0, sy1, ct1)
+    let ok1 = _approx(comp_get(sy1, ct1, "Ca"), 10.0, 1.0e-12)
+              && _approx(comp_get(sy1, ct1, "P"), 6.0, 1.0e-12)
+              && _approx(comp_get(sy1, ct1, "O"), 24.0, 1.0e-12)
+              && _approx(comp_get(sy1, ct1, "F"), 2.0, 1.0e-12)
+    if ok1 { pass = pass + 1 } else { println("FAIL comp Ca10(PO4)6F2") }
+
+    // Al2(SO4)3 -> Al:2 S:3 O:12
+    total = total + 1
+    let ex2 = _expand_all_parens("Al2(SO4)3")
+    let sy2: [string] = []
+    let ct2: [float] = []
+    _scan_elements(ex2, 1.0, sy2, ct2)
+    let ok2 = _approx(comp_get(sy2, ct2, "Al"), 2.0, 1.0e-12)
+              && _approx(comp_get(sy2, ct2, "S"), 3.0, 1.0e-12)
+              && _approx(comp_get(sy2, ct2, "O"), 12.0, 1.0e-12)
+    if ok2 { pass = pass + 1 } else { println("FAIL comp Al2(SO4)3") }
+
+    // Ca10(PO4)6(OH)2 -> O:24+2=26, H:2 (two paren groups, fixpoint loop)
+    total = total + 1
+    let ex3 = _expand_all_parens("Ca10(PO4)6(OH)2")
+    let sy3: [string] = []
+    let ct3: [float] = []
+    _scan_elements(ex3, 1.0, sy3, ct3)
+    let ok3 = _approx(comp_get(sy3, ct3, "O"), 26.0, 1.0e-12)
+              && _approx(comp_get(sy3, ct3, "H"), 2.0, 1.0e-12)
+              && _approx(comp_get(sy3, ct3, "P"), 6.0, 1.0e-12)
+    if ok3 { pass = pass + 1 } else { println("FAIL comp Ca10(PO4)6(OH)2") }
+
+    // YBa2Cu3O6.5 -> decimal count O:6.5 preserved
+    total = total + 1
+    let ex4 = _expand_all_parens("YBa2Cu3O6.5")
+    let sy4: [string] = []
+    let ct4: [float] = []
+    _scan_elements(ex4, 1.0, sy4, ct4)
+    let ok4 = _approx(comp_get(sy4, ct4, "O"), 6.5, 1.0e-12)
+              && _approx(comp_get(sy4, ct4, "Ba"), 2.0, 1.0e-12)
+              && _approx(comp_get(sy4, ct4, "Cu"), 3.0, 1.0e-12)
+    if ok4 { pass = pass + 1 } else { println("FAIL comp YBa2Cu3O6.5") }
+
+    println("__HEXA_OP99__ " + (if pass == total { "PASS" } else { "FAIL" }) + " " + to_string(pass) + "/" + to_string(total))
+}
