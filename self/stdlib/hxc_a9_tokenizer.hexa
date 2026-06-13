@@ -84,14 +84,17 @@ fn _str_to_bytes(s: string) -> array {
 }
 
 // array<i64> → string (preserves bytes via chr).
+// OP-135 SSOT: converge on the canonical `bytes_to_str_raw` builtin (single
+// byte-faithful source of truth). chr()+join was already byte-faithful — a
+// consolidation, plus NUL-clean assembly (join truncates at embedded 0x00).
 fn _bytes_to_str(b: array) -> string {
-    let mut parts = []
+    let mut sub = []
     let mut i = 0
     while i < len(b) {
-        parts.push(chr(b[i]))
+        sub.push(b[i] & 0xFF)
         i = i + 1
     }
-    return parts.join("")
+    return bytes_to_str_raw(sub)
 }
 
 // ───────────────────────── base64url codec ─────────────────────────

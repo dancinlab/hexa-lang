@@ -665,14 +665,19 @@ fn _str_to_bytes(s: string) -> array {
     return out
 }
 
+// OP-135 SSOT: converge on the canonical `bytes_to_str_raw` builtin — the
+// single byte-faithful raw-bytes→string source of truth. The prior chr()+join
+// body was already byte-faithful per byte (chr=hexa_chr_byte), so this is a
+// consolidation, not a bugfix; it additionally makes the decode NUL-clean
+// (join truncates at an embedded 0x00; bytes_to_str_raw carries the length).
 fn _bytes_to_str(bytes: array) -> string {
-    let mut parts = []
+    let mut sub = []
     let mut i = 0
     while i < len(bytes) {
-        parts.push(chr(bytes[i]))
+        sub.push(bytes[i] & 0xFF)
         i = i + 1
     }
-    return parts.join("")
+    return bytes_to_str_raw(sub)
 }
 
 // ───────────────────────── encode (per row) ─────────────────────────

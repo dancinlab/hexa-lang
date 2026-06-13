@@ -864,10 +864,12 @@ fn a32_decode(stream: string) -> string {
     if len(header) < 8 || header.substring(0, 8) != "# a32:s1" { return stream }
     let bytes = _a32_decode_to_bytes(stream)
     if len(bytes) == 0 { return stream }
-    let mut parts = []
+    // OP-135 SSOT: decode tail → canonical bytes_to_str_raw (byte-faithful,
+    // NUL-clean; replaces a chr()+join twin of the raw-byte decode).
+    let mut sub = []
     let mut i = 0
-    while i < len(bytes) { parts.push(chr(bytes[i])); i = i + 1 }
-    return parts.join("")
+    while i < len(bytes) { sub.push(bytes[i] & 0xFF); i = i + 1 }
+    return bytes_to_str_raw(sub)
 }
 
 // ───────────────── v2 decode wire ─────────────────
@@ -897,10 +899,12 @@ fn a32_v2_decode(stream: string) -> string {
     if n < 3 || stream.substring(0, 3) != A32_V2_HEADER_TAG { return stream }
     let bytes = _a32_v2_decode_to_bytes(stream)
     if len(bytes) == 0 { return stream }
-    let mut parts = []
+    // OP-135 SSOT: decode tail → canonical bytes_to_str_raw (byte-faithful,
+    // NUL-clean; replaces a chr()+join twin of the raw-byte decode).
+    let mut sub = []
     let mut i = 0
-    while i < len(bytes) { parts.push(chr(bytes[i])); i = i + 1 }
-    return parts.join("")
+    while i < len(bytes) { sub.push(bytes[i] & 0xFF); i = i + 1 }
+    return bytes_to_str_raw(sub)
 }
 
 fn a32_decode_any(stream: string) -> string {

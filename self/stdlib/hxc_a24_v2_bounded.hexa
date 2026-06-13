@@ -663,13 +663,15 @@ fn a24v2_decode_v3(stream: string) -> string {
     if len(header) < 7 || header.substring(0, 7) != "# a24:s" { return stream }
     let bytes = _a24v2_decode_v3_to_bytes(stream)
     if len(bytes) == 0 { return stream }
-    let mut parts = []
+    // OP-135 SSOT: decode tail → canonical bytes_to_str_raw (byte-faithful,
+    // NUL-clean; replaces a chr()+join twin of the raw-byte decode).
+    let mut sub = []
     let mut i = 0
     while i < len(bytes) {
-        parts.push(chr(bytes[i]))
+        sub.push(bytes[i] & 0xFF)
         i = i + 1
     }
-    return parts.join("")
+    return bytes_to_str_raw(sub)
 }
 
 // ───────────────── selftest (5 fixtures + 3 latency probes + 5 wire) ─────────────────
