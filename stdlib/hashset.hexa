@@ -78,6 +78,37 @@ pub struct HashSet {
     items: any
 }
 
+// ── key normalisation (OP-134 hash↔eq contract) ────────────────────────────
+//
+// Contract: `a == b` ⟹ they MUST map to the SAME backing key, else a
+// hashset silently loses/duplicates entries. The backing map keys on
+// to_string(item), so the contract reduces to: equal values MUST stringify
+// equal. ONE float case breaks this — IEEE `-0.0 == 0.0` is TRUE, yet a
+// runtime-computed `-0.0` (e.g. `x * -1.0`) stringifies to "-0.0" while
+// `0.0` stringifies to "0.0". Without normalisation, inserting `0.0` then
+// looking up `-0.0` MISSES (lost key), and inserting both yields len 2.
+//
+// `_hashset_norm` collapses signed zero: for a float that compares == 0.0,
+// `0.0 + 0.0` forces +0.0 (IEEE round-to-nearest clears the sign bit), so
+// both zeros share the "0.0" key — matching how `==` already treats them
+// (and Python, where hash(-0.0) == hash(0.0)). All other values (ints,
+// strings, NaN, ±inf, non-zero floats) pass through untouched.
+//
+// NaN: `NaN != NaN` at the language level, but to_string(NaN) == "NaN" for
+// every NaN, so a NaN key collapses to one slot and IS findable as itself.
+// That is a collision (allowed by the contract — the inverse direction), not
+// a violation; we leave it so a NaN-keyed set is deterministic rather than
+// corrupt. Distinct-NaN-identity semantics are out of scope for a string-
+// keyed set (documented limitation, same model as the `1`/"1" collision).
+fn _hashset_norm(item) {
+    if type_of(item) == "float" {
+        if item == 0.0 {
+            return 0.0 + 0.0
+        }
+    }
+    return item
+}
+
 // ── constructors ──────────────────────────────────────────────────────────
 
 // Create a fresh, empty HashSet. O(1).
@@ -102,7 +133,7 @@ pub fn hashset_from_array(arr) -> HashSet {
 // Insert `item`. Returns true if the item was newly added, false if it
 // was already present. O(1) amortised (one map lookup + one map set).
 pub fn hashset_insert(s: HashSet, item) -> bool {
-    let k = to_string(item)
+    let k = to_string(_hashset_norm(item))
     let m = s.items
     if has_key(m, k) {
         return false
@@ -117,7 +148,7 @@ pub fn hashset_insert(s: HashSet, item) -> bool {
 // Delegates to map_remove (hexa_map_remove), which silently no-ops on
 // missing keys — we pre-check has_key to compute the return signal.
 pub fn hashset_remove(s: HashSet, item) -> bool {
-    let k = to_string(item)
+    let k = to_string(_hashset_norm(item))
     let m = s.items
     if !has_key(m, k) {
         return false
@@ -136,7 +167,7 @@ pub fn hashset_clear(s: HashSet) {
 
 // Membership test. O(1) amortised.
 pub fn hashset_contains(s: HashSet, item) -> bool {
-    return has_key(s.items, to_string(item))
+    return has_key(s.items, to_string(_hashset_norm(item)))
 }
 
 // Number of distinct elements.
