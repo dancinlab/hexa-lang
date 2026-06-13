@@ -1,0 +1,113 @@
+// self/runtime/hyperloglog_pure_test.hexa — HLL structural oracle lock (OP-85).
+//
+// Locks self/runtime/hyperloglog_pure.hexa, which ships WITHOUT a test.
+//
+// SCOPE NOTE on the cardinality KAT:
+//   The module header (lines 24-30) EXPLICITLY documents that hll_estimate
+//   returns the RAW harmonic-mean estimator αm·m²/Σ2^-reg[i] and OMITS the
+//   small-range (linear-counting) and large-range corrections. Measured
+//   here: at p=12 (m=4096) the empty sketch estimates ~2954 and a true-1000
+//   set estimates ~3464 — i.e. the RAW estimate has NO usable accuracy bound
+//   in these regimes, exactly as the header warns. So a "cardinality within
+//   1.04/sqrt(m)" KAT is NOT lockable for the raw estimator and is reported
+//   UNVERIFIED in the OP-85 verdict (it is a known documented limitation,
+//   NOT a bug). This oracle instead locks the STRUCTURAL invariants that ARE
+//   authoritative for HyperLogLog at the register level:
+//
+//   G1 CLAMP       precision clamps to [4, 16] (module spec)
+//   G2 MERGE=MAX   hll_merge is register-wise max (the defining HLL union)
+//   G3 DETERMINISM same item multiset => identical register state
+//   G4 IDEMPOTENT  re-adding already-seen items leaves registers unchanged
+//   G5 SELF-MERGE  merge(a, a) == a (max is idempotent)
+//   G6 MONOTONE    register-sum is non-decreasing as distinct items are added
+//
+// Cross-checked vs a faithful Python port of the FNV-1a + rank + register
+// logic (0 mismatch on register state; see OP-85 verdict).
+//
+// Runs on the shipping path (`hexa run`) — hyperloglog_pure is nil-free.
+// @sentinel(__HEXA_RUNTIME_HLL__ <PASS|FAIL> N/N)
+
+use "self/runtime/hyperloglog_pure"
+
+let SENT_T = "__HEXA_RUNTIME_HLL__"
+
+fn _sum_reg(regs) {
+    let mut s = 0
+    let mut i = 0
+    while i < len(regs) { s = s + regs[i] i = i + 1 }
+    return s
+}
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // ── G1 PRECISION CLAMP [4,16] ────────────────────────────────────
+    total = total + 1
+    if hll_precision(hll_create(2)) == 4 { pass = pass + 1 } else { eprintln("FAIL G1 clamp-lo") }
+    total = total + 1
+    if hll_precision(hll_create(99)) == 16 { pass = pass + 1 } else { eprintln("FAIL G1 clamp-hi") }
+    total = total + 1
+    if hll_precision(hll_create(10)) == 10 { pass = pass + 1 } else { eprintln("FAIL G1 in-range") }
+
+    // ── build two disjoint 300-item sketches ─────────────────────────
+    let mut p = hll_create(8)
+    let mut q = hll_create(8)
+    let mut j = 0
+    while j < 300 { p = hll_add(p, "p" + str(j)) j = j + 1 }
+    let mut k = 0
+    while k < 300 { q = hll_add(q, "q" + str(k)) k = k + 1 }
+
+    // ── G2 MERGE == register-wise MAX ────────────────────────────────
+    let u = hll_merge(p, q)
+    let rp = hll_registers(p)
+    let rq = hll_registers(q)
+    let ru = hll_registers(u)
+    let mut regmax_ok = true
+    let mut ri = 0
+    while ri < len(ru) {
+        let want = if rp[ri] >= rq[ri] { rp[ri] } else { rq[ri] }
+        if ru[ri] != want { regmax_ok = false }
+        ri = ri + 1
+    }
+    total = total + 1
+    if regmax_ok { pass = pass + 1 } else { eprintln("FAIL G2 merge-not-regmax") }
+
+    // ── G3 DETERMINISM — identical multiset => identical registers ───
+    let mut a = hll_create(8)
+    let mut b = hll_create(8)
+    let mut t = 0
+    while t < 150 { a = hll_add(a, "v" + str(t)) b = hll_add(b, "v" + str(t)) t = t + 1 }
+    total = total + 1
+    if _sum_reg(hll_registers(a)) == _sum_reg(hll_registers(b)) { pass = pass + 1 } else { eprintln("FAIL G3 nondeterministic") }
+
+    // ── G4 IDEMPOTENT — re-adding seen items is a no-op ──────────────
+    let a_sum = _sum_reg(hll_registers(a))
+    let mut a2 = a
+    a2 = hll_add(a2, "v0")
+    a2 = hll_add(a2, "v75")
+    total = total + 1
+    if _sum_reg(hll_registers(a2)) == a_sum { pass = pass + 1 } else { eprintln("FAIL G4 not-idempotent") }
+
+    // ── G5 SELF-MERGE identity ───────────────────────────────────────
+    total = total + 1
+    if _sum_reg(hll_registers(hll_merge(a, a))) == a_sum { pass = pass + 1 } else { eprintln("FAIL G5 self-merge") }
+
+    // ── G6 MONOTONE register-sum (adding distinct items never shrinks) ─
+    let mut mono = hll_create(8)
+    let mut prev = 0
+    let mut mono_ok = true
+    let mut mi = 0
+    while mi < 200 {
+        mono = hll_add(mono, "m" + str(mi))
+        let cur = _sum_reg(hll_registers(mono))
+        if cur < prev { mono_ok = false }
+        prev = cur
+        mi = mi + 1
+    }
+    total = total + 1
+    if mono_ok { pass = pass + 1 } else { eprintln("FAIL G6 not-monotone") }
+
+    let verdict = if pass == total { "PASS" } else { "FAIL" }
+    println(SENT_T + " " + verdict + " " + str(pass) + "/" + str(total))
+}

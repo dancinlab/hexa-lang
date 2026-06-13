@@ -1,0 +1,79 @@
+// self/runtime/count_min_sketch_pure_test.hexa — CMS oracle lock (OP-85).
+//
+// Locks self/runtime/count_min_sketch_pure.hexa, which ships WITHOUT a
+// test. Count-Min Sketch has a DOCUMENTED authoritative invariant (module
+// header lines 19-25): the estimate is a NON-STRICT UPPER BOUND on the
+// true frequency — never an under-count; over-count only on hash
+// collisions. With a wide-enough sketch (no collisions) the estimate is
+// EXACT, which gives a hard oracle against a plain exact-count dictionary.
+//
+// Gates (cross-checked vs an exact frequency dict — the authoritative ref):
+//   G1 EXACT       width=256 (collision-free for this small key set) =>
+//                  estimate == true count for every key
+//   G2 NO-UNDER    estimate(item) >= true_count(item) for all keys (the
+//                  documented one-sided-error invariant)
+//   G3 ABSENT      estimate of an unseen key >= 0 (never negative)
+//   G4 MERGE=SUM   cms_merge is element-wise add: est_d after merge with a
+//                  +2 sketch == est_d + 2 (documented bonus invariant)
+//   G5 HASH-DET    cms_hash is a deterministic pure function
+//   G6 SHAPE       cms_width / cms_depth report the construction params
+//
+// Runs on the shipping path (`hexa run`) — count_min_sketch_pure is
+// nil-free and interpreter-safe.
+// @sentinel(__HEXA_RUNTIME_CMS__ <PASS|FAIL> N/N)
+
+use "self/runtime/count_min_sketch_pure"
+
+let SENT_T = "__HEXA_RUNTIME_CMS__"
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // exact frequencies: a:5 b:3 c:1 d:10
+    let items = ["a","a","a","a","a","b","b","b","c","d","d","d","d","d","d","d","d","d","d"]
+    let keys = ["a","b","c","d"]
+    let truth = [5, 3, 1, 10]
+
+    // width 256, depth 4 -> collision-free for this 4-key set
+    let mut s = cms_create(256, 4)
+    let mut i = 0
+    while i < len(items) { s = cms_add(s, items[i]) i = i + 1 }
+
+    // ── G1 EXACT (no collisions) + G2 NO-UNDER-COUNT ─────────────────
+    let mut ki = 0
+    while ki < len(keys) {
+        let est = cms_estimate(s, keys[ki])
+        total = total + 1
+        if est == truth[ki] { pass = pass + 1 } else { eprintln("FAIL G1 exact " + keys[ki]) }   // exact
+        total = total + 1
+        if est >= truth[ki] { pass = pass + 1 } else { eprintln("FAIL G2 under " + keys[ki]) }    // never under
+        ki = ki + 1
+    }
+
+    // ── G3 ABSENT key — non-negative ─────────────────────────────────
+    total = total + 1
+    if cms_estimate(s, "zzz-not-present") >= 0 { pass = pass + 1 } else { eprintln("FAIL G3 absent-neg") }
+
+    // ── G4 MERGE == element-wise SUM ─────────────────────────────────
+    let est_d_before = cms_estimate(s, "d")
+    let mut s2 = cms_create(256, 4)
+    s2 = cms_add(s2, "d")
+    s2 = cms_add(s2, "d")
+    let m = cms_merge(s, s2)
+    total = total + 1
+    if cms_estimate(m, "d") == est_d_before + 2 { pass = pass + 1 } else { eprintln("FAIL G4 merge-sum") }
+
+    // ── G5 HASH determinism ──────────────────────────────────────────
+    total = total + 1
+    if cms_hash("hello", 0, 256) == cms_hash("hello", 0, 256) { pass = pass + 1 } else { eprintln("FAIL G5 hash-det") }
+
+    // ── G6 SHAPE accessors ───────────────────────────────────────────
+    total = total + 1
+    if cms_width(s) == 256 { pass = pass + 1 } else { eprintln("FAIL G6 width") }
+    total = total + 1
+    if cms_depth(s) == 4 { pass = pass + 1 } else { eprintln("FAIL G6 depth") }
+
+    let verdict = if pass == total { "PASS" } else { "FAIL" }
+    println(SENT_T + " " + verdict + " " + str(pass) + "/" + str(total))
+}

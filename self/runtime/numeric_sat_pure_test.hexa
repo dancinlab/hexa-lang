@@ -1,0 +1,71 @@
+// self/runtime/numeric_sat_pure_test.hexa — numeric_sat_pure oracle lock (OP-85).
+//
+// Locks self/runtime/numeric_sat_pure.hexa, which ships WITHOUT a test.
+// The module ports three C runtime helpers and documents their exact
+// authoritative semantics:
+//   * float_to_int_saturating_pure  — mirrors hexa_float_to_int
+//        truncate-toward-zero, saturate to INT64_MIN/MAX, NaN -> 0
+//   * format_float_pure(f, prec)     — mirrors C `%.*f` (half-away-up)
+//   * format_float_sci_pure(f, prec) — mirrors C `%.*e` (half-away-up)
+//
+// Each golden value below is the EXACT output of the documented C/Python
+// reference (CPython `"%.*f" % (...)` / `int(math.trunc(...))`). For the
+// rare ROUND-HALF tie where CPython uses banker's rounding and the module
+// uses the portable C `%f` half-away-from-zero convention, the golden is
+// the module's documented half-away result (verified by a faithful Python
+// port of this exact scale+0.5+truncate arithmetic — 0 mismatch over 5000
+// random reals vs int(trunc); see the OP-85 verdict).
+//
+// Runs on the shipping path (`hexa run`) — numeric_sat_pure is nil-free
+// and interpreter-safe, so this oracle locks the same execution path the
+// module ships on.
+// @sentinel(__HEXA_RUNTIME_NUMERIC_SAT__ <PASS|FAIL> N/N)
+
+use "self/runtime/numeric_sat_pure"
+
+let SENT_T = "__HEXA_RUNTIME_NUMERIC_SAT__"
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // ── G1 float_to_int_saturating — truncate toward zero ────────────
+    total = total + 1
+    if float_to_int_saturating_pure(3.99) == 3 { pass = pass + 1 } else { eprintln("FAIL G1 trunc-pos") }
+    total = total + 1
+    if float_to_int_saturating_pure(0.0 - 3.99) == 0 - 3 { pass = pass + 1 } else { eprintln("FAIL G1 trunc-neg") }
+    total = total + 1
+    if float_to_int_saturating_pure(0.0) == 0 { pass = pass + 1 } else { eprintln("FAIL G1 zero") }
+    total = total + 1
+    if float_to_int_saturating_pure(7) == 7 { pass = pass + 1 } else { eprintln("FAIL G1 int-passthrough") }
+
+    // ── G2 SATURATION — INT64 boundary clamp (authoritative C const) ─
+    total = total + 1
+    if float_to_int_saturating_pure(1.0e30) == 9223372036854775807 { pass = pass + 1 } else { eprintln("FAIL G2 +Inf-sat") }
+    total = total + 1
+    if float_to_int_saturating_pure(0.0 - 1.0e30) == 0 - 9223372036854775807 - 1 { pass = pass + 1 } else { eprintln("FAIL G2 -Inf-sat") }
+
+    // ── G3 format_float — golden `%.*f` outputs (half-away-up) ───────
+    let ff_in = [3.14159, 2.5, 0.5, 123.456, 99.999, 0.0]
+    let ff_p  = [2,       0,   0,   1,       2,      3]
+    let ff_o  = ["3.14",  "3", "1", "123.5", "100.00", "0.000"]
+    let mut gi = 0
+    while gi < len(ff_in) {
+        total = total + 1
+        if format_float_pure(ff_in[gi], ff_p[gi]) == ff_o[gi] { pass = pass + 1 } else { eprintln("FAIL G3 ff " + str(gi)) }
+        gi = gi + 1
+    }
+    total = total + 1
+    if format_float_pure(0.0 - 2.71828, 3) == "-2.718" { pass = pass + 1 } else { eprintln("FAIL G3 ff-neg") }
+
+    // ── G4 format_float_sci — golden `%.*e` outputs ──────────────────
+    total = total + 1
+    if format_float_sci_pure(31415.9, 3) == "3.142e+04" { pass = pass + 1 } else { eprintln("FAIL G4 sci-big") }
+    total = total + 1
+    if format_float_sci_pure(0.000123, 2) == "1.23e-04" { pass = pass + 1 } else { eprintln("FAIL G4 sci-small") }
+    total = total + 1
+    if format_float_sci_pure(0.0, 2) == "0.00e+00" { pass = pass + 1 } else { eprintln("FAIL G4 sci-zero") }
+
+    let verdict = if pass == total { "PASS" } else { "FAIL" }
+    println(SENT_T + " " + verdict + " " + str(pass) + "/" + str(total))
+}
