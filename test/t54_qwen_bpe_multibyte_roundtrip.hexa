@@ -1,0 +1,177 @@
+// tests/t54_qwen_bpe_multibyte_roundtrip.hexa
+//   — OP-128 regression: byte-level-BPE bijection + multibyte cross-token
+//     round-trip for self/ml/qwen_bpe.hexa.
+//
+// GUARDS TWO BUG CLASSES:
+//  (a) byte<->unicode BIJECTION must match the CANONICAL GPT-2/Qwen
+//      bytes_to_unicode() table. The old qwen_build_byte_to_str used
+//      `256 + i` (per-byte offset) instead of the running counter
+//      `256 + n`; the two AGREE for bytes 0..32 but DIVERGE for the 35
+//      non-printable bytes >= 127 (0x7F, 0x80..0xA0, 0xAD). 34 of those
+//      (0x80..0xA0, 0xAD) are UTF-8 CONTINUATION bytes present in EVERY
+//      Korean / CJK / emoji character — so the wrong visible glyph never
+//      matched Qwen's vocab.json keys and all non-Latin multibyte text
+//      tokenized/detokenized to garbage.  Canonical codepoints (verified
+//      against HF `tokenizers` / openai GPT-2 bytes_to_unicode):
+//          byte 0x20 (32)  -> U+0120   (first non-printable -> 256+0)
+//          byte 0x7F (127) -> U+0121   (256 + n, NOT 256+127=U+017F)
+//          byte 0x80 (128) -> U+0122   (256 + n, NOT 256+128=U+0180)
+//          byte 0xA0 (160) -> U+0142   (last small-range non-printable)
+//          byte 0xAD (173) -> U+0143
+//
+//  (b) DETOKENIZE must collect raw bytes ACROSS token boundaries before
+//      they form a character. qwen_unmap_bytes emits one raw byte per
+//      visible char and qwen_bpe_decode concatenates the per-token raw-byte
+//      strings into a single buffer — so a multibyte char whose 2-3 UTF-8
+//      bytes are SPLIT across two/three tokens must still reassemble. We
+//      assert decode-of-split-tokens == original UTF-8 byte sequence.
+//
+// Pure / fast: builds the table directly (no 7 MB tokenizer.json load),
+// so this runs in <1s in the interpreter and in CI.
+//
+// Run:  ./hexa run test/t54_qwen_bpe_multibyte_roundtrip.hexa
+
+use "../self/ml/qwen_bpe"
+
+let mut ok = true
+fn must(label, cond) {
+    if cond { println("PASS " + label) } else { ok = false; println("FAIL " + label) }
+}
+
+// Build the table + inverse exactly as the loader does.
+let b2s = qwen_build_byte_to_str()
+let s2b = qwen_build_str_to_byte(b2s)
+
+// ── (a1) full 256-entry bijection: distinctness + inverse round-trip ──
+let mut distinct = 0
+let mut bi = 0
+while bi < 256 {
+    let mut dup = false
+    let mut bj = 0
+    while bj < bi {
+        if b2s[bj] == b2s[bi] { dup = true; bj = bi }
+        else { bj = bj + 1 }
+    }
+    if !dup { distinct = distinct + 1 }
+    bi = bi + 1
+}
+must("256 visible glyphs all DISTINCT (bijection)", distinct == 256)
+
+let mut rt = 0
+bi = 0
+while bi < 256 {
+    if has_key(s2b, b2s[bi]) {
+        if s2b[b2s[bi]] == bi { rt = rt + 1 }
+    }
+    bi = bi + 1
+}
+must("byte->glyph->byte round-trips all 256", rt == 256)
+
+// ── (a2) canonical-codepoint spot checks on the HISTORICALLY-BROKEN bytes.
+// The visible glyph for a non-printable byte must be the UTF-8 encoding of
+// (256 + running_counter). We re-derive the expected codepoint and compare
+// the glyph bytes.
+fn glyph_is_codepoint(glyph, cp) {
+    // cp in U+0100..U+07FF => 2 UTF-8 bytes: 110xxxxx 10xxxxxx
+    let b0 = 192 + (cp / 64)
+    let b1 = 128 + (cp - (cp / 64) * 64)
+    if len(glyph) != 2 { return false }
+    return char_code(glyph, 0) == b0 && char_code(glyph, 1) == b1
+}
+// bytes 0..32 are the first 33 non-printable -> 256+0 .. 256+32
+must("byte 0x20 (32)  glyph == U+0120", glyph_is_codepoint(b2s[32],  288))   // 256+32
+must("byte 0x7F (127) glyph == U+0121", glyph_is_codepoint(b2s[127], 289))   // 256+33 (NOT 256+127)
+must("byte 0x80 (128) glyph == U+0122", glyph_is_codepoint(b2s[128], 290))   // 256+34 (NOT 256+128)
+must("byte 0xA0 (160) glyph == U+0142", glyph_is_codepoint(b2s[160], 322))   // 256+66
+must("byte 0xAD (173) glyph == U+0143", glyph_is_codepoint(b2s[173], 323))   // 256+67
+
+// regression sentinel: the OLD buggy table would give byte 0x80 -> U+0180
+// (256+128). Assert we are NOT producing that.
+must("byte 0x80 is NOT the buggy U+0180", !glyph_is_codepoint(b2s[128], 384))
+
+// ── (b) MULTIBYTE CROSS-TOKEN DECODE ─────────────────────────────────
+// Byte-level-encode a UTF-8 string to its visible-glyph sequence, then
+// deliberately PACK the glyphs into multi-glyph "tokens" so multibyte
+// characters straddle token boundaries, decode each token via
+// qwen_unmap_bytes and concatenate — must equal the original raw bytes.
+
+// raw UTF-8 byte sequence of a string -> array of single-byte ints
+fn raw_bytes(s) {
+    let mut a = []
+    let mut i = 0
+    let n = len(s)
+    while i < n { a = a + [char_code(s, i)]; i = i + 1 }
+    return a
+}
+
+// byte-level encode: each raw byte -> its visible glyph string
+fn vis_encode(b2s, s) {
+    let mut g = []
+    let bs = raw_bytes(s)
+    let mut i = 0
+    while i < len(bs) { g = g + [b2s[bs[i]]]; i = i + 1 }
+    return g
+}
+
+// pack a glyph list into tokens of `width` glyphs each (concatenated)
+fn pack(glyphs, width) {
+    let mut toks = []
+    let mut i = 0
+    while i < len(glyphs) {
+        let mut t = ""
+        let mut k = 0
+        while k < width && i + k < len(glyphs) { t = t + glyphs[i + k]; k = k + 1 }
+        toks = toks + [t]
+        i = i + width
+    }
+    return toks
+}
+
+// the shared minimal QwenBpe value carrying just str_to_byte (built once).
+let bpe = QwenBpe {
+    vocab: #{}, id_to_token: [], merge_rank: #{},
+    byte_to_str: [], str_to_byte: s2b, added_tokens: [], vocab_size: 0
+}
+
+// decode tokens via qwen_unmap_bytes and concat the raw-byte strings.
+fn decode_via_unmap(bpe, toks) {
+    let mut out = ""
+    let mut i = 0
+    while i < len(toks) {
+        out = out + qwen_unmap_bytes(bpe, toks[i])
+        i = i + 1
+    }
+    return out
+}
+
+fn roundtrip_at_width(bpe, b2s, s, width) {
+    let glyphs = vis_encode(b2s, s)
+    let toks = pack(glyphs, width)
+    return decode_via_unmap(bpe, toks)
+}
+
+// Test strings: Korean (3-byte), CJK, emoji (4-byte), mixed ASCII+multibyte.
+let s_kor = "한글"             // U+D55C U+AE00  (ED 95 9C  EA B8 80)
+let s_cjk = "中文"
+let s_emo = "😀"               // 4-byte F0 9F 98 80
+let s_mix = "aA가1B나"
+
+// width 1 = each glyph its own token (worst case: 3-byte char split 1+1+1)
+let rt_kor1 = roundtrip_at_width(bpe, b2s, s_kor, 1)
+must("Korean round-trip, glyph-per-token (1+1+1 split)", rt_kor1 == s_kor)
+// width 2 = continuation bytes straddle token boundaries
+let rt_kor2 = roundtrip_at_width(bpe, b2s, s_kor, 2)
+must("Korean round-trip, 2-glyph tokens (cross-boundary)", rt_kor2 == s_kor)
+let rt_cjk2 = roundtrip_at_width(bpe, b2s, s_cjk, 2)
+must("CJK round-trip, 2-glyph tokens", rt_cjk2 == s_cjk)
+let rt_emo2 = roundtrip_at_width(bpe, b2s, s_emo, 2)
+must("Emoji (4-byte) round-trip, 2-glyph tokens (split across 2 tokens)", rt_emo2 == s_emo)
+let rt_emo3 = roundtrip_at_width(bpe, b2s, s_emo, 3)
+must("Emoji (4-byte) round-trip, 3-glyph tokens", rt_emo3 == s_emo)
+let rt_mix2 = roundtrip_at_width(bpe, b2s, s_mix, 2)
+must("Mixed ASCII+multibyte round-trip, 2-glyph tokens", rt_mix2 == s_mix)
+let rt_mix4 = roundtrip_at_width(bpe, b2s, s_mix, 4)
+must("Mixed ASCII+multibyte round-trip, 4-glyph tokens", rt_mix4 == s_mix)
+
+if ok { println("PASS t54_qwen_bpe_multibyte_roundtrip") }
+else  { println("FAIL t54_qwen_bpe_multibyte_roundtrip") }
