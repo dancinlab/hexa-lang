@@ -1,0 +1,96 @@
+// ═══════════════════════════════════════════════════════════
+//  test_float_roundtrip.hexa — OP-132 float→string round-trip lock
+//
+//  Property A (ROUND-TRIP EXACTNESS): for every double d,
+//    to_float(to_string(d)) == d   (bit-identical reparse).
+//  The pre-OP-132 default formatter ("%g", 6 sig digits) LOST
+//  precision: 1.0/3.0 → "0.333333" reparsed to a DIFFERENT double.
+//  The shortest-round-trip default (Python repr semantics) emits the
+//  shortest string that reparses EXACTLY.
+//
+//  Property B (CLEAN / SHORTEST repr): to_string(0.1) == "0.1"
+//  (not the over-precise "0.10000000000000001"), and the documented
+//  whole-float convention to_string(3.0) == "3.0" holds.
+//
+//  Special values: 0.0 / -0.0 / inf / -inf / NaN render canonically.
+// ═══════════════════════════════════════════════════════════
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check_eq(name: string, actual: string, expected: string) {
+    if actual == expected {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected: " + expected + ", got: " + actual)
+        fail_count = fail_count + 1
+    }
+}
+
+// Property A — round-trip EXACTNESS. Reparse the emitted string and
+// compare to the original double bit-for-bit (== on float is the
+// IEEE bit compare for finite values).
+fn check_roundtrip(name: string, d: float) {
+    let s = to_string(d)
+    let back = to_float(s)
+    if back == d {
+        println("[PASS] roundtrip " + name + " (" + s + ")")
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] roundtrip " + name + " — " + to_string(d) + " → \"" + s + "\" → " + to_string(back))
+        fail_count = fail_count + 1
+    }
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  OP-132 float→string round-trip + shortest-repr lock")
+println("═══════════════════════════════════════════════════════")
+
+// ── Property A: round-trip exactness across the stress set ──
+println("--- round-trip exactness ---")
+check_roundtrip("0.1", 0.1)
+check_roundtrip("0.2", 0.2)
+check_roundtrip("0.3", 0.3)
+check_roundtrip("one-third", 1.0 / 3.0)
+check_roundtrip("pi", 3.141592653589793)
+check_roundtrip("2.5", 2.5)
+check_roundtrip("0.0001", 0.0001)
+check_roundtrip("0.3...04", 0.30000000000000004)
+check_roundtrip("123456789.123456789", 123456789.123456789)
+check_roundtrip("1.5", 1.5)
+check_roundtrip("-1.5", -1.5)
+check_roundtrip("large 1e21", 1e21)
+check_roundtrip("DBL_MAX", 1.7976931348623157e308)
+check_roundtrip("tiny 1e-7", 1e-7)
+
+// ── Property B: clean / shortest repr ──
+println("--- shortest / clean repr ---")
+check_eq("0.1 shortest", to_string(0.1), "0.1")
+check_eq("0.2 shortest", to_string(0.2), "0.2")
+check_eq("0.3 shortest", to_string(0.3), "0.3")
+check_eq("2.5 clean", to_string(2.5), "2.5")
+check_eq("one-third shortest", to_string(1.0 / 3.0), "0.3333333333333333")
+check_eq("0.3...04 exact", to_string(0.30000000000000004), "0.30000000000000004")
+
+// ── documented whole-float convention (trk.27): N.0 ──
+println("--- whole-valued float convention ---")
+check_eq("3.0 → 3.0", to_string(3.0), "3.0")
+check_eq("0.0 → 0.0", to_string(0.0), "0.0")
+check_eq("100.0 → 100.0", to_string(100.0), "100.0")
+
+// ── special values (canonical casing) ──
+println("--- special values ---")
+let pos_inf = 1.0e308 * 10.0
+let neg_inf = -1.0e308 * 10.0
+let not_a_num = pos_inf - pos_inf
+check_eq("inf", to_string(pos_inf), "inf")
+check_eq("-inf", to_string(neg_inf), "-inf")
+check_eq("NaN", to_string(not_a_num), "NaN")
+
+println("")
+println("───────────────────────────────────────────────────────")
+println("  PASS: " + to_string(pass_count) + "  FAIL: " + to_string(fail_count))
+println("───────────────────────────────────────────────────────")
+if fail_count > 0 { exit(1) }
+exit(0)
