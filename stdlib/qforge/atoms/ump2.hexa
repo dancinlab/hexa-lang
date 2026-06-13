@@ -1,0 +1,267 @@
+// HEXA Standard Library — qforge/atoms/ump2
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE-ATOMS brick #25 — UNRESTRICTED MP2 (UMP2) correlation energy on top of a
+// converged UHF reference. The r16 RMP2 brick is CLOSED-SHELL ONLY (doubly-occupied
+// RHF orbitals) — it cannot touch HALF of real chemistry: radicals (OH, CH₃),
+// doublet ions, triplets (O₂, CH₂), most transition-metal centres. UMP2 generalizes
+// the second-order Møller–Plesset correction to a SPIN-POLARIZED UHF reference with
+// SEPARATE α/β molecular orbitals (C^α/C^β, ε^α/ε^β, n_α/n_β from molscf/uhf.hexa).
+//
+// ── spin-orbital MP2 split into three SPIN BLOCKS  (Szabo & Ostlund §6.7) ────────
+//   E_UMP2 = E_αα + E_ββ + E_αβ
+//
+//   SAME-SPIN (αα, ββ) — antisymmetrized, one spin's orbitals throughout:
+//     E_ss = ¼ Σ_{i<>j ∈ occ_s, a<>b ∈ virt_s}  ⟨ij||ab⟩² / (ε_i+ε_j−ε_a−ε_b)
+//          = ¼ Σ_{ijab}  [ (ia|jb) − (ib|ja) ]² / Δ           (s = α or β)
+//     all four indices in the SAME spin's MO basis; the ¼ folds the unrestricted
+//     i,j and a,b double-counting. Vanishes when a spin has <2 virtuals (e.g. OH α).
+//
+//   OPPOSITE-SPIN (αβ) — NO exchange (different-spin electrons are distinguishable):
+//     E_αβ = Σ_{i,a ∈ α, j,b ∈ β}  (ia|jb)² / (ε_i^α + ε_j^β − ε_a^α − ε_b^β)
+//     a MIXED integral: the (ia) pair is built from C^α, the (jb) pair from C^β.
+//
+// ── closed-shell reduction (g5 verdict a) ────────────────────────────────────────
+//   When n_α=n_β and C^α=C^β=C, ε^α=ε^β=ε, the three blocks collapse to RMP2:
+//     E_αα = E_ββ = the same-spin part,  E_αβ = the opposite-spin part, and
+//     E_αα+E_ββ+E_αβ ≡ Σ_{ia,jb}(ia|jb)[2(ia|jb)−(ib|ja)]/Δ  (the r16 closed form).
+//   So UMP2 reproduces the SEALED RMP2 E_corr to the round-off floor — proof the
+//   unrestricted machinery reduces correctly when the reference is unpolarized.
+//
+// ── honest scope (d6) ────────────────────────────────────────────────────────────
+//   UMP2 sits on a SPIN-CONTAMINATED UHF reference (⟨S²⟩ ≠ S(S+1) exactly — the
+//   selftest REPORTS the contamination, never hides it). The spin-projected PUMP2 or
+//   an ROHF-MP2 reference is the cleaner variant — the next round (#26). The transform
+//   and the energy sums are EXACT for the supplied integrals; nothing is fitted.
+//
+// reuse (d19 · d3): the converged UHF reference (molscf/uhf.uhf_scf → C^α,C^β,ε^α,ε^β)
+//   + the r16 mp2_ao_to_mo 4-index transform (run once per spin for the same-spin
+//   blocks; a mixed C^α/C^β transform for the opposite-spin block). The closed-shell
+//   RMP2 path (mp2.hexa) is BYTE-UNTOUCHED — UMP2 is purely additive.
+
+use "stdlib/qforge/atoms/mp2"
+
+// Flat index into a chemists' MO tensor T[((p*n+q)*n+r)*n+s].
+fn _u4(T: [float], n: int, p: int, q: int, r: int, s: int) -> float {
+    return T[((p * n + q) * n + r) * n + s]
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   mixed-spin AO→MO transform — (ia|jb) with the (μν) pair on C1, (λσ) on C2
+// ════════════════════════════════════════════════════════════════════════════
+
+// Opposite-spin transform  (pq|rs) = Σ_{μνλσ} C1_μp C1_νq C2_λr C2_σs (μν|λσ).
+// The FIRST electron pair (p,q) rotates with C1 (spin-α MOs), the SECOND pair (r,s)
+// with C2 (spin-β MOs). Reuses the same staged quarter-transform structure as
+// mp2_ao_to_mo (r16), just with two different coefficient matrices. d19 reuse: when
+// C1==C2 this is EXACTLY mp2_ao_to_mo (same-spin tensor) — verified in the selftest.
+pub fn ump2_ao_to_mo_mixed(eri: [float], C1: [float], C2: [float], n: int) -> [float] {
+    let n4 = n * n * n * n
+    // quarter 1: μ→p  (C1)
+    let mut q1: [float] = []
+    let mut z1 = 0
+    while z1 < n4 { q1.push(0.0) ; z1 = z1 + 1 }
+    let mut p = 0
+    while p < n {
+        let mut nu = 0
+        while nu < n {
+            let mut lm = 0
+            while lm < n {
+                let mut sg = 0
+                while sg < n {
+                    let mut acc = 0.0
+                    let mut mu = 0
+                    while mu < n {
+                        acc = acc + C1[mu * n + p] * _u4(eri, n, mu, nu, lm, sg)
+                        mu = mu + 1
+                    }
+                    q1[((p * n + nu) * n + lm) * n + sg] = acc
+                    sg = sg + 1
+                }
+                lm = lm + 1
+            }
+            nu = nu + 1
+        }
+        p = p + 1
+    }
+    // quarter 2: ν→q  (C1)
+    let mut q2: [float] = []
+    let mut z2 = 0
+    while z2 < n4 { q2.push(0.0) ; z2 = z2 + 1 }
+    p = 0
+    while p < n {
+        let mut q = 0
+        while q < n {
+            let mut lm = 0
+            while lm < n {
+                let mut sg = 0
+                while sg < n {
+                    let mut acc = 0.0
+                    let mut nu = 0
+                    while nu < n {
+                        acc = acc + C1[nu * n + q] * _u4(q1, n, p, nu, lm, sg)
+                        nu = nu + 1
+                    }
+                    q2[((p * n + q) * n + lm) * n + sg] = acc
+                    sg = sg + 1
+                }
+                lm = lm + 1
+            }
+            q = q + 1
+        }
+        p = p + 1
+    }
+    // quarter 3: λ→r  (C2)
+    let mut q3: [float] = []
+    let mut z3 = 0
+    while z3 < n4 { q3.push(0.0) ; z3 = z3 + 1 }
+    p = 0
+    while p < n {
+        let mut q = 0
+        while q < n {
+            let mut r = 0
+            while r < n {
+                let mut sg = 0
+                while sg < n {
+                    let mut acc = 0.0
+                    let mut lm = 0
+                    while lm < n {
+                        acc = acc + C2[lm * n + r] * _u4(q2, n, p, q, lm, sg)
+                        lm = lm + 1
+                    }
+                    q3[((p * n + q) * n + r) * n + sg] = acc
+                    sg = sg + 1
+                }
+                r = r + 1
+            }
+            q = q + 1
+        }
+        p = p + 1
+    }
+    // quarter 4: σ→s  (C2)
+    let mut q4: [float] = []
+    let mut z4 = 0
+    while z4 < n4 { q4.push(0.0) ; z4 = z4 + 1 }
+    p = 0
+    while p < n {
+        let mut q = 0
+        while q < n {
+            let mut r = 0
+            while r < n {
+                let mut s = 0
+                while s < n {
+                    let mut acc = 0.0
+                    let mut sg = 0
+                    while sg < n {
+                        acc = acc + C2[sg * n + s] * _u4(q3, n, p, q, r, sg)
+                        sg = sg + 1
+                    }
+                    q4[((p * n + q) * n + r) * n + s] = acc
+                    s = s + 1
+                }
+                r = r + 1
+            }
+            q = q + 1
+        }
+        p = p + 1
+    }
+    return q4
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   spin-block correlation energies
+// ════════════════════════════════════════════════════════════════════════════
+
+// SAME-SPIN block  E_ss = ¼ Σ_{ijab} [ (ia|jb)−(ib|ja) ]² / (ε_i+ε_j−ε_a−ε_b).
+//   eri_mo : the SAME-spin MO tensor (mp2_ao_to_mo with that spin's C).
+//   eps    : that spin's MO energies (ascending). n_occ : that spin's occupation.
+// Antisymmetrized numerator ⇒ vanishes whenever a==b or i==j; nonzero only with
+// ≥2 occupied AND ≥2 virtual orbitals of that spin.
+pub fn ump2_same_spin_energy(eri_mo: [float], eps: [float], n: int, n_occ: int) -> float {
+    let mut e = 0.0
+    let mut i = 0
+    while i < n_occ {
+        let mut a = n_occ
+        while a < n {
+            let mut j = 0
+            while j < n_occ {
+                let mut b = n_occ
+                while b < n {
+                    let iajb = _u4(eri_mo, n, i, a, j, b)
+                    let ibja = _u4(eri_mo, n, i, b, j, a)
+                    let anti = iajb - ibja
+                    let den = eps[i] + eps[j] - eps[a] - eps[b]
+                    e = e + 0.25 * anti * anti / den
+                    b = b + 1
+                }
+                j = j + 1
+            }
+            a = a + 1
+        }
+        i = i + 1
+    }
+    return e
+}
+
+// OPPOSITE-SPIN block  E_αβ = Σ_{i,a∈α, j,b∈β} (ia|jb)² / (ε_i^α+ε_j^β−ε_a^α−ε_b^β).
+//   eri_ab : the MIXED αβ MO tensor (ump2_ao_to_mo_mixed(eri, Ca, Cb, n)).
+//   eps_a/eps_b : α/β MO energies.  na/nb : α/β occupations.  No exchange term.
+pub fn ump2_opposite_spin_energy(
+    eri_ab: [float], eps_a: [float], eps_b: [float], n: int, na: int, nb: int
+) -> float {
+    let mut e = 0.0
+    let mut i = 0
+    while i < na {
+        let mut a = na
+        while a < n {
+            let mut j = 0
+            while j < nb {
+                let mut b = nb
+                while b < n {
+                    let iajb = _u4(eri_ab, n, i, a, j, b)
+                    let den = eps_a[i] + eps_b[j] - eps_a[a] - eps_b[b]
+                    e = e + iajb * iajb / den
+                    b = b + 1
+                }
+                j = j + 1
+            }
+            a = a + 1
+        }
+        i = i + 1
+    }
+    return e
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   driver — converged UHF MO data → the three spin blocks + the UMP2 total
+// ════════════════════════════════════════════════════════════════════════════
+
+// Consume the converged UHF α/β MO coefficients + energies + occupations (from
+// molscf/uhf.uhf_scf — indices Ca=9, Cb=10, eps_a=7, eps_b=8) plus the AO ERI tensor
+// + e_uhf, and return the spin-resolved UMP2 decomposition. d4-generic: any
+// open-shell (or closed-shell, n_α=n_β) molecule's UHF data runs here unchanged.
+// Returns [ e_aa, e_bb, e_ab, e_corr, e_ump2_total ]:
+//   e_aa  = αα same-spin correlation (< 0; 0 if <2 α-virtuals)
+//   e_bb  = ββ same-spin correlation (< 0; 0 if <2 β-virtuals)
+//   e_ab  = αβ opposite-spin correlation (< 0; the dominant block)
+//   e_corr      = e_aa + e_bb + e_ab
+//   e_ump2_total = e_uhf + e_corr
+pub fn ump2_corr_from_uhf(
+    eri: [float], Ca: [float], Cb: [float],
+    eps_a: [float], eps_b: [float],
+    n: int, na: int, nb: int, e_uhf: float
+) -> [float] {
+    // same-spin tensors (r16 transform, one C per spin)
+    let eri_aa = mp2_ao_to_mo(eri, Ca, n)
+    let eri_bb = mp2_ao_to_mo(eri, Cb, n)
+    let e_aa = ump2_same_spin_energy(eri_aa, eps_a, n, na)
+    let e_bb = ump2_same_spin_energy(eri_bb, eps_b, n, nb)
+    // opposite-spin tensor (mixed Ca/Cb transform)
+    let eri_ab = ump2_ao_to_mo_mixed(eri, Ca, Cb, n)
+    let e_ab = ump2_opposite_spin_energy(eri_ab, eps_a, eps_b, n, na, nb)
+    let e_corr = e_aa + e_bb + e_ab
+    let e_ump2 = e_uhf + e_corr
+    return [e_aa, e_bb, e_ab, e_corr, e_ump2]
+}

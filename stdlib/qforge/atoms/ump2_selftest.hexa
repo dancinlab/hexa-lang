@@ -1,0 +1,229 @@
+// @ci_gate — deterministic · network-free · QFORGE-ATOMS round-25 UMP2 g5
+//
+// ump2_selftest.hexa — round-25 g5 gate. UNRESTRICTED MP2 (UMP2) correlation energy
+// on top of a converged UHF reference (molscf/uhf.hexa), extending the correlated
+// atoms stack from CLOSED-shell (r16 RMP2) to OPEN-shell chemistry (radicals,
+// doublets, triplets). FOUR verdicts, all VERBATIM (d6 — every printed value is the
+// raw computed scalar; the open-shell anchor is PySCF mp.UMP2(umf).kernel()):
+//
+//   (a) UMP2 == RMP2 CLOSED-SHELL — on H₂O/STO-3G @ Crawford geometry with n_α=n_β=5
+//       (UNPOLARIZED), the UMP2 three-block sum E_αα+E_ββ+E_αβ reproduces the SEALED
+//       r16 RMP2 E_corr = −0.04914964 to ≤1e-9. Proves UMP2 reduces correctly to RMP2
+//       when the reference is closed-shell. |Δ| printed verbatim.
+//
+//   (b) OPEN-SHELL UMP2 vs PySCF — the CH₃ methyl radical (doublet, STO-3G, n_α=5,
+//       n_β=4, 8 AOs) UMP2 correlation energy vs PySCF mp.UMP2(umf).kernel() =
+//       −0.038288661868. E_UMP2_corr + |Δ| + the UHF ⟨S²⟩ (0.765 — genuinely
+//       spin-contaminated above 0.75, REPORTED not hidden) printed verbatim.
+//
+//   (c) SPIN-BLOCK DECOMPOSITION — E_αα, E_ββ, E_αβ reported SEPARATELY. Closed-shell
+//       (a): E_αα==E_ββ and E_αβ = the opposite-spin RMP2 part. Open-shell CH₃: the
+//       same-spin blocks are NONZERO and ASYMMETRIC (E_αα=−0.000816, E_ββ=−0.000770,
+//       n_α≠n_β), the opposite-spin block dominates (E_αβ=−0.036703). vs PySCF.
+//
+//   (d) REGRESSION — the r16 closed-shell RMP2 path is BYTE-UNTOUCHED: the sealed
+//       RMP2 E_corr at the Crawford geometry, computed by the UNMODIFIED
+//       mp2_corr_from_rhf, is re-asserted == −0.04914964. UMP2 is purely additive.
+//
+// HONEST (d6): UMP2 sits on a SPIN-CONTAMINATED UHF reference (⟨S²⟩=0.765 ≠ 0.75 for
+//   CH₃). The cleaner spin-projected PUMP2 or ROHF-MP2 is round-26. Both anchors are
+//   REAL PySCF outputs (UHF 2.13.1); nothing fitted/forced. Next: UCCSD · PUMP2.
+//
+// Run:  HEXA_LANG=<worktree> hexa run stdlib/qforge/atoms/ump2_selftest.hexa
+// PASS: "qforge_atoms_ump2_selftest PASS".
+use "stdlib/qforge/atoms/ump2"
+use "stdlib/qforge/atoms/mp2"
+use "stdlib/qforge/atoms/rhf_force_pd"
+use "stdlib/qforge/molscf/uhf"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, c: bool) -> int {
+    if c { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+// H₂O STO-3G basis tables (d19 reuse — identical to the r16 mp2 selftest anchor).
+fn _h2o_pw() -> [[int]] {
+    return [[0,0,0],[0,0,0],[1,0,0],[0,1,0],[0,0,1],[0,0,0],[0,0,0]]
+}
+fn _h2o_exps() -> [[float]] {
+    let o1a = [130.70932, 23.808861, 6.4436083]
+    let o2a = [5.0331513, 1.1695961, 0.3803890]
+    let ha  = [3.42525091, 0.62391373, 0.16885540]
+    return [o1a, o2a, o2a, o2a, o2a, ha, ha]
+}
+fn _h2o_coef() -> [[float]] {
+    let o1d  = [0.15432897, 0.53532814, 0.44463454]
+    let o2sd = [0.0 - 0.09996723, 0.39951283, 0.70011547]
+    let o2pd = [0.15591627, 0.60768372, 0.39195739]
+    let hd   = [0.15432897, 0.53532814, 0.44463454]
+    return [o1d, o2sd, o2pd, o2pd, o2pd, hd, hd]
+}
+fn _h2o_aom() -> [int] { return [0,0,0,0,0,1,2] }
+
+// CH₃ planar radical STO-3G basis tables (C 1s,2s,2px,2py,2pz + 3 × H 1s = 8 AOs).
+// C STO-3G exponents/contraction from PySCF gto.basis.load('sto-3g','C').
+fn _ch3_pw() -> [[int]] {
+    return [[0,0,0],[0,0,0],[1,0,0],[0,1,0],[0,0,1],[0,0,0],[0,0,0],[0,0,0]]
+}
+fn _ch3_exps() -> [[float]] {
+    let c1a = [71.616837, 13.045096, 3.5305122]
+    let c2a = [2.9412494, 0.6834831, 0.2222899]
+    let ha  = [3.42525091, 0.62391373, 0.16885540]
+    return [c1a, c2a, c2a, c2a, c2a, ha, ha, ha]
+}
+fn _ch3_coef() -> [[float]] {
+    let c1d  = [0.15432897, 0.53532814, 0.44463454]
+    let c2sd = [0.0 - 0.09996723, 0.39951283, 0.70011547]
+    let c2pd = [0.15591627, 0.60768372, 0.39195739]
+    let hd   = [0.15432897, 0.53532814, 0.44463454]
+    return [c1d, c2sd, c2pd, c2pd, c2pd, hd, hd, hd]
+}
+fn _ch3_aom() -> [int] { return [0,0,0,0,0,1,2,3] }
+
+fn main() {
+    let mut fails = 0
+    let pw7 = _h2o_pw()
+    let exps7 = _h2o_exps()
+    let coef7 = _h2o_coef()
+    let aom7 = _h2o_aom()
+    let zW = [8.0, 1.0, 1.0]
+    let norb = 7
+    let natW = 3
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  (a)+(d) CLOSED-SHELL — H₂O/STO-3G @ Crawford geom: UMP2(n_α=n_β=5) == RMP2
+    // ══════════════════════════════════════════════════════════════════════════
+    println("════ CLOSED-SHELL: H₂O/STO-3G @ Crawford (n_α=n_β=5) ════")
+    let posC = [
+        0.0, 0.0 - 0.143225816552, 0.0,
+        1.638036840407, 1.136548822547, 0.0,
+        0.0 - 1.638036840407, 1.136548822547, 0.0
+    ]
+    let SC  = qf_pd_overlap(posC, pw7, exps7, coef7, aom7, norb)
+    let hcC = qf_pd_hcore(posC, pw7, exps7, coef7, aom7, norb, zW, natW)
+    let eriC = qf_pd_eri_tensor(posC, pw7, exps7, coef7, aom7, norb)
+    let enucC = qf_pd_enuc(posC, zW, natW)
+    let e_corr_ref = 0.0 - 0.04914964
+
+    // (d) regression — the UNMODIFIED r16 RMP2 path still reproduces the sealed anchor.
+    //     mp2_corr_from_rhf returns [e_rhf, e_corr, e_mp2, conv, eps, C, eri_mo].
+    let mC = mp2_corr_from_rhf(SC, hcC, eriC, norb, 5, enucC, 300, 1.0e-11, 1.0)
+    let e_rmp2 = mC[1]
+    let eps_rhf = mC[4]
+    let C_rhf = mC[5]
+    println("    [d] r16 RMP2 E_corr = " + to_string(e_rmp2) + " (sealed ref −0.04914964)")
+    fails = fails + _ck_close("(d)r16 RMP2 path BYTE-UNTOUCHED: E_corr == −0.04914964",
+                              e_rmp2, e_corr_ref, 1.0e-6)
+
+    // (a) RIGOROUS REDUCTION — feed the RHF's OWN converged orbitals into the UMP2
+    //     driver as both Ca==Cb (ε^α==ε^β==ε_RHF, n_α==n_β==5). This is a pure
+    //     ALGEBRAIC identity: the three-block sum must equal the r16 RMP2 E_corr at
+    //     MACHINE precision (same orbitals → same energy, no SCF re-convergence drift).
+    let dR = ump2_corr_from_uhf(eriC, C_rhf, C_rhf, eps_rhf, eps_rhf, norb, 5, 5, 0.0)
+    let e_aaR = dR[0]
+    let e_bbR = dR[1]
+    let e_abR = dR[2]
+    let e_corrR = dR[3]
+    println("    [c] (RHF-orbitals) E_αα=" + to_string(e_aaR) + " E_ββ=" + to_string(e_bbR)
+            + " E_αβ=" + to_string(e_abR))
+    println("    [a] UMP2(RHF-orb) E_corr=" + to_string(e_corrR)
+            + "  |Δ vs r16 RMP2|=" + to_string(_abs(e_corrR - e_rmp2)))
+    fails = fails + _ck_close("(a)UMP2 formula reduces to RMP2 on identical orbitals (≤1e-9)",
+                              e_corrR, e_rmp2, 1.0e-9)
+    // (c) closed-shell: same-spin blocks EQUAL (E_αα == E_ββ exactly — Ca==Cb)
+    fails = fails + _ck_close("(c)closed-shell same-spin symmetry E_αα == E_ββ",
+                              e_aaR, e_bbR, 1.0e-12)
+
+    // (a-corroborate) the FULL UHF→UMP2 driver path (independent uhf_scf convergence)
+    //     reproduces the sealed RMP2 anchor to ~1e-7 (two independent SCF solvers reach
+    //     the same physical density; the residual is the inter-driver convergence drift,
+    //     NOT a formula error — d6 honest tolerance for cross-driver agreement).
+    let uW = uhf_scf(SC, hcC, eriC, norb, 5, 5, enucC, 300, 1.0e-12, 0.5, true, 0.0)
+    let e_uhf_W = uW[0]
+    let convW = uW[11]
+    let ssW = uhf_spin_squared(uW[9], uW[10], SC, norb, 5, 5)
+    let dW = ump2_corr_from_uhf(eriC, uW[9], uW[10], uW[7], uW[8], norb, 5, 5, e_uhf_W)
+    let e_corrW = dW[3]
+    println("    UHF(5,5) E=" + to_string(e_uhf_W) + " conv=" + to_string(convW)
+            + " ⟨S²⟩=" + to_string(ssW) + " (closed-shell → 0)")
+    println("    [a] UMP2(UHF-driver) E_corr=" + to_string(e_corrW)
+            + "  |Δ vs sealed RMP2|=" + to_string(_abs(e_corrW - e_corr_ref)))
+    fails = fails + _ck_true("(a)H₂O UHF(5,5) converged", convW)
+    fails = fails + _ck_close("(a)UHF-driver UMP2 == sealed RMP2 (cross-driver ~1e-7)",
+                              e_corrW, e_corr_ref, 1.0e-6)
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  (b)+(c) OPEN-SHELL — CH₃ methyl radical / STO-3G (doublet, n_α=5, n_β=4)
+    // ══════════════════════════════════════════════════════════════════════════
+    println("════ OPEN-SHELL: CH₃ radical / STO-3G (doublet n_α=5 n_β=4) ════")
+    let posM = [
+        0.0, 0.0, 0.0,
+        2.0390143417, 0.0, 0.0,
+        0.0 - 1.0195071708, 1.7658382186, 0.0,
+        0.0 - 1.0195071708, 0.0 - 1.7658382186, 0.0
+    ]
+    let pwM = _ch3_pw()
+    let expsM = _ch3_exps()
+    let coefM = _ch3_coef()
+    let aomM = _ch3_aom()
+    let zM = [6.0, 1.0, 1.0, 1.0]
+    let norbM = 8
+    let natM = 4
+
+    let SM  = qf_pd_overlap(posM, pwM, expsM, coefM, aomM, norbM)
+    let hcM = qf_pd_hcore(posM, pwM, expsM, coefM, aomM, norbM, zM, natM)
+    let eriM = qf_pd_eri_tensor(posM, pwM, expsM, coefM, aomM, norbM)
+    let enucM = qf_pd_enuc(posM, zM, natM)
+
+    let uM = uhf_scf(SM, hcM, eriM, norbM, 5, 4, enucM, 400, 1.0e-12, 0.5, true, 0.2)
+    let e_uhf_M = uM[0]
+    let eps_aM = uM[7]
+    let eps_bM = uM[8]
+    let CaM = uM[9]
+    let CbM = uM[10]
+    let convM = uM[11]
+    let ssM = uhf_spin_squared(CaM, CbM, SM, norbM, 5, 4)
+    println("    UHF(5,4) E=" + to_string(e_uhf_M) + " conv=" + to_string(convM))
+    println("    [b] UHF ⟨S²⟩=" + to_string(ssM) + " (exact 0.75; contamination = "
+            + to_string(ssM - 0.75) + ")")
+    fails = fails + _ck_true("(b)CH₃ UHF(5,4) converged", convM)
+    fails = fails + _ck_close("(b)CH₃ UHF E == PySCF −39.0767088551 (1e-4)",
+                              e_uhf_M, 0.0 - 39.0767088551, 1.0e-4)
+    fails = fails + _ck_close("(b)CH₃ UHF ⟨S²⟩ == PySCF 0.7652248 (spin-contaminated)",
+                              ssM, 0.7652248, 1.0e-3)
+
+    let dM = ump2_corr_from_uhf(eriM, CaM, CbM, eps_aM, eps_bM, norbM, 5, 4, e_uhf_M)
+    let e_aaM = dM[0]
+    let e_bbM = dM[1]
+    let e_abM = dM[2]
+    let e_corrM = dM[3]
+    let e_ump2M = dM[4]
+    println("    [c] E_αα=" + to_string(e_aaM) + " (ref −0.00081567)")
+    println("    [c] E_ββ=" + to_string(e_bbM) + " (ref −0.00077022)")
+    println("    [c] E_αβ=" + to_string(e_abM) + " (ref −0.03670277)")
+    println("    [b] UMP2 E_corr=" + to_string(e_corrM) + " (PySCF −0.038288661868)")
+    println("    [b] E_UMP2_total=" + to_string(e_ump2M))
+    let e_corr_ref_M = 0.0 - 0.038288661868
+    println("    [b] |Δ UMP2−PySCF|=" + to_string(_abs(e_corrM - e_corr_ref_M)))
+    // (b) open-shell UMP2 vs PySCF
+    fails = fails + _ck_close("(b)CH₃ UMP2 E_corr == PySCF −0.038288661868 (≤1e-5)",
+                              e_corrM, e_corr_ref_M, 1.0e-5)
+    // (c) open-shell spin blocks — nonzero AND asymmetric, opposite-spin dominates
+    fails = fails + _ck_close("(c)CH₃ E_αα == PySCF −0.00081567", e_aaM, 0.0 - 0.00081567, 1.0e-5)
+    fails = fails + _ck_close("(c)CH₃ E_ββ == PySCF −0.00077022", e_bbM, 0.0 - 0.00077022, 1.0e-5)
+    fails = fails + _ck_close("(c)CH₃ E_αβ == PySCF −0.03670277", e_abM, 0.0 - 0.03670277, 1.0e-5)
+    fails = fails + _ck_true("(c)CH₃ same-spin blocks NONZERO & ASYMMETRIC (E_αα≠E_ββ, both<0)",
+                             e_aaM < 0.0 && e_bbM < 0.0 && _abs(e_aaM - e_bbM) > 1.0e-6)
+    fails = fails + _ck_true("(c)CH₃ opposite-spin dominates (|E_αβ| > |E_αα|+|E_ββ|)",
+                             _abs(e_abM) > _abs(e_aaM) + _abs(e_bbM))
+    fails = fails + _ck_true("(c)CH₃ E_corr < 0 & E_UMP2 < E_UHF strictly",
+                             e_corrM < 0.0 && e_ump2M < e_uhf_M)
+
+    if fails == 0 { println("qforge_atoms_ump2_selftest PASS") }
+    else { println("qforge_atoms_ump2_selftest FAIL — " + to_string(fails) + " checks failed") }
+}
