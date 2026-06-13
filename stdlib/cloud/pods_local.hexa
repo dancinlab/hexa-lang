@@ -646,6 +646,41 @@ pub fn idle_reap_classify(reachable: int, busy: int) -> str {
     return "REAP"
 }
 
+// idle_reap_classify_status — handoff d1410e5b. The ssh-only classifier above
+// fails SAFE on an undetermined probe (busy==-1 → BUSY_UNMANIFESTED, never
+// reaped). That is correct when the probe is the ONLY signal, but it strands a
+// pod whose provider STATUS is unambiguously dead: vast inst 38711598 reported
+// actual_status=exited yet its proxy ssh was refused (busy==-1), so it was
+// mis-held as BUSY-UNMANIFESTED forever and lingered billing until a manual
+// `hexa cloud down`. status=exited/stopped (vast actual_status) and the GONE/
+// stopped runpod desiredStatus are UNAMBIGUOUS — they license a REAP regardless
+// of what the ssh probe could (not) tell us.
+//
+// `status` is the live PROVIDER-API state from _alive_probe (alive.hexa):
+//   "STOPPED" | "GONE"               → REAP   (provider says the pod is dead —
+//                                       exited/stopped/terminated/reclaimed;
+//                                       authoritative over an ambiguous probe).
+//   "RUNNING" | "UNKNOWN" | "" |     → fall through to the ssh-only classifier
+//   "MISSING-CRED"                     (NO behaviour change — a RUNNING provider
+//                                       state with a busy proc is still BUSY,
+//                                       and an UNKNOWN/cred-less status NEVER
+//                                       upgrades a fail-safe HOLD to a reap; @L4
+//                                       g63 — a degraded provider query must not
+//                                       tear down real compute).
+// This is purely ADDITIVE safety: it can only convert a previously-stranded
+// BUSY_UNMANIFESTED into a REAP when the provider POSITIVELY reports dead; it
+// never makes a RUNNING/UNKNOWN pod more reapable. Returns "REAP" |
+// "BUSY_UNMANIFESTED" (same domain as idle_reap_classify). PURE — string status
+// in, so the selftest injects fixtures with no network.
+pub fn idle_reap_classify_status(reachable: int, busy: int, status: str) -> str {
+    // provider POSITIVELY dead → reap regardless of the ssh probe ambiguity.
+    if status == "STOPPED" { return "REAP" }
+    if status == "GONE" { return "REAP" }
+    // RUNNING / UNKNOWN / MISSING-CRED / "" → defer to the ssh-only discipline
+    // (fail-safe HOLD on an undetermined probe is preserved).
+    return idle_reap_classify(reachable, busy)
+}
+
 // pods_local_job_live_state — PURE provider-liveness classifier (the `cloud
 // pods` phantom-pod fix). Closed-form int inputs mirror idle_reap_classify so
 // the caller resolves pod-id membership against the provider-alive set and

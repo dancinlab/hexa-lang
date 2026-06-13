@@ -2275,7 +2275,13 @@ fn _cloud_idle_reap(provider_scope: str, apply: int) -> int {
         // only probe the proc state when reachable (an unreachable pod is dead → REAP).
         let mut busy = -1
         if reach == 1 { busy = _idle_reap_probe_busy(id) }
-        let klass = idle_reap_classify(reach, busy)
+        // handoff d1410e5b: consult the live PROVIDER STATUS so a pod the
+        // provider reports exited/stopped/gone is reaped even when its ssh probe
+        // is ambiguous (the inst 38711598 actual_status=exited + ssh-refused case
+        // that was stranded BUSY-UNMANIFESTED forever). UNKNOWN/MISSING-CRED/
+        // RUNNING fall back to the ssh-only discipline (no behaviour change).
+        let pstatus = alive_probe_status(id, prov)
+        let klass = idle_reap_classify_status(reach, busy, pstatus)
         if klass == "BUSY_UNMANIFESTED" {
             busy_n = busy_n + 1
             println(_reg_pad(id, 24) + " " + _reg_pad(prov, 9) + " BUSY-UNMANIFESTED  WARN (live dup — consolidate, never reap)")

@@ -187,6 +187,18 @@ fn _alive_probe(id: str, provider: str) -> [str] {
     return _alive_probe_vast(id)
 }
 
+// alive_probe_status — pub, returns ONLY the live provider STATE string for one
+// id ("RUNNING" | "STOPPED" | "GONE" | "UNKNOWN" | "MISSING-CRED"), discarding
+// the raw-detail second field. The idle-reap classifier (handoff d1410e5b)
+// consults this to reap a provider-confirmed-dead pod (exited/stopped/gone) that
+// an ambiguous ssh probe would otherwise strand as BUSY-UNMANIFESTED. Honest by
+// construction — it forwards _alive_probe, so a missing key is MISSING-CRED and
+// an API error is UNKNOWN (neither of which the classifier treats as dead).
+pub fn alive_probe_status(id: str, provider: str) -> str {
+    let res = _alive_probe(id, provider)
+    return res[0]
+}
+
 // _alive_json_escape — minimal JSON string escaper for the raw field.
 fn _alive_json_escape(s: str) -> str {
     let mut out = ""
