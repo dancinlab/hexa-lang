@@ -1,0 +1,398 @@
+// HEXA Standard Library — qforge/molscf/md_integrals
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE MOLSCF front-end brick 6/N — McMurchie–Davidson (MD) Gaussian integrals
+// for ARBITRARY angular momentum (s, p, d, …). Where bricks 1/2 supplied the
+// s-only closed forms (gaussian_integrals.hexa S/T, coulomb_integrals.hexa V /
+// (ab|cd)), this brick supplies the GENERAL recursion that produces every one-
+// and two-electron integral over Cartesian Gaussians, so a real polyatomic
+// (H₂O / STO-3G, which needs the O 2p shell) feeds the UNCHANGED rhf_scf.
+//
+// The MD scheme (McMurchie & Davidson, J. Comput. Phys. 26, 218 (1978);
+// Helgaker, Jørgensen & Olsen, "Molecular Electronic-Structure Theory" ch. 9)
+// expands the product of two Cartesian Gaussians in HERMITE Gaussians:
+//
+//   G_i(x;a,Ax) · G_j(x;b,Bx) = Σ_t E^{ij}_t · Λ_t(x;p,Px)
+//
+// where Λ_t is the t-th Hermite Gaussian about the product center P and the
+// EXPANSION COEFFICIENTS E^{ij}_t obey the two-term recursion (HJO eq. 9.5.6):
+//
+//   E^{i+1,j}_t = 1/(2p) E^{ij}_{t-1} + X_PA E^{ij}_t + (t+1) E^{ij}_{t+1}
+//   E^{i,j+1}_t = 1/(2p) E^{ij}_{t-1} + X_PB E^{ij}_t + (t+1) E^{ij}_{t+1}
+//   E^{00}_0 = exp(−μ X_AB²)  =  K_AB        (the s·s Gaussian prefactor)
+//
+// with X_PA = Px−Ax, X_PB = Px−Bx, μ = ab/p, p = a+b, and E^{ij}_t = 0 for
+// t<0 or t>i+j. Each Cartesian axis is INDEPENDENT, so a 3-D integral is a
+// product of three 1-D E-coefficient towers.
+//
+// ── Overlap (HJO 9.5.41) ─────────────────────────────────────────────────────
+//   S_ab = E^{ij}_0 E^{kl}_0 E^{mn}_0 · (π/p)^{3/2}
+//   (i,k,m)=L_a Cartesian powers of bra, (j,l,n)=L_b of ket.
+//   L=0 on every axis ⇒ E^{00}_0=K_AB ⇒ S = K_AB (π/p)^{3/2}  — EXACTLY the
+//   brick-1 s closed form (the L=0 regression anchor, g5 (a)).
+//
+// ── Kinetic (Obara–Saika / MD differential, HJO 9.3.40) ──────────────────────
+//   The 1-D kinetic factor T_i^j = −½ d²/dx² acting on a Gaussian raises/lowers
+//   the ket power by 2:
+//     T^{ij} = −½[ j(j−1) S^{i,j−2} − 2b(2j+1) S^{ij} + 4b² S^{i,j+2} ]
+//   T_ab = T_x S_y S_z + S_x T_y S_z + S_x S_y T_z   (1-D S/T per axis).
+//
+// ── Hermite Coulomb R-tensor (HJO 9.9.9) ─────────────────────────────────────
+//   R^{n}_{tuv} couples the Hermite charge distribution to the Boys function:
+//     R^{n}_{000} = (−2p)^n F_n(p|P−C|²)
+//     R^{n}_{t+1,u,v} = t R^{n+1}_{t−1,u,v} + X_PC R^{n+1}_{tuv}   (and u,v sym.)
+//   Nuclear / ERI then contract the bra (and ket) E-towers against R.
+//
+// ── Honest scope (d6) ────────────────────────────────────────────────────────
+//   This brick is PURE recursion (no SCF change). It is gated by md_selftest:
+//   (a) L=0 reduction to the brick-1/2 s forms to ~1e-12; (b) a p-shell overlap
+//   vs an independent value; (c) the full H₂O/STO-3G RHF energy through the
+//   unchanged rhf_scf vs the standard reference. d (and f) angular momentum is
+//   reachable by the SAME recursions (they carry no L cap) — round-5 lands the
+//   d-shell Cartesian normalization + a d-bearing molecule. No fabricated value.
+//
+// reuse (d19 · d3): boys_fn extends the brick-2 boys_f0 (same erf_fn root from
+//   stdlib/core/special) to order n via downward recursion; the Gaussian-product
+//   p/μ/center machinery mirrors bricks 1/2 exactly. No new transcendental minted.
+
+use "stdlib/core/special"
+
+// ════════════════════════════════════════════════════════════════════════════
+//   Boys function F_n(t)  (the only special function; extends brick-2 boys_f0)
+// ════════════════════════════════════════════════════════════════════════════
+
+// F_0(t) = ½√(π/t)·erf(√t),  F_0(0)=1   (brick-2 boys_f0, kept local & identical).
+pub fn md_boys0(t: float) -> float {
+    if t <= 1.0e-12 { return 1.0 }
+    let pi = 3.141592653589793
+    return 0.5 * sqrt(pi / t) * erf_fn(sqrt(t))
+}
+
+// F_n(t) for n = 0..nmax, returned as a length-(nmax+1) array (HJO §9.8.1).
+//   Two stable regimes (the ascending series DIVERGES for large t, the upward
+//   recurrence DIVERGES for small t — so each is used only where it is stable):
+//
+//   • SMALL t (t < 35): seed F_nmax by the ascending series
+//       F_N(t) = e^{−t} Σ_{k≥0} (2t)^k (2N−1)!! / (2N+2k+1)!!     (converges, all
+//     terms positive, t small ⇒ no overflow) then recur DOWNWARD
+//       F_n = [2t F_{n+1} + e^{−t}] / (2n+1)                       (stable down).
+//
+//   • LARGE t (t ≥ 35): the tail e^{−t}→0, so seed the EXACT
+//       F_0 = ½√(π/t)  (erf(√t)→1 to ≪1e-15) and recur UPWARD
+//       F_{n+1} = [(2n+1) F_n − e^{−t}] / (2t)                     (stable up for
+//     large t — the divisor 2t is large, no catastrophic cancellation).
+//
+//   t→0 ⇒ F_n(0)=1/(2n+1) exactly.
+pub fn md_boys(nmax: int, t: float) -> [float] {
+    let mut n = 0
+    // t≈0: F_n(0) = 1/(2n+1) exactly.
+    if t <= 1.0e-12 {
+        let mut f = []
+        while n <= nmax {
+            f.push(1.0 / (2.0 * float(n) + 1.0))
+            n = n + 1
+        }
+        return f
+    }
+    let et = exp(0.0 - t)
+    let twot = 2.0 * t
+    let mut tmp = []
+    n = 0
+    while n <= nmax { tmp.push(0.0) ; n = n + 1 }
+    if t < 35.0 {
+        // ascending series seed at nmax, then downward recursion.
+        let mut term = 1.0 / (2.0 * float(nmax) + 1.0)
+        let mut sum = term
+        let mut k = 1
+        while k < 300 {
+            term = term * twot / (2.0 * float(nmax) + 2.0 * float(k) + 1.0)
+            sum = sum + term
+            if term < 1.0e-17 * sum { k = 300 } else { k = k + 1 }
+        }
+        tmp[nmax] = et * sum
+        n = nmax - 1
+        while n >= 0 {
+            tmp[n] = (twot * tmp[n + 1] + et) / (2.0 * float(n) + 1.0)
+            n = n - 1
+        }
+        return tmp
+    }
+    // large t: exact F_0, upward recursion.
+    let pi = 3.141592653589793
+    tmp[0] = 0.5 * sqrt(pi / t) * erf_fn(sqrt(t))
+    n = 0
+    while n < nmax {
+        tmp[n + 1] = ((2.0 * float(n) + 1.0) * tmp[n] - et) / twot
+        n = n + 1
+    }
+    return tmp
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   E-coefficient tower  E^{ij}_t  for one Cartesian axis
+// ════════════════════════════════════════════════════════════════════════════
+
+// E^{ij}_t (HJO 9.5.6) — the Hermite-expansion coefficient of the product of a
+//   bra Gaussian of power i and a ket Gaussian of power j (this 1-D axis).
+//   a,b  : the two primitive exponents
+//   ax,bx: the two centers (this axis, bohr)
+//   i,j  : Cartesian powers on this axis (≥0)
+//   t    : Hermite index (0 ≤ t ≤ i+j)
+//   Recurses on i then j down to E^{00}_0 = K_AB = exp(−μ X_AB²).  t out of
+//   [0,i+j] ⇒ 0.0.  Pure (no memo); STO-3G L≤2 depth is tiny so cost is fine.
+pub fn md_hermite_e(i: int, j: int, t: int, a: float, b: float, ax: float, bx: float) -> float {
+    if t < 0 { return 0.0 }
+    if t > i + j { return 0.0 }
+    let p = a + b
+    if p <= 0.0 { return 0.0 }
+    let mu = a * b / p
+    let xab = ax - bx
+    if i == 0 {
+        if j == 0 {
+            // E^{00}_0 = K_AB ; (t must be 0 here, guarded above).
+            return exp(0.0 - mu * xab * xab)
+        }
+        // decrement j (HJO 9.5.6, recur in j):
+        //   X_PB = Px − Bx = (aA+bB)/p − B = a(A−B)/p
+        let xpb = a * (ax - bx) / p
+        let e0 = md_hermite_e(i, j - 1, t - 1, a, b, ax, bx)
+        let e1 = md_hermite_e(i, j - 1, t,     a, b, ax, bx)
+        let e2 = md_hermite_e(i, j - 1, t + 1, a, b, ax, bx)
+        return (1.0 / (2.0 * p)) * e0 + xpb * e1 + (float(t) + 1.0) * e2
+    }
+    // decrement i:  X_PA = Px − Ax = b(B−A)/p = −b(A−B)/p
+    let xpa = 0.0 - b * (ax - bx) / p
+    let e0 = md_hermite_e(i - 1, j, t - 1, a, b, ax, bx)
+    let e1 = md_hermite_e(i - 1, j, t,     a, b, ax, bx)
+    let e2 = md_hermite_e(i - 1, j, t + 1, a, b, ax, bx)
+    return (1.0 / (2.0 * p)) * e0 + xpa * e1 + (float(t) + 1.0) * e2
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   primitive overlap & kinetic for arbitrary Cartesian (lx,ly,lz)
+// ════════════════════════════════════════════════════════════════════════════
+
+// 1-D overlap factor  S_axis = E^{ij}_0 √(π/p).
+fn md_s1d(i: int, j: int, a: float, b: float, ax: float, bx: float) -> float {
+    let p = a + b
+    let pi = 3.141592653589793
+    return md_hermite_e(i, j, 0, a, b, ax, bx) * sqrt(pi / p)
+}
+
+// 3-D overlap of two UNNORMALIZED Cartesian primitives.
+//   la=[lx,ly,lz] bra powers, lb ket powers; A,B = [3] centers.
+//   = Π_axis E^{i_a i_b}_0 · (π/p)^{3/2}.
+pub fn md_overlap_prim(la: [int], a: float, A: [float], lb: [int], b: float, B: [float]) -> float {
+    if len(la) != 3 { return 0.0 }
+    if len(lb) != 3 { return 0.0 }
+    if len(A) != 3 { return 0.0 }
+    if len(B) != 3 { return 0.0 }
+    let sx = md_s1d(la[0], lb[0], a, b, A[0], B[0])
+    let sy = md_s1d(la[1], lb[1], a, b, A[1], B[1])
+    let sz = md_s1d(la[2], lb[2], a, b, A[2], B[2])
+    return sx * sy * sz
+}
+
+// 1-D kinetic factor (HJO 9.3.40):
+//   T^{ij} = −½[ j(j−1) S^{i,j−2} − 2b(2j+1) S^{ij} + 4b² S^{i,j+2} ].
+fn md_t1d(i: int, j: int, a: float, b: float, ax: float, bx: float) -> float {
+    let term0 = float(j * (j - 1)) * md_s1d(i, j - 2, a, b, ax, bx)
+    let term1 = 2.0 * b * (2.0 * float(j) + 1.0) * md_s1d(i, j, a, b, ax, bx)
+    let term2 = 4.0 * b * b * md_s1d(i, j + 2, a, b, ax, bx)
+    return 0.0 - 0.5 * (term0 - term1 + term2)
+}
+
+// 3-D kinetic of two UNNORMALIZED Cartesian primitives:
+//   T = T_x S_y S_z + S_x T_y S_z + S_x S_y T_z.
+pub fn md_kinetic_prim(la: [int], a: float, A: [float], lb: [int], b: float, B: [float]) -> float {
+    if len(la) != 3 { return 0.0 }
+    if len(lb) != 3 { return 0.0 }
+    let sx = md_s1d(la[0], lb[0], a, b, A[0], B[0])
+    let sy = md_s1d(la[1], lb[1], a, b, A[1], B[1])
+    let sz = md_s1d(la[2], lb[2], a, b, A[2], B[2])
+    let tx = md_t1d(la[0], lb[0], a, b, A[0], B[0])
+    let ty = md_t1d(la[1], lb[1], a, b, A[1], B[1])
+    let tz = md_t1d(la[2], lb[2], a, b, A[2], B[2])
+    return tx * sy * sz + sx * ty * sz + sx * sy * tz
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   Hermite Coulomb R-tensor
+// ════════════════════════════════════════════════════════════════════════════
+
+// R^{n}_{tuv} (HJO 9.9.9) — recursive Hermite Coulomb auxiliary.
+//   p   : combined exponent of the (bra or bra⊗ket) Gaussian distribution
+//   pcx : P−C components [3] (bohr)
+//   fn  : precomputed Boys table F_0..F_{t+u+v} at argument p|P−C|² (length ≥ N+1)
+//   Recurs t→u→v down to R^{n}_{000} = (−2p)^n F_n.
+pub fn md_hermite_r(tt: int, uu: int, vv: int, nn: int, p: float, pcx: [float], fn_tab: [float]) -> float {
+    if tt < 0 { return 0.0 }
+    if uu < 0 { return 0.0 }
+    if vv < 0 { return 0.0 }
+    if tt == 0 {
+        if uu == 0 {
+            if vv == 0 {
+                // R^{n}_{000} = (−2p)^n F_n
+                let mut m = 1.0
+                let mut k = 0
+                while k < nn { m = m * (0.0 - 2.0 * p) ; k = k + 1 }
+                return m * fn_tab[nn]
+            }
+            // recur in v
+            let r1 = md_hermite_r(tt, uu, vv - 1, nn + 1, p, pcx, fn_tab)
+            let mut add = 0.0
+            if vv > 1 { add = float(vv - 1) * md_hermite_r(tt, uu, vv - 2, nn + 1, p, pcx, fn_tab) }
+            return pcx[2] * r1 + add
+        }
+        // recur in u
+        let r1 = md_hermite_r(tt, uu - 1, vv, nn + 1, p, pcx, fn_tab)
+        let mut add = 0.0
+        if uu > 1 { add = float(uu - 1) * md_hermite_r(tt, uu - 2, vv, nn + 1, p, pcx, fn_tab) }
+        return pcx[1] * r1 + add
+    }
+    // recur in t
+    let r1 = md_hermite_r(tt - 1, uu, vv, nn + 1, p, pcx, fn_tab)
+    let mut add = 0.0
+    if tt > 1 { add = float(tt - 1) * md_hermite_r(tt - 2, uu, vv, nn + 1, p, pcx, fn_tab) }
+    return pcx[0] * r1 + add
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   nuclear attraction & two-electron repulsion (arbitrary Cartesian)
+// ════════════════════════════════════════════════════════════════════════════
+
+// product center P = (aA+bB)/p  ([3]).
+fn md_pcenter(a: float, A: [float], b: float, B: [float]) -> [float] {
+    let p = a + b
+    return [(a * A[0] + b * B[0]) / p, (a * A[1] + b * B[1]) / p, (a * A[2] + b * B[2]) / p]
+}
+
+// Nuclear attraction V_ab of two UNNORMALIZED Cartesian primitives, nucleus Z@C.
+//   V = −Z (2π/p) Σ_{tuv} E^x_t E^y_u E^z_v R^{0}_{tuv}(p, P−C).
+//   (HJO 9.10.16; the (2π/p) carries the s·s prefactor and Hermite normalization.)
+pub fn md_nuclear_prim(
+    la: [int], a: float, A: [float], lb: [int], b: float, B: [float], z: float, C: [float]
+) -> float {
+    if len(la) != 3 { return 0.0 }
+    if len(lb) != 3 { return 0.0 }
+    if len(C) != 3 { return 0.0 }
+    let p = a + b
+    if p <= 0.0 { return 0.0 }
+    let pi = 3.141592653589793
+    let P = md_pcenter(a, A, b, B)
+    let pcx = [P[0] - C[0], P[1] - C[1], P[2] - C[2]]
+    let rpc2 = pcx[0] * pcx[0] + pcx[1] * pcx[1] + pcx[2] * pcx[2]
+    let lmax = la[0] + lb[0] + la[1] + lb[1] + la[2] + lb[2]
+    let fn_tab = md_boys(lmax, p * rpc2)
+    let mut acc = 0.0
+    let mut t = 0
+    while t <= la[0] + lb[0] {
+        let ex = md_hermite_e(la[0], lb[0], t, a, b, A[0], B[0])
+        let mut u = 0
+        while u <= la[1] + lb[1] {
+            let ey = md_hermite_e(la[1], lb[1], u, a, b, A[1], B[1])
+            let mut v = 0
+            while v <= la[2] + lb[2] {
+                let ez = md_hermite_e(la[2], lb[2], v, a, b, A[2], B[2])
+                let r = md_hermite_r(t, u, v, 0, p, pcx, fn_tab)
+                acc = acc + ex * ey * ez * r
+                v = v + 1
+            }
+            u = u + 1
+        }
+        t = t + 1
+    }
+    return 0.0 - z * (2.0 * pi / p) * acc
+}
+
+// Two-electron repulsion (ab|cd) of four UNNORMALIZED Cartesian primitives.
+//   (HJO 9.10.23) bra p=a+b @P, ket q=c+d @Q, α=pq/(p+q):
+//   (ab|cd) = 2π^{5/2}/(p q √(p+q)) Σ_{tuv} E^bra_{tuv}
+//             Σ_{τνφ} (−1)^{τ+ν+φ} E^ket_{τνφ} R^{0}_{t+τ,u+ν,v+φ}(α, P−Q).
+pub fn md_eri_prim(
+    la: [int], a: float, A: [float], lb: [int], b: float, B: [float],
+    lc: [int], c: float, C: [float], ld: [int], d: float, D: [float]
+) -> float {
+    let p = a + b
+    let q = c + d
+    if p <= 0.0 { return 0.0 }
+    if q <= 0.0 { return 0.0 }
+    let pi = 3.141592653589793
+    let P = md_pcenter(a, A, b, B)
+    let Q = md_pcenter(c, C, d, D)
+    let alpha = p * q / (p + q)
+    let pqx = [P[0] - Q[0], P[1] - Q[1], P[2] - Q[2]]
+    let rpq2 = pqx[0] * pqx[0] + pqx[1] * pqx[1] + pqx[2] * pqx[2]
+    let nmax = la[0]+lb[0]+lc[0]+ld[0] + la[1]+lb[1]+lc[1]+ld[1] + la[2]+lb[2]+lc[2]+ld[2]
+    let fn_tab = md_boys(nmax, alpha * rpq2)
+    let mut acc = 0.0
+    let mut t = 0
+    while t <= la[0] + lb[0] {
+        let ebx = md_hermite_e(la[0], lb[0], t, a, b, A[0], B[0])
+        let mut u = 0
+        while u <= la[1] + lb[1] {
+            let eby = md_hermite_e(la[1], lb[1], u, a, b, A[1], B[1])
+            let mut v = 0
+            while v <= la[2] + lb[2] {
+                let ebz = md_hermite_e(la[2], lb[2], v, a, b, A[2], B[2])
+                let ebra = ebx * eby * ebz
+                // ket Hermite sum
+                let mut tau = 0
+                while tau <= lc[0] + ld[0] {
+                    let ekx = md_hermite_e(lc[0], ld[0], tau, c, d, C[0], D[0])
+                    let mut nu = 0
+                    while nu <= lc[1] + ld[1] {
+                        let eky = md_hermite_e(lc[1], ld[1], nu, c, d, C[1], D[1])
+                        let mut phi = 0
+                        while phi <= lc[2] + ld[2] {
+                            let ekz = md_hermite_e(lc[2], ld[2], phi, c, d, C[2], D[2])
+                            // (−1)^{τ+ν+φ}
+                            let par = (tau + nu + phi) % 2
+                            let mut sgn = 1.0
+                            if par == 1 { sgn = 0.0 - 1.0 }
+                            let r = md_hermite_r(t + tau, u + nu, v + phi, 0, alpha, pqx, fn_tab)
+                            acc = acc + ebra * sgn * ekx * eky * ekz * r
+                            phi = phi + 1
+                        }
+                        nu = nu + 1
+                    }
+                    tau = tau + 1
+                }
+                v = v + 1
+            }
+            u = u + 1
+        }
+        t = t + 1
+    }
+    let pref = 2.0 * pi * pi * sqrt(pi) / (p * q * sqrt(p + q))
+    return pref * acc
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   Cartesian Gaussian normalization (per primitive, per (lx,ly,lz))
+// ════════════════════════════════════════════════════════════════════════════
+
+// (2n−1)!! = 1·3·5·…·(2n−1), with (−1)!!=1, (0 component)!!→1.
+fn md_dfact(n: int) -> float {
+    if n <= 0 { return 1.0 }
+    let mut r = 1.0
+    let mut k = n
+    while k > 0 { r = r * float(k) ; k = k - 2 }
+    return r
+}
+
+// Normalization of a single Cartesian Gaussian primitive x^lx y^ly z^lz e^{−a r²}:
+//   N = (2a/π)^{3/4} · (4a)^{L/2} / √[(2lx−1)!!(2ly−1)!!(2lz−1)!!],  L=lx+ly+lz.
+//   L=0 ⇒ N = (2a/π)^{3/4}  (the brick-1 s normalization, exactly).
+pub fn md_norm_prim(l: [int], a: float) -> float {
+    if a <= 0.0 { return 0.0 }
+    if len(l) != 3 { return 0.0 }
+    let pi = 3.141592653589793
+    let L = l[0] + l[1] + l[2]
+    let base = pow(2.0 * a / pi, 0.75)
+    let ang = pow(4.0 * a, float(L) / 2.0)
+    let df = md_dfact(2 * l[0] - 1) * md_dfact(2 * l[1] - 1) * md_dfact(2 * l[2] - 1)
+    return base * ang / sqrt(df)
+}
