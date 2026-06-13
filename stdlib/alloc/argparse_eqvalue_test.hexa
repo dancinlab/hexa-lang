@@ -1,0 +1,207 @@
+// ─────────────────────────────────────────────────────────────────────────
+// stdlib/alloc/argparse_eqvalue_test.hexa
+//
+// OP-90 lock test for the `--key=value` attached-value parse fix in
+// stdlib/alloc/argparse.hexa (ap_parse).
+//
+// The installed `hexa` resolves `use "stdlib/..."` to its STALE bundled copy
+// (OP-87/88 lesson), so the FIXED ap_parse body is VERBATIM-INLINED here and
+// exercised via `hexa run`. The asserted outcomes match Python's stdlib
+// argparse (the documented "Python-argparse subset" reference).
+//
+// BUG (pre-fix): a `--out=foo.txt` token was never recognised as the value
+// option `--out`; it fell through to positional capture, so `out` kept its
+// default, the `--out=foo.txt` token corrupted the positional `file`, and the
+// real positional overflowed into `_extras`. One attached-value token derailed
+// the entire positional assignment.
+//
+// FIX: split a `--long=value` token at the first '=', match the key as a value
+// option, and assign the post-'=' tail (Python argparse parity).
+//
+// Run:  hexa run stdlib/alloc/argparse_eqvalue_test.hexa
+// ─────────────────────────────────────────────────────────────────────────
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn check(ok: bool, label: string) {
+    RUN = RUN + 1
+    if ok {
+        println("  [PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("  [FAIL] " + label)
+    }
+}
+
+// ── VERBATIM-INLINED helpers from the fixed stdlib/alloc/argparse.hexa ──────
+
+fn _strip_dashes(s: string) -> string {
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        if s[i] != '-' { return s.substring(i, n) }
+        i = i + 1
+    }
+    return ""
+}
+
+fn _match_flag(p, tok: string) {
+    let flags = p["flags"]
+    let mut i = 0
+    while i < len(flags) {
+        let f = flags[i]
+        if tok == f["short"] || tok == f["long"] { return f }
+        i = i + 1
+    }
+    return #{}
+}
+
+fn _match_value(p, tok: string) {
+    let values = p["values"]
+    let mut i = 0
+    while i < len(values) {
+        let v = values[i]
+        if tok == v["short"] || tok == v["long"] { return v }
+        i = i + 1
+    }
+    return #{}
+}
+
+fn _eq_index(tok: string) -> int {
+    let n = len(tok)
+    let mut i = 0
+    while i < n {
+        if tok[i] == '=' { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn ap_parse(p, argv: [string]) {
+    let mut out = #{ "_extras": [], "_help": false }
+    let flags = p["flags"]
+    let mut fi = 0
+    while fi < len(flags) {
+        let f = flags[fi]
+        out[_strip_dashes(f["long"])] = f["default"]
+        fi = fi + 1
+    }
+    let values = p["values"]
+    let mut vi = 0
+    while vi < len(values) {
+        let v = values[vi]
+        out[_strip_dashes(v["long"])] = v["default"]
+        vi = vi + 1
+    }
+
+    let mut pos_consumed = 0
+    let positional = p["positional"]
+    let mut extras = []
+
+    let mut i = 0
+    while i < len(argv) {
+        let tok = argv[i]
+        if tok == "-h" || tok == "--help" {
+            out["_help"] = true
+            i = i + 1
+        } else {
+            let f = _match_flag(p, tok)
+            if len(f) > 0 {
+                out[_strip_dashes(f["long"])] = true
+                i = i + 1
+            } else {
+                let eq = _eq_index(tok)
+                let mut kv = #{}
+                if eq >= 0 {
+                    let key = tok.substring(0, eq)
+                    kv = _match_value(p, key)
+                }
+                if eq >= 0 && len(kv) > 0 {
+                    out[_strip_dashes(kv["long"])] = tok.substring(eq + 1, len(tok))
+                    i = i + 1
+                } else {
+                    let v = _match_value(p, tok)
+                    if len(v) > 0 {
+                        if i + 1 < len(argv) {
+                            out[_strip_dashes(v["long"])] = argv[i + 1]
+                            i = i + 2
+                        } else {
+                            i = i + 1
+                        }
+                    } else {
+                        if pos_consumed < len(positional) {
+                            let pos = positional[pos_consumed]
+                            out[pos["name"]] = tok
+                            pos_consumed = pos_consumed + 1
+                            i = i + 1
+                        } else {
+                            extras.push(tok)
+                            i = i + 1
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out["_extras"] = extras
+    return out
+}
+
+fn make_parser() {
+    return #{ "prog": "t", "desc": "d",
+        "flags":  [ #{ "short": "-v", "long": "--verbose", "help": "", "default": false } ],
+        "values": [ #{ "short": "-o", "long": "--out", "help": "", "default": "def.txt", "required": false } ],
+        "positional": [ #{ "name": "file", "help": "", "required": true } ] }
+}
+
+fn extras_len(o) -> int { return len(o["_extras"]) }
+
+fn main() {
+    println("========================================================================")
+    println("  OP-90 argparse `--key=value` attached-value lock test")
+    println("========================================================================")
+
+    // Case 1: `--out=foo.txt x` — the bug case. Python argparse → out=foo.txt,
+    // file=x, no extras. Pre-fix: out=def.txt, file=--out=foo.txt, extras=[x].
+    let r1 = ap_parse(make_parser(), ["--out=foo.txt", "x"])
+    check(r1["out"] == "foo.txt", "--out=foo.txt → out == \"foo.txt\" (not default)")
+    check(r1["file"] == "x", "--out=foo.txt x → positional file == \"x\" (uncorrupted)")
+    check(extras_len(r1) == 0, "--out=foo.txt x → no extras")
+
+    // Case 2: separated `-o foo.txt x` still works (regression guard).
+    let r2 = ap_parse(make_parser(), ["-o", "foo.txt", "x"])
+    check(r2["out"] == "foo.txt" && r2["file"] == "x" && extras_len(r2) == 0,
+        "-o foo.txt x → out=foo.txt, file=x (separated form preserved)")
+
+    // Case 3: short attached `-o=foo.txt x`.
+    let r3 = ap_parse(make_parser(), ["-o=foo.txt", "x"])
+    check(r3["out"] == "foo.txt" && r3["file"] == "x",
+        "-o=foo.txt x → out=foo.txt, file=x (short attached form)")
+
+    // Case 4: value containing '=' on the RHS — split only on FIRST '='.
+    let r4 = ap_parse(make_parser(), ["--out=a=b=c", "x"])
+    check(r4["out"] == "a=b=c" && r4["file"] == "x",
+        "--out=a=b=c → out=\"a=b=c\" (split on first '=' only)")
+
+    // Case 5: empty value after '=' — `--out=`.
+    let r5 = ap_parse(make_parser(), ["--out=", "x"])
+    check(r5["out"] == "" && r5["file"] == "x",
+        "--out= → out=\"\" (empty attached value)")
+
+    // Case 6: a bare positional containing '=' that is NOT an option key stays
+    // a positional (no value option named "k=v" key).
+    let r6 = ap_parse(make_parser(), ["k=v"])
+    check(r6["file"] == "k=v" && extras_len(r6) == 0,
+        "k=v (unknown key) → captured as positional file (not swallowed)")
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("__OP90_ARGPARSE_EQVALUE__ FAIL")
+        exit(1)
+    }
+    println("__OP90_ARGPARSE_EQVALUE__ PASS")
+    exit(0)
+}
