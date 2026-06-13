@@ -1,0 +1,106 @@
+// test/op145_let_reassign_loop.hexa — regression lock for OP-145
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Run:  hexa build test/op145_let_reassign_loop.hexa -o /tmp/op145.bin && /tmp/op145.bin
+// Sentinel: __OP145_LET_REASSIGN_LOOP__ PASS|FAIL on the final line.
+//
+// CONTRACT (OP-145): a plain immutable `let` binding is REASSIGNABLE in hexa
+// (no enforced immutability — 162 occurrences of `let i = 0; … i = i + 1` in
+// shipped stdlib). The codegen const-folds `let i = <lit>` to its literal and
+// inlines reads, but MUST invalidate that fold for any name the body of a
+// `while`/`if` reassigns BEFORE emitting the loop condition — otherwise the
+// stale literal is inlined into the condition (`0 < 3`, always true) while the
+// body increments the live cell → a NON-TERMINATING loop (the binary hangs,
+// exit 124/143). Fixed by #2650 (MISCOMPILE-ZERO while-cond pre-invalidate) +
+// #2660 (if-body sibling). This test is the array-store-in-fn variant the
+// HEXA-0POD campaign hit (OP-143/OP-145): the trigger was never the array
+// store — it was the immutable-`let` loop counter sharing the function body.
+//
+// Each case below HUNG on the stale pre-#2650 deployed binary and RUNS on
+// current source. The witness is simply: the program TERMINATES and the
+// counters reach their bound.
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label, cond) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+// Case 1: immutable `let` counter reassigned in a while — must terminate at 3.
+fn count_to_three() {
+    let i = 0
+    while i < 3 {
+        i = i + 1
+    }
+    return i
+}
+check("let-counter-terminates", count_to_three() == 3)
+
+// Case 2: immutable `let` counter + array index-STORE in the loop body,
+// returning an element (the OP-143/OP-145 array-store-in-fn shape).
+fn fill_and_read() {
+    let mut result = [0, 0, 0]
+    let i = 0
+    while i < 3 {
+        result[i] = i + 100
+        i = i + 1
+    }
+    return result[2]
+}
+check("let-counter-array-store", fill_and_read() == 102)
+
+// Case 3: insertion sort transcribed verbatim from stdlib/alloc/collections.sort
+// (immutable `let i = 1` outer counter + `let mut j` inner + index-stores) —
+// the exact construct OP-143 reported as a hang.
+fn isort(arr) {
+    let n = len(arr)
+    if n <= 1 { return arr }
+    let result = arr
+    let i = 1
+    while i < n {
+        let key = result[i]
+        let mut j = i - 1
+        while j >= 0 && result[j] > key {
+            result[j + 1] = result[j]
+            j = j - 1
+        }
+        result[j + 1] = key
+        i = i + 1
+    }
+    result
+}
+let s = isort([3, 1, 2])
+check("isort-sorted-0", s[0] == 1)
+check("isort-sorted-1", s[1] == 2)
+check("isort-sorted-2", s[2] == 3)
+
+// Case 4: nested immutable-`let` counters (both outer and inner are plain `let`)
+fn nested() {
+    let mut total = 0
+    let i = 0
+    while i < 3 {
+        let j = 0
+        while j < 3 {
+            total = total + 1
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return total
+}
+check("nested-let-counters", nested() == 9)
+
+if FAIL == 0 {
+    println("__OP145_LET_REASSIGN_LOOP__ PASS")
+} else {
+    println("__OP145_LET_REASSIGN_LOOP__ FAIL")
+}
