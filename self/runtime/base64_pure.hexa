@@ -71,10 +71,25 @@ pub fn base64_encode_pure(s) {
 // ── base64_decode_pure ────────────────────────────────────────────
 // Mirrors hexa_base64_decode (runtime.c:4396). Skips non-alphabet
 // characters and stops at the first '='.
+//
+// OP-139 (byte-producing escape-decoder multibyte sweep · OP-136 class):
+// a base64 payload decodes to RAW BYTES, not Unicode code points. The
+// prior body emitted `from_char_code(byte)` per decoded byte, which for
+// any byte >= 0x80 produces the UTF-8 encoding of the code point U+00xx
+// (2 bytes) instead of the literal byte — so a multibyte UTF-8 payload
+// like base64("한글😀")="7ZWc6riA8J+YgA==" decoded to 20 garbage bytes
+// instead of the 10 raw bytes (verified vs Python base64.b64decode).
+// Fix = accumulate the decoded RAW BYTES into a buffer, then UTF-8-
+// assemble once via `bytes_to_str_raw` (the OP-135 byte-faithful SSOT,
+// NUL-clean) — the exact pattern url_pure.url_decode_pure and
+// stdlib/codec/base64.base64_decode_str already use. Round-trips
+// multibyte correctly under BOTH the Rust interpreter and self-host
+// codegen (a runtime-DIVERGENT bug, like OP-136 — chr/from_char_code
+// only re-encode >=0x80 under the interpreter).
 pub fn base64_decode_pure(s) {
     if type_of(s) != "string" { return "" }
     let n = len(s)
-    let mut out_chars = []
+    let mut out_bytes = []
     let mut bits = 0
     let mut vbits = 0
     let mut i = 0
@@ -98,7 +113,7 @@ pub fn base64_decode_pure(s) {
                         p = p + 1
                     }
                     let byte = (bits / sc) % 256
-                    out_chars.push(from_char_code(byte))
+                    out_bytes.push(byte)
                     // mask off emitted bits from `bits`
                     bits = bits % sc
                 }
@@ -106,5 +121,5 @@ pub fn base64_decode_pure(s) {
             i = i + 1
         }
     }
-    out_chars.join("")
+    bytes_to_str_raw(out_bytes)
 }
