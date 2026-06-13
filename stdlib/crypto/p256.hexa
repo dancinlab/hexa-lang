@@ -541,6 +541,12 @@ fn _scalar_mult(k: [int], px: [int], py: [int]) -> [int] {
 
 @pure
 pub fn p256_verify(qx_be: [int], qy_be: [int], hash_be: [int], r_be: [int], s_be: [int]) -> bool {
+    // OP-109 defense-in-depth: a malformed DIRECT call with a short coordinate /
+    // scalar / hash would OOB-read in _be32_to_limbs (it indexes b[30],b[31]),
+    // trapping `index out of bounds`. Mirror the OP-104/105 alpn length-guard:
+    // every P-256 big-endian field is exactly 32 bytes. Wrong length ⇒ false.
+    if len(qx_be) != 32 || len(qy_be) != 32 || len(hash_be) != 32 { return false }
+    if len(r_be) != 32 || len(s_be) != 32 { return false }
     let n = _N()
     let qx = _be32_to_limbs(qx_be)
     let qy = _be32_to_limbs(qy_be)

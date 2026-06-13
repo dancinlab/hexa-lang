@@ -1,0 +1,132 @@
+F-OP109-CRYPTO-ENCODE-VERIFY-OOB — close OP-107's flagged verify-side OOB + audit the crypto/TLS ENCODE side
+============================================================================================================
+
+GOAL (g5): TWO parts. PART A — close the 🟠 flag OP-107 left open: ed25519_verify /
+p256_verify lack a DIRECT-call sig/pubkey LENGTH guard, so a malformed direct call
+(short sig/pubkey/coordinate) OOB-reads the fixed-position indexing inside the verifier
+(defense-in-depth, NOT forgery — every in-tree caller already guards). PART B — audit
+the ENCODE side (the inverse of OP-105's parse-side OOB sweep): for every crypto/TLS/x509
+SERIALIZER that BUILDS length-prefixed wire, does the emitted length field == the actual
+emitted body length (encode∘parse == identity, parse(encode(v)) == v)? A wrong / off-by-one
+/ malformed length field is a real 🔴; a correct encoder (length==body) is 🟢, not a bug.
+Differential vs RFC 8448 / RFC 8446 documented wire bytes. NOTE (OP-87/88/107): the
+installed ~/.hx/bin/hexa resolves `use` to the STALE Jun-1 bundle (~/.hx/src/stdlib) which
+LACKS these fixes — so the verbatim-inlined hermetic leaf (`hexa run`, no `use`) is the
+verification surface; trust the source + RFC/Python reference over the stale binary.
+
+RESULT: 🔴→FIXED ×2 classes. PART A: ed25519_verify + p256_verify direct-call OOB CLOSED
+with length guards (malformed → false, valid → true, never OOB). PART B: exactly ONE real
+wire-interop bug — the tls13 record-AAD length field was 16 bytes short of TLSCiphertext.length
+(RFC 8446 §5.2) → FIXED; all other TLS encoders are length==body CLEAN; the scoped ASN.1-DER /
+OID base-128 ENCODE has NO in-tree encoder (asn1_der.hexa is decode-only) → nothing to break.
+
+──────────────────────────────────────────────────────────────────────────────────────────
+PART A — close the flag: ed25519_verify / p256_verify direct-call length guard
+──────────────────────────────────────────────────────────────────────────────────────────
+
+VERBATIM REPRO (shipping `hexa run`, the inlined verifier-loop shape):
+  ed25519_verify(pubk, msg, sig) first reads sig[0..32], pubk[0..32], sig[32..64] with NO
+  length guard. A malformed direct call with a SHORT signature (len 10):
+      calling ed_shape with short sig...
+      index 10 out of bounds (len 10)
+  p256_verify(qx,qy,hash,r,s) calls _be32_to_limbs on each field, which reads b[30],b[31].
+  A SHORT coordinate (qx len 4):
+      calling p256 _be32_to_limbs shape with short qx (len 4)...
+      index 30 out of bounds (len 4)
+  → the OOB read is a RUNTIME PANIC (process abort = DoS), not silent garbage. All in-tree
+    callers (x509_verify_self_ed25519/_p256) already guard, so this is defense-in-depth, not
+    a forgery-acceptance bug — but a malformed direct call MUST return false, never OOB.
+
+FIX (mirror the OP-104/105 alpn length-guard pattern):
+  stdlib/crypto/ed25519.hexa  ed25519_verify prologue:
+      if len(pubk) != 32 || len(sig) != 64 { return false }     # RFC 8032: 32B pub, 64B sig
+  stdlib/crypto/p256.hexa     p256_verify prologue:
+      if len(qx_be)!=32 || len(qy_be)!=32 || len(hash_be)!=32 { return false }
+      if len(r_be)!=32 || len(s_be)!=32 { return false }        # every P-256 BE field = 32B
+  Wrong length ⇒ false; correct length ⇒ the fixed 0..32/0..64 and b[30],b[31] reads are
+  all in-bounds.
+
+LOCK: NEW stdlib/crypto/verify_len_guard_op109_test.hexa (HERMETIC, verbatim-inlined guard
++ the indexing it protects, no `use`) — shipping `hexa run`:
+      OP109-A verify-len-guard pass=11 fail=0
+      OP109-A ALL GREEN
+  (ed25519: valid-lengths pass + short-sig/short-pubkey/empty-sig/long-sig[strict !=] reject;
+   p256: valid pass + short-qx/qy/hash/r/s reject — guard returns false with NO OOB.)
+
+──────────────────────────────────────────────────────────────────────────────────────────
+PART B — ENCODE-side length-field audit (length field == body? round-trip == identity?)
+──────────────────────────────────────────────────────────────────────────────────────────
+
+🔴 REAL BUG FOUND + FIXED — tls13 RECORD-AAD length (tls13_record_aad caller in
+   stdlib/crypto/tls13_client_record_io.hexa).
+   RFC 8446 §5.2: additional_data = opaque_type ‖ legacy_record_version ‖ TLSCiphertext.length,
+   where TLSCiphertext.length = the encrypted_record length = |TLSInnerPlaintext| + 16 (AEAD tag).
+   BUG: the SEAL caller passed tls13_record_aad(len(plain))  — 16 SHORT (no +tag).
+        the OPEN caller passed tls13_record_aad(body_len-16) — also 16 short.
+   SELF-CONSISTENT (seal==open) so a hexa↔hexa round-trip worked and no hexa-only test caught
+   it — BUT WRONG ON THE WIRE. The outer record HEADER was already correct (len(ct_tag)); only
+   the AEAD AAD length was short, so a CONFORMING peer (OpenSSL/BoringSSL) recomputes the
+   correct AAD from the on-wire length → the AEAD tag verify FAILS = a real TLS-interop break.
+   DIFFERENTIAL (RFC 8448 §3 documented server App-Data record header):
+        wire:  17 03 03 02 a2     (TLSCiphertext.length = 0x02a2 = 674 = ciphertext+tag)
+        hexa-correct AAD = 17 03 03 02 a2   (== wire)
+        hexa-OLD     AAD = 17 03 03 02 92   (0x0292 = 658 = inner, 16 SHORT)   ← WRONG
+   FIX: seal passes len(plain)+16 (AEAD tag is always 16B for ChaCha20-Poly1305 and AES-GCM);
+        open passes body_len (the on-wire encrypted_record length). seal-AAD == open-AAD is
+        PRESERVED (hexa↔hexa still round-trips) AND now == the on-wire record-header length ==
+        the RFC 8448 value. (Reject body_len<16 on open — a body shorter than the tag.)
+
+🟢 CLEAN encoders (emitted length field == actual emitted body length; round-trip == identity
+   — a correct encoder is the SUCCESS, g5, no fabrication):
+   - tls13_ext_build (Extension TLV): uint16 length == len(value); round-trips vs
+     tls13_ext_length / tls13_ext_next; documented supported_versions client bytes
+     00 2b 00 03 02 03 04 reproduced exactly.
+   - tls13_client_hello_body: legacy_session_id uint8 == len(session_id); cipher_suites uint16
+     == len(suites)*2; extensions uint16 == len(extensions_concat); total body length consistent.
+   - _keyshare_entry + tls13_ext_key_share_client_x25519: uint16 key_len == len(key);
+     client_shares-vector len; outer ext len each == body; X25519 32B key → key_len 0x0020.
+   - tls13_cr_build (context uint8 + extensions uint16), tls13_ee_build (uint16),
+     tls13_ext_key_share_hrr (hardcoded len 2 == body) — each length field == body.
+   - tls13_record_header / tls13_hs_header: big-endian length field round-trips (build↔parse).
+
+ASN.1 DER ENCODE / OID base-128 encode (the task-scoped short→long-form 128 boundary +
+   multi-byte length + base-128 OID encoders): NO in-tree encoder EXISTS to audit.
+   - stdlib/crypto/asn1_der.hexa is DECODE-ONLY (its own header: "Encoding-only side ignored
+     (decode is what cert parsing needs)").
+   - stdlib/crypto/x509_*.hexa are PARSERS (return slices of an existing DER cert, no builder).
+   - A tree-wide grep for a DER/OID encoder (long-form 0x81/0x82, the 128 boundary, base-128
+     continuation bytes) found NONE in crypto. So the 128 short→long-form boundary / multi-byte
+     length / base-128 OID encode the task scoped DO NOT EXIST → nothing to break (honest: no
+     encoder to find a bug in, reported as such, not "found clean").
+
+LOCK: NEW stdlib/crypto/encode_len_field_op109_test.hexa (HERMETIC verbatim-inlined encoders,
+no `use`) — shipping `hexa run`:
+      OP109-B encode-len-field pass=18 fail=0
+      OP109-B ALL GREEN
+  (AAD: FIXED seal length field == wire_len == RFC 8448 0x02a2, != the 16-short regression,
+   == open AAD, == on-wire record-header length, documented bytes 17 03 03 02 a2; ext-TLV
+   len==body + next==total + value round-trip + supported_versions bytes; ClientHello
+   session_id/cipher_suites/extensions length fields == body + total; keyshare uint16 key_len
+   == body + X25519 0x0020; record-header big-endian length round-trip.)
+
+──────────────────────────────────────────────────────────────────────────────────────────
+BYTE-EQ / GUARDS / HONESTY (g5)
+──────────────────────────────────────────────────────────────────────────────────────────
+- CLOSURE: ed25519.hexa, p256.hexa, tls13_client_record_io.hexa are NOT in the build_selfhost
+  closure (no self/* nor build_selfhost.sh reference — crypto stdlib is closure-OUT, OP-105/107
+  proven) → ZERO byte-eq / fixpoint impact, no selfhost gate. The 2 NEW leaf tests are also
+  closure-OUT.
+- DIFF: ed25519 +5, p256 +6, tls13_client_record_io net +11 (one comment-clarify + 2 call-site
+  length fixes); net +18 across 3 source files + 2 NEW leaves; 0 large deletions → wipe_guard
+  net-additive (no scope/WIPE-OK trailer needed).
+- STALE-BUNDLE NOTE (OP-87/88/107 lesson): a `use`-based driver against the shipping verifiers
+  still OOB-panics (`index N out of bounds`) because `use` resolves to ~/.hx/src/stdlib (the
+  Jun-1 bundle, which lacks the guards) — this CONFIRMS the bug exists in unpatched code; the
+  verbatim-inlined leaf is the correct verification surface.
+- HONEST g5: PART A = a REAL DoS-class OOB CLOSED (defense-in-depth, not forgery — said so).
+  PART B = exactly ONE REAL wire-interop bug (record-AAD 16-short) FIXED with an RFC 8448
+  differential; all other encoders length==body CLEAN (a correct encoder is 🟢, not a bug);
+  the scoped ASN.1-DER-ENCODE sub-task has no in-tree encoder to audit (stated honestly, not
+  fabricated as "audited clean"). LANE-2 (crypto ENCODE + the flagged verify-OOB guards) — no
+  LANE-1 numeric overlap.
+- $0 · 0-pod · NO GPU · no vast · no foreign-pod · no .tape · leak-0. Milestone OP-109 [x].

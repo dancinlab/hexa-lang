@@ -90,10 +90,14 @@ pub fn tls13_seal_app_record(
         i = i + 1
     }
     plain.push(inner_content_type & 0xFF)
-    // AAD encodes the OUTER record fields including the ciphertext length
-    // (= plaintext length + 16-byte AEAD tag). tls13_record_aad takes the
-    // INNER plaintext length; the helper adds the 16-byte tag internally.
-    let aad = tls13_record_aad(len(plain))
+    // AAD encodes the OUTER record fields including the TLSCiphertext.length =
+    // the encrypted_record length = |TLSInnerPlaintext| + 16-byte AEAD tag
+    // (RFC 8446 §5.2). tls13_record_aad takes that FULL ciphertext+tag length
+    // (its `inner_len` param = |plaintext|+1+16, per its own contract); it does
+    // NOT add the tag itself. OP-109: passing len(plain) here emitted an AAD 16
+    // bytes short of the on-wire record length (RFC 8448 §3: 0x02a2, not 0x0292)
+    // — a real interop bug (a conforming peer's AEAD verify fails). Add the 16.
+    let aad = tls13_record_aad(len(plain) + 16)
     let ct_tag = tls13_record_seal(key, iv, seq, aad, plain)
     let hdr = tls13_record_header(_TLS_REC_APPLICATION_DATA_LOCAL, _TLS_VERSION_LEGACY_LOCAL, len(ct_tag))
     let mut out: [int] = []
@@ -164,11 +168,14 @@ pub fn tls13_open_app_record(
     // AAD = the SAME outer record header bytes (RFC 8446 §5.2: additional_data
     // = TLSCiphertext.opaque_type || legacy_record_version ||
     //   TLSCiphertext.length). tls13_record_aad reconstructs that.
-    let inner_len = body_len - 16
-    if inner_len < 0 {
+    // OP-109: AAD length field = TLSCiphertext.length = the full encrypted_record
+    // length = body_len (ciphertext+tag), NOT body_len-16. This MUST match the
+    // on-wire record header (RFC 8446 §5.2 / RFC 8448 §3). Reject under-length
+    // records (a body shorter than the 16-byte tag can hold no ciphertext).
+    if body_len < 16 {
         return _opened_err("open-fail", ct, body_len)
     }
-    let aad = tls13_record_aad(inner_len)
+    let aad = tls13_record_aad(body_len)
     let ok = tls13_record_open_verify(key, iv, seq, aad, ct_tag)
     if !ok {
         return _opened_err("open-fail", ct, body_len)
