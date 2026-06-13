@@ -1,0 +1,20 @@
+--- raw comparator sign on extremes (big vs small) ---
+[PASS] branch(big,small) > 0
+[PASS] sub(big,small) WRAPS to <= 0 (the bug)
+
+--- sort [big, small, 0] : branch=correct, sub=mis-sorts ---
+[PASS] branch sort[0] == small
+[PASS] branch sort[1] == 0
+[PASS] branch sort[2] == big
+[PASS] sub sort MIS-ORDERS (head != small)
+
+--- antisymmetry / trichotomy of the branch comparator ---
+[PASS] branch(a,b) == -branch(b,a) [extremes]
+[PASS] branch(x,x) == 0
+[PASS] branch(0,big) < 0
+[PASS] branch(0,small) > 0
+
+═══════════════════════════════════════════════════════
+  Results: 10 passed, 0 failed
+═══════════════════════════════════════════════════════
+ALL PASS
