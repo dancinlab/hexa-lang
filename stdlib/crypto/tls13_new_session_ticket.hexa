@@ -49,7 +49,8 @@ pub fn tls13_nst_nonce(body: [int]) -> [int] {
     let nl = body[8] & 0xFF
     let mut n: [int] = []
     let mut i = 0
-    while i < nl { n.push(body[9 + i]); i = i + 1 }
+    // Guard the wire-declared nonce length against a truncated body (OP-105).
+    while i < nl && 9 + i < len(body) { n.push(body[9 + i]); i = i + 1 }
     return n
 }
 
@@ -70,7 +71,8 @@ pub fn tls13_nst_ticket(body: [int]) -> [int] {
     let tl = _u16(body, to)
     let mut t: [int] = []
     let mut i = 0
-    while i < tl { t.push(body[to + 2 + i]); i = i + 1 }
+    // Guard the wire-declared (u16) ticket length against a truncated body (OP-105).
+    while i < tl && to + 2 + i < len(body) { t.push(body[to + 2 + i]); i = i + 1 }
     return t
 }
 

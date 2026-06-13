@@ -39,7 +39,8 @@ pub fn tls13_ch_version(body: [int], o: int) -> int {
 pub fn tls13_ch_random(body: [int], o: int) -> [int] {
     let mut r: [int] = []
     let mut i = 0
-    while i < 32 { r.push(body[o + 2 + i]); i = i + 1 }
+    // Guard the fixed 32-byte random read against a truncated body (OP-105).
+    while i < 32 && o + 2 + i < len(body) { r.push(body[o + 2 + i]); i = i + 1 }
     return r
 }
 
@@ -48,7 +49,8 @@ pub fn tls13_ch_session_id(body: [int], o: int) -> [int] {
     let sl = body[o + 34] & 0xFF
     let mut s: [int] = []
     let mut i = 0
-    while i < sl { s.push(body[o + 35 + i]); i = i + 1 }
+    // Guard the wire-declared session_id length against a truncated body (OP-105).
+    while i < sl && o + 35 + i < len(body) { s.push(body[o + 35 + i]); i = i + 1 }
     return s
 }
 
@@ -69,7 +71,8 @@ pub fn tls13_ch_cipher_suites(body: [int], o: int) -> [int] {
     let cs_bytes = _cs_byte_length(body, o)
     let mut out: [int] = []
     let mut i = 0
-    while i + 1 < cs_bytes {
+    // Guard the wire-declared cipher_suites length against a truncated body (OP-105).
+    while i + 1 < cs_bytes && cso + i + 1 < len(body) {
         out.push(((body[cso + i] & 0xFF) << 8) | (body[cso + i + 1] & 0xFF))
         i = i + 2
     }
