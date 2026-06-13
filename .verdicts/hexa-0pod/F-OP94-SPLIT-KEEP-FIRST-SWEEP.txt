@@ -1,0 +1,130 @@
+F-OP94-SPLIT-KEEP-FIRST-SWEEP
+HEXA-0POD OP-94 — systemic split-on-every-delimiter / keep-first anti-pattern
+census across the LANE-2 stdlib net/http/url/string surface.
+Date: 2026-06-13 · LANE 2 (0-pod correctness) · $0 · 0-pod · NO GPU · leak-0
+
+TIER: 🟢 systemic class CLOSED in LANE-2 stdlib (census + differential + 18/18
+leaf-lock) + 🟠 2 closure twins FLAGGED (not fixed — fixpoint risk).
+
+==============================================================================
+MOTIVE
+==============================================================================
+The split-on-every-delimiter-keep-first bug class recurred in 5 prior ops:
+  OP-91 parse_query, OP-92 parse_request, OP-75 base64, OP-90 argparse,
+  OP-87 dirname.
+Pattern: code does `x.split(SEP)` then uses a FIXED index ([0]/[1]/parts[1])
+when the INTENT is "split on the FIRST (or LAST) delimiter only" — so any
+input containing SEP more than once is silently truncated/corrupted.
+This round did a high-leverage GREP CENSUS to find+classify+fix every
+remaining LANE-2 instance at once.
+
+==============================================================================
+CENSUS SCOPE (scoped greps, NO .git)
+==============================================================================
+LANE-2 territory swept: stdlib/net/*.hexa, stdlib/http.hexa, stdlib/http2.hexa,
+stdlib/http_sse.hexa, stdlib/websocket.hexa, stdlib/string.hexa,
+stdlib/core/string.hexa.
+EXCLUDED: stdlib data-structure/numeric/parser (= LANE-1 territory);
+self/* (= self-host closure — flag only, do not fix).
+Patterns grepped: `.split(` `.partition(` `.index_of(` `.last_index_of(`
+`substring(` and fixed-index uses ([0]/[1]/parts[i]/kv[i]) of the result.
+
+==============================================================================
+CENSUS MATRIX  (site → classify → action)
+==============================================================================
+[1] stdlib/net/http_request.hexa parse_query
+    `qs.split("&")` then split-FIRST-"=" via index_of/substring
+    → ALREADY-FIXED by OP-91 (#3245). CLEAN. Re-locked.
+[2] stdlib/net/http_request.hexa parse_request
+    `raw.index_of("\r\n\r\n")` header/body split-FIRST
+    → ALREADY-FIXED by OP-92 (#3247). CLEAN. Re-locked.
+[3] stdlib/net/http_request.hexa:40 `header_block.split("\r\n")`
+    → CLEAN — all-segments (while-iterates EVERY header line).
+[4] stdlib/net/http_request.hexa:43 `lines[0].split(" ")`  (request line)
+    → CLEAN — request-target cannot contain a raw SP; req_parts[0]=method,
+      [1]=path is correct; HTTP/x is [2] (unused, fine).
+[5] stdlib/http_sse.hexa:327 http_sse_parse_event  `line.index_of(":")`
+    → CLEAN — split-FIRST-":" per WHATWG SSE (field before first ":",
+      value after; value keeps inner ":").
+[6] stdlib/http_sse.hexa:511/592 `split(raw,"\n")`
+    → CLEAN — all-segments (while-iterates EVERY line; per-line event accum).
+[7] stdlib/http2.hexa _h2_parse_status_block  `_h2_last_index_of("\n")` ×2
+    → CLEAN — reverse-split: peels trailing `\n<version>\n<code>` sentinel;
+      body = everything BEFORE, so embedded body newlines are preserved.
+[8] stdlib/http.hexa:140/213 + stdlib/net/http_client.hexa:108
+    `_http_last_index_of("\n")`
+    → CLEAN — reverse-split: peels `\n%{http_code}` curl sentinel; multiline
+      body before the last "\n" is preserved.
+[9] stdlib/net/websocket_native.hexa ws_url_parse
+    :81 authority/path split-FIRST-"/" via index_of (path keeps later slashes
+      via substring, NOT split) → CLEAN
+    :90 host/port split-FIRST-":" via index_of → CLEAN
+    :207/224/228 handshake split-FIRST-"\r\n\r\n" / "\r\n" via index_of → CLEAN
+[10] stdlib/websocket.hexa
+    :242/243 JSON-object brace via `last_index_of("{")`/`last_index_of("}")`
+      → CLEAN — intentional last-JSON-object heuristic.
+    :157 EMITTED Python `head.split(b'\r\n', 1)[0]`
+      → CLEAN — maxsplit=1 = correct first-split, AND it is emitted Python
+        string text, not hexa split logic.
+
+RESULT: ZERO new BUGGY sites. The two genuine 🔴 of this class were already
+closed by OP-91 / OP-92. Every remaining LANE-2 delimiter parser is CLEAN —
+split-on-FIRST or split-on-LAST via index_of/last_index_of+substring, NOT
+shatter-on-every-occurrence with a fixed index. The systemic split-keep-first
+class is CLOSED in LANE-2 stdlib.
+
+==============================================================================
+DIFFERENTIAL (faithful Python port of each CLEAN body; delimiter 2+ times)
+==============================================================================
+sse_field("data: a:b:c")              -> field="data" value="a:b:c"   ✓
+sse_field("event: msg")               -> field="event" value="msg"    ✓
+sse_field("flag")                     -> field="flag"  value=""       ✓
+sse_field(":heartbeat")               -> ("__comment__","heartbeat")  ✓
+h2_status_block("line1\nline2\nline3\nHTTP/2\n200")
+                                      -> body="line1\nline2\nline3"
+                                         version="HTTP/2" status="200" ✓
+http_status_peel("multi\nline\nbody\n404")
+                                      -> body="multi\nline\nbody" status=404 ✓
+ws_url_parse("ws://h:81/a/b/c")       -> host="h" port=81 path="/a/b/c" ✓
+ws_url_parse("ws://host/x")           -> host="host" port=80 path="/x"  ✓
+ws_url_parse("ws://host")             -> host="host" port=80 path="/"   ✓
+"ALL CLEAN-SITE DIFFERENTIALS PASS — every site preserves data past the
+ delimiter (no keep-first truncation)"
+
+==============================================================================
+LOCK (leaf oracle, run LOCAL on shipping `hexa run` /Users/mini/.hx/bin/hexa)
+==============================================================================
+NEW stdlib/net/split_keep_first_census_test.hexa — verbatim-inlined CLEAN
+bodies (sse_field FIRST-":", h2_status_block reverse-"\n", http_status_peel
+reverse-"\n", ws_url_parse FIRST-"/"+":"), self-contained no-`use`, NOT in the
+build_selfhost closure. Each test feeds an input containing the delimiter MORE
+THAN ONCE and asserts the segment after the first/last delimiter is kept whole.
+
+  __HEXA_STDLIB_SPLIT_KEEP_FIRST_OP94__ 18/18 ALL-GREEN
+
+Regression re-run of the prior fix-locks (same shipping `hexa run`):
+  __HEXA_STDLIB_PARSE_QUERY_OP91__   20/20 ALL-GREEN
+  __HEXA_STDLIB_PARSE_REQUEST_OP92__ 13/13 ALL-GREEN
+
+==============================================================================
+🟠 FLAGGED CLOSURE TWINS (NOT fixed — fixpoint risk)
+==============================================================================
+self/serve/http_server.hexa:25-28 parse_request
+    `raw.split("\r\n\r\n")` then `parts[1]` — IDENTICAL body-truncation bug
+    (OP-92 twin). IN the build_selfhost closure → FLAGGED only.
+self/serve/http_server.hexa:78-86 parse_query
+    `kv = pairs[i].split("=")` then `kv[0]`/`kv[1]` — IDENTICAL value-trunc +
+    spurious-blank-key bug (OP-91 twin). IN the closure → FLAGGED only.
+A closure edit risks the self-host byte-eq fixpoint; same posture OP-91/92 took.
+
+self/main.hexa:435/461 hexa_url_query_get / hexa_url_query_get_all
+    `query.split("&")` then a char-scan that breaks at the FIRST "=" → CLEAN
+    (already correct first-"=" split; preserves value-with-=). No action.
+
+==============================================================================
+BYTE-EQ / SAFETY
+==============================================================================
+stdlib/net/* is NOT in the self-host closure. 0 source edits (every site was
+already correct) + 1 NEW census leaf; 0 deletions (wipe_guard net-additive).
+Self-host fixpoint UNAFFECTED. LANE-2 only (LANE-1 data/numeric/parser
+untouched). $0 · 0-pod · NO GPU · no vast · no foreign pod · no .tape · leak-0.
