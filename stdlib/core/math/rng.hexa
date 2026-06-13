@@ -21,7 +21,19 @@
 //   pub fn randn_box_muller(state: int) -> array
 //       [new_state, z0, z1]  (two i.i.d. standard normals).
 //   pub fn randn_matrix(rows: int, cols: int, seed: int) -> array
-//       deterministic row-major flat Gaussian matrix.
+//       row-major flat Gaussian matrix (see REPRODUCIBILITY note below).
+//
+// REPRODUCIBILITY (OP-140 2026-06-13):
+//   * INTEGER / UNIFORM path (lcg_next/lcg_u32/lcg_float01) is FULLY
+//     reproducible AND platform-independent: pure int64 arithmetic with a
+//     32-bit mask, no float transcendentals. Reference-locked in rng_test.
+//   * GAUSSIAN path (randn_box_muller/randn_matrix) is same-machine
+//     DETERMINISTIC ONLY. Box-Muller uses platform libm log/cos/sin (sqrt is
+//     IEEE-exact) which differ 1-2 ULP Darwin vs glibc (the F-OP33/OP66
+//     class) → the Gaussian stream is NOT bit-exact across platforms. It is
+//     OFF the flame bit-exact training path (flame inits via its own uniform
+//     dt_lcg/_flame_lcg, not Box-Muller). Do not rely on randn_* for
+//     cross-platform byte-identical results; use the uniform path for that.
 
 let RNG_LCG_A = 1664525
 let RNG_LCG_C = 1013904223

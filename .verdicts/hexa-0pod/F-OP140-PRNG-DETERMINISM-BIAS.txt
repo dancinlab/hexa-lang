@@ -1,0 +1,112 @@
+F-OP140-PRNG-DETERMINISM-BIAS — hexa-lang stdlib PRNG determinism / documented-sequence / bounded-random bias audit
+LANE-2 · HEXA-0POD · 2026-06-13 · $0 · 0-pod · NO GPU · no vast · no foreign-pod · local CPU only
+
+VERDICT: 🔴 1 WRONG-SEQUENCE bug FIXED  +  🟢 CONVERGED on the rest
+         (6 PRNG surfaces audited / 1 buggy / 1 fixed · LCG reference-locked · shuffle correct ·
+          bounded-random effectively unbiased · 1 libm-nondeterminism flagged 🟠 off-flagship-path)
+
+METHOD (honest g5): each PRNG ported to a Python int64-wrap oracle (or numpy uint64) and compared to its
+documented reference vector; the actual shipping hexa binary (~/.hx/bin/hexa, Jun-7) RUN and diffed
+byte-exact against the oracle. hexa int = 64-bit SIGNED, confirmed empirically: integer multiply wraps
+two's-complement ((2^63-1)*2 = -2) and `%` is C-truncated (sign follows dividend: (-7)%3 = -1).
+
+═══════════════════════════════════════════════════════════════════════════════════════════════════════
+PER-RNG TABLE
+─────────────────────────────────────────────────────────────────────────────────────────────────────────
+RNG / algo                          reference-vector match?        bounded sampling   verdict
+─────────────────────────────────────────────────────────────────────────────────────────────────────────
+stdlib/core/math/rng.hexa           ✅ MATCH (NR LCG a=1664525,     n/a (uniform/      CLEAN — determinism
+  lcg_next (Numerical Recipes LCG,     c=1013904223, m=2^32)          gaussian only)     reference-locked by
+  m=2^32 masked)                       seed=42 → 1083814273,                            existing rng_test.hexa
+                                        378494188, 2479403867 …                          (LCG step1/2/3 asserts
+                                        byte-exact vs Python oracle                      match my oracle)
+─────────────────────────────────────────────────────────────────────────────────────────────────────────
+stdlib/core/math/rng.hexa           ⚠ uses platform libm           n/a                LIBM-NONDETERMINISM 🟠
+  randn_box_muller (Box-Muller)        log / cos / sin (sqrt is                          z0=-0.032581691… matches
+                                        IEEE-exact). Darwin vs glibc                     binary; OFF the flame
+                                        differ 1-2 ULP (F-OP33/OP66                       bit-exact training path
+                                        class) → gaussian NOT bit-exact                  (flame uses its own
+                                        cross-platform                                   uniform dt_lcg/_flame_lcg,
+                                                                                         NOT Box-Muller).
+                                                                                         Consumers = optim/cpgd
+                                                                                         init + chem/vina docking
+                                                                                         only. Docstring overclaims
+                                                                                         "deterministic" → caveat
+                                                                                         added (see FIX 🟠).
+─────────────────────────────────────────────────────────────────────────────────────────────────────────
+stdlib/flame/flame_math.hexa        ✅ self-consistent (MMIX/Knuth   dt_rand_unit       CLEAN — deterministic,
+  dt_lcg_next                          LCG mult 1103515245,           = s%1000 (power-   platform-independent
+stdlib/flame/tensor_lib.hexa           m=2^31); int64 wrap +          of-10 small range, (two's-comp wrap +
+  _flame_lcg_next (MMIX 64-bit LCG     C-truncated mod confirmed       uniform fill)      C-mod verified by oracle:
+  mult 6364136223846793005)             byte-exact vs oracle                              flame seq 1151595062,
+                                                                                          1116573791 … MATCH).
+                                                                                          THIS is the bit-exact
+                                                                                          training-init path.
+─────────────────────────────────────────────────────────────────────────────────────────────────────────
+stdlib/bio/weave/.../              ✅ Fisher-Yates CORRECT:         lcg_int = pos%n    CLEAN (shuffle) /
+  weave_composition.hexa               i from n-1 downto 1,            (modulo bias)      NEGLIGIBLE-MODULO.
+  lcg_shuffle + lcg_int                j = lcg_int(s, i+1) picks                          pos∈[0,2^63) so for any
+                                        j∈[0,i] inclusive — canonical                    realistic n the bias is
+                                        unbiased downward F-Y (NOT                        < 1e-16 rel (n=1000 →
+                                        the [0,n) biased variant)                         1.08e-16; only material as
+                                                                                          n→2^63). Standard pragmatic
+                                                                                          tradeoff; not a 🔴.
+─────────────────────────────────────────────────────────────────────────────────────────────────────────
+stdlib/sim_universe/anu_stream/     🔴 WRONG SEQUENCE → ✅ FIXED.   n/a (MC π demo)    🔴 WRONG-SEQUENCE FIXED.
+  client_example.hexa                  Output scrambler multiplier                      See FIX 🔴 below.
+  xs64s_step (xorshift64*, Vigna       HIGH word was 625058449
+  2014, shifts 12/25/27,                (=0x2541A291) where the
+  mult 0x2545F4914F6CDD1D)              documented constant 0x2545F491
+                                        = 625341585. lo word
+                                        (0x4F6CDD1D=1332534557) OK, so
+                                        the bug hid behind a matching
+                                        low half. Diverged from the
+                                        Vigna reference at the hi word
+                                        of every draw.
+─────────────────────────────────────────────────────────────────────────────────────────────────────────
+stdlib/sim_universe/experiments/    ✅ self-consistent (Knuth 64-   _bernoulli =       CLEAN (for its purpose) /
+  surface_code/surface_code.hexa       bit LCG, same MMIX constants); float < p          MISLABEL note. Labeled
+  _rng_u / _bernoulli                  NOT a true canonical                              "splitmix64-style" but is a
+                                        splitmix64 (no fixed-increment                    plain Knuth LCG (no
+                                        + 3-stage finalizer) — but it                     splitmix finalizer). Claims
+                                        does NOT claim to match an                        only internal byte-repro
+                                        external splitmix64 reference                      for a selftest seal, which
+                                        vector, only internal repro.                      it has. Left as-is.
+═══════════════════════════════════════════════════════════════════════════════════════════════════════
+
+FIX 🔴 (WRONG-SEQUENCE) — stdlib/sim_universe/anu_stream/client_example.hexa
+  xs64s_step:  mul64_hi(new_hi, new_lo, 625058449, 1332534557)
+            →  mul64_hi(new_hi, new_lo, 625341585, 1332534557)   // 0x2545F491, not 0x2541A291
+  + corrected the false arithmetic claim in the constant comment (0x2545F491 = 625341585, was 625058449).
+  ROOT CAUSE: transcription error 45F4 → 41A2 in the hi 32 bits of the documented xorshift64* multiplier.
+  PROOF (binary RUN, seed s = 0x0000000100000001 = (hi=1, lo=1)):
+    BEFORE (buggy):  step1 (hi,lo) = (475707226, 4249649341)  — diverges from reference at the hi word
+    AFTER  (fixed):  step1 (hi,lo) = (2229881178, 4249649341) = canonical Vigna 2014 xorshift64*
+    full fixed sequence (5 draws) byte-EXACT vs numpy-uint64 oracle:
+      2229881178 4249649341 / 4270084175 4015758125 / 3574873509 2671303217 /
+      4138503428 3287688887 / 3555259689 351018684
+  Scope: client_example.hexa is a standalone Monte-Carlo π demo (ANU-seeded), imported by NOTHING in the
+  build closure (grep = 0 importers) → closure-OUT, ZERO byte-eq / self-host-fixpoint impact. Net-additive
+  (1 constant char-pair + comment correction + 1 new test) → wipe_guard N/A.
+
+FIX 🟠 (LIBM-NONDETERMINISM caveat) — stdlib/core/math/rng.hexa
+  randn_box_muller / randn_matrix use platform libm log/cos/sin → NOT bit-exact across Darwin vs glibc
+  (F-OP33/OP66 class). Added an honest cross-platform caveat to the module header: the LCG uniform path is
+  fully reproducible, but the gaussian path is same-machine-deterministic only. NOT moved off libm (the
+  @D stdlib_trig_libm directive mandates libm trig over hand-rolled Taylor; and Box-Muller gaussian is OFF
+  the flame bit-exact training path — flame inits weights via its own uniform dt_lcg). Flagged, not blocked.
+
+REGRESSION LOCK: stdlib/sim_universe/anu_stream/xs64s_reference_test.hexa
+  Inlines the pair-arithmetic helpers + xs64s_step (CORRECTED constant) and pins the full (hi,lo) 64-bit
+  output for seed (1,1) against the canonical xorshift64* reference vector (10 checks: 5 draws × hi+lo).
+  RUN: PASS 10/10. Negative control (revert multiplier to the buggy 625058449) → FAILS at hi[0]/hi[2..4]
+  (5/10), proving the test actually guards the constant + shifts + pair arithmetic.
+  The existing stdlib/math/rng_test.hexa already reference-locks the core LCG (step1/2/3) — re-verified PASS 11/11.
+
+ARE SEEDED PRNGS REPRODUCIBLE + UNBIASED?
+  YES for the integer/uniform path: the core NR LCG and the flame training-init LCGs reproduce their
+  documented sequences byte-exactly and are platform-independent (two's-comp int64 wrap + C-truncated mod),
+  Fisher-Yates shuffle is the correct unbiased downward form, and bounded `% n` bias is < 1e-16 for any
+  realistic n. The one WRONG-SEQUENCE bug (xorshift64* demo multiplier hi word) is fixed and reference-locked.
+  CAVEAT: the Box-Muller GAUSSIAN path is same-machine-deterministic but NOT bit-exact cross-platform
+  (libm log/cos/sin) — off the flame bit-exact training path, now documented (🟠), not silently overclaimed.

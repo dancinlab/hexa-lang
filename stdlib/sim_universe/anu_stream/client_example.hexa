@@ -208,7 +208,10 @@ fn mul64_lo(a_lo: int, b_lo: int) -> int {
 //   s ^= s >> 27
 //   result = s * 0x2545F4914F6CDD1D
 // ------------------------------------------------------------
-// Multiplier 0x2545F4914F6CDD1D = [0x2545F491, 0x4F6CDD1D] = [625058449, 1332534557]
+// Multiplier 0x2545F4914F6CDD1D = [0x2545F491, 0x4F6CDD1D] = [625341585, 1332534557]
+// OP-140 (2026-06-13): hi word was 625058449 (=0x2541A291) — a transcription error
+// (45F4→41A2) that diverged the output scrambler from the documented Vigna 2014
+// xorshift64* reference sequence. 0x2545F491 = 625341585 (verified). lo word OK.
 
 // Returns new_hi, new_lo, out_hi, out_lo as 4 values via array [new_hi, new_lo, out_hi, out_lo]
 fn xs64s_step(shi: int, slo: int) -> [int] {
@@ -228,7 +231,7 @@ fn xs64s_step(shi: int, slo: int) -> [int] {
     let new_hi = b_hi ^ t3_hi
     let new_lo = b_lo ^ t3_lo
     // out = new * 0x2545F4914F6CDD1D
-    let out_hi = mul64_hi(new_hi, new_lo, 625058449, 1332534557)
+    let out_hi = mul64_hi(new_hi, new_lo, 625341585, 1332534557)
     let out_lo = mul64_lo(new_lo, 1332534557)
     [new_hi, new_lo, out_hi, out_lo]
 }
