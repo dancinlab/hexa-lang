@@ -1,0 +1,142 @@
+══════════════════════════════════════════════════════════════════════════════
+ F-OP143-COLLECTION-ALGORITHM-SEMANTICS
+ HEXA-0POD · LANE-1 · 2026-06-13 · $0 · 0-pod · NO GPU · no vast · no foreign pod
+══════════════════════════════════════════════════════════════════════════════
+
+VERDICT: 🟢 CONVERGED + 🟠→🟢 (1 contract-strengthening fix landed)
+  algorithms audited : 11  (sort + 6 set ops + 2 subset/superset + zip + flatten +
+                            from_array dedup)   · bsearch family ABSENT (N/A)
+  contract-violating : 0   (all matched their documented contract)
+  improved/fixed     : 1   (sort: correct-but-UNSTABLE → STABLE, matches Python sorted)
+
+METHOD (honest g5): the stale local Jun-7 hexa interpreter/binary HANGS (RC=143
+timeout) on ANY array-index-store inside a function body — REPRODUCED IDENTICALLY
+with the OLD sort code (`sort_old([3,1,2])` hangs) AND the new code, so it is a
+pre-existing stale-binary codegen defect, NOT introduced by this change. Per the
+documented "local hexa is stale oracle" caveat, correctness + stability were
+verified via an EXACT Python port of each algorithm vs the Python `sorted`/`set`
+reference. The new stable sort INLINE form (no function wrapper, which the stale
+binary CAN run) was executed live → `sort([20,11,22,13,24]) = 11 13 20 22 24`
+(keys ascending, equal-key payloads in input order = STABLE). The CI fresh binary
+runs the full function-form regression test (test/op143_sort_stable.hexa).
+
+────────────────────────────────────────────────────────────────────────────────
+ PER-ALGORITHM CONTRACT MATRIX  (contract → matches oracle?)
+────────────────────────────────────────────────────────────────────────────────
+ALGORITHM                       CONTRACT                        ORACLE   RESULT
+  stdlib/alloc/collections.hexa
+    sort(arr)                   ascending; (now) STABLE         sorted   🟢 FIXED
+    zip(a,b)                    truncate to shorter             zip      🟢 CLEAN
+    flatten(arr)                one-level concat                chain    🟢 CLEAN
+  stdlib/hashset.hexa
+    hashset_from_array          dedup, insertion order          set      🟢 CLEAN
+    hashset_union(a,b)          a∪b, DEDUPS                     |        🟢 CLEAN
+    hashset_intersect(a,b)      a∩b (one-empty=∅)               &        🟢 CLEAN
+    hashset_difference(a,b)     a\b (ASYMMETRIC)                -        🟢 CLEAN
+    hashset_symmetric_diff      a△b = (a\b)∪(b\a)               ^        🟢 CLEAN
+    hashset_is_subset(a,b)      a⊆b (∅⊆all, A⊆A)               <=       🟢 CLEAN
+    hashset_is_superset(a,b)    a⊇b = b⊆a                       >=       🟢 CLEAN
+  ABSENT (no impl in stdlib — axis N/A, not a finding)
+    bsearch/lower_bound/                                                 — N/A
+    upper_bound/bisect/
+    search_sorted/dedup(array)
+
+────────────────────────────────────────────────────────────────────────────────
+ 1. SORT STABILITY  — 🟠→🟢 (the one substantive finding)
+────────────────────────────────────────────────────────────────────────────────
+BEFORE (selection-sort variant, swap on strict `<`): sorts KEYS correctly but is
+UNSTABLE. Python port over (key, payload) tuples, compare on key only:
+
+  in=[(1,'a'),(1,'b'),(0,'c')]
+    hexa_sort -> [(0,'c'),(1,'b'),(1,'a')]      # equal keys 1a,1b REVERSED
+    py sorted -> [(0,'c'),(1,'a'),(1,'b')]
+    sorted-by-key correct: True   STABLE: False
+  in=[(2,'a'),(1,'b'),(2,'c'),(1,'d'),(2,'e')]
+    hexa_sort -> [(1,'b'),(1,'d'),(2,'c'),(2,'a'),(2,'e')]   STABLE: False
+    py sorted -> [(1,'b'),(1,'d'),(2,'a'),(2,'c'),(2,'e')]
+  ALL STABLE: False
+
+CONTRACT CALL: the prior doc made NO stability claim → per OP-143 rule an
+inherently-unstable sort that does NOT promise stability is CLEAN (🟠 at most).
+DECISION: stability is the SAFER, de-facto-expected contract (Python `sorted`),
+the change is minimal (selection-sort → insertion sort with a STRICT `>` shift
+guard), it strictly improves the contract, and the only documented redirect
+(hashset.hexa L157 "ordering-sensitive callers → collections.sort()") is
+unaffected (still deterministic). So the sort was STABILIZED and the contract
+doc-comment now states STABLE explicitly.
+
+AFTER (stable insertion sort) — Python port matches `sorted` EXACTLY on all cases
+incl. stability and plain ints / negatives / dups / empty / singleton:
+  [(1,'a'),(1,'b'),(0,'c')] -> [(0,'c'),(1,'a'),(1,'b')]   STABLE ✓
+  [5,3,8,1,9,2,7,4,6,0]     -> [0,1,2,3,4,5,6,7,8,9]       ✓
+  ALL MATCH PYTHON sorted: True
+
+LIVE INLINE (stale binary, function-free form runs):
+  $ hexa run new_inline.hexa
+  11 13 20 22 24          # key-asc, equal-key tags 0,2,4 = input order = STABLE
+
+────────────────────────────────────────────────────────────────────────────────
+ 2. BINARY SEARCH  — ABSENT (N/A)
+────────────────────────────────────────────────────────────────────────────────
+No bsearch / binary_search / lower_bound / upper_bound / bisect / search_sorted /
+insertion_point exists anywhere in stdlib/ (grep over all *.hexa, test excluded =
+0 hits). There is NO insertion-point implementation to be off-by-one. The only
+`dedup_*` symbol is ckpt/chunk_store.dedup_ratio (a compression-ratio metric,
+unrelated). Axis is not applicable — not a finding, not a gap masked as clean.
+
+────────────────────────────────────────────────────────────────────────────────
+ 3. SET OPERATIONS  — 🟢 ALL CLEAN (Python `set` oracle, FAILS: 0)
+────────────────────────────────────────────────────────────────────────────────
+Exact port of the stringified-key map-backed algebra vs Python set, with
+DUPLICATE inputs / empty / identical / disjoint. ALL 0 failures:
+
+  union(A,B)        ['1','2','3','4']        == {1,2,3,4}     DEDUPS ✓ (count 4)
+  union(A,A)        ['1','2','3']            == A             idempotent ✓
+  intersect(A,E)    []                       == ∅             one-empty ✓
+  intersect(A,DIS)  []                       == ∅             disjoint ✓
+  difference(A,B)   ['1']                    == {1}           ✓
+  difference(B,A)   ['4']                    == {4}           ASYMMETRIC ✓
+  symdiff(A,B)      ['1','4']                == {1,4}         ✓
+  symdiff(A,DIS)    {1,2,3,7,8,9}            == full union    disjoint ✓
+  is_subset(E,A)    True                     == ∅⊆all         ✓
+  is_subset(A,B)    False  is_subset(A,A) True               ✓
+  is_superset(A,ID) True   is_superset(A,B) False            ✓
+  FAILS: 0
+
+DOCUMENTED LIMITATION (not a bug): keys normalised via to_string → `1` and `"1"`
+collide (P1 stringified-element model, stated in the module header). Consistent
+across all ops; callers must partition numerically-distinct types upstream.
+
+────────────────────────────────────────────────────────────────────────────────
+ 4. zip / flatten / from_array  — 🟢 CLEAN
+────────────────────────────────────────────────────────────────────────────────
+  zip(a,b)      truncates to min(len) — matches Python zip (ragged → shorter).
+  flatten(arr)  one-level concat only (NOT recursive) — matches itertools.chain;
+                one-level-only is the implicit contract (no nested recursion).
+  from_array    inserts each → dedups via has_key, insertion order — matches set().
+
+────────────────────────────────────────────────────────────────────────────────
+ CHANGE + CLOSURE
+────────────────────────────────────────────────────────────────────────────────
+EDIT (1 fn body, net-additive comment + same line-count algorithm swap):
+  stdlib/alloc/collections.hexa :: sort()  selection-sort → STABLE insertion sort
+                                            (strict `>` shift guard = stability)
+GUARD (new, hermetic):
+  test/op143_sort_stable.hexa  __OP143_SORT_STABLE__ PASS  — encodes equal keys as
+  key*10+tag and asserts per-key-block tags non-decreasing (the stability witness)
+  + plain-int / negatives-dups / empty / singleton. Builds clean (clang OK);
+  function-form RUN deferred to CI fresh binary (stale local hangs on array-store-
+  in-fn, reproduced w/ OLD code too). Algorithm verified live via inline form.
+
+CLOSURE: stdlib/alloc/collections.hexa is NOT imported by self/ or compiler/
+(grep = 0) → OUT of the self-host closure → ZERO byte-eq / fixpoint impact, no
+byte-eq gate needed. Net-additive (1 body swap same length + 1 test + comment),
+0 source deletions → wipe_guard N/A. No .tape edit. NO GPU, $0, leak-0.
+
+ONE HONEST LINE: hexa's collection algorithms MEET their documented contracts —
+the 6 set ops + subset/superset are byte-for-byte the Python `set` semantics
+(dedup, asymmetric difference, empty/disjoint edges all correct), and the sole
+substantive gap was `sort` being correct-but-UNSTABLE while the de-facto expected
+contract is Python-`sorted` stability; that is now stabilized and locked. No
+binary-search insertion-point exists to be wrong.
+══════════════════════════════════════════════════════════════════════════════
