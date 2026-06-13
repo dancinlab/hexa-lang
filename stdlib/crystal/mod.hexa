@@ -203,10 +203,28 @@ pub fn lattice_angles(L: Lattice) -> any {
     let ac = a[0] * c[0] + a[1] * c[1] + a[2] * c[2]
     let ab = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
     let pi = acos(-1.0)
-    let alpha = acos(bc / (nb * nc)) * 180.0 / pi
-    let beta = acos(ac / (na * nc)) * 180.0 / pi
-    let gamma = acos(ab / (na * nb)) * 180.0 / pi
+    // Numerical guard: dot/(|u||v|) can exceed [-1,1] by ~1e-16 of
+    // floating-point roundoff for (near-)collinear lattice vectors, and
+    // a zero-length vector makes the ratio Inf — either makes the libm
+    // acos return NaN, which then propagates silently into the returned
+    // angles. Clamp the cosine to [-1,1] before acos (the same guard the
+    // sibling chem/md/bonded.hexa angle_energy applies to its cos θ).
+    let alpha = acos(_crystal_clamp_unit(bc, nb * nc)) * 180.0 / pi
+    let beta = acos(_crystal_clamp_unit(ac, na * nc)) * 180.0 / pi
+    let gamma = acos(_crystal_clamp_unit(ab, na * nb)) * 180.0 / pi
     return [alpha, beta, gamma]
+}
+
+// Clamp dot / (|u||v|) into [-1, 1] so acos never sees an out-of-domain
+// argument. A zero denominator (degenerate zero-length vector) maps to
+// cos = 1.0 (angle 0) — the least-surprising saturation, consistent with
+// the collinear limit the roundoff overflow approaches.
+fn _crystal_clamp_unit(dot: float, denom: float) -> float {
+    if denom == 0.0 { return 1.0 }
+    let cos = dot / denom
+    if cos > 1.0 { return 1.0 }
+    if cos < 0.0 - 1.0 { return 0.0 - 1.0 }
+    return cos
 }
 
 // Convenience: a Structure's cartesian site coordinates.

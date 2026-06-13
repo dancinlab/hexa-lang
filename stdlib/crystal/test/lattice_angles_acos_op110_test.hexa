@@ -1,0 +1,93 @@
+// OP-110 (LANE-1 0-pod, float-domain class) — lattice_angles acos-domain lock.
+//
+// BUG: stdlib/crystal/mod.hexa lattice_angles computed acos(dot/(|u||v|))
+// with NO clamp. For (near-)collinear lattice vectors the cosine ratio
+// exceeds [-1,1] by ~1e-16 of floating-point roundoff, and a zero-length
+// vector makes the ratio Inf — either drives the libm acos out of domain
+// → NaN, which then propagates silently into the returned angles.
+//
+// FIX: clamp the cosine to [-1,1] (denom==0 → 1.0) before acos, mirroring
+// the sibling chem/md/bonded.hexa angle_energy guard.
+//
+// HERMETIC (no `use` — stale-bundle dodge OP-87/88): the FIXED clamp helper
+// + lattice_angles body are verbatim-inlined here, plus an UNFIXED twin as
+// the negative control. Closure-OUT (crystal not in build_selfhost) →
+// fixpoint UNAFFECTED.
+
+fn _abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// verbatim from stdlib/crystal/mod.hexa (post-fix)
+fn _crystal_clamp_unit(dot: float, denom: float) -> float {
+    if denom == 0.0 { return 1.0 }
+    let cos = dot / denom
+    if cos > 1.0 { return 1.0 }
+    if cos < 0.0 - 1.0 { return 0.0 - 1.0 }
+    return cos
+}
+
+fn lattice_angles_fixed(m: array) -> array {
+    let a = m[0]
+    let b = m[1]
+    let c = m[2]
+    let na = sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2])
+    let nb = sqrt(b[0] * b[0] + b[1] * b[1] + b[2] * b[2])
+    let nc = sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2])
+    let bc = b[0] * c[0] + b[1] * c[1] + b[2] * c[2]
+    let ac = a[0] * c[0] + a[1] * c[1] + a[2] * c[2]
+    let ab = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    let pi = acos(-1.0)
+    let alpha = acos(_crystal_clamp_unit(bc, nb * nc)) * 180.0 / pi
+    let beta = acos(_crystal_clamp_unit(ac, na * nc)) * 180.0 / pi
+    let gamma = acos(_crystal_clamp_unit(ab, na * nb)) * 180.0 / pi
+    return [alpha, beta, gamma]
+}
+
+// UNFIXED twin — negative control (must NaN on the collinear input)
+fn lattice_angles_unfixed_alpha(m: array) -> float {
+    let b = m[1]
+    let c = m[2]
+    let nb = sqrt(b[0] * b[0] + b[1] * b[1] + b[2] * b[2])
+    let nc = sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2])
+    let bc = b[0] * c[0] + b[1] * c[1] + b[2] * c[2]
+    let pi = acos(-1.0)
+    return acos(bc / (nb * nc)) * 180.0 / pi
+}
+
+fn main() {
+    let mut pass = 0
+    let mut fail = 0
+
+    // ── 1. Collinear-overflow case (the bug): b ∥ c, true alpha = 0° ──
+    let s = 0.9525597121912246
+    let v0 = -0.4969649763063986
+    let v1 = -0.4664928284510319
+    let v2 = 4.548027195441373
+    let a = [1.0, 0.0, 0.0]
+    let b = [v0, v1, v2]
+    let c = [s * v0, s * v1, s * v2]
+    let ang = lattice_angles_fixed([a, b, c])
+    if ang[0] == ang[0] && _abs(ang[0] - 0.0) < 0.0000001 { pass = pass + 1 } else { fail = fail + 1; println("FAIL collinear alpha->0") }
+
+    // ── 2. NEGATIVE CONTROL: unfixed twin NaNs on the same input ──
+    let bad = lattice_angles_unfixed_alpha([a, b, c])
+    if bad != bad { pass = pass + 1 } else { fail = fail + 1; println("FAIL neg-ctrl (unfixed not NaN)") }
+
+    // ── 3. Zero-length vector (degenerate): denom 0 -> cos 1 -> 0° ──
+    let zang = lattice_angles_fixed([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    if zang[1] == zang[1] && _abs(zang[1] - 0.0) < 0.0000001 { pass = pass + 1 } else { fail = fail + 1; println("FAIL zero-vec beta->0") }
+
+    // ── 4. Normal cubic (regression): all 90° ──
+    let cub = lattice_angles_fixed([[3.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 3.0]])
+    if _abs(cub[0] - 90.0) < 0.0000001 && _abs(cub[2] - 90.0) < 0.0000001 { pass = pass + 1 } else { fail = fail + 1; println("FAIL cubic 90") }
+
+    // ── 5. Normal FCC primitive (regression): 60° ──
+    let h = 1.5
+    let fcc = lattice_angles_fixed([[0.0, h, h], [h, 0.0, h], [h, h, 0.0]])
+    if _abs(fcc[0] - 60.0) < 0.0000001 && _abs(fcc[2] - 60.0) < 0.0000001 { pass = pass + 1 } else { fail = fail + 1; println("FAIL fcc 60") }
+
+    println("__HEXA_OP110_LATTICE_ACOS__ pass=" + to_string(pass) + " fail=" + to_string(fail))
+    if fail == 0 { println("ALL GREEN") } else { println("RED") }
+}

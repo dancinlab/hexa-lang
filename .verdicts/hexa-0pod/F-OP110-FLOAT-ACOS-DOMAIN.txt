@@ -1,0 +1,113 @@
+F-OP110-FLOAT-ACOS-DOMAIN — LANE-1 float-domain / NaN-propagation class sweep
+==============================================================================
+verdict: 🔴 ONE genuine bug (crystal lattice_angles unclamped acos → NaN) FIXED + locked;
+         the rest of the inverse-trig-domain surface 🟢 CLEAN (clamped/bounded)
+tier:    d5 (float-domain correctness fix vs documented semantics + hermetic regression lock,
+             $0 / 0-pod / 0-GPU)
+date:    2026-06-13
+lane:    LANE-1 (numeric / float / algorithm — NOT crypto-verify / binary-parser = LANE-2)
+
+CLASS (FRESH — not previously swept)
+------------------------------------
+A float-DOMAIN error: an inverse-trig call acos(x)/asin(x) reached with |x|>1, or a log(0)/
+sqrt(-x)/0.0-÷ producing Inf/NaN, that then PROPAGATES SILENTLY into a public result. Per
+g5 a site is CLEAN if x is provably in-domain (clamped before the call, or bounded by exact
+construction), and a real 🔴 only if a plausible input drives the argument out of domain and
+the documented contract forbids the resulting NaN. Distinct from OP-103/106 (OOB/degenerate
+INDEX-or-div-by-0 CRASH): here there is no crash — acos(>1) returns a silent NaN that
+corrupts the answer.
+
+THE BUG  🔴  stdlib/crystal/mod.hexa  lattice_angles
+----------------------------------------------------
+pymatgen-port lattice_angles(L) returns (α,β,γ) in degrees via the cosine law
+  cos α = (b·c)/(|b||c|),  α = acos(cos α)·180/π   (and β,γ).
+The cosine ratios were passed to acos with NO clamp and NO zero-denominator guard. Two
+plausible inputs drive acos out of [-1,1] → NaN:
+  (1) (near-)COLLINEAR lattice vectors: dot/(|u||v|) overflows 1.0 by ~1e-16 of fp roundoff.
+      A random sweep of 2e6 collinear vector pairs (Python signed-64 ref) → cos up to
+      1.0000000000000004, ~10% (215205/2e6) exceed 1.0.
+  (2) a zero-LENGTH lattice vector (degenerate cell) → denom 0 → ratio Inf → acos(Inf) = NaN.
+The sibling chem/md/bonded.hexa angle_energy computes the IDENTICAL cos θ = dot/(|u||v|) and
+DOES clamp (`if c>1.0 {c=1.0}; if c<-1.0 {c=-1.0}` before acos); wgs84_kernel.hexa haversine
+likewise clamps √a∈[0,1] before asin with the documented "antipodal-roundoff clamp so asin
+doesn't NaN". lattice_angles was the one inverse-trig site missing the guard.
+
+VERBATIM REPRO (shipping `hexa run` 0.1.0-dispatch, hermetic verbatim-inlined UNFIXED body)
+------------------------------------------------------------------------------------------
+Input: collinear lattice a=[1,0,0], b=[-0.4969649763063986,-0.4664928284510319,4.548027195441373],
+       c = 0.9525597121912246·b  (b∥c ⇒ true α = 0°).
+  UNFIXED:  alpha = NaN
+            alpha is NaN (alpha != alpha): true
+Builtin acos out-of-domain probe (same toolchain): acos(1.0000000000000004) = NaN.
+Python math.acos reference on the SAME ratio: ValueError (math domain error) — i.e. the C
+libm acos hexa binds to returns NaN on exactly this argument. (Hexa's stdlib SOFTWARE
+rt_acos in runtime/math.hexa DOES clamp |x|>1 → ±π/2, but per governance @D stdlib_trig_libm
+stdlib trig = the libm BUILTIN acos, which is what lattice_angles binds — NaN, confirmed.)
+
+FIX (minimal, net-additive; clamp the cosine to [-1,1] before acos)
+-------------------------------------------------------------------
+Added a leaf helper + 3 call-site rewrites in stdlib/crystal/mod.hexa:
+  fn _crystal_clamp_unit(dot, denom) -> float {
+      if denom == 0.0 { return 1.0 }        // degenerate zero-length vector → cos 1 (angle 0)
+      let cos = dot / denom
+      if cos > 1.0 { return 1.0 }
+      if cos < 0.0 - 1.0 { return 0.0 - 1.0 }
+      return cos
+  }
+  let alpha = acos(_crystal_clamp_unit(bc, nb*nc)) * 180.0 / pi   (and β,γ)
+RATIONALE: clamp to [-1,1] is the standard cosine-law numerical guard (matches the sibling
+angle_energy + wgs84 haversine); denom==0 → cos 1.0 (angle 0°) is the collinear limit the
+roundoff overflow approaches — least-surprising saturation. OUTPUT shape (3 angles) preserved.
+
+CROSS-CHECK / LOCK
+------------------
+NEW stdlib/crystal/test/lattice_angles_acos_op110_test.hexa — HERMETIC (no `use`; the FIXED
+clamp helper + lattice_angles body verbatim-inlined + an UNFIXED twin as the negative
+control), shipping `hexa run` LOCAL → `__HEXA_OP110_LATTICE_ACOS__ pass=5 fail=0` `ALL GREEN`:
+  1. collinear lattice (true α=0°) → FIXED α == 0.0, not NaN
+  2. NEGATIVE CONTROL: the UNFIXED twin on the SAME input → α = NaN (α != α) — proves it is
+     not a tautology; the guard converts NaN → the correct collinear 0°
+  3. zero-length vector (denom 0) → β = 0.0, not NaN
+  4. REGRESSION: cubic lattice → all 90.0°
+  5. REGRESSION: FCC primitive → 60.0°
+EXISTING stdlib/sci_stage1_test.hexa (cubic-90° + FCC-60° angle asserts) compiled against the
+EDITED source → `__SCI_STAGE1_TEST__ PASS (45/45)` — normal in-domain angles UNCHANGED, no
+regression.
+
+CENSUS — rest of the inverse-trig-domain surface  🟢 CLEAN
+---------------------------------------------------------
+  chem/md/bonded.hexa angle_energy   acos(c)  CLAMPED c∈[-1,1] + zero-norm guard → CLEAN (ref)
+  kernels/geodesy/wgs84_kernel.hexa  asin(√a) CLAMPED √a∈[0,1], documented anti-roundoff → CLEAN
+  kernels/solar/solar_kernel.hexa    asin(.)  args are sums of products of bounded sin/cos
+                                              (declination sin·sin; elevation = dot of two
+                                              unit vectors); 3e6-sample sweep max |arg| =
+                                              0.99999 / 0.3986, NO division → NO div-by-0 Inf
+                                              path. 🟠 a tiny roundoff overflow is theoretically
+                                              possible only at the exact zenith/nadir pole
+                                              (dot of unit vectors = ±1); NOT reproducible in
+                                              the sweep, NO documented-contract violation →
+                                              defense-in-depth note, NOT fixed (scope/honesty).
+  rt_asin/rt_acos (runtime/math.hexa software fallback) already clamp |x|>1 → ±π/2 (CLEAN);
+  not the binding for the libm-builtin call sites above.
+
+BYTE-EQ / GUARDS
+----------------
+stdlib/crystal/mod.hexa is NOT in the build_selfhost closure (no self/* nor build_selfhost.sh
+reference — leaf science stdlib) → ZERO byte-eq/fixpoint impact, no selfhost gate. Edit is
+purely ADDITIVE (1 helper fn + 3 call rewrites + comment; 0 logic deletions) → wipe_guard
+net-additive. NEW leaf test closure-OUT → fixpoint UNAFFECTED. LANE-1 only (no net/string-
+parser/crypto/tls edits — LANE-2 untouched). No overlap with OP-103/106 (CRASH classes) —
+this is the silent-NaN float-DOMAIN class.
+
+INVARIANTS LOCKED
+-----------------
+lattice_angles never passes an out-of-[-1,1] argument to acos → never returns a NaN angle:
+collinear/near-collinear vectors saturate to the in-range cosine (0° in the exact-collinear
+limit); a zero-length vector saturates to cos 1.0 (0°); normal m≥0 well-formed lattices are
+UNCHANGED bit-for-bit (45/45 + cubic-90/FCC-60 regression asserts hold).
+
+HONEST g5: the inverse-trig-domain class is otherwise CLEAN (the two other acos/asin call
+sites already clamp or are bounded by exact construction — a clamped/bounded site = CLEAN, no
+fabrication); the ONE genuine unguarded NaN-propagating acos was crystal lattice_angles →
+FIXED. $0 · 0-pod · NO GPU · no vast · no foreign-pod · no .tape · leak-0.
+Milestone OP-110 [x]. Verdict F-OP110-FLOAT-ACOS-DOMAIN.txt.
