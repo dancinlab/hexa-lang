@@ -1,0 +1,76 @@
+// test/native_map_signed_zero_smoke.hexa — OP-137 regression lock
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Locks the bare native `#{}` map primitive signed-zero hash<->equality
+// contract: m[-0.0] and m[0.0] MUST address the SAME key (Python:
+// hash(-0.0) == hash(0.0)) while display str(-0.0) STILL yields "-0.0"
+// (OP-132 shortest-repr fidelity preserved — key path only).
+//
+// Root cause (FIXED in self/runtime_core_emit.hexa, OP-137): hexa_to_cstring
+// (the map-key stringifier) emitted -0.0 as "-0.0" != "0.0", losing the key.
+// Fix = `if (f == 0.0) f = 0.0;` before each float snprintf in BOTH float
+// branches of hexa_to_cstring (KEY path only; hexa_to_string display untouched).
+//
+// Run:  hexa build test/native_map_signed_zero_smoke.hexa -o /tmp/op137.bin
+//       /tmp/op137.bin
+// Sentinel: __OP137_MAP_SMOKE__ PASS|FAIL on the final line.
+// NOTE: a stale pre-fix runtime FAILS the key-match checks (discriminating).
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn check(label: string, cond: bool) {
+    if cond {
+        PASS = PASS + 1
+        println("[PASS] " + label)
+    } else {
+        FAIL = FAIL + 1
+        println("[FAIL] " + label)
+    }
+}
+
+// ── insert +0.0, look up via runtime-computed -0.0 ─────────────────────────
+let m = #{}
+m[0.0] = 1
+let negz = 0.0 * -1.0
+check("OP-137: has_key(m, -0.0) after m[0.0]=1", has_key(m, negz))
+check("OP-137: has_key(m, -0.0 literal)", has_key(m, -0.0))
+check("OP-137: has_key(m, 0.0)", has_key(m, 0.0))
+check("OP-137: m[-0.0] reads the +0.0 slot", m[negz] == 1)
+
+// ── overwrite via -0.0 must hit the SAME slot (no duplicate key) ───────────
+m[negz] = 2
+check("OP-137: m[-0.0]=2 overwrites m[0.0] slot (m[0.0]==2)", m[0.0] == 2)
+
+// ── symmetry: insert via -0.0 first, find via +0.0 ─────────────────────────
+let m2 = #{}
+m2[0.0 * -1.0] = 9
+check("OP-137: has_key(m2, 0.0) after m2[-0.0]=9", has_key(m2, 0.0))
+check("OP-137: m2[0.0] reads the -0.0 slot", m2[0.0] == 9)
+
+// ── non-zero floats stay DISTINCT (normalisation is zero-only) ─────────────
+let m3 = #{}
+m3[2.5] = 100
+m3[-2.5] = 200
+check("OP-137: 2.5 and -2.5 are distinct keys", m3[2.5] == 100)
+check("OP-137: -2.5 distinct key", m3[-2.5] == 200)
+
+// ── int / string keys untouched ────────────────────────────────────────────
+let m4 = #{}
+m4[7] = 42
+check("OP-137: int key 7 untouched", m4[7] == 42)
+
+// ── DISPLAY PRESERVATION: str(-0.0) MUST still be "-0.0" (OP-132) ──────────
+check("OP-137: str(-0.0) preserves sign == \"-0.0\"", str(negz) == "-0.0")
+check("OP-137: str(0.0) == \"0.0\"", str(0.0) == "0.0")
+
+// ── summary ────────────────────────────────────────────────────────────────
+println("")
+println("== native_map_signed_zero_smoke: " + to_string(PASS) + " passed, " + to_string(FAIL) + " failed ==")
+if FAIL == 0 {
+    println("__OP137_MAP_SMOKE__ PASS")
+} else {
+    println("__OP137_MAP_SMOKE__ FAIL")
+}
