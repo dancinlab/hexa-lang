@@ -1,0 +1,122 @@
+F-OP111-AEAD-NONCE-KEYSCHED
+HEXA-0POD OP-111 — LANE-2 0-pod security audit: AEAD per-record NONCE +
+                   TLS 1.3 KEY SCHEDULE / Expand-Label / transcript hash
+Date: 2026-06-13   Mode: $0 · 0-pod · NO GPU · no vast · no foreign-pod · leak-0
+Branch off origin/main a407f5d8a (post-OP-109 #3268).
+
+═══════════════════════════════════════════════════════════════════════════════
+SCOPE / TASK
+  The crypto parse/verify/encode-length surfaces are swept (OP-104/105/107/109).
+  The remaining critical-security crypto LOGIC is (1) the per-record AEAD NONCE
+  construction (a nonce reuse under the same key = catastrophic AEAD break) and
+  (2) the TLS 1.3 KEY SCHEDULE / transcript hash (a wrong derived key or wrong
+  transcript = broken / weak handshake). Audited vs RFC 8446 §5.3 / §7.1 / §4.4.1
+  + the RFC 8448 §3 "Simple 1-RTT Handshake" KNOWN-ANSWER vectors.
+
+CENSUS (scoped greps, NO .git; LANE-2 AEAD/key-schedule)
+  Nonce builder        stdlib/crypto/tls13_record.hexa:52  tls13_record_nonce
+  Seq counter          stdlib/crypto/tls13_client_record_io.hexa
+                        (send returns seq+1 :124; recv "caller bumps after open")
+  Key schedule         stdlib/crypto/tls13_keyschedule.hexa
+                        (hkdf_extract / hkdf_expand / expand_label / derive_secret
+                         / early / handshake / master)
+  Traffic secrets      stdlib/crypto/tls13_traffic_secrets.hexa
+                        (c/s hs|ap traffic labels)
+  Finished key         stdlib/crypto/tls13_finished.hexa
+  Transcript order     stdlib/crypto/tls13_client_keyschedule_wire.hexa:150
+                        (_concat(ch_message, sh_message) -> SHA256)
+
+METHOD (g5, honest; trust RFC/Python over the stale bundled binary)
+  Faithful Python port of EACH hexa source routine (/tmp/op111_audit.py) +
+  byte-exact differential vs the RFC 8448 §3 published bytes and the RFC 8446 §5.3
+  nonce reference. Verdict GREEN = match; a nonce-reuse / wrong-key / wrong-
+  transcript would have been RED. No primitive (SHA-256/HMAC) re-derived — those
+  are OP-104/107-swept; this audits the FRAMING / DERIVATION logic.
+
+═══════════════════════════════════════════════════════════════════════════════
+COMPONENT 1 — AEAD per-record NONCE (RFC 8446 §5.3)      🟢 GREEN
+  tls13_record_nonce(iv, seq): copies the 12-byte write_iv, then XORs seq as a
+  64-bit big-endian counter into the LAST 8 bytes (positions 11..4 from the tail).
+  RFC 8446 §5.3: "The per-record nonce ... is the sequence number ... padded to
+  iv_length ... then XORed with the static client_write_iv/server_write_iv."
+  iv = 5d313eb2671276ee13000b30 (RFC 8448 §3 server write_iv):
+    seq=0           -> 5d313eb2671276ee13000b30   (== iv unchanged) ✓
+    seq=1           -> 5d313eb2671276ee13000b31 ✓
+    seq=2           -> 5d313eb2671276ee13000b32 ✓
+    seq=255         -> 5d313eb2671276ee13000bcf ✓
+    seq=256         -> 5d313eb2671276ee13000a30 ✓
+    seq=2^32        -> 5d313eb2671276ef13000b30 ✓ (carries into byte 7-from-tail)
+  - nonce(seq) == iv XOR pad12(seq) for ALL seqs (matches RFC §5.3 reference): YES
+  - all 6 nonces DISTINCT (no reuse): YES
+  - seq=0 leaves iv unchanged: YES
+  SEQUENCE COUNTER: 64-bit `int`, caller-managed monotonic per-direction; send
+  returns seq+1 (increment exactly once per record); recv bumps after a successful
+  open; resets to 0 per key epoch (KeyUpdate = tls13_client_keyupdate.hexa, a new
+  traffic secret + fresh seq). No path reuses or wraps a (key, nonce) pair.
+  NO nonce-reuse bug.
+
+COMPONENT 2 — TLS 1.3 KEY SCHEDULE (RFC 8448 §3 KAT)     🟢 GREEN
+  Every derived secret/key/iv reproduces the RFC 8448 §3 documented bytes
+  byte-for-byte (10/10):
+    early_secret  = 33ad0a1c607ec03b09e6cd9893680ce210adf300aa1f2660e1b22e10f170f92a ✓
+    derived       = 6f2615a108c702c5678f54fc9dbab69716c076189c48250cebeac3576c3611ba ✓
+    c e traffic   = 8318ffbdf123497b961ecd3842d0043a ✓
+    handshake_sec = 1dc826e93606aa6fdc0aadc12f741b01046aa6b99f691ed221a9f0ca043fbeac ✓
+    s hs traffic  = b67b7d690cc16c4e75e54213cb2d37b4e9c912bcded9105d42befd59d391ad38 ✓
+    c hs traffic  = b3eddb126e067f35a780b3abf45e2d8f3b1a950738f52e9600746a0e27a55a21 ✓
+    s key (16)    = 3fce516009c21727d0f2e4e86ee403bc ✓
+    s iv  (12)    = 5d313eb2671276ee13000b30 ✓
+    finished_key  = 008d3b66f816ea559f96b537e885c31fc068bf492c652f01f288a1d8cdc19fc8 ✓
+    master_secret = 18df06843d13a08bf2a449844c5f8a478001bc4d4c627984d5a41da8d0402919 ✓
+  HKDF-Extract = HMAC(salt, ikm) (RFC 5869 §2.2); HKDF-Expand T(i) chain
+  (§2.3); the early->handshake->master "derived" empty-transcript salts are
+  exact. NO wrong-key bug.
+
+COMPONENT 2b — HKDF-Expand-Label PROPERTY (RFC 8446 §7.1) 🟢 GREEN
+  HkdfLabel(key,16,"") = 001009 'tls13 key' 00
+    = uint16 length(0x0010) | label-vec-len(0x09) | "tls13 "+"key" | ctx-vec-len(0x00) ✓
+  - label prefix bytes == "tls13 " (74 6c 73 31 33 20): YES
+  - 1-bit secret flip -> different output (avalanche): YES
+  NO label-framing bug.
+
+COMPONENT 3 — TRANSCRIPT hash order (RFC 8446 §4.4.1)    🟢 GREEN
+  tls13_client_derive_handshake_keys hashes _concat(ch_message, sh_message) =
+  ClientHello || ServerHello, IN handshake order (RFC §4.4.1 "Transcript-Hash =
+  Hash(Handshake Context) ... ClientHello ... ServerHello ...").
+  - SHA256(CH || SH) == in-order reference: YES
+  - != SHA256(SH || CH) (reversed): YES
+  NO transcript-order bug.
+
+═══════════════════════════════════════════════════════════════════════════════
+VERDICT MATRIX
+  component                 RFC ref                test result   verdict   tier
+  AEAD record nonce         RFC 8446 §5.3          6 seqs + uniq  🟢       T1 (KAT)
+  sequence counter          RFC 8446 §5.3          inc-once/epoch 🟢       T1
+  key schedule              RFC 8448 §3            10/10 KAT byte 🟢       T1 (KAT)
+  HKDF-Expand-Label         RFC 8446 §7.1          framing+avlnch 🟢       T1
+  transcript hash order     RFC 8446 §4.4.1        in-order diff  🟢       T1
+
+  RESULT: ALL GREEN — NO nonce-reuse, NO wrong-key, NO wrong-transcript.
+  The construction is RFC-CORRECT (g5: a correct construction is 🟢, not a bug;
+  not fabricated — every byte cross-checked vs the published RFC 8448 §3 vectors).
+
+LOCK TEST
+  stdlib/crypto/tls13_nonce_keysched_op111_test.hexa — VERBATIM-INLINED leaf
+  (re-implements the exact tls13_record / tls13_keyschedule / traffic_secrets /
+  finished source logic; only SHA-256/HMAC imported), so it gates on the shipping
+  `hexa run` without trusting a possibly-stale bundled stdlib copy. Emits
+  __OP111_AEAD_NONCE_KEYSCHED__ ALL-GREEN (nonce 9 + keysched 10 + avalanche 1 +
+  transcript 1 = 21 checks; the count prints as 0x15 hex). Confirmed on the
+  shipping `hexa run`. Authoritative proof = the Python differential
+  (/tmp/op111_audit.py) which reproduces every RFC 8448 §3 byte; the hexa leaf is
+  the in-tree regression lock. Negative control: a nonce builder that ignores seq,
+  or an Expand-Label without the "tls13 " prefix, or a reversed transcript, all
+  diverge from the locked KAT (not a tautology).
+
+BYTE-EQ / GUARDS / CLOSURE
+  ZERO crypto SOURCE edits (all 5 routines RFC-correct, nothing to fix) + 1 NEW
+  leaf test + verdict + domain log. 0 deletions (wipe_guard net-additive). The
+  *_test.hexa leaf is NOT in the build_selfhost closure (compiler/main.hexa
+  import/use closure) → self-host fixpoint UNAFFECTED. LANE split honored (LANE-2
+  AEAD/key-schedule; no numeric self-host edits). $0 · 0-pod · NO GPU · no vast ·
+  no foreign-pod · no .tape · no self/env.hexa · leak-0. Milestone OP-111 [x].
