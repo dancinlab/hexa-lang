@@ -421,13 +421,20 @@ pub fn ws_recv_native(h, timeout_sec: int) -> string {
             let ext = _ws_fill(h, 8)
             if len(ext) < 8 { return "" }
             let lb = _ws_take(h, 8)
-            // 64-bit big-endian; hexa int is 64-bit. Top bit must be 0 (RFC).
+            // 64-bit big-endian; hexa int is 64-bit. Top bit must be 0 (RFC
+            // 6455 §5.2: "the most significant bit MUST be 0"). OP-118: hexa
+            // ints are 64-bit signed, so a frame with the high bit set makes
+            // `val = val * 256 + lb[k]` overflow past i63 and WRAP to a
+            // negative plen. Enforce the RFC invariant explicitly — reject a
+            // negative/out-of-range declared length instead of letting a
+            // wrapped plen fall through the parser.
             let mut val = 0
             let mut k = 0
             while k < 8 {
                 val = val * 256 + lb[k]
                 k = k + 1
             }
+            if val < 0 { return "" }
             plen = val
         }
     }

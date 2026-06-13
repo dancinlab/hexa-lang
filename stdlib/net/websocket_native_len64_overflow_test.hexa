@@ -1,0 +1,52 @@
+// Verbatim-inlined leaf lock for OP-118 websocket 64-bit length RFC top-bit fix.
+// RFC 6455 §5.2: the MSB of a 127-form 64-bit length MUST be 0. hexa ints are
+// 64-bit signed -> a top-bit-set length wraps val negative. The fix rejects val<0.
+fn decode64_prefix(lb: [int]) -> int {
+    let mut val = 0
+    let mut k = 0
+    while k < 8 { val = val * 256 + lb[k]; k = k + 1 }
+    return val   // pre-fix: returns wrapped (possibly negative) plen
+}
+// post-fix returns -1 as the "reject" sentinel (caller does `return ""`)
+fn decode64_fixed(lb: [int]) -> int {
+    let mut val = 0
+    let mut k = 0
+    while k < 8 { val = val * 256 + lb[k]; k = k + 1 }
+    if val < 0 { return -1 }
+    return val
+}
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // 1. valid small length 300 = 0x012C -> [0,0,0,0,0,0,1,0x2C]
+    total = total + 1
+    let v300 = [0,0,0,0,0,0,1,0x2C]
+    if decode64_fixed(v300) == 300 { pass = pass + 1 } else { print("FAIL 300") }
+
+    // 2. valid 65536 -> [0,0,0,0,0,1,0,0]
+    total = total + 1
+    if decode64_fixed([0,0,0,0,0,1,0,0]) == 65536 { pass = pass + 1 } else { print("FAIL 65536") }
+
+    // 3. MALICIOUS top-bit set: [0x80,0,...] pre-fix WRAPS negative, fixed REJECTS (-1)
+    total = total + 1
+    let mal = [0x80,0,0,0,0,0,0,0]
+    let pre = decode64_prefix(mal)
+    let fix = decode64_fixed(mal)
+    print("top-bit-set: prefix=", pre, " fixed=", fix)
+    if pre < 0 && fix == -1 { pass = pass + 1 } else { print("FAIL top-bit") }
+
+    // 4. all-FF -> pre-fix -1 (negative), fixed -1 (rejected)
+    total = total + 1
+    let allf = [0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF]
+    let pre2 = decode64_prefix(allf)
+    if pre2 < 0 && decode64_fixed(allf) == -1 { pass = pass + 1 } else { print("FAIL allFF") }
+
+    // 5. NEGATIVE CONTROL: a valid 2^53 length stays positive (not over-rejected)
+    total = total + 1
+    let big = [0,0x20,0,0,0,0,0,0]  // 0x20 * 256^6 = 2^53
+    if decode64_fixed(big) > 0 { pass = pass + 1 } else { print("FAIL valid-big") }
+
+    if pass == total { print("__HEXA_OP118_WS_LEN64_OVERFLOW__ PASS ", pass, "/", total) }
+    else { print("__HEXA_OP118_WS_LEN64_OVERFLOW__ FAIL ", pass, "/", total) }
+}
