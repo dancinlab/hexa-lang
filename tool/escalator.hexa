@@ -17,8 +17,10 @@
 //   - Queue dir = /tmp/hexa_escalate/  (world writable — same trust bar as
 //     any /tmp-based IPC; single-user dev machine threat model).
 //   - Ops whitelisted: write_file, invoke_tool, launchctl_bootstrap.
-//   - Paths whitelisted: must be under /Users/ghost/core/ .
-//   - invoke_tool: argv[0] must start with /Users/ghost/core/hexa-lang/
+//   - Paths whitelisted: must be under <allow_root> = $HEXA_ESCALATOR_ROOT,
+//     else $HOME/core/ (was the literal /Users/ghost/core/; identical on the
+//     author host). See _allow_root — fails CLOSED when $HOME is empty.
+//   - invoke_tool: argv[0] must start with <allow_root>/hexa-lang/
 //     (can't escalate to arbitrary binaries).
 //   - No shell metachar expansion — exec_with_status invoked on argv-style
 //     list, not bash string.
@@ -47,6 +49,43 @@ fn _home() -> string {
 
 fn _queue_dir() -> string { return "/tmp/hexa_escalate" }
 
+// _allow_root / _allow_tool_root — the write/exec allowlist roots, derived
+// (handoff d7b69397) instead of a hardcoded foreign-host literal.
+//
+//   $HEXA_ESCALATOR_ROOT (explicit) → $HOME/core/   (per-user default)
+//
+// SECURITY — narrowness is PRESERVED, never widened:
+//   - On the author host $HOME = /Users/ghost, so the default resolves
+//     BYTE-IDENTICAL to the previous literal "/Users/ghost/core/". The
+//     allowed set is exactly as narrow as before.
+//   - FAIL-CLOSED: if $HOME is empty (no explicit root either) we return a
+//     sentinel that can never prefix a real absolute path, so _path_ok /
+//     _argv_first_ok reject EVERYTHING rather than degrade to a wide root
+//     like "/core/". An empty-$HOME daemon thus allows fewer paths, not more.
+//   - The result always ends in "/" so the starts_with() prefix check cannot
+//     match a sibling like "/Users/ghost/core-evil/".
+//   - This is NOT the daemon's real trust boundary regardless: the raw_exec
+//     op already runs arbitrary unsandboxed commands with no path check, so
+//     anyone who can write the /tmp queue (the actual boundary) is unaffected
+//     by this allowlist either way. The change cannot grant new capability.
+fn _allow_root() -> string {
+    let explicit = env("HEXA_ESCALATOR_ROOT")
+    if len(explicit) > 0 {
+        if explicit.ends_with("/") { return explicit }
+        return explicit + "/"
+    }
+    let h = _home()
+    if len(h) == 0 {
+        // Fail closed: a sentinel that does NOT begin with "/", so it can
+        // never prefix an absolute request path → _path_ok rejects all.
+        return "__hexa_escalator_no_root__/"
+    }
+    if h.ends_with("/") { return h + "core/" }
+    return h + "/core/"
+}
+
+fn _allow_tool_root() -> string { return _allow_root() + "hexa-lang/" }
+
 fn _iso_now() -> string {
     return to_string(exec("date -u +%Y-%m-%dT%H:%M:%SZ")).trim()
 }
@@ -55,9 +94,11 @@ fn _ensure_queue() {
     let _mk = exec("mkdir -p '" + _queue_dir() + "'")
 }
 
-// Reject paths that escape the allowed tree. Accept only /Users/ghost/core/*.
+// Reject paths that escape the allowed tree. Accept only <allow_root>/* —
+// the root is derived (see _allow_root), defaulting to $HOME/core/ which is
+// byte-identical to the previous /Users/ghost/core/ on the author host.
 fn _path_ok(p: string) -> bool {
-    if !p.starts_with("/Users/ghost/core/") { return false }
+    if !p.starts_with(_allow_root()) { return false }
     if p.contains("/..") { return false }
     if p.contains("//") { return false }
     return true
@@ -66,7 +107,7 @@ fn _path_ok(p: string) -> bool {
 fn _argv_first_ok(argv: array) -> bool {
     if len(argv) == 0 { return false }
     let a0 = to_string(argv[0])
-    if a0.starts_with("/Users/ghost/core/hexa-lang/") { return true }
+    if a0.starts_with(_allow_tool_root()) { return true }
     // launchctl / osascript allowed only via dedicated ops, not invoke_tool
     return false
 }
@@ -135,7 +176,7 @@ fn _process_invoke_tool(req_id: string, obj) -> int {
     if !has_key(obj, "argv") { _write_result(req_id, false, 2, "missing argv"); return 2 }
     let argv = obj["argv"]
     if !_argv_first_ok(argv) {
-        _write_result(req_id, false, 3, "argv[0] must be under /Users/ghost/core/hexa-lang/")
+        _write_result(req_id, false, 3, "argv[0] must be under " + _allow_tool_root())
         return 3
     }
     // Build quoted cmd
@@ -244,7 +285,7 @@ fn _selftest() -> int {
     write_file(content_file, "hello from escalator selftest\n")
     let req_body = "{\"op\":\"write_file\",\"path\":\"" + target
                  + "\",\"content_file\":\"" + content_file + "\"}"
-    // target must be /Users/ghost/core/* per policy — but for selftest allow /tmp
+    // target must be under <allow_root> per policy — but for selftest allow /tmp
     // → selftest uses a dummy op that will be REJECTED with rc=3 (path not allowed).
     // We check that the reject path is taken correctly rather than writing arbitrary.
     write_file(qd + "/" + req_id + ".req", req_body)
