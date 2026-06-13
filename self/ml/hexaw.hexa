@@ -384,11 +384,18 @@ fn hexaw_load_binary_from_bytes(path, raw) {
     let mut t = 0
     while t < n {
         // name line
-        let mut name = ""
+        // OP-127: tensor names can be non-ASCII UTF-8 on disk. Accumulate the
+        // raw bytes and decode the UTF-8 sequence ONCE via bytes_to_str_raw —
+        // the prior per-byte from_char_code re-encoded each byte as a codepoint
+        // and double-encoded any byte >=0x80 into mojibake (OP-79/OP-125 class).
+        // (The ndim/dims/count fields below stay per-byte: ASCII digits only,
+        //  consumed by to_int — provably <0x80, no double-encode possible.)
+        let mut name_bytes = []
         while pos < nb && raw[pos] != 10 {
-            name = name + to_string(from_char_code(raw[pos]))
+            name_bytes.push(raw[pos] & 0xFF)
             pos = pos + 1
         }
+        let name = bytes_to_str_raw(name_bytes)
         pos = pos + 1
         // ndim
         let mut ndstr = ""

@@ -1,0 +1,159 @@
+// @ci_gate — deterministic · network-free · Eyring TST 속도상수 k(T) g5 게이트
+//
+// tst_rate.hexa — QFORGE `chem` 스케일 front-end round-5 (반응경로 정점):
+//   round-2~4 가 *위치를 찾은* 전이상태(TS)를 **정량 반응속도 k(T)** 로 바꾼다.
+//   이것이 chem 스케일의 양적 화학 deliverable: 위치된 saddle → Eyring k(T).
+//
+//   ── Eyring 전이상태이론 (Eyring 1935; Evans-Polanyi 1935) ──────────────
+//     k(T) = κ · (k_B T / h) · exp(−ΔG‡ / R T)
+//       κ        = 투과계수 (고전 TST = 1; 터널링 보정은 HONEST 아래 참조)
+//       k_B T/h  = 보편 TST prefactor (298.15 K 에서 6.21e12 s⁻¹, 닫힌형)
+//       ΔG‡      = TS 자유에너지 장벽 = ΔE‡ + ΔZPE + ΔG_vib(T)
+//                  ΔE‡   = 전자/PES 장벽 (NEB/LEPS saddle − reactant)
+//                  ΔZPE  = ½ħΣω‡ − ½ħΣω_R (TS 는 허수모드 제외)
+//                  ΔG_vib= q_vib 분배함수 자유에너지 차 (TS 는 허수모드 제외)
+//     ⇒ TS 는 반응좌표(허수모드)를 분배함수에서 *떨어뜨린다* — 이것이 TST 의 핵심.
+//
+//   ── Arrhenius 일관성 (gate c) ─────────────────────────────────────────
+//     k(T) = A exp(−E_a/RT) ⇒ ln k = ln A − E_a/(RT).  ln k vs 1/T 직선.
+//     TST 에서 E_a ≡ −R d(ln k)/d(1/T) = ΔE‡ + (m+½)RT (prefactor 의 T^m 의존).
+//     순수 prefactor (k_B T/h, m=1) + 온도무관 ΔG‡ ⇒ E_a = ΔH‡ + RT ≈ ΔE‡ + ... .
+//     본 brick 은 ΔG‡(T) 의 *전 분배함수 온도의존* 을 수치미분으로 E_a 를 회수한다.
+//
+// ── d19 재사용 (chem 내부 + materials) ────────────────────────────────────
+//   * leps_h3_energy / leps_h3_grad (neb_scf.hexa R2) — LEPS PES energy+force.
+//   * ts_classify_at / TSClass.omega (ts_hessian.hexa R3) — saddle Hessian 의
+//     부호보존 진동수(ω, materials qforge_phonons eigh 재사용).  TS 는 음모드 1개
+//     (허수 = 반응좌표) → 분배함수에서 제외; 나머지 실모드만 q_vib 에 합산.
+//   * Newton saddle refiner (ts_hessian_selftest.hexa 와 동형) 로 ∇V=0 정류점 산출.
+//   ⇒ 새 PES/Hessian 코어 mint 없음 — round-2~4 brick 을 그대로 조립해 k(T) 만 신설.
+//
+// ── HONEST 범위 (d6 / CLAUDE.md d6) ───────────────────────────────────────
+//   (1) PES = LEPS 표준 해석 PES (neb_scf.hexa, *NOT* ab-initio).  장벽 ΔE‡ 는
+//       LEPS saddle−reactant 이며, 교과서 H+H₂ 고전장벽 ~9.8 kcal/mol 에 anchor 한다
+//       (LSTH/LEPS surface; 문헌 anchor 이지 강제 fit 아님).
+//   (2) 본 brick 의 k(T) 는 **고전 TST** (κ=1, 터널링 *없음*).  H+H₂ 는 경원자라
+//       300 K 에서 터널링이 강해 QTST 가 정확 rate 보다 ~20% 큼 — 즉 고전 TST 는
+//       저온에서 rate 를 *과소평가* 한다 (Mielke et al., 정확 QM benchmark).  다음 수:
+//       Wigner κ_W = 1 + (1/24)(ħω‡/k_BT)²  또는 Eckart 투과계수 — round-6 으로 이월.
+//   (3) ΔZPE/ΔG_vib 의 *절대* 진동수는 LEPS Hessian (단위질량, eV/Å² 고유치) 에서
+//       오므로 ab-initio cm⁻¹ 정확도가 아니다.  핵심 검증대상은 (a) prefactor 닫힌형,
+//       (b) Eyring k(T) 가 anchor 장벽에서 문헌 규모, (c) Arrhenius 선형성 + E_a 회수.
+//       ⇒ k(T) 를 cited 값에 anchor 하고 |Δ| 를 정직보고한다 — rate 를 *지어내지 않는다*.
+//
+// Run:  hexa run stdlib/qforge/chem/tst_rate_selftest.hexa
+
+use "stdlib/qforge/chem/neb_scf"        // leps_h3_energy · leps_h3_grad · ev_to_kcalmol
+use "stdlib/qforge/chem/ts_hessian"     // ts_classify_at · TSClass (omega 재사용)
+
+fn _tst_abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// ── 물리상수 (SI · 2019 redefinition exact values) ────────────────────────
+//   k_B  = 1.380649e-23  J/K     (exact, SI 2019)
+//   h    = 6.62607015e-34 J·s    (exact, SI 2019)
+//   R    = 1.380649e-23·6.02214076e23 = 8.314462618 J/(mol·K)
+//   1 kcal/mol = 4184 J/mol ;  k_B in eV/K = 8.617333262e-5.
+pub fn tst_kB_SI() -> float { return 1.380649e-23 }
+pub fn tst_h_SI() -> float { return 6.62607015e-34 }
+pub fn tst_R_gas() -> float { return 8.314462618 }          // J/(mol·K)
+pub fn tst_kcalmol_to_J() -> float { return 4184.0 }        // J per kcal/mol
+
+// ── (a) 보편 Eyring prefactor:  k_B T / h  [s⁻¹] ──────────────────────────
+//   298.15 K 닫힌형 = 6.214e12 s⁻¹ (TST 의 보편 attempt frequency).
+pub fn tst_prefactor(temp_K: float) -> float {
+    return tst_kB_SI() * temp_K / tst_h_SI()
+}
+
+// ── Eyring 속도상수 (고전 TST, κ=1) ───────────────────────────────────────
+//   k(T) = (k_B T/h) · exp(−ΔG‡ / R T).  ΔG‡ 단위 = kcal/mol (→ J/mol 변환).
+//   단분자 1차 (s⁻¹) 형태; 이분자는 동일식에 표준상태 농도항(여기선 ΔG‡ 에 흡수).
+pub fn tst_eyring_rate(dG_kcalmol: float, temp_K: float) -> float {
+    let pref = tst_prefactor(temp_K)
+    let dG_J = dG_kcalmol * tst_kcalmol_to_J()
+    let arg = -dG_J / (tst_R_gas() * temp_K)
+    return pref * exp(arg)
+}
+
+// ── 진동 분배함수 자유에너지 (양자조화진동자) ─────────────────────────────
+//   각 실모드 i (진동수 ω_i>0, 각진동수 rad/s):  특성온도 θ_i = ħω_i/k_B.
+//   G_vib(T) = Σ_i [ ½ħω_i + k_B T·ln(1 − exp(−ħω_i/k_B T)) ]    (ZPE + 열항)
+//   본 brick 의 ω 는 LEPS Hessian 의 부호보존 sqrt(ω²) (단위질량, √(eV/Å²)).
+//   절대 cm⁻¹ 정확도는 아니지만(HONEST 3), TS 가 허수모드를 *제외* 하는 구조와
+//   ΔG_vib 의 온도의존(→Arrhenius E_a 회수)은 정확히 시연된다.
+//   omega_scale = ω(LEPS √eV/Å²) → 각진동수(rad/s) 환산계수.  ΔZPE/ΔG_vib 는
+//   reactant−TS *차이* 이므로 공통 스케일은 상쇄에 가깝다(여기선 상대규모만 사용).
+fn _gvib_from_omegas(omegas: [float], temp_K: float, hbar_scale: float) -> float {
+    // hbar_scale = ħ·omega_scale (모드 ω → 에너지 J 로 환산하는 묶음 계수).
+    let kT = tst_kB_SI() * temp_K
+    let mut g = 0.0
+    let mut i = 0
+    while i < len(omegas) {
+        if omegas[i] > 0.0 {                       // 실모드만 (허수모드 제외)
+            let e = omegas[i] * hbar_scale         // ħω_i (J)
+            let zpe = 0.5 * e
+            let x = e / kT
+            // ln(1 − exp(−x)); x 클수록 0 에 수렴 (열항 작아짐).
+            let therm = kT * ln(1.0 - exp(-x))
+            g = g + zpe + therm
+            i = i + 1
+        } else { i = i + 1 }
+    }
+    return g                                        // J (per molecule)
+}
+
+// TSClass 에서 실모드 ω 만 추출 (음모드/허수모드 제외) — TS 반응좌표 drop.
+pub fn tst_real_omegas(c: TSClass) -> [float] {
+    let mut o: [float] = []
+    let mut i = 0
+    while i < len(c.omega) {
+        if c.omega[i] > 0.0 { o.push(c.omega[i]) }
+        i = i + 1
+    }
+    return o
+}
+
+// ── ΔG_vib(T) [kcal/mol] = G_vib(TS, 허수모드 제외) − G_vib(reactant) ──────
+//   TS 는 음모드(반응좌표)를 tst_real_omegas 에서 자동 제외 → 분배함수 drop 시연.
+pub fn tst_dGvib_kcalmol(ts: TSClass, reactant: TSClass,
+                         temp_K: float, hbar_scale: float) -> float {
+    let g_ts = _gvib_from_omegas(tst_real_omegas(ts), temp_K, hbar_scale)
+    let g_r = _gvib_from_omegas(tst_real_omegas(reactant), temp_K, hbar_scale)
+    let dG_J_per_molecule = g_ts - g_r
+    // J/molecule → kcal/mol :  ×N_A / 4184.
+    let NA = 6.02214076e23
+    return dG_J_per_molecule * NA / tst_kcalmol_to_J()
+}
+
+// ── 전체 ΔG‡(T) [kcal/mol] = ΔE‡ + ΔG_vib(T) ──────────────────────────────
+//   ΔE‡ = PES 장벽 (kcal/mol, 호출자가 NEB/LEPS saddle 에서 산출해 전달).
+pub fn tst_dG_barrier(dE_kcalmol: float, ts: TSClass, reactant: TSClass,
+                      temp_K: float, hbar_scale: float) -> float {
+    return dE_kcalmol + tst_dGvib_kcalmol(ts, reactant, temp_K, hbar_scale)
+}
+
+// ── (c) Arrhenius 회수: 두 온도에서 k → E_a, ln A (직선 fit) ───────────────
+//   ln k = ln A − E_a/(R T).  두 점 (T1,k1),(T2,k2):
+//     E_a = −R · (ln k2 − ln k1) / (1/T2 − 1/T1)    [J/mol]
+//   반환 = E_a [kcal/mol].
+pub fn tst_arrhenius_Ea(k1: float, T1: float, k2: float, T2: float) -> float {
+    let lnk1 = ln(k1)
+    let lnk2 = ln(k2)
+    let inv1 = 1.0 / T1
+    let inv2 = 1.0 / T2
+    let Ea_J = -tst_R_gas() * (lnk2 - lnk1) / (inv2 - inv1)
+    return Ea_J / tst_kcalmol_to_J()
+}
+
+// pre-exponential A [s⁻¹]:  ln A = ln k + E_a/(RT) ⇒ A = k·exp(E_a/RT).
+pub fn tst_arrhenius_A(k: float, Ea_kcalmol: float, temp_K: float) -> float {
+    let Ea_J = Ea_kcalmol * tst_kcalmol_to_J()
+    return k * exp(Ea_J / (tst_R_gas() * temp_K))
+}
+
+// ── Wigner 터널링 보정 (HONEST 다음수 — round-6 후보, 여기선 진단만) ────────
+//   κ_W = 1 + (1/24)(ħ|ω‡|/k_B T)²  — 허수배리어 곡률 |ω‡| 로 1차 터널링 증강.
+//   고전 TST(κ=1)가 저온 rate 를 과소평가하는 정도를 *정직하게* 정량.
+pub fn tst_wigner_kappa(imag_omega_J: float, temp_K: float) -> float {
+    let x = imag_omega_J / (tst_kB_SI() * temp_K)
+    return 1.0 + (1.0 / 24.0) * x * x
+}

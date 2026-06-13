@@ -89,27 +89,34 @@ fn jc_skip_ws(b, p) {
 
 fn jc_parse_string(b, p) {
     // Returns [value_string, next_pos]. Assumes b[p] == '"' (34).
+    // OP-127: accumulate the raw header bytes and decode the UTF-8 sequence
+    // ONCE via bytes_to_str_raw. The prior `from_char_code(byte)` per byte
+    // re-interpreted each on-disk UTF-8 byte as a Unicode codepoint and
+    // re-UTF-8-encoded it, so any non-ASCII tensor name / __metadata__ value
+    // (e.g. a Korean label `층.가중치`) double-encoded into mojibake — the
+    // exact OP-79/OP-125 double-encode class. bytes_to_str_raw passes the
+    // raw bytes through unchanged so the UTF-8 round-trips byte-exact.
     let mut i = p + 1
     let n = len(b)
-    let mut out = ""
+    let mut sub = []
     while i < n {
         let c = b[i]
         if c == 34 {                 // '"'
-            return [out, i + 1]
+            return [bytes_to_str_raw(sub), i + 1]
         }
         if c == 92 {                 // backslash
             if i + 1 < n {
-                out = out + to_string(from_char_code(b[i + 1]))
+                sub.push(b[i + 1] & 0xFF)
                 i = i + 2
             } else {
                 i = i + 1
             }
         } else {
-            out = out + to_string(from_char_code(c))
+            sub.push(c & 0xFF)
             i = i + 1
         }
     }
-    return [out, i]
+    return [bytes_to_str_raw(sub), i]
 }
 
 fn jc_parse_int(b, p) {

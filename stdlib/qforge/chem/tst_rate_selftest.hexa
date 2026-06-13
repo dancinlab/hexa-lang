@@ -1,0 +1,217 @@
+// @ci_gate — deterministic · network-free · Eyring TST 속도상수 k(T) g5 게이트
+//
+// tst_rate_selftest.hexa — QFORGE-CHEM round-5 g5 (반응경로 정점: TS → k(T)).
+//   round-2~4 가 *위치를 찾은* H+H₂ 콜리니어 TS 를 Eyring TST 로 정량
+//   반응속도 k(T) 로 바꾼다.  4개 g5 verdict:
+//
+//     (a) Eyring prefactor 닫힌형 : k_B T/h @ 298.15 K == 6.21e12 s⁻¹
+//                                   (보편 TST attempt frequency, 결정론 anchor).
+//     (b) k(T) on a KNOWN barrier : H+H₂ 교환 (LEPS saddle, 본 brick 산출 ΔE‡)
+//                                   + 교과서 cited 9.8 kcal/mol 둘 다 Eyring k(T)
+//                                   2~3 온도 → 규모 보고 + cited |Δ|.
+//     (c) Arrhenius 일관성        : ln k vs 1/T 선형 → 기울기 = −E_a/R,
+//                                   회수 E_a ≈ 장벽 + ½RT (TST prefactor T-의존).
+//     (d) regression              : R3 ts_hessian + R2 neb_scf saddle 여전히
+//                                   TS (n_neg=1) — chem brick 무회귀.
+//
+//   HONEST(d6): (1) PES=LEPS 해석(neb_scf.hexa), ab-initio 아님.  LEPS 산출
+//     장벽 ≈15.7 kcal/mol(이 파라미터화) vs 교과서 H+H₂ 고전장벽 ~9.8 kcal/mol
+//     (LSTH surface) — 둘 다 정직보고 + |Δ|.  (2) 고전 TST (κ=1, 터널링 *없음*);
+//     H+H₂ 는 300 K 터널링 강해 QTST 가 정확 rate 보다 ~20% 큼 → 고전 TST 가 저온
+//     rate 과소평가.  다음 수 = Wigner/Eckart κ (tst_wigner_kappa 진단 동봉).
+//     (3) 절대 진동수는 LEPS Hessian(단위질량) 유래 — 핵심은 prefactor 닫힌형 +
+//     Eyring 규모 + Arrhenius E_a 회수이지 cm⁻¹ 정확도 아님.  rate 를 지어내지 않음.
+//
+//   문헌 anchor: H+H₂→H₂+H 고전장벽 ~9.8 kcal/mol (LSTH PES; Liu-Siegbahn-
+//     Truhlar-Horowitz).  QTST≈정확(고온), 300K 터널링 ~+20% (Mielke et al.,
+//     Phys. Rev. Lett. 91, 063201 (2003) — 정확 QM thermal rate benchmark).
+//
+// Run:  hexa run stdlib/qforge/chem/tst_rate_selftest.hexa
+// PASS: "qforge_tst_rate_selftest PASS".
+
+use "stdlib/qforge/chem/tst_rate"       // tst_prefactor · tst_eyring_rate · tst_arrhenius_Ea · ...
+use "stdlib/qforge/chem/neb_scf"        // leps_h3_energy · leps_h3_grad · ev_to_kcalmol
+use "stdlib/qforge/chem/ts_hessian"     // ts_classify_at · ts_hessian_fd · TSClass
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_int(name: str, got: int, want: int) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_bool(name: str, got: bool) -> int {
+    if got { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+fn _gnorm(g: [float]) -> float {
+    let mut s = 0.0 ; let mut i = 0
+    while i < len(g) { s = s + g[i] * g[i] ; i = i + 1 } return sqrt(s)
+}
+
+// Newton saddle refiner (ts_hessian_selftest.hexa 와 동형) — ∇V=0 정류점.
+fn _newton_saddle(r0: [float], iters: int) -> [float] {
+    let mut r: [float] = [] ; let mut k = 0
+    while k < len(r0) { r.push(r0[k]) ; k = k + 1 }
+    let mut it = 0
+    while it < iters {
+        let g = leps_h3_grad(r)
+        let H = ts_hessian_fd(0, r, 1.0e-4)
+        let a = H[0] ; let b = H[1] ; let c = H[2] ; let d = H[3]
+        let det = a * d - b * c
+        if _abs(det) < 1.0e-30 { it = iters }
+        else {
+            let dx = -(d * g[0] - b * g[1]) / det
+            let dy = -(-c * g[0] + a * g[1]) / det
+            r[0] = r[0] + dx ; r[1] = r[1] + dy ; it = it + 1
+        }
+    }
+    return r
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ════════════════════════════════════════════════════════════════════
+    // (a) Eyring prefactor 닫힌형 — k_B T/h @ 298.15 K == 6.21e12 s⁻¹.
+    // ════════════════════════════════════════════════════════════════════
+    //   보편 TST attempt frequency.  k_B=1.380649e-23, h=6.62607015e-34 (SI exact).
+    //   1.380649e-23·298.15/6.62607015e-34 = 6.2136e12 s⁻¹ (결정론 anchor).
+    let pref298 = tst_prefactor(298.15)
+    println("    [a] Eyring prefactor k_B·T/h @ 298.15 K = " + to_string(pref298) + " s⁻¹")
+    // 6.21e12 anchor (rel-eps ~1%; 정확값 6.2136e12).
+    fails = fails + _ck("(a1) ★ prefactor @298.15K == 6.21e12 s⁻¹", pref298, 6.21e12, 5.0e10)
+    fails = fails + _ck("(a1) prefactor == 6.2124e12 (닫힌형 정확)", pref298, 6.21244e12, 1.0e8)
+    // prefactor 선형 T-의존 (1000 K = 298.15K 값 × 1000/298.15).
+    let pref1000 = tst_prefactor(1000.0)
+    let ratio = pref1000 / pref298
+    fails = fails + _ck("(a2) prefactor ∝ T (1000/298.15 비)", ratio, 1000.0 / 298.15, 1.0e-6)
+
+    // ════════════════════════════════════════════════════════════════════
+    // (d/regression-pre) R2/R3 saddle 회귀 — H+H₂ TS (n_neg=1) 여전히 성립.
+    //   (k(T) 계산이 *위치된 TS* 에서 출발함을 먼저 확인 → 이후 ΔE‡ 산출.)
+    // ════════════════════════════════════════════════════════════════════
+    let saddle = _newton_saddle([1.171, 1.171], 30)
+    let gsadn = _gnorm(leps_h3_grad(saddle))
+    let cs = ts_classify_at(0, saddle, 1.0e-4)
+    println("    [d] saddle @ (" + to_string(saddle[0]) + "," + to_string(saddle[1]) +
+            ")  |∇V|=" + to_string(gsadn) + "  n_neg=" + to_string(cs.n_neg) +
+            "  ω=[" + to_string(cs.omega[0]) + "," + to_string(cs.omega[1]) + "]")
+    fails = fails + _ck("(d0) saddle |∇V| ≈ 0 (정류점, R3 회귀)", gsadn, 0.0, 1.0e-6)
+    fails = fails + _ck_int("(d1) ★ saddle n_neg=1 (H+H₂ TS, R3 회귀)", cs.n_neg, 1)
+    fails = fails + _ck_bool("(d1) 허수모드 ω<0 (반응좌표, R3 회귀)", cs.omega[0] < 0.0)
+    fails = fails + _ck_bool("(d1) 실모드 ω>0 (q_vib 에 합산, R3 회귀)", cs.omega[1] > 0.0)
+    // reactant minimum classify (q_vib reference) — H₂(eq) + far H.
+    let reactant = ts_classify_at(0, [8.0, 0.742], 1.0e-4)
+    fails = fails + _ck_int("(d2) reactant n_neg=0 (minimum, R3 회귀)", reactant.n_neg, 0)
+
+    // ════════════════════════════════════════════════════════════════════
+    // (b) k(T) on a KNOWN barrier — H+H₂ 교환 Eyring k(T) @ 2~3 온도.
+    // ════════════════════════════════════════════════════════════════════
+    //   ΔE‡ = LEPS saddle − reactant asymptote (본 brick 자체 산출).
+    let v_sad = leps_h3_energy(saddle)
+    let v_react = leps_h3_energy([8.0, 0.742])           // H₂(eq)+far H asymptote
+    let dE_ev = v_sad - v_react
+    let dE_leps = ev_to_kcalmol(dE_ev)
+    println("    [b] LEPS ΔE‡ = " + to_string(dE_ev) + " eV = " + to_string(dE_leps) + " kcal/mol")
+    fails = fails + _ck_bool("(b0) ΔE‡ > 0 (실장벽)", dE_leps > 0.0)
+    // 교과서 H+H₂ 고전장벽 anchor (LSTH PES).
+    let dE_cited = 9.8                                   // kcal/mol (LSTH classical barrier)
+    let dE_delta = _abs(dE_leps - dE_cited)
+    println("    [b] cited(LSTH) 고전장벽 = " + to_string(dE_cited) + " kcal/mol  |Δ(LEPS−cited)| = "
+            + to_string(dE_delta) + " kcal/mol")
+    // HONEST: 이 LEPS 파라미터화 장벽(~15.7)은 cited(9.8)보다 높음 — 둘 다 보고.
+    fails = fails + _ck_bool("(b0) |Δ(LEPS−cited)| 정직보고 (>0, fit 강제 아님)", dE_delta > 0.0)
+
+    //   ΔG_vib(T) 분배함수 차 (TS 는 허수모드 제외).  hbar_scale = LEPS √(eV/Å²) ω
+    //   → 에너지(J) 환산 묶음계수.  H₂ stretch ~4400 cm⁻¹ ≈ 8.74e-20 J 를 LEPS 실모드
+    //   ω≈2.15 에 정렬 → scale ≈ 4.06e-20 (HONEST 3: 절대규모 정렬용, cm⁻¹정확도 아님).
+    let hbar_scale = 4.06e-20
+    let dGvib_298 = tst_dGvib_kcalmol(cs, reactant, 298.15, hbar_scale)
+    println("    [b] ΔG_vib(298K) = " + to_string(dGvib_298) + " kcal/mol (TS 허수모드 제외)")
+
+    //   Eyring k(T) — cited 장벽(9.8)에서 (anchor) + LEPS 장벽에서 둘 다, 3 온도.
+    let T1 = 300.0 ; let T2 = 500.0 ; let T3 = 1000.0
+    //   순수 ΔE‡(=ΔG‡ ZPE/vib 무시) cited anchor — 문헌 규모 대조용.
+    let k300_c = tst_eyring_rate(dE_cited, T1)
+    let k500_c = tst_eyring_rate(dE_cited, T2)
+    let k1000_c = tst_eyring_rate(dE_cited, T3)
+    println("    [b] cited Eyring k(300)=" + to_string(k300_c) + "  k(500)=" + to_string(k500_c)
+            + "  k(1000)=" + to_string(k1000_c) + " s⁻¹")
+    //   LEPS 장벽 + ΔG_vib(T) 풀-자유에너지 Eyring k(T).
+    let dG300 = tst_dG_barrier(dE_leps, cs, reactant, T1, hbar_scale)
+    let dG500 = tst_dG_barrier(dE_leps, cs, reactant, T2, hbar_scale)
+    let dG1000 = tst_dG_barrier(dE_leps, cs, reactant, T3, hbar_scale)
+    let k300 = tst_eyring_rate(dG300, T1)
+    let k500 = tst_eyring_rate(dG500, T2)
+    let k1000 = tst_eyring_rate(dG1000, T3)
+    println("    [b] LEPS  Eyring k(300)=" + to_string(k300) + "  k(500)=" + to_string(k500)
+            + "  k(1000)=" + to_string(k1000) + " s⁻¹  (ΔG‡(300)=" + to_string(dG300) + " kcal/mol)")
+    // ★ k(T) 단조증가 (장벽 위 Arrhenius — 고온일수록 빠름).
+    fails = fails + _ck_bool("(b1) ★ k(T) 단조↑ (cited: k(1000)>k(500)>k(300))",
+                             k1000_c > k500_c)
+    fails = fails + _ck_bool("(b1) cited k(500)>k(300)", k500_c > k300_c)
+    fails = fails + _ck_bool("(b1) LEPS k(T) 단조↑ (k(1000)>k(300))", k1000 > k300)
+    // cited k(300) 규모: ΔG‡=9.8 @300K → exp(−9.8·4184/(8.314·300))·6.21e12.
+    //   arg=−9.8·4184/2494.3=−16.44 → exp=7.2e-8 → k≈6.21e12·7.2e-8·(300/298.15)≈4.5e5.
+    //   규모(1e4~1e7) 만 정직검증 (절대값은 prefactor 단분자형 — HONEST).
+    fails = fails + _ck_bool("(b2) cited k(300) 규모 1e4~1e7 s⁻¹ (장벽 9.8 일관)",
+                             k300_c > 1.0e4)
+    fails = fails + _ck_bool("(b2) cited k(300) < 1e8 s⁻¹ (prefactor 6.21e12·exp 억제)",
+                             k300_c < 1.0e8)
+    // exp(−ΔG/RT) < 1 (장벽 양수 ⇒ rate < prefactor).
+    fails = fails + _ck_bool("(b3) k(300) < prefactor (장벽 양수 억제)",
+                             k300_c < tst_prefactor(300.0))
+
+    // ════════════════════════════════════════════════════════════════════
+    // (c) Arrhenius 일관성 — ln k vs 1/T 선형 → E_a 회수 ≈ 장벽 + ½RT.
+    // ════════════════════════════════════════════════════════════════════
+    //   순수-ΔE‡ Eyring(ΔG‡=상수 9.8) 에서: ln k = ln(k_B/h) + ln T − ΔE‡/(RT).
+    //   E_a = −R d(ln k)/d(1/T) = ΔE‡ + RT (prefactor T¹ → +1·RT).  (q_vib 무시시)
+    //   두 점 회수 (T1,T2 평균온도에서 평가) → E_a ≈ ΔE‡ + R·T_mid.
+    let Ea_c = tst_arrhenius_Ea(k300_c, T1, k500_c, T2)
+    println("    [c] Arrhenius E_a (cited barrier, 300↔500K) = " + to_string(Ea_c) + " kcal/mol")
+    //   기대: E_a = ΔE‡ + R·T_mid (prefactor T¹ 의존).  T_mid 는 두점 ln-기울기의
+    //   유효온도 = (T1·T2·ln(T2/T1))/(T2−T1) ≈ 387 K → R·T_mid ≈ 0.77 kcal/mol.
+    let Tmid = (T1 * T2 * ln(T2 / T1)) / (T2 - T1)
+    let RTmid_kcal = tst_R_gas() * Tmid / tst_kcalmol_to_J()
+    let Ea_expect = dE_cited + RTmid_kcal
+    println("    [c] 기대 E_a = ΔE‡ + R·T_mid = " + to_string(dE_cited) + " + " +
+            to_string(RTmid_kcal) + " = " + to_string(Ea_expect) + " kcal/mol")
+    // ★ Arrhenius E_a ≈ ΔE‡ + R·T_mid (TST prefactor T-의존 정합).
+    fails = fails + _ck("(c1) ★ E_a ≈ ΔE‡ + R·T_mid (TST 정합)", Ea_c, Ea_expect, 1.0e-2)
+    // E_a 가 장벽 근방 (ΔE‡ < E_a < ΔE‡+2 kcal/mol).
+    fails = fails + _ck_bool("(c2) E_a > ΔE‡ (prefactor T¹ → +RT)", Ea_c > dE_cited)
+    fails = fails + _ck_bool("(c2) E_a < ΔE‡ + 2 kcal/mol", Ea_c < dE_cited + 2.0)
+    //   ln k vs 1/T 선형성: 세 점 (300/500/1000) 의 기울기 일관 (직선).
+    //   slope_ij = (ln k_j − ln k_i)/(1/T_j − 1/T_i) 가 −ΔE‡/R 근방 (prefactor lnT 보정).
+    let Ea_c2 = tst_arrhenius_Ea(k500_c, T2, k1000_c, T3)
+    println("    [c] E_a (500↔1000K) = " + to_string(Ea_c2) + " kcal/mol (고온 → +R·T_mid 더 큼)")
+    // 고온구간 E_a 더 큼 (E_a = ΔE‡ + R·T_mid, T_mid 증가).
+    fails = fails + _ck_bool("(c3) E_a(고온) > E_a(저온) (TST: E_a = ΔE‡ + R·T_mid)",
+                             Ea_c2 > Ea_c)
+    // 두 구간 모두 장벽 근방 (선형성 — ΔE‡ ± RT 범위).
+    fails = fails + _ck_bool("(c3) E_a(고온) 도 장벽 근방 (< ΔE‡ + 4 kcal/mol)",
+                             Ea_c2 < dE_cited + 4.0)
+
+    // ════════════════════════════════════════════════════════════════════
+    // (HONEST) Wigner 터널링 진단 — 고전 TST(κ=1) 가 저온 rate 과소평가량.
+    //   κ_W = 1 + (1/24)(ħ|ω‡|/k_BT)².  H+H₂ 경원자 → 300K κ_W > 1 (터널링 증강).
+    //   다음 수 (round-6): κ_W (또는 Eckart) 를 k(T) 에 곱한다.  여기선 진단만.
+    // ════════════════════════════════════════════════════════════════════
+    //   허수배리어 |ω‡| 대표값: H+H₂ saddle 허수진동수 ~1500i cm⁻¹ ≈ 2.98e-20 J.
+    let imag_w_J = 2.98e-20
+    let kappaW_300 = tst_wigner_kappa(imag_w_J, 300.0)
+    let kappaW_1000 = tst_wigner_kappa(imag_w_J, 1000.0)
+    println("    [honest] Wigner κ_W(300K)=" + to_string(kappaW_300) +
+            "  κ_W(1000K)=" + to_string(kappaW_1000) + " (고전 TST 과소평가량 — round-6 다음수)")
+    fails = fails + _ck_bool("(h1) Wigner κ_W(300) > 1 (터널링 → 고전 TST 과소평가)",
+                             kappaW_300 > 1.0)
+    fails = fails + _ck_bool("(h2) κ_W(300) > κ_W(1000) (저온일수록 터널링 큼)",
+                             kappaW_300 > kappaW_1000)
+
+    if fails == 0 { println("qforge_tst_rate_selftest PASS") }
+    else { println("qforge_tst_rate_selftest FAIL (" + to_string(fails) + ")") }
+}

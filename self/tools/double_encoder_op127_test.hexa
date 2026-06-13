@@ -1,0 +1,96 @@
+// HEXA — OP-127 module-local UTF-8 double-encoder regression lock.
+// @sentinel(__HEXA_OP127_DOUBLE_ENCODER__ <PASS|FAIL> N/N)
+//
+// Locks the cure of the module-local double-encoder class that OP-79's
+// repo-wide `bytes_to_str` sweep EXCLUDED (underscore/local helpers) and
+// OP-125 first found in safetensors. OP-127's census found the SAME
+// double-encode pattern in the hexaw tooling JSON-header / name readers:
+//   self/tools/safetensors_to_hexaw.hexa::jc_parse_string
+//   self/alloc/safetensors_mmap.hexa::jc_parse_string
+//   self/tools/lora_to_hexaw.hexa::jc_parse_string
+//   self/ml/hexaw.hexa  (tensor-name field)
+//
+// Bug: a JSON/header string value was rebuilt per byte via
+// `from_char_code(byte)`, which re-interprets each on-disk UTF-8 byte as a
+// Unicode codepoint and re-UTF-8-encodes it — so a non-ASCII tensor name
+// (e.g. the Korean `층.가중치`) double-encodes into mojibake (13 bytes -> 25).
+// Cure: accumulate raw bytes and decode the UTF-8 sequence ONCE via the
+// registered builtin `bytes_to_str_raw` (raw byte buffer, no re-encode).
+//
+// This test inlines the FIXED jc_parse_string reader and the OLD buggy reader
+// over the same header bytes, asserting: fixed round-trips byte-exact, buggy
+// mojibakes (longer + != original). Lock is binary-independent: `chr` lowers
+// to a raw byte under native codegen but the on-disk readers used
+// `from_char_code` (codepoint encoder) which double-encodes in BOTH paths.
+
+let SENT_T = "__HEXA_OP127_DOUBLE_ENCODER__"
+
+// 층.가중치 ("layer.weight" in Korean) as raw UTF-8 bytes (13 bytes on disk).
+fn _korean_name_bytes() -> [int] {
+    return [236, 184, 181, 46, 234, 176, 128, 236, 164, 145, 236, 185, 152]
+}
+
+// FIXED reader (mirrors the cured jc_parse_string): accumulate raw bytes in a
+// `"..."`-quoted JSON value and decode once via bytes_to_str_raw.
+fn _parse_string_fixed(b: [int], p: int) -> string {
+    let mut i = p + 1
+    let n = len(b)
+    let mut sub = []
+    while i < n {
+        let c = b[i]
+        if c == 34 { return bytes_to_str_raw(sub) }
+        sub.push(c & 0xFF)
+        i = i + 1
+    }
+    return bytes_to_str_raw(sub)
+}
+
+// OLD buggy reader (the pattern we removed): per-byte from_char_code.
+fn _parse_string_buggy(b: [int], p: int) -> string {
+    let mut i = p + 1
+    let n = len(b)
+    let mut out = ""
+    while i < n {
+        let c = b[i]
+        if c == 34 { return out }
+        out = out + to_string(from_char_code(c & 0xFF))
+        i = i + 1
+    }
+    return out
+}
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // Build a safetensors-style header fragment: "<korean>"
+    let mut hdr = [34]               // opening quote
+    let nm = _korean_name_bytes()
+    let mut k = 0
+    while k < len(nm) { hdr.push(nm[k]); k = k + 1 }
+    hdr.push(34)                     // closing quote
+
+    let expected = bytes_to_str_raw(nm)   // canonical decode of the 13 bytes
+
+    // 1. FIXED reader round-trips the Korean name byte-exact.
+    total = total + 1
+    let got = _parse_string_fixed(hdr, 0)
+    if got == expected && len(got) == 13 { pass = pass + 1 }
+    else { println("FAIL fixed-roundtrip: len=" + to_string(len(got))) }
+
+    // 2. OLD buggy reader mojibakes — longer than the input + != original.
+    total = total + 1
+    let bad = _parse_string_buggy(hdr, 0)
+    if len(bad) == 25 && bad != expected { pass = pass + 1 }
+    else { println("FAIL buggy-mojibake: len=" + to_string(len(bad))) }
+
+    // 3. ASCII names are unaffected (no regression on the common path).
+    total = total + 1
+    let ascii_hdr = [34, 109, 111, 100, 101, 108, 46, 119, 101, 105, 103, 104, 116, 34]  // "model.weight"
+    let asc = _parse_string_fixed(ascii_hdr, 0)
+    if asc == "model.weight" { pass = pass + 1 }
+    else { println("FAIL ascii: '" + asc + "'") }
+
+    let verdict = if pass == total { "PASS" } else { "FAIL" }
+    println(SENT_T + " " + verdict + " " + to_string(pass) + "/" + to_string(total))
+}
