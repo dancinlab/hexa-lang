@@ -82,6 +82,13 @@ fn _hexa_name_is_reserved(s) {
     if s == "gamma" { return true }
     if s == "lgamma" { return true }
     if s == "tgamma" { return true }
+    // math.h function-like macros (classification) — shadowing these as a
+    // user fn collides with the <math.h> macro and clang fails with
+    // "operand of type 'HexaVal' where arithmetic ... required".
+    if s == "isfinite" { return true }
+    if s == "isnan" { return true }
+    if s == "isinf" { return true }
+    if s == "signbit" { return true }
     // string.h functions
     if s == "strchr" { return true }
     if s == "strrchr" { return true }
