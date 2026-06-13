@@ -1,0 +1,171 @@
+F-OP97-BOUNDARY-RUN-SWEEP — systemic boundary-run-collapse class census (LANE-1, 0-pod)
+================================================================================
+DATE   : 2026-06-13
+LANE   : 1 (0-pod correctness, stdlib NUMERIC / DATA-STRUCTURE / PARSER + path/
+         string siblings). Sibling LANE-2 (OP-96) owns self/serve/* closure
+         twins — self/serve/* NOT touched here (non-overlapping surface).
+TIER   : 🟢 class CLOSED in LANE-1 stdlib (grep census + differential + 39/39
+         leaf-lock; ZERO new buggy sites — the 2 genuine 🔴 of this class were
+         OP-87/88) + 🟢 no closure-side twin (self/main _init_basename already
+         uses the correct run-skip pattern). Honest g5: a correct run-skipping
+         scan is CLEAN, not a bug — "class already clean outside OP-87/88" is
+         the verified result.
+
+================================================================================
+MOTIVE — the boundary-run-collapse bug class
+================================================================================
+OP-87 (path_dirname, #3239) + OP-88 (path_ext, #3241) shared a DISTINCT class
+from OP-94's split-keep-first: a `while`/index scan over a string that advances
+by 1 over a delimiter/boundary char and FAILS to SKIP/COLLAPSE *consecutive
+runs* of that char → leaks or miscounts at runs. Concretely:
+  · trailing/leading separator strip leaving a dangling run (OP-87 dirname)
+  · a boundary char inside a leading RUN mistaken for a real separator (OP-88
+    ext: "..ext" leaked ".ext")
+This round GREP-CENSUSED that class (the way OP-94 systematized split-keep-
+first) across the LANE-1 stdlib surface and classified every run-handling site.
+
+================================================================================
+CENSUS SCOPE (scoped greps, NO .git)
+================================================================================
+Grepped `while` index scans + the run-collapse intent keywords (trim/strip/
+skip/collapse/leading/trailing/whitespace/last_index_of/leading-zero/trailing-
+zero) across stdlib/ EXCLUDING .git, self/serve/* (LANE-2), rtsc/ verify
+fixtures, *_test.hexa. Read every candidate body. Surface swept:
+  NUMERIC/PARSER : core/parse.hexa · regex/native.hexa · material/composition
+                   .hexa · quantum/.../qasm3_lex.hexa · time/civil.hexa ·
+                   codec/base64.hexa · codec/hex.hexa · plot/plot.hexa
+  DATA/CRYPTO    : crypto/x509_rsa.hexa · crypto/tls13_client_record_io.hexa
+  TOKENIZERS     : stdlib_cli.hexa _trim · easy/cli.hexa _word_count ·
+                   kernels/circuit/devsim.hexa _split_ws ·
+                   kernels/logic_synth/read_verilog.hexa _rv_tokens ·
+                   kernels/noc_sim/anynet.hexa _anynet_tokens ·
+                   kernels/logic_synth/abc_map.hexa BLIF reader ·
+                   fusion/_plasma_lambda_d_batch.hexa ·
+                   xeno/.../akida_honesty_detector.hexa _extract_int
+  PATH/STRING    : alloc/path.hexa (all 7 fns) · core/string.hexa · string.hexa
+                   · yaml.hexa · stdlib_cli.hexa basename · bio/weave/* +
+                   bio/nanobot/* last_index_of("/") dir/basename extractors
+
+================================================================================
+CENSUS MATRIX  (site → classify → action)
+================================================================================
+[1] alloc/path.hexa path_dirname        → 🔴 FIXED by OP-87 (run-skip added). CLEAN now.
+[2] alloc/path.hexa path_ext/path_stem  → 🔴 FIXED by OP-88 (lead-dot-run skip). CLEAN now.
+[3] alloc/path.hexa path_basename       → CLEAN. Trailing-slash strip loop (64-67)
+        skips the WHOLE run; reverse scan finds last '/'. GNU-correct (OP-87-locked).
+[4] alloc/path.hexa path_normalize      → CLEAN. split("/") + filter len>0 → consecutive
+        slashes COLLAPSE (empty segments dropped). OP-88 double-slash-confirmed.
+[5] stdlib_cli.hexa _trim               → CLEAN. Leading `while a` AND trailing `while b`
+        loops both skip the full ws RUN (loop until non-ws). Textbook correct.
+[6] easy/cli.hexa _word_count           → CLEAN. `in_tok` state machine collapses ws runs
+        (counts only on the ws→non-ws transition). No phantom words.
+[7] kernels/circuit/devsim.hexa _split_ws → CLEAN. Pushes `cur` only when non-empty,
+        resets on each separator → ws runs yield NO empty tokens. (Same shape as
+        read_verilog _rv_tokens [8] and noc_sim/anynet _anynet_tokens [9].)
+[8] kernels/logic_synth/read_verilog.hexa _rv_tokens → CLEAN. Filters len>0 after split.
+[9] kernels/noc_sim/anynet.hexa _anynet_tokens       → CLEAN. Filters len>0 after split.
+[10] kernels/logic_synth/abc_map.hexa BLIF reader → CLEAN. The `.latch` path EXPLICITLY
+        filters empty tokens for ABC's variable-whitespace rows (656-661). `.model/
+        .inputs/.outputs/.gate` use bare split(" ") but parse standard single-space
+        BLIF emitter output — empty tokens cannot occur on the tool-generated input the
+        reader consumes (documented round-trip with this module's own emitter). NOTE:
+        robustness-only gap on malformed input, NOT a provable run-collapse-intent bug;
+        not fixed (out of g0/g5 scope — the intended input has single-space directives).
+[11] fusion/_plasma_lambda_d_batch.hexa → CLEAN. Replaces \t→space then split(" ") and
+        DROPS empty tokens (`len(tok) > 0`). Explicitly collapses ws runs (comment 74-76).
+[12] codec/base64.hexa base64_decode    → CLEAN. Skips EVERY whitespace char (each
+        processed; runs collapse). data-char count steady under inter-char ws (OP-75 area).
+[13] crypto/tls13_client_record_io.hexa → CLEAN. Trailing zero-pad strip (180-187) loops
+        decrementing while plain[end]==0 → strips the FULL zero RUN (RFC 8446 §5.4).
+[14] crypto/x509_rsa.hexa x509_rsa_modulus → CLEAN. Leading 0x00 sign-byte strip (36)
+        loops `while count>0 && byte==0` → strips the FULL leading-zero RUN (robust beyond
+        DER's single sign byte).
+[15] core/parse.hexa is_numeric_str / to_int_strict_or_zero → CLEAN. Every digit consumed
+        by the accumulation loop; leading zeros are NOT a run-collapse concern (value
+        accumulates correctly). to_int_safe split(".") = split-FIRST (OP-94 class, correct).
+[16] regex/native.hexa {n,m} quantifier + qasm3_lex.hexa lexer → CLEAN. Digit/ident/ws
+        runs fully consumed by inner `while`; lexer outer loop re-checks per char.
+[17] material/composition.hexa _scan_count / _scan_elements / paren expand → CLEAN. Digit
+        runs accumulated whole; parens are single boundary chars (not runs); Python regex
+        parity documented & exact.
+[18] plot/plot.hexa permille format → CLEAN. 2-digit fixed fraction (frac!=0 guarded) → at
+        most ONE trailing zero possible (no run); strip is correct.
+[19] stdlib_cli.hexa basename + bio/weave/* + bio/nanobot/* last_index_of("/") dir/basename
+        → CLEAN. Split on LAST slash → internal consecutive slashes handled naturally;
+        inputs are constructed filesystem/registry paths (no trailing-slash run occurs).
+[20] yaml.hexa flat parser indent/colon scan → CLEAN. First-char indent test (documented
+        flat-parser drop); colon split-FIRST (correct YAML); no run semantics.
+
+RESULT: ZERO new BUGGY sites. The boundary-run-collapse class is CLOSED in
+LANE-1 stdlib — every run-handling site uses the correct pattern (a run-skip
+inner loop, filter-empty-after-split, or accumulate-the-whole-run). The two
+genuine 🔴 of this class were OP-87 (dirname) + OP-88 (ext). One robustness-
+only gap noted (abc_map non-.latch BLIF directives) — NOT a provable run-
+collapse-intent bug on the tool-generated input the module consumes.
+
+================================================================================
+DIFFERENTIAL (faithful Python port of each CLEAN body; 0/1/2/3 boundary runs)
+================================================================================
+Ports run over inputs carrying 0/1/2/3 consecutive boundary chars at start/mid/
+end (/tmp/op97_diff.py + /tmp/op97_b64.py). All CLEAN bodies match intended
+run-collapse semantics:
+  cli_trim('   x   ')          -> 'x'         (2-3 ws runs both ends stripped)  ✓
+  cli_trim('\t\t a b \r\r')    -> 'a b'       (mixed ws runs)                   ✓
+  word_count('  a   b  ')      -> 2           (ws runs collapse, no phantoms)   ✓
+  word_count('a\t\tb\n\nc')    -> 3                                             ✓
+  split_ws('  a   b  ')        -> ['a','b']   (no empty tokens from runs)       ✓
+  b64_ws('Q  U\nJ\tD')         -> 4 data chars (ws runs skipped)                ✓
+  tls_trailing_nonzero([1,2,21,0,0,0]) -> 2  (3-zero run stripped, RFC8446)     ✓
+  x509_leading_strip([0,0,1,2])-> [1,2]      (2-zero run stripped)              ✓
+  path_collapse('/foo//bar///baz') -> '/foo/bar/baz' (all slash runs collapse)  ✓
+0 divergence from intended run-collapse semantics across all CLEAN bodies.
+(3 transient "BUG" prints in op97_diff.py were a TEST-EXPECTATION error — I had
+written base64 data-char count as 3 instead of 4; re-confirmed 4 in op97_b64.py.
+The module is correct.)
+
+================================================================================
+LOCK (leaf oracle, run LOCAL on shipping `hexa run` /Users/mini/.hx/bin/hexa)
+================================================================================
+NEW stdlib/alloc/boundary_run_census_op97_test.hexa — verbatim-inlined CLEAN
+bodies (cli_trim, word_count, split_ws_count, b64_ws_count, tls_trailing_nonzero,
+x509_leading_strip_count, path_collapse), self-contained no-`use`, NOT in the
+build_selfhost closure. Each asserts correct collapse of 0/1/2/3 consecutive
+boundary chars at start/mid/end.
+
+  __HEXA_STDLIB_BOUNDARY_RUN_OP97__ 39/39
+  PASS
+
+Non-regression re-run of the prior fix-locks (same shipping `hexa run`):
+  __HEXA_STDLIB_PATH_COLL_OP87__ 34/34  PASS
+  __HEXA_STDLIB_PATH_EXT_OP88__  24/24  PASS
+
+================================================================================
+🟢 CLOSURE-SIDE (self/*) — NO boundary-run twin (FLAG check)
+================================================================================
+self/main.hexa:618 _init_basename — closure-side path basename. INSPECTED: its
+trailing-slash strip loop (623-625) `while end>0 && path[end-1]=="/"` skips the
+FULL run, and the reverse-to-prior-slash scan (628-630) is GNU-correct. ALREADY
+uses the correct run-skip pattern → CLEAN, NOT a twin, no flag needed.
+self/native/native_gate_emit.hexa C-emit `while (n>0 && path[n-1]=='/') n--;`
+(1414) + runtime_core_emit.hexa (624) — emitted C trailing-slash strips, also
+correct run-skip. CLEAN.
+NO buggy closure twin of the boundary-run-collapse class exists (distinct from
+OP-94's split-keep-first twins in self/serve/http_server.hexa, which are LANE-2/
+OP-96 territory and a DIFFERENT class).
+
+================================================================================
+BYTE-EQ / wipe_guard / SAFETY
+================================================================================
+ZERO stdlib SOURCE edits — every censused site was already correct (no fix
+needed; the 2 real bugs of this class were OP-87/88). 1 NEW leaf census test +
+this verdict + the domain log entry. 0 deletions (wipe_guard net-additive). The
+*_test.hexa leaf is NOT in the build_selfhost closure → self-host fixpoint
+UNAFFECTED; no codegen/runtime/rt bytes touched. LANE split honored (no
+self/serve/*). $0 · 0-pod · NO GPU · no vast · no foreign pod · no .tape ·
+no self/env.hexa · leak-0.
+
+VERDICT: 🟢 boundary-run-collapse class CLOSED in LANE-1 stdlib (grep census of
+20 site-groups, ALL CLEAN; the 2 genuine 🔴 were OP-87/88) + 🟢 no closure-side
+twin (self/main _init_basename already run-skip-correct), locked by a 39/39
+verbatim leaf oracle on the shipping `hexa run` with OP-87/88 (34/34 + 24/24)
+re-run GREEN. Honest g5: a correct run-skipping scan is CLEAN, not fabricated.
