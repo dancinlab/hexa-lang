@@ -66,28 +66,39 @@ fn _cf_log2_int(n: int) -> int {
     return result
 }
 
-// ── fft_native(real, imag, n): in-place Cooley-Tukey radix-2 FFT ────────────
+// ── _cf_fft_inplace(re, im, n): in-place radix-2 forward butterfly on `farr` ──
 //
-// Byte-equal port of dsp_core.hexa::dsp_fft. Returns flat
-// [re0, im0, re1, im1, ...] (2·n floats). Requires n a power of 2.
-
-pub fn fft_native(real: [float], imag: [float], n: int) -> [float] {
-    if n <= 0 { return [] }
+//   SCRATCH LIFECYCLE (2026-06-14, handoff 16083ab3): the in-place butterfly
+//   core operates on caller-owned flat `farr` buffers (re/im, length n). It does
+//   the bit-reversal permutation IN PLACE then the iterative butterfly passes,
+//   allocating NOTHING per call. Both the 1D public wrappers and the 3D axis
+//   pass route their per-line transform through here, so the only allocation in
+//   the whole transform is the caller's two `farr` scratch buffers — which the
+//   caller `farr_free`s deterministically.
+//
+//   Why this matters: the earlier path built the working re/im (and the packed
+//   output) as `[float]` push-arrays. On grow they heap-promote (runtime
+//   arena→malloc), and a promoted buffer is ORPHANED on scope-pop (the val-arena
+//   rewind never free()s it). Every transform LINE leaked O(n); fft3 runs
+//   thousands of lines per call, so repeated large-grid fft3_real/ifft3
+//   accumulated memory → OOM under load. The math is bit-identical: same
+//   bit-reversal indexing, same twiddles, same butterfly write order.
+fn _cf_fft_inplace(re: int, im: int, n: int) {
     let bits = _cf_log2_int(n)
-
-    // Step 1: bit-reversal permutation into working arrays
-    let mut re = []
-    let mut im = []
+    // bit-reversal permutation in place (swap i <-> rev once, for i < rev)
     let mut i = 0
     while i < n {
         let rev = _cf_bit_reverse(i, bits)
-        re = re.push(real[rev])
-        im = im.push(imag[rev])
+        if rev > i {
+            let tr = farr_get(re, i)  let ti = farr_get(im, i)
+            let _ = farr_set(re, i, farr_get(re, rev))
+            let _ = farr_set(im, i, farr_get(im, rev))
+            let _ = farr_set(re, rev, tr)
+            let _ = farr_set(im, rev, ti)
+        }
         i = i + 1
     }
-
-    // Step 2: iterative butterfly passes
-    // stride doubles each stage: 2, 4, 8 ... n
+    // iterative butterfly passes; stride doubles each stage: 2, 4, 8 ... n
     let mut stride = 2
     while stride <= n {
         let half = stride / 2
@@ -100,39 +111,54 @@ pub fn fft_native(real: [float], imag: [float], n: int) -> [float] {
                 let tw_im = sin(0.0 - CF_TWO_PI * k / stride)
                 let a_idx = j + k
                 let b_idx = j + k + half
+                let b_re = farr_get(re, b_idx)
+                let b_im = farr_get(im, b_idx)
                 // Complex multiply: tw * b
-                let tb_re = tw_re * re[b_idx] - tw_im * im[b_idx]
-                let tb_im = tw_re * im[b_idx] + tw_im * re[b_idx]
-                // Butterfly: a' = a + tw*b, b' = a - tw*b — TRUE in-place.
-                //   The original code rebuilt the ENTIRE re/im array (n pushes) on
-                //   EVERY butterfly because of a stale "hexa lists are pass-by-value,
-                //   cannot mutate" assumption. hexa arrays DO support index assignment
-                //   (arr[i] = v, used throughout the stdlib), so the textbook radix-2
-                //   in-place butterfly is just 4 element writes — O(1) instead of O(n).
-                //   This removes the O(n²·log n) per-FFT allocation churn that OOM'd
-                //   the converged screened el-ph (3³q · 8 bands · 32³ grid). Output is
-                //   byte-identical (verified by the fft3 selftest). d4/d6, perf-only.
-                let a_re = re[a_idx]
-                let a_im = im[a_idx]
-                re[a_idx] = a_re + tb_re
-                im[a_idx] = a_im + tb_im
-                re[b_idx] = a_re - tb_re
-                im[b_idx] = a_im - tb_im
+                let tb_re = tw_re * b_re - tw_im * b_im
+                let tb_im = tw_re * b_im + tw_im * b_re
+                // Butterfly: a' = a + tw*b, b' = a - tw*b — TRUE in-place
+                //   (4 scalar writes, O(1) per pair — radix-2 textbook).
+                let a_re = farr_get(re, a_idx)
+                let a_im = farr_get(im, a_idx)
+                let _ = farr_set(re, a_idx, a_re + tb_re)
+                let _ = farr_set(im, a_idx, a_im + tb_im)
+                let _ = farr_set(re, b_idx, a_re - tb_re)
+                let _ = farr_set(im, b_idx, a_im - tb_im)
                 k = k + 1
             }
             j = j + stride
         }
         stride = stride * 2
     }
+}
 
+// ── fft_native(real, imag, n): in-place Cooley-Tukey radix-2 FFT ────────────
+//
+// Byte-equal port of dsp_core.hexa::dsp_fft. Returns flat
+// [re0, im0, re1, im1, ...] (2·n floats). Requires n a power of 2.
+
+pub fn fft_native(real: [float], imag: [float], n: int) -> [float] {
+    if n <= 0 { return [] }
+    // copy inputs into reclaimable `farr` scratch, transform in place, pack out
+    let re = farr_zeros(n)
+    let im = farr_zeros(n)
+    let mut i = 0
+    while i < n {
+        let _ = farr_set(re, i, real[i])
+        let _ = farr_set(im, i, imag[i])
+        i = i + 1
+    }
+    _cf_fft_inplace(re, im, n)
     // Pack output as interleaved [re0, im0, re1, im1, ...]
     let mut out = []
     let mut p = 0
     while p < n {
-        out = out.push(re[p])
-        out = out.push(im[p])
+        out = out.push(farr_get(re, p))
+        out = out.push(farr_get(im, p))
         p = p + 1
     }
+    let _ = farr_free(re)
+    let _ = farr_free(im)
     return out
 }
 
@@ -144,29 +170,27 @@ pub fn fft_native(real: [float], imag: [float], n: int) -> [float] {
 
 pub fn ifft_native(real: [float], imag: [float], n: int) -> [float] {
     if n <= 0 { return [] }
-
-    // Conjugate input: negate imaginary parts
-    let mut conj_im = []
+    // IFFT(X) = conj(FFT(conj(X)))/N, realised on reclaimable `farr` scratch.
+    let re = farr_zeros(n)
+    let im = farr_zeros(n)
     let mut i = 0
     while i < n {
-        conj_im = conj_im.push(0.0 - imag[i])
+        let _ = farr_set(re, i, real[i])
+        let _ = farr_set(im, i, 0.0 - imag[i])    // conjugate input
         i = i + 1
     }
-
-    // Forward FFT on conjugated input
-    let fft_out = fft_native(real, conj_im, n)
-
-    // Conjugate output and divide by N
+    _cf_fft_inplace(re, im, n)
+    // Conjugate output and divide by N, packing interleaved [re,im,...].
     let mut out = []
     let inv_n = 1.0 / n
     let mut j = 0
     while j < n {
-        let re_val = fft_out[j * 2] * inv_n
-        let im_val = 0.0 - fft_out[j * 2 + 1] * inv_n
-        out = out.push(re_val)
-        out = out.push(im_val)
+        out = out.push(farr_get(re, j) * inv_n)
+        out = out.push(0.0 - farr_get(im, j) * inv_n)
         j = j + 1
     }
+    let _ = farr_free(re)
+    let _ = farr_free(im)
     return out
 }
 
@@ -208,12 +232,14 @@ pub fn ifft_native(real: [float], imag: [float], n: int) -> [float] {
 // trick lifted to 3D, so ifft3 reuses the same axis-wise machinery via the
 // `inverse` flag and a final 1/N scale.
 
-// ── _fft3_core: split-array (re_in, im_in) → split (re_out, im_out) packed as
-//    [re0..re_{N-1}, im0..im_{N-1}] (length 2N). `inverse=1` ⇒ inverse passes,
-//    `inverse=0` ⇒ forward. NO 1/N scaling here (caller applies it for ifft3).
-fn _fft3_axis_pass(re: [float], im: [float], nx: int, ny: int, nz: int, axis: int, inverse: int) -> [float] {
-    // Transform every line along `axis` (0=x, 1=y, 2=z) with the 1D fft/ifft.
-    // Returns split [re(0..N-1), im(0..N-1)].
+// ── _fft3_axis_pass_farr: transform every line along `axis` IN PLACE on the
+//    `farr` working buffers wre/wim (length N). `inverse=1` ⇒ inverse passes
+//    (conjugate in, conjugate out, 1/alen scale), `inverse=0` ⇒ forward.
+//
+//    The line scratch (lre/lim, length alen) is allocated ONCE here and reused
+//    for every line of the pass, then freed — no per-line allocation, no leak.
+//    Everything stays in `farr`; nothing escapes as a `[float]`.
+fn _fft3_axis_pass_farr(wre: int, wim: int, nx: int, ny: int, nz: int, axis: int, inverse: int) {
     let ntot = nx * ny * nz
     // length of the transformed axis + stride between successive samples on it
     let mut alen = nz
@@ -222,12 +248,10 @@ fn _fft3_axis_pass(re: [float], im: [float], nx: int, ny: int, nz: int, axis: in
     if axis == 1 { alen = ny  astride = nz }
     if axis == 2 { alen = nz  astride = 1 }
 
-    // working copies (rebuilt as we scatter each transformed line back)
-    let mut wre = re
-    let mut wim = im
-
-    // number of independent lines = ntot / alen
-    let nlines = ntot / alen
+    // one reusable line scratch for the whole pass
+    let lre = farr_zeros(alen)
+    let lim = farr_zeros(alen)
+    let inv_a = 1.0 / alen
 
     // Enumerate every line: a line is fixed in the two non-`axis` coords. We
     // walk all N base indices and process a line only at its starting element
@@ -245,49 +269,40 @@ fn _fft3_axis_pass(re: [float], im: [float], nx: int, ny: int, nz: int, axis: in
         if axis == 1 { if iy == 0 { is_start = 1 } }
         if axis == 2 { if iz == 0 { is_start = 1 } }
         if is_start == 1 {
-            // gather the line
-            let mut lre = []
-            let mut lim = []
+            // gather the line into the reusable scratch (conjugate input on inverse)
             let mut t = 0
             while t < alen {
                 let gidx = base + t * astride
-                lre = lre.push(wre[gidx])
-                lim = lim.push(wim[gidx])
+                let _ = farr_set(lre, t, farr_get(wre, gidx))
+                if inverse == 0 {
+                    let _ = farr_set(lim, t, farr_get(wim, gidx))
+                } else {
+                    let _ = farr_set(lim, t, 0.0 - farr_get(wim, gidx))
+                }
                 t = t + 1
             }
-            // 1D transform (REUSE fft_native / ifft_native verbatim)
-            let mut spec = []
-            if inverse == 0 {
-                spec = fft_native(lre, lim, alen)
-            } else {
-                spec = ifft_native(lre, lim, alen)
-            }
-            // scatter back (spec is interleaved [re,im,...]). hexa supports
-            // list index-assignment (`arr[i] = v`), so we mutate in place.
+            // 1D forward butterfly (same core as fft_native/ifft_native)
+            _cf_fft_inplace(lre, lim, alen)
+            // scatter back; on inverse, conjugate output and scale by 1/alen so
+            // three passes accumulate exactly 1/(Nx·Ny·Nz). Bit-identical to the
+            // prior fft_native/ifft_native-per-line path.
             let mut s = 0
             while s < alen {
                 let gidx = base + s * astride
-                wre[gidx] = spec[s * 2]
-                wim[gidx] = spec[s * 2 + 1]
+                if inverse == 0 {
+                    let _ = farr_set(wre, gidx, farr_get(lre, s))
+                    let _ = farr_set(wim, gidx, farr_get(lim, s))
+                } else {
+                    let _ = farr_set(wre, gidx, farr_get(lre, s) * inv_a)
+                    let _ = farr_set(wim, gidx, (0.0 - farr_get(lim, s)) * inv_a)
+                }
                 s = s + 1
             }
         }
         base = base + 1
     }
-
-    // pack split [re.., im..]
-    let mut out = []
-    let mut p = 0
-    while p < ntot {
-        out = out.push(wre[p])
-        p = p + 1
-    }
-    let mut q = 0
-    while q < ntot {
-        out = out.push(wim[q])
-        q = q + 1
-    }
-    return out
+    let _ = farr_free(lre)
+    let _ = farr_free(lim)
 }
 
 // ── _is_pow2: true (1) iff n>0 and a power of two ────────────────────────────
@@ -310,43 +325,44 @@ fn _fft3_run(re: [float], im: [float], nx: int, ny: int, nz: int, inverse: int) 
     if _cf_is_pow2(nz) == 0 { return [] }
     let ntot = nx * ny * nz
     if len(re) != ntot { return [] }
-    if len(im) != ntot { return [] }
+    // im == [] is the real-input fast path (fft3_real): imaginary part is all
+    // zeros, synthesized directly into the farr below — no `zim` array to leak.
+    let im_zero = len(im) == 0
+    if im_zero == false { if len(im) != ntot { return [] } }
 
-    // split working arrays
-    let mut wre = re
-    let mut wim = im
+    // `farr` working buffers — the ONLY whole-grid allocation, transformed in
+    // place across all three passes and freed before return (handoff 16083ab3).
+    let wre = farr_zeros(ntot)
+    let wim = farr_zeros(ntot)   // farr_zeros already 0-fills, so the real path is a no-op
+    let mut c = 0
+    while c < ntot {
+        let _ = farr_set(wre, c, re[c])
+        if im_zero == false { let _ = farr_set(wim, c, im[c]) }
+        c = c + 1
+    }
 
     // pass order: z (axis 2) → y (axis 1) → x (axis 0). Order is immaterial
     // for a separable transform; innermost-first is cache-friendliest.
     let mut axis = 2
     while axis >= 0 {
-        let packed = _fft3_axis_pass(wre, wim, nx, ny, nz, axis, inverse)
-        // unpack split [re.., im..] back into wre/wim
-        let mut nre = []
-        let mut nim = []
-        let mut p = 0
-        while p < ntot {
-            nre = nre.push(packed[p])
-            nim = nim.push(packed[ntot + p])
-            p = p + 1
-        }
-        wre = nre
-        wim = nim
+        _fft3_axis_pass_farr(wre, wim, nx, ny, nz, axis, inverse)
         axis = axis - 1
     }
 
-    // For the inverse, ifft_native already divides each 1D pass by its axis
-    // length, so the cumulative scaling after three passes is 1/(Nx·Ny·Nz) = 1/N
-    // exactly — no extra global scale is needed. (Forward applies no scale.)
+    // For the inverse, each 1D pass divides by its axis length, so the cumulative
+    // scaling after three passes is 1/(Nx·Ny·Nz) = 1/N exactly — no extra global
+    // scale is needed. (Forward applies no scale.)
 
     // pack output as INTERLEAVED [re0, im0, re1, im1, ...] (matches fft_native).
     let mut out = []
     let mut o = 0
     while o < ntot {
-        out = out.push(wre[o])
-        out = out.push(wim[o])
+        out = out.push(farr_get(wre, o))
+        out = out.push(farr_get(wim, o))
         o = o + 1
     }
+    let _ = farr_free(wre)
+    let _ = farr_free(wim)
     return out
 }
 
@@ -379,11 +395,8 @@ pub fn ifft3(re: [float], im: [float], nx: int, ny: int, nz: int) -> [float] {
 pub fn fft3_real(data: [float], nx: int, ny: int, nz: int) -> [float] {
     let ntot = nx * ny * nz
     if len(data) != ntot { return [] }
-    let mut zim = []
-    let mut i = 0
-    while i < ntot {
-        zim = zim.push(0.0)
-        i = i + 1
-    }
-    return fft3(data, zim, nx, ny, nz)
+    // im == [] selects _fft3_run's real-input fast path: the all-zero imaginary
+    // part is synthesized in the farr working buffer, so no `zim` array is built
+    // (and leaked) per call (handoff 16083ab3).
+    return _fft3_run(data, [], nx, ny, nz, 0)
 }
