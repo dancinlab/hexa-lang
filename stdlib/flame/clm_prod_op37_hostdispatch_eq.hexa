@@ -119,7 +119,6 @@ fn _t_col2im(T: int, Cin: int, K: int, dil: int) -> float {
 }
 
 
-
 fn _t_grad_sum3(n: int) -> float {
     let a = t_zeros(n); let b = t_zeros(n); let c = t_zeros(n)
     _o37_fill(a, n, 29, 0.1); _o37_fill(b, n, 31, 0.1); _o37_fill(c, n, 37, 0.1)
@@ -130,8 +129,6 @@ fn _t_grad_sum3(n: int) -> float {
     if rc != 0 { return 999.0 }
     return _o37_maxdev(ref, got, n)
 }
-
-
 
 
 fn _t_embedding(T: int, d: int, V: int) -> float {
