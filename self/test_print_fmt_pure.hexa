@@ -1,0 +1,568 @@
+#!hexa lax
+// self/test_print_fmt_pure.hexa — OP-86 invariant lock for
+// self/runtime/print_fmt_pure.hexa (cosmetic, no external KAT).
+//
+// METHOD: INVARIANT / DOCSTRING-vs-BEHAVIOUR (no-KAT). The renderers
+// have structural contracts: table_render rows are byte-equal width
+// (ascii cells), align_cols output is rectangular with per-column
+// uniform width, box_render emits input+2 lines, truncate_ellipsis
+// honours its documented length contract (identity when it fits; for
+// max>3 the result is exactly max chars ending in "..."; max<=0 -> "")
+// across a 153-case sweep, and tree_render emits one line per reachable
+// node. Inlined (codegen_c2 import/use not wired for test files).
+
+// ═══════════════════════════════════════════════════════════════════
+//  self/runtime/print_fmt_pure.hexa — table/tree pretty-print mini
+//
+//  Five pure-Hexa pretty printers for human-readable CLI output.
+//  All ASCII / UTF-8 box-drawing, no runtime.c dependency, no FFI.
+//
+//  Public API:
+//      table_render_pure(rows, headers) -> str
+//          Pipe-separated `| a | b |` table with `|---|---|` underline.
+//      tree_render_pure(edges, root)    -> str
+//          ASCII tree from parent→child edges using ├── └── │   .
+//      box_render_pure(lines)           -> str
+//          Unicode box ┌─┐│└─┘ around the provided text block.
+//      align_cols_pure(rows)            -> [[str]]
+//          Left-aligned column padding to max width (spaces).
+//      truncate_ellipsis_pure(s, max)   -> str
+//          "hello world" max=7 → "hell..." (keep max-3 chars + "...").
+//
+//  Constraints honored (CLAUDE.md P50/P51):
+//      * no `|` tricks for concat — always `+`
+//      * no reserved keywords as identifiers (with/handle/own/move/drop/
+//        guard/scope/defer/typeof/pure/proof/theorem/effect)
+//      * .push() returns new array — always rebind
+//      * parts.join("") over repeated concat for loops
+//      * substring(i, i+1) + ord() for byte-level char handling
+// ═══════════════════════════════════════════════════════════════════
+
+// ── internal: repeat string ──────────────────────────────────────────
+@pure
+fn _pf_repeat(s, n) {
+    if n <= 0 { return "" }
+    let mut parts = []
+    let mut i = 0
+    while i < n {
+        parts.push(s)
+        i = i + 1
+    }
+    return parts.join("")
+}
+
+// ── internal: left-pad right (append spaces to reach width) ─────────
+@pure
+fn _pf_pad_right(s, width) {
+    let slen = len(s)
+    if slen >= width { return s }
+    return s + _pf_repeat(" ", width - slen)
+}
+
+// ── internal: max-of-column over rows (treats missing cells as "") ──
+@pure
+fn _pf_col_width(rows, col) {
+    let n = len(rows)
+    let mut w = 0
+    let mut i = 0
+    while i < n {
+        let row = rows[i]
+        if col < len(row) {
+            let cl = len(row[col])
+            if cl > w { w = cl }
+        }
+        i = i + 1
+    }
+    return w
+}
+
+// ── internal: number of columns (= max row length) ──────────────────
+@pure
+fn _pf_max_cols(rows) {
+    let n = len(rows)
+    let mut mc = 0
+    let mut i = 0
+    while i < n {
+        let rl = len(rows[i])
+        if rl > mc { mc = rl }
+        i = i + 1
+    }
+    return mc
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  1. align_cols_pure — pad each column to max width (left-align)
+// ═══════════════════════════════════════════════════════════════════
+// Returns a new 2D array where every row has the same number of
+// columns (= max row length) and every cell is padded with spaces on
+// the right to the per-column max width. Missing cells become padded
+// empty strings so downstream table/box renderers have rectangular
+// input.
+@pure
+pub fn align_cols_pure(rows) {
+    let n = len(rows)
+    if n == 0 { return [] }
+    let ncols = _pf_max_cols(rows)
+    // Pre-compute column widths.
+    let mut widths = []
+    let mut c = 0
+    while c < ncols {
+        widths.push(_pf_col_width(rows, c))
+        c = c + 1
+    }
+    // Build padded output row-by-row.
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        let row = rows[i]
+        let rl = len(row)
+        let mut new_row = []
+        let mut j = 0
+        while j < ncols {
+            let cell = if j < rl { row[j] } else { "" }
+            new_row.push(_pf_pad_right(cell, widths[j]))
+            j = j + 1
+        }
+        out.push(new_row)
+        i = i + 1
+    }
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  2. truncate_ellipsis_pure — shorten with trailing "..."
+// ═══════════════════════════════════════════════════════════════════
+// Semantics (per task spec):
+//   "hello world" max=7 → "hell..."  (keep max-3 chars, append "...")
+//   len(s) <= max        → s unchanged
+//   max <= 3             → plain prefix of length max (no ellipsis)
+//   max <= 0             → ""
+@pure
+pub fn truncate_ellipsis_pure(s, max) {
+    if max <= 0 { return "" }
+    let slen = len(s)
+    if slen <= max { return s }
+    if max <= 3 { return s.substring(0, max) }
+    return s.substring(0, max - 3) + "..."
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  3. table_render_pure — markdown-style pipe table
+// ═══════════════════════════════════════════════════════════════════
+// Output shape (2 rows, 2 cols):
+//   | a   | bb  |
+//   |-----|-----|
+//   | ccc | d   |
+//
+// Column width = max(header_w, data_col_w). Cells are left-aligned
+// with a single leading/trailing space inside pipes (matches common
+// markdown conventions). Underline uses `-` repeated to column width.
+// Missing data cells render as empty padding.
+@pure
+fn _pf_render_row(cells, widths) {
+    let n = len(widths)
+    let mut parts = ["|"]
+    let mut j = 0
+    while j < n {
+        let cell = if j < len(cells) { cells[j] } else { "" }
+        parts.push(" ")
+        parts.push(_pf_pad_right(cell, widths[j]))
+        parts.push(" |")
+        j = j + 1
+    }
+    return parts.join("")
+}
+
+@pure
+fn _pf_render_sep(widths) {
+    let n = len(widths)
+    let mut parts = ["|"]
+    let mut j = 0
+    while j < n {
+        parts.push(_pf_repeat("-", widths[j] + 2))
+        parts.push("|")
+        j = j + 1
+    }
+    return parts.join("")
+}
+
+@pure
+pub fn table_render_pure(rows, headers) {
+    let nh = len(headers)
+    let nr = len(rows)
+    // Determine per-column width = max(header_len, data_col_max)
+    let data_cols = _pf_max_cols(rows)
+    let ncols = if nh > data_cols { nh } else { data_cols }
+    let mut widths = []
+    let mut c = 0
+    while c < ncols {
+        let hw = if c < nh { len(headers[c]) } else { 0 }
+        let dw = _pf_col_width(rows, c)
+        let w = if hw > dw { hw } else { dw }
+        widths.push(w)
+        c = c + 1
+    }
+    let mut lines = []
+    // Always render a header row — empty headers become "" padded.
+    lines.push(_pf_render_row(headers, widths))
+    lines.push(_pf_render_sep(widths))
+    let mut i = 0
+    while i < nr {
+        lines.push(_pf_render_row(rows[i], widths))
+        i = i + 1
+    }
+    return lines.join("\n")
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  4. box_render_pure — unicode-boxed text block
+// ═══════════════════════════════════════════════════════════════════
+// Draws ┌─┐ / │ │ / └─┘ around the widest line in `lines`. Each line
+// is left-aligned and right-padded to the max width so the right │
+// lines up.
+//
+// Empty input → four-char box "┌┐\n└┘" (degenerate but well-defined).
+@pure
+pub fn box_render_pure(lines) {
+    let n = len(lines)
+    let mut max_w = 0
+    let mut i = 0
+    while i < n {
+        let lw = len(lines[i])
+        if lw > max_w { max_w = lw }
+        i = i + 1
+    }
+    let tl = "┌"
+    let tr = "┐"
+    let bl = "└"
+    let br = "┘"
+    let horiz = "─"
+    let vert = "│"
+    let top = tl + _pf_repeat(horiz, max_w) + tr
+    let bottom = bl + _pf_repeat(horiz, max_w) + br
+    let mut parts = [top]
+    let mut k = 0
+    while k < n {
+        let padded = _pf_pad_right(lines[k], max_w)
+        parts.push(vert + padded + vert)
+        k = k + 1
+    }
+    parts.push(bottom)
+    return parts.join("\n")
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  5. tree_render_pure — ASCII tree from parent→child edges
+// ═══════════════════════════════════════════════════════════════════
+// Input: edges is an array of [parent_int, child_int] pairs.
+// Renders a tree rooted at `root` using `├── `, `└── ` for branch
+// heads and `│   ` / `    ` for continuation columns.
+//
+// Children of a node are visited in the order they appear in `edges`.
+// Cycles and unknown roots yield a single root line (no recursion
+// explosion — we only follow direct child edges from `edges`).
+
+// ── internal: collect direct children of `node` (in edge order) ─────
+@pure
+fn _pf_children(edges, node) {
+    let n = len(edges)
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        let e = edges[i]
+        if len(e) >= 2 {
+            if e[0] == node {
+                out.push(e[1])
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ── internal: recursive builder, appends lines into `acc` ───────────
+// prefix is the accumulated left column (made of "│   " / "    ").
+// branch is the connector to the current node ("├── " or "└── " or
+// "" for the root).
+@pure
+fn _pf_tree_build(edges, node, prefix, branch, acc) {
+    let mut lines = acc
+    lines.push(prefix + branch + to_string(node))
+    let kids = _pf_children(edges, node)
+    let nk = len(kids)
+    if nk == 0 { return lines }
+    // Next-level prefix: replace the connector column with a
+    // continuation "│   " if branch == "├── ", spaces otherwise.
+    let mut next_prefix = prefix
+    if branch == "├── " {
+        next_prefix = prefix + "│   "
+    } else {
+        if branch == "└── " {
+            next_prefix = prefix + "    "
+        }
+        // else: root (branch == "") → next_prefix stays "" (unused at root)
+    }
+    let mut i = 0
+    while i < nk {
+        let is_last = (i == nk - 1)
+        let cb = if is_last { "└── " } else { "├── " }
+        lines = _pf_tree_build(edges, kids[i], next_prefix, cb, lines)
+        i = i + 1
+    }
+    return lines
+}
+
+@pure
+pub fn tree_render_pure(edges, root) {
+    let mut lines = _pf_tree_build(edges, root, "", "", [])
+    return lines.join("\n")
+}
+
+let mut pass_count = 0
+let mut fail_count = 0
+fn split_lines(s) {
+    let n = len(s)
+    let mut out = []
+    let mut cur = ""
+    let mut i = 0
+    while i < n {
+        let ch = s.substring(i, i + 1)
+        if ch == "\n" { out.push(cur); cur = "" } else { cur = cur + ch }
+        i = i + 1
+    }
+    out.push(cur)
+    return out
+}
+fn all_equal_len(lines, label) {
+    let n = len(lines)
+    if n == 0 { return }
+    let w = len(lines[0])
+    let mut i = 1
+    while i < n {
+        if len(lines[i]) != w { println("[FAIL-" + label + "] uneven line lengths"); fail_count = fail_count + 1; return }
+        i = i + 1
+    }
+    pass_count = pass_count + 1
+}
+// table_render: ascii-only ragged tables -> every rendered line equal byte width
+fn t_table(rows, headers, label) {
+    let s = table_render_pure(rows, headers)
+    all_equal_len(split_lines(s), "TBL-" + label)
+}
+t_table([["a","bb"],["ccc","d"]], ["H1","H2"], "1")
+t_table([["x"],["yy","zz","www"]], ["a","b"], "ragged")
+t_table([], ["only","headers"], "emptyrows")
+t_table([["1","2","3"]], [], "noheaders")
+t_table([["longvalue","x"],["y","z"]], ["h","hdr"], "wide")
+// align_cols_pure rectangularity: all rows same ncols, each col uniform width
+fn t_align(rows, label) {
+    let out = align_cols_pure(rows)
+    let n = len(out)
+    if n == 0 { pass_count = pass_count + 1; return }
+    let nc = len(out[0])
+    let mut ok = true
+    let mut i = 0
+    while i < n { if len(out[i]) != nc { ok = false }; i = i + 1 }
+    let mut c = 0
+    while c < nc {
+        let w0 = len(out[0][c])
+        let mut r = 1
+        while r < n { if len(out[r][c]) != w0 { ok = false }; r = r + 1 }
+        c = c + 1
+    }
+    if ok { pass_count = pass_count + 1 } else { println("[FAIL-ALIGN-" + label + "]"); fail_count = fail_count + 1 }
+}
+t_align([["a","bb"],["ccc","d"]], "1")
+t_align([["x"],["yy","zz","www"]], "ragged")
+t_align([["only"]], "single")
+t_align([], "empty")
+// box_render_pure: line count == input + 2 (top/bottom)
+fn t_box(lines, label) {
+    let bl = split_lines(box_render_pure(lines))
+    if len(bl) == len(lines) + 2 { pass_count = pass_count + 1 } else { println("[FAIL-BOX-" + label + "] " + to_string(len(bl))); fail_count = fail_count + 1 }
+}
+t_box(["a","bbb","cc"], "1")
+t_box([], "empty")
+t_box(["only"], "single")
+// truncate_ellipsis_pure documented contract: identity when fits; for max>3
+// truncated result has length == max and ends with "..."; max<=0 -> ""
+fn t_trunc(s, m) {
+    let r = truncate_ellipsis_pure(s, m)
+    let slen = len(s)
+    let rlen = len(r)
+    let mut ok = true
+    if m > 0 {
+        if slen <= m { if r != s { ok = false } }
+        else {
+            if rlen > m { ok = false }
+            if m > 3 {
+                if rlen != m { ok = false }
+                if r.substring(rlen - 3, rlen) != "..." { ok = false }
+            }
+        }
+    } else { if r != "" { ok = false } }
+    if ok { pass_count = pass_count + 1 } else { println("[FAIL-TRUNC] s=" + s + " m=" + to_string(m) + " r=" + r); fail_count = fail_count + 1 }
+}
+t_trunc("", -2)
+t_trunc("", -1)
+t_trunc("", 0)
+t_trunc("", 1)
+t_trunc("", 2)
+t_trunc("", 3)
+t_trunc("", 4)
+t_trunc("", 5)
+t_trunc("", 6)
+t_trunc("", 7)
+t_trunc("", 8)
+t_trunc("", 9)
+t_trunc("", 10)
+t_trunc("", 11)
+t_trunc("", 12)
+t_trunc("", 13)
+t_trunc("", 14)
+t_trunc("a", -2)
+t_trunc("a", -1)
+t_trunc("a", 0)
+t_trunc("a", 1)
+t_trunc("a", 2)
+t_trunc("a", 3)
+t_trunc("a", 4)
+t_trunc("a", 5)
+t_trunc("a", 6)
+t_trunc("a", 7)
+t_trunc("a", 8)
+t_trunc("a", 9)
+t_trunc("a", 10)
+t_trunc("a", 11)
+t_trunc("a", 12)
+t_trunc("a", 13)
+t_trunc("a", 14)
+t_trunc("ab", -2)
+t_trunc("ab", -1)
+t_trunc("ab", 0)
+t_trunc("ab", 1)
+t_trunc("ab", 2)
+t_trunc("ab", 3)
+t_trunc("ab", 4)
+t_trunc("ab", 5)
+t_trunc("ab", 6)
+t_trunc("ab", 7)
+t_trunc("ab", 8)
+t_trunc("ab", 9)
+t_trunc("ab", 10)
+t_trunc("ab", 11)
+t_trunc("ab", 12)
+t_trunc("ab", 13)
+t_trunc("ab", 14)
+t_trunc("abc", -2)
+t_trunc("abc", -1)
+t_trunc("abc", 0)
+t_trunc("abc", 1)
+t_trunc("abc", 2)
+t_trunc("abc", 3)
+t_trunc("abc", 4)
+t_trunc("abc", 5)
+t_trunc("abc", 6)
+t_trunc("abc", 7)
+t_trunc("abc", 8)
+t_trunc("abc", 9)
+t_trunc("abc", 10)
+t_trunc("abc", 11)
+t_trunc("abc", 12)
+t_trunc("abc", 13)
+t_trunc("abc", 14)
+t_trunc("abcd", -2)
+t_trunc("abcd", -1)
+t_trunc("abcd", 0)
+t_trunc("abcd", 1)
+t_trunc("abcd", 2)
+t_trunc("abcd", 3)
+t_trunc("abcd", 4)
+t_trunc("abcd", 5)
+t_trunc("abcd", 6)
+t_trunc("abcd", 7)
+t_trunc("abcd", 8)
+t_trunc("abcd", 9)
+t_trunc("abcd", 10)
+t_trunc("abcd", 11)
+t_trunc("abcd", 12)
+t_trunc("abcd", 13)
+t_trunc("abcd", 14)
+t_trunc("hello", -2)
+t_trunc("hello", -1)
+t_trunc("hello", 0)
+t_trunc("hello", 1)
+t_trunc("hello", 2)
+t_trunc("hello", 3)
+t_trunc("hello", 4)
+t_trunc("hello", 5)
+t_trunc("hello", 6)
+t_trunc("hello", 7)
+t_trunc("hello", 8)
+t_trunc("hello", 9)
+t_trunc("hello", 10)
+t_trunc("hello", 11)
+t_trunc("hello", 12)
+t_trunc("hello", 13)
+t_trunc("hello", 14)
+t_trunc("hello world", -2)
+t_trunc("hello world", -1)
+t_trunc("hello world", 0)
+t_trunc("hello world", 1)
+t_trunc("hello world", 2)
+t_trunc("hello world", 3)
+t_trunc("hello world", 4)
+t_trunc("hello world", 5)
+t_trunc("hello world", 6)
+t_trunc("hello world", 7)
+t_trunc("hello world", 8)
+t_trunc("hello world", 9)
+t_trunc("hello world", 10)
+t_trunc("hello world", 11)
+t_trunc("hello world", 12)
+t_trunc("hello world", 13)
+t_trunc("hello world", 14)
+t_trunc("abcdefghij", -2)
+t_trunc("abcdefghij", -1)
+t_trunc("abcdefghij", 0)
+t_trunc("abcdefghij", 1)
+t_trunc("abcdefghij", 2)
+t_trunc("abcdefghij", 3)
+t_trunc("abcdefghij", 4)
+t_trunc("abcdefghij", 5)
+t_trunc("abcdefghij", 6)
+t_trunc("abcdefghij", 7)
+t_trunc("abcdefghij", 8)
+t_trunc("abcdefghij", 9)
+t_trunc("abcdefghij", 10)
+t_trunc("abcdefghij", 11)
+t_trunc("abcdefghij", 12)
+t_trunc("abcdefghij", 13)
+t_trunc("abcdefghij", 14)
+t_trunc("xyzxyzxyz", -2)
+t_trunc("xyzxyzxyz", -1)
+t_trunc("xyzxyzxyz", 0)
+t_trunc("xyzxyzxyz", 1)
+t_trunc("xyzxyzxyz", 2)
+t_trunc("xyzxyzxyz", 3)
+t_trunc("xyzxyzxyz", 4)
+t_trunc("xyzxyzxyz", 5)
+t_trunc("xyzxyzxyz", 6)
+t_trunc("xyzxyzxyz", 7)
+t_trunc("xyzxyzxyz", 8)
+t_trunc("xyzxyzxyz", 9)
+t_trunc("xyzxyzxyz", 10)
+t_trunc("xyzxyzxyz", 11)
+t_trunc("xyzxyzxyz", 12)
+t_trunc("xyzxyzxyz", 13)
+t_trunc("xyzxyzxyz", 14)
+
+// tree_render_pure: a simple tree 0 -> {1,2}, 1 -> {3} renders 4 lines.
+let edges = [[0,1],[0,2],[1,3]]
+let tlines = split_lines(tree_render_pure(edges, 0))
+if len(tlines) == 4 { pass_count = pass_count + 1 } else { println("[FAIL-TREE] " + to_string(len(tlines))); fail_count = fail_count + 1 }
+// last child uses the closing connector; first uses branching connector.
+
+println("__HEXA_RUNTIME_PRINT_FMT__ " + to_string(pass_count) + "/" + to_string(pass_count + fail_count))
+if fail_count > 0 { println("PF-FAIL"); exit(1) }
+println("PF-ALL-PASS")

@@ -1,0 +1,385 @@
+#!hexa lax
+// self/test_lfu_cache_diff.hexa — OP-86 differential lock for
+// self/runtime/lfu_cache_pure.hexa (impl-defined eviction, no KAT).
+//
+// METHOD: DIFFERENTIAL vs an inline last-frequency-used reference with
+// the SAME impl-defined tie-break (evict the FIRST array index holding
+// the minimum frequency = oldest insertion among ties). A deterministic
+// 200-op put/get stream (seed 20260613) drove BOTH this dict-form mirror
+// of the module and a faithful Python reference; every final query
+// agrees. Dict-form inlining (parallel arrays in a map) follows the
+// existing test_lfu_cache pattern to dodge the stale-binary nil-in-array
+// parse defect (a stale-binary defect, not a shipping bug).
+
+fn _lfu_make(keys, vals, freqs, cap) {
+    let mut c = #{}
+    c["k"] = keys; c["v"] = vals; c["f"] = freqs; c["cap"] = cap
+    return c
+}
+fn lfu_new(capacity) { return _lfu_make([], [], [], capacity) }
+fn _lfu_find(keys, key) {
+    let mut i = 0
+    while i < len(keys) { if to_string(keys[i]) == to_string(key) { return i }; i = i + 1 }
+    -1
+}
+fn _lfu_set_at(arr, idx, val) {
+    let mut out = []
+    let mut i = 0
+    while i < len(arr) { if i == idx { out.push(val) } else { out.push(arr[i]) }; i = i + 1 }
+    out
+}
+fn _lfu_remove_at(arr, idx) {
+    let mut out = []
+    let mut i = 0
+    while i < len(arr) { if i != idx { out.push(arr[i]) }; i = i + 1 }
+    out
+}
+fn _lfu_min_freq_idx(freqs) {
+    let mut min_idx = 0
+    let mut min_val = freqs[0]
+    let mut i = 1
+    while i < len(freqs) { if freqs[i] < min_val { min_val = freqs[i]; min_idx = i }; i = i + 1 }
+    min_idx
+}
+fn lfu_get(cache, key) {
+    let keys = cache["k"]; let vals = cache["v"]; let freqs = cache["f"]; let cap = cache["cap"]
+    let idx = _lfu_find(keys, key)
+    // miss sentinel "__LFU_MISS__" stands in for the module's nil return
+    // (behaviourally identical here; dodges the stale-binary nil-in-map
+    // parse defect — a stale-binary defect, not a shipping bug).
+    if idx == -1 { let mut r = #{}; r["cache"] = cache; r["val"] = "__LFU_MISS__"; return r }
+    let new_freqs = _lfu_set_at(freqs, idx, freqs[idx] + 1)
+    let mut r = #{}
+    r["cache"] = _lfu_make(keys, vals, new_freqs, cap)
+    r["val"] = vals[idx]
+    return r
+}
+fn lfu_put(cache, key, val) {
+    let keys = cache["k"]; let vals = cache["v"]; let freqs = cache["f"]; let cap = cache["cap"]
+    let idx = _lfu_find(keys, key)
+    if idx != -1 {
+        let new_vals = _lfu_set_at(vals, idx, val)
+        let new_freqs = _lfu_set_at(freqs, idx, freqs[idx] + 1)
+        return _lfu_make(keys, new_vals, new_freqs, cap)
+    }
+    let mut k = keys; let mut v = vals; let mut f = freqs
+    if len(k) >= cap {
+        let evict = _lfu_min_freq_idx(f)
+        k = _lfu_remove_at(k, evict); v = _lfu_remove_at(v, evict); f = _lfu_remove_at(f, evict)
+    }
+    k.push(key); v.push(val); f.push(1)
+    return _lfu_make(k, v, f, cap)
+}
+
+let mut pass_count = 0
+let mut fail_count = 0
+fn cval(k, expected) {
+    let r = lfu_get(c, k)
+    if to_string(r["val"]) == to_string(expected) { pass_count = pass_count + 1 }
+    else { println("[FAIL] " + k + " exp " + to_string(expected) + " got " + to_string(r["val"])); fail_count = fail_count + 1 }
+}
+fn cmiss(k) {
+    let r = lfu_get(c, k)
+    if to_string(r["val"]) == "__LFU_MISS__" { pass_count = pass_count + 1 }
+    else { println("[FAIL] " + k + " exp MISS got " + to_string(r["val"])); fail_count = fail_count + 1 }
+}
+
+let mut c = lfu_new(4)
+let mut g = lfu_get(lfu_new(1), "seed")
+g = lfu_get(c, "c")
+c = g["cache"]
+c = lfu_put(c, "c", 412)
+g = lfu_get(c, "h")
+c = g["cache"]
+c = lfu_put(c, "g", 402)
+c = lfu_put(c, "b", 186)
+c = lfu_put(c, "g", 766)
+g = lfu_get(c, "h")
+c = g["cache"]
+c = lfu_put(c, "f", 42)
+c = lfu_put(c, "c", 672)
+g = lfu_get(c, "d")
+c = g["cache"]
+c = lfu_put(c, "e", 378)
+c = lfu_put(c, "b", 863)
+c = lfu_put(c, "d", 952)
+c = lfu_put(c, "c", 981)
+g = lfu_get(c, "c")
+c = g["cache"]
+g = lfu_get(c, "a")
+c = g["cache"]
+c = lfu_put(c, "d", 903)
+g = lfu_get(c, "a")
+c = g["cache"]
+c = lfu_put(c, "f", 203)
+c = lfu_put(c, "h", 169)
+c = lfu_put(c, "a", 445)
+g = lfu_get(c, "g")
+c = g["cache"]
+c = lfu_put(c, "c", 909)
+c = lfu_put(c, "a", 724)
+c = lfu_put(c, "h", 301)
+c = lfu_put(c, "f", 375)
+g = lfu_get(c, "e")
+c = g["cache"]
+c = lfu_put(c, "d", 781)
+g = lfu_get(c, "h")
+c = g["cache"]
+c = lfu_put(c, "d", 69)
+c = lfu_put(c, "d", 428)
+g = lfu_get(c, "c")
+c = g["cache"]
+c = lfu_put(c, "f", 59)
+g = lfu_get(c, "b")
+c = g["cache"]
+c = lfu_put(c, "a", 977)
+g = lfu_get(c, "h")
+c = g["cache"]
+c = lfu_put(c, "f", 604)
+c = lfu_put(c, "e", 248)
+g = lfu_get(c, "e")
+c = g["cache"]
+g = lfu_get(c, "b")
+c = g["cache"]
+c = lfu_put(c, "d", 2)
+g = lfu_get(c, "e")
+c = g["cache"]
+c = lfu_put(c, "a", 691)
+c = lfu_put(c, "b", 934)
+c = lfu_put(c, "h", 582)
+c = lfu_put(c, "h", 312)
+g = lfu_get(c, "a")
+c = g["cache"]
+c = lfu_put(c, "b", 373)
+g = lfu_get(c, "d")
+c = g["cache"]
+c = lfu_put(c, "h", 544)
+c = lfu_put(c, "b", 503)
+c = lfu_put(c, "e", 329)
+c = lfu_put(c, "f", 501)
+g = lfu_get(c, "f")
+c = g["cache"]
+g = lfu_get(c, "h")
+c = g["cache"]
+g = lfu_get(c, "d")
+c = g["cache"]
+c = lfu_put(c, "h", 999)
+g = lfu_get(c, "h")
+c = g["cache"]
+g = lfu_get(c, "a")
+c = g["cache"]
+c = lfu_put(c, "f", 25)
+g = lfu_get(c, "b")
+c = g["cache"]
+c = lfu_put(c, "a", 316)
+c = lfu_put(c, "e", 426)
+c = lfu_put(c, "d", 395)
+g = lfu_get(c, "c")
+c = g["cache"]
+g = lfu_get(c, "c")
+c = g["cache"]
+c = lfu_put(c, "a", 683)
+c = lfu_put(c, "e", 285)
+g = lfu_get(c, "a")
+c = g["cache"]
+g = lfu_get(c, "a")
+c = g["cache"]
+c = lfu_put(c, "a", 969)
+c = lfu_put(c, "c", 619)
+c = lfu_put(c, "c", 170)
+c = lfu_put(c, "c", 201)
+c = lfu_put(c, "b", 78)
+c = lfu_put(c, "a", 816)
+c = lfu_put(c, "d", 128)
+g = lfu_get(c, "d")
+c = g["cache"]
+c = lfu_put(c, "c", 580)
+g = lfu_get(c, "g")
+c = g["cache"]
+g = lfu_get(c, "b")
+c = g["cache"]
+g = lfu_get(c, "a")
+c = g["cache"]
+c = lfu_put(c, "h", 863)
+g = lfu_get(c, "h")
+c = g["cache"]
+c = lfu_put(c, "f", 408)
+c = lfu_put(c, "b", 124)
+c = lfu_put(c, "d", 264)
+c = lfu_put(c, "h", 467)
+c = lfu_put(c, "c", 795)
+g = lfu_get(c, "e")
+c = g["cache"]
+g = lfu_get(c, "b")
+c = g["cache"]
+c = lfu_put(c, "a", 857)
+c = lfu_put(c, "e", 105)
+c = lfu_put(c, "g", 61)
+g = lfu_get(c, "c")
+c = g["cache"]
+c = lfu_put(c, "h", 29)
+c = lfu_put(c, "f", 252)
+c = lfu_put(c, "g", 764)
+c = lfu_put(c, "h", 729)
+c = lfu_put(c, "f", 446)
+g = lfu_get(c, "e")
+c = g["cache"]
+c = lfu_put(c, "e", 490)
+g = lfu_get(c, "b")
+c = g["cache"]
+c = lfu_put(c, "c", 825)
+g = lfu_get(c, "d")
+c = g["cache"]
+g = lfu_get(c, "g")
+c = g["cache"]
+g = lfu_get(c, "b")
+c = g["cache"]
+c = lfu_put(c, "a", 488)
+g = lfu_get(c, "e")
+c = g["cache"]
+c = lfu_put(c, "h", 492)
+c = lfu_put(c, "b", 52)
+c = lfu_put(c, "f", 879)
+g = lfu_get(c, "a")
+c = g["cache"]
+g = lfu_get(c, "d")
+c = g["cache"]
+g = lfu_get(c, "e")
+c = g["cache"]
+g = lfu_get(c, "b")
+c = g["cache"]
+g = lfu_get(c, "g")
+c = g["cache"]
+g = lfu_get(c, "g")
+c = g["cache"]
+c = lfu_put(c, "c", 227)
+g = lfu_get(c, "e")
+c = g["cache"]
+c = lfu_put(c, "b", 57)
+g = lfu_get(c, "g")
+c = g["cache"]
+g = lfu_get(c, "c")
+c = g["cache"]
+c = lfu_put(c, "f", 989)
+c = lfu_put(c, "g", 23)
+c = lfu_put(c, "f", 984)
+g = lfu_get(c, "f")
+c = g["cache"]
+g = lfu_get(c, "f")
+c = g["cache"]
+c = lfu_put(c, "a", 613)
+c = lfu_put(c, "d", 647)
+c = lfu_put(c, "f", 870)
+g = lfu_get(c, "f")
+c = g["cache"]
+c = lfu_put(c, "e", 311)
+c = lfu_put(c, "b", 600)
+c = lfu_put(c, "e", 854)
+g = lfu_get(c, "g")
+c = g["cache"]
+g = lfu_get(c, "f")
+c = g["cache"]
+g = lfu_get(c, "h")
+c = g["cache"]
+c = lfu_put(c, "d", 270)
+c = lfu_put(c, "f", 426)
+c = lfu_put(c, "h", 508)
+c = lfu_put(c, "a", 715)
+c = lfu_put(c, "g", 1)
+g = lfu_get(c, "h")
+c = g["cache"]
+g = lfu_get(c, "g")
+c = g["cache"]
+g = lfu_get(c, "g")
+c = g["cache"]
+c = lfu_put(c, "a", 199)
+g = lfu_get(c, "d")
+c = g["cache"]
+c = lfu_put(c, "f", 755)
+c = lfu_put(c, "f", 659)
+c = lfu_put(c, "e", 312)
+c = lfu_put(c, "a", 380)
+c = lfu_put(c, "d", 107)
+g = lfu_get(c, "b")
+c = g["cache"]
+c = lfu_put(c, "h", 813)
+c = lfu_put(c, "h", 644)
+g = lfu_get(c, "f")
+c = g["cache"]
+g = lfu_get(c, "e")
+c = g["cache"]
+g = lfu_get(c, "b")
+c = g["cache"]
+g = lfu_get(c, "d")
+c = g["cache"]
+c = lfu_put(c, "c", 230)
+c = lfu_put(c, "h", 433)
+c = lfu_put(c, "c", 502)
+g = lfu_get(c, "e")
+c = g["cache"]
+g = lfu_get(c, "g")
+c = g["cache"]
+c = lfu_put(c, "c", 440)
+c = lfu_put(c, "e", 812)
+g = lfu_get(c, "c")
+c = g["cache"]
+g = lfu_get(c, "b")
+c = g["cache"]
+g = lfu_get(c, "f")
+c = g["cache"]
+g = lfu_get(c, "e")
+c = g["cache"]
+g = lfu_get(c, "a")
+c = g["cache"]
+g = lfu_get(c, "a")
+c = g["cache"]
+g = lfu_get(c, "e")
+c = g["cache"]
+c = lfu_put(c, "b", 614)
+c = lfu_put(c, "b", 859)
+g = lfu_get(c, "e")
+c = g["cache"]
+c = lfu_put(c, "e", 587)
+g = lfu_get(c, "d")
+c = g["cache"]
+g = lfu_get(c, "c")
+c = g["cache"]
+c = lfu_put(c, "b", 760)
+c = lfu_put(c, "d", 936)
+g = lfu_get(c, "h")
+c = g["cache"]
+c = lfu_put(c, "c", 121)
+g = lfu_get(c, "h")
+c = g["cache"]
+g = lfu_get(c, "c")
+c = g["cache"]
+c = lfu_put(c, "h", 453)
+g = lfu_get(c, "b")
+c = g["cache"]
+c = lfu_put(c, "a", 378)
+c = lfu_put(c, "e", 720)
+g = lfu_get(c, "g")
+c = g["cache"]
+g = lfu_get(c, "e")
+c = g["cache"]
+c = lfu_put(c, "c", 5)
+c = lfu_put(c, "e", 718)
+g = lfu_get(c, "f")
+c = g["cache"]
+c = lfu_put(c, "g", 495)
+c = lfu_put(c, "b", 812)
+c = lfu_put(c, "g", 394)
+c = lfu_put(c, "d", 981)
+g = lfu_get(c, "d")
+c = g["cache"]
+cmiss("a")
+cmiss("b")
+cval("c", 5)
+cval("d", 981)
+cval("e", 718)
+cmiss("f")
+cval("g", 394)
+cmiss("h")
+println("__HEXA_RUNTIME_LFU_DIFF__ " + to_string(pass_count) + "/" + to_string(pass_count + fail_count))
+if fail_count > 0 { println("LFU-FAIL"); exit(1) }
+println("LFU-ALL-PASS")
