@@ -58,34 +58,48 @@ pub fn url_encode_pure(s) {
 // Reverse of url_encode_pure. '+' is decoded to space (form-urlencoded
 // flavor). Invalid %XX sequences are preserved verbatim to match the
 // permissive behaviour common in URL libraries.
+//
+// OP-136 (URL parse/normalize value-correctness + security audit): a
+// percent-escape encodes ONE RAW BYTE, not a Unicode code point. The
+// prior body emitted `from_char_code(byte)` per escape, which for any
+// byte ≥ 0x80 produces the UTF-8 encoding of the CODE POINT U+00xx
+// (2 bytes) rather than the literal byte — so a multibyte UTF-8 payload
+// like "%E2%9C%93" (✓) decoded to the 6-byte garbage c3 a2 c2 9c c2 93
+// instead of the 3 raw bytes e2 9c 93 (verified vs urllib.parse.unquote).
+// Fix = collect the decoded RAW BYTES into a buffer, then UTF-8-assemble
+// once via `bytes_to_str_raw` (the OP-135 byte-faithful SSOT, NUL-clean) —
+// same pattern std_encoding.hexa's url_decode already uses. Round-trips
+// multibyte correctly under BOTH the Rust interpreter and self-host codegen.
 pub fn url_decode_pure(s) {
     if type_of(s) != "string" { return "" }
     let n = len(s)
-    let mut out = ""
+    let mut bytes = []
     let mut i = 0
     while i < n {
         let c = s.substring(i, i + 1)
         if c == "+" {
-            out = out + " "
+            bytes.push(32)
             i = i + 1
         } else if c == "%" && i + 2 < n {
             let hi = _hex_to_int(s.substring(i + 1, i + 2))
             let lo = _hex_to_int(s.substring(i + 2, i + 3))
             if hi >= 0 && lo >= 0 {
-                out = out + from_char_code(hi * 16 + lo)
+                bytes.push((hi * 16 + lo) & 0xFF)
                 i = i + 3
             } else {
-                out = out + c
+                bytes.push(ord(c))
                 i = i + 1
             }
         } else if c == "%" && i + 2 >= n {
-            // trailing partial %... — leave verbatim
-            out = out + s.substring(i, n)
-            i = n
+            // trailing partial %... — keep the raw bytes verbatim
+            while i < n {
+                bytes.push(ord(s.substring(i, i + 1)))
+                i = i + 1
+            }
         } else {
-            out = out + c
+            bytes.push(ord(c))
             i = i + 1
         }
     }
-    out
+    bytes_to_str_raw(bytes)
 }

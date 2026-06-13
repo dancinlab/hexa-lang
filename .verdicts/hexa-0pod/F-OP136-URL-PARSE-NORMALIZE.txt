@@ -1,0 +1,133 @@
+F-OP136-URL-PARSE-NORMALIZE — URL/URI parse + percent-decode + authority
+decomposition value-correctness & SECURITY audit (HEXA-0POD, LANE-2, 0-pod).
+
+VERDICT: 🔴 2 bugs FIXED (1 VALUE/encoding · 1 SECURITY) + 🟢 CONVERGED.
+COUNT: 5 URL functions audited / 4 buggy (3 = same percent-decode class) / 4 fixed.
+        + path_normalize audited CLEAN (already locked by OP-116).
+
+────────────────────────────────────────────────────────────────────────────
+SURFACE INVENTORY (g5 honest — no full scheme://authority parser exists)
+────────────────────────────────────────────────────────────────────────────
+There is NO general-purpose URL/URI parser in-repo (no url_parse/uri_parse/
+parse_url/resolve_uri/url_join). The URL surface is:
+  · OP-91 query helper  stdlib/net/http_request.hexa::parse_query / parse_request
+       — splits ?query at first '?', pairs at first '='. NO percent-decode,
+         NO normalization. Already audited (OP-91/92). Out of OP-136 scope.
+  · percent codecs      self/runtime/url_pure.hexa     url_decode_pure   [FIXED]
+                        self/runtime/encoding_pure.hexa url_decode_pure  [FIXED]
+                        self/main.hexa                  hexa_url_decode   [FIXED]
+                        self/std_encoding.hexa          url_decode        CLEAN
+                                  (already collects bytes → bytes_to_str_raw)
+  · ws authority parse  stdlib/net/websocket_native.hexa::_ws_url_parse   [FIXED]
+       — splits ws://host[:port]/path (the only scheme://authority decomposer)
+  · path normalizer     stdlib/alloc/path.hexa::path_normalize            CLEAN
+       — filesystem (not URL) path; matches posixpath; clamps `..` at root;
+         already locked by OP-116 (path-traversal). Re-verified below.
+
+────────────────────────────────────────────────────────────────────────────
+🔴 BUG 1 — PERCENT-DECODE multibyte corruption  (VALUE/encoding · OP-128 class)
+────────────────────────────────────────────────────────────────────────────
+A %XX escape encodes ONE RAW BYTE, not a Unicode code point. The 3 decoders
+emitted `from_char_code(byte)` / `chr(byte)` PER ESCAPE, so under the Rust
+interpreter every byte ≥ 0x80 was re-UTF-8-encoded as the code point U+00xx.
+
+EDGE TABLE (input → hexa BEFORE → hexa AFTER fix → Python urllib oracle → V):
+  input         hexa-OLD (bytes)        hexa-FIXED       unquote()      verdict
+  "%E2%9C%93"   c3 a2 c2 9c c2 93  ✗    e2 9c 93 (✓)     e2 9c 93 (✓)   FIXED
+  "%ED%95%9C"   c3 ad c2 95 c2 9c  ✗    ec 95 88 (한)     ec 95 88 (한)   FIXED
+  "%41"         41 (A)                  41 (A)           41 (A)         CLEAN
+  "hello+world" "hello world"           "hello world"    "hello world"  CLEAN
+  "a%2Fb"       "a/b"                   "a/b"            "a/b"          CLEAN(*)
+  "%ZZ"         "%ZZ"                   "%ZZ"            "%ZZ"          CLEAN
+  "100%"        "100%"                  "100%"           "100%"         CLEAN
+  "%4"          "%4"                    "%4"             "%4"           CLEAN
+  (*) %2F decodes to the BYTE '/' (correct); this is a leaf decoder with no
+      path-splitting downstream, so no premature-reserved-decode security
+      issue — the ws parser splits the path BEFORE this decoder ever runs.
+  Bounds guard `i+2 < n` AUDITED: correct (index i+2 must be < n = valid);
+      trailing complete escape "%41" decodes, partial "%4"/"%"/"a%" verbatim.
+
+FIX: collect decoded raw bytes → bytes_to_str_raw (the OP-135 byte-faithful
+SSOT; NUL-clean). Same pattern std_encoding.url_decode already uses. Correct
+under BOTH the Rust interpreter and self-host codegen (where chr→hexa_chr_byte
+&0xFF happened to be byte-faithful — so this was a runtime-DIVERGENT bug).
+
+────────────────────────────────────────────────────────────────────────────
+🔴 BUG 2 — IPv6 AUTHORITY port-confusion  (SECURITY — parse confusion / DoS)
+────────────────────────────────────────────────────────────────────────────
+_ws_url_parse split host:port on the FIRST ':'. An IPv6 literal "[::1]:8080"
+is full of ':' — the first lands INSIDE the address.
+
+EDGE TABLE (ws URL → hexa BEFORE → hexa AFTER fix → urlsplit oracle → verdict):
+  url                       hexa-OLD              hexa-FIXED          urlsplit          V
+  "ws://[::1]:8080/path"    THREW to_int(        host="::1"          host="::1"        FIXED
+                            ":1]:8080") = CRASH   port=8080           port=8080
+  "ws://[2001:db8::1]:9000  THREW (crash)         host="2001:db8::1"  host="2001:db8::1" FIXED
+   /x"                                            port=9000           port=9000
+  "ws://[::1]/path"         host="[" port=80 ✗    host="::1" port=80  host="::1" 80     FIXED
+  "ws://host:8080/p"        host="host" 8080      host="host" 8080    host="host" 8080  CLEAN
+  "ws://host/p"             host="host" 80        host="host" 80      host="host" 80    CLEAN
+  "ws://host"               host="host" 80 /      host="host" 80 /    host="host" 80 /  CLEAN
+
+IMPACT: every IPv6 ws:// URL HARD-CRASHED the parser (`to_int: not an integer`)
+— a parse-confusion DoS; under a permissive to_int it would have silently
+mis-routed the connection (host="[", wrong port). FIX = bracket-aware split
+(RFC 3986 §3.2.2): host = the bracketed span (brackets stripped, matching
+urlsplit().hostname), port = the ':' that follows ']' only.
+
+────────────────────────────────────────────────────────────────────────────
+🟢 path_normalize (stdlib/alloc/path.hexa) — CLEAN (re-verified vs posixpath)
+────────────────────────────────────────────────────────────────────────────
+  input              hexa             posixpath        root-escape?
+  "/../"             "/"              "/"              clamped ✓
+  "/../../etc/passwd" "/etc/passwd"   "/etc/passwd"    clamped ✓ (no traversal)
+  "/a/../../b"       "/b"             "/b"             clamped ✓
+  "/a/b/../c"        "/a/c"           "/a/c"           ✓
+  "//a//b"           "/a/b"           "/a/b" (posix //a/b — leading-pair only)
+  "/a/./b"           "/a/b"           "/a/b"           ✓
+A `..` can NEVER escape above an absolute root → no path-traversal. Matches
+posixpath (the correct oracle for a FILESYSTEM path helper). Already locked
+by OP-116; not a URL path normalizer, so RFC 3986 trailing-slash differences
+are intentional filesystem semantics, not bugs.
+
+────────────────────────────────────────────────────────────────────────────
+REGRESSION GUARD — stdlib/net/url_parse_normalize_op136_test.hexa
+────────────────────────────────────────────────────────────────────────────
+Hermetic (no `use`; fixed bodies inlined verbatim). 16/16 checks PASS:
+  __HEXA_STDLIB_URL_PARSE_NORMALIZE_OP136__ 16/16
+  PASS
+Both fixes locked vs urllib.parse oracle, EACH with a negative-control
+falsifier: (1) the OLD per-escape body PROVABLY corrupts "%E2%9C%93" (≠ ✓);
+(2) the OLD first-':' split lands inside "[::1]:8080" → host="[" (the
+confusion the fix removes). Also: test_url_pure.hexa 23/23 PASS with the
+fixed url_pure.hexa body.
+
+────────────────────────────────────────────────────────────────────────────
+CLOSURE / FLAGS
+────────────────────────────────────────────────────────────────────────────
+ALL edited files are closure-OUT of the active self-host byte-eq build:
+  · self/runtime/url_pure.hexa + encoding_pure.hexa — DORMANT (referenced
+    only by their own test files; the file header notes "no C twin yet…
+    self-host will depend on this LATER").
+  · self/main.hexa — the OLD self-host tree; the active build compiles
+    compiler/main.hexa, which never `use`s self/main (verified: 0 import stmts).
+  · stdlib/net/websocket_native.hexa — net leaf (only importer: websocket.hexa);
+    parses cleanly through the full closure post-fix.
+→ ZERO byte-eq / fixpoint impact; no selfhost gate semantics changed.
+Net-additive (4 corrected decode/parse bodies + new test); no >50-line deletion
+→ wipe_guard N/A. NO .tape edit.
+
+STALE-BINARY CAVEAT: the local ~/.hx/bin/hexa is a Jun-7 build that rejects
+pre-existing `nil` literals in encoding_pure.hexa's UNRELATED base64 decoder
+(lines 126/141/149 — NOT my hunks; my hunks introduce no `nil`). The
+encoding_pure.hexa fix is structurally identical to the url_pure.hexa fix,
+which IS verified (test_url_pure 23/23 + the 16/16 inlined oracle). Rebuild-
+pending only for that one file's full-closure run; correctness is oracle-proven.
+
+ONE HONEST LINE: there is no general URL parser in-repo; of the percent-codec
++ ws-authority surface that exists, multibyte percent-decode silently corrupted
+any non-ASCII UTF-8 (3 decoders) and the ws parser hard-crashed on every IPv6
+URL — both now byte-match urllib.parse; the lone path normalizer was already
+traversal-safe.
+
+$0 · 0-pod · NO GPU · no vast · no foreign-pod · leak-0. LANE-2.

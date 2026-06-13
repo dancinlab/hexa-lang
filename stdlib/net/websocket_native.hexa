@@ -87,15 +87,41 @@ fn _ws_url_parse(url: string) {
     }
     if len(path) == 0 { path = "/" }
     // Split host : port.
-    let colon = authority.index_of(":")
-    if colon >= 0 {
-        r["host"] = authority.substring(0, colon)
-        let port_str = authority.substring(colon + 1, len(authority))
-        let p = to_int(port_str)
-        if p > 0 { r["port"] = p }
+    //
+    // OP-136 (URL authority-decomposition security audit): an IPv6 host is
+    // bracket-delimited — "[::1]:8080" — and is FULL of ':' separators. The
+    // prior `authority.index_of(":")` grabbed the FIRST ':' (inside the
+    // address), so "[::1]:8080" parsed host="[" and then `to_int(":1]:8080")`
+    // THREW "to_int: not an integer" — an IPv6 ws:// URL hard-crashed the
+    // parser (a parse-confusion DoS, and on a permissive to_int it would have
+    // mis-routed the connection). Per RFC 3986 §3.2.2 the port separator is
+    // the first ':' AFTER the closing ']'. We strip the brackets from the
+    // host (matching urlsplit().hostname) and only read a port that trails ']'.
+    if len(authority) > 0 && authority.substring(0, 1) == "[" {
+        // IPv6 literal: host is the bracketed span; port (if any) follows ']'.
+        let rb = authority.index_of("]")
+        if rb < 0 {
+            r["error"] = "ws_native: unterminated IPv6 '[' in url: " + url
+            return r
+        }
+        r["host"] = authority.substring(1, rb)
+        let after = authority.substring(rb + 1, len(authority))
+        if len(after) > 0 && after.substring(0, 1) == ":" {
+            let port_str = after.substring(1, len(after))
+            let p = to_int(port_str)
+            if p > 0 { r["port"] = p }
+        }
     } else {
-        r["host"] = authority
-        r["port"] = 80
+        let colon = authority.index_of(":")
+        if colon >= 0 {
+            r["host"] = authority.substring(0, colon)
+            let port_str = authority.substring(colon + 1, len(authority))
+            let p = to_int(port_str)
+            if p > 0 { r["port"] = p }
+        } else {
+            r["host"] = authority
+            r["port"] = 80
+        }
     }
     if len(to_string(r["host"])) == 0 {
         r["error"] = "ws_native: empty host in url: " + url

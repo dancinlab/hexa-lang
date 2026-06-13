@@ -503,32 +503,40 @@ fn hexa_url_hex_nibble(c) {
 }
 
 fn hexa_url_decode(s) {
+    // OP-136 (URL parse/normalize audit): a percent-escape encodes ONE RAW
+    // BYTE. The prior body emitted `chr(code)` per escape and concatenated
+    // strings; under the Rust interpreter `chr` of a byte ≥ 0x80 yields the
+    // UTF-8 encoding of the CODE POINT (2 bytes), so a multibyte file= param
+    // ("%E2%9C%93" → ✓) corrupted to 6 garbage bytes. (Self-host codegen
+    // lowers chr→hexa_chr_byte &0xFF and happened to be byte-faithful, but
+    // the interpreter path diverged.) Fix = accumulate decoded RAW BYTES then
+    // assemble once via the byte-faithful `bytes_to_str_raw` SSOT — correct
+    // under both runtimes. Matches std_encoding.url_decode.
     let n = len(s)
-    let mut out = ""
+    let mut bytes = []
     let mut i = 0
     while i < n {
         let c = s.substring(i, i + 1)
         if c == "+" {
-            out = out + " "
+            bytes.push(32)
             i = i + 1
         } else if c == "%" && i + 2 < n {
             // Need 2 more chars for %XX. substring(i+2, i+3) requires i+3 <= n.
             let h = hexa_url_hex_nibble(s.substring(i + 1, i + 2))
             let l = hexa_url_hex_nibble(s.substring(i + 2, i + 3))
             if h >= 0 && l >= 0 {
-                let code = h * 16 + l
-                out = out + chr(code)
+                bytes.push((h * 16 + l) & 0xFF)
                 i = i + 3
             } else {
-                out = out + c
+                bytes.push(ord(c))
                 i = i + 1
             }
         } else {
-            out = out + c
+            bytes.push(ord(c))
             i = i + 1
         }
     }
-    return out
+    return bytes_to_str_raw(bytes)
 }
 
 fn cmd_url(url) {
