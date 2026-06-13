@@ -74,20 +74,36 @@ struct QwenBpe {
 
 
 // ═══════════════════════════════════════════════════════════════════
-//  Byte ↔ UTF-8 visible-char mapping (GPT-2 convention)
+//  Byte ↔ UTF-8 visible-char mapping (CANONICAL GPT-2/Qwen bytes_to_unicode)
 //
-//  Bytes 33..126, 161..172, 174..255 stay as the corresponding ASCII
-//  or Latin-1 codepoint. Everything else is shifted to 256 + offset.
+//  Printable byte b (33..126 | 161..172 | 174..255) -> codepoint b.
+//  Every OTHER ("non-printable") byte, in ascending byte order, maps to
+//  codepoint `256 + n` where n is a RUNNING COUNTER incremented once per
+//  non-printable byte (NOT `256 + byte`).
+//
+//  ⚠ FIX (OP-128, 2026-06): the previous table used `256 + i`, which agrees
+//  with the canonical running-counter ONLY for bytes 0..32 and DIVERGES for
+//  the 35 non-printable bytes >= 127 (0x7F, 0x80..0xA0, 0xAD). 34 of those
+//  (0x80..0xA0, 0xAD) are UTF-8 CONTINUATION bytes present in EVERY
+//  Korean/CJK/emoji character, so the wrong visible glyph never matched
+//  Qwen's vocab.json keys: encode produced wrong/missing tokens for all
+//  non-Latin multibyte text and decode of HF tokens carrying U+0122..U+0142
+//  fell through to mojibake. This is the same defect OP-28b cured in the
+//  tokenizer_bpe.hexa / op28b twin; qwen_bpe.hexa was the un-fixed copy.
+//  Cured by the running-counter `256 + n` (pure integer/table — byte-eq
+//  run-to-run + machine-independent by construction). See the OP-128 verdict.
 // ═══════════════════════════════════════════════════════════════════
 fn qwen_build_byte_to_str() {
     let mut table = []
+    let mut n = 0           // running counter for the non-printable set
     let mut i = 0
     while i < 256 {
         let printable = (i >= 33 && i <= 126) || (i >= 161 && i <= 172) || (i >= 174 && i <= 255)
         if printable {
             table = table + [from_char_code(i)]
         } else {
-            table = table + [from_char_code(256 + i)]
+            table = table + [from_char_code(256 + n)]
+            n = n + 1
         }
         i = i + 1
     }
@@ -946,43 +962,46 @@ fn qwen_is_added(bpe, id) {
     return false
 }
 
-// Walk a BPE token UTF-8 string, emit raw bytes per visible char.
+// Walk a BPE token UTF-8 string, emit the raw byte for each visible glyph.
+//
+// ⚠ FIX (OP-128, 2026-06): the previous body had two `from_char_code` misuses
+// that corrupted EVERY multibyte glyph (so all Korean / CJK / emoji decode
+// produced mojibake, even within a single token):
+//   (1) the visible glyph was rebuilt byte-by-byte via
+//       `from_char_code(char_code(tok, j))` — but for a raw byte >=128 that
+//       re-UTF-8-encodes it (byte 0xC4 -> "Ä" = 0xC3 0x84), so the lookup key
+//       never matched str_to_byte and the 2-byte glyph became a 4-byte blob.
+//   (2) the recovered RAW byte was emitted via `from_char_code(byte_val)` —
+//       which for byte_val >= 128 (e.g. 0xEA, a Korean lead byte) emits the
+//       2-byte UTF-8 encoding of U+00EA instead of the single raw byte 0xEA.
+// Both are cured the same way the proven tokenizer_bpe.hexa twin does it:
+//   • extract the glyph with `.slice` (byte-indexed, preserves raw bytes),
+//     sizing the slice by the lead byte (192/224/240 -> 2/3/4 bytes), and
+//   • emit the recovered byte with `chr(byte_val)` (single raw byte), falling
+//     back to the raw glyph slice on a miss.
+// Cross-token correctness is then automatic: `out` is a raw-byte buffer and
+// qwen_bpe_decode concatenates the per-token unmaps, so a multibyte char
+// whose UTF-8 bytes span TWO OR MORE tokens reassembles before any decode.
 fn qwen_unmap_bytes(bpe, tok) {
     let nb = len(tok)
     let mut out = ""
     let mut i = 0
     while i < nb {
-        let b = char_code(tok, i)
-        if b < 128 {
-            // single-byte visible char
-            let s = from_char_code(b)
-            if has_key(bpe.str_to_byte, s) {
-                out = out + from_char_code(bpe.str_to_byte[s])
-            } else {
-                out = out + s
-            }
-            i = i + 1
+        let b0 = char_code(tok, i)
+        // Size the visible glyph by its UTF-8 lead byte.
+        let mut clen = 1
+        if b0 >= 240 { clen = 4 }
+        else if b0 >= 224 { clen = 3 }
+        else if b0 >= 192 { clen = 2 }
+        // Defensive: never run past the token end.
+        if i + clen > nb { clen = nb - i }
+        let c = tok.slice(i, i + clen)
+        if has_key(bpe.str_to_byte, c) {
+            out = out + chr(bpe.str_to_byte[c])   // single RAW byte
         } else {
-            // UTF-8 continuation: consume up to 4 bytes until next char boundary
-            let start = i
-            i = i + 1
-            while i < nb {
-                let bn = char_code(tok, i)
-                if bn < 128 || bn >= 192 { break }
-                i = i + 1
-            }
-            let mut piece = ""
-            let mut j = start
-            while j < i {
-                piece = piece + from_char_code(char_code(tok, j))
-                j = j + 1
-            }
-            if has_key(bpe.str_to_byte, piece) {
-                out = out + from_char_code(bpe.str_to_byte[piece])
-            } else {
-                out = out + piece
-            }
+            out = out + c                          // pass the raw glyph through
         }
+        i = i + clen
     }
     return out
 }

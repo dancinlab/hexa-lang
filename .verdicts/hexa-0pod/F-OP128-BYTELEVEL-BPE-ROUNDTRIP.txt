@@ -1,0 +1,128 @@
+════════════════════════════════════════════════════════════════════════
+ F-OP128-BYTELEVEL-BPE-ROUNDTRIP — byte-level-BPE tokenizer round-trip
+ campaign HEXA-0POD · LANE 2 · 0-pod ($0, local CPU only)
+ verdict: 🔴 FIXED — TWO real bugs (class a: bijection · class b: detokenize)
+════════════════════════════════════════════════════════════════════════
+
+TARGET
+  self/ml/qwen_bpe.hexa — production Qwen2.5 byte-level-BPE tokenizer
+  (the `qwen_unmap_bytes` detokenize path flagged latent by OP-127).
+
+METHOD (honest g5)
+  The shipping local hexa is a stale-frozen-stdlib build; correctness was
+  established with a faithful Python PORT-OF-SOURCE oracle of the hexa
+  bijection + decode (modeling hexa string = raw-byte buffer, from_char_code
+  = UTF-8 encoder, char_code = raw byte, slice = byte-indexed) cross-checked
+  against the openai/HF GPT-2 `bytes_to_unicode()` reference table, plus a
+  pure hexa regression test (test/t54_*) run on the local interpreter (the
+  bijection + unmap functions are pure/fast — no 7MB tokenizer.json load).
+
+────────────────────────────────────────────────────────────────────────
+BUG CLASS (a) — byte↔unicode BIJECTION not exact vs GPT-2/HF reference
+────────────────────────────────────────────────────────────────────────
+  qwen_build_byte_to_str() mapped each non-printable byte to codepoint
+  `256 + i` (per-byte offset) instead of the canonical GPT-2 RUNNING
+  COUNTER `256 + n`. The two AGREE for bytes 0..32 but DIVERGE for the 35
+  non-printable bytes ≥127: 0x7F, 0x80..0xA0, 0xAD.
+
+  OF THOSE, 34 (0x80..0xA0, 0xAD) are UTF-8 CONTINUATION bytes present in
+  EVERY Korean / CJK / emoji character. The wrong visible glyph never
+  matched Qwen's vocab.json keys, so:
+    - encode produced wrong / missing tokens for ALL non-Latin multibyte text
+    - decode of HF tokens carrying U+0122..U+0142 fell through to mojibake.
+
+  The internal decode(encode(x)) was self-CONSISTENT (same wrong table both
+  ways) so it masked the defect — only interop with a real HF vocab (keyed
+  by the canonical table) exposes it. (Note: OP-28b had already cured this
+  EXACT defect in the tokenizer_bpe.hexa / op28b twin — qwen_bpe.hexa was
+  the un-fixed copy.)
+
+  ORACLE — BUGGY table vs GPT-2/HF reference:
+    [bijection] distinct visible strings: 256 / 256 OK
+    [bijection] str_to_byte inverse recovers all 256 bytes: OK
+    [bijection vs GPT-2 ref] mismatches: 35
+       byte 0x7f: hexa=0x17f ref=0x121
+       byte 0x80: hexa=0x180 ref=0x122   ← continuation byte (every CJK char)
+       ...
+       byte 0xa0: hexa=0x1a0 ref=0x142
+    ENCODE '가' against HF(gpt2) vocab: got 2 ids, MISSING bytes ['0x80']
+      -> 0x80 / 0xb0 are continuation bytes in EVERY Korean/CJK char => fail.
+
+  FIX: running-counter `256 + n`. ORACLE — FIXED table:
+    [FIXED] distinct256: True  inverse256: True  mismatch_vs_GPT2: 0
+      encode '가':  3 ids, missing=[]  -> OK
+      encode '한글 테스트': 16 ids, missing=[] -> OK
+      encode '中文':  6 ids, missing=[] -> OK
+      encode '😀':    4 ids, missing=[] -> OK
+    RESULT: GREEN
+
+────────────────────────────────────────────────────────────────────────
+BUG CLASS (b) — DETOKENIZE corrupts multibyte glyphs (cross-token too)
+────────────────────────────────────────────────────────────────────────
+  qwen_unmap_bytes() had two from_char_code misuses that mangled EVERY
+  multibyte visible glyph (even within a SINGLE token, before any
+  cross-token concern):
+    (1) it rebuilt the glyph key byte-by-byte via
+        `piece = piece + from_char_code(char_code(tok, j))` — but for a
+        raw byte ≥128, from_char_code (the UTF-8 ENCODER) re-encodes it
+        (byte 0xC4 -> "Ä" = 0xC3 0x84). A 2-byte glyph became a 4-byte
+        blob, str_to_byte lookup MISSED, and the garbage passed through.
+    (2) it emitted the recovered RAW byte via `from_char_code(byte_val)` —
+        which for byte_val ≥128 (e.g. 0xEA, a Korean lead byte) emits the
+        2-byte UTF-8 encoding of U+00EA, NOT the single raw byte 0xEA.
+
+  PROOF on the local interpreter (single 2-byte glyph for byte 0x95):
+    BEFORE fix:  unmap(glyph) len=4  b0=195   map key 'Ä·' not found   ← WRONG
+    AFTER  fix:  unmap single glyph(149): len=1 b0=149                 ← raw byte
+    AFTER  fix:  unmap(한 packed): len=3  bytes: 237 149 156           ← correct UTF-8
+
+  FIX (matches the proven tokenizer_bpe.hexa::bpe_decode twin): size the
+  glyph by its lead byte (192/224/240 -> 2/3/4), extract it with `.slice`
+  (raw-byte preserving), emit the recovered byte with `chr(byte_val)`
+  (single raw byte), fall back to the raw slice on a miss. Cross-token
+  correctness is then automatic: `out` is a raw-byte buffer and
+  qwen_bpe_decode concatenates per-token unmaps, so a multibyte char whose
+  UTF-8 bytes span 2+ tokens reassembles BEFORE it is ever decoded.
+
+────────────────────────────────────────────────────────────────────────
+REGRESSION TEST — test/t54_qwen_bpe_multibyte_roundtrip.hexa (LOCKED GREEN)
+  `hexa run test/t54_qwen_bpe_multibyte_roundtrip.hexa`:
+    PASS 256 visible glyphs all DISTINCT (bijection)
+    PASS byte->glyph->byte round-trips all 256
+    PASS byte 0x20 (32)  glyph == U+0120
+    PASS byte 0x7F (127) glyph == U+0121     (256+n, NOT buggy 256+127)
+    PASS byte 0x80 (128) glyph == U+0122     (256+n, NOT buggy 256+128)
+    PASS byte 0xA0 (160) glyph == U+0142
+    PASS byte 0xAD (173) glyph == U+0143
+    PASS byte 0x80 is NOT the buggy U+0180
+    PASS Korean round-trip, glyph-per-token (1+1+1 split)
+    PASS Korean round-trip, 2-glyph tokens (cross-boundary)
+    PASS CJK round-trip, 2-glyph tokens
+    PASS Emoji (4-byte) round-trip, 2-glyph tokens (split across 2 tokens)
+    PASS Emoji (4-byte) round-trip, 3-glyph tokens
+    PASS Mixed ASCII+multibyte round-trip, 2-glyph tokens
+    PASS Mixed ASCII+multibyte round-trip, 4-glyph tokens
+    PASS t54_qwen_bpe_multibyte_roundtrip
+
+  The CRITICAL guard is the multibyte CROSS-TOKEN case (a 3-byte Korean
+  char split 1+1+1 across three tokens, and a 4-byte emoji split across
+  two/three tokens): all reassemble to the exact original UTF-8.
+
+────────────────────────────────────────────────────────────────────────
+HONEST RESIDUALS
+  - The fix is verified by Python-port-of-source oracle + pure-hexa
+    interpreter test. The frozen shipping binary's embedded stdlib will
+    only carry the fix after a rebuild — rebuild-pending, source is correct.
+  - The earlier t54 FAIL on the nested-struct-literal-in-helper pattern was
+    a stale-interpreter SCOPING quirk (not a logic bug); hoisting the
+    QwenBpe value to top level made all 16 assertions GREEN. The fixed
+    functions themselves verified correct in standalone probes regardless.
+  - Pre-existing KNOWN-LIMITATIONS (no \p{N} for non-0-9 digits, no NFC
+    normalization) are unchanged and out of scope for round-trip.
+
+VERDICT: 🔴 FIXED — bug class (a) bijection + bug class (b) detokenize.
+  Byte-level-BPE detokenize is now CORRECT for multibyte cross-token text:
+  decode collects raw bytes across token boundaries (chr/slice, raw-byte
+  buffer) then the UTF-8 sequence is intact, with the bijection matching
+  the GPT-2/HF reference exactly.
+════════════════════════════════════════════════════════════════════════
