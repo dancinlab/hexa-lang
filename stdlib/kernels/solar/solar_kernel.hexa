@@ -104,6 +104,22 @@ fn degrees(r: float) -> float {
     return r * 180.0 / pi()
 }
 
+/// Clamp a value that is mathematically a sine/cosine (∈ [-1, 1]) back
+/// into the asin/acos domain. The solar-elevation sine
+/// `cosφ·cosδ·cosH + sinφ·sinδ` equals cos(φ−δ) at H=0 and is ≤ 1 by
+/// Cauchy–Schwarz, but the floating-point sum-of-products overshoots 1
+/// by ~1e-16 of roundoff for plausible inputs (latitude ≈ declination,
+/// i.e. the sun overhead at solar noon). Feeding that to the libm
+/// `asin` builtin (which, unlike rt_asin, does NOT clamp) returns a
+/// silent NaN that propagates into elevation and zenith. Saturate to
+/// [-1, 1] first — the same guard the crystal lattice_angles and
+/// chem/md/bonded angle_energy ports apply to their cos θ.
+fn _solar_clamp_unit(x: float) -> float {
+    if x > 1.0 { return 1.0 }
+    if x < 0.0 - 1.0 { return 0.0 - 1.0 }
+    return x
+}
+
 // ── ephemeris (Grover Hughes / Sandia 1985, pvlib parity) ────────────
 
 /// Clean-room hexa-native port of pvlib.solarposition.ephemeris.
@@ -203,9 +219,13 @@ pub fn ephemeris(year: int, doy: int, utc_hour: float,
     if sun_az < 0.0 { sun_az = sun_az + 360.0 }
 
     // ── Elevation (deg) ──────────────────────────────────────────────
-    let sun_el = degrees(asin(
+    // Clamp the elevation sine into [-1, 1]: the sum-of-products below is
+    // ≤ 1 by Cauchy–Schwarz but overshoots by ~1e-16 of roundoff when the
+    // latitude ≈ declination (sun overhead at solar noon), which makes the
+    // libm asin return a silent NaN that propagates into elevation/zenith.
+    let sun_el = degrees(asin(_solar_clamp_unit(
         cos(lat_r) * cos(dec_r) * cos(hr_angle_r)
-        + sin(lat_r) * sin(dec_r)))
+        + sin(lat_r) * sin(dec_r))))
 
     let solar_time = (180.0 + hr_angle) / 15.0
     let zenith = 90.0 - sun_el

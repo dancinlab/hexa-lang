@@ -1,0 +1,158 @@
+F-OP112-NAN-INF-SWEEP — systemic silent-NaN/Inf-propagation class sweep across
+stdlib numeric/scientific (LANE-1, NON-crypto). Generalizes OP-110.
+================================================================================
+STATUS: GREEN — class swept; 1 real 🔴 found + fixed + locked; all other public
+numeric/scientific sites GUARDED / documented-precondition / structurally-in-domain.
+
+GOAL: census every public numeric/scientific stdlib site that performs a float op
+that can yield NaN/Inf on a PLAUSIBLE input (intended result finite) WITHOUT a
+domain guard, and propagates it SILENTLY into a public result. Classify each as
+CLEAN (guarded / documented / structurally-in-domain) or 🔴 (unguarded silent
+NaN/Inf). Fix every 🔴 by clamping/guarding the domain to the sensible value,
+mirroring OP-110's _crystal_clamp_unit + the chem/md/bonded angle clamp.
+
+0-pod · $0 · NO GPU · NO vast · NO foreign pod · leak-0. Local hexa `hexa run`
+(stale-bundle dodge: every repro/lock verbatim-INLINED, no `use`). Python ref for
+the IEEE-754 overshoot cross-check.
+
+────────────────────────────────────────────────────────────────────────────────
+CENSUS MATRIX  (site → class → action)
+────────────────────────────────────────────────────────────────────────────────
+INVERSE-TRIG (acos/asin reached with |x|>1 by roundoff) — OP-110 was the seed:
+  stdlib/crystal/mod.hexa lattice_angles  acos(dot/|u||v|)   ── OP-110 FIXED (prior)
+  stdlib/chem/md/bonded.hexa angle_energy  acos(c)           ── CLEAN (clamps c→[-1,1]
+                                                                 + norm<1e-15 guard)
+  stdlib/chem/md/bonded.hexa dihedral  sqrt(1-cosphi²)       ── CLEAN (cosphi clamped
+                                                                 [-1,1] before sqrt)
+  stdlib/kernels/geodesy/wgs84_kernel.hexa haversine  asin(√a_h) ── CLEAN (a_h clamped
+                                                                 [0,1], explicit
+                                                                 "antipodal-roundoff clamp")
+  stdlib/kernels/solar/solar_kernel.hexa  asin(sinε·sinλ)    ── CLEAN (product of two
+                                                                 |sin|≤1 → ≤1 structurally)
+  stdlib/kernels/solar/solar_kernel.hexa  asin(cosφcosδcosH  ── 🔴 BUG (sum-of-products
+                                            + sinφsinδ)          overshoots 1 by 1 ULP
+                                                                 at lat≈dec, solar noon →
+                                                                 silent NaN) ─── FIXED
+  stdlib/runtime/math.hexa rt_asin / rt_acos                 ── CLEAN (clamp |x|>1→±π/2;
+                                                                 the libm builtin used by
+                                                                 the kernels does NOT — that
+                                                                 is precisely the bug surface)
+
+LOG (log/ln of x that can be ≤0):
+  stdlib/info/entropy.hexa shannon_entropy                   ── CLEAN (total==0→0; p+1e-10
+                                                                 smoothing; log never sees 0)
+  stdlib/info/entropy_histogram.hexa entropy_hist/joint      ── CLEAN (x<=0→0 helper; p>0)
+  stdlib/info/transfer_entropy.hexa mutual_info              ── CLEAN (pj>0&&pa>0&&pb>0;
+                                                                 xx clamped to 0.9999)
+  stdlib/info/mutual_info.hexa mutual_info_pair              ── CLEAN (n<=0/n_bins<=0→0)
+  stdlib/iit_ei.hexa ei_per_state_nats                       ── CLEAN (p>0 then q>0; q==0
+                                                                 → "+inf" sentinel, explicit)
+  stdlib/math/logsumexp.hexa logsumexp                       ── CLEAN (−∞ sentinel handled;
+                                                                 max-shift keeps exp≤1)
+  stdlib/stats/powerlaw_fit.hexa powerlaw_fit                ── CLEAN (k>0&&count>0 filter;
+                                                                 denom==0→0)
+  stdlib/atoms/mod.hexa (acut=log(9999)/…)                   ── CLEAN (log of a constant)
+  stdlib/atoms/mod.hexa (ds=-log(s1v/12))                    ── CLEAN (explicit if s1v<=0)
+  stdlib/kernels/plasma/…coulomb_log  log(√n/T)              ── DOCUMENTED-PRECONDITION
+                                                                 (n_e>0, T_e>0 physical; NRL
+                                                                 formula as-written) — left
+  stdlib/kernels/mc_transport/…bethe  0.5·log(log_arg)       ── DOCUMENTED-PRECONDITION
+                                                                 (energies/I physical >0) — left
+
+SQRT (x that can be <0 from roundoff / variance / 1-x²):
+  stdlib/stats/correlation.hexa pearson_r  num/sqrt(dx2·dy2) ── CLEAN (sqrt arg = Σsq·Σsq≥0;
+                                                                 denom<=0→0 guard, documented)
+  stdlib/stats/welford.hexa welford_var/pop_var             ── CLEAN (var = Σ(x-mean)²/(n-1)
+                                                                 ≥0; n≤1→0; NaN propagation
+                                                                 documented for NaN INPUTS only)
+  stdlib/nn.hexa layernorm  sqrt(variance+eps)               ── CLEAN (+eps)
+  stdlib/linalg/norm.hexa / reference.hexa  sqrt(Σsq)/(+eps) ── CLEAN (sum of squares ≥0)
+  stdlib/material/sim.hexa  sqrt(variance)                   ── CLEAN (two-pass-from-mean Σd²≥0)
+  stdlib/material/sim.hexa coherence_length sqrt(φ0/hc2)     ── CLEAN (hc2<=0→0 sentinel)
+  stdlib/material/sim.hexa penetration_depth sqrt(…/n_s…)    ── CLEAN (n_s<=0→0 sentinel)
+  stdlib/nuclear/sim.hexa viola_seaborg / royer  …/√Q_α      ── CLEAN (Q_alpha<=0→0 sentinel,
+                                                                 documented NaN-free convention)
+  stdlib/chem/vina/search.hexa  sqrt(1-r2)                   ── CLEAN (gated r2<1.0 && r2>0.0)
+  stdlib/chem/md/* distances  sqrt(dx²+dy²+dz²)              ── CLEAN (sum of squares ≥0)
+
+POW (x<0 frac-y / 0**0 / 0**neg):
+  stdlib/physics/laser_optics.hexa  pow(10, …)               ── CLEAN (base 10>0)
+  stdlib/material/sim.hexa  pow(1+…, 1/3) / pow(λ/λ1, 1.5)   ── CLEAN (base ≥1>0)
+  stdlib/nuclear/sim.hexa  pow(A,1/6) / pow(10,…)            ── CLEAN (A>0 nuclide mass; base 10)
+  stdlib/chem/md/forces_autograd.hexa  pow(sigma,6/12)       ── CLEAN (sigma>0 LJ radius)
+
+DIVISION (non-empty b that can be 0 → Inf into a public value):
+  (mean-over-empty = OP-106; this round = non-empty b==0)
+  All inspected normalizers carry a denom==0/<=0→sentinel guard (pearson_r denom<=0→0,
+  powerlaw_fit denom==0→0, material/nuclear sentinels above, bonded norm<1e-15→0). No
+  unguarded data-driven zero-denominator into a public result found. — CLEAN
+
+CONCLUSION: the well-maintained public numeric/scientific stdlib is consistently
+guarded — sentinels, [-1,1] clamps, +eps, p>0/denom>0 filters — EXCEPT one lone
+unguarded sum-of-products → inverse-trig site (solar elevation), the exact OP-110
+shape. One 🔴 in the class. Honest g5: an all-guarded site is CLEAN, not a bug.
+
+────────────────────────────────────────────────────────────────────────────────
+🔴 BUG #1 — solar_elevation / ephemeris asin-domain silent NaN
+────────────────────────────────────────────────────────────────────────────────
+FILE: stdlib/kernels/solar/solar_kernel.hexa  (pub fn ephemeris; the public
+      solar_elevation / solar_zenith / apparent_zenith all build on it)
+
+PRE-FIX:
+    let sun_el = degrees(asin(
+        cos(lat_r) * cos(dec_r) * cos(hr_angle_r)
+        + sin(lat_r) * sin(dec_r)))
+
+The argument is sin(elevation) = cosφcosδcosH + sinφsinδ. At H=0 it equals
+cos(φ−δ) and is ≤ 1 by Cauchy–Schwarz, so the intended result is finite. But the
+floating-point sum-of-products overshoots 1 by ~1e-16 (1 ULP) for plausible
+inputs — latitude ≈ declination, i.e. the sun directly overhead at solar noon.
+The libm `asin` builtin (unlike rt_asin, which clamps |x|>1→±π/2) returns a
+SILENT NaN, which propagates into the returned elevation AND into
+zenith = 90 − elevation. No crash — a corrupted finite-API result.
+
+VERBATIM REPRO (hexa run, /tmp/solar_repro3.hexa + /tmp/clamp_mini.hexa):
+  // 900-pt lat=dec sweep, H=0, runtime-computed sine:
+  UNGUARDED asin(>1) NaN count = 35        ← 35/900 plausible inputs → silent NaN
+  // the exact 1-ULP overshoot:
+  asin(1.0000000000000002) is_nan = true   ← the silent NaN
+  asin(clamp)              is_nan = false  val~pi/2 = 1.5708   ← fix → correct π/2
+
+PYTHON CROSS-CHECK (IEEE-754 double, authoritative):
+  max arg over lat,dec sweep at H=0 = 1.0000000000000002 (>1) at lat=dec=-15.6°
+  math.asin(1.0000000000000002) → NaN ;  clamp→1.0 → asin = 1.5707963267948966 (π/2)
+
+FIX (net-additive, 0 logic deletions): leaf `_solar_clamp_unit(x)` (saturate to
+[-1,1]) + wrap the elevation-sine argument before asin. Mirrors OP-110
+_crystal_clamp_unit and the chem/md/bonded angle clamp. The declination-sine
+asin (sinε·sinλ, a product of two |sin|≤1 values, ≤1 structurally) is left
+unwrapped — clamping it would be a no-op; only the genuine sum-of-products site
+is touched. The clamp is a no-op for every in-domain input (no contract change).
+
+LOCK: stdlib/kernels/solar/solar_elevation_asin_op112_test.hexa — HERMETIC
+verbatim-inlined FIXED step + UNFIXED twin negative control, `hexa run`:
+  __HEXA_OP112_SOLAR_ASIN__ pass=6 fail=0  ALL GREEN
+    1. FIXED clamps the 1-ULP-overshoot sine → finite π/2 (not NaN)
+    2. NEG-CTRL: unfixed twin asin(1+ULP) → NaN (NaN != NaN)
+    3. asin(1+ULP) raw → NaN, asin(clamp) → π/2 (the guarded silent NaN)
+    4. 900-pt sweep: UNGUARDED form NaNs (≥1) / CLAMPED form NaN-free (0)
+    5. regression: sine==1.0 → el = π/2 (sun overhead)
+    6. regression: in-domain sine cos(23.4°) round-trips asin to π/2−23.4° (libm-ulp)
+
+NO REGRESSION: existing stdlib/kernels/solar/solar_kernel_test.hexa vs the edited
+source → "solar_kernel_test: 34/34 PASS" (the clamp is a no-op on the Phoenix-AZ
+pvlib-parity timestamps; substrate parity <1e-9 preserved).
+
+────────────────────────────────────────────────────────────────────────────────
+CLOSURE / FLAGS
+────────────────────────────────────────────────────────────────────────────────
+· solar_kernel.hexa is a leaf science kernel, NOT in the build_selfhost closure
+  (grep compiler/ + self/ for kernels/solar → none import it) → ZERO fixpoint /
+  byte-eq impact, no selfhost gate. As fixpoint-safe as a stdlib leaf fix.
+· wipe_guard: net-ADDITIVE (+helper +clamp wrap +test); 0 logic deletions. OK.
+· Class verdict: silent-NaN/Inf in public numeric/scientific = CLOSED. 1 real 🔴
+  (this) on top of OP-110's lattice_angles; every other surveyed public site is
+  guarded / documented-precondition / structurally-in-domain. Honest SUCCESS.
+
+TIER: 🔴→🟢 (real silent-NaN bug → fixed + locked) + class-census GREEN.
+$0 · 0-pod · NO GPU · leak-0.
