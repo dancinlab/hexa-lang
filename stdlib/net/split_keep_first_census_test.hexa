@@ -1,0 +1,178 @@
+// OP-94 census lock for the split-on-every-delimiter / keep-first class
+// across the LANE-2 stdlib net/http/url surface.
+//
+// OP-91 (#3245 parse_query) and OP-92 (#3247 parse_request) already FIXED
+// the two genuine 🔴 truncation bugs of this class. The OP-94 census then
+// swept the remaining delimiter/boundary parsers and found them all CLEAN:
+// every one splits on the FIRST (or LAST) delimiter via index_of /
+// last_index_of + substring (NOT a shatter-on-every-occurrence .split()
+// with a fixed index), so data past the delimiter is preserved.
+//
+// This leaf pins those CLEAN sites with verbatim-inlined bodies so the
+// class STAYS closed: each test feeds an input containing the delimiter
+// MORE THAN ONCE and asserts the segment after the first/last delimiter
+// is kept whole (the exact failure mode the buggy class produced).
+//
+// Sites pinned (file → fn → delimiter semantics):
+//   stdlib/http_sse.hexa        http_sse_parse_event  : FIRST ":"  (WHATWG)
+//   stdlib/http2.hexa           _h2_parse_status_block: LAST  "\n" (reverse)
+//   stdlib/http.hexa            *_with_headers_status : LAST  "\n" (reverse)
+//   stdlib/net/websocket_native ws_url_parse          : FIRST "/" + ":"
+//
+// Verbatim-inlined (the installed `hexa` resolves `use "stdlib/..."` to a
+// stale bundled copy), self-contained, runnable with `hexa run`.
+
+// ── http_sse_parse_event field split (FIRST ":") ────────────────────
+fn sse_field(line) {
+    if len(line) > 0 && line.substring(0, 1) == ":" {
+        return ["__comment__", line.substring(1, len(line))]
+    }
+    let colon = line.index_of(":")
+    if colon < 0 { return [line, ""] }
+    let field = line.substring(0, colon)
+    let mut value = line.substring(colon + 1, len(line))
+    if len(value) > 0 && value.substring(0, 1) == " " {
+        value = value.substring(1, len(value))
+    }
+    return [field, value]
+}
+
+// ── _h2_parse_status_block (LAST "\n" twice, reverse) ───────────────
+fn last_index_of(s, needle) {
+    let nlen = len(needle)
+    if nlen == 0 { return len(s) }
+    let mut i = len(s) - nlen
+    while i >= 0 {
+        if s.substring(i, i + nlen) == needle { return i }
+        i = i - 1
+    }
+    return 0 - 1
+}
+
+fn h2_status_block(raw) {
+    let r = #{}
+    r["body"] = ""
+    r["status"] = ""
+    r["version"] = ""
+    if len(raw) == 0 { return r }
+    let nl2 = last_index_of(raw, "\n")
+    if nl2 < 0 { return r }
+    let status_str = raw.substring(nl2 + 1, len(raw)).trim()
+    let head = raw.substring(0, nl2)
+    let nl1 = last_index_of(head, "\n")
+    if nl1 < 0 {
+        r["body"] = head
+        r["status"] = status_str
+        return r
+    }
+    r["version"] = head.substring(nl1 + 1, len(head)).trim()
+    r["body"] = head.substring(0, nl1)
+    r["status"] = status_str
+    return r
+}
+
+// ── http_*_with_headers_status sentinel peel (LAST "\n") ────────────
+fn http_status_peel(raw) {
+    let r = #{}
+    r["body"] = ""
+    r["status"] = ""
+    let nl = last_index_of(raw, "\n")
+    if nl < 0 { return r }
+    r["body"] = raw.substring(0, nl)
+    r["status"] = raw.substring(nl + 1, len(raw)).trim()
+    return r
+}
+
+// ── ws_url_parse (FIRST "/" then FIRST ":") ─────────────────────────
+fn ws_url_parse(url) {
+    let r = #{}
+    r["host"] = ""
+    r["port"] = 80
+    r["path"] = "/"
+    let rest = url.substring(5, len(url))
+    let slash = rest.index_of("/")
+    let mut authority = rest
+    let mut path = "/"
+    if slash >= 0 {
+        authority = rest.substring(0, slash)
+        path = rest.substring(slash, len(rest))
+    }
+    if len(path) == 0 { path = "/" }
+    let colon = authority.index_of(":")
+    if colon >= 0 {
+        r["host"] = authority.substring(0, colon)
+        let port_str = authority.substring(colon + 1, len(authority))
+        let p = to_int(port_str)
+        if p > 0 { r["port"] = p }
+    } else {
+        r["host"] = authority
+    }
+    r["path"] = path
+    return r
+}
+
+fn check_str(name, got, want) {
+    if got == want {
+        println("ok   " + name)
+        return 1
+    }
+    println("FAIL " + name + " got=[" + got + "] want=[" + want + "]")
+    return 0
+}
+
+fn check_int(name, got, want) {
+    if got == want {
+        println("ok   " + name)
+        return 1
+    }
+    println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want))
+    return 0
+}
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // --- SSE field: value containing ":" must survive (FIRST split) ---
+    let s1 = sse_field("data: a:b:c")
+    total = total + 1; pass = pass + check_str("sse field", s1[0], "data")
+    total = total + 1; pass = pass + check_str("sse value-with-colon", s1[1], "a:b:c")
+    let s2 = sse_field("event: msg")
+    total = total + 1; pass = pass + check_str("sse simple field", s2[0], "event")
+    total = total + 1; pass = pass + check_str("sse simple value", s2[1], "msg")
+    let s3 = sse_field("flag")
+    total = total + 1; pass = pass + check_str("sse no-colon field", s3[0], "flag")
+    total = total + 1; pass = pass + check_str("sse no-colon value", s3[1], "")
+    let s4 = sse_field(":heartbeat")
+    total = total + 1; pass = pass + check_str("sse comment", s4[0], "__comment__")
+
+    // --- h2 status block: body with embedded newlines must survive ---
+    let h1 = h2_status_block("line1\nline2\nline3\nHTTP/2\n200")
+    total = total + 1; pass = pass + check_str("h2 body-multiline", h1["body"], "line1\nline2\nline3")
+    total = total + 1; pass = pass + check_str("h2 version", h1["version"], "HTTP/2")
+    total = total + 1; pass = pass + check_str("h2 status", h1["status"], "200")
+
+    // --- http status sentinel: multiline body survives reverse-split ---
+    let p1 = http_status_peel("multi\nline\nbody\n404")
+    total = total + 1; pass = pass + check_str("http body-multiline", p1["body"], "multi\nline\nbody")
+    total = total + 1; pass = pass + check_str("http status", p1["status"], "404")
+
+    // --- ws url parse: path with multiple slashes must survive ---
+    let w1 = ws_url_parse("ws://h:81/a/b/c")
+    total = total + 1; pass = pass + check_str("ws host", w1["host"], "h")
+    total = total + 1; pass = pass + check_int("ws port", w1["port"], 81)
+    total = total + 1; pass = pass + check_str("ws path-multislash", w1["path"], "/a/b/c")
+    let w2 = ws_url_parse("ws://host/x")
+    total = total + 1; pass = pass + check_str("ws default-port host", w2["host"], "host")
+    total = total + 1; pass = pass + check_int("ws default port", w2["port"], 80)
+    let w3 = ws_url_parse("ws://host")
+    total = total + 1; pass = pass + check_str("ws no-path default", w3["path"], "/")
+
+    println("---")
+    println("PASS " + to_string(pass) + "/" + to_string(total))
+    if pass == total {
+        println("__HEXA_STDLIB_SPLIT_KEEP_FIRST_OP94__ " + to_string(pass) + "/" + to_string(total) + " ALL-GREEN")
+    } else {
+        println("RED")
+    }
+}
