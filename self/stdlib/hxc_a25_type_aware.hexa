@@ -2,11 +2,11 @@
 
 // @resolver-bypass(reason="darwin-native HXC type-aware dispatcher meta-tool")
 // @tool(slug="hxc-a25-type-aware", desc="HXC algorithm A25: corpus-class auto-detection + per-class algorithm winner selection (smart dispatcher, NOT new compression algorithm). Phase 12 P3 entry — 80% target final close attempt via per-class winner routing (A18 v2 dominates large-text/JSON/struct, A23 v2 dominates small-file <500B, A24 PCFG lever-active class). Pure hexa hexa-only + self-host fixpoint self-host (integer-only classifier, table-driven dispatch, no fp ops, no neural mixer per ai-config-ban). FIRST TICK BUILD: PASS 1 (corpus-class auto-detection) + PASS 2 (per-class algorithm dispatch table) + PASS 3 (encode wrapper — delegate to inner via exec to AOT binary) + PASS 4 (decode wrapper — header parse + inner-decode delegation) + 5-fixture selftest. Sigil ^Y (post-A24 ^X). Header v=type-aware-v1. ai-config-ban cmix-ban MAINTAINED: A25 = deterministic class-detection table dispatch, NOT cmix-class neural mixer or non-deterministic winner picker. C3 honest C3: this tick = smart dispatcher (corpus-class detection + per-class winner routing), NOT a new compression algorithm. The +pp gain comes from selecting the right inner algorithm per class, NOT from any novel compression. Inner algorithms (A18 v2 / A23 v2 / A24) are unchanged.")
-// @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a25_type_aware.hexa --selftest)
-// @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a25_type_aware.hexa classify <in>)
-// @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a25_type_aware.hexa dispatch <in>)
-// @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a25_type_aware.hexa encode <in> <out>)
-// @usage(hexa /Users/ghost/core/hexa-lang/self/stdlib/hxc_a25_type_aware.hexa decode <in> <out>)
+// @usage(hexa self/stdlib/hxc_a25_type_aware.hexa --selftest    — run from repo root)
+// @usage(hexa self/stdlib/hxc_a25_type_aware.hexa classify <in>)
+// @usage(hexa self/stdlib/hxc_a25_type_aware.hexa dispatch <in>)
+// @usage(hexa self/stdlib/hxc_a25_type_aware.hexa encode <in> <out>)
+// @usage(hexa self/stdlib/hxc_a25_type_aware.hexa decode <in> <out>)
 // @exit_codes(0=ok, 1=selftest-fail, 2=io-error, 3=bad-args, 4=decode-mismatch)
 //
 // Spec (first tick scope — corpus-class detection + per-class winner routing):
@@ -67,8 +67,8 @@
 //     try-and-revert magic-number2 D2: a25_encode picks shortest of {v2-wrapped,
 //     v1-wrapped, identity}; if even v2 inflates beyond raw input, fallback to
 //     identity passthrough (NEVER inflate).
-//     Inner algorithm invocation: shell out to AOT binary at
-//     /Users/ghost/core/anima/.hxc_aot/<bin> with `encode <in_path> <out_path>`.
+//     Inner algorithm invocation: shell out to the AOT binary resolved by
+//     _anima_aot_bin()/_hxc_repo_aot() with `encode <in_path> <out_path>`.
 //     For selftest hermeticity (no AOT dep), passthrough-class fixtures avoid
 //     the subprocess; only LIVE FIRE fixtures invoke the AOT binary.
 //
@@ -156,10 +156,52 @@ const A25_B64_ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234
 //   synthetic-repetitive       | a24  (v1)       | ^X    | a24:s1 grammar-pcfg-v1
 //   mixed (default)            | a18  (v2)       | ^M    | a18:s2 lz-ppm-v2
 //
-// AOT binary paths (used by encode/decode subprocess delegation):
-//   /Users/ghost/core/anima/.hxc_aot/hxc_a18
-//   /Users/ghost/core/anima/.hxc_aot/hxc_a23
-//   /Users/ghost/core/anima/.hxc_aot/hxc_a24
+// AOT binary paths (used by encode/decode subprocess delegation) are resolved
+// at runtime — NEVER a foreign-host literal:
+//   anima AOT dir : $HXC_ANIMA_AOT env → $HOME/core/anima/.hxc_aot
+//                   (anima is an external repo; resolution is env→home-relative)
+//   hexa-lang AOT : <repo-root>/build/<bin>  (repo-root = env→cwd-ascent→cwd)
+// See _anima_aot_dir() / _hxc_repo_root() below.
+
+// ───────────────── AOT path resolution (no foreign-host literal) ─────────────────
+
+// External anima repo's compiled HXC AOT dir. env override → $HOME convention.
+fn _anima_aot_dir() -> string {
+    let e = env("HXC_ANIMA_AOT")
+    if e.len() > 0 { return e }
+    return env("HOME") + "/core/anima/.hxc_aot"
+}
+
+// hexa-lang checkout root (PR #2475 pattern): $HEXA_LANG / $HEXA_LANG_ROOT env →
+// ascend from cwd to the repo sentinel (self/module_loader.hexa) → cwd.
+fn _hxc_repo_root() -> string {
+    let e = env("HEXA_LANG")
+    if e.len() > 0 { return e }
+    let e2 = env("HEXA_LANG_ROOT")
+    if e2.len() > 0 { return e2 }
+    let mut cur = env("PWD")
+    if cur.len() == 0 { cur = exec("pwd").trim() }
+    let start = cur
+    let mut guard = 0
+    while len(cur) > 1 && guard < 64 {
+        if exec("test -f '" + cur + "/self/module_loader.hexa' && echo y || echo n").trim() == "y" { return cur }
+        let up = exec("dirname '" + cur + "'").trim()
+        if up == cur { break }
+        cur = up
+        guard = guard + 1
+    }
+    return start
+}
+
+// anima AOT binary by name (e.g. "hxc_a23").
+fn _anima_aot_bin(name: string) -> string {
+    return _anima_aot_dir() + "/" + name
+}
+
+// hexa-lang in-repo AOT binary by relative build path (e.g. "build/a18_d631a902_aot").
+fn _hxc_repo_aot(rel: string) -> string {
+    return _hxc_repo_root() + "/" + rel
+}
 
 // ───────────────── byte / string helpers ─────────────────
 
@@ -372,11 +414,11 @@ fn a25_dispatch(class_name: string) -> array {
     }
     if class_name == "small-file" {
         return ["a23", "^W", "v=sparse-ppm-v2",
-                "/Users/ghost/core/anima/.hxc_aot/hxc_a23"]
+                _anima_aot_bin("hxc_a23")]
     }
     if class_name == "synthetic-repetitive" {
         return ["a24", "^X", "v=grammar-pcfg-v1",
-                "/Users/ghost/core/anima/.hxc_aot/hxc_a24"]
+                _anima_aot_bin("hxc_a24")]
     }
     // text-heavy / json-heavy / struct-audit / mixed → A18 v2 (primary).
     // 2026-04-28: wired to d631a902 v3/v3-o2/v4-w64/v6-optimal multi-encoder
@@ -384,7 +426,7 @@ fn a25_dispatch(class_name: string) -> array {
     //             A18 binary path migration: anima/.hxc_aot/hxc_a18 (v2-only)
     //             → hexa-lang/build/a18_d631a902_aot (multi-encoder).
     return ["a18", "^M", "v=lz-ppm-v2",
-            "/Users/ghost/core/hexa-lang/build/a18_d631a902_aot"]
+            _hxc_repo_aot("build/a18_d631a902_aot")]
 }
 
 // a25_candidates: PASS 2b — return ALL inner candidates for a class.
@@ -402,10 +444,10 @@ fn a25_candidates(class_name: string) -> array {
         return [["passthrough", "", ""]]
     }
     if class_name == "small-file" {
-        return [["a23", "/Users/ghost/core/anima/.hxc_aot/hxc_a23", ""]]
+        return [["a23", _anima_aot_bin("hxc_a23"), ""]]
     }
     if class_name == "synthetic-repetitive" {
-        return [["a24", "/Users/ghost/core/anima/.hxc_aot/hxc_a24", ""]]
+        return [["a24", _anima_aot_bin("hxc_a24"), ""]]
     }
     // text-heavy / json-heavy / struct-audit / mixed → min-of-{A18, A29 v3}.
     // A18 d631a902 default encode is already min-of-7 internally (v1/v2/v3/
@@ -413,18 +455,18 @@ fn a25_candidates(class_name: string) -> array {
     // DEFLATE which beats LZ+PPM on small text-heavy inputs (5KB README probe
     // 32% vs 20% saving). A29 inner stream wire is `# a29:s3 v=deflate-v3`
     // (orthogonal to A18 wire `# a18:s1`); algo field disambiguates routing.
-    return [["a18",    "/Users/ghost/core/hexa-lang/build/a18_d631a902_aot", ""],
-            ["a29_v3", "/Users/ghost/core/anima/.hxc_aot/hxc_a29",           "--v3"]]
+    return [["a18",    _hxc_repo_aot("build/a18_d631a902_aot"), ""],
+            ["a29_v3", _anima_aot_bin("hxc_a29"),               "--v3"]]
 }
 
 // a25_aot_for_algo: PASS 2c — given algo label from wire header, return the
 // AOT binary path used for decode routing. Symmetric inverse of a25_candidates
 // (encode-side label → decode-side binary path).
 fn a25_aot_for_algo(algo_label: string) -> string {
-    if algo_label == "a23" { return "/Users/ghost/core/anima/.hxc_aot/hxc_a23" }
-    if algo_label == "a24" { return "/Users/ghost/core/anima/.hxc_aot/hxc_a24" }
-    if algo_label == "a29_v3" { return "/Users/ghost/core/anima/.hxc_aot/hxc_a29" }
-    if algo_label == "a18" { return "/Users/ghost/core/hexa-lang/build/a18_d631a902_aot" }
+    if algo_label == "a23" { return _anima_aot_bin("hxc_a23") }
+    if algo_label == "a24" { return _anima_aot_bin("hxc_a24") }
+    if algo_label == "a29_v3" { return _anima_aot_bin("hxc_a29") }
+    if algo_label == "a18" { return _hxc_repo_aot("build/a18_d631a902_aot") }
     if algo_label == "passthrough" { return "" }
     return ""
 }

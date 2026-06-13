@@ -8,7 +8,7 @@
 // run_publish 가 즉시 abort 하므로 더이상 R/W 가 발생하지 않음.
 // 파일은 history preservation 목적으로 보존 (follow-up self-host fixpoint
 // 영향 없음 — _registry.hexa 는 use 만 하고 path 자체는 호출하지 않음).
-// 후속 진입점: /Users/ghost/core/papers/upload_all_unpublished.hexa
+// 후속 진입점: papers CLI (core/papers/upload_all_unpublished.hexa — 외부 레포)
 // ─────────────────────────────────────────────────────────────────────────
 //
 // 경로: <n6_root>/shared/n6/docs/domains.json
@@ -46,7 +46,9 @@ fn _domains_json_path() -> string {
     // shell fallback — env_var 미지원 빌드 대비
     let sh = to_string(exec("printf '%s' \"$HEXA_DOMAINS_JSON\" 2>/dev/null")).trim()
     if sh != "" { return sh }
-    return "/Users/ghost/Dev/nexus/n6/docs/domains.json"
+    // nexus 는 외부 레포 — env 미설정이면 "" 반환 (file_exists=false → empty
+    // registry). foreign-host literal 금지. (본 모듈은 DEPRECATED — paper 배포 폐기.)
+    return ""
 }
 
 // 파일 로드 — 없으면 기본 구조 반환 (_meta + entries[])

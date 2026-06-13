@@ -5,7 +5,7 @@
 //
 // 사용:
 //   use "self/attrs/_lib/rules_loader"
-//   let rules = find_attr_rules(source, "doc", "/Users/ghost/Dev/nexus/tool/config/doc_rules.json")
+//   let rules = find_attr_rules(source, "doc", rl_nexus_config_path("doc"))
 //   // rules["_meta"] / rules["rules"] or rules["scopes"] 접근
 //
 // 동작:
@@ -57,6 +57,47 @@ fn _rl_to_upper(s: string) -> string {
 // attr="doc" → env "HEXA_DOC_RULES"
 fn _rl_env_name(attr: string) -> string {
     return "HEXA_" + _rl_to_upper(attr) + "_RULES"
+}
+
+// ─────────────────────────────────────────────────────────────
+// Headless-safe path resolvers — NEVER a foreign-host literal.
+// Mirror the canonical env→cwd-ascent pattern from tool/* (PR #2475):
+//   $HEXA_LANG / $HEXA_LANG_ROOT env → ascend from cwd to the repo
+//   sentinel (self/module_loader.hexa) → cwd. The final cwd fallback
+//   is repo-relative, never /Users/<author>/...
+// ─────────────────────────────────────────────────────────────
+
+// hexa-lang checkout root. Used by attrs that need to read in-repo
+// defaults (e.g. self/attrs/_defaults.hexa) without a foreign literal.
+pub fn rl_repo_root() -> string {
+    let e = env("HEXA_LANG")
+    if e != "" { return e }
+    let e2 = env("HEXA_LANG_ROOT")
+    if e2 != "" { return e2 }
+    let mut cur = env("PWD")
+    if cur == "" { cur = to_string(exec("pwd")).trim() }
+    let start = cur
+    let mut guard = 0
+    while len(cur) > 1 && guard < 64 {
+        let ok = to_string(exec("test -f '" + cur + "/self/module_loader.hexa' && echo y || echo n")).trim()
+        if ok == "y" { return cur }
+        let up = to_string(exec("dirname '" + cur + "'")).trim()
+        if up == cur { break }
+        cur = up
+        guard = guard + 1
+    }
+    return start
+}
+
+// Legacy nexus config root for `<attr>_rules.json` global defaults.
+// nexus is an EXTERNAL repo, so cwd-ascent cannot find it — resolution
+// is env-only ($HEXA_NEXUS_ROOT). When unset the caller gets "" and
+// falls back to its builtin rules (graceful), never a foreign literal.
+// Per-attr $HEXA_<ATTR>_RULES still overrides this entirely.
+pub fn rl_nexus_config_path(attr: string) -> string {
+    let root = env("HEXA_NEXUS_ROOT")
+    if root == "" { return "" }
+    return root + "/tool/config/" + attr + "_rules.json"
 }
 
 // source 경로에서 상위로 거슬러 올라가며 `.<attr>-rules.json` 탐색.
@@ -188,8 +229,7 @@ pub fn find_global_defaults(attr: string, selector: map) -> map {
     // Phase 3 에서 `$HEXA_LANG/self/attrs/_defaults.hexa` 를 채우면 이 함수가
     // 그 파일을 동일한 project.hexa 문법으로 파싱해 블록을 찾아준다.
     // 현재는 stub — 파일 없거나 블록 없으면 #{} 반환.
-    let hl = env("HEXA_LANG")
-    let root = if hl != "" { hl } else { "/Users/ghost/Dev/hexa-lang" }
+    let root = rl_repo_root()
     let path = root + "/self/attrs/_defaults.hexa"
     let exists = to_string(exec("test -f '" + path + "' && printf 1 || printf 0")).trim()
     if exists != "1" { return #{} }
@@ -216,7 +256,8 @@ pub fn find_attr_rules_v2(source: string, attr: string, selector: map) -> map {
         return _v2_wrap(gdef, "global.hexa")
     }
     // (3) legacy JSON fallback — attr 별 `<attr>_rules.json`
-    let legacy_path = "/Users/ghost/Dev/nexus/tool/config/" + attr + "_rules.json"
+    // nexus is external: env-gated ($HEXA_NEXUS_ROOT), "" when unset.
+    let legacy_path = rl_nexus_config_path(attr)
     let env_override = env(_rl_env_name(attr))
     let eff = if env_override != "" { env_override } else { legacy_path }
     let json = load_rules_file(eff)

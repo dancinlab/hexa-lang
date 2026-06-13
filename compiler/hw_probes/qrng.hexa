@@ -7,12 +7,11 @@
 // Source: `~/core/nexus/cli/qrng.hexa` + `~/core/nexus/cli/run.hexa
 // ::cmd_qrng`.
 //
-// Live path: shells out to the standalone qrng binary using the
-// 4-tier resolution from nexus:
+// Live path: shells out to the standalone qrng binary using a
+// 3-tier resolution (no foreign-host literal):
 //   1. $QRNG_ROOT env override
-//   2. /Users/ghost/core/qrng
-//   3. $HOME/core/qrng
-//   4. PATH-resolved `qrng`
+//   2. $HOME/core/qrng
+//   3. PATH-resolved `qrng`
 //
 // Fallback path: deterministic seed-based PRNG. NOT cryptographically
 // secure and NOT quantum-true — degraded entropy is explicitly flagged
@@ -29,9 +28,6 @@ pub fn _qrng_resolved_root() -> string {
         let p = envroot + "/cli/qrng.hexa"
         if exec("[ -f " + shq(p) + " ] && echo yes || echo no").trim() == "yes" { return envroot }
     }
-    let mac_root = "/Users/ghost/core/qrng"
-    let mac_p = mac_root + "/cli/qrng.hexa"
-    if exec("[ -f " + shq(mac_p) + " ] && echo yes || echo no").trim() == "yes" { return mac_root }
     let home = env("HOME")
     let home_root = home + "/core/qrng"
     let home_p = home_root + "/cli/qrng.hexa"
