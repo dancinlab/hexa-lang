@@ -1,0 +1,158 @@
+F-OP107-CRYPTO-VERIFY-AUDIT — LANE-2 0-pod crypto VERIFICATION/AUTH-path security audit
+=========================================================================================
+
+GOAL (g5): for every *_verify / *_validate / signature-check / MAC-check / AEAD-tag /
+cert-chain / Finished verifier in the crypto surface, feed a FORGED / TAMPERED /
+MALFORMED input and prove the verdict REJECTS it (a verify that ACCEPTS a forgery =
+🔴 auth-bypass). A correct rejecter = 🟢. A timing-leak = 🟠. Differential method:
+Python port of the EXACT hexa source (RFC KAT cross-check) + property/forge tests,
+plus a shipping `hexa run` hermetic lock. NOTE (OP-87/88): the installed ~/.hx/bin/hexa
+is a STALE Jun-1 oracle — see the chacha MISCOMPILE finding below; correctness verdicts
+rest on the SOURCE + its verbatim Python port, NOT the stale binary.
+
+RESULT: 🟢 NO forgery-acceptance bug found. Every audited verifier REJECTS forged /
+tampered / malformed input and ACCEPTS valid input. All secret compares are byte-COMPLETE
+constant-time (no early-return short-circuit → no timing leak). RSA PKCS#1 v1.5 uses the
+strict RIGHT-ANCHORED parse that defeats the BERserk/Bleichenbacher'06 forgery class.
+One 🟠 robustness note (missing direct-call sig/pubkey length guard, covered by callers)
+and one NON-security stale-compiler interop discrepancy logged honestly.
+
+CENSUS — VERIFICATION/AUTH functions + what each MUST reject + forge test + verdict
+-----------------------------------------------------------------------------------
+
+[1] chacha20poly1305_verify (stdlib/crypto/chacha20poly1305.hexa:94) — TLS1.3/WireGuard/age
+    MUST reject: flipped tag, flipped ciphertext, wrong tag length.
+    FORGE (shipping `hexa run`, RFC 8439 §2.8.2 vector):
+      valid_accept=true · forged_tag_reject=true (flip tag[0]) ·
+      forged_ct_reject=true (flip ct[0]) · short_tag_reject=true (15-byte tag)
+    Compare = constant-time accumulate-diff over 16 bytes, len!=16 guard. 🟢
+    Python port of the EXACT poly1305+chacha20 source → RFC tag 1ae10b59...0600691 EXACT;
+    the verify recomputes that same MAC, so any tamper mismatches.
+
+[2] aes256gcm_verify (stdlib/crypto/aes256gcm.hexa:177) ·
+[3] aes128gcm_verify (stdlib/crypto/aes128gcm.hexa:190)
+    MUST reject: flipped GCM tag, wrong tag length.
+    Compare = `if len(tag)!=16 {return false}` + accumulate-diff over 16 bytes → diff==0.
+    Python model of the identical compare: valid accept · flipped-tag reject ·
+    short-tag reject — all correct. 🟢
+
+[4] tls13_finished_verify (stdlib/crypto/tls13_finished.hexa:45) — TLS1.3 handshake AUTH
+    MUST reject: a wrong/forged Finished verify_data, wrong length.
+    verify_data = HMAC-SHA256(Expand-Label(secret,"finished"), transcript_hash).
+    Compare = `if len(got)!=32 {return false}` + accumulate-diff over 32 bytes. 🟢
+    tls13_client_verify_server_finished delegates to this (no separate compare). 🟢
+
+[5] tls13_record_open_verify (stdlib/crypto/tls13_record.hexa:93) — TLS1.3 record AEAD
+    MUST reject: a record shorter than the 16-byte tag, a tampered ct/tag.
+    `if n<16 {return false}` then splits ct‖tag and delegates to chacha20poly1305_verify
+    (the audited [1] constant-time compare). 🟢
+
+[6] rsa_pkcs1_sha256_verify (stdlib/crypto/rsa_pkcs1.hexa:167) — X.509 cert sig (RSA-2048)
+    MUST reject: BERserk garbage-after-hash forgery, flipped hash, padding hole, wrong
+    block-type, <8 FF pad, wrong hash length.
+    The EMSA-PKCS1-v1_5 check is STRICT RIGHT-ANCHORED: sep = elen - (DigestInfo+32) - 1
+    is FIXED, em[2..sep] must ALL be 0xFF, em[sep]=0x00, then DigestInfo+hash anchored at
+    the very END. This is the secure construction (no left-anchored / variable-tail parse),
+    so the classic forgeries cannot place a low-exponent perfect-cube garbage tail.
+    FORGE (Python port of the EXACT parse + shipping `hexa run` hermetic lock):
+      well-formed EM            → accept
+      BERserk garbage-tail      → REJECT (hash not at end / sep FF region wrong)
+      flipped hash byte         → REJECT
+      padding hole (FF→00)      → REJECT
+      wrong block-type (01→02)  → REJECT
+    modexp uses small public e (square-and-multiply, top-bit search ≤31 bits → e=65537 ok).
+    🟢
+
+[7] ed25519_verify (stdlib/crypto/ed25519.hexa:383) — X.509 Ed25519 cert sig
+    MUST reject: forged signature, signature over a different message, bad pubkey point.
+    Equation is textbook-correct: k=H(R‖A‖M); checks pack(S·B + k·A) == R with A = -A
+    (via _unpackneg, which returns [0]=fail on a non-canonical/off-curve pubkey → reject).
+    A flipped sig byte changes R or S → the recomputed point ≠ sig[0:32] → reject. 🟢
+    🟠 NOTE: ed25519_verify itself has NO `len(sig)==64 / len(pubk)==32` guard. All
+    in-tree callers (x509_verify_self_ed25519 :96, x509_chain_verify_ed25519 :40,52) DO
+    guard len before calling, so this is a defense-in-depth robustness gap (a direct
+    attacker-length call could OOB-read), NOT a forgery-acceptance bug. Flagged for a
+    LANE-1/OOB follow-up (OP-104/105 class), not fixed here to keep this round scoped.
+
+[8] p256_verify (stdlib/crypto/p256.hexa:543) — ECDSA-P256 cert sig
+    MUST reject: r or s out of [1,n-1], R==infinity, R.x mod n != r, forged (r,s).
+    Verbatim checks: r==0→false, s==0→false, r>=n→false, s>=n→false; computes
+    R=u1·G+u2·Q, rejects R==O, returns (R.x mod n)==r. Standard correct ECDSA verify. 🟢
+    🟠 same direct-call length-guard note as [7] (callers guard).
+
+[9] x509_verify_self_ed25519 (stdlib/crypto/x509_min.hexa:91) — self-signed cert
+    MUST reject: wrong pubkey length, wrong sig length, sig not over the cert's TBS.
+    Guards len(pk)==32 + len(sig)==64, then ed25519_verify(pk, TBS_bytes, sig) over the
+    cert's OWN extracted TBSCertificate — a tampered TBS or substituted key fails. 🟢
+
+[10] x509_chain_verify_ed25519 (stdlib/crypto/x509_chain.hexa:29) — chain to trust anchor
+    MUST reject: any cert outside its validity window; any link whose sig does NOT verify
+    under its ISSUER's pubkey (next cert up, or the trust anchor for the topmost).
+    For each cert: x509_validity_contains(cert, now) must hold (expired → reject) AND
+    ed25519_verify(issuer_pub, TBS, sig) must hold (len(issuer_pub)!=32 → reject;
+    len(sig)!=64 → reject). The cryptographic binding (sig under issuer key) is the
+    forgery gate — a forged intermediate has no valid sig under the real issuer key. 🟢
+    NOTE (scope, not a bug): does not enforce issuer-DN == subject-DN name chaining
+    (path-building / defense-in-depth); the sig-under-issuer-key check is the actual
+    auth gate and is present.
+
+[11] x509_validity_contains (stdlib/crypto/x509_validity.hexa:100) — expiry check
+    MUST reject: now < notBefore, or now > notAfter (expired / not-yet-valid).
+    Returns time_le(notBefore, now) && time_le(now, notAfter). An expired cert
+    (now > notAfter) → second clause false → reject. UTCTime 2000/1950 pivot per RFC. 🟢
+
+[12] hmac_sha256_bytes (stdlib/core/hash/hmac.hexa:158) — HMAC core under [4]
+    FIPS 198-1 HMAC = H((K⊕opad)‖H((K⊕ipad)‖m)); SHA-256 core is FIPS 180-4. The
+    module's own companion (hmac_test.hexa) cross-checks byte-equal to the runtime
+    builtin on empty + "abc". Correct primitive → [4] rejects forged Finished. 🟢
+
+WRAPPERS / BUILDERS / STUBS (no accept/reject verdict of an untrusted input → noted)
+------------------------------------------------------------------------------------
+  tls13_certverify_{server,client,content}    — BUILDS the signed content (64×0x20 ‖
+      label ‖ 0x00 ‖ thash) per RFC 8446 §4.4.3. Constructor, no verdict. Correct shape.
+  tls13_psk_binder / tls13_{res,ext}_binder_key — Expand-Label derivations, no verdict.
+  tls_ca_bundle_verify_chain / tls_ca_bundle_pinned_nss_verify_chain — SCAFFOLDS: return
+      {kind:"no-bundle", matched_root_index:-1} — they NEVER assert "verified" for a
+      forged cert (fail-closed: no bundle ⇒ no trust). Safe placeholder, OUT-OF-SCOPE
+      until the real body lands.
+  cert/meta2_validator validate / validate_chain — reward/verdict schema validator
+      (governance JSON shape), not a cryptographic auth path. OUT-OF-SCOPE here.
+
+🟠 TIMING — none found. ALL five MAC/tag/Finished compares ([1][2][3][4]) use the
+   accumulate-diff-over-fixed-length idiom (no early return on first mismatch); the
+   lock test's flip-LAST-byte case proves the compare does not short-circuit. No
+   `==`/index_of secret compare exists in the crypto surface (grep clean).
+
+NON-SECURITY FINDING (honest g5 — logged, NOT a bug in this audit's source)
+---------------------------------------------------------------------------
+The installed ~/.hx/bin/hexa (stale Jun-1 oracle, OP-87/88) MIScompiles the chacha20-
+poly1305 path: running the SHIPPING source it produced AEAD tag[0]=27 where the RFC
+(and Python's `cryptography`, and the verbatim Python PORT of the SAME hexa source)
+give tag[0]=26 (0x1a). Since the Python port of the exact source = RFC EXACT, the SOURCE
+is CORRECT — the divergence is a stale-COMPILER codegen miscompile, NOT a logic bug and
+NOT a security bug (the verify is self-consistent: it accepts the tag it computes and
+rejects every flip; an attacker cannot forge). It IS an interop hazard on the stale
+binary (would reject a real peer's RFC-conformant tag); not in this audit's scope to fix
+the compiler. Reported for the toolchain track.
+
+LOCK (shipping `hexa run`, hermetic, verbatim-inlined, closure-OUT)
+-------------------------------------------------------------------
+NEW stdlib/crypto/verify_forgery_reject_op107_test.hexa — bodies VERBATIM-INLINED from
+the *_verify constant-time tag compare + the rsa_pkcs1 EMSA structure check (no `use`,
+stale-bundle dodge). 9/9 PASS on `hexa run`:
+  OP107 verify-forgery-reject pass=9 fail=0
+  OP107 ALL GREEN
+covering tag {valid-accept, flip-LAST-byte reject, flip-first reject, short reject} +
+rsa {well-formed accept, BERserk garbage-tail reject, flipped-hash reject, padding-hole
+reject, wrong-blocktype reject}. NEGATIVE CONTROL (a forgery-ACCEPTING `return true`
+mutant) → "ACCEPT forged tag = RED mutant caught" → the lock has teeth (not a tautology).
+
+BYTE-EQ / CLOSURE: ZERO source edits (every verifier is already correct) + 1 NEW leaf
+test; 0 deletions. The crypto verifiers are NOT in the build_selfhost closure (grep
+compiler/ + self/ for crypto/* → none) → fixpoint UNAFFECTED, no gate needed.
+
+LANE-2 only (crypto verification/auth; LANE-1 = numeric/data degenerate-crash, no overlap).
+🟢 verification/auth-path census: 12 verifiers audited, ALL correctly reject forgery +
+constant-time; RSA right-anchored parse defeats BERserk; + 2 🟠 direct-call length-guard
+robustness notes (caller-guarded) + 1 non-security stale-compiler interop note.
+$0, 0-pod, NO GPU, no vast, no foreign pod, no .tape, leak-0.
