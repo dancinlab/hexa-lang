@@ -35,6 +35,19 @@ pub fn der_value_len(b: [int], o: int) -> int {
     let n = b[o + 1] & 0xFF
     if n < 0x80 { return n }
     let nbytes = n & 0x7F
+    // CWE-190 size-arithmetic guard (OP-118): a long-form length is a
+    // big-endian integer accumulated by `v = (v << 8) | byte`. hexa ints
+    // are 64-bit signed (i63 effective) — an 8-byte length already spans
+    // the full u64 range and its 8th byte can flip `v` negative; >8 bytes
+    // shift straight past the int domain → `v` WRAPS to a negative/garbage
+    // value. A negative length then poisons every caller: `der_next =
+    // start + v` REGRESSES below `start` (TLV iteration loops backward),
+    // and the returned `n_len`/`e_len`/`r_len`/`s_len` feed X.509 reads as
+    // a huge unsigned span. DER value lengths that don't fit a non-negative
+    // i63 are not representable here, so reject the overflow class up front
+    // (return 0 = empty value, the same graceful short-read result a
+    // truncated buffer already yields) instead of returning a wrapped size.
+    if nbytes > 8 { return 0 }
     let mut v = 0
     let mut i = 0
     // Guard the long-form length-byte read against a truncated DER buffer (OP-105).
@@ -42,6 +55,9 @@ pub fn der_value_len(b: [int], o: int) -> int {
         v = (v << 8) | (b[o + 2 + i] & 0xFF)
         i = i + 1
     }
+    // The 8-byte form can still set the high bit (v < 0). A negative DER
+    // length is malformed and would wrap callers' offset arithmetic; reject.
+    if v < 0 { return 0 }
     return v
 }
 

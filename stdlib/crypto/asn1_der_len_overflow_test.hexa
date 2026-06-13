@@ -1,0 +1,85 @@
+// Verbatim-inlined leaf lock for OP-118 DER length-overflow fix.
+// PRE-FIX (unguarded) vs POST-FIX (guarded) der_value_len.
+fn der_value_len_prefix(b: [int], o: int) -> int {
+    let n = b[o + 1] & 0xFF
+    if n < 0x80 { return n }
+    let nbytes = n & 0x7F
+    let mut v = 0
+    let mut i = 0
+    while i < nbytes && o + 2 + i < len(b) {
+        v = (v << 8) | (b[o + 2 + i] & 0xFF)
+        i = i + 1
+    }
+    return v
+}
+fn der_value_len_fixed(b: [int], o: int) -> int {
+    let n = b[o + 1] & 0xFF
+    if n < 0x80 { return n }
+    let nbytes = n & 0x7F
+    if nbytes > 8 { return 0 }
+    let mut v = 0
+    let mut i = 0
+    while i < nbytes && o + 2 + i < len(b) {
+        v = (v << 8) | (b[o + 2 + i] & 0xFF)
+        i = i + 1
+    }
+    if v < 0 { return 0 }
+    return v
+}
+fn mk(nbytes: int, fillFF: int) -> [int] {
+    // [tag=0x04, 0x80|nbytes, <nbytes value bytes>, pad...]
+    let mut b = [0x04, 0x80 | nbytes]
+    let mut k = 0
+    while k < nbytes { b = b + [if fillFF == 1 { 0xFF } else { 0x00 }]; k = k + 1 }
+    while k < 64 { b = b + [0x00]; k = k + 1 }
+    return b
+}
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // 1. valid short form: 04 0A -> 10
+    total = total + 1
+    if der_value_len_fixed([0x04, 0x0A, 0,0,0,0,0,0,0,0,0,0], 0) == 10 { pass = pass + 1 } else { print("FAIL short") }
+
+    // 2. valid long form 1 byte: 04 81 80 -> 128 (the file's documented vector)
+    total = total + 1
+    if der_value_len_fixed([0x04, 0x81, 0x80] + [0]+[0], 0) == 128 { pass = pass + 1 } else { print("FAIL 1-byte-long") }
+
+    // 3. valid 2-byte long form: 04 82 01 00 -> 256
+    total = total + 1
+    if der_value_len_fixed([0x04, 0x82, 0x01, 0x00] + [0,0], 0) == 256 { pass = pass + 1 } else { print("FAIL 2-byte-long") }
+
+    // 4. valid 4-byte long form 0x7FFFFFFF -> stays positive
+    total = total + 1
+    let four = [0x04, 0x84, 0x7F, 0xFF, 0xFF, 0xFF] + [0,0,0,0]
+    if der_value_len_fixed(four, 0) == 2147483647 { pass = pass + 1 } else { print("FAIL 4-byte-long") }
+
+    // 5. MALICIOUS 9-byte length: pre-fix WRAPS to -1, fixed REJECTS to 0
+    total = total + 1
+    let nine = mk(9, 1)
+    let pre9 = der_value_len_prefix(nine, 0)
+    let fix9 = der_value_len_fixed(nine, 0)
+    print("9-byte: prefix=", pre9, " fixed=", fix9)
+    if pre9 < 0 && fix9 == 0 { pass = pass + 1 } else { print("FAIL 9-byte") }
+
+    // 6. MALICIOUS 8-byte all-FF: pre-fix WRAPS to -1, fixed REJECTS to 0
+    total = total + 1
+    let eight = mk(8, 1)
+    let pre8 = der_value_len_prefix(eight, 0)
+    let fix8 = der_value_len_fixed(eight, 0)
+    print("8-byte-FF: prefix=", pre8, " fixed=", fix8)
+    if pre8 < 0 && fix8 == 0 { pass = pass + 1 } else { print("FAIL 8-byte-FF") }
+
+    // 7. der_next REGRESSION check: pre-fix start+v < start (backward), fixed start+0 >= start
+    total = total + 1
+    // value_start for 9-byte long form = o + 2 + 9 = 11
+    let start = 11
+    let pre_next = start + pre9
+    let fix_next = start + fix9
+    print("der_next: pre=", pre_next, " (start=", start, ") fixed=", fix_next)
+    if pre_next < start && fix_next >= start { pass = pass + 1 } else { print("FAIL regression") }
+
+    if pass == total { print("__HEXA_OP118_DER_LEN_OVERFLOW__ PASS ", pass, "/", total) }
+    else { print("__HEXA_OP118_DER_LEN_OVERFLOW__ FAIL ", pass, "/", total) }
+}
