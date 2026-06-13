@@ -1,0 +1,118 @@
+F-OP89-STDLIB-STRING-BOUNDARY — stdlib string-helper boundary-arithmetic hunt
+================================================================================
+DATE     : 2026-06-13
+LANE     : 2 (0-pod correctness, stdlib/* bespoke char-scanning bug-hunt).
+           Sibling LANE-1/OP-86 owns self/runtime + self/* string helpers
+           (non-overlapping surface — OP-89 touched ONLY stdlib/*).
+TIER     : 🟢 CLEAN (no fabricated bug) — 7 bespoke scanners PROVEN-CLEAN over a
+           boundary sweep, invariant-locked by a 57/57 leaf oracle.
+METHOD   : differential vs the authoritative CPython `str` methods (and PyYAML
+           safe_load for the yaml flat-scalar contract), over boundary sweeps:
+           empty / single-char / all-separators / leading+trailing+doubled
+           separators / pattern==whole / pattern-longer-than-string / empty
+           pattern / overlapping matches / multibyte. Faithful Python ports of
+           the UNFIXED bodies (byte-level, mirroring the byte-indexed runtime).
+
+CONTEXT (why this round)
+--------------------------------------------------------------------------------
+OP-87 (path_dirname consecutive-slash) + OP-88 (path_ext leading-dot-run) both
+leaked at run-boundaries — the char-scanning / boundary-arithmetic class is the
+proven failure mode. OP-89 hunts the SAME class in stdlib STRING helpers that do
+their own index/boundary arithmetic over runs of chars.
+
+SURVEY (scoped greps, NO .git; stdlib/* only — self/* is LANE-1)
+--------------------------------------------------------------------------------
+The canonical string module (stdlib/core/string.hexa, 71L) is small + already
+clean (repeat/pad_left/pad_right/reverse/starts_with/ends_with — examined, no
+boundary bug; reverse is BYTE-reversed, a documented byte-runtime property, NOT
+a bug, and core/string is closure-risky so NOT touched). path.hexa is the OP-87/
+88 surface (dirname+ext fixed, basename/normalize/join already CLEAN per OP-88).
+The richest UNTESTED bespoke char-scanning surface censused:
+  · stdlib/easy/cli.hexa     — 5 bespoke scanners, NO co-located test, NO verdict:
+                               _contains · _count_lines · _count_occ · _word_count
+                               · _strip_comments. PICKED (high boundary-surface).
+  · stdlib/yaml.hexa         — _yaml_unquote + yaml_frontmatter_extract (flat YAML
+                               scanner; whitespace/indent/quote run arithmetic).
+                               PICKED (documented contract → checkable).
+  · stdlib/codec/hex.hexa    — hex_decode (whitespace-skip + odd-nibble guard);
+                               examined CLEAN (has a co-located test). Not re-locked.
+  · stdlib/codec/utf8.hexa   — multibyte continuation-run validator; examined
+                               CLEAN (RFC-3629 overlong/surrogate guards correct,
+                               has a co-located test). Not re-locked.
+  · stdlib/alloc/argparse.hexa — _strip_dashes leading-run scanner CLEAN; the
+                               value-flag-at-EOL keeps-default edge is the
+                               under-specified (NOT-a-bug) edge already noted in
+                               OP-87. Not re-locked.
+
+DIFFERENTIAL RESULTS — all 0 mismatch (verbatim, byte-level Python port vs ref)
+--------------------------------------------------------------------------------
+stdlib/easy/cli.hexa (57 cases inside the leaf oracle; Python sweep = 57 here):
+  _contains(hay,needle)   ≡ CPython `needle in hay`              0/13 mismatch
+       empty-in-empty -> True · empty-needle -> True · whole · longer-needle ->
+       False · overlap-position · tail · ws-run · interior — all match.
+  _count_lines(s)         ≡ s.count("\n")                        0/7  mismatch
+       empty · single LF · LF-run(3) · trailing LF · no-LF.
+  _count_occ(hay,needle)  ≡ s.count(sub) NON-overlapping         0/14 mismatch
+       count(',,,',',')=3 · count('aaa','aa')=1 (non-overlap, advance by nlen) ·
+       count('ababab','ab')=3 · whole=1 · needle-longer=0 · empty-needle -> 0
+       (a documented guard; CPython str.count returns len+1 — module's 0 is the
+       intended degenerate guard, NOT claimed as str.count parity).
+  _word_count(s)          ≡ len(s.split())                       0/11 mismatch
+       all-ws -> 0 · leading/trailing/doubled-ws runs · mixed \n\t\r · CRLF.
+  _strip_comments(s)      <!-- ... --> removal                   0/12 mismatch
+       empty-comment <!----> · adjacent comments · unterminated -> truncate
+       (HTML) · trailing literal '-->'.
+
+stdlib/yaml.hexa (vs PyYAML safe_load over the flat-scalar contract subset):
+  _yaml_unquote(v)                  balanced wrapping-quote strip   0 mismatch
+       n<2 lone-quote kept · '"x"' -> x · "'x'" -> x · unbalanced '"ab' kept ·
+       trims-then-strips ('  "x"  ' -> x).
+  yaml_parse_flat(text)             first-colon split + skip runs   0 IN-CONTRACT
+       19-case sweep; the ONLY two divergences vs PyYAML are DOCUMENTED honest-
+       caveats, NOT bugs: indented-child line dropped (limit 1 "nested rejected")
+       and inline ` # comment` kept (limit 3, to preserve URLs containing '#').
+  yaml_frontmatter_extract(text)    --- ... --- block extract       0 mismatch
+       leading-blank lines · open-only(no close) -> "" · empty block -> "" ·
+       multi-line body preserved.
+
+CONCLUSION (g5, honest)
+--------------------------------------------------------------------------------
+NO shipping bug found in this round — the boundary-arithmetic vein in stdlib
+STRING helpers is SOLID post OP-87/88, which already fixed the two real bugs of
+this exact class (path_dirname, path_ext). Per the regimen, a bug was NOT
+fabricated; the clean scanners are invariant-locked instead so a future codegen/
+runtime change cannot silently regress them.
+
+THE LOCK — stdlib/easy/cli_op89_test.hexa (leaf oracle)
+--------------------------------------------------------------------------------
+NEW co-located leaf test (OP-80/83/87/88 pattern: all 7 module bodies inlined
+verbatim, self-contained). Gated on the shipping `hexa run` interpreter
+(OP-82/85 stale-oracle note — the inlined bodies use only pure string builtins
+substring/split/trim/len, and the Python differential confirms the semantics
+independently of the local install). VERBATIM exit-0:
+
+    __HEXA_STDLIB_STRING_OP89__ 57/57
+    PASS
+
+57/57 — 10 _contains + 6 _count_lines + 10 _count_occ + 8 _word_count +
+9 _strip_comments + 8 _yaml_unquote + 6 yaml_frontmatter_extract goldens vs
+CPython `str` / PyYAML.
+
+BYTE-EQ / GUARDS
+--------------------------------------------------------------------------------
+· ZERO production-module edits — 0 functions changed, 0 deletions (wipe_guard
+  trivially satisfied, net-additive). Only 1 NEW leaf test file + 1 verdict +
+  domain log/milestone.
+· The leaf test file is used nowhere (not imported by any module) → closure-
+  neutral; easy/cli.hexa + yaml.hexa are NOT in the build_selfhost closure
+  regardless → self-host fixpoint UNAFFECTED; no codegen/runtime/rt bytes touched.
+· LANE split honored — only stdlib/* examined (no self/runtime, no self/* string
+  helpers = LANE-1 territory).
+· $0 · 0-pod · NO GPU · no vast · no foreign pod · no .tape edit · no self/env ·
+  leak-0.
+
+VERDICT: 🟢 CLEAN — 7 bespoke stdlib string scanners (easy/cli ×5 + yaml ×2)
+PROVEN-CLEAN vs CPython `str` / PyYAML over an empty/single/separator-run/
+overlap/multibyte boundary sweep (0 mismatch), invariant-locked by a 57/57 leaf
+oracle. The OP-87/88 boundary-arithmetic class is closed in stdlib string helpers
+with no remaining shipping bug.

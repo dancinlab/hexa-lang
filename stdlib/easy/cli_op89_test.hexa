@@ -1,0 +1,262 @@
+// HEXA Standard Library — easy/cli + yaml bespoke string-scanner self-test
+// (OP-89 leaf oracle — boundary-arithmetic bug-hunt on stdlib STRING helpers,
+//  LANE-2 0-pod)
+//
+// OP-87 (path_dirname consecutive-slash) and OP-88 (path_ext dot-run) both
+// leaked at run-boundaries in the char-scanning / boundary-arithmetic class.
+// This round hunts the SAME class in the UNTESTED bespoke string scanners that
+// do their own index/boundary arithmetic over runs of chars.
+//
+// ── 🟢 RESULT: CLEAN (no shipping bug) — invariant-locks ───────────────
+//
+// Five bespoke scanners in stdlib/easy/cli.hexa (NO co-located test, NO prior
+// verdict) were differentialled vs CPython str semantics over a boundary sweep
+// (empty / single-char / all-separators / runs / pattern-at-edges / overlap /
+// multibyte) — 0 mismatches:
+//
+//   _contains(hay,needle)   ≡ CPython `needle in hay`     (empty-needle -> True)
+//   _count_lines(s)         ≡ s.count("\n")
+//   _count_occ(hay,needle)  ≡ s.count(sub)  NON-overlapping (advance by nlen)
+//                             (empty-needle -> 0, a documented guard not str.count)
+//   _word_count(s)          ≡ len(s.split())  whitespace-RUN split, drops empties
+//   _strip_comments(s)      <!-- ... --> removal, unterminated -> truncate (HTML)
+//
+// Two bespoke scanners in stdlib/yaml.hexa, differentialled vs PyYAML safe_load
+// over the FLAT-scalar contract subset — 0 in-contract mismatches (the only two
+// divergences are DOCUMENTED honest-caveats: indented-child drop = limit 1,
+// inline `# comment` kept = limit 3):
+//
+//   _yaml_unquote(v)                 balanced wrapping-quote strip
+//   yaml_frontmatter_extract(text)   --- ... --- block extract
+//
+// CONCLUSION: the boundary-arithmetic vein in stdlib string helpers is solid
+// post OP-87/88 (which already fixed the two real bugs of this exact class).
+// Honest g5 — no bug fabricated; these locks pin the clean invariants so a
+// future codegen/runtime change cannot silently regress them.
+//
+// LEAF pattern (OP-80/81/83/87/88): every body is inlined VERBATIM so the test
+// is self-contained and cannot drift the build_selfhost closure. easy/cli.hexa
+// and yaml.hexa are NOT in the self-host closure regardless — fixpoint UNAFFECTED.
+// Gated on `hexa run` (the shipping interpreter), per OP-82/85 stale-oracle note.
+
+let mut pass = 0
+let mut total = 0
+let mut first_fail = ""
+
+fn check(name: string, cond: bool) {
+    total = total + 1
+    if cond { pass = pass + 1 } else {
+        if first_fail == "" { first_fail = name }
+        println("FAIL " + name)
+    }
+}
+
+// ── stdlib/easy/cli.hexa scanners (inlined VERBATIM) ──────────────────────
+
+fn _contains(hay: string, needle: string) -> bool {
+    let nlen = len(needle)
+    let hlen = len(hay)
+    if nlen == 0 { return true }
+    let mut i = 0
+    while i + nlen <= hlen {
+        if hay.substring(i, i + nlen) == needle { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _count_lines(s: string) -> int {
+    let mut n = 0
+    let mut i = 0
+    while i < len(s) {
+        if s.substring(i, i + 1) == "\n" { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+fn _count_occ(hay: string, needle: string) -> int {
+    let nlen = len(needle)
+    if nlen == 0 { return 0 }
+    let hlen = len(hay)
+    let mut n = 0
+    let mut i = 0
+    while i + nlen <= hlen {
+        if hay.substring(i, i + nlen) == needle {
+            n = n + 1
+            i = i + nlen
+        } else {
+            i = i + 1
+        }
+    }
+    return n
+}
+
+fn _strip_comments(s: string) -> string {
+    let slen = len(s)
+    let mut out = ""
+    let mut i = 0
+    while i < slen {
+        if i + 4 <= slen && s.substring(i, i + 4) == "<!--" {
+            let mut j = i + 4
+            let mut closed = false
+            while j + 3 <= slen {
+                if s.substring(j, j + 3) == "-->" {
+                    i = j + 3
+                    closed = true
+                    break
+                }
+                j = j + 1
+            }
+            if !closed { return out }
+        } else {
+            out = out + s.substring(i, i + 1)
+            i = i + 1
+        }
+    }
+    return out
+}
+
+fn _word_count(s: string) -> int {
+    let slen = len(s)
+    let mut n = 0
+    let mut in_tok = false
+    let mut i = 0
+    while i < slen {
+        let c = s.substring(i, i + 1)
+        let ws = c == " " || c == "\n" || c == "\t" || c == "\r"
+        if ws {
+            in_tok = false
+        } else {
+            if !in_tok { n = n + 1 }
+            in_tok = true
+        }
+        i = i + 1
+    }
+    return n
+}
+
+// ── stdlib/yaml.hexa scanners (inlined VERBATIM) ──────────────────────────
+
+fn _yaml_unquote(v: string) -> string {
+    let s = v.trim()
+    let n = len(s)
+    if n < 2 { return s }
+    let head = s.substring(0, 1)
+    let tail = s.substring(n - 1, n)
+    if head == "\"" && tail == "\"" {
+        return s.substring(1, n - 1)
+    }
+    if head == "'" && tail == "'" {
+        return s.substring(1, n - 1)
+    }
+    return s
+}
+
+fn yaml_frontmatter_extract(text: string) -> string {
+    if len(text) == 0 { return "" }
+    let lines = text.split("\n")
+    let n = len(lines)
+    if n < 2 { return "" }
+    let mut i = 0
+    while i < n && lines[i].trim() == "" {
+        i = i + 1
+    }
+    if i >= n { return "" }
+    if lines[i].trim() != "---" { return "" }
+    let start = i + 1
+    let mut j = start
+    while j < n {
+        if lines[j].trim() == "---" {
+            let mut out = ""
+            let mut k = start
+            while k < j {
+                if k > start { out = out + "\n" }
+                out = out + lines[k]
+                k = k + 1
+            }
+            return out
+        }
+        j = j + 1
+    }
+    return ""
+}
+
+fn main() {
+    // ── _contains: boundary sweep vs CPython `in` ─────────────────────────
+    check("contains('','') == true (empty in empty)",      _contains("", "") == true)
+    check("contains('','a') == false",                      _contains("", "a") == false)
+    check("contains('a','') == true (empty needle)",        _contains("a", "") == true)
+    check("contains('abc','abc') whole == true",            _contains("abc", "abc") == true)
+    check("contains('abc','abcd') longer == false",         _contains("abc", "abcd") == false)
+    check("contains('aaa','aa') overlap-pos == true",       _contains("aaa", "aa") == true)
+    check("contains('hello world','world') tail == true",   _contains("hello world", "world") == true)
+    check("contains('hello','xyz') == false",               _contains("hello", "xyz") == false)
+    check("contains('   ','  ') ws-run == true",            _contains("   ", "  ") == true)
+    check("contains('aXa','Xa') interior == true",          _contains("aXa", "Xa") == true)
+
+    // ── _count_lines: count("\n") ─────────────────────────────────────────
+    check("count_lines('') == 0",                           _count_lines("") == 0)
+    check("count_lines(LF) == 1",                           _count_lines("\n") == 1)
+    check("count_lines(LF-run) == 3",                       _count_lines("\n\n\n") == 3)
+    check("count_lines('a LF b') == 1",                     _count_lines("a\nb") == 1)
+    check("count_lines('a LF b LF') trailing == 2",         _count_lines("a\nb\n") == 2)
+    check("count_lines('abc') == 0",                        _count_lines("abc") == 0)
+
+    // ── _count_occ: NON-overlapping, str.count(sub) ───────────────────────
+    check("count_occ('','a') == 0",                         _count_occ("", "a") == 0)
+    check("count_occ('aaa','') empty-guard == 0",           _count_occ("aaa", "") == 0)
+    check("count_occ('aaa','aa') non-overlap == 1",         _count_occ("aaa", "aa") == 1)
+    check("count_occ('aaaa','aa') == 2",                    _count_occ("aaaa", "aa") == 2)
+    check("count_occ('aaaaa','aa') == 2",                   _count_occ("aaaaa", "aa") == 2)
+    check("count_occ(',,,',',') sep-run == 3",              _count_occ(",,,", ",") == 3)
+    check("count_occ('ababab','ab') == 3",                  _count_occ("ababab", "ab") == 3)
+    check("count_occ('abc','d') == 0",                      _count_occ("abc", "d") == 0)
+    check("count_occ('aaa','aaa') whole == 1",              _count_occ("aaa", "aaa") == 1)
+    check("count_occ('aa','aaa') needle-longer == 0",       _count_occ("aa", "aaa") == 0)
+
+    // ── _word_count: whitespace-RUN split, drops empties ──────────────────
+    check("word_count('') == 0",                            _word_count("") == 0)
+    check("word_count('   ') all-ws == 0",                  _word_count("   ") == 0)
+    check("word_count('a') == 1",                           _word_count("a") == 1)
+    check("word_count('a b c') == 3",                       _word_count("a b c") == 3)
+    check("word_count('  a   b  ') runs+edges == 2",        _word_count("  a   b  ") == 2)
+    check("word_count('a LF b TAB c') mixed-ws == 3",       _word_count("a\nb\tc") == 3)
+    check("word_count(' TAB LF ') all-ws-mixed == 0",       _word_count(" \t\n ") == 0)
+    check("word_count('a CR LF b') crlf == 2",              _word_count("a\r\nb") == 2)
+
+    // ── _strip_comments: <!-- ... -->, unterminated -> truncate ───────────
+    check("strip_comments('') == ''",                       _strip_comments("") == "")
+    check("strip_comments('abc') == 'abc'",                 _strip_comments("abc") == "abc")
+    check("strip_comments('<!--x-->') == ''",               _strip_comments("<!--x-->") == "")
+    check("strip_comments('a<!--x-->b') == 'ab'",           _strip_comments("a<!--x-->b") == "ab")
+    check("strip_comments('<!---->') empty-cmt == ''",      _strip_comments("<!---->") == "")
+    check("strip_comments('<!--a--><!--b-->') == ''",       _strip_comments("<!--a--><!--b-->") == "")
+    check("strip_comments(unterminated) -> 'a'",            _strip_comments("a<!--unterminated") == "a")
+    check("strip_comments('pre<!-- c -->post')",            _strip_comments("pre<!-- c -->post") == "prepost")
+    check("strip_comments('<!--a-->-->') == '-->'",         _strip_comments("<!--a-->-->") == "-->")
+
+    // ── _yaml_unquote: balanced wrapping quotes only ──────────────────────
+    check("unquote('') == ''",                              _yaml_unquote("") == "")
+    check("unquote('a') single-char kept",                  _yaml_unquote("a") == "a")
+    check("unquote(lone-dquote) kept (n<2)",                _yaml_unquote("\"") == "\"")
+    check("unquote('\"x\"') balanced -> x",                 _yaml_unquote("\"x\"") == "x")
+    check("unquote(\"'x'\") balanced -> x",                 _yaml_unquote("'x'") == "x")
+    check("unquote('\"ab') unbalanced kept",                _yaml_unquote("\"ab") == "\"ab")
+    check("unquote('  \"x\"  ') trims then strips",         _yaml_unquote("  \"x\"  ") == "x")
+    check("unquote('plain') == 'plain'",                    _yaml_unquote("plain") == "plain")
+
+    // ── yaml_frontmatter_extract: --- ... --- block ───────────────────────
+    check("fm(simple block) -> 'a: 1'",                    yaml_frontmatter_extract("---\na: 1\n---\nbody") == "a: 1")
+    check("fm(leading-blank lines) -> 'x: 2'",             yaml_frontmatter_extract("\n\n---\nx: 2\n---\nb") == "x: 2")
+    check("fm('no frontmatter') -> ''",                    yaml_frontmatter_extract("no frontmatter here") == "")
+    check("fm(open-only, no close) -> ''",                 yaml_frontmatter_extract("---\nonly open\nno close") == "")
+    check("fm(empty block) -> ''",                          yaml_frontmatter_extract("---\n---\n") == "")
+    check("fm(multi-line body) preserved",                 yaml_frontmatter_extract("---\na: 1\nb: 2\n---") == "a: 1\nb: 2")
+
+    println("__HEXA_STDLIB_STRING_OP89__ " + to_string(pass) + "/" + to_string(total))
+    if pass == total { println("PASS") } else {
+        println("first fail: " + first_fail)
+        exit(1)
+    }
+}
