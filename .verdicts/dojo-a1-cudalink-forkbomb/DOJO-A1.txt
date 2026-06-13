@@ -84,3 +84,61 @@ TODO (named, per task — full CUDA link needs nvcc/GPU pod):
 
 Tool/local oracle note: ~/.hx/bin/hexa.real = hx-selfhost-cli (current build,
 runs the emit fine). Run on darwin/arm64 workstation.
+
+------------------------------------------------------------------------
+RE-VERIFICATION — current main f1832e1, FRESH LINUX HOST (summer)
+------------------------------------------------------------------------
+
+Re-ran the A1 gate against current origin/main (f1832e1, was 9b4f2c143) on the
+linux pool host `summer` (x86_64, Ubuntu 6.17 kernel, nvcc 12.0 PRESENT — the
+fresh-build-host profile that originally bit on laneg), from a clean shallow
+clone. Both prior findings STILL HOLD verbatim:
+
+  - #3a target absent:  grep -rn 'HEXA_CUDA_LINK|HEXA_NO_CUDA|cuda_link_decision'
+                        self/ stdlib/  → exit 1 (NO matches) on f1832e1.
+  - #3b present:         self/cuda/runtime_cuda_emit.hexa:7046 = write_file(out_path,
+                        c_text); old '__HEXA_EMIT_EOF__' heredoc → grep exit 1 (gone).
+
+EMPIRICAL — emit step, run under a `ulimit -u 300` safety net (so any fork-bomb
+during the test would be capped, not take down the shared host):
+
+  $ ( ulimit -u 300; hexa run self/cuda/runtime_cuda_emit.hexa /tmp/out.c )
+
+  baseline hexa procs:                 0
+  emit rc:                             0
+  MAX hexa procs observed during emit: 3        (bounded; NO 1800+ proc storm)
+  elapsed:                             ~4.9 s    (single-process C-string gen)
+  output size:                         334332 bytes  (~326 KB >> 100KB bar)
+  emitted runtime_cuda.c:              7008 lines, ends cleanly, 293 CUDA symbols
+                                       (_hx_cuda_*/cublas/__global__/extern "C")
+  proc-cap (300) never approached.
+
+#3b BEFORE-drop FAILURE MODE reproduced directly (the old code path):
+  The pre-fix main() did exec("cat > out <<EOF\n" + c_text + "EOF") — the whole
+  ~326KB C in ONE shell argv. Pushing that 334332-byte payload as a single argv
+  string on summer:
+    $ /bin/sh -c 'printf %s "$1" > out' _ "$BIG"
+    -> "Argument list too long" (E2BIG; exceeds MAX_ARG_STRLEN = 131072 B)
+    -> result file: MISSING (0 bytes / never created)  <- the exact silent drop.
+  write_file (rt_write_file fopen/fwrite) streams to the fd -> no ARG_MAX limit ->
+  334332 B written. Confirms #3b's value on a real Linux host.
+
+VERDICT (re-confirm): GATE PASS (emit-step) on current main, linux host.
+  - fork-bomb gone:      YES (bounded MAX 3 procs; #3a path structurally absent)
+  - runtime_cuda.c full: YES (334332 B >> 100KB, write not dropped)
+
+NO CODE CHANGE LANDABLE: #3b already on main (8409117e2/#2630, byte-identical to
+laneg bb10154fb); #3a (27535d93d) targets cuda_link_decision()/HEXA_CUDA_LINK
+which do not exist anywhere on main — porting it = re-introducing the whole
+unmerged opt-in link feature (dead code, no call site -> diff_guard/wipe_guard
+violation, out of A1 scope). This PR records the fresh-host re-verification only.
+
+CUDA-DEPENDENT RESIDUAL (needs a GPU pod, NOT verified here): full end-to-end
+`HEXA_CUDA_LINK=1 hexa build stdlib/flame/clm_prod.hexa` link (nvcc -DHEXA_CUDA
+-lcuda + GPU run) cannot run on main — the opt-in link path is absent, so there
+is no main code that consumes HEXA_CUDA_LINK. The FAILING STEP (the nested emit)
+is what fork-bombed + dropped on laneg, and that step is clean here. If the
+lane-g opt-in feature is ever merged, re-port BOTH guards together and re-fire
+the full-link confirm on a CUDA pod. The GPU was deliberately NOT touched.
+
+Re-verified by agent on summer 2026-06-14 (handoff 677b84cd — NOT closed).
