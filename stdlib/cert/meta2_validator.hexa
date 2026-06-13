@@ -196,13 +196,23 @@ fn _parse_literal(cur) -> string {
 // Each returns a record: {"kind": <string>, "value": <native>, "raw": <string?>}
 // where kind ∈ "string" | "number" | "bool" | "null" | "array" | "object".
 
-fn _parse_value(cur) {
+// CWE-674 depth cap (OP-120). _parse_value/object/array are mutually recursive
+// — one stack frame per `{`/`[` — so a `[[[[…]]]]` certificate/attestation body
+// (one byte per level) blows the native call stack: a DoS, since this validator
+// parses untrusted cert JSON (parse_cert_from_string / parse_chain). The depth
+// is threaded and the parse fails CLOSED past the cap — returning a "null"
+// value-record, which surfaces as a parse error to the caller rather than a
+// crash. 512 dwarfs any honest cert nesting and stays far below the stack limit.
+let _MV_MAX_DEPTH = 512
+
+fn _parse_value(cur, depth: int) {
     _skip_ws(cur)
     if _eof(cur) { return _mk_val("null", void, "null") }
+    if depth > _MV_MAX_DEPTH { return _mk_val("null", void, "null") }
     let c = _peek(cur)
     if c == "\"" { let s = _parse_string(cur); return _mk_val("string", s, "") }
-    if c == "{" { return _parse_object(cur) }
-    if c == "[" { return _parse_array(cur) }
+    if c == "{" { return _parse_object(cur, depth) }
+    if c == "[" { return _parse_array(cur, depth) }
     if c == "t" || c == "f" {
         let lit = _parse_literal(cur)
         if lit == "true" { return _mk_val("bool", true, "true") }
@@ -236,7 +246,7 @@ fn _mk_val(k: string, v, raw: string) {
     return r
 }
 
-fn _parse_object(cur) {
+fn _parse_object(cur, depth: int) {
     // Represent as list of [key, val_record] pairs (preserves source order),
     // plus a map for O(1) lookup. Return {kind: "object", value: {pairs, map, key_order}}.
     _skip_ws(cur)
@@ -260,7 +270,7 @@ fn _parse_object(cur) {
         let k = _parse_string(cur)
         _skip_ws(cur)
         if _peek(cur) == ":" { _advance(cur) }
-        let val = _parse_value(cur)
+        let val = _parse_value(cur, depth + 1)
         pairs = pairs.push([k, val])
         key_order = key_order.push(k)
         obj_map[k] = val
@@ -279,7 +289,7 @@ fn _parse_object(cur) {
     return _mk_val("object", v, "")
 }
 
-fn _parse_array(cur) {
+fn _parse_array(cur, depth: int) {
     _skip_ws(cur)
     if _peek(cur) != "[" { return _mk_val("null", void, "null") }
     _advance(cur)
@@ -288,7 +298,7 @@ fn _parse_array(cur) {
     if _peek(cur) == "]" { _advance(cur); return _mk_val("array", items, "") }
     let mut done = false
     while !_eof(cur) && !done {
-        let val = _parse_value(cur)
+        let val = _parse_value(cur, depth + 1)
         items = items.push(val)
         _skip_ws(cur)
         let nc = _peek(cur)
@@ -482,7 +492,7 @@ fn _selftest_from_obj(v) {
 // ── Top-level parse_cert ───────────────────────────────────────────────────
 pub fn parse_cert_from_string(body: string) {
     let cur = _mk_cursor(body)
-    let v = _parse_value(cur)
+    let v = _parse_value(cur, 0)
     let c = new_cert()
     if v["kind"] != "object" {
         c["_parse_error"] = "top-level JSON is not an object"
@@ -604,7 +614,7 @@ pub fn parse_chain(path: string) {
     }
     let body = read_file(path)
     let cur = _mk_cursor(body)
-    let v = _parse_value(cur)
+    let v = _parse_value(cur, 0)
     if v["kind"] != "object" {
         ch["_parse_error"] = "top-level JSON is not an object"
         return ch

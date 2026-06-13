@@ -1,0 +1,213 @@
+// OP-120 — recursion-depth / unbounded-nesting DoS regression lock (LANE-2).
+//
+// The bug class (CWE-674, "Uncontrolled Recursion"): a recursive-descent
+// parser for nested wire data — JSON `{…}`/`[…]`, ASN.1 DER constructed
+// tags, nested protocol framing — pushes ONE native stack frame per nesting
+// level and threads NO depth cap. A malicious deeply-nested input of the
+// form `[[[[ … ]]]]` (a single byte per level) recurses without bound and
+// blows the call stack: a remote crash / denial-of-service. This is DISTINCT
+// from OP-115 (count-driven unbounded WORK), OP-118 (size-arithmetic int
+// overflow) and OP-105 (offset OOB-read) — the resource exhausted here is
+// CALL-STACK DEPTH, which grows LINEARLY with input nesting.
+//
+// The OP-120 sweep found THREE shipping recursive JSON value/object/array
+// parsers fed untrusted input, all UNCAPPED:
+//
+//   1. self/serve/http_server.hexa  _json_parse_value/object/array
+//        — parses the untrusted HTTP request BODY (json_parse on req.body).
+//   2. self/rt/json.hexa            _jp_parse_value/object/array  (rt_json_parse)
+//        — runtime JSON, handed arbitrary text.
+//   3. stdlib/cert/meta2_validator.hexa  _parse_value/object/array
+//        — parses untrusted certificate / attestation JSON
+//          (parse_cert_from_string / parse_chain).
+//
+// FIX (all three): thread a `depth` counter through the mutual recursion and
+// FAIL CLOSED past a documented cap (MAX_DEPTH = 512) — return the parse-error
+// / null sentinel instead of recursing, bounding the stack to a constant. 512
+// dwarfs any honest payload nesting yet sits far below the native stack limit.
+//
+// This leaf re-derives the FIXED http_server parser shape VERBATIM (a
+// depth-threaded, fail-closed value/object/array recursion) and locks:
+//   • a depth-bomb `[[[…512+…]]]` is REJECTED (parse-error sentinel),
+//   • a normally-nested payload is ACCEPTED and parses to the right value,
+//   • a NEGATIVE CONTROL — the same parser WITHOUT the cap — proves the cap
+//     is load-bearing: it would descend to a depth equal to the input nesting
+//     (here observed via a counted depth-recorder, NOT by actually blowing the
+//     real stack — the test demonstrates the linear depth growth the cap kills
+//     without crashing the test runner).
+//
+// Run: `hexa run stdlib/info/recursion_depth_dos_guard_op120_test.hexa`
+
+let MAX_DEPTH = 512
+
+// Build a depth-bomb string: `level` open brackets then `level` close brackets.
+fn nest(level: int) -> string {
+    let mut s = ""
+    let mut i = 0
+    while i < level { s = s + "["; i = i + 1 }
+    i = 0
+    while i < level { s = s + "]"; i = i + 1 }
+    return s
+}
+
+// ── FIXED parser — depth-threaded, fails CLOSED past MAX_DEPTH ──────────────
+// Mirrors self/serve/http_server.hexa _json_parse_{value,array} verbatim.
+// Sentinel: returns [void, -1] on parse error (incl. over-depth). The minimal
+// grammar handles only nested arrays + the empty leaf, which is all a depth
+// bomb exercises; the real parsers also do objects/strings/numbers identically.
+
+fn skip_ws(s: string, i: int) -> int {
+    let n = len(s)
+    let mut p = i
+    while p < n {
+        let c = s.substring(p, p + 1)
+        if c == " " || c == "\t" || c == "\n" || c == "\r" { p = p + 1 }
+        else { break }
+    }
+    return p
+}
+
+fn parse_value(s: string, i: int, depth: int) {
+    if depth > MAX_DEPTH { return [void, 0 - 1] }   // FAIL CLOSED
+    let n = len(s)
+    let p = skip_ws(s, i)
+    if p >= n { return [void, 0 - 1] }
+    let c = s.substring(p, p + 1)
+    if c == "[" { return parse_array(s, p, depth) }
+    // leaf: a bare "x" stands in for any scalar terminal
+    if c == "x" { return ["x", p + 1] }
+    return [void, 0 - 1]
+}
+
+fn parse_array(s: string, i: int, depth: int) {
+    let n = len(s)
+    if s.substring(i, i + 1) != "[" { return [void, 0 - 1] }
+    let mut j = skip_ws(s, i + 1)
+    if j < n {
+        if s.substring(j, j + 1) == "]" { return [[], j + 1] }
+    }
+    let mut arr = []
+    while j < n {
+        let vr = parse_value(s, j, depth + 1)   // depth grows per level
+        if vr[1] < 0 { return [void, 0 - 1] }   // propagate fail-closed
+        arr.push(vr[0])
+        j = skip_ws(s, vr[1])
+        if j >= n { return [void, 0 - 1] }
+        let sep = s.substring(j, j + 1)
+        if sep == "]" { return [arr, j + 1] }
+        if sep != "," { return [void, 0 - 1] }
+        j = skip_ws(s, j + 1)
+    }
+    return [void, 0 - 1]
+}
+
+// top-level wrapper: -1 cursor → reject (returns false), else accept (true)
+fn parse_ok(s: string) -> bool {
+    let r = parse_value(s, 0, 0)
+    return r[1] >= 0
+}
+
+// ── NEGATIVE CONTROL — counts the depth the UNCAPPED parser WOULD reach ─────
+// Identical descent but with NO depth gate; instead of recursing on the real
+// native stack (which would crash at the bomb depth), it RECORDS the maximum
+// nesting it walks. This demonstrates the linear depth-growth-with-input that
+// the production cap prevents — without actually blowing the test's stack.
+let mut g_max_depth = 0
+
+fn walk_uncapped(s: string, i: int, depth: int) -> int {
+    if depth > g_max_depth { g_max_depth = depth }
+    let n = len(s)
+    let p = skip_ws(s, i)
+    if p >= n { return 0 - 1 }
+    let c = s.substring(p, p + 1)
+    if c != "[" { return p + 1 }
+    let mut j = skip_ws(s, p + 1)
+    if j < n {
+        if s.substring(j, j + 1) == "]" { return j + 1 }
+    }
+    while j < n {
+        let nx = walk_uncapped(s, j, depth + 1)   // unbounded — depth = nesting
+        if nx < 0 { return 0 - 1 }
+        j = skip_ws(s, nx)
+        if j >= n { return 0 - 1 }
+        let sep = s.substring(j, j + 1)
+        if sep == "]" { return j + 1 }
+        if sep != "," { return 0 - 1 }
+        j = skip_ws(s, j + 1)
+    }
+    return 0 - 1
+}
+
+let mut g_pass = 0
+let mut g_fail = 0
+
+fn check(name: string, actual: bool, expected: bool) {
+    if actual == expected {
+        g_pass = g_pass + 1
+        println("  PASS  " + name)
+    } else {
+        g_fail = g_fail + 1
+        println("  FAIL  " + name + "  (got " + to_string(actual) +
+                ", want " + to_string(expected) + ")")
+    }
+}
+
+fn check_int(name: string, actual: int, expected: int) {
+    if actual == expected {
+        g_pass = g_pass + 1
+        println("  PASS  " + name + "  (=" + to_string(actual) + ")")
+    } else {
+        g_fail = g_fail + 1
+        println("  FAIL  " + name + "  (got " + to_string(actual) +
+                ", want " + to_string(expected) + ")")
+    }
+}
+
+fn main() {
+    println("OP-120 recursion-depth / unbounded-nesting DoS guard")
+    println("MAX_DEPTH = " + to_string(MAX_DEPTH))
+    println("")
+
+    // 1. Normal nesting is ACCEPTED (under the cap).
+    println("[normal-nesting-accept]")
+    check("empty array []",              parse_ok("[]"),         true)
+    check("one leaf [x]",                parse_ok("[x]"),        true)
+    check("depth-4 [[[[]]]]",            parse_ok(nest(4)),      true)
+    check("depth-100 (< cap)",           parse_ok(nest(100)),    true)
+    check("depth-510 (just under cap)",  parse_ok(nest(510)),    true)
+    // A nest of L `[` reaches parse_value at depth L-1 for the innermost
+    // empty `[]` leaf, so the cap (`depth > 512`) admits up to L = 513.
+    check("depth-513 (at cap boundary)", parse_ok(nest(513)),    true)
+
+    // 2. Depth-bomb is REJECTED — fail-closed sentinel, no stack blow-up.
+    //    L=514 reaches depth 513 > 512 → over-depth → parse-error sentinel.
+    println("")
+    println("[depth-bomb-reject]")
+    check("depth-514 (just over cap)",   parse_ok(nest(514)),    false)
+    check("depth-1000 bomb",             parse_ok(nest(1000)),   false)
+    check("depth-5000 bomb",             parse_ok(nest(5000)),   false)
+
+    // 3. NEGATIVE CONTROL — the uncapped twin's depth grows LINEARLY with
+    //    input nesting. THIS is the unbounded recursion the cap kills: at a
+    //    1000-deep bomb the uncapped parser reaches depth 1000 (one native
+    //    frame each → stack-blow DoS on the real parser).
+    println("")
+    println("[negative-control: uncapped depth = input nesting]")
+    // An L-deep nest drives the uncapped walk to depth L-1 (the innermost
+    // empty `[]` leaf is consumed without one further recursion) — depth still
+    // grows 1:1 with input nesting, the unbounded behaviour the cap kills.
+    g_max_depth = 0
+    walk_uncapped(nest(50),  0, 0)
+    check_int("uncapped reaches depth 49 on 50-nest",     g_max_depth, 49)
+    g_max_depth = 0
+    walk_uncapped(nest(1000), 0, 0)
+    check_int("uncapped reaches depth 999 on 1000-nest",  g_max_depth, 999)
+
+    println("")
+    println("RESULT  pass=" + to_string(g_pass) + "  fail=" + to_string(g_fail))
+    if g_fail == 0 {
+        println("OP-120 GUARD GREEN — depth cap rejects nesting bombs, accepts honest payloads")
+    } else {
+        println("OP-120 GUARD RED")
+    }
+}
