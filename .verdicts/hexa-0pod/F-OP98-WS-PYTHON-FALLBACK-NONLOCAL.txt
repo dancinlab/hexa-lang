@@ -1,0 +1,134 @@
+F-OP98-WS-PYTHON-FALLBACK-NONLOCAL
+HEXA-0POD OP-98 — LANE-2 0-pod bug-hunt: INDEX-HEAVY binary/framed-protocol parsers
+Date: 2026-06-13   Mode: $0 · 0-pod · NO GPU · no vast · no foreign-pod · leak-0
+Branch off origin/main f03c9766e (post-OP-96 #3250).
+
+═══════════════════════════════════════════════════════════════════════════════
+SCOPE / TASK
+  Hunt the densest bit/byte index-arithmetic parsers on the net/protocol surface:
+  WS frame parse (FIN/opcode/MASK, 7/16/64-bit payload-len, 4-byte mask XOR),
+  HTTP/2 frame/status, the HTTP server response/route stack, cookie/multipart/
+  chunked. LANE-2 (net/protocol/HTTP). Differential vs RFC-6455/7540 Python ports
+  + invariants (mask∘mask==id, encode∘decode==id, length round-trip) over a
+  boundary sweep (125/126/127, 0, 16-bit, 64-bit, masked/unmasked).
+
+PARSERS EXAMINED (5 picked, highest bit/byte index surface) + WHY
+  1. stdlib/net/websocket_native.hexa — DENSEST. Native RFC-6455 frame codec:
+     7/16/64-bit length forms, 4-byte mask key, arithmetic XOR (_ws_xor_byte,
+     bit-by-bit), big-endian 64-bit length assembly, opcode dispatch. Pure
+     index/byte arithmetic.  CLOSURE: stdlib → NOT in compiler closure.
+  2. stdlib/websocket.hexa — the python3 FALLBACK emits an inline RFC-6455 client
+     (handshake + masked client text frame + server-frame decode + masked close).
+     The emitted Python IS the parse logic for hosts without websocat.
+     CLOSURE: stdlib → NOT in compiler closure.
+  3. self/serve/http_server.hexa (NON-closure, OP-96-proven) — parse_request body
+     framing + parse_query first-"=" + build_response status-line/Content-Length +
+     JSON mini parser (index walk). High index surface.
+  4. stdlib/http2.hexa — _h2_parse_status_block trailing-sentinel split (curl
+     wrapper; no HPACK/frame bit arithmetic — lower surface, examined for
+     completeness).
+  5. stdlib/http_sse.hexa — OP-92-clean (skipped per task).
+
+CLOSURE-MEMBERSHIP (OP-96 method — decisive)
+  build_selfhost compiles "compiler/main.hexa + its import/use closure"
+  (tool/build_selfhost.sh:27). grep of compiler/ for stdlib/websocket* and
+  serve/http_server → NONE imported. All edited files (stdlib/websocket.hexa,
+  stdlib/test/*) are OUTSIDE the closure → as fixpoint-safe as a stdlib fix.
+  Per OP-96 lesson: non-closure bug ⇒ FIX (not flag).
+
+═══════════════════════════════════════════════════════════════════════════════
+🔴 REAL SHIPPING BUG FOUND + FIXED — stdlib/websocket.hexa python3 fallback
+  WHAT: _ws_python_helper_source emits a top-level Python script. Inside the
+  nested `def take(n):` it declared `nonlocal pre`, but `pre` is assigned at
+  module / `try`-block scope (the helper runs as `python3 helper.py`, so take's
+  ENCLOSING scope is the MODULE, not a function). `nonlocal` requires an
+  enclosing FUNCTION binding → Python raises a COMPILE-TIME
+
+      SyntaxError: no binding for nonlocal 'pre' found   (at the take() line)
+
+  This aborts the ENTIRE helper before any line executes — the script emits NO
+  JSON on stdout, so ws_request_response's python3 path ALWAYS returns
+  ok=false, error="python helper: no JSON in stdout". The python3 fallback —
+  the universally-available backend on hosts without websocat — was 100% dead.
+
+  VERBATIM REPRO (helper reconstructed from the hexa string literals, run as the
+  wrapper does):
+    $ echo '{"url":"ws://127.0.0.1:1/x","msg":"hi","timeout":1}' | python3 helper.py
+      File ".../ws_helper.py", line 58
+          nonlocal pre
+          ^^^^^^^^^^^^
+      SyntaxError: no binding for nonlocal 'pre' found
+    exit=1   (NO JSON on stdout)
+
+  RFC/REFERENCE CROSS-CHECK: the bug is purely the Python scoping keyword; the
+  frame-codec LOGIC in the helper is RFC-6455-correct (verified independently
+  below). Fix is the minimal keyword swap.
+
+  FIX (minimal, 0 deletions):  s = s + "        nonlocal pre\n"
+                            →  s = s + "        global pre\n"
+  (`pre` is a module global; take() reads+reassigns it → `global pre` is correct.)
+
+  POST-FIX PROOF — LIVE LOOPBACK (hermetic, local python3 echo server + the fixed
+  emitted helper as client, full handshake + masked client frame + server-frame
+  decode + masked close):
+    STDOUT: {"ok": 1, "reply": "ECHO:hello-boundary", "error": ""}
+    PARSED ok=1 reply='ECHO:hello-boundary'  → LOOPBACK PASS
+  NEGATIVE CONTROL (flip back to nonlocal): SyntaxError, empty stdout, FAIL —
+  NOT a tautology.
+
+═══════════════════════════════════════════════════════════════════════════════
+🟢 CLEAN — stdlib/net/websocket_native.hexa frame codec (RFC-6455 byte-exact)
+  Exact Python port of _ws_encode_frame + ws_recv_native parser, checked vs an
+  INDEPENDENT RFC-6455 reference encoder (struct.pack '>H'/'>Q') over a boundary
+  sweep n ∈ {0,1,2,125,126,127,128,255,256,65535,65536,65537,70000}:
+    · masked client encode == RFC reference: 0 mismatch ALL n
+    · encode∘decode round-trip == payload:  0 mismatch ALL n
+    · unmasked SERVER frame decode (what ws_recv_native receives):
+      n ∈ {0,125,126,127,65535,65536} → 0 mismatch
+    · _ws_xor_byte (arithmetic, bit-by-bit) == Python `^` for ALL 256×{0,1,0x5C,
+      0xFF,0xA1} pairs, and involution xor(xor(a,b),b)==a holds: 0 mismatch.
+  The 7/16/64-bit length forms, big-endian assembly, mask-bit strip (b1%128),
+  and opcode (b0%16) are all correct. NO bug.
+
+🟢 CLEAN — self/serve/http_server.hexa parse surface
+  parse_request (first "\r\n\r\n" framing) and parse_query (first "=" split,
+  empty-pair skip) are ALREADY correct on origin/main (closed by OP-96 #3250 —
+  the stale shared-checkout copy mis-led an initial read; the origin/main copy
+  was re-read and confirmed fixed). build_response / JSON-mini index walks: no
+  divergence found. Re-confirmed, not re-fixed.
+
+🟢 CLEAN — stdlib/http2.hexa _h2_parse_status_block
+  Trailing-sentinel reverse-split via _h2_last_index_of("\n") ×2 — preserves
+  multi-line body (OP-94 already classified CLEAN). curl wrapper, no frame/HPACK
+  bit arithmetic. No bug.
+
+  (parse_query value-with-"=" truncation, which an early stale-copy read flagged,
+   is ALREADY FIXED on origin/main — confirmed, not a new bug.)
+
+═══════════════════════════════════════════════════════════════════════════════
+LOCK
+  NEW stdlib/test/test_websocket_helper_lock.hexa — HERMETIC (no network, no
+  python3 needed to run the test). SELF-CONTAINED: _ws_python_helper_source
+  VERBATIM-INLINED (no `use` — installed hexa resolves `use "stdlib/websocket"`
+  to a STALE bundled copy, OP-87/88 lesson). Asserts the emitted source carries
+  `global pre`, has NO `nonlocal pre`, defines take(), seeds `pre = rest`, and
+  keeps the masked close-code (cmask[0]^0x03, cmask[1]^0xE8).
+    Run on shipping `hexa run` (LOCAL, hexa 0.1.0-dispatch):
+      __ websocket python-helper lock (OP-98) __  pass=5 fail=0  → PASS 5/5
+    NEGATIVE CONTROL (flip the inlined line to `nonlocal pre`): FAIL 3/5
+      (has_global_pre FAIL, no_nonlocal_pre FAIL) → catches the regression,
+      NOT a tautology.
+  Test-exposure fn ws_python_helper_source_for_test() also added to
+  stdlib/websocket.hexa (mirrors ws_shell_escape_for_test) for a future
+  non-stale `use`-based test.
+
+BYTE-EQ / GUARDS
+  All edits OUTSIDE the build_selfhost closure (stdlib/websocket.hexa +
+  stdlib/test/*) → self-host fixpoint UNAFFECTED (no gate needed; confirmed
+  closure-OUT). 1 keyword fixed + 1 test-exposure fn + 1 NEW leaf test; 0 source
+  deletions (wipe_guard net-additive). LANE-2 only.
+
+VERDICT: 🔴→FIXED (ws python3 fallback resurrected) + 🟢×3 (native WS codec
+  RFC-byte-exact, http_server parse clean, http2 status-block clean).
+  Tier: 🟢 (real bug fixed + locked + invariants proven).
+  $0 · 0-pod · NO GPU · no vast · no foreign-pod · no .tape · leak-0.

@@ -177,7 +177,13 @@ fn _ws_python_helper_source() -> string {
     s = s + "        return out\n"
     s = s + "    pre = rest\n"
     s = s + "    def take(n):\n"
-    s = s + "        nonlocal pre\n"
+    // `pre` is assigned at module/`try`-block scope (this helper runs as a
+    // top-level script: `python3 helper.py`), so `take`'s enclosing scope is
+    // the MODULE, not a function. `nonlocal pre` therefore raised a compile-
+    // time `SyntaxError: no binding for nonlocal 'pre'` — aborting the ENTIRE
+    // helper before any code ran, so the python3 fallback emitted no JSON and
+    // ws_request_response always failed with "no JSON in stdout". Use `global`.
+    s = s + "        global pre\n"
     s = s + "        while len(pre) < n:\n"
     s = s + "            c = sock.recv(4096)\n"
     s = s + "            if not c: break\n"
@@ -470,6 +476,17 @@ pub fn ws_recv(h, timeout_sec: int) -> string {
 // stdlib's shell-escape idiom.
 pub fn ws_shell_escape_for_test(s: string) -> string {
     return _ws_shell_escape(s)
+}
+
+// ws_python_helper_source_for_test — expose the emitted python3 fallback
+// helper source so a hermetic (no-network) test can assert it is valid
+// Python. Locks the `global pre` fix: the helper runs as a top-level script
+// (`python3 helper.py`), so `take`'s enclosing scope is the MODULE — a
+// `nonlocal pre` there is a compile-time SyntaxError that killed the entire
+// fallback (OP-98). The test asserts `global pre` is present and `nonlocal`
+// is absent.
+pub fn ws_python_helper_source_for_test() -> string {
+    return _ws_python_helper_source()
 }
 
 // ws_close — terminate the supervised websocat + clean up FIFOs.
