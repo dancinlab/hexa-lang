@@ -1,0 +1,325 @@
+// stdlib/test/test_json_roundtrip_lock.hexa — OP-101 LANE-1 round-trip lock
+//
+// Locks the SERIALIZE∘PARSE == IDENTITY invariant for the JSON serialization
+// surface, hunted in HEXA-0POD OP-101 (serialization round-trip bug-hunt).
+//
+// SURFACE (why high-escaping/type-fidelity):
+//   · self/rt/json.hexa — the pure-hexa recursive-descent JSON parser
+//     (`rt_json_parse`) + the pure-hexa stringifier mirror
+//     (`_js_escape_string`). String escaping (`"` `\` `\n` `\t` `\b` `\f`
+//     `\r`, control <0x20 → \u00XX), number type fidelity (int vs float on
+//     `.`/`e`), nested/empty containers — the classic-buggy I/O boundary.
+//   · stdlib/alloc/json.hexa — the pure-hexa pretty-printer (json_dump_pretty)
+//     with its own recursive emit + key stringify.
+//
+// METHOD (hermetic, no `use` — the installed `hexa` resolves `use` to a STALE
+// bundled copy, OP-87/88 lesson): the parser body of self/rt/json.hexa and the
+// escape-emitter body are VERBATIM-INLINED below (helpers char_code/chr/
+// substring map to the same builtins the self-host scaffold lowers to). Each
+// value is round-tripped through the SHIPPING builtin `json_stringify` and the
+// INLINED `rt_json_parse`, and cross-checked DIFFERENTIALLY against the builtin
+// `json_parse` (the documented mirror). A divergence = a real bug; agreement +
+// structural round-trip = 🟢 lock.
+//
+// Run on the shipping `hexa run` (LOCAL, 0-pod). Expected: pass=N fail=0.
+
+// ── verbatim-inlined helpers (self-host scaffold lowerings) ─────────────────
+@pure fn _jp_is_ws(c: int) -> bool { return c == 32 || c == 9 || c == 10 || c == 13 }
+@pure fn _jp_is_digit(c: int) -> bool { return c >= 48 && c <= 57 }
+fn _cc(s: string, i: int) -> int { return char_code(s, i) }
+fn _from_chars(codes) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(codes) { out = out + chr(codes[i]); i = i + 1 }
+    return out
+}
+fn _jp_skip_ws(s: string, i: int) -> int {
+    let n = len(s); let mut p = i
+    while p < n && _jp_is_ws(_cc(s, p)) { p = p + 1 }
+    return p
+}
+
+// ── verbatim-inlined rt_json_parse (self/rt/json.hexa) ──────────────────────
+fn _jp_parse_string(s: string, i: int) {
+    let n = len(s)
+    if i >= n || _cc(s, i) != 34 { return ["", i] }
+    let mut p = i + 1
+    let mut codes = []
+    while p < n {
+        let c = _cc(s, p)
+        if c == 34 { return [_from_chars(codes), p + 1] }
+        if c == 92 && p + 1 < n {
+            let e = _cc(s, p + 1)
+            if e == 34 { codes.push(34); p = p + 2; continue }
+            if e == 92 { codes.push(92); p = p + 2; continue }
+            if e == 47 { codes.push(47); p = p + 2; continue }
+            if e == 110 { codes.push(10); p = p + 2; continue }
+            if e == 114 { codes.push(13); p = p + 2; continue }
+            if e == 116 { codes.push(9); p = p + 2; continue }
+            if e == 98 { codes.push(8); p = p + 2; continue }
+            if e == 102 { codes.push(12); p = p + 2; continue }
+            if e == 117 {
+                if p + 5 < n {
+                    let mut k = 0
+                    while k < 6 { codes.push(_cc(s, p + k)); k = k + 1 }
+                    p = p + 6; continue
+                }
+                codes.push(117); p = p + 2; continue
+            }
+            codes.push(e); p = p + 2; continue
+        }
+        codes.push(c); p = p + 1
+    }
+    return [_from_chars(codes), p]
+}
+fn _jp_parse_number(s: string, i: int) {
+    let n = len(s); let mut p = i; let mut is_float = false
+    if p < n { let c0 = _cc(s, p); if c0 == 45 || c0 == 43 { p = p + 1 } }
+    while p < n && _jp_is_digit(_cc(s, p)) { p = p + 1 }
+    if p < n && _cc(s, p) == 46 { is_float = true; p = p + 1; while p < n && _jp_is_digit(_cc(s, p)) { p = p + 1 } }
+    if p < n {
+        let ce = _cc(s, p)
+        if ce == 101 || ce == 69 {
+            is_float = true; p = p + 1
+            if p < n { let cs = _cc(s, p); if cs == 43 || cs == 45 { p = p + 1 } }
+            while p < n && _jp_is_digit(_cc(s, p)) { p = p + 1 }
+        }
+    }
+    let body = s.substring(i, p)
+    if is_float { return [to_float(body), p] }
+    return [to_int(body), p]
+}
+fn _jp_parse_value(s: string, i: int) {
+    let n = len(s); let start = _jp_skip_ws(s, i)
+    if start >= n { return [void, start] }
+    let c = _cc(s, start)
+    if c == 34 { return _jp_parse_string(s, start) }
+    if c == 123 { return _jp_parse_object(s, start) }
+    if c == 91 { return _jp_parse_array(s, start) }
+    if c == 116 { if start + 4 <= n && s.substring(start, start + 4) == "true" { return [true, start + 4] } }
+    if c == 102 { if start + 5 <= n && s.substring(start, start + 5) == "false" { return [false, start + 5] } }
+    if c == 110 { if start + 4 <= n && s.substring(start, start + 4) == "null" { return [void, start + 4] } }
+    if c == 45 || _jp_is_digit(c) { return _jp_parse_number(s, start) }
+    return [void, start + 1]
+}
+fn _jp_parse_array(s: string, i: int) {
+    let n = len(s)
+    if i >= n || _cc(s, i) != 91 { return [[], i] }
+    let mut p = i + 1; let mut arr = []
+    p = _jp_skip_ws(s, p)
+    if p < n && _cc(s, p) == 93 { return [arr, p + 1] }
+    while p < n {
+        p = _jp_skip_ws(s, p)
+        let r = _jp_parse_value(s, p)
+        arr.push(r[0]); p = r[1]
+        p = _jp_skip_ws(s, p)
+        if p < n { let c = _cc(s, p); if c == 44 { p = p + 1; continue }; if c == 93 { return [arr, p + 1] } }
+        break
+    }
+    return [arr, p]
+}
+fn _jp_parse_object(s: string, i: int) {
+    let n = len(s)
+    if i >= n || _cc(s, i) != 123 { return [#{}, i] }
+    let mut p = i + 1; let mut m = #{}
+    p = _jp_skip_ws(s, p)
+    if p < n && _cc(s, p) == 125 { return [m, p + 1] }
+    while p < n {
+        p = _jp_skip_ws(s, p)
+        let kr = _jp_parse_string(s, p); let key = kr[0]; p = kr[1]
+        p = _jp_skip_ws(s, p)
+        if p < n && _cc(s, p) == 58 { p = p + 1 }
+        p = _jp_skip_ws(s, p)
+        let vr = _jp_parse_value(s, p); m[key] = vr[0]; p = vr[1]
+        p = _jp_skip_ws(s, p)
+        if p < n { let c = _cc(s, p); if c == 44 { p = p + 1; continue }; if c == 125 { return [m, p + 1] } }
+        break
+    }
+    return [m, p]
+}
+fn rt_json_parse(s: string) {
+    if typeof(s) != "string" { return void }
+    let r = _jp_parse_value(s, 0)
+    return r[0]
+}
+
+// ── verbatim-inlined _js_escape_string (self/rt/json.hexa stringifier mirror) ─
+@pure fn _js_hex_digit(n: int) -> int { if n < 10 { return 48 + n }; return 87 + n }
+fn _str_bytes(s: string) {
+    let mut out = []; let mut i = 0
+    while i < len(s) { out.push(char_code(s, i)); i = i + 1 }
+    return out
+}
+fn _js_escape_string(s: string) -> string {
+    let bytes = _str_bytes(s)
+    let n = len(bytes)
+    let mut parts = []
+    parts.push("\"")
+    let mut i = 0
+    while i < n {
+        let c = bytes[i]
+        if c == 34 { parts.push("\\\"") }
+        else if c == 92 { parts.push("\\\\") }
+        else if c == 10 { parts.push("\\n") }
+        else if c == 13 { parts.push("\\r") }
+        else if c == 9 { parts.push("\\t") }
+        else if c == 8 { parts.push("\\b") }
+        else if c == 12 { parts.push("\\f") }
+        else if c < 32 {
+            let hi = c / 16; let lo = c % 16
+            let mut esc = []
+            esc.push(92).push(117).push(48).push(48)
+            esc.push(_js_hex_digit(hi))
+            esc.push(_js_hex_digit(lo))
+            parts.push(_from_chars(esc))
+        } else { parts.push(chr(c)) }
+        i = i + 1
+    }
+    parts.push("\"")
+    return parts.join("")
+}
+
+// ── verbatim-inlined json_dump_pretty (stdlib/alloc/json.hexa) ───────────────
+fn _json_pad(indent: int, level: int) -> string {
+    let total = indent * level
+    let mut s = ""; let mut i = 0
+    while i < total { s = s + " "; i = i + 1 }
+    return s
+}
+fn _json_dump_indent(v, indent: int, level: int) -> string {
+    let t = typeof(v)
+    if t == "void" { return "null" }
+    if t == "bool" { return json_stringify(v) }
+    if t == "int" { return json_stringify(v) }
+    if t == "float" { return json_stringify(v) }
+    if t == "string" { return json_stringify(v) }
+    if t == "array" {
+        if len(v) == 0 { return "[]" }
+        let pad = _json_pad(indent, level + 1)
+        let close_pad = _json_pad(indent, level)
+        let mut out = "[\n"
+        let mut i = 0
+        while i < len(v) {
+            out = out + pad + _json_dump_indent(v[i], indent, level + 1)
+            if i + 1 < len(v) { out = out + "," }
+            out = out + "\n"; i = i + 1
+        }
+        out = out + close_pad + "]"; return out
+    }
+    if t == "map" {
+        let ks = keys(v)
+        if len(ks) == 0 { return "{}" }
+        let pad = _json_pad(indent, level + 1)
+        let close_pad = _json_pad(indent, level)
+        let mut out = "{\n"
+        let mut i = 0
+        while i < len(ks) {
+            let k = ks[i]
+            out = out + pad + json_stringify(k) + ": " + _json_dump_indent(v[k], indent, level + 1)
+            if i + 1 < len(ks) { out = out + "," }
+            out = out + "\n"; i = i + 1
+        }
+        out = out + close_pad + "}"; return out
+    }
+    return json_stringify(v)
+}
+fn json_dump_pretty(v, indent: int) -> string {
+    if indent <= 0 { return json_stringify(v) }
+    return _json_dump_indent(v, indent, 0)
+}
+
+// ── harness ─────────────────────────────────────────────────────────────────
+let mut PASS = 0
+let mut FAIL = 0
+fn ok(name, cond) {
+    if cond { PASS = PASS + 1; print("PASS "); println(name) }
+    else { FAIL = FAIL + 1; print("FAIL "); println(name) }
+}
+
+fn main() {
+    // (1) rt_json_parse ∘ builtin-stringify == identity over adversarial strings.
+    let strs = ["hello", "", "a\"b", "a\\b", "a\nb", "a\tb", "tab\tnl\n", "null", "true", "123", "x😀y"]
+    let mut i = 0
+    while i < len(strs) {
+        let v = strs[i]
+        let dec = rt_json_parse(json_stringify(v))
+        ok("rt-parse:str#" + to_string(i), dec == v)
+        i = i + 1
+    }
+
+    // (2) int round-trip (type fidelity: stays int).
+    let ints = [0, -1, 42, 1000000, 2147483647]
+    i = 0
+    while i < len(ints) {
+        let v = ints[i]
+        let dec = rt_json_parse(json_stringify(v))
+        ok("rt-parse:int#" + to_string(i), dec == v && typeof(dec) == "int")
+        i = i + 1
+    }
+
+    // (3) float type fidelity: literals carrying '.'/'e' parse as float, and
+    //     match the builtin parse byte-for-byte (no rt-vs-builtin divergence).
+    let fjsons = ["3.5", "-2.5", "0.0", "1e10", "1.5e-3", "-2.5E+2"]
+    i = 0
+    while i < len(fjsons) {
+        let s = fjsons[i]
+        let rt = rt_json_parse(s)
+        let bt = json_parse(s)
+        ok("rt-parse:float-type#" + to_string(i), typeof(rt) == "float")
+        ok("rt-parse:float-eq-builtin#" + to_string(i), rt == bt)
+        i = i + 1
+    }
+
+    // (4) DIFFERENTIAL vs builtin parser over adversarial structural inputs:
+    //     re-stringify must agree (rt_json_parse mirrors the builtin).
+    let inputs = [
+        "{\"a\":1,\"a\":2}",
+        "[1,2]extra",
+        "  {  \"a\" : 1 , \"b\" : [ 1 , 2 ] }  ",
+        "{\"k\\u00e9y\":1}",
+        "[[[[1]]]]",
+        "{\"a\":{},\"b\":[]}",
+        "\"a\\/b\"",
+        "\"caf\\u00e9\"",
+        "[true,false,null]",
+        "{\"x\":\"line1\\nline2\\ttab\"}"
+    ]
+    i = 0
+    while i < len(inputs) {
+        let s = inputs[i]
+        let rs = json_stringify(rt_json_parse(s))
+        let bs = json_stringify(json_parse(s))
+        ok("rt-vs-builtin#" + to_string(i), rs == bs)
+        i = i + 1
+    }
+
+    // (5) _js_escape_string == builtin json_stringify (the documented mirror)
+    //     AND round-trips through the builtin parser.
+    let esc = ["hello", "", "a\"b", "a\\b", "a\nb", "a\tb", "q\"\\n"]
+    i = 0
+    while i < len(esc) {
+        let v = esc[i]
+        ok("emit-mirror#" + to_string(i), _js_escape_string(v) == json_stringify(v))
+        ok("emit-roundtrip#" + to_string(i), json_parse(_js_escape_string(v)) == v)
+        i = i + 1
+    }
+
+    // (6) pretty-printer round-trip: json_parse(json_dump_pretty(v,2)) == v
+    //     over a value with quote/backslash/newline/tab/emoji + type-confusion
+    //     string literals + nested + empty containers + a special-char KEY.
+    let m = #{
+        "plain": "hello", "quote": "a\"b", "back": "a\\b", "nl": "a\nb",
+        "tab": "a\tb", "emoji": "x😀y", "empty": "", "lit_null": "null",
+        "lit_true": "true", "lit_123": "123", "neg": -5, "flt": 2.5,
+        "bt": true, "nest": #{"a": [1, 2, #{}], "e": []}, "k\"\\n": "v"
+    }
+    let pback = json_parse(json_dump_pretty(m, 2))
+    ok("pretty-roundtrip:obj", json_stringify(pback) == json_stringify(m))
+    let arr = [[], #{}, "x\"y", 1, true]
+    let aback = json_parse(json_dump_pretty(arr, 2))
+    ok("pretty-roundtrip:arr", json_stringify(aback) == json_stringify(arr))
+
+    print("pass="); print(to_string(PASS))
+    print(" fail="); println(to_string(FAIL))
+    if FAIL == 0 { println("JSON ROUND-TRIP LOCK: GREEN") } else { println("JSON ROUND-TRIP LOCK: RED") }
+}
