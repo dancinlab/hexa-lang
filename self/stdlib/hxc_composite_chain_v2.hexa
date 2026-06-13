@@ -116,12 +116,15 @@ const CC2_B64_ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234
 
 // ───────────────── byte / string helpers ─────────────────
 
+// OP-135 SSOT: converge on the canonical `bytes_to_str_raw` builtin (single
+// byte-faithful source of truth). chr()+join was already byte-faithful — a
+// consolidation, plus NUL-clean assembly (join truncates at embedded 0x00).
 fn _cc2_bytes_to_str(b: array) -> string {
-    let mut out = []
+    let mut sub = []
     let n: i64 = len(b)
     let mut i: i64 = 0
-    while i < n { out.push(chr(b[i])); i = i + 1 }
-    return out.join("")
+    while i < n { sub.push(b[i] & 0xFF); i = i + 1 }
+    return bytes_to_str_raw(sub)
 }
 
 fn _cc2_str_to_bytes(s: string) -> array {

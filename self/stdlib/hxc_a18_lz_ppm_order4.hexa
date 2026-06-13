@@ -1772,13 +1772,15 @@ fn a18_decode(stream: string) -> string {
     if len(header) < 7 || header.substring(0, 7) != "# a18:s" { return stream }
     let bytes = _a18_decode_to_bytes(stream)
     if len(bytes) == 0 { return stream }
-    let mut parts = []
+    // OP-135 SSOT: decode tail → canonical bytes_to_str_raw (byte-faithful,
+    // NUL-clean; replaces a chr()+join twin of the raw-byte decode).
+    let mut sub = []
     let mut i = 0
     while i < len(bytes) {
-        parts.push(chr(bytes[i]))
+        sub.push(bytes[i] & 0xFF)
         i = i + 1
     }
-    return parts.join("")
+    return bytes_to_str_raw(sub)
 }
 
 // ───────────────── in-sample bits estimator (PPM-order-4 + LZ stub bits) ─────────────────

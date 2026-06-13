@@ -137,11 +137,16 @@ pub fn ssh_get_string(buf: [int], off: int) -> any {
     return #{ "bytes": out, "off": start + n }
 }
 
+// OP-135 SSOT: SSH wire strings (usernames, service/method/channel names —
+// UTF-8 per RFC 4251 §5) decode through the canonical `bytes_to_str_raw`
+// builtin, the single byte-faithful source of truth. The prior `chr()`+concat
+// loop was byte-faithful per byte but re-implemented the decode and truncated
+// at any embedded NUL via the C-string length; bytes_to_str_raw is NUL-clean.
 pub fn ssh_bytes_to_string(bs: [int]) -> string {
-    let mut s = ""
+    let mut sub = []
     let mut i = 0
-    while i < len(bs) { s = s + chr(bs[i]) ; i = i + 1 }
-    return s
+    while i < len(bs) { sub.push(bs[i] & 0xFF) ; i = i + 1 }
+    return bytes_to_str_raw(sub)
 }
 
 // ── Plaintext packet framing (used pre-KEX) ───────────────────────

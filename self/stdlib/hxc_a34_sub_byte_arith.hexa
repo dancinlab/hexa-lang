@@ -899,15 +899,18 @@ fn a34_decode(stream: string) -> string {
     return _bytes_to_string(out_bytes)
 }
 
+// OP-135 SSOT: converge on the canonical `bytes_to_str_raw` builtin (single
+// byte-faithful source of truth). chr()+join was already byte-faithful — a
+// consolidation, plus NUL-clean assembly (join truncates at embedded 0x00).
 fn _bytes_to_string(bytes: array) -> string {
-    let mut parts = []
+    let mut sub = []
     let n = len(bytes)
     let mut i = 0
     while i < n {
-        parts.push(chr(bytes[i]))
+        sub.push(bytes[i] & 0xFF)
         i = i + 1
     }
-    return parts.join("")
+    return bytes_to_str_raw(sub)
 }
 
 // _a34_decode_to_bytes: byte-array variant for Korean / multibyte fixtures

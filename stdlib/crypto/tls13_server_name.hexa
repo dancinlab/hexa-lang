@@ -63,12 +63,15 @@ pub fn tls13_server_name_parse(ext_value: [int]) -> string {
     if nt != 0 { return "" }
     let hn = ((ext_value[3] & 0xFF) << 8) | (ext_value[4] & 0xFF)
     if len(ext_value) < 5 + hn { return "" }
-    let mut chars: [string] = []
+    // OP-135 SSOT: raw bytes → string converges on the canonical
+    // `bytes_to_str_raw` builtin (the single byte-faithful source of truth).
+    // SNI host_name is an IDNA A-label (ASCII) so chr()+join was correct;
+    // this is a consolidation onto the builtin (also NUL-clean).
+    let mut sub: [int] = []
     let mut i = 0
     while i < hn {
-        let by = ext_value[5 + i] & 0xFF
-        chars.push(chr(by))
+        sub.push(ext_value[5 + i] & 0xFF)
         i = i + 1
     }
-    return chars.join("")
+    return bytes_to_str_raw(sub)
 }
