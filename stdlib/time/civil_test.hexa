@@ -28,6 +28,22 @@ fn main() {
     cki("cfd_y", ymd[0], 1970)
     cki("cfd_m", ymd[1], 1)
     cki("cfd_d", ymd[2], 1)
+    // OP-131 regression: iso8601_parse_native must REJECT invalid field ranges
+    // (was OP-93's deferred 🟠). Each of these silently produced a normalised
+    // garbage epoch before the fix; Python datetime() raises ValueError on all.
+    cki("rej_m13",      iso8601_parse_native("2024-13-05T00:00:00Z"), 0 - 1)
+    cki("rej_d32",      iso8601_parse_native("2024-01-32T00:00:00Z"), 0 - 1)
+    cki("rej_feb30",    iso8601_parse_native("2024-02-30T00:00:00Z"), 0 - 1)
+    cki("rej_m0",       iso8601_parse_native("2024-00-15T00:00:00Z"), 0 - 1)
+    cki("rej_d0",       iso8601_parse_native("2024-01-00T00:00:00Z"), 0 - 1)
+    cki("rej_h25",      iso8601_parse_native("2024-01-01T25:00:00Z"), 0 - 1)
+    cki("rej_min60",    iso8601_parse_native("2024-01-01T00:60:00Z"), 0 - 1)
+    cki("rej_1900feb29", iso8601_parse_native("1900-02-29T00:00:00Z"), 0 - 1)
+    // valid edge cases must STILL parse to the exact Python-oracle epoch
+    cki("ok_leap2024",  iso8601_parse_native("2024-02-29T12:00:00Z"), 1709208000)
+    cki("ok_2000feb29", iso8601_parse_native("2000-02-29T00:00:00Z"), 951782400)
+    cki("ok_leapsec",   iso8601_parse_native("2016-12-31T23:59:60Z"),
+        days_from_civil(2016, 12, 31) * 86400 + 23 * 3600 + 59 * 60 + 60)
     println("civil self-test: " + to_string(pass) + "/" + to_string(total))
     if pass == total { println("PASS") } else { println("FAILED") }
 }

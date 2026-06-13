@@ -1,0 +1,79 @@
+F-OP131-DATETIME-ARITHMETIC — date/time arithmetic & parsing value-correctness audit
+====================================================================================
+Campaign HEXA-0POD · LANE-1 · 0-pod · $0 · NO GPU · local CPU only · 2026-06-13
+Promotes OP-93's deferred 🟠 "civil does not validate field ranges" to a real audit.
+
+VERDICT: 🔴 1 BUG FIXED (field-range validation / silent-normalisation of invalid dates)
+         + 🟢 CONVERGED (every date/time arithmetic helper byte-exact vs Python datetime/calendar oracle)
+
+HELPERS AUDITED (8) · BUGGY (1) · FIXED (1):
+  stdlib/time/civil.hexa
+    civil_from_days / days_from_civil    — Howard Hinnant proleptic Gregorian   CLEAN (bit-exact int64)
+    iso8601_format_native / rfc3339_*    — epoch → ISO-8601 Z                    CLEAN
+    iso8601_parse_native                 — ISO-8601 → epoch                      🔴 BUG → FIXED
+  self/runtime/datetime_mini_pure.hexa
+    is_leap_year_pure / days_in_month_pure / day_of_year_pure
+    days_between_pure / weekday_zeller_pure                                      CLEAN (documented preconditions)
+  self/std_time.hexa
+    is_leap / parts_to_timestamp / timestamp_to_parts / time_parse              CLEAN-for-valid (see RESIDUAL)
+
+THE BUG (iso8601_parse_native — the public input boundary):
+  Contract says "Returns -1 on a malformed/too-short input" but it NEVER checked
+  field ranges. Every out-of-range field was silently normalised through
+  days_from_civil() into a garbage epoch instead of the documented -1 sentinel.
+  A user round-tripping an invalid date had it silently corrupted.
+
+EDGE-CASE TABLE  (input → hexa BEFORE fix → Python oracle → hexa AFTER fix → verdict)
+  "2024-13-05T00:00:00Z" → 1736035200 → ValueError(month 13)        → -1          🔴→FIXED
+  "2024-01-32T00:00:00Z" → 1706745600 → ValueError(day 32)          → -1          🔴→FIXED
+  "2024-02-30T00:00:00Z" → 1709251200 → ValueError(Feb 30)          → -1          🔴→FIXED  (was = 2024-03-01)
+  "2024-00-15T00:00:00Z" → 1702598400 → ValueError(month 0)         → -1          🔴→FIXED
+  "2024-01-00T00:00:00Z" → 1703980800 → ValueError(day 0)           → -1          🔴→FIXED
+  "2024-01-01T25:00:00Z" → 1704157200 → ValueError(hour 25)         → -1          🔴→FIXED
+  "2024-01-01T00:60:00Z" → 1704070800 → ValueError(minute 60)       → -1          🔴→FIXED
+  "1900-02-29T00:00:00Z" → -2203891200→ ValueError(1900 not leap)   → -1          🔴→FIXED  (1900 ÷100 not ÷400)
+  "2024-02-29T12:00:00Z" → 1709208000 → 1709208000 (valid leap day) → 1709208000  🟢 unchanged
+  "2000-02-29T00:00:00Z" → 951782400  → 951782400  (÷400 leap)      → 951782400   🟢 unchanged
+  "2016-12-31T23:59:60Z" → (leap sec)  → accepted (ss=60 allowed)    → accepted    🟢 unchanged
+  "1970-01-01T00:00:00Z" → 0          → 0                           → 0           🟢 unchanged
+  roundtrip(fmt(1700000000)) → 1700000000 → 1700000000              → 1700000000  🟢 unchanged
+
+CLEAN (no bug — preconditions documented AND no in-repo caller violates them):
+  - civil_from_days / days_from_civil: Hinnant algorithm; tested bit-exact vs Python
+    proleptic-Gregorian for leap (2000/2024), non-leap-century (1900), negative epoch
+    (1969-12-31 → -86400), Dec-31→Jan-1 boundary. max|Δ|=0.
+  - datetime_mini_pure: every fn documents "no validity check — caller's responsibility";
+    the only in-repo callers are its own days_between_pure (passes validated literals) and
+    the self-test. weekday_zeller_pure is OP-81's locked-clean leaf (not re-audited).
+  - self/std_time.parts_to_timestamp/timestamp_to_parts: round-trips correctly for valid
+    fields; is_leap rule correct (÷4 except ÷100 unless ÷400).
+
+FIX (minimal, stdlib leaf, closure-OUT):
+  stdlib/time/civil.hexa — added month∈[1,12], hour≤23, minute≤59, second≤60 (leap-sec),
+  day∈[1, _days_in_month(y,m)] checks before days_from_civil; new leap-aware
+  _days_in_month helper. Returns the already-documented -1 sentinel on any violation.
+
+LOCK (regression test — stdlib/time/civil_test.hexa, @ci_gate):
+  8 rej_* cases (each previously a silent garbage epoch) + 3 ok_* valid-edge cases
+  (leap day / ÷400 leap / leap second) pinned to the Python-oracle epoch.
+  hexa run (patched source) → civil self-test: 21/21 · PASS.
+
+METHOD / HONESTY:
+  hexa run resolves `use "stdlib/time/civil"` against the INSTALLED stdlib
+  (~/.hx/src/...), which is a stale frozen build, so the deployed `hexa run` still
+  shows the OLD garbage epochs until the stdlib is re-shipped — this is the known
+  stale-oracle residual, NOT a logic bug. The fix LOGIC is proven by interpreting
+  the patched source directly: `hexa run` over a `use "/tmp/civil_patched"` copy →
+  all 13 edge cases PASS (8 invalid → -1, 5 valid → exact oracle epoch). Both
+  worktree files `hexa parse` clean. Python oracle = datetime.datetime(...,tzinfo=utc)
+  + a source-port of the Hinnant integer algorithm.
+
+CLOSURE: stdlib/time/civil.hexa is a stdlib leaf — compiler/main.hexa never imports it
+  (build_selfhost closure-OUT) → ZERO byte-eq / fixpoint impact, no selfhost gate
+  semantics changed. Net-additive (validation block + 1 helper + 11 test asserts,
+  0 deletions) → wipe_guard N/A. NO .tape.
+
+HONEST ONE-LINER: every date/time ARITHMETIC helper is value-correct (bit-exact vs
+  Python for leap/century/negative-epoch/boundary cases); the single real bug was the
+  ISO-8601 PARSER silently normalising invalid fields instead of rejecting them — now
+  it returns the documented -1, matching what Python datetime() refuses.
