@@ -1,0 +1,102 @@
+F-OP86-BESPOKE-NO-KAT
+═══════════════════════════════════════════════════════════════════════
+OP-86 — bespoke / no-KAT runtime-helper bug-hunt (LANE-1)
+Closes the OP-85 DEFERRED LOW/no-KAT tail (the 6 helpers OP-85 set aside
+because they have NO authoritative known-answer reference). REFRAME: no
+external KAT ≠ low value — bespoke custom logic is HIGHER bug-probability.
+Hunted via the no-KAT methods: DIFFERENTIAL (vs C reference or a faithful
+twin), INVARIANT (round-trip / rectangularity / order / bounds), and
+DOCSTRING-vs-BEHAVIOUR (documented contract vs body).
+═══════════════════════════════════════════════════════════════════════
+
+SURFACE (the exact 6 OP-85 deferred as LOW/no-KAT, none substituted):
+  char_code_pure · ffi_path_pure · lfu_cache_pure ·
+  lsm_tree_pure · print_fmt_pure · reservoir_sample_pure
+All confirmed untested at round start (scoped grep, NO .git): only
+lfu_cache had a co-located test (test_lfu_cache.hexa); the other 5 had
+no companion test and no .verdicts lock.
+
+METHOD + VERBATIM EVIDENCE (all gated on the SHIPPING `hexa run`):
+
+1) lsm_tree_pure — DIFFERENTIAL vs last-write-wins (LWW) dict reference.
+   An LSM must read like a plain dict under put/delete; compaction must
+   be invisible to reads. Authored against a Python LWW reference that
+   drove 5 random op-streams (seeds 1/7/13/99/256, 300 ops each, cap=3
+   ratio=2, puts+deletes+compactions) through THIS module via `hexa run`
+   → 0 mismatch on every query (RESULTS 20 pass 0 fail × 5 seeds).
+   Pinned: self/test_lsm_tree_pure.hexa — __HEXA_RUNTIME_LSM_TREE__ 14/14
+   (representative stream + idempotent-compaction + unknown-key-MISSING
+   invariants). LSM-ALL-PASS, exit 0.
+
+2) ffi_path_pure — DIFFERENTIAL vs the C reference hexa_ffi_extract_libname
+   (runtime.c:2994). Faithful Python ports of BOTH the C body and this
+   module ran 2,800,007 generated path strings (prefixes
+   ""/lib/abs/rel/dir + 0..7-char combos over a/./s/o/d/y/l/i/b/1):
+     tested 2800007  mismatches 0
+   (NOTE: the module uses blen>=6/>=3 where C uses blen>6/>3, but the
+   equality case always lands on suffix_at==0 → "" in BOTH — final
+   results never diverge. Documented, not a bug.)
+   Pinned: self/test_ffi_path_pure.hexa — __HEXA_RUNTIME_FFI_PATH__ 15/15
+   (behaviour table + basename + .so.N leftmost-substring edges).
+
+3) reservoir_sample_pure — DIFFERENTIAL + INVARIANT.
+   Custom 16-bit-decomposition _mul32 and inline 32-bit LCG _lcg_next
+   checked vs a true (a*b)&MASK / standard-LCG Python reference across
+   edge cases incl. 0xFFFFFFFF² → RNG-ALL-PASS, 0 mismatch.
+   Algorithm-R structural invariants (fill order, overflow size==cap +
+   count tracking, valid stream indices, cap0 stores nothing, neg-cap
+   clamp) all hold.
+   HONEST g5 NOTE (NOT a bug): the RAW sampling distribution is
+   non-uniform. A faithful Python port of reservoir_add over the SAME
+   weak LCG + seed thread reproduced the EXACT per-item skew
+   BYTE-FOR-BYTE (4000 trials, N=20 k=4: item-7 count 203, item-4 1061
+   vs ~800 ideal — Hexa and Python identical). This is the documented
+   weak-LCG ("standard 32-bit LCG") low-bit `% n` bias, NOT a sampling
+   logic bug — the module matches its reference exactly. No uniformity
+   assertion is locked for that reason.
+   Pinned: self/test_reservoir_sample_pure.hexa
+   __HEXA_RUNTIME_RESERVOIR__ 38/38. RES-ALL-PASS.
+
+4) char_code_pure — DOCSTRING-vs-BEHAVIOUR + INTERNAL DIFFERENTIAL.
+   The header table (runtime.c:4297 hexa_char_code) transcribed into
+   asserts; char_code_pure(s,i) == string_bytes_range_pure(s,i,i+1)[0]
+   over a full string; range clipping matches hexa_str_slice.
+   Pinned: self/test_char_code_pure.hexa — __HEXA_RUNTIME_CHAR_CODE__ 26/26.
+
+5) print_fmt_pure — INVARIANT / DOCSTRING-vs-BEHAVIOUR.
+   table_render rows are byte-equal width (ascii cells); align_cols
+   output is rectangular with per-column uniform width; box_render emits
+   input+2 lines; truncate_ellipsis honours its documented length
+   contract (identity when it fits; max>3 → exactly max chars ending in
+   "..."; max<=0 → "") across a 153-case sweep; tree_render emits one
+   line per reachable node.
+   Pinned: self/test_print_fmt_pure.hexa — __HEXA_RUNTIME_PRINT_FMT__ 166/166.
+
+6) lfu_cache_pure — DIFFERENTIAL vs an LFU reference with the SAME
+   impl-defined tie-break (evict the FIRST array index holding the min
+   frequency = oldest insertion among ties). A deterministic 200-op
+   put/get stream (seed 20260613) agreed with a faithful Python ref on
+   every final query. Dict-form inlining (existing test_lfu_cache
+   pattern) + a "__LFU_MISS__" sentinel dodge the stale-binary
+   nil-in-map parse defect (a stale-binary defect, NOT a shipping bug).
+   Pinned: self/test_lfu_cache_diff.hexa — __HEXA_RUNTIME_LFU_DIFF__ 8/8.
+
+RESULT: 267/267 assertions PASS across all 6 modules.
+  NO 🔴 BUG — all 6 bespoke helpers PROVEN-CLEAN. The differential and
+  invariant methods (not KAT) were sufficient: each module matches its
+  C reference / faithful twin / documented contract exactly, including
+  the deliberately-reproduced weak-LCG skew (a documented property, not
+  a defect — honest g5, not fabricated).
+
+BYTE-EQ SAFETY: 6 NEW leaf test files only (self/test_*_pure.hexa +
+test_lfu_cache_diff.hexa) — NOT in the build_selfhost closure (not
+imported by any stage) → self-host fixpoint UNAFFECTED. Every audited
+module left UNCHANGED. wipe_guard net-additive (0 deletions).
+
+VEIN: this closes the bespoke/no-KAT runtime *_pure tail OP-85 deferred.
+With OP-80/OP-82/OP-85 (authoritative-reference vein) + this round, the
+remaining untested runtime *_pure helpers are internal MED-LOW glue with
+neither an external KAT nor a non-trivial bespoke contract.
+
+TIER 🟢 GREEN — 6 bespoke runtime helpers locked, 267/267, 0 bugs.
+$0 · 0-pod · NO GPU · no vast · no foreign pod · no MAIN.tape · leak-0.

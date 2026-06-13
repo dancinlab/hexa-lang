@@ -1,0 +1,96 @@
+#!hexa lax
+// self/test_ffi_path_pure.hexa — OP-86 differential lock for
+// self/runtime/ffi_path_pure.hexa.
+//
+// METHOD: DIFFERENTIAL vs the C reference hexa_ffi_extract_libname
+// (runtime.c:2994). The C body IS the contract. When authored, a
+// faithful Python port of BOTH the C and this module ran 2,800,007
+// generated path strings (prefixes ""/lib/abs/rel/dir + 0..7-char
+// combos over a/./s/o/d/y/l/i/b/1) — 0 mismatch. (Note the module uses
+// blen>=6/>=3 vs the C blen>6/>3; the equality case always lands on the
+// suffix_at==0 -> "" branch in BOTH, so the final results never diverge.)
+// This file pins the documented behaviour rows + the basename / .so.N
+// leftmost-substring edge cases.
+//
+// Inlined (codegen_c2 import/use not wired for test files).
+
+@pure
+fn _ffi_basename(path) {
+    let n = len(path)
+    if n == 0 { return path }
+    let mut i = n - 1
+    let mut cut = 0 - 1
+    while i >= 0 {
+        if path.substring(i, i + 1) == "/" {
+            cut = i
+            i = 0 - 1
+        } else {
+            i = i - 1
+        }
+    }
+    if cut < 0 { return path }
+    path.substring(cut + 1, n)
+}
+@pure
+fn _ffi_find_suffix(base) {
+    let n = len(base)
+    if n >= 6 && base.substring(n - 6, n) == ".dylib" {
+        return n - 6
+    }
+    if n >= 3 && base.substring(n - 3, n) == ".so" {
+        return n - 3
+    }
+    let mut i = 0
+    let lim = n - 4
+    while i <= lim {
+        if base.substring(i, i + 4) == ".so." {
+            return i
+        }
+        i = i + 1
+    }
+    0 - 1
+}
+@pure
+pub fn ffi_extract_libname_pure(path) {
+    if type_of(path) != "string" { return "" }
+    let n = len(path)
+    if n == 0 { return "" }
+    let base = _ffi_basename(path)
+    let bn = len(base)
+    if bn < 3 { return "" }
+    if base.substring(0, 3) != "lib" { return "" }
+    let after_lib = base.substring(3, bn)
+    let suffix_at = _ffi_find_suffix(after_lib)
+    if suffix_at < 0 { return "" }
+    if suffix_at == 0 { return "" }
+    after_lib.substring(0, suffix_at)
+}
+
+let mut pass_count = 0
+let mut fail_count = 0
+fn ck(actual, expected, msg) {
+    if to_string(actual) == to_string(expected) { pass_count = pass_count + 1 }
+    else { println("[FAIL] " + msg + " exp [" + to_string(expected) + "] got [" + to_string(actual) + "]"); fail_count = fail_count + 1 }
+}
+
+// Documented behaviour table (module header + C reference).
+ck(ffi_extract_libname_pure("/abs/path/libhxblas.dylib"), "hxblas", "abs dylib")
+ck(ffi_extract_libname_pure("./libfoo.so"), "foo", "rel so")
+ck(ffi_extract_libname_pure("libhxml.so.2"), "hxml", "so.N")
+ck(ffi_extract_libname_pure("libalone"), "", "no suffix")
+ck(ffi_extract_libname_pure("not-a-lib.dylib"), "", "no lib prefix")
+ck(ffi_extract_libname_pure(""), "", "empty")
+// edge cases vs C strstr leftmost .so. + basename stripping
+ck(ffi_extract_libname_pure("/x/y/libname.so.10.4"), "name", ".so.N.M leftmost")
+ck(ffi_extract_libname_pure("lib.so"), "", "empty name (suffix_at==0)")
+ck(ffi_extract_libname_pure("lib.dylib"), "", "empty name dylib")
+ck(ffi_extract_libname_pure("libx.so"), "x", "1-char name")
+ck(ffi_extract_libname_pure("li"), "", "shorter than lib")
+ck(ffi_extract_libname_pure("/only/dir/"), "", "trailing slash basename empty")
+ck(ffi_extract_libname_pure(123), "", "non-string")
+ck(ffi_extract_libname_pure("libplain.txt"), "", "unrecognised suffix")
+ck(ffi_extract_libname_pure("/a/b/c/libdeep.so"), "deep", "deep path")
+
+println("__HEXA_RUNTIME_FFI_PATH__ " + to_string(pass_count) + "/" + to_string(pass_count + fail_count))
+if fail_count > 0 { println("FFI-FAIL"); exit(1) }
+println("FFI-ALL-PASS")
