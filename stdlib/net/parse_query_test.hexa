@@ -1,0 +1,107 @@
+// OP-91 leaf lock for stdlib/net/http_request.hexa parse_query.
+//
+// Verbatim-inlined copy of the FIXED parse_query body (the installed
+// `hexa` resolves `use "stdlib/..."` to its stale bundled copy, so this
+// test inlines the leaf and checks the boundary cases that diverged from
+// urllib.parse.parse_qsl(keep_blank_values=True) before the fix:
+//   - "a=b=c"   -> a="b=c"  (value keeps "=", was truncated to "b")
+//   - "a==b"    -> a="=b"   (was truncated to "")
+//   - "a=1&&b=2"-> {a:1,b:2} (empty pair skipped, was spurious "" key)
+// plus the cases that already matched, as regression locks. Empty-key
+// absence is asserted via len(result) (no nil literal — not a value here).
+
+fn parse_query(qs) {
+    let result = #{}
+    if len(qs) == 0 { return result }
+    let pairs = qs.split("&")
+    let mut i = 0
+    while i < len(pairs) {
+        let pair = pairs[i]
+        if len(pair) > 0 {
+            let eq = pair.index_of("=")
+            if eq >= 0 {
+                result[pair.substring(0, eq)] = pair.substring(eq + 1, len(pair))
+            } else {
+                result[pair] = ""
+            }
+        }
+        i = i + 1
+    }
+    return result
+}
+
+fn check_str(name, got, want) {
+    if got == want {
+        println("ok   " + name)
+        return 1
+    }
+    println("FAIL " + name + " got=[" + got + "] want=[" + want + "]")
+    return 0
+}
+
+fn check_int(name, got, want) {
+    if got == want {
+        println("ok   " + name)
+        return 1
+    }
+    println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want))
+    return 0
+}
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // --- CPython-divergent cases (the bugs the fix closes) ---
+    let r1 = parse_query("a=b=c")
+    total = total + 1; pass = pass + check_str("value-with-= a=b=c", r1["a"], "b=c")
+
+    let r2 = parse_query("a==b")
+    total = total + 1; pass = pass + check_str("double-eq a==b", r2["a"], "=b")
+
+    let r3 = parse_query("a=1&&b=2")
+    total = total + 1; pass = pass + check_str("empty-pair a", r3["a"], "1")
+    total = total + 1; pass = pass + check_str("empty-pair b", r3["b"], "2")
+    // exactly 2 keys -> no spurious "" key (unfixed body produced 3)
+    total = total + 1; pass = pass + check_int("empty-pair keycount", len(r3), 2)
+
+    let r10 = parse_query("a=1&")
+    total = total + 1; pass = pass + check_str("trailing-amp a", r10["a"], "1")
+    total = total + 1; pass = pass + check_int("trailing-amp keycount", len(r10), 1)
+
+    // --- Already-matching regression locks ---
+    let r4 = parse_query("a=1&b=2")
+    total = total + 1; pass = pass + check_str("basic a", r4["a"], "1")
+    total = total + 1; pass = pass + check_str("basic b", r4["b"], "2")
+
+    let r5 = parse_query("key")
+    total = total + 1; pass = pass + check_str("no-eq flag", r5["key"], "")
+    total = total + 1; pass = pass + check_int("no-eq keycount", len(r5), 1)
+
+    let r6 = parse_query("key=")
+    total = total + 1; pass = pass + check_str("trailing-eq", r6["key"], "")
+
+    let r7 = parse_query("=val")
+    total = total + 1; pass = pass + check_str("leading-eq blank-key val", r7[""], "val")
+    total = total + 1; pass = pass + check_int("leading-eq keycount", len(r7), 1)
+
+    let r8 = parse_query("a=1&a=2")
+    total = total + 1; pass = pass + check_str("repeat last-wins", r8["a"], "2")
+    total = total + 1; pass = pass + check_int("repeat keycount", len(r8), 1)
+
+    let r9 = parse_query("flag&x=1")
+    total = total + 1; pass = pass + check_str("mixed flag", r9["flag"], "")
+    total = total + 1; pass = pass + check_str("mixed x", r9["x"], "1")
+    total = total + 1; pass = pass + check_int("mixed keycount", len(r9), 2)
+
+    let r0 = parse_query("")
+    total = total + 1; pass = pass + check_int("empty-input keycount", len(r0), 0)
+
+    println("---")
+    println("PASS " + to_string(pass) + "/" + to_string(total))
+    if pass == total {
+        println("__HEXA_STDLIB_PARSE_QUERY_OP91__ " + to_string(pass) + "/" + to_string(total) + " ALL-GREEN")
+    } else {
+        println("RED")
+    }
+}

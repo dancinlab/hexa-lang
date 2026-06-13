@@ -72,6 +72,14 @@ pub fn parse_request(raw) {
 }
 
 // -- Parse query string "a=1&b=2" into map --
+//
+// Matches urllib.parse.parse_qsl(keep_blank_values=True) shape (last
+// value wins, like a map assignment):
+//   - the value is split on the FIRST "=" only, so "a=b=c" -> a="b=c"
+//     (a naive .split("=") would truncate the value at the first "=");
+//   - an empty pair (from "a&&b" or a trailing "&") is SKIPPED, not
+//     turned into a spurious "" key;
+//   - a pair with no "=" ("flag") yields an empty value ("flag" -> "").
 
 pub fn parse_query(qs) {
     let result = #{}
@@ -79,12 +87,14 @@ pub fn parse_query(qs) {
     let pairs = qs.split("&")
     let mut i = 0
     while i < len(pairs) {
-        let kv = pairs[i].split("=")
-        if len(kv) >= 2 {
-            result[kv[0]] = kv[1]
-        } else {
-            if len(kv) == 1 {
-                result[kv[0]] = ""
+        let pair = pairs[i]
+        if len(pair) > 0 {
+            let eq = pair.index_of("=")
+            if eq >= 0 {
+                // Split on the FIRST "=" only — keep "=" inside the value.
+                result[pair.substring(0, eq)] = pair.substring(eq + 1, len(pair))
+            } else {
+                result[pair] = ""
             }
         }
         i = i + 1

@@ -1,0 +1,127 @@
+F-OP91-NET-PARSE-QUERY — LANE-2 0-pod bug-hunt: stdlib COMPLEX TEXT + URL modules
+=================================================================================
+
+TIER: 🔴 REAL SHIPPING BUG FOUND + FIXED (2 divergences, 1 root edit) + 🟢 invariant-lock
+LANE: 2 (0-pod correctness; stdlib STRING/PATH/TEXT/URL territory). Sibling LANE-1 owns
+      self/runtime + self/* helpers — no overlap (OP-91 touches ONLY stdlib/*).
+SCOPE: $0 · 0-pod · NO GPU · no vast · no foreign pod · no .tape edit · leak-0.
+DATE: 2026-06-13
+
+--------------------------------------------------------------------------------
+SURVEY (scoped greps, NO .git; LANE-2 = string/path/text/url; SKIP path.hexa [OP-87/88],
+the 7 OP-89 scanners, codec/*)
+--------------------------------------------------------------------------------
+Census of the COMPLEX-state text + URL surface. The classic named modules
+(glob/fnmatch/wildcard, textwrap/word_wrap, difflib/myers, fuzzy/levenshtein,
+template/interpolate, urlencode/percent/quote/unquote, slugify, indent/dedent, csv)
+DO NOT EXIST as stdlib functions — grep for `fn (glob|fnmatch|wildcard|word_wrap|
+wrap|textwrap|slugify|percent_encode|percent_decode|url_encode|urlencode|parse_qs|
+interpolate|edit_distance|levenshtein|fuzzy_match|dedent|indent)` over stdlib (no .git)
+returned ZERO definitions. The actual COMPLEX text/url surfaces in stdlib are:
+
+  * stdlib/net/http_request.hexa  parse_query(qs)   — URL query-string parser
+                                  parse_request(raw)— request-line + header parser
+  * stdlib/net/http_server.hexa   _route_match      — path exact + prefix match
+  * stdlib/bio/.../lean4_..._emit.hexa wrap_text     — non-pub bio-selftest local helper
+
+PICKED stdlib/net/http_request.hexa parse_query as the HIGHEST index/state/encoding bug
+surface (WHY): it is the only user-facing URL parser in stdlib, with the exact boundary
+class the regimen targets — `&`/`=`/empty-value edges, value-containing-`=`, empty pairs.
+It splits each `&`-pair with a NAIVE `.split("=")` then reads `kv[0]`/`kv[1]` — a textbook
+"split on first delimiter only" index bug. The directly-comparable CPython reference is
+urllib.parse.parse_qsl(keep_blank_values=True).
+
+(parse_request = simple `index_of("?")` + CRLF split, no run/encoding arithmetic — low
+surface, not picked. _route_match = a documented path-PREFIX mount [substring(0,len(pat))],
+not a glob, no CPython differential — not a bug. wrap_text = a non-pub helper inside a bio
+selftest, out of the stdlib text API surface — not picked.)
+
+--------------------------------------------------------------------------------
+🔴 BUG (parse_query) — DIFFERENTIAL vs urllib.parse.parse_qsl(keep_blank_values=True)
+--------------------------------------------------------------------------------
+UNFIXED body (origin/main stdlib/net/http_request.hexa):
+    let kv = pairs[i].split("=")
+    if len(kv) >= 2 { result[kv[0]] = kv[1] }      // takes ONLY the first value seg
+    else { if len(kv) == 1 { result[kv[0]] = "" } }// empty pair -> spurious "" key
+
+hexa split semantics confirmed on the SHIPPING `hexa run` (summer pool, 0.1.0-dispatch):
+    "a=b=c".split("=")   -> ["a","b","c"]   (len 3)
+    "a=1&&b=2".split("&")-> ["a=1","","b=2"] (len 3, empty middle)
+
+VERBATIM differential (faithful Python port of the UNFIXED body vs CPython parse_qsl,
+dict form last-write-wins to match map assignment):
+    input        hexa(unfixed)                cpython                      match
+    'a=1&b=2'    {'a':'1','b':'2'}            {'a':'1','b':'2'}            OK
+    'a=b=c'      {'a':'b'}                    {'a':'b=c'}                  MISMATCH  <-- BUG 1
+    'a==b'       {'a':''}                     {'a':'=b'}                   MISMATCH  <-- BUG 1
+    'key'        {'key':''}                   {'key':''}                   OK
+    'key='       {'key':''}                   {'key':''}                   OK
+    '=val'       {'':'val'}                   {'':'val'}                   OK
+    'a=1&a=2'    {'a':'2'}                    {'a':'2'}                    OK
+    'a=1&&b=2'   {'a':'1','':'','b':'2'}      {'a':'1','b':'2'}            MISMATCH  <-- BUG 2
+    'flag&x=1'   {'flag':'','x':'1'}          {'flag':'','x':'1'}          OK
+
+And VERBATIM on the SHIPPING `hexa run` (summer), the UNFIXED body:
+    a=b=c    -> a=[b]               (CPython: 'b=c')
+    a==b     -> a=[]               (CPython: '=b')
+    a=1&&b=2 -> keycount=3         (CPython: 2 keys — empty pair skipped)
+    a=1&     -> keycount=2         (CPython: 1 key — trailing & = empty pair, skipped)
+
+ROOT CAUSE:
+  BUG 1 — value truncation: `.split("=")` shatters the whole pair on EVERY "=", and the
+          code keeps only kv[1], dropping any "=" that legitimately belongs INSIDE the value.
+  BUG 2 — spurious blank key: an empty pair (from "&&" or a trailing/leading "&") yields a
+          "" segment whose `"".split("=")` has len 1, so the code inserts result[""]="" —
+          a key CPython never produces (it skips empty pairs).
+
+--------------------------------------------------------------------------------
+FIX (minimal, provably-correct — matches parse_qsl(keep_blank_values=True); 0 deletions)
+--------------------------------------------------------------------------------
+    let pair = pairs[i]
+    if len(pair) > 0 {                         // skip empty pair  -> closes BUG 2
+        let eq = pair.index_of("=")
+        if eq >= 0 {
+            // split on the FIRST "=" only      -> closes BUG 1
+            result[pair.substring(0, eq)] = pair.substring(eq + 1, len(pair))
+        } else {
+            result[pair] = ""
+        }
+    }
+
+--------------------------------------------------------------------------------
+🟢 LOCK + POST-FIX CROSS-CHECK
+--------------------------------------------------------------------------------
+NEW stdlib/net/parse_query_test.hexa — verbatim-inlined leaf oracle of the FIXED body
+(self-contained, no `use`; the installed `hexa` resolves `use "stdlib/..."` to its stale
+bundled copy, so the body is inlined and gated on the SHIPPING `hexa run`; empty-key
+absence asserted via len(result), no `nil` literal). Run on the summer pool host
+(linux, hexa 0.1.0-dispatch) — local was fork-storm-capped by 10 orphaned multi-hour
+hexa_run processes from other sessions, so the sanctioned pool path was used:
+
+    __HEXA_STDLIB_PARSE_QUERY_OP91__ 20/20 ALL-GREEN
+
+20 goldens cover: value-with-= (a=b=c->b=c, a==b->=b), empty-pair skip (a=1&&b=2 ->
+{a,b}, keycount==2), trailing-& skip (a=1& -> keycount==1), and the already-correct
+cases as regression locks (basic, no-eq flag, trailing-eq, leading-eq blank-key,
+last-wins repeat, mixed flag, empty input). Every value + keycount matches
+urllib.parse.parse_qsl(keep_blank_values=True).
+
+The leaf running the UNFIXED body reproduces all 4 divergences verbatim (above), proving
+the oracle actually catches the bug — it is not a tautology.
+
+--------------------------------------------------------------------------------
+BYTE-EQ / FIXPOINT SAFETY
+--------------------------------------------------------------------------------
+stdlib/net/http_request.hexa is a stdlib application module, NOT in the build_selfhost
+closure (the compiler's own copy lives at self/serve/http_server.hexa and is UNTOUCHED —
+editing it would risk the self-host fixpoint, so it was deliberately left alone and only
+NOTED as carrying the identical pre-port bug). 1 function changed (parse_query), 1 NEW
+leaf test file, 0 deletions (wipe_guard trivially satisfied, net-additive). The pre-existing
+`== nil` usage in content_length_of (lines 99/101) is UPSTREAM on origin/main, not touched,
+out of scope. Self-host fixpoint UNAFFECTED.
+
+VERDICT: 🔴→FIXED + 🟢 — stdlib/net/http_request.hexa parse_query had a real shipping
+URL-parser bug (value truncation at the first "=" + spurious blank-key on empty pairs),
+diverging from urllib.parse.parse_qsl on a=b=c / a==b / a=1&&b=2 / a=1&. Fixed to split on
+the first "=" only and skip empty pairs (matches CPython), locked by a 20/20 verbatim leaf
+oracle on the shipping `hexa run`. $0 · 0-pod · NO GPU · leak-0.
