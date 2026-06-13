@@ -90,6 +90,33 @@ fi
 
 [ -x "$HEXA_V2" ] || { echo "build_aprime: hexat missing/not-executable: $HEXA_V2" >&2; exit 1; }
 
+# ── platform arch flag ─────────────────────────────────────────────
+# `-arch arm64` is an Apple-clang extension; on Linux clang it errors with
+# `unsupported option -arch for target x86_64-pc-linux-gnu` (handoff 4565ac05).
+# On Darwin keep the explicit -arch (we cross from any host to arm64 Mach-O);
+# on Linux omit it entirely so host clang picks the native arch — matching
+# the arch-clean cflags the rest of the toolchain uses (os_clang_cflags).
+# The emit-target for the stage-5 smoke is likewise platform-derived.
+if [ "$(uname -s)" = "Darwin" ]; then
+    ARCH_FLAG="-arch arm64"
+    SMOKE_TARGET="arm64-apple-darwin"
+    # Apple ld dead-strip spelling (GNU ld rejects `-dead_strip`).
+    DEAD_STRIP="-Wl,-dead_strip"
+else
+    ARCH_FLAG=""
+    # GNU ld equivalent of Apple `-dead_strip`; pairs with
+    # -ffunction-sections/-fdata-sections to drop unused code on Linux.
+    DEAD_STRIP="-Wl,--gc-sections"
+    # aprime_cc's --emit=asm matches target triples by EXACT string equality
+    # (compiler/main.hexa codegen dispatch); its Linux triples are
+    # `arm64-linux-gnu` / `x86_64-linux-gnu` — NOT the LLVM `aarch64-` /
+    # `-unknown-` spellings, which it rejects with exit(2).
+    case "$(uname -m)" in
+        arm64|aarch64) SMOKE_TARGET="arm64-linux-gnu"  ;;
+        *)             SMOKE_TARGET="x86_64-linux-gnu" ;;
+    esac
+fi
+
 TMP="$(mktemp -d -t aprime_build.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 FLAT="$TMP/ap_flat.hexa"
@@ -197,8 +224,8 @@ mkdir -p "$(dirname "$OUT")"
 # -D_FORTIFY_SOURCE=0          : ___memcpy_chk etc fortified wrappers
 # -fno-stack-protector         : ___stack_chk_fail/_guard
 # These flags are link-equivalent — no source change required.
-CL_ERR="$(clang -Oz -arch arm64 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-    -ffunction-sections -fdata-sections -Wl,-dead_strip \
+CL_ERR="$(clang -Oz $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
+    -ffunction-sections -fdata-sections $DEAD_STRIP \
     -fno-builtin-bzero -fno-builtin-memcpy -fno-builtin-strlen \
     -D_FORTIFY_SOURCE=0 -fno-stack-protector \
     -I self -I . "$APPOST" -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
@@ -213,15 +240,15 @@ echo "  [4/5] clang: $OUT ($(ls -la "$OUT" | awk '{print $5}') B, $(file -b "$OU
 SMK="$TMP/prog.hexa"; SMS="$TMP/prog.s"; SMO="$TMP/prog.o"
 RTO="$TMP/rt_arm64.o"; SMB="$TMP/prog"
 printf 'fn main() {\n  let x = 6 * 7\n  exit(x)\n}\n' > "$SMK"
-"$OUT" _drv.hexa --emit=asm --target=arm64-apple-darwin -o "$SMS" "$SMK" 2>&1 | tail -1
+"$OUT" _drv.hexa --emit=asm --target="$SMOKE_TARGET" -o "$SMS" "$SMK" 2>&1 | tail -1
 EXTRA_DEFS=""
 if [ "$(uname -s)" = "Darwin" ]; then
     EXTRA_DEFS="-D_DARWIN_C_SOURCE"
 fi
-clang -c -O2 -arch arm64 -std=gnu11 -D_GNU_SOURCE $EXTRA_DEFS -Wno-trigraphs -I self -I . \
+clang -c -O2 $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE $EXTRA_DEFS -Wno-trigraphs -I self -I . \
     self/runtime.c -o "$RTO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
-clang -arch arm64 "$SMS" -c -o "$SMO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
-clang -arch arm64 "$SMO" "$RTO" -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:' | head -5
+clang $ARCH_FLAG "$SMS" -c -o "$SMO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
+clang $ARCH_FLAG "$SMO" "$RTO" -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:' | head -5
 if [ ! -x "$SMB" ]; then
     echo "build_aprime: smoke link failed" >&2
     exit 2
