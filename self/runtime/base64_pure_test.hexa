@@ -1,0 +1,85 @@
+// self/runtime/base64_pure_test.hexa — base64_pure invariant lock (OP-82).
+//
+// Locks the documented contract of self/runtime/base64_pure.hexa, which
+// ships WITHOUT a co-located test. The module claims RFC 4648 base64.
+// Every encoded value below is the EXACT output of CPython
+// base64.b64encode (the authoritative reference), and the decode path is
+// locked by the RFC 4648 round-trip identity decode(encode(s)) == s,
+// which downstream code relies on.
+//
+// Gates:
+//   G1 ENCODE     ASCII strings == base64.b64encode (authoritative)
+//   G2 PADDING    1-,2-,0-residue inputs produce correct ==/= padding
+//   G3 ROUNDTRIP  decode(encode(s)) == s over a corpus (RFC 4648 identity)
+//   G4 DECODE     known base64 == known plaintext (authoritative direction)
+//
+// Runs on the interpreter (`hexa run`) — base64_pure is interpreter-safe
+// (no `<<`/`>>`; /256, %64, .substring/ord). ASCII (<0x80) inputs only
+// (interpreter from_char_code cannot build raw bytes); the C reference it
+// mirrors (runtime.c:4367) round-trips full 0..255 — see OP-82 verdict.
+// @sentinel(__HEXA_RUNTIME_BASE64__ <PASS|FAIL> N/N)
+
+use "self/runtime/base64_pure"
+
+let SENT_T = "__HEXA_RUNTIME_BASE64__"
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // ── G1 ENCODE — exact base64.b64encode outputs (authoritative) ───
+    let ps = ["", "a", "ab", "abc", "foo", "hello", "hello world", "123456789",
+              "The quick brown fox jumps over the lazy dog"]
+    let es = ["", "YQ==", "YWI=", "YWJj", "Zm9v", "aGVsbG8=", "aGVsbG8gd29ybGQ=",
+              "MTIzNDU2Nzg5",
+              "VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZw=="]
+    let mut i = 0
+    while i < len(ps) {
+        total = total + 1
+        if base64_encode_pure(ps[i]) == es[i] { pass = pass + 1 } else { eprintln("FAIL G1 encode " + ps[i]) }
+        i = i + 1
+    }
+
+    // ── G2 PADDING — residue-class padding correctness ───────────────
+    // 1-byte residue -> "==", 2-byte residue -> "=", multiple-of-3 -> none
+    total = total + 1
+    if base64_encode_pure("a") == "YQ==" { pass = pass + 1 } else { eprintln("FAIL G2 pad-1") }
+    total = total + 1
+    if base64_encode_pure("ab") == "YWI=" { pass = pass + 1 } else { eprintln("FAIL G2 pad-2") }
+    total = total + 1
+    if base64_encode_pure("abc") == "YWJj" { pass = pass + 1 } else { eprintln("FAIL G2 pad-0") }
+
+    // ── G3 ROUNDTRIP — decode(encode(s)) == s (RFC 4648 identity) ────
+    let mut rt_bad = 0
+    i = 0
+    while i < len(ps) {
+        let s = ps[i]
+        if base64_decode_pure(base64_encode_pure(s)) != s { rt_bad = rt_bad + 1 }
+        i = i + 1
+    }
+    // extra round-trip corpus spanning all residue classes
+    let extra = ["x", "xy", "xyz", "abcd", "abcde", "abcdef", "Man", "Ma", "M",
+                 "any carnal pleasure", "sure."]
+    i = 0
+    while i < len(extra) {
+        let s = extra[i]
+        if base64_decode_pure(base64_encode_pure(s)) != s { rt_bad = rt_bad + 1 }
+        i = i + 1
+    }
+    total = total + 1
+    if rt_bad == 0 { pass = pass + 1 } else { eprintln("FAIL G3 roundtrip count=" + str(rt_bad)) }
+
+    // ── G4 DECODE — authoritative base64 -> plaintext direction ──────
+    total = total + 1
+    if base64_decode_pure("aGVsbG8gd29ybGQ=") == "hello world" { pass = pass + 1 } else { eprintln("FAIL G4 decode-hello") }
+    total = total + 1
+    if base64_decode_pure("TWFu") == "Man" { pass = pass + 1 } else { eprintln("FAIL G4 decode-Man") }
+    total = total + 1
+    if base64_decode_pure("") == "" { pass = pass + 1 } else { eprintln("FAIL G4 decode-empty") }
+    // type-guard: non-string encodes to ""
+    total = total + 1
+    if base64_encode_pure(42) == "" { pass = pass + 1 } else { eprintln("FAIL G4 encode-non-string") }
+
+    let verdict = if pass == total { "PASS" } else { "FAIL" }
+    println(SENT_T + " " + verdict + " " + str(pass) + "/" + str(total))
+}

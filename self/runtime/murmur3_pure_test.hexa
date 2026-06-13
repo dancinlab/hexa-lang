@@ -1,0 +1,84 @@
+// self/runtime/murmur3_pure_test.hexa — murmur3_pure invariant lock (OP-82).
+//
+// Locks the documented contract of self/runtime/murmur3_pure.hexa, which
+// ships WITHOUT a co-located test. The module claims to be MurmurHash3
+// x86_32 (aappleby/smhasher — the canonical reference). That hash has a
+// single authoritative cross-checkable surface: every value below is the
+// EXACT output of a faithful Python port of the reference
+// MurmurHash3.cpp (and matches the `mmh3.hash(s, seed, signed=False)`
+// package), so this oracle pins the module to the standard.
+//
+// Gates:
+//   G1 EMPTY    murmur3_32("", 0) == 0
+//   G2 GOLDEN   8 ASCII strings == the smhasher reference (seed 0)
+//   G3 SEED     murmur3_32("hello", 42) == 3806057185 + seed sensitivity
+//   G4 ALIAS    murmur3_simple(s) == murmur3_32(s, 0)
+//   G5 RANGE    result in [0, 0xFFFFFFFF], deterministic, order-sensitive
+//
+// Runs on the interpreter (`hexa run`) — murmur3_pure is interpreter-safe
+// (no `<<`/`>>`; .substring/ord/type_of + the inlined bit helpers only),
+// so this oracle locks correctness on the SAME execution path the module
+// ships on.
+//
+// SCOPE NOTE: the gates use ASCII (<0x80) inputs only. The interpreter's
+// from_char_code does codepoint->UTF-8 (from_char_code(255) yields the
+// 2-byte 0xC3 0xBF, not a raw 0xFF), so raw single-byte vectors cannot be
+// constructed on this path. The full 0..255 raw-byte coverage + reference
+// parity was proven by a faithful Python port of the smhasher reference
+// (0 mismatch) — see the OP-82 verdict; this leaf oracle locks the
+// standard-conformance + structural invariants on the shipping path.
+// @sentinel(__HEXA_RUNTIME_MURMUR3__ <PASS|FAIL> N/N)
+
+use "self/runtime/murmur3_pure"
+
+let SENT_T = "__HEXA_RUNTIME_MURMUR3__"
+let M32 = 0xFFFFFFFF
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // ── G1 EMPTY — murmur3_32("", 0) == 0 ────────────────────────────
+    total = total + 1
+    if murmur3_32("", 0) == 0 { pass = pass + 1 } else { eprintln("FAIL G1 empty") }
+
+    // ── G2 GOLDEN — exact smhasher reference outputs (seed 0) ─────────
+    let gs = ["a", "abc", "foo", "hello", "hello world", "123456789",
+              "The quick brown fox jumps over the lazy dog"]
+    let gv = [1009084850, 3017643002, 4138058784, 613153351, 1586663183,
+              3036607362, 776992547]
+    let mut gi = 0
+    while gi < len(gs) {
+        total = total + 1
+        if murmur3_32(gs[gi], 0) == gv[gi] { pass = pass + 1 } else { eprintln("FAIL G2 golden " + gs[gi]) }
+        gi = gi + 1
+    }
+
+    // ── G3 SEED — seeded vector + seed sensitivity ───────────────────
+    total = total + 1
+    if murmur3_32("hello", 42) == 3806057185 { pass = pass + 1 } else { eprintln("FAIL G3 seed-vector") }
+    total = total + 1
+    if murmur3_32("hello", 0) != murmur3_32("hello", 42) { pass = pass + 1 } else { eprintln("FAIL G3 seed-sensitivity") }
+
+    // ── G4 ALIAS — murmur3_simple(s) == murmur3_32(s, 0) ─────────────
+    total = total + 1
+    if murmur3_simple("abc") == murmur3_32("abc", 0) { pass = pass + 1 } else { eprintln("FAIL G4 simple-alias") }
+    total = total + 1
+    if murmur3_32("abc", 0) == murmur3_hash32("abc", 0) { pass = pass + 1 } else { eprintln("FAIL G4 hash32-alias") }
+
+    // ── G5 RANGE / structural invariants ─────────────────────────────
+    total = total + 1
+    let h = murmur3_32("hello world", 0)
+    if h >= 0 { pass = pass + 1 } else { eprintln("FAIL G5 nonneg") }
+    total = total + 1
+    if h <= M32 { pass = pass + 1 } else { eprintln("FAIL G5 fits32") }
+    total = total + 1
+    if murmur3_32("abc", 0) == murmur3_32("abc", 0) { pass = pass + 1 } else { eprintln("FAIL G5 determinism") }
+    total = total + 1
+    if murmur3_32("ab", 0) != murmur3_32("ba", 0) { pass = pass + 1 } else { eprintln("FAIL G5 order-sensitive") }
+    total = total + 1
+    if murmur3_32(42, 7) == 7 { pass = pass + 1 } else { eprintln("FAIL G5 non-string-returns-seed") }
+
+    let verdict = if pass == total { "PASS" } else { "FAIL" }
+    println(SENT_T + " " + verdict + " " + str(pass) + "/" + str(total))
+}

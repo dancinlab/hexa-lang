@@ -1,0 +1,107 @@
+// self/runtime/mod_exp_pure_test.hexa — mod_exp_pure invariant lock (OP-82).
+//
+// Locks the documented contract of self/runtime/mod_exp_pure.hexa, which
+// ships WITHOUT a co-located test. The module implements standard modular
+// arithmetic; each function has a single authoritative reference:
+//   mod_exp_pure(b,e,m) == CPython pow(b, e, m)
+//   gcd(a,b)            == CPython math.gcd
+//   mod_inv_pure(a,m)   == CPython pow(a, -1, m) (or -1 when gcd != 1)
+//   gcd_ext_pure(a,b)   == [g,x,y] with a*x + b*y == g (Bezout identity)
+//   is_prime_miller     == trial-division primality (incl. Carmichael 561,1105)
+//
+// Gates:
+//   G1 MODEXP   pow(b,e,m) goldens == CPython pow (authoritative)
+//   G2 GCD/LCM  math.gcd / lcm goldens + commutativity
+//   G3 MODINV   mod_inv == pow(a,-1,m); inverse identity (a*inv)%m==1; -1 case
+//   G4 EXTGCD   Bezout identity a*x + b*y == g holds
+//   G5 PRIME    Miller-Rabin agrees with trial division (incl. Carmichael)
+//
+// All integer-only — interpreter-exact (no float). Runs on `hexa run`.
+// @sentinel(__HEXA_RUNTIME_MODEXP__ <PASS|FAIL> N/N)
+
+use "self/runtime/mod_exp_pure"
+
+let SENT_T = "__HEXA_RUNTIME_MODEXP__"
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // ── G1 MODEXP — pow(b,e,m) == CPython pow (authoritative) ────────
+    total = total + 1
+    if mod_exp_pure(2, 10, 1000) == 24 { pass = pass + 1 } else { eprintln("FAIL G1 2^10%1000") }
+    total = total + 1
+    if mod_exp_pure(3, 644, 645) == 36 { pass = pass + 1 } else { eprintln("FAIL G1 3^644%645") }
+    total = total + 1
+    if mod_exp_pure(7, 256, 13) == 9 { pass = pass + 1 } else { eprintln("FAIL G1 7^256%13") }
+    total = total + 1
+    if mod_exp_pure(123456, 789, 1000000007) == 182677862 { pass = pass + 1 } else { eprintln("FAIL G1 big") }
+    total = total + 1
+    if mod_exp_pure(2, 0, 7) == 1 { pass = pass + 1 } else { eprintln("FAIL G1 exp-0") }
+    total = total + 1
+    if mod_exp_pure(5, 3, 1) == 0 { pass = pass + 1 } else { eprintln("FAIL G1 mod-1") }
+    total = total + 1
+    if mod_exp(10, 5, 6) == mod_exp_pure(10, 5, 6) { pass = pass + 1 } else { eprintln("FAIL G1 alias") }
+
+    // ── G2 GCD / LCM — math.gcd goldens ──────────────────────────────
+    total = total + 1
+    if gcd(48, 36) == 12 { pass = pass + 1 } else { eprintln("FAIL G2 gcd-48-36") }
+    total = total + 1
+    if gcd(17, 5) == 1 { pass = pass + 1 } else { eprintln("FAIL G2 gcd-coprime") }
+    total = total + 1
+    if gcd(0, 7) == 7 { pass = pass + 1 } else { eprintln("FAIL G2 gcd-zero") }
+    total = total + 1
+    if gcd(36, 48) == gcd(48, 36) { pass = pass + 1 } else { eprintln("FAIL G2 gcd-commutes") }
+    total = total + 1
+    if lcm(4, 6) == 12 { pass = pass + 1 } else { eprintln("FAIL G2 lcm-4-6") }
+    total = total + 1
+    if lcm(0, 5) == 0 { pass = pass + 1 } else { eprintln("FAIL G2 lcm-zero") }
+
+    // ── G3 MODINV — pow(a,-1,m); inverse identity; no-inverse -> -1 ──
+    total = total + 1
+    if mod_inv_pure(3, 11) == 4 { pass = pass + 1 } else { eprintln("FAIL G3 inv-3-11") }
+    total = total + 1
+    if mod_inv_pure(7, 1000000007) == 142857144 { pass = pass + 1 } else { eprintln("FAIL G3 inv-big") }
+    // (a * inv) % m == 1 — the defining identity
+    total = total + 1
+    let inv = mod_inv_pure(7, 1000000007)
+    if mod_mul_pure(7, inv, 1000000007) == 1 { pass = pass + 1 } else { eprintln("FAIL G3 inv-identity") }
+    // gcd(a,m) != 1 -> no inverse -> -1
+    total = total + 1
+    if mod_inv_pure(2, 4) == -1 { pass = pass + 1 } else { eprintln("FAIL G3 no-inverse") }
+
+    // ── G4 EXTGCD — Bezout: a*x + b*y == g ───────────────────────────
+    let ext = gcd_ext_pure(240, 46)
+    let g = ext[0]
+    let x = ext[1]
+    let y = ext[2]
+    total = total + 1
+    if g == 2 { pass = pass + 1 } else { eprintln("FAIL G4 extgcd-g") }
+    total = total + 1
+    if 240 * x + 46 * y == g { pass = pass + 1 } else { eprintln("FAIL G4 bezout") }
+
+    // ── G5 PRIME — Miller-Rabin vs trial division ────────────────────
+    // primes (true) — 7 witnesses are deterministic in this range
+    let primes = [2, 3, 17, 7919, 104729, 1000003]
+    let mut pi = 0
+    let mut prime_bad = 0
+    while pi < len(primes) {
+        if is_prime_miller(primes[pi], 7) != true { prime_bad = prime_bad + 1 }
+        pi = pi + 1
+    }
+    total = total + 1
+    if prime_bad == 0 { pass = pass + 1 } else { eprintln("FAIL G5 primes count=" + str(prime_bad)) }
+    // composites (false) — incl. Carmichael 561, 1105 (fool Fermat tests)
+    let comps = [1, 4, 561, 1105, 7920, 104730]
+    let mut ci = 0
+    let mut comp_bad = 0
+    while ci < len(comps) {
+        if is_prime_miller(comps[ci], 7) != false { comp_bad = comp_bad + 1 }
+        ci = ci + 1
+    }
+    total = total + 1
+    if comp_bad == 0 { pass = pass + 1 } else { eprintln("FAIL G5 composites count=" + str(comp_bad)) }
+
+    let verdict = if pass == total { "PASS" } else { "FAIL" }
+    println(SENT_T + " " + verdict + " " + str(pass) + "/" + str(total))
+}
