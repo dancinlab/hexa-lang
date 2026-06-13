@@ -19,6 +19,34 @@
 - TIER: 🟢 2 closure twins CLOSED + fixpoint verified-safe (closure proof + 25/25 leaf-lock). $0 · 0-pod · NO GPU · no vast · no foreign pod · no .tape · leak-0.
 - verdict: .verdicts/hexa-0pod/F-OP96-CLOSURE-TWIN-HTTP.txt
 
+## 2026-06-13 — OP-97 DONE: SYSTEMIC boundary-run-collapse CENSUS across LANE-1 stdlib (NUMERIC/DATA/PARSER + path/string) — class CLOSED (0 new bugs; OP-87/88 were the 2 genuine 🔴) + 39/39 census leaf-lock + NO closure twin 🟢
+- LANE: 1 (0-pod correctness, stdlib NUMERIC/DATA-STRUCTURE/PARSER + path/string siblings). Sibling LANE-2 (OP-96) owns self/serve/* closure twins of the split-keep-first class — self/serve/* NOT touched here (non-overlapping; this is a DIFFERENT class).
+- MOTIVE: OP-87 (path_dirname) + OP-88 (path_ext) shared a class DISTINCT from OP-94's split-keep-first: a `while`/index scan advancing by 1 over a delimiter/boundary char that FAILS to SKIP/COLLAPSE *consecutive runs* of that char → leaks/miscounts at runs (trailing/leading-separator strip, consecutive-separator collapse, whitespace-run skip, leading/trailing zero-byte run). This round GREP-CENSUSED that class the way OP-94 systematized split-keep-first.
+- CENSUS (scoped greps, NO .git; LANE-1; EXCLUDE self/serve/* + rtsc fixtures + *_test): grep `while` index scans + run-collapse keywords (trim/strip/skip/collapse/whitespace/leading-zero/trailing-zero/last_index_of), read every candidate body.
+- MATRIX (20 site-groups, ALL CLEAN):
+  - alloc/path.hexa path_dirname → 🔴 FIXED by OP-87 (run-skip added). path_ext/path_stem → 🔴 FIXED by OP-88 (lead-dot-run skip). Both CLEAN now.
+  - alloc/path.hexa path_basename → CLEAN (trailing-slash strip loop skips whole run; reverse scan = last '/'; GNU-correct).
+  - alloc/path.hexa path_normalize → CLEAN (split"/" + filter len>0 → consecutive slashes COLLAPSE; OP-88-confirmed).
+  - stdlib_cli.hexa _trim → CLEAN (leading `while a` + trailing `while b` both skip the full ws RUN).
+  - easy/cli.hexa _word_count → CLEAN (`in_tok` state machine collapses ws runs; counts only on ws→non-ws transition).
+  - kernels/circuit/devsim.hexa _split_ws + read_verilog _rv_tokens + noc_sim/anynet _anynet_tokens + fusion/_plasma_lambda_d_batch → CLEAN (filter-empty-after-split → ws runs yield NO empty tokens).
+  - codec/base64.hexa base64_decode → CLEAN (skips EVERY whitespace char; runs collapse; data-char count steady — OP-75 area).
+  - crypto/tls13_client_record_io.hexa → CLEAN (trailing zero-pad strip loops the FULL zero RUN, RFC 8446 §5.4).
+  - crypto/x509_rsa.hexa x509_rsa_modulus → CLEAN (leading 0x00 sign-byte strip loops the FULL leading-zero RUN).
+  - core/parse.hexa is_numeric_str/to_int_strict_or_zero → CLEAN (every digit consumed; leading zeros accumulate correctly, not a run-collapse concern). to_int_safe split(".") = split-FIRST (correct).
+  - regex/native.hexa {n,m} quantifier + qasm3_lex.hexa lexer → CLEAN (digit/ident/ws runs fully consumed; lexer outer loop re-checks per char).
+  - material/composition.hexa _scan_count/_scan_elements/paren-expand → CLEAN (digit runs accumulated whole; parens = single chars not runs; Python regex parity exact).
+  - plot/plot.hexa permille format → CLEAN (2-digit fraction, frac!=0 guarded → at most 1 trailing zero, no run).
+  - stdlib_cli.hexa basename + bio/weave/* + bio/nanobot/* last_index_of("/") dir/basename → CLEAN (split on LAST slash; internal runs handled; constructed paths have no trailing-slash run).
+  - yaml.hexa flat parser indent/colon scan → CLEAN (first-char indent test documented; colon split-FIRST = correct YAML).
+- ROBUSTNESS-ONLY note (NOT a bug, not fixed; g0/g5 scope): abc_map.hexa non-.latch BLIF directives (.model/.inputs/.outputs/.gate) use bare split(" ") but parse standard single-space BLIF emitter output — empty tokens cannot occur on the tool-generated input the reader consumes (the .latch path already filters empties for ABC's variable-whitespace rows). Documented round-trip with this module's own emitter; not a provable run-collapse-intent bug.
+- RESULT: ZERO new buggy sites. The boundary-run-collapse class is CLOSED in LANE-1 stdlib — every run-handling site uses the correct pattern (run-skip inner loop, filter-empty-after-split, or accumulate-the-whole-run). The 2 genuine 🔴 of this class were OP-87/88.
+- DIFFERENTIAL (g5): faithful Python ports of each CLEAN body over inputs with 0/1/2/3 consecutive boundary chars at start/mid/end (/tmp/op97_diff.py + /tmp/op97_b64.py) — 0 divergence from intended run-collapse semantics. (3 transient "BUG" prints were a TEST-EXPECTATION error: I wrote base64 data-char count as 3 instead of 4; re-confirmed 4 in op97_b64.py — the module is correct.)
+- LOCK: NEW stdlib/alloc/boundary_run_census_op97_test.hexa — verbatim-inlined CLEAN bodies (cli_trim, word_count, split_ws_count, b64_ws_count, tls_trailing_nonzero, x509_leading_strip_count, path_collapse), self-contained no-`use`, NOT in build_selfhost closure, run LOCAL on shipping `hexa run` /Users/mini/.hx/bin/hexa: __HEXA_STDLIB_BOUNDARY_RUN_OP97__ 39/39 PASS. Non-regression: OP-87 __HEXA_STDLIB_PATH_COLL_OP87__ 34/34 PASS + OP-88 __HEXA_STDLIB_PATH_EXT_OP88__ 24/24 PASS re-run GREEN.
+- 🟢 CLOSURE-SIDE (self/*) — NO boundary-run twin: self/main.hexa:618 _init_basename trailing-slash strip loop (623-625) skips the FULL run + reverse-to-prior-slash scan is GNU-correct → ALREADY run-skip-correct, NOT a twin, no flag. native_gate_emit/runtime_core_emit emitted-C trailing-slash strips also correct. (Distinct from OP-94's split-keep-first closure twins in self/serve/http_server.hexa = LANE-2/OP-96, a DIFFERENT class.)
+- BYTE-EQ / wipe_guard: ZERO stdlib source edits (every site already correct, no fix needed) + 1 NEW census leaf + verdict + this log entry; 0 deletions (wipe_guard net-additive). The leaf is NOT in the closure → self-host fixpoint UNAFFECTED; no codegen/runtime/rt bytes touched.
+- TIER: 🟢 class-closed + 🟢 no closure twin. $0 · 0-pod · NO GPU · no vast · no foreign pod · no .tape · leak-0. Milestone OP-97 [x]. Verdict F-OP97-BOUNDARY-RUN-SWEEP.txt.
+
 ## 2026-06-13 — OP-94 DONE: SYSTEMIC split-on-every-delimiter-keep-first CENSUS across LANE-2 stdlib (net/http/url/string) — class CLOSED (0 new bugs; OP-91/92 already fixed the 2 genuine 🔴) + 18/18 census leaf-lock + 2 closure twins FLAGGED 🟠
 - LANE: 2 (0-pod correctness, stdlib STRING/PATH/TEXT/URL/NET). Sibling LANE-1 owns stdlib data-structure/numeric/parser (non-overlapping — OP-94 touched ONLY stdlib/net/* + read-only census of http*.hexa/websocket.hexa/string.hexa).
 - MOTIVE: the split-keep-first anti-pattern recurred in 5 prior ops (OP-91 parse_query, OP-92 parse_request, OP-75 base64, OP-90 argparse, OP-87 dirname) — code does `x.split(SEP)` then a FIXED index ([0]/[1]/parts[1]) when intent is split-on-FIRST/LAST only, so any input with SEP 2+ times is silently truncated. This round did a high-leverage GREP CENSUS to catch every remaining LANE-2 instance at once.
