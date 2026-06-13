@@ -3817,3 +3817,45 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   0 deletions (wipe_guard net-additive). The leaf is NOT in the build_selfhost closure → self-host fixpoint
   UNAFFECTED. LANE-1 only (no protocol/binary/net parsing — that is LANE-2/OP-98). $0 · 0-pod · NO GPU · no vast ·
   no foreign-pod · no .tape · leak-0. Milestone OP-99 [x]. Verdict F-OP99-SCI-COMPUTE-INVARIANTS.txt.
+## OP-100 — EMITTED-FOREIGN-CODE validity sweep (generalizes the OP-98 bug class); CLASS CLEAN + in-tree lock — 2026-06-13
+- SCOPE: LANE-2 (EMITTED-FOREIGN-CODE infra/protocol — modules that EMIT python3/bash/awk/C/sql source). The
+  OP-98 class: a hexa module BUILDS a foreign-language source STRING and execs it, but the emitted code carries a
+  latent SYNTAX/SCOPE/QUOTING bug → the path is dead-on-arrival (the host fallback "just fails", never surfaced).
+  LANE-1 owns the scientific/compute-numeric emitters (sim_universe/kernels/fusion/bio) — avoided overlap.
+- METHOD: CENSUS (scoped greps, NO .git) `s = s + "…"` multi-line program builders + heredoc emitters
+  (`cat > x <<'EOF'`) + inline `python3 -c`. EXTRACT each emitted source for representative inputs (generic
+  `s=s+"lit"+var` reconstructor + heredoc-payload slicer) and VALIDATE through its REAL interpreter WITHOUT needing
+  hexa: python3 → `ast.parse` + actual run; bash → `bash -n` + run; awk → `awk -f` + functional pipeline; sql →
+  sqlite3 round-trip.
+- MATRIX (all 🟢 CLEAN): stdlib/python_ffi.hexa py_get_doc helper → ast.parse OK + RUN OK, get_first('os|getcwd')
+  → 'Return a unicode string representing the current working directory.', get_first('json|dumps') → correct (no
+  nonlocal/scope bug). stdlib/dojo/{llm,vision,tabular,rl,flame_forge,hexa_cuda,clm}.hexa → each python `_*_torch_ref`
+  ast.parse OK + each bash `_*_glue` `-n` OK. stdlib/sqlite.hexa SQL builder (define_table/insert/select_where via
+  _bind_params→_sqlq) → sqlite3 round-trip OK; SQL-92 single-quote DOUBLING verified with an embedded quote
+  (INSERT…VALUES(1,'O''Brien') → SELECT → `1|O'Brien`; `?` is bound, not literal → no injection, no dead-on-arrival).
+  self/main.hexa merge_modules_awk emits THREE heredoc awk programs (merge/dedup/rename) for the C-transpile
+  self-host build → `awk -f` parses all three + functional pipeline on a representative module C file: dedup DROPPED
+  the redundant `HexaVal foo(int x);` fwd decl, merge RENAMED `int main(`→`int _lexer_init(`, rename left the
+  string-literal `__hexa_ic_0`/`__hexa_sl_1`/`__hexa_strlit_init` inside hexa_str("…") UNTOUCHED (string-literal-aware,
+  correct). self/main IS in the build_selfhost closure → would be FLAG-not-fix, but it is CLEAN so moot.
+- NOTES: dojo `_hc_cu` emits CUDA C++ (<cstdio>/__global__) → needs nvcc not host gcc; the gcc-as-C "cstdio not
+  found" is a TOOLCHAIN mismatch NOT an emitter bug. dojo `_*_t_*` katas emit HEXA source, not foreign code.
+  ⚪ OUT-OF-HOST-REACH (not validated, not flagged — honest): sscb/hal firmware C emitters (STM32/RP2040 vendor
+  headers absent on host; they carry their own boot_byte_diff_* selftests, LANE-1-adjacent); cloud/vast + proc +
+  channel build SINGLE-LINE shell (not full programs; vast `python3 -c 'import vastai'`=valid probe; proc/channel
+  use _shell_quote/_shq); easy/cli emits markdown; syntax_highlight is a SQL keyword LIST not an emitter.
+- RESULT: 🟢 CLASS CLEAN. Every infra/protocol EMITTED-FOREIGN-CODE program validates through its real interpreter;
+  ZERO new dead-on-arrival bug — OP-98's websocket `nonlocal pre` SyntaxError was the ONLY bug of this class
+  (anti-pattern grep: `nonlocal` in any emitted python across stdlib/+self/ → 0 hits; websocket is `global pre`,
+  OP-98-fixed). No fabrication (a valid emitter is CLEAN, not a bug — same honest framing as the OP-97 clean census).
+- LOCK: NEW stdlib/test/test_emitted_code_validity_op100.hexa — in-tree regression guard, SELF-CONTAINED
+  (verbatim-inlined fragments, no `use` — stale-bundle dodge OP-87/88): python_ffi helper defines get_first +
+  registers the synthetic module + balanced try/except + carries NO `nonlocal` (the OP-98 anti-pattern); sqlite
+  _sqlq DOUBLES the single quote ('O''Brien') + NO backslash-escape (the dead-on-arrival shape); self/main awk-merge
+  has BEGIN + the `/^int main\(/`→`_%s_init` rename + the column-0 `/^\}$/` close + the default `{ print }`. Shipping
+  `hexa run` LOCAL → 11/11 PASS. NEGATIVE CONTROL (not a tautology): regressing _sqlq → backslash-escape AND renaming
+  `def get_first` → FAIL 8/11 (sqlq_embedded_quote / sqlq_no_backslash / pyffi_defines_get_first flip to FAIL).
+- BYTE-EQ / GUARDS: ZERO source edits to any shipping emitter (all CLEAN — no fix needed) + 1 NEW leaf test file;
+  0 deletions (wipe_guard net-additive). The *_op100 leaf is NOT in the build_selfhost closure → self-host fixpoint
+  UNAFFECTED. LANE-2 only (no LANE-1 numeric-emitter overlap). $0 · 0-pod · NO GPU · no vast · no foreign-pod ·
+  no .tape · leak-0. Milestone OP-100 [x]. Verdict F-OP100-EMITTED-CODE-SWEEP.txt.
