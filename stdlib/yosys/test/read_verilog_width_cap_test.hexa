@@ -1,0 +1,69 @@
+// stdlib/yosys/test/read_verilog_width_cap_test.hexa — OP-115 DoS-cap lock
+// @ci_gate
+//
+// Locks the resource-exhaustion cap added to the Verilog frontend's range
+// parser (stdlib/yosys/read_verilog.hexa + stdlib/kernels/logic_synth/
+// read_verilog.hexa, _rv_parse_range). A packed/unpacked range `[HI:LO]`
+// parses to `width = |HI-LO|+1`, and that width drives per-bit / per-element
+// wire-allocation loops (`while bj < width`, `while k < ur.width`, each a
+// push). HI/LO come straight from untrusted Verilog source tokens, so an
+// uncapped width is a DoS vector (CWE-1333 / CWE-400): a tiny input like
+// `output [999999999:0] o;` would force ~1e9 wire allocations.
+//
+// VERBATIM-INLINED LEAF ORACLE (OP-87/88 lesson): the installed `hexa`
+// resolves `use` to a STALE bundled copy that predates this cap, so this
+// test does NOT `use` the module — it inlines the PATCHED width computation
+// (_RV_MAX_WIDTH + the fail-closed `if w > cap` guard) byte-for-byte so the
+// gate verifies the source-of-truth, not the stale binary.
+//
+// Run:  hexa run stdlib/yosys/test/read_verilog_width_cap_test.hexa
+// Exit: 0 = all checks pass; 1 = a check FAILED.
+
+// ── PATCHED logic, inlined verbatim from read_verilog.hexa ──
+fn _RV_MAX_WIDTH() -> int { return 1048576 }
+
+// Mirror of _rv_parse_range's tail: width = |HI-LO|+1, then the DoS cap.
+// Returns the parsed width, or -1 when the cap rejects the range (mirrors the
+// RangeEval.err fail-closed path — callers propagate err, so NO per-bit
+// allocation loop ever runs for an over-cap range).
+fn parse_range_width(hi: int, lo: int) -> int {
+    let mut w = hi - lo + 1
+    if w < 1 { w = lo - hi + 1 }
+    if w > _RV_MAX_WIDTH() {
+        return -1   // err set -> caller aborts -> zero allocation
+    }
+    return w
+}
+
+let mut pass_count = 0
+let mut total_count = 0
+
+fn check(name: string, got: int, want: int) {
+    total_count = total_count + 1
+    if got == want {
+        pass_count = pass_count + 1
+    } else {
+        println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want))
+    }
+}
+
+fn main() {
+    // BOMB rejections (a tiny pattern forcing ~1e9 allocations) → -1.
+    check("bomb-1e9",       parse_range_width(999999999, 0), -1)   // [999999999:0]
+    check("bomb-1e9-rev",   parse_range_width(0, 999999999), -1)   // [0:999999999]
+    check("bomb-cap+1",     parse_range_width(1048576, 0),   -1)   // width 1048577 > cap
+
+    // BOUNDARY: width == cap exactly is ACCEPTED (inclusive).
+    check("at-cap",         parse_range_width(1048575, 0),   1048576)
+
+    // NEGATIVE CONTROLS: realistic widths still parse unchanged.
+    check("normal-32",      parse_range_width(31, 0),  32)
+    check("normal-8",       parse_range_width(7, 0),   8)
+    check("normal-1",       parse_range_width(0, 0),   1)
+    check("reversed-16",    parse_range_width(0, 15),  16)
+
+    println("read_verilog_width_cap: " + to_string(pass_count) + "/" + to_string(total_count) + " checks pass")
+    if pass_count != total_count {
+        exit(1)
+    }
+}

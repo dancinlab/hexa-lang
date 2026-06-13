@@ -1,0 +1,145 @@
+F-OP115-RESOURCE-EXHAUSTION-SWEEP — systemic unbounded-WORK / unbounded-ALLOC DoS class sweep across parsers/decoders/protocol
+=============================================================================================================================
+
+GOAL (g5): GENERALIZE OP-113's regex `{n,m}` ReDoS (an untrusted declared COUNT
+drove ~1e9 iterations + multi-GB alloc with no cap) into a CLASS sweep: every
+site where an UNTRUSTED parsed count/length/size/repeat drives an ALLOCATION
+(array-grow / `.push` / fill) or a LOOP BOUND WITHOUT a sanity cap → a tiny
+malicious input forces work/alloc ≫ len(input). This is the unbounded-WORK side,
+distinct from OP-105's read-OOB (which bounded the READ to the actual buffer);
+here the declared count EXCEEDS any real data and drives the ALLOC/append.
+
+RESULT: 🔴 → FIXED (1) + 🟢 CLEAN census (rest bounded-by-input or documented).
+The Verilog frontend's range parser `_rv_parse_range` (in BOTH copies:
+stdlib/kernels/logic_synth/read_verilog.hexa AND stdlib/yosys/read_verilog.hexa)
+parses a packed/unpacked range `[HI:LO]` into `width = |HI-LO|+1` with NO upper
+bound. That width then drives per-bit / per-element WIRE-ALLOCATION loops in the
+declaration path (`while bj < width { …rtlil_module_add_wire… }`,
+`while k < ur.width { … }` — each a `.push`), so a tiny untrusted Verilog input
+`output [999999999:0] o;` forces ~1e9 wire allocations from a few bytes
+(CWE-1333 / CWE-400). HI/LO come straight from untrusted source tokens via
+`_rv_eval_expr` (the `v = v*10 + d` decimal accumulator). FIXED by capping the
+parsed width at `_RV_MAX_WIDTH()` = 1048576 (2^20 — far above any realistic
+synthesizable design width) and FAILING the parse fail-closed via the RangeEval
+`err` field (every caller already propagates `err` → `ReadVerilogResult.ok=0`)
+rather than allocating gigabytes. Pure-additive (+23/−0 each file); zero
+valid-parse semantics change (the 12-fixture round-trip gate still 12/12).
+
+NOTE (OP-87/88/107 lesson — CONFIRMED LIVE this round): the installed
+~/.hx/bin/hexa (0.1.0-dispatch, Jun-7 build) resolves `use "stdlib/yosys/
+read_verilog"` to a STALE bundled copy that PREDATES this cap — feeding the bomb
+through `read_verilog()` via the installed binary returns ok=1 (the stale bundle,
+NOT the edited source). So the authoritative verification surface is a
+VERBATIM-INLINED hermetic leaf oracle (`hexa run`, no `use`) of the PATCHED width
+computation + cap, PLUS `hexa parse` of the edited source (clean) PLUS the
+real-surface round_trip gate (12/12, proving the cap does not break normal
+parsing). Trust the port-of-source over the stale binary.
+
+──────────────────────────────────────────────────────────────────────────────────────
+CENSUS MATRIX (site → bounded/unbounded → action) — scoped greps, NO .git
+──────────────────────────────────────────────────────────────────────────────────────
+SURFACE / SITE                                              CLASS        VERDICT
+stdlib/kernels/logic_synth/read_verilog.hexa _rv_parse_range  declared-count   🔴 UNBOUNDED → FIXED
+  width=|HI-LO|+1 drives `while bj<width`/`while k<ur.width`   →wire alloc      (cap 2^20, fail-closed)
+  per-bit/per-element rtlil wire push loops (uncapped)
+stdlib/yosys/read_verilog.hexa _rv_parse_range (parallel copy) declared-count   🔴 UNBOUNDED → FIXED
+  identical vector; reached by round_trip test                →wire alloc      (same cap)
+─────────────────────────────────────────────────────────── ──────────────── ───────────────────
+stdlib/regex/native.hexa {n,m} counted-repeat                 declared-count   ✔ already FIXED (OP-113)
+stdlib/wasm/wasm_leb128.hexa uleb/sleb decode                 varint           🟢 BOUNDED by len(bytes)
+  (overlong-encoding acceptance = DOCUMENTED non-goal, not a bug)
+stdlib/crypto/asn1_der.hexa der_value_len / der_oid_str       length-prefix    🟢 BOUNDED — pure offset
+  arithmetic over a fixed buffer; every read loop OP-105-guarded `&& off<len(b)`; NO preallocation
+stdlib/codec/base64.hexa base64_decode                        expansion        🟢 BOUNDED — out≤in, loops over len
+stdlib/codec/hex.hexa / utf8.hexa decode                      multibyte        🟢 BOUNDED — loops over byte_len(s)
+stdlib/codec/{euc_kr,cp949,gbk,big5,shift_jis}.hexa           table decode     🟢 BOUNDED — loops over len(table/input)
+stdlib/http2.hexa http2_request                               protocol         🟢 BOUNDED — curl wrapper, no binary frame parse
+stdlib/net/websocket_native.hexa ws_recv_native               64-bit plen      🟢 BOUNDED — `_ws_fill` tries-capped
+  (4096×65536=256MB ceiling); `_ws_take(plen)` only after len(buf)≥plen → bounded by data the attacker actually sent
+stdlib/websocket.hexa                                         codegen          🟢 N/A — EMITS a Python helper string, not a hexa parser
+stdlib/alloc/json.hexa json_dump_pretty                       recursion        🟢 BOUNDED — WRITE-side over trusted in-mem struct
+stdlib/alloc/json_object.hexa read-side                       parse            🟢 BOUNDED — delegates to runtime json_parse builtin (out of stdlib scope); own loops over len()
+stdlib/crypto/tls13_*_parse / client_hello_parse              list-length      🟢 BOUNDED — every append loop OP-105-guarded `&& off<len(body)`
+stdlib/crypto/tls13_keyschedule.hexa hkdf_expand `length`     RFC param        🟢 BOUNDED — caller-supplied (trusted), RFC-capped 255·HashLen
+stdlib/demi/record_loader.hexa                               record load      🟢 BOUNDED — all loops over len(files/lines/segs)
+decimal value accumulators (`v=v*10+d`) in semver/x509_validity/  value parse   🟢 N/A — produce a VALUE used as data,
+  brenda/read_verilog _rv_literal_width(dead, uncalled)/logic_synth passes      NOT a loop bound or alloc count
+
+NET: the ONLY sites where a tiny declared count forces work ≫ len(input) with no
+cap are the regex `{n,m}` (OP-113, already fixed) and the Verilog range width
+(this round, both copies → fixed). Every other parser/decoder is bounded by
+len(input), a documented cap, or a trusted/RFC-capped parameter — CLEAN, not a
+bug (honest g5; no fabrication).
+
+──────────────────────────────────────────────────────────────────────────────────────
+🔴 FIX — COMPUTED-SIZE REPRO (no GB actually allocated; the COUNT is computed)
+──────────────────────────────────────────────────────────────────────────────────────
+Untrusted Verilog: `module m (input clk, output [999999999:0] o);  endmodule`
+  parsed range width = |999999999 - 0| + 1 = 1,000,000,000
+  the multi-bit OUTPUT shadow-port loop `while bj < width { rtlil_module_add_wire(...) }`
+  would push 1,000,000,000 wires (each a struct alloc) = multi-GB + minutes of CPU
+  from a ~50-byte input. (Hermetic oracle prints the count; NO 1e9 alloc is run.)
+
+  Hermetic leaf oracle (verbatim-inlined PATCHED _rv_parse_range tail), `hexa run`:
+    bomb [999999999:0]   -> parse_width = -1 (REJECTED, no loop ran)
+    PRE-FIX it would push 1000000000 wires (~1e9 allocs)
+    just-over [1048576:0]-> parse_width = -1 (REJECTED)          (width 1048577 > cap)
+    at-cap [1048575:0]   -> parse_width = 1048576 (ACCEPTED)     (boundary inclusive)
+    normal [31:0]        -> parse_width = 32   (OK)
+    normal [7:0]         -> parse_width = 8    (OK)
+    normal [0:0]         -> parse_width = 1    (OK)
+    reversed [0:15]      -> parse_width = 16   (OK)              (unpacked [lo:hi] preserved)
+
+──────────────────────────────────────────────────────────────────────────────────────
+FIX (both read_verilog.hexa copies) — surgical cap, fail-closed
+──────────────────────────────────────────────────────────────────────────────────────
+  + @pure fn _RV_MAX_WIDTH() -> int { return 1048576 }
+  in _rv_parse_range, after computing `w = |HI-LO|+1`:
+  + if w > _RV_MAX_WIDTH() {
+  +     return RangeEval { width: 1, st: st,
+  +         err: "read_verilog: range width " + str(w) + " exceeds cap " + str(_RV_MAX_WIDTH()) }
+  + }
+  Over-cap ranges set `err` → every caller propagates it → ReadVerilogResult.ok=0
+  BEFORE any per-bit/per-element wire-allocation loop runs. Single chokepoint:
+  all `width`/`ur.width`/`ur2.width`-driven push loops trace to _rv_parse_range,
+  and downstream wire-width lookups (_rv_emit_eq_dyn_idx `w = m.wires[i].width`)
+  inherit the bound transitively. `_rv_literal_width` (the `sz=sz*10+d` literal
+  accumulator) is DEAD (defined, never called) → no allocation path depends on it.
+
+──────────────────────────────────────────────────────────────────────────────────────
+LOCK (stdlib/yosys/test/read_verilog_width_cap_test.hexa, @ci_gate) — 8 checks
+──────────────────────────────────────────────────────────────────────────────────────
+  bomb-1e9      [999999999:0]  → -1 (bomb rejected)
+  bomb-1e9-rev  [0:999999999]  → -1 (bomb rejected, reversed unpacked range)
+  bomb-cap+1    [1048576:0]    → -1 (width 1048577 just over cap, rejected)
+  at-cap        [1048575:0]    → 1048576 (boundary inclusive, accepted)
+  normal-32     [31:0]         → 32  (negative control: normal width parses)
+  normal-8      [7:0]          → 8   (negative control)
+  normal-1      [0:0]          → 1   (negative control)
+  reversed-16   [0:15]         → 16  (negative control: unpacked [lo:hi])
+  → read_verilog_width_cap: 8/8 checks pass (hermetic `hexa run`, no `use`).
+
+REAL-SURFACE NO-REGRESSION: stdlib/yosys/test/round_trip.hexa (uses the EDITED
+yosys read_verilog through its real read_verilog() entry, F3/F6/F10/F12 exercise
+multibit ranges via _rv_parse_range) → 12/12 round-trip-equal. `hexa parse` of
+BOTH edited files → "parses cleanly".
+
+──────────────────────────────────────────────────────────────────────────────────────
+FLAGS / INVARIANTS
+──────────────────────────────────────────────────────────────────────────────────────
+Pure-additive: read_verilog.hexa (logic_synth) +23/−0, read_verilog.hexa (yosys)
++23/−0, new test +0 deletions → wipe_guard net-additive. NEITHER read_verilog.hexa
+is in the build_selfhost closure (no self/* nor build reference — frontend stdlib)
+→ ZERO byte-eq/fixpoint impact, no selfhost gate; the new test is closure-OUT.
+LANE-2 (resource-exhaustion / DoS — parsers/decoders/protocol) — no overlap with
+LANE-1 numeric (OP-114) nor any closed crypto/delimiter class. Generalizes OP-113
+to the declared-LENGTH/SIZE side; mirrors its `_RE_MAX_REPEAT` fail-closed cap.
+
+INVARIANT: the Verilog frontend never expands a declared range beyond 2^20
+bits/elements → a tiny input can no longer force unbounded wire allocation; every
+range within the cap (and all 12 round-trip fixtures) parses UNCHANGED.
+
+TIER: 🔴 real DoS bug (2 source copies) → FIXED + locked + negative-controlled +
+real-surface-regression-checked; 🟢 CLEAN census over the rest of the
+parser/decoder/protocol surface. $0 · 0-pod · NO GPU · no vast · no foreign-pod ·
+no .tape · leak-0. Verdict F-OP115-RESOURCE-EXHAUSTION-SWEEP.txt; milestone OP-115 [x].

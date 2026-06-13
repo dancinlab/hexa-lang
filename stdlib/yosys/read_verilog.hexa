@@ -1076,6 +1076,19 @@ struct RangeEval {
     err:   str,
 }
 
+// Maximum accepted packed/unpacked range extent (bit-width OR array element
+// count). A parsed range `[HI:LO]` yields `width = |HI-LO|+1`, and that width
+// drives per-bit / per-element wire-allocation loops in the declaration path
+// (`while bj < width`, `while k < ur.width` — each pushing an rtlil wire). HI
+// and LO come straight from untrusted Verilog source tokens, so an uncapped
+// width is a denial-of-service vector (CWE-1333 / CWE-400): a tiny input like
+// `output [999999999:0] o;` would force ~1e9 wire allocations. 1048576 (2^20)
+// is far above any realistic synthesizable design width yet bounds worst-case
+// work; over-limit ranges FAIL the parse (via the RangeEval `err` field, which
+// every caller already propagates) rather than allocating gigabytes.
+@pure
+fn _RV_MAX_WIDTH() -> int { return 1048576 }
+
 // CLEAN-ROOM: parse a bracketed range `[ HI : LO ]`, folding HI and LO
 // against `tab`. Used for both packed bit-ranges (width) and unpacked
 // 1-D array ranges (element count). `[ N ]` single-index → extent 1.
@@ -1121,6 +1134,16 @@ fn _rv_parse_range(st_in: PState, tab: SymTab) -> RangeEval {
     // both yield a positive extent.
     let mut w = hi.value - lo.value + 1
     if w < 1 { w = lo.value - hi.value + 1 }
+    // DoS cap (CWE-1333 / CWE-400): `width` drives per-bit / per-element wire
+    // allocation loops downstream, so an untrusted oversized range (e.g.
+    // `[999999999:0]`) would force ~1e9 allocations from a few bytes. Reject
+    // ranges above _RV_MAX_WIDTH() fail-closed (callers propagate `err`).
+    if w > _RV_MAX_WIDTH() {
+        return RangeEval {
+            width: 1, st: st,
+            err: "read_verilog: range width " + str(w) + " exceeds cap " + str(_RV_MAX_WIDTH())
+        }
+    }
     return RangeEval { width: w, st: st, err: "" }
 }
 
