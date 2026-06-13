@@ -1,0 +1,70 @@
+// HEXA Standard Library — hash/xxhash self-test
+// @ci_gate
+//
+// Authoritative KAT: the official `xxhash` reference (Python pkg 3.7.0,
+// which wraps Yann Collet's libxxhash). All digests below were emitted by
+// that reference and cross-checked 0-mismatch vs a faithful Python port.
+//   xxh32("",0)=02cc5d05  xxh32("a",0)=550d7456  xxh32("abc",0)=32d153ff
+//   xxh32("abc",1)=aa3da8ff  xxh32("abcdefghijklmnop",0)=9d2d8b62
+//   xxh32("abcdefghijklmnopq",0)=b3b873e1
+//   xxh64("",0)=ef46db3751d8e999  xxh64("a",0)=d24ec4f1a98c6e5b
+//   xxh64("abc",0)=44bc2cf5ad770999  xxh64("abc",1)=bea9ca8199328908
+//   xxh64(0..39,0)=f5da40f1b11741e9
+use "stdlib/core/hash/xxhash"
+let mut pass = 0
+let mut total = 0
+fn ck(name: string, got: string, want: string) {
+    total = total + 1
+    if got == want { pass = pass + 1 } else { println("FAIL " + name + " got=" + got + " want=" + want) }
+}
+fn h32(d: array, seed: int) -> string {
+    let H = "0123456789abcdef"
+    let v = xxh32(d, seed)
+    let mut p: [string] = []
+    let mut sh = 28
+    while sh >= 0 { let nib = (v >> sh) & 15; p.push(H.substring(nib, nib+1)); sh = sh - 4 }
+    return p.join("")
+}
+fn w32hex(v: int) -> string {
+    let H = "0123456789abcdef"
+    let mut p: [string] = []
+    let mut sh = 28
+    while sh >= 0 { let nib = (v >> sh) & 15; p.push(H.substring(nib, nib+1)); sh = sh - 4 }
+    return p.join("")
+}
+fn h64(d: array, seed: int) -> string {
+    let hl = xxh64(d, seed)   // [hi, lo]
+    return w32hex(hl[0]) + w32hex(hl[1])
+}
+fn bytes(s: string) -> [int] {
+    let mut out: [int] = []
+    let mut i = 0
+    while i < byte_len(s) { out.push(byte_at(s, i)); i = i + 1 }
+    return out
+}
+fn main() {
+    let empty: [int] = []
+    // ── xxHash32 official vectors ──
+    ck("xxh32_empty",  h32(empty, 0),            "02cc5d05")
+    ck("xxh32_a",      h32(bytes("a"), 0),       "550d7456")
+    ck("xxh32_abc",    h32(bytes("abc"), 0),     "32d153ff")
+    ck("xxh32_abc_s1", h32(bytes("abc"), 1),     "aa3da8ff")
+    ck("xxh32_16",     h32(bytes("abcdefghijklmnop"), 0),  "9d2d8b62")
+    ck("xxh32_17",     h32(bytes("abcdefghijklmnopq"), 0), "b3b873e1")
+    // ── xxHash64 official vectors ──
+    ck("xxh64_empty",  h64(empty, 0),            "ef46db3751d8e999")
+    ck("xxh64_a",      h64(bytes("a"), 0),       "d24ec4f1a98c6e5b")
+    ck("xxh64_abc",    h64(bytes("abc"), 0),     "44bc2cf5ad770999")
+    ck("xxh64_abc_s1", h64(bytes("abc"), 1),     "bea9ca8199328908")
+    // 40-byte 0..39 buffer exercises the 32-byte block path.
+    let mut buf: [int] = []
+    let mut k = 0
+    while k < 40 { buf.push(k); k = k + 1 }
+    ck("xxh64_40block", h64(buf, 0),             "f5da40f1b11741e9")
+    // ── determinism invariant ──
+    ck("xxh32_determinism", h32(bytes("abc"), 0), h32(bytes("abc"), 0))
+    ck("xxh64_determinism", h64(bytes("abc"), 0), h64(bytes("abc"), 0))
+
+    println("xxhash self-test: " + to_string(pass) + "/" + to_string(total))
+    if pass == total { println("PASS") } else { println("FAILED") }
+}
