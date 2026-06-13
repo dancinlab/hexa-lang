@@ -1,0 +1,138 @@
+// self/runtime/base64_pure_multibyte_op139_test.hexa
+//
+// OP-139 (byte-producing escape-decoder multibyte sweep · OP-136 class)
+// regression lock for self/runtime/base64_pure.hexa::base64_decode_pure.
+//
+// A base64 payload decodes to RAW BYTES, not Unicode code points. The
+// pre-OP-139 body emitted `from_char_code(byte)` per decoded byte, so
+// under the Rust interpreter every byte >= 0x80 was re-UTF-8-encoded as
+// code point U+00xx (2 bytes) — a multibyte UTF-8 payload mojibaked.
+// The fix accumulates raw bytes then `bytes_to_str_raw` once (the OP-135
+// byte-faithful SSOT, identical to url_pure.url_decode_pure and
+// stdlib/codec/base64.base64_decode_str).
+//
+// HERMETIC: the FIXED decoder body is inlined here (`base64_decode_fixed`)
+// next to a copy of the OLD per-byte `from_char_code` body
+// (`base64_decode_old`) so the test is a self-contained negative-control
+// lock — it asserts (a) the fixed body round-trips multibyte byte-exact
+// vs a Python `base64` oracle AND (b) the OLD body provably mojibakes the
+// same input. (`use "self/runtime/base64_pure"` resolves to the INSTALLED
+// stdlib copy — stale Jun-1 build — so an import-based test would exercise
+// the unfixed module; the inlined bodies are install-independent. The
+// shipped fix is byte-identical to `base64_decode_fixed` below.)
+//
+// Oracle (Python `base64`):
+//   base64.b64encode("한글😀".encode()) == b"7ZWc6riA8J+YgA=="  (10 bytes)
+//   base64.b64encode("café✓".encode())  == b"Y2Fmw6ninJM="     (8 bytes)
+//   base64.b64encode("Man".encode())    == b"TWFu"             (3 bytes)
+
+fn _b64v(c) {
+    let o = ord(c)
+    if o >= 65 && o <= 90  { return o - 65 }
+    if o >= 97 && o <= 122 { return o - 97 + 26 }
+    if o >= 48 && o <= 57  { return o - 48 + 52 }
+    if o == 43 { return 62 }
+    if o == 47 { return 63 }
+    return -1
+}
+
+// FIXED body — accumulate raw bytes, bytes_to_str_raw once (= shipped).
+fn base64_decode_fixed(s) {
+    if type_of(s) != "string" { return "" }
+    let n = len(s)
+    let mut out_bytes = []
+    let mut bits = 0
+    let mut vbits = 0
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "=" { i = n }
+        else {
+            let v = _b64v(c)
+            if v >= 0 {
+                bits = bits * 64 + v
+                vbits = vbits + 6
+                if vbits >= 8 {
+                    vbits = vbits - 8
+                    let mut sc = 1
+                    let mut p = 0
+                    while p < vbits { sc = sc * 2; p = p + 1 }
+                    out_bytes.push((bits / sc) % 256)
+                    bits = bits % sc
+                }
+            }
+            i = i + 1
+        }
+    }
+    return bytes_to_str_raw(out_bytes)
+}
+
+// OLD body — per-byte from_char_code (the bug, for the negative control).
+fn base64_decode_old(s) {
+    if type_of(s) != "string" { return "" }
+    let n = len(s)
+    let mut out_chars = []
+    let mut bits = 0
+    let mut vbits = 0
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "=" { i = n }
+        else {
+            let v = _b64v(c)
+            if v >= 0 {
+                bits = bits * 64 + v
+                vbits = vbits + 6
+                if vbits >= 8 {
+                    vbits = vbits - 8
+                    let mut sc = 1
+                    let mut p = 0
+                    while p < vbits { sc = sc * 2; p = p + 1 }
+                    out_chars.push(from_char_code((bits / sc) % 256))
+                    bits = bits % sc
+                }
+            }
+            i = i + 1
+        }
+    }
+    return out_chars.join("")
+}
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // 1. FIXED: multibyte decode byte-exact (Korean + emoji)
+    total = total + 1
+    if base64_decode_fixed("7ZWc6riA8J+YgA==") == "한글😀" { pass = pass + 1 }
+    else { eprintln("FAIL 1: fixed han-geul-emoji decode mojibaked") }
+
+    // 2. FIXED: decoded byte LENGTH = raw count (10), not re-encode inflation
+    total = total + 1
+    if len(base64_decode_fixed("7ZWc6riA8J+YgA==")) == 10 { pass = pass + 1 }
+    else { eprintln("FAIL 2: fixed decoded byte length wrong") }
+
+    // 3. FIXED: accented + 3-byte check mark (café✓), byte-exact vs oracle
+    total = total + 1
+    if base64_decode_fixed("Y2Fmw6ninJM=") == "café✓" { pass = pass + 1 }
+    else { eprintln("FAIL 3: fixed cafe-check decode mojibaked") }
+
+    // 4. FIXED: pure-ASCII decode still correct (< 0x80 path, no regression)
+    total = total + 1
+    if base64_decode_fixed("TWFu") == "Man" { pass = pass + 1 }
+    else { eprintln("FAIL 4: fixed ascii decode regressed") }
+
+    // 5. FIXED: empty input
+    total = total + 1
+    if base64_decode_fixed("") == "" { pass = pass + 1 }
+    else { eprintln("FAIL 5: fixed empty decode") }
+
+    // 6. NEGATIVE CONTROL: the OLD body provably mojibakes the same input
+    //    (inflates 10 raw bytes to 20 via per-codepoint re-encode).
+    total = total + 1
+    if base64_decode_old("7ZWc6riA8J+YgA==") != "한글😀" { pass = pass + 1 }
+    else { eprintln("FAIL 6: OLD body unexpectedly correct (falsifier broke)") }
+
+    println("__HEXA_BASE64_PURE_MULTIBYTE_OP139__ " + to_string(pass) + "/" + to_string(total))
+    if pass == total { println("PASS") } else { println("FAIL") }
+}

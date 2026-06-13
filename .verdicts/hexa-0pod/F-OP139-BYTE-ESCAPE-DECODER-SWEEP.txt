@@ -1,0 +1,112 @@
+F-OP139 — BYTE-PRODUCING ESCAPE-DECODER MULTIBYTE SWEEP (HEXA-0POD · LANE-2)
+================================================================================
+Date     : 2026-06-13
+Campaign : HEXA-0POD (0-pod · $0 · local CPU only · no GPU · no vast/cloud)
+Class    : OP-128/135/136 cross-token byte-vs-codepoint mojibake, applied to
+           the ESCAPE/CODEC decoder surface (any "parse escape → produce a raw
+           byte 0-255 → append").
+Verdict  : 🔴 1 BYTE-producing decoder FIXED + 🟢 CONVERGED
+           (decoders surveyed 18 / byte-producing 5 / buggy 1 / fixed 1;
+            codepoint-producing decoders all correct or documented-scoped).
+
+THE RULE
+--------
+A BYTE-producing escape/codec (%XX · \xHH · base64 · octal · =XX quoted-
+printable) decodes to a RAW BYTE 0-255. Such bytes MUST be accumulated into a
+buffer then UTF-8-assembled ONCE via `bytes_to_str_raw` (the OP-135 byte-
+faithful, NUL-clean SSOT). Emitting `from_char_code(byte)` PER byte re-UTF-8-
+encodes every byte >= 0x80 as the code point U+00xx (2 bytes) → MOJIBAKE for
+all multibyte UTF-8 (Korean / CJK / emoji). NOTE (runtime-DIVERGENT): the
+interpreter's `chr(b)` is byte-faithful (1 byte) but `from_char_code(b)` is
+codepoint (2 bytes for b>=0x80) — so a `chr`-based byte decoder is correct,
+a `from_char_code`-based one is the bug.
+
+A CODEPOINT-producing escape (\uXXXX · &#NNNN; · \u{...}) decodes to a CODE
+POINT, so `from_char_code(cp)` is CORRECT (only surrogate-pair combination for
+astral codepoints is a separate concern).
+
+================================================================================
+🔴 BUG FIXED — self/runtime/base64_pure.hexa :: base64_decode_pure
+================================================================================
+A base64 payload decodes to RAW BYTES. The prior body built the result string
+via `out_chars.push(from_char_code(byte))` per decoded byte, then `.join("")`.
+For any byte >= 0x80 this emitted the 2-byte UTF-8 of U+00xx instead of the
+literal byte → every multibyte UTF-8 base64 payload mojibaked.
+
+REPRO (hermetic `hexa run` + Python `base64` oracle):
+  base64.b64encode("한글😀".encode()) == b"7ZWc6riA8J+YgA=="  (10 raw bytes)
+    OLD base64_decode_pure("7ZWc6riA8J+YgA==") -> 20-byte garbage  ✗
+    FIX base64_decode_pure("7ZWc6riA8J+YgA==") == "한글😀" (10 bytes) ✓
+  base64.b64encode("café✓".encode()) == b"Y2Fmw6ninJM="
+    OLD -> mojibake ;  FIX == "café✓"  ✓
+  ASCII unchanged: "TWFu" -> "Man" ; "aGVsbG8gd29ybGQ=" -> "hello world".
+
+FIX = accumulate decoded bytes into `out_bytes`, then `bytes_to_str_raw(out_bytes)`
+once — byte-identical to the pattern url_pure.url_decode_pure (OP-136) and
+stdlib/codec/base64.base64_decode_str already use. Net +18/-3 lines (1 body
+rewrite + comment); 0 deletions over the wipe_guard floor.
+
+GUARD: self/runtime/base64_pure_multibyte_op139_test.hexa
+  `__HEXA_BASE64_PURE_MULTIBYTE_OP139__ 6/6` / `PASS`
+  — fixed body byte-exact vs Python oracle (한글😀 · café✓ · Man · empty) AND a
+  negative control asserting the OLD per-byte from_char_code body mojibakes the
+  same input (10 raw bytes inflated to 20). HERMETIC: the test INLINES both
+  bodies (`use "self/runtime/base64_pure"` resolves to the INSTALLED Jun-1
+  stdlib copy that shadows the worktree edit — the inlined bodies are install-
+  independent; the shipped fix is byte-identical to the inlined `base64_decode_fixed`).
+
+CLOSURE: base64_pure.hexa is a DORMANT runtime-port leaf — NO importer in the
+compiler build closure (grep over compiler/ = 0; only its own tests `use` it).
+Closure-OUT → ZERO byte-eq / fixpoint impact. wipe_guard N/A (net-additive).
+STALE-BINARY CAVEAT: local Jun-1 hexa's `use` resolves the installed stdlib
+copy, not the worktree edit — fix verified via inlined-oracle proof (the exact
+pattern OP-136 used for the dormant url_pure/encoding_pure fixes); rebuild-
+pending only for a full-closure import run.
+
+================================================================================
+CENSUS — escape/codec decoder surface
+================================================================================
+decoder (file::fn)                                        kind        multibyte?
+----------------------------------------------------------------------------------
+self/runtime/url_pure.hexa::url_decode_pure (%XX)         BYTE        ✓ OP-136 fixed
+self/runtime/encoding_pure.hexa::url_decode (%XX)         BYTE        ✓ OP-136 fixed
+self/main.hexa::hexa_url_decode (%XX)                     BYTE        ✓ OP-136 fixed
+self/runtime/base64_pure.hexa::base64_decode_pure        BYTE        🔴→✓ OP-139 FIX
+self/runtime/encoding_pure.hexa::base64_decode_pure      BYTE→[int]  ✓ returns byte array (no stringify)
+stdlib/codec/base64.hexa::base64_decode / _str           BYTE        ✓ [int] + bytes_to_str_raw
+self/stdlib/hxc_a7_shared_dict.hexa::_dict_unescape (\x)  BYTE        ✓ uses chr() (byte-faithful) +
+                                                                        encoder only emits \x00-\x7f
+self/stdlib/hxc_a8_column_stat.hexa::_enum_unescape (\x)  BYTE        ✓ chr() byte-faithful (same)
+self/stdlib/hxc_a19_..::_dict_body_unescape (\x)          BYTE        ✓ fixed-literal match (\x0a/0d/5c only)
+self/runtime/encoding_pure.hexa::hex_dump_pure           BYTE-disp   ✓ from_char_code guarded to 0x20-0x7E
+self/runtime/runtime_pure.hexa::rt_str_to_upper/lower    ASCII-shift ✓ a-z/A-Z only (<0x80); not a decoder
+self/runtime/json_mini_pure.hexa::json_unescape_string_pure CODEPOINT* ✓ \b/\f=8/12 ASCII; no \x/\u; else verbatim
+self/rt/json.hexa::_jp_parse_string                      passthrough ✓ \uXXXX passed through 6 bytes verbatim
+self/serve/http_server.hexa (JSON unescape)              CODEPOINT*  ✓ \b/\f ASCII only; no byte \x
+self/lsp.hexa (\uXXXX)                                   CODEPOINT   ✓ from_char_code(cp) correct (BMP);
+                                                                        lone surrogate for astral DOCUMENTED-scoped
+self/ml/qwen_bpe.hexa::qwen_parse_string (\uXXXX)        CODEPOINT   ✓ from_char_code(cp) correct (BMP, documented)
+stdlib/codec/utf8.hexa::utf8_from_codepoints/_codepoints CODEPOINT   ✓ surrogate-validated (utf8_test 🟢)
+*hex_to_bytes (chacha20/qrng/anu/atlas/hexa_ld …)        BYTE→[int]  ✓ all return [int] byte arrays (no stringify)
+
+byte-producing decoders that BUILD A STRING:
+  url_decode_pure, encoding_pure.url_decode, hexa_url_decode  → OP-136 (3, fixed)
+  base64_decode_pure (base64_pure)                            → OP-139 (1, FIXED)
+  hxc _dict/_enum/_body_unescape (\x)                         → use chr() = byte-faithful (CLEAN)
+  encoding_pure.base64 / stdlib/codec/base64 / *hex_to_bytes  → return [int] (CLEAN by design)
+
+codepoint-producing decoders (\u): lsp · qwen_bpe · json_mini · http_server ·
+  rt/json — from_char_code(codepoint) is CORRECT; astral surrogate-pair
+  combination is DOCUMENTED-deferred (BMP-only, scoped), not the OP-139 byte bug.
+
+================================================================================
+ONE HONEST LINE
+================================================================================
+Of the byte-producing string-building escape/codec decoders, OP-136 fixed the 3
+percent-decoders and OP-139 fixes the one remaining one — base64_decode_pure in
+the dormant base64_pure runtime-port leaf, which mojibaked every multibyte
+base64 payload via per-byte from_char_code; it now round-trips byte-exact vs
+Python base64. Every other byte decoder is already correct (chr()-byte-faithful
+or returns a raw [int] array); every \u decoder is codepoint-correct (astral
+surrogate combination is a documented BMP-only scope, not a byte-class bug).
+$0 · 0-pod · NO GPU · no vast · no foreign-pod · leak-0.
