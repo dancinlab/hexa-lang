@@ -49,23 +49,27 @@ fn jc_skip_ws(b, p) {
 }
 
 fn jc_parse_string(b, p) {
+    // OP-127: accumulate raw header bytes + decode UTF-8 once via
+    // bytes_to_str_raw. Prior per-byte from_char_code double-encoded any
+    // non-ASCII tensor name / __metadata__ value into mojibake (OP-79/OP-125
+    // double-encode class). See self/tools/safetensors_to_hexaw.hexa.
     let mut i = p + 1
     let n = len(b)
-    let mut out = ""
+    let mut sub = []
     while i < n {
         let c = b[i]
-        if c == 34 { return [out, i + 1] }
+        if c == 34 { return [bytes_to_str_raw(sub), i + 1] }
         if c == 92 {
             if i + 1 < n {
-                out = out + to_string(from_char_code(b[i + 1]))
+                sub.push(b[i + 1] & 0xFF)
                 i = i + 2
             } else { i = i + 1 }
         } else {
-            out = out + to_string(from_char_code(c))
+            sub.push(c & 0xFF)
             i = i + 1
         }
     }
-    return [out, i]
+    return [bytes_to_str_raw(sub), i]
 }
 
 fn jc_parse_int(b, p) {
@@ -433,29 +437,24 @@ fn decode_tensor_to_f32(path, dt, data_abs_off, n_elem) {
 //  since safetensors_to_hexaw preserves HF names.
 
 fn strip_peft_prefix(name) {
+    // OP-127: slice with substring (byte-range copy) rather than rebuilding the
+    // string char-by-char via from_char_code(char_code(name,i)) — that walk
+    // split each multibyte UTF-8 name on byte boundaries AND re-encoded every
+    // byte as a codepoint, double-encoding any non-ASCII tensor name (OP-79
+    // double-encode class). substring preserves the raw UTF-8 bytes verbatim.
     let p1 = "base_model.model."
     if name.starts_with(p1) {
-        let mut out = ""
-        let mut i = len(p1)
-        while i < len(name) {
-            out = out + to_string(from_char_code(char_code(name, i)))
-            i = i + 1
-        }
-        return out
+        return name.substring(len(p1), len(name))
     }
     return name
 }
 
 fn strip_suffix(name, suf) {
+    // OP-127: substring slice instead of a per-byte from_char_code rebuild
+    // (see strip_peft_prefix) — avoids the UTF-8 double-encode on non-ASCII names.
     if name.ends_with(suf) {
-        let mut out = ""
         let cut = len(name) - len(suf)
-        let mut i = 0
-        while i < cut {
-            out = out + to_string(from_char_code(char_code(name, i)))
-            i = i + 1
-        }
-        return out
+        return name.substring(0, cut)
     }
     return name
 }

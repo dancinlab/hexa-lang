@@ -1,0 +1,140 @@
+F-OP127-DOUBLE-ENCODER-CENSUS
+HEXA-0POD OP-127 — exhaustive census of the MODULE-LOCAL UTF-8 double-encoder
+class that OP-79's repo-wide `bytes_to_str(` sweep EXCLUDED.
+2026-06-13 · 0-pod · $0 · NO GPU · no vast · no foreign pod · leak-0
+
+═══════════════════════════════════════════════════════════════════════════════
+TASK
+═══════════════════════════════════════════════════════════════════════════════
+OP-79 swept misuse of the global `bytes_to_str` (the ckpt-local double-encode
+helper) repo-wide but EXPLICITLY EXCLUDED underscore-prefixed `_bytes_to_str`
+and other module-local copies. OP-125 then found exactly such a missed site —
+stdlib/safetensors.hexa::_bytes_to_str (+ self/ mirror), already FIXED & landed
+(#3292, in this branch's base). OP-127 = census EVERY function (any name) that
+converts a byte array→string by the BUGGY pattern "treat each raw byte as a
+codepoint and emit it as a char", vs the CORRECT `bytes_to_str_raw` (raw byte
+buffer, no codepoint re-encode).
+
+═══════════════════════════════════════════════════════════════════════════════
+1. THE TWO PRIMITIVES (runtime ground truth, self/runtime.c)
+═══════════════════════════════════════════════════════════════════════════════
+  hexa_bytes_to_str_raw(arr)  (runtime.c:6105)  — copies raw bytes verbatim.
+       The registered builtin `bytes_to_str_raw`. CORRECT raw-byte→string.
+  hexa_chr_byte(N)            (runtime.c:6067)  — 1 byte (N & 0xFF). RAW/CORRECT.
+       `chr` LOWERS TO THIS under NATIVE codegen (codegen.hexa:7205).
+  hexa_from_char_code(N)      (runtime.c:6035)  — codepoint N → UTF-8 (1..4 bytes).
+       N>=0x80 expands to multi-byte. Over a RAW BYTE this DOUBLE-ENCODES.
+
+  KEY ASYMMETRY (compiler/PLAN.md:3399 — DISSOLVED-BY-INTERP-RETIREMENT):
+    `chr(b)`           → hexa_chr_byte under native codegen = RAW = CORRECT.
+    `from_char_code(b)` over a RAW BYTE → codepoint re-encode = BUGGY in
+                        BOTH the native and interpreter paths.
+  ⇒ The true bug class is `from_char_code(rawbyte)`, NOT `chr(byte)`.
+    The interpreter (where chr==from_char_code) is retired (@D g_interp_deprecated,
+    R7 CLOSED); the shipping path is native-compiled where `chr` is raw-correct.
+
+═══════════════════════════════════════════════════════════════════════════════
+2. CENSUS MATRIX — every byte→string helper / inline byte-walk
+   (scoped grep stdlib/ self/ compiler/ tool/ ; .git + _test excluded)
+═══════════════════════════════════════════════════════════════════════════════
+
+ SITE                                              PATTERN                CLASS
+ ──────────────────────────────────────────────────────────────────────────────
+ BUGGY — from_char_code over RAW on-disk/wire bytes (non-ASCII reachable) → FIXED
+ ──────────────────────────────────────────────────────────────────────────────
+ stdlib/safetensors.hexa::_bytes_to_str           from_char_code(byte)   FIXED (OP-125, base)
+ self/stdlib/safetensors.hexa::_bytes_to_str      from_char_code(byte)   FIXED (OP-125, base)
+ self/tools/safetensors_to_hexaw.hexa             from_char_code(b[i])   FIXED (OP-127)
+   ::jc_parse_string (safetensors JSON header reader — tensor names/__metadata__)
+ self/alloc/safetensors_mmap.hexa::jc_parse_string from_char_code(b[i])  FIXED (OP-127)
+   (mmap'd safetensors header string reader — same JSON-value path)
+ self/tools/lora_to_hexaw.hexa::jc_parse_string   from_char_code(b[i])   FIXED (OP-127)
+   (LoRA adapter safetensors JSON header reader)
+ self/tools/lora_to_hexaw.hexa::strip_peft_prefix from_char_code(        FIXED (OP-127)
+   ::strip_suffix                                   char_code(name,i))   → name.substring()
+   (rebuilt a tensor-name substring per byte — split UTF-8 + re-encode)
+ self/ml/hexaw.hexa::hexaw_load_binary_from_bytes from_char_code(raw[pos]) FIXED (OP-127)
+   (HEXAW2 binary header — the tensor NAME field; non-ASCII reachable)
+
+ ASCII-ONLY-SAFE (latent — from_char_code over provably-<0x80 data) → FLAGGED, no fix
+ ──────────────────────────────────────────────────────────────────────────────
+ self/ml/hexaw.hexa  (n_tensors / ndim / dims / count fields)            ASCII-DIGITS-ONLY
+   (each char consumed by to_int — provably 0x30..0x39/'-' < 0x80; left per-byte,
+    documented inline; no double-encode possible)
+ self/tools/lora_to_hexaw.hexa (jc_parse_number digit reader L88-96)     ASCII-DIGITS-ONLY
+ stdlib/codec/{big5,gbk,cp949,euc_kr,shift_jis}.hexa  from_char_code(cp) CORRECT (cp = a
+   stdlib/codec/unicode_normalize.hexa               from_char_code(cp)   CODEPOINT, not a
+   (DBCS/normalize decoders — arg is a decoded Unicode CODEPOINT)          raw byte) — CORRECT
+ self/stdlib/term_*.hexa  from_char_code(27/7/8/...)                      ASCII-CONTROL CONST
+ self/{lsp,serve/http_server,runtime/json_mini_pure}.hexa  esc bytes     ASCII/CODEPOINT
+ self/ml/qwen_bpe.hexa::qwen_unmap_bytes  from_char_code(str_to_byte[s]) BYTE-LEVEL-BPE (see §note)
+
+ CORRECT — chr(byte) byte-walk (raw under native codegen) → NO FIX NEEDED
+ ──────────────────────────────────────────────────────────────────────────────
+ self/stdlib/hxc_a{7,9,20,22,24,25,33,34}*.hexa  parts.push(chr(b[i]))   CHR=RAW (native)
+   (hexa-codex compression atoms; standalone @resolver-bypass CLI tools.
+    `chr` lowers to hexa_chr_byte = raw byte under the shipping native path —
+    NOT the double-encode primitive. Left as-is.)
+ self/stdlib/ssh/wire.hexa::ssh_bytes_to_string   s = s + chr(bs[i])     CHR=RAW (native)
+ self/std_encoding.hexa::bytes_to_string          parts.push(chr(b[i]))  CHR=RAW (native)
+ stdlib/ckpt/format.hexa::bytes_to_str (definition) — CURED by OP-75/77/79 sweep.
+
+ NOTE (qwen_bpe byte-level BPE): `from_char_code(bpe.str_to_byte[piece])`
+ maps a visible-char back to a GPT-2-style byte value (0..255) then re-encodes
+ it — a latent double-encode for non-ASCII OUTPUT. It is NOT a flat file/wire
+ reader but the inner loop of a byte-level BPE detokenizer with its own byte
+ table; a correct fix is an accumulate-then-bytes_to_str_raw refactor of the
+ whole detokenize path, deferred as a DISTINCT follow-on (FLAGGED, not in OP-127
+ scope: this census closes the flat module-local byte→string-reader class).
+
+═══════════════════════════════════════════════════════════════════════════════
+3. CLOSURE MEMBERSHIP (build_selfhost = import/use closure of compiler/main.hexa
+   + tool/hexa_ld.hexa; computed = 50 files, ~documented 48)
+═══════════════════════════════════════════════════════════════════════════════
+  EVERY fixed file is build_selfhost-closure-OUT:
+    self/tools/safetensors_to_hexaw.hexa   OUT
+    self/alloc/safetensors_mmap.hexa       OUT
+    self/tools/lora_to_hexaw.hexa          OUT
+    self/ml/hexaw.hexa                     OUT
+  ⇒ ZERO self-host byte-eq / fixpoint impact; NO selfhost gate required by the
+    source edits. (safetensors mirror was likewise closure-OUT per OP-125.)
+
+═══════════════════════════════════════════════════════════════════════════════
+4. REPRODUCTION (Korean tensor name `층.가중치`, 13 UTF-8 bytes on disk)
+═══════════════════════════════════════════════════════════════════════════════
+  Python UTF-8 oracle (faithful port of the fixed jc_parse_string) AND the LIVE
+  `hexa run` (bytes_to_str_raw is already correct in the shipping binary) agree:
+
+    disk bytes (13): [236,184,181,46,234,176,128,236,164,145,236,185,152]
+    BUGGY  per-byte from_char_code → 25 bytes, mojibake, != original
+    FIXED  bytes_to_str_raw        → 13 bytes, == original, decodes "층.가중치"
+
+  Live hexa run (/tmp/op127_smoke.hexa):
+    층.가중치
+    buggy_len=25 fixed_len=13
+    ROUNDTRIP_OK
+
+  Regression test (self/tools/double_encoder_op127_test.hexa), `hexa run`:
+    __HEXA_OP127_DOUBLE_ENCODER__ PASS 3/3
+    (1 fixed-reader round-trips byte-exact · 2 old buggy reader mojibakes 13→25
+     != original · 3 ASCII name "model.weight" unaffected = no regression)
+
+  `hexa parse` clean on all 4 edited files + the test (×5 OK).
+
+═══════════════════════════════════════════════════════════════════════════════
+5. VERDICT
+═══════════════════════════════════════════════════════════════════════════════
+  🔴→FIXED ×4 source files (5 distinct call-sites cured: 3 jc_parse_string JSON
+  header readers + 2 lora name-strip substring rebuilds + 1 hexaw name field).
+  CENSUS CONVERGED for the FLAT module-local byte→string-reader class: every
+  remaining `from_char_code` is over a CODEPOINT (codec decoders) or provably
+  ASCII-only (digit/control fields), and every `chr(byte)` walk is raw-correct
+  under the shipping native codegen. ONE distinct latent path FLAGGED for a
+  separate follow-on (qwen_bpe byte-level-BPE detokenize — not a flat reader).
+
+  The module-local UTF-8 double-encoder class (flat byte→string readers) is now
+  DEFINITIVELY CLOSED: OP-79 cured the global helper, OP-125 the safetensors
+  local, OP-127 the hexaw/lora/mmap tooling family. The only honest residual is
+  the documented stale-binary/promote lag (the embedded stdlib in the Jun-7
+  dispatch binary freezes disk edits) — source is correct; live end-to-end
+  awaits the next interpreter rebuild. $0 · 0-pod · leak-0.
