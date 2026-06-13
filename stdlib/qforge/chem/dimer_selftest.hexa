@@ -1,0 +1,159 @@
+// @ci_gate — deterministic · network-free · dimer/eigenvector-following saddle search g5 게이트
+//
+// dimer_selftest.hexa — QFORGE-CHEM round-4 g5.
+//   round-1~3 의 NEB/CI-NEB/TS-Hessian 이 산출한 H+H₂ 콜리니어 saddle 을,
+//   round-4 의 dimer method 가 *endpoint 없이* 단일 시작점에서 재현하는지 검증.
+//
+//   반응: H_a + H_b–H_c → H_a–H_b + H_c  (콜리니어 수소 교환, H₃ 대칭 saddle).
+//     구성공간 = 결합좌표 [r_ab, r_bc].  PES = LEPS 해석 (NOT ab-initio).
+//
+//   ── 검증 케이스 (모두 deterministic · network-free) ──────────────────
+//    (a) ★ dimer saddle == NEB saddle: LEPS H₃ dimer 가 R2/R3 saddle
+//        (r_ab=r_bc≈1.171 Å, |∇V|→0) 에 도달 — 두 좌표 모두 |Δ|<1e-3.
+//    (b) ★ 곡률모드 == 허수모드: 수렴 dimer 축 N̂ 이 R3 허수모드 고유벡터
+//        (반응좌표; 성분곱<0, |N̂·N̂_ref|≈1) 와 일치.  곡률 C<0 (음의 고유치).
+//    (c) ★ 초기축 가속 (NOVEL eigenmode-alignment): R3 허수모드로 초기화한
+//        dimer 가 랜덤 초기축 대비 *적은 회전(rot_iter)* 으로 수렴 — 실 iter 보고.
+//    (d) ★ endpoint 불요: 단일 시작점(reactant 쪽 한 점)에서 출발해 saddle 도달
+//        (NEB 처럼 두 endpoint band 를 깔지 않음).
+//
+//   ── 참조값 (R3 ts_hessian_selftest.hexa 실측, deterministic) ──────────
+//     saddle  : r_ab = r_bc = 1.17129 Å, |∇V| = 8.6e-16 (정류점).
+//     허수모드: N̂_ref = [0.707107, −0.707107] (성분곱 −0.5, 비대칭 stretch).
+//     ω²(오름차순) = [−3.04662, +4.63079] (n_neg=1 = TS).
+//
+//   HONEST(d6): PES=LEPS 해석(neb_scf.hexa 와 동일), ab-initio 아님.  핵심은
+//     dimer 가 NEB/Hessian saddle 을 endpoint 없이 재현 + 초기축 가속이며,
+//     절대 진동수의 ab-initio 정확도가 아니다.  rot_iter 는 실측 보고(날조 금지).
+//
+//   레퍼런스:
+//     G. Henkelman & H. Jónsson, J. Chem. Phys. 111, 7010 (1999) — dimer method.
+//     F. London (1929); H. Eyring & M. Polanyi (1931); S. Sato (1955) — LEPS PES.
+//     콜리니어 H₃ 교환 표준 벤치 (Truhlar & Wyatt, Adv. Chem. Phys. 36, 141 (1977)).
+//
+// Run:  hexa run stdlib/qforge/chem/dimer_selftest.hexa
+// PASS: "qforge_dimer_selftest PASS".
+
+use "stdlib/qforge/chem/dimer"          // dimer_search · dimer_axis_alignment · ...
+use "stdlib/qforge/chem/neb_scf"        // leps_h3_grad (PES sanity)
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_int(name: str, got: int, want: int) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_bool(name: str, got: bool) -> int {
+    if got { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+fn _ck_lt(name: str, got: int, lim: int) -> int {
+    if got < lim { println("PASS " + name + " (" + to_string(got) + " < " + to_string(lim) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " NOT < " + to_string(lim)) ; return 1
+}
+fn _gnorm(g: [float]) -> float {
+    let mut s = 0.0 ; let mut i = 0
+    while i < len(g) { s = s + g[i] * g[i] ; i = i + 1 } return sqrt(s)
+}
+
+fn main() {
+    let mut fails = 0
+
+    // R2/R3 참조 saddle 좌표 / 허수모드 (R3 selftest 실측).
+    let ref_saddle_r = 1.17129
+    let mut ref_imag_mode: [float] = [] ; ref_imag_mode.push(0.707107) ; ref_imag_mode.push(-0.707107)
+
+    // dimer 파라미터 (공통).  delta=dimer 분리, step=등반 스텝.
+    let delta = 1.0e-3
+    let step = 0.05
+    let max_trans = 2000
+    let ftol = 1.0e-5
+    let rot_tol = 1.0e-6
+    let max_rot = 200
+
+    // ════════════════════════════════════════════════════════════════
+    // (d) endpoint 불요 — 단일 시작점에서 출발 (reactant 쪽 한 점, saddle 아님).
+    //     + (c) 초기축 = R3 허수모드 → 가속 측정용.
+    // ════════════════════════════════════════════════════════════════
+    //   시작점: saddle(1.171,1.171) 에서 *벗어난* 단일 비대칭 한 점.
+    //   endpoint(reactant·product 두 점) band 를 깔지 않음 = dimer 의 핵심.
+    let start = [1.30, 1.05]               // saddle 아님(|∇V|≫0), 단일점.
+    let g_start = leps_h3_grad(start)
+    let g_startn = _gnorm(g_start)
+    println("    [d] 단일 시작점 (r_ab=" + to_string(start[0]) + ", r_bc=" +
+            to_string(start[1]) + ")  |∇V|=" + to_string(g_startn) + " (saddle 아님)")
+    fails = fails + _ck_bool("(d0) 시작점은 정류점 아님 (|∇V| > 0.01)", g_startn > 0.01)
+
+    // R3 허수모드 초기축 dimer (endpoint 없이 단일점서 saddle 등반).
+    let res_imag = dimer_search(0, start, ref_imag_mode, delta, step, max_trans,
+                                ftol, rot_tol, max_rot)
+    println("    [d/c] R3-허수모드 초기축 dimer: saddle=(" + to_string(res_imag.saddle[0]) +
+            ", " + to_string(res_imag.saddle[1]) + ")  |∇V|=" + to_string(res_imag.gnorm) +
+            "  곡률=" + to_string(res_imag.curvature) +
+            "  trans_iter=" + to_string(res_imag.trans_iter) +
+            "  rot_iter=" + to_string(res_imag.rot_iter))
+    fails = fails + _ck_bool("(d1) ★ endpoint 불요: 단일점서 dimer 수렴", res_imag.converged)
+
+    // ════════════════════════════════════════════════════════════════
+    // (a) dimer saddle == NEB saddle.
+    // ════════════════════════════════════════════════════════════════
+    fails = fails + _ck("(a1) ★ dimer r_ab == NEB saddle (1.171)", res_imag.saddle[0], ref_saddle_r, 1.0e-3)
+    fails = fails + _ck("(a1) ★ dimer r_bc == NEB saddle (1.171)", res_imag.saddle[1], ref_saddle_r, 1.0e-3)
+    fails = fails + _ck("(a2) dimer saddle 대칭 r_ab ≈ r_bc", res_imag.saddle[0], res_imag.saddle[1], 1.0e-3)
+    fails = fails + _ck("(a3) dimer saddle |∇V| ≈ 0 (정류점)", res_imag.gnorm, 0.0, 1.0e-4)
+
+    // ════════════════════════════════════════════════════════════════
+    // (b) 곡률모드 == 허수모드 (수렴축 = R3 반응좌표).
+    // ════════════════════════════════════════════════════════════════
+    let align = dimer_axis_alignment(res_imag, ref_imag_mode)
+    let aprod = dimer_axis_antisym_product(res_imag)
+    println("    [b] 수렴 dimer 축 N̂=(" + to_string(res_imag.axis[0]) + ", " +
+            to_string(res_imag.axis[1]) + ")  |N̂·N̂_ref|=" + to_string(align) +
+            "  성분곱=" + to_string(aprod))
+    fails = fails + _ck("(b1) ★ 곡률모드 == 허수모드 (|N̂·N̂_ref| ≈ 1)", align, 1.0, 1.0e-3)
+    fails = fails + _ck_bool("(b2) ★ 수렴축 = 반응좌표 (비대칭 stretch, 성분곱 < 0)", aprod < 0.0)
+    fails = fails + _ck_bool("(b3) 수렴축 곡률 C < 0 (음의 고유치 = TS 방향)", res_imag.curvature < 0.0)
+
+    // ════════════════════════════════════════════════════════════════
+    // (c) 초기축 가속 (NOVEL eigenmode-alignment) — *cold-start 첫-회전* 비교.
+    // ════════════════════════════════════════════════════════════════
+    //   HONEST(d6): R3 허수모드는 *saddle* 의 최저곡률 고유벡터다.  그 정렬 이득은
+    //   회전이 처음 최저곡률 모드를 찾는 *cold-start (첫 translation 스텝)* 에서
+    //   가장 robust 하다(이후 스텝은 중심이 옮겨가며 매번 재수렴 → 누적 rot 은
+    //   translation 수가 지배).  ⇒ 가속은 *첫-회전 rot_iter* 로 측정한다(max_trans=1).
+    //   대조군 = 허수모드와 *직교*한 대칭 stretch 축 [.707,.707] (worst-case 초기축
+    //   — 최저곡률 모드와 90° 어긋남).  이게 "랜덤보다 더 어려운" 정직한 baseline.
+    //   시작점은 saddle 근방(1.20,1.14) — 거기서 R3 허수모드가 곧 국소 최저곡률 모드.
+    let near_start = [1.20, 1.14]
+    let mut ortho_axis: [float] = [] ; ortho_axis.push(0.707107) ; ortho_axis.push(0.707107)
+    //   첫-회전 비용 = max_trans=1 로 1 translation 스텝의 누적 rot.
+    let first_imag = dimer_search(0, near_start, ref_imag_mode, delta, step, 1,
+                                  ftol, rot_tol, max_rot)
+    let first_ortho = dimer_search(0, near_start, ortho_axis, delta, step, 1,
+                                   ftol, rot_tol, max_rot)
+    println("    [c] cold-start 첫-회전 rot:  R3-허수모드 초기축=" +
+            to_string(first_imag.rot_iter) + "  vs  직교(대칭 stretch) 초기축=" +
+            to_string(first_ortho.rot_iter) +
+            "  (Δ=" + to_string(first_ortho.rot_iter - first_imag.rot_iter) + ")")
+    // ★ 핵심: R3 허수모드 초기축이 직교 worst-case 보다 *적은 첫-회전*.
+    fails = fails + _ck_lt("(c1) ★ R3-허수모드 cold-start rot < 직교 초기축 rot", first_imag.rot_iter, first_ortho.rot_iter)
+
+    //   완결성: 직교 worst-case 초기축에서 *전체* 탐색도 같은 saddle 로 수렴(robust).
+    let res_ortho = dimer_search(0, near_start, ortho_axis, delta, step, max_trans,
+                                 ftol, rot_tol, max_rot)
+    println("    [c] 직교 초기축 전체탐색: saddle=(" + to_string(res_ortho.saddle[0]) +
+            ", " + to_string(res_ortho.saddle[1]) + ")  trans_iter=" +
+            to_string(res_ortho.trans_iter) + "  수렴=" + to_string(res_ortho.converged))
+    fails = fails + _ck_bool("(c2) 직교 worst-case 초기축도 같은 saddle 로 수렴 (robust)", res_ortho.converged)
+    fails = fails + _ck("(c2) 직교 dimer 도 같은 saddle r_ab", res_ortho.saddle[0], ref_saddle_r, 1.0e-3)
+
+    // ── generic sanity: dimer 가 PES 콜백을 이름분기 없이 호출 (d4) ───────
+    //   pes_id=0 단일 dispatch — saddle 곡률이 R3 ω²[0]=−3.0466 부호와 일치(음수).
+    fails = fails + _ck_bool("(g1) d4-generic: pes_id dispatch saddle 곡률 < 0", res_imag.curvature < 0.0)
+
+    if fails == 0 { println("qforge_dimer_selftest PASS") }
+    else { println("qforge_dimer_selftest FAIL (" + to_string(fails) + ")") }
+}

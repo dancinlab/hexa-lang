@@ -1,0 +1,286 @@
+// @ci_gate — deterministic · network-free · dimer/eigenvector-following saddle search g5 게이트
+//
+// dimer.hexa — QFORGE `chem` 스케일 front-end round-4:
+//   round-1~3 의 NEB(neb.hexa)·CI-NEB·TS-Hessian(ts_hessian.hexa) 은 모두
+//   *endpoint(또는 수렴 saddle 기하)* 를 전제했다.  round-4 는 그 전제를 없앤다 —
+//   **dimer method (Henkelman & Jónsson, J. Chem. Phys. 111, 7010 (1999))**:
+//   단일 시작점에서 출발해, endpoint 없이 1차 saddle(전이상태)로 등반한다.
+//
+//   ── dimer 메커닉스 ────────────────────────────────────────────────
+//   중심 R 과 단위축 N̂ 으로 정의된 두 image:
+//       R₁ = R + (Δ/2)·N̂ ,  R₂ = R − (Δ/2)·N̂        (Δ = dimer 분리거리)
+//   각 image 의 force F_i = −∇V(R_i).  축방향 곡률(curvature):
+//       C(N̂) = (F₂ − F₁)·N̂ / Δ              (음수 = 음의 곡률 = saddle 방향)
+//   (1) ROTATION: dimer 를 회전시켜 곡률 C 를 *최소화*(가장 음수)하는 축 N̂ 을
+//       찾는다.  회전력(rotational force) G = (F₁ − F₂) − ((F₁−F₂)·N̂)N̂  (⊥N̂).
+//       회전평면 Θ̂ = unit(G) 위에서 유한차분 회전(작은 dθ)으로 곡률의 각도미분
+//       dC/dθ 을 추정, Newton 스텝으로 |G|→0 (곡률 최소 ⇒ 최저곡률 고유모드)로 수렴.
+//       → 수렴한 N̂ = Hessian 최저 고유치 고유벡터 (허수모드 = 반응좌표).
+//   (2) TRANSLATION: 중심력 F_R = −∇V(R) 을 축방향에서 *반전*한 수정력으로 이동:
+//       C<0 (음곡률 영역): F* = F_R − 2(F_R·N̂)N̂   (축방향 성분 부호반전 → 등반)
+//       C>0 (양곡률, 아직 saddle basin 밖): F* = −(F_R·N̂)N̂  (축방향만, 곡률축 향함)
+//       → uphill along N̂, downhill ⊥N̂ ⇒ saddle 로 수렴.
+//   endpoint *불요* — 단일 시작점 + 초기축 N̂ 만으로 saddle 등반.
+//
+//   ── R3 허수모드 = dimer 초기축 (NOVEL: eigenmode-alignment 가속) ──────
+//   round-3 ts_hessian 이 산출한 saddle 허수모드 고유벡터(반응좌표 방향)를
+//   dimer 초기축 N̂₀ 으로 공급하면, 회전 단계가 이미 최저곡률 모드에 정렬돼
+//   있어 회전 iteration 이 급감한다(랜덤 초기축 대비).  이것이 round-1 의
+//   NOVEL hybrid eigenmode-alignment 라인의 실현 — Hessian(R3) → dimer(R4)
+//   재사용 lattice(d19).  R3 허수모드가 없으면 랜덤(또는 사용자 지정) 초기축.
+//
+//   ── d4-generic (PES = 콜백) ──────────────────────────────────────────
+//   엔진(dimer_search)은 PES 를 이름분기하지 않는다.  energy/grad 는 `pes_id`
+//   정수 selector 로 `_dimer_grad` dispatcher 에 위임:
+//       pes_id == 0 → LEPS H₃ (neb_scf.hexa::leps_h3_grad 재사용).
+//   새 PES 추가 = dispatcher 케이스 한 줄(엔진 미접촉).  ⇒ "PES = 콜백" 이
+//   진짜 generic 함을 dimer 에서 입증(d4).
+//
+//   ── d19 재사용 (chem 내부 reuse lattice) ─────────────────────────────
+//     · LEPS PES energy+force  = neb_scf.hexa::leps_h3_grad (R2, 검증된 콜백).
+//     · 초기축 N̂₀ = ts_hessian.hexa 가 산출한 허수모드(R3, 검증된 반응좌표).
+//     · 벡터 헬퍼 = neb_scf.hexa 와 동형(검증된 식 재사용).
+//
+//   ── HONEST 범위 (d6) ────────────────────────────────────────────────
+//   PES = LEPS 표준 해석 PES(neb_scf.hexa 와 동일), *NOT* ab-initio.
+//   핵심 검증대상 = dimer 가 (endpoint 없이) NEB/Hessian saddle 을 *재현*하고,
+//   수렴축이 허수모드와 일치하며, R3-허수모드 초기화가 랜덤 대비 회전/iter 를
+//   줄인다는 것.  실분자 SCF(Hellmann-Feynman force) 결선은 round-5+ 로 정직 이월.
+//
+// Run:  hexa run stdlib/qforge/chem/dimer_selftest.hexa
+
+use "stdlib/qforge/chem/neb_scf"        // leps_h3_grad (LEPS PES force 콜백 재사용, d19)
+
+// ── 벡터 헬퍼 (neb_scf.hexa 와 동형 — 검증된 식 재사용, d19) ──────────
+fn _dm_sub(a: [float], b: [float]) -> [float] {
+    let mut o: [float] = [] ; let mut i = 0
+    while i < len(a) { o.push(a[i] - b[i]) ; i = i + 1 } return o
+}
+fn _dm_add(a: [float], b: [float]) -> [float] {
+    let mut o: [float] = [] ; let mut i = 0
+    while i < len(a) { o.push(a[i] + b[i]) ; i = i + 1 } return o
+}
+fn _dm_scale(a: [float], s: float) -> [float] {
+    let mut o: [float] = [] ; let mut i = 0
+    while i < len(a) { o.push(a[i] * s) ; i = i + 1 } return o
+}
+fn _dm_dot(a: [float], b: [float]) -> float {
+    let mut acc = 0.0 ; let mut i = 0
+    while i < len(a) { acc = acc + a[i] * b[i] ; i = i + 1 } return acc
+}
+fn _dm_norm(a: [float]) -> float { return sqrt(_dm_dot(a, a)) }
+fn _dm_unit(a: [float]) -> [float] {
+    let n = _dm_norm(a)
+    if n < 1.0e-30 { return _dm_scale(a, 0.0) }
+    return _dm_scale(a, 1.0 / n)
+}
+fn _dm_copy(a: [float]) -> [float] {
+    let mut o: [float] = [] ; let mut i = 0
+    while i < len(a) { o.push(a[i]) ; i = i + 1 } return o
+}
+
+// ── PES 콜백 dispatcher (d4: 엔진은 이름분기 없음) ────────────────────
+//   pes_id == 0 → LEPS H₃ (neb_scf.hexa::leps_h3_grad).  force F = −∇V.
+fn _dimer_grad(pes_id: int, coord: [float]) -> [float] {
+    return leps_h3_grad(coord)             // pes_id == 0 (현재 유일 케이스)
+}
+fn _dimer_force(pes_id: int, coord: [float]) -> [float] {
+    return _dm_scale(_dimer_grad(pes_id, coord), -1.0)     // F = −∇V
+}
+
+// ── dimer 탐색 결과 ──────────────────────────────────────────────────
+//   saddle    : 수렴한 중심좌표 R (saddle 기하).
+//   axis      : 수렴한 dimer 축 N̂ (= 최저곡률 고유모드 = 허수모드/반응좌표).
+//   curvature : 수렴축의 곡률 C(N̂) (saddle 에서 음수 = 음의 고유치).
+//   gnorm     : saddle 의 |∇V| (정류점 ⇒ ≈0).
+//   converged : translation 수렴 여부.
+//   trans_iter: translation(등반) iteration 수.
+//   rot_iter  : 누적 rotation iteration 수 (초기축 가속 NOVEL 측정 — 핵심 지표).
+pub struct DimerResult {
+    dim: int,
+    saddle: [float],
+    axis: [float],
+    curvature: float,
+    gnorm: float,
+    converged: bool,
+    trans_iter: int,
+    rot_iter: int
+}
+
+// ── 곡률 + 회전력 (한 translation 스텝에서 1회 평가) ──────────────────
+//   두 image force F₁,F₂ 로부터:
+//     curvature C = (F₂ − F₁)·N̂ / Δ
+//     rotational force G = (F₁ − F₂) − ((F₁−F₂)·N̂)·N̂   (⊥ N̂, 곡률 감소방향)
+//   반환 = [C, |G|, G₀, G₁, ...] (평탄; G 는 인덱스 2.. 에).
+fn _dimer_curv_and_rotforce(pes_id: int, center: [float], axis: [float],
+                            delta: float) -> [float] {
+    let r1 = _dm_add(center, _dm_scale(axis, 0.5 * delta))
+    let r2 = _dm_sub(center, _dm_scale(axis, 0.5 * delta))
+    let f1 = _dimer_force(pes_id, r1)
+    let f2 = _dimer_force(pes_id, r2)
+    let df = _dm_sub(f2, f1)                       // F₂ − F₁
+    let curv = _dm_dot(df, axis) / delta           // C = (F₂−F₁)·N̂ / Δ
+    // 회전력 G = [(F₁−F₂) − ((F₁−F₂)·N̂)N̂] / Δ.  (F₁−F₂) = −df.
+    //   /Δ 로 곡률-그래디언트 단위 정규화 (rot_tol 비교 일관).  방향은 Θ̂ 산출용.
+    let f1mf2 = _dm_scale(df, -1.0 / delta)
+    let proj = _dm_dot(f1mf2, axis)
+    let g = _dm_sub(f1mf2, _dm_scale(axis, proj))  // ⊥ N̂
+    let gnorm = _dm_norm(g)
+    let mut o: [float] = []
+    o.push(curv) ; o.push(gnorm)
+    let mut i = 0
+    while i < len(g) { o.push(g[i]) ; i = i + 1 }
+    return o
+}
+
+// ── ROTATION: 곡률을 회전평면 위 1D 함수 C(θ) 로 보고 *최소화*해 최저곡률
+//   모드(허수모드/반응좌표)로 dimer 축 N̂ 을 수렴시킨다.
+//   회전평면 단위벡터 Θ̂ = unit(F_rot) (F_rot = 회전력, ⊥N̂).  이 평면 안에서
+//   C(θ) (N̂'=cosθ·N̂ + sinθ·Θ̂ 의 곡률) 의 각도미분을 *중심차분 FD* 로 직접
+//   추정하고 — dC/dθ ≈ [C(+h) − C(−h)]/(2h) — Newton/감폭 line-search 로 한 평면
+//   회전을 *곡률 최소점*으로 등반(backtracking 으로 항상 곡률 감소 보장).  Θ̂ 는
+//   매 iter 새 F_rot 로 갱신 → 2D 곡률면 위 steepest-descent (단일 Fourier 가정
+//   불요 = robust).  정렬된 초기축이면 첫 iter 에서 |F_rot|→0 (가속의 근거).
+//   반환 = [수렴축..., rot_iter_used].  rot_iter 는 마지막 원소.
+fn _dimer_rotate(pes_id: int, center: [float], axis0: [float], delta: float,
+                 rot_tol: float, max_rot: int) -> [float] {
+    let dim = len(axis0)
+    let mut axis = _dm_unit(axis0)
+    let mut used = 0
+    let mut it = 0
+    while it < max_rot {
+        let cg = _dimer_curv_and_rotforce(pes_id, center, axis, delta)
+        let gnorm = cg[1]                          // |F_rot|
+        let c0 = cg[0]                             // C(현재 축)
+        used = it
+        if gnorm < rot_tol { it = max_rot }       // 회전력 ≈0 ⇒ 최저곡률 정렬 완료
+        else {
+            // 회전평면 단위벡터 Θ̂ = unit(F_rot).
+            let mut theta: [float] = []
+            let mut k = 0
+            while k < dim { theta.push(cg[2 + k]) ; k = k + 1 }
+            let thn = _dm_norm(theta)
+            if thn < 1.0e-30 { it = max_rot }
+            else {
+                let that = _dm_scale(theta, 1.0 / thn)
+                // 곡률의 각도미분 dC/dθ 를 중심차분 FD 로 추정.
+                let h = 1.0e-4
+                let axp = _dm_unit(_dm_add(_dm_scale(axis, cos(h)), _dm_scale(that, sin(h))))
+                let axm = _dm_unit(_dm_add(_dm_scale(axis, cos(h)), _dm_scale(that, -sin(h))))
+                let cgp = _dimer_curv_and_rotforce(pes_id, center, axp, delta)
+                let cgm = _dimer_curv_and_rotforce(pes_id, center, axm, delta)
+                let dCdtheta = (cgp[0] - cgm[0]) / (2.0 * h)
+                // backtracking line-search: θ ← θ − η·dC/dθ, η 를 곡률이 줄 때까지 축소.
+                let mut eta = 0.25
+                let mut moved = false
+                let mut tries = 0
+                while tries < 30 {
+                    let dtheta = -eta * dCdtheta
+                    let axn = _dm_unit(_dm_add(_dm_scale(axis, cos(dtheta)),
+                                               _dm_scale(that, sin(dtheta))))
+                    let cgn = _dimer_curv_and_rotforce(pes_id, center, axn, delta)
+                    if cgn[0] < c0 { axis = axn ; moved = true ; tries = 30 }
+                    else { eta = eta * 0.5 ; tries = tries + 1 }
+                }
+                if !moved { it = max_rot }          // 더 못 줄임 ⇒ 곡률 최소 도달
+            }
+        }
+        it = it + 1
+    }
+    let mut out = _dm_copy(axis)
+    out.push((used + 1) * 1.0)            // rot_iter (실 사용 회전수, float 인코딩)
+    return out
+}
+
+// ── TRANSLATION: 수정력 따라 중심 R 등반 → saddle ────────────────────
+//   F* = F_R − 2(F_R·N̂)N̂   (C<0, 음곡률: 축방향 반전 등반)
+//   F* = −(F_R·N̂)N̂          (C≥0, 양곡률: 축방향만, 음곡률 basin 으로 유도)
+//   매 스텝 ROTATION 으로 N̂ 갱신 → 최저곡률 모드 추종.
+//   ★ d2 정직: 각 translation 스텝의 rotation 수를 누적(rot_iter)해 보고.
+pub fn dimer_search(pes_id: int, start: [float], axis0: [float], delta: float,
+                    step: float, max_trans: int, ftol: float,
+                    rot_tol: float, max_rot: int) -> DimerResult {
+    let dim = len(start)
+    let mut center = _dm_copy(start)
+    let mut axis = _dm_unit(axis0)
+    let mut converged = false
+    let mut trans_iter = 0
+    let mut rot_total = 0
+    let mut last_curv = 0.0
+    let mut last_gnorm = 1.0e30
+
+    let mut it = 0
+    while it < max_trans {
+        // (1) ROTATION: 최저곡률 축 N̂ 갱신 (R3 허수모드 초기축이면 수렴 빠름).
+        let rotout = _dimer_rotate(pes_id, center, axis, delta, rot_tol, max_rot)
+        let mut na: [float] = []
+        let mut k = 0
+        while k < dim { na.push(rotout[k]) ; k = k + 1 }
+        axis = na
+        let rused = rotout[dim]
+        rot_total = rot_total + (rused as int)
+        // 갱신된 축에서 곡률 평가.
+        let cg = _dimer_curv_and_rotforce(pes_id, center, axis, delta)
+        let curv = cg[0]
+        last_curv = curv
+        // (2) TRANSLATION: 중심력 F_R = −∇V(R).
+        let fr = _dimer_force(pes_id, center)
+        let frpar = _dm_dot(fr, axis)             // F_R·N̂
+        let mut fstar: [float] = []
+        if curv < 0.0 {
+            // 음곡률: F* = F_R − 2(F_R·N̂)N̂  (축방향 반전 → uphill).
+            fstar = _dm_sub(fr, _dm_scale(axis, 2.0 * frpar))
+        } else {
+            // 양곡률: F* = −(F_R·N̂)N̂  (음곡률 basin 으로 끌어당김; ⊥성분 0).
+            fstar = _dm_scale(axis, -1.0 * frpar)
+        }
+        let fnorm = _dm_norm(fstar)
+        last_gnorm = _dm_norm(fr)                 // 실제 |∇V| (정류점 판정)
+        trans_iter = it + 1
+        // 수렴: 수정력·실력 모두 작고 곡률 음수(진짜 1차 saddle).
+        if fnorm < ftol {
+            if last_gnorm < ftol {
+                if curv < 0.0 { converged = true ; it = max_trans }
+            }
+        }
+        if it < max_trans {
+            center = _dm_add(center, _dm_scale(fstar, step))
+        }
+        it = it + 1
+    }
+    // 최종 진단 (수렴 여부 무관하게 보고).
+    let gfin = _dimer_grad(pes_id, center)
+    let gfinn = _dm_norm(gfin)
+    let cgf = _dimer_curv_and_rotforce(pes_id, center, axis, delta)
+    return DimerResult { dim: dim, saddle: center, axis: axis,
+                         curvature: cgf[0], gnorm: gfinn,
+                         converged: converged, trans_iter: trans_iter,
+                         rot_iter: rot_total }
+}
+
+// ── 편의: R3 허수모드(반응좌표)를 초기축으로 한 dimer 탐색 ─────────────
+//   neg_mode = ts_hessian.hexa 가 산출한 허수모드 고유벡터 (d19 reuse edge).
+pub fn dimer_search_from_imag_mode(pes_id: int, start: [float], neg_mode: [float],
+                                   delta: float, step: float, max_trans: int,
+                                   ftol: float, rot_tol: float,
+                                   max_rot: int) -> DimerResult {
+    return dimer_search(pes_id, start, neg_mode, delta, step, max_trans, ftol,
+                        rot_tol, max_rot)
+}
+
+// ── 진단: 수렴 dimer 축이 참조 허수모드와 같은 방향(반응좌표)인가? ─────
+//   부호 무관(축은 ±N̂ 동일)·정규화 후 |cosθ| ≈ 1 이면 동일 모드.
+//   반환 = |N̂_dimer · N̂_ref| (정규화 내적 절댓값).
+pub fn dimer_axis_alignment(res: DimerResult, ref_mode: [float]) -> float {
+    let a = _dm_unit(res.axis)
+    let b = _dm_unit(ref_mode)
+    let d = _dm_dot(a, b)
+    if d < 0.0 { return -d } return d
+}
+
+// ── 진단: 콜리니어 H₃ 축 성분곱 (R3 와 동일 규약 — 비대칭 stretch<0) ───
+pub fn dimer_axis_antisym_product(res: DimerResult) -> float {
+    let a = _dm_unit(res.axis)
+    if len(a) < 2 { return 0.0 }
+    return a[0] * a[1]
+}
