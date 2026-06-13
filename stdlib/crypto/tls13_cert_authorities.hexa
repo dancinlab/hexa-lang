@@ -79,7 +79,11 @@ pub fn tls13_cert_authorities_at(ext_value: [int], idx: int) -> [int] {
         if k == idx {
             let mut name: [int] = []
             let mut j = 0
-            while j < nl { name.push(ext_value[i + 2 + j]); j = j + 1 }
+            // Bounds-guard the inner name read against a truncated/malformed
+            // extension where the declared length `nl` overruns the buffer
+            // (mirrors tls13_alpn_parse's `i + j < len` inner guard) — a
+            // truncated DN yields a short name, never an out-of-bounds read.
+            while j < nl && i + 2 + j < len(ext_value) { name.push(ext_value[i + 2 + j]); j = j + 1 }
             return name
         }
         i = i + 2 + nl

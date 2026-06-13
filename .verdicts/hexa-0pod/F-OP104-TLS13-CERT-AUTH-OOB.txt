@@ -1,0 +1,142 @@
+F-OP104-TLS13-CERT-AUTH-OOB — unguarded-inner-read OOB in a length-prefixed
+                              TLS 1.3 binary parser (LANE-2, 0-pod)
+================================================================================
+DATE   : 2026-06-13
+LANE   : 2 (0-pod correctness). FRESH bug class — NOT the closed delimiter/index
+         set (OP-94 split-keep-first · OP-97 boundary-run-collapse · OP-102
+         index_of(-1)-unchecked). This round took the ERROR-PROPAGATION /
+         robustness axis (b): a fallible read over a malformed/truncated wire
+         length should yield a graceful short/empty result, NOT an out-of-bounds
+         read. Sibling LANE-1 (OP-101/103) owns serialization/slice-bounds —
+         untouched here (non-overlapping surface).
+TIER   : 🔴 → FIXED (1 real shipping OOB) + 🟢 sibling census clean (the 5 other
+         length-prefixed TLS-extension parsers round-trip exact). Honest g5:
+         verbatim VM repro of the fault below; the fix is minimal (1 guard, 0
+         deletions) and mirrors the SAFE sibling parser already in-tree.
+
+================================================================================
+MOTIVE — the unguarded-inner-read bug class
+================================================================================
+Length-prefixed binary parsers walk a buffer reading a length field, then copy
+that many following bytes. The OUTER loop typically bounds-checks the LENGTH
+HEADER against len(buffer); the trap is the INNER copy loop reading the
+length-many DATA bytes WITHOUT re-checking the buffer end. On a truncated or
+malicious wire frame where the declared length overruns the actual buffer, the
+inner loop reads past the array end — a runtime OOB fault (or, in a non-bounds-
+checked runtime, memory disclosure). The correct pattern guards EVERY inner
+byte read against len(buffer) (graceful short read). This is a distinct class
+from the closed delimiter/index work.
+
+================================================================================
+SURVEY (scoped greps, NO .git)
+================================================================================
+The densest length-prefixed binary parsers in this stdlib are the TLS 1.3
+extension family stdlib/crypto/tls13_*.hexa. Censused every inner
+`while … len(ext_value)` read across:
+  tls13_sig_algs.hexa            (uint16 list_len, 2-byte SignatureScheme pairs)
+  tls13_supported_groups.hexa    (uint16 list_len, 2-byte NamedGroup pairs)
+  tls13_cert_compression.hexa    (uint8  list_len, 2-byte algorithm pairs)
+  tls13_cookie.hexa              (uint16 len, single-byte opaque copy)
+  tls13_alpn.hexa                (uint16 list_len, per-name uint8 len + bytes)
+  tls13_psk_modes.hexa           (uint8  len, single-byte modes)
+  tls13_renegotiation_info.hexa  (uint8  len, single-byte payload)
+  tls13_cert_authorities.hexa    (uint16 list_len, per-DN uint16 len + bytes)
+
+SAFE REFERENCE — tls13_alpn_parse (lines 59-69) guards every inner byte:
+    while j < nb && i + j < len(ext_value) {   // <-- inner bound on EACH byte
+        chars.push(chr(ext_value[i + j] & 0xFF))
+        j = j + 1
+    }
+
+================================================================================
+🟢 CLEAN — the 5 pair/byte parsers round-trip EXACT
+================================================================================
+/tmp/op104_tls.py — faithful Python ports of the build + parse bodies, run
+build∘parse over N∈{1,2,3,4} entries:
+  cert_compression  in=[1025]            ev=[2,4,1]              -> [1025]            OK
+  cert_compression  in=[1025,1027]       ev=[4,4,1,4,3]         -> [1025,1027]       OK
+  cert_compression  in=[1,2,3,4]         ev=[8,0,1,0,2,0,3,0,4] -> [1,2,3,4]         OK
+  sig_algs          in=[1025,1027,2055]  ev=[0,6,4,1,4,3,8,7]   -> [1025,1027,2055]  OK
+  supported_groups  in=[1,2,3,4]         ev=[0,8,0,1,0,2,0,3,0,4]-> [1,2,3,4]        OK
+The strict `<` bounds in these are CORRECT: for a pair at data-offset i with a
+list length L, `i+1 < L` ⟺ `i+1 <= L-1` admits the LAST full pair. cookie's
+single-byte `2+i < len` is likewise correct. 0 mismatch → these parsers are not
+the bug.
+
+================================================================================
+🔴 REAL SHIPPING BUG — tls13_cert_authorities_at (stdlib/crypto/tls13_cert_authorities.hexa)
+================================================================================
+The inner DistinguishedName name-copy loop (line 82, pre-fix):
+    while j < nl { name.push(ext_value[i + 2 + j]); j = j + 1 }
+has NO bounds guard. The outer loop only validates the 2-byte nl HEADER:
+    while i + 1 < end && i + 1 < len(ext_value) {
+        let nl = ((ext_value[i] & 0xFF) << 8) | (ext_value[i + 1] & 0xFF)
+        ...
+i.e. it checks the header is in-range but NOT that the nl name bytes that follow
+fit in the buffer — UNLIKE the sibling tls13_alpn_parse. On a truncated/
+malformed extension where the declared `nl` overruns the buffer, the inner loop
+reads ext_value[i+2+j] past the array end.
+
+VERBATIM REPRO on the shipping VM (`hexa run` /Users/mini/.hx/bin/hexa) — the
+pre-fix body run standalone on a truncated extension (inner list_len=7 claims a
+2-byte header + 5-byte DN, entry nl=5, but only 2 name bytes present, len=6):
+  input ext_value = [0, 7, 0, 5, 0xAA, 0xBB]
+  $ hexa run op104_prefix_neg.hexa
+    calling buggy _ca_at on truncated (len=6, will read index 6)...
+    index 6 out of bounds (len 6)            <<<< OOB FAULT
+The well-guarded sibling tls13_alpn_parse on an analogous truncated input
+returns the short string SAFELY (no fault) — the contrast that proves the
+missing guard is the defect, not the input.
+
+================================================================================
+FIX (minimal · 0 deletions · mirrors the safe sibling)
+================================================================================
+stdlib/crypto/tls13_cert_authorities.hexa, tls13_cert_authorities_at inner loop:
+  - while j < nl { name.push(ext_value[i + 2 + j]); j = j + 1 }
+  + while j < nl && i + 2 + j < len(ext_value) { name.push(ext_value[i + 2 + j]); j = j + 1 }
+A truncated DN now yields a graceful SHORT name, never an OOB read — identical
+in spirit to tls13_alpn_parse's `i + j < len(ext_value)` inner guard.
+
+POST-FIX DIFFERENTIAL (/tmp/op104_ca.py):
+  truncated at(0) = [170, 187]                  (graceful short name, no OOB)
+  well-formed     count=2  at0=[1,2,3]  at1=[0xAA]  (round-trip EXACT)
+
+================================================================================
+CLOSURE MEMBERSHIP (OP-96 method)
+================================================================================
+grep compiler/ + self/ for `tls13_cert_authorities` / `crypto/tls13` → NONE
+imported by the build_selfhost (~48-file) closure. The fix + the new leaf are
+OUTSIDE the closure → as fixpoint-safe as a stdlib leaf; cc-genN byte-eq
+UNAFFECTED; no self-host gate needed.
+
+================================================================================
+LOCK
+================================================================================
+NEW stdlib/crypto/tls13_cert_authorities_oob_op104_test.hexa — HERMETIC (no
+network; _ca_count / _ca_at bodies VERBATIM-INLINED post-fix, NO `use` — the
+installed hexa resolves `use` to a STALE bundled copy, OP-87/88 lesson), NOT in
+the build_selfhost closure. Asserts:
+  (1) truncated extension → graceful short name [0xAA,0xBB] (no fault)
+  (2) well-formed → count==2, at0==[1,2,3], at1==[0xAA]
+  (3) empty / undersized → []  (4) out-of-range idx → []
+Shipping `hexa run` LOCAL:
+  [tls13_cert_authorities_oob_op104_test] 7/7 asserts passed
+  __HEXA_TLS13_CA_OOB_OP104__ PASS 7/7
+NEGATIVE CONTROL = the PRE-fix body (no inner guard) run standalone on the same
+truncated input → `index 6 out of bounds (len 6)` fault → the lock catches the
+real OOB regression, NOT a tautology.
+
+================================================================================
+BYTE-EQ / GUARDS / SCOPE
+================================================================================
+- Source change: 1 guarded line in stdlib/crypto/tls13_cert_authorities.hexa
+  (closure-OUT). 0 deletions (wipe_guard net-additive).
+- 1 NEW leaf test (closure-OUT). Fixpoint UNAFFECTED, no gate needed.
+- LANE-2 only; FRESH unguarded-inner-read robustness class — NOT the closed
+  delimiter / index / split classes, NOT LANE-1 serde/slice territory.
+- $0 · 0-pod · NO GPU · no vast · no foreign pod · no .tape edit · leak-0.
+
+RESULT: 🔴 → FIXED (tls13_cert_authorities_at OOB on truncated DN) + 🟢 sibling
+census clean (5 length-prefixed TLS-extension parsers round-trip exact). The
+unguarded-inner-read class is now closed across the TLS 1.3 extension family
+(cert_authorities was the lone offender; alpn was already the safe template).
