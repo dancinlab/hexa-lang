@@ -1,0 +1,101 @@
+// HEXA Standard Library — qforge/atoms/cc_accel
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE-ATOMS brick #19a — coupled-cluster tensor-contraction ACCELERATION.
+// EXECUTION-ONLY change (zero physics drift): the post-HF correlation ladder
+// (mp2.hexa / ccsd.hexa / ccsd_t.hexa) is dominated by the AO→MO 4-index
+// transform — FOUR sequential O(N⁵) quarter-transforms (mp2_ao_to_mo). In the
+// interpreter each quarter is a triple-nested loop with a scalar inner Σ; at the
+// cc-pVDZ basis (n=25) the interpreted transform is the heavy stage of every
+// MP2 / CCSD / CCSD(T) run (it is rebuilt once per CI).
+//
+// d19 REUSE (NOT a rebuild): each quarter-transform IS a matrix multiply, so we
+// route it through the EXISTING native contraction kernel `t_matmul`
+// (stdlib/flame/tensor_lib → RFC 032 CPU farr_matmul, ikj-order FMA-fused under
+// clang -O2). NO new tensor engine is minted — the kernel already exists in
+// flame; this brick only RESHAPES the chemists' (μν|λσ) tensor so each quarter
+// becomes one matmul. The whole ladder inherits the speedup for free.
+//
+// ── the right-multiply + cyclic-rotate scheme (transpose-free) ──────────────────
+// The chemists' tensor is flat T[((p·n+q)·n+r)·n+s]. Reshaped as an (n³ × n)
+// matrix M[(p,q,r), s], one quarter-transform of the TRAILING index against C
+// (n×n) is exactly the matmul  M·C  →  M'[(p,q,r), s'] = Σ_s T[p,q,r,s]·C[s,s'].
+// After the matmul the freshly-transformed index sits in the trailing slot; a
+// cyclic rotation  [a,b,c,d] → [d,a,b,c]  (an O(N⁴) index copy, negligible vs the
+// O(N⁵) matmul) brings the NEXT raw AO index into the trailing slot. Four
+// (matmul → rotate) steps transform σ,λ,ν,μ in turn and land back on the
+// canonical [p,q,r,s] ordering — giving (pq|rs) = Σ C C C C (μν|λσ) EXACTLY.
+//
+// ── bit-faithfulness (g5 a/d) ──────────────────────────────────────────────────
+// The result is mathematically identical to mp2_ao_to_mo; the ONLY numerical
+// difference is the accumulation ORDER inside Σ (native ikj-FMA vs interpreted
+// sequential), which perturbs each element at the float round-off floor (~1e-16).
+// Propagated to the correlation energy this is ≪1e-12 — far under the g5 ≤1e-9
+// gate. The SEALED r16/r17/r18 anchors are reproduced; nothing in the physics or
+// the formulas changes — this is a pure EXECUTION swap.
+
+use "stdlib/flame/tensor_lib"
+
+// Cyclic index rotation [a,b,c,d] → [d,a,b,c] on a flat n⁴ farr tensor.
+//   src flat = ((a·n+b)·n+c)·n+d ;  dst flat = ((d·n+a)·n+b)·n+c
+// O(N⁴) — negligible beside the O(N⁵) matmul it sits between.
+fn _rot_last_to_front(T: int, n: int) -> int {
+    let n4 = n * n * n * n
+    let out = t_zeros(n4)
+    let mut a = 0
+    while a < n {
+        let mut b = 0
+        while b < n {
+            let mut c = 0
+            while c < n {
+                let mut d = 0
+                while d < n {
+                    let src = ((a * n + b) * n + c) * n + d
+                    let dst = ((d * n + a) * n + b) * n + c
+                    t_set(out, dst, t_get(T, src))
+                    d = d + 1
+                }
+                c = c + 1
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return out
+}
+
+// Accelerated AO→MO 4-index transform — drop-in replacement for mp2_ao_to_mo.
+//   (pq|rs) = Σ_{μνλσ} C_μp C_νq C_λr C_σs (μν|λσ)
+// FOUR (matmul → rotate) steps, each matmul = T(n³×n) · C(n×n) via the native
+// flame kernel. eri / C are [float] (chemists' (μν|λσ) layout · C row-major C_μp =
+// C[μ·n+p]); returns the full n⁴ MO tensor (flat, chemists' (pq|rs) layout).
+pub fn mp2_ao_to_mo_fast(eri: [float], C: [float], n: int) -> [float] {
+    let n4 = n * n * n * n
+    let n3 = n * n * n
+    // marshal the [float] AO tensor + C into flame farr buffers
+    let mut T = t_zeros(n4)
+    let mut idx = 0
+    while idx < n4 { t_set(T, idx, eri[idx]) ; idx = idx + 1 }
+    let Cf = t_zeros(n * n)
+    let mut ci = 0
+    while ci < n * n { t_set(Cf, ci, C[ci]) ; ci = ci + 1 }
+    // 4 quarter-transforms: each transforms the trailing index, then rotates it
+    // to the front so the next AO index becomes trailing.
+    let mut step = 0
+    while step < 4 {
+        let M = t_matmul(T, n3, n, Cf, n)     // (n³×n) · (n×n) → (n³×n)
+        t_free(T)
+        T = _rot_last_to_front(M, n)
+        t_free(M)
+        step = step + 1
+    }
+    // T is now in canonical [p,q,r,s] order; read back to a [float] tensor.
+    let mut out: [float] = []
+    let mut k = 0
+    while k < n4 { out.push(t_get(T, k)) ; k = k + 1 }
+    t_free(T)
+    t_free(Cf)
+    return out
+}

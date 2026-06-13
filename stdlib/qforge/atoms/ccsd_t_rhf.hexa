@@ -1,0 +1,301 @@
+// HEXA Standard Library — qforge/atoms/ccsd_t_rhf
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE-ATOMS brick #22 — SPIN-ADAPTED closed-shell (RHF) perturbative triples (T).
+// The r18 ccsd_t.hexa is CORRECT but SPIN-ORBITAL: its O(N⁷) triples sweep runs over
+// nso = 2n spin-orbitals (occ³·virt³ with the 9-term P(i/jk)P(a/bc) permutation per
+// element), so cc-pVDZ H₂O (n=25 → nso=50) was the >31-min killer that left the gold-
+// standard cc-pVDZ CCSD(T) NOT live. This brick reformulates (T) in SPATIAL orbitals
+// (indices 0..n−1) on the converged SPATIAL CCSD amplitudes (brick #21, ccsd_rhf.hexa):
+// occ/virt dims collapse nso→n (a 2³=8× cut in the triples index volume) and the inner
+// f/m contractions become small matmul-shaped sums on the compact spatial dims — the
+// lever that makes cc-pVDZ CCSD(T) live-tractable.
+//
+// ── spin-summed closed-shell (T) (Rendell, JCP 94, 442 (1991); the PySCF RHF
+//    ccsd_t_slow kernel — spin-adapted, the canonical production form) ───────────────
+// From the converged closed-shell t1 (t_i^a) / t2 (t_ij^ab) and the spatial physicist
+// MO blocks ⟨pq|rs⟩ (built by ccsd_rhf.hexa, re-used VERBATIM), for each virtual triple
+// a ≥ b ≥ c build the connected (W) and disconnected (V) triples over occ (i,j,k):
+//
+//   W_abc[i,j,k] = Σ_f ⟨if|ab⟩ t_kj^cf  −  Σ_m ⟨ji|ma⟩ t_mk^bc
+//   V_abc[i,j,k] = ⟨ij|ab⟩ t_k^c                 (the f_vo·t2 term ≡ 0, canonical RHF)
+//
+// (the chemists' (ia|fb) = ⟨if|ab⟩_phys, (ia|jm) = ⟨ji|ma⟩_phys, (ia|jb) = ⟨ij|ab⟩_phys;
+//  exactly the PySCF get_w / get_v einsums re-expressed in compact spatial blocks). The
+// six index permutations W_{abc,acb,bac,bca,cab,cba} are formed, the spin-adaptation
+// operator r3(w) = 4w + w(jki) + w(kij) − 2 w(kji) − 2 w(ikj) − 2 w(jik) is applied to
+// z = r3(W + ½V)/D, and the energy is the 36-term permutation contraction Σ⟨W,z⟩ ×2,
+// with D = ε_i+ε_j+ε_k − ε_a−ε_b−ε_c and the a≥b≥c degeneracy factor (×6 a=b=c, ×2 a=b
+// or b=c). This is bit-identical to the r18 spin-orbital (T) on closed shell.
+//
+// ── H₂ zero-anchor ───────────────────────────────────────────────────────────────
+// For H₂ (2e) there is ONE occupied spatial orbital → no i,j,k all-distinct triple is
+// even needed, and CCSD == FCI: E_(T)(H₂) == 0 EXACTLY (the spatial sum is over a
+// single occupied index — its triples contribution cancels to machine zero).
+//
+// ── correctness anchor (g5 a) ────────────────────────────────────────────────────
+// MUST reproduce the r18 spin-orbital E_(T) bit-compatibly on closed shell:
+//   H₂O/STO-3G  E_(T) = −9.987727211e-05  (Crawford Project_06 / PySCF ccsd_t)
+//   H₂          E_(T) = 0 EXACTLY
+// to ≤1e-9. The spin-orbital ccsd_t.hexa is KEPT byte-untouched as the regression
+// anchor (r18 selftest still passes); this brick is purely ADDITIVE.
+//
+// reuse (d19 · d3): consumes ccsd_rhf.hexa's CCRhfInts physicist blocks + its converged
+//   spatial t1/t2 + the RHF ε VERBATIM. No new transform / eigensolver / CC iteration
+//   minted — (T) is pure post-processing on the converged spatial CCSD amplitudes.
+//
+// ⚠ PARSER (f37015ac): every index-summed arithmetic assignment is ONE physical line —
+//   a multi-line arithmetic continuation silently drops the trailing term.
+// ⚠ integral-mapping (r21): ⟨if|ab⟩ vs ⟨ji|ma⟩ are DISTINCT block reads, never conflated
+//   — the H₂ 2e case hides it, the H₂O multi-occupied case exposes it (verified on H₂O).
+
+use "stdlib/qforge/atoms/ccsd_rhf"
+
+// ════════════════════════════════════════════════════════════════════════════
+//   spatial physicist block readers (re-expressed for the (T) contractions)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// The (T) kernel needs three chemists' integral classes, each mapped to an EXISTING
+// CCRhfInts physicist block (built once by ccrhf_build_ints — d19 reuse, nothing new):
+//   (ia|fb)_chem = ⟨if|ab⟩_phys  → ovvv block at (i,f,a,b)
+//   (ia|jm)_chem = ⟨ji|ma⟩_phys  → ooov block at (j,i,m,a)
+//   (ia|jb)_chem = ⟨ij|ab⟩_phys  → oovv block at (i,j,a,b)
+// These re-use ccsd_rhf's flat layout directly (no re-marshal): I.ovvv / I.ooov / I.oovv.
+
+fn _t_ovvv(I: CCRhfInts, i: int, f: int, a: int, b: int) -> float {
+    return I.ovvv[((i * I.nv + f) * I.nv + a) * I.nv + b]   // ⟨if|ab⟩
+}
+fn _t_ooov(I: CCRhfInts, j: int, i: int, m: int, a: int) -> float {
+    return I.ooov[((j * I.no + i) * I.no + m) * I.nv + a]   // ⟨ji|ma⟩
+}
+fn _t_oovv(I: CCRhfInts, i: int, j: int, a: int, b: int) -> float {
+    return I.oovv[((i * I.no + j) * I.nv + a) * I.nv + b]   // ⟨ij|ab⟩
+}
+
+// t2 flat read (oovv layout, no²nv²): t_ij^ab.
+fn _t2r(t2: [float], no: int, nv: int, i: int, j: int, a: int, b: int) -> float {
+    return t2[((i * no + j) * nv + a) * nv + b]
+}
+fn _t1r(t1: [float], nv: int, i: int, a: int) -> float { return t1[i * nv + a] }
+
+// ════════════════════════════════════════════════════════════════════════════
+//   W (connected) / V (disconnected) triples for one (a,b,c), as no³ blocks
+// ════════════════════════════════════════════════════════════════════════════
+//
+//   W_abc[i,j,k] = Σ_f ⟨if|ab⟩ t_kj^cf  −  Σ_m ⟨ji|ma⟩ t_mk^bc
+// Returned flat as [(i*no+j)*no+k]. (PySCF get_w, spatial physicist blocks.)
+fn _get_w(I: CCRhfInts, t2: [float], no: int, nv: int, a: int, b: int, c: int) -> [float] {
+    let mut w: [float] = []
+    let mut i = 0
+    while i < no {
+        let mut j = 0
+        while j < no {
+            let mut k = 0
+            while k < no {
+                let mut v = 0.0
+                let mut f = 0
+                while f < nv { v = v + _t_ovvv(I,i,f,a,b) * _t2r(t2,no,nv,k,j,c,f) ; f = f + 1 }
+                let mut m = 0
+                while m < no { v = v - _t_ooov(I,j,i,m,a) * _t2r(t2,no,nv,m,k,b,c) ; m = m + 1 }
+                w.push(v)
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return w
+}
+
+//   V_abc[i,j,k] = ⟨ij|ab⟩ t_k^c    (the canonical-RHF f_vo·t2 term ≡ 0)
+fn _get_v(I: CCRhfInts, t1: [float], no: int, nv: int, a: int, b: int, c: int) -> [float] {
+    let mut v: [float] = []
+    let mut i = 0
+    while i < no {
+        let mut j = 0
+        while j < no {
+            let mut k = 0
+            while k < no { v.push(_t_oovv(I,i,j,a,b) * _t1r(t1,nv,k,c)) ; k = k + 1 }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return v
+}
+
+// r3(w)[i,j,k] = 4 w[i,j,k] + w[j,k,i] + w[k,i,j] − 2 w[k,j,i] − 2 w[i,k,j] − 2 w[j,i,k]
+// (the PySCF spin-adaptation operator: 4w + w.T(1,2,0) + w.T(2,0,1) − 2 w.T(2,1,0)
+//  − 2 w.T(0,2,1) − 2 w.T(1,0,2); transpose(p,q,r) takes axis order so element
+//  [i,j,k] of w.T(1,2,0) is w[k,i,j], of w.T(2,0,1) is w[j,k,i], etc.)
+fn _w_at(w: [float], no: int, i: int, j: int, k: int) -> float { return w[(i * no + j) * no + k] }
+fn _r3(w: [float], no: int) -> [float] {
+    let mut out: [float] = []
+    let mut i = 0
+    while i < no {
+        let mut j = 0
+        while j < no {
+            let mut k = 0
+            while k < no {
+                let v = 4.0 * _w_at(w,no,i,j,k) + _w_at(w,no,j,k,i) + _w_at(w,no,k,i,j) - 2.0 * _w_at(w,no,k,j,i) - 2.0 * _w_at(w,no,i,k,j) - 2.0 * _w_at(w,no,j,i,k)
+                out.push(v)
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Σ_ijk w[perm(i,j,k)] · z[i,j,k]. perm selects which axis-permutation of w pairs with z
+// (the PySCF einsum subscripts 'ijk','ikj','jik','jki','kij','kji' against fixed z[ijk]).
+fn _contract(w: [float], z: [float], no: int, perm: int) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < no {
+        let mut j = 0
+        while j < no {
+            let mut k = 0
+            while k < no {
+                let zv = z[(i * no + j) * no + k]
+                let mut wv = 0.0
+                if perm == 0 { wv = _w_at(w,no,i,j,k) }      // ijk
+                if perm == 1 { wv = _w_at(w,no,i,k,j) }      // ikj
+                if perm == 2 { wv = _w_at(w,no,j,i,k) }      // jik
+                if perm == 3 { wv = _w_at(w,no,j,k,i) }      // jki
+                if perm == 4 { wv = _w_at(w,no,k,i,j) }      // kij
+                if perm == 5 { wv = _w_at(w,no,k,j,i) }      // kji
+                s = s + wv * zv
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return s
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   E_(T) — spin-adapted closed-shell perturbative triples correction
+// ════════════════════════════════════════════════════════════════════════════
+//
+// The PySCF a≥b≥c loop: for each ordered virtual triple, build the 6 W- and 6 V-
+// permutations, form z for each, and accumulate the 36-term permutation contraction
+// (6 z-blocks × 6 w-permutation pairings, the einsum table verbatim). ×2 at the end.
+pub fn ccrhf_t_energy(I: CCRhfInts, t1: [float], t2: [float], eps: [float]) -> float {
+    let no = I.no
+    let nv = I.nv
+    let mut et = 0.0
+    let mut a = 0
+    while a < nv {
+        let mut b = 0
+        while b <= a {
+            let mut c = 0
+            while c <= b {
+                let da = eps[no + a] + eps[no + b] + eps[no + c]
+                // degeneracy factor folds into D (PySCF: d3 *= 6 / *= 2)
+                let mut deg = 1.0
+                if a == c { deg = 6.0 } else { if a == b || b == c { deg = 2.0 } }
+                // build the 6 W and 6 V permutations
+                let wabc = _get_w(I,t2,no,nv,a,b,c)
+                let wacb = _get_w(I,t2,no,nv,a,c,b)
+                let wbac = _get_w(I,t2,no,nv,b,a,c)
+                let wbca = _get_w(I,t2,no,nv,b,c,a)
+                let wcab = _get_w(I,t2,no,nv,c,a,b)
+                let wcba = _get_w(I,t2,no,nv,c,b,a)
+                let vabc = _get_v(I,t1,no,nv,a,b,c)
+                let vacb = _get_v(I,t1,no,nv,a,c,b)
+                let vbac = _get_v(I,t1,no,nv,b,a,c)
+                let vbca = _get_v(I,t1,no,nv,b,c,a)
+                let vcab = _get_v(I,t1,no,nv,c,a,b)
+                let vcba = _get_v(I,t1,no,nv,c,b,a)
+                // D denominator: D_ijk = (ε_i+ε_j+ε_k − ε_a−ε_b−ε_c) × deg (PySCF d3 *= deg).
+                let zabc = _make_z_deg(wabc, vabc, eps, no, da, deg)
+                let zacb = _make_z_deg(wacb, vacb, eps, no, da, deg)
+                let zbac = _make_z_deg(wbac, vbac, eps, no, da, deg)
+                let zbca = _make_z_deg(wbca, vbca, eps, no, da, deg)
+                let zcab = _make_z_deg(wcab, vcab, eps, no, da, deg)
+                let zcba = _make_z_deg(wcba, vcba, eps, no, da, deg)
+                // 36-term permutation contraction (PySCF einsum table verbatim)
+                et = et + _contract(wabc,zabc,no,0) + _contract(wacb,zabc,no,1) + _contract(wbac,zabc,no,2) + _contract(wbca,zabc,no,3) + _contract(wcab,zabc,no,4) + _contract(wcba,zabc,no,5)
+                et = et + _contract(wacb,zacb,no,0) + _contract(wabc,zacb,no,1) + _contract(wcab,zacb,no,2) + _contract(wcba,zacb,no,3) + _contract(wbac,zacb,no,4) + _contract(wbca,zacb,no,5)
+                et = et + _contract(wbac,zbac,no,0) + _contract(wbca,zbac,no,1) + _contract(wabc,zbac,no,2) + _contract(wacb,zbac,no,3) + _contract(wcba,zbac,no,4) + _contract(wcab,zbac,no,5)
+                et = et + _contract(wbca,zbca,no,0) + _contract(wbac,zbca,no,1) + _contract(wcba,zbca,no,2) + _contract(wcab,zbca,no,3) + _contract(wabc,zbca,no,4) + _contract(wacb,zbca,no,5)
+                et = et + _contract(wcab,zcab,no,0) + _contract(wcba,zcab,no,1) + _contract(wacb,zcab,no,2) + _contract(wabc,zcab,no,3) + _contract(wbca,zcab,no,4) + _contract(wbac,zcab,no,5)
+                et = et + _contract(wcba,zcba,no,0) + _contract(wcab,zcba,no,1) + _contract(wbca,zcba,no,2) + _contract(wbac,zcba,no,3) + _contract(wacb,zcba,no,4) + _contract(wabc,zcba,no,5)
+                c = c + 1
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return et * 2.0
+}
+
+// z with the a≥b≥c degeneracy factor folded into D: z = r3(W+½V) / ((eijk − da)·deg).
+fn _make_z_deg(w: [float], v: [float], eps: [float], no: int, da: float, deg: float) -> [float] {
+    let mut wv: [float] = []
+    let mut t = 0
+    let n3 = no * no * no
+    while t < n3 { wv.push(w[t] + 0.5 * v[t]) ; t = t + 1 }
+    let r = _r3(wv, no)
+    let mut z: [float] = []
+    let mut i = 0
+    while i < no {
+        let mut j = 0
+        while j < no {
+            let mut k = 0
+            while k < no {
+                let d = (eps[i] + eps[j] + eps[k] - da) * deg
+                z.push(r[(i * no + j) * no + k] / d)
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return z
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   driver — chemists' MO-ERI tensor + ε + n_occ → full spatial CCSD(T)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Re-run the r21 spatial CCSD to convergence, then add the spatial (T) correction.
+// Returns [ e_ccsd, e_t, e_ccsd_t, iters, residual, converged ] — same shape as the
+// r18 spin-orbital ccsd_t_from_mo_eri (drop-in comparable), e_ccsd_t = e_ccsd + e_t.
+pub fn ccrhf_t_from_mo_eri(
+    eri_mo: [float], eps: [float], n: int, n_occ: int,
+    max_iter: int, e_tol: float
+) -> [any] {
+    let I = ccrhf_build_ints(eri_mo, n, n_occ)
+    let nv = I.nv
+    let mut t1: [float] = []
+    let mut z = 0
+    while z < n_occ * nv { t1.push(0.0) ; z = z + 1 }
+    let mut t2 = ccrhf_mp2_guess(I, eps, n_occ)
+    let mut e_old = ccrhf_energy(I, t1, t2)
+    let mut iters = 0
+    let mut residual = 1.0
+    let mut converged = false
+    while iters < max_iter {
+        let res = ccrhf_iterate(I, eps, t1, t2)
+        let t1new: [float] = res[0]
+        let t2new: [float] = res[1]
+        residual = ccrhf_t2_rmsd(t2new, t2)
+        t1 = t1new
+        t2 = t2new
+        let e_new = ccrhf_energy(I, t1, t2)
+        iters = iters + 1
+        let de = e_new - e_old
+        let ade = if de < 0.0 { 0.0 - de } else { de }
+        e_old = e_new
+        if ade < e_tol && residual < e_tol { converged = true ; break }
+    }
+    let e_ccsd = ccrhf_energy(I, t1, t2)
+    let e_t = ccrhf_t_energy(I, t1, t2, eps)
+    let e_ccsd_t = e_ccsd + e_t
+    return [e_ccsd, e_t, e_ccsd_t, iters, residual, converged]
+}
