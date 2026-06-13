@@ -1,0 +1,39 @@
+DEPLOYED `hexa run` RESIDUAL — INSTALL-RESOLUTION, NOT A SOURCE BUG (terminal diagnosis)
+=======================================================================================
+context: after the self-host byte-eq fixpoint was reached + the runtime-regen rot
+         closed (PR #3319), `hexa run` end-to-end still exhibits OP-124 (multi-line
+         `-` continuation) and OP-145 (immutable-let loop) on the deployed mini CLI.
+host   : mini darwin-arm64, 0-pod local, HEAD post-#3319.
+
+GROUND TRUTH — the SOURCE + self-host compiler are CORRECT (proven, verbatim):
+  - self/parser.hexa:3377 HAS the #1747 fix: p_continue_bin_op(["Plus", "Minus"]).
+  - NATIVE path  : gen3 --emit=obj op124 -> hexa_ld -> run  =>  prints 9  (CORRECT).
+  - C-transpile  : build/hexat (fresh, regen'd hexa_cc.c) transpile op124 -> 9 (CORRECT).
+  - even the prior build/hexat transpiles op124 -> 9.
+  => no source/compiler bug. the byte-eq fixpoint compiler is right.
+
+THE RESIDUAL = a DEPLOYMENT / install-resolution tangle in ~/.hx:
+  - `hexa` -> hexa.real -> hx-selfhost-cli -> DELEGATE (non--emit) to
+    hexa.real.pre-selfhost.<ts> (a 2.1MB self-contained binary with EMBEDDED
+    pre-#2650 codegen — HX1102/HX1103 strings). gen3 serves --emit ONLY.
+  - the deployed run-path resolves a STALE transpiler/parser from MULTIPLE ~/.hx
+    install copies: ~/.hx/src/self/native/hexa_cc.c (1925245B, pre-#1747),
+    ~/.hx/packages/hexa/{build/hexat,self/native/hexa_cc.c}, ~/.hx/bin/build/hexat.
+  - a freshly-built dispatch (stage_build_hexa, current source) ALSO printed 1 —
+    its run-path resolves the same stale ~/.hx transpiler, not the local fresh one.
+  => single-file local swaps each hit a resolution mismatch at the next layer.
+
+RESOLUTION (the clean fix — NOT local hand-patching):
+  re-run the install/release pipeline (install.sh from a freshly-built release, or
+  `promote_selfhost.sh` + a dispatch-binary refresh) so ALL ~/.hx copies
+  (dispatch binary + src/ + packages/ transpiler + build/hexat) are refreshed
+  ATOMICALLY from current source. This is OP-126 option A at install granularity.
+
+WHAT LANDED THIS CAMPAIGN (banked):
+  - #3319: build_selfhost.sh forces runtime_core.c regen -> from-scratch byte-eq
+    fixpoint reproducible from main (sha 30939fe6, SELF-HOST GRADUATION).
+  - tier1 install: gen3 slot refreshed -> `hexa --emit` uses the fresh fixpoint gen3.
+  - ~/.hx default toolchain otherwise UNCHANGED; --revert available.
+
+STATUS: 🟠 DEPLOYED-RUN residual = install-pipeline scope (release/build-host).
+        🟢 SOURCE + self-host fixpoint = CORRECT + MERGED. Local completeness exhausted.
