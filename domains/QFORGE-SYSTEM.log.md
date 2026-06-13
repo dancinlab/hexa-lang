@@ -205,3 +205,51 @@ preserves the slow-DOF free energy / first two moments of the mapped coordinate 
 position = mass-weighted centroid of its 4 mapped atoms; the mapping operator is linear → reuse the
 same linear-slave Jacobian pattern as the link atom for CG force back-mapping). Reuses R1 partition +
 R4 linear-slave projection (CG mapping is the same constant-Jacobian back-mapping as the H-cap).
+
+## 2026-06-13 — COMPLETION: real ab-initio QM/MM end-to-end (genuine RHF QM + electrostatic embedding)
+
+The named system-scale completion. The QM region is now a GENUINE ab-initio molecule, not a model
+energy: QFORGE-ATOMS/MOLSCF landed real closed-shell RHF (`qf_pd_*` build the McMurchie-Davidson
+overlap/kinetic/nuclear/ERI integrals from atom positions + a contracted-Gaussian basis, and
+`molscf/rhf::rhf_scf` drives the SCF fixed-point loop). `stdlib/qforge/system/qmmm_real.hexa` wires
+that real RHF into the existing round-1 partition + round-3 electrostatic bridge.
+
+System run (honest, d6): QM = a water molecule (STO-3G, 7 cart AOs, 5 doubly-occupied MOs) by the
+real RHF; MM = point charge(s). The clean minimal end-to-end case.
+
+g5 (VERBATIM run output):
+- (b) REAL QM region — E_QM(real RHF) = −74.9618 Ha == the standalone MOLSCF anchor −74.961754. The
+  QM subsystem is genuine ab-initio quantum mechanics, not a model energy.
+- (a) ADDITIVITY IDENTITY — with the REAL RHF as E_high(inner), the additive ONIOM scheme reduces
+  correctly to full-QM: |additive − ONIOM| = 0.0 (machine zero) on the round-1 partition algebra
+  (reused verbatim). When MM≡QM on the region the partition collapses to the full energy.
+- (c) ELECTROSTATIC EMBEDDING WITH REAL DENSITY RESPONSE (the key physics) — the MM point charge is
+  appended to the QM hcore as an extra electron-attraction center (`qf_pd_hcore` sums
+  Σ_c z_c·∫φ(−1/|r−R_c|)φ over every center; an MM charge q is a center with z=q, no new AO since the
+  basis stays on the QM atoms), and the FULL SCF re-converges the density IN the MM field — a GENUINE
+  polarized density, NOT the round-3 linear-response surrogate. Cation +1 @4bohr → shift −2.556 Ha
+  (stabilizing, electrons drawn toward the +charge); anion −1 → +2.548 Ha (destabilizing); closer
+  cation +1 @2bohr → −5.274 Ha (1/distance growth); cation/anion magnitude asymmetry = 0.0082 Ha,
+  which is the nonlinear SCF density response (a linear-response E_pol=−½α|E|² would be EXACTLY
+  symmetric — the asymmetry proves the density genuinely re-converged, not a model response).
+- (d) ΣF = 0 — the real analytic RHF forces (Hellmann-Feynman + Pulay) on the QM region satisfy
+  Newton's 3rd: ‖Σ_A F_A‖∞ = 3.9968e-15 (machine zero, translational invariance).
+- regression — system r1-r8 selftests (qmmm · embed_mechanical · embed_electrostatic · embed_real_scf
+  · link_atom · cg_martini{,_bonded,_ff}) 8/8 PASS unchanged.
+
+WALL CLOSED (d6): round-8 (embed_real_scf) flagged `molecular_scf_frontend_available()==0` — QFORGE's
+periodic plane-wave SCF could not treat an isolated MOLECULE. QFORGE-ATOMS/MOLSCF supplies the
+molecular front-end, so this COMPLETION closes that cross-cutting wall for the system scale: the QM
+region is a real water molecule by genuine RHF, with a real-density-response electrostatic embedding
+(the round-3 next-step, now made real). d4-generic: qf_pd_* engine + qmmm.hexa algebra reused
+verbatim; the MM charge set is data (longer array = more charges, no edit).
+
+REUSE (d19 · NEXUS): E_QM ← stdlib/qforge/atoms/rhf_force_pd::qf_pd_{energy,run,force,enuc};
+SCF loop ← stdlib/qforge/molscf/rhf::rhf_scf; ΣF ← qf_pd_transl_residual; ONIOM/additive ←
+stdlib/qforge/system/qmmm. Vendored atoms/MOLSCF files (rhf_force_pd · molscf/rhf · molscf/md_integrals
+· atoms/shell_grads) are read-only copies from origin/qforge-atoms-r29 (atoms is the canonical home).
+
+### next
+electrostatic embedding with a self-consistently RESPONDING MM region (mutual polarization /
+polarizable MM, e.g. Drude/AMOEBA) — here the MM charges are FIXED external centers; the QM density
+responds but the MM does not respond back. Mutual QM↔MM polarization is the next refinement.

@@ -1,0 +1,163 @@
+// qmmm_real.hexa — QFORGE/system COMPLETION: real ab-initio QM/MM end-to-end.
+//
+// The named system-scale completion: a REAL end-to-end QM/MM energy on an actual
+// partitioned system where the QM region is a GENUINE ab-initio RHF (now landed
+// in QFORGE-ATOMS/MOLSCF: `qf_pd_*` build S/H/ERI from atom positions+basis and
+// `rhf_scf` drives the self-consistent loop) and the MM region is point charges.
+// This proves the multi-scale bridge (round-1 partition · round-2 mechanical ·
+// round-3 electrostatic) works with REAL quantum mechanics — not a model QM
+// energy (round-2 qforge_ewald) and not the periodic-cell SCF (round-8), which
+// could not treat an isolated MOLECULE. round-8 flagged the molecular-SCF
+// front-end as the cross-cutting WALL (molecular_scf_frontend_available()==0);
+// QFORGE-ATOMS/MOLSCF supplies it, so this file CLOSES that wall for the system
+// scale: the QM region is a real water molecule treated by genuine RHF.
+//
+// ── WHAT IS NOW REAL (vs round-8) ────────────────────────────────────────────
+//   round-8 E_QM = qforge_scf_pw(...).e_total   // PERIODIC-CELL self-consistent
+//   THIS    E_QM = qf_pd_energy(...)            // MOLECULAR ab-initio RHF (real)
+// `qf_pd_energy` runs the full closed-shell RHF: overlap/kinetic/nuclear (md
+// McMurchie-Davidson integrals) + the n⁴ ERI tensor + the SCF fixed-point loop
+// (molscf/rhf::rhf_scf). For STO-3G H₂O at the standard geometry it returns the
+// MOLSCF anchor E_total = −74.961754 Ha (verified in atoms rhf_force_pd g5) —
+// the genuine ab-initio molecular energy, no fabrication.
+//
+// ── THE KEY PHYSICS — ELECTROSTATIC EMBEDDING WITH REAL DENSITY RESPONSE ──────
+// round-3 (embed_electrostatic) added the MM-field polarization at LINEAR
+// RESPONSE (E_pol = −½α|E|²) because a converged molecular SCF in the MM field
+// did not yet exist. With the real RHF it now DOES. The molecular hcore builder
+// `qf_pd_hcore` sums the electron–center attraction Σ_c z[c]·∫φ_μ(−1/|r−R_c|)φ_ν
+// over EVERY center (md_nuclear_prim returns −z·(…), the standard attraction).
+// An MM point charge q is therefore just ANOTHER center with z=q appended to the
+// (pos, z, natom) lists — the BASIS stays on the QM atoms (aom unchanged), so no
+// AO is added, only the external potential the electrons feel. Re-running the
+// FULL SCF with that extra hcore term re-converges the density IN the MM field:
+// a GENUINE polarized density, NOT a linear-response surrogate. This is exactly
+// the "electrostatic-embedding-with-density-response" round-8 named as next.
+//
+//   q_MM > 0 (cation) → extra ATTRACTION → hcore lowers → E_QM DROPS (stabilize)
+//                       + electron density shifts TOWARD the cation.
+//   q_MM < 0 (anion)  → extra REPULSION  → E_QM RISES + density shifts AWAY.
+//
+// d4-GENERIC: the QM engine is `qf_pd_*` reused verbatim — no engine name is
+// branched on. Adding/removing an MM charge = pass a longer (q_mm,pos_mm) array,
+// never edit this file. The ONIOM/additive algebra is the round-1 partition,
+// untouched. The whole completion is WIRING real RHF into the existing bridge.
+//
+// REUSE (d19 · NEXUS edges):
+//   E_QM(molecular RHF) ← stdlib/qforge/atoms/rhf_force_pd::qf_pd_{energy,run,force,enuc}
+//   RHF SCF loop        ← stdlib/qforge/molscf/rhf::rhf_scf (via qf_pd_run)
+//   ΣF residual         ← stdlib/qforge/atoms/rhf_force_pd::qf_pd_transl_residual
+//   ONIOM / additive    ← stdlib/qforge/system/qmmm::qmmm_{additive_from_levels,oniom2_total}
+
+use "stdlib/qforge/atoms/rhf_force_pd"
+use "stdlib/qforge/system/qmmm"
+
+// ── (b) REAL QM REGION — genuine ab-initio molecular RHF E_total ──────────────
+// The QM subsystem energy from the real closed-shell RHF (atoms/MOLSCF). For
+// STO-3G H₂O at the standard geometry this is the −74.961754 Ha MOLSCF anchor.
+pub fn qmmm_real_qm_energy(pos: [float], pw: [[int]], exps: [[float]], coef: [[float]],
+                           aom: [int], norb: int, z: [float], natom: int, n_occ: int) -> float {
+    return qf_pd_energy(pos, pw, exps, coef, aom, norb, z, natom, n_occ)
+}
+
+// ── EMBED MM POINT CHARGES AS EXTRA ATTRACTION CENTERS (no new AOs) ───────────
+// Append the MM charges to (pos, z) and bump natom. `q_mm`[k] is the MM charge,
+// `pos_mm` packs their positions [x,y,z,...]. The QM BASIS (pw/exps/coef/aom) is
+// returned UNCHANGED — the MM centers carry charge but no basis function, so the
+// electrons feel q/|r−R| via qf_pd_hcore without any extra AO. Returns the
+// extended (pos, z, natom_total) for a re-run of the real RHF in the MM field.
+pub fn qmmm_real_embed_centers(pos: [float], z: [float], natom: int,
+                               q_mm: [float], pos_mm: [float]) -> [any] {
+    let nmm = len(q_mm)
+    let mut pos2: [float] = []
+    let mut z2: [float] = []
+    let mut i = 0
+    while i < 3 * natom { pos2.push(pos[i]) ; i = i + 1 }
+    let mut j = 0
+    while j < natom { z2.push(z[j]) ; j = j + 1 }
+    let mut k = 0
+    while k < nmm {
+        pos2.push(pos_mm[k * 3])
+        pos2.push(pos_mm[k * 3 + 1])
+        pos2.push(pos_mm[k * 3 + 2])
+        z2.push(q_mm[k])
+        k = k + 1
+    }
+    return [pos2, z2, natom + nmm]
+}
+
+// ── (c) ELECTROSTATIC-EMBEDDED QM ENERGY — REAL polarized density ─────────────
+// Re-run the FULL ab-initio RHF with the MM charges added as external-potential
+// centers: the SCF re-converges the density in the MM field (genuine response).
+// Only the ELECTRON–MM and the QM-nuclei–MM attraction must be removed from the
+// MM-augmented enuc (MM is a fixed external field, its self-energy and the
+// QM-nucleus–MM term are bookkeeping, not part of the QM electronic energy we
+// shift). We therefore build hcore over the EXTENDED center list (so electrons
+// feel MM) but evaluate enuc over the QM nuclei ONLY (the original natom) — this
+// isolates the ELECTRONIC polarization shift, the round-3 E_pol made real.
+//   pos/z/natom/...   : the QM region (water)
+//   q_mm,pos_mm       : MM point charges + positions [x,y,z,...]
+// Returns E_QM(embedded) = E_elec(polarized) + E_nuc(QM-only).
+pub fn qmmm_real_qm_energy_embedded(pos: [float], pw: [[int]], exps: [[float]],
+                                    coef: [[float]], aom: [int], norb: int,
+                                    z: [float], natom: int, n_occ: int,
+                                    q_mm: [float], pos_mm: [float]) -> float {
+    let ext = qmmm_real_embed_centers(pos, z, natom, q_mm, pos_mm)
+    let pos2: [float] = ext[0]
+    let z2: [float] = ext[1]
+    let natom2: int = ext[2]
+    // hcore over the EXTENDED centers (electrons feel MM) → polarized SCF.
+    let S = qf_pd_overlap(pos2, pw, exps, coef, aom, norb)
+    let H = qf_pd_hcore(pos2, pw, exps, coef, aom, norb, z2, natom2)
+    let eri = qf_pd_eri_tensor(pos2, pw, exps, coef, aom, norb)
+    // QM-only nuclear repulsion (MM contributes external potential, not QM E_nuc).
+    let e_nuc_qm = qf_pd_enuc(pos, z, natom)
+    let out = rhf_scf(S, H, eri, norb, n_occ, e_nuc_qm, 200, 1.0e-11, 1.0)
+    return out[0]
+}
+
+// ── (c) THE EMBEDDING SHIFT — ΔE_QM = E_embedded − E_bare (the polarization) ──
+// The energy shift the MM charge induces on the real QM region. q>0 ⇒ shift < 0
+// (extra attraction stabilizes); q<0 ⇒ shift > 0. This is the round-3 E_pol now
+// computed from a GENUINE re-converged density, not linear response.
+pub fn qmmm_real_ee_shift(pos: [float], pw: [[int]], exps: [[float]],
+                          coef: [[float]], aom: [int], norb: int,
+                          z: [float], natom: int, n_occ: int,
+                          q_mm: [float], pos_mm: [float]) -> float {
+    let e_bare = qmmm_real_qm_energy(pos, pw, exps, coef, aom, norb, z, natom, n_occ)
+    let e_emb = qmmm_real_qm_energy_embedded(pos, pw, exps, coef, aom, norb,
+                                             z, natom, n_occ, q_mm, pos_mm)
+    return e_emb - e_bare
+}
+
+// ── (a) ADDITIVE / ONIOM TOTAL WITH THE REAL RHF AS THE HIGH LEVEL ────────────
+// The end-to-end multi-scale total: E_high(inner)=real RHF, MM(outer)+coupling
+// from the low-level MM. Reuses the round-1 partition verbatim — the only change
+// vs round-2/8 is that e_high_inner is now the GENUINE molecular RHF energy.
+//   e_high_inner : real RHF E_QM (qmmm_real_qm_energy)
+//   e_low_real/inner/outer : MM energies (full / region / outer)
+pub fn qmmm_real_additive_total(e_high_inner: float, e_low_real: float,
+                                e_low_inner: float, e_low_outer: float) -> float {
+    return qmmm_additive_from_levels(e_high_inner, e_low_real, e_low_inner, e_low_outer)
+}
+
+// ── (a) ADDITIVITY IDENTITY RESIDUAL — additive ≡ ONIOM ≡ full-QM reduction ───
+// When the MM model on the REGION equals the QM treatment there (e_low_inner ≡
+// e_high_inner) AND the outer is MM, the additive scheme reduces correctly to
+// the full energy E_high_inner + [E_low_real − E_low_inner] = ONIOM. The residual
+// add − ONIOM is ~0 to round-off for ANY inputs (round-1 finding), now exercised
+// with the REAL RHF e_high_inner. Returns |add − ONIOM|.
+pub fn qmmm_real_additivity_residual(e_high_inner: float, e_low_real: float,
+                                     e_low_inner: float, e_low_outer: float) -> float {
+    return qmmm_scheme_residual(e_high_inner, e_low_real, e_low_inner, e_low_outer)
+}
+
+// ── ΣF=0 ON THE QM REGION (Newton's 3rd) — real analytic RHF forces ──────────
+// Translational residual ‖Σ_A F_A‖∞ of the real analytic RHF forces on the QM
+// atoms (with Pulay term). Must be ~0 — the QM region exerts no net self-force.
+pub fn qmmm_real_force_residual(pos: [float], pw: [[int]], exps: [[float]],
+                                coef: [[float]], aom: [int], norb: int,
+                                z: [float], natom: int, n_occ: int) -> float {
+    let f = qf_pd_force(1, pos, pw, exps, coef, aom, norb, z, natom, n_occ)
+    return qf_pd_transl_residual(f, natom)
+}

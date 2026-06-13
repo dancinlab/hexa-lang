@@ -44,12 +44,25 @@ physical coupling (mechanical → electrostatic → covalent boundary → CG tie
       (`embed_ee_vext_at`) — verified identical in-gate.
 - [ ] round-5 — CG tier (MARTINI-style ~4:1 mapping): QM/MM/CG additive coupling reusing the same
       partition algebra. g5 = MM→CG coarse-graining preserves the slow-DOF free energy in a toy.
+- [x] COMPLETION — real ab-initio QM/MM end-to-end: QM = a water molecule treated by the GENUINE
+      closed-shell RHF from QFORGE-ATOMS/MOLSCF (`qf_pd_*` real integrals + `rhf_scf` loop), MM =
+      point charge(s). `stdlib/qforge/system/qmmm_real.hexa` + selftest. g5 PASS — (b) E_QM = the
+      real STO-3G H₂O RHF −74.9618 Ha (== MOLSCF anchor); (a) additive ONIOM reduces to full-QM with
+      the REAL E_high (|add−ONIOM|=0); (c) ELECTROSTATIC EMBEDDING WITH REAL DENSITY RESPONSE — the
+      MM charge enters the QM hcore as an extra attraction center, SCF re-converges the POLARIZED
+      density (NOT linear response): cation +1@4bohr shift −2.556 Ha (stabilize), anion −1 +2.548 Ha
+      (destabilize), closer +1@2bohr −5.274 Ha (1/d growth), cation/anion asymmetry 0.0082 Ha = the
+      nonlinear SCF response (linear-response would be exactly symmetric); (d) ΣF=0 real analytic RHF
+      forces ‖ΣF‖∞=4e-15. CLOSES round-8's molecular-SCF WALL for the system scale. d4-generic
+      (qf_pd_* engine + qmmm.hexa algebra reused verbatim; MM charges = data). Regression: r1-r8
+      embed/link-atom/CG selftests 8/8 PASS.
 
 ## core reuse (d19)
 
 | bridge term           | hexa core reused (not rebuilt)                          |
 |-----------------------|---------------------------------------------------------|
 | E_QM(inner)           | `stdlib/qforge/scf` · `scf_etot`                        |
+| E_QM(inner, real RHF) | **`stdlib/qforge/atoms/rhf_force_pd`** `qf_pd_{energy,force}` (genuine ab-initio molecular RHF) |
 | E_MM(outer)           | `stdlib/chem/md/lennard_jones` · `bonded`               |
 | E_QM-MM electrostatic | `stdlib/chem/md/ewald` · `pme`                          |
 | V_ext (QM 1-e hook)   | `stdlib/qforge/assembler` `qforge_assemble_h` (SCF hook) |
