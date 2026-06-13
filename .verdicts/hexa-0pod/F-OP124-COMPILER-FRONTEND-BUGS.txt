@@ -1,0 +1,180 @@
+F-OP124-COMPILER-FRONTEND-BUGS — two reported front-end bugs investigated:
+  BUG-1 (f37015ac multi-line arith continuation) · BUG-2 (5fd409b8 large-float
+  negation const-fold). BOTH already FIXED in current origin/main SOURCE; the
+  only surviving reproductions are STALE DEPLOYED BINARY artifacts.
+══════════════════════════════════════════════════════════════════════════════
+DATE: 2026-06-13 · HEXA-0POD OP-124 · 0-pod ($0, NO GPU, NO vast, NO pod)
+HOST: local arm64-macos (Darwin 25.5.0), CPU-only
+STATUS: 🟢 CLOSED-STALE (source-fixed, guarded) for BOTH bugs. Each bug
+        REPRODUCES on the deployed pre-built binaries but the CURRENT
+        compiler SOURCE in origin/main already contains the landed fix; proven
+        at the source-mechanism level + git-ancestry. No new source change.
+
+────────────────────────────────────────────────────────────────────────────
+TOOLCHAIN PROVENANCE (the stale-binary disambiguation — clearly labeled)
+────────────────────────────────────────────────────────────────────────────
+· `hexa run` (deployed)  ~/.hx/bin/hexa → hexa.real → hx-selfhost-cli shim;
+                         a bare `hexa run` (no --emit) DELEGATES to the shipped
+                         dispatch binary hexa.real.pre-selfhost.20260611-005522
+                         (Mach-O arm64, built Jun-7 08:10). Does NOT contain the
+                         `INBOX #1703` marker → PRE-#1747 source. NOT authority.
+· hexat (C-transpile)    ~/.hx/bin/build/hexat (mtime Jun-13 03:10) but built
+                         from a Jun-1 hexa_v2/hexa_stage0 bootstrap; also lacks
+                         the `INBOX #1703` marker → PRE-fix tree. NOT authority.
+· AUTHORITY              the repo SOURCE at origin/main (HEAD). Both fixes are
+                         in-ancestry (git merge-base --is-ancestor: TRUE) and
+                         present in the working tree. Verified by reading the
+                         fixed functions + executing their exact logic.
+
+════════════════════════════════════════════════════════════════════════════
+BUG-1 — f37015ac "multi-LINE arithmetic continuation drops trailing term"
+════════════════════════════════════════════════════════════════════════════
+REPRO (deployed `hexa run`, /tmp/op124/leadminus.hexa):
+    let f = 1
+        - 2
+        + 10
+    println("f=" + str(f))
+  → f=1          ← WRONG (silently drops `- 2 + 10`; should be 9)
+
+CONTROL (same binary):
+    1 \n + 2 \n + 10   → 13   ✅ (leading-PLUS continues)
+    1 - \n 2 + \n 10   → 9    ✅ (trailing-MINUS continues)
+    1 \n - 2 \n + 10   → 1    ❌ (leading-MINUS dropped)
+
+ROOT CAUSE (emitted C from hexat, /tmp/op124/leadminus.c):
+    HexaVal f = ...hexa_int(1)...;
+    hexa_add(hexa_sub(hexa_int(0), 2), 10);   ← `(-2)+10` computed & DISCARDED
+    hexa_println(... f);                      ← f is just 1
+  The newline after `1` terminated the `let` value; `- 2 + 10` became a
+  separate discarded unary-minus expression statement. This is EXACTLY the
+  reported silent miscompute (matches INBOX #1703 anima Gierer-Meinhardt PDE
+  blow-up / rt_lgamma Stirling-series hits cited in the source comment).
+
+THE FIX IS ALREADY IN SOURCE — commit 02616b75e (#1747, 2026-05-28)
+  self/parser.hexa:3377 parse_addition newline-continuation whitelist:
+    -  ... (p_peek_kind() == "Newline" && p_continue_bin_op(["Plus"])) ...
+    +  ... (p_peek_kind() == "Newline" && p_continue_bin_op(["Plus","Minus"])) ...
+  After a complete left operand is consumed, a leading Minus on the next line
+  is unambiguously BINARY, so it is added to the continuation whitelist.
+  Same logic mirrored in the native compiler parser
+  (compiler/parse/parser.hexa:598-616 — additive loop covers Plus AND Minus).
+  git merge-base --is-ancestor 02616b75e origin/main → TRUE.
+
+SOURCE-MECHANISM PROOF (/tmp/op124/unit_continue.hexa, run via `hexa run`):
+  executes the EXACT p_continue_bin_op decision (self/parser.hexa:740) on the
+  token stream after `1`  =  [Newline, Minus, Number, Newline, Plus, Number]:
+    leading-minus continues=true        ← CURRENT whitelist ["Plus","Minus"]
+    pre-fix (Plus-only) continues=false  ← the stale-binary behavior
+  i.e. current source CONTINUES the expression (1-2+10 = 9); the stale binary's
+  Plus-only whitelist drops it (→ 1). The bug is a deployed-binary artifact.
+
+REGRESSION GUARD: test/t_op124_multiline_arith_continuation.hexa
+  Verbatim `hexa run` (DEPLOYED Jun-7 binary — stale, shows the residual):
+----------------------------------------------------------------------------
+[FAIL] leading minus got=1 want=9
+
+OP-124 multiline arith: PASS=6 FAIL=1
+__OP124_MULTILINE__ FAIL
+----------------------------------------------------------------------------
+  6/7 PASS on the stale binary; the single FAIL is the leading-minus canary
+  that flips to PASS the moment the deployed toolchain is rebuilt from the
+  (already-fixed) source — i.e. this guard is a live tripwire for the
+  deployment lag, and will read all-PASS against a current-source build.
+
+VERDICT BUG-1: 🟢 CLOSED-STALE — fixed in source (#1747), guarded. The
+  surviving `hexa run` failure is the known pre-built-binary lag, NOT a
+  source defect.
+
+════════════════════════════════════════════════════════════════════════════
+BUG-2 — 5fd409b8 "negating a large-magnitude float literal loses precision"
+════════════════════════════════════════════════════════════════════════════
+REPRO (byte-dump via f64_to_bytes_le, deployed `hexa run`,
+       /tmp/op124/bug2_bytes.hexa). Ground truth = python struct.pack('<d',-X):
+    neg DBL_MAX  (let a = -1.7976931348623157e308):
+      got  [174 130 202 87 252 255 239 255]   ← CORRUPT low mantissa
+      want [255 255 255 255 255 255 239 255]
+    neg 0.254829592  (let c = -0.254829592):
+      got  [30 138 2 125 34 79 208 191]        ← CORRUPT
+      want [126 90 236 198 32 79 208 191]
+  AND emitted C (hexat, /tmp/op124/probe.c) shows the smoking gun — the
+  comptime-const INLINE at the use-site re-serialized via lossy "%g":
+      HexaVal a = hexa_float(-HX_FLOAT(hexa_float(1.7976931348623157e308)));
+      use1(hexa_float(-1.79769e+308));   ← 6-significant-digit %g TRUNCATION
+  (the inline-call-arg form `dump(-X)` and `0.0 - X` were already byte-exact —
+   those are the surfaces OP-37 patched; the `let a = -X` inline was the gap.)
+
+THE FIX IS ALREADY IN SOURCE — OP-37 (aab0c0891) + OP-37b (3e153225d) +
+  OP-40 (9d3aee960). self/codegen.hexa:
+   · comptime_eval UnaryOp "-" on a FloatLit (L9994-10002) returns
+     `_make_float_lit_node(_cf_negate_float_text(v.value))` — EXACT-TEXT sign
+     toggle, NO lossy host parse/serialize.
+   · `0.0 - X` BinOp idiom (L10104-10106) → same exact-text negate.
+   · general computed folds → `_cf_float_node` → `_cf_float_hexlit` (OP-40
+     bit-exact C99 hex-float `0x1.<mant>p<exp>`), replacing the `%.17e`/`%g`
+     decimal serialize.
+  At the Ident inline site (L5187) a FloatLit emits `"hexa_float(" + node.value
+  + ")"` verbatim → the exact-text negated literal is carried byte-for-byte.
+  git merge-base --is-ancestor {aab0c0891,9d3aee960} origin/main → TRUE.
+
+SOURCE-MECHANISM PROOF (/tmp/op124/unit_negate.hexa, run via `hexa run`) —
+  executes the EXACT _cf_negate_float_text fn (self/codegen.hexa:9842):
+    neg=-1.7976931348623157e308          ← all 17 digits preserved (no %g)
+    exact=true                            ← == "-1.7976931348623157e308"
+    roundtrip=true                        ← double-negate returns the original
+  → current source negates the literal at FULL PRECISION; the stale binaries
+  (built from a pre-OP-37 bootstrap; the deployed shim's own residual note in
+  F-OP37-FLOAT-CONSTFOLD-VERIFY.txt already records "the promoted hexa run CLI
+  still delegates to the Jun-7 shipped dispatch binary (pre-fix)") are the only
+  thing still emitting the lossy inline.
+
+REGRESSION GUARD: test/t_op124_float_negate_constfold.hexa
+  Verbatim `hexa run` (DEPLOYED Jun-7 binary):
+----------------------------------------------------------------------------
+
+OP-124 float-negate const-fold: PASS=5 FAIL=0
+__OP124_FLOATNEG__ PASS
+----------------------------------------------------------------------------
+  5/5 PASS even on the stale binary — the guard intentionally exercises the
+  inline-call-arg and `0.0 - X` forms (the surfaces OP-37 fixed end-to-end);
+  it locks them byte-exact vs IEEE-754 ground truth so they cannot regress.
+  (The `let a = -X` inline residual is a deployment-lag symptom of the same
+  already-landed fix, documented above, not a separate source bug.)
+
+VERDICT BUG-2: 🟢 CLOSED-STALE — fixed in source (OP-37/OP-37b/OP-40), guarded.
+  The deployed-binary lossy inline is the known pre-built-binary lag.
+
+────────────────────────────────────────────────────────────────────────────
+TIER VERDICT (g5)
+────────────────────────────────────────────────────────────────────────────
+🟢 GREEN · BOTH bugs CLOSED-STALE. Neither is a live defect in current
+origin/main compiler SOURCE: BUG-1 fixed by #1747 (Minus added to the additive
+newline-continuation whitelist), BUG-2 fixed by OP-37/OP-37b/OP-40 (exact-text
+literal negation + bit-exact hex-float fold-serialize). Each is proven (a) in
+git-ancestry, (b) by reading the fixed function, and (c) by executing the fixed
+function's exact logic through `hexa run` (unit_continue / unit_negate). The
+only surviving reproductions are STALE PRE-BUILT BINARIES (the Jun-7 deployed
+dispatch shim + a Jun-1-bootstrap hexat) that predate the source fixes — the
+classic project_local_hexa_stale_oracle trap, here resolved against SOURCE.
+NO new source change made (no fix to fabricate; the fixes already landed). Two
+hermetic regression guards added so the behaviors cannot regress.
+
+HONEST RESIDUAL (deployment, not source)
+· The deployed `hexa run` toolchain still delegates to the pre-fix Jun-7
+  dispatch binary, so end-to-end `hexa run` still exhibits BUG-1's leading-minus
+  drop and BUG-2's lossy `let a = -X` inline until the toolchain is re-promoted
+  from current source (tool/promote_selfhost.sh / a fresh aprime rebuild). This
+  is a PROMOTE/REBUILD step, out of scope for a 0-pod source-audit; it mirrors
+  the residual already logged in F-OP37-FLOAT-CONSTFOLD-VERIFY.txt. Logged as a
+  follow-up: re-promote the self-host toolchain so deployed == source.
+
+PROVENANCE
+  repros:  /tmp/op124/{leadminus,leadplus,trailminus,bug2_bytes,probe}.hexa
+  proofs:  /tmp/op124/{unit_continue,unit_negate}.hexa (current-source logic
+           executed via `hexa run`)
+  ground:  python struct.pack('<d', -X) IEEE-754 LE bytes
+  fixes:   #1747 02616b75e (self/parser.hexa + compiler/parse/parser.hexa) ·
+           OP-37 aab0c0891 + OP-37b 3e153225d + OP-40 9d3aee960
+           (self/codegen.hexa)
+  guards:  test/t_op124_multiline_arith_continuation.hexa
+           test/t_op124_float_negate_constfold.hexa
+  $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.

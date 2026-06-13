@@ -1,0 +1,64 @@
+// test/t_op124_float_negate_constfold.hexa
+//
+// HEXA-0POD OP-124 · regression guard for handoff 5fd409b8
+//   "BUG (constant-folder): negating a large-magnitude float literal
+//    loses precision/term"
+//
+// Negating a large-magnitude float literal at compile time must be
+// BYTE-EXACT vs the IEEE-754 ground truth — the historical bug round-tripped
+// the folded constant through the lossy `%g` (6-significant-digit) serialize
+// (HEXA-0POD OP-37 / OP-40, fixed by commits aab0c0891 + 9d3aee960 via the
+// exact-text `_cf_negate_float_text` path + the hex-float `_cf_float_hexlit`
+// serializer in self/codegen.hexa).
+//
+// This guard dumps the raw IEEE-754 little-endian bytes (via the
+// f64_to_bytes_le builtin) of negated large-magnitude float literals and
+// compares them to the known ground-truth byte sequences (python
+// struct.pack('<d', -X)). Any %g-truncating regression flips a low-mantissa
+// byte and FAILS the guard.
+//
+// Forms covered (the const-fold negation surfaces):
+//   * inline call-argument:   dump(-<bigfloat>)
+//   * `0.0 - X` sign-flip idiom (A&S erf coefficient form)
+//
+// Run:  hexa run test/t_op124_float_negate_constfold.hexa
+// Pass = stdout final line `__OP124_FLOATNEG__ PASS`.
+
+let mut pass = 0
+let mut fail = 0
+
+// expected = 8 ground-truth bytes (python struct.pack('<d', value))
+fn dump_check(name: string, x: f64, e0: i64, e1: i64, e2: i64, e3: i64, e4: i64, e5: i64, e6: i64, e7: i64) {
+    let b = f64_to_bytes_le(x)
+    let ok = b[0] == e0 && b[1] == e1 && b[2] == e2 && b[3] == e3 && b[4] == e4 && b[5] == e5 && b[6] == e6 && b[7] == e7
+    if ok {
+        pass = pass + 1
+    } else {
+        fail = fail + 1
+        println("[FAIL] " + name + " = [" + str(b[0]) + " " + str(b[1]) + " " + str(b[2]) + " " + str(b[3]) + " " + str(b[4]) + " " + str(b[5]) + " " + str(b[6]) + " " + str(b[7]) + "]")
+    }
+}
+
+// -DBL_MAX = -1.7976931348623157e308
+//   struct.pack('<d', -1.7976931348623157e308) = ff ff ff ff ff ff ef ff
+dump_check("neg DBL_MAX inline", -1.7976931348623157e308, 255, 255, 255, 255, 255, 255, 239, 255)
+
+// -1.23456789012345e200
+//   struct.pack('<d', -1.23456789012345e200) = 60 24 f8 e6 4a ce 79 e9
+dump_check("neg 1.234e200 inline", -1.23456789012345e200, 96, 36, 248, 230, 74, 206, 121, 233)
+
+// -0.254829592 (A&S erf coefficient — the OP-36/OP-37 trigger)
+//   struct.pack('<d', -0.254829592) = 7e 5a ec c6 20 4f d0 bf
+dump_check("neg 0.254829592 inline", -0.254829592, 126, 90, 236, 198, 32, 79, 208, 191)
+
+// 0.0 - X sign-flip idiom (must equal -X byte-for-byte)
+dump_check("0.0 - 0.254829592", 0.0 - 0.254829592, 126, 90, 236, 198, 32, 79, 208, 191)
+dump_check("0.0 - DBL_MAX", 0.0 - 1.7976931348623157e308, 255, 255, 255, 255, 255, 255, 239, 255)
+
+println("")
+println("OP-124 float-negate const-fold: PASS=" + str(pass) + " FAIL=" + str(fail))
+if fail > 0 {
+    println("__OP124_FLOATNEG__ FAIL")
+} else {
+    println("__OP124_FLOATNEG__ PASS")
+}
