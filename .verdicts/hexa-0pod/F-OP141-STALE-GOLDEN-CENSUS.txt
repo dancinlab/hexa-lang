@@ -1,0 +1,160 @@
+════════════════════════════════════════════════════════════════════════════════
+ F-OP141-STALE-GOLDEN-CENSUS — repo-wide census of golden/baseline values that
+ may encode a STALE (lossy) float-derived constant pinned UNDER the pre-float-fix
+ compiler (the OP-138 dt_erf follow-up).
+ HEXA-0POD OP-141 · LANE-1 · 0-GPU · 0-pod · ZERO vast · $0 · local CPU only
+════════════════════════════════════════════════════════════════════════════════
+
+VERDICT (one line)
+  🟢 CONVERGED — erf WAS the only float-derived GATE golden affected, and it is
+  already resolved (OP-138 #3307). Census proves NO other CI gate silently
+  encodes a pre-float-fix lossy value. ONE honest residue found + fixed: a STALE
+  DOCUMENTARY COMMENT in .github/workflows/nobaseline-gate.yml still cited the
+  OLD pre-fix dt_erf goldens (a doc-only artifact of OP-138; not an assertion, no
+  CI-behavior change) — corrected to the OP-138 re-pinned float-fix-correct
+  values for honesty. No masking found. No stale golden re-pin required.
+
+────────────────────────────────────────────────────────────────────────────────
+ 0. WHAT MAKES A GOLDEN A CANDIDATE (the OP-138 signature)
+────────────────────────────────────────────────────────────────────────────────
+  STALE-RISK = a golden that (a) is FLOAT-DERIVED — its value is produced by
+  compile-time float const-folding of 9-10+ significant-digit rationals or
+  transcendentals (NOT pure integers / simple fractions like 0.25/1.0/2.0/12,
+  which serialize bit-identically under either path) — AND (b) was PINNED BEFORE
+  the float-fix commits. Float-fix cutoff (all 2026-06-12):
+    OP-37  #3069 aab0c0891 09:49 — additive-identity idiom exact source text
+    OP-40  #3084 9d3aee960 14:34 — hex-float fold serialize (kills %.17e 1-ULP)
+    OP-42  #3091 0430eba83 15:51 — OP-39 const-fold gate (the regression lock)
+  A golden pinned after ~14:34 on 2026-06-12 captures the FIXED-compiler bits and
+  is CLEAN by construction.
+
+────────────────────────────────────────────────────────────────────────────────
+ 1. CENSUS TABLE — golden → float-derived? → pinned-pre-fix? → status
+────────────────────────────────────────────────────────────────────────────────
+  GATE / GOLDEN SURFACE                       FLOAT-DERIVED  PRE-FIX  STATUS
+  ──────────────────────────────────────────  ─────────────  ───────  ────────────
+  tool/fold_ci_gate.sh  (dt_erf FWD/BWD)       YES (9-10 dig) YES      RESOLVED OP-138
+  tool/fold_ci_gate.sh  (dt_exp CEBWD)         no (0.25/1/2)  YES      CLEAN (unaffected)
+  tool/op39_constfold_gate.sh (18 fold bits)   YES            NO       CLEAN (post-fix tripwire)
+  .github/workflows/nobaseline-gate.yml cmt    YES (doc echo) YES      STALE COMMENT → FIXED
+  fixtures/**/golden_*.json (10 files)         no (int/byte)  —        CLEAN (pure arithmetic)
+  bench/snapshots/*.hexa (4)                   no             —        CLEAN (codegen-shape)
+  *_eq.hexa agreement oracles (op29/33/72/74…) no (delta cmp) —        CLEAN (masking-immune)
+  op19/op19b crossplatform oracles             prints bits    —        CLEAN (no internal golden)
+  determinism_gate.sh / miscompile_zero_gate.sh no (byte cmp) —        CLEAN (identity, no number)
+  flame_steppath_{fma,libm}_gate.sh            no (lexical)   —        CLEAN (grep tripwire)
+  dojo_rent_preflight.sh (2^31 / 3B)           no (int cfg)   —        CLEAN (thresholds)
+  archive/fires/** PTX/CUDA baselines          GPU artifacts  —        OUT-OF-SCOPE (archived)
+
+  Surveyed: ~30 golden/baseline surfaces. Float-derived GATE goldens: 2
+  (fold_ci_gate.sh, op39_constfold_gate.sh). Stale (pre-fix + float-derived):
+  1 gate (fold_ci_gate.sh) — ALREADY RESOLVED by OP-138. New stale-doc residue:
+  1 (workflow comment) — fixed here. Net stale golden re-pins required: 0.
+
+────────────────────────────────────────────────────────────────────────────────
+ 2. WHY EACH NON-erf FLOAT SURFACE IS NOT STALE (the discriminating proofs)
+────────────────────────────────────────────────────────────────────────────────
+  (a) tool/op39_constfold_gate.sh — CLEAN BY CONSTRUCTION. It is the regression
+      tripwire CREATED by OP-39/OP-42 (#3091, 2026-06-12 15:51) AFTER the fix.
+      Its goldens ARE the fixed-compiler output: the NEG/SUB/ADD0 idioms are
+      python struct.pack('<d',...) ground truth (byte-exact), the MUL_HF* are the
+      hex-float-serialized correctly-rounded products (the very path OP-40 fixed).
+      It cannot be stale — it asserts the post-fix invariant; a regression to the
+      OLD %g/%.17e serialize is what it CATCHES.
+
+  (b) dt_exp (GOLD_CEBWD 7679248634312321699) — UNAFFECTED. Its constants are
+      0.25/1.0/2.0/12, which serialize bit-identically under the lossy AND the
+      shortest-round-trip path (OP-138 already established this; confirmed here:
+      dt_exp matched its golden on all 3 CI platforms while dt_erf drifted).
+
+  (c) *_eq.hexa agreement/determinism oracles (op29 decoder-block,
+      op33 LR-schedule, op72 d5-trig, op74 moe-exp, op76/op78 shape-contract,
+      clm_prod_crossplatform_exact, op35 ckpt) — STRUCTURALLY MASKING-IMMUNE.
+      Each computes TWO values at runtime and asserts a DELTA within tolerance
+      (e.g. check_agree() returns a float deviation) — it NEVER compares to a
+      pinned constant. An equality oracle cannot encode a stale golden, and it
+      cannot "mask" via a stale recompute path because both sides are recomputed
+      by the SAME current compiler each run (a real divergence would still fire).
+      Additionally: NONE of these are wired into any CI gate with a pinned value
+      (grep tool/ + .github/ = 0 references) — they are self-checking oracles.
+
+  (d) op19b_crossplatform_erf.hexa — has NO internally-pinned numeric golden; it
+      only prints f64_to_bytes bit-dumps for fold_ci_gate.sh to assert EXTERNALLY.
+      The golden lives solely in fold_ci_gate.sh (re-pinned by OP-138). git diff
+      of op19b vs its creation commit is empty — source unchanged; only the
+      external golden was stale, and that is fixed.
+
+  (e) JSON fixtures (fixtures/**/golden_*.json) — INTEGER / BYTE goldens
+      ("expected": 72623859790382856 = 0x0102030405060708 BE-fold; hex/byte
+      arrays; JSON-dump string snapshots). No float const-fold path. Pure
+      arithmetic, host-independent. UNAFFECTED.
+
+  (f) bench/snapshots/*.hexa — codegen-SHAPE snapshots (arg layout, builtin
+      mangling, JSON helpers, string-method coverage). No pinned float values.
+
+  (g) determinism_gate.sh / miscompile_zero_gate.sh — assert byte-IDENTITY
+      (emit twice → cmp; clean ENCODE-MISS/udf). No pinned numeric value at all,
+      so nothing to be stale. flame_steppath_{fma,libm}_gate.sh are purely
+      LEXICAL grep tripwires (no number). dojo_rent_preflight thresholds are
+      integer config (2^31, 3B params), not folds.
+
+  (h) archive/fires/** — GPU PTX/CUDA/Metal perf baselines, dated, ARCHIVED, not
+      a compile-time float-fold class and not an active CI gate. OUT-OF-SCOPE.
+
+────────────────────────────────────────────────────────────────────────────────
+ 3. THE ONE RESIDUE FOUND + FIX (honest, doc-only)
+────────────────────────────────────────────────────────────────────────────────
+  .github/workflows/nobaseline-gate.yml, the OP-34 fold-gate step header COMMENT
+  (one occurrence) still cited the OLD pre-fix dt_erf goldens:
+    dt_erf FWD 4548590605583584556 · dt_erf BWD 4249661408190172843
+  These are the values OP-138 (#3307) re-pinned in the SSOT tool/fold_ci_gate.sh
+  to 1088281529475491513 / 2045849491002578884. The YAML comment is DOCUMENTARY
+  (the real assertion is `sh tool/fold_ci_gate.sh ./hexa`, which OP-138 fixed) —
+  so this never affected CI behavior; it was a stale doc echo left by OP-138.
+  Corrected the comment to the float-fix-correct values + the OP-138/37/40/132
+  provenance, recording the old values as historical. ZERO gate-behavior change.
+
+  NOT a stale GATE, NOT a re-pin of an asserted golden — purely a doc-honesty fix
+  so the workflow stops claiming to assert a value that is no longer the golden.
+
+────────────────────────────────────────────────────────────────────────────────
+ 4. MASKING CHECK (the "GREEN but stale" failure mode) — NONE FOUND
+────────────────────────────────────────────────────────────────────────────────
+  A masking golden = a test that "passes" because it recomputes the expected
+  value via the SAME stale path instead of comparing to a fixed pinned constant.
+  Audited every float surface:
+   · fold_ci_gate.sh / op39_constfold_gate.sh compare against HARD-CODED string
+     constants (GOLD_*) — they would go RED on drift, not mask. (fold_ci did go
+     RED → OP-138; op39 is post-fix.)
+   · the *_eq.hexa oracles compute both sides each run, but they assert a
+     tolerance on a DELTA, not equality to a recomputed golden — a true
+     divergence still trips them; they are determinism oracles, not pinned
+     goldens, so "masking a stale value" is not applicable.
+  Conclusion: no surface silently passes by recomputing a stale value.
+
+────────────────────────────────────────────────────────────────────────────────
+ 5. GATE (g5) SUMMARY
+────────────────────────────────────────────────────────────────────────────────
+  goldens surveyed ......... ~30 surfaces
+  float-derived GATE goldens 2 (fold_ci_gate.sh, op39_constfold_gate.sh)
+  stale (pre-fix+float) gate 1 — fold_ci_gate.sh dt_erf → RESOLVED by OP-138
+  new stale residue ........ 1 — nobaseline-gate.yml DOC comment (fixed here)
+  stale gate re-pins needed  0 (erf was the only one; already done)
+  masking found ............ NONE
+  cross-platform proof ..... not re-needed (no new golden value introduced; the
+                             only edit is a comment correction to OP-138's
+                             already-3-platform-proven values)
+  files .................... .github/workflows/nobaseline-gate.yml (comment) ·
+                             this verdict
+  cost ..................... $0 · 0-GPU · 0-pod · no vast · no foreign pod
+  classification ........... 🟢 CONVERGED — erf was the only float-derived gate
+                             golden affected; no other golden silently encodes a
+                             pre-float-fix lossy value.
+
+  ONE HONEST LINE: After OP-138, NO other CI gate golden silently encodes a
+  pre-float-fix lossy value — the only float-derived gate goldens are
+  fold_ci_gate.sh (dt_erf re-pinned by OP-138; dt_exp unaffected) and the
+  post-fix op39_constfold_gate.sh tripwire; every other golden is integer/byte,
+  a codegen-shape snapshot, or a delta-tolerance equality oracle that cannot pin
+  a stale float. The one stale artifact was a documentary comment, now corrected.
+════════════════════════════════════════════════════════════════════════════════

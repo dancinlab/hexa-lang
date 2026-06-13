@@ -95,8 +95,11 @@ jobs:
       # ── OP-34: machine-independence FOLD regression gate ──────────────────
       # The built ./hexa runs the two self-contained determinism oracles and
       # asserts the recorded golden folds (dt_exp 7679248634312321699 ·
-      # dt_erf FWD 4548590605583584556 · dt_erf BWD 4249661408190172843 —
-      # proven byte-identical across 4 environments, F-OP19/19b/19c/19d).
+      # dt_erf FWD 1088281529475491513 · dt_erf BWD 2045849491002578884 —
+      # OP-138 re-pin to the float-fix-correct invariant, proven byte-identical
+      # across 4 environments, F-OP19/19b/19c/19d/138; old pre-fix goldens were
+      # 4548590605583584556 / 4249661408190172843, stale under the lossy
+      # %g/%.17e const-fold serialize fixed by OP-37/40/132).
       # LOW BLAST RADIUS: only a REAL fold drift (or the oracle failing to
       # run) can fail this step — tool/fold_ci_gate.sh is the SSOT. <5 s.
       - name: OP-34 — fold gate (dt_exp/dt_erf golden folds, darwin-arm64)
