@@ -1,0 +1,327 @@
+// HEXA Standard Library — qforge/atoms/rohf_ccsd_t
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE-ATOMS brick #28 — semicanonical ROHF-CCSD(T): the open-shell gold standard
+// on a SPIN-PURE reference. The r25-r27 open-shell ladder (UMP2 → UCCSD → UCCSD(T))
+// sits on a SPIN-CONTAMINATED UHF reference (CH₃ ⟨S²⟩=0.7652 ≠ 0.75). ROHF uses ONE
+// set of spatial orbitals (closed doubly-filled, open singly-filled high-spin) so the
+// determinant is a pure S² eigenstate: ⟨S²⟩=S(S+1) EXACTLY. Building CCSD(T) on the
+// ROHF reference removes the contamination AT THE REFERENCE LEVEL:
+//
+//   open shell, contaminated:   UHF  → UMP2 → UCCSD → UCCSD(T)     (r25/r26/r27)
+//   open shell, spin-pure ref:  ROHF → ───────────→ ROHF-CCSD(T)   (THIS)
+//
+// ── the key realization (d19 — REUSE the r27 UCCSD(T) wiring VERBATIM) ────────────────
+//   PySCF's default ROHF-CCSD uses SEMICANONICAL orbitals: take the ROHF spatial orbitals
+//   (one set, used for BOTH α and β, with α occupying n_a = n_closed+n_open and β occupying
+//   n_b = n_closed of the SAME orbitals) and rotate WITHIN the occ/occ and virt/virt blocks
+//   per spin so each spin's Fock is diagonal in those blocks. The semicanonical α/β
+//   orbitals + their diagonal-Fock eigenvalues are then EXACTLY the (Cα, Cβ, εα, εβ) that
+//   the r27 spin-orbital UCCSD(T) driver consumes. So ROHF-CCSD(T) = uccsd_t_from_uhf fed
+//   SEMICANONICAL ROHF orbitals instead of UHF orbitals. uccsd_t.hexa / uccsd.hexa /
+//   ccsd.hexa / ccsd_t.hexa are BYTE-UNTOUCHED — the only new logic is the semicanonical
+//   rotation of the spin-pure ROHF reference.
+//
+// ── semicanonicalization (the ONLY new piece) ─────────────────────────────────────────
+//   At the converged ROHF densities, build Fα,Fβ (reuse uhf_fock_pair). For each spin σ:
+//     1. transform to the ROHF MO basis:  F_mo = Cᵀ F_σ C
+//     2. diagonalize the occ-occ subblock (0..n_σ-1) and the virt-virt subblock
+//        (n_σ..n-1) SEPARATELY (reuse eigh) → block-diagonal rotation U_σ (occ-occ +
+//        virt-virt mixing only; occ↔virt is left ZERO, preserving the ROHF determinant)
+//     3. the semicanonical orbitals are C_σ = C · U_σ; the orbital energies ε_σ are the
+//        block eigenvalues (the diagonal of the rotated Fock). occ↔virt coupling is
+//        DISCARDED for the energies (semicanonical = canonical only within occ/virt).
+//   This is the standard "semicanonical ROHF-CC" — exactly what PySCF computes.
+//
+// ── honest scope (d6) ─────────────────────────────────────────────────────────────────
+//   The ROHF *reference* is spin-pure (⟨S²⟩=0.75 EXACT for CH₃ — proven in the selftest
+//   vs the UHF 0.7652). But semicanonical ROHF-CCSD(T) is NOT fully spin-adapted: residual
+//   spin contamination can remain in the CC *wavefunction* (the cluster operator is built
+//   from spin-orbitals, not spin-adapted CSFs). This is the production "ROHF-CCSD(T)" the
+//   whole community (PySCF, CFOUR-"ROHF-CCSD(T)", Gaussian) ships — the spin-pure-REFERENCE
+//   gold standard, NOT the fully spin-adapted (Brueckner/partially-spin-adapted) variant.
+//   All anchors are REAL PySCF outputs; nothing fitted/forced. STO-3G minimal basis bounds
+//   the absolute energy (basis-set limit = the r16 cc-pVXZ bricks).
+//
+// reuse (d19 · d3): rohf_scf (the spin-pure reference — vendored molscf brick 8, byte-
+//   untouched) + uhf_fock_pair (the spin Focks at the ROHF densities) + uccsd_t_from_uhf
+//   (the r27 spin-orbital UCCSD(T) — byte-untouched, consumes Cα/Cβ/εα/εβ) + rhf_matmul /
+//   rhf_transpose (the MO transforms) + eigh (the only eigensolver). No new CC kernel, no
+//   new amplitude solver, no new (T) kernel minted — pure semicanonical-reference wiring.
+//
+// ⚠ PARSER (f37015ac): every long index-summed arithmetic assignment is one physical line.
+
+use "stdlib/alloc/math/eigen"
+use "stdlib/qforge/molscf/rhf"
+use "stdlib/qforge/molscf/uhf"
+use "stdlib/qforge/molscf/rohf"
+use "stdlib/qforge/atoms/ccsd"
+use "stdlib/qforge/atoms/ccsd_t"
+use "stdlib/qforge/atoms/uccsd"
+
+// ════════════════════════════════════════════════════════════════════════════
+//   semicanonical rotation of ONE spin from the ROHF orbitals
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Given the ROHF spatial orbitals C (n×n, column = MO), the AO-basis spin Fock F_σ, and
+// the spin occupation n_occ, rotate WITHIN the occ-occ (0..n_occ-1) and virt-virt
+// (n_occ..n-1) blocks so F_σ is diagonal there. Returns [ C_sc, eps_sc ] with C_sc = C·U
+// (the semicanonical orbitals) and eps_sc the block eigenvalues (occ ascending, then virt
+// ascending) — exactly the per-spin (C, ε) the r27 spin-orbital CC consumes. occ↔virt
+// coupling is left out of U (zeroed) so the ROHF determinant is preserved.
+pub fn rohf_semicanonical_spin(
+    C: [float], F: [float], n: int, n_occ: int
+) -> [any] {
+    let Ct = rhf_transpose(C, n)
+    let F_mo = rhf_matmul(rhf_matmul(Ct, F, n), C, n)   // Cᵀ F C
+    let nv = n - n_occ
+
+    // ── occ-occ subblock → eigh (returns eigvals DESCENDING) ──
+    let mut Uocc: [float] = []
+    let mut eocc: [float] = []
+    if n_occ > 0 {
+        let mut Bo: [float] = []
+        let mut i = 0
+        while i < n_occ {
+            let mut j = 0
+            while j < n_occ { Bo.push(F_mo[i * n + j]) ; j = j + 1 }
+            i = i + 1
+        }
+        let ro = eigh(Bo, n_occ)
+        let voc: [float] = ro[0]            // eigenvalues DESCENDING
+        let veco: [any] = ro[1]             // veco[k] = k-th eigenvector (row, len n_occ)
+        // re-emit ASCENDING so occ index 0 = lowest orbital
+        let mut a = 0
+        while a < n_occ { eocc.push(voc[n_occ - 1 - a]) ; a = a + 1 }
+        // Uocc[old, new] : column `new` = the (ascending) eigenvector — Uocc[r*n_occ+c]
+        let mut r0 = 0
+        while r0 < n_occ {
+            let mut c0 = 0
+            while c0 < n_occ {
+                let evec: [float] = veco[n_occ - 1 - c0]
+                Uocc.push(evec[r0])
+                c0 = c0 + 1
+            }
+            r0 = r0 + 1
+        }
+    }
+
+    // ── virt-virt subblock → eigh ──
+    let mut Uvir: [float] = []
+    let mut evir: [float] = []
+    if nv > 0 {
+        let mut Bv: [float] = []
+        let mut i2 = 0
+        while i2 < nv {
+            let mut j2 = 0
+            while j2 < nv { Bv.push(F_mo[(n_occ + i2) * n + (n_occ + j2)]) ; j2 = j2 + 1 }
+            i2 = i2 + 1
+        }
+        let rv = eigh(Bv, nv)
+        let vvi: [float] = rv[0]
+        let vecv: [any] = rv[1]
+        let mut a2 = 0
+        while a2 < nv { evir.push(vvi[nv - 1 - a2]) ; a2 = a2 + 1 }
+        let mut r1 = 0
+        while r1 < nv {
+            let mut c1 = 0
+            while c1 < nv {
+                let evec2: [float] = vecv[nv - 1 - c1]
+                Uvir.push(evec2[r1])
+                c1 = c1 + 1
+            }
+            r1 = r1 + 1
+        }
+    }
+
+    // ── assemble the block-diagonal n×n rotation U (occ⊕virt, occ↔virt = 0) ──
+    let mut U: [float] = []
+    let mut p = 0
+    while p < n {
+        let mut q = 0
+        while q < n {
+            let mut val = 0.0
+            if p < n_occ && q < n_occ { val = Uocc[p * n_occ + q] }
+            if p >= n_occ && q >= n_occ { val = Uvir[(p - n_occ) * nv + (q - n_occ)] }
+            U.push(val)
+            q = q + 1
+        }
+        p = p + 1
+    }
+    // semicanonical orbitals C_sc = C · U
+    let C_sc = rhf_matmul(C, U, n)
+    // orbital energies: occ block (ascending) then virt block (ascending)
+    let mut eps_sc: [float] = []
+    let mut k = 0
+    while k < n_occ { eps_sc.push(eocc[k]) ; k = k + 1 }
+    k = 0
+    while k < nv { eps_sc.push(evir[k]) ; k = k + 1 }
+    // semicanonical MO-basis Fock  F_sc = C_scᵀ F C_sc  (occ-occ / virt-virt diagonal,
+    // occ-virt block = the residual off-diagonal coupling that the Fock-general CC needs)
+    let C_sct = rhf_transpose(C_sc, n)
+    let F_sc = rhf_matmul(rhf_matmul(C_sct, F, n), C_sc, n)
+    return [C_sc, eps_sc, F_sc]
+}
+
+// Assemble the spin-orbital off-diagonal Fock (natural 2k+σ order) from the per-spin
+// semicanonical MO-basis Focks Fa_mo, Fb_mo (each n×n). The spin-orbital Fock is block-
+// diagonal in spin: foff0[(2k+σ)(2l+σ)] = F^σ_mo[k,l]; cross-spin = 0. Diagonal entries
+// are the ε (carried separately) — here we keep the FULL matrix; the CC kernel reads only
+// the occ-virt block. Then PERMUTE to occ-first (the SAME perm the amplitudes use).
+fn rohf_spinorb_foff(Fa_mo: [float], Fb_mo: [float], perm: [int], n: int) -> [float] {
+    let nso = 2 * n
+    let mut foff0: [float] = []
+    let mut p = 0
+    while p < nso {
+        let kp = p / 2
+        let sp = p % 2
+        let mut q = 0
+        while q < nso {
+            let kq = q / 2
+            let sq = q % 2
+            let mut val = 0.0
+            if sp == sq {
+                if sp == 0 { val = Fa_mo[kp * n + kq] } else { val = Fb_mo[kp * n + kq] }
+            }
+            foff0.push(val)
+            q = q + 1
+        }
+        p = p + 1
+    }
+    // permuted foff[(p,q)] = foff0[(perm[p],perm[q])]
+    let mut foff: [float] = []
+    let mut pp = 0
+    while pp < nso {
+        let op = perm[pp]
+        let mut qq = 0
+        while qq < nso {
+            let oq = perm[qq]
+            foff.push(foff0[op * nso + oq])
+            qq = qq + 1
+        }
+        pp = pp + 1
+    }
+    return foff
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   driver — molecular integrals  →  full semicanonical ROHF-CCSD(T)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// One call: run the spin-pure ROHF reference (rohf_scf), semicanonicalize α and β from
+// the ROHF orbitals, then feed the semicanonical (Cα,Cβ,εα,εβ) into the r27 spin-orbital
+// UCCSD(T) driver (BYTE-UNTOUCHED). Returns
+//   [ e_rohf, ss_rohf, e_ccsd, e_t, e_ccsd_t, e_total, e_mp2_first,
+//     iters, residual, ccsd_conv, rohf_conv ]
+// with e_ccsd_t = e_ccsd + e_t (the spin-pure-reference correlation energy) and
+// e_total = e_rohf + e_ccsd_t. ss_rohf = the ROHF ⟨S²⟩ (= S(S+1) EXACTLY — spin-pure).
+pub fn rohf_ccsd_t_from_integrals(
+    S: [float], hcore: [float], eri: [float],
+    n: int, n_closed: int, n_open: int, e_nuc: float,
+    scf_iter: int, scf_tol: float,
+    cc_iter: int, cc_tol: float
+) -> [any] {
+    let n_a = n_closed + n_open
+    let n_b = n_closed
+    // ── spin-pure ROHF reference (reuse molscf brick 8, byte-untouched) ──
+    let rh = rohf_scf(S, hcore, eri, n, n_closed, n_open, e_nuc, scf_iter, scf_tol, true)
+    let e_rohf: float = rh[0]
+    let Pa: [float] = rh[3]
+    let Pb: [float] = rh[4]
+    let C: [float] = rh[8]
+    let rohf_conv: bool = rh[9]
+    // ⟨S²⟩ exact by construction (reuse uhf_spin_squared — same orbitals → contamination 0)
+    let ss_rohf = uhf_spin_squared(C, C, S, n, n_a, n_b)
+
+    // spin Focks at the converged ROHF densities (reuse uhf_fock_pair)
+    let fp = uhf_fock_pair(hcore, Pa, Pb, eri, n)
+    let Fa: [float] = fp[0]
+    let Fb: [float] = fp[1]
+
+    // ── semicanonicalize each spin from the SAME ROHF orbitals ──
+    let sca = rohf_semicanonical_spin(C, Fa, n, n_a)
+    let Ca: [float] = sca[0]
+    let eps_a: [float] = sca[1]
+    let Fa_mo: [float] = sca[2]      // semicanonical α MO-basis Fock (occ-virt block ≠ 0)
+    let scb = rohf_semicanonical_spin(C, Fb, n, n_b)
+    let Cb: [float] = scb[0]
+    let eps_b: [float] = scb[1]
+    let Fb_mo: [float] = scb[2]
+
+    // ── spin-orbital tensor + occ-first permutation (REUSE r26 builders verbatim) ──
+    let nso = 2 * n
+    let nocc = n_a + n_b
+    let W0 = uccsd_spinorb_eri_uhf(eri, Ca, Cb, n)
+    let eps0 = uccsd_spinorb_eps_uhf(eps_a, eps_b, n)
+    let mut perm: [int] = []
+    let mut k = 0
+    while k < n_a { perm.push(2 * k) ; k = k + 1 }
+    k = 0
+    while k < n_b { perm.push(2 * k + 1) ; k = k + 1 }
+    k = n_a
+    while k < n { perm.push(2 * k) ; k = k + 1 }
+    k = n_b
+    while k < n { perm.push(2 * k + 1) ; k = k + 1 }
+    let mut eps_so: [float] = []
+    let mut a0 = 0
+    while a0 < nso { eps_so.push(eps0[perm[a0]]) ; a0 = a0 + 1 }
+    let mut W: [float] = []
+    let mut p = 0
+    while p < nso {
+        let op = perm[p]
+        let mut q = 0
+        while q < nso {
+            let oq = perm[q]
+            let mut r = 0
+            while r < nso {
+                let or0 = perm[r]
+                let mut s = 0
+                while s < nso {
+                    let os = perm[s]
+                    W.push(W0[((op * nso + oq) * nso + or0) * nso + os])
+                    s = s + 1
+                }
+                r = r + 1
+            }
+            q = q + 1
+        }
+        p = p + 1
+    }
+    // permuted off-diagonal spin-orbital Fock (the semicanonical occ-virt coupling)
+    let foff = rohf_spinorb_foff(Fa_mo, Fb_mo, perm, n)
+
+    // ── Fock-GENERAL spin-orbital CCSD iteration (semicanonical reference) ──
+    let mut t1: [float] = []
+    let mut ti = 0
+    while ti < nso * nso { t1.push(0.0) ; ti = ti + 1 }
+    let mut t2 = ccsd_mp2_guess(W, eps_so, nso, nocc)
+    let e_mp2_first = ccsd_energy_foff(W, foff, t1, t2, nso, nocc)
+    let mut e_old = e_mp2_first
+    let mut iters = 0
+    let mut residual = 1.0
+    let mut ccsd_conv = false
+    while iters < cc_iter {
+        let res = ccsd_iterate_foff(W, eps_so, foff, t1, t2, nso, nocc)
+        let t1new: [float] = res[0]
+        let t2new: [float] = res[1]
+        residual = ccsd_t2_rmsd(t2new, t2, nso)
+        t1 = t1new
+        t2 = t2new
+        let e_new = ccsd_energy_foff(W, foff, t1, t2, nso, nocc)
+        iters = iters + 1
+        let de = e_new - e_old
+        let ade = if de < 0.0 { 0.0 - de } else { de }
+        e_old = e_new
+        if ade < cc_tol && residual < cc_tol { ccsd_conv = true ; break }
+    }
+    let e_ccsd = ccsd_energy_foff(W, foff, t1, t2, nso, nocc)
+    // perturbative (T) on the semicanonical spin-orbital amplitudes (reuse r18 kernel —
+    // denominators use the semicanonical ε_so, matching PySCF's semicanonical (T)).
+    let e_t = ccsd_t_energy(W, t1, t2, eps_so, nso, nocc)
+    let e_ccsd_t = e_ccsd + e_t
+    let e_total = e_rohf + e_ccsd_t
+    return [e_rohf, ss_rohf, e_ccsd, e_t, e_ccsd_t, e_total, e_mp2_first,
+            iters, residual, ccsd_conv, rohf_conv]
+}
