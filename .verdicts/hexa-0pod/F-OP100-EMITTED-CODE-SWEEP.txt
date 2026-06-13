@@ -1,0 +1,117 @@
+F-OP100-EMITTED-CODE-SWEEP — EMITTED-FOREIGN-CODE validity sweep (HEXA-0POD, 0-pod, LANE-2)
+================================================================================================
+
+GOAL
+  OP-98 found stdlib/websocket.hexa's emitted python3 helper was 100% DEAD: a
+  `nonlocal pre` at module scope → compile-time SyntaxError aborted the entire
+  fallback before any line ran. This is a distinct, high-leverage CLASS: a hexa
+  module BUILDS a foreign-language source STRING (python3/bash/awk/C/sql) and
+  execs it, but the emitted code carries a latent SYNTAX/SCOPE/QUOTING bug that
+  makes the path dead-on-arrival (never caught because the host fallback "just
+  fails"). OP-100 censuses such emitters (infra/protocol lane — LANE-1 hunts the
+  scientific/compute-numeric emitters) and VALIDATES each emitted program through
+  its REAL interpreter (python3 / bash / awk / sqlite3), 0-pod, local toolchain.
+
+METHOD
+  1. CENSUS (scoped greps, NO .git): modules that BUILD a foreign-code string to
+     exec — `s = s + "..."` multi-line program builders + heredoc emitters
+     (`cat > x <<'EOF'`) + inline `python3 -c` one-liners across stdlib/* and
+     non-closure self/*.
+  2. EXTRACT the exact emitted source for representative inputs (a generic
+     `s = s + "lit" + var` reconstructor + a heredoc-payload slicer) and VALIDATE
+     each through its real interpreter WITHOUT needing hexa to run it:
+       python3 → `python3 -c "import ast; ast.parse(...)"` + actual run on a sample
+       bash/sh → `bash -n` + run on a sample
+       awk     → `awk -f` (syntax) + functional pipeline run
+       sql     → `sqlite3` (DDL/INSERT/SELECT round-trip)
+  3. A SyntaxError / scope error / quoting bug / dead path = 🔴 → minimal fix +
+     lock test. A valid emitter is 🟢 CLEAN, NOT a bug (honest g5 — no fabrication).
+
+CENSUS + VALIDATION MATRIX  (emitter :: foreign-lang :: real-interpreter result)
+--------------------------------------------------------------------------------
+  🟢 stdlib/python_ffi.hexa :: python3 :: py_get_doc emits a top-level helper
+     (def get_first + synthetic module register). ast.parse OK; RUN OK;
+     get_first('os|getcwd') → 'Return a unicode string representing the current
+     working directory.', get_first('json|dumps') → 'Serialize ``obj`` to a JSON
+     formatted ``str``.' — CORRECT, no nonlocal/scope bug.
+
+  🟢 stdlib/dojo/llm.hexa :: python3 + bash :: _llm_train (HF Trainer causal-LM)
+     ast.parse OK; _llm_glue bash -n OK.
+  🟢 stdlib/dojo/vision.hexa  :: python3 (_vis_torch_ref) ast.parse OK + bash (_vis_glue) -n OK.
+  🟢 stdlib/dojo/tabular.hexa :: python3 (_tab_torch_ref) ast.parse OK + bash (_tab_glue) -n OK.
+  🟢 stdlib/dojo/rl.hexa      :: python3 (_rl_torch_ref) ast.parse OK + bash (_rl_glue) -n OK.
+  🟢 stdlib/dojo/flame_forge.hexa :: python3 (_ff_torch_ref) ast.parse OK + bash (_ff_glue) -n OK.
+  🟢 stdlib/dojo/hexa_cuda.hexa :: python3 (_hc_py) ast.parse OK + bash (_hc_glue) -n OK.
+     [_hc_cu emits CUDA C++ (#include <cstdio>, __global__) → needs nvcc not host
+      gcc; the gcc-as-C "fatal: 'cstdio' not found" is a TOOLCHAIN mismatch, NOT
+      an emitter bug. Out-of-host-validation; CUDA = GPU lane.]
+     [dojo `_*_t_*` kata bodies emit HEXA source, not foreign code — not in scope.]
+  🟢 stdlib/dojo/clm.hexa :: bash (_clm_glue) -n OK.
+
+  🟢 stdlib/sqlite.hexa :: sql :: SQL builder (define_table/insert/select_where via
+     _bind_params → _sqlq). sqlite3 round-trip OK: CREATE TABLE IF NOT EXISTS /
+     INSERT(...) VALUES(...) / SELECT ... WHERE ... all valid. SQL-92 string-literal
+     quoting (_sqlq doubles the single quote) verified with an embedded quote:
+     INSERT ... VALUES(1,'O''Brien') → SELECT → `1|O'Brien` (no dead-on-arrival,
+     no injection — `?` is bound, not literal).
+
+  🟢 self/main.hexa :: awk :: merge_modules_awk emits THREE heredoc awk programs
+     (merge, dedup, rename) for the C-transpile self-host build. `awk -f` parses
+     all three. FUNCTIONAL pipeline test on a representative module C file
+     (awk -f dedup | awk -v MOD=lexer -f merge | awk -v MOD=lexer -f rename):
+       · dedup DROPPED the redundant `HexaVal foo(int x);` forward decl
+       · merge RENAMED `int main(` → `int _lexer_init(`
+       · rename left the string-literal `__hexa_ic_0`/`__hexa_sl_1`/
+         `__hexa_strlit_init` INSIDE hexa_str("...") UNTOUCHED (string-literal-aware,
+         correct — those are codegen emit templates).
+     CORRECT end-to-end. (self/main.hexa IS in the build_selfhost closure → would be
+     FLAG-not-fix; but it is CLEAN, so nothing to change.)
+
+  ⚪ stdlib/sscb/firmware/src/*_emit.hexa + stdlib/hal/t3/*.hexa :: C (ARM Cortex-M)
+     emit STM32/RP2040 firmware C referencing vendor headers (stm32f4xx_min.h,
+     CMSIS). Host gcc lacks the cross headers → not host-validatable; these are
+     embedded-compute with their own boot_byte_diff_* selftests, closer to LANE-1.
+     NOT validated here, NOT flagged (honest — out of host-interpreter reach).
+
+  ⚪ stdlib/cloud/vast.hexa, stdlib/proc.hexa, stdlib/channel.hexa :: shell — build
+     SINGLE-LINE shell invocations (not multi-line programs); vast `python3 -c
+     'import vastai'` is a valid import-probe; proc/channel use _shell_quote/_shq.
+     No full-program emitter → no dead-on-arrival surface. NOT a bug.
+  ⚪ stdlib/easy/cli.hexa :: markdown (scaffold) — not executable foreign code.
+  ⚪ self/stdlib/syntax_highlight.hexa — SQL KEYWORD LIST for highlighting, not an
+     emitter.
+
+RESULT
+  🟢 CLASS CLEAN. EVERY EMITTED-FOREIGN-CODE program in the infra/protocol lane
+  validates through its real interpreter (python3 ast.parse+run, bash -n, awk -f +
+  functional run, sqlite3 round-trip). ZERO new dead-on-arrival bug — the OP-98
+  websocket `nonlocal pre` SyntaxError was the ONLY bug of this class. Anti-pattern
+  scan confirms it: grep for `nonlocal` in any emitted python across stdlib/+self/
+  → 0 hits (websocket is `global pre`, OP-98-fixed). No fabrication: a valid
+  emitter is CLEAN, not a bug.
+
+LOCK
+  NEW stdlib/test/test_emitted_code_validity_op100.hexa — in-tree regression guard
+  for the validity-critical invariants of the validated emitters. SELF-CONTAINED
+  (verbatim-inlined fragments, no `use` — stale-bundle dodge OP-87/88). Asserts:
+    · python_ffi helper defines get_first, registers the synthetic module, has
+      balanced try/except, and carries NO `nonlocal` (the OP-98 anti-pattern).
+    · sqlite _sqlq DOUBLES the single quote ('O''Brien') and uses NO backslash
+      escape (the dead-on-arrival shape).
+    · self/main awk-merge has BEGIN, the `/^int main\(/` → `_%s_init` rename, the
+      column-0 `/^\}$/` close, and the default `{ print }`.
+  Run on shipping `hexa run` LOCAL → 11/11 PASS.
+  NEGATIVE CONTROL (not a tautology): regressing _sqlq to backslash-escape AND
+  renaming `def get_first` → FAIL 8/11 (sqlq_embedded_quote, sqlq_no_backslash,
+  pyffi_defines_get_first flip to FAIL).
+
+BYTE-EQ / GUARDS
+  ZERO source edits to any shipping emitter (all CLEAN — no fix needed) + 1 NEW
+  leaf test file; 0 deletions (wipe_guard net-additive). The new *_op100 test leaf
+  is NOT in the build_selfhost closure → self-host fixpoint UNAFFECTED. LANE-2
+  (EMITTED-FOREIGN-CODE infra/protocol); LANE-1 numeric/compute emitters avoided.
+  $0 · 0-pod · NO GPU · no vast · no foreign-pod · no .tape · leak-0.
+  Tier: 🟢 (class-clean census + in-tree lock with teeth).
+
+TOOLCHAIN (0-pod, local, allowed)
+  python3 (ast.parse + run), bash -n, awk -f, gcc -fsyntax-only, sqlite3.
