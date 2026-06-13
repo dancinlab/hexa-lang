@@ -1,0 +1,154 @@
+================================================================================
+F-OP119-UNCHECKED-SENTINEL — unchecked error-sentinel / silent-failure
+                             propagation census of the NON-parser stdlib
+                             data/algorithm/util family (LANE-1, 0-pod)
+================================================================================
+DATE   : 2026-06-13
+LANE   : 1 (0-pod correctness / security). A FRESH class disjoint from the
+         OOB / DoS / injection / numeric classes already swept OP-103 / 105 /
+         106 / 108 / 110 / 112 / 113 / 114 / 115 / 116 / 117, and disjoint
+         from sibling LANE-2's parser-size-arith integer-overflow (OP-118).
+         COMPLEMENTS LANE-2's OP-102, which swept the net / string / PARSER
+         index_of surface — this round is the NON-parser data / algorithm /
+         util complement (collections, math/stats, string utils, table /
+         lookup, graph / cluster, kernels, audit tools).
+TIER   : 🟢 CONVERGED — NO 🔴. Every finder-sentinel consumer in the
+         non-parser stdlib surface GUARDS the sentinel (`if idx < 0 {
+         fallback }`) BEFORE using the result, OR indexes with a
+         provably-present key. The protective GUARDED pattern is re-derived
+         verbatim in a leaf oracle (8/8 GREEN) with a NEGATIVE CONTROL
+         proving the guard is load-bearing (the unguarded twin really faults
+         `arr[-1]` / yields a silently-wrong window). Honest g5: this is a
+         "class clean / LANE-1 converged" SUCCESS, not a found-bug — no
+         fabricated 🔴.
+
+================================================================================
+MOTIVE — the unchecked-error-sentinel bug class
+================================================================================
+Many stdlib functions signal failure by RETURNING A SENTINEL rather than
+raising: `index_of` / `find` / `find_index` return `-1` on a miss, a lookup
+returns an empty/default struct, a search returns `len(x)` (one-past-end) on
+not-found. The BUG is a CALLER that USES that sentinel WITHOUT checking it —
+`arr[index_of(x)]` when index_of can return -1 (→ reads `arr[-1]`), a slice
+`xs.substring(find(a), …)` / window `xs[find(a) .. find(b)]` where a -1 / len
+sentinel makes a wrong or inverted window. This is the silent-wrong-data
+class: no crash, no exception — just a quietly incorrect result (and
+sometimes a negative-index OOB).
+
+================================================================================
+NEGATIVE-INDEX SEMANTICS (probed — decides silent-wrong-value vs OOB)
+================================================================================
+`hexa run` 0.1.0-dispatch probes:
+
+  arr = [10, 20, 30]; arr[-1]            -> index -1 out of bounds (len 3)
+  arr[idx_of("ABC","X")]  (miss -> -1)   -> index -1 out of bounds (len 3)
+  "hello".find("z") / .index_of("z")     -> -1   (miss sentinel confirmed)
+  to_int("abc") / parse_int("zz")        -> error: to_int: not an integer
+
+FINDINGS:
+- `arr[-1]` is a HARD FAULT (bounds-checked) — NOT a Python-style wrap to the
+  last element. So an unchecked `-1` finder-sentinel used as an INDEX is a
+  crash / DoS; used in a SLICE or arithmetic it is silent-wrong-data. Either
+  way the guard is mandatory.
+- `.find` / `.index_of` builtins return `-1` on a miss (the class
+  precondition).
+- `to_int` / `parse_int` ERROR on malformed input — they do NOT silently
+  return 0. So the "parse silently yields 0 on bad input → wrong sum" sub-
+  class is vacuously closed for the builtin numeric conversions.
+
+================================================================================
+CENSUS MATRIX (site -> checked/unchecked -> action; scoped greps, NO .git)
+================================================================================
+SITE (finder consumer · file:line)                            CLASS    ACTION
+------------------------------------------------------------- -------- ------
+collections.find_index -> -1 · alloc/collections.hexa:55       CHECKED  none
+  NO non-self stdlib call sites (only self-module) -> vacuous.
+semver._sv_index_of · semver.hexa:215,222,348,350              CHECKED  none
+  all `if !(plus<0)` / `if !(dash<0)` -> slice only on a hit.
+http _http_last_index_of · http.hexa:140,213                   CHECKED  none
+http2 _h2_last_index_of · http2.hexa:115,119                   CHECKED  none
+net  _net_http_last_index_of · net/http_client.hexa:103        CHECKED  none
+  all `if nl<0 { return result }` peeling curl \n%{http_code}.
+  (text-util, borderline-parser; OP-102 also swept — kept.)
+cli._index_of · stdlib_cli.hexa:170,177,427,429,612            CHECKED  none
+  `if sep_at<0{continue}` / `if c1<0{return ["","",""]}` /
+  `if sep>=0` -> substring only after the guard.
+record_loader.rl_index_of · demi/record_loader.hexa:460        CHECKED  none
+  `if si>=0` before the title substring.
+keychain.last_index_of(::rc=) · keychain.hexa:138,194          CHECKED  none
+proc/websocket last_index_of({/}) · proc:84,438 ws:248         CHECKED  none
+http_sse.index_of(:) · http_sse.hexa:327                       CHECKED  none
+  `if colon<0 { whole-line-is-field rule }`.
+bio/matter audit finders idx_of/find_idx/find_sub/idx_of_int   CHECKED  none
+  cross_axis_matrix:118 `if pos_idx<0{break}`;
+  status_md_generator:200-209 `if pN>=0`, :733-736 `if si<0{""}`;
+  c_handoff:85 digit-guarded, :167 `if at<0{break}`;
+  lattice_fit:141,145 `if cN<0{continue}`;
+  registry_consistency:140,143 `if at<0`;
+  virocapsid_pdb_corpus:315,318,329 `if kidx<0`;
+  schema_const_audit:380,597 `if <0`;
+  n_substrate json_string_field:159,166,325 `if idx<0{return ""}`.
+magnet_gate res.find(→/->) · fusion/magnet_gate.hexa:463-472   CHECKED  none
+  tail_start defaults -1, set only inside `>=0`, `if tail_start<0`.
+godel.find_int_lit · sim_universe/godel_q/mutator.hexa:92       CHECKED  none
+  `if start<0 { return ["0", line] }`.
+wolfspeed._index_of_char · kernels/circuit/wolfspeed.hexa:151,302 CHECKED none
+  `if idx<0{return line}` / `if eq>0`.
+traffic_dest_* -> -1 · kernels/noc_sim/traffic.hexa:132,147,..  CHECKED  none
+  documented invalid-dest sentinel propagated up; no unchecked-
+  as-index consumer (self-tests compare to expected values).
+registry unc_cnt[idx_of(unc_tags,tg)] · registry_consistency:164 SAFE    none
+  tg ∈ sort_str(unc_tags) -> always a member -> idx >= 0 always.
+c_handoff find_sub("0123456789",digit) · c_handoff:85            SAFE    none
+  guarded by is_dig -> digit always 0-9 -> always found.
+
+RESULT: every finder-sentinel consumer guards the `-1` (or indexes with a
+provably-present key). The two direct `arr[finder(...)]` sites both use keys
+proven to be present. NO UNCHECKED-SENTINEL site found. CLASS CLEAN.
+
+================================================================================
+LOCK — stdlib/info/unchecked_sentinel_guard_op119_test.hexa
+================================================================================
+NEW hermetic verbatim-inlined leaf (no `use` — stale-bundle dodge OP-87/88;
+closure-OUT). Shipping `hexa run` LOCAL ->
+  `OP119 unchecked-sentinel-guard pass=8 fail=0`  then  `ALL GREEN`.
+Re-derives the canonical finder shape `idx_of(s,ch) -> -1` + the GUARDED
+consumer `after_char_guarded` (`if at<0 { return s /*documented fallback*/ }`):
+  - HIT path peels correctly ("key=value" -> "value");
+  - MISS path returns the documented whole-string fallback (NOT a -1 slice);
+  - a guarded array lookup `if where>=0 { arr[where] }` skips the read on a
+    miss; the hit lookup still works (arr[1] == 20).
+NEGATIVE CONTROL: the UNGUARDED twin's miss-start = `-1 + 1 = 0` -> would
+slice the WHOLE input (a silently-wrong "found everything" window) instead of
+the not-found fallback; the raw sentinel -1 used as an index would fault
+`arr[-1]`. Asserts the unguarded value really is wrong (start 0 / sentinel -1)
+-> the `if at<0` guard does real work. Verified separately (`hexa run`) that
+the actual unguarded `arr[idx_of("ABC","X")]` faults verbatim
+`index -1 out of bounds (len 3)`.
+
+================================================================================
+CLOSURE FLAGS
+================================================================================
+- BUILD-SELFHOST CLOSURE: none of the audited files (collections, semver,
+  http / http2, net/http_client, stdlib_cli, demi/record_loader, keychain,
+  proc, websocket, http_sse, bio/matter _hexa_bridge audit tools,
+  fusion/magnet_gate, sim_universe/godel_q, kernels/circuit, kernels/noc_sim)
+  are in the build_selfhost closure (no self/* nor build_selfhost.sh
+  dependency). The NEW leaf lives in stdlib/info (non-self, closure-OUT). ->
+  ZERO byte-eq / fixpoint / selfhost-gate impact.
+- WIPE-GUARD: net-additive — ONE new file (~110 lines), ZERO deletions, ZERO
+  edits to existing code (no fix needed — class already clean). No .tape edit.
+- $0 · 0-pod · NO GPU · no vast · no foreign-pod · leak-0.
+- LANE: LANE-1 (NON-parser data/algorithm/util unchecked-sentinel). NO
+  overlap with sibling LANE-2 (OP-118 parser-size-arith integer-overflow);
+  complements LANE-2's OP-102 (net/string/parser index_of) on a disjoint file
+  set.
+- HONEST g5: the GOAL was CLOSING the unchecked-error-sentinel class in
+  non-parser stdlib code. Every consumer guards the sentinel by construction
+  (or indexes a provably-present key). An evidence-backed "all consumers guard
+  the sentinel — class clean / LANE-1 converged" is the truthful verdict here;
+  no 🔴 was fabricated, and the leaf + negative control prove the guard is
+  real and load-bearing.
+
+OP-119 milestone [x]. Verdict: this file.
+================================================================================
