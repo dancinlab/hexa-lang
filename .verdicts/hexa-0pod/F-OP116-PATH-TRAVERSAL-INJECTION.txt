@@ -1,0 +1,178 @@
+F-OP116-PATH-TRAVERSAL-INJECTION — path-traversal / file-access / injection security audit (LANE-1 0-pod)
+========================================================================================================
+
+GOAL (g5): audit a FRESH security class not yet swept — (1) PATH-TRAVERSAL (an
+untrusted path segment `../` / leading `/` / a URL/archive entry name used to build a
+read/write/include path that escapes the intended base directory) and (2) INJECTION (a
+shell/SQL/format string built by interpolating untrusted input without escaping →
+command/SQL injection). For each site: is there a guard (reject/normalize `..`/abs,
+canonicalize-and-check-prefix, parameterize/escape)? A real traversal/injection on
+UNTRUSTED input = 🔴 → fix; a guarded site or a documented-trusted-local-context site
+(a CLI/tool intentionally taking a trusted user path) = 🟢, note the trust boundary.
+
+RESULT: 🟢 CONVERGED — NO genuine 🔴. The stdlib + compiler path-builder and
+shell/SQL-builder surface is GUARDED or trusted-local across the board. Every site that
+turns a name into a filesystem path or a shell/SQL string is either (a) shell-escaped
+with the canonical single-quote-wrap-`'\''` pattern, (b) SQL-value-quoted with the
+SQL-92 `''`-doubling, (c) lexically `..`-collapsed (the module-loader import resolver),
+or (d) a documented-trusted-local context (a CLI/process tool taking a path the program
+itself constructed). There is NO untrusted-network-input → file-path mapping in the
+surface: no static-file HTTP server, no archive/zip/tar extractor writing entry names,
+no download-cache keyed by a remote name. This is an evidence-backed CLEAN landing (a
+guarded/trusted surface is 🟢, not a fabricated fix), with the three load-bearing
+guards PROVEN by a hermetic leaf oracle + negative controls.
+
+NOTE (OP-87/88/107 stale-bundle discipline): the installed ~/.hx/bin/hexa resolves
+`use` to a STALE Jun-1 bundle, so the verification surface = a VERBATIM-INLINED hermetic
+leaf oracle (`hexa run`, no `use`) of each guard's actual source logic + an UNGUARDED
+negative-control twin — trust the port-of-source over the stale binary.
+
+────────────────────────────────────────────────────────────────────────────────────────
+CENSUS MATRIX (site → class → guarded/trusted/unguarded → action)
+────────────────────────────────────────────────────────────────────────────────────────
+
+PATH-TRAVERSAL (name → filesystem path)
+  · self/module_loader.hexa  ml_canon_path / ml_resolve_stdlib (import "..." → file)
+        → the ONLY "include resolves a name → file path" site. LEXICALLY collapses
+          '.'/'..' (line 97-141, "absolute '..' above root: drop") before read.
+        → GUARDED + trusted (resolves the COMPILER's own source imports — developer
+          code, not untrusted network input). 🟢 CLEAN. (closure-IN — NOT edited.)
+  · stdlib/alloc/path.hexa  path_normalize / path_join / path_is_abs
+        → the canonical POSIX path helper. path_normalize collapses '.'/'..'
+          lexically; path_join honors an absolute b verbatim (documented). Pure
+          lexical builder; a hardened consumer canonicalizes-then-prefix-checks.
+        → GUARDED (normalize available) + the abs-honor is the documented CLI trust
+          boundary. 🟢 CLEAN.
+  · stdlib/record.hexa  record_dir(domain,slug,ts) → "exports/<domain>/<slug>/<ts>/"
+        → domain/slug/ts are PRODUCER-supplied identifiers (the program's own emit
+          tags), not untrusted input. 🟢 trusted-local, note.
+  · stdlib/safetensors.hexa  safetensors_read/write(path), tensor NAMES
+        → path = caller-supplied local file path (trusted); tensor names from the
+          header are used as MAP KEYS, never as filesystem paths → no traversal.
+          🟢 CLEAN.
+  · stdlib/stdlib_cli.hexa  _is_dir / _dir_set / _stdlib_root (find '<path>')
+        → path is the local stdlib root; STILL shell-escaped via .replace("'","'\''")
+          and _getenv validates the var-name charset. 🟢 GUARDED.
+
+INJECTION — SHELL (string → exec/sh -c)
+  · stdlib/http.hexa  http_get/post_with_headers (curl)  url + headers
+        → _http_shell_escape single-quote-wrap-`'\''` on url AND each `-H 'k: v'`.
+          🟢 GUARDED.
+  · stdlib/http2.hexa  http2_request (curl --http2)  method + url
+        → _h2_shell_escape on method + url; body via stdin (proc_run_with_stdin).
+          🟢 GUARDED.
+  · stdlib/llm.hexa  llm_complete (curl POST)  body/headers
+        → pure request-BUILDERS + the already-escaped http_post shellout; body piped,
+          not interpolated. 🟢 GUARDED.
+  · stdlib/io.hexa  write_text_atomic (mv via _shq), portable_fs.hexa (wc/stat/test
+        via `escaped`), registry_autodiscover.hexa (ls via `escaped`)
+        → all use the single-quote-wrap-`'\''` escape. 🟢 GUARDED.
+  · stdlib/sqlite.hexa  _run_sqlite  path + tmp via _shq
+        → _shq-escaped. 🟢 GUARDED.
+  · stdlib/proc.hexa  _next_resource_id / register / launcher  ('<path>', sh -c '<cmd>')
+        → builds shell from caller-supplied LOCK/RESOURCE/SCRIPT paths + the program's
+          own command; single-quote-wrapped (no inner-escape, but the path/cmd is the
+          PROGRAM AUTHOR's, not untrusted). A process-spawning lib intentionally takes
+          a trusted command. 🟢 trusted-local, note (the unescaped wrap is a latent
+          fragility on a hypothetical untrusted path, NOT a bug on intended use).
+  · stdlib/channel.hexa  mkfifo / sh '<script>'  FIFO + script paths
+        → caller-supplied local FIFO/script paths; same trusted-local context. 🟢 note.
+  · stdlib/rtsc/verify/*.hexa, falsifier_dispatch.hexa  _read_file(path)=exec("cat "+path)
+        → UNESCAPED `cat <path>`, BUT path = a hardcoded DOC_* constant or argv[1] of a
+          local CLI (the wrapper-generated /tmp/<uuid>.json). A CLI that intentionally
+          takes a path = trusted. 🟢 trusted-local, note (the unquoted concat is brittle
+          but not an untrusted-input sink).
+
+INJECTION — SQL (string → sqlite3)
+  · stdlib/sqlite.hexa  _sqlq / _format_param / _bind_params  (the `?` value path)
+        → every string VALUE goes through _sqlq (SQL-92 `''`-doubling); int/float bare,
+          bool 1/0, void NULL. OP-100 verified the doubling; re-confirmed ALL value
+          paths parameterized. 🟢 GUARDED.
+  · stdlib/sqlite.hexa  define_table(name,columns) / insert / select_where  (IDENTIFIERS
+        + where_sql interpolated RAW into DDL/DML)
+        → table/column NAMES and the where_sql fragment are interpolated WITHOUT
+          escaping. BUT the module contract (line 63-65) states "SQL injection is
+          blocked because the only string path goes through SQL-double-quote escaping.
+          Callers MUST use `?` for any data — never concat raw." Identifiers come from
+          the program's OWN schema (the developer declared them), and where_sql is an
+          intentionally-raw caller-provided SQL fragment — NOT untrusted row data. This
+          is the standard ORM-lite design + documented contract. 🟢 documented-trusted-
+          context, note (no identifier-validation, but not a bug on intended use; a
+          fabricated "fix" quoting identifiers would break valid schema use).
+
+────────────────────────────────────────────────────────────────────────────────────────
+GUARD-IS-LOAD-BEARING PROOF (computed repros + neg-controls; the 🟢 is not a tautology)
+────────────────────────────────────────────────────────────────────────────────────────
+
+(1) PATH-TRAVERSAL — computed (NO filesystem escape actually performed):
+    join("safe/base", "../../etc/passwd")  = "safe/base/../../etc/passwd"
+    normalize(...)                          → "etc/passwd"   (RELATIVE — NOT absolute
+                                              /etc/passwd; the two `..` pop safe/+base/,
+                                              no leading "/" is ever gained)
+    join("base", "../../../../../../etc/passwd") → normalize → relative, never abs.
+    TRUST BOUNDARY (neg-control): join("safe/base", "/etc/passwd") = "/etc/passwd"
+                                  (abs b honored verbatim — documented; a CLI that
+                                  takes an absolute path means it).
+
+(2) SHELL-QUOTE — payload `x'; rm -rf / #`:
+    GUARDED  _shq("x'; rm -rf / #") = 'x'\''; rm -rf / #'   (the bare quote-closer
+             `x';` is rewritten to `x'\''` — the `'` is escaped, NOT a closer; the
+             whole `rm` stays a literal argument).
+    NEG-CTRL naive wrap          = 'x'; rm -rf / #'          (the bare `x';` survives →
+             the `'` closes the argument and `rm` runs — exactly why the brittle
+             `'" + p + "'` pattern is unsafe for UNTRUSTED input; the guarded sites
+             avoid it).
+
+(3) SQL-VALUE — payload `x' OR '1'='1`:
+    GUARDED  _sqlq("x' OR '1'='1") = 'x'' OR ''1''=''1'      (one INERT literal; the
+             `OR '1'='1` tautology cannot break the WHERE clause).
+    NEG-CTRL no-doubling          = 'x' OR '1'='1'           (the `'` closes the literal
+             → the tautology escapes into the SQL — the injection the guard prevents).
+
+────────────────────────────────────────────────────────────────────────────────────────
+LOCK
+────────────────────────────────────────────────────────────────────────────────────────
+NEW stdlib/alloc/path_traversal_injection_op116_test.hexa — HERMETIC (no `use`;
+path_normalize/path_join/path_is_abs + _shq + _sqlq verbatim-inlined from source, each
+paired with an UNGUARDED negative-control twin). Shipping `hexa run` LOCAL →
+  __HEXA_OP116_PATH_TRAVERSAL_INJECTION__ pass=13 fail=0
+  ALL-GREEN (traversal-blocked + shell-escape + sql-quote guards load-bearing; neg-controls leak)
+13 checks: 1a relative `../../etc/passwd` → not-abs · 1b deep `..` chain → not-abs · 1c
+abs `/etc/passwd` honored (trust boundary, not a tautology) · 1d normal relative include
+unchanged · 1e normalize→prefix invariant · 2a guarded bare-quote-closer rewritten + 2a
+escape-seq present · 2b NEG-CTRL naive leaks bare quote · 2c benign no-op · 3a _sqlq
+doubles → inert literal + 3a no bare `x' OR` · 3b NEG-CTRL no-doubling leaks · 3c benign
+no-op.
+
+────────────────────────────────────────────────────────────────────────────────────────
+HONEST TRUST-BOUNDARY NOTES (g5 — NOT bugs, no fabricated "fixes")
+────────────────────────────────────────────────────────────────────────────────────────
+· sqlite IDENTIFIERS (table/column names) + where_sql are interpolated raw, but per the
+  documented module contract they are the program's OWN schema / an intentional raw SQL
+  fragment, never untrusted row data (which goes through `?`/_sqlq). Adding identifier
+  quoting would break valid schema use — declined per "don't fabricate a fix that breaks
+  intended local use".
+· proc.hexa / channel.hexa / the rtsc-verify CLIs build shell strings from
+  caller-supplied lock/FIFO/script/argv paths the PROGRAM ITSELF constructs (or a local
+  CLI's own path arg). A process/CLI tool intentionally takes a trusted local path —
+  these are honest trust-boundary sites, not untrusted-input injection sinks. (The
+  unescaped single-quote-wrap / unquoted `cat <path>` in some rtsc-verify helpers is a
+  latent fragility worth a future hardening pass, NOT a security bug on the trusted
+  local DOC_*/argv input they consume — logged, not "fixed".)
+
+────────────────────────────────────────────────────────────────────────────────────────
+FLAGS
+────────────────────────────────────────────────────────────────────────────────────────
+· NO source edit (the surface is CLEAN — guarded/trusted is 🟢, not a fabricated fix) →
+  ZERO byte-eq / fixpoint impact, no selfhost gate. The ONLY added file = this verdict +
+  the OP-116 milestone/log + the NEW hermetic leaf test.
+· The leaf test is closure-OUT (a *_test.hexa under stdlib/alloc, not in the
+  build_selfhost closure, no self/* nor build ref) → fixpoint UNAFFECTED.
+· wipe_guard N/A (0 deletions, pure-additive).
+· NO .tape edit (no sign token).
+· LANE-1 (0-pod path/file/injection security) — NO overlap with sibling LANE-2 (OP-115
+  resource-exhaustion DoS) nor the swept crypto/tls/regex classes (OP-104/105/107/109/
+  111/113).
+· $0 · 0-pod · NO GPU · no vast · no foreign-pod · leak-0.
+
+Verdict F-OP116-PATH-TRAVERSAL-INJECTION.txt. Milestone OP-116 [x].
