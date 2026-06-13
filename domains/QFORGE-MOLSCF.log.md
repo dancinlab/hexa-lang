@@ -973,3 +973,49 @@ CONSUMES the round-15 nevpt2_dm4 — NOT a 4-RDM einsum.
    δ_ke E_la − a†_l a†_a a_k a_e) added to the 4-RDM contraction, recovering f3ca analytically from dm4+dm3.
 3. CUMULANT-4-RDM APPROXIMATION — for CAS(8,8)+ where the exact m^8 4-RDM is the factorial-cost ceiling,
    approximate Γ⁴ ≈ (antisymmetrized Γ¹Γ¹Γ¹Γ¹ + Γ²-cumulant terms) — the standard DMRG-NEVPT2 ceiling-breaker.
+
+## round-16 — Sr/Si 4-RDM classes → FULL 8-class SC-NEVPT2 (the f3ca/f3ac wall broken)
+
+brick 19 — `stdlib/qforge/molscf/nevpt2_srsi.hexa` (nevpt2_Sr · nevpt2_Si · nevpt2_total8) +
+`nevpt2_srsi_selftest.hexa`. The two remaining SC-NEVPT2 perturber classes Sr (a16) / Si (a22) — the only
+classes that contract the active 4-RDM — now close, completing the full 8-class SC-NEVPT2 on CAS(4,4)+.
+
+### the r15 "f3ca/f3ac wall" was MISDIAGNOSED — it was a dm4 BUILD bug, not a normal-ordering correction
+r15 attributed a ~6.5 residual to an undocumented particle-symmetric normal-ordering correction in PySCF's
+C-kernel and deferred Sr/Si. This round established empirically (Python ↔ PySCF) that the wall was a
+transposition in r15's nevpt2_dm4 BUILD: the bra was built E_sr-then-E_qp, so ⟨bra| = ⟨gs|E_rs E_pq, storing
+⟨gs|E_rs E_pq E_tu E_vw⟩ at flat position [p,q,r,s,t,u,v,w] instead of ⟨gs|E_pq E_rs E_tu E_vw⟩ — the FIRST
+index PAIR was transposed. The symmetric number-operator trace sum-rule (Σ_p dm4[p,p,...]=N·dm3) is invariant
+under that pair swap, so r15's selftest passed despite the bug. One-line fix in nevpt2_dm4 (apply E_qp first,
+then E_sr). After the fix the GENUINE 4-RDM reproduces the C-kernel f3ca/f3ac and the a16/a22 intermediates to
+machine precision — there is NO irreducible residual and NO normal-ordering correction.
+
+### the f3ca/f3ac kernel ported as its EXACT 4-RDM ∘ active-eri contraction (path 1 — same algorithm)
+Each PySCF f3 object (f3ca/f3ac) IS exactly one 4-RDM ∘ eri contraction, reused across several a16/a22 terms by
+an index permutation (the PySCF f3.transpose(...) re-use). Reconstructed exactly (errs vs the C-kernel):
+  f3ac[p,q,r,a,b,c] = Σ_{i,j,k} h2e[i,j,k,a] dm4[r,p,q,b,j,c,i,k]   (err 9e-15)
+  f3ca[p,q,r,a,b,c] = Σ_{i,j,k} h2e[k,c,i,j] dm4[r,p,q,b,a,j,k,i]   (err 5e-15)
+a16/a22 then follow PySCF make_a16/make_a22 verbatim (each f3 usage read at its permuted index), verified
+element-wise to <1.6e-14, and the Sr/Si class energies to <1e-13. integral conventions (hexa chemist gfull):
+h1e=FI active block, h2e[i,j,k,l]=(ik|jl)=gfull[c+i,c+k,c+j,c+l]; Sr h2e_v[r,i,j,k]=gfull[nocc+r,c+j,c+i,c+k],
+Si h2e_v[i,j,c0,k]=gfull[c+j,c+k,c+i,core c0]. mo_energy = generalized-Fock diagonal (== PySCF mc.mo_energy
+AFTER the NEVPT for_dms canonicalization, NOT the pre-NEVPT CASCI mo_energy — the source of an early anchor
+mismatch).
+
+### g5 (VERBATIM — deterministic CASCI(RHF) H₆ STO-3G R=1.8 Bohr CAS(4,4); per-class is gauge-invariant)
+  (a) Sr = -0.00352214   PySCF -0.0035221118   |ΔSr| = 2.36816e-08   PASS (<1e-6)
+  (b) Si = -0.00436186   PySCF -0.0043618502   |ΔSi| = 1.30597e-08   PASS (<1e-6)
+  (c) 8-class total = -0.0320731   PySCF mrpt.NEVPT.kernel -0.0320728303   |Δtotal8| = 2.38813e-07   PASS
+      6-class = -0.0241891   PySCF -0.0241888683   PASS
+  (d) regression — nevpt2 (r13) PASS · nevpt2_canon (r14) PASS · nevpt2_4rdm (r15) PASS (sum-rule residual
+      1.01e-13 after the dm4 pair-order fix) · CAS(2,2) 6-class drift under the 8-driver = 0.0   PASS
+NOTE (d6 HONEST): on the (steepest-descent) CASSCF H₆ reference per-class Sr/Si land ~2e-5 from PySCF — that
+residual is CASSCF orbital NON-convergence (conv=false; energy matches to 5 digits, orbitals not at the PySCF
+minimum), NOT a recipe error. The CASCI(RHF) reference is deterministic + bit-reproduced by PySCF, so it is the
+correctness gate. Tight 2nd-order CASSCF convergence is named round-17.
+
+### round-17 named (3 breakthrough paths, d2 — never concede)
+1. 2nd-ORDER NEWTON MCSCF (augmented-Hessian) replacing the steepest-descent line search → tight CASSCF
+   convergence so the per-class Sr/Si anchors also hold on CASSCF orbitals (closes the round-14 |Δ|=4.67e-4).
+2. DIRECT-CI DAVIDSON past the dense-eigh ceiling → CAS(10,10), Cr₂ (orbital + CI both scale).
+3. CUMULANT-4-RDM for CAS(8,8)+ where the exact m^8 4-RDM is the factorial-cost ceiling (DMRG-NEVPT2 path).

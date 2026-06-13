@@ -223,13 +223,14 @@ pub fn nevpt2_dm3(gs: [any], dets: [any], ndet: int, m: int, nocc: int) -> [floa
 
 // 4-RDM dm4[p,q,r,s,t,u,v,w] = ⟨gs| E_pq E_rs E_tu E_vw |gs⟩ (m^8 flat). round-15: the
 //   active-space 4-RDM required by the two SC-NEVPT2 4-RDM perturber classes Sr (a16) and
-//   Si (a22). Built the SAME way as the 3-RDM — one more spin-summed excitation operator
-//   on the KET (E_pq(E_rs(E_tu(E_vw|gs⟩)))) — then ⟨gs|ket⟩. The two innermost excited
-//   vectors are CACHED per (v,w) and per (t,u,v,w) so each is built once (not m^4 times):
-//   cost = m^4 inner builds × the m^4 outer (p,q,r,s) dot loop, tractable to CAS(6,6)
-//   (m=6 → m^8 = 1.7M elements). HONEST (d6): m^8 is the factorial-cost ceiling — CAS(8,8)+
-//   needs a cumulant-4-RDM approximation (named round-16). flat offset (((((((p*m+q)*m+r)
-//   *m+s)*m+t)*m+u)*m+v)*m+w).
+//   Si (a22). Built as ⟨bra|ket⟩ with ⟨bra| = ⟨gs| E_pq E_rs (apply E_qp then E_sr to |gs⟩)
+//   and |ket⟩ = E_tu E_vw|gs⟩ (apply E_vw then E_tu). round-16 fix: the bra excitation order
+//   is E_qp-then-E_sr so that ⟨bra| = ⟨gs|(E_qp)†(E_sr)† = ⟨gs| E_pq E_rs — the r15 build
+//   applied E_sr-then-E_qp, giving ⟨gs| E_rs E_pq (first index PAIR transposed). The symmetric
+//   trace sum-rule did not catch this; the Sr/Si energy contraction (round-16) did. cost =
+//   m^4 inner builds × the m^4 outer (p,q,r,s) dot loop, tractable to CAS(6,6) (m=6 → m^8 =
+//   1.7M). HONEST (d6): m^8 is the factorial-cost ceiling — CAS(8,8)+ needs a cumulant-4-RDM
+//   approximation (named round-17). flat offset (((((((p*m+q)*m+r)*m+s)*m+t)*m+u)*m+v)*m+w).
 pub fn nevpt2_dm4(gs: [any], dets: [any], ndet: int, m: int, nocc: int) -> [float] {
     let mut D = []
     let mut p = 0
@@ -241,9 +242,13 @@ pub fn nevpt2_dm4(gs: [any], dets: [any], ndet: int, m: int, nocc: int) -> [floa
                 let mut s = 0
                 while s < m {
                     // bra = ⟨gs| E_pq E_rs  (built as E_sr E_qp on |gs⟩ then dotted with the
-                    //   E_tu E_vw ket below — self-adjoint pairing, same trick as nevpt2_dm2)
-                    let braA = nevpt2_apply_E(gs, dets, ndet, nocc, s, r)
-                    let bra = nevpt2_apply_E(braA, dets, ndet, nocc, q, p)
+                    //   E_tu E_vw ket below — self-adjoint pairing, same trick as nevpt2_dm2).
+                    //   ORDER: apply E_qp FIRST then E_sr, so |bra⟩ = E_sr E_qp|gs⟩ and
+                    //   ⟨bra| = ⟨gs|(E_qp)†(E_sr)† = ⟨gs| E_pq E_rs (round-16 fix: the prior
+                    //   E_sr-then-E_qp order produced ⟨gs| E_rs E_pq — the first index PAIR
+                    //   was transposed, which the symmetric trace sum-rule did not catch).
+                    let braA = nevpt2_apply_E(gs, dets, ndet, nocc, q, p)
+                    let bra = nevpt2_apply_E(braA, dets, ndet, nocc, s, r)
                     let mut t = 0
                     while t < m {
                         let mut u = 0
