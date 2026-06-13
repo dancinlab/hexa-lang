@@ -94,8 +94,29 @@ pub fn iso8601_parse_native(s: string) -> int {
     let mm = _digits2(s, 14)
     let ss = _digits2(s, 17)
     if yr < 0 || mo < 0 || dy < 0 || hh < 0 || mm < 0 || ss < 0 { return 0 - 1 }
+    // OP-131: validate field ranges (was OP-93's deferred 🟠). Without this the
+    // parser silently normalises invalid dates — e.g. "2024-02-30" → 2024-03-01,
+    // "2024-13-05" → 2025-01-05 — corrupting user input instead of rejecting it.
+    // Reject anything Python datetime() would raise ValueError on.
+    if mo < 1 || mo > 12 { return 0 - 1 }
+    if hh > 23 || mm > 59 || ss > 60 { return 0 - 1 }   // ss=60 = leap second
+    let dim = _days_in_month(yr, mo)
+    if dy < 1 || dy > dim { return 0 - 1 }
     let days = days_from_civil(yr, mo, dy)
     return days * _SECS_PER_DAY + hh * 3600 + mm * 60 + ss
+}
+
+// Days in month `m` (1-12) of proleptic-Gregorian year `y`, leap-aware.
+// Returns 0 for an out-of-range month (callers above already range-check m).
+@pure
+fn _days_in_month(y: int, m: int) -> int {
+    if m == 2 {
+        let leap = (y % 4 == 0) && (y % 100 != 0 || y % 400 == 0)
+        return if leap { 29 } else { 28 }
+    }
+    if m == 4 || m == 6 || m == 9 || m == 11 { return 30 }
+    if m >= 1 && m <= 12 { return 31 }
+    return 0
 }
 
 @pure
