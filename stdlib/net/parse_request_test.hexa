@@ -1,0 +1,120 @@
+// OP-92 leaf lock for stdlib/net/http_request.hexa parse_request.
+//
+// Verbatim-inlined copy of the FIXED parse_request body (the installed
+// `hexa` resolves `use "stdlib/..."` to its stale bundled copy, so this
+// test inlines the leaf and checks the boundary case that diverged from
+// an RFC-7230 reference parser before the fix:
+//   - a body that itself contains a blank line ("\r\n\r\n") was
+//     TRUNCATED at the first blank line. split("\r\n\r\n") then parts[1]
+//     dropped parts[2..]; the fix splits on the FIRST separator only via
+//     index_of, so the whole body (CRLFs included) is preserved.
+// plus request-line + header cases as regression locks.
+
+fn parse_request(raw) {
+    let mut method = "GET"
+    let mut path = "/"
+    let mut query = ""
+    let mut body = ""
+    let mut headers = #{}
+
+    // Split header block from body on the FIRST double CRLF only.
+    let sep = raw.index_of("\r\n\r\n")
+    let mut header_block = raw
+    if sep >= 0 {
+        header_block = raw.substring(0, sep)
+        body = raw.substring(sep + 4, len(raw))
+    }
+
+    let lines = header_block.split("\r\n")
+    if len(lines) > 0 {
+        let req_parts = lines[0].split(" ")
+        if len(req_parts) >= 2 {
+            method = req_parts[0]
+            let full_path = req_parts[1]
+            let qidx = full_path.index_of("?")
+            if qidx >= 0 {
+                path = full_path.substring(0, qidx)
+                query = full_path.substring(qidx + 1, len(full_path))
+            } else {
+                path = full_path
+            }
+        }
+    }
+
+    let mut i = 1
+    while i < len(lines) {
+        let line = lines[i]
+        let colon = line.index_of(":")
+        if colon > 0 {
+            let key = line.substring(0, colon).trim().to_lower()
+            let val = line.substring(colon + 1, len(line)).trim()
+            headers[key] = val
+        }
+        i = i + 1
+    }
+
+    let result = #{}
+    result["method"] = method
+    result["path"] = path
+    result["query"] = query
+    result["body"] = body
+    result["headers"] = headers
+    return result
+}
+
+fn check_str(name, got, want) {
+    if got == want {
+        println("ok   " + name)
+        return 1
+    }
+    println("FAIL " + name + " got=[" + got + "] want=[" + want + "]")
+    return 0
+}
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // --- The bug the fix closes: body with an embedded blank line ---
+    // "hi\r\n\r\nbye" — unfixed body returned just "hi" (truncated at the
+    // first "\r\n\r\n"); the RFC reference keeps the whole body.
+    let r1 = parse_request("POST /x HTTP/1.1\r\nContent-Length: 9\r\n\r\nhi\r\n\r\nbye")
+    total = total + 1; pass = pass + check_str("body-embedded-blankline", r1["body"], "hi\r\n\r\nbye")
+    total = total + 1; pass = pass + check_str("body-blankline method", r1["method"], "POST")
+    total = total + 1; pass = pass + check_str("body-blankline path", r1["path"], "/x")
+
+    // Multipart-style body with two paragraph breaks (3 "\r\n\r\n" total).
+    let r2 = parse_request("POST /u HTTP/1.1\r\n\r\nA\r\n\r\nB\r\n\r\nC")
+    total = total + 1; pass = pass + check_str("body-multi-blankline", r2["body"], "A\r\n\r\nB\r\n\r\nC")
+
+    // --- Regression locks (already-correct behavior) ---
+    let r3 = parse_request("GET /api/ping HTTP/1.1\r\nHost: x\r\n\r\n")
+    total = total + 1; pass = pass + check_str("simple method", r3["method"], "GET")
+    total = total + 1; pass = pass + check_str("simple path", r3["path"], "/api/ping")
+    total = total + 1; pass = pass + check_str("simple body-empty", r3["body"], "")
+    let h3 = r3["headers"]
+    total = total + 1; pass = pass + check_str("simple header host", h3["host"], "x")
+
+    let r4 = parse_request("GET /a?b=1&c=2 HTTP/1.1\r\n\r\n")
+    total = total + 1; pass = pass + check_str("query path", r4["path"], "/a")
+    total = total + 1; pass = pass + check_str("query string", r4["query"], "b=1&c=2")
+
+    // Header value containing a colon (e.g. a Date) keeps the full value.
+    let r5 = parse_request("GET / HTTP/1.1\r\nDate: Mon, 01 Jan: 2020\r\n\r\n")
+    let h5 = r5["headers"]
+    total = total + 1; pass = pass + check_str("header-colon-in-value", h5["date"], "Mon, 01 Jan: 2020")
+
+    // No body, no separator at all (still parses request line + headers).
+    let r6 = parse_request("GET / HTTP/1.1\r\nHost: y")
+    let h6 = r6["headers"]
+    total = total + 1; pass = pass + check_str("no-separator host", h6["host"], "y")
+    total = total + 1; pass = pass + check_str("no-separator body", r6["body"], "")
+
+    println("---")
+    println("PASS " + to_string(pass) + "/" + to_string(total))
+    if pass == total {
+        println("__HEXA_STDLIB_PARSE_REQUEST_OP92__ " + to_string(pass) + "/" + to_string(total) + " ALL-GREEN")
+    } else {
+        println("RED")
+    }
+}
