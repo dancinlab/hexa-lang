@@ -1,0 +1,102 @@
+// OP-119 — unchecked error-sentinel / silent-failure regression lock (LANE-1).
+//
+// The bug class: a stdlib function signals "not found / malformed" by
+// RETURNING A SENTINEL (`-1` from find / index_of / find_index, a default
+// from a lookup) instead of raising. The trap is a CALLER that USES that
+// sentinel WITHOUT checking it — `arr[find(x)]`, `xs.substring(find(a), …)`,
+// or a window `xs[find(a) .. find(b)]` where a `-1` makes a wrong/inverted
+// slice (silent-wrong-data) or a negative-index read (a hard fault, see
+// NEGATIVE-INDEX SEMANTICS below).
+//
+// The OP-119 census found the entire NON-parser stdlib data/algorithm/util
+// surface (collections find_index, semver / http / cli / record_loader
+// index_of helpers, bio/matter audit idx_of / find_idx / find_sub, cluster /
+// kernels finders, magnet_gate / godel float-&-int sentinels) GUARDS the
+// sentinel before use — every consumer is `if idx < 0 { fallback }` or a
+// provably-present lookup. This leaf re-derives the protective GUARDED
+// pattern verbatim and a NEGATIVE CONTROL proving the guard is load-bearing
+// (the unguarded twin yields the wrong window / would index out of bounds).
+//
+// NEGATIVE-INDEX SEMANTICS (probed): `arr[-1]` is a HARD FAULT in hexa
+// (`index -1 out of bounds (len N)`) — NOT a Python-style wrap to the last
+// element. So an unchecked `-1` finder-sentinel used as an index is a
+// crash/DoS, and used in slice/arithmetic is silent-wrong-data. Either way
+// the guard is mandatory; this test locks both the guarded result and the
+// wrong-window the unguarded twin would produce.
+//
+// Run: `hexa run stdlib/info/unchecked_sentinel_guard_op119_test.hexa`
+
+// index of first occurrence of single-char `ch` in `s`, or -1 (the canonical
+// stdlib finder-sentinel shape, e.g. semver._sv_index_of / cli._index_of).
+fn idx_of(s: string, ch: string) -> int {
+    let mut i = 0
+    while i < len(s) {
+        if s.substring(i, i + 1) == ch { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// GUARDED consumer — the protective pattern found at every census site:
+// peel the substring AFTER `ch`, but on a miss (-1) return a documented
+// fallback (here the whole string) instead of slicing on the sentinel.
+fn after_char_guarded(s: string, ch: string) -> string {
+    let at = idx_of(s, ch)
+    if at < 0 { return s }               // miss-guard — no sentinel slice
+    return s.substring(at + 1, len(s))
+}
+
+// UNGUARDED twin (the BUG shape) — uses the raw result as a slice start. On a
+// miss the `-1` makes the would-be window start 0 (`-1 + 1`), which slices the
+// WHOLE input (a silently-wrong "found everything" window) instead of the
+// intended not-found fallback. We return the would-be start so the negative
+// control can assert it is wrong without faulting on a negative substring.
+fn after_char_unguarded_start(s: string, ch: string) -> int {
+    let at = idx_of(s, ch)
+    return at + 1                        // unchecked: -1 -> 0, wrong window
+}
+
+fn main() {
+    let mut pass = 0
+    let mut fail = 0
+
+    // ---- HIT path: guarded == unguarded when the needle is present -------
+    let s = "key=value"
+    let hit = after_char_guarded(s, "=")
+    if hit == "value" { pass = pass + 1 } else { fail = fail + 1 }
+    // unguarded start on a HIT is also correct (4) — guard changes nothing
+    if after_char_unguarded_start(s, "=") == 4 { pass = pass + 1 } else { fail = fail + 1 }
+
+    // ---- MISS path: the guard returns the documented fallback ------------
+    let nodelim = "novaluehere"
+    let miss = after_char_guarded(nodelim, "=")
+    // GUARDED: miss -> whole-string fallback (documented), NOT a -1 slice
+    if miss == nodelim { pass = pass + 1 } else { fail = fail + 1 }
+
+    // ---- finder returns the -1 sentinel on a miss (the class precondition)
+    if idx_of(nodelim, "=") == -1 { pass = pass + 1 } else { fail = fail + 1 }
+
+    // ---- a guarded array lookup never indexes with the sentinel ----------
+    let arr = [10, 20, 30]
+    let where_ = idx_of("ABC", "X")      // miss -> -1
+    let mut got = -999
+    if where_ >= 0 { got = arr[where_] } else { got = -999 }  // guard skips read
+    if got == -999 { pass = pass + 1 } else { fail = fail + 1 }
+    // hit lookup still works
+    let where2 = idx_of("AXC", "X")      // -> 1
+    if where2 >= 0 && arr[where2] == 20 { pass = pass + 1 } else { fail = fail + 1 }
+
+    // ---- NEGATIVE CONTROL — the guard is load-bearing --------------------
+    // The UNGUARDED start on a MISS computes 0, which would slice the WHOLE
+    // input (a silently-wrong "found everything" window) instead of the
+    // intended not-found fallback. Assert the unguarded start really is the
+    // wrong value (0), proving the `if at < 0` guard above does real work.
+    let bad_start = after_char_unguarded_start(nodelim, "=")
+    if bad_start == 0 { pass = pass + 1 } else { fail = fail + 1 }   // wrong window
+    // And the raw sentinel as an index would be -1 (the hard-fault index):
+    let raw_sentinel = idx_of(nodelim, "=")
+    if raw_sentinel == -1 { pass = pass + 1 } else { fail = fail + 1 } // would fault arr[-1]
+
+    println("OP119 unchecked-sentinel-guard pass=" + str(pass) + " fail=" + str(fail))
+    if fail == 0 { println("ALL GREEN") } else { println("FAILURES PRESENT") }
+}
