@@ -91,7 +91,7 @@ fn _sha256(p: str) -> str {
 fn _hexa_run() -> str {
     // Prefer an on-PATH hexa-run; fall back to the canonical install path.
     if _which("hexa-run") { return "hexa-run" }
-    return "/Users/ghost/.hx/bin/hexa-run"
+    return env("HOME") + "/.hx/bin/hexa-run"
 }
 
 fn _check(ok: bool, label: str, detail: str) {
