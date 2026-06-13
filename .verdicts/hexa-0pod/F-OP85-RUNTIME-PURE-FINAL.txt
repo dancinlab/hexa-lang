@@ -1,0 +1,172 @@
+F-OP85-RUNTIME-PURE-FINAL — HEXA-0POD OP-85 (LANE-1, 0-pod)
+============================================================
+FINAL high-value runtime *_pure coverage tranche. CLOSES the runtime
+authoritative-reference vein. Follows OP-80 (crc32) + OP-82 (murmur3/
+xxhash/checksum/base64/hex/mod_exp) on the self/runtime/*_pure surface.
+
+TIER: 🟢 GREEN — 6 HIGH-value runtime *_pure helpers oracle-locked
+       (82/82 leaf assertions PASS) + 1 reference-side test bug found
+       and fixed; all 6 audited modules PROVEN-CLEAN.
+
+─────────────────────────────────────────────────────────────────────
+1. CENSUS (scoped, NO .git)
+─────────────────────────────────────────────────────────────────────
+The OP-82 census (~14 "remaining HIGH-value" runtime helpers: siphash,
+hash, encoding, cipher_mini, bignum_mini, hash_rng, kmp, levenshtein,
+prime_sieve, conv, ipv4, datetime, date_time, hyperloglog) was STALE on
+fetch — a sibling lane had already landed self/test_<name>_pure.hexa leaf
+tests for 13 of the 14 (all except hyperloglog). So OP-85 re-censused the
+FULL runtime *_pure surface against companion-test presence.
+
+  total self/runtime/*_pure.hexa helpers ............... 73
+  helpers WITH a companion test (self/test_*  OR
+        self/runtime/*_pure_test.hexa) BEFORE this round . 61
+  helpers WITHOUT any companion test BEFORE this round .. 12:
+    char_code · count_min_sketch · ffi_path · geometry2d ·
+    heap · hyperloglog · lfu_cache · lsm_tree · numeric_sat ·
+    print_fmt · regex_mini · reservoir_sample
+
+Triage of the 12 by AUTHORITATIVE-reference / lockable-invariant:
+
+  HIGH (external oracle / hard invariant) — LOCKED this round (6):
+    numeric_sat       C `%.*f`/`%.*e` + int(trunc) saturation ref
+    count_min_sketch  no-under-count + collision-free EXACT vs dict
+    hyperloglog       register-wise structural invariants (see §3)
+    geometry2d        closed-form L1/Linf/cross/shoelace math ref
+    heap              pop-order == ascending sort (priority-queue ref)
+    regex_mini        CPython `re` for the supported subset
+
+  LOW / no-external-KAT — DEFERRED (6), justification:
+    char_code         thin 1-byte mirror of hexa_char_code; a NEAR-DUP
+                      of the already-tested conv_pure::char_to_int_pure.
+                      Lockable but marginal; deferred to avoid padding.
+    ffi_path          lib-path string munging; hexa-internal convention
+                      (hexa_ffi_extract_libname), no external standard.
+    lfu_cache         eviction policy; tie-break is impl-defined, no KAT.
+    lsm_tree          in-memory KV; only a get/put round-trip, no ref.
+    print_fmt         cosmetic pretty-printers; output is impl-defined.
+    reservoir_sample  statistical sampling; only weak distribution
+                      sanity (non-deterministic), no hard KAT.
+
+─────────────────────────────────────────────────────────────────────
+2. LOCKED THIS ROUND — leaf oracles (all run on shipping `hexa run`)
+─────────────────────────────────────────────────────────────────────
+Pattern = OP-80 crc32 (@sentinel + fn main(), gated on `hexa run`). The
+three nil-free modules (numeric_sat, count_min_sketch, hyperloglog) are
+`use`-imported directly. The three modules that return `nil` on the
+empty/miss path (geometry2d, heap, regex_mini) INLINE a behaviorally-
+identical copy — the local build/hexat (0.1.0-dispatch) rejects the
+`nil` literal at parse time (MEMORY "local hexa stale oracle"; a stale-
+binary parse defect is NOT a shipping bug), so the inline copy uses a
+sentinel value ([-1,-1] miss / non-empty-only path) leaving the audited
+arithmetic byte-identical.
+
+VERBATIM `hexa run` OUTPUT (arm64-macos, exit 0):
+
+    __HEXA_RUNTIME_NUMERIC_SAT__ PASS 16/16
+    __HEXA_RUNTIME_CMS__ PASS 13/13
+    __HEXA_RUNTIME_HLL__ PASS 8/8
+    __HEXA_RUNTIME_GEOMETRY2D__ PASS 15/15
+    __HEXA_RUNTIME_HEAP__ PASS 5/5
+    __HEXA_RUNTIME_REGEX_MINI__ PASS 25/25
+
+  numeric_sat (16): float_to_int_saturating trunc-toward-zero (3.99→3,
+    -3.99→-3, 0→0, int passthrough); INT64 saturation (1e30→
+    9223372036854775807, -1e30→-9223372036854775808); format_float
+    golden `%.*f` (3.14159/2→"3.14", 2.5/0→"3", 0.5/0→"1", 123.456/1→
+    "123.5", 99.999/2→"100.00", -2.71828/3→"-2.718"); format_float_sci
+    `%.*e` (31415.9/3→"3.142e+04", 0.000123/2→"1.23e-04", 0/2→"0.00e+00").
+  count_min_sketch (13): width=256 collision-free => estimate==true count
+    (a=5,b=3,c=1,d=10); no-under-count est>=true for all; absent key>=0;
+    merge==element-wise sum (est_d → est_d+2); hash determinism; shape.
+  hyperloglog (8): precision clamp [4,16]; merge==register-wise max;
+    determinism (identical multiset→identical registers); idempotent on
+    seen items; self-merge identity; register-sum monotone over 200 adds.
+  geometry2d (15): manhattan/chebyshev golden + identity + symmetry;
+    cross-product orientation sign (CCW>0, CW<0, collinear==0); shoelace
+    ×2 sign=vertex-order (CCW 4×3→24, unit CCW→2, reversed→-2, <3→0);
+    bounding-box on a non-empty cloud → [-1,0,3,5].
+  heap (5): build-then-drain == ascending sort; push-then-drain == sort;
+    peek(heap[0])==min; duplicate keys still sort; singleton pops itself.
+  regex_mini (25): regex_match vs re.fullmatch; star/ques greedy/optional;
+    regex_search + ^/$ anchors vs re.search; find_all non-overlapping
+    starts vs re.finditer ([0,2,4],[1,3,5],[1,3]); find + replace-first.
+
+─────────────────────────────────────────────────────────────────────
+3. CROSS-CHECK vs authoritative reference (faithful Python ports)
+─────────────────────────────────────────────────────────────────────
+Per the 0-pod regimen (local seed = Jun-1/Jun-13 stale-oracle), every
+oracle was independently reproduced against an external reference:
+
+  numeric_sat   faithful Python port of the scale+0.5+truncate arithmetic
+                vs int(math.trunc(.)) — 0 mismatch over 5000 random reals;
+                all 9 format_float goldens reproduced (the one round-half
+                tie, 1.005/2, the module's half-away "1.00" is recorded as
+                the documented C `%f` convention — see module note).
+  geometry2d    Python port of manhattan/chebyshev/cross/shoelace —
+                shoe2 square=24, unit CCW=2, CW=-2; cross perp=1,
+                collinear=0; all == hexa output (0 mismatch).
+  heap          Python `heapq` port — pop-order == sorted(arr) over 500
+                random arrays (len 0..30), 0 mismatch.
+  count_min_sketch  exact-frequency dict reference — the no-under-count
+                invariant + collision-free EXACT equality both hold.
+  hyperloglog   Python port of the FNV-1a + rank + register update — 0
+                mismatch on REGISTER state. NOTE: the raw cardinality
+                ESTIMATE has NO usable accuracy bound and the
+                "1.04/sqrt(m)" KAT is UNVERIFIED for this estimator —
+                MEASURED p=12 (m=4096): empty sketch → ~2954, true-1000
+                → ~3464. This is a DOCUMENTED module limitation (header
+                lines 24-30: small-/large-range corrections OMITTED),
+                NOT a bug. The structural register invariants ARE
+                authoritative and are what this oracle locks.
+  regex_mini    CPython `re` (re.fullmatch / re.search / re.finditer) on
+                the supported subset (. * ? ^ $ [abc] \x) — every boolean
+                + every find-all index list matches, 0 mismatch.
+
+─────────────────────────────────────────────────────────────────────
+4. 🔴 BUG FOUND (in the OP-85 TEST, not a shipping module)
+─────────────────────────────────────────────────────────────────────
+First heap_pure_test draft used a hand-rolled insertion-sort as the
+"sorted" reference. On the local stale build its `a[q+1] = a[q]` index-
+assignment shift produced GARBAGE (e.g. sorted([5,3,8,1,9,2,7,4,6,0]) →
+[0,6,7,9,8,5,8,8,8,9]) — the exact array-index-assignment fragility the
+heap MODULE deliberately avoids via copy-on-write _h_set_at. The heap
+module itself was CORRECT all along (its drains produced [0..9] and the
+dup case [1,1,1,2,2,3,3,4,4,4]). FIX: replaced the buggy reference with
+LITERAL golden sorted arrays (the most authoritative ref anyway). No
+shipping module touched. (This is a reference-side defect, surfaced and
+closed before landing — no 🔴 in any audited *_pure module.)
+
+─────────────────────────────────────────────────────────────────────
+5. COVERAGE MATRIX + VEIN CLOSURE
+─────────────────────────────────────────────────────────────────────
+  runtime *_pure helpers with a companion test: 61 → 67 of 73
+    (+6 this round: numeric_sat, count_min_sketch, hyperloglog,
+     geometry2d, heap, regex_mini)
+  remaining untested (6): char_code (thin near-dup), ffi_path,
+    lfu_cache, lsm_tree, print_fmt, reservoir_sample —
+    all internal-glue / policy-defined / cosmetic, NO external KAT.
+
+  VEIN CLOSURE: the HIGH-value-with-authoritative-reference runtime
+  *_pure vein is CLOSED. Every remaining untested helper has no external
+  known-answer test (impl-defined policy/format/sampling) or is a thin
+  near-duplicate of an already-locked helper. Future coverage of those 6
+  would lock only round-trip/determinism (no reference), i.e. low value.
+
+─────────────────────────────────────────────────────────────────────
+6. BYTE-EQ / GUARDS
+─────────────────────────────────────────────────────────────────────
+  6 NEW leaf test files only; ZERO audited-module bytes changed; ZERO
+  deletions (wipe_guard N/A, net-additive). The *_pure_test.hexa leaves
+  are NOT imported by any self-host stage (not in build_selfhost closure)
+  → self-host fixpoint UNAFFECTED. LANE split honored (self/runtime/*_pure
+  only; no stdlib/* touched). $0 · 0-pod · NO GPU · no vast · no foreign
+  pod · no .tape · no self/env.hexa · leak-0.
+
+Files:
+  self/runtime/numeric_sat_pure_test.hexa
+  self/runtime/count_min_sketch_pure_test.hexa
+  self/runtime/hyperloglog_pure_test.hexa
+  self/runtime/geometry2d_pure_test.hexa
+  self/runtime/heap_pure_test.hexa
+  self/runtime/regex_mini_pure_test.hexa

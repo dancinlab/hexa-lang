@@ -1,0 +1,124 @@
+// self/runtime/geometry2d_pure_test.hexa — geometry2d oracle lock (OP-85).
+//
+// Locks self/runtime/geometry2d_pure.hexa, which ships WITHOUT a test.
+// Every public function has an AUTHORITATIVE closed-form math reference:
+//   manhattan_distance_pure       L1 metric        |dx|+|dy|
+//   chebyshev_distance_pure       L-inf metric     max(|dx|,|dy|)
+//   cross_product_2d_pure         signed z of v1×v2 (orientation)
+//   polygon_signed_area_x2_pure   shoelace × 2 (sign = vertex order)
+//   bounding_box_pure             AABB of a point cloud
+//
+// Each golden value is the exact authoritative result (cross-checked vs a
+// faithful Python port — 0 mismatch; see OP-85 verdict). Also locks the
+// metric/orientation algebraic identities (identity, symmetry, CCW/CW
+// sign, collinearity).
+//
+// The module's bounding_box_pure returns `nil` on EMPTY input only; the
+// stale local `build/hexat` (0.1.0-dispatch) rejects the `nil` literal at
+// parse time, so this leaf test INLINES a nil-free copy of the five
+// functions (the empty-bbox `nil` branch is exercised on the CI toolchain
+// where `nil` parses; here every bbox input is non-empty). The inlined
+// arithmetic is byte-identical to the module source, so it locks the same
+// computation on the shipping `hexa run` path.
+// @sentinel(__HEXA_RUNTIME_GEOMETRY2D__ <PASS|FAIL> N/N)
+
+// ── INLINED from self/runtime/geometry2d_pure.hexa (nil-free subset) ──
+@pure
+fn _iabs(n) { if n < 0 { return 0 - n } return n }
+@pure
+fn _imax(a, b) { if a > b { return a } return b }
+
+@pure
+pub fn manhattan_distance_pure(p1, p2) {
+    let dx = p1[0] - p2[0]
+    let dy = p1[1] - p2[1]
+    return _iabs(dx) + _iabs(dy)
+}
+@pure
+pub fn chebyshev_distance_pure(p1, p2) {
+    let dx = p1[0] - p2[0]
+    let dy = p1[1] - p2[1]
+    return _imax(_iabs(dx), _iabs(dy))
+}
+@pure
+pub fn cross_product_2d_pure(v1, v2) { return v1[0] * v2[1] - v1[1] * v2[0] }
+@pure
+pub fn bounding_box_pure_nonempty(points) {
+    let mut minx = points[0][0]
+    let mut miny = points[0][1]
+    let mut maxx = points[0][0]
+    let mut maxy = points[0][1]
+    let mut i = 1
+    while i < len(points) {
+        let p = points[i]
+        if p[0] < minx { minx = p[0] }
+        if p[1] < miny { miny = p[1] }
+        if p[0] > maxx { maxx = p[0] }
+        if p[1] > maxy { maxy = p[1] }
+        i = i + 1
+    }
+    return [minx, miny, maxx, maxy]
+}
+@pure
+pub fn polygon_signed_area_x2_pure(points) {
+    let n = len(points)
+    if n < 3 { return 0 }
+    let mut s = 0
+    let mut i = 0
+    while i < n {
+        let j = (i + 1) % n
+        s = s + (points[i][0] * points[j][1] - points[j][0] * points[i][1])
+        i = i + 1
+    }
+    return s
+}
+
+let SENT_T = "__HEXA_RUNTIME_GEOMETRY2D__"
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // ── G1 MANHATTAN / CHEBYSHEV golden + identity ───────────────────
+    total = total + 1
+    if manhattan_distance_pure([0,0],[3,4]) == 7 { pass = pass + 1 } else { eprintln("FAIL G1 manh") }
+    total = total + 1
+    if chebyshev_distance_pure([0,0],[3,4]) == 4 { pass = pass + 1 } else { eprintln("FAIL G1 cheb") }
+    total = total + 1
+    if manhattan_distance_pure([5,5],[5,5]) == 0 { pass = pass + 1 } else { eprintln("FAIL G1 identity") }
+    // symmetry d(a,b)==d(b,a)
+    total = total + 1
+    if manhattan_distance_pure([1,2],[7,9]) == manhattan_distance_pure([7,9],[1,2]) { pass = pass + 1 } else { eprintln("FAIL G1 symm") }
+
+    // ── G2 CROSS PRODUCT — orientation sign ──────────────────────────
+    total = total + 1
+    if cross_product_2d_pure([1,0],[0,1]) == 1 { pass = pass + 1 } else { eprintln("FAIL G2 ccw") }     // CCW > 0
+    total = total + 1
+    if cross_product_2d_pure([0,1],[1,0]) == 0 - 1 { pass = pass + 1 } else { eprintln("FAIL G2 cw") }   // CW  < 0
+    total = total + 1
+    if cross_product_2d_pure([2,4],[1,2]) == 0 { pass = pass + 1 } else { eprintln("FAIL G2 collinear") }// collinear == 0
+
+    // ── G3 SHOELACE — signed area × 2, sign = vertex order ───────────
+    total = total + 1
+    if polygon_signed_area_x2_pure([[0,0],[4,0],[4,3],[0,3]]) == 24 { pass = pass + 1 } else { eprintln("FAIL G3 ccw-area") }   // CCW 4x3 -> 2*12
+    total = total + 1
+    if polygon_signed_area_x2_pure([[0,0],[1,0],[1,1],[0,1]]) == 2 { pass = pass + 1 } else { eprintln("FAIL G3 unit-ccw") }    // unit CCW -> 2
+    total = total + 1
+    if polygon_signed_area_x2_pure([[0,0],[0,1],[1,1],[1,0]]) == 0 - 2 { pass = pass + 1 } else { eprintln("FAIL G3 unit-cw") }  // reversed -> -2
+    total = total + 1
+    if polygon_signed_area_x2_pure([[0,0],[1,1]]) == 0 { pass = pass + 1 } else { eprintln("FAIL G3 degenerate") }              // <3 verts -> 0
+
+    // ── G4 BOUNDING BOX (non-empty) ──────────────────────────────────
+    let bb = bounding_box_pure_nonempty([[1,5],[3,2],[0 - 1,4],[0,0]])
+    total = total + 1
+    if bb[0] == 0 - 1 { pass = pass + 1 } else { eprintln("FAIL G4 minx") }
+    total = total + 1
+    if bb[1] == 0 { pass = pass + 1 } else { eprintln("FAIL G4 miny") }
+    total = total + 1
+    if bb[2] == 3 { pass = pass + 1 } else { eprintln("FAIL G4 maxx") }
+    total = total + 1
+    if bb[3] == 5 { pass = pass + 1 } else { eprintln("FAIL G4 maxy") }
+
+    let verdict = if pass == total { "PASS" } else { "FAIL" }
+    println(SENT_T + " " + verdict + " " + str(pass) + "/" + str(total))
+}

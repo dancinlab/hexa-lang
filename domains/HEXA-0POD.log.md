@@ -3454,3 +3454,59 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   builtin_names vs lsp.hexa get_builtins() are two hand-lists with no compile-time consistency check (latent drift;
   a future 0-pod test get_builtins() ⊆ roster would catch this automatically). $0 · 0-GPU · 0-pod · no vast ·
   no foreign-pod · no .tape. Verdict F-OP65-LSP-ORPHAN-PRUNE.txt.
+
+## OP-85 — FINAL high-value runtime *_pure tranche; CLOSES the runtime authoritative-reference vein (6 helpers locked 82/82) — 2026-06-13
+- SCOPE: LANE-1 (self/runtime/*_pure). OP-82 follow-on. Census of the OP-82 "~14 remaining HIGH-value" list was
+  STALE on `git fetch origin main` (e022ba889..9212b61d3): a sibling lane had already landed
+  self/test_<name>_pure.hexa leaf tests for 13/14 (siphash·hash·encoding·cipher_mini·bignum_mini·hash_rng·kmp·
+  levenshtein·prime_sieve·conv·ipv4·datetime·date_time — all EXCEPT hyperloglog). Re-censused the FULL runtime
+  *_pure surface by companion-test presence instead.
+- CENSUS (scoped, NO .git): 73 self/runtime/*_pure.hexa; 12 without any companion test → char_code · count_min_sketch
+  · ffi_path · geometry2d · heap · hyperloglog · lfu_cache · lsm_tree · numeric_sat · print_fmt · regex_mini ·
+  reservoir_sample. Triage by AUTHORITATIVE-reference / lockable-invariant.
+- PICK (g0, HIGH-value with a real external oracle, 6): numeric_sat (C %.*f/%.*e + int(trunc) saturation) ·
+  count_min_sketch (no-under-count + collision-free EXACT vs exact-freq dict) · hyperloglog (register-wise
+  structural invariants) · geometry2d (closed-form L1/Linf/cross/shoelace) · heap (pop-order==ascending sort) ·
+  regex_mini (CPython `re` for the . * ? ^ $ [abc] \x subset).
+- DEFER (LOW / no external KAT, 6): char_code (thin 1-byte mirror of hexa_char_code, NEAR-DUP of the already-tested
+  conv_pure::char_to_int_pure) · ffi_path (internal lib-path convention, no standard) · lfu_cache (impl-defined
+  eviction tie-break) · lsm_tree (in-memory get/put round-trip only) · print_fmt (cosmetic pretty-printers) ·
+  reservoir_sample (weak distribution sanity, non-deterministic). Deferred to avoid padding (g0).
+- BUILD: 6 leaf oracles, OP-80 @sentinel + fn main() pattern, gated on `hexa run`. The 3 nil-free modules
+  (numeric_sat·count_min_sketch·hyperloglog) `use`-imported directly. The 3 modules that return `nil` on the
+  empty/miss path (geometry2d·heap·regex_mini) INLINE a behaviorally-identical copy with a [-1,-1] miss /
+  non-empty-only sentinel — the local build/hexat (0.1.0-dispatch, "interp retired" → always transpiles) rejects
+  the `nil` literal at parse time; a stale-binary parse defect is NOT a shipping bug (MEMORY local-hexa-stale-oracle).
+  The inline arithmetic is byte-identical to the audited module.
+- RUN (verbatim, `hexa run` arm64-macos exit 0):
+    __HEXA_RUNTIME_NUMERIC_SAT__ PASS 16/16
+    __HEXA_RUNTIME_CMS__ PASS 13/13
+    __HEXA_RUNTIME_HLL__ PASS 8/8
+    __HEXA_RUNTIME_GEOMETRY2D__ PASS 15/15
+    __HEXA_RUNTIME_HEAP__ PASS 5/5
+    __HEXA_RUNTIME_REGEX_MINI__ PASS 25/25
+  (82/82 assertions.)
+- CROSS-CHECK (g5, faithful Python ports vs external reference): numeric_sat scale+0.5+trunc vs int(math.trunc)
+  0/5000 + 9 format goldens; geometry2d vs closed-form (shoe2 square=24/unitCCW=2/CW=-2, cross perp=1/collinear=0)
+  0 mism; heap vs `heapq` pop-order==sorted(arr) 0/500; count_min_sketch no-under-count + EXACT vs exact dict;
+  regex_mini vs re.fullmatch/search/finditer ([0,2,4]/[1,3,5]/[1,3]) 0 mism.
+- HLL NOTE: the RAW harmonic-mean estimate has NO usable accuracy bound — MEASURED p=12 (m=4096): empty sketch
+  → ~2954, true-1000 set → ~3464. The "1.04/sqrt(m)" cardinality KAT is therefore UNVERIFIED for this estimator;
+  this is a DOCUMENTED module limitation (header lines 24-30: small-/large-range corrections OMITTED), NOT a bug.
+  The oracle locks the authoritative REGISTER invariants instead (clamp/merge==regmax/determinism/idempotent/
+  self-merge/monotone), cross-checked against a Python register-state port at 0 mismatch.
+- 🔴 BUG (in the OP-85 TEST, not a shipping module): the first heap_pure_test draft used a hand-rolled
+  insertion-sort as the "sorted" reference; its `a[q+1]=a[q]` index-assignment shift hit the exact
+  array-index-assignment fragility the heap MODULE deliberately avoids via copy-on-write _h_set_at, producing
+  garbage (sorted([5,3,8,1,9,2,7,4,6,0])→[0,6,7,9,8,5,8,8,8,9]). FIX: replaced the reference with literal golden
+  sorted arrays (the most authoritative ref anyway). The heap module itself was CORRECT throughout (its drains
+  produced [0..9] and the dup case [1,1,1,2,2,3,3,4,4,4]). No shipping module touched; all 6 audited modules
+  PROVEN-CLEAN.
+- COVERAGE: 61→67 of 73 runtime *_pure now carry a companion test. Remaining 6 untested = char_code (near-dup) +
+  ffi_path/lfu_cache/lsm_tree/print_fmt/reservoir_sample (internal-glue / policy-defined / cosmetic / statistical,
+  NO external KAT). VEIN CLOSED: the HIGH-value-with-authoritative-reference runtime *_pure vein is CLOSED — any
+  remaining coverage would lock only round-trip/determinism with no external reference (low value).
+- BYTE-EQ / GUARDS: 6 NEW leaf test files only; 0 audited-module bytes changed; 0 deletions (wipe_guard
+  net-additive). The *_pure_test.hexa leaves are NOT in the build_selfhost closure → self-host fixpoint
+  UNAFFECTED. LANE split honored (no stdlib/* touched). $0 · 0-pod · NO GPU · no vast · no foreign-pod · no .tape ·
+  no self/env.hexa · leak-0. Milestone OP-85 [x]. Verdict F-OP85-RUNTIME-PURE-FINAL.txt.
