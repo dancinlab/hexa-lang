@@ -219,8 +219,8 @@ if [ "$(uname -s)" = "Darwin" ]; then
     EXTRA_DEFS="-D_DARWIN_C_SOURCE"
 fi
 clang -c -O2 -arch arm64 -std=gnu11 -D_GNU_SOURCE $EXTRA_DEFS -Wno-trigraphs -I self -I . \
-    self/runtime.c -o "$RTO" 2>&1 | grep -iE 'error:' | head -3
-clang -arch arm64 "$SMS" -c -o "$SMO" 2>&1 | grep -iE 'error:' | head -3
+    self/runtime.c -o "$RTO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
+clang -arch arm64 "$SMS" -c -o "$SMO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
 clang -arch arm64 "$SMO" "$RTO" -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:' | head -5
 if [ ! -x "$SMB" ]; then
     echo "build_aprime: smoke link failed" >&2

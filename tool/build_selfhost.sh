@@ -170,7 +170,7 @@ log "stage0: aprime_cc OK ($(stat -f%z "$WORK/aprime_cc" 2>/dev/null || echo ?) 
 log "runtime: clang self/runtime.c -> rt.o"
 EXTRA=""; [ "$(uname -s)" = "Darwin" ] && EXTRA="-D_DARWIN_C_SOURCE"
 clang -c -O2 -arch arm64 -std=gnu11 -D_GNU_SOURCE $EXTRA -Wno-trigraphs \
-    -I self -I . self/runtime.c -o "$WORK/rt.o" 2>&1 | grep -iE 'error:' | head -3
+    -I self -I . self/runtime.c -o "$WORK/rt.o" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
 [ -s "$WORK/rt.o" ] || fail runtime rt.o
 
 # ── stage: hexa_ld (Mach-O linker w/ __literal8 const-merge fix on main) ──────

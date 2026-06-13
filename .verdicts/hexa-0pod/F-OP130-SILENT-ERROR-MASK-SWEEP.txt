@@ -1,0 +1,92 @@
+F-OP130-SILENT-ERROR-MASK-SWEEP — narrow error-detection mask sweep
+campaign HEXA-0POD · LANE-1 · 0-pod · $0 · NO GPU · 2026-06-13
+
+VERDICT: 🔴 3 fragile diagnostic masks fixed + 🟢 census CONVERGED
+(the OP-129 class was the ONLY genuine offender family; 3 narrow `error:`
+masks survived OP-129's targeted fix → widened here)
+
+═══════════════════════════════════════════════════════════════════════
+BACKGROUND
+═══════════════════════════════════════════════════════════════════════
+OP-129 found `tool/build_selfhost.sh` used `grep -iE 'error:'` to surface a
+failed build step, but clang's linker failure prints "Undefined symbols for
+architecture …" (NO `error:` token), so the mask MISSED it → the script's
+diagnostic was empty before the artifact-existence `fail`, producing a
+confusing/misleading failure. OP-129 widened the ONE linker line it touched
+(`error:|undefined`). OP-130 sweeps the WHOLE repo for the same class.
+
+═══════════════════════════════════════════════════════════════════════
+CENSUS — error/success-detection gates in tool/*.sh · .githooks/* · CI yml
+═══════════════════════════════════════════════════════════════════════
+Surveyed: every `grep -i*error`, `grep 'error:'`, `| grep -q`, `grep -c`,
+`if … grep`, `&& echo PASS`/`|| echo FAIL`, and CI `::error::` gate across
+tool/*.sh (≈110 scripts), .githooks/*, .github/workflows/*.yml.
+
+gate (file:line)                                   | fragile? | failure-mode missed                                  | fix
+---------------------------------------------------|----------|------------------------------------------------------|---------------------------------
+build_selfhost.sh:173  rt.o clang `grep 'error:'`  | YES (dx) | clang link/`ld:`/`fatal error:`/`Undefined symbols`  | widen → error:|undefined|ld:|fatal|cannot find
+build_aprime.sh:222    rt.o clang `grep 'error:'`  | YES (dx) | same — narrow mask swallows non-`error:` diagnostics | widen → error:|undefined|ld:|fatal|cannot find
+build_aprime.sh:223    .s   clang `grep 'error:'`  | YES (dx) | assembler `fatal error:`/`cannot find` swallowed     | widen → error:|undefined|ld:|fatal|cannot find
+build_selfhost.sh:??   hexat clang  (OP-129)       | n/a now  | OP-129's #3296 merge consolidated the hexat TU; the  | (gone — no narrow mask remains)
+                                                   |          | narrow hexat mask no longer exists post-merge        |
+build_selfhost.sh:213  hexa_ld link (OP-129 fixed) | ROBUST   | already `error:|undefined`                           | (left as-is)
+build_aprime.sh:204    main clang  `[ -n "$CL_ERR"]| ROBUST   | grep RESULT gates pass/fail BUT OR'd with `[!-x OUT]`| (left — artifact backstop covers)
+build_aprime.sh:224    smoke link  `undefined|err` | ROBUST   | already covers `undefined`                           | (left as-is)
+build_hexa_{atlas,calc,check,verify,…}.sh          | ROBUST   | pass/fail decided by `rc=$?` (build) + secondary     | (left — exit-code based)
+                                                   |          | banner smoke; grep is a 2nd check, not the gate      |
+flame_phase4b3_verify_all.sh (grep "^PASS")        | ROBUST   | PASS-marker gate but each verify step run-asserts;    | (left — marker is the contract)
+determinism_gate / miscompile_zero / codegen_guard |          | grep -c ENCODE-MISS = a COUNT metric, not the only   |
+  (grep -c ENCODE-MISS / udf)                      | ROBUST   | pass/fail axis (exit-code + count both gate)         | (left)
+dispatch_*.sh (`grep -q READY`/`grep -q OK`)       | ROBUST   | remote-readiness probes, retried + exit-code guarded | (left)
+CI .github/workflows/*.yml                          | ROBUST   | use `::error::` annotations + step exit codes, NOT   | (left)
+                                                   |          | output-grep gates                                    |
+
+dx = "diagnostic-only fragile": the grep is DISPLAY-only (its stdout is piped
+to the terminal/log), and the ACTUAL pass/fail decision is the next-line
+artifact-existence check (`[ -s rt.o ] || fail`, `[ -x SMB ] || exit`). So the
+GATE never silently passed — but the narrow mask SWALLOWED the real linker /
+assembler error text, leaving an empty diagnostic before the failure, which is
+exactly the confusing-failure half of the OP-129 class. Widening only ever
+prints MORE real failure text → ZERO false-positive / CI-break hazard (a
+display widening cannot flip a gate; the gate is the artifact/exit check).
+
+═══════════════════════════════════════════════════════════════════════
+DEMONSTRATED MISSED FAILURE MODE (build_aprime.sh:223, representative)
+═══════════════════════════════════════════════════════════════════════
+clang -arch arm64 "$SMS" -c -o "$SMO" 2>&1 | grep -iE 'error:' | head -3
+  If the smoke .s fails to assemble with e.g.
+    "fatal error: cannot find ..." OR an "ld: " surfaced through the driver,
+  the line emits NO matching text → the operator sees a blank line then a
+  later `[ ! -x "$SMB" ]` → "smoke link failed" with the REAL cause hidden.
+After widening to `error:|undefined|ld:|fatal|cannot find` the real diagnostic
+is surfaced verbatim, matching OP-129's `error:|undefined` precedent.
+
+═══════════════════════════════════════════════════════════════════════
+FIX (surgical, 3 lines, 2 files — matches OP-129's widening style)
+═══════════════════════════════════════════════════════════════════════
+tool/build_selfhost.sh:173  grep -iE 'error:'  → grep -iE 'error:|undefined|ld:|fatal|cannot find'
+tool/build_aprime.sh:222    grep -iE 'error:'  → grep -iE 'error:|undefined|ld:|fatal|cannot find'
+tool/build_aprime.sh:223    grep -iE 'error:'  → grep -iE 'error:|undefined|ld:|fatal|cannot find'
+
+`bash -n` clean on both files post-edit. `grep -rn "grep -iE 'error:'" tool/*.sh`
+→ 0 remaining narrow `error:`-only masks repo-wide.
+
+═══════════════════════════════════════════════════════════════════════
+HONEST SCOPE / FLAGS
+═══════════════════════════════════════════════════════════════════════
+- 2 BUILD SCRIPTS (.sh) only, NO compiler source → ZERO byte-eq/fixpoint
+  impact, no selfhost gate semantics changed.
+- net-additive (3 widened patterns, 0 deletions) → wipe_guard N/A.
+- Robustness ranking confirmed: the pass/fail GATES across the repo are
+  predominantly exit-code / artifact-existence based (the robust pattern);
+  the only fragility was the OP-129 narrow-mask DIAGNOSTIC class, now fully
+  swept. CI workflows decide on step exit codes, never output-grep magic
+  words.
+- HONEST residual: can a build/CI script STILL silently swallow a real
+  failure? NO known case remains where a narrow grep DECIDES pass/fail —
+  every grep gate is either exit-code/artifact-backstopped or a count metric
+  alongside an exit check. The one grep-RESULT-gates-passfail site
+  (build_aprime.sh:204) is OR'd with `[ ! -x "$OUT" ]`, so a no-`error:`-token
+  clang failure still fails via the missing artifact. Class CONVERGED.
+
+$0 · 0-pod · NO GPU · no vast · no foreign-pod · leak-0 · LANE-1.
