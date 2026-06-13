@@ -1,0 +1,123 @@
+══════════════════════════════════════════════════════════════════════════════
+ F-OP145-ARRAY-STORE-FN-HANG
+ HEXA-0POD · LANE-1 · 2026-06-13 · $0 · 0-pod · NO GPU · no vast · no foreign pod
+══════════════════════════════════════════════════════════════════════════════
+
+VERDICT: 🟢 STALE-BINARY-ONLY ARTIFACT — current main SOURCE runs it correctly.
+  The "array-index-store inside a function body HANGS (RC=143)" symptom that
+  OP-143 (and earlier rounds) hit is NOT a current-source codegen bug. It is the
+  stale pre-#2650 deployed Jun-7 binary. Current `self/codegen.hexa` (HEAD
+  b2a1fb56a) already contains the fix (#2650 + #2660) and compiles+runs every
+  repro correctly. Re-promote-closeable (same class as OP-124/126/132).
+
+  ROOT MISDIAGNOSIS CORRECTED: the trigger was NEVER the array store. The true
+  trigger is reassigning a plain immutable `let` binding inside a `while` loop
+  (`let i = 0; while i < 3 { i = i + 1 }`). The reports all happened to use a
+  `let i` (not `let mut i`) loop counter that shared the function body with the
+  array store, which is why "array-store-in-fn" looked like the axis.
+
+────────────────────────────────────────────────────────────────────────────────
+ MINIMAL REPRO (the real trigger — array-INDEPENDENT)
+────────────────────────────────────────────────────────────────────────────────
+  fn main() -> i64 {
+    let i = 0                 // immutable `let` (NOT `let mut`)
+    while i < 3 { i = i + 1 } // reassigned in the loop body
+    println(str(i))
+    return 0
+  }
+  DEPLOYED Jun-7 binary:  HANGS (RC=143, timeout)   ← stale
+  CURRENT-SOURCE aprime:  RC=0, prints "3"          ← correct
+
+  Changing `let i` → `let mut i` makes the DEPLOYED binary run too — confirming
+  the axis is immutable-`let`-reassign, not arrays.
+
+────────────────────────────────────────────────────────────────────────────────
+ BISECTION (deployed Jun-7 binary, all via `hexa run`, 15-25s timeout)
+────────────────────────────────────────────────────────────────────────────────
+  CASE                                                          DEPLOYED   AXIS
+  let mut arr=[0,0,0]; arr[i]=v in loop; return arr[2]   RC=0   (uses let mut i)
+  let mut arr; arr[i]=v in loop; return ARRAY            HANG   (uses let i)
+  let i=0; while i<3 { i=i+1 } (NO array at all)         HANG   ← isolates it
+  let mut i=0; while i<3 { i=i+1 }                       RC=0   ← the cure
+  arr[0]=v single store, no loop (top-level)            RC=0
+  stdlib sort([3,1,2]) (import OR inline)               HANG   (let i=1 counter)
+  map_arr([1,2,3], dbl) (stdlib, let i counter)         HANG
+
+  Distilling axis: a `while`/loop that reassigns a plain immutable `let` name.
+
+────────────────────────────────────────────────────────────────────────────────
+ ROOT CAUSE (generated-C witness, frozen-seed hexat)
+────────────────────────────────────────────────────────────────────────────────
+  hexat transpile of `let i=0; while i<3 { i=i+1 }`:
+      HexaVal i = hexa_int(0);
+      while (HX_BOOL(hexa_cmp_lt(hexa_int(0), hexa_int(3)))) {   // i CONST-FOLDED
+          i = hexa_add(i, hexa_int(1));                          // live i updated
+      }
+  vs `let mut i=0`:
+      while (HX_BOOL(hexa_cmp_lt(i, hexa_int(3)))) {             // reads live i ✓
+
+  The codegen const-folds `let x = <lit>` to its literal and inlines reads
+  (self/codegen.hexa §"PROBE r11 B3", ~L3099). The fold is invalidated on a
+  plain Ident reassignment (AssignStmt arm, ~L3225) — but the AssignStmt is
+  emitted AFTER the loop condition, so the condition was already folded with the
+  stale `0`. `i < 3` becomes `0 < 3` (always true) → non-terminating loop.
+
+  hexa's `let` is REASSIGNABLE (no enforced immutability): `let i = 0; … i=i+1`
+  appears 162× in shipped stdlib/self/compiler source (map_arr/filter/reduce/
+  sort all use it), so this idiom MUST work — it is not a missing-`mut` lint.
+
+────────────────────────────────────────────────────────────────────────────────
+ FIX ALREADY IN CURRENT SOURCE (this is what makes it a stale-binary artifact)
+────────────────────────────────────────────────────────────────────────────────
+  self/codegen.hexa WhileStmt arm (~L3504-3521), comment "MISCOMPILE-ZERO
+  (hexa-run-hang-diag, BUG 1)":
+      let _w_assigned = _gen2_collect_assigned(node.body, [])
+      while _wai < len(_w_assigned) { _invalidate_comptime_const(...); ... }
+  Pre-invalidates the fold for every name the loop body reassigns BEFORE
+  emitting the condition. Landed:
+      #2650  3b550c6af  2026-06-04 03:15  fix(codegen): MISCOMPILE-ZERO — hexa
+                                          run HANG (comptime-const fold reassign)
+      #2660  d8e54bf13  if-body const-fold pre-invalidation (sibling)
+  The frozen bootstrap seed (commit 151c52c8, 2026-05-29) PREDATES #2650 — that
+  is why the frozen-seed hexat also hangs. It is the bootstrap seed, not main.
+
+────────────────────────────────────────────────────────────────────────────────
+ AUTHORITATIVE FRESH-SOURCE RESULT (the stale-oracle-defeating signal)
+────────────────────────────────────────────────────────────────────────────────
+  Built the current-source compiler from HEAD b2a1fb56a:
+      tool/build_selfhost.sh -j   → aprime_cc (current self/*.hexa, has #2650)
+  emit (--emit=obj --target=arm64-apple-darwin) + hexa_ld + rt.o, then ran:
+
+  REPRO                                  DEPLOYED Jun-7    CURRENT aprime_cc
+    let i loop (no array)                HANG (143)        RC=0  → "3"
+    let i + array index-store + ret elem HANG (143)        RC=0  → "102"
+    stdlib sort([3,1,2]) inline          HANG (143)        RC=0  → "1 2 3"
+    test/op145_let_reassign_loop.hexa    HANG (143)        RC=0  → PASS (6/6)
+
+  Fresh-source RUNS every repro correctly → CASE (b), stale-binary artifact.
+
+────────────────────────────────────────────────────────────────────────────────
+ CLASSIFICATION & CLOSURE
+────────────────────────────────────────────────────────────────────────────────
+  (a) REAL current-source codegen bug ............ NO
+  (b) stale-deployed-binary artifact ............. YES  ← verdict
+      Closed by a toolchain RE-PROMOTE: rebuild gen3 from current main
+      (tool/build_selfhost.sh) + tool/promote_selfhost.sh install --default.
+      No source fix to fabricate — the fix (#2650/#2660) is already on main.
+
+  Note for the OP-126 / promote recipe residual list: the deployed
+  hexa.real → hx-selfhost-cli shim DELEGATES `hexa run` to the backed-up
+  shipped dispatch binary (hexa.real.pre-selfhost.20260611-005522, built from a
+  pre-#2650 tree); that delegate is the stale oracle every campaign agent hit.
+  Re-promoting from current main retires it.
+
+  Regression test: test/op145_let_reassign_loop.hexa — sentinel
+  __OP145_LET_REASSIGN_LOOP__ PASS|FAIL; 6 checks (let counter terminates ·
+  let+array-store · stdlib insertion sort verbatim · nested let counters).
+  PASSES on current source; HANGS on the stale deployed binary (documents the
+  artifact). CI fresh binary runs it green.
+
+ONE-LINE: `arr[i]=v` inside a function is NOT broken in current source — the
+hang is the stale pre-#2650 deployed binary miscompiling immutable-`let`
+loop-counter reassignment (`let i=0; while i<3 {i=i+1}` → folded `0<3` infinite
+loop); current main already fixed it (#2650/#2660); a re-promote closes it.
