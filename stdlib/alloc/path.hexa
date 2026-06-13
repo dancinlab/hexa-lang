@@ -39,6 +39,15 @@ pub fn path_dirname(p: string) -> string {
     }
     while i >= 0 {
         if p[i] == '/' {
+            // Collapse consecutive separator slashes so the dir portion
+            // carries no stray trailing slash — matches path_basename's
+            // own trailing-slash strip, and POSIX/GNU dirname
+            // ("a//b" -> "a", not "a/"). Without this, repeated internal
+            // slashes leak a dangling "/" into the result.
+            while i > 0 {
+                if p[i - 1] != '/' { break }
+                i = i - 1
+            }
             if i == 0 { return "/" }
             return p.substring(0, i)
         }
