@@ -1,0 +1,36 @@
+F-OP120-RECURSION-DEPTH-DOS — CWE-674 uncontrolled-recursion sweep (LANE-2)
+verdict tier: 🔴 3 FIXED  (3 unbounded recursive JSON parsers depth-capped)
+date: 2026-06-13
+method: g5 hermetic VM test — fail-closed depth cap rejects nesting bombs,
+        accepts honest payloads; negative control shows uncapped depth grows 1:1.
+run: hexa run stdlib/info/recursion_depth_dos_guard_op120_test.hexa
+
+FIXED (depth threaded + MAX_DEPTH=512 fail-closed):
+  1. self/serve/http_server.hexa   _json_parse_value/object/array (untrusted HTTP body)
+  2. self/rt/json.hexa             _jp_parse_value/object/array (rt_json_parse)
+  3. stdlib/cert/meta2_validator.hexa _parse_value/object/array (untrusted cert/attestation JSON)
+
+------------------------------ verbatim stdout ------------------------------
+OP-120 recursion-depth / unbounded-nesting DoS guard
+MAX_DEPTH = 512
+
+[normal-nesting-accept]
+  PASS  empty array []
+  PASS  one leaf [x]
+  PASS  depth-4 [[[[]]]]
+  PASS  depth-100 (< cap)
+  PASS  depth-510 (just under cap)
+  PASS  depth-513 (at cap boundary)
+
+[depth-bomb-reject]
+  PASS  depth-514 (just over cap)
+  PASS  depth-1000 bomb
+  PASS  depth-5000 bomb
+
+[negative-control: uncapped depth = input nesting]
+  PASS  uncapped reaches depth 49 on 50-nest  (=49)
+  PASS  uncapped reaches depth 999 on 1000-nest  (=999)
+
+RESULT  pass=11  fail=0
+OP-120 GUARD GREEN — depth cap rejects nesting bombs, accepts honest payloads
+exit=0

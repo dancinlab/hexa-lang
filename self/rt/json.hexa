@@ -152,14 +152,23 @@ fn _jp_parse_number(s: string, i: int) {
     return [rt_str_parse_int(body), p]
 }
 
-fn _jp_parse_value(s: string, i: int) {
+// CWE-674 depth cap (OP-120). _jp_parse_value/object/array are mutually
+// recursive — one stack frame per nesting level — so a `[[[[…]]]]` input (one
+// byte per level) blows the native call stack: a crash/DoS when rt_json_parse
+// is handed untrusted text. The depth is threaded and the parse fails CLOSED
+// (returns the current accumulator + cursor, terminating the descent) past the
+// cap, bounding the stack to a constant. 512 dwarfs any honest payload nesting.
+let _JP_MAX_DEPTH = 512
+
+fn _jp_parse_value(s: string, i: int, depth: int) {
     let n = len(s)
     let start = _jp_skip_ws(s, i)
     if start >= n { return [void, start] }
+    if depth > _JP_MAX_DEPTH { return [void, start] }
     let c = char_code(s, start)
     if c == 34 { return _jp_parse_string(s, start) }            // '"'
-    if c == 123 { return _jp_parse_object(s, start) }           // '{'
-    if c == 91 { return _jp_parse_array(s, start) }             // '['
+    if c == 123 { return _jp_parse_object(s, start, depth) }    // '{'
+    if c == 91 { return _jp_parse_array(s, start, depth) }      // '['
     if c == 116 {  // 't'
         if start + 4 <= n && s.substring(start, start + 4) == "true" {
             return [true, start + 4]
@@ -182,7 +191,7 @@ fn _jp_parse_value(s: string, i: int) {
     return [void, start + 1]
 }
 
-fn _jp_parse_array(s: string, i: int) {
+fn _jp_parse_array(s: string, i: int, depth: int) {
     let n = len(s)
     if i >= n || char_code(s, i) != 91 { return [[], i] }
     let mut p = i + 1
@@ -191,7 +200,7 @@ fn _jp_parse_array(s: string, i: int) {
     if p < n && char_code(s, p) == 93 { return [arr, p + 1] }   // ']'
     while p < n {
         p = _jp_skip_ws(s, p)
-        let r = _jp_parse_value(s, p)
+        let r = _jp_parse_value(s, p, depth + 1)
         arr.push(r[0])
         p = r[1]
         p = _jp_skip_ws(s, p)
@@ -205,7 +214,7 @@ fn _jp_parse_array(s: string, i: int) {
     return [arr, p]
 }
 
-fn _jp_parse_object(s: string, i: int) {
+fn _jp_parse_object(s: string, i: int, depth: int) {
     let n = len(s)
     if i >= n || char_code(s, i) != 123 { return [#{}, i] }
     let mut p = i + 1
@@ -220,7 +229,7 @@ fn _jp_parse_object(s: string, i: int) {
         p = _jp_skip_ws(s, p)
         if p < n && char_code(s, p) == 58 { p = p + 1 }         // ':'
         p = _jp_skip_ws(s, p)
-        let vr = _jp_parse_value(s, p)
+        let vr = _jp_parse_value(s, p, depth + 1)
         m[key] = vr[0]
         p = vr[1]
         p = _jp_skip_ws(s, p)
@@ -237,7 +246,7 @@ fn _jp_parse_object(s: string, i: int) {
 // Public entry — discards trailing cursor.
 fn rt_json_parse(s: string) {
     if typeof(s) != "string" { return void }
-    let r = _jp_parse_value(s, 0)
+    let r = _jp_parse_value(s, 0, 0)
     return r[0]
 }
 

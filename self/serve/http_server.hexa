@@ -314,14 +314,25 @@ fn _json_num_from(s, start, end_idx, has_dot) {
     return to_int(raw)
 }
 
-fn _json_parse_value(s, i) {
+// CWE-674 depth cap (OP-120). The value/object/array parsers are mutually
+// recursive: one stack frame is pushed per `{`/`[`, so a malicious request
+// body of `[[[[…]]]]` (one byte per level) blows the call stack — a remote
+// DoS, since `json_parse` runs on the untrusted HTTP request body. Threading
+// a `depth` through the recursion and failing CLOSED (return the [nil, -1]
+// parse-error sentinel, which `json_parse` unwraps to nil) past the cap bounds
+// the stack to a constant. 512 is well above any honest config/API payload and
+// far below the native stack limit.
+let _JSON_MAX_DEPTH = 512
+
+fn _json_parse_value(s, i, depth) {
+    if depth > _JSON_MAX_DEPTH { return [nil, 0 - 1] }
     let n = len(s)
     let p = _json_skip_ws(s, i)
     if p >= n { return [nil, 0 - 1] }
     let c = s.substring(p, p + 1)
     if c == "\"" { return _json_parse_string(s, p) }
-    if c == "{" { return _json_parse_object(s, p) }
-    if c == "[" { return _json_parse_array(s, p) }
+    if c == "{" { return _json_parse_object(s, p, depth) }
+    if c == "[" { return _json_parse_array(s, p, depth) }
     if c == "t" {
         if (p + 4) <= n {
             if s.substring(p, p + 4) == "true" { return [true, p + 4] }
@@ -344,7 +355,7 @@ fn _json_parse_value(s, i) {
     return [nil, 0 - 1]
 }
 
-fn _json_parse_object(s, i) {
+fn _json_parse_object(s, i, depth) {
     let n = len(s)
     if s.substring(i, i + 1) != "{" { return [nil, 0 - 1] }
     let mut j = _json_skip_ws(s, i + 1)
@@ -360,7 +371,7 @@ fn _json_parse_object(s, i) {
         if j >= n { return [nil, 0 - 1] }
         if s.substring(j, j + 1) != ":" { return [nil, 0 - 1] }
         j = _json_skip_ws(s, j + 1)
-        let vr = _json_parse_value(s, j)
+        let vr = _json_parse_value(s, j, depth + 1)
         if vr[1] < 0 { return [nil, 0 - 1] }
         obj[key] = vr[0]
         j = _json_skip_ws(s, vr[1])
@@ -373,7 +384,7 @@ fn _json_parse_object(s, i) {
     return [nil, 0 - 1]
 }
 
-fn _json_parse_array(s, i) {
+fn _json_parse_array(s, i, depth) {
     let n = len(s)
     if s.substring(i, i + 1) != "[" { return [nil, 0 - 1] }
     let mut j = _json_skip_ws(s, i + 1)
@@ -382,7 +393,7 @@ fn _json_parse_array(s, i) {
         if s.substring(j, j + 1) == "]" { return [arr, j + 1] }
     }
     while j < n {
-        let vr = _json_parse_value(s, j)
+        let vr = _json_parse_value(s, j, depth + 1)
         if vr[1] < 0 { return [nil, 0 - 1] }
         arr.push(vr[0])
         j = _json_skip_ws(s, vr[1])
@@ -398,7 +409,7 @@ fn _json_parse_array(s, i) {
 fn json_parse(text) {
     if type_of(text) != "string" { return nil }
     if len(text) == 0 { return nil }
-    let r = _json_parse_value(text, 0)
+    let r = _json_parse_value(text, 0, 0)
     if r[1] < 0 { return nil }
     return r[0]
 }
