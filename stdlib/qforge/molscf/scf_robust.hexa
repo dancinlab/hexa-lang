@@ -1,0 +1,405 @@
+// HEXA Standard Library — qforge/molscf/scf_robust
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE MOLSCF brick 9/N — ROBUST-SCF convergence machinery.
+// Round-8 (rohf.hexa, #3188) sealed spin-pure ROHF and a REAL transition-metal
+// anchor (ScH⁺ d¹, |Δ_PySCF|=6.6e-5, clean 9-iter). But a genuinely STIFF
+// multi-open-d TM — TiO ³Σ⁻ (near-degenerate t2g/eg + π* manifold) — does NOT
+// converge with the bare H_core guess + DIIS + level-shift alone: the d-shell is
+// mis-seeded by H_core (which has no e–e repulsion, so it puts all the d-density
+// in the wrong place) and the near-degenerate roots FLIP every iteration, so the
+// energy OSCILLATES and never lands. This brick adds the two STANDARD robust-SCF
+// aids that fix that, WITHOUT touching rhf/uhf/rohf.hexa (additive file):
+//
+//   1. GWH initial guess (Generalized Wolfsberg–Helmholz) — a better-than-H_core
+//      seed for the d-shell.  H^GWH_ij = ½·K·S_ij·(H_ii + H_jj),  K = 1.75,
+//      diagonal H^GWH_ii = H_ii. Diagonalizing this in the Löwdin basis gives MOs
+//      that already feel the overlap-weighted on-site energies — the 3d block is
+//      seeded near its physical occupation instead of the H_core artefact. (We use
+//      GWH, NOT SAD: GWH needs NO external atomic-density data — it is built purely
+//      from the supplied S and H_core diagonal, so it stays 0-dependency / pure.)
+//
+//   2. Fermi–Dirac fractional-occupation smearing + T→0 annealing. At a finite
+//      electronic temperature the occupations n_i = 1/(1+exp((ε_i−μ)/k_BT)) (μ set
+//      by the electron count via bisection) spread fractional charge across the
+//      near-degenerate manifold, so the density no longer jumps when two roots swap
+//      order → the root-flipping oscillation is DAMPED. We start hot (k_BT≈0.02 Ha),
+//      converge, then LOWER T in steps (annealing), re-converging at each rung. The
+//      FINAL rung is T→0 (k_BT≈2e-4 Ha): there the occupations collapse back to
+//      integer 0/1 and the entropy term S_smear → 0, so the reported energy is the
+//      PHYSICAL T=0 SCF — smearing is a convergence AID, removed at the end (d6).
+//      We report E_T0 AND the residual entropy term (must vanish) for the honesty
+//      check that the aid did not change the converged physical answer.
+//
+// ── d4 generic dispatch ──────────────────────────────────────────────────────
+//   uhf_scf_smeared consumes the SAME (S, hcore, eri, n, n_a, n_b, e_nuc) manifest
+//   as uhf_scf. TiO, VO, ScH⁺, H₃ all traverse it unchanged — the molecule is the
+//   manifest, the smearing schedule is a fixed numeric ladder, nothing is hardcoded
+//   per system. Setting the schedule to a single T≈0 rung + GWH off reduces to the
+//   plain uhf_scf path (used to DEMONSTRATE the without-machinery failure, g5 b).
+//
+// reuse (d3 · d19): uhf_fock_pair / uhf_energy_elec / uhf_diis_error / uhf_err_norm
+//   / uhf_lin_solve / uhf_diis_extrapolate-shape / uhf_density_spin from uhf.hexa;
+//   rhf_matmul / rhf_transpose / rhf_s_inv_sqrt / rhf_diagonalize from rhf.hexa.
+//   uhf.hexa, rhf.hexa, rohf.hexa are BYTE-UNTOUCHED. New logic = GWH assembly,
+//   Fermi μ-bisection, fractional-occupation density, the annealing driver.
+
+use "stdlib/alloc/math/eigen"
+use "stdlib/qforge/molscf/rhf"
+use "stdlib/qforge/molscf/uhf"
+
+// ════════════════════════════════════════════════════════════════════════════
+//   GWH initial guess  (Generalized Wolfsberg–Helmholz)
+// ════════════════════════════════════════════════════════════════════════════
+
+// Build the GWH effective one-electron matrix from the overlap S and the core
+// Hamiltonian H (both n×n row-major flat):
+//   H^GWH_ii = H_ii                                   (on-site = core diagonal)
+//   H^GWH_ij = ½·K·S_ij·(H_ii + H_jj)   (i≠j)         (overlap-weighted coupling)
+// K = 1.75 is the standard Wolfsberg–Helmholz constant. Returns the n×n matrix;
+// diagonalizing it in the Löwdin basis gives the GWH MO guess.
+pub fn gwh_matrix(S: [float], hcore: [float], n: int, K: float) -> [float] {
+    let mut Hg = []
+    let mut i = 0
+    while i < n {
+        let hii = hcore[i * n + i]
+        let mut j = 0
+        while j < n {
+            if i == j {
+                Hg.push(hii)
+            } else {
+                let hjj = hcore[j * n + j]
+                let sij = S[i * n + j]
+                Hg.push(0.5 * K * sij * (hii + hjj))
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return Hg
+}
+
+// GWH MO guess: diagonalize the GWH matrix in the Löwdin basis. Returns the same
+// [C, eps] shape as rhf_diagonalize so it is a drop-in replacement for the
+// "dg0 = rhf_diagonalize(hcore, ...)" bare-H_core guess.
+pub fn gwh_guess(S: [float], hcore: [float], xmat: [float], n: int, K: float) -> [any] {
+    let Hg = gwh_matrix(S, hcore, n, K)
+    return rhf_diagonalize(Hg, xmat, n)
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   Fermi–Dirac fractional occupations + entropy
+// ════════════════════════════════════════════════════════════════════════════
+
+// Fermi occupation of one level at (ε−μ)/kT, guarded against exp overflow.
+fn fermi_one(eps_i: float, mu: float, kT: float) -> float {
+    if kT <= 0.0 {
+        if eps_i < mu { return 1.0 }
+        if eps_i > mu { return 0.0 }
+        return 0.5
+    }
+    let x = (eps_i - mu) / kT
+    if x > 40.0 { return 0.0 }
+    if x < 0.0 - 40.0 { return 1.0 }
+    return 1.0 / (1.0 + exp(x))
+}
+
+// Total smeared electron count for a chemical potential μ.
+fn fermi_count(eps: [float], n: int, mu: float, kT: float) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < n { s = s + fermi_one(eps[i], mu, kT) ; i = i + 1 }
+    return s
+}
+
+// Solve for the chemical potential μ such that Σ_i n_i(μ) = n_target, by bisection
+// on μ bracketed by [eps_min−1, eps_max+1]. Returns μ. Monotone (count increases
+// with μ), so bisection is robust. 60 iterations → ~1e-18 bracket on a ~Ha range.
+pub fn fermi_mu(eps: [float], n: int, n_target: float, kT: float) -> float {
+    let mut lo = eps[0]
+    let mut hi = eps[0]
+    let mut i = 1
+    while i < n {
+        if eps[i] < lo { lo = eps[i] }
+        if eps[i] > hi { hi = eps[i] }
+        i = i + 1
+    }
+    lo = lo - 1.0
+    hi = hi + 1.0
+    let mut it = 0
+    while it < 60 {
+        let mid = 0.5 * (lo + hi)
+        let c = fermi_count(eps, n, mid, kT)
+        if c > n_target { hi = mid } else { lo = mid }
+        it = it + 1
+    }
+    return 0.5 * (lo + hi)
+}
+
+// Fractional-occupation vector n_i for the n MOs at temperature kT and the
+// electron count n_target (μ solved internally). Returns length-n occupations.
+pub fn fermi_occupations(eps: [float], n: int, n_target: float, kT: float) -> [float] {
+    let mu = fermi_mu(eps, n, n_target, kT)
+    let mut occ = []
+    let mut i = 0
+    while i < n { occ.push(fermi_one(eps[i], mu, kT)) ; i = i + 1 }
+    return occ
+}
+
+// Fractionally-occupied single-spin density  P_μν = Σ_a occ_a C_μa C_νa.
+// (Generalizes uhf_density_spin's hard 0/1 cutoff to the smeared occupations.)
+pub fn frac_density(C: [float], occ: [float], n: int) -> [float] {
+    let mut P = []
+    let mut mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu < n {
+            let mut s = 0.0
+            let mut a = 0
+            while a < n {
+                let oa = occ[a]
+                if oa > 1.0e-14 { s = s + oa * C[mu * n + a] * C[nu * n + a] }
+                a = a + 1
+            }
+            P.push(s)
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    return P
+}
+
+// Smearing (electronic) entropy contribution per spin channel, in units of kT:
+//   S/k_B = −Σ_a [ n_a ln n_a + (1−n_a) ln(1−n_a) ].
+// The Mermin free-energy correction is −kT·S/k_B; we report |entropy term| so the
+// caller can verify it → 0 at the final T→0 rung (occupations integer ⇒ S=0).
+pub fn smear_entropy_term(occ: [float], n: int, kT: float) -> float {
+    let mut s = 0.0
+    let mut a = 0
+    while a < n {
+        let na = occ[a]
+        if na > 1.0e-12 && na < 1.0 - 1.0e-12 {
+            s = s - (na * log(na) + (1.0 - na) * log(1.0 - na))
+        }
+        a = a + 1
+    }
+    // free-energy correction magnitude  kT·S/k_B  (≥ 0); → 0 as kT → 0 / integer occ.
+    let corr = kT * s
+    if corr < 0.0 { return 0.0 - corr }
+    return corr
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   smeared-density UHF SCF at a FIXED temperature  (one annealing rung)
+// ════════════════════════════════════════════════════════════════════════════
+
+fn _robust_drop_first(h: [any]) -> [any] {
+    let mut out = []
+    let mut i = 1
+    while i < len(h) { out.push(h[i]) ; i = i + 1 }
+    return out
+}
+
+// slice [start, start+len_) of a flat vector (uhf_slice is private to uhf.hexa).
+fn _robust_slice(v: [float], start: int, len_: int) -> [float] {
+    let mut out = []
+    let mut i = 0
+    while i < len_ { out.push(v[start + i]) ; i = i + 1 }
+    return out
+}
+
+// DIIS extrapolation on the concatenated α||β error/Fock history (Pulay).
+// Equivalent to uhf_diis_extrapolate (private in uhf.hexa) — reuses the PUBLIC
+// uhf_lin_solve for the small Pulay B-system. Returns F̃ = Σ_i c_i F_i (len vlen).
+fn _robust_diis(errs: [any], focks: [any], m: int, vlen: int) -> [float] {
+    let dim = m + 1
+    let mut B = []
+    let mut i = 0
+    while i < dim * dim { B.push(0.0) ; i = i + 1 }
+    i = 0
+    while i < m {
+        let ei = errs[i]
+        let mut j = 0
+        while j < m {
+            let ej = errs[j]
+            let mut dot = 0.0
+            let mut k = 0
+            while k < vlen { dot = dot + ei[k] * ej[k] ; k = k + 1 }
+            B[i * dim + j] = dot
+            j = j + 1
+        }
+        B[i * dim + m] = 0.0 - 1.0
+        B[m * dim + i] = 0.0 - 1.0
+        i = i + 1
+    }
+    B[m * dim + m] = 0.0
+    let mut rhs = []
+    i = 0
+    while i < m { rhs.push(0.0) ; i = i + 1 }
+    rhs.push(0.0 - 1.0)
+    let coef = uhf_lin_solve(B, rhs, dim)
+    let mut Ftil = []
+    i = 0
+    while i < vlen { Ftil.push(0.0) ; i = i + 1 }
+    i = 0
+    while i < m {
+        let ci = coef[i]
+        let Fi = focks[i]
+        let mut k = 0
+        while k < vlen { Ftil[k] = Ftil[k] + ci * Fi[k] ; k = k + 1 }
+        i = i + 1
+    }
+    return Ftil
+}
+
+// One annealing rung: smeared-density UHF at fixed kT, warm-started from (Pa,Pb).
+//   Diagonalizes the α/β Focks (DIIS-accelerated), rebuilds the density with
+//   Fermi occupations (n_a / n_b electrons per spin) at this kT. Returns
+//   [ Pa, Pb, Ca, Cb, eps_a, eps_b, e_elec, iters, err_final, entropy ].
+//   kT=0 ⇒ hard integer occupations (collapses to the plain UHF density).
+fn robust_rung(
+    S: [float], hcore: [float], eri: [float], xmat: [float],
+    n: int, n_a: int, n_b: int, kT: float,
+    Pa_in: [float], Pb_in: [float],
+    max_iter: int, e_tol: float
+) -> [any] {
+    let mut Pa = Pa_in
+    let mut Pb = Pb_in
+    let vlen = n * n
+    let mut Ca = xmat
+    let mut Cb = xmat
+    let mut eps_a = []
+    let mut eps_b = []
+    let mut e_old = 0.0
+    let mut iters = 0
+    let mut err_final = 0.0
+    let mut ent = 0.0
+    let mut diis_err = []
+    let mut diis_fock = []
+    let max_diis = 6
+    let na_f = float(n_a)
+    let nb_f = float(n_b)
+    while iters < max_iter {
+        let fp = uhf_fock_pair(hcore, Pa, Pb, eri, n)
+        let Fa = fp[0]
+        let Fb = fp[1]
+        let e_elec = uhf_energy_elec(Pa, Pb, hcore, Fa, Fb, n)
+        let ea = uhf_diis_error(Fa, Pa, S, xmat, n)
+        let eb = uhf_diis_error(Fb, Pb, S, xmat, n)
+        let err_a = uhf_err_norm(ea, n)
+        let err_b = uhf_err_norm(eb, n)
+        err_final = if err_a > err_b { err_a } else { err_b }
+        let mut Fa_use = Fa
+        let mut Fb_use = Fb
+        // DIIS on the concatenated α||β error/Fock (same scheme as uhf_scf).
+        let mut ecat = []
+        let mut k = 0
+        while k < vlen { ecat.push(ea[k]) ; k = k + 1 }
+        k = 0
+        while k < vlen { ecat.push(eb[k]) ; k = k + 1 }
+        let mut fcat = []
+        k = 0
+        while k < vlen { fcat.push(Fa[k]) ; k = k + 1 }
+        k = 0
+        while k < vlen { fcat.push(Fb[k]) ; k = k + 1 }
+        diis_err.push(ecat)
+        diis_fock.push(fcat)
+        if len(diis_err) > max_diis {
+            diis_err = _robust_drop_first(diis_err)
+            diis_fock = _robust_drop_first(diis_fock)
+        }
+        let m = len(diis_err)
+        if m >= 2 && err_final > 1.0e-11 {
+            let Ftil = _robust_diis(diis_err, diis_fock, m, 2 * vlen)
+            Fa_use = _robust_slice(Ftil, 0, vlen)
+            Fb_use = _robust_slice(Ftil, vlen, vlen)
+        }
+        let dga = rhf_diagonalize(Fa_use, xmat, n)
+        let dgb = rhf_diagonalize(Fb_use, xmat, n)
+        Ca = dga[0]
+        eps_a = dga[1]
+        Cb = dgb[0]
+        eps_b = dgb[1]
+        // Fermi-smeared occupations (kT=0 ⇒ integer) → fractional densities.
+        let occ_a = fermi_occupations(eps_a, n, na_f, kT)
+        let occ_b = fermi_occupations(eps_b, n, nb_f, kT)
+        ent = smear_entropy_term(occ_a, n, kT) + smear_entropy_term(occ_b, n, kT)
+        Pa = frac_density(Ca, occ_a, n)
+        Pb = frac_density(Cb, occ_b, n)
+        iters = iters + 1
+        let de = if e_elec > e_old { e_elec - e_old } else { e_old - e_elec }
+        if iters > 1 {
+            if de < e_tol && err_final < 1.0e-6 { e_old = e_elec ; break }
+        }
+        e_old = e_elec
+    }
+    let fpf = uhf_fock_pair(hcore, Pa, Pb, eri, n)
+    let e_elec_final = uhf_energy_elec(Pa, Pb, hcore, fpf[0], fpf[1], n)
+    return [Pa, Pb, Ca, Cb, eps_a, eps_b, e_elec_final, iters, err_final, ent]
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   the robust annealing UHF SCF driver
+// ════════════════════════════════════════════════════════════════════════════
+
+// Robust UHF SCF with GWH guess + Fermi-smearing T→0 annealing.
+//   S, hcore, eri, n, n_a, n_b, e_nuc : the usual molecule manifest.
+//   kT_schedule : descending list of electronic temperatures (Ha); the LAST entry
+//                 should be ~0 (T→0) so the final rung is the physical SCF. A
+//                 single-entry [0.0] schedule + use_gwh=false reproduces the plain
+//                 bare-guess path (used to show the without-machinery failure).
+//   rung_iter, e_tol : per-rung iteration cap & |ΔE| gate.
+//   use_gwh : GWH initial guess (true) vs bare H_core guess (false).
+//   Returns [ e_total, total_iters, e_elec, Pa, Pb, Fa, Fb, eps_a, eps_b,
+//             Ca, Cb, converged, err_final, entropy_T0, guess_iters_first_rung ].
+//   converged = final-rung |ΔE|/‖e‖ gate met. entropy_T0 must be ≈0 (honesty).
+pub fn uhf_scf_smeared(
+    S: [float], hcore: [float], eri: [float],
+    n: int, n_a: int, n_b: int, e_nuc: float,
+    kT_schedule: [float], rung_iter: int, e_tol: float, use_gwh: bool
+) -> [any] {
+    let xmat = rhf_s_inv_sqrt(S, n)
+    // initial guess: GWH (better d-shell seed) or bare H_core.
+    let dg0 = if use_gwh { gwh_guess(S, hcore, xmat, n, 1.75) }
+              else { rhf_diagonalize(hcore, xmat, n) }
+    let c0 = dg0[0]
+    let mut Pa = uhf_density_spin(c0, n, n_a)
+    let mut Pb = uhf_density_spin(c0, n, n_b)
+    let mut total_iters = 0
+    let mut guess_iters_first = 0
+    let mut Ca = c0
+    let mut Cb = c0
+    let mut eps_a = dg0[1]
+    let mut eps_b = dg0[1]
+    let mut err_final = 0.0
+    let mut ent = 0.0
+    let nrung = len(kT_schedule)
+    let mut r = 0
+    while r < nrung {
+        let kT = kT_schedule[r]
+        let rr = robust_rung(S, hcore, eri, xmat, n, n_a, n_b, kT, Pa, Pb, rung_iter, e_tol)
+        Pa = rr[0]
+        Pb = rr[1]
+        Ca = rr[2]
+        Cb = rr[3]
+        eps_a = rr[4]
+        eps_b = rr[5]
+        let it_r = rr[7]
+        if r == 0 { guess_iters_first = it_r }
+        total_iters = total_iters + it_r
+        err_final = rr[8]
+        ent = rr[9]
+        r = r + 1
+    }
+    let fpf = uhf_fock_pair(hcore, Pa, Pb, eri, n)
+    let Fa = fpf[0]
+    let Fb = fpf[1]
+    let e_elec_final = uhf_energy_elec(Pa, Pb, hcore, Fa, Fb, n)
+    let e_total = e_elec_final + e_nuc
+    // convergence = final (T→0) rung met the |ΔE|/‖e‖ gate.
+    let converged = err_final < 1.0e-6
+    return [e_total, total_iters, e_elec_final, Pa, Pb, Fa, Fb, eps_a, eps_b,
+            Ca, Cb, converged, err_final, ent, guess_iters_first]
+}

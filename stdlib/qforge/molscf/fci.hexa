@@ -1,0 +1,301 @@
+// HEXA Standard Library — qforge/molscf/fci
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE MOLSCF front-end brick 14/N (round-11) — GENERAL N-electron CASCI: the
+// determinant-string full-CI over an ARBITRARY active space CAS(n_elec, n_act),
+// generalizing round-10's 2-electron `casci_2e_solve` to any electron count. This
+// opens CAS(4,4), CAS(6,6), … — the REAL strongly-correlated multi-reference wall
+// (N₂ triple-bond dissociation, O₂ biradical, H-chain stretch) that a single
+// 2-electron grid cannot reach.
+//
+// ── scope (d6 HONEST) ────────────────────────────────────────────────────────
+//   This is CASCI — CI in the determinant basis over FIXED RHF orbitals (orbitals
+//   NOT re-optimized). The 2-electron `|a_α b_β⟩` grid of round-10 is the N=2
+//   special case of this algorithm. CASSCF orbital-optimization (the MCSCF
+//   orbital-rotation step) is round-12 — NOT done here.
+//
+// ── the determinant-string algorithm (Knowles–Handy / standard FCI) ──────────
+//   For CAS(n_elec, n_act) with n_α + n_β = n_elec:
+//     • α-strings = every choice of n_α occupied orbitals among n_act (combinations)
+//     • β-strings = every choice of n_β occupied orbitals among n_act
+//     • determinant basis = α-string ⊗ β-string  (dim = C(n_act,n_α)·C(n_act,n_β))
+//   Each determinant is materialized as a SORTED list of occupied SPIN-orbitals
+//   (spin-orbital index = 2·spatial + spin, spin 0=α 1=β). The CI Hamiltonian is
+//   built by the GENERAL Slater–Condon rules over spin-orbitals (diagonal / single
+//   / double excitation, zero beyond double) with the orbital-reordering PHASE from
+//   the parity of the permutation aligning the two occupation lists. eigh
+//   diagonalizes; the lowest eigenvalue is the ground state, its eigenvector gives
+//   the determinant weights (the multi-reference signature).
+//
+// ── spin-orbital integrals (chemists' (pq|rs) over spatial MOs) ──────────────
+//   1e:  ⟨P|h|Q⟩ = δ(σ_P,σ_Q) · h_{pq}                       (p,q spatial of P,Q)
+//   2e (physicists' antisymmetrizable):
+//        ⟨PQ|RS⟩ = δ(σ_P,σ_R) δ(σ_Q,σ_S) · (p r | q s)_chem
+//   The Slater–Condon double term uses the antisymmetrized ⟨PQ‖RS⟩ = ⟨PQ|RS⟩ −
+//   ⟨PQ|SR⟩. h_{pq} and (pq|rs)_chem are the round-10 active-MO integrals
+//   (casci_mo_hcore / casci_mo_eri) — REUSED verbatim, nothing re-derived.
+//
+// reuse (d19 · d3): casci_mo_hcore / casci_mo_eri / casci_mo_coeff from
+//   molscf/casci (the AO→MO active-space transform + RHF-coeff recovery); eigh
+//   from stdlib/alloc/math/eigen (CI-Hamiltonian diagonalizer). The ONLY new
+//   machinery is the string enumeration + the general Slater–Condon matrix element.
+
+use "stdlib/alloc/math/eigen"
+use "stdlib/qforge/molscf/casci"
+
+// ════════════════════════════════════════════════════════════════════════════
+//   determinant-string enumeration  (combinations C(n_act, k) as sorted lists)
+// ════════════════════════════════════════════════════════════════════════════
+
+// All k-subsets of {0..n-1} as SORTED ascending orbital-index lists, in
+//   lexicographic order. Iterative (no recursion): returns [[i0,i1,..],...].
+//   k=0 → [[]] (the single empty string, the vacuum for that spin).
+pub fn fci_combinations(n: int, k: int) -> [any] {
+    if k == 0 { return [[]] }
+    if k > n { return [] }
+    // start at the lexicographically first combination [0,1,..,k-1]
+    let mut cur = []
+    let mut i = 0
+    while i < k { cur.push(i) ; i = i + 1 }
+    let mut out = []
+    let mut more = true
+    while more {
+        // emit a COPY of cur
+        let mut row = []
+        let mut t = 0
+        while t < k { row.push(cur[t]) ; t = t + 1 }
+        out.push(row)
+        // advance to next combination: find rightmost position j that can grow
+        let mut j = k - 1
+        let mut found = false
+        while j >= 0 {
+            if cur[j] < n - k + j {
+                found = true
+                let nv = cur[j] + 1
+                cur[j] = nv
+                let mut p = j + 1
+                let mut base = nv
+                while p < k { base = base + 1 ; cur[p] = base ; p = p + 1 }
+                j = -1
+            } else {
+                j = j - 1
+            }
+        }
+        if !found { more = false }
+    }
+    return out
+}
+
+// Build the full determinant basis as sorted SPIN-orbital occupation lists.
+//   astrings/bstrings = combination lists (spatial indices) for α / β.
+//   spin-orbital index = 2·spatial + spin (α=0, β=1). For each (α-string ⊗
+//   β-string) the occupied spin-orbitals are merge-sorted ascending. Returns a
+//   list of determinants, each a sorted [int] of occupied spin-orbitals, in
+//   row-major (α outer, β inner) order — matching the CAS grid convention.
+pub fn fci_dets(astrings: [any], bstrings: [any], nelA: int, nelB: int) -> [any] {
+    let mut dets = []
+    let mut ia = 0
+    while ia < len(astrings) {
+        let av = astrings[ia]
+        let mut ib = 0
+        while ib < len(bstrings) {
+            let bv = bstrings[ib]
+            // merge the two ascending spin-orbital lists (α even, β odd) into one
+            let mut occ = []
+            let mut pa = 0
+            let mut pb = 0
+            while pa < nelA || pb < nelB {
+                let mut takeA = false
+                if pa < nelA {
+                    if pb >= nelB { takeA = true }
+                    else { if (2 * av[pa]) < (2 * bv[pb] + 1) { takeA = true } }
+                }
+                if takeA { occ.push(2 * av[pa]) ; pa = pa + 1 }
+                else { occ.push(2 * bv[pb] + 1) ; pb = pb + 1 }
+            }
+            dets.push(occ)
+            ib = ib + 1
+        }
+        ia = ia + 1
+    }
+    return dets
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   general Slater–Condon matrix element  ⟨D_I | H | D_J⟩
+// ════════════════════════════════════════════════════════════════════════════
+
+// spin-orbital 1e integral ⟨P|h|Q⟩ = δ(σ_P,σ_Q) h_{p q}  (p=P/2 spatial, σ=P%2).
+fn _so_h(P: int, Q: int, h: [float], m: int) -> float {
+    if (P % 2) != (Q % 2) { return 0.0 }
+    return h[(P / 2) * m + (Q / 2)]
+}
+
+// spin-orbital physicists' 2e integral ⟨PQ|RS⟩ = δ(σP,σR) δ(σQ,σS) (pr|qs)_chem.
+fn _so_eri(P: int, Q: int, R: int, S: int, moeri: [float], m: int) -> float {
+    if (P % 2) != (R % 2) { return 0.0 }
+    if (Q % 2) != (S % 2) { return 0.0 }
+    let p = P / 2
+    let q = Q / 2
+    let r = R / 2
+    let s = S / 2
+    return moeri[((p * m + r) * m + q) * m + s]
+}
+
+// antisymmetrized ⟨PQ‖RS⟩ = ⟨PQ|RS⟩ − ⟨PQ|SR⟩  (spin-orbital basis).
+fn _so_eri_as(P: int, Q: int, R: int, S: int, moeri: [float], m: int) -> float {
+    return _so_eri(P, Q, R, S, moeri, m) - _so_eri(P, Q, S, R, moeri, m)
+}
+
+// Positions where two SORTED equal-length occupation lists differ. Returns
+//   [ ndiff, holes(in I, not J), parts(in J, not I), common(in both) ].
+//   holes/parts are returned in ASCENDING order (the list order), so the phase
+//   can be derived from their positions in I and J respectively.
+fn _diff(occI: [any], occJ: [any], nocc: int) -> [any] {
+    let mut holes = []
+    let mut parts = []
+    let mut common = []
+    let mut i = 0
+    while i < nocc {
+        // is occI[i] present in occJ ?
+        let oi = occI[i]
+        let mut inJ = false
+        let mut t = 0
+        while t < nocc { if occJ[t] == oi { inJ = true ; t = nocc } else { t = t + 1 } }
+        if inJ { common.push(oi) } else { holes.push(oi) }
+        i = i + 1
+    }
+    let mut j = 0
+    while j < nocc {
+        let oj = occJ[j]
+        let mut inI = false
+        let mut t2 = 0
+        while t2 < nocc { if occI[t2] == oj { inI = true ; t2 = nocc } else { t2 = t2 + 1 } }
+        if !inI { parts.push(oj) }
+        j = j + 1
+    }
+    return [len(holes), holes, parts, common]
+}
+
+// Index (position) of value `v` in the sorted occupation list `occ`.
+fn _pos(occ: [any], v: int, nocc: int) -> int {
+    let mut i = 0
+    while i < nocc { if occ[i] == v { return i } i = i + 1 }
+    return -1
+}
+
+// General Slater–Condon ⟨D_I|H|D_J⟩. occI/occJ = sorted spin-orbital occupations
+//   (length nocc = n_elec). h = m×m MO 1e, moeri = m^4 chemists' MO 2e.
+pub fn fci_matel(occI: [any], occJ: [any], nocc: int, h: [float], moeri: [float], m: int) -> float {
+    let df = _diff(occI, occJ, nocc)
+    let ndiff = df[0]
+    if ndiff > 2 { return 0.0 }
+    if ndiff == 0 {
+        // diagonal: Σ_i ⟨i|h|i⟩ + Σ_{i<j} ⟨ij‖ij⟩
+        let mut e = 0.0
+        let mut i = 0
+        while i < nocc {
+            let Pi = occI[i]
+            e = e + _so_h(Pi, Pi, h, m)
+            let mut j = i + 1
+            while j < nocc {
+                let Pj = occI[j]
+                e = e + _so_eri_as(Pi, Pj, Pi, Pj, moeri, m)
+                j = j + 1
+            }
+            i = i + 1
+        }
+        return e
+    }
+    if ndiff == 1 {
+        // single p(hole, in I) → q(part, in J). phase = (−1)^(pos_I(p)+pos_J(q)).
+        let p = df[1][0]
+        let q = df[2][0]
+        let common = df[3]
+        let posp = _pos(occI, p, nocc)
+        let posq = _pos(occJ, q, nocc)
+        let par = (posp + posq) % 2
+        let mut sgn = 1.0
+        if par == 1 { sgn = 0.0 - 1.0 }
+        let mut e = _so_h(p, q, h, m)
+        let mut t = 0
+        while t < len(common) {
+            let ci = common[t]
+            e = e + _so_eri_as(p, ci, q, ci, moeri, m)
+            t = t + 1
+        }
+        return sgn * e
+    }
+    // ndiff == 2: double  p<p2 (holes, in I) → q<q2 (parts, in J).
+    let p = df[1][0]
+    let p2 = df[1][1]
+    let q = df[2][0]
+    let q2 = df[2][1]
+    let pp = _pos(occI, p, nocc)
+    let pp2 = _pos(occI, p2, nocc)
+    let pq = _pos(occJ, q, nocc)
+    let pq2 = _pos(occJ, q2, nocc)
+    let par2 = (pp + pp2 + pq + pq2) % 2
+    let mut sgn2 = 1.0
+    if par2 == 1 { sgn2 = 0.0 - 1.0 }
+    return sgn2 * _so_eri_as(p, p2, q, q2, moeri, m)
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   general full-CI driver  (build the det-basis CI Hamiltonian + diagonalize)
+// ════════════════════════════════════════════════════════════════════════════
+
+// Build the CI Hamiltonian over the determinant basis and diagonalize for the
+//   ground state. h/moeri = active-MO integrals (m orbitals), nelA/nelB = α/β
+//   electron counts, e_nuc = nuclear repulsion.
+//   Returns [ e_total, e_ci_elec, ndet, weights(length ndet), dets(occ lists) ].
+pub fn fci_solve(h: [float], moeri: [float], m: int, nelA: int, nelB: int, e_nuc: float) -> [any] {
+    let astrings = fci_combinations(m, nelA)
+    let bstrings = fci_combinations(m, nelB)
+    let dets = fci_dets(astrings, bstrings, nelA, nelB)
+    let ndet = len(dets)
+    let nocc = nelA + nelB
+    // assemble the symmetric CI Hamiltonian (full, row-major ndet×ndet)
+    let mut H = []
+    let mut iI = 0
+    while iI < ndet {
+        let occI = dets[iI]
+        let mut iJ = 0
+        while iJ < ndet {
+            let occJ = dets[iJ]
+            H.push(fci_matel(occI, occJ, nocc, h, moeri, m))
+            iJ = iJ + 1
+        }
+        iI = iI + 1
+    }
+    let eg = eigh(H, ndet)
+    let vals = eg[0]                        // descending
+    let vecs = eg[1]
+    let e_ci_elec = vals[ndet - 1]         // lowest = ascending 0 = descending ndet-1
+    let gs = vecs[ndet - 1]
+    let mut weights = []
+    let mut k = 0
+    while k < ndet { weights.push(gs[k] * gs[k]) ; k = k + 1 }
+    let e_total = e_ci_elec + e_nuc
+    return [e_total, e_ci_elec, ndet, weights, dets]
+}
+
+// End-to-end general CASCI driver: AO inputs + converged RHF Fock → CAS full-CI.
+//   S, hcore : n×n AO overlap & core Hamiltonian
+//   F        : converged RHF Fock (n×n) — recovers the RHF MO-coeffs
+//   eri      : AO n^4 chemists' (μν|σλ) tensor
+//   m        : number of active orbitals (the first m MOs)
+//   nelA/nelB: active α / β electron counts (n_elec = nelA + nelB)
+//   e_nuc    : nuclear repulsion
+//   Returns the fci_solve tuple [e_total, e_ci_elec, ndet, weights, dets].
+pub fn casci_solve_rhf(
+    S: [float], hcore: [float], F: [float], eri: [float],
+    n: int, m: int, nelA: int, nelB: int, e_nuc: float
+) -> [any] {
+    let C = casci_mo_coeff(S, F, n)
+    let h = casci_mo_hcore(C, hcore, n, m)
+    let moeri = casci_mo_eri(C, eri, n, m)
+    return fci_solve(h, moeri, m, nelA, nelB, e_nuc)
+}

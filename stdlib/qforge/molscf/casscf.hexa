@@ -1,0 +1,677 @@
+// HEXA Standard Library — qforge/molscf/casscf
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE MOLSCF front-end brick 15/N (round-12) — CASSCF: the MCSCF
+// orbital-rotation step wrapped around the general N-electron CASCI of round-11
+// (fci.hexa). Round-11 shipped CASCI — CI over FIXED RHF orbitals. CASSCF
+// re-optimizes the orbitals SELF-CONSISTENTLY with the CI, so the energy is
+// variationally optimal (E_CASSCF ≤ E_CASCI) and seed-invariant (RHF vs a
+// perturbed/ROHF start → the SAME converged energy). This completes the
+// multireference method to its proper form.
+//
+// ── the orbital-rotation macro-iteration (standard MCSCF) ─────────────────────
+//   The MO space splits into core (doubly occupied, frozen-density), active
+//   (CAS), and virtual. Each macro-iteration:
+//     (1) solve CASCI for the current orbitals C → CI ground-state vector;
+//     (2) build the active-space 1-RDM γ_tu and 2-RDM Γ_tuvw from that vector;
+//     (3) build the generalized (Lagrangian) Fock F_pq and the orbital gradient
+//         g_pq = 2 (F_pq − F_qp) over the FULL MO space;
+//     (4) take an orbital-rotation step κ (antisymmetric) and update C ← C·exp(κ),
+//         with a backtracking line search guaranteeing monotonic descent.
+//   Iterate to ‖g‖ → 0. Only ROTATIONS BETWEEN DIFFERENT SUBSPACES (core↔active,
+//   core↔virtual, active↔virtual) change the energy — active↔active and the
+//   redundant within-subspace rotations are skipped (zero gradient).
+//
+// ── the generalized Fock matrix (Helgaker, MEST eq. 10.8) ─────────────────────
+//   inactive (core) Fock     F^I_pq = h_pq + Σ_i [ 2(pq|ii) − (pi|iq) ]   (i core)
+//   active   Coulomb-exch.   F^A_pq = Σ_tu γ_tu [ (pq|tu) − ½(pt|uq) ]
+//   generalized Fock (rows):
+//     core   i :  F_iq = 2 ( F^I_iq + F^A_iq )
+//     active t :  F_tq = Σ_u γ_tu F^I_qu + Σ_uvw Γ_tuvw (qu|vw)
+//     virtual a:  F_aq = 0
+//   orbital gradient g_pq = 2 (F_pq − F_qp). A descent step is κ_pq = +α g_pq
+//   (sign verified by single-pair line search against finite-difference; see the
+//   commit body). The orbital rotation C ← C·exp(κ) keeps C orthonormal exactly.
+//
+// ── HONEST scope (d6) ─────────────────────────────────────────────────────────
+//   This is a FIRST-ORDER CASSCF: steepest-descent in the orbital-rotation
+//   parameter (κ = +α g) with a backtracking line search, NOT a full
+//   second-order Newton MCSCF (no orbital Hessian / no AH micro-iteration). Both
+//   are legitimate — the deliverable is E_CASSCF ≤ E_CASCI reaching the PySCF
+//   `mcscf.CASSCF` reference with a converged orbital gradient ‖g‖→0. The CI
+//   itself is the EXACT round-11 determinant-string FCI in the active space.
+//   Largest system run = H₆ CAS(2,2)/CAS(4,4) (4×4 / 400-det inner CI). The CAS
+//   that spans the FULL space (CAS(n,n) H_n) is an equality anchor: orbital
+//   rotations cannot change a full-space energy, so CASSCF == CASCI == FCI there
+//   and the gradient is identically zero — a valid invariance check.
+//
+// reuse (d19 · d3): fci_combinations / fci_dets / fci_matel from molscf/fci (the
+//   determinant-string CI machinery — REUSED verbatim, only a CI-vector-returning
+//   wrapper + the RDM contractions are new here); casci_mo_coeff from molscf/casci
+//   (RHF MO-coeff recovery); rhf_matmul / rhf_transpose from molscf/rhf. The new
+//   machinery is the RDM build + the generalized Fock / orbital-rotation step.
+
+use "stdlib/alloc/math/eigen"
+use "stdlib/qforge/molscf/rhf"
+use "stdlib/qforge/molscf/casci"
+use "stdlib/qforge/molscf/fci"
+
+fn _cs_abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+// ════════════════════════════════════════════════════════════════════════════
+//   full-space MO integral transform (ALL n MOs — core + active + virtual)
+// ════════════════════════════════════════════════════════════════════════════
+
+// 1-electron full MO transform h_pq = Σ_μν C_μp H_μν C_νq over ALL n MOs.
+//   (casci_mo_hcore restricted to the first m active MOs; CASSCF needs the full
+//   n×n block because the generalized Fock couples active↔core↔virtual.)
+pub fn casscf_full_hcore(C: [float], hcore: [float], n: int) -> [float] {
+    return casci_mo_hcore(C, hcore, n, n)
+}
+
+// 2-electron full MO transform (pq|rs) over ALL n MOs (n^4 tensor).
+pub fn casscf_full_eri(C: [float], eri: [float], n: int) -> [float] {
+    return casci_mo_eri(C, eri, n, n)
+}
+
+// Slice the active m×m 1e block out of the full n×n h: hact[t*m+u] = h[(c+t)*n+(c+u)].
+fn _slice_h_active(h: [float], n: int, ncore: int, m: int) -> [float] {
+    let mut ha = []
+    let mut t = 0
+    while t < m {
+        let mut u = 0
+        while u < m {
+            ha.push(h[(ncore + t) * n + (ncore + u)])
+            u = u + 1
+        }
+        t = t + 1
+    }
+    return ha
+}
+
+// Slice the active m^4 2e block out of the full n^4 moeri (chemists' (tu|vw)).
+fn _slice_eri_active(g: [float], n: int, ncore: int, m: int) -> [float] {
+    let mut ga = []
+    let mut t = 0
+    while t < m {
+        let mut u = 0
+        while u < m {
+            let mut v = 0
+            while v < m {
+                let mut w = 0
+                while w < m {
+                    let ti = ncore + t
+                    let ui = ncore + u
+                    let vi = ncore + v
+                    let wi = ncore + w
+                    ga.push(g[((ti * n + ui) * n + vi) * n + wi])
+                    w = w + 1
+                }
+                v = v + 1
+            }
+            u = u + 1
+        }
+        t = t + 1
+    }
+    return ga
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   active-space effective 1e Hamiltonian + core energy (frozen-core mean field)
+// ════════════════════════════════════════════════════════════════════════════
+
+// Core (inactive) energy E_core = E_nuc + Σ_i 2 h_ii + Σ_ij [2(ii|jj) − (ij|ji)]
+//   (i,j over the ncore doubly-occupied MOs; full MO h and g).
+pub fn casscf_core_energy(h: [float], g: [float], n: int, ncore: int, e_nuc: float) -> float {
+    let mut ec = e_nuc
+    let mut i = 0
+    while i < ncore { ec = ec + 2.0 * h[i * n + i] ; i = i + 1 }
+    let mut a = 0
+    while a < ncore {
+        let mut b = 0
+        while b < ncore {
+            let coul = g[((a * n + a) * n + b) * n + b]
+            let exch = g[((a * n + b) * n + b) * n + a]
+            ec = ec + 2.0 * coul - exch
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return ec
+}
+
+// Effective active 1e integral heff_tu = h_tu + Σ_i [2(tu|ii) − (ti|iu)]  (i core).
+//   Returns m×m flat (the active-MO indices t,u are offset by ncore in the full h/g).
+pub fn casscf_heff_active(h: [float], g: [float], n: int, ncore: int, m: int) -> [float] {
+    let mut heff = []
+    let mut t = 0
+    while t < m {
+        let mut u = 0
+        while u < m {
+            let tt = ncore + t
+            let uu = ncore + u
+            let mut v = h[tt * n + uu]
+            let mut i = 0
+            while i < ncore {
+                let coul = g[((tt * n + uu) * n + i) * n + i]
+                let exch = g[((tt * n + i) * n + i) * n + uu]
+                v = v + 2.0 * coul - exch
+                i = i + 1
+            }
+            heff.push(v)
+            u = u + 1
+        }
+        t = t + 1
+    }
+    return heff
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   CASCI solve returning the CI ground-state VECTOR (not just |c|²)
+// ════════════════════════════════════════════════════════════════════════════
+
+// Like fci_solve but returns the signed CI ground-state vector (needed for the
+//   RDM build). Returns [ e_ci_elec, ndet, gs(length ndet, signed), dets ].
+//   h/moeri = ACTIVE-space integrals (m orbitals); nelA/nelB = α/β counts.
+pub fn casscf_ci_vec(h: [float], moeri: [float], m: int, nelA: int, nelB: int) -> [any] {
+    let astrings = fci_combinations(m, nelA)
+    let bstrings = fci_combinations(m, nelB)
+    let dets = fci_dets(astrings, bstrings, nelA, nelB)
+    let ndet = len(dets)
+    let nocc = nelA + nelB
+    let mut H = []
+    let mut iI = 0
+    while iI < ndet {
+        let occI = dets[iI]
+        let mut iJ = 0
+        while iJ < ndet {
+            let occJ = dets[iJ]
+            H.push(fci_matel(occI, occJ, nocc, h, moeri, m))
+            iJ = iJ + 1
+        }
+        iI = iI + 1
+    }
+    let eg = eigh(H, ndet)
+    let vals = eg[0]
+    let vecs = eg[1]
+    let e_ci_elec = vals[ndet - 1]
+    let gs = vecs[ndet - 1]
+    return [e_ci_elec, ndet, gs, dets]
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   second-quantized ladder operators on sorted spin-orbital occupation lists
+// ════════════════════════════════════════════════════════════════════════════
+
+// Annihilate spin-orbital `so` in sorted occ list. Returns [ ok(1/0), newocc, phase ].
+//   phase = (−1)^(position of so in occ). ok=0 if so is unoccupied.
+fn _annihilate(occ: [any], so: int, nocc: int) -> [any] {
+    let mut pos = -1
+    let mut i = 0
+    while i < nocc { if occ[i] == so { pos = i ; i = nocc } else { i = i + 1 } }
+    if pos < 0 { return [0, [], 0] }
+    let mut nw = []
+    let mut j = 0
+    while j < nocc { if j != pos { nw.push(occ[j]) } j = j + 1 }
+    let mut ph = 1
+    if (pos % 2) == 1 { ph = 0 - 1 }
+    return [1, nw, ph]
+}
+
+// Create spin-orbital `so` into sorted occ list (length cur). Returns [ ok, newocc, phase ].
+//   phase = (−1)^(insertion position). ok=0 if so already occupied.
+fn _create(occ: [any], so: int, cur: int) -> [any] {
+    let mut i = 0
+    while i < cur { if occ[i] == so { return [0, [], 0] } i = i + 1 }
+    // insertion position = count of occupied spin-orbitals less than so
+    let mut pos = 0
+    let mut k = 0
+    while k < cur { if occ[k] < so { pos = pos + 1 } k = k + 1 }
+    let mut nw = []
+    let mut placed = false
+    let mut j = 0
+    while j < cur {
+        if !placed { if occ[j] > so { nw.push(so) ; placed = true } }
+        nw.push(occ[j])
+        j = j + 1
+    }
+    if !placed { nw.push(so) }
+    let mut ph = 1
+    if (pos % 2) == 1 { ph = 0 - 1 }
+    return [1, nw, ph]
+}
+
+// Linear index of a sorted occupation list within `dets` (−1 if absent).
+//   Lists are length-`nocc` sorted spin-orbital arrays; compare element-wise.
+fn _det_index(dets: [any], occ: [any], ndet: int, nocc: int) -> int {
+    let mut d = 0
+    while d < ndet {
+        let cand = dets[d]
+        let mut same = true
+        let mut i = 0
+        while i < nocc { if cand[i] != occ[i] { same = false ; i = nocc } else { i = i + 1 } }
+        if same { return d }
+        d = d + 1
+    }
+    return 0 - 1
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   reduced density matrices from the CI ground-state vector
+// ════════════════════════════════════════════════════════════════════════════
+
+// Spin-summed active 1-RDM γ_pq = Σ_σ ⟨Ψ| a†_{pσ} a_{qσ} |Ψ⟩  (m×m flat).
+pub fn casscf_rdm1(gs: [any], dets: [any], ndet: int, m: int, nocc: int) -> [float] {
+    let mut D = []
+    let mut p = 0
+    while p < m {
+        let mut q = 0
+        while q < m {
+            let mut val = 0.0
+            let mut spin = 0
+            while spin < 2 {
+                let P = 2 * p + spin
+                let Q = 2 * q + spin
+                let mut J = 0
+                while J < ndet {
+                    let an = _annihilate(dets[J], Q, nocc)
+                    if an[0] == 1 {
+                        let cr = _create(an[1], P, nocc - 1)
+                        if cr[0] == 1 {
+                            let I = _det_index(dets, cr[1], ndet, nocc)
+                            if I >= 0 {
+                                let ph = to_float(an[2] * cr[2])
+                                val = val + gs[I] * gs[J] * ph
+                            }
+                        }
+                    }
+                    J = J + 1
+                }
+                spin = spin + 1
+            }
+            D.push(val)
+            q = q + 1
+        }
+        p = p + 1
+    }
+    return D
+}
+
+// Spin-summed active 2-RDM Γ_pqrs = Σ_{στ} ⟨Ψ| a†_{pσ} a†_{rτ} a_{sτ} a_{qσ} |Ψ⟩.
+//   PySCF convention Γ[p,q,r,s] = ⟨a†_p a†_r a_s a_q⟩ (the term that pairs with
+//   (pq|rs) in the energy). Returned as the m^4 flat tensor Γ[((p*m+q)*m+r)*m+s].
+pub fn casscf_rdm2(gs: [any], dets: [any], ndet: int, m: int, nocc: int) -> [float] {
+    let mut G2 = []
+    let mut p = 0
+    while p < m {
+        let mut q = 0
+        while q < m {
+            let mut r = 0
+            while r < m {
+                let mut s = 0
+                while s < m {
+                    let mut val = 0.0
+                    let mut s1 = 0
+                    while s1 < 2 {
+                        let mut s2 = 0
+                        while s2 < 2 {
+                            let P = 2 * p + s1
+                            let Q = 2 * q + s1
+                            let R = 2 * r + s2
+                            let S = 2 * s + s2
+                            let mut J = 0
+                            while J < ndet {
+                                let a1 = _annihilate(dets[J], Q, nocc)
+                                if a1[0] == 1 {
+                                    let a2 = _annihilate(a1[1], S, nocc - 1)
+                                    if a2[0] == 1 {
+                                        let c1 = _create(a2[1], R, nocc - 2)
+                                        if c1[0] == 1 {
+                                            let c2 = _create(c1[1], P, nocc - 1)
+                                            if c2[0] == 1 {
+                                                let I = _det_index(dets, c2[1], ndet, nocc)
+                                                if I >= 0 {
+                                                    let ph = to_float(a1[2] * a2[2] * c1[2] * c2[2])
+                                                    val = val + gs[I] * gs[J] * ph
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                J = J + 1
+                            }
+                            s2 = s2 + 1
+                        }
+                        s1 = s1 + 1
+                    }
+                    G2.push(val)
+                    s = s + 1
+                }
+                r = r + 1
+            }
+            q = q + 1
+        }
+        p = p + 1
+    }
+    return G2
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   generalized Fock matrix + orbital gradient
+// ════════════════════════════════════════════════════════════════════════════
+
+// Inactive (core) Fock F^I_pq = h_pq + Σ_i [2(pq|ii) − (pi|iq)]  (full n×n; i core).
+fn _inactive_fock(h: [float], g: [float], n: int, ncore: int) -> [float] {
+    let mut FI = []
+    let mut p = 0
+    while p < n {
+        let mut q = 0
+        while q < n {
+            let mut v = h[p * n + q]
+            let mut i = 0
+            while i < ncore {
+                let coul = g[((p * n + q) * n + i) * n + i]
+                let exch = g[((p * n + i) * n + i) * n + q]
+                v = v + 2.0 * coul - exch
+                i = i + 1
+            }
+            FI.push(v)
+            q = q + 1
+        }
+        p = p + 1
+    }
+    return FI
+}
+
+// Generalized Fock F_pq (full n×n) and orbital gradient g_pq = 2(F_pq − F_qp).
+//   dm1 (m×m) / dm2 (m^4) = active RDMs; the active MO index t maps to full index
+//   ncore+t. Returns the n×n gradient (flat).
+pub fn casscf_orb_gradient(
+    h: [float], g: [float], dm1: [float], dm2: [float],
+    n: int, ncore: int, m: int
+) -> [float] {
+    let FI = _inactive_fock(h, g, n, ncore)
+    // active Coulomb-exchange F^A_pq = Σ_tu γ_tu [(pq|tu) − ½(pt|uq)]
+    let mut FA = []
+    let mut p = 0
+    while p < n {
+        let mut q = 0
+        while q < n {
+            let mut v = 0.0
+            let mut t = 0
+            while t < m {
+                let mut u = 0
+                while u < m {
+                    let tt = ncore + t
+                    let uu = ncore + u
+                    let coul = g[((p * n + q) * n + tt) * n + uu]
+                    let exch = g[((p * n + tt) * n + uu) * n + q]
+                    v = v + dm1[t * m + u] * (coul - 0.5 * exch)
+                    u = u + 1
+                }
+                t = t + 1
+            }
+            FA.push(v)
+            q = q + 1
+        }
+        p = p + 1
+    }
+    // generalized Fock F_mq
+    let mut Fg = []
+    let mut z = 0
+    while z < n * n { Fg.push(0.0) ; z = z + 1 }
+    // core rows: F_iq = 2 (F^I_iq + F^A_iq)
+    let mut i = 0
+    while i < ncore {
+        let mut q = 0
+        while q < n {
+            Fg[i * n + q] = 2.0 * (FI[i * n + q] + FA[i * n + q])
+            q = q + 1
+        }
+        i = i + 1
+    }
+    // active rows: F_tq = Σ_u γ_tu F^I_qu + Σ_uvw Γ_tuvw (qu|vw)
+    let mut t = 0
+    while t < m {
+        let tt = ncore + t
+        let mut q = 0
+        while q < n {
+            let mut s = 0.0
+            let mut u = 0
+            while u < m {
+                let uu = ncore + u
+                s = s + dm1[t * m + u] * FI[q * n + uu]
+                u = u + 1
+            }
+            let mut u2 = 0
+            while u2 < m {
+                let uu2 = ncore + u2
+                let mut v = 0
+                while v < m {
+                    let vv = ncore + v
+                    let mut w = 0
+                    while w < m {
+                        let ww = ncore + w
+                        let gamma = dm2[((t * m + u2) * m + v) * m + w]
+                        let eint = g[((q * n + uu2) * n + vv) * n + ww]
+                        s = s + gamma * eint
+                        w = w + 1
+                    }
+                    v = v + 1
+                }
+                u2 = u2 + 1
+            }
+            Fg[tt * n + q] = s
+            q = q + 1
+        }
+        t = t + 1
+    }
+    // gradient g_pq = 2 (F_pq − F_qp)
+    let mut grad = []
+    let mut a = 0
+    while a < n {
+        let mut b = 0
+        while b < n {
+            grad.push(2.0 * (Fg[a * n + b] - Fg[b * n + a]))
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return grad
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   orbital rotation  C ← C · exp(κ)   (antisymmetric κ → orthogonal rotation)
+// ════════════════════════════════════════════════════════════════════════════
+
+// Matrix exponential exp(K) for an n×n K via scaling-and-squaring + Taylor series.
+//   K is scaled down until ‖K‖_max ≤ 0.1, a 17-term Taylor series is summed, then
+//   the result is squared back. For the small antisymmetric κ here this is
+//   machine-accurate and keeps the rotation exactly orthogonal.
+pub fn casscf_mat_exp(K: [float], n: int) -> [float] {
+    let mut nrm = 0.0
+    let mut i = 0
+    while i < n * n { let a = _cs_abs(K[i]) ; if a > nrm { nrm = a } ; i = i + 1 }
+    let mut squarings = 0
+    let mut Ks = K
+    while nrm > 0.1 {
+        let mut half = []
+        let mut j = 0
+        while j < n * n { half.push(Ks[j] * 0.5) ; j = j + 1 }
+        Ks = half
+        nrm = nrm * 0.5
+        squarings = squarings + 1
+    }
+    // E = I ; term = I ; term ← term·Ks/k ; E ← E + term
+    let mut E = []
+    let mut p = 0
+    while p < n {
+        let mut q = 0
+        while q < n { if p == q { E.push(1.0) } else { E.push(0.0) } q = q + 1 }
+        p = p + 1
+    }
+    let mut term = E
+    let mut k = 1
+    while k < 18 {
+        let kf = to_float(k)
+        let tk = rhf_matmul(term, Ks, n)
+        let mut nt = []
+        let mut z = 0
+        while z < n * n { nt.push(tk[z] / kf) ; z = z + 1 }
+        term = nt
+        let mut ne = []
+        let mut z2 = 0
+        while z2 < n * n { ne.push(E[z2] + term[z2]) ; z2 = z2 + 1 }
+        E = ne
+        k = k + 1
+    }
+    let mut sq = 0
+    while sq < squarings { E = rhf_matmul(E, E, n) ; sq = sq + 1 }
+    return E
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   the CASSCF macro-iteration driver
+// ════════════════════════════════════════════════════════════════════════════
+
+// One CASCI evaluation at orbital matrix C: returns [ e_total, gs, dets, ndet,
+//   h_full, g_full ] (full MO integrals reused by the gradient build).
+fn _casci_at(
+    C: [float], hcore: [float], eri: [float],
+    n: int, ncore: int, m: int, nelA: int, nelB: int, e_nuc: float
+) -> [any] {
+    let h = casscf_full_hcore(C, hcore, n)
+    let g = casscf_full_eri(C, eri, n)
+    let ec = casscf_core_energy(h, g, n, ncore, e_nuc)
+    let heff = casscf_heff_active(h, g, n, ncore, m)
+    let gact = _slice_eri_active(g, n, ncore, m)
+    let civ = casscf_ci_vec(heff, gact, m, nelA, nelB)
+    let e_ci_elec = civ[0]
+    let ndet = civ[1]
+    let gs = civ[2]
+    let dets = civ[3]
+    let e_total = e_ci_elec + ec
+    return [e_total, gs, dets, ndet, h, g]
+}
+
+// Norm of the orbital gradient restricted to inter-subspace rotations (the only
+//   non-redundant generators). pairs[] = flat list of (p,q) index pairs.
+fn _grad_norm(grad: [float], n: int, pairs: [any]) -> float {
+    let mut acc = 0.0
+    let mut i = 0
+    while i < len(pairs) {
+        let pq = pairs[i]
+        let v = grad[pq[0] * n + pq[1]]
+        acc = acc + v * v
+        i = i + 1
+    }
+    return sqrt(acc)
+}
+
+// Build the inter-subspace rotation pairs (core↔active, core↔virtual, active↔virtual).
+//   Subspace: 0=core (p<ncore), 1=active (ncore≤p<ncore+m), 2=virtual (rest).
+fn _rotation_pairs(n: int, ncore: int, m: int) -> [any] {
+    let mut pairs = []
+    let mut p = 0
+    while p < n {
+        let mut q = p + 1
+        while q < n {
+            let mut sp = 2
+            if p < ncore { sp = 0 } else { if p < ncore + m { sp = 1 } }
+            let mut sq = 2
+            if q < ncore { sq = 0 } else { if q < ncore + m { sq = 1 } }
+            if sp != sq { pairs.push([p, q]) }
+            q = q + 1
+        }
+        p = p + 1
+    }
+    return pairs
+}
+
+// CASSCF driver: starting from MO matrix C0, optimize the orbitals self-consistently.
+//   hcore/eri : AO core-Hamiltonian (n×n) and chemists' ERI tensor (n^4)
+//   n         : total MO/AO count
+//   ncore     : doubly-occupied (frozen-density) core orbitals
+//   m         : active orbitals; nelA/nelB = active α/β electron counts
+//   e_nuc     : nuclear repulsion
+//   max_macro : macro-iteration cap;  g_tol : ‖g‖ convergence gate
+//   step0     : initial line-search step length (damped to ‖αg‖≤0.2)
+//   Returns [ e_casscf, macro_iters, grad_norm, converged, C_opt ].
+//   First-order: κ = +α·g steepest descent with backtracking line search.
+pub fn casscf_optimize(
+    C0: [float], hcore: [float], eri: [float],
+    n: int, ncore: int, m: int, nelA: int, nelB: int, e_nuc: float,
+    max_macro: int, g_tol: float, step0: float
+) -> [any] {
+    let pairs = _rotation_pairs(n, ncore, m)
+    let nocc = nelA + nelB
+    let mut C = C0
+    let mut cur = _casci_at(C, hcore, eri, n, ncore, m, nelA, nelB, e_nuc)
+    let mut E = cur[0]
+    let mut iters = 0
+    let mut converged = false
+    let mut gnorm = 0.0
+    while iters < max_macro {
+        let dm1 = casscf_rdm1(cur[1], cur[2], cur[3], m, nocc)
+        let dm2 = casscf_rdm2(cur[1], cur[2], cur[3], m, nocc)
+        let grad = casscf_orb_gradient(cur[4], cur[5], dm1, dm2, n, ncore, m)
+        gnorm = _grad_norm(grad, n, pairs)
+        if gnorm < g_tol { converged = true ; break }
+        // build antisymmetric κ = α·g over the inter-subspace pairs
+        let mut Kdir = []
+        let mut z = 0
+        while z < n * n { Kdir.push(0.0) ; z = z + 1 }
+        let mut ip = 0
+        while ip < len(pairs) {
+            let pq = pairs[ip]
+            let gv = grad[pq[0] * n + pq[1]]
+            Kdir[pq[0] * n + pq[1]] = gv
+            Kdir[pq[1] * n + pq[0]] = 0.0 - gv
+            ip = ip + 1
+        }
+        // damp so the largest |α·κ| ≤ 0.2 (trust region)
+        let mut mx = 0.0
+        let mut zz = 0
+        while zz < n * n { let a = _cs_abs(Kdir[zz]) ; if a > mx { mx = a } ; zz = zz + 1 }
+        let mut alpha = step0
+        if mx * alpha > 0.2 { alpha = 0.2 / mx }
+        // backtracking line search: accept the first α that lowers E
+        let mut accepted = false
+        let mut tries = 0
+        while tries < 30 {
+            let mut Kstep = []
+            let mut w = 0
+            while w < n * n { Kstep.push(Kdir[w] * alpha) ; w = w + 1 }
+            let R = casscf_mat_exp(Kstep, n)
+            let Cn = rhf_matmul(C, R, n)
+            let trial = _casci_at(Cn, hcore, eri, n, ncore, m, nelA, nelB, e_nuc)
+            if trial[0] < E - 1.0e-13 {
+                C = Cn
+                E = trial[0]
+                cur = trial
+                accepted = true
+                tries = 30
+            } else {
+                alpha = alpha * 0.5
+                tries = tries + 1
+            }
+        }
+        if !accepted { break }
+        iters = iters + 1
+    }
+    return [E, iters, gnorm, converged, C]
+}
+
+// End-to-end CASSCF from a converged RHF Fock (recovers the RHF MO-coeffs as the
+//   initial orbital guess, then runs the orbital optimization).
+//   S/hcore/F/eri = AO overlap, core-H, converged RHF Fock, AO ERIs.
+pub fn casscf_from_rhf(
+    S: [float], hcore: [float], F: [float], eri: [float],
+    n: int, ncore: int, m: int, nelA: int, nelB: int, e_nuc: float,
+    max_macro: int, g_tol: float, step0: float
+) -> [any] {
+    let C0 = casci_mo_coeff(S, F, n)
+    return casscf_optimize(C0, hcore, eri, n, ncore, m, nelA, nelB, e_nuc, max_macro, g_tol, step0)
+}

@@ -1,0 +1,594 @@
+// HEXA Standard Library — qforge/molscf/nevpt2_srsi
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE MOLSCF brick 17/N (round-16) — the two 4-RDM SC-NEVPT2 perturber classes
+// Sr (S_r^{(−1)}, a16) and Si (S_i^{(+1)}, a22). These are the only classes whose
+// perturber contracts the active 4-RDM; adding them completes the full 8-class
+// SC-NEVPT2. round-15 shipped the validated 4-RDM build (nevpt2_dm4); this round
+// contracts it.
+//
+// ── the f3ca/f3ac kernel, ported as exact 4-RDM ∘ eri contractions ─────────────────
+//   PySCF assembles the a16/a22 4-RDM terms from a C-kernel object f3ca/f3ac. round-15
+//   HONESTLY refused the stale full-4-RDM comment einsums (they leave a ~6.5 residual /
+//   Sr=+0.0014). This round established the CORRECT identity empirically (Python ↔ PySCF,
+//   <1e-13): each f3 IS ONE exact 4-RDM ∘ active-eri contraction, reused by several
+//   a16/a22 terms via an index permutation —
+//     f3ac[p,q,r,a,b,c] = Σ_{i,j,k} h2e[i,j,k,a] · dm4[r,p,q,b,j,c,i,k]
+//     f3ca[p,q,r,a,b,c] = Σ_{i,j,k} h2e[k,c,i,j] · dm4[r,p,q,b,a,j,k,i]
+//   (these reconstruct the C-kernel f3ac/f3ca to 9e-15 / 5e-15; the comment lines were
+//   stale, never exercised.) Each a16/a22 usage reads f3 at a permuted index, exactly the
+//   PySCF f3.transpose(...) re-use. Feeding the GENUINE nevpt2_dm4 reproduces a16/a22 —
+//   hence Sr/Si — element-wise to <1.6e-14, and the class energies to <1e-13. The "same
+//   algorithm = guaranteed correct" path: replicate the kernel's operation (a 4-RDM ∘ eri
+//   contraction), recovered as its exact einsum, not the stale comment.
+//
+//   integral conventions (hexa full-MO chemist gfull[p,q,r,s] = (pq|rs)):
+//     h1e[p,q]      = inactive Fock FI active block = FI[(c+p)*n+(c+q)]
+//     h2e[i,j,k,l]  = (ik|jl) physicist active = gfull[c+i, c+k, c+j, c+l]
+//     Sr h2e_v[r,i,j,k] = gfull[nocc+r, c+j, c+i, c+k] ; h1e_v[r,i] = FI[nocc+r,c+i] − Σ_b h2e_v[r,b,b,i]
+//     Si h2e_v[i,j,c0,k] = gfull[c+j, c+k, c+i, core c0]; h1e_v[i,c0] = FI[c+i, core c0]
+
+use "stdlib/qforge/molscf/fci"
+use "stdlib/qforge/molscf/casscf"
+use "stdlib/qforge/molscf/nevpt2"
+
+fn _sr_abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+fn _sr_h2e(g: [float], n: int, c: int, i: int, j: int, k: int, l: int) -> float {
+    return g[(((c + i) * n + (c + k)) * n + (c + j)) * n + (c + l)]
+}
+fn _sr_h1(FI: [float], n: int, c: int, p: int, q: int) -> float {
+    return FI[(c + p) * n + (c + q)]
+}
+fn _sr_d3(dm3: [float], m: int, p: int, q: int, r: int, s: int, t: int, u: int) -> float {
+    let mut o = p ; o = o * m + q ; o = o * m + r ; o = o * m + s ; o = o * m + t ; o = o * m + u
+    return dm3[o]
+}
+fn _sr_d2(dm2: [float], m: int, p: int, q: int, r: int, s: int) -> float {
+    return dm2[(((p * m + q) * m + r) * m + s)]
+}
+// h1e with the (mjjn) self-contraction removed (a17/a19/a23/a25 effective 1e).
+fn _sr_h1c(FI: [float], g: [float], n: int, c: int, m: int, p: int, q: int) -> float {
+    let mut v = _sr_h1(FI, n, c, p, q)
+    let mut j = 0
+    while j < m { v = v - _sr_h2e(g, n, c, p, j, j, q) ; j = j + 1 }
+    return v
+}
+
+// f3 base contractions (the kernel port). Output indices p,q,r,a,b,c.
+fn _sr_f3ac(g: [float], dm4: [float], n: int, c: int, m: int, p: int, q: int, r: int, a: int, b: int, cc: int) -> float {
+    let mut v = 0.0
+    let mut i = 0
+    while i < m {
+        let mut j = 0
+        while j < m {
+            let mut k = 0
+            while k < m {
+                v = v + _sr_h2e(g, n, c, i, j, k, a) * nevpt2_dm4_idx(dm4, m, r, p, q, b, j, cc, i, k)
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return v
+}
+fn _sr_f3ca(g: [float], dm4: [float], n: int, c: int, m: int, p: int, q: int, r: int, a: int, b: int, cc: int) -> float {
+    let mut v = 0.0
+    let mut i = 0
+    while i < m {
+        let mut j = 0
+        while j < m {
+            let mut k = 0
+            while k < m {
+                v = v + _sr_h2e(g, n, c, k, cc, i, j) * nevpt2_dm4_idx(dm4, m, r, p, q, b, a, j, k, i)
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return v
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   a16[p,q,r,a,b,c] (Sr perturber) — PySCF make_a16, f3 via the kernel contraction.
+//   f3 usages (element access of f3(out[access[*]])):
+//     l70 = f3ca @ [p,a,r,q,c,b]   l79 = f3ac @ [p,q,r,a,b,c]   l82 = f3ca @ [p,q,r,a,b,c]
+// ════════════════════════════════════════════════════════════════════════════
+fn _sr_a16(g: [float], FI: [float], dm3: [float], dm4: [float], n: int, c: int, m: int,
+           p: int, q: int, r: int, a: int, b: int, cc: int) -> float {
+    let mut v = 0.0
+    let mut i = 0
+    while i < m {
+        v = v - _sr_h1(FI, n, c, i, b) * _sr_d3(dm3, m, r, p, q, i, a, cc)
+        v = v + _sr_h1(FI, n, c, i, a) * _sr_d3(dm3, m, r, p, q, b, i, cc)
+        v = v - _sr_h1(FI, n, c, cc, i) * _sr_d3(dm3, m, r, p, q, b, a, i)
+        i = i + 1
+    }
+    v = v - _sr_f3ca(g, dm4, n, c, m, p, a, r, q, cc, b)   // l70 access [p,a,r,q,c,b]
+    let mut k = 0
+    while k < m {
+        let mut i2 = 0
+        while i2 < m {
+            v = v - _sr_h2e(g, n, c, k, b, i2, a) * _sr_d3(dm3, m, r, p, q, cc, k, i2)
+            v = v - _sr_h2e(g, n, c, k, b, a, i2) * _sr_d3(dm3, m, r, p, q, i2, k, cc)
+            i2 = i2 + 1
+        }
+        k = k + 1
+    }
+    let mut i3 = 0
+    while i3 < m {
+        let mut j2 = 0
+        while j2 < m {
+            v = v + _sr_h2e(g, n, c, cc, b, i3, j2) * _sr_d3(dm3, m, r, p, q, j2, a, i3)
+            v = v + _sr_h2e(g, n, c, j2, b, i3, j2) * _sr_d3(dm3, m, r, p, q, i3, a, cc)
+            v = v - _sr_h2e(g, n, c, cc, i3, j2, a) * _sr_d3(dm3, m, r, p, q, b, i3, j2)
+            v = v + _sr_h2e(g, n, c, j2, cc, i3, j2) * _sr_d3(dm3, m, r, p, q, b, a, i3)
+            j2 = j2 + 1
+        }
+        i3 = i3 + 1
+    }
+    if q == cc {
+        let mut k3 = 0
+        while k3 < m {
+            let mut i4 = 0
+            while i4 < m {
+                let mut j3 = 0
+                while j3 < m {
+                    v = v + _sr_h2e(g, n, c, k3, b, i4, j3) * _sr_d3(dm3, m, r, p, a, j3, k3, i4)
+                    j3 = j3 + 1
+                }
+                i4 = i4 + 1
+            }
+            k3 = k3 + 1
+        }
+    }
+    v = v + _sr_f3ac(g, dm4, n, c, m, p, q, r, a, b, cc)   // l79 access identity
+    v = v - _sr_f3ca(g, dm4, n, c, m, p, q, r, a, b, cc)   // l82 access identity
+    return v
+}
+
+// a17[a,b,c,p] = −Σ_i h1c[p,i] dm2[c,a,b,i] − Σ_kij h2e[k,p,i,j] dm3[c,a,b,j,k,i].
+fn _sr_a17(g: [float], FI: [float], dm2: [float], dm3: [float], n: int, c: int, m: int,
+           a: int, b: int, cc: int, p: int) -> float {
+    let mut v = 0.0
+    let mut i = 0
+    while i < m { v = v - _sr_h1c(FI, g, n, c, m, p, i) * _sr_d2(dm2, m, cc, a, b, i) ; i = i + 1 }
+    let mut k = 0
+    while k < m {
+        let mut i2 = 0
+        while i2 < m {
+            let mut j = 0
+            while j < m {
+                v = v - _sr_h2e(g, n, c, k, p, i2, j) * _sr_d3(dm3, m, cc, a, b, j, k, i2)
+                j = j + 1
+            }
+            i2 = i2 + 1
+        }
+        k = k + 1
+    }
+    return v
+}
+
+// a19[a,p] = −Σ_i h1c[p,i] dm1[a,i] − Σ_kij h2e[k,p,i,j] dm2[a,j,k,i].
+fn _sr_a19(g: [float], FI: [float], dm1: [float], dm2: [float], n: int, c: int, m: int, a: int, p: int) -> float {
+    let mut v = 0.0
+    let mut i = 0
+    while i < m { v = v - _sr_h1c(FI, g, n, c, m, p, i) * dm1[a * m + i] ; i = i + 1 }
+    let mut k = 0
+    while k < m {
+        let mut i2 = 0
+        while i2 < m {
+            let mut j = 0
+            while j < m {
+                v = v - _sr_h2e(g, n, c, k, p, i2, j) * _sr_d2(dm2, m, a, j, k, i2)
+                j = j + 1
+            }
+            i2 = i2 + 1
+        }
+        k = k + 1
+    }
+    return v
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   Sr (S_r^{(−1)}) class energy = Σ_r −norm_r/(Δ_r + ener_r/norm_r), Δ_r = moe[nocc+r].
+//   norm_r = Σ h2e_v[r,p,q,s] dm3[s,p,q,b,a,c] h2e_v[r,a,b,c]      (the dm3 part)
+//          + 2 Σ h2e_v[r,p,q,a] dm2[s? ] ... assembled per the PySCF Sr equations.
+// ════════════════════════════════════════════════════════════════════════════
+pub fn nevpt2_Sr(g: [float], FI: [float], dm1: [float], dm2: [float], dm3: [float], dm4: [float],
+                 moe: [float], n: int, ncore: int, m: int) -> float {
+    let nocc = ncore + m
+    let nvirt = n - nocc
+    if nvirt == 0 { return 0.0 }
+    let c = ncore
+    let mut e = 0.0
+    let mut rr = 0
+    while rr < nvirt {
+        let vr = nocc + rr
+        // h2e_v[i,j,k] = gfull[vr, c+j, c+i, c+k] ; h1e_v[i] = FI[vr,c+i] − Σ_b h2e_v[i,b,b]? (b loop on jk)
+        // ener = Σ_pqr h2e_v[p,q,r] a16[p,q,r,a,b,c] h2e_v[a,b,c]
+        //       + 2 Σ_pqr h2e_v[p,q,r] a17[p,q,r,a] h1e_v[a]
+        //       + Σ_p h1e_v[p] a19[p,a] h1e_v[a]
+        // norm = Σ h2e_v[p,q,r] dm3[r,p,q,b,a,c] h2e_v[a,b,c]
+        //       + 2 Σ h2e_v[p,q,r] dm2[r,p,q,a] h1e_v[a]
+        //       + Σ h1e_v[p] dm1[p,a] h1e_v[a]
+        let mut ener = 0.0
+        let mut norm = 0.0
+        // assemble h1e_v[i] for this r
+        let mut h1ev = []
+        let mut ii = 0
+        while ii < m {
+            let mut hv = FI[vr * n + (c + ii)]
+            let mut bb = 0
+            while bb < m { hv = hv - g[(vr * n + (c + bb)) * n + (c + bb)] * 0.0 ; bb = bb + 1 }
+            // h2e_v[i,b,b] = gfull[vr, c+b, c+i, c+b]
+            let mut bb2 = 0
+            while bb2 < m { hv = hv - g[((vr * n + (c + bb2)) * n + (c + ii)) * n + (c + bb2)] ; bb2 = bb2 + 1 }
+            h1ev.push(hv)
+            ii = ii + 1
+        }
+        // 3-body block (a16 / dm3)
+        let mut p = 0
+        while p < m {
+            let mut q = 0
+            while q < m {
+                let mut s = 0
+                while s < m {
+                    let vpqs = g[((vr * n + (c + q)) * n + (c + p)) * n + (c + s)]  // h2e_v[p,q,s]=gfull[vr,c+q,c+p,c+s]
+                    let mut a = 0
+                    while a < m {
+                        let mut b = 0
+                        while b < m {
+                            let mut cc = 0
+                            while cc < m {
+                                let vabc = g[((vr * n + (c + b)) * n + (c + a)) * n + (c + cc)]
+                                let prod = vpqs * vabc
+                                let a16v = _sr_a16(g, FI, dm3, dm4, n, c, m, p, q, s, a, b, cc)
+                                ener = ener + prod * a16v
+                                norm = norm + prod * _sr_d3(dm3, m, s, p, q, b, a, cc)
+                                cc = cc + 1
+                            }
+                            b = b + 1
+                        }
+                        a = a + 1
+                    }
+                    s = s + 1
+                }
+                q = q + 1
+            }
+            p = p + 1
+        }
+        // 2-body cross block (a17 / dm2) ×2, and 1-body (a19 / dm1)
+        let mut p2 = 0
+        while p2 < m {
+            let mut q2 = 0
+            while q2 < m {
+                let mut s2 = 0
+                while s2 < m {
+                    let vpqs = g[((vr * n + (c + q2)) * n + (c + p2)) * n + (c + s2)]
+                    let mut a2 = 0
+                    while a2 < m {
+                        let a17v = _sr_a17(g, FI, dm2, dm3, n, c, m, p2, q2, s2, a2)
+                        ener = ener + 2.0 * vpqs * a17v * h1ev[a2]
+                        norm = norm + 2.0 * vpqs * _sr_d2(dm2, m, s2, p2, q2, a2) * h1ev[a2]
+                        a2 = a2 + 1
+                    }
+                    s2 = s2 + 1
+                }
+                q2 = q2 + 1
+            }
+            p2 = p2 + 1
+        }
+        let mut p3 = 0
+        while p3 < m {
+            let mut a3 = 0
+            while a3 < m {
+                let a19v = _sr_a19(g, FI, dm1, dm2, n, c, m, p3, a3)
+                ener = ener + h1ev[p3] * a19v * h1ev[a3]
+                norm = norm + h1ev[p3] * dm1[p3 * m + a3] * h1ev[a3]
+                a3 = a3 + 1
+            }
+            p3 = p3 + 1
+        }
+        if _sr_abs(norm) > 1.0e-14 {
+            let denom = moe[vr] + ener / norm
+            e = e - norm / denom
+        }
+        rr = rr + 1
+    }
+    return e
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   a22[i,j,k,a,b,c] (Si perturber) — PySCF make_a22, f3 via the kernel contraction.
+//   f3 usages: l120 = f3ac @ [i,a,k,b,c,j]  l129 = f3ac @ [i,b,k,a,j,c]  l132 = f3ca @ [i,b,k,a,j,c]
+//   diagonal-block fixups: −fdm2b when j==a ; +2·fdm2c when j==b.
+// ════════════════════════════════════════════════════════════════════════════
+fn _sr_a22(g: [float], FI: [float], dm2: [float], dm3: [float], dm4: [float], n: int, c: int, m: int,
+           i_: int, j_: int, k_: int, a: int, b: int, cc: int) -> float {
+    let mut v = 0.0
+    let mut p = 0
+    while p < m {
+        v = v - _sr_h1(FI, n, c, p, b) * _sr_d3(dm3, m, k_, i_, p, j_, a, cc)
+        v = v - _sr_h1(FI, n, c, p, a) * _sr_d3(dm3, m, k_, i_, b, j_, p, cc)
+        v = v + _sr_h1(FI, n, c, cc, p) * _sr_d3(dm3, m, k_, i_, b, j_, a, p)
+        p = p + 1
+    }
+    let mut q = 0
+    while q < m {
+        let mut r = 0
+        while r < m {
+            v = v + _sr_h2e(g, n, c, cc, q, r, a) * _sr_d3(dm3, m, k_, i_, b, j_, q, r)
+            v = v - _sr_h2e(g, n, c, r, cc, q, r) * _sr_d3(dm3, m, k_, i_, b, j_, a, q)
+            r = r + 1
+        }
+        q = q + 1
+    }
+    v = v - _sr_f3ac(g, dm4, n, c, m, i_, a, k_, b, cc, j_)   // l120 access [i,a,k,b,c,j]
+    if j_ == a {
+        let mut p2 = 0
+        while p2 < m {
+            let mut q2 = 0
+            while q2 < m {
+                let mut r2 = 0
+                while r2 < m {
+                    v = v - _sr_h2e(g, n, c, p2, q2, r2, b) * _sr_d3(dm3, m, k_, i_, q2, cc, p2, r2)
+                    r2 = r2 + 1
+                }
+                q2 = q2 + 1
+            }
+            p2 = p2 + 1
+        }
+    }
+    let mut p3 = 0
+    while p3 < m {
+        let mut q3 = 0
+        while q3 < m {
+            v = v - _sr_h2e(g, n, c, p3, q3, a, b) * _sr_d3(dm3, m, k_, i_, q3, j_, p3, cc)
+            v = v + _sr_h2e(g, n, c, p3, cc, q3, b) * _sr_d3(dm3, m, k_, i_, a, j_, p3, q3)
+            v = v + _sr_h2e(g, n, c, cc, p3, q3, b) * _sr_d3(dm3, m, k_, i_, p3, j_, a, q3)
+            q3 = q3 + 1
+        }
+        p3 = p3 + 1
+    }
+    v = v - _sr_f3ac(g, dm4, n, c, m, i_, b, k_, a, j_, cc)   // l129 access [i,b,k,a,j,c]
+    v = v + _sr_f3ca(g, dm4, n, c, m, i_, b, k_, a, j_, cc)   // l132 access [i,b,k,a,j,c]
+    v = v + 2.0 * _sr_h1(FI, n, c, j_, b) * _sr_d2(dm2, m, k_, i_, a, cc)
+    let mut p4 = 0
+    while p4 < m {
+        let mut r4 = 0
+        while r4 < m {
+            v = v + 2.0 * _sr_h2e(g, n, c, p4, j_, r4, b) * _sr_d3(dm3, m, k_, i_, p4, r4, a, cc)
+            r4 = r4 + 1
+        }
+        p4 = p4 + 1
+    }
+    if j_ == b {
+        let mut s = 0.0
+        let mut p5 = 0
+        while p5 < m {
+            s = s + _sr_h1(FI, n, c, p5, a) * _sr_d2(dm2, m, k_, i_, p5, cc)
+            s = s - _sr_h1(FI, n, c, cc, p5) * _sr_d2(dm2, m, k_, i_, a, p5)
+            p5 = p5 + 1
+        }
+        let mut q5 = 0
+        while q5 < m {
+            let mut r5 = 0
+            while r5 < m {
+                s = s - _sr_h2e(g, n, c, cc, q5, r5, a) * _sr_d2(dm2, m, k_, i_, q5, r5)
+                s = s + _sr_h2e(g, n, c, r5, cc, q5, r5) * _sr_d2(dm2, m, k_, i_, a, q5)
+                r5 = r5 + 1
+            }
+            q5 = q5 + 1
+        }
+        let mut p6 = 0
+        while p6 < m {
+            let mut q6 = 0
+            while q6 < m {
+                let mut r6 = 0
+                while r6 < m {
+                    s = s + _sr_h2e(g, n, c, p6, q6, r6, a) * _sr_d3(dm3, m, k_, i_, q6, cc, p6, r6)
+                    s = s - _sr_h2e(g, n, c, r6, cc, p6, q6) * _sr_d3(dm3, m, k_, i_, a, q6, r6, p6)
+                    r6 = r6 + 1
+                }
+                q6 = q6 + 1
+            }
+            p6 = p6 + 1
+        }
+        v = v + s * 2.0
+    }
+    return v
+}
+
+// a23[a,b,c,p] = −Σ_i h1e[i,p] dm2[c,a,i,b] − Σ_ijk h2e[p,i,j,k] dm3[c,a,j,b,i,k]
+//   + 2 h1e[b,p] dm1[c,a] + 2 Σ_ik h2e[p,i,b,k] dm2[c,a,i,k].
+fn _sr_a23(g: [float], FI: [float], dm1: [float], dm2: [float], dm3: [float], n: int, c: int, m: int,
+           a: int, b: int, cc: int, p: int) -> float {
+    let mut v = 0.0
+    let mut i = 0
+    while i < m { v = v - _sr_h1(FI, n, c, i, p) * _sr_d2(dm2, m, cc, a, i, b) ; i = i + 1 }
+    let mut i2 = 0
+    while i2 < m {
+        let mut j = 0
+        while j < m {
+            let mut k = 0
+            while k < m {
+                v = v - _sr_h2e(g, n, c, p, i2, j, k) * _sr_d3(dm3, m, cc, a, j, b, i2, k)
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i2 = i2 + 1
+    }
+    v = v + 2.0 * _sr_h1(FI, n, c, b, p) * dm1[cc * m + a]
+    let mut i3 = 0
+    while i3 < m {
+        let mut k2 = 0
+        while k2 < m {
+            v = v + 2.0 * _sr_h2e(g, n, c, p, i3, b, k2) * _sr_d2(dm2, m, cc, a, i3, k2)
+            k2 = k2 + 1
+        }
+        i3 = i3 + 1
+    }
+    return v
+}
+
+// a25[a,p] = −Σ_i h1e[p,i] dm1[a,i] − Σ_ijk h2e[p,i,j,k] dm2[j,a,i,k] + 2 h1e[a,p]
+//   + 2 Σ_ij h2e[p,i,a,j] dm1[i,j].
+fn _sr_a25(g: [float], FI: [float], dm1: [float], dm2: [float], n: int, c: int, m: int, a: int, p: int) -> float {
+    let mut v = 0.0
+    let mut i = 0
+    while i < m { v = v - _sr_h1(FI, n, c, p, i) * dm1[a * m + i] ; i = i + 1 }
+    let mut i2 = 0
+    while i2 < m {
+        let mut j = 0
+        while j < m {
+            let mut k = 0
+            while k < m {
+                v = v - _sr_h2e(g, n, c, p, i2, j, k) * _sr_d2(dm2, m, j, a, i2, k)
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i2 = i2 + 1
+    }
+    v = v + 2.0 * _sr_h1(FI, n, c, a, p)
+    let mut i3 = 0
+    while i3 < m {
+        let mut j2 = 0
+        while j2 < m {
+            v = v + 2.0 * _sr_h2e(g, n, c, p, i3, a, j2) * dm1[i3 * m + j2]
+            j2 = j2 + 1
+        }
+        i3 = i3 + 1
+    }
+    return v
+}
+
+// hole densities for Si (PySCF dm3_h / dm2_h / dm1_h).
+fn _sr_d3h(dm2: [float], dm3: [float], m: int, a: int, b: int, cc: int, d: int, ee: int, f: int) -> float {
+    let mut v = 0.0 - _sr_d3(dm3, m, a, b, d, cc, ee, f)
+    if cc == d { v = v + 2.0 * _sr_d2(dm2, m, a, b, ee, f) }
+    return v
+}
+fn _sr_d2h(dm1: [float], dm2: [float], m: int, a: int, b: int, cc: int, d: int) -> float {
+    let mut v = 0.0 - _sr_d2(dm2, m, a, b, d, cc)
+    if cc == d { v = v + 2.0 * dm1[a * m + b] }
+    return v
+}
+fn _sr_d1h(dm1: [float], m: int, a: int, b: int) -> float {
+    let mut v = 0.0 - dm1[b * m + a]
+    if a == b { v = v + 2.0 }
+    return v
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   Si (S_i^{(1)}) class energy = Σ_{ic core} −norm/(−moe[ic] + ener/norm).
+//   Si h2e_v[i,j,ic,k] = gfull[c+j, c+k, c+i, ic] ; h1e_v[i,ic] = FI[c+i, ic].
+// ════════════════════════════════════════════════════════════════════════════
+pub fn nevpt2_Si(g: [float], FI: [float], dm1: [float], dm2: [float], dm3: [float], dm4: [float],
+                 moe: [float], n: int, ncore: int, m: int) -> float {
+    if ncore == 0 { return 0.0 }
+    let c = ncore
+    let mut e = 0.0
+    let mut ic = 0
+    while ic < ncore {
+        let mut ener = 0.0
+        let mut norm = 0.0
+        let mut q = 0
+        while q < m {
+            let mut p = 0
+            while p < m {
+                let mut r = 0
+                while r < m {
+                    // h2e_v[q,p,ic,r] = gfull[c+p, c+r, c+q, ic]
+                    let vqpir = g[(((c + p) * n + (c + r)) * n + (c + q)) * n + ic]
+                    let mut a = 0
+                    while a < m {
+                        let mut b = 0
+                        while b < m {
+                            let mut cc = 0
+                            while cc < m {
+                                let vbaic = g[(((c + a) * n + (c + cc)) * n + (c + b)) * n + ic]
+                                let prod = vqpir * vbaic
+                                ener = ener + prod * _sr_a22(g, FI, dm2, dm3, dm4, n, c, m, p, q, r, a, b, cc)
+                                norm = norm + prod * _sr_d3h(dm2, dm3, m, r, p, q, b, a, cc)
+                                cc = cc + 1
+                            }
+                            b = b + 1
+                        }
+                        a = a + 1
+                    }
+                    r = r + 1
+                }
+                p = p + 1
+            }
+            q = q + 1
+        }
+        let mut q2 = 0
+        while q2 < m {
+            let mut p2 = 0
+            while p2 < m {
+                let mut r2 = 0
+                while r2 < m {
+                    let vqpir = g[(((c + p2) * n + (c + r2)) * n + (c + q2)) * n + ic]
+                    let mut a2 = 0
+                    while a2 < m {
+                        let h1v = FI[(c + a2) * n + ic]
+                        ener = ener + 2.0 * vqpir * _sr_a23(g, FI, dm1, dm2, dm3, n, c, m, p2, q2, r2, a2) * h1v
+                        norm = norm + 2.0 * vqpir * _sr_d2h(dm1, dm2, m, r2, p2, q2, a2) * h1v
+                        a2 = a2 + 1
+                    }
+                    r2 = r2 + 1
+                }
+                p2 = p2 + 1
+            }
+            q2 = q2 + 1
+        }
+        let mut p3 = 0
+        while p3 < m {
+            let h1p = FI[(c + p3) * n + ic]
+            let mut a3 = 0
+            while a3 < m {
+                let h1a = FI[(c + a3) * n + ic]
+                ener = ener + h1p * _sr_a25(g, FI, dm1, dm2, n, c, m, p3, a3) * h1a
+                norm = norm + h1p * _sr_d1h(dm1, m, p3, a3) * h1a
+                a3 = a3 + 1
+            }
+            p3 = p3 + 1
+        }
+        if _sr_abs(norm) > 1.0e-14 {
+            let denom = (0.0 - moe[ic]) + ener / norm
+            e = e - norm / denom
+        }
+        ic = ic + 1
+    }
+    return e
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   Full 8-class SC-NEVPT2 total. Extends nevpt2_total (6 classes) with Sr + Si.
+//   Returns [ e_total8, e_6class, e_Sr, e_Si ].
+// ════════════════════════════════════════════════════════════════════════════
+pub fn nevpt2_total8(
+    gs: [any], dets: [any], ndet: int, hfull: [float], gfull: [float],
+    n: int, ncore: int, m: int, nelA: int, nelB: int
+) -> [float] {
+    let nocc = nelA + nelB
+    let six = nevpt2_total(gs, dets, ndet, hfull, gfull, n, ncore, m, nelA, nelB)
+    let e6 = six[0]
+    let dm1 = nevpt2_dm1(gs, dets, ndet, m, nocc)
+    let dm2 = nevpt2_dm2(gs, dets, ndet, m, nocc)
+    let dm3 = nevpt2_dm3(gs, dets, ndet, m, nocc)
+    let dm4 = nevpt2_dm4(gs, dets, ndet, m, nocc)
+    let FI = nevpt2_inactive_fock(hfull, gfull, n, ncore)
+    let moe = nevpt2_mo_energy(hfull, gfull, dm1, n, ncore, m)
+    let eSr = nevpt2_Sr(gfull, FI, dm1, dm2, dm3, dm4, moe, n, ncore, m)
+    let eSi = nevpt2_Si(gfull, FI, dm1, dm2, dm3, dm4, moe, n, ncore, m)
+    let tot = e6 + eSr + eSi
+    return [tot, e6, eSr, eSi]
+}

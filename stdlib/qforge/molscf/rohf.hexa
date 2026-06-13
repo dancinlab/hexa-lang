@@ -1,0 +1,275 @@
+// HEXA Standard Library — qforge/molscf/rohf
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE MOLSCF brick 8/N — RESTRICTED OPEN-SHELL Hartree–Fock (ROHF).
+// This SEALS the spin-contamination crack the round-7 UHF agent left open: UHF
+// (uhf.hexa) gives a genuine open-shell SCF energy but its single-determinant of
+// SEPARATE α/β spatial orbitals is NOT an S² eigenfunction — the H₃ radical comes
+// out ⟨S²⟩=0.7957 (+0.046 over the exact doublet 0.75). ROHF uses ONE set of
+// spatial orbitals (closed orbitals doubly filled, open orbitals singly filled
+// with the high-spin α electrons), so the determinant is a pure S=S_z eigenstate:
+// ⟨S²⟩ = S(S+1) EXACTLY, ZERO contamination — by CONSTRUCTION, not by luck.
+//
+// ── d4 generic dispatch — instance = manifest, no name hardcoding ─────────────
+//   rohf_scf consumes the SAME precomputed integral set as rhf_scf / uhf_scf
+//   (S, H_core, the (μν|σλ) tensor) + (n_closed, n_open) + E_nuc. n_a = n_closed
+//   + n_open, n_b = n_closed. The MOLECULE is the manifest; the H atom, CH₃, a
+//   d¹ ScH⁺ doublet all traverse rohf_scf unchanged — only the occupations and the
+//   input matrices differ. n_open = 0 reduces EXACTLY to closed-shell RHF (g5 b).
+//
+// ── ROHF effective Fock — Roothaan single coupling operator ──────────────────
+//   ROHF diagonalizes ONE effective Fock R for ONE orbital set. We use the
+//   canonical Roothaan/Davidson MO-basis block coupling (Roothaan 1960; the form
+//   PySCF / Gaussian "ROHF" build). With Fα, Fβ the usual UHF-style spin Focks at
+//   the CURRENT common orbitals (reuse uhf_fock_pair), and the orbital space split
+//   into closed (c, doubly occ) · open (o, singly occ) · virtual (v, empty):
+//
+//        ┌                              ┐
+//        │  R_cc = ½(Fα+Fβ)   R_co = Fβ      R_cv = ½(Fα+Fβ) │
+//   R =  │  R_oc = Fβ         R_oo = ½(Fα+Fβ) R_ov = Fα       │   (MO basis)
+//        │  R_vc = ½(Fα+Fβ)   R_vo = Fα       R_vv = ½(Fα+Fβ) │
+//        └                              ┘
+//   The off-diagonal couplings (R_co=Fβ, R_ov=Fα) are what make the single set of
+//   orbitals stationary for the ROHF energy; the diagonal blocks are the spin-
+//   averaged Fock ½(Fα+Fβ). R is built in the MO basis of the CURRENT C, then
+//   back-transformed to the AO basis  R_ao = S C R_mo (S C)ᵀ  and diagonalized in
+//   the shared Löwdin basis (reuse rhf_diagonalize). The new C rebuilds BOTH spin
+//   densities from the SAME orbitals → spin-pure determinant, every iteration.
+//
+// ── ROHF energy ──────────────────────────────────────────────────────────────
+//   Identical algebraic form to UHF at the common-orbital densities:
+//   E_elec = ½ Σ_μν [ P_tot H_core + P^α F^α + P^β F^β ],   P^α from (c+o) MOs,
+//   P^β from (c) MOs of the SAME C.  E_total = E_elec + E_nuc.
+//   Variational ordering: E_ROHF ≥ E_UHF (ROHF is the spin-constrained UHF), the
+//   gap = the energy paid for spin purity — REPORTED, never hidden (d6).
+//
+// ── ⟨S²⟩ — exact by construction ─────────────────────────────────────────────
+//   Because α and β share spatial orbitals, the closed α/β overlaps are 1 and the
+//   open α orbitals have no β partner, so uhf_spin_squared collapses to exactly
+//   S_z(S_z+1) + n_β − n_β = S_z(S_z+1) = S(S+1) for the high-spin coupling. We
+//   reuse uhf_spin_squared UNCHANGED and the contamination term is 0 to machine ε.
+//
+// reuse (d3 · d19): uhf_fock_pair / uhf_energy_elec / uhf_spin_squared / DIIS
+//   (uhf_diis_error · uhf_err_norm · uhf_lin_solve) from uhf.hexa; rhf_matmul /
+//   rhf_transpose / rhf_s_inv_sqrt / rhf_diagonalize from rhf.hexa. uhf.hexa and
+//   rhf.hexa are BYTE-UNTOUCHED — ROHF is a NEW additive file. The only new logic
+//   is the Roothaan block assembly + the MO↔AO transform of R (no new primitive).
+
+use "stdlib/alloc/math/eigen"
+use "stdlib/qforge/molscf/rhf"
+use "stdlib/qforge/molscf/uhf"
+
+// ════════════════════════════════════════════════════════════════════════════
+//   Roothaan single effective Fock  (MO-basis block assembly)
+// ════════════════════════════════════════════════════════════════════════════
+
+// Orbital-space class for MO index p given (n_closed, n_open):
+//   0 = closed (doubly occ)  : 0       .. n_closed-1
+//   1 = open   (singly occ)  : n_closed .. n_closed+n_open-1
+//   2 = virtual              : n_closed+n_open .. n-1
+fn rohf_class(p: int, n_closed: int, n_open: int) -> int {
+    if p < n_closed { return 0 }
+    if p < n_closed + n_open { return 1 }
+    return 2
+}
+
+// The Roothaan coupling coefficient for the (row-class, col-class) block applied
+// to (Fα, Fβ). Returns the scalar combination R = cA·Fα + cB·Fβ entrywise.
+//   diagonal blocks (cc,oo,vv)         → ½(Fα+Fβ)   [cA=cB=½]
+//   closed↔open  (co,oc)               → Fβ          [cA=0, cB=1]
+//   open↔virtual (ov,vo)               → Fα          [cA=1, cB=0]
+//   closed↔virtual (cv,vc)             → ½(Fα+Fβ)   [cA=cB=½]
+// Returns [cA, cB].
+fn rohf_couple(rc: int, cc: int) -> [float] {
+    if rc == cc { return [0.5, 0.5] }                  // any diagonal block
+    // closed(0)↔open(1): use Fβ
+    if (rc == 0 && cc == 1) || (rc == 1 && cc == 0) { return [0.0, 1.0] }
+    // open(1)↔virtual(2): use Fα
+    if (rc == 1 && cc == 2) || (rc == 2 && cc == 1) { return [1.0, 0.0] }
+    // closed(0)↔virtual(2): spin-averaged
+    return [0.5, 0.5]
+}
+
+// Build the AO-basis Roothaan effective Fock R from the spin Focks Fα,Fβ and the
+// current orbital coefficients C (n×n, column = MO).
+//   1. transform each spin Fock to the current MO basis:  F_mo = Cᵀ F C
+//   2. assemble R_mo block-by-block with rohf_couple
+//   3. back-transform to AO:  R_ao = (S C) R_mo (S C)ᵀ
+// (S C) is the contravariant MO→AO map so that diagonalizing R_ao in the Löwdin
+// basis reproduces the MO-basis eigenproblem; this keeps the SAME rhf_diagonalize
+// path UHF/RHF use — no new eigen path.
+pub fn rohf_effective_fock(
+    Fa: [float], Fb: [float], C: [float], S: [float],
+    n: int, n_closed: int, n_open: int
+) -> [float] {
+    let Ct = rhf_transpose(C, n)
+    // F_mo^α = Cᵀ Fα C,  F_mo^β = Cᵀ Fβ C
+    let Fa_mo = rhf_matmul(rhf_matmul(Ct, Fa, n), C, n)
+    let Fb_mo = rhf_matmul(rhf_matmul(Ct, Fb, n), C, n)
+    // R_mo block assembly
+    let mut Rmo = []
+    let mut p = 0
+    while p < n {
+        let rc = rohf_class(p, n_closed, n_open)
+        let mut q = 0
+        while q < n {
+            let cc = rohf_class(q, n_closed, n_open)
+            let cf = rohf_couple(rc, cc)
+            let idx = p * n + q
+            Rmo.push(cf[0] * Fa_mo[idx] + cf[1] * Fb_mo[idx])
+            q = q + 1
+        }
+        p = p + 1
+    }
+    // back-transform  R_ao = (S C) R_mo (S C)ᵀ
+    let SC = rhf_matmul(S, C, n)
+    let SCt = rhf_transpose(SC, n)
+    let R_ao = rhf_matmul(rhf_matmul(SC, Rmo, n), SCt, n)
+    return R_ao
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   the ROHF SCF driver
+// ════════════════════════════════════════════════════════════════════════════
+
+fn rohf_slice(v: [float], start: int, len_: int) -> [float] {
+    let mut out = []
+    let mut i = 0
+    while i < len_ { out.push(v[start + i]) ; i = i + 1 }
+    return out
+}
+
+fn rohf_drop_first(h: [any]) -> [any] {
+    let mut out = []
+    let mut i = 1
+    while i < len(h) { out.push(h[i]) ; i = i + 1 }
+    return out
+}
+
+// Restricted open-shell Hartree–Fock SCF (high-spin coupling).
+//   S, hcore : n×n overlap & core Hamiltonian (row-major flat)
+//   eri      : n^4 chemists' (μν|σλ) tensor
+//   n_closed : doubly-occupied MOs;  n_open : singly-occupied (high-spin α) MOs
+//   e_nuc    : nuclear repulsion
+//   max_iter, e_tol : iteration cap & |ΔE| gate
+//   use_diis : Pulay DIIS on the single Roothaan error vector
+//   Returns [ e_total, iters, e_elec, Pa, Pb, Fa, Fb, eps, C, converged,
+//             err_final ].  (single eps / single C — spin-restricted.)
+//   d4-generic: any molecule's supplied integrals + (n_closed,n_open) run here.
+//   n_open = 0 ⇒ RHF reduction (the open block is empty; R = ½(Fα+Fβ) = F_RHF).
+pub fn rohf_scf(
+    S: [float], hcore: [float], eri: [float],
+    n: int, n_closed: int, n_open: int, e_nuc: float,
+    max_iter: int, e_tol: float, use_diis: bool
+) -> [any] {
+    let n_a = n_closed + n_open       // α electrons (closed pairs + open)
+    let n_b = n_closed                // β electrons (closed pairs only)
+    let xmat = rhf_s_inv_sqrt(S, n)
+    // core-Hamiltonian initial guess — ONE orbital set for both spins.
+    let dg0 = rhf_diagonalize(hcore, xmat, n)
+    let mut C = dg0[0]
+    let mut eps = dg0[1]
+    let mut Pa = uhf_density_spin(C, n, n_a)
+    let mut Pb = uhf_density_spin(C, n, n_b)
+    let mut e_old = 0.0
+    let mut iters = 0
+    let mut converged = false
+    let mut Fa = hcore
+    let mut Fb = hcore
+    let mut err_final = 0.0
+    let vlen = n * n
+    let mut diis_err = []
+    let mut diis_fock = []
+    let max_diis = 6
+    while iters < max_iter {
+        // spin Focks at the CURRENT common orbitals (reuse UHF builder).
+        let fp = uhf_fock_pair(hcore, Pa, Pb, eri, n)
+        Fa = fp[0]
+        Fb = fp[1]
+        let e_elec = uhf_energy_elec(Pa, Pb, hcore, Fa, Fb, n)
+        // Roothaan single effective Fock (AO basis).
+        let mut R = rohf_effective_fock(Fa, Fb, C, S, n, n_closed, n_open)
+        // DIIS error from the single effective Fock with the TOTAL density.
+        let mut ptot = []
+        let mut t = 0
+        while t < vlen { ptot.push(Pa[t] + Pb[t]) ; t = t + 1 }
+        let e_vec = uhf_diis_error(R, ptot, S, xmat, n)
+        err_final = uhf_err_norm(e_vec, n)
+        if use_diis {
+            diis_err.push(e_vec)
+            diis_fock.push(R)
+            if len(diis_err) > max_diis {
+                diis_err = rohf_drop_first(diis_err)
+                diis_fock = rohf_drop_first(diis_fock)
+            }
+            let m = len(diis_err)
+            if m >= 2 && err_final > 1.0e-11 {
+                R = rohf_diis_extrapolate(diis_err, diis_fock, m, vlen)
+            }
+        }
+        let dg = rhf_diagonalize(R, xmat, n)
+        C = dg[0]
+        eps = dg[1]
+        Pa = uhf_density_spin(C, n, n_a)
+        Pb = uhf_density_spin(C, n, n_b)
+        iters = iters + 1
+        let de = if e_elec > e_old { e_elec - e_old } else { e_old - e_elec }
+        if iters > 1 {
+            if de < e_tol && err_final < 1.0e-6 { converged = true ; e_old = e_elec ; break }
+        }
+        e_old = e_elec
+    }
+    // final energy at the converged common-orbital densities.
+    let fpf = uhf_fock_pair(hcore, Pa, Pb, eri, n)
+    Fa = fpf[0]
+    Fb = fpf[1]
+    let e_elec_final = uhf_energy_elec(Pa, Pb, hcore, Fa, Fb, n)
+    let e_total = e_elec_final + e_nuc
+    return [e_total, iters, e_elec_final, Pa, Pb, Fa, Fb, eps, C, converged, err_final]
+}
+
+// DIIS extrapolation on the SINGLE Roothaan effective Fock (one error/Fock vector
+// per iteration — simpler than UHF's concatenated α||β). Solves the Pulay system
+// (reuse uhf_lin_solve) and returns F̃ = Σ_i c_i R_i (length n*n).
+fn rohf_diis_extrapolate(errs: [any], focks: [any], m: int, vlen: int) -> [float] {
+    let dim = m + 1
+    let mut B = []
+    let mut i = 0
+    while i < dim * dim { B.push(0.0) ; i = i + 1 }
+    i = 0
+    while i < m {
+        let ei = errs[i]
+        let mut j = 0
+        while j < m {
+            let ej = errs[j]
+            let mut dot = 0.0
+            let mut k = 0
+            while k < vlen { dot = dot + ei[k] * ej[k] ; k = k + 1 }
+            B[i * dim + j] = dot
+            j = j + 1
+        }
+        B[i * dim + m] = 0.0 - 1.0
+        B[m * dim + i] = 0.0 - 1.0
+        i = i + 1
+    }
+    B[m * dim + m] = 0.0
+    let mut rhs = []
+    i = 0
+    while i < m { rhs.push(0.0) ; i = i + 1 }
+    rhs.push(0.0 - 1.0)
+    let coef = uhf_lin_solve(B, rhs, dim)
+    let mut Ftil = []
+    i = 0
+    while i < vlen { Ftil.push(0.0) ; i = i + 1 }
+    i = 0
+    while i < m {
+        let ci = coef[i]
+        let Fi = focks[i]
+        let mut k = 0
+        while k < vlen { Ftil[k] = Ftil[k] + ci * Fi[k] ; k = k + 1 }
+        i = i + 1
+    }
+    return Ftil
+}

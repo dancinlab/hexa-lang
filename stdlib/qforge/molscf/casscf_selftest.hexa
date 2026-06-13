@@ -1,0 +1,264 @@
+// @ci_gate — deterministic · network-free · MOLSCF CASSCF g5 gate
+//
+// casscf_selftest.hexa — QFORGE MOLSCF brick 15/N (round-12) CASSCF g5 gate. The
+// MCSCF orbital-rotation step wrapped around the round-11 general N-electron CASCI
+// (fci.hexa). Round-11 shipped CASCI — CI over FIXED RHF orbitals. CASSCF
+// re-optimizes the orbitals self-consistently with the CI, so the energy is
+// variationally optimal (E_CASSCF ≤ E_CASCI) and seed-invariant. It assembles
+// H-chain STO-3G integrals LIVE from brick 1/2/3, runs RHF → CASCI → CASSCF, and
+// shows:
+//
+//   (a) E_CASSCF ≤ E_CASCI (variational lowering): on H₄ where the RHF orbitals    🔵
+//       are NOT optimal for CAS(2,2), orbital optimization LOWERS E below the
+//       round-11 CASCI value. R=3.0: CASCI −1.82808573 → CASSCF −1.84528333
+//       (lowering 1.72e-2 Ha). PLUS the equality anchor: CAS(4,4)=full space →
+//       CASSCF == CASCI == FCI exactly (orbital rotations can't change a
+//       full-space energy; gradient ≡ 0).
+//   (b) CASSCF == PySCF mcscf.CASSCF: the orbital-optimized energy matches PySCF   🔵
+//       CASSCF for the same active space (H₄ CAS(2,2) @1.8 and @3.0).
+//   (c) seed-invariance + gradient convergence: RHF start vs a PERTURBED orbital   🔵
+//       guess → the SAME converged CASSCF energy (the signature of true orbital
+//       optimization), and the orbital gradient ‖g‖ → 0 at convergence.
+//   (d) regression: r1..r11 selftests (incl. r11 fci) untouched — casscf is a new  🔵
+//       file wrapping fci.hexa / casci.hexa byte-for-byte unchanged.
+//
+// Independent reference (pyscf 2.13.1 RHF / mcscf.CASCI / mcscf.CASSCF, STO-3G,
+//   ζ-default H1s, Bohr; verified in python against this exact hexa port):
+//   H₄ R=1.8 CAS(2,2):  E_RHF=−2.11342892  CASCI=−2.13593831  CASSCF=−2.13740984
+//   H₄ R=3.0 CAS(2,2):  E_RHF=−1.77917257  CASCI=−1.82808573  CASSCF=−1.84528333
+//   H₄ R=1.8 CAS(4,4):  E_RHF=−2.11342892  CASCI=CASSCF=FCI=−2.17541114 (equality)
+//
+// HONEST (d6): every energy + the final ‖g‖ is printed VERBATIM. This is a
+// FIRST-ORDER CASSCF — steepest descent in the orbital-rotation parameter
+// (κ = +α·g) with a backtracking line search, NOT a full second-order Newton
+// MCSCF (no orbital Hessian). The CI is the EXACT round-11 determinant-string FCI.
+// Largest system run here = H₄ CAS(2,2)/CAS(4,4) (36-det inner CI). The sign of
+// the gradient (descent = +α·g) was pinned by a single-pair line search vs
+// finite-difference of the CASCI energy (commit body). Full second-order Newton
+// + larger active spaces are named refinements, not method-class gaps.
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/molscf/casscf_selftest.hexa
+// PASS: "qforge_molscf_casscf_selftest PASS".
+use "stdlib/qforge/molscf/gaussian_integrals"
+use "stdlib/qforge/molscf/coulomb_integrals"
+use "stdlib/qforge/molscf/rhf"
+use "stdlib/qforge/molscf/casci"
+use "stdlib/qforge/molscf/fci"
+use "stdlib/qforge/molscf/casscf"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+// contracted ERI (μν|σλ) — 4-fold primitive sum (same as the casci/fci selftest).
+fn eri_contracted(
+    al: [float], co: [float], ax: [float],
+    bl: [float], bo: [float], bx: [float],
+    cl: [float], cco: [float], cx: [float],
+    dl: [float], dco: [float], dx: [float]
+) -> float {
+    let mut v = 0.0
+    let mut i = 0
+    while i < len(al) {
+        let mut j = 0
+        while j < len(bl) {
+            let mut k = 0
+            while k < len(cl) {
+                let mut l = 0
+                while l < len(dl) {
+                    let w = co[i] * bo[j] * cco[k] * dco[l]
+                    v = v + w * cint_eri_s(al[i], ax, bl[j], bx, cl[k], cx, dl[l], dx)
+                    l = l + 1
+                }
+                k = k + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return v
+}
+
+// Build a linear H_n / STO-3G chain at spacing R (bohr): returns the AO integral
+//   set + the converged RHF Fock + nuclear repulsion, ready for CASCI/CASSCF.
+//   Returns [ S, hcore, eri, F, e_nuc, e_rhf ].
+fn hchain_integrals(nH: int, R: float) -> [any] {
+    let alpha = [3.42525091, 0.62391373, 0.16885540]
+    let coeff = [0.15432897, 0.53532814, 0.44463454]
+    let n = nH
+    let z = 1.0
+    let n_occ = nH / 2
+    let mut centers = []
+    let mut ci = 0
+    while ci < nH { centers.push([(to_float(ci)) * R, 0.0, 0.0]) ; ci = ci + 1 }
+    let mut S = []
+    let mut hcore = []
+    let mut a = 0
+    while a < n {
+        let mut b = 0
+        while b < n {
+            let sab = gint_overlap_contracted(alpha, coeff, centers[a], alpha, coeff, centers[b])
+            S.push(sab)
+            let tab = gint_kinetic_contracted(alpha, coeff, centers[a], alpha, coeff, centers[b])
+            let mut vab = 0.0
+            let mut nn = 0
+            while nn < nH {
+                vab = vab + cint_nuclear_contracted(alpha, coeff, centers[a], alpha, coeff, centers[b], z, centers[nn])
+                nn = nn + 1
+            }
+            hcore.push(tab + vab)
+            b = b + 1
+        }
+        a = a + 1
+    }
+    let mut eri = []
+    let mut mu = 0
+    while mu < n {
+        let mut nu = 0
+        while nu < n {
+            let mut sg = 0
+            while sg < n {
+                let mut lm = 0
+                while lm < n {
+                    let e = eri_contracted(alpha, coeff, centers[mu], alpha, coeff, centers[nu], alpha, coeff, centers[sg], alpha, coeff, centers[lm])
+                    eri.push(e)
+                    lm = lm + 1
+                }
+                sg = sg + 1
+            }
+            nu = nu + 1
+        }
+        mu = mu + 1
+    }
+    let mut e_nuc = 0.0
+    let mut ii = 0
+    while ii < nH {
+        let mut jj = ii + 1
+        while jj < nH {
+            e_nuc = e_nuc + (z * z) / ((to_float(jj - ii)) * R)
+            jj = jj + 1
+        }
+        ii = ii + 1
+    }
+    let out = rhf_scf(S, hcore, eri, n, n_occ, e_nuc, 200, 1.0e-10, 0.7)
+    let e_rhf = out[0]
+    let F = out[4]
+    return [S, hcore, eri, F, e_nuc, e_rhf]
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ══ H₄ STO-3G integral sets at two geometries ══════════════════════════════
+    let h4eq = hchain_integrals(4, 1.8)
+    let h4st = hchain_integrals(4, 3.0)
+
+    // ── CASCI baselines (round-11, fixed RHF orbitals) ──
+    //   CAS(2,2): ncore=1 core, m=2 active, 1 α + 1 β electron.
+    let ci_eq = casci_solve_rhf(h4eq[0], h4eq[1], h4eq[3], h4eq[2], 4, 2, 1, 1, h4eq[4])
+    let ci_st = casci_solve_rhf(h4st[0], h4st[1], h4st[3], h4st[2], 4, 2, 1, 1, h4st[4])
+    // NB casci_solve_rhf with m=2 uses the FIRST 2 MOs as active (ncore=0). For
+    // CAS(2,2) on H₄ the chemically-correct active space is the frontier pair with
+    // 1 frozen core — CASSCF below uses ncore=1. The CASCI baseline we lower from
+    // is the ncore=1 CASCI, computed by the CASSCF driver at macro-iter 0 (the
+    // initial-orbital CASCI). We report that value explicitly.
+
+    // ── CASSCF (round-12, orbital-optimized) ──
+    //   ncore=1, m=2 active, 1α+1β. step0=0.2, ‖g‖ tol 1e-6, 400 macro-iters.
+    let scf_eq = casscf_from_rhf(h4eq[0], h4eq[1], h4eq[3], h4eq[2], 4, 1, 2, 1, 1, h4eq[4], 400, 1.0e-6, 0.2)
+    let scf_st = casscf_from_rhf(h4st[0], h4st[1], h4st[3], h4st[2], 4, 1, 2, 1, 1, h4st[4], 400, 1.0e-6, 0.2)
+
+    // The CASCI-at-RHF-orbitals baseline (macro-iter 0) — recompute via the driver
+    //   with max_macro=0 so it returns the unoptimized CASCI energy directly.
+    let base_eq = casscf_from_rhf(h4eq[0], h4eq[1], h4eq[3], h4eq[2], 4, 1, 2, 1, 1, h4eq[4], 0, 1.0e-6, 0.2)
+    let base_st = casscf_from_rhf(h4st[0], h4st[1], h4st[3], h4st[2], 4, 1, 2, 1, 1, h4st[4], 0, 1.0e-6, 0.2)
+    let casci_eq = base_eq[0]
+    let casci_st = base_st[0]
+    let casscf_eq = scf_eq[0]
+    let casscf_st = scf_st[0]
+
+    println("── (a)/(b) H₄ CAS(2,2) orbital optimization (1 core, 2 active) ──")
+    println("  R=1.8: E_CASCI = " + to_string(casci_eq) + " → E_CASSCF = " + to_string(casscf_eq))
+    println("         lowering = " + to_string(casci_eq - casscf_eq) + " Ha  (pyscf CASSCF −2.13740984)")
+    println("         macro-iters = " + to_string(scf_eq[1]) + "  ‖g‖ = " + to_string(scf_eq[2]))
+    println("  R=3.0: E_CASCI = " + to_string(casci_st) + " → E_CASSCF = " + to_string(casscf_st))
+    println("         lowering = " + to_string(casci_st - casscf_st) + " Ha  (pyscf CASSCF −1.84528333)")
+    println("         macro-iters = " + to_string(scf_st[1]) + "  ‖g‖ = " + to_string(scf_st[2]))
+
+    // (a) variational lowering: E_CASSCF ≤ E_CASCI (strictly lower here)
+    fails = fails + _ck_true("(a) R=1.8 E_CASSCF ≤ E_CASCI (variational)", casscf_eq <= casci_eq + 1.0e-12)
+    fails = fails + _ck_true("(a) R=3.0 E_CASSCF ≤ E_CASCI (variational)", casscf_st <= casci_st + 1.0e-12)
+    fails = fails + _ck_true("(a) R=3.0 lowering > 0.01 Ha (substantial orbital relaxation)", (casci_st - casscf_st) > 0.01)
+    fails = fails + _ck_true("(a) R=1.8 lowering > 0.001 Ha (nonzero orbital relaxation)", (casci_eq - casscf_eq) > 0.001)
+
+    // (b) CASSCF == pyscf mcscf.CASSCF
+    fails = fails + _ck_close("(b) H₄ CAS(2,2) CASSCF @1.8 == pyscf −2.13740984", casscf_eq, 0.0 - 2.13740984, 1.0e-5)
+    fails = fails + _ck_close("(b) H₄ CAS(2,2) CASSCF @3.0 == pyscf −1.84528333", casscf_st, 0.0 - 1.84528333, 1.0e-5)
+    // and CASCI baseline == pyscf mcscf.CASCI (the value we lower from)
+    fails = fails + _ck_close("(b) H₄ CAS(2,2) CASCI @1.8 == pyscf −2.13593831", casci_eq, 0.0 - 2.13593831, 1.0e-5)
+    fails = fails + _ck_close("(b) H₄ CAS(2,2) CASCI @3.0 == pyscf −1.82808573", casci_st, 0.0 - 1.82808573, 1.0e-5)
+
+    // ══ (a) EQUALITY anchor: CAS(4,4)=full space → CASSCF == CASCI == FCI ═══════
+    //   ncore=0, m=4 active, 2α+2β. Orbital rotations can't change a full-space
+    //   energy, so CASSCF == CASCI == FCI exactly and the gradient is ≡ 0.
+    let fci_eq = casscf_from_rhf(h4eq[0], h4eq[1], h4eq[3], h4eq[2], 4, 0, 4, 2, 2, h4eq[4], 50, 1.0e-6, 0.2)
+    println("── (a) EQUALITY anchor: H₄ CAS(4,4)=FCI @1.8 (full space) ──")
+    println("  E_CASSCF = " + to_string(fci_eq[0]) + "  macro-iters = " + to_string(fci_eq[1]) + "  ‖g‖ = " + to_string(fci_eq[2]) + "  (pyscf FCI −2.17541114)")
+    fails = fails + _ck_close("(a) H₄ CAS(4,4) CASSCF == FCI −2.17541114 (full-space equality)", fci_eq[0], 0.0 - 2.17541114, 1.0e-5)
+    fails = fails + _ck_true("(a) H₄ CAS(4,4) ‖g‖ ≈ 0 (full space → no orbital gradient)", fci_eq[2] < 1.0e-6)
+
+    // ══ (c) SEED-INVARIANCE: perturbed orbital guess → same CASSCF energy ═══════
+    //   Perturb the RHF MO matrix by a deterministic antisymmetric rotation, then
+    //   run CASSCF. True orbital optimization → the SAME converged energy.
+    let C_rhf = casci_mo_coeff(h4st[0], h4st[3], 4)
+    //   build a perturbing antisymmetric κ_p with a few hand-picked nonzero
+    //   inter-subspace entries (deterministic — no RNG), then C_pert = C_rhf·exp(κ_p).
+    let mut Kp = []
+    let mut z = 0
+    while z < 16 { Kp.push(0.0) ; z = z + 1 }
+    Kp[0 * 4 + 2] = 0.15
+    Kp[2 * 4 + 0] = 0.0 - 0.15
+    Kp[1 * 4 + 3] = 0.0 - 0.12
+    Kp[3 * 4 + 1] = 0.12
+    Kp[0 * 4 + 3] = 0.07
+    Kp[3 * 4 + 0] = 0.0 - 0.07
+    let Rp = casscf_mat_exp(Kp, 4)
+    let C_pert = rhf_matmul(C_rhf, Rp, 4)
+    let scf_seed2 = casscf_optimize(C_pert, h4st[1], h4st[2], 4, 1, 2, 1, 1, h4st[4], 400, 1.0e-6, 0.2)
+    println("── (c) seed-invariance: H₄ CAS(2,2) @3.0 from a PERTURBED orbital guess ──")
+    println("  seed-1 (RHF start)      E_CASSCF = " + to_string(casscf_st) + "  ‖g‖ = " + to_string(scf_st[2]))
+    println("  seed-2 (perturbed start) E_CASSCF = " + to_string(scf_seed2[0]) + "  ‖g‖ = " + to_string(scf_seed2[2]))
+    println("  |ΔE(seed-1 − seed-2)| = " + to_string(_abs(casscf_st - scf_seed2[0])))
+    fails = fails + _ck_close("(c) seed-2 perturbed start == seed-1 RHF start (seed-invariant)", scf_seed2[0], casscf_st, 1.0e-5)
+    fails = fails + _ck_close("(c) seed-2 == pyscf CASSCF −1.84528333 (independent anchor)", scf_seed2[0], 0.0 - 1.84528333, 1.0e-5)
+    fails = fails + _ck_true("(c) seed-1 gradient ‖g‖ → 0 (< 1e-6 converged)", scf_st[2] < 1.0e-6)
+    fails = fails + _ck_true("(c) seed-2 gradient ‖g‖ → 0 (< 1e-6 converged)", scf_seed2[2] < 1.0e-6)
+    fails = fails + _ck_true("(c) both seeds converged", scf_st[3] && scf_seed2[3])
+
+    // ══ (d) RDM sanity: trace(γ) == n_active_elec, and matexp orthogonality ═════
+    //   The active 1-RDM trace must equal the active electron count (2 for CAS(2,2)).
+    let civ = casscf_ci_vec(casscf_heff_active(casscf_full_hcore(C_rhf, h4st[1], 4), casscf_full_eri(C_rhf, h4st[2], 4), 4, 1, 2), _slice_eri_active(casscf_full_eri(C_rhf, h4st[2], 4), 4, 1, 2), 2, 1, 1)
+    let dm1 = casscf_rdm1(civ[2], civ[3], civ[1], 2, 2)
+    let tr = dm1[0 * 2 + 0] + dm1[1 * 2 + 1]
+    fails = fails + _ck_close("(d) trace(γ) == 2 (CAS(2,2) active electron count)", tr, 2.0, 1.0e-8)
+    //   matexp of an antisymmetric K is orthogonal: (exp K)ᵀ(exp K) == I.
+    let RR = casscf_mat_exp(Kp, 4)
+    let RRt = rhf_transpose(RR, 4)
+    let prod = rhf_matmul(RRt, RR, 4)
+    let off = _abs(prod[0 * 4 + 1]) + _abs(prod[1 * 4 + 2]) + _abs(prod[2 * 4 + 3])
+    let dia = prod[0 * 4 + 0] + prod[1 * 4 + 1] + prod[2 * 4 + 2] + prod[3 * 4 + 3]
+    fails = fails + _ck_true("(d) matexp(antisym) is orthogonal — off-diag ≈ 0", off < 1.0e-10)
+    fails = fails + _ck_close("(d) matexp(antisym) is orthogonal — trace == 4", dia, 4.0, 1.0e-10)
+
+    if fails == 0 {
+        println("qforge_molscf_casscf_selftest PASS")
+    } else {
+        println("qforge_molscf_casscf_selftest FAIL (" + to_string(fails) + ")")
+    }
+}
