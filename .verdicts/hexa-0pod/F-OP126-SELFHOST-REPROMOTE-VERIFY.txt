@@ -1,0 +1,114 @@
+F-OP126-SELFHOST-REPROMOTE-VERIFY
+=================================
+Tier: 🟢 — a 0-pod LOCAL rebuild from current source PROVABLY closes the deployed
+            OP-124 front-end residual (BOTH bugs). The actual default-flip is a
+            user-gated decision (NOT performed here).
+
+Campaign: HEXA-0POD · LANE 1 · $0 · 0-pod · NO GPU · no vast · no foreign-pod · leak-0
+HEAD: 7b1f81a32 (OP-124 closed-stale + guards landed)
+Date: 2026-06-13
+
+────────────────────────────────────────────────────────────────────────────────
+0. THE RESIDUAL (from OP-124 / OP-37 / OP-40)
+────────────────────────────────────────────────────────────────────────────────
+Two front-end bugs are ALREADY FIXED in current origin/main SOURCE:
+  BUG-1  multi-line `-` continuation         — #1747 02616b75e (parser whitelist)
+  BUG-2  large-float negation const-fold     — OP-37 aab0c0891 + OP-37b 3e153225d
+                                                + OP-40 9d3aee960 (codegen serialize)
+…but the DEPLOYED `hexa run` still exhibits BOTH, because end-to-end `hexa run`
+is served by a STALE PREBUILT dispatch binary, not by current source.
+
+DISPATCH TOPOLOGY (measured on this host, ~/.hx/bin):
+  hexa            -> exec hexa.real
+  hexa.real       -> symlink -> hx-selfhost-cli            (tier2 flip, Jun-11)
+  hx-selfhost-cli : routes by surface —
+       carries --emit=<x>  -> gen3  (self/native/selfhost/gen3, Jun-3 binary)
+       EVERYTHING else      -> DELEGATE to hexa.real.pre-selfhost.20260611-005522
+                               (the Jun-7 shipped dispatch binary; built from a
+                                prebuilt release tarball via install.sh curl)
+  => `hexa run X` carries NO --emit  => DELEGATES to the Jun-7 dispatch binary.
+  => The self-host gen3 NEVER serves `run`; only the `--emit` compile surface.
+  => BOTH the gen3 slot (Jun-3) AND the dispatch binary (Jun-7) PRE-DATE the
+     OP-37/OP-40 codegen fixes and the (older) #1747 parser fix as DEPLOYED.
+
+────────────────────────────────────────────────────────────────────────────────
+1. DEPLOYED (STALE) — both bugs REPRODUCE on `hexa run`
+────────────────────────────────────────────────────────────────────────────────
+BUG-1  repro1.hexa:  let f = 1 \n - 2 \n + 10 ; print(f)
+   $ ~/.hx/bin/hexa run repro1.hexa
+   1                      <- WRONG (drops `- 2 + 10`; correct = 1-2+10 = 9)
+
+BUG-2  -1.7976931348623157e308 comptime const → emitted C (deployed transpile,
+       captured at /tmp/op124/probe.c during OP-124):
+       use1(hexa_float(-1.79769e+308));
+   => serialized with %g 6-significant-digit truncation — the low mantissa is
+      DESTROYED. python IEEE-754 truth: 0xFFEFFFFFFFFFFFFF
+      (LE bytes 255 255 255 255 255 255 239 255). The f64_to_bytes_le byte-dump
+      on deployed `hexa run` diverges from this truth.
+
+────────────────────────────────────────────────────────────────────────────────
+2. 0-POD LOCAL REBUILD FROM CURRENT SOURCE — both bugs CLOSE
+────────────────────────────────────────────────────────────────────────────────
+Build = the stage0 native compiler `aprime_cc` (current compiler/main.hexa closure
+transpiled via hexat → C → clang). FULLY 0-pod: no GPU, no pod, ~32 s wall for
+aprime_cc (NOT the 3.5h gen3 byte-eq ladder). One bootstrap-rot workaround needed
+(see §3 / recipe): build_selfhost.sh's hexat compile omits self/runtime.c, so the
+hexat clang link fails with `Undefined symbols … ___hexa_last_error`; compiling
+hexa_cc.c + runtime.c in ONE TU produces a working hexat (1,945,208 B).
+
+aprime_cc build (verbatim tail):
+  HEAD: 7b1f81a32 …
+  [1/5] flatten: 48 files 44041 lines
+  [2/5] transpile: 47609 lines C
+  [4/5] clang: …/aprime_cc (1571560 B, Mach-O 64-bit executable arm64)
+  atlas: loaded 17265 nodes from embedded.gen.hexa
+  [5/5] smoke: exit(42)==42 PASS — aprime_cc OK
+
+BUG-1 (link via hexa_ld + rt.o, run):
+   deployed `hexa run repro1.hexa`     -> 1     (WRONG)
+   current-source aprime_cc repro1.bin -> 9     (CORRECT — 1-2+10)   ✅ CLOSES
+
+BUG-2 (emit obj for `let a = -1.7976931348623157e308`; disassemble the baked const):
+   current-source aprime_cc lit2.o  contains the contiguous little-endian bytes
+       ff ff ff ff ff ff ef ff   = 0xFFEFFFFFFFFFFFFF   (BYTE-EXACT IEEE-754)
+   (proof: `xxd -p lit2.o | tr -d '\n' | grep -oi ffffffffffffefff` → MATCH)
+   vs deployed serialize `hexa_float(-1.79769e+308)` (%g, corrupt low mantissa).
+   python truth: 0xffefffffffffffff                                ✅ CLOSES
+   => OP-40 bit-exact hex-float const-fold serialize is live in current source;
+      the bare aprime emit bakes the exact double, not the lossy %g form.
+   (NB: f64_to_bytes_le is a stdlib symbol absent from the bare --emit runtime,
+    so the literal byte-dump cannot link on the bare compiler surface; the
+    object-disassembly of the baked const is the equivalent, unambiguous proof
+    of the serialize fix — it is what the byte-dump reads back at runtime.)
+
+────────────────────────────────────────────────────────────────────────────────
+3. WHAT IS PROVEN vs WHAT REMAINS A USER DECISION
+────────────────────────────────────────────────────────────────────────────────
+PROVEN (this verdict):
+  • The current-source toolchain emits CORRECT results for BOTH OP-124 repros
+    where the deployed stale binary emits WRONG ones.
+  • Therefore a re-promote from current source CLOSES the deployed residual.
+  • The proving build (aprime_cc) is fully 0-pod-feasible (~32 s, local CPU).
+
+USER DECISION (NOT performed — out of OP-126 scope by design):
+  • The actual DEFAULT FLIP. Closing the residual end-to-end requires REFRESHING
+    THE DISPATCH BINARY that `hexa run` delegates to (the Jun-7 hexa.real backup),
+    i.e. a current-source dispatch build + re-promote — and/or making
+    hx-selfhost-cli route `run` to a current-source compiler.
+  • The build-host gen3 byte-eq fixpoint ladder (cc-gen3.o==cc-gen4.o, ~3.5 h,
+    THREE 68-min self-emits) and the FROZEN_SEED_REF re-pin remain the canonical
+    promote, per docs/selfhost-next-constfold-promote.md (that is the CI-seed path;
+    distinct from the deployed-binary path this verdict measures).
+  • NOT done here: no `promote_selfhost.sh install --default`, ~/.hx/bin untouched.
+
+Recipe (turnkey promote + --revert rollback): docs/selfhost-repromote-recipe.md
+
+────────────────────────────────────────────────────────────────────────────────
+4. FLAGS
+────────────────────────────────────────────────────────────────────────────────
+LANE-1. $0 · 0-pod · NO GPU · no vast · no foreign-pod · leak-0.
+NO source edit (both bugs already fixed in source) → ZERO byte-eq/fixpoint impact.
+Scratch build only (build/op126-scratch/, gitignored region) — ~/.hx/bin UNTOUCHED,
+default NOT flipped. wipe_guard N/A (0 deletions). Recurs across OP-37/40/124 as the
+"stale deployed binary" residual; this verdict closes the VERIFY question (rebuild
+closes it) and hands the FLIP to the user.
