@@ -1,0 +1,98 @@
+F-OP129-BUILDSELFHOST-RUNTIME-LINK — build_selfhost.sh hexat link omitted self/runtime.c
+Verdict: 🔴→FIXED — from-scratch build_selfhost.sh now links the runtime; the manual
+one-TU workaround documented in docs/selfhost-repromote-recipe.md is no longer required.
+Method: g5 honest — REPRODUCE the linker failure verbatim, root-cause the script's
+clang TU, fix minimally (add self/runtime.c + -lm matching the rt.o/aprime convention),
+PROVE from scratch on local CPU (~43 s, 0-pod). 0 GPU, $0, no vast/foreign-pod.
+
+────────────────────────────────────────────────────────────────────────────
+BEFORE — current build_selfhost.sh hexat link (line 149-150: omits self/runtime.c, no -lm)
+────────────────────────────────────────────────────────────────────────────
+$ clang -O2 -arch arm64 -std=gnu11 -D_GNU_SOURCE -D_DARWIN_C_SOURCE -Wno-trigraphs \
+        -I self -I . self/native/hexa_cc.c -o build/hexat
+Undefined symbols for architecture arm64:
+  "___hexa_fn_arena_enter", referenced from:
+      _keyword_list in hexa_cc-e1292a.o
+      _keyword_list_matches_is_keyword in hexa_cc-e1292a.o
+      _is_keyword in hexa_cc-e1292a.o
+      _keyword_kind in hexa_cc-e1292a.o
+      _is_unicode_byte in hexa_cc-e1292a.o
+      _is_ident_start in hexa_cc-e1292a.o
+      ...
+  "___hexa_fn_arena_return", referenced from:
+      _keyword_list in hexa_cc-e1292a.o
+      ...
+  "___hexa_last_error", referenced from:
+      _parse in hexa_cc-e1292a.o
+  "___hexa_try_cleanup", referenced from:
+      _parse in hexa_cc-e1292a.o
+  "___hexa_try_push", referenced from:
+      _parse in hexa_cc-e1292a.o
+  "___hexa_try_top", referenced from:
+      _parse in hexa_cc-e1292a.o
+  "___hx_to_double", referenced from:
+      _comptime_eval in hexa_cc-e1292a.o
+      ... (many)
+ld: symbol(s) not found for architecture arm64
+=> build/hexat NOT produced. (Worse: the script's `grep -iE 'error:'` mask SWALLOWS this
+   — clang prints "Undefined symbols", not "error:" — so the script silently fell through
+   to a confusing `fail seed hexat-build`.)
+
+Missing runtime symbols = the runtime ABI hexa_cc.c references: ___hexa_last_error,
+___hexa_fn_arena_enter/return, ___hexa_try_push/top/cleanup, ___hx_to_double, … — all
+defined in self/runtime.c, which was not in the translation unit.
+
+────────────────────────────────────────────────────────────────────────────
+FIX (tool/build_selfhost.sh, hexat stage) — minimal, matches the rt.o + aprime convention
+────────────────────────────────────────────────────────────────────────────
+- compile line now:  ... self/native/hexa_cc.c self/runtime.c -o build/hexat -lm
+- seed guard now requires self/runtime.c too (restore_frozen_seeds if either missing)
+- error mask widened to 'error:|undefined' so a future link regression surfaces (not swallowed)
+No compiler-SOURCE change → ZERO byte-eq / fixpoint impact (build script + recipe doc only).
+
+────────────────────────────────────────────────────────────────────────────
+AFTER — FROM-SCRATCH FIXED build_selfhost.sh (-j stage0), local CPU, ~43 s, NO manual workaround
+────────────────────────────────────────────────────────────────────────────
+$ rm -rf build/selfhost build/hexat
+$ bash tool/build_selfhost.sh -r "$PWD" -w "$PWD/build/selfhost" -j --detached .../mark.txt
+[build_selfhost] === repo=... HEAD=8b89bbcc1 work=.../build/selfhost ===
+[build_selfhost] stage seed: restoring frozen bootstrap seeds + building hexat
+[build_selfhost] hexat: Mach-O 64-bit executable arm64
+[build_selfhost] stage0: build_aprime.sh -> aprime_cc
+[build_selfhost] stage0: aprime_cc OK (1571560 B)
+[build_selfhost] runtime: clang self/runtime.c -> rt.o
+[build_selfhost] linker: build hexa_ld from tool/hexa_ld.hexa
+flatten: 48 files 44041 lines
+ld flatten: 1 files
+OK: .../build/selfhost/ld.c
+post: hoisted 0 enum #defines + mkdir lowering + bind rename + free_tree lowering applied
+[build_selfhost] linker: hexa_ld OK (359656 B)
+[build_selfhost] stage0-only (-j): aprime_cc + hexa_ld + rt.o built. Stopping before self-emits.
+$ echo EXIT_CODE=$?
+EXIT_CODE=0
+$ cat build/selfhost/mark.txt
+EXIT=0 STAGE=stage0-only HEAD=8b89bbcc1 aprime=ok hexa_ld=ok rt=ok
+$ build/hexat            # hexat sanity — runs clean, no crash
+hexa-cc: HEXA self-hosted compiler
+Usage: hexa-cc <input.hexa> <output.c>
+hexat-rc=0
+
+Artifacts produced from scratch (no manual one-TU step):
+  build/hexat              1945208 B  Mach-O arm64   (the previously-FAILING step)
+  build/selfhost/aprime_cc 1571560 B  stage0 native compiler
+  build/selfhost/rt.o       525536 B  runtime object
+  build/selfhost/hexa_ld    359656 B  Mach-O linker
+
+────────────────────────────────────────────────────────────────────────────
+SCOPE / HONESTY
+────────────────────────────────────────────────────────────────────────────
+- The ONLY rot OP-129 targets is the hexat link (the from-scratch blocker). It is now
+  fixed and PROVEN end-to-end through every stage this edit touches: hexat → aprime_cc →
+  rt.o → hexa_ld, via the script itself (-j stops before the self-emits).
+- Stages 1-3 (the THREE ~68-min self-emits + cc-gen3.o==cc-gen4.o fixpoint GATE, ~3.5h)
+  are UNCHANGED by this fix and are inherently build-host (NOT 0-pod) — they already link
+  the runtime correctly via the existing rt.o + selfemit/link lines. Not re-run here (out
+  of 0-pod scope); no NEW breakage observed up to where they begin.
+- docs/selfhost-repromote-recipe.md updated: the manual one-TU workaround note replaced
+  with "build_selfhost.sh now links runtime correctly as of OP-129".
+$0 · 0-pod · NO GPU · no vast · no foreign-pod · leak-0.

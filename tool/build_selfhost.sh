@@ -141,13 +141,19 @@ selfemit() {
 # ── stage: seeds + hexat ─────────────────────────────────────────────────────
 if [ ! -x build/hexat ]; then
     log "stage seed: restoring frozen bootstrap seeds + building hexat"
-    if [ ! -f self/native/hexa_cc.c ]; then
+    if [ ! -f self/native/hexa_cc.c ] || [ ! -f self/runtime.c ]; then
         bash tool/restore_frozen_seeds >/dev/null 2>&1 || fail seed restore_frozen_seeds
     fi
     [ -f self/native/hexa_cc.c ] || fail seed no-hexa_cc.c
+    [ -f self/runtime.c ] || fail seed no-runtime.c
     mkdir -p build
+    # hexat is the C-transpiler bootstrap: hexa_cc.c references the runtime ABI
+    # (___hexa_last_error, ___hexa_fn_arena_*, ___hx_to_double, …), so self/runtime.c
+    # MUST be in the same link (+ -lm for libm trig). Omitting it left a from-scratch
+    # build failing `Undefined symbols … ___hexa_last_error` — fixed OP-129.
     clang -O2 -arch arm64 -std=gnu11 -D_GNU_SOURCE -D_DARWIN_C_SOURCE -Wno-trigraphs \
-        -I self -I . self/native/hexa_cc.c -o build/hexat 2>&1 | grep -iE 'error:' | head -3
+        -I self -I . self/native/hexa_cc.c self/runtime.c -o build/hexat -lm \
+        2>&1 | grep -iE 'error:|undefined' | head -5
     [ -x build/hexat ] || fail seed hexat-build
 fi
 log "hexat: $(file -b build/hexat 2>/dev/null)"
@@ -164,7 +170,7 @@ log "stage0: aprime_cc OK ($(stat -f%z "$WORK/aprime_cc" 2>/dev/null || echo ?) 
 log "runtime: clang self/runtime.c -> rt.o"
 EXTRA=""; [ "$(uname -s)" = "Darwin" ] && EXTRA="-D_DARWIN_C_SOURCE"
 clang -c -O2 -arch arm64 -std=gnu11 -D_GNU_SOURCE $EXTRA -Wno-trigraphs \
-    -I self -I . self/runtime.c -o "$WORK/rt.o" 2>&1 | grep -iE 'error:' | head -3
+    -I self -I . self/runtime.c -o "$WORK/rt.o" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
 [ -s "$WORK/rt.o" ] || fail runtime rt.o
 
 # ── stage: hexa_ld (Mach-O linker w/ __literal8 const-merge fix on main) ──────
