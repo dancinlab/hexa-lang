@@ -1,0 +1,145 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/test/test_websocket_helper_lock.hexa
+//
+//  HERMETIC (no-network) regression lock for the OP-98 python3-fallback bug.
+//  SELF-CONTAINED: the python-helper emitter is INLINED VERBATIM (no `use`),
+//  because the installed `hexa` resolves `use "stdlib/websocket"` to a STALE
+//  bundled copy (OP-87/88) that predates the test-exposure function.
+//
+//  Run:
+//      hexa run stdlib/test/test_websocket_helper_lock.hexa
+//
+//  BUG (OP-98): the emitted helper declared `nonlocal pre` inside `def take(n)`
+//  while `pre` is module/`try`-scope (helper runs as `python3 helper.py`), so
+//  python raised `SyntaxError: no binding for nonlocal 'pre'` — the ENTIRE
+//  fallback aborted before any code ran (no JSON on stdout → ws_request_response
+//  always failed). Fix: `nonlocal pre` -> `global pre`. This lock asserts the
+//  emitted source carries `global pre` and NOT `nonlocal pre`.
+// ═══════════════════════════════════════════════════════════════════════════
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn chk(tag, cond) {
+    if cond {
+        println("  PASS " + tag)
+        pass_count = pass_count + 1
+    } else {
+        println("  FAIL " + tag)
+        fail_count = fail_count + 1
+    }
+}
+
+// ── INLINED VERBATIM from stdlib/websocket.hexa::_ws_python_helper_source ──
+fn helper_source() -> string {
+    let mut s = ""
+    s = s + "import sys, json, socket, ssl, os, base64, hashlib, struct\n"
+    s = s + "from urllib.parse import urlsplit\n"
+    s = s + "def fail(msg):\n"
+    s = s + "    print(json.dumps({'ok': 0, 'reply': '', 'error': msg}))\n"
+    s = s + "    sys.exit(0)\n"
+    s = s + "try:\n"
+    s = s + "    req = json.loads(sys.stdin.read())\n"
+    s = s + "    url = req['url']; msg = req.get('msg', ''); timeout = float(req.get('timeout', 10))\n"
+    s = s + "    u = urlsplit(url)\n"
+    s = s + "    secure = (u.scheme == 'wss')\n"
+    s = s + "    host = u.hostname\n"
+    s = s + "    port = u.port or (443 if secure else 80)\n"
+    s = s + "    path = u.path or '/'\n"
+    s = s + "    if u.query: path = path + '?' + u.query\n"
+    s = s + "    sock = socket.create_connection((host, port), timeout=timeout)\n"
+    s = s + "    if secure:\n"
+    s = s + "        ctx = ssl.create_default_context()\n"
+    s = s + "        sock = ctx.wrap_socket(sock, server_hostname=host)\n"
+    s = s + "    key = base64.b64encode(os.urandom(16)).decode()\n"
+    s = s + "    handshake = ('GET ' + path + ' HTTP/1.1\\r\\n'\n"
+    s = s + "                 'Host: ' + host + '\\r\\n'\n"
+    s = s + "                 'Upgrade: websocket\\r\\n'\n"
+    s = s + "                 'Connection: Upgrade\\r\\n'\n"
+    s = s + "                 'Sec-WebSocket-Key: ' + key + '\\r\\n'\n"
+    s = s + "                 'Sec-WebSocket-Version: 13\\r\\n'\n"
+    s = s + "                 'User-Agent: hexa-stdlib-websocket/1.0\\r\\n'\n"
+    s = s + "                 '\\r\\n')\n"
+    s = s + "    sock.sendall(handshake.encode())\n"
+    s = s + "    buf = b''\n"
+    s = s + "    while b'\\r\\n\\r\\n' not in buf:\n"
+    s = s + "        chunk = sock.recv(4096)\n"
+    s = s + "        if not chunk: fail('handshake closed early')\n"
+    s = s + "        buf += chunk\n"
+    s = s + "    head, _, rest = buf.partition(b'\\r\\n\\r\\n')\n"
+    s = s + "    status = head.split(b'\\r\\n', 1)[0]\n"
+    s = s + "    if b'101' not in status: fail('handshake status: ' + status.decode('latin-1', 'replace'))\n"
+    s = s + "    expect = base64.b64encode(hashlib.sha1((key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode()).digest()).decode()\n"
+    s = s + "    if expect.encode().lower() not in head.lower(): fail('Sec-WebSocket-Accept mismatch')\n"
+    s = s + "    payload = msg.encode('utf-8')\n"
+    s = s + "    n = len(payload)\n"
+    s = s + "    frame = bytearray([0x81])\n"
+    s = s + "    if n < 126: frame.append(0x80 | n)\n"
+    s = s + "    elif n < 65536: frame.append(0x80 | 126); frame += struct.pack('>H', n)\n"
+    s = s + "    else: frame.append(0x80 | 127); frame += struct.pack('>Q', n)\n"
+    s = s + "    mask = os.urandom(4); frame += mask\n"
+    s = s + "    frame += bytes(b ^ mask[i % 4] for i, b in enumerate(payload))\n"
+    s = s + "    sock.sendall(bytes(frame))\n"
+    s = s + "    sock.settimeout(timeout)\n"
+    s = s + "    def recv_n(n):\n"
+    s = s + "        out = b''\n"
+    s = s + "        while len(out) < n:\n"
+    s = s + "            c = sock.recv(n - len(out))\n"
+    s = s + "            if not c: break\n"
+    s = s + "            out += c\n"
+    s = s + "        return out\n"
+    s = s + "    pre = rest\n"
+    s = s + "    def take(n):\n"
+    s = s + "        global pre\n"
+    s = s + "        while len(pre) < n:\n"
+    s = s + "            c = sock.recv(4096)\n"
+    s = s + "            if not c: break\n"
+    s = s + "            pre += c\n"
+    s = s + "        out, pre = pre[:n], pre[n:]\n"
+    s = s + "        return out\n"
+    s = s + "    h = take(2)\n"
+    s = s + "    if len(h) < 2: fail('truncated frame header')\n"
+    s = s + "    b1, b2 = h[0], h[1]\n"
+    s = s + "    op = b1 & 0x0F\n"
+    s = s + "    masked = (b2 & 0x80) != 0\n"
+    s = s + "    plen = b2 & 0x7F\n"
+    s = s + "    if plen == 126: plen = struct.unpack('>H', take(2))[0]\n"
+    s = s + "    elif plen == 127: plen = struct.unpack('>Q', take(8))[0]\n"
+    s = s + "    mkey = take(4) if masked else b''\n"
+    s = s + "    body = take(plen)\n"
+    s = s + "    if masked: body = bytes(b ^ mkey[i % 4] for i, b in enumerate(body))\n"
+    s = s + "    if op == 0x8:\n"
+    s = s + "        print(json.dumps({'ok': 0, 'reply': '', 'error': 'server closed: ' + body[2:].decode('utf-8', 'replace')}))\n"
+    s = s + "        sys.exit(0)\n"
+    s = s + "    if op != 0x1:\n"
+    s = s + "        print(json.dumps({'ok': 0, 'reply': '', 'error': 'non-text opcode 0x%x' % op}))\n"
+    s = s + "        sys.exit(0)\n"
+    s = s + "    reply = body.decode('utf-8', 'replace')\n"
+    s = s + "    cmask = os.urandom(4)\n"
+    s = s + "    cframe = bytes([0x88, 0x82]) + cmask + bytes([cmask[0] ^ 0x03, cmask[1] ^ 0xE8])\n"
+    s = s + "    try: sock.sendall(cframe); sock.close()\n"
+    s = s + "    except Exception: pass\n"
+    s = s + "    print(json.dumps({'ok': 1, 'reply': reply, 'error': ''}))\n"
+    s = s + "except Exception as e:\n"
+    s = s + "    fail(type(e).__name__ + ': ' + str(e))\n"
+    return s
+}
+
+fn main() -> void {
+    println("── stdlib/websocket python-helper lock (OP-98) ──")
+    let src = helper_source()
+    chk("has_global_pre", src.index_of("global pre") >= 0)
+    chk("no_nonlocal_pre", src.index_of("nonlocal pre") < 0)
+    chk("defines_take", src.index_of("def take(n):") >= 0)
+    chk("seeds_pre", src.index_of("pre = rest") >= 0)
+    chk("close_code_masked", src.index_of("cmask[0] ^ 0x03") >= 0 && src.index_of("cmask[1] ^ 0xE8") >= 0)
+    let total = pass_count + fail_count
+    println("")
+    println("  pass=" + to_string(pass_count) + "  fail=" + to_string(fail_count))
+    if fail_count == 0 {
+        println("PASS: websocket python-helper lock " + to_string(pass_count) + "/" + to_string(total))
+        return
+    }
+    println("FAIL: websocket python-helper lock " + to_string(pass_count) + "/" + to_string(total))
+    exit(1)
+}
