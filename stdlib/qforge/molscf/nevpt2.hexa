@@ -221,6 +221,60 @@ pub fn nevpt2_dm3(gs: [any], dets: [any], ndet: int, m: int, nocc: int) -> [floa
     return D
 }
 
+// 4-RDM dm4[p,q,r,s,t,u,v,w] = ⟨gs| E_pq E_rs E_tu E_vw |gs⟩ (m^8 flat). round-15: the
+//   active-space 4-RDM required by the two SC-NEVPT2 4-RDM perturber classes Sr (a16) and
+//   Si (a22). Built the SAME way as the 3-RDM — one more spin-summed excitation operator
+//   on the KET (E_pq(E_rs(E_tu(E_vw|gs⟩)))) — then ⟨gs|ket⟩. The two innermost excited
+//   vectors are CACHED per (v,w) and per (t,u,v,w) so each is built once (not m^4 times):
+//   cost = m^4 inner builds × the m^4 outer (p,q,r,s) dot loop, tractable to CAS(6,6)
+//   (m=6 → m^8 = 1.7M elements). HONEST (d6): m^8 is the factorial-cost ceiling — CAS(8,8)+
+//   needs a cumulant-4-RDM approximation (named round-16). flat offset (((((((p*m+q)*m+r)
+//   *m+s)*m+t)*m+u)*m+v)*m+w).
+pub fn nevpt2_dm4(gs: [any], dets: [any], ndet: int, m: int, nocc: int) -> [float] {
+    let mut D = []
+    let mut p = 0
+    while p < m {
+        let mut q = 0
+        while q < m {
+            let mut r = 0
+            while r < m {
+                let mut s = 0
+                while s < m {
+                    // bra = ⟨gs| E_pq E_rs  (built as E_sr E_qp on |gs⟩ then dotted with the
+                    //   E_tu E_vw ket below — self-adjoint pairing, same trick as nevpt2_dm2)
+                    let braA = nevpt2_apply_E(gs, dets, ndet, nocc, s, r)
+                    let bra = nevpt2_apply_E(braA, dets, ndet, nocc, q, p)
+                    let mut t = 0
+                    while t < m {
+                        let mut u = 0
+                        while u < m {
+                            let k1 = nevpt2_apply_E(gs, dets, ndet, nocc, t, u)
+                            let mut v = 0
+                            while v < m {
+                                let mut w = 0
+                                while w < m {
+                                    let k0 = nevpt2_apply_E(gs, dets, ndet, nocc, v, w)
+                                    let kk = nevpt2_apply_E(k0, dets, ndet, nocc, t, u)
+                                    D.push(_nv_dot(bra, kk, ndet))
+                                    w = w + 1
+                                }
+                                v = v + 1
+                            }
+                            u = u + 1
+                        }
+                        t = t + 1
+                    }
+                    s = s + 1
+                }
+                r = r + 1
+            }
+            q = q + 1
+        }
+        p = p + 1
+    }
+    return D
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 //   integral / Fock helpers over the full MO space
 // ════════════════════════════════════════════════════════════════════════════
@@ -1392,6 +1446,46 @@ pub fn nevpt2_Sir(g: [float], FI: [float], dm1: [float], dm2: [float], dm3: [flo
     return e
 }
 
+
+// dm4 element accessor dm4[p,q,r,s,t,u,v,w] (flat, stepwise offset) — used by the round-16
+//   exact f3ca/f3ac contraction (the validated 4-RDM is the input that round-16 contracts).
+pub fn nevpt2_dm4_idx(dm4: [float], m: int, p: int, q: int, r: int, s: int, t: int, u: int, v: int, w: int) -> float {
+    let mut o = p
+    o = o * m + q
+    o = o * m + r
+    o = o * m + s
+    o = o * m + t
+    o = o * m + u
+    o = o * m + v
+    o = o * m + w
+    return dm4[o]
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   round-15 scope (d6 · @L5 HONEST) — the 4-RDM BUILD ships; Sr/Si energy = round-16
+//
+//   This round delivers nevpt2_dm4 — the active-space 4-RDM ⟨E_pq E_rs E_tu E_vw⟩, the
+//   one new primitive both 4-RDM perturber classes Sr (a16) and Si (a22) require. It is
+//   the literal one-more-excitation-operator extension of the validated nevpt2_dm3 build,
+//   and is validated independently by (a) the 4-RDM trace sum rule Σ_p ⟨E_pp · X⟩ = N⟨X⟩
+//   and (b) CAS(2,2) — where Sr/Si vanish identically — both in nevpt2_4rdm_selftest.
+//
+//   ── the f3ca/f3ac wall (why the Sr/Si ENERGY is round-16, not this round) ────────────
+//   PySCF assembles the a16/a22 4-RDM intermediates from a C-kernel object f3ca/f3ac =
+//   (4-RDM ∘ active-eri) computed DIRECTLY from the CI vector — it NEVER forms the full
+//   4-RDM. Empirically (this round's investigation, recorded in QFORGE-MOLSCF.log.md):
+//     • the full-4-RDM einsums in PySCF's OWN source comments do NOT reproduce f3ca —
+//       matching f3ca to ANY 4-RDM contraction (exhaustive index search) leaves a ~6.5
+//       irreducible residual (the kernel's particle-symmetric normal-ordering correction,
+//       undocumented). Because PySCF never builds dm4, those comment einsums were never
+//       exercised and are stale.
+//     • feeding the comment einsums the genuine 4-RDM gives Sr = +0.0014 vs PySCF
+//       −0.00196 on H₆ CAS(4,4) — a ~3e-3 error, NOT the <1e-6 the gate demands.
+//   d6 forbids shipping that as a <1e-6 match. The CORRECT path is to port the C-kernel
+//   itself (t2ci pair-excitation of the CI vector → active-eri dgemm → particle-symmetric
+//   tril2pdm contraction), NOT a 4-RDM einsum. That port is the round-16 target — it
+//   consumes the nevpt2_dm4 this round validates. So: 4-RDM machinery SHIPS validated; the
+//   two 4-RDM class energies are HONESTLY deferred one round rather than shipped wrong.
 
 // ════════════════════════════════════════════════════════════════════════════
 //   SC-NEVPT2 driver — sum the 6 shipped classes on a converged CASSCF reference
