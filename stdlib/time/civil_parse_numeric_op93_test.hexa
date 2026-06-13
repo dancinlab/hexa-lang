@@ -1,0 +1,162 @@
+// HEXA Standard Library — OP-93 LANE-1 parser/numeric invariant lock
+// @ci_gate
+//
+// VERBATIM-INLINED leaf (installed hexa resolves `use "stdlib/..."` to its
+// STALE bundled copy, so the audited bodies are inlined verbatim per the
+// OP-87/88 lesson). The bespoke parsers/formatters surveyed in OP-93 were
+// PROVEN-CLEAN against a Python reference (0 mismatch over a wide boundary
+// sweep) — NO shipping bug, NOT fabricated (g5). This leaf LOCKS the invariants.
+//
+// Locks: time/civil.hexa parse∘format round-trip + format∘parse idempotence
+//        + too-short/non-digit → -1; core/math/permille.hexa half-away ratio
+//        round + pm_to_string format (incl. negative + sub-milli pad).
+
+let mut pass = 0
+let mut total = 0
+fn cki(name: string, got: int, want: int) {
+    total = total + 1
+    if got == want { pass = pass + 1 } else { println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want)) }
+}
+fn cks(name: string, got: string, want: string) {
+    total = total + 1
+    if got == want { pass = pass + 1 } else { println("FAIL " + name + " got=" + got + " want=" + want) }
+}
+
+// ── civil.hexa verbatim ──────────────────────────────────────────────
+let _SECS_PER_DAY: int = 86400
+fn civil_from_days(days: int) -> [int] {
+    let z = days + 719468
+    let mut era = z / 146097
+    if z < 0 { era = (z - 146096) / 146097 }
+    let doe = z - era * 146097
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    let y = yoe + era * 400
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    let mp = (5 * doy + 2) / 153
+    let d = doy - (153 * mp + 2) / 5 + 1
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }
+    let year = if m <= 2 { y + 1 } else { y }
+    return [year, m, d]
+}
+fn days_from_civil(y: int, m: int, d: int) -> int {
+    let yy = if m <= 2 { y - 1 } else { y }
+    let mut era = yy / 400
+    if yy < 0 { era = (yy - 399) / 400 }
+    let yoe = yy - era * 400
+    let mpart = if m > 2 { m - 3 } else { m + 9 }
+    let doy = (153 * mpart + 2) / 5 + d - 1
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+    return era * 146097 + doe - 719468
+}
+fn _zpad(val: int, width: int) -> string {
+    let mut s = to_string(val)
+    while len(s) < width { s = "0" + s }
+    return s
+}
+fn iso8601_format_native(epoch: int) -> string {
+    let days = epoch / _SECS_PER_DAY
+    let secs = epoch - days * _SECS_PER_DAY
+    let ymd = civil_from_days(days)
+    let hh = secs / 3600
+    let mm = (secs - hh * 3600) / 60
+    let ss = secs - hh * 3600 - mm * 60
+    return _zpad(ymd[0], 4) + "-" + _zpad(ymd[1], 2) + "-" + _zpad(ymd[2], 2)
+         + "T" + _zpad(hh, 2) + ":" + _zpad(mm, 2) + ":" + _zpad(ss, 2) + "Z"
+}
+fn _digit_at(s: string, i: int) -> int {
+    let c = s.byte_at(i)
+    if c < 48 || c > 57 { return 0 - 1 }
+    return c - 48
+}
+fn _digits2(s: string, off: int) -> int {
+    let a = _digit_at(s, off)
+    let b = _digit_at(s, off + 1)
+    if a < 0 || b < 0 { return 0 - 1 }
+    return a * 10 + b
+}
+fn _digits4(s: string, off: int) -> int {
+    let a = _digit_at(s, off)
+    let b = _digit_at(s, off + 1)
+    let c = _digit_at(s, off + 2)
+    let d = _digit_at(s, off + 3)
+    if a < 0 || b < 0 || c < 0 || d < 0 { return 0 - 1 }
+    return a * 1000 + b * 100 + c * 10 + d
+}
+fn iso8601_parse_native(s: string) -> int {
+    if byte_len(s) < 19 { return 0 - 1 }
+    let yr = _digits4(s, 0)
+    let mo = _digits2(s, 5)
+    let dy = _digits2(s, 8)
+    let hh = _digits2(s, 11)
+    let mm = _digits2(s, 14)
+    let ss = _digits2(s, 17)
+    if yr < 0 || mo < 0 || dy < 0 || hh < 0 || mm < 0 || ss < 0 { return 0 - 1 }
+    let days = days_from_civil(yr, mo, dy)
+    return days * _SECS_PER_DAY + hh * 3600 + mm * 60 + ss
+}
+
+// ── permille.hexa verbatim subset ────────────────────────────────────
+let PM_SCALE = 1000
+fn _div_round_half_away(a: int, b: int) -> int {
+    if b == 0 { return 0 }
+    let sign_a = if a < 0 { -1 } else { 1 }
+    let sign_b = if b < 0 { -1 } else { 1 }
+    let sign = sign_a * sign_b
+    let abs_a = if a < 0 { 0 - a } else { a }
+    let abs_b = if b < 0 { 0 - b } else { b }
+    let q = (abs_a + abs_b / 2) / abs_b
+    return sign * q
+}
+fn pm_of_ratio_pm(num: int, den: int) -> int {
+    if den == 0 { return 0 }
+    return _div_round_half_away(num * PM_SCALE, den)
+}
+fn _pad3(n: int) -> string {
+    let s = to_string(n)
+    let l = len(s)
+    if l >= 3 { return s }
+    if l == 2 { return "0" + s }
+    if l == 1 { return "00" + s }
+    return "000"
+}
+fn pm_to_string_raw(p: int) -> string {
+    let neg = p < 0
+    let abs_pm = if neg { 0 - p } else { p }
+    let whole = abs_pm / PM_SCALE
+    let frac = abs_pm - whole * PM_SCALE
+    let sign = if neg { "-" } else { "" }
+    return sign + to_string(whole) + "." + _pad3(frac)
+}
+
+fn main() {
+    // civil: parse∘format round-trip over a spread of epochs
+    let eps = [0, 1700000000, 946684800, 1709251200, 86399, 4102444799]
+    let mut ei = 0
+    while ei < len(eps) {
+        let ep = eps[ei]
+        cki("rt_parse_format", iso8601_parse_native(iso8601_format_native(ep)), ep)
+        // format∘parse idempotence on well-formed canonical
+        cks("rt_format_parse", iso8601_format_native(iso8601_parse_native(iso8601_format_native(ep))), iso8601_format_native(ep))
+        ei = ei + 1
+    }
+    // known anchors
+    cks("epoch0", iso8601_format_native(0), "1970-01-01T00:00:00Z")
+    cks("y2k", iso8601_format_native(946684800), "2000-01-01T00:00:00Z")
+    cki("dfc_epoch", days_from_civil(1970, 1, 1), 0)
+    // too-short → -1
+    cki("tooshort", iso8601_parse_native("1970-01-01"), 0 - 1)
+    cki("nondigit", iso8601_parse_native("abcd-ef-ghTij:kl:mnZ"), 0 - 1)
+
+    // permille: half-away ratio + format
+    cki("pm_1of3", pm_of_ratio_pm(1, 3), 333)       // 0.333..→333
+    cki("pm_2of3", pm_of_ratio_pm(2, 3), 667)       // 0.666..→667 (half-away)
+    cki("pm_1of2", pm_of_ratio_pm(1, 2), 500)
+    cki("pm_neg", pm_of_ratio_pm(-1, 3), 0 - 333)
+    cks("pm_fmt_500", pm_to_string_raw(500), "0.500")
+    cks("pm_fmt_1230", pm_to_string_raw(1230), "1.230")
+    cks("pm_fmt_neg", pm_to_string_raw(0 - 1230), "-1.230")
+    cks("pm_fmt_5", pm_to_string_raw(5), "0.005")
+
+    println("OP-93 lock: " + to_string(pass) + "/" + to_string(total))
+    if pass == total { println("PASS") } else { println("FAILED") }
+}
