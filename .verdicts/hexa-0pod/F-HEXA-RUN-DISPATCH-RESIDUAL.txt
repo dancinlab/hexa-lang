@@ -1,4 +1,21 @@
-DEPLOYED `hexa run` RESIDUAL — INSTALL-RESOLUTION, NOT A SOURCE BUG (terminal diagnosis)
+⚠️ SUPERSEDED 2026-06-14 by F-HEXA-RUN-NATIVE-ROUTE.txt (PR #3325) — DO NOT ACT ON THE
+   "RESOLUTION" / "STATUS" BELOW. This verdict's conclusions were WRONG and are corrected here:
+   ✗ "clean fix = re-run install/release pipeline, NOT local hand-patching"  →  WRONG.
+     The fix was a 39-line LOCAL shim change (tool/hx-selfhost-cli native-run route). No
+     release pipeline, no atomic ~/.hx refresh needed.
+   ✗ "Local completeness exhausted"  →  WRONG. It was closed locally + durably (#3325).
+   ✗ "run-path resolves a STALE transpiler from MULTIPLE ~/.hx copies"  →  WRONG ROOT CAUSE.
+     `hexa run` compiles IN-PROCESS (zero child procs, zero temp .c) via the parser BAKED
+     INTO the shipped dispatch binary (hexa.real.pre-selfhost.*). It never shells to an
+     external hexat — so swapping ~/.hx/build/hexat or regenerating hexa_cc.c did NOTHING.
+   ✓ ACTUAL FIX: the hx-selfhost-cli shim now routes `run <f.hexa>` → gen3 --emit=obj →
+     hexa_ld → exec (byte-eq self-host slot), native-first + delegate-fallback. Deployed
+     OP-124 → 9, OP-145 → 3. See F-HEXA-RUN-NATIVE-ROUTE.txt for the full method + gates.
+   The GROUND-TRUTH section below (source/compiler correct, gen3 --emit → 9) was right and
+   still holds; only the RESOLUTION + STATUS verdicts are retracted.
+================================================================================================
+
+DEPLOYED `hexa run` RESIDUAL — INSTALL-RESOLUTION, NOT A SOURCE BUG (terminal diagnosis) [RETRACTED]
 =======================================================================================
 context: after the self-host byte-eq fixpoint was reached + the runtime-regen rot
          closed (PR #3319), `hexa run` end-to-end still exhibits OP-124 (multi-line
