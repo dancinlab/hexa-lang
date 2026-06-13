@@ -1,0 +1,235 @@
+// stdlib/chem/fep/mbar_selftest.hexa — g5 seal for MBAR / BAR estimator.
+//
+// QFORGE-BIO round-4, alchemical estimator brick.
+//
+// Run:
+//   hexa run stdlib/chem/fep/mbar_selftest.hexa
+//
+// Checks:
+//   (a) SELF-CONSISTENT CONVERGENCE: the fixed-point residual max|Δf|
+//       decreases monotonically across sweeps and reaches < 1e-10.
+//   (b) BAR == MBAR (K=2): on the SAME 2-state data, mbar_solve's ΔG
+//       equals the independent Bennett (BAR) Fermi self-consistent ΔG,
+//       |Δ| < 1e-9 (Shirts-Chodera: MBAR reduces to BAR at K=2).
+//   (c) ZWANZIG LIMIT: with samples from ONE state only, MBAR's ΔG to a
+//       target equals the Zwanzig exponential average −ln⟨exp(−Δu)⟩.
+//   (d) ANALYTIC ΔG: two 1-D Gaussian (harmonic) wells of widths k0,k1
+//       have closed-form ΔF = (1/2)·ln(k1/k0) (in kT). Synthetic samples
+//       drawn from each well give MBAR ΔG == analytic, |Δ| < 0.01 kT.
+//   (e) GAUGE INVARIANCE: adding a constant to every entry of u_kn leaves
+//       ΔG unchanged (the MBAR equation is invariant to a global shift).
+//
+// All data is SYNTHETIC and reproducible (deterministic Box-Muller from a
+// fixed-seed LCG). No external library, no domain name — generic K,N_k,u_kn.
+
+use "stdlib/math/logsumexp"
+use "stdlib/chem/fep/mbar"
+
+let mut pass_count = 0
+let mut total = 0
+let mut first_fail = ""
+
+fn abs_f(x: float) -> float { if x < 0.0 { return 0.0 - x } else { return x } }
+
+fn check(name: string, cond: bool, detail: string) {
+    total = total + 1
+    if cond {
+        pass_count = pass_count + 1
+        println("  ok : " + name + " " + detail)
+    } else {
+        if first_fail == "" { first_fail = name }
+        println("  FAIL " + name + " " + detail)
+    }
+}
+
+// ── deterministic Gaussian sampler (LCG + Box-Muller) ────────────────
+let mut _seed = 1234567.0
+fn _u01() -> float {
+    // 48-bit-ish LCG kept in float; returns (0,1).
+    _seed = _mod(1103515245.0 * _seed + 12345.0, 2147483648.0)
+    let u = _seed / 2147483648.0
+    if u <= 0.0 { return 1.0e-12 }
+    if u >= 1.0 { return 1.0 - 1.0e-12 }
+    return u
+}
+fn _mod(a: float, m: float) -> float {
+    return a - floor(a / m) * m
+}
+fn _gauss() -> float {
+    // Box-Muller: one normal(0,1) per call.
+    let u1 = _u01()
+    let u2 = _u01()
+    return sqrt(0.0 - 2.0 * ln(u1)) * cos(6.283185307179586 * u2)
+}
+// sample from N(mu, 1/sqrt(kspring)) i.e. harmonic well of stiffness k:
+// potential U = (1/2) k (x-mu)²; equilibrium variance (β=1) = 1/k.
+fn _sample_well(mu: float, kspring: float) -> float {
+    return mu + _gauss() / sqrt(kspring)
+}
+
+// reduced potential of a harmonic well at x: u = (1/2) k (x-mu)²  (β folded
+// in: we work in reduced units β=1, so u is already dimensionless).
+fn _u_well(x: float, mu: float, kspring: float) -> float {
+    let d = x - mu
+    return 0.5 * kspring * d * d
+}
+
+fn fmtf(x: float) -> string { return to_string(x) }
+
+fn main() {
+    println("── mbar selftest (Shirts-Chodera MBAR + Bennett BAR) ──")
+
+    // ========================================================
+    // Build a generic 2-state harmonic dataset shared by (a)(b)(d)(e).
+    //   state 0: well at mu0, stiffness k0
+    //   state 1: well at mu1, stiffness k1
+    //   Analytic ΔF (reduced, β=1) for 1-D harmonic:
+    //     Z_k = ∫ exp(−½k(x−mu)²) dx = sqrt(2π/k)
+    //     F_k = −ln Z_k = −½ ln(2π/k) = ½ ln k − ½ ln(2π)
+    //     ΔF = F_1 − F_0 = ½ ln(k1/k0)        (mu cancels)
+    // ========================================================
+    let mu0 = 0.0
+    let mu1 = 0.6
+    let k0  = 1.0
+    let k1  = 2.5
+    let analytic_df = 0.5 * ln(k1 / k0)        // closed-form ΔF (reduced)
+
+    let N0 = 4000
+    let N1 = 4000
+    let Ntot = N0 + N1
+
+    // draw samples: first N0 from state 0, next N1 from state 1.
+    let mut xs = []
+    let mut i = 0
+    while i < N0 { xs.push(_sample_well(mu0, k0)) i = i + 1 }
+    let mut j = 0
+    while j < N1 { xs.push(_sample_well(mu1, k1)) j = j + 1 }
+
+    // reduced-potential matrix u_kn (row-major, K=2):
+    //   u_kn[0*Ntot + n] = u_0(x_n),  u_kn[1*Ntot + n] = u_1(x_n)
+    let mut u_kn = []
+    let mut a = 0
+    while a < Ntot { u_kn.push(_u_well(xs[a], mu0, k0)) a = a + 1 }
+    let mut b = 0
+    while b < Ntot { u_kn.push(_u_well(xs[b], mu1, k1)) b = b + 1 }
+    let N_k = [to_float(N0), to_float(N1)]
+
+    // ── (a) SELF-CONSISTENT CONVERGENCE (monotone residual → <1e-10) ──
+    // Re-run mbar_solve with an increasing iteration cap and record the
+    // terminal residual at each cap; assert it shrinks monotonically and
+    // the final tight-tol solve reports max_df < 1e-10.
+    let caps = [1, 2, 3, 5, 8, 12, 20]
+    let mut prev_res = 1.0e300
+    let mut monotone = true
+    let mut residstr = ""
+    let mut ci = 0
+    while ci < caps.len() {
+        // tol=0 forces it to run the full cap so max_df is the residual AT that cap.
+        let r = mbar_solve(u_kn, N_k, 0.0, caps[ci])
+        let res = r["max_df"]
+        residstr = residstr + " " + to_string(caps[ci]) + ":" + to_string(res)
+        if res > prev_res + 1.0e-14 { monotone = false }
+        prev_res = res
+        ci = ci + 1
+    }
+    let rconv = mbar_solve(u_kn, N_k, 1.0e-12, 500)
+    let final_res = rconv["max_df"]
+    println("    residual by iter-cap:" + residstr)
+    println("    converged=" + to_string(rconv["converged"])
+            + " iters=" + to_string(rconv["iters"])
+            + " final_res=" + to_string(final_res))
+    check("(a) self-consistent residual monotone↓ and <1e-10",
+          monotone && final_res < 1.0e-10,
+          "monotone=" + to_string(monotone) + " final_res=" + to_string(final_res))
+
+    // ── (d) ANALYTIC ΔG: MBAR ΔF == ½ ln(k1/k0) ─────────────────────
+    // (computed first so we can reuse the converged f for (b)/(e))
+    let mbar_df = mbar_delta_f(u_kn, N_k, 1.0e-12, 500)
+    let d_analytic = abs_f(mbar_df - analytic_df)
+    println("    [analytic harmonic] MBAR ΔF=" + to_string(mbar_df)
+            + "  analytic ½ln(k1/k0)=" + to_string(analytic_df)
+            + "  |Δ|=" + to_string(d_analytic))
+    check("(d) MBAR ΔG == analytic harmonic ΔF (<0.01 kT)",
+          d_analytic < 0.01,
+          "|Δ|=" + to_string(d_analytic) + " kT")
+
+    // ── (b) BAR == MBAR (K=2) ────────────────────────────────────────
+    // Bennett work values:
+    //   w_f = (u_1 − u_0)(x_n) for n ∈ state 0  (first N0 samples)
+    //   w_r = (u_0 − u_1)(x_n) for n ∈ state 1  (next  N1 samples)
+    let mut w_f = []
+    let mut p = 0
+    while p < N0 {
+        w_f.push(u_kn[1 * Ntot + p] - u_kn[0 * Ntot + p])
+        p = p + 1
+    }
+    let mut w_r = []
+    let mut q = 0
+    while q < N1 {
+        let idx = N0 + q
+        w_r.push(u_kn[0 * Ntot + idx] - u_kn[1 * Ntot + idx])
+        q = q + 1
+    }
+    let bar = bar_delta_f(w_f, w_r, 1.0e-13, 500)
+    let bar_df = bar["df"]
+    let d_bm = abs_f(bar_df - mbar_df)
+    println("    [K=2] MBAR ΔF=" + to_string(mbar_df)
+            + "  BAR(Bennett) ΔF=" + to_string(bar_df)
+            + "  |Δ|=" + to_string(d_bm))
+    check("(b) BAR == MBAR at K=2 (<1e-9)",
+          d_bm < 1.0e-9,
+          "|Δ|=" + to_string(d_bm) + " (bar_iters=" + to_string(bar["iters"]) + ")")
+
+    // ── (c) ZWANZIG LIMIT: single-state sampling ─────────────────────
+    // Use ONLY state-0 samples (N0), evaluate at state 0 and state 1.
+    // MBAR with N_k=[N0,0] must equal Zwanzig −ln⟨exp(−Δu)⟩_0.
+    let mut u_kn_z = []
+    let mut z0 = 0
+    while z0 < N0 { u_kn_z.push(u_kn[0 * Ntot + z0]) z0 = z0 + 1 }   // u_0 over state-0 samples
+    let mut z1 = 0
+    while z1 < N0 { u_kn_z.push(u_kn[1 * Ntot + z1]) z1 = z1 + 1 }   // u_1 over state-0 samples
+    let N_k_z = [to_float(N0), 0.0]
+    let mbar_df_z = mbar_delta_f(u_kn_z, N_k_z, 1.0e-12, 500)
+    // Zwanzig du = (u_1 − u_0)(x_n), n ∈ state 0
+    let mut du = []
+    let mut zz = 0
+    while zz < N0 {
+        du.push(u_kn[1 * Ntot + zz] - u_kn[0 * Ntot + zz])
+        zz = zz + 1
+    }
+    let zwan = zwanzig_delta_f(du)
+    let d_z = abs_f(mbar_df_z - zwan)
+    println("    [single-state] MBAR ΔF=" + to_string(mbar_df_z)
+            + "  Zwanzig −ln⟨e^−Δu⟩=" + to_string(zwan)
+            + "  |Δ|=" + to_string(d_z))
+    check("(c) MBAR(one state) == Zwanzig exp-avg (<1e-9)",
+          d_z < 1.0e-9,
+          "|Δ|=" + to_string(d_z))
+
+    // ── (e) GAUGE INVARIANCE: u_kn + const ⇒ ΔG unchanged ────────────
+    let shift = 137.5
+    let mut u_kn_g = []
+    let mut g = 0
+    while g < u_kn.len() {
+        u_kn_g.push(u_kn[g] + shift)
+        g = g + 1
+    }
+    let mbar_df_g = mbar_delta_f(u_kn_g, N_k, 1.0e-12, 500)
+    let d_g = abs_f(mbar_df_g - mbar_df)
+    println("    [+const " + to_string(shift) + "] ΔF=" + to_string(mbar_df_g)
+            + "  base ΔF=" + to_string(mbar_df) + "  |Δ|=" + to_string(d_g))
+    check("(e) ΔG gauge-invariant under u_kn+const (<1e-9)",
+          d_g < 1.0e-9,
+          "|Δ|=" + to_string(d_g))
+
+    // ── verdict ──────────────────────────────────────────────────────
+    println("")
+    if pass_count == total {
+        println("PASS: mbar " + to_string(pass_count) + "/" + to_string(total))
+        exit(0)
+    } else {
+        println("FAIL: mbar first=" + first_fail
+                + " (" + to_string(pass_count) + "/" + to_string(total) + ")")
+        exit(1)
+    }
+}

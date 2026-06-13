@@ -1,0 +1,325 @@
+// stdlib/chem/solvate/tip3p.hexa — TIP3P water model + solvation-box builder.
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE-BIO round-6 — the real-system infrastructure layer that sits on
+// top of the sealed native FEP core (R2 autograd-force · R3 soft-core ·
+// R4 MBAR · R5 HREX). Turns a bare solute + box into a solvated periodic
+// system ready for LJ+Coulomb minimum-image evaluation by the existing
+// stdlib (stdlib/chem/md/{lennard_jones,pbc,ewald}).
+//
+// References:
+//   Jorgensen, W.L., Chandrasekhar, J., Madura, J.D., Impey, R.W. &
+//     Klein, M.L. (1983). Comparison of simple potential functions for
+//     simulating liquid water. J. Chem. Phys. 79, 926 (TIP3P).
+//   Frenkel, D. & Smit, B. (2002). Understanding Molecular Simulation,
+//     2nd ed., Academic. Ch. 3 (lattice initialisation / packing).
+//
+// TIP3P = rigid 3-site water:
+//   geometry : r(O-H) = 0.9572 Å, ∠(H-O-H) = 104.52°
+//   charges  : q(O) = −0.834 e, q(H) = +0.417 e   (Σ = 0)
+//   LJ       : O-site only, ε = 0.1521 kcal/mol, σ = 3.1507 Å
+//              (H-sites carry charge only, no LJ)
+//
+// Units: lengths in Å, charges in e (4πε₀ = 1 natural units for the
+// downstream Coulomb sum), masses in amu, density reported in g/cm³.
+//
+// d4-generic: NO solute-name / NO water-count hardcoding. Box edge,
+// solute atom list, target density and overlap cutoff are ALL parameters;
+// a single generic fill path drives every system.
+//
+// Public surface:
+//   pub struct SolvAtom { x, y, z, q, eps, sigma, mass : float, is_o : bool }
+//   pub fn tip3p_constants() -> array          // [rOH, thetaHOH_deg, qO, qH, epsO, sigmaO, massO, massH]
+//   pub fn tip3p_molecule(ox, oy, oz) -> array // 3 SolvAtom: O + 2 H, closed-form geometry
+//   pub fn tip3p_bond_length(mol) -> float     // measured r(O-H) of a built molecule
+//   pub fn tip3p_angle_deg(mol) -> float       // measured ∠(H-O-H) in degrees
+//   pub fn solvate_box(solute, L, target_density, overlap_cut) -> array
+//   pub fn box_water_count(atoms) -> int
+//   pub fn box_density(atoms, L) -> float       // g/cm³ of the water in the box
+//   pub fn box_total_charge(atoms) -> float
+//   pub fn min_solute_water_distance(atoms, n_solute, L) -> float
+
+let PI = 3.141592653589793
+
+// Avogadro + Å³→cm³ for the density bookkeeping.
+//   N_A = 6.02214076e23  /mol
+//   1 Å³ = 1e-24 cm³
+let N_AVOGADRO = 6.02214076e23
+let ANG3_TO_CM3 = 1.0e-24
+// TIP3P molar mass: O(15.9994) + 2·H(1.008) = 18.0154 g/mol.
+let WATER_MOLAR_MASS = 18.0154
+
+pub struct SolvAtom {
+    x: float,
+    y: float,
+    z: float,
+    q: float,
+    eps: float,
+    sigma: float,
+    mass: float,
+    is_o: bool,
+}
+
+fn _abs_f(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// ── TIP3P defining constants ─────────────────────────────────────────
+//
+// Returned as an array so callers / selftest can assert against the
+// literature values without re-typing them.
+//   [0] rOH (Å)         [1] θHOH (deg)
+//   [2] qO  (e)         [3] qH (e)
+//   [4] εO (kcal/mol)   [5] σO (Å)
+//   [6] mO (amu)        [7] mH (amu)
+
+pub fn tip3p_constants() -> array {
+    return [0.9572, 104.52, 0.0 - 0.834, 0.417, 0.1521, 3.1507, 15.9994, 1.008]
+}
+
+// ── Single TIP3P molecule, closed-form geometry ──────────────────────
+//
+// O placed at (ox,oy,oz). The two H lie in the local xy-plane,
+// symmetric about the +x axis, each at distance rOH and at half-angle
+// ±θ/2 from the bisector. This construction makes r(O-H)=rOH and
+// ∠(H-O-H)=θ exact by definition.
+//
+//   H1 = O + rOH·(cos(θ/2),  sin(θ/2), 0)
+//   H2 = O + rOH·(cos(θ/2), −sin(θ/2), 0)
+//
+// Returns [O, H1, H2] as SolvAtom. O carries charge+LJ, H carry charge.
+
+pub fn tip3p_molecule(ox: float, oy: float, oz: float) -> array {
+    let c = tip3p_constants()
+    let rOH    = c[0]
+    let theta  = c[1] * PI / 180.0   // deg → rad
+    let qO     = c[2]
+    let qH     = c[3]
+    let epsO   = c[4]
+    let sigmaO = c[5]
+    let mO     = c[6]
+    let mH     = c[7]
+
+    let half = 0.5 * theta
+    let dx = rOH * cos(half)
+    let dy = rOH * sin(half)
+
+    let o = SolvAtom{
+        x: ox, y: oy, z: oz,
+        q: qO, eps: epsO, sigma: sigmaO, mass: mO, is_o: true,
+    }
+    let h1 = SolvAtom{
+        x: ox + dx, y: oy + dy, z: oz,
+        q: qH, eps: 0.0, sigma: 0.0, mass: mH, is_o: false,
+    }
+    let h2 = SolvAtom{
+        x: ox + dx, y: oy - dy, z: oz,
+        q: qH, eps: 0.0, sigma: 0.0, mass: mH, is_o: false,
+    }
+    return [o, h1, h2]
+}
+
+// ── Measured geometry of a built molecule (selftest oracle) ──────────
+
+fn _dist(a: SolvAtom, b: SolvAtom) -> float {
+    let dx = a.x - b.x
+    let dy = a.y - b.y
+    let dz = a.z - b.z
+    return sqrt(dx * dx + dy * dy + dz * dz)
+}
+
+// r(O-H) of molecule [O,H1,H2]; both bonds equal by construction so the
+// first is reported (selftest also checks the second).
+pub fn tip3p_bond_length(mol: array) -> float {
+    return _dist(mol[0], mol[1])
+}
+
+// ∠(H-O-H) in degrees via the dot-product / law of cosines:
+//   cos θ = (OH1 · OH2) / (|OH1| |OH2|)
+pub fn tip3p_angle_deg(mol: array) -> float {
+    let o  = mol[0]
+    let h1 = mol[1]
+    let h2 = mol[2]
+    let v1x = h1.x - o.x
+    let v1y = h1.y - o.y
+    let v1z = h1.z - o.z
+    let v2x = h2.x - o.x
+    let v2y = h2.y - o.y
+    let v2z = h2.z - o.z
+    let dot = v1x * v2x + v1y * v2y + v1z * v2z
+    let n1 = sqrt(v1x * v1x + v1y * v1y + v1z * v1z)
+    let n2 = sqrt(v2x * v2x + v2y * v2y + v2z * v2z)
+    if n1 <= 0.0 || n2 <= 0.0 { return 0.0 }
+    let mut c = dot / (n1 * n2)
+    // numerical clamp to acos domain.
+    if c > 1.0 { c = 1.0 }
+    if c < 0.0 - 1.0 { c = 0.0 - 1.0 }
+    return acos(c) * 180.0 / PI
+}
+
+// ── Lattice grid sizing from a target water density ──────────────────
+//
+// Number of water molecules in a cubic box of edge L (Å) at density ρ
+// (g/cm³):
+//   N = ρ · V[cm³] · N_A / M          V[cm³] = L³ · 1e-24
+// We round to the nearest cube n³ that does not exceed N (a uniform n×n×n
+// grid is the generic packing; the residual is the lattice-fill tolerance
+// the selftest budgets ±5%).
+
+fn _grid_n_for_count(n_target: float) -> int {
+    if n_target <= 1.0 { return 1 }
+    // n = round(cbrt(N_target)) so the realised n³ lands closest to the
+    // target count (symmetric error, keeps density within the ±5% band).
+    let cube_root = pow(n_target, 1.0 / 3.0)
+    let mut n = to_int(floor(cube_root + 0.5))
+    if n < 1 { n = 1 }
+    return n
+}
+
+// minimum-image of a single-axis displacement (cubic box edge L).
+fn _min_image(d: float, L: float) -> float {
+    if L <= 0.0 { return d }
+    let q = d / L + 0.5
+    return d - L * to_float(floor(q))
+}
+
+// ── Generic solvation-box builder ────────────────────────────────────
+//
+// solute        : array of SolvAtom already positioned inside the box.
+// L             : cubic box edge (Å).
+// target_density: desired bulk water density (g/cm³, ~0.997).
+// overlap_cut   : if any atom of a candidate water lies within this
+//                 distance (Å, minimum-image) of ANY solute atom, the
+//                 WHOLE water is dropped (rigid 3-site, no clash).
+//
+// Single generic path: O sites placed on a uniform n×n×n grid spanning
+// (0,L); each gets a full TIP3P molecule; overlap-rejected against the
+// solute; survivors appended after the solute atoms. No name / count
+// hardcoding — every system flows through here.
+//
+// Returns the combined atom list: [solute..., water...].
+
+pub fn solvate_box(solute: array, L: float,
+                   target_density: float, overlap_cut: float) -> array {
+    let mut out = []
+    // copy solute through unchanged (it owns the leading indices).
+    let n_sol = len(solute)
+    let mut si = 0
+    while si < n_sol {
+        out = push(out, solute[si])
+        si = si + 1
+    }
+    if L <= 0.0 { return out }
+
+    // target molecule count from density, then nearest grid.
+    let vol_cm3 = L * L * L * ANG3_TO_CM3
+    let n_target = target_density * vol_cm3 * N_AVOGADRO / WATER_MOLAR_MASS
+    let n = _grid_n_for_count(n_target)
+
+    // grid spacing; offset by half a cell so O's sit at cell centres,
+    // away from the periodic face (avoids self-image clash at the seam).
+    let spacing = L / to_float(n)
+    let half = 0.5 * spacing
+
+    let mut ix = 0
+    while ix < n {
+        let mut iy = 0
+        while iy < n {
+            let mut iz = 0
+            while iz < n {
+                let ox = half + to_float(ix) * spacing
+                let oy = half + to_float(iy) * spacing
+                let oz = half + to_float(iz) * spacing
+                let mol = tip3p_molecule(ox, oy, oz)
+                // overlap test: any of the 3 sites within cut of any solute atom?
+                let mut clash = false
+                let mut mk = 0
+                while mk < 3 {
+                    let a = mol[mk]
+                    let mut sj = 0
+                    while sj < n_sol {
+                        let s = solute[sj]
+                        // minimum-image distance, cubic box.
+                        let dx = _min_image(a.x - s.x, L)
+                        let dy = _min_image(a.y - s.y, L)
+                        let dz = _min_image(a.z - s.z, L)
+                        let r = sqrt(dx * dx + dy * dy + dz * dz)
+                        if r < overlap_cut { clash = true }
+                        sj = sj + 1
+                    }
+                    mk = mk + 1
+                }
+                if !clash {
+                    out = push(out, mol[0])
+                    out = push(out, mol[1])
+                    out = push(out, mol[2])
+                }
+                iz = iz + 1
+            }
+            iy = iy + 1
+        }
+        ix = ix + 1
+    }
+    return out
+}
+
+// ── Box diagnostics ──────────────────────────────────────────────────
+
+// Number of water molecules = O-site count.
+pub fn box_water_count(atoms: array) -> int {
+    let mut n_o = 0
+    let mut i = 0
+    while i < len(atoms) {
+        if atoms[i].is_o { n_o = n_o + 1 }
+        i = i + 1
+    }
+    return n_o
+}
+
+// Bulk water density (g/cm³) — water molecules only, solute excluded.
+pub fn box_density(atoms: array, L: float) -> float {
+    if L <= 0.0 { return 0.0 }
+    let n_water = box_water_count(atoms)
+    let mass_g = to_float(n_water) * WATER_MOLAR_MASS / N_AVOGADRO
+    let vol_cm3 = L * L * L * ANG3_TO_CM3
+    if vol_cm3 <= 0.0 { return 0.0 }
+    return mass_g / vol_cm3
+}
+
+// Total charge Σq over every atom (solute + water).
+pub fn box_total_charge(atoms: array) -> float {
+    let mut q = 0.0
+    let mut i = 0
+    while i < len(atoms) {
+        q = q + atoms[i].q
+        i = i + 1
+    }
+    return q
+}
+
+// Minimum solute↔water atom distance (minimum-image, cubic box).
+// atoms = [solute(0..n_solute) ..., water ...]. Returns a large sentinel
+// if either set is empty.
+pub fn min_solute_water_distance(atoms: array, n_solute: int, L: float) -> float {
+    let n = len(atoms)
+    let mut best = 1.0e30
+    let mut i = 0
+    while i < n_solute {
+        let a = atoms[i]
+        let mut j = n_solute
+        while j < n {
+            let b = atoms[j]
+            let dx = _min_image(a.x - b.x, L)
+            let dy = _min_image(a.y - b.y, L)
+            let dz = _min_image(a.z - b.z, L)
+            let r = sqrt(dx * dx + dy * dy + dz * dz)
+            if r < best { best = r }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return best
+}

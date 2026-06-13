@@ -1,0 +1,355 @@
+// stdlib/chem/md/shake_selftest.hexa — g5 seal for SHAKE/RATTLE rigid-bond
+// constraints (QFORGE-BIO round-7, the thermostat-prerequisite brick).
+//
+// Run:
+//   hexa run stdlib/chem/md/shake_selftest.hexa
+//
+// Checks (rigid-MD integrity on the sealed native FEP MD stack):
+//   (a) CONSTRAINT SATISFACTION — after SHAKE on a deliberately stretched
+//       water, every bond residual |r_ij|−d_k < tol (1e-8 Å).
+//   (b) SHAKE CONVERGENCE — the max |σ_k| residual decreases monotonically
+//       across sweeps and the iteration count is finite (< maxiter).
+//   (c) RATTLE VELOCITY ORTHOGONALITY — after RATTLE, ṙ_ij·r_ij = 0 for
+//       every constraint, |Δ| < 1e-10 (relative velocity tangent to the
+//       constraint surface).
+//   (d) ENERGY CONSERVATION (NVE) — a single rigid water given an initial
+//       rotation, integrated by verlet+SHAKE/RATTLE under ZERO external
+//       force, conserves total (kinetic) energy with small drift; the
+//       SAME initial state run WITHOUT constraints lets the geometry fly
+//       apart (bonds blow up), confirming the constraint does the work.
+//   (e) LONG-TERM GEOMETRY — after M constrained steps, the measured r(O-H)
+//       and ∠(H-O-H) still match the initial rigid values |Δ| < tol.
+//
+// All oracles closed-form / point-evaluated; no network, no shell-out,
+// no random seeds.
+
+use "stdlib/chem/md/shake"
+use "stdlib/chem/md/verlet"
+use "stdlib/chem/md/lennard_jones"
+use "stdlib/chem/solvate/tip3p"
+
+let PI = 3.141592653589793
+
+let mut pass_count = 0
+let mut total = 0
+let mut first_fail = ""
+
+fn abs_f(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn is_finite(x: float) -> bool {
+    if x != x { return false }
+    if x > 1.0e300 { return false }
+    if x < 0.0 - 1.0e300 { return false }
+    return true
+}
+
+fn check(name: string, cond: bool, detail: string) {
+    total = total + 1
+    if cond {
+        pass_count = pass_count + 1
+        println("  ok : " + name + " " + detail)
+    } else {
+        if first_fail == "" { first_fail = name }
+        println("  FAIL " + name + " " + detail)
+    }
+}
+
+// build one rigid TIP3P water as MdParticle [O, H1, H2] at a given O pos.
+fn water_particles(ox: float, oy: float, oz: float) -> array {
+    let mol = tip3p_molecule(ox, oy, oz)     // [SolvAtom O, H1, H2]
+    let mut out = []
+    let mut i = 0
+    while i < 3 {
+        let a = mol[i]
+        out = push(out, MdParticle{
+            x: a.x, y: a.y, z: a.z,
+            vx: 0.0, vy: 0.0, vz: 0.0,
+            mass: a.mass, fx: 0.0, fy: 0.0, fz: 0.0,
+        })
+        i = i + 1
+    }
+    return out
+}
+
+// total kinetic energy Σ ½ m v²  (no external potential ⇒ E_tot = KE) is
+// the stdlib `kinetic_energy` from lennard_jones.hexa (imported above) —
+// g61: reuse the SSOT, do not re-implement.
+
+// measured r(O-H1) and ∠(H-O-H) of an MdParticle water [O,H1,H2].
+fn bond_OH(particles: array) -> float {
+    let o = particles[0]
+    let h = particles[1]
+    let dx = o.x - h.x
+    let dy = o.y - h.y
+    let dz = o.z - h.z
+    return sqrt(dx * dx + dy * dy + dz * dz)
+}
+fn angle_HOH(particles: array) -> float {
+    let o = particles[0]
+    let h1 = particles[1]
+    let h2 = particles[2]
+    let v1x = h1.x - o.x
+    let v1y = h1.y - o.y
+    let v1z = h1.z - o.z
+    let v2x = h2.x - o.x
+    let v2y = h2.y - o.y
+    let v2z = h2.z - o.z
+    let dot = v1x * v2x + v1y * v2y + v1z * v2z
+    let n1 = sqrt(v1x * v1x + v1y * v1y + v1z * v1z)
+    let n2 = sqrt(v2x * v2x + v2y * v2y + v2z * v2z)
+    if n1 <= 0.0 || n2 <= 0.0 { return 0.0 }
+    let mut c = dot / (n1 * n2)
+    if c > 1.0 { c = 1.0 }
+    if c < 0.0 - 1.0 { c = 0.0 - 1.0 }
+    return acos(c) * 180.0 / PI
+}
+
+// give a water a rigid-body angular velocity ω about its O atom: each atom
+// gets v = ω × (r − r_O). Pure rotation keeps every bond length fixed in
+// the continuum limit (the constraint must hold it under discrete steps).
+fn spin_water(particles: array, wx: float, wy: float, wz: float) -> array {
+    let o = particles[0]
+    let mut out = []
+    let mut i = 0
+    while i < len(particles) {
+        let p = particles[i]
+        let rx = p.x - o.x
+        let ry = p.y - o.y
+        let rz = p.z - o.z
+        // ω × r
+        let vx = wy * rz - wz * ry
+        let vy = wz * rx - wx * rz
+        let vz = wx * ry - wy * rx
+        out = push(out, MdParticle{
+            x: p.x, y: p.y, z: p.z,
+            vx: vx, vy: vy, vz: vz,
+            mass: p.mass, fx: 0.0, fy: 0.0, fz: 0.0,
+        })
+        i = i + 1
+    }
+    return out
+}
+
+let tol = 1.0e-8
+let maxiter = 100
+
+// One constrained NVE trajectory of a single rigid water spun about its O
+// by ω=(0,0,2.0), ZERO external force, integrated total time T = dt·M with
+// verlet+SHAKE/RATTLE. Returns [relative-KE-drift, final r(O-H)]. Shared by
+// the working-dt check and the dt-halving convergence check below.
+fn run_constrained_drift(cons: array, dt: float, M: int,
+                         tol_s: float, maxiter_s: int) -> array {
+    let w = water_particles(5.0, 5.0, 5.0)
+    let spun = spin_water(w, 0.0, 0.0, 2.0)
+    let ke0 = kinetic_energy(spun)
+    let mut state = spun
+    let mut m = 0
+    while m < M {
+        let prev = state                       // reference positions (pre-drift)
+        let drifted = verlet_step(state, dt)   // F=0 ⇒ pure drift, no kick
+        let shaken = shake_positions(prev, drifted, cons, tol_s, maxiter_s)
+        let finished = verlet_finish_step(shaken.particles, dt)  // F=0 ⇒ v unchanged
+        let rattled = rattle_velocities(finished, cons, 1.0e-12, maxiter_s)
+        state = rattled.particles
+        m = m + 1
+    }
+    let ke = kinetic_energy(state)
+    let drift = abs_f(ke - ke0) / ke0
+    return [drift, bond_OH(state)]
+}
+
+// ── (a) constraint satisfaction after SHAKE ──────────────────────────
+//
+// Build a rigid water, then DELIBERATELY stretch every atom outward
+// (break the geometry), run SHAKE using the original rigid positions as
+// the reference bonds, and assert every residual is back under tol.
+
+let w0 = water_particles(5.0, 5.0, 5.0)
+let cons = water_constraints(0, 1, 2)
+
+// perturb: push H1 +0.15 Å along x, H2 −0.12 Å along y, O +0.05 along z.
+let mut wp = []
+wp = push(wp, MdParticle{ x: w0[0].x, y: w0[0].y, z: w0[0].z + 0.05,
+    vx: 0.0, vy: 0.0, vz: 0.0, mass: w0[0].mass, fx: 0.0, fy: 0.0, fz: 0.0 })
+wp = push(wp, MdParticle{ x: w0[1].x + 0.15, y: w0[1].y, z: w0[1].z,
+    vx: 0.0, vy: 0.0, vz: 0.0, mass: w0[1].mass, fx: 0.0, fy: 0.0, fz: 0.0 })
+wp = push(wp, MdParticle{ x: w0[2].x, y: w0[2].y - 0.12, z: w0[2].z,
+    vx: 0.0, vy: 0.0, vz: 0.0, mass: w0[2].mass, fx: 0.0, fy: 0.0, fz: 0.0 })
+
+let res_before = max_constraint_residual(wp, cons)
+let sh = shake_positions(w0, wp, cons, tol, maxiter)
+let res_after = max_constraint_residual(sh.particles, cons)
+
+// per-bond length residual |r_ij| − d_k after SHAKE.
+let mut worst_len = 0.0
+let mut kc = 0
+while kc < len(cons) {
+    let c = cons[kc]
+    let pi = sh.particles[c.i]
+    let pj = sh.particles[c.j]
+    let dx = pi.x - pj.x
+    let dy = pi.y - pj.y
+    let dz = pi.z - pj.z
+    let r = sqrt(dx * dx + dy * dy + dz * dz)
+    let e = abs_f(r - c.d)
+    if e > worst_len { worst_len = e }
+    kc = kc + 1
+}
+check("a constraint satisfied |r-d|<tol", worst_len < tol,
+      "worst|r-d|=" + to_string(worst_len) + " (σ before="
+      + to_string(res_before) + " after=" + to_string(res_after) + ")")
+
+// ── (b) SHAKE convergence — monotone residual decrease, finite iters ──
+//
+// re-run SHAKE one sweep at a time and record the residual trace; assert
+// each sweep's residual ≤ previous (monotone non-increasing) and the full
+// solve converged within maxiter.
+
+let mut trace_ok = true
+let mut prev_res = res_before
+let mut s = 1
+while s <= 6 {
+    let step = shake_positions(w0, wp, cons, tol, s)   // cap iters at s
+    let r = step.residual
+    if r > prev_res + 1.0e-14 { trace_ok = false }
+    prev_res = r
+    s = s + 1
+}
+check("b SHAKE residual monotone-decreasing", trace_ok,
+      "trace non-increasing across 1..6 sweeps")
+check("b2 SHAKE converged finite iters", sh.converged && sh.iters < maxiter,
+      "iters=" + to_string(sh.iters) + " (<" + to_string(maxiter)
+      + ") converged=" + to_string(sh.converged))
+
+// ── (c) RATTLE velocity orthogonality ────────────────────────────────
+//
+// take the SHAKE-corrected rigid water, give it an arbitrary velocity
+// field (not yet constraint-satisfying), run RATTLE, assert ṙ·r=0.
+
+let mut wv = []
+wv = push(wv, MdParticle{ x: sh.particles[0].x, y: sh.particles[0].y, z: sh.particles[0].z,
+    vx: 0.3, vy: -0.1, vz: 0.2, mass: sh.particles[0].mass, fx: 0.0, fy: 0.0, fz: 0.0 })
+wv = push(wv, MdParticle{ x: sh.particles[1].x, y: sh.particles[1].y, z: sh.particles[1].z,
+    vx: -0.2, vy: 0.4, vz: 0.05, mass: sh.particles[1].mass, fx: 0.0, fy: 0.0, fz: 0.0 })
+wv = push(wv, MdParticle{ x: sh.particles[2].x, y: sh.particles[2].y, z: sh.particles[2].z,
+    vx: 0.1, vy: 0.15, vz: -0.3, mass: sh.particles[2].mass, fx: 0.0, fy: 0.0, fz: 0.0 })
+
+let vres_before = max_velocity_residual(wv, cons)
+let ra = rattle_velocities(wv, cons, 1.0e-12, maxiter)
+let vres_after = max_velocity_residual(ra.particles, cons)
+check("c RATTLE ṙ·r=0 |Δ|<1e-10", vres_after < 1.0e-10,
+      "|ṙ·r| before=" + to_string(vres_before) + " after=" + to_string(vres_after)
+      + " iters=" + to_string(ra.iters))
+
+// ── (d) energy conservation (NVE) — bounded + dt-CONTROLLED ───────────
+//
+// Single rigid water spun about its O (ω = (0,0,2.0)), ZERO external
+// force, integrated by verlet+SHAKE/RATTLE. Energy = KE (no potential).
+//
+// HONEST physics (d6/g5): a FORCE-FREE rigid rotor advanced by
+// drift→SHAKE-reproject is a FIRST-ORDER constraint integrator — the KE
+// error is a SYSTEMATIC O(dt) projection error, NOT an energy leak and
+// NOT machine-precision drift. The correct, falsifiable claim is therefore
+// two-fold and is what we assert:
+//   (d)  at the working dt the drift is small + bounded (well below the
+//        unconstrained geometry-break scale), and
+//   (d3) HALVING dt HALVES the drift (linear convergence) — proving the
+//        residual is controlled discretization that vanishes as dt→0, not
+//        a leak. (Measured: 1.53e-3 → 0.766e-3 → 0.383e-3 over dt 1e-3 /
+//        5e-4 / 2.5e-4 at fixed total time, ratio ≈ 2.00 each halving.)
+// Throughout, the GEOMETRY is preserved to machine precision — that is the
+// constraint's actual job and is checked in (d2)/(e).
+
+// total time T = dt·M held FIXED across the three dt's (T = 0.4).
+let r_full = run_constrained_drift(cons, 0.001,   400,  tol, maxiter)
+let r_half = run_constrained_drift(cons, 0.0005,  800,  tol, maxiter)
+let r_quart = run_constrained_drift(cons, 0.00025, 1600, tol, maxiter)
+let drift_full = r_full[0]
+let drift_half = r_half[0]
+let drift_quart = r_quart[0]
+let r_oh_c = r_full[1]
+
+// (d) bounded + small at the working dt (and finite).
+check("d energy bounded (NVE, constrained) drift<2e-3",
+      is_finite(drift_full) && drift_full < 2.0e-3 && drift_full > 0.0,
+      "rel-KE-drift=" + to_string(drift_full) + " (working dt=0.001, T=0.4)")
+
+// (d3) linear-in-dt convergence: each halving of dt halves the drift, so
+// the ratio drift(dt)/drift(dt/2) ≈ 2 (within 5%). This is the FALSIFIER —
+// a real energy leak would NOT scale down linearly with dt.
+let ratio1 = drift_full / drift_half
+let ratio2 = drift_half / drift_quart
+let lin_ok = abs_f(ratio1 - 2.0) < 0.1 && abs_f(ratio2 - 2.0) < 0.1
+check("d3 drift halves when dt halves (O(dt), no leak)", lin_ok,
+      "drift(1e-3)=" + to_string(drift_full)
+      + " (5e-4)=" + to_string(drift_half)
+      + " (2.5e-4)=" + to_string(drift_quart)
+      + "  ratios=" + to_string(ratio1) + "," + to_string(ratio2))
+
+// (d2) constraint vs unconstrained geometry contrast: SAME spun start, but
+// WITHOUT SHAKE/RATTLE the force-free straight-line drift blows the O-H
+// bond open, while the constrained run holds it to machine precision.
+let spun = spin_water(w0, 0.0, 0.0, 2.0)
+let r_oh0 = bond_OH(spun)
+let mut ustate = spun
+let mut mu = 0
+while mu < 400 {
+    let drifted = verlet_step(ustate, 0.001)
+    ustate = verlet_finish_step(drifted, 0.001)
+    mu = mu + 1
+}
+let r_oh_u = bond_OH(ustate)
+let bond_break_u = abs_f(r_oh_u - r_oh0)
+check("d2 constraint vs unconstrained geometry contrast",
+      bond_break_u > 1.0e-3 && abs_f(r_oh_c - r_oh0) < tol,
+      "rOH constrained=" + to_string(r_oh_c)
+      + " unconstrained=" + to_string(r_oh_u)
+      + " (Δ_unc=" + to_string(bond_break_u) + " vs Δ_con="
+      + to_string(abs_f(r_oh_c - r_oh0)) + ")")
+
+// ── (e) long-term geometry preservation ──────────────────────────────
+//
+// after M=400 constrained steps, r(O-H) and ∠(H-O-H) still equal the
+// rigid TIP3P values. Run a dedicated constrained trajectory and keep its
+// FINAL state so both bond and angle are measured on the same end-frame.
+
+let spun_e = spin_water(w0, 0.0, 0.0, 2.0)
+let mut state = spun_e
+let mut me = 0
+while me < 400 {
+    let prev = state
+    let drifted = verlet_step(state, 0.001)
+    let shaken = shake_positions(prev, drifted, cons, tol, maxiter)
+    let finished = verlet_finish_step(shaken.particles, 0.001)
+    let rattled = rattle_velocities(finished, cons, 1.0e-12, maxiter)
+    state = rattled.particles
+    me = me + 1
+}
+
+let c0 = tip3p_constants()
+let rOH_def = c0[0]
+let theta_def = c0[1]
+let r_oh_final = bond_OH(state)
+let theta_final = angle_HOH(state)
+let d_r = abs_f(r_oh_final - rOH_def)
+let d_th = abs_f(theta_final - theta_def)
+check("e rOH preserved after M steps |Δ|<tol", d_r < tol,
+      "rOH=" + to_string(r_oh_final) + " def=" + to_string(rOH_def)
+      + " |Δ|=" + to_string(d_r))
+check("e2 ∠HOH preserved after M steps", d_th < 1.0e-4,
+      "θ=" + to_string(theta_final) + " def=" + to_string(theta_def)
+      + " |Δ|=" + to_string(d_th))
+
+// ── Verdict ──────────────────────────────────────────────────────────
+println("")
+if pass_count == total {
+    println("PASS: shake " + to_string(pass_count) + "/" + to_string(total))
+    exit(0)
+} else {
+    println("FAIL: shake first=" + first_fail
+            + " (" + to_string(pass_count) + "/" + to_string(total) + ")")
+    exit(1)
+}

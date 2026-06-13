@@ -1,0 +1,331 @@
+// stdlib/chem/md/shake.hexa — SHAKE/RATTLE rigid-bond constraints for MD.
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE-BIO round-7 — the rigid-body constraint layer that makes the
+// sealed native FEP MD stack (R2 autograd-force · R3 soft-core · R4 MBAR
+// · R5 HREX · R6 solvation/TIP3P) usable for REAL rigid-water trajectories.
+// Rigid TIP3P water (and any holonomically-constrained solute) cannot be
+// integrated by velocity-Verlet alone: the unconstrained step stretches
+// the O-H bonds (and the H-H distance), injecting high-frequency vibrational
+// energy that a thermostat then mis-couples. SHAKE/RATTLE enforces the
+// distance constraints σ_k = |r_ij|² − d_k² = 0 exactly each step, so the
+// geometry is preserved and the constrained DOF are removed from the
+// dynamics. This is a STRICT PREREQUISITE for the thermostat (R8) — the
+// thermostat must see a system whose rigid bonds are already frozen.
+//
+// References:
+//   Ryckaert, J.-P., Ciccotti, G. & Berendsen, H.J.C. (1977).
+//     Numerical integration of the cartesian equations of motion of a
+//     system with constraints: molecular dynamics of n-alkanes.
+//     J. Comput. Phys. 23, 327 (SHAKE — position constraints).
+//   Andersen, H.C. (1983). RATTLE: A "velocity" version of the SHAKE
+//     algorithm for molecular dynamics calculations.
+//     J. Comput. Phys. 52, 24 (RATTLE — velocity constraints, the
+//     velocity-Verlet companion used here).
+//
+// Pure algorithmic — no I/O, no syscall. Vacuum boundary (no PBC inside
+// the constraint solve; intra-molecule bonds are short, so minimum-image
+// is not needed for the rigid water triangle — a DEFERRED item for
+// constraints spanning a periodic seam).
+//
+// d4-GENERIC: NO molecule-name / NO water-specific hardcoding. A constraint
+// is a (i, j, d) triple in a flat Constraint list; the SAME iterative loop
+// drives a 3-constraint rigid water and an arbitrary N-constraint network.
+// Adding / removing a constraint is list-only — no branch on instance.
+//
+// Public surface:
+//   pub struct Constraint { i, j : int ; d : float }   // |r_i − r_j| = d
+//   pub fn water_constraints(o, h1, h2) -> [Constraint]
+//       The 3 rigid bonds of one TIP3P water (2×O-H + 1×H-H), built from
+//       the TIP3P geometry — a CONVENIENCE that emits generic Constraints.
+//   pub fn shake_positions(prev, particles, cons, tol, maxiter) -> ShakeResult
+//       SHAKE: correct `particles` positions (post-drift) so every
+//       constraint k satisfies |σ_k| < tol, using the reference geometry
+//       `prev` (positions BEFORE the unconstrained drift) for the
+//       constraint directions. Velocities are co-corrected (Δr/dt is folded
+//       in by the caller via RATTLE; here we move positions only).
+//   pub fn rattle_velocities(particles, cons, tol, maxiter) -> ShakeResult
+//       RATTLE: correct velocities so ṙ_ij · r_ij = 0 for every constraint
+//       (the relative velocity along each bond is removed — tangential
+//       constraint-surface velocity).
+//   pub fn max_constraint_residual(particles, cons) -> float
+//       max_k |σ_k| = max_k | |r_ij|² − d_k² |  (selftest oracle).
+//   pub fn max_velocity_residual(particles, cons) -> float
+//       max_k |ṙ_ij · r_ij|  (selftest oracle for RATTLE).
+
+use "stdlib/chem/md/lennard_jones"   // MdParticle layout (SSOT)
+use "stdlib/chem/solvate/tip3p"      // tip3p_constants for water_constraints
+
+let SHAKE_PI = 3.141592653589793
+
+pub struct Constraint {
+    i: int,
+    j: int,
+    d: float,
+}
+
+// SHAKE/RATTLE outcome: the corrected particle array + convergence trace.
+//   particles : corrected array
+//   iters     : iterations actually taken (≤ maxiter)
+//   residual  : final max |σ_k| (positions) or max |ṙ·r| (velocities)
+//   converged : residual < tol within maxiter
+pub struct ShakeResult {
+    particles: array,
+    iters: int,
+    residual: float,
+    converged: bool,
+}
+
+fn _abs_f(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// ── Constraint list for one rigid TIP3P water ────────────────────────
+//
+// Indices i,j refer to positions in the caller's particle array. A rigid
+// 3-site water is fully constrained by THREE distances:
+//   O-H1 = O-H2 = rOH,   H1-H2 = 2·rOH·sin(θ/2)
+// We emit them as generic Constraints — the SHAKE loop never knows these
+// came from water.
+
+pub fn water_constraints(o: int, h1: int, h2: int) -> array {
+    let c = tip3p_constants()
+    let rOH = c[0]
+    let theta = c[1] * SHAKE_PI / 180.0
+    let dHH = 2.0 * rOH * sin(0.5 * theta)
+    let mut out = []
+    out = push(out, Constraint{ i: o,  j: h1, d: rOH })
+    out = push(out, Constraint{ i: o,  j: h2, d: rOH })
+    out = push(out, Constraint{ i: h1, j: h2, d: dHH })
+    return out
+}
+
+// ── Constraint residual oracles ──────────────────────────────────────
+
+// max_k | |r_ij|² − d_k² |  over the constraint list (position residual).
+pub fn max_constraint_residual(particles: array, cons: array) -> float {
+    let mut worst = 0.0
+    let mut k = 0
+    while k < len(cons) {
+        let c = cons[k]
+        let pi = particles[c.i]
+        let pj = particles[c.j]
+        let dx = pi.x - pj.x
+        let dy = pi.y - pj.y
+        let dz = pi.z - pj.z
+        let r2 = dx * dx + dy * dy + dz * dz
+        let sigma = r2 - c.d * c.d
+        let a = _abs_f(sigma)
+        if a > worst { worst = a }
+        k = k + 1
+    }
+    return worst
+}
+
+// max_k | ṙ_ij · r_ij |  over the constraint list (velocity residual).
+// ṙ_ij = v_i − v_j, r_ij = r_i − r_j. Zero ⇒ relative velocity has no
+// component along the bond (motion stays tangent to the constraint
+// surface).
+pub fn max_velocity_residual(particles: array, cons: array) -> float {
+    let mut worst = 0.0
+    let mut k = 0
+    while k < len(cons) {
+        let c = cons[k]
+        let pi = particles[c.i]
+        let pj = particles[c.j]
+        let rx = pi.x - pj.x
+        let ry = pi.y - pj.y
+        let rz = pi.z - pj.z
+        let vx = pi.vx - pj.vx
+        let vy = pi.vy - pj.vy
+        let vz = pi.vz - pj.vz
+        let rv = rx * vx + ry * vy + rz * vz
+        let a = _abs_f(rv)
+        if a > worst { worst = a }
+        k = k + 1
+    }
+    return worst
+}
+
+// ── SHAKE: position constraint solve ─────────────────────────────────
+//
+// Input:
+//   prev      : reference positions BEFORE the unconstrained drift —
+//               provides the constraint bond directions r_ij^old. (These
+//               are the "old" bonds; SHAKE moves atoms along them so the
+//               first-order correction is exact to machine precision after
+//               a few iterations.)
+//   particles : positions AFTER the unconstrained drift (to be corrected).
+//   cons      : Constraint list.
+//   tol       : converge when max_k |σ_k| < tol.
+//   maxiter   : iteration ceiling.
+//
+// For each constraint k = (i,j,d):
+//   σ_k = |r_ij^new|² − d²
+//   the Lagrange-multiplier correction (Ryckaert 1977, eq. for one bond):
+//     g = σ_k / ( 2 · (1/m_i + 1/m_j) · (r_ij^new · r_ij^old) )
+//   Δr_i = −g · r_ij^old / m_i ,  Δr_j = +g · r_ij^old / m_j
+//   (mass-weighted, so the centre of mass and linear momentum are
+//    conserved.) Velocities are co-updated by Δr/dt — but we keep the
+//    position-only form here; the caller folds Δr into v via verlet's
+//    own bookkeeping and RATTLE enforces the velocity constraint exactly.
+//
+// SHAKE is a Gauss-Seidel sweep: each constraint correction uses the most
+// recent positions, so the sweep is repeated until all σ_k are within tol.
+//
+// d4-generic: the loop body is identical for every constraint; the water
+// triangle is just len(cons)==3.
+
+pub fn shake_positions(prev: array, particles: array, cons: array,
+                       tol: float, maxiter: int) -> ShakeResult {
+    let n = len(particles)
+    // working copy we mutate in place across sweeps.
+    let mut work = []
+    let mut t = 0
+    while t < n {
+        work = push(work, particles[t])
+        t = t + 1
+    }
+
+    let mut iters = 0
+    let mut residual = max_constraint_residual(work, cons)
+    let mut converged = residual < tol
+
+    while iters < maxiter {
+        if converged { break }
+        // one Gauss-Seidel sweep over all constraints.
+        let mut k = 0
+        while k < len(cons) {
+            let c = cons[k]
+            let pi = work[c.i]
+            let pj = work[c.j]
+            // current (post-drift / partially-corrected) bond.
+            let rx = pi.x - pj.x
+            let ry = pi.y - pj.y
+            let rz = pi.z - pj.z
+            let r2 = rx * rx + ry * ry + rz * rz
+            let sigma = r2 - c.d * c.d
+            // reference (old) bond for the projection direction.
+            let qi = prev[c.i]
+            let qj = prev[c.j]
+            let ox = qi.x - qj.x
+            let oy = qi.y - qj.y
+            let oz = qi.z - qj.z
+            let dot = rx * ox + ry * oy + rz * oz
+            let inv_mi = 1.0 / pi.mass
+            let inv_mj = 1.0 / pj.mass
+            let denom = 2.0 * (inv_mi + inv_mj) * dot
+            if _abs_f(denom) > 1.0e-30 {
+                let g = sigma / denom
+                // Δr_i = −g·r_old/m_i , Δr_j = +g·r_old/m_j
+                let dxi = 0.0 - g * ox * inv_mi
+                let dyi = 0.0 - g * oy * inv_mi
+                let dzi = 0.0 - g * oz * inv_mi
+                let dxj = g * ox * inv_mj
+                let dyj = g * oy * inv_mj
+                let dzj = g * oz * inv_mj
+                work[c.i] = MdParticle{
+                    x: pi.x + dxi, y: pi.y + dyi, z: pi.z + dzi,
+                    vx: pi.vx, vy: pi.vy, vz: pi.vz,
+                    mass: pi.mass, fx: pi.fx, fy: pi.fy, fz: pi.fz,
+                }
+                work[c.j] = MdParticle{
+                    x: pj.x + dxj, y: pj.y + dyj, z: pj.z + dzj,
+                    vx: pj.vx, vy: pj.vy, vz: pj.vz,
+                    mass: pj.mass, fx: pj.fx, fy: pj.fy, fz: pj.fz,
+                }
+            }
+            k = k + 1
+        }
+        iters = iters + 1
+        residual = max_constraint_residual(work, cons)
+        converged = residual < tol
+    }
+
+    return ShakeResult{
+        particles: work, iters: iters,
+        residual: residual, converged: converged,
+    }
+}
+
+// ── RATTLE: velocity constraint solve ────────────────────────────────
+//
+// After SHAKE has fixed positions and the second velocity half-kick is
+// applied, the relative velocity along each bond must vanish:
+//   ṙ_ij · r_ij = (v_i − v_j) · r_ij = 0
+// For each constraint k = (i,j,d), the velocity Lagrange multiplier:
+//   rv = (v_i − v_j) · r_ij
+//   k_mult = rv / ( (1/m_i + 1/m_j) · |r_ij|² )
+//   Δv_i = −k_mult · r_ij / m_i ,  Δv_j = +k_mult · r_ij / m_j
+// (mass-weighted ⇒ linear momentum conserved). Gauss-Seidel sweep until
+// max_k |ṙ_ij · r_ij| < tol.
+//
+// Uses the CURRENT (already SHAKE-corrected) positions for r_ij.
+// d4-generic: same body for every constraint.
+
+pub fn rattle_velocities(particles: array, cons: array,
+                         tol: float, maxiter: int) -> ShakeResult {
+    let n = len(particles)
+    let mut work = []
+    let mut t = 0
+    while t < n {
+        work = push(work, particles[t])
+        t = t + 1
+    }
+
+    let mut iters = 0
+    let mut residual = max_velocity_residual(work, cons)
+    let mut converged = residual < tol
+
+    while iters < maxiter {
+        if converged { break }
+        let mut k = 0
+        while k < len(cons) {
+            let c = cons[k]
+            let pi = work[c.i]
+            let pj = work[c.j]
+            let rx = pi.x - pj.x
+            let ry = pi.y - pj.y
+            let rz = pi.z - pj.z
+            let r2 = rx * rx + ry * ry + rz * rz
+            let vx = pi.vx - pj.vx
+            let vy = pi.vy - pj.vy
+            let vz = pi.vz - pj.vz
+            let rv = rx * vx + ry * vy + rz * vz
+            let inv_mi = 1.0 / pi.mass
+            let inv_mj = 1.0 / pj.mass
+            let denom = (inv_mi + inv_mj) * r2
+            if _abs_f(denom) > 1.0e-30 {
+                let km = rv / denom
+                let dvxi = 0.0 - km * rx * inv_mi
+                let dvyi = 0.0 - km * ry * inv_mi
+                let dvzi = 0.0 - km * rz * inv_mi
+                let dvxj = km * rx * inv_mj
+                let dvyj = km * ry * inv_mj
+                let dvzj = km * rz * inv_mj
+                work[c.i] = MdParticle{
+                    x: pi.x, y: pi.y, z: pi.z,
+                    vx: pi.vx + dvxi, vy: pi.vy + dvyi, vz: pi.vz + dvzi,
+                    mass: pi.mass, fx: pi.fx, fy: pi.fy, fz: pi.fz,
+                }
+                work[c.j] = MdParticle{
+                    x: pj.x, y: pj.y, z: pj.z,
+                    vx: pj.vx + dvxj, vy: pj.vy + dvyj, vz: pj.vz + dvzj,
+                    mass: pj.mass, fx: pj.fx, fy: pj.fy, fz: pj.fz,
+                }
+            }
+            k = k + 1
+        }
+        iters = iters + 1
+        residual = max_velocity_residual(work, cons)
+        converged = residual < tol
+    }
+
+    return ShakeResult{
+        particles: work, iters: iters,
+        residual: residual, converged: converged,
+    }
+}

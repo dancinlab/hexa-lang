@@ -1,0 +1,422 @@
+// stdlib/chem/md/pme.hexa — Smooth Particle-Mesh Ewald (SPME) reciprocal sum.
+//
+// QFORGE-BIO round-10: the FFT-accelerated replacement for the O(N²) direct
+// reciprocal sum in ewald.hexa. The physics-stack's last unsealed piece —
+// the direct Ewald recip sum scales O(N²·K³) (every charge × every k-vector),
+// which is intractable for large protein-ligand systems. PME spreads the
+// charges onto a regular mesh with cardinal B-splines, takes ONE fft3, does a
+// per-grid-point reciprocal multiply, and one inverse fft3 — O(N + K log K).
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// ── SCOPE (d3 / d19 — reuse, do NOT duplicate) ───────────────────────────
+// PME accelerates ONLY the reciprocal-space term. The real-space erfc sum,
+// the self-energy, and (implicitly) the neutralizing background are IDENTICAL
+// to direct Ewald and are REUSED verbatim from ewald.hexa
+//   ewald_real_energy · ewald_self_energy · ewald_default_alpha/kmax
+// fft3 / ifft3 are REUSED verbatim from stdlib/signal/core_fft.hexa (d19:
+// the same 3D FFT brick that QFORGE materials el-ph FFT-Poisson uses).
+//
+// References:
+//   Essmann, U. et al. (1995). A smooth particle mesh Ewald method.
+//     J. Chem. Phys. 103, 8577. DOI 10.1063/1.470117.   (canonical SPME)
+//   Darden, T., York, D. & Pedersen, L. (1993). Particle mesh Ewald: An
+//     N·log(N) method for Ewald sums in large systems.
+//     J. Chem. Phys. 98, 10089.                          (original PME)
+//   Deserno, M. & Holm, C. (1998). How to mesh up Ewald sums.
+//     J. Chem. Phys. 109, 7678.                          (B-spline / B(m) eigenvalues)
+//
+// ── METHOD (Smooth PME, Essmann 1995) ────────────────────────────────────
+// The direct reciprocal energy (ewald.hexa) is
+//   E_recip = (2π/V) Σ_{k≠0} exp(-k²/4α²)/k² · |S(k)|²,   S(k)=Σ_i q_i e^{ik·r_i}
+// with k = (2π/L)·m, m ∈ ℤ³. SPME approximates the exact structure factor
+// S(k) by an FFT of a B-spline-smeared charge grid:
+//   S(m) ≈ B(m) · F[Q](m),   Q = B-spline charge mesh,  F = forward DFT (fft3)
+// where B(m) = |b₁(m₁)|²|b₂(m₂)|²|b₃(m₃)|² is the B-spline Euler-spline
+// EIGENVALUE correction (Essmann eq. 4.4). Hence
+//   |S(m)|² ≈ B(m) · |F[Q](m)|²
+// and the reciprocal energy becomes a single per-grid-point sum:
+//   E_recip ≈ (2π/V) Σ_{m≠0} [exp(-k²/4α²)/k²] · B(m) · |F[Q](m)|²
+//                ──────────────────────────┬──────────────
+//                       influence function C(m) · B(m)
+//
+// The convolution theorem turns this into: build Q (charge spread) → fft3 →
+// multiply by the reciprocal kernel θ_rec(m) = C(m)·B(m) → the energy is
+// ½ Σ Q ⊙ (Q ⋆ θ_rec) realised in reciprocal space as Σ θ_rec |F[Q]|² (½ folded
+// into the (2π/V) prefactor exactly as ewald_recip_energy folds it). Forces use
+// the same convolved potential evaluated with the B-spline DERIVATIVE.
+//
+// k = (2π/L)·m here with the SAME |m|_∞ ≤ kmax spherical cutoff as the direct
+// recip sum, so for a fixed (α, kmax, grid) PME and direct Ewald are the SAME
+// truncated sum up to the B-spline discretisation of S(k) — the parity the
+// selftest pins.
+//
+// ── PUBLIC SURFACE ───────────────────────────────────────────────────────
+//   pub fn pme_recip_energy(charges, L, alpha, kmax, ngrid, spline_order) -> float
+//   pub fn pme_recip_forces(charges, L, alpha, kmax, ngrid, spline_order) -> array
+//   pub fn pme_total_energy(charges, L, tolerance, ngrid, spline_order) -> float
+//
+// All sizing is GENERIC (d4): grid size `ngrid` (power of 2, fft3 requirement),
+// B-spline `spline_order` n, β=alpha, k-cutoff `kmax` — no name hardcoding, the
+// charge set is the only instance datum. ngrid/spline_order/kmax independent.
+
+use "stdlib/signal/core_fft"
+use "stdlib/chem/md/ewald"
+
+let PME_PI = 3.141592653589793
+let PME_TWO_PI = 6.283185307179586
+
+fn _pme_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// ── cardinal B-spline M_n(u) (Essmann eq. 4.1, recursive) ────────────────
+//
+//   M_2(u) = 1 - |u-1|         for 0 ≤ u ≤ 2, else 0
+//   M_n(u) = (u/(n-1))·M_{n-1}(u) + ((n-u)/(n-1))·M_{n-1}(u-1)
+//
+// Support is [0, n]. Returns M_n(u). n ≥ 2.
+fn _pme_bspline(u: float, n: int) -> float {
+    if u <= 0.0 { return 0.0 }
+    if u >= to_float(n) { return 0.0 }
+    if n == 2 {
+        // M_2(u) = 1 - |u - 1|
+        return 1.0 - _pme_abs(u - 1.0)
+    }
+    // recurse
+    let nm1 = to_float(n - 1)
+    let a = u / nm1
+    let b = (to_float(n) - u) / nm1
+    return a * _pme_bspline(u, n - 1) + b * _pme_bspline(u - 1.0, n - 1)
+}
+
+// ── derivative dM_n/du (Essmann eq. 4.2) ─────────────────────────────────
+//   d/du M_n(u) = M_{n-1}(u) - M_{n-1}(u-1)
+fn _pme_bspline_deriv(u: float, n: int) -> float {
+    if n < 2 { return 0.0 }
+    return _pme_bspline(u, n - 1) - _pme_bspline(u - 1.0, n - 1)
+}
+
+// ── B-spline Euler-spline eigenvalue |b(m)|² (Essmann eq. 4.4) ────────────
+//
+//   b(m) = exp(2πi(n-1)m/K) / Σ_{k=0}^{n-2} M_n(k+1) exp(2πi m k / K)
+//   |b(m)|² = 1 / |Σ_{k=0}^{n-2} M_n(k+1) exp(2πi m k / K)|²
+//
+// (the numerator is unit-modulus). K = grid size on this axis, m = index.
+// For odd order at the Nyquist edge the denominator can vanish; we guard with
+// the standard "set |b|²=0 there" (Essmann footnote) — those modes carry no
+// weight. Returns |b(m)|².
+fn _pme_bsp_eigen(m: int, K: int, n: int) -> float {
+    // denominator Σ_{k=0}^{n-2} M_n(k+1)·exp(2πi m k / K)
+    let mut sr = 0.0
+    let mut si = 0.0
+    let mut k = 0
+    while k <= n - 2 {
+        let mn = _pme_bspline(to_float(k + 1), n)
+        let phase = PME_TWO_PI * to_float(m) * to_float(k) / to_float(K)
+        sr = sr + mn * cos(phase)
+        si = si + mn * sin(phase)
+        k = k + 1
+    }
+    let denom = sr * sr + si * si
+    if denom < 1.0e-12 { return 0.0 }
+    return 1.0 / denom
+}
+
+// ── charge spreading: build the B-spline charge mesh Q (real, length N) ──
+//
+// Each charge q_i at fractional grid coordinate u_i = K_a · s_a (s = r/L ∈ [0,1))
+// is smeared onto the `spline_order` nearest grid points along each axis with
+// weight q_i · M_n(u_i - floor(u_i) + j) (Essmann eq. 4.6), wrapped periodically.
+fn _pme_spread_charge(charges: array, L: float, nx: int, ny: int, nz: int, n: int) -> array {
+    let ntot = nx * ny * nz
+    let mut Q = []
+    let mut z = 0
+    while z < ntot { Q = Q.push(0.0)  z = z + 1 }
+
+    let na = len(charges)
+    let mut i = 0
+    while i < na {
+        let c = charges[i]
+        // fractional coordinate in [0,1) then scaled to grid
+        let mut sx = c.x / L
+        let mut sy = c.y / L
+        let mut sz = c.z / L
+        sx = sx - to_float(floor(sx))
+        sy = sy - to_float(floor(sy))
+        sz = sz - to_float(floor(sz))
+        let ux = sx * to_float(nx)
+        let uy = sy * to_float(ny)
+        let uz = sz * to_float(nz)
+        let gx0 = to_int(floor(ux))
+        let gy0 = to_int(floor(uy))
+        let gz0 = to_int(floor(uz))
+        let fx = ux - to_float(gx0)
+        let fy = uy - to_float(gy0)
+        let fz = uz - to_float(gz0)
+
+        // smear over the n nearest points along each axis
+        let mut jx = 0
+        while jx < n {
+            // B-spline argument: u - (g0 - jx) measured from the leftmost support point.
+            // grid point gx = g0 - jx ; weight M_n(fx + jx)
+            let wx = _pme_bspline(fx + to_float(jx), n)
+            let gx = ((gx0 - jx) % nx + nx) % nx
+            let mut jy = 0
+            while jy < n {
+                let wy = _pme_bspline(fy + to_float(jy), n)
+                let gy = ((gy0 - jy) % ny + ny) % ny
+                let mut jz = 0
+                while jz < n {
+                    let wz = _pme_bspline(fz + to_float(jz), n)
+                    let gz = ((gz0 - jz) % nz + nz) % nz
+                    let idx = (gx * ny + gy) * nz + gz
+                    Q[idx] = Q[idx] + c.q * wx * wy * wz
+                    jz = jz + 1
+                }
+                jy = jy + 1
+            }
+            jx = jx + 1
+        }
+        i = i + 1
+    }
+    return Q
+}
+
+// ── reciprocal energy via PME ─────────────────────────────────────────────
+//
+// E_recip = (2π/V) Σ_{m≠0, |m|≤kmax} C(m)·B(m)·|F[Q](m)|²
+//   C(m) = exp(-k²/4α²)/k²,  k=(2π/L)m,  B(m)=|b_x|²|b_y|²|b_z|²
+//
+// m ranges over the signed Brillouin indices: index g on the grid maps to
+//   m = g            for g ≤ K/2
+//   m = g - K        for g >  K/2
+// (the FFT's natural frequency ordering), matching the direct sum's n-range.
+pub fn pme_recip_energy(charges: array, L: float, alpha: float, kmax: int, ngrid: int, spline_order: int) -> float {
+    let na = len(charges)
+    if na < 1 { return 0.0 }
+    if L <= 0.0 { return 0.0 }
+    let nx = ngrid
+    let ny = ngrid
+    let nz = ngrid
+    let n = spline_order
+    let ntot = nx * ny * nz
+
+    // 1) spread charge to mesh
+    let Q = _pme_spread_charge(charges, L, nx, ny, nz, n)
+    // 2) forward fft3 (real input)
+    let FQ = fft3_real(Q, nx, ny, nz)
+    if len(FQ) == 0 { return 0.0 }   // malformed grid (non-pow2) guard
+
+    let V = L * L * L
+    let inv_4a2 = 1.0 / (4.0 * alpha * alpha)
+    let prefactor = PME_TWO_PI / V
+    let n2_lim = kmax * kmax
+
+    let mut e = 0.0
+    let mut gx = 0
+    while gx < nx {
+        let mx = if gx * 2 > nx { gx - nx } else { gx }
+        let bx = _pme_bsp_eigen(gx, nx, n)
+        let mut gy = 0
+        while gy < ny {
+            let my = if gy * 2 > ny { gy - ny } else { gy }
+            let by = _pme_bsp_eigen(gy, ny, n)
+            let mut gz = 0
+            while gz < nz {
+                let mz = if gz * 2 > nz { gz - nz } else { gz }
+                if mx != 0 || my != 0 || mz != 0 {
+                    let nsq = mx * mx + my * my + mz * mz
+                    if nsq <= n2_lim {
+                        let bz = _pme_bsp_eigen(gz, nz, n)
+                        let kx = PME_TWO_PI * to_float(mx) / L
+                        let ky = PME_TWO_PI * to_float(my) / L
+                        let kz = PME_TWO_PI * to_float(mz) / L
+                        let k2 = kx * kx + ky * ky + kz * kz
+                        if k2 > 0.0 {
+                            let idx = (gx * ny + gy) * nz + gz
+                            let fr = FQ[idx * 2]
+                            let fi = FQ[idx * 2 + 1]
+                            let s2 = fr * fr + fi * fi
+                            let C = exp(0.0 - k2 * inv_4a2) / k2
+                            let B = bx * by * bz
+                            e = e + C * B * s2
+                        }
+                    }
+                }
+                gz = gz + 1
+            }
+            gy = gy + 1
+        }
+        gx = gx + 1
+    }
+    return prefactor * e
+}
+
+// ── reciprocal forces via PME (convolution + B-spline derivative) ─────────
+//
+// F_i^recip = -∂E_recip/∂r_i. SPME computes the convolved reciprocal potential
+//   θ_rec(m) = (4π/V)·C(m)·B(m)·F[Q](m)   (the recip-space Green's function ×
+// the smeared charge), inverse-FFTs it to a real-space potential grid φ_rec,
+// then F_i = -q_i Σ_grid (dM/du along each axis) · φ_rec  (Essmann eq. 4.9).
+//
+// Returns a flat [fx0,fy0,fz0, fx1,fy1,fz1, ...] array (3·na floats).
+pub fn pme_recip_forces(charges: array, L: float, alpha: float, kmax: int, ngrid: int, spline_order: int) -> array {
+    let na = len(charges)
+    let nx = ngrid
+    let ny = ngrid
+    let nz = ngrid
+    let n = spline_order
+    let ntot = nx * ny * nz
+
+    let mut F = []
+    let mut zf = 0
+    while zf < 3 * na { F = F.push(0.0)  zf = zf + 1 }
+    if na < 1 { return F }
+    if L <= 0.0 { return F }
+
+    // 1) spread + forward fft3
+    let Q = _pme_spread_charge(charges, L, nx, ny, nz, n)
+    let FQ = fft3_real(Q, nx, ny, nz)
+    if len(FQ) == 0 { return F }
+
+    let V = L * L * L
+    let inv_4a2 = 1.0 / (4.0 * alpha * alpha)
+    // recip Green's function prefactor: θ_rec = (2/V)·(2π)·C·B·F[Q]
+    //   (the factor 2 vs energy's 1× comes from E = ½ Σ_grid Q·(Q⋆θ); the
+    //    field that acts on a charge is ∂E/∂Q = the full convolution, hence
+    //    the energy prefactor 2π/V × 2.)
+    let pref = 2.0 * PME_TWO_PI / V
+    let n2_lim = kmax * kmax
+
+    // 2) build θ_rec(m) = pref·C·B·F[Q]  (complex grid)
+    let mut tre = []
+    let mut tim = []
+    let mut z = 0
+    while z < ntot { tre = tre.push(0.0)  tim = tim.push(0.0)  z = z + 1 }
+
+    let mut gx = 0
+    while gx < nx {
+        let mx = if gx * 2 > nx { gx - nx } else { gx }
+        let bx = _pme_bsp_eigen(gx, nx, n)
+        let mut gy = 0
+        while gy < ny {
+            let my = if gy * 2 > ny { gy - ny } else { gy }
+            let by = _pme_bsp_eigen(gy, ny, n)
+            let mut gz = 0
+            while gz < nz {
+                let mz = if gz * 2 > nz { gz - nz } else { gz }
+                if mx != 0 || my != 0 || mz != 0 {
+                    let nsq = mx * mx + my * my + mz * mz
+                    if nsq <= n2_lim {
+                        let bz = _pme_bsp_eigen(gz, nz, n)
+                        let kx = PME_TWO_PI * to_float(mx) / L
+                        let ky = PME_TWO_PI * to_float(my) / L
+                        let kz = PME_TWO_PI * to_float(mz) / L
+                        let k2 = kx * kx + ky * ky + kz * kz
+                        if k2 > 0.0 {
+                            let idx = (gx * ny + gy) * nz + gz
+                            let C = exp(0.0 - k2 * inv_4a2) / k2
+                            let w = pref * C * bx * by * bz
+                            tre[idx] = w * FQ[idx * 2]
+                            tim[idx] = w * FQ[idx * 2 + 1]
+                        }
+                    }
+                }
+                gz = gz + 1
+            }
+            gy = gy + 1
+        }
+        gx = gx + 1
+    }
+
+    // 3) inverse fft3 → real-space convolved potential φ_rec (take real part).
+    //    ∂E/∂Q(g) = 2·(2π/V)·Re[ Σ_m θ·FQ·e^{+ik·g} ] and ifft3 carries a 1/N,
+    //    so the convolution Σ_m(…) = N·ifft3(θ·FQ); multiply the real part by N.
+    let phi = ifft3(tre, tim, nx, ny, nz)
+    if len(phi) == 0 { return F }
+    let Nf = to_float(ntot)
+
+    // 4) F_i = -q_i Σ_grid [∂(M_x M_y M_z)/∂r_i] φ_rec(grid)
+    //    ∂/∂x uses the B-spline derivative on the x-axis (× K/L chain rule).
+    let mut i = 0
+    while i < na {
+        let c = charges[i]
+        let mut sx = c.x / L
+        let mut sy = c.y / L
+        let mut sz = c.z / L
+        sx = sx - to_float(floor(sx))
+        sy = sy - to_float(floor(sy))
+        sz = sz - to_float(floor(sz))
+        let ux = sx * to_float(nx)
+        let uy = sy * to_float(ny)
+        let uz = sz * to_float(nz)
+        let gx0 = floor(ux)
+        let gy0 = floor(uy)
+        let gz0 = floor(uz)
+        let fx = ux - to_float(gx0)
+        let fy = uy - to_float(gy0)
+        let fz = uz - to_float(gz0)
+
+        let mut fxacc = 0.0
+        let mut fyacc = 0.0
+        let mut fzacc = 0.0
+        let dKLx = to_float(nx) / L
+        let dKLy = to_float(ny) / L
+        let dKLz = to_float(nz) / L
+
+        let mut jx = 0
+        while jx < n {
+            let mxv = _pme_bspline(fx + to_float(jx), n)
+            let dxv = _pme_bspline_deriv(fx + to_float(jx), n)
+            let gxi = ((to_int(gx0) - jx) % nx + nx) % nx
+            let mut jy = 0
+            while jy < n {
+                let myv = _pme_bspline(fy + to_float(jy), n)
+                let dyv = _pme_bspline_deriv(fy + to_float(jy), n)
+                let gyi = ((to_int(gy0) - jy) % ny + ny) % ny
+                let mut jz = 0
+                while jz < n {
+                    let mzv = _pme_bspline(fz + to_float(jz), n)
+                    let dzv = _pme_bspline_deriv(fz + to_float(jz), n)
+                    let gzi = ((to_int(gz0) - jz) % nz + nz) % nz
+                    let gidx = (gxi * ny + gyi) * nz + gzi
+                    let p = phi[gidx * 2] * Nf   // real part of convolved potential (×N undoes ifft3 1/N)
+                    // ∂M/∂(grid u) → ∂/∂r via chain factor (K/L); the grid index
+                    // gx = g0 - jx so ∂u/∂x = +K/L and the spread weight argument
+                    // is (f + jx), giving F = -q · dM · (K/L) · φ.
+                    fxacc = fxacc + dxv * dKLx * myv * mzv * p
+                    fyacc = fyacc + mxv * dyv * dKLy * mzv * p
+                    fzacc = fzacc + mxv * myv * dzv * dKLz * p
+                    jz = jz + 1
+                }
+                jy = jy + 1
+            }
+            jx = jx + 1
+        }
+        F[i * 3]     = 0.0 - c.q * fxacc
+        F[i * 3 + 1] = 0.0 - c.q * fyacc
+        F[i * 3 + 2] = 0.0 - c.q * fzacc
+        i = i + 1
+    }
+    return F
+}
+
+// ── total electrostatic energy via PME (real+recip+self) ─────────────────
+//
+// real-space erfc sum + self-energy REUSED verbatim from ewald.hexa (d3); only
+// the reciprocal term is FFT-accelerated. tolerance-driven α/kmax (same as
+// ewald_total_energy) so PME and direct Ewald share parameters exactly.
+pub fn pme_total_energy(charges: array, L: float, tolerance: float, ngrid: int, spline_order: int) -> float {
+    if len(charges) == 0 { return 0.0 }
+    if L <= 0.0 { return 0.0 }
+    let rc = 0.5 * L
+    let alpha = ewald_default_alpha(rc, tolerance)
+    let kmax = ewald_default_kmax(L, alpha, tolerance)
+    let e_real  = ewald_real_energy(charges, L, alpha, rc)
+    let e_recip = pme_recip_energy(charges, L, alpha, kmax, ngrid, spline_order)
+    let e_self  = ewald_self_energy(charges, alpha)
+    return e_real + e_recip + e_self
+}

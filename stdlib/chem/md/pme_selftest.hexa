@@ -1,0 +1,185 @@
+// @ci_gate
+// stdlib/chem/md/pme_selftest.hexa — g5 seal for Smooth Particle-Mesh Ewald.
+//
+// QFORGE-BIO round-10: the FFT-accelerated reciprocal sum (pme.hexa) is pinned
+// against the O(N²) direct Ewald reciprocal sum (ewald.hexa) — same (α, kmax),
+// so the only difference is the B-spline mesh discretisation of the structure
+// factor S(k). Parity to that discretisation error PROVES the FFT path computes
+// the same physics as the direct sum.
+//
+// Run:
+//   hexa run stdlib/chem/md/pme_selftest.hexa
+//
+// Checks (VERBATIM honest — d6/@L5):
+//   (a) RECIP PARITY    PME recip E  == direct Ewald recip E (small system)  |Δ|<1e-4
+//   (b) TOTAL PARITY    PME total (real+PME recip+self) == Ewald total       |Δ|<1e-4
+//   (c) FORCE MATCH     PME recip force == central-FD of PME recip energy     max|Δ|<1e-3
+//   (d) NEUTRAL INVAR.  uniform translation leaves total electrostatic E unchanged (gauge)
+//   (e) SCALING         denser grid / higher B-spline order ⇒ |Δ| → 0 monotonically
+//
+// fft3 here is the REAL radix-2 3D FFT brick (stdlib/signal/core_fft.hexa,
+// reused verbatim) — NOT a naive DFT. Grids are powers of 2 (fft3 requirement).
+
+use "stdlib/chem/md/pme"
+use "stdlib/chem/md/ewald"
+
+let mut pass_count = 0
+let mut total = 0
+let mut first_fail = ""
+
+fn abs_f(x: float) -> float { if x < 0.0 { return 0.0 - x } else { return x } }
+
+fn check(name: string, cond: bool, detail: string) {
+    total = total + 1
+    if cond {
+        pass_count = pass_count + 1
+        println("  ok : " + name + "   " + detail)
+    } else {
+        if first_fail == "" { first_fail = name }
+        println("  FAIL " + name + "   " + detail)
+    }
+}
+
+// A reusable small charge set (net-neutral, asymmetric placement so every
+// reciprocal mode carries weight). Built fresh each time it is needed so no
+// test mutates another's input.
+fn make_charges() -> array {
+    return [
+        EwaldCharge{x: 1.0, y: 1.0, z: 1.0, q:  1.0},
+        EwaldCharge{x: 4.0, y: 2.0, z: 1.5, q: -1.0},
+        EwaldCharge{x: 2.0, y: 7.0, z: 3.0, q:  0.5},
+        EwaldCharge{x: 6.0, y: 5.0, z: 8.0, q: -0.5}
+    ]
+}
+
+// translate every charge by (dx,dy,dz) — for the gauge-invariance test.
+fn translate(cs: array, dx: float, dy: float, dz: float) -> array {
+    let mut out = []
+    let mut i = 0
+    while i < len(cs) {
+        let c = cs[i]
+        out = out.push(EwaldCharge{x: c.x + dx, y: c.y + dy, z: c.z + dz, q: c.q})
+        i = i + 1
+    }
+    return out
+}
+
+fn main() {
+    let L = 10.0
+    let tol = 1.0e-5
+    let rc = 0.5 * L
+    let alpha = ewald_default_alpha(rc, tol)
+    let kmax = ewald_default_kmax(L, alpha, tol)
+    let ngrid = 32
+    let order = 6
+
+    println("PME selftest — Smooth Particle-Mesh Ewald (QFORGE-BIO R10)")
+    println("  L=" + to_string(L) + " alpha=" + to_string(alpha) + " kmax=" + to_string(kmax) + " grid=" + to_string(ngrid) + "^3 order=" + to_string(order))
+    println("")
+
+    // ── (a) RECIP PARITY: PME recip == direct Ewald recip ──
+    let cs_a = make_charges()
+    let e_dir = ewald_recip_energy(cs_a, L, alpha, kmax)
+    let e_pme = pme_recip_energy(cs_a, L, alpha, kmax, ngrid, order)
+    let d_recip = abs_f(e_pme - e_dir)
+    check("a_recip_parity",
+          d_recip < 1.0e-4,
+          "PME=" + to_string(e_pme) + " direct=" + to_string(e_dir) + " |Δ|=" + to_string(d_recip))
+
+    // ── (b) TOTAL PARITY: full electrostatic energy ──
+    let cs_b = make_charges()
+    let tot_pme = pme_total_energy(cs_b, L, tol, ngrid, order)
+    let tot_dir = ewald_total_energy(cs_b, L, tol)
+    let d_tot = abs_f(tot_pme - tot_dir)
+    check("b_total_parity",
+          d_tot < 1.0e-4,
+          "PME=" + to_string(tot_pme) + " Ewald=" + to_string(tot_dir) + " |Δ|=" + to_string(d_tot))
+
+    // ── (c) FORCE MATCH: PME recip force vs central-FD of PME recip energy ──
+    // FD on EACH of the 12 (= 4 charges × 3 axes) components; report max |Δ|.
+    let cs_c = make_charges()
+    let force = pme_recip_forces(cs_c, L, alpha, kmax, ngrid, order)
+    let h = 1.0e-4
+    let na = len(cs_c)
+    let mut max_fd = 0.0
+    let mut ia = 0
+    while ia < na {
+        let mut ax = 0
+        while ax < 3 {
+            // perturb component (ia, ax) by ±h, rebuild the charge list, FD.
+            let mut csp = []
+            let mut csm = []
+            let mut jj = 0
+            while jj < na {
+                let c = cs_c[jj]
+                let mut px = c.x
+                let mut py = c.y
+                let mut pz = c.z
+                let mut mx = c.x
+                let mut my = c.y
+                let mut mz = c.z
+                if jj == ia {
+                    if ax == 0 { px = c.x + h  mx = c.x - h }
+                    if ax == 1 { py = c.y + h  my = c.y - h }
+                    if ax == 2 { pz = c.z + h  mz = c.z - h }
+                }
+                csp = csp.push(EwaldCharge{x: px, y: py, z: pz, q: c.q})
+                csm = csm.push(EwaldCharge{x: mx, y: my, z: mz, q: c.q})
+                jj = jj + 1
+            }
+            let ep = pme_recip_energy(csp, L, alpha, kmax, ngrid, order)
+            let em = pme_recip_energy(csm, L, alpha, kmax, ngrid, order)
+            let fd = 0.0 - (ep - em) / (2.0 * h)
+            let fan = force[ia * 3 + ax]
+            let d = abs_f(fan - fd)
+            if d > max_fd { max_fd = d }
+            ax = ax + 1
+        }
+        ia = ia + 1
+    }
+    check("c_force_match_fd",
+          max_fd < 1.0e-3,
+          "max|F_analytic − F_FD| over 12 components = " + to_string(max_fd))
+
+    // ── (d) NEUTRAL INVARIANCE: rigid translation leaves total E unchanged ──
+    // For a net-neutral system under PBC the electrostatic energy is gauge/
+    // translation invariant. Shift every charge by a non-lattice vector and the
+    // PME total must be unchanged (the recip phase factors absorb the shift).
+    let cs_d0 = make_charges()
+    let e0 = pme_total_energy(cs_d0, L, tol, ngrid, order)
+    let cs_d1 = translate(make_charges(), 1.37, 0.0, 0.0)
+    let e1 = pme_total_energy(cs_d1, L, tol, ngrid, order)
+    let cs_d2 = translate(make_charges(), 0.5, 2.1, 3.3)
+    let e2 = pme_total_energy(cs_d2, L, tol, ngrid, order)
+    let d_t1 = abs_f(e1 - e0)
+    let d_t2 = abs_f(e2 - e0)
+    let d_trans = if d_t1 > d_t2 { d_t1 } else { d_t2 }
+    check("d_translation_gauge_invariance",
+          d_trans < 1.0e-4,
+          "E0=" + to_string(e0) + " max|E(shift)−E0|=" + to_string(d_trans))
+
+    // ── (e) SCALING: PME → direct Ewald as grid/order increase (monotone |Δ|↓) ──
+    // Coarse grid + low order has the LARGEST discretisation error; refining the
+    // mesh must shrink |Δ| monotonically toward the direct sum.
+    let cs_e = make_charges()
+    let ref_dir = ewald_recip_energy(cs_e, L, alpha, kmax)
+    let d_g8o4  = abs_f(pme_recip_energy(cs_e, L, alpha, kmax,  8, 4) - ref_dir)
+    let d_g16o4 = abs_f(pme_recip_energy(cs_e, L, alpha, kmax, 16, 4) - ref_dir)
+    let d_g16o6 = abs_f(pme_recip_energy(cs_e, L, alpha, kmax, 16, 6) - ref_dir)
+    let d_g32o6 = abs_f(pme_recip_energy(cs_e, L, alpha, kmax, 32, 6) - ref_dir)
+    println("  scaling ladder |Δ|:  g8/o4=" + to_string(d_g8o4) + "  g16/o4=" + to_string(d_g16o4) + "  g16/o6=" + to_string(d_g16o6) + "  g32/o6=" + to_string(d_g32o6))
+    // monotone refinement: grid↑ shrinks Δ, and order↑ at fixed grid shrinks Δ.
+    let mono = (d_g16o4 < d_g8o4) && (d_g16o6 < d_g16o4) && (d_g32o6 < d_g16o6)
+    check("e_scaling_convergence_monotone",
+          mono,
+          "grid/order refine ⇒ |Δ| strictly decreasing toward direct sum")
+
+    println("")
+    if first_fail == "" {
+        println("ALL PASS — stdlib/chem/md PME (Smooth Particle-Mesh Ewald) " + to_string(pass_count) + "/" + to_string(total))
+        println("PME == direct Ewald to B-spline discretisation; FFT-accelerated reciprocal sum SEALED.")
+    } else {
+        println("FAILURES (" + to_string(total - pass_count) + "/" + to_string(total) + ") first=" + first_fail)
+        exit(1)
+    }
+}
