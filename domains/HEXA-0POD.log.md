@@ -3978,3 +3978,64 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   len0→[] len1→[0.0] (matches the fixed-free BC); n≥2 uniform mesh ⇒ u(x_k)=P_tip*x_k/(E*A); thomas_tridiag(empty)→[].
   $0 · 0-pod · NO GPU · no vast · no foreign-pod · no .tape · leak-0. Milestone OP-103 [x]. Verdict
   F-OP103-SLICE-BOUNDS-SWEEP.txt.
+
+## OP-106 — SYSTEMIC degenerate-INPUT-crash class sweep (LANE-1, empty-list stats/reduce/normalize flavor); class CLEAN except ONE module 🔴 (matrix axis-reductions) → FIXED + locked — 2026-06-13
+- SCOPE: LANE-1 (stats / reducer / normalizer / matrix-reduce / numeric public APIs — NOT net/string-parser/crypto/
+  tls/binary = LANE-2). CLASS: a PUBLIC `pub fn` that on a DEGENERATE input (empty list, size-0/1, zero-length
+  reduction axis, all-equal, divide-by-sum=0, 1-point) indexes an empty array (x[0]/x[n-1]) or divides by a zero
+  count WITHOUT a guard → OOB read or div-by-0 crash. Sibling of OP-103 (slice/window RANGE flavor); OP-106 = the
+  empty-LIST stats/reduce/normalize flavor.
+- CENSUS (scoped greps, NO .git): RUNTIME NUMERIC/MATH (stdlib/runtime/{numeric,math}.hexa) ALL GUARDED with
+  documented empty→saturation contracts — rt_array_mean/min_float/max_float `if n==0 {return 0.0}`,
+  rt_array_sum/product accumulator-init, rt_argmax `if n==0 {return -1}`, rt_softmax/rt_rms_norm_scalar/array
+  `if n==0 {return out}` + sum>0/s==0 guards. STATS/INFO ALL GUARDED — stats/powerlaw_fit `n<3→0.0`/`m<2→0.0`/
+  `denom==0→0.0`, stats/correlation pearson_r denom=sqrt(dx2·dy2)≤0→0.0 (NaN-tolerant, no index) + spearman_rho
+  farr_zeros(0)→pearson_r(…,0)→0.0, info/entropy shannon_entropy `if total==0 {return 0.0}`+1e-8 smoothing. SIGNAL
+  ALL GUARDED (also OP-103) — autocorrelation `n≤0→[]`, autocorrelation_normalized `raw_len==0→[]`+`r0==0.0→[]`.
+  MATRIX construct/stack ALL SAFE (zeros/ones/eye/diag + vstack/hstack/transpose loop-bounded over m/n, no
+  reduction div/index).
+- 🔴 THE ONE MODULE — stdlib/matrix/mod.hexa axis-reductions: the header contract (flat row-major M, explicit (m,n),
+  axis0 collapses rows→out len n, axis1 collapses cols→out len m) has NO documented m≥1/n≥1 precondition, so a
+  0-row/0-col (empty) matrix is a plausible degenerate input, and the reduction along the collapsed axis runs
+  UNCONDITIONALLY: matrix_mean_axis/std_axis `s/to_float(m|n)` with m|n==0 = div-by-0; matrix_argmax_axis
+  `best_v=M[j]`(axis0)/`M[i*n]`(axis1) reads the empty M = OOB. (matrix_sum_axis is SAFE — no division, loops skip
+  → zeros per bin.)
+- VERBATIM REPRO (shipping `hexa run`, hermetic verbatim-inlined UNFIXED bodies):
+    matrix_mean_axis([],0,3,0) → `mean m=0,n=3,axis=0:division by zero`
+    matrix_std_axis([],0,3,0)  → `std m=0,n=3,axis=0:division by zero`
+    matrix_argmax_axis([],0,3,0) → `--- m=0,n=3,axis=0 (argmax over columns of an empty matrix) ---index 0 out of bounds (len 0)`
+    matrix_argmax_axis([],4,0,1) (axis-1 flavor) → `UNFIXED argmax m=4,n=0,axis=1:index 0 out of bounds (len 0)`
+- FIX (minimal, additive, 0 deletions; saturate the degenerate empty reduction axis):
+    matrix_mean_axis:   `out.push(if m == 0 { 0.0 } else { s / to_float(m) })` (axis0) + `if n == 0 { 0.0 }…` (axis1)
+    matrix_std_axis:    `if m == 0 { out.push(0.0); j = j + 1; continue }` (axis0, before div) + `if n == 0 …` (axis1)
+    matrix_argmax_axis: `if m == 0 { out.push(0); j = j + 1; continue }` (axis0, before M[j]) + `if n == 0 …` (axis1)
+  RATIONALE: mean/std of NO elements → 0.0 (matches the sibling matrix_sum_axis zeros + the runtime rt_array_mean
+  empty→0.0 contract); argmax over NO elements → index 0 (smallest-index tie convention degenerates). OUTPUT LENGTH
+  (n axis0 / m axis1) PRESERVED — same shape, saturated values, no crash.
+- POST-FIX CROSS-CHECK (verbatim-inlined FIXED bodies): `OK mean m=0,n=3,axis=0 -> [0,0,0]` · `OK mean m=4,n=0,axis=1
+  -> 4x0.0` · `OK std m=0,n=3,axis=0 -> [0,0,0]` · `OK argmax m=0,n=3,axis=0 -> [0,0,0]` · `OK argmax m=4,n=0,axis=1
+  -> 4x0` · `OK 0x0 -> []` · `OK mean 2x3 axis0 [2.5,4,4]` · `OK argmax 2x3 axis0 [1,1,1]` · `OK argmax 2x3 axis1
+  [2,1]` → pass=9 fail=0. Degenerate empty axis saturates to the documented default; the m≥1/n≥1 reductions are
+  UNCHANGED bit-for-bit (no regression).
+- LOCK: NEW stdlib/matrix/test/matrix_degenerate_op106_test.hexa — HERMETIC (the 3 fn bodies verbatim-inlined WITH
+  the fix, no `use` — stale-bundle dodge OP-87/88), shipping `hexa run` LOCAL → `OP-106 matrix degenerate-axis lock:
+  pass=10 fail=0` `ALL GREEN` (mean/std/argmax m=0 & n=0 both axes → saturated bins · 0x0→[] · normal 2x3 mean
+  [2.5,4,4] · argmax axis0 [1,1,1] · argmax axis1 [2,1]). NEGATIVE CONTROL (not a tautology): the UNFIXED bodies
+  CRASH on the empty matrix — mean/std `division by zero`, argmax `index 0 out of bounds (len 0)` (the verbatim
+  repros) — the guard converts each crash into the saturated default; the normal-2x3 asserts catch any regression
+  of the guard OR the reduction math.
+- DOMAIN-INTERNAL NOTE (not fixed): qforge/smearing qforge_fermi_level reads `evals[0]` with no emptiness guard
+  (empty band list → `index 0 out of bounds (len 0)`) — left as a domain-internal physics precondition (a Fermi
+  level over ZERO bands is physically undefined, n≥1-band implicit, analogous to OP-103's FEM n≥2), not a
+  general-purpose-API bug; noted for honesty, expanding here would change a domain contract (out of sweep scope).
+- BYTE-EQ / GUARDS: stdlib/matrix/mod.hexa is NOT in the build_selfhost closure (no self/* nor build_selfhost.sh
+  ref — leaf numeric stdlib) → ZERO byte-eq/fixpoint impact, no selfhost gate. Edit purely ADDITIVE (8 guard/continue
+  lines across the 3 fns), 0 deletions → wipe_guard net-additive. NEW leaf test closure-OUT → fixpoint UNAFFECTED.
+  LANE-1 only (NO net/string-parser/crypto/tls edits — LANE-2 territory untouched); no overlap with OP-103 (range
+  flavor). INVARIANTS LOCKED: matrix_mean_axis/std_axis never divide by a zero reduction count (empty axis → 0.0/bin,
+  output length preserved); matrix_argmax_axis never indexes the backing array on an empty reduction axis (empty
+  axis → 0/bin, length preserved); normal m≥1/n≥1 reductions UNCHANGED bit-for-bit. HONEST g5: the class is
+  otherwise CLEAN (runtime/stats/info/signal ALL guard the degenerate with documented empty→saturation contracts —
+  a guarded/documented-precond site = CLEAN not a bug, no fabrication); the ONE genuine UNDOCUMENTED crash was the
+  matrix axis-reductions → FIXED. $0 · 0-pod · NO GPU · no vast · no foreign-pod · no .tape · leak-0. Milestone
+  OP-106 [x]. Verdict F-OP106-DEGENERATE-CRASH-SWEEP.txt.
