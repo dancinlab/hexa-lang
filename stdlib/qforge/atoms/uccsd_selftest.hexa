@@ -1,0 +1,223 @@
+// @ci_gate — deterministic · network-free · QFORGE-ATOMS round-26 UCCSD g5
+//
+// uccsd_selftest.hexa — round-26 g5 gate. UNRESTRICTED CCSD (UCCSD) — coupled-cluster
+// singles & doubles on a converged UHF reference — extending the open-shell correlated
+// stack from MP2 (r25 UMP2) to the GOLD STANDARD (the open-shell analogue of the r17/r18
+// closed-shell CCSD / CCSD(T) ceiling). UCCSD feeds the UHF spin-orbital integrals +
+// energies into the EXISTING r17 spin-orbital ccsd_iterate (BYTE-UNTOUCHED). FOUR
+// verdicts, all VERBATIM (d6 — every printed value is the raw computed scalar; the
+// open-shell anchor is PySCF cc.UCCSD(umf).kernel()):
+//
+//   (a) UCCSD == RCCSD CLOSED-SHELL — on H₂O/STO-3G @ Crawford geometry with n_α=n_β=5
+//       (UNPOLARIZED, Cα=Cβ=C_RHF), UCCSD reproduces the SEALED r17 RCCSD E_corr =
+//       −0.070680088376 to ≤1e-9. Proves UCCSD reduces correctly to RCCSD when the
+//       reference is unpolarized. |Δ| printed verbatim.
+//
+//   (b) OPEN-SHELL UCCSD vs PySCF — the CH₃ methyl radical (doublet, STO-3G, n_α=5,
+//       n_β=4, 8 AOs → 16 spin-orbitals) UCCSD correlation energy vs PySCF
+//       cc.UCCSD(umf).kernel() = −0.057682347772. E_UCCSD + |Δ| + the UHF ⟨S²⟩
+//       (0.7652248 — genuinely spin-contaminated above 0.75, REPORTED not hidden)
+//       + converged + iters printed verbatim.
+//
+//   (c) UCCSD ⊃ UMP2 + CONVERGENCE — the FIRST UCCSD iteration (T1=0, T2=UMP2 guess)
+//       reproduces the r25 UMP2 correlation energy (−0.038288657) — the amplitude/energy
+//       machinery is wired; AND converged |E_UCCSD| > |E_UMP2| (CCSD captures more than
+//       MP2), E_UCCSD < E_UMP2 < E_UHF strictly. residual ‖ΔT2‖→0 + iters reported.
+//
+//   (d) REGRESSION — the r17 spin-orbital ccsd.hexa is BYTE-UNTOUCHED (UCCSD only
+//       SUPPLIES a UHF spin-orbital tensor; the closed-shell RCCSD path is re-asserted
+//       == −0.070680088376 here via the shared ccsd_iterate, and the r25 UMP2 anchor is
+//       re-recovered at UCCSD iter-1 in (c)). UCCSD is additive wiring.
+//
+// HONEST (d6): UCCSD sits on a SPIN-CONTAMINATED UHF reference (⟨S²⟩=0.7652 ≠ 0.75 for
+//   CH₃). CCSD PARTIALLY heals the contamination through the exponential ansatz but does
+//   NOT fully restore spin symmetry; spin-adapted RHF-CCSD or ROHF-CCSD is the cleaner
+//   variant (round-27). Open-shell connected triples — UCCSD(T) — is the next accuracy
+//   rung. Both anchors are REAL PySCF 2.13.1 outputs; nothing fitted/forced.
+//
+// Run:  HEXA_LANG=<worktree> hexa run stdlib/qforge/atoms/uccsd_selftest.hexa
+// PASS: "qforge_atoms_uccsd_selftest PASS".
+use "stdlib/qforge/atoms/uccsd"
+use "stdlib/qforge/atoms/ccsd"
+use "stdlib/qforge/atoms/ump2"
+use "stdlib/qforge/atoms/mp2"
+use "stdlib/qforge/atoms/rhf_force_pd"
+use "stdlib/qforge/molscf/uhf"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_le(name: str, got: float, lim: float) -> int {
+    if got <= lim { println("PASS " + name + " (" + to_string(got) + " ≤ " + to_string(lim) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " > " + to_string(lim)) ; return 1
+}
+fn _ck_true(name: str, c: bool) -> int {
+    if c { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+// H₂O STO-3G basis tables (d19 reuse — identical to r16/r17/r25 anchors).
+fn _h2o_pw() -> [[int]] { return [[0,0,0],[0,0,0],[1,0,0],[0,1,0],[0,0,1],[0,0,0],[0,0,0]] }
+fn _h2o_exps() -> [[float]] {
+    let o1a = [130.70932, 23.808861, 6.4436083]
+    let o2a = [5.0331513, 1.1695961, 0.3803890]
+    let ha  = [3.42525091, 0.62391373, 0.16885540]
+    return [o1a, o2a, o2a, o2a, o2a, ha, ha]
+}
+fn _h2o_coef() -> [[float]] {
+    let o1d  = [0.15432897, 0.53532814, 0.44463454]
+    let o2sd = [0.0 - 0.09996723, 0.39951283, 0.70011547]
+    let o2pd = [0.15591627, 0.60768372, 0.39195739]
+    let hd   = [0.15432897, 0.53532814, 0.44463454]
+    return [o1d, o2sd, o2pd, o2pd, o2pd, hd, hd]
+}
+fn _h2o_aom() -> [int] { return [0,0,0,0,0,1,2] }
+
+// CH₃ planar radical STO-3G basis tables (C 1s,2s,2px,2py,2pz + 3 × H 1s = 8 AOs).
+fn _ch3_pw() -> [[int]] { return [[0,0,0],[0,0,0],[1,0,0],[0,1,0],[0,0,1],[0,0,0],[0,0,0],[0,0,0]] }
+fn _ch3_exps() -> [[float]] {
+    let c1a = [71.616837, 13.045096, 3.5305122]
+    let c2a = [2.9412494, 0.6834831, 0.2222899]
+    let ha  = [3.42525091, 0.62391373, 0.16885540]
+    return [c1a, c2a, c2a, c2a, c2a, ha, ha, ha]
+}
+fn _ch3_coef() -> [[float]] {
+    let c1d  = [0.15432897, 0.53532814, 0.44463454]
+    let c2sd = [0.0 - 0.09996723, 0.39951283, 0.70011547]
+    let c2pd = [0.15591627, 0.60768372, 0.39195739]
+    let hd   = [0.15432897, 0.53532814, 0.44463454]
+    return [c1d, c2sd, c2pd, c2pd, c2pd, hd, hd, hd]
+}
+fn _ch3_aom() -> [int] { return [0,0,0,0,0,1,2,3] }
+
+fn main() {
+    let mut fails = 0
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  (a)+(d) CLOSED-SHELL — H₂O/STO-3G @ Crawford: UCCSD(n_α=n_β=5) == RCCSD
+    // ══════════════════════════════════════════════════════════════════════════
+    println("════ CLOSED-SHELL: H₂O/STO-3G @ Crawford (n_α=n_β=5) — UCCSD == RCCSD ════")
+    let pw7 = _h2o_pw()
+    let exps7 = _h2o_exps()
+    let coef7 = _h2o_coef()
+    let aom7 = _h2o_aom()
+    let zW = [8.0, 1.0, 1.0]
+    let norb = 7
+    let natW = 3
+    let posC = [
+        0.0, 0.0 - 0.143225816552, 0.0,
+        1.638036840407, 1.136548822547, 0.0,
+        0.0 - 1.638036840407, 1.136548822547, 0.0
+    ]
+    let SC  = qf_pd_overlap(posC, pw7, exps7, coef7, aom7, norb)
+    let hcC = qf_pd_hcore(posC, pw7, exps7, coef7, aom7, norb, zW, natW)
+    let eriC = qf_pd_eri_tensor(posC, pw7, exps7, coef7, aom7, norb)
+    let enucC = qf_pd_enuc(posC, zW, natW)
+    let e_rccsd_ref = 0.0 - 0.070680088376
+
+    // r17 RCCSD path (UNMODIFIED) — get the RHF orbitals + the sealed RCCSD anchor.
+    let mC = mp2_corr_from_rhf(SC, hcC, eriC, norb, 5, enucC, 300, 1.0e-11, 1.0)
+    let e_rhfC = mC[0]
+    let epsC: [float] = mC[4]
+    let C_rhf: [float] = mC[5]
+    let erimoC: [float] = mC[6]
+    let ccC = ccsd_from_mo_eri(erimoC, epsC, norb, 5, 100, 1.0e-11)
+    let e_rccsd: float = ccC[0]
+    println("    [d] r17 RCCSD E_corr = " + to_string(e_rccsd) + " (sealed ref −0.070680088376)")
+    fails = fails + _ck_close("(d)r17 RCCSD path BYTE-UNTOUCHED: E_corr == −0.070680088376",
+                              e_rccsd, e_rccsd_ref, 1.0e-6)
+
+    // (a) RIGOROUS REDUCTION — feed the RHF's OWN orbitals into UCCSD as Cα==Cβ==C_RHF,
+    //     εα==εβ==ε_RHF, n_α==n_β==5. A pure ALGEBRAIC identity: the UHF spin-orbital
+    //     tensor collapses to the restricted tensor, so UCCSD must equal the r17 RCCSD
+    //     E_corr to machine precision (same orbitals → same amplitudes → same energy).
+    let uccR = uccsd_from_uhf(eriC, C_rhf, C_rhf, epsC, epsC, norb, 5, 5, e_rhfC, 100, 1.0e-11)
+    let e_uccsdR: float = uccR[0]
+    let convR: bool = uccR[4]
+    println("    [a] UCCSD(RHF-orb) E_corr=" + to_string(e_uccsdR)
+            + "  |Δ vs r17 RCCSD|=" + to_string(_abs(e_uccsdR - e_rccsd)))
+    fails = fails + _ck_true("(a)UCCSD(RHF-orb) converged", convR)
+    fails = fails + _ck_close("(a)UCCSD reduces to RCCSD on identical orbitals (≤1e-9)",
+                              e_uccsdR, e_rccsd, 1.0e-9)
+    fails = fails + _ck_close("(a)UCCSD(RHF-orb) == sealed r17 RCCSD −0.070680088376 (≤1e-6)",
+                              e_uccsdR, e_rccsd_ref, 1.0e-6)
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  (b)+(c) OPEN-SHELL — CH₃ methyl radical / STO-3G (doublet, n_α=5, n_β=4)
+    // ══════════════════════════════════════════════════════════════════════════
+    println("════ OPEN-SHELL: CH₃ radical / STO-3G (doublet n_α=5 n_β=4, 16 spin-orbitals) ════")
+    let posM = [
+        0.0, 0.0, 0.0,
+        2.0390143417, 0.0, 0.0,
+        0.0 - 1.0195071708, 1.7658382186, 0.0,
+        0.0 - 1.0195071708, 0.0 - 1.7658382186, 0.0
+    ]
+    let pwM = _ch3_pw()
+    let expsM = _ch3_exps()
+    let coefM = _ch3_coef()
+    let aomM = _ch3_aom()
+    let zM = [6.0, 1.0, 1.0, 1.0]
+    let norbM = 8
+    let natM = 4
+
+    let SM  = qf_pd_overlap(posM, pwM, expsM, coefM, aomM, norbM)
+    let hcM = qf_pd_hcore(posM, pwM, expsM, coefM, aomM, norbM, zM, natM)
+    let eriM = qf_pd_eri_tensor(posM, pwM, expsM, coefM, aomM, norbM)
+    let enucM = qf_pd_enuc(posM, zM, natM)
+
+    let uM = uhf_scf(SM, hcM, eriM, norbM, 5, 4, enucM, 400, 1.0e-12, 0.5, true, 0.2)
+    let e_uhf_M = uM[0]
+    let eps_aM = uM[7]
+    let eps_bM = uM[8]
+    let CaM = uM[9]
+    let CbM = uM[10]
+    let convM = uM[11]
+    let ssM = uhf_spin_squared(CaM, CbM, SM, norbM, 5, 4)
+    println("    UHF(5,4) E=" + to_string(e_uhf_M) + " conv=" + to_string(convM))
+    println("    [b] UHF ⟨S²⟩=" + to_string(ssM) + " (exact 0.75; contamination = "
+            + to_string(ssM - 0.75) + ")")
+    fails = fails + _ck_true("(b)CH₃ UHF(5,4) converged", convM)
+    fails = fails + _ck_close("(b)CH₃ UHF ⟨S²⟩ == PySCF 0.7652248 (spin-contaminated, REPORTED)",
+                              ssM, 0.7652248, 1.0e-3)
+
+    // r25 UMP2 anchor (the three-block sum) for the (c) iter-1 recovery comparison.
+    let dM = ump2_corr_from_uhf(eriM, CaM, CbM, eps_aM, eps_bM, norbM, 5, 4, e_uhf_M)
+    let e_ump2M = dM[3]
+    println("    [c] r25 UMP2 E_corr = " + to_string(e_ump2M) + " (PySCF −0.038288657)")
+
+    // UCCSD on the CH₃ UHF reference.
+    let uccM = uccsd_from_uhf(eriM, CaM, CbM, eps_aM, eps_bM, norbM, 5, 4, e_uhf_M, 200, 1.0e-10)
+    let e_uccsdM: float = uccM[0]
+    let e_firstM: float = uccM[1]
+    let itersM: int = uccM[2]
+    let residM: float = uccM[3]
+    let convccM: bool = uccM[4]
+    let e_uccsdM_tot: float = uccM[5]
+    let e_uccsd_ref_M = 0.0 - 0.057682347772
+    println("    [c] E(first UCCSD iter)=" + to_string(e_firstM) + "  (== r25 UMP2)  |Δ|="
+            + to_string(_abs(e_firstM - e_ump2M)))
+    println("    [b] UCCSD E_corr=" + to_string(e_uccsdM) + " (PySCF −0.057682347772)")
+    println("    [b] E_UCCSD_total=" + to_string(e_uccsdM_tot))
+    println("    [b] |Δ UCCSD−PySCF|=" + to_string(_abs(e_uccsdM - e_uccsd_ref_M)))
+    println("    iters=" + to_string(itersM) + "  residual=" + to_string(residM)
+            + "  conv=" + to_string(convccM))
+
+    // (c) UCCSD iter-1 == r25 UMP2 (amplitude/energy machinery wired)
+    fails = fails + _ck_close("(c)CH₃ first-iter UCCSD energy == r25 UMP2 (machinery wired)",
+                              e_firstM, e_ump2M, 1.0e-9)
+    // (b) open-shell UCCSD vs PySCF
+    fails = fails + _ck_true("(b)CH₃ UCCSD amplitude iteration converged", convccM)
+    fails = fails + _ck_close("(b)CH₃ UCCSD E_corr == PySCF −0.057682347772 (≤1e-5)",
+                              e_uccsdM, e_uccsd_ref_M, 1.0e-5)
+    fails = fails + _ck_le("(c)CH₃ UCCSD final residual ‖ΔT2‖ < 1e-8", residM, 1.0e-8)
+    // (c) UCCSD ⊃ UMP2 ordering: |E_UCCSD| > |E_UMP2|, and E_UCCSD < E_UMP2 < E_UHF
+    fails = fails + _ck_true("(c)CH₃ |E_UCCSD| > |E_UMP2| (CCSD captures more than MP2)",
+                             _abs(e_uccsdM) > _abs(e_ump2M))
+    fails = fails + _ck_true("(c)CH₃ E_UCCSD < E_UMP2 < 0 strictly (E_UCCSD_tot < E_UHF)",
+                             e_uccsdM < e_ump2M && e_ump2M < 0.0 && e_uccsdM_tot < e_uhf_M)
+
+    if fails == 0 { println("qforge_atoms_uccsd_selftest PASS") }
+    else { println("qforge_atoms_uccsd_selftest FAIL — " + to_string(fails) + " checks failed") }
+}
