@@ -1,0 +1,132 @@
+// embed_mechanical.hexa — QFORGE/system round-2: MECHANICAL EMBEDDING, real cores.
+//
+// Round-1 (qmmm.hexa) proved the partition ALGEBRA scale-consistent with toy
+// scalars. Round-2 wires the REAL energy cores into that algebra for the
+// mechanical-embedding scheme:
+//
+//   E_total = E_QM(inner) + E_MM(outer) + E_QM-MM(inner↔outer)
+//
+//   • E_QM(inner)   — a real QFORGE SCF total-energy term. The directly
+//     callable SCF energy primitive that takes plain inputs (positions /
+//     charges / cell) is `qforge_ewald` from stdlib/qforge/scf_etot.hexa —
+//     the electrostatic (Madelung) total of the inner charge configuration in
+//     its cell, a genuine QFORGE SCF energy component (HONEST SCOPE, d6: the
+//     full self-consistent `qforge_scf` needs plane-wave H_of_rho/rho_of_psi
+//     callbacks and cannot accept a toy molecule, so round-2 uses the SCF
+//     ELECTROSTATIC total as the inner QM energy — real qforge output, not a
+//     fabricated number; the partition layer is callback-generic so swapping
+//     in full SCF later is "pass a different scalar", d4).
+//   • E_MM(outer)   — real chem/md: lj_system_energy + bonded_total_energy.
+//   • E_QM-MM       — classical LJ + Coulomb between inner and outer regions,
+//     evaluated pairwise (mechanical embedding: the coupling is purely
+//     classical; the QM density does NOT see the MM charges — that is round-3
+//     electrostatic embedding).
+//
+// d4-GENERIC (the CORE is a callback): `embed_mechanical_total` takes the
+// three region energies as plain floats — the results of whatever QM / MM /
+// coupling engine produced them. The mechanical-embedding driver is agnostic
+// to how each scalar was computed, exactly as round-1's partition algebra is.
+// The real-core wiring lives in `*_from_regions`, which CALLS qforge + chem/md
+// and feeds their outputs into the generic total. No engine name is branched
+// on in the generic layer (d4); the partition sum reuses round-1 (d3 · d19).
+//
+// REUSE (d19 · NEXUS edge):
+//   E_QM(inner)  ← stdlib/qforge/scf_etot::qforge_ewald
+//   E_MM(outer)  ← stdlib/chem/md/lennard_jones::lj_system_energy
+//                + stdlib/chem/md/bonded::bonded_total_energy
+//   E_QM-MM      ← stdlib/chem/md/lennard_jones::lj_pair_energy (+ Coulomb here)
+//   partition    ← stdlib/qforge/system/qmmm::qmmm_additive_total (round-1)
+
+use "stdlib/qforge/system/qmmm"
+use "stdlib/qforge/scf_etot"
+use "stdlib/chem/md/lennard_jones"
+use "stdlib/chem/md/bonded"
+
+// ── GENERIC CORE (d4 — energies are callback results) ────────────────────────
+// Mechanical-embedding total = the round-1 additive partition of three
+// pre-evaluated region energies. This IS the engine-agnostic driver: it never
+// looks at how e_qm_inner / e_mm_outer / e_coupling were produced.
+pub fn embed_mechanical_total(e_qm_inner: float, e_mm_outer: float, e_coupling: float) -> float {
+    return qmmm_additive_total(e_qm_inner, e_mm_outer, e_coupling)
+}
+
+// ── REAL CORE 1 — E_QM(inner): QFORGE SCF electrostatic total ────────────────
+// Inner region = `n_inner` point charges (positions packed [x,y,z,...]) in a
+// cubic cell of side L. Returns the qforge Ewald (Madelung) energy — a real
+// SCF electrostatic total, the directly-callable qforge energy primitive.
+pub fn embed_qm_inner_energy(pos_inner: [float], q_inner: [float], L: float, eta: float, kmax: int) -> float {
+    let a1 = [L, 0.0, 0.0]
+    let a2 = [0.0, L, 0.0]
+    let a3 = [0.0, 0.0, L]
+    let tp = 6.28318530717958647692 / L
+    let b1 = [tp, 0.0, 0.0]
+    let b2 = [0.0, tp, 0.0]
+    let b3 = [0.0, 0.0, tp]
+    let omega = L * L * L
+    return qforge_ewald(a1, a2, a3, b1, b2, b3, pos_inner, q_inner, omega, eta, kmax)
+}
+
+// ── REAL CORE 2 — E_MM(outer): chem/md LJ + bonded ───────────────────────────
+// Outer region energy = LJ system energy + bonded (bond/angle/dihedral) total
+// over the outer particles. Real chem/md cores, no reimplementation (d3).
+pub fn embed_mm_outer_energy(outer: array, eps: float, sigma: float,
+                             bonds: array, angles: array, dihedrals: array, L: float) -> float {
+    let e_lj = lj_system_energy(outer, eps, sigma)
+    let e_bonded = bonded_total_energy(outer, bonds, angles, dihedrals, L)
+    return e_lj + e_bonded
+}
+
+// ── REAL CORE 3 — E_QM-MM: classical LJ + Coulomb inner↔outer ────────────────
+// Mechanical-embedding coupling: every inner particle interacts with every
+// outer particle through classical LJ (reusing lj_pair_energy) + a Coulomb
+// term q_i q_j / r_ij. PBC-free direct sum (the toy cell is non-periodic for
+// the coupling region — mechanical embedding does not Ewald the QM/MM cross
+// term in this round; that is an electrostatic-embedding refinement).
+//
+// inner / outer are MdParticle arrays; q_inner / q_outer the matching charges.
+pub fn embed_qmmm_coupling(inner: array, q_inner: [float],
+                           outer: array, q_outer: [float],
+                           eps: float, sigma: float, k_coulomb: float) -> float {
+    let ni = len(inner)
+    let no = len(outer)
+    let mut e = 0.0
+    let mut i = 0
+    while i < ni {
+        let pi = inner[i]
+        let mut j = 0
+        while j < no {
+            let pj = outer[j]
+            // classical LJ pair (reuse chem/md primitive)
+            e = e + lj_pair_energy(pi, pj, eps, sigma)
+            // classical Coulomb pair
+            let dx = pi.x - pj.x
+            let dy = pi.y - pj.y
+            let dz = pi.z - pj.z
+            let r2 = dx * dx + dy * dy + dz * dz
+            if r2 > 1.0e-30 {
+                let r = sqrt(r2)
+                e = e + k_coulomb * q_inner[i] * q_outer[j] / r
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return e
+}
+
+// ── FULL-CHAIN real-core mechanical-embedding total ──────────────────────────
+// Wires all three real cores and feeds them into the generic partition (d4):
+//   E_total = E_QM(inner, qforge SCF) + E_MM(outer, chem/md) + E_QM-MM(LJ+Coul)
+// `inner`/`outer` are MdParticle arrays; pos_inner is the inner positions
+// packed [x,y,z,...] for the qforge ewald call (same geometry as `inner`).
+pub fn embed_mechanical_from_regions(
+        inner: array, pos_inner: [float], q_inner: [float],
+        outer: array, q_outer: [float],
+        L: float, eta: float, kmax: int,
+        eps: float, sigma: float, k_coulomb: float,
+        bonds: array, angles: array, dihedrals: array) -> float {
+    let e_qm = embed_qm_inner_energy(pos_inner, q_inner, L, eta, kmax)
+    let e_mm = embed_mm_outer_energy(outer, eps, sigma, bonds, angles, dihedrals, L)
+    let e_cp = embed_qmmm_coupling(inner, q_inner, outer, q_outer, eps, sigma, k_coulomb)
+    return embed_mechanical_total(e_qm, e_mm, e_cp)
+}
