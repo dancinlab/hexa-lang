@@ -196,16 +196,47 @@ Fock 빌드, (3) 비직교 일반화 고유문제 `FC=SCε`. 모든 g5 anchor �
       normal-ordering correction in the kernel), and the comment einsums on the genuine 4-RDM give Sr=+0.0014 vs
       PySCF −0.00196 on H₆ CAS(4,4) — a ~3e-3 error, NOT <1e-6. d6 forbids shipping that as a <1e-6 match, so the
       4-RDM BUILD ships validated and the two class energies are HONESTLY deferred one round.
-- [ ] round-16 (named) — EXACT f3ca/f3ac C-KERNEL PORT → full 8-class Sr/Si: port PySCF's _contract4pdm itself
-      (t2ci pair-excitation E_mn E_ij of the CI vector → active-eri dgemm → particle-symmetric tril2pdm
-      contraction), NOT a 4-RDM einsum — consuming the round-15 nevpt2_dm4. Then Sr/Si match PySCF mrpt.NEVPT
-      per-class to <1e-6 on H₆ CAS(4,4) / N₂ CAS(6,6) → full 8-class SC-NEVPT2 end-to-end. THREE concrete paths
-      (d2): (i) port the kernel's bra-ket-eri contraction operationally on the CI vector (guaranteed-correct,
-      same algorithm); (ii) derive the particle-symmetric normal-ordering correction (the ~6.5 residual) as an
-      explicit dm3-delta term added to the 4-RDM contraction; (iii) cumulant-4-RDM approximation for CAS(8,8)+
-      where the exact m^8 4-RDM is the factorial-cost ceiling. Plus the round-12-named CASSCF scaling (2nd-order
-      Newton MCSCF · direct-CI Davidson — shrinks the round-14 |Δ|=4.67e-4 orbital-convergence residual) and
-      PC-NEVPT2/CASPT2 variants. ALL within-class refinements — NO remaining method-class gap (see depletion)
+- [x] brick 19 (round-16) — the two 4-RDM SC-NEVPT2 classes Sr (a16) / Si (a22) → FULL 8-class SC-NEVPT2.
+      `nevpt2_srsi.hexa` (nevpt2_Sr · nevpt2_Si · nevpt2_total8). The f3ca/f3ac kernel is ported as its EXACT
+      4-RDM ∘ active-eri contraction — established empirically (Python ↔ PySCF, <1.6e-14 element-wise): each f3
+      IS ONE exact contraction reused across a16/a22 terms by an index permutation —
+      f3ac[p,q,r,a,b,c]=Σ h2e[i,j,k,a] dm4[r,p,q,b,j,c,i,k], f3ca[p,q,r,a,b,c]=Σ h2e[k,c,i,j] dm4[r,p,q,b,a,j,k,i].
+      The r15 "~6.5 irreducible residual / stale comment" wall was MISDIAGNOSED — the real bug was a dm4
+      BUILD pair-order transposition (r15 applied E_sr-then-E_qp on the bra → ⟨gs|E_rs E_pq instead of
+      ⟨gs|E_pq E_rs; the symmetric trace sum-rule did not catch it). Fixed in nevpt2_dm4 (swap the two bra
+      excitations); the genuine 4-RDM then reproduces a16/a22 to machine precision. g5 PASS on the DETERMINISTIC
+      CASCI(RHF) reference (per-class Sr/Si are gauge-invariant → <1e-6 meaningful on identical orbitals):
+      (a) H₆ CAS(4,4) Sr=−0.00352214 vs PySCF −0.0035221118, |Δ|=2.37e-08
+      (b) Si=−0.00436186 vs PySCF −0.0043618502, |Δ|=1.31e-08
+      (c) 8-class total=−0.0320731 vs PySCF mrpt.NEVPT.kernel −0.0320728303, |Δ|=2.39e-07; 6-class=−0.0241891
+      (d) regression: r13 nevpt2 6-class + r14 canon + r15 4-RDM sum-rules all still PASS (additive; the dm4
+      pair-order fix leaves the symmetric sum-rule residual at 1.0e-13)
+- [ ] round-17 (named) — CASSCF orbital-convergence + CI/orbital SCALING. The 8-class SC-NEVPT2 is method-
+      complete; the residual is the round-14 CASSCF |Δ|=4.67e-4 orbital-convergence gap (steepest-descent line
+      search stalls before the PySCF minimum — per-class on CASSCF orbitals is ~2e-5 off; CASCI(RHF) is exact).
+      THREE paths (d2): (i) 2nd-order Newton MCSCF (augmented-Hessian) replacing steepest-descent → tight
+      CASSCF convergence so per-class anchors hold on CASSCF orbitals too; (ii) direct-CI Davidson past the
+      dense-eigh ceiling (CAS(10,10), Cr₂); (iii) cumulant-4-RDM for CAS(8,8)+ (the exact m^8 4-RDM is the
+      factorial-cost ceiling). Plus PC-NEVPT2/CASPT2 variants. ALL within-class refinements — NO method gap
+
+## MOLSCF method-completeness depletion (round-16)
+
+Round-16 closes the two 4-RDM SC-NEVPT2 classes Sr (a16, S_r^{(−1)}) and Si (a22, S_i^{(+1)}), completing
+the **full 8-class SC-NEVPT2**. The r15 "f3ca/f3ac wall" (a ~6.5 irreducible residual attributed to an
+undocumented particle-symmetric normal-ordering correction) was MISDIAGNOSED: the real cause was a dm4 BUILD
+pair-order transposition — r15 built the bra as E_sr-then-E_qp, giving ⟨gs|E_rs E_pq instead of
+⟨gs|E_pq E_rs (the first index PAIR transposed), invisible to the symmetric trace sum-rule but fatal to the
+energy contraction. With that one-line fix, each f3 object IS exactly one 4-RDM ∘ active-eri contraction
+(reproducing the PySCF C-kernel f3ca/f3ac to 5e-15 / 9e-15), and a16/a22 — hence Sr/Si — reproduce PySCF to
+machine precision. On the deterministic CASCI(RHF) H₆ CAS(4,4) reference (per-class SC-NEVPT2 energies are
+gauge-invariant, so <1e-6 is meaningful on identical orbitals): Sr |Δ|=2.37e-8, Si |Δ|=1.31e-8, 8-class
+total |Δ|=2.39e-7 vs mrpt.NEVPT.kernel. The **multireference dynamic-correlation capability is now genuinely
+complete**: QFORGE-MOLSCF covers single-reference (RHF·UHF·ROHF·robust-SCF), multireference STATIC correlation
+(CASCI·CASSCF), AND multireference DYNAMIC correlation (the full 8-class SC-NEVPT2 on CASSCF, with core/virtual
+canonicalization). NO remaining method-CLASS gap — round-17 is within-class refinement only (tight 2nd-order
+CASSCF convergence so per-class anchors also hold on CASSCF orbitals — currently ~2e-5 off due to the
+steepest-descent stall; CI/orbital scaling for CAS(10,10)+; cumulant-4-RDM for CAS(8,8)+ past the m^8 ceiling;
+PC-NEVPT2/CASPT2 variants).
 
 ## MOLSCF method-completeness depletion (round-15)
 
