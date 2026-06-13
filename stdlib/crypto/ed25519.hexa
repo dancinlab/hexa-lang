@@ -381,6 +381,11 @@ fn _unpackneg(pk: [int]) -> [int] {
 
 @pure
 pub fn ed25519_verify(pubk: [int], msg: [int], sig: [int]) -> bool {
+    // OP-109 defense-in-depth: a malformed DIRECT call with a short pubkey/sig
+    // would OOB-read (the fixed 0..32 / 0..64 indexing below traps `index out of
+    // bounds`). Mirror the OP-104/105 alpn length-guard: wrong length ⇒ false,
+    // never OOB. Ed25519 pubkey = 32 bytes, signature = 64 bytes (RFC 8032).
+    if len(pubk) != 32 || len(sig) != 64 { return false }
     let un = _unpackneg(pubk)
     if un[0] == 0 { return false }
     let mut A: [int] = []

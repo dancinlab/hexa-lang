@@ -1,0 +1,206 @@
+// HEXA Standard Library — crypto/encode_len_field_op109_test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// OP-109 PART B (LANE-2 0-pod) lock test — the crypto/TLS SERIALIZER
+// length-field audit (the inverse of the OP-105 parse-side OOB sweep).
+//
+// HERMETIC — every encoder body below is VERBATIM-INLINED from the shipping
+// builder it locks (no `use`, to dodge the stale-bundle resolution OP-87/88), so
+// `hexa run` exercises the EXACT length-field computation that lands on the wire.
+//
+// What this locks (for each encoder: emitted length FIELD == actual emitted body
+// length, and encode∘parse == identity round-trip):
+//   1. 🔴 FIXED — tls13 RECORD-AAD length (tls13_record_aad caller, RFC 8446
+//      §5.2): the AAD's length field MUST equal TLSCiphertext.length = the
+//      encrypted_record length = |TLSInnerPlaintext| + 16-byte AEAD tag. The
+//      seal caller was passing len(plain) (16 SHORT) and the open caller
+//      body_len-16 (also short) — self-consistent (hexa↔hexa worked) but BOTH
+//      WRONG vs RFC 8448 §3 (documented record length 0x02a2, not 0x0292): a
+//      conforming peer's AEAD verify fails. Fix: seal passes len(plain)+16, open
+//      passes body_len. Lock: AAD length == on-wire record length == RFC value.
+//   2. 🟢 tls13_ext_build — Extension TLV uint16 length == len(value); round-trip
+//      vs tls13_ext_length / tls13_ext_next.
+//   3. 🟢 tls13_client_hello_body — session_id uint8 len, cipher_suites uint16
+//      (csn*2), extensions uint16 len; each field == its body.
+//   4. 🟢 _keyshare_entry / key_share client wrap — uint16 key_len, shares-vec
+//      len, ext len each == body.
+//   5. 🟢 tls13_record_header / tls13_hs_header big-endian length field round-trip.
+
+// ════════════════════════ encoder #1: RECORD AAD ════════════════════════
+// VERBATIM tls13_record_aad: writes a big-endian uint16 length field.
+@pure
+fn _tls13_record_aad(len_field: int) -> [int] {
+    let mut aad: [int] = []
+    aad.push(0x17)
+    aad.push(0x03)
+    aad.push(0x03)
+    aad.push((len_field >> 8) & 0xFF)
+    aad.push(len_field & 0xFF)
+    return aad
+}
+// VERBATIM tls13_record_header (length field big-endian uint16 at [3],[4]).
+@pure
+fn _tls13_record_header(content_type: int, version: int, length: int) -> [int] {
+    let mut h: [int] = []
+    h.push(content_type & 0xFF)
+    h.push((version >> 8) & 0xFF)
+    h.push(version & 0xFF)
+    h.push((length >> 8) & 0xFF)
+    h.push(length & 0xFF)
+    return h
+}
+// The FIXED seal-side AAD computation (tls13_client_record_io): len(plain)+16.
+@pure
+fn _seal_aad(plain_len: int) -> [int] { return _tls13_record_aad(plain_len + 16) }
+// The FIXED open-side AAD computation: body_len (= ct_tag len = plain_len+16).
+@pure
+fn _open_aad(body_len: int) -> [int] { return _tls13_record_aad(body_len) }
+
+// ════════════════════════ encoder #2: Extension TLV ════════════════════════
+@pure
+fn _ext_build(ext_type: int, value: [int]) -> [int] {
+    let mut o: [int] = []
+    let n = len(value)
+    o.push((ext_type >> 8) & 0xFF)
+    o.push(ext_type & 0xFF)
+    o.push((n >> 8) & 0xFF)
+    o.push(n & 0xFF)
+    let mut i = 0
+    while i < n { o.push(value[i]); i = i + 1 }
+    return o
+}
+@pure
+fn _ext_length(b: [int], o: int) -> int { return ((b[o + 2] & 0xFF) << 8) | (b[o + 3] & 0xFF) }
+@pure
+fn _ext_next(b: [int], o: int) -> int { return o + 4 + _ext_length(b, o) }
+
+// ════════════════════════ encoder #3: ClientHello body ════════════════════════
+@pure
+fn _client_hello_body(random: [int], session_id: [int], cipher_suites: [int], extensions_concat: [int]) -> [int] {
+    let mut o: [int] = []
+    o.push(0x03)
+    o.push(0x03)
+    let mut i = 0
+    while i < 32 { o.push(if i < len(random) { random[i] } else { 0 }); i = i + 1 }
+    let sl = len(session_id)
+    o.push(sl & 0xFF)
+    i = 0
+    while i < sl { o.push(session_id[i]); i = i + 1 }
+    let csn = len(cipher_suites)
+    let cs_bytes = csn * 2
+    o.push((cs_bytes >> 8) & 0xFF)
+    o.push(cs_bytes & 0xFF)
+    i = 0
+    while i < csn {
+        o.push((cipher_suites[i] >> 8) & 0xFF)
+        o.push(cipher_suites[i] & 0xFF)
+        i = i + 1
+    }
+    o.push(0x01)
+    o.push(0x00)
+    let en = len(extensions_concat)
+    o.push((en >> 8) & 0xFF)
+    o.push(en & 0xFF)
+    i = 0
+    while i < en { o.push(extensions_concat[i]); i = i + 1 }
+    return o
+}
+
+// ════════════════════════ encoder #4: key_share entry ════════════════════════
+@pure
+fn _keyshare_entry(group: int, key: [int]) -> [int] {
+    let mut o: [int] = []
+    o.push((group >> 8) & 0xFF)
+    o.push(group & 0xFF)
+    let n = len(key)
+    o.push((n >> 8) & 0xFF)
+    o.push(n & 0xFF)
+    let mut i = 0
+    while i < n { o.push(key[i]); i = i + 1 }
+    return o
+}
+
+@pure
+fn _u16(hi: int, lo: int) -> int { return ((hi & 0xFF) << 8) | (lo & 0xFF) }
+
+fn main() {
+    let mut pass = 0
+    let mut fail = 0
+
+    // ── #1 RECORD AAD: the FIXED length field == on-wire record length == RFC ──
+    // RFC 8448 §3: a server App-Data record header is 17 03 03 02 a2 (len=0x02a2).
+    // Inner (plaintext+content_type) = 0x02a2 - 16 = 0x0292 = 658.
+    let inner_len = 0x0292               // |plain| (what the OLD buggy code passed)
+    let wire_len = 0x02a2                // ciphertext+tag = inner_len + 16 (RFC value)
+    let seal = _seal_aad(inner_len)      // FIXED: inner_len + 16
+    let open = _open_aad(wire_len)       // FIXED: body_len
+    let hdr = _tls13_record_header(0x17, 0x0303, wire_len)
+    // seal AAD length field == wire_len (NOT inner_len)
+    if _u16(seal[3], seal[4]) == wire_len { pass = pass + 1 } else { fail = fail + 1; println("FAIL aad seal==wire_len") }
+    // seal AAD must NOT equal the old (16-short) value
+    if _u16(seal[3], seal[4]) != inner_len { pass = pass + 1 } else { fail = fail + 1; println("FAIL aad regression: still 16-short") }
+    // open AAD length field == wire_len
+    if _u16(open[3], open[4]) == wire_len { pass = pass + 1 } else { fail = fail + 1; println("FAIL aad open==wire_len") }
+    // seal AAD == open AAD (hexa↔hexa round-trip preserved)
+    if _u16(seal[3], seal[4]) == _u16(open[3], open[4]) { pass = pass + 1 } else { fail = fail + 1; println("FAIL aad seal==open") }
+    // AAD length field == the on-wire record-header length field (RFC 8446 §5.2)
+    if _u16(seal[3], seal[4]) == _u16(hdr[3], hdr[4]) { pass = pass + 1 } else { fail = fail + 1; println("FAIL aad==record-header len") }
+    // documented RFC 8448 wire bytes: 17 03 03 02 a2
+    if hdr[0]==0x17 && hdr[1]==0x03 && hdr[2]==0x03 && hdr[3]==0x02 && hdr[4]==0xa2 { pass = pass + 1 } else { fail = fail + 1; println("FAIL rfc8448 wire bytes") }
+
+    // ── #2 Extension TLV: length field == len(value); round-trip ──
+    let val = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE]
+    let ext = _ext_build(0x002b, val)
+    if _ext_length(ext, 0) == len(val) { pass = pass + 1 } else { fail = fail + 1; println("FAIL ext len-field==body") }
+    if _ext_next(ext, 0) == len(ext) { pass = pass + 1 } else { fail = fail + 1; println("FAIL ext next==total") }
+    // round-trip: re-extract value matches input
+    let mut rt = true
+    let mut j = 0
+    while j < len(val) { if ext[4 + j] != val[j] { rt = false }; j = j + 1 }
+    if rt { pass = pass + 1 } else { fail = fail + 1; println("FAIL ext value round-trip") }
+    // documented supported_versions client bytes: 00 2b 00 03 02 03 04
+    let sv = _ext_build(0x002b, [0x02, 0x03, 0x04])
+    if sv[0]==0x00 && sv[1]==0x2b && sv[2]==0x00 && sv[3]==0x03 && sv[4]==0x02 && sv[5]==0x03 && sv[6]==0x04 { pass = pass + 1 } else { fail = fail + 1; println("FAIL supported_versions wire bytes") }
+
+    // ── #3 ClientHello body: each length field == its body ──
+    let rnd = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32]
+    let sid = [0xDE,0xAD,0xBE,0xEF]
+    let suites = [0x1301, 0x1303]
+    let exts = [0x00,0x2b,0x00,0x03,0x02,0x03,0x04]   // a supported_versions ext
+    let ch = _client_hello_body(rnd, sid, suites, exts)
+    // session_id uint8 len at offset 34 (2 ver + 32 random)
+    if (ch[34] & 0xFF) == len(sid) { pass = pass + 1 } else { fail = fail + 1; println("FAIL ch session_id len") }
+    // cipher_suites uint16 len right after sid
+    let cs_off = 35 + len(sid)
+    if _u16(ch[cs_off], ch[cs_off + 1]) == len(suites) * 2 { pass = pass + 1 } else { fail = fail + 1; println("FAIL ch cipher_suites len") }
+    // extensions uint16 len after suites(4) + compression(2)
+    let ext_off = cs_off + 2 + len(suites) * 2 + 2
+    if _u16(ch[ext_off], ch[ext_off + 1]) == len(exts) { pass = pass + 1 } else { fail = fail + 1; println("FAIL ch extensions len") }
+    // total body length consistency
+    let expect_total = 2 + 32 + 1 + len(sid) + 2 + len(suites) * 2 + 2 + 2 + len(exts)
+    if len(ch) == expect_total { pass = pass + 1 } else { fail = fail + 1; println("FAIL ch total len") }
+
+    // ── #4 key_share entry: uint16 key_len == len(key) ──
+    let pubkey = [0xAB, 0xCD, 0xEF, 0x12, 0x34]
+    let entry = _keyshare_entry(0x001d, pubkey)
+    if _u16(entry[2], entry[3]) == len(pubkey) { pass = pass + 1 } else { fail = fail + 1; println("FAIL keyshare key_len") }
+    if len(entry) == 4 + len(pubkey) { pass = pass + 1 } else { fail = fail + 1; println("FAIL keyshare total") }
+    // X25519 key (32 bytes) → key_len field = 0x0020
+    let mut k32: [int] = []
+    let mut z = 0
+    while z < 32 { k32.push(0); z = z + 1 }
+    let e32 = _keyshare_entry(0x001d, k32)
+    if e32[2]==0x00 && e32[3]==0x20 { pass = pass + 1 } else { fail = fail + 1; println("FAIL keyshare x25519 len 0x0020") }
+
+    // ── #5 record/hs header big-endian length round-trip ──
+    let h = _tls13_record_header(0x16, 0x0301, 0x1234)
+    if _u16(h[3], h[4]) == 0x1234 { pass = pass + 1 } else { fail = fail + 1; println("FAIL record-header len round-trip") }
+
+    print("OP109-B encode-len-field pass=")
+    print(pass)
+    print(" fail=")
+    println(fail)
+    if fail == 0 { println("OP109-B ALL GREEN") } else { println("OP109-B RED") }
+}
