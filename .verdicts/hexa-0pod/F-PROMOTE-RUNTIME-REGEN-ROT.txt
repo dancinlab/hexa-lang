@@ -1,0 +1,35 @@
+PROMOTE FROM-SCRATCH RUNTIME-REGEN ROT — CLOSED (build_selfhost.sh)
+==================================================================
+claim  : tool/build_selfhost.sh cannot reach the self-host byte-eq fixpoint
+         from a frozen-seed tree because gen2 dyld-FAILS at load on the
+         runtime helper family the current emitter SSOT owns but the frozen
+         seed predates (__map_raw_len, __raw_d2i, __raw_idiv, ...).
+host   : mini (darwin-arm64), 0-pod local, HEAD 0f3428b65
+method : full ladder; cmp cc-gen3.o cc-gen4.o.
+
+ROOT CAUSE
+  restore_frozen_seeds restores the STALE frozen self/runtime_core.c (commit
+  151c52c8, 2026-05-29). build_aprime.sh:62 SKIPS its own runtime regen when
+  self/runtime.c is present (warm-tree guard). So rt.o + gen2+ link the stale
+  runtime; gen2 references __map_raw_len/__raw_d2i as undefined externals ->
+  dyld 'Symbol not found' -> stage2 self-emit aborts rc=134 -> no fixpoint.
+  (frozen runtime: __map_raw_len absent; 27 helpers static-inline=not exported.)
+
+FIX (this PR)
+  build_selfhost.sh: after restore_frozen_seeds + hexat build, force
+  `tool/stage_resolve_runtime_a` (regenerates runtime_core.c from the emitter
+  SSOT self/runtime_core_emit.hexa) BEFORE stage0/rt.o. Now every stage links
+  the COMPLETE runtime.
+
+EVIDENCE (verbatim, mini darwin-arm64, this build)
+  pre-fix  : gen2 -> dyld 'Symbol not found: ___raw_d2i' -> stage2 rc=134.
+  post-fix : regen ran -> rt.o 539768B exports T ___map_raw_len/___raw_d2i ->
+             gen2 rc=0 emits obj -> stage1/2/3 all rc=0 miss=0 sz=3467080 ->
+             GATE: BYTE-EQ FIXPOINT cc-gen3.o == cc-gen4.o (3467080 B).
+  sha256   : 30939fe6db1b477f8654c426eea87fb003c941223c6336643d74bc7b3e816919
+             (cc-gen3.o == cc-gen4.o, byte-identical) — SELF-HOST GRADUATION.
+
+RESIDUAL (separate, documented)
+  `hexa run` end-to-end still delegates to the pre-#2650 dispatch binary
+  (hexa.real.pre-selfhost.<ts>); gen3 serves --emit only. Full run/build fix
+  = dispatch-binary refresh (OP-126 option A). This PR closes the BUILD rot.
