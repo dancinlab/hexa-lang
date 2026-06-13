@@ -1,5 +1,26 @@
 # HEXA-0POD — log
 
+## 2026-06-13 — OP-88 DONE: LANE-2 bespoke-stdlib bug-hunt — 🔴 REAL shipping path_ext leading-dot bug FOUND+FIXED + path_normalize/path_join/semver PROVEN-CLEAN
+- LANE: 2 (0-pod correctness, stdlib/* bespoke-logic bug-hunt). Sibling LANE-1/OP-86 owns self/runtime + self/* (non-overlapping surface).
+- REFRAME: OP-87 (#3239) fixed path_dirname's stray-trailing-slash on consecutive separators. This round hunts the SAME boundary-arithmetic bug class across the SIBLING path helpers (path_ext/path_stem/path_join/path_normalize) + one more bespoke module (semver). Method = differential vs authoritative refs (Python posixpath.splitext/normpath/join, GNU basename/dirname, the official semver.org 2.0.0 regex + §11 + npm range goldens).
+- 🔴 BUG (REAL, SHIPPING) — stdlib/alloc/path.hexa :: path_ext (+ path_stem). The last-'.' scan used a bare `while i > 0` guard that only protected a SINGLE leading dot, so it returned "" for ".bashrc"/".config" (correct) but LEAKED a bogus extension whenever the basename began with a RUN of dots. POSIX/Python splitext treats the whole leading dot-run as part of the name, never an extension.
+  VERBATIM repro (faithful Python port of the UNFIXED body vs posixpath.splitext on the basename):
+    ext('..ext')   = '.ext'   (splitext: '')   BUG
+    ext('..')      = '.'       (splitext: '')   BUG
+    ext('...')     = '.'       (splitext: '')   BUG
+    ext('....y')   = '.y'      (splitext: '')   BUG
+    ext('a/..')    = '.'       (splitext: '')   BUG   (basename '..')
+    ext('/..')     = '.'       (splitext: '')   BUG
+    ext('a/b/..')  = '.'       (splitext: '')   BUG
+  ROOT CAUSE: the scan never identified the leading dot-run boundary, so a '.' inside that prefix was mistaken for an extension separator. path_stem inherits it (stem("..ext")="..e", want "..ext").
+- FIX (minimal, behavior-correct — provably the bug; matches posixpath.splitext): skip the leading run of dots first, then only treat a '.' AFTER that run as the separator (added `while lead<n {…}` + changed `i>0`→`i>lead`; 0 deletions, wipe_guard net-additive).
+- CROSS-CHECK (g5, differential vs posixpath.splitext(basename) over 58 inputs): UNFIXED diverged on 10 leading-dot cases (.., ..ext, ..., ....y, a/.., /.., a/b/.., a/b/../.., ..//.., a/b/../..); POST-FIX matches all 58 + NO ordinary regression (foo.txt→.txt, a/b.tar.gz→.gz, archive.TAR→.TAR, a.→., .bashrc→"", .config→"" unchanged). No in-tree caller depends on the buggy output (scoped grep, NO .git).
+- 🟢 CLEAN (other path helpers): path_normalize 46-input slash sweep vs posixpath.normpath 0 real mism (the lone //a→/a is the POSIX-impl-defined leading-// case the docstring chooses to collapse; NOTE — a naive Python port using "/".join(["/",body]) FALSELY reported a doubled leading slash, but the hexa code uses q.join("") (empty sep) so it is CORRECT — re-confirmed, no bug); path_join 15 pairs vs posixpath.join, the only divergence join(a,"")→"a" (vs posix "a/") is the DOCUMENTED empty-component contract (line 99), not a bug; path_basename re-confirmed GNU-correct (OP-87-locked).
+- 🟢 CLEAN (invariant-lock) — stdlib/semver.hexa (the one-more bespoke module, heaviest uncovered logic; has a self-test but NO external-reference differential before this): semver_valid 40 inputs vs the OFFICIAL semver.org 2.0.0 regex 0 mism (leading-zero core/pre, empty pre segment, "_" reject, "v"-prefix, huge numbers, +build, "1.0.0-0A.is.legal"); semver_compare 441 ordered pairs vs §11 precedence 0 mism (canonical alpha<alpha.1<alpha.beta<beta<beta.2<beta.11<rc.1<1.0.0 chain, numeric<alphanumeric, longer-identifier-list-wins); semver_satisfies 38 npm-style goldens 0 mism (^ ~ x-range || AND + the prerelease-in-range gate).
+- LOCK: NEW stdlib/alloc/path_op88_test.hexa leaf oracle (path_ext/path_stem inlined verbatim WITH the fix, NOT in build_selfhost closure, gated on the SHIPPING `hexa run` not the stale seed) — VERBATIM exit-0: __HEXA_STDLIB_PATH_EXT_OP88__ 24/24 PASS. semver locked by the 519-pair Python differential (/tmp/op88_semver.py vs the semver.org regex + §11 + npm goldens). path_ext fix repro/cross-check /tmp/op88_extfix.py (0/58). NON-REGRESSION: OP-87 oracle re-run __HEXA_STDLIB_PATH_COLL_OP87__ 34/34 PASS.
+- BYTE-EQ: stdlib/alloc/path.hexa is alloc-tier (NOT in the self-host closure) → fixpoint UNAFFECTED; 1 fn fixed (path_ext) + 1 NEW leaf test; 0 deletions (wipe_guard net-additive); semver.hexa UNCHANGED (PROVEN-CLEAN).
+- 🔴→FIXED + 🟢. $0, 0-pod, NO GPU, no vast, no foreign pod, no .tape, leak-0. LANE-2 stdlib/* only. verdict .verdicts/hexa-0pod/F-OP88-PATH-EXT-LEADING-DOT.txt
+
 ## 2026-06-13 — OP-87 DONE: LANE-2 bespoke-stdlib bug-hunt — 🔴 REAL shipping path_dirname double-slash bug FOUND+FIXED + combinations/permutations PROVEN-CLEAN
 - LANE: 2 (0-pod correctness, stdlib/* bespoke-logic bug-hunt). Sibling LANE-1/OP-86 owns self/runtime + self/* (non-overlapping surface, coordinated lanes).
 - REFRAME: the authoritative-reference stdlib vein is CLOSED (OP-83/84). This round hunts UNTESTED BESPOKE internal-logic modules (custom parsers / data structures / numeric-format / text) via KAT-free methods — differential (naive twin / cross-impl), invariant (round-trip / monotonicity / bounds), docstring-vs-behavior.
