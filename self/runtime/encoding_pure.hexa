@@ -223,38 +223,48 @@ pub fn url_encode_pure(s) {
 // Reverses url_encode_pure. '+' decodes to space (form-encoded
 // flavor). Trailing '%' without two hex digits is left verbatim.
 // Invalid %HH (non-hex) is also passed through literally.
+//
+// OP-136 (URL parse/normalize audit): a percent-escape encodes ONE RAW
+// BYTE. The prior per-escape `from_char_code(byte)` treated the byte as a
+// Unicode code point, so any byte ≥ 0x80 was re-UTF-8-encoded — a multibyte
+// payload "%E2%9C%93" (✓) decoded to the 6-byte garbage c3 a2 c2 9c c2 93
+// instead of the 3 raw bytes e2 9c 93 (verified vs urllib.parse.unquote).
+// Fix = accumulate decoded RAW BYTES, then UTF-8-assemble once via the
+// byte-faithful `bytes_to_str_raw` SSOT (matches std_encoding.url_decode).
 pub fn url_decode_pure(s) {
     if type_of(s) != "string" { return "" }
     let n = len(s)
-    let mut parts = []
+    let mut bytes = []
     let mut i = 0
     while i < n {
         let c = s.substring(i, i + 1)
         if c == "+" {
-            parts.push(" ")
+            bytes.push(32)
             i = i + 1
         } else if c == "%" {
             if i + 2 < n {
                 let hi = _enc_hex_val(s.substring(i + 1, i + 2))
                 let lo = _enc_hex_val(s.substring(i + 2, i + 3))
                 if hi >= 0 && lo >= 0 {
-                    parts.push(from_char_code(hi * 16 + lo))
+                    bytes.push((hi * 16 + lo) & 0xFF)
                     i = i + 3
                 } else {
-                    parts.push(c)
+                    bytes.push(ord(c))
                     i = i + 1
                 }
             } else {
-                // trailing partial % — leave verbatim
-                parts.push(s.substring(i, n))
-                i = n
+                // trailing partial % — keep the raw bytes verbatim
+                while i < n {
+                    bytes.push(ord(s.substring(i, i + 1)))
+                    i = i + 1
+                }
             }
         } else {
-            parts.push(c)
+            bytes.push(ord(c))
             i = i + 1
         }
     }
-    parts.join("")
+    bytes_to_str_raw(bytes)
 }
 
 // ── _enc_hex_byte_lc — byte 0..255 → 2-char lowercase hex ─────────

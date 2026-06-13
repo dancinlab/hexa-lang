@@ -1,0 +1,225 @@
+// HEXA-0POD OP-136 leaf oracle — URL/URI parse + percent-decode + authority
+// decomposition value-correctness & security lock.
+//
+// Audited the repo's full URL surface (there is NO general scheme://authority
+// URL parser beyond the ws:// helper + the percent codecs; the only path
+// normalizer, stdlib/alloc/path.hexa::path_normalize, is already locked clean
+// by OP-116 — matches posixpath, clamps `..` at root, no traversal). Two
+// genuine 🔴 were found and FIXED; this leaf locks both against a Python
+// urllib.parse oracle, EACH paired with a negative-control demonstrating the
+// OLD broken body actually mis-behaved (so the green is not a tautology).
+//
+//   (1) PERCENT-DECODE multibyte corruption (value/encoding bug, OP-128
+//       cross-token class) — a %XX escape encodes ONE RAW BYTE, not a Unicode
+//       code point. The pure url_decode_pure (self/runtime/url_pure.hexa +
+//       encoding_pure.hexa) and self/main.hexa::hexa_url_decode emitted
+//       `from_char_code(byte)` / `chr(byte)` per escape, so under the Rust
+//       interpreter every byte ≥ 0x80 was re-UTF-8-encoded: "%E2%9C%93" (✓)
+//       decoded to the 6-byte garbage c3 a2 c2 9c c2 93 instead of the 3 raw
+//       bytes e2 9c 93. FIX = collect raw bytes → bytes_to_str_raw (the OP-135
+//       byte-faithful SSOT; the same pattern std_encoding.url_decode uses).
+//       Oracle: urllib.parse.unquote("%E2%9C%93") == "✓".
+//
+//   (2) IPv6 AUTHORITY port-confusion (SECURITY — parse confusion / DoS) —
+//       stdlib/net/websocket_native.hexa::_ws_url_parse split host:port on the
+//       FIRST ':'. For "ws://[::1]:8080/p" the first ':' is INSIDE the IPv6
+//       literal, so host parsed to "[" and the port read `to_int(":1]:8080")`
+//       which THREW "to_int: not an integer" — every IPv6 ws:// URL hard-
+//       crashed (a parse-confusion DoS; on a permissive to_int it would have
+//       silently mis-routed the host). FIX = bracket-aware split (RFC 3986
+//       §3.2.2): host = the bracketed span (brackets stripped, matching
+//       urlsplit().hostname), port = the ':' AFTER ']' only.
+//       Oracle: urlsplit("ws://[::1]:8080/p") → hostname "::1", port 8080.
+//
+// Self-contained (no `use` — stale-bundle dodge, OP-87/88 convention). The
+// fixed url_decode + ws-authority bodies are inlined VERBATIM from source.
+// closure-OUT: self/runtime/url_pure.hexa + encoding_pure.hexa are dormant
+// (referenced only by their own tests), self/main.hexa is the OLD self-host
+// tree (the active byte-eq build compiles compiler/main.hexa), and
+// stdlib/net/* is a net leaf — so byte-eq / fixpoint is UNAFFECTED.
+//
+// Run: hexa run stdlib/net/url_parse_normalize_op136_test.hexa  → "PASS".
+
+// ── (1) percent-decode — VERBATIM from self/runtime/url_pure.hexa (FIXED) ──
+fn _hex_to_int(c) {
+    let o = ord(c)
+    if o >= 48 && o <= 57  { return o - 48 }
+    if o >= 65 && o <= 70  { return o - 65 + 10 }
+    if o >= 97 && o <= 102 { return o - 97 + 10 }
+    -1
+}
+
+fn url_decode_fixed(s) {
+    if type_of(s) != "string" { return "" }
+    let n = len(s)
+    let mut bytes = []
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "+" {
+            bytes.push(32)
+            i = i + 1
+        } else if c == "%" && i + 2 < n {
+            let hi = _hex_to_int(s.substring(i + 1, i + 2))
+            let lo = _hex_to_int(s.substring(i + 2, i + 3))
+            if hi >= 0 && lo >= 0 {
+                bytes.push((hi * 16 + lo) & 0xFF)
+                i = i + 3
+            } else {
+                bytes.push(ord(c))
+                i = i + 1
+            }
+        } else if c == "%" && i + 2 >= n {
+            while i < n {
+                bytes.push(ord(s.substring(i, i + 1)))
+                i = i + 1
+            }
+        } else {
+            bytes.push(ord(c))
+            i = i + 1
+        }
+    }
+    bytes_to_str_raw(bytes)
+}
+
+// NEGATIVE CONTROL — the OLD per-escape `from_char_code` body. Demonstrates
+// the multibyte corruption (≠ the fixed/oracle result), so the lock is real.
+fn url_decode_OLD_broken(s) {
+    let n = len(s)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "+" {
+            out = out + " "
+            i = i + 1
+        } else if c == "%" && i + 2 < n {
+            let hi = _hex_to_int(s.substring(i + 1, i + 2))
+            let lo = _hex_to_int(s.substring(i + 2, i + 3))
+            if hi >= 0 && lo >= 0 {
+                out = out + from_char_code(hi * 16 + lo)
+                i = i + 3
+            } else {
+                out = out + c
+                i = i + 1
+            }
+        } else {
+            out = out + c
+            i = i + 1
+        }
+    }
+    out
+}
+
+// ── (2) ws authority split — VERBATIM from websocket_native.hexa (FIXED) ──
+// Returns "host|port|path". Bracket-aware IPv6 handling.
+fn ws_authority_fixed(url: string) -> string {
+    let rest = url.substring(5, len(url))
+    let slash = rest.index_of("/")
+    let mut authority = rest
+    let mut path = "/"
+    if slash >= 0 {
+        authority = rest.substring(0, slash)
+        path = rest.substring(slash, len(rest))
+    }
+    if len(path) == 0 { path = "/" }
+    let mut host = ""
+    let mut port = 80
+    if len(authority) > 0 && authority.substring(0, 1) == "[" {
+        let rb = authority.index_of("]")
+        if rb < 0 { return "ERR-unterminated" }
+        host = authority.substring(1, rb)
+        let after = authority.substring(rb + 1, len(authority))
+        if len(after) > 0 && after.substring(0, 1) == ":" {
+            let p = to_int(after.substring(1, len(after)))
+            if p > 0 { port = p }
+        }
+    } else {
+        let colon = authority.index_of(":")
+        if colon >= 0 {
+            host = authority.substring(0, colon)
+            let p = to_int(authority.substring(colon + 1, len(authority)))
+            if p > 0 { port = p }
+        } else {
+            host = authority
+        }
+    }
+    return host + "|" + to_string(port) + "|" + path
+}
+
+// NEGATIVE CONTROL — the OLD first-':' body, on a NON-IPv6 authority only
+// (the IPv6 input made the old body THROW to_int, which a test cannot catch).
+// "host:8080" → old grabbed the right ':' here; the falsifier is structural:
+// show that on the bracketed authority the FIRST ':' lands INSIDE the address,
+// so host would have been the bare "[" prefix (the confusion the fix removes).
+fn ws_old_first_colon_host(authority: string) -> string {
+    let colon = authority.index_of(":")
+    if colon >= 0 { return authority.substring(0, colon) }
+    return authority
+}
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // ── (1) percent-decode value-correctness vs urllib.parse.unquote ──
+    // multibyte ✓ — the headline fix
+    total = total + 1
+    if url_decode_fixed("%E2%9C%93") == "✓" { pass = pass + 1 }
+    // single-byte ASCII
+    total = total + 1
+    if url_decode_fixed("%41") == "A" { pass = pass + 1 }
+    // '+' → space (form flavor)
+    total = total + 1
+    if url_decode_fixed("hello+world") == "hello world" { pass = pass + 1 }
+    // reserved %2F decodes to '/' (the byte, not a structural split)
+    total = total + 1
+    if url_decode_fixed("a%2Fb") == "a/b" { pass = pass + 1 }
+    // invalid %ZZ passthrough verbatim
+    total = total + 1
+    if url_decode_fixed("%ZZ") == "%ZZ" { pass = pass + 1 }
+    // trailing partial '%' verbatim
+    total = total + 1
+    if url_decode_fixed("100%") == "100%" { pass = pass + 1 }
+    total = total + 1
+    if url_decode_fixed("%4") == "%4" { pass = pass + 1 }
+    // 2-byte Korean 한 = EC 95 88
+    total = total + 1
+    if url_decode_fixed("%ED%95%9C") == "한" { pass = pass + 1 }
+
+    // FALSIFIER — the OLD body corrupts the multibyte sequence (≠ ✓).
+    total = total + 1
+    if url_decode_OLD_broken("%E2%9C%93") != "✓" { pass = pass + 1 }
+
+    // ── (2) ws IPv6 authority decomposition vs urlsplit ──
+    // IPv6 + port — previously a hard crash; now host "::1", port 8080
+    total = total + 1
+    if ws_authority_fixed("ws://[::1]:8080/path") == "::1|8080|/path" { pass = pass + 1 }
+    // longer IPv6 + port
+    total = total + 1
+    if ws_authority_fixed("ws://[2001:db8::1]:9000/x") == "2001:db8::1|9000|/x" { pass = pass + 1 }
+    // IPv6 no port → default 80
+    total = total + 1
+    if ws_authority_fixed("ws://[::1]/path") == "::1|80|/path" { pass = pass + 1 }
+    // regular host:port unaffected
+    total = total + 1
+    if ws_authority_fixed("ws://host:8080/p") == "host|8080|/p" { pass = pass + 1 }
+    // regular host no port
+    total = total + 1
+    if ws_authority_fixed("ws://host/p") == "host|80|/p" { pass = pass + 1 }
+    // bare host, no path
+    total = total + 1
+    if ws_authority_fixed("ws://host") == "host|80|/" { pass = pass + 1 }
+
+    // FALSIFIER — old first-':' split lands inside the IPv6 literal, yielding
+    // the bare "[" prefix as "host" (the parse confusion the fix removes).
+    total = total + 1
+    if ws_old_first_colon_host("[::1]:8080") == "[" { pass = pass + 1 }
+
+    println("__HEXA_STDLIB_URL_PARSE_NORMALIZE_OP136__ " + to_string(pass) + "/" + to_string(total))
+    if pass == total {
+        println("PASS")
+    } else {
+        println("FAIL")
+    }
+}
