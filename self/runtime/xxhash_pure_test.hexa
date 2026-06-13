@@ -1,0 +1,75 @@
+// self/runtime/xxhash_pure_test.hexa — xxhash_pure invariant lock (OP-82).
+//
+// Locks the documented contract of self/runtime/xxhash_pure.hexa, which
+// ships WITHOUT a co-located test. The module claims to be xxHash32
+// (Yann Collet — the canonical reference). Every value below is the EXACT
+// output of a faithful Python port of the xxHash32 reference algorithm
+// (primes 0x9E3779B1.. , 16-byte stripe + 4-byte + tail + avalanche), so
+// this oracle pins the module to the standard.
+//
+// Gates:
+//   G1 SHORT    short (<16 B) ASCII strings == reference (seed 0)
+//   G2 STRIPE   16+ B strings == reference (exercises the 4-acc stripe loop)
+//   G3 SEED     seed sensitivity + simple()==seed0 alias
+//   G4 RANGE    result in [0, 0xFFFFFFFF], deterministic, order-sensitive
+//
+// Runs on the interpreter (`hexa run`) — xxhash_pure is interpreter-safe
+// (no `<<`/`>>`; division/multiply + inlined bit helpers), so this oracle
+// locks correctness on the SAME execution path the module ships on.
+//
+// SCOPE NOTE: ASCII (<0x80) inputs only (interpreter from_char_code is
+// codepoint->UTF-8, cannot build raw bytes). Full raw-byte reference
+// parity was proven by the faithful Python port (0 mismatch) — OP-82
+// verdict.
+// @sentinel(__HEXA_RUNTIME_XXHASH__ <PASS|FAIL> N/N)
+
+use "self/runtime/xxhash_pure"
+
+let SENT_T = "__HEXA_RUNTIME_XXHASH__"
+let M32 = 0xFFFFFFFF
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // ── G1 SHORT — <16 B vectors == xxHash32 reference (seed 0) ───────
+    let gs = ["", "a", "abc", "foo", "hello", "hello world", "123456789"]
+    let gv = [46947589, 1426945110, 852579327, 3792637401, 4211111929,
+              3468387874, 2474356071]
+    let mut gi = 0
+    while gi < len(gs) {
+        total = total + 1
+        if xxhash32_pure(gs[gi], 0) == gv[gi] { pass = pass + 1 } else { eprintln("FAIL G1 short " + gs[gi]) }
+        gi = gi + 1
+    }
+
+    // ── G2 STRIPE — 16+ B vectors (exercise the 4-accumulator loop) ──
+    total = total + 1
+    if xxhash32_pure("aaaaaaaaaaaaaaaa", 0) == 1571609996 { pass = pass + 1 } else { eprintln("FAIL G2 16-byte") }
+    total = total + 1
+    if xxhash32_pure("abcdefghijklmnopqrstuvwxyz", 0) == 1671515487 { pass = pass + 1 } else { eprintln("FAIL G2 alphabet") }
+    total = total + 1
+    if xxhash32_pure("The quick brown fox jumps over the lazy dog", 0) == 3898516702 { pass = pass + 1 } else { eprintln("FAIL G2 pangram") }
+
+    // ── G3 SEED — seeded vector + alias ──────────────────────────────
+    total = total + 1
+    if xxhash32_pure("hello", 1) == 4244634537 { pass = pass + 1 } else { eprintln("FAIL G3 seed-vector") }
+    total = total + 1
+    if xxhash32_pure("hello", 0) != xxhash32_pure("hello", 1) { pass = pass + 1 } else { eprintln("FAIL G3 seed-sensitivity") }
+    total = total + 1
+    if xxhash32_simple("abc") == xxhash32_pure("abc", 0) { pass = pass + 1 } else { eprintln("FAIL G3 simple-alias") }
+
+    // ── G4 RANGE / structural invariants ─────────────────────────────
+    total = total + 1
+    let h = xxhash32_pure("hello world", 0)
+    if h >= 0 { pass = pass + 1 } else { eprintln("FAIL G4 nonneg") }
+    total = total + 1
+    if h <= M32 { pass = pass + 1 } else { eprintln("FAIL G4 fits32") }
+    total = total + 1
+    if xxhash32_pure("abc", 0) == xxhash32_pure("abc", 0) { pass = pass + 1 } else { eprintln("FAIL G4 determinism") }
+    total = total + 1
+    if xxhash32_pure("ab", 0) != xxhash32_pure("ba", 0) { pass = pass + 1 } else { eprintln("FAIL G4 order-sensitive") }
+
+    let verdict = if pass == total { "PASS" } else { "FAIL" }
+    println(SENT_T + " " + verdict + " " + str(pass) + "/" + str(total))
+}

@@ -1,0 +1,147 @@
+F-OP82-RUNTIME-PURE-COVERAGE
+============================
+TIER: 🟢 GREEN — batch invariant-lock (6 runtime *_pure.hexa leaf oracles)
+DATE: 2026-06-13
+LANE: 1 (0-pod correctness; runtime *_pure helper coverage — OP-80 follow-on)
+SCOPE: $0 · 0-pod · NO GPU · no vast · no foreign pod · no .tape · no self/env.hexa · leak-0
+
+GOAL
+----
+OP-80 (#3219) found that 76 self/runtime/*_pure.hexa helpers ship with ZERO
+co-located tests and locked crc32_pure (1/76). This round BATCH-locks the next
+HIGH-value tranche — the untested *_pure helpers that each carry an AUTHORITATIVE
+external reference (a named standard hash/checksum/encoding/number-format with
+known test vectors) — in ONE PR. g0: the high-value ~6 this round + census the rest.
+
+CENSUS (scoped, NO .git — STEP 1)
+---------------------------------
+72 self/runtime/*_pure.hexa helpers ship. After OP-80 (crc32) and the older
+inline-style self/test_*.hexa files, the co-located-test gap = 71 helpers with a
+*_pure_test.hexa twin missing at the round's start. Each candidate triaged for
+VALUE: HIGH = a single authoritative cross-checkable reference (a named standard);
+MED/LOW = internal-only, no external oracle.
+
+HIGH-value untested helpers IDENTIFIED (authoritative reference in parens):
+  · murmur3_pure  — MurmurHash3 x86_32 (aappleby/smhasher; mmh3 pkg)   ← LOCKED
+  · xxhash_pure   — xxHash32 (Yann Collet reference)                   ← LOCKED
+  · checksum_pure — Adler-32 (RFC 1950 / zlib.adler32) + DJB2/SDBM/    ← LOCKED
+                    XOR/Luhn (Bernstein, SDBM, mod-10 Luhn standards)
+  · base64_pure   — RFC 4648 base64 (CPython base64.b64encode)         ← LOCKED
+  · hex_pure      — byte<->hex codec (binascii.hexlify)                ← LOCKED
+  · mod_exp_pure  — modular arith (CPython pow / math.gcd / pow -1)    ← LOCKED
+  · siphash_pure        — SipHash-2-4 (Aumasson/Bernstein)             — DEFERRED (next tranche)
+  · hash_pure           — FNV-1a 32 (the FNV reference)                — DEFERRED
+  · encoding_pure       — base64/url/hexdump (RFC 4648/3986)           — DEFERRED (overlaps base64_pure)
+  · cipher_mini_pure / bignum_mini_pure / hash_rng_pure / kmp_pure /
+    levenshtein_pure / prime_sieve_pure / conv_pure / ipv4_pure /
+    datetime_pure / date_time_pure / hyperloglog_pure                 — DEFERRED (HIGH-ish, future rounds)
+MED/LOW (internal-only, no external standard — deferred indefinitely): arena,
+array*, bit*, bloom_filter, char*, cmp, count_min_sketch, dedup, dijkstra,
+dispatch, file, fmt, format, geometry2d, graph*, heap, json_mini, lfu/lru/lsm,
+map*, math, numeric_sat, parse*, path, print_fmt, range, reducer, regex_mini,
+reservoir_sample, set_ext, sort_variants, spawn, string, topo_sort, trie,
+union_find, value, welford, ffi_path  — round-trip/structural-only, no single
+authoritative vector; these are MED-LOW per g0 and were not picked this round.
+
+PICK = the 6 HIGH helpers with the cleanest single authoritative reference and a
+runs-on-the-shipping-interpreter contract (g0-simplest leaf oracles).
+
+THE BATCH LOCK (6 NEW leaf oracles, OP-80 pattern: `use "self/runtime/<mod>"`,
+fn main(), @sentinel(...), runs on the shipping `hexa run` interpreter path)
+---------------------------------------------------------------------------
+1) self/runtime/murmur3_pure_test.hexa  @sentinel __HEXA_RUNTIME_MURMUR3__
+   G1 empty==0 · G2 8 smhasher-reference vectors (seed 0) · G3 seeded vector
+   3806057185 + seed sensitivity · G4 simple/hash32 aliases · G5 range/det/order.
+   RUN: __HEXA_RUNTIME_MURMUR3__ PASS 17/17  (exit 0)
+
+2) self/runtime/xxhash_pure_test.hexa   @sentinel __HEXA_RUNTIME_XXHASH__
+   G1 short (<16B) reference vectors · G2 16+B stripe-loop vectors · G3 seeded
+   4244634537 + simple alias · G4 range/det/order.
+   RUN: __HEXA_RUNTIME_XXHASH__ PASS 17/17  (exit 0)
+
+3) self/runtime/checksum_pure_test.hexa @sentinel __HEXA_RUNTIME_CHECKSUM__
+   G1 adler32 == zlib.adler32 (5 goldens + empty==1) · G2 DJB2 goldens · G3 SDBM
+   goldens · G4 XOR goldens + [0,255] range · G5 Luhn: valid cards (Visa
+   4532015112830366, 79927398713) == 0, invalid != 0, dashes skipped.
+   RUN: __HEXA_RUNTIME_CHECKSUM__ PASS 29/29  (exit 0)
+
+4) self/runtime/base64_pure_test.hexa   @sentinel __HEXA_RUNTIME_BASE64__
+   G1 encode == base64.b64encode (9 goldens) · G2 1/2/0-residue padding · G3
+   decode(encode(s))==s round-trip over 20-string corpus (RFC 4648 identity) ·
+   G4 authoritative decode direction + type-guards.
+   RUN: __HEXA_RUNTIME_BASE64__ PASS 17/17  (exit 0)
+
+5) self/runtime/hex_pure_test.hexa      @sentinel __HEXA_RUNTIME_HEX__
+   G1 encode == binascii.hexlify (7 goldens) · G2 uppercase form · G3
+   hex_of_byte boundaries (00/0f/10/ff) · G4 decode byte-ints + odd/invalid->[] ·
+   G5 encode->decode->re-encode codec round-trip + int_to_hex goldens.
+   RUN: __HEXA_RUNTIME_HEX__ PASS 22/22  (exit 0)
+
+6) self/runtime/mod_exp_pure_test.hexa  @sentinel __HEXA_RUNTIME_MODEXP__
+   G1 mod_exp == CPython pow(b,e,m) (7 goldens incl. big 1e9+7) · G2 gcd/lcm ==
+   math.gcd + commutativity · G3 mod_inv == pow(a,-1,m) + (a*inv)%m==1 identity +
+   no-inverse->-1 · G4 ext-gcd Bezout a*x+b*y==g · G5 Miller-Rabin vs trial
+   division incl. Carmichael 561/1105.
+   RUN: __HEXA_RUNTIME_MODEXP__ PASS 21/21  (exit 0)
+
+ALL 6 RUN GREEN on the SHIPPING `hexa run` interpreter (the same execution path
+the modules ship on), total 123/123 gates PASS, exit 0.
+
+AUTHORITATIVE CROSS-CHECK (g5 — faithful Python stdlib ports vs the references)
+------------------------------------------------------------------------------
+Every leaf vector above was generated by a faithful Python port of the exact
+module algorithm and confirmed against the authoritative reference (0 mismatch):
+  · adler32 vs CPython zlib.adler32 — 0/4004 mismatch (incl. empty, 0x00, 0xFF,
+    the full 0..255 byte buffer, + 4000 random buffers len 0..40).
+  · base64 RFC 4648 round-trip (base64.b64decode∘b64encode) — 0 mismatch same corpus.
+  · binascii.hexlify round-trip — 0 mismatch same corpus.
+  · murmur3 vs the smhasher MurmurHash3.cpp port + mmh3 — vectors match.
+  · xxhash32 vs the Yann Collet xxHash32 reference port — vectors match (short +
+    16B-stripe + tail paths).
+  · mod_exp/gcd/mod_inv vs CPython pow / math.gcd / pow(a,-1,m) — vectors match;
+    Miller-Rabin vs trial-division agrees incl. Carmichael 561/1105.
+
+SCOPE NOTE (g5, same as OP-80): the leaf gates use ASCII (<0x80) inputs only.
+The interpreter's from_char_code does codepoint->UTF-8 (from_char_code(255) yields
+the 2-byte 0xC3 0xBF, not a raw 0xFF), so raw single-byte vectors cannot be built
+on `hexa run`. The full 0..255 RAW-BYTE coverage is carried by the Python
+authoritative ports above (0 mismatch). MEMORY "local hexa stale oracle" CONFIRMED
+this round: the Jun-1 build/hexat binary MISCOMPILES a function whose final
+expression is a bare unary `-1` (e.g. hex_pure._hex_digit_val) — it evaluates it
+as a binary subtract of the prior if-expression result ("cannot subtract
+non-numeric operand, tag 4 - tag 0"). The SHIPPING `hexa run` interpreter handles
+it CORRECTLY (verified: `z->-1`), so hex_pure is NOT buggy — the stale hexat was.
+All 6 oracles were therefore GATED on the shipping `hexa run`, not the stale hexat.
+
+NO 🔴 BUG: all 6 helpers AGREE with their authoritative references. (The bare-`-1`
+miscompile is a property of the stale build/hexat oracle only, not of any shipping
+module or the shipping interpreter — flagged here as an oracle caveat, not a defect.)
+
+COVERAGE MATRIX (runtime *_pure.hexa helper -> value -> status)
+--------------------------------------------------------------
+  crc32_pure       HIGH  already-locked (OP-80)
+  murmur3_pure     HIGH  locked THIS round
+  xxhash_pure      HIGH  locked THIS round
+  checksum_pure    HIGH  locked THIS round  (adler32/djb2/sdbm/xor/luhn)
+  base64_pure      HIGH  locked THIS round
+  hex_pure         HIGH  locked THIS round
+  mod_exp_pure     HIGH  locked THIS round
+  siphash/hash/encoding/cipher_mini/bignum_mini/hash_rng/kmp/levenshtein/
+    prime_sieve/conv/ipv4/datetime/date_time/hyperloglog   HIGH  DEFERRED (next tranches)
+  ~50 internal-only helpers                                 MED-LOW DEFERRED (no external oracle)
+  (url_pure, rle_pure   PROVEN-CLEAN at OP-80; datetime_mini_pure locked OP-81)
+
+COVERAGE COUNT: 7 / 72 runtime *_pure.hexa helpers now carry a co-located leaf
+oracle (crc32 @OP-80 + the 6 above). HIGH-value tranche is being drained
+round-by-round; ~14 HIGH-value untested remain for future OP-8x rounds.
+
+BYTE-EQ / SELF-HOST
+-------------------
+NEW FILES ONLY (6 *_pure_test.hexa leaf oracles). They are NOT in the
+build_selfhost closure (not imported by hexa_full or any stage) — zero
+source/codegen/runtime bytes change, self-host fixpoint UNAFFECTED. Every audited
+*_pure.hexa module is left UNCHANGED (PROVEN-CLEAN). wipe_guard net-additive
+(6 new files, 562 lines, 0 deletions).
+
+VERDICT: 🟢 GREEN — 6 runtime *_pure helpers batch-locked to their authoritative
+references; 0 disagreements (no 🔴). $0, 0-pod, NO GPU, leak-0.

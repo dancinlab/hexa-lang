@@ -1,0 +1,100 @@
+// self/runtime/checksum_pure_test.hexa — checksum_pure invariant lock (OP-82).
+//
+// Locks the documented contracts of self/runtime/checksum_pure.hexa, which
+// ships WITHOUT a co-located test. The module exposes five classical
+// checksums, each with an authoritative external reference:
+//   adler32_pure — Adler-32 (RFC 1950 zlib); cross-checked vs CPython
+//                  zlib.adler32 (THE authoritative reference, verbatim).
+//   djb2_pure    — Bernstein DJB2 (h=h*33+c, init 5381, 32-bit masked).
+//   sdbm_pure    — SDBM (h=c+h*65599, 32-bit masked).
+//   sum_xor_pure — 8-bit XOR checksum (result in [0,255]).
+//   luhn_pure    — Luhn mod-10 (0 == valid); cross-checked vs known-valid
+//                  card numbers (4532015112830366 Visa, 79927398713).
+//
+// Gates:
+//   G1 ADLER  5 ASCII strings == zlib.adler32 (authoritative)
+//   G2 DJB2   golden values + init==5381 for empty
+//   G3 SDBM   golden values
+//   G4 XOR    golden values + range [0,255]
+//   G5 LUHN   valid cards == 0, invalid != 0, dashes skipped
+//
+// Runs on the interpreter (`hexa run`) — checksum_pure is interpreter-safe
+// (no `<<`/`>>`; modulo/multiply only). ASCII (<0x80) inputs only (the
+// interpreter cannot build raw bytes via from_char_code); full raw-byte
+// adler32/zlib parity proven by the faithful Python port — OP-82 verdict.
+// @sentinel(__HEXA_RUNTIME_CHECKSUM__ <PASS|FAIL> N/N)
+
+use "self/runtime/checksum_pure"
+
+let SENT_T = "__HEXA_RUNTIME_CHECKSUM__"
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    let strs = ["", "a", "abc", "hello", "hello world"]
+
+    // ── G1 ADLER — exact zlib.adler32 outputs (authoritative) ────────
+    let av = [1, 6422626, 38600999, 103547413, 436929629]
+    let mut i = 0
+    while i < len(strs) {
+        total = total + 1
+        if adler32_pure(strs[i]) == av[i] { pass = pass + 1 } else { eprintln("FAIL G1 adler " + strs[i]) }
+        i = i + 1
+    }
+    // adler32 empty == 1 (the RFC 1950 init: a=1,b=0 -> b*65536+a == 1)
+    total = total + 1
+    if adler32_pure("") == 1 { pass = pass + 1 } else { eprintln("FAIL G1 adler-empty") }
+
+    // ── G2 DJB2 — h = h*33 + c, init 5381, masked ────────────────────
+    let dv = [5381, 177670, 193485963, 261238937, 894552257]
+    i = 0
+    while i < len(strs) {
+        total = total + 1
+        if djb2_pure(strs[i]) == dv[i] { pass = pass + 1 } else { eprintln("FAIL G2 djb2 " + strs[i]) }
+        i = i + 1
+    }
+
+    // ── G3 SDBM — h = c + h*65599, masked ────────────────────────────
+    let sv = [0, 97, 807794786, 684824882, 430867652]
+    i = 0
+    while i < len(strs) {
+        total = total + 1
+        if sdbm_pure(strs[i]) == sv[i] { pass = pass + 1 } else { eprintln("FAIL G3 sdbm " + strs[i]) }
+        i = i + 1
+    }
+
+    // ── G4 XOR — 8-bit XOR checksum, range [0,255] ───────────────────
+    let xv = [0, 97, 96, 98, 32]
+    i = 0
+    while i < len(strs) {
+        total = total + 1
+        if sum_xor_pure(strs[i]) == xv[i] { pass = pass + 1 } else { eprintln("FAIL G4 xor " + strs[i]) }
+        i = i + 1
+    }
+    total = total + 1
+    let xr = sum_xor_pure("hello world")
+    if xr >= 0 { pass = pass + 1 } else { eprintln("FAIL G4 xor-nonneg") }
+    total = total + 1
+    if xr <= 255 { pass = pass + 1 } else { eprintln("FAIL G4 xor-byte-range") }
+
+    // ── G5 LUHN — mod-10 check (0 == valid) ──────────────────────────
+    total = total + 1
+    if luhn_pure("4532015112830366") == 0 { pass = pass + 1 } else { eprintln("FAIL G5 luhn-visa") }
+    total = total + 1
+    if luhn_pure("79927398713") == 0 { pass = pass + 1 } else { eprintln("FAIL G5 luhn-known-valid") }
+    total = total + 1
+    if luhn_pure("79927398714") != 0 { pass = pass + 1 } else { eprintln("FAIL G5 luhn-invalid") }
+    // dashes/spaces are skipped — same result as the bare digit string
+    total = total + 1
+    if luhn_pure("4532-0151-1283-0366") == luhn_pure("4532015112830366") { pass = pass + 1 } else { eprintln("FAIL G5 luhn-dashes") }
+
+    // ── determinism / type-guards ────────────────────────────────────
+    total = total + 1
+    if adler32_pure("abc") == adler32_pure("abc") { pass = pass + 1 } else { eprintln("FAIL determinism") }
+    total = total + 1
+    if djb2_pure(42) == 5381 { pass = pass + 1 } else { eprintln("FAIL djb2-non-string") }
+
+    let verdict = if pass == total { "PASS" } else { "FAIL" }
+    println(SENT_T + " " + verdict + " " + str(pass) + "/" + str(total))
+}

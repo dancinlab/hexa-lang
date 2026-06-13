@@ -1,0 +1,111 @@
+// self/runtime/hex_pure_test.hexa — hex_pure invariant lock (OP-82).
+//
+// Locks the documented contract of self/runtime/hex_pure.hexa, which ships
+// WITHOUT a co-located test. The module is a byte<->hex codec. Every
+// encoded value below is the EXACT output of CPython
+// binascii.hexlify (the authoritative reference). The decode path returns
+// an int byte-array; it is locked by the identity that hex_decode_pure of
+// the encoding reproduces the original byte values, and by re-hex-encoding
+// the decoded bytes back to the original hex string (codec round-trip).
+//
+// Gates:
+//   G1 ENCODE   ASCII strings == binascii.hexlify (lowercase, authoritative)
+//   G2 UPPER    hex_encode_upper_pure == uppercase form
+//   G3 OFBYTE   hex_of_byte_pure boundary bytes (0x00,0x0f,0x10,0xff)
+//   G4 DECODE   hex_decode_pure yields the right byte ints; odd/invalid -> []
+//   G5 ROUNDTRIP encode∘decode reproduces bytes; int_to_hex_pure goldens
+//
+// Runs on the interpreter (`hexa run`) — hex_pure is interpreter-safe
+// (/16,%16,.substring/ord). ASCII (<0x80) inputs only on this path; the
+// codec covers full 0..255 (proven by the faithful Python port, OP-82).
+// @sentinel(__HEXA_RUNTIME_HEX__ <PASS|FAIL> N/N)
+
+use "self/runtime/hex_pure"
+
+let SENT_T = "__HEXA_RUNTIME_HEX__"
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+
+    // ── G1 ENCODE — exact binascii.hexlify outputs (authoritative) ───
+    let ps = ["", "a", "abc", "foo", "hello", "hello world", "123456789"]
+    let hs = ["", "61", "616263", "666f6f", "68656c6c6f",
+              "68656c6c6f20776f726c64", "313233343536373839"]
+    let mut i = 0
+    while i < len(ps) {
+        total = total + 1
+        if hex_encode_pure(ps[i]) == hs[i] { pass = pass + 1 } else { eprintln("FAIL G1 encode " + ps[i]) }
+        i = i + 1
+    }
+
+    // ── G2 UPPER — uppercase encoding ────────────────────────────────
+    total = total + 1
+    if hex_encode_upper_pure("hello") == "68656C6C6F" { pass = pass + 1 } else { eprintln("FAIL G2 upper") }
+    total = total + 1
+    if hex_encode_upper_pure("foo") == "666F6F" { pass = pass + 1 } else { eprintln("FAIL G2 upper-foo") }
+
+    // ── G3 OFBYTE — single-byte 2-char hex, boundary values ──────────
+    total = total + 1
+    if hex_of_byte_pure(0) == "00" { pass = pass + 1 } else { eprintln("FAIL G3 byte-00") }
+    total = total + 1
+    if hex_of_byte_pure(15) == "0f" { pass = pass + 1 } else { eprintln("FAIL G3 byte-0f") }
+    total = total + 1
+    if hex_of_byte_pure(16) == "10" { pass = pass + 1 } else { eprintln("FAIL G3 byte-10") }
+    total = total + 1
+    if hex_of_byte_pure(255) == "ff" { pass = pass + 1 } else { eprintln("FAIL G3 byte-ff") }
+
+    // ── G4 DECODE — hex string -> byte ints; error cases -> [] ───────
+    let dec = hex_decode_pure("68656c6c6f")     // "hello"
+    let exp = [104, 101, 108, 108, 111]
+    let mut dec_bad = 0
+    if len(dec) != len(exp) { dec_bad = dec_bad + 1 }
+    else {
+        let mut j = 0
+        while j < len(exp) { if dec[j] != exp[j] { dec_bad = dec_bad + 1 }; j = j + 1 }
+    }
+    total = total + 1
+    if dec_bad == 0 { pass = pass + 1 } else { eprintln("FAIL G4 decode-hello") }
+    // uppercase hex also decodes
+    total = total + 1
+    if len(hex_decode_pure("FF")) == 1 { pass = pass + 1 } else { eprintln("FAIL G4 decode-upper-len") }
+    total = total + 1
+    if hex_decode_pure("FF")[0] == 255 { pass = pass + 1 } else { eprintln("FAIL G4 decode-FF-val") }
+    // odd length -> []
+    total = total + 1
+    if len(hex_decode_pure("abc")) == 0 { pass = pass + 1 } else { eprintln("FAIL G4 decode-odd") }
+    // invalid char -> []
+    total = total + 1
+    if len(hex_decode_pure("zz")) == 0 { pass = pass + 1 } else { eprintln("FAIL G4 decode-invalid") }
+
+    // ── G5 ROUNDTRIP — encode(s) -> decode -> re-encode == hex(s) ────
+    // decode returns byte ints; re-build a string and re-encode to lock
+    // the codec round-trip (encode is the authoritative direction).
+    let mut rt_bad = 0
+    let corpus = ["", "a", "abc", "hello world", "123456789", "xyz!?."]
+    i = 0
+    while i < len(corpus) {
+        let s = corpus[i]
+        let enc = hex_encode_pure(s)
+        let bytes = hex_decode_pure(enc)
+        // rebuild string from byte ints and re-encode
+        let mut rebuilt = ""
+        let mut k = 0
+        while k < len(bytes) { rebuilt = rebuilt + from_char_code(bytes[k]); k = k + 1 }
+        if hex_encode_pure(rebuilt) != enc { rt_bad = rt_bad + 1 }
+        i = i + 1
+    }
+    total = total + 1
+    if rt_bad == 0 { pass = pass + 1 } else { eprintln("FAIL G5 roundtrip count=" + str(rt_bad)) }
+
+    // int_to_hex_pure goldens (min-width lowercase, no leading zeros)
+    total = total + 1
+    if int_to_hex_pure(0) == "0" { pass = pass + 1 } else { eprintln("FAIL G5 int-hex-0") }
+    total = total + 1
+    if int_to_hex_pure(255) == "ff" { pass = pass + 1 } else { eprintln("FAIL G5 int-hex-255") }
+    total = total + 1
+    if int_to_hex_pure(4096) == "1000" { pass = pass + 1 } else { eprintln("FAIL G5 int-hex-4096") }
+
+    let verdict = if pass == total { "PASS" } else { "FAIL" }
+    println(SENT_T + " " + verdict + " " + str(pass) + "/" + str(total))
+}
