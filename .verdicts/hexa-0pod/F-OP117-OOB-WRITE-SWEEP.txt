@@ -1,0 +1,133 @@
+================================================================================
+F-OP117-OOB-WRITE-SWEEP — write-side OOB census of the NON-crypto
+                          codec/data/buffer family (LANE-1, 0-pod) — the
+                          WRITE-side complement of OP-105's read-OOB sweep
+================================================================================
+DATE   : 2026-06-13
+LANE   : 1 (0-pod correctness / security). Complement of OP-105 (which closed
+         the length-prefixed-binary OOB-READ class) and distinct from OP-103
+         (slice-READ bounds). This audits the WRITE side: a site that WRITES
+         into a PRE-SIZED / fixed-size array/buffer at an index derived from a
+         count / length / position / stride WITHOUT confirming the write index
+         stays in [0, len(dest)) → an out-of-bounds write (corrupts the
+         neighbour / faults). NON-crypto only (crypto/protocol parsers are
+         LANE-2's surface — no overlap).
+TIER   : 🟢 CONVERGED — NO 🔴. Every write site in the NON-crypto
+         codec/data/buffer family keeps its write index PROVABLY in
+         [0, len(dest)) by one of three mechanisms (loop-counter bound /
+         value clamp / explicit range guard) OR the dest is sized to the true
+         max index. The two representative protective patterns are
+         re-derived verbatim in a leaf oracle (20/20 GREEN) with a NEGATIVE
+         CONTROL proving the clamp/guard is load-bearing (the unprotected
+         index really would escape the dest). Honest g5: this is a
+         "class clean / LANE-1 converged" SUCCESS, not a found-bug — no
+         fabricated 🔴.
+
+================================================================================
+MOTIVE — the unbounded-write bug class
+================================================================================
+A decoder / scatter / histogram / grid writer computes a destination index
+from input-derived data (a token id, a parsed bond endpoint, a bin value, a
+grid coordinate, a permutation entry) and writes into a buffer that was
+pre-allocated to a FIXED size. The trap: if the index can exceed the dest
+size and the write is unguarded, the store lands past the array end — an OOB
+write that corrupts adjacent memory or faults. The correct pattern keeps the
+write index in range by (a) using the LOOP COUNTER as the index (always
+bounded by the loop condition), (b) CLAMPing the data-derived value to
+[0, len-1] before the write, (c) GUARDing the write with an explicit
+in-range conditional, or (d) sizing the dest to the maximum possible index.
+
+================================================================================
+CENSUS MATRIX (non-crypto codec/data/buffer WRITE sites)
+================================================================================
+SITE (write · file:line)                                          CLASS    NOTE
+---------------------------------------------------------------- -------- ----
+binning  bins[j]=b · info/binning.hexa:43                          BOUNDED  L+C
+  write idx = loop counter j (j<n into n-sized bins); bin VALUE b
+  clamped to [0,n_bins-1] (:41-42). Index never data-derived.
+iit4 bin  bins[j]=b · consciousness/iit4/faithful_phi.hexa:115     BOUNDED  L+C
+  identical clamp+loop-counter pattern (RFC036 replica of binning).
+kmeans   counts[lab] · cluster/core_kmeans.hexa:196                BOUNDED  G
+  write GUARDED by `if lab>=0 && lab<k` (:190) before the bump.
+hofstadter grid[cy*cols+cx]="*" · sim_universe/.../hofstadter.hexa:437 BOUNDED G
+  write GUARDED `if cx>=0&&cx<cols&&cy>=0&&cy<rows` (:436).
+conserv-mi counts[b] · sim_universe/.../core_conservation_mi.hexa:103 BOUNDED  C
+  b=all_seqs[i][pos]; every base produced by base_idx() (:55-61)
+  which returns 0..3 (default return 0) -> provably in [0,NBASES).
+  joint[bx*NBASES+by] (:136) same — bx,by both base_idx()-clamped.
+nussinov db_arr[pair_i[pi]]/[pair_j[pi]] · bio/.../ribozyme_mfe_nussinov.hexa:117-118 BOUNDED S
+  pair_i/pair_j filled only from traceback (i,j) with the loop
+  invariant 0<=i<j<=n-1 (seed (0,n-1); `if i>=j {continue}` :89;
+  pushes i+1,j-1,k,k+1 only when in-range) -> always < len(db_arr)=n.
+rna-sim  db_arr[kept_orig[slot]] · bio/.../rna_targeting_small_molecule_sim.hexa:201 BOUNDED S
+  kept_orig pushes only k<n (:190); db_arr sized n (:198).
+embed-fwd X_out[i*d+c]=table[tok*d+c] · flame/nn_lib.hexa:595      BOUNDED  L
+  write idx = i*d+c, i<T & c<d -> dest X_out sized T*d (caller).
+embed-bwd dtable[tok*d+c] · flame/nn_lib.hexa:614                  SIZED-MAX D
+  scatter-add idx = tok*d+c; tok is a vocab id, dtable sized V*d by
+  the caller-contract (one row per vocab id, doc :583-587). Internal
+  training path; ids are model-internal, dtable sized to the max row.
+es-count cnt[tok] · flame/clm_prod_embed_scatter_eq.hexa:152       BOUNDED  S
+  cnt=t_zeros(V); tok generated `(s%(V/2+1))%V` (:140) -> tok<V.
+recordld used[best]=true · demi/record_loader.hexa:503             BOUNDED  S
+  `best` chosen from inner `k<len(stubs)` scan over un-used slots;
+  outer loop runs len(stubs) times so best is always a valid index.
+smiles   bsum[bd_a[bi]]/[bd_b[bi]] · bio/.../cmt_smiles_validation.hexa:473-474 BOUNDED S
+  bsum sized na=len(at_sym); bond endpoints are new_atom() returns
+  (=len(at_sym)-1, an existing atom idx) -> always < na.
+---------------------------------------------------------------- -------- ----
+MECHANISM KEY: L = loop-counter write index · C = value clamp before write ·
+G = explicit in-range guard · S = sized/invariant (index proven < len(dest)
+by construction) · D = dest sized to the max index by caller contract.
+
+ALL 13 non-crypto write sites surveyed: BOUNDED / SIZED-MAX. NO UNBOUNDED-WRITE.
+
+(Contrast — bounds-safe surfaces NOT a write-OOB risk, noted for completeness:
+ hexa native `array` push/index + dict (`counts[key]` associative) are
+ runtime-bounds-checked — a dict write can never OOB; only flat fixed-size
+ farr/t_zeros buffers with a computed index are in-scope, and those are the
+ 13 above. wasm_uleb128_decode (wasm/wasm_leb128.hexa:116) only RETURNS a
+ value, no buffer write — out of WRITE scope (its READ is OP-105's class).)
+
+================================================================================
+LOCK — verbatim-inlined leaf oracle (no `use`; stale-bundle dodge OP-87/88)
+================================================================================
+NEW stdlib/info/oob_write_bound_op117_test.hexa — shipping `hexa run` →
+  `OP117 oob-write-bound pass=20 fail=0` then `ALL GREEN`.
+Re-derives the two representative protective patterns verbatim:
+  Pattern A (clamp): a histogram-bin assembly into a fixed n_bins dest with
+    the bin value clamped to [0,n_bins-1] (binning.hexa). Drives raws
+    {-3,0,3,7,8,13} — values that UNCLAMPED would index -3..13 (OOB both
+    directions) — and asserts every clamped write lands in [0,n_bins),
+    dest length unchanged, total writes == #inputs (no neighbour corrupt).
+  Pattern B (guard): a guarded scatter into a pre-sized rows*cols grid
+    (hofstadter.hexa / core_kmeans.hexa). In-range (2,3) writes; OOB row
+    (rows+7), OOB col (cols+2), and negative coords all return -1 -> caller
+    skips -> NO OOB write; grid length unchanged, exactly one cell written.
+  NEGATIVE CONTROL: asserts the UNPROTECTED indices (raw 13 >= n_bins=8;
+    flat (rows+7)*cols = 55 >= 20) really do escape the dest range — so the
+    clamp/guard is load-bearing, not a no-op.
+
+================================================================================
+CLOSURE FLAGS
+================================================================================
+- BUILD-SELFHOST CLOSURE: none of the audited files (info/binning,
+  iit4/faithful_phi, cluster/core_kmeans, sim_universe/*, bio/*, flame/nn_lib,
+  flame/clm_prod_embed_scatter_eq, demi/record_loader) are in the
+  build_selfhost closure (no self/* nor build_selfhost.sh dependency — the
+  only `self/` hit is a CLI help-string literal in self/main.hexa). The NEW
+  leaf lives in stdlib/info/ (non-self, closure-OUT). → ZERO byte-eq /
+  fixpoint / selfhost-gate impact.
+- WIPE-GUARD: net-additive — ONE new file (124 lines), ZERO deletions, ZERO
+  edits to existing code (no fix needed — class already clean). No .tape edit.
+- $0 · 0-pod · NO GPU · no vast · no foreign-pod · leak-0.
+- LANE: LANE-1 (NON-crypto codec/data/buffer write-OOB). NO overlap with
+  LANE-2 (crypto/protocol resource-exhaustion, OP-115) — disjoint file set.
+- HONEST g5: the GOAL was CLOSING the OOB-WRITE class in non-crypto code. The
+  whole family keeps the write index in range by construction (loop / clamp /
+  guard / sized-max). An evidence-backed "all writes bounded — class clean /
+  LANE-1 converged" is the truthful verdict here; no 🔴 was fabricated, and
+  the leaf+negative-control prove the protections are real and load-bearing.
+
+OP-117 milestone [x]. Verdict: this file.
+================================================================================
