@@ -873,3 +873,63 @@ method-class front-end has NO open accuracy-capability gap. Round-14 = NEVPT2 co
    mo_energy is exact beyond the 1-dim-block CAS(2,2) restriction → opens many-core / many-virtual systems.
 3. PC-NEVPT2 / CASPT2 — the partially-contracted (per-perturber, tighter) variant + the CASPT2 zeroth-order
    Hamiltonian, plus the round-12-named CASSCF scaling (2nd-order Newton MCSCF · direct-CI Davidson).
+
+## 2026-06-13 — round-14: core/virtual orbital CANONICALIZATION — SC-NEVPT2 on real multi-core/virtual
+
+Round-13 sealed SC-NEVPT2 only on minimal CAS(2,2) H-chains whose core/virtual blocks are 1-DIMENSIONAL,
+where mo_energy = generalized-Fock diagonal is exact. For a REAL molecule with MULTIPLE core/virtual orbitals
+the generalized Fock is NOT diagonal in those blocks and the Koopmans-like NEVPT2 denominators are ill-defined
+unless the core/virtual spaces are CANONICALIZED. Round-14 ships that canonicalization + the two multi-core/
+virtual class bugs it exposed. `nevpt2.hexa` ONLY (casscf.hexa/fci.hexa BYTE-UNTOUCHED, d3/d19) + a new
+`nevpt2_canon_selftest.hexa` g5 gate.
+
+WHAT SHIPPED (the canonicalization, REUSE-first per d19):
+  • `nevpt2_gfock` — full n×n generalized Fock F_pq = F^I_pq + Σ_tu γ_tu[(pq|tu) − ½(pt|uq)] (the off-diagonal
+    generalization of r13's diagonal _nv_moe; γ = active 1-RDM).
+  • `nevpt2_canonicalize_C` — extract the core-core and virtual-virtual blocks of F → `eigh` each (REUSES the
+    sealed stdlib/alloc/math/eigen block diagonalizer, NOTHING minted) → assemble a block-diagonal rotation
+    U = U_core ⊕ I_active ⊕ U_virt → return C' = C·U. The active block is left untouched (NEVPT2 contracts the
+    active RDMs, not canonical active orbitals). After the rotation F is diagonal in core/virtual, so r13's
+    existing diagonal nevpt2_mo_energy IS the canonical Koopmans orbital energy — the class machinery is reused
+    verbatim, only its orbital-energy/denominator INPUT is fixed.
+  • `nevpt2_from_casscf_orbitals_canon` — end-to-end: build the active CI at the input orbitals to get γ (core/
+    virtual canonicalization leaves the active CI/γ invariant), canonicalize, then call r13's
+    nevpt2_from_casscf_orbitals on the canonicalized C.
+
+TWO multi-core/virtual class BUGS the canonicalization EXPOSED (both MASKED at 1 core/1 virtual, hence passed
+r13's CAS(2,2) H₄ gate; localized by the PySCF-canonical-orbital anchor where 4/6 classes already matched):
+  • Srsi transpose-partner: the (s,r,i) mirror term used `2·srip·rsia` where the working equation needs
+    `2·srip·sria` (h2e_v[s,r,i,a], not [r,s,i,a]). Identical when r=s (1 virtual) → masked.
+  • Sir nn6: the term +Σ_pqa v2_rpqi·v2_raai·γ_qp (PySCF einsum 'rpqi,raai,qp' — NO b index) was summed INSIDE
+    the b-loop → counted m× (an exact 2× over-count for m=2). Fixed by guarding it to one count per (p,q,a).
+
+g5 VERBATIM (nevpt2_canon_selftest.hexa, target H₆ STO-3G CAS(2,2): ncore=2 + 2 active + nvirt=2):
+  (a) PASS canon core-core off-diag² ≈ 0 (2.71945e-26) · PASS virt-virt off-diag² ≈ 0 (4.2992e-26). A 30°-
+      rotated input (virt off-diag²=0.0377097 ≫0) is driven back to ~0 by nevpt2_canonicalize_C.
+  (b) PASS H₆ CAS(2,2) NEVPT2 == pyscf −0.03786532 (canon) (got −0.0383324, |Δ|=4.67e-4). The residual is
+      hexa's FIRST-ORDER-CASSCF orbital-convergence gap, NOT a NEVPT2 error — PROVEN: on PySCF's OWN canonical
+      orbitals all 6 classes match <1e-6 (Sijrs −0.0174203 Sijr −0.00331534 Srsi −0.00124904 Srs −0.00138933
+      Sij −0.00207451 Sir −0.0124168, total −0.0378653 vs pyscf −0.03786532). PASS E_NEVPT2 < 0.
+  (c) PASS rotated input is genuinely non-canonical (off-diag² 0.0377 > 1e-4) · PASS canon NEVPT2 invariant
+      under the 30° core/virtual rotation (−0.0383324, |Δ|<1e-9) · PASS un-canonicalized diag-moe path is NOT
+      invariant (−0.0377832 ≠ −0.0383324) — canonicalization is LOAD-BEARING, not a no-op.
+  (d) PASS canon path == r13 path on 1-dim-block CAS(2,2) (|Δ|=0) · PASS 1-dim-block canon NEVPT2 ≡ 0 (full-
+      space H₂, no perturbers). The sealed r13 nevpt2_selftest + r1..r12 molscf selftests ALL still PASS;
+      casscf.hexa/fci.hexa byte-for-byte unchanged.
+  → qforge_molscf_nevpt2_canon_selftest PASS
+
+HONEST (d6): target = H₆ CAS(2,2), a REAL multi-core/virtual case (2 core + 2 virtual) where the 6 shipped
+(≤3-RDM) classes ARE the full SC-NEVPT2 (the two 4-RDM classes Sr/Si still vanish on CAS(2,2)). H₂O/N₂ CAS(2,2)
+would also work — the O/N p-shell STO-3G integrals already exist (round-4/5 MD) — but H₆ CAS(2,2) exercises the
+multi-core/virtual canonicalization IDENTICALLY through the sealed native H-1s integral path; stated so the
+anchor is unambiguous. Larger active spaces (CAS(4,4)+) additionally need the 4-RDM Sr/Si classes — round-15.
+
+### round-15 next (3 breakthrough paths, d2 — never concede)
+1. NEVPT2 4-RDM classes — add Sr (S_r^{(−1)}, a16) + Si (S_i^{(+1)}, a22) via the active 4-RDM
+   ⟨E_pq E_rs E_tu E_vw⟩ (same E-product ladder, one more contraction). Canonicalization shipped THIS round, so
+   full 8-class NEVPT2 then runs end-to-end on a real multi-core/virtual molecule (H₆ CAS(4,4), N₂ CAS(6,6)).
+2. PC-NEVPT2 / CASPT2 — the partially-contracted (per-perturber, tighter) variant + the CASPT2 zeroth-order
+   Hamiltonian.
+3. CASSCF SCALING — 2nd-order Newton/AH MCSCF + direct-CI Davidson past the dense-eigh / steepest-descent
+   ceiling (also shrinks the round-14 (b) |Δ|=4.67e-4 orbital-convergence residual toward the <1e-6 the PySCF-
+   orbital anchor already demonstrates) → N₂ CAS(6,6), Cr₂ CAS(12,12).

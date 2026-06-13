@@ -154,28 +154,60 @@ Fock 빌드, (3) 비직교 일반화 고유문제 `FC=SCε`. 모든 g5 anchor �
           check: H₂ CAS(2,2)=full → CASSCF=FCI → NEVPT2 ≡ 0 EXACTLY (no perturbers) — both limit anchors hold
       (d) r1..r12 (gaussian/coulomb/rhf/md/md_d/md_f/uhf/rohf/scf_robust/casci/fci/casscf) regress ALL PASS —
           nevpt2 is a NEW additive file; casscf.hexa/fci.hexa byte-for-byte unchanged
-- [ ] round-14 (named) — NEVPT2 COMPLETE + CASSCF SCALE: (1) the two 4-RDM classes Sr (S_r^{(−1)}, a16) +
+- [x] brick 17 (round-14) — core/virtual orbital CANONICALIZATION: SC-NEVPT2 on a REAL multi-core/virtual
+      molecule (lifts the r13 1-dim-block mo_energy restriction). `nevpt2.hexa` (additive — casscf.hexa
+      BYTE-UNTOUCHED): nevpt2_gfock builds the full n×n generalized Fock F=F^I+F^A(γ); nevpt2_canonicalize_C
+      eigh's the core-core and virtual-virtual blocks (REUSES eigh) → rotates the MO coeffs C←C·U (U=U_core ⊕
+      I_active ⊕ U_virt) so F is diagonal there → the existing diagonal nevpt2_mo_energy is then the canonical
+      Koopmans orbital energy; nevpt2_from_casscf_orbitals_canon wires it end-to-end. Two multi-core/virtual
+      bugs the canonicalization EXPOSED (masked at 1 core/1 virtual) are fixed: Srsi transpose-partner used
+      rsia where sria was required; Sir nn6 (rpqi,raai,qp — no b index) was summed inside the b-loop, an m×
+      over-count. Target = H₆ STO-3G CAS(2,2): ncore=2 + 2 active + nvirt=2 (multi-core AND multi-virtual).
+      (a) canonicalization correctness — canonicalized generalized-Fock core-core off-diag²=2.7e-26 + virt-virt
+          off-diag²=4.3e-26 → 0; a deliberately 30°-rotated input (virt off-diag²=0.0377 ≫0) is driven back to
+          ~0 by nevpt2_canonicalize_C. Off-diagonal residual reported VERBATIM.
+      (b) real-molecule NEVPT2 vs PySCF — H₆ CAS(2,2) canon SC-NEVPT2 = −0.0383324 vs pyscf mrpt.NEVPT
+          −0.03786532, |Δ|=4.67e-4 (the residual is hexa's FIRST-ORDER-CASSCF orbital-convergence gap, NOT a
+          NEVPT2 error). PROOF: on PySCF's OWN canonical orbitals ALL 6 classes match to <1e-6 (Sijrs −0.0174203
+          Sijr −0.00331534 Srsi −0.00124904 Srs −0.00138933 Sij −0.00207451 Sir −0.0124168, total −0.0378653 vs
+          −0.03786532) — the canonicalization + class math are EXACT, anchored to PySCF.
+      (c) canonicalization invariance / recovery — a 30° core+virtual rotation leaves the CANONICALIZED NEVPT2
+          unchanged to 1e-9 (block rotation = gauge freedom) while the un-canonicalized diagonal-moe path shifts
+          (−0.0377832 ≠ −0.0383324) — canonicalization is LOAD-BEARING, not a no-op
+      (d) reduction anchor / regression — 1-dim-block CAS(2,2) (H₂ full space): canon path == r13 path |Δ|=0
+          (canonicalizing a 1-dim block IS the identity, NEVPT2 ≡ 0); r13 nevpt2_selftest + r1..r12 regress ALL
+          PASS — casscf.hexa/fci.hexa byte-for-byte unchanged
+- [ ] round-15 (named) — NEVPT2 4-RDM CLASSES + CASSCF SCALE: (1) the two 4-RDM classes Sr (S_r^{(−1)}, a16) +
       Si (S_i^{(+1)}, a22) → full 8-class SC-NEVPT2 on large active spaces (CAS(4,4)+) where they are nonzero,
-      via the active 4-RDM ⟨E_pq E_rs E_tu E_vw⟩; (2) core/virtual block canonicalization (multi-orbital
-      generalized-Fock diagonalization, lifting the 1-dim-block mo_energy restriction); (3) PC-NEVPT2 / CASPT2
-      (partially-contracted / 2nd variant). Plus the round-12-named CASSCF scaling (2nd-order Newton MCSCF ·
-      direct-CI Davidson). ALL are within-class refinements — NO remaining method-class gap (see depletion)
+      via the active 4-RDM ⟨E_pq E_rs E_tu E_vw⟩ (canonicalization already shipped this round, so CAS(4,4)+ on a
+      real multi-core/virtual molecule then runs end-to-end); (2) PC-NEVPT2 / CASPT2 (partially-contracted / 2nd
+      variant); (3) the round-12-named CASSCF scaling (2nd-order Newton MCSCF · direct-CI Davidson — would also
+      shrink the round-14 (b) |Δ|=4.67e-4 orbital-convergence residual). ALL within-class refinements — NO
+      remaining method-class gap (see depletion)
 
-## MOLSCF method-completeness depletion (round-13)
+## MOLSCF method-completeness depletion (round-14)
 
 Single-reference (RHF · UHF · ROHF · robust-SCF), multi-reference STATIC correlation (CASCI · CASSCF), AND
-multi-reference DYNAMIC correlation (SC-NEVPT2) are ALL closed and PySCF-anchored. With round-13 the molecular
-electronic-structure front-end is **method-complete to quantitative accuracy**: every accuracy CLASS a
-finite-molecule ab-initio wavefunction code needs is shipped — closed-shell HF, open-shell HF (spin-broken UHF
-+ spin-pure ROHF), stiff-TM convergence machinery, exact static-correlation CI (CASCI), variational
-orbital-optimized multireference (CASSCF), and now the 2nd-order multireference dynamic-correlation correction
-(NEVPT2). The HF→MP2 and CASSCF→NEVPT2 correlation ladders are BOTH built. The remaining frontier is NAMED
-REFINEMENTS within existing classes — NO new accuracy capability: (1) full 8-class NEVPT2 (the 2 four-RDM
-classes Sr/Si, zero on CAS(2,2)) + PC-NEVPT2/CASPT2 variants; (2) CI/orbital SCALING — direct-Davidson +
-2nd-order Newton past the dense-eigh / steepest-descent ceiling (CAS(10,10), Cr₂); (3) g-and-higher angular
-momentum (basis-table extension, d4 — no new code path); (4) analytic forces/gradients (autograd through the
-closed pipeline, brick 6). The wavefunction method-class front-end — single-ref + multi-ref + static + dynamic
-correlation — has NO open accuracy-capability gap.
+multi-reference DYNAMIC correlation (SC-NEVPT2) are ALL closed and PySCF-anchored. Round-13 sealed SC-NEVPT2 on
+1-dim-block CAS(2,2) toys; **round-14 makes SC-NEVPT2 work on a REAL multi-core/virtual molecule** via
+core/virtual orbital canonicalization (eigh on the generalized-Fock core/virtual blocks → MO rotation), proven
+EXACT on PySCF's own canonical orbitals (all 6 classes <1e-6) on H₆ CAS(2,2) (2 core + 2 virtual). The two
+multi-core/virtual class bugs the canonicalization exposed (Srsi transpose partner, Sir nn6 b-loop over-count)
+are fixed; the sealed CAS(2,2) H₄ anchor reduces exactly (no regression). The molecular electronic-structure
+front-end is now **method-complete to quantitative accuracy on real molecules**: every accuracy CLASS a finite-
+molecule ab-initio wavefunction code needs is shipped AND runs beyond the 1-dim-block special case — closed-
+shell HF, open-shell HF (UHF + ROHF), stiff-TM convergence machinery, exact static-correlation CI (CASCI),
+orbital-optimized multireference (CASSCF), and the 2nd-order multireference dynamic-correlation correction
+(NEVPT2) with proper multi-core/virtual canonical denominators. The HF→MP2 and CASSCF→NEVPT2 correlation
+ladders are BOTH built. The remaining frontier is NAMED REFINEMENTS within existing classes — NO new accuracy
+capability: (1) the 2 four-RDM NEVPT2 classes Sr/Si (zero on CAS(2,2), nonzero on CAS(4,4)+; canonicalization
+already shipped so they run end-to-end on real molecules once the 4-RDM lands) + PC-NEVPT2/CASPT2 variants —
+round-15; (2) CI/orbital SCALING — direct-Davidson + 2nd-order Newton past the dense-eigh / steepest-descent
+ceiling (CAS(10,10), Cr₂; also shrinks the round-14 |Δ|=4.67e-4 orbital-convergence residual); (3) g-and-higher
+angular momentum (basis-table extension, d4 — no new code path); (4) analytic forces/gradients (autograd
+through the closed pipeline, brick 6); (5) heavy-atom (O/N) STO-3G p-shell integrals already exist (round-4/5
+MD) so H₂O/N₂ CAS NEVPT2 is wireable directly. The wavefunction method-class front-end — single-ref + multi-ref
++ static + dynamic correlation, on REAL multi-core/virtual molecules — has NO open accuracy-capability gap.
 
 ## three-scale unblock
 

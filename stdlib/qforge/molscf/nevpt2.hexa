@@ -282,8 +282,10 @@ pub fn nevpt2_inactive_fock(h: [float], g: [float], n: int, ncore: int) -> [floa
 }
 
 // Orbital energies = generalized-Fock diagonal F^I_pp + F^A_pp(γ) for ALL n MOs.
-//   Exact for 1-dim core/virtual blocks (CAS(2,2)); a full block-diagonalization
-//   (round-14) generalizes to multi-orbital core/virtual canonicalization.
+//   Exact when the core/virtual blocks are 1-dim (CAS(2,2) on a minimal H-chain) OR
+//   when the orbitals are already CANONICALIZED (round-14 nevpt2_canonicalize_C makes
+//   the off-diagonal core-core / virtual-virtual generalized-Fock elements vanish, so
+//   the diagonal IS the Koopmans-like orbital energy in any multi-core/virtual case).
 pub fn nevpt2_mo_energy(h: [float], g: [float], dm1: [float], n: int, ncore: int, m: int) -> [float] {
     let FI = _nv_FI(h, g, n, ncore)
     let mut moe = []
@@ -293,6 +295,163 @@ pub fn nevpt2_mo_energy(h: [float], g: [float], dm1: [float], n: int, ncore: int
         p = p + 1
     }
     return moe
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   round-14: core/virtual orbital CANONICALIZATION
+//
+//   For a REAL molecule with MULTIPLE core and/or virtual orbitals the generalized
+//   Fock F_pq = F^I_pq + F^A_pq(γ) (with F^A_pq = Σ_tu γ_tu[(pq|tu) − ½(pt|uq)]) is
+//   NOT diagonal in the core-core or virtual-virtual blocks. The SC-NEVPT2 perturber
+//   denominators ΔE_l need Koopmans-like single-orbital energies, which are only the
+//   plain diagonal of F when F is block-diagonal there. Canonicalization rotates the
+//   MO coefficients WITHIN the core block and WITHIN the virtual block so that F
+//   becomes diagonal in both — the active block is left untouched (NEVPT2 contracts
+//   the active RDMs, not canonical active orbitals). After the rotation, the existing
+//   diagonal-based nevpt2_mo_energy returns the canonical orbital energies exactly.
+//
+//   F^I + F^A is symmetric (real, Hermitian) → eigh on each block gives the canonical
+//   orbital energies (eigenvalues) + the in-block rotation (eigenvectors). We assemble
+//   a block-diagonal rotation U = U_core ⊕ I_active ⊕ U_virt and return C' = C·U; the
+//   downstream integral transform then sees canonical core/virtual orbitals.
+// ════════════════════════════════════════════════════════════════════════════
+
+// Full n×n generalized Fock F_pq = F^I_pq + Σ_tu γ_tu[(pq|tu) − ½(pt|uq)]  (γ = active 1-RDM).
+//   The diagonal of this matrix is exactly _nv_moe; here we need the full off-diagonal
+//   core-core and virtual-virtual structure to canonicalize.
+pub fn nevpt2_gfock(h: [float], g: [float], dm1: [float], n: int, ncore: int, m: int) -> [float] {
+    let FI = _nv_FI(h, g, n, ncore)
+    let mut F = []
+    let mut p = 0
+    while p < n {
+        let mut q = 0
+        while q < n {
+            let mut v = FI[p * n + q]
+            let mut t = 0
+            while t < m {
+                let mut u = 0
+                while u < m {
+                    let tt = ncore + t
+                    let uu = ncore + u
+                    let coul = g[((p * n + q) * n + tt) * n + uu]
+                    let exch = g[((p * n + tt) * n + uu) * n + q]
+                    v = v + dm1[t * m + u] * (coul - 0.5 * exch)
+                    u = u + 1
+                }
+                t = t + 1
+            }
+            F.push(v)
+            q = q + 1
+        }
+        p = p + 1
+    }
+    return F
+}
+
+// Extract the `dim×dim` block of F whose rows/cols start at `off` (flat dim×dim out).
+fn _nv_block(F: [float], n: int, off: int, dim: int) -> [float] {
+    let mut B = []
+    let mut a = 0
+    while a < dim {
+        let mut b = 0
+        while b < dim {
+            B.push(F[(off + a) * n + (off + b)])
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return B
+}
+
+// Sum of squared OFF-diagonal elements of a flat dim×dim symmetric block (canonicalization
+//   residual probe — should be ~0 in the canonical basis).
+pub fn nevpt2_offdiag2(B: [float], dim: int) -> float {
+    let mut s = 0.0
+    let mut a = 0
+    while a < dim {
+        let mut b = 0
+        while b < dim {
+            if a != b { s = s + B[a * dim + b] * B[a * dim + b] }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return s
+}
+
+// Canonicalize a CASSCF MO-coefficient matrix C (AO×MO, C[μ*n+p]) in the core and
+//   virtual blocks. Returns C' = C·U with U block-diagonal (core-rot ⊕ I ⊕ virt-rot).
+//   h/g = full-MO integrals at C (casscf_full_hcore / casscf_full_eri); dm1 = active
+//   1-RDM (γ). After this rotation the generalized Fock is diagonal in core/virtual.
+pub fn nevpt2_canonicalize_C(
+    C: [float], h: [float], g: [float], dm1: [float], n: int, ncore: int, m: int
+) -> [float] {
+    let nocc = ncore + m
+    let nvirt = n - nocc
+    let F = nevpt2_gfock(h, g, dm1, n, ncore, m)
+    // identity rotation U
+    let mut U = []
+    let mut a0 = 0
+    while a0 < n {
+        let mut b0 = 0
+        while b0 < n {
+            if a0 == b0 { U.push(1.0) } else { U.push(0.0) }
+            b0 = b0 + 1
+        }
+        a0 = a0 + 1
+    }
+    // core block rotation
+    if ncore > 1 {
+        let Bc = _nv_block(F, n, 0, ncore)
+        let egc = eigh(Bc, ncore)
+        let vc = egc[1]
+        let mut col = 0
+        while col < ncore {
+            let kdesc = ncore - 1 - col
+            let vk = vc[kdesc]
+            let mut row = 0
+            while row < ncore {
+                U[row * n + col] = vk[row]
+                row = row + 1
+            }
+            col = col + 1
+        }
+    }
+    // virtual block rotation
+    if nvirt > 1 {
+        let Bv = _nv_block(F, n, nocc, nvirt)
+        let egv = eigh(Bv, nvirt)
+        let vv = egv[1]
+        let mut col2 = 0
+        while col2 < nvirt {
+            let kdesc2 = nvirt - 1 - col2
+            let vk2 = vv[kdesc2]
+            let mut row2 = 0
+            while row2 < nvirt {
+                U[(nocc + row2) * n + (nocc + col2)] = vk2[row2]
+                row2 = row2 + 1
+            }
+            col2 = col2 + 1
+        }
+    }
+    // C' = C·U  (C[μ*n+p], U[p*n+q] → C'[μ*n+q] = Σ_p C[μ*n+p] U[p*n+q])
+    let mut Cp = []
+    let mut mu = 0
+    while mu < n {
+        let mut q = 0
+        while q < n {
+            let mut acc = 0.0
+            let mut p = 0
+            while p < n {
+                acc = acc + C[mu * n + p] * U[p * n + q]
+                p = p + 1
+            }
+            Cp.push(acc)
+            q = q + 1
+        }
+        mu = mu + 1
+    }
+    return Cp
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -541,14 +700,14 @@ pub fn nevpt2_Srsi(g: [float], FI: [float], dm1: [float], dm2: [float], moe: [fl
                         let rsip = g[((vr * n + i) * n + vs) * n + (ncore + pp)]
                         let rsia = g[((vr * n + i) * n + vs) * n + (ncore + aa)]
                         let sria = g[((vs * n + i) * n + vr) * n + (ncore + aa)]
-                        // transpose partner (s,r): h2e_v[s,r,i,p]=g[vs,i,vr,c+p], [r,s,i,a]=g[vr,i,vs,c+a]
+                        // transpose partner norm[s,r,i] = 2 h2e_v[s,r,i,p] h2e_v[s,r,i,a]
+                        //   − h2e_v[s,r,i,p] h2e_v[r,s,i,a]. h2e_v[s,r,i,p]=g[vs,i,vr,c+p]=srip,
+                        //   h2e_v[s,r,i,a]=g[vs,i,vr,c+a]=sria, h2e_v[r,s,i,a]=g[vr,i,vs,c+a]=rsia.
                         let srip = g[((vs * n + i) * n + vr) * n + (ncore + pp)]
-                        let rsia2 = g[((vr * n + i) * n + vs) * n + (ncore + aa)]
                         let n1a = 2.0 * rsip * rsia
                         let n1b = rsip * sria
                         let n1 = n1a - n1b
-                        // (s,r) term uses srip with sria->rsia2 and sria->? mirror
-                        let n2a = 2.0 * srip * rsia2
+                        let n2a = 2.0 * srip * sria
                         let n2b = srip * rsia
                         let n2 = n2a - n2b
                         let nsum = n1 + n2
@@ -1165,8 +1324,11 @@ pub fn nevpt2_Sir(g: [float], FI: [float], dm1: [float], dm2: [float], dm3: [flo
                             let dm2qbap = dm2[((q * m + b) * m + a) * m + p]
                             let nn5 = v2rpqi * v2rabi * dm2qbap
                             norm = norm - nn5
-                            let nn6 = v2rpqi * v2raai * dm1[q * m + p]
-                            norm = norm + nn6
+                            // nn6 = +Σ_pqa v2_rpqi v2_raai dm1_qp  (NO b index — count once per b-loop)
+                            if b == 0 {
+                                let nn6 = v2rpqi * v2raai * dm1[q * m + p]
+                                norm = norm + nn6
+                            }
                             // h terms: a12/a13 contractions (same integral structure)
                             let a12v = _nv_a12_elem(g, FI, dm1, dm2, dm3, m, n, ncore, p, q, a, b)
                             let a13v = _nv_a13_elem(g, FI, dm1, dm2, dm3, m, n, ncore, p, q, a, b)
@@ -1283,6 +1445,35 @@ pub fn nevpt2_from_casscf_orbitals(
     let gs = civ[2]
     let dets = civ[3]
     return nevpt2_total(gs, dets, ndet, hfull, gfull, n, ncore, m, nelA, nelB)
+}
+
+// End-to-end WITH round-14 core/virtual canonicalization: build the active CI from C
+//   (to get the active 1-RDM γ), canonicalize the core/virtual blocks of C against the
+//   generalized Fock, then run the 6-class SC-NEVPT2 on the CANONICALIZED orbitals.
+//   This is the correct path for a REAL molecule with MULTIPLE core/virtual orbitals
+//   (H₆ CAS(2,2): 2 core + 2 virtual). On a 1-dim-block CAS(2,2) (H₄/H₂) the core and
+//   virtual rotations are the identity, so it reproduces nevpt2_from_casscf_orbitals
+//   exactly (no regression). Returns nevpt2_total's [tot,Sijrs,Sijr,Srsi,Srs,Sij,Sir].
+pub fn nevpt2_from_casscf_orbitals_canon(
+    C: [float], hcore: [float], eri: [float],
+    n: int, ncore: int, m: int, nelA: int, nelB: int
+) -> [float] {
+    // first pass: build the active CI at the input orbitals to get γ (canonicalization
+    //   of core/virtual leaves the active block — hence the active CI / γ — invariant).
+    let hfull0 = casscf_full_hcore(C, hcore, n)
+    let gfull0 = casscf_full_eri(C, eri, n)
+    let heff0 = casscf_heff_active(hfull0, gfull0, n, ncore, m)
+    let gact0 = _nv_slice_active(gfull0, n, ncore, m)
+    let nocc = nelA + nelB
+    let civ0 = casscf_ci_vec(heff0, gact0, m, nelA, nelB)
+    let ndet0 = civ0[1]
+    let gs0 = civ0[2]
+    let dets0 = civ0[3]
+    let dm1 = nevpt2_dm1(gs0, dets0, ndet0, m, nocc)
+    // canonicalize the core/virtual blocks of C against the generalized Fock
+    let Cc = nevpt2_canonicalize_C(C, hfull0, gfull0, dm1, n, ncore, m)
+    // run NEVPT2 on the canonicalized orbitals (diagonal mo_energy now exact)
+    return nevpt2_from_casscf_orbitals(Cc, hcore, eri, n, ncore, m, nelA, nelB)
 }
 
 // Slice the active m^4 chemist (tu|vw) block out of the full n^4 gfull.
