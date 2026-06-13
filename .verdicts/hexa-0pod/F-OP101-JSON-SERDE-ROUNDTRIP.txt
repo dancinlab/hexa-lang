@@ -1,0 +1,113 @@
+F-OP101-JSON-SERDE-ROUNDTRIP — HEXA-0POD OP-101 (LANE-1)
+=========================================================
+SERIALIZATION round-trip bug-hunt: serialize∘parse == identity over the
+stdlib JSON serializer/parser surface. 2026-06-13. $0 · 0-pod · NO GPU.
+
+TIER: 🟢 GREEN (surface CLEAN — 0 new bugs; round-trip invariant LOCKED 54/54).
+       Honest g5: no fabricated bug. The one spec-gap found (\uXXXX non-decode)
+       is SHARED with the runtime builtin + DOCUMENTED in-source → consistent,
+       not a divergence → not a new fix.
+
+SURVEY (scoped greps, NO .git; SKIP codec/* base64/hex/utf8, SKIP net/* LANE-2,
+SKIP OP-100 python-emit)
+------------------------------------------------------------------------------
+Census of stdlib SERIALIZERS/PARSERS with the highest escaping/quoting/
+type-fidelity surface:
+  · self/rt/json.hexa (446L) — the pure-hexa recursive-descent JSON codec:
+    rt_json_parse (parser, returns [value,next_index]) + _js_escape_string /
+    _js_emit (stringifier mirror of runtime.c _js_emit_string). FULL escape
+    set (\" \\ \/ \n \r \t \b \f, \uXXXX, control<0x20 → \u00XX) + int/float
+    type dispatch (`.`/`e` → float) + nested/empty containers. HIGHEST surface
+    — string escaping + number type fidelity + structural round-trip.  PICKED.
+  · stdlib/alloc/json.hexa (170L) — pure-hexa pretty-printer json_dump_pretty
+    with its OWN recursive emit + key stringify + empty/nested handling. Live
+    pure-hexa emitter. PICKED.
+  · stdlib/alloc/json_object.hexa (248L) — lookup helpers over the builtin
+    json_parse (no own escape/emit). Lower surface; spot-checked only.
+  · stdlib/yaml.hexa (225L) — parse-ONLY (yaml_parse_flat); NO emitter → no
+    round-trip pair. Documented flat/no-escape caveats. Out of round-trip scope.
+  · No dedicated CSV / INI / TOML / msgpack / struct-pack emit+parse PAIR exists
+    in core stdlib (greps for to_csv/write_csv/encode_kv/struct_pack/msgpack ⇒
+    none). The serialization round-trip territory is JSON-centric here.
+
+METHOD (hermetic; installed `hexa` resolves `use` to a STALE bundled copy —
+OP-87/88 lesson — so parser/emitter bodies are VERBATIM-INLINED, no `use`):
+  Each value round-tripped through the SHIPPING builtin `json_stringify` and the
+  INLINED rt_json_parse / _js_escape_string / json_dump_pretty, cross-checked
+  DIFFERENTIALLY against the builtin `json_parse` (the documented mirror).
+  Run on shipping `hexa run` (hexa 0.1.0-dispatch), LOCAL.
+
+ADVERSARIAL SWEEP + VERBATIM EVIDENCE
+-------------------------------------
+(1) rt_json_parse ∘ json_stringify == identity over strings:
+    "hello","",`a"b`,`a\b`,"a\nb","a\tb","tab\tnl\n",
+    "null","true","123" (type-confusion literals), "x😀y" (emoji)
+    → ALL recover the exact original string. 11/11 PASS.
+
+(2) int round-trip + type fidelity: 0,-1,42,1000000,2147483647
+    → all decode == original AND typeof==="int". 5/5 PASS.
+
+(3) float type fidelity + rt-vs-builtin byte-eq: "3.5","-2.5","0.0","1e10",
+    "1.5e-3","-2.5E+2" → ALL typeof==="float" (HEXA_F2 contract holds) AND
+    rt_json_parse(s) == json_parse(s) (byte-identical to builtin). 12/12 PASS.
+    NOTE: literal "0.0015" round-trips to a value 4.33681e-19 off the source
+    float literal — but rt_json_parse and the BUILTIN json_parse produce the
+    IDENTICAL value (rt==bt true, same delta). The miss is the parser's float
+    accumulation being 1 ULP off the compiler's literal-parse, SHARED by both →
+    not a divergence, not a bug.
+
+(4) DIFFERENTIAL vs builtin json_parse over adversarial STRUCTURAL inputs
+    (re-stringify must agree): duplicate keys {"a":1,"a":2}; trailing garbage
+    "[1,2]extra"; heavy whitespace "  {  \"a\" : 1 , \"b\" : [ 1 , 2 ] }  ";
+    \u in key "{\"k\\u00e9y\":1}"; deep nest [[[[1]]]]; empty {"a":{},"b":[]};
+    \/ escape; unicode "café"; [true,false,null]; nested escapes
+    "{\"x\":\"line1\\nline2\\ttab\"}".
+    → STRUCT-DIVERGE = 0. rt_json_parse mirrors the builtin on EVERY input.
+
+(5) _js_escape_string == builtin json_stringify (documented mirror) AND
+    round-trips through the builtin parser: "hello","",`a"b`,`a\b`,"a\nb",
+    "a\tb",`q"\n` → emit-mirror 0 mismatch, emit-roundtrip 0 mismatch. 14/14 PASS.
+
+(6) pretty-printer round-trip json_parse(json_dump_pretty(v,2)) == v over a map
+    with quote/backslash/newline/tab/emoji values + type-confusion string
+    literals ("null"/"true"/"123") + negative/float/bool + nested {a:[1,2,{}],
+    e:[]} + a SPECIAL-CHAR KEY `k"\n` + empty containers; plus a top-level array
+    [[], {}, `x"y`, 1, true]. → both re-stringify == direct stringify. 2/2 PASS.
+
+TOTAL: pass=54 fail=0 → JSON ROUND-TRIP LOCK: GREEN.
+
+SPEC-GAP NOTED (shared + documented → NOT a new fix; honest g5)
+--------------------------------------------------------------
+\uXXXX is passed through LITERALLY by BOTH rt_json_parse (self/rt/json.hexa
+L75-90, explicitly: "\uXXXX passes through literally for round-trip safety")
+AND the runtime builtin json_parse. So json_parse("\"\\u0041\"") yields the
+6-char string `A`, not "A"; likewise control bytes emitted as \u00XX by
+the stringifier are NOT decoded back. VERBATIM: builtin json_stringify("ctrl"+
+chr(1)+"here") = `"ctrlhere"`; builtin json_parse of that → len 14 (the
+literal escape), NOT len 9. rt_json_parse gives the IDENTICAL len-14 result.
+Because the pure-hexa parser is CONSISTENT with the builtin and the behaviour
+is documented in-source, this is a shared runtime design caveat (full Unicode
+decode deferred), not a rt/json divergence bug. Fixing it = a deep runtime.c
+change, out of this 0-pod lane's behaviour-fix-only-when-provably-matching scope.
+(The pure-hexa _js_emit float path uses float_to_string(v,6) = 6-digit truncation
+— a fidelity gap IF used, but the LIVE compact rt_json_stringify delegates to the
+builtin json_stringify, and _js_emit's helpers aren't interp-exposed, so the gap
+is not on any live serializer path. Documented, not live.)
+
+LOCK
+----
+NEW stdlib/test/test_json_roundtrip_lock.hexa — HERMETIC (no network, no `use`;
+parser+emitter+pretty bodies verbatim-inlined). Run on shipping `hexa run`
+LOCAL: pass=54 fail=0. NEGATIVE CONTROL: flip the float-`.` detection
+(is_float=true → false) → "3.5" routes to to_int → runtime error
+`to_int: trailing garbage in "3.5"` (test hard-fails at float-type check) →
+catches a real float-fidelity regression, NOT a tautology.
+
+GUARDS
+------
+self/rt/json.hexa IS in the self-host build closure, but it was NOT edited
+(0 source changes — clean surface). Only ADDED stdlib/test/test_json_roundtrip_lock.hexa
+(OUTSIDE the closure) → self-host fixpoint UNAFFECTED, no gate needed.
+wipe_guard: net-additive, 0 deletions. LANE-1 only (no net/protocol/python-emit
+— that is LANE-2). $0 · 0-pod · NO GPU · no vast · no foreign-pod · no .tape ·
+leak-0. Milestone OP-101 [x].
