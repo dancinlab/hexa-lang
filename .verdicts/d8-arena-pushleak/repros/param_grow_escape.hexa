@@ -1,0 +1,15 @@
+// Correctness repro: callee grows a caller-owned array via push and RETURNS it
+// (very common). Return path is barrier-covered -> safe. Must print
+// 3496500 / 1000 / 0 / 6993.
+fn grow_it(arr, x) {
+  arr = arr.push(x)
+  arr
+}
+fn main() {
+  let mut xs = []
+  let mut i = 0
+  while i < 1000 { xs = grow_it(xs, i * 7); i = i + 1 }
+  let mut s = 0; let mut j = 0
+  while j < xs.len() { s = s + xs[j]; j = j + 1 }
+  println(s); println(xs.len()); println(xs[0]); println(xs[999])
+}
