@@ -68,7 +68,10 @@ pub fn hash_str(s: str) -> int {
     let mut i: int = 0
     let n: int = len(s)
     while i < n {
-        h = (h ^ s[i]) * 16777619
+        // FNV-1a 32-bit: the multiply is mod 2^32. WITHOUT this mask the
+        // accumulator grows past 2^63 after a few code-points and wraps to a
+        // NEGATIVE i64 — violating the documented [0, 0xFFFFFFFF] 32-bit range.
+        h = ((h ^ s[i]) * 16777619) & 0xFFFFFFFF
         i = i + 1
     }
     return h
@@ -86,7 +89,9 @@ pub fn hash_array_int(a: [int]) -> int {
     let mut i: int = 0
     let n: int = len(a)
     while i < n {
-        h = (h ^ a[i]) * 16777619
+        // FNV-1a 32-bit: mod 2^32 each step (see hash_str). Missing mask =
+        // i64 overflow → negative hash, off the documented 32-bit range.
+        h = ((h ^ a[i]) * 16777619) & 0xFFFFFFFF
         i = i + 1
     }
     return h

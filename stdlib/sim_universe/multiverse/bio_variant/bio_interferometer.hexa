@@ -135,9 +135,13 @@ fn position_mask(canonical: [i64], variant: [i64]) -> string {
 
 // --- k_cat (inlined from kcat_compute.hexa) ---
 
+// Reduce each LCG step mod 2^31 so `state` stays in [0, 2^31): without it,
+// `state * 1103515245` overflows i63 for variant_idx ≥ 4 → negative i64 →
+// C-truncated `state % 2001` goes negative → `r - 1000` leaves the intended
+// [-1000, 1000] noise band. (Mirrors kcat_compute.hexa.)
 fn noise_kcal_scaled(variant_idx: i64, world_idx: i64) -> i64 {
-    let mut state = variant_idx * 2654435761 + world_idx * 40503
-    state = state * 1103515245 + 12345
+    let mut state = (variant_idx * 2654435761 + world_idx * 40503) % 2147483648
+    state = (state * 1103515245 + 12345) % 2147483648
     let r = state % 2001
     let centered = r - 1000
     let n = centered * NOISE_SIGMA_SCALED / 1000

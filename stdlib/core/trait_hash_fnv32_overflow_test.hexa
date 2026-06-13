@@ -1,0 +1,106 @@
+// HEXA Standard Library — core/trait_hash_fnv32_overflow_test
+//
+// OP-108 lock — integer-overflow / signedness class.
+//
+// Locks two distinct numeric correctness fixes found in the OP-108 sweep:
+//
+//  (1) FNV-1a 32-bit (trait_hash_fixture.hexa hash_str / hash_array_int):
+//      the multiply MUST be reduced mod 2^32 each step. The pre-fix code
+//      `h = (h ^ b) * 16777619` (no mask) overflows i63 after a few inputs
+//      and wraps to a NEGATIVE i64 — off the documented [0, 0xFFFFFFFF]
+//      32-bit range and disagreeing with any FNV-1a 32-bit reference.
+//
+//  (2) kcat noise LCG (kcat_compute.hexa / bio_interferometer.hexa
+//      noise_kcal_scaled): each LCG step MUST be reduced mod 2^31. The
+//      pre-fix `state * 1103515245` overflows i63 for variant_idx ≥ 4 →
+//      negative i64 → C-truncated `state % 2001` negative → `r - 1000`
+//      leaves the documented [-1000, 1000] band.
+//
+// The audited functions are verbatim-inlined below (the installed hexat is a
+// stale 0.1.0-dispatch oracle; we lock the arithmetic directly via `hexa run`
+// rather than `use`-importing through the stale resolver). The inlined bodies
+// are byte-identical to the shipped post-fix functions.
+
+// ── (1) FNV-1a 32-bit — fixed (mask each step) ──────────────────────────
+fn hash_array_int_fixed(a: [int]) -> int {
+    let mut h: int = 2166136261
+    let mut i: int = 0
+    let n: int = len(a)
+    while i < n {
+        h = ((h ^ a[i]) * 16777619) & 0xFFFFFFFF
+        i = i + 1
+    }
+    return h
+}
+
+// ── (2) kcat noise — fixed (mod 2^31 each LCG step) ─────────────────────
+fn noise_centered_fixed(variant_idx: int, world_idx: int) -> int {
+    let mut state = (variant_idx * 2654435761 + world_idx * 40503) % 2147483648
+    state = (state * 1103515245 + 12345) % 2147483648
+    let r = state % 2001
+    let centered = r - 1000
+    return centered
+}
+
+fn main() {
+    let mut pass = 0
+    let mut fail = 0
+
+    // --- FNV-1a 32-bit golden cross-check (vs Python FNV-1a 32-bit ref) ---
+    // "hello world!!!" code-points; Python masked ref = 3092072344.
+    let s = [104, 101, 108, 108, 111, 32, 119, 111, 114, 108, 100, 33, 33, 33]
+    let hv = hash_array_int_fixed(s)
+    if hv == 3092072344 { pass = pass + 1 } else { fail = fail + 1; print("FAIL fnv golden got ", hv) }
+    // Range invariant: 32-bit hash is non-negative and < 2^32.
+    if hv >= 0 && hv < 4294967296 { pass = pass + 1 } else { fail = fail + 1; print("FAIL fnv range ", hv) }
+
+    // Empty input → the offset basis, masked.
+    let he = hash_array_int_fixed([])
+    if he == 2166136261 { pass = pass + 1 } else { fail = fail + 1; print("FAIL fnv empty ", he) }
+
+    // Single-element determinism + 32-bit range across a spread of inputs.
+    let mut k = 0
+    let mut all_in_range = true
+    while k < 64 {
+        let h1 = hash_array_int_fixed([k, k * 7 + 3, k * 131])
+        if h1 < 0 || h1 >= 4294967296 { all_in_range = false }
+        // re-run must be byte-identical (deterministic)
+        let h2 = hash_array_int_fixed([k, k * 7 + 3, k * 131])
+        if h1 != h2 { all_in_range = false }
+        k = k + 1
+    }
+    if all_in_range { pass = pass + 1 } else { fail = fail + 1; print("FAIL fnv spread range/det") }
+
+    // --- kcat noise band invariant: centered ∈ [-1000, 1000] for all vi ---
+    // (pre-fix: vi=4 produced -2930, out of band.)
+    let mut vi = 0
+    let mut band_ok = true
+    while vi < 256 {
+        let mut wi = 0
+        while wi < 4 {
+            let c = noise_centered_fixed(vi, wi)
+            if c < -1000 || c > 1000 { band_ok = false }
+            wi = wi + 1
+        }
+        vi = vi + 1
+    }
+    if band_ok { pass = pass + 1 } else { fail = fail + 1; print("FAIL kcat band") }
+
+    // kcat golden cross-check (vs hexa+Python signed-64 reference, FIXED path):
+    // vi=4,wi=0 → 676 ; vi=0,wi=0 → -661.
+    if noise_centered_fixed(4, 0) == 676 { pass = pass + 1 } else { fail = fail + 1; print("FAIL kcat v4 ", noise_centered_fixed(4, 0)) }
+    if noise_centered_fixed(0, 0) == -661 { pass = pass + 1 } else { fail = fail + 1; print("FAIL kcat v0 ", noise_centered_fixed(0, 0)) }
+
+    // Negative control: the OLD unmasked kcat path DOES leave the band at vi=4
+    // (locks that the bug was real and the fix is load-bearing).
+    let mut bad_state = 4 * 2654435761 + 0 * 40503
+    bad_state = bad_state * 1103515245 + 12345
+    let bad_centered = (bad_state % 2001) - 1000
+    if bad_centered < -1000 { pass = pass + 1 } else { fail = fail + 1; print("FAIL neg-control expected out-of-band, got ", bad_centered) }
+
+    if fail == 0 {
+        print("__HEXA_OP108_INT_OVERFLOW_SIGN__ PASS ", pass, "/", pass)
+    } else {
+        print("__HEXA_OP108_INT_OVERFLOW_SIGN__ FAIL ", fail)
+    }
+}
