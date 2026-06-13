@@ -100,21 +100,26 @@ pub fn range(start, end) {
     result
 }
 
+// sort(arr): ascending sort. STABLE — equal elements keep their relative
+// input order, matching Python `sorted` (OP-143). Insertion sort: the inner
+// shift uses a STRICT `>` guard (`result[j] > key`, never `>=`), so an
+// element never moves past an equal predecessor — that strictness is what
+// makes it stable. The prior selection-sort variant swapped on strict `<`
+// and was correct-but-UNSTABLE (equal keys could be reversed); see
+// test/op143_sort_stable.hexa for the locked regression.
 pub fn sort(arr) {
     let n = len(arr)
     if n <= 1 { return arr }
     let result = arr
-    let i = 0
+    let i = 1
     while i < n {
-        let j = i + 1
-        while j < n {
-            if result[j] < result[i] {
-                let tmp = result[i]
-                result[i] = result[j]
-                result[j] = tmp
-            }
-            j = j + 1
+        let key = result[i]
+        let mut j = i - 1
+        while j >= 0 && result[j] > key {
+            result[j + 1] = result[j]
+            j = j - 1
         }
+        result[j + 1] = key
         i = i + 1
     }
     result
