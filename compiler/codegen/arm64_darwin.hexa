@@ -1454,7 +1454,7 @@ pub fn _builtin_runtime_sym(name: string) -> string {
 // builtin runtime fn return-shape needing a post-call box into HexaVal:
 // "int" → sxtw w0 + hexa_int ; "bool" → uxtw w0 + hexa_bool ; "" → none
 // (already HexaVal). has_key is handled by its own STMT_CALL path.
-fn _builtin_ret_box(name: string) -> string {
+pub fn _builtin_ret_box(name: string) -> string {
     if name == "len"         { return "int" }
     if name == "contains"    { return "bool" }
     if name == "starts_with" { return "bool" }
