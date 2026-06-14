@@ -27,28 +27,33 @@ use "stdlib/qforge/realspace_density"
 use "stdlib/qforge/realspace_xc"
 use "stdlib/qforge/pbe_spin"
 
-let mut GGA_BARE: PwHam = PwHam { h: [], diag: [], n: 0 }
-let mut GGA_VG: int = 0            // farr handle to the current spin's V_scr(ΔG) matrix
+let mut GGA_HFULL: int = 0         // farr (n·n) full H = bare + V_scr(ΔG), current spin
+let mut GGA_VVEC: int = 0          // farr (n) reusable matvec input
 let mut GGA_N: int = 0
+// matvec via COMPILED farr_matmul (RFC 032; cuBLAS on CUDA builds) — ~100× the
+// interpreted O(npw²) loop, the lever that makes high-npw (Co 3d) tractable.
 fn gga_apply(v: [float]) -> [float] {
-    let hv = qforge_h_apply(GGA_BARE, v)
     let n = GGA_N
+    let mut i = 0
+    while i < n { let _ = farr_set(GGA_VVEC, i, v[i]) ; i = i + 1 }
+    let res = farr_matmul(GGA_HFULL, n, n, GGA_VVEC, 1)   // (n×n)·(n×1) → (n×1) farr
     let mut out: [float] = []
-    let mut a = 0
-    while a < n {
-        let mut s = hv[a]
-        let mut b = 0
-        while b < n { s = s + farr_get(GGA_VG, a * n + b) * v[b] ; b = b + 1 }
-        out.push(s)
-        a = a + 1
-    }
+    i = 0
+    while i < n { out.push(farr_get(res, i)) ; i = i + 1 }
+    let _ = farr_free(res)
     return out
 }
-fn gga_diag(vg: int, bare: PwHam, n: int) -> [float] {
+fn gga_diag(hfull: int, n: int) -> [float] {
     let mut d: [float] = []
     let mut a = 0
-    while a < n { d.push(bare.diag[a] + farr_get(vg, a * n + a)) ; a = a + 1 }
+    while a < n { d.push(farr_get(hfull, a * n + a)) ; a = a + 1 }
     return d
+}
+// build GGA_HFULL = bare.h + V_scr(ΔG) matrix (farr) for one spin.
+fn gga_build_hfull(bare: PwHam, mg: int, n: int) {
+    let mut p = 0
+    let nn = n * n
+    while p < nn { let _ = farr_set(GGA_HFULL, p, bare.h[p] + farr_get(mg, p)) ; p = p + 1 }
 }
 
 // ── Γ real-space spin-GGA-local SCF (farr-pool, memory-bounded) ───────────────
@@ -65,9 +70,10 @@ pub fn qforge_scf_pw_gga_spin(kvec: [float], gvecs: [float], nspec: int,
     let ntot = nx * ny * nz
     let millers = qforge_miller_of_g(gvecs, b1, b2, b3)
     let mut no_scr: [float] = []
-    GGA_BARE = qforge_assemble_h_multi(kvec, gvecs, nspec, rs, rabs, vlocs, mlens, zs,
+    let bare = qforge_assemble_h_multi(kvec, gvecs, nspec, rs, rabs, vlocs, mlens, zs,
                                        poss, palens, betas, ls, dij, nprojs, blens, dlens, omega, no_scr)
     GGA_N = n
+    GGA_HFULL = farr_zeros(n * n) ; GGA_VVEC = farr_zeros(n)   // compiled-matmul davidson buffers
     let dvv = omega / to_float(ntot)
 
     // farr pool (allocated once, reused every iter, freed at the end)
@@ -122,10 +128,10 @@ pub fn qforge_scf_pw_gga_spin(kvec: [float], gvecs: [float], nspec: int,
         // V_scr^σ(ΔG) matrices → H_σ = bare + matrix → davidson
         qforge_vxc_local_matrix_farr(vsu, gvecs, millers, nx, ny, nz, sreh, simh, mgu_h)
         qforge_vxc_local_matrix_farr(vsd, gvecs, millers, nx, ny, nz, sreh, simh, mgd_h)
-        GGA_VG = mgu_h
-        let dru = qforge_davidson(gga_apply, gga_diag(mgu_h, GGA_BARE, n), n, nbands, 1.0e-10, 200)
-        GGA_VG = mgd_h
-        let drd = qforge_davidson(gga_apply, gga_diag(mgd_h, GGA_BARE, n), n, nbands, 1.0e-10, 200)
+        gga_build_hfull(bare, mgu_h, n)
+        let dru = qforge_davidson(gga_apply, gga_diag(GGA_HFULL, n), n, nbands, 1.0e-10, 200)
+        gga_build_hfull(bare, mgd_h, n)
+        let drd = qforge_davidson(gga_apply, gga_diag(GGA_HFULL, n), n, nbands, 1.0e-10, 200)
         evals_up = dru.evals ; evals_dn = drd.evals
 
         let occs = qforge_fermi_occupations_spin(evals_up, evals_dn, nelec, sigma)
@@ -174,6 +180,7 @@ pub fn qforge_scf_pw_gga_spin(kvec: [float], gvecs: [float], nspec: int,
     let _ = farr_free(vsu) ; let _ = farr_free(vsd)
     let _ = farr_free(sreh) ; let _ = farr_free(simh) ; let _ = farr_free(sgr) ; let _ = farr_free(sgi)
     let _ = farr_free(mgu_h) ; let _ = farr_free(mgd_h)
+    let _ = farr_free(GGA_HFULL) ; let _ = farr_free(GGA_VVEC)
     return ScfResultSpin { rho_up: rho_up_out, rho_dn: rho_dn_out, evals_up: evals_up, evals_dn: evals_dn,
                            e_total: e_total, magnetization: mag, iters: iters, converged: converged }
 }
