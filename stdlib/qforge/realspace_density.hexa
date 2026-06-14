@@ -1,0 +1,126 @@
+// HEXA Standard Library — qforge/realspace_density
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE real-space density — FFT the PW wavefunctions ψ_b(G) onto a 3D grid to build
+// the TRUE real-space density ρ(r)=Σ_b occ_b|ψ_b(r)|². The legacy qforge_rho_of_psi
+// returns the G-COEFFICIENT density Σ_b occ_b|c_b(G_i)|² (per-PW, reciprocal), which is
+// fine for LDA (local) but cannot give |∇ρ(r)| for GGA. This brick is the GGA enabler
+// (handoff bb095261: LDA gives CoSn m≈0 at Γ/2³/4³; the moment is GGA-stabilized).
+//
+//   c_b(G)  ──scatter onto (h,k,l) grid──▶  ifft3  ──▶  ψ_b(r)  ──▶  Σ occ|ψ_b(r)|² = ρ(r)
+//
+// Miller indices (h,k,l) of each G are recovered from B⁻¹·G (B=[b1 b2 b3] columns) and
+// rounded — exact since every G is an integer combination of b1,b2,b3.
+//
+// reuse (d19): stdlib/signal/core_fft ifft3 (#2076) — FFT 재구현 금지.
+use "stdlib/signal/core_fft"
+
+// ── 3×3 inverse of the reciprocal matrix B=[b1 b2 b3] (columns) ───────────────
+//   Returns the flat 9-element row-major inverse, or [] if singular.
+pub fn qforge_mat3_inv(b1: [float], b2: [float], b3: [float]) -> [float] {
+    let a = b1[0] ; let d = b1[1] ; let g = b1[2]   // column 1
+    let b = b2[0] ; let e = b2[1] ; let h = b2[2]   // column 2
+    let c = b3[0] ; let f = b3[1] ; let i = b3[2]   // column 3
+    let det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
+    if det < 1.0e-30 && det > -1.0e-30 { return [] }
+    let inv = 1.0 / det
+    // row-major inverse (cofactor transpose / det)
+    let mut m: [float] = []
+    m.push((e * i - f * h) * inv) ; m.push((c * h - b * i) * inv) ; m.push((b * f - c * e) * inv)
+    m.push((f * g - d * i) * inv) ; m.push((a * i - c * g) * inv) ; m.push((c * d - a * f) * inv)
+    m.push((d * h - e * g) * inv) ; m.push((b * g - a * h) * inv) ; m.push((a * e - b * d) * inv)
+    return m
+}
+
+fn _round(x: float) -> int {
+    if x >= 0.0 { return to_int(x + 0.5) }
+    return to_int(x - 0.5)
+}
+
+// ── Miller indices (h,k,l) per G: [h0,k0,l0, h1,k1,l1, …] from B⁻¹·G rounded ──
+pub fn qforge_miller_of_g(gvecs: [float], b1: [float], b2: [float], b3: [float]) -> [int] {
+    let n = len(gvecs) / 3
+    let binv = qforge_mat3_inv(b1, b2, b3)
+    let mut out: [int] = []
+    if len(binv) != 9 { return out }
+    let mut i = 0
+    while i < n {
+        let gx = gvecs[i * 3] ; let gy = gvecs[i * 3 + 1] ; let gz = gvecs[i * 3 + 2]
+        let hf = binv[0] * gx + binv[1] * gy + binv[2] * gz
+        let kf = binv[3] * gx + binv[4] * gy + binv[5] * gz
+        let lf = binv[6] * gx + binv[7] * gy + binv[8] * gz
+        out.push(_round(hf)) ; out.push(_round(kf)) ; out.push(_round(lf))
+        i = i + 1
+    }
+    return out
+}
+
+// ── wrap a signed Miller index onto a [0,N) FFT grid axis ─────────────────────
+fn _wrap(m: int, ngrid: int) -> int {
+    let mut r = m
+    while r < 0 { r = r + ngrid }
+    while r >= ngrid { r = r - ngrid }
+    return r
+}
+
+// ── ψ_b(r) magnitude² on the (nx,ny,nz) grid from real coeffs c_b(G) ──────────
+//   Scatter c_b(G) (real, Γ eigenvector) at grid index (h%nx,k%ny,l%nz), ifft3 →
+//   ψ_b(r) (complex), return |ψ_b(r)|² (length nx*ny*nz). cap |h|<nx/2 etc to avoid
+//   aliasing (caller sizes the grid ≥ 2·max|miller|).
+fn _psi2_real(coeffs: [float], millers: [int], n: int, nx: int, ny: int, nz: int) -> [float] {
+    let ntot = nx * ny * nz
+    let mut re: [float] = [] ; let mut im: [float] = []
+    let mut z = 0
+    while z < ntot { re.push(0.0) ; im.push(0.0) ; z = z + 1 }
+    let mut ig = 0
+    while ig < n {
+        let h = _wrap(millers[ig * 3], nx)
+        let k = _wrap(millers[ig * 3 + 1], ny)
+        let l = _wrap(millers[ig * 3 + 2], nz)
+        let lin = (h * ny + k) * nz + l
+        re[lin] = re[lin] + coeffs[ig]     // real Γ coefficient
+        ig = ig + 1
+    }
+    let psir = ifft3(re, im, nx, ny, nz)
+    if len(psir) != 2 * ntot { return [] }
+    let mut p2: [float] = []
+    let mut p = 0
+    while p < ntot {
+        let rr = psir[p * 2] ; let ii = psir[p * 2 + 1]
+        p2.push(rr * rr + ii * ii)
+        p = p + 1
+    }
+    return p2
+}
+
+// ── real-space density ρ(r)=Σ_b occ_b|ψ_b(r)|² on the (nx,ny,nz) grid ─────────
+//   psis: [[float]] nbands eigenvectors (real, length n=NPW). millers: 3·n.
+//   Normalized so Σ_r ρ(r)·(Ω/ntot) = Σ_b occ_b (charge) — the ifft3 is unitary÷N so
+//   Σ_r|ψ(r)|² = Σ_G|c(G)|²·(ntot/?) ; we renormalize each band to ∫|ψ|²dV=1.
+pub fn qforge_rho_real(psis: [[float]], occ: [float], nbands: int, millers: [int],
+                       nx: int, ny: int, nz: int, omega: float) -> [float] {
+    let ntot = nx * ny * nz
+    let n = len(psis[0])
+    let dv = omega / to_float(ntot)
+    let mut rho: [float] = []
+    let mut z = 0
+    while z < ntot { rho.push(0.0) ; z = z + 1 }
+    let mut b = 0
+    while b < nbands {
+        let p2 = _psi2_real(psis[b], millers, n, nx, ny, nz)
+        if len(p2) != ntot { b = b + 1 ; continue }
+        // renormalize the band to ∫|ψ|²dV = 1 (Parseval: ifft introduces a 1/ntot scale).
+        let mut s = 0.0
+        let mut q = 0
+        while q < ntot { s = s + p2[q] ; q = q + 1 }
+        let norm = s * dv
+        let mut scale = 0.0
+        if norm > 1.0e-30 { scale = occ[b] / norm }
+        q = 0
+        while q < ntot { rho[q] = rho[q] + scale * p2[q] ; q = q + 1 }
+        b = b + 1
+    }
+    return rho
+}
