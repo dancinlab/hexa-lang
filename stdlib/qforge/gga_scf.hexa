@@ -1,0 +1,210 @@
+// HEXA Standard Library — qforge/gga_scf
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE real-space spin-GGA (PBE) SCF at Γ (handoff bb095261). The decisive test: LDA
+// gives CoSn m≈0 at Γ/2³/4³ k; if GGA at the SAME Γ gives m>0, the functional (not k)
+// is the cause (QE-PBE: m=0.43). Uses the real-space density (psi(G)→psi(r)→rho(r)),
+// the PBE exchange + PW92 spin correlation as a LOCAL potential V_xc^σ(r), and the
+// gradient term −∇·(∂e_x/∂|∇ρ_σ|·∇ρ_σ/|∇ρ_σ|), assembled into H via V_scr^σ(ΔG).
+//
+//   psi(G) ─FFT▶ rho_sigma(r) ─▶ |grad| + V_xc^PBE,sigma(r) + V_H(r) = V_scr^sigma(r)
+//          ─FFT▶ V_scr(dG) ─▶ H_sigma = H_bare + V_scr(dG) ─▶ davidson ─▶ shared E_F ─▶ rho
+//
+// reuse (d19): realspace_density · realspace_xc · pbe_spin · correlation · screening ·
+//   scf_pw (bare H + PW_HAM apply) · davidson · smearing · scf (ScfResultSpin/mix).
+use "stdlib/qforge/assembler"
+use "stdlib/qforge/screening"
+use "stdlib/qforge/correlation"
+use "stdlib/qforge/scf"
+use "stdlib/qforge/davidson"
+use "stdlib/qforge/smearing"
+use "stdlib/qforge/mixing"
+use "stdlib/qforge/realspace_density"
+use "stdlib/qforge/realspace_xc"
+use "stdlib/qforge/pbe_spin"
+
+// ── module-global bare H + V_scr(ΔG) slots for the davidson apply (Γ, real) ────
+let mut GGA_BARE: PwHam = PwHam { h: [], diag: [], n: 0 }
+let mut GGA_VG: [float] = []          // current spin's V_scr(ΔG) flat n·n
+let mut GGA_N: int = 0
+fn gga_apply(v: [float]) -> [float] {
+    // H·v = (H_bare + V_scr(ΔG))·v
+    let hv = qforge_h_apply(GGA_BARE, v)
+    let n = GGA_N
+    let mut out: [float] = []
+    let mut a = 0
+    while a < n {
+        let mut s = hv[a]
+        let mut b = 0
+        while b < n { s = s + GGA_VG[a * n + b] * v[b] ; b = b + 1 }
+        out.push(s)
+        a = a + 1
+    }
+    return out
+}
+fn gga_diag(vg: [float], bare: PwHam, n: int) -> [float] {
+    let mut d: [float] = []
+    let mut a = 0
+    while a < n { d.push(bare.diag[a] + vg[a * n + a]) ; a = a + 1 }
+    return d
+}
+
+// ── build V_xc^σ(r) (PBE local + gradient) + V_H(r) on the grid ────────────────
+fn gga_vscr_grid(rho_up: [float], rho_dn: [float], ntot: int, sign: float, xc_mode: int,
+                 nx: int, ny: int, nz: int, b1: [float], b2: [float], b3: [float]) -> [float] {
+    // ρ_tot, V_H(r)
+    let mut rho_tot: [float] = []
+    let mut i = 0
+    while i < ntot { rho_tot.push(rho_up[i] + rho_dn[i]) ; i = i + 1 }
+    let vh = qforge_vhartree_from_rho(rho_tot, nx, ny, nz, b1, b2, b3)
+    let have_vh = len(vh) == ntot
+    // |∇ρ_σ|, ∇ρ_σ components (for the gradient potential)
+    let rs = if sign > 0.0 { rho_up } else { rho_dn }
+    let gmag = qforge_grad_rho_mag(rs, nx, ny, nz, b1, b2, b3)
+    let gvec = qforge_grad_rho_vec(rs, nx, ny, nz, b1, b2, b3)
+    // gradient vector field F_a = coef·∇ρ_a/|∇ρ| ; coef = ∂e_x/∂|∇ρ_σ|
+    let mut fx: [float] = [] ; let mut fy: [float] = [] ; let mut fz: [float] = []
+    i = 0
+    while i < ntot {
+        let gm = gmag[i]
+        let coef = qforge_vx_pbe_gradcoef_spin(rho_up[i], rho_dn[i], gmag[i], gmag[i], sign)
+        if gm > 1.0e-12 {
+            let inv = coef / gm
+            fx.push(inv * gvec[i]) ; fy.push(inv * gvec[ntot + i]) ; fz.push(inv * gvec[2 * ntot + i])
+        } else {
+            fx.push(0.0) ; fy.push(0.0) ; fz.push(0.0)
+        }
+        i = i + 1
+    }
+    let vgrad = qforge_div_field(fx, fy, fz, nx, ny, nz, b1, b2, b3)   // ∇·F
+    let have_vg = len(vgrad) == ntot
+    // V_xc^σ(r) = V_x^PBE,local + V_c^σ,PW92 − ∇·F ; + V_H
+    let mut vscr: [float] = []
+    i = 0
+    while i < ntot {
+        let vxloc = qforge_vx_pbe_local_spin(rho_up[i], rho_dn[i], gmag[i], gmag[i], sign)
+        let mut v = vxloc
+        if xc_mode >= 1 {
+            let vc = qforge_vc_pw92_spin(rho_up[i], rho_dn[i])
+            if sign > 0.0 { v = v + vc[0] } else { v = v + vc[1] }
+        }
+        if have_vg { v = v - vgrad[i] }
+        if have_vh { v = v + vh[i] }
+        vscr.push(v)
+        i = i + 1
+    }
+    return vscr
+}
+
+// ── Γ real-space spin-GGA SCF ─────────────────────────────────────────────────
+//   Cell staged like qforge_scf_pw_h_multi_smeared (PWM_* via the bare assemble call).
+//   grid (nx,ny,nz pow2) sized by the caller (≥ 2·max|miller|+1). Returns ScfResultSpin.
+pub fn qforge_scf_pw_gga_spin(kvec: [float], gvecs: [float], nspec: int,
+                              rs: [float], rabs: [float], vlocs: [float],
+                              mlens: [int], zs: [float], poss: [float], palens: [int],
+                              betas: [float], ls: [int], dij: [float],
+                              nprojs: [int], blens: [int], dlens: [int],
+                              omega: float, xc_mode: int,
+                              nx: int, ny: int, nz: int, b1: [float], b2: [float], b3: [float],
+                              nbands: int, nelec: int, mix: float, tol: float,
+                              max_iter: int, sigma: float, and_depth: int, init_mag: float) -> ScfResultSpin {
+    let n = len(gvecs) / 3
+    let ntot = nx * ny * nz
+    let millers = qforge_miller_of_g(gvecs, b1, b2, b3)
+    // bare H (kinetic + V_loc + V_NL), once.
+    let mut no_scr: [float] = []
+    GGA_BARE = qforge_assemble_h_multi(kvec, gvecs, nspec, rs, rabs, vlocs, mlens, zs,
+                                       poss, palens, betas, ls, dij, nprojs, blens, dlens, omega, no_scr)
+    GGA_N = n
+
+    // real-space spin densities, init uniform with the moment seed.
+    let nf = to_float(nelec) ; let vol = omega
+    let r_up0 = (nf + init_mag) / (2.0 * vol)
+    let r_dn0 = (nf - init_mag) / (2.0 * vol)
+    let mut rho_up: [float] = [] ; let mut rho_dn: [float] = []
+    let mut z = 0
+    while z < ntot { rho_up.push(r_up0) ; rho_dn.push(r_dn0) ; z = z + 1 }
+
+    let mut hin_u: [float] = [] ; let mut hout_u: [float] = []
+    let mut hin_d: [float] = [] ; let mut hout_d: [float] = []
+    let mut hh = 0
+    let mut evals_up: [float] = [] ; let mut evals_dn: [float] = []
+    let mut e_total = 0.0 ; let mut e_prev = 0.0 ; let mut mag = 0.0
+    let mut iters = 0 ; let mut converged = false ; let mut first = true
+    let dvv = omega / to_float(ntot)
+
+    while iters < max_iter {
+        iters = iters + 1
+        // V_scr^σ(r) → V_scr^σ(ΔG) → H_σ = bare + matrix ; davidson per spin.
+        let vsu = gga_vscr_grid(rho_up, rho_dn, ntot, 1.0, xc_mode, nx, ny, nz, b1, b2, b3)
+        let vsd = gga_vscr_grid(rho_up, rho_dn, ntot, -1.0, xc_mode, nx, ny, nz, b1, b2, b3)
+        let mgu = qforge_vxc_local_matrix(vsu, gvecs, millers, nx, ny, nz)
+        let mgd = qforge_vxc_local_matrix(vsd, gvecs, millers, nx, ny, nz)
+        GGA_VG = mgu
+        let dru = qforge_davidson(gga_apply, gga_diag(mgu, GGA_BARE, n), n, nbands, 1.0e-10, 200)
+        GGA_VG = mgd
+        let drd = qforge_davidson(gga_apply, gga_diag(mgd, GGA_BARE, n), n, nbands, 1.0e-10, 200)
+        evals_up = dru.evals ; evals_dn = drd.evals
+
+        let occs = qforge_fermi_occupations_spin(evals_up, evals_dn, nelec, sigma)
+        let occ_u = occs[0] ; let occ_d = occs[1]
+        let psis_u = scf_slice_psis(dru.evecs, nbands, n)
+        let psis_d = scf_slice_psis(drd.evecs, nbands, n)
+        // real-space density rebuild.
+        let rou = qforge_rho_real(psis_u, occ_u, nbands, millers, nx, ny, nz, omega)
+        let rod = qforge_rho_real(psis_d, occ_d, nbands, millers, nx, ny, nz, omega)
+        // magnetization = ∫(ρ↑−ρ↓)dV.
+        let mut nu = 0.0 ; let mut nd = 0.0
+        let mut q = 0
+        while q < ntot { nu = nu + rou[q] * dvv ; nd = nd + rod[q] * dvv ; q = q + 1 }
+        mag = nu - nd
+        e_total = scf_band_energy(evals_up, occ_u, nbands) + scf_band_energy(evals_dn, occ_d, nbands)
+        e_total = e_total - sigma * (qforge_smearing_entropy(occ_u, 1.0) + qforge_smearing_entropy(occ_d, 1.0))
+
+        let dru2 = scf_dmax(rho_up, rou, ntot)
+        let drd2 = scf_dmax(rho_dn, rod, ntot)
+        let mut dr_rho = dru2
+        if drd2 > dr_rho { dr_rho = drd2 }
+        let dr_e = if first { tol + 1.0 } else { scf_abs(e_total - e_prev) }
+        let resid = if dr_rho > dr_e { dr_rho } else { dr_e }
+
+        // Anderson / linear mix (grid density).
+        let mut t2 = 0
+        while t2 < ntot { hin_u.push(rho_up[t2]) ; hout_u.push(rou[t2]) ; hin_d.push(rho_dn[t2]) ; hout_d.push(rod[t2]) ; t2 = t2 + 1 }
+        hh = hh + 1
+        let mut a = mix
+        if a <= 0.0 { a = 0.1 }
+        if a > 1.0 { a = 1.0 }
+        let mut rnu: [float] = [] ; let mut rnd: [float] = []
+        if and_depth > 0 {
+            rnu = qforge_anderson_next(hin_u, hout_u, hh, ntot, and_depth, a)
+            rnd = qforge_anderson_next(hin_d, hout_d, hh, ntot, and_depth, a)
+        } else {
+            let mut k = 0
+            while k < ntot { rnu.push((1.0 - a) * rho_up[k] + a * rou[k]) ; rnd.push((1.0 - a) * rho_dn[k] + a * rod[k]) ; k = k + 1 }
+        }
+        let cap = and_depth + 2
+        if and_depth > 0 && hh > cap {
+            let ndrop = hh - cap
+            let mut au: [float] = [] ; let mut bu: [float] = [] ; let mut ad: [float] = [] ; let mut bd: [float] = []
+            let mut keep = ndrop
+            while keep < hh {
+                let mut z2 = 0
+                while z2 < ntot { au.push(hin_u[keep * ntot + z2]) ; bu.push(hout_u[keep * ntot + z2]) ; ad.push(hin_d[keep * ntot + z2]) ; bd.push(hout_d[keep * ntot + z2]) ; z2 = z2 + 1 }
+                keep = keep + 1
+            }
+            hin_u = au ; hout_u = bu ; hin_d = ad ; hout_d = bd ; hh = cap
+        }
+        rho_up = rnu ; rho_dn = rnd
+        e_prev = e_total ; first = false
+        if resid < tol {
+            converged = true
+            return ScfResultSpin { rho_up: rho_up, rho_dn: rho_dn, evals_up: evals_up, evals_dn: evals_dn,
+                                   e_total: e_total, magnetization: mag, iters: iters, converged: true }
+        }
+    }
+    return ScfResultSpin { rho_up: rho_up, rho_dn: rho_dn, evals_up: evals_up, evals_dn: evals_dn,
+                           e_total: e_total, magnetization: mag, iters: iters, converged: converged }
+}
