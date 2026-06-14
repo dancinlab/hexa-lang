@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # GO — hexa-lang `hexa run/build` Go-ergonomic 정리 도메인
 
 > 한 줄: hexa-lang 의 사용자-대면 CLI (`hexa run`/`hexa build`) 를 Go (`go run`/`go build`) 수준의 무신경(no-friction) 사용감으로 정리.

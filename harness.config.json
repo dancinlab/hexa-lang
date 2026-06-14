@@ -5,7 +5,15 @@
     "hexa"
   ],
   "lockdown": {
-    "files": [],
+    "files": [
+      "compiler/main.hexa",
+      "compiler/check/citation.hexa",
+      "compiler/atlas/embedded.gen.hexa",
+      "compiler/atlas/static_index.hexa",
+      "tool/hexa_ld.hexa",
+      "tool/hx.hexa",
+      "self/bootstrap.hexa"
+    ],
     "fromMarkdown": "CLAUDE.md",
     "onEditReminder": "L0 file edited — update CHANGELOG + issue tracker in the same change."
   },
@@ -42,6 +50,28 @@
     "AGENTS.md",
     "README.md"
   ],
+  "docs": {
+    "architecture": "ARCHITECTURE.md",
+    "log": "CHANGELOG.md",
+    "scratchDir": "scripts/scratch",
+    "scopeDirs": [
+      ""
+    ],
+    "allow": [
+      "README.md",
+      "README.en.md",
+      "README.ko.md",
+      "CHANGELOG.md",
+      "ARCHITECTURE.md",
+      "CLAUDE.md",
+      "AGENTS.md",
+      "LICENSE",
+      "LICENSE.md",
+      "CONTRIBUTING.md",
+      "SECURITY.md",
+      "TAPE-AUDIT.md"
+    ]
+  },
   "ledger": {
     "staleSec": 1800
   }

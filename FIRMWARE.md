@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 <!-- @created: 2026-05-20 -->
 <!-- @scope: roadmap — eliminate firmware/RTL non-hexa source classes; reach parity in pure hexa AOT -->
 <!-- @authority: HEXA-NATIVE-ONLY.md (ML/runtime sibling) · AGENTS.tape §3 @D g5 hexa-native-only -->

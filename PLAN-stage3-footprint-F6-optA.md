@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # DESIGN — F6 option A: region-promote on return
 
 > Authority: `PLAN-stage3-footprint-F6.md` option A. Option C empirically

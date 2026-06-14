@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 @title: 🔥 HEXA-C-ZERO — "C 완전 박멸"
 @goal: repo 전체 .c = 0 (literal none-cc none-c). 트랜스파일러 씨앗 + 손-작성 shim + generated runtime.c + GPU .cu/.metal/.m 까지 — hexa가 C를 한 줄도 생성·커밋하지 않고 native backend(기계어 직접 emit)로 자기를 빌드.
 

@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # HANDOFF — 키워드 demote 작업 (다른 세션 인계용)
 
 > 작성 2026-05-19. hexa-lang 의 충돌-위험 키워드 demote 작업을 다른 세션이

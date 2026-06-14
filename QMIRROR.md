@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # QMIRROR — current state
 
 @goal: RFC 045 qmirror 5-PR atom batch — Bells/Mitigation/Variational/Dynamics/Support

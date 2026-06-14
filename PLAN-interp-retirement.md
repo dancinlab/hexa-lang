@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # PLAN — interpreter retirement
 
 > Goal (user, 2026-05-16): make the native `compiler/` toolchain good

@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # INBOX — log
 
 ## 2026-05-29 — ✅ RESOLVED (lang-side) · mm_extract host RSS leak — `stdlib/flame/mm_extract_inplace` 추가 (anima M5 460MB/step)

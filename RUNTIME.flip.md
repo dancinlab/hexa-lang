@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # 🛸 RUNTIME.flip — runtime hexa-native frontier
 
 > Atomic milestone backlog for the runtime hexa-native frontier.

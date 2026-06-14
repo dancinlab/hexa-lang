@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # PLAN — stage-3 footprint: streaming per-function compilation
 
 > Authority: companion to `PLAN-stage3-pathA.md` (the A′ codegen blueprint).

@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # RUNTIME — log
 
 Append-only history sister of `RUNTIME.md`. Each entry starts with `## 2026-05-27T15:30Z — 🛸 "완주" 세션: crypto stack 대량 완주 + #1506 codegen fix

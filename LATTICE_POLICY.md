@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 <!-- @created: 2026-05-12 -->
 <!-- @scope: universal policy for all dancinlab/hexa-* + meta projects -->
 <!-- @principle: verify against REAL limits (math + physics), not against self-imposed convenient numbers -->

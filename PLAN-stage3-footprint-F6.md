@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # DESIGN-GATE — F6: per-function IR reclaim
 
 > Companion to `PLAN-stage3-footprint.md` (F6). This is a **decision

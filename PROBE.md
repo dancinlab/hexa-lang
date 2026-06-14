@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # PROBE — hexa canonical-deviation audit
 
 @goal: PROBE r14 next-list 23 entries 모두 closed (LANDED PR 또는 filed inbox RFC) — 식별된 canonical deviation 100% 처리. 종료 후 r15 sweep 진입.

@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # PLAN — stage-3 Path A (codegen HexaVal-ABI correctness, arm64-first)
 
 > Authority: `COMPILE-ONLY.log.tape` `@D d_stage3_abi_path` (A chosen; B

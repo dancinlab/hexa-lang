@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 <!-- @created: 2026-05-12 -->
 <!-- @scope: real-limits audit (Wave M) — programming-language design / compiler / type system limits -->
 <!-- @authority: applies LATTICE_POLICY.md §1.2 taxonomy verbatim -->

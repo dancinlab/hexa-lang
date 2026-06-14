@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # GPU.anima.log — anima 트레이너 GPU 전이 시간순 로그
 
 > `GPU.anima.md` 스냅샷의 append-only 시간순 로그. 마일스톤 진척·발견·정정·외부 PR 링크.

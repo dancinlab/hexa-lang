@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # flame + forge vs PyTorch + cuBLAS — an honest head-to-head
 
 > **Read the TL;DR before quoting any number.** This is a *result* document, not a

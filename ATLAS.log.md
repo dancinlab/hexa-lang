@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # ATLAS — log
 
 Append-only step log for the theorem-atlas upgrade campaign. Newest on top.
