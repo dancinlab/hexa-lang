@@ -102,3 +102,46 @@ echo "[stage_prebuild_hexat] building build/hexat from hexa_cc.c + runtime.a"
 $CC $CFLAGS -I "$ROOT" -I "$ROOT/self" "$CC_SRC" "$RA" -o "$HEXAT" $LIBS
 test -x "$HEXAT"
 echo "[stage_prebuild_hexat] build/hexat = $(wc -c < "$HEXAT") bytes"
+
+# ── N5 seed-convergence — promote self/codegen.hexa source fixes into the seed ─
+# WHY (the forge OFF-CUDA 4-arg wall · b65ebe51 / OP-37 residual): the seed
+# hexa_cc.c is regenerated from current self/codegen.hexa by the PRIOR generation
+# of hexat (frozen 151c52c8 blob, or the prior `edge` tarball's build/hexat). A
+# source fix to codegen's OWN lowering logic (e.g. the 4-arg forge_dispatch_*
+# special-cases — db_colsum/residual_add/expert_pack2/… that the frozen seed
+# lowers as the broken `hexa_call4(fn,…)` → a COMPILE error in clm_prod OFF-CUDA)
+# takes TWO regen passes to bake in: pass A carries the fix as STRING data the old
+# hexat copies through (seed grows but the OLD hexat still cannot APPLY it); pass B
+# builds a hexat FROM that seed (now it CONTAINS the new lowering) and re-regens —
+# the resulting seed is the FIXED one. A single edge roll only does pass A, so the
+# seed sits one generation behind source forever. This converges it WITHIN one run.
+#
+# Mechanism: regen the seed with the freshly-built hexat; if it differs (pass-A
+# source-carry), install it, rebuild hexat (→ applies the new lowering), and loop.
+# Stops at the FIXPOINT (regen == current seed) — proven to converge in 2 passes
+# (seed_A 2034131B → seed_B 2106692B == seed_C, summer linux-x86_64). IDEMPOTENT:
+# a warm/already-converged tree regens to a byte-identical seed → 0 iterations, no
+# byte change. Opt-out via HEXA_SKIP_SEED_CONVERGE=1 (cold-bootstrap / debugging).
+if [ "${HEXA_SKIP_SEED_CONVERGE:-0}" != "1" ]; then
+  CONV_TMP="$(mktemp -d)"; trap 'rm -rf "$CONV_TMP"' EXIT
+  i=0; max=4
+  while [ "$i" -lt "$max" ]; do
+    NEW="$CONV_TMP/seed_$i.c"
+    if ! OUT="$NEW" HEXA_V2="$HEXAT" HEXA_LANG="$ROOT" bash "$ROOT/tool/regen_cc_manual" \
+           >"$CONV_TMP/regen_$i.log" 2>&1 || [ ! -s "$NEW" ]; then
+      echo "[stage_prebuild_hexat] seed-converge: regen pass $i FAILED — keeping current seed" >&2
+      tail -2 "$CONV_TMP/regen_$i.log" >&2 2>/dev/null || true
+      break
+    fi
+    if cmp -s "$NEW" "$CC_SRC"; then
+      echo "[stage_prebuild_hexat] seed-converge: FIXPOINT after $i pass(es) (seed byte-stable, $(wc -c < "$CC_SRC")B)"
+      break
+    fi
+    cp "$NEW" "$CC_SRC"
+    $CC $CFLAGS -I "$ROOT" -I "$ROOT/self" "$CC_SRC" "$RA" -o "$HEXAT" $LIBS
+    test -x "$HEXAT"
+    i=$((i+1))
+    echo "[stage_prebuild_hexat] seed-converge: pass $i — seed=$(wc -c < "$CC_SRC")B hexat=$(wc -c < "$HEXAT")B"
+  done
+  [ "$i" -ge "$max" ] && echo "[stage_prebuild_hexat] seed-converge: WARN hit max $max passes without fixpoint — using last seed" >&2
+fi
