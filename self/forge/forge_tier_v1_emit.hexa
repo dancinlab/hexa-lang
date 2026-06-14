@@ -133,6 +133,19 @@ fn emit_forge_tier_v1_c() -> str {
             " * on CUDA hosts hexa_farr_matmul forwards through the cuBLAS Dgemm\n" +
             " * path inside runtime.c. Either way: correct, byte-eq with the CPU\n" +
             " * farr oracle, and the bottom of the §6.6 fallback chain.       */\n" +
+            "/* GPU-vs-CPU routing is NOT an arch-recognition gate. There is no\n" +
+            " * compute-capability (sm_xx) allowlist anywhere in this dispatcher\n" +
+            " * nor in runtime_cuda.c — cuBLAS Dgemm is arch-agnostic. The CPU-vs-\n" +
+            " * GPU choice is decided SOLELY by the HEXA_CUDA build macro inside\n" +
+            " * hexa_farr_matmul_gpu (runtime.c): a binary built without -DHEXA_CUDA\n" +
+            " * runs every GEMM on the host even though a CUDA context allocates.\n" +
+            " * FORGE_FALLBACK_USED below is NOT a CPU route and is arch-independent\n" +
+            " * — it is the honest 'Stage-2 specialized-tier registry is empty,\n" +
+            " * served via the RFC 040 baseline' signal, returned identically on\n" +
+            " * sm_90 / sm_120 / any arch. Verified on RTX 5070 (cc 12.0, sm_120,\n" +
+            " * CUDA 12.0 toolkit, sm_90 PTX JIT): cuBLAS Dgemm 256x256x256 ran on\n" +
+            " * device byte-exact vs CPU (max|gpu-cpu|=0.0). The earlier 0%-util\n" +
+            " * Blackwell report was a no-HEXA_CUDA build, not an sm_120 gate.   */\n" +
             "static int _forge_dispatch_matmul_fp64(\n" +
             "    const ForgeShapeInfo *shape,\n" +
             "    const ForgeArgs      *in,\n" +
