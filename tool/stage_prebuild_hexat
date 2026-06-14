@@ -155,5 +155,18 @@ if [ "${HEXA_SEED_CONVERGE:-0}" = "1" ]; then
     i=$((i+1))
     echo "[stage_prebuild_hexat] seed-converge: pass $i — seed=$(wc -c < "$CC_SRC")B hexat=$(wc -c < "$HEXAT")B"
   done
-  [ "$i" -ge "$max" ] && echo "[stage_prebuild_hexat] seed-converge: WARN hit max $max passes without fixpoint — using last seed" >&2
+  if [ "$i" -ge "$max" ]; then
+    echo "[stage_prebuild_hexat] seed-converge: WARN hit max $max passes without fixpoint — using last seed" >&2
+  fi
 fi
+
+# Explicit success exit: the script runs under the caller's `set -e`
+# (tool/release_build), so its exit status MUST be 0 on the normal path. The
+# prior trailing `[ "$i" -ge "$max" ] && echo …` was the LAST command, so on the
+# common FIXPOINT path ($i < $max) the bare `[ … ]` test returned 1 and BECAME
+# the script's exit code → release_build aborted with exit 1 (this is what made
+# HEXA_SEED_CONVERGE=1 fail in the shared release path on every platform, not
+# just darwin). Guard it as a proper `if` (above) + assert + exit 0 here so a
+# converged build is unambiguously successful.
+test -x "$HEXAT"
+exit 0
