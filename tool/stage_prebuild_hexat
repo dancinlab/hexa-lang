@@ -121,8 +121,20 @@ echo "[stage_prebuild_hexat] build/hexat = $(wc -c < "$HEXAT") bytes"
 # Stops at the FIXPOINT (regen == current seed) — proven to converge in 2 passes
 # (seed_A 2034131B → seed_B 2106692B == seed_C, summer linux-x86_64). IDEMPOTENT:
 # a warm/already-converged tree regens to a byte-identical seed → 0 iterations, no
-# byte change. Opt-out via HEXA_SKIP_SEED_CONVERGE=1 (cold-bootstrap / debugging).
-if [ "${HEXA_SKIP_SEED_CONVERGE:-0}" != "1" ]; then
+# byte change.
+#
+# OPT-IN (default OFF) via HEXA_SEED_CONVERGE=1. It must NOT run on the normal
+# prebuild / faithful-nobaseline path: the loop MUTATES the committed seed
+# ($CC_SRC) + rebuilds hexat mid-build, which breaks the "seeds removed, edge-pull"
+# faithful contract (the build must reproduce the edge baseline byte-for-byte;
+# darwin-arm64 faithful-nobaseline regressed when this ran by default). The
+# correct integration is to converge ONCE at edge-roll time so the shipped seed is
+# already converged and every downstream build (incl. faithful) reproduces it —
+# that release-engineering wiring is the tracked residual
+# (.verdicts/compiler-selfhost-fixpoint/F-N5-SEED-CONVERGE-FORGE-4ARG-WALL.txt).
+# Until then this is available opt-in for a local build that needs clm_prod
+# OFF-CUDA to compile (the forge 4-arg wall).
+if [ "${HEXA_SEED_CONVERGE:-0}" = "1" ]; then
   CONV_TMP="$(mktemp -d)"; trap 'rm -rf "$CONV_TMP"' EXIT
   i=0; max=4
   while [ "$i" -lt "$max" ]; do
