@@ -159,6 +159,96 @@ pub fn qforge_fc_pw92(rho: float) -> float {
     return (vp - vm) / (2.0 * h)
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// ── PW92 SPIN-POLARIZED (LSDA) — handoff bb095261 (CoSn magnetic kagome) ──────
+//   Spin interpolation between paramagnetic (ζ=0) and ferromagnetic (ζ=1) HEG.
+//   ζ = (ρ↑−ρ↓)/ρ.  Perdew-Wang 1992 PRB 45, 13244 eqs (8)-(10):
+//     ε_c(r_s,ζ) = ε_c(r_s,0)
+//                + α_c(r_s)·[f(ζ)/f''(0)]·(1−ζ⁴)
+//                + [ε_c(r_s,1) − ε_c(r_s,0)]·f(ζ)·ζ⁴
+//   f(ζ) = [(1+ζ)^{4/3}+(1−ζ)^{4/3}−2] / (2^{4/3}−2),  f''(0)=1.709921.
+//   ε_c(0), ε_c(1), −α_c(r_s) each = the SAME G-functional with 3 param sets.
+//   V_c^σ = d(ρ ε_c)/dρ_σ  (robust central-diff in ρ_σ — matches qforge_fc_pw92
+//           house style, rel ε~1e-7; at ζ=0 → V_c^↑=V_c^↓=unpolarized V_c).
+//   REGRESSION PIN: qforge_ec_pw92_spin(r_s,0) ≡ qforge_ec_pw92(r_s) (same G,
+//           same unpolarized params; the ζ-terms vanish at ζ=0).
+// ════════════════════════════════════════════════════════════════════════════
+
+let _PW92_FPP0 = 1.7099209341613657      // f''(0) = 4 / (9·(2^{1/3}−1))
+
+// ── generic PW92 G(r_s) (p=1 form) — one functional, three param sets ─────────
+//   G = −2A(1+α₁ r_s)·ln(1 + 1/(2A·(β₁√r_s+β₂ r_s+β₃ r_s^{3/2}+β₄ r_s²))).
+pub fn qforge_pw92_g(rs: float, aa: float, a1: float, b1: float, b2: float, b3: float, b4: float) -> float {
+    if rs <= 0.0 { return 0.0 }
+    let srs = sqrt(rs)
+    let q1 = b1 * srs + b2 * rs + b3 * rs * srs + b4 * rs * rs
+    let arg = 1.0 + 1.0 / (2.0 * aa * q1)
+    return -2.0 * aa * (1.0 + a1 * rs) * log(arg)
+}
+
+// ── f(ζ) spin-interpolation function (ζ clamped to [−1,1]) ────────────────────
+pub fn qforge_f_zeta(zeta: float) -> float {
+    let mut z = zeta
+    if z > 1.0 { z = 1.0 }
+    if z < -1.0 { z = -1.0 }
+    let ft = 4.0 / 3.0
+    let num = pow(1.0 + z, ft) + pow(1.0 - z, ft) - 2.0
+    let den = pow(2.0, ft) - 2.0
+    return num / den
+}
+
+// ── PW92 ε_c(r_s, ζ) spin-polarized (Ha) ─────────────────────────────────────
+pub fn qforge_ec_pw92_spin(rs: float, zeta: float) -> float {
+    if rs <= 0.0 { return 0.0 }
+    let mut z = zeta
+    if z > 1.0 { z = 1.0 }
+    if z < -1.0 { z = -1.0 }
+    // ε_c(r_s,0): paramagnetic (same as qforge_ec_pw92 — regression pin).
+    let ec0 = qforge_pw92_g(rs, 0.031091, 0.21370, 7.5957, 3.5876, 1.6382, 0.49294)
+    // ε_c(r_s,1): ferromagnetic.
+    let ec1 = qforge_pw92_g(rs, 0.015545, 0.20548, 14.1189, 6.1977, 3.3662, 0.62517)
+    // −α_c(r_s): spin stiffness (G with these params yields −α_c → α_c = −G).
+    let mac = qforge_pw92_g(rs, 0.016887, 0.11125, 10.357, 3.6231, 0.88026, 0.49671)
+    let alphac = -1.0 * mac
+    let fz = qforge_f_zeta(z)
+    let z2 = z * z
+    let z4 = z2 * z2
+    return ec0 + alphac * (fz / _PW92_FPP0) * (1.0 - z4) + (ec1 - ec0) * fz * z4
+}
+
+// ── ρ_σ → spin ε_c (front-end helper). ρ_up,ρ_down ≥ 0; total ≤ 0 → 0. ────────
+pub fn qforge_ec_pw92_spin_from_rho(rho_up: float, rho_dn: float) -> float {
+    let rho = rho_up + rho_dn
+    if rho <= 0.0 { return 0.0 }
+    let mut zeta = (rho_up - rho_dn) / rho
+    if zeta > 1.0 { zeta = 1.0 }
+    if zeta < -1.0 { zeta = -1.0 }
+    return qforge_ec_pw92_spin(qforge_rs_from_rho(rho), zeta)
+}
+
+// ── correlation energy DENSITY ρ·ε_c(ρ↑,ρ↓) (Ha/vol) — V_c source ─────────────
+pub fn qforge_ec_endens_spin(rho_up: float, rho_dn: float) -> float {
+    let rho = rho_up + rho_dn
+    if rho <= 0.0 { return 0.0 }
+    return rho * qforge_ec_pw92_spin_from_rho(rho_up, rho_dn)
+}
+
+// ── PW92 spin correlation potentials [V_c^↑, V_c^↓] = d(ρ ε_c)/dρ_σ (Ha) ──────
+//   Central difference in each ρ_σ (robust; rel ε~1e-7). Relative step
+//   h_σ = ρ_σ·1e-5 (floor 1e-12) — same scheme as qforge_fc_pw92.
+//   At ρ↑=ρ↓ → V_c^↑=V_c^↓= unpolarized PW92 V_c (regression-consistent).
+pub fn qforge_vc_pw92_spin(rho_up: float, rho_dn: float) -> [float] {
+    let rho = rho_up + rho_dn
+    if rho <= 0.0 { return [0.0, 0.0] }
+    let mut hu = rho_up * 1.0e-5
+    if hu < 1.0e-12 { hu = 1.0e-12 }
+    let mut hd = rho_dn * 1.0e-5
+    if hd < 1.0e-12 { hd = 1.0e-12 }
+    let vup = (qforge_ec_endens_spin(rho_up + hu, rho_dn) - qforge_ec_endens_spin(rho_up - hu, rho_dn)) / (2.0 * hu)
+    let vdn = (qforge_ec_endens_spin(rho_up, rho_dn + hd) - qforge_ec_endens_spin(rho_up, rho_dn - hd)) / (2.0 * hd)
+    return [vup, vdn]
+}
+
 // ── PBE GGA 상관 (Perdew-Burke-Ernzerhof 1996, PRL 77, 3865) ──────────────────
 //   ε_c^PBE(r_s,ζ,t) = ε_c^LDA(r_s,ζ) + H(r_s,ζ,t)   (per-electron, Ha)
 //   spin-unpolarized(ζ=0 → φ=1):
