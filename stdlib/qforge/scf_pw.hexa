@@ -135,6 +135,39 @@ pub fn qforge_vscr_diag(rho: [float], vh_diag: [float], xc_mode: int) -> [float]
     return vscr
 }
 
+// ── LDA SPIN xc potential at one site (LSDA, handoff bb095261) ────────────────
+//   V_xc^σ = V_x(2ρ_σ) + [xc_mode≥1] V_c^σ(ρ↑,ρ↓).  sign=+1 → ↑, −1 → ↓.
+//   Reuses screening.qforge_vx_lda_spin + correlation.qforge_vc_pw92_spin (PR1).
+pub fn qforge_vxc_point_spin(rho_up: float, rho_dn: float, sign: float, xc_mode: int) -> float {
+    let vx = qforge_vx_lda_spin(rho_up, rho_dn)             // [V_x^↑, V_x^↓]
+    let mut v = vx[0]
+    if sign <= 0.0 { v = vx[1] }
+    if xc_mode >= 1 {
+        let vc = qforge_vc_pw92_spin(rho_up, rho_dn)        // [V_c^↑, V_c^↓]
+        if sign > 0.0 { v = v + vc[0] } else { v = v + vc[1] }
+    }
+    return v
+}
+
+// ── SPIN G-diagonal screening V_scr^σ(i) = V_H[ρ↑+ρ↓](i) + V_xc^σ(ρ↑,ρ↓)(i) ────
+//   V_H couples to the TOTAL density (spin-independent); V_xc is spin-resolved.
+//   xc_mode<0 → no screening. vh_diag built by caller from ρ_tot (or []).
+pub fn qforge_vscr_diag_spin(rho_up: [float], rho_dn: [float], vh_diag: [float],
+                             xc_mode: int, sign: float) -> [float] {
+    if xc_mode < 0 { return [] }
+    let n = len(rho_up)
+    let have_vh = len(vh_diag) == n
+    let mut vscr: [float] = []
+    let mut i = 0
+    while i < n {
+        let mut v = qforge_vxc_point_spin(rho_up[i], rho_dn[i], sign, xc_mode)
+        if have_vh { v = v + vh_diag[i] }
+        vscr.push(v)
+        i = i + 1
+    }
+    return vscr
+}
+
 // ── BASIS-DECOUPLED G=0 screening diagonal (QFORGE-PERF real-cell monotonicity) ─
 //   Returns a length-n CONSTANT vscr_diag = V_xc(ρ̄) on every G (the spatial-average
 //   / G=0 component of the screening), with ρ̄ = nelec/Ω the basis-INDEPENDENT mean
@@ -224,6 +257,45 @@ pub fn qforge_pw_apply_global(ham: PwHam) {
     return qforge_pw_h_apply
 }
 pub fn qforge_pw_h_apply(v: [float]) { return qforge_h_apply(PW_HAM, v) }
+
+// ── doubled apply slots for the LSDA driver (↑,↓ live simultaneously) ─────────
+//   The spin SCF driver probes H↑ and H↓ in the same iteration, so each spin
+//   binds its own PwHam slot + named apply fn (the single PW_HAM would alias).
+let mut PW_HAM_UP: PwHam = PwHam { h: [], diag: [], n: 0 }
+let mut PW_HAM_DN: PwHam = PwHam { h: [], diag: [], n: 0 }
+pub fn qforge_pw_h_apply_up(v: [float]) { return qforge_h_apply(PW_HAM_UP, v) }
+pub fn qforge_pw_h_apply_dn(v: [float]) { return qforge_h_apply(PW_HAM_DN, v) }
+
+// ── the SPIN density-dependent H_of_rho closure (LSDA, multi-species) ─────────
+//   (ρ↑,ρ↓,sign) → per-spin V_scr^σ (V_H[ρ↑+ρ↓] + V_xc^σ) → assemble H → apply.
+//   sign=+1 stages PW_HAM_UP/returns ↑ apply; −1 stages PW_HAM_DN/returns ↓ apply.
+//   Uses the in-loop V_H[ρ_tot] (PW_HGRID_ON) — the physically-correct magnetic
+//   path (FDG's frozen ρ̄ cannot carry the self-consistent moment).
+pub fn qforge_h_of_rho_multi_spin(rho_up: [float], rho_dn: [float], sign: float) {
+    let n = len(rho_up)
+    let mut rho_tot: [float] = []
+    let mut i = 0
+    while i < n { rho_tot.push(rho_up[i] + rho_dn[i]) ; i = i + 1 }
+    let mut vh = PW_VH
+    if PW_HGRID_ON {
+        if n == PW_NX * PW_NY * PW_NZ {
+            vh = qforge_vhartree_from_rho(rho_tot, PW_NX, PW_NY, PW_NZ, PW_B1, PW_B2, PW_B3)
+        }
+    }
+    let vscr = qforge_vscr_diag_spin(rho_up, rho_dn, vh, PW_XCMODE, sign)
+    let ham = qforge_assemble_h_multi(PWM_KVEC, PWM_GVECS, PWM_NSPEC,
+                                      PWM_RS, PWM_RABS, PWM_VLOCS, PWM_MLENS, PWM_ZS,
+                                      PWM_POSS, PWM_PALENS,
+                                      PWM_BETAS, PWM_LS, PWM_DIJ,
+                                      PWM_NPROJS, PWM_BLENS, PWM_DLENS,
+                                      PWM_OMEGA, vscr)
+    if sign > 0.0 {
+        PW_HAM_UP = ham
+        return qforge_pw_h_apply_up
+    }
+    PW_HAM_DN = ham
+    return qforge_pw_h_apply_dn
+}
 
 // ── One-call self-consistent PW SCF: cell + UPF + xc_mode → ScfResult ─────────
 //
@@ -392,6 +464,42 @@ pub fn qforge_scf_pw_h_multi_smeared(kvec: [float], gvecs: [float], nspec: int,
     let n = len(gvecs) / 3
     return qforge_scf_smeared(qforge_h_of_rho_multi, qforge_rho_of_psi, n, nbands,
                               nelec, mix, tol, max_iter, sigma, spin_deg, and_depth)
+}
+
+// ── MULTI-SPECIES SPIN-POLARIZED (LSDA, nspin=2) SCF (handoff bb095261) ───────
+//   Same cell staging + in-loop V_H[ρ_tot] as qforge_scf_pw_h_multi_smeared, but
+//   drives the two-channel LSDA driver (qforge_scf_spin_smeared_dc) via the spin
+//   closure qforge_h_of_rho_multi_spin. init_mag seeds the ↑−↓ moment (e.g. from a
+//   starting_magnetization). Returns ScfResultSpin (ρ↑,ρ↓,evals↑,evals↓,m,…).
+//   REGRESSION: init_mag=0 on a non-magnetic cell → m≈0 and the converged total
+//   energy reproduces qforge_scf_pw_h_multi_smeared(spin_deg=2) (CaH6 pin). d4 —
+//   the species list is data; CoSn / any transition-metal kagome traverse this.
+pub fn qforge_scf_pw_h_multi_smeared_spin(kvec: [float], gvecs: [float], nspec: int,
+                                          rs: [float], rabs: [float], vlocs: [float],
+                                          mlens: [int], zs: [float],
+                                          poss: [float], palens: [int],
+                                          betas: [float], ls: [int], dij: [float],
+                                          nprojs: [int], blens: [int], dlens: [int],
+                                          omega: float, xc_mode: int,
+                                          nx: int, ny: int, nz: int,
+                                          b1: [float], b2: [float], b3: [float],
+                                          nbands: int, nelec: int, mix: float, tol: float,
+                                          max_iter: int, sigma: float, and_depth: int,
+                                          init_mag: float) -> ScfResultSpin {
+    PWM_KVEC = kvec ; PWM_GVECS = gvecs ; PWM_NSPEC = nspec
+    PWM_RS = rs ; PWM_RABS = rabs ; PWM_VLOCS = vlocs ; PWM_MLENS = mlens ; PWM_ZS = zs
+    PWM_POSS = poss ; PWM_PALENS = palens
+    PWM_BETAS = betas ; PWM_LS = ls ; PWM_DIJ = dij
+    PWM_NPROJS = nprojs ; PWM_BLENS = blens ; PWM_DLENS = dlens
+    PWM_OMEGA = omega
+    let mut empty_f: [float] = []
+    PW_VH = empty_f ; PW_XCMODE = xc_mode
+    PW_FDG_ON = false                                      // real-density screening (magnetic path)
+    qforge_scf_pw_set_hgrid(nx, ny, nz, b1, b2, b3)        // in-loop V_H[ρ_tot]
+    let n = len(gvecs) / 3
+    return qforge_scf_spin_smeared_dc(qforge_h_of_rho_multi_spin, qforge_rho_of_psi,
+                                      n, nbands, nelec, mix, tol, max_iter,
+                                      sigma, and_depth, 0.0, init_mag)
 }
 
 // ── MULTI-SPECIES SMEARED SCF with BASIS-DECOUPLED screening (QFORGE-PERF fix) ──

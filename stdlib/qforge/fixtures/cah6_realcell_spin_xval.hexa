@@ -1,0 +1,137 @@
+// stdlib/qforge/fixtures/cah6_realcell_spin_xval.hexa — LSDA nspin=2 ≡ nspin=1 REAL-cell pin.
+//
+// handoff bb095261: prove the spin-polarized PW SCF (qforge_scf_pw_h_multi_smeared_spin)
+// reproduces the restricted PW SCF (qforge_scf_pw_h_multi_smeared, spin_deg=2) on a real,
+// NON-magnetic multi-species cell — CaH6 BCC (same cell as cah6_realcell_mermin_monotone_check).
+//
+// Mechanism: with init_mag=0 and no exchange field, the spin closure keeps ρ↑=ρ↓ at every
+// iteration (V_xc^↑=V_xc^↓ ⇒ H↑=H↓ ⇒ identical spectra/occupations/densities). So the spin SCF
+// reproduces the restricted (spin_deg=2) one to SCF-CONVERGENCE accuracy: e_total agrees, the
+// band eigenvalues agree, magnetization → 0 (exactly). NOTE the spin residual is per-channel
+// (ρ_σ = ρ_tot/2 at ζ=0 ⇒ HALF the restricted density-residual), so for the same tol the spin
+// run stops a few iterations earlier (175 vs 184) at a marginally different converged point —
+// hence the agreement is at the SCF tol level (~1e-5), not bit-identical. m=0 is exact.
+// This promotes the PR2 model pin to the real PW Hamiltonian + multi-species screening closure.
+//
+// Run: HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel stdlib/qforge/fixtures/cah6_realcell_spin_xval.hexa
+// PASS: "qforge_cah6_realcell_spin_xval PASS".
+use "stdlib/qforge/scf_pw"
+use "stdlib/qforge/upf"
+use "stdlib/qforge/davidson"
+
+let DECK = "/Users/mini/dancinlab/demiurge/exports/rtsc/decks/CaH6_NC"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn build_npw(npw: int, mshell: int, b1: [float], b2: [float], b3: [float]) -> [float] {
+    let mut gall: [float] = [] ; let mut g2all: [float] = []
+    let mut gi = -mshell
+    while gi <= mshell {
+        let mut gj = -mshell
+        while gj <= mshell {
+            let mut gk = -mshell
+            while gk <= mshell {
+                let gx = to_float(gi) * b1[0] + to_float(gj) * b2[0] + to_float(gk) * b3[0]
+                let gy = to_float(gi) * b1[1] + to_float(gj) * b2[1] + to_float(gk) * b3[1]
+                let gz = to_float(gi) * b1[2] + to_float(gj) * b2[2] + to_float(gk) * b3[2]
+                gall.push(gx) ; gall.push(gy) ; gall.push(gz)
+                g2all.push(gx * gx + gy * gy + gz * gz)
+                gk = gk + 1
+            }
+            gj = gj + 1
+        }
+        gi = gi + 1
+    }
+    let ntot = len(g2all)
+    let mut gvecs: [float] = []
+    let mut used: [int] = [] ; let mut u = 0 ; while u < ntot { used.push(0) ; u = u + 1 }
+    let mut picked = 0
+    while picked < npw {
+        let mut best = -1 ; let mut bestv = 1.0e30 ; let mut t = 0
+        while t < ntot { if used[t] == 0 { if g2all[t] < bestv { bestv = g2all[t] ; best = t } } ; t = t + 1 }
+        if best < 0 { break }
+        used[best] = 1
+        gvecs.push(gall[best * 3]) ; gvecs.push(gall[best * 3 + 1]) ; gvecs.push(gall[best * 3 + 2])
+        picked = picked + 1
+    }
+    return gvecs
+}
+
+fn main() {
+    let mut fails = 0
+    println("=== QFORGE CaH6 real-cell LSDA nspin2≡nspin1 pin (handoff bb095261) ===")
+    let ca = upf_parse(DECK + "/pseudo/Ca_ONCV_PBE_sr.upf")
+    let h  = upf_parse(DECK + "/pseudo/H_ONCV_PBE_sr.upf")
+    if !ca.ok { println("FAIL Ca UPF: " + ca.error) ; return }
+    if !h.ok  { println("FAIL H UPF: "  + h.error)  ; return }
+    let zca = ca.header.z_valence ; let zh = h.header.z_valence
+    let nelec = to_int(zca + 6.0 * zh) ; let nocc = nelec / 2
+
+    let a = 6.4640 ; let ha = 0.5 * a ; let omega = a * a * a * 0.5
+    let tpa = 6.28318530717958647692 / a
+    let b1 = [tpa, 0.0, tpa] ; let b2 = [-tpa, tpa, 0.0] ; let b3 = [0.0, -tpa, tpa]
+    let hf = [0.25, 0.50, 0.00,  0.50, 0.00, 0.25,  0.00, 0.25, 0.50,
+              0.75, 0.50, 0.00,  0.50, 0.00, 0.75,  0.00, 0.75, 0.50]
+    let mut pos_h: [float] = []
+    let a1 = [ha, ha, ha] ; let a2 = [-ha, ha, ha] ; let a3 = [-ha, -ha, ha]
+    let mut ih = 0
+    while ih < 6 {
+        let f1 = hf[ih * 3] ; let f2 = hf[ih * 3 + 1] ; let f3 = hf[ih * 3 + 2]
+        pos_h.push(f1 * a1[0] + f2 * a2[0] + f3 * a3[0])
+        pos_h.push(f1 * a1[1] + f2 * a2[1] + f3 * a3[1])
+        pos_h.push(f1 * a1[2] + f2 * a2[2] + f3 * a3[2])
+        ih = ih + 1
+    }
+
+    let nspec = 2
+    let mut rs: [float] = [] ; let mut rabs: [float] = [] ; let mut vlocs: [float] = []
+    let mut i = 0
+    while i < len(ca.r) { rs.push(ca.r[i]) ; rabs.push(ca.rab[i]) ; vlocs.push(ca.vloc[i]) ; i = i + 1 }
+    i = 0
+    while i < len(h.r) { rs.push(h.r[i]) ; rabs.push(h.rab[i]) ; vlocs.push(h.vloc[i]) ; i = i + 1 }
+    let mlens = [len(ca.r), len(h.r)] ; let zs = [zca, zh]
+    let mut poss: [float] = []
+    poss.push(0.0) ; poss.push(0.0) ; poss.push(0.0)
+    i = 0 ; while i < len(pos_h) { poss.push(pos_h[i]) ; i = i + 1 }
+    let palens = [1, 6]
+    let mut empty_f: [float] = [] ; let mut empty_i: [int] = []
+    let nprojs = [0, 0] ; let blens = [0, 0] ; let dlens = [0, 0]
+    let k0 = [0.0, 0.0, 0.0] ; let xc_mode = 1
+    let eb1 = [tpa, 0.0, 0.0] ; let eb2 = [0.0, tpa, 0.0] ; let eb3 = [0.0, 0.0, tpa]
+    let sigma = 0.02 ; let nbands = nocc + 4
+    let gvecs = build_npw(48, 4, b1, b2, b3)
+    let n = len(gvecs) / 3
+    let MIX = 0.2 ; let TOL = 1.0e-6 ; let MAXIT = 300
+
+    // restricted (spin_deg=2, plain linear and_depth=0)
+    let rr = qforge_scf_pw_h_multi_smeared(k0, gvecs, nspec, rs, rabs, vlocs, mlens, zs,
+                                           poss, palens, empty_f, empty_i, empty_f,
+                                           nprojs, blens, dlens, omega, xc_mode,
+                                           1, 1, n, eb1, eb2, eb3,
+                                           nbands, nelec, MIX, TOL, MAXIT, sigma, 2.0, 0)
+    // spin LSDA (init_mag=0, plain linear)
+    let sp = qforge_scf_pw_h_multi_smeared_spin(k0, gvecs, nspec, rs, rabs, vlocs, mlens, zs,
+                                                poss, palens, empty_f, empty_i, empty_f,
+                                                nprojs, blens, dlens, omega, xc_mode,
+                                                1, 1, n, eb1, eb2, eb3,
+                                                nbands, nelec, MIX, TOL, MAXIT, sigma, 0, 0.0)
+
+    println("restricted: e_total=" + to_string(rr.e_total) + " conv=" + to_string(rr.converged) + " iters=" + to_string(rr.iters))
+    println("spin LSDA : e_total=" + to_string(sp.e_total) + " conv=" + to_string(sp.converged) + " iters=" + to_string(sp.iters) + " m=" + to_string(sp.magnetization))
+
+    if _abs(sp.e_total - rr.e_total) <= 1.0e-5 { println("PASS e_total spin==restricted (SCF tol)") } else { println("FAIL e_total — spin " + to_string(sp.e_total) + " vs " + to_string(rr.e_total)) ; fails = fails + 1 }
+    if _abs(sp.magnetization) <= 1.0e-9 { println("PASS magnetization ≈ 0 (non-magnetic, EXACT)") } else { println("FAIL m=" + to_string(sp.magnetization)) ; fails = fails + 1 }
+    if sp.converged && rr.converged { println("PASS both converged (spin " + to_string(sp.iters) + " / restricted " + to_string(rr.iters) + " iters — per-channel residual scaling)") } else { println("FAIL convergence spin=" + to_string(sp.converged) + " restricted=" + to_string(rr.converged)) ; fails = fails + 1 }
+    let mut ek = 0
+    while ek < nbands {
+        if _abs(sp.evals_up[ek] - rr.evals[ek]) <= 1.0e-5 && _abs(sp.evals_dn[ek] - rr.evals[ek]) <= 1.0e-5 {
+            println("PASS evals[" + to_string(ek) + "] ↑↓=restricted (" + to_string(rr.evals[ek]) + ")")
+        } else {
+            println("FAIL evals[" + to_string(ek) + "] ↑=" + to_string(sp.evals_up[ek]) + " ↓=" + to_string(sp.evals_dn[ek]) + " vs " + to_string(rr.evals[ek])) ; fails = fails + 1
+        }
+        ek = ek + 1
+    }
+
+    if fails == 0 { println("qforge_cah6_realcell_spin_xval PASS") }
+    else { println("qforge_cah6_realcell_spin_xval FAIL — " + to_string(fails) + " case(s)") }
+}
