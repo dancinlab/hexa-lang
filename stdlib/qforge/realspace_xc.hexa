@@ -1,203 +1,229 @@
 // HEXA Standard Library — qforge/realspace_xc
 //
-// @version 0.1.0
+// @version 0.2.0
 // @capabilities [pure]
 //
-// QFORGE real-space XC plumbing for spin-GGA (handoff bb095261): the density gradient
-// |∇ρ(r)| (needed by PBE) and the LOCAL XC potential as a full V_xc(ΔG) Hamiltonian
-// contribution (H[a][b] += Re V_xc(G_a−G_b)) — the proper local potential, replacing the
-// G-diagonal screening approximation. A constant V_xc(r) collapses to the diagonal-only
-// term (reduction pin), so this is a strict generalization of the legacy path.
+// QFORGE real-space XC plumbing for spin-GGA (handoff bb095261): |∇ρ(r)|, its components,
+// the divergence ∇·F, and the LOCAL XC potential as a full V_xc(ΔG) Hamiltonian term.
+// MEMORY-BOUNDED (v0.2): every FFT goes through the in-place `farr` transform with
+// caller-freed scratch buffers — NO per-call [float] FFT outputs (which heap-promote +
+// orphan in the val-arena → OOM on 32³ grids). Only the final [float] result escapes.
 //
-// reuse (d19): stdlib/signal/core_fft fft3/ifft3 · qforge/realspace_density (_wrap pattern).
+// reuse (d19): stdlib/signal/core_fft fft3_farr_inplace (farr scratch) · farr_* builtins.
 use "stdlib/signal/core_fft"
 
 let _RXC_PI = 3.14159265358979323846
 
 fn _rxc_freq(k: int, n: int) -> int { if k > n / 2 { return k - n } return k }
 
-// ── |∇ρ(r)| on the (nx,ny,nz) grid via FFT: ∇ρ = ifft(iG·ρ(G)) ────────────────
-//   ρ(r) real → ρ(G)=fft3(ρ); per axis ∇ρ_a(r)=ifft(iG_a ρ(G)) (take real part);
-//   |∇ρ| = sqrt(Σ_a ∇ρ_a²). b1,b2,b3 = reciprocal basis for G=h·b1+k·b2+l·b3.
+// ── |∇ρ(r)| on the (nx,ny,nz) grid (farr-internal, memory-bounded) ────────────
 pub fn qforge_grad_rho_mag(rho_r: [float], nx: int, ny: int, nz: int,
                            b1: [float], b2: [float], b3: [float]) -> [float] {
     let ntot = nx * ny * nz
     if len(rho_r) != ntot { return [] }
-    let mut rcp: [float] = []
-    let mut cp = 0
-    while cp < ntot { rcp.push(rho_r[cp]) ; cp = cp + 1 }
-    let spec = fft3_real(rcp, nx, ny, nz)            // [re,im]·ntot
-    if len(spec) != 2 * ntot { return [] }
-    // build iG_a·ρ(G) for each axis a, then ifft → ∇ρ_a(r).
-    let mut gxr: [float] = [] ; let mut gxi: [float] = []
-    let mut gyr: [float] = [] ; let mut gyi: [float] = []
-    let mut gzr: [float] = [] ; let mut gzi: [float] = []
-    let mut ix = 0
-    while ix < nx {
-        let mut iy = 0
-        while iy < ny {
-            let mut iz = 0
-            while iz < nz {
-                let h = _rxc_freq(ix, nx) ; let k = _rxc_freq(iy, ny) ; let l = _rxc_freq(iz, nz)
-                let gx = to_float(h) * b1[0] + to_float(k) * b2[0] + to_float(l) * b3[0]
-                let gy = to_float(h) * b1[1] + to_float(k) * b2[1] + to_float(l) * b3[1]
-                let gz = to_float(h) * b1[2] + to_float(k) * b2[2] + to_float(l) * b3[2]
-                let lin = (ix * ny + iy) * nz + iz
-                let pr = spec[lin * 2] ; let pi = spec[lin * 2 + 1]
-                // iG·(pr+i·pi) = (−G·pi) + i(G·pr)
-                gxr.push(-gx * pi) ; gxi.push(gx * pr)
-                gyr.push(-gy * pi) ; gyi.push(gy * pr)
-                gzr.push(-gz * pi) ; gzi.push(gz * pr)
-                iz = iz + 1
+    let reh = farr_zeros(ntot) ; let imh = farr_zeros(ntot)
+    let mut i = 0
+    while i < ntot { let _ = farr_set(reh, i, rho_r[i]) ; i = i + 1 }
+    fft3_farr_inplace(reh, imh, nx, ny, nz, 0)            // ρ(G)
+    let gr = farr_zeros(ntot) ; let gi = farr_zeros(ntot)
+    let mag2 = farr_zeros(ntot)
+    let mut axis = 0
+    while axis < 3 {
+        let mut ix = 0
+        while ix < nx {
+            let mut iy = 0
+            while iy < ny {
+                let mut iz = 0
+                while iz < nz {
+                    let h = _rxc_freq(ix, nx) ; let k = _rxc_freq(iy, ny) ; let l = _rxc_freq(iz, nz)
+                    let mut ga = to_float(h) * b1[0] + to_float(k) * b2[0] + to_float(l) * b3[0]
+                    if axis == 1 { ga = to_float(h) * b1[1] + to_float(k) * b2[1] + to_float(l) * b3[1] }
+                    if axis == 2 { ga = to_float(h) * b1[2] + to_float(k) * b2[2] + to_float(l) * b3[2] }
+                    let p = (ix * ny + iy) * nz + iz
+                    let pr = farr_get(reh, p) ; let pi = farr_get(imh, p)
+                    let _ = farr_set(gr, p, -ga * pi)        // iG·(pr+i·pi) → re=−G·pi
+                    let _ = farr_set(gi, p, ga * pr)         //                im= G·pr
+                    iz = iz + 1
+                }
+                iy = iy + 1
             }
-            iy = iy + 1
+            ix = ix + 1
         }
-        ix = ix + 1
+        fft3_farr_inplace(gr, gi, nx, ny, nz, 1)          // ∇ρ_axis(r) (re part)
+        let mut q = 0
+        while q < ntot { let d = farr_get(gr, q) ; let _ = farr_set(mag2, q, farr_get(mag2, q) + d * d) ; q = q + 1 }
+        axis = axis + 1
     }
-    let dx = ifft3(gxr, gxi, nx, ny, nz)
-    let dy = ifft3(gyr, gyi, nx, ny, nz)
-    let dz = ifft3(gzr, gzi, nx, ny, nz)
-    if len(dx) != 2 * ntot { return [] }
     let mut out: [float] = []
-    let mut p = 0
-    while p < ntot {
-        let ax = dx[p * 2] ; let ay = dy[p * 2] ; let az = dz[p * 2]
-        out.push(sqrt(ax * ax + ay * ay + az * az))
-        p = p + 1
-    }
+    let mut q = 0
+    while q < ntot { out.push(sqrt(farr_get(mag2, q))) ; q = q + 1 }
+    let _ = farr_free(reh) ; let _ = farr_free(imh) ; let _ = farr_free(gr) ; let _ = farr_free(gi) ; let _ = farr_free(mag2)
     return out
 }
 
-// ── ∇ρ(r) COMPONENTS (∇ρ_x,∇ρ_y,∇ρ_z) via FFT — returns flat [3·ntot] ─────────
-//   For the GGA potential's vector field F=coef·∇ρ/|∇ρ|. Layout: [dx(0..ntot),
-//   dy(0..ntot), dz(0..ntot)].
+// ── ∇ρ components [dx(0..ntot), dy, dz] (farr-internal) ───────────────────────
 pub fn qforge_grad_rho_vec(rho_r: [float], nx: int, ny: int, nz: int,
                            b1: [float], b2: [float], b3: [float]) -> [float] {
     let ntot = nx * ny * nz
     if len(rho_r) != ntot { return [] }
-    let mut rcp: [float] = []
-    let mut cp = 0
-    while cp < ntot { rcp.push(rho_r[cp]) ; cp = cp + 1 }
-    let spec = fft3_real(rcp, nx, ny, nz)
-    if len(spec) != 2 * ntot { return [] }
-    let mut gxr: [float] = [] ; let mut gxi: [float] = []
-    let mut gyr: [float] = [] ; let mut gyi: [float] = []
-    let mut gzr: [float] = [] ; let mut gzi: [float] = []
-    let mut ix = 0
-    while ix < nx {
-        let mut iy = 0
-        while iy < ny {
-            let mut iz = 0
-            while iz < nz {
-                let h = _rxc_freq(ix, nx) ; let k = _rxc_freq(iy, ny) ; let l = _rxc_freq(iz, nz)
-                let gx = to_float(h) * b1[0] + to_float(k) * b2[0] + to_float(l) * b3[0]
-                let gy = to_float(h) * b1[1] + to_float(k) * b2[1] + to_float(l) * b3[1]
-                let gz = to_float(h) * b1[2] + to_float(k) * b2[2] + to_float(l) * b3[2]
-                let lin = (ix * ny + iy) * nz + iz
-                let pr = spec[lin * 2] ; let pi = spec[lin * 2 + 1]
-                gxr.push(-gx * pi) ; gxi.push(gx * pr)
-                gyr.push(-gy * pi) ; gyi.push(gy * pr)
-                gzr.push(-gz * pi) ; gzi.push(gz * pr)
-                iz = iz + 1
-            }
-            iy = iy + 1
-        }
-        ix = ix + 1
-    }
-    let dx = ifft3(gxr, gxi, nx, ny, nz)
-    let dy = ifft3(gyr, gyi, nx, ny, nz)
-    let dz = ifft3(gzr, gzi, nx, ny, nz)
-    if len(dx) != 2 * ntot { return [] }
+    let reh = farr_zeros(ntot) ; let imh = farr_zeros(ntot)
+    let mut i = 0
+    while i < ntot { let _ = farr_set(reh, i, rho_r[i]) ; i = i + 1 }
+    fft3_farr_inplace(reh, imh, nx, ny, nz, 0)
+    let gr = farr_zeros(ntot) ; let gi = farr_zeros(ntot)
     let mut out: [float] = []
-    let mut p = 0
-    while p < ntot { out.push(dx[p * 2]) ; p = p + 1 }
-    p = 0
-    while p < ntot { out.push(dy[p * 2]) ; p = p + 1 }
-    p = 0
-    while p < ntot { out.push(dz[p * 2]) ; p = p + 1 }
+    let mut z = 0
+    while z < 3 * ntot { out.push(0.0) ; z = z + 1 }
+    let mut axis = 0
+    while axis < 3 {
+        let mut ix = 0
+        while ix < nx {
+            let mut iy = 0
+            while iy < ny {
+                let mut iz = 0
+                while iz < nz {
+                    let h = _rxc_freq(ix, nx) ; let k = _rxc_freq(iy, ny) ; let l = _rxc_freq(iz, nz)
+                    let mut ga = to_float(h) * b1[0] + to_float(k) * b2[0] + to_float(l) * b3[0]
+                    if axis == 1 { ga = to_float(h) * b1[1] + to_float(k) * b2[1] + to_float(l) * b3[1] }
+                    if axis == 2 { ga = to_float(h) * b1[2] + to_float(k) * b2[2] + to_float(l) * b3[2] }
+                    let p = (ix * ny + iy) * nz + iz
+                    let pr = farr_get(reh, p) ; let pi = farr_get(imh, p)
+                    let _ = farr_set(gr, p, -ga * pi)
+                    let _ = farr_set(gi, p, ga * pr)
+                    iz = iz + 1
+                }
+                iy = iy + 1
+            }
+            ix = ix + 1
+        }
+        fft3_farr_inplace(gr, gi, nx, ny, nz, 1)
+        let off = axis * ntot
+        let mut q = 0
+        while q < ntot { out[off + q] = farr_get(gr, q) ; q = q + 1 }
+        axis = axis + 1
+    }
+    let _ = farr_free(reh) ; let _ = farr_free(imh) ; let _ = farr_free(gr) ; let _ = farr_free(gi)
     return out
 }
 
-// ── divergence ∇·F(r) of a real vector field (Fx,Fy,Fz) via FFT ───────────────
-//   ∇·F = ifft( iG·F(G) ).  Used for the GGA potential term −∇·(∂e/∂|∇ρ|·∇ρ/|∇ρ|).
+// ── ∇·F of a real vector field (farr-internal) ────────────────────────────────
 pub fn qforge_div_field(fx: [float], fy: [float], fz: [float], nx: int, ny: int, nz: int,
                         b1: [float], b2: [float], b3: [float]) -> [float] {
     let ntot = nx * ny * nz
     if len(fx) != ntot { return [] }
-    let mut cx: [float] = [] ; let mut cy: [float] = [] ; let mut cz: [float] = []
-    let mut i = 0
-    while i < ntot { cx.push(fx[i]) ; cy.push(fy[i]) ; cz.push(fz[i]) ; i = i + 1 }
-    let sx = fft3_real(cx, nx, ny, nz)
-    let sy = fft3_real(cy, nx, ny, nz)
-    let sz = fft3_real(cz, nx, ny, nz)
-    if len(sx) != 2 * ntot { return [] }
-    let mut dr: [float] = [] ; let mut di: [float] = []
-    let mut ix = 0
-    while ix < nx {
-        let mut iy = 0
-        while iy < ny {
-            let mut iz = 0
-            while iz < nz {
-                let h = _rxc_freq(ix, nx) ; let k = _rxc_freq(iy, ny) ; let l = _rxc_freq(iz, nz)
-                let gx = to_float(h) * b1[0] + to_float(k) * b2[0] + to_float(l) * b3[0]
-                let gy = to_float(h) * b1[1] + to_float(k) * b2[1] + to_float(l) * b3[1]
-                let gz = to_float(h) * b1[2] + to_float(k) * b2[2] + to_float(l) * b3[2]
-                let lin = (ix * ny + iy) * nz + iz
-                // iG·F(G) = i(Gx Fx + Gy Fy + Gz Fz), F(G) complex per axis
-                let fxr = sx[lin * 2] ; let fxi = sx[lin * 2 + 1]
-                let fyr = sy[lin * 2] ; let fyi = sy[lin * 2 + 1]
-                let fzr = sz[lin * 2] ; let fzi = sz[lin * 2 + 1]
-                let dotr = gx * fxr + gy * fyr + gz * fzr
-                let doti = gx * fxi + gy * fyi + gz * fzi
-                // i·(dotr + i·doti) = −doti + i·dotr
-                dr.push(-doti) ; di.push(dotr)
-                iz = iz + 1
-            }
-            iy = iy + 1
+    let ar = farr_zeros(ntot) ; let ai = farr_zeros(ntot)   // accumulate iG·F(G)
+    let wr = farr_zeros(ntot) ; let wi = farr_zeros(ntot)   // per-component FFT scratch
+    let mut axis = 0
+    while axis < 3 {
+        let mut i = 0
+        while i < ntot {
+            let mut v = fx[i]
+            if axis == 1 { v = fy[i] }
+            if axis == 2 { v = fz[i] }
+            let _ = farr_set(wr, i, v) ; let _ = farr_set(wi, i, 0.0)
+            i = i + 1
         }
-        ix = ix + 1
+        fft3_farr_inplace(wr, wi, nx, ny, nz, 0)            // F_axis(G)
+        let mut ix = 0
+        while ix < nx {
+            let mut iy = 0
+            while iy < ny {
+                let mut iz = 0
+                while iz < nz {
+                    let h = _rxc_freq(ix, nx) ; let k = _rxc_freq(iy, ny) ; let l = _rxc_freq(iz, nz)
+                    let mut ga = to_float(h) * b1[0] + to_float(k) * b2[0] + to_float(l) * b3[0]
+                    if axis == 1 { ga = to_float(h) * b1[1] + to_float(k) * b2[1] + to_float(l) * b3[1] }
+                    if axis == 2 { ga = to_float(h) * b1[2] + to_float(k) * b2[2] + to_float(l) * b3[2] }
+                    let p = (ix * ny + iy) * nz + iz
+                    // iG_a·F_a(G): re += −G·im, im += G·re
+                    let _ = farr_set(ar, p, farr_get(ar, p) - ga * farr_get(wi, p))
+                    let _ = farr_set(ai, p, farr_get(ai, p) + ga * farr_get(wr, p))
+                    iz = iz + 1
+                }
+                iy = iy + 1
+            }
+            ix = ix + 1
+        }
+        axis = axis + 1
     }
-    let back = ifft3(dr, di, nx, ny, nz)
-    if len(back) != 2 * ntot { return [] }
+    fft3_farr_inplace(ar, ai, nx, ny, nz, 1)               // ∇·F(r) (re part)
     let mut out: [float] = []
-    let mut p = 0
-    while p < ntot { out.push(back[p * 2]) ; p = p + 1 }
+    let mut q = 0
+    while q < ntot { out.push(farr_get(ar, q)) ; q = q + 1 }
+    let _ = farr_free(ar) ; let _ = farr_free(ai) ; let _ = farr_free(wr) ; let _ = farr_free(wi)
     return out
 }
 
-// ── LOCAL XC potential as a full Hamiltonian contribution H[a][b] += Re V_xc(ΔG) ─
-//   vxc_r: V_xc(r) on the (nx,ny,nz) grid. gvecs: Cartesian (n PW). millers: 3·n.
-//   Returns the n·n flat real matrix Re[V_xc(G_a−G_b)] to ADD to H. A constant
-//   V_xc(r)=V0 → V_xc(G)=V0·δ_G → contributes V0 only on the diagonal (reduction pin).
+// ── LOCAL XC potential matrix H[a][b] += Re V_xc(G_a−G_b) (farr-internal FFT) ──
+//   A constant V_xc(r)=V0 → V_xc(G)=V0·δ_G → diagonal-only (reduction pin).
 pub fn qforge_vxc_local_matrix(vxc_r: [float], gvecs: [float], millers: [int],
                                nx: int, ny: int, nz: int) -> [float] {
     let ntot = nx * ny * nz
     let n = len(gvecs) / 3
     if len(vxc_r) != ntot { return [] }
-    let mut vcp: [float] = []
-    let mut cp = 0
-    while cp < ntot { vcp.push(vxc_r[cp]) ; cp = cp + 1 }
-    let spec = fft3_real(vcp, nx, ny, nz)            // V_xc(G), [re,im]·ntot, unitary-fwd÷?
-    if len(spec) != 2 * ntot { return [] }
-    let invn = 1.0 / to_float(ntot)                  // fft3 is un-normalized fwd → divide
+    let reh = farr_zeros(ntot) ; let imh = farr_zeros(ntot)
+    let mut i = 0
+    while i < ntot { let _ = farr_set(reh, i, vxc_r[i]) ; i = i + 1 }
+    fft3_farr_inplace(reh, imh, nx, ny, nz, 0)             // V_xc(G), un-normalized fwd
+    let invn = 1.0 / to_float(ntot)
     let mut hxc: [float] = []
     let mut a = 0
     while a < n {
         let ha = millers[a * 3] ; let ka = millers[a * 3 + 1] ; let la = millers[a * 3 + 2]
         let mut b = 0
         while b < n {
-            let dh = ha - millers[b * 3]
-            let dk = ka - millers[b * 3 + 1]
-            let dl = la - millers[b * 3 + 2]
-            // wrap ΔG miller onto the grid
+            let dh = ha - millers[b * 3] ; let dk = ka - millers[b * 3 + 1] ; let dl = la - millers[b * 3 + 2]
             let mut wh = dh ; while wh < 0 { wh = wh + nx } ; while wh >= nx { wh = wh - nx }
             let mut wk = dk ; while wk < 0 { wk = wk + ny } ; while wk >= ny { wk = wk - ny }
             let mut wl = dl ; while wl < 0 { wl = wl + nz } ; while wl >= nz { wl = wl - nz }
             let lin = (wh * ny + wk) * nz + wl
-            hxc.push(spec[lin * 2] * invn)           // Re V_xc(ΔG)
+            hxc.push(farr_get(reh, lin) * invn)            // Re V_xc(ΔG)
             b = b + 1
         }
         a = a + 1
     }
+    let _ = farr_free(reh) ; let _ = farr_free(imh)
     return hxc
+}
+
+// ── Hartree V_H(r) from ρ(r): 4π/|G|² Poisson (farr-internal, G=0→0) ──────────
+pub fn qforge_vhartree_real_farr(rho_r: [float], nx: int, ny: int, nz: int,
+                                 b1: [float], b2: [float], b3: [float]) -> [float] {
+    let ntot = nx * ny * nz
+    if len(rho_r) != ntot { return [] }
+    let four_pi = 4.0 * _RXC_PI
+    let reh = farr_zeros(ntot) ; let imh = farr_zeros(ntot)
+    let mut i = 0
+    while i < ntot { let _ = farr_set(reh, i, rho_r[i]) ; i = i + 1 }
+    fft3_farr_inplace(reh, imh, nx, ny, nz, 0)             // ρ(G)
+    let mut ix = 0
+    while ix < nx {
+        let mut iy = 0
+        while iy < ny {
+            let mut iz = 0
+            while iz < nz {
+                let h = _rxc_freq(ix, nx) ; let k = _rxc_freq(iy, ny) ; let l = _rxc_freq(iz, nz)
+                let gx = to_float(h) * b1[0] + to_float(k) * b2[0] + to_float(l) * b3[0]
+                let gy = to_float(h) * b1[1] + to_float(k) * b2[1] + to_float(l) * b3[1]
+                let gz = to_float(h) * b1[2] + to_float(k) * b2[2] + to_float(l) * b3[2]
+                let g2 = gx * gx + gy * gy + gz * gz
+                let p = (ix * ny + iy) * nz + iz
+                if g2 < 1.0e-12 {
+                    let _ = farr_set(reh, p, 0.0) ; let _ = farr_set(imh, p, 0.0)   // G=0 gauge
+                } else {
+                    let f = four_pi / g2
+                    let _ = farr_set(reh, p, f * farr_get(reh, p)) ; let _ = farr_set(imh, p, f * farr_get(imh, p))
+                }
+                iz = iz + 1
+            }
+            iy = iy + 1
+        }
+        ix = ix + 1
+    }
+    fft3_farr_inplace(reh, imh, nx, ny, nz, 1)             // V_H(r) (re part)
+    let mut out: [float] = []
+    let mut q = 0
+    while q < ntot { out.push(farr_get(reh, q)) ; q = q + 1 }
+    let _ = farr_free(reh) ; let _ = farr_free(imh)
+    return out
 }

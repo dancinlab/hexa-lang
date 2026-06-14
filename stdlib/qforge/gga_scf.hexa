@@ -58,7 +58,7 @@ fn gga_vscr_grid(rho_up: [float], rho_dn: [float], ntot: int, sign: float, xc_mo
     let mut rho_tot: [float] = []
     let mut i = 0
     while i < ntot { rho_tot.push(rho_up[i] + rho_dn[i]) ; i = i + 1 }
-    let vh = qforge_vhartree_from_rho(rho_tot, nx, ny, nz, b1, b2, b3)
+    let vh = qforge_vhartree_real_farr(rho_tot, nx, ny, nz, b1, b2, b3)
     let have_vh = len(vh) == ntot
     // |∇ρ_σ|, ∇ρ_σ components (for the gradient potential)
     let rs = if sign > 0.0 { rho_up } else { rho_dn }

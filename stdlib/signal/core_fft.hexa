@@ -366,6 +366,25 @@ fn _fft3_run(re: [float], im: [float], nx: int, ny: int, nz: int, inverse: int) 
     return out
 }
 
+// ── fft3_farr_inplace: in-place 3D FFT on caller-owned `farr` buffers ─────────
+//   re/im are farr handles (int) the CALLER allocates (farr_zeros) and frees
+//   (farr_free) — reused across many transforms (e.g. one per band in an SCF
+//   density loop) so NO per-call [float] output array is built (which would
+//   heap-promote + orphan in the val-arena → OOM on large grids). Transforms the
+//   caller's buffers IN PLACE: on return re/im hold the (forward/inverse) result.
+//   inverse=1 applies the 1/N scale (three 1/alen passes). The line scratch inside
+//   each axis pass is the only allocation and it is freed there. Same pow2 guards.
+pub fn fft3_farr_inplace(re: int, im: int, nx: int, ny: int, nz: int, inverse: int) {
+    if _cf_is_pow2(nx) == 0 { return }
+    if _cf_is_pow2(ny) == 0 { return }
+    if _cf_is_pow2(nz) == 0 { return }
+    let mut axis = 2
+    while axis >= 0 {
+        _fft3_axis_pass_farr(re, im, nx, ny, nz, axis, inverse)
+        axis = axis - 1
+    }
+}
+
 // ── fft3(re, im, nx, ny, nz): forward 3D FFT ─────────────────────────────────
 //
 //   X[kx,ky,kz] = Σ x[ix,iy,iz] · e^{-j2π(kx·ix/Nx + ky·iy/Ny + kz·iz/Nz)}
