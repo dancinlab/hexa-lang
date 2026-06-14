@@ -140,3 +140,41 @@ pub fn qforge_rho_real(psis: [[float]], occ: [float], nbands: int, millers: [int
     let _ = farr_free(imh)
     return rho
 }
+
+// ── farr-output density: ρ(r) into a caller out-farr (memory-bounded GGA SCF) ──
+pub fn qforge_rho_real_farr(psis: [[float]], occ: [float], nbands: int, millers: [int],
+                            nx: int, ny: int, nz: int, omega: float, out_h: int) {
+    let ntot = nx * ny * nz
+    let n = len(psis[0])
+    let dv = omega / to_float(ntot)
+    let mut z = 0
+    while z < ntot { let _ = farr_set(out_h, z, 0.0) ; z = z + 1 }
+    let reh = farr_zeros(ntot)
+    let imh = farr_zeros(ntot)
+    let mut b = 0
+    while b < nbands {
+        let mut q = 0
+        while q < ntot { let _ = farr_set(reh, q, 0.0) ; let _ = farr_set(imh, q, 0.0) ; q = q + 1 }
+        let coeffs = psis[b]
+        let mut ig = 0
+        while ig < n {
+            let h = _wrap(millers[ig * 3], nx)
+            let k = _wrap(millers[ig * 3 + 1], ny)
+            let l = _wrap(millers[ig * 3 + 2], nz)
+            let lin = (h * ny + k) * nz + l
+            let _ = farr_set(reh, lin, farr_get(reh, lin) + coeffs[ig])
+            ig = ig + 1
+        }
+        fft3_farr_inplace(reh, imh, nx, ny, nz, 1)
+        let mut s = 0.0
+        q = 0
+        while q < ntot { let rr = farr_get(reh, q) ; let ii = farr_get(imh, q) ; s = s + (rr * rr + ii * ii) ; q = q + 1 }
+        let norm = s * dv
+        let mut scale = 0.0
+        if norm > 1.0e-30 { scale = occ[b] / norm }
+        q = 0
+        while q < ntot { let rr = farr_get(reh, q) ; let ii = farr_get(imh, q) ; let _ = farr_set(out_h, q, farr_get(out_h, q) + scale * (rr * rr + ii * ii)) ; q = q + 1 }
+        b = b + 1
+    }
+    let _ = farr_free(reh) ; let _ = farr_free(imh)
+}
