@@ -1617,11 +1617,26 @@ HexaVal forge_dispatch_adamw_keepmv(HexaVal w_v, HexaVal g_v, HexaVal m_v,
     return hexa_forge_dispatch_adamw(w_v, g_v, m_v, v_v, n_v, lr_v,
                                      b1_v, b2_v, eps_v, wd_v, t_v);
 }
+
+/* adamw_fused / clm_megafwd: CUDA-ONLY megakernels with NO unfused OFF-CUDA
+ * reference (they fuse the WHOLE optimizer step / fwd DAG into one cooperative
+ * launch). OFF-CUDA they get a descriptive rc=-1 stub — the EXACT contract the
+ * codegen documents ("no-CUDA / no-coop → returns -1 so the .hexa caller runs
+ * the eager fwd / per-param _adam loop, the byte-eq FP64 reference"). The
+ * clm_prod callers (_clm_megafwd / _adam_fused) are gated by HEXA_CLM_MEGASTEP /
+ * HEXA_CLM_FULLSTEP and explicitly check `if rc == 0` → on -1 they fall through
+ * to the proven unfused path. NOT a silent wrong result. Variadic arg count
+ * (clm_megafwd 37, adamw_fused 12) → take no fixed params (hexa always supplies
+ * the full arg list at the named call; the body ignores them and returns -1). */
+HexaVal hexa_forge_dispatch_adamw_fused() { return hexa_int(-1); }
+HexaVal forge_dispatch_adamw_fused()      { return hexa_int(-1); }
+HexaVal hexa_forge_dispatch_clm_megafwd() { return hexa_int(-1); }
+HexaVal forge_dispatch_clm_megafwd()      { return hexa_int(-1); }
 #undef _OP38_FA
 #pragma STDC FP_CONTRACT DEFAULT
 #endif
 OP38_EOF
-  echo "[restore_frozen_seeds] OP-38: appended OFF-CUDA clm_prod glue host fallbacks (gelu/_bwd · ce_grad · int4_quant/_bwd · groupnorm_bwd · moe_router_bwd · embedding_bwd_scatter · groupnorm_gelu_residual + adamw/keepmv rc=-1 stubs) to $rt"
+  echo "[restore_frozen_seeds] OP-38: appended OFF-CUDA clm_prod glue host fallbacks (gelu/_bwd · ce_grad · int4_quant/_bwd · groupnorm_bwd · moe_router_bwd · embedding_bwd_scatter · groupnorm_gelu_residual + adamw/keepmv/adamw_fused/clm_megafwd rc=-1 stubs) to $rt"
 fi
 
 # Unstage everything we just restored so the index reflects the graduated tree;
