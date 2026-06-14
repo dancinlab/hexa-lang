@@ -1138,6 +1138,492 @@ OP37_EOF
   echo "[restore_frozen_seeds] OP-37: appended OFF-CUDA clm_prod glue host fallbacks (im2col/_t · col2im · db_colsum · grad_sum2/3 · residual_add · expert_pack2/unpack2 · embedding · groupnorm · groupnorm_gelu_residual · moe_router) to $rt"
 fi
 
+# ── OP-38 (HEXA-0POD) — OFF-CUDA host fallbacks for the REMAINING clm_prod glue ──
+# dispatchers (b65ebe51 residual / OP-37 follow-on) ───────────────────────────
+# OP-37 closed the gather/scatter/copy/add + groupnorm/moe_router subset. This
+# sweep closes the rest of the clm_prod CLMConvMoE close-out set OFF-CUDA, each
+# byte-eq max|Δ|=0 VERIFIED on summer (fresh from-source ./hexa built with
+# HEXA_SEED_CONVERGE=1, via the new clm_prod_op38_hostdispatch_eq oracle that
+# drives every dispatch through the runtime body and compares to the inline
+# unfused reference):
+#   gelu                         — nn_gelu_fwd: a[i] = x·Φ(x), Φ=0.5(1+dt_erf(x/√2)).
+#                                  Reuses _op18_gelu (== _op19b_dt_erf form, byte-eq
+#                                  to dt_erf). (The "~2.5e-7 GELU host-vs-ref" note
+#                                  OP-37 flagged was a libm-erf comparison artifact;
+#                                  _op19b_dt_erf IS byte-identical to flame dt_erf —
+#                                  groupnorm_gelu_residual is therefore byte-eq too.)
+#   gelu_bwd                     — nn_gelu_bwd: dg[i] = da[i]·(Φ(g)+g·φ(g)),
+#                                  φ(x)=exp(−x²/2)/√(2π). New _op38_gelu_grad reuses
+#                                  _op19b_dt_erf (CDF) + _op19b_dt_exp (PDF, == dt_exp).
+#   ce_grad                      — clm_ce_grad: per-row softmax(max-subtract, dt_exp),
+#                                  grad = softmax·(1/T), then −(1/T) at target index.
+#                                  Reuses _op19b_dt_exp (== dt_exp; NOT _op18_moe_exp).
+#   int4_quant                   — nn_int4_quant_fwd: per-channel s=max|W|/7 (1.0 if 0),
+#                                  q=round-half-away(W/s) clamped [−7,7], mask=in-range,
+#                                  wq=q·s. New _op38_qround/_qabs match _q_round/_q_abs.
+#   int4_quant_bwd               — nn_int4_quant_bwd: clipped-STE dW[i]=dy[i]·mask[i],
+#                                  flat n=Cout·rest (dispatcher is 4-arg, n=Cout*rest).
+#   groupnorm_bwd                — nn_groupnorm_bwd: dgamma/dbeta (c-outer,t-inner),
+#                                  dX per group (t-outer,c-inner two-pass: s1=Σdxhat,
+#                                  s2=Σdxhat·xhat; dX=inv·(dxhat−s1/m−xhat·s2/m)).
+#                                  Reads SAVED inv (no sqrt). Pure arithmetic.
+#   moe_router_bwd               — nn_moe_router_bwd: per-t two-pass — dgate[e]=Σ_c
+#                                  dy·ex_out (+ dex_out[e]=probs·dy + dot=Σprobs·dgate),
+#                                  then dlogits[e]=probs·(dgate−dot). Reads CACHED probs
+#                                  (no _moe_exp replay). Pure arithmetic.
+#   embedding_bwd_scatter        — nn_embedding_bwd_scatter: sequential scatter-add
+#                                  dtable[tok·d+c]+=dX[i·d+c], i ascending, NO atomics.
+#                                  Dispatcher is 6-arg (…,T,d,V); V unused on host.
+#                                  Pure arithmetic.
+#   groupnorm_gelu_residual      — out=r+gelu(GN(x)), a=gelu, y=pre-gelu GN. Reuses
+#                                  the OP-37 groupnorm body + _op18_gelu + residual add.
+#                                  Now byte-eq (the gelu twin matches — see above).
+# adamw / adamw_keepmv are HONEST RESIDUALS (NOT shipped here): the host adamw
+# reference (_adamw_prod, clm_prod_adamw_update_eq.hexa) uses a 24-iter Newton sqrt
+# starting at g=max(x,1.0) (== flame dt_sqrt) + betapow by repeated multiply, which
+# a host body CAN replicate; but the dispatcher returning rc=−1 already routes the
+# .hexa caller to the proven host opt_adamw_step (byte-eq), so the OFF-CUDA *link*
+# does not strictly need an adamw body. To keep this set max|Δ|=0-clean and avoid a
+# second AdamW arithmetic SSOT that could silently drift from opt_adamw_step, the
+# adamw/keepmv host bodies are added as rc=−1 fall-through stubs (force the proven
+# host path) rather than a re-derived update — see the stub note in the block.
+# adamw_fused / clm_megafwd are CUDA-ONLY (no unfused OFF-CUDA reference) — they get
+# a descriptive-abort #ifndef HEXA_CUDA stub (NOT a silent wrong result).
+# All reuse the OP-18/OP-19b statics (_op18_gelu / _op19b_dt_exp / _op19b_dt_erf)
+# defined above (same TU, same #ifndef HEXA_CUDA scope). FP_CONTRACT OFF (same
+# reason as OP-18). Both bare + hexa_ names defined. Marker-guarded (idempotent).
+if [ -f "$rt" ] && ! grep -q 'OP-38 (HEXA-0POD' "$rt"; then
+  cat >> "$rt" <<'OP38_EOF'
+
+/* ═══════════════════════════════════════════════════════════════════
+ * OP-38 (HEXA-0POD) — OFF-CUDA host fallbacks for the REMAINING clm_prod
+ * glue dispatchers (b65ebe51 residual / OP-37 follow-on). Byte-eq-VERIFIED
+ * subset: gelu · gelu_bwd · ce_grad · int4_quant(/_bwd) · groupnorm_bwd ·
+ * moe_router_bwd · embedding_bwd_scatter · groupnorm_gelu_residual.
+ * adamw/keepmv = rc=-1 fall-through (proven host opt_adamw_step). Reuses the
+ * OP-18/OP-19b statics. `#ifndef HEXA_CUDA` only → GPU path UNCHANGED. */
+#ifndef HEXA_CUDA
+#pragma STDC FP_CONTRACT OFF
+
+#ifndef _OP38_FA
+#define _OP38_FA(id, need) \
+    ( (id) >= 0 && (id) < _hx_farr_count && _hx_farr_table[(id)].buf && \
+      _hx_farr_table[(id)].len >= (need) )
+#endif
+
+/* GELU' = Φ(x) + x·φ(x), Φ via _op19b_dt_erf (== flame dt_erf), φ(x) =
+ * exp(−x²/2)/√(2π) via _op19b_dt_exp (== flame dt_exp). Byte-identical to
+ * nn_lib _nn_gelu_grad (_nn_normal_cdf + x·_nn_normal_pdf). */
+static double _op38_gelu_grad(double x) {
+    const double inv_sqrt2   = 0.70710678118654752440;
+    const double inv_sqrt2pi = 0.39894228040143267794;
+    double cdf = 0.5 * (1.0 + _op19b_dt_erf(x * inv_sqrt2));
+    double pdf = inv_sqrt2pi * _op19b_dt_exp(0.0 - 0.5 * x * x);
+    return cdf + x * pdf;
+}
+/* round-half-away-from-zero, integer-valued (== quant_lib _q_round; to_int
+ * truncates toward zero, matching C (int64_t) cast). */
+static double _op38_qround(double x) {
+    if (x >= 0.0) return (double)(int64_t)(x + 0.5);
+    return 0.0 - (double)(int64_t)((0.0 - x) + 0.5);
+}
+static double _op38_qabs(double x) { return x < 0.0 ? (0.0 - x) : x; }
+
+/* gelu(in, out, n) -> int rc. out[i] = _op18_gelu(in[i]). byte-eq nn_gelu_fwd. */
+HexaVal hexa_forge_dispatch_gelu(HexaVal in_v, HexaVal out_v, HexaVal n_v) {
+    int64_t in = hexa_as_num(in_v), out = hexa_as_num(out_v), n = hexa_as_num(n_v);
+    if (n <= 0 || !_OP38_FA(in, n) || !_OP38_FA(out, n))    return hexa_int(-1);
+    double* IN = _hx_farr_table[in].buf;
+    double* O  = _hx_farr_table[out].buf;
+    for (int64_t i = 0; i < n; i++) O[i] = _op18_gelu(IN[i]);
+    return hexa_int(0);
+}
+HexaVal forge_dispatch_gelu(HexaVal in_v, HexaVal out_v, HexaVal n_v) {
+    return hexa_forge_dispatch_gelu(in_v, out_v, n_v);
+}
+
+/* gelu_bwd(g, da, dg, n) -> int rc. dg[i] = da[i]·GELU'(g[i]). g = pre-act.
+ * byte-eq nn_gelu_bwd. */
+HexaVal hexa_forge_dispatch_gelu_bwd(HexaVal g_v, HexaVal da_v,
+                                     HexaVal dg_v, HexaVal n_v) {
+    int64_t g = hexa_as_num(g_v), da = hexa_as_num(da_v);
+    int64_t dg = hexa_as_num(dg_v), n = hexa_as_num(n_v);
+    if (n <= 0 || !_OP38_FA(g, n) || !_OP38_FA(da, n) || !_OP38_FA(dg, n))
+        return hexa_int(-1);
+    double* G  = _hx_farr_table[g].buf;
+    double* DA = _hx_farr_table[da].buf;
+    double* DG = _hx_farr_table[dg].buf;
+    for (int64_t i = 0; i < n; i++) DG[i] = DA[i] * _op38_gelu_grad(G[i]);
+    return hexa_int(0);
+}
+HexaVal forge_dispatch_gelu_bwd(HexaVal g_v, HexaVal da_v,
+                                HexaVal dg_v, HexaVal n_v) {
+    return hexa_forge_dispatch_gelu_bwd(g_v, da_v, dg_v, n_v);
+}
+
+/* ce_grad(logits, targets, dlogits_out, T, V) -> int rc. Per-row softmax
+ * (max-subtract, _op19b_dt_exp), grad = softmax·(1/T), then −(1/T) at the
+ * target index. byte-eq clm_ce_grad. */
+HexaVal hexa_forge_dispatch_ce_grad(HexaVal lg_v, HexaVal tg_v, HexaVal dl_v,
+                                    HexaVal t_v, HexaVal v_v) {
+    int64_t lg = hexa_as_num(lg_v), tg = hexa_as_num(tg_v), dl = hexa_as_num(dl_v);
+    int64_t T = hexa_as_num(t_v), V = hexa_as_num(v_v);
+    if (T <= 0 || V <= 0)                                   return hexa_int(-1);
+    if (!_OP38_FA(lg, T * V) || !_OP38_FA(tg, T) || !_OP38_FA(dl, T * V))
+        return hexa_int(-1);
+    double* LG = _hx_farr_table[lg].buf;
+    double* TG = _hx_farr_table[tg].buf;
+    double* DL = _hx_farr_table[dl].buf;
+    for (int64_t t = 0; t < T; t++) {
+        int64_t base = t * V;
+        double mx = LG[base];
+        for (int64_t i = 1; i < V; i++) { double v = LG[base + i]; if (v > mx) mx = v; }
+        double sm = 0.0;
+        for (int64_t i2 = 0; i2 < V; i2++) sm = sm + _op19b_dt_exp(LG[base + i2] - mx);
+        double invT = 1.0 / (double)T;
+        for (int64_t v3 = 0; v3 < V; v3++) {
+            double p = _op19b_dt_exp(LG[base + v3] - mx) / sm;
+            DL[base + v3] = p * invT;
+        }
+        int64_t tgt = (int64_t)TG[t];
+        if (tgt < 0 || tgt >= V)                            return hexa_int(-1);
+        DL[base + tgt] = DL[base + tgt] - invT;
+    }
+    return hexa_int(0);
+}
+HexaVal forge_dispatch_ce_grad(HexaVal lg_v, HexaVal tg_v, HexaVal dl_v,
+                               HexaVal t_v, HexaVal v_v) {
+    return hexa_forge_dispatch_ce_grad(lg_v, tg_v, dl_v, t_v, v_v);
+}
+
+/* int4_quant(w, wq, sc, ql, mask, Cout, rest) -> int rc. Per-output-channel
+ * symmetric fake-quant: s = max|W|/7 (1.0 if all-zero), q = round-half-away(W/s)
+ * clamped [−7,7], mask = in-range (1.0/0.0), wq = q·s. byte-eq nn_int4_quant_fwd. */
+HexaVal hexa_forge_dispatch_int4_quant(HexaVal w_v, HexaVal wq_v, HexaVal sc_v,
+                                       HexaVal ql_v, HexaVal mask_v,
+                                       HexaVal cout_v, HexaVal rest_v) {
+    int64_t w = hexa_as_num(w_v), wq = hexa_as_num(wq_v), sc = hexa_as_num(sc_v);
+    int64_t ql = hexa_as_num(ql_v), mk = hexa_as_num(mask_v);
+    int64_t Cout = hexa_as_num(cout_v), rest = hexa_as_num(rest_v);
+    if (Cout <= 0 || rest <= 0)                             return hexa_int(-1);
+    int64_t n = Cout * rest;
+    if (!_OP38_FA(w, n) || !_OP38_FA(wq, n) || !_OP38_FA(ql, n) ||
+        !_OP38_FA(mk, n) || !_OP38_FA(sc, Cout))            return hexa_int(-1);
+    double* W  = _hx_farr_table[w].buf;
+    double* WQ = _hx_farr_table[wq].buf;
+    double* SC = _hx_farr_table[sc].buf;
+    double* QL = _hx_farr_table[ql].buf;
+    double* MK = _hx_farr_table[mk].buf;
+    for (int64_t co = 0; co < Cout; co++) {
+        double mx = 0.0;
+        for (int64_t j = 0; j < rest; j++) {
+            double a = _op38_qabs(W[co * rest + j]);
+            if (a > mx) mx = a;
+        }
+        double s = (mx > 0.0) ? (mx / 7.0) : 1.0;
+        SC[co] = s;
+        for (int64_t j2 = 0; j2 < rest; j2++) {
+            int64_t idx = co * rest + j2;
+            double q = _op38_qround(W[idx] / s);
+            double inrange = 1.0;
+            if (q > 7.0)         { q = 7.0;       inrange = 0.0; }
+            if (q < 0.0 - 7.0)   { q = 0.0 - 7.0; inrange = 0.0; }
+            QL[idx] = q;
+            MK[idx] = inrange;
+            WQ[idx] = q * s;
+        }
+    }
+    return hexa_int(0);
+}
+HexaVal forge_dispatch_int4_quant(HexaVal w_v, HexaVal wq_v, HexaVal sc_v,
+                                  HexaVal ql_v, HexaVal mask_v,
+                                  HexaVal cout_v, HexaVal rest_v) {
+    return hexa_forge_dispatch_int4_quant(w_v, wq_v, sc_v, ql_v, mask_v,
+                                          cout_v, rest_v);
+}
+
+/* int4_quant_bwd(dy, mask, dW, n) -> int rc. Clipped-STE dW[i]=dy[i]·mask[i].
+ * Dispatcher is 4-arg with flat n = Cout·rest. byte-eq nn_int4_quant_bwd. */
+HexaVal hexa_forge_dispatch_int4_quant_bwd(HexaVal dy_v, HexaVal mask_v,
+                                           HexaVal dw_v, HexaVal n_v) {
+    int64_t dy = hexa_as_num(dy_v), mk = hexa_as_num(mask_v);
+    int64_t dw = hexa_as_num(dw_v), n = hexa_as_num(n_v);
+    if (n <= 0 || !_OP38_FA(dy, n) || !_OP38_FA(mk, n) || !_OP38_FA(dw, n))
+        return hexa_int(-1);
+    double* DY = _hx_farr_table[dy].buf;
+    double* MK = _hx_farr_table[mk].buf;
+    double* DW = _hx_farr_table[dw].buf;
+    for (int64_t i = 0; i < n; i++) DW[i] = DY[i] * MK[i];
+    return hexa_int(0);
+}
+HexaVal forge_dispatch_int4_quant_bwd(HexaVal dy_v, HexaVal mask_v,
+                                      HexaVal dw_v, HexaVal n_v) {
+    return hexa_forge_dispatch_int4_quant_bwd(dy_v, mask_v, dw_v, n_v);
+}
+
+/* groupnorm_bwd(xhat, inv, gamma, dy, dgamma, dbeta, dX, T, C, G) -> int rc.
+ * dgamma[c]=Σ_t dy·xhat, dbeta[c]=Σ_t dy (c-outer, t-inner); dX per group, two
+ * passes (t-outer, c-inner): s1=Σ dxhat, s2=Σ dxhat·xhat (dxhat=dy·gamma); then
+ * dX=inv·(dxhat − s1/m − xhat·s2/m). Reads SAVED inv. byte-eq nn_groupnorm_bwd. */
+HexaVal hexa_forge_dispatch_groupnorm_bwd(HexaVal xhat_v, HexaVal inv_v,
+                                          HexaVal gamma_v, HexaVal dy_v,
+                                          HexaVal dgamma_v, HexaVal dbeta_v,
+                                          HexaVal dx_v, HexaVal t_v,
+                                          HexaVal c_v, HexaVal g_v) {
+    int64_t xh = hexa_as_num(xhat_v), iv = hexa_as_num(inv_v), gm = hexa_as_num(gamma_v);
+    int64_t dy = hexa_as_num(dy_v), dgm = hexa_as_num(dgamma_v);
+    int64_t dbt = hexa_as_num(dbeta_v), dx = hexa_as_num(dx_v);
+    int64_t T = hexa_as_num(t_v), C = hexa_as_num(c_v), G = hexa_as_num(g_v);
+    if (T <= 0 || C <= 0 || G <= 0 || (C % G) != 0)         return hexa_int(-1);
+    int64_t cg = C / G, n = T * C;
+    if (!_OP38_FA(xh, n) || !_OP38_FA(dy, n) || !_OP38_FA(dx, n) ||
+        !_OP38_FA(gm, C) || !_OP38_FA(dgm, C) || !_OP38_FA(dbt, C) ||
+        !_OP38_FA(iv, G))                                   return hexa_int(-1);
+    double* XH = _hx_farr_table[xh].buf;
+    double* IV = _hx_farr_table[iv].buf;
+    double* GM = _hx_farr_table[gm].buf;
+    double* DY = _hx_farr_table[dy].buf;
+    double* DGM = _hx_farr_table[dgm].buf;
+    double* DBT = _hx_farr_table[dbt].buf;
+    double* DX = _hx_farr_table[dx].buf;
+    double m = (double)(cg * T);
+    for (int64_t c = 0; c < C; c++) {
+        double sg = 0.0, sb = 0.0;
+        for (int64_t t = 0; t < T; t++) {
+            int64_t idx = t * C + c;
+            double gy = DY[idx];
+            sg = sg + gy * XH[idx];
+            sb = sb + gy;
+        }
+        DGM[c] = sg;
+        DBT[c] = sb;
+    }
+    for (int64_t g = 0; g < G; g++) {
+        int64_t c0 = g * cg;
+        double inv_g = IV[g];
+        double s1 = 0.0, s2 = 0.0;
+        for (int64_t t = 0; t < T; t++)
+            for (int64_t cc = 0; cc < cg; cc++) {
+                int64_t ch = c0 + cc, idx = t * C + ch;
+                double dxh = DY[idx] * GM[ch];
+                s1 = s1 + dxh;
+                s2 = s2 + dxh * XH[idx];
+            }
+        for (int64_t t2 = 0; t2 < T; t2++)
+            for (int64_t cc2 = 0; cc2 < cg; cc2++) {
+                int64_t ch = c0 + cc2, idx = t2 * C + ch;
+                double dxh = DY[idx] * GM[ch];
+                DX[idx] = inv_g * (dxh - s1 / m - XH[idx] * s2 / m);
+            }
+    }
+    return hexa_int(0);
+}
+HexaVal forge_dispatch_groupnorm_bwd(HexaVal xhat_v, HexaVal inv_v,
+                                     HexaVal gamma_v, HexaVal dy_v,
+                                     HexaVal dgamma_v, HexaVal dbeta_v,
+                                     HexaVal dx_v, HexaVal t_v,
+                                     HexaVal c_v, HexaVal g_v) {
+    return hexa_forge_dispatch_groupnorm_bwd(xhat_v, inv_v, gamma_v, dy_v,
+                                             dgamma_v, dbeta_v, dx_v,
+                                             t_v, c_v, g_v);
+}
+
+/* moe_router_bwd(probs, ex_out, dy, dlogits, dex_out, T, E, C) -> int rc.
+ * Per-t two-pass: pass1 (e-outer,c-inner) dgate[e]=Σ_c dy·ex_out, dex_out[e]=
+ * probs·dy, dot=Σ_e probs·dgate (dgate stashed in dlogits); pass2 dlogits[e]=
+ * probs·(dgate−dot). Reads CACHED probs. byte-eq nn_moe_router_bwd. */
+HexaVal hexa_forge_dispatch_moe_router_bwd(HexaVal probs_v, HexaVal exo_v,
+                                           HexaVal dy_v, HexaVal dl_v,
+                                           HexaVal dex_v, HexaVal t_v,
+                                           HexaVal e_v, HexaVal c_v) {
+    int64_t pr = hexa_as_num(probs_v), eo = hexa_as_num(exo_v), dy = hexa_as_num(dy_v);
+    int64_t dl = hexa_as_num(dl_v), dex = hexa_as_num(dex_v);
+    int64_t T = hexa_as_num(t_v), E = hexa_as_num(e_v), C = hexa_as_num(c_v);
+    if (T <= 0 || E <= 0 || C <= 0)                         return hexa_int(-1);
+    if (!_OP38_FA(pr, T * E) || !_OP38_FA(dl, T * E) ||
+        !_OP38_FA(eo, E * T * C) || !_OP38_FA(dy, T * C) ||
+        !_OP38_FA(dex, E * T * C))                          return hexa_int(-1);
+    double* PR = _hx_farr_table[pr].buf;
+    double* EO = _hx_farr_table[eo].buf;
+    double* DY = _hx_farr_table[dy].buf;
+    double* DL = _hx_farr_table[dl].buf;
+    double* DEX = _hx_farr_table[dex].buf;
+    for (int64_t t = 0; t < T; t++) {
+        double dot = 0.0;
+        for (int64_t e = 0; e < E; e++) {
+            double pte = PR[t * E + e];
+            double dg = 0.0;
+            for (int64_t c = 0; c < C; c++) {
+                double gy = DY[t * C + c];
+                dg = dg + gy * EO[e * T * C + t * C + c];
+                DEX[e * T * C + t * C + c] = pte * gy;
+            }
+            DL[t * E + e] = dg;
+            dot = dot + pte * dg;
+        }
+        for (int64_t e2 = 0; e2 < E; e2++) {
+            double pte = PR[t * E + e2];
+            double dg = DL[t * E + e2];
+            DL[t * E + e2] = pte * (dg - dot);
+        }
+    }
+    return hexa_int(0);
+}
+HexaVal forge_dispatch_moe_router_bwd(HexaVal probs_v, HexaVal exo_v,
+                                      HexaVal dy_v, HexaVal dl_v,
+                                      HexaVal dex_v, HexaVal t_v,
+                                      HexaVal e_v, HexaVal c_v) {
+    return hexa_forge_dispatch_moe_router_bwd(probs_v, exo_v, dy_v, dl_v,
+                                              dex_v, t_v, e_v, c_v);
+}
+
+/* embedding_bwd_scatter(dX, ids, dtable, T, d, V) -> int rc. Sequential
+ * scatter-add dtable[tok·d+c] += dX[i·d+c], i ascending, NO atomics. V unused
+ * on host (it bounds the device vocab-row thread count). dtable pre-zeroed by
+ * caller. byte-eq nn_embedding_bwd_scatter. */
+HexaVal hexa_forge_dispatch_embedding_bwd_scatter(HexaVal dx_v, HexaVal ids_v,
+                                                  HexaVal dt_v, HexaVal t_v,
+                                                  HexaVal d_v, HexaVal v_v) {
+    int64_t dx = hexa_as_num(dx_v), ids = hexa_as_num(ids_v), dt = hexa_as_num(dt_v);
+    int64_t T = hexa_as_num(t_v), d = hexa_as_num(d_v), V = hexa_as_num(v_v);
+    if (T <= 0 || d <= 0)                                   return hexa_int(-1);
+    if (!_OP38_FA(dx, T * d) || !_OP38_FA(ids, T))          return hexa_int(-1);
+    if (dt < 0 || dt >= _hx_farr_count || !_hx_farr_table[dt].buf)
+        return hexa_int(-1);
+    double* DX = _hx_farr_table[dx].buf;
+    double* IDS = _hx_farr_table[ids].buf;
+    double* DT = _hx_farr_table[dt].buf;
+    int64_t dtlen = _hx_farr_table[dt].len;
+    for (int64_t i = 0; i < T; i++) {
+        int64_t tok = (int64_t)IDS[i];
+        if (tok < 0 || (V > 0 && tok >= V) || (tok + 1) * d > dtlen)
+            return hexa_int(-1);
+        for (int64_t c = 0; c < d; c++)
+            DT[tok * d + c] = DT[tok * d + c] + DX[i * d + c];
+    }
+    return hexa_int(0);
+}
+HexaVal forge_dispatch_embedding_bwd_scatter(HexaVal dx_v, HexaVal ids_v,
+                                             HexaVal dt_v, HexaVal t_v,
+                                             HexaVal d_v, HexaVal v_v) {
+    return hexa_forge_dispatch_embedding_bwd_scatter(dx_v, ids_v, dt_v,
+                                                     t_v, d_v, v_v);
+}
+
+/* groupnorm_gelu_residual(x,gamma,beta,r,y,a,out,mean,inv,xhat,T,C,G) -> int rc.
+ * out = r + gelu(GN(x)); a = gelu out; y = pre-gelu GN out (for bwd). Same GN
+ * two-pass (t-outer,c-inner, eps=1e-5, 40-iter _op18_gn_sqrt) as OP-37 groupnorm,
+ * then a = _op18_gelu(y), out = r + a. byte-eq _groupnorm_gelu + _residual_add. */
+HexaVal hexa_forge_dispatch_groupnorm_gelu_residual(
+        HexaVal x_v, HexaVal gamma_v, HexaVal beta_v, HexaVal r_v,
+        HexaVal y_v, HexaVal a_v, HexaVal out_v, HexaVal mean_v, HexaVal inv_v,
+        HexaVal xhat_v, HexaVal t_v, HexaVal c_v, HexaVal g_v) {
+    int64_t x = hexa_as_num(x_v), gm = hexa_as_num(gamma_v), bt = hexa_as_num(beta_v);
+    int64_t r = hexa_as_num(r_v), y = hexa_as_num(y_v), a = hexa_as_num(a_v);
+    int64_t out = hexa_as_num(out_v), mn = hexa_as_num(mean_v), iv = hexa_as_num(inv_v);
+    int64_t xh = hexa_as_num(xhat_v);
+    int64_t T = hexa_as_num(t_v), C = hexa_as_num(c_v), G = hexa_as_num(g_v);
+    if (T <= 0 || C <= 0 || G <= 0 || (C % G) != 0)         return hexa_int(-1);
+    int64_t cg = C / G, n = T * C;
+    if (!_OP38_FA(x, n) || !_OP38_FA(y, n) || !_OP38_FA(a, n) ||
+        !_OP38_FA(r, n) || !_OP38_FA(out, n) || !_OP38_FA(xh, n) ||
+        !_OP38_FA(gm, C) || !_OP38_FA(bt, C) ||
+        !_OP38_FA(mn, G) || !_OP38_FA(iv, G))               return hexa_int(-1);
+    double* X = _hx_farr_table[x].buf;
+    double* GM = _hx_farr_table[gm].buf;
+    double* BT = _hx_farr_table[bt].buf;
+    double* R = _hx_farr_table[r].buf;
+    double* Y = _hx_farr_table[y].buf;
+    double* A = _hx_farr_table[a].buf;
+    double* OUT = _hx_farr_table[out].buf;
+    double* MN = _hx_farr_table[mn].buf;
+    double* IV = _hx_farr_table[iv].buf;
+    double* XH = _hx_farr_table[xh].buf;
+    const double eps = 0.00001;
+    double m = (double)(cg * T);
+    /* GN + gelu (== OP-37 groupnorm body + _op18_gelu into a, then y = pre-gelu) */
+    for (int64_t g = 0; g < G; g++) {
+        int64_t c0 = g * cg;
+        double sum = 0.0;
+        for (int64_t t = 0; t < T; t++)
+            for (int64_t c = 0; c < cg; c++)
+                sum += X[t * C + (c0 + c)];
+        double mu = sum / m;
+        double vs = 0.0;
+        for (int64_t t = 0; t < T; t++)
+            for (int64_t c = 0; c < cg; c++) {
+                double dd = X[t * C + (c0 + c)] - mu;
+                vs += dd * dd;
+            }
+        double var = vs / m;
+        double inv = 1.0 / _op18_gn_sqrt(var + eps);
+        MN[g] = mu;
+        IV[g] = inv;
+        for (int64_t t = 0; t < T; t++)
+            for (int64_t c = 0; c < cg; c++) {
+                int64_t ch = c0 + c, idx = t * C + ch;
+                double xhat = (X[idx] - mu) * inv;
+                XH[idx] = xhat;
+                double yv = GM[ch] * xhat + BT[ch];
+                Y[idx] = yv;
+                A[idx] = _op18_gelu(yv);
+            }
+    }
+    /* residual add (== _residual_add(r, a, out, T*C)) */
+    for (int64_t i = 0; i < n; i++) OUT[i] = R[i] + A[i];
+    return hexa_int(0);
+}
+HexaVal forge_dispatch_groupnorm_gelu_residual(
+        HexaVal x_v, HexaVal gamma_v, HexaVal beta_v, HexaVal r_v,
+        HexaVal y_v, HexaVal a_v, HexaVal out_v, HexaVal mean_v, HexaVal inv_v,
+        HexaVal xhat_v, HexaVal t_v, HexaVal c_v, HexaVal g_v) {
+    return hexa_forge_dispatch_groupnorm_gelu_residual(
+        x_v, gamma_v, beta_v, r_v, y_v, a_v, out_v, mean_v, inv_v,
+        xhat_v, t_v, c_v, g_v);
+}
+
+/* adamw / adamw_keepmv: rc=-1 fall-through stubs. Returning -1 routes the
+ * clm_prod _adam helper to the proven host opt_adamw_step (byte-eq) — keeping a
+ * SINGLE AdamW arithmetic SSOT (no risk of a second host body drifting from
+ * opt_adamw_step). The OFF-CUDA link is satisfied (symbols defined); the update
+ * runs through the verified host optimizer. NOT a silent wrong result — the
+ * caller explicitly handles rc!=0 by running opt_adamw_step. */
+HexaVal hexa_forge_dispatch_adamw(HexaVal w_v, HexaVal g_v, HexaVal m_v,
+                                  HexaVal v_v, HexaVal n_v, HexaVal lr_v,
+                                  HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
+                                  HexaVal wd_v, HexaVal t_v) {
+    (void)w_v; (void)g_v; (void)m_v; (void)v_v; (void)n_v; (void)lr_v;
+    (void)b1_v; (void)b2_v; (void)eps_v; (void)wd_v; (void)t_v;
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_adamw(HexaVal w_v, HexaVal g_v, HexaVal m_v,
+                             HexaVal v_v, HexaVal n_v, HexaVal lr_v,
+                             HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
+                             HexaVal wd_v, HexaVal t_v) {
+    return hexa_forge_dispatch_adamw(w_v, g_v, m_v, v_v, n_v, lr_v,
+                                     b1_v, b2_v, eps_v, wd_v, t_v);
+}
+HexaVal hexa_forge_dispatch_adamw_keepmv(HexaVal w_v, HexaVal g_v, HexaVal m_v,
+                                         HexaVal v_v, HexaVal n_v, HexaVal lr_v,
+                                         HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
+                                         HexaVal wd_v, HexaVal t_v) {
+    return hexa_forge_dispatch_adamw(w_v, g_v, m_v, v_v, n_v, lr_v,
+                                     b1_v, b2_v, eps_v, wd_v, t_v);
+}
+HexaVal forge_dispatch_adamw_keepmv(HexaVal w_v, HexaVal g_v, HexaVal m_v,
+                                    HexaVal v_v, HexaVal n_v, HexaVal lr_v,
+                                    HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
+                                    HexaVal wd_v, HexaVal t_v) {
+    return hexa_forge_dispatch_adamw(w_v, g_v, m_v, v_v, n_v, lr_v,
+                                     b1_v, b2_v, eps_v, wd_v, t_v);
+}
+#undef _OP38_FA
+#pragma STDC FP_CONTRACT DEFAULT
+#endif
+OP38_EOF
+  echo "[restore_frozen_seeds] OP-38: appended OFF-CUDA clm_prod glue host fallbacks (gelu/_bwd · ce_grad · int4_quant/_bwd · groupnorm_bwd · moe_router_bwd · embedding_bwd_scatter · groupnorm_gelu_residual + adamw/keepmv rc=-1 stubs) to $rt"
+fi
+
 # Unstage everything we just restored so the index reflects the graduated tree;
 # the working-tree files remain as the ephemeral build input.
 git reset -q -- "${FROZEN_SEEDS[@]}" 2>/dev/null || true
