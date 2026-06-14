@@ -109,6 +109,19 @@ jobs:
           CC: clang
           LIBS: ""
           GH_TOKEN: ${{ github.token }}
+          # ── N5 seed-convergence SHIP-BY-DEFAULT (edge-roll only) ──────────
+          # Converge the bootstrap seed (self/native/hexa_cc.c) to its fixpoint
+          # DURING the edge roll so the shipped build/hexat already lowers the
+          # forge OFF-CUDA 4-arg dispatches (clm_prod) correctly — every
+          # downstream `hx install` build inherits the converged hexat via the
+          # edge tarball, with NO per-user HEXA_SEED_CONVERGE=1 opt-in. Scoped
+          # to the release edge-build ONLY (NOT the shared tool/release_build,
+          # NOT the faithful-nobaseline gate, which both keep the default OFF):
+          # the gate edge-pulls the CURRENT edge (no-op prebuild) + runs the
+          # determinism oracles, so convergence — a deterministic fixpoint —
+          # flows through faithful unchanged. The converged edge ships on the
+          # NEXT roll after this merges.
+          HEXA_SEED_CONVERGE: "1"
         run: bash tool/release_build
 
       # ── macOS Developer ID signing (GATED · skips cleanly when secrets
@@ -229,6 +242,10 @@ jobs:
           CC: gcc
           LIBS: "-lm -ldl"
           GH_TOKEN: ${{ github.token }}
+          # N5 seed-convergence SHIP-BY-DEFAULT (edge-roll only) — see the
+          # darwin-arm64 job for the full rationale. Scoped to the release
+          # edge-build; the shared release_build + faithful gate stay default-OFF.
+          HEXA_SEED_CONVERGE: "1"
         run: bash tool/release_build
 
       - name: Package — shared release_package (Stage 3 + tarball)
@@ -270,6 +287,10 @@ jobs:
           CC: gcc
           LIBS: "-lm -ldl"
           GH_TOKEN: ${{ github.token }}
+          # N5 seed-convergence SHIP-BY-DEFAULT (edge-roll only) — see the
+          # darwin-arm64 job for the full rationale. Scoped to the release
+          # edge-build; the shared release_build + faithful gate stay default-OFF.
+          HEXA_SEED_CONVERGE: "1"
         run: bash tool/release_build
 
       - name: Package — shared release_package (Stage 3 + tarball)

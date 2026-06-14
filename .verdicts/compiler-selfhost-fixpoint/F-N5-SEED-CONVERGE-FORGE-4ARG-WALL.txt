@@ -87,3 +87,47 @@ HEXA_SKIP_SEED_CONVERGE=1.
 the seed byte-eq fixpoint HOLDS — via a committable, in-mechanism tool/ change
 (no frozen-REF bump; seed stays gitignored). Residual = the OP-37-deferred
 OFF-CUDA runtime host bodies (orthogonal). NOT merged — CI byte-eq gates decide.
+
+═══ ADDENDUM 2026-06-14 — SHIP-BY-DEFAULT (edge-roll) + darwin-loop ROOT CAUSE ═
+branch: ship/n5-seed-converge-default   host: ghost (darwin-arm64) + summer (x86_64)
+
+The opt-in HEXA_SEED_CONVERGE=1 (00b7f45e2 / #3338) had been made opt-in because
+the convergence loop "failed on darwin-arm64 with exit 1" in the shared
+release_build path. ROOT CAUSE (reproduced on ghost AND summer — NOT darwin-
+specific, NOT BSD-vs-GNU): the loop's TRAILING statement was
+
+    [ "$i" -ge "$max" ] && echo "...WARN..." >&2
+
+As the LAST command in stage_prebuild_hexat, on the normal FIXPOINT path
+($i < $max) the bare `[ … ]` test returns 1, which BECOMES the script's exit
+code. release_build runs under `set -e`, so that exit 1 aborts the whole build —
+on every platform. (It "passed" in the prior summer verdict only because that
+test ran the loop in isolation, not through release_build's set -e.)
+
+FIX (tool/stage_prebuild_hexat): convert the trailing `[..] && echo` to a proper
+`if`, then `test -x "$HEXAT"; exit 0` so a converged build is unambiguously
+successful. Verified: bash tool/stage_prebuild_hexat → EXIT 0 at FIXPOINT
+(was 1); full release_build → "[release_build] PASS" on BOTH ghost (darwin-arm64)
+and summer (linux-x86_64).
+
+SHIP-BY-DEFAULT wiring: HEXA_SEED_CONVERGE=1 set in release.yml's THREE release
+build steps' env: ONLY (darwin/linux-x86_64/linux-arm64) — NOT in the shared
+tool/release_build, NOT in nobaseline-gate.yml (faithful). Faithful edge-pulls
+the CURRENT edge (build/hexat present → stage_prebuild_hexat no-ops BEFORE the
+loop, verified EXIT 0 with the env even set) → determinism oracles green. The
+converged edge ships on the NEXT roll after merge (PR cannot pre-verify that).
+
+CROSS-PLATFORM FIXPOINT (g5): converged seed sha256 IDENTICAL on darwin + linux:
+  baa5cae09f831cf0526976adfc0f53fdcf09a35b52e212cfb9c1088f42766725  (2106692B)
+clm_prod OFF-CUDA: rc=0 · 0 broken hexa_call4(forge_dispatch…) · 3 direct
+hexa_forge_dispatch_* calls — both hosts. Re-emit byte-identical — both hosts.
+
+NOTE (summer repro artifact, NOT a bug): summer's ~/.bashrc + ~/.profile export
+a stale HEXA_PREBUILT_RUNTIME=~/core/hexa-lang/build/runtime.a (missing
+hexa_os_getuid) — leaks into local reproductions and fails Stage-2 link on the
+frozen-seed path REGARDLESS of convergence (baseline reproduces it too). CI envs
+start clean; `unset HEXA_PREBUILT_RUNTIME` → PASS. Orthogonal to this change.
+
+OUTCOME: (A) — one clean PR; darwin loop fixed + portable; ship-by-default wired
+at edge-roll; faithful stays default-OFF (edge-pull no-op + determinism). The
+faithful-nobaseline CI on the PR is the gate.
