@@ -645,14 +645,33 @@ fn _x86_hv_tag_for(o: Operand) -> i64 {
 }
 
 // Box one runtime-call argument as a HexaVal {tag, payload} into the
-// register pair (lo = tag, hi = payload). The raw value/pointer is loaded
-// into `hi` via the existing single-register resolve path (a const_str /
-// global label materialises through the emitter's RIP-relative `lea`), then
-// the constant tag is written into `lo`. `lo` is set AFTER `hi` so a payload
-// that resolves through a scratch register cannot clobber the tag.
+// register pair (lo = tag, hi = payload), then write the constant tag into
+// `lo`. `lo` is set AFTER `hi` so a payload that resolves through a scratch
+// register cannot clobber the tag.
+//
+// The payload eightbyte must hold the VALUE for an int/bool, or the ADDRESS
+// for a string/global aggregate. The asm-text renderer (compiler/emit/asm.hexa)
+// prints a `mov reg, <label>` operand verbatim, which GNU `as` assembles as an
+// absolute immediate (`R_X86_64_32S`) — for a `.rodata` string label that both
+// rejects under PIE and (worse) loads a truncated/garbage value, not the
+// pointer. So a const_str / global payload is materialised with an explicit
+// RIP-relative `lea reg, [rip+label]` (address-of), the canonical x86_64
+// way to take a data address position-independently. Int payloads keep the
+// existing single-register resolve (a register, immediate, or spill reload).
 fn _x86_hv_box_arg(buf: [LInstr], o: Operand, st: X86StrTab, rm: X86RegMap,
                    lo: string, hi: string, opts: CodegenOptions) -> [LInstr] {
     let mut out = buf
+    if o.kind == "const_str" {
+        let mut lbl = _x86_strtab_lookup(st, o.str_val)
+        if len(lbl) == 0 { lbl = o.str_val }
+        out.push(_x86_instr2("lea", _x86_op_reg(hi),
+                         _x86_op_label("[rip+" + lbl + "]"),
+                         "hv arg payload: &str " + lbl))
+        out.push(_x86_instr2("mov", _x86_op_reg(lo),
+                         _x86_op_imm(_x86_hv_tag_for(o)),
+                         "hv arg tag = " + to_string(_x86_hv_tag_for(o))))
+        return out
+    }
     out = _x86_op_rm(out, o, st, rm, hi, opts)
     let payload = _x86_op_resolve(o, st, rm, hi, opts)
     out.push(_x86_instr2("mov", _x86_op_reg(hi), payload, "hv arg payload"))
