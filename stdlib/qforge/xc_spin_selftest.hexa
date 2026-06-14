@@ -1,0 +1,146 @@
+// @ci_gate — deterministic · network-free · LSDA spin XC (PW92 corr + Slater x) g5 gate
+//
+// xc_spin_selftest.hexa — QFORGE spin-polarized (LSDA) XC g5 gate.
+//   Verifies the nspin=2 additions for handoff bb095261 (CoSn magnetic kagome):
+//   spin PW92 correlation (correlation.hexa) + spin-scaled LDA exchange (screening.hexa).
+//
+// 검증 케이스:
+//  🔵 (A) REGRESSION PIN — ε_c^spin(r_s,ζ=0) ≡ ε_c^unpol(r_s) (abs<1e-12, r_s=1,2,5,10).
+//  🔵 (B) ferromagnetic limit — ε_c^spin(r_s,ζ=1) = G(ferro params) hand-reproduced (abs<1e-9).
+//  🔵 (C) ζ-interpolation hand-reproduce — ε_c^spin(r_s,0.5) = ec0+α_c·f/f''(0)·(1−ζ⁴)+Δ·f·ζ⁴ (abs<1e-9).
+//  🔵 (D) f(ζ): f(0)=0 · f(±1)=1 · even f(0.5)=f(−0.5) (abs<1e-12).
+//  🟢 (E) spin V_c at ζ=0 → V_c^↑=V_c^↓= unpolarized PW92 V_c (abs<1e-6, central-diff).
+//  🟢 (F) physics — correlation weakens with polarization: |ε_c(ζ=1)| < |ε_c(ζ=0)| (r_s=2,5).
+//  🔵 (G) REGRESSION PIN — V_x^spin(ρ/2,ρ/2) = V_x^unpol(ρ) both channels (abs<1e-12).
+//  🔵 (H) spin exchange scaling — V_x^↑(ρ↑,ρ↓) = −(6ρ↑/π)^{1/3} hand (abs<1e-12); fully-polarized ↓→0.
+//  🟢 (I) spin exchange energy density at ζ=0 = ρ·ε_x^unpol (ε_x=¾V_x) (abs<1e-9).
+//
+// Run:  hexa run --no-sentinel stdlib/qforge/xc_spin_selftest.hexa
+// PASS: "qforge_xc_spin_selftest PASS".
+use "stdlib/qforge/correlation"
+use "stdlib/qforge/screening"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_bool(name: str, got: bool, want: bool) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+
+// independent hand-reproduction of the generic PW92 G(r_s) (selftest-side).
+fn _g_hand(rs: float, aa: float, a1: float, b1: float, b2: float, b3: float, b4: float) -> float {
+    let srs = sqrt(rs)
+    let q1 = b1 * srs + b2 * rs + b3 * rs * srs + b4 * rs * rs
+    let arg = 1.0 + 1.0 / (2.0 * aa * q1)
+    return -2.0 * aa * (1.0 + a1 * rs) * log(arg)
+}
+fn _ec0_hand(rs: float) -> float { return _g_hand(rs, 0.031091, 0.21370, 7.5957, 3.5876, 1.6382, 0.49294) }
+fn _ec1_hand(rs: float) -> float { return _g_hand(rs, 0.015545, 0.20548, 14.1189, 6.1977, 3.3662, 0.62517) }
+fn _mac_hand(rs: float) -> float { return _g_hand(rs, 0.016887, 0.11125, 10.357, 3.6231, 0.88026, 0.49671) }
+fn _f_hand(z: float) -> float {
+    let ft = 4.0 / 3.0
+    return (pow(1.0 + z, ft) + pow(1.0 - z, ft) - 2.0) / (pow(2.0, ft) - 2.0)
+}
+
+fn main() {
+    let mut fails = 0
+    let PI = 3.14159265358979323846
+    let fpp0 = 1.7099209341613657
+
+    // ── (A) REGRESSION PIN: spin ζ=0 ≡ unpolarized ───────────────────────────
+    let rsA = [1.0, 2.0, 5.0, 10.0]
+    let mut ia = 0
+    while ia < len(rsA) {
+        let rs = rsA[ia]
+        fails = fails + _ck_close("(A) ε_c^spin(ζ=0)≡ε_c^unpol r_s=" + to_string(rs),
+                                  qforge_ec_pw92_spin(rs, 0.0), qforge_ec_pw92(rs), 1.0e-12)
+        ia = ia + 1
+    }
+
+    // ── (B) ferromagnetic limit ζ=1 → ec1 ───────────────────────────────────
+    let rsB = [1.0, 2.0, 5.0]
+    let mut ib = 0
+    while ib < len(rsB) {
+        let rs = rsB[ib]
+        fails = fails + _ck_close("(B) ε_c^spin(ζ=1)=ec1 ferro r_s=" + to_string(rs),
+                                  qforge_ec_pw92_spin(rs, 1.0), _ec1_hand(rs), 1.0e-9)
+        ib = ib + 1
+    }
+
+    // ── (C) ζ=0.5 interpolation hand-reproduce ───────────────────────────────
+    let rsC = [1.0, 3.0, 8.0]
+    let mut ic = 0
+    while ic < len(rsC) {
+        let rs = rsC[ic]
+        let z = 0.5
+        let ec0 = _ec0_hand(rs)
+        let ec1 = _ec1_hand(rs)
+        let alphac = -1.0 * _mac_hand(rs)
+        let fz = _f_hand(z)
+        let z4 = z * z * z * z
+        let want = ec0 + alphac * (fz / fpp0) * (1.0 - z4) + (ec1 - ec0) * fz * z4
+        fails = fails + _ck_close("(C) ε_c^spin(ζ=0.5) interp r_s=" + to_string(rs),
+                                  qforge_ec_pw92_spin(rs, z), want, 1.0e-9)
+        ic = ic + 1
+    }
+
+    // ── (D) f(ζ) endpoints + evenness ────────────────────────────────────────
+    fails = fails + _ck_close("(D) f(0)=0", qforge_f_zeta(0.0), 0.0, 1.0e-12)
+    fails = fails + _ck_close("(D) f(1)=1", qforge_f_zeta(1.0), 1.0, 1.0e-12)
+    fails = fails + _ck_close("(D) f(-1)=1", qforge_f_zeta(-1.0), 1.0, 1.0e-12)
+    fails = fails + _ck_close("(D) f even f(.5)=f(-.5)", qforge_f_zeta(0.5), qforge_f_zeta(-0.5), 1.0e-12)
+
+    // ── (E) spin V_c at ζ=0 → unpolarized V_c (both channels) ────────────────
+    let rhoE = [0.02, 0.05, 0.1]
+    let mut ie = 0
+    while ie < len(rhoE) {
+        let rho = rhoE[ie]
+        let rs = qforge_rs_from_rho(rho)
+        let vc = qforge_vc_pw92_spin(rho / 2.0, rho / 2.0)
+        fails = fails + _ck_close("(E) V_c^↑(ζ=0)=V_c unpol ρ=" + to_string(rho), vc[0], qforge_vc_pw92(rs), 1.0e-6)
+        fails = fails + _ck_close("(E) V_c^↓(ζ=0)=V_c unpol ρ=" + to_string(rho), vc[1], qforge_vc_pw92(rs), 1.0e-6)
+        ie = ie + 1
+    }
+
+    // ── (F) correlation weakens with polarization: |ε_c(1)| < |ε_c(0)| ───────
+    fails = fails + _ck_bool("(F) |ε_c(ζ=1)|<|ε_c(ζ=0)| r_s=2", _abs(qforge_ec_pw92_spin(2.0, 1.0)) < _abs(qforge_ec_pw92_spin(2.0, 0.0)), true)
+    fails = fails + _ck_bool("(F) |ε_c(ζ=1)|<|ε_c(ζ=0)| r_s=5", _abs(qforge_ec_pw92_spin(5.0, 1.0)) < _abs(qforge_ec_pw92_spin(5.0, 0.0)), true)
+
+    // ── (G) REGRESSION PIN: spin V_x(ρ/2,ρ/2) = unpolarized V_x(ρ) ───────────
+    let rhoG = [0.02, 0.05, 0.1, 0.3]
+    let mut ig = 0
+    while ig < len(rhoG) {
+        let rho = rhoG[ig]
+        let vx = qforge_vx_lda_spin(rho / 2.0, rho / 2.0)
+        fails = fails + _ck_close("(G) V_x^↑(ζ=0)=V_x unpol ρ=" + to_string(rho), vx[0], qforge_vx_lda(rho), 1.0e-12)
+        fails = fails + _ck_close("(G) V_x^↓(ζ=0)=V_x unpol ρ=" + to_string(rho), vx[1], qforge_vx_lda(rho), 1.0e-12)
+        ig = ig + 1
+    }
+
+    // ── (H) spin exchange scaling V_x^↑ = −(6ρ↑/π)^{1/3}; ↓ fully polarized → 0 ─
+    let ru = 0.04
+    let rd = 0.01
+    let third = 1.0 / 3.0
+    let vx2 = qforge_vx_lda_spin(ru, rd)
+    fails = fails + _ck_close("(H) V_x^↑ scaling", vx2[0], -1.0 * pow(6.0 * ru / PI, third), 1.0e-12)
+    fails = fails + _ck_close("(H) V_x^↓ scaling", vx2[1], -1.0 * pow(6.0 * rd / PI, third), 1.0e-12)
+    let vxpol = qforge_vx_lda_spin(0.05, 0.0)
+    fails = fails + _ck_close("(H) V_x^↓(ρ↓=0)=0", vxpol[1], 0.0, 1.0e-12)
+
+    // ── (I) spin exchange energy density at ζ=0 = ρ·ε_x^unpol (ε_x=¾V_x) ──────
+    let rhoI = [0.03, 0.08]
+    let mut ii = 0
+    while ii < len(rhoI) {
+        let rho = rhoI[ii]
+        let want = rho * 0.75 * qforge_vx_lda(rho)
+        fails = fails + _ck_close("(I) ε_x density(ζ=0) ρ=" + to_string(rho),
+                                  qforge_ex_endens_spin(rho / 2.0, rho / 2.0), want, 1.0e-9)
+        ii = ii + 1
+    }
+
+    if fails == 0 { println("qforge_xc_spin_selftest PASS") }
+    else { println("qforge_xc_spin_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

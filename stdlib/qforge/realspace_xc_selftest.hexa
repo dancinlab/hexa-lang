@@ -1,0 +1,125 @@
+// @ci_gate — deterministic · network-free · real-space XC plumbing g5 gate (PR7c)
+//
+// realspace_xc_selftest.hexa — verifies |∇ρ| (FFT gradient), ∇·F (divergence), and the
+// local V_xc(ΔG) Hamiltonian contribution.
+//  🔵 (A) constant ρ → |∇ρ| = 0 everywhere.
+//  🔵 (B) constant vector field → ∇·F = 0.
+//  🟢 (C) single cosine mode ρ(r)=cos(2π·ix/nx) → |∇ρ| = b1x·|sin(2π·ix/nx)| (analytic).
+//  🔵 (D) constant V_xc=V0 → matrix diagonal = V0, off-diagonal = 0 (reduction pin).
+//  🟢 (E) V_xc matrix is symmetric Re V(ΔG) (Hermitian real part).
+// Run: hexa run --no-sentinel stdlib/qforge/realspace_xc_selftest.hexa
+// PASS: "qforge_realspace_xc_selftest PASS".
+use "stdlib/qforge/realspace_xc"
+use "stdlib/qforge/realspace_density"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ckt(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+fn _ck(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let tp = 0.7853981633974483           // π/4
+    let b1 = [tp, 0.0, 0.0] ; let b2 = [0.0, tp, 0.0] ; let b3 = [0.0, 0.0, tp]
+    let nx = 8 ; let ny = 8 ; let nz = 8 ; let ntot = nx * ny * nz
+    let twopi = 6.283185307179586
+
+    // ── (A) constant ρ → |∇ρ| = 0 ────────────────────────────────────────────
+    let mut rc: [float] = [] ; let mut q = 0
+    while q < ntot { rc.push(0.37) ; q = q + 1 }
+    let gc = qforge_grad_rho_mag(rc, nx, ny, nz, b1, b2, b3)
+    let mut amax = 0.0 ; q = 0
+    while q < ntot { if _abs(gc[q]) > amax { amax = _abs(gc[q]) } ; q = q + 1 }
+    fails = fails + _ckt("(A) const ρ → |∇ρ|≈0", amax < 1.0e-10)
+
+    // ── (B) constant F → ∇·F = 0 ─────────────────────────────────────────────
+    let mut fx: [float] = [] ; let mut fy: [float] = [] ; let mut fz: [float] = []
+    q = 0 ; while q < ntot { fx.push(0.5) ; fy.push(-0.2) ; fz.push(0.9) ; q = q + 1 }
+    let dv = qforge_div_field(fx, fy, fz, nx, ny, nz, b1, b2, b3)
+    let mut dmax = 0.0 ; q = 0
+    while q < ntot { if _abs(dv[q]) > dmax { dmax = _abs(dv[q]) } ; q = q + 1 }
+    fails = fails + _ckt("(B) const F → ∇·F≈0", dmax < 1.0e-10)
+
+    // ── (C) cosine mode |∇ρ| = b1x·|sin(2π·ix/nx)| ──────────────────────────
+    let mut rcos: [float] = []
+    let mut ix = 0
+    while ix < nx {
+        let mut iy = 0
+        while iy < ny {
+            let mut iz = 0
+            while iz < nz { rcos.push(cos(twopi * to_float(ix) / to_float(nx))) ; iz = iz + 1 }
+            iy = iy + 1
+        }
+        ix = ix + 1
+    }
+    let gcos = qforge_grad_rho_mag(rcos, nx, ny, nz, b1, b2, b3)
+    let mut ok = true
+    ix = 0
+    while ix < nx {
+        let want = tp * _abs(sin(twopi * to_float(ix) / to_float(nx)))
+        let lin = (ix * ny + 0) * nz + 0
+        if _abs(gcos[lin] - want) > 1.0e-9 { ok = false }
+        ix = ix + 1
+    }
+    fails = fails + _ckt("(C) cosine |∇ρ| = b1x·|sin| (analytic)", ok)
+
+    // ── (D) constant V_xc=V0 → matrix diag V0, off-diag 0 ────────────────────
+    let hkl = [0, 0, 0,  1, 0, 0,  0, 1, 0,  -1, 0, 0]
+    let mut gvecs: [float] = []
+    let mut i = 0
+    while i < 4 {
+        let h = to_float(hkl[i * 3]) ; let k = to_float(hkl[i * 3 + 1]) ; let l = to_float(hkl[i * 3 + 2])
+        gvecs.push(h * tp) ; gvecs.push(k * tp) ; gvecs.push(l * tp)
+        i = i + 1
+    }
+    let mil = qforge_miller_of_g(gvecs, b1, b2, b3)
+    let mut v0: [float] = [] ; q = 0
+    while q < ntot { v0.push(0.42) ; q = q + 1 }
+    let hxc = qforge_vxc_local_matrix(v0, gvecs, mil, nx, ny, nz)
+    let mut diag_ok = true ; let mut off_ok = true
+    let nn = 4
+    let mut a = 0
+    while a < nn {
+        let mut b = 0
+        while b < nn {
+            let val = hxc[a * nn + b]
+            if a == b { if _abs(val - 0.42) > 1.0e-9 { diag_ok = false } }
+            else { if _abs(val) > 1.0e-9 { off_ok = false } }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    fails = fails + _ckt("(D) const V_xc → diagonal = V0", diag_ok)
+    fails = fails + _ckt("(D) const V_xc → off-diagonal = 0", off_ok)
+
+    // ── (E) V_xc matrix symmetric (real V(r) → Re V(ΔG) symmetric) ───────────
+    // use a non-constant V_xc (cosine) and check H[a][b]==H[b][a].
+    let mut vco: [float] = []
+    ix = 0
+    while ix < nx {
+        let mut iy = 0
+        while iy < ny {
+            let mut iz = 0
+            while iz < nz { vco.push(0.3 + 0.1 * cos(twopi * to_float(ix) / to_float(nx))) ; iz = iz + 1 }
+            iy = iy + 1
+        }
+        ix = ix + 1
+    }
+    let hxc2 = qforge_vxc_local_matrix(vco, gvecs, mil, nx, ny, nz)
+    let mut sym = true
+    a = 0
+    while a < nn {
+        let mut b = 0
+        while b < nn { if _abs(hxc2[a * nn + b] - hxc2[b * nn + a]) > 1.0e-9 { sym = false } ; b = b + 1 }
+        a = a + 1
+    }
+    fails = fails + _ckt("(E) V_xc matrix symmetric", sym)
+
+    if fails == 0 { println("qforge_realspace_xc_selftest PASS") }
+    else { println("qforge_realspace_xc_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

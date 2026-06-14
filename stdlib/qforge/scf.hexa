@@ -345,6 +345,177 @@ pub fn qforge_scf_smeared_dc(H_of_rho, rho_of_psi, n: int, nbands: int, nelec: i
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// SPIN-POLARIZED (LSDA, nspin=2) SCF DRIVER — handoff bb095261 (CoSn kagome)
+// ════════════════════════════════════════════════════════════════════════════
+// Two coupled Kohn-Sham channels (↑,↓) sharing ONE Fermi level. Each iteration
+// builds a per-spin H from BOTH densities (V_xc^σ depends on ρ↑,ρ↓; V_H on ρ↑+ρ↓),
+// diagonalizes each channel, fills both via a single shared E_F (smearing.hexa
+// qforge_fermi_occupations_spin), rebuilds ρ↑,ρ↓, mixes each (plain linear), and
+// tracks the magnetization m=Σocc↑−Σocc↓. Physics-agnostic (d4): the per-spin
+// Hamiltonian is supplied by the caller's H_of_rho_spin(ρ↑,ρ↓,sign)→H_apply
+// closure (sign=+1 up, −1 down); ρ_of_psi reused unchanged.
+//
+// REGRESSION PIN: a spin-SYMMETRIC closure (H_of_rho_spin ignores sign, depends
+//   only on ρ↑+ρ↓) with init_mag=0 reproduces qforge_scf_smeared(...,spin_deg=2,
+//   and_depth=0): two identical channels each weight-1 ≡ one channel weight-2
+//   (shared E_F over [E,E] == restricted E_F with sd=2; band sum & entropy add).
+// Smeared (sigma>0) only — magnetic metals always smear; verified path.
+// Mixing: per-channel Anderson when and_depth>0 (qforge_anderson_next on each spin's
+// own history — cuts TM-metal iter-count ~3-5×), else plain linear. and_depth=0 keeps
+// the linear regression pin (CaH6 nspin2≡nspin1).
+pub struct ScfResultSpin {
+    rho_up: [float],
+    rho_dn: [float],
+    evals_up: [float],
+    evals_dn: [float],
+    e_total: float,
+    magnetization: float,   // m = Σ occ↑ − Σ occ↓  (μ_B per cell)
+    iters: int,
+    converged: bool
+}
+
+pub fn qforge_scf_spin_smeared_dc(H_of_rho_spin, rho_of_psi, n: int, nbands: int, nelec: int,
+                                  mix: float, tol: float, max_iter: int,
+                                  sigma: float, and_depth: int, e_dc: float, init_mag: float) -> ScfResultSpin {
+    let mut a = mix
+    if a <= 0.0 { a = 0.1 }
+    if a > 1.0 { a = 1.0 }
+
+    // init spin densities: ρ↑+ρ↓ = nelec/n (charge), ρ↑−ρ↓ = init_mag/n (moment seed).
+    let nf = to_float(nelec)
+    let nnf = to_float(n)
+    let r_up0 = (nf + init_mag) / (2.0 * nnf)
+    let r_dn0 = (nf - init_mag) / (2.0 * nnf)
+    let mut rho_up: [float] = []
+    let mut rho_dn: [float] = []
+    let mut i = 0
+    while i < n { rho_up.push(r_up0) ; rho_dn.push(r_dn0) ; i = i + 1 }
+
+    let mut evals_up: [float] = []
+    let mut evals_dn: [float] = []
+    let mut e_total = 0.0
+    let mut e_prev = 0.0
+    let mut mag = 0.0
+    let mut iters = 0
+    let mut converged = false
+    let mut first = true
+
+    // per-channel Anderson history (flat h×n buffers) — and_depth>0 enables it,
+    // ≤0 → plain linear. Anderson cuts metal SCF iter-count ~3-5× (the restricted
+    // CaH6 needed it; linear alone limit-cycles / converges slowly on TM cells).
+    let mut hin_u: [float] = [] ; let mut hout_u: [float] = []
+    let mut hin_d: [float] = [] ; let mut hout_d: [float] = []
+    let mut hh = 0
+
+    while iters < max_iter {
+        iters = iters + 1
+
+        let H_up = H_of_rho_spin(rho_up, rho_dn, 1.0)
+        let H_dn = H_of_rho_spin(rho_up, rho_dn, -1.0)
+
+        // per-channel diagonal (unit-vector probe — same as restricted driver).
+        let mut diag_u: [float] = []
+        let mut diag_d: [float] = []
+        let mut d = 0
+        while d < n {
+            let mut e = []
+            let mut t = 0
+            while t < n { if t == d { e.push(1.0) } else { e.push(0.0) } ; t = t + 1 }
+            let cu = H_up(e)
+            let cd = H_dn(e)
+            diag_u.push(cu[d])
+            diag_d.push(cd[d])
+            d = d + 1
+        }
+
+        let dr_u = qforge_davidson(H_up, diag_u, n, nbands, 1.0e-10, 200)
+        let dr_d = qforge_davidson(H_dn, diag_d, n, nbands, 1.0e-10, 200)
+        evals_up = dr_u.evals
+        evals_dn = dr_d.evals
+
+        // shared E_F → spin occupations (each channel spin_deg=1).
+        let occs = qforge_fermi_occupations_spin(evals_up, evals_dn, nelec, sigma)
+        let occ_u = occs[0]
+        let occ_d = occs[1]
+
+        let psis_u = scf_slice_psis(dr_u.evecs, nbands, n)
+        let psis_d = scf_slice_psis(dr_d.evecs, nbands, n)
+        let rho_out_u = rho_of_psi(psis_u, occ_u, nbands)
+        let rho_out_d = rho_of_psi(psis_d, occ_d, nbands)
+        mag = qforge_magnetization(occ_u, occ_d)
+
+        // Mermin free energy: Σ_σ (band sum − σ·entropy_σ) + e_dc.
+        e_total = scf_band_energy(evals_up, occ_u, nbands) + scf_band_energy(evals_dn, occ_d, nbands)
+        e_total = e_total - sigma * (qforge_smearing_entropy(occ_u, 1.0) + qforge_smearing_entropy(occ_d, 1.0))
+        e_total = e_total + e_dc
+
+        let dru = scf_dmax(rho_up, rho_out_u, n)
+        let drd = scf_dmax(rho_dn, rho_out_d, n)
+        let mut dr_rho = dru
+        if drd > dr_rho { dr_rho = drd }
+        let dr_e = if first { tol + 1.0 } else { scf_abs(e_total - e_prev) }
+        let resid = if dr_rho > dr_e { dr_rho } else { dr_e }
+
+        // mixing, per channel: Anderson (and_depth>0) or plain linear (≤0).
+        let mut t2 = 0
+        while t2 < n {
+            hin_u.push(rho_up[t2]) ; hout_u.push(rho_out_u[t2])
+            hin_d.push(rho_dn[t2]) ; hout_d.push(rho_out_d[t2])
+            t2 = t2 + 1
+        }
+        hh = hh + 1
+        let mut rho_new_u: [float] = []
+        let mut rho_new_d: [float] = []
+        if and_depth > 0 {
+            rho_new_u = qforge_anderson_next(hin_u, hout_u, hh, n, and_depth, a)
+            rho_new_d = qforge_anderson_next(hin_d, hout_d, hh, n, and_depth, a)
+        } else {
+            let mut k = 0
+            while k < n {
+                rho_new_u.push((1.0 - a) * rho_up[k] + a * rho_out_u[k])
+                rho_new_d.push((1.0 - a) * rho_dn[k] + a * rho_out_d[k])
+                k = k + 1
+            }
+        }
+        // trim both histories to and_depth+2 pairs (bound cost + keep Gram conditioned).
+        let cap = and_depth + 2
+        if and_depth > 0 && hh > cap {
+            let ndrop = hh - cap
+            let mut ti_u: [float] = [] ; let mut to_u: [float] = []
+            let mut ti_d: [float] = [] ; let mut to_d: [float] = []
+            let mut keep = ndrop
+            while keep < hh {
+                let mut tt = 0
+                while tt < n {
+                    ti_u.push(hin_u[keep * n + tt]) ; to_u.push(hout_u[keep * n + tt])
+                    ti_d.push(hin_d[keep * n + tt]) ; to_d.push(hout_d[keep * n + tt])
+                    tt = tt + 1
+                }
+                keep = keep + 1
+            }
+            hin_u = ti_u ; hout_u = to_u ; hin_d = ti_d ; hout_d = to_d ; hh = cap
+        }
+        rho_up = rho_new_u
+        rho_dn = rho_new_d
+
+        e_prev = e_total
+        first = false
+
+        if resid < tol {
+            converged = true
+            return ScfResultSpin { rho_up: rho_up, rho_dn: rho_dn,
+                                   evals_up: evals_up, evals_dn: evals_dn,
+                                   e_total: e_total, magnetization: mag,
+                                   iters: iters, converged: true }
+        }
+    }
+    return ScfResultSpin { rho_up: rho_up, rho_dn: rho_dn,
+                           evals_up: evals_up, evals_dn: evals_dn,
+                           e_total: e_total, magnetization: mag,
+                           iters: iters, converged: converged }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // OPT-IN CRASH-RESILIENT RESUME (qforge/checkpoint, PR2) — recover-EOF 구조적 불가능화
 // ════════════════════════════════════════════════════════════════════════════
 // qforge_scf is an iterative fixed-point loop; a crash mid-convergence restarts

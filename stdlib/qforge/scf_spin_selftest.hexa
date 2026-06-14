@@ -1,0 +1,148 @@
+// @ci_gate — deterministic · pure analytic anchors (no fixture I/O required)
+//
+// scf_spin_selftest.hexa — the LSDA (nspin=2) SCF DRIVER g5 gate (handoff bb095261).
+//
+// Verifies qforge_scf_spin_smeared_dc (scf.hexa): two coupled KS channels sharing
+// ONE Fermi level, per-spin density feedback, magnetization tracking. Uses a
+// ρ-coupled metallic model H (diagonal kinetic ladder + decaying hops + a
+// self-consistent on-site coupling V_c·ρ_tot(i) + an exchange field −sign·Δ_x).
+//
+//   (A) REGRESSION PIN — exchange OFF (Δ_x=0), init_mag=0: the spin driver
+//       reproduces qforge_scf_smeared(spin_deg=2, and_depth=0) bit-for-bit —
+//       e_total (1e-7), evals↑=evals↓=restricted (1e-9), magnetization≈0.
+//       Two identical weight-1 channels ≡ one weight-2 channel; ρ_tot trajectory
+//       and Mermin F are identical under linear mixing.                         🔵
+//   (B) MAGNETIC CASE — exchange ON (Δ_x>0): ↑ band lowered ⇒ net moment m>0,
+//       evals↑[0] < evals↓[0], and the shared-E_F occupations conserve charge
+//       (Σ occ = nelec) while m = Σocc↑−Σocc↓ matches the driver's report.      🟢
+//   (C) CHARGE under polarization — recomputed occupations sum to nelec.        🟢
+//
+// Run:  hexa run --no-sentinel stdlib/qforge/scf_spin_selftest.hexa
+// PASS: "qforge_scf_spin_selftest PASS".
+use "stdlib/qforge/scf"
+use "stdlib/qforge/smearing"
+use "stdlib/qforge/assembler"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+
+// ── model parameters (module-global; named-fn closures, d4) ───────────────────
+let mut SN = 0           // basis size
+let SVC = 0.05           // on-site self-consistent coupling V_c·ρ_tot(i)
+let mut SDX = 0.0        // exchange field Δ_x (0 = spin-symmetric; >0 = Stoner split)
+let mut SHAM_UP: PwHam = PwHam { h: [], diag: [], n: 0 }
+let mut SHAM_DN: PwHam = PwHam { h: [], diag: [], n: 0 }
+let mut SHAM_R: PwHam = PwHam { h: [], diag: [], n: 0 }
+fn s_up_apply(v: [float]) -> [float] { return qforge_h_apply(SHAM_UP, v) }
+fn s_dn_apply(v: [float]) -> [float] { return qforge_h_apply(SHAM_DN, v) }
+fn s_r_apply(v: [float]) -> [float] { return qforge_h_apply(SHAM_R, v) }
+
+// build the ρ-coupled metallic Hamiltonian (diagonal + decaying hops + exch field).
+fn s_build(rho_tot: [float], exch: float) -> PwHam {
+    let mut h: [float] = []
+    let mut dg: [float] = []
+    let mut a = 0
+    while a < SN {
+        let mut da = 0.5 * (0.37 * to_float(a)) * (0.37 * to_float(a))
+        if a == 3 { da = da - 0.02 }
+        if a == 4 { da = da - 0.018 }          // near-degenerate at E_F
+        da = da + SVC * rho_tot[a] + exch
+        let mut b = 0
+        while b < SN {
+            if a == b {
+                h.push(da)
+            } else {
+                let d = _abs(to_float(a - b))
+                h.push(-0.12 / (1.0 + d * d))
+            }
+            b = b + 1
+        }
+        dg.push(da)
+        a = a + 1
+    }
+    return PwHam { h: h, diag: dg, n: SN }
+}
+
+// spin closure: stages SHAM_UP / SHAM_DN by sign; exch = −sign·Δ_x (↑ lowered).
+fn s_spin_of_rho(rho_up: [float], rho_dn: [float], sign: float) {
+    let mut rt: [float] = []
+    let mut i = 0
+    while i < SN { rt.push(rho_up[i] + rho_dn[i]) ; i = i + 1 }
+    let exch = -1.0 * sign * SDX
+    if sign > 0.0 {
+        SHAM_UP = s_build(rt, exch)
+        return s_up_apply
+    }
+    SHAM_DN = s_build(rt, exch)
+    return s_dn_apply
+}
+// restricted closure: identical formula, exch=0 (the regression target).
+fn s_restr_of_rho(rho: [float]) {
+    SHAM_R = s_build(rho, 0.0)
+    return s_r_apply
+}
+// density: ρ(i) = Σ_b occ_b |ψ_b(i)|².
+fn s_rho(psis: [[float]], occ: [float], nbands: int) -> [float] {
+    let ndim = len(psis[0])
+    let mut rho: [float] = []
+    let mut i = 0
+    while i < ndim {
+        let mut s = 0.0
+        let mut b = 0
+        while b < nbands { s = s + occ[b] * psis[b][i] * psis[b][i] ; b = b + 1 }
+        rho.push(s)
+        i = i + 1
+    }
+    return rho
+}
+
+fn main() {
+    let mut fails = 0
+    let sigma = 0.25
+    let nelec = 6
+    SN = 8
+
+    // ══ (A) REGRESSION PIN: spin (Δ_x=0, init_mag=0) ≡ restricted spin_deg=2 ══
+    SDX = 0.0
+    let rr = qforge_scf_smeared(s_restr_of_rho, s_rho, SN, SN, nelec,
+                                0.5, 1.0e-12, 200, sigma, 2.0, 0)
+    let sp = qforge_scf_spin_smeared_dc(s_spin_of_rho, s_rho, SN, SN, nelec,
+                                        0.5, 1.0e-12, 200, sigma, 0, 0.0, 0.0)
+    fails = fails + _ck_true("(A) restricted SCF converged", rr.converged)
+    fails = fails + _ck_true("(A) spin SCF converged", sp.converged)
+    fails = fails + _ck_close("(A) e_total spin == restricted", sp.e_total, rr.e_total, 1.0e-7)
+    fails = fails + _ck_close("(A) magnetization ≈ 0 (non-magnetic)", sp.magnetization, 0.0, 1.0e-6)
+    let mut ek = 0
+    while ek < SN {
+        fails = fails + _ck_close("(A) evals↑[" + to_string(ek) + "]=restricted", sp.evals_up[ek], rr.evals[ek], 1.0e-9)
+        fails = fails + _ck_close("(A) evals↓[" + to_string(ek) + "]=restricted", sp.evals_dn[ek], rr.evals[ek], 1.0e-9)
+        ek = ek + 1
+    }
+
+    // ══ (B) MAGNETIC: exchange field Δ_x>0 → m>0, ↑ below ↓ ════════════════════
+    SDX = 0.15
+    let mg = qforge_scf_spin_smeared_dc(s_spin_of_rho, s_rho, SN, SN, nelec,
+                                        0.5, 1.0e-12, 200, sigma, 0, 0.0, 1.0)
+    fails = fails + _ck_true("(B) magnetic SCF converged", mg.converged)
+    fails = fails + _ck_true("(B) net moment m > 0", mg.magnetization > 0.0)
+    fails = fails + _ck_true("(B) evals↑[0] < evals↓[0] (↑ lowered)", mg.evals_up[0] < mg.evals_dn[0])
+
+    // ══ (C) shared-E_F charge conservation under polarization ══════════════════
+    let occs = qforge_fermi_occupations_spin(mg.evals_up, mg.evals_dn, nelec, sigma)
+    let mut q = 0.0
+    let mut bi = 0
+    while bi < SN { q = q + occs[0][bi] + occs[1][bi] ; bi = bi + 1 }
+    fails = fails + _ck_close("(C) Σ occ == nelec (shared E_F)", q, to_float(nelec), 1.0e-6)
+    let mrec = qforge_magnetization(occs[0], occs[1])
+    fails = fails + _ck_close("(C) recomputed m == driver m", mrec, mg.magnetization, 1.0e-6)
+
+    if fails == 0 { println("qforge_scf_spin_selftest PASS") }
+    else { println("qforge_scf_spin_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

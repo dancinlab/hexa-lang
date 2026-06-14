@@ -1,0 +1,91 @@
+// cosn_gga_gamma.hexa — CoSn Γ real-space spin-GGA SCF (handoff bb095261, PR7d).
+// DECISIVE TEST: LDA gives m≈0 at Γ (and 2³/4³ k). If GGA at the SAME Γ gives m>0,
+// the functional (not k-sampling) is the cause of the QE m=0.43 discrepancy.
+// Run: HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel stdlib/qforge/fixtures/cosn_gga_gamma.hexa
+use "stdlib/qforge/gga_scf"
+use "stdlib/qforge/upf"
+
+let DECK = "/Users/mini/dancinlab/demiurge/exports/rtsc/decks/cosn"
+
+fn build_npw(npw: int, mshell: int, b1: [float], b2: [float], b3: [float]) -> [float] {
+    let mut gall: [float] = [] ; let mut g2all: [float] = []
+    let mut gi = -mshell
+    while gi <= mshell {
+        let mut gj = -mshell
+        while gj <= mshell {
+            let mut gk = -mshell
+            while gk <= mshell {
+                let gx = to_float(gi) * b1[0] + to_float(gj) * b2[0] + to_float(gk) * b3[0]
+                let gy = to_float(gi) * b1[1] + to_float(gj) * b2[1] + to_float(gk) * b3[1]
+                let gz = to_float(gi) * b1[2] + to_float(gj) * b2[2] + to_float(gk) * b3[2]
+                gall.push(gx) ; gall.push(gy) ; gall.push(gz)
+                g2all.push(gx * gx + gy * gy + gz * gz)
+                gk = gk + 1
+            }
+            gj = gj + 1
+        }
+        gi = gi + 1
+    }
+    let ntot = len(g2all)
+    let mut gvecs: [float] = []
+    let mut used: [int] = [] ; let mut u = 0 ; while u < ntot { used.push(0) ; u = u + 1 }
+    let mut picked = 0
+    while picked < npw {
+        let mut best = -1 ; let mut bestv = 1.0e30 ; let mut t = 0
+        while t < ntot { if used[t] == 0 { if g2all[t] < bestv { bestv = g2all[t] ; best = t } } ; t = t + 1 }
+        if best < 0 { break }
+        used[best] = 1
+        gvecs.push(gall[best * 3]) ; gvecs.push(gall[best * 3 + 1]) ; gvecs.push(gall[best * 3 + 2])
+        picked = picked + 1
+    }
+    return gvecs
+}
+
+fn main() {
+    println("=== QFORGE CoSn Γ spin-GGA SCF — functional test (handoff bb095261) ===")
+    let co = upf_parse(DECK + "/pseudo/Co_ONCV_PBE_sr.upf")
+    let sn = upf_parse(DECK + "/pseudo/Sn_ONCV_PBE_sr.upf")
+    if !co.ok { println("MISSING Co UPF: " + co.error) ; return }
+    if !sn.ok { println("MISSING Sn UPF: " + sn.error) ; return }
+    let zco = co.header.z_valence ; let zsn = sn.header.z_valence
+    let nelec = to_int(3.0 * zco + 3.0 * zsn) ; let nocc = nelec / 2
+    let a = 9.9760 ; let c = 0.8068 * a ; let r3 = 1.7320508075688772
+    let tpa = 6.28318530717958647692 / a ; let tpc = 6.28318530717958647692 / c
+    let b1 = [tpa, tpa / r3, 0.0]
+    let b2 = [0.0, 2.0 * tpa / r3, 0.0]
+    let b3 = [0.0, 0.0, tpc]
+    let omega = a * a * c * r3 / 2.0
+    let mut poss: [float] = []
+    poss.push(a / 2.0) ; poss.push(0.0) ; poss.push(0.0)
+    poss.push(-a / 4.0) ; poss.push(a * r3 / 4.0) ; poss.push(0.0)
+    poss.push(a / 4.0) ; poss.push(a * r3 / 4.0) ; poss.push(0.0)
+    poss.push(0.0) ; poss.push(0.0) ; poss.push(0.0)
+    poss.push(0.0) ; poss.push(a * r3 / 3.0) ; poss.push(c / 2.0)
+    poss.push(a / 2.0) ; poss.push(a * r3 / 6.0) ; poss.push(c / 2.0)
+    let nspec = 2
+    let mut rs: [float] = [] ; let mut rabs: [float] = [] ; let mut vlocs: [float] = []
+    let mut i = 0
+    while i < len(co.r) { rs.push(co.r[i]) ; rabs.push(co.rab[i]) ; vlocs.push(co.vloc[i]) ; i = i + 1 }
+    i = 0
+    while i < len(sn.r) { rs.push(sn.r[i]) ; rabs.push(sn.rab[i]) ; vlocs.push(sn.vloc[i]) ; i = i + 1 }
+    let mlens = [len(co.r), len(sn.r)] ; let zs = [zco, zsn]
+    let palens = [3, 3]
+    let mut empty_f: [float] = [] ; let mut empty_i: [int] = []
+    let nprojs = [0, 0] ; let blens = [0, 0] ; let dlens = [0, 0]
+    let k0 = [0.0, 0.0, 0.0] ; let xc_mode = 1
+    let sigma = 0.01 ; let nbands = nocc + 2
+    let mshell = 5
+    let gvecs = build_npw(200, mshell, b1, b2, b3) ; let n = len(gvecs) / 3
+    let nx = 32 ; let ny = 32 ; let nz = 32     // ≥ 2·(2·mshell)+1 → pow2
+
+    println("nelec=" + to_string(nelec) + " nbands=" + to_string(nbands) + " NPW=" + to_string(n) + " grid=" + to_string(nx))
+    let sp = qforge_scf_pw_gga_spin(k0, gvecs, nspec, rs, rabs, vlocs, mlens, zs,
+                                    poss, palens, empty_f, empty_i, empty_f,
+                                    nprojs, blens, dlens, omega, xc_mode,
+                                    nx, ny, nz, b1, b2, b3,
+                                    nbands, nelec, 0.3, 1.0e-5, 40, sigma, 6, 0.6)
+    println("converged=" + to_string(sp.converged) + " iters=" + to_string(sp.iters))
+    println("e_total=" + to_string(sp.e_total) + " Ha")
+    println("MAGNETIZATION m = " + to_string(sp.magnetization) + " μ_B/cell  (LDA-Γ gave ≈0; QE-PBE 0.43)")
+    println("=== DONE ===")
+}

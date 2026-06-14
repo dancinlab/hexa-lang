@@ -1,0 +1,186 @@
+// HEXA Standard Library — qforge/gga_scf
+//
+// @version 0.2.0
+// @capabilities [pure]
+//
+// QFORGE real-space spin-GGA SCF at Γ (handoff bb095261). LDA gives CoSn m≈0 at Γ/2³/4³;
+// if GGA at the SAME Γ gives m>0, the functional (not k-sampling) is the cause vs QE-PBE
+// (m=0.43). MEMORY-BOUNDED (v0.2): the whole SCF runs on a fixed pool of reused `farr`
+// buffers (rho↑/↓, V_H, V_scr↑/↓, |∇ρ|↑/↓, ρ_out↑/↓) — no per-iter [float] ntot arrays
+// (those orphan in the val-arena → OOM at 32³). farr_free verified to return memory.
+//
+// XC: PBE exchange LOCAL part (gradient-dependent via F_x(s), the moment driver) + PW92
+// spin correlation + V_H, assembled as a real local potential V_scr^σ(ΔG). The full PBE
+// ∇·(∂e/∂|∇ρ|·∇ρ/|∇ρ|) gradient-potential term is omitted in this v0.2 (GGA-local) — it
+// is the coarse-grid-unstable piece; the local F_x(s) enhancement already carries the
+// dominant exchange-splitting that drives itinerant magnetism.
+//
+// reuse (d19): realspace_density (farr ρ) · realspace_xc (farr |∇ρ|, V_H, V_xc matrix) ·
+//   pbe_spin · correlation · scf_pw bare H · davidson · smearing · scf.
+use "stdlib/qforge/assembler"
+use "stdlib/qforge/screening"
+use "stdlib/qforge/correlation"
+use "stdlib/qforge/scf"
+use "stdlib/qforge/davidson"
+use "stdlib/qforge/smearing"
+use "stdlib/qforge/realspace_density"
+use "stdlib/qforge/realspace_xc"
+use "stdlib/qforge/pbe_spin"
+
+let mut GGA_HFULL: int = 0         // farr (n·n) full H = bare + V_scr(ΔG), current spin
+let mut GGA_VVEC: int = 0          // farr (n) reusable matvec input
+let mut GGA_N: int = 0
+// matvec via COMPILED farr_matmul (RFC 032; cuBLAS on CUDA builds) — ~100× the
+// interpreted O(npw²) loop, the lever that makes high-npw (Co 3d) tractable.
+fn gga_apply(v: [float]) -> [float] {
+    let n = GGA_N
+    let mut i = 0
+    while i < n { let _ = farr_set(GGA_VVEC, i, v[i]) ; i = i + 1 }
+    let res = farr_matmul(GGA_HFULL, n, n, GGA_VVEC, 1)   // (n×n)·(n×1) → (n×1) farr
+    let mut out: [float] = []
+    i = 0
+    while i < n { out.push(farr_get(res, i)) ; i = i + 1 }
+    let _ = farr_free(res)
+    return out
+}
+fn gga_diag(hfull: int, n: int) -> [float] {
+    let mut d: [float] = []
+    let mut a = 0
+    while a < n { d.push(farr_get(hfull, a * n + a)) ; a = a + 1 }
+    return d
+}
+// build GGA_HFULL = bare.h + V_scr(ΔG) matrix (farr) for one spin.
+fn gga_build_hfull(bare: PwHam, mg: int, n: int) {
+    let mut p = 0
+    let nn = n * n
+    while p < nn { let _ = farr_set(GGA_HFULL, p, bare.h[p] + farr_get(mg, p)) ; p = p + 1 }
+}
+
+// ── Γ real-space spin-GGA-local SCF (farr-pool, memory-bounded) ───────────────
+pub fn qforge_scf_pw_gga_spin(kvec: [float], gvecs: [float], nspec: int,
+                              rs: [float], rabs: [float], vlocs: [float],
+                              mlens: [int], zs: [float], poss: [float], palens: [int],
+                              betas: [float], ls: [int], dij: [float],
+                              nprojs: [int], blens: [int], dlens: [int],
+                              omega: float, xc_mode: int,
+                              nx: int, ny: int, nz: int, b1: [float], b2: [float], b3: [float],
+                              nbands: int, nelec: int, mix: float, tol: float,
+                              max_iter: int, sigma: float, and_depth: int, init_mag: float) -> ScfResultSpin {
+    let n = len(gvecs) / 3
+    let ntot = nx * ny * nz
+    let millers = qforge_miller_of_g(gvecs, b1, b2, b3)
+    let mut no_scr: [float] = []
+    let bare = qforge_assemble_h_multi(kvec, gvecs, nspec, rs, rabs, vlocs, mlens, zs,
+                                       poss, palens, betas, ls, dij, nprojs, blens, dlens, omega, no_scr)
+    GGA_N = n
+    GGA_HFULL = farr_zeros(n * n) ; GGA_VVEC = farr_zeros(n)   // compiled-matmul davidson buffers
+    let dvv = omega / to_float(ntot)
+
+    // farr pool (allocated once, reused every iter, freed at the end)
+    let ru = farr_zeros(ntot) ; let rd = farr_zeros(ntot)
+    let rou = farr_zeros(ntot) ; let rod = farr_zeros(ntot)
+    let rtot = farr_zeros(ntot) ; let vh = farr_zeros(ntot)
+    let gmu = farr_zeros(ntot) ; let gmd = farr_zeros(ntot)
+    let vsu = farr_zeros(ntot) ; let vsd = farr_zeros(ntot)
+    // shared FFT scratch (reused by every helper → ZERO alloc/free inside the loop)
+    let sreh = farr_zeros(ntot) ; let simh = farr_zeros(ntot)
+    let sgr = farr_zeros(ntot) ; let sgi = farr_zeros(ntot)
+    let mgu_h = farr_zeros(n * n) ; let mgd_h = farr_zeros(n * n)   // V_scr(ΔG) matrices (farr)
+
+    // init densities (uniform + moment seed)
+    let nf = to_float(nelec)
+    let r_up0 = (nf + init_mag) / (2.0 * omega)
+    let r_dn0 = (nf - init_mag) / (2.0 * omega)
+    let mut z = 0
+    while z < ntot { let _ = farr_set(ru, z, r_up0) ; let _ = farr_set(rd, z, r_dn0) ; z = z + 1 }
+
+    let mut evals_up: [float] = [] ; let mut evals_dn: [float] = []
+    let mut e_total = 0.0 ; let mut e_prev = 0.0 ; let mut mag = 0.0
+    let mut iters = 0 ; let mut converged = false ; let mut first = true
+    let mut a = mix
+    if a <= 0.0 { a = 0.1 }
+    if a > 1.0 { a = 1.0 }
+
+    while iters < max_iter {
+        iters = iters + 1
+        // ρ_tot, V_H, |∇ρ_σ|
+        let mut i = 0
+        while i < ntot { let _ = farr_set(rtot, i, farr_get(ru, i) + farr_get(rd, i)) ; i = i + 1 }
+        qforge_vhartree_farr(rtot, nx, ny, nz, b1, b2, b3, vh, sreh, simh)
+        qforge_grad_rho_mag_farr(ru, nx, ny, nz, b1, b2, b3, gmu, sreh, simh, sgr, sgi)
+        qforge_grad_rho_mag_farr(rd, nx, ny, nz, b1, b2, b3, gmd, sreh, simh, sgr, sgi)
+        // V_scr^σ(r) = V_x^PBE,local + V_c^σ(PW92) + V_H  (GGA-local)
+        i = 0
+        while i < ntot {
+            let rui = farr_get(ru, i) ; let rdi = farr_get(rd, i)
+            let gui = farr_get(gmu, i) ; let gdi = farr_get(gmd, i)
+            let vhi = farr_get(vh, i)
+            let mut vu = qforge_vx_pbe_local_spin(rui, rdi, gui, gdi, 1.0)
+            let mut vd = qforge_vx_pbe_local_spin(rui, rdi, gui, gdi, -1.0)
+            if xc_mode >= 1 {
+                let vc = qforge_vc_pw92_spin(rui, rdi)
+                vu = vu + vc[0] ; vd = vd + vc[1]
+            }
+            let _ = farr_set(vsu, i, vu + vhi)
+            let _ = farr_set(vsd, i, vd + vhi)
+            i = i + 1
+        }
+        // V_scr^σ(ΔG) matrices → H_σ = bare + matrix → davidson
+        qforge_vxc_local_matrix_farr(vsu, gvecs, millers, nx, ny, nz, sreh, simh, mgu_h)
+        qforge_vxc_local_matrix_farr(vsd, gvecs, millers, nx, ny, nz, sreh, simh, mgd_h)
+        gga_build_hfull(bare, mgu_h, n)
+        let dru = qforge_davidson(gga_apply, gga_diag(GGA_HFULL, n), n, nbands, 1.0e-10, 200)
+        gga_build_hfull(bare, mgd_h, n)
+        let drd = qforge_davidson(gga_apply, gga_diag(GGA_HFULL, n), n, nbands, 1.0e-10, 200)
+        evals_up = dru.evals ; evals_dn = drd.evals
+
+        let occs = qforge_fermi_occupations_spin(evals_up, evals_dn, nelec, sigma)
+        let occ_u = occs[0] ; let occ_d = occs[1]
+        let psis_u = scf_slice_psis(dru.evecs, nbands, n)
+        let psis_d = scf_slice_psis(drd.evecs, nbands, n)
+        qforge_rho_real_farr(psis_u, occ_u, nbands, millers, nx, ny, nz, omega, rou, sreh, simh)
+        qforge_rho_real_farr(psis_d, occ_d, nbands, millers, nx, ny, nz, omega, rod, sreh, simh)
+
+        // magnetization + residual + energy
+        let mut nu = 0.0 ; let mut nd = 0.0 ; let mut drm = 0.0
+        i = 0
+        while i < ntot {
+            let ouv = farr_get(rou, i) ; let odv = farr_get(rod, i)
+            nu = nu + ouv * dvv ; nd = nd + odv * dvv
+            let du = farr_get(ru, i) - ouv ; let dd = farr_get(rd, i) - odv
+            let adu = if du < 0.0 { -du } else { du }
+            let add = if dd < 0.0 { -dd } else { dd }
+            if adu > drm { drm = adu }
+            if add > drm { drm = add }
+            i = i + 1
+        }
+        mag = nu - nd
+        e_total = scf_band_energy(evals_up, occ_u, nbands) + scf_band_energy(evals_dn, occ_d, nbands)
+        e_total = e_total - sigma * (qforge_smearing_entropy(occ_u, 1.0) + qforge_smearing_entropy(occ_d, 1.0))
+        let dr_e = if first { tol + 1.0 } else { scf_abs(e_total - e_prev) }
+        let resid = if drm > dr_e { drm } else { dr_e }
+
+        // linear mix (on farr)
+        i = 0
+        while i < ntot {
+            let _ = farr_set(ru, i, (1.0 - a) * farr_get(ru, i) + a * farr_get(rou, i))
+            let _ = farr_set(rd, i, (1.0 - a) * farr_get(rd, i) + a * farr_get(rod, i))
+            i = i + 1
+        }
+        e_prev = e_total ; first = false
+        if resid < tol { converged = true ; iters = max_iter }
+    }
+
+    // pack the converged densities (farr → [float]) for the result, then free pool
+    let mut rho_up_out: [float] = [] ; let mut rho_dn_out: [float] = []
+    let mut q = 0
+    while q < ntot { rho_up_out.push(farr_get(ru, q)) ; rho_dn_out.push(farr_get(rd, q)) ; q = q + 1 }
+    let _ = farr_free(ru) ; let _ = farr_free(rd) ; let _ = farr_free(rou) ; let _ = farr_free(rod)
+    let _ = farr_free(rtot) ; let _ = farr_free(vh) ; let _ = farr_free(gmu) ; let _ = farr_free(gmd)
+    let _ = farr_free(vsu) ; let _ = farr_free(vsd)
+    let _ = farr_free(sreh) ; let _ = farr_free(simh) ; let _ = farr_free(sgr) ; let _ = farr_free(sgi)
+    let _ = farr_free(mgu_h) ; let _ = farr_free(mgd_h)
+    let _ = farr_free(GGA_HFULL) ; let _ = farr_free(GGA_VVEC)
+    return ScfResultSpin { rho_up: rho_up_out, rho_dn: rho_dn_out, evals_up: evals_up, evals_dn: evals_dn,
+                           e_total: e_total, magnetization: mag, iters: iters, converged: converged }
+}

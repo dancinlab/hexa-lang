@@ -1,0 +1,87 @@
+// @ci_gate — deterministic · network-free · real-space density g5 gate (PR7b)
+//
+// realspace_density_selftest.hexa — verifies the FFT real-space density builder.
+//  🔵 (A) mat3_inv: B·B⁻¹ = I (abs<1e-12).
+//  🔵 (B) miller_of_g: G=h·b1+k·b2+l·b3 → recovers (h,k,l) exactly.
+//  🟢 (C) single plane wave (c at G=0) → uniform ρ(r) = occ/Ω; Σρ·dV = occ.
+//  🟢 (D) charge conservation: Σ_r ρ(r)·dV = Σ_b occ_b (multi-band).
+//  🔵 (E) ρ(r) ≥ 0 everywhere.
+// Run: hexa run --no-sentinel stdlib/qforge/realspace_density_selftest.hexa
+// PASS: "qforge_realspace_density_selftest PASS".
+use "stdlib/qforge/realspace_density"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ckt(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let tp = 1.5707963267948966          // π/2 (arbitrary reciprocal scale)
+    let b1 = [tp, 0.0, 0.0] ; let b2 = [0.0, tp, 0.0] ; let b3 = [0.0, 0.0, tp]
+
+    // ── (A) B·B⁻¹ = I ────────────────────────────────────────────────────────
+    let binv = qforge_mat3_inv(b1, b2, b3)
+    fails = fails + _ckt("(A) mat3_inv returns 9", len(binv) == 9)
+    // B·Binv: B columns are b1,b2,b3; check (B·Binv)[0][0]=1, off-diag 0 (diagonal B).
+    fails = fails + _ck("(A) (B·Binv)00=1", b1[0] * binv[0], 1.0, 1.0e-12)
+    fails = fails + _ck("(A) Binv diag = 1/tp", binv[0], 1.0 / tp, 1.0e-12)
+
+    // ── (B) miller recovery ──────────────────────────────────────────────────
+    // G-list with known Miller: (0,0,0),(1,0,0),(0,1,0),(0,0,1),(1,1,0),(-1,0,1)
+    let hkl = [0, 0, 0,  1, 0, 0,  0, 1, 0,  0, 0, 1,  1, 1, 0,  -1, 0, 1]
+    let mut gvecs: [float] = []
+    let mut i = 0
+    while i < 6 {
+        let h = to_float(hkl[i * 3]) ; let k = to_float(hkl[i * 3 + 1]) ; let l = to_float(hkl[i * 3 + 2])
+        gvecs.push(h * b1[0] + k * b2[0] + l * b3[0])
+        gvecs.push(h * b1[1] + k * b2[1] + l * b3[1])
+        gvecs.push(h * b1[2] + k * b2[2] + l * b3[2])
+        i = i + 1
+    }
+    let mil = qforge_miller_of_g(gvecs, b1, b2, b3)
+    let mut ok = true
+    i = 0
+    while i < 18 { if mil[i] != hkl[i] { ok = false } ; i = i + 1 }
+    fails = fails + _ckt("(B) miller_of_g recovers exact (h,k,l)", ok)
+
+    // ── (C) single plane wave at G=0 → uniform ρ = occ/Ω ─────────────────────
+    let nx = 4 ; let ny = 4 ; let nz = 4 ; let ntot = nx * ny * nz
+    let omega = 100.0 ; let dv = omega / to_float(ntot)
+    // one band: coeff 1 at the FIRST G (which is G=(0,0,0)); others 0.
+    let mut c0: [float] = []
+    i = 0 ; while i < 6 { if i == 0 { c0.push(1.0) } else { c0.push(0.0) } ; i = i + 1 }
+    let psis1 = [c0]
+    let occ1 = [2.0]
+    let rho1 = qforge_rho_real(psis1, occ1, 1, mil, nx, ny, nz, omega)
+    // uniform? all grid points equal to occ/Ω = 2/100 = 0.02.
+    let mut uni = true ; let mut q = 0
+    while q < ntot { if _abs(rho1[q] - 0.02) > 1.0e-9 { uni = false } ; q = q + 1 }
+    fails = fails + _ckt("(C) single-PW → uniform ρ=occ/Ω=0.02", uni)
+    let mut s1 = 0.0 ; q = 0
+    while q < ntot { s1 = s1 + rho1[q] ; q = q + 1 }
+    fails = fails + _ck("(C) Σρ·dV = occ = 2", s1 * dv, 2.0, 1.0e-9)
+
+    // ── (D) charge conservation, two bands with mixed coeffs ─────────────────
+    let mut ca: [float] = [0.8, 0.5, 0.0, 0.3, 0.0, 0.0]
+    let mut cb: [float] = [0.2, 0.0, 0.7, 0.0, 0.4, 0.1]
+    let psis2 = [ca, cb]
+    let occ2 = [2.0, 1.0]
+    let rho2 = qforge_rho_real(psis2, occ2, 2, mil, nx, ny, nz, omega)
+    let mut s2 = 0.0 ; q = 0
+    while q < ntot { s2 = s2 + rho2[q] ; q = q + 1 }
+    fails = fails + _ck("(D) Σρ·dV = Σocc = 3", s2 * dv, 3.0, 1.0e-9)
+
+    // ── (E) ρ(r) ≥ 0 ─────────────────────────────────────────────────────────
+    let mut nonneg = true ; q = 0
+    while q < ntot { if rho2[q] < -1.0e-12 { nonneg = false } ; q = q + 1 }
+    fails = fails + _ckt("(E) ρ(r) ≥ 0 everywhere", nonneg)
+
+    if fails == 0 { println("qforge_realspace_density_selftest PASS") }
+    else { println("qforge_realspace_density_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

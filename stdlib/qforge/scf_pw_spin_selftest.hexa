@@ -1,0 +1,85 @@
+// @ci_gate — deterministic · network-free · LSDA PW screening-closure g5 gate
+//
+// scf_pw_spin_selftest.hexa — QFORGE spin (nspin=2) PW screening closure g5 gate
+// (handoff bb095261). Verifies the per-spin screening helpers that feed the
+// multi-species LSDA closure qforge_h_of_rho_multi_spin:
+//   qforge_vxc_point_spin · qforge_vscr_diag_spin.
+//
+//  🔵 (A) REGRESSION PIN — V_xc^σ(ρ/2,ρ/2) ≡ V_xc^unpol(ρ) both signs. Exchange
+//         (xc_mode 0) EXACT (abs<1e-12); +correlation (xc_mode 1) to the spin-V_c
+//         central-diff precision (abs<1e-6, matching qforge_fc_pw92 house style).
+//  🟢 (B) SPIN SPLIT — for ρ↑>ρ↓, V_xc^↑ < V_xc^↓ (majority sees deeper xc).
+//  🔵 (C) vscr_diag_spin(½,½,vh,·) ≡ vscr_diag(ρ,vh,·) elementwise (abs<1e-6,
+//         x+c central-diff), with and without a Hartree vh_diag.
+//  🔵 (D) xc_mode<0 → both return [] (free-electron: no screening).
+//
+// Run:  hexa run --no-sentinel stdlib/qforge/scf_pw_spin_selftest.hexa
+// PASS: "qforge_scf_pw_spin_selftest PASS".
+use "stdlib/qforge/scf_pw"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let rhos = [0.02, 0.05, 0.1, 0.3]
+
+    // ── (A) REGRESSION PIN: V_xc^σ(ρ/2,ρ/2) ≡ V_xc^unpol(ρ) ──────────────────
+    let mut xm = 0
+    while xm <= 1 {
+        let eps = if xm == 0 { 1.0e-12 } else { 1.0e-6 }   // exch exact; +corr central-diff
+        let mut i = 0
+        while i < len(rhos) {
+            let rho = rhos[i]
+            let want = qforge_vxc_point(rho, xm)
+            fails = fails + _ck_close("(A) V_xc^↑(ζ=0) xc=" + to_string(xm) + " ρ=" + to_string(rho),
+                                      qforge_vxc_point_spin(rho / 2.0, rho / 2.0, 1.0, xm), want, eps)
+            fails = fails + _ck_close("(A) V_xc^↓(ζ=0) xc=" + to_string(xm) + " ρ=" + to_string(rho),
+                                      qforge_vxc_point_spin(rho / 2.0, rho / 2.0, -1.0, xm), want, eps)
+            i = i + 1
+        }
+        xm = xm + 1
+    }
+
+    // ── (B) SPIN SPLIT: ρ↑>ρ↓ → V_xc^↑ < V_xc^↓ (majority deeper) ─────────────
+    let vup = qforge_vxc_point_spin(0.06, 0.02, 1.0, 1)
+    let vdn = qforge_vxc_point_spin(0.06, 0.02, -1.0, 1)
+    fails = fails + _ck_true("(B) V_xc^↑ < V_xc^↓ for ρ↑>ρ↓", vup < vdn)
+
+    // ── (C) vscr_diag_spin(½,½,vh,·) ≡ vscr_diag(ρ,vh,·) ─────────────────────
+    let rho_full = [0.02, 0.05, 0.1]
+    let mut half: [float] = []
+    let mut k = 0
+    while k < len(rho_full) { half.push(rho_full[k] / 2.0) ; k = k + 1 }
+    let empty_vh: [float] = []
+    let vs_r = qforge_vscr_diag(rho_full, empty_vh, 1)
+    let vs_s = qforge_vscr_diag_spin(half, half, empty_vh, 1, 1.0)
+    let mut j = 0
+    while j < len(rho_full) {
+        fails = fails + _ck_close("(C) vscr_spin[" + to_string(j) + "]=vscr (no vh)", vs_s[j], vs_r[j], 1.0e-6)
+        j = j + 1
+    }
+    // with a Hartree vh_diag
+    let vh = [0.01, -0.02, 0.03]
+    let vs_r2 = qforge_vscr_diag(rho_full, vh, 1)
+    let vs_s2 = qforge_vscr_diag_spin(half, half, vh, 1, -1.0)
+    j = 0
+    while j < len(rho_full) {
+        fails = fails + _ck_close("(C) vscr_spin[" + to_string(j) + "]=vscr (+vh)", vs_s2[j], vs_r2[j], 1.0e-6)
+        j = j + 1
+    }
+
+    // ── (D) xc_mode<0 → [] (free-electron) ───────────────────────────────────
+    let vfree = qforge_vscr_diag_spin(half, half, empty_vh, -1, 1.0)
+    fails = fails + _ck_true("(D) xc_mode<0 → empty vscr", len(vfree) == 0)
+
+    if fails == 0 { println("qforge_scf_pw_spin_selftest PASS") }
+    else { println("qforge_scf_pw_spin_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

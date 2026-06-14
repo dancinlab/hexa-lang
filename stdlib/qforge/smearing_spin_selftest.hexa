@@ -1,0 +1,99 @@
+// @ci_gate — deterministic · pure analytic anchors
+//
+// qforge_smearing_spin_selftest.hexa — QFORGE handoff bb095261 (CoSn magnetic
+// kagome, nspin=2) g5 gate for the SHARED-E_F two-channel (LSDA) occupation solver.
+//
+// smearing.hexa's spin-polarized fns solve ONE common Fermi level over TWO
+// eigenvalue spectra (ε_up, ε_dn), each channel spin_deg=1, so the combined count
+// Σ f(ε_up_k−E_F) + Σ f(ε_dn_k−E_F) == nelec. Analytic anchors (d6 — derivable):
+//
+//   (A) REGRESSION PIN: a non-magnetic spectrum (ε_up==ε_dn) reproduces the
+//       restricted spin_deg=2 result EXACTLY — two unit-weight channels at the same
+//       evals == one channel of weight 2. So E_F_spin == E_F_restricted (~1e-10) and
+//       Σ(occ_up+occ_dn) == Σ occ_restricted.                                     🟢
+//   (B) MAGNETIC CASE: ε_up shifted BELOW ε_dn → majority-up cell, positive
+//       magnetization m = Σocc_up − Σocc_dn > 0, with the correct electron count.  🟢
+//   (C) CHARGE CONSERVATION: the shared E_F makes Σ(occ_up+occ_dn) == nelec to tol
+//       on the magnetic (genuinely two-channel) spectrum.                          🟢
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/smearing_spin_selftest.hexa
+// PASS: "qforge_smearing_spin_selftest PASS".
+use "stdlib/qforge/smearing"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ══ (A) REGRESSION PIN: shared-E_F spin == restricted spin_deg=2 ═══════════
+    // A metallic-like spectrum used identically in BOTH channels (ε_up == ε_dn ==
+    // E). 6 states per channel, nelec=5 (odd → genuinely fractional). The shared-E_F
+    // spin solve must reproduce the restricted spin_deg=2 E_F and total occupation
+    // EXACTLY — two unit-weight channels at the same evals == one weight-2 channel.
+    let E = [-0.50, -0.20, -0.05, 0.00, 0.30, 0.80]
+    let sigma = 0.02
+    let efR = qforge_fermi_level(E, 5, sigma, 2.0)               // restricted spin_deg=2
+    let efS = qforge_fermi_level_spin(E, E, 5, sigma)            // shared-E_F spin
+    fails = fails + _ck_close("(A) E_F_spin == E_F_restricted (non-magnetic)", efS, efR, 1.0e-10)
+
+    // restricted total occupation Σ occ (spin_deg=2)
+    let occR = qforge_fermi_occupations(E, 6, 5, sigma, 2.0)
+    let mut sumR = 0.0
+    let mut k = 0
+    while k < 6 { sumR = sumR + occR[k] ; k = k + 1 }
+    // spin total occupation Σ(occ_up + occ_dn)
+    let occS = qforge_fermi_occupations_spin(E, E, 5, sigma)
+    let occ_up = occS[0]
+    let occ_dn = occS[1]
+    let mut sumS = 0.0
+    k = 0
+    while k < 6 { sumS = sumS + occ_up[k] + occ_dn[k] ; k = k + 1 }
+    fails = fails + _ck_close("(A) Σ(occ_up+occ_dn) == Σ occ_restricted", sumS, sumR, 1.0e-10)
+    fails = fails + _ck_close("(A) both totals == nelec=5", sumS, 5.0, 1.0e-9)
+    // non-magnetic ⇒ zero net moment.
+    fails = fails + _ck_close("(A) magnetization == 0 (non-magnetic)",
+                              qforge_magnetization(occ_up, occ_dn), 0.0, 1.0e-10)
+
+    // ══ (B) MAGNETIC CASE: ε_up below ε_dn → positive magnetization ════════════
+    // Exchange-split kagome-like spectrum: the up channel sits BELOW the down channel
+    // (majority spin up). 4 states per channel, nelec=4. With the up bands lower the
+    // shared E_F occupies MORE up than down → m = Σocc_up − Σocc_dn > 0.
+    let evals_up = [-1.00, -0.60, -0.20, 0.40]
+    let evals_dn = [-0.40, 0.00, 0.40, 1.00]
+    let sigM = 0.05
+    let occM = qforge_fermi_occupations_spin(evals_up, evals_dn, 4, sigM)
+    let occMu = occM[0]
+    let occMd = occM[1]
+    let mag = qforge_magnetization(occMu, occMd)
+    fails = fails + _ck_true("(B) magnetization > 0 (majority-up cell)", mag > 1.0e-3)
+    // each occ ∈ [0,1] (spin-resolved bound).
+    let mut bounded = true
+    k = 0
+    while k < 4 {
+        if occMu[k] < -1.0e-12 || occMu[k] > 1.0 + 1.0e-12 { bounded = false }
+        if occMd[k] < -1.0e-12 || occMd[k] > 1.0 + 1.0e-12 { bounded = false }
+        k = k + 1
+    }
+    fails = fails + _ck_true("(B) every occ_σk ∈ [0,1]", bounded)
+
+    // ══ (C) CHARGE CONSERVATION on the magnetic spectrum ═══════════════════════
+    // the shared E_F makes Σ(occ_up + occ_dn) == nelec to tol.
+    let efM = qforge_fermi_level_spin(evals_up, evals_dn, 4, sigM)
+    let cntM = qforge_occ_sum_spin(evals_up, evals_dn, efM, sigM)
+    fails = fails + _ck_close("(C) Σf_up+Σf_dn == nelec=4 (bisection)", cntM, 4.0, 1.0e-9)
+    let mut sovM = 0.0
+    k = 0
+    while k < 4 { sovM = sovM + occMu[k] + occMd[k] ; k = k + 1 }
+    fails = fails + _ck_close("(C) Σ(occ_up+occ_dn) == nelec=4 (occ vectors)", sovM, 4.0, 1.0e-9)
+
+    if fails == 0 { println("qforge_smearing_spin_selftest PASS") }
+    else { println("qforge_smearing_spin_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

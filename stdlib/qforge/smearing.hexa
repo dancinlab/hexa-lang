@@ -106,6 +106,50 @@ pub fn qforge_fermi_level(evals: [float], nelec: int, sigma: float,
     return 0.5 * (lo + hi)
 }
 
+// ── WEIGHTED occupation count Σ_i w_i·f(ε_i−E_F) (k-mesh BZ integration) ──────
+//   For a k-mesh spin SCF: flatten ALL (k,spin,band) eigenvalues into `evals` with a
+//   parallel `weights` array (w_i = the k-point weight of entry i; each spin channel
+//   carries weight 1, so w_i = w_k). One shared E_F counts the BZ-integrated charge.
+pub fn qforge_occ_sum_weighted(evals: [float], weights: [float], ef: float, sigma: float) -> float {
+    let n = len(evals)
+    let mut s = 0.0
+    let mut k = 0
+    while k < n { s = s + weights[k] * qforge_fermi_dirac(evals[k], ef, sigma) ; k = k + 1 }
+    return s
+}
+
+// ── shared E_F by bisection so Σ_i w_i·f(ε_i) == nelec (k-mesh, all k+spin) ────
+//   Same bracket/iteration logic as qforge_fermi_level, over the weighted multi-set.
+//   The per-STATE occupation is then f(ε−E_F) (unweighted); the w_k multiplies that
+//   k-point's contribution to ρ in the density sum (caller).
+pub fn qforge_fermi_level_weighted(evals: [float], weights: [float], nelec: int, sigma: float) -> float {
+    let n = len(evals)
+    let target = to_float(nelec)
+    let mut lo = evals[0]
+    let mut hi = evals[0]
+    let mut k = 1
+    while k < n {
+        if evals[k] < lo { lo = evals[k] }
+        if evals[k] > hi { hi = evals[k] }
+        k = k + 1
+    }
+    let span = hi - lo
+    let mut pad = 10.0 * sigma
+    if span > pad { pad = span }
+    if pad < 1.0 { pad = 1.0 }
+    lo = lo - pad
+    hi = hi + pad
+    let mut it = 0
+    while it < 100 {
+        let mid = 0.5 * (lo + hi)
+        let cnt = qforge_occ_sum_weighted(evals, weights, mid, sigma)
+        if cnt > target { hi = mid } else { lo = mid }
+        if (hi - lo) < 1.0e-12 { break }
+        it = it + 1
+    }
+    return 0.5 * (lo + hi)
+}
+
 // ── smearing entropy S = −Σ_k [ f̃ ln f̃ + (1−f̃) ln(1−f̃) ] (per spin channel) ─
 //   The Mermin finite-T entropy of the Fermi-Dirac occupations. occ_k carries the
 //   spin-degenerate occupation (spin_deg·f̃, f̃ ∈ [0,1] the per-channel filling);
@@ -157,4 +201,135 @@ pub fn qforge_fermi_occupations(evals: [float], nbands: int, nelec: int,
         k = k + 1
     }
     return occ
+}
+
+// ══ SPIN-POLARIZED (LSDA / nspin=2) — SHARED-E_F two-channel occupation ═══════
+//
+// QFORGE handoff bb095261 (CoSn magnetic kagome, nspin=2). A spin-polarized system
+// carries TWO eigenvalue spectra ε_up_k and ε_dn_k that are NOT equal (exchange
+// splits the channels). Both channels share ONE common Fermi level E_F (the chemical
+// potential is a single scalar for the whole cell — electrons flow freely between
+// spin channels until a single E_F equalizes). Each channel has spin_deg=1 (a
+// spin-resolved band holds ONE electron per state, not two), so the combined count
+// is Σ_k f(ε_up_k − E_F) + Σ_k f(ε_dn_k − E_F) == nelec.
+//
+//   NON-MAGNETIC LIMIT (the regression pin): when ε_up == ε_dn the two unit-weight
+//   channels at identical evals are EXACTLY one channel of weight 2 — so
+//   qforge_fermi_level_spin(E,E,nelec,σ) == qforge_fermi_level(E,nelec,σ,2.0) and the
+//   summed occupation equals the spin_deg=2 restricted result. This is the additive,
+//   regression-safe property: the restricted path is a special case of the shared-E_F
+//   spin path, never modified by it.
+//
+// reuse (d19): qforge_fermi_dirac (the single-state f), the SAME bracket/iteration
+//   logic as qforge_fermi_level (60→100 halvings, 1e-12 bracket tol) over the
+//   combined two-channel count. No new numerics.
+
+// ── combined two-channel count Σ f(ε_up_k − E_F) + Σ f(ε_dn_k − E_F) at trial E_F ─
+//   Each channel weight 1 (spin-resolved), ONE shared E_F. The non-magnetic case
+//   evals_up==evals_dn gives 2·Σ f(ε_k) == the spin_deg=2 qforge_occ_sum.
+pub fn qforge_occ_sum_spin(evals_up: [float], evals_dn: [float], ef: float,
+                           sigma: float) -> float {
+    let mut s = 0.0
+    let nu = len(evals_up)
+    let mut k = 0
+    while k < nu {
+        s = s + qforge_fermi_dirac(evals_up[k], ef, sigma)
+        k = k + 1
+    }
+    let nd = len(evals_dn)
+    k = 0
+    while k < nd {
+        s = s + qforge_fermi_dirac(evals_dn[k], ef, sigma)
+        k = k + 1
+    }
+    return s
+}
+
+// ── single SHARED E_F by BISECTION so the combined two-channel count == nelec ──
+//   Mirrors qforge_fermi_level EXACTLY (same bracket expansion, same 100-iter cap,
+//   same 1e-12 bracket tol) over Σf_up + Σf_down. The bracket lo/hi straddle the
+//   MIN/MAX over BOTH eval arrays (so the endpoints truly bound every state in both
+//   channels). The combined sum is monotone INCREASING in E_F (each f is), so the
+//   identical "too many → lower, too few → raise" bisection invariant holds.
+pub fn qforge_fermi_level_spin(evals_up: [float], evals_dn: [float], nelec: int,
+                               sigma: float) -> float {
+    let target = to_float(nelec)
+    // bracket: lo below all states (sum→0), hi above all states (sum→(N_up+N_dn)).
+    // initialise from the first available eigenvalue across both channels.
+    let nu = len(evals_up)
+    let nd = len(evals_dn)
+    let mut lo = 0.0
+    let mut hi = 0.0
+    if nu > 0 { lo = evals_up[0] ; hi = evals_up[0] }
+    else { lo = evals_dn[0] ; hi = evals_dn[0] }
+    let mut k = 0
+    while k < nu {
+        if evals_up[k] < lo { lo = evals_up[k] }
+        if evals_up[k] > hi { hi = evals_up[k] }
+        k = k + 1
+    }
+    k = 0
+    while k < nd {
+        if evals_dn[k] < lo { lo = evals_dn[k] }
+        if evals_dn[k] > hi { hi = evals_dn[k] }
+        k = k + 1
+    }
+    // pad the bracket by max(10σ, span) so the endpoints truly straddle the target.
+    let span = hi - lo
+    let mut pad = 10.0 * sigma
+    if span > pad { pad = span }
+    if pad < 1.0 { pad = 1.0 }
+    lo = lo - pad
+    hi = hi + pad
+    // bisection: ~60 halvings → ef to ~(span)·2^-60 (machine precision on the count).
+    let mut it = 0
+    while it < 100 {
+        let mid = 0.5 * (lo + hi)
+        let cnt = qforge_occ_sum_spin(evals_up, evals_dn, mid, sigma)
+        // sum increasing in E_F: too many electrons → lower E_F; too few → raise it.
+        if cnt > target { hi = mid } else { lo = mid }
+        // tight enough on the bracket → done.
+        if (hi - lo) < 1.0e-12 { break }
+        it = it + 1
+    }
+    return 0.5 * (lo + hi)
+}
+
+// ── per-channel occupation vectors [occ_up, occ_dn], occ_σk = f(ε_σk − E_F) ────
+//   Solves the single SHARED E_F internally (qforge_fermi_level_spin) so the two
+//   returned vectors TOGETHER sum (Σ occ_up + Σ occ_dn) to nelec. Each occ_σk is a
+//   spin-resolved (weight-1) Fermi-Dirac occupation ∈ [0,1].
+pub fn qforge_fermi_occupations_spin(evals_up: [float], evals_dn: [float],
+                                     nelec: int, sigma: float) -> [[float]] {
+    let ef = qforge_fermi_level_spin(evals_up, evals_dn, nelec, sigma)
+    let mut occ_up: [float] = []
+    let nu = len(evals_up)
+    let mut k = 0
+    while k < nu {
+        occ_up.push(qforge_fermi_dirac(evals_up[k], ef, sigma))
+        k = k + 1
+    }
+    let mut occ_dn: [float] = []
+    let nd = len(evals_dn)
+    k = 0
+    while k < nd {
+        occ_dn.push(qforge_fermi_dirac(evals_dn[k], ef, sigma))
+        k = k + 1
+    }
+    return [occ_up, occ_dn]
+}
+
+// ── net magnetization m = Σ occ_up − Σ occ_dn (μ_B per cell) ──────────────────
+//   The cell's net spin moment: the excess of spin-up over spin-down occupation.
+//   m=0 for a non-magnetic system (occ_up==occ_dn), m>0 for a majority-up cell.
+pub fn qforge_magnetization(occ_up: [float], occ_dn: [float]) -> float {
+    let mut su = 0.0
+    let nu = len(occ_up)
+    let mut k = 0
+    while k < nu { su = su + occ_up[k] ; k = k + 1 }
+    let mut sd = 0.0
+    let nd = len(occ_dn)
+    k = 0
+    while k < nd { sd = sd + occ_dn[k] ; k = k + 1 }
+    return su - sd
 }

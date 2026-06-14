@@ -1,0 +1,120 @@
+// cosn_kmesh_spin.hexa — CoSn kagome LSDA over a 2×2×2 k-mesh (handoff bb095261/[33976daa]).
+// The Γ-only run gave m≈0 because itinerant magnetism is BZ-integrated. This samples the
+// BZ (8-point MP mesh, weight 1/8 each) so N(E_F) across k can drive the Stoner moment —
+// the cross-val direction vs QE (m=0.43 μ_B, PBE k-mesh). 2×2×2 is the minimal coarse mesh
+// (a magnitude-converged moment needs denser + spin-GGA; this confirms emergence + sign).
+// Run: HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel stdlib/qforge/fixtures/cosn_kmesh_spin.hexa
+use "stdlib/qforge/scf_pw"
+use "stdlib/qforge/upf"
+use "stdlib/qforge/davidson"
+
+let DECK = "/Users/mini/dancinlab/demiurge/exports/rtsc/decks/cosn"
+
+fn build_npw(npw: int, mshell: int, b1: [float], b2: [float], b3: [float]) -> [float] {
+    let mut gall: [float] = [] ; let mut g2all: [float] = []
+    let mut gi = -mshell
+    while gi <= mshell {
+        let mut gj = -mshell
+        while gj <= mshell {
+            let mut gk = -mshell
+            while gk <= mshell {
+                let gx = to_float(gi) * b1[0] + to_float(gj) * b2[0] + to_float(gk) * b3[0]
+                let gy = to_float(gi) * b1[1] + to_float(gj) * b2[1] + to_float(gk) * b3[1]
+                let gz = to_float(gi) * b1[2] + to_float(gj) * b2[2] + to_float(gk) * b3[2]
+                gall.push(gx) ; gall.push(gy) ; gall.push(gz)
+                g2all.push(gx * gx + gy * gy + gz * gz)
+                gk = gk + 1
+            }
+            gj = gj + 1
+        }
+        gi = gi + 1
+    }
+    let ntot = len(g2all)
+    let mut gvecs: [float] = []
+    let mut used: [int] = [] ; let mut u = 0 ; while u < ntot { used.push(0) ; u = u + 1 }
+    let mut picked = 0
+    while picked < npw {
+        let mut best = -1 ; let mut bestv = 1.0e30 ; let mut t = 0
+        while t < ntot { if used[t] == 0 { if g2all[t] < bestv { bestv = g2all[t] ; best = t } } ; t = t + 1 }
+        if best < 0 { break }
+        used[best] = 1
+        gvecs.push(gall[best * 3]) ; gvecs.push(gall[best * 3 + 1]) ; gvecs.push(gall[best * 3 + 2])
+        picked = picked + 1
+    }
+    return gvecs
+}
+
+fn main() {
+    println("=== QFORGE CoSn kagome LSDA 2×2×2 k-mesh — itinerant magnetism (handoff bb095261) ===")
+    let co = upf_parse(DECK + "/pseudo/Co_ONCV_PBE_sr.upf")
+    let sn = upf_parse(DECK + "/pseudo/Sn_ONCV_PBE_sr.upf")
+    if !co.ok { println("MISSING-INPUT Co UPF: " + co.error) ; return }
+    if !sn.ok { println("MISSING-INPUT Sn UPF: " + sn.error) ; return }
+    let zco = co.header.z_valence ; let zsn = sn.header.z_valence
+    let nelec = to_int(3.0 * zco + 3.0 * zsn) ; let nocc = nelec / 2
+    let a = 9.9760 ; let c = 0.8068 * a ; let r3 = 1.7320508075688772
+    let tpa = 6.28318530717958647692 / a ; let tpc = 6.28318530717958647692 / c
+    let b1 = [tpa, tpa / r3, 0.0]
+    let b2 = [0.0, 2.0 * tpa / r3, 0.0]
+    let b3 = [0.0, 0.0, tpc]
+    let omega = a * a * c * r3 / 2.0
+    let mut poss: [float] = []
+    poss.push(a / 2.0) ; poss.push(0.0) ; poss.push(0.0)
+    poss.push(-a / 4.0) ; poss.push(a * r3 / 4.0) ; poss.push(0.0)
+    poss.push(a / 4.0) ; poss.push(a * r3 / 4.0) ; poss.push(0.0)
+    poss.push(0.0) ; poss.push(0.0) ; poss.push(0.0)
+    poss.push(0.0) ; poss.push(a * r3 / 3.0) ; poss.push(c / 2.0)
+    poss.push(a / 2.0) ; poss.push(a * r3 / 6.0) ; poss.push(c / 2.0)
+    let nspec = 2
+    let mut rs: [float] = [] ; let mut rabs: [float] = [] ; let mut vlocs: [float] = []
+    let mut i = 0
+    while i < len(co.r) { rs.push(co.r[i]) ; rabs.push(co.rab[i]) ; vlocs.push(co.vloc[i]) ; i = i + 1 }
+    i = 0
+    while i < len(sn.r) { rs.push(sn.r[i]) ; rabs.push(sn.rab[i]) ; vlocs.push(sn.vloc[i]) ; i = i + 1 }
+    let mlens = [len(co.r), len(sn.r)] ; let zs = [zco, zsn]
+    let palens = [3, 3]
+    let mut empty_f: [float] = [] ; let mut empty_i: [int] = []
+    let nprojs = [0, 0] ; let blens = [0, 0] ; let dlens = [0, 0]
+    let xc_mode = 1
+    let eb1 = [tpa, 0.0, 0.0] ; let eb2 = [0.0, tpa, 0.0] ; let eb3 = [0.0, 0.0, tpc]
+    let sigma = 0.01 ; let nbands = nocc + 6
+    let gvecs = build_npw(120, 6, b1, b2, b3) ; let n = len(gvecs) / 3
+
+    // 2×2×2 Monkhorst-Pack mesh (crystal fractions {0,0.5}³ → Cartesian via b1,b2,b3), w=1/8.
+    let fr = [0.0, 0.5]
+    let mut kvecs: [float] = [] ; let mut kw: [float] = []
+    let mut ia = 0
+    while ia < 2 {
+        let mut ib = 0
+        while ib < 2 {
+            let mut ic = 0
+            while ic < 2 {
+                let f1 = fr[ia] ; let f2 = fr[ib] ; let f3 = fr[ic]
+                kvecs.push(f1 * b1[0] + f2 * b2[0] + f3 * b3[0])
+                kvecs.push(f1 * b1[1] + f2 * b2[1] + f3 * b3[1])
+                kvecs.push(f1 * b1[2] + f2 * b2[2] + f3 * b3[2])
+                kw.push(0.125)
+                ic = ic + 1
+            }
+            ib = ib + 1
+        }
+        ia = ia + 1
+    }
+    println("nelec=" + to_string(nelec) + " nbands=" + to_string(nbands) + " NPW=" + to_string(n) + " nk=" + to_string(len(kw)))
+
+    let sp = qforge_scf_pw_kmesh_spin(kvecs, kw, gvecs, nspec, rs, rabs, vlocs, mlens, zs,
+                                      poss, palens, empty_f, empty_i, empty_f,
+                                      nprojs, blens, dlens, omega, xc_mode,
+                                      1, 1, n, eb1, eb2, eb3,
+                                      nbands, nelec, 0.3, 1.0e-5, 200, sigma, 6, 1.0)
+    println("converged=" + to_string(sp.converged) + " iters=" + to_string(sp.iters))
+    println("e_total=" + to_string(sp.e_total) + " Ha")
+    println("MAGNETIZATION m = " + to_string(sp.magnetization) + " μ_B/cell")
+    println("QE ref (PBE, dense k-mesh): m=0.43 μ_B, flat-band ΔE=−0.44 eV.")
+    if sp.magnetization > 0.05 {
+        println("VERDICT: itinerant moment EMERGES with k-mesh (m=" + to_string(sp.magnetization) + ") — confirms Γ-only→k-mesh direction vs QE 0.43 μ_B. Magnitude needs denser mesh + spin-GGA (d6).")
+    } else {
+        println("VERDICT: m still ≈0 at 2×2×2 — needs denser k / spin-GGA / smaller σ to drive the QE moment.")
+    }
+    println("=== DONE ===")
+}

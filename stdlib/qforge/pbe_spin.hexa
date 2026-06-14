@@ -1,0 +1,106 @@
+// HEXA Standard Library — qforge/pbe_spin
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE spin-GGA (PBE) exchange-correlation — the functional + its analytic partial
+// derivatives, for the LSDA→GGA upgrade (handoff bb095261: QFORGE LDA gives CoSn m≈0
+// at Γ/2³/4³ k; QE-PBE gives m=0.43 — LDA kills the weak itinerant kagome moment that
+// GGA stabilizes). This brick supplies, per spin channel, the energy density and the
+// two partials the GGA potential needs:
+//   v_xc^σ = ∂e_xc/∂ρ_σ − ∇·( ∂e_xc/∂|∇ρ_σ| · ∇ρ_σ/|∇ρ_σ| )
+// PR7a = the LOCAL pieces (e_xc, ∂e/∂ρ, ∂e/∂|∇ρ|); the ∇· divergence (FFT) + wiring
+// are PR7b/c. g5: every piece reduces to the LSDA value at |∇ρ|=0.
+//
+// ── PBE exchange (Perdew-Burke-Ernzerhof 1996, PRL 77, 3865) ──────────────────
+//   ε_x^unif(n) = −(3/4)(3/π)^{1/3} n^{1/3}     (per-electron, Ha)
+//   s = |∇n| / (2 k_F n),  k_F = (3π² n)^{1/3}   (reduced gradient)
+//   F_x(s) = 1 + κ − κ/(1 + μ s²/κ),  κ=0.804, μ=0.2195149727645171 (=β π²/3)
+//   e_x(n,g) = n·ε_x^unif(n)·F_x(s)              (energy density; g=|∇n|)
+//   Spin (exact spin-scaling): E_x[ρ↑,ρ↓] = ½(E_x[2ρ↑]+E_x[2ρ↓]); the σ channel
+//   uses n=2ρ_σ, g=2|∇ρ_σ|.  At g=0: F_x=1 → e_x = n·ε_x^unif (LSDA exchange).
+//
+// reuse (d19): correlation.qforge_ec_pw92_spin / qforge_ec_pbe (PW92 + PBE-H).
+use "stdlib/qforge/correlation"
+
+let _PBES_PI = 3.14159265358979323846
+let _PBES_KAPPA = 0.804
+let _PBES_MU = 0.2195149727645171         // β·π²/3, β=0.06672455060314922
+
+// ── k_F(n) = (3π² n)^{1/3} ────────────────────────────────────────────────────
+fn _kf(n: float) -> float {
+    if n <= 0.0 { return 0.0 }
+    return pow(3.0 * _PBES_PI * _PBES_PI * n, 1.0 / 3.0)
+}
+// ── reduced gradient s = g / (2 k_F n) ───────────────────────────────────────
+fn _s_of(n: float, g: float) -> float {
+    if n <= 0.0 { return 0.0 }
+    let kf = _kf(n)
+    if kf <= 0.0 { return 0.0 }
+    return g / (2.0 * kf * n)
+}
+// ── F_x(s) and dF_x/ds ───────────────────────────────────────────────────────
+pub fn qforge_pbe_fx(s: float) -> float {
+    let den = 1.0 + _PBES_MU * s * s / _PBES_KAPPA
+    return 1.0 + _PBES_KAPPA - _PBES_KAPPA / den
+}
+pub fn qforge_pbe_dfx_ds(s: float) -> float {
+    let den = 1.0 + _PBES_MU * s * s / _PBES_KAPPA
+    return 2.0 * _PBES_MU * s / (den * den)
+}
+
+// ── unpolarized PBE exchange energy density e_x(n,g) = n·ε_x^unif·F_x(s) ───────
+//   C = −(3/4)(3/π)^{1/3}.  e_x = C·n^{4/3}·F_x(s).
+let _PBES_CX = -0.7385587663820224          // −(3/4)(3/π)^{1/3}
+pub fn qforge_ex_pbe_endens(n: float, g: float) -> float {
+    if n <= 0.0 { return 0.0 }
+    let s = _s_of(n, g)
+    return _PBES_CX * pow(n, 4.0 / 3.0) * qforge_pbe_fx(s)
+}
+// ── ∂e_x/∂n (at fixed g) = C·(4/3)·n^{1/3}·[F_x − s·F_x'(s)] ──────────────────
+//   (s ∝ n^{−4/3} at fixed g ⇒ ∂s/∂n = −(4/3)s/n.)
+pub fn qforge_ex_pbe_de_dn(n: float, g: float) -> float {
+    if n <= 0.0 { return 0.0 }
+    let s = _s_of(n, g)
+    let fx = qforge_pbe_fx(s)
+    let dfx = qforge_pbe_dfx_ds(s)
+    return _PBES_CX * (4.0 / 3.0) * pow(n, 1.0 / 3.0) * (fx - s * dfx)
+}
+// ── ∂e_x/∂g (at fixed n) = C·n^{4/3}·F_x'(s)·(s/g) = C·n^{1/3}·F_x'(s)/(2 k_F·... ) ─
+//   ∂s/∂g = s/g = 1/(2 k_F n).  → ∂e_x/∂g = C n^{4/3} F_x'(s)/(2 k_F n).
+pub fn qforge_ex_pbe_de_dg(n: float, g: float) -> float {
+    if n <= 0.0 || g <= 0.0 { return 0.0 }
+    let s = _s_of(n, g)
+    let dfx = qforge_pbe_dfx_ds(s)
+    let kf = _kf(n)
+    return _PBES_CX * pow(n, 4.0 / 3.0) * dfx / (2.0 * kf * n)
+}
+
+// ── SPIN PBE exchange at a point (ρ↑,ρ↓,|∇ρ↑|,|∇ρ↓|) ─────────────────────────
+//   energy density = ½ Σ_σ e_x(2ρ_σ, 2|∇ρ_σ|).  At ∇=0 → LSDA exchange density.
+pub fn qforge_ex_pbe_endens_spin(rho_up: float, rho_dn: float, gup: float, gdn: float) -> float {
+    let mut e = 0.0
+    if rho_up > 0.0 { e = e + 0.5 * qforge_ex_pbe_endens(2.0 * rho_up, 2.0 * gup) }
+    if rho_dn > 0.0 { e = e + 0.5 * qforge_ex_pbe_endens(2.0 * rho_dn, 2.0 * gdn) }
+    return e
+}
+// ── spin PBE exchange LOCAL potential ∂e_x/∂ρ_σ = ∂e_x/∂n|_{2ρ_σ} (Ha) ────────
+//   v_x^σ,local; the gradient ∇· term (PR7c) uses qforge_ex_pbe_de_dg below.
+pub fn qforge_vx_pbe_local_spin(rho_up: float, rho_dn: float, gup: float, gdn: float, sign: float) -> float {
+    if sign > 0.0 {
+        if rho_up <= 0.0 { return 0.0 }
+        return qforge_ex_pbe_de_dn(2.0 * rho_up, 2.0 * gup)
+    }
+    if rho_dn <= 0.0 { return 0.0 }
+    return qforge_ex_pbe_de_dn(2.0 * rho_dn, 2.0 * gdn)
+}
+// ── spin PBE exchange GRADIENT coefficient ∂e_x/∂|∇ρ_σ| (for the ∇· term) ──────
+//   energy density piece ½ e_x(2ρ_σ,2g_σ) ⇒ ∂/∂g_σ = ½·2·∂e_x/∂g = ∂e_x/∂g|_{2ρ_σ,2g_σ}.
+pub fn qforge_vx_pbe_gradcoef_spin(rho_up: float, rho_dn: float, gup: float, gdn: float, sign: float) -> float {
+    if sign > 0.0 {
+        if rho_up <= 0.0 { return 0.0 }
+        return qforge_ex_pbe_de_dg(2.0 * rho_up, 2.0 * gup)
+    }
+    if rho_dn <= 0.0 { return 0.0 }
+    return qforge_ex_pbe_de_dg(2.0 * rho_dn, 2.0 * gdn)
+}

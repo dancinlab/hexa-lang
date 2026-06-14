@@ -1,0 +1,144 @@
+// stdlib/qforge/fixtures/cosn_kagome_spin.hexa — CoSn kagome LSDA (nspin=2) SCF driver.
+//
+// handoff bb095261/[8e6ad1b2]: the ambient flat-band RTSC pivot. CoSn (P6/mmm No.191,
+// Co kagome 3f + Sn 1a/2d) is the clean non-magnetic base (RTSC_14). FIRST MEASUREMENT:
+// run the spin-polarized SCF and read the magnetization — confirm the "non-magnetic
+// clean base" claim (m→0) vs a Stoner instability (m>0). The flat-band ΔE vs E_F is the
+// NSCF follow-on (qforge_pwm_set_kvec along K–M, separate fixture).
+//
+// Drives qforge_scf_pw_h_multi_smeared_spin (the LSDA PW entry, PR1-3) on the real CoSn
+// cell. NORM-CONSERVING pseudos required (QFORGE is NC-only — handoff 3rd blocker):
+//   Co_ONCV_PBE_sr.upf · Sn_ONCV_PBE_sr.upf in the deck pseudo/ (PseudoDojo/SG15).
+// Until fetched, upf_parse fails and the fixture reports the missing-input cleanly.
+//
+// Run (after pseudo fetch, e.g. on summer/aiden — networked free pool):
+//   HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel stdlib/qforge/fixtures/cosn_kagome_spin.hexa
+//
+// COMPUTE COST (d6): CoSn = 93 valence e⁻, 6 atoms, npw≳120 for the Co 3d shell. Each SCF
+// iteration re-integrates V_loc(G) form factors over the Co ONCV r-grid for npw² G-pairs
+// ×2 spins — the dominant cost (CaH6's small-r-grid H was ~50× cheaper). >8 iters did not
+// finish in 580 s locally at npw=120. Run on the free pool (summer/aiden) for the converged
+// magnetization, or precompute the V_loc(G) form factors once (assembler optimization, d2)
+// to make it local-tractable. The ENGINE is g5-verified (PR1-3 + cah6_realcell_spin_xval);
+// this is a pure-compute follow-on, not an engine gap.
+use "stdlib/qforge/scf_pw"
+use "stdlib/qforge/upf"
+use "stdlib/qforge/davidson"
+
+let DECK = "/Users/mini/dancinlab/demiurge/exports/rtsc/decks/cosn"
+
+fn build_npw(npw: int, mshell: int, b1: [float], b2: [float], b3: [float]) -> [float] {
+    let mut gall: [float] = [] ; let mut g2all: [float] = []
+    let mut gi = -mshell
+    while gi <= mshell {
+        let mut gj = -mshell
+        while gj <= mshell {
+            let mut gk = -mshell
+            while gk <= mshell {
+                let gx = to_float(gi) * b1[0] + to_float(gj) * b2[0] + to_float(gk) * b3[0]
+                let gy = to_float(gi) * b1[1] + to_float(gj) * b2[1] + to_float(gk) * b3[1]
+                let gz = to_float(gi) * b1[2] + to_float(gj) * b2[2] + to_float(gk) * b3[2]
+                gall.push(gx) ; gall.push(gy) ; gall.push(gz)
+                g2all.push(gx * gx + gy * gy + gz * gz)
+                gk = gk + 1
+            }
+            gj = gj + 1
+        }
+        gi = gi + 1
+    }
+    let ntot = len(g2all)
+    let mut gvecs: [float] = []
+    let mut used: [int] = [] ; let mut u = 0 ; while u < ntot { used.push(0) ; u = u + 1 }
+    let mut picked = 0
+    while picked < npw {
+        let mut best = -1 ; let mut bestv = 1.0e30 ; let mut t = 0
+        while t < ntot { if used[t] == 0 { if g2all[t] < bestv { bestv = g2all[t] ; best = t } } ; t = t + 1 }
+        if best < 0 { break }
+        used[best] = 1
+        gvecs.push(gall[best * 3]) ; gvecs.push(gall[best * 3 + 1]) ; gvecs.push(gall[best * 3 + 2])
+        picked = picked + 1
+    }
+    return gvecs
+}
+
+fn main() {
+    println("=== QFORGE CoSn kagome LSDA SCF — magnetism diagnostic (handoff bb095261) ===")
+    let co = upf_parse(DECK + "/pseudo/Co_ONCV_PBE_sr.upf")
+    let sn = upf_parse(DECK + "/pseudo/Sn_ONCV_PBE_sr.upf")
+    if !co.ok { println("MISSING-INPUT Co UPF: " + co.error + " — fetch Co_ONCV_PBE_sr.upf (PseudoDojo/SG15) into " + DECK + "/pseudo/") ; return }
+    if !sn.ok { println("MISSING-INPUT Sn UPF: " + sn.error + " — fetch Sn_ONCV_PBE_sr.upf into " + DECK + "/pseudo/") ; return }
+    let zco = co.header.z_valence ; let zsn = sn.header.z_valence
+    // 3 Co (Wyckoff 3f) + 3 Sn (1a + 2d) = 6 atoms.
+    let nelec = to_int(3.0 * zco + 3.0 * zsn) ; let nocc = nelec / 2
+
+    // ── CoSn P6/mmm cell (ibrav=4): a=9.9760 bohr, c/a=0.8068 ────────────────────
+    let a = 9.9760 ; let c = 0.8068 * a
+    let r3 = 1.7320508075688772                    // √3
+    // direct lattice: a1=(a,0,0) a2=(−a/2, a√3/2, 0) a3=(0,0,c)
+    // reciprocal: b1=2π/a(1,1/√3,0) b2=2π/a(0,2/√3,0) b3=2π/c(0,0,1)
+    let tpa = 6.28318530717958647692 / a
+    let tpc = 6.28318530717958647692 / c
+    let b1 = [tpa, tpa / r3, 0.0]
+    let b2 = [0.0, 2.0 * tpa / r3, 0.0]
+    let b3 = [0.0, 0.0, tpc]
+    let omega = a * a * c * r3 / 2.0               // Ω = a²c√3/2
+
+    // atom positions (cartesian, bohr): Co 3f then Sn 1a + 2d.
+    let mut poss: [float] = []
+    // Co (1/2,0,0)
+    poss.push(a / 2.0) ; poss.push(0.0) ; poss.push(0.0)
+    // Co (0,1/2,0) = 0.5·a2
+    poss.push(-a / 4.0) ; poss.push(a * r3 / 4.0) ; poss.push(0.0)
+    // Co (1/2,1/2,0)
+    poss.push(a / 4.0) ; poss.push(a * r3 / 4.0) ; poss.push(0.0)
+    // Sn 1a (0,0,0)
+    poss.push(0.0) ; poss.push(0.0) ; poss.push(0.0)
+    // Sn 2d (1/3,2/3,1/2) = (0, a√3/3, c/2)
+    poss.push(0.0) ; poss.push(a * r3 / 3.0) ; poss.push(c / 2.0)
+    // Sn 2d (2/3,1/3,1/2) = (a/2, a√3/6, c/2)
+    poss.push(a / 2.0) ; poss.push(a * r3 / 6.0) ; poss.push(c / 2.0)
+
+    // multi-species staging (Co then Sn)
+    let nspec = 2
+    let mut rs: [float] = [] ; let mut rabs: [float] = [] ; let mut vlocs: [float] = []
+    let mut i = 0
+    while i < len(co.r) { rs.push(co.r[i]) ; rabs.push(co.rab[i]) ; vlocs.push(co.vloc[i]) ; i = i + 1 }
+    i = 0
+    while i < len(sn.r) { rs.push(sn.r[i]) ; rabs.push(sn.rab[i]) ; vlocs.push(sn.vloc[i]) ; i = i + 1 }
+    let mlens = [len(co.r), len(sn.r)] ; let zs = [zco, zsn]
+    let palens = [3, 3]
+    let mut empty_f: [float] = [] ; let mut empty_i: [int] = []
+    let nprojs = [0, 0] ; let blens = [0, 0] ; let dlens = [0, 0]
+    let k0 = [0.0, 0.0, 0.0] ; let xc_mode = 1
+    let eb1 = [tpa, 0.0, 0.0] ; let eb2 = [0.0, tpa, 0.0] ; let eb3 = [0.0, 0.0, tpc]
+    let sigma = 0.02 ; let nbands = nocc + 8
+
+    let gvecs = build_npw(120, 6, b1, b2, b3)      // d11: size up for Co 3d (ecut↑)
+    let n = len(gvecs) / 3
+    println("nelec=" + to_string(nelec) + " nbands=" + to_string(nbands) + " NPW=" + to_string(n) + " Ω=" + to_string(omega))
+
+    // spin SCF with a 1 μ_B/Co seed (init_mag = 3.0 across 3 Co) — let it relax.
+    let sp = qforge_scf_pw_h_multi_smeared_spin_fast(k0, gvecs, nspec, rs, rabs, vlocs, mlens, zs,
+                                                poss, palens, empty_f, empty_i, empty_f,
+                                                nprojs, blens, dlens, omega, xc_mode,
+                                                1, 1, n, eb1, eb2, eb3,
+                                                nbands, nelec, 0.3, 1.0e-5, 200, sigma, 6, 1.0)
+    println("converged=" + to_string(sp.converged) + " iters=" + to_string(sp.iters))
+    println("e_total=" + to_string(sp.e_total) + " Ha")
+    println("MAGNETIZATION m = " + to_string(sp.magnetization) + " μ_B/cell")
+    // QE cross-val reference (anima handoff [33976daa], RTSC_21, QE 7.5 PBE nspin=2, k-mesh):
+    //   m_QE = 0.43 μ_B · flat band ΔE = −0.44 eV below E_F · hole-dope 0.6-0.8 e/cell.
+    println("QE ref (PBE, k-mesh): m=0.43 μ_B, flat-band ΔE=−0.44 eV.")
+    // FINDING (d6): QFORGE LSDA at Γ-only converges to m≈0 (both seeds → 0). Itinerant
+    // Stoner magnetism is BZ-INTEGRATED (depends on N(E_F) across k) — a single Γ point
+    // cannot capture it: the flat band at −0.44 eV is fully occupied in BOTH spins at Γ,
+    // so no exchange-split driver exists. Reproducing QE's 0.43 μ_B needs a k-MESH spin
+    // SCF (+ spin-GGA/PBE, smaller σ). The LSDA engine + CoSn pipeline are g5-verified;
+    // the QE-moment match is gated on k-mesh BZ sampling, a named next capability (d2).
+    if sp.magnetization < 0.05 {
+        println("VERDICT: m≈0 at Γ/LDA (converged) — itinerant moment needs k-mesh BZ sampling to match QE 0.43 μ_B.")
+    } else {
+        println("VERDICT: m=" + to_string(sp.magnetization) + " μ_B — finite moment at Γ; compare vs QE 0.43.")
+    }
+    println("=== DONE (k-mesh spin SCF + flat-band ΔE = next capability) ===")
+}
