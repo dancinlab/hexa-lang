@@ -1,0 +1,387 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_prod_op38_hostdispatch_eq.hexa — F-OP38 OFF-CUDA clm_prod-glue host
+//  dispatch byte-eq ORACLE (OP-37 follow-on, b65ebe51 residual).
+//
+//  OP-37 closed the gather/scatter/copy/add + groupnorm/moe_router host subset.
+//  OP-38 adds the REMAINING clm_prod CLMConvMoE close-out dispatchers OFF-CUDA:
+//    gelu · gelu_bwd · ce_grad · int4_quant(/_bwd) · groupnorm_bwd ·
+//    moe_router_bwd · embedding_bwd_scatter · groupnorm_gelu_residual.
+//  This oracle DRIVES each new host dispatch DIRECTLY (the builtin call, which
+//  codegen lowers to the runtime host body) and compares to an inline unfused
+//  reference computed in pure .hexa, asserting max|Δ|=0.
+//
+//  The transcendental forms here replicate the runtime statics EXACTLY (NO libm):
+//    _op19b_dt_erf / _op19b_dt_exp == flame dt_erf / dt_exp (A&S 7.1.26 + Taylor),
+//    _op18_gelu = x·0.5(1+dt_erf(x/√2)), _op18_gn_sqrt = 40-iter Newton (g=x).
+//
+//  Build the verifying hexat with HEXA_SEED_CONVERGE=1 so the 4-arg dispatchers
+//  (gelu_bwd / int4_quant_bwd) resolve as named C calls (not hexa_call4).
+//
+//  Run with:  hexa run stdlib/flame/clm_prod_op38_hostdispatch_eq.hexa
+//
+//  F-OP38-CLMPROD-HOST-FALLBACK : every OP-38 host dispatch == unfused reference,
+//                                 max|Δ|=0, links off-CUDA.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+fn _o38_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _o38_maxdev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n { let d = _o38_absf(t_get(a, i) - t_get(b, i)); if d > m { m = d }; i = i + 1 }
+    return m
+}
+fn _o38_fill(a: int, n: int, seed: int, scale: float) {
+    let mut i = 0
+    let mut s = seed
+    while i < n {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        t_set(a, i, (to_float(s % 1000) - 500.0) * scale)
+        i = i + 1
+    }
+}
+
+// ── hand-rolled math byte-identical to the OP-18/OP-19b runtime statics ────────
+fn _o38_dt_exp(x: float) -> float {
+    let mut r = 0
+    let mut xr = x
+    while (if xr > 0.0 { xr } else { 0.0 - xr }) > 0.25 { xr = xr / 2.0; r = r + 1 }
+    let mut term = 1.0
+    let mut acc = 1.0
+    let mut k = 1
+    while k < 12 { term = term * xr / to_float(k); acc = acc + term; k = k + 1 }
+    let mut s = 0
+    while s < r { acc = acc * acc; s = s + 1 }
+    return acc
+}
+fn _o38_dt_erf(x: float) -> float {
+    let mut sign = 1.0
+    let mut z = x
+    if z < 0.0 { sign = 0.0 - 1.0; z = 0.0 - z }
+    let t = 1.0 / (1.0 + 0.3275911 * z)
+    let a1 = 0.254829592
+    let a2 = 0.0 - 0.284496736
+    let a3 = 1.421413741
+    let a4 = 0.0 - 1.453152027
+    let a5 = 1.061405429
+    let poly = ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t
+    return sign * (1.0 - poly * _o38_dt_exp(0.0 - z * z))
+}
+fn _o38_gelu(x: float) -> float {
+    let inv_sqrt2 = 0.70710678118654752440
+    return x * (0.5 * (1.0 + _o38_dt_erf(x * inv_sqrt2)))
+}
+fn _o38_gelu_grad(x: float) -> float {
+    let inv_sqrt2 = 0.70710678118654752440
+    let inv_sqrt2pi = 0.39894228040143267794
+    let cdf = 0.5 * (1.0 + _o38_dt_erf(x * inv_sqrt2))
+    let pdf = inv_sqrt2pi * _o38_dt_exp(0.0 - 0.5 * x * x)
+    return cdf + x * pdf
+}
+fn _o38_sqrt40(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    let mut i = 0
+    while i < 40 { g = 0.5 * (g + x / g); i = i + 1 }
+    return g
+}
+fn _o38_qround(x: float) -> float {
+    if x >= 0.0 { return to_float(to_int(x + 0.5)) }
+    return 0.0 - to_float(to_int((0.0 - x) + 0.5))
+}
+fn _o38_qabs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+// ── per-kernel byte-eq cases ─────────────────────────────────────────────────
+
+fn _t_gelu(n: int) -> float {
+    let g = t_zeros(n); _o38_fill(g, n, 101, 0.3)
+    let ref = t_zeros(n); let mut i = 0
+    while i < n { t_set(ref, i, _o38_gelu(t_get(g, i))); i = i + 1 }
+    let got = t_zeros(n)
+    let rc = forge_dispatch_gelu(g, got, n)
+    if rc != 0 { return 999.0 }
+    return _o38_maxdev(ref, got, n)
+}
+
+fn _t_gelu_bwd(n: int) -> float {
+    let g = t_zeros(n); _o38_fill(g, n, 103, 0.3)
+    let da = t_zeros(n); _o38_fill(da, n, 107, 0.2)
+    let ref = t_zeros(n); let mut i = 0
+    while i < n { t_set(ref, i, t_get(da, i) * _o38_gelu_grad(t_get(g, i))); i = i + 1 }
+    let got = t_zeros(n)
+    let rc = forge_dispatch_gelu_bwd(g, da, got, n)
+    if rc != 0 { return 999.0 }
+    return _o38_maxdev(ref, got, n)
+}
+
+fn _t_ce_grad(T: int, V: int) -> float {
+    let logits = t_zeros(T * V); _o38_fill(logits, T * V, 109, 0.2)
+    let targets = t_zeros(T); let mut i = 0
+    while i < T { t_set(targets, i, to_float((i * 5 + 1) % V)); i = i + 1 }
+    // reference (clm_ce_grad)
+    let ref = t_zeros(T * V)
+    let mut t = 0
+    while t < T {
+        let base = t * V
+        let mut mx = t_get(logits, base); let mut a = 1
+        while a < V { let v = t_get(logits, base + a); if v > mx { mx = v }; a = a + 1 }
+        let mut sm = 0.0; let mut i2 = 0
+        while i2 < V { sm = sm + _o38_dt_exp(t_get(logits, base + i2) - mx); i2 = i2 + 1 }
+        let invT = 1.0 / to_float(T)
+        let mut v3 = 0
+        while v3 < V {
+            let p = _o38_dt_exp(t_get(logits, base + v3) - mx) / sm
+            t_set(ref, base + v3, p * invT); v3 = v3 + 1
+        }
+        let tgt = to_int(t_get(targets, t))
+        t_set(ref, base + tgt, t_get(ref, base + tgt) - invT)
+        t = t + 1
+    }
+    let got = t_zeros(T * V)
+    let rc = forge_dispatch_ce_grad(logits, targets, got, T, V)
+    if rc != 0 { return 999.0 }
+    return _o38_maxdev(ref, got, T * V)
+}
+
+fn _t_int4_quant(Cout: int, rest: int) -> float {
+    let n = Cout * rest
+    let w = t_zeros(n); _o38_fill(w, n, 113, 0.4)
+    // reference (nn_int4_quant_fwd)
+    let rwq = t_zeros(n); let rsc = t_zeros(Cout); let rql = t_zeros(n); let rmk = t_zeros(n)
+    let mut co = 0
+    while co < Cout {
+        let mut mx = 0.0; let mut j = 0
+        while j < rest { let av = _o38_qabs(t_get(w, co * rest + j)); if av > mx { mx = av }; j = j + 1 }
+        let s = if mx > 0.0 { mx / 7.0 } else { 1.0 }
+        t_set(rsc, co, s)
+        let mut j2 = 0
+        while j2 < rest {
+            let idx = co * rest + j2
+            let mut q = _o38_qround(t_get(w, idx) / s)
+            let mut inrange = 1.0
+            if q > 7.0 { q = 7.0; inrange = 0.0 }
+            if q < 0.0 - 7.0 { q = 0.0 - 7.0; inrange = 0.0 }
+            t_set(rql, idx, q); t_set(rmk, idx, inrange); t_set(rwq, idx, q * s)
+            j2 = j2 + 1
+        }
+        co = co + 1
+    }
+    let gwq = t_zeros(n); let gsc = t_zeros(Cout); let gql = t_zeros(n); let gmk = t_zeros(n)
+    let rc = forge_dispatch_int4_quant(w, gwq, gsc, gql, gmk, Cout, rest)
+    if rc != 0 { return 999.0 }
+    let d1 = _o38_maxdev(rwq, gwq, n)
+    let d2 = _o38_maxdev(rsc, gsc, Cout)
+    let d3 = _o38_maxdev(rql, gql, n)
+    let d4 = _o38_maxdev(rmk, gmk, n)
+    let mut mxd = d1
+    if d2 > mxd { mxd = d2 }
+    if d3 > mxd { mxd = d3 }
+    if d4 > mxd { mxd = d4 }
+    return mxd
+}
+
+fn _t_int4_quant_bwd(n: int) -> float {
+    let dy = t_zeros(n); _o38_fill(dy, n, 127, 0.2)
+    let mask = t_zeros(n); let mut i = 0
+    while i < n { t_set(mask, i, to_float(i % 2)); i = i + 1 }
+    let ref = t_zeros(n); i = 0
+    while i < n { t_set(ref, i, t_get(dy, i) * t_get(mask, i)); i = i + 1 }
+    let got = t_zeros(n)
+    let rc = forge_dispatch_int4_quant_bwd(dy, mask, got, n)
+    if rc != 0 { return 999.0 }
+    return _o38_maxdev(ref, got, n)
+}
+
+fn _t_groupnorm_bwd(T: int, C: int, G: int) -> float {
+    let cg = C / G
+    let m = to_float(cg * T)
+    let xhat = t_zeros(T * C); _o38_fill(xhat, T * C, 131, 0.1)
+    let inv = t_zeros(G); _o38_fill(inv, G, 137, 0.05)
+    let mut gi = 0; while gi < G { t_set(inv, gi, t_get(inv, gi) + 1.0); gi = gi + 1 }
+    let gamma = t_zeros(C); _o38_fill(gamma, C, 139, 0.02)
+    gi = 0; while gi < C { t_set(gamma, gi, t_get(gamma, gi) + 1.0); gi = gi + 1 }
+    let dy = t_zeros(T * C); _o38_fill(dy, T * C, 149, 0.1)
+    // reference (nn_groupnorm_bwd)
+    let rdg = t_zeros(C); let rdb = t_zeros(C); let rdx = t_zeros(T * C)
+    let mut c = 0
+    while c < C {
+        let mut sg = 0.0; let mut sb = 0.0; let mut t = 0
+        while t < T { let idx = t * C + c; let gy = t_get(dy, idx)
+            sg = sg + gy * t_get(xhat, idx); sb = sb + gy; t = t + 1 }
+        t_set(rdg, c, sg); t_set(rdb, c, sb); c = c + 1
+    }
+    let mut g = 0
+    while g < G {
+        let c0 = g * cg; let inv_g = t_get(inv, g)
+        let mut s1 = 0.0; let mut s2 = 0.0; let mut t = 0
+        while t < T { let mut cc = 0
+            while cc < cg { let ch = c0 + cc; let idx = t * C + ch
+                let dxh = t_get(dy, idx) * t_get(gamma, ch)
+                s1 = s1 + dxh; s2 = s2 + dxh * t_get(xhat, idx); cc = cc + 1 }
+            t = t + 1 }
+        let mut t2 = 0
+        while t2 < T { let mut cc2 = 0
+            while cc2 < cg { let ch = c0 + cc2; let idx = t2 * C + ch
+                let dxh = t_get(dy, idx) * t_get(gamma, ch)
+                let dx = inv_g * (dxh - s1 / m - t_get(xhat, idx) * s2 / m)
+                t_set(rdx, idx, dx); cc2 = cc2 + 1 }
+            t2 = t2 + 1 }
+        g = g + 1
+    }
+    let gdg = t_zeros(C); let gdb = t_zeros(C); let gdx = t_zeros(T * C)
+    let rc = forge_dispatch_groupnorm_bwd(xhat, inv, gamma, dy, gdg, gdb, gdx, T, C, G)
+    if rc != 0 { return 999.0 }
+    let d1 = _o38_maxdev(rdg, gdg, C)
+    let d2 = _o38_maxdev(rdb, gdb, C)
+    let d3 = _o38_maxdev(rdx, gdx, T * C)
+    let mut mxd = d1
+    if d2 > mxd { mxd = d2 }
+    if d3 > mxd { mxd = d3 }
+    return mxd
+}
+
+fn _t_moe_router_bwd(T: int, E: int, C: int) -> float {
+    let probs = t_zeros(T * E)
+    // build valid probs (softmax rows) so the bwd is well-posed
+    let mut t = 0
+    while t < T {
+        let mut s = 0.0; let mut e = 0
+        while e < E { let v = _o38_dt_exp(to_float((t * 3 + e) % 5) * 0.1); t_set(probs, t * E + e, v); s = s + v; e = e + 1 }
+        e = 0; while e < E { t_set(probs, t * E + e, t_get(probs, t * E + e) / s); e = e + 1 }
+        t = t + 1
+    }
+    let exo = t_zeros(E * T * C); _o38_fill(exo, E * T * C, 151, 0.1)
+    let dy = t_zeros(T * C); _o38_fill(dy, T * C, 157, 0.1)
+    // reference (nn_moe_router_bwd)
+    let rdl = t_zeros(T * E); let rdex = t_zeros(E * T * C)
+    t = 0
+    while t < T {
+        let mut dot = 0.0; let mut e = 0
+        while e < E {
+            let pte = t_get(probs, t * E + e); let mut dg = 0.0; let mut c = 0
+            while c < C {
+                let gy = t_get(dy, t * C + c)
+                dg = dg + gy * t_get(exo, e * T * C + t * C + c)
+                t_set(rdex, e * T * C + t * C + c, pte * gy); c = c + 1
+            }
+            t_set(rdl, t * E + e, dg); dot = dot + pte * dg; e = e + 1
+        }
+        let mut e2 = 0
+        while e2 < E {
+            let pte = t_get(probs, t * E + e2); let dg = t_get(rdl, t * E + e2)
+            t_set(rdl, t * E + e2, pte * (dg - dot)); e2 = e2 + 1
+        }
+        t = t + 1
+    }
+    let gdl = t_zeros(T * E); let gdex = t_zeros(E * T * C)
+    let rc = forge_dispatch_moe_router_bwd(probs, exo, dy, gdl, gdex, T, E, C)
+    if rc != 0 { return 999.0 }
+    let d1 = _o38_maxdev(rdl, gdl, T * E)
+    let d2 = _o38_maxdev(rdex, gdex, E * T * C)
+    if d2 > d1 { return d2 }
+    return d1
+}
+
+fn _t_embedding_bwd_scatter(T: int, d: int, V: int) -> float {
+    let dX = t_zeros(T * d); _o38_fill(dX, T * d, 163, 0.1)
+    let ids = t_zeros(T); let mut i = 0
+    // intentionally repeat tokens so the scatter-add accumulates (i ascending)
+    while i < T { t_set(ids, i, to_float((i * 3) % V)); i = i + 1 }
+    // reference (nn_embedding_bwd_scatter, pre-zeroed table)
+    let rdt = t_zeros(V * d)
+    i = 0
+    while i < T {
+        let tok = to_int(t_get(ids, i)); let mut c = 0
+        while c < d { t_set(rdt, tok * d + c, t_get(rdt, tok * d + c) + t_get(dX, i * d + c)); c = c + 1 }
+        i = i + 1
+    }
+    let gdt = t_zeros(V * d)
+    let rc = forge_dispatch_embedding_bwd_scatter(dX, ids, gdt, T, d, V)
+    if rc != 0 { return 999.0 }
+    return _o38_maxdev(rdt, gdt, V * d)
+}
+
+fn _t_gn_gelu_residual(T: int, C: int, G: int) -> float {
+    let eps = 0.00001
+    let cg = C / G
+    let m = to_float(cg * T)
+    let x = t_zeros(T * C); _o38_fill(x, T * C, 167, 0.05)
+    let gamma = t_zeros(C); let beta = t_zeros(C)
+    _o38_fill(gamma, C, 173, 0.02); _o38_fill(beta, C, 179, 0.01)
+    let mut gi = 0; while gi < C { t_set(gamma, gi, t_get(gamma, gi) + 1.0); gi = gi + 1 }
+    let r = t_zeros(T * C); _o38_fill(r, T * C, 181, 0.1)
+    // reference: GN -> y, a = gelu(y), out = r + a
+    let ry = t_zeros(T * C); let ra = t_zeros(T * C); let rout = t_zeros(T * C)
+    let rmean = t_zeros(G); let rinv = t_zeros(G); let rxhat = t_zeros(T * C)
+    let mut g = 0
+    while g < G {
+        let c0 = g * cg; let mut sum = 0.0; let mut t = 0
+        while t < T { let mut c = 0; while c < cg { sum = sum + t_get(x, t * C + (c0 + c)); c = c + 1 }; t = t + 1 }
+        let mu = sum / m; let mut vs = 0.0; let mut t2 = 0
+        while t2 < T { let mut c2 = 0; while c2 < cg { let dd = t_get(x, t2 * C + (c0 + c2)) - mu; vs = vs + dd * dd; c2 = c2 + 1 }; t2 = t2 + 1 }
+        let var = vs / m; let inv = 1.0 / _o38_sqrt40(var + eps)
+        t_set(rmean, g, mu); t_set(rinv, g, inv)
+        let mut t3 = 0
+        while t3 < T { let mut c3 = 0
+            while c3 < cg { let ch = c0 + c3; let idx = t3 * C + ch
+                let xh = (t_get(x, idx) - mu) * inv; t_set(rxhat, idx, xh)
+                let yv = t_get(gamma, ch) * xh + t_get(beta, ch)
+                t_set(ry, idx, yv); t_set(ra, idx, _o38_gelu(yv)); c3 = c3 + 1 }
+            t3 = t3 + 1 }
+        g = g + 1
+    }
+    let mut i = 0
+    while i < T * C { t_set(rout, i, t_get(r, i) + t_get(ra, i)); i = i + 1 }
+    // dispatch
+    let gy = t_zeros(T * C); let ga = t_zeros(T * C); let gout = t_zeros(T * C)
+    let gmean = t_zeros(G); let ginv = t_zeros(G); let gxhat = t_zeros(T * C)
+    let rc = forge_dispatch_groupnorm_gelu_residual(x, gamma, beta, r, gy, ga, gout, gmean, ginv, gxhat, T, C, G)
+    if rc != 0 { return 999.0 }
+    let d1 = _o38_maxdev(ry, gy, T * C)
+    let d2 = _o38_maxdev(ra, ga, T * C)
+    let d3 = _o38_maxdev(rout, gout, T * C)
+    let d4 = _o38_maxdev(rxhat, gxhat, T * C)
+    let d5 = _o38_maxdev(rmean, gmean, G)
+    let d6 = _o38_maxdev(rinv, ginv, G)
+    let mut mxd = d1
+    if d2 > mxd { mxd = d2 }
+    if d3 > mxd { mxd = d3 }
+    if d4 > mxd { mxd = d4 }
+    if d5 > mxd { mxd = d5 }
+    if d6 > mxd { mxd = d6 }
+    return mxd
+}
+
+fn _chk(name: str, d: float) -> bool {
+    println("  " + name + " max|Δ| = " + to_string(d))
+    return d == 0.0
+}
+
+fn main() {
+    println("clm_prod_op38_hostdispatch_eq — F-OP38 OFF-CUDA clm_prod-glue host dispatch byte-eq (CPU oracle)")
+    let mut ok = true
+    if !_chk("gelu              n128      ", _t_gelu(128)) { ok = false }
+    if !_chk("gelu              n257      ", _t_gelu(257)) { ok = false }
+    if !_chk("gelu_bwd          n128      ", _t_gelu_bwd(128)) { ok = false }
+    if !_chk("gelu_bwd          n257      ", _t_gelu_bwd(257)) { ok = false }
+    if !_chk("ce_grad           T8 V16    ", _t_ce_grad(8, 16)) { ok = false }
+    if !_chk("ce_grad           T5 V11    ", _t_ce_grad(5, 11)) { ok = false }
+    if !_chk("int4_quant        Co8 r16   ", _t_int4_quant(8, 16)) { ok = false }
+    if !_chk("int4_quant        Co5 r7    ", _t_int4_quant(5, 7)) { ok = false }
+    if !_chk("int4_quant_bwd    n128      ", _t_int4_quant_bwd(128)) { ok = false }
+    if !_chk("groupnorm_bwd     T8 C8 G2  ", _t_groupnorm_bwd(8, 8, 2)) { ok = false }
+    if !_chk("groupnorm_bwd     T16 C12 G4", _t_groupnorm_bwd(16, 12, 4)) { ok = false }
+    if !_chk("moe_router_bwd    T8 E2 C8  ", _t_moe_router_bwd(8, 2, 8)) { ok = false }
+    if !_chk("moe_router_bwd    T6 E4 C5  ", _t_moe_router_bwd(6, 4, 5)) { ok = false }
+    if !_chk("embed_bwd_scatter T10 d8 V6 ", _t_embedding_bwd_scatter(10, 8, 6)) { ok = false }
+    if !_chk("gn_gelu_residual  T8 C8 G2  ", _t_gn_gelu_residual(8, 8, 2)) { ok = false }
+    if !_chk("gn_gelu_residual  T16 C12 G4", _t_gn_gelu_residual(16, 12, 4)) { ok = false }
+    if ok {
+        println("F-OP38-CLMPROD-HOST-FALLBACK = 1")
+        println("PASS — all OP-38 host dispatches == unfused reference, byte-eq (max|Δ|=0); LINKS off-CUDA")
+    } else {
+        println("F-OP38-CLMPROD-HOST-FALLBACK = 0")
+        println("FAIL — at least one OP-38 host dispatch diverges from the unfused reference")
+    }
+}

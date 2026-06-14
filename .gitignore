@@ -286,3 +286,5 @@ self/runtime_hi_gen.c
 self/native/hexa_cc.c
 self/forge/forge_tier_v1.c
 test/native_build/classd_behavioral_harness.c
+.harness/logs/
+.harness/handoff/
