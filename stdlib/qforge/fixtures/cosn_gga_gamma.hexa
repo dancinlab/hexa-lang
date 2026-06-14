@@ -75,7 +75,7 @@ fn main() {
     let k0 = [0.0, 0.0, 0.0] ; let xc_mode = 1
     let sigma = 0.01 ; let nbands = nocc + 2
     let mshell = 4
-    let gvecs = build_npw(80, mshell, b1, b2, b3) ; let n = len(gvecs) / 3
+    let gvecs = build_npw(120, mshell, b1, b2, b3) ; let n = len(gvecs) / 3
     let nx = 32 ; let ny = 32 ; let nz = 32     // ≥ 2·(2·mshell)+1 → pow2
 
     println("nelec=" + to_string(nelec) + " nbands=" + to_string(nbands) + " NPW=" + to_string(n) + " grid=" + to_string(nx))
@@ -83,7 +83,7 @@ fn main() {
                                     poss, palens, empty_f, empty_i, empty_f,
                                     nprojs, blens, dlens, omega, xc_mode,
                                     nx, ny, nz, b1, b2, b3,
-                                    nbands, nelec, 0.3, 1.0e-5, 60, sigma, 6, 0.6)
+                                    nbands, nelec, 0.3, 1.0e-5, 30, sigma, 6, 0.6)
     println("converged=" + to_string(sp.converged) + " iters=" + to_string(sp.iters))
     println("e_total=" + to_string(sp.e_total) + " Ha")
     println("MAGNETIZATION m = " + to_string(sp.magnetization) + " μ_B/cell  (LDA-Γ gave ≈0; QE-PBE 0.43)")
