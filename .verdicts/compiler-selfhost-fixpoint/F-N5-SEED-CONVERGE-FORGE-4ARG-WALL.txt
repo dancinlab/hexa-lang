@@ -1,0 +1,89 @@
+F-N5-SEED-CONVERGE-FORGE-4ARG-WALL
+verdict: 🟢 GREEN (scoped) — seed-convergence fix closes the forge OFF-CUDA 4-arg
+         hexa_call4 COMPILE wall; byte-eq fixpoint HOLDS (gen2==gen3).
+date: 2026-06-14
+host: summer (linux-x86_64, CPU-only; anima GPU job untouched)
+branch: fix/selfhost-seed-converge-n5
+seed: tool/stage_prebuild_hexat (N5 seed-convergence loop)
+
+═══ PHASE 0 — SEED MECHANISM (the load-bearing finding) ═══════════════════════
+
+self/native/hexa_cc.c (the bootstrap transpiler seed) is GITIGNORED — it is NOT
+committed. It is produced one of two ways:
+  (1) restored from the IMMUTABLE git ref 151c52c8…  (tool/restore_frozen_seeds,
+      FROZEN_SEED_REF) — the cold-start fallback; OR
+  (2) the rolling `edge` release tarball bundles a prebuilt build/hexat
+      (release.yml force-moves edge on every main push).
+
+stage_prebuild_hexat builds build/hexat from hexa_cc.c; stage_regen_hexa_cc
+regenerates hexa_cc.c from CURRENT self/codegen.hexa using the PRIOR generation
+of hexat (frozen blob, or prior edge build/hexat) as the transpiler.
+
+ROOT CAUSE OF THE ONE-GENERATION LAG (why source fixes never reach the seed):
+A fix to codegen's OWN lowering logic (the per-name 4-arg forge_dispatch_*
+special-cases — db_colsum / residual_add / expert_pack2 / expert_unpack2 /
+grad_sum2 / int4_quant_bwd / gelu_bwd …) takes TWO regen passes to bake in:
+  pass A — the OLD hexat copies the fix through as STRING data (the literal
+           "hexa_forge_dispatch_db_colsum" appears in the regen output) but the
+           OLD hexat still cannot APPLY the lowering → it emits the broken
+           hexa_call4(forge_dispatch_db_colsum, …) when it compiles clm_prod.
+  pass B — build a hexat FROM pass-A's seed (now it CONTAINS the new lowering);
+           re-regen → THIS seed is the FIXED one.
+A single edge roll only does pass A, so the seed sits one generation behind
+source PERMANENTLY. (Confirmed: the LIVE edge tarball's build/hexat, built from
+HEAD ee02099c1, still emits 14× hexa_call4 for clm_prod.)
+
+═══ BEFORE (origin/main · frozen seed OR live edge hexat) ═════════════════════
+  ./hexa build stdlib/flame/clm_prod.hexa  →  rc=1
+  hexa_call4 errors: 14  (incompatible type — function-as-HexaVal)
+  e.g.  HexaVal rc = hexa_call4(forge_dispatch_db_colsum, dy, db_out, T, Cout);
+        HexaVal rc = hexa_call4(forge_dispatch_residual_add, a, b, out, n);
+        HexaVal rc = hexa_call4(forge_dispatch_expert_pack2, ex0, ex1, ex_out, n);
+  → clm_prod CANNOT compile OFF-CUDA. (b65ebe51 / OP-37 residual; the N5 wall.)
+
+═══ FIX (tool/stage_prebuild_hexat — seed-convergence loop) ═══════════════════
+After building hexat, regen the seed with it; if it differs (pass-A source-carry)
+install it, rebuild hexat, loop — stop at the FIXPOINT (regen == current seed).
+Idempotent (warm/converged tree → 0 iterations, byte-identical). Opt-out via
+HEXA_SKIP_SEED_CONVERGE=1.
+
+  cold frozen seed (1854825B)
+    → pass 1: seed=2034131B (source-carry)
+    → pass 2: seed=2106692B (logic-apply = FIXED)
+    → FIXPOINT after 2 passes (seed byte-stable 2106692B)
+
+═══ AFTER (converged seed) ════════════════════════════════════════════════════
+  ./hexa --version → hexa 0.1.0-dispatch  (smoke OK)
+  ./hexa build stdlib/flame/clm_prod.hexa  →  rc=1
+  hexa_call4 errors: 0          ← THE WALL IS CLOSED
+  incompatible-type compile errors: 0
+  undefined link refs: 14  — EXACTLY the OP-37-documented HONEST-deferred
+    OFF-CUDA host bodies (adamw / adamw_keepmv / adamw_fused / ce_grad /
+    clm_megafwd / embedding_bwd_scatter / gelu / gelu_bwd / groupnorm_bwd /
+    groupnorm_gelu_residual / int4_quant / int4_quant_bwd / moe_router_bwd).
+    These are a SEPARATE runtime-host-body work item (no host body in
+    self/runtime.c), NOT the seed problem this PR targets.
+
+  os_getuid: the regenerated seed carries the RFC-093 hexa_os_getuid() special-
+  case (current codegen.hexa:7147) — the "undeclared os_getuid" fresh-regen
+  failure is gone by construction.
+
+═══ BYTE-EQ / DETERMINISM (g5, verbatim) ══════════════════════════════════════
+  gen2 vs gen3:   2106692 == 2106692  "BYTE-IDENTICAL: gen2==gen3 FIXPOINT REACHED"
+  seed_B vs seed_C: "FIXPOINT: seed_B==seed_C (double-bootstrap converges)"
+  re-emit:        codegen.hexa transpiled twice → "RE-EMIT BYTE-IDENTICAL … DETERMINISTIC"
+  gen1 != gen2:   EXPECTED one-time OLD→NEW transpiler boundary (analog of the
+                  documented cc-prc2(C) ≠ cc-gen3(native) graduation boundary).
+
+  NOT runnable on summer (no graduated native gen3 slot): the native-emit gates
+  selfhost_byteeq_gate.sh / determinism_gate.sh exercise the native --emit=obj +
+  hexa_ld path (cc-gen3.o == cc-gen4.o), which needs $HX_HOME/self/native/selfhost
+  — present only on the ghost-selfhost CI runner. They exit-2 (neutral) elsewhere.
+  The C-transpile fixpoint proven above (gen2==gen3 + re-emit determinism) is the
+  C-bootstrap analog and predicts those gates pass.
+
+═══ OUTCOME ═══════════════════════════════════════════════════════════════════
+(A)-grade on the targeted wall: the hexa_call4 4-arg COMPILE wall is CLOSED and
+the seed byte-eq fixpoint HOLDS — via a committable, in-mechanism tool/ change
+(no frozen-REF bump; seed stays gitignored). Residual = the OP-37-deferred
+OFF-CUDA runtime host bodies (orthogonal). NOT merged — CI byte-eq gates decide.
