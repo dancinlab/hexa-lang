@@ -1,0 +1,82 @@
+// @ci_gate — deterministic · network-free · spin-PBE exchange g5 gate (PR7a)
+//
+// pbe_spin_selftest.hexa — verifies the spin-GGA (PBE) exchange functional + its analytic
+// partials reduce to LSDA at |∇ρ|=0 and that ∂e/∂n, ∂e/∂g match finite differences.
+//
+//  🔵 (A) F_x(0)=1 · F_x→1+κ as s→∞ · F_x'(0)=0 · F_x monotone↑.
+//  🔵 (B) REDUCTION e_x(n,g=0) = LDA exchange density (n·ε_x^unif) (abs<1e-12).
+//  🔵 (C) REDUCTION ∂e_x/∂n(n,0) = V_x^LDA(n) (the LDA exchange potential) (abs<1e-12).
+//  🟢 (D) ∂e_x/∂n analytic = central-diff of e_x in n (g>0) (abs<1e-6).
+//  🟢 (E) ∂e_x/∂g analytic = central-diff of e_x in g (abs<1e-6).
+//  🔵 (F) SPIN reduction: e_x^spin(ρ/2,ρ/2,0,0)=LDA · v_x^spin,local(ρ/2,ρ/2,0,0,±)=V_x^LDA(ρ).
+//  🟢 (G) F_x>1 for s>0 (gradient enhances |exchange|: more negative energy).
+//
+// Run:  hexa run --no-sentinel stdlib/qforge/pbe_spin_selftest.hexa
+// PASS: "qforge_pbe_spin_selftest PASS".
+use "stdlib/qforge/pbe_spin"
+use "stdlib/qforge/screening"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ckt(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let kappa = 0.804
+
+    // ── (A) F_x shape ────────────────────────────────────────────────────────
+    fails = fails + _ck("(A) F_x(0)=1", qforge_pbe_fx(0.0), 1.0, 1.0e-12)
+    fails = fails + _ck("(A) F_x'(0)=0", qforge_pbe_dfx_ds(0.0), 0.0, 1.0e-12)
+    fails = fails + _ckt("(A) F_x(100) → 1+κ (sat)", _abs(qforge_pbe_fx(100.0) - (1.0 + kappa)) < 1.0e-3)
+    fails = fails + _ckt("(A) F_x monotone↑ (F_x(2)>F_x(1))", qforge_pbe_fx(2.0) > qforge_pbe_fx(1.0))
+
+    // ── (B) e_x(n,0) = LDA exchange density = 0.75·n·V_x(n) ───────────────────
+    let ns = [0.02, 0.05, 0.1, 0.3]
+    let mut i = 0
+    while i < len(ns) {
+        let n = ns[i]
+        fails = fails + _ck("(B) e_x(n,0)=LDA dens n=" + to_string(n),
+                            qforge_ex_pbe_endens(n, 0.0), 0.75 * n * qforge_vx_lda(n), 1.0e-6)
+        i = i + 1
+    }
+
+    // ── (C) ∂e_x/∂n(n,0) = V_x^LDA(n) ─────────────────────────────────────────
+    i = 0
+    while i < len(ns) {
+        let n = ns[i]
+        fails = fails + _ck("(C) de_dn(n,0)=V_x^LDA n=" + to_string(n),
+                            qforge_ex_pbe_de_dn(n, 0.0), qforge_vx_lda(n), 1.0e-6)
+        i = i + 1
+    }
+
+    // ── (D) ∂e_x/∂n analytic = central-diff (g>0) ────────────────────────────
+    let n0 = 0.1 ; let g0 = 0.05 ; let h = 1.0e-6
+    let dn_fd = (qforge_ex_pbe_endens(n0 + h, g0) - qforge_ex_pbe_endens(n0 - h, g0)) / (2.0 * h)
+    fails = fails + _ck("(D) de_dn = FD", qforge_ex_pbe_de_dn(n0, g0), dn_fd, 1.0e-6)
+
+    // ── (E) ∂e_x/∂g analytic = central-diff ──────────────────────────────────
+    let dg_fd = (qforge_ex_pbe_endens(n0, g0 + h) - qforge_ex_pbe_endens(n0, g0 - h)) / (2.0 * h)
+    fails = fails + _ck("(E) de_dg = FD", qforge_ex_pbe_de_dg(n0, g0), dg_fd, 1.0e-6)
+
+    // ── (F) SPIN reduction at ζ=0, ∇=0 ───────────────────────────────────────
+    let rho = 0.1
+    fails = fails + _ck("(F) e_x^spin(ζ=0,∇=0)=LDA", qforge_ex_pbe_endens_spin(rho / 2.0, rho / 2.0, 0.0, 0.0),
+                        qforge_ex_endens_spin(rho / 2.0, rho / 2.0), 1.0e-6)
+    fails = fails + _ck("(F) v_x^↑,local(ζ=0,∇=0)=V_x^LDA", qforge_vx_pbe_local_spin(rho / 2.0, rho / 2.0, 0.0, 0.0, 1.0),
+                        qforge_vx_lda(rho), 1.0e-6)
+    fails = fails + _ck("(F) v_x^↓,local(ζ=0,∇=0)=V_x^LDA", qforge_vx_pbe_local_spin(rho / 2.0, rho / 2.0, 0.0, 0.0, -1.0),
+                        qforge_vx_lda(rho), 1.0e-6)
+
+    // ── (G) gradient enhances exchange (F_x>1, |e_x| larger) ─────────────────
+    fails = fails + _ckt("(G) |e_x(n,g>0)| > |e_x(n,0)| (GGA enhancement)",
+                         _abs(qforge_ex_pbe_endens(0.1, 0.08)) > _abs(qforge_ex_pbe_endens(0.1, 0.0)))
+
+    if fails == 0 { println("qforge_pbe_spin_selftest PASS") }
+    else { println("qforge_pbe_spin_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
