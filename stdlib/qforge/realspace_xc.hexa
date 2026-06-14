@@ -233,15 +233,15 @@ pub fn qforge_vhartree_real_farr(rho_r: [float], nx: int, ny: int, nz: int,
 // the memory-bounded GGA SCF (no [float] ntot return → no val-arena orphan).
 // ════════════════════════════════════════════════════════════════════════════
 
-// |∇ρ| from a farr ρ into out-farr (gmag). scratch reh/imh/gr/gi allocated+freed.
+// |∇ρ| from a farr ρ into out-farr (gmag). scratch reh/imh/gr/gi CALLER-OWNED (reused
+// across the SCF loop → zero per-call alloc/free → no allocator fragmentation/OOM).
 pub fn qforge_grad_rho_mag_farr(rho_h: int, nx: int, ny: int, nz: int,
-                                b1: [float], b2: [float], b3: [float], out_h: int) {
+                                b1: [float], b2: [float], b3: [float], out_h: int,
+                                reh: int, imh: int, gr: int, gi: int) {
     let ntot = nx * ny * nz
-    let reh = farr_zeros(ntot) ; let imh = farr_zeros(ntot)
     let mut i = 0
     while i < ntot { let _ = farr_set(reh, i, farr_get(rho_h, i)) ; let _ = farr_set(imh, i, 0.0) ; let _ = farr_set(out_h, i, 0.0) ; i = i + 1 }
     fft3_farr_inplace(reh, imh, nx, ny, nz, 0)
-    let gr = farr_zeros(ntot) ; let gi = farr_zeros(ntot)
     let mut axis = 0
     while axis < 3 {
         let mut ix = 0
@@ -270,15 +270,14 @@ pub fn qforge_grad_rho_mag_farr(rho_h: int, nx: int, ny: int, nz: int,
     }
     let mut q = 0
     while q < ntot { let _ = farr_set(out_h, q, sqrt(farr_get(out_h, q))) ; q = q + 1 }
-    let _ = farr_free(reh) ; let _ = farr_free(imh) ; let _ = farr_free(gr) ; let _ = farr_free(gi)
 }
 
-// V_H(r) from a farr ρ into out-farr (4π/|G|², G=0→0).
+// V_H(r) from a farr ρ into out-farr (4π/|G|², G=0→0). scratch reh/imh caller-owned.
 pub fn qforge_vhartree_farr(rho_h: int, nx: int, ny: int, nz: int,
-                            b1: [float], b2: [float], b3: [float], out_h: int) {
+                            b1: [float], b2: [float], b3: [float], out_h: int,
+                            reh: int, imh: int) {
     let ntot = nx * ny * nz
     let four_pi = 4.0 * _RXC_PI
-    let reh = farr_zeros(ntot) ; let imh = farr_zeros(ntot)
     let mut i = 0
     while i < ntot { let _ = farr_set(reh, i, farr_get(rho_h, i)) ; let _ = farr_set(imh, i, 0.0) ; i = i + 1 }
     fft3_farr_inplace(reh, imh, nx, ny, nz, 0)
@@ -305,20 +304,18 @@ pub fn qforge_vhartree_farr(rho_h: int, nx: int, ny: int, nz: int,
     fft3_farr_inplace(reh, imh, nx, ny, nz, 1)
     let mut q = 0
     while q < ntot { let _ = farr_set(out_h, q, farr_get(reh, q)) ; q = q + 1 }
-    let _ = farr_free(reh) ; let _ = farr_free(imh)
 }
 
-// V_xc(ΔG) local matrix from a farr V_scr(r) → [float] n·n (matrix is small).
+// V_xc(ΔG) local matrix from a farr V_scr(r) → into a CALLER farr out_mat (n·n).
+// scratch reh/imh + out_mat caller-owned (reused across SCF loop → no [float] n² orphan).
 pub fn qforge_vxc_local_matrix_farr(vscr_h: int, gvecs: [float], millers: [int],
-                                    nx: int, ny: int, nz: int) -> [float] {
+                                    nx: int, ny: int, nz: int, reh: int, imh: int, out_mat: int) {
     let ntot = nx * ny * nz
     let n = len(gvecs) / 3
-    let reh = farr_zeros(ntot) ; let imh = farr_zeros(ntot)
     let mut i = 0
     while i < ntot { let _ = farr_set(reh, i, farr_get(vscr_h, i)) ; let _ = farr_set(imh, i, 0.0) ; i = i + 1 }
     fft3_farr_inplace(reh, imh, nx, ny, nz, 0)
     let invn = 1.0 / to_float(ntot)
-    let mut hxc: [float] = []
     let mut a = 0
     while a < n {
         let ha = millers[a * 3] ; let ka = millers[a * 3 + 1] ; let la = millers[a * 3 + 2]
@@ -329,11 +326,9 @@ pub fn qforge_vxc_local_matrix_farr(vscr_h: int, gvecs: [float], millers: [int],
             let mut wk = dk ; while wk < 0 { wk = wk + ny } ; while wk >= ny { wk = wk - ny }
             let mut wl = dl ; while wl < 0 { wl = wl + nz } ; while wl >= nz { wl = wl - nz }
             let lin = (wh * ny + wk) * nz + wl
-            hxc.push(farr_get(reh, lin) * invn)
+            let _ = farr_set(out_mat, a * n + b, farr_get(reh, lin) * invn)
             b = b + 1
         }
         a = a + 1
     }
-    let _ = farr_free(reh) ; let _ = farr_free(imh)
-    return hxc
 }
