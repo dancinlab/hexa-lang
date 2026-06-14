@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # STDLIB — current state
 
 @goal: 외부 라이브러리·API·알고리즘을 hexa-native stdlib으로 포팅 — HERPES · TTR · 기타 도메인이 의존하는 외부 도구 모두 `stdlib/` 안 self-contained 모듈로 흡수, Python/외부 CLI shell-out 제거. 각 모듈 `_test.hexa` measured-oracle PASS 까지 absorbed=false (per d5).

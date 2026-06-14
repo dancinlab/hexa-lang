@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # HEXA-LANG Development Plan
 
 ## 🎯 GOAL: 의식을 프로그래밍하는 유일한 언어

@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # MAIN
 
 @title: 🎯 MAIN — current active thrust (flame + forge improvement on FREE resources)

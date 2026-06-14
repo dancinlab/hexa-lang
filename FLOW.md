@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # FLOW — 미니멀 작업흐름
 
 배경: nexus/DRILL.md, hexa-bio/AXIS.md 두 세션이 같은 결함으로 무너짐

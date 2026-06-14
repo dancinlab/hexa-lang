@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # 🧱 RUNTIME.floor — 물리 바닥 레인 (hexa-native frontier)
 
 > Sibling to `RUNTIME.flip.md` (quick-win lane). This file owns the

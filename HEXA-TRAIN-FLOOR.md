@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 @title: 🐢 HEXA-TRAIN-FLOOR — "거북이 학습기 바닥"
 @goal: hexa-native 학습기를 production scale에서 feasible하게 — step-rate floor를 물리 한계(roofline)까지 끌어올려 closure. 추론은 AKIDA-int4 순수 유지(g1), 학습 경로만 대상.
 

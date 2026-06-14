@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # 🍞 부트스트랩 — hexa-native self-host
 
 hexa-lang 은 `.hexa` 소스만으로 빌드되는 native self-hosted 컴파일러다.

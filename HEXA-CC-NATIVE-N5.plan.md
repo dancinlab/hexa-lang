@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 <!-- @plan: HEXA-CC-NATIVE N5→N6→N7 — drive the compiler to a C-free self-host fixpoint -->
 <!-- @created: 2026-06-10 -->
 <!-- @domain: HEXA-CC-NATIVE (active) -->

@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # KEYWORD_DEMOTE — hexa-lang 키워드/식별자 충돌 감사 + demote 후보
 
 > 루트 UPPERCASE.md 작업 로그. hexa-lang 렉서가 hard keyword 로 등록한 단어 중

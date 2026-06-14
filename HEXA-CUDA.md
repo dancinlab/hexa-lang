@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 @title: 🟩 HEXA-CUDA — "just write CUDA in hexa" cookbook
 
 @goal: A user-facing cookbook for writing hand-authored GPU kernels directly

@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # 🎯 GPU.attention — FlashAttention v3 hexa-native (BC4)
 
 > **서브문서.** GPU.md 의 attention-axis 작업을 분리 추적. 본 파일 = snapshot, log 는 `GPU.log.md` 시간순 흡수.

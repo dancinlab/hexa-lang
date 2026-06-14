@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 # PROBE log — hexa canonical-deviation audit
 
 체크박스 append-only 로그. snapshot = `PROBE.md`.

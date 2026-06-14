@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 <!-- @created: 2026-05-13 -->
 <!-- @updated: 2026-05-13 (breakthrough-axis exhaustive brainstorm) -->
 <!-- @scope: roadmap — eliminate per-RFC C kernels, reach perf parity in pure hexa AOT -->

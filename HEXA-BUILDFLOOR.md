@@ -1,3 +1,5 @@
+> 📍 SSOT: [ARCHITECTURE.md](ARCHITECTURE.md) · governance [CLAUDE.md](CLAUDE.md)
+
 @title: 🏗️ HEXA-BUILDFLOOR — "건물 기초공사"
 @goal: hexa-lang의 멀티모듈 빌드 레시피를 Go/Rust식 canonical 단일 드라이버로 통일 — 손으로 짠 .sh 레시피의 죽은 경로(hexat·self/runtime.c) 드리프트를 제거하고, 모든 멀티모듈 hexa 프로그램(falsifier=cloud_cli)이 결정적으로 링크되게 한다.
 
