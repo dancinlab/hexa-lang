@@ -360,7 +360,9 @@ pub fn qforge_scf_smeared_dc(H_of_rho, rho_of_psi, n: int, nbands: int, nelec: i
 //   and_depth=0): two identical channels each weight-1 ≡ one channel weight-2
 //   (shared E_F over [E,E] == restricted E_F with sd=2; band sum & entropy add).
 // Smeared (sigma>0) only — magnetic metals always smear; verified path.
-// and_depth reserved (Anderson-per-spin deferred); mixing is plain linear here.
+// Mixing: per-channel Anderson when and_depth>0 (qforge_anderson_next on each spin's
+// own history — cuts TM-metal iter-count ~3-5×), else plain linear. and_depth=0 keeps
+// the linear regression pin (CaH6 nspin2≡nspin1).
 pub struct ScfResultSpin {
     rho_up: [float],
     rho_dn: [float],
@@ -397,6 +399,13 @@ pub fn qforge_scf_spin_smeared_dc(H_of_rho_spin, rho_of_psi, n: int, nbands: int
     let mut iters = 0
     let mut converged = false
     let mut first = true
+
+    // per-channel Anderson history (flat h×n buffers) — and_depth>0 enables it,
+    // ≤0 → plain linear. Anderson cuts metal SCF iter-count ~3-5× (the restricted
+    // CaH6 needed it; linear alone limit-cycles / converges slowly on TM cells).
+    let mut hin_u: [float] = [] ; let mut hout_u: [float] = []
+    let mut hin_d: [float] = [] ; let mut hout_d: [float] = []
+    let mut hh = 0
 
     while iters < max_iter {
         iters = iters + 1
@@ -447,14 +456,44 @@ pub fn qforge_scf_spin_smeared_dc(H_of_rho_spin, rho_of_psi, n: int, nbands: int
         let dr_e = if first { tol + 1.0 } else { scf_abs(e_total - e_prev) }
         let resid = if dr_rho > dr_e { dr_rho } else { dr_e }
 
-        // plain linear mixing, per channel.
+        // mixing, per channel: Anderson (and_depth>0) or plain linear (≤0).
+        let mut t2 = 0
+        while t2 < n {
+            hin_u.push(rho_up[t2]) ; hout_u.push(rho_out_u[t2])
+            hin_d.push(rho_dn[t2]) ; hout_d.push(rho_out_d[t2])
+            t2 = t2 + 1
+        }
+        hh = hh + 1
         let mut rho_new_u: [float] = []
         let mut rho_new_d: [float] = []
-        let mut k = 0
-        while k < n {
-            rho_new_u.push((1.0 - a) * rho_up[k] + a * rho_out_u[k])
-            rho_new_d.push((1.0 - a) * rho_dn[k] + a * rho_out_d[k])
-            k = k + 1
+        if and_depth > 0 {
+            rho_new_u = qforge_anderson_next(hin_u, hout_u, hh, n, and_depth, a)
+            rho_new_d = qforge_anderson_next(hin_d, hout_d, hh, n, and_depth, a)
+        } else {
+            let mut k = 0
+            while k < n {
+                rho_new_u.push((1.0 - a) * rho_up[k] + a * rho_out_u[k])
+                rho_new_d.push((1.0 - a) * rho_dn[k] + a * rho_out_d[k])
+                k = k + 1
+            }
+        }
+        // trim both histories to and_depth+2 pairs (bound cost + keep Gram conditioned).
+        let cap = and_depth + 2
+        if and_depth > 0 && hh > cap {
+            let ndrop = hh - cap
+            let mut ti_u: [float] = [] ; let mut to_u: [float] = []
+            let mut ti_d: [float] = [] ; let mut to_d: [float] = []
+            let mut keep = ndrop
+            while keep < hh {
+                let mut tt = 0
+                while tt < n {
+                    ti_u.push(hin_u[keep * n + tt]) ; to_u.push(hout_u[keep * n + tt])
+                    ti_d.push(hin_d[keep * n + tt]) ; to_d.push(hout_d[keep * n + tt])
+                    tt = tt + 1
+                }
+                keep = keep + 1
+            }
+            hin_u = ti_u ; hout_u = to_u ; hin_d = ti_d ; hout_d = to_d ; hh = cap
         }
         rho_up = rho_new_u
         rho_dn = rho_new_d

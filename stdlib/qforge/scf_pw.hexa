@@ -466,6 +466,76 @@ pub fn qforge_scf_pw_h_multi_smeared(kvec: [float], gvecs: [float], nspec: int,
                               nelec, mix, tol, max_iter, sigma, spin_deg, and_depth)
 }
 
+// ── BARE-H CACHE for the LSDA closure (QFORGE-PERF, handoff bb095261 d2) ──────
+//   H(ρ↑,ρ↓) = H_bare + diag(V_scr^σ).  H_bare (kinetic + V_loc form factors +
+//   V_NL KB) is ρ-INDEPENDENT and spin-INDEPENDENT (assembler.hexa adds vscr ONLY
+//   on the diagonal, L261) — so re-integrating the V_loc(G) form factors over the
+//   pseudo r-grid every SCF iteration is pure waste. Assemble H_bare ONCE, then per
+//   iteration apply H·v = H_bare·v + V_scr^σ⊙v (O(n) diagonal add). This is the
+//   speed lever that makes a Co-3d cell (CoSn, npw≳120) local-tractable — the
+//   per-iter form-factor integral (n²·r_grid·nspec·2) dominated otherwise.
+let mut PW_BARE: PwHam = PwHam { h: [], diag: [], n: 0 }
+let mut PW_BARE_READY: bool = false
+let mut PW_VSCR_UP: [float] = []
+let mut PW_VSCR_DN: [float] = []
+pub fn qforge_pw_bare_apply_up(v: [float]) {
+    let hv = qforge_h_apply(PW_BARE, v)
+    let n = len(hv)
+    let mut out: [float] = []
+    let mut i = 0
+    while i < n {
+        let mut x = hv[i]
+        if i < len(PW_VSCR_UP) { x = x + PW_VSCR_UP[i] * v[i] }
+        out.push(x)
+        i = i + 1
+    }
+    return out
+}
+pub fn qforge_pw_bare_apply_dn(v: [float]) {
+    let hv = qforge_h_apply(PW_BARE, v)
+    let n = len(hv)
+    let mut out: [float] = []
+    let mut i = 0
+    while i < n {
+        let mut x = hv[i]
+        if i < len(PW_VSCR_DN) { x = x + PW_VSCR_DN[i] * v[i] }
+        out.push(x)
+        i = i + 1
+    }
+    return out
+}
+
+// ── bare-cached SPIN closure (drop-in for qforge_h_of_rho_multi_spin) ──────────
+pub fn qforge_h_of_rho_multi_spin_fast(rho_up: [float], rho_dn: [float], sign: float) {
+    if !PW_BARE_READY {
+        let mut no_scr: [float] = []
+        PW_BARE = qforge_assemble_h_multi(PWM_KVEC, PWM_GVECS, PWM_NSPEC,
+                                          PWM_RS, PWM_RABS, PWM_VLOCS, PWM_MLENS, PWM_ZS,
+                                          PWM_POSS, PWM_PALENS,
+                                          PWM_BETAS, PWM_LS, PWM_DIJ,
+                                          PWM_NPROJS, PWM_BLENS, PWM_DLENS,
+                                          PWM_OMEGA, no_scr)         // H_bare — ρ-independent, computed ONCE
+        PW_BARE_READY = true
+    }
+    let n = len(rho_up)
+    let mut rho_tot: [float] = []
+    let mut i = 0
+    while i < n { rho_tot.push(rho_up[i] + rho_dn[i]) ; i = i + 1 }
+    let mut vh = PW_VH
+    if PW_HGRID_ON {
+        if n == PW_NX * PW_NY * PW_NZ {
+            vh = qforge_vhartree_from_rho(rho_tot, PW_NX, PW_NY, PW_NZ, PW_B1, PW_B2, PW_B3)
+        }
+    }
+    let vscr = qforge_vscr_diag_spin(rho_up, rho_dn, vh, PW_XCMODE, sign)
+    if sign > 0.0 {
+        PW_VSCR_UP = vscr
+        return qforge_pw_bare_apply_up
+    }
+    PW_VSCR_DN = vscr
+    return qforge_pw_bare_apply_dn
+}
+
 // ── MULTI-SPECIES SPIN-POLARIZED (LSDA, nspin=2) SCF (handoff bb095261) ───────
 //   Same cell staging + in-loop V_H[ρ_tot] as qforge_scf_pw_h_multi_smeared, but
 //   drives the two-channel LSDA driver (qforge_scf_spin_smeared_dc) via the spin
@@ -498,6 +568,41 @@ pub fn qforge_scf_pw_h_multi_smeared_spin(kvec: [float], gvecs: [float], nspec: 
     qforge_scf_pw_set_hgrid(nx, ny, nz, b1, b2, b3)        // in-loop V_H[ρ_tot]
     let n = len(gvecs) / 3
     return qforge_scf_spin_smeared_dc(qforge_h_of_rho_multi_spin, qforge_rho_of_psi,
+                                      n, nbands, nelec, mix, tol, max_iter,
+                                      sigma, and_depth, 0.0, init_mag)
+}
+
+// ── BARE-CACHED LSDA SCF (QFORGE-PERF — H_bare computed once, handoff d2) ──────
+//   Identical physics + result to qforge_scf_pw_h_multi_smeared_spin, but uses the
+//   bare-H-cache closure: the V_loc form factors + V_NL are assembled ONCE and
+//   reused every SCF iteration (only V_scr^σ on the diagonal updates). Use this for
+//   transition-metal cells (CoSn) where the per-iter form-factor integral dominated.
+//   Resets PW_BARE_READY so each call re-derives H_bare for the staged cell.
+pub fn qforge_scf_pw_h_multi_smeared_spin_fast(kvec: [float], gvecs: [float], nspec: int,
+                                               rs: [float], rabs: [float], vlocs: [float],
+                                               mlens: [int], zs: [float],
+                                               poss: [float], palens: [int],
+                                               betas: [float], ls: [int], dij: [float],
+                                               nprojs: [int], blens: [int], dlens: [int],
+                                               omega: float, xc_mode: int,
+                                               nx: int, ny: int, nz: int,
+                                               b1: [float], b2: [float], b3: [float],
+                                               nbands: int, nelec: int, mix: float, tol: float,
+                                               max_iter: int, sigma: float, and_depth: int,
+                                               init_mag: float) -> ScfResultSpin {
+    PWM_KVEC = kvec ; PWM_GVECS = gvecs ; PWM_NSPEC = nspec
+    PWM_RS = rs ; PWM_RABS = rabs ; PWM_VLOCS = vlocs ; PWM_MLENS = mlens ; PWM_ZS = zs
+    PWM_POSS = poss ; PWM_PALENS = palens
+    PWM_BETAS = betas ; PWM_LS = ls ; PWM_DIJ = dij
+    PWM_NPROJS = nprojs ; PWM_BLENS = blens ; PWM_DLENS = dlens
+    PWM_OMEGA = omega
+    let mut empty_f: [float] = []
+    PW_VH = empty_f ; PW_XCMODE = xc_mode
+    PW_FDG_ON = false
+    PW_BARE_READY = false                                  // re-derive H_bare for this cell
+    qforge_scf_pw_set_hgrid(nx, ny, nz, b1, b2, b3)
+    let n = len(gvecs) / 3
+    return qforge_scf_spin_smeared_dc(qforge_h_of_rho_multi_spin_fast, qforge_rho_of_psi,
                                       n, nbands, nelec, mix, tol, max_iter,
                                       sigma, and_depth, 0.0, init_mag)
 }
