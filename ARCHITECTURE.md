@@ -48,8 +48,13 @@ Honest accounting of where self-hosting actually stands (no overclaim — `git l
   `lea` was then dropped in the native-emit data-address matcher (it only saw bare `.LCstrN`
   labels, not the `[rip+<label>]`-wrapped payload) — fixed by `_ex86_data_label_of`
   (`compiler/emit/elf_x86_64.hexa`). verdict `F-X86-RUNG2-STRING-PRINT-PASS`.
-- **Full native `hexa build` end-to-end** — gen3 owning the link + runtime orchestration, so
-  the C-transpile delegate-fallback can be retired.
+- 🟡 **Full native `hexa build` end-to-end** — the **capability is proven** (2026-06-15):
+  `gen3 --emit=obj` → `hexa_ld` (native Mach-O link against `rt.o`, `--static`) → runnable
+  binary with **zero clang / zero system ld** (`print("hi")`→`hi` rc 7 on arm64-darwin,
+  verdict `F-FULL-NATIVE-BUILD-E2E-ARM64`). REMAINING = flip the `hexa build` **driver**
+  default to this path (it still uses `--emit=asm`→clang for safety; the promote shim
+  delegates the `build` subcommand) — a driver change gated on **full-corpus** byte-eq, kept
+  opt-in until corpus-verified.
 - **Runtime C floor (still shrinking)** — `self/runtime*.c` (~5.5k LOC measured; tier-A core
   ≈1.5k libc/libm/syscall/`HexaVal` arena) is generated from `*_emit.hexa` SSOTs, not authored
   by hand. The RUNTIME-PORT campaign is **still driving it down** (M3 = 151 BORDERLINE numeric
