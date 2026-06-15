@@ -142,7 +142,7 @@ fn emit_tensor_kernels_c() -> str {
             "HexaVal hexa_bytes_to_f32_le(HexaVal arr, HexaVal offset) {\n" +
             "    int64_t off = HX_IS_INT(offset) ? HX_INT(offset) : 0;\n" +
             "    if (!HX_IS_ARRAY(arr)) return hexa_float(0.0);\n" +
-            "    int len = HX_ARR_LEN(arr);\n" +
+            "    int64_t len = HX_ARR_LEN(arr);  // 64-bit: offset into a >=2 GB byte buffer\n" +
             "    if (off < 0 || off + 4 > len) return hexa_float(0.0);\n" +
             "    HexaVal* items = HX_ARR_ITEMS(arr);\n" +
             "    uint8_t buf[4];\n" +
@@ -185,7 +185,7 @@ fn emit_tensor_kernels_c() -> str {
             "HexaVal hexa_bytes_to_f64_le(HexaVal arr, HexaVal offset) {\n" +
             "    int64_t off = HX_IS_INT(offset) ? HX_INT(offset) : 0;\n" +
             "    if (!HX_IS_ARRAY(arr)) return hexa_float(0.0);\n" +
-            "    int len = HX_ARR_LEN(arr);\n" +
+            "    int64_t len = HX_ARR_LEN(arr);  // 64-bit: offset into a >=2 GB byte buffer\n" +
             "    if (off < 0 || off + 8 > len) return hexa_float(0.0);\n" +
             "    HexaVal* items = HX_ARR_ITEMS(arr);\n" +
             "    uint8_t buf[8];\n" +
@@ -209,7 +209,7 @@ fn emit_tensor_kernels_c() -> str {
             "HexaVal hexa_bytes_to_f32_le_v(HexaVal arr, HexaVal offset) {\n" +
             "    int64_t off = HX_IS_INT(offset) ? HX_INT(offset) : 0;\n" +
             "    if (!HX_IS_ARRAY(arr)) return hexa_float(0.0);\n" +
-            "    int len = HX_ARR_LEN(arr);\n" +
+            "    int64_t len = HX_ARR_LEN(arr);  // 64-bit: offset into a >=2 GB byte buffer\n" +
             "    if (off < 0 || off + 4 > len) return hexa_float(0.0);\n" +
             "    HexaVal* items = HX_ARR_ITEMS(arr);\n" +
             "    uint8_t buf[4];\n" +
@@ -233,7 +233,7 @@ fn emit_tensor_kernels_c() -> str {
             "HexaVal hexa_bytes_to_f64_le_v(HexaVal arr, HexaVal offset) {\n" +
             "    int64_t off = HX_IS_INT(offset) ? HX_INT(offset) : 0;\n" +
             "    if (!HX_IS_ARRAY(arr)) return hexa_float(0.0);\n" +
-            "    int len = HX_ARR_LEN(arr);\n" +
+            "    int64_t len = HX_ARR_LEN(arr);  // 64-bit: offset into a >=2 GB byte buffer\n" +
             "    if (off < 0 || off + 8 > len) return hexa_float(0.0);\n" +
             "    HexaVal* items = HX_ARR_ITEMS(arr);\n" +
             "    uint8_t buf[8];\n" +
