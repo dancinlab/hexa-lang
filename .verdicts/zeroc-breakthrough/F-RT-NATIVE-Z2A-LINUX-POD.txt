@@ -1,0 +1,27 @@
+F-RT-NATIVE-Z2A-LINUX-POD — Z2a x86_64-linux pod 검증: x86_64 native-codegen 버그로 BLOCKED
+date: 2026-06-16   host: aiden (pool, linux x86_64 Ubuntu 24.04, free — rent 0)   domain: RT-NATIVE Z2a
+
+목표: arm64-darwin 에서 byte-identical 검증된 Z2a(native rt_hi → runtime_hi_gen.c 제거)를
+x86_64-linux 에서 재현해 cross-platform 파일제거를 정당화.
+
+POD 실행 (aiden, 캡처):
+  [1] aprime_cc_lin (x86_64-linux) 빌드 OK.
+  [2] lib-only runtime_hi → x86_64-linux .s (native) OK.
+  [3] assemble → rt_hi.o: rt_str_split/lines/pad_left/pad_right/repeat/center (T) 제공, _main 없음,
+      hexa_str_join (U) — 심볼 깨끗, 충돌 0.
+  [4] HEXA_ZEROC_RT_HI=1 빌드 → LINK FAIL #1: `R_X86_64_32S against .rodata can not be used when
+      making a PIE object` — native x86_64 codegen 이 절대주소(non-PIC) reloc 방출, linux 기본 PIE 충돌.
+      FIX: `-no-pie` 링크 → 링크 성공.
+  [5] 그러나 aprime_z2a_lin 실행 시 **SEGFAULT (exit 139, 코어덤프)** — native x86_64 rt_str_* 가
+      런타임 크래시. parity 0/4 (전부 z2a 측 segfault).
+
+진단: arm64-darwin native rt_str_* 는 byte-identical 작동(F-ZEROC-Z2A-INTEGRATION-VERIFIED)하나,
+x86_64 native codegen 은 rt_str_* 에서 **런타임 버그**(rodata 절대주소 + HexaVal 16B SysV reg-pair
+ABI 미성숙 — cf. 메모리 "x86_64 RUNG2 string-print"). `-no-pie` 는 LINK 만 통과시키고 RUNTIME
+크래시는 못 고침 = native x86_64 codegen 수정 필요.
+
+VERDICT: 🔴 Z2a x86_64-linux BLOCKED on x86_64-native-codegen 버그(config 아님). consequence:
+  runtime_hi_gen.c 제거는 arm64-darwin 만으론 불가(linux 빌드 깨짐) → x86_64 codegen 의 rt_str_*
+  rodata/ABI 수정이 선행. 이 수정은 Z2c-class(native codegen 작업)이고, pod 가 그 점을 실증.
+  → RT-NATIVE 의 x86_64-linux 경로는 Z2c(codegen 성숙)에 의존함이 pod 증거로 확정.
+  arm64-darwin Z2a 는 검증완료, arm64-linux 는 미검증(arm64-linux 호스트 필요).
