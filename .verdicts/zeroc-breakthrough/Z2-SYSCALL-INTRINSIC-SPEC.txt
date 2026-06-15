@@ -1,0 +1,35 @@
+Z2-SYSCALL-INTRINSIC-SPEC — native-emit @syscall intrinsic (pickup-ready)
+date: 2026-06-16   goal: "no .c 완전돌파" — the literal `ls self/*.c == ∅` gate
+
+WHY Z2 IS THE LITERAL-ZERO-.c GATE:
+  self/runtime.c #include's runtime_core.c into ONE translation unit. Porting the
+  155 pure leaves to .hexa does NOT delete a single .c file until the WHOLE TU can be
+  replaced — which needs its syscall + malloc(mmap) + libm to be native (.hexa). The
+  syscall surface is the keystone (malloc=mmap-syscall, file I/O=read/write-syscall).
+
+KEYSTONE ALREADY EXISTS (instruction encoders present — Z2 is NOT from scratch):
+  - arm64 SVC encoder:   compiler/emit/macho_arm64.hexa:584  (op "SVC")  + :1496 alias
+  - x86_64 SYSCALL enc:  compiler/emit/elf_x86_64.hexa:1259  (op "SYSCALL")
+  - PROVEN freestanding exit: macho_arm64.hexa:581-583 `mov x8,#93; mov x0,#N; svc #0`
+    corpus test compiler/test/macho_p0_corpus/run_F_P1_SVC_EXIT.hexa (svc exit, zero C)
+  - C-transpile builtin precedent: self/codegen.hexa:6230 (__fd_write_bytes lowering)
+
+THE MISSING PIECE (the actual Z2 work):
+  A MIR-level intrinsic `@syscall(nr, a0..a5)` (or builtin `__raw_syscall`) that the
+  NATIVE codegen lowers to: marshal nr→x8/rax, args→x0..x5 / rdi,rsi,rdx,r10,r8,r9,
+  then emit the existing svc/syscall op, then read x0/rax as the return. Expose it as a
+  .hexa-callable surface so runtime syscall wrappers (write/read/mmap/openat/exit) can
+  be authored in .hexa. Then rebuild gen3 and re-establish the byte-eq fixpoint.
+
+LOCAL VERIFICATION BLOCKED (honest, 2026-06-16):
+  The local toolchain (~/.hx/bin/hexa → build/hexat, Jun-1) is too STALE to compile the
+  current codegen corpus — `hexa run run_F_P1_SVC_EXIT.hexa` fails with
+  `undeclared hexa_codegen_error__missing_field__ParsedObj__data` (stale hexat doesn't
+  know the current ParsedObj.data field). So Z2 implement+verify needs a FRESH compiler
+  build + byte-eq gate = the documented codegen-emit campaign (pod-backed for the
+  gen3≡gen4 fixpoint, per the self-host fragility notes). NOT a blind one-pass edit.
+
+STATUS: wall broken (M3 falsified, landed #3378/#3379); Z2 located + de-risked (encoders
+  exist); literal zero-.c = scoped codegen campaign, ready to execute with fresh-build
+  infra. Honest 🧱 terminal for a local-only session — the gate is infrastructure, not
+  possibility.
