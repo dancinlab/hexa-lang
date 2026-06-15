@@ -1,10 +1,14 @@
 # hexa-lang
 
 Native compiler for the `.hexa` language with an embedded theorem **atlas** and the `hx`
-package manager. No LLVM, no C-transpile: source is lowered through the compiler's own IR to
-native objects (ELF64 / Mach-O arm64) and linked with `hexa_ld`. Every formula-bearing
-function must cite an atlas law (`@cite(L[id])`), carry an active `@verify`, or declare a
-`@grace` — otherwise the build refuses to emit a binary (stage S8, fatal `HX8004`).
+package manager. No LLVM anywhere: source is lowered through the compiler's own IR to native
+objects (ELF64 / Mach-O arm64) and linked with `hexa_ld` — a byte-identical self-host fixpoint
+(`gen3 ≡ gen4`), default for `--emit`. Two C pieces remain by policy (not port debt): a
+C-transpile fallback delegate for some full `hexa build`/`run` flows, and the irreducible
+~5.5k-LOC C runtime substrate (libc/syscall floor, generated from `.hexa` emitters). See
+[ARCHITECTURE.md](ARCHITECTURE.md) → Self-host status for the honest accounting. Every
+formula-bearing function must cite an atlas law (`@cite(L[id])`), carry an active `@verify`, or
+declare a `@grace` — otherwise the build refuses to emit a binary (stage S8, fatal `HX8004`).
 The full architecture SSOT is [ARCHITECTURE.md](ARCHITECTURE.md); this file is the single governance SSOT (md 단일화 — `project.tape` retired).
 
 ## Structure
