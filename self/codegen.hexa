@@ -12771,6 +12771,7 @@ fn _is_builtin_name(name) {
     if name == "swiglu_vec" { return true }
     // FIX-A (Anima stdlib unblock, 2026-04-19): 10 cross-project builtins
     if name == "read_stdin" { return true }
+    if name == "input" { return true }  // line-input prompt builtin — was missing here, so callers fell through to user-fn emission → bare C `input()` → dyld `_input` not found (codegen.hexa:7118/7205 already map it to hexa_input)
     if name == "sleep_s" { return true }
     if name == "sleep_ms" { return true }
     if name == "sleep_ns" { return true }
