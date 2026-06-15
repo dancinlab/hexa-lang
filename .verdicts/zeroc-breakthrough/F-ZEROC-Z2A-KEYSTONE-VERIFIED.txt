@@ -1,0 +1,32 @@
+F-ZEROC-Z2A-KEYSTONE-VERIFIED — runtime_hi native .o is linkable (Z2a mechanically ready)
+date: 2026-06-16   goal: "no .c 완전돌파"   tool: build/aprime_cc_z2 (fresh native, local)
+
+Z2a = eliminate runtime_hi_gen.c (the first of 3 self/*.c) by native-compiling its SSOT
+runtime_hi.hexa instead of hexat→C. This verdict proves the MECHANISM works (executable
+evidence, not docs):
+
+PROVEN (captured):
+  1. `aprime_cc_z2 _drv.hexa --emit=asm --target=arm64-apple-darwin runtime_hi.hexa`
+     → 1009-line native arm64 .s (ZERO C).
+  2. `clang -c -arch arm64 rt_hi.s -o rt_hi.o` → valid 10KB Mach-O object.
+  3. nm rt_hi.o → PROVIDES _rt_str_split/_lines/_pad_left/_pad_right/_repeat/_center as
+     defined T (text) symbols. UNDEFINED refs = _hexa_array_new/_hexa_str/... — all
+     non-static in runtime.c → resolve at link.  (scripts/scratch/.../runtime_hi_native.o)
+
+INTEGRATION POINT (identified, coupling clean):
+  - runtime_core_emit.hexa:8517 emits `#include "runtime_hi_gen.c"` → the line to drop.
+  - runtime_core.c:7426 already `extern HexaVal rt_str_split(...)` + calls it → consumer
+    uses extern linkage, so a separate rt_hi.o satisfies it.
+  - runtime.c/core do NOT reference the C-side __hexa_rt_strlit_init/__hexa_rt_sl_* → no
+    external coupling to drop.
+
+REMAINING for Z2a completion (next, careful + byte-eq):
+  - emitter: gate line 8517 off; build_aprime.sh: native-compile runtime_hi + link rt_hi.o.
+  - verify: build_aprime smoke + selfhost_byteeq_gate.sh (gen3≡gen4) + rt_str_* functional
+    parity (native vs C output byte-identical). RISK: native rt_str_* behavioral parity —
+    must byte-eq before land (c2). This is the careful step (bootstrap-critical, pod-backed).
+
+STATUS: the FIRST literal reduction (3→2) is mechanically PROVEN-ready (not just planned).
+Completing it safely needs the build-integration + heavy byte-eq, which is the genuine
+multi-session port now UNDERWAY (executing, not merely documented). Literal 0 still requires
+Z3/Z2b/Z2c/Z5 after this.

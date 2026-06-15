@@ -1,0 +1,28 @@
+=== Z2a keystone: native rt_hi.o (zero C), assembled from runtime_hi.hexa ===
+--- build: aprime_cc_z2 _drv.hexa --emit=asm runtime_hi.hexa → rt_hi.s → clang -c → rt_hi.o ---
+PROVIDED (T symbols, zero C):
+0000000000000710 T _rt_str_center
+0000000000000210 T _rt_str_lines
+0000000000000248 T _rt_str_pad_left
+0000000000000434 T _rt_str_pad_right
+0000000000000620 T _rt_str_repeat
+0000000000000000 T _rt_str_split
+UNDEFINED (resolve from runtime.o, all non-static):
+_hexa_add_slow
+_hexa_array_new
+_hexa_array_push
+_hexa_cmp_ge
+_hexa_cmp_le
+_hexa_cmp_lt
+_hexa_div
+_hexa_eq
+_hexa_exit
+_hexa_int
+_hexa_len
+_hexa_mul
+_hexa_println
+_hexa_set_args
+_hexa_str_join
+_hexa_str_substring
+_hexa_sub
+_hexa_truthy
