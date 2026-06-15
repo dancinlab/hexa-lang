@@ -211,6 +211,26 @@ RTFS
 fi
 echo "  [3/5] post-process: s4_flatc_post + builtin sed + runtime.c inline"
 
+# ── ZERO-C Z2a (gated, non-default) ────────────────────────────────
+# Prove runtime_hi_gen.c (1 of 3 self/*.c) is eliminable: supply rt_str_*
+# from a NATIVE-compiled object (build/rt_hi_native.o, from self/runtime_hi.hexa
+# via the native compiler) linked separately, instead of the hexat-transpiled
+# runtime_hi_gen.c #include. Default path (HEXA_ZEROC_RT_HI unset) is unchanged.
+# Restored after the build so the warm artifact is not left mutated.
+ZEROC_RT_HI_OBJ=""
+ZEROC_RT_HI_RESTORE=""
+if [ "${HEXA_ZEROC_RT_HI:-0}" = "1" ]; then
+    if [ ! -f "$REPO/build/rt_hi_native.o" ]; then
+        echo "build_aprime: HEXA_ZEROC_RT_HI=1 but build/rt_hi_native.o missing" >&2; exit 1
+    fi
+    cp self/runtime_core.c "$TMP/runtime_core.c.preZ2a"
+    ZEROC_RT_HI_RESTORE="$TMP/runtime_core.c.preZ2a"
+    sed -i.zbak 's|#include "runtime_hi_gen.c"|/* ZERO-C Z2a: rt_str_* supplied by native build/rt_hi_native.o */|' self/runtime_core.c
+    rm -f self/runtime_core.c.zbak
+    ZEROC_RT_HI_OBJ="$REPO/build/rt_hi_native.o"
+    echo "  [3/5] ZERO-C Z2a: runtime_hi_gen.c #include removed; linking native rt_hi_native.o"
+fi
+
 # ── stage 4: clang ─────────────────────────────────────────────────
 mkdir -p "$(dirname "$OUT")"
 # Cycle 43: -dead_strip + -ffunction-sections + -Oz shrinks aprime_cc
@@ -228,7 +248,9 @@ CL_ERR="$(clang -Oz $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
     -ffunction-sections -fdata-sections $DEAD_STRIP \
     -fno-builtin-bzero -fno-builtin-memcpy -fno-builtin-strlen \
     -D_FORTIFY_SOURCE=0 -fno-stack-protector \
-    -I self -I . "$APPOST" -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
+    -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
+# ZERO-C Z2a: restore the warm runtime_core.c artifact (build leaves no mutation).
+[ -n "$ZEROC_RT_HI_RESTORE" ] && cp "$ZEROC_RT_HI_RESTORE" self/runtime_core.c
 if [ -n "$CL_ERR" ] || [ ! -x "$OUT" ]; then
     echo "build_aprime: clang failed" >&2
     [ -n "$CL_ERR" ] && echo "$CL_ERR" >&2
