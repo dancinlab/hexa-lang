@@ -226,6 +226,16 @@ HexaVal hexa_args(void);                              /* runtime.c:5103 */
 int64_t hexa_len(HexaVal v);                          /* runtime.c:2042 — int64: ≥4GB read_file_bytes len must not truncate */
 HexaVal hexa_array_new(void);                         /* runtime.c:1693 */
 HexaVal hexa_array_push(HexaVal arr, HexaVal item);   /* runtime.c:1809 */
+/* typed contiguous-storage arrays — codegen lowers [f64]/[i64] literals to
+ * these (self/codegen.hexa); declared here so the C-transpile app (which
+ * #includes runtime.h, not runtime_core.c) compiles without implicit-decl.
+ * Defs in runtime_core.c (regen from runtime_core_emit.hexa). */
+HexaVal hexa_arr_i64_new(int cap);                    /* runtime_core.c */
+HexaVal hexa_arr_i64_push(HexaVal v, int64_t x);      /* runtime_core.c */
+HexaVal hexa_arr_i64_box(HexaVal v, int64_t i);       /* runtime_core.c */
+HexaVal hexa_arr_f64_new(int cap);                    /* runtime_core.c */
+HexaVal hexa_arr_f64_push(HexaVal v, double x);       /* runtime_core.c */
+HexaVal hexa_arr_f64_box(HexaVal v, int64_t i);       /* runtime_core.c */
 HexaVal hexa_float(double f);                         /* runtime.c:1232 */
 
 /* arithmetic (non-macro) */
