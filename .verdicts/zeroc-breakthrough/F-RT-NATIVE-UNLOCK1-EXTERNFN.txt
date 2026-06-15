@@ -1,0 +1,26 @@
+F-RT-NATIVE-UNLOCK1 — extern-fn FFI fix: body-less `extern fn` → undefined external (not stub)
+date: 2026-06-16   domain: RT-NATIVE   unlock: UNLOCK-1 (Z3 arena FFI blocker)
+
+ROOT CAUSE (located): compiler/parse/parser.hexa:parse_extern_fn_item synthesized an EMPTY
+Block body for a body-less `extern fn` (kind ItemKind::Fn) → hir_to_mir lowered it to an MFunc
+with empty body → arm64_darwin emitted a VOID-returning stub (`_malloc: movz x0,#4 ; ret void`).
+So `extern fn malloc(...)` became a stub returning void → arena got a void/NULL ptr → segfault
+(the Z3 blocker, F-RT-NATIVE-Z3-Z2a-Z2b-IMPL).
+
+FIX (2 files, self-host codegen):
+  - parser.hexa: when an `extern fn` has NO body, append annotation `__extern_decl`.
+  - hir_to_mir.hexa: the ITEM_FN loop skips MFunc emission for `__extern_decl` items → the
+    symbol stays an UNDEFINED external (linked from libc/runtime), calls still emit `bl <name>`.
+  - build_aprime.sh: 2 Z2a smoke-step fixes surfaced (restore the runtime_core.c include only
+    when runtime_hi_gen.c still exists; smoke links $ZEROC_RT_HI_OBJ).
+
+VERIFICATION (c2, captured):
+  - aprime rebuilt; `extern fn malloc` → `.s` has NO `_malloc:` stub body, only `bl _malloc`
+    (undefined external). FFI works.
+  - smoke exit(42)==42 PASS; ls self/*.c = 2 (Z2a maintained).
+  - FIXPOINT: aprime_u1b vs aprime_cc_z2 byte-identical .s 4/4 (runtime_hi/ast/codegen_native/
+    atomic_ops) → gen3≡gen4 self-host fixpoint PRESERVED (no regression from the parser/lower change).
+
+VERDICT: 🟢 UNLOCK-1 DONE. Native `.hexa` can now call libc/runtime via body-less `extern fn`
+(malloc/mmap/free) — the Z3 arena FFI blocker is removed. Next: port the arena to native `.hexa`
+using `extern fn malloc/free` (or mmap-via-svc) + integrate via the Z2a seed-link pattern → Z3.
