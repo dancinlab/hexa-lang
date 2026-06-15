@@ -1,0 +1,29 @@
+F-X86-RUNG2-STRING-PRINT-PASS — x86_64 native-emit runtime string-print
+date: 2026-06-15  host: summer (x86_64 GNU/Linux, gcc 13.3.0)  HEAD-base: 5c21c943b
+
+RESULT: 🟢 PASS — print("hi");exit(7) compiled THROUGH the native x86_64 emitter
+        (--backend=native --target=x86_64-linux-gnu → pack_lir_x86_64 +
+        serialize_elf_x86_64, NO host as/clang for codegen) → ran natively.
+
+ROOT CAUSE (was 🔴): the native-emit data-address matcher in
+  compiler/emit/elf_x86_64.hexa pack_lir_x86_64 (~L1385) recognized ONLY a
+  BARE data label (.LCstrN / g<id>). The HexaVal arg-boxing path
+  (codegen _x86_hv_box_arg) renders a string PAYLOAD as a [rip+<label>]-
+  WRAPPED operand → matcher missed it → the lea was dropped → print's payload
+  register (rsi) left UNSET → hexa_print_val printed garbage ([+m K]/rc=7).
+  exit(7) worked (int payload via mov rsi,imm). #3340 fixed only the int/
+  return reg-pair, NOT the string lea drop.
+
+FIX: _ex86_data_label_of(s) normalizes both the bare AND [rip+<label>] forms
+  (rejecting @GOTPCREL/@PLT), and the matcher emits lea reg,[rip+0] + the
+  R_X86_64_PC32 reloc against the INNER label. (compiler/emit/elf_x86_64.hexa)
+
+EVIDENCE (tool/build_native_linux_x86_64 -w build/lx8664-rung2fix):
+[build_native_linux_x86_64] stage4: cc_native = 3392648 B · ELF 64-bit LSB pie executable, x86-64
+[build_native_linux_x86_64] stage5: hi.o = ELF 64-bit LSB relocatable, x86-64
+[build_native_linux_x86_64] stage5: NATIVE RUN — stdout=[hi] rc=7
+[build_native_linux_x86_64] stage5: PASS — native ELF .o emitted + linked + RAN natively (hi / rc 7)
+[build_native_linux_x86_64] DONE — cc_native + native-emit milestone PASS (HEAD=5c21c943b)
+=== EXIT: 0 ===
+
+BEFORE FIX (same script, pre-edit, build/lx8664-rung2):
