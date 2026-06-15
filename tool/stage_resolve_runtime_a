@@ -141,8 +141,19 @@ reconcile_runtime_c_ssot_dups() {
 # frozen fragment) — see regen_runtime_core_from_emitter above.
 build_runtime_a_from_source() {
     regen_runtime_core_from_emitter
+    # RT-NATIVE Z2a (gated): supply rt_str_* from a NATIVE-compiled object
+    # (build/rt_hi_native.o, assembled from the self/native/runtime_hi_native.s
+    # frozen seed) instead of the hexat-transpiled runtime_hi_gen.c #include —
+    # so runtime_hi_gen.c is never needed. Default path unchanged.
+    local extra_obj=""
+    if [ "${HEXA_ZEROC_RT_HI:-0}" = "1" ] && [ -f build/rt_hi_native.o ]; then
+        sed -i.zbak 's|#include "runtime_hi_gen.c"|/* RT-NATIVE Z2a: rt_str_* from native build/rt_hi_native.o */|' self/runtime_core.c
+        rm -f self/runtime_core.c.zbak
+        extra_obj="build/rt_hi_native.o"
+        echo "[stage_resolve_runtime_a] RT-NATIVE Z2a: runtime_hi_gen.c #include removed; ar'ing native rt_hi_native.o into runtime.a"
+    fi
     $CC $CFLAGS -I self -c self/runtime.c -o build/runtime.o
-    ar rcs "$RA" build/runtime.o
+    ar rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     echo "$RA"
 }

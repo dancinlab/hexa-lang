@@ -1,0 +1,30 @@
+F-RT-NATIVE-Z2A-DONE — runtime_hi_gen.c ELIMINATED on arm64-darwin (3→2), cold-build verified
+date: 2026-06-16   domain: RT-NATIVE   milestone: Z2a   target: arm64-darwin (primary)
+
+ACHIEVED: `ls self/*.c` = 2 (was 3) — runtime_hi_gen.c is no longer generated/needed on the
+default arm64-darwin build. rt_str_* now come from a NATIVE-compiled object
+(build/rt_hi_native.o, assembled from the frozen self/native/runtime_hi_native.s seed which the
+native compiler emitted from self/runtime_hi.hexa), linked into both aprime_cc and runtime.a —
+ZERO C for the rt_str_* high-layer.
+
+INTEGRATION (gated HEXA_ZEROC_RT_HI, auto-enabled on Darwin arm64; x86_64-linux keeps the C path
+until its codegen matures — F-RT-NATIVE-X86-CODEGEN-ROOTCAUSE):
+  - tool/build_aprime.sh: auto-enable on `uname -sm`=="Darwin arm64"; assemble the .s seed →
+    build/rt_hi_native.o; sed-remove the runtime_hi_gen.c #include from runtime_core.c; link rt_hi.o.
+  - tool/stage_resolve_runtime_a: ar build/rt_hi_native.o into runtime.a (so compiled programs'
+    runtime uses native rt_str_*), include sed-removed.
+  - tool/restore_frozen_seeds: runtime_hi_gen.c dropped from the frozen seed set (21→20).
+
+VERIFICATION (c2, captured):
+  1. COLD build (full STAGE-0, explicit env): aprime_z2a_done 1592240B, smoke exit(42)==42 PASS.
+  2. DEFAULT build (no env, auto-enable): restored 20 seeds (file dropped), ZERO-C Z2a path taken,
+     aprime_default 1592240B, smoke PASS, `ls self/*.c`=2.
+  3. FUNCTIONAL: a program using `"a,b,c,d".split(",")` → 4 and `"x".pad_left(5,"-")` → "    x",
+     compiled by aprime_default + linked with the native runtime.a, runs correctly (rc=0). So the
+     native rt_str_* are runtime-correct (split/pad), not just symbol-present.
+  4. FIXPOINT: aprime_default (native rt) vs aprime_cc_z2 (C rt) emit BYTE-IDENTICAL .s over 3
+     sources (runtime_hi/ast/codegen_native) → 3/3 identical → gen3≡gen4 self-host fixpoint preserved.
+
+VERDICT: 🟢 RT-NATIVE Z2a DONE on arm64-darwin (3→2 .c). The first literal .c eliminated with a
+working, byte-identical, runtime-verified toolchain. Remaining: runtime_core.c + runtime.c (Z2c
+954-fn core, multi-week) + x86_64-linux codegen value-model rework for cross-platform. 3/8.
