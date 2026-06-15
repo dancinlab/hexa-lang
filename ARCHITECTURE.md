@@ -6,9 +6,16 @@
 ## Overview
 
 `hexa-lang` is a self-hosted native compiler for the `.hexa` language, shipped with the
-`hx` package manager. There is **no LLVM and no C-transpile**: the compiler lowers source
-directly through its own IR to native objects (ELF64 / Mach-O arm64) and links them with its
-own linker (`hexa_ld`). Its defining feature is an embedded **atlas** — a ~4.2 MB theorem
+`hx` package manager. There is **no LLVM anywhere in the toolchain**. The self-host backend
+lowers source directly through its own IR to native objects (ELF64 / Mach-O arm64) and links
+them with its own linker (`hexa_ld`); this native-emit path is a proven byte-identical fixpoint
+(`gen3 ≡ gen4`) and is the default for `--emit`. Two pieces of C remain, by policy, not as
+unfinished port debt — see [Self-host status](#self-host-status) for the honest accounting:
+a C-transpile **fallback delegate** still serves some full `hexa build`/`run` flows until the
+native end-to-end path lands, and an irreducible ~5.5k-LOC **C runtime substrate** (libc/syscall
+floor, generated from `.hexa` emitter SSOTs) is compiled and linked into every binary
+(RFC 061 §4.1 / g5 §7 permit substrate C; they forbid only a C-transpile *backend*).
+Its defining feature is an embedded **atlas** — a ~4.2 MB theorem
 dictionary (P primitives / C constants / L laws / E errors) baked statically into the binary.
 Every formula-bearing function must either cite an atlas law (`@cite(L[id])`), carry an active
 `@verify`, or declare an explicit `@grace`; otherwise the build refuses to produce a binary
@@ -20,6 +27,29 @@ S3 type → S4 domain → S5 units → S6 equational `@verify` → S7 proof `@pr
 A binary appears only when every fatal stage passes. After the gate, source is lowered
 HIR → MIR (SSA) → LIR and emitted per target. The compiler is self-hosting: the compiler
 that builds `.hexa` is itself written in `.hexa` (`self/`).
+
+## Self-host status
+
+Honest accounting of where self-hosting actually stands (no overclaim — `git log` + the
+`.verdicts/` tree are the evidence):
+
+| Layer | State | Evidence |
+|-------|-------|----------|
+| Native-emit backend (own IR → Mach-O / ELF, no LLVM) | ✅ **byte-identical fixpoint** `gen3 ≡ gen4` | `.verdicts/.../N5-FIXPOINT-ACHIEVED`, `tool/selfhost_byteeq_gate.sh` |
+| Default toolchain promotion (`--emit` → native gen3) | ✅ **flipped + persisted** across `hx install` | `tool/promote_selfhost.sh`, marker `~/.hx/.selfhost-default` |
+| Multi-target bootstrap | ✅ arm64-darwin · linux-arm64 (real-HW byte-eq) · x86_64 (RUNG 1+3) | SELFHOST-NEXT domain ledger |
+| `hexa run` routing | 🟡 **native-first + C-transpile delegate-fallback** (safety > coverage) | shim, native-route landing |
+
+**Remaining residuals** (tracked, not silent):
+
+- **x86_64 RUNG 2** — `print(str)` mis-prints because the x86_64 `STMT_CALL` path does not
+  yet materialise the 16-byte `HexaVal {tag,payload}` SysV register-pair (arg0 → rdi:rsi).
+- **Full native `hexa build` end-to-end** — gen3 owning the link + runtime orchestration, so
+  the C-transpile delegate-fallback can be retired.
+- **Irreducible C floor** — `self/runtime*.c` (~5.5k LOC tier-A: libc/libm/syscall/`HexaVal`
+  arena) is **policy-accepted permanent C**, generated from `*_emit.hexa` SSOTs, not authored
+  by hand and not port debt. A literal `ls self/*.c` empty tree (the HEXA-SELFHOST+ meta
+  graduation bar) collides with this floor and is a definition question, not engineering debt.
 
 ## Component map
 
