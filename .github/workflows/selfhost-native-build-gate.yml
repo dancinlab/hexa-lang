@@ -53,11 +53,13 @@ jobs:
       - name: Gate — hexa build native path corpus
         shell: bash
         run: |
-          set -uo pipefail
-          bash tool/selfhost_native_build_gate
-          rc=$?
+          # NB: the Actions shell injects `-e` (errexit), so a non-zero gate
+          # exit would abort BEFORE the remap. Capture via `|| rc=$?` so the
+          # exit-2-neutral classification actually runs.
+          rc=0
+          bash tool/selfhost_native_build_gate || rc=$?
           if [ "$rc" = 2 ]; then
             echo "::notice::native-build gate NEUTRAL — no promoted self-host slot on this runner"
             exit 0
           fi
-          exit $rc
+          exit "$rc"
