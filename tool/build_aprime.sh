@@ -267,8 +267,15 @@ CL_ERR="$(clang -Oz $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
     -fno-builtin-bzero -fno-builtin-memcpy -fno-builtin-strlen \
     -D_FORTIFY_SOURCE=0 -fno-stack-protector \
     -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
-# ZERO-C Z2a: restore the warm runtime_core.c artifact (build leaves no mutation).
-[ -n "$ZEROC_RT_HI_RESTORE" ] && cp "$ZEROC_RT_HI_RESTORE" self/runtime_core.c
+# ZERO-C Z2a: restore the warm runtime_core.c artifact ONLY when runtime_hi_gen.c
+# still exists (legacy gated test). When the file is permanently gone (default
+# Z2a path) keep the `#include` removed — restoring it would make the stage-5
+# smoke's `self/runtime.c` compile (+ any later runtime build) fail on the
+# missing file. runtime_core.c is a gitignored generated artifact, so leaving it
+# in the include-removed state is correct.
+if [ -n "$ZEROC_RT_HI_RESTORE" ] && [ -f self/runtime_hi_gen.c ]; then
+    cp "$ZEROC_RT_HI_RESTORE" self/runtime_core.c
+fi
 if [ -n "$CL_ERR" ] || [ ! -x "$OUT" ]; then
     echo "build_aprime: clang failed" >&2
     [ -n "$CL_ERR" ] && echo "$CL_ERR" >&2
@@ -288,7 +295,7 @@ fi
 clang -c -O2 $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE $EXTRA_DEFS -Wno-trigraphs -I self -I . \
     self/runtime.c -o "$RTO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
 clang $ARCH_FLAG "$SMS" -c -o "$SMO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
-clang $ARCH_FLAG "$SMO" "$RTO" -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:' | head -5
+clang $ARCH_FLAG "$SMO" "$RTO" $ZEROC_RT_HI_OBJ -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:' | head -5
 if [ ! -x "$SMB" ]; then
     echo "build_aprime: smoke link failed" >&2
     exit 2

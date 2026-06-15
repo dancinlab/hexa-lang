@@ -1853,14 +1853,26 @@ fn parse_extern_fn_item(is_pub: bool, anns: [Annotation]) -> Item {
         children: [],
         atlas_ref: empty_atlas()
     }
+    // RT-NATIVE UNLOCK-1: a BODY-LESS `extern fn` is a true FFI declaration —
+    // it must lower to an UNDEFINED external symbol (resolved from libc/runtime
+    // at link), NOT a void-returning stub. Mark it with `__extern_decl` so
+    // hir_to_mir skips MFunc emission (a stub would make e.g. `malloc` return
+    // void → arena segfault, the Z3 blocker). A present body keeps normal
+    // lowering (an `extern fn` WITH a body is a definition).
+    let mut has_body = false
     if check_kind(TokenKind::LBrace) {
         body = parse_block_expr()
+        has_body = true
+    }
+    let mut final_anns = anns
+    if !has_body {
+        final_anns.push(Annotation { name: "__extern_decl", args: [], span: kw.span })
     }
     return Item {
         kind: ItemKind::Fn,
         name: name_tok.text,
         span: kw.span,
-        annotations: anns,
+        annotations: final_anns,
         params: params,
         return_type: ret_ty,
         body: body,

@@ -3498,6 +3498,19 @@ pub fn lower_hir(module: HModule) -> MModule {
     while i < len(module.items) {
         let it = module.items[i]
         if it.kind == "ITEM_FN" {
+            // RT-NATIVE UNLOCK-1: a body-less `extern fn` (marked `__extern_decl`
+            // by the parser) is a true FFI declaration — emit NO MFunc so the
+            // symbol stays an undefined external (resolved from libc/runtime at
+            // link), not a void-returning stub. Calls to it still lower to a
+            // `bl <name>` whose target the linker binds. Fixes the Z3 arena
+            // blocker (a stubbed `malloc` returned void → arena segfault).
+            let mut _is_extern_decl = false
+            let mut _ai = 0
+            while _ai < len(it.annotations) {
+                if it.annotations[_ai].name == "__extern_decl" { _is_extern_decl = true; break }
+                _ai = _ai + 1
+            }
+            if _is_extern_decl { i = i + 1; continue }
             // First-wins fn dedup (mirrors the bind pre-pass that
             // resolves duplicate pub symbols across imported files
             // with a first-wins skip). Without this skip the second
