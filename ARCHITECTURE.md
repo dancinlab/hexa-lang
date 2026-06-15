@@ -91,7 +91,18 @@ Honest accounting of where self-hosting actually stands (no overclaim — `git l
   designed, partial), and (c) **GPU/device FFI** (tier-C, outside the compiler's self-host scope).
   `ls self/*.c` empty is thus an **attackable codegen campaign**, not "unreachable by porting".
   Full zero-`.c` remains multi-step (port batches + `@asm`-syscall wiring + a libm decision), much
-  of it pod-gated — but the wall ("can't be done") is broken. Tracked: HEXA-BUILDFLOOR domain.
+  of it pod-gated — but the wall ("can't be done") is broken. Tracked: **RT-NATIVE domain**
+  (`RT-NATIVE.md`, 8 milestones Z0–Z5; supersedes the HEXA-BUILDFLOOR zero-C tracking).
+
+  **Zero-C scope (Go/Rust-equivalent, clarified 2026-06-16):** "no `.c`" means the *user-visible*
+  runtime (arena · tag · string/array · syscall · exception-dispatch) is native; the OS/ABI
+  bootstrap floor — libm transcendentals and the Linux libc `setjmp`/`longjmp` — is the
+  freestanding substrate every self-hosting runtime rests on (as do Go/Rust). **Exception model
+  (RT-NATIVE Z4, closed):** `try`/`catch` lowers to a `setjmp`/`longjmp` try-stack; on
+  **arm64-darwin** `hxlcl_setjmp`/`hxlcl_longjmp` are already **naked asm** (zero C, runtime.c
+  cycle 86) — extractable to a `.s` file, so it does NOT block `ls self/*.c == ∅` on the primary
+  target; on **x86_64-linux** it is a libc wrapper, kept as a platform floor (honest-keep, like
+  libm). verdict `.verdicts/zeroc-breakthrough/F-RT-NATIVE-Z4-SETJMP-DECISION.txt`.
 
 ## Component map
 
