@@ -1,0 +1,34 @@
+RT-NATIVE Z3/Z2b/Z4 병렬 연구 (2026-06-16, 3 에이전트 분석) — 설계 + 정직한 난이도
+═══════════════════════════════════════════════════════════════════
+
+Z3 — ARENA ALLOCATOR → .hexa (포팅 가능, 단일세션 MVP)
+  함수: hexa_arena_alloc(runtime_core.c:3595) · _mark(3644) · _rewind(3654) · _reset(3669)
+        · _new_block(3571) · val_arena_scope_push(3768)/pop(3829) · __hexa_fn_arena_enter(4518)/return(4523)
+  자료구조: HexaArenaBlock{next,cap,used,data[]} (3528-3544) — bump allocator.
+  OS dep: malloc/free (현재). mmap-via-svc 대체 가능(SYS_mmap=197 darwin+linux, 6-arg carry-flag,
+          runtime.c:1274 hxlcl_mmap 증명). MVP = malloc 유지(byte-eq ZERO) · 풀native = mmap intrinsic.
+  tag 결합: 없음(Z2b 독립) — .cap 음수 sentinel + .from_arena bool 만 사용, 태그 무관.
+  KEEP-in-C: hexa_val_heapify(3979-4256, 4000줄 재귀 deep-copy) — Z3 단독엔 C 유지 가능.
+  난이도: MVP 단일세션, byte-eq 위험 ZERO(malloc 경로).
+
+Z2b — NaN-BOXING TAG MACHINE (self-contained, 진짜 블로커=boxing ABI)
+  HexaVal 16B tagged union(runtime_core.c:1007-1021) + HX_* 매크로 14개(1030-1094: HX_TAG/INT/
+    IS_INT/IS_STR…). TAG_* 상수 runtime.hexa:47-66.
+  핵심: codegen 이 이미 HexaVal 을 native 로 다룸(arm64_darwin.hexa:1030-1160 reg-pair x0:x1,
+    const_int→movz tag; x86_64_linux.hexa:609-680). 컴파일된 프로그램은 태그를 native inline.
+  표현차이: 인터프리터 struct Val(hexa_full.hexa) ≠ 컴파일 HexaVal — 그래서 C 코어함수 필요.
+  진짜 블로커: hexa_int/float/str boxing(1267-1286) = shipped gen2/3/4 바이너리가 의존하는 ABI →
+    breaking 불가. Z2b 는 single 가능하나 Z2c 의 선행조건은 아님.
+  설계: 코어 fn 을 .hexa 로 쓰면 codegen 이 태그연산 native lower → HX_* C매크로 불필요.
+
+Z4 — setjmp/longjmp try/catch (🎯 Darwin 이미 NAKED ASM = zero C!)
+  ★ Darwin arm64: hxlcl_setjmp/longjmp(runtime.c:1624-1647) = naked asm(cycle 86), 192B jmp_buf
+    수동저장, C 제로. → 현재 플랫폼 literal-0 에 setjmp 포팅 불필요(이미 C 아님).
+  Linux x86_64: libc setjmp wrapper(runtime.c:2018-2021) — glibc 의존.
+  try/catch 문법: parser/MIR/codegen 완비(ast.hexa:95, hir_to_mir.hexa:1810-1936,
+    arm64_darwin.hexa:2100-2171 STMT_TRY_SETJMP). __hexa_try_stack(runtime_core.c:5977-6012).
+  결론: irreducible 아님(Darwin 증명). Linux native unwinding 은 비용>이득 → HONEST-KEEP 권고
+    (libm 과 동일 정책: platform module, zero-C 범위서 제외). hexa_throw 는 Z2c 에서 native port.
+
+종합: Darwin arm64 literal-0 경로 = Z2a(hi)✓ + Z3(arena, malloc MVP) + Z2b(tag, codegen-native) +
+  Z2c(core 954fn) — setjmp 는 이미 native(Z4 honest-keep). 가장 큰 덩어리 = Z2c.
