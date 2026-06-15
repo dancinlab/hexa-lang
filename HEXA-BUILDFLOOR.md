@@ -83,7 +83,7 @@ syscall 명령 방출(`@asm`-svc, 설계됨·부분구현) + GPU/device FFI(tier
 
 - [x] Z0 — 돌파 증명: M3 "zero portable" FALSIFIED (frozen-first fnv1a port byte-id + 155/308 purity audit + PLAN.md @asm 증거). ARCHITECTURE.md/M3 verdict 정직성 수선. **🟢 2026-06-16**. falsifier `scripts/scratch/zeroc_falsifier/`.
 - [ ] Z1 — pure-leaf 포팅 배치: 155 PURE fn 을 tracked `.hexa` 런타임 모듈로 포팅(emit→native), 각 fn C↔.hexa byte-eq 게이트. (로컬 가능 일부 + 전체 byte-eq 는 pod)
-- [ ] Z2 — `@asm`-svc 일반 lowering 배선: runtime syscall trampoline(write/read/mmap/exit) 을 `@asm svc` 블록으로 방출, C shim 제거. (codegen-emit, pod-gated)
+- [ ] Z2 — **native-emit 일반 syscall 표면 구축** (honest 정정 2026-06-16): runtime syscall trampoline(write/read/mmap/exit)을 .hexa 소스에서 방출. ⚠️ 기존 `@asm`(stdlib/firmware/asm.hexa)은 **GCC `__asm__` C-프래그먼트 방출 + cortex-M only** → C-transpile 경로 전용, native zero-C 경로에 무용. native codegen 의 svc#0x80 방출은 컴파일러 내부 program-exit 한정(소스 호출 표면 없음). `__fd_write_bytes` 빌트인도 C shim 경유(io.hexa:26). → 진짜 과제 = `@syscall(num,args...)` native-emit intrinsic(svc/syscall + reg marshalling) **신규 구축**. codegen-emit, pod-gated. (벽 아님 — 구축가능 codegen)
 - [ ] Z3 — malloc/memcpy floor: `.hexa` 아레나(mmap-via-@asm) + memcpy 순수루프 → libc-dep 140 중 다수 해방.
 - [ ] Z4 — libm 결정: 초월함수 .hexa 다항근사 포팅 vs FP-codegen-target 으로 정직히 유지(정책 명문화). 둘 다 honest 종착 후보.
 - [ ] Z5 — `ls self/*.c` == ∅ 졸업게이트 (Z1–Z4 누적, full native byte-eq fixpoint 재확인).
