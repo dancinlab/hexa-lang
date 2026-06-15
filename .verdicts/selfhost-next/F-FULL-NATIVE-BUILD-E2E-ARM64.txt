@@ -1,0 +1,22 @@
+F-FULL-NATIVE-BUILD-E2E-ARM64 — clang/ld-free native build pipeline
+date: 2026-06-15  host: mini (arm64-apple-darwin, promoted selfhost slot)
+
+RESULT: 🟢 PASS — compile→obj→native-link→runtime→run with ZERO clang / ZERO system ld.
+
+PIPELINE (no system as/clang/ld anywhere):
+  1. gen3 --emit=obj --target=arm64-apple-darwin → hi.o : Mach-O 64-bit object arm64
+  2. hexa_ld -o hi.bin hi.o rt.o --lc-main _main      → hi.bin: Mach-O 64-bit executable arm64
+  3. ./hi.bin  → stdout=[hi] rc=7   (expected hi / 7)
+
+SIGNIFICANCE: the full native build path (gen3 direct Mach-O object emit +
+  hexa_ld native link against rt.o, --static single-binary) produces a working
+  executable end-to-end WITHOUT the C-transpile/clang delegate. This proves the
+  CAPABILITY behind SELFHOST-NEXT residual 'full native hexa build e2e'.
+
+REMAINING (productization, NOT this verdict): flip the `hexa build` DRIVER
+  (self/main.hexa cmd_build still --emit=asm→clang for safety; promote shim
+  delegates the `build` subcommand) to this native obj→hexa_ld path as DEFAULT,
+  gated on FULL-CORPUS byte-eq (not just this trivial program) — a separate
+  driver change + standing gate, deliberately kept opt-in until corpus-verified.
+
+slot: ~/.hx/self/native/selfhost/{gen3,hexa_ld,rt.o} (promote marker set)
