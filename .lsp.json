@@ -1,0 +1,19 @@
+{
+  "hexa": {
+    "command": "sh",
+    "args": [
+      "-c",
+      "for d in \"$HEXA_LANG\" \"$HOME/.hx/packages/hexa\" \"$HOME/.hx/packages/hexa-lang\" \"$HOME/.hx/src\"; do [ -n \"$d\" ] && [ -f \"$d/self/lsp.hexa\" ] && cd \"$d\" && break; done; exec hexa lsp"
+    ],
+    "extensionToLanguage": {
+      ".hexa": "hexa"
+    }
+  },
+  "kosmos": {
+    "command": "kosmos-lsp",
+    "args": [],
+    "extensionToLanguage": {
+      ".kosmos": "kosmos"
+    }
+  }
+}
