@@ -8,6 +8,6 @@
 - [x] Z4 setjmp/longjmp try/catch → native unwinding lowering (또는 정직-keep 결정)
 - [ ] Z2b NaN-boxing tag machine → native value-ops (core fns .hexa 화, HX_* C매크로 제거)
 - [ ] Z3 arena allocator → .hexa (mmap-via-svc, codegen_native enc_svc)
-- [ ] Z2a-done runtime_hi_gen.c 제거 (3→2): 부트스트랩 순환(2-pass) + runtime.a rt_hi.o ar + emitter ungate + restore_frozen_seeds drop + selfhost_byteeq_gate green
+- [x] Z2a-done runtime_hi_gen.c 제거 (3→2): 부트스트랩 순환(2-pass) + runtime.a rt_hi.o ar + emitter ungate + restore_frozen_seeds drop + selfhost_byteeq_gate green
 - [x] Z0 벽 반증 + zero-C 실행증명 + Z2a byte-identical 검증 (8 PR #3378-3384)
 - [ ] (first milestone — `harness domain ms <text>`)
