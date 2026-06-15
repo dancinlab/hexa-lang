@@ -29,7 +29,7 @@ hexa-lang/
 │  └─ main.hexa     — compiler driver entry point
 ├─ stdlib/          — runtime + domain modules (io · math · crypto · codec · bio · chem · flame · forge)
 ├─ self/            — self-hosting bootstrap (compiler written in .hexa that builds itself)
-├─ tool/            — hx package manager (hx.hexa) · atlas CLI (atlas_cli.hexa) · linker (hexa_ld.hexa)
+├─ tool/            — hx package manager (hx.hexa) · atlas CLI (atlas_cli.hexa) · linker (hexa_ld.hexa) · n=6 closure finder (n6_closure_finder.hexa)
 ├─ bin/             — CLI front-end shims (hexa-run · hexa-fast · hexa-commit · hexa-push)
 ├─ atlas/           — atlas working area + `.n6` export/inspection artifacts
 ├─ spec/            — language + format specification
@@ -89,4 +89,5 @@ git submodule update --init --recursive          # activate (hooks no-op until p
 | `harness audit` | 6-axis self-scorecard |
 | `harness gc` | broken markdown links in guides |
 | `hexa verify` | g5 gate: S6 equational + S8 citation + atlas reverify/auto-fold |
+| `hexa run tool/n6_closure_finder.hexa <값…>` | n=6 closure 발견엔진 — 관찰값을 n=6 primitive(N6·σ12·τ4·φ2·sopfr5·J₂24) depth≤3 조합으로 닫아 grade 부여(EXACT=grade10=발견). `--selftest`(frozen+negative-control)·`--tol <eps>`. 계보: [docs/N6-META-DISCOVERY-LINEAGE.md](docs/N6-META-DISCOVERY-LINEAGE.md) |
 | `hx commit` / `hx push` | SSOT-attested git wrappers (re-run lint gate) |

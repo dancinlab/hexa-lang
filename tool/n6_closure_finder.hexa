@@ -1,0 +1,269 @@
+// tool/n6_closure_finder.hexa — n=6 closure discovery engine (grade-10 EXACT finder).
+//
+// The "전단계" generative process behind the n=6 → meta → meta³ lineage
+// (docs/N6-META-DISCOVERY-LINEAGE.md §2/§6) made executable: feed it observed
+// constants, and it searches whether each closes to a finite depth<=3 combination
+// of the six n=6 primitives — the same is_exact rule echoes/GRADE_RUBRIC defines.
+//
+//   n=6 primitives:  N=6 · sigma=12 · tau=4 · phi=2 · sopfr=5 · J2=24
+//
+//   search space (depth<=3):
+//     depth-1   p                       (single primitive)
+//     mult/div  p*k , p/k               (k in 1..24)
+//     depth-2   p op q                  (op in + - * /)
+//     depth-3   (p op q) op r
+//
+//   grade (normalized residual d = |cand - v| / (1 + |v|)):
+//     d <= 1e-6  -> grade 10  EXACT     (closure achieved)
+//     d <= 1e-2  -> grade  8  CLOSE     (near, retry)
+//     d <= 1e-1  -> grade  6  WEAK      (partial)
+//     else       -> grade  5  MISS      (more data needed)
+//
+// usage:
+//   hexa run tool/n6_closure_finder.hexa 24 144 48 0.5     — test each value
+//   hexa run tool/n6_closure_finder.hexa --tol 0.001 14.55 — override EXACT tol
+//   hexa run tool/n6_closure_finder.hexa --selftest        — frozen + negative-control
+//   hexa run tool/n6_closure_finder.hexa --help
+//
+// hexa-only · proof-carrying (every grade derives from a numeric residual) ·
+// frozen-first + negative-control verified (--selftest). NOT a tune-to-green
+// laundromat: the primitive set and depth bound are fixed, so EXACT is falsifiable.
+
+let _NOCALC: float = 999999999.0
+
+fn _fabs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn _is_digit(c: string) -> bool {
+    return "0123456789".index_of(c) >= 0
+}
+
+// A token is a numeric value iff its first char is a digit, '-' or '.'.
+// (args() may include the script path / dispatch verb — those are skipped.)
+fn _looks_numeric(s: string) -> bool {
+    if len(s) == 0 { return false }
+    let c0 = s.substring(0, 1)
+    return _is_digit(c0) || c0 == "-" || c0 == "."
+}
+
+// Parse a plain decimal string (optional leading '-') into a float.
+// Stops at the first non-digit after the integer/fraction (no to_int blowups).
+fn _atof(s: string) -> float {
+    let n = len(s)
+    let mut i = 0
+    let mut sign = 1.0
+    if n > 0 && s.substring(0, 1) == "-" { sign = 0.0 - 1.0; i = 1 }
+    let mut intp = 0.0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if !_is_digit(c) { break }
+        intp = intp * 10.0 + to_float(to_int(c))
+        i = i + 1
+    }
+    let mut frac = 0.0
+    let mut scale = 1.0
+    if i < n && s.substring(i, i + 1) == "." {
+        i = i + 1
+        while i < n {
+            let c = s.substring(i, i + 1)
+            if !_is_digit(c) { break }
+            scale = scale / 10.0
+            frac = frac + to_float(to_int(c)) * scale
+            i = i + 1
+        }
+    }
+    return sign * (intp + frac)
+}
+
+// op codes: 0 = +, 1 = -, 2 = *, 3 = / . Returns _NOCALC on divide-by-zero.
+fn _apply(x: float, opc: int, y: float) -> float {
+    if opc == 0 { return x + y }
+    if opc == 1 { return x - y }
+    if opc == 2 { return x * y }
+    if y == 0.0 { return _NOCALC }
+    return x / y
+}
+
+fn _opname(opc: int) -> string {
+    if opc == 0 { return "+" }
+    if opc == 1 { return "-" }
+    if opc == 2 { return "*" }
+    return "/"
+}
+
+// normalized residual → grade (10 EXACT / 8 CLOSE / 6 WEAK / 5 MISS).
+fn _grade(v: float, cand: float, tol: float) -> int {
+    if cand >= _NOCALC { return 0 }
+    let d = _fabs(cand - v) / (1.0 + _fabs(v))
+    if d <= tol { return 10 }
+    if d <= 0.01 { return 8 }
+    if d <= 0.10 { return 6 }
+    return 5
+}
+
+fn _verdict(g: int) -> string {
+    if g == 10 { return "EXACT" }
+    if g == 8 { return "CLOSE" }
+    if g == 6 { return "WEAK" }
+    return "MISS"
+}
+
+// Search the depth<=3 n=6 closure space for the best match to v.
+// Returns [grade(int), expr(string)].
+fn _search(v: float, tol: float) -> array {
+    let prims = [6.0, 12.0, 4.0, 2.0, 5.0, 24.0]
+    let pnames = ["N", "sigma", "tau", "phi", "sopfr", "J2"]
+    let np = 6
+    let mut best_g = 0
+    let mut best_expr = "(no n=6 closure within depth<=3)"
+
+    // depth-1 + integer multiple/ratio
+    let mut a = 0
+    while a < np {
+        let pa = prims[a]
+        let ga = _grade(v, pa, tol)
+        if ga > best_g { best_g = ga; best_expr = pnames[a] }
+        let mut k = 1
+        while k < 25 {
+            let kf = to_float(k)
+            let gm = _grade(v, pa * kf, tol)
+            if gm > best_g { best_g = gm; best_expr = to_string(k) + "*" + pnames[a] }
+            let gd = _grade(v, pa / kf, tol)
+            if gd > best_g { best_g = gd; best_expr = pnames[a] + "/" + to_string(k) }
+            k = k + 1
+        }
+        a = a + 1
+    }
+
+    // depth-2: p op q
+    a = 0
+    while a < np {
+        let mut b = 0
+        while b < np {
+            let mut op = 0
+            while op < 4 {
+                let r = _apply(prims[a], op, prims[b])
+                let g2 = _grade(v, r, tol)
+                if g2 > best_g {
+                    best_g = g2
+                    best_expr = pnames[a] + " " + _opname(op) + " " + pnames[b]
+                }
+                op = op + 1
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+
+    // depth-3: (p op q) op r
+    a = 0
+    while a < np {
+        let mut b = 0
+        while b < np {
+            let mut op1 = 0
+            while op1 < 4 {
+                let inner = _apply(prims[a], op1, prims[b])
+                if inner < _NOCALC {
+                    let mut c = 0
+                    while c < np {
+                        let mut op2 = 0
+                        while op2 < 4 {
+                            let r = _apply(inner, op2, prims[c])
+                            let g3 = _grade(v, r, tol)
+                            if g3 > best_g {
+                                best_g = g3
+                                best_expr = "(" + pnames[a] + " " + _opname(op1) + " " + pnames[b] + ") " + _opname(op2) + " " + pnames[c]
+                            }
+                            op2 = op2 + 1
+                        }
+                        c = c + 1
+                    }
+                }
+                op1 = op1 + 1
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+
+    return [best_g, best_expr]
+}
+
+fn _report(token: string, tol: float) {
+    let v = _atof(token)
+    let res = _search(v, tol)
+    let g = res[0]
+    let expr = res[1]
+    println(token + "  ->  grade " + to_string(g) + "  " + _verdict(g) + "   =  " + expr)
+}
+
+fn _selftest() -> int {
+    // frozen-first: values that MUST close EXACT (grade 10)
+    let pos = ["24", "12", "4", "2", "48", "144", "288", "6"]
+    let mut fails = 0
+    let mut i = 0
+    while i < len(pos) {
+        let r = _search(_atof(pos[i]), 0.000001)
+        if r[0] != 10 {
+            println("FAIL(frozen): " + pos[i] + " expected EXACT, got grade " + to_string(r[0]))
+            fails = fails + 1
+        }
+        i = i + 1
+    }
+    // negative control: a transcendental-ish value must NOT close EXACT
+    let neg = ["3.141593", "2.718282", "1.414214"]
+    i = 0
+    while i < len(neg) {
+        let r = _search(_atof(neg[i]), 0.000001)
+        if r[0] == 10 {
+            println("FAIL(neg-control): " + neg[i] + " closed EXACT unexpectedly")
+            fails = fails + 1
+        }
+        i = i + 1
+    }
+    if fails == 0 {
+        println("n6_closure_finder selftest: PASS (8 frozen EXACT + 3 negative-control)")
+        return 0
+    }
+    println("n6_closure_finder selftest: FAIL (" + to_string(fails) + ")")
+    return 1
+}
+
+fn _usage() {
+    println("n6_closure_finder — n=6 closure discovery engine (grade-10 EXACT finder)")
+    println("  hexa run tool/n6_closure_finder.hexa <value> [<value> ...]")
+    println("  hexa run tool/n6_closure_finder.hexa --tol <eps> <value> ...")
+    println("  hexa run tool/n6_closure_finder.hexa --selftest")
+    println("  n=6 primitives: N=6 sigma=12 tau=4 phi=2 sopfr=5 J2=24")
+}
+
+fn main() -> int {
+    let argv = args()
+    let mut tol = 0.000001
+    let mut had_value = false
+    let mut i = 0
+    // first pass: flags
+    while i < len(argv) {
+        let a = argv[i]
+        if a == "--selftest" { return _selftest() }
+        if a == "--help" || a == "-h" { _usage(); return 0 }
+        if a == "--tol" {
+            if i + 1 < len(argv) { tol = _atof(argv[i + 1]); i = i + 1 }
+        }
+        i = i + 1
+    }
+    // second pass: values (skip flags + the --tol operand)
+    i = 0
+    while i < len(argv) {
+        let a = argv[i]
+        if a == "--tol" { i = i + 2; continue }
+        if !_looks_numeric(a) { i = i + 1; continue }
+        _report(a, tol)
+        had_value = true
+        i = i + 1
+    }
+    if !had_value { _usage() }
+    return 0
+}

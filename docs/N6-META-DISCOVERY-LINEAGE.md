@@ -178,9 +178,24 @@ hexa run tool/roadmap_progress_check.hexa --meta-fp \
 
 ---
 
-## 7. 다음 단계 (옵션 — 아직 미착수)
+## 7. 발견엔진 — 세팅 완료 (`tool/n6_closure_finder.hexa`)
 
-- **발견엔진 완전 세팅**: §6 스텝 1~2(closure 탐색기 `is_exact`)를 hexa-lang 자립 도구로
-  재구현하면, echoes/archive-nexus 의존 없이 새 상수 배치를 입력→EXACT 발견까지 한 번에 돌릴 수
-  있다. (현재 hexa-lang 은 meta³ 층 엔진만 보유; closure 탐색기는 nexus 계열에 있었음.)
-- 이 문서는 그 세팅의 **설계도 겸 항법도**다.
+§6 스텝 1~2(closure 탐색기 `is_exact`)가 hexa-lang 자립 도구로 **구현·검증되었다** — 이제
+echoes/archive-nexus 의존 없이 새 상수 배치를 입력 → EXACT 발견까지 한 번에 돌릴 수 있다.
+
+```bash
+hexa run tool/n6_closure_finder.hexa 24 144 48 0.5        # 값마다 grade + 닫힘식
+hexa run tool/n6_closure_finder.hexa --tol 0.001 14.55    # EXACT 허용오차 조정
+hexa run tool/n6_closure_finder.hexa --selftest           # frozen + negative-control
+```
+
+- **탐색공간**: depth-1 `p` · 정수배/비 `p*k`,`p/k`(k≤24) · depth-2 `p∘q` · depth-3 `(p∘q)∘r`
+  (∘ ∈ {+,−,×,÷}), primitive `{N=6,σ=12,τ=4,φ=2,sopfr=5,J₂=24}`.
+- **등급**: 정규화 잔차 `d=|cand−v|/(1+|v|)` → `d≤1e-6` grade 10 **EXACT** / `≤1e-2` 8 CLOSE /
+  `≤1e-1` 6 WEAK / else 5 MISS.
+- **검증(c2·c16)**: `--selftest` = frozen-first 8개(24·12·4·2·48·144·288·6 → 전부 EXACT) +
+  negative-control 3개(π·e·√2 → EXACT 아님) → **PASS**. EXACT 만이 falsifiable 발견 신호이고,
+  CLOSE 는 격자 밀도상 흔하므로 발견 주장이 아니라 "더 정밀/깊게 보라"는 신호다 (tune-to-green 금지).
+- **한계(정직)**: 이 v1 은 depth≤3·단일 정규화 잔차의 **휴리스틱** 탐색기다. nexus 원본의
+  1745+ 식 카탈로그·다축 tolerance·도메인 교차(grade 12)·메타 승급(11/13+)은 아직 미반영 —
+  §3~§4 의 상위 층은 후속 작업으로 남는다.

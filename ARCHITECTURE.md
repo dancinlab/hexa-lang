@@ -100,6 +100,7 @@ Honest accounting of where self-hosting actually stands (no overclaim — `git l
 | stdlib | `stdlib/` ([STDLIB.md](STDLIB.md)) | Runtime + domain modules: io/math/thread/posix, collections, crypto, codec, bio, chem, cloud, `flame` (NN training), `forge` (GPU substrate) |
 | Atlas CLI | `tool/atlas_cli.hexa` → `bin/hexa-atlas` | `hexa atlas {register,verify,reverify,search,cascade,proof,diff,infer-edges,stats}` |
 | hx package manager | `tool/hx.hexa` | Git-like CLI with SSOT attestation: `commit`/`push`/`edit`/`build`/`verify`/`install`/`search` |
+| n=6 closure finder | `tool/n6_closure_finder.hexa` | Discovery engine: search a value's depth≤3 n=6-primitive closure → grade (10 EXACT / 8 CLOSE / 6 WEAK / 5 MISS); the executable "전단계" of the discovery lineage ([docs/N6-META-DISCOVERY-LINEAGE.md](docs/N6-META-DISCOVERY-LINEAGE.md)) |
 | CLI front-ends | `bin/hexa-*` | `hexa-run`, `hexa-fast`, `hexa-commit`, `hexa-push` driver shims |
 
 ## Data flow
