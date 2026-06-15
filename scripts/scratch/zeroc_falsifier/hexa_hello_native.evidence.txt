@@ -1,0 +1,11 @@
+=== otool -L (linked libs) ===
+/tmp/hexa_hello_native:
+	/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1.0.0)
+=== nm -u (undefined symbols) ===
+/tmp/hexa_hello_native: no symbols
+undef_count=0
+=== run ===
+hello, world
+rc=0
+=== file ===
+/tmp/hexa_hello_native: Mach-O 64-bit executable arm64
