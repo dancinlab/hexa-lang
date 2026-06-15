@@ -921,6 +921,14 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "HexaVal rt_write_bytes_v(HexaVal path, HexaVal arr);\n"
     buf = buf + "HexaVal rt_read_file_bytes(HexaVal path);\n"
     buf = buf + "HexaVal rt_read_bytes_at(HexaVal path, HexaVal offset, HexaVal nbytes);\n"
+    buf = buf + "HexaVal rt_read_f32_at(HexaVal path, HexaVal byte_off, HexaVal n_floats);\n"
+    // rt_read_f32_at materialises a native farr directly (no boxed-byte
+    // intermediate). The farr table lives in the OUTER runtime.c, which
+    // #includes this fragment, so hexa_farr_zeros/hexa_farr_set are defined
+    // AFTER this point in the TU — forward-declare them here so rt_read_f32_at
+    // (emitted below) links against them within the single runtime.c TU.
+    buf = buf + "HexaVal hexa_farr_zeros(HexaVal n_v);\n"
+    buf = buf + "HexaVal hexa_farr_set(HexaVal h_v, HexaVal i_v, HexaVal x_v);\n"
     buf = buf + "HexaVal rt_write_bytes_append(HexaVal path, HexaVal arr);\n"
     buf = buf + "HexaVal rt_write_bytes_append_v(HexaVal path, HexaVal arr);\n"
     buf = buf + "HexaVal rt_file_size(HexaVal path);\n"
@@ -7788,6 +7796,79 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "    }\n"
     buf = buf + "    free(buf);\n"
     buf = buf + "    return arr;\n"
+    buf = buf + "}\n"
+    buf = buf + "\n"
+    // ── read_f32_at: native ranged f32 reader (NO boxed-byte intermediate) ──
+    // The load-once-generation enabler. read_bytes_at returns a boxed HexaVal
+    // byte array (~16 B/byte) — fine for a per-layer forward (freed each layer)
+    // but for a resident 1B weight set the per-slice boxed buffers churn the
+    // allocator to a ~76.8 GB footprint (4.3 GB file × ~16 boxing) → jetsam
+    // SIGKILL (137). rt_read_f32_at instead decodes each LE IEEE-754 f32
+    // straight into a freshly-allocated native farr (double[] handle table,
+    // 8 B/elem) using a bounded reused C chunk buffer, so even a multi-GB
+    // slice uses O(chunk) transient memory, NOT O(slice). The f32→f64 decode
+    // is byte-identical to bytes_to_f32_le(read_bytes_at(...)) — `memcpy(&f,b,4)`
+    // then exact `(double)f` widening, same as hexa_bytes_to_f32_le — so
+    // anima's 303M / 1B parity stays byte-exact.
+    if buf.len() > 65536 { _flush_runtime_core(out_path, buf); buf = "" }
+    buf = buf + "// read_f32_at(path, byte_off, n_floats): ranged native-float reader.\n"
+    buf = buf + "// Seeks to byte_off (64-bit, via the shimmed fseek — NOT fseeko/_fseeki64,\n"
+    buf = buf + "// which SIGSEGV on the hxlcl_* handle, cf rt_read_bytes_at) and reads\n"
+    buf = buf + "// n_floats little-endian IEEE-754 f32s DIRECTLY into a fresh farr (native\n"
+    buf = buf + "// double[] handle). NO boxed-HexaVal byte intermediate. Returns the farr\n"
+    buf = buf + "// int handle (as farr_zeros) of length = floats actually read (short on EOF);\n"
+    buf = buf + "// an empty farr (handle to a 0-length buffer) on fopen/seek failure.\n"
+    buf = buf + "HexaVal rt_read_f32_at(HexaVal path, HexaVal byte_off, HexaVal n_floats) {\n"
+    buf = buf + "    int64_t off = HX_IS_INT(byte_off) ? HX_INT(byte_off)\n"
+    buf = buf + "                : (HX_TAG(byte_off) == TAG_FLOAT ? (int64_t)HX_FLOAT(byte_off) : -1);\n"
+    buf = buf + "    int64_t nf  = HX_IS_INT(n_floats) ? HX_INT(n_floats)\n"
+    buf = buf + "                : (HX_TAG(n_floats) == TAG_FLOAT ? (int64_t)HX_FLOAT(n_floats) : 0);\n"
+    buf = buf + "    if (off < 0 || nf <= 0) return hexa_farr_zeros(hexa_int(0));\n"
+    buf = buf + "    FILE* f = fopen(HX_STR(path), \"rb\");\n"
+    buf = buf + "    if (!f) return hexa_farr_zeros(hexa_int(0));\n"
+    buf = buf + "    // Shimmed fseek (hxlcl_fseek): `long` offset = 64-bit on LP64, honored\n"
+    buf = buf + "    // past 2^31/2^32. Unshimmed fseeko/_fseeki64 MUST NOT touch this handle\n"
+    buf = buf + "    // (it is an hxlcl handle, not a real libc FILE* — fseeko SIGSEGVs).\n"
+    buf = buf + "    if (fseek(f, (long)off, SEEK_SET) != 0) { fclose(f); return hexa_farr_zeros(hexa_int(0)); }\n"
+    buf = buf + "    // Allocate the destination farr up front (n_floats doubles, zero-filled).\n"
+    buf = buf + "    // farr.len/.buf are int64_t/double* — a multi-GB float set is fine.\n"
+    buf = buf + "    HexaVal fh = hexa_farr_zeros(hexa_int(nf));\n"
+    buf = buf + "    int64_t hid = HX_INT(fh);\n"
+    buf = buf + "    // BOUNDED reused C chunk buffer (8 MB = 2M floats). Transient memory is\n"
+    buf = buf + "    // O(chunk), NOT O(slice): a 1B-float slice streams through this 8 MB\n"
+    buf = buf + "    // buffer. The native double[] destination is the only O(slice) memory,\n"
+    buf = buf + "    // and it is the resident weight set itself (not allocator churn).\n"
+    if buf.len() > 65536 { _flush_runtime_core(out_path, buf); buf = "" }
+    buf = buf + "    const int64_t CHUNK_FLOATS = 2097152;  // 2M floats = 8 MB per chunk\n"
+    buf = buf + "    unsigned char* cbuf = (unsigned char*)malloc((size_t)CHUNK_FLOATS * 4);\n"
+    buf = buf + "    if (!cbuf) { fclose(f); return fh; }\n"
+    buf = buf + "    // Store each decoded f32 (as f64) into the native double[] via\n"
+    buf = buf + "    // hexa_farr_set — a single `e->buf[i] = x` store, NO allocation and NO\n"
+    buf = buf + "    // boxed-byte intermediate (the whole point of this builtin). The farr\n"
+    buf = buf + "    // table is `static` in the no-CUDA build, so a direct _hx_farr_table\n"
+    buf = buf + "    // store from this #included fragment is not link-visible — the public\n"
+    buf = buf + "    // hexa_farr_set entry point is the right, allocation-free path.\n"
+    buf = buf + "    int64_t done = 0;\n"
+    buf = buf + "    while (done < nf) {\n"
+    buf = buf + "        int64_t want = nf - done;\n"
+    buf = buf + "        if (want > CHUNK_FLOATS) want = CHUNK_FLOATS;\n"
+    buf = buf + "        int64_t got_bytes = (int64_t)fread(cbuf, 1, (size_t)(want * 4), f);\n"
+    buf = buf + "        int64_t got_floats = got_bytes / 4;  // ignore a trailing partial f32\n"
+    buf = buf + "        for (int64_t i = 0; i < got_floats; i++) {\n"
+    buf = buf + "            float fv;\n"
+    buf = buf + "            // LE bytes in file order -> host float. On LP64 LE targets this\n"
+    buf = buf + "            // memcpy is the same decode as hexa_bytes_to_f32_le; the (double)\n"
+    buf = buf + "            // widening below is byte-identical to that builtin's result.\n"
+    buf = buf + "            memcpy(&fv, cbuf + i * 4, 4);\n"
+    buf = buf + "            hexa_farr_set(fh, hexa_int(done + i), hexa_float((double)fv));\n"
+    buf = buf + "        }\n"
+    buf = buf + "        done += got_floats;\n"
+    buf = buf + "        if (got_floats < want) break;  // EOF / short read\n"
+    buf = buf + "    }\n"
+    buf = buf + "    (void)hid;\n"
+    buf = buf + "    free(cbuf);\n"
+    buf = buf + "    fclose(f);\n"
+    buf = buf + "    return fh;\n"
     buf = buf + "}\n"
     buf = buf + "\n"
     buf = buf + "// write_bytes_append(path, arr): append raw bytes from an int array\n"
