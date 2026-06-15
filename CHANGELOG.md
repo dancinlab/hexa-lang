@@ -8,6 +8,7 @@ For the full audit trail, see `git log`.
 
 ## 2026-06-16
 
+- **docs: n=6 → 메타 → meta³ 발견 계보 항법 문서 추가 (`docs/N6-META-DISCOVERY-LINEAGE.md`)** — σ·φ=n·τ "씨앗 항등식"에서 메타 부동점(alien16, 2026-04-18) → 메타 재귀 아틀라스("지도의 지도의 지도", Tarski 계층, 2026-04-19) → meta³=transcendence(Banach α⊃β⊃γ⊃δ⊃ε 5층 cap=sopfr(6)=5, hexa-lang 커밋 `d48d59ffc`, 2026-04-24)까지 *어떤 구조에서 이어져 발견됐는지*(계보)와 *그 발견을 만든 생성 프로세스*(6스텝 재현 레시피)를 한 곳에 모은 cross-repo 항법 문서. SSOT 본체는 echoes/hexa-physics/archive-nexus 이고 이 문서는 hexa-lang 세션에서 자주 참조하기 위한 지도+소스맵. 컴파일러 self-host byte-eq fixpoint(별개 트랙)과의 혼동 주의 박스 포함. 문서 only.
 - **docs: README + GitHub description "no C-transpile" 과장 정직성 수선 (전체 문서 현행화)** — ARCHITECTURE.md/CLAUDE.md 가 이미 받은 정직성 수선(#3353/#3354)을 README 와 repo description 까지 확장. README 5곳(태그라인·본문·ownership 표·how-it-works·요약)의 `no C-transpile` 을 "no LLVM anywhere + self-host native fixpoint(`gen3 ≡ gen4`) + C-transpile 은 fallback + 기약 libc floor" 로 교정(ARCHITECTURE.md#self-host-status 링크). GitHub repo description 도 `no LLVM · no C-transpile` → `no LLVM · self-hosting native fixpoint`. 이번 세션 self-host 사실(native run/build clang-free·v0.238.0 릴리즈)과 정합. 코드 변경 0 — 문서 only.
 
 ## 2026-06-15
