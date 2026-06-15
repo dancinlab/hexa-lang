@@ -42,3 +42,21 @@ VERDICT: 🟢 M3 "zero-portable / irreducible minimum" OVERCLAIM is FALSIFIED.
   "no .c 완전돌파" is therefore an ATTACKABLE codegen campaign, NOT an impossibility.
   Full zero-.c remains multi-step (porting batches + @asm-syscall wiring + libm
   decision), much pod-gated — but the WALL ("can't be done") is broken.
+
+────────────────────────────────────────────────────────────────────
+REFINEMENT (2026-06-16, same day) — honest sharpening of the Z2 (syscall) gap.
+The first pass credited "@asm-svc eliminable (designed, partial)". On reading
+stdlib/firmware/asm.hexa: `asm_emit_block` emits a GCC `__asm__ volatile` C
+fragment (a C-TRANSPILE feature needing clang), and `asm_supported_arch` only
+validates cortex-M (armv6-m/armv7e-m/armv8-m.main) — NOT arm64-darwin/x86_64 hosts.
+Zero real `@asm(` usage exists in stdlib/self/compiler .hexa. So the @asm path as
+BUILT does NOT help the native-emit zero-C path: it's C-inline-asm for firmware.
+Native codegen DOES emit raw svc#0x80 (proven), but only as the COMPILER's internal
+program-exit — there is NO general syscall SURFACE a .hexa runtime author can call
+for arbitrary syscalls; the piecemeal builtins (`__fd_write_bytes`) still route
+through a C shim (stdlib/runtime/io.hexa:26). HONEST Z2 wall: a general native-emit
+syscall intrinsic (`@syscall(num, args...)` → svc/syscall with reg marshalling) is
+UNBUILT. This is the real, attackable codegen task — pod-gated, non-trivial. It does
+NOT revive "irreducible": the floor is still reducible (Z1 pure leaves port today;
+Z2 is buildable codegen, not a wall), but the path is more work than @asm implied.
+────────────────────────────────────────────────────────────────────

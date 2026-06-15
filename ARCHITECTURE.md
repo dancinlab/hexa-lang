@@ -77,9 +77,13 @@ Honest accounting of where self-hosting actually stands (no overclaim — `git l
     308 top-level fns (50%) call no libc/libm/syscall** → portable to `.hexa` today, zero toolchain
     change. (`libc-dep:140` is mostly `malloc`/`memcpy` convenience that itself ports once a `.hexa`
     arena + `memcpy`-loop exist; `syscall-dep:3`; `libm/FFI-dep:10`.)
-  - **Roadmap agrees** — `PLAN.md` L7589/L8183/L8341 mark kernel syscalls as `@asm`-svc eliminable;
-    the compiler already emits byte-correct `svc #0x80` / x86 `syscall`, and the `__fd_write_bytes`
-    syscall builtin is wired (`self/codegen_c2.hexa`, `bind.hexa`).
+  - **Roadmap agrees** — `PLAN.md` L7589/L8183/L8341 mark kernel syscalls as eliminable; the
+    compiler already emits byte-correct `svc #0x80` / x86 `syscall` (as the program's exit), and a
+    `__fd_write_bytes` builtin exists. ⚠️ *Honest caveat:* the existing `@asm` block
+    (`stdlib/firmware/asm.hexa`) emits a GCC `__asm__` **C** fragment for **cortex-M only** — it is
+    a C-transpile firmware feature, NOT a native-emit syscall surface. Native zero-C therefore needs
+    a **new** general syscall intrinsic (`@syscall(num, args…)` → `svc`/`syscall` with register
+    marshalling); that's buildable codegen work, not a wall (Z2 in the campaign).
 
   The **honest** floor is therefore NOT "all ~5.5k LOC". It reduces to (a) **libm transcendentals**
   (~10 fns — a policy choice for FP-codegen fragility, not a hard wall), (b) **raw syscall
