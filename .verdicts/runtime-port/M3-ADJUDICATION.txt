@@ -30,3 +30,13 @@ A literal 'ls self/*.c == empty' is therefore UNREACHABLE by porting: the floor 
 freestanding libc/libm/syscall/device primitives that a self-hosting native compiler
 fundamentally rests on (as do Go/Rust runtimes). 'self-host complete' = native-emit
 fixpoint + this irreducible floor, NOT zero C source.
+
+────────────────────────────────────────────────────────────────────
+CORRECTION (2026-06-16) — this verdict's "zero portable / irreducible" is FALSIFIED.
+The tally above counted M1 reason-COLUMNS on paper; it never tested actual portability.
+A frozen-first port (hexa_fnv1a → pure .hexa, byte-identical over 6 cases) + a per-fn
+body audit (155/308 runtime_core.c fns call no libc/libm/syscall = portable today) +
+the compiler's own PLAN.md (@asm-svc syscall elimination) refute "Net portable surface = 0".
+Honest floor reduces to libm transcendentals + raw syscall emission (@asm, partial) + GPU FFI.
+See .verdicts/zeroc-breakthrough/F-ZEROC-M3-OVERCLAIM-FALSIFIED.txt. Zero-.c = OPEN campaign.
+────────────────────────────────────────────────────────────────────

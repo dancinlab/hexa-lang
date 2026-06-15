@@ -1,0 +1,26 @@
+// Zero-C falsifier: pure-.hexa reimplementation of runtime_core.c hexa_fnv1a.
+// Refutes M3-ADJUDICATION's "ZERO clean portable hexa leaves" claim.
+// uint32 wraparound emulated via & 0xFFFFFFFF (hexa ints are 64-bit).
+
+fn fnv1a(s: string) -> i64 {
+    let mut h: i64 = 2166136261
+    let n = s.len()
+    let mut i = 0
+    while i < n {
+        let b = s.char_code_at(i) & 255
+        h = h ^ b
+        h = (h * 16777619) & 4294967295
+        i = i + 1
+    }
+    return h
+}
+
+fn main() {
+    let cases = ["", "a", "hexa", "no .c 완전돌파", "The quick brown fox", "fnv1a"]
+    let mut k = 0
+    while k < cases.len() {
+        let c = cases[k]
+        println(fnv1a(c))
+        k = k + 1
+    }
+}

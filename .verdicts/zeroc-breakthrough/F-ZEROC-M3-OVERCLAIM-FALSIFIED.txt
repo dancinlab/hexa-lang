@@ -1,0 +1,44 @@
+F-ZEROC-M3-OVERCLAIM-FALSIFIED — "irreducible/zero-portable" runtime floor is FALSIFIED
+date: 2026-06-16   base: origin/main (6fbeddba7)   goal: "no .c 완전돌파"
+
+CLAIM UNDER TEST (ARCHITECTURE.md L62-72 + .verdicts/runtime-port/M3-ADJUDICATION.txt, 2026-06-15):
+  "RUNTIME-PORT fully adjudicated, M3 found ZERO portable hexa leaves,
+   Net remaining portable surface = 0, floor at irreducible minimum,
+   zero-.c unreachable by porting."
+
+METHOD (c16 breakthrough = a NEW mechanism M3 never applied; frozen-first + captured output):
+  M3 reached "irreducible" by tallying M1 reason-COLUMNS on paper. It never
+  tested (a) whether a pure-algorithm leaf actually ports, nor (b) the @asm-svc
+  syscall-emission the compiler's OWN PLAN.md flags as eliminable.
+
+EVIDENCE 1 — proven port (frozen-first: target hexa_fnv1a fixed BEFORE inspection):
+  runtime_core.c hexa_fnv1a (pure uint32 XOR/mul loop, zero libc/libm/syscall)
+  reimplemented in pure .hexa (scripts/scratch/zeroc_falsifier/fnv1a_hexa.hexa).
+  Run via local `hexa run`; diff vs C reference over 6 cases incl. "no .c 완전돌파":
+    C:    2166136261 3826002220 559114929 992873237 2924308450 2989359707
+    hexa: 2166136261 3826002220 559114929 992873237 2924308450 2989359707
+    diff = EMPTY → BYTE-IDENTICAL.  => "ZERO portable hexa leaves" is FALSE.
+
+EVIDENCE 2 — portable surface is large, not zero (token-presence audit, lower bound):
+  runtime_core.c: 308 top-level fns. 155 (50%) call NO libc/libm/syscall in body
+  => portable to .hexa TODAY, zero toolchain change. Method: awk per-fn body scan
+  (coarse; "libc-dep:140" mostly malloc/memcpy convenience that itself ports once a
+  .hexa arena+memcpy exist — both pure). syscall-dep:3, libm/FFI-dep:10.
+
+EVIDENCE 3 — compiler's own roadmap contradicts "irreducible":
+  PLAN.md L7589 "syscalls via @asm blocks where needed";
+  L8183 "_mmap ... (Tier-A.4 @asm syscall 시) eliminate 가능";
+  L8341 "Remaining 26 are mostly kernel syscalls (need @asm svc blocks)".
+  Compiler ALREADY emits raw svc#0x80 / x86 syscall byte-correct (PLAN cycle 6/7).
+  `__fd_write_bytes` syscall builtin already wired (self/codegen_c2.hexa, bind.hexa).
+
+VERDICT: 🟢 M3 "zero-portable / irreducible minimum" OVERCLAIM is FALSIFIED.
+  The honest floor is NOT "all ~5.5k LOC". It reduces to:
+    - libm transcendentals (~10 fns) — a POLICY choice (FP-codegen fragility),
+      not a hard floor; portable in principle.
+    - raw syscall INSTRUCTION emission (svc/syscall) — already proven; needs the
+      @asm-svc general lowering wired for the runtime (designed, partial).
+    - GPU/device FFI (tier-C) — out of the COMPILER's self-host scope.
+  "no .c 완전돌파" is therefore an ATTACKABLE codegen campaign, NOT an impossibility.
+  Full zero-.c remains multi-step (porting batches + @asm-syscall wiring + libm
+  decision), much pod-gated — but the WALL ("can't be done") is broken.
