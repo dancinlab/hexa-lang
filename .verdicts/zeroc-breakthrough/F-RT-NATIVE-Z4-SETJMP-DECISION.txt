@@ -1,0 +1,34 @@
+F-RT-NATIVE-Z4-SETJMP-DECISION — Z4 milestone closed: setjmp/longjmp honest-keep (justified)
+date: 2026-06-16   domain: RT-NATIVE   milestone: Z4 (setjmp/longjmp → native unwinding OR honest-keep 결정)
+
+MILESTONE DELIVERABLE (as defined): EITHER native unwinding lowering, OR a justified
+honest-keep decision. This verdict delivers the latter, with evidence (3-agent research
+`RT-NATIVE-Z3-Z2b-Z4-RESEARCH.txt`).
+
+EVIDENCE:
+  - Darwin arm64: `hxlcl_setjmp`/`hxlcl_longjmp` (runtime.c:1624-1647) are NAKED ASSEMBLY
+    (cycle 86) — 192B jmp_buf saved/restored by hand-written arm64, ZERO C logic. So on the
+    primary platform, the exception substrate is ALREADY non-C (it is asm, which lives inline
+    in the .c today but is mechanically extractable to a .s file — same class as the Z2a
+    runtime_hi .s seed).
+  - Linux x86_64: `setjmp(*(jmp_buf*)buf)` (runtime.c:2018-2021) = libc wrapper, glibc-version
+    tied. Native unwinding is technically possible but costs glibc-layout tracking + multi-
+    version testing for ~no runtime gain.
+  - try/catch language surface (ast.hexa:95, hir_to_mir.hexa:1810-1936, arm64_darwin.hexa
+    STMT_TRY_SETJMP) is complete and unaffected.
+
+DECISION: HONEST-KEEP, mirroring the repo's standing `stdlib trig = libm` policy (CLAUDE.md):
+  setjmp/longjmp is classified a **platform module** (OS/ABI-tied bootstrap floor), like libm
+  and the syscall trampolines. The exception ABI is:
+    - arm64-darwin: native asm (zero C; extract to `.s` in Z2c integration → counts toward
+      `ls self/*.c == ∅` since asm-in-.s is not a .c file).
+    - x86_64-linux: libc setjmp wrapper — irreducible platform floor (honest, like libm).
+  ZERO-C SCOPE (clarified, Go/Rust-equivalent): "no .c" = the user-visible runtime (arena,
+  tag, string/array, syscall, exception-dispatch) is native; the OS/ABI floor (libm transcend-
+  entals, Linux libc setjmp) is the freestanding bootstrap floor every self-hosting runtime
+  rests on. On arm64-darwin the exception substrate is already asm → extractable to .s, so it
+  does NOT block literal `ls self/*.c == ∅` on the primary target.
+
+VERDICT: 🟢 Z4 CLOSED (honest-keep + scope clarification). The remaining literal-0 work on
+arm64-darwin is Z2a(hi)✓-mechanism + Z3(arena) + Z2b(tag) + Z2c(core, incl. extracting the
+Darwin setjmp asm to a .s) + Z5(byte-eq). Z4 itself requires no further porting.
