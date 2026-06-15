@@ -71,7 +71,7 @@ typedef struct HexaMapTable {
     int          from_arena;
 } HexaMapTable;
 
-typedef struct HexaArr { HexaVal* items; int len; int cap; }            HexaArr;
+typedef struct HexaArr { HexaVal* items; int64_t len; int64_t cap; }    HexaArr; /* 64-bit len/cap: a >=4GB read_file_bytes buffer must not wrap (MUST match runtime_core.c) */
 typedef struct HexaMap { HexaMapTable* tbl; int len; }                  HexaMap;
 typedef struct HexaFn  { void* fn_ptr; int arity; }                     HexaFn;
 typedef struct HexaClo { void* fn_ptr; int arity; HexaVal* env_box; }   HexaClo;
@@ -223,7 +223,7 @@ void    hexa_set_args(int argc, char** argv);         /* runtime.c:5088 */
 HexaVal hexa_args(void);                              /* runtime.c:5103 */
 
 /* arrays */
-int     hexa_len(HexaVal v);                          /* runtime.c:2042 */
+int64_t hexa_len(HexaVal v);                          /* runtime.c:2042 — int64: ≥4GB read_file_bytes len must not truncate */
 HexaVal hexa_array_new(void);                         /* runtime.c:1693 */
 HexaVal hexa_array_push(HexaVal arr, HexaVal item);   /* runtime.c:1809 */
 HexaVal hexa_float(double f);                         /* runtime.c:1232 */
