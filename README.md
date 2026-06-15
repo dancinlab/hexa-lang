@@ -4,7 +4,7 @@
 
 <h1 align="center">💎 hexa-lang</h1>
 
-<p align="center"><strong>Native compiler with atlas-bound theorems</strong> — strict-lint · citation-enforced · no LLVM · no C-transpile</p>
+<p align="center"><strong>Native compiler with atlas-bound theorems</strong> — strict-lint · citation-enforced · no LLVM · self-hosting native fixpoint</p>
 
 <p align="center">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue"></a>
@@ -20,7 +20,7 @@
 
 ---
 
-`hexa-lang` is a native compiler that carries its own theorem 사전 (dictionary) inside the binary. No LLVM. No C-transpile. Every formula in your code either cites the atlas or the build refuses to start. The stricter the gate, the cleaner the code that passes.
+`hexa-lang` is a native compiler that carries its own theorem 사전 (dictionary) inside the binary. **No LLVM anywhere** — the self-host backend lowers source through its own IR to native objects (a byte-identical `gen3 ≡ gen4` fixpoint) and links them with its own `hexa_ld`; `hexa run`/`hexa build` ship clang-free on the promoted toolchain. (Two C pieces remain by engineering necessity, not as unfinished debt: a C-transpile fallback delegate for some flows, and a small irreducible libc/syscall runtime floor generated from `.hexa` emitters — the honest accounting is in [ARCHITECTURE.md → Self-host status](ARCHITECTURE.md#self-host-status).) Every formula in your code either cites the atlas or the build refuses to start. The stricter the gate, the cleaner the code that passes.
 
 > [!NOTE]
 > Sister of [`n6`](https://github.com/dancinlab/n6) (semantic atom layer — atlas serialisation format), [`hxc`](https://github.com/dancinlab/hxc) (byte-canonical wire), and [`tape`](https://github.com/dancinlab/tape) (operational trace). hexa-lang's atlas is unconditionally binary built-in — compile-time embedded into the compiler — and `.n6` is the sister serialisation format emitted on demand by `hexa atlas export` for interop / inspection. Discovered laws are absorbed via GitHub PR directly into the embedded atlas, not through a runtime `.n6` overlay. The `wilson` agent ([`dancinlab/wilson`](https://github.com/dancinlab/wilson)) is built end-to-end on hexa-lang.
@@ -223,7 +223,7 @@ A ~13–24 % same-dtype speed tax buys a column cuBLAS leaves empty. These are *
 | 🎲 **Determinism (byte-exact)** | bit-reproducible by construction — *you* fix the reduction order | DMMA accumulation order is vendor-**"unspecified"**, drifts across GPU generations, **un-matchable from outside** | the byte-eq capstone (`max\|Δ\| = 0`) · audit-grade reproducible training · clean A/B (zero GEMM noise) · multi-GPU bit-consistency |
 | 🧩 **Fusion (megakernel-resident)** | callable *inside* a persistent / cooperative kernel — GEMM becomes just another resident op | **cannot be nested** in a device kernel (host library call) — forces "stop, write HBM, hand off" | whole-step megakernel (`F-FUSION-M2`) · 11-op fwd in 1 launch (`F-FUSION-LAUNCH-AMORT`) · FlashAttn-style fused attention |
 | 🔢 **FP64-exact + custom epilogue** | arbitrary precision + fused epilogue in one kernel; FP64 GEMM is a byte-exact oracle | FP64 **epilogue fusion absent**; IEEE-float only | `clm_prod` FP64 train `max\|ΔCE\| = 0` (oracle baseline) · RTSC/DFT-grade FP64 science · non-IEEE dtypes (posit · n=6 lattice) |
-| 🔓 **Ownership (no vendor lock)** | 100 % hexa source → PTX → SASS, no LLVM, no C-transpile, single binary | closed black box, NVIDIA-only, multi-GB libtorch to ship | edge / offline single-binary deploy · SASS-level kernel research · the 💎 identity |
+| 🔓 **Ownership (no vendor lock)** | 100 % hexa source → PTX → SASS, no LLVM, self-host native fixpoint, single binary | closed black box, NVIDIA-only, multi-GB libtorch to ship | edge / offline single-binary deploy · SASS-level kernel research · the 💎 identity |
 
 **Net:** *"≈ cuBLAS speed (−13–24 % tax) **+** determinism + fusion + FP64-exact + ownership that cuBLAS cannot express."* For a workload that just wants a fast standalone matmul, cuBLAS is simpler and faster. For hexa's targets — reproducible, fusible, owned, FP64-correct — the trade is decisively worth it, and the **byte-eq megakernel capstone is the existence proof**: it is *only* reachable on the own-GEMM stack.
 
@@ -340,7 +340,7 @@ Snapshot derived from `git log` on main; full tables at `SPEC.yaml::phases_compl
 
 Six choices that shape everything else, pinned in [`SPEC.yaml`](SPEC.yaml):
 
-1. **Native compiled, direct codegen** — no LLVM, no C-transpile. The tree-walking interpreter is retired: the self-host stage reached a byte-equal fixed point, and `hexa run` compiles then executes.
+1. **Native compiled, direct codegen** — no LLVM; native-emit (own IR → object) is the self-host backend. The tree-walking interpreter is retired: the self-host stage reached a byte-equal fixed point (`gen3 ≡ gen4`), and `hexa run`/`hexa build` compile then execute clang-free (a C-transpile fallback delegate stays for uncovered flows).
 2. **Atlas static-baked into the compiler binary** — `ATLAS_HASH` pinned, drift handled by CI auto-rebuild. Runtime atlas-load cost: 0 ms.
 3. **Strict compile-time fatal lint** — Python `SyntaxError` + TypeScript `strict` model. S0–S5 + S8 always fatal. No `--unsafe`. No `HEXA_STRICT=0`.
 4. **`@grace` is the only opt-out** — `@grace(HXxxxx, until="...", reason="...")` per site, every site emits HX9000 at every compile, CI requires `Acked-grace:` trailer.
@@ -459,7 +459,7 @@ Citing a tombstoned `L[id]` fires `HX1099` and fails the build. Bypass is `@grac
 
 ## Highlights
 
-- native compiled — direct codegen, no LLVM, no C-transpile
+- native compiled — direct codegen, no LLVM (self-host native fixpoint; C-transpile = fallback only)
 - 4.2 MB atlas baked statically into the compiler binary; runtime cost 0 ms
 - 8-stage strict lint S0–S5 + S8 enforced at compile time, fatal by default
 - ε self-proof: `@verify` / `@discover` → atlas auto-promote → tombstone retroactive sweep
