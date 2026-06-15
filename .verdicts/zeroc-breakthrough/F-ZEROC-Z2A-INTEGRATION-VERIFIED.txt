@@ -1,0 +1,28 @@
+F-ZEROC-Z2A-INTEGRATION-VERIFIED — compiler builds without runtime_hi_gen.c; native rt parity byte-identical
+date: 2026-06-16   goal: "no .c 완전돌파"   tool: build/aprime_cc_z2 + build_aprime.sh (local)
+
+Z2a = supply rt_str_* from a NATIVE-compiled object (zero C) instead of the hexat-transpiled
+runtime_hi_gen.c. This verdict VERIFIES the full integration works (c2, captured output):
+
+BUILD (gated HEXA_ZEROC_RT_HI=1, non-default):
+  - native-compile lib-only runtime_hi (head -130, main/selftest stripped — mirrors
+    extract_runtime_hi.sh) → rt_hi.s → clang -c → build/rt_hi_native.o.
+    nm: provides _rt_str_split/_lines/_pad_left/_pad_right/_repeat/_center (T), NO _main.
+  - build_aprime.sh HEXA_ZEROC_RT_HI=1: removes `#include "runtime_hi_gen.c"` from the
+    generated runtime_core.c (restored after) + links build/rt_hi_native.o.
+  - RESULT: build/aprime_z2a (1592232 B Mach-O arm64) built with NO runtime_hi_gen.c,
+    smoke exit(42)==42 PASS. First duplicate-_main link failure fixed by lib-only strip.
+
+PARITY (the c2 gate — native rt_str_* MUST behave identically to C):
+  aprime_z2a (native rt) vs aprime_cc_z2 (C rt) emit BYTE-IDENTICAL .s over 4 sources
+  (runtime_hi.hexa string-heavy, codegen_native.hexa, ast.hexa, atomic_ops.hexa):
+    4 identical, 0 differ. => native rt_str_* are behaviorally equivalent to the C bodies;
+    the compiler emits identical output regardless of which runtime_hi it links.
+
+CONSEQUENCE: runtime_hi_gen.c (1 of 3 self/*.c) is VERIFIED-eliminable with zero behavioral
+change (not just mechanically-ready). The gated build_aprime.sh path proves it end-to-end.
+REMAINING to actually drop the FILE from `ls self/*.c`: (a) flip to default (ungate) for BOTH
+the compiler build AND runtime.a (compiled-program runtime also #includes runtime_hi_gen.c),
+(b) native-compile rt_hi in-build (bootstrap via prior-gen native compiler), (c) the heavy
+selfhost_byteeq_gate.sh (gen3≡gen4) on the flipped default. Then `ls self/*.c` = 2. Z3/Z2b/Z2c
+remain for 2→0. The byte-identical parity here is the hard proof that the approach is sound.
