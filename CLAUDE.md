@@ -3,9 +3,10 @@
 Native compiler for the `.hexa` language with an embedded theorem **atlas** and the `hx`
 package manager. No LLVM anywhere: source is lowered through the compiler's own IR to native
 objects (ELF64 / Mach-O arm64) and linked with `hexa_ld` — a byte-identical self-host fixpoint
-(`gen3 ≡ gen4`), default for `--emit`. Two C pieces remain by policy (not port debt): a
-C-transpile fallback delegate for some full `hexa build`/`run` flows, and the irreducible
-~5.5k-LOC C runtime substrate (libc/syscall floor, generated from `.hexa` emitters). See
+(`gen3 ≡ gen4`), default for `--emit`. Two C pieces still remain: a C-transpile fallback
+delegate for some full `hexa build`/`run` flows, and the ~5.5k-LOC C runtime substrate (the
+libc/syscall bootstrap floor, generated from `.hexa` emitters) — the floor RUNTIME-PORT is
+still shrinking (M3 open), an irreducible-bootstrap assessment, **not** a permanence policy. See
 [ARCHITECTURE.md](ARCHITECTURE.md) → Self-host status for the honest accounting. Every
 formula-bearing function must cite an atlas law (`@cite(L[id])`), carry an active `@verify`, or
 declare a `@grace` — otherwise the build refuses to emit a binary (stage S8, fatal `HX8004`).

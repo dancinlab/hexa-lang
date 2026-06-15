@@ -9,12 +9,13 @@
 `hx` package manager. There is **no LLVM anywhere in the toolchain**. The self-host backend
 lowers source directly through its own IR to native objects (ELF64 / Mach-O arm64) and links
 them with its own linker (`hexa_ld`); this native-emit path is a proven byte-identical fixpoint
-(`gen3 ≡ gen4`) and is the default for `--emit`. Two pieces of C remain, by policy, not as
-unfinished port debt — see [Self-host status](#self-host-status) for the honest accounting:
-a C-transpile **fallback delegate** still serves some full `hexa build`/`run` flows until the
-native end-to-end path lands, and an irreducible ~5.5k-LOC **C runtime substrate** (libc/syscall
-floor, generated from `.hexa` emitter SSOTs) is compiled and linked into every binary
-(RFC 061 §4.1 / g5 §7 permit substrate C; they forbid only a C-transpile *backend*).
+(`gen3 ≡ gen4`) and is the default for `--emit`. Two pieces of C still remain — see
+[Self-host status](#self-host-status) for the honest accounting: a C-transpile **fallback
+delegate** still serves some full `hexa build`/`run` flows until the native end-to-end path
+lands, and a ~5.5k-LOC **C runtime substrate** (the libc/syscall bootstrap floor, generated
+from `.hexa` emitter SSOTs) is compiled and linked into every binary. The substrate is the
+engineering floor the RUNTIME-PORT campaign is **still shrinking** (M3 open) — an
+irreducible-bootstrap assessment, **not** a policy that accepts C permanently.
 Its defining feature is an embedded **atlas** — a ~4.2 MB theorem
 dictionary (P primitives / C constants / L laws / E errors) baked statically into the binary.
 Every formula-bearing function must either cite an atlas law (`@cite(L[id])`), carry an active
@@ -46,10 +47,12 @@ Honest accounting of where self-hosting actually stands (no overclaim — `git l
   yet materialise the 16-byte `HexaVal {tag,payload}` SysV register-pair (arg0 → rdi:rsi).
 - **Full native `hexa build` end-to-end** — gen3 owning the link + runtime orchestration, so
   the C-transpile delegate-fallback can be retired.
-- **Irreducible C floor** — `self/runtime*.c` (~5.5k LOC tier-A: libc/libm/syscall/`HexaVal`
-  arena) is **policy-accepted permanent C**, generated from `*_emit.hexa` SSOTs, not authored
-  by hand and not port debt. A literal `ls self/*.c` empty tree (the HEXA-SELFHOST+ meta
-  graduation bar) collides with this floor and is a definition question, not engineering debt.
+- **Runtime C floor (still shrinking)** — `self/runtime*.c` (~5.5k LOC measured; tier-A core
+  ≈1.5k libc/libm/syscall/`HexaVal` arena) is generated from `*_emit.hexa` SSOTs, not authored
+  by hand. The RUNTIME-PORT campaign is **still driving it down** (M3 = 151 BORDERLINE numeric
+  fns open). "Irreducible floor" is an *engineering assessment* of the libc/syscall bootstrap
+  layer — **there is no policy that accepts this C as permanent**. The HEXA-SELFHOST+ meta bar
+  (`ls self/*.c` empty) is therefore genuinely unmet, not merely a definition technicality.
 
 ## Component map
 
