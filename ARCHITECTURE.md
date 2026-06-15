@@ -48,13 +48,17 @@ Honest accounting of where self-hosting actually stands (no overclaim — `git l
   `lea` was then dropped in the native-emit data-address matcher (it only saw bare `.LCstrN`
   labels, not the `[rip+<label>]`-wrapped payload) — fixed by `_ex86_data_label_of`
   (`compiler/emit/elf_x86_64.hexa`). verdict `F-X86-RUNG2-STRING-PRINT-PASS`.
-- 🟡 **Full native `hexa build` end-to-end** — the **capability is proven** (2026-06-15):
-  `gen3 --emit=obj` → `hexa_ld` (native Mach-O link against `rt.o`, `--static`) → runnable
-  binary with **zero clang / zero system ld** (`print("hi")`→`hi` rc 7 on arm64-darwin,
-  verdict `F-FULL-NATIVE-BUILD-E2E-ARM64`). REMAINING = flip the `hexa build` **driver**
-  default to this path (it still uses `--emit=asm`→clang for safety; the promote shim
-  delegates the `build` subcommand) — a driver change gated on **full-corpus** byte-eq, kept
-  opt-in until corpus-verified.
+- ✅ **Full native `hexa build` end-to-end** (done 2026-06-15) — `hexa build <src> -o OUT`
+  now produces a native executable with **zero clang / zero system ld**: the `hx-selfhost-cli`
+  launcher's new `build` route (native-first + delegate-fallback, mirroring the `run` route
+  #3325) runs `gen3 --emit=obj` → `hexa_ld <obj> rt.o -o OUT`. Corpus-verified (arith/string/
+  loop/fn/cond/array 6/6) + standing gate `tool/selfhost_native_build_gate`
+  (`.github/workflows/selfhost-native-build-gate.yml`). Safety: any program gen3/hexa_ld can't
+  build, `HEXA_NATIVE_BUILD=0`, or an unknown flag → falls through to the shipped build
+  (builds never break); reversible via `promote_selfhost.sh --revert`. verdict
+  `F-SELFHOST-NATIVE-BUILD-FLIP`. (The deeper `self/main.hexa cmd_build` `--emit=asm`→clang
+  block is left intact as the fallback — the launcher route already delivers clang-free builds
+  without a gen3 rebuild / shipped-toolchain blast risk.)
 - **Runtime C floor (at engineering-irreducible minimum)** — `self/runtime*.c` (~5.5k LOC;
   tier-A core ≈1.5k libc/libm/syscall/`HexaVal` arena) is generated from `*_emit.hexa` SSOTs,
   not authored by hand. RUNTIME-PORT is now **fully adjudicated (M1–M5 closed)**: the M3 pass

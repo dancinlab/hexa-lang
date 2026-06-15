@@ -1,0 +1,38 @@
+F-SELFHOST-NATIVE-BUILD-FLIP — hexa build default → native gen3+hexa_ld (clang/ld-free)
+date: 2026-06-15  host: mini (arm64-apple-darwin, promoted selfhost slot)
+
+RESULT: 🟢 PASS — `hexa build` now produces native executables with ZERO clang /
+ZERO system ld, via the hx-selfhost-cli launcher's new `build` block.
+
+WHAT CHANGED (productization of SELFHOST-NEXT residual [2]):
+  tool/hx-selfhost-cli — added a `build` route MIRRORING the existing `run` route
+  (#3325): native-first + delegate-fallback. `hexa build <src.hexa> [-o OUT]` →
+  gen3 --emit=obj (direct object) → hexa_ld <obj> rt.o -o OUT. On ANY native
+  compile/link failure, or HEXA_NATIVE_BUILD=0, or an unknown flag → falls through
+  to the shipped dispatch's build (builds never break). Reversible:
+  tool/promote_selfhost.sh --revert.
+
+VERIFIED (live, on the promoted slot):
+  • hexa build prog.hexa -o prog.bin → Mach-O 64-bit executable arm64; ./prog.bin
+    stdout=native-build-ok rc=0 (no clang/ld invoked).
+  • kill-switch: HEXA_NATIVE_BUILD=0 hexa build … → delegates ('OK: built …').
+  • subcommands intact: hexa --version → 'hexa 0.1.0-dispatch'; hexa run → run-ok.
+  • standing gate tool/selfhost_native_build_gate (corpus 6: arith/string/loop/
+    userfn/cond/array), driven through `hexa build`:
+      PASS arith — stdout=[42] rc=0
+      PASS string — stdout=[hello] rc=0
+      PASS loop — stdout=[15] rc=0
+      PASS userfn — stdout=[42] rc=0
+      PASS cond — stdout=[big] rc=0
+      PASS array — stdout=[40] rc=0
+      selfhost_native_build_gate: PASS=6 FAIL=0 (corpus 6)
+    gate exit=0
+
+CI: .github/workflows/selfhost-native-build-gate.yml (per-PR; neutral-2 where no slot).
+
+SCOPE NOTE (honest): this flips the launcher-level `build` route (low-blast,
+reversible, fallback-safe) — the same layer #3325 used for `run`. The deeper
+self/main.hexa cmd_build native block (--emit=asm→clang, a 200-line table-driven
+weak-symbol system) is left untouched: rewriting it needs a full gen3 rebuild +
+re-promote and carries shipped-toolchain blast risk with no added user-visible
+benefit (the launcher already delivers clang-free `hexa build`).

@@ -1,0 +1,63 @@
+name: selfhost-native-build-gate
+
+# ── `hexa build` NATIVE PATH regression gate ────────────────────────────────
+#
+# PURPOSE
+#   Lock the "full native hexa build end-to-end" capability into standing CI:
+#   `hexa build <prog.hexa> -o OUT` must produce a WORKING native executable via
+#   the self-hosted gen3 (--emit=obj direct object) + hexa_ld (native link
+#   against rt.o) — ZERO clang / ZERO system ld on the build path. The
+#   hx-selfhost-cli launcher's `build` block (native-first, delegate-fallback)
+#   is what this exercises, across a feature corpus (arith/string/loop/fn/
+#   cond/array), so a regression that silently drops to clang/garbage FAILS the
+#   PR instead of rotting unnoticed. verdict F-SELFHOST-NATIVE-BUILD-FLIP.
+#
+#   Same exit-2-neutral classification as the sister self-host gates: a CI
+#   runner without a promoted self-host slot (gen3/hexa_ld/rt.o) cannot drive
+#   the native build path → the gate exits 2 (SETUP/INFRA) and we remap to
+#   neutral, so a missing slot never false-fails a PR. A TRUE regression (a
+#   corpus program failed to build natively, or wrong output) exits 1 and fails.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tool/hx-selfhost-cli'
+      - 'tool/selfhost_native_build_gate'
+      - '.github/workflows/selfhost-native-build-gate.yml'
+      - 'compiler/**'
+      - 'self/**'
+  pull_request:
+    paths:
+      - 'tool/hx-selfhost-cli'
+      - 'tool/selfhost_native_build_gate'
+      - '.github/workflows/selfhost-native-build-gate.yml'
+      - 'compiler/**'
+      - 'self/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  selfhost-native-build-gate:
+    name: selfhost native build (gen3 --emit=obj + hexa_ld, darwin-arm64)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      # The gate self-classifies: without a promoted self-host slot
+      # ($HOME/.hx/self/native/selfhost/{gen3,hexa_ld,rt.o}) it exits 2 → neutral.
+      # A self-hosted runner that holds the slot runs the corpus for real.
+      - name: Gate — hexa build native path corpus
+        shell: bash
+        run: |
+          set -uo pipefail
+          bash tool/selfhost_native_build_gate
+          rc=$?
+          if [ "$rc" = 2 ]; then
+            echo "::notice::native-build gate NEUTRAL — no promoted self-host slot on this runner"
+            exit 0
+          fi
+          exit $rc

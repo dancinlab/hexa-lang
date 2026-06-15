@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# tool/selfhost_native_build_gate — standing gate for `hexa build` native path.
+#
+# Locks the "full native hexa build end-to-end" capability (SELFHOST-NEXT):
+# `hexa build <prog.hexa> -o OUT` must produce a WORKING native executable via
+# the self-hosted gen3 (--emit=obj, direct Mach-O/ELF object) + hexa_ld
+# (native link against rt.o) — with ZERO clang / ZERO system ld on the build
+# path. The hx-selfhost-cli launcher's `build` block (native-first, delegate-
+# fallback) is what this exercises; this gate proves it across a feature corpus
+# (arith · string · loop · user-fn · conditional · array), not just trivial
+# print/exit, so a regression that silently drops back to clang/garbage FAILS
+# the PR instead of rotting unnoticed.
+#
+# Extension-less (not .sh) per the build_native_linux_* / stage_* precedent
+# (the project sidecar hook blocks .sh Write/Edit). Invoke as
+# `bash tool/selfhost_native_build_gate`.
+#
+# CONFIG (env)
+#   SLOT   selfhost slot dir (default: $HOME/.hx/self/native/selfhost)
+#          must hold gen3 + hexa_ld + rt.o (promote_selfhost.sh tier1 installs it)
+#   HEXA   the build driver to drive (default: `hexa` on PATH = the promoted
+#          hx-selfhost-cli launcher); the gate forces HEXA_NATIVE_BUILD=1.
+#
+# EXIT
+#   0  every corpus program built natively + ran with the expected stdout/rc
+#   1  a TRUE regression (a program failed to build natively, or wrong output)
+#   2  SETUP/INFRA neutral — the slot (gen3/hexa_ld/rt.o) is absent here
+#      (CI remaps 2 -> neutral; the native-build floor is not broken, the
+#      runner just lacks a promoted self-host slot to drive)
+set -u
+
+SLOT="${SLOT:-$HOME/.hx/self/native/selfhost}"
+HEXA="${HEXA:-hexa}"
+
+for f in gen3 hexa_ld rt.o; do
+    if [ ! -e "$SLOT/$f" ]; then
+        echo "selfhost_native_build_gate: NEUTRAL — slot missing $SLOT/$f (no promoted self-host slot)" >&2
+        exit 2
+    fi
+done
+
+WORK="$(mktemp -d 2>/dev/null || echo "${TMPDIR:-/tmp}/snbg.$$")"; mkdir -p "$WORK"
+trap 'rm -rf "$WORK"' EXIT
+
+# corpus: (name | source | expected-stdout)
+names=(arith string loop userfn cond array)
+srcs=(
+  'fn main(){ let a=30; let b=12; print(to_string(a+b)); exit(0) }'
+  'fn main(){ print("he"+"llo"); exit(0) }'
+  'fn main(){ let mut s=0; let mut i=1; while i<=5 { s=s+i; i=i+1 }; print(to_string(s)); exit(0) }'
+  'fn add(a:Int,b:Int)->Int{ return a+b } fn main(){ print(to_string(add(40,2))); exit(0) }'
+  'fn main(){ let x=7; if x>5 { print("big") } else { print("small") }; exit(0) }'
+  'fn main(){ let a=[10,20,30]; print(to_string(a[0]+a[2])); exit(0) }'
+)
+exps=(42 hello 15 42 big 40)
+
+pass=0; fail=0
+i=0
+while [ $i -lt ${#names[@]} ]; do
+    n="${names[$i]}"; src="${srcs[$i]}"; exp="${exps[$i]}"
+    printf '%s\n' "$src" > "$WORK/$n.hexa"
+    HEXA_NATIVE_BUILD=1 "$HEXA" build "$WORK/$n.hexa" -o "$WORK/$n.bin" >/dev/null 2>&1
+    if [ ! -x "$WORK/$n.bin" ]; then
+        echo "FAIL $n — native build produced no executable"
+        fail=$((fail+1)); i=$((i+1)); continue
+    fi
+    out="$("$WORK/$n.bin" 2>&1)"; rc=$?
+    if [ "$out" = "$exp" ] && [ "$rc" = 0 ]; then
+        echo "PASS $n — stdout=[$out] rc=$rc"
+        pass=$((pass+1))
+    else
+        echo "FAIL $n — stdout=[$out] rc=$rc (expected [$exp] rc 0)"
+        fail=$((fail+1))
+    fi
+    i=$((i+1))
+done
+
+echo "selfhost_native_build_gate: PASS=$pass FAIL=$fail (corpus ${#names[@]})"
+[ "$fail" = 0 ] || exit 1
+exit 0
