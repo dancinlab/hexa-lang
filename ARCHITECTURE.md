@@ -13,9 +13,12 @@ them with its own linker (`hexa_ld`); this native-emit path is a proven byte-ide
 [Self-host status](#self-host-status) for the honest accounting: a C-transpile **fallback
 delegate** still serves some full `hexa build`/`run` flows until the native end-to-end path
 lands, and a ~5.5k-LOC **C runtime substrate** (the libc/syscall bootstrap floor, generated
-from `.hexa` emitter SSOTs) is compiled and linked into every binary. The substrate is the
-engineering floor the RUNTIME-PORT campaign is **still shrinking** (M3 open) — an
-irreducible-bootstrap assessment, **not** a policy that accepts C permanently.
+from `.hexa` emitter SSOTs) is compiled and linked into every binary. This substrate is
+**reducible**: a 2026-06-16 falsification (`.verdicts/zeroc-breakthrough/`) showed ~50% of
+`runtime_core.c` is pure-algorithm code portable to `.hexa` today (a `.hexa` `hexa_fnv1a`
+is byte-identical to the C one), the syscall layer is `@asm`-svc eliminable, and the genuine
+residual is only libm transcendentals + GPU FFI — so zero-`.c` is an **open, attackable campaign**,
+not a policy that accepts C permanently.
 Its defining feature is an embedded **atlas** — a ~4.2 MB theorem
 dictionary (P primitives / C constants / L laws / E errors) baked statically into the binary.
 Every formula-bearing function must either cite an atlas law (`@cite(L[id])`), carry an active
@@ -59,17 +62,32 @@ Honest accounting of where self-hosting actually stands (no overclaim — `git l
   `F-SELFHOST-NATIVE-BUILD-FLIP`. (The deeper `self/main.hexa cmd_build` `--emit=asm`→clang
   block is left intact as the fallback — the launcher route already delivers clang-free builds
   without a gen3 rebuild / shipped-toolchain blast risk.)
-- **Runtime C floor (at engineering-irreducible minimum)** — `self/runtime*.c` (~5.5k LOC;
-  tier-A core ≈1.5k libc/libm/syscall/`HexaVal` arena) is generated from `*_emit.hexa` SSOTs,
-  not authored by hand. RUNTIME-PORT is now **fully adjudicated (M1–M5 closed)**: the M3 pass
-  (2026-06-15) tallied the last 151 BORDERLINE fns and found **zero portable hexa leaves** — all
-  are libc / libm (which codegen *lowers onto* — porting is circular) / syscall trampolines /
-  GPU-device dispatch / pthread / arena. **Net remaining portable surface = 0.** So the floor is
-  not "still shrinking" — it is at its irreducible minimum. CONSEQUENCE: the HEXA-SELFHOST+ meta
-  bar (`ls self/*.c` empty) is **unreachable by porting** — a self-hosting native compiler rests
-  on a freestanding libc/syscall/codegen-target floor (as do the Go/Rust runtimes). "Self-host
-  complete" honestly means **native-emit byte-eq fixpoint + this irreducible floor**, not zero C
-  source. verdict `.verdicts/runtime-port/M3-ADJUDICATION.txt`.
+- **Runtime C floor (reducible — zero-C campaign OPEN, not "irreducible")** — `self/runtime*.c`
+  (~23.6k LOC across `runtime.c` + `runtime_core.c` + `runtime_hi_gen.c`; the doc's older "~5.5k
+  tier-A" figure undercounted) is generated from `*_emit.hexa` SSOTs, not authored by hand.
+  **CORRECTION (2026-06-16):** the prior M3 verdict's claim that this floor is *irreducible* with
+  *zero portable surface* was **FALSIFIED**. M3 reached "irreducible" by tallying M1 reason-columns
+  on paper — it never tested whether a pure leaf actually ports, nor the `@asm`-svc syscall path
+  the compiler's own `PLAN.md` flags as eliminable. Falsification (verdict
+  `.verdicts/zeroc-breakthrough/F-ZEROC-M3-OVERCLAIM-FALSIFIED.txt`):
+  - **Proven port** — `hexa_fnv1a` (pure uint32 XOR/mul loop) reimplemented in pure `.hexa` is
+    **byte-identical** to the C function over 6 cases (incl. the string "no .c 완전돌파"). So
+    "zero portable hexa leaves" is false.
+  - **Portable surface is large** — a per-function body audit of `runtime_core.c` finds **155 of
+    308 top-level fns (50%) call no libc/libm/syscall** → portable to `.hexa` today, zero toolchain
+    change. (`libc-dep:140` is mostly `malloc`/`memcpy` convenience that itself ports once a `.hexa`
+    arena + `memcpy`-loop exist; `syscall-dep:3`; `libm/FFI-dep:10`.)
+  - **Roadmap agrees** — `PLAN.md` L7589/L8183/L8341 mark kernel syscalls as `@asm`-svc eliminable;
+    the compiler already emits byte-correct `svc #0x80` / x86 `syscall`, and the `__fd_write_bytes`
+    syscall builtin is wired (`self/codegen_c2.hexa`, `bind.hexa`).
+
+  The **honest** floor is therefore NOT "all ~5.5k LOC". It reduces to (a) **libm transcendentals**
+  (~10 fns — a policy choice for FP-codegen fragility, not a hard wall), (b) **raw syscall
+  instruction emission** (proven; needs the `@asm`-svc general lowering wired for the runtime —
+  designed, partial), and (c) **GPU/device FFI** (tier-C, outside the compiler's self-host scope).
+  `ls self/*.c` empty is thus an **attackable codegen campaign**, not "unreachable by porting".
+  Full zero-`.c` remains multi-step (port batches + `@asm`-syscall wiring + a libm decision), much
+  of it pod-gated — but the wall ("can't be done") is broken. Tracked: HEXA-BUILDFLOOR domain.
 
 ## Component map
 

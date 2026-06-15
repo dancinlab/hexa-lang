@@ -63,4 +63,29 @@ clang ... cgen build/self/runtime.c -I build/self ... -o /tmp/hexa-cloud-test-bu
 - [ ] M6 — PR(s) 랜딩 (격리 worktree · 한글 커밋) + handoff 2cf7a421/f8f3d35b 갱신
 - [x] M7 — `tool/build_aprime.sh` self-contained STAGE-0 (clean `.c=0` checkout self-build) — **🟢 LANDED (2026-06-01)**. #2421 에서 PROVEN 했으나 .sh 편집 governance 차단으로 미착지였던 STAGE-0 recipe 를 in-place `tool/build_aprime.sh` 에 착지 (.sh 편집 ban 해제됨). STAGE-0(regen, IDEMPOTENT — hexat+runtime.c fresh 면 SKIP): `restore_frozen_seeds`(21 seeds) → `stage_resolve_runtime_a`(runtime_core.c emitter SSOT regen + reconcile + runtime.a) → `stage_prebuild_hexat`(build/hexat) → HEXA_V2 를 gitignored `build/hexat` 에 지정(committable 산출물 0). release/nobaseline CI 와 동일 검증 메커니즘 재사용. B2 rt_fs 게이트(아직 main 미착지)는 stage-3 rt_fs link-fill(TEMP, runtime_core.c 가 bodies 미정의 시에만 3 stub append — B2 fix 트리에선 no-op) 로 해소. **검증(verbatim, 진짜 .c=0 worktree)**: STAGE-0(seeds 21 · runtime_core 8508L · runtime.a 546800B · hexat 1946184B) → flatten 46 files · transpile 43707L C → `[4/5] clang: build/aprime_cc (1455016 B, Mach-O 64-bit executable arm64)` → `[5/5] smoke: exit(42)==42 PASS`. warm 재실행 = STAGE-0 SKIP + smoke PASS(idempotent). #2421 M7 proof 와 byte 일치(hexat 1946184B · aprime_cc 1455016B). verdict `.verdicts/buildfloor-m7/F-BUILDFLOOR-M7-STAGE0-LAND.txt`.
 - [~] M7-followup (B2 rt_fs gate) — **root-cause + fix VERIFIED, but un-committable (🔴 closed-negative on landing axis · 2026-06-01)**. #2421 의 stage-3 .sh link-fill 워크어라운드 대신 SSOT 근본수정 시도. 근본원인: `self/runtime.c` 의 rt_fs 3-way gate 의 `#else` (HEXA_HAS_HEXA_RT_STDLIB && !HEXA_RT_SELFEMIT — build_aprime.sh stage-4 가 만드는 config) 가 `rt_fs_append_atomic/stat/rotate_if_over` 를 definer 없이 extern → builtin-init(L13378) 의 주소-획득 → `Undefined symbols`. codegen.hexa(7205/7311/7376)는 CALL 만 lower, body 는 안 emit; sibling `rt_fs_mkdir_p`/`rt_append_file`/`rt_write_bytes` 는 무조건 C body(canonical convention). **수정(b 채택)**: `#else` 를 real body 로 collapse(extern-away 제거). **검증(verbatim)**: PRE-FIX `nm` = `U _rt_fs_append_atomic/stat/rotate_if_over`(mkdir_p 만 T) → POST-FIX = 4개 모두 `T`; clang link 시 3 symbol 의 Undefined 소멸(link-fill stub 無). **🔴 블로커**: `self/runtime.c` 는 .gitignore:280 으로 GITIGNORE(.c-graduation FINAL) — main body 는 tracked emitter SSOT 가 **없음**(runtime_core_emit.hexa 는 runtime_core.c 만 emit). rt_fs gate 텍스트는 gitignored runtime.c 에만 존재 → `git add` 거부 → PR 불가. 과제 전제(".hexa SSOT 존재 · .c 편집 governance-차단")는 이 코드에 성립 안 함: .hexa SSOT 가 부재하고 codegen 은 runtime body 를 emit 못함. **다음 단계(범위 밖 구조개선)**: runtime.c main body 에 tracked .hexa emitter 부여 OR rt_fs body 를 runtime_core.c(tracked emitter 있음)로 이동 → committable SSOT 화. verdict `.verdicts/buildfloor-b2-rtfs-gate/B2-rt-fs-gate-root-fix.txt`.
+## 🧱→🔓 ZERO-C 돌파 (2026-06-16 · goal "no .c 완전돌파")
+
+어제(2026-06-15) M3-ADJUDICATION 이 런타임 C floor 를 "irreducible · zero portable surface ·
+porting 으로 도달 불가" 로 닫았으나, 이 단언이 **반증됨**. (c16: 벽은 종착이 아니다 — M3 가
+적용 안 한 메커니즘으로 한 번 더 돌파.)
+
+| M3 단언 | 검증 결과 | 증거 |
+|---|---|---|
+| ZERO clean portable hexa leaves | ❌ FALSIFIED | 순수-.hexa `hexa_fnv1a` ↔ C 6/6 byte-identical (goal 문자열 포함) |
+| Net portable surface = 0 | ❌ FALSIFIED | `runtime_core.c` 308fn 중 **155(50%)** libc/libm/syscall 무호출 = 오늘 포팅 가능 |
+| irreducible · porting 으로 도달 불가 | ❌ FALSIFIED | 컴파일러 PLAN.md L7589/8183/8341: kernel syscall = `@asm`-svc eliminable. svc#0x80 방출 byte-correct 증명됨 |
+
+**진짜 floor (정직)**: libm 초월함수 ~10 (FP-codegen 취약성 정책선택, hard wall 아님) + raw
+syscall 명령 방출(`@asm`-svc, 설계됨·부분구현) + GPU/device FFI(tier-C, 컴파일러 self-host 범위 밖).
+→ zero-`.c` = **공략가능 codegen 캠페인**, 불가능 아님. verdict `.verdicts/zeroc-breakthrough/`.
+
+### zero-C 캠페인 마일스톤 (재개)
+
+- [x] Z0 — 돌파 증명: M3 "zero portable" FALSIFIED (frozen-first fnv1a port byte-id + 155/308 purity audit + PLAN.md @asm 증거). ARCHITECTURE.md/M3 verdict 정직성 수선. **🟢 2026-06-16**. falsifier `scripts/scratch/zeroc_falsifier/`.
+- [ ] Z1 — pure-leaf 포팅 배치: 155 PURE fn 을 tracked `.hexa` 런타임 모듈로 포팅(emit→native), 각 fn C↔.hexa byte-eq 게이트. (로컬 가능 일부 + 전체 byte-eq 는 pod)
+- [ ] Z2 — `@asm`-svc 일반 lowering 배선: runtime syscall trampoline(write/read/mmap/exit) 을 `@asm svc` 블록으로 방출, C shim 제거. (codegen-emit, pod-gated)
+- [ ] Z3 — malloc/memcpy floor: `.hexa` 아레나(mmap-via-@asm) + memcpy 순수루프 → libc-dep 140 중 다수 해방.
+- [ ] Z4 — libm 결정: 초월함수 .hexa 다항근사 포팅 vs FP-codegen-target 으로 정직히 유지(정책 명문화). 둘 다 honest 종착 후보.
+- [ ] Z5 — `ls self/*.c` == ∅ 졸업게이트 (Z1–Z4 누적, full native byte-eq fixpoint 재확인).
+
 - [x] M7-followup — B2 rt_fs 링크 픽스가 이제 **committable** (2026-06-01). 근본 원인: stage-4 config (`HEXA_HAS_HEXA_RT_STDLIB && !HEXA_RT_SELFEMIT`)에서 runtime.c 가 `rt_fs_append_atomic`/`rt_fs_stat`/`rt_fs_rotate_if_over` 를 extern 으로 날려버렸으나 definer 부재(codegen.hexa:7205/7311/7376 은 `fs_*` builtin → CALL 만 lower, body 안 emit; .hexa stdlib 도 정의 안 함) → clang `Undefined symbols`. #2421 은 stage-3 .sh link-fill 3-stub 로 우회. **수정(option 2)**: 3개 body 를 gitignored runtime.c 가 아니라 **tracked emitter `self/runtime_core_emit.hexa` → runtime_core.c** (runtime.c 가 in-TU `#include` 하는 fragment)에 정의. `rt_write_bytes` 와 동형(runtime_core.c body + runtime.c forward-decl). guard `#ifndef HEXA_RT_SELFEMIT` 로 self-emit config 에선 .o 가 body 소유(double-def 없음). failure-default semantics byte-unchanged (append_atomic→`-1` · stat→`hexa_void()` · rotate→`0`). **검증(g5)**: `hexa run self/runtime_core_emit.hexa` 로 runtime_core.c 재생성 → stage-4 config nm `U`→`T` 확정(BEFORE `U _rt_fs_*`, AFTER `T _rt_fs_*`) · SELFEMIT config 은 `U`(=.o 위임, no double-def) · standalone smoke config 은 `T` · `bash tool/build_aprime.sh` 풀빌드 **smoke exit(42)==42 PASS, link-fill stub 없이**. **결과**: #2421 stage-3 .sh link-fill stub 이 **obviated** — 이 PR 머지 후 sibling 의 build_aprime.sh STAGE-0 link-fill 은 삭제 가능. verdict `.verdicts/buildfloor-m7/F-BUILDFLOOR-M7-RTFS.txt`.
