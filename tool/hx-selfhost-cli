@@ -108,6 +108,43 @@ if [ "$has_emit" != 1 ] && [ "${1:-}" = "run" ] && [ "${HEXA_NATIVE_RUN:-1}" = 1
     fi
 fi
 
+# ── build surface -> native gen3 compile+link -> persistent binary ───────────
+# `hexa build <file.hexa> [-o OUT]` : produce a native executable with ZERO
+# clang / ZERO system ld — gen3 --emit=obj (direct Mach-O/ELF object) + hexa_ld
+# linking against rt.o (the proven full-native pipeline, corpus-verified +
+# F-FULL-NATIVE-BUILD-E2E-ARM64). Mirrors the `run` block's native-first +
+# delegate-fallback safety: any program gen3/hexa_ld cannot compile/link falls
+# through to the shipped dispatch's build untouched. Disable with HEXA_NATIVE_BUILD=0.
+if [ "$has_emit" != 1 ] && [ "${1:-}" = "build" ] && [ "${HEXA_NATIVE_BUILD:-1}" = 1 ] \
+   && [ -n "$src" ] && [ -x "$GEN3" ] && [ -x "$HEXA_LD" ] && [ -f "$RT_O" ]; then
+    # resolve -o OUT (default: source stem); reject unknown flags -> delegate.
+    _nb_ok=1; _nb_seen=0; _nb_out=""; _nb_first=1; _nb_want_o=0
+    for a in "$@"; do
+        if [ "$_nb_first" = 1 ]; then _nb_first=0; continue; fi   # skip literal 'build'
+        if [ "$_nb_want_o" = 1 ]; then _nb_out="$a"; _nb_want_o=0; continue; fi
+        case "$a" in
+            "$src")  _nb_seen=1 ;;
+            -o)      _nb_want_o=1 ;;
+            -o*)     _nb_out="${a#-o}" ;;
+            -*)      _nb_ok=0; break ;;   # unknown build flag -> delegate (safety)
+        esac
+    done
+    if [ "$_nb_ok" = 1 ] && [ "$_nb_seen" = 1 ]; then
+        if [ -z "$_nb_out" ]; then _nb_out="$(basename "${src%.hexa}")"; fi
+        _nb_d="$(mktemp -d 2>/dev/null || echo "${TMPDIR:-/tmp}/hx-nb.$$")"; mkdir -p "$_nb_d"
+        _nb_o="$_nb_d/nb.o"
+        if [ -z "${HEXA_ATLAS_EMBED:-}" ]; then
+            _nb_na="$(mktemp -d 2>/dev/null || echo "$_nb_d/noatlas")"; mkdir -p "$_nb_na"
+            export HEXA_ATLAS_EMBED="$_nb_na"
+        fi
+        if "$GEN3" _drv.hexa "$src" --emit=obj -o "$_nb_o" >/dev/null 2>&1 && [ -s "$_nb_o" ] \
+           && "$HEXA_LD" "$_nb_o" "$RT_O" -o "$_nb_out" >/dev/null 2>&1 && [ -x "$_nb_out" ]; then
+            exit 0
+        fi
+        # native compile/link failed -> fall through to delegate (safety)
+    fi
+fi
+
 # Anything that is NOT a bare-compiler emit -> delegate to the full CLI.
 if [ "$has_emit" != 1 ]; then
     delegate "$@"
