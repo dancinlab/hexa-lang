@@ -1,0 +1,28 @@
+F-RT-NATIVE Z3/Z2a/Z2b 구현 탐침 (2026-06-16, 3 에이전트 worktree, 캡처검증) — 모두 Z2c 로 수렴
+═══════════════════════════════════════════════════════════════════
+
+Z3 — ARENA bump 로직 .hexa 포팅: ✅ BYTE-EQ 검증됨
+  scripts/scratch/rt_native/arena_port.hexa(.hexa) vs arena_ref.c(C, runtime_core.c:3528-3673 발췌).
+  동일 시퀀스(alloc/mark/rewind/reset ×40 + 오버사이즈 + 중첩마크 + tail-reuse + reset + empty-mark)를
+  양쪽에 먹여 최종 arena 상태(블록 used 오프셋·누적바이트·cur·cap·mark스택) 출력 → SHA-256 일치
+  (10c308db…, c_out==hexa_out). main 에서 재현 PASS. bump 로직 portable·byte-eq 위험 0 확정.
+  잔여: 실제 통합(hexa_arena_alloc 의 포인터-리턴 ABI + malloc/mmap-svc backend). heapify 는 C 유지.
+
+Z2a — cross-platform native .s seed: ✅ 3 플랫폼 텍스트 well-formed (linux byte-eq 는 pod)
+  arm64-darwin(self/native/runtime_hi_native.s 760L, 커밋·byte-eq 검증됨) +
+  x86_64-linux(552L, .intel_syntax, x86 367 insn) + arm64-linux(753L, arm64 466 insn).
+  3개 전부 _rt_str_* 6심볼 .globl+정의 제공, _main 없음, ISA 정합. seeds/ 에 보관(self/native 승격 대기).
+  잔여: linux 어셈블·링크·byte-identical-vs-runtime_hi_gen.c 는 LINUX 호스트(pod) 필요 — darwin 은
+  ELF 생성 불가. → runtime_hi_gen.c 실제 rm 은 linux pod 검증 후.
+
+Z2b — tag accessor native 방출 탐침: 🟡 인프라 native·discrimination 은 Z2c 에 묶임
+  HexaVal = x0:x1 reg-pair(ldp/stp), const-int box-out = movz tag inline(C콜 없음), HEXA_INLINE_INT_BOX
+  로 boxing bl 마저 2-instr repr-pack 소거 — 인프라 절반은 이미 native·self-emit-proven.
+  그러나 태그 *판별*(.hexa 의 type_of/==/truthy)은 전부 bl _hexa_type_of / _hexa_eq / _hexa_truthy
+  (C switch)로 lower — `tag==TAG_INT` 단일 cmp inline 빌트인 미존재. 4개 사소한 태그함수도
+  hexa_type_of·eq·truthy·add_slow·len·int 6 C코어 의존. → Z2b 목표(태그연산 native)는 Z2c 의
+  디스패치코어(hexa_type_of/eq/truthy) 포팅 없이 달성 불가.
+
+수렴 결론 (구현 증거): Z3 통합 · Z2a linux 검증 · Z2b 목표 — 셋 다 **Z2c(954fn 코어 디스패치 포팅)
++ linux pod byte-eq** 로 귀결. Z2c = 진짜 multi-week 벌크(hexa_type_of/eq/truthy/add_slow/to_string
+… + 각 byte-eq). 설계뿐 아니라 구현 탐침도 동일 결론 — RT-NATIVE 8/8 의 임계경로 = Z2c + pod.

@@ -1,0 +1,61 @@
+// RT-NATIVE Z2b probe — NaN-boxing tag accessor written in .hexa.
+//
+// Goal: observe how codegen lowers tag discrimination (type_of / is_*
+// branches) to native arm64 — does the tag check become native
+// cmp/movz + branch over the x0:x1 HexaVal reg-pair, or a runtime call?
+//
+// Each function takes a dynamically-typed HexaVal arg (no type annotation
+// so it stays a runtime tagged value) and branches on its runtime tag.
+
+// (1) tag dispatch via type_of string comparison.
+//     int   -> n + 1
+//     string-> its length
+//     else  -> -1
+fn tag_dispatch(x) -> i64 {
+    let t = type_of(x)
+    if t == "int" {
+        return x + 1
+    }
+    if t == "string" {
+        return len(x)
+    }
+    return -1
+}
+
+// (2) pure is-int predicate via type_of, returns a bool HexaVal.
+fn is_intval(x) -> bool {
+    return type_of(x) == "int"
+}
+
+// (3) three-way classifier producing distinct int codes — exercises a
+//     chain of tag comparisons (the C HX_IS_INT/HX_IS_STR/HX_IS_FLOAT
+//     macro-ladder equivalent).
+fn classify(x) -> i64 {
+    let t = type_of(x)
+    if t == "int"    { return 0 }
+    if t == "float"  { return 1 }
+    if t == "string" { return 2 }
+    if t == "bool"   { return 3 }
+    return 9
+}
+
+// (4) numeric coercion-ish branch: if int, double it; if float branch,
+//     return it as-is via a marker; mixes int box-out with a tag read.
+fn maybe_double(x) -> i64 {
+    if type_of(x) == "int" {
+        return x + x
+    }
+    return 0
+}
+
+fn main() -> i64 {
+    let a = tag_dispatch(41)        // int  -> 42
+    let b = tag_dispatch("hello")   // str  -> 5
+    let c = classify(3.14)          // float-> 1
+    let d = maybe_double(21)        // int  -> 42
+    let e = is_intval(7)            // true
+    if e {
+        return a + b + c + d
+    }
+    return -1
+}
