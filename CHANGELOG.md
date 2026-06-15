@@ -6,6 +6,10 @@ For the full audit trail, see `git log`.
 
 ---
 
+## 2026-06-16
+
+- **docs: README + GitHub description "no C-transpile" 과장 정직성 수선 (전체 문서 현행화)** — ARCHITECTURE.md/CLAUDE.md 가 이미 받은 정직성 수선(#3353/#3354)을 README 와 repo description 까지 확장. README 5곳(태그라인·본문·ownership 표·how-it-works·요약)의 `no C-transpile` 을 "no LLVM anywhere + self-host native fixpoint(`gen3 ≡ gen4`) + C-transpile 은 fallback + 기약 libc floor" 로 교정(ARCHITECTURE.md#self-host-status 링크). GitHub repo description 도 `no LLVM · no C-transpile` → `no LLVM · self-hosting native fixpoint`. 이번 세션 self-host 사실(native run/build clang-free·v0.238.0 릴리즈)과 정합. 코드 변경 0 — 문서 only.
+
 ## 2026-06-15
 
 - **fix(runtime/release): `runtime.h` 에 typed-array(`hexa_arr_f64/i64_*`) 선언 추가 — 깨진 release 파이프라인 복구** — `release.yml` 이 5/31(v0.17.3) 이후 main push 마다 전부 FAIL → GitHub Release 가 800커밋 stale. **근본원인(c1)**: 실패 스텝은 빌드가 아니라 `release_package`(Stage 3 precompile) — `tool/verify_cli.hexa` 의 `[f64]` 리터럴(t-임계값표)을 C-transpile 하면 codegen 이 `hexa_arr_f64_new/push` 를 emit 하는데, 앱 .c 가 `#include "runtime.h"` 하는 그 헤더에 선언이 없어 clang `undeclared function` → binary 미생성 → 출고 0. (#3357 read_f32_at 가 codegen emit + `runtime_core.c` 정의는 넣고 **공개 헤더 `runtime.h` 선언을 누락**한 회귀.) **수정**: `self/runtime.h` array 섹션에 codegen 이 내는 6종(`hexa_arr_{i64,f64}_{new,push,box}`) 선언 추가(시그니처는 `runtime_core.c` 정의와 일치). 손-작성 공개 ABI 헤더라 emit-regen 불필요. **검증(c2)**: 깨졌던 호출패턴(`#include "runtime.h"` + `hexa_arr_f64_new/push`·`hexa_arr_i64_new/push`)을 repo 헤더로 `clang -fsyntax-only` → undeclared 0(BEFORE: implicit-decl 에러). release.yml 재실행으로 출고 복구 확인 예정.
