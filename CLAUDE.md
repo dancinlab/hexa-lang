@@ -5,7 +5,7 @@ package manager. No LLVM, no C-transpile: source is lowered through the compiler
 native objects (ELF64 / Mach-O arm64) and linked with `hexa_ld`. Every formula-bearing
 function must cite an atlas law (`@cite(L[id])`), carry an active `@verify`, or declare a
 `@grace` — otherwise the build refuses to emit a binary (stage S8, fatal `HX8004`).
-The full architecture SSOT is [ARCHITECTURE.md](ARCHITECTURE.md).
+The full architecture SSOT is [ARCHITECTURE.md](ARCHITECTURE.md); this file is the single governance SSOT (md 단일화 — `project.tape` retired).
 
 ## Structure
 
@@ -33,13 +33,13 @@ hexa-lang/
 ├─ docs/            — supplementary documentation + logo
 ├─ ARCHITECTURE.md  — architecture SSOT (update in place)
 ├─ CHANGELOG.md     — append-only history / decisions
-├─ project.tape     — governance directives (tape SSOT, distilled below)
+├─ CLAUDE.md        — governance SSOT (this file — directives below)
 └─ .harness-engine/ — vendored harness (submodule); gate engine behind .claude hooks
 ```
 
 ## Governance
 
-Distilled from `project.tape` (the tape SSOT — edit there, keep ≤100 chars per directive value):
+This file is the single governance SSOT (md 단일화) — edit directives here, keep them concise:
 
 - **diff-guard** — a subagent diffs guarded files (`git diff <baseline>...HEAD`) before staging
   (`.githooks/pre-commit`).
