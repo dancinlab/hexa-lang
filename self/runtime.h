@@ -263,6 +263,7 @@ HexaVal rt_file_exists(HexaVal path);                 /* runtime.c:4877 */
 HexaVal rt_path_exists(HexaVal path);                 /* runtime_core.c — stat-based exists (any type) */
 HexaVal rt_read_lines(HexaVal path);                  /* runtime.c:4921 — defined but header-decl was missing → implicit-decl error in transpiled user.c */
 HexaVal rt_read_bytes_at(HexaVal path, HexaVal offset, HexaVal nbytes); /* runtime_core.c:6849 — ditto */
+HexaVal rt_read_f32_at(HexaVal path, HexaVal byte_off, HexaVal n_floats); /* runtime_core.c — native ranged f32→farr reader (no boxed-byte intermediate; 1B+ load-once mounts) */
 
 /* process / shell */
 HexaVal hexa_exec(HexaVal cmd);                       /* runtime.c:4153 */
