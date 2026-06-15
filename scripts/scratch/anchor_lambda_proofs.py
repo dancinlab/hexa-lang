@@ -10,6 +10,10 @@ def SIG(n):
     r=1
     for p,a in fac(n).items(): r*=(p**(a+1)-1)//(p-1)
     return r
+def PSI(n):
+    r=1
+    for p,a in fac(n).items(): r*=(p+1)*p**(a-1)
+    return r
 def LAM(n):
     if n==1: return 1
     l=1
@@ -41,3 +45,14 @@ print()
 N=2_000_000
 sol=[n for n in range(2,N+1) if SIG(n)==n*LAM(n)]
 print(f" 수치 재확인 σ=nλ (n≤2e6): {sol}")
+
+# ψ/λ=n ⟺ {6,12,24}: λ=ρ(n)=∏(1+1/p); ρ∈ℤ ⟺ radical={2,3}; λ=2 ⟹ {6,12,24}
+print("\n### ψ=nλ ⟺ {6,12,24} (radical 논증) ###")
+from fractions import Fraction as F
+def rho(n):
+    r=F(1)
+    for p in fac(n): r*=F(p+1,p)
+    return r
+radint={tuple(sorted(fac(n))) for n in range(2,50000) if rho(n).denominator==1}
+print(f"  ρ(n)∈ℤ radical = {sorted(radint)} (유일 {{2,3}}, ρ=2) ⟹ λ=2 ⟹ n=2^a3^b,a≤3,b=1")
+print(f"  해 = {[n for n in range(2,100000) if PSI(n)==n*LAM(n)]}")
