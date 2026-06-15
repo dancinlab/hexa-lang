@@ -254,3 +254,23 @@ s(n)=σ(n)−n  궤도 분류 (n≤10⁶, 전부 검증됨)
 - **정직 (c9)**: 276 등의 종료 여부는 **미해결**. 본 탐침은 그 미해결 지점을 계산으로 정확히
   재현·박제한 것이지 증명이 아니다. 친화수·사교수 사이클은 기지 결과와 일치(검증).
 - 재현: `python3 scripts/scratch/aliquot_probe.py` (의존성 0).
+
+---
+
+## 10. 유명 미해결 문제 — falsifiable 탐침 (2026-06-16)
+
+"수학 난제" 방향 확장. 같은 frozen-first 계산탐침을 4대 유명 미해결에 적용
+(`scripts/scratch/openproblem_probe.py`, 무의존성). **정직(c9): 증명이 아니라 유한범위 검증/탐색**
+— 전부 기지 사실과 일치(범위 내 성립), 유명한 미해결 갭은 그대로 열림.
+
+| 문제 | 탐침 결과 (검증됨) | 미해결 갭 |
+|------|------|------|
+| Collatz (3n+1) | n≤3×10⁵ 전부 1 도달 · 최장 n=230631→442 steps | 전체 n 미증명 |
+| Goldbach | 짝수 ≤10⁵ 전부 p+q (반례 0) | 전체 미증명 |
+| Twin primes | <2×10⁵ 에 2160쌍 · 최대간격 924 | 무한성 미증명 |
+| Erdős–Straus 4/n | n≤5000 전부 1/x+1/y+1/z 분해 | 전체 n 미증명 |
+
+**정직한 메타-결론 (c9·c16)**: 유한범위 brute-verification 은 *기지 사실 재확인*이지 새 발견이
+아니다. 이 줄기에서 genuinely-new 구조가 나온 곳은 **§8 anchor spectrum**(σ·τ/φ=28 쌍대, 6=최대
+자기참조, λ-가족, triperfect 672) — 즉 "famous 난제 brute"보다 **자기참조 부동점 구조** 쪽이
+실제 돌파 vein. 재현: `python3 scripts/scratch/openproblem_probe.py`.
