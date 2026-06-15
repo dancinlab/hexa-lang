@@ -1,0 +1,5 @@
+extern fn malloc(n: int) -> *Void
+fn main() -> int {
+    let p = malloc(64)
+    return 7
+}
