@@ -1,0 +1,27 @@
+F-RT-NATIVE-X86-CODEGEN-ROOTCAUSE — x86_64 codegen 값모델 한계가 cross-platform zero-C 의 근본 블로커
+date: 2026-06-16   host: aiden (pool linux x86_64)   domain: RT-NATIVE   evidence: gdb backtrace (캡처)
+
+POD gdb 백트레이스 (aprime_z2a_lin compiling smk.hexa):
+  #0 hexa_array_push+45: mov 0x10(%rbx),%rbp  ← SIGSEGV (rdi=0, rsi=5)
+  #1 rt_str_split (native)   #2 hexa_str_split   #3 _extract_raw_blocks   #4 static_atlas
+  #5 _load_atlas   #6 main
+
+근본원인 (compiler/codegen/x86_64_linux.hexa:609-682 분석으로 확정):
+  x86_64 backend 는 "모든 값 = raw 1-레지스터 int" 모델(L625-626). HexaVal 16B 는 CALL 경계에서만
+  box/unbox(_x86_hv_box_arg). 그래서:
+    1. rt_str_split 이 hexa_array_new() 호출 → 배열 HexaVal {tag:TAG_ARRAY=5, payload:ptr} 가
+       rax:rdx 로 반환(L623). 그러나 raw-int 모델은 1 레지스터만 캡처 → rax(tag=5)만 살고
+       rdx(payload=ptr) 버림. local 에 5(=raw int)만 저장.
+    2. hexa_array_push(arr,item) 호출 시 _x86_hv_box_arg 가 arr(local)을 박싱 — _x86_hv_tag_for(L641)
+       이 local 을 TAG_INT(0)로 기본 박싱 → {tag:0(rdi), payload:5(rsi)} 전달.
+    3. hexa_array_push 가 payload 5 를 배열포인터로 deref → mov 0x10(%rbx) NULL/garbage → SIGSEGV.
+  크래시 레지스터(rdi=0, rsi=5)가 정확히 이 {tag:0, payload:5} 를 증명. TAG_ARRAY=5 가 payload 자리에.
+
+대조: arm64-darwin 은 HexaVal 을 x0:x1 쌍으로 local lifetime 내내 운반(_hv_load/_hv_store) → 작동
+  (Z2a byte-identical 검증됨). x86_64 는 그 쌍-운반 모델이 없음 = 근본 한계.
+
+VERDICT: 🔴 cross-platform zero-C(runtime_hi_gen.c 제거 + 어떤 runtime native-compile)의 x86_64-linux
+  경로는 **x86_64 codegen 값모델 전면 개편**(raw-int → 16B HexaVal 쌍 운반, arm64 동형)이 선행.
+  이건 targeted 패치가 아니라 codegen 아키텍처 작업 = multi-week. pod 가 근본원인을 캡처 증거로 확정.
+  → RT-NATIVE 8/8 의 cross-platform 완료는 x86_64 codegen 성숙에 의존(Z2c 상위 선행). arm64-darwin
+  단독 경로는 별개로 진행 가능(Z2a✓). honest: x86_64 는 진짜 multi-week 근본작업.
