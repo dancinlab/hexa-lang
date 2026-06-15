@@ -1,0 +1,28 @@
+Z-CODEGEN-UNLOCK-SPECS — RT-NATIVE 잔여 5/8 의 native-codegen unlock 정밀 구현 지점 (다음 세션 pickup)
+date: 2026-06-16   domain: RT-NATIVE (3/8 done: Z0·Z4·Z2a)
+
+남은 5/8 은 전부 아래 3개 native-codegen unlock + 954fn 포팅으로 수렴(실측 확정). 각 unlock 의
+정확한 파일/함수 지점 (rebuild aprime_cc + selfhost_byteeq_gate.sh 검증 필수):
+
+UNLOCK-1 — extern-fn FFI (Z3 arena 의 malloc/mmap unblock):
+  증상: native 컴파일러가 `extern fn malloc(...)` 를 void-반환 stub 으로 정의(`_malloc: movz x0,#4
+        ret void`), undefined extern 이 아님 → arena 가 malloc 호출 시 stub → segfault.
+  원점: body 없는 fn 이 default void epilogue(compiler/codegen/arm64_darwin.hexa:2079)로 fall-through.
+  FIX: (a) MFunc(compiler/ir/mir.hexa:123) 에 is_extern flag 추가. (b) hir_to_mir.hexa 함수 로워링서
+       body 없으면 is_extern=true. (c) arm64_darwin.hexa 가 is_extern MFunc 은 body 미방출 + undefined
+       extern 심볼로(implicit runtime call 처럼 U). 대조: runtime_hi 의 hexa_array_new 는 U 로 정상 링크됨.
+  대안: mmap-via-svc (codegen_native.hexa enc_svc, SYS_mmap=197) — extern 없이 syscall.
+
+UNLOCK-2 — @tag native intrinsic (Z2b/Z2c dispatch core unblock):
+  필요: .hexa 가 HexaVal 태그를 native 로 읽어야 hexa_type_of/eq/truthy 포팅 가능(현재 type_of→C콜).
+  지점: (a) C-transpile self/codegen.hexa builtin table(~6116 `name=="__..."`) 에 `__hx_tag`→
+       `hexa_int(HX_TAG(arg))`. (b) native arm64_darwin.hexa: `_hv_load`(1081)로 arg→x0:x1, x0(tag)를
+       int payload 로 box(_builtin_ret_box 1457 패턴). (c) bind.hexa builtin 인식. arm64 는 이미
+       HexaVal 을 x0:x1 쌍으로 운반하므로 tag(x0) 접근 가능 — 신규 op 작음.
+
+UNLOCK-3 — x86_64 값모델 개편 (cross-platform, pod gdb 근본원인 F-RT-NATIVE-X86-CODEGEN-ROOTCAUSE):
+  x86_64_linux.hexa 가 "모든 값=raw 1-reg" → 16B HexaVal local 운반 불가. arm64 의 x0:x1 쌍 모델
+  (_hv_load/_hv_store)을 x86_64(rdi:rsi/rax:rdx)로 포팅. 가장 큰 codegen 작업.
+
+순서: UNLOCK-1(Z3) → UNLOCK-2(Z2b→Z2c dispatch core) → Z2c 954fn 배치포팅 → UNLOCK-3(x86_64 cross) →
+  Z5 byte-eq 졸업. 각 단계 branch + selfhost_byteeq_gate.sh green 시에만 머지(c2, fixpoint 보호).
