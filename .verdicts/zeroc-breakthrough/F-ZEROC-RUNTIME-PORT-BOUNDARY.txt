@@ -1,0 +1,33 @@
+F-ZEROC-RUNTIME-PORT-BOUNDARY — the precise irreducible core for literal `ls self/*.c == ∅`
+date: 2026-06-16   base: origin/main   goal: "no .c 완전돌파"   tool: build/aprime_cc_z2 (fresh native)
+
+SETUP: the 3 self/*.c are gitignored GENERATED intermediates (hexat-transpiled from .hexa
+SSOTs). Literal zero-.c (working toolchain) = build the runtime via native compile (gen3),
+not hexat→C→clang. Runtime .hexa SOURCE already exists: runtime.hexa, runtime_core.hexa,
+runtime_pure.hexa (Jun 14), runtime_hi.hexa.
+
+EVIDENCE (native compile via aprime_cc_z2 `_drv.hexa --emit=asm --target=arm64-apple-darwin`):
+  - runtime_hi.hexa   → /tmp/rt_hi.s  ✅ 1009 lines native arm64, ZERO C. rt_str_split/trim/...
+    emitted as native asm (calls hexa_array_new etc.). PROVES the runtime hi-layer is
+    native-compilable today → runtime_hi_gen.c is REPLACEABLE.
+  - runtime_core.hexa → ❌ HX2001 undefined: val_void, TAG_VOID, call_builtin, TAG_NOT_BUILTIN,
+    Val — references the NaN-boxing tag machinery / interpreter primitives not defined as
+    .hexa (they live inline in the compiled binary / C macros).
+  - runtime_pure.hexa → ❌ HX0011 parse (extern fn syntax) + its OWN honest STATUS header maps
+    the genuine C-only residual:
+       "remain C-only: NaN-boxing tag machinery (HX_IS_STR/HX_INT...) — compiled binary only;
+        Arena allocator internals; ValStruct unwrapping; setjmp/longjmp try/catch."
+
+PRECISE IRREDUCIBLE-NOW CORE (what blocks literal zero-.c, evidence-based — NOT 23.6k LOC):
+  1. NaN-boxing tag machinery — HexaVal repr; codegen emits tag ops inline, but the C runtime
+     fns are authored against C macros. Port = author core fns as .hexa using native value ops.
+  2. Arena allocator (malloc/mmap-backed) — port = .hexa arena over mmap-via-svc (Z3).
+  3. setjmp/longjmp try/catch — "no hexa equivalent yet" — needs a native unwinding lowering.
+
+VERDICT: literal `ls self/*.c == ∅` (working toolchain) = a MULTI-SESSION port of this precise
+core (tags + arena + try/catch) so runtime_core/.hexa native-compiles like runtime_hi does,
+then wire the build to native-compile the runtime (drop hexat→C), then re-establish gen3≡gen4
+byte-eq. The wall ("irreducible 23.6k floor") is FALSIFIED and the residual is now precisely
+~3 mechanisms, not the whole runtime — but it is genuinely multi-session, not session-closable,
+and CANNOT be honestly satisfied by deleting the gitignored intermediates (they regenerate; the
+binary stays C-origin). Honest 🧱 with the boundary mapped to the exact 3 mechanisms.

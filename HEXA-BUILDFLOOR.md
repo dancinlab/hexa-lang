@@ -88,4 +88,16 @@ syscall 명령 방출(`@asm`-svc, 설계됨·부분구현) + GPU/device FFI(tier
 - [ ] Z4 — libm 결정: 초월함수 .hexa 다항근사 포팅 vs FP-codegen-target 으로 정직히 유지(정책 명문화). 둘 다 honest 종착 후보.
 - [ ] Z5 — `ls self/*.c` == ∅ 졸업게이트 (Z1–Z4 누적, full native byte-eq fixpoint 재확인).
 
+### 정밀 경계 (2026-06-16 · fresh `build/aprime_cc_z2` 로 측정 · verdict `F-ZEROC-RUNTIME-PORT-BOUNDARY.txt`)
+
+3개 `.c`는 gitignored 생성 중간물(hexat-transpile). literal zero-.c = 빌드가 런타임을 native 컴파일(gen3)로 만들어 `.c` 자체가 안 생기게. 런타임 `.hexa` 소스 이미 존재(runtime.hexa·runtime_core.hexa·runtime_pure.hexa·runtime_hi.hexa). native 컴파일 실측:
+
+```
+runtime_hi.hexa   → native .s ✅ (1009줄 arm64, C 0) → runtime_hi_gen.c 대체가능
+runtime_core.hexa → ❌ undefined val_void·TAG_VOID·call_builtin (tag 머신 미정의)
+runtime_pure.hexa → ❌ parse(extern fn) + 자체헤더 "C-only" 명시
+```
+
+**진짜 잔여 코어(증거기반, 23.6k 아님 — 정확히 3 메커니즘)**: ① NaN-boxing 태그 머신(HexaVal repr) ② arena allocator(mmap) ③ setjmp/longjmp try/catch. literal 0 = 이 3개를 native .hexa 로 포팅 → runtime_core.hexa 가 runtime_hi 처럼 native 컴파일 → 빌드를 native-runtime 으로 전환 → gen3≡gen4 byte-eq. **multi-session**(한 세션 불가). gitignored 중간물 삭제로는 honest 충족 불가(재생성 + 바이너리 C-origin 유지).
+
 - [x] M7-followup — B2 rt_fs 링크 픽스가 이제 **committable** (2026-06-01). 근본 원인: stage-4 config (`HEXA_HAS_HEXA_RT_STDLIB && !HEXA_RT_SELFEMIT`)에서 runtime.c 가 `rt_fs_append_atomic`/`rt_fs_stat`/`rt_fs_rotate_if_over` 를 extern 으로 날려버렸으나 definer 부재(codegen.hexa:7205/7311/7376 은 `fs_*` builtin → CALL 만 lower, body 안 emit; .hexa stdlib 도 정의 안 함) → clang `Undefined symbols`. #2421 은 stage-3 .sh link-fill 3-stub 로 우회. **수정(option 2)**: 3개 body 를 gitignored runtime.c 가 아니라 **tracked emitter `self/runtime_core_emit.hexa` → runtime_core.c** (runtime.c 가 in-TU `#include` 하는 fragment)에 정의. `rt_write_bytes` 와 동형(runtime_core.c body + runtime.c forward-decl). guard `#ifndef HEXA_RT_SELFEMIT` 로 self-emit config 에선 .o 가 body 소유(double-def 없음). failure-default semantics byte-unchanged (append_atomic→`-1` · stat→`hexa_void()` · rotate→`0`). **검증(g5)**: `hexa run self/runtime_core_emit.hexa` 로 runtime_core.c 재생성 → stage-4 config nm `U`→`T` 확정(BEFORE `U _rt_fs_*`, AFTER `T _rt_fs_*`) · SELFEMIT config 은 `U`(=.o 위임, no double-def) · standalone smoke config 은 `T` · `bash tool/build_aprime.sh` 풀빌드 **smoke exit(42)==42 PASS, link-fill stub 없이**. **결과**: #2421 stage-3 .sh link-fill stub 이 **obviated** — 이 PR 머지 후 sibling 의 build_aprime.sh STAGE-0 link-fill 은 삭제 가능. verdict `.verdicts/buildfloor-m7/F-BUILDFLOOR-M7-RTFS.txt`.
