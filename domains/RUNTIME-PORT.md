@@ -57,7 +57,15 @@
     portable leaf, prior BLOCKED corrected). The NUL-clean builder gap is CLOSED
     (STRBUILDER-FEAS B1). NO remaining hard-BLOCKED portable leaf. Remaining
     B-OPEN leaves carry to M2-followup (see log).
-- [ ] M3 — adjudicate the 151 BORDERLINE fns (numeric CPU kernels: keep vs port)
+- [x] M3 — adjudicate the 151 BORDERLINE fns (keep vs port) — DONE 2026-06-15. Tallying the
+  per-fn M1 reason column: ALL fall into irreducible-floor/FFI categories, ZERO portable hexa
+  leaves → uniform disposition **KEEP**. Breakdown: 70 freestanding libc · 41 GPU/device-dispatch
+  + mmap · 33 libm math ops (codegen LOWERS TO these — porting is circular) · 11 raw syscall
+  trampolines · 7 libm/ctype · 2 pthread/atomics · 2 bit/encode · 1 macro. **Net new ports = 0**:
+  the BORDERLINE set is the bootstrap/FFI/codegen-target floor itself, not a portable well
+  (mirrors the M4 runtime_core.c ~90%-irreducible finding). The runtime C floor (~5.5k LOC) is
+  thus at its engineering-irreducible minimum — no remaining portable surface. verdict
+  `.verdicts/runtime-port/M3-ADJUDICATION.txt`. **ALL RUNTIME-PORT milestones now closed (M1–M5).**
 - [x] M4 — extend inventory to self/runtime_core.c (the CORE tier) — DONE 2026-06-03.
   Tiered all 286 unique fns (363 defs) / 5531 body-LOC of the 8544-line file:
   - **tier-A irreducible CORE floor = 4011 LOC / 198 fns** (codegen-escape
