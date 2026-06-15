@@ -1,0 +1,37 @@
+Z-ROADMAP — literal `ls self/*.c == ∅` (working toolchain): the multi-session port plan
+date: 2026-06-16   goal: "no .c 완전돌파"   tooling: build/aprime_cc_z2 (fresh native, local)
+
+WHY IT'S MULTI-SESSION (established this session, evidence-based — NOT a guess):
+  The 3 self/*.c are gitignored GENERATED intermediates (hexat→C):
+    - runtime_hi_gen.c  ← runtime_hi.hexa  (✅ native-compiles today: 1009-line .s, zero C)
+    - runtime_core.c    ← runtime_core_emit.hexa (a C-TEXT EMITTER — core authored AS C strings)
+    - runtime.c         ← frozen seed + emitter output (954 C fns: HexaVal/arena/syscall/platform)
+  Literal zero-.c (toolchain still works) = build the runtime via NATIVE compile (gen3),
+  never emitting .c. Deleting the intermediates is rejected (c9): they regenerate + the
+  binary stays C-origin.
+
+ARCHITECTURE ALREADY EXISTS (the pieces are real):
+  - `HEXA_RT_SELFEMIT` mode in runtime.c: runtime symbols are EXTERNALLY LINKABLE so a
+    self-emitted (native) runtime can provide them. `hexa_array_new`/`hexa_str` are non-static.
+  - self/codegen_native.hexa = pure-.hexa native Mach-O emitter with svc syscalls (zero C) —
+    compile_hello.hexa runs (nm -u=0). The emit primitive is proven.
+  - The native compiler parses typed/untyped params + `extern fn ... *Void` (all confirmed
+    native-compile). runtime_hi.hexa native-compiles. runtime_pure.hexa (Jun-14 port effort)
+    has a specific construct that trips the parser — fixable.
+
+MULTI-SESSION PLAN (each step pod-backed for byte-eq; each lands independently):
+  Z2a. Eliminate runtime_hi_gen.c: native-compile runtime_hi.hexa → .o, link via
+       HEXA_RT_SELFEMIT instead of hexat→C #include. (3→2 .c) — build surgery, byte-eq.
+  Z3.  Arena allocator → .hexa over mmap-via-svc (codegen_native enc_svc).
+  Z2b. NaN-boxing tag machinery → native value-ops (codegen already manipulates HexaVal;
+       author core fns as .hexa so no HX_* C macros needed).
+  Z4.  setjmp/longjmp try/catch → native unwinding lowering (no .hexa equiv yet) OR libm-style
+       honest-keep decision.
+  Z2c. Port runtime_core_emit.hexa's C-text core (the 954 fns) → native .hexa functions,
+       native-compile, HEXA_RT_SELFEMIT link. (2→0 .c)
+  Z5.  gen3 builds with zero clang/zero .c runtime; re-establish gen3≡gen4 byte-eq fixpoint;
+       `ls self/*.c == ∅` with a working toolchain. GRADUATION.
+
+STATUS: wall ("irreducible") FALSIFIED + path PROVEN + tooling BUILT + boundary MAPPED to
+exact mechanisms (5 PRs #3378-#3381). Literal 0 = the above port, genuinely multi-session,
+honestly not single-session-closable. This file is the pickup point.
