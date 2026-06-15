@@ -48,6 +48,17 @@ cd "$REPO" || { echo "build_aprime: bad repo '$REPO'" >&2; exit 1; }
 [ -f compiler/main.hexa ] || { echo "build_aprime: no compiler/main.hexa under $REPO" >&2; exit 1; }
 [ -z "$HEXA_V2" ] && HEXA_V2="$REPO/self/native/hexat"
 
+# RT-NATIVE Z2a (default-on for arm64-darwin): the native runtime_hi path
+# (build/rt_hi_native.o from the frozen self/native/runtime_hi_native.s seed,
+# instead of the hexat-transpiled runtime_hi_gen.c) is byte-identical + runtime-
+# verified on arm64-darwin, so it is the DEFAULT there — `ls self/*.c` drops
+# runtime_hi_gen.c. x86_64-linux keeps the C path until its codegen matures
+# (root cause: F-RT-NATIVE-X86-CODEGEN-ROOTCAUSE) — auto-enable only on Darwin
+# arm64. Override with HEXA_ZEROC_RT_HI=0 to force the legacy C path.
+if [ "$(uname -sm 2>/dev/null)" = "Darwin arm64" ] && [ -f "$REPO/self/native/runtime_hi_native.s" ]; then
+    export HEXA_ZEROC_RT_HI="${HEXA_ZEROC_RT_HI:-1}"
+fi
+
 # ── stage 0: regen (clean-checkout self-build) ─────────────────────
 # Make this recipe self-contained on a fresh `.c=0` checkout. The two
 # inputs the pipeline assumes — the amalgam self/runtime.c (stage-3 inline
@@ -220,8 +231,15 @@ echo "  [3/5] post-process: s4_flatc_post + builtin sed + runtime.c inline"
 ZEROC_RT_HI_OBJ=""
 ZEROC_RT_HI_RESTORE=""
 if [ "${HEXA_ZEROC_RT_HI:-0}" = "1" ]; then
+    # Assemble build/rt_hi_native.o from the frozen native .s seed if absent
+    # (breaks the bootstrap chicken-egg the same way self/runtime.c is a seed).
+    if [ ! -f "$REPO/build/rt_hi_native.o" ] && [ -f "$REPO/self/native/runtime_hi_native.s" ]; then
+        grep -vE '^// ' "$REPO/self/native/runtime_hi_native.s" > "$TMP/rt_hi_seed.s" 2>/dev/null || cp "$REPO/self/native/runtime_hi_native.s" "$TMP/rt_hi_seed.s"
+        clang -c $ARCH_FLAG "$TMP/rt_hi_seed.s" -o "$REPO/build/rt_hi_native.o" 2>/dev/null \
+            && echo "  [3/5] ZERO-C Z2a: assembled build/rt_hi_native.o from frozen .s seed"
+    fi
     if [ ! -f "$REPO/build/rt_hi_native.o" ]; then
-        echo "build_aprime: HEXA_ZEROC_RT_HI=1 but build/rt_hi_native.o missing" >&2; exit 1
+        echo "build_aprime: HEXA_ZEROC_RT_HI=1 but build/rt_hi_native.o missing (no seed)" >&2; exit 1
     fi
     cp self/runtime_core.c "$TMP/runtime_core.c.preZ2a"
     ZEROC_RT_HI_RESTORE="$TMP/runtime_core.c.preZ2a"

@@ -90,6 +90,10 @@ Honest accounting of where self-hosting actually stands (no overclaim — `git l
   instruction emission** (proven; needs the `@asm`-svc general lowering wired for the runtime —
   designed, partial), and (c) **GPU/device FFI** (tier-C, outside the compiler's self-host scope).
   `ls self/*.c` empty is thus an **attackable codegen campaign**, not "unreachable by porting".
+  **RT-NATIVE Z2a DONE (2026-06-16):** `runtime_hi_gen.c` is eliminated on the default arm64-darwin
+  build (`ls self/*.c` 3→2) — `rt_str_*` come from a native-compiled object (the frozen
+  `self/native/runtime_hi_native.s` seed), byte-identical + runtime-verified, self-host fixpoint
+  preserved. x86_64-linux keeps the C path pending its codegen value-model rework.
   Full zero-`.c` remains multi-step (port batches + `@asm`-syscall wiring + a libm decision), much
   of it pod-gated — but the wall ("can't be done") is broken. Tracked: **RT-NATIVE domain**
   (`RT-NATIVE.md`, 8 milestones Z0–Z5; supersedes the HEXA-BUILDFLOOR zero-C tracking).

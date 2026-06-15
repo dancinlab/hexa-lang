@@ -42,10 +42,16 @@ FROZEN_SEED_REF="${FROZEN_SEED_REF:-151c52c82502e93d01735c58b43b017d102fee63}"
 # The frozen seed set: self/runtime.c + the .c fragments it #includes (derived
 # from `git show <ref>:self/runtime.c | grep '#include "'`) + the transpiler
 # seed self/native/hexa_cc.c (needed by stage_prebuild_hexat to build hexat).
+# RT-NATIVE Z2a: runtime_hi_gen.c dropped from the seed set when the native
+# path is active (HEXA_ZEROC_RT_HI=1) — rt_str_* now come from the native
+# build/rt_hi_native.o (assembled from self/native/runtime_hi_native.s), so the
+# C intermediate is never restored/generated. Default keeps the C seed.
+_RT_HI_SEED="self/runtime_hi_gen.c"
+[ "${HEXA_ZEROC_RT_HI:-0}" = "1" ] && _RT_HI_SEED=""
 FROZEN_SEEDS=(
   self/runtime.c
   self/runtime_core.c
-  self/runtime_hi_gen.c
+  ${_RT_HI_SEED:+$_RT_HI_SEED}
   self/native/hexa_cc.c
   self/native/tensor_kernels.c
   self/native/net.c
