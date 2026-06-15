@@ -1,0 +1,31 @@
+F-ZEROC-NATIVE-EMIT-DEMONSTRATED — a complete zero-C binary, emitted by pure .hexa, runs
+date: 2026-06-16   base: origin/main   goal: "no .c 완전돌파"
+
+CLAIM TESTED: is the Z2 "native syscall surface" only a spec, or does zero-C native emit
+actually WORK today? (M3 said the floor is irreducible / zero-C unreachable.)
+
+RESULT — it WORKS and is DEMONSTRATED, not merely designed:
+  `hexa run self/compile_hello.hexa` (pure-.hexa native Mach-O emitter, uses
+  self/codegen_native.hexa enc_svc/enc_movz/...) emitted a hello-world program:
+    [1] .text = write+exit syscalls + "hello, world\n"  (56 bytes arm64 machine code)
+    [2] wrapped in Mach-O MH_EXECUTE                      (16433 bytes)
+    [3..6] wrote /tmp/hexa_hello_native, chmod +x, ad-hoc codesign, RAN it
+    → exit 0, stdout = "hello, world"   (self-asserted PASS)
+  NO clang, NO system linker, NO C runtime in the pipeline — pure .hexa → bytes → exec.
+
+ZERO-C VERIFICATION (otool/nm, captured in hexa_hello_native.evidence.txt):
+  - nm -u: "no symbols" → undefined-symbol count = 0  → NOTHING resolved from any dylib;
+    write/exit go through raw `svc #0x80`, zero C calls.
+  - otool -L: 1 LC_LOAD_DYLIB(/usr/lib/libSystem.B.dylib) — VESTIGIAL macOS dyld
+    convention (Apple disallows officially-static user binaries); with 0 undefined
+    symbols nothing is actually called from it. On Linux the analog is a true static
+    no-interp binary. Honest: not a functional C dependency.
+  - re-run standalone: "hello, world", rc=0. file: Mach-O 64-bit executable arm64.
+
+CONSEQUENCE for the campaign: Z2's keystone (zero-C syscall emit from .hexa source)
+is NOT "unbuilt" — self/codegen_native.hexa already emits running zero-C binaries with
+svc syscalls for a language SUBSET (println-literal, arith, while/if, fn-call, array
+demos via build_*). The real remaining work is SCALE: grow this emitter's subset to the
+full language/runtime OR wire production gen3's syscall builtins to enc_svc — then the
+runtime's write/read/mmap/exit need no C. Strengthens (does not replace) the fnv1a
+pure-leaf falsifier. The "irreducible/impossible" framing is decisively refuted.
