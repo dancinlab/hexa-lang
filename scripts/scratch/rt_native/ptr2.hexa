@@ -1,0 +1,9 @@
+extern fn malloc(n: int) -> *Void
+extern fn __store64(p: *Void, off: int, v: int)
+extern fn __load64(p: *Void, off: int) -> int
+fn main() -> int {
+    let p = malloc(64)
+    __store64(p, 8, 42)
+    let v = __load64(p, 8)
+    return v
+}
