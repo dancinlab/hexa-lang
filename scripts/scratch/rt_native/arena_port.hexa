@@ -1,0 +1,208 @@
+// RT-NATIVE Z3 — pure-.hexa port of the bump arena allocator.
+//
+// Faithful re-implementation of self/runtime_core.c's malloc-backed bump arena
+//   hexa_arena_new_block (3571) · _alloc (3595) · _mark (3644)
+//   · _rewind (3654) · _reset (3669) · HexaArenaBlock{next,cap,used} (3528)
+//
+// Modeling choice: the C block chain (next pointers) is represented as the
+// natural order of parallel arrays cap[]/used[]. The chain head is index 0;
+// "next" of block i is i+1; `cur`/`head`/`mark.block` are integer indices.
+// malloc itself is the only OS dependency — here a new block is `cap.push(...)`
+// (the .hexa runtime's array growth IS malloc). This keeps byte-eq risk ZERO:
+// the observable arena state (per-block used offsets, cumulative bytes, cur
+// index, block caps) is identical to the C struct chain. Alignment, OOM-free
+// growth, oversized-block (min_cap>BLOCK), and tail-reuse-after-rewind are all
+// reproduced.
+//
+// A mark.block index of -1 models the C `m.block == NULL` (empty arena) case.
+
+let BLOCK_SIZE: i64 = 256   // matches arena_ref.c (small so chain spans blocks)
+
+// ── arena state (parallel-array block chain) ──────────────────
+// cap[i], used[i] for block i; chain order = array order.
+// head is always index 0 once any block exists; cur is the bump index.
+// arena[0] = cur, arena[1] = nblocks, arena[2] = headExists(0/1)
+// We pass cap/used arrays explicitly and return state via globals-as-arrays.
+
+fn align8(n: i64) -> i64 {
+    let mut m = (n + 7) & -8     // round up to 8
+    if m == 0 { m = 8 }
+    return m
+}
+
+// new_block: append a block of max(min_cap, BLOCK_SIZE). Returns nothing;
+// mutates cap/used in place. (malloc == array push.)
+fn arena_new_block(cap: [i64], used: [i64], min_cap: i64) {
+    let mut c = BLOCK_SIZE
+    if min_cap > BLOCK_SIZE { c = min_cap }
+    cap.push(c)
+    used.push(0)
+}
+
+// alloc n bytes. st = [cur, nblocks, headExists]. Mutates st, cap, used.
+fn arena_alloc(st: [i64], cap: [i64], used: [i64], n_in: i64) {
+    let mut n = align8(n_in)
+    // first-block lazy init
+    if st[2] == 0 {
+        arena_new_block(cap, used, n)
+        st[0] = 0          // cur = head = 0
+        st[1] = 1          // nblocks
+        st[2] = 1          // headExists
+    }
+    let mut b = st[0]
+    if used[b] + n > cap[b] {
+        // walk forward for a rewound-empty tail block big enough
+        let mut nb = b + 1
+        while nb < st[1] {
+            if cap[nb] >= n { break }
+            nb = nb + 1
+        }
+        if nb >= st[1] {
+            // none found → append (preserve rewound tail blocks)
+            arena_new_block(cap, used, n)
+            nb = st[1]          // index of the just-appended block
+            st[1] = st[1] + 1
+        }
+        used[nb] = 0
+        st[0] = nb
+        b = nb
+    }
+    used[b] = used[b] + n
+}
+
+// mark: capture (block, used). Returns [block, used]; block=-1 if empty arena.
+fn arena_mark(st: [i64], used: [i64]) -> [i64] {
+    if st[2] == 0 {
+        return [-1, 0]
+    }
+    let b = st[0]
+    return [b, used[b]]
+}
+
+// rewind to mark m=[block,used].
+fn arena_rewind(st: [i64], used: [i64], m: [i64]) {
+    if m[0] < 0 {
+        if st[2] == 1 {
+            used[0] = 0
+            st[0] = 0
+        }
+        return
+    }
+    used[m[0]] = m[1]
+    let mut b = m[0] + 1
+    while b < st[1] {
+        used[b] = 0
+        b = b + 1
+    }
+    st[0] = m[0]
+}
+
+// reset to head, keep blocks for reuse.
+fn arena_reset(st: [i64], used: [i64]) {
+    if st[2] == 0 { return }
+    let mut b = 0
+    while b < st[1] {
+        used[b] = 0
+        b = b + 1
+    }
+    st[0] = 0
+}
+
+// ── observable-state dump (byte-eq surface) ───────────────────
+fn cur_index(st: [i64]) -> i64 {
+    if st[2] == 0 { return -1 }
+    return st[0]
+}
+
+fn state_line(op: string, st: [i64], cap: [i64], used: [i64], total: i64) {
+    let nblocks = st[1]
+    let mut sum_used = 0
+    let mut i = 0
+    while i < nblocks {
+        sum_used = sum_used + used[i]
+        i = i + 1
+    }
+    // pad op to 10 chars then one space (matches C "%-10s ")
+    let mut opp = op
+    while opp.len() < 10 { opp = opp + " " }
+    opp = opp + " "
+
+    let mut usedStr = ""
+    i = 0
+    while i < nblocks {
+        if i > 0 { usedStr = usedStr + "," }
+        usedStr = usedStr + int_to_str(used[i])
+        i = i + 1
+    }
+    let mut capStr = ""
+    i = 0
+    while i < nblocks {
+        if i > 0 { capStr = capStr + "," }
+        capStr = capStr + int_to_str(cap[i])
+        i = i + 1
+    }
+    println(opp + "blocks=" + int_to_str(nblocks) + " cur=" + int_to_str(cur_index(st))
+        + " sum_used=" + int_to_str(sum_used) + " total=" + int_to_str(total)
+        + " | used=[" + usedStr + "] cap=[" + capStr + "]")
+}
+
+fn int_to_str(n: i64) -> string {
+    return "" + n
+}
+
+// total: cumulative requested bytes (post-align). Helper mutates total via array.
+fn do_alloc(st: [i64], cap: [i64], used: [i64], tot: [i64], n: i64) {
+    tot[0] = tot[0] + align8(n)
+    arena_alloc(st, cap, used, n)
+}
+
+fn main() {
+    let mut st  = [0, 0, 0]   // cur, nblocks, headExists
+    let mut cap: [i64]  = []
+    let mut used: [i64] = []
+    let mut tot = [0]
+
+    // mark stack
+    let mut mstack: [[i64]] = []
+
+    let R = 40
+    let mut r = 0
+    while r < R {
+        do_alloc(st, cap, used, tot, 16)
+        do_alloc(st, cap, used, tot, 100)
+        mstack.push(arena_mark(st, used))
+        do_alloc(st, cap, used, tot, 50)
+        let m = mstack[mstack.len() - 1]
+        mstack.pop()
+        arena_rewind(st, used, m)
+        do_alloc(st, cap, used, tot, 8)
+        r = r + 1
+    }
+    state_line("post-loop", st, cap, used, tot[0])
+
+    do_alloc(st, cap, used, tot, 300)
+    do_alloc(st, cap, used, tot, 1000)
+    state_line("post-large", st, cap, used, tot[0])
+
+    let mA = arena_mark(st, used)
+    do_alloc(st, cap, used, tot, 40)
+    let mB = arena_mark(st, used)
+    do_alloc(st, cap, used, tot, 40)
+    do_alloc(st, cap, used, tot, 40)
+    arena_rewind(st, used, mB)
+    do_alloc(st, cap, used, tot, 24)
+    arena_rewind(st, used, mA)
+    state_line("post-nested", st, cap, used, tot[0])
+
+    do_alloc(st, cap, used, tot, 200)
+    do_alloc(st, cap, used, tot, 200)
+    state_line("post-refill", st, cap, used, tot[0])
+
+    arena_reset(st, used)
+    state_line("post-reset", st, cap, used, tot[0])
+
+    let m0 = arena_mark(st, used)
+    do_alloc(st, cap, used, tot, 64)
+    arena_rewind(st, used, m0)
+    state_line("post-m0", st, cap, used, tot[0])
+}
