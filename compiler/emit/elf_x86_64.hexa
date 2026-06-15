@@ -1227,6 +1227,32 @@ fn _ex86_is_data_label(s: string) -> bool {
     return false
 }
 
+// Normalize a data-address operand to its plain reloc label, accepting both
+// the bare `.LCstrN` / `g<id>` form (the original _x86_op_resolve convention)
+// AND the `[rip+<label>]`-wrapped form the HexaVal arg-boxing path emits
+// (codegen _x86_hv_box_arg, for a runtime-builtin string/global PAYLOAD).
+// Both denote the same RIP-relative `lea reg, [rip+0]` + R_X86_64_PC32 the
+// native packer materialises — without this the wrapped form missed the
+// data-reloc matcher and the lea was dropped, so a `print("hi")` call left
+// its payload register unset (the RUNG-2 string-print garbage bug). A
+// `@GOTPCREL`/`@PLT`-suffixed inner is a DIFFERENT reloc, not a PC32 data
+// label → return "" (leave to the default path). Returns "" when not a data
+// label.
+fn _ex86_data_label_of(s: string) -> string {
+    let n = len(s)
+    let mut inner = s
+    if n >= 7 && s.substring(0, 5) == "[rip+" && s.substring(n - 1, n) == "]" {
+        inner = s.substring(5, n - 1)
+    }
+    let mut j = 0
+    while j < len(inner) {
+        if inner.substring(j, j + 1) == "@" { return "" }
+        j = j + 1
+    }
+    if _ex86_is_data_label(inner) { return inner }
+    return ""
+}
+
 fn _lir_op_uppercase_x86(op: string, ops: [LOperand]) -> string {
     // 0/1-arg ops with no width variant.
     if op == "ret"     { return "RET" }
@@ -1383,19 +1409,21 @@ fn _pack_fn_x86(out_text: [Int],
         // capture. Both `mov` (any-width LIR op) and an explicit `lea`
         // route here when the second operand is a data label.
         if (ins.op == "mov" || ins.op == "lea") && len(ins.args) == 2
-           && ins.args[0].kind == "reg" && ins.args[1].kind == "label"
-           && _ex86_is_data_label(ins.args[1].label) {
-            let rd = _ex86_reg64(ins.args[0].reg.name)
-            if rd >= 0 {
-                let cur_off = len(out_text)
-                let bs = _ex86_lea_rip_rel(rd)
-                let mut bi = 0
-                while bi < len(bs) { out_text.push(bs[bi]); bi = bi + 1 }
-                // disp32 sits at the last 4 bytes of the 7-byte insn.
-                data_offsets.push(cur_off + 3)
-                data_names.push(ins.args[1].label)
-                i = i + 1
-                continue
+           && ins.args[0].kind == "reg" && ins.args[1].kind == "label" {
+            let dl = _ex86_data_label_of(ins.args[1].label)
+            if len(dl) > 0 {
+                let rd = _ex86_reg64(ins.args[0].reg.name)
+                if rd >= 0 {
+                    let cur_off = len(out_text)
+                    let bs = _ex86_lea_rip_rel(rd)
+                    let mut bi = 0
+                    while bi < len(bs) { out_text.push(bs[bi]); bi = bi + 1 }
+                    // disp32 sits at the last 4 bytes of the 7-byte insn.
+                    data_offsets.push(cur_off + 3)
+                    data_names.push(dl)
+                    i = i + 1
+                    continue
+                }
             }
         }
 

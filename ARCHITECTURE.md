@@ -38,13 +38,16 @@ Honest accounting of where self-hosting actually stands (no overclaim — `git l
 |-------|-------|----------|
 | Native-emit backend (own IR → Mach-O / ELF, no LLVM) | ✅ **byte-identical fixpoint** `gen3 ≡ gen4` | `.verdicts/.../N5-FIXPOINT-ACHIEVED`, `tool/selfhost_byteeq_gate.sh` |
 | Default toolchain promotion (`--emit` → native gen3) | ✅ **flipped + persisted** across `hx install` | `tool/promote_selfhost.sh`, marker `~/.hx/.selfhost-default` |
-| Multi-target bootstrap | ✅ arm64-darwin · linux-arm64 (real-HW byte-eq) · x86_64 (RUNG 1+3) | SELFHOST-NEXT domain ledger |
+| Multi-target bootstrap | ✅ arm64-darwin · linux-arm64 (real-HW byte-eq) · x86_64 (RUNG 1+2+3) | SELFHOST-NEXT domain ledger |
 | `hexa run` routing | 🟡 **native-first + C-transpile delegate-fallback** (safety > coverage) | shim, native-route landing |
 
 **Remaining residuals** (tracked, not silent):
 
-- **x86_64 RUNG 2** — `print(str)` mis-prints because the x86_64 `STMT_CALL` path does not
-  yet materialise the 16-byte `HexaVal {tag,payload}` SysV register-pair (arg0 → rdi:rsi).
+- ✅ **x86_64 RUNG 2** (done 2026-06-15) — `print("hi")` now prints `hi` via the native
+  x86_64 emitter. The HexaVal 16-byte SysV reg-pair ABI landed in #3340; the string-payload
+  `lea` was then dropped in the native-emit data-address matcher (it only saw bare `.LCstrN`
+  labels, not the `[rip+<label>]`-wrapped payload) — fixed by `_ex86_data_label_of`
+  (`compiler/emit/elf_x86_64.hexa`). verdict `F-X86-RUNG2-STRING-PRINT-PASS`.
 - **Full native `hexa build` end-to-end** — gen3 owning the link + runtime orchestration, so
   the C-transpile delegate-fallback can be retired.
 - **Runtime C floor (still shrinking)** — `self/runtime*.c` (~5.5k LOC measured; tier-A core
