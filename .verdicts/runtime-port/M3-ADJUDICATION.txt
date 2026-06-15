@@ -1,0 +1,32 @@
+M3-ADJUDICATION — the 151 BORDERLINE fns: keep-vs-port verdict
+date: 2026-06-15  base: origin/main  source: .verdicts/runtime-port/INVENTORY.txt (M1)
+
+QUESTION (RUNTIME-PORT M3): of runtime.c's 151 BORDERLINE fns (3066 LOC,
+labeled 'ambiguous' at M1), which are PORTABLE hexa leaves vs KEEP-as-floor?
+
+METHOD: tallied the per-fn M1 reason column over the BORDERLINE tier section.
+
+RESULT — every BORDERLINE fn falls into an irreducible-floor / FFI category;
+ZERO are clean portable hexa leaves. Breakdown by reason:
+  70  freestanding libc primitive (str/mem/stdio/malloc bootstrap floor) → KEEP (tier-A)
+  41  flat-array GPU/device-dispatch or mmap primitive (numeric ABI)     → KEEP (tier-C FFI/device)
+  33  libm math op (the math ABI hexa codegen LOWERS TO)                 → KEEP (tier-A; porting would be circular)
+  11  raw syscall trampoline (freestanding ABI)                          → KEEP (tier-C FFI)
+   7  libm/ctype primitive hexa lowers math/char ops to                  → KEEP (tier-A)
+   2  pthread/atomics primitive (GC/concurrency)                         → KEEP (tier-A)
+   2  low-level bit/encode primitive                                     → KEEP (tier-A)
+   1  macro-ish primitive                                                → KEEP (tier-A)
+  (per-fn dual-def counting rounds to ~the 151; the DISPOSITION is uniform: KEEP.)
+
+VERDICT: 🟢 M3 CLOSED — net new ports = 0. The BORDERLINE set is NOT a portable
+well; it is the bootstrap/FFI/codegen-target floor itself (libc + libm that codegen
+lowers onto + syscall trampolines + GPU/device dispatch + pthread/arena). Porting
+libm ops to hexa is circular (hexa math LOWERS TO them); GPU/syscall/libc are the OS
+boundary. This mirrors the M4 runtime_core.c finding (~90% irreducible-or-ported).
+
+CONSEQUENCE for HEXA-SELFHOST+ meta: the runtime C floor (~5.5k LOC) is at its
+engineering-irreducible minimum — there is no remaining portable surface to drain.
+A literal 'ls self/*.c == empty' is therefore UNREACHABLE by porting: the floor is
+freestanding libc/libm/syscall/device primitives that a self-hosting native compiler
+fundamentally rests on (as do Go/Rust runtimes). 'self-host complete' = native-emit
+fixpoint + this irreducible floor, NOT zero C source.

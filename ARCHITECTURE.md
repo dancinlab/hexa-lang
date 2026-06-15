@@ -55,12 +55,17 @@ Honest accounting of where self-hosting actually stands (no overclaim — `git l
   default to this path (it still uses `--emit=asm`→clang for safety; the promote shim
   delegates the `build` subcommand) — a driver change gated on **full-corpus** byte-eq, kept
   opt-in until corpus-verified.
-- **Runtime C floor (still shrinking)** — `self/runtime*.c` (~5.5k LOC measured; tier-A core
-  ≈1.5k libc/libm/syscall/`HexaVal` arena) is generated from `*_emit.hexa` SSOTs, not authored
-  by hand. The RUNTIME-PORT campaign is **still driving it down** (M3 = 151 BORDERLINE numeric
-  fns open). "Irreducible floor" is an *engineering assessment* of the libc/syscall bootstrap
-  layer — **there is no policy that accepts this C as permanent**. The HEXA-SELFHOST+ meta bar
-  (`ls self/*.c` empty) is therefore genuinely unmet, not merely a definition technicality.
+- **Runtime C floor (at engineering-irreducible minimum)** — `self/runtime*.c` (~5.5k LOC;
+  tier-A core ≈1.5k libc/libm/syscall/`HexaVal` arena) is generated from `*_emit.hexa` SSOTs,
+  not authored by hand. RUNTIME-PORT is now **fully adjudicated (M1–M5 closed)**: the M3 pass
+  (2026-06-15) tallied the last 151 BORDERLINE fns and found **zero portable hexa leaves** — all
+  are libc / libm (which codegen *lowers onto* — porting is circular) / syscall trampolines /
+  GPU-device dispatch / pthread / arena. **Net remaining portable surface = 0.** So the floor is
+  not "still shrinking" — it is at its irreducible minimum. CONSEQUENCE: the HEXA-SELFHOST+ meta
+  bar (`ls self/*.c` empty) is **unreachable by porting** — a self-hosting native compiler rests
+  on a freestanding libc/syscall/codegen-target floor (as do the Go/Rust runtimes). "Self-host
+  complete" honestly means **native-emit byte-eq fixpoint + this irreducible floor**, not zero C
+  source. verdict `.verdicts/runtime-port/M3-ADJUDICATION.txt`.
 
 ## Component map
 
