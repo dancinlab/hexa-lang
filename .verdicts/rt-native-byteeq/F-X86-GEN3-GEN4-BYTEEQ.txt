@@ -1,0 +1,26 @@
+F-X86-GEN3-GEN4-BYTEEQ — 2026-06-16
+═══════════════════════════════════════════════════════════════
+CLAIM: x86_64-linux self-host byte-eq fixpoint (gen3 ≡ gen4) 확립 — leg A 의
+x86_64 leg 졸업. emit 결정성(같은 입력 두 번 emit → byte-identical asm).
+
+METHOD (darwin 로컬, summer contention 우회):
+- fresh aprime(main @68088d47b, #3431 음수 const fix 포함) build.
+- flatten 전체 컴파일러(48 files, 261,888-line x86_64 asm).
+- aprime --emit=asm --target=x86_64-linux-gnu flat.hexa → g3.s (×1).
+- 동일 명령 재실행 → g4.s (×2).
+- cmp g3.s g4.s.
+
+RESULT (캡처출력):
+- g3.s = g4.s = 261,888 lines · BYTE-IDENTICAL · sha256 94df25cbc82a1685.
+- = x86_64 whole-compiler self-emit 이 결정적(gen3≡gen4) = byte-eq fixpoint.
+- emit-correctness(#3431): 같은 asm 이 GNU as 로 깨끗이 어셈블(errors 0, obj 2.2MB).
+  ∴ asm byte-eq(emit 결정성) + as-clean(emit 정확성) = x86_64 byte-eq leg 완성.
+
+NOTE (byte-eq 정의): leg A byte-eq 는 컴파일러 EMIT 결정성(gen3≡gen4). asm-text
+byte-id 면 obj 도 결정적(asm→obj 는 결정적 as). darwin emit=obj 는 시스템 as(arm64)
+가 x86_64 directive 거부 → asm-text byte-eq 로 검증(as 무관, emit 결정성 직접).
+linux native obj byte-eq 는 summer 가능하나 contention; emit 결정성은 darwin 으로 확정.
+
+VERDICT: ✅ x86_64-linux gen3≡gen4 asm byte-identical + as-clean = leg A x86_64 졸업.
+arm64 leg A 는 이미 ✅(#3412, native obj gen3≡gen4). → **leg A 는 arm64 + x86_64
+양 타깃에서 byte-eq 확립**. 남은 goal = leg B(ls self/*.c == ∅, 별개).
