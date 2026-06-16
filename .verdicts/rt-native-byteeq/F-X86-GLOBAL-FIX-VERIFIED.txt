@@ -1,0 +1,26 @@
+F-X86-GLOBAL-FIX-VERIFIED — 2026-06-16
+═══════════════════════════════════════════════════════════════
+CLAIM: x86_64 global-operand fix(#3423)가 whole-compiler 수준에서 동작 —
+darwin 로컬 cross-assemble 로 검증(summer contention 우회).
+
+METHOD (darwin, clang multi-arch cross-assemble):
+- fresh aprime_xc(main @3d7634d14, #3423 포함) build
+- flatten 전체 컴파일러(48 files) → aprime --emit=asm --target=x86_64-linux-gnu
+  → flat_x86.s (261,590 lines) → clang -target x86_64-linux-gnu -c (cross-assemble)
+
+RESULT (캡처출력):
+- **bare `g<N>` label (cmp/test/mov operand) = 0** (이전 다수 → 0; #3423 동작 확정)
+- 이전 "ambiguous operand size for cmp"(global) 에러 클래스 = 사라짐.
+- 잔여 as 에러 = 52: invalid operand for instruction(38) + unknown token(14).
+  ① `idiv 0` — divisor 가 미처리 operand kind → _x86_op_resolve fallback imm 0
+     (const_int 는 이미 materialize 됨; 다른 kind 가 idiv 에 imm 으로 새어듦).
+  ② `cmp r12, ` — binop == 의 RHS operand 빈값 (#3421 잔여; reg-alloc 이 특정
+     local 에 reg/spill 둘 다 안 줘서 _x86_op_resolve 가 빈 op_reg 렌더).
+
+VERDICT: ✅ #3423 global fix whole-compiler 동작 확정(g<N>=0). 🔧 다음 2 버그
+(idiv imm-divisor · binop cmp RHS 빈값 = reg-alloc local 미할당) 노출. leg A-linux
+검증을 darwin 로컬 cross-assemble(scripts/scratch/rt_native/x86_crossassemble_gate.sh)
+로 수행 가능 — summer/pod contention 불요(EMIT 정확성 펜스; 실행은 별도 linux).
+
+NEXT: idiv 미처리 operand kind materialize + cmp RHS reg-alloc local 미할당 수정 →
+gate 재실행 → 52 에러 감소 추적.
