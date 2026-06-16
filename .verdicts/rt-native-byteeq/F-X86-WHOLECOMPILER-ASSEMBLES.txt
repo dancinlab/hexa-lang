@@ -1,0 +1,25 @@
+F-X86-WHOLECOMPILER-ASSEMBLES — 2026-06-16
+═══════════════════════════════════════════════════════════════
+CLAIM: x86_64-linux whole-compiler self-emit asm 가 GNU as 로 깨끗이
+어셈블된다 (as 에러 0) — leg A-linux 의 EMIT-correctness 달성.
+
+ROOT (마지막 버그): x86_64 `_fmt_imm` 가 `to_string(imm)` 만 호출 →
+`to_string` 이 음수 i64 의 부호를 떨어뜨려, 음수 const_int(예: MStmt
+`target_block: -7001/-7002/-1` block-id sentinel)이 EMPTY operand
+(`mov rax,`/`cmp r12,`/`mov rdx,`)로 렌더 = whole-compiler unknown-token
+에러 클래스 16개. 진단 경로: kind DIAG comment → `DIAGkind=const_int
+rn= lbl=` → 음수 const 작은 재현 `mov rax, ` 빈 → to_string 음수 부호 누락 확정.
+FIX: x86 `_fmt_imm` 에서 `if imm < 0 { return "-" + to_string(0 - imm) }`
+(arm64 는 음수를 movz/movk 로 분해해 _fmt_imm 미경유 → 무영향, leg A #3412 보존).
+
+RESULT (darwin cross-assemble 게이트, 캡처출력):
+- whole-compiler asm 261,888 lines → clang -target x86_64-linux-gnu -c
+  → **obj OK 2,204,600 bytes · errors 0** · bare g<N> 0.
+- 누적 에러 추적: (다수) → 52 → 26 → 19 → 17 → 16 → **0**.
+  #3423 global · #3425 idiv · #3426 wide-imm · #3427 test · #3428 push ·
+  #3430 진단 · 본PR 음수 const_int.
+
+의의: x86_64-linux whole-compiler 가 emit→assemble 통과 = leg A-linux 의
+EMIT-correctness 완성. 남은 leg A-linux = (1) obj→link→run + (2) gen3≡gen4
+x86_64 byte-eq (summer/linux 실행, contention 우회 위해 darwin cross-assemble
+로 emit 검증 완료). arm64 leg A 는 이미 ✅(#3412). leg B(파일 0)는 별개.
