@@ -1173,10 +1173,12 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf = _x86_op_rm(buf, s.args[0], st, rm, "r10", opts)
             let cond = _x86_op_resolve(s.args[0], st, rm, "r10", opts)
             // x86 `test` first operand must be reg/mem, not imm. A const_int
-            // condition would emit `test 0, 0` (rejected by GNU as).
-            // Materialize into r10 first. Mirrors the cmp fix above.
+            // condition — OR any non-local/global operand that fell through
+            // `_x86_op_resolve` to the `imm 0` fallback (which produced the
+            // invalid `test 0, 0` in whole-compiler emit) — must be
+            // materialized into r10. local/global already resolve to reg/mem.
             let mut cond_real = cond
-            if s.args[0].kind == "const_int" {
+            if s.args[0].kind != "local" && s.args[0].kind != "global" {
                 buf.push(_x86_instr2("mov", _x86_op_reg("r10"), cond,
                                  "materialize test cond to reg"))
                 cond_real = _x86_op_reg("r10")
