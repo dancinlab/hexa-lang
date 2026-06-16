@@ -1,0 +1,78 @@
+// RT-NATIVE Z2c: hexa_truthy ported to native .hexa using the UNLOCK-2 @tag
+// intrinsic (__hx_tag) — no `bl _hexa_truthy` C call. Mirrors runtime_core.c
+// hexa_truthy's tag→bool switch. TAG enum: INT0 FLOAT1 BOOL2 STR3 VOID4
+// ARRAY5 MAP6 FN7 CHAR8 CLOSURE9 VALSTRUCT10 ENUM11.
+//
+// C truthy rules (self/runtime_core.c hexa_truthy):
+//   BOOL  -> the bool itself
+//   INT   -> i != 0
+//   FLOAT -> f != 0.0  (NaN is truthy, non-zero)
+//   STR   -> non-NULL && first char != 0  (i.e. "" is falsy)
+//   VOID  -> 0 (falsy)
+//   ARRAY -> len > 0   (RFC r16: empty array falsy)
+//   MAP   -> NULL tbl falsy; struct (has "__type__") truthy; else len > 0
+//   VALSTRUCT -> .vs pointer non-null
+//   default (FN/CHAR/CLOSURE/ENUM) -> 1 (truthy)
+//
+// Native value-extraction: only __hx_tag exists as an intrinsic; there is no
+// __hx_int / __hx_float. Inside a tag-known branch we operate on `v` directly
+// (v != 0 / v != 0.0) which the codegen lowers per the known tag, and use the
+// len() builtin for STR/ARRAY/MAP emptiness — exactly the C semantics.
+fn rt_truthy_native(v) -> int {
+    let t = __hx_tag(v)
+    if t == 2 {            // BOOL: the bool itself
+        if v { return 1 }
+        return 0
+    }
+    if t == 0 {            // INT: i != 0
+        if v != 0 { return 1 }
+        return 0
+    }
+    if t == 1 {            // FLOAT: f != 0.0
+        if v != 0.0 { return 1 }
+        return 0
+    }
+    if t == 3 {            // STR: "" is falsy
+        if len(v) > 0 { return 1 }
+        return 0
+    }
+    if t == 4 {            // VOID: falsy
+        return 0
+    }
+    if t == 5 {            // ARRAY: empty falsy
+        if len(v) > 0 { return 1 }
+        return 0
+    }
+    if t == 6 {            // MAP: empty falsy (struct carries __type__ -> len>=1)
+        if len(v) > 0 { return 1 }
+        return 0
+    }
+    if t == 10 {           // VALSTRUCT: non-null -> truthy
+        return 1
+    }
+    return 1               // FN/CHAR/CLOSURE/ENUM default -> truthy
+}
+
+// C-side truthiness oracle: `if v {}` lowers to hexa_truthy(v) in codegen.
+fn c_truthy(v) -> int {
+    if v { return 1 }
+    return 0
+}
+
+fn main() {
+    let empty_arr = []
+    let one_arr = [1]
+    let empty_map = #{}
+    let cases = [0, 1, 42, true, false, "", "hi", empty_arr, one_arr, empty_map]
+    let mut ok = 0
+    let mut k = 0
+    while k < cases.len() {
+        let nat = rt_truthy_native(cases[k])
+        let c = c_truthy(cases[k])
+        if nat == c { ok = ok + 1 }
+        else { println("MISMATCH idx=" + k.to_string() + " native=" + nat.to_string() + " C=" + c.to_string()) }
+        k = k + 1
+    }
+    println("native-vs-C truthy match: " + ok.to_string() + "/" + cases.len().to_string())
+    exit(ok)
+}
