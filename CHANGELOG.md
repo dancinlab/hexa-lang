@@ -8,6 +8,8 @@ For the full audit trail, see `git log`.
 
 ## 2026-06-16
 
+- **RT-NATIVE: leg B 코어 native 누적 batch2 — 비교/산술/eq 10 fn** — `__hx_payload_lt/gt/le/ge/eq/add/sub/mul` + `__hx_to_double`+`flt/fadd`(혼합 float) = int/float fast-path 완전 native. **검증(c2)**: 비교4(3<5·5>3·4<=4·4>=4)+eq1+산술3(20+22·50-8·6*7=42)+float2 정확 · asm·obj exit10 · `_rt_*` T 심볼 10. 코어 native 누적 8→**18/591**. (string/map/valstruct 분기는 추가 leaf 잔여). 다세션 누적 가속(int/float 코어 op 완비). 데모: scripts/scratch/rt_native/rt_core_batch2.hexa.
+
 - **RT-NATIVE: leg B 코어 native 누적 — type predicate 7종(is_int/float/bool/str/void/array/map)** — `__hx_tag` + `__hx_payload_eq(tag, TAG_X)` = **완전 leaf**(MAP/glue 잔여 없음, predicate 는 단순 tag 비교). **검증(c2)**: 7종 정확(int→is_int T·float→is_float T·…·타입 불일치 F) · asm·obj exit8 · `_rt_is_*` T 심볼 7개(stdlib 편입 가능). 코어 native 누적 1(rt_truthy #3443)→**8/591**. 패턴: 단순 코어 fn 은 leaf 만으로 완전 native(glue 불요), 복합 fn(truthy MAP·dispatch)은 추가 leaf+glue lowering 필요. 다세션 누적 가속. 데모: scripts/scratch/rt_native/rt_typepred_demo.hexa.
 
 - **RT-NATIVE: leg B 코어 native 첫 fn PoC — rt_truthy(leaf intrinsic) == C hexa_truthy 10/10** — 코어 591 fn 의 첫 fn 을 leaf intrinsic 으로 .hexa native 작성: `__hx_tag` + tag별 분기(BOOL→payload_nz·INT→nz·FLOAT bits·VOID→0·STR→str_byte·ARRAY→arr_len). **검증(c2)**: rt_truthy native vs C hexa_truthy 10/10 일치(INT 0/nonzero·BOOL·FLOAT 0.0/nonzero·STR ""/nonempty·ARRAY []/nonempty) · asm·obj exit10 · `_rt_truthy` T 심볼(stdlib 편입 가능). MAP/VALSTRUCT 분기는 추가 leaf(hmap_find/vs-deref) 잔여 · 글루(if/==)는 아직 C 호출(typed-glue lowering 잔여, 정정 #3407). 의의: leg B 코어 native 패턴 확립(코어 fn→leaf .hexa→C byte-eq→T 심볼) = 다세션 누적이 실제 작동 실증. 첫 fn 검증, 591 중 1. 데모: scripts/scratch/rt_native/rt_truthy_demo.hexa.

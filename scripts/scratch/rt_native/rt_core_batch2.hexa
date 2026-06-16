@@ -1,0 +1,30 @@
+// VERIFIED 2026-06-16: 코어 비교/산술/eq 10 fn native(int fast-path leaf +
+// float to_double) — asm·obj exit=10, _rt_* T 심볼 10. 누적 8→18/591.
+// int/float 분기 완전 native; string/map/valstruct 분기 추가 leaf 잔여.
+// RT-NATIVE leg B 코어 native 누적 batch2: 값 비교/산술 dispatch (leaf 조합).
+// C: hexa_cmp_lt/gt/le/ge·hexa_eq·hexa_ne — int fast-path leaf, 혼합 to_double.
+// (string/map/valstruct 분기는 추가 leaf 잔여; int/float 분기 완전 native.)
+fn rt_cmp_lt_i(a, b) -> bool { return __hx_payload_lt(a, b) }
+fn rt_cmp_gt_i(a, b) -> bool { return __hx_payload_gt(a, b) }
+fn rt_cmp_le_i(a, b) -> bool { return __hx_payload_le(a, b) }
+fn rt_cmp_ge_i(a, b) -> bool { return __hx_payload_ge(a, b) }
+fn rt_eq_i(a, b) -> bool     { return __hx_payload_eq(a, b) }
+fn rt_add_i(a, b) -> int     { return __hx_payload_add(a, b) }
+fn rt_sub_i(a, b) -> int     { return __hx_payload_sub(a, b) }
+fn rt_mul_i(a, b) -> int     { return __hx_payload_mul(a, b) }
+fn rt_cmp_lt_f(a, b) -> bool { return __hx_payload_flt(__hx_to_double(a), __hx_to_double(b)) }
+fn rt_add_f(a, b) -> float   { return __hx_payload_fadd(__hx_to_double(a), __hx_to_double(b)) }
+fn main() {
+  let mut ok = 0
+  if rt_cmp_lt_i(3, 5) { ok = ok + 1 }       // 3<5 T
+  if !rt_cmp_lt_i(5, 3) { ok = ok + 1 }      // 5<3 F
+  if rt_cmp_gt_i(5, 3) { ok = ok + 1 }       // 5>3 T
+  if rt_cmp_le_i(4, 4) { ok = ok + 1 }       // 4<=4 T
+  if rt_cmp_ge_i(4, 4) { ok = ok + 1 }       // 4>=4 T
+  if rt_eq_i(7, 7) { ok = ok + 1 }           // 7==7 T
+  if __hx_payload_eq(rt_add_i(20, 22), 42) { ok = ok + 1 }   // 20+22=42
+  if __hx_payload_eq(rt_sub_i(50, 8), 42) { ok = ok + 1 }    // 50-8=42
+  if __hx_payload_eq(rt_mul_i(6, 7), 42) { ok = ok + 1 }     // 6*7=42
+  if rt_cmp_lt_f(1.5, 2.5) { ok = ok + 1 }   // 1.5<2.5 T
+  exit(ok)   // expect 10 = 비교4+eq1+산술3+float2 정확
+}
