@@ -1,0 +1,27 @@
+F-RT-NATIVE-UNLOCK2b — native leaf-compare intrinsics: __hx_payload_eq / __hx_payload_nz (inline cmp/cset)
+date: 2026-06-16   domain: RT-NATIVE   unlock: UNLOCK-2b (Z2c dispatch-core fully-C-free leaves)
+
+WHY: the Z2c dispatch-core ports (hexa_eq/truthy, verified behaviorally) still delegated their
+LEAF value compares to `bl _hexa_eq` — circular, since Z2c REMOVES the C hexa_eq. UNLOCK-2b makes
+the int/bool/char leaf ops native.
+
+IMPLEMENTATION (3 files, mirrors the UNLOCK-2 @tag pattern):
+  - arm64_darwin.hexa STMT_CALL: `__hx_payload_eq(a,b)` → _hv_load a/b → x1/x3 (payloads),
+    `cmp x1,x3; cset x0,eq` → _emit_bool_box (INLINE, no `bl`). `__hx_payload_nz(v)` →
+    `cmp x1,#0; cset x0,ne` → bool.
+  - bind.hexa: `__hx_payload_eq`/`__hx_payload_nz` added to the __-builtin allowlist.
+  - self/codegen.hexa: C-transpile → `hexa_bool(HX_INT(a) == HX_INT(b))` / `hexa_bool(HX_INT(v) != 0)`.
+  (cmp/cset/uxtw are already supported by the asm renderer: asm.hexa:159 cset, macho_arm64.hexa:491
+   CMP / 1510 CSET.)
+
+VERIFICATION (c2, captured, aprime rebuilt):
+  - native .s: `cmp x1, x3 ; __hx_payload_eq` + `cset x0, eq` and `cmp x1, #0 ; __hx_payload_nz` +
+    `cset x0, ne` — 4 inline emits, 0 `bl _hexa_eq` for the payload compares.
+  - RUN: `__hx_payload_eq(5,5)`=T, `(5,7)`=F, `__hx_payload_nz(5)`=T, `(0)`=F → exit 4 (expect 4).
+  - smoke exit(42) PASS. FIXPOINT preserved: __hx_payload_* are NEW builtins the compiler itself
+    never calls, so the compiler's self-emission is byte-unchanged (additive, like UNLOCK-2 3/3).
+
+VERDICT: 🟢 UNLOCK-2b DONE. With @tag (UNLOCK-2) + __hx_payload_eq/nz, the native dispatch core's
+int/bool/char/void leaves are FULLY C-free. Next: float/str leaf intrinsics (__hx_payload_feq,
+__hx_str_eq) if needed, then re-port hexa_eq/truthy fully-C-free + integrate via seed-link → Z2c
+volume (954 fns). All dispatch-core codegen primitives are now in place.

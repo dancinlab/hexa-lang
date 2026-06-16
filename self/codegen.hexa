@@ -6123,6 +6123,14 @@ fn gen2_expr(node) {
             if name == "__hx_tag" {
                 return "hexa_int((int64_t)HX_TAG(" + gen2_expr(node.args[0]) + "))"
             }
+            // RT-NATIVE UNLOCK-2b: native leaf-compare (payload i64 cmp). C-transpile
+            // = HX_INT macro (the payload union as int64); native arm64 lowers inline.
+            if name == "__hx_payload_eq" {
+                return "hexa_bool(HX_INT(" + gen2_expr(node.args[0]) + ") == HX_INT(" + gen2_expr(node.args[1]) + "))"
+            }
+            if name == "__hx_payload_nz" {
+                return "hexa_bool(HX_INT(" + gen2_expr(node.args[0]) + ") != 0)"
+            }
             if name == "__map_ptr_eq" {
                 return "hexa_bool((HX_MAP_TBL(" + gen2_expr(node.args[0]) + ") == HX_MAP_TBL(" + gen2_expr(node.args[1]) + ")))"
             }

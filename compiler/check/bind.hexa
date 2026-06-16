@@ -1222,7 +1222,7 @@ fn _bind_builtin_names() -> [string] {
         // reads the HexaVal tag inline (arm64_darwin.hexa STMT_CALL special-case;
         // C-transpile self/codegen.hexa → hexa_int(HX_TAG(v))). Lets .hexa port
         // hexa_type_of/eq/truthy natively (Z2c dispatch core) instead of `bl _hexa_type_of`.
-        "__hx_tag",
+        "__hx_tag", "__hx_payload_eq", "__hx_payload_nz",
         // N5-pre STEP2: builtins the compiler source calls but were absent from this allowlist
         // (HX2001). All have C-level defs: bytes_to_str_raw -> self/codegen.hexa:7155
         // (hexa_bytes_to_str_raw); __arr_alloc_items_zero[_int] are s4_flatc_post-injected statics.

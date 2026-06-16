@@ -1893,6 +1893,32 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // RT-NATIVE UNLOCK-2b: native leaf-compare intrinsics — `__hx_payload_eq(a,b)`
+        // compares the HexaVal PAYLOADS (hi eightbyte = x1) as raw i64 → bool, INLINE
+        // (cmp/cset, no `bl _hexa_eq`). `__hx_payload_nz(v)` = `payload != 0` → bool.
+        // Lets the native dispatch core (hexa_eq/truthy int/bool/char leaves) be FULLY
+        // C-free instead of re-entering the C `hexa_eq` that Z2c removes.
+        if s.op == "__hx_payload_eq" && len(s.args) >= 2 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // a → x1=payload
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // b → x3=payload
+            buf.push(_arm64_instr2("cmp", _arm64_op_reg("x1"),
+                             _arm64_op_reg("x3"), "__hx_payload_eq: cmp payloads"))
+            buf.push(_arm64_instr2("cset", _arm64_op_reg("x0"),
+                             _arm64_op_label("eq"), "__hx_payload_eq: x0 = (a.pl == b.pl)"))
+            buf = _emit_bool_box(buf, "__hx_payload_eq: box bool")
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        if s.op == "__hx_payload_nz" && len(s.args) >= 1 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // v → x1=payload
+            buf.push(_arm64_instr2("cmp", _arm64_op_reg("x1"),
+                             _arm64_op_label("#0"), "__hx_payload_nz: cmp payload, 0"))
+            buf.push(_arm64_instr2("cset", _arm64_op_reg("x0"),
+                             _arm64_op_label("ne"), "__hx_payload_nz: x0 = (payload != 0)"))
+            buf = _emit_bool_box(buf, "__hx_payload_nz: box bool")
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // has_key(m, key) special: runtime ABI is
         // hexa_bool(hexa_map_contains_key(HexaVal m, const char* key))
         // (codegen_c2:4302). key is a HexaVal var → hexa_to_cstring it.
