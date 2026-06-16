@@ -89,6 +89,7 @@ use "stdlib/qforge/correlation"
 use "stdlib/qforge/screened_dv"
 use "stdlib/qforge/screening_anderson"
 use "stdlib/qforge/screening_pwfft"
+use "stdlib/qforge/gga_scf"
 
 let _QPW_2PI: float = 6.28318530717958647692
 
@@ -143,6 +144,31 @@ pub fn qpw_h_apply(v: [float]) -> [float] { return qforge_h_apply(QPW_HAM, v) }
 // evaluation point the screened-vertex Dyson response needs (length = the PW basis
 // n in the (1,1,n) cubic-grid screening convention). Read by qpwd_drho_to_dvscf.
 let mut QPW_RHO: [float] = []
+
+// ── 3-D PBE ground-state override (residual-(3) test, the genuinely-new lever) ──
+//   The default front-end SCF self-consists ρ on a DEGENERATE (1,1,n) G-INDEX LINE
+//   (the in-loop V_H convention) — a 1-D proxy, NOT a physical 3-D ρ(r). A GGA
+//   gradient on that 1-D line is unphysical, and at the converged n=645 basis (645 ≠
+//   pow2) the spectral PBE V_xc silently falls back to LDA. The .verdicts/
+//   qforge-pbe-scf-cah6 round NAMED this as the deep residual. gga_scf.hexa is a TRUE
+//   3-D real-space spin-GGA SCF on a cubic (nx,ny,nz) grid (real 3-D ∇ρ). When
+//   QPW_PBE3D is ON, qforge_pw_frontend runs gga_scf in the SAME PW G-basis the vertex
+//   uses, then sets QPW_HAM = its converged dense H so the screened vertex re-solves
+//   the GENUINE 3-D-PBE occupied manifold (not the 1-D-line one). This is the honest
+//   test of whether a physical 3-D PBE density changes the from-scratch λ. d6 — λ
+//   reported VERBATIM; the override is NOT tuned to 4.376.
+let mut QPW_PBE3D: bool = false
+let mut QPW_PBE3D_NX: int = 16
+let mut QPW_PBE3D_NY: int = 16
+let mut QPW_PBE3D_NZ: int = 16
+let mut QPW_PBE3D_ENGAGED: bool = false   // d6 witness: did the 3-D H actually replace QPW_HAM
+pub fn qpw_set_pbe3d(on: bool, nx: int, ny: int, nz: int) {
+    QPW_PBE3D = on
+    if nx > 0 { QPW_PBE3D_NX = nx }
+    if ny > 0 { QPW_PBE3D_NY = ny }
+    if nz > 0 { QPW_PBE3D_NZ = nz }
+}
+pub fn qpw_pbe3d_engaged() -> bool { return QPW_PBE3D_ENGAGED }
 
 // =============================================================================
 // ① DECK-DIR GEOMETRY PARSER
@@ -619,6 +645,51 @@ pub fn qforge_pw_frontend(deck_dir: str, npw_cap: int, xc_mode: int,
     // stage QPW_HAM = the dense converged H (qpw_h_apply applies it for qforge_run).
     //   Probe the staged apply closure column-by-column: H·e_j = the j-th COLUMN.
     QPW_HAM = _qpw_capture_ham(_apply, n)
+
+    // ── 3-D PBE ground-state OVERRIDE (residual-(3) honest test) ──────────────────
+    //   Replace the (1,1,n)-line ground state with a TRUE 3-D real-space spin-GGA SCF
+    //   (gga_scf) in the SAME PW G-basis, so the screened vertex re-solves the genuine
+    //   3-D-PBE occupied manifold. d4 generic (cubic grid = DATA); d6 VERBATIM.
+    QPW_PBE3D_ENGAGED = false
+    if QPW_PBE3D {
+        let nx3 = QPW_PBE3D_NX ; let ny3 = QPW_PBE3D_NY ; let nz3 = QPW_PBE3D_NZ
+        // real cell reciprocal vectors (physical 3-D ∇ρ on the cubic FFT cube).
+        let gb1 = geom.b1 ; let gb2 = geom.b2 ; let gb3 = geom.b3
+        // EXACT integer millers per G (the BCC reciprocal is SINGULAR → recovering them
+        //   by inverting B collapses the grid; carry them from qpw_gvectors_miller — the
+        //   SAME workaround the screened path uses (line ~975). gvm[0]=gvecs · gvm[1]=miller.
+        let ecut_ha3 = if geom.ecutwfc > 0.0 { 0.5 * geom.ecutwfc } else { 0.0 }
+        let gvm3 = qpw_gvectors_miller(gb1, gb2, gb3, ecut_ha3, 4, npw_cap)
+        let gvecs3 = gvm3[0]
+        let milf3 = gvm3[1]
+        let mut mil3: [int] = []
+        let mut mi3 = 0
+        while mi3 < len(milf3) { mil3.push(to_int(milf3[mi3])) ; mi3 = mi3 + 1 }
+        // xc_mode≥1 for gga_scf → PBE-x(F_x(s) gradient enhancement) + PW92-c; init_mag=0
+        //   (non-magnetic hydride). Same nbands/nelec/sigma as the line SCF.
+        let xcg = if xc_mode >= 1 { 1 } else { 1 }   // gga_scf always runs the GGA-x term
+        let sp = qforge_scf_pw_gga_spin_mil(
+            k0, gvecs3, mil3, geom.nspec, rs, rabs, vlocs, mlens, zs,
+            poss, palens, betas, ls, dij, nprojs, blens, dlens,
+            geom.omega, xcg, nx3, ny3, nz3, gb1, gb2, gb3,
+            nbands, nelec, 0.3, 1.0e-6, 80, sigma, 6, 0.0)
+        let h3 = qforge_gga_hconv()
+        if len(h3) == n * n {
+            // replace QPW_HAM with the 3-D-PBE converged dense H + rebuild diag.
+            let mut d3: [float] = []
+            let mut dq = 0
+            while dq < n { d3.push(h3[dq * n + dq]) ; dq = dq + 1 }
+            QPW_HAM = PwHam { h: h3, diag: d3, n: n }
+            diag = d3
+            // QPW_RHO: the 3-D-PBE total density projected onto the n PW coefficients is
+            //   NOT directly the (1,1,n) line convention QPW_RHO uses; the screened
+            //   vertex's LOCAL-ALDA reconstructs ρ(r) from the ψ_n columns (re-solved
+            //   from THIS 3-D H) — so the physical 3-D ground state already flows through
+            //   the orbitals. QPW_RHO (uniform-gas f_xc[ρ̄] fallback coeff) is unchanged.
+            QPW_PBE3D_ENGAGED = true
+        }
+        // if len(h3) != n·n the override silently no-ops (d6: ENGAGED=false witnesses it).
+    }
 
     // ── ⑤ EMIT the QforgeDeck (SCF half FULL · DFPT half = Einstein default) ──
     let omega0 = if omega0_K > 0.0 { omega0_K } else { 1236.4 }   // CaH6-scale default

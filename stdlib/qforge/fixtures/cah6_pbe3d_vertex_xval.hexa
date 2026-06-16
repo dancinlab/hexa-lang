@@ -1,0 +1,103 @@
+// stdlib/qforge/fixtures/cah6_pbe3d_vertex_xval.hexa
+//
+// QFORGE residual-(3) HONEST TEST — 3-D PBE ground state → from-scratch screened
+// el-ph vertex → CaH6 λ vs QE 4.376.
+//
+// The .verdicts/qforge-pbe-scf-cah6 round NAMED the deep residual: the from-scratch
+// vertex SCF self-consists ρ on a DEGENERATE (1,1,n) G-INDEX LINE (a 1-D proxy), so a
+// GGA gradient on it is unphysical, AND at the converged n=645 basis (645≠pow2) the
+// spectral PBE V_xc falls back to LDA. gga_scf.hexa is a TRUE 3-D real-space spin-GGA
+// SCF on a cubic (nx,ny,nz) grid (real 3-D ∇ρ). This fixture wires its converged 3-D-
+// PBE dense H into the screened-vertex front-end (qpw_set_pbe3d) so the el-ph |g|² re-
+// solves the GENUINE 3-D-PBE occupied manifold, then measures λ VERBATIM (d6).
+//
+// FROZEN PREDICTION (.verdicts/qforge-cah6-pbe-scf-vertex/PREDICTION.txt):
+//   PRIMARY = won't close ≤1% (two functional levers — f_xc-in-χ R8 AND (1,1,n) PBE —
+//   both push λ the WRONG way → residual is NOT the XC functional of the ground state).
+//   SECONDARY (this 3-D test) = GUARDED-NEGATIVE. λ reported VERBATIM, NOT tuned.
+//
+// args:  <deck_dir> <npw_cap> <nq> <grid> [<screened> <beta> <m>]
+//   grid = cubic FFT dim (pow2; the 3-D real-space SCF cube). 0 → auto (16).
+// Run: HEXA_LANG="$PWD" hexa run --no-sentinel \
+//        stdlib/qforge/fixtures/cah6_pbe3d_vertex_xval.hexa <deck> <npw_cap> <nq> <grid>
+
+use "stdlib/qforge/pw_frontend"
+use "stdlib/qforge/qforge_run"
+use "stdlib/material/sim"
+
+let QE_LAMBDA: float = 4.376
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn main() {
+    let av = args()
+    let deck_dir = if len(av) > 1 { av[1] } else {
+        "/Users/mini/dancinlab/demiurge/exports/rtsc/decks/CaH6_NC" }
+    let npw_cap = if len(av) > 2 { to_int(av[2]) } else { 0 }
+    let nq      = if len(av) > 3 { to_int(av[3]) } else { 4 }
+    let grid    = if len(av) > 4 { to_int(av[4]) } else { 16 }
+    let screened = if len(av) > 5 { to_int(av[5]) != 0 } else { true }
+    let scr_beta = if len(av) > 6 { to_float(av[6]) } else { 0.3 }
+    let scr_md   = if len(av) > 7 { to_int(av[7]) } else { 5 }
+    let scr_maxit = 6
+    let g3 = if grid > 0 { grid } else { 16 }
+
+    println("=== QFORGE residual-(3) — 3-D PBE ground state → screened vertex λ (d6 VERBATIM) ===")
+    println("deck=" + deck_dir + "  npw_cap=" + to_string(npw_cap)
+            + " (0=full ecut shell)  q-mesh=" + to_string(nq) + "³ MP  3-D cube="
+            + to_string(g3) + "³")
+    println("vertex=" + (if screened { "SCREENED (Dyson ε⁻¹, Anderson β="
+            + to_string(scr_beta) + " m=" + to_string(scr_md) + ")" } else { "BARE (baseline)" }))
+
+    // ── ENGAGE the 3-D PBE ground-state override (residual-(3) lever) ────────────
+    qpw_set_pbe3d(true, g3, g3, g3)
+
+    let sigma = 0.02
+    let fe = qforge_pw_frontend_phonons_scr(deck_dir, npw_cap, 1, sigma, nq,
+                                            screened, scr_beta, scr_md, scr_maxit)
+    if !fe.ok {
+        println("DEFER — front-end failed: " + fe.error)
+        println("=== DONE (DEFER) ===")
+        return
+    }
+    println("[3-D PBE override ENGAGED] = " + to_string(qpw_pbe3d_engaged())
+            + "  (true = QPW_HAM replaced by the 3-D-PBE converged dense H)")
+    println("[front-end] cell=" + fe.geom.species[0] + " n(PW)=" + to_string(fe.n)
+            + " nelec=" + to_string(fe.nelec) + " nocc=" + to_string(fe.nocc)
+            + " SCF-converged=" + to_string(fe.converged) + " iters=" + to_string(fe.iters))
+    println("[front-end] ecutwfc=" + to_string(fe.geom.ecutwfc) + " Ry  e_band="
+            + to_string(fe.e_band) + " Ha")
+
+    let res = qforge_run_tol(qpw_h_apply, fe.deck, 1.0e-8, 600)
+    if res.ok != 1 {
+        println("DEFER — qforge_run failed: " + res.err)
+        println("=== DONE (DEFER) ===")
+        return
+    }
+
+    let lam = res.lambda
+    let rel = (lam - QE_LAMBDA) / QE_LAMBDA
+    let arel = _abs(rel)
+    println("")
+    println("════════════════ λ VERDICT — 3-D PBE vertex (d6 VERBATIM) ════════════════")
+    println("3-D PBE override   : ENGAGED=" + to_string(qpw_pbe3d_engaged())
+            + " · cube=" + to_string(g3) + "³ real-space spin-GGA SCF")
+    println("convergence params : ecutwfc=" + to_string(fe.geom.ecutwfc) + " Ry · npw_cap="
+            + to_string(npw_cap) + " · n(PW)=" + to_string(fe.n) + " · q-mesh=" + to_string(nq)
+            + "³ MP · sigma=" + to_string(sigma) + " Ha")
+    println("vertex             : " + (if screened { "SCREENED ΔV_scr" } else { "BARE |g|²" }))
+    println("BARE/LDA baseline λ= 4.13647  (prior converged run #2768, rel-ε=5.47%)")
+    println("QFORGE λ (this run)= " + to_string(lam))
+    println("QE answer-key λ    = " + to_string(QE_LAMBDA))
+    println("rel-ε              = " + to_string(arel) + "  (" + to_string(arel * 100.0) + " %)")
+    println("Δλ vs 4.137 baseline = " + to_string(lam - 4.13647))
+    println("QFORGE ω_log       = " + to_string(res.omega_log) + " K")
+    println("QFORGE Tc (Allen-Dynes) = " + to_string(res.tc) + " K")
+    if arel <= 0.01 {
+        println("GATE: MET — 3-D PBE vertex CaH6 λ within 1% of QE 4.376 ✅ (PREDICTION FALSIFIED)")
+    } else {
+        println("GATE: NOT MET — rel-ε=" + to_string(arel * 100.0) + "% > 1% (HONEST FINDING, d6)")
+    }
+    println("══════════════════════════════════════════════════════════════════════════")
+    println("=== DONE ===")
+}

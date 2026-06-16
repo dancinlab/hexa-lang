@@ -30,6 +30,19 @@ use "stdlib/qforge/pbe_spin"
 let mut GGA_HFULL: int = 0         // farr (n·n) full H = bare + V_scr(ΔG), current spin
 let mut GGA_VVEC: int = 0          // farr (n) reusable matvec input
 let mut GGA_N: int = 0
+
+// ── CONVERGED dense H export (the el-ph-vertex wiring hook, residual-(3) fix) ──
+//   The screened-vertex path (pw_frontend) re-solves the occupied manifold ψ_n from a
+//   CONVERGED dense H in the PW G-basis. The (1,1,n) G-line SCF feeds it an LDA-fallback
+//   H; to test whether a PHYSICAL 3-D PBE ground state (true 3-D ∇ρ, NOT a 1-D proxy,
+//   NOT a pow2-fallback-to-LDA) changes the from-scratch λ, we stash the 3-D-spin-GGA
+//   converged dense H = bare + V_scr^↑(ΔG) here (length n·n, row-major). The vertex
+//   reads it via qforge_gga_hconv() and sets QPW_HAM = PwHam{h, diag, n} directly, so
+//   its davidson recovers the genuine 3-D-PBE orbitals (NOT the 1-D-line ones). d4/d6 —
+//   pure data export, no physics change to the SCF.  Spin-↑ channel (non-magnetic
+//   hydride ↑≡↓; for a magnetic cell the ↑ manifold is the physical convention).
+let mut GGA_HCONV: [float] = []
+pub fn qforge_gga_hconv() -> [float] { return GGA_HCONV }
 // matvec via COMPILED farr_matmul (RFC 032; cuBLAS on CUDA builds) — ~100× the
 // interpreted O(npw²) loop, the lever that makes high-npw (Co 3d) tractable.
 fn gga_apply(v: [float]) -> [float] {
@@ -57,7 +70,29 @@ fn gga_build_hfull(bare: PwHam, mg: int, n: int) {
 }
 
 // ── Γ real-space spin-GGA-local SCF (farr-pool, memory-bounded) ───────────────
+//   Recovers integer Miller (h,k,l) per G by inverting the reciprocal matrix B
+//   (qforge_miller_of_g) — VALID for a non-singular B (e.g. hexagonal CoSn). For a
+//   SINGULAR B (the BCC-primitive hydride reciprocal — det(B)=0, the same wall the
+//   screened-vertex path names) this returns []; use qforge_scf_pw_gga_spin_mil and
+//   pass the EXACT integer millers carried from qpw_gvectors_miller instead.
 pub fn qforge_scf_pw_gga_spin(kvec: [float], gvecs: [float], nspec: int,
+                              rs: [float], rabs: [float], vlocs: [float],
+                              mlens: [int], zs: [float], poss: [float], palens: [int],
+                              betas: [float], ls: [int], dij: [float],
+                              nprojs: [int], blens: [int], dlens: [int],
+                              omega: float, xc_mode: int,
+                              nx: int, ny: int, nz: int, b1: [float], b2: [float], b3: [float],
+                              nbands: int, nelec: int, mix: float, tol: float,
+                              max_iter: int, sigma: float, and_depth: int, init_mag: float) -> ScfResultSpin {
+    let millers = qforge_miller_of_g(gvecs, b1, b2, b3)
+    return qforge_scf_pw_gga_spin_mil(kvec, gvecs, millers, nspec, rs, rabs, vlocs,
+        mlens, zs, poss, palens, betas, ls, dij, nprojs, blens, dlens, omega, xc_mode,
+        nx, ny, nz, b1, b2, b3, nbands, nelec, mix, tol, max_iter, sigma, and_depth, init_mag)
+}
+
+// ── millers-EXPLICIT variant — pass the exact integer (h,k,l) per G (the BCC-
+//   singular-B fix). Identical physics; only the Miller source differs (d4/d6). ──
+pub fn qforge_scf_pw_gga_spin_mil(kvec: [float], gvecs: [float], millers: [int], nspec: int,
                               rs: [float], rabs: [float], vlocs: [float],
                               mlens: [int], zs: [float], poss: [float], palens: [int],
                               betas: [float], ls: [int], dij: [float],
@@ -68,7 +103,6 @@ pub fn qforge_scf_pw_gga_spin(kvec: [float], gvecs: [float], nspec: int,
                               max_iter: int, sigma: float, and_depth: int, init_mag: float) -> ScfResultSpin {
     let n = len(gvecs) / 3
     let ntot = nx * ny * nz
-    let millers = qforge_miller_of_g(gvecs, b1, b2, b3)
     let mut no_scr: [float] = []
     let bare = qforge_assemble_h_multi(kvec, gvecs, nspec, rs, rabs, vlocs, mlens, zs,
                                        poss, palens, betas, ls, dij, nprojs, blens, dlens, omega, no_scr)
@@ -170,6 +204,14 @@ pub fn qforge_scf_pw_gga_spin(kvec: [float], gvecs: [float], nspec: int,
         e_prev = e_total ; first = false
         if resid < tol { converged = true ; iters = max_iter }
     }
+
+    // export the converged dense H^↑ = bare + V_scr^↑(ΔG) (the el-ph-vertex wiring
+    //   hook). mgu_h holds the LAST-iteration converged V_scr^↑(ΔG) matrix; bare.h is
+    //   the kinetic+V_loc+V_NL operator. Row-major [float] length n·n → QPW_HAM. d4/d6.
+    GGA_HCONV = []
+    let mut hp = 0
+    let nn2 = n * n
+    while hp < nn2 { GGA_HCONV.push(bare.h[hp] + farr_get(mgu_h, hp)) ; hp = hp + 1 }
 
     // pack the converged densities (farr → [float]) for the result, then free pool
     let mut rho_up_out: [float] = [] ; let mut rho_dn_out: [float] = []
