@@ -1,0 +1,13 @@
+// x86_64 global-operand bug repro (RT-NATIVE leg A-linux blocker).
+// VERIFIED 2026-06-16: x86_64 emit produces `cmp g0, 0` / `mov rbx, g0`
+// (global label direct, no memory load) → clang -target x86_64-linux-gnu -c
+// FAILS with "ambiguous operand size for instruction 'cmp'". arm64 handles
+// the same global via adrp/add/ldp (proper 16B HexaVal value load). The fix
+// = x86_64 global → RIP-relative 16B pair load. verdict F-X86-GLOBAL-OPERAND-BUG.txt
+let mut g_count: int = 5
+fn main() {
+  if g_count > 0 {
+    exit(g_count + 37)
+  }
+  exit(0)
+}

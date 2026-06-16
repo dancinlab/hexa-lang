@@ -1,0 +1,33 @@
+F-X86-GLOBAL-OPERAND-BUG — 2026-06-16
+═══════════════════════════════════════════════════════════════
+ROOT CAUSE (확정): x86_64 whole-compiler self-emit 실패(#3421의 test g16/
+cmp 빈값)의 진짜 원인 = **x86_64 global operand 가 메모리 로드 없이 라벨을
+직접 emit**. HexaVal 16-byte 전역변수를 값으로 쓸 때 발생.
+
+재현 (로컬, scripts/scratch/rt_native/x86_global_repro.hexa):
+  let mut g_count: int = 5
+  fn main() { if g_count > 0 { exit(g_count + 37) } exit(0) }
+
+x86_64 emit (BUG):
+  cmp g0, 0       # binop >   ← g0 = global label 직접
+  mov rbx, g0     # binop lhs into dst
+cross-assemble (clang -target x86_64-linux-gnu -c):
+  → "error: ambiguous operand size for instruction 'cmp'" = FAIL 확정.
+
+arm64 emit (정상, 대조):
+  adrp x0, _g0@PAGE ; add x0, x0, _g0@PAGEOFF ; ldp x0, x1, [x0]
+  = 주소계산 + HexaVal 16B 페어 값 로드(ldp x0=tag,x1=payload).
+
+원인 위치 (compiler/codegen/x86_64_linux.hexa):
+- `_x86_op_rm` global 경로: opts.shared==1 만 GOT 로드, **shared==0(baseline)
+  은 아무것도 안 함** (주석은 "linker fixes bare g<id> as absolute" 라 가정
+  하나, GNU as 가 cmp/test/mov 의 operand 로 받으면 ambiguous size 거부).
+- `_x86_op_resolve` global: shared==0 → `_x86_op_label("g"+id)` 바 라벨 반환.
+
+수정 방향 (NEXT): x86_64 global 을 HexaVal 16B 페어로 RIP-relative 값 로드 —
+  mov <lo>, [rip+g<id>] ; mov <hi>, [rip+g<id>+8]  (arm64 ldp 대응).
+  store 도 대칭(mov [rip+g], lo; mov [rip+g+8], hi). _hv pair 경로 통합 필요.
+검증: x86_global_repro cross-assemble OK + summer 실행 → whole-compiler self-emit 재시도.
+
+IMPACT: 이 버그가 x86_64 leg A(linux byte-eq)의 핵심 블로커. single-file
+RUNG2(#3420)는 전역 안 써서 통과. arm64 leg A 는 영향 없음(이미 ✅ #3412).
