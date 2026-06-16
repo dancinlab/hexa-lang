@@ -143,6 +143,36 @@ if [ -f "$rt" ] && ! grep -q 'OP-17 (HEXA-0POD' "$rt"; then
   echo "[restore_frozen_seeds] OP-17: injected 9 #undef (-Wmacro-redefined hygiene) into $rt"
 fi
 
+# ── RT-NATIVE leg B Z2a (trim-ends group) — scrub frozen runtime.c C bodies ───
+# The casefold/trim group's C bodies were ABSENT from the frozen 151c52c8
+# runtime.c, so no scrub was needed for them. The trim-ends siblings
+# (rt_str_trim_start / rt_str_trim_end) ARE still present in the frozen blob as
+# `#ifndef HEXA_HAS_HEXA_RT_STDLIB` C bodies (the seeds-removed runtime.a is
+# compiled WITHOUT that macro, so those bodies WOULD compile). Now that the SSOT
+# moved both fns into the HI-tier runtime_hi_gen.c (synthesized below) the gen.c
+# provides them on every target → leaving the frozen C bodies in place would be a
+# DUPLICATE symbol at the app link. Delete the two C definition bodies (signature
+# line through the column-0 closing brace) from the restored runtime.c; the empty
+# `#ifndef`/`#endif` shells left behind compile harmlessly. NO-OP-SAFE: if the
+# bodies are already absent (e.g. a future frozen-ref drop), the awk leaves the
+# file unchanged. Idempotent (re-running finds nothing to delete).
+if [ -f "$rt" ] && grep -q 'HexaVal rt_str_trim_start(HexaVal s) {' "$rt"; then
+  before=$(wc -l < "$rt")
+  awk '
+    /^HexaVal rt_str_trim_start\(HexaVal s\) \{$/ { skip=1 }
+    /^HexaVal rt_str_trim_end\(HexaVal s\) \{$/   { skip=1 }
+    {
+      if (skip) {
+        if ($0 == "}") { skip=0; next }
+        next
+      }
+      print
+    }
+  ' "$rt" > "$rt.z2atrim" && mv "$rt.z2atrim" "$rt"
+  after=$(wc -l < "$rt")
+  echo "[restore_frozen_seeds] RT-NATIVE Z2a: scrubbed frozen rt_str_trim_start/end C bodies from $rt ($((before-after)) lines; gen.c now sole provider)"
+fi
+
 # ── RT-NATIVE leg B Z2a — SYNTHESIZE the 9-fn runtime_hi_gen.c seed ───────────
 # The casefold/trim group (rt_str_to_upper/to_lower/trim) grew the HI-tier
 # rt_str_* SSOT from 6→9 fn and RETIRED the matching C #ifndef bodies from
@@ -191,14 +221,16 @@ if [ "${_RT_HI_NATIVE:-0}" != "1" ]; then
           printf "%s", out
         }
       ' "$_RHG_EMIT" > "$_rhg_tmp" 2>/dev/null || true
-      # Validate: must carry all 9 fn (esp. the 3 casefold/trim) + the ctor.
+      # Validate: must carry all 11 fn (the 3 casefold/trim + 2 trim-ends) + ctor.
       if [ -s "$_rhg_tmp" ] \
          && grep -q 'HexaVal rt_str_to_upper(HexaVal s) {' "$_rhg_tmp" \
          && grep -q 'HexaVal rt_str_to_lower(HexaVal s) {' "$_rhg_tmp" \
          && grep -q 'HexaVal rt_str_trim(HexaVal s) {' "$_rhg_tmp" \
+         && grep -q 'HexaVal rt_str_trim_start(HexaVal s) {' "$_rhg_tmp" \
+         && grep -q 'HexaVal rt_str_trim_end(HexaVal s) {' "$_rhg_tmp" \
          && grep -q '__hexa_rt_strlit_init_ctor' "$_rhg_tmp"; then
         cp -f "$_rhg_tmp" "$_RHG"
-        echo "[restore_frozen_seeds] RT-NATIVE Z2a: synthesized 9-fn $_RHG from $_RHG_EMIT ($(wc -l < "$_RHG") lines, hexat-free)"
+        echo "[restore_frozen_seeds] RT-NATIVE Z2a: synthesized 11-fn $_RHG from $_RHG_EMIT ($(wc -l < "$_RHG") lines, hexat-free)"
         _rhg_done=1
       fi
       rm -f "$_rhg_tmp"
