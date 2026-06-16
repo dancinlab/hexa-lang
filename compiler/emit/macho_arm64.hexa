@@ -585,6 +585,34 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
         let imm = (mp[1] >> 3) & 0xfff
         return 0xf9000000 | (imm << 10) | (rn << 5) | rt
     }
+    // LDRB Wt, [Xn{, #imm}]  (RT-NATIVE UNLOCK-5: byte load for string
+    // leaves).  The byte form uses an UNSCALED imm12 (0..4095 bytes), and
+    // the destination is a W-register (same 5-bit number as Xt). Encoding
+    // verified vs clang: ldrb w0,[x1]=39400020 · [x1,#1]=39400420 ·
+    // w2,[x3,#15]=39403c62.  base 0x39400000 | (imm<<10) | (Rn<<5) | Rt.
+    if op == "LDRB" && len(ops) == 2 {
+        // Accept "wN"/"xN" for the destination (same register field).
+        let dn = ops[0]
+        let ndn = len(dn)
+        let mut rt = -1
+        if ndn >= 2 && (dn.substring(0, 1) == "w" || dn.substring(0, 1) == "W") {
+            let rv = dn.substring(1, ndn).to_int()
+            if rv >= 0 && rv <= 30 { rt = rv }
+            if dn == "wzr" || dn == "WZR" { rt = 31 }
+        } else {
+            rt = xreg_idx(dn)
+        }
+        let mp = _parse_mem_op(ops[1])
+        if rt >= 0 && mp[0] < 0 {
+            let rn = xreg_idx(ops[1])
+            return 0x39400000 | (rn << 5) | rt
+        }
+        if rt >= 0 {
+            let rn = mp[0]
+            let imm = mp[1] & 0xfff       // UNSCALED imm12 (byte form)
+            return 0x39400000 | (imm << 10) | (rn << 5) | rt
+        }
+    }
     // ── Stack-pair (STP/LDP) — 3 mem modes (offset / pre-index /
     //    post-index) for 64-bit GPRs. Per ARM ARM C6.2.273-:
     //
@@ -1598,6 +1626,7 @@ fn _lir_op_uppercase(op: string) -> string {
     if op == "fmul"  { return "FMUL" }
     if op == "fdiv"  { return "FDIV" }
     if op == "fcmp"  { return "FCMP" }
+    if op == "ldrb"  { return "LDRB" }
     // RFC 063 P0 fill (self-host udf-hole closure): the native obj-emit
     // path also lowers these in main's prologue + arithmetic; without a
     // table entry they fell through `_lir_op_uppercase` as lowercase →

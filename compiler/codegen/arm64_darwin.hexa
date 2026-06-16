@@ -2011,6 +2011,25 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // RT-NATIVE UNLOCK-5: `__hx_str_byte(s, i)` → int HexaVal of the
+        // unsigned byte at offset i of string s. The STR payload (x1) IS the
+        // `char*` (HexaVal union `.s`); the INT payload (x3) is the index.
+        // add base+index, ldrb the byte (W-write zero-extends), box int.
+        // The first byte-level string leaf — unblocks a native `rt_strcmp`.
+        if s.op == "__hx_str_byte" && len(s.args) >= 2 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // s → x1 = char*
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // i → x3 = index
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x1"), _arm64_op_reg("x1"),
+                             _arm64_op_reg("x3"), "__hx_str_byte: x1 = s + i"))
+            buf.push(_arm64_instr2("ldrb", _arm64_op_reg("w0"),
+                             _arm64_op_label("[x1]"), "__hx_str_byte: w0 = s[i]"))
+            buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"),
+                             _arm64_op_reg("x0"), "__hx_str_byte: payload = byte"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_str_byte: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // has_key(m, key) special: runtime ABI is
         // hexa_bool(hexa_map_contains_key(HexaVal m, const char* key))
         // (codegen_c2:4302). key is a HexaVal var → hexa_to_cstring it.
