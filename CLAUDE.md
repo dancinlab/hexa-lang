@@ -7,10 +7,10 @@ objects (ELF64 / Mach-O arm64) and linked with `hexa_ld` — a byte-identical se
 delegate for some full `hexa build`/`run` flows, and the ~5.5k-LOC C runtime substrate (the
 libc/syscall bootstrap floor, generated from `.hexa` emitters) — the floor RUNTIME-PORT is
 still shrinking (M3 open), an irreducible-bootstrap assessment, **not** a permanence policy. See
-[ARCHITECTURE.md](ARCHITECTURE.md) → Self-host status for the honest accounting. Every
+[ARCHITECTURE.json](ARCHITECTURE.json) → Self-host status for the honest accounting (사람용 뷰어 `architecture.html`, `python3 serve.py`). Every
 formula-bearing function must cite an atlas law (`@cite(L[id])`), carry an active `@verify`, or
 declare a `@grace` — otherwise the build refuses to emit a binary (stage S8, fatal `HX8004`).
-The full architecture SSOT is [ARCHITECTURE.md](ARCHITECTURE.md); this file is the single governance SSOT (md 단일화 — `project.tape` retired).
+The full architecture SSOT is [ARCHITECTURE.json](ARCHITECTURE.json) (JSON 트리 — 사람은 `architecture.html` 뷰어로 봄, `python3 serve.py`); this file is the single governance SSOT (md 단일화 — `project.tape`·`ARCHITECTURE.md` retired).
 
 ## Structure
 
@@ -36,7 +36,7 @@ hexa-lang/
 ├─ tests/, test/    — smoke · core-invariant · regression suites
 ├─ bench/           — performance benchmarks
 ├─ docs/            — supplementary documentation + logo
-├─ ARCHITECTURE.md  — architecture SSOT (update in place)
+├─ ARCHITECTURE.json — architecture SSOT (JSON 트리, update in place) + architecture.html 뷰어 + serve.py
 ├─ CHANGELOG.md     — append-only history / decisions
 ├─ CLAUDE.md        — governance SSOT (this file — directives below)
 └─ .harness-engine/ — vendored harness (submodule); gate engine behind .claude hooks

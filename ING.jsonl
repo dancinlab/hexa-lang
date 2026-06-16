@@ -5,3 +5,4 @@
 {"ts":"2026-06-15T23:49:43.497Z","kind":"work","id":"5","text":"RT-NATIVE 다세션: UNLOCK-1(extern-fn FFI) DONE+검증+fixpoint보존(#3393). 다음=UNLOCK-2(@tag intrinsic, codegen.hexa HX_TAG + arm64_darwin _hv_load x0 box) → Z3 arena 포팅(extern malloc) → Z2c. spec Z-CODEGEN-UNLOCK-SPECS.txt."}
 {"ts":"2026-06-16T14:14:31.336Z","kind":"work","id":"6","text":"RT-NATIVE leg B 코어 native 누적: batch2 비교/산술/eq 10 fn(int/float fast-path 완전 leaf, exit10, T 심볼 10). 누적 18/591. int/float 코어 op 완비. 다음=string/array/map ops(추가 leaf 필요)+코어 통합"}
 {"ts":"2026-06-16T14:21:58.099Z","kind":"work","id":"7","text":"RT-NATIVE leg B 경계확정: floor 작음(syscall8+libm10+struct15, 다 표현가능)·나머지 ~580fn 볼륨·Z2a 메커니즘 PROVEN(rt_hi_native.o ar wired). leg B=연구벽 아님=다세션 누적. 다음=Z2a 패턴으로 코어 18→fn그룹 ar into runtime.a + standalone #else 제거"}
+{"ts":"2026-06-16T15:02:57.688Z","kind":"work","id":"8","text":"아키텍처 md→json 전환 완료: ARCHITECTURE.json(SSOT)+architecture.html(뷰어)+serve.py, ARCHITECTURE.md 완전폐기(git rm). 참조 4파일 전환 검증"}

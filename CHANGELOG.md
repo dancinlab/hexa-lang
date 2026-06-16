@@ -1,3 +1,7 @@
+## 2026-06-17
+
+- **아키텍처 SSOT: ARCHITECTURE.md → ARCHITECTURE.json 전환 + md 완전 폐기** — c4(단일문서) JSON 트리 채택. `ARCHITECTURE.json`(JSON 트리 = AI·툴 파싱 SSOT, 5 섹션 Overview·Self-host status·Component map·Data flow·Verify gate, 손실 없이 이관) + `architecture.html`(fetch+렌더 뷰어: prose/list/table/codeblock/subsection, inline 마크다운+다크모드) + `serve.py`(정적 서버 + 브라우저 자동오픈, `file://` fetch 차단 우회). **검증(c2)**: JSON 유효·serve.py 구문 OK·블록타입 5종 전부 뷰어 처리·라이브 서빙 스모크 200 OK(html 6487B/json 17.8KB, 뷰어가 SSOT fetch 확인). `ARCHITECTURE.md` 는 `git rm` 으로 **완전 폐기**(stub 미잔존). 참조 전환: CLAUDE.md(본문 2 + 트리 1) · README.md · harness.config.json(docs.architecture + allowlist) · .harness/enforcement.json(설명 텍스트) = 핵심 4파일 잔여 `ARCHITECTURE.md` 0.
+
 # Changelog
 
 Chronological log of notable changes. One section per ship batch, date-keyed. hexa-lang runs at high commit velocity (RFC-driven); this file carries the headline landings — `git log` is the detailed record.

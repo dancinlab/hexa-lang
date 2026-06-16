@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hexa-lang — Architecture (SSOT)</title>
+<style>
+  :root {
+    --bg: #0d1117; --fg: #c9d1d9; --muted: #8b949e; --accent: #58a6ff;
+    --border: #30363d; --code-bg: #161b22; --th-bg: #161b22; --row-alt: #11161d;
+    --green: #3fb950; --yellow: #d29922;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --accent: #0969da;
+      --border: #d1d9e0; --code-bg: #f6f8fa; --th-bg: #f6f8fa; --row-alt: #f6f8fa;
+      --green: #1a7f37; --yellow: #9a6700;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem 6rem; }
+  header.top { border-bottom: 1px solid var(--border); padding-bottom: 1rem; margin-bottom: 1.5rem; }
+  header.top h1 { margin: 0 0 .25rem; font-size: 1.7rem; }
+  header.top .role { color: var(--muted); font-size: .92rem; }
+  header.top .meta { color: var(--muted); font-size: .82rem; margin-top: .6rem; }
+  header.top .meta code { font-size: .82rem; }
+  .toc {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: .75rem 1rem; margin-bottom: 2rem;
+  }
+  .toc strong { display: block; font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: .4rem; }
+  .toc a { color: var(--accent); text-decoration: none; margin-right: 1rem; font-size: .9rem; }
+  .toc a:hover { text-decoration: underline; }
+  h2 { font-size: 1.35rem; margin: 2.5rem 0 1rem; padding-top: .5rem; border-bottom: 1px solid var(--border); padding-bottom: .35rem; }
+  h3 { font-size: 1.08rem; margin: 1.8rem 0 .8rem; color: var(--fg); }
+  h4 { font-size: .98rem; margin: 1.4rem 0 .6rem; color: var(--muted); }
+  p { margin: .8rem 0; }
+  ul { margin: .8rem 0; padding-left: 1.4rem; }
+  li { margin: .5rem 0; }
+  code {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px;
+    padding: .1em .35em; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .85em;
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 1rem; overflow-x: auto; line-height: 1.45;
+  }
+  pre code { background: none; border: none; padding: 0; font-size: .82rem; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .88rem; display: block; overflow-x: auto; }
+  th, td { border: 1px solid var(--border); padding: .5rem .7rem; text-align: left; vertical-align: top; }
+  th { background: var(--th-bg); font-weight: 600; }
+  tr:nth-child(even) td { background: var(--row-alt); }
+  strong { font-weight: 600; }
+  .ok { color: var(--green); } .warn { color: var(--yellow); }
+  footer { margin-top: 4rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--muted); font-size: .82rem; }
+  #err { color: #f85149; padding: 1rem; border: 1px solid #f85149; border-radius: 8px; background: rgba(248,81,73,.08); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="err" style="display:none"></div>
+  <header class="top" id="head"></header>
+  <nav class="toc" id="toc"></nav>
+  <main id="body"></main>
+  <footer id="foot"></footer>
+</div>
+<script>
+// Minimal inline-markdown renderer: `code`, **bold**, [text](url). HTML-escaped first.
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function inline(s){
+  let t = esc(s);
+  t = t.replace(/`([^`]+)`/g, (_,c)=>'<code>'+c+'</code>');
+  t = t.replace(/\*\*([^*]+)\*\*/g, (_,c)=>'<strong>'+c+'</strong>');
+  t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_,txt,url)=>'<a href="'+url+'">'+txt+'</a>');
+  // light status coloring
+  t = t.replace(/✅/g,'<span class="ok">✅</span>').replace(/🟡/g,'<span class="warn">🟡</span>');
+  return t;
+}
+function slug(s){ return s.toLowerCase().replace(/[^\w]+/g,'-').replace(/^-|-$/g,''); }
+
+function renderBlocks(blocks, depth){
+  let html = '';
+  for (const b of blocks){
+    if (b.type === 'prose'){ html += '<p>'+inline(b.text)+'</p>'; }
+    else if (b.type === 'list'){
+      html += '<ul>' + b.items.map(i=>'<li>'+inline(i)+'</li>').join('') + '</ul>';
+    }
+    else if (b.type === 'codeblock'){
+      html += '<pre><code>'+esc(b.text)+'</code></pre>';
+    }
+    else if (b.type === 'table'){
+      html += '<table><thead><tr>' + b.columns.map(c=>'<th>'+inline(c)+'</th>').join('') + '</tr></thead><tbody>';
+      html += b.rows.map(r=>'<tr>'+r.map(c=>'<td>'+inline(c)+'</td>').join('')+'</tr>').join('');
+      html += '</tbody></table>';
+    }
+    else if (b.type === 'subsection'){
+      const h = depth >= 1 ? 'h4' : 'h3';
+      html += '<'+h+'>'+inline(b.title)+'</'+h+'>';
+      html += renderBlocks(b.blocks, (depth||0)+1);
+    }
+  }
+  return html;
+}
+
+fetch('ARCHITECTURE.json', {cache:'no-store'})
+  .then(r => { if(!r.ok) throw new Error('HTTP '+r.status+' — serve via `python3 serve.py` (file:// blocks fetch)'); return r.json(); })
+  .then(doc => {
+    const m = doc.meta;
+    document.title = m.title;
+    document.getElementById('head').innerHTML =
+      '<h1>'+inline(m.title)+'</h1>' +
+      '<div class="role">'+inline(m.role)+'</div>' +
+      '<div class="meta">SSOT: <code>ARCHITECTURE.json</code> · viewer: <code>'+m.viewer+'</code> · serve: <code>'+m.serve+'</code><br>'+
+      'history → <a href="CHANGELOG.md">CHANGELOG.md</a> · governance → <a href="CLAUDE.md">CLAUDE.md</a> · update policy: '+inline(m.update_policy)+'</div>';
+
+    document.getElementById('toc').innerHTML =
+      '<strong>Sections</strong>' +
+      doc.sections.map(s=>'<a href="#'+s.id+'">'+inline(s.title)+'</a>').join('');
+
+    document.getElementById('body').innerHTML =
+      doc.sections.map(s =>
+        '<section id="'+s.id+'"><h2>'+inline(s.title)+'</h2>'+renderBlocks(s.blocks,0)+'</section>'
+      ).join('');
+
+    document.getElementById('foot').innerHTML =
+      'Generated viewer for <code>'+m.project+'</code> architecture. This page renders the JSON SSOT — edit <code>ARCHITECTURE.json</code>, never this HTML.';
+  })
+  .catch(e => {
+    const el = document.getElementById('err');
+    el.style.display = 'block';
+    el.textContent = 'Failed to load ARCHITECTURE.json — ' + e.message;
+  });
+</script>
+</body>
+</html>
