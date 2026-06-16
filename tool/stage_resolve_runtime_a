@@ -199,12 +199,68 @@ reconcile_runtime_c_ssot_dups() {
 # fallback so there is exactly ONE compile recipe (no drift). The runtime_core.c
 # emitter-regen runs FIRST so the compiled .a carries the SSOT (not the stale
 # frozen fragment) — see regen_runtime_core_from_emitter above.
+# ── RT-NATIVE leg B Z2a — arch-aware native rt_hi seed → build/rt_hi_native.o ──
+# Assemble build/rt_hi_native.o from the frozen native .s seed matching the
+# build TARGET, and AUTO-ENABLE the native rt_str_* path (HEXA_ZEROC_RT_HI=1) so
+# runtime_hi_gen.c is never #included on that platform. Runs BEFORE
+# restore_frozen_seeds (which reads HEXA_ZEROC_RT_HI to skip gen.c synthesis) and
+# BEFORE build_runtime_a_from_source (which ar's the .o). The seed is a frozen
+# bootstrap artifact (like self/runtime.c) so this needs no native compiler here.
+#   arm64-darwin → self/native/runtime_hi_native.s  (Mach-O, _rt_str_* underscore)
+#   x86_64-linux → self/native/runtime_hi_x86_64.s  (ELF, rt_str_* no underscore)
+#   linux-arm64  → no seed yet → stays on the C (awk-synth gen.c) path.
+# Idempotent · NO-OP-SAFE: if the seed is absent or assembly fails, leaves
+# HEXA_ZEROC_RT_HI untouched so the legacy C path takes over. Override by
+# pre-setting HEXA_ZEROC_RT_HI=0 to force the C path even when a seed exists.
+resolve_native_rt_hi_seed() {
+    [ "${HEXA_ZEROC_RT_HI:-x}" = "0" ] && return 0   # explicit opt-out
+    [ -f build/rt_hi_native.o ] && { export HEXA_ZEROC_RT_HI=1; return 0; }
+    local seed="" tgt="${TARGET:-}"
+    [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
+        "Darwin arm64") tgt="darwin-arm64" ;;
+        "Linux x86_64") tgt="linux-x86_64" ;;
+        "Linux aarch64"|"Linux arm64") tgt="linux-arm64" ;;
+    esac
+    case "$tgt" in
+        darwin-arm64) seed="self/native/runtime_hi_native.s" ;;
+        linux-x86_64) seed="self/native/runtime_hi_x86_64.s" ;;
+        *)            seed="" ;;   # linux-arm64 + unknown → C path
+    esac
+    [ -n "$seed" ] && [ -f "$seed" ] || return 0
+    mkdir -p build
+    # Strip the leading `// ` header comment block (asm comment syntax differs by
+    # target: `;` Mach-O / `#` ELF — both reject `//`), then assemble with $CC.
+    # The temp MUST end in `.s` so $CC treats it as assembly — a fixed build/
+    # path guarantees that (mktemp's `XXXXXX.s` template is unportable: macOS
+    # appends the random suffix AFTER the `.s`, breaking the extension).
+    # SAFETY: only adopt the native path if the seed actually exports ALL 11
+    # rt_str_* the SSOT runtime_core.c expects — a stale/partial seed (e.g.
+    # pre-trim-ends, 9 fn) would otherwise yield `undefined reference` at the
+    # app link. Counted from the seed's `.globl` directives (toolchain-free, no
+    # nm dependency). On a shortfall, skip the native path → legacy C gen.c.
+    local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?rt_str_' "$seed" 2>/dev/null || echo 0)"
+    if [ "${nsyms:-0}" -lt 11 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE Z2a: seed $seed exports only $nsyms/11 rt_str_* — falling back to C gen.c path" >&2
+        return 0
+    fi
+    local s_tmp="build/rt_hi_seed.s"
+    grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
+    if $CC -c "$s_tmp" -o build/rt_hi_native.o 2>/dev/null; then
+        export HEXA_ZEROC_RT_HI=1
+        echo "[stage_resolve_runtime_a] RT-NATIVE Z2a: assembled build/rt_hi_native.o from $seed (TARGET=$tgt, $nsyms rt_str_* syms) → native rt_str_* path"
+    else
+        echo "[stage_resolve_runtime_a] RT-NATIVE Z2a: WARN assemble of $seed failed — falling back to C gen.c path" >&2
+    fi
+    rm -f "$s_tmp"
+}
+
 build_runtime_a_from_source() {
     regen_runtime_core_from_emitter
     # RT-NATIVE Z2a (gated): supply rt_str_* from a NATIVE-compiled object
-    # (build/rt_hi_native.o, assembled from the self/native/runtime_hi_native.s
-    # frozen seed) instead of the hexat-transpiled runtime_hi_gen.c #include —
-    # so runtime_hi_gen.c is never needed. Default path unchanged.
+    # (build/rt_hi_native.o, assembled from the self/native/runtime_hi_*.s
+    # frozen seed by resolve_native_rt_hi_seed) instead of the hexat-transpiled
+    # runtime_hi_gen.c #include — so runtime_hi_gen.c is never needed. Default
+    # path unchanged.
     local extra_obj=""
     if [ "${HEXA_ZEROC_RT_HI:-0}" = "1" ] && [ -f build/rt_hi_native.o ]; then
         sed -i.zbak 's|#include "runtime_hi_gen.c"|/* RT-NATIVE Z2a: rt_str_* from native build/rt_hi_native.o */|' self/runtime_core.c
@@ -217,6 +273,11 @@ build_runtime_a_from_source() {
     ls -la "$RA"
     echo "$RA"
 }
+
+# Assemble the arch-matched native rt_hi seed (sets HEXA_ZEROC_RT_HI=1 on the
+# platforms that have one) BEFORE either branch — restore_frozen_seeds reads
+# HEXA_ZEROC_RT_HI to decide whether to synthesize runtime_hi_gen.c at all.
+resolve_native_rt_hi_seed
 
 if [ -f self/runtime.c ]; then
     echo "stage_resolve_runtime_a: seeds present — building runtime.a from source"

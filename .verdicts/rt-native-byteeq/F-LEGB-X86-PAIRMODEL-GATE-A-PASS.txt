@@ -1,0 +1,64 @@
+F-LEGB-X86-PAIRMODEL-GATE-A-PASS — 2026-06-17 (aiden linux x86_64)
+================================================================================
+GOAL: rework x86_64-linux native codegen to carry full HexaVal {tag,payload}
+pairs (mirror arm64) so the tag survives through locals/params/call-results
+into tag-dispatching runtime helpers. Root cause (PR #3461): payload-only
+"raw-int model" derived the tag from operand-kind → local string got tag=0 →
+every native rt_str_* returned empty/null.
+
+FIX (compiler/codegen/x86_64_linux.hexa, surgical, ~290 net lines):
+ 1. Per-value TAG SLOT: every value gets a parallel 8-byte frame tag-slot
+    (tag_base region above the payload spills; _x86_tag_off/_x86_frame_off).
+    The payload stays in the existing single-register/spill raw-int model; the
+    tag is carried alongside in memory so it survives params/locals/results.
+ 2. INGRESS (pair): each HexaVal param arrives as a SysV register PAIR
+    (param p → _x86_hv_pair_lo/hi(p)). Payload read from the HIGH reg (rsi for
+    p0, not rdi=tag — the confirmed ingress bug); tag stashed into the tag-slot.
+    Bounded to 3 register pairs (6 regs); params ≥3 from [rbp+16+(p-3)*16].
+ 3. OPERAND TAG resolve (_x86_tag_resolve): const_str→3, const_float→1,
+    local/global→load carried tag from tag-slot, else TAG_INT.
+ 4. CALL ARG boxing (_x86_hv_box_arg): passes the value's ACTUAL carried tag,
+    not _x86_hv_tag_for=0. Payload-first then tag (avoids clobber when the
+    payload home reg coincides with the tag eightbyte register).
+ 5. CALL RESULT unbox (builtin + user fn): capture rdx(payload)+rax(tag) for a
+    HexaVal return; rax(payload)+imm tag for a ret-box (len/contains/…).
+ 6. RETURN emits the rax:rdx pair (tag:payload) — user .hexa fns now have the
+    uniform HexaVal return ABI a C caller / another compiled fn expects.
+ 7. User-fn call path converted to the same HexaVal pair ABI (args 0..2 in
+    reg pairs, ≥3 on 16B stack slots) since user fns now take/return pairs.
+ 8. binop/array_lit/struct_lit/enum_ctor/field/concat/load tag-writes added.
+
+TWO regalloc-soundness fixes the pair model exposed (both pre-existing, masked
+when string fns returned null):
+ A. rax REMOVED from the allocation pool — rax is CALLER-SAVED; a param parked
+    in rax was destroyed by the next call (segfault, rbp=0 in hexa_strlen).
+    Pool = rbx/r12-r15 (callee-saved) only; overflow spills.
+ B. CONSERVATIVE WHOLE-FUNCTION LIVENESS — the textual linear-scan live ranges
+    are wrong across loop back-edges (a loop bound `n` last-read in the header
+    was reused by a loop-body value `b`, clobbering n → `byte_at index out of
+    bounds`). Extend every interval to [0,pos] so no two values share a reg
+    (mirrors arm64's force-resident model). First 5 pinned in callee-saved
+    regs; rest spill (safe across calls).
+ C. Callee-saved push/pop (rbx/r12-r15 + 8B align pad = 48B) added to
+    prologue/epilogue so the ABI contract to C callers holds; spill/tag slots
+    shifted below the save block via _x86_frame_off.
+
+GATE A (C differential harness, the hard gate) — 9/9 PASS:
+  BEFORE (broken seed, PR #3460): all 9 → null/empty.
+  AFTER:
+    padL=[007] exp[007]      padR=[700] exp[700]
+    rep =[ababab] exp[ababab]  ctr =[--hi--] exp[--hi--]
+    upr =[HELLO, WORLD!] exp[HELLO, WORLD!]
+    lwr =[hello, world!] exp[hello, world!]
+    trm =[hi] exp[hi]  trS =[hi  ] exp[hi  ]  trE =[  hi] exp[  hi]
+  RC=0. Reproducible (gate scripts: scripts/scratch/rt_native/pairmodel_gate.c).
+
+GATE B part 1 — faithful build with seed (HEXA_ZEROC_RT_HI=1) PASS: aprime built,
+  Z2a linked native rt_hi_native.o, transpile did NOT collapse (48887 lines C,
+  not the 182-line "undeclared Span/file/string/line/i64" collapse), smoke
+  exit(42)==42 PASS.
+GATE B part 2 — x86_64 self-emit gen3≡gen4 byte-eq: running (whole-compiler
+  45k-line self-emit to x86 obj is slow ~30-60min/emit); see byteeq_x86.sh.
+
+BOOTSTRAP: aprime built WITHOUT the seed (HEXA_ZEROC_RT_HI=0, C-runtime) so hexat
+  is clang-correct; seed then regenerated with the fixed compiler.

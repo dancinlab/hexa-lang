@@ -1,0 +1,112 @@
+F-LEGB-X86-NATIVE-SEED-IMPL — 2026-06-17
+═══════════════════════════════════════════════════════════════
+CLAIM: RT-NATIVE leg B 의 첫 실제 cross-target ls-감소 = linux x86_64 native
+rt_hi seed 생성 + 빌드경로 통합. x86_64-linux 가 #include "runtime_hi_gen.c"(C)
+를 회피하고 native .s seed → rt_str_* 를 runtime.a 에 ar 한다.
+
+배경 (검증된 사실):
+- Darwin arm64 는 frozen native seed self/native/runtime_hi_native.s (Mach-O)
+  로 gen.c 를 회피(Z2a-done). x86_64/linux 는 seed 부재로 gen.c(C) 강제 = linux
+  ls 비-감소 원인.
+- x86_64 codegen 졸업: F-X86-GEN3-GEN4-BYTEEQ + F-X86-WHOLECOMPILER-ASSEMBLES
+  (#3431/#3432) — whole-compiler x86_64-linux asm 이 byte-id emit + GNU as clean.
+
+구현 (이 변경):
+1. EMIT (검증). aprime_cc (build/aprime_cc, gen3 self-host 바이너리, Jun 17)
+   로 self/runtime_hi.hexa 의 lib-only head(line<227, `fn runtime_hi_selftest`
+   전) 를 x86_64-linux .s 로 구움:
+     aprime_cc _drv.hexa --emit=asm --target=x86_64-linux-gnu \
+               -o runtime_hi_x86_64.s runtime_hi_lib.hexa
+   (-o 플래그 필수 — 없으면 asm 이 어디에도 안 써짐. _drv.hexa 더미 첫 토큰 =
+    standalone "missing SOURCE" 가드 충족; 실제 lib 소스는 끝 인자.)
+   target 문자열은 정확히 `x86_64-linux-gnu` (LLVM `-unknown-` 철자 아님 —
+    aprime 는 exact-string match, build_aprime.sh L121 주석).
+
+2. ABI (검증, 캡처). emit 된 .s:
+   - linux ELF 심볼 = underscore 없음 (rt_str_split, NOT _rt_str_split) ✅
+     (메모리 "codegen drops ABI underscore on _-refs" 우려 → target 별로 올바르게
+      처리됨. Darwin seed 는 _rt_str_*, linux seed 는 rt_str_*.)
+   - .intel_syntax noprefix · .hidden (ELF, Mach-O .private_extern 대응).
+   - 11 fn: split/lines/pad_left/pad_right/repeat/center + to_upper/to_lower/
+     trim/trim_start/trim_end (현 SSOT 11-fn 일치 — trim-ends #3457 포함).
+
+3. ASSEMBLE/LINK (검증, 캡처). Darwin 로컬 cross-assemble:
+   - clang -target x86_64-linux-gnu -c → ELF 64 x86-64 obj, errors 0, 7208 B.
+   - zig cc -target x86_64-linux-gnu -c → identical nm.
+   - nm: 11 rt_str_* 전부 **T** (defined-global text) 심볼 — runtime.c 의
+     hexa_* 헬퍼와 link-resolvable.
+   - undefined U = hexa_array_new/push/len/str_byte_at/str_join/str_substring
+     (전부 runtime.c 제공, Darwin seed 와 동일 의존 surface).
+
+4. FROZEN SEED 박제. self/native/runtime_hi_x86_64.s (provenance 헤더 + emit).
+   + Darwin seed self/native/runtime_hi_native.s 를 9→11 fn 으로 REGEN(현 SSOT
+     동기화; trim_start/trim_end 누락분 보충 — 그래야 Darwin CI 도 native 경로
+     활성 시 link 무결).
+
+5. 빌드경로 통합:
+   - tool/stage_resolve_runtime_a: resolve_native_rt_hi_seed() 헬퍼 신설.
+     $TARGET(release_build SSOT) 또는 uname 으로 arch 판정 → arch-matched seed
+     선택(darwin→native.s · x86_64→x86_64.s · linux-arm64→없음=C경로) → $CC -c
+     로 build/rt_hi_native.o 어셈블 + HEXA_ZEROC_RT_HI=1 export. restore_frozen_
+     seeds(gen.c synth 결정) + build_runtime_a_from_source(ar) 양쪽 BEFORE 실행.
+     SAFETY: seed 의 .globl rt_str_* 가 11 미만이면 native 경로 skip→C fallback
+     (toolchain-free .globl count, stale/partial seed 가 undefined-ref 내는 것
+      방지). 명시적 HEXA_ZEROC_RT_HI=0 opt-out.
+   - tool/build_aprime.sh: auto-enable 가드를 Darwin arm64 + Linux x86_64 로 확장
+     (case uname -sm); 로컬 seed 어셈블 블록도 arch-matched seed 선택.
+   - tool/regen_runtime_hi_native_s.sh (신설): 양 seed 재현 스크립트
+     ([darwin|x86_64|all]). lib-only 추출 → emit → provenance 헤더 → cross-
+     assemble sanity(11 T 심볼 assert). .file 경로 정규화로 글로벌-심볼 결정성;
+     local .L<hex>_bb 라벨은 per-process nonce(링크 무관, 정직 명시).
+
+로컬 검증 (c2, 전부 캡처):
+- x86 emit rc=0, 11 .globl rt_str_*, ABI underscore 없음 ✅
+- clang + zig cc cross-assemble rc=0, 11 T 심볼 (둘 다) ✅
+- resolver 4-target 유닛테스트: x86_64→ZEROC=1·obj 11 T · darwin→ZEROC=1·obj 11 T
+  · linux-arm64→ZEROC=UNSET·no .o(C경로) · HEXA_ZEROC_RT_HI=0→opt-out ✅
+- bash -n 3 스크립트 OK · regen all rc=0(양 seed 11/11 cross-assemble OK)
+- mktemp `.s` 확장자 portability 버그 발견·수정(macOS 가 .s 뒤에 nonce 붙임 →
+  build/rt_hi_seed.s 고정경로로 교체).
+
+미해결 / CI 판정 대기 (authoritative, c2·c9):
+- **CI faithful-nobaseline 3-job (linux-x86_64·linux-arm64·darwin-arm64) 가
+  유일한 착지 증거.** 로컬 Darwin cross-assemble 은 de-risk 일 뿐, linux 네이티브
+  as/gcc + 실제 release_build 경로(restore_frozen_seeds edge-pull 포함)는 CI 만이
+  권위. linux-x86_64 green(rt_str undefined/duplicate 0) = 성공.
+- darwin-arm64 OP-34 fold gate(dt_exp/dt_erf) 실패는 base main pre-existing →
+  non-blocking (base 대조 확인 필요).
+- linux-arm64 native seed 는 별도 단위(ELF arm64, Darwin Mach-O 와 ABI 다름).
+  현 변경은 linux-arm64 를 C 경로로 안전 유지(seed 부재→skip).
+
+CI 1차 결과 (PR #3460, run 27646785203, authoritative):
+- darwin-arm64: **success** (11-fn Darwin seed regen + resolver native 경로 OK)
+- linux-arm64: **success** (seed 부재 → C 경로 유지, 무회귀)
+- linux-x86_64: **FAILURE** — Build(release_build) 단계. 정확 로그(캡처):
+    [stage_resolve_runtime_a] assembled build/rt_hi_native.o from
+      runtime_hi_x86_64.s (11 rt_str_* syms) → native rt_str_* path   ← OK
+    [restore_frozen_seeds] scrubbed frozen rt_str_trim_start/end C bodies  ← OK
+    [stage_resolve_runtime_a] runtime_hi_gen.c #include removed; ar'ing …  ← OK
+    /usr/bin/ld: build/runtime.a(rt_hi_native.o): relocation R_X86_64_32S
+      against `.rodata' can not be used when making a PIE object; recompile
+      with -fPIE
+    /usr/bin/ld: failed to set dynamic section sizes: bad value
+    collect2: error: ld returned 1 exit status
+
+ROOT CAUSE (진단 완료): x86_64 codegen 이 일부 문자열-리터럴 주소를 ABSOLUTE
+  `mov <reg>, .LCstrN` 로 emit → R_X86_64_32S(.rodata 절대참조) 생성. modern
+  linux gcc/ld 의 기본 PIE 실행파일 링크가 이 reloc 을 거부. (다른 문자열-arg
+  payload 는 이미 `lea <reg>, [rip+.LCstrN]` PIC 형태 — emitter 내부 비일관성;
+  return-value/assign 4개만 절대형.) C(gen.c) 경로는 cc 가 기본 PIC 라 미발생.
+
+FIX (적용·로컬검증): PIC 변환 = `mov <reg>, .LCstrN` → `lea <reg>, [rip+.LCstrN]`
+  (의미동일 — 둘다 label 주소를 reg 에 적재). regen_runtime_hi_native_s.sh 의
+  x86_64 emit 경로에 sed 변환 baked-in(darwin arm64 는 adrp/add 로 본래 PIC, 미적용).
+  regen sanity 에 PIE-LINK 검사 추가(zig cc -target x86_64-linux-gnu -pie stub+seed.o
+  → reloc 잔존 시 regen 자체 fail). 재생성: seed 의 bare `mov reg,.LC` 0개, 10개
+  `lea [rip+.LC]`. **CI 실패 config 정확 재현**: zig ar→runtime.a→`zig cc -pie
+  app.c runtime.a` 링크 CLEAN(R_X86_64_32S 제거 확인). PIE-OK.
+
+VERDICT: 🔵 EMIT+ASSEMBLE+PIE-LINK 로컬 검증 완료. CI 1차가 PIE-reloc 블로커를
+  포착(authoritative gate 작동) → PIC 변환으로 근본수정 + regen 에 PIE-check
+  영구화. darwin/linux-arm64 는 1차에서 이미 green. 2차 CI(push 후) linux-x86_64
+  green = LANDED 판정. 막힘: PIE-reloc 1건 발견·수정완료, 남은 게이트는 2차 CI.
