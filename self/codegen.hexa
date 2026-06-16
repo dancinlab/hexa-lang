@@ -6143,6 +6143,15 @@ fn gen2_expr(node) {
             if name == "__hx_payload_ge" {
                 return "hexa_bool(HX_INT(" + gen2_expr(node.args[0]) + ") >= HX_INT(" + gen2_expr(node.args[1]) + "))"
             }
+            if name == "__hx_payload_add" {
+                return "hexa_int(HX_INT(" + gen2_expr(node.args[0]) + ") + HX_INT(" + gen2_expr(node.args[1]) + "))"
+            }
+            if name == "__hx_payload_sub" {
+                return "hexa_int(HX_INT(" + gen2_expr(node.args[0]) + ") - HX_INT(" + gen2_expr(node.args[1]) + "))"
+            }
+            if name == "__hx_payload_mul" {
+                return "hexa_int(HX_INT(" + gen2_expr(node.args[0]) + ") * HX_INT(" + gen2_expr(node.args[1]) + "))"
+            }
             if name == "__map_ptr_eq" {
                 return "hexa_bool((HX_MAP_TBL(" + gen2_expr(node.args[0]) + ") == HX_MAP_TBL(" + gen2_expr(node.args[1]) + ")))"
             }
