@@ -6190,6 +6190,9 @@ fn gen2_expr(node) {
             if name == "__hx_arr_len" {
                 return "hexa_int(HX_ARR_LEN(" + gen2_expr(node.args[0]) + "))"
             }
+            if name == "__hx_syscall0" {
+                return "hexa_int(syscall((long)HX_INT(" + gen2_expr(node.args[0]) + ")))"
+            }
             if name == "__map_ptr_eq" {
                 return "hexa_bool((HX_MAP_TBL(" + gen2_expr(node.args[0]) + ") == HX_MAP_TBL(" + gen2_expr(node.args[1]) + ")))"
             }

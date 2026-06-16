@@ -2036,6 +2036,24 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // RT-NATIVE UNLOCK-8: `__hx_syscall0(num)` → int HexaVal of a 0-arg
+        // BSD syscall result. macOS arm64 ABI: syscall number in x16, trap via
+        // `svc #0x80`, result in x0. This is the Z3 arena foundation — a native
+        // syscall-emit (mmap/munmap path) with NO C shim. Verified via getuid
+        // (#24) which returns the caller's uid deterministically.
+        if s.op == "__hx_syscall0" && len(s.args) >= 1 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // num → x1
+            buf.push(_arm64_instr2("mov", _arm64_op_reg("x16"),
+                             _arm64_op_reg("x1"), "__hx_syscall0: x16 = syscall num"))
+            buf.push(_arm64_instr1("svc", _arm64_op_label("#0x80"),
+                             "__hx_syscall0: BSD syscall trap"))
+            buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"),
+                             _arm64_op_reg("x0"), "__hx_syscall0: payload = result"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_syscall0: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // RT-NATIVE UNLOCK-6: `__hx_to_double(v)` → float HexaVal coercing
         // an int-or-float operand to double (dispatch core's mixed int/float
         // compare: `__hx_to_double(a) < __hx_to_double(b)`). BRANCHLESS via
