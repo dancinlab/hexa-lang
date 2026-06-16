@@ -40,6 +40,17 @@ fi
 
 "$HV2" "$SRC" "$TMP/raw.c" >/dev/null
 
+# Detect the string-literal init symbol hexat actually emitted (bare or
+# module-suffixed) and compute its post-rename form, so the constructor footer
+# below calls the symbol that genuinely exists (root-cause fix for the hardcode
+# drift that regressed the linux runtime_hi_gen.c regen path).
+INIT_RAW=$(grep -oE '__hexa_strlit_init[A-Za-z0-9_]*' "$TMP/raw.c" | sort -u | head -1)
+if [[ -z "$INIT_RAW" ]]; then
+    echo "[extract_runtime_hi] ERROR: no __hexa_strlit_init* symbol in hexat output" >&2
+    exit 1
+fi
+INIT_RENAMED="${INIT_RAW/__hexa_strlit_init/__hexa_rt_strlit_init}"
+
 {
   cat <<'HDR'
 // GENERATED FROM self/runtime_hi.hexa — do not edit manually.
@@ -68,11 +79,12 @@ HDR
       s/__hexa_strlit_init/__hexa_rt_strlit_init/g;
     '
 
-  cat <<'FTR'
-
-__attribute__((constructor))
-static void __hexa_rt_strlit_init_ctor(void) { __hexa_rt_strlit_init(); }
-FTR
+  # Constructor footer: call the string-literal init by its ACTUAL emitted name.
+  # hexat historically emitted a bare `__hexa_strlit_init`; current builds emit a
+  # module-suffixed `__hexa_strlit_init__runtime_hi`. Auto-detect the symbol from
+  # raw.c and apply the same `__hexa_rt_` rename the bodies got, instead of
+  # hardcoding (the hardcode drifted → footer called a non-existent symbol).
+  printf '\n__attribute__((constructor))\nstatic void __hexa_rt_strlit_init_ctor(void) { %s(); }\n' "$INIT_RENAMED"
 } > "$OUT"
 
 echo "[extract_runtime_hi] wrote $OUT"
