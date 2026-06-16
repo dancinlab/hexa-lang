@@ -1,0 +1,28 @@
+F-X86-RUNG2-VERIFIED — 2026-06-16
+═══════════════════════════════════════════════════════════════
+CLAIM: x86_64-linux native codegen 의 RUNG2(string-print) 가 동작한다 —
+메모리의 "x86_64 RUNG2 string-print HexaVal 16B SysV reg-pair ABI not impl"
+은 FALSIFIED (stale).
+
+METHOD (summer = Linux x86_64, 실제 실행):
+- aprime_x86v 빌드 (build_aprime.sh, main @2c139961c, summer native)
+- ret42(RUNG1) + string-print(RUNG2) 를 `--emit=obj --target=x86_64-linux-gnu`
+  로 직접 ELF serialize → build/runtime.a(745460B) 링크 → 실행.
+
+RESULT (캡처출력, summer):
+- r42 emit=obj rc=0 2216B · sp emit=obj rc=0 2440B  (직접 ELF serialize)
+- r42: RUN exit=42                                  (RUNG1 PASS)
+- sp:  RUN stdout=[hello x86_64 RUNG2] exit=7        (RUNG2 string-print PASS)
+
+VERDICT: ✅ x86_64-linux RUNG2(string-print) emit+obj+link+run 전부 동작.
+HexaVal 16B SysV reg-pair ABI(rsi:rdi arg, rax:rdx return)가 string payload
+경로까지 구현됨(x86_64_linux.hexa:609- `_x86_hv_pair_lo/hi`/`_x86_hv_box_arg`).
+darwin cross-assemble(clang -target x86_64-linux-gnu) 도 ELF obj 생성 가능
+(단 실행은 linux libc sysroot 필요 → summer/pod).
+
+IMPACT (leg B 종착 재평가):
+- 이전 인과(#3419): 파일 0 ⇐ standalone 재설계 ⇐ linux native codegen 성숙(미성숙 가정).
+- 본 검증으로 "linux codegen 미성숙" 전제가 FALSE — RUNG1/2/3 동작. 따라서
+  leg B 종착 블로커는 "codegen 성숙"이 아니라 (a) x86_64 byte-eq fixpoint 확인
+  (b) standalone→hexa-source 링크 전환 (c) ~420 fn 전수 포팅. codegen 자체는 준비됨.
+- 메모리 project_hexa_zeroc_breakthrough 의 x86_64 RUNG2 항목 정정 필요.
