@@ -678,6 +678,18 @@ fn _x86_tag_resolve(buf: [LInstr], o: Operand, rm: X86RegMap, scratch: string) -
             return out
         }
     }
+    // RT-NATIVE Z2c — a `const_bool` literal (`true`/`false`) carries TAG_BOOL=2,
+    // NOT the operand-kind default 0. x86_64 parity with arm64_darwin.hexa
+    // (_arm64_tag_resolve const_bool case). Without this the literal lowered to
+    // TAG_INT and `_x86_op_resolve`'s missing const_bool case dropped the payload
+    // to imm 0, so `return true`/`return false` both returned (tag=0,payload=0)
+    // — every bool-returning native-seed fn (rt_str_starts_with_b/ends_with_b/
+    // contains_b) silently returned false.
+    if o.kind == "const_bool" {
+        out.push(_x86_instr2("mov", _x86_op_reg(scratch), _x86_op_imm(2),
+                         "tag const_bool = TAG_BOOL"))
+        return out
+    }
     // const_int / untracked → TAG_INT = 0
     out.push(_x86_instr2("mov", _x86_op_reg(scratch), _x86_op_imm(0),
                      "tag default = TAG_INT"))
@@ -706,6 +718,10 @@ fn _x86_64_op_for_operand_st(o: Operand, st: X86StrTab) -> LOperand {
         return _x86_op_reg(_x86_64_reg_for_local(o.local_id))
     }
     if o.kind == "const_int" {
+        return _x86_op_imm(o.int_val)
+    }
+    // RT-NATIVE Z2c — const_bool payload = int_val (0/1), like const_int.
+    if o.kind == "const_bool" {
         return _x86_op_imm(o.int_val)
     }
     if o.kind == "global" {
@@ -957,6 +973,11 @@ fn _x86_op_resolve(o: Operand, st: X86StrTab, rm: X86RegMap,
         return _x86_op_reg(_x86_reg_lookup(rm, o.local_id))
     }
     if o.kind == "const_int" { return _x86_op_imm(o.int_val) }
+    // RT-NATIVE Z2c — a `const_bool` payload is its int_val (0/1), same as a
+    // const_int immediate (the tag separates them via _x86_tag_resolve). Mirror
+    // arm64_darwin's const_bool resolve. Was falling through to `imm 0`, dropping
+    // `return true` to 0.
+    if o.kind == "const_bool" { return _x86_op_imm(o.int_val) }
     if o.kind == "global"    {
         // RFC 070 G7-A.native impl emit (2026-05-20, D2): in `--shared`
         // mode the GOT entry was loaded into `scratch` by `_x86_op_rm`,
