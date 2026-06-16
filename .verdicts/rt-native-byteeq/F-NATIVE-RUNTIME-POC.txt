@@ -1,0 +1,31 @@
+F-NATIVE-RUNTIME-POC — 2026-06-16
+═══════════════════════════════════════════════════════════════
+leg B native runtime 토대 작동 확인 — aprime 가 stdlib/runtime/*.hexa 를
+native obj 로 컴파일(rt_* global 심볼) = leg A byte-eq 졸업의 직접 활용.
+
+PoC (aprime_nr, --emit=obj --target=arm64-apple-darwin, 캡처출력):
+- math.hexa   → 30,464B · T 심볼 _rt_cos/_rt_sin/_rt_exp/_rt_log/_rt_fmod/_rt_acos/log2/log10
+- ctype.hexa  → 52,720B OK
+- posix.hexa  →  4,136B OK
+- net.hexa    →    808B OK
+- numeric.hexa → rc=1 FAIL (의존성 — 별도 진단).
+∴ aprime 가 .hexa 런타임 모듈을 native obj(global rt_* 심볼)로 컴파일 = leg B
+  native runtime.a 의 핵심 토대 작동 확인.
+
+ABI 갭 (통합 시 wrapper 필요):
+- math.hexa `pub fn rt_cos(x: float) -> float` → native obj 가 float ABI.
+- runtime.c `extern HexaVal rt_cos(HexaVal x)` → HexaVal 16B ABI.
+- 심볼명(_rt_cos) 동일하나 ABI 불일치 → 그대로 링크 시 호출 깨짐.
+- 통합 = HexaVal↔float ABI wrapper(active hexa_math_cos wrapper 패턴) OR
+  hexa-source 를 HexaVal 시그니처로 재작성.
+
+leg B native runtime 작업 (확정 경로):
+- (1) stdlib/runtime/*.hexa 를 aprime native obj 로 → rt_*.o (PoC ✅, numeric 수리)
+- (2) runtime.c/core.c 코어(HexaVal struct/macro/값op/arena/dispatch ~1190 fn)도
+  .hexa native (메커니즘 전부 증명됨 이번 세션 — 값op·arena·dispatch).
+- (3) ABI wrapper 통합 + native runtime.a 구성 + restore C-seed 경로 제거.
+- (4) self/runtime.c/core.c build 미생성 → ls self/*.c == ∅ + native(C-free).
+거대 다세션 전수. leg A 양 타깃 byte-eq 졸업(#3412/3432)이 native 컴파일 토대.
+
+NEXT: numeric.hexa FAIL 진단·수리 → 8개 모듈 전부 native obj → ABI wrapper PoC →
+점진 코어 fn .hexa 화.
