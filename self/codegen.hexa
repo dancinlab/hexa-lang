@@ -6116,6 +6116,13 @@ fn gen2_expr(node) {
             if name == "__vs_ptr_eq" {
                 return "hexa_bool((HX_VS(" + gen2_expr(node.args[0]) + ") == HX_VS(" + gen2_expr(node.args[1]) + ")))"
             }
+            // RT-NATIVE UNLOCK-2: `__hx_tag(v)` native tag-read intrinsic — read
+            // the HexaVal tag, boxed as an int. C-transpile = HX_TAG macro; the
+            // native arm64 backend lowers it inline (arm64_darwin.hexa STMT_CALL).
+            // Lets .hexa port hexa_type_of/eq/truthy natively (Z2c dispatch core).
+            if name == "__hx_tag" {
+                return "hexa_int((int64_t)HX_TAG(" + gen2_expr(node.args[0]) + "))"
+            }
             if name == "__map_ptr_eq" {
                 return "hexa_bool((HX_MAP_TBL(" + gen2_expr(node.args[0]) + ") == HX_MAP_TBL(" + gen2_expr(node.args[1]) + ")))"
             }
