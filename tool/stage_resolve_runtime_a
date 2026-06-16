@@ -63,40 +63,34 @@ mkdir -p build
 #   · no hexa runner  → keep the in-tree .c (no change).
 #   · emitter fails   → keep the in-tree .c (warn, non-fatal).
 # On a SHA-identical regen the runtime.c TU is byte-unchanged (PERF UNCHANGED).
-# Resolve a hexa runner that can `run` a .hexa file end-to-end.
-#   1. an external hexa-run / hexa on PATH (local dev parity), else
-#   2. the prior edge `hexa` binary (CI: same asset stage_regen_hexa_cc uses).
-# Prints the runner command on stdout (empty if none); shared by the
-# runtime_core.c AND runtime_hi_gen.c emitter regens (no drift between them).
-_resolve_hexa_runner() {
-    if command -v hexa-run >/dev/null 2>&1; then
-        echo "hexa-run"; return 0
-    elif command -v hexa >/dev/null 2>&1; then
-        echo "hexa run"; return 0
-    fi
-    local asset="${EDGE_ASSET:-}"
-    if [ -n "$asset" ]; then
-        local edge_dir="/tmp/edge_rc_runner"
-        rm -rf "$edge_dir"; mkdir -p "$edge_dir"
-        if gh release download edge --repo "${GITHUB_REPOSITORY:-dancinlab/hexa-lang}" \
-              --pattern "$asset" --dir "$edge_dir" --clobber 2>/tmp/rc_dl.err \
-           && tar xzf "$edge_dir/$asset" -C "$edge_dir" 2>/dev/null; then
-            local edge_hexa
-            edge_hexa="$(find "$edge_dir" -name hexa -type f -perm -u+x 2>/dev/null | head -1)"
-            [ -z "$edge_hexa" ] && edge_hexa="$(find "$edge_dir" -name hexa -type f 2>/dev/null | head -1)"
-            if [ -n "$edge_hexa" ]; then chmod +x "$edge_hexa" 2>/dev/null || true; echo "$edge_hexa run"; return 0; fi
-        fi
-    fi
-    echo ""
-}
-
 regen_runtime_core_from_emitter() {
     local emitter="self/runtime_core_emit.hexa"
     local dst="self/runtime_core.c"
     [ -f "$emitter" ] || { echo "[stage_resolve_runtime_a] runtime_core.c regen SKIP — emitter absent"; return 0; }
 
-    local runner
-    runner="$(_resolve_hexa_runner)"
+    # Resolve a hexa runner that can `run` a .hexa file end-to-end.
+    #   1. an external hexa-run / hexa on PATH (local dev parity), else
+    #   2. the prior edge `hexa` binary (CI: same asset stage_regen_hexa_cc uses).
+    local runner=""
+    if command -v hexa-run >/dev/null 2>&1; then
+        runner="hexa-run"
+    elif command -v hexa >/dev/null 2>&1; then
+        runner="hexa run"
+    else
+        local asset="${EDGE_ASSET:-}"
+        if [ -n "$asset" ]; then
+            local edge_dir="/tmp/edge_rc_runner"
+            rm -rf "$edge_dir"; mkdir -p "$edge_dir"
+            if gh release download edge --repo "${GITHUB_REPOSITORY:-dancinlab/hexa-lang}" \
+                  --pattern "$asset" --dir "$edge_dir" --clobber 2>/tmp/rc_dl.err \
+               && tar xzf "$edge_dir/$asset" -C "$edge_dir" 2>/dev/null; then
+                local edge_hexa
+                edge_hexa="$(find "$edge_dir" -name hexa -type f -perm -u+x 2>/dev/null | head -1)"
+                [ -z "$edge_hexa" ] && edge_hexa="$(find "$edge_dir" -name hexa -type f 2>/dev/null | head -1)"
+                if [ -n "$edge_hexa" ]; then chmod +x "$edge_hexa" 2>/dev/null || true; runner="$edge_hexa run"; fi
+            fi
+        fi
+    fi
     if [ -z "$runner" ]; then
         echo "[stage_resolve_runtime_a] runtime_core.c regen SKIP — no hexa runner (in-tree .c used)"
         return 0
@@ -140,89 +134,6 @@ reconcile_runtime_c_ssot_dups() {
     echo "[stage_resolve_runtime_a] SSOT reconcile: dropped $((before-after)) migrated f64<->bits defs from runtime.c (emitter owns them)"
 }
 
-# RT-NATIVE leg B Z2a — regen self/runtime_hi_gen.c (the HI-tier rt_str_* fragment
-# `#include`d by runtime_core.c, RFC 061 amalgamation) from its emitter SSOT
-# (self/runtime_hi_gen_emit.hexa) BEFORE compiling runtime.a. WHY THIS IS REQUIRED:
-# the frozen runtime_hi_gen.c seed (restore_frozen_seeds, 151c52c8) is a STALE
-# 6-fn copy; the SSOT has since grown the casefold/trim group (rt_str_to_upper/
-# to_lower/trim → 9 fn). regen_runtime_core_from_emitter retires those 3 fns'
-# C #ifndef bodies, so WITHOUT this gen.c regen the linux (non-Z2a) runtime.a is
-# built from {SSOT runtime_core.c (no C bodies)} + {frozen 6-fn gen.c} → the app
-# (hexa_cc) link fails with "undefined reference to rt_str_to_upper/rt_str_trim".
-# Mirrors regen_runtime_core_from_emitter's STRICTLY-OPTIONAL + NO-OP-SAFE contract
-# (no runner / no emitter → keep the in-tree .c). The Z2a path (native seed) drops
-# the include entirely, so this is only needed for the C-fallback (linux) path.
-# Locate a hexat (transpiler) binary that runs NATIVELY on this host, for the
-# deterministic extract_runtime_hi.sh regen path. Stage 0b runs BEFORE
-# stage_prebuild_hexat, so self/native/hexat / build/hexat may be absent here;
-# but the committed per-target seeds (build/hexat_linux x86_64 ELF,
-# dist/<target>/hexat) ARE present on a fresh checkout. Prints the path (empty
-# if none runs on this arch). Arch-matched only — a foreign-arch ELF would
-# fail to exec.
-_resolve_native_hexat() {
-    local host_m; host_m="$(uname -m 2>/dev/null)"
-    local cands=()
-    case "$host_m" in
-        x86_64|amd64)
-            cands=(self/native/hexat build/hexat build/hexat_linux dist/linux-x86_64/hexat) ;;
-        arm64|aarch64)
-            cands=(self/native/hexat build/hexat dist/linux-arm64/hexat dist/darwin-arm64/hexat) ;;
-        *)
-            cands=(self/native/hexat build/hexat) ;;
-    esac
-    local c
-    for c in "${cands[@]}"; do
-        if [ -x "$c" ] || { [ -f "$c" ] && chmod +x "$c" 2>/dev/null && [ -x "$c" ]; }; then
-            # Probe: a foreign-arch binary fails to exec — verify it runs.
-            if "$c" --version >/dev/null 2>&1 || "$c" 2>/dev/null | head -1 >/dev/null 2>&1; then
-                echo "$c"; return 0
-            fi
-        fi
-    done
-    echo ""
-}
-
-regen_runtime_hi_gen_from_emitter() {
-    local emitter="self/runtime_hi_gen_emit.hexa"
-    local src="self/runtime_hi.hexa"
-    local dst="self/runtime_hi_gen.c"
-
-    # PRIMARY (deterministic): extract_runtime_hi.sh transpiles the runtime_hi.hexa
-    # SSOT via a native hexat — the SAME path that produces the byte-identical 9-fn
-    # gen.c locally, and robust against the interp-emitter's per-host fragility.
-    if [ -f "$src" ] && [ -x tool/extract_runtime_hi.sh ]; then
-        local hexat_bin
-        hexat_bin="$(_resolve_native_hexat)"
-        if [ -n "$hexat_bin" ]; then
-            if HEXA_V2="$ROOT/$hexat_bin" HX_ROOT="$ROOT" bash tool/extract_runtime_hi.sh >/tmp/rhg_extract.log 2>&1 \
-               && [ -s "$dst" ] && grep -q 'HexaVal rt_str_to_upper' "$dst"; then
-                echo "[stage_resolve_runtime_a] runtime_hi_gen.c REGENERATED via extract_runtime_hi.sh ($hexat_bin, $(wc -l < "$dst") lines)"
-                return 0
-            fi
-            echo "[stage_resolve_runtime_a] warn: extract_runtime_hi.sh regen failed ($(tail -1 /tmp/rhg_extract.log 2>/dev/null)) — trying emitter" >&2
-        fi
-    fi
-
-    # FALLBACK: the interp .c-text emitter (runtime_hi_gen_emit.hexa SSOT) via an
-    # edge/external hexa runner. STRICTLY-OPTIONAL + NO-OP-SAFE.
-    [ -f "$emitter" ] || { echo "[stage_resolve_runtime_a] runtime_hi_gen.c regen SKIP — no hexat + emitter absent (in-tree .c used)"; return 0; }
-    local runner
-    runner="$(_resolve_hexa_runner)"
-    if [ -z "$runner" ]; then
-        echo "[stage_resolve_runtime_a] runtime_hi_gen.c regen SKIP — no hexat + no hexa runner (in-tree .c used)"
-        return 0
-    fi
-    local tmp
-    tmp="$(mktemp -t regen_runtime_hi_gen_c.XXXXXX)" || { echo "[stage_resolve_runtime_a] mktemp failed — runtime_hi_gen.c regen skipped" >&2; return 0; }
-    if HEXA_LANG="$ROOT" $runner "$emitter" "$tmp" >/tmp/rhg_emit.log 2>&1 && [ -s "$tmp" ] && grep -q 'HexaVal rt_str_to_upper' "$tmp"; then
-        cp -f "$tmp" "$dst"
-        echo "[stage_resolve_runtime_a] runtime_hi_gen.c REGENERATED from emitter SSOT ($(wc -l < "$dst") lines)"
-    else
-        echo "[stage_resolve_runtime_a] warn: runtime_hi_gen emitter failed ($(tail -1 /tmp/rhg_emit.log 2>/dev/null)) — in-tree .c used" >&2
-    fi
-    rm -f "$tmp"
-}
-
 # Shared source-compile of runtime.a from the in-tree self/runtime.c (+ its
 # #include seed .c). Used by BOTH the seeds-present branch and the frozen-seed
 # fallback so there is exactly ONE compile recipe (no drift). The runtime_core.c
@@ -235,14 +146,6 @@ build_runtime_a_from_source() {
     # frozen seed) instead of the hexat-transpiled runtime_hi_gen.c #include —
     # so runtime_hi_gen.c is never needed. Default path unchanged.
     local extra_obj=""
-    if [ "${HEXA_ZEROC_RT_HI:-0}" = "1" ] && [ -f build/rt_hi_native.o ]; then
-        :  # Z2a: native seed path — gen.c regen unneeded (include is stripped below)
-    else
-        # C-fallback (linux) path: refresh the frozen 6-fn gen.c to the SSOT 9-fn
-        # version so the casefold/trim group resolves at the app link (else
-        # "undefined reference to rt_str_to_upper/rt_str_trim").
-        regen_runtime_hi_gen_from_emitter
-    fi
     if [ "${HEXA_ZEROC_RT_HI:-0}" = "1" ] && [ -f build/rt_hi_native.o ]; then
         sed -i.zbak 's|#include "runtime_hi_gen.c"|/* RT-NATIVE Z2a: rt_str_* from native build/rt_hi_native.o */|' self/runtime_core.c
         rm -f self/runtime_core.c.zbak

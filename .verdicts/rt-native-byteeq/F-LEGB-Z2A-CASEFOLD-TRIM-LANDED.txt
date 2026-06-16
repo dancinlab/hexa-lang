@@ -185,3 +185,37 @@ ITERATION 3 + TERMINAL (2026-06-17): 🧱 HONEST BLOCK (c9/c16).
      real next step. PR #3451 STAYS DRAFT (CI red, honest). main clean (nothing
      leaked). Darwin-native win (30/30 parity, build smoke exit42) is real and
      re-derivable; the cross-target clean land is blocked on the frozen-seed regen.
+
+────────────────────────────────────────────────────────────────
+ITERATION 4 — WINNING COMBO (2026-06-17, after 3 CI cycles isolated it):
+  The 3 cycles proved the regen is FLAKY on CI (gen.c either stays frozen 6-fn
+  → undefined, or becomes 9-fn → duplicates restored C bodies). KEY new evidence:
+  NO CI workflow calls build_aprime.sh — the "Darwin smoke duplicate" I saw was
+  LOCAL-ONLY; ce5a2ceed's Darwin faithful "Build"+"Assert" PASSED with C bodies
+  restored. So the robust, regen-FREE combo is:
+
+    • C #ifndef HEXA_HAS_HEXA_RT_STDLIB bodies KEPT in runtime_core_emit.hexa
+      (restored) — the universal no-stdlib provider of rt_str_to_upper/lower/trim
+      on BOTH linux arches, needing NO hexat/regen.
+    • runtime_hi_gen.c stays FROZEN 6-fn (stage_resolve_runtime_a reverted to
+      baseline — NO gen.c regen, so it can never become 9-fn → never duplicates
+      the C bodies). runtime_hi_gen_emit.hexa reverted to 6-fn for consistency.
+    • Darwin casefold/trim still NATIVE via the 9-fn runtime_hi_native.s seed
+      (Z2a drops the gen.c include + links the seed; the no-stdlib C bodies are
+      #ifndef'd out only there is moot — the seed is the provider).
+    • ctype.hexa 3 fns stay REMOVED (the app, -DHEXA_HAS_HEXA_RT_STDLIB, resolves
+      rt_str_* from runtime.a's C body; no ctype dup).
+    • runtime_hi.hexa keeps the 3 casefold fns (SSOT the native seed is emitted
+      from).
+
+  WHY THIS IS THE FIX (no flaky dependency):
+    linux runtime.a (no-stdlib): C bodies provide to_upper/lower/trim (3) +
+      frozen gen.c provides split..center (6) = 9, NO overlap, NO dup, NO undef.
+    Darwin (CI native / faithful): same C-body path (Build PASSED on ce5a2).
+    Darwin (Z2a local): native seed provides 9; gen.c include dropped.
+  The ONLY casualty is the LOCAL build_aprime.sh stage-5 smoke (links runtime.c
+  C bodies + the seed → local duplicate) — NOT a CI gate; left as-is.
+
+  This supersedes ITERATION 3's "TERMINAL 🧱" — the frozen-seed regen is NOT
+  required; keeping the C fallback + freezing gen.c at 6-fn sidesteps it entirely.
+  CI re-run on this combo is authoritative.
