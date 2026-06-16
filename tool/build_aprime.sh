@@ -48,16 +48,24 @@ cd "$REPO" || { echo "build_aprime: bad repo '$REPO'" >&2; exit 1; }
 [ -f compiler/main.hexa ] || { echo "build_aprime: no compiler/main.hexa under $REPO" >&2; exit 1; }
 [ -z "$HEXA_V2" ] && HEXA_V2="$REPO/self/native/hexat"
 
-# RT-NATIVE Z2a (default-on for arm64-darwin): the native runtime_hi path
-# (build/rt_hi_native.o from the frozen self/native/runtime_hi_native.s seed,
-# instead of the hexat-transpiled runtime_hi_gen.c) is byte-identical + runtime-
-# verified on arm64-darwin, so it is the DEFAULT there — `ls self/*.c` drops
-# runtime_hi_gen.c. x86_64-linux keeps the C path until its codegen matures
-# (root cause: F-RT-NATIVE-X86-CODEGEN-ROOTCAUSE) — auto-enable only on Darwin
-# arm64. Override with HEXA_ZEROC_RT_HI=0 to force the legacy C path.
-if [ "$(uname -sm 2>/dev/null)" = "Darwin arm64" ] && [ -f "$REPO/self/native/runtime_hi_native.s" ]; then
-    export HEXA_ZEROC_RT_HI="${HEXA_ZEROC_RT_HI:-1}"
-fi
+# RT-NATIVE Z2a/leg B (default-on for arm64-darwin AND x86_64-linux): the native
+# runtime_hi path (build/rt_hi_native.o from a frozen self/native/runtime_hi_*.s
+# seed, instead of the hexat-transpiled runtime_hi_gen.c) drops runtime_hi_gen.c
+# from `ls self/*.c`.
+#   arm64-darwin → runtime_hi_native.s  (Mach-O; byte-id + runtime-verified)
+#   x86_64-linux → runtime_hi_x86_64.s  (ELF; x86_64 codegen graduated —
+#       F-X86-GEN3-GEN4-BYTEEQ + F-X86-WHOLECOMPILER-ASSEMBLES; seed cross-
+#       assembles clean, all 11 rt_str_* = T symbols).
+# linux-arm64 still has no seed → keeps the C path. Override HEXA_ZEROC_RT_HI=0
+# to force the legacy C path on any platform.
+case "$(uname -sm 2>/dev/null)" in
+    "Darwin arm64")
+        [ -f "$REPO/self/native/runtime_hi_native.s" ] \
+            && export HEXA_ZEROC_RT_HI="${HEXA_ZEROC_RT_HI:-1}" ;;
+    "Linux x86_64")
+        [ -f "$REPO/self/native/runtime_hi_x86_64.s" ] \
+            && export HEXA_ZEROC_RT_HI="${HEXA_ZEROC_RT_HI:-1}" ;;
+esac
 
 # ── stage 0: regen (clean-checkout self-build) ─────────────────────
 # Make this recipe self-contained on a fresh `.c=0` checkout. The two
@@ -231,12 +239,18 @@ echo "  [3/5] post-process: s4_flatc_post + builtin sed + runtime.c inline"
 ZEROC_RT_HI_OBJ=""
 ZEROC_RT_HI_RESTORE=""
 if [ "${HEXA_ZEROC_RT_HI:-0}" = "1" ]; then
-    # Assemble build/rt_hi_native.o from the frozen native .s seed if absent
-    # (breaks the bootstrap chicken-egg the same way self/runtime.c is a seed).
-    if [ ! -f "$REPO/build/rt_hi_native.o" ] && [ -f "$REPO/self/native/runtime_hi_native.s" ]; then
-        grep -vE '^// ' "$REPO/self/native/runtime_hi_native.s" > "$TMP/rt_hi_seed.s" 2>/dev/null || cp "$REPO/self/native/runtime_hi_native.s" "$TMP/rt_hi_seed.s"
-        clang -c $ARCH_FLAG "$TMP/rt_hi_seed.s" -o "$REPO/build/rt_hi_native.o" 2>/dev/null \
-            && echo "  [3/5] ZERO-C Z2a: assembled build/rt_hi_native.o from frozen .s seed"
+    # Assemble build/rt_hi_native.o from the arch-matched frozen native .s seed
+    # if absent (breaks the bootstrap chicken-egg the same way self/runtime.c is
+    # a seed). arm64-darwin → runtime_hi_native.s (Mach-O) · x86_64-linux →
+    # runtime_hi_x86_64.s (ELF).
+    case "$(uname -sm 2>/dev/null)" in
+        "Linux x86_64") RT_HI_SEED="$REPO/self/native/runtime_hi_x86_64.s" ;;
+        *)              RT_HI_SEED="$REPO/self/native/runtime_hi_native.s"  ;;
+    esac
+    if [ ! -f "$REPO/build/rt_hi_native.o" ] && [ -f "$RT_HI_SEED" ]; then
+        grep -vE '^// ' "$RT_HI_SEED" > "$TMP/rt_hi_seed.s" 2>/dev/null || cp "$RT_HI_SEED" "$TMP/rt_hi_seed.s"
+        ${CC:-clang} -c $ARCH_FLAG "$TMP/rt_hi_seed.s" -o "$REPO/build/rt_hi_native.o" 2>/dev/null \
+            && echo "  [3/5] ZERO-C Z2a: assembled build/rt_hi_native.o from frozen .s seed ($RT_HI_SEED)"
     fi
     if [ ! -f "$REPO/build/rt_hi_native.o" ]; then
         echo "build_aprime: HEXA_ZEROC_RT_HI=1 but build/rt_hi_native.o missing (no seed)" >&2; exit 1
