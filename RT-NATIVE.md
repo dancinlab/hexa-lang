@@ -7,6 +7,7 @@
 - [ ] Z2c runtime_core_emit.hexa C-text core (954 fn) → native .hexa 재작성 (2→0)
 - [x] Z4 setjmp/longjmp try/catch → native unwinding lowering (또는 정직-keep 결정)
 - [~] Z2b NaN-boxing tag machine → native value-ops (core fns .hexa 화, HX_* C매크로 제거)
+  - **string-leaf 메커니즘 증명(2026-06-16)**: 순수-.hexa `rt_strcmp`(while + `__hx_str_byte` + `__hx_payload_lt/gt/eq`)가 C `strcmp` 부호와 8/8 일치(asm·obj exit=8), rt_strcmp 본문 `bl` 0개 = 완전 native·zero C-string dep. `scripts/scratch/rt_native/rt_strcmp_demo.hexa`. → hexa_cmp_lt string branch 를 정상-.hexa 로 seed-link 포팅할 수 있음이 실증됨.
   - codegen-primitive 진행: int-leaf(태그읽기 `__hx_tag` + 비교 6 + 산술 3, #3393/#3400/#3401) + float-leaf(`__hx_payload_fadd/fsub/fmul/fdiv` + `flt/fgt/fle/fge` NaN-correct, #3402) + **FP/cset obj-path 인코딩**(#3402, udf-hole 클래스 닫힘 — asm==obj byte-id, canary 무회귀). 잔여 = 문자열/포인터 leaf(`hxlcl_strcmp` char* deref·byte load = Z3 포인터-codegen 블로커와 동일) + enum/valstruct + `__hx_to_double` 강제변환 → 그 후 dispatch fn(hexa_cmp_*/add/sub/mul) 전체 C-free 포팅 + seed-link.
 - [ ] Z3 arena allocator → .hexa (mmap-via-svc, codegen_native enc_svc)
 - [x] Z2a-done runtime_hi_gen.c 제거 (3→2): 부트스트랩 순환(2-pass) + runtime.a rt_hi.o ar + emitter ungate + restore_frozen_seeds drop + selfhost_byteeq_gate green

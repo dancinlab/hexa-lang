@@ -1,0 +1,42 @@
+// VERIFIED 2026-06-16: asm & obj exit=8 (all 8 cases match C strcmp sign);
+// rt_strcmp body has 0 `bl` into runtime = fully native, zero C-string dep.
+// RT-NATIVE UNLOCK-5 mechanism proof: pure-.hexa NUL-terminated strcmp
+// using ONLY the native string/value-op leaf intrinsics (no `bl` into C):
+//   __hx_str_byte(s,i)  — byte at offset i
+//   __hx_payload_lt/gt  — int payload compare
+// Returns -1 / 0 / +1 like C strcmp's sign. This is the body that a
+// seed-linked native `rt_str_lt` (hexa_cmp_lt string branch) is built from.
+fn rt_strcmp(a: string, b: string) -> int {
+    let mut i = 0
+    while true {
+        let ca = __hx_str_byte(a, i)
+        let cb = __hx_str_byte(b, i)
+        if __hx_payload_lt(ca, cb) { return -1 }
+        if __hx_payload_gt(ca, cb) { return 1 }
+        if __hx_payload_eq(ca, 0)  { return 0 }   // both hit NUL together
+        i = i + 1
+    }
+    return 0
+}
+
+fn sgn(x: int) -> int {
+    if x < 0 { return -1 }
+    if x > 0 { return 1 }
+    return 0
+}
+
+fn main() {
+    // exit code packs 8 case-results: each must equal C strcmp's sign.
+    // pairs: (abc,abc)=0 (abc,abd)=-1 (abd,abc)=1 (ab,abc)=-1 (abc,ab)=1
+    //        (,a)=-1 (a,)=1 (Z,Z)=0
+    let mut ok = 0
+    if sgn(rt_strcmp("abc","abc")) == 0  { ok = ok + 1 }
+    if sgn(rt_strcmp("abc","abd")) == -1 { ok = ok + 1 }
+    if sgn(rt_strcmp("abd","abc")) == 1  { ok = ok + 1 }
+    if sgn(rt_strcmp("ab","abc"))  == -1 { ok = ok + 1 }
+    if sgn(rt_strcmp("abc","ab"))  == 1  { ok = ok + 1 }
+    if sgn(rt_strcmp("","a"))      == -1 { ok = ok + 1 }
+    if sgn(rt_strcmp("a",""))      == 1  { ok = ok + 1 }
+    if sgn(rt_strcmp("Z","Z"))     == 0  { ok = ok + 1 }
+    exit(ok)   // expect 8 = all match C strcmp sign
+}
