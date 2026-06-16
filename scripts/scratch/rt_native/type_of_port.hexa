@@ -1,0 +1,34 @@
+// RT-NATIVE Z2c: hexa_type_of ported to native .hexa using the UNLOCK-2 @tag
+// intrinsic (__hx_tag) — no `bl _hexa_type_of` C call. Mirrors runtime_core.c
+// hexa_type_of's tag→string switch. TAG enum: INT0 FLOAT1 BOOL2 STR3 VOID4
+// ARRAY5 MAP6 FN7 CHAR8 CLOSURE9 VALSTRUCT10 ENUM11.
+fn rt_type_of_native(v) -> string {
+    let t = __hx_tag(v)
+    if t == 0 { return "int" }
+    if t == 1 { return "float" }
+    if t == 2 { return "bool" }
+    if t == 3 { return "string" }
+    if t == 4 { return "void" }
+    if t == 5 { return "array" }
+    if t == 6 { return "map" }
+    if t == 7 { return "fn" }
+    if t == 8 { return "char" }
+    if t == 9 { return "closure" }
+    if t == 10 { return "struct" }
+    if t == 11 { return "enum" }
+    return "unknown"
+}
+fn main() {
+    // verify each native type_of vs the built-in type_of (C) — must match
+    let cases = [42, 3.14, true, "hi", [1,2,3]]
+    let mut ok = 0
+    let mut k = 0
+    while k < cases.len() {
+        let nat = rt_type_of_native(cases[k])
+        let c = type_of(cases[k])
+        if nat == c { ok = ok + 1 } else { println("MISMATCH: native=" + nat + " C=" + c) }
+        k = k + 1
+    }
+    println("native-vs-C type_of match: " + ok.to_string() + "/" + cases.len().to_string())
+    exit(ok)
+}
