@@ -728,11 +728,21 @@ fn _x86_op_rm(buf: [LInstr], o: Operand, st: X86StrTab, rm: X86RegMap,
     //     R_X86_64_64 absolute relocs on a position-independent object;
     //     R_X86_64_GOTPCREL is the canonical replacement.
     if o.kind == "global" {
+        let gl = "g" + to_string(o.global_id)
         if opts.shared == 1 {
-            let gl = "g" + to_string(o.global_id)
             out.push(_x86_instr2("mov", _x86_op_reg(scratch),
                              _x86_op_label("[rip+" + gl + "@GOTPCREL]"),
                              "addr GOT load: " + gl + " [reloc=" + RELOC_X86_64_GOTPCREL + "]"))
+        } else {
+            // RT-NATIVE x86_64 global-operand fix (#3422 root cause): a bare
+            // `g<id>` label as a cmp/test/mov operand is rejected by GNU as
+            // ("ambiguous operand size") — it has no register width. Load the
+            // global's VALUE into `scratch` via RIP-relative addressing so the
+            // consumer gets a sized register operand (mirrors arm64's adrp+ldr
+            // value load). `_x86_op_resolve` returns `scratch` accordingly.
+            out.push(_x86_instr2("mov", _x86_op_reg(scratch),
+                             _x86_op_label("[rip+" + gl + "]"),
+                             "load global value: " + gl))
         }
     }
     return out
@@ -754,8 +764,10 @@ fn _x86_op_resolve(o: Operand, st: X86StrTab, rm: X86RegMap,
         // here would defeat the PIC indirection and re-introduce the
         // text-section absolute reloc the GOT path exists to avoid. The
         // baseline path returns the label as before for byte-eq emit.
-        if opts.shared == 1 { return _x86_op_reg(scratch) }
-        return _x86_op_label("g" + to_string(o.global_id))
+        // Both shared (GOT addr in scratch) and baseline (value in scratch via
+        // the #3422 RIP-relative load) now resolve to `scratch` — a bare
+        // `g<id>` label operand is rejected by GNU as ("ambiguous size").
+        return _x86_op_reg(scratch)
     }
     if o.kind == "const_str" {
         let lbl = _x86_strtab_lookup(st, o.str_val)
