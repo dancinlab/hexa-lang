@@ -28,24 +28,21 @@
 /tmp/flat_x86.s:139221:15: error: unknown token in expression
     cmp r10,  # binop <
               ^
-/tmp/flat_x86.s:202164:15: error: unknown token in expression
+/tmp/flat_x86.s:139892:15: error: unknown token in expression
+    cmp r10,  # binop <
+              ^
+/tmp/flat_x86.s:202241:15: error: unknown token in expression
     cmp r13,  # binop <
               ^
-/tmp/flat_x86.s:202171:15: error: unknown token in expression
+/tmp/flat_x86.s:202248:15: error: unknown token in expression
     mov r13,  # assign L43
               ^
-/tmp/flat_x86.s:216923:5: error: invalid operand for instruction
-    push 2147483648 # C7: spill arg 9 (right-to-left)
-    ^
-/tmp/flat_x86.s:217317:5: error: invalid operand for instruction
-    push 2147484672 # C7: spill arg 9 (right-to-left)
-    ^
-/tmp/flat_x86.s:226469:15: error: unknown token in expression
+/tmp/flat_x86.s:226548:15: error: unknown token in expression
     cmp rdx,  # binop >=
               ^
-/tmp/flat_x86.s:235314:15: error: unknown token in expression
+/tmp/flat_x86.s:235393:15: error: unknown token in expression
     mov rdx,  # struct_lit: field val
               ^
-/tmp/flat_x86.s:235539:15: error: unknown token in expression
+/tmp/flat_x86.s:235618:15: error: unknown token in expression
     mov rdx,  # struct_lit: field val
               ^
