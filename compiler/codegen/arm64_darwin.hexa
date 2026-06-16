@@ -2020,6 +2020,22 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // RT-NATIVE UNLOCK-7: `__hx_arr_len(v)` → int HexaVal of an array's
+        // element count. The ARRAY payload (x1) IS the `HexaArr*` (union
+        // `.arr_ptr`); per runtime_core.c the struct is `{HexaVal* items;
+        // int len; int cap;}` — `len` is a 32-bit `int` at byte offset 8
+        // (NOT int64 — runtime.h's int64 decl is stale). A 32-bit `ldr w1`
+        // zero-extends it cleanly; a 64-bit load would fold `cap` into the
+        // high word ((cap<<32)|len). Box int. First struct-field-load leaf.
+        if s.op == "__hx_arr_len" && len(s.args) >= 1 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // v → x1 = HexaArr*
+            buf.push(_arm64_instr2("ldr", _arm64_op_reg("w1"),
+                             _arm64_op_label("[x1, #8]"), "__hx_arr_len: w1 = arr->len (int32)"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_arr_len: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // RT-NATIVE UNLOCK-6: `__hx_to_double(v)` → float HexaVal coercing
         // an int-or-float operand to double (dispatch core's mixed int/float
         // compare: `__hx_to_double(a) < __hx_to_double(b)`). BRANCHLESS via

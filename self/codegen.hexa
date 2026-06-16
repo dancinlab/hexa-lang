@@ -6186,6 +6186,10 @@ fn gen2_expr(node) {
                 let a0 = gen2_expr(node.args[0])
                 return "hexa_float(HX_IS_FLOAT(" + a0 + ") ? HX_FLOAT(" + a0 + ") : (double)HX_INT(" + a0 + "))"
             }
+            // RT-NATIVE UNLOCK-7: array element count (struct-field load).
+            if name == "__hx_arr_len" {
+                return "hexa_int(HX_ARR_LEN(" + gen2_expr(node.args[0]) + "))"
+            }
             if name == "__map_ptr_eq" {
                 return "hexa_bool((HX_MAP_TBL(" + gen2_expr(node.args[0]) + ") == HX_MAP_TBL(" + gen2_expr(node.args[1]) + ")))"
             }
