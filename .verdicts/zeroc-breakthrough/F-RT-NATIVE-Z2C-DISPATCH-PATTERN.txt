@@ -1,0 +1,24 @@
+F-RT-NATIVE-Z2C-DISPATCH-PATTERN — dispatch-core port verified: hexa_type_of native via @tag (5/5)
+date: 2026-06-16   domain: RT-NATIVE   milestone: Z2c (dispatch core, first verified port)
+
+WHY: Z2c (the C-authored runtime_core dispatch core — hexa_type_of/eq/truthy/add_slow/… + 954
+fns) is the bulk blocking literal zero-.c. UNLOCK-2 (@tag, __hx_tag) made HexaVal tags readable
+in native .hexa. This verdict proves the dispatch-core port PATTERN works end-to-end on the
+first + most central function.
+
+PORT (scripts/scratch/rt_native/type_of_port.hexa):
+  rt_type_of_native(v) = switch on __hx_tag(v) → type string, mirroring runtime_core.c
+  hexa_type_of's tag→string switch (TAG enum INT0 FLOAT1 BOOL2 STR3 VOID4 ARRAY5 MAP6 FN7 CHAR8
+  CLOSURE9 VALSTRUCT10 ENUM11). Pure .hexa, no C.
+
+VERIFICATION (c2, captured, aprime rebuilt with __hx_tag):
+  - native .s: rt_type_of_native uses `__hx_tag` INLINE (no `bl _hexa_type_of` for the native fn;
+    the 1 `bl _hexa_type_of` in the .s is the builtin used as the comparison oracle).
+  - RUN: rt_type_of_native(v) == type_of(v) [C builtin] for 42/3.14/true/"hi"/[1,2,3] → 5/5 MATCH.
+    exit(match_count) = 5.
+
+CONSEQUENCE: the Z2c dispatch core IS portable to native .hexa via @tag, byte-behavior-matching
+the C version. The full Z2c = port the rest (hexa_eq/truthy/to_string/add_slow + the 954fn,
+many tag-switch or arithmetic shaped) the same way, + integrate via the Z2a seed-link pattern
+(native-compile → .s seed → link into runtime.a, remove C defs), + byte-eq. The PATTERN is now
+proven on hexa_type_of; remaining is volume (954 fns) + integration, multi-session but unblocked.
