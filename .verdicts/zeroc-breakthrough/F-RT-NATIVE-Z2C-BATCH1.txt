@@ -1,0 +1,20 @@
+F-RT-NATIVE-Z2C-BATCH1 — dispatch core 3-fn native port (type_of/truthy/eq) 검증 + UNLOCK-2b 식별
+date: 2026-06-16   domain: RT-NATIVE   milestone: Z2c (dispatch core, 3 fns verified, 2 agents parallel)
+
+검증된 native 포트 (전부 __hx_tag dispatch, C와 byte-eq):
+  - rt_type_of_native  → C type_of  5/5  (int/float/bool/string/array) [F-...-Z2C-DISPATCH-PATTERN]
+  - rt_truthy_native   → C truthy  10/10 (0/1/42/true/false/""/hi/[]/[1]/#{})
+  - rt_eq_native       → C eq       8/8  (int↔float 강제·tag mismatch 포함)
+  scratch: type_of_port.hexa · truthy_port.hexa · eq_port.hexa (+ verify drivers).
+
+핵심 발견 (다음 unlock 정밀화): @tag(UNLOCK-2) 는 DISPATCH(태그 판별)만 native inline. LEAF 값연산
+  — int/float/str payload unbox + 비교 — 은 여전히 C 콜(`bl _hexa_eq`/`hexa_truthy`)로 떨어짐
+  (`__hx_int`/`__hx_float`/`__hx_str` 같은 unbox intrinsic 미존재). 그래서 위 포트들은 BEHAVIOR
+  는 C와 일치(검증)하나 leaf 레벨은 100% C-free 아님.
+  → UNLOCK-2b (신규): `__hx_int(v)`/`__hx_float(v)`/`__hx_str_ptr(v)` payload unbox intrinsic
+    (arm64_darwin _hv_load → x1(payload) raw; @tag 와 동형, x1 추출). 이게 서면 dispatch core 가
+    fully C-free. 구현 = UNLOCK-2 와 동일 패턴(STMT_CALL 특수케이스 + bind + codegen.hexa).
+
+VERDICT: 🟡 Z2c dispatch core 3-fn BEHAVIOR 검증(@tag 로 포팅가능 확정). 완전 C-free + 통합(seed-link
+  → runtime.a, C def 제거) + byte-eq 는 UNLOCK-2b(unbox intrinsic) 후 volume(954fn) 진행. 다음
+  진입점 = UNLOCK-2b 구현(__hx_int/float/str) → dispatch core fully-native 재검증 → 통합.
