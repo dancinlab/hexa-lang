@@ -1,0 +1,62 @@
+// VERIFIED 2026-06-16: asm & obj exit=2 (50 cells sum=3675 exact + reset OK).
+// arena_init/alloc/reset have ZERO bl into C malloc/arena/calloc/free.
+// = stateful native arena (global frontier cursor + O(1) reset), NO C shim.
+// RT-NATIVE Z3: a STATEFUL bump-pointer arena in pure .hexa with a global
+// frontier cursor — the structural equivalent of runtime_core.c's
+// hexa_arena_alloc (mmap slab + bump pointer + O(1) reset). NO C shim.
+// This is the building block that replaces the C arena body.
+
+// global arena state: base address + current bump offset + slab size.
+let mut g_arena_base: int = 0
+let mut g_arena_off: int = 0
+let mut g_arena_size: int = 0
+
+// initialize: mmap a slab, reset the cursor.
+fn arena_init(size: int) {
+    g_arena_base = __hx_syscall6(197, 0, size, 3, 4098, -1, 0)   // mmap RW ANON
+    g_arena_off = 0
+    g_arena_size = size
+}
+// bump-allocate `n` bytes (8-byte aligned), return the cell's base address.
+fn arena_alloc(n: int) -> int {
+    let aligned = (n + 7) / 8 * 8
+    let addr = g_arena_base + g_arena_off
+    g_arena_off = g_arena_off + aligned
+    return addr
+}
+// O(1) reset — rewind the cursor (objects logically freed in bulk).
+fn arena_reset() {
+    g_arena_off = 0
+}
+fn arena_teardown() {
+    __hx_syscall6(73, g_arena_base, g_arena_size, 0, 0, 0, 0)   // munmap
+}
+
+fn main() {
+    arena_init(65536)
+    // allocate 50 int-cells, write i*3, read back, sum.
+    let mut bases: [int] = []
+    let mut i = 0
+    while i < 50 {
+        let a = arena_alloc(8)
+        __hx_ptr_store64(a, 0, i * 3)
+        bases.push(a)
+        i = i + 1
+    }
+    let mut sum = 0
+    let mut j = 0
+    while j < 50 {
+        sum = sum + __hx_ptr_load64(bases[j], 0)
+        j = j + 1
+    }
+    // sum of i*3 for i in 0..49 = 3 * (49*50/2) = 3*1225 = 3675
+    // also test reset: after reset, alloc returns base again
+    arena_reset()
+    let r = arena_alloc(8)
+    let reset_ok = if r == g_arena_base { 1 } else { 0 }
+    arena_teardown()
+    let mut ok = 0
+    if sum == 3675 { ok = ok + 1 }
+    if reset_ok == 1 { ok = ok + 1 }
+    exit(ok)   // expect 2 = stateful arena (alloc+reset) works
+}
