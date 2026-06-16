@@ -1,0 +1,29 @@
+F-GOAL-MEASURE-CLARIFY — 2026-06-16
+═══════════════════════════════════════════════════════════════
+goal `ls self/*.c == ∅` 의 정확한 측정 방식 + 진짜 의미 확정.
+
+발견 (git ls-files / check-ignore, 캡처출력):
+- self/runtime.c + self/runtime_core.c 는 **git 추적 안 됨**(git ls-files self/*.c
+  = 5개, 전부 cuda/native wrapper; runtime.c/core.c 부재) + **.gitignore 매칭**
+  (git check-ignore 양성).
+- ∴ clean checkout(git, build 전) = ls self/*.c 에 runtime.c/core.c 없음(∅ 근접).
+  working tree(build 후) = restore_frozen_seeds 가 frozen C seed(blob 151c52c82)
+  생성 → 2개 출현.
+
+진짜 goal (c9 — gitignore 트릭 금지):
+- "self/runtime.c 가 이미 gitignored 니까 ∅" 는 **금지된 트릭**(메모리 명시).
+- 진짜 goal = **build 가 .c 를 생성/컴파일하지 않고 native runtime 을 쓰는 것**.
+  현재: build_aprime STAGE-0 restore_frozen_seeds → C seed 생성 → clang 컴파일
+  → runtime.a(runtime.o + rt_hi_native.o). C 런타임 의존 = 미달.
+- 즉 leg B = restore_frozen_seeds(C 생성)를 native runtime.a(aprime 가 .hexa 런타임
+  native 컴파일)로 대체 → build 후에도 self/*.c 미생성 = ∅.
+
+leg B 작업 (확정):
+- runtime.c/core.c 의 ~1190 fn 을 .hexa 로 재구현(or 기존 stdlib/runtime/*.hexa 확장)
+  → aprime native 컴파일 → native runtime.a → restore_frozen_seeds C-seed 경로 제거.
+- leg A 양 타깃 byte-eq 졸업(#3412/3432)으로 aprime native 컴파일 토대 완비.
+- 거대 다세션 전수. RT 프리미티브·arena·dispatch 메커니즘 전부 증명됨(이번 세션).
+
+NEXT: native runtime.a PoC — aprime 가 stdlib/runtime/*.hexa(이미 존재 다수)를
+native 컴파일 → rt_*.o → runtime.a(C runtime.o 없이) → aprime self-build 가
+C-seed 없이 동작하는지. 점진 fn 추가.
