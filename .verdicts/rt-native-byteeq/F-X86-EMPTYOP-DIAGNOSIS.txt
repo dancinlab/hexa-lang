@@ -1,0 +1,32 @@
+F-X86-EMPTYOP-DIAGNOSIS — 2026-06-16
+═══════════════════════════════════════════════════════════════
+x86_64 whole-compiler 잔여 16 에러(단일 클래스 unknown token = 빈 operand)
+의 진단 — root 를 `target_block` field val 까지 좁힘.
+
+증거 (flat_x86.s, darwin cross-assemble):
+- binop ==: `mov rsi, .LCstr1134(=target_block); call hexa_map_get;
+  mov r12, rax; cmp r12, ` ← RHS(args[1]) 빈 operand.
+- struct_lit: `mov rsi, .LCstr1134(=target_block); mov rdx, ` ← field val 빈.
+- .LCstr1134 = bytes 74 61 72 67 65 74 5f 62 6c 6f 63 6b 00 = "target_block".
+- 즉 둘 다 MStmt 의 `target_block` field VALUE 가 빈 operand (key=target_block,
+  val=빈). hir_to_mir.hexa 가 `MStmt { ..., target_block: tgt }`(line 616/988)
+  struct literal 로 MStmt 를 만들 때 그 tgt operand 가 빈.
+
+렌더 경로 (emit/asm.hexa:167 _fmt_operand):
+- reg kind → `_fmt_reg = op.reg.name`; name="" 이면 빈 문자열.
+- label kind → `_fmt_label`; label="" 이면 빈.
+- imm → `to_string(imm)`(빈 불가) · unknown → `<?kind?>`(빈 불가).
+- ∴ 빈 operand = op_reg(name="") OR op_label("").
+
+미규명 (코드리뷰상 빈값 경로 부재):
+- `_x86_op_resolve` local: not-spilled → `_x86_reg_lookup` → 항상 유효 reg
+  (`_x86_64_reg_for_local` fallback = slots[id%12], 빈 불가).
+- const_str: `_x86_collect_strs_from_stmt` 가 "" 도 .LCstrN 등록 → miss 없음.
+- ∴ resolve 가 op_reg("")/op_label("") 를 내는 경로가 코드상 보이지 않는데
+  asm 엔 빈 operand 존재 = MIR operand 의 실제 kind 를 덤프해야 확정 가능.
+
+NEXT (c2, tune-to-green 금지): emit/asm.hexa `_fmt_operand` 에 빈값 진단
+placeholder(reg.name/label 빈→`<EMPTY_kind>`) 임시 추가 → x86_64 whole-compiler
+emit → 빈 operand 의 정확한 LOperand kind 노출 → hir_to_mir 의 target_block
+operand 생성 OR _x86_op_resolve 의 해당 kind 처리 root 수정. arm64 무영향(빈
+operand 없음, leg A #3412 보존). 누적 진전: 52→16(단일 클래스), root=target_block field val.
