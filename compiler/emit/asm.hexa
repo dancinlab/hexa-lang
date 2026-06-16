@@ -89,7 +89,13 @@ fn _fmt_imm(target: string, imm: i64) -> string {
         // ARM Thumb-2 immediates: `#42` (same syntax as ARM64 / GAS .arm)
         return "#" + to_string(imm)
     }
-    // Intel x86 immediates: bare integer
+    // Intel x86 immediates: bare integer. RT-NATIVE #3430 root: `to_string`
+    // drops the sign for a negative i64, so a negative const_int (e.g. an
+    // MStmt `target_block: -7001`) rendered as an EMPTY operand (`mov rax,`),
+    // the whole-compiler unknown-token error class. Emit the sign explicitly —
+    // `mov rax, -7001` is valid x86. (0 - imm is safe for the small negative
+    // block-ids / sentinels in question.)
+    if imm < 0 { return "-" + to_string(0 - imm) }
     return to_string(imm)
 }
 
