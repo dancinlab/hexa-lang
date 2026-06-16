@@ -533,41 +533,12 @@ pub fn rt_pad_right(s: string, width: int) -> string {
     return s + bytes_to_str_raw(bytes)
 }
 
-// Step 3 cycle 50 — ASCII case conversion. Non-ASCII bytes pass through
-// unchanged (UTF-8 continuation bytes have high bit set, won't match
-// the 'a'-'z' or 'A'-'Z' range). Collect bytes into [int] then one-shot
-// `bytes_to_str_raw` so we avoid O(n²) string concat.
-pub fn rt_str_to_upper(s: string) -> string {
-    let n = byte_len(s)
-    let mut bytes: [int] = []
-    let mut i = 0
-    while i < n {
-        let b = s.byte_at(i)
-        if b >= 97 && b <= 122 {
-            bytes = bytes.push(b - 32)
-        } else {
-            bytes = bytes.push(b)
-        }
-        i = i + 1
-    }
-    return bytes_to_str_raw(bytes)
-}
-
-pub fn rt_str_to_lower(s: string) -> string {
-    let n = byte_len(s)
-    let mut bytes: [int] = []
-    let mut i = 0
-    while i < n {
-        let b = s.byte_at(i)
-        if b >= 65 && b <= 90 {
-            bytes = bytes.push(b + 32)
-        } else {
-            bytes = bytes.push(b)
-        }
-        i = i + 1
-    }
-    return bytes_to_str_raw(bytes)
-}
+// RT-NATIVE leg B Z2a (casefold/trim group) — rt_str_to_upper / rt_str_to_lower
+// / rt_str_trim MOVED to the self/runtime_hi.hexa SSOT. They now ship as native
+// (Darwin: self/native/runtime_hi_native.s seed) or hexat-transpiled
+// (linux: self/runtime_hi_gen.c) rt_str_* — zero C, no duplicate symbol with
+// the native seed at the Darwin link. trim_start/trim_end stay here (not yet
+// in the runtime_hi.hexa seed group).
 
 // Step 3 cycle 49 — strip trailing whitespace (mirror of trim_start).
 pub fn rt_str_trim_end(s: string) -> string {
@@ -584,31 +555,9 @@ pub fn rt_str_trim_end(s: string) -> string {
     return s.substring(0, b_end)
 }
 
-// Step 3 cycle 49 — strip both leading and trailing whitespace.
-// Could be implemented as trim_end(trim_start(s)) but inlining halves
-// the string allocations.
-pub fn rt_str_trim(s: string) -> string {
-    let n = byte_len(s)
-    let mut a = 0
-    while a < n {
-        let b = s.byte_at(a)
-        if b == 32 || b == 9 || b == 10 || b == 13 {
-            a = a + 1
-        } else {
-            break
-        }
-    }
-    let mut b_end = n
-    while b_end > a {
-        let b = s.byte_at(b_end - 1)
-        if b == 32 || b == 9 || b == 10 || b == 13 {
-            b_end = b_end - 1
-        } else {
-            break
-        }
-    }
-    return s.substring(a, b_end)
-}
+// RT-NATIVE leg B Z2a (casefold/trim group): rt_str_trim MOVED to the
+// self/runtime_hi.hexa SSOT (see the to_upper/to_lower note above). It now
+// ships native (Darwin seed) / hexat-transpiled (linux gen.c) as rt_str_*.
 
 // Step 3 cycle 48 — strip leading whitespace (space, tab, LF, CR).
 // Replaces the C-direct rt_str_trim_start in self/runtime.c:2970 when

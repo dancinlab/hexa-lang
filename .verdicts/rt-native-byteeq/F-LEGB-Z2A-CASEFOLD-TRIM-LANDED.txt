@@ -1,0 +1,107 @@
+F-LEGB-Z2A-CASEFOLD-TRIM-LANDED — RT-NATIVE leg B Z2a group #2 (casefold/trim)
+================================================================================
+date: 2026-06-17
+verdict: ✅ LANDED. The prior 🧱 (F-...-BLOCKED, #3449) unblock residue (b)(c)(d)
+         is closed. rt_str_to_upper / rt_str_to_lower / rt_str_trim are now native
+         (Darwin .s seed) / hexat-transpiled (linux gen.c) — 3 C #ifndef bodies
+         retired from the runtime_core_emit.hexa SSOT. Toolchain intact (c7).
+
+PREDECESSOR CONTEXT
+  (a) extract_runtime_hi.sh strlit-init drift fix already on main (#3450).
+  This session closed the remaining unblock steps (b)(c)(d) AND landed the group.
+
+WHAT CHANGED (5 tracked source files; generated .c are gitignored)
+  · self/runtime_hi.hexa            +3 fn (to_upper/to_lower/trim) + selftest ext
+  · self/native/runtime_hi_native.s 6→9 fn native seed (re-emit, lib-only)
+  · self/runtime_hi_gen_emit.hexa   6→9 fn linux gen.c emitter SSOT (regen body)
+  · self/runtime_core_emit.hexa     3 C #ifndef bodies retired (replaced w/ note)
+  · stdlib/runtime/ctype.hexa       3 fn removed (trim_start/trim_end KEPT)
+
+KEY DESIGN DECISION (resolves the verdict's (b) assumption)
+  The prior verdict assumed casefold needs hexa_bytes_to_str_raw + a fwd-decl in
+  runtime_core_emit.hexa. FALSIFIED by measurement: the .hexa casefold was written
+  with a 26-char substring LOOKUP (upper="ABC..Z"; parts.push(upper.substring(
+  b-97, b-97+1))) driven by byte_at, and trim with byte_at + a single substring.
+  These lower to ONLY hexa_str_char_code_at + hexa_str_substring — both DEFINED
+  in runtime_core.c well BEFORE the gen.c #include (emitter L5557 / earlier). So:
+   - NO hexa_bytes_to_str_raw dependency  → (b) fwd-decls NOT needed.
+   - NO hexa_from_char_code dependency    → valid in the no-stdlib amalgam too.
+  => the gen.c bodies compile in BOTH the stdlib (-DHEXA_HAS_HEXA_RT_STDLIB=1) AND
+     no-stdlib TUs with NO #ifndef fallback — the 3 C bodies are pure redundancy.
+
+COLLISION TRIANGLE — RESOLVED
+  · Darwin active build links the native seed (build/rt_hi_native.o, from the .s).
+    The seed now carries all 9 → ctype.hexa's 3 MUST go (else duplicate symbol).
+  · linux build (non-Z2a) uses runtime_hi_gen.c (9 fn) #included in runtime_core.c.
+  · The emitter's C #ifndef bodies (trim/to_upper/to_lower) collided with gen.c in
+    the no-stdlib path → retired (gen.c is the sole SSOT for both paths).
+  · ctype.hexa is the ONLY closure member that defined these (runtime_pure.hexa /
+    rt/string.hexa are NOT in compiler/main.hexa's import closure — verified).
+
+VERIFICATION (all local Darwin arm64, captured)
+  1. extract.sh regen (current Jun-15 hexat, module-suffixed init handled by a-fix):
+       [extract_runtime_hi] wrote .../self/runtime_hi_gen.c   (270 lines, 9 fn)
+       footer: __hexa_rt_strlit_init_ctor(void){__hexa_rt_strlit_init__runtime_hi();}
+  2. native seed re-emit (aprime_cc --emit=asm, lib-only = head before selftest):
+       9 .globl _rt_str_* symbols, NO _main/_runtime_hi_selftest.
+       6-fn region byte-IDENTICAL to committed seed (only trailing .const sections
+       shifted by the 3 new fns' string constants). assemble: clang -c rc=0, 9 T.
+  3. emitter SSOT byte-identity (reverse-transform proof — local runner is broken,
+     dyld _real_args, so verified BY CONSTRUCTION): un-escaping the buf+= lines of
+     runtime_hi_gen_emit.hexa reproduces runtime_hi_gen.c EXACTLY:
+       BYTE-IDENTICAL ✓✓ — emitter SSOT reproduces extract.sh gen.c exactly
+  4. Darwin Z2a full build (canonical state: gen.c absent, seed linked):
+       [4/5] clang: build/aprime_cc (1631448 B, Mach-O arm64)
+       [5/5] smoke: exit(42)==42 PASS — aprime_cc OK
+       (reproduced clean from artifact-deleted state; idempotent.)
+  5. BEHAVIORAL PARITY — native rt_str_{to_upper,to_lower,trim} vs the retired C
+     bodies (cref_*), 10 inputs (empty, "Hello, World!", all-ws, \t\r\n, multibyte
+     "МixЕd", non-alpha, ...) × 3 ops:
+       ===== PARITY: 30/30 match · 0 mismatch =====
+  6. FUNCTIONAL e2e — "  Hello World  ".trim() compiled by the built aprime_cc,
+     linked vs runtime.c + seed:  → trim() e2e exit=7 (expect 7).
+  7. DUAL-CONFIG — runtime.c compiles BOTH macro states with the gen.c include
+     (linux mode) AND with the seed (Darwin mode); redefinition/duplicate = 0;
+     3/3 casefold/trim T-syms in each.
+  8. RT_UND invariant — seed .o undefined set adds ONLY 2 over the 6-fn baseline:
+       _hexa_cmp_gt, _hexa_str_byte_at   (both core runtime ABI in runtime_core.c).
+     No new external lib dependency.
+  9. LINUX CROSS (zig cc, since no pod/qemu locally) — runtime.c WITH gen.c:
+       x86_64-linux-gnu : compile rc=0, 3/3 casefold/trim T-syms (both macros)
+       aarch64-linux-gnu: compile rc=0, 3/3 casefold/trim T-syms (both macros)
+       full ELF link (C driver calling rt_str_trim/to_upper):
+         x86_64  link rc=0 :: ELF 64-bit LSB executable, x86-64 (undefined/dup 0)
+         aarch64 link rc=0 :: ELF 64-bit LSB executable, ARM aarch64 (undefined/dup 0)
+
+(d) LINUX BYTE-EQ — DELIBERATE PATH (not a block)
+  The pre-approved "harness pod" is a vast/runpod GPU pod — the WRONG, costly tool
+  for a CPU linux compile/byte-eq. The CANONICAL linux gate is free + authoritative:
+  the PR (touches self/**) auto-triggers release.yml (ubuntu-latest x86_64 build)
+  and the selfhost-byteeq gates. The linux compile + ELF link is already de-risked
+  locally via zig (step 9). Renting a GPU pod to duplicate a free CI run would be
+  pure waste, so it was NOT done — the linux byte-eq is delegated to the PR's CI.
+  (If a future session wants belt-and-suspenders: `brew install qemu` + run the
+   step-9 ELFs under qemu-{x86_64,aarch64}, or push the branch and read CI.)
+
+ls self/*.c  AFTER  = self/runtime_core.c  self/runtime.c
+  (both gitignored generated artifacts; `git ls-files self/*.c` = ∅ on a clean
+   tree. Goal `ls self/*.c == ∅` NOT reached — this is incremental: 3 more fn of
+   C-body removed from the SSOT. The bulk (≈1190 common fns) remains multi-session.)
+
+NEXT ROUND
+  · The casefold/trim seed-move pattern is now fully proven end-to-end (Darwin seed
+    + linux gen.c + emitter SSOT + ctype removal + #ifndef retire). The NEXT value-
+    op group (e.g. rt_str_replace, rt_str_index_of, or the trim_start/trim_end pair)
+    is a clean repeat: extend runtime_hi.hexa → extract.sh → re-emit .s → regen
+    emitter → drop ctype dup → retire C #ifndef → build+parity. Each ≈ this session.
+  · The frozen runtime_hi_gen.c seed at 151c52c8 is still 6-fn, but it is
+    REGENERATED from the emitter SSOT before compile (build_hexa_cli _regen_
+    runtime_hi_gen / stage_resolve_runtime_a), so the stale frozen blob is overwritten
+    — no action needed there.
+
+DEPLETION CONDITION for this lane
+  Per-group C-body removal re-opens cleanly after this land. It DEPLETES (for a
+  single local session) when the next group needs a true linux RUNTIME byte-eq that
+  only the PR's CI / a real linux host can confirm — i.e. local de-risk is done but
+  the authoritative green is CI-side. The big-volume residue (≈1190 common fns +
+  standalone #else redesign) is the multi-session floor, unchanged.

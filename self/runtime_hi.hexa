@@ -125,6 +125,71 @@ fn rt_str_center(s: string, width: int, pad: string) -> string {
     return parts.join("")
 }
 
+// ── to_upper / to_lower (runtime.c L8428/L8435 대응) ────────────────
+// ASCII-only case fold. Per-byte scan via byte_at (raw 0-255). A byte in the
+// fold range is remapped through a 26-char lookup table (substring slice);
+// all other bytes pass through unchanged as a 1-byte substring. Only
+// byte_at + substring + join — the same leaf builtins the seed group uses
+// (both present in runtime_core.c), so no new C dependency (no bytes_to_str_raw).
+fn rt_str_to_upper(s: string) -> string {
+    let upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    let n = len(s)
+    let mut parts = []
+    let mut i = 0
+    while i < n {
+        let b = s.byte_at(i)
+        if b >= 97 && b <= 122 {
+            parts.push(upper.substring(b - 97, b - 97 + 1))
+        } else {
+            parts.push(s.substring(i, i + 1))
+        }
+        i = i + 1
+    }
+    return parts.join("")
+}
+
+fn rt_str_to_lower(s: string) -> string {
+    let lower = "abcdefghijklmnopqrstuvwxyz"
+    let n = len(s)
+    let mut parts = []
+    let mut i = 0
+    while i < n {
+        let b = s.byte_at(i)
+        if b >= 65 && b <= 90 {
+            parts.push(lower.substring(b - 65, b - 65 + 1))
+        } else {
+            parts.push(s.substring(i, i + 1))
+        }
+        i = i + 1
+    }
+    return parts.join("")
+}
+
+// ── trim (runtime.c L8365) — strip leading/trailing ws (space/\t/\n/\r) ──
+// byte_at whitespace scan + a single substring slice (no allocation churn).
+fn rt_str_trim(s: string) -> string {
+    let n = len(s)
+    let mut start = 0
+    while start < n {
+        let b = s.byte_at(start)
+        if b == 32 || b == 9 || b == 10 || b == 13 {
+            start = start + 1
+        } else {
+            break
+        }
+    }
+    let mut end_pos = n
+    while end_pos > start {
+        let b = s.byte_at(end_pos - 1)
+        if b == 32 || b == 9 || b == 10 || b == 13 {
+            end_pos = end_pos - 1
+        } else {
+            break
+        }
+    }
+    return s.substring(start, end_pos)
+}
+
 // ── M1-lite smoke probe (main은 exit 0, functions 존재 증명) ────────
 // 실제 대사(cutover) 는 다음 세션. 이 파일 자체는 interp 컴파일 검증용.
 // 호출부 없이도 hexat 가 각 함수를 HexaVal-반환형으로 emit 하는지 확인.
@@ -134,7 +199,11 @@ fn runtime_hi_selftest() -> int {
     let c = rt_str_repeat("ab", 3)             // "ababab"
     let d = rt_str_center("hi", 6, "-")        // "--hi--"
     let e = rt_str_lines("a\nb\nc")            // ["a","b","c"]
-    if a == "007" && b == "700" && c == "ababab" && d == "--hi--" && len(e) == 3 {
+    let f = rt_str_to_upper("Hello, World!")   // "HELLO, WORLD!"
+    let g = rt_str_to_lower("Hello, World!")   // "hello, world!"
+    let h = rt_str_trim("  hi \t\n")           // "hi"
+    if a == "007" && b == "700" && c == "ababab" && d == "--hi--" && len(e) == 3
+        && f == "HELLO, WORLD!" && g == "hello, world!" && h == "hi" {
         return 0
     }
     return 1
