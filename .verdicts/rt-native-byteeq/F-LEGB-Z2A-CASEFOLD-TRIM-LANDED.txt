@@ -105,3 +105,34 @@ DEPLETION CONDITION for this lane
   only the PR's CI / a real linux host can confirm — i.e. local de-risk is done but
   the authoritative green is CI-side. The big-volume residue (≈1190 common fns +
   standalone #else redesign) is the multi-session floor, unchanged.
+
+────────────────────────────────────────────────────────────────
+CI-CAUGHT REGRESSION + FIX (2026-06-17, PR #3451 first run)
+  The PR's own faithful-nobaseline (linux-x86_64) gate went RED — exactly the
+  (d) value the local zig de-risk could NOT reach:
+    hexa_cc.c: undefined reference to `rt_str_to_upper'
+    hexa_cc.c: undefined reference to `rt_str_trim'   → collect2 ld exit 1
+  (darwin-arm64 faithful failed on OP-34 dt_exp/dt_erf fold gate — PRE-EXISTING,
+   RED on the base commit f6b999a4 too; linux-x86_64 was GREEN on base = real regress.)
+
+  ROOT CAUSE: tool/stage_resolve_runtime_a::build_runtime_a_from_source regenerated
+  runtime_core.c from the emitter (C #ifndef bodies for the 3 fns RETIRED) but did
+  NOT regenerate runtime_hi_gen.c — so on the linux (non-Z2a) path runtime.a was
+  built from {SSOT runtime_core.c, no C bodies} #include {FROZEN 6-fn gen.c seed
+  (151c52c8, restore_frozen_seeds)} → casefold/trim 3 fn missing from runtime.a →
+  app (hexa_cc) link fails. (My local zig test compiled runtime.c WITH the freshly
+  regenerated 9-fn gen.c, so it never saw the frozen-seed gap — the pipeline did.)
+
+  FIX: factored _resolve_hexa_runner() (shared by both emitter regens, no drift) +
+  added regen_runtime_hi_gen_from_emitter() (mirrors regen_runtime_core_from_emitter:
+  STRICTLY-OPTIONAL, NO-OP-SAFE — no runner/emitter ⇒ in-tree .c kept). It runs in
+  build_runtime_a_from_source on the non-Z2a (linux C-fallback) branch only; the Z2a
+  (Darwin native-seed) branch strips the include so it's skipped. Verified: bash -n
+  OK; new emitter transpiles via hexat (valid hexa); emitter primitive surface
+  (exec/real_args/println/exit) == runtime_core_emit.hexa (proven edge-runnable on
+  CI); Darwin rebuild smoke exit42 PASS (else-branch correctly skipped). The CI
+  re-run on the pushed fix is the authoritative linux green.
+
+  LESSON: the frozen 6-fn runtime_hi_gen.c seed is the stale-fragment trap (same
+  class as the f64<->bits / exec-leak seams reconcile_runtime_c_ssot_dups guards) —
+  any rt_str_* SSOT growth MUST be paired with a gen.c regen before runtime.a compile.
