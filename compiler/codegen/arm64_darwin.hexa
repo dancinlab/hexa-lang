@@ -1938,6 +1938,24 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // RT-NATIVE UNLOCK-2c: signed-i64 payload arithmetic (__hx_payload_add/
+        // sub/mul) → result int HexaVal {TAG_INT, a.pl OP b.pl}, INLINE (add/sub/
+        // mul, no `bl _hexa_add`). Unblocks the native dispatch core's int-int
+        // arithmetic leaves (hexa_add_slow/sub/mul fast path).
+        if (s.op == "__hx_payload_add" || s.op == "__hx_payload_sub"
+            || s.op == "__hx_payload_mul") && len(s.args) >= 2 {
+            let mut _aop = "add"
+            if s.op == "__hx_payload_sub" { _aop = "sub" }
+            if s.op == "__hx_payload_mul" { _aop = "mul" }
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // a → x1=payload
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // b → x3=payload
+            buf.push(_arm64_instr3(_aop, _arm64_op_reg("x1"), _arm64_op_reg("x1"),
+                             _arm64_op_reg("x3"), s.op + ": x1 = a.pl " + _aop + " b.pl"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), s.op + ": TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // has_key(m, key) special: runtime ABI is
         // hexa_bool(hexa_map_contains_key(HexaVal m, const char* key))
         // (codegen_c2:4302). key is a HexaVal var → hexa_to_cstring it.
