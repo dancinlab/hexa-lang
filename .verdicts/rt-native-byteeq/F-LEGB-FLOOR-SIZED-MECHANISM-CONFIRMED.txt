@@ -1,0 +1,27 @@
+F-LEGB-FLOOR-SIZED-MECHANISM-CONFIRMED (2026-06-16)
+
+leg B (ls self/*.c == ∅) 정밀 경계 + 메커니즘 확정. 데모 아님 — 구조 측정.
+
+[현황 측정]
+- self/*.c = runtime.c(755KB, system-include heavy) + runtime_core.c(8082L/375KB)
+  둘 다 gitignored 생성물; restore_frozen_seeds 가 frozen blob 151c52c82 에서 복원
+  (SSOT emitter 없는 rustc-stage0 패턴 부트스트랩 시드).
+- runtime_core.c: 이미 36 #ifdef HEXA_HAS_HEXA_RT_STDLIB native 위임 분기 + 80 #else
+  (standalone C body).
+
+[irreducible floor = 작음]
+- syscall/asm 8 (→ __hx_syscall0/6 intrinsic 으로 표현 가능, 구축됨)
+- libm extern 10 (cos/sin/exp/log/pow/sqrt — CLAUDE.md "stdlib trig=libm" extern FFI 허용)
+- HexaVal struct/union def 15 (substrate; self/runtime.h git-tracked 헤더로 표현 가능)
+- 나머지 ~580 fn = dispatch/value-op 로직 = 포팅 대상(볼륨).
+
+[메커니즘 = 증명·작동 중 (Z2a-done)]
+- stage_resolve_runtime_a 에 HEXA_ZEROC_RT_HI=1 경로 wired: build/rt_hi_native.o 를
+  ar 로 runtime.a 에 넣고 runtime_core.c 의 #include "runtime_hi_gen.c" 를 sed 제거.
+  = C→native-obj 치환 패턴 PROVEN. rt_str_* 그룹 이미 native.
+- 본 세션 코어 native 18/591 (truthy·predicate7·cmp/arith/eq10) = 이 패턴의 ar 후보.
+
+[결론]
+leg B = 연구 벽(closed-negative) 아님. 검증된 Z2a 메커니즘의 VOLUME(~580 fn 포팅 +
+standalone 재설계로 #else 80블록 제거) = 다세션 누적. floor 는 작고 표현가능.
+"거대 미지수" → "경계 확정·메커니즘 증명·~580fn 다세션" 으로 전환(c9 honest).
