@@ -6202,6 +6202,12 @@ fn gen2_expr(node) {
             if name == "__hx_ptr_load64" {
                 return "hexa_int(*(int64_t*)((char*)(intptr_t)HX_INT(" + gen2_expr(node.args[0]) + ") + HX_INT(" + gen2_expr(node.args[1]) + ")))"
             }
+            if name == "__hx_ptr_store32" {
+                return "({ int64_t __pp = HX_INT(" + gen2_expr(node.args[0]) + "); *(int32_t*)((char*)(intptr_t)__pp + HX_INT(" + gen2_expr(node.args[1]) + ")) = (int32_t)HX_INT(" + gen2_expr(node.args[2]) + "); hexa_int(__pp); })"
+            }
+            if name == "__hx_ptr_load32" {
+                return "hexa_int((int64_t)*(int32_t*)((char*)(intptr_t)HX_INT(" + gen2_expr(node.args[0]) + ") + HX_INT(" + gen2_expr(node.args[1]) + ")))"
+            }
             if name == "__map_ptr_eq" {
                 return "hexa_bool((HX_MAP_TBL(" + gen2_expr(node.args[0]) + ") == HX_MAP_TBL(" + gen2_expr(node.args[1]) + ")))"
             }

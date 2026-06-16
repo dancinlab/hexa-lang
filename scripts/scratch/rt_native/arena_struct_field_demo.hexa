@@ -1,0 +1,19 @@
+// VERIFIED 2026-06-16: asm & obj exit=3 — HexaArr layout {ptr@0(i64),
+// len@8(i32), cap@12(i32)} written into an mmap arena and read back exact
+// (999/7/16). Mixed 64/32-bit struct-field R/W with NO C struct-access shim.
+fn main() {
+  let p = __hx_syscall6(197, 0, 4096, 3, 4098, -1, 0)   // mmap
+  // simulate a HexaArr {ptr@0, len@8(i32), cap@12(i32)} in the arena
+  __hx_ptr_store64(p, 0, 999)       // items ptr (fake)
+  __hx_ptr_store32(p, 8, 7)         // len = 7  (32-bit)
+  __hx_ptr_store32(p, 12, 16)       // cap = 16 (32-bit)
+  println(__hx_ptr_load64(p, 0))    // 999
+  println(__hx_ptr_load32(p, 8))    // 7
+  println(__hx_ptr_load32(p, 12))   // 16
+  let mut ok = 0
+  if __hx_payload_eq(__hx_ptr_load64(p, 0), 999) { ok = ok + 1 }
+  if __hx_payload_eq(__hx_ptr_load32(p, 8), 7)   { ok = ok + 1 }
+  if __hx_payload_eq(__hx_ptr_load32(p, 12), 16) { ok = ok + 1 }
+  __hx_syscall6(73, p, 4096, 0, 0, 0, 0)
+  exit(ok)   // expect 3 = mixed 64/32-bit struct field R/W works
+}
