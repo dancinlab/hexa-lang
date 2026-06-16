@@ -44,3 +44,9 @@ AUTHORITATIVE JUDGE: CI faithful-nobaseline (linux-x86_64 + linux-arm64 +
   (c9: self-report 아닌 CI 출력이 증거).
 
 STATUS: CANDIDATE — awaiting CI faithful-nobaseline 3-job verdict.
+
+
+--- LANDED UPDATE ---
+LANDED (#3457, merge e9bf3b872) — CI faithful-nobaseline FULL GREEN.
+  run 27644231452 (SHA 3a0dbf4): linux-x86_64+linux-arm64+darwin-arm64 전부 success, non-success 0.
+  awk-synth 패턴 2번째 그룹 첫시도 green (casefold #3455 에 이어). 패턴 신뢰성 확정.
