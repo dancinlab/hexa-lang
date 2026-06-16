@@ -1879,6 +1879,20 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         return buf
     }
     if s.kind == _STMT_CALL {
+        // RT-NATIVE UNLOCK-2: `__hx_tag(v)` native tag-read intrinsic — read
+        // the HexaVal tag (the lo eightbyte = x0 of the x0:x1 pair) and box it
+        // as an int, INLINE (no runtime call). Lets `.hexa` discriminate tags
+        // natively (hexa_type_of/eq/truthy port → Z2c dispatch core) instead of
+        // `bl _hexa_type_of`. Result = {tag:TAG_INT(0), payload: v.tag}.
+        if s.op == "__hx_tag" && len(s.args) >= 1 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // v → x0=tag, x1=payload
+            buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"),
+                             _arm64_op_reg("x0"), "__hx_tag: payload = v.tag"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_tag: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // has_key(m, key) special: runtime ABI is
         // hexa_bool(hexa_map_contains_key(HexaVal m, const char* key))
         // (codegen_c2:4302). key is a HexaVal var → hexa_to_cstring it.

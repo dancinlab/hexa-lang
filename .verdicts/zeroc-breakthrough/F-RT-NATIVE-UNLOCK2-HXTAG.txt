@@ -1,0 +1,26 @@
+F-RT-NATIVE-UNLOCK2 — @tag native intrinsic: `__hx_tag(v)` reads HexaVal tag inline (no runtime call)
+date: 2026-06-16   domain: RT-NATIVE   unlock: UNLOCK-2 (Z2b/Z2c dispatch-core)
+
+WHY: porting hexa_type_of/eq/truthy (the Z2c dispatch core) to native .hexa needs the HexaVal
+tag readable in .hexa. Before: `.hexa` tag-discrimination (`type_of`/`==`/truthy) lowered to
+`bl _hexa_type_of` (C). `__hx_tag` makes it a native inline read.
+
+IMPLEMENTATION (3 files):
+  - compiler/codegen/arm64_darwin.hexa: STMT_CALL special-case `__hx_tag(v)` → `_hv_load` v into
+    x0(tag):x1(payload), then `{tag:TAG_INT(0), payload: v.tag(x0)}` — INLINE (mov x1,x0; movz x0,#0),
+    no `bl`. Result is an int HexaVal whose value is v's tag.
+  - compiler/check/bind.hexa: `__hx_tag` added to the __-builtin allowlist (else HX2001 undefined).
+  - self/codegen.hexa: C-transpile path `__hx_tag` → `hexa_int((int64_t)HX_TAG(v))`.
+
+VERIFICATION (c2, captured, aprime rebuilt):
+  - native .s: `mov x1, x0 ; __hx_tag: payload = v.tag` + `movz x0, #0 ; __hx_tag: TAG_INT` —
+    0 runtime calls (no `bl _hexa_type_of`).
+  - VALUES (via `exit(__hx_tag(v))`, which extracts the int payload): "hi"→3 (TAG_STR), 42→0
+    (TAG_INT), 3.14→1 (TAG_FLOAT), true→2 (TAG_BOOL). ALL CORRECT.
+  - FIXPOINT: aprime_u2 vs aprime_cc_z2 byte-identical .s 3/3 → gen3≡gen4 PRESERVED (no regression).
+  - (note: a `return __hx_tag(v)` test is misleading — main-return puts the HexaVal in x0:x1 and
+    the exit path reads x0=tag=0; `exit()` is the correct probe as it reads the payload.)
+
+VERDICT: 🟢 UNLOCK-2 DONE. `.hexa` can now read HexaVal tags natively inline. Next: port
+hexa_type_of (switch on `__hx_tag(v)` → type string), then hexa_eq/truthy, then the rest of the
+runtime_core dispatch (Z2c) using the Z2a seed-link integration pattern.
