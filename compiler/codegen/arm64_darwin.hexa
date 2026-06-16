@@ -1919,6 +1919,25 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // RT-NATIVE UNLOCK-2b ext: signed-i64 payload relational compares
+        // (__hx_payload_lt/gt/le/ge) — `cmp x1,x3; cset x0,<cond>` → bool, INLINE.
+        // Unblocks the native dispatch core's hexa_cmp_lt/gt/le/ge int leaves.
+        if (s.op == "__hx_payload_lt" || s.op == "__hx_payload_gt"
+            || s.op == "__hx_payload_le" || s.op == "__hx_payload_ge") && len(s.args) >= 2 {
+            let mut _pcond = "lt"
+            if s.op == "__hx_payload_gt" { _pcond = "gt" }
+            if s.op == "__hx_payload_le" { _pcond = "le" }
+            if s.op == "__hx_payload_ge" { _pcond = "ge" }
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // a → x1=payload
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // b → x3=payload
+            buf.push(_arm64_instr2("cmp", _arm64_op_reg("x1"),
+                             _arm64_op_reg("x3"), s.op + ": cmp payloads"))
+            buf.push(_arm64_instr2("cset", _arm64_op_reg("x0"),
+                             _arm64_op_label(_pcond), s.op + ": x0 = (a.pl " + _pcond + " b.pl)"))
+            buf = _emit_bool_box(buf, s.op + ": box bool")
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // has_key(m, key) special: runtime ABI is
         // hexa_bool(hexa_map_contains_key(HexaVal m, const char* key))
         // (codegen_c2:4302). key is a HexaVal var → hexa_to_cstring it.
