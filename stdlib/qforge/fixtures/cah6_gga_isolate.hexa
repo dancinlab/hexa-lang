@@ -1,0 +1,108 @@
+// cah6_gga_isolate.hexa — isolate qforge_scf_pw_gga_spin on the CaH6 basis (residual-3).
+// Run: HEXA_LANG="$PWD" hexa run --no-sentinel stdlib/qforge/fixtures/cah6_gga_isolate.hexa <npw> <grid>
+use "stdlib/qforge/gga_scf"
+use "stdlib/qforge/upf"
+
+let DECK = "/Users/mini/dancinlab/demiurge/exports/rtsc/decks/CaH6_NC"
+
+fn main() {
+    let av = args()
+    let NPW = if len(av) > 1 { to_int(av[1]) } else { 64 }
+    let G3  = if len(av) > 2 { to_int(av[2]) } else { 16 }
+    let ca = upf_parse(DECK + "/pseudo/Ca_ONCV_PBE_sr.upf")
+    let h  = upf_parse(DECK + "/pseudo/H_ONCV_PBE_sr.upf")
+    if !ca.ok { println("FAIL Ca: " + ca.error) ; return }
+    if !h.ok  { println("FAIL H: " + h.error) ; return }
+    let zca = ca.header.z_valence ; let zh = h.header.z_valence
+    let nelec = to_int(zca + 6.0 * zh) ; let nocc = nelec / 2
+    let a = 6.4640 ; let ha = 0.5 * a ; let omega = a * a * a * 0.5
+    let tpa = 6.28318530717958647692 / a
+    let b1 = [0.0, tpa, tpa] ; let b2 = [-tpa, 0.0, tpa] ; let b3 = [-tpa, -tpa, 0.0]
+    let hf = [0.25, 0.50, 0.00,  0.50, 0.00, 0.25,  0.00, 0.25, 0.50,
+              0.75, 0.50, 0.00,  0.50, 0.00, 0.75,  0.00, 0.75, 0.50]
+    let a1 = [ha, ha, ha] ; let a2 = [-ha, ha, ha] ; let a3 = [-ha, -ha, ha]
+    let mut poss: [float] = [0.0, 0.0, 0.0]
+    let mut ih = 0
+    while ih < 6 {
+        let f1 = hf[ih*3] ; let f2 = hf[ih*3+1] ; let f3 = hf[ih*3+2]
+        poss.push(f1*a1[0]+f2*a2[0]+f3*a3[0])
+        poss.push(f1*a1[1]+f2*a2[1]+f3*a3[1])
+        poss.push(f1*a1[2]+f2*a2[2]+f3*a3[2])
+        ih = ih + 1
+    }
+    // build lowest-|G|² NPW basis (carry exact integer millers — BCC B is singular).
+    let M = 4
+    let mut gall: [float] = [] ; let mut g2all: [float] = [] ; let mut mall: [int] = []
+    let mut gi = -M
+    while gi <= M { let mut gj = -M
+        while gj <= M { let mut gk = -M
+            while gk <= M {
+                let gx = to_float(gi)*b1[0]+to_float(gj)*b2[0]+to_float(gk)*b3[0]
+                let gy = to_float(gi)*b1[1]+to_float(gj)*b2[1]+to_float(gk)*b3[1]
+                let gz = to_float(gi)*b1[2]+to_float(gj)*b2[2]+to_float(gk)*b3[2]
+                gall.push(gx) ; gall.push(gy) ; gall.push(gz)
+                mall.push(gi) ; mall.push(gj) ; mall.push(gk)
+                g2all.push(gx*gx+gy*gy+gz*gz) ; gk = gk + 1
+            } gj = gj + 1 } gi = gi + 1 }
+    let ntot = len(g2all)
+    let mut gvecs: [float] = [] ; let mut millers: [int] = []
+    let mut used: [int] = [] ; let mut u = 0 ; while u < ntot { used.push(0) ; u = u + 1 }
+    let mut picked = 0
+    while picked < NPW {
+        let mut best = -1 ; let mut bv = 1.0e30 ; let mut t = 0
+        while t < ntot { if used[t] == 0 { if g2all[t] < bv { bv = g2all[t] ; best = t } } ; t = t + 1 }
+        if best < 0 { break }
+        used[best] = 1
+        gvecs.push(gall[best*3]) ; gvecs.push(gall[best*3+1]) ; gvecs.push(gall[best*3+2])
+        millers.push(mall[best*3]) ; millers.push(mall[best*3+1]) ; millers.push(mall[best*3+2])
+        picked = picked + 1
+    }
+    let n = len(gvecs) / 3
+    let nspec = 2
+    let mut rs: [float] = [] ; let mut rabs: [float] = [] ; let mut vlocs: [float] = []
+    let mut i = 0
+    while i < len(ca.r) { rs.push(ca.r[i]) ; rabs.push(ca.rab[i]) ; vlocs.push(ca.vloc[i]) ; i = i + 1 }
+    i = 0
+    while i < len(h.r) { rs.push(h.r[i]) ; rabs.push(h.rab[i]) ; vlocs.push(h.vloc[i]) ; i = i + 1 }
+    let mlens = [len(ca.r), len(h.r)] ; let zs = [zca, zh]
+    let palens = [1, 6]
+    let mut ef: [float] = [] ; let mut ei: [int] = []
+    // FULL nonlocal KB projectors (mirror the front-end staging) — the real vertex path.
+    let mut betas: [float] = [] ; let mut lsv: [int] = [] ; let mut dij: [float] = []
+    let mut nprojs: [int] = [] ; let mut blens: [int] = [] ; let mut dlens: [int] = []
+    let ups = [ca, h]
+    let mut su = 0
+    while su < 2 {
+        let upx = ups[su]
+        let npx = upx.header.number_of_proj
+        nprojs.push(npx)
+        if npx > 0 {
+            let mut bi = 0
+            while bi < len(upx.betas) { betas.push(upx.betas[bi]) ; bi = bi + 1 }
+            blens.push(len(upx.betas))
+            let mut li = 0
+            while li < len(upx.ls) { lsv.push(upx.ls[li]) ; li = li + 1 }
+            let mut di = 0
+            while di < len(upx.dij) { dij.push(upx.dij[di]) ; di = di + 1 }
+            dlens.push(len(upx.dij))
+        } else { blens.push(0) ; dlens.push(0) }
+        su = su + 1
+    }
+    println("nprojs=" + to_string(nprojs[0]) + "," + to_string(nprojs[1])
+        + " len(betas)=" + to_string(len(betas)) + " len(ls)=" + to_string(len(lsv))
+        + " len(dij)=" + to_string(len(dij)))
+    let k0 = [0.0, 0.0, 0.0]
+    let sigma = 0.02 ; let nbands = nocc + 4
+    println("CaH6 gga isolate: nelec=" + to_string(nelec) + " nocc=" + to_string(nocc)
+            + " n(PW)=" + to_string(n) + " grid=" + to_string(G3) + "³ nbands=" + to_string(nbands))
+    let sp = qforge_scf_pw_gga_spin_mil(k0, gvecs, millers, nspec, rs, rabs, vlocs, mlens, zs,
+                                    poss, palens, betas, lsv, dij, nprojs, blens, dlens,
+                                    omega, 1, G3, G3, G3, b1, b2, b3,
+                                    nbands, nelec, 0.3, 1.0e-6, 40, sigma, 6, 0.0)
+    println("converged=" + to_string(sp.converged) + " iters=" + to_string(sp.iters)
+            + " e_total=" + to_string(sp.e_total) + " mag=" + to_string(sp.magnetization))
+    let hc = qforge_gga_hconv()
+    println("hconv len=" + to_string(len(hc)) + " (want n²=" + to_string(n*n) + ")")
+    println("evals_up len=" + to_string(len(sp.evals_up)))
+    println("=== DONE ===")
+}

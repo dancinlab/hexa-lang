@@ -615,80 +615,92 @@ pub fn qforge_pw_frontend(deck_dir: str, npw_cap: int, xc_mode: int,
     let tpa = _QPW_2PI / geom.a
     let eb1 = [tpa, 0.0, 0.0] ; let eb2 = [0.0, tpa, 0.0] ; let eb3 = [0.0, 0.0, tpa]
     let nbands = nocc + 4
-    let scf = qforge_scf_pw_h_multi_smeared(
-        k0, gvecs, geom.nspec, rs, rabs, vlocs, mlens, zs,
-        poss, palens, betas, ls, dij, nprojs, blens, dlens,
-        geom.omega, xc_mode, 1, 1, n, eb1, eb2, eb3,
-        nbands, nelec, 0.3, 1.0e-6, 200, sigma, 2.0, 6)
 
-    // stage the converged ρ(r) for the screened-vertex Dyson kernel (d19 — the XC
-    // evaluation point; same length-n (1,1,n) cubic grid the in-loop V_H[ρ] uses).
-    let mut rho_cap: [float] = []
-    let mut rc = 0
-    while rc < len(scf.rho) { rho_cap.push(scf.rho[rc]) ; rc = rc + 1 }
-    QPW_RHO = rho_cap
-
-    // ── emit the CONVERGED matrix-free H-apply (qforge_run re-solves it) ──
-    //   qforge_h_of_rho_multi(scf.rho) re-stages PWM_* + returns the apply closure;
-    //   we capture the assembled PwHam into QPW_HAM so qpw_h_apply is the deck's H.
-    let _apply = qforge_h_of_rho_multi(scf.rho)
-    // build the diagonal preconditioner from the converged H (n probes).
-    let mut diag: [float] = []
-    let mut dd = 0
-    while dd < n {
-        let mut col: [float] = [] ; let mut t = 0
-        while t < n { if t == dd { col.push(1.0) } else { col.push(0.0) } ; t = t + 1 }
-        let hc = _apply(col)
-        diag.push(hc[dd])
-        dd = dd + 1
-    }
-    // stage QPW_HAM = the dense converged H (qpw_h_apply applies it for qforge_run).
-    //   Probe the staged apply closure column-by-column: H·e_j = the j-th COLUMN.
-    QPW_HAM = _qpw_capture_ham(_apply, n)
-
-    // ── 3-D PBE ground-state OVERRIDE (residual-(3) honest test) ──────────────────
-    //   Replace the (1,1,n)-line ground state with a TRUE 3-D real-space spin-GGA SCF
-    //   (gga_scf) in the SAME PW G-basis, so the screened vertex re-solves the genuine
-    //   3-D-PBE occupied manifold. d4 generic (cubic grid = DATA); d6 VERBATIM.
+    // ── 3-D PBE ground-state OVERRIDE — run FIRST, on FRESH module globals ─────────
+    //   The TRUE 3-D real-space spin-GGA SCF (gga_scf) must run BEFORE the (1,1,n) line
+    //   SCF: gga_scf and the line SCF share assembler/screening/davidson MODULE scratch
+    //   globals, and running gga_scf AFTER the line SCF crashes on the line-sized dirty
+    //   scratch. Computing the 3-D-PBE H here (clean state) captures its converged dense
+    //   H into a local; the line SCF then runs (its scf.rho/evals still feed the deck),
+    //   and the QPW_HAM stage below installs the 3-D-PBE H when engaged. d4/d6.
+    let mut pbe3d_h: [float] = []
+    let mut pbe3d_evals: [float] = []
+    let mut pbe3d_etot = 0.0
+    let mut pbe3d_iters = 0
+    let mut pbe3d_conv = false
     QPW_PBE3D_ENGAGED = false
     if QPW_PBE3D {
-        let nx3 = QPW_PBE3D_NX ; let ny3 = QPW_PBE3D_NY ; let nz3 = QPW_PBE3D_NZ
-        // real cell reciprocal vectors (physical 3-D ∇ρ on the cubic FFT cube).
-        let gb1 = geom.b1 ; let gb2 = geom.b2 ; let gb3 = geom.b3
-        // EXACT integer millers per G (the BCC reciprocal is SINGULAR → recovering them
-        //   by inverting B collapses the grid; carry them from qpw_gvectors_miller — the
-        //   SAME workaround the screened path uses (line ~975). gvm[0]=gvecs · gvm[1]=miller.
         let ecut_ha3 = if geom.ecutwfc > 0.0 { 0.5 * geom.ecutwfc } else { 0.0 }
-        let gvm3 = qpw_gvectors_miller(gb1, gb2, gb3, ecut_ha3, 4, npw_cap)
+        let gvm3 = qpw_gvectors_miller(geom.b1, geom.b2, geom.b3, ecut_ha3, 4, npw_cap)
         let gvecs3 = gvm3[0]
         let milf3 = gvm3[1]
         let mut mil3: [int] = []
         let mut mi3 = 0
         while mi3 < len(milf3) { mil3.push(to_int(milf3[mi3])) ; mi3 = mi3 + 1 }
-        // xc_mode≥1 for gga_scf → PBE-x(F_x(s) gradient enhancement) + PW92-c; init_mag=0
-        //   (non-magnetic hydride). Same nbands/nelec/sigma as the line SCF.
         let xcg = if xc_mode >= 1 { 1 } else { 1 }   // gga_scf always runs the GGA-x term
-        let sp = qforge_scf_pw_gga_spin_mil(
+        let sp3 = qforge_scf_pw_gga_spin_mil(
             k0, gvecs3, mil3, geom.nspec, rs, rabs, vlocs, mlens, zs,
             poss, palens, betas, ls, dij, nprojs, blens, dlens,
-            geom.omega, xcg, nx3, ny3, nz3, gb1, gb2, gb3,
+            geom.omega, xcg, QPW_PBE3D_NX, QPW_PBE3D_NY, QPW_PBE3D_NZ,
+            geom.b1, geom.b2, geom.b3,
             nbands, nelec, 0.3, 1.0e-6, 80, sigma, 6, 0.0)
         let h3 = qforge_gga_hconv()
         if len(h3) == n * n {
-            // replace QPW_HAM with the 3-D-PBE converged dense H + rebuild diag.
-            let mut d3: [float] = []
-            let mut dq = 0
-            while dq < n { d3.push(h3[dq * n + dq]) ; dq = dq + 1 }
-            QPW_HAM = PwHam { h: h3, diag: d3, n: n }
-            diag = d3
-            // QPW_RHO: the 3-D-PBE total density projected onto the n PW coefficients is
-            //   NOT directly the (1,1,n) line convention QPW_RHO uses; the screened
-            //   vertex's LOCAL-ALDA reconstructs ρ(r) from the ψ_n columns (re-solved
-            //   from THIS 3-D H) — so the physical 3-D ground state already flows through
-            //   the orbitals. QPW_RHO (uniform-gas f_xc[ρ̄] fallback coeff) is unchanged.
+            let mut hc = 0
+            while hc < n * n { pbe3d_h.push(h3[hc]) ; hc = hc + 1 }
+            let mut ev = 0
+            while ev < len(sp3.evals_up) { pbe3d_evals.push(sp3.evals_up[ev]) ; ev = ev + 1 }
+            pbe3d_etot = sp3.e_total ; pbe3d_iters = sp3.iters ; pbe3d_conv = sp3.converged
             QPW_PBE3D_ENGAGED = true
         }
-        // if len(h3) != n·n the override silently no-ops (d6: ENGAGED=false witnesses it).
+    }
+
+    // ── ground state: the line SCF, OR (residual-(3) test) the 3-D PBE one ────────
+    //   When the 3-D PBE override is engaged we MUST NOT also run the (1,1,n) line SCF
+    //   in the same process — gga_scf and scf_pw share mutable module scratch globals
+    //   and the SECOND SCF segfaults on the first's dirty/sized state. So we branch:
+    //   pbe3d-on → QPW_HAM = the 3-D-PBE dense H + synthetic ScfResult from gga (evals/
+    //   e_total); pbe3d-off → the original line SCF + capture_ham. d6 — both VERBATIM.
+    let mut scf = ScfResult { rho: [], evals: [], e_total: 0.0, iters: 0, converged: false }
+    let mut diag: [float] = []
+    if QPW_PBE3D_ENGAGED && len(pbe3d_h) == n * n {
+        // install the 3-D-PBE dense H as the deck's H; build diag from its diagonal.
+        let mut d3: [float] = []
+        let mut dq = 0
+        while dq < n { d3.push(pbe3d_h[dq * n + dq]) ; dq = dq + 1 }
+        QPW_HAM = PwHam { h: pbe3d_h, diag: d3, n: n }
+        diag = d3
+        // QPW_RHO: a length-n placeholder (the screened-vertex LOCAL-ALDA reconstructs
+        //   ρ(r) from the ψ_n re-solved from THIS 3-D H — the physical density flows via
+        //   the orbitals; the uniform-gas f_xc[ρ̄] coeff uses ρ̄=nelec/Ω, basis-free).
+        let mut rz: [float] = []
+        let mut rzi = 0
+        while rzi < n { rz.push(0.0) ; rzi = rzi + 1 }
+        QPW_RHO = rz
+        scf = ScfResult { rho: rz, evals: pbe3d_evals, e_total: pbe3d_etot,
+                          iters: pbe3d_iters, converged: pbe3d_conv }
+    } else {
+        scf = qforge_scf_pw_h_multi_smeared(
+            k0, gvecs, geom.nspec, rs, rabs, vlocs, mlens, zs,
+            poss, palens, betas, ls, dij, nprojs, blens, dlens,
+            geom.omega, xc_mode, 1, 1, n, eb1, eb2, eb3,
+            nbands, nelec, 0.3, 1.0e-6, 200, sigma, 2.0, 6)
+        // stage the converged ρ(r) for the screened-vertex Dyson kernel (d19 XC point).
+        let mut rho_cap: [float] = []
+        let mut rc = 0
+        while rc < len(scf.rho) { rho_cap.push(scf.rho[rc]) ; rc = rc + 1 }
+        QPW_RHO = rho_cap
+        // emit the CONVERGED matrix-free H-apply; capture the dense PwHam into QPW_HAM.
+        let _apply = qforge_h_of_rho_multi(scf.rho)
+        let mut dd = 0
+        while dd < n {
+            let mut col: [float] = [] ; let mut t = 0
+            while t < n { if t == dd { col.push(1.0) } else { col.push(0.0) } ; t = t + 1 }
+            let hc = _apply(col)
+            diag.push(hc[dd])
+            dd = dd + 1
+        }
+        QPW_HAM = _qpw_capture_ham(_apply, n)
     }
 
     // ── ⑤ EMIT the QforgeDeck (SCF half FULL · DFPT half = Einstein default) ──
