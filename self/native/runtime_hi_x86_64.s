@@ -14,118 +14,242 @@ rt_str_split:
     .loc 1 22 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
-.Lf6aa_rt_str_split_bb0:
+    push rbx # prologue: save rbx
+    push r12 # prologue: save r12
+    push r13 # prologue: save r13
+    push r14 # prologue: save r14
+    push r15 # prologue: save r15
+    sub rsp, 8 # prologue: callee-save align pad
+    sub rsp, 384 # prologue: alloc spill frame
+    mov [rbp - 224], rdi # store tag L0
+    mov rbx, rsi # ingress param payload
+    mov [rbp - 232], rdx # store tag L1
+    mov r12, rcx # ingress param payload
+.L80d5_rt_str_split_bb0:
     call hexa_array_new # array_lit: new array
-    mov rax, rax # array_lit: capture new array
-    mov rbx, rax # assign L3
-    mov rsi, rsi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    call hexa_len # call hexa_len
-    mov r12, rax # hv: unbox call result (rax)
-    cmp r12, 0 # binop ==
-    sete al # binop == → al
-    movzx r13, al # zero-extend al into dst
-    test r13, r13 # br_cond test
-    jz .Lf6aa_rt_str_split_bb2 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_split_bb1 # jump -> then
-.Lf6aa_rt_str_split_bb1:
-    mov rsi, rbx # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, rdi # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
-    call hexa_array_push # call hexa_array_push
-    mov r14, rdx # hv: unbox call result (rdx)
-    mov rax, rbx # set return value
-    pop rbp # epilogue: restore rbp
-    ret # return
-.Lf6aa_rt_str_split_bb2:
-    mov rsi, rsi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
+    mov r13, rdx # array_lit: capture new array payload
+    mov [rbp - 240], rax # store tag L2
+    mov r14, r13 # assign L3
+    mov r11, [rbp - 240] # tag L2 from tag-slot
+    mov [rbp - 248], r11 # store tag L3
+    mov rsi, r12 # hv arg payload
+    mov rdi, [rbp - 232] # tag L1 from tag-slot
     call hexa_len # call hexa_len
     mov r15, rax # hv: unbox call result (rax)
-    mov rax, r15 # assign L9
-    mov r12, 0 # assign L10
-    mov r13, 0 # assign L11
-    jmp .Lf6aa_rt_str_split_bb3 # branch
-.Lf6aa_rt_str_split_bb3:
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    call hexa_len # call hexa_len
-    mov r14, rax # hv: unbox call result (rax)
-    mov r15, r14 # binop lhs into dst
-    sub r15, rax # binop -
-    cmp r13, r15 # binop <=
-    setle al # binop <= → al
-    movzx r14, al # zero-extend al into dst
-    test r14, r14 # br_cond test
-    jz .Lf6aa_rt_str_split_bb5 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_split_bb4 # jump -> then
-.Lf6aa_rt_str_split_bb4:
-    mov r15, r13 # binop lhs into dst
-    add r15, rax # binop +
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, r13 # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
-    mov r9, r15 # hv arg payload
-    mov r8, 0 # hv arg tag = 0
-    call hexa_str_substring # call hexa_str_substring
-    mov r14, rdx # hv: unbox call result (rdx)
-    cmp r14, rsi # binop ==
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 256], r11 # store tag L4
+    cmp r15, 0 # binop ==
     sete al # binop == → al
-    movzx r15, al # zero-extend al into dst
-    test r15, r15 # br_cond test
-    jz .Lf6aa_rt_str_split_bb7 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_split_bb6 # jump -> then
-.Lf6aa_rt_str_split_bb5:
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    call hexa_len # call hexa_len
-    mov r14, rax # hv: unbox call result (rax)
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, r12 # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
-    mov r9, r14 # hv arg payload
-    mov r8, 0 # hv arg tag = 0
-    call hexa_str_substring # call hexa_str_substring
-    mov r15, rdx # hv: unbox call result (rdx)
-    mov rsi, rbx # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, r15 # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 264], r11 # store tag L5
+    mov [rbp - 56], r10 # spill L5 to slot
+    mov r10, [rbp - 56] # reload L5 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_split_bb2 # jump-if-zero -> else
+    jmp .L80d5_rt_str_split_bb1 # jump -> then
+.L80d5_rt_str_split_bb1:
+    mov rsi, r14 # hv arg payload
+    mov rdi, [rbp - 248] # tag L3 from tag-slot
+    mov rcx, rbx # hv arg payload
+    mov rdx, [rbp - 224] # tag L0 from tag-slot
     call hexa_array_push # call hexa_array_push
-    mov r14, rdx # hv: unbox call result (rdx)
-    mov rax, rbx # set return value
+    mov [rbp - 280], rax # store tag L7
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 72], r10 # spill L7 to slot
+    mov rdx, r14 # hv arg payload
+    mov rax, [rbp - 248] # tag L3 from tag-slot
+    add rsp, 384 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.Lf6aa_rt_str_split_bb6:
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, r12 # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
-    mov r9, r13 # hv arg payload
-    mov r8, 0 # hv arg tag = 0
-    call hexa_str_substring # call hexa_str_substring
-    mov r15, rdx # hv: unbox call result (rdx)
+.L80d5_rt_str_split_bb2:
+    mov rsi, r12 # hv arg payload
+    mov rdi, [rbp - 232] # tag L1 from tag-slot
+    call hexa_len # call hexa_len
+    mov r10, rax # hv: unbox call result (rax)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 288], r11 # store tag L8
+    mov [rbp - 80], r10 # spill L8 to slot
+    mov r11, [rbp - 80] # reload L8 from spill slot
+    mov r10, r11 # assign L9
+    mov [rbp - 88], r10 # spill L9 to slot
+    mov r11, [rbp - 288] # tag L8 from tag-slot
+    mov [rbp - 296], r11 # store tag L9
+    mov r10, 0 # assign L10
+    mov [rbp - 96], r10 # spill L10 to slot
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 304], r11 # store tag L10
+    mov r10, 0 # assign L11
+    mov [rbp - 104], r10 # spill L11 to slot
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 312], r11 # store tag L11
+    jmp .L80d5_rt_str_split_bb3 # branch
+.L80d5_rt_str_split_bb3:
     mov rsi, rbx # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, r15 # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
+    mov rdi, [rbp - 224] # tag L0 from tag-slot
+    call hexa_len # call hexa_len
+    mov r10, rax # hv: unbox call result (rax)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 320], r11 # store tag L12
+    mov [rbp - 112], r10 # spill L12 to slot
+    mov r10, [rbp - 112] # reload L12 from spill slot
+    mov r11, [rbp - 88] # reload L9 from spill slot
+    mov r10, r10 # binop lhs into dst
+    sub r10, r11 # binop -
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 328], r11 # store tag L13
+    mov [rbp - 120], r10 # spill L13 to slot
+    mov r10, [rbp - 104] # reload L11 from spill slot
+    mov r11, [rbp - 120] # reload L13 from spill slot
+    cmp r10, r11 # binop <=
+    setle al # binop <= → al
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 336], r11 # store tag L14
+    mov [rbp - 128], r10 # spill L14 to slot
+    mov r10, [rbp - 128] # reload L14 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_split_bb5 # jump-if-zero -> else
+    jmp .L80d5_rt_str_split_bb4 # jump -> then
+.L80d5_rt_str_split_bb4:
+    mov r10, [rbp - 104] # reload L11 from spill slot
+    mov r11, [rbp - 88] # reload L9 from spill slot
+    mov r10, r10 # binop lhs into dst
+    add r10, r11 # binop +
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 344], r11 # store tag L15
+    mov [rbp - 136], r10 # spill L15 to slot
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 224] # tag L0 from tag-slot
+    mov rcx, [rbp - 104] # reload L11 from spill slot
+    mov rcx, rcx # hv arg payload
+    mov rdx, [rbp - 312] # tag L11 from tag-slot
+    mov r9, [rbp - 136] # reload L15 from spill slot
+    mov r9, r9 # hv arg payload
+    mov r8, [rbp - 344] # tag L15 from tag-slot
+    call hexa_str_substring # call hexa_str_substring
+    mov [rbp - 352], rax # store tag L16
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 144], r10 # spill L16 to slot
+    mov r10, [rbp - 144] # reload L16 from spill slot
+    cmp r10, r12 # binop ==
+    sete al # binop == → al
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 360], r11 # store tag L17
+    mov [rbp - 152], r10 # spill L17 to slot
+    mov r10, [rbp - 152] # reload L17 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_split_bb7 # jump-if-zero -> else
+    jmp .L80d5_rt_str_split_bb6 # jump -> then
+.L80d5_rt_str_split_bb5:
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 224] # tag L0 from tag-slot
+    call hexa_len # call hexa_len
+    mov r10, rax # hv: unbox call result (rax)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 408], r11 # store tag L23
+    mov [rbp - 200], r10 # spill L23 to slot
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 224] # tag L0 from tag-slot
+    mov rcx, [rbp - 96] # reload L10 from spill slot
+    mov rcx, rcx # hv arg payload
+    mov rdx, [rbp - 304] # tag L10 from tag-slot
+    mov r9, [rbp - 200] # reload L23 from spill slot
+    mov r9, r9 # hv arg payload
+    mov r8, [rbp - 408] # tag L23 from tag-slot
+    call hexa_str_substring # call hexa_str_substring
+    mov [rbp - 416], rax # store tag L24
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 208], r10 # spill L24 to slot
+    mov rsi, r14 # hv arg payload
+    mov rdi, [rbp - 248] # tag L3 from tag-slot
+    mov rcx, [rbp - 208] # reload L24 from spill slot
+    mov rcx, rcx # hv arg payload
+    mov rdx, [rbp - 416] # tag L24 from tag-slot
     call hexa_array_push # call hexa_array_push
-    mov r14, rdx # hv: unbox call result (rdx)
-    mov rbx, r13 # binop lhs into dst
-    add rbx, rax # binop +
-    mov r12, rbx # assign L10
-    mov r13, r12 # assign L11
-    jmp .Lf6aa_rt_str_split_bb8 # branch
-.Lf6aa_rt_str_split_bb7:
-    mov r15, r13 # binop lhs into dst
-    add r15, 1 # binop +
-    mov r13, r15 # assign L11
-    jmp .Lf6aa_rt_str_split_bb8 # branch
-.Lf6aa_rt_str_split_bb8:
-    jmp .Lf6aa_rt_str_split_bb3 # branch
+    mov [rbp - 424], rax # store tag L25
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 216], r10 # spill L25 to slot
+    mov rdx, r14 # hv arg payload
+    mov rax, [rbp - 248] # tag L3 from tag-slot
+    add rsp, 384 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
+    pop rbp # epilogue: restore rbp
+    ret # return
+.L80d5_rt_str_split_bb6:
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 224] # tag L0 from tag-slot
+    mov rcx, [rbp - 96] # reload L10 from spill slot
+    mov rcx, rcx # hv arg payload
+    mov rdx, [rbp - 304] # tag L10 from tag-slot
+    mov r9, [rbp - 104] # reload L11 from spill slot
+    mov r9, r9 # hv arg payload
+    mov r8, [rbp - 312] # tag L11 from tag-slot
+    call hexa_str_substring # call hexa_str_substring
+    mov [rbp - 376], rax # store tag L19
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 168], r10 # spill L19 to slot
+    mov rsi, r14 # hv arg payload
+    mov rdi, [rbp - 248] # tag L3 from tag-slot
+    mov rcx, [rbp - 168] # reload L19 from spill slot
+    mov rcx, rcx # hv arg payload
+    mov rdx, [rbp - 376] # tag L19 from tag-slot
+    call hexa_array_push # call hexa_array_push
+    mov [rbp - 384], rax # store tag L20
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 176], r10 # spill L20 to slot
+    mov r10, [rbp - 104] # reload L11 from spill slot
+    mov r11, [rbp - 88] # reload L9 from spill slot
+    mov r10, r10 # binop lhs into dst
+    add r10, r11 # binop +
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 392], r11 # store tag L21
+    mov [rbp - 184], r10 # spill L21 to slot
+    mov r11, [rbp - 184] # reload L21 from spill slot
+    mov r10, r11 # assign L10
+    mov [rbp - 96], r10 # spill L10 to slot
+    mov r11, [rbp - 392] # tag L21 from tag-slot
+    mov [rbp - 304], r11 # store tag L10
+    mov r11, [rbp - 96] # reload L10 from spill slot
+    mov r10, r11 # assign L11
+    mov [rbp - 104], r10 # spill L11 to slot
+    mov r11, [rbp - 304] # tag L10 from tag-slot
+    mov [rbp - 312], r11 # store tag L11
+    jmp .L80d5_rt_str_split_bb8 # branch
+.L80d5_rt_str_split_bb7:
+    mov r10, [rbp - 104] # reload L11 from spill slot
+    mov r10, r10 # binop lhs into dst
+    add r10, 1 # binop +
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 400], r11 # store tag L22
+    mov [rbp - 192], r10 # spill L22 to slot
+    mov r11, [rbp - 192] # reload L22 from spill slot
+    mov r10, r11 # assign L11
+    mov [rbp - 104], r10 # spill L11 to slot
+    mov r11, [rbp - 400] # tag L22 from tag-slot
+    mov [rbp - 312], r11 # store tag L11
+    jmp .L80d5_rt_str_split_bb8 # branch
+.L80d5_rt_str_split_bb8:
+    jmp .L80d5_rt_str_split_bb3 # branch
+    add rsp, 384 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
 .globl rt_str_lines
@@ -135,11 +259,32 @@ rt_str_lines:
     .loc 1 45 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
-.Lf6aa_rt_str_lines_bb0:
-    mov rdi, rdi # arg 0
-    lea rsi, [rip+.LCstr0] # arg 1
+    push rbx # prologue: save rbx
+    push r12 # prologue: save r12
+    push r13 # prologue: save r13
+    push r14 # prologue: save r14
+    push r15 # prologue: save r15
+    sub rsp, 8 # prologue: callee-save align pad
+    sub rsp, 16 # prologue: alloc spill frame
+    mov [rbp - 56], rdi # store tag L0
+    mov rbx, rsi # ingress param payload
+.L80d5_rt_str_lines_bb0:
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 56] # tag L0 from tag-slot
+    lea rcx, [rip+.LCstr0] # hv arg payload: &str .LCstr0
+    mov rdx, 3 # hv arg tag = TAG_STR
     call rt_str_split # call rt_str_split
-    mov rax, rax # set return value
+    mov [rbp - 64], rax # store tag L1
+    mov r12, rdx # hv: unbox user-call result payload
+    mov rdx, r12 # hv arg payload
+    mov rax, [rbp - 64] # tag L1 from tag-slot
+    add rsp, 16 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
 .globl rt_str_pad_left
@@ -149,98 +294,224 @@ rt_str_pad_left:
     .loc 1 52 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
-.Lf6aa_rt_str_pad_left_bb0:
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
+    push rbx # prologue: save rbx
+    push r12 # prologue: save r12
+    push r13 # prologue: save r13
+    push r14 # prologue: save r14
+    push r15 # prologue: save r15
+    sub rsp, 8 # prologue: callee-save align pad
+    sub rsp, 400 # prologue: alloc spill frame
+    mov [rbp - 232], rdi # store tag L0
+    mov rbx, rsi # ingress param payload
+    mov [rbp - 240], rdx # store tag L1
+    mov r12, rcx # ingress param payload
+    mov [rbp - 248], r8 # store tag L2
+    mov r13, r9 # ingress param payload
+.L80d5_rt_str_pad_left_bb0:
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 232] # tag L0 from tag-slot
     call hexa_len # call hexa_len
-    mov rbx, rax # assign L4
-    mov rsi, rdx # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
+    mov r14, rax # hv: unbox call result (rax)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 256], r11 # store tag L3
+    mov r15, r14 # assign L4
+    mov r11, [rbp - 256] # tag L3 from tag-slot
+    mov [rbp - 264], r11 # store tag L4
+    mov rsi, r13 # hv arg payload
+    mov rdi, [rbp - 248] # tag L2 from tag-slot
     call hexa_len # call hexa_len
-    mov r12, rax # hv: unbox call result (rax)
-    mov r13, r12 # assign L6
-    cmp rbx, rsi # binop >=
+    mov r10, rax # hv: unbox call result (rax)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 272], r11 # store tag L5
+    mov [rbp - 56], r10 # spill L5 to slot
+    mov r11, [rbp - 56] # reload L5 from spill slot
+    mov r10, r11 # assign L6
+    mov [rbp - 64], r10 # spill L6 to slot
+    mov r11, [rbp - 272] # tag L5 from tag-slot
+    mov [rbp - 280], r11 # store tag L6
+    cmp r15, r12 # binop >=
     setge al # binop >= → al
-    movzx r14, al # zero-extend al into dst
-    test r14, r14 # br_cond test
-    jz .Lf6aa_rt_str_pad_left_bb2 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_pad_left_bb1 # jump -> then
-.Lf6aa_rt_str_pad_left_bb1:
-    mov rax, rdi # set return value
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 288], r11 # store tag L7
+    mov [rbp - 72], r10 # spill L7 to slot
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_pad_left_bb2 # jump-if-zero -> else
+    jmp .L80d5_rt_str_pad_left_bb1 # jump -> then
+.L80d5_rt_str_pad_left_bb1:
+    mov rdx, rbx # hv arg payload
+    mov rax, [rbp - 232] # tag L0 from tag-slot
+    add rsp, 400 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.Lf6aa_rt_str_pad_left_bb2:
-    cmp r13, 0 # binop ==
+.L80d5_rt_str_pad_left_bb2:
+    mov r10, [rbp - 64] # reload L6 from spill slot
+    cmp r10, 0 # binop ==
     sete al # binop == → al
-    movzx r15, al # zero-extend al into dst
-    test r15, r15 # br_cond test
-    jz .Lf6aa_rt_str_pad_left_bb4 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_pad_left_bb3 # jump -> then
-.Lf6aa_rt_str_pad_left_bb3:
-    mov rax, rdi # set return value
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 304], r11 # store tag L9
+    mov [rbp - 88], r10 # spill L9 to slot
+    mov r10, [rbp - 88] # reload L9 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_pad_left_bb4 # jump-if-zero -> else
+    jmp .L80d5_rt_str_pad_left_bb3 # jump -> then
+.L80d5_rt_str_pad_left_bb3:
+    mov rdx, rbx # hv arg payload
+    mov rax, [rbp - 232] # tag L0 from tag-slot
+    add rsp, 400 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.Lf6aa_rt_str_pad_left_bb4:
-    mov rax, rsi # binop lhs into dst
-    sub rax, rbx # binop -
-    mov r12, rax # assign L12
-    mov rax, r12 # idiv dividend → rax
+.L80d5_rt_str_pad_left_bb4:
+    mov r10, r12 # binop lhs into dst
+    sub r10, r15 # binop -
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 320], r11 # store tag L11
+    mov [rbp - 104], r10 # spill L11 to slot
+    mov r11, [rbp - 104] # reload L11 from spill slot
+    mov r10, r11 # assign L12
+    mov [rbp - 112], r10 # spill L12 to slot
+    mov r11, [rbp - 320] # tag L11 from tag-slot
+    mov [rbp - 328], r11 # store tag L12
+    mov r10, [rbp - 112] # reload L12 from spill slot
+    mov r11, [rbp - 64] # reload L6 from spill slot
+    mov rax, r10 # idiv dividend → rax
     cqo # sign-extend rax into rdx:rax
-    mov r11, r13 # materialize idiv divisor to reg
+    mov r11, r11 # materialize idiv divisor to reg
     idiv r11 # binop /
-    mov r14, rax # idiv quotient → dst
-    mov r15, r14 # assign L14
-    mov rbx, r15 # binop lhs into dst
-    imul rbx, r13 # binop *
-    cmp rbx, r12 # binop <
+    mov r10, rax # idiv quotient → dst
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 336], r11 # store tag L13
+    mov [rbp - 120], r10 # spill L13 to slot
+    mov r11, [rbp - 120] # reload L13 from spill slot
+    mov r10, r11 # assign L14
+    mov [rbp - 128], r10 # spill L14 to slot
+    mov r11, [rbp - 336] # tag L13 from tag-slot
+    mov [rbp - 344], r11 # store tag L14
+    mov r10, [rbp - 128] # reload L14 from spill slot
+    mov r11, [rbp - 64] # reload L6 from spill slot
+    mov r10, r10 # binop lhs into dst
+    imul r10, r11 # binop *
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 352], r11 # store tag L15
+    mov [rbp - 136], r10 # spill L15 to slot
+    mov r10, [rbp - 136] # reload L15 from spill slot
+    mov r11, [rbp - 112] # reload L12 from spill slot
+    cmp r10, r11 # binop <
     setl al # binop < → al
-    movzx rax, al # zero-extend al into dst
-    test rax, rax # br_cond test
-    jz .Lf6aa_rt_str_pad_left_bb6 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_pad_left_bb5 # jump -> then
-.Lf6aa_rt_str_pad_left_bb5:
-    mov r14, r15 # binop lhs into dst
-    add r14, 1 # binop +
-    mov r15, r14 # assign L14
-    jmp .Lf6aa_rt_str_pad_left_bb6 # branch
-.Lf6aa_rt_str_pad_left_bb6:
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 360], r11 # store tag L16
+    mov [rbp - 144], r10 # spill L16 to slot
+    mov r10, [rbp - 144] # reload L16 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_pad_left_bb6 # jump-if-zero -> else
+    jmp .L80d5_rt_str_pad_left_bb5 # jump -> then
+.L80d5_rt_str_pad_left_bb5:
+    mov r10, [rbp - 128] # reload L14 from spill slot
+    mov r10, r10 # binop lhs into dst
+    add r10, 1 # binop +
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 376], r11 # store tag L18
+    mov [rbp - 160], r10 # spill L18 to slot
+    mov r11, [rbp - 160] # reload L18 from spill slot
+    mov r10, r11 # assign L14
+    mov [rbp - 128], r10 # spill L14 to slot
+    mov r11, [rbp - 376] # tag L18 from tag-slot
+    mov [rbp - 344], r11 # store tag L14
+    jmp .L80d5_rt_str_pad_left_bb6 # branch
+.L80d5_rt_str_pad_left_bb6:
     call hexa_array_new # array_lit: new array
-    mov r13, rax # array_lit: capture new array
-    mov r12, r13 # assign L20
-    mov rbx, 0 # assign L21
-    jmp .Lf6aa_rt_str_pad_left_bb7 # branch
-.Lf6aa_rt_str_pad_left_bb7:
-    cmp rbx, r15 # binop <
+    mov r10, rdx # array_lit: capture new array payload
+    mov [rbp - 384], rax # store tag L19
+    mov [rbp - 168], r10 # spill L19 to slot
+    mov r11, [rbp - 168] # reload L19 from spill slot
+    mov r10, r11 # assign L20
+    mov [rbp - 176], r10 # spill L20 to slot
+    mov r11, [rbp - 384] # tag L19 from tag-slot
+    mov [rbp - 392], r11 # store tag L20
+    mov r10, 0 # assign L21
+    mov [rbp - 184], r10 # spill L21 to slot
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 400], r11 # store tag L21
+    jmp .L80d5_rt_str_pad_left_bb7 # branch
+.L80d5_rt_str_pad_left_bb7:
+    mov r10, [rbp - 184] # reload L21 from spill slot
+    mov r11, [rbp - 128] # reload L14 from spill slot
+    cmp r10, r11 # binop <
     setl al # binop < → al
-    movzx rax, al # zero-extend al into dst
-    test rax, rax # br_cond test
-    jz .Lf6aa_rt_str_pad_left_bb9 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_pad_left_bb8 # jump -> then
-.Lf6aa_rt_str_pad_left_bb8:
-    mov rsi, r12 # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, rdx # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 408], r11 # store tag L22
+    mov [rbp - 192], r10 # spill L22 to slot
+    mov r10, [rbp - 192] # reload L22 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_pad_left_bb9 # jump-if-zero -> else
+    jmp .L80d5_rt_str_pad_left_bb8 # jump -> then
+.L80d5_rt_str_pad_left_bb8:
+    mov rsi, [rbp - 176] # reload L20 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 392] # tag L20 from tag-slot
+    mov rcx, r13 # hv arg payload
+    mov rdx, [rbp - 248] # tag L2 from tag-slot
     call hexa_array_push # call hexa_array_push
-    mov r14, rdx # hv: unbox call result (rdx)
-    mov r13, rbx # binop lhs into dst
-    add r13, 1 # binop +
-    mov rbx, r13 # assign L21
-    jmp .Lf6aa_rt_str_pad_left_bb7 # branch
-.Lf6aa_rt_str_pad_left_bb9:
-    mov rsi, r12 # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, rdi # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
+    mov [rbp - 416], rax # store tag L23
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 200], r10 # spill L23 to slot
+    mov r10, [rbp - 184] # reload L21 from spill slot
+    mov r10, r10 # binop lhs into dst
+    add r10, 1 # binop +
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 424], r11 # store tag L24
+    mov [rbp - 208], r10 # spill L24 to slot
+    mov r11, [rbp - 208] # reload L24 from spill slot
+    mov r10, r11 # assign L21
+    mov [rbp - 184], r10 # spill L21 to slot
+    mov r11, [rbp - 424] # tag L24 from tag-slot
+    mov [rbp - 400], r11 # store tag L21
+    jmp .L80d5_rt_str_pad_left_bb7 # branch
+.L80d5_rt_str_pad_left_bb9:
+    mov rsi, [rbp - 176] # reload L20 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 392] # tag L20 from tag-slot
+    mov rcx, rbx # hv arg payload
+    mov rdx, [rbp - 232] # tag L0 from tag-slot
     call hexa_array_push # call hexa_array_push
-    mov r15, rdx # hv: unbox call result (rdx)
-    mov rsi, r12 # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
+    mov [rbp - 432], rax # store tag L25
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 216], r10 # spill L25 to slot
+    mov rsi, [rbp - 176] # reload L20 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 392] # tag L20 from tag-slot
     lea rcx, [rip+.LCstr1] # hv arg payload: &str .LCstr1
-    mov rdx, 3 # hv arg tag = 3
+    mov rdx, 3 # hv arg tag = TAG_STR
     call hexa_str_join # call hexa_str_join
-    mov rax, rdx # hv: unbox call result (rdx)
-    mov rax, rax # set return value
+    mov [rbp - 440], rax # store tag L26
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 224], r10 # spill L26 to slot
+    mov rdx, [rbp - 224] # reload L26 from spill slot
+    mov rdx, rdx # hv arg payload
+    mov rax, [rbp - 440] # tag L26 from tag-slot
+    add rsp, 400 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
 .globl rt_str_pad_right
@@ -250,98 +521,224 @@ rt_str_pad_right:
     .loc 1 70 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
-.Lf6aa_rt_str_pad_right_bb0:
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
+    push rbx # prologue: save rbx
+    push r12 # prologue: save r12
+    push r13 # prologue: save r13
+    push r14 # prologue: save r14
+    push r15 # prologue: save r15
+    sub rsp, 8 # prologue: callee-save align pad
+    sub rsp, 400 # prologue: alloc spill frame
+    mov [rbp - 232], rdi # store tag L0
+    mov rbx, rsi # ingress param payload
+    mov [rbp - 240], rdx # store tag L1
+    mov r12, rcx # ingress param payload
+    mov [rbp - 248], r8 # store tag L2
+    mov r13, r9 # ingress param payload
+.L80d5_rt_str_pad_right_bb0:
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 232] # tag L0 from tag-slot
     call hexa_len # call hexa_len
-    mov rbx, rax # assign L4
-    mov rsi, rdx # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
+    mov r14, rax # hv: unbox call result (rax)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 256], r11 # store tag L3
+    mov r15, r14 # assign L4
+    mov r11, [rbp - 256] # tag L3 from tag-slot
+    mov [rbp - 264], r11 # store tag L4
+    mov rsi, r13 # hv arg payload
+    mov rdi, [rbp - 248] # tag L2 from tag-slot
     call hexa_len # call hexa_len
-    mov r12, rax # hv: unbox call result (rax)
-    mov r13, r12 # assign L6
-    cmp rbx, rsi # binop >=
+    mov r10, rax # hv: unbox call result (rax)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 272], r11 # store tag L5
+    mov [rbp - 56], r10 # spill L5 to slot
+    mov r11, [rbp - 56] # reload L5 from spill slot
+    mov r10, r11 # assign L6
+    mov [rbp - 64], r10 # spill L6 to slot
+    mov r11, [rbp - 272] # tag L5 from tag-slot
+    mov [rbp - 280], r11 # store tag L6
+    cmp r15, r12 # binop >=
     setge al # binop >= → al
-    movzx r14, al # zero-extend al into dst
-    test r14, r14 # br_cond test
-    jz .Lf6aa_rt_str_pad_right_bb2 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_pad_right_bb1 # jump -> then
-.Lf6aa_rt_str_pad_right_bb1:
-    mov rax, rdi # set return value
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 288], r11 # store tag L7
+    mov [rbp - 72], r10 # spill L7 to slot
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_pad_right_bb2 # jump-if-zero -> else
+    jmp .L80d5_rt_str_pad_right_bb1 # jump -> then
+.L80d5_rt_str_pad_right_bb1:
+    mov rdx, rbx # hv arg payload
+    mov rax, [rbp - 232] # tag L0 from tag-slot
+    add rsp, 400 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.Lf6aa_rt_str_pad_right_bb2:
-    cmp r13, 0 # binop ==
+.L80d5_rt_str_pad_right_bb2:
+    mov r10, [rbp - 64] # reload L6 from spill slot
+    cmp r10, 0 # binop ==
     sete al # binop == → al
-    movzx r15, al # zero-extend al into dst
-    test r15, r15 # br_cond test
-    jz .Lf6aa_rt_str_pad_right_bb4 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_pad_right_bb3 # jump -> then
-.Lf6aa_rt_str_pad_right_bb3:
-    mov rax, rdi # set return value
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 304], r11 # store tag L9
+    mov [rbp - 88], r10 # spill L9 to slot
+    mov r10, [rbp - 88] # reload L9 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_pad_right_bb4 # jump-if-zero -> else
+    jmp .L80d5_rt_str_pad_right_bb3 # jump -> then
+.L80d5_rt_str_pad_right_bb3:
+    mov rdx, rbx # hv arg payload
+    mov rax, [rbp - 232] # tag L0 from tag-slot
+    add rsp, 400 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.Lf6aa_rt_str_pad_right_bb4:
-    mov rax, rsi # binop lhs into dst
-    sub rax, rbx # binop -
-    mov r12, rax # assign L12
-    mov rax, r12 # idiv dividend → rax
+.L80d5_rt_str_pad_right_bb4:
+    mov r10, r12 # binop lhs into dst
+    sub r10, r15 # binop -
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 320], r11 # store tag L11
+    mov [rbp - 104], r10 # spill L11 to slot
+    mov r11, [rbp - 104] # reload L11 from spill slot
+    mov r10, r11 # assign L12
+    mov [rbp - 112], r10 # spill L12 to slot
+    mov r11, [rbp - 320] # tag L11 from tag-slot
+    mov [rbp - 328], r11 # store tag L12
+    mov r10, [rbp - 112] # reload L12 from spill slot
+    mov r11, [rbp - 64] # reload L6 from spill slot
+    mov rax, r10 # idiv dividend → rax
     cqo # sign-extend rax into rdx:rax
-    mov r11, r13 # materialize idiv divisor to reg
+    mov r11, r11 # materialize idiv divisor to reg
     idiv r11 # binop /
-    mov r14, rax # idiv quotient → dst
-    mov r15, r14 # assign L14
-    mov rbx, r15 # binop lhs into dst
-    imul rbx, r13 # binop *
-    cmp rbx, r12 # binop <
+    mov r10, rax # idiv quotient → dst
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 336], r11 # store tag L13
+    mov [rbp - 120], r10 # spill L13 to slot
+    mov r11, [rbp - 120] # reload L13 from spill slot
+    mov r10, r11 # assign L14
+    mov [rbp - 128], r10 # spill L14 to slot
+    mov r11, [rbp - 336] # tag L13 from tag-slot
+    mov [rbp - 344], r11 # store tag L14
+    mov r10, [rbp - 128] # reload L14 from spill slot
+    mov r11, [rbp - 64] # reload L6 from spill slot
+    mov r10, r10 # binop lhs into dst
+    imul r10, r11 # binop *
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 352], r11 # store tag L15
+    mov [rbp - 136], r10 # spill L15 to slot
+    mov r10, [rbp - 136] # reload L15 from spill slot
+    mov r11, [rbp - 112] # reload L12 from spill slot
+    cmp r10, r11 # binop <
     setl al # binop < → al
-    movzx rax, al # zero-extend al into dst
-    test rax, rax # br_cond test
-    jz .Lf6aa_rt_str_pad_right_bb6 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_pad_right_bb5 # jump -> then
-.Lf6aa_rt_str_pad_right_bb5:
-    mov r14, r15 # binop lhs into dst
-    add r14, 1 # binop +
-    mov r15, r14 # assign L14
-    jmp .Lf6aa_rt_str_pad_right_bb6 # branch
-.Lf6aa_rt_str_pad_right_bb6:
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 360], r11 # store tag L16
+    mov [rbp - 144], r10 # spill L16 to slot
+    mov r10, [rbp - 144] # reload L16 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_pad_right_bb6 # jump-if-zero -> else
+    jmp .L80d5_rt_str_pad_right_bb5 # jump -> then
+.L80d5_rt_str_pad_right_bb5:
+    mov r10, [rbp - 128] # reload L14 from spill slot
+    mov r10, r10 # binop lhs into dst
+    add r10, 1 # binop +
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 376], r11 # store tag L18
+    mov [rbp - 160], r10 # spill L18 to slot
+    mov r11, [rbp - 160] # reload L18 from spill slot
+    mov r10, r11 # assign L14
+    mov [rbp - 128], r10 # spill L14 to slot
+    mov r11, [rbp - 376] # tag L18 from tag-slot
+    mov [rbp - 344], r11 # store tag L14
+    jmp .L80d5_rt_str_pad_right_bb6 # branch
+.L80d5_rt_str_pad_right_bb6:
     call hexa_array_new # array_lit: new array
-    mov r13, rax # array_lit: capture new array
-    mov r12, r13 # assign L20
-    mov rsi, r12 # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, rdi # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
+    mov r10, rdx # array_lit: capture new array payload
+    mov [rbp - 384], rax # store tag L19
+    mov [rbp - 168], r10 # spill L19 to slot
+    mov r11, [rbp - 168] # reload L19 from spill slot
+    mov r10, r11 # assign L20
+    mov [rbp - 176], r10 # spill L20 to slot
+    mov r11, [rbp - 384] # tag L19 from tag-slot
+    mov [rbp - 392], r11 # store tag L20
+    mov rsi, [rbp - 176] # reload L20 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 392] # tag L20 from tag-slot
+    mov rcx, rbx # hv arg payload
+    mov rdx, [rbp - 232] # tag L0 from tag-slot
     call hexa_array_push # call hexa_array_push
-    mov rbx, rdx # hv: unbox call result (rdx)
-    mov rax, 0 # assign L22
-    jmp .Lf6aa_rt_str_pad_right_bb7 # branch
-.Lf6aa_rt_str_pad_right_bb7:
-    cmp rax, r15 # binop <
+    mov [rbp - 400], rax # store tag L21
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 184], r10 # spill L21 to slot
+    mov r10, 0 # assign L22
+    mov [rbp - 192], r10 # spill L22 to slot
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 408], r11 # store tag L22
+    jmp .L80d5_rt_str_pad_right_bb7 # branch
+.L80d5_rt_str_pad_right_bb7:
+    mov r10, [rbp - 192] # reload L22 from spill slot
+    mov r11, [rbp - 128] # reload L14 from spill slot
+    cmp r10, r11 # binop <
     setl al # binop < → al
-    movzx r14, al # zero-extend al into dst
-    test r14, r14 # br_cond test
-    jz .Lf6aa_rt_str_pad_right_bb9 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_pad_right_bb8 # jump -> then
-.Lf6aa_rt_str_pad_right_bb8:
-    mov rsi, r12 # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, rdx # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 416], r11 # store tag L23
+    mov [rbp - 200], r10 # spill L23 to slot
+    mov r10, [rbp - 200] # reload L23 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_pad_right_bb9 # jump-if-zero -> else
+    jmp .L80d5_rt_str_pad_right_bb8 # jump -> then
+.L80d5_rt_str_pad_right_bb8:
+    mov rsi, [rbp - 176] # reload L20 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 392] # tag L20 from tag-slot
+    mov rcx, r13 # hv arg payload
+    mov rdx, [rbp - 248] # tag L2 from tag-slot
     call hexa_array_push # call hexa_array_push
-    mov r13, rdx # hv: unbox call result (rdx)
-    mov rbx, rax # binop lhs into dst
-    add rbx, 1 # binop +
-    mov rax, rbx # assign L22
-    jmp .Lf6aa_rt_str_pad_right_bb7 # branch
-.Lf6aa_rt_str_pad_right_bb9:
-    mov rsi, r12 # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
+    mov [rbp - 424], rax # store tag L24
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 208], r10 # spill L24 to slot
+    mov r10, [rbp - 192] # reload L22 from spill slot
+    mov r10, r10 # binop lhs into dst
+    add r10, 1 # binop +
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 432], r11 # store tag L25
+    mov [rbp - 216], r10 # spill L25 to slot
+    mov r11, [rbp - 216] # reload L25 from spill slot
+    mov r10, r11 # assign L22
+    mov [rbp - 192], r10 # spill L22 to slot
+    mov r11, [rbp - 432] # tag L25 from tag-slot
+    mov [rbp - 408], r11 # store tag L22
+    jmp .L80d5_rt_str_pad_right_bb7 # branch
+.L80d5_rt_str_pad_right_bb9:
+    mov rsi, [rbp - 176] # reload L20 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 392] # tag L20 from tag-slot
     lea rcx, [rip+.LCstr1] # hv arg payload: &str .LCstr1
-    mov rdx, 3 # hv arg tag = 3
+    mov rdx, 3 # hv arg tag = TAG_STR
     call hexa_str_join # call hexa_str_join
-    mov r15, rdx # hv: unbox call result (rdx)
-    mov rax, r15 # set return value
+    mov [rbp - 440], rax # store tag L26
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 224], r10 # spill L26 to slot
+    mov rdx, [rbp - 224] # reload L26 from spill slot
+    mov rdx, rdx # hv arg payload
+    mov rax, [rbp - 440] # tag L26 from tag-slot
+    add rsp, 400 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
 .globl rt_str_repeat
@@ -351,49 +748,105 @@ rt_str_repeat:
     .loc 1 89 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
-.Lf6aa_rt_str_repeat_bb0:
-    cmp rsi, 0 # binop <=
+    push rbx # prologue: save rbx
+    push r12 # prologue: save r12
+    push r13 # prologue: save r13
+    push r14 # prologue: save r14
+    push r15 # prologue: save r15
+    sub rsp, 8 # prologue: callee-save align pad
+    sub rsp, 144 # prologue: alloc spill frame
+    mov [rbp - 104], rdi # store tag L0
+    mov rbx, rsi # ingress param payload
+    mov [rbp - 112], rdx # store tag L1
+    mov r12, rcx # ingress param payload
+.L80d5_rt_str_repeat_bb0:
+    cmp r12, 0 # binop <=
     setle al # binop <= → al
-    movzx rax, al # zero-extend al into dst
-    test rax, rax # br_cond test
-    jz .Lf6aa_rt_str_repeat_bb2 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_repeat_bb1 # jump -> then
-.Lf6aa_rt_str_repeat_bb1:
-    lea rax, [rip+.LCstr1] # set return value
+    movzx r13, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 120], r11 # store tag L2
+    test r13, r13 # br_cond test
+    jz .L80d5_rt_str_repeat_bb2 # jump-if-zero -> else
+    jmp .L80d5_rt_str_repeat_bb1 # jump -> then
+.L80d5_rt_str_repeat_bb1:
+    lea rdx, [rip+.LCstr1] # hv arg payload: &str .LCstr1
+    mov rax, 3 # hv arg tag = TAG_STR
+    add rsp, 144 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.Lf6aa_rt_str_repeat_bb2:
+.L80d5_rt_str_repeat_bb2:
     call hexa_array_new # array_lit: new array
-    mov rbx, rax # array_lit: capture new array
-    mov r12, rbx # assign L5
-    mov r13, 0 # assign L6
-    jmp .Lf6aa_rt_str_repeat_bb3 # branch
-.Lf6aa_rt_str_repeat_bb3:
-    cmp r13, rsi # binop <
+    mov r15, rdx # array_lit: capture new array payload
+    mov [rbp - 136], rax # store tag L4
+    mov r10, r15 # assign L5
+    mov [rbp - 56], r10 # spill L5 to slot
+    mov r11, [rbp - 136] # tag L4 from tag-slot
+    mov [rbp - 144], r11 # store tag L5
+    mov r10, 0 # assign L6
+    mov [rbp - 64], r10 # spill L6 to slot
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 152], r11 # store tag L6
+    jmp .L80d5_rt_str_repeat_bb3 # branch
+.L80d5_rt_str_repeat_bb3:
+    mov r10, [rbp - 64] # reload L6 from spill slot
+    cmp r10, r12 # binop <
     setl al # binop < → al
-    movzx r14, al # zero-extend al into dst
-    test r14, r14 # br_cond test
-    jz .Lf6aa_rt_str_repeat_bb5 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_repeat_bb4 # jump -> then
-.Lf6aa_rt_str_repeat_bb4:
-    mov rsi, r12 # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, rdi # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 160], r11 # store tag L7
+    mov [rbp - 72], r10 # spill L7 to slot
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_repeat_bb5 # jump-if-zero -> else
+    jmp .L80d5_rt_str_repeat_bb4 # jump -> then
+.L80d5_rt_str_repeat_bb4:
+    mov rsi, [rbp - 56] # reload L5 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 144] # tag L5 from tag-slot
+    mov rcx, rbx # hv arg payload
+    mov rdx, [rbp - 104] # tag L0 from tag-slot
     call hexa_array_push # call hexa_array_push
-    mov r15, rdx # hv: unbox call result (rdx)
-    mov rax, r13 # binop lhs into dst
-    add rax, 1 # binop +
-    mov r13, rax # assign L6
-    jmp .Lf6aa_rt_str_repeat_bb3 # branch
-.Lf6aa_rt_str_repeat_bb5:
-    mov rsi, r12 # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
+    mov [rbp - 168], rax # store tag L8
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 80], r10 # spill L8 to slot
+    mov r10, [rbp - 64] # reload L6 from spill slot
+    mov r10, r10 # binop lhs into dst
+    add r10, 1 # binop +
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 176], r11 # store tag L9
+    mov [rbp - 88], r10 # spill L9 to slot
+    mov r11, [rbp - 88] # reload L9 from spill slot
+    mov r10, r11 # assign L6
+    mov [rbp - 64], r10 # spill L6 to slot
+    mov r11, [rbp - 176] # tag L9 from tag-slot
+    mov [rbp - 152], r11 # store tag L6
+    jmp .L80d5_rt_str_repeat_bb3 # branch
+.L80d5_rt_str_repeat_bb5:
+    mov rsi, [rbp - 56] # reload L5 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 144] # tag L5 from tag-slot
     lea rcx, [rip+.LCstr1] # hv arg payload: &str .LCstr1
-    mov rdx, 3 # hv arg tag = 3
+    mov rdx, 3 # hv arg tag = TAG_STR
     call hexa_str_join # call hexa_str_join
-    mov rbx, rdx # hv: unbox call result (rdx)
-    mov rax, rbx # set return value
+    mov [rbp - 184], rax # store tag L10
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 96], r10 # spill L10 to slot
+    mov rdx, [rbp - 96] # reload L10 from spill slot
+    mov rdx, rdx # hv arg payload
+    mov rax, [rbp - 184] # tag L10 from tag-slot
+    add rsp, 144 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
 .globl rt_str_center
@@ -403,148 +856,339 @@ rt_str_center:
     .loc 1 101 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
-.Lf6aa_rt_str_center_bb0:
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
+    push rbx # prologue: save rbx
+    push r12 # prologue: save r12
+    push r13 # prologue: save r13
+    push r14 # prologue: save r14
+    push r15 # prologue: save r15
+    sub rsp, 8 # prologue: callee-save align pad
+    sub rsp, 624 # prologue: alloc spill frame
+    mov [rbp - 344], rdi # store tag L0
+    mov rbx, rsi # ingress param payload
+    mov [rbp - 352], rdx # store tag L1
+    mov r12, rcx # ingress param payload
+    mov [rbp - 360], r8 # store tag L2
+    mov r13, r9 # ingress param payload
+.L80d5_rt_str_center_bb0:
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 344] # tag L0 from tag-slot
     call hexa_len # call hexa_len
-    mov rbx, rax # assign L4
-    mov rsi, rdx # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
+    mov r14, rax # hv: unbox call result (rax)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 368], r11 # store tag L3
+    mov r15, r14 # assign L4
+    mov r11, [rbp - 368] # tag L3 from tag-slot
+    mov [rbp - 376], r11 # store tag L4
+    mov rsi, r13 # hv arg payload
+    mov rdi, [rbp - 360] # tag L2 from tag-slot
     call hexa_len # call hexa_len
-    mov r12, rax # hv: unbox call result (rax)
-    mov r13, r12 # assign L6
-    cmp rbx, rsi # binop >=
+    mov r10, rax # hv: unbox call result (rax)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 384], r11 # store tag L5
+    mov [rbp - 56], r10 # spill L5 to slot
+    mov r11, [rbp - 56] # reload L5 from spill slot
+    mov r10, r11 # assign L6
+    mov [rbp - 64], r10 # spill L6 to slot
+    mov r11, [rbp - 384] # tag L5 from tag-slot
+    mov [rbp - 392], r11 # store tag L6
+    cmp r15, r12 # binop >=
     setge al # binop >= → al
-    movzx r14, al # zero-extend al into dst
-    test r14, r14 # br_cond test
-    jz .Lf6aa_rt_str_center_bb2 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_center_bb1 # jump -> then
-.Lf6aa_rt_str_center_bb1:
-    mov rax, rdi # set return value
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 400], r11 # store tag L7
+    mov [rbp - 72], r10 # spill L7 to slot
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_center_bb2 # jump-if-zero -> else
+    jmp .L80d5_rt_str_center_bb1 # jump -> then
+.L80d5_rt_str_center_bb1:
+    mov rdx, rbx # hv arg payload
+    mov rax, [rbp - 344] # tag L0 from tag-slot
+    add rsp, 624 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.Lf6aa_rt_str_center_bb2:
-    cmp r13, 0 # binop ==
+.L80d5_rt_str_center_bb2:
+    mov r10, [rbp - 64] # reload L6 from spill slot
+    cmp r10, 0 # binop ==
     sete al # binop == → al
-    movzx r15, al # zero-extend al into dst
-    test r15, r15 # br_cond test
-    jz .Lf6aa_rt_str_center_bb4 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_center_bb3 # jump -> then
-.Lf6aa_rt_str_center_bb3:
-    mov rax, rdi # set return value
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 416], r11 # store tag L9
+    mov [rbp - 88], r10 # spill L9 to slot
+    mov r10, [rbp - 88] # reload L9 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_center_bb4 # jump-if-zero -> else
+    jmp .L80d5_rt_str_center_bb3 # jump -> then
+.L80d5_rt_str_center_bb3:
+    mov rdx, rbx # hv arg payload
+    mov rax, [rbp - 344] # tag L0 from tag-slot
+    add rsp, 624 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.Lf6aa_rt_str_center_bb4:
-    mov rax, rsi # binop lhs into dst
-    sub rax, rbx # binop -
-    mov r12, rax # assign L12
-    mov rax, r12 # idiv dividend → rax
+.L80d5_rt_str_center_bb4:
+    mov r10, r12 # binop lhs into dst
+    sub r10, r15 # binop -
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 432], r11 # store tag L11
+    mov [rbp - 104], r10 # spill L11 to slot
+    mov r11, [rbp - 104] # reload L11 from spill slot
+    mov r10, r11 # assign L12
+    mov [rbp - 112], r10 # spill L12 to slot
+    mov r11, [rbp - 432] # tag L11 from tag-slot
+    mov [rbp - 440], r11 # store tag L12
+    mov r10, [rbp - 112] # reload L12 from spill slot
+    mov rax, r10 # idiv dividend → rax
     cqo # sign-extend rax into rdx:rax
     mov r11, 2 # materialize idiv divisor to reg
     idiv r11 # binop /
-    mov r14, rax # idiv quotient → dst
-    mov r15, r14 # assign L14
-    mov rbx, r12 # binop lhs into dst
-    sub rbx, r15 # binop -
-    mov rax, rbx # assign L16
-    mov rax, r15 # idiv dividend → rax
+    mov r10, rax # idiv quotient → dst
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 448], r11 # store tag L13
+    mov [rbp - 120], r10 # spill L13 to slot
+    mov r11, [rbp - 120] # reload L13 from spill slot
+    mov r10, r11 # assign L14
+    mov [rbp - 128], r10 # spill L14 to slot
+    mov r11, [rbp - 448] # tag L13 from tag-slot
+    mov [rbp - 456], r11 # store tag L14
+    mov r10, [rbp - 112] # reload L12 from spill slot
+    mov r11, [rbp - 128] # reload L14 from spill slot
+    mov r10, r10 # binop lhs into dst
+    sub r10, r11 # binop -
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 464], r11 # store tag L15
+    mov [rbp - 136], r10 # spill L15 to slot
+    mov r11, [rbp - 136] # reload L15 from spill slot
+    mov r10, r11 # assign L16
+    mov [rbp - 144], r10 # spill L16 to slot
+    mov r11, [rbp - 464] # tag L15 from tag-slot
+    mov [rbp - 472], r11 # store tag L16
+    mov r10, [rbp - 128] # reload L14 from spill slot
+    mov r11, [rbp - 64] # reload L6 from spill slot
+    mov rax, r10 # idiv dividend → rax
     cqo # sign-extend rax into rdx:rax
-    mov r11, r13 # materialize idiv divisor to reg
+    mov r11, r11 # materialize idiv divisor to reg
     idiv r11 # binop /
-    mov r14, rax # idiv quotient → dst
-    mov r12, r14 # assign L18
-    mov rbx, r12 # binop lhs into dst
-    imul rbx, r13 # binop *
-    cmp rbx, r15 # binop <
+    mov r10, rax # idiv quotient → dst
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 480], r11 # store tag L17
+    mov [rbp - 152], r10 # spill L17 to slot
+    mov r11, [rbp - 152] # reload L17 from spill slot
+    mov r10, r11 # assign L18
+    mov [rbp - 160], r10 # spill L18 to slot
+    mov r11, [rbp - 480] # tag L17 from tag-slot
+    mov [rbp - 488], r11 # store tag L18
+    mov r10, [rbp - 160] # reload L18 from spill slot
+    mov r11, [rbp - 64] # reload L6 from spill slot
+    mov r10, r10 # binop lhs into dst
+    imul r10, r11 # binop *
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 496], r11 # store tag L19
+    mov [rbp - 168], r10 # spill L19 to slot
+    mov r10, [rbp - 168] # reload L19 from spill slot
+    mov r11, [rbp - 128] # reload L14 from spill slot
+    cmp r10, r11 # binop <
     setl al # binop < → al
-    movzx r14, al # zero-extend al into dst
-    test r14, r14 # br_cond test
-    jz .Lf6aa_rt_str_center_bb6 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_center_bb5 # jump -> then
-.Lf6aa_rt_str_center_bb5:
-    mov r15, r12 # binop lhs into dst
-    add r15, 1 # binop +
-    mov r12, r15 # assign L18
-    jmp .Lf6aa_rt_str_center_bb6 # branch
-.Lf6aa_rt_str_center_bb6:
-    mov rax, rax # idiv dividend → rax
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 504], r11 # store tag L20
+    mov [rbp - 176], r10 # spill L20 to slot
+    mov r10, [rbp - 176] # reload L20 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_center_bb6 # jump-if-zero -> else
+    jmp .L80d5_rt_str_center_bb5 # jump -> then
+.L80d5_rt_str_center_bb5:
+    mov r10, [rbp - 160] # reload L18 from spill slot
+    mov r10, r10 # binop lhs into dst
+    add r10, 1 # binop +
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 520], r11 # store tag L22
+    mov [rbp - 192], r10 # spill L22 to slot
+    mov r11, [rbp - 192] # reload L22 from spill slot
+    mov r10, r11 # assign L18
+    mov [rbp - 160], r10 # spill L18 to slot
+    mov r11, [rbp - 520] # tag L22 from tag-slot
+    mov [rbp - 488], r11 # store tag L18
+    jmp .L80d5_rt_str_center_bb6 # branch
+.L80d5_rt_str_center_bb6:
+    mov r10, [rbp - 144] # reload L16 from spill slot
+    mov r11, [rbp - 64] # reload L6 from spill slot
+    mov rax, r10 # idiv dividend → rax
     cqo # sign-extend rax into rdx:rax
-    mov r11, r13 # materialize idiv divisor to reg
+    mov r11, r11 # materialize idiv divisor to reg
     idiv r11 # binop /
-    mov rbx, rax # idiv quotient → dst
-    mov r14, rbx # assign L24
-    mov r15, r14 # binop lhs into dst
-    imul r15, r13 # binop *
-    cmp r15, rax # binop <
+    mov r10, rax # idiv quotient → dst
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 528], r11 # store tag L23
+    mov [rbp - 200], r10 # spill L23 to slot
+    mov r11, [rbp - 200] # reload L23 from spill slot
+    mov r10, r11 # assign L24
+    mov [rbp - 208], r10 # spill L24 to slot
+    mov r11, [rbp - 528] # tag L23 from tag-slot
+    mov [rbp - 536], r11 # store tag L24
+    mov r10, [rbp - 208] # reload L24 from spill slot
+    mov r11, [rbp - 64] # reload L6 from spill slot
+    mov r10, r10 # binop lhs into dst
+    imul r10, r11 # binop *
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 544], r11 # store tag L25
+    mov [rbp - 216], r10 # spill L25 to slot
+    mov r10, [rbp - 216] # reload L25 from spill slot
+    mov r11, [rbp - 144] # reload L16 from spill slot
+    cmp r10, r11 # binop <
     setl al # binop < → al
-    movzx rbx, al # zero-extend al into dst
-    test rbx, rbx # br_cond test
-    jz .Lf6aa_rt_str_center_bb8 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_center_bb7 # jump -> then
-.Lf6aa_rt_str_center_bb7:
-    mov r13, r14 # binop lhs into dst
-    add r13, 1 # binop +
-    mov r14, r13 # assign L24
-    jmp .Lf6aa_rt_str_center_bb8 # branch
-.Lf6aa_rt_str_center_bb8:
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 552], r11 # store tag L26
+    mov [rbp - 224], r10 # spill L26 to slot
+    mov r10, [rbp - 224] # reload L26 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_center_bb8 # jump-if-zero -> else
+    jmp .L80d5_rt_str_center_bb7 # jump -> then
+.L80d5_rt_str_center_bb7:
+    mov r10, [rbp - 208] # reload L24 from spill slot
+    mov r10, r10 # binop lhs into dst
+    add r10, 1 # binop +
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 568], r11 # store tag L28
+    mov [rbp - 240], r10 # spill L28 to slot
+    mov r11, [rbp - 240] # reload L28 from spill slot
+    mov r10, r11 # assign L24
+    mov [rbp - 208], r10 # spill L24 to slot
+    mov r11, [rbp - 568] # tag L28 from tag-slot
+    mov [rbp - 536], r11 # store tag L24
+    jmp .L80d5_rt_str_center_bb8 # branch
+.L80d5_rt_str_center_bb8:
     call hexa_array_new # array_lit: new array
-    mov rax, rax # array_lit: capture new array
-    mov r15, rax # assign L30
-    mov rbx, 0 # assign L31
-    jmp .Lf6aa_rt_str_center_bb9 # branch
-.Lf6aa_rt_str_center_bb9:
-    cmp rbx, r12 # binop <
+    mov r10, rdx # array_lit: capture new array payload
+    mov [rbp - 576], rax # store tag L29
+    mov [rbp - 248], r10 # spill L29 to slot
+    mov r11, [rbp - 248] # reload L29 from spill slot
+    mov r10, r11 # assign L30
+    mov [rbp - 256], r10 # spill L30 to slot
+    mov r11, [rbp - 576] # tag L29 from tag-slot
+    mov [rbp - 584], r11 # store tag L30
+    mov r10, 0 # assign L31
+    mov [rbp - 264], r10 # spill L31 to slot
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 592], r11 # store tag L31
+    jmp .L80d5_rt_str_center_bb9 # branch
+.L80d5_rt_str_center_bb9:
+    mov r10, [rbp - 264] # reload L31 from spill slot
+    mov r11, [rbp - 160] # reload L18 from spill slot
+    cmp r10, r11 # binop <
     setl al # binop < → al
-    movzx r13, al # zero-extend al into dst
-    test r13, r13 # br_cond test
-    jz .Lf6aa_rt_str_center_bb11 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_center_bb10 # jump -> then
-.Lf6aa_rt_str_center_bb10:
-    mov rsi, r15 # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, rdx # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 600], r11 # store tag L32
+    mov [rbp - 272], r10 # spill L32 to slot
+    mov r10, [rbp - 272] # reload L32 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_center_bb11 # jump-if-zero -> else
+    jmp .L80d5_rt_str_center_bb10 # jump -> then
+.L80d5_rt_str_center_bb10:
+    mov rsi, [rbp - 256] # reload L30 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 584] # tag L30 from tag-slot
+    mov rcx, r13 # hv arg payload
+    mov rdx, [rbp - 360] # tag L2 from tag-slot
     call hexa_array_push # call hexa_array_push
-    mov rax, rdx # hv: unbox call result (rdx)
-    mov r12, rbx # binop lhs into dst
-    add r12, 1 # binop +
-    mov rbx, r12 # assign L31
-    jmp .Lf6aa_rt_str_center_bb9 # branch
-.Lf6aa_rt_str_center_bb11:
-    mov rsi, r15 # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, rdi # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
+    mov [rbp - 608], rax # store tag L33
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 280], r10 # spill L33 to slot
+    mov r10, [rbp - 264] # reload L31 from spill slot
+    mov r10, r10 # binop lhs into dst
+    add r10, 1 # binop +
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 616], r11 # store tag L34
+    mov [rbp - 288], r10 # spill L34 to slot
+    mov r11, [rbp - 288] # reload L34 from spill slot
+    mov r10, r11 # assign L31
+    mov [rbp - 264], r10 # spill L31 to slot
+    mov r11, [rbp - 616] # tag L34 from tag-slot
+    mov [rbp - 592], r11 # store tag L31
+    jmp .L80d5_rt_str_center_bb9 # branch
+.L80d5_rt_str_center_bb11:
+    mov rsi, [rbp - 256] # reload L30 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 584] # tag L30 from tag-slot
+    mov rcx, rbx # hv arg payload
+    mov rdx, [rbp - 344] # tag L0 from tag-slot
     call hexa_array_push # call hexa_array_push
-    mov r13, rdx # hv: unbox call result (rdx)
-    mov rax, 0 # assign L36
-    jmp .Lf6aa_rt_str_center_bb12 # branch
-.Lf6aa_rt_str_center_bb12:
-    cmp rax, r14 # binop <
+    mov [rbp - 624], rax # store tag L35
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 296], r10 # spill L35 to slot
+    mov r10, 0 # assign L36
+    mov [rbp - 304], r10 # spill L36 to slot
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 632], r11 # store tag L36
+    jmp .L80d5_rt_str_center_bb12 # branch
+.L80d5_rt_str_center_bb12:
+    mov r10, [rbp - 304] # reload L36 from spill slot
+    mov r11, [rbp - 208] # reload L24 from spill slot
+    cmp r10, r11 # binop <
     setl al # binop < → al
-    movzx rbx, al # zero-extend al into dst
-    test rbx, rbx # br_cond test
-    jz .Lf6aa_rt_str_center_bb14 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_center_bb13 # jump -> then
-.Lf6aa_rt_str_center_bb13:
-    mov rsi, r15 # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, rdx # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 640], r11 # store tag L37
+    mov [rbp - 312], r10 # spill L37 to slot
+    mov r10, [rbp - 312] # reload L37 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_center_bb14 # jump-if-zero -> else
+    jmp .L80d5_rt_str_center_bb13 # jump -> then
+.L80d5_rt_str_center_bb13:
+    mov rsi, [rbp - 256] # reload L30 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 584] # tag L30 from tag-slot
+    mov rcx, r13 # hv arg payload
+    mov rdx, [rbp - 360] # tag L2 from tag-slot
     call hexa_array_push # call hexa_array_push
-    mov r12, rdx # hv: unbox call result (rdx)
-    mov r13, rax # binop lhs into dst
-    add r13, 1 # binop +
-    mov rax, r13 # assign L36
-    jmp .Lf6aa_rt_str_center_bb12 # branch
-.Lf6aa_rt_str_center_bb14:
-    mov rsi, r15 # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
+    mov [rbp - 648], rax # store tag L38
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 320], r10 # spill L38 to slot
+    mov r10, [rbp - 304] # reload L36 from spill slot
+    mov r10, r10 # binop lhs into dst
+    add r10, 1 # binop +
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 656], r11 # store tag L39
+    mov [rbp - 328], r10 # spill L39 to slot
+    mov r11, [rbp - 328] # reload L39 from spill slot
+    mov r10, r11 # assign L36
+    mov [rbp - 304], r10 # spill L36 to slot
+    mov r11, [rbp - 656] # tag L39 from tag-slot
+    mov [rbp - 632], r11 # store tag L36
+    jmp .L80d5_rt_str_center_bb12 # branch
+.L80d5_rt_str_center_bb14:
+    mov rsi, [rbp - 256] # reload L30 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 584] # tag L30 from tag-slot
     lea rcx, [rip+.LCstr1] # hv arg payload: &str .LCstr1
-    mov rdx, 3 # hv arg tag = 3
+    mov rdx, 3 # hv arg tag = TAG_STR
     call hexa_str_join # call hexa_str_join
-    mov r14, rdx # hv: unbox call result (rdx)
-    mov rax, r14 # set return value
+    mov [rbp - 664], rax # store tag L40
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 336], r10 # spill L40 to slot
+    mov rdx, [rbp - 336] # reload L40 from spill slot
+    mov rdx, rdx # hv arg payload
+    mov rax, [rbp - 664] # tag L40 from tag-slot
+    add rsp, 624 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
 .globl rt_str_to_upper
@@ -554,119 +1198,228 @@ rt_str_to_upper:
     .loc 1 134 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
-    sub rsp, 16 # prologue: alloc spill frame
-.Lf6aa_rt_str_to_upper_bb0:
-    lea rax, [rip+.LCstr2] # assign L1
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
+    push rbx # prologue: save rbx
+    push r12 # prologue: save r12
+    push r13 # prologue: save r13
+    push r14 # prologue: save r14
+    push r15 # prologue: save r15
+    sub rsp, 8 # prologue: callee-save align pad
+    sub rsp, 352 # prologue: alloc spill frame
+    mov [rbp - 208], rdi # store tag L0
+    mov rbx, rsi # ingress param payload
+.L80d5_rt_str_to_upper_bb0:
+    lea r12, [rip+.LCstr2] # assign L1
+    mov r11, 3 # tag const_str = TAG_STR
+    mov [rbp - 216], r11 # store tag L1
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 208] # tag L0 from tag-slot
     call hexa_len # call hexa_len
-    mov rbx, rax # hv: unbox call result (rax)
-    mov r12, rbx # assign L3
+    mov r13, rax # hv: unbox call result (rax)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 224], r11 # store tag L2
+    mov r14, r13 # assign L3
+    mov r11, [rbp - 224] # tag L2 from tag-slot
+    mov [rbp - 232], r11 # store tag L3
     call hexa_array_new # array_lit: new array
-    mov r13, rax # array_lit: capture new array
-    mov r14, r13 # assign L5
+    mov r15, rdx # array_lit: capture new array payload
+    mov [rbp - 240], rax # store tag L4
+    mov r10, r15 # assign L5
+    mov [rbp - 56], r10 # spill L5 to slot
+    mov r11, [rbp - 240] # tag L4 from tag-slot
+    mov [rbp - 248], r11 # store tag L5
     mov r10, 0 # assign L6
-    mov [rbp - 8], r10 # spill L6 to slot
-    jmp .Lf6aa_rt_str_to_upper_bb1 # branch
-.Lf6aa_rt_str_to_upper_bb1:
-    mov r10, [rbp - 8] # reload L6 from spill slot
-    cmp r10, r12 # binop <
+    mov [rbp - 64], r10 # spill L6 to slot
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 256], r11 # store tag L6
+    jmp .L80d5_rt_str_to_upper_bb1 # branch
+.L80d5_rt_str_to_upper_bb1:
+    mov r10, [rbp - 64] # reload L6 from spill slot
+    cmp r10, r14 # binop <
     setl al # binop < → al
-    movzx rbx, al # zero-extend al into dst
-    test rbx, rbx # br_cond test
-    jz .Lf6aa_rt_str_to_upper_bb3 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_to_upper_bb2 # jump -> then
-.Lf6aa_rt_str_to_upper_bb2:
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, [rbp - 8] # reload L6 from spill slot
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 264], r11 # store tag L7
+    mov [rbp - 72], r10 # spill L7 to slot
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_to_upper_bb3 # jump-if-zero -> else
+    jmp .L80d5_rt_str_to_upper_bb2 # jump -> then
+.L80d5_rt_str_to_upper_bb2:
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 208] # tag L0 from tag-slot
+    mov rcx, [rbp - 64] # reload L6 from spill slot
     mov rcx, rcx # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
+    mov rdx, [rbp - 256] # tag L6 from tag-slot
     call hexa_str_byte_at # call hexa_str_byte_at
-    mov r13, rdx # hv: unbox call result (rdx)
-    mov r12, r13 # assign L9
-    cmp r12, 97 # binop >=
+    mov [rbp - 272], rax # store tag L8
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 80], r10 # spill L8 to slot
+    mov r11, [rbp - 80] # reload L8 from spill slot
+    mov r10, r11 # assign L9
+    mov [rbp - 88], r10 # spill L9 to slot
+    mov r11, [rbp - 272] # tag L8 from tag-slot
+    mov [rbp - 280], r11 # store tag L9
+    mov r10, [rbp - 88] # reload L9 from spill slot
+    cmp r10, 97 # binop >=
     setge al # binop >= → al
-    movzx rbx, al # zero-extend al into dst
-    test rbx, rbx # br_cond test
-    jz .Lf6aa_rt_str_to_upper_bb5 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_to_upper_bb4 # jump -> then
-.Lf6aa_rt_str_to_upper_bb3:
-    mov rsi, r14 # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 288], r11 # store tag L10
+    mov [rbp - 96], r10 # spill L10 to slot
+    mov r10, [rbp - 96] # reload L10 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_to_upper_bb5 # jump-if-zero -> else
+    jmp .L80d5_rt_str_to_upper_bb4 # jump -> then
+.L80d5_rt_str_to_upper_bb3:
+    mov rsi, [rbp - 56] # reload L5 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 248] # tag L5 from tag-slot
     lea rcx, [rip+.LCstr1] # hv arg payload: &str .LCstr1
-    mov rdx, 3 # hv arg tag = 3
+    mov rdx, 3 # hv arg tag = TAG_STR
     call hexa_str_join # call hexa_str_join
-    mov r13, rdx # hv: unbox call result (rdx)
-    mov rax, r13 # set return value
-    add rsp, 16 # epilogue: free spill frame
+    mov [rbp - 392], rax # store tag L23
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 200], r10 # spill L23 to slot
+    mov rdx, [rbp - 200] # reload L23 from spill slot
+    mov rdx, rdx # hv arg payload
+    mov rax, [rbp - 392] # tag L23 from tag-slot
+    add rsp, 352 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.Lf6aa_rt_str_to_upper_bb4:
-    cmp r12, 122 # binop <=
+.L80d5_rt_str_to_upper_bb4:
+    mov r10, [rbp - 88] # reload L9 from spill slot
+    cmp r10, 122 # binop <=
     setle al # binop <= → al
-    movzx r13, al # zero-extend al into dst
-    mov r15, r13 # assign L11
-    jmp .Lf6aa_rt_str_to_upper_bb6 # branch
-.Lf6aa_rt_str_to_upper_bb5:
-    mov r15, rbx # assign L11
-    jmp .Lf6aa_rt_str_to_upper_bb6 # branch
-.Lf6aa_rt_str_to_upper_bb6:
-    test r15, r15 # br_cond test
-    jz .Lf6aa_rt_str_to_upper_bb8 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_to_upper_bb7 # jump -> then
-.Lf6aa_rt_str_to_upper_bb7:
-    mov r13, r12 # binop lhs into dst
-    sub r13, 97 # binop -
-    mov rbx, r12 # binop lhs into dst
-    sub rbx, 97 # binop -
-    mov r15, rbx # binop lhs into dst
-    add r15, 1 # binop +
-    mov rsi, rax # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, r13 # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
-    mov r9, r15 # hv arg payload
-    mov r8, 0 # hv arg tag = 0
-    call hexa_str_substring # call hexa_str_substring
-    mov r12, rdx # hv: unbox call result (rdx)
-    mov rsi, r14 # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, r12 # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
-    call hexa_array_push # call hexa_array_push
-    mov rbx, rdx # hv: unbox call result (rdx)
-    mov rax, rbx # assign L13
-    jmp .Lf6aa_rt_str_to_upper_bb9 # branch
-.Lf6aa_rt_str_to_upper_bb8:
-    mov r10, [rbp - 8] # reload L6 from spill slot
-    mov r13, r10 # binop lhs into dst
-    add r13, 1 # binop +
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, [rbp - 8] # reload L6 from spill slot
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 304], r11 # store tag L12
+    mov [rbp - 112], r10 # spill L12 to slot
+    mov r11, [rbp - 112] # reload L12 from spill slot
+    mov r10, r11 # assign L11
+    mov [rbp - 104], r10 # spill L11 to slot
+    mov r11, [rbp - 304] # tag L12 from tag-slot
+    mov [rbp - 296], r11 # store tag L11
+    jmp .L80d5_rt_str_to_upper_bb6 # branch
+.L80d5_rt_str_to_upper_bb5:
+    mov r11, [rbp - 96] # reload L10 from spill slot
+    mov r10, r11 # assign L11
+    mov [rbp - 104], r10 # spill L11 to slot
+    mov r11, [rbp - 288] # tag L10 from tag-slot
+    mov [rbp - 296], r11 # store tag L11
+    jmp .L80d5_rt_str_to_upper_bb6 # branch
+.L80d5_rt_str_to_upper_bb6:
+    mov r10, [rbp - 104] # reload L11 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_to_upper_bb8 # jump-if-zero -> else
+    jmp .L80d5_rt_str_to_upper_bb7 # jump -> then
+.L80d5_rt_str_to_upper_bb7:
+    mov r10, [rbp - 88] # reload L9 from spill slot
+    mov r10, r10 # binop lhs into dst
+    sub r10, 97 # binop -
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 320], r11 # store tag L14
+    mov [rbp - 128], r10 # spill L14 to slot
+    mov r10, [rbp - 88] # reload L9 from spill slot
+    mov r10, r10 # binop lhs into dst
+    sub r10, 97 # binop -
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 328], r11 # store tag L15
+    mov [rbp - 136], r10 # spill L15 to slot
+    mov r10, [rbp - 136] # reload L15 from spill slot
+    mov r10, r10 # binop lhs into dst
+    add r10, 1 # binop +
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 336], r11 # store tag L16
+    mov [rbp - 144], r10 # spill L16 to slot
+    mov rsi, r12 # hv arg payload
+    mov rdi, [rbp - 216] # tag L1 from tag-slot
+    mov rcx, [rbp - 128] # reload L14 from spill slot
     mov rcx, rcx # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
-    mov r9, r13 # hv arg payload
-    mov r8, 0 # hv arg tag = 0
+    mov rdx, [rbp - 320] # tag L14 from tag-slot
+    mov r9, [rbp - 144] # reload L16 from spill slot
+    mov r9, r9 # hv arg payload
+    mov r8, [rbp - 336] # tag L16 from tag-slot
     call hexa_str_substring # call hexa_str_substring
-    mov r15, rdx # hv: unbox call result (rdx)
-    mov rsi, r14 # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, r15 # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
+    mov [rbp - 344], rax # store tag L17
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 152], r10 # spill L17 to slot
+    mov rsi, [rbp - 56] # reload L5 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 248] # tag L5 from tag-slot
+    mov rcx, [rbp - 152] # reload L17 from spill slot
+    mov rcx, rcx # hv arg payload
+    mov rdx, [rbp - 344] # tag L17 from tag-slot
     call hexa_array_push # call hexa_array_push
-    mov r12, rdx # hv: unbox call result (rdx)
-    mov rax, r12 # assign L13
-    jmp .Lf6aa_rt_str_to_upper_bb9 # branch
-.Lf6aa_rt_str_to_upper_bb9:
-    mov r10, [rbp - 8] # reload L6 from spill slot
-    mov rbx, r10 # binop lhs into dst
-    add rbx, 1 # binop +
-    mov r10, rbx # assign L6
-    mov [rbp - 8], r10 # spill L6 to slot
-    jmp .Lf6aa_rt_str_to_upper_bb1 # branch
-    add rsp, 16 # epilogue: free spill frame
+    mov [rbp - 352], rax # store tag L18
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 160], r10 # spill L18 to slot
+    mov r11, [rbp - 160] # reload L18 from spill slot
+    mov r10, r11 # assign L13
+    mov [rbp - 120], r10 # spill L13 to slot
+    mov r11, [rbp - 352] # tag L18 from tag-slot
+    mov [rbp - 312], r11 # store tag L13
+    jmp .L80d5_rt_str_to_upper_bb9 # branch
+.L80d5_rt_str_to_upper_bb8:
+    mov r10, [rbp - 64] # reload L6 from spill slot
+    mov r10, r10 # binop lhs into dst
+    add r10, 1 # binop +
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 360], r11 # store tag L19
+    mov [rbp - 168], r10 # spill L19 to slot
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 208] # tag L0 from tag-slot
+    mov rcx, [rbp - 64] # reload L6 from spill slot
+    mov rcx, rcx # hv arg payload
+    mov rdx, [rbp - 256] # tag L6 from tag-slot
+    mov r9, [rbp - 168] # reload L19 from spill slot
+    mov r9, r9 # hv arg payload
+    mov r8, [rbp - 360] # tag L19 from tag-slot
+    call hexa_str_substring # call hexa_str_substring
+    mov [rbp - 368], rax # store tag L20
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 176], r10 # spill L20 to slot
+    mov rsi, [rbp - 56] # reload L5 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 248] # tag L5 from tag-slot
+    mov rcx, [rbp - 176] # reload L20 from spill slot
+    mov rcx, rcx # hv arg payload
+    mov rdx, [rbp - 368] # tag L20 from tag-slot
+    call hexa_array_push # call hexa_array_push
+    mov [rbp - 376], rax # store tag L21
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 184], r10 # spill L21 to slot
+    mov r11, [rbp - 184] # reload L21 from spill slot
+    mov r10, r11 # assign L13
+    mov [rbp - 120], r10 # spill L13 to slot
+    mov r11, [rbp - 376] # tag L21 from tag-slot
+    mov [rbp - 312], r11 # store tag L13
+    jmp .L80d5_rt_str_to_upper_bb9 # branch
+.L80d5_rt_str_to_upper_bb9:
+    mov r10, [rbp - 64] # reload L6 from spill slot
+    mov r10, r10 # binop lhs into dst
+    add r10, 1 # binop +
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 384], r11 # store tag L22
+    mov [rbp - 192], r10 # spill L22 to slot
+    mov r11, [rbp - 192] # reload L22 from spill slot
+    mov r10, r11 # assign L6
+    mov [rbp - 64], r10 # spill L6 to slot
+    mov r11, [rbp - 384] # tag L22 from tag-slot
+    mov [rbp - 256], r11 # store tag L6
+    jmp .L80d5_rt_str_to_upper_bb1 # branch
+    add rsp, 352 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
 .globl rt_str_to_lower
@@ -676,119 +1429,228 @@ rt_str_to_lower:
     .loc 1 151 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
-    sub rsp, 16 # prologue: alloc spill frame
-.Lf6aa_rt_str_to_lower_bb0:
-    lea rax, [rip+.LCstr3] # assign L1
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
+    push rbx # prologue: save rbx
+    push r12 # prologue: save r12
+    push r13 # prologue: save r13
+    push r14 # prologue: save r14
+    push r15 # prologue: save r15
+    sub rsp, 8 # prologue: callee-save align pad
+    sub rsp, 352 # prologue: alloc spill frame
+    mov [rbp - 208], rdi # store tag L0
+    mov rbx, rsi # ingress param payload
+.L80d5_rt_str_to_lower_bb0:
+    lea r12, [rip+.LCstr3] # assign L1
+    mov r11, 3 # tag const_str = TAG_STR
+    mov [rbp - 216], r11 # store tag L1
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 208] # tag L0 from tag-slot
     call hexa_len # call hexa_len
-    mov rbx, rax # hv: unbox call result (rax)
-    mov r12, rbx # assign L3
+    mov r13, rax # hv: unbox call result (rax)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 224], r11 # store tag L2
+    mov r14, r13 # assign L3
+    mov r11, [rbp - 224] # tag L2 from tag-slot
+    mov [rbp - 232], r11 # store tag L3
     call hexa_array_new # array_lit: new array
-    mov r13, rax # array_lit: capture new array
-    mov r14, r13 # assign L5
+    mov r15, rdx # array_lit: capture new array payload
+    mov [rbp - 240], rax # store tag L4
+    mov r10, r15 # assign L5
+    mov [rbp - 56], r10 # spill L5 to slot
+    mov r11, [rbp - 240] # tag L4 from tag-slot
+    mov [rbp - 248], r11 # store tag L5
     mov r10, 0 # assign L6
-    mov [rbp - 8], r10 # spill L6 to slot
-    jmp .Lf6aa_rt_str_to_lower_bb1 # branch
-.Lf6aa_rt_str_to_lower_bb1:
-    mov r10, [rbp - 8] # reload L6 from spill slot
-    cmp r10, r12 # binop <
+    mov [rbp - 64], r10 # spill L6 to slot
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 256], r11 # store tag L6
+    jmp .L80d5_rt_str_to_lower_bb1 # branch
+.L80d5_rt_str_to_lower_bb1:
+    mov r10, [rbp - 64] # reload L6 from spill slot
+    cmp r10, r14 # binop <
     setl al # binop < → al
-    movzx rbx, al # zero-extend al into dst
-    test rbx, rbx # br_cond test
-    jz .Lf6aa_rt_str_to_lower_bb3 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_to_lower_bb2 # jump -> then
-.Lf6aa_rt_str_to_lower_bb2:
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, [rbp - 8] # reload L6 from spill slot
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 264], r11 # store tag L7
+    mov [rbp - 72], r10 # spill L7 to slot
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_to_lower_bb3 # jump-if-zero -> else
+    jmp .L80d5_rt_str_to_lower_bb2 # jump -> then
+.L80d5_rt_str_to_lower_bb2:
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 208] # tag L0 from tag-slot
+    mov rcx, [rbp - 64] # reload L6 from spill slot
     mov rcx, rcx # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
+    mov rdx, [rbp - 256] # tag L6 from tag-slot
     call hexa_str_byte_at # call hexa_str_byte_at
-    mov r13, rdx # hv: unbox call result (rdx)
-    mov r12, r13 # assign L9
-    cmp r12, 65 # binop >=
+    mov [rbp - 272], rax # store tag L8
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 80], r10 # spill L8 to slot
+    mov r11, [rbp - 80] # reload L8 from spill slot
+    mov r10, r11 # assign L9
+    mov [rbp - 88], r10 # spill L9 to slot
+    mov r11, [rbp - 272] # tag L8 from tag-slot
+    mov [rbp - 280], r11 # store tag L9
+    mov r10, [rbp - 88] # reload L9 from spill slot
+    cmp r10, 65 # binop >=
     setge al # binop >= → al
-    movzx rbx, al # zero-extend al into dst
-    test rbx, rbx # br_cond test
-    jz .Lf6aa_rt_str_to_lower_bb5 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_to_lower_bb4 # jump -> then
-.Lf6aa_rt_str_to_lower_bb3:
-    mov rsi, r14 # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 288], r11 # store tag L10
+    mov [rbp - 96], r10 # spill L10 to slot
+    mov r10, [rbp - 96] # reload L10 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_to_lower_bb5 # jump-if-zero -> else
+    jmp .L80d5_rt_str_to_lower_bb4 # jump -> then
+.L80d5_rt_str_to_lower_bb3:
+    mov rsi, [rbp - 56] # reload L5 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 248] # tag L5 from tag-slot
     lea rcx, [rip+.LCstr1] # hv arg payload: &str .LCstr1
-    mov rdx, 3 # hv arg tag = 3
+    mov rdx, 3 # hv arg tag = TAG_STR
     call hexa_str_join # call hexa_str_join
-    mov r13, rdx # hv: unbox call result (rdx)
-    mov rax, r13 # set return value
-    add rsp, 16 # epilogue: free spill frame
+    mov [rbp - 392], rax # store tag L23
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 200], r10 # spill L23 to slot
+    mov rdx, [rbp - 200] # reload L23 from spill slot
+    mov rdx, rdx # hv arg payload
+    mov rax, [rbp - 392] # tag L23 from tag-slot
+    add rsp, 352 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.Lf6aa_rt_str_to_lower_bb4:
-    cmp r12, 90 # binop <=
+.L80d5_rt_str_to_lower_bb4:
+    mov r10, [rbp - 88] # reload L9 from spill slot
+    cmp r10, 90 # binop <=
     setle al # binop <= → al
-    movzx r13, al # zero-extend al into dst
-    mov r15, r13 # assign L11
-    jmp .Lf6aa_rt_str_to_lower_bb6 # branch
-.Lf6aa_rt_str_to_lower_bb5:
-    mov r15, rbx # assign L11
-    jmp .Lf6aa_rt_str_to_lower_bb6 # branch
-.Lf6aa_rt_str_to_lower_bb6:
-    test r15, r15 # br_cond test
-    jz .Lf6aa_rt_str_to_lower_bb8 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_to_lower_bb7 # jump -> then
-.Lf6aa_rt_str_to_lower_bb7:
-    mov r13, r12 # binop lhs into dst
-    sub r13, 65 # binop -
-    mov rbx, r12 # binop lhs into dst
-    sub rbx, 65 # binop -
-    mov r15, rbx # binop lhs into dst
-    add r15, 1 # binop +
-    mov rsi, rax # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, r13 # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
-    mov r9, r15 # hv arg payload
-    mov r8, 0 # hv arg tag = 0
-    call hexa_str_substring # call hexa_str_substring
-    mov r12, rdx # hv: unbox call result (rdx)
-    mov rsi, r14 # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, r12 # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
-    call hexa_array_push # call hexa_array_push
-    mov rbx, rdx # hv: unbox call result (rdx)
-    mov rax, rbx # assign L13
-    jmp .Lf6aa_rt_str_to_lower_bb9 # branch
-.Lf6aa_rt_str_to_lower_bb8:
-    mov r10, [rbp - 8] # reload L6 from spill slot
-    mov r13, r10 # binop lhs into dst
-    add r13, 1 # binop +
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, [rbp - 8] # reload L6 from spill slot
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 304], r11 # store tag L12
+    mov [rbp - 112], r10 # spill L12 to slot
+    mov r11, [rbp - 112] # reload L12 from spill slot
+    mov r10, r11 # assign L11
+    mov [rbp - 104], r10 # spill L11 to slot
+    mov r11, [rbp - 304] # tag L12 from tag-slot
+    mov [rbp - 296], r11 # store tag L11
+    jmp .L80d5_rt_str_to_lower_bb6 # branch
+.L80d5_rt_str_to_lower_bb5:
+    mov r11, [rbp - 96] # reload L10 from spill slot
+    mov r10, r11 # assign L11
+    mov [rbp - 104], r10 # spill L11 to slot
+    mov r11, [rbp - 288] # tag L10 from tag-slot
+    mov [rbp - 296], r11 # store tag L11
+    jmp .L80d5_rt_str_to_lower_bb6 # branch
+.L80d5_rt_str_to_lower_bb6:
+    mov r10, [rbp - 104] # reload L11 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_to_lower_bb8 # jump-if-zero -> else
+    jmp .L80d5_rt_str_to_lower_bb7 # jump -> then
+.L80d5_rt_str_to_lower_bb7:
+    mov r10, [rbp - 88] # reload L9 from spill slot
+    mov r10, r10 # binop lhs into dst
+    sub r10, 65 # binop -
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 320], r11 # store tag L14
+    mov [rbp - 128], r10 # spill L14 to slot
+    mov r10, [rbp - 88] # reload L9 from spill slot
+    mov r10, r10 # binop lhs into dst
+    sub r10, 65 # binop -
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 328], r11 # store tag L15
+    mov [rbp - 136], r10 # spill L15 to slot
+    mov r10, [rbp - 136] # reload L15 from spill slot
+    mov r10, r10 # binop lhs into dst
+    add r10, 1 # binop +
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 336], r11 # store tag L16
+    mov [rbp - 144], r10 # spill L16 to slot
+    mov rsi, r12 # hv arg payload
+    mov rdi, [rbp - 216] # tag L1 from tag-slot
+    mov rcx, [rbp - 128] # reload L14 from spill slot
     mov rcx, rcx # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
-    mov r9, r13 # hv arg payload
-    mov r8, 0 # hv arg tag = 0
+    mov rdx, [rbp - 320] # tag L14 from tag-slot
+    mov r9, [rbp - 144] # reload L16 from spill slot
+    mov r9, r9 # hv arg payload
+    mov r8, [rbp - 336] # tag L16 from tag-slot
     call hexa_str_substring # call hexa_str_substring
-    mov r15, rdx # hv: unbox call result (rdx)
-    mov rsi, r14 # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, r15 # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
+    mov [rbp - 344], rax # store tag L17
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 152], r10 # spill L17 to slot
+    mov rsi, [rbp - 56] # reload L5 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 248] # tag L5 from tag-slot
+    mov rcx, [rbp - 152] # reload L17 from spill slot
+    mov rcx, rcx # hv arg payload
+    mov rdx, [rbp - 344] # tag L17 from tag-slot
     call hexa_array_push # call hexa_array_push
-    mov r12, rdx # hv: unbox call result (rdx)
-    mov rax, r12 # assign L13
-    jmp .Lf6aa_rt_str_to_lower_bb9 # branch
-.Lf6aa_rt_str_to_lower_bb9:
-    mov r10, [rbp - 8] # reload L6 from spill slot
-    mov rbx, r10 # binop lhs into dst
-    add rbx, 1 # binop +
-    mov r10, rbx # assign L6
-    mov [rbp - 8], r10 # spill L6 to slot
-    jmp .Lf6aa_rt_str_to_lower_bb1 # branch
-    add rsp, 16 # epilogue: free spill frame
+    mov [rbp - 352], rax # store tag L18
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 160], r10 # spill L18 to slot
+    mov r11, [rbp - 160] # reload L18 from spill slot
+    mov r10, r11 # assign L13
+    mov [rbp - 120], r10 # spill L13 to slot
+    mov r11, [rbp - 352] # tag L18 from tag-slot
+    mov [rbp - 312], r11 # store tag L13
+    jmp .L80d5_rt_str_to_lower_bb9 # branch
+.L80d5_rt_str_to_lower_bb8:
+    mov r10, [rbp - 64] # reload L6 from spill slot
+    mov r10, r10 # binop lhs into dst
+    add r10, 1 # binop +
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 360], r11 # store tag L19
+    mov [rbp - 168], r10 # spill L19 to slot
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 208] # tag L0 from tag-slot
+    mov rcx, [rbp - 64] # reload L6 from spill slot
+    mov rcx, rcx # hv arg payload
+    mov rdx, [rbp - 256] # tag L6 from tag-slot
+    mov r9, [rbp - 168] # reload L19 from spill slot
+    mov r9, r9 # hv arg payload
+    mov r8, [rbp - 360] # tag L19 from tag-slot
+    call hexa_str_substring # call hexa_str_substring
+    mov [rbp - 368], rax # store tag L20
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 176], r10 # spill L20 to slot
+    mov rsi, [rbp - 56] # reload L5 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 248] # tag L5 from tag-slot
+    mov rcx, [rbp - 176] # reload L20 from spill slot
+    mov rcx, rcx # hv arg payload
+    mov rdx, [rbp - 368] # tag L20 from tag-slot
+    call hexa_array_push # call hexa_array_push
+    mov [rbp - 376], rax # store tag L21
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 184], r10 # spill L21 to slot
+    mov r11, [rbp - 184] # reload L21 from spill slot
+    mov r10, r11 # assign L13
+    mov [rbp - 120], r10 # spill L13 to slot
+    mov r11, [rbp - 376] # tag L21 from tag-slot
+    mov [rbp - 312], r11 # store tag L13
+    jmp .L80d5_rt_str_to_lower_bb9 # branch
+.L80d5_rt_str_to_lower_bb9:
+    mov r10, [rbp - 64] # reload L6 from spill slot
+    mov r10, r10 # binop lhs into dst
+    add r10, 1 # binop +
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 384], r11 # store tag L22
+    mov [rbp - 192], r10 # spill L22 to slot
+    mov r11, [rbp - 192] # reload L22 from spill slot
+    mov r10, r11 # assign L6
+    mov [rbp - 64], r10 # spill L6 to slot
+    mov r11, [rbp - 384] # tag L22 from tag-slot
+    mov [rbp - 256], r11 # store tag L6
+    jmp .L80d5_rt_str_to_lower_bb1 # branch
+    add rsp, 352 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
 .globl rt_str_trim
@@ -798,168 +1660,332 @@ rt_str_trim:
     .loc 1 170 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
-.Lf6aa_rt_str_trim_bb0:
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
+    push rbx # prologue: save rbx
+    push r12 # prologue: save r12
+    push r13 # prologue: save r13
+    push r14 # prologue: save r14
+    push r15 # prologue: save r15
+    sub rsp, 8 # prologue: callee-save align pad
+    sub rsp, 464 # prologue: alloc spill frame
+    mov [rbp - 264], rdi # store tag L0
+    mov rbx, rsi # ingress param payload
+.L80d5_rt_str_trim_bb0:
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 264] # tag L0 from tag-slot
     call hexa_len # call hexa_len
-    mov rbx, rax # assign L2
-    mov r12, 0 # assign L3
-    jmp .Lf6aa_rt_str_trim_bb1 # branch
-.Lf6aa_rt_str_trim_bb1:
-    cmp r12, rbx # binop <
+    mov r12, rax # hv: unbox call result (rax)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 272], r11 # store tag L1
+    mov r13, r12 # assign L2
+    mov r11, [rbp - 272] # tag L1 from tag-slot
+    mov [rbp - 280], r11 # store tag L2
+    mov r14, 0 # assign L3
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 288], r11 # store tag L3
+    jmp .L80d5_rt_str_trim_bb1 # branch
+.L80d5_rt_str_trim_bb1:
+    cmp r14, r13 # binop <
     setl al # binop < → al
-    movzx r13, al # zero-extend al into dst
-    test r13, r13 # br_cond test
-    jz .Lf6aa_rt_str_trim_bb3 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_trim_bb2 # jump -> then
-.Lf6aa_rt_str_trim_bb2:
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, r12 # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
+    movzx r15, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 296], r11 # store tag L4
+    test r15, r15 # br_cond test
+    jz .L80d5_rt_str_trim_bb3 # jump-if-zero -> else
+    jmp .L80d5_rt_str_trim_bb2 # jump -> then
+.L80d5_rt_str_trim_bb2:
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 264] # tag L0 from tag-slot
+    mov rcx, r14 # hv arg payload
+    mov rdx, [rbp - 288] # tag L3 from tag-slot
     call hexa_str_byte_at # call hexa_str_byte_at
-    mov r14, rdx # hv: unbox call result (rdx)
-    mov r15, r14 # assign L6
-    cmp r15, 32 # binop ==
+    mov [rbp - 304], rax # store tag L5
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 56], r10 # spill L5 to slot
+    mov r11, [rbp - 56] # reload L5 from spill slot
+    mov r10, r11 # assign L6
+    mov [rbp - 64], r10 # spill L6 to slot
+    mov r11, [rbp - 304] # tag L5 from tag-slot
+    mov [rbp - 312], r11 # store tag L6
+    mov r10, [rbp - 64] # reload L6 from spill slot
+    cmp r10, 32 # binop ==
     sete al # binop == → al
-    movzx rax, al # zero-extend al into dst
-    test rax, rax # br_cond test
-    jz .Lf6aa_rt_str_trim_bb5 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_trim_bb4 # jump -> then
-.Lf6aa_rt_str_trim_bb3:
-    mov r13, rbx # assign L16
-    jmp .Lf6aa_rt_str_trim_bb16 # branch
-.Lf6aa_rt_str_trim_bb4:
-    mov r14, rax # assign L8
-    jmp .Lf6aa_rt_str_trim_bb6 # branch
-.Lf6aa_rt_str_trim_bb5:
-    cmp r15, 9 # binop ==
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 320], r11 # store tag L7
+    mov [rbp - 72], r10 # spill L7 to slot
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_trim_bb5 # jump-if-zero -> else
+    jmp .L80d5_rt_str_trim_bb4 # jump -> then
+.L80d5_rt_str_trim_bb3:
+    mov r10, r13 # assign L16
+    mov [rbp - 144], r10 # spill L16 to slot
+    mov r11, [rbp - 280] # tag L2 from tag-slot
+    mov [rbp - 392], r11 # store tag L16
+    jmp .L80d5_rt_str_trim_bb16 # branch
+.L80d5_rt_str_trim_bb4:
+    mov r11, [rbp - 72] # reload L7 from spill slot
+    mov r10, r11 # assign L8
+    mov [rbp - 80], r10 # spill L8 to slot
+    mov r11, [rbp - 320] # tag L7 from tag-slot
+    mov [rbp - 328], r11 # store tag L8
+    jmp .L80d5_rt_str_trim_bb6 # branch
+.L80d5_rt_str_trim_bb5:
+    mov r10, [rbp - 64] # reload L6 from spill slot
+    cmp r10, 9 # binop ==
     sete al # binop == → al
-    movzx rbx, al # zero-extend al into dst
-    mov r14, rbx # assign L8
-    jmp .Lf6aa_rt_str_trim_bb6 # branch
-.Lf6aa_rt_str_trim_bb6:
-    test r14, r14 # br_cond test
-    jz .Lf6aa_rt_str_trim_bb8 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_trim_bb7 # jump -> then
-.Lf6aa_rt_str_trim_bb7:
-    mov rax, r14 # assign L10
-    jmp .Lf6aa_rt_str_trim_bb9 # branch
-.Lf6aa_rt_str_trim_bb8:
-    cmp r15, 10 # binop ==
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 336], r11 # store tag L9
+    mov [rbp - 88], r10 # spill L9 to slot
+    mov r11, [rbp - 88] # reload L9 from spill slot
+    mov r10, r11 # assign L8
+    mov [rbp - 80], r10 # spill L8 to slot
+    mov r11, [rbp - 336] # tag L9 from tag-slot
+    mov [rbp - 328], r11 # store tag L8
+    jmp .L80d5_rt_str_trim_bb6 # branch
+.L80d5_rt_str_trim_bb6:
+    mov r10, [rbp - 80] # reload L8 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_trim_bb8 # jump-if-zero -> else
+    jmp .L80d5_rt_str_trim_bb7 # jump -> then
+.L80d5_rt_str_trim_bb7:
+    mov r11, [rbp - 80] # reload L8 from spill slot
+    mov r10, r11 # assign L10
+    mov [rbp - 96], r10 # spill L10 to slot
+    mov r11, [rbp - 328] # tag L8 from tag-slot
+    mov [rbp - 344], r11 # store tag L10
+    jmp .L80d5_rt_str_trim_bb9 # branch
+.L80d5_rt_str_trim_bb8:
+    mov r10, [rbp - 64] # reload L6 from spill slot
+    cmp r10, 10 # binop ==
     sete al # binop == → al
-    movzx rbx, al # zero-extend al into dst
-    mov rax, rbx # assign L10
-    jmp .Lf6aa_rt_str_trim_bb9 # branch
-.Lf6aa_rt_str_trim_bb9:
-    test rax, rax # br_cond test
-    jz .Lf6aa_rt_str_trim_bb11 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_trim_bb10 # jump -> then
-.Lf6aa_rt_str_trim_bb10:
-    mov r14, rax # assign L12
-    jmp .Lf6aa_rt_str_trim_bb12 # branch
-.Lf6aa_rt_str_trim_bb11:
-    cmp r15, 13 # binop ==
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 352], r11 # store tag L11
+    mov [rbp - 104], r10 # spill L11 to slot
+    mov r11, [rbp - 104] # reload L11 from spill slot
+    mov r10, r11 # assign L10
+    mov [rbp - 96], r10 # spill L10 to slot
+    mov r11, [rbp - 352] # tag L11 from tag-slot
+    mov [rbp - 344], r11 # store tag L10
+    jmp .L80d5_rt_str_trim_bb9 # branch
+.L80d5_rt_str_trim_bb9:
+    mov r10, [rbp - 96] # reload L10 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_trim_bb11 # jump-if-zero -> else
+    jmp .L80d5_rt_str_trim_bb10 # jump -> then
+.L80d5_rt_str_trim_bb10:
+    mov r11, [rbp - 96] # reload L10 from spill slot
+    mov r10, r11 # assign L12
+    mov [rbp - 112], r10 # spill L12 to slot
+    mov r11, [rbp - 344] # tag L10 from tag-slot
+    mov [rbp - 360], r11 # store tag L12
+    jmp .L80d5_rt_str_trim_bb12 # branch
+.L80d5_rt_str_trim_bb11:
+    mov r10, [rbp - 64] # reload L6 from spill slot
+    cmp r10, 13 # binop ==
     sete al # binop == → al
-    movzx rbx, al # zero-extend al into dst
-    mov r14, rbx # assign L12
-    jmp .Lf6aa_rt_str_trim_bb12 # branch
-.Lf6aa_rt_str_trim_bb12:
-    test r14, r14 # br_cond test
-    jz .Lf6aa_rt_str_trim_bb14 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_trim_bb13 # jump -> then
-.Lf6aa_rt_str_trim_bb13:
-    mov rax, r12 # binop lhs into dst
-    add rax, 1 # binop +
-    mov r12, rax # assign L3
-    jmp .Lf6aa_rt_str_trim_bb15 # branch
-.Lf6aa_rt_str_trim_bb14:
-    jmp .Lf6aa_rt_str_trim_bb3 # branch
-.Lf6aa_rt_str_trim_bb15:
-    jmp .Lf6aa_rt_str_trim_bb1 # branch
-.Lf6aa_rt_str_trim_bb16:
-    cmp r13, r12 # binop >
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 368], r11 # store tag L13
+    mov [rbp - 120], r10 # spill L13 to slot
+    mov r11, [rbp - 120] # reload L13 from spill slot
+    mov r10, r11 # assign L12
+    mov [rbp - 112], r10 # spill L12 to slot
+    mov r11, [rbp - 368] # tag L13 from tag-slot
+    mov [rbp - 360], r11 # store tag L12
+    jmp .L80d5_rt_str_trim_bb12 # branch
+.L80d5_rt_str_trim_bb12:
+    mov r10, [rbp - 112] # reload L12 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_trim_bb14 # jump-if-zero -> else
+    jmp .L80d5_rt_str_trim_bb13 # jump -> then
+.L80d5_rt_str_trim_bb13:
+    mov r10, r14 # binop lhs into dst
+    add r10, 1 # binop +
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 384], r11 # store tag L15
+    mov [rbp - 136], r10 # spill L15 to slot
+    mov r10, [rbp - 136] # reload L15 from spill slot
+    mov r14, r10 # assign L3
+    mov r11, [rbp - 384] # tag L15 from tag-slot
+    mov [rbp - 288], r11 # store tag L3
+    jmp .L80d5_rt_str_trim_bb15 # branch
+.L80d5_rt_str_trim_bb14:
+    jmp .L80d5_rt_str_trim_bb3 # branch
+.L80d5_rt_str_trim_bb15:
+    jmp .L80d5_rt_str_trim_bb1 # branch
+.L80d5_rt_str_trim_bb16:
+    mov r10, [rbp - 144] # reload L16 from spill slot
+    cmp r10, r14 # binop >
     setg al # binop > → al
-    movzx r15, al # zero-extend al into dst
-    test r15, r15 # br_cond test
-    jz .Lf6aa_rt_str_trim_bb18 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_trim_bb17 # jump -> then
-.Lf6aa_rt_str_trim_bb17:
-    mov rbx, r13 # binop lhs into dst
-    sub rbx, 1 # binop -
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, rbx # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 400], r11 # store tag L17
+    mov [rbp - 152], r10 # spill L17 to slot
+    mov r10, [rbp - 152] # reload L17 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_trim_bb18 # jump-if-zero -> else
+    jmp .L80d5_rt_str_trim_bb17 # jump -> then
+.L80d5_rt_str_trim_bb17:
+    mov r10, [rbp - 144] # reload L16 from spill slot
+    mov r10, r10 # binop lhs into dst
+    sub r10, 1 # binop -
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 408], r11 # store tag L18
+    mov [rbp - 160], r10 # spill L18 to slot
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 264] # tag L0 from tag-slot
+    mov rcx, [rbp - 160] # reload L18 from spill slot
+    mov rcx, rcx # hv arg payload
+    mov rdx, [rbp - 408] # tag L18 from tag-slot
     call hexa_str_byte_at # call hexa_str_byte_at
-    mov r14, rdx # hv: unbox call result (rdx)
-    mov rax, r14 # assign L20
-    cmp rax, 32 # binop ==
+    mov [rbp - 416], rax # store tag L19
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 168], r10 # spill L19 to slot
+    mov r11, [rbp - 168] # reload L19 from spill slot
+    mov r10, r11 # assign L20
+    mov [rbp - 176], r10 # spill L20 to slot
+    mov r11, [rbp - 416] # tag L19 from tag-slot
+    mov [rbp - 424], r11 # store tag L20
+    mov r10, [rbp - 176] # reload L20 from spill slot
+    cmp r10, 32 # binop ==
     sete al # binop == → al
-    movzx r15, al # zero-extend al into dst
-    test r15, r15 # br_cond test
-    jz .Lf6aa_rt_str_trim_bb20 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_trim_bb19 # jump -> then
-.Lf6aa_rt_str_trim_bb18:
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, r12 # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
-    mov r9, r13 # hv arg payload
-    mov r8, 0 # hv arg tag = 0
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 432], r11 # store tag L21
+    mov [rbp - 184], r10 # spill L21 to slot
+    mov r10, [rbp - 184] # reload L21 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_trim_bb20 # jump-if-zero -> else
+    jmp .L80d5_rt_str_trim_bb19 # jump -> then
+.L80d5_rt_str_trim_bb18:
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 264] # tag L0 from tag-slot
+    mov rcx, r14 # hv arg payload
+    mov rdx, [rbp - 288] # tag L3 from tag-slot
+    mov r9, [rbp - 144] # reload L16 from spill slot
+    mov r9, r9 # hv arg payload
+    mov r8, [rbp - 392] # tag L16 from tag-slot
     call hexa_str_substring # call hexa_str_substring
-    mov rbx, rdx # hv: unbox call result (rdx)
-    mov rax, rbx # set return value
+    mov [rbp - 504], rax # store tag L30
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 256], r10 # spill L30 to slot
+    mov rdx, [rbp - 256] # reload L30 from spill slot
+    mov rdx, rdx # hv arg payload
+    mov rax, [rbp - 504] # tag L30 from tag-slot
+    add rsp, 464 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.Lf6aa_rt_str_trim_bb19:
-    mov r14, r15 # assign L22
-    jmp .Lf6aa_rt_str_trim_bb21 # branch
-.Lf6aa_rt_str_trim_bb20:
-    cmp rax, 9 # binop ==
+.L80d5_rt_str_trim_bb19:
+    mov r11, [rbp - 184] # reload L21 from spill slot
+    mov r10, r11 # assign L22
+    mov [rbp - 192], r10 # spill L22 to slot
+    mov r11, [rbp - 432] # tag L21 from tag-slot
+    mov [rbp - 440], r11 # store tag L22
+    jmp .L80d5_rt_str_trim_bb21 # branch
+.L80d5_rt_str_trim_bb20:
+    mov r10, [rbp - 176] # reload L20 from spill slot
+    cmp r10, 9 # binop ==
     sete al # binop == → al
-    movzx r12, al # zero-extend al into dst
-    mov r14, r12 # assign L22
-    jmp .Lf6aa_rt_str_trim_bb21 # branch
-.Lf6aa_rt_str_trim_bb21:
-    test r14, r14 # br_cond test
-    jz .Lf6aa_rt_str_trim_bb23 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_trim_bb22 # jump -> then
-.Lf6aa_rt_str_trim_bb22:
-    mov rbx, r14 # assign L24
-    jmp .Lf6aa_rt_str_trim_bb24 # branch
-.Lf6aa_rt_str_trim_bb23:
-    cmp rax, 10 # binop ==
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 448], r11 # store tag L23
+    mov [rbp - 200], r10 # spill L23 to slot
+    mov r11, [rbp - 200] # reload L23 from spill slot
+    mov r10, r11 # assign L22
+    mov [rbp - 192], r10 # spill L22 to slot
+    mov r11, [rbp - 448] # tag L23 from tag-slot
+    mov [rbp - 440], r11 # store tag L22
+    jmp .L80d5_rt_str_trim_bb21 # branch
+.L80d5_rt_str_trim_bb21:
+    mov r10, [rbp - 192] # reload L22 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_trim_bb23 # jump-if-zero -> else
+    jmp .L80d5_rt_str_trim_bb22 # jump -> then
+.L80d5_rt_str_trim_bb22:
+    mov r11, [rbp - 192] # reload L22 from spill slot
+    mov r10, r11 # assign L24
+    mov [rbp - 208], r10 # spill L24 to slot
+    mov r11, [rbp - 440] # tag L22 from tag-slot
+    mov [rbp - 456], r11 # store tag L24
+    jmp .L80d5_rt_str_trim_bb24 # branch
+.L80d5_rt_str_trim_bb23:
+    mov r10, [rbp - 176] # reload L20 from spill slot
+    cmp r10, 10 # binop ==
     sete al # binop == → al
-    movzx r15, al # zero-extend al into dst
-    mov rbx, r15 # assign L24
-    jmp .Lf6aa_rt_str_trim_bb24 # branch
-.Lf6aa_rt_str_trim_bb24:
-    test rbx, rbx # br_cond test
-    jz .Lf6aa_rt_str_trim_bb26 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_trim_bb25 # jump -> then
-.Lf6aa_rt_str_trim_bb25:
-    mov r12, rbx # assign L26
-    jmp .Lf6aa_rt_str_trim_bb27 # branch
-.Lf6aa_rt_str_trim_bb26:
-    cmp rax, 13 # binop ==
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 464], r11 # store tag L25
+    mov [rbp - 216], r10 # spill L25 to slot
+    mov r11, [rbp - 216] # reload L25 from spill slot
+    mov r10, r11 # assign L24
+    mov [rbp - 208], r10 # spill L24 to slot
+    mov r11, [rbp - 464] # tag L25 from tag-slot
+    mov [rbp - 456], r11 # store tag L24
+    jmp .L80d5_rt_str_trim_bb24 # branch
+.L80d5_rt_str_trim_bb24:
+    mov r10, [rbp - 208] # reload L24 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_trim_bb26 # jump-if-zero -> else
+    jmp .L80d5_rt_str_trim_bb25 # jump -> then
+.L80d5_rt_str_trim_bb25:
+    mov r11, [rbp - 208] # reload L24 from spill slot
+    mov r10, r11 # assign L26
+    mov [rbp - 224], r10 # spill L26 to slot
+    mov r11, [rbp - 456] # tag L24 from tag-slot
+    mov [rbp - 472], r11 # store tag L26
+    jmp .L80d5_rt_str_trim_bb27 # branch
+.L80d5_rt_str_trim_bb26:
+    mov r10, [rbp - 176] # reload L20 from spill slot
+    cmp r10, 13 # binop ==
     sete al # binop == → al
-    movzx r14, al # zero-extend al into dst
-    mov r12, r14 # assign L26
-    jmp .Lf6aa_rt_str_trim_bb27 # branch
-.Lf6aa_rt_str_trim_bb27:
-    test r12, r12 # br_cond test
-    jz .Lf6aa_rt_str_trim_bb29 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_trim_bb28 # jump -> then
-.Lf6aa_rt_str_trim_bb28:
-    mov r15, r13 # binop lhs into dst
-    sub r15, 1 # binop -
-    mov r13, r15 # assign L16
-    jmp .Lf6aa_rt_str_trim_bb30 # branch
-.Lf6aa_rt_str_trim_bb29:
-    jmp .Lf6aa_rt_str_trim_bb18 # branch
-.Lf6aa_rt_str_trim_bb30:
-    jmp .Lf6aa_rt_str_trim_bb16 # branch
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 480], r11 # store tag L27
+    mov [rbp - 232], r10 # spill L27 to slot
+    mov r11, [rbp - 232] # reload L27 from spill slot
+    mov r10, r11 # assign L26
+    mov [rbp - 224], r10 # spill L26 to slot
+    mov r11, [rbp - 480] # tag L27 from tag-slot
+    mov [rbp - 472], r11 # store tag L26
+    jmp .L80d5_rt_str_trim_bb27 # branch
+.L80d5_rt_str_trim_bb27:
+    mov r10, [rbp - 224] # reload L26 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_trim_bb29 # jump-if-zero -> else
+    jmp .L80d5_rt_str_trim_bb28 # jump -> then
+.L80d5_rt_str_trim_bb28:
+    mov r10, [rbp - 144] # reload L16 from spill slot
+    mov r10, r10 # binop lhs into dst
+    sub r10, 1 # binop -
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 496], r11 # store tag L29
+    mov [rbp - 248], r10 # spill L29 to slot
+    mov r11, [rbp - 248] # reload L29 from spill slot
+    mov r10, r11 # assign L16
+    mov [rbp - 144], r10 # spill L16 to slot
+    mov r11, [rbp - 496] # tag L29 from tag-slot
+    mov [rbp - 392], r11 # store tag L16
+    jmp .L80d5_rt_str_trim_bb30 # branch
+.L80d5_rt_str_trim_bb29:
+    jmp .L80d5_rt_str_trim_bb18 # branch
+.L80d5_rt_str_trim_bb30:
+    jmp .L80d5_rt_str_trim_bb16 # branch
+    add rsp, 464 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
 .globl rt_str_trim_start
@@ -969,94 +1995,186 @@ rt_str_trim_start:
     .loc 1 196 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
-.Lf6aa_rt_str_trim_start_bb0:
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
+    push rbx # prologue: save rbx
+    push r12 # prologue: save r12
+    push r13 # prologue: save r13
+    push r14 # prologue: save r14
+    push r15 # prologue: save r15
+    sub rsp, 8 # prologue: callee-save align pad
+    sub rsp, 240 # prologue: alloc spill frame
+    mov [rbp - 152], rdi # store tag L0
+    mov rbx, rsi # ingress param payload
+.L80d5_rt_str_trim_start_bb0:
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 152] # tag L0 from tag-slot
     call hexa_len # call hexa_len
-    mov rbx, rax # assign L2
-    mov r12, 0 # assign L3
-    jmp .Lf6aa_rt_str_trim_start_bb1 # branch
-.Lf6aa_rt_str_trim_start_bb1:
-    cmp r12, rbx # binop <
+    mov r12, rax # hv: unbox call result (rax)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 160], r11 # store tag L1
+    mov r13, r12 # assign L2
+    mov r11, [rbp - 160] # tag L1 from tag-slot
+    mov [rbp - 168], r11 # store tag L2
+    mov r14, 0 # assign L3
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 176], r11 # store tag L3
+    jmp .L80d5_rt_str_trim_start_bb1 # branch
+.L80d5_rt_str_trim_start_bb1:
+    cmp r14, r13 # binop <
     setl al # binop < → al
-    movzx r13, al # zero-extend al into dst
-    test r13, r13 # br_cond test
-    jz .Lf6aa_rt_str_trim_start_bb3 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_trim_start_bb2 # jump -> then
-.Lf6aa_rt_str_trim_start_bb2:
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, r12 # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
+    movzx r15, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 184], r11 # store tag L4
+    test r15, r15 # br_cond test
+    jz .L80d5_rt_str_trim_start_bb3 # jump-if-zero -> else
+    jmp .L80d5_rt_str_trim_start_bb2 # jump -> then
+.L80d5_rt_str_trim_start_bb2:
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 152] # tag L0 from tag-slot
+    mov rcx, r14 # hv arg payload
+    mov rdx, [rbp - 176] # tag L3 from tag-slot
     call hexa_str_byte_at # call hexa_str_byte_at
-    mov r14, rdx # hv: unbox call result (rdx)
-    mov r15, r14 # assign L6
-    cmp r15, 32 # binop ==
+    mov [rbp - 192], rax # store tag L5
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 56], r10 # spill L5 to slot
+    mov r11, [rbp - 56] # reload L5 from spill slot
+    mov r10, r11 # assign L6
+    mov [rbp - 64], r10 # spill L6 to slot
+    mov r11, [rbp - 192] # tag L5 from tag-slot
+    mov [rbp - 200], r11 # store tag L6
+    mov r10, [rbp - 64] # reload L6 from spill slot
+    cmp r10, 32 # binop ==
     sete al # binop == → al
-    movzx rax, al # zero-extend al into dst
-    test rax, rax # br_cond test
-    jz .Lf6aa_rt_str_trim_start_bb5 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_trim_start_bb4 # jump -> then
-.Lf6aa_rt_str_trim_start_bb3:
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, r12 # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
-    mov r9, rbx # hv arg payload
-    mov r8, 0 # hv arg tag = 0
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 208], r11 # store tag L7
+    mov [rbp - 72], r10 # spill L7 to slot
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_trim_start_bb5 # jump-if-zero -> else
+    jmp .L80d5_rt_str_trim_start_bb4 # jump -> then
+.L80d5_rt_str_trim_start_bb3:
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 152] # tag L0 from tag-slot
+    mov rcx, r14 # hv arg payload
+    mov rdx, [rbp - 176] # tag L3 from tag-slot
+    mov r9, r13 # hv arg payload
+    mov r8, [rbp - 168] # tag L2 from tag-slot
     call hexa_str_substring # call hexa_str_substring
-    mov r13, rdx # hv: unbox call result (rdx)
-    mov rax, r13 # set return value
+    mov [rbp - 280], rax # store tag L16
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 144], r10 # spill L16 to slot
+    mov rdx, [rbp - 144] # reload L16 from spill slot
+    mov rdx, rdx # hv arg payload
+    mov rax, [rbp - 280] # tag L16 from tag-slot
+    add rsp, 240 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.Lf6aa_rt_str_trim_start_bb4:
-    mov r14, rax # assign L8
-    jmp .Lf6aa_rt_str_trim_start_bb6 # branch
-.Lf6aa_rt_str_trim_start_bb5:
-    cmp r15, 9 # binop ==
+.L80d5_rt_str_trim_start_bb4:
+    mov r11, [rbp - 72] # reload L7 from spill slot
+    mov r10, r11 # assign L8
+    mov [rbp - 80], r10 # spill L8 to slot
+    mov r11, [rbp - 208] # tag L7 from tag-slot
+    mov [rbp - 216], r11 # store tag L8
+    jmp .L80d5_rt_str_trim_start_bb6 # branch
+.L80d5_rt_str_trim_start_bb5:
+    mov r10, [rbp - 64] # reload L6 from spill slot
+    cmp r10, 9 # binop ==
     sete al # binop == → al
-    movzx rbx, al # zero-extend al into dst
-    mov r14, rbx # assign L8
-    jmp .Lf6aa_rt_str_trim_start_bb6 # branch
-.Lf6aa_rt_str_trim_start_bb6:
-    test r14, r14 # br_cond test
-    jz .Lf6aa_rt_str_trim_start_bb8 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_trim_start_bb7 # jump -> then
-.Lf6aa_rt_str_trim_start_bb7:
-    mov r13, r14 # assign L10
-    jmp .Lf6aa_rt_str_trim_start_bb9 # branch
-.Lf6aa_rt_str_trim_start_bb8:
-    cmp r15, 10 # binop ==
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 224], r11 # store tag L9
+    mov [rbp - 88], r10 # spill L9 to slot
+    mov r11, [rbp - 88] # reload L9 from spill slot
+    mov r10, r11 # assign L8
+    mov [rbp - 80], r10 # spill L8 to slot
+    mov r11, [rbp - 224] # tag L9 from tag-slot
+    mov [rbp - 216], r11 # store tag L8
+    jmp .L80d5_rt_str_trim_start_bb6 # branch
+.L80d5_rt_str_trim_start_bb6:
+    mov r10, [rbp - 80] # reload L8 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_trim_start_bb8 # jump-if-zero -> else
+    jmp .L80d5_rt_str_trim_start_bb7 # jump -> then
+.L80d5_rt_str_trim_start_bb7:
+    mov r11, [rbp - 80] # reload L8 from spill slot
+    mov r10, r11 # assign L10
+    mov [rbp - 96], r10 # spill L10 to slot
+    mov r11, [rbp - 216] # tag L8 from tag-slot
+    mov [rbp - 232], r11 # store tag L10
+    jmp .L80d5_rt_str_trim_start_bb9 # branch
+.L80d5_rt_str_trim_start_bb8:
+    mov r10, [rbp - 64] # reload L6 from spill slot
+    cmp r10, 10 # binop ==
     sete al # binop == → al
-    movzx rax, al # zero-extend al into dst
-    mov r13, rax # assign L10
-    jmp .Lf6aa_rt_str_trim_start_bb9 # branch
-.Lf6aa_rt_str_trim_start_bb9:
-    test r13, r13 # br_cond test
-    jz .Lf6aa_rt_str_trim_start_bb11 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_trim_start_bb10 # jump -> then
-.Lf6aa_rt_str_trim_start_bb10:
-    mov rbx, r13 # assign L12
-    jmp .Lf6aa_rt_str_trim_start_bb12 # branch
-.Lf6aa_rt_str_trim_start_bb11:
-    cmp r15, 13 # binop ==
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 240], r11 # store tag L11
+    mov [rbp - 104], r10 # spill L11 to slot
+    mov r11, [rbp - 104] # reload L11 from spill slot
+    mov r10, r11 # assign L10
+    mov [rbp - 96], r10 # spill L10 to slot
+    mov r11, [rbp - 240] # tag L11 from tag-slot
+    mov [rbp - 232], r11 # store tag L10
+    jmp .L80d5_rt_str_trim_start_bb9 # branch
+.L80d5_rt_str_trim_start_bb9:
+    mov r10, [rbp - 96] # reload L10 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_trim_start_bb11 # jump-if-zero -> else
+    jmp .L80d5_rt_str_trim_start_bb10 # jump -> then
+.L80d5_rt_str_trim_start_bb10:
+    mov r11, [rbp - 96] # reload L10 from spill slot
+    mov r10, r11 # assign L12
+    mov [rbp - 112], r10 # spill L12 to slot
+    mov r11, [rbp - 232] # tag L10 from tag-slot
+    mov [rbp - 248], r11 # store tag L12
+    jmp .L80d5_rt_str_trim_start_bb12 # branch
+.L80d5_rt_str_trim_start_bb11:
+    mov r10, [rbp - 64] # reload L6 from spill slot
+    cmp r10, 13 # binop ==
     sete al # binop == → al
-    movzx r14, al # zero-extend al into dst
-    mov rbx, r14 # assign L12
-    jmp .Lf6aa_rt_str_trim_start_bb12 # branch
-.Lf6aa_rt_str_trim_start_bb12:
-    test rbx, rbx # br_cond test
-    jz .Lf6aa_rt_str_trim_start_bb14 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_trim_start_bb13 # jump -> then
-.Lf6aa_rt_str_trim_start_bb13:
-    mov rax, r12 # binop lhs into dst
-    add rax, 1 # binop +
-    mov r12, rax # assign L3
-    jmp .Lf6aa_rt_str_trim_start_bb15 # branch
-.Lf6aa_rt_str_trim_start_bb14:
-    jmp .Lf6aa_rt_str_trim_start_bb3 # branch
-.Lf6aa_rt_str_trim_start_bb15:
-    jmp .Lf6aa_rt_str_trim_start_bb1 # branch
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 256], r11 # store tag L13
+    mov [rbp - 120], r10 # spill L13 to slot
+    mov r11, [rbp - 120] # reload L13 from spill slot
+    mov r10, r11 # assign L12
+    mov [rbp - 112], r10 # spill L12 to slot
+    mov r11, [rbp - 256] # tag L13 from tag-slot
+    mov [rbp - 248], r11 # store tag L12
+    jmp .L80d5_rt_str_trim_start_bb12 # branch
+.L80d5_rt_str_trim_start_bb12:
+    mov r10, [rbp - 112] # reload L12 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_trim_start_bb14 # jump-if-zero -> else
+    jmp .L80d5_rt_str_trim_start_bb13 # jump -> then
+.L80d5_rt_str_trim_start_bb13:
+    mov r10, r14 # binop lhs into dst
+    add r10, 1 # binop +
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 272], r11 # store tag L15
+    mov [rbp - 136], r10 # spill L15 to slot
+    mov r10, [rbp - 136] # reload L15 from spill slot
+    mov r14, r10 # assign L3
+    mov r11, [rbp - 272] # tag L15 from tag-slot
+    mov [rbp - 176], r11 # store tag L3
+    jmp .L80d5_rt_str_trim_start_bb15 # branch
+.L80d5_rt_str_trim_start_bb14:
+    jmp .L80d5_rt_str_trim_start_bb3 # branch
+.L80d5_rt_str_trim_start_bb15:
+    jmp .L80d5_rt_str_trim_start_bb1 # branch
+    add rsp, 240 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
 .globl rt_str_trim_end
@@ -1066,96 +2184,192 @@ rt_str_trim_end:
     .loc 1 210 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
-.Lf6aa_rt_str_trim_end_bb0:
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
+    push rbx # prologue: save rbx
+    push r12 # prologue: save r12
+    push r13 # prologue: save r13
+    push r14 # prologue: save r14
+    push r15 # prologue: save r15
+    sub rsp, 8 # prologue: callee-save align pad
+    sub rsp, 256 # prologue: alloc spill frame
+    mov [rbp - 160], rdi # store tag L0
+    mov rbx, rsi # ingress param payload
+.L80d5_rt_str_trim_end_bb0:
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 160] # tag L0 from tag-slot
     call hexa_len # call hexa_len
-    mov rbx, rax # assign L2
-    mov r12, rbx # assign L3
-    jmp .Lf6aa_rt_str_trim_end_bb1 # branch
-.Lf6aa_rt_str_trim_end_bb1:
-    cmp r12, 0 # binop >
+    mov r12, rax # hv: unbox call result (rax)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 168], r11 # store tag L1
+    mov r13, r12 # assign L2
+    mov r11, [rbp - 168] # tag L1 from tag-slot
+    mov [rbp - 176], r11 # store tag L2
+    mov r14, r13 # assign L3
+    mov r11, [rbp - 176] # tag L2 from tag-slot
+    mov [rbp - 184], r11 # store tag L3
+    jmp .L80d5_rt_str_trim_end_bb1 # branch
+.L80d5_rt_str_trim_end_bb1:
+    cmp r14, 0 # binop >
     setg al # binop > → al
-    movzx r13, al # zero-extend al into dst
-    test r13, r13 # br_cond test
-    jz .Lf6aa_rt_str_trim_end_bb3 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_trim_end_bb2 # jump -> then
-.Lf6aa_rt_str_trim_end_bb2:
-    mov r14, r12 # binop lhs into dst
-    sub r14, 1 # binop -
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
-    mov rcx, r14 # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
+    movzx r15, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 192], r11 # store tag L4
+    test r15, r15 # br_cond test
+    jz .L80d5_rt_str_trim_end_bb3 # jump-if-zero -> else
+    jmp .L80d5_rt_str_trim_end_bb2 # jump -> then
+.L80d5_rt_str_trim_end_bb2:
+    mov r10, r14 # binop lhs into dst
+    sub r10, 1 # binop -
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 200], r11 # store tag L5
+    mov [rbp - 56], r10 # spill L5 to slot
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 160] # tag L0 from tag-slot
+    mov rcx, [rbp - 56] # reload L5 from spill slot
+    mov rcx, rcx # hv arg payload
+    mov rdx, [rbp - 200] # tag L5 from tag-slot
     call hexa_str_byte_at # call hexa_str_byte_at
-    mov r15, rdx # hv: unbox call result (rdx)
-    mov rax, r15 # assign L7
-    cmp rax, 32 # binop ==
+    mov [rbp - 208], rax # store tag L6
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 64], r10 # spill L6 to slot
+    mov r11, [rbp - 64] # reload L6 from spill slot
+    mov r10, r11 # assign L7
+    mov [rbp - 72], r10 # spill L7 to slot
+    mov r11, [rbp - 208] # tag L6 from tag-slot
+    mov [rbp - 216], r11 # store tag L7
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    cmp r10, 32 # binop ==
     sete al # binop == → al
-    movzx rbx, al # zero-extend al into dst
-    test rbx, rbx # br_cond test
-    jz .Lf6aa_rt_str_trim_end_bb5 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_trim_end_bb4 # jump -> then
-.Lf6aa_rt_str_trim_end_bb3:
-    mov rsi, rdi # hv arg payload
-    mov rdi, 0 # hv arg tag = 0
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 224], r11 # store tag L8
+    mov [rbp - 80], r10 # spill L8 to slot
+    mov r10, [rbp - 80] # reload L8 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_trim_end_bb5 # jump-if-zero -> else
+    jmp .L80d5_rt_str_trim_end_bb4 # jump -> then
+.L80d5_rt_str_trim_end_bb3:
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 160] # tag L0 from tag-slot
     mov rcx, 0 # hv arg payload
-    mov rdx, 0 # hv arg tag = 0
-    mov r9, r12 # hv arg payload
-    mov r8, 0 # hv arg tag = 0
+    mov rdx, 0 # tag default = TAG_INT
+    mov r9, r14 # hv arg payload
+    mov r8, [rbp - 184] # tag L3 from tag-slot
     call hexa_str_substring # call hexa_str_substring
-    mov r13, rdx # hv: unbox call result (rdx)
-    mov rax, r13 # set return value
+    mov [rbp - 296], rax # store tag L17
+    mov r10, rdx # hv: unbox call result (rdx)
+    mov [rbp - 152], r10 # spill L17 to slot
+    mov rdx, [rbp - 152] # reload L17 from spill slot
+    mov rdx, rdx # hv arg payload
+    mov rax, [rbp - 296] # tag L17 from tag-slot
+    add rsp, 256 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.Lf6aa_rt_str_trim_end_bb4:
-    mov r14, rbx # assign L9
-    jmp .Lf6aa_rt_str_trim_end_bb6 # branch
-.Lf6aa_rt_str_trim_end_bb5:
-    cmp rax, 9 # binop ==
+.L80d5_rt_str_trim_end_bb4:
+    mov r11, [rbp - 80] # reload L8 from spill slot
+    mov r10, r11 # assign L9
+    mov [rbp - 88], r10 # spill L9 to slot
+    mov r11, [rbp - 224] # tag L8 from tag-slot
+    mov [rbp - 232], r11 # store tag L9
+    jmp .L80d5_rt_str_trim_end_bb6 # branch
+.L80d5_rt_str_trim_end_bb5:
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    cmp r10, 9 # binop ==
     sete al # binop == → al
-    movzx r15, al # zero-extend al into dst
-    mov r14, r15 # assign L9
-    jmp .Lf6aa_rt_str_trim_end_bb6 # branch
-.Lf6aa_rt_str_trim_end_bb6:
-    test r14, r14 # br_cond test
-    jz .Lf6aa_rt_str_trim_end_bb8 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_trim_end_bb7 # jump -> then
-.Lf6aa_rt_str_trim_end_bb7:
-    mov r13, r14 # assign L11
-    jmp .Lf6aa_rt_str_trim_end_bb9 # branch
-.Lf6aa_rt_str_trim_end_bb8:
-    cmp rax, 10 # binop ==
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 240], r11 # store tag L10
+    mov [rbp - 96], r10 # spill L10 to slot
+    mov r11, [rbp - 96] # reload L10 from spill slot
+    mov r10, r11 # assign L9
+    mov [rbp - 88], r10 # spill L9 to slot
+    mov r11, [rbp - 240] # tag L10 from tag-slot
+    mov [rbp - 232], r11 # store tag L9
+    jmp .L80d5_rt_str_trim_end_bb6 # branch
+.L80d5_rt_str_trim_end_bb6:
+    mov r10, [rbp - 88] # reload L9 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_trim_end_bb8 # jump-if-zero -> else
+    jmp .L80d5_rt_str_trim_end_bb7 # jump -> then
+.L80d5_rt_str_trim_end_bb7:
+    mov r11, [rbp - 88] # reload L9 from spill slot
+    mov r10, r11 # assign L11
+    mov [rbp - 104], r10 # spill L11 to slot
+    mov r11, [rbp - 232] # tag L9 from tag-slot
+    mov [rbp - 248], r11 # store tag L11
+    jmp .L80d5_rt_str_trim_end_bb9 # branch
+.L80d5_rt_str_trim_end_bb8:
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    cmp r10, 10 # binop ==
     sete al # binop == → al
-    movzx rbx, al # zero-extend al into dst
-    mov r13, rbx # assign L11
-    jmp .Lf6aa_rt_str_trim_end_bb9 # branch
-.Lf6aa_rt_str_trim_end_bb9:
-    test r13, r13 # br_cond test
-    jz .Lf6aa_rt_str_trim_end_bb11 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_trim_end_bb10 # jump -> then
-.Lf6aa_rt_str_trim_end_bb10:
-    mov r15, r13 # assign L13
-    jmp .Lf6aa_rt_str_trim_end_bb12 # branch
-.Lf6aa_rt_str_trim_end_bb11:
-    cmp rax, 13 # binop ==
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 256], r11 # store tag L12
+    mov [rbp - 112], r10 # spill L12 to slot
+    mov r11, [rbp - 112] # reload L12 from spill slot
+    mov r10, r11 # assign L11
+    mov [rbp - 104], r10 # spill L11 to slot
+    mov r11, [rbp - 256] # tag L12 from tag-slot
+    mov [rbp - 248], r11 # store tag L11
+    jmp .L80d5_rt_str_trim_end_bb9 # branch
+.L80d5_rt_str_trim_end_bb9:
+    mov r10, [rbp - 104] # reload L11 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_trim_end_bb11 # jump-if-zero -> else
+    jmp .L80d5_rt_str_trim_end_bb10 # jump -> then
+.L80d5_rt_str_trim_end_bb10:
+    mov r11, [rbp - 104] # reload L11 from spill slot
+    mov r10, r11 # assign L13
+    mov [rbp - 120], r10 # spill L13 to slot
+    mov r11, [rbp - 248] # tag L11 from tag-slot
+    mov [rbp - 264], r11 # store tag L13
+    jmp .L80d5_rt_str_trim_end_bb12 # branch
+.L80d5_rt_str_trim_end_bb11:
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    cmp r10, 13 # binop ==
     sete al # binop == → al
-    movzx r14, al # zero-extend al into dst
-    mov r15, r14 # assign L13
-    jmp .Lf6aa_rt_str_trim_end_bb12 # branch
-.Lf6aa_rt_str_trim_end_bb12:
-    test r15, r15 # br_cond test
-    jz .Lf6aa_rt_str_trim_end_bb14 # jump-if-zero -> else
-    jmp .Lf6aa_rt_str_trim_end_bb13 # jump -> then
-.Lf6aa_rt_str_trim_end_bb13:
-    mov rbx, r12 # binop lhs into dst
-    sub rbx, 1 # binop -
-    mov r12, rbx # assign L3
-    jmp .Lf6aa_rt_str_trim_end_bb15 # branch
-.Lf6aa_rt_str_trim_end_bb14:
-    jmp .Lf6aa_rt_str_trim_end_bb3 # branch
-.Lf6aa_rt_str_trim_end_bb15:
-    jmp .Lf6aa_rt_str_trim_end_bb1 # branch
+    movzx r10, al # zero-extend al into dst
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 272], r11 # store tag L14
+    mov [rbp - 128], r10 # spill L14 to slot
+    mov r11, [rbp - 128] # reload L14 from spill slot
+    mov r10, r11 # assign L13
+    mov [rbp - 120], r10 # spill L13 to slot
+    mov r11, [rbp - 272] # tag L14 from tag-slot
+    mov [rbp - 264], r11 # store tag L13
+    jmp .L80d5_rt_str_trim_end_bb12 # branch
+.L80d5_rt_str_trim_end_bb12:
+    mov r10, [rbp - 120] # reload L13 from spill slot
+    test r10, r10 # br_cond test
+    jz .L80d5_rt_str_trim_end_bb14 # jump-if-zero -> else
+    jmp .L80d5_rt_str_trim_end_bb13 # jump -> then
+.L80d5_rt_str_trim_end_bb13:
+    mov r10, r14 # binop lhs into dst
+    sub r10, 1 # binop -
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 288], r11 # store tag L16
+    mov [rbp - 144], r10 # spill L16 to slot
+    mov r10, [rbp - 144] # reload L16 from spill slot
+    mov r14, r10 # assign L3
+    mov r11, [rbp - 288] # tag L16 from tag-slot
+    mov [rbp - 184], r11 # store tag L3
+    jmp .L80d5_rt_str_trim_end_bb15 # branch
+.L80d5_rt_str_trim_end_bb14:
+    jmp .L80d5_rt_str_trim_end_bb3 # branch
+.L80d5_rt_str_trim_end_bb15:
+    jmp .L80d5_rt_str_trim_end_bb1 # branch
+    add rsp, 256 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
 .section .rodata

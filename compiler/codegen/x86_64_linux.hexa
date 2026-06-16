@@ -205,10 +205,22 @@ fn _x86_64_arg_reg(idx: i64) -> string {
 }
 
 // ── C6 — Linear-scan register allocator (x86_64) ─────────────
+// RT-NATIVE leg B PAIR-MODEL — the x86_64 backend carries a value's PAYLOAD
+// in a register/spill slot (the original raw-int model), but ALSO carries the
+// value's HexaVal TAG in a dedicated per-value frame tag-slot so the tag
+// survives through params/locals/call-results into a tag-dispatching runtime
+// helper (e.g. hexa_len → `if HX_IS_STR(v)`). Mirrors the arm64 16-byte pair
+// model (which force-spills every value to a {tag,payload} 16B slot) but stays
+// surgical: the existing single-register payload model is untouched; the tag
+// slot is a PARALLEL 8-byte slot in an extended frame region. `tag_base` is the
+// byte offset (from the spill region top) where the per-value tag-slot array
+// begins; value `id` (interval index `idx`) gets its tag at `[rbp, -8 -
+// (tag_base + idx*8)]`.
 pub struct X86RegMap {
     ids: [i64],
     regs: [string],
-    slots: [i64]
+    slots: [i64],
+    tag_base: i64
 }
 
 pub struct X86AllocResult {
@@ -222,9 +234,33 @@ pub struct X86Intervals {
     ends: [i64]
 }
 
+// PAIR-MODEL — callee-saved register block. rbx/r12-r15 (the allocation pool)
+// are CALLEE-SAVED under System V: a function that uses them MUST preserve them
+// for its caller (incl. the C harness / any C caller). The prologue pushes all
+// five + one 8-byte alignment pad (6 * 8 = 48 bytes, a 16-byte multiple so the
+// call-site rsp alignment is preserved); the epilogue pops them. Spill/tag
+// frame slots are addressed BELOW this block (offset by _X86_CALLEE_SAVE_BYTES)
+// so they never alias a saved register.
+let _X86_CALLEE_SAVE_BYTES = 48
+
+// Negative rbp-relative byte offset for a frame slot at logical offset `off`
+// (0-based). Shifted below the callee-saved block. Returns the signed offset
+// for _x86_op_mem.
+fn _x86_frame_off(off: i64) -> i64 {
+    return -8 - _X86_CALLEE_SAVE_BYTES - off
+}
+
 fn _x86_pool_init() -> [string] {
+    // PAIR-MODEL — only CALLEE-SAVED registers are eligible for a value that
+    // may be live across a call. rax was previously in this pool, but rax is
+    // CALLER-SAVED (volatile): a value parked in rax is destroyed by the next
+    // `call` (every runtime builtin / user-fn call clobbers rax:rdx as the
+    // return pair + rcx/rdi/rsi/r8-r11 as arg/scratch). A param `s` assigned to
+    // rax and then read after `hexa_len(s)` reloaded garbage — the crash root.
+    // Restrict the pool to rbx/r12-r15 (callee-saved); anything beyond 5 live
+    // values spills to the frame (safe across calls). rax stays free as the
+    // return/scratch register the call emit already assumes.
     let mut p: [string] = []
-    p.push("rax")
     p.push("rbx")
     p.push("r12")
     p.push("r13")
@@ -316,6 +352,27 @@ fn _x86_compute_live_ranges(mf: MFunc) -> X86Intervals {
         }
         bi = bi + 1
     }
+    // PAIR-MODEL — CONSERVATIVE WHOLE-FUNCTION LIVENESS. The textual linear-scan
+    // live ranges above are WRONG across loop back-edges: a value last *read* in
+    // a loop-header block (e.g. the loop bound `n` in `cmp i, n`) is positioned
+    // BEFORE a value *defined* in the loop body (e.g. `b = s.byte_at(i)`), so
+    // the scanner thinks `n` is dead and lets `b` reuse its register — but the
+    // back-edge re-enters the header needing `n`, which `b` has clobbered (the
+    // confirmed `byte_at index out of bounds` miscompile: the loop bound was
+    // overwritten by the per-iteration byte). A proper fix needs loop-aware
+    // liveness; here we mirror the arm64 backend's force-resident model by
+    // extending EVERY interval to span the whole function [0, pos]. No two
+    // values ever share a physical register, so loop-carried values survive.
+    // The first 5 values stay pinned in the callee-saved pool (rbx/r12-r15,
+    // never expired → never reused); the rest spill to the frame (safe across
+    // calls). Slower but correct; a real allocator is a post-correctness opt.
+    let mut ei = 0
+    while ei < len(ids) {
+        if starts[ei] < 0 { starts[ei] = 0 }
+        starts[ei] = 0
+        ends[ei] = pos
+        ei = ei + 1
+    }
     return X86Intervals { ids: ids, starts: starts, ends: ends }
 }
 
@@ -352,9 +409,18 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
         j = j + 1
     }
 
+    // PAIR-MODEL — params are NOT pre-colored to a SysV arg register. In the
+    // raw-int model a param's payload lived in its arg reg, so pre-coloring it
+    // there avoided an ingress mov. Now each param arrives as a {tag,payload}
+    // PAIR (param p → _x86_hv_pair_lo/hi(p)); the prologue moves the PAYLOAD
+    // out of the high arg reg into the param's assigned home (pool reg or
+    // payload spill) and stashes the TAG into the param's tag-slot. So a param
+    // is allocated like any ordinary value — no arg-reg pre-color. The
+    // `is_param` victim-protection below still keeps params live for the whole
+    // fn (they are stored once at ingress and reloaded from their home).
     let mut p = 0
     while p < len(mf.params) {
-        if p < 6 {
+        if false {
             let pid = mf.params[p].id
             let idx = _x86_index_of(iv.ids, pid)
             if idx >= 0 {
@@ -489,11 +555,16 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
         s = s + 1
     }
 
-    let mut frame = next_slot
+    // RT-NATIVE leg B PAIR-MODEL — reserve a parallel per-value tag-slot
+    // region ABOVE the payload-spill region. Every value (one per `map_ids`
+    // entry) gets an 8-byte tag slot so the HexaVal tag is carried alongside
+    // the payload register/spill. tag_base = top of the payload-spill region.
+    let tag_base = next_slot
+    let mut frame = next_slot + n * 8
     let rem = frame - (frame / 16) * 16
     if rem != 0 { frame = frame + (16 - rem) }
 
-    let map = X86RegMap { ids: map_ids, regs: map_regs, slots: map_slots }
+    let map = X86RegMap { ids: map_ids, regs: map_regs, slots: map_slots, tag_base: tag_base }
     return X86AllocResult { map: map, frame_size: frame }
 }
 
@@ -515,6 +586,102 @@ fn _x86_spill_offset(rm: X86RegMap, id: i64) -> i64 {
     let idx = _x86_index_of(rm.ids, id)
     if idx < 0 { return 0 }
     return rm.slots[idx]
+}
+
+// RT-NATIVE leg B PAIR-MODEL — per-value tag-slot frame byte-offset for value
+// `id`. Returns -1 if `id` is not tracked (no tag slot reserved). The slot is
+// the 8 bytes at [rbp, -8 - off]. Mirrors arm64's tag eightbyte (the `lo`
+// register of its 16B pair), here kept in a parallel frame region so the rest
+// of the raw-int payload model is untouched.
+fn _x86_tag_off(rm: X86RegMap, id: i64) -> i64 {
+    let idx = _x86_index_of(rm.ids, id)
+    if idx < 0 { return -1 }
+    return rm.tag_base + idx * 8
+}
+
+// Emit a tag store from a REGISTER source: `mov [rbp, -8-tagoff], reg`. The
+// register source gives the store an unambiguous operand size (8 bytes) under
+// GAS Intel syntax. No-op for untracked ids.
+fn _x86_store_tag_reg(buf: [LInstr], rm: X86RegMap, id: i64, src_reg: string) -> [LInstr] {
+    let mut out = buf
+    let off = _x86_tag_off(rm, id)
+    if off < 0 { return out }
+    out.push(_x86_instr2("mov", _x86_op_mem("rbp", _x86_frame_off(off)), _x86_op_reg(src_reg),
+                     "store tag L" + to_string(id)))
+    return out
+}
+
+// Emit a tag store from an IMMEDIATE constant tag. A direct `mov mem, imm` is
+// ambiguous in GAS Intel syntax (no operand width) — so materialize the tag
+// into the r11 scratch first, then store from the register. r11 is free at
+// every call site (the binop/call-result tag stores run AFTER the result has
+// been captured into dst, so the r10/r11 operand scratches are dead).
+fn _x86_store_tag_imm(buf: [LInstr], rm: X86RegMap, id: i64, tag: i64) -> [LInstr] {
+    let mut out = buf
+    let off = _x86_tag_off(rm, id)
+    if off < 0 { return out }
+    out.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_imm(tag),
+                     "materialize tag imm " + to_string(tag)))
+    out.push(_x86_instr2("mov", _x86_op_mem("rbp", _x86_frame_off(off)), _x86_op_reg("r11"),
+                     "store tag L" + to_string(id)))
+    return out
+}
+
+// Load value `id`'s carried tag from its tag-slot into `scratch` (TAG_INT=0 if
+// untracked). The reg-source counterpart of _x86_tag_resolve for a bare id.
+fn _x86_tag_resolve_local(buf: [LInstr], rm: X86RegMap, id: i64, scratch: string) -> [LInstr] {
+    let mut out = buf
+    let off = _x86_tag_off(rm, id)
+    if off < 0 {
+        out.push(_x86_instr2("mov", _x86_op_reg(scratch), _x86_op_imm(0),
+                         "tag L" + to_string(id) + " untracked = TAG_INT"))
+        return out
+    }
+    out.push(_x86_instr2("mov", _x86_op_reg(scratch),
+                     _x86_op_mem("rbp", _x86_frame_off(off)),
+                     "tag L" + to_string(id) + " from tag-slot"))
+    return out
+}
+
+// Materialize the HexaVal TAG of operand `o` into `scratch` and return the
+// LOperand to read it. const_str→3 const_float→1 const_int→0; a `local` loads
+// its carried tag from the value's tag-slot (the WHOLE point of the pair model
+// — a string stored in a local keeps TAG_STR=3 instead of the operand-kind
+// default 0). A tracked global also loads from its tag-slot; otherwise 0.
+fn _x86_tag_resolve(buf: [LInstr], o: Operand, rm: X86RegMap, scratch: string) -> [LInstr] {
+    let mut out = buf
+    if o.kind == "const_str"   {
+        out.push(_x86_instr2("mov", _x86_op_reg(scratch), _x86_op_imm(3),
+                         "tag const_str = TAG_STR"))
+        return out
+    }
+    if o.kind == "const_float" {
+        out.push(_x86_instr2("mov", _x86_op_reg(scratch), _x86_op_imm(1),
+                         "tag const_float = TAG_FLOAT"))
+        return out
+    }
+    if o.kind == "local" {
+        let off = _x86_tag_off(rm, o.local_id)
+        if off >= 0 {
+            out.push(_x86_instr2("mov", _x86_op_reg(scratch),
+                             _x86_op_mem("rbp", _x86_frame_off(off)),
+                             "tag L" + to_string(o.local_id) + " from tag-slot"))
+            return out
+        }
+    }
+    if o.kind == "global" {
+        let off = _x86_tag_off(rm, o.global_id)
+        if off >= 0 {
+            out.push(_x86_instr2("mov", _x86_op_reg(scratch),
+                             _x86_op_mem("rbp", _x86_frame_off(off)),
+                             "tag g" + to_string(o.global_id) + " from tag-slot"))
+            return out
+        }
+    }
+    // const_int / untracked → TAG_INT = 0
+    out.push(_x86_instr2("mov", _x86_op_reg(scratch), _x86_op_imm(0),
+                     "tag default = TAG_INT"))
+    return out
 }
 
 // String literal → rodata label map. See arm64_darwin.hexa for the
@@ -662,22 +829,32 @@ fn _x86_hv_box_arg(buf: [LInstr], o: Operand, st: X86StrTab, rm: X86RegMap,
                    lo: string, hi: string, opts: CodegenOptions) -> [LInstr] {
     let mut out = buf
     if o.kind == "const_str" {
+        // A bare string literal: payload = &.LCstr (RIP-relative), tag = 3.
         let mut lbl = _x86_strtab_lookup(st, o.str_val)
         if len(lbl) == 0 { lbl = o.str_val }
         out.push(_x86_instr2("lea", _x86_op_reg(hi),
                          _x86_op_label("[rip+" + lbl + "]"),
                          "hv arg payload: &str " + lbl))
         out.push(_x86_instr2("mov", _x86_op_reg(lo),
-                         _x86_op_imm(_x86_hv_tag_for(o)),
-                         "hv arg tag = " + to_string(_x86_hv_tag_for(o))))
+                         _x86_op_imm(3),
+                         "hv arg tag = TAG_STR"))
         return out
     }
+    // RT-NATIVE leg B PAIR-MODEL — the tag is the value's ACTUAL carried tag,
+    // NOT the operand-kind default. A `local` holding a string keeps TAG_STR
+    // (recovered from its tag-slot via _x86_tag_resolve) so a tag-dispatching
+    // runtime helper sees the right tag.
+    //
+    // ORDER MATTERS: materialize the PAYLOAD into `hi` FIRST, then the tag into
+    // `lo`. If the operand's payload home register IS `lo` (e.g. a local whose
+    // assigned reg coincides with the tag eightbyte register, or the rax:rdx
+    // return pair), loading the tag into `lo` first would clobber the payload
+    // before it is read. The tag load reads only a memory slot / immediate, so
+    // it can never disturb `hi` — making payload-first the safe sequence.
     out = _x86_op_rm(out, o, st, rm, hi, opts)
     let payload = _x86_op_resolve(o, st, rm, hi, opts)
     out.push(_x86_instr2("mov", _x86_op_reg(hi), payload, "hv arg payload"))
-    out.push(_x86_instr2("mov", _x86_op_reg(lo),
-                     _x86_op_imm(_x86_hv_tag_for(o)),
-                     "hv arg tag = " + to_string(_x86_hv_tag_for(o))))
+    out = _x86_tag_resolve(out, o, rm, lo)
     return out
 }
 
@@ -687,7 +864,7 @@ fn _x86_load_spill(buf: [LInstr], rm: X86RegMap, id: i64, scratch: string) -> [L
     let mut out = buf
     let off = _x86_spill_offset(rm, id)
     out.push(_x86_instr2("mov", _x86_op_reg(scratch),
-                     _x86_op_mem("rbp", -8 - off),
+                     _x86_op_mem("rbp", _x86_frame_off(off)),
                      "reload L" + to_string(id) + " from spill slot"))
     return out
 }
@@ -695,9 +872,32 @@ fn _x86_load_spill(buf: [LInstr], rm: X86RegMap, id: i64, scratch: string) -> [L
 fn _x86_store_spill(buf: [LInstr], rm: X86RegMap, id: i64, src_reg: string) -> [LInstr] {
     let mut out = buf
     let off = _x86_spill_offset(rm, id)
-    out.push(_x86_instr2("mov", _x86_op_mem("rbp", -8 - off),
+    out.push(_x86_instr2("mov", _x86_op_mem("rbp", _x86_frame_off(off)),
                      _x86_op_reg(src_reg),
                      "spill L" + to_string(id) + " to slot"))
+    return out
+}
+
+// PAIR-MODEL — emit the function-exit tail: free the spill frame, pop the
+// callee-save align pad, restore rbx/r12-r15 (reverse push order) and rbp, ret.
+// Shared by the RETURN statement and the safety epilogue so both honor the
+// callee-saved ABI contract. The return-value pair (rax:rdx) is already set by
+// the caller before this runs; none of these instructions touch rax/rdx.
+fn _x86_emit_epilogue(buf: [LInstr], spill_frame: i64) -> [LInstr] {
+    let mut out = buf
+    if spill_frame > 0 {
+        out.push(_x86_instr2("add", _x86_op_reg("rsp"),
+                         _x86_op_imm(spill_frame), "epilogue: free spill frame"))
+    }
+    out.push(_x86_instr2("add", _x86_op_reg("rsp"), _x86_op_imm(8),
+                     "epilogue: drop callee-save align pad"))
+    out.push(_x86_instr1("pop", _x86_op_reg("r15"), "epilogue: restore r15"))
+    out.push(_x86_instr1("pop", _x86_op_reg("r14"), "epilogue: restore r14"))
+    out.push(_x86_instr1("pop", _x86_op_reg("r13"), "epilogue: restore r13"))
+    out.push(_x86_instr1("pop", _x86_op_reg("r12"), "epilogue: restore r12"))
+    out.push(_x86_instr1("pop", _x86_op_reg("rbx"), "epilogue: restore rbx"))
+    out.push(_x86_instr1("pop", _x86_op_reg("rbp"), "epilogue: restore rbp"))
+    out.push(_x86_instr0("ret", "return"))
     return out
 }
 
@@ -808,22 +1008,27 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // logic parity with the existing concat/idiv emits.
         if s.op == "array_lit" {
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
+            // hexa_array_new returns a HexaVal {tag=TAG_ARRAY, payload=ptr} in
+            // rax:rdx. PAIR-MODEL: payload = rdx (the array ptr), tag = rax.
             buf.push(_x86_instr1("call", _x86_op_label("hexa_array_new"),
                              "array_lit: new array"))
-            buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
-                             "array_lit: capture new array"))
+            buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                             "array_lit: capture new array payload"))
+            buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
             let mut i = 0
             while i < len(s.args) {
-                buf = _x86_op_rm(buf, s.args[i], st, rm, "r10", opts)
-                let v = _x86_op_resolve(s.args[i], st, rm, "r10", opts)
-                buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), v,
-                                 "array_lit: elem " + to_string(i)))
-                buf.push(_x86_instr2("mov", _x86_op_reg("rdi"), dst,
-                                 "array_lit: arr arg"))
+                // hexa_array_push(HexaVal arr, HexaVal item) — both args are
+                // 16B HexaVal pairs: arr → rdi:rsi, item → rdx:rcx.
+                buf = _x86_hv_box_arg(buf, s.args[i], st, rm, "rdx", "rcx", opts)
+                // arr = {tag, dst-payload}: box dst's carried tag into rdi.
+                buf = _x86_tag_resolve_local(buf, rm, s.dst.id, "rdi")
+                buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), dst,
+                                 "array_lit: arr payload"))
                 buf.push(_x86_instr1("call", _x86_op_label("hexa_array_push"),
                                  "array_lit: push elem " + to_string(i)))
-                buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
-                                 "array_lit: recapture array"))
+                buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                                 "array_lit: recapture array payload"))
+                buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
                 i = i + 1
             }
             buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
@@ -842,8 +1047,9 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
             buf.push(_x86_instr1("call", _x86_op_label("hexa_map_new"),
                              "struct_lit: new map"))
-            buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
-                             "struct_lit: capture new map"))
+            buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                             "struct_lit: capture new map payload"))
+            buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
             let mut i = 1
             while i + 1 < len(s.args) {
                 buf = _x86_op_rm(buf, s.args[i], st, rm, "r10", opts)
@@ -858,8 +1064,9 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                                  "struct_lit: map arg"))
                 buf.push(_x86_instr1("call", _x86_op_label("hexa_map_set"),
                                  "struct_lit: set field"))
-                buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
-                                 "struct_lit: recapture map"))
+                buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                                 "struct_lit: recapture map payload"))
+                buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
                 i = i + 2
             }
             buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
@@ -875,8 +1082,9 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
             buf.push(_x86_instr1("call", _x86_op_label("hexa_map_new"),
                              "enum_ctor: new map (multi-cell payload)"))
-            buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
-                             "enum_ctor: capture new map"))
+            buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                             "enum_ctor: capture new map payload"))
+            buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
             let mut i = 1
             while i + 1 < len(s.args) {
                 buf = _x86_op_rm(buf, s.args[i], st, rm, "r10", opts)
@@ -891,8 +1099,9 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                                  "enum_ctor: map arg"))
                 buf.push(_x86_instr1("call", _x86_op_label("hexa_map_set"),
                                  "enum_ctor: set cell"))
-                buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
-                                 "enum_ctor: recapture map"))
+                buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                                 "enum_ctor: recapture map payload"))
+                buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
                 i = i + 2
             }
             buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
@@ -904,19 +1113,20 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // Parity with the shipped array_lit/struct_lit emits; rebuild-
         // verification deferred (Track-A clang wall).
         if s.op == "field" && len(s.args) >= 2 {
+            // hexa_map_get(HexaVal m, const char* key) → m is a 16B pair
+            // (rdi:rsi), key is a raw char* (rdx). Box the map receiver so its
+            // carried tag (TAG_MAP) reaches the runtime tag-dispatch.
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
-            buf = _x86_op_rm(buf, s.args[0], st, rm, "r10", opts)
-            let base = _x86_op_resolve(s.args[0], st, rm, "r10", opts)
-            buf = _x86_op_rm(buf, s.args[1], st, rm, "r11", opts)
-            let key = _x86_op_resolve(s.args[1], st, rm, "r11", opts)
-            buf.push(_x86_instr2("mov", _x86_op_reg("rdi"), base,
-                             "field: map base"))
-            buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), key,
+            buf = _x86_hv_box_arg(buf, s.args[0], st, rm, "rdi", "rsi", opts)
+            buf = _x86_op_rm(buf, s.args[1], st, rm, "rdx", opts)
+            let key = _x86_op_resolve(s.args[1], st, rm, "rdx", opts)
+            buf.push(_x86_instr2("mov", _x86_op_reg("rdx"), key,
                              "field: key"))
             buf.push(_x86_instr1("call", _x86_op_label("hexa_map_get"),
                              "field: hexa_map_get"))
-            buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
-                             "field: capture result"))
+            buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                             "field: capture result payload"))
+            buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
             buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
             return buf
         }
@@ -928,6 +1138,10 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
             buf.push(_x86_instr2("mov", dst, src, "assign L" + to_string(s.dst.id)))
             buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            // PAIR-MODEL — carry the source value's tag to the dst so an
+            // assigned string/array keeps its HexaVal tag (e.g. `let x = s`).
+            buf = _x86_tag_resolve(buf, s.args[0], rm, "r11")
+            buf = _x86_store_tag_reg(buf, rm, s.dst.id, "r11")
         }
         return buf
     }
@@ -943,13 +1157,17 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             let dst = _x86_op_reg(dst_name)
 
             if _x86_is_concat(s.op) {
-                buf.push(_x86_instr2("mov", _x86_op_reg("rdi"), a, "concat arg0"))
-                buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), b, "concat arg1"))
+                // hexa_str_concat(HexaVal a, HexaVal b) → HexaVal in rax:rdx.
+                // PAIR-MODEL: box both args (a→rdi:rsi, b→rdx:rcx) so each
+                // carries its TAG_STR; capture payload from rdx, tag from rax.
+                buf = _x86_hv_box_arg(buf, s.args[0], st, rm, "rdi", "rsi", opts)
+                buf = _x86_hv_box_arg(buf, s.args[1], st, rm, "rdx", "rcx", opts)
                 buf.push(_x86_instr1("call", _x86_op_label("hexa_str_concat"),
                                  "call runtime: hexa_str_concat"))
-                if dst.reg.name != "rax" {
-                    buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"), "capture concat result"))
+                if dst.reg.name != "rdx" {
+                    buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"), "capture concat result payload"))
                 }
+                buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
                 buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
                 return buf
             }
@@ -972,6 +1190,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                                  "binop " + s.op + " → al"))
                 buf.push(_x86_instr2("movzx", dst, _x86_op_reg("al"),
                                  "zero-extend al into dst"))
+                buf = _x86_store_tag_imm(buf, rm, s.dst.id, 2) // TAG_BOOL
                 buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
                 return buf
             }
@@ -995,6 +1214,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 buf.push(_x86_instr1("idiv", divisor, "binop /"))
                 buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
                                  "idiv quotient → dst"))
+                buf = _x86_store_tag_imm(buf, rm, s.dst.id, 0) // TAG_INT
                 buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
                 return buf
             }
@@ -1020,6 +1240,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 }
             }
             buf.push(_x86_instr2(mnemonic, dst, b_real, "binop " + s.op))
+            buf = _x86_store_tag_imm(buf, rm, s.dst.id, 0) // TAG_INT (arith/bitwise)
             buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
         }
         return buf
@@ -1081,80 +1302,88 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             }
             if s.dst.id >= 0 {
                 // Unbox the 16-byte HexaVal return (rax:rdx = tag:payload)
-                // back into the raw-int model the x86_64 backend carries.
+                // back into the raw-int + carried-tag PAIR-MODEL.
                 //   _builtin_ret_box != "" : the C builtin returned a raw int
-                //     in eax (len/contains/…) — already raw, take rax.
-                //   otherwise : a HexaVal return — the raw value the rest of
-                //     the backend wants is the payload eightbyte = rdx.
+                //     in eax (len/contains/…) — payload = rax, tag = TAG_INT(0).
+                //   otherwise : a HexaVal return — payload = rdx (the payload
+                //     eightbyte), tag = rax (the returned HexaVal tag, carried
+                //     into the dst's tag-slot so e.g. a returned string keeps
+                //     TAG_STR for a downstream tag-dispatch).
                 let dst_name = _x86_dst_reg(rm, s.dst.id)
                 let dst = _x86_op_reg(dst_name)
+                let is_retbox = len(_builtin_ret_box(s.op)) > 0
                 let mut src_reg = "rdx"
-                if len(_builtin_ret_box(s.op)) > 0 { src_reg = "rax" }
-                if dst.reg.name != src_reg {
-                    buf.push(_x86_instr2("mov", dst, _x86_op_reg(src_reg),
-                        "hv: unbox call result (" + src_reg + ")"))
+                if is_retbox { src_reg = "rax" }
+                // Capture tag BEFORE moving the payload (payload move into dst
+                // may target rax/rdx, but the tag store reads rax into memory
+                // first so order is: tag-store(rax) then payload-mov). For a
+                // ret-box the payload IS rax, so store the imm tag, not rax.
+                if is_retbox {
+                    if dst.reg.name != src_reg {
+                        buf.push(_x86_instr2("mov", dst, _x86_op_reg(src_reg),
+                            "hv: unbox call result (" + src_reg + ")"))
+                    }
+                    buf = _x86_store_tag_imm(buf, rm, s.dst.id, 0) // TAG_INT
+                } else {
+                    buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
+                    if dst.reg.name != src_reg {
+                        buf.push(_x86_instr2("mov", dst, _x86_op_reg(src_reg),
+                            "hv: unbox call result (" + src_reg + ")"))
+                    }
                 }
                 buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
             }
             return buf
         }
 
-        // ── User-function call: raw single-register System V int ABI.
-        // C7 — stack spill for args 7+. Push args 7+ right-to-left so the
-        // lowest-numbered overflow arg (arg 7) lands at [rsp+0] when `call`
-        // executes. rsp at fn body is 16-byte aligned; if the overflow count
-        // is odd we pre-`sub rsp, 8` to preserve alignment at the call site.
+        // ── User-function call: HexaVal 16-byte SysV register-pair ABI.
+        // PAIR-MODEL — every user .hexa fn compiled by this backend takes and
+        // returns HexaVal {tag,payload} pairs (params arrive as pairs in the
+        // ingress prologue; return emits rax:rdx). So a user→user call boxes
+        // each arg into a register pair exactly like the builtin path: arg0 →
+        // rdi:rsi, arg1 → rdx:rcx, arg2 → r8:r9; args ≥3 spill into 16B stack
+        // slots [rsp+0], [rsp+16], …; result unboxes rdx(payload)+rax(tag).
         let mut overflow_n = 0
-        if arg_n > 6 { overflow_n = arg_n - 6 }
-        let mut align_pad = 0
-        if overflow_n > 0 && overflow_n % 2 == 1 {
-            align_pad = 8
-            buf.push(_x86_instr2("sub", _x86_op_reg("rsp"), _x86_op_imm(8),
-                "C7: align rsp to 16 before " + to_string(overflow_n) + " pushes"))
+        if arg_n > 3 { overflow_n = arg_n - 3 }
+        if overflow_n > 0 {
+            buf.push(_x86_instr2("sub", _x86_op_reg("rsp"),
+                _x86_op_imm(overflow_n * 16),
+                "hv: reserve " + to_string(overflow_n) + " 16B stack arg slots"))
         }
-        // Push overflow args right-to-left so arg 7 ends up at [rsp+0].
+        // Spill args ≥3 right-to-left into the reserved slots.
         let mut k = arg_n - 1
-        while k >= 6 {
-            buf = _x86_op_rm(buf, s.args[k], st, rm, "r10", opts)
-            let mut src = _x86_op_resolve(s.args[k], st, rm, "r10", opts)
-            // `push imm` sign-extends an imm32; a const outside [-2^31, 2^31)
-            // (e.g. 2147483648) is rejected by GNU as ("invalid operand").
-            // Materialize a wide const into r10 first (push reg is unbounded).
-            if s.args[k].kind == "const_int" {
-                let kv = s.args[k].int_val
-                if kv > 2147483647 || kv < -2147483648 {
-                    buf.push(_x86_instr2("mov", _x86_op_reg("r10"), src,
-                                     "materialize wide imm for push (imm32 limit)"))
-                    src = _x86_op_reg("r10")
-                }
-            }
-            buf.push(_x86_instr1("push", src,
-                "C7: spill arg " + to_string(k) + " (right-to-left)"))
+        while k >= 3 {
+            buf = _x86_hv_box_arg(buf, s.args[k], st, rm, "r10", "r11", opts)
+            let off = (k - 3) * 16
+            buf.push(_x86_instr2("mov", _x86_op_mem("rsp", off),
+                _x86_op_reg("r10"), "hv stack arg " + to_string(k) + " tag"))
+            buf.push(_x86_instr2("mov", _x86_op_mem("rsp", off + 8),
+                _x86_op_reg("r11"), "hv stack arg " + to_string(k) + " payload"))
             k = k - 1
         }
-        // Place args 0..5 in System V arg regs (rdi/rsi/rdx/rcx/r8/r9).
+        // Box args 0..2 into their SysV register pairs.
         let mut i = 0
         while i < arg_n {
-            if i < 6 {
-                let scratch = _x86_64_arg_reg_seq(i)
-                buf = _x86_op_rm(buf, s.args[i], st, rm, scratch, opts)
-                let src = _x86_op_resolve(s.args[i], st, rm, scratch, opts)
-                let dst_reg = _x86_op_reg(scratch)
-                buf.push(_x86_instr2("mov", dst_reg, src, "arg " + to_string(i)))
+            if i < 3 {
+                let lo = _x86_hv_pair_lo(i)
+                let hi = _x86_hv_pair_hi(i)
+                buf = _x86_hv_box_arg(buf, s.args[i], st, rm, lo, hi, opts)
             }
             i = i + 1
         }
         buf.push(_x86_instr1("call", _x86_op_label(target), "call " + target))
-        let cleanup = overflow_n * 8 + align_pad
-        if cleanup > 0 {
-            buf.push(_x86_instr2("add", _x86_op_reg("rsp"), _x86_op_imm(cleanup),
-                "C7: pop " + to_string(overflow_n) + " overflow args + pad"))
+        if overflow_n > 0 {
+            buf.push(_x86_instr2("add", _x86_op_reg("rsp"),
+                _x86_op_imm(overflow_n * 16),
+                "hv: pop " + to_string(overflow_n) + " stack arg slots"))
         }
         if s.dst.id >= 0 {
             let dst_name = _x86_dst_reg(rm, s.dst.id)
             let dst = _x86_op_reg(dst_name)
-            if dst.reg.name != "rax" {
-                buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"), "capture call result"))
+            buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
+            if dst.reg.name != "rdx" {
+                buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                    "hv: unbox user-call result payload"))
             }
             buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
         }
@@ -1162,16 +1391,15 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
     }
     if s.kind == _STMT_RETURN {
         if len(s.args) >= 1 {
-            buf = _x86_op_rm(buf, s.args[0], st, rm, "r10", opts)
-            let src = _x86_op_resolve(s.args[0], st, rm, "r10", opts)
-            buf.push(_x86_instr2("mov", _x86_op_reg("rax"), src, "set return value"))
+            // PAIR-MODEL — a user .hexa fn returns a 16-byte HexaVal in the
+            // SysV INTEGER-class return pair rax:rdx (tag:payload). Box the
+            // return operand with lo=rax (tag), hi=rdx (payload) so a returned
+            // string/array carries its real tag back to the caller (and to a
+            // C caller reading {long tag; long u}). Must run BEFORE the frame
+            // teardown since it reads tag/spill slots off rbp.
+            buf = _x86_hv_box_arg(buf, s.args[0], st, rm, "rax", "rdx", opts)
         }
-        if spill_frame > 0 {
-            buf.push(_x86_instr2("add", _x86_op_reg("rsp"),
-                             _x86_op_imm(spill_frame), "epilogue: free spill frame"))
-        }
-        buf.push(_x86_instr1("pop", _x86_op_reg("rbp"), "epilogue: restore rbp"))
-        buf.push(_x86_instr0("ret", "return"))
+        buf = _x86_emit_epilogue(buf, spill_frame)
         return buf
     }
     if s.kind == _STMT_BR {
@@ -1209,6 +1437,9 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
             buf.push(_x86_instr2("mov", dst, base_op, "load"))
             buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            // PAIR-MODEL — carry the loaded value's tag into the dst tag-slot.
+            buf = _x86_tag_resolve(buf, s.args[0], rm, "r11")
+            buf = _x86_store_tag_reg(buf, rm, s.dst.id, "r11")
         }
         return buf
     }
@@ -1240,6 +1471,18 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
     // Prologue
     instrs.push(_x86_instr1("push", _x86_op_reg("rbp"), "prologue: save rbp"))
     instrs.push(_x86_instr2("mov", _x86_op_reg("rbp"), _x86_op_reg("rsp"), "prologue: set rbp"))
+    // PAIR-MODEL — preserve the callee-saved allocation pool (rbx/r12-r15) for
+    // the caller (ABI contract; the C harness and any C caller require it). The
+    // 5 pushes + 8-byte pad = 48 bytes (_X86_CALLEE_SAVE_BYTES, a 16-byte
+    // multiple) keep the call-site rsp alignment. These live at [rbp-8..-40]
+    // and the spill/tag frame is shifted below via _x86_frame_off.
+    instrs.push(_x86_instr1("push", _x86_op_reg("rbx"), "prologue: save rbx"))
+    instrs.push(_x86_instr1("push", _x86_op_reg("r12"), "prologue: save r12"))
+    instrs.push(_x86_instr1("push", _x86_op_reg("r13"), "prologue: save r13"))
+    instrs.push(_x86_instr1("push", _x86_op_reg("r14"), "prologue: save r14"))
+    instrs.push(_x86_instr1("push", _x86_op_reg("r15"), "prologue: save r15"))
+    instrs.push(_x86_instr2("sub", _x86_op_reg("rsp"), _x86_op_imm(8),
+                        "prologue: callee-save align pad"))
 
     if spill_frame > 0 {
         instrs.push(_x86_instr2("sub", _x86_op_reg("rsp"),
@@ -1247,20 +1490,52 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
                             "prologue: alloc spill frame"))
     }
 
-    // Move incoming params into assigned regs / spill slots.
+    // PAIR-MODEL ingress — each HexaVal param arrives as a 16-byte SysV
+    // register PAIR: param0 → rdi:rsi, param1 → rdx:rcx, param2 → r8:r9
+    // (tag = lo, payload = hi). Only THREE pairs fit in the six integer-arg
+    // registers; params ≥3 arrive in caller 16B stack slots above the saved
+    // rbp + return address at [rbp + 16 + (p-3)*16] (tag at +0, payload at +8).
+    //
+    // The PAYLOAD goes into the param's home (assigned reg or payload spill
+    // slot) exactly as the prior raw-int model did — but read from the HIGH
+    // (payload) register `_x86_hv_pair_hi(p)`, NOT the single `_x86_64_arg_reg(p)`
+    // (the confirmed ingress bug: param0 payload is in rsi, not rdi=tag). The
+    // TAG goes into the param's parallel tag-slot so it survives into any
+    // downstream tag-dispatching runtime call.
     let mut p = 0
     while p < len(mf.params) {
-        if p < 6 {
-            let pid = mf.params[p].id
-            let src_name = _x86_64_arg_reg(p)
+        let pid = mf.params[p].id
+        if p < 3 {
+            let tag_reg = _x86_hv_pair_lo(p)     // tag eightbyte
+            let pay_reg = _x86_hv_pair_hi(p)     // payload eightbyte
+            // Stash the tag first (it reads a fresh arg reg; storing it into a
+            // tag-slot can't disturb the payload reg).
+            instrs = _x86_store_tag_reg(instrs, rm, pid, tag_reg)
             if _x86_is_spilled(rm, pid) {
-                instrs = _x86_store_spill(instrs, rm, pid, src_name)
+                instrs = _x86_store_spill(instrs, rm, pid, pay_reg)
             } else {
                 let dst_name = _x86_reg_lookup(rm, pid)
-                if dst_name != src_name {
+                if dst_name != pay_reg {
                     instrs.push(_x86_instr2("mov", _x86_op_reg(dst_name),
-                                        _x86_op_reg(src_name), "ingress param"))
+                                        _x86_op_reg(pay_reg), "ingress param payload"))
                 }
+            }
+        } else {
+            // Stack param: tag at [rbp,16+(p-3)*16], payload at +8.
+            let inoff = 16 + (p - 3) * 16
+            instrs.push(_x86_instr2("mov", _x86_op_reg("r10"),
+                             _x86_op_mem("rbp", inoff),
+                             "ingress stack param " + to_string(p) + " tag"))
+            instrs = _x86_store_tag_reg(instrs, rm, pid, "r10")
+            instrs.push(_x86_instr2("mov", _x86_op_reg("r10"),
+                             _x86_op_mem("rbp", inoff + 8),
+                             "ingress stack param " + to_string(p) + " payload"))
+            if _x86_is_spilled(rm, pid) {
+                instrs = _x86_store_spill(instrs, rm, pid, "r10")
+            } else {
+                let dst_name = _x86_reg_lookup(rm, pid)
+                instrs.push(_x86_instr2("mov", _x86_op_reg(dst_name),
+                                    _x86_op_reg("r10"), "ingress stack param payload"))
             }
         }
         p = p + 1
@@ -1293,13 +1568,7 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
             }
         }
     }
-    if spill_frame > 0 {
-        instrs.push(_x86_instr2("add", _x86_op_reg("rsp"),
-                            _x86_op_imm(spill_frame),
-                            "epilogue: free spill frame"))
-    }
-    instrs.push(_x86_instr1("pop", _x86_op_reg("rbp"), "epilogue: restore rbp"))
-    instrs.push(_x86_instr0("ret", "return"))
+    instrs = _x86_emit_epilogue(instrs, spill_frame)
 
     return LFunc {
         name: mf.name,
