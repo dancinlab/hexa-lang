@@ -25,54 +25,33 @@
 /tmp/flat_x86.s:137027:15: error: unknown token in expression
     mov r13,  # binop lhs into dst
               ^
-/tmp/flat_x86.s:202058:15: error: unknown token in expression
+/tmp/flat_x86.s:139221:15: error: unknown token in expression
+    cmp r10,  # binop <
+              ^
+/tmp/flat_x86.s:202138:15: error: unknown token in expression
     cmp r13,  # binop <
               ^
-/tmp/flat_x86.s:202065:15: error: unknown token in expression
+/tmp/flat_x86.s:202145:15: error: unknown token in expression
     mov r13,  # assign L43
               ^
-/tmp/flat_x86.s:216817:5: error: invalid operand for instruction
+/tmp/flat_x86.s:216897:5: error: invalid operand for instruction
     push 2147483648 # C7: spill arg 9 (right-to-left)
     ^
-/tmp/flat_x86.s:217211:5: error: invalid operand for instruction
+/tmp/flat_x86.s:217291:5: error: invalid operand for instruction
     push 2147484672 # C7: spill arg 9 (right-to-left)
     ^
-/tmp/flat_x86.s:221824:5: error: invalid operand for instruction
-    and r14, 4227858432 # binop &
-    ^
-/tmp/flat_x86.s:221849:5: error: invalid operand for instruction
-    and r15, 4278190111 # binop &
-    ^
-/tmp/flat_x86.s:224090:5: error: invalid operand for instruction
-    and rax, 4227858432 # binop &
-    ^
-/tmp/flat_x86.s:226360:15: error: unknown token in expression
+/tmp/flat_x86.s:226443:15: error: unknown token in expression
     cmp rdx,  # binop >=
               ^
-/tmp/flat_x86.s:230347:5: error: invalid operand for instruction
+/tmp/flat_x86.s:230430:5: error: invalid operand for instruction
     test 0, 0 # br_cond test
     ^
-/tmp/flat_x86.s:230594:5: error: invalid operand for instruction
+/tmp/flat_x86.s:230677:5: error: invalid operand for instruction
     test 0, 0 # br_cond test
     ^
-/tmp/flat_x86.s:231408:5: error: invalid operand for instruction
-    and r12, 4294967295 # binop &
-    ^
-/tmp/flat_x86.s:235202:15: error: unknown token in expression
+/tmp/flat_x86.s:235286:15: error: unknown token in expression
     mov rdx,  # struct_lit: field val
               ^
-/tmp/flat_x86.s:235427:15: error: unknown token in expression
+/tmp/flat_x86.s:235511:15: error: unknown token in expression
     mov rdx,  # struct_lit: field val
               ^
-/tmp/flat_x86.s:236369:5: error: invalid operand for instruction
-    and r12, 4294967295 # binop &
-    ^
-/tmp/flat_x86.s:237942:5: error: invalid operand for instruction
-    and rbx, 4227858432 # binop &
-    ^
-/tmp/flat_x86.s:237963:5: error: invalid operand for instruction
-    and rbx, 4278190111 # binop &
-    ^
-/tmp/flat_x86.s:238792:5: error: invalid operand for instruction
-    and r12, 4227858432 # binop &
-    ^

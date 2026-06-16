@@ -1006,7 +1006,20 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if _x86_is_bit_and(s.op)   { mnemonic = "and" }
             if _x86_is_bit_or(s.op)    { mnemonic = "or"  }
             if _x86_is_bit_xor(s.op)   { mnemonic = "xor" }
-            buf.push(_x86_instr2(mnemonic, dst, b, "binop " + s.op))
+            // x86-64 ALU ops take a sign-extended imm32; an operand outside
+            // [-2^31, 2^31) (e.g. a 0xFC000000 bitmask) is rejected by GNU as
+            // ("invalid operand"). Materialize a wide const into a register so
+            // the op uses a 64-bit reg divisor/source.
+            let mut b_real = b
+            if s.args[1].kind == "const_int" {
+                let bv = s.args[1].int_val
+                if bv > 2147483647 || bv < -2147483648 {
+                    buf.push(_x86_instr2("mov", _x86_op_reg(b_scratch), b,
+                                     "materialize wide imm to reg (x86 ALU imm is imm32)"))
+                    b_real = _x86_op_reg(b_scratch)
+                }
+            }
+            buf.push(_x86_instr2(mnemonic, dst, b_real, "binop " + s.op))
             buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
         }
         return buf
