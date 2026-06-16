@@ -1116,7 +1116,18 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         let mut k = arg_n - 1
         while k >= 6 {
             buf = _x86_op_rm(buf, s.args[k], st, rm, "r10", opts)
-            let src = _x86_op_resolve(s.args[k], st, rm, "r10", opts)
+            let mut src = _x86_op_resolve(s.args[k], st, rm, "r10", opts)
+            // `push imm` sign-extends an imm32; a const outside [-2^31, 2^31)
+            // (e.g. 2147483648) is rejected by GNU as ("invalid operand").
+            // Materialize a wide const into r10 first (push reg is unbounded).
+            if s.args[k].kind == "const_int" {
+                let kv = s.args[k].int_val
+                if kv > 2147483647 || kv < -2147483648 {
+                    buf.push(_x86_instr2("mov", _x86_op_reg("r10"), src,
+                                     "materialize wide imm for push (imm32 limit)"))
+                    src = _x86_op_reg("r10")
+                }
+            }
             buf.push(_x86_instr1("push", src,
                 "C7: spill arg " + to_string(k) + " (right-to-left)"))
             k = k - 1
