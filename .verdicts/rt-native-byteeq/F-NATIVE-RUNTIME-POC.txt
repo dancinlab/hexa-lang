@@ -29,3 +29,18 @@ leg B native runtime 작업 (확정 경로):
 
 NEXT: numeric.hexa FAIL 진단·수리 → 8개 모듈 전부 native obj → ABI wrapper PoC →
 점진 코어 fn .hexa 화.
+
+
+## numeric FAIL 해결 (2026-06-16, flatten)
+numeric.hexa 단독 컴파일 FAIL = `undefined name rt_log10`(:220) — rt_log10 은
+math.hexa 정의(PoC 의 _rt_log10 T 심볼). 단독 `--emit=obj` 가 import 미해결 →
+undefined (진짜 버그 아님). math+numeric flatten(import 라인 제거 concat) →
+native obj OK 118,912B, `_rt_array_*` 등 T 심볼 다수. ∴ stdlib/runtime/*.hexa
+전부 flatten → aprime native obj 가능(import 함께 해결) = native runtime.a 의
+stdlib 부분 토대 완성.
+
+leg B native runtime 진척:
+- stdlib/runtime/*.hexa flatten native obj ✅ (math/ctype/posix/net 단독 + numeric flatten).
+- 남은: (1) HexaVal struct/macro/값op/arena/dispatch 코어 ~1190 fn .hexa 화(거대,
+  메커니즘 전부 증명됨 이번 세션) (2) ABI wrapper(float↔HexaVal) (3) native runtime.a
+  통합 + restore C-seed 제거. 거대 다세션 전수.
