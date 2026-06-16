@@ -1,0 +1,61 @@
+// stdlib/qforge/fixtures/cah6_pbe3d_ckpt_write.hexa
+//
+// QFORGE process-split — PROCESS 1 (gga_scf → checkpoint WRITE).
+//
+// The from-scratch 3-D-PBE ground state for CaH6 now COMPUTES (residual-(3) fixed:
+// genuine 3-D ∇ρ, npw nonlocal converged). BUT measuring λ in the SAME process
+// SIGSEGVs (exit 138): gga_scf uses off-heap `farr`; the downstream screened-vertex
+// el-ph uses val-arena `[float]`; co-running both corrupts the heap. This is an ENGINE
+// memory-model collision, NOT physics.
+//
+// THE SPLIT: this process runs ONLY gga_scf (the farr side), serializes the converged
+// 3-D-PBE dense H + metadata to a disk checkpoint, then RETURNS before the vertex. A
+// second process (cah6_pbe3d_ckpt_vertex.hexa) reads the checkpoint and runs ONLY the
+// screened vertex (the val-arena side) → measures λ. No farr+val-arena co-residency.
+//
+// args:  <ckpt_path> <deck_dir> <npw_cap> <grid>
+//   ckpt_path = where to write the checkpoint (P2 reads the SAME path).
+//   grid      = cubic FFT dim (pow2; the 3-D real-space SCF cube). 0 → 16.
+// Run: HEXA_LANG="$PWD" hexa run --no-sentinel \
+//        stdlib/qforge/fixtures/cah6_pbe3d_ckpt_write.hexa <ckpt> <deck> <npw_cap> <grid>
+
+use "stdlib/qforge/pw_frontend"
+
+fn main() {
+    let av = args()
+    let ckpt = if len(av) > 1 { av[1] } else { "/tmp/cah6_pbe3d.ckpt" }
+    let deck_dir = if len(av) > 2 { av[2] } else {
+        "/Users/mini/dancinlab/demiurge/exports/rtsc/decks/CaH6_NC" }
+    let npw_cap = if len(av) > 3 { to_int(av[3]) } else { 0 }
+    let grid    = if len(av) > 4 { to_int(av[4]) } else { 16 }
+    let g3 = if grid > 0 { grid } else { 16 }
+    let sigma = 0.02
+
+    println("=== QFORGE process-split — P1 (gga_scf → checkpoint WRITE) ===")
+    println("ckpt=" + ckpt + "  deck=" + deck_dir + "  npw_cap=" + to_string(npw_cap)
+            + "  3-D cube=" + to_string(g3) + "³")
+
+    // engage the 3-D-PBE override AND the checkpoint-write hook; this process runs ONLY
+    // gga_scf (farr) and returns after persisting the converged H — no vertex here.
+    qpw_set_pbe3d(true, g3, g3, g3)
+    qpw_set_ckpt(ckpt, "")
+
+    let fe = qforge_pw_frontend(deck_dir, npw_cap, 1, sigma, 1236.4)
+    if !fe.ok {
+        println("FAIL — front-end (gga_scf) failed: " + fe.error)
+        println("=== DONE (FAIL) ===")
+        return
+    }
+    if !qpw_ckpt_returned() {
+        println("FAIL — checkpoint NOT written (3-D-PBE override did not engage; "
+                + "gga_scf H length != n·n). note=" + fe.note)
+        println("=== DONE (FAIL) ===")
+        return
+    }
+    println("[gga_scf] n(PW)=" + to_string(fe.n) + " nelec=" + to_string(fe.nelec)
+            + " nocc=" + to_string(fe.nocc) + " converged=" + to_string(fe.converged)
+            + " iters=" + to_string(fe.iters))
+    println("[gga_scf] e_total=" + to_string(fe.e_band) + " Ha (3-D-PBE ground state)")
+    println("[ckpt] " + fe.note)
+    println("=== DONE (checkpoint WRITTEN — run P2 cah6_pbe3d_ckpt_vertex.hexa next) ===")
+}

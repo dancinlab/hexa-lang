@@ -1,0 +1,94 @@
+// stdlib/qforge/fixtures/cah6_pbe3d_ckpt_vertex.hexa
+//
+// QFORGE process-split — PROCESS 2 (checkpoint READ → screened vertex → λ).
+//
+// P1 (cah6_pbe3d_ckpt_write.hexa) ran gga_scf (the off-heap `farr` side) and persisted
+// the converged 3-D-PBE dense H to disk. THIS process runs ONLY the screened-vertex
+// el-ph (the val-arena `[float]` side): it reads the checkpoint, installs the 3-D-PBE H
+// as QPW_HAM (NO gga_scf, NO farr in this process), re-solves the genuine 3-D-PBE
+// occupied manifold, and measures CaH6 λ VERBATIM vs QE 4.376. The 2-process split
+// sidesteps the farr/val-arena heap collision that SIGSEGV'd the single-process run.
+//
+// args:  <ckpt_path> <deck_dir> <npw_cap> <nq> [<screened> <beta> <m>]
+//   ckpt_path = the checkpoint P1 wrote (MUST match P1's npw_cap → same basis n).
+// Run: HEXA_LANG="$PWD" hexa run --no-sentinel \
+//        stdlib/qforge/fixtures/cah6_pbe3d_ckpt_vertex.hexa <ckpt> <deck> <npw_cap> <nq>
+
+use "stdlib/qforge/pw_frontend"
+use "stdlib/qforge/qforge_run"
+
+let QE_LAMBDA: float = 4.376
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn main() {
+    let av = args()
+    let ckpt = if len(av) > 1 { av[1] } else { "/tmp/cah6_pbe3d.ckpt" }
+    let deck_dir = if len(av) > 2 { av[2] } else {
+        "/Users/mini/dancinlab/demiurge/exports/rtsc/decks/CaH6_NC" }
+    let npw_cap = if len(av) > 3 { to_int(av[3]) } else { 0 }
+    let nq      = if len(av) > 4 { to_int(av[4]) } else { 4 }
+    let screened = if len(av) > 5 { to_int(av[5]) != 0 } else { true }
+    let scr_beta = if len(av) > 6 { to_float(av[6]) } else { 0.3 }
+    let scr_md   = if len(av) > 7 { to_int(av[7]) } else { 5 }
+    let scr_maxit = 6
+    let sigma = 0.02
+
+    println("=== QFORGE process-split — P2 (checkpoint READ → screened vertex → λ) ===")
+    println("ckpt=" + ckpt + "  deck=" + deck_dir + "  npw_cap=" + to_string(npw_cap)
+            + "  q-mesh=" + to_string(nq) + "³ MP")
+    println("vertex=" + (if screened { "SCREENED (Dyson ε⁻¹, Anderson β="
+            + to_string(scr_beta) + " m=" + to_string(scr_md) + ")" } else { "BARE" }))
+
+    // engage ONLY the checkpoint-read hook — NO qpw_set_pbe3d (gga_scf must NOT run in
+    // this process). The front-end loads the 3-D-PBE H from disk and installs QPW_HAM.
+    qpw_set_pbe3d(false, 0, 0, 0)
+    qpw_set_ckpt("", ckpt)
+
+    let fe = qforge_pw_frontend_phonons_scr(deck_dir, npw_cap, 1, sigma, nq,
+                                            screened, scr_beta, scr_md, scr_maxit)
+    if !fe.ok {
+        println("DEFER — front-end failed: " + fe.error)
+        println("=== DONE (DEFER) ===")
+        return
+    }
+    println("[3-D PBE via ckpt] ENGAGED=" + to_string(qpw_pbe3d_engaged())
+            + "  (true = QPW_HAM = the disk 3-D-PBE H, re-solved here without farr)")
+    println("[front-end] cell=" + fe.geom.species[0] + " n(PW)=" + to_string(fe.n)
+            + " nelec=" + to_string(fe.nelec) + " nocc=" + to_string(fe.nocc)
+            + " e_band=" + to_string(fe.e_band) + " Ha")
+
+    let res = qforge_run_tol(qpw_h_apply, fe.deck, 1.0e-8, 600)
+    if res.ok != 1 {
+        println("DEFER — qforge_run failed: " + res.err)
+        println("=== DONE (DEFER) ===")
+        return
+    }
+
+    let lam = res.lambda
+    let rel = (lam - QE_LAMBDA) / QE_LAMBDA
+    let arel = _abs(rel)
+    println("")
+    println("════════════════ λ VERDICT — 3-D PBE vertex via PROCESS-SPLIT (d6 VERBATIM) ════════════════")
+    println("split              : P1 gga_scf(farr)→ckpt · P2 vertex([float]) — NO heap co-residency")
+    println("3-D PBE override   : ENGAGED=" + to_string(qpw_pbe3d_engaged())
+            + " · loaded from checkpoint " + ckpt)
+    println("convergence params : ecutwfc=" + to_string(fe.geom.ecutwfc) + " Ry · npw_cap="
+            + to_string(npw_cap) + " · n(PW)=" + to_string(fe.n) + " · q-mesh=" + to_string(nq)
+            + "³ MP · sigma=" + to_string(sigma) + " Ha")
+    println("vertex             : " + (if screened { "SCREENED ΔV_scr" } else { "BARE |g|²" }))
+    println("BARE/LDA baseline λ= 4.13647  (prior converged run #2768, rel-ε=5.47%)")
+    println("QFORGE λ (this run)= " + to_string(lam))
+    println("QE answer-key λ    = " + to_string(QE_LAMBDA))
+    println("rel-ε              = " + to_string(arel) + "  (" + to_string(arel * 100.0) + " %)")
+    println("Δλ vs 4.137 baseline = " + to_string(lam - 4.13647))
+    println("QFORGE ω_log       = " + to_string(res.omega_log) + " K")
+    println("QFORGE Tc (Allen-Dynes) = " + to_string(res.tc) + " K")
+    if arel <= 0.01 {
+        println("GATE: MET — from-scratch 3-D PBE CaH6 λ within 1% of QE 4.376 ✅ (gate-grade achieved)")
+    } else {
+        println("GATE: NOT MET — rel-ε=" + to_string(arel * 100.0) + "% > 1% (HONEST FINDING, d6)")
+    }
+    println("══════════════════════════════════════════════════════════════════════════════════════════")
+    println("=== DONE ===")
+}

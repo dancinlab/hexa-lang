@@ -170,6 +170,49 @@ pub fn qpw_set_pbe3d(on: bool, nx: int, ny: int, nz: int) {
 }
 pub fn qpw_pbe3d_engaged() -> bool { return QPW_PBE3D_ENGAGED }
 
+// ── process-split checkpoint (the farr/val-arena heap-collision sidestep) ──────
+//   gga_scf runs on off-heap `farr`; the screened-vertex el-ph runs on val-arena
+//   `[float]`. Co-running BOTH in ONE process corrupts the heap (SIGSEGV, exit
+//   138) — an ENGINE memory-model collision, NOT physics. The fix is a 2-process
+//   split sharing a disk checkpoint:
+//     P1 (WRITE): QPW_PBE3D on + ckpt-write path → run ONLY gga_scf, serialize the
+//        converged 3-D-PBE dense H + metadata to disk, then RETURN (no vertex here).
+//     P2 (READ): ckpt-read path → SKIP gga_scf entirely (no farr in this process),
+//        load the dense H from disk, install it as QPW_HAM, run ONLY the vertex.
+//   Format = newline-separated text (stdlib/io write_text/read_text): a 4-line
+//   header (MAGIC, n, e_total, iters·converged) + n evals + n·n row-major H floats.
+let mut QPW_CKPT_WRITE: str = ""   // P1: write the converged 3-D-PBE H here, then early-return
+let mut QPW_CKPT_READ: str = ""    // P2: load the converged 3-D-PBE H from here (no gga_scf)
+let mut QPW_CKPT_RETURNED: bool = false   // P1 witness: did the front-end return after writing
+pub fn qpw_set_ckpt(write_path: str, read_path: str) {
+    QPW_CKPT_WRITE = write_path
+    QPW_CKPT_READ = read_path
+}
+pub fn qpw_ckpt_returned() -> bool { return QPW_CKPT_RETURNED }
+
+// serialize the converged 3-D-PBE H to a checkpoint string.
+//   line0 = "QFORGE_PBE3D_CKPT_V1"
+//   line1 = n
+//   line2 = e_total · iters · converged(0/1)  (space-separated)
+//   line3 = n eval floats (space-separated)
+//   line4.. = n·n row-major H floats, one per line (precision-safe)
+fn _qpw_ckpt_serialize(h: [float], evals: [float], n: int, e_total: float,
+                       iters: int, converged: bool) -> str {
+    let mut out: [str] = []
+    out.push("QFORGE_PBE3D_CKPT_V1")
+    out.push(to_string(n))
+    let cv = if converged { 1 } else { 0 }
+    out.push(to_string(e_total) + " " + to_string(iters) + " " + to_string(cv))
+    let mut ev: [str] = []
+    let mut e = 0
+    while e < len(evals) { ev.push(to_string(evals[e])) ; e = e + 1 }
+    out.push(ev.join(" "))
+    let nn = n * n
+    let mut p = 0
+    while p < nn { out.push(to_string(h[p])) ; p = p + 1 }
+    return out.join("\n")
+}
+
 // =============================================================================
 // ① DECK-DIR GEOMETRY PARSER
 // =============================================================================
@@ -629,7 +672,49 @@ pub fn qforge_pw_frontend(deck_dir: str, npw_cap: int, xc_mode: int,
     let mut pbe3d_iters = 0
     let mut pbe3d_conv = false
     QPW_PBE3D_ENGAGED = false
-    if QPW_PBE3D {
+    QPW_CKPT_RETURNED = false
+
+    // ── P2 (checkpoint READ): load the 3-D-PBE H from disk; SKIP gga_scf entirely ──
+    //   This process must contain NO farr/gga_scf (the val-arena side runs the vertex).
+    //   We deserialize the converged dense H written by P1 and install it as QPW_HAM
+    //   exactly as the in-process engaged branch does, then fall through to the deck
+    //   emit. The vertex re-solves the genuine 3-D-PBE manifold from THIS H. d4/d6.
+    if len(QPW_CKPT_READ) > 0 {
+        let raw = read_file(QPW_CKPT_READ)
+        if len(raw) < 1 {
+            return _qpw_fe_err(geom, "ckpt-read: empty/missing checkpoint " + QPW_CKPT_READ)
+        }
+        let lines = raw.split("\n")
+        if len(lines) < 4 || lines[0] != "QFORGE_PBE3D_CKPT_V1" {
+            return _qpw_fe_err(geom, "ckpt-read: bad magic/format in " + QPW_CKPT_READ)
+        }
+        let ckn = to_int(lines[1].trim())
+        if ckn != n {
+            return _qpw_fe_err(geom, "ckpt-read: n mismatch ckpt=" + to_string(ckn)
+                + " vs front-end n=" + to_string(n) + " (P1/P2 basis differ — same npw_cap?)")
+        }
+        let meta = lines[2].trim().split(" ")
+        pbe3d_etot = to_float(meta[0])
+        pbe3d_iters = to_int(meta[1])
+        pbe3d_conv = to_int(meta[2]) != 0
+        let evtoks = lines[3].trim().split(" ")
+        let mut ei = 0
+        while ei < len(evtoks) {
+            let t = evtoks[ei].trim()
+            if len(t) > 0 { pbe3d_evals.push(to_float(t)) }
+            ei = ei + 1
+        }
+        let nn = n * n
+        if len(lines) < 4 + nn {
+            return _qpw_fe_err(geom, "ckpt-read: H short — have "
+                + to_string(len(lines) - 4) + " floats, need " + to_string(nn))
+        }
+        let mut hp = 0
+        while hp < nn { pbe3d_h.push(to_float(lines[4 + hp].trim())) ; hp = hp + 1 }
+        QPW_PBE3D_ENGAGED = true
+    }
+
+    if QPW_PBE3D && len(QPW_CKPT_READ) == 0 {
         let ecut_ha3 = if geom.ecutwfc > 0.0 { 0.5 * geom.ecutwfc } else { 0.0 }
         let gvm3 = qpw_gvectors_miller(geom.b1, geom.b2, geom.b3, ecut_ha3, 4, npw_cap)
         let gvecs3 = gvm3[0]
@@ -652,6 +737,35 @@ pub fn qforge_pw_frontend(deck_dir: str, npw_cap: int, xc_mode: int,
             while ev < len(sp3.evals_up) { pbe3d_evals.push(sp3.evals_up[ev]) ; ev = ev + 1 }
             pbe3d_etot = sp3.e_total ; pbe3d_iters = sp3.iters ; pbe3d_conv = sp3.converged
             QPW_PBE3D_ENGAGED = true
+
+            // ── P1 (checkpoint WRITE): persist the converged 3-D-PBE H + metadata to
+            //    disk, then RETURN before the vertex runs — this process holds farr/
+            //    gga_scf, so it must NOT also run the val-arena vertex (the collision).
+            //    P2 reads this file and runs the vertex in a fresh, farr-free process.
+            if len(QPW_CKPT_WRITE) > 0 {
+                let blob = _qpw_ckpt_serialize(pbe3d_h, pbe3d_evals, n,
+                                               pbe3d_etot, pbe3d_iters, pbe3d_conv)
+                write_file(QPW_CKPT_WRITE, blob)
+                QPW_CKPT_RETURNED = true
+                let mut e_evals_w: [float] = []
+                let mut qw = 0
+                while qw < len(pbe3d_evals) { e_evals_w.push(pbe3d_evals[qw]) ; qw = qw + 1 }
+                let ef: [float] = []
+                let empty_deck = QforgeDeck {
+                    name: geom.species[0], h_diag: ef, n: n, nocc: nocc, phi: ef, masses: ef,
+                    qvec: ef, natoms: 0, ncells: 0, cell_R: ef, dv_modes: [],
+                    e_fermi: 0.0, n_ef: -1.0, omega_grid: ef, mode_weight: 0.0,
+                    sigma_el: 0.0, sigma_ph: 0.0, mu_star: 0.0, n_mats: 0
+                }
+                return QpwFrontendResult {
+                    ok: true, error: "", geom: geom, n: n, nelec: nelec, nocc: nocc,
+                    converged: pbe3d_conv, iters: pbe3d_iters, e_band: pbe3d_etot,
+                    evals: e_evals_w, deck: empty_deck,
+                    note: "P1 checkpoint WRITE — converged 3-D-PBE H persisted to "
+                        + QPW_CKPT_WRITE + " (n=" + to_string(n) + ", "
+                        + to_string(n * n) + " H floats); vertex deferred to P2"
+                }
+            }
         }
     }
 
