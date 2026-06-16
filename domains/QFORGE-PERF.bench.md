@@ -237,6 +237,51 @@ accuracy Lanczos offers **no matvec-count advantage** — Davidson's diagonal
 preconditioner dominates on this well-separated spectrum. Closure: **Davidson stays**;
 Lanczos is not worth swapping in. Verdict `lanczos-vs-davidson.txt` (🟢).
 
+### 8c. K1 H_apply GPU-GEMM — root-cause + batched-apply FIX (🟢 GPU win at size)
+
+**The open item.** `qforge_h_apply_forge` (assembler.hexa) routes a SINGLE matvec
+H[n,n]·v[n,1] through `forge_dispatch_matmul` → cuBLAS. Measured **🔴 NOT FASTER**
+(QFORGE-PERF.md K1, RTX A5000: wall Δ < 1 at every size). **Root cause (now MEASURED,
+not asserted):** the Davidson/Sternheimer inner loop applies H to a *block* of m bands
+per iteration, but the seam does that as m INDEPENDENT GEMV calls — **m separate H2D
+copies of the entire O(n²) H matrix**, each to do one memory-bound (AI≈0.25) matvec.
+Transfer never amortizes → a single GEMV cannot beat CPU. **Fix:** fold the m applies
+into ONE GEMM `H[n,n] @ Ψ[n,m]` (`qforge_h_apply_forge_block`, assembler.hexa) — H is
+transferred **once** and the math runs at GEMM (tensor-roof) intensity AI≈m, opening
+exactly the roof K2 (Davidson VᵀHV) already proved.
+
+**Measured (RTX 5070 sm_120 · `nvptx_happly_block_host.cu`, VERBATIM):** three paths on
+the same fixture — CPU (m scalar matvecs) · GPU GEMV (m H2D of H = current per-band
+seam) · GPU GEMM (1 H2D, batched = FIX):
+
+| n | m | CPU (ms) | GEMV per-band (ms · ×CPU) | **GEMM batched (ms · ×CPU)** | GEMM vs GEMV | parity max_rel |
+|---|---|---|---|---|---|---|
+| 256 | 8 | 0.248 | 63.856 (0.004×) | 1.266 (0.196×) | 50.4× | 5.7e-13 |
+| 256 | 32 | 1.322 | 1.881 (0.703×) | 0.166 (**7.97×**) | 11.3× | 1.8e-12 |
+| 256 | 64 | 3.207 | 3.541 (0.906×) | 0.179 (**17.9×**) | 19.8× | 4.0e-11 |
+| 512 | 8 | 1.100 | 1.470 (0.749×) | 0.300 (**3.67×**) | 4.9× | 4.9e-13 |
+| 512 | 32 | 5.293 | 5.055 (1.047×) | 0.304 (**17.4×**) | 16.6× | 2.4e-11 |
+| 512 | 64 | 12.701 | 10.585 (1.200×) | 0.339 (**37.5×**) | 31.2× | 3.2e-12 |
+| 1024 | 8 | 4.760 | 3.674 (1.296×) | 0.980 (**4.86×**) | 3.7× | 4.0e-12 |
+| 1024 | 32 | 24.540 | 13.846 (1.772×) | 0.812 (**30.2×**) | 17.1× | 2.9e-11 |
+| 1024 | 64 | 57.848 | 30.323 (1.908×) | 1.120 (**51.7×**) | 27.1× | 1.7e-11 |
+| 2048 | 8 | 34.009 | 20.635 (1.648×) | 3.134 (**10.9×**) | 6.6× | 1.1e-11 |
+| 2048 | 32 | 157.448 | 86.193 (1.827×) | 2.994 (**52.6×**) | 28.8× | 4.5e-11 |
+| **2048** | **64** | **310.463** | **157.348 (1.973×)** | **4.144 (74.9×)** | **38.0×** | **4.7e-11** |
+
+ALL parity PASS (FP64-tol 1e-9, max_rel ≤ 4.7e-11). **Verdict 🟢 GPU WINS AT SIZE:**
+the batched apply beats CPU at every (n,m) except the single smallest (n=256,m=8), and
+the win grows with both n and m — **74.9× vs CPU at n=2048,m=64** and **37.97× faster
+than the per-band GEMV** at the same size. The per-band GEMV path (the original seam)
+tops out at 1.97× even at the largest size and is 0.004× at the small end — confirming
+the root cause is **m redundant H2D transfers**, exactly what batching removes.
+
+The CPU-build parity gate (`happly_block_bench.hexa`) confirms `qforge_h_apply_forge_block`
+is element-eq to m sequential scalar `qforge_h_apply` calls (byte-eq on the no-GPU CPU
+GEMM tier). Falsifier (wall Δ ≥ 1 at production size ∧ FP-tol parity) **now SATISFIED**
+— K1 lifts from 🔴 NOT-FASTER to 🟢 bench-VERIFIED **once the engine calls the batched
+seam per Davidson/Sternheimer iteration** (single GEMV stays correctly ruled out).
+
 ## 9. Second-generation closed-form corollaries — 11 more, no GPU
 
 A second `bench/qforge/accel_corollaries.hexa` driver derives ELEVEN further
