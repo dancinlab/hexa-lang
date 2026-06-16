@@ -152,21 +152,69 @@ reconcile_runtime_c_ssot_dups() {
 # Mirrors regen_runtime_core_from_emitter's STRICTLY-OPTIONAL + NO-OP-SAFE contract
 # (no runner / no emitter → keep the in-tree .c). The Z2a path (native seed) drops
 # the include entirely, so this is only needed for the C-fallback (linux) path.
+# Locate a hexat (transpiler) binary that runs NATIVELY on this host, for the
+# deterministic extract_runtime_hi.sh regen path. Stage 0b runs BEFORE
+# stage_prebuild_hexat, so self/native/hexat / build/hexat may be absent here;
+# but the committed per-target seeds (build/hexat_linux x86_64 ELF,
+# dist/<target>/hexat) ARE present on a fresh checkout. Prints the path (empty
+# if none runs on this arch). Arch-matched only — a foreign-arch ELF would
+# fail to exec.
+_resolve_native_hexat() {
+    local host_m; host_m="$(uname -m 2>/dev/null)"
+    local cands=()
+    case "$host_m" in
+        x86_64|amd64)
+            cands=(self/native/hexat build/hexat build/hexat_linux dist/linux-x86_64/hexat) ;;
+        arm64|aarch64)
+            cands=(self/native/hexat build/hexat dist/linux-arm64/hexat dist/darwin-arm64/hexat) ;;
+        *)
+            cands=(self/native/hexat build/hexat) ;;
+    esac
+    local c
+    for c in "${cands[@]}"; do
+        if [ -x "$c" ] || { [ -f "$c" ] && chmod +x "$c" 2>/dev/null && [ -x "$c" ]; }; then
+            # Probe: a foreign-arch binary fails to exec — verify it runs.
+            if "$c" --version >/dev/null 2>&1 || "$c" 2>/dev/null | head -1 >/dev/null 2>&1; then
+                echo "$c"; return 0
+            fi
+        fi
+    done
+    echo ""
+}
+
 regen_runtime_hi_gen_from_emitter() {
     local emitter="self/runtime_hi_gen_emit.hexa"
+    local src="self/runtime_hi.hexa"
     local dst="self/runtime_hi_gen.c"
-    [ -f "$emitter" ] || { echo "[stage_resolve_runtime_a] runtime_hi_gen.c regen SKIP — emitter absent"; return 0; }
 
+    # PRIMARY (deterministic): extract_runtime_hi.sh transpiles the runtime_hi.hexa
+    # SSOT via a native hexat — the SAME path that produces the byte-identical 9-fn
+    # gen.c locally, and robust against the interp-emitter's per-host fragility.
+    if [ -f "$src" ] && [ -x tool/extract_runtime_hi.sh ]; then
+        local hexat_bin
+        hexat_bin="$(_resolve_native_hexat)"
+        if [ -n "$hexat_bin" ]; then
+            if HEXA_V2="$ROOT/$hexat_bin" HX_ROOT="$ROOT" bash tool/extract_runtime_hi.sh >/tmp/rhg_extract.log 2>&1 \
+               && [ -s "$dst" ] && grep -q 'HexaVal rt_str_to_upper' "$dst"; then
+                echo "[stage_resolve_runtime_a] runtime_hi_gen.c REGENERATED via extract_runtime_hi.sh ($hexat_bin, $(wc -l < "$dst") lines)"
+                return 0
+            fi
+            echo "[stage_resolve_runtime_a] warn: extract_runtime_hi.sh regen failed ($(tail -1 /tmp/rhg_extract.log 2>/dev/null)) — trying emitter" >&2
+        fi
+    fi
+
+    # FALLBACK: the interp .c-text emitter (runtime_hi_gen_emit.hexa SSOT) via an
+    # edge/external hexa runner. STRICTLY-OPTIONAL + NO-OP-SAFE.
+    [ -f "$emitter" ] || { echo "[stage_resolve_runtime_a] runtime_hi_gen.c regen SKIP — no hexat + emitter absent (in-tree .c used)"; return 0; }
     local runner
     runner="$(_resolve_hexa_runner)"
     if [ -z "$runner" ]; then
-        echo "[stage_resolve_runtime_a] runtime_hi_gen.c regen SKIP — no hexa runner (in-tree .c used)"
+        echo "[stage_resolve_runtime_a] runtime_hi_gen.c regen SKIP — no hexat + no hexa runner (in-tree .c used)"
         return 0
     fi
-
     local tmp
     tmp="$(mktemp -t regen_runtime_hi_gen_c.XXXXXX)" || { echo "[stage_resolve_runtime_a] mktemp failed — runtime_hi_gen.c regen skipped" >&2; return 0; }
-    if HEXA_LANG="$ROOT" $runner "$emitter" "$tmp" >/tmp/rhg_emit.log 2>&1 && [ -s "$tmp" ]; then
+    if HEXA_LANG="$ROOT" $runner "$emitter" "$tmp" >/tmp/rhg_emit.log 2>&1 && [ -s "$tmp" ] && grep -q 'HexaVal rt_str_to_upper' "$tmp"; then
         cp -f "$tmp" "$dst"
         echo "[stage_resolve_runtime_a] runtime_hi_gen.c REGENERATED from emitter SSOT ($(wc -l < "$dst") lines)"
     else

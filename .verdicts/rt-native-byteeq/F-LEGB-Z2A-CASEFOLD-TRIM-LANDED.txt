@@ -136,3 +136,18 @@ CI-CAUGHT REGRESSION + FIX (2026-06-17, PR #3451 first run)
   LESSON: the frozen 6-fn runtime_hi_gen.c seed is the stale-fragment trap (same
   class as the f64<->bits / exec-leak seams reconcile_runtime_c_ssot_dups guards) —
   any rt_str_* SSOT growth MUST be paired with a gen.c regen before runtime.a compile.
+
+────────────────────────────────────────────────────────────────
+CORRECTION (2026-06-17, main-loop): "LANDED" was FALSIFIED by CI (c9).
+  PR #3451 CI on the fix commit (76f4ceb9e) is RED on faithful-nobaseline
+  (linux-x86_64): "Stage 0a-pre prebuild build/hexat" → ld: undefined reference
+  to rt_str_to_upper / rt_str_trim. Root cause: the agent RETIRED the 3 C
+  #ifndef HEXA_HAS_HEXA_RT_STDLIB bodies, which were the no-stdlib/seeds-removed
+  FALLBACK ("C body stays for the no-stdlib path"). On the seeds-removed path
+  runtime.a is built before hexat exists → regen skipped → frozen 6-fn gen.c →
+  3 syms missing AND C fallback gone → link fail. (darwin-arm64 faithful RED is
+  PRE-EXISTING OP-34 dt_exp/dt_erf, unrelated; linux-arm64 GREEN on base.)
+  FIX (this commit): restore the 3 C #ifndef bodies (universal no-stdlib
+  fallback) + keep _resolve_native_hexat (committed-seed regen for stdlib path).
+  Guard means: stdlib path → C excluded, gen.c/seed provides; no-stdlib path →
+  C bodies provide. PR #3451 back to draft; CI re-run is authoritative.
