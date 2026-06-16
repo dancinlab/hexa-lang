@@ -60,6 +60,9 @@ fn stdlib_commands() -> [Cmd] {
             summary: "Remote GPU fire harness + PTX static analysis (GPU.md §7c)." },
 
         // ── gen — 빵틀 generators ────────────────────────────────────────
+        Cmd { name: "deck", group: "gen",
+            args: "<domain> <slug> '<spec>' | domains | prototypes [<domain>]",
+            summary: "Generic 6-domain input-deck 빵틀 (emit → exports/<d>/decks/<slug>/; rtsc full, others honest stub)." },
         Cmd { name: "dojo", group: "gen",
             args: "<domain> <slug> '<spec>' [--lang=hexa|py|both]",
             summary: "Cloud training-job 빵틀 (.hexa+.py+run.sh → exports/<d>/dojo/<slug>/)." },

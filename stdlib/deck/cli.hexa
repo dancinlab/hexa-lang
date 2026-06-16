@@ -10,6 +10,18 @@
 // is the hexa-lang-side entry it shells into.
 //
 // Subverbs:
+//   deck <domain> <slug> '<spec-json>'
+//                                — EMIT: build a DeckSpec from the flat spec-json
+//                                  argv, dispatch via gen_deck(domain, spec), and
+//                                  write each DeckFile into exports/<domain>/decks/
+//                                  <slug>/ (rtsc full impl; chem/chip/bio/nuclear/
+//                                  material are honest exit-1 stubs). This is the
+//                                  native `hexa deck` graduation of the /deck skill's
+//                                  former `hexa run stdlib/deck/gen.hexa ... --out`
+//                                  shell-out. cli.hexa owns the disk write via
+//                                  stdlib/io.write_text — the generator writes the
+//                                  *.in files (not a human), so the deck-guard never
+//                                  sees an agent Write (same path as dojo).
 //   deck prototypes [<domain>]   — list the known crystal/structure prototypes
 //                                  for <domain> (default: rtsc). The single
 //                                  source is gen_prototypes() (d4 dispatch); a
@@ -21,13 +33,12 @@
 //                                  required ≈ q × gb-per-q; ⚠ WARN if free < that.
 //   deck help                    — usage.
 //
-// Run:  hexa run stdlib/deck/cli.hexa prototypes rtsc
-//
-// NB: the EMIT path (`--domain/--slug/--spec/--out`) is driven by the plugin
-// directly against the library API; this front-door currently exposes the
-// read-only coverage subverbs the deck-validate-gate plan requires.
+// Run:  hexa deck rtsc YSbH6 '{"prototype":"a15_ysbh6","prefix":"ysbh6"}'
+//       hexa run stdlib/deck/cli.hexa prototypes rtsc
 
 import "stdlib/deck/gen.hexa"
+import "stdlib/deck/types.hexa"
+import "stdlib/io.hexa"
 
 fn _print_list(title: str, xs: [str]) {
     println(title)
@@ -59,11 +70,171 @@ fn _atoi(s: str) -> int {
 }
 
 fn _usage() {
-    println("deck — generic 6-domain deck generator (coverage surface)")
+    println("deck — generic 6-domain input-deck generator (빵틀)")
+    println("  deck <domain> <slug> '<spec-json>'    emit the deck file-set into exports/<domain>/decks/<slug>/")
     println("  deck prototypes [<domain>]            list known prototypes for <domain> (default rtsc)")
     println("  deck domains                          list known deck domains")
     println("  deck disk-estimate <q> <gb-per-q> [free-gb]  disk-headroom preflight line (⚠ if free<required)")
     println("  deck help                             this message")
+    println("")
+    println("  e.g. hexa deck rtsc YSbH6 '{\"prototype\":\"a15_ysbh6\",\"prefix\":\"ysbh6\",\"a_site_symbol\":\"Y\"}'")
+    println("  domains: rtsc (full impl) · nuclear · material · chem · chip · bio (honest TODO stubs)")
+}
+
+// ── flat-JSON spec scanner (interp-safe · open-schema) ───────────────
+//
+// The deck spec is an OPEN object (every prototype names its own keys), so
+// unlike dojo's fixed key list we scan ALL top-level "key": value pairs the
+// JSON carries. NOT a full JSON parser — a flat-object field walker, which is
+// all the flat deck spec schema needs (no nested objects / arrays in a spec).
+
+fn _is_ws(c: string) -> bool {
+    return c == " " || c == "\t" || c == "\n" || c == "\r"
+}
+
+// Read a quoted-string token starting at the OPENING quote index `i`.
+// Returns (value, index-just-past-the-closing-quote). Honors \" and \\ escapes.
+fn _read_qstring(body: string, i: int) -> [string] {
+    let blen = len(body)
+    let mut k = i + 1
+    let mut out = ""
+    while k < blen {
+        let ch = body.substring(k, k + 1)
+        if ch == "\\" && k + 1 < blen {
+            let nx = body.substring(k + 1, k + 2)
+            if nx == "\"" { out = out + "\""; k = k + 2; continue }
+            if nx == "\\" { out = out + "\\"; k = k + 2; continue }
+            out = out + nx
+            k = k + 2
+            continue
+        }
+        if ch == "\"" { return [out, str(k + 1)] }
+        out = out + ch
+        k = k + 1
+    }
+    return [out, str(k)]
+}
+
+// Populate a DeckSpec from a flat spec-json string. Walks every top-level
+// "key": value pair (string OR bareword/number) and sets it on the spec.
+fn _spec_from_json(body: string) -> DeckSpec {
+    let spec = deck_spec_new()
+    let blen = len(body)
+    let mut i = 0
+    while i < blen {
+        let c = body.substring(i, i + 1)
+        // a key always starts with an opening quote
+        if c != "\"" { i = i + 1; continue }
+        let kres = _read_qstring(body, i)
+        let key = kres[0]
+        let mut j = _to_int_safe(kres[1])
+        // skip whitespace up to the colon
+        while j < blen && _is_ws(body.substring(j, j + 1)) { j = j + 1 }
+        if j >= blen || body.substring(j, j + 1) != ":" {
+            // not a key:value (e.g. a string inside an array we don't parse) —
+            // advance past this token and keep scanning.
+            i = j
+            continue
+        }
+        j = j + 1
+        while j < blen && _is_ws(body.substring(j, j + 1)) { j = j + 1 }
+        if j >= blen { break }
+        let first = body.substring(j, j + 1)
+        if first == "\"" {
+            let vres = _read_qstring(body, j)
+            spec_set(spec, key, vres[0])
+            i = _to_int_safe(vres[1])
+            continue
+        }
+        if first == "{" || first == "[" {
+            // nested value — skip it (flat schema; no nested spec keys today).
+            i = j + 1
+            continue
+        }
+        // bareword / number — read to , } ] or whitespace.
+        let mut k = j
+        let mut val = ""
+        while k < blen {
+            let ch = body.substring(k, k + 1)
+            if ch == "," || ch == "}" || ch == "]" || _is_ws(ch) { break }
+            val = val + ch
+            k = k + 1
+        }
+        spec_set(spec, key, val)
+        i = k
+    }
+    return spec
+}
+
+// _to_int_safe — minimal dec-string → int (mirrors rtsc.hexa). Non-digit → stop.
+fn _to_int_safe(s: string) -> int {
+    let mut n = 0
+    let mut i = 0
+    while i < len(s) {
+        let d = ord(s.substring(i, i + 1)) - 48
+        if d < 0 || d > 9 { return n }
+        n = n * 10 + d
+        i = i + 1
+    }
+    return n
+}
+
+// _count_lines — newline count for the per-file emit report line.
+fn _count_lines(s: string) -> int {
+    let mut n = 0
+    let mut i = 0
+    while i < len(s) {
+        if s.substring(i, i + 1) == "\n" { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+// _emit — the `hexa deck <domain> <slug> '<spec-json>'` path. Builds a DeckSpec
+// from the spec-json, dispatches via gen_deck, and writes each DeckFile into
+// exports/<domain>/decks/<slug>/. An unknown / stub domain (gen_deck returns [])
+// is an HONEST exit-1 with a TODO message — never a silent empty deck.
+fn _emit(domain: string, slug: string, spec_json: string) {
+    let spec = _spec_from_json(spec_json)
+    let files = gen_deck(domain, spec)
+    if len(files) == 0 {
+        println("🍞 deck: '" + domain + "' emitter is a stub (no files) — only rtsc has a full impl today.")
+        println("    known domains: run `hexa deck domains`")
+        println("    graduation = add emit_" + domain + "() + a dispatch branch in stdlib/deck/gen.hexa")
+        exit(1)
+    }
+    let out_dir = "exports/" + domain + "/decks/" + slug + "/"
+    let _ = exec("mkdir -p " + _shq(out_dir) + " 2>/dev/null")
+    println("🍞 deck staged: " + out_dir)
+    let mut i = 0
+    while i < len(files) {
+        let f = files[i]
+        let path = out_dir + f.path
+        let ok = write_text(path, f.content)
+        let nlines = _count_lines(f.content)
+        if ok {
+            println("   " + f.path + "  " + str(nlines) + " lines")
+        } else {
+            println("   ⚠ FAILED to write " + f.path)
+        }
+        i = i + 1
+    }
+    println("")
+    println("   spec: " + spec_json)
+    println("   run:  see RUNBOOK.md in " + out_dir + " (d16: free `pool on <host>` import dry-run first)")
+}
+
+// shell single-quote wrap (embedded ' → '"'"').
+fn _shq(s: string) -> string {
+    let mut out = "'"
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c == "'" { out = out + "'\"'\"'" } else { out = out + c }
+        i = i + 1
+    }
+    out = out + "'"
+    return out
 }
 
 fn main() {
@@ -98,6 +269,19 @@ fn main() {
         _usage()
         return
     }
-    println("deck: unknown subverb '" + sub + "'")
+    // EMIT form: deck <domain> <slug> '<spec-json>'. `sub` is the domain; any
+    // token that is not a known read-only subverb above falls through to here.
+    if len(av) >= 4 {
+        _emit(sub, av[2], av[3])
+        return
+    }
+    if len(av) == 3 {
+        // a domain + slug with no spec — emit with an empty spec (prototype
+        // defaults apply). Honest: rtsc defaults to beh8_clathrate.
+        _emit(sub, av[2], "{}")
+        return
+    }
+    println("deck: '" + sub + "' is not a known subverb, and an emit needs <domain> <slug> '<spec-json>'")
     _usage()
+    exit(2)
 }

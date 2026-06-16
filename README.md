@@ -377,6 +377,9 @@ hexa atlas register --from-verify <fn> <args> <v>   # verify IN-PROCESS → fold
 hexa atlas export [--out PATH]          # export live atlas → portable .n6 (n6 = export-only)
 hexa drill --seed "<expr>"             # OUROBOROS smash → ... → absorb cycle
 
+hexa deck <domain> <slug> '<spec>'     # input-deck 빵틀 → exports/<domain>/decks/<slug>/ (rtsc full · others stub)
+hexa dojo <domain> <slug> '<spec>'     # cloud training-job 빵틀 → exports/<domain>/dojo/<slug>/ (.hexa+.py+run.sh)
+
 hx install <package>                   # install a hexa package by name (looks up dancinlab GitHub by default)
 hx update                              # pull updates for all installed packages
 hx list                                # what's installed under ~/.hx/bin/

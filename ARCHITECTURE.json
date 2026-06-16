@@ -134,7 +134,8 @@
             ["stdlib", "`stdlib/` (STDLIB.md)", "Runtime + domain modules: io/math/thread/posix, collections, crypto, codec, bio, chem, cloud, `flame` (NN training), `forge` (GPU substrate)"],
             ["Atlas CLI", "`tool/atlas_cli.hexa` → `bin/hexa-atlas`", "`hexa atlas {register,verify,reverify,search,cascade,proof,diff,infer-edges,stats}`"],
             ["hx package manager", "`tool/hx.hexa`", "Git-like CLI with SSOT attestation: `commit`/`push`/`edit`/`build`/`verify`/`install`/`search`"],
-            ["CLI front-ends", "`bin/hexa-*`", "`hexa-run`, `hexa-fast`, `hexa-commit`, `hexa-push` driver shims"]
+            ["CLI front-ends", "`bin/hexa-*`", "`hexa-run`, `hexa-fast`, `hexa-commit`, `hexa-push` driver shims"],
+            ["STDLIB CLI verbs", "`self/stdlib_commands.hexa` → `self/main.hexa` dispatch", "Roster SSOT for the stdlib-CLI verbs (verify/atlas/qrng/cloud/loop/…) + the `gen` 빵틀 family `hexa {deck,dojo,easy,hf}` — each routes via `cmd_run` to `stdlib/<verb>/cli.hexa`; command↔dispatch drift is gated by `self/stdlib_help_drift_test.hexa`"]
           ]
         }
       ]
