@@ -2088,6 +2088,42 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // RT-NATIVE UNLOCK-10: `__hx_ptr_store64(ptr, off, val)` — write the
+        // 64-bit int `val` to raw address `ptr + off`. The arena bump path
+        // (a native allocator writes object headers/fields into an mmap slab)
+        // with NO C store helper. `ptr`/`off`/`val` payloads are raw int64;
+        // add the byte offset, `str` the value. Returns `ptr` (chainable).
+        if s.op == "__hx_ptr_store64" && len(s.args) >= 3 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // ptr → x1
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // off → x3
+            buf = _hv_load(buf, s.args[2], st, rm, "x4", "x5")  // val → x5
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x1"), _arm64_op_reg("x1"),
+                             _arm64_op_reg("x3"), "__hx_ptr_store64: addr = ptr + off"))
+            buf.push(_arm64_instr2("str", _arm64_op_reg("x5"),
+                             _arm64_op_label("[x1]"), "__hx_ptr_store64: *(addr) = val"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_ptr_store64: TAG_INT (ret ptr)"))
+            // x1 still holds ptr+off; restore the base ptr for the chainable return.
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_ptr_store64: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // RT-NATIVE UNLOCK-10: `__hx_ptr_load64(ptr, off)` — read the 64-bit
+        // int at raw address `ptr + off`. The arena read path. add offset, ldr.
+        if s.op == "__hx_ptr_load64" && len(s.args) >= 2 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // ptr → x1
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // off → x3
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x1"), _arm64_op_reg("x1"),
+                             _arm64_op_reg("x3"), "__hx_ptr_load64: addr = ptr + off"))
+            buf.push(_arm64_instr2("ldr", _arm64_op_reg("x1"),
+                             _arm64_op_label("[x1]"), "__hx_ptr_load64: x1 = *(addr)"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_ptr_load64: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // RT-NATIVE UNLOCK-6: `__hx_to_double(v)` → float HexaVal coercing
         // an int-or-float operand to double (dispatch core's mixed int/float
         // compare: `__hx_to_double(a) < __hx_to_double(b)`). BRANCHLESS via

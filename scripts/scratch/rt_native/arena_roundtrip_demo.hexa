@@ -1,0 +1,15 @@
+fn main() {
+  // mmap a page, store64 at offsets, load64 back — full arena round-trip.
+  let p = __hx_syscall6(197, 0, 4096, 3, 4098, -1, 0)   // mmap
+  __hx_ptr_store64(p, 0, 12345)
+  __hx_ptr_store64(p, 8, 67890)
+  __hx_ptr_store64(p, 16, 42)
+  println(__hx_ptr_load64(p, 0))    // 12345
+  println(__hx_ptr_load64(p, 8))    // 67890
+  let mut ok = 0
+  if __hx_payload_eq(__hx_ptr_load64(p, 0), 12345)  { ok = ok + 1 }
+  if __hx_payload_eq(__hx_ptr_load64(p, 8), 67890)  { ok = ok + 1 }
+  if __hx_payload_eq(__hx_ptr_load64(p, 16), 42)    { ok = ok + 1 }
+  __hx_syscall6(73, p, 4096, 0, 0, 0, 0)            // munmap
+  exit(ok)   // expect 3 = arena store/load round-trip works
+}

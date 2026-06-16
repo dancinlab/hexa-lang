@@ -6196,6 +6196,12 @@ fn gen2_expr(node) {
             if name == "__hx_syscall6" {
                 return "hexa_int(syscall((long)HX_INT(" + gen2_expr(node.args[0]) + "), (long)HX_INT(" + gen2_expr(node.args[1]) + "), (long)HX_INT(" + gen2_expr(node.args[2]) + "), (long)HX_INT(" + gen2_expr(node.args[3]) + "), (long)HX_INT(" + gen2_expr(node.args[4]) + "), (long)HX_INT(" + gen2_expr(node.args[5]) + "), (long)HX_INT(" + gen2_expr(node.args[6]) + ")))"
             }
+            if name == "__hx_ptr_store64" {
+                return "({ int64_t __pp = HX_INT(" + gen2_expr(node.args[0]) + "); *(int64_t*)((char*)(intptr_t)__pp + HX_INT(" + gen2_expr(node.args[1]) + ")) = HX_INT(" + gen2_expr(node.args[2]) + "); hexa_int(__pp); })"
+            }
+            if name == "__hx_ptr_load64" {
+                return "hexa_int(*(int64_t*)((char*)(intptr_t)HX_INT(" + gen2_expr(node.args[0]) + ") + HX_INT(" + gen2_expr(node.args[1]) + ")))"
+            }
             if name == "__map_ptr_eq" {
                 return "hexa_bool((HX_MAP_TBL(" + gen2_expr(node.args[0]) + ") == HX_MAP_TBL(" + gen2_expr(node.args[1]) + ")))"
             }
