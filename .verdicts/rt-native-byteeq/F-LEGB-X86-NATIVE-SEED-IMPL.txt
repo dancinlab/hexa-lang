@@ -78,7 +78,35 @@ rt_hi seed 생성 + 빌드경로 통합. x86_64-linux 가 #include "runtime_hi_g
 - linux-arm64 native seed 는 별도 단위(ELF arm64, Darwin Mach-O 와 ABI 다름).
   현 변경은 linux-arm64 를 C 경로로 안전 유지(seed 부재→skip).
 
-VERDICT: 🔵 EMIT+ASSEMBLE 로컬 검증 완료(x86_64 ELF seed, 11 T 심볼, clang+zig
-양 toolchain). 빌드경로 통합 + Darwin seed 11-fn 동기화 + regen 스크립트 신설.
-CI faithful 3-job = 최종 LANDED 판정 (PR 대기). 막힘 없음 — emit/ABI/assemble
-전부 green, 남은 게이트는 CI 권위 검증.
+CI 1차 결과 (PR #3460, run 27646785203, authoritative):
+- darwin-arm64: **success** (11-fn Darwin seed regen + resolver native 경로 OK)
+- linux-arm64: **success** (seed 부재 → C 경로 유지, 무회귀)
+- linux-x86_64: **FAILURE** — Build(release_build) 단계. 정확 로그(캡처):
+    [stage_resolve_runtime_a] assembled build/rt_hi_native.o from
+      runtime_hi_x86_64.s (11 rt_str_* syms) → native rt_str_* path   ← OK
+    [restore_frozen_seeds] scrubbed frozen rt_str_trim_start/end C bodies  ← OK
+    [stage_resolve_runtime_a] runtime_hi_gen.c #include removed; ar'ing …  ← OK
+    /usr/bin/ld: build/runtime.a(rt_hi_native.o): relocation R_X86_64_32S
+      against `.rodata' can not be used when making a PIE object; recompile
+      with -fPIE
+    /usr/bin/ld: failed to set dynamic section sizes: bad value
+    collect2: error: ld returned 1 exit status
+
+ROOT CAUSE (진단 완료): x86_64 codegen 이 일부 문자열-리터럴 주소를 ABSOLUTE
+  `mov <reg>, .LCstrN` 로 emit → R_X86_64_32S(.rodata 절대참조) 생성. modern
+  linux gcc/ld 의 기본 PIE 실행파일 링크가 이 reloc 을 거부. (다른 문자열-arg
+  payload 는 이미 `lea <reg>, [rip+.LCstrN]` PIC 형태 — emitter 내부 비일관성;
+  return-value/assign 4개만 절대형.) C(gen.c) 경로는 cc 가 기본 PIC 라 미발생.
+
+FIX (적용·로컬검증): PIC 변환 = `mov <reg>, .LCstrN` → `lea <reg>, [rip+.LCstrN]`
+  (의미동일 — 둘다 label 주소를 reg 에 적재). regen_runtime_hi_native_s.sh 의
+  x86_64 emit 경로에 sed 변환 baked-in(darwin arm64 는 adrp/add 로 본래 PIC, 미적용).
+  regen sanity 에 PIE-LINK 검사 추가(zig cc -target x86_64-linux-gnu -pie stub+seed.o
+  → reloc 잔존 시 regen 자체 fail). 재생성: seed 의 bare `mov reg,.LC` 0개, 10개
+  `lea [rip+.LC]`. **CI 실패 config 정확 재현**: zig ar→runtime.a→`zig cc -pie
+  app.c runtime.a` 링크 CLEAN(R_X86_64_32S 제거 확인). PIE-OK.
+
+VERDICT: 🔵 EMIT+ASSEMBLE+PIE-LINK 로컬 검증 완료. CI 1차가 PIE-reloc 블로커를
+  포착(authoritative gate 작동) → PIC 변환으로 근본수정 + regen 에 PIE-check
+  영구화. darwin/linux-arm64 는 1차에서 이미 green. 2차 CI(push 후) linux-x86_64
+  green = LANDED 판정. 막힘: PIE-reloc 1건 발견·수정완료, 남은 게이트는 2차 CI.

@@ -14,7 +14,7 @@ rt_str_split:
     .loc 1 22 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
-.La762_rt_str_split_bb0:
+.Lf6aa_rt_str_split_bb0:
     call hexa_array_new # array_lit: new array
     mov rax, rax # array_lit: capture new array
     mov rbx, rax # assign L3
@@ -26,9 +26,9 @@ rt_str_split:
     sete al # binop == → al
     movzx r13, al # zero-extend al into dst
     test r13, r13 # br_cond test
-    jz .La762_rt_str_split_bb2 # jump-if-zero -> else
-    jmp .La762_rt_str_split_bb1 # jump -> then
-.La762_rt_str_split_bb1:
+    jz .Lf6aa_rt_str_split_bb2 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_split_bb1 # jump -> then
+.Lf6aa_rt_str_split_bb1:
     mov rsi, rbx # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     mov rcx, rdi # hv arg payload
@@ -38,7 +38,7 @@ rt_str_split:
     mov rax, rbx # set return value
     pop rbp # epilogue: restore rbp
     ret # return
-.La762_rt_str_split_bb2:
+.Lf6aa_rt_str_split_bb2:
     mov rsi, rsi # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     call hexa_len # call hexa_len
@@ -46,8 +46,8 @@ rt_str_split:
     mov rax, r15 # assign L9
     mov r12, 0 # assign L10
     mov r13, 0 # assign L11
-    jmp .La762_rt_str_split_bb3 # branch
-.La762_rt_str_split_bb3:
+    jmp .Lf6aa_rt_str_split_bb3 # branch
+.Lf6aa_rt_str_split_bb3:
     mov rsi, rdi # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     call hexa_len # call hexa_len
@@ -58,9 +58,9 @@ rt_str_split:
     setle al # binop <= → al
     movzx r14, al # zero-extend al into dst
     test r14, r14 # br_cond test
-    jz .La762_rt_str_split_bb5 # jump-if-zero -> else
-    jmp .La762_rt_str_split_bb4 # jump -> then
-.La762_rt_str_split_bb4:
+    jz .Lf6aa_rt_str_split_bb5 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_split_bb4 # jump -> then
+.Lf6aa_rt_str_split_bb4:
     mov r15, r13 # binop lhs into dst
     add r15, rax # binop +
     mov rsi, rdi # hv arg payload
@@ -75,9 +75,9 @@ rt_str_split:
     sete al # binop == → al
     movzx r15, al # zero-extend al into dst
     test r15, r15 # br_cond test
-    jz .La762_rt_str_split_bb7 # jump-if-zero -> else
-    jmp .La762_rt_str_split_bb6 # jump -> then
-.La762_rt_str_split_bb5:
+    jz .Lf6aa_rt_str_split_bb7 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_split_bb6 # jump -> then
+.Lf6aa_rt_str_split_bb5:
     mov rsi, rdi # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     call hexa_len # call hexa_len
@@ -99,7 +99,7 @@ rt_str_split:
     mov rax, rbx # set return value
     pop rbp # epilogue: restore rbp
     ret # return
-.La762_rt_str_split_bb6:
+.Lf6aa_rt_str_split_bb6:
     mov rsi, rdi # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     mov rcx, r12 # hv arg payload
@@ -118,14 +118,14 @@ rt_str_split:
     add rbx, rax # binop +
     mov r12, rbx # assign L10
     mov r13, r12 # assign L11
-    jmp .La762_rt_str_split_bb8 # branch
-.La762_rt_str_split_bb7:
+    jmp .Lf6aa_rt_str_split_bb8 # branch
+.Lf6aa_rt_str_split_bb7:
     mov r15, r13 # binop lhs into dst
     add r15, 1 # binop +
     mov r13, r15 # assign L11
-    jmp .La762_rt_str_split_bb8 # branch
-.La762_rt_str_split_bb8:
-    jmp .La762_rt_str_split_bb3 # branch
+    jmp .Lf6aa_rt_str_split_bb8 # branch
+.Lf6aa_rt_str_split_bb8:
+    jmp .Lf6aa_rt_str_split_bb3 # branch
     pop rbp # epilogue: restore rbp
     ret # return
 .globl rt_str_lines
@@ -135,9 +135,9 @@ rt_str_lines:
     .loc 1 45 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
-.La762_rt_str_lines_bb0:
+.Lf6aa_rt_str_lines_bb0:
     mov rdi, rdi # arg 0
-    mov rsi, .LCstr0 # arg 1
+    lea rsi, [rip+.LCstr0] # arg 1
     call rt_str_split # call rt_str_split
     mov rax, rax # set return value
     pop rbp # epilogue: restore rbp
@@ -149,7 +149,7 @@ rt_str_pad_left:
     .loc 1 52 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
-.La762_rt_str_pad_left_bb0:
+.Lf6aa_rt_str_pad_left_bb0:
     mov rsi, rdi # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     call hexa_len # call hexa_len
@@ -163,24 +163,24 @@ rt_str_pad_left:
     setge al # binop >= → al
     movzx r14, al # zero-extend al into dst
     test r14, r14 # br_cond test
-    jz .La762_rt_str_pad_left_bb2 # jump-if-zero -> else
-    jmp .La762_rt_str_pad_left_bb1 # jump -> then
-.La762_rt_str_pad_left_bb1:
+    jz .Lf6aa_rt_str_pad_left_bb2 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_pad_left_bb1 # jump -> then
+.Lf6aa_rt_str_pad_left_bb1:
     mov rax, rdi # set return value
     pop rbp # epilogue: restore rbp
     ret # return
-.La762_rt_str_pad_left_bb2:
+.Lf6aa_rt_str_pad_left_bb2:
     cmp r13, 0 # binop ==
     sete al # binop == → al
     movzx r15, al # zero-extend al into dst
     test r15, r15 # br_cond test
-    jz .La762_rt_str_pad_left_bb4 # jump-if-zero -> else
-    jmp .La762_rt_str_pad_left_bb3 # jump -> then
-.La762_rt_str_pad_left_bb3:
+    jz .Lf6aa_rt_str_pad_left_bb4 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_pad_left_bb3 # jump -> then
+.Lf6aa_rt_str_pad_left_bb3:
     mov rax, rdi # set return value
     pop rbp # epilogue: restore rbp
     ret # return
-.La762_rt_str_pad_left_bb4:
+.Lf6aa_rt_str_pad_left_bb4:
     mov rax, rsi # binop lhs into dst
     sub rax, rbx # binop -
     mov r12, rax # assign L12
@@ -196,27 +196,27 @@ rt_str_pad_left:
     setl al # binop < → al
     movzx rax, al # zero-extend al into dst
     test rax, rax # br_cond test
-    jz .La762_rt_str_pad_left_bb6 # jump-if-zero -> else
-    jmp .La762_rt_str_pad_left_bb5 # jump -> then
-.La762_rt_str_pad_left_bb5:
+    jz .Lf6aa_rt_str_pad_left_bb6 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_pad_left_bb5 # jump -> then
+.Lf6aa_rt_str_pad_left_bb5:
     mov r14, r15 # binop lhs into dst
     add r14, 1 # binop +
     mov r15, r14 # assign L14
-    jmp .La762_rt_str_pad_left_bb6 # branch
-.La762_rt_str_pad_left_bb6:
+    jmp .Lf6aa_rt_str_pad_left_bb6 # branch
+.Lf6aa_rt_str_pad_left_bb6:
     call hexa_array_new # array_lit: new array
     mov r13, rax # array_lit: capture new array
     mov r12, r13 # assign L20
     mov rbx, 0 # assign L21
-    jmp .La762_rt_str_pad_left_bb7 # branch
-.La762_rt_str_pad_left_bb7:
+    jmp .Lf6aa_rt_str_pad_left_bb7 # branch
+.Lf6aa_rt_str_pad_left_bb7:
     cmp rbx, r15 # binop <
     setl al # binop < → al
     movzx rax, al # zero-extend al into dst
     test rax, rax # br_cond test
-    jz .La762_rt_str_pad_left_bb9 # jump-if-zero -> else
-    jmp .La762_rt_str_pad_left_bb8 # jump -> then
-.La762_rt_str_pad_left_bb8:
+    jz .Lf6aa_rt_str_pad_left_bb9 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_pad_left_bb8 # jump -> then
+.Lf6aa_rt_str_pad_left_bb8:
     mov rsi, r12 # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     mov rcx, rdx # hv arg payload
@@ -226,8 +226,8 @@ rt_str_pad_left:
     mov r13, rbx # binop lhs into dst
     add r13, 1 # binop +
     mov rbx, r13 # assign L21
-    jmp .La762_rt_str_pad_left_bb7 # branch
-.La762_rt_str_pad_left_bb9:
+    jmp .Lf6aa_rt_str_pad_left_bb7 # branch
+.Lf6aa_rt_str_pad_left_bb9:
     mov rsi, r12 # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     mov rcx, rdi # hv arg payload
@@ -250,7 +250,7 @@ rt_str_pad_right:
     .loc 1 70 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
-.La762_rt_str_pad_right_bb0:
+.Lf6aa_rt_str_pad_right_bb0:
     mov rsi, rdi # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     call hexa_len # call hexa_len
@@ -264,24 +264,24 @@ rt_str_pad_right:
     setge al # binop >= → al
     movzx r14, al # zero-extend al into dst
     test r14, r14 # br_cond test
-    jz .La762_rt_str_pad_right_bb2 # jump-if-zero -> else
-    jmp .La762_rt_str_pad_right_bb1 # jump -> then
-.La762_rt_str_pad_right_bb1:
+    jz .Lf6aa_rt_str_pad_right_bb2 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_pad_right_bb1 # jump -> then
+.Lf6aa_rt_str_pad_right_bb1:
     mov rax, rdi # set return value
     pop rbp # epilogue: restore rbp
     ret # return
-.La762_rt_str_pad_right_bb2:
+.Lf6aa_rt_str_pad_right_bb2:
     cmp r13, 0 # binop ==
     sete al # binop == → al
     movzx r15, al # zero-extend al into dst
     test r15, r15 # br_cond test
-    jz .La762_rt_str_pad_right_bb4 # jump-if-zero -> else
-    jmp .La762_rt_str_pad_right_bb3 # jump -> then
-.La762_rt_str_pad_right_bb3:
+    jz .Lf6aa_rt_str_pad_right_bb4 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_pad_right_bb3 # jump -> then
+.Lf6aa_rt_str_pad_right_bb3:
     mov rax, rdi # set return value
     pop rbp # epilogue: restore rbp
     ret # return
-.La762_rt_str_pad_right_bb4:
+.Lf6aa_rt_str_pad_right_bb4:
     mov rax, rsi # binop lhs into dst
     sub rax, rbx # binop -
     mov r12, rax # assign L12
@@ -297,14 +297,14 @@ rt_str_pad_right:
     setl al # binop < → al
     movzx rax, al # zero-extend al into dst
     test rax, rax # br_cond test
-    jz .La762_rt_str_pad_right_bb6 # jump-if-zero -> else
-    jmp .La762_rt_str_pad_right_bb5 # jump -> then
-.La762_rt_str_pad_right_bb5:
+    jz .Lf6aa_rt_str_pad_right_bb6 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_pad_right_bb5 # jump -> then
+.Lf6aa_rt_str_pad_right_bb5:
     mov r14, r15 # binop lhs into dst
     add r14, 1 # binop +
     mov r15, r14 # assign L14
-    jmp .La762_rt_str_pad_right_bb6 # branch
-.La762_rt_str_pad_right_bb6:
+    jmp .Lf6aa_rt_str_pad_right_bb6 # branch
+.Lf6aa_rt_str_pad_right_bb6:
     call hexa_array_new # array_lit: new array
     mov r13, rax # array_lit: capture new array
     mov r12, r13 # assign L20
@@ -315,15 +315,15 @@ rt_str_pad_right:
     call hexa_array_push # call hexa_array_push
     mov rbx, rdx # hv: unbox call result (rdx)
     mov rax, 0 # assign L22
-    jmp .La762_rt_str_pad_right_bb7 # branch
-.La762_rt_str_pad_right_bb7:
+    jmp .Lf6aa_rt_str_pad_right_bb7 # branch
+.Lf6aa_rt_str_pad_right_bb7:
     cmp rax, r15 # binop <
     setl al # binop < → al
     movzx r14, al # zero-extend al into dst
     test r14, r14 # br_cond test
-    jz .La762_rt_str_pad_right_bb9 # jump-if-zero -> else
-    jmp .La762_rt_str_pad_right_bb8 # jump -> then
-.La762_rt_str_pad_right_bb8:
+    jz .Lf6aa_rt_str_pad_right_bb9 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_pad_right_bb8 # jump -> then
+.Lf6aa_rt_str_pad_right_bb8:
     mov rsi, r12 # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     mov rcx, rdx # hv arg payload
@@ -333,8 +333,8 @@ rt_str_pad_right:
     mov rbx, rax # binop lhs into dst
     add rbx, 1 # binop +
     mov rax, rbx # assign L22
-    jmp .La762_rt_str_pad_right_bb7 # branch
-.La762_rt_str_pad_right_bb9:
+    jmp .Lf6aa_rt_str_pad_right_bb7 # branch
+.Lf6aa_rt_str_pad_right_bb9:
     mov rsi, r12 # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     lea rcx, [rip+.LCstr1] # hv arg payload: &str .LCstr1
@@ -351,31 +351,31 @@ rt_str_repeat:
     .loc 1 89 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
-.La762_rt_str_repeat_bb0:
+.Lf6aa_rt_str_repeat_bb0:
     cmp rsi, 0 # binop <=
     setle al # binop <= → al
     movzx rax, al # zero-extend al into dst
     test rax, rax # br_cond test
-    jz .La762_rt_str_repeat_bb2 # jump-if-zero -> else
-    jmp .La762_rt_str_repeat_bb1 # jump -> then
-.La762_rt_str_repeat_bb1:
-    mov rax, .LCstr1 # set return value
+    jz .Lf6aa_rt_str_repeat_bb2 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_repeat_bb1 # jump -> then
+.Lf6aa_rt_str_repeat_bb1:
+    lea rax, [rip+.LCstr1] # set return value
     pop rbp # epilogue: restore rbp
     ret # return
-.La762_rt_str_repeat_bb2:
+.Lf6aa_rt_str_repeat_bb2:
     call hexa_array_new # array_lit: new array
     mov rbx, rax # array_lit: capture new array
     mov r12, rbx # assign L5
     mov r13, 0 # assign L6
-    jmp .La762_rt_str_repeat_bb3 # branch
-.La762_rt_str_repeat_bb3:
+    jmp .Lf6aa_rt_str_repeat_bb3 # branch
+.Lf6aa_rt_str_repeat_bb3:
     cmp r13, rsi # binop <
     setl al # binop < → al
     movzx r14, al # zero-extend al into dst
     test r14, r14 # br_cond test
-    jz .La762_rt_str_repeat_bb5 # jump-if-zero -> else
-    jmp .La762_rt_str_repeat_bb4 # jump -> then
-.La762_rt_str_repeat_bb4:
+    jz .Lf6aa_rt_str_repeat_bb5 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_repeat_bb4 # jump -> then
+.Lf6aa_rt_str_repeat_bb4:
     mov rsi, r12 # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     mov rcx, rdi # hv arg payload
@@ -385,8 +385,8 @@ rt_str_repeat:
     mov rax, r13 # binop lhs into dst
     add rax, 1 # binop +
     mov r13, rax # assign L6
-    jmp .La762_rt_str_repeat_bb3 # branch
-.La762_rt_str_repeat_bb5:
+    jmp .Lf6aa_rt_str_repeat_bb3 # branch
+.Lf6aa_rt_str_repeat_bb5:
     mov rsi, r12 # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     lea rcx, [rip+.LCstr1] # hv arg payload: &str .LCstr1
@@ -403,7 +403,7 @@ rt_str_center:
     .loc 1 101 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
-.La762_rt_str_center_bb0:
+.Lf6aa_rt_str_center_bb0:
     mov rsi, rdi # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     call hexa_len # call hexa_len
@@ -417,24 +417,24 @@ rt_str_center:
     setge al # binop >= → al
     movzx r14, al # zero-extend al into dst
     test r14, r14 # br_cond test
-    jz .La762_rt_str_center_bb2 # jump-if-zero -> else
-    jmp .La762_rt_str_center_bb1 # jump -> then
-.La762_rt_str_center_bb1:
+    jz .Lf6aa_rt_str_center_bb2 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_center_bb1 # jump -> then
+.Lf6aa_rt_str_center_bb1:
     mov rax, rdi # set return value
     pop rbp # epilogue: restore rbp
     ret # return
-.La762_rt_str_center_bb2:
+.Lf6aa_rt_str_center_bb2:
     cmp r13, 0 # binop ==
     sete al # binop == → al
     movzx r15, al # zero-extend al into dst
     test r15, r15 # br_cond test
-    jz .La762_rt_str_center_bb4 # jump-if-zero -> else
-    jmp .La762_rt_str_center_bb3 # jump -> then
-.La762_rt_str_center_bb3:
+    jz .Lf6aa_rt_str_center_bb4 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_center_bb3 # jump -> then
+.Lf6aa_rt_str_center_bb3:
     mov rax, rdi # set return value
     pop rbp # epilogue: restore rbp
     ret # return
-.La762_rt_str_center_bb4:
+.Lf6aa_rt_str_center_bb4:
     mov rax, rsi # binop lhs into dst
     sub rax, rbx # binop -
     mov r12, rax # assign L12
@@ -459,14 +459,14 @@ rt_str_center:
     setl al # binop < → al
     movzx r14, al # zero-extend al into dst
     test r14, r14 # br_cond test
-    jz .La762_rt_str_center_bb6 # jump-if-zero -> else
-    jmp .La762_rt_str_center_bb5 # jump -> then
-.La762_rt_str_center_bb5:
+    jz .Lf6aa_rt_str_center_bb6 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_center_bb5 # jump -> then
+.Lf6aa_rt_str_center_bb5:
     mov r15, r12 # binop lhs into dst
     add r15, 1 # binop +
     mov r12, r15 # assign L18
-    jmp .La762_rt_str_center_bb6 # branch
-.La762_rt_str_center_bb6:
+    jmp .Lf6aa_rt_str_center_bb6 # branch
+.Lf6aa_rt_str_center_bb6:
     mov rax, rax # idiv dividend → rax
     cqo # sign-extend rax into rdx:rax
     mov r11, r13 # materialize idiv divisor to reg
@@ -479,27 +479,27 @@ rt_str_center:
     setl al # binop < → al
     movzx rbx, al # zero-extend al into dst
     test rbx, rbx # br_cond test
-    jz .La762_rt_str_center_bb8 # jump-if-zero -> else
-    jmp .La762_rt_str_center_bb7 # jump -> then
-.La762_rt_str_center_bb7:
+    jz .Lf6aa_rt_str_center_bb8 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_center_bb7 # jump -> then
+.Lf6aa_rt_str_center_bb7:
     mov r13, r14 # binop lhs into dst
     add r13, 1 # binop +
     mov r14, r13 # assign L24
-    jmp .La762_rt_str_center_bb8 # branch
-.La762_rt_str_center_bb8:
+    jmp .Lf6aa_rt_str_center_bb8 # branch
+.Lf6aa_rt_str_center_bb8:
     call hexa_array_new # array_lit: new array
     mov rax, rax # array_lit: capture new array
     mov r15, rax # assign L30
     mov rbx, 0 # assign L31
-    jmp .La762_rt_str_center_bb9 # branch
-.La762_rt_str_center_bb9:
+    jmp .Lf6aa_rt_str_center_bb9 # branch
+.Lf6aa_rt_str_center_bb9:
     cmp rbx, r12 # binop <
     setl al # binop < → al
     movzx r13, al # zero-extend al into dst
     test r13, r13 # br_cond test
-    jz .La762_rt_str_center_bb11 # jump-if-zero -> else
-    jmp .La762_rt_str_center_bb10 # jump -> then
-.La762_rt_str_center_bb10:
+    jz .Lf6aa_rt_str_center_bb11 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_center_bb10 # jump -> then
+.Lf6aa_rt_str_center_bb10:
     mov rsi, r15 # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     mov rcx, rdx # hv arg payload
@@ -509,8 +509,8 @@ rt_str_center:
     mov r12, rbx # binop lhs into dst
     add r12, 1 # binop +
     mov rbx, r12 # assign L31
-    jmp .La762_rt_str_center_bb9 # branch
-.La762_rt_str_center_bb11:
+    jmp .Lf6aa_rt_str_center_bb9 # branch
+.Lf6aa_rt_str_center_bb11:
     mov rsi, r15 # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     mov rcx, rdi # hv arg payload
@@ -518,15 +518,15 @@ rt_str_center:
     call hexa_array_push # call hexa_array_push
     mov r13, rdx # hv: unbox call result (rdx)
     mov rax, 0 # assign L36
-    jmp .La762_rt_str_center_bb12 # branch
-.La762_rt_str_center_bb12:
+    jmp .Lf6aa_rt_str_center_bb12 # branch
+.Lf6aa_rt_str_center_bb12:
     cmp rax, r14 # binop <
     setl al # binop < → al
     movzx rbx, al # zero-extend al into dst
     test rbx, rbx # br_cond test
-    jz .La762_rt_str_center_bb14 # jump-if-zero -> else
-    jmp .La762_rt_str_center_bb13 # jump -> then
-.La762_rt_str_center_bb13:
+    jz .Lf6aa_rt_str_center_bb14 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_center_bb13 # jump -> then
+.Lf6aa_rt_str_center_bb13:
     mov rsi, r15 # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     mov rcx, rdx # hv arg payload
@@ -536,8 +536,8 @@ rt_str_center:
     mov r13, rax # binop lhs into dst
     add r13, 1 # binop +
     mov rax, r13 # assign L36
-    jmp .La762_rt_str_center_bb12 # branch
-.La762_rt_str_center_bb14:
+    jmp .Lf6aa_rt_str_center_bb12 # branch
+.Lf6aa_rt_str_center_bb14:
     mov rsi, r15 # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     lea rcx, [rip+.LCstr1] # hv arg payload: &str .LCstr1
@@ -555,8 +555,8 @@ rt_str_to_upper:
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     sub rsp, 16 # prologue: alloc spill frame
-.La762_rt_str_to_upper_bb0:
-    mov rax, .LCstr2 # assign L1
+.Lf6aa_rt_str_to_upper_bb0:
+    lea rax, [rip+.LCstr2] # assign L1
     mov rsi, rdi # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     call hexa_len # call hexa_len
@@ -567,16 +567,16 @@ rt_str_to_upper:
     mov r14, r13 # assign L5
     mov r10, 0 # assign L6
     mov [rbp - 8], r10 # spill L6 to slot
-    jmp .La762_rt_str_to_upper_bb1 # branch
-.La762_rt_str_to_upper_bb1:
+    jmp .Lf6aa_rt_str_to_upper_bb1 # branch
+.Lf6aa_rt_str_to_upper_bb1:
     mov r10, [rbp - 8] # reload L6 from spill slot
     cmp r10, r12 # binop <
     setl al # binop < → al
     movzx rbx, al # zero-extend al into dst
     test rbx, rbx # br_cond test
-    jz .La762_rt_str_to_upper_bb3 # jump-if-zero -> else
-    jmp .La762_rt_str_to_upper_bb2 # jump -> then
-.La762_rt_str_to_upper_bb2:
+    jz .Lf6aa_rt_str_to_upper_bb3 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_to_upper_bb2 # jump -> then
+.Lf6aa_rt_str_to_upper_bb2:
     mov rsi, rdi # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     mov rcx, [rbp - 8] # reload L6 from spill slot
@@ -589,9 +589,9 @@ rt_str_to_upper:
     setge al # binop >= → al
     movzx rbx, al # zero-extend al into dst
     test rbx, rbx # br_cond test
-    jz .La762_rt_str_to_upper_bb5 # jump-if-zero -> else
-    jmp .La762_rt_str_to_upper_bb4 # jump -> then
-.La762_rt_str_to_upper_bb3:
+    jz .Lf6aa_rt_str_to_upper_bb5 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_to_upper_bb4 # jump -> then
+.Lf6aa_rt_str_to_upper_bb3:
     mov rsi, r14 # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     lea rcx, [rip+.LCstr1] # hv arg payload: &str .LCstr1
@@ -602,20 +602,20 @@ rt_str_to_upper:
     add rsp, 16 # epilogue: free spill frame
     pop rbp # epilogue: restore rbp
     ret # return
-.La762_rt_str_to_upper_bb4:
+.Lf6aa_rt_str_to_upper_bb4:
     cmp r12, 122 # binop <=
     setle al # binop <= → al
     movzx r13, al # zero-extend al into dst
     mov r15, r13 # assign L11
-    jmp .La762_rt_str_to_upper_bb6 # branch
-.La762_rt_str_to_upper_bb5:
+    jmp .Lf6aa_rt_str_to_upper_bb6 # branch
+.Lf6aa_rt_str_to_upper_bb5:
     mov r15, rbx # assign L11
-    jmp .La762_rt_str_to_upper_bb6 # branch
-.La762_rt_str_to_upper_bb6:
+    jmp .Lf6aa_rt_str_to_upper_bb6 # branch
+.Lf6aa_rt_str_to_upper_bb6:
     test r15, r15 # br_cond test
-    jz .La762_rt_str_to_upper_bb8 # jump-if-zero -> else
-    jmp .La762_rt_str_to_upper_bb7 # jump -> then
-.La762_rt_str_to_upper_bb7:
+    jz .Lf6aa_rt_str_to_upper_bb8 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_to_upper_bb7 # jump -> then
+.Lf6aa_rt_str_to_upper_bb7:
     mov r13, r12 # binop lhs into dst
     sub r13, 97 # binop -
     mov rbx, r12 # binop lhs into dst
@@ -637,8 +637,8 @@ rt_str_to_upper:
     call hexa_array_push # call hexa_array_push
     mov rbx, rdx # hv: unbox call result (rdx)
     mov rax, rbx # assign L13
-    jmp .La762_rt_str_to_upper_bb9 # branch
-.La762_rt_str_to_upper_bb8:
+    jmp .Lf6aa_rt_str_to_upper_bb9 # branch
+.Lf6aa_rt_str_to_upper_bb8:
     mov r10, [rbp - 8] # reload L6 from spill slot
     mov r13, r10 # binop lhs into dst
     add r13, 1 # binop +
@@ -658,14 +658,14 @@ rt_str_to_upper:
     call hexa_array_push # call hexa_array_push
     mov r12, rdx # hv: unbox call result (rdx)
     mov rax, r12 # assign L13
-    jmp .La762_rt_str_to_upper_bb9 # branch
-.La762_rt_str_to_upper_bb9:
+    jmp .Lf6aa_rt_str_to_upper_bb9 # branch
+.Lf6aa_rt_str_to_upper_bb9:
     mov r10, [rbp - 8] # reload L6 from spill slot
     mov rbx, r10 # binop lhs into dst
     add rbx, 1 # binop +
     mov r10, rbx # assign L6
     mov [rbp - 8], r10 # spill L6 to slot
-    jmp .La762_rt_str_to_upper_bb1 # branch
+    jmp .Lf6aa_rt_str_to_upper_bb1 # branch
     add rsp, 16 # epilogue: free spill frame
     pop rbp # epilogue: restore rbp
     ret # return
@@ -677,8 +677,8 @@ rt_str_to_lower:
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     sub rsp, 16 # prologue: alloc spill frame
-.La762_rt_str_to_lower_bb0:
-    mov rax, .LCstr3 # assign L1
+.Lf6aa_rt_str_to_lower_bb0:
+    lea rax, [rip+.LCstr3] # assign L1
     mov rsi, rdi # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     call hexa_len # call hexa_len
@@ -689,16 +689,16 @@ rt_str_to_lower:
     mov r14, r13 # assign L5
     mov r10, 0 # assign L6
     mov [rbp - 8], r10 # spill L6 to slot
-    jmp .La762_rt_str_to_lower_bb1 # branch
-.La762_rt_str_to_lower_bb1:
+    jmp .Lf6aa_rt_str_to_lower_bb1 # branch
+.Lf6aa_rt_str_to_lower_bb1:
     mov r10, [rbp - 8] # reload L6 from spill slot
     cmp r10, r12 # binop <
     setl al # binop < → al
     movzx rbx, al # zero-extend al into dst
     test rbx, rbx # br_cond test
-    jz .La762_rt_str_to_lower_bb3 # jump-if-zero -> else
-    jmp .La762_rt_str_to_lower_bb2 # jump -> then
-.La762_rt_str_to_lower_bb2:
+    jz .Lf6aa_rt_str_to_lower_bb3 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_to_lower_bb2 # jump -> then
+.Lf6aa_rt_str_to_lower_bb2:
     mov rsi, rdi # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     mov rcx, [rbp - 8] # reload L6 from spill slot
@@ -711,9 +711,9 @@ rt_str_to_lower:
     setge al # binop >= → al
     movzx rbx, al # zero-extend al into dst
     test rbx, rbx # br_cond test
-    jz .La762_rt_str_to_lower_bb5 # jump-if-zero -> else
-    jmp .La762_rt_str_to_lower_bb4 # jump -> then
-.La762_rt_str_to_lower_bb3:
+    jz .Lf6aa_rt_str_to_lower_bb5 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_to_lower_bb4 # jump -> then
+.Lf6aa_rt_str_to_lower_bb3:
     mov rsi, r14 # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     lea rcx, [rip+.LCstr1] # hv arg payload: &str .LCstr1
@@ -724,20 +724,20 @@ rt_str_to_lower:
     add rsp, 16 # epilogue: free spill frame
     pop rbp # epilogue: restore rbp
     ret # return
-.La762_rt_str_to_lower_bb4:
+.Lf6aa_rt_str_to_lower_bb4:
     cmp r12, 90 # binop <=
     setle al # binop <= → al
     movzx r13, al # zero-extend al into dst
     mov r15, r13 # assign L11
-    jmp .La762_rt_str_to_lower_bb6 # branch
-.La762_rt_str_to_lower_bb5:
+    jmp .Lf6aa_rt_str_to_lower_bb6 # branch
+.Lf6aa_rt_str_to_lower_bb5:
     mov r15, rbx # assign L11
-    jmp .La762_rt_str_to_lower_bb6 # branch
-.La762_rt_str_to_lower_bb6:
+    jmp .Lf6aa_rt_str_to_lower_bb6 # branch
+.Lf6aa_rt_str_to_lower_bb6:
     test r15, r15 # br_cond test
-    jz .La762_rt_str_to_lower_bb8 # jump-if-zero -> else
-    jmp .La762_rt_str_to_lower_bb7 # jump -> then
-.La762_rt_str_to_lower_bb7:
+    jz .Lf6aa_rt_str_to_lower_bb8 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_to_lower_bb7 # jump -> then
+.Lf6aa_rt_str_to_lower_bb7:
     mov r13, r12 # binop lhs into dst
     sub r13, 65 # binop -
     mov rbx, r12 # binop lhs into dst
@@ -759,8 +759,8 @@ rt_str_to_lower:
     call hexa_array_push # call hexa_array_push
     mov rbx, rdx # hv: unbox call result (rdx)
     mov rax, rbx # assign L13
-    jmp .La762_rt_str_to_lower_bb9 # branch
-.La762_rt_str_to_lower_bb8:
+    jmp .Lf6aa_rt_str_to_lower_bb9 # branch
+.Lf6aa_rt_str_to_lower_bb8:
     mov r10, [rbp - 8] # reload L6 from spill slot
     mov r13, r10 # binop lhs into dst
     add r13, 1 # binop +
@@ -780,14 +780,14 @@ rt_str_to_lower:
     call hexa_array_push # call hexa_array_push
     mov r12, rdx # hv: unbox call result (rdx)
     mov rax, r12 # assign L13
-    jmp .La762_rt_str_to_lower_bb9 # branch
-.La762_rt_str_to_lower_bb9:
+    jmp .Lf6aa_rt_str_to_lower_bb9 # branch
+.Lf6aa_rt_str_to_lower_bb9:
     mov r10, [rbp - 8] # reload L6 from spill slot
     mov rbx, r10 # binop lhs into dst
     add rbx, 1 # binop +
     mov r10, rbx # assign L6
     mov [rbp - 8], r10 # spill L6 to slot
-    jmp .La762_rt_str_to_lower_bb1 # branch
+    jmp .Lf6aa_rt_str_to_lower_bb1 # branch
     add rsp, 16 # epilogue: free spill frame
     pop rbp # epilogue: restore rbp
     ret # return
@@ -798,21 +798,21 @@ rt_str_trim:
     .loc 1 170 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
-.La762_rt_str_trim_bb0:
+.Lf6aa_rt_str_trim_bb0:
     mov rsi, rdi # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     call hexa_len # call hexa_len
     mov rbx, rax # assign L2
     mov r12, 0 # assign L3
-    jmp .La762_rt_str_trim_bb1 # branch
-.La762_rt_str_trim_bb1:
+    jmp .Lf6aa_rt_str_trim_bb1 # branch
+.Lf6aa_rt_str_trim_bb1:
     cmp r12, rbx # binop <
     setl al # binop < → al
     movzx r13, al # zero-extend al into dst
     test r13, r13 # br_cond test
-    jz .La762_rt_str_trim_bb3 # jump-if-zero -> else
-    jmp .La762_rt_str_trim_bb2 # jump -> then
-.La762_rt_str_trim_bb2:
+    jz .Lf6aa_rt_str_trim_bb3 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_trim_bb2 # jump -> then
+.Lf6aa_rt_str_trim_bb2:
     mov rsi, rdi # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     mov rcx, r12 # hv arg payload
@@ -824,67 +824,67 @@ rt_str_trim:
     sete al # binop == → al
     movzx rax, al # zero-extend al into dst
     test rax, rax # br_cond test
-    jz .La762_rt_str_trim_bb5 # jump-if-zero -> else
-    jmp .La762_rt_str_trim_bb4 # jump -> then
-.La762_rt_str_trim_bb3:
+    jz .Lf6aa_rt_str_trim_bb5 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_trim_bb4 # jump -> then
+.Lf6aa_rt_str_trim_bb3:
     mov r13, rbx # assign L16
-    jmp .La762_rt_str_trim_bb16 # branch
-.La762_rt_str_trim_bb4:
+    jmp .Lf6aa_rt_str_trim_bb16 # branch
+.Lf6aa_rt_str_trim_bb4:
     mov r14, rax # assign L8
-    jmp .La762_rt_str_trim_bb6 # branch
-.La762_rt_str_trim_bb5:
+    jmp .Lf6aa_rt_str_trim_bb6 # branch
+.Lf6aa_rt_str_trim_bb5:
     cmp r15, 9 # binop ==
     sete al # binop == → al
     movzx rbx, al # zero-extend al into dst
     mov r14, rbx # assign L8
-    jmp .La762_rt_str_trim_bb6 # branch
-.La762_rt_str_trim_bb6:
+    jmp .Lf6aa_rt_str_trim_bb6 # branch
+.Lf6aa_rt_str_trim_bb6:
     test r14, r14 # br_cond test
-    jz .La762_rt_str_trim_bb8 # jump-if-zero -> else
-    jmp .La762_rt_str_trim_bb7 # jump -> then
-.La762_rt_str_trim_bb7:
+    jz .Lf6aa_rt_str_trim_bb8 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_trim_bb7 # jump -> then
+.Lf6aa_rt_str_trim_bb7:
     mov rax, r14 # assign L10
-    jmp .La762_rt_str_trim_bb9 # branch
-.La762_rt_str_trim_bb8:
+    jmp .Lf6aa_rt_str_trim_bb9 # branch
+.Lf6aa_rt_str_trim_bb8:
     cmp r15, 10 # binop ==
     sete al # binop == → al
     movzx rbx, al # zero-extend al into dst
     mov rax, rbx # assign L10
-    jmp .La762_rt_str_trim_bb9 # branch
-.La762_rt_str_trim_bb9:
+    jmp .Lf6aa_rt_str_trim_bb9 # branch
+.Lf6aa_rt_str_trim_bb9:
     test rax, rax # br_cond test
-    jz .La762_rt_str_trim_bb11 # jump-if-zero -> else
-    jmp .La762_rt_str_trim_bb10 # jump -> then
-.La762_rt_str_trim_bb10:
+    jz .Lf6aa_rt_str_trim_bb11 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_trim_bb10 # jump -> then
+.Lf6aa_rt_str_trim_bb10:
     mov r14, rax # assign L12
-    jmp .La762_rt_str_trim_bb12 # branch
-.La762_rt_str_trim_bb11:
+    jmp .Lf6aa_rt_str_trim_bb12 # branch
+.Lf6aa_rt_str_trim_bb11:
     cmp r15, 13 # binop ==
     sete al # binop == → al
     movzx rbx, al # zero-extend al into dst
     mov r14, rbx # assign L12
-    jmp .La762_rt_str_trim_bb12 # branch
-.La762_rt_str_trim_bb12:
+    jmp .Lf6aa_rt_str_trim_bb12 # branch
+.Lf6aa_rt_str_trim_bb12:
     test r14, r14 # br_cond test
-    jz .La762_rt_str_trim_bb14 # jump-if-zero -> else
-    jmp .La762_rt_str_trim_bb13 # jump -> then
-.La762_rt_str_trim_bb13:
+    jz .Lf6aa_rt_str_trim_bb14 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_trim_bb13 # jump -> then
+.Lf6aa_rt_str_trim_bb13:
     mov rax, r12 # binop lhs into dst
     add rax, 1 # binop +
     mov r12, rax # assign L3
-    jmp .La762_rt_str_trim_bb15 # branch
-.La762_rt_str_trim_bb14:
-    jmp .La762_rt_str_trim_bb3 # branch
-.La762_rt_str_trim_bb15:
-    jmp .La762_rt_str_trim_bb1 # branch
-.La762_rt_str_trim_bb16:
+    jmp .Lf6aa_rt_str_trim_bb15 # branch
+.Lf6aa_rt_str_trim_bb14:
+    jmp .Lf6aa_rt_str_trim_bb3 # branch
+.Lf6aa_rt_str_trim_bb15:
+    jmp .Lf6aa_rt_str_trim_bb1 # branch
+.Lf6aa_rt_str_trim_bb16:
     cmp r13, r12 # binop >
     setg al # binop > → al
     movzx r15, al # zero-extend al into dst
     test r15, r15 # br_cond test
-    jz .La762_rt_str_trim_bb18 # jump-if-zero -> else
-    jmp .La762_rt_str_trim_bb17 # jump -> then
-.La762_rt_str_trim_bb17:
+    jz .Lf6aa_rt_str_trim_bb18 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_trim_bb17 # jump -> then
+.Lf6aa_rt_str_trim_bb17:
     mov rbx, r13 # binop lhs into dst
     sub rbx, 1 # binop -
     mov rsi, rdi # hv arg payload
@@ -898,9 +898,9 @@ rt_str_trim:
     sete al # binop == → al
     movzx r15, al # zero-extend al into dst
     test r15, r15 # br_cond test
-    jz .La762_rt_str_trim_bb20 # jump-if-zero -> else
-    jmp .La762_rt_str_trim_bb19 # jump -> then
-.La762_rt_str_trim_bb18:
+    jz .Lf6aa_rt_str_trim_bb20 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_trim_bb19 # jump -> then
+.Lf6aa_rt_str_trim_bb18:
     mov rsi, rdi # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     mov rcx, r12 # hv arg payload
@@ -912,54 +912,54 @@ rt_str_trim:
     mov rax, rbx # set return value
     pop rbp # epilogue: restore rbp
     ret # return
-.La762_rt_str_trim_bb19:
+.Lf6aa_rt_str_trim_bb19:
     mov r14, r15 # assign L22
-    jmp .La762_rt_str_trim_bb21 # branch
-.La762_rt_str_trim_bb20:
+    jmp .Lf6aa_rt_str_trim_bb21 # branch
+.Lf6aa_rt_str_trim_bb20:
     cmp rax, 9 # binop ==
     sete al # binop == → al
     movzx r12, al # zero-extend al into dst
     mov r14, r12 # assign L22
-    jmp .La762_rt_str_trim_bb21 # branch
-.La762_rt_str_trim_bb21:
+    jmp .Lf6aa_rt_str_trim_bb21 # branch
+.Lf6aa_rt_str_trim_bb21:
     test r14, r14 # br_cond test
-    jz .La762_rt_str_trim_bb23 # jump-if-zero -> else
-    jmp .La762_rt_str_trim_bb22 # jump -> then
-.La762_rt_str_trim_bb22:
+    jz .Lf6aa_rt_str_trim_bb23 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_trim_bb22 # jump -> then
+.Lf6aa_rt_str_trim_bb22:
     mov rbx, r14 # assign L24
-    jmp .La762_rt_str_trim_bb24 # branch
-.La762_rt_str_trim_bb23:
+    jmp .Lf6aa_rt_str_trim_bb24 # branch
+.Lf6aa_rt_str_trim_bb23:
     cmp rax, 10 # binop ==
     sete al # binop == → al
     movzx r15, al # zero-extend al into dst
     mov rbx, r15 # assign L24
-    jmp .La762_rt_str_trim_bb24 # branch
-.La762_rt_str_trim_bb24:
+    jmp .Lf6aa_rt_str_trim_bb24 # branch
+.Lf6aa_rt_str_trim_bb24:
     test rbx, rbx # br_cond test
-    jz .La762_rt_str_trim_bb26 # jump-if-zero -> else
-    jmp .La762_rt_str_trim_bb25 # jump -> then
-.La762_rt_str_trim_bb25:
+    jz .Lf6aa_rt_str_trim_bb26 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_trim_bb25 # jump -> then
+.Lf6aa_rt_str_trim_bb25:
     mov r12, rbx # assign L26
-    jmp .La762_rt_str_trim_bb27 # branch
-.La762_rt_str_trim_bb26:
+    jmp .Lf6aa_rt_str_trim_bb27 # branch
+.Lf6aa_rt_str_trim_bb26:
     cmp rax, 13 # binop ==
     sete al # binop == → al
     movzx r14, al # zero-extend al into dst
     mov r12, r14 # assign L26
-    jmp .La762_rt_str_trim_bb27 # branch
-.La762_rt_str_trim_bb27:
+    jmp .Lf6aa_rt_str_trim_bb27 # branch
+.Lf6aa_rt_str_trim_bb27:
     test r12, r12 # br_cond test
-    jz .La762_rt_str_trim_bb29 # jump-if-zero -> else
-    jmp .La762_rt_str_trim_bb28 # jump -> then
-.La762_rt_str_trim_bb28:
+    jz .Lf6aa_rt_str_trim_bb29 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_trim_bb28 # jump -> then
+.Lf6aa_rt_str_trim_bb28:
     mov r15, r13 # binop lhs into dst
     sub r15, 1 # binop -
     mov r13, r15 # assign L16
-    jmp .La762_rt_str_trim_bb30 # branch
-.La762_rt_str_trim_bb29:
-    jmp .La762_rt_str_trim_bb18 # branch
-.La762_rt_str_trim_bb30:
-    jmp .La762_rt_str_trim_bb16 # branch
+    jmp .Lf6aa_rt_str_trim_bb30 # branch
+.Lf6aa_rt_str_trim_bb29:
+    jmp .Lf6aa_rt_str_trim_bb18 # branch
+.Lf6aa_rt_str_trim_bb30:
+    jmp .Lf6aa_rt_str_trim_bb16 # branch
     pop rbp # epilogue: restore rbp
     ret # return
 .globl rt_str_trim_start
@@ -969,21 +969,21 @@ rt_str_trim_start:
     .loc 1 196 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
-.La762_rt_str_trim_start_bb0:
+.Lf6aa_rt_str_trim_start_bb0:
     mov rsi, rdi # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     call hexa_len # call hexa_len
     mov rbx, rax # assign L2
     mov r12, 0 # assign L3
-    jmp .La762_rt_str_trim_start_bb1 # branch
-.La762_rt_str_trim_start_bb1:
+    jmp .Lf6aa_rt_str_trim_start_bb1 # branch
+.Lf6aa_rt_str_trim_start_bb1:
     cmp r12, rbx # binop <
     setl al # binop < → al
     movzx r13, al # zero-extend al into dst
     test r13, r13 # br_cond test
-    jz .La762_rt_str_trim_start_bb3 # jump-if-zero -> else
-    jmp .La762_rt_str_trim_start_bb2 # jump -> then
-.La762_rt_str_trim_start_bb2:
+    jz .Lf6aa_rt_str_trim_start_bb3 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_trim_start_bb2 # jump -> then
+.Lf6aa_rt_str_trim_start_bb2:
     mov rsi, rdi # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     mov rcx, r12 # hv arg payload
@@ -995,9 +995,9 @@ rt_str_trim_start:
     sete al # binop == → al
     movzx rax, al # zero-extend al into dst
     test rax, rax # br_cond test
-    jz .La762_rt_str_trim_start_bb5 # jump-if-zero -> else
-    jmp .La762_rt_str_trim_start_bb4 # jump -> then
-.La762_rt_str_trim_start_bb3:
+    jz .Lf6aa_rt_str_trim_start_bb5 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_trim_start_bb4 # jump -> then
+.Lf6aa_rt_str_trim_start_bb3:
     mov rsi, rdi # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     mov rcx, r12 # hv arg payload
@@ -1009,54 +1009,54 @@ rt_str_trim_start:
     mov rax, r13 # set return value
     pop rbp # epilogue: restore rbp
     ret # return
-.La762_rt_str_trim_start_bb4:
+.Lf6aa_rt_str_trim_start_bb4:
     mov r14, rax # assign L8
-    jmp .La762_rt_str_trim_start_bb6 # branch
-.La762_rt_str_trim_start_bb5:
+    jmp .Lf6aa_rt_str_trim_start_bb6 # branch
+.Lf6aa_rt_str_trim_start_bb5:
     cmp r15, 9 # binop ==
     sete al # binop == → al
     movzx rbx, al # zero-extend al into dst
     mov r14, rbx # assign L8
-    jmp .La762_rt_str_trim_start_bb6 # branch
-.La762_rt_str_trim_start_bb6:
+    jmp .Lf6aa_rt_str_trim_start_bb6 # branch
+.Lf6aa_rt_str_trim_start_bb6:
     test r14, r14 # br_cond test
-    jz .La762_rt_str_trim_start_bb8 # jump-if-zero -> else
-    jmp .La762_rt_str_trim_start_bb7 # jump -> then
-.La762_rt_str_trim_start_bb7:
+    jz .Lf6aa_rt_str_trim_start_bb8 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_trim_start_bb7 # jump -> then
+.Lf6aa_rt_str_trim_start_bb7:
     mov r13, r14 # assign L10
-    jmp .La762_rt_str_trim_start_bb9 # branch
-.La762_rt_str_trim_start_bb8:
+    jmp .Lf6aa_rt_str_trim_start_bb9 # branch
+.Lf6aa_rt_str_trim_start_bb8:
     cmp r15, 10 # binop ==
     sete al # binop == → al
     movzx rax, al # zero-extend al into dst
     mov r13, rax # assign L10
-    jmp .La762_rt_str_trim_start_bb9 # branch
-.La762_rt_str_trim_start_bb9:
+    jmp .Lf6aa_rt_str_trim_start_bb9 # branch
+.Lf6aa_rt_str_trim_start_bb9:
     test r13, r13 # br_cond test
-    jz .La762_rt_str_trim_start_bb11 # jump-if-zero -> else
-    jmp .La762_rt_str_trim_start_bb10 # jump -> then
-.La762_rt_str_trim_start_bb10:
+    jz .Lf6aa_rt_str_trim_start_bb11 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_trim_start_bb10 # jump -> then
+.Lf6aa_rt_str_trim_start_bb10:
     mov rbx, r13 # assign L12
-    jmp .La762_rt_str_trim_start_bb12 # branch
-.La762_rt_str_trim_start_bb11:
+    jmp .Lf6aa_rt_str_trim_start_bb12 # branch
+.Lf6aa_rt_str_trim_start_bb11:
     cmp r15, 13 # binop ==
     sete al # binop == → al
     movzx r14, al # zero-extend al into dst
     mov rbx, r14 # assign L12
-    jmp .La762_rt_str_trim_start_bb12 # branch
-.La762_rt_str_trim_start_bb12:
+    jmp .Lf6aa_rt_str_trim_start_bb12 # branch
+.Lf6aa_rt_str_trim_start_bb12:
     test rbx, rbx # br_cond test
-    jz .La762_rt_str_trim_start_bb14 # jump-if-zero -> else
-    jmp .La762_rt_str_trim_start_bb13 # jump -> then
-.La762_rt_str_trim_start_bb13:
+    jz .Lf6aa_rt_str_trim_start_bb14 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_trim_start_bb13 # jump -> then
+.Lf6aa_rt_str_trim_start_bb13:
     mov rax, r12 # binop lhs into dst
     add rax, 1 # binop +
     mov r12, rax # assign L3
-    jmp .La762_rt_str_trim_start_bb15 # branch
-.La762_rt_str_trim_start_bb14:
-    jmp .La762_rt_str_trim_start_bb3 # branch
-.La762_rt_str_trim_start_bb15:
-    jmp .La762_rt_str_trim_start_bb1 # branch
+    jmp .Lf6aa_rt_str_trim_start_bb15 # branch
+.Lf6aa_rt_str_trim_start_bb14:
+    jmp .Lf6aa_rt_str_trim_start_bb3 # branch
+.Lf6aa_rt_str_trim_start_bb15:
+    jmp .Lf6aa_rt_str_trim_start_bb1 # branch
     pop rbp # epilogue: restore rbp
     ret # return
 .globl rt_str_trim_end
@@ -1066,21 +1066,21 @@ rt_str_trim_end:
     .loc 1 210 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
-.La762_rt_str_trim_end_bb0:
+.Lf6aa_rt_str_trim_end_bb0:
     mov rsi, rdi # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     call hexa_len # call hexa_len
     mov rbx, rax # assign L2
     mov r12, rbx # assign L3
-    jmp .La762_rt_str_trim_end_bb1 # branch
-.La762_rt_str_trim_end_bb1:
+    jmp .Lf6aa_rt_str_trim_end_bb1 # branch
+.Lf6aa_rt_str_trim_end_bb1:
     cmp r12, 0 # binop >
     setg al # binop > → al
     movzx r13, al # zero-extend al into dst
     test r13, r13 # br_cond test
-    jz .La762_rt_str_trim_end_bb3 # jump-if-zero -> else
-    jmp .La762_rt_str_trim_end_bb2 # jump -> then
-.La762_rt_str_trim_end_bb2:
+    jz .Lf6aa_rt_str_trim_end_bb3 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_trim_end_bb2 # jump -> then
+.Lf6aa_rt_str_trim_end_bb2:
     mov r14, r12 # binop lhs into dst
     sub r14, 1 # binop -
     mov rsi, rdi # hv arg payload
@@ -1094,9 +1094,9 @@ rt_str_trim_end:
     sete al # binop == → al
     movzx rbx, al # zero-extend al into dst
     test rbx, rbx # br_cond test
-    jz .La762_rt_str_trim_end_bb5 # jump-if-zero -> else
-    jmp .La762_rt_str_trim_end_bb4 # jump -> then
-.La762_rt_str_trim_end_bb3:
+    jz .Lf6aa_rt_str_trim_end_bb5 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_trim_end_bb4 # jump -> then
+.Lf6aa_rt_str_trim_end_bb3:
     mov rsi, rdi # hv arg payload
     mov rdi, 0 # hv arg tag = 0
     mov rcx, 0 # hv arg payload
@@ -1108,54 +1108,54 @@ rt_str_trim_end:
     mov rax, r13 # set return value
     pop rbp # epilogue: restore rbp
     ret # return
-.La762_rt_str_trim_end_bb4:
+.Lf6aa_rt_str_trim_end_bb4:
     mov r14, rbx # assign L9
-    jmp .La762_rt_str_trim_end_bb6 # branch
-.La762_rt_str_trim_end_bb5:
+    jmp .Lf6aa_rt_str_trim_end_bb6 # branch
+.Lf6aa_rt_str_trim_end_bb5:
     cmp rax, 9 # binop ==
     sete al # binop == → al
     movzx r15, al # zero-extend al into dst
     mov r14, r15 # assign L9
-    jmp .La762_rt_str_trim_end_bb6 # branch
-.La762_rt_str_trim_end_bb6:
+    jmp .Lf6aa_rt_str_trim_end_bb6 # branch
+.Lf6aa_rt_str_trim_end_bb6:
     test r14, r14 # br_cond test
-    jz .La762_rt_str_trim_end_bb8 # jump-if-zero -> else
-    jmp .La762_rt_str_trim_end_bb7 # jump -> then
-.La762_rt_str_trim_end_bb7:
+    jz .Lf6aa_rt_str_trim_end_bb8 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_trim_end_bb7 # jump -> then
+.Lf6aa_rt_str_trim_end_bb7:
     mov r13, r14 # assign L11
-    jmp .La762_rt_str_trim_end_bb9 # branch
-.La762_rt_str_trim_end_bb8:
+    jmp .Lf6aa_rt_str_trim_end_bb9 # branch
+.Lf6aa_rt_str_trim_end_bb8:
     cmp rax, 10 # binop ==
     sete al # binop == → al
     movzx rbx, al # zero-extend al into dst
     mov r13, rbx # assign L11
-    jmp .La762_rt_str_trim_end_bb9 # branch
-.La762_rt_str_trim_end_bb9:
+    jmp .Lf6aa_rt_str_trim_end_bb9 # branch
+.Lf6aa_rt_str_trim_end_bb9:
     test r13, r13 # br_cond test
-    jz .La762_rt_str_trim_end_bb11 # jump-if-zero -> else
-    jmp .La762_rt_str_trim_end_bb10 # jump -> then
-.La762_rt_str_trim_end_bb10:
+    jz .Lf6aa_rt_str_trim_end_bb11 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_trim_end_bb10 # jump -> then
+.Lf6aa_rt_str_trim_end_bb10:
     mov r15, r13 # assign L13
-    jmp .La762_rt_str_trim_end_bb12 # branch
-.La762_rt_str_trim_end_bb11:
+    jmp .Lf6aa_rt_str_trim_end_bb12 # branch
+.Lf6aa_rt_str_trim_end_bb11:
     cmp rax, 13 # binop ==
     sete al # binop == → al
     movzx r14, al # zero-extend al into dst
     mov r15, r14 # assign L13
-    jmp .La762_rt_str_trim_end_bb12 # branch
-.La762_rt_str_trim_end_bb12:
+    jmp .Lf6aa_rt_str_trim_end_bb12 # branch
+.Lf6aa_rt_str_trim_end_bb12:
     test r15, r15 # br_cond test
-    jz .La762_rt_str_trim_end_bb14 # jump-if-zero -> else
-    jmp .La762_rt_str_trim_end_bb13 # jump -> then
-.La762_rt_str_trim_end_bb13:
+    jz .Lf6aa_rt_str_trim_end_bb14 # jump-if-zero -> else
+    jmp .Lf6aa_rt_str_trim_end_bb13 # jump -> then
+.Lf6aa_rt_str_trim_end_bb13:
     mov rbx, r12 # binop lhs into dst
     sub rbx, 1 # binop -
     mov r12, rbx # assign L3
-    jmp .La762_rt_str_trim_end_bb15 # branch
-.La762_rt_str_trim_end_bb14:
-    jmp .La762_rt_str_trim_end_bb3 # branch
-.La762_rt_str_trim_end_bb15:
-    jmp .La762_rt_str_trim_end_bb1 # branch
+    jmp .Lf6aa_rt_str_trim_end_bb15 # branch
+.Lf6aa_rt_str_trim_end_bb14:
+    jmp .Lf6aa_rt_str_trim_end_bb3 # branch
+.Lf6aa_rt_str_trim_end_bb15:
+    jmp .Lf6aa_rt_str_trim_end_bb1 # branch
     pop rbp # epilogue: restore rbp
     ret # return
 .section .rodata
