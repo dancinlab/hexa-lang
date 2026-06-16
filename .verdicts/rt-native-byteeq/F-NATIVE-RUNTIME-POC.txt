@@ -44,3 +44,21 @@ leg B native runtime 진척:
 - 남은: (1) HexaVal struct/macro/값op/arena/dispatch 코어 ~1190 fn .hexa 화(거대,
   메커니즘 전부 증명됨 이번 세션) (2) ABI wrapper(float↔HexaVal) (3) native runtime.a
   통합 + restore C-seed 제거. 거대 다세션 전수.
+
+
+## 코어 native 범위 측정 (2026-06-16, nm build/runtime.a)
+runtime.a(567448B) 심볼 분포:
+- 총 T(global) 심볼: 744.
+- hexa_* (코어 값op/생성자/string/array/map/arena): **591**.
+- rt_* (stdlib 위임, native obj PoC ✅): 42.
+- 기타: 111.
+∴ leg B 코어 native 대상 = **591 hexa_* fn**(1190 추정 → 591 정확화). stdlib 42 는
+native obj PoC 완료. 코어 591 = HexaVal 값op(hexa_int/bool/float/void/truthy/add/cmp)
++ string/array/map(arena 기반) + arena. 이번 세션 메커니즘 전부 증명:
+- 값op leaf intrinsic(__hx_tag/payload_*/str_byte/to_double, #3400-3409).
+- native arena(stateful, mmap/munmap/ptr R/W, #3413-3416).
+- dispatch(rt_cmp_lt==C 11/11, #3405).
+
+leg B 잔여 (확정): 591 코어 fn .hexa native(leaf intrinsic+arena 기반) + ABI wrapper
++ native runtime.a 통합 + restore C-seed 제거 → ls self/*.c==∅ + C-free. 거대 다세션
+누적. leg A 양 타깃 byte-eq 졸업(#3412/3432)이 native 컴파일 토대.
