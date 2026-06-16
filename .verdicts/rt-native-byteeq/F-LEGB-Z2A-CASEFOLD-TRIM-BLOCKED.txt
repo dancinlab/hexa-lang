@@ -69,3 +69,17 @@ DEPLETION CONDITION for this lane:
   Darwin seed + parity are already proven here; re-derive cheaply).
 
 revert: git checkout — all 4 source files; worktree CLEAN (verified). c7 intact.
+
+────────────────────────────────────────────────────────────────
+FOLLOW-UP (2026-06-17): unblock step (a) RESOLVED.
+  tool/extract_runtime_hi.sh no longer hardcodes the strlit-init name in the
+  ctor footer. It now auto-detects the symbol hexat emits (bare
+  `__hexa_strlit_init` OR module-suffixed `__hexa_strlit_init__runtime_hi`) and
+  applies the same `__hexa_rt_` rename the bodies get, so footer-call == body-def
+  for BOTH ABI forms. Verified by construction (logic test, both cases MATCH).
+  Cannot run the full regen locally (no hexat build) nor linux cross byte-eq
+  (pod) — those remain steps (c)+(d). Step (b) (2 fwd decls in
+  runtime_core_emit.hexa) deferred to the regen session that can build-verify it
+  (target symbol hexa_bytes_to_str_raw not locatable in the emitter SSOT from
+  here; blind-editing a core-file generator is unsafe — c2/c9).
+  => "real wall" blocker (a) is down; (c)+(d) genuinely need hexat+pod.
