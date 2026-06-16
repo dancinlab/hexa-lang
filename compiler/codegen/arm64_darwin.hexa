@@ -2054,6 +2054,40 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // RT-NATIVE UNLOCK-9: `__hx_syscall6(num, a0..a5)` → int HexaVal of a
+        // 6-arg BSD syscall result. The mmap/munmap path = native arena (Z3)
+        // with NO C malloc shim. macOS arm64: args in x0..x5, number in x16,
+        // `svc #0x80`, result x0. Each arg's INT payload is staged into a
+        // callee-temp (x9..x14) FIRST — `_hv_load` clobbers x0..x3 as scratch,
+        // so loading directly into x0..x5 would corrupt earlier args — then
+        // moved into x0..x5 in one block just before the trap.
+        if s.op == "__hx_syscall6" && len(s.args) >= 7 {
+            let tmps = ["x9", "x10", "x11", "x12", "x13", "x14"]
+            let mut ai = 1
+            while ai <= 6 {
+                buf = _hv_load(buf, s.args[ai], st, rm, "x7", "x8")  // arg → x8=payload
+                buf.push(_arm64_instr2("mov", _arm64_op_reg(tmps[ai - 1]),
+                                 _arm64_op_reg("x8"), "__hx_syscall6: stage arg"))
+                ai = ai + 1
+            }
+            buf = _hv_load(buf, s.args[0], st, rm, "x7", "x8")  // num → x8
+            buf.push(_arm64_instr2("mov", _arm64_op_reg("x16"),
+                             _arm64_op_reg("x8"), "__hx_syscall6: x16 = syscall num"))
+            let mut mi = 0
+            while mi <= 5 {
+                buf.push(_arm64_instr2("mov", _arm64_op_reg("x" + to_string(mi)),
+                                 _arm64_op_reg(tmps[mi]), "__hx_syscall6: arg -> x" + to_string(mi)))
+                mi = mi + 1
+            }
+            buf.push(_arm64_instr1("svc", _arm64_op_label("#0x80"),
+                             "__hx_syscall6: BSD syscall trap"))
+            buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"),
+                             _arm64_op_reg("x0"), "__hx_syscall6: payload = result"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_syscall6: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // RT-NATIVE UNLOCK-6: `__hx_to_double(v)` → float HexaVal coercing
         // an int-or-float operand to double (dispatch core's mixed int/float
         // compare: `__hx_to_double(a) < __hx_to_double(b)`). BRANCHLESS via
