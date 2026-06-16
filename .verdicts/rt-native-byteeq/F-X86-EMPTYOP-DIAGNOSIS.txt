@@ -30,3 +30,22 @@ placeholder(reg.name/label 빈→`<EMPTY_kind>`) 임시 추가 → x86_64 whole-
 emit → 빈 operand 의 정확한 LOperand kind 노출 → hir_to_mir 의 target_block
 operand 생성 OR _x86_op_resolve 의 해당 kind 처리 root 수정. arm64 무영향(빈
 operand 없음, leg A #3412 보존). 누적 진전: 52→16(단일 클래스), root=target_block field val.
+
+
+## 2차 진단 (2026-06-16, _fmt_operand placeholder 결과)
+emit/asm.hexa `_fmt_operand` 의 reg.name/label "" → `<EMPTY_REG_op>`/`<EMPTY_LABEL_op>`
+placeholder 추가 후 x86_64 whole-compiler emit:
+- **EMPTY placeholder 0개** (바이너리엔 반영됨 — strings 2개 확인).
+- od 로 본 빈 operand 실제 형태: `mov rdx,  # struct_lit: field val`
+  = operand 완전 빈 (대괄호 `[]` 도 없음 → mem 아님).
+- ∴ 빈 operand 는 reg/label kind 아님(placeholder 미발동) · mem 아님(`[]` 부재)
+  · imm 아님(to_string 빈 불가) · unknown 아님(`<?kind?>` 0개).
+- = 빈 operand 가 `_fmt_operand` 의 모든 분기를 **우회**하거나, x86_64 가
+  `_fmt_operand` 아닌 다른 asm-text 렌더 경로를 쓴다. arm64 는 빈 operand 없음
+  (placeholder 무발동, smoke exit42, leg A #3412 보존).
+
+NEXT: x86_64 LIR→asm-text 렌더 경로 확인 — `_fmt_instr`/`_fmt_args_for_op` 가
+x86_64 에도 적용되는지, 아니면 x86_64 전용 렌더가 빈 operand 를 trailing-comma
+로 흘리는지. `_fmt_operand_for_op` 의 cc-carrying 우회(cset/csel)는 cmp/mov 에
+해당 안 됨(배제). 누적 52→16(단일 클래스 빈 operand, root 추가 좁힘: 모든
+_fmt_operand kind 배제).

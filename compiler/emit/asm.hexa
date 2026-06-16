@@ -165,10 +165,22 @@ fn _is_cc_carrying_op(op: string) -> bool {
 }
 
 fn _fmt_operand(target: string, op: LOperand) -> string {
-    if op.kind == "reg"   { return _fmt_reg(target, op.reg) }
+    if op.kind == "reg" {
+        let r = _fmt_reg(target, op.reg)
+        // DIAG (RT-NATIVE #3429): a blank reg name renders an empty operand
+        // (`mov rdx,`/`cmp r12,`) — the x86_64 whole-compiler unknown-token
+        // error class. Surface it so the origin is inspectable instead of a
+        // silent blank. (A correct emit never produces a blank reg name.)
+        if len(r) == 0 { return "<EMPTY_REG_op>" }
+        return r
+    }
     if op.kind == "imm"   { return _fmt_imm(target, op.imm) }
     if op.kind == "mem"   { return _fmt_mem(target, op) }
-    if op.kind == "label" { return _fmt_label(target, op.label) }
+    if op.kind == "label" {
+        let l = _fmt_label(target, op.label)
+        if len(l) == 0 { return "<EMPTY_LABEL_op>" }
+        return l
+    }
     // Unknown kind — emit a placeholder so output is still inspectable.
     return "<?" + op.kind + "?>"
 }
