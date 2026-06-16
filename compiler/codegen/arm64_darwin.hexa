@@ -199,6 +199,15 @@ fn _arm64_instr3(op: string, a: LOperand, b: LOperand, c: LOperand, comment: str
     return LInstr { op: op, args: xs, comment: comment }
 }
 
+fn _arm64_instr4(op: string, a: LOperand, b: LOperand, c: LOperand, d: LOperand, comment: string) -> LInstr {
+    let mut xs = []
+    xs.push(a)
+    xs.push(b)
+    xs.push(c)
+    xs.push(d)
+    return LInstr { op: op, args: xs, comment: comment }
+}
+
 // ── Register assignment (naive fallback) ─────────────────────
 //
 // Used only when no RegMap is available. Production codegen runs
@@ -2008,6 +2017,27 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf.push(_arm64_instr2("cset", _arm64_op_reg("x0"),
                              _arm64_op_label(_fcond), s.op + ": x0 = (a " + _fcond + " b)"))
             buf = _emit_bool_box(buf, s.op + ": box bool")
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // RT-NATIVE UNLOCK-6: `__hx_to_double(v)` → float HexaVal coercing
+        // an int-or-float operand to double (dispatch core's mixed int/float
+        // compare: `__hx_to_double(a) < __hx_to_double(b)`). BRANCHLESS via
+        // csel (no intra-sequence label): convert int→double unconditionally,
+        // then select already-double bits when tag==FLOAT else the converted.
+        if s.op == "__hx_to_double" && len(s.args) >= 1 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // tag=x0, pl=x1
+            buf.push(_arm64_instr2("scvtf", _arm64_op_reg("d0"),
+                             _arm64_op_reg("x1"), "__hx_to_double: d0 = (double)int"))
+            buf.push(_arm64_instr2("fmov", _arm64_op_reg("x2"),
+                             _arm64_op_reg("d0"), "__hx_to_double: x2 = int-as-double bits"))
+            buf.push(_arm64_instr2("cmp", _arm64_op_reg("x0"),
+                             _arm64_op_label("#1"), "__hx_to_double: tag == TAG_FLOAT?"))
+            buf.push(_arm64_instr4("csel", _arm64_op_reg("x1"), _arm64_op_reg("x1"),
+                             _arm64_op_reg("x2"), _arm64_op_label("eq"),
+                             "__hx_to_double: float→keep bits, int→converted"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#1"), "__hx_to_double: TAG_FLOAT"))
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
