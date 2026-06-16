@@ -6181,6 +6181,11 @@ fn gen2_expr(node) {
             if name == "__hx_str_byte" {
                 return "hexa_int((int64_t)(uint8_t)HX_STR(" + gen2_expr(node.args[0]) + ")[HX_INT(" + gen2_expr(node.args[1]) + ")])"
             }
+            // RT-NATIVE UNLOCK-6: coerce int-or-float operand to double.
+            if name == "__hx_to_double" {
+                let a0 = gen2_expr(node.args[0])
+                return "hexa_float(HX_IS_FLOAT(" + a0 + ") ? HX_FLOAT(" + a0 + ") : (double)HX_INT(" + a0 + "))"
+            }
             if name == "__map_ptr_eq" {
                 return "hexa_bool((HX_MAP_TBL(" + gen2_expr(node.args[0]) + ") == HX_MAP_TBL(" + gen2_expr(node.args[1]) + ")))"
             }
