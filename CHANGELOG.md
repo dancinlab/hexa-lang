@@ -8,6 +8,8 @@ For the full audit trail, see `git log`.
 
 ## 2026-06-16
 
+- **RT-NATIVE: leg B 경계확정 + Z2a 메커니즘 증명 (데모→구조)** — leg B(`ls self/*.c==∅`)를 "거대 미지수"에서 **경계확정·메커니즘증명**으로 전환(c9 정직, c16 다른 각도). 측정: runtime_core.c 8082L 중 irreducible floor=**작음**(syscall/asm 8 → `__hx_syscall0/6` intrinsic 구축됨 · libm extern 10 → CLAUDE.md "trig=libm" FFI 허용 · HexaVal struct def 15 → git-tracked 헤더 표현가능), 나머지 ~580 fn = dispatch/value-op 볼륨. **메커니즘 PROVEN**: `stage_resolve_runtime_a` `HEXA_ZEROC_RT_HI=1` 경로가 이미 `build/rt_hi_native.o`를 runtime.a에 ar + `#include runtime_hi_gen.c` 제거(Z2a-done, rt_str_* native 완료). 결론: leg B = 연구 벽 아님, **검증된 Z2a 패턴의 ~580fn 다세션 누적 + standalone 재설계(#else 80블록)**. verdict F-LEGB-FLOOR-SIZED-MECHANISM-CONFIRMED.
+
 - **RT-NATIVE: leg B 코어 native 누적 batch2 — 비교/산술/eq 10 fn** — `__hx_payload_lt/gt/le/ge/eq/add/sub/mul` + `__hx_to_double`+`flt/fadd`(혼합 float) = int/float fast-path 완전 native. **검증(c2)**: 비교4(3<5·5>3·4<=4·4>=4)+eq1+산술3(20+22·50-8·6*7=42)+float2 정확 · asm·obj exit10 · `_rt_*` T 심볼 10. 코어 native 누적 8→**18/591**. (string/map/valstruct 분기는 추가 leaf 잔여). 다세션 누적 가속(int/float 코어 op 완비). 데모: scripts/scratch/rt_native/rt_core_batch2.hexa.
 
 - **RT-NATIVE: leg B 코어 native 누적 — type predicate 7종(is_int/float/bool/str/void/array/map)** — `__hx_tag` + `__hx_payload_eq(tag, TAG_X)` = **완전 leaf**(MAP/glue 잔여 없음, predicate 는 단순 tag 비교). **검증(c2)**: 7종 정확(int→is_int T·float→is_float T·…·타입 불일치 F) · asm·obj exit8 · `_rt_is_*` T 심볼 7개(stdlib 편입 가능). 코어 native 누적 1(rt_truthy #3443)→**8/591**. 패턴: 단순 코어 fn 은 leaf 만으로 완전 native(glue 불요), 복합 fn(truthy MAP·dispatch)은 추가 leaf+glue lowering 필요. 다세션 누적 가속. 데모: scripts/scratch/rt_native/rt_typepred_demo.hexa.
