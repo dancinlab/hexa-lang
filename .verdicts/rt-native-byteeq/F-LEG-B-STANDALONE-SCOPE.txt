@@ -1,0 +1,31 @@
+F-LEG-B-STANDALONE-SCOPE — 2026-06-16
+═══════════════════════════════════════════════════════════════
+leg B(ls self/*.c == ∅) standalone 재설계 블로커의 정확한 규모 측정 — 생각보다
+훨씬 작고 거의 해소됨.
+
+측정 (clang -E preprocess diff, 캡처출력):
+- runtime.c active(-DHEXA_HAS_HEXA_RT_STDLIB=1) fn 정의 = 1190.
+- runtime.c standalone(no -D) fn 정의 = 1202.
+- **standalone-only = 12 fn** (active 엔 없고 standalone #else 에만):
+  libm 5: rt_cos rt_sin rt_exp rt_log rt_fmod
+  char 2: rt_isalnum rt_isalpha
+  stub 5: rt_net_fail rt_net_zero rt_posix_ok rt_pthread_create_policy rt_pthread_noop
+- active-only = 0 (active 와 standalone 이 1190 fn 공통).
+
+핵심 발견: **이 12 standalone-only fn 전부 stdlib/runtime/ 에 hexa-source 이미 존재**:
+  rt_cos/sin/exp/log/fmod → stdlib/runtime/math.hexa
+  rt_isalnum/isalpha     → stdlib/runtime/ctype.hexa
+  rt_net_fail/zero       → stdlib/runtime/net.hexa
+  rt_posix_ok            → stdlib/runtime/posix.hexa
+
+leg B 규모 재평가:
+- standalone 재설계 = 12 fn 의 hexa-source 를 standalone 빌드가 링크 = **거의 완료**
+  (hexa-source 존재, x86_64 codegen 졸업으로 aprime native 컴파일 가능).
+  → cross_build/standalone 빌드가 math.hexa/ctype.hexa/net.hexa/posix.hexa 를
+    aprime 로 native 컴파일 → rt_*.o → 링크 → #else 12 fn 제거 가능.
+- 파일 0 의 진짜 벌크 = active+standalone 공통 1190 fn 의 native 화 (runtime.c/core.c
+  코어 struct/macro/대부분 fn). 이게 거대·다세션 전수.
+
+VERDICT: leg B standalone 재설계 블로커 = 12 fn(전부 hexa-source 존재) = 작음·거의
+해소. 파일 0 벌크 = 1190 공통 fn 전수 native(다세션). NEXT: standalone 빌드 →
+aprime native rt_*.o 링크 전환 PoC(12 fn) → #else 제거 → dual-config gate.
