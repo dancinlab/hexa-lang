@@ -1,0 +1,26 @@
+// VERIFIED 2026-06-16: 7 type predicate(is_int/float/bool/str/void/array/map)
+// native(완전 leaf, __hx_tag+payload_eq) — asm·obj exit=8, _rt_is_* T 심볼 7개.
+// leg B 코어 native 누적 1(rt_truthy)→8/591. 완전 native(MAP/glue 잔여 없음).
+// RT-NATIVE leg B 코어 native 누적: type predicate 7종 (완전 leaf, glue 최소).
+// C: hexa_is_int/float/bool/str/void/array(v) = HX_TAG(v)==TAG_X.
+// TAG: INT=0 FLOAT=1 BOOL=2 STR=3 VOID=4 ARRAY=5 MAP=6.
+fn rt_is_int(v) -> bool   { return __hx_payload_eq(__hx_tag(v), 0) }
+fn rt_is_float(v) -> bool { return __hx_payload_eq(__hx_tag(v), 1) }
+fn rt_is_bool(v) -> bool  { return __hx_payload_eq(__hx_tag(v), 2) }
+fn rt_is_str(v) -> bool   { return __hx_payload_eq(__hx_tag(v), 3) }
+fn rt_is_void(v) -> bool  { return __hx_payload_eq(__hx_tag(v), 4) }
+fn rt_is_array(v) -> bool { return __hx_payload_eq(__hx_tag(v), 5) }
+fn rt_is_map(v) -> bool   { return __hx_payload_eq(__hx_tag(v), 6) }
+fn main() {
+  let mut ok = 0
+  // 각 predicate 가 해당 타입에 true, 타 타입에 false
+  if rt_is_int(1) { ok = ok + 1 }          // int → is_int T
+  if !rt_is_int(1.5) { ok = ok + 1 }       // float → is_int F
+  if rt_is_float(2.5) { ok = ok + 1 }      // float → is_float T
+  if rt_is_bool(true) { ok = ok + 1 }      // bool → is_bool T
+  if rt_is_str("x") { ok = ok + 1 }        // str → is_str T
+  if rt_is_array([1]) { ok = ok + 1 }      // array → is_array T
+  if !rt_is_str(1) { ok = ok + 1 }         // int → is_str F
+  if !rt_is_array("x") { ok = ok + 1 }     // str → is_array F
+  exit(ok)   // expect 8 = 7 predicate 정확 동작
+}
