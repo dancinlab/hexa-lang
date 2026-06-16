@@ -1,0 +1,31 @@
+F-RT-NATIVE-FIXPOINT-PRESERVED — 2026-06-16
+═══════════════════════════════════════════════════════════════
+
+CLAIM: 이번 세션 RT-NATIVE 12 PR(#3400-3411, leaf intrinsic + 14종 obj
+인코딩: FP/cset/ldrb/scvtf/csel/ldr-W/svc)이 self-host byte-eq fixpoint
+(gen3 ≡ gen4)를 보존한다.
+
+METHOD (LEG-A self-reproduction):
+- fresh aprime_cc 빌드 (build_aprime.sh, main @becbe795a + 12 PR 머지됨)
+- flatten compiler/main.hexa import/use closure → /tmp/flat.hexa (48 files, 44630 lines)
+  (embedded.gen.hexa = STUB; build_aprime.sh stage-1 과 동일 로직)
+- aprime _drv.hexa --emit=obj --target=arm64-apple-darwin flat.hexa → g3.o
+- 동일 명령 재실행 → g4.o
+- cmp g3.o g4.o
+
+RESULT (캡처출력):
+  g3.o = 3,547,208 bytes · ENCODE-MISS 0 · udf 0
+  g4.o = 3,547,208 bytes
+  cmp  = BYTE-IDENTICAL
+  sha256(g3) = f68cd893f16d4831… == sha256(g4) = f68cd893f16d4831…
+
+VERDICT: ✅ gen3 ≡ gen4 byte-identical. 14종 신규 obj 인코딩이 전체 컴파일러
+자기-emit 에서 ENCODE-MISS·udf 0 → fixpoint 무회귀. self-host 졸업 게이트의
+byte-eq fixpoint leg PASS (this Mac, Darwin arm64).
+
+HONEST SCOPE (c9):
+- 이것은 self-REPRODUCTION fixpoint(gen2의 emit이 재실행에서 자기 자신을
+  재생산: g3==g4). canonical 졸업 정의와 일치(selfhost_byteeq_gate.sh LEG-A).
+- goal `ls self/*.c == ∅` 는 별개 leg(런타임 .c 제거) — 미달(2개 잔존:
+  runtime.c·runtime_core.c). 본 verdict 는 "내 변경이 fixpoint 안 깸"만 증명,
+  "파일 0 달성"은 증명 안 함. 두 leg 는 독립.

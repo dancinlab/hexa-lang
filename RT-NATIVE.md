@@ -3,7 +3,8 @@
 @goal: literal `ls self/*.c == ∅` (작동 toolchain 유지) — 빌드가 런타임을 native(gen3)로 컴파일해 .c 중간물을 아예 생성/필요로 하지 않게 한다. C-authored 런타임 코어(tag·arena·setjmp + 954fn)를 native .hexa 로 재작성 → gen3≡gen4 byte-eq 재확립
 
 ## milestones
-- [ ] Z5 졸업: ls self/*.c==∅ + gen3≡gen4 byte-eq fixpoint 재확립
+- [~] Z5 졸업: ls self/*.c==∅ + gen3≡gen4 byte-eq fixpoint 재확립
+  - **byte-eq leg ✅ 검증(2026-06-16)**: 이번 세션 12 PR(14종 obj 인코딩 포함) 후 fresh aprime self-emit gen3≡gen4 BYTE-IDENTICAL(3,547,208 bytes·sha f68cd893·ENCODE-MISS 0·udf 0). verdict .verdicts/rt-native-byteeq/. **잔여 leg = ls self/*.c==∅**(런타임 .c 제거, 별개·미달 2개).
 - [ ] Z2c runtime_core.c 506fn + runtime.c 전수 → native .hexa seed-link 포팅 (2→0). **메커니즘=Z2a 패턴**(rt_*.hexa → native .s seed → runtime.a ar → C #if-guard/제거 → byte-eq). 글루 헬퍼(truthy/bool/add_slow/cmp_*) 포함 전수. 대부분 pod(전수 후 gen3≡gen4)
   - **정확한 현황 발견(2026-06-16)**: hexa-native 런타임 stdlib `stdlib/runtime/*.hexa`(numeric.hexa 1713L 등 rt_abs/floor/clamp/array_*/format_* 다수)가 **이미 존재·활성** — build_aprime.sh stage-4 가 `-DHEXA_HAS_HEXA_RT_STDLIB=1` 을 설정해 runtime_core.c 의 `hexa_add_slow`/`hexa_str_join`/… 가 `#ifdef HEXA_HAS_HEXA_RT_STDLIB` 분기로 hexa-source `rt_*` 에 위임(C #else 본문은 standalone 용 보존). 즉 런타임은 **하이브리드**(다수 fn 이미 hexa-native dispatch). `ls self/*.c==∅` 미달 이유 = (1) 아직 C-body 인 잔여 fn (2) **부트스트랩 플로어**(HexaVal struct/union·HX_* 매크로·arena·syscall@asm — frozen-seed 순환). 본 세션 leaf intrinsic 은 이 rt_* 함수들의 **핫-경로를 인라인**해 C 글루 재진입을 줄이는 가속재. 잔여 = C-body fn 포팅 완료 + 플로어 제거 + 전수 후 gen3≡gen4 byte-eq(pod).
 - [x] Z4 setjmp/longjmp try/catch → native unwinding lowering (또는 정직-keep 결정)
