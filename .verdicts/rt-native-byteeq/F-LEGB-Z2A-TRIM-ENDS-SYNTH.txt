@@ -1,0 +1,46 @@
+F-LEGB-Z2A-TRIM-ENDS-SYNTH — trim-ends group → native SSOT (awk-synth) (CANDIDATE)
+================================================================================
+CLAIM: casefold/trim(#3455, d99ecc321) 의 green awk-synth 패턴을 정확히 같은 방식으로
+다음 floor-안전 그룹 rt_str_trim_start/rt_str_trim_end 에 적용한다. linux+darwin 모두
+native(11-fn gen.c) 로 제공, regen 은 hexat-free awk un-escaper(PRIMARY 경로).
+
+GROUP (floor-safe, c1):
+  rt_str_trim_start / rt_str_trim_end — rt_str_trim 의 직계 형제. 동일 byte_at
+  whitespace scan(32/9/10/13) + 단일 substring slice. leaf builtin 만
+  (char_code_at + substring), libc/syscall/libm 의존 0. ctype.hexa 가 명시적으로
+  "trim_start/trim_end stay here (not yet in the runtime_hi.hexa seed group)"
+  라 지목한 다음 후보(easy 후보 선정 아닌 SSOT 명시).
+
+MECHANISM (①②③④):
+  ① self/runtime_hi.hexa SSOT: 2 fn 추가 + selftest(p/q assertion).
+  ② self/runtime_hi_gen_emit.hexa: gen.c 정의 2개 추가(trim 바디 byte-id idiom,
+     trim_start = head-only slice [start,n) / trim_end = tail-only slice [0,end)).
+     awk un-escape → 9→11-fn gen.c.
+  ③ tool/restore_frozen_seeds: frozen 151c52c8 runtime.c 의 #ifndef
+     HEXA_HAS_HEXA_RT_STDLIB trim_start/end C 바디를 awk scrub.
+     11-fn 검증 grep 확장(trim_start/end 정의 require).
+  ④ stdlib/runtime/ctype.hexa: trim_start/end 제거(migration note).
+
+DIFF vs casefold (c1 근본):
+  casefold 3 fn(to_upper/to_lower/trim) 은 frozen 151c52c8 runtime.c 에 C 바디
+  부재 → scrub 불요였음. trim_start/end 는 frozen 에 #ifndef 바디 존재(L4343/4354).
+  seeds-removed runtime.a 는 HEXA_HAS_HEXA_RT_STDLIB 없이 컴파일(stage_resolve_
+  runtime_a 에 -D 없음) → 그 C 바디가 활성 → gen.c 정의와 DUPLICATE 였을 것.
+  따라서 restore 후 scrub 이 trim-ends 의 필수 추가 스텝(casefold 엔 없던).
+  native .s seed 는 #3455 처럼 미변경(gated HEXA_ZEROC_RT_HI 경로, CI 비대상 →
+  blast radius 최소; 그 경로엔 trim_start/end 가 오늘도 native 부재).
+
+LOCAL VERIFY (c2, captured):
+  - awk un-escape runtime_hi_gen_emit.hexa → rc=0, 11-fn:
+    rt_str_split/lines/pad_left/pad_right/repeat/center/to_upper/to_lower/trim/
+    trim_start(L268)/trim_end(L286), __hexa_rt_strlit_init_ctor 존재.
+  - scrub awk on frozen runtime.c: 12줄 제거(=6+6), trim_start/end 정의 0,
+    빈 #ifndef/#endif shell well-formed(valid C).
+  - bash -n stage_resolve_runtime_a / restore_frozen_seeds : OK
+  - 충돌마커: 0
+
+AUTHORITATIVE JUDGE: CI faithful-nobaseline (linux-x86_64 + linux-arm64 +
+  darwin-arm64). 로컬은 구조까지만. 전체 seeds-removed 빌드/링크 = CI 가 판정
+  (c9: self-report 아닌 CI 출력이 증거).
+
+STATUS: CANDIDATE — awaiting CI faithful-nobaseline 3-job verdict.

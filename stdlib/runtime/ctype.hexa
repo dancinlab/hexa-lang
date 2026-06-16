@@ -537,45 +537,19 @@ pub fn rt_pad_right(s: string, width: int) -> string {
 // / rt_str_trim MOVED to the self/runtime_hi.hexa SSOT. They now ship as native
 // (Darwin: self/native/runtime_hi_native.s seed) or hexat-transpiled
 // (linux: self/runtime_hi_gen.c) rt_str_* — zero C, no duplicate symbol with
-// the native seed at the Darwin link. trim_start/trim_end stay here (not yet
-// in the runtime_hi.hexa seed group).
+// the native seed at the Darwin link.
 
-// Step 3 cycle 49 — strip trailing whitespace (mirror of trim_start).
-pub fn rt_str_trim_end(s: string) -> string {
-    let n = byte_len(s)
-    let mut b_end = n
-    while b_end > 0 {
-        let b = s.byte_at(b_end - 1)
-        if b == 32 || b == 9 || b == 10 || b == 13 {
-            b_end = b_end - 1
-        } else {
-            break
-        }
-    }
-    return s.substring(0, b_end)
-}
+// RT-NATIVE leg B Z2a (trim-ends group): rt_str_trim_start / rt_str_trim_end
+// MOVED to the self/runtime_hi.hexa SSOT (siblings of rt_str_trim, same byte_at
+// + substring leaf body). They now ship from the runtime_hi_gen.c #include
+// (synthesized hexat-free from self/runtime_hi_gen_emit.hexa) on every target,
+// and the frozen self/runtime.c's #ifndef C bodies are scrubbed at
+// tool/restore_frozen_seeds so there is no duplicate symbol on the seeds-removed
+// (faithful-nobaseline) link.
 
 // RT-NATIVE leg B Z2a (casefold/trim group): rt_str_trim MOVED to the
 // self/runtime_hi.hexa SSOT (see the to_upper/to_lower note above). It now
 // ships native (Darwin seed) / hexat-transpiled (linux gen.c) as rt_str_*.
-
-// Step 3 cycle 48 — strip leading whitespace (space, tab, LF, CR).
-// Replaces the C-direct rt_str_trim_start in self/runtime.c:2970 when
-// HEXA_HAS_HEXA_RT_STDLIB is defined. The C body uses strdup; this
-// uses the substring builtin (perf-31 single-shot alloc).
-pub fn rt_str_trim_start(s: string) -> string {
-    let n = byte_len(s)
-    let mut a = 0
-    while a < n {
-        let b = s.byte_at(a)
-        if b == 32 || b == 9 || b == 10 || b == 13 {
-            a = a + 1
-        } else {
-            break
-        }
-    }
-    return s.substring(a, n)
-}
 
 // Step 3 cycle 47 — UTF-8 codepoint walker. Returns an array of
 // 1-codepoint strings ("한글hi".chars().len() == 4, not 8). ASCII
