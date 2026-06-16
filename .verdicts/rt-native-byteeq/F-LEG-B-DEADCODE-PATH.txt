@@ -1,0 +1,31 @@
+F-LEG-B-DEADCODE-PATH — 2026-06-16
+═══════════════════════════════════════════════════════════════
+leg B(ls self/*.c == ∅) 파일 축소의 안전한 경로 발견 — standalone(neither)
+#elif C body 는 죽은 코드.
+
+발견 (빌드 도구 플래그 grep, 캡처출력):
+- 모든 빌드가 HEXA_HAS_HEXA_RT_STDLIB 또는 HEXA_RT_SELFEMIT 사용:
+  build_aprime.sh: HEXA_HAS + SELFEMIT
+  cross_build_runtime_linux_arm64: HEXA_HAS
+  build_native_linux_x86_64/arm64: HEXA_HAS + SELFEMIT
+  cross_build_ccnative_linux_arm64: HEXA_HAS + SELFEMIT
+- **neither(standalone) 경로를 쓰는 실제 빌드 = 0개**.
+- runtime.c 의 3-way: #if SELFEMIT(extern) / #elif !HEXA_HAS(C body) / #else(extern).
+  → #elif !HEXA_HAS C body 는 어떤 실제 빌드도 안 컴파일 = 죽은 코드.
+
+leg B 파일 축소 경로:
+- standalone-only C body(#elif !HEXA_HAS, preprocess 측정 ~548L) 제거 = 실제 빌드
+  무영향(active/SELFEMIT 는 extern 경로) + 파일 바이트 축소.
+- active 가 일부 rt_* 사용(hxlcl_atexit→rt_posix_ok 등) → extern 정의 필요
+  (hexa transpile SELFEMIT OR hexa-source 링크 HEXA_HAS). 제거해도 extern 유지.
+
+복잡도 (정합 필수):
+- runtime.c 는 frozen seed(14663L, SSOT emitter 없음, git blob 151c52c82,
+  restore_frozen_seeds 가 cold STAGE-0 에서 복원). 직접 편집 → warm tree 빌드만
+  반영, cold regen 시 frozen blob 복원 = 덮어씀. → frozen seed 메커니즘 정합
+  필요(restore_frozen_seeds 갱신 OR 새 frozen revision).
+
+NEXT (다세션 누적 첫 단위): (1) frozen seed 정합 메커니즘 — runtime.c 편집이 cold
+regen 후에도 유지되게 (2) #elif !HEXA_HAS 죽은 C body 제거(검증: active/SELFEMIT
+preprocess byte-id) (3) active 코어 1190 fn 전수 native(거대). leg A 양 타깃
+byte-eq 이미 졸업(#3412/3432) — leg B 파일 0 만 남음.
