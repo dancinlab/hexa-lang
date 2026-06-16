@@ -569,6 +569,29 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
     // offset / 8 (so the range is 0..32760 in 8-byte steps).
     //
     // LDR Xt, [Xn{, #imm}]
+    // LDR Wt, [Xn{, #imm}]  (32-bit load, zero-extends; RT-NATIVE UNLOCK-7).
+    // Needed for 32-bit struct fields (e.g. HexaArr `int len`/`int cap`).
+    // 32-bit form scales the imm12 by 4 (not 8). Verified vs clang:
+    // ldr w1,[x1,#8]=b9400821 · w0,[x3]=b9400060 · w5,[x6,#12]=b9400cc5.
+    if op == "LDR" && len(ops) == 2 && (ops[0].substring(0, 1) == "w"
+        || ops[0].substring(0, 1) == "W") {
+        let nm = ops[0]
+        let nn = len(nm)
+        let mut rt = -1
+        let rv = nm.substring(1, nn).to_int()
+        if rv >= 0 && rv <= 30 { rt = rv }
+        if nm == "wzr" || nm == "WZR" { rt = 31 }
+        let mp = _parse_mem_op(ops[1])
+        if rt >= 0 && mp[0] < 0 {
+            let rn = xreg_idx(ops[1])
+            return 0xb9400000 | (rn << 5) | rt
+        }
+        if rt >= 0 {
+            let rn = mp[0]
+            let imm = (mp[1] >> 2) & 0xfff    // scaled imm12, 32-bit form (/4)
+            return 0xb9400000 | (imm << 10) | (rn << 5) | rt
+        }
+    }
     if op == "LDR" && len(ops) == 2 {
         let rt = xreg_idx(ops[0])
         let mp = _parse_mem_op(ops[1])
