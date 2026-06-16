@@ -1227,6 +1227,7 @@ fn _bind_builtin_names() -> [string] {
         "__hx_payload_add", "__hx_payload_sub", "__hx_payload_mul",
         "__hx_payload_fadd", "__hx_payload_fsub", "__hx_payload_fmul", "__hx_payload_fdiv",
         "__hx_payload_flt", "__hx_payload_fgt", "__hx_payload_fle", "__hx_payload_fge",
+        "__hx_str_byte",
         // N5-pre STEP2: builtins the compiler source calls but were absent from this allowlist
         // (HX2001). All have C-level defs: bytes_to_str_raw -> self/codegen.hexa:7155
         // (hexa_bytes_to_str_raw); __arr_alloc_items_zero[_int] are s4_flatc_post-injected statics.

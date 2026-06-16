@@ -6177,6 +6177,10 @@ fn gen2_expr(node) {
             if name == "__hx_payload_fge" {
                 return "hexa_bool(HX_FLOAT(" + gen2_expr(node.args[0]) + ") >= HX_FLOAT(" + gen2_expr(node.args[1]) + "))"
             }
+            // RT-NATIVE UNLOCK-5: unsigned byte at offset i of string s.
+            if name == "__hx_str_byte" {
+                return "hexa_int((int64_t)(uint8_t)HX_STR(" + gen2_expr(node.args[0]) + ")[HX_INT(" + gen2_expr(node.args[1]) + ")])"
+            }
             if name == "__map_ptr_eq" {
                 return "hexa_bool((HX_MAP_TBL(" + gen2_expr(node.args[0]) + ") == HX_MAP_TBL(" + gen2_expr(node.args[1]) + ")))"
             }
