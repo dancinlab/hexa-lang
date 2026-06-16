@@ -6131,6 +6131,18 @@ fn gen2_expr(node) {
             if name == "__hx_payload_nz" {
                 return "hexa_bool(HX_INT(" + gen2_expr(node.args[0]) + ") != 0)"
             }
+            if name == "__hx_payload_lt" {
+                return "hexa_bool(HX_INT(" + gen2_expr(node.args[0]) + ") < HX_INT(" + gen2_expr(node.args[1]) + "))"
+            }
+            if name == "__hx_payload_gt" {
+                return "hexa_bool(HX_INT(" + gen2_expr(node.args[0]) + ") > HX_INT(" + gen2_expr(node.args[1]) + "))"
+            }
+            if name == "__hx_payload_le" {
+                return "hexa_bool(HX_INT(" + gen2_expr(node.args[0]) + ") <= HX_INT(" + gen2_expr(node.args[1]) + "))"
+            }
+            if name == "__hx_payload_ge" {
+                return "hexa_bool(HX_INT(" + gen2_expr(node.args[0]) + ") >= HX_INT(" + gen2_expr(node.args[1]) + "))"
+            }
             if name == "__map_ptr_eq" {
                 return "hexa_bool((HX_MAP_TBL(" + gen2_expr(node.args[0]) + ") == HX_MAP_TBL(" + gen2_expr(node.args[1]) + ")))"
             }
