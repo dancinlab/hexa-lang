@@ -1,0 +1,11 @@
+extern fn malloc(n: int) -> *Void
+extern fn __pstore(p: *Void, off: int, v: int)
+extern fn __pload(p: *Void, off: int) -> int
+fn main() {
+    let base = malloc(128)
+    __pstore(base, 8, 42)
+    __pstore(base, 16, 7)
+    let a = __pload(base, 8)
+    let b = __pload(base, 16)
+    exit(a + b)
+}
