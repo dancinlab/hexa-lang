@@ -29,3 +29,20 @@ leg B 규모 재평가:
 VERDICT: leg B standalone 재설계 블로커 = 12 fn(전부 hexa-source 존재) = 작음·거의
 해소. 파일 0 벌크 = 1190 공통 fn 전수 native(다세션). NEXT: standalone 빌드 →
 aprime native rt_*.o 링크 전환 PoC(12 fn) → #else 제거 → dual-config gate.
+
+
+## ABI 발견 (2026-06-16) — standalone 재설계는 단순 링크 아님
+12 standalone-only fn 은 runtime.c(손-작성, runtime_core.c emitter 무관)에 있고
+C body 단순(rt_cos=Chebyshev·rt_net_fail=-1·rt_posix_ok=0). 그러나 hexa-source
+구현과 ABI 시그니처 불일치:
+- runtime.c (active extern + standalone C body): `HexaVal rt_cos(HexaVal x)`.
+- stdlib/runtime/math.hexa: `pub fn rt_cos(x: float) -> float` (float→float).
+∴ standalone 빌드가 hexa-source rt_*.o 를 그대로 링크하면 ABI(HexaVal 16B vs
+float reg) 불일치 → 잘못된 호출. standalone 재설계 = (a) HexaVal↔float ABI
+wrapper OR (b) hexa-source 를 HexaVal 시그니처로 재작성 OR (c) active 처럼
+hexa_math_cos wrapper(HexaVal) → rt_cos(float) 호출 경로 복제. 단순 #else 제거
++ extern 통합으로는 안 됨. = standalone 재설계도 fn 별 ABI 작업(작지만 비-trivial).
+
+leg B 규모 재확정: ① standalone 재설계 12 fn(ABI wrapper, 작음·비-trivial)
+② 파일 0 벌크 1190 공통 fn native 전수(거대·다세션). 둘 다 fn 별 검증(byte-eq
+~20min/회) → 단일 세션 물리 불가, 다세션.
