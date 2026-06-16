@@ -1,0 +1,156 @@
+/tmp/flat_x86.s:94802:15: error: unknown token in expression
+    cmp r12,  # binop ==
+              ^
+/tmp/flat_x86.s:94819:15: error: unknown token in expression
+    cmp rbx,  # binop ==
+              ^
+/tmp/flat_x86.s:94838:15: error: unknown token in expression
+    cmp rax,  # binop ==
+              ^
+/tmp/flat_x86.s:98886:15: error: unknown token in expression
+    mov rdx,  # struct_lit: field val
+              ^
+/tmp/flat_x86.s:98949:15: error: unknown token in expression
+    mov rdx,  # struct_lit: field val
+              ^
+/tmp/flat_x86.s:99674:15: error: unknown token in expression
+    mov rdx,  # struct_lit: field val
+              ^
+/tmp/flat_x86.s:120125:15: error: unknown token in expression
+    cmp rax,  # binop ==
+              ^
+/tmp/flat_x86.s:136982:15: error: unknown token in expression
+    mov r14,  # binop lhs into dst
+              ^
+/tmp/flat_x86.s:137025:15: error: unknown token in expression
+    mov r13,  # binop lhs into dst
+              ^
+/tmp/flat_x86.s:200838:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:200846:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:200858:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:200872:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:200888:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:201990:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:201998:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:202010:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:202021:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:202032:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:202051:15: error: unknown token in expression
+    cmp r13,  # binop <
+              ^
+/tmp/flat_x86.s:202058:15: error: unknown token in expression
+    mov r13,  # assign L43
+              ^
+/tmp/flat_x86.s:202208:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:202214:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:202220:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:202228:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:202311:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:202317:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:202323:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:202330:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:202339:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:202348:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:202357:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:202474:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:202480:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:202486:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:202493:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:202499:5: error: invalid operand for instruction
+    idiv 0 # binop /
+    ^
+/tmp/flat_x86.s:216782:5: error: invalid operand for instruction
+    push 2147483648 # C7: spill arg 9 (right-to-left)
+    ^
+/tmp/flat_x86.s:217176:5: error: invalid operand for instruction
+    push 2147484672 # C7: spill arg 9 (right-to-left)
+    ^
+/tmp/flat_x86.s:221789:5: error: invalid operand for instruction
+    and r14, 4227858432 # binop &
+    ^
+/tmp/flat_x86.s:221814:5: error: invalid operand for instruction
+    and r15, 4278190111 # binop &
+    ^
+/tmp/flat_x86.s:224055:5: error: invalid operand for instruction
+    and rax, 4227858432 # binop &
+    ^
+/tmp/flat_x86.s:226325:15: error: unknown token in expression
+    cmp rdx,  # binop >=
+              ^
+/tmp/flat_x86.s:230312:5: error: invalid operand for instruction
+    test 0, 0 # br_cond test
+    ^
+/tmp/flat_x86.s:230559:5: error: invalid operand for instruction
+    test 0, 0 # br_cond test
+    ^
+/tmp/flat_x86.s:231373:5: error: invalid operand for instruction
+    and r12, 4294967295 # binop &
+    ^
+/tmp/flat_x86.s:235167:15: error: unknown token in expression
+    mov rdx,  # struct_lit: field val
+              ^
+/tmp/flat_x86.s:235392:15: error: unknown token in expression
+    mov rdx,  # struct_lit: field val
+              ^
+/tmp/flat_x86.s:236334:5: error: invalid operand for instruction
+    and r12, 4294967295 # binop &
+    ^
+/tmp/flat_x86.s:237907:5: error: invalid operand for instruction
+    and rbx, 4227858432 # binop &
+    ^
+/tmp/flat_x86.s:237928:5: error: invalid operand for instruction
+    and rbx, 4278190111 # binop &
+    ^
+/tmp/flat_x86.s:238757:5: error: invalid operand for instruction
+    and r12, 4227858432 # binop &
+    ^
