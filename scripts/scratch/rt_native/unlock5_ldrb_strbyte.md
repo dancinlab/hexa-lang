@@ -19,3 +19,14 @@
 inline-loop intrinsic 불요 — 정상 `.hexa` 함수 `rt_strcmp`(while + `__hx_str_byte` +
 `__hx_payload_lt`)로 작성 가능 → seed-link 으로 hexa_cmp_lt string branch C-free 포팅 길 열림.
 잔여: 길이/NUL 종결 처리 + enum/valstruct + `__hx_to_double` + seed-link 통합(Z2c).
+
+
+## ⚠️ 정정 (2026-06-16, c9) — "rt_strcmp bl=0" 주장은 틀림
+원래 검증의 `grep -c 'bl '`(space)가 otool의 TAB-구분 `bl\t`를 놓쳐 0으로 오집계했다.
+**실제: rt_strcmp bl=3** (`_hexa_truthy`×.. `_hexa_bool` `_hexa_add_slow`). 정확한 사실:
+- leaf intrinsic 자체(`__hx_str_byte`·`__hx_payload_lt/gt/eq`)는 **진짜 인라인** — reloc 표에
+  `_hexa_str_byte`/`_hexa_payload_*` 없음(확인). byte-access·payload-compare는 C 호출 없음.
+- 그러나 손으로 쓴 `.hexa` 함수의 **글루**는 여전히 C 런타임: `if`→`_hexa_truthy`,
+  bool반환 박싱→`_hexa_bool`, `i = i + 1`(typed int +)→`_hexa_add_slow`, `< 0`→`_hexa_cmp_lt`.
+- 따라서 "byte-level string leaf 인라인 동작" 은 유효하나, "rt_strcmp 전체 C-free" 는 **거짓**.
+  전체 C-free dispatch fn 은 글루 ops(typed if/bool/arith)까지 인라인-lower 돼야 함 = 잔여 과제.

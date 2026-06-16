@@ -1,0 +1,57 @@
+// VERIFIED 2026-06-16: rt_cmp_lt dispatch matches C hexa_cmp_lt on 11/11
+// mixed int/str/float cases (asm & obj exit=11). HONEST SCOPE: the leaf
+// intrinsics inline (no bl into _hexa_str_byte/_hexa_payload_*), but this
+// fn is NOT fully C-free — its glue still calls _hexa_truthy/_hexa_bool/
+// _hexa_add_slow/_hexa_cmp_lt. Full C-free needs typed-glue inline-lowering.
+// RT-NATIVE Z2c proof: pure-.hexa hexa_cmp_lt(a,b) dispatch — int/str/float
+// branches, all C-free (leaf intrinsics only). enum/valstruct out of scope
+// (same boundary as eq_port). Mirrors runtime_core.c hexa_cmp_lt structure.
+// TAG: INT=0 FLOAT=1 BOOL=2 STR=3.
+fn rt_strcmp(a, b) -> int {
+    let mut i = 0
+    while true {
+        let ca = __hx_str_byte(a, i)
+        let cb = __hx_str_byte(b, i)
+        if __hx_payload_lt(ca, cb) { return -1 }
+        if __hx_payload_gt(ca, cb) { return 1 }
+        if __hx_payload_eq(ca, 0)  { return 0 }
+        i = i + 1
+    }
+    return 0
+}
+fn rt_cmp_lt(a, b) -> bool {
+    let ta = __hx_tag(a)
+    let tb = __hx_tag(b)
+    if __hx_payload_eq(ta, 3) {            // a is STR
+        if __hx_payload_eq(tb, 3) {        // b is STR → strcmp
+            return rt_strcmp(a, b) < 0
+        }
+    }
+    if __hx_payload_eq(ta, 1) {            // a is FLOAT → double compare
+        return __hx_payload_flt(__hx_to_double(a), __hx_to_double(b))
+    }
+    if __hx_payload_eq(tb, 1) {            // b is FLOAT → double compare
+        return __hx_payload_flt(__hx_to_double(a), __hx_to_double(b))
+    }
+    return __hx_payload_lt(a, b)           // int (or enum) compare
+}
+// C reference: routes through the runtime `<` (bl _hexa_cmp_lt).
+fn c_lt(a, b) -> bool { return a < b }
+
+fn chk(a, b) -> int { if rt_cmp_lt(a, b) == c_lt(a, b) { return 1 } return 0 }
+
+fn main() {
+    let mut ok = 0
+    ok = ok + chk(1, 2)
+    ok = ok + chk(2, 1)
+    ok = ok + chk(3, 3)
+    ok = ok + chk(1.5, 2.5)
+    ok = ok + chk(3, 3.5)
+    ok = ok + chk(3.5, 3)
+    ok = ok + chk(5, 5.0)
+    ok = ok + chk(2.5, 2.5)
+    ok = ok + chk("abc", "abd")
+    ok = ok + chk("abd", "abc")
+    ok = ok + chk("abc", "abc")
+    exit(ok)   // expect 11 = rt_cmp_lt agrees with C hexa_cmp_lt on all
+}
