@@ -606,6 +606,29 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
         return 0xf9400000 | (imm << 10) | (rn << 5) | rt
     }
     // STR Xt, [Xn{, #imm}]
+    // STR Wt, [Xn{, #imm}]  (32-bit store; RT-NATIVE UNLOCK-11). Needed to
+    // write 32-bit struct fields (HexaArr/HexaMap `int len`/`int cap`) into an
+    // arena slab. 32-bit form scales imm12 by 4. Verified vs clang:
+    // str w3,[x1]=b9000023 · w3,[x1,#8]=b9000823 · w5,[x6,#12]=b9000cc5.
+    if op == "STR" && len(ops) == 2 && (ops[0].substring(0, 1) == "w"
+        || ops[0].substring(0, 1) == "W") {
+        let nm = ops[0]
+        let nn = len(nm)
+        let mut rt = -1
+        let rv = nm.substring(1, nn).to_int()
+        if rv >= 0 && rv <= 30 { rt = rv }
+        if nm == "wzr" || nm == "WZR" { rt = 31 }
+        let mp = _parse_mem_op(ops[1])
+        if rt >= 0 && mp[0] < 0 {
+            let rn = xreg_idx(ops[1])
+            return 0xb9000000 | (rn << 5) | rt
+        }
+        if rt >= 0 {
+            let rn = mp[0]
+            let imm = (mp[1] >> 2) & 0xfff    // scaled imm12, 32-bit form (/4)
+            return 0xb9000000 | (imm << 10) | (rn << 5) | rt
+        }
+    }
     if op == "STR" && len(ops) == 2 {
         let rt = xreg_idx(ops[0])
         let mp = _parse_mem_op(ops[1])
