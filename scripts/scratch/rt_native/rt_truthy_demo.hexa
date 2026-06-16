@@ -1,0 +1,39 @@
+// VERIFIED 2026-06-16: rt_truthy native(leaf intrinsic) == C hexa_truthy 10/10
+// (asm·obj exit=10). _rt_truthy T 심볼. leg B 코어 591 fn 중 첫 fn native 실증.
+// leaf 분기 INT/BOOL/FLOAT/STR/VOID/ARRAY 완성; MAP/VALSTRUCT 추가 leaf(hmap_find/
+// vs-deref) 잔여; 글루(if/==)는 아직 C 호출(정정 #3407, typed-glue lowering 잔여).
+// RT-NATIVE leg B 코어 native PoC: hexa_truthy 를 leaf intrinsic 으로.
+// C 시맨틱(runtime_core.c hexa_truthy): BOOL→b · INT→i!=0 · FLOAT→f!=0.0 ·
+// STR→non-null&&[0]!=0 · VOID→0 · ARRAY→len>0 · MAP/VALSTRUCT→복잡(추가 leaf).
+// TAG: INT=0 FLOAT=1 BOOL=2 STR=3 VOID=4 ARRAY=5 MAP=6.
+// leaf-가능 분기만 native; MAP/VALSTRUCT 는 추가 leaf(hmap_find/vs-deref) 필요.
+fn rt_truthy(v) -> bool {
+    let t = __hx_tag(v)
+    if __hx_payload_eq(t, 2) { return __hx_payload_nz(v) }   // BOOL → b
+    if __hx_payload_eq(t, 0) { return __hx_payload_nz(v) }   // INT → i != 0
+    if __hx_payload_eq(t, 1) { return __hx_payload_nz(v) }   // FLOAT bits != 0 (0.0=0)
+    if __hx_payload_eq(t, 4) { return false }                // VOID → 0
+    if __hx_payload_eq(t, 3) {                               // STR
+        if __hx_payload_eq(v, 0) { return false }            // null ptr (payload 0)
+        return __hx_str_byte(v, 0) != 0                      // [0] != 0
+    }
+    if __hx_payload_eq(t, 5) { return __hx_arr_len(v) > 0 }  // ARRAY → len > 0
+    return true   // MAP/VALSTRUCT: 추가 leaf 필요 (잔여)
+}
+// C 레퍼런스: 런타임 hexa_truthy 경유.
+fn c_truthy(v) -> bool { if v { return true } return false }
+fn chk(v) -> int { if rt_truthy(v) == c_truthy(v) { return 1 } return 0 }
+fn main() {
+    let mut ok = 0
+    ok = ok + chk(1)        // INT nonzero → T
+    ok = ok + chk(0)        // INT zero → F
+    ok = ok + chk(true)     // BOOL T
+    ok = ok + chk(false)    // BOOL F
+    ok = ok + chk(1.5)      // FLOAT nonzero → T
+    ok = ok + chk(0.0)      // FLOAT zero → F
+    ok = ok + chk("hi")     // STR nonempty → T
+    ok = ok + chk("")       // STR empty → F
+    ok = ok + chk([1,2])    // ARRAY nonempty → T
+    ok = ok + chk([])       // ARRAY empty → F
+    exit(ok)   // expect 10 = rt_truthy 가 C hexa_truthy 와 10/10 일치 (leaf 분기)
+}
