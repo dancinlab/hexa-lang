@@ -151,3 +151,16 @@ CORRECTION (2026-06-17, main-loop): "LANDED" was FALSIFIED by CI (c9).
   fallback) + keep _resolve_native_hexat (committed-seed regen for stdlib path).
   Guard means: stdlib path → C excluded, gen.c/seed provides; no-stdlib path →
   C bodies provide. PR #3451 back to draft; CI re-run is authoritative.
+
+────────────────────────────────────────────────────────────────
+ITERATION 2 (2026-06-17, main-loop, evidence-driven): two CI cycles isolated
+the exact interaction (NOT tune-to-green — the two opposite failures pinpoint it):
+  · 76f4ceb9e (C bodies RETIRED, no working regen) → UNDEFINED rt_str_to_upper
+    (regen skipped → frozen 6-fn gen.c → 3 syms missing).
+  · ce5a2ceed (C bodies RESTORED + _resolve_native_hexat) → REDEFINITION
+    (runtime_hi_gen.c:201 vs runtime_core.c:8180 — regen NOW produced 9-fn gen.c,
+     so the restored C bodies became duplicates).
+  => WINNING COMBO = _resolve_native_hexat (regen → 9-fn gen.c) + C bodies RETIRED
+     (gen.c is sole provider, no duplicate, no undefined). This commit: re-retire
+     the C bodies (revert runtime_core_emit.hexa to 76f4ceb9e) while KEEPING the
+     stage_resolve _resolve_native_hexat regen. CI re-run is authoritative.
