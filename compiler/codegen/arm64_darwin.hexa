@@ -1956,6 +1956,61 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // RT-NATIVE UNLOCK-4: scalar double-precision FP arithmetic
+        // (__hx_payload_fadd/fsub/fmul/fdiv) → result float HexaVal
+        // {TAG_FLOAT, a.f OP b.f}, INLINE. The 8-byte payload IS the IEEE-754
+        // bit pattern; fmov copies it GPR↔FP, the FP op runs, fmov copies the
+        // result bits back. Unblocks the dispatch core's float arithmetic
+        // leaves (hexa_add_slow/sub/mul/div float fast path).
+        if (s.op == "__hx_payload_fadd" || s.op == "__hx_payload_fsub"
+            || s.op == "__hx_payload_fmul" || s.op == "__hx_payload_fdiv")
+            && len(s.args) >= 2 {
+            let mut _fop = "fadd"
+            if s.op == "__hx_payload_fsub" { _fop = "fsub" }
+            if s.op == "__hx_payload_fmul" { _fop = "fmul" }
+            if s.op == "__hx_payload_fdiv" { _fop = "fdiv" }
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // a → x1=f bits
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // b → x3=f bits
+            buf.push(_arm64_instr2("fmov", _arm64_op_reg("d0"),
+                             _arm64_op_reg("x1"), s.op + ": d0 = a.f"))
+            buf.push(_arm64_instr2("fmov", _arm64_op_reg("d1"),
+                             _arm64_op_reg("x3"), s.op + ": d1 = b.f"))
+            buf.push(_arm64_instr3(_fop, _arm64_op_reg("d0"), _arm64_op_reg("d0"),
+                             _arm64_op_reg("d1"), s.op + ": d0 = a.f " + _fop + " b.f"))
+            buf.push(_arm64_instr2("fmov", _arm64_op_reg("x1"),
+                             _arm64_op_reg("d0"), s.op + ": x1 = result bits"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#1"), s.op + ": TAG_FLOAT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // RT-NATIVE UNLOCK-4: scalar double-precision FP compare
+        // (__hx_payload_flt/fgt/fle/fge) → bool HexaVal, INLINE (fcmp + cset).
+        // IEEE compare (not integer cmp of bits): handles sign + ordering.
+        if (s.op == "__hx_payload_flt" || s.op == "__hx_payload_fgt"
+            || s.op == "__hx_payload_fle" || s.op == "__hx_payload_fge")
+            && len(s.args) >= 2 {
+            // IEEE-754 ordered compare cond codes (NaN → false, matching C):
+            // `<`→MI (not LT), `<=`→LS (not LE); `>`→GT, `>=`→GE are correct
+            // as-is. LT/LE would wrongly return true for the unordered case.
+            let mut _fcond = "mi"
+            if s.op == "__hx_payload_fgt" { _fcond = "gt" }
+            if s.op == "__hx_payload_fle" { _fcond = "ls" }
+            if s.op == "__hx_payload_fge" { _fcond = "ge" }
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // a → x1=f bits
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // b → x3=f bits
+            buf.push(_arm64_instr2("fmov", _arm64_op_reg("d0"),
+                             _arm64_op_reg("x1"), s.op + ": d0 = a.f"))
+            buf.push(_arm64_instr2("fmov", _arm64_op_reg("d1"),
+                             _arm64_op_reg("x3"), s.op + ": d1 = b.f"))
+            buf.push(_arm64_instr2("fcmp", _arm64_op_reg("d0"),
+                             _arm64_op_reg("d1"), s.op + ": fcmp a.f, b.f"))
+            buf.push(_arm64_instr2("cset", _arm64_op_reg("x0"),
+                             _arm64_op_label(_fcond), s.op + ": x0 = (a " + _fcond + " b)"))
+            buf = _emit_bool_box(buf, s.op + ": box bool")
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // has_key(m, key) special: runtime ABI is
         // hexa_bool(hexa_map_contains_key(HexaVal m, const char* key))
         // (codegen_c2:4302). key is a HexaVal var → hexa_to_cstring it.

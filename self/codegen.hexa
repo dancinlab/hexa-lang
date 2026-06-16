@@ -6152,6 +6152,31 @@ fn gen2_expr(node) {
             if name == "__hx_payload_mul" {
                 return "hexa_int(HX_INT(" + gen2_expr(node.args[0]) + ") * HX_INT(" + gen2_expr(node.args[1]) + "))"
             }
+            // RT-NATIVE UNLOCK-4: scalar double-precision FP arithmetic/compare.
+            if name == "__hx_payload_fadd" {
+                return "hexa_float(HX_FLOAT(" + gen2_expr(node.args[0]) + ") + HX_FLOAT(" + gen2_expr(node.args[1]) + "))"
+            }
+            if name == "__hx_payload_fsub" {
+                return "hexa_float(HX_FLOAT(" + gen2_expr(node.args[0]) + ") - HX_FLOAT(" + gen2_expr(node.args[1]) + "))"
+            }
+            if name == "__hx_payload_fmul" {
+                return "hexa_float(HX_FLOAT(" + gen2_expr(node.args[0]) + ") * HX_FLOAT(" + gen2_expr(node.args[1]) + "))"
+            }
+            if name == "__hx_payload_fdiv" {
+                return "hexa_float(HX_FLOAT(" + gen2_expr(node.args[0]) + ") / HX_FLOAT(" + gen2_expr(node.args[1]) + "))"
+            }
+            if name == "__hx_payload_flt" {
+                return "hexa_bool(HX_FLOAT(" + gen2_expr(node.args[0]) + ") < HX_FLOAT(" + gen2_expr(node.args[1]) + "))"
+            }
+            if name == "__hx_payload_fgt" {
+                return "hexa_bool(HX_FLOAT(" + gen2_expr(node.args[0]) + ") > HX_FLOAT(" + gen2_expr(node.args[1]) + "))"
+            }
+            if name == "__hx_payload_fle" {
+                return "hexa_bool(HX_FLOAT(" + gen2_expr(node.args[0]) + ") <= HX_FLOAT(" + gen2_expr(node.args[1]) + "))"
+            }
+            if name == "__hx_payload_fge" {
+                return "hexa_bool(HX_FLOAT(" + gen2_expr(node.args[0]) + ") >= HX_FLOAT(" + gen2_expr(node.args[1]) + "))"
+            }
             if name == "__map_ptr_eq" {
                 return "hexa_bool((HX_MAP_TBL(" + gen2_expr(node.args[0]) + ") == HX_MAP_TBL(" + gen2_expr(node.args[1]) + ")))"
             }

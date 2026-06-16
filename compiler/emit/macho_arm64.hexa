@@ -252,6 +252,20 @@ fn xreg_idx(s: string) -> i64 {
     return v
 }
 
+// Parse a scalar FP register name "d0".."d31" (double-precision Vn) to
+// its index 0..31. Returns -1 for anything that is not a `d`-register, so
+// the FP encoding cases can fall through cleanly on a GPR operand.
+fn dreg_idx(s: string) -> i64 {
+    let n = len(s)
+    if n < 2 { return -1 }
+    let head = s.substring(0, 1)
+    if head != "D" && head != "d" { return -1 }
+    let rest = s.substring(1, n)
+    let v = rest.to_int()
+    if v < 0 || v > 31 { return -1 }
+    return v
+}
+
 // Parse "#42" or "#0x2a" (immediate operand) to i64.
 fn imm_val(s: string) -> i64 {
     let n = len(s)
@@ -487,6 +501,45 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
         return 0x9b007c00 | (rm << 16) | (rn << 5) | rd
     }
 
+    // ── Scalar double-precision FP (RT-NATIVE UNLOCK-4) ──
+    // Encodings verified byte-identical against clang `otool -tvVj`:
+    //   fmov d0,x1=9e670020 · fmov x1,d0=9e660001 · fadd d0,d0,d1=1e612800
+    //   fsub=1e613800 · fmul=1e610800 · fdiv=1e611800 · fcmp d0,d1=1e612000.
+    // FMOV Dd, Xn  (GPR→FP bit-copy, 64-bit) — ops[0]=d-reg, ops[1]=x-reg.
+    if op == "FMOV" && len(ops) == 2 {
+        let d0 = dreg_idx(ops[0])
+        let d1 = dreg_idx(ops[1])
+        if d0 >= 0 && d1 < 0 {
+            let xn = xreg_idx(ops[1])
+            return 0x9e670000 | (xn << 5) | d0
+        }
+        // FMOV Xd, Dn  (FP→GPR bit-copy, 64-bit) — ops[0]=x-reg, ops[1]=d-reg.
+        if d0 < 0 && d1 >= 0 {
+            let xd = xreg_idx(ops[0])
+            return 0x9e660000 | (d1 << 5) | xd
+        }
+    }
+    // FADD/FSUB/FMUL/FDIV Dd, Dn, Dm
+    if (op == "FADD" || op == "FSUB" || op == "FMUL" || op == "FDIV")
+        && len(ops) == 3 {
+        let rd = dreg_idx(ops[0])
+        let rn = dreg_idx(ops[1])
+        let rm = dreg_idx(ops[2])
+        let mut base = 0x1e602800   // FADD
+        if op == "FSUB" { base = 0x1e603800 }
+        if op == "FMUL" { base = 0x1e600800 }
+        if op == "FDIV" { base = 0x1e601800 }
+        return base | (rm << 16) | (rn << 5) | rd
+    }
+    // FCMP Dn, Dm  (sets NZCV; opcode2 = 00000)
+    if op == "FCMP" && len(ops) == 2 {
+        let rn = dreg_idx(ops[0])
+        let rm = dreg_idx(ops[1])
+        if rn >= 0 && rm >= 0 {
+            return 0x1e602000 | (rm << 16) | (rn << 5)
+        }
+    }
+
     // ── Compare (SUBS XZR, ...) ──
     // CMP Xn, Xm
     if op == "CMP" && len(ops) == 2 && ops[1].substring(0, 1) != "#" {
@@ -600,6 +653,33 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
         else if cc == "GT" { c = 12 } else if cc == "LE" { c = 13 }
         else if cc == "AL" { c = 14 }
         if c >= 0 { return 0x54000000 | c }
+    }
+
+    // ── CSET Xd, <cond>  (RT-NATIVE UNLOCK-4) ──
+    // CSET is an alias for `CSINC Xd, XZR, XZR, invert(cond)`. The
+    // condition operand arrives lowercase ("eq"/"lt"/"mi"/…). The
+    // self-host obj path previously had NO CSET case → it fell through to
+    // 0 (the udf #0 hole), so the comparison/bool intrinsics only worked
+    // via the clang-asm route. Encoding verified byte-identical against
+    // clang `otool`: cset x0,eq=9a9f17e0 · lt=9a9fa7e0 · mi=9a9f57e0 ·
+    // ls=9a9f87e0. base 0x9a9f07e0 (Rm=Rn=XZR) | (cond^1)<<12 | Rd.
+    if op == "CSET" && len(ops) == 2 {
+        let rd = xreg_idx(ops[0])
+        let cc = ops[1]
+        let mut c = -1
+        if cc == "eq" { c = 0  } else if cc == "ne" { c = 1  }
+        else if cc == "cs" { c = 2  } else if cc == "cc" { c = 3  }
+        else if cc == "mi" { c = 4  } else if cc == "pl" { c = 5  }
+        else if cc == "vs" { c = 6  } else if cc == "vc" { c = 7  }
+        else if cc == "hi" { c = 8  } else if cc == "ls" { c = 9  }
+        else if cc == "ge" { c = 10 } else if cc == "lt" { c = 11 }
+        else if cc == "gt" { c = 12 } else if cc == "le" { c = 13 }
+        if c >= 0 && rd >= 0 {
+            // invert(cond) = flip the low bit (EQ↔NE, LT↔GE, MI↔PL, …).
+            let mut cinv = c + 1
+            if c % 2 == 1 { cinv = c - 1 }
+            return 0x9a9f07e0 | (cinv << 12) | rd
+        }
     }
 
     // ── Bitfield / extension aliases (UBFM-family) ──
@@ -1509,6 +1589,15 @@ fn _lir_op_uppercase(op: string) -> string {
     if op == "asr"   { return "ASR"  }
     if op == "cset"  { return "CSET" }
     if op == "csel"  { return "CSEL" }
+    // RT-NATIVE UNLOCK-4: scalar FP mnemonics — without these the obj-emit
+    // path passed them through lowercase → encode returned 0 (udf hole),
+    // so FP intrinsics only worked via the clang-asm route.
+    if op == "fmov"  { return "FMOV" }
+    if op == "fadd"  { return "FADD" }
+    if op == "fsub"  { return "FSUB" }
+    if op == "fmul"  { return "FMUL" }
+    if op == "fdiv"  { return "FDIV" }
+    if op == "fcmp"  { return "FCMP" }
     // RFC 063 P0 fill (self-host udf-hole closure): the native obj-emit
     // path also lowers these in main's prologue + arithmetic; without a
     // table entry they fell through `_lir_op_uppercase` as lowercase →
