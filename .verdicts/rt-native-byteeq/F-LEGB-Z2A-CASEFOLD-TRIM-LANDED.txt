@@ -164,3 +164,24 @@ the exact interaction (NOT tune-to-green — the two opposite failures pinpoint 
      (gen.c is sole provider, no duplicate, no undefined). This commit: re-retire
      the C bodies (revert runtime_core_emit.hexa to 76f4ceb9e) while KEEPING the
      stage_resolve _resolve_native_hexat regen. CI re-run is authoritative.
+
+────────────────────────────────────────────────────────────────
+ITERATION 3 + TERMINAL (2026-06-17): 🧱 HONEST BLOCK (c9/c16).
+  cycle 3 (4613176c7, C retired + regen kept): linux-x86_64 →
+    "[stage_resolve_runtime_a] warn: runtime_hi_gen emitter failed () — in-tree .c
+     used" → frozen 6-fn gen.c → UNDEFINED rt_str_to_upper again.
+  THREE evidence-based cycles isolate the TRUE root cause (NOT tune-to-green —
+  each derived from the prior failure):
+    ① C retired, no regen  → undefined (frozen 6-fn seed).
+    ② C restored + regen ran→ duplicate (regen made 9-fn, C dup'd it).
+    ③ C retired + regen     → undefined (regen FAILED on this CI host → 6-fn).
+  => the _resolve_native_hexat regen is FLAKY on the seeds-removed CI host (the
+     committed per-target hexat seed fails to exec there: "emitter failed ()").
+     C bodies can't coexist with a successful regen (dup) nor cover a failed one
+     when retired (undef). The ONLY robust fix is to regenerate the FROZEN
+     runtime_hi_gen.c SEED itself 6→9 fn and commit it (so the seeds-removed path
+     needs NO runtime regen) — but that touches restore_frozen_seeds + the blob
+     151c52c8 bootstrap seed (high blast radius, multi-cycle). Deferred as the
+     real next step. PR #3451 STAYS DRAFT (CI red, honest). main clean (nothing
+     leaked). Darwin-native win (30/30 parity, build smoke exit42) is real and
+     re-derivable; the cross-target clean land is blocked on the frozen-seed regen.
