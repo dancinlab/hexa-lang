@@ -983,12 +983,15 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 // "operand type mismatch"). Emit the proper sequence.
                 buf.push(_x86_instr2("mov", _x86_op_reg("rax"), a, "idiv dividend → rax"))
                 buf.push(_x86_instr0("cqo", "sign-extend rax into rdx:rax"))
-                let mut divisor = b
-                if s.args[1].kind == "const_int" {
-                    buf.push(_x86_instr2("mov", _x86_op_reg(b_scratch), b,
-                                     "materialize idiv divisor to reg"))
-                    divisor = _x86_op_reg(b_scratch)
-                }
+                // idiv forbids an immediate/label divisor — it must be reg/mem.
+                // ALWAYS materialize into b_scratch: const_int lowers to an imm,
+                // and any unhandled operand kind falls through `_x86_op_resolve`
+                // to the `imm 0` fallback (which produced the invalid `idiv 0`
+                // seen in whole-compiler emit). One unconditional mov covers
+                // every case, keeping b_scratch as a sized register divisor.
+                buf.push(_x86_instr2("mov", _x86_op_reg(b_scratch), b,
+                                 "materialize idiv divisor to reg"))
+                let divisor = _x86_op_reg(b_scratch)
                 buf.push(_x86_instr1("idiv", divisor, "binop /"))
                 buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
                                  "idiv quotient → dst"))
