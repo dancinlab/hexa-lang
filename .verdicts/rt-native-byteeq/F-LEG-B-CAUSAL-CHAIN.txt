@@ -1,0 +1,31 @@
+F-LEG-B-CAUSAL-CHAIN — 2026-06-16
+═══════════════════════════════════════════════════════════════
+goal leg B = `ls self/*.c == ∅` (runtime.c·runtime_core.c 제거)의 정확한
+인과 사슬 — 왜 단일 세션·로컬-only 로 완료 불가능한가 (정직한 규명).
+
+측정 (캡처출력):
+- runtime.c active(-DHEXA_HAS_HEXA_RT_STDLIB=1) preprocess = 39,729 lines
+- runtime.c standalone(no -D)        preprocess = 40,446 lines
+- 차이 = 717 lines = standalone-only C #else body (linux 크로스 경로 전용)
+- 양쪽 config 모두 darwin clang 로컬 컴파일 OK (active 563816B·standalone 590576B)
+
+인과 사슬 (파일 0 으로 가는 의존성):
+  ls self/*.c == ∅
+    ⇐ darwin active 빌드가 .c 없이 (runtime 코어 struct/macro/arena/위임 → native seed)
+    ⇐ AND linux standalone 빌드가 .c 없이
+        ⇐ #else(standalone) C body 717L 제거
+            ⇐ standalone(=cross_build_runtime_linux_arm64) 재설계
+                ⇐ **linux native codegen 성숙** (현재 C-fallback = hexa native 미성숙)
+                    ⇐ pod (linux arm64/x86_64 byte-eq, 메모리 x86_64 RUNG2 gap)
+    ⇐ AND ~420 C-only fn 전수 .hexa 재구현 (프리미티브 완비, 볼륨)
+
+종착 판정:
+- leg B 의 진짜 종착 블로커 = **linux native codegen 성숙** (pod-gated) + ~420 fn 전수.
+- darwin-only·단일 세션·로컬 로 완료 불가능. 다세션 + pod 필수.
+- gitignore 트릭(.c 숨기기)은 c9 금지 → 진짜 native-seed 화만 유효.
+
+이번 세션 확보 (leg B 토대, 전부 검증):
+- 프리미티브 완비: 값op·메모리(syscall/mmap/ptr 64·32)·arena 3종·객체할당.
+- 메커니즘 증명: rt_strcmp·rt_cmp_lt(11/11)·bump/stateful arena (C-shim 0 reloc).
+- 안전망: dualconfig_gate.sh (매 fn-port active+standalone 로컬 회귀).
+- leg A(byte-eq fixpoint gen3≡gen4)는 ✅ 별도 검증완료(F-RT-NATIVE-FIXPOINT-PRESERVED).
