@@ -62,3 +62,25 @@ native obj PoC 완료. 코어 591 = HexaVal 값op(hexa_int/bool/float/void/truth
 leg B 잔여 (확정): 591 코어 fn .hexa native(leaf intrinsic+arena 기반) + ABI wrapper
 + native runtime.a 통합 + restore C-seed 제거 → ls self/*.c==∅ + C-free. 거대 다세션
 누적. leg A 양 타깃 byte-eq 졸업(#3412/3432)이 native 컴파일 토대.
+
+
+## 코어 native 의 성격 확정 (2026-06-16, value_logic_fixture.hexa)
+stdlib/runtime/value_logic_fixture.hexa 주석이 명시: 코어 hexa_* fn(hexa_truthy/eq/
+is_type 등)은 HexaVal tagged-union 내부(HX_TAG/HX_INT/HX_BOOL)를 조작 → "hexa source
+가 HexaVal tag 를 직접 construct/inspect 못 함 = **codegen-emit pass 의 일**(frontier
+#1 phase-H), stdlib 추가 아님". fixture 는 SEMANTICS 만 hexa 로 보존(A/B byte-eq 용).
+
+★ 핵심: 이번 세션 leaf intrinsic(__hx_tag/payload_lt/gt/le/ge/eq/nz/add/sub/mul/
+fadd~/str_byte/to_double/arr_len/syscall0/6/ptr_store/load, #3400-3417)이 정확히
+그 "codegen-side HexaVal 조작"을 구현 = 코어 native 의 직접 진전. value_logic_fixture
+가 "codegen-side work 필요"라 한 것을 이번 세션이 leaf intrinsic 으로 착수.
+
+leg B 코어 591 fn native 성격 (확정):
+- = codegen-emit 확장(leaf intrinsic + typed-glue lowering) + 일부 stdlib hexa-source
+  (numeric.hexa 에 rt_eq/add/cmp_lt/len 존재). 순수 stdlib 추가 아님.
+- 이번 세션 ~18종 leaf intrinsic = 코어 native 의 codegen 토대. 591 fn 전수는
+  각 fn 의 codegen-emit 포팅(leaf 조합 + 글루) = 거대 다세션 누적 codegen 작업.
+- leg A 양 타깃 byte-eq 졸업(#3412/3432) = 이 codegen 이 양 타깃에서 정확·결정적.
+
+leg B 완료 경로 (최종 확정): 591 코어 fn 의 codegen-emit native 포팅(leaf+글루) +
+ABI wrapper + native runtime.a + restore C-seed 제거. 다세션 누적, 메커니즘 완비.
