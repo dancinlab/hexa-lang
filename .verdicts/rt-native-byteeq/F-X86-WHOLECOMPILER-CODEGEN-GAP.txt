@@ -1,0 +1,27 @@
+F-X86-WHOLECOMPILER-CODEGEN-GAP — 2026-06-16
+═══════════════════════════════════════════════════════════════
+CLAIM: x86_64-linux native codegen 은 단일 파일(RUNG1/2/3)은 동작하나,
+WHOLE-COMPILER self-emit 은 2 codegen 버그로 실패한다 — leg A(linux byte-eq)
+의 정확한 gap.
+
+METHOD (summer = Linux x86_64):
+- aprime_x86v 로 flatten 전체 컴파일러(48 files, 44k flat) --emit=obj
+  --target=x86_64-linux-gnu → asm 경로(flat.s 246353L) → as 어셈블 실패.
+
+RESULT (캡처출력, summer build-temp /tmp/hexa-272025-...):
+- g3_x86.o: rc=2 (obj 미생성), ENCODE-MISS=0 — as 어셈블 단계 실패.
+- 버그① test g16, g16 (flat.s:26080,27199,28461,…246353)
+    `test <reg>,<reg>`의 reg 가 가상 레지스터 g16 그대로(물리 reg 미할당).
+    x86_64 = 16 GPR; 복잡 함수(overlay_note_conflict 등)서 16개 초과 →
+    spill 필요한데 x86_64 reg-alloc spill 경로가 g16+ 을 물리 reg 로 못 풀음.
+    arm64(31 GPR)는 reg 여유로 이 패턴 미발생 → single-file 통과.
+  버그② cmp r12,  (flat.s:94669,94686,94705,98697,98759,…)
+    `cmp <reg>, <RHS>`의 RHS operand 가 비어있음(binop == 의 RHS 누락).
+    field hexa_map_get 결과 비교 경로. operand 1개로 cmp emit.
+
+VERDICT: 🔧 x86_64 single-file RUNG1/2/3 ✅(#3420) · whole-compiler ❌ 2 버그.
+leg A-linux gap = x86_64 reg-alloc spill(g16+ 물리 reg 미할당) + binop cmp
+RHS operand 누락. arm64 leg A 는 이미 ✅(#3412); x86_64 는 이 2 버그 수정 필요.
+
+NEXT: x86_64_linux.hexa reg-alloc spill 경로(16 GPR 초과 → 스택 spill) +
+binop == RHS operand emit 수정 → summer whole-compiler self-emit 재검증.
