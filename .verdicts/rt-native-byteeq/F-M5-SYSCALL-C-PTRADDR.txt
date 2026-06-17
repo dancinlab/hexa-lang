@@ -1,0 +1,78 @@
+F-M5-SYSCALL-C-PTRADDR — `__hx_str_ptr(s)` string→cstring-ptr leaf added to the
+                          shipping backend (ADD-only); the b2 alloc+syscall gate
+                          now EMITs + ASSEMBLEs clean — only the `g<id>` global-
+                          slot gap (link) remains before RUN-green.
+                          (2026-06-18, RAN aiden aprime_m5c)
+================================================================================
+LANE: M5 standalone-redesign, syscall sub-unit c (RT-NATIVE-ZEROC fleet).
+GOAL: resolve GAP1 from F-M5-SYSCALL-B-PORTED — `hexa_ptr_addr` (the P7-7
+string→cstring-ptr intrinsic absent from the shipping backend) — so the b2 gate
+(flatten alloc+syscall + driver) gets past EMIT.
+
+================================================================================
+1. WHAT LANDED (ADD-only leaf, c10)
+================================================================================
+`__hx_str_ptr(s)` — returns an int HexaVal whose payload IS the string's char*
+base (the STR payload word; a hexa const_str's payload is a .rodata NUL-terminated
+cstring). Same str-payload load as `__hx_str_byte`, minus the +index and byte
+deref:
+  · compiler/check/bind.hexa        — whitelist "__hx_str_ptr"
+  · compiler/codegen/x86_64_linux.hexa — `_x86_hv_payload(s.args[0], r10)` (r10 =
+       char* base) → _x86_hv_store_leaf. Mirrors __hx_str_byte.
+  · compiler/codegen/arm64_darwin.hexa — `_hv_load(s.args[0], x0, x1)` (x1 = char*
+       base) + movz x0,#0 (TAG_INT) → _hv_store_dst.
+  · self/rt/syscall.hexa — `hexa_ptr_addr(` → `__hx_str_ptr(` (1 site: the
+       sys_getrandom darwin /dev/urandom fallback).
+ADD-only: the compiler never calls __hx_str_ptr ⇒ self-emit unchanged (gen3≡gen4;
+CI selfhost-byteeq-real authority). aprime_m5c rebuild smoke exit42 PASS.
+
+================================================================================
+2. DECISIVE RESULT (c2 — aiden RAN, aprime_m5c, x86_64)
+================================================================================
+b2 gate (flatten alloc+syscall [496 L] + driver):
+  emit rc = 0   ← GAP1 RESOLVED (no more HX2001 undefined `hexa_ptr_addr`;
+                  only HX4001 unused-var warns, benign)
+  as   rc = 0   (assembles clean)
+  link rc = 1   ← undefined reference to `g0` (×N), at the alloc.hexa lines that
+                  read/write __arena_tbl (the module-global `let mut`)
+  ⇒ exactly the GAP2 the b1/b2 verdicts predicted, now ISOLATED as the SOLE
+    remaining blocker. The asm references `g0` but no .bss/.data slot defines it
+    in a standalone single-module emit (the whole-program compiler build supplies
+    the data section; a lone _drv+module emit does not).
+
+================================================================================
+3. CLASSIFICATION (c16) + NAMED NEXT BRICK
+================================================================================
+WALL TYPE (c) substrate/codegen — GAP1 cleared, GAP2 isolated. The alloc+syscall
+integration is now one bounded codegen edit from RUN-green.
+
+  NAMED M5-gslot: "Define the module-global `let mut` data slot (`g<id>`) in the
+   shipping backend's standalone single-module emit — emit a `.bss`/.data slot +
+   `g<id>:` label (size 8, zero-init) for each module-global the object
+   references but does not get from a whole-program data section. (alloc.hexa's
+   __arena_tbl is the witness; rt_init is its only writer, so a const-fold or a
+   .bss slot both work.) DEPLETION TEST: the b2 gate LINKs + RUNs **exit 0** on
+   aiden x86_64 — alloc+syscall C-free integration proven end-to-end — + cross-
+   emit arm64. ADD-only / emit-shape (compiler self-emit already supplies its own
+   data section, so byteeq is preserved; CI authority)."
+
+  THEN b3 = M5 standalone-relink (larm64_flatten path) → write `#else` drop = the
+  actual ls reduction.
+
+================================================================================
+4. HONEST RESIDUAL (c9)
+================================================================================
+  · b2 gate is EMIT+AS green but NOT yet LINK/RUN green — GAP2 (g<id> slot) is the
+    sole remaining blocker, now isolated with RAN evidence. "alloc+syscall C-free
+    integration" is one codegen brick away, not done.
+  · __hx_str_ptr is RAN-correct at the emit level (gate emits clean, smoke-42
+    rebuild OK); its runtime correctness (the cstring actually opens /dev/urandom)
+    is only exercised on the darwin getrandom path, not by this x86_64 alloc gate
+    — noted, not overclaimed.
+  · `ls self/*.c == ∅` unchanged. Sequence so far: __hx_target_os ✓ (a) →
+    syscall() rewrite ✓ (b) → __hx_str_ptr ✓ (c) → M5-gslot (next, turns b2 gate
+    RUN-green) → b3 relink (#else drop = ls↓).
+
+CONCLUSION: the string→ptr gap is closed; the b2 alloc+syscall gate now emits and
+assembles clean, with the single `g<id>` module-global-slot gap isolated as the
+last step before a RUN-green C-free integration proof (M5-gslot).
