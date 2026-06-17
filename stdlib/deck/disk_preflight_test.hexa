@@ -82,5 +82,17 @@ fn main() {
     _has("line(unknown): says free disk unknown", unk, "free disk unknown")
     _hasnt("line(unknown): no false WARN", unk, "WARN")
 
+    // ── fine-mesh-aware el-ph scratch estimate (LaOs3Si2 40G disk-wall, 2026-06-17) ──
+    // The 16^3 fine-k cell measured >40 GB/q; the estimator must catch the 40G wall,
+    // scale up with denser meshes, and floor small/junk inputs at the 40G minimum.
+    _check("elph est: 16^3/nat6 == 40 (the measured wall)", deck_elph_scratch_gb_est(16, 6), 40)
+    _check("elph est: 20^3/nat6 == 80 (scales with mesh)", deck_elph_scratch_gb_est(20, 6), 80)
+    _check("elph est: 12^3/nat6 floored to 40", deck_elph_scratch_gb_est(12, 6), 40)
+    _check("elph est: junk(0) floored to 40", deck_elph_scratch_gb_est(0, 6), 40)
+    // a 40G pod (≈37 GB usable) does NOT fit the 16^3 estimate → correctly rejected
+    let est16 = deck_elph_scratch_gb_est(16, 6)
+    _is("elph est: 40G pod rejected for 16^3 el-ph", deck_disk_fits(1, est16, 37), false)
+    _is("elph est: 100G pod fits 16^3 el-ph", deck_disk_fits(1, est16, 100), true)
+
     println("deck_disk_preflight_test PASS")
 }

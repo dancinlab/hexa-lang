@@ -95,6 +95,9 @@ fn main() {
     _check("§4c run_resume.sh driver UNREGRESSED (#2113)",
         rb_default.contains("run_resume.sh")
         && rb_default.contains("REAL-TERMINAL"), fails)
+    _check("§4c disk-preflight guard present (LaOs3Si2 40G disk-wall · d11/d16)",
+        rb_default.contains("DISK PREFLIGHT FAIL")
+        && rb_default.contains("RENT >=100G disk pod"), fails)
     println("")
 
     // ── OPT-IN (pack_one_pod=true) — concurrent-fill fallback ────────────
