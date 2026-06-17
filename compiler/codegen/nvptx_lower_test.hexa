@@ -759,6 +759,82 @@ fn _test_atomic_add() -> bool {
     return ok
 }
 
+// ── Case 8b — RFC 055 3-arg gpu_atomic_add(base, idx, val) ────────────
+//
+// The 3-arg form lowers (mirror of index_set's addr-compute) to:
+//   mul.lo.s64 %rd_idxs_addr, %rd<idx>, 8;
+//   add.s64    %rd_idxs_addr, %rd_idxs_addr, %rd<base>;
+//   atom.global.add.f64 %fd<dst>, [%rd_idxs_addr], %fd<val>;
+// REGRESSION (handoff #10): the shared `%rd_idxs_addr` scratch must be
+// DECLARED in the `.reg` bank even when the kernel has NO `index_set`
+// statement — otherwise ptxas fails with "Unknown symbol %rd_idxs_addr".
+// This fixture has a 3-arg atomic and no index_set, so the presence of
+// `.reg .u64 %rd_idxs_addr` is the load-bearing assertion.
+
+fn _build_case_atomic_add_3arg() -> MModule {
+    let base  = _local_array_i64(0, "base")  // array param → U64 bank (addr operand)
+    let v_p   = _local(1, "v")               // value param (f64 via binop dst)
+    let idx32 = _local(2, "idx32")           // gpu_thread_id_x → U32
+    let idx   = _local(3, "idx")             // to_i64(idx32) → U64 (idx operand)
+    let val   = _local(4, "val")             // v + v → F64 (value operand)
+    let r     = _local(5, "r")               // dst (old value) → F64
+
+    let mut tii = []
+    tii.push(_op_local(idx32.id))
+
+    let mut atom_args = []
+    atom_args.push(_op_local(base.id))
+    atom_args.push(_op_local(idx.id))
+    atom_args.push(_op_local(val.id))
+
+    let mut s0 = []
+    s0.push(_stmt_call(idx32, "gpu_thread_id_x"))
+    s0.push(_stmt_call_with_args(idx, "to_i64", tii))
+    s0.push(_stmt_binop(val, "add", _op_local(v_p.id), _op_local(v_p.id)))
+    s0.push(_stmt_call_with_args(r, "gpu_atomic_add", atom_args))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut params = []
+    params.push(base); params.push(v_p)
+    let mut locals = []
+    locals.push(base); locals.push(v_p)
+    locals.push(idx32); locals.push(idx); locals.push(val); locals.push(r)
+
+    let mf = MFunc {
+        name: "atomic_add_3arg",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_atomic_add_3arg.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_atomic_add_3arg() -> bool {
+    let mut ok = true
+    let ptx = codegen_emit_ptx_sm80(_build_case_atomic_add_3arg())
+    println("")
+    println("-- emitted PTX (RFC 055 3-arg gpu_atomic_add case, sm_80) --")
+    println(ptx)
+    // REGRESSION (handoff #10): scratch addr reg declared even with no index_set
+    ok = _check(ok, ptx, ".reg .u64 %rd_idxs_addr", "scratch %rd_idxs_addr declared (handoff #10)")
+    // addr-compute trio + the atom body using that scratch
+    ok = _check(ok, ptx, "mul.lo.s64 %rd_idxs_addr", "addr-compute mul.lo.s64 into scratch")
+    ok = _check(ok, ptx, "add.s64 %rd_idxs_addr, %rd_idxs_addr", "addr-compute add.s64 into scratch")
+    ok = _check(ok, ptx, "atom.global.add.f64", "atom.global.add.f64 body")
+    ok = _check(ok, ptx, "[%rd_idxs_addr]", "atom deref uses the declared scratch")
+    return ok
+}
+
 // ── Case 32 — F-RFC067-NVPTX-TMA-CODEGEN-SCAFFOLD ─────────────────────
 //
 // RFC 067 N202 — TMA opcode scaffold + sm_120a header emit. Verifies:
@@ -1186,6 +1262,7 @@ fn main() {
     let ok_part  = _test_partition()
     let ok_barr  = _test_barrier()
     let ok_atom  = _test_atomic_add()
+    let ok_atom3 = _test_atomic_add_3arg()
     let ok_shuf  = _test_warp_shuffle()
     let ok_shuff64 = _test_warp_shuffle_f64()
     let ok_shufm64 = _test_warp_shuffle_f64_u64mask()
@@ -1223,7 +1300,7 @@ fn main() {
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_wov && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_tof64 && ok_mwc && ok_iadd && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae && ok_mf32 && ok_mf64 && ok_minh {
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_atom3 && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_wov && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_tof64 && ok_mwc && ok_iadd && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae && ok_mf32 && ok_mf64 && ok_minh {
         println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+/P5+ + N71-B FP64 warp-shuffle (+u64 mask narrow) + N73 mixed-width int setp (u32<u64 widen) + RFC 067 N202 TMA scaffold + RFC 067 N206 TMA matmul emit + RFC 055 §13 math intrinsics (sqrt/max/min/exp/abs/rsqrt) + PR-A [i64] kernel int-bank — 40/40 cases (incl. matmul + matmul_NT_a + matmul_NT_b + FP64 warp-shuffle composition + mixed-width cmp widen + TMA codegen scaffold + TMA matmul emit + math f32/f64/inherit + [i64] iadd int-bank)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
@@ -1235,6 +1312,7 @@ fn main() {
         if !ok_part { println("      055-P3c gpu_kind partition FAILED") }
         if !ok_barr { println("      055-P4 gpu_barrier() FAILED") }
         if !ok_atom { println("      055-P4+ gpu_atomic_add() FAILED") }
+        if !ok_atom3 { println("      RFC 055 3-arg gpu_atomic_add %rd_idxs_addr decl (handoff #10) FAILED") }
         if !ok_shuf { println("      055-P4+ gpu_warp_shuffle() FAILED") }
         if !ok_shuff64 { println("      N71-B FP64 gpu_warp_shuffle composition FAILED") }
         if !ok_shufm64 { println("      N71-B FP64 shuffle u64-mask narrow FAILED") }
