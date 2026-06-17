@@ -1,0 +1,47 @@
+// RT-NATIVE-ZEROC M4 ARRAY-R2 — `__hx_make_val(tag, payload)` round-trip probe.
+//
+// The DECISIVE measurement (c2): the caller-supplied TAG must SURVIVE a
+// make_val→tag round-trip. `__hx_make_val(t, p)` builds a {tag, payload}
+// HexaVal; `__hx_tag(v)` reads the tag back. If make_val flattened to a fixed
+// boxing tag, the read-back would be TAG_INT(0) instead of `t`.
+//
+// We assert POSITIVELY (no `!`, the x86_64 backend has no logical-not lowering
+// yet): each correct outcome adds to `ok`; a wrong outcome adds a poison value
+// that pushes the exit code off the expected total. Expected exit = 8.
+//
+//   TAG enum (self/runtime.h): INT=0 FLOAT=1 BOOL=2 STR=3 VOID=4
+//
+// tag survives:
+//   make_val(3, P)  -> tag == 3 (STR)   ← the decisive int/STR re-stamp
+//   make_val(1, P)  -> tag == 1 (FLOAT)
+//   make_val(2, P)  -> tag == 2 (BOOL)
+//   make_val(0, P)  -> tag == 0 (INT)
+// payload survives:
+//   make_val(3, 1234)        payload read via __hx_payload_eq == 1234
+//   make_val(0, 42)          payload == 42
+//   make_val(1, 7)           payload == 7
+//   make_val(2, 99)          payload == 99
+
+fn mk(t, p)        { return __hx_make_val(t, p) }
+fn tag_of(v) -> int { return __hx_tag(v) }
+
+fn main() {
+  let mut ok = 0
+
+  // ── tag SURVIVES (4) — the decisive half ──
+  if __hx_payload_eq(tag_of(mk(3, 1234)), 3) { ok = ok + 1 }   // STR survives
+  if __hx_payload_eq(tag_of(mk(1, 7)),    1) { ok = ok + 1 }   // FLOAT survives
+  if __hx_payload_eq(tag_of(mk(2, 99)),   2) { ok = ok + 1 }   // BOOL survives
+  if __hx_payload_eq(tag_of(mk(0, 42)),   0) { ok = ok + 1 }   // INT survives
+
+  // ── payload SURVIVES (4) ──
+  // mk(tag, p) stamps p into the payload eightbyte; __hx_payload_eq reads it.
+  if __hx_payload_eq(mk(3, 1234), 1234) { ok = ok + 1 }
+  if __hx_payload_eq(mk(0, 42),   42)   { ok = ok + 1 }
+  if __hx_payload_eq(mk(1, 7),    7)    { ok = ok + 1 }
+  if __hx_payload_eq(mk(2, 99),   99)   { ok = ok + 1 }
+
+  // POISON guards: a flattened tag (make_val ignoring the tag word) would make
+  // the STR/FLOAT/BOOL survival checks above fail, dropping `ok` below 8.
+  exit(ok)   // expect 8
+}

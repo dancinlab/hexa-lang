@@ -1,0 +1,80 @@
+F-M4-ARRAY-R2-MAKEVAL — `__hx_make_val(tag, payload)` constructor-intrinsic
+============================================================================
+Date: 2026-06-17
+Branch: rt-native-m4-array-r2-makeval (from rt-native-m4-b4-array)
+HEAD: 99db0fc8c
+Campaign: RT-NATIVE-ZEROC, M4 (~1190fn port), array lane r2
+Status: GO — the intrinsic lands GREEN; tag SURVIVES the round-trip.
+
+WHAT
+----
+`__hx_make_val(tag, payload) -> HexaVal` — the symmetric WRITE-half of the
+existing `__hx_tag(v) -> int` reader. WRITES a {tag, payload} 16-byte HexaVal
+from two raw int64 words, WITHOUT going through hexa_int/hexa_float/… boxing
+(which would force a fixed tag and lose the caller's intended tag). This lets a
+raw payload word loaded from an array slot be re-stamped with its REAL element
+tag — the NAMED unblocking lever from array r1 (#3484) and B1 (#3480) for
+B4/B5 element returns and the nanbox.hexa file-reduction.
+
+SCOPE (ADD-only, mirrors the existing __hx_tag / __hx_payload_* leaves, c10)
+---------------------------------------------------------------------------
+1. compiler/check/bind.hexa — `__hx_make_val` added to the __hx_* allowlist.
+2. compiler/codegen/arm64_darwin.hexa — STMT_CALL leaf. Both args int-boxed,
+   loaded into DISJOINT pairs (x0:x1, x2:x3 — _hv_load clobbers its pair as
+   scratch); lo = tag word (x1), hi = payload word (x3); stp. NO `bl`.
+3. compiler/codegen/x86_64_linux.hexa — STMT_CALL leaf + new helper
+   `_x86_hv_store_leaf_tagreg` (register tag, not const). payload word → r10
+   (the dst home/spill reg), tag word → r11 → tag-slot via _x86_store_tag_reg.
+   first→r10/second→r11 disjoint ordering (proven by payload-arith). NO `call`.
+   r10/r11 are scratch (pool = rbx/r12-r15), so the dst home reg is never r11.
+4. self/codegen.hexa — C-transpile:
+   ((HexaVal){.tag=(HexaTag)HX_INT(t), .i=HX_INT(p)})
+   (.i = the int64 union member of runtime.h HexaVal_; HX_INT reads the
+   int-boxed argument payload.)
+
+DECISIVE MEASUREMENT (c2 — RAN on real x86_64, aiden) — TAG SURVIVES
+--------------------------------------------------------------------
+Probe: scripts/scratch/rt_native/m4_makeval_roundtrip.hexa
+  make_val(3, P) -> __hx_tag == 3 (STR)   ← the decisive int/STR re-stamp
+  make_val(1, P) -> __hx_tag == 1 (FLOAT)
+  make_val(2, P) -> __hx_tag == 2 (BOOL)
+  make_val(0, P) -> __hx_tag == 0 (INT)
+  + 4 payload-survives checks. exit = 8 expected.
+
+RAN OUTPUT (aiden, build/aprime_m4 emit -> GNU as -> link C runtime -> exec):
+  ===== MAKEVAL GATE (decisive round-trip) =====
+  ── (A) ENCODING sanity (GNU as ↔ objdump byte-match — composed, no novel opcode) ──
+    ✓ x86 mov +rbx,r10  [4c 89 d3]
+    ✓ x86 mov +QWORD PTR [rbp-0x8],r11  [4c 89 5d f8]
+    ✓ arm64 mov x0,x1
+    ✓ arm64 mov x1,x3
+  ── (B) SEMANTIC ground-truth — DECISIVE (emit → as → link → run, assert exit=8) ──
+    ✓ makeval: exit=8 (TAG SURVIVES round-trip — STR/FLOAT/BOOL/INT not flattened + payload exact)
+  M4 MAKEVAL GATE: PASS
+
+==> The caller-passed TAG (TAG_STR=3) SURVIVED, NOT flattened to TAG_INT(0).
+
+NO REGRESSION (c2)
+------------------
+aprime smoke: exit(42)==42 PASS (build_aprime [5/5]).
+M1 x86 leaf gate (x86_leaf_gate.sh build/aprime_m4): PASS
+  (A) encoding 7/7 byte-match · (B) core exit=16 · str exit=3 · arena exit=5.
+
+FIXPOINT
+--------
+ADD-only ⇒ gen3≡gen4 cross-target fixpoint structurally preserved:
+  - `grep __hx_make_val compiler/ self/ tool/ stdlib/` = ZERO call-sites
+    outside the 4 def files. The new `if s.op == "__hx_make_val"` codegen
+    branch is DEAD CODE during the self-emit (no MIR stmt carries that op),
+    so the whole-compiler emitted bytes are unchanged.
+  - Local whole-compiler x86_64 obj byte-eq (byteeq_x86.sh) could NOT be run
+    interactively — the 46k-line/1.9MB flattened-compiler `--emit=obj` is
+    OOM-killed under the pool wrapper (`pool on aiden: exit -1`, the flatten
+    completes then the first emit dies). This is an INFRA resource limit, NOT
+    a regression — the same emit is the heavy step CI runs in a fuller
+    environment. CI selfhost-byteeq-real (via harness pr-cycle) is the final
+    authority and is the canonical fixpoint check per the mission.
+
+VERDICT: GO. Intrinsic landed GREEN, tag survives. r3 named = B4 array_core
+re-attempt (get/set/pop/len now expressible via __hx_ptr_load64 + __hx_make_val;
+new/push/reserve stay C #else — WALL-2 alloc-blocked).

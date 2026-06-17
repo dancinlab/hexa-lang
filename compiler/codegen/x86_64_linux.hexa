@@ -938,6 +938,24 @@ fn _x86_hv_store_leaf(buf: [LInstr], rm: X86RegMap, id: i64,
     return out
 }
 
+// RT-NATIVE M4 ARRAY-R2 — like `_x86_hv_store_leaf` but the tag comes from a
+// REGISTER (not a compile-time constant): for `__hx_make_val(tag, payload)` the
+// tag is a runtime word, not a fixed TAG_*. `pay_reg` holds the payload, `tag_reg`
+// the tag. Writes payload→dst home, tag→dst tag-slot, then the spill writeback.
+// `tag_reg` must be disjoint from `pay_reg` and from the dst home reg.
+fn _x86_hv_store_leaf_tagreg(buf: [LInstr], rm: X86RegMap, id: i64,
+                             pay_reg: string, tag_reg: string) -> [LInstr] {
+    let mut out = buf
+    let dst_name = _x86_dst_reg(rm, id)
+    if dst_name != pay_reg {
+        out.push(_x86_instr2("mov", _x86_op_reg(dst_name), _x86_op_reg(pay_reg),
+                         "leaf: payload → dst L" + to_string(id)))
+    }
+    out = _x86_store_tag_reg(out, rm, id, tag_reg)
+    out = _x86_emit_dst_writeback(out, rm, id)
+    return out
+}
+
 // ── Statement lowering (C6 — RegMap-aware) ───────────────────
 
 fn _x86_load_spill(buf: [LInstr], rm: X86RegMap, id: i64, scratch: string) -> [LInstr] {
@@ -1449,6 +1467,24 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 {
                 buf = _x86_store_tag_imm(buf, rm, s.dst.id, 0)    // result TAG_INT
                 buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            }
+            return buf
+        }
+        // RT-NATIVE M4 ARRAY-R2: `__hx_make_val(tag, payload)` → a {tag, payload}
+        // 16-byte HexaVal from two raw int64 words, the symmetric WRITE-half of
+        // `__hx_tag`. The SysV PAIR ABI here keeps tag in the value's tag-slot and
+        // payload in its home reg (mirrors arm64 lo=x0=tag / hi=x1=payload). Both
+        // args are int-boxed HexaVals → the WANTED word is each arg's PAYLOAD. The
+        // payload word is loaded into r10 FIRST and the tag word into r11 (the same
+        // first→r10 / second→r11 disjoint ordering the payload-arith leaves use, so
+        // the 2nd `_x86_hv_payload` cannot clobber the 1st), then stored as
+        // {tag=r11, payload=r10}. r10 is the dst home / spill reg, so the payload
+        // lands correctly under `_x86_emit_dst_writeback`. No `call` (non-circular).
+        if s.op == "__hx_make_val" && len(s.args) >= 2 {
+            buf = _x86_hv_payload(buf, s.args[1], st, rm, "r10", opts)  // payload word → r10
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r11", opts)  // tag word     → r11
+            if s.dst.id >= 0 {
+                buf = _x86_hv_store_leaf_tagreg(buf, rm, s.dst.id, "r10", "r11")
             }
             return buf
         }
