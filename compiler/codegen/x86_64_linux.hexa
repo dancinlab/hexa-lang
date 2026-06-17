@@ -771,6 +771,22 @@ fn _x86_is_bit_or(op: string) -> bool    { return op == "or"  || op == "|" }
 fn _x86_is_bit_xor(op: string) -> bool   { return op == "xor" || op == "^" }
 fn _x86_is_concat(op: string) -> bool    { return op == "concat" }
 
+// Tag-aware arithmetic binop → runtime helper symbol. Mirrors arm64's
+// _hv_binop_sym for the ARITHMETIC subset only (+ - * / %): these are the
+// ops whose result tag depends on operand tags (INT vs FLOAT), so they MUST
+// route through the tag-dispatching runtime helper rather than a raw integer
+// ALU op. Bitwise (& | ^), comparisons (handled via setcc), and concat are
+// intentionally excluded — they keep their existing fast paths.
+// `hexa_add` is a runtime.h MACRO; the linkable symbol is `hexa_add_slow`.
+fn _x86_hv_arith_sym(op: string) -> string {
+    if op == "+" || op == "add" { return "hexa_add_slow" }
+    if op == "-" || op == "sub" { return "hexa_sub" }
+    if op == "*" || op == "mul" { return "hexa_mul" }
+    if op == "/" || op == "div" || op == "sdiv" { return "hexa_div" }
+    if op == "%" || op == "mod" || op == "rem"  { return "hexa_mod" }
+    return ""
+}
+
 // SETcc suffix for source comparison op. Returns "" if not a
 // comparison.
 fn _x86_setcc_suffix(op: string) -> string {
@@ -1301,6 +1317,37 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                                  "call runtime: hexa_str_concat"))
                 if dst.reg.name != "rdx" {
                     buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"), "capture concat result payload"))
+                }
+                buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
+                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+                return buf
+            }
+
+            // Tag-aware arithmetic (+ - * / %): route through the runtime's
+            // tag-dispatching helper EXACTLY as arm64_darwin.hexa does
+            // (_hv_binop_sym). @root-cause-ok: the prior x86_64 path emitted a
+            // raw integer `add`/`sub`/`imul` on the payloads and hardcoded the
+            // result tag to TAG_INT (0). For FLOAT operands (e.g. a param-array
+            // float element via the index_get path above) that silently
+            // produced an INT-tagged HexaVal carrying the IEEE-754 BITS — so
+            // `str()` rendered the bit pattern as an integer instead of the
+            // float (the confirmed "raw-int model HexaVal tag 소실"). The
+            // runtime helper inspects both operands' tags, performs int- or
+            // float arithmetic accordingly, and returns a correctly-tagged
+            // {tag,payload} pair (rax:rdx). Box both args as full HexaVal pairs
+            // (a→rdi:rsi, b→rdx:rcx) so their carried tags reach the helper.
+            // NB: integer-only programs keep bit-identical results (the helper
+            // takes the int path); this only repairs the float/mixed case the
+            // raw-int model dropped.
+            let _ar_sym = _x86_hv_arith_sym(s.op)
+            if len(_ar_sym) > 0 {
+                buf = _x86_hv_box_arg(buf, s.args[0], st, rm, "rdi", "rsi", opts)
+                buf = _x86_hv_box_arg(buf, s.args[1], st, rm, "rdx", "rcx", opts)
+                buf.push(_x86_instr1("call", _x86_op_label(_ar_sym),
+                                 "binop " + s.op + ": tag-dispatch " + _ar_sym))
+                if dst.reg.name != "rdx" {
+                    buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                                     "binop " + s.op + ": capture result payload"))
                 }
                 buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
                 buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
