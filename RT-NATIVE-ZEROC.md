@@ -7,7 +7,7 @@
 - [ ] M5 standalone-build 재설계 (native rt_*.o 링크, #else 제거)
 - [ ] M4 ~1190 common core fn 전수 hexa-native 포팅 (다배치, nanbox/syscall/map/array)
   - B1 nanbox-ctor: mechanism DONE (3중 native: _hv_load inline · HEXA_RT_SELFEMIT rt_hexa_* bytes · __hx_* read-intrinsics); C-diff gate b1_nanbox_gate.c 35/35 PASS (aiden x86_64). nanbox.hexa NOT viable (HexaVal struct-literal = self-recursive hexa_int call). #else drop BLOCKED-on-M5 (standalone runtime.a links the C bodies). verdict F-M4-B1-NANBOX.
-- [ ] M3 @syscall 일반 intrinsic 양타깃 (svc/syscall reg marshalling)
-- [ ] M2 raw-mem intrinsic 양타깃 완비 (__hx_ptr_load/store map·array)
+- [x] M3 @syscall 일반 intrinsic 양타깃 (svc/syscall reg marshalling)
+- [x] M2 raw-mem intrinsic 양타깃 완비 (__hx_ptr_load/store map·array)
 - [x] M1 x86_64 leaf-intrinsic parity (25/25 __hx_* arm64→x86_64 codegen; GNU-as byte-id 인코딩; emit→as→link→run exit-correct; gen3≡gen4 byteeq 보존; +const_float payload root-fix. 잔여=const_str-assign·unop `!` 미구현 = M2 orthogonal. F-M1-X86-LEAF-PARITY)
 - [ ] (first milestone — `harness domain ms <text>`)
