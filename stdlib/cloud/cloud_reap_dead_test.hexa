@@ -45,7 +45,7 @@ fn _rec(id: str, project: str, rented_by: str, last_hb: str, max_ttl: int, owner
         rented_by: rented_by, project: project, purpose: "",
         ssh_host: "", ssh_port: "", status: "READY",
         ttl_sec: -1, max_cost_usd: "", cumulative_cost_usd: "0.0", cost_per_hr_usd: "",
-        owner_pid: owner_pid, last_heartbeat: last_hb, max_ttl_sec: max_ttl
+        owner_pid: owner_pid, last_heartbeat: last_hb, max_ttl_sec: max_ttl, src: ""
     }
 }
 

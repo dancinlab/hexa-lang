@@ -183,6 +183,11 @@ hexa.pre-cc-backup-*
 Dockerfile.bak.*
 # Timestamped backup snapshots (e.g. hexa.real.bak.1778419304) — local-only
 *.bak.*
+# hexa cloud ING.jsonl SSOT: .bak rotation snapshot + atomic-write temp +
+# the test-only sandbox-root sentinel — all local-only, never commit.
+ING.jsonl.bak
+ING.jsonl.tmp.*
+.hexa-cloud-ing-sandbox
 archive/
 
 # Jekyll/static site generator output for docs/ — source is the .md files
