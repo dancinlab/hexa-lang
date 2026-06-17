@@ -1,0 +1,78 @@
+F-M5-B3B-ARENA-FEATURE-GAP — b3b is NOT a simple #else drop: the b3a seed
+                              (self/rt/alloc.hexa, a simple P7-7 bump arena) is
+                              NOT feature-equivalent to the C arena in
+                              runtime_core_emit.hexa (env-probe / frame_clean /
+                              slot_dirty / heap-promote). b3b needs a measured
+                              seed↔C equivalence pass, not a blind drop.
+                              (2026-06-18, source read)
+================================================================================
+LANE: M5 standalone-redesign, b3b (RT-NATIVE-ZEROC fleet).
+GOAL: ar the b3a seed into runtime.a + drop the C `#else` alloc/syscall bodies =
+the first alloc-lane ls reduction. THIS VERDICT records why that is bigger than
+the read-half array-r4 #else drop.
+
+================================================================================
+1. THE FEATURE GAP (c9 / c16 — source read, not yet measured)
+================================================================================
+The C arena (self/runtime_core_emit.hexa, ~3956-4233) is a RICH allocator:
+  · 3972  hexa_arena_on()        — lazy env-probe (HEXA_ARENA toggle), not `return 1`
+  · 3956  __hexa_arena_enabled   — lazy state
+  · 4066  hexa_arena_rewind / 4081 hexa_arena_reset — over a linked-block model
+  · 4202  hexa_arena_frame_clean / 4233 __hexa_arena_slot_dirty — per-frame RSS
+        hygiene (the monotonic-growth mitigation the runtime header documents)
+  · arena-resident vs heap-promote + mark-stack (`__hexa_val_mark_top`)
+The b3a seed (self/rt/alloc.hexa, the P7-7 skeleton b1/b2 de-circularized) is a
+SIMPLE bump arena: arena_init/grow/alloc/mark/rewind/reset over a raw-mem pool
+table, `hexa_arena_on() = return 1`, NO env-probe / frame_clean / slot_dirty /
+heap-promote.
+
+⇒ blindly dropping the C `#else` and linking the seed would REPLACE the rich C
+  arena with the simple one — potentially losing env-toggle + RSS-hygiene +
+  heap-promote behavior the compiler/runtime may rely on. The b2 gate RUN exit 0
+  proved the seed's OWN arena works (alloc/mark/rewind/reset round-trip) — it did
+  NOT prove feature-equivalence to the shipped C arena. (Honest: b2 = "the native
+  arena runs", NOT "the native arena can replace the C arena wholesale".)
+
+================================================================================
+2. CLASSIFICATION (c16) — wall type (d) subsumption-NOT-yet-measured
+================================================================================
+This is NOT a blocker on the seed mechanism (b3a seed emits + RUN-works). It is a
+SCOPE correction: b3b's "#else drop" must be MEASURED, not assumed. Two honest
+routes, to decide by measurement next session:
+
+  ROUTE A (measure subset): #ifdef-guard ONLY the functions the seed is a faithful
+    equivalent of (the pure alloc/syscall leaves the seed fully implements), and
+    KEEP the C `#else` for the RSS-hygiene/env-probe functions the seed does not
+    cover. Partial ls reduction, no behavior loss. DEPLETION TEST: seed-built
+    runtime.a → selfhost-byteeq-real + faithful 3-target + miscompile-zero all
+    green (the compiler still self-hosts with the native leaves + C hygiene).
+
+  ROUTE B (full-feature seed): extend self/rt/alloc.hexa to cover env-probe +
+    frame_clean + slot_dirty + heap-promote (port the rich C arena to hexa), then
+    drop the whole C `#else`. Larger; the genuine "alloc fully native" endpoint.
+
+  Either way the GATE is the same: seed-built runtime.a passes byteeq-real +
+  faithful 3-target + miscompile-zero (i.e. the compiler still builds itself
+  byte-identically with the seed in place). That measurement — NOT a source-level
+  assumption — decides which functions can drop.
+
+================================================================================
+3. HONEST RESIDUAL (c9)
+================================================================================
+  · This round is a SOURCE-READ finding (the C arena is rich, the seed is simple)
+    — no code, no measurement yet. It CORRECTS the prior "b3b = drop the #else"
+    framing: the drop must be measured per-function, because the seed is not a
+    drop-in for the RSS-hygiene/env-probe parts.
+  · b2 RUN exit 0 stands (the native arena runs correctly in isolation); it is
+    just not, by itself, proof of wholesale C-replacement — stated plainly.
+  · `ls self/*.c == ∅` unchanged. b3b is now correctly scoped as a measured
+    seed↔C equivalence pass (Route A subset-drop is the low-risk first ls cut;
+    Route B full-feature port is the eventual zero-C endpoint). r3 map_* + the 6
+    modules follow.
+
+CONCLUSION: b3b is bigger than the read-half #else drop — the b3a seed (simple
+P7-7 bump arena) is not feature-equivalent to the rich C arena (env-probe /
+frame_clean / slot_dirty / heap-promote), so the `#else` drop must be a MEASURED
+per-function pass (Route A subset, gated by byteeq+faithful+miscompile-zero), not
+a blind drop. b2 RUN exit 0 proved the native arena runs, not that it replaces
+the C arena wholesale.
