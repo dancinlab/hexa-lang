@@ -6123,6 +6123,18 @@ fn gen2_expr(node) {
             if name == "__hx_tag" {
                 return "hexa_int((int64_t)HX_TAG(" + gen2_expr(node.args[0]) + "))"
             }
+            // RT-NATIVE M4 ARRAY-R2: `__hx_make_val(tag, payload)` native value
+            // CONSTRUCTOR — the symmetric write-half of `__hx_tag`. Builds a
+            // {tag, payload} HexaVal from two int-boxed words WITHOUT going through
+            // hexa_int/hexa_str/… (which force a fixed tag), so a payload word from
+            // an array slot keeps its real element tag. C-transpile = a HexaVal
+            // compound literal whose .tag is the first arg's int payload and whose
+            // .i (the int64 union member, runtime.h HexaVal_) is the second arg's.
+            // The native arm64/x86_64 backends lower it inline (STMT_CALL leaf, no
+            // call). HX_INT reads the int-boxed argument's payload word.
+            if name == "__hx_make_val" {
+                return "((HexaVal){.tag=(HexaTag)HX_INT(" + gen2_expr(node.args[0]) + "), .i=HX_INT(" + gen2_expr(node.args[1]) + ")})"
+            }
             // RT-NATIVE UNLOCK-2b: native leaf-compare (payload i64 cmp). C-transpile
             // = HX_INT macro (the payload union as int64); native arm64 lowers inline.
             if name == "__hx_payload_eq" {

@@ -1902,6 +1902,27 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // RT-NATIVE M4 ARRAY-R2: `__hx_make_val(tag, payload)` — the symmetric
+        // WRITE-half of `__hx_tag`. Builds a {tag, payload} 16-byte HexaVal from
+        // two raw int64 words: tag→lo eightbyte (x0), payload→hi eightbyte (x1),
+        // with NO `bl` (non-circular leaf, like `__hx_tag`). Both args are
+        // int-boxed HexaVals, so the WANTED word is each arg's PAYLOAD (hi = x1/x3
+        // of the x0:x1 / x2:x3 pairs). Lets a raw payload word loaded from an array
+        // slot be re-stamped with its real element tag WITHOUT going through
+        // hexa_int/hexa_str/… (which would force a fixed tag and lose the caller's
+        // intended tag). `_hv_load` clobbers its lo/hi pair as scratch, so arg0 and
+        // arg1 are loaded into DISJOINT pairs (x0:x1 then x2:x3); the tag survives
+        // in x1, the payload in x3. Then move both into the result {x0=tag, x1=pl}.
+        if s.op == "__hx_make_val" && len(s.args) >= 2 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // tag word  → x1 = payload
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // pl word   → x3 = payload
+            buf.push(_arm64_instr2("mov", _arm64_op_reg("x0"),
+                             _arm64_op_reg("x1"), "__hx_make_val: lo = tag word"))
+            buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"),
+                             _arm64_op_reg("x3"), "__hx_make_val: hi = payload word"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // RT-NATIVE UNLOCK-2b: native leaf-compare intrinsics — `__hx_payload_eq(a,b)`
         // compares the HexaVal PAYLOADS (hi eightbyte = x1) as raw i64 → bool, INLINE
         // (cmp/cset, no `bl _hexa_eq`). `__hx_payload_nz(v)` = `payload != 0` → bool.
