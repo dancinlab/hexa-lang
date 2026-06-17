@@ -2247,6 +2247,17 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // RT-NATIVE M5-syscall-c: `__hx_str_ptr(s)` → int HexaVal whose payload IS
+        // the string's char* base (the STR payload x1). Same str-payload load as
+        // __hx_str_byte, minus the +index and byte deref — for handing a cstring to
+        // a raw syscall (sys_open). The shipping analog of P7-7 `hexa_ptr_addr`.
+        if s.op == "__hx_str_ptr" && len(s.args) >= 1 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // s → x1 = char* base
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_str_ptr: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // RT-NATIVE UNLOCK-5: `__hx_str_byte(s, i)` → int HexaVal of the
         // unsigned byte at offset i of string s. The STR payload (x1) IS the
         // `char*` (HexaVal union `.s`); the INT payload (x3) is the index.

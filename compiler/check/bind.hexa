@@ -1243,6 +1243,12 @@ fn _bind_builtin_names() -> [string] {
         // `__TARGET_OS__` ident (which only self/codegen knew) and select the
         // per-target syscall number natively. ADD-only: the compiler never calls it.
         "__hx_target_os",
+        // RT-NATIVE M5-syscall-c (2026-06-18): `__hx_str_ptr(s)` — the char* base
+        // of a string HexaVal (its payload word) as an int HexaVal, for passing a
+        // NUL-terminated cstring to a raw syscall (e.g. sys_open). The shipping
+        // analog of self/rt/syscall.hexa's old P7-7 `hexa_ptr_addr`. 1 arg; same
+        // str-payload load as __hx_str_byte minus the byte deref.
+        "__hx_str_ptr",
         // N5-pre STEP2: builtins the compiler source calls but were absent from this allowlist
         // (HX2001). All have C-level defs: bytes_to_str_raw -> self/codegen.hexa:7155
         // (hexa_bytes_to_str_raw); __arr_alloc_items_zero[_int] are s4_flatc_post-injected statics.

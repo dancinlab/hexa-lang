@@ -1750,6 +1750,15 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 1) }
             return buf
         }
+        // RT-NATIVE M5-syscall-c: `__hx_str_ptr(s)` → int HexaVal whose payload IS
+        // the string's char* base (the STR payload word). Same str-payload load as
+        // __hx_str_byte, minus the +index and byte deref — for handing a cstring to
+        // a raw syscall (sys_open). The shipping analog of P7-7 `hexa_ptr_addr`.
+        if s.op == "__hx_str_ptr" && len(s.args) >= 1 {
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)  // r10 = char* base
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            return buf
+        }
         // UNLOCK-5: `__hx_str_byte(s, i)` → int HexaVal of the unsigned byte at
         // offset i. STR payload (r10) IS the char*; INT payload (r11) is the
         // index. add base+index, movzx byte load (zero-extends), box int.
