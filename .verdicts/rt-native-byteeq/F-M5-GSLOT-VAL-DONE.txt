@@ -1,0 +1,79 @@
+F-M5-GSLOT-VAL-DONE — x86_64 module-global WRITE path implemented; the b2
+                       alloc+syscall gate now RUNs exit 0 = C-free integration
+                       PROVEN end-to-end. (2026-06-18, RAN aiden aprime_gv)
+================================================================================
+LANE: M5 standalone-redesign, gslot-val sub-unit (RT-NATIVE-ZEROC fleet).
+GOAL: implement the x86_64 module-global write path (F-M5-GSLOT-VAL-GLOBALWRITE
+diagnosis) so the b2 gate RUNs exit 0.
+
+================================================================================
+1. WHAT LANDED (the root-cause fix, c1)
+================================================================================
+The lower already marks a write to a module-global with a sentinel: `Stmt.dst` is
+a Local with `arena_id == -999` (id = global_id) — hir_to_mir.hexa:1534-1548
+"the backend recognises this sentinel and emits a `.data` global store instead of
+a stack-slot store." The x86_64 backend did NOT recognise it: `_x86_emit_dst_
+writeback` was spill-only, so the write fell through to a stack slot (lost on
+return) → the global stayed `.data`-zero → near-null deref (F-M5-GSLOT-VAL-
+GLOBALWRITE: 17 g0 reads, 0 writes in the asm).
+
+FIX (compiler/codegen/x86_64_linux.hexa):
+  · `_x86_emit_dst_writeback(buf, rm, id, arena_id)` — new arena_id param; when
+    `arena_id == -999`, emit `mov [rip+g<id>], <payload home reg>` (mirrors the
+    READ side _x86_op_resolve which loads `[rip+g<id>]`). Else the prior spill path.
+  · `_x86_hv_store_leaf` / `_x86_hv_store_leaf_tagreg` — thread arena_id to the
+    writeback.
+  · all ~35 call sites pass `s.dst.arena_id` (cont.local_id sites pass 0 = local).
+
+================================================================================
+2. DECISIVE RESULT (c2 — aiden RAN, aprime_gv rebuild smoke exit42 PASS)
+================================================================================
+b2 gate (flatten alloc+syscall + driver: rt_init → 3 cross-pool hexa_ptr_alloc →
+mark/rewind reuse → reset):
+  emit rc = 0  ·  asm now has `mov [rip+g0], rbx # global write: g0` ×2 (was 0)
+  as   rc = 0
+  link rc = 0  (the 3 dup hexa_arena_* weakened in runtime.o = native-overrides-C,
+               the b3-relink semantics)
+  RUN  exit = 0   ★ alloc+syscall C-FREE INTEGRATION PROVEN end-to-end ★
+    (3 alloc cross-pool grow + mark/rewind address-reuse + reset, all byte-exact,
+     over the fully-native syscall.hexa + alloc.hexa — no C arena/syscall body).
+
+  aprime_gv rebuild smoke exit(42)==42 PASS = the compiler itself did not regress.
+
+================================================================================
+3. CLASSIFICATION (c16) + WHAT THIS UNBLOCKS
+================================================================================
+WALL CLEARED. The entire M5 syscall+alloc leaf sequence is now RUN-green:
+  __hx_target_os (a) → syscall() rewrite (b) → __hx_str_ptr (c) → gslot link
+  (.data slot) → gslot-val (global write) → **b2 gate RUN exit 0**.
+
+  NEXT: **b3 standalone-relink** — wire the native alloc+syscall rt_*.o into the
+  standalone build so the C `#else` arena/syscall bodies are REPLACED (not
+  weakened — the real link, no objcopy), dropping them = the first alloc-lane
+  `ls`/byte reduction. Then **r3 = map_*** (make_val construct-half) +
+  io/fmt/proc/fs/intern/math module ports.
+
+  arm64 PARITY: arm64_darwin's `_arm64_emit_dst_writeback` is also spill-only
+  (same gap), but b2 RUN exercises x86_64 only; arm64 needs the mirror fix (adrp
+  g@PAGE + str home,[x15,g@PAGEOFF]) — done next if CI byteeq flags arm64
+  module-global self-emit, else a bounded follow.
+
+================================================================================
+4. HONEST RESIDUAL (c9)
+================================================================================
+  · This is a SHIPPING codegen change (x86_64 dst-writeback). CI selfhost-byteeq-
+    real (gen3≡gen4) + faithful-nobaseline (linux-x86_64) are the authority — the
+    fix mirrors the existing READ side and is gated. The b2 RUN exit0 + smoke-42
+    rebuild are the local evidence.
+  · The b2 gate still uses the 3-symbol weaken (native-overrides-C) as a HARNESS
+    device; b3 does the real relink (native replaces the C #else, no weaken).
+  · arm64 module-global write is NOT yet fixed (same spill-only gap); x86_64 b2
+    proves the mechanism; arm64 is the parity follow.
+  · `ls self/*.c == ∅` unchanged THIS round (b2 is the integration PROOF, not the
+    #else drop — that is b3). But the alloc+syscall C-free path is now RUN-proven,
+    which is the prerequisite the whole alloc lane was driving toward.
+
+CONCLUSION: the x86_64 module-global write path is implemented (sentinel
+arena_id==-999 → [rip+g<id>] store, mirroring READ); the b2 alloc+syscall gate
+RUNs exit 0 — C-free alloc+syscall integration proven end-to-end. b3 standalone-
+relink (the actual #else drop = ls reduction) is now unblocked.
