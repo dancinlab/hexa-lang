@@ -1,0 +1,46 @@
+// RT-NATIVE ALLOC-R1 feasibility PoC (Linux x86_64 flavor).
+// A pure-.hexa bump arena over raw mmap/munmap via __hx_syscall6 + __hx_ptr_*.
+// NO C malloc/calloc/realloc/free, NO HexaVal construction in the arena body —
+// the arena state (base ptr, raw addresses) lives entirely in int-payload space.
+// Linux x86_64 ABI: mmap=9 (addr,len,prot,flags,fd,off), munmap=11.
+//   prot = 3 (PROT_READ|PROT_WRITE)
+//   flags = 0x22 = MAP_PRIVATE(0x02)|MAP_ANONYMOUS(0x20)
+
+fn arena_new(size: int) -> int {
+    // mmap(NULL, size, PROT_RW=3, MAP_PRIVATE|ANON=0x22, fd=-1, off=0)
+    let p = __hx_syscall6(9, 0, size, 3, 34, -1, 0)
+    return p
+}
+fn arena_put(base: int, i: int, v: int) -> int {
+    __hx_ptr_store64(base, i * 8, v)
+    return v
+}
+fn arena_get(base: int, i: int) -> int {
+    return __hx_ptr_load64(base, i * 8)
+}
+fn arena_free(base: int, size: int) {
+    __hx_syscall6(11, base, size, 0, 0, 0, 0)   // munmap
+}
+
+fn main() {
+    let SZ = 8192
+    let a = arena_new(SZ)
+    // mmap returns a small NEGATIVE errno on failure; a valid mapping is a large
+    // positive pointer. Guard: if a <= 0 the mmap failed → exit 2.
+    if a <= 0 { exit(2) }
+    // bump-allocate 200 8-byte cells, store i^2, read back, sum.
+    let mut i = 0
+    while i < 200 {
+        arena_put(a, i, i * i)
+        i = i + 1
+    }
+    let mut sum = 0
+    let mut j = 0
+    while j < 200 {
+        sum = sum + arena_get(a, j)
+        j = j + 1
+    }
+    arena_free(a, SZ)
+    // sum of i^2 for i in 0..199 = 199*200*399/6 = 2646700.
+    exit(if sum == 2646700 { 0 } else { 1 })
+}
