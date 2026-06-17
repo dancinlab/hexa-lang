@@ -102,3 +102,27 @@ linux-arm64, which has no native seed). runtime.a +~3.8KB, runtime_core.c +0, `l
   = T on all 3 + b4_array_native_gate exit on real arm64 + x86_64 hosts.
   GO for the LIVE-in-runtime.a milestone (proven, green-able, ADD-only to runtime.a, fixpoint
   preserved); the byte-DECREASE is HONESTLY DEFERRED to the linux-arm64-seed / M5 redesign (c9).
+
+────────────────────────────────────────────────────────────────────────────
+UPDATE (byte-DECREASE ACHIEVED — the deferred-from-r3 reduction lands):
+  The linux-arm64 seed gap is closed and the #else IS dropped. Decisive branch:
+  build_native_linux_arm64:84 ALREADY calls stage_resolve_runtime_a w/ TARGET=
+  linux-arm64 (consume hook exists) → NOT M-level redesign. Two plumbing edits
+  (regen arm64-linux target + resolver linux-arm64 case) freeze the 3rd seed;
+  the get/set #else (HX_ARR_ITEMS[idx]) is dropped to an unconditional native
+  call; single-TU dev builds (build_aprime stage4/5 + build_native_linux_arm64
+  stage4) link build/array_core_native.o (rt_hi Z2a mirror).
+  CAPTURED (aiden x86_64):
+    - byte-DECREASE = 1264 B / 24 L  (origin/main 412623B·8762L → 411359B·8738L)
+      [earlier −5 was a CONTAMINATED control: aiden local `main` ref = stale
+       array-r4 WIP commit 257a7e994, not origin/main; corrected w/ origin/main]
+    - build_aprime.sh smoke exit(42)==42 PASS (native array path in the compiler)
+    - nm build/runtime.a: rt_array_{get,set,len,pop}_native = T + hexa_array_get/set T
+    - arm64-linux seed: 254L, .globl 4/4 (no underscore, ELF), only extern bl
+      hexa_to_int, all __hx_* inlined (0 undefined refs)
+  blast-radius MEASURED: ALL authoritative gates (byteeq-real/faithful-3/release/
+  determinism/miscompile) use release_build → runtime.a (seed ar'd) + byteeq is an
+  OBJECT compare (cc-gen3.o, runtime-independent); build_aprime + build_native_
+  linux_arm64 are in NO workflow (dev single-TU) → #else drop is gate-safe.
+  Residual: aarch64 assembly of the linux-arm64 seed is unverified locally (no
+  cross-assembler on aiden/mini) → PR CI faithful linux-arm64 is the authority.
