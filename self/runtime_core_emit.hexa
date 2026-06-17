@@ -3291,10 +3291,16 @@ fn emit_runtime_core_to(out_path: str) {
     if buf.len() > 65536 { _flush_runtime_core(out_path, buf); buf = "" }
     buf = buf + "}\n"
     buf = buf + "#else\n"
+    // RT-NATIVE-ZEROC M4 map-r4: the standalone `in` / contains probe delegates
+    // to the raw-mem hexa-source body (map_core.hexa::rt_map_contains_native —
+    // same open-addressing walk as rt_map_get_native, returns a {0,1} TAG_INT
+    // HexaVal for slot-present, value-independent like the C `hmap_find>=0`). The
+    // native body enters via the same frozen map_core .s seed; the C wrapper keeps
+    // the NULL-table guard + boxes the key to a TAG_INT HexaVal.
+    buf = buf + "extern HexaVal rt_map_contains_native(HexaVal m, HexaVal key);\n"
     buf = buf + "int hexa_map_contains_key(HexaVal m, const char* key) {\n"
     buf = buf + "    if (!HX_MAP_TBL(m)) return 0;\n"
-    buf = buf + "    uint32_t h = hexa_fnv1a_str(key);\n"
-    buf = buf + "    return hmap_find(HX_MAP_TBL(m), key, h) >= 0;\n"
+    buf = buf + "    return (int)HX_INT(rt_map_contains_native(m, hexa_int((int64_t)(intptr_t)key)));\n"
     buf = buf + "}\n"
     buf = buf + "#endif\n"
     buf = buf + "\n"
