@@ -22,8 +22,9 @@
 # by runtime.c at link.
 #
 # Targets:
-#   darwin  → self/native/array_core_arm64.s   (arm64-apple-darwin, Mach-O)
-#   x86_64  → self/native/array_core_x86_64.s   (x86_64-linux-gnu,    ELF)
+#   darwin      → self/native/array_core_arm64.s        (arm64-apple-darwin, Mach-O)
+#   x86_64      → self/native/array_core_x86_64.s        (x86_64-linux-gnu,    ELF)
+#   arm64-linux → self/native/array_core_arm64-linux.s   (arm64-linux-gnu,     ELF)
 #
 # Requires a native compiler at $APRIME (default build/aprime_cc — the gen3
 # self-host binary) + a C driver ($CC, default clang) to cross-assemble.
@@ -70,6 +71,7 @@ emit_one() {
     grep -vE '^// ' "$out" > "$s"
     case "$triple" in
         x86_64-linux-gnu) [ "$(uname -s)" = Darwin ] && cc_extra="-target x86_64-linux-gnu" ;;
+        arm64-linux-gnu)  [ "$(uname -s)" = Darwin ] && cc_extra="-target aarch64-linux-gnu" ;;
     esac
     if $CC $cc_extra -c "$s" -o "$o" 2>/dev/null; then
         local t; t="$( (nm "$o" 2>/dev/null || echo) | grep -cE ' T _?rt_array_(get|set|len|pop)_native')"
@@ -81,12 +83,14 @@ emit_one() {
 }
 
 case "$WHICH" in
-    darwin) emit_one arm64-apple-darwin "$HX/self/native/array_core_arm64.s" "Mach-O, _rt_array_*_native underscore-prefixed; external _hexa_to_int" ;;
-    x86_64) emit_one x86_64-linux-gnu   "$HX/self/native/array_core_x86_64.s" "ELF, rt_array_*_native no underscore" ;;
+    darwin)      emit_one arm64-apple-darwin "$HX/self/native/array_core_arm64.s" "Mach-O, _rt_array_*_native underscore-prefixed; external _hexa_to_int" ;;
+    x86_64)      emit_one x86_64-linux-gnu   "$HX/self/native/array_core_x86_64.s" "ELF, rt_array_*_native no underscore" ;;
+    arm64-linux) emit_one arm64-linux-gnu    "$HX/self/native/array_core_arm64-linux.s" "ELF aarch64, rt_array_*_native no underscore; external hexa_to_int" ;;
     all)
         emit_one arm64-apple-darwin "$HX/self/native/array_core_arm64.s" "Mach-O, _rt_array_*_native underscore-prefixed; external _hexa_to_int"
         emit_one x86_64-linux-gnu   "$HX/self/native/array_core_x86_64.s" "ELF, rt_array_*_native no underscore"
+        emit_one arm64-linux-gnu    "$HX/self/native/array_core_arm64-linux.s" "ELF aarch64, rt_array_*_native no underscore; external hexa_to_int"
         ;;
-    *) echo "[regen_array_core] usage: $0 [darwin|x86_64|all]" >&2; exit 1 ;;
+    *) echo "[regen_array_core] usage: $0 [darwin|x86_64|arm64-linux|all]" >&2; exit 1 ;;
 esac
 echo "[regen_array_core] done."

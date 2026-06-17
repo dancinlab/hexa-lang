@@ -260,10 +260,11 @@ resolve_native_rt_hi_seed() {
 # the native array element path (HEXA_RT_ARRAY_NATIVE=1) so hexa_array_get/set
 # delegate to rt_array_get_native/set_native (raw-mem + __hx_make_val, gen2-only
 # intrinsics the hexat C-transpile bootstrap cannot lower — hence a frozen .s
-# seed, exactly like rt_str). On targets WITHOUT a seed (linux-arm64) or on an
-# assemble failure, HEXA_RT_ARRAY_NATIVE stays unset and the C #else element body
-# in runtime_core.c ships unchanged (the no-seed fallback). Override by
-# pre-setting HEXA_RT_ARRAY_NATIVE=0 to force the C path even when a seed exists.
+# seed, exactly like rt_str). All 3 production targets now carry a seed
+# (darwin-arm64 + linux-x86_64 + linux-arm64, r4). On an unknown target or an
+# assemble failure, HEXA_RT_ARRAY_NATIVE stays unset and the C element body in
+# runtime_core.c ships unchanged (the no-seed fallback). Override by pre-setting
+# HEXA_RT_ARRAY_NATIVE=0 to force the C path even when a seed exists.
 resolve_native_array_core_seed() {
     [ "${HEXA_RT_ARRAY_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
     [ -f build/array_core_native.o ] && { export HEXA_RT_ARRAY_NATIVE=1; return 0; }
@@ -276,7 +277,8 @@ resolve_native_array_core_seed() {
     case "$tgt" in
         darwin-arm64) seed="self/native/array_core_arm64.s" ;;
         linux-x86_64) seed="self/native/array_core_x86_64.s" ;;
-        *)            seed="" ;;   # linux-arm64 + unknown → C #else path
+        linux-arm64)  seed="self/native/array_core_arm64-linux.s" ;;
+        *)            seed="" ;;   # unknown → C #else path
     esac
     [ -n "$seed" ] && [ -f "$seed" ] || return 0
     mkdir -p build
@@ -335,8 +337,8 @@ build_runtime_a_from_source() {
 # HEXA_ZEROC_RT_HI to decide whether to synthesize runtime_hi_gen.c at all.
 resolve_native_rt_hi_seed
 # RT-NATIVE ARRAY-R4: assemble the arch-matched native array_core seed (sets
-# HEXA_RT_ARRAY_NATIVE=1 on the platforms that have one — darwin-arm64 + linux-
-# x86_64). No-seed targets (linux-arm64) keep the C #else element path.
+# HEXA_RT_ARRAY_NATIVE=1 on all 3 production targets — darwin-arm64 + linux-x86_64
+# + linux-arm64). Unknown targets keep the C element path.
 resolve_native_array_core_seed
 
 if [ -f self/runtime.c ]; then
