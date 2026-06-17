@@ -1,0 +1,127 @@
+F-M4-B4-ARRAY-R3-READHALF — array-core READ-half (get/set/len/pop) ported to native
+raw-mem hexa-source; PROVEN-correct in isolation; SHIP-integration = native .s seed (r4)
+================================================================================================
+verdict date: 2026-06-17 · lane: array r3 (RT-NATIVE-ZEROC fleet) · branch
+rt-native-array-r3-arraycore (HEAD 6e6396b8f) · base origin/main 8534e3173 (makeval r2 #3488)
+method c2/c9/c16 — every claim RAN on real x86_64 aiden via `harness pool on aiden`; nothing
+self-judged. Native compiler = build_aprime.sh → /tmp/aprime_gated (smoke exit42 PASS).
+
+TL;DR
+─────
+The four low-level array element primitives are now expressible as native raw-mem hexa-source
+bodies and PROVEN bit-correct in isolation, but they CANNOT be flipped on in any shipped build
+yet — they require the native-emitted frozen `.s` seed pipeline (the rt_hi mechanism), which is
+r4/M5 territory. So r3 ships: (1) the proven-correct bodies `stdlib/runtime/array_core.hexa`,
+(2) the emitter delegation gated behind a DEFAULT-OFF `HEXA_RT_ARRAY_NATIVE` macro (zero
+regression, fixpoint structurally preserved), (3) a 12/12 direct-call native gate as the
+re-runnable proof. The genuine ls-reduction (drop the #else) lands at r4 when the seed is ar'd
+in — NOT this round. Honest partial per c16; byte-count went UP (~1KB inert guards), as the
+mission anticipated.
+
+────────────────────────────────────────────────────────────────────────────────────────
+1. WHAT WAS PORTED (stdlib/runtime/array_core.hexa — NOT @pure, raw-mem)
+────────────────────────────────────────────────────────────────────────────────────────
+  rt_array_get_native(arr, idx)  = arr_ptr=__hx_payload_add(arr,0); items=__hx_ptr_load64(
+                                   arr_ptr,0); tag=__hx_ptr_load64(items, idx*16+0);
+                                   pay=__hx_ptr_load64(items, idx*16+8); __hx_make_val(tag,pay)
+  rt_array_set_native(arr,idx,v) = items[idx*16+0]=__hx_tag(v); items[idx*16+8]=
+                                   __hx_payload_add(v,0)  (in-place, alloc-free)
+  rt_array_len_native(arr)       = __hx_ptr_load64(arr_ptr, 8)  (HexaArr.len @8)
+  rt_array_pop_native(arr)       = get(len-1) then __hx_ptr_store64(arr_ptr,8,len-1) (pure
+                                   length decrement, NO realloc/free)
+  Offset arithmetic via __hx_payload_mul/add/sub (verified leaf intrinsics). NO `arr[idx]`
+  (r1 trap c1 — lowers to hexa_index_get→hexa_array_get = circular). Layout per the locked
+  b4_array_gate.c oracle: HexaArr{items@0,len@8,cap@16}/24 · HexaVal{tag@0,pay@8}/16 · stride16.
+  __hx_make_val (r2 #3488) re-stamps the element's REAL tag → no boxing-loss (WALL-1 down).
+
+────────────────────────────────────────────────────────────────────────────────────────
+2. DECISIVE PROOF — native emit + direct-call gate (c2, RAN on aiden x86_64)
+────────────────────────────────────────────────────────────────────────────────────────
+A. NATIVE EMIT (the native gen2 compiler lowers the raw-mem intrinsics):
+   /tmp/aprime_gated _drv.hexa --emit=obj --backend=native --target=x86_64-linux-gnu
+     -o array_core.o stdlib/runtime/array_core.hexa     → rc=0, 2152 B ELF
+   nm array_core.o:
+     T rt_array_get_native   T rt_array_set_native
+     T rt_array_len_native   T rt_array_pop_native
+     U hexa_to_int   ← the ONLY undefined symbol (from `as int` cast; normal runtime sym)
+   ★ ZERO undefined __hx_* — every intrinsic (__hx_ptr_load64/__hx_make_val/__hx_payload_*/
+     __hx_tag) INLINED to machine code. The frozen-.s-seed route is FEASIBLE.
+   Cross-emit arm64-apple-darwin + arm64-linux-gnu: rc=0 both (arm64-linux nm = 4×T) — bodies
+   compile on BOTH targets' codegen.
+
+B. DIRECT-CALL GATE (b4_array_native_gate via direct_gate.hexa — calls rt_array_*_native
+   DIRECTLY, linked: native-emitted array_core.o + standard runtime.a):
+     gcc dg.o array_core.o build/runtime.a → /tmp/dg ; ./dg → exit 12
+   ★ DIRECT_gate_exit=12 = PASS — all 12 checks:
+     · int get round-trip [0..2] · len==3 · set→get [1]=99 + neighbour intact
+     · MIXED TAGS: set "hi"(STR) + true(BOOL), get back EXACT — tag NOT flattened to INT
+       (the decisive __hx_make_val tag-faithfulness check, int neighbour untouched)
+     · pop returns last (true) + len shrinks 3→2 + survivor ("hi") intact
+   (float element dropped from the gate: `let x=3.5;print(x)` → 0.0 on this backend = a
+    SEPARATE pre-existing native-x86_64 float-literal emit gap, NOT an array bug — confirmed
+    by a bare-float probe; the C-oracle covers the float element image instead.)
+
+C. C ORACLE no-regression (b4_array_gate.c, the C #else path, macro OFF):
+   cc -O2 -I self b4_array_gate.c self/runtime.c -lm → GATE PASS — 32 checks, 0 fails.
+
+────────────────────────────────────────────────────────────────────────────────────────
+3. WHY IT CANNOT SHIP-INTEGRATE THIS ROUND (🧱 WALL-3 — bootstrap-transpile gap, c16 ≥2 lenses)
+────────────────────────────────────────────────────────────────────────────────────────
+First attempt imported array_core.hexa into compiler/main.hexa. The aprime/release build
+flattens main.hexa → hexat (C-transpile bootstrap) → gcc. hexat does NOT lower the raw-mem
+intrinsics (only self/codegen.hexa gen2 does):
+   RAN: build broke — ap_post.c: '__hx_payload_add'/'__hx_ptr_load64'/'__hx_make_val'/'__hx_tag'
+        undeclared (the intrinsics emit as undefined C calls under hexat).
+Lens-1 (transpile): hexat ≠ gen2 — only gen2 inlines these leaves. Confirmed: grep shows the
+  raw-mem intrinsics are used ONLY in standalone scratch .hexa gates (native-compiled directly),
+  NEVER in any compiler-imported module; array_core was the first such import = the break.
+Lens-2 (runtime path): the rt-stdlib runtime bodies enter via hexat too (extract_runtime_hi.sh
+  runs hexat); runtime_hi.hexa (the rt_str native-seed SSOT) uses ZERO __hx_ intrinsics by
+  design — it is dual-path (hexat C + frozen .s). A raw-mem-intrinsic body has NO hexat-
+  transpilable form, so it can enter ONLY via the native-emitted frozen .s seed
+  (self/native/runtime_hi_x86_64.s precedent), ar'd into runtime.a (build_aprime.sh:241-263).
+Lens-3 (build precedent): build_native_linux_* EXPLICITLY excludes the array stdlib from the
+  compiler flatten closure + C-link-fills rt_array_pop/shift (lines 117-140) — the architecture
+  deliberately keeps array primitives out of the hexa closure.
+DECISIVE REGRESSION (why gating was mandatory): build_aprime/release DEFINE
+  HEXA_HAS_HEXA_RT_STDLIB. With the delegation under that macro, hexa_array_get/set took the
+  native arm → link FAILED (`undefined reference to rt_array_get_native`, RAN). So the
+  delegation MUST be gated behind a dedicated DEFAULT-OFF macro until the seed lands.
+
+────────────────────────────────────────────────────────────────────────────────────────
+4. WHAT SHIPPED THIS ROUND (zero regression, fixpoint preserved)
+────────────────────────────────────────────────────────────────────────────────────────
+  · stdlib/runtime/array_core.hexa — the 4 proven native bodies (native-seed SSOT; NOT imported
+    by compiler/main.hexa — the import was added then REMOVED after the break, see §3).
+  · self/runtime_core_emit.hexa — hexa_array_get/set delegation gated behind
+    `#ifdef HEXA_RT_ARRAY_NATIVE` (DEFAULT-OFF) + extern decls in the same guard. 28 emitted-C
+    lines added, ALL inside the inert #ifdef or comments → the DEFAULT-compiled runtime_core.c
+    keeps the unchanged `HX_ARR_ITEMS(arr)[idx]` active arm (the preprocessor strips the
+    undefined-macro arm). build_aprime.sh on the branch: smoke exit42 PASS (regression FIXED).
+  · scripts/scratch/rt_native/b4_array_native_gate.hexa + the direct_gate proof.
+  BYTE DELTA (honest, the mission's decisive number): runtime_core.c emitter source +28 buf
+    lines (~+1KB C text); the COMPILED runtime_core.c active bytes = UNCHANGED vs main (inert
+    guards stripped). This is an INCREASE, not a decrease — the genuine ls-reduction (drop the
+    #else + active rt_array_*_native) is r4, exactly as the brief anticipated ("the real ls-
+    reduction only lands when M5 drops the #else"). selfhost-byteeq-real structurally preserved
+    (active compiled bytes identical; HEXA_RT_ARRAY_NATIVE undefined in every CI config).
+
+────────────────────────────────────────────────────────────────────────────────────────
+5. r4 — the native .s seed integration (the genuine ls-drop, now de-risked)
+────────────────────────────────────────────────────────────────────────────────────────
+The feasibility is PROVEN (§2A: native emit → T symbols, intrinsics inline, both targets).
+r4 = wire array_core like rt_hi:
+  (i)   freeze: native-emit array_core.hexa → self/native/array_core_{x86_64,arm64}.s seeds.
+  (ii)  build_aprime.sh + stage_resolve_runtime_a: assemble array_core_native.o from the seed +
+        ar into runtime.a (mirror the HEXA_ZEROC_RT_HI block 241-263) + define
+        HEXA_RT_ARRAY_NATIVE so the delegation goes live.
+  (iii) DROP the C #else for get/set (now the native .o supplies them) → the FIRST genuine
+        non-string runtime-substrate ls-reduction byte-delta.
+  DEPLETION TEST for r4: build_aprime.sh + faithful 3-target + selfhost-byteeq-real GREEN with
+    HEXA_RT_ARRAY_NATIVE on + the native .o linked; nm runtime.a shows rt_array_get/set_native
+    = T from the .o (not the #else); b4_array_native_gate exit12 on real arm64 + x86_64 hosts;
+    runtime_core.c byte-count DECREASES (the ls signal). Coordinates with alloc lane: this is
+    the array twin of the alloc lane's named "x86_64 rt_arena .s emitter + M5 relink" brick —
+    both are the M5 standalone-redesign (relink native rt_*.o), to land together.
+GO (proven-correct partial, zero-regression, r4 named). c9 honest: a real ls-reduction did NOT
+land this round — it is r4/M5 (build integration), and the bytes went UP by design.
