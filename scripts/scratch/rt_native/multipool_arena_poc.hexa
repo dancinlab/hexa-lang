@@ -1,0 +1,120 @@
+// RT-NATIVE M5-alloc-b1 PoC — multi-pool fixed-table bump arena over raw mmap.
+//
+// De-circularized blueprint for self/rt/alloc.hexa: the pool list is held in
+// RAW MEMORY (a fixed mmap'd table addressed by __hx_ptr_load64/store64), NOT a
+// hexa `[ArenaPool]` array + `.push()`. This removes the F-M5-ALLOC-CIRCULAR-DEP
+// cycle (arena-alloc -> array-push-grow -> arena-alloc) while keeping the full
+// arena semantics (grow across pools, mark/rewind, reset).
+//
+// Linux x86_64 ABI: mmap=9 (addr,len,prot,flags,fd,off), munmap=11.
+//   prot = 3 (PROT_READ|PROT_WRITE), flags = 0x22 (MAP_PRIVATE|MAP_ANONYMOUS)
+//
+// Proves (to falsify via aiden native-emit + run):
+//   1. module-global `let mut` int state survives the shipping native backend
+//   2. a raw-mem pool table replaces the [ArenaPool] array + .push()
+//   3. bump-alloc across a pool boundary, mark/rewind, reset all round-trip
+//   4. NON-CIRCULAR: nm/objdump witness ZERO hexa_array_push / malloc / calloc
+
+// Pool table: slot i at __tbl + i*24 -> {base @+0, size @+8, used @+16}.
+let mut __tbl = 0     // table region base (mmap'd at arena_init)
+let mut __np = 0      // live pool count
+
+fn POOL() -> int { return 1048576 }   // 1 MB per pool page
+fn MAXP() -> int { return 256 }       // up to 256 MB / arena
+
+fn arena_init() {
+    // mmap the fixed pool table: 256 slots * 24 bytes = 6144 bytes.
+    __tbl = __hx_syscall6(9, 0, MAXP() * 24, 3, 34, -1, 0)
+    __np = 0
+}
+
+fn tbl_base(i: int) -> int { return __hx_ptr_load64(__tbl, i * 24) }
+fn tbl_size(i: int) -> int { return __hx_ptr_load64(__tbl, i * 24 + 8) }
+fn tbl_used(i: int) -> int { return __hx_ptr_load64(__tbl, i * 24 + 16) }
+fn tbl_set_base(i: int, v: int) { __hx_ptr_store64(__tbl, i * 24, v) }
+fn tbl_set_size(i: int, v: int) { __hx_ptr_store64(__tbl, i * 24 + 8, v) }
+fn tbl_set_used(i: int, v: int) { __hx_ptr_store64(__tbl, i * 24 + 16, v) }
+
+// Map a new pool page + record it in the table (replaces new_pools.push(pool)).
+fn arena_grow() {
+    let base = __hx_syscall6(9, 0, POOL(), 3, 34, -1, 0)
+    tbl_set_base(__np, base)
+    tbl_set_size(__np, POOL())
+    tbl_set_used(__np, 0)
+    __np = __np + 1
+}
+
+fn align8(n: int) -> int { return ((n + 7) / 8) * 8 }
+
+fn arena_alloc(size: int) -> int {
+    let a = align8(size)
+    if __np == 0 { arena_grow() }
+    let cur = __np - 1
+    if tbl_used(cur) + a > tbl_size(cur) {
+        arena_grow()
+    }
+    let c = __np - 1
+    let addr = tbl_base(c) + tbl_used(c)
+    tbl_set_used(c, tbl_used(c) + a)
+    return addr
+}
+
+// mark encodes {pool_idx, used} into one int: pool_idx*(POOL+1) + used (used < POOL).
+fn arena_mark() -> int {
+    if __np == 0 { return -1 }
+    let cur = __np - 1
+    return cur * (POOL() + 1) + tbl_used(cur)
+}
+
+fn arena_rewind(mark: int) {
+    if mark < 0 {
+        let mut i = 0
+        while i < __np { __hx_syscall6(11, tbl_base(i), tbl_size(i), 0, 0, 0, 0)  i = i + 1 }
+        __np = 0
+        return
+    }
+    let pidx = mark / (POOL() + 1)
+    let used = mark - pidx * (POOL() + 1)
+    let mut i = __np - 1
+    while i > pidx {
+        __hx_syscall6(11, tbl_base(i), tbl_size(i), 0, 0, 0, 0)
+        i = i - 1
+    }
+    __np = pidx + 1
+    tbl_set_used(pidx, used)
+}
+
+fn arena_reset() {
+    let mut i = 0
+    while i < __np { __hx_syscall6(11, tbl_base(i), tbl_size(i), 0, 0, 0, 0)  i = i + 1 }
+    __np = 0
+}
+
+fn main() {
+    arena_init()
+    if __tbl <= 0 { exit(2) }
+
+    // Three 400KB allocs: pool0 holds 2 (800000 < 1MB), 3rd forces a grow -> pool1.
+    let p0 = arena_alloc(400000)
+    __hx_ptr_store64(p0, 0, 111)
+    let p1 = arena_alloc(400000)
+    __hx_ptr_store64(p1, 0, 222)
+    let p2 = arena_alloc(400000)
+    __hx_ptr_store64(p2, 0, 333)
+
+    if __hx_ptr_load64(p0, 0) + __hx_ptr_load64(p1, 0) + __hx_ptr_load64(p2, 0) != 666 { exit(3) }
+    if __np != 2 { exit(4) }
+
+    // mark -> alloc -> rewind: a fresh alloc must reuse the marked address.
+    let m = arena_mark()
+    let pt = arena_alloc(1000)
+    __hx_ptr_store64(pt, 0, 999)
+    arena_rewind(m)
+    let pt2 = arena_alloc(1000)
+    if pt2 != pt { exit(5) }
+
+    arena_reset()
+    if __np != 0 { exit(6) }
+
+    exit(0)
+}
