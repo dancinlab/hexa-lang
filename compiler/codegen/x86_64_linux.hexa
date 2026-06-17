@@ -1634,10 +1634,13 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // UNLOCK-2c: signed-i64 payload arithmetic → int HexaVal {TAG_INT, …}.
         // add/sub/imul into r10 (a.pl), then box as TAG_INT.
         if (s.op == "__hx_payload_add" || s.op == "__hx_payload_sub"
-            || s.op == "__hx_payload_mul") && len(s.args) >= 2 {
+            || s.op == "__hx_payload_mul" || s.op == "__hx_payload_and"
+            || s.op == "__hx_payload_xor") && len(s.args) >= 2 {
             let mut _aop = "add"
             if s.op == "__hx_payload_sub" { _aop = "sub" }
             if s.op == "__hx_payload_mul" { _aop = "imul" }
+            if s.op == "__hx_payload_and" { _aop = "and" }
+            if s.op == "__hx_payload_xor" { _aop = "xor" }
             buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)
             buf = _x86_hv_payload(buf, s.args[1], st, rm, "r11", opts)
             buf.push(_x86_instr2(_aop, _x86_op_reg("r10"), _x86_op_reg("r11"),
