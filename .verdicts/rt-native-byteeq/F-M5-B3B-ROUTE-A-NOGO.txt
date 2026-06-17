@@ -1,0 +1,79 @@
+F-M5-B3B-ROUTE-A-NOGO — the low-risk b3b "Route A" (subset #else-drop) yields ZERO
+                         ls reduction: the seed-equivalent leaves (sys_*/hexa_ptr_*)
+                         have NO C body in the shipping runtime (it uses libc), and
+                         the only C body that IS droppable (the arena) is a different
+                         data structure (linked-block C vs raw-mem seed) = all-or-
+                         nothing = Route B. (2026-06-18, source+grep confirmed)
+================================================================================
+LANE: M5 standalone-redesign, b3b (RT-NATIVE-ZEROC fleet).
+GOAL: decide which b3b route actually produces the first alloc-lane ls reduction.
+Refines F-M5-B3B-ARENA-FEATURE-GAP (which said "measure per-function"); the
+measurement target turns out to be EMPTY for Route A.
+
+================================================================================
+1. THE FINDING (c9 — grep + source read, decisive)
+================================================================================
+  (A) sys_* / hexa_ptr_* — the seed's pure, data-structure-INDEPENDENT leaves
+      (the only candidates for a low-risk subset drop) have NO C body in the
+      shipping runtime emit SSOT (self/runtime_core_emit.hexa / runtime_emit.hexa):
+        grep sys_write/sys_mmap/sys_read/sys_exit/sys_getrandom C-body → 0 hits
+        grep hexa_ptr_alloc/hexa_ptr_free C-body                      → 0 hits
+      The shipping runtime issues syscalls via LIBC (write/mmap/fwrite — 9 call
+      sites in runtime_core_emit.hexa), NOT via a hand-rolled sys_* layer. So
+      self/rt/syscall.hexa's sys_* family is a SELF-HOST (self/codegen) module,
+      DEAD in the shipped runtime — there is no C body to drop. Dropping them =
+      ZERO ls reduction (nothing to delete).
+
+  (B) arena — the ONLY droppable C body is the arena (runtime_core_emit.hexa):
+        :4005 void* hexa_arena_alloc(size_t n)   — linked-block "shared block chain"
+        :4055 HexaArenaMark hexa_arena_mark(void)
+        :4066 void hexa_arena_rewind(HexaArenaMark m)
+        :4081 void hexa_arena_reset(void)
+      + the RSS-hygiene set (frame_clean:4202 / slot_dirty:4233 / env-probe
+      hexa_arena_on:3972 / heap-promote). This is a LINKED-BLOCK allocator with a
+      C-struct ABI (HexaArenaMark). The b3a seed is a RAW-MEM POOL TABLE with an
+      int mark — a DIFFERENT data structure + ABI. You cannot drop mark/rewind/
+      reset to the seed while keeping alloc/on/frame_clean in C: they share one
+      arena state, so it is ALL-OR-NOTHING. That all = Route B.
+
+  ⇒ Route A (subset, low-risk partial drop) is a NO-GO: its only candidates
+    (sys_*/hexa_ptr_*) have no C body to drop, and the arena cannot be partially
+    replaced. The first alloc-lane ls reduction REQUIRES Route B.
+
+================================================================================
+2. CLASSIFICATION (c16) — wall type (d), scope sharpened (NOT a dead end)
+================================================================================
+b3b is NOT a small seed→drop like the read-half accessors. The first ls cut =
+ROUTE B = re-author self/rt/alloc.hexa to be a FULL feature-equivalent of the C
+arena: linked-block (or behaviorally-identical) allocation + the HexaArenaMark
+ABI + frame_clean/slot_dirty RSS-hygiene + env-probe + heap-promote, THEN ar the
+seed + drop the whole C arena `#else`. Gate: seed-built runtime.a passes byteeq-
+real + faithful 3-target + miscompile-zero + the runtime's RSS/arena behavior is
+preserved (the b2 simple-arena RUN exit0 is necessary but NOT sufficient — it
+lacks the hygiene the shipped arena guarantees).
+
+  This is a genuine multi-session port (the arena is the most feature-rich single
+  C body in the substrate), parallel-independent from r3 = map_* (make_val
+  construct-half, which DOES have droppable C bodies and is the lower-risk next ls
+  cut). RECOMMENDED ORDER: r3 map_* first (real ls reduction, read-half-like
+  mechanism, lower risk) THEN b3b Route B (arena full-feature) as the larger lift.
+
+================================================================================
+3. HONEST RESIDUAL (c9)
+================================================================================
+  · This is a SOURCE+grep finding (no aiden build): the absence of sys_*/hexa_ptr_*
+    C bodies (grep 0) + the arena's linked-block-vs-raw-mem data-structure
+    mismatch are directly verified, not assumed. It SUPERSEDES the "measure each
+    function" framing of F-M5-B3B-ARENA-FEATURE-GAP: there is nothing to measure
+    for Route A (empty target), and Route B is all-or-nothing.
+  · `ls self/*.c == ∅` unchanged. The honest path to the FIRST ls reduction is now
+    r3 map_* (lower-risk, has droppable C bodies) with b3b Route B (arena full-
+    feature) as the larger multi-session lift after it.
+  · b2 RUN exit0 stands (simple arena runs) but is explicitly NOT sufficient for
+    Route B (the shipped arena guarantees RSS-hygiene the simple seed lacks).
+
+CONCLUSION: b3b Route A (low-risk subset drop) is a NO-GO — sys_*/hexa_ptr_* have
+no shipping C body (libc-backed), and the arena is all-or-nothing (linked-block C
+≠ raw-mem seed). The first alloc-lane ls reduction requires Route B (arena full-
+feature port), a genuine multi-session lift; r3 map_* is the lower-risk next ls
+cut to take first.
