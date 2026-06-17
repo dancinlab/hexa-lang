@@ -67,11 +67,6 @@ import "../stdlib/runtime/thread.hexa"
 import "../stdlib/runtime/net.hexa"
 import "../stdlib/runtime/posix.hexa"
 import "../stdlib/runtime/numeric.hexa"
-// RT-NATIVE-ZEROC M4 B4 array-core READ-half — raw-mem hexa-source bodies for
-// the low-level array element primitives (get/set/pop/len) that runtime_core.c
-// kept C-side until __hx_make_val (r2 #3488) unblocked tag-faithful element
-// reconstruction. runtime_core_emit.hexa's HEXA_HAS_HEXA_RT_STDLIB arm delegates.
-import "../stdlib/runtime/array_core.hexa"
 import "../stdlib/runtime/io.hexa"
 import "./emit/asm.hexa"
 import "./emit/macho_arm64.hexa"
