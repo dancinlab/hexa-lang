@@ -1,0 +1,86 @@
+F-M5-GSLOT-DATA-SLOT — x86_64 codegen now registers module-global slot labels so
+                        emit_asm emits a `.data g<id>:` slot (the g0-undefined link
+                        gap is RESOLVED); the b2 gate then LINKs but RUN segfaults,
+                        isolating a SEPARATE x86_64 global-HexaVal value-model bug
+                        as the next wall. (2026-06-18, RAN aiden aprime_gslot)
+================================================================================
+LANE: M5 standalone-redesign, gslot sub-unit (RT-NATIVE-ZEROC fleet).
+GOAL: resolve GAP2 from F-M5-SYSCALL-C-PTRADDR — the `g<id>` module-global slot
+undefined at link — so the b2 alloc+syscall gate LINKs + RUNs exit 0.
+
+================================================================================
+1. WHAT LANDED (the root-cause fix, c1)
+================================================================================
+ROOT CAUSE (RAN): compiler/codegen/x86_64_linux.hexa:2493 returned `globals: []`
+while the same backend REFERENCES module-globals as `g<id>` (_x86_op_resolve,
+line 732/1054). arm64_darwin.hexa:3217 already builds `gnames` (line 3188:
+`"g"+id`). So x86_64 emitted `g<id>` references with NO defining slot → a
+standalone single-module emit had `.s` with 17 `g0` refs and ZERO `.data` slot →
+link "undefined reference to g0". The whole-program compiler build hides this
+(its data section is supplied differently); the read-half lane never hit it (no
+module-global state). alloc.hexa's `__arena_tbl` is the first.
+
+FIX: mirror arm64 — build `gnames` (bare `g<id>` for ELF) from module.globals and
+return `globals: gnames`. emit_asm (asm.hexa:653) then emits `.data` +
+`g<id>: .quad 0 .quad 0` per global.
+
+================================================================================
+2. RESULT (c2 — aiden RAN, aprime_gslot rebuild smoke exit42 PASS)
+================================================================================
+b2 gate (flatten alloc+syscall + driver):
+  emit rc = 0
+  .s now contains:  `.section .data` / `g0:` / `.quad 0` / `.quad 0`  ✓ (was absent)
+  as   rc = 0
+  link (naive runtime.o) rc=1 = `multiple definition of hexa_arena_mark/rewind/
+       reset` — the gate links BOTH the native obj AND the C runtime.o alloc; the
+       true dup set is EXACTLY those 3 (comm of native∩C T-symbols). Weakening
+       just those 3 in runtime.o (native overrides C — the b3-relink semantics) →
+       link rc = 0. ⇒ GAP2 (g0 link) is RESOLVED.
+  RUN  exit = 139 (SIGSEGV)   ← NEW, separate wall.
+
+  ISOLATION: the b1 PoC (global-FREE, arena state in the table region) RAN exit 0;
+  the only structural difference in b2 is the module-global `__arena_tbl` (g0). So
+  the segfault is in the x86_64 GLOBAL value path, not the arena logic (b1 proved
+  the arena correct). The likely cause: a hexa module-global is a 16-byte HexaVal
+  slot (`.quad 0`(tag) + `.quad 0`(payload)); if the x86_64 global load/store
+  (`mov scratch,[rip+g0]`) reads/writes only ONE 8-byte word (tag, not payload),
+  then `__arena_tbl` reads back the tag (0) instead of the mmap'd pointer → a
+  near-null deref. (NOT yet confirmed by lldb — stated as the leading hypothesis,
+  c9.)
+
+================================================================================
+3. CLASSIFICATION (c16) + NAMED NEXT BRICK
+================================================================================
+WALL TYPE (c) substrate/codegen — GAP2's LINK half RESOLVED (.data slot emits);
+a separate x86_64 global-HexaVal value-model bug surfaces at RUN.
+
+  NAMED M5-gslot-val: "Verify + fix the x86_64 module-global value model — a
+   global holding a 16-byte HexaVal must load/store BOTH eightbytes (tag@[rip+g],
+   payload@[rip+g+8]), not a single 8-byte word. Confirm with lldb on the b2 gate
+   (does `__arena_tbl` read back the mmap ptr or 0?), then fix _x86_op_resolve /
+   the global store path to move the full 16 bytes (arm64 may need the same
+   audit). DEPLETION TEST: b2 gate RUN exit 0 (the existing emit+as+link-green
+   harness, native-overrides-C via the 3-symbol weaken). Then b3 = standalone-
+   relink (native rt_*.o replaces the C #else, no weaken needed) → write #else
+   drop = ls reduction."
+
+================================================================================
+4. HONEST RESIDUAL (c9)
+================================================================================
+  · GAP2's LINK half is FIXED (the .data slot — a real x86_64-vs-arm64 parity bug,
+    arm64 was already correct). The b2 gate now emits+assembles+LINKS clean. But
+    it does NOT yet RUN green — a SEPARATE x86_64 global-HexaVal value-model bug
+    (segfault) is the next wall, isolated by the b1(global-free, exit 0) vs
+    b2(global, segfault) contrast. Stated plainly, not hidden.
+  · The 3-symbol weaken is a GATE-HARNESS device (native overrides C alloc) that
+    mimics the b3 relink; it is not shipped. b3 relink replaces the C #else so no
+    weaken is needed there.
+  · This is a codegen edit (x86_64 globals []→gnames). It changes x86_64 emit ONLY
+    for modules that HAVE module-globals; gen3≡gen4 is the CI byteeq-real
+    authority (the fix is the same shape arm64 already ships). `ls self/*.c == ∅`
+    unchanged.
+
+CONCLUSION: the g0 link gap is closed (x86_64 now emits the .data module-global
+slot, matching arm64); the b2 gate links clean and the remaining blocker is a
+narrower, isolated x86_64 global-HexaVal value-model segfault (M5-gslot-val) —
+not the slot, not the arena (b1-proven), not syscall (a/b/c done).
