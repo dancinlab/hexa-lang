@@ -1620,8 +1620,10 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.op == "__hx_payload_ge" { _scc = "setge" }
             if s.op == "__hx_payload_eq" { _scc = "sete" }
             if s.op == "__hx_payload_ne" { _scc = "setne" }
-            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)
+            // Load b→r11 before a→r10 (nested-intrinsic clobber fix — see the
+            // arithmetic block); cmp r10,r11 reg assignment is unchanged.
             buf = _x86_hv_payload(buf, s.args[1], st, rm, "r11", opts)
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)
             buf.push(_x86_instr2("cmp", _x86_op_reg("r10"), _x86_op_reg("r11"),
                              s.op + ": cmp payloads"))
             buf.push(_x86_instr1(_scc, _x86_op_reg("al"), s.op + ": al = predicate"))
@@ -1644,8 +1646,14 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.op == "__hx_payload_mul" { _aop = "imul" }
             if s.op == "__hx_payload_and" { _aop = "and" }
             if s.op == "__hx_payload_xor" { _aop = "xor" }
-            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)
+            // Load b→r11 BEFORE a→r10: a spilled operand resolves through r10
+            // (_x86_op_resolve line ~574), so loading b LAST would clobber a's
+            // value already in r10. Loading b first (r10 free) then a→r10 avoids
+            // the nested-intrinsic clobber (NESTING finding, map_core.hexa). Reg
+            // assignment (a=r10, b=r11) is unchanged, so non-commutative sub/imul
+            // stay correct.
             buf = _x86_hv_payload(buf, s.args[1], st, rm, "r11", opts)
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)
             buf.push(_x86_instr2(_aop, _x86_op_reg("r10"), _x86_op_reg("r11"),
                              s.op + ": r10 = a.pl " + _aop + " b.pl"))
             if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
