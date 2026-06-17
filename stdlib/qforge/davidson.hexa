@@ -188,6 +188,24 @@ pub fn qforge_davidson(H_apply, diag: [float], n: int, nbands: int,
                 rb = rb + 1
             }
             m = len(basis)
+            // DEGENERATE-COLLAPSE REFILL (c1 · M4 root fix): on a near-degenerate
+            // manifold dv_orthonormalize drops linearly-dependent Ritz vectors, so
+            // the rebuilt basis can have m < nbands. The next Ritz loop computes
+            // `col = m-1-bk` for bk in [0,nbands): when bk >= m that index goes
+            // NEGATIVE → vals[col]/vecs[col] read out of bounds → a garbage Ritz
+            // vector lands in evecs → downstream st_project_out occ[j][i] SIGSEGVs.
+            // A Davidson subspace must span >= nbands dims to extract nbands Ritz
+            // pairs, so refill with fresh orthonormal unit vectors (standard restart)
+            // until m == nbands.
+            let mut rf = 0
+            while m < nbands && rf < n {
+                let mut e = []
+                let mut ie = 0
+                while ie < n { if ie == rf { e.push(1.0) } else { e.push(0.0) } ; ie = ie + 1 }
+                let on2 = dv_orthonormalize(basis, m, e, n)
+                if len(on2) == n { basis.push(on2) ; m = m + 1 }
+                rf = rf + 1
+            }
         }
         let mut ci = 0
         while ci < len(corrections) {
