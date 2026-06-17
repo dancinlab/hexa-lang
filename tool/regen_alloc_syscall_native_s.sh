@@ -76,6 +76,34 @@ emit_one() {
             inmain!=1 { print }
         '
     } > "$out"
+    # x86_64 codegen gap (measure-4/5): the seed REFERENCES `.LCstr0`
+    # (`lea ...[rip+.LCstr0]` for the sys_getrandom "/dev/urandom" fallback in
+    # syscall.hexa) but the x86_64 string-literal rodata emitter does not define
+    # it (arm64 emits it into __TEXT,__const correctly). Without the definition
+    # `clang -c` fails: `Undefined temporary symbol .LCstr0`. Re-apply the rodata
+    # definition here so the regenerated seed assembles (mirrors the manual fix
+    # measure-4 landed in the frozen .s). Remove once the x86_64 codegen emits
+    # string-literal rodata for the seed directly.
+    case "$triple" in
+        x86_64-*)
+            if grep -q 'rip+\.LCstr0' "$out" && ! grep -qE '^\.LCstr0:' "$out"; then
+                python3 - "$out" <<'PY'
+import sys
+f=sys.argv[1]; s=open(f).read()
+block=('.section .rodata\n.LCstr0:\n'
+       '    .byte 0x2f, 0x64, 0x65, 0x76, 0x2f, 0x75, 0x72, 0x61, '
+       '0x6e, 0x64, 0x6f, 0x6d, 0x00\n.text\n')
+anchor='.section .hexa.cap,"",@progbits'
+if anchor in s:
+    s=s.replace(anchor, block+anchor, 1)
+else:
+    s=s+'\n'+block
+open(f,'w').write(s)
+print('  [regen_alloc_syscall] re-applied .LCstr0 rodata (x86_64 codegen gap)')
+PY
+            fi
+            ;;
+    esac
     # Sanity: the stripped seed must NOT export main.
     if grep -qE '^[[:space:]]*\.globl[[:space:]]+_?main$' "$out"; then
         echo "[regen_alloc_syscall] ERROR: $out still exports main after strip" >&2; exit 1

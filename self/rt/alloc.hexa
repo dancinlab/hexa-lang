@@ -51,6 +51,19 @@ fn __env_extend(base: int, size: int) {
 fn hexa_arena_env_lo() -> int { return __arena_env_lo }
 fn hexa_arena_env_hi() -> int { return __arena_env_hi }
 
+// ── Block-chain iteration surface (measure-5 heapify wiring) ───────────
+// The C hexa_val_heapify TAG_STR slow-path walks the live arena block chain to
+// detect an arena-resident string and strdup it before the rewind. The C arena
+// exposed `__hexa_arena.head` + per-block `b->next`/`b->data`/`b->cap`; in native
+// mode those C fields are NULL (the seed owns __arena_head, a separate chain), so
+// the C walk found nothing → arena strings dangled past rewind → tag corruption.
+// Export the seed's head pointer + a data-pointer getter so the C heapify can
+// redirect onto the seed's chain under HEXA_RT_ALLOC_NATIVE. (next/cap/used
+// already exported via __blk_next/__blk_cap/__blk_used below.)
+fn hexa_arena_head() -> int { return __arena_head }
+fn hexa_arena_cur() -> int { return __arena_cur }
+fn __blk_data(b: int) -> int { return b + BLOCK_HDR() }
+
 @pure fn align_up(n: int, align: int) -> int {
     return ((n + align - 1) / align) * align
 }
