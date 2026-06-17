@@ -101,7 +101,8 @@ pub fn rt_array_shift_native(arr: HexaVal) -> HexaVal {
     let arr_ptr = __hx_payload_add(arr, 0)
     let items = __hx_ptr_load64(arr_ptr, 0)
     let len = __hx_ptr_load64(arr_ptr, 8)
-    let first = rt_array_get_native(arr, 0)          // items[0], tag-faithful
+    let zero = __hx_payload_add(0, 0)                // HexaVal{TAG_INT, 0} (idx param is HexaVal)
+    let first = rt_array_get_native(arr, zero)       // items[0], tag-faithful
     let last = __hx_payload_sub(len, 1)              // n - 1
     let mut i = 0
     while __hx_payload_lt(i, last) {
