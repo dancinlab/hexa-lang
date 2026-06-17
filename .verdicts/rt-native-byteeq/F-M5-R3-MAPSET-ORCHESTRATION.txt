@@ -1,0 +1,73 @@
+F-M5-R3-MAPSET-ORCHESTRATION — r3 map_set is NOT a read-half-style pure-algorithm
+                                port: hexa_map_set_impl is a C MEMORY-MANAGEMENT
+                                ORCHESTRATION (hmap_alloc/hmap_grow/hxlcl_strdup/
+                                malloc/realloc + arena-promote + valstruct), so
+                                native-porting it just re-wraps C calls — the real
+                                ls reduction is the arena itself (Route B), not the
+                                map surface. (2026-06-18, C body read)
+================================================================================
+LANE: M5 standalone-redesign, r3 = map_* construct-half (RT-NATIVE-ZEROC fleet).
+GOAL: assess r3 map_set native-port value (was "lower-risk first ls cut").
+Refines F-M5-B3B-ROUTE-A-NOGO's "r3 first" recommendation with the actual C body.
+
+================================================================================
+1. THE FINDING (c9 — runtime_core_emit.hexa:2967-3031 read, decisive)
+================================================================================
+hexa_map_set_impl's body is NOT a self-contained raw-mem algorithm (unlike the
+read-half rt_map_get_native, which is a pure probe with ZERO extern calls). It is
+an ORCHESTRATION of C memory-management primitives:
+  · HX_IS_VALSTRUCT(m) → hexa_valstruct_set_by_key  (a whole separate path)
+  · hmap_alloc(HMAP_INIT_CAP)                        (lazy table alloc — arena/C)
+  · hmap_find(t,key,h)                               (the read-half probe, reusable)
+  · t->len*100/t->ht_cap >= HMAP_LOAD_MAX → hmap_grow(t)  (load-factor REHASH — C)
+  · hxlcl_strdup(key)                                (key intern — arena/C)
+  · order_keys/order_vals append + order_cap*2 grow via malloc/realloc + arena-
+    promote (from_arena branch)                      (C heap management)
+The pieces that DO the work (alloc, grow/rehash, strdup, realloc) are C functions.
+A native rt_map_set_native would CALL those same C functions (extern) — it would
+re-wrap the orchestration, NOT replace the substrate. ls drop = the ~50-line
+set_impl orchestration only; the heavy lifting (hmap_alloc/grow/strdup) STAYS C.
+
+================================================================================
+2. CLASSIFICATION (c16) — the honest alloc-lane shape
+================================================================================
+This SHARPENS the campaign picture: the read-half (#3494-3506) drained the PURE-
+ALGORITHM ls reductions (probe/strcmp/fnv1a/slide — no allocation, no extern). The
+alloc/construct lane's remaining bodies are all MEMORY-MANAGEMENT or orchestration
+OF it, and memory management = the arena (hmap_alloc/grow lazy-alloc + rehash over
+hexa_arena_alloc). So:
+  · The REAL substrate ls reduction is the ARENA itself = b3b Route B (port the C
+    linked-block arena + RSS-hygiene to .hexa). Hard, but it is THE floor.
+  · map_set/keys native-ports are LOW-VALUE until Route B lands: they would call C
+    hmap_alloc/grow/strdup, dropping only the thin orchestration while the heavy C
+    stays. And they DEPEND on the arena (hmap_alloc/grow), so they naturally come
+    AFTER Route B, not before.
+  ⇒ ORDER RE-CORRECTED: the "r3 first" recommendation (F-M5-B3B-ROUTE-A-NOGO) was
+    based on "r3 has droppable C bodies" — true, but those bodies are orchestration
+    over the arena, so r3's VALUE is gated on Route B. The honest sequence is:
+    **b3b Route B (arena full-feature → .hexa) FIRST** (the real floor reduction),
+    THEN map_set/keys native become genuine (they can drop the now-native
+    alloc/grow too). r3 keys (order-array traversal → array build) is the one
+    lower-coupling piece, but still array-alloc dependent.
+
+================================================================================
+3. HONEST RESIDUAL (c9)
+================================================================================
+  · Source-read finding (no build). It CORRECTS the prior "r3 first, lower-risk"
+    framing: r3 map_set is arena-coupled orchestration, low standalone value, so
+    Route B (arena) is the real first substrate ls reduction and should lead.
+  · This also names the campaign's honest shape: the EASY (pure-algorithm) ls
+    reductions are EXHAUSTED (read-half). What remains is the memory substrate
+    (arena/libc floor) — genuinely hard (Route B) — plus thin orchestration whose
+    value is gated on the substrate. `ls self/*.c == ∅` is a substrate-floor
+    problem now, not a port-more-leaves problem.
+  · `ls self/*.c == ∅` unchanged. Next real lever = b3b Route B (arena → .hexa,
+    full feature-equivalence), the hardest single body in the substrate; then
+    map_set/keys; then io/fmt/proc/fs/intern/math (each likewise substrate- or
+    libc-coupled — to be assessed per module).
+
+CONCLUSION: r3 map_set is C memory-management orchestration (hmap_alloc/grow/
+strdup/malloc + arena-promote), not a read-half-style pure-algorithm port — native-
+porting it re-wraps C calls and is arena-coupled. The real next ls reduction is
+b3b Route B (port the C arena to .hexa); the easy pure-algorithm reductions are
+exhausted and what remains is the memory substrate floor.
