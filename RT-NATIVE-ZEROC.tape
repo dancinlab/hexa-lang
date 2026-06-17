@@ -165,3 +165,33 @@ NEXT r3 = map_* allocator(arena over __hx_syscall6 mmap + __hx_ptr_*)+construct(
 PROCESS: shared-worktree collision — array lane reset --hard + committed array-r3 WIP onto this
   branch (c39f9c8a5); preserved as tag recover/array-r3-wip-c39f9c8a5, branch re-based clean on
   origin/main 8534e3173. fleet lanes must not share a worktree dir.
+## 2026-06-17 — array r3 (READ-half): get/set/len/pop native raw-mem; PROVEN; ship=seed(r4)
+RT-NATIVE-ZEROC array r3. branch rt-native-array-r3-arraycore (HEAD 6e6396b8f). base 8534e3173.
+heavy on aiden x86_64 (build_aprime.sh → /tmp/aprime_gated, smoke exit42 PASS).
+SHIPPED: stdlib/runtime/array_core.hexa (rt_array_{get,set,len,pop}_native raw-mem over
+  __hx_payload_add(arr,0)=HexaArr* + __hx_ptr_load64/store64 at items+idx*16+{0,8} +
+  __hx_make_val for tag-faithful element reconstruct; NO arr[idx] = no circular). delegation
+  in self/runtime_core_emit.hexa gated #ifdef HEXA_RT_ARRAY_NATIVE (DEFAULT-OFF).
+PROVEN (RAN aiden, c2):
+  · native emit array_core.o → nm rt_array_*_native = T, ZERO undefined __hx_* (intrinsics
+    inline) = frozen-.s-seed route FEASIBLE. cross-emit arm64-darwin+arm64-linux rc=0.
+  · direct-call gate (b4_array_native_gate via direct_gate, native array_core.o + runtime.a)
+    = exit 12 PASS: int get/set + len + MIXED-TAG set "hi"(STR)/true(BOOL) read EXACT (tag NOT
+    flattened, the __hx_make_val faithfulness) + pop last + len shrink + survivor intact.
+  · C oracle b4_array_gate.c (C #else path) = GATE PASS 32/32 (no-regression).
+🧱 WALL-3 (bootstrap-transpile gap, c16 ≥2 lenses): importing array_core.hexa into
+  compiler/main.hexa BROKE the build — hexat (C-transpile bootstrap) does NOT lower the raw-mem
+  intrinsics (only self/codegen.hexa gen2 does); __hx_payload_add/__hx_ptr_load64/__hx_make_val
+  undeclared (RAN). import REMOVED. runtime_hi.hexa (rt_str seed SSOT) uses ZERO __hx_ by design;
+  the bodies enter ONLY via the native frozen .s seed (rt_hi mechanism build_aprime:241-263).
+  build_aprime/release define HEXA_HAS_HEXA_RT_STDLIB → gating under THAT macro broke the link
+  (undefined rt_array_get_native) → dedicated DEFAULT-OFF HEXA_RT_ARRAY_NATIVE → build_aprime
+  PASS, fixpoint preserved (28 inert emitted-C lines, compiled active bytes unchanged).
+BYTE DELTA (honest): runtime_core.c +~1KB inert text (INCREASE, not decrease) — the genuine
+  ls-drop (#else removal) is r4, as briefed. selfhost-byteeq-real structurally preserved.
+r4 = freeze array_core_{x86_64,arm64}.s + ar into runtime.a + define HEXA_RT_ARRAY_NATIVE +
+  DROP get/set #else (first non-string runtime-substrate ls byte-DECREASE); depletion test =
+  build_aprime + faithful-3target + byteeq-real GREEN w/ macro on + native .o linked + nm
+  runtime.a rt_array_*_native=T (from .o not #else) + b4_array_native_gate exit12 on real
+  arm64+x86_64 + runtime_core.c bytes DECREASE. array twin of alloc lane's M5 relink brick.
+  verdict F-M4-B4-ARRAY-R3-READHALF. GO (proven partial, zero-regression).
