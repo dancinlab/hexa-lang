@@ -27,13 +27,15 @@
 //   HexaMapSlot { char* key @0;  uint32_t hash @8;  int order_idx @12 }  stride 16
 //   vals[] stride = sizeof(HexaVal) = 16:  tag @ +0,  payload @ +8.
 //   The lookup `key` arrives as a raw `const char*` (NUL-terminated), passed as
-//   an int64 pointer value (the C wrapper casts it) so the body reads its bytes
-//   with __hx_ptr_load8.
+//   an int64 pointer value BOXED as a TAG_INT HexaVal (C wrapper:
+//   hexa_int((int64_t)key)) — hexa fns receive every param as a 16-byte HexaVal,
+//   so a bare `int` param mis-aligns the call ABI (measured: int param → 0). The
+//   __hx_ptr_load8 / __hx_payload_* leaves extract the payload word regardless.
 
 // rt_map_fnv1a_native: FNV-1a over the NUL-terminated key bytes at `keyp`.
 // 32-bit arithmetic — mask to 0xFFFFFFFF after each multiply so the result is
 // byte-identical to the C `uint32_t` hexa_fnv1a_str.
-fn rt_map_fnv1a_native(keyp: int) -> int {
+fn rt_map_fnv1a_native(keyp: HexaVal) -> int {
     let mut h = 2166136261
     let mut i = 0
     let mut b = __hx_ptr_load8(keyp, 0)
@@ -49,7 +51,7 @@ fn rt_map_fnv1a_native(keyp: int) -> int {
 
 // rt_map_strcmp0_native: 0 when the two NUL-terminated C strings are equal,
 // else 1 (sign-irrelevant — hmap_find only tests == 0). Raw byte walk.
-fn rt_map_strcmp0_native(a: int, b: int) -> int {
+fn rt_map_strcmp0_native(a: HexaVal, b: HexaVal) -> int {
     let mut j = 0
     let mut ca = __hx_ptr_load8(a, 0)
     let mut cb = __hx_ptr_load8(b, 0)
@@ -68,7 +70,7 @@ fn rt_map_strcmp0_native(a: int, b: int) -> int {
 // NULL-table guards + the not-found stderr message + key coercion, and delegates
 // only the in-table probe. The probe is bounded by ht_cap steps (the C `while
 // slots[idx].key` terminates at an empty slot; load < 75% guarantees one).
-pub fn rt_map_get_native(m: HexaVal, keyp: int) -> HexaVal {
+pub fn rt_map_get_native(m: HexaVal, keyp: HexaVal) -> HexaVal {
     let map_ptr = __hx_payload_add(m, 0)                 // HexaMap*
     let t = __hx_ptr_load64(map_ptr, 0)                  // HexaMap.tbl @0
     let slots = __hx_ptr_load64(t, 0)                    // HexaMapTable.slots @0
