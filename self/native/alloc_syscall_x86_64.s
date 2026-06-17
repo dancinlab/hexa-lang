@@ -5409,6 +5409,10 @@ hexa_ptr_read_64:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
+.section .rodata
+.LCstr0:
+    .byte 0x2f, 0x64, 0x65, 0x76, 0x2f, 0x75, 0x72, 0x61, 0x6e, 0x64, 0x6f, 0x6d, 0x00
+.text
     .p2align 4
 g0:
     .quad 0
