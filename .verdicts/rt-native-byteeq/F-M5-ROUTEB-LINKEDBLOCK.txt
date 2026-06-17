@@ -1,0 +1,80 @@
+F-M5-ROUTEB-LINKEDBLOCK — Route B's C-ABI half requires the seed arena to be a
+                           LINKED-BLOCK structure (HexaArenaBlock chain), because
+                           HexaArenaMark is a 16-byte {HexaArenaBlock*, size_t}
+                           struct that C callers pass around. The b2 raw-mem
+                           pool-table seed is fundamentally ABI-incompatible — Route
+                           B is a linked-block REWRITE, not a pool-table extension.
+                           (2026-06-18, struct def read)
+================================================================================
+LANE: M5 standalone-redesign, b3b Route B C-ABI half (RT-NATIVE-ZEROC fleet).
+GOAL: assess the C-ABI half after the envelope half landed (#3524).
+
+================================================================================
+1. THE FINDING (c9 — runtime_core_emit.hexa:3937-3953 read, decisive)
+================================================================================
+The C arena's mark ABI:
+    typedef struct HexaArenaBlock { struct HexaArenaBlock* next; size_t cap;
+                                    size_t used; char data[]; } HexaArenaBlock;
+    typedef struct { HexaArenaBlock* block; size_t used; } HexaArenaMark;  // 16B
+    HexaArenaMark hexa_arena_mark(void);
+    void          hexa_arena_rewind(HexaArenaMark m);
+HexaArenaMark is a 16-byte struct carrying a HexaArenaBlock* (a pointer INTO the
+C linked-block chain) + a size_t used. Every C caller of arena_mark/rewind passes
+this struct by value (SysV: returned in rax:rdx, passed in rdi:rsi).
+
+The b2 seed (self/rt/alloc.hexa) is a RAW-MEM POOL TABLE: arena state is a fixed
+mmap'd table of {base,size,used} pool slots, and its mark is a SINGLE int
+(pool_idx * (PAGE+1) + used). There is NO HexaArenaBlock — no per-block `next`
+chain, no `block*` to put in a HexaArenaMark. So:
+  · seed hexa_arena_mark() -> int   (1 word, rax)
+  · C   hexa_arena_mark() -> HexaArenaMark {block*, used}  (2 words, rax:rdx)
+ABI-INCOMPATIBLE at the call boundary, AND the mark's `block*` field has no
+meaning in the pool-table model. A C caller that does `m.block` on a seed-produced
+mark reads garbage.
+
+⇒ To make the seed a drop-in for the C arena (so the C `#else` can drop), the seed
+  must adopt the C DATA STRUCTURE: a HexaArenaBlock linked chain, with mark =
+  {block*, used}. The b2 pool-table work (b1/b2 de-circularization) does not carry
+  forward to the C-ABI half — Route B is a LINKED-BLOCK REWRITE.
+
+================================================================================
+2. CLASSIFICATION (c16) — Route B is a rewrite, not an extension
+================================================================================
+Honest correction to the prior framing ("extend self/rt/alloc.hexa to full
+feature"): the EXTEND is actually a REWRITE of the allocation data structure
+(pool-table → linked-block) to match the C-ABI HexaArenaMark. What carries forward
+from b1/b2/envelope:
+  · KEEP: the mmap-over-__hx_syscall floor (block backing memory), the envelope
+    half (#3524, __env_extend over each mmap), the syscall.hexa leaf port.
+  · REWRITE: arena alloc/mark/rewind/reset onto a HexaArenaBlock {next,cap,used,
+    data[]} chain, with HexaArenaMark = {block*, used} (16-byte struct return —
+    the hexa fn must emit the SysV 2-register struct ABI, or be called through a
+    thin C shim that boxes the two words).
+  · ADD: the block-reuse-on-rewind walk (C arena keeps rewound tail blocks),
+    new-block append, frame_clean/slot_dirty (RSS) if measurement shows the
+    self-compile needs them.
+The hexa↔C struct-return ABI (HexaArenaMark by value) is the open question: does
+the native backend emit a 16-byte struct return in rax:rdx? If not, the seed
+exposes two int accessors (mark_block/mark_used) and a C shim assembles the
+struct. DEPLETION TEST (aiden): seed-built runtime.a → byteeq-real + faithful
+3-target + miscompile-zero + RSS-OOM bounded.
+
+================================================================================
+3. HONEST RESIDUAL (c9)
+================================================================================
+  · Struct-def read finding (no build). It CORRECTS "Route B = extend the b2 seed":
+    the C-ABI half needs a linked-block rewrite (HexaArenaBlock chain + 16-byte
+    HexaArenaMark), since the b2 pool-table mark (int) is ABI- and model-
+    incompatible with the C HexaArenaMark the callers expect.
+  · The envelope half (#3524) DOES carry forward (it tracks mmap ranges regardless
+    of pool-table vs linked-block). The syscall/mmap floor carries forward too.
+  · `ls self/*.c == ∅` unchanged. Route B is now scoped precisely: a linked-block
+    arena rewrite in self/rt/alloc.hexa + the struct-ABI question (native 16-byte
+    struct return vs C-shim) + seed regen + arena C `#else` drop + aiden measure.
+    Genuinely the hardest single substrate body; multi-session.
+
+CONCLUSION: Route B's C-ABI half is a linked-block REWRITE of the seed arena
+(HexaArenaBlock chain + 16-byte HexaArenaMark {block*,used}), not an extension of
+the b2 pool table — the b2 mark (int) is ABI- and model-incompatible with the C
+HexaArenaMark that callers pass by value. The envelope half (#3524) and the
+syscall/mmap floor carry forward; the alloc/mark/rewind data structure is rewritten.
