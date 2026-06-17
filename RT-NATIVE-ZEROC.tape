@@ -229,3 +229,42 @@ r4 = freeze array_core_{x86_64,arm64}.s + ar into runtime.a + define HEXA_RT_ARR
   (NOTE: r1 의 "x86_64 = bounded mirror" 프레이밍은 후속 F-ALLOC-R2-X86-ARENA 가 정정 —
   arm64 rt_arena_* 는 dormant machine-code emitter(portable hexa 아님), shipped-runtime
   parity gap 없음. feasibility + non-circularity 발견은 유효.)
+
+## [array-r4 LANDED + M5 roadmap clarified] 2026-06-17
+- ARRAY-R4 byte-DECREASE LANDED on main (#3494, 321f038ad): runtime_core.c −1264 B/−24 L
+  + faithful 3-target + byteeq-real + 10 more = 13/13 CI GREEN. get/set #else dropped to
+  unconditional rt_array_{get,set}_native; 3-target native seed (darwin-arm64 + linux-x86_64
+  + linux-arm64); single-TU dev builds wire build/array_core_native.o (rt_hi Z2a mirror).
+  blast-radius MEASURED: authoritative gates use release_build→runtime.a(seed ar'd) + byteeq
+  = object compare → gate-safe; build_aprime/build_native_linux_arm64 in NO workflow (dev).
+- ROADMAP to ls==∅ (clarified, c9 honest horizon = MULTI-SESSION):
+  * The remaining runtime_core.c #else bodies split into TWO buckets (per F-M5-R2-RTCORE-CENSUS):
+    (A) CONSTRUCT-WALLED (arith/cmp/eq/to_string) — build a HexaVal result from computed
+        words → needs __hx_make_val (landed #3488). ARRAY-R4 was the FIRST breakthrough of this
+        wall. Next bricks = same template (write raw-mem hexa-source body + freeze .s seed +
+        ar into runtime.a + wire single-TU dev builds + drop #else). Each ~array-sized.
+    (B) ALLOC-WALLED (map _impl set/remove, snapshot, println/stdio) — needs a hexa allocator
+        over mmap+__hx_ptr_* (arena lane) OR stays C substrate floor (honest-keep like Go/Rust).
+  * map_get's NATIVE arm already = rt_map_get_v (hexa-source); its #else is the standalone-link
+    duplicate — but map is ALLOC-walled (set/remove _impl) so the family ships C until the arena
+    lane lands. map READ-half alone could brick like array if separated from set/remove.
+  * self/rt/*.hexa families are mostly PURE (0 __hx_) = already hexat-transpilable (rt_str did
+    this via runtime_hi_gen.c); the genuine residual #else is the construct/alloc-walled set.
+  * Completion = (M4) drop each construct-walled family via the array template + (arena lane)
+    unlock alloc-walled + (M5) standalone redesign linking all native rt_*.o + (M6) wholesale
+    runtime_core.c drop + ls self/*.c==∅ with gen3≡gen4 on both targets. ~15-family scale.
+
+## [M5 feasibility PROVEN] 2026-06-17
+- PROBE (aiden, captured): `build/hexat self/rt/core.hexa /tmp/core_gen.c` → rc=0, 392 lines C,
+  emits rt_eq / rt_cmp_{lt,gt,le,ge} / rt_len / rt_truthy bodies (externs rt_add/hexa_bool resolve
+  from runtime.c). ⇒ the runtime_hi_gen.c (rt_str) gen.c-bundle pattern GENERALIZES to the pure
+  self/rt/*.hexa families (0 __hx_): hexat transpiles them to standalone C with NO native .s seed.
+- M5 IMPLEMENTATION (next focused cycle — fixpoint-sensitive, deserves a clean run, NOT a rushed
+  tail): generate gen.c bundles for the pure rt_* families (core + numeric + …) the way
+  extract_runtime_hi.sh does for rt_str; have stage_resolve_runtime_a #include them into the
+  standalone runtime build + define HEXA_HAS_HEXA_RT_STDLIB for those fns; drop the now-duplicate
+  #else bodies wholesale → a LARGE runtime_core.c byte-DECREASE in one cycle. GATE = build_aprime
+  + faithful 3-target + byteeq-real GREEN (the gen3≡gen4 fixpoint is the campaign invariant — must
+  not tune-to-green; verify by captured CI). Residual after pure-family M5 = alloc-walled families
+  (map _impl/snapshot, stdio) → arena lane (hexa allocator over mmap+__hx_ptr_*) OR honest-keep as
+  Go/Rust-equivalent substrate floor. Then M6 = wholesale runtime_core.c drop + ls self/*.c==∅.
