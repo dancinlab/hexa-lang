@@ -1,0 +1,98 @@
+F-M5-ROUTEB-MEASURE5-HEAPIFY-VALARENA — measure-5 heapify block-walk WIRED
+   (str-arena native path CLEAN), but the VAL-arena heapify path still corrupts
+   tags → whole-compiler transpile still miscompiles. WALL re-classified from
+   "heapify block-walk unwired" (measure-4) to "val-arena heapify .hexa full
+   port". (2026-06-18, aiden Linux x86_64, RAN)
+================================================================================
+LANE: RT-NATIVE-ZEROC Route B, routeb measure-5 (heapify block-walk 연동).
+GOAL: redirect the heapify slow-path onto the native seed's block chain so the
+      HEXA_RT_ALLOC_NATIVE=1 whole-compiler transpile stops miscompiling.
+
+================================================================================
+1. WHAT WAS WIRED (byteeq-inert, OFF green)
+================================================================================
+self/rt/alloc.hexa — export block-chain iteration surface:
+    hexa_arena_head()  -> __arena_head     (first block, 0 = empty)
+    hexa_arena_cur()   -> __arena_cur      (current bump block)
+    __blk_data(b)      -> b + 24           (&block.data[0])
+  (next/cap/used already exported via __blk_next/__blk_cap/__blk_used)
+
+self/runtime_core_emit.hexa — THREE native-mode redirects (#ifdef HEXA_RT_ALLOC_NATIVE):
+  (a) heapify TAG_STR copy-out walk `for(b=__hexa_arena.head;…)` → seed
+      hexa_arena_head()/__blk_next/__blk_data/__blk_cap. The C __hexa_arena.head
+      is NULL in native mode, so the walk found no block → arena strings inside
+      the envelope were flagged-but-not-copied → dangled past rewind.
+  (b) hexa_val_arena_scope_push + hexa_arena_frame_clean → seed hexa_arena_cur()
+      + __blk_used. The C __hexa_arena.cur is NULL → frame_clean was
+      ALWAYS-true (NULL==NULL && 0==0) → the TAG_VALSTRUCT/ARRAY/MAP slot walks
+      were being skipped wholesale (a second, latent corruption source).
+  (c) hexa_val_arena_scope_pop → seed hexa_arena_rewind(). Rewinding via the
+      NULL C cur would leave the seed allocator un-rewound → unbounded RSS.
+
+tool/regen_alloc_syscall_native_s.sh — re-apply the x86_64 `.LCstr0` rodata
+  (sys_getrandom /dev/urandom fallback) reproducibly. The x86_64 string-literal
+  rodata emitter does not define it (arm64 does) — measure-4 hand-patched the
+  frozen .s; the regen now reproduces it so a fresh regen assembles.
+
+seeds — 3-target regenerated (aiden aprime_cc): 119 globl + the 3 new accessors;
+  x86_64 assembles RC=0.
+
+================================================================================
+2. MEASUREMENT (aiden Linux x86_64, hexat whole-flat 45816-line transpile)
+================================================================================
+KEY CORRECTION: measure-4's "ON miscompile" was performed by a STALE build/hexat
+that ITSELF carried the OLD (pre-measure-5) native arena. build/hexat is the
+C-transpiler binary linked against runtime.a, so its OWN arena = whatever
+runtime.a was built with. Forcing a clean build/hexat rebuild isolated reality:
+
+  · C-arena baseline (build/hexat_linux, or HEXA_VAL_ARENA=0): whole-flat
+    transpile RC=0, 49992 lines C, 0 tag-errors  = CLEAN (no regression).
+  · OFF build WITH measure-5 edits (C arena, default): build RC=0, whole-flat
+    RC=0, 49988 lines, 0 tag-errors  = byteeq-inert CONFIRMED.
+  · NATIVE-arena hexat WITH the measure-5 fix (runtime_core.c redirect present,
+    seed syms present): whole-flat RC=1, STILL
+    `cannot subtract non-numeric operand (tag 3 - tag 0)`.
+
+DECISIVE ISOLATION (env toggles on the native-arena hexat):
+  · HEXA_VAL_ARENA=0  (val-arena OFF, native str-arena ON)  = CLEAN, output produced.
+  · HEXA_STR_ARENA=0  (str-arena OFF, val-arena ON)         = still errors.
+  ⇒ the measure-5 fix CLOSED the str-arena native path (necessary), but the SOLE
+    remaining corruption is the VAL-arena heapify path.
+
+gdb (break hexa_sub): the tag-3 (str) − tag-0 (int) subtraction fires inside
+`_parser_init` — a MODULE-GLOBAL initializer, before any real parsing. A
+val-arena fn-boundary heapify (__hexa_fn_arena_return → hexa_val_heapify →
+scope_pop rewind) is failing to heapify an escaping value, which block-reuse
+then overwrites → its tag flips to a stale neighbouring string's.
+
+================================================================================
+3. CLASSIFICATION (c9 → escalate)
+================================================================================
+The measure-5 redirect (block-walk + frame_clean + scope_pop) is NECESSARY but
+INSUFFICIENT. The residual lives in the val-arena heapify of TAG_VALSTRUCT /
+TAG_ARRAY / TAG_MAP slot walks + hexa_val_copy_into_arena / region-promote,
+which embed the C `__hexa_arena` data-structure assumption in more places than
+the three redirected entry points. valstruct_new_v hard-codes from_arena=0
+(T33-fix-2), so the corrupted value is an arena STRING reached through a slot the
+heapify either skips or copies wrong under the native chain.
+
+WALL RE-CLASSIFIED (measure-4 "heapify block-walk unwired" → measure-5
+"val-arena heapify .hexa full port"). MEASURE-6 options:
+  (A) port the val-arena heapify path wholesale to .hexa, OR
+  (B) expose native seed SETTERS so the native arena keeps the C `__hexa_arena`
+      struct populated ("mirror the C data structure" — cheaper, keeps heapify C).
+
+================================================================================
+4. DEPLETION
+================================================================================
+  · str-arena native path = CLOSED (HEXA_VAL_ARENA=0 + native str-arena = CLEAN).
+  · val-arena heapify gap = the SINGLE remaining wall before the arena C `#else`
+    can drop / runtime_core.c wc can decrease. No `ls` reduction this round.
+  · All measure-5 edits landed byteeq-inert (OFF default unaffected, opt-in
+    HEXA_RT_ALLOC_NATIVE only) → genuine forward progress (str-arena solved,
+    wall narrowed to val-arena), shipped, not a revert.
+
+CONCLUSION: measure-5 wired the heapify block-walk and PROVED (by env isolation)
+that it fixes the str-arena native path; the whole-compiler still miscompiles
+because the val-arena heapify path retains a deeper C-`__hexa_arena` dependency.
+Wall escalated to "val-arena heapify .hexa full port" (measure-6). byteeq-inert.
