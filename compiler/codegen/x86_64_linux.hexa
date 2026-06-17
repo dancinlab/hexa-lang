@@ -724,6 +724,10 @@ fn _x86_64_op_for_operand_st(o: Operand, st: X86StrTab) -> LOperand {
     if o.kind == "const_bool" {
         return _x86_op_imm(o.int_val)
     }
+    // RT-NATIVE-ZEROC M1 — const_float payload = IEEE-754 bits (see _x86_op_resolve).
+    if o.kind == "const_float" {
+        return _x86_op_imm(float_to_bits(o.float_val))
+    }
     if o.kind == "global" {
         return _x86_op_label("g" + to_string(o.global_id))
     }
@@ -874,6 +878,50 @@ fn _x86_hv_box_arg(buf: [LInstr], o: Operand, st: X86StrTab, rm: X86RegMap,
     return out
 }
 
+// RT-NATIVE-ZEROC M1 — load just the PAYLOAD eightbyte of operand `o` into
+// register `reg` (the x86_64 raw-int payload model carries the value in one
+// register; the tag is recovered separately via the tag-slot). This is the
+// x86_64 counterpart of arm64's `_hv_load` hi-register half: the `__hx_*` leaf
+// intrinsics operate on the raw 8-byte payload (int / IEEE-754 bits / pointer)
+// only, so they never need the tag in a register. Const_str payload = the
+// string ADDRESS (RIP-relative lea, never an absolute immediate — see
+// _x86_hv_box_arg); int/bool/global payloads resolve through the normal
+// _x86_op_rm + _x86_op_resolve path, then a guaranteed `mov reg, payload` lands
+// the value in `reg` regardless of where it resolved (reg / imm / spill).
+fn _x86_hv_payload(buf: [LInstr], o: Operand, st: X86StrTab, rm: X86RegMap,
+                   reg: string, opts: CodegenOptions) -> [LInstr] {
+    let mut out = buf
+    if o.kind == "const_str" {
+        let mut lbl = _x86_strtab_lookup(st, o.str_val)
+        if len(lbl) == 0 { lbl = o.str_val }
+        out.push(_x86_instr2("lea", _x86_op_reg(reg),
+                         _x86_op_label("[rip+" + lbl + "]"),
+                         "hv payload: &str " + lbl))
+        return out
+    }
+    out = _x86_op_rm(out, o, st, rm, reg, opts)
+    let payload = _x86_op_resolve(o, st, rm, reg, opts)
+    out.push(_x86_instr2("mov", _x86_op_reg(reg), payload, "hv payload"))
+    return out
+}
+
+// RT-NATIVE-ZEROC M1 — write a leaf intrinsic's {tag, payload} result into the
+// destination value `id`: the payload (raw register `pay_reg`) into the dst's
+// home reg, the constant `tag` into its tag-slot, then the spill writeback. The
+// x86_64 counterpart of arm64's `_hv_store_dst(buf, rm, dst, x0_tag, x1_pay)`.
+fn _x86_hv_store_leaf(buf: [LInstr], rm: X86RegMap, id: i64,
+                      pay_reg: string, tag: i64) -> [LInstr] {
+    let mut out = buf
+    let dst_name = _x86_dst_reg(rm, id)
+    if dst_name != pay_reg {
+        out.push(_x86_instr2("mov", _x86_op_reg(dst_name), _x86_op_reg(pay_reg),
+                         "leaf: payload → dst L" + to_string(id)))
+    }
+    out = _x86_store_tag_imm(out, rm, id, tag)
+    out = _x86_emit_dst_writeback(out, rm, id)
+    return out
+}
+
 // ── Statement lowering (C6 — RegMap-aware) ───────────────────
 
 fn _x86_load_spill(buf: [LInstr], rm: X86RegMap, id: i64, scratch: string) -> [LInstr] {
@@ -978,6 +1026,18 @@ fn _x86_op_resolve(o: Operand, st: X86StrTab, rm: X86RegMap,
     // arm64_darwin's const_bool resolve. Was falling through to `imm 0`, dropping
     // `return true` to 0.
     if o.kind == "const_bool" { return _x86_op_imm(o.int_val) }
+    // RT-NATIVE-ZEROC M1 — a `const_float` PAYLOAD is the IEEE-754 bit pattern
+    // of the double, materialized as a 64-bit immediate (`mov reg, <bits>`,
+    // which GNU as encodes as `movabs`). The x86_64 backend previously had NO
+    // const_float payload path (the #3462 pair model carried int/str/bool only),
+    // so a float literal resolved to the `imm 0` fallback — every float
+    // arithmetic/compare leaf (__hx_payload_fadd/flt/…) operating on a LITERAL
+    // computed against 0.0. `float_to_bits` (compile-time runtime builtin, also
+    // used by macho_arm64.hexa float-pool emit) gives the exact 64-bit pattern,
+    // sidestepping a stage0 double→bits bitcast and matching arm64's `.LCfltN:
+    // .double` pool value. Operands flowing through params/locals already carry
+    // real bits (boxed at the call site); this closes the LITERAL gap.
+    if o.kind == "const_float" { return _x86_op_imm(float_to_bits(o.float_val)) }
     if o.kind == "global"    {
         // RFC 070 G7-A.native impl emit (2026-05-20, D2): in `--shared`
         // mode the GOT entry was loaded into `scratch` by `_x86_op_rm`,
@@ -1268,6 +1328,317 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
     }
     if s.kind == _STMT_CALL {
         let arg_n = len(s.args)
+        // ── RT-NATIVE-ZEROC M1: x86_64 `__hx_*` leaf-intrinsic parity ──────
+        // Bring the x86_64 backend to parity with arm64_darwin.hexa for the 25
+        // whitelisted `__hx_*` leaf intrinsics (check/bind.hexa _bind_builtin_
+        // names). Each is INLINED — no runtime call — operating on the raw
+        // HexaVal payload (the x86_64 raw-int single-register model; tag carried
+        // in the tag-slot). Every encoding here was verified against GNU `as` +
+        // `objdump` ground-truth (scripts/scratch/rt_native/x86_leaf_gate.sh).
+        // These read the second eightbyte (payload) of a value; the tag for the
+        // FLOAT/INT result is written by _x86_hv_store_leaf. Foundation for the
+        // M4 native runtime-core port on x86_64. Mirrors arm64 UNLOCK-2..11.
+
+        // UNLOCK-2: `__hx_tag(v)` → int HexaVal {TAG_INT, v.tag}. The tag is the
+        // value's carried tag-slot value (not the payload); read it into the dst
+        // and box as TAG_INT.
+        if s.op == "__hx_tag" && len(s.args) >= 1 {
+            let dst_name = _x86_dst_reg(rm, s.dst.id)
+            buf = _x86_tag_resolve(buf, s.args[0], rm, dst_name)  // dst = v.tag
+            if s.dst.id >= 0 {
+                buf = _x86_store_tag_imm(buf, rm, s.dst.id, 0)    // result TAG_INT
+                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            }
+            return buf
+        }
+        // UNLOCK-2b: payload equality / non-zero → bool, INLINE (cmp + setcc +
+        // movzx). r10 = a.payload, r11 = b.payload; al = predicate; movzx into
+        // dst; tag = TAG_BOOL(2). NaN-irrelevant (raw i64 compare).
+        if s.op == "__hx_payload_eq" && len(s.args) >= 2 {
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)
+            buf = _x86_hv_payload(buf, s.args[1], st, rm, "r11", opts)
+            buf.push(_x86_instr2("cmp", _x86_op_reg("r10"), _x86_op_reg("r11"),
+                             "__hx_payload_eq: cmp payloads"))
+            buf.push(_x86_instr1("sete", _x86_op_reg("al"), "__hx_payload_eq: al = (a==b)"))
+            let dn = _x86_dst_reg(rm, s.dst.id)
+            buf.push(_x86_instr2("movzx", _x86_op_reg(dn), _x86_op_reg("al"),
+                             "__hx_payload_eq: zero-extend bool"))
+            if s.dst.id >= 0 {
+                buf = _x86_store_tag_imm(buf, rm, s.dst.id, 2)
+                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            }
+            return buf
+        }
+        if s.op == "__hx_payload_nz" && len(s.args) >= 1 {
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)
+            buf.push(_x86_instr2("cmp", _x86_op_reg("r10"), _x86_op_imm(0),
+                             "__hx_payload_nz: cmp payload, 0"))
+            buf.push(_x86_instr1("setne", _x86_op_reg("al"), "__hx_payload_nz: al = (pl != 0)"))
+            let dn = _x86_dst_reg(rm, s.dst.id)
+            buf.push(_x86_instr2("movzx", _x86_op_reg(dn), _x86_op_reg("al"),
+                             "__hx_payload_nz: zero-extend bool"))
+            if s.dst.id >= 0 {
+                buf = _x86_store_tag_imm(buf, rm, s.dst.id, 2)
+                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            }
+            return buf
+        }
+        // UNLOCK-2b ext: signed-i64 relational payload compares → bool.
+        // setl/setg/setle/setge (signed cond codes, matching arm64 lt/gt/le/ge).
+        if (s.op == "__hx_payload_lt" || s.op == "__hx_payload_gt"
+            || s.op == "__hx_payload_le" || s.op == "__hx_payload_ge") && len(s.args) >= 2 {
+            let mut _scc = "setl"
+            if s.op == "__hx_payload_gt" { _scc = "setg" }
+            if s.op == "__hx_payload_le" { _scc = "setle" }
+            if s.op == "__hx_payload_ge" { _scc = "setge" }
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)
+            buf = _x86_hv_payload(buf, s.args[1], st, rm, "r11", opts)
+            buf.push(_x86_instr2("cmp", _x86_op_reg("r10"), _x86_op_reg("r11"),
+                             s.op + ": cmp payloads"))
+            buf.push(_x86_instr1(_scc, _x86_op_reg("al"), s.op + ": al = predicate"))
+            let dn = _x86_dst_reg(rm, s.dst.id)
+            buf.push(_x86_instr2("movzx", _x86_op_reg(dn), _x86_op_reg("al"),
+                             s.op + ": zero-extend bool"))
+            if s.dst.id >= 0 {
+                buf = _x86_store_tag_imm(buf, rm, s.dst.id, 2)
+                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            }
+            return buf
+        }
+        // UNLOCK-2c: signed-i64 payload arithmetic → int HexaVal {TAG_INT, …}.
+        // add/sub/imul into r10 (a.pl), then box as TAG_INT.
+        if (s.op == "__hx_payload_add" || s.op == "__hx_payload_sub"
+            || s.op == "__hx_payload_mul") && len(s.args) >= 2 {
+            let mut _aop = "add"
+            if s.op == "__hx_payload_sub" { _aop = "sub" }
+            if s.op == "__hx_payload_mul" { _aop = "imul" }
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)
+            buf = _x86_hv_payload(buf, s.args[1], st, rm, "r11", opts)
+            buf.push(_x86_instr2(_aop, _x86_op_reg("r10"), _x86_op_reg("r11"),
+                             s.op + ": r10 = a.pl " + _aop + " b.pl"))
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            return buf
+        }
+        // UNLOCK-4: scalar double-precision FP arithmetic → float HexaVal
+        // {TAG_FLOAT, …}. The 8-byte payload IS the IEEE-754 bit pattern; movq
+        // copies GPR↔xmm, the SSE op runs, movq copies result bits back.
+        if (s.op == "__hx_payload_fadd" || s.op == "__hx_payload_fsub"
+            || s.op == "__hx_payload_fmul" || s.op == "__hx_payload_fdiv")
+            && len(s.args) >= 2 {
+            let mut _fop = "addsd"
+            if s.op == "__hx_payload_fsub" { _fop = "subsd" }
+            if s.op == "__hx_payload_fmul" { _fop = "mulsd" }
+            if s.op == "__hx_payload_fdiv" { _fop = "divsd" }
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)
+            buf = _x86_hv_payload(buf, s.args[1], st, rm, "r11", opts)
+            buf.push(_x86_instr2("movq", _x86_op_reg("xmm0"), _x86_op_reg("r10"),
+                             s.op + ": xmm0 = a.f bits"))
+            buf.push(_x86_instr2("movq", _x86_op_reg("xmm1"), _x86_op_reg("r11"),
+                             s.op + ": xmm1 = b.f bits"))
+            buf.push(_x86_instr2(_fop, _x86_op_reg("xmm0"), _x86_op_reg("xmm1"),
+                             s.op + ": xmm0 = a.f " + _fop + " b.f"))
+            buf.push(_x86_instr2("movq", _x86_op_reg("r10"), _x86_op_reg("xmm0"),
+                             s.op + ": r10 = result bits"))
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 1) }
+            return buf
+        }
+        // UNLOCK-4: scalar double-precision FP compare → bool HexaVal, INLINE.
+        // NaN-correct (C / arm64-MI-LS semantics): false on unordered. Mirrors
+        // the GCC -O1 idiom verified against ground-truth:
+        //   a <  b → comisd b,a ; seta   (flt)
+        //   a <= b → comisd b,a ; setae  (fle)
+        //   a >  b → comisd a,b ; seta   (fgt)
+        //   a >= b → comisd a,b ; setae  (fge)
+        // `seta`/`setae` (above / above-or-equal) read CF/ZF which `comisd` sets
+        // to 1 on unordered, so the predicate is false on NaN — unlike `setb`
+        // which would be true on NaN. The b,a operand swap for </<= is the x86
+        // way to get the ordered <-comparison from the >-style above codes.
+        if (s.op == "__hx_payload_flt" || s.op == "__hx_payload_fgt"
+            || s.op == "__hx_payload_fle" || s.op == "__hx_payload_fge")
+            && len(s.args) >= 2 {
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)  // a bits
+            buf = _x86_hv_payload(buf, s.args[1], st, rm, "r11", opts)  // b bits
+            buf.push(_x86_instr2("movq", _x86_op_reg("xmm0"), _x86_op_reg("r10"),
+                             s.op + ": xmm0 = a.f bits"))
+            buf.push(_x86_instr2("movq", _x86_op_reg("xmm1"), _x86_op_reg("r11"),
+                             s.op + ": xmm1 = b.f bits"))
+            // Choose operand order + setcc per the NaN-correct GCC idiom.
+            let mut _lhs = "xmm0"
+            let mut _rhs = "xmm1"
+            let mut _scc = "seta"
+            if s.op == "__hx_payload_flt" { _lhs = "xmm1"  _rhs = "xmm0"  _scc = "seta" }
+            if s.op == "__hx_payload_fle" { _lhs = "xmm1"  _rhs = "xmm0"  _scc = "setae" }
+            if s.op == "__hx_payload_fgt" { _lhs = "xmm0"  _rhs = "xmm1"  _scc = "seta" }
+            if s.op == "__hx_payload_fge" { _lhs = "xmm0"  _rhs = "xmm1"  _scc = "setae" }
+            buf.push(_x86_instr2("comisd", _x86_op_reg(_lhs), _x86_op_reg(_rhs),
+                             s.op + ": comisd (NaN-correct ordered)"))
+            buf.push(_x86_instr1(_scc, _x86_op_reg("al"), s.op + ": al = predicate"))
+            let dn = _x86_dst_reg(rm, s.dst.id)
+            buf.push(_x86_instr2("movzx", _x86_op_reg(dn), _x86_op_reg("al"),
+                             s.op + ": zero-extend bool"))
+            if s.dst.id >= 0 {
+                buf = _x86_store_tag_imm(buf, rm, s.dst.id, 2)
+                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            }
+            return buf
+        }
+        // UNLOCK-6: `__hx_to_double(v)` → float HexaVal coercing int-or-float to
+        // double. BRANCHLESS: convert int→double unconditionally (cvtsi2sd),
+        // then select the already-double bits when tag==TAG_FLOAT else the
+        // converted bits. x86 has no csel — use cmp + cmove (cmovne keeps r10
+        // = converted when tag != FLOAT; if tag == FLOAT it falls through to the
+        // original float bits already in r11). r10=payload bits, r12=tag.
+        if s.op == "__hx_to_double" && len(s.args) >= 1 {
+            // SCRATCH DISCIPLINE: the tag scratch MUST be a caller-saved reg
+            // OUTSIDE the allocatable pool (rbx/r12-r15). `rax` is the backend's
+            // free scratch. Using a pool reg (e.g. r12) here would CLOBBER a live
+            // value whose home is that reg — the exact bug that made the second
+            // `__hx_to_double(b)` in a chained float compare read a's tag as b's
+            // payload (r12 doubled as param b's home AND the tag scratch).
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)  // r10 = payload
+            buf = _x86_tag_resolve(buf, s.args[0], rm, "rax")          // rax = tag
+            buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_reg("r10"),
+                             "__hx_to_double: r11 = original (float) bits"))
+            buf.push(_x86_instr2("cvtsi2sd", _x86_op_reg("xmm0"), _x86_op_reg("r10"),
+                             "__hx_to_double: xmm0 = (double)int"))
+            buf.push(_x86_instr2("movq", _x86_op_reg("r10"), _x86_op_reg("xmm0"),
+                             "__hx_to_double: r10 = converted bits"))
+            buf.push(_x86_instr2("cmp", _x86_op_reg("rax"), _x86_op_imm(1),
+                             "__hx_to_double: tag == TAG_FLOAT?"))
+            buf.push(_x86_instr2("cmove", _x86_op_reg("r10"), _x86_op_reg("r11"),
+                             "__hx_to_double: if FLOAT keep original bits"))
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 1) }
+            return buf
+        }
+        // UNLOCK-5: `__hx_str_byte(s, i)` → int HexaVal of the unsigned byte at
+        // offset i. STR payload (r10) IS the char*; INT payload (r11) is the
+        // index. add base+index, movzx byte load (zero-extends), box int.
+        if s.op == "__hx_str_byte" && len(s.args) >= 2 {
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)  // r10 = char*
+            buf = _x86_hv_payload(buf, s.args[1], st, rm, "r11", opts)  // r11 = index
+            buf.push(_x86_instr2("add", _x86_op_reg("r10"), _x86_op_reg("r11"),
+                             "__hx_str_byte: r10 = s + i"))
+            buf.push(_x86_instr2("movzx", _x86_op_reg("r10"),
+                             _x86_op_label("byte ptr [r10]"), "__hx_str_byte: r10 = s[i]"))
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            return buf
+        }
+        // UNLOCK-7: `__hx_arr_len(v)` → int HexaVal of an array's element count.
+        // ARRAY payload (r10) IS the HexaArr* — `{HexaVal* items; int len; int
+        // cap;}`; `len` is a 32-bit int at byte offset 8. A 32-bit `mov e..,
+        // dword ptr [..+8]` zero-extends cleanly (a 64-bit load would fold cap
+        // into the high word). Result reg held in r10 (its low 32 bits = e10d).
+        if s.op == "__hx_arr_len" && len(s.args) >= 1 {
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)  // r10 = HexaArr*
+            buf.push(_x86_instr2("mov", _x86_op_reg("r10d"),
+                             _x86_op_label("dword ptr [r10 + 8]"),
+                             "__hx_arr_len: r10d = arr->len (int32, zero-ext)"))
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            return buf
+        }
+        // UNLOCK-8: `__hx_syscall0(num)` → int HexaVal of a 0-arg Linux syscall.
+        // x86_64 ABI: number in rax, `syscall`, result in rax. (Linux, NOT the
+        // BSD svc #0x80 of macOS arm64 — the syscall numbers differ per OS but
+        // the leaf is the same shape.) Native syscall-emit, NO C shim.
+        if s.op == "__hx_syscall0" && len(s.args) >= 1 {
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "rax", opts)  // rax = num
+            buf.push(_x86_instr0("syscall", "__hx_syscall0: Linux syscall"))
+            buf.push(_x86_instr2("mov", _x86_op_reg("r10"), _x86_op_reg("rax"),
+                             "__hx_syscall0: r10 = result"))
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            return buf
+        }
+        // UNLOCK-9: `__hx_syscall6(num, a0..a5)` → int HexaVal. x86_64 Linux
+        // syscall arg registers: rdi, rsi, rdx, r10, r8, r9; number in rax;
+        // result in rax. (rcx/r11 are CLOBBERED by the `syscall` instruction
+        // itself, so they are NOT used for args.) Args 0..4 (→ rdi,rsi,rdx,r10,
+        // r8) are staged into callee-saved temps r12..r15 + rbx FIRST — because
+        // _x86_hv_payload resolves through the passed reg and a later arg's
+        // resolve could clobber an earlier arg reg (esp. r10, which doubles as
+        // this backend's scratch). a5 (→ r9) and num (→ rax) are loaded directly
+        // last since nothing after them clobbers r9/rax. NEVER stage into rbp/
+        // rsp (frame/stack pointers). Then the staged temps move into the ABI
+        // arg regs in one block just before `syscall`.
+        if s.op == "__hx_syscall6" && len(s.args) >= 7 {
+            // SCRATCH DISCIPLINE: load each arg payload DIRECTLY into its final
+            // syscall ABI register — rdi,rsi,rdx,r10,r8,r9 (number in rax). All
+            // SEVEN are caller-saved and NONE overlap the allocatable pool
+            // (rbx/r12-r15), so there is no live-value clobber and no cross-arg
+            // aliasing: _x86_hv_payload(op, R) reads op's home (a pool reg, a
+            // spill slot, or an immediate) and writes only R, and the args are
+            // loaded into DISTINCT ABI regs. Staging into pool regs (the earlier
+            // approach) would clobber a live value whose home is r12-r15/rbx.
+            // `num → rax` LAST since rax doubles as _x86_hv_payload's resolve
+            // scratch for the preceding loads.
+            let argregs = ["rdi", "rsi", "rdx", "r10", "r8", "r9"]
+            let mut ai = 1
+            while ai <= 6 {
+                buf = _x86_hv_payload(buf, s.args[ai], st, rm, argregs[ai - 1], opts)
+                ai = ai + 1
+            }
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "rax", opts)  // num → rax
+            buf.push(_x86_instr0("syscall", "__hx_syscall6: Linux syscall"))
+            // result in rax → stash in r11 (caller-saved, clobbered by syscall
+            // anyway, but free here) before the dst-write tag materialization.
+            buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_reg("rax"),
+                             "__hx_syscall6: r11 = result"))
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r11", 0) }
+            return buf
+        }
+        // UNLOCK-10: `__hx_ptr_store64(ptr, off, val)` — write 64-bit `val` to
+        // raw address ptr+off. Returns ptr (chainable). r10=ptr, r11=off,
+        // rsi=val; add; mov qword ptr [addr], val; result = original ptr.
+        if s.op == "__hx_ptr_store64" && len(s.args) >= 3 {
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)  // ptr
+            buf = _x86_hv_payload(buf, s.args[1], st, rm, "r11", opts)  // off
+            buf = _x86_hv_payload(buf, s.args[2], st, rm, "rsi", opts)  // val
+            buf.push(_x86_instr2("add", _x86_op_reg("r10"), _x86_op_reg("r11"),
+                             "__hx_ptr_store64: addr = ptr + off"))
+            buf.push(_x86_instr2("mov", _x86_op_label("qword ptr [r10]"),
+                             _x86_op_reg("rsi"), "__hx_ptr_store64: *(addr) = val"))
+            // chainable return = original ptr (reload, r10 was mutated).
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            return buf
+        }
+        // UNLOCK-10: `__hx_ptr_load64(ptr, off)` — read 64-bit int at ptr+off.
+        if s.op == "__hx_ptr_load64" && len(s.args) >= 2 {
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)  // ptr
+            buf = _x86_hv_payload(buf, s.args[1], st, rm, "r11", opts)  // off
+            buf.push(_x86_instr2("add", _x86_op_reg("r10"), _x86_op_reg("r11"),
+                             "__hx_ptr_load64: addr = ptr + off"))
+            buf.push(_x86_instr2("mov", _x86_op_reg("r10"),
+                             _x86_op_label("qword ptr [r10]"), "__hx_ptr_load64: r10 = *(addr)"))
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            return buf
+        }
+        // UNLOCK-11: `__hx_ptr_store32(ptr, off, val)` — write low 32 bits of
+        // `val` to ptr+off (HexaArr/HexaMap int len/cap fields). Returns ptr.
+        if s.op == "__hx_ptr_store32" && len(s.args) >= 3 {
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)  // ptr
+            buf = _x86_hv_payload(buf, s.args[1], st, rm, "r11", opts)  // off
+            buf = _x86_hv_payload(buf, s.args[2], st, rm, "rsi", opts)  // val
+            buf.push(_x86_instr2("add", _x86_op_reg("r10"), _x86_op_reg("r11"),
+                             "__hx_ptr_store32: addr = ptr + off"))
+            buf.push(_x86_instr2("mov", _x86_op_label("dword ptr [r10]"),
+                             _x86_op_reg("esi"), "__hx_ptr_store32: *(addr) = (i32)val"))
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)  // reload ptr
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            return buf
+        }
+        // UNLOCK-11: `__hx_ptr_load32(ptr, off)` — read 32-bit int at ptr+off
+        // (zero-extended).
+        if s.op == "__hx_ptr_load32" && len(s.args) >= 2 {
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)  // ptr
+            buf = _x86_hv_payload(buf, s.args[1], st, rm, "r11", opts)  // off
+            buf.push(_x86_instr2("add", _x86_op_reg("r10"), _x86_op_reg("r11"),
+                             "__hx_ptr_load32: addr = ptr + off"))
+            buf.push(_x86_instr2("mov", _x86_op_reg("r10d"),
+                             _x86_op_label("dword ptr [r10]"),
+                             "__hx_ptr_load32: r10d = *(i32*)addr (zero-ext)"))
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            return buf
+        }
         // SELFHOST-NEXT x86_64: map builtin/runtime names to their linkable
         // C runtime symbol (print -> hexa_print_val, println -> hexa_println,
         // exit -> hexa_exit, etc.) — the same mapping the arm64 direct-asm

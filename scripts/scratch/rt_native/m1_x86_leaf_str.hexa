@@ -1,0 +1,13 @@
+// RT-NATIVE-ZEROC M1 — x86_64 __hx_str_byte leaf parity test.
+// Read individual UTF-8 bytes of a string LITERAL via the native byte-load
+// leaf (RIP-relative lea + movzx byte ptr). "ABC" = 65,66,67. The literal is
+// passed directly to the leaf so its payload is the rodata address (the
+// const_str→local ASSIGN path is an orthogonal pre-existing x86 materialization
+// gap, not a property of this leaf). Expected exit = 3.
+fn main() {
+  let mut ok = 0
+  if __hx_payload_eq(__hx_str_byte("ABC", 0), 65) { ok = ok + 1 }  // 'A'
+  if __hx_payload_eq(__hx_str_byte("ABC", 1), 66) { ok = ok + 1 }  // 'B'
+  if __hx_payload_eq(__hx_str_byte("ABC", 2), 67) { ok = ok + 1 }  // 'C'
+  exit(ok)   // expect 3
+}

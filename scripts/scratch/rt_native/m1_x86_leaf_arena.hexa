@@ -1,0 +1,24 @@
+// RT-NATIVE-ZEROC M1 — x86_64 syscall + pointer leaf parity test.
+// mmap a page via the x86_64 LINUX syscall ABI (mmap=9), round-trip
+// store64/load64 + store32/load32, munmap (=11). NO C shim — a native
+// arena round-trip through __hx_syscall6 / __hx_ptr_*. Expected exit = 5.
+//   x86_64 mmap(addr=0, len, prot=PROT_READ|WRITE=3,
+//               flags=MAP_PRIVATE|MAP_ANONYMOUS=0x22, fd=-1, off=0)
+fn main() {
+  let p = __hx_syscall6(9, 0, 4096, 3, 34, -1, 0)   // mmap → page base
+  let mut ok = 0
+  // 64-bit store/load round-trip
+  __hx_ptr_store64(p, 0, 12345)
+  __hx_ptr_store64(p, 8, 67890)
+  __hx_ptr_store64(p, 16, 42)
+  if __hx_payload_eq(__hx_ptr_load64(p, 0), 12345) { ok = ok + 1 }
+  if __hx_payload_eq(__hx_ptr_load64(p, 8), 67890) { ok = ok + 1 }
+  if __hx_payload_eq(__hx_ptr_load64(p, 16), 42)   { ok = ok + 1 }
+  // 32-bit store/load round-trip (HexaArr len/cap field shape)
+  __hx_ptr_store32(p, 24, 777)
+  if __hx_payload_eq(__hx_ptr_load32(p, 24), 777)  { ok = ok + 1 }
+  // ptr_store64 chainable return = base ptr
+  if __hx_payload_eq(__hx_ptr_store64(p, 32, 5), p) { ok = ok + 1 }
+  __hx_syscall6(11, p, 4096, 0, 0, 0, 0)            // munmap
+  exit(ok)   // expect 5
+}
