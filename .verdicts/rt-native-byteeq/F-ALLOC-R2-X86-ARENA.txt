@@ -1,0 +1,191 @@
+F-ALLOC-R2-X86-ARENA — the r2 "mirror arm64 arena → x86_64, #else byte-count
+                         DECREASES" deliverable is a NO-GO that DUPLICATES the
+                         already-decided F-LEGB-STANDALONE-ELSE NO-GO (2026-06-17)
+================================================================================
+LANE: alloc r2 (RT-NATIVE-ZEROC fleet). Branch rt-native-alloc-r2-x86-arena.
+GOAL (as briefed): port the arm64 hexa-source rt_arena_* bump arena into the
+x86_64 native runtime + the standalone build path so that the x86_64 arena symbols
+become T from a hexa-source body, the C `#else` arena body is EXCISED from the
+emitter, and `runtime_core.c` byte-count DECREASES (the genuine ls-reduction signal).
+
+DECISION = honest NO-GO on the briefed deliverable (c9). The briefed verify bar is
+unachievable WITHOUT tripping the exact NO-GO this campaign already landed today.
+A real, non-fake GO SUB-UNIT exists (x86_64 rt_arena_* machine-code emitter twin)
+but it produces ZERO ls-reduction and ZERO byteeq change — it is dormant-emitter
+parity, NOT a shipped-runtime C-free. Named below as a deferred ADD, not claimed
+as this round's reduction.
+
+================================================================================
+1. THE r1 PREMISE IS HALF-TRUE AND MISLEADING (RAN — read the real bodies)
+================================================================================
+r1 (F-ALLOC-R1-FEASIBILITY) framed r2 as "the arm64 native runtime ALREADY emits a
+full hexa-source bump arena → x86_64 is just a bounded codegen MIRROR." Reading the
+actual sources falsifies the "just a mirror" part:
+
+  · self/codegen/runtime_arm64.hexa:2237-2543 — rt_arena_init/alloc/reset/release
+    is a hexa-source fn that returns a [int] of RAW ARM64 MACHINE-CODE BYTES (svc
+    #0x80 mmap=197/munmap=73, _arena_state addressed via ADRP+ADD PAGE21/PAGEOFF12
+    relocs). It is darwin-arm64-SPECIFIC machine code, NOT portable hexa logic.
+
+  · self/runtime_core_emit.hexa:3882-4049 — a SEPARATE, C-SOURCE-TEXT arena model
+    (buf = buf + "..."): hexa_arena_alloc / hexa_arena_mark / hexa_arena_rewind /
+    hexa_arena_reset, a linked-block bump allocator in portable C.
+
+  These are two UNRELATED arena implementations. "Mirroring" the arm64 one to
+  x86_64 means WRITING AN x86_64 MACHINE-CODE EMITTER (rax=9/11 syscall, RIP-rel
+  PC32 reloc to _arena_state), NOT translating a portable hexa body. There is no
+  portable hexa arena to copy.
+
+  WITNESS — no x86_64 analog exists:
+    grep -rln 'rt_arena' self/ compiler/ tool/ (excl. tests) →
+      self/codegen/runtime_arm64.hexa  (the emitter)
+      self/codegen/macho.hexa          (the .o-wrap machinery, ARM64_RELOC only)
+    grep '^fn rt_arena' self/codegen/*.hexa → ARM64 only. NO runtime_x86*.hexa.
+
+================================================================================
+2. THE DECISIVE FACT: THE SHIPPED ARENA IS C `#else` ON **BOTH** TARGETS
+================================================================================
+The arm64 rt_arena_* machine-code emitter is PROVEN-BUT-DORMANT. It is consumed
+ONLY by PoC/test .o emitters (test/native_build/poc_arena_bundle_emit.hexa,
+tool/emit_runtime_obj.hexa). It is NEVER wired into the shipped runtime:
+
+  grep 'emit_runtime_obj|poc_arena_bundle|rt_arena' tool/release_build
+       tool/stage_resolve_runtime_a tool/*.sh  →  EMPTY.
+
+The runtime that BOTH arm64-darwin AND x86_64-linux actually link in CI/release is
+the C standalone path (F-LEGB-STANDALONE-ELSE-NOGO, same campaign, today):
+  selfhost-byteeq-gate.yml:71 / release.yml:125/249/294 → bash tool/release_build
+  tool/release_build:68            → bash tool/stage_resolve_runtime_a (Stage 0b)
+  tool/stage_resolve_runtime_a:271 → $CC $CFLAGS -I self -c self/runtime.c -o
+                                     build/runtime.o   (NO -DHEXA_HAS_HEXA_RT_STDLIB
+                                     = STANDALONE config; self/runtime.c #includes
+                                     runtime_core.c which carries the #else arena)
+  aiden RAN (F-LEGB...NOGO): nm build/runtime.o | grep -c ' T rt_' = 33 → the #else
+  C bodies DEFINE the shipped rt_* (incl. arena). Excising #else ⇒ runtime.a has
+  rt_* UNDEFINED ⇒ release_build's ./hexa link FAILS = REAL regression, not
+  substrate trimming.
+
+  ⇒ x86_64's shipped arena is C **for the same reason arm64's shipped arena is C**.
+    There is NO arm64-vs-x86_64 parity gap to close by mirroring. Both ship C; the
+    arm64 rt_arena_* native emitter is dormant on its own target too.
+
+================================================================================
+3. WHY THE BRIEFED VERIFY BAR IS UNACHIEVABLE WITHOUT THE NO-GO (c16)
+================================================================================
+The briefed bar requires "the C `#else` arena body is excised from the emitter" and
+"runtime_core.c byte-count DECREASES." But:
+
+  · The #else arena body IS the shipped x86_64 (and arm64) arena (§2).
+  · F-LEGB-STANDALONE-ELSE-NOGO (2026-06-17, this campaign) already RAN the proof
+    that deleting a live #else body breaks tool/release_build (the authoritative CI
+    judge) and decided: "어떤 #else 블록도 제거하지 않음 / 에미터 미편집."
+  · F-M5-R2-RTCORE-CENSUS (2026-06-17, #3487) already classified the per-family
+    #else-drop lane TERMINAL: "PURE-PORTABLE 버킷 = 0 ... per-family native-seed
+    드롭 = EXHAUSTED. ls 레버는 __hx_make_val unlock + M5 standalone 재설계 둘뿐."
+
+  ⇒ Achieving "runtime_core.c bytes DECREASE" via #else-excise is the precise
+    F-LEGB-STANDALONE-ELSE NO-GO pattern the r2 brief itself warned against ("do
+    NOT delete a live body — that breaks ./hexa link"). The briefed deliverable
+    asks for the forbidden move. NO-GO is the honest, already-established result.
+
+  NO aiden build was burned to "achieve" a reduction that the campaign has twice
+  proven impossible without a regression — that would be tune-to-green theatre (c9).
+
+================================================================================
+4. THE REAL, NON-FAKE GO SUB-UNIT (named deferred ADD, not this round's reduction)
+================================================================================
+There IS a genuine emitter-parity gap, and the infra to close it EXISTS:
+
+  GAP: arm64 has a (dormant) hexa-source native arena emitter (runtime_arm64.hexa
+       rt_arena_*); x86_64 has NONE.
+  INFRA READY (RAN — read compiler/emit/elf_x86_64.hexa, 1693 L):
+    · .data / .rodata / .bss sections (line 59-61: ".data = module-global HexaVal
+      slots, 16-B zero, g<id> locals") — _arena_state 24-B slot fits .bss/.data.
+    · R_X86_64_64 / PC32 / PLT32 reloc kinds (lines 49-51) + reloc resolution
+      (lines 782-853, formula imm32 = S + A - P) — RIP-relative addressing of
+      _arena_state is the x86_64 analog of arm64 PAGE21/PAGEOFF12.
+    · multi-symbol + data + rela.text object wrap — the ELF twin of macho.hexa's
+      v3 wrap that poc_arena_bundle uses.
+  ⇒ Writing rt_arena_{init,alloc,reset,release} as x86_64 machine-code bytes
+    (mov rax,#9 mmap / #11 munmap; syscall; lea/RIP-rel to _arena_state) + an ELF
+    bundle emitter twin of poc_arena_bundle is BOUNDED, ADD-ONLY, non-circular
+    (same int/pointer-space body the r1 PoC already RAN on aiden).
+
+  BUT its honest value is EMITTER PARITY ONLY — it would be dormant on x86_64
+  exactly as rt_arena_* is dormant on arm64 (§2), because the shipped C standalone
+  runtime links neither. It yields ZERO runtime_core.c byte-delta and ZERO byteeq
+  change. Claiming it as an ls-reduction would be fake. It is a prerequisite brick
+  for the M5 standalone-redesign (link native rt_*.o instead of C #else), NOT a
+  reduction by itself.
+
+================================================================================
+5. CLASSIFICATION (c16) + NAMED r3
+================================================================================
+VERDICT: 🧱 NO-GO on the briefed deliverable (#else-excise byte-reduction) =
+  DUPLICATE of F-LEGB-STANDALONE-ELSE-NOGO + F-M5-R2-RTCORE-CENSUS (both today).
+  The ALLOC #else is the M5-standalone-redesign lever, NOT a per-family mirror.
+
+  · NO byte-delta achieved (correctly — the only way to one is the forbidden
+    #else delete). runtime_core.c UNCHANGED. No emitter edit. No CI run needed
+    (no source change to gate); byteeq-real on main = GREEN (last: §3 chain),
+    untouched by this docs-only round.
+  · The x86_64 rt_arena_* emitter twin (§4) is a REAL bounded ADD but DORMANT-
+    parity only — deferred, not landed, to avoid a fake-reduction claim.
+
+NAMED r3 — pivot off the dead-end per-family/mirror lane onto the two REAL levers
+the census named, sequenced behind the array lane's __hx_make_val (#3488, now on
+main per the r2 brief):
+
+  r3 = "map_* allocator+construct half over arena + __hx_make_val": the FIRST
+       HexaVal-RETURNING ALLOC-WALLED family now that BOTH walls (alloc feasibility
+       r1 + construct __hx_make_val #3488) are down. hexa_map_set_impl/get/keys:
+       alloc-half = hmap_alloc_ex/hmap_grow via the r1-proven bump arena over
+       __hx_syscall6 mmap + __hx_ptr_* (calloc = fresh-anon-page bump, kernel
+       zero-fills; realloc = alloc+__hx_ptr copy); construct-half = {.tag=TAG_MAP}
+       via __hx_make_val. DEPLETION TEST: a C-diff gate (map_core_gate.c, like
+       b4_array_gate 32/32) RAN on aiden — N inserts/lookups/removes byte-exact
+       vs the C #else map _impl, + nm witness that the hexa map body references
+       NO malloc/calloc/realloc (only the 2-syscall arena floor). Same #else-DROP
+       gate as B4: BLOCKED-on-M5-standalone-redesign (don't delete the live C
+       body) — r3 proves the MECHANISM is C-free, M5 does the standalone relink.
+  COORDINATE: the array lane owns array_core.hexa (get/set/pop/len via
+       __hx_make_val + __hx_ptr_load64); alloc r3 takes map_* so the lanes don't
+       collide on the same construct-unlock.
+
+  SECONDARY deferred (not r3): the §4 x86_64 rt_arena_* ELF emitter twin — a brick
+  for M5 standalone-redesign (native rt_*.o link), to be picked up WITH the M5
+  relink so it lands non-dormant, not before (a dormant emitter is dead weight).
+
+================================================================================
+6. HONEST RESIDUAL (c9)
+================================================================================
+  · This round produced NO code, NO byte-reduction, NO CI run — and that is the
+    correct outcome: the briefed reduction is only reachable via the #else delete
+    this campaign has twice proven is a real regression. A "GO with green CI" here
+    would have required either (a) deleting a live shipped body (regression) or
+    (b) writing a dormant emitter and mislabeling it a reduction (fake). Both
+    rejected per c9.
+  · The genuine irreducible floor stands (ARCHITECTURE.json): syscall instruction
+    (wrapped) + libm. The ALLOC #else C body is, like Go/Rust's freestanding mmap
+    allocator substrate, an HONEST-KEEP standalone fallback — re-assessable via the
+    M5 standalone-redesign (relink native rt_*.o), not deletable in place.
+  · r1's "x86_64 = bounded mirror" framing is CORRECTED: x86_64's shipped arena is
+    C for the same reason arm64's is — the rt_arena_* native emitter is dormant on
+    BOTH targets. The lever is M5 standalone-redesign + __hx_make_val map/array
+    ports, exactly as F-M5-R2-RTCORE-CENSUS already named. r2 adds the x86_64 ELF
+    emitter-twin feasibility (infra READY) as a deferred M5 brick.
+
+  · PROCESS NOTE (shared-worktree collision, recovered): this lane's worktree
+    (.claude/worktrees/reflective-leaping-porcupine) was concurrently checked out
+    by the array lane, which `git reset --hard origin/main` + committed array-r3
+    WIP (array_core.hexa get/set ports) ONTO this branch name (c39f9c8a5). That
+    stray commit was preserved under tag `recover/array-r3-wip-c39f9c8a5` and this
+    branch was re-based cleanly on origin/main (8534e3173, makeval #3488) carrying
+    ONLY this verdict's docs. The array lane's work is NOT lost (tag + its own
+    origin/rt-native-array-r3-arraycore branch). Lesson: fleet lanes must NOT share
+    a worktree directory.
+
+CONCLUSION: ALLOC r2 briefed deliverable = NO-GO (duplicate of standing NO-GO).
+The per-family/mirror ls-lever is EXHAUSTED; the two live levers are M5 standalone-
+redesign + the make_val-unlocked map/array ports (r3 = map_*). The x86_64 native
+arena emitter is a real bounded ADD but a dormant M5 brick, not a reduction.

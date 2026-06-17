@@ -134,3 +134,34 @@
   CONSTRUCT-WALLED arith/cmp/eq/to_string 13패밀리) (ii) standalone #else 중복제거/runtime.c
   substrate 재설계(M5 standalone-redesign lane, build 작업). 포트 강제 안 함(c9). runtime_core.c
   byte delta = 0. verdict F-M5-R2-RTCORE-CENSUS. m5 DEPLETED(per-family-drop lane).
+
+## 2026-06-17 — alloc r2 (x86 arena): briefed #else-excise = NO-GO (dup of standing NO-GO)
+RT-NATIVE-ZEROC alloc r2. branch rt-native-alloc-r2-x86-arena. docs-only.
+brief: mirror arm64 rt_arena_* → x86_64 + excise #else arena + runtime_core.c bytes DECREASE.
+RAN (read real bodies, no build burned):
+  · arm64 rt_arena_* (runtime_arm64.hexa:2237-2543) = hexa-source emitting RAW ARM64
+    MACHINE-CODE bytes (svc mmap=197/munmap=73, _arena_state ADRP+ADD PAGE21/PAGEOFF12) =
+    darwin-arm64-SPECIFIC, NOT portable hexa. #else arena (runtime_core_emit.hexa:3882-4049)
+    = SEPARATE portable-C linked-block bump. "mirror" = WRITE x86 machine-code emitter, no
+    portable body to copy. no x86 analog (grep '^fn rt_arena' self/codegen = ARM64 only).
+  · DECISIVE: arm64 rt_arena_* = PROVEN-BUT-DORMANT — consumed only by PoC/test .o
+    (poc_arena_bundle_emit, emit_runtime_obj), NEVER by release_build/stage_resolve_runtime_a
+    (grep empty). BOTH targets ship the C standalone arena (stage_resolve_runtime_a:271
+    $CC -c self/runtime.c, no -DHEXA_HAS, #includes runtime_core.c #else). x86's shipped
+    arena is C for the SAME reason arm64's is = NO mirror parity-gap. r1 "x86=bounded mirror"
+    framing CORRECTED.
+  · briefed bar (excise #else, bytes DECREASE) = the F-LEGB-STANDALONE-ELSE-NOGO pattern the
+    brief warned against — delete = breaks release_build (CI judge); F-M5-R2-RTCORE-CENSUS
+    (#3487) already TERMINAL'd per-family #else-drop. reduction reachable ONLY via forbidden
+    delete = NO-GO. no source change → no CI run; byteeq-real on main GREEN, untouched.
+real GO sub-unit (DEFERRED, not a reduction): x86 rt_arena_* ELF machine-code emitter twin IS
+  buildable (elf_x86_64.hexa has .data/.bss + R_X86_64_64/PC32 reloc+resolve + multi-sym wrap),
+  but DORMANT-parity (links into nothing shipped) ⇒ ZERO byte-delta. a brick for M5 standalone-
+  redesign (relink native rt_*.o), pick up WITH that relink so it lands non-dormant.
+verdict F-ALLOC-R2-X86-ARENA. runtime_core.c byte delta = 0. emitter/runtime/build UNCHANGED.
+NEXT r3 = map_* allocator(arena over __hx_syscall6 mmap + __hx_ptr_*)+construct(__hx_make_val
+  #3488) half, map_core_gate.c C-diff depletion test; #else drop BLOCKED-on-M5. coordinate:
+  array lane owns array_core.hexa, alloc takes map_*.
+PROCESS: shared-worktree collision — array lane reset --hard + committed array-r3 WIP onto this
+  branch (c39f9c8a5); preserved as tag recover/array-r3-wip-c39f9c8a5, branch re-based clean on
+  origin/main 8534e3173. fleet lanes must not share a worktree dir.
