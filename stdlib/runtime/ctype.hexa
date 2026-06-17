@@ -49,13 +49,12 @@ pub fn rt_str_char_count(s: string) -> int {
     return rt_utf8_cpcount(s)
 }
 
-// Step 3 cycle 57 — string contains (substring search). True when `sub`
-// appears anywhere in `s`. Reuses cycle-54's rt_str_index_of for the
-// scan logic — `index_of != -1` is the canonical predicate.
-pub fn rt_str_contains_b(s: string, sub: string) -> bool {
-    if rt_str_index_of(s, sub) >= 0 { return true }
-    return false
-}
+// Step 3 cycle 57 — string contains (substring search). MIGRATED to the
+// native HI-tier seed self/runtime_hi.hexa (RT-NATIVE leg B Z2c, string-search
+// predicate group) — rt_str_contains_b now lives there (self-contained inline
+// substring scan, no rt_str_index_of dep), provided to both targets via the
+// native .s seed + runtime_hi_gen.c. Removed here to avoid a duplicate symbol
+// at the Darwin/active link (the seed group is the sole provider).
 
 // Step 3 cycle 57 — string byte-equality. C body uses pointer-equality
 // fast-path for interned strings then strcmp — we replicate the byte-
@@ -73,34 +72,11 @@ pub fn rt_str_eq_b(a: string, b: string) -> bool {
     return true
 }
 
-// Step 3 cycle 56 — prefix / suffix predicates. Hexa fns return bool;
-// the C wrappers keep their `int` return signature (codegen wraps in
-// `hexa_bool(rt_str_starts_with(...))`) so we use `_b` suffix names
-// here and let the C bridge extract via `hexa_truthy(...) ? 1 : 0`.
-pub fn rt_str_starts_with_b(s: string, prefix: string) -> bool {
-    let plen = byte_len(prefix)
-    let slen = byte_len(s)
-    if plen > slen { return false }
-    let mut i = 0
-    while i < plen {
-        if s.byte_at(i) != prefix.byte_at(i) { return false }
-        i = i + 1
-    }
-    return true
-}
-
-pub fn rt_str_ends_with_b(s: string, suffix: string) -> bool {
-    let sfxlen = byte_len(suffix)
-    let slen = byte_len(s)
-    if sfxlen > slen { return false }
-    let offset = slen - sfxlen
-    let mut i = 0
-    while i < sfxlen {
-        if s.byte_at(offset + i) != suffix.byte_at(i) { return false }
-        i = i + 1
-    }
-    return true
-}
+// Step 3 cycle 56 — prefix / suffix predicates. MIGRATED to the native
+// HI-tier seed self/runtime_hi.hexa (RT-NATIVE leg B Z2c, string-search
+// predicate group) — rt_str_starts_with_b / rt_str_ends_with_b now live there,
+// provided to both targets via the native .s seed + runtime_hi_gen.c. Removed
+// here to avoid a duplicate symbol at the Darwin/active link.
 
 // Step 3 cycle 55 — first occurrence at-or-after byte offset `start`.
 // st < 0 clamps to 0; st > hlen returns -1; empty needle returns st

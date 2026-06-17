@@ -221,16 +221,20 @@ if [ "${_RT_HI_NATIVE:-0}" != "1" ]; then
           printf "%s", out
         }
       ' "$_RHG_EMIT" > "$_rhg_tmp" 2>/dev/null || true
-      # Validate: must carry all 11 fn (the 3 casefold/trim + 2 trim-ends) + ctor.
+      # Validate: must carry all 14 fn (3 casefold/trim + 2 trim-ends + 3 search
+      # predicates) + ctor.
       if [ -s "$_rhg_tmp" ] \
          && grep -q 'HexaVal rt_str_to_upper(HexaVal s) {' "$_rhg_tmp" \
          && grep -q 'HexaVal rt_str_to_lower(HexaVal s) {' "$_rhg_tmp" \
          && grep -q 'HexaVal rt_str_trim(HexaVal s) {' "$_rhg_tmp" \
          && grep -q 'HexaVal rt_str_trim_start(HexaVal s) {' "$_rhg_tmp" \
          && grep -q 'HexaVal rt_str_trim_end(HexaVal s) {' "$_rhg_tmp" \
+         && grep -q 'HexaVal rt_str_starts_with_b(HexaVal s, HexaVal prefix) {' "$_rhg_tmp" \
+         && grep -q 'HexaVal rt_str_ends_with_b(HexaVal s, HexaVal suffix) {' "$_rhg_tmp" \
+         && grep -q 'HexaVal rt_str_contains_b(HexaVal s, HexaVal sub) {' "$_rhg_tmp" \
          && grep -q '__hexa_rt_strlit_init_ctor' "$_rhg_tmp"; then
         cp -f "$_rhg_tmp" "$_RHG"
-        echo "[restore_frozen_seeds] RT-NATIVE Z2a: synthesized 11-fn $_RHG from $_RHG_EMIT ($(wc -l < "$_RHG") lines, hexat-free)"
+        echo "[restore_frozen_seeds] RT-NATIVE Z2a: synthesized 14-fn $_RHG from $_RHG_EMIT ($(wc -l < "$_RHG") lines, hexat-free)"
         _rhg_done=1
       fi
       rm -f "$_rhg_tmp"

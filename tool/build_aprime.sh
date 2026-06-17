@@ -55,7 +55,7 @@ cd "$REPO" || { echo "build_aprime: bad repo '$REPO'" >&2; exit 1; }
 #   arm64-darwin → runtime_hi_native.s  (Mach-O; byte-id + runtime-verified)
 #   x86_64-linux → runtime_hi_x86_64.s  (ELF; x86_64 codegen graduated —
 #       F-X86-GEN3-GEN4-BYTEEQ + F-X86-WHOLECOMPILER-ASSEMBLES; seed cross-
-#       assembles clean, all 11 rt_str_* = T symbols).
+#       assembles clean, all 14 rt_str_* = T symbols).
 # linux-arm64 still has no seed → keeps the C path. Override HEXA_ZEROC_RT_HI=0
 # to force the legacy C path on any platform.
 case "$(uname -sm 2>/dev/null)" in
