@@ -1,0 +1,126 @@
+F-LEGB-UNLOCK2-NANBOX-FEASIBILITY — @tag/nanbox-constructor intrinsic feasibility (RT-NATIVE leg B)
+====================================================================================================
+verdict date: 2026-06-17 · method c2/c9/c16 (read actual codegen+runtime source on aiden, no self-judge)
+aiden repo @ 29525bfa1 (synced past ebade14be) · all reads via `harness pool on aiden`
+
+CONCLUSION: GO — and ALREADY EXECUTED (the mechanism is landed). The circularity the task worried
+            about DOES NOT EXIST: the nanbox model lowers DIRECTLY to register `movz` writes with
+            NO runtime call. There is no bootstrap cycle. UNLOCK-2 is DONE on arm64 (CHANGELOG #124,
+            "RT-NATIVE UNLOCK-2 DONE: `@tag` native intrinsic").
+            Residual category-(1) ELIMINATION is bounded but blocked by a DIFFERENT wall (standalone
+            #else redesign, ING #14/#15/#16), not by the intrinsic. x86_64 has a parity GAP (the
+            `__hx_*` leaf intrinsics are arm64-only; x86_64 carries the full {tag,payload} pair model
+            but no leaf-read intrinsic).
+
+────────────────────────────────────────────────────────────────────────────────────────────────
+Q1. CURRENT NANBOX MODEL — what a hexa-level constructor intrinsic must emit
+────────────────────────────────────────────────────────────────────────────────────────────────
+HexaVal is NOT a NaN-boxed pointer-tag; it is a 16-byte TAGGED UNION (self/runtime_core.c:1112):
+
+    typedef struct HexaVal_ {
+        HexaTag tag;                       // lo eightbyte
+        union { int64_t i; double f; int b; char* s; HexaArr* arr_ptr; ... }; // hi eightbyte (payload)
+    } HexaVal;
+
+Tag enum (runtime_core.c:1019):  TAG_INT=0, TAG_FLOAT=1, TAG_BOOL=2, TAG_STR=3, TAG_VOID=4, ...
+Macros (1135-1137):  HX_TAG(v)=(v).tag · HX_INT(v)=(v).i
+
+Category-(1) C constructor bodies (runtime_core.c:1422-1448) are ONE-LINE struct literals:
+    hexa_int(int64_t n)  { return (HexaVal){.tag=TAG_INT,   .i=n};  }
+    hexa_float(double f) { return (HexaVal){.tag=TAG_FLOAT,  .f=f};  }
+    hexa_bool(int b)     { return (HexaVal){.tag=TAG_BOOL,   .b=b};  }
+    hexa_void()          { return (HexaVal){.tag=TAG_VOID};         }
+    hexa_bits_to_float(x){ union{int64_t i;double d;}u; u.i=HX_INT(x); return hexa_float(u.d); }
+
+To express these in hexa, a hexa-level intrinsic must emit: write the tag constant into the lo
+register/slot and the payload into the hi register/slot. Nothing more — no allocation, no call.
+
+────────────────────────────────────────────────────────────────────────────────────────────────
+Q2. EXISTING INTRINSIC PRECEDENT — UNLOCK-1 FFI + the @-intrinsic / builtin-lowering path
+────────────────────────────────────────────────────────────────────────────────────────────────
+UNLOCK-1 (extern-fn FFI, #3393, CHANGELOG #128) landed: body-less `extern fn` → undefined external
+(parser.hexa `__extern_decl` marker + hir_to_mir skips MFunc → symbol stays undefined → links libc).
+
+A FULL @-intrinsic / builtin-lowering path ALREADY EXISTS and is the exact extension point the task
+asked about ("codegen.hexa HX_TAG + arm64_darwin _hv_load x0 box"). Three-file recipe, proven:
+  • compiler/check/bind.hexa:1221-1231 — `_bind_builtin_names()` whitelist with the `__hx_*`
+    family: __hx_tag, __hx_payload_eq, __hx_payload_nz, __hx_str_byte, __hx_to_double, __hx_arr_len,
+    __hx_syscall0, __hx_syscall6, __hx_ptr_store64/load64, __hx_ptr_store32/load32.
+  • compiler/codegen/arm64_darwin.hexa — STMT_CALL special-cases (1896 __hx_tag, 1910 __hx_payload_eq,
+    1921 __hx_payload_nz, plus the int/float leaf-ops, str-byte, to_double).
+  • compiler/codegen/codegen.hexa — C-transpile mirror (HX_TAG etc).
+
+The construction primitive `_hv_load` (arm64_darwin.hexa:1090) is literally the nanbox-constructor
+intrinsic, already inlined per operand kind:
+    const_int  → movz lo,#0 (TAG_INT)  + movz/imm hi,#val     ← this IS hexa_int inlined
+    const_bool → movz lo,#2 (TAG_BOOL) + movz hi,#0/1         ← this IS hexa_bool inlined
+    const_void → movz lo,#4 (TAG_VOID) + movz hi,#0           ← this IS hexa_void inlined
+    const_float→ movz lo,#1 (TAG_FLOAT)+ adrp/add/ldr hi(f64) ← this IS hexa_float inlined
+`_hv_store`/`_hv_store_dst` write the pair back with `stp`. So the constructor side already exists
+at the codegen primitive level; the value-read side (`__hx_tag`) is the landed intrinsic.
+
+────────────────────────────────────────────────────────────────────────────────────────────────
+Q3. THE CIRCULARITY QUESTION (KEY) — ANSWER: NO CIRCULARITY (c16 — NOT a true-ceiling)
+────────────────────────────────────────────────────────────────────────────────────────────────
+DISSOCIATION EVIDENCE (captured codegen, arm64_darwin.hexa:1896-1903, __hx_tag emit):
+
+    buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")          // v → x0=tag, x1=payload
+    buf.push(_arm64_instr2("mov",  x1, x0,  "__hx_tag: payload = v.tag"))
+    buf.push(_arm64_instr2("movz", x0, #0,  "__hx_tag: TAG_INT"))   // result = {TAG_INT, v.tag}
+
+There is NO `bl` (no branch-with-link / call) anywhere in this lowering. The intrinsic emits only
+`ldp`/`mov`/`movz`. The CHANGELOG #124 verification confirms it independently:
+    "native .s 런타임콜 0 · 값 정확(exit(__hx_tag(v))): hi→3(STR)·42→0(INT)·3.14→1(FLOAT)·true→2(BOOL)
+     · fixpoint aprime byte-identical 3/3 보존"
+
+Why no cycle: a nanbox-constructor intrinsic does NOT call the constructor it replaces — it lowers
+DIRECTLY to the tag/payload register writes (`movz tag` + `mov/ldr payload`) that the constructor's
+machine code would itself have been. The intrinsic IS the constructor's body, inlined at the call
+site. The C function `hexa_int` and the hexa intrinsic both bottom out in the same two stores; the
+hexa form simply skips the function-call wrapper. The substrate the intrinsic "rests on" is the
+register file and the immediate-move opcode — not a HexaVal constructor — so the recursion that
+would make this a true-ceiling (d) result never closes. This is GO-class, and it is already proven
+by the landed `__hx_tag`/`__hx_payload_*` intrinsics + the 3/3 byte-identical fixpoint.
+
+(Contrast — the genuine irreducible floor lives ELSEWHERE: syscall/asm bootstrap, the frozen-seed
+2-pass arena, and the HexaVal struct *type definition* in self/runtime.h. Those are git-tracked /
+intrinsic-expressible and were already classified small in F-LEGB-FLOOR-SIZED. The nanbox CONSTRUCTOR
+is not part of that floor.)
+
+────────────────────────────────────────────────────────────────────────────────────────────────
+Q4. SCOPE ESTIMATE — bounded first step, does NOT cascade
+────────────────────────────────────────────────────────────────────────────────────────────────
+Codegen sites: the constructor primitive (`_hv_load`/`_hv_store`) + the leaf intrinsics already
+exist on arm64 (ONE backend, ~6 STMT_CALL cases + the per-kind _hv_load branches). The ONLY codegen
+work remaining for full target parity = port the `__hx_*` leaf intrinsics to x86_64_linux.hexa
+(MEASURED: `grep -c __hx_ compiler/codegen/x86_64_linux.hexa` = 0 — x86_64 has the full {tag,payload}
+pair model from #3462 but NO leaf-read intrinsic). That is a bounded, single-file mirror of ~6 cases.
+
+runtime_core.c category-(1) functions touched: 6 (hexa_int, hexa_float, hexa_bool, hexa_void,
+hexa_bits_to_float, + hexa_enum_str/_v). These are the FOUNDATION the other categories rest on,
+but porting them does NOT cascade into (2)/(3)/(4): the per-census 5-category split
+(F-LEGB-RTCORE-PURE-CANDIDATES-ZERO) keeps syscall/alloc (2), map (3), array (4) behind their own
+walls (raw hashtable / raw memory / syscall floor), each independently gated. Category (1) is a
+self-contained leaf set.
+
+HOWEVER (c9 honesty): porting these 6 C constructors to hexa does NOT reduce `ls self/*.c` by itself.
+The 3 self/*.c files are gitignored build products; the file count is held by the standalone #else
+fallback blocks, NOT by the active constructors (which already dispatch to native where seeded).
+File reduction is gated on the standalone-build redesign (ING #14/#15/#16), which is the real next
+leg-B blocker — a build re-design, not this intrinsic. So UNLOCK-2 unblocks the Z2c dispatch core
+(hexa_type_of/eq/truthy native port, CHANGELOG #122) but is orthogonal to the file-count goal.
+
+────────────────────────────────────────────────────────────────────────────────────────────────
+MINIMAL FIRST IMPLEMENTATION STEP (already mostly done on arm64)
+────────────────────────────────────────────────────────────────────────────────────────────────
+1. (DONE arm64) `__hx_tag` + `__hx_payload_eq/nz` + leaf int/float/str ops in arm64_darwin.hexa
+   + bind whitelist + codegen.hexa C-transpile mirror.
+2. (NEXT, bounded) mirror the `__hx_*` leaf intrinsic STMT_CALL cases into x86_64_linux.hexa
+   (the pair model from #3462 already carries {tag,payload}; only the leaf-read emit is missing) —
+   gate on selfhost-byteeq-real CI green.
+3. (Z2c) port hexa_type_of as `switch on __hx_tag(v)` to native .hexa, seed-link via the proven
+   Z2a pattern. Tracking; does not reduce file count.
+
+The nanbox constructor is NOT the irreducible substrate floor — it inlines to register writes and is
+already native-expressible. The honest-keep floor is syscall/seed/struct-def, which is small and
+separately accounted. GO confirmed by landed evidence; no forced GO, no false NO-GO.
