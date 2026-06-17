@@ -254,6 +254,53 @@ resolve_native_rt_hi_seed() {
     rm -f "$s_tmp"
 }
 
+# ── RT-NATIVE leg B M4 ARRAY-R4 — array-core READ-half native seed → build/array_core_native.o ──
+# The array twin of resolve_native_rt_hi_seed: assemble build/array_core_native.o
+# from the arch-matched frozen self/native/array_core_*.s seed, and AUTO-ENABLE
+# the native array element path (HEXA_RT_ARRAY_NATIVE=1) so hexa_array_get/set
+# delegate to rt_array_get_native/set_native (raw-mem + __hx_make_val, gen2-only
+# intrinsics the hexat C-transpile bootstrap cannot lower — hence a frozen .s
+# seed, exactly like rt_str). All 3 production targets now carry a seed
+# (darwin-arm64 + linux-x86_64 + linux-arm64, r4). On an unknown target or an
+# assemble failure, HEXA_RT_ARRAY_NATIVE stays unset and the C element body in
+# runtime_core.c ships unchanged (the no-seed fallback). Override by pre-setting
+# HEXA_RT_ARRAY_NATIVE=0 to force the C path even when a seed exists.
+resolve_native_array_core_seed() {
+    [ "${HEXA_RT_ARRAY_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
+    [ -f build/array_core_native.o ] && { export HEXA_RT_ARRAY_NATIVE=1; return 0; }
+    local seed="" tgt="${TARGET:-}"
+    [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
+        "Darwin arm64") tgt="darwin-arm64" ;;
+        "Linux x86_64") tgt="linux-x86_64" ;;
+        "Linux aarch64"|"Linux arm64") tgt="linux-arm64" ;;
+    esac
+    case "$tgt" in
+        darwin-arm64) seed="self/native/array_core_arm64.s" ;;
+        linux-x86_64) seed="self/native/array_core_x86_64.s" ;;
+        linux-arm64)  seed="self/native/array_core_arm64-linux.s" ;;
+        *)            seed="" ;;   # unknown → C #else path
+    esac
+    [ -n "$seed" ] && [ -f "$seed" ] || return 0
+    mkdir -p build
+    # SAFETY: only adopt the native path if the seed exports ALL 4 element fns
+    # the runtime_core.c delegation expects — a stale/partial seed would yield an
+    # `undefined reference` at the app link. Counted from `.globl` (toolchain-free).
+    local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?rt_array_(get|set|len|pop)_native' "$seed" 2>/dev/null || echo 0)"
+    if [ "${nsyms:-0}" -lt 4 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE ARRAY-R4: seed $seed exports only $nsyms/4 rt_array_*_native — falling back to C #else path" >&2
+        return 0
+    fi
+    local s_tmp="build/array_core_seed.s"
+    grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
+    if $CC -c "$s_tmp" -o build/array_core_native.o 2>/dev/null; then
+        export HEXA_RT_ARRAY_NATIVE=1
+        echo "[stage_resolve_runtime_a] RT-NATIVE ARRAY-R4: assembled build/array_core_native.o from $seed (TARGET=$tgt, $nsyms rt_array_*_native syms) → native array element path"
+    else
+        echo "[stage_resolve_runtime_a] RT-NATIVE ARRAY-R4: WARN assemble of $seed failed — falling back to C #else path" >&2
+    fi
+    rm -f "$s_tmp"
+}
+
 build_runtime_a_from_source() {
     regen_runtime_core_from_emitter
     # RT-NATIVE Z2a (gated): supply rt_str_* from a NATIVE-compiled object
@@ -268,7 +315,18 @@ build_runtime_a_from_source() {
         extra_obj="build/rt_hi_native.o"
         echo "[stage_resolve_runtime_a] RT-NATIVE Z2a: runtime_hi_gen.c #include removed; ar'ing native rt_hi_native.o into runtime.a"
     fi
-    $CC $CFLAGS -I self -c self/runtime.c -o build/runtime.o
+    # RT-NATIVE ARRAY-R4 (gated): when the array_core seed is active, define
+    # HEXA_RT_ARRAY_NATIVE for the runtime.c compile (so hexa_array_get/set take
+    # the native arm) and ar build/array_core_native.o into runtime.a so its
+    # rt_array_*_native symbols resolve. The C #else element bodies stay in
+    # runtime_core.c as the no-seed fallback (dead on seed targets).
+    local rt_array_def=""
+    if [ "${HEXA_RT_ARRAY_NATIVE:-0}" = "1" ] && [ -f build/array_core_native.o ]; then
+        rt_array_def="-DHEXA_RT_ARRAY_NATIVE=1"
+        extra_obj="$extra_obj build/array_core_native.o"
+        echo "[stage_resolve_runtime_a] RT-NATIVE ARRAY-R4: HEXA_RT_ARRAY_NATIVE=1; ar'ing native array_core_native.o into runtime.a"
+    fi
+    $CC $CFLAGS $rt_array_def -I self -c self/runtime.c -o build/runtime.o
     ar rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     echo "$RA"
@@ -278,6 +336,10 @@ build_runtime_a_from_source() {
 # platforms that have one) BEFORE either branch — restore_frozen_seeds reads
 # HEXA_ZEROC_RT_HI to decide whether to synthesize runtime_hi_gen.c at all.
 resolve_native_rt_hi_seed
+# RT-NATIVE ARRAY-R4: assemble the arch-matched native array_core seed (sets
+# HEXA_RT_ARRAY_NATIVE=1 on all 3 production targets — darwin-arm64 + linux-x86_64
+# + linux-arm64). Unknown targets keep the C element path.
+resolve_native_array_core_seed
 
 if [ -f self/runtime.c ]; then
     echo "stage_resolve_runtime_a: seeds present — building runtime.a from source"

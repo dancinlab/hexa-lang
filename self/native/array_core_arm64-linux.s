@@ -1,0 +1,254 @@
+// array_core_arm64-linux.s — FROZEN BOOTSTRAP SEED (RT-NATIVE leg B M4 ARRAY-R4).
+// GENERATED: tool/regen_array_core_native_s.sh — aprime_cc _drv.hexa --emit=asm
+//   --target=arm64-linux-gnu -o array_core_arm64-linux.s stdlib/runtime/array_core.hexa.
+//   Provides the array-core READ-half (rt_array_get_native / rt_array_set_native /
+//   rt_array_len_native / rt_array_pop_native) as native raw-mem bodies
+//   (__hx_ptr_load64/store64 over the HexaArr descriptor + __hx_make_val tag
+//   re-stamp). These intrinsics are gen2-native-only (the hexat C-transpile
+//   bootstrap cannot lower them), so the bodies enter the shipped runtime.a ONLY
+//   via this seed — the rt_hi mechanism (resolve_native_rt_hi_seed / Z2a).
+//   ABI: ELF aarch64, rt_array_*_native no underscore; external hexa_to_int. External: hexa_to_int (runtime.c).
+//   Lets stage_resolve_runtime_a define HEXA_RT_ARRAY_NATIVE + ar this .o into
+//   runtime.a so hexa_array_get/set delegate to the native bodies.
+// hexa-lang emit pass — target=arm64-linux-gnu
+// source: stdlib/runtime/array_core.hexa
+.file 1 "stdlib/runtime/array_core.hexa"
+.text
+.globl rt_array_len_native
+.hidden rt_array_len_native
+    .p2align 2
+rt_array_len_native:
+    .loc 1 44 0
+    stp x29, x30, [sp, #-16]! // prologue: save fp/lr
+    mov x29, sp // prologue: set fp
+    sub sp, sp, #80 // sp adj
+    stp x0, x1, [sp, #0] // ingress param 0
+_L01db_rt_array_len_native_bb0:
+    ldp x0, x1, [sp, #0] // hv load L0
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
+    movz x0, #0 // __hx_payload_add: TAG_INT
+    stp x0, x1, [sp, #16] // hv store L1
+    ldp x0, x1, [sp, #16] // hv load L1
+    stp x0, x1, [sp, #32] // hv store L2
+    ldp x0, x1, [sp, #32] // hv load L2
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #8 // hv const_int val
+    add x1, x1, x3 // __hx_ptr_load64: addr = ptr + off
+    ldr x1, [x1] // __hx_ptr_load64: x1 = *(addr)
+    movz x0, #0 // __hx_ptr_load64: TAG_INT
+    stp x0, x1, [sp, #48] // hv store L3
+    ldp x0, x1, [sp, #48] // hv load L3
+    bl hexa_to_int // call hexa_to_int
+    stp x0, x1, [sp, #64] // hv store L4
+    ldp x0, x1, [sp, #64] // hv load L4
+    add sp, sp, #80 // sp adj
+    ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
+    ret // return
+.globl rt_array_get_native
+.hidden rt_array_get_native
+    .p2align 2
+rt_array_get_native:
+    .loc 1 53 0
+    stp x29, x30, [sp, #-16]! // prologue: save fp/lr
+    mov x29, sp // prologue: set fp
+    sub sp, sp, #224 // sp adj
+    stp x0, x1, [sp, #0] // ingress param 0
+    stp x2, x3, [sp, #16] // ingress param 1
+_L01db_rt_array_get_native_bb0:
+    ldp x0, x1, [sp, #0] // hv load L0
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
+    movz x0, #0 // __hx_payload_add: TAG_INT
+    stp x0, x1, [sp, #32] // hv store L2
+    ldp x0, x1, [sp, #32] // hv load L2
+    stp x0, x1, [sp, #48] // hv store L3
+    ldp x0, x1, [sp, #48] // hv load L3
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    add x1, x1, x3 // __hx_ptr_load64: addr = ptr + off
+    ldr x1, [x1] // __hx_ptr_load64: x1 = *(addr)
+    movz x0, #0 // __hx_ptr_load64: TAG_INT
+    stp x0, x1, [sp, #64] // hv store L4
+    ldp x0, x1, [sp, #64] // hv load L4
+    stp x0, x1, [sp, #80] // hv store L5
+    ldp x0, x1, [sp, #16] // hv load L1
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #16 // hv const_int val
+    mul x1, x1, x3 // __hx_payload_mul: x1 = a.pl mul b.pl
+    movz x0, #0 // __hx_payload_mul: TAG_INT
+    stp x0, x1, [sp, #96] // hv store L6
+    ldp x0, x1, [sp, #96] // hv load L6
+    stp x0, x1, [sp, #112] // hv store L7
+    ldp x0, x1, [sp, #80] // hv load L5
+    ldp x2, x3, [sp, #112] // hv load L7
+    add x1, x1, x3 // __hx_ptr_load64: addr = ptr + off
+    ldr x1, [x1] // __hx_ptr_load64: x1 = *(addr)
+    movz x0, #0 // __hx_ptr_load64: TAG_INT
+    stp x0, x1, [sp, #128] // hv store L8
+    ldp x0, x1, [sp, #128] // hv load L8
+    stp x0, x1, [sp, #144] // hv store L9
+    ldp x0, x1, [sp, #112] // hv load L7
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #8 // hv const_int val
+    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
+    movz x0, #0 // __hx_payload_add: TAG_INT
+    stp x0, x1, [sp, #160] // hv store L10
+    ldp x0, x1, [sp, #80] // hv load L5
+    ldp x2, x3, [sp, #160] // hv load L10
+    add x1, x1, x3 // __hx_ptr_load64: addr = ptr + off
+    ldr x1, [x1] // __hx_ptr_load64: x1 = *(addr)
+    movz x0, #0 // __hx_ptr_load64: TAG_INT
+    stp x0, x1, [sp, #176] // hv store L11
+    ldp x0, x1, [sp, #176] // hv load L11
+    stp x0, x1, [sp, #192] // hv store L12
+    ldp x0, x1, [sp, #144] // hv load L9
+    ldp x2, x3, [sp, #192] // hv load L12
+    mov x0, x1 // __hx_make_val: lo = tag word
+    mov x1, x3 // __hx_make_val: hi = payload word
+    stp x0, x1, [sp, #208] // hv store L13
+    ldp x0, x1, [sp, #208] // hv load L13
+    add sp, sp, #224 // sp adj
+    ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
+    ret // return
+.globl rt_array_set_native
+.hidden rt_array_set_native
+    .p2align 2
+rt_array_set_native:
+    .loc 1 67 0
+    stp x29, x30, [sp, #-16]! // prologue: save fp/lr
+    mov x29, sp // prologue: set fp
+    sub sp, sp, #256 // sp adj
+    stp x0, x1, [sp, #0] // ingress param 0
+    stp x2, x3, [sp, #16] // ingress param 1
+    stp x4, x5, [sp, #32] // ingress param 2
+_L01db_rt_array_set_native_bb0:
+    ldp x0, x1, [sp, #0] // hv load L0
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
+    movz x0, #0 // __hx_payload_add: TAG_INT
+    stp x0, x1, [sp, #48] // hv store L3
+    ldp x0, x1, [sp, #48] // hv load L3
+    stp x0, x1, [sp, #64] // hv store L4
+    ldp x0, x1, [sp, #64] // hv load L4
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    add x1, x1, x3 // __hx_ptr_load64: addr = ptr + off
+    ldr x1, [x1] // __hx_ptr_load64: x1 = *(addr)
+    movz x0, #0 // __hx_ptr_load64: TAG_INT
+    stp x0, x1, [sp, #80] // hv store L5
+    ldp x0, x1, [sp, #80] // hv load L5
+    stp x0, x1, [sp, #96] // hv store L6
+    ldp x0, x1, [sp, #16] // hv load L1
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #16 // hv const_int val
+    mul x1, x1, x3 // __hx_payload_mul: x1 = a.pl mul b.pl
+    movz x0, #0 // __hx_payload_mul: TAG_INT
+    stp x0, x1, [sp, #112] // hv store L7
+    ldp x0, x1, [sp, #112] // hv load L7
+    stp x0, x1, [sp, #128] // hv store L8
+    ldp x0, x1, [sp, #32] // hv load L2
+    mov x1, x0 // __hx_tag: payload = v.tag
+    movz x0, #0 // __hx_tag: TAG_INT
+    stp x0, x1, [sp, #144] // hv store L9
+    ldp x0, x1, [sp, #144] // hv load L9
+    stp x0, x1, [sp, #160] // hv store L10
+    ldp x0, x1, [sp, #32] // hv load L2
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
+    movz x0, #0 // __hx_payload_add: TAG_INT
+    stp x0, x1, [sp, #176] // hv store L11
+    ldp x0, x1, [sp, #176] // hv load L11
+    stp x0, x1, [sp, #192] // hv store L12
+    ldp x0, x1, [sp, #96] // hv load L6
+    ldp x2, x3, [sp, #128] // hv load L8
+    ldp x4, x5, [sp, #160] // hv load L10
+    add x1, x1, x3 // __hx_ptr_store64: addr = ptr + off
+    str x5, [x1] // __hx_ptr_store64: *(addr) = val
+    movz x0, #0 // __hx_ptr_store64: TAG_INT (ret ptr)
+    ldp x0, x1, [sp, #96] // hv load L6
+    movz x0, #0 // __hx_ptr_store64: TAG_INT
+    stp x0, x1, [sp, #208] // hv store L13
+    ldp x0, x1, [sp, #128] // hv load L8
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #8 // hv const_int val
+    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
+    movz x0, #0 // __hx_payload_add: TAG_INT
+    stp x0, x1, [sp, #224] // hv store L14
+    ldp x0, x1, [sp, #96] // hv load L6
+    ldp x2, x3, [sp, #224] // hv load L14
+    ldp x4, x5, [sp, #192] // hv load L12
+    add x1, x1, x3 // __hx_ptr_store64: addr = ptr + off
+    str x5, [x1] // __hx_ptr_store64: *(addr) = val
+    movz x0, #0 // __hx_ptr_store64: TAG_INT (ret ptr)
+    ldp x0, x1, [sp, #96] // hv load L6
+    movz x0, #0 // __hx_ptr_store64: TAG_INT
+    stp x0, x1, [sp, #240] // hv store L15
+    ldp x0, x1, [sp, #0] // hv load L0
+    add sp, sp, #256 // sp adj
+    ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
+    ret // return
+.globl rt_array_pop_native
+.hidden rt_array_pop_native
+    .p2align 2
+rt_array_pop_native:
+    .loc 1 83 0
+    stp x29, x30, [sp, #-16]! // prologue: save fp/lr
+    mov x29, sp // prologue: set fp
+    sub sp, sp, #160 // sp adj
+    stp x0, x1, [sp, #0] // ingress param 0
+_L01db_rt_array_pop_native_bb0:
+    ldp x0, x1, [sp, #0] // hv load L0
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
+    movz x0, #0 // __hx_payload_add: TAG_INT
+    stp x0, x1, [sp, #16] // hv store L1
+    ldp x0, x1, [sp, #16] // hv load L1
+    stp x0, x1, [sp, #32] // hv store L2
+    ldp x0, x1, [sp, #32] // hv load L2
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #8 // hv const_int val
+    add x1, x1, x3 // __hx_ptr_load64: addr = ptr + off
+    ldr x1, [x1] // __hx_ptr_load64: x1 = *(addr)
+    movz x0, #0 // __hx_ptr_load64: TAG_INT
+    stp x0, x1, [sp, #48] // hv store L3
+    ldp x0, x1, [sp, #48] // hv load L3
+    stp x0, x1, [sp, #64] // hv store L4
+    ldp x0, x1, [sp, #64] // hv load L4
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #1 // hv const_int val
+    sub x1, x1, x3 // __hx_payload_sub: x1 = a.pl sub b.pl
+    movz x0, #0 // __hx_payload_sub: TAG_INT
+    stp x0, x1, [sp, #80] // hv store L5
+    ldp x0, x1, [sp, #80] // hv load L5
+    stp x0, x1, [sp, #96] // hv store L6
+    ldp x0, x1, [sp, #0] // hv load L0
+    ldp x2, x3, [sp, #96] // hv load L6
+    bl rt_array_get_native // call rt_array_get_native
+    stp x0, x1, [sp, #112] // hv store L7
+    ldp x0, x1, [sp, #112] // hv load L7
+    stp x0, x1, [sp, #128] // hv store L8
+    ldp x0, x1, [sp, #32] // hv load L2
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #8 // hv const_int val
+    ldp x4, x5, [sp, #96] // hv load L6
+    add x1, x1, x3 // __hx_ptr_store64: addr = ptr + off
+    str x5, [x1] // __hx_ptr_store64: *(addr) = val
+    movz x0, #0 // __hx_ptr_store64: TAG_INT (ret ptr)
+    ldp x0, x1, [sp, #32] // hv load L2
+    movz x0, #0 // __hx_ptr_store64: TAG_INT
+    stp x0, x1, [sp, #144] // hv store L9
+    ldp x0, x1, [sp, #128] // hv load L8
+    add sp, sp, #160 // sp adj
+    ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
+    ret // return
+.section .hexa.cap,"",@progbits
+_hexa_cap_manifest:
+.section .hexa.abi,"",@progbits
+_hexa_abi_stamp:
+    .byte 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00

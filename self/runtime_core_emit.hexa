@@ -2485,25 +2485,24 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "// 여기서 일찍 선언.\n"
     buf = buf + "void hexa_throw(HexaVal err);\n"
     buf = buf + "\n"
-    buf = buf + "// RT-NATIVE-ZEROC M4 B4 array-core READ-half (r3): the in-bounds element\n"
-    buf = buf + "// read/write cores OPTIONALLY delegate to raw-mem hexa-source bodies\n"
-    buf = buf + "// (stdlib/runtime/array_core.hexa::rt_array_get_native/set_native) — gated\n"
-    buf = buf + "// behind HEXA_RT_ARRAY_NATIVE, DEFAULT-OFF. The bodies use native-only leaf\n"
-    buf = buf + "// intrinsics (__hx_ptr_load64 + __hx_make_val, r2 #3488) that ONLY the native\n"
-    buf = buf + "// gen2 compiler (self/codegen.hexa) lowers — the hexat C-transpile bootstrap\n"
-    buf = buf + "// (used by build_aprime/release) does NOT, and the array stdlib is not in the\n"
-    buf = buf + "// compiler flatten closure. So the bodies enter the runtime ONLY via a native-\n"
-    buf = buf + "// emitted frozen .s seed (the rt_hi mechanism); until that seed is ar'd in,\n"
-    buf = buf + "// HEXA_RT_ARRAY_NATIVE stays undefined and the C body below ships unchanged\n"
-    buf = buf + "// (fixpoint + all build configs untouched). The native path is PROVEN: nm of\n"
-    buf = buf + "// the native-emitted array_core.o = rt_array_*_native T (intrinsics inlined,\n"
-    buf = buf + "// zero undefined __hx_*) + direct-call gate 12/12 (int/str/bool tag-faithful).\n"
-    buf = buf + "// The C arm keeps the non-array / OOB guards + throw routing + dirty flag;\n"
-    buf = buf + "// only the alloc-free element {tag,payload} touch is delegated.\n"
-    buf = buf + "#ifdef HEXA_RT_ARRAY_NATIVE\n"
+    // RT-NATIVE-ZEROC M4 B4 array-core READ-half (r4) — emitter-source rationale
+    // (NOT emitted; keeps runtime_core.c minimal for the genuine byte-decrease):
+    // hexa_array_get/set delegate UNCONDITIONALLY to the raw-mem hexa-source bodies
+    // (stdlib/runtime/array_core.hexa::rt_array_{get,set}_native). The C
+    // `#else HX_ARR_ITEMS(arr)[idx]` fallback was DROPPED here — the first genuine
+    // non-string runtime-substrate runtime_core.c byte-decrease. The bodies use
+    // native-only leaf intrinsics (__hx_ptr_load64 + __hx_make_val, r2 #3488) that
+    // ONLY the native gen2 compiler lowers (the hexat C-transpile bootstrap does
+    // NOT, and the array stdlib is not in the compiler flatten closure), so they
+    // enter the runtime ONLY via the frozen .s seed
+    // (self/native/array_core_{arm64,x86_64,arm64-linux}.s) ar'd into runtime.a by
+    // stage_resolve_runtime_a::resolve_native_array_core_seed (all 3 production
+    // targets) + linked into the single-TU dev builds (build_aprime /
+    // build_native_linux_arm64). PROVEN: nm = rt_array_*_native T (intrinsics
+    // inlined, zero undefined __hx_*) + direct-call gate 12/12 + C-diff gate 32/32.
+    buf = buf + "// array element read/write: native raw-mem bodies (array_core.hexa).\n"
     buf = buf + "extern HexaVal rt_array_get_native(HexaVal arr, HexaVal idx);\n"
     buf = buf + "extern HexaVal rt_array_set_native(HexaVal arr, HexaVal idx, HexaVal v);\n"
-    buf = buf + "#endif\n"
     buf = buf + "\n"
     buf = buf + "HexaVal hexa_array_get(HexaVal arr, int64_t idx) {\n"
     buf = buf + "    // B13: tag guard — without this, a TAG_STR (from hexa_add fallthrough)\n"
@@ -2551,11 +2550,7 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "        hexa_throw(hexa_str(_buf));\n"
     buf = buf + "        return hexa_void();\n"
     buf = buf + "    }\n"
-    buf = buf + "#ifdef HEXA_RT_ARRAY_NATIVE\n"
     buf = buf + "    return rt_array_get_native(arr, hexa_int(idx));\n"
-    buf = buf + "#else\n"
-    buf = buf + "    return HX_ARR_ITEMS(arr)[idx];\n"
-    buf = buf + "#endif\n"
     buf = buf + "}\n"
     buf = buf + "\n"
     buf = buf + "// .last() codegen helper — single-eval the obj expression (HX_ARR_LEN is a\n"
@@ -2606,11 +2601,7 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "        return arr;\n"
     buf = buf + "    }\n"
     buf = buf + "    // In-place mutate (no copy — caller reassigns)\n"
-    buf = buf + "#ifdef HEXA_RT_ARRAY_NATIVE\n"
     buf = buf + "    rt_array_set_native(arr, hexa_int(idx), val);\n"
-    buf = buf + "#else\n"
-    buf = buf + "    HX_ARR_ITEMS(arr)[idx] = val;\n"
-    buf = buf + "#endif\n"
     buf = buf + "    // ω-interp-2: SETTER for the per-frame \"dirty\" flag. Any direct write to\n"
     buf = buf + "    // a host-array element is the canonical \"slot may now contain arena Vals\"\n"
     buf = buf + "    // event — covers `array_store[idx] = items.push(item)` from\n"
