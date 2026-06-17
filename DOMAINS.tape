@@ -22,3 +22,4 @@
 @domain HEXA-DDP := "domains/HEXA-DDP.md"
 @domain HEXA-DOJO := "domains/HEXA-DOJO.md"
 @domain RT-NATIVE := "./RT-NATIVE.md"
+@domain RT-NATIVE-ZEROC := "./RT-NATIVE-ZEROC.md"
