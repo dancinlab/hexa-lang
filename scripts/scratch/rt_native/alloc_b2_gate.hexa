@@ -1,0 +1,517 @@
+// ==== /Users/mini/dancinlab/hexa-lang/self/rt/syscall.hexa ====
+// self/rt/syscall.hexa — P7-7a: syscall intrinsic wrappers
+//
+// Declares per-target syscall numbers and portable sys_* wrappers over
+// the `syscall(num, args...)` builtin. The builtin is lowered by
+// self/codegen/syscall.hexa into architecture-specific instruction
+// sequences (ARM64 svc / x86_64 syscall).
+//
+// Spec: docs/plans/syscall_intrinsic_spec.md
+//
+// Usage from rt/ modules:
+//
+//     use self::rt::syscall
+//
+//     fn write_line(s: string) -> int {
+//         let addr = __hx_str_ptr(s)
+//         return sys_write(1, addr, len(s))
+//     }
+//
+// Per-target constants are const fns so codegen DCE drops the dead
+// branch at --target time. `target_is_linux()` / `target_is_darwin()`
+// resolve at codegen (compile-time known).
+
+// ═══════════════════════════════════════════════════════════════════
+// Target selection (compile-time, resolved by codegen --target flag)
+// ═══════════════════════════════════════════════════════════════════
+
+@pure fn target_is_linux() -> bool { return __hx_target_os() == 0 }
+@pure fn target_is_darwin() -> bool { return __hx_target_os() == 1 }
+
+// __hx_target_os() is a shipping-backend leaf intrinsic (RT-NATIVE M5-syscall-a,
+// 2026-06-18): x86_64_linux → 0, arm64_darwin → 1. It replaces the old P7-7
+// `__TARGET_OS__` codegen-injected ident which only self/codegen knew.
+//   0 = linux,  1 = darwin,  2 = (reserved for freebsd)
+
+// ═══════════════════════════════════════════════════════════════════
+// syscall shim — route the P7-7 `syscall(num, args…)` builtin (not lowered by
+// the shipping compiler/codegen) to the M1 leaf `__hx_syscall6` (num + EXACTLY
+// 6 args; 0-fill the unused tail) / `__hx_syscall0` (num only). RT-NATIVE
+// M5-syscall-b, 2026-06-18.
+// ═══════════════════════════════════════════════════════════════════
+
+@inline fn _sc0(n: int) -> int { return __hx_syscall0(n) }
+@inline fn _sc1(n: int, a: int) -> int { return __hx_syscall6(n, a, 0, 0, 0, 0, 0) }
+@inline fn _sc2(n: int, a: int, b: int) -> int { return __hx_syscall6(n, a, b, 0, 0, 0, 0) }
+@inline fn _sc3(n: int, a: int, b: int, c: int) -> int { return __hx_syscall6(n, a, b, c, 0, 0, 0) }
+@inline fn _sc4(n: int, a: int, b: int, c: int, d: int) -> int { return __hx_syscall6(n, a, b, c, d, 0, 0) }
+@inline fn _sc6(n: int, a: int, b: int, c: int, d: int, e: int, f: int) -> int { return __hx_syscall6(n, a, b, c, d, e, f) }
+
+// ═══════════════════════════════════════════════════════════════════
+// Linux syscall numbers (x86_64 + arm64 unified — Linux unified ABI)
+// ═══════════════════════════════════════════════════════════════════
+
+@pure fn SYS_LINUX_READ()         -> int { return 0 }
+@pure fn SYS_LINUX_WRITE()        -> int { return 1 }
+@pure fn SYS_LINUX_OPEN()         -> int { return 2 }
+@pure fn SYS_LINUX_CLOSE()        -> int { return 3 }
+@pure fn SYS_LINUX_STAT()         -> int { return 4 }
+@pure fn SYS_LINUX_FSTAT()        -> int { return 5 }
+@pure fn SYS_LINUX_LSEEK()        -> int { return 8 }
+@pure fn SYS_LINUX_MMAP()         -> int { return 9 }
+@pure fn SYS_LINUX_MUNMAP()       -> int { return 11 }
+@pure fn SYS_LINUX_BRK()          -> int { return 12 }
+@pure fn SYS_LINUX_IOCTL()        -> int { return 16 }
+@pure fn SYS_LINUX_PIPE()         -> int { return 22 }
+@pure fn SYS_LINUX_NANOSLEEP()    -> int { return 35 }
+@pure fn SYS_LINUX_FORK()         -> int { return 57 }
+@pure fn SYS_LINUX_EXECVE()       -> int { return 59 }
+@pure fn SYS_LINUX_WAIT4()        -> int { return 61 }
+@pure fn SYS_LINUX_DUP2()         -> int { return 33 }
+@pure fn SYS_LINUX_GETDENTS64()   -> int { return 217 }
+@pure fn SYS_LINUX_CLOCK_GETTIME()-> int { return 228 }
+@pure fn SYS_LINUX_EXIT_GROUP()   -> int { return 231 }
+@pure fn SYS_LINUX_UNLINKAT()     -> int { return 263 }
+@pure fn SYS_LINUX_MKDIRAT()      -> int { return 258 }
+@pure fn SYS_LINUX_GETRANDOM()    -> int { return 318 }
+
+// ═══════════════════════════════════════════════════════════════════
+// Darwin syscall numbers (BSD layer, OR 0x2000000 baked in)
+// ═══════════════════════════════════════════════════════════════════
+
+@pure fn SYS_DARWIN_EXIT()        -> int { return 33554433 }  // 0x2000001
+@pure fn SYS_DARWIN_FORK()        -> int { return 33554434 }  // 0x2000002
+@pure fn SYS_DARWIN_READ()        -> int { return 33554435 }  // 0x2000003
+@pure fn SYS_DARWIN_WRITE()       -> int { return 33554436 }  // 0x2000004
+@pure fn SYS_DARWIN_OPEN()        -> int { return 33554437 }  // 0x2000005
+@pure fn SYS_DARWIN_CLOSE()       -> int { return 33554438 }  // 0x2000006
+@pure fn SYS_DARWIN_WAIT4()       -> int { return 33554439 }  // 0x2000007
+@pure fn SYS_DARWIN_UNLINK()      -> int { return 33554442 }  // 0x200000a
+@pure fn SYS_DARWIN_LSEEK()       -> int { return 33554631 }  // 0x20000c7 (arm64)
+@pure fn SYS_DARWIN_EXECVE()      -> int { return 33554491 }  // 0x200003b
+@pure fn SYS_DARWIN_MUNMAP()      -> int { return 33554505 }  // 0x2000049
+@pure fn SYS_DARWIN_MMAP()        -> int { return 33554629 }  // 0x20000c5
+@pure fn SYS_DARWIN_FSTAT64()     -> int { return 33554621 }  // 0x20000bd
+@pure fn SYS_DARWIN_GETDIRENTRIES()-> int { return 33554772 } // 0x2000154
+@pure fn SYS_DARWIN_GETDIRENTRIES64()->int { return 33554776 } // 0x2000158 (arm64 new-style)
+@pure fn SYS_DARWIN_MKDIR()       -> int { return 33554568 }  // 0x2000088
+@pure fn SYS_DARWIN_NANOSLEEP()   -> int { return 33554629 }  // (placeholder — revise)
+@pure fn SYS_DARWIN_CLOCK_GETTIME()->int  { return 33558008 }  // 0x2000E78
+
+// ═══════════════════════════════════════════════════════════════════
+// Portable wrappers — callers use these, not raw syscall()
+// ═══════════════════════════════════════════════════════════════════
+
+fn sys_read(fd: int, buf: int, len: int) -> int {
+    if target_is_linux() { return _sc3(SYS_LINUX_READ(), fd, buf, len) }
+    return _sc3(SYS_DARWIN_READ(), fd, buf, len)
+}
+
+fn sys_write(fd: int, buf: int, len: int) -> int {
+    if target_is_linux() { return _sc3(SYS_LINUX_WRITE(), fd, buf, len) }
+    return _sc3(SYS_DARWIN_WRITE(), fd, buf, len)
+}
+
+fn sys_open(path_cstr: int, flags: int, mode: int) -> int {
+    if target_is_linux() { return _sc3(SYS_LINUX_OPEN(), path_cstr, flags, mode) }
+    return _sc3(SYS_DARWIN_OPEN(), path_cstr, flags, mode)
+}
+
+fn sys_close(fd: int) -> int {
+    if target_is_linux() { return _sc1(SYS_LINUX_CLOSE(), fd) }
+    return _sc1(SYS_DARWIN_CLOSE(), fd)
+}
+
+fn sys_lseek(fd: int, off: int, whence: int) -> int {
+    if target_is_linux() { return _sc3(SYS_LINUX_LSEEK(), fd, off, whence) }
+    return _sc3(SYS_DARWIN_LSEEK(), fd, off, whence)
+}
+
+fn sys_unlink(path_cstr: int) -> int {
+    if target_is_linux() {
+        // Linux uses unlinkat(AT_FDCWD=-100, path, 0)
+        return _sc3(SYS_LINUX_UNLINKAT(), -100, path_cstr, 0)
+    }
+    return _sc1(SYS_DARWIN_UNLINK(), path_cstr)
+}
+
+fn sys_mkdir(path_cstr: int, mode: int) -> int {
+    if target_is_linux() {
+        // Linux: mkdirat(AT_FDCWD=-100, path, mode) — raw mkdir(2)=83 was dropped.
+        return _sc3(SYS_LINUX_MKDIRAT(), -100, path_cstr, mode)
+    }
+    return _sc2(SYS_DARWIN_MKDIR(), path_cstr, mode)
+}
+
+fn sys_mmap(addr: int, size: int, prot: int, flags: int, fd: int, off: int) -> int {
+    if target_is_linux() { return _sc6(SYS_LINUX_MMAP(), addr, size, prot, flags, fd, off) }
+    return _sc6(SYS_DARWIN_MMAP(), addr, size, prot, flags, fd, off)
+}
+
+fn sys_munmap(addr: int, size: int) -> int {
+    if target_is_linux() { return _sc2(SYS_LINUX_MUNMAP(), addr, size) }
+    return _sc2(SYS_DARWIN_MUNMAP(), addr, size)
+}
+
+fn sys_exit(code: int) -> int {
+    if target_is_linux() { return _sc1(SYS_LINUX_EXIT_GROUP(), code) }
+    return _sc1(SYS_DARWIN_EXIT(), code)
+}
+
+fn sys_getrandom(buf: int, len: int, flags: int) -> int {
+    if target_is_linux() { return _sc3(SYS_LINUX_GETRANDOM(), buf, len, flags) }
+    // Darwin has no getrandom; fall back to /dev/urandom via open+read
+    let fd = sys_open(__hx_str_ptr("/dev/urandom"), 0, 0)
+    if fd < 0 { return fd }
+    let n = sys_read(fd, buf, len)
+    sys_close(fd)
+    return n
+}
+
+fn sys_clock_gettime(clk: int, ts_ptr: int) -> int {
+    if target_is_linux() { return _sc2(SYS_LINUX_CLOCK_GETTIME(), clk, ts_ptr) }
+    return _sc2(SYS_DARWIN_CLOCK_GETTIME(), clk, ts_ptr)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Process control — fork / execve / wait4 / pipe / dup2 / nanosleep
+// ═══════════════════════════════════════════════════════════════════
+//
+// Used by self/rt/proc.hexa (hexa_exec / hexa_exec_with_status / hexa_sleep).
+// Signatures match the Linux unified ABI; Darwin uses the same layout.
+
+fn sys_fork() -> int {
+    if target_is_linux() { return _sc0(SYS_LINUX_FORK()) }
+    return _sc0(SYS_DARWIN_FORK())
+}
+
+// argv_ptr / envp_ptr are int addresses of NULL-terminated cstring arrays.
+fn sys_execve(path_cstr: int, argv_ptr: int, envp_ptr: int) -> int {
+    if target_is_linux() { return _sc3(SYS_LINUX_EXECVE(), path_cstr, argv_ptr, envp_ptr) }
+    return _sc3(SYS_DARWIN_EXECVE(), path_cstr, argv_ptr, envp_ptr)
+}
+
+// wait4(pid, &status, options, &rusage). rusage_ptr = 0 to skip.
+fn sys_wait4(pid: int, status_ptr: int, options: int, rusage_ptr: int) -> int {
+    if target_is_linux() { return _sc4(SYS_LINUX_WAIT4(), pid, status_ptr, options, rusage_ptr) }
+    return _sc4(SYS_DARWIN_WAIT4(), pid, status_ptr, options, rusage_ptr)
+}
+
+// pipe(fds[2]) — fds_ptr is int addr of a 2-int array (8 bytes each on 64-bit,
+// or 4 bytes if codegen emits 32-bit ints; interp convention is 64-bit slots).
+// Linux pipe() returns read-end in rax and writes read/write fds to fds_ptr[0..1]
+// (actually writes both slots; return value is 0 on success, -errno on error).
+fn sys_pipe(fds_ptr: int) -> int {
+    if target_is_linux() { return _sc1(SYS_LINUX_PIPE(), fds_ptr) }
+    // Darwin has no plain pipe() via BSD syscall — kernel returns r0/r1 in
+    // two return regs. Current codegen exposes only the first return value,
+    // so Darwin path is incomplete; pipe-based exec is Linux-only for now.
+    return -1
+}
+
+fn sys_dup2(oldfd: int, newfd: int) -> int {
+    if target_is_linux() { return _sc2(SYS_LINUX_DUP2(), oldfd, newfd) }
+    // Darwin dup2 syscall number not yet catalogued — see proc.hexa blocker.
+    return -1
+}
+
+fn sys_nanosleep(req_ptr: int, rem_ptr: int) -> int {
+    if target_is_linux() { return _sc2(SYS_LINUX_NANOSLEEP(), req_ptr, rem_ptr) }
+    return _sc2(SYS_DARWIN_NANOSLEEP(), req_ptr, rem_ptr)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Open flags (POSIX shared; Linux + Darwin identical for subset below)
+// ═══════════════════════════════════════════════════════════════════
+
+@pure fn O_RDONLY()  -> int { return 0 }
+@pure fn O_WRONLY()  -> int { return 1 }
+@pure fn O_RDWR()    -> int { return 2 }
+// Note: O_CREAT / O_APPEND / O_TRUNC values diverge between Linux and
+// Darwin. Use per-target variants.
+@pure fn O_CREAT_LINUX()  -> int { return 64 }    // 0x40
+@pure fn O_APPEND_LINUX() -> int { return 1024 }  // 0x400
+@pure fn O_TRUNC_LINUX()  -> int { return 512 }   // 0x200
+@pure fn O_CREAT_DARWIN() -> int { return 512 }   // 0x200
+@pure fn O_APPEND_DARWIN()-> int { return 8 }     // 0x008
+@pure fn O_TRUNC_DARWIN() -> int { return 1024 }  // 0x400
+
+fn flag_o_creat() -> int {
+    if target_is_linux() { return O_CREAT_LINUX() }
+    return O_CREAT_DARWIN()
+}
+fn flag_o_append() -> int {
+    if target_is_linux() { return O_APPEND_LINUX() }
+    return O_APPEND_DARWIN()
+}
+fn flag_o_trunc() -> int {
+    if target_is_linux() { return O_TRUNC_LINUX() }
+    return O_TRUNC_DARWIN()
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// mmap prot/flags (POSIX shared subset)
+// ═══════════════════════════════════════════════════════════════════
+
+@pure fn PROT_READ()  -> int { return 1 }
+@pure fn PROT_WRITE() -> int { return 2 }
+@pure fn PROT_EXEC()  -> int { return 4 }
+@pure fn MAP_PRIVATE()-> int { return 2 }
+@pure fn MAP_ANON_LINUX()  -> int { return 32 }    // 0x20
+@pure fn MAP_ANON_DARWIN() -> int { return 4096 }  // 0x1000
+fn flag_map_anon() -> int {
+    if target_is_linux() { return MAP_ANON_LINUX() }
+    return MAP_ANON_DARWIN()
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CLOCK_* constants
+// ═══════════════════════════════════════════════════════════════════
+
+@pure fn CLOCK_REALTIME()  -> int { return 0 }
+@pure fn CLOCK_MONOTONIC_LINUX()  -> int { return 1 }
+@pure fn CLOCK_MONOTONIC_DARWIN() -> int { return 6 }
+fn clock_monotonic() -> int {
+    if target_is_linux() { return CLOCK_MONOTONIC_LINUX() }
+    return CLOCK_MONOTONIC_DARWIN()
+}
+
+// ==== self/rt/alloc.hexa ====
+// self/rt/alloc.hexa — P7-7b: hexa allocator over syscall(mmap/munmap)
+//
+// Replaces runtime.c malloc/free/realloc. Mirrors the existing arena
+// semantics from runtime.c:
+//
+//   hexa_arena_on() / hexa_arena_rewind(mark) / hexa_arena_reset()
+//   hexa_ptr_alloc(size) / hexa_ptr_free(ptr, size)
+//
+// DE-CIRCULARIZED (2026-06-18, M5-alloc-b2 over F-M5-ALLOC-B1-MULTIPOOL-RAN):
+// the pool list is held in RAW MEMORY — a fixed mmap'd table addressed by
+// __hx_ptr_load64/store64 — NOT a hexa `[ArenaPool]` array + `.push()`. The old
+// P7-7 draft's array representation made arena-alloc recurse into
+// array-push-grow into arena-alloc (F-M5-ALLOC-CIRCULAR-DEP); the raw-mem table
+// breaks that cycle. The multi-pool grow/mark/rewind/reset body below was proven
+// end-to-end on real x86_64 (native-emit + RUN exit 0, non-circular nm witness)
+// as scripts/scratch/rt_native/multipool_arena_poc.hexa.
+//
+// Memory intrinsics are now the SHIPPING __hx_ptr_load64/store64 (+8 byte),
+// not the P7-7-era __mem_* names (those only had self/codegen/memop.hexa
+// lowering; the shipping compiler/codegen knows only __hx_ptr_*).
+//
+// Design
+// ------
+//
+//   1. Arena (bump pointer, scope-rewindable). Primary allocator. The pool
+//      TABLE lives at __arena_tbl (one mmap'd region): a header word holds the
+//      live pool count, and pool i's {base,size,used} header is at
+//      __arena_tbl + 24 + i*24. Pool data pages are separate mmap regions.
+//
+//   2. Page allocator (one mmap per large alloc) for objects >= POOL/2.
+//
+// Arena resets/rewinds are O(pools). State is global (the runtime.c surface
+// hexa_ptr_alloc(size) takes no arena handle); the single table-base int lives
+// in the module global __arena_tbl, set by rt_init().
+//
+// Thread safety: single-threaded (matches runtime.c).
+
+// ═══════════════════════════════════════════════════════════════════
+// Constants
+// ═══════════════════════════════════════════════════════════════════
+
+@pure fn POOL_PAGE_SIZE() -> int { return 1048576 }  // 1 MB per pool page
+@pure fn ARENA_MAX_POOLS() -> int { return 256 }      // up to 256 MB/arena
+
+// ═══════════════════════════════════════════════════════════════════
+// Global arena state — a raw mmap'd pool table (NO hexa array)
+// ═══════════════════════════════════════════════════════════════════
+//
+// Table layout (each slot 24 bytes = 3 words):
+//   __arena_tbl + 0          : live pool count (np)
+//   __arena_tbl + 24 + i*24  : pool i {base @+0, size @+8, used @+16}
+
+let mut __arena_tbl = 0
+
+@pure fn align_up(n: int, align: int) -> int {
+    return ((n + align - 1) / align) * align
+}
+
+// Raw table accessors — single __hx_ptr_* op each, no allocation, no recursion.
+fn __a_np() -> int { return __hx_ptr_load64(__arena_tbl, 0) }
+fn __a_set_np(n: int) { __hx_ptr_store64(__arena_tbl, 0, n) }
+fn __p_base(i: int) -> int { return __hx_ptr_load64(__arena_tbl, 24 + i * 24) }
+fn __p_size(i: int) -> int { return __hx_ptr_load64(__arena_tbl, 24 + i * 24 + 8) }
+fn __p_used(i: int) -> int { return __hx_ptr_load64(__arena_tbl, 24 + i * 24 + 16) }
+fn __p_set_base(i: int, v: int) { __hx_ptr_store64(__arena_tbl, 24 + i * 24, v) }
+fn __p_set_size(i: int, v: int) { __hx_ptr_store64(__arena_tbl, 24 + i * 24 + 8, v) }
+fn __p_set_used(i: int, v: int) { __hx_ptr_store64(__arena_tbl, 24 + i * 24 + 16, v) }
+
+// Map a new pool page + record it in the raw table (replaces .push(pool)).
+fn __arena_grow() {
+    let n = __a_np()
+    let flags = MAP_PRIVATE() + flag_map_anon()
+    let prot = PROT_READ() + PROT_WRITE()
+    let base = sys_mmap(0, POOL_PAGE_SIZE(), prot, flags, -1, 0)
+    if base < 0 {
+        sys_exit(137)  // arena overflow → abort (SIGKILL-equivalent)
+        return
+    }
+    __p_set_base(n, base)
+    __p_set_size(n, POOL_PAGE_SIZE())
+    __p_set_used(n, 0)
+    __a_set_np(n + 1)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Page allocator — one mmap per alloc, one munmap per free
+// ═══════════════════════════════════════════════════════════════════
+
+fn page_alloc(size: int) -> int {
+    let aligned = align_up(size, 4096)
+    let flags = MAP_PRIVATE() + flag_map_anon()
+    let prot = PROT_READ() + PROT_WRITE()
+    let addr = sys_mmap(0, aligned, prot, flags, -1, 0)
+    if addr < 0 {
+        sys_exit(137)
+        return 0
+    }
+    return addr
+}
+
+fn page_free(addr: int, size: int) -> int {
+    let aligned = align_up(size, 4096)
+    return sys_munmap(addr, aligned)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Global allocator surface — runtime.c compat shims
+// ═══════════════════════════════════════════════════════════════════
+//
+// runtime.c exposes:
+//   hexa_arena_on / hexa_arena_mark / hexa_arena_rewind / hexa_arena_reset
+//   hexa_ptr_alloc(size) / hexa_ptr_free(ptr, size)
+//
+// A mark is encoded as a single int: pool_idx * (POOL_PAGE_SIZE+1) + used
+// (used < POOL_PAGE_SIZE, so the division recovers both halves). -1 = empty.
+
+fn rt_init() {
+    // mmap the fixed pool table, then eagerly map the first pool so the first
+    // alloc is O(1).
+    let flags = MAP_PRIVATE() + flag_map_anon()
+    let prot = PROT_READ() + PROT_WRITE()
+    __arena_tbl = sys_mmap(0, (ARENA_MAX_POOLS() + 1) * 24, prot, flags, -1, 0)
+    if __arena_tbl < 0 {
+        sys_exit(137)
+        return
+    }
+    __hx_ptr_store64(__arena_tbl, 0, 0)  // np = 0
+    __arena_grow()
+}
+
+fn hexa_arena_on() -> int {
+    return 1
+}
+
+fn hexa_arena_mark() -> int {
+    if __a_np() == 0 { return -1 }
+    let cur = __a_np() - 1
+    return cur * (POOL_PAGE_SIZE() + 1) + __p_used(cur)
+}
+
+fn hexa_arena_rewind(mark: int) {
+    if mark < 0 {
+        hexa_arena_reset()
+        return
+    }
+    let pidx = mark / (POOL_PAGE_SIZE() + 1)
+    let used = mark - pidx * (POOL_PAGE_SIZE() + 1)
+    // Unmap any pools created after the marked pool.
+    let mut i = __a_np() - 1
+    while i > pidx {
+        sys_munmap(__p_base(i), __p_size(i))
+        i = i - 1
+    }
+    __a_set_np(pidx + 1)
+    __p_set_used(pidx, used)
+}
+
+fn hexa_arena_reset() {
+    let mut i = 0
+    while i < __a_np() {
+        sys_munmap(__p_base(i), __p_size(i))
+        i = i + 1
+    }
+    __a_set_np(0)
+}
+
+fn hexa_ptr_alloc(size: int) -> int {
+    let aligned = align_up(size, 8)
+    // Large allocs bypass the arena (go straight to mmap).
+    if aligned > POOL_PAGE_SIZE() / 2 {
+        return page_alloc(aligned)
+    }
+    if __a_np() == 0 { __arena_grow() }
+    let cur = __a_np() - 1
+    if __p_used(cur) + aligned > __p_size(cur) {
+        __arena_grow()
+    }
+    let c = __a_np() - 1
+    let addr = __p_base(c) + __p_used(c)
+    __p_set_used(c, __p_used(c) + aligned)
+    return addr
+}
+
+fn hexa_ptr_free(ptr: int, size: int) -> int {
+    // Arena allocs are freed en masse via arena_reset. Individual free is only
+    // honored for page allocs (>= POOL/2). Small allocs: no-op.
+    if size >= POOL_PAGE_SIZE() / 2 {
+        return page_free(ptr, size)
+    }
+    return 0
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Memory intrinsics — typed load/store at raw addresses
+// ═══════════════════════════════════════════════════════════════════
+//
+// Thin over the shipping __hx_ptr_* leaf intrinsics (single instruction each,
+// no libc memcpy). Offset is pre-added by the intrinsic's second arg.
+
+@inline fn hexa_ptr_write_byte(ptr: int, offset: int, val: int) -> int {
+    __hx_ptr_store8(ptr, offset, val)
+    return val
+}
+
+@inline fn hexa_ptr_read_byte(ptr: int, offset: int) -> int {
+    return __hx_ptr_load8(ptr, offset)
+}
+
+@inline fn hexa_ptr_write_64(ptr: int, offset: int, val: int) -> int {
+    __hx_ptr_store64(ptr, offset, val)
+    return val
+}
+
+@inline fn hexa_ptr_read_64(ptr: int, offset: int) -> int {
+    return __hx_ptr_load64(ptr, offset)
+}
+
+// ── b2 driver: alloc over the fully-ported syscall.hexa (M5-syscall a/b/c) ──
+fn main() {
+    rt_init()
+    let p0 = hexa_ptr_alloc(400000)
+    __hx_ptr_store64(p0, 0, 111)
+    let p1 = hexa_ptr_alloc(400000)
+    __hx_ptr_store64(p1, 0, 222)
+    let p2 = hexa_ptr_alloc(400000)
+    __hx_ptr_store64(p2, 0, 333)
+    if __hx_ptr_load64(p0, 0) + __hx_ptr_load64(p1, 0) + __hx_ptr_load64(p2, 0) != 666 { exit(3) }
+    if __a_np() != 2 { exit(4) }
+    let m = hexa_arena_mark()
+    let pt = hexa_ptr_alloc(1000)
+    __hx_ptr_store64(pt, 0, 999)
+    hexa_arena_rewind(m)
+    let pt2 = hexa_ptr_alloc(1000)
+    if pt2 != pt { exit(5) }
+    hexa_arena_reset()
+    if __a_np() != 0 { exit(6) }
+    exit(0)
+}

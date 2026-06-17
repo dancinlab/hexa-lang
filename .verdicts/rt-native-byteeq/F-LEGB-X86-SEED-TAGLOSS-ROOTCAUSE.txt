@@ -1,0 +1,35 @@
+F-LEGB-X86-SEED-TAGLOSS-ROOTCAUSE — PR #3460 x86_64 native rt_hi seed: 진짜 root cause
+================================================================================
+증상: PR #3460 (linux x86_64 native rt_hi seed) → CI linux-x86_64 faithful FAIL.
+      aprime 빌드 시 transpile 44736L→182L 붕괴 + module_loader.c
+      "undeclared identifier Span/file/string/line/i64".
+
+진단 경로 (aiden linux x86_64, 4중 대조 — c2/c9/c16):
+ 1) negative-control: HEXA_ZEROC_RT_HI=1(시드)=FAIL · =0(C경로)=PASS → 시드 범인 확정.
+ 2) ABI-control (C harness + runtime.a): hexa_str→[HELLO] tag=3 · hexa_int→42 ·
+    hexa_len→3 전부 정상 → 내 harness ABI(HexaVal={long tag; long u}) 정확.
+ 3) 시드 함수 직접 호출: rt_str_pad_left/repeat/center/to_upper/to_lower/trim/
+    trim_start/trim_end 9개 ALL null/empty → 단일함수 아닌 시스템적 버그.
+ 4) 어셈블리 대조 (arm64 작동 vs x86_64 버그):
+    arm64: `stp x0,x1,[sp] ; ingress param 0` → {tag,payload} 16B 쌍 통째 저장,
+           `ldp x0,x1; bl hexa_len` → tag=3 보존 → 정상.
+    x86_64: `mov rsi,rdi #payload; mov rdi,0 #tag; call hexa_len` →
+           (a) ingress 가 param0 payload 를 rsi(reg1) 아닌 rdi(reg0=tag)에서 읽음
+               (x86_64_linux.hexa:1255 `_x86_64_arg_reg(p)`; 정답=`_x86_hv_pair_hi(p)`)
+           (b) "raw-int model"(L636-640 문서화): payload 1-reg 만 추적, tag 는
+               operand-kind 에서 파생 → local=TAG_INT(0) 강제 → string local 의 tag 소실.
+    hexa_len 은 tag-dispatch(`if HX_IS_STR(v)`) → tag=0 → 0 반환 → 루프 0회 →
+    빈 배열 → join → empty/null. 모든 HexaVal-param native 함수에 동일.
+
+ROOT CAUSE: x86_64 codegen 의 payload-only "raw-int model" 이 HexaVal tag 를 통째로
+  잃는다. arm64 는 {tag,payload} 쌍을 spill-slot 에 통째 carry(stp/ldp)하여 tag 보존.
+  + ingress 레지스터 매핑 버그(payload 를 홀수 reg 아닌 짝수 reg 에서 읽음).
+  → self-emit byte-eq PASS(일관됨) + int-only RUNG PASS(tag=0=int 우연일치) 라서
+    "x86_64 codegen graduated" 가 과대평가였음(assembles/byte-eq ≠ runtime ABI 정확성).
+
+FIX (large, scoped, 1줄 아님): x86_64_linux.hexa 가 arm64 처럼 모든 HexaVal 값을
+  {tag,payload} 16B 쌍으로 carry — ingress(쌍 저장)·operand resolve(쌍 로드)·
+  call arg/result(쌍 box/unbox)·spill(16B slot)·binop. = x86_64 backend value-model 재작업.
+
+PR #3460 판정: 머지 불가(BLOCKED). x86_64 native seed 는 이 재작업 선행 필요.
+  leg A x86_64 byte-eq(#3432)·leg B casefold/trim awk-synth(#3455/#3457)은 무관(유효).

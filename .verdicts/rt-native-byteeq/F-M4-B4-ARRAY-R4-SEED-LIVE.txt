@@ -1,0 +1,128 @@
+F-M4-B4-ARRAY-R4-SEED-LIVE — array-core READ-half native bodies LIVE in shipped runtime.a
+(M5 relink mechanism PROVEN for a non-string family); NO runtime_core.c byte-DECREASE
+(drop blocked on linux-arm64 codegen), honest partial (c2/c9/c16)
+================================================================================================
+verdict date: 2026-06-17 · lane: array r4 (RT-NATIVE-ZEROC fleet) · branch
+rt-native-array-r4-seed-drop · base origin/main 6853ec96d (= r3 #3493 merged)
+method c2/c9/c16 — every claim RAN on real x86_64 aiden via `harness pool on aiden`.
+
+TL;DR
+─────
+r4 extended the rt_hi native-seed-into-runtime.a mechanism to the array read-half: a frozen
+`self/native/array_core_{x86_64,arm64}.s` seed (native-emitted from array_core.hexa) is
+assembled to `build/array_core_native.o`, `HEXA_RT_ARRAY_NATIVE` is defined, and the .o is
+ar'd into the shipped runtime.a so `hexa_array_get/set` delegate to the native `rt_array_*_native`
+bodies. **PROVEN LIVE+correct on x86_64** (release_build PASS, nm runtime.a = rt_array_*_native T,
+real array program exit=6). The honest result: this makes the native bodies LIVE in the shipped
+runtime (the M5-relink mechanism proven for the FIRST non-string family) — but it is **NOT a
+runtime_core.c byte-DECREASE**: the C `#else` element body STAYS (it is the no-seed fallback for
+linux-arm64, which has no native seed). runtime.a +~3.8KB, runtime_core.c +0, `ls self/*.c` +0.
+
+────────────────────────────────────────────────────────────────────────────────────────
+1. WHAT LANDED (build-infra, mirrors the rt_hi Z2a path)
+────────────────────────────────────────────────────────────────────────────────────────
+  · self/native/array_core_x86_64.s (374 L) + array_core_arm64.s (254 L) — FROZEN native seeds
+    (rt_array_{get,set,len,pop}_native; 4 .globl each). Position-independent: NO `.LC` string
+    refs, objdump -r = ZERO R_X86_64_32S, PIE-links clean (no PIC fixup needed, unlike rt_hi).
+  · tool/regen_array_core_native_s.sh — reproducible regen (the array twin of
+    regen_runtime_hi_native_s.sh).
+  · tool/stage_resolve_runtime_a — resolve_native_array_core_seed() (assemble seed → .o, set
+    HEXA_RT_ARRAY_NATIVE=1, seed targets only: darwin-arm64 + linux-x86_64; linux-arm64 + unknown
+    → C #else) + build_runtime_a_from_source extended to define -DHEXA_RT_ARRAY_NATIVE for the
+    runtime.c compile + ar build/array_core_native.o into runtime.a when active. 4-globl SAFETY
+    guard (toolchain-free .globl count) skips a stale/partial seed.
+  NOTE: build_aprime.sh (the COMPILER build) is UNCHANGED — it defines HEXA_HAS_HEXA_RT_STDLIB
+  but NOT HEXA_RT_ARRAY_NATIVE, so hexa_array_get/set there take the C #else (the compiler does
+  not need the native array bodies). ⇒ the self-host fixpoint is structurally untouched: the
+  compiler binary's emitted bytes are unchanged; only the shipped RUNTIME.a changed.
+
+────────────────────────────────────────────────────────────────────────────────────────
+2. PROVEN (c2 — RAN on real x86_64 aiden)
+────────────────────────────────────────────────────────────────────────────────────────
+  · `bash tool/stage_resolve_runtime_a` (TARGET=linux-x86_64): "RT-NATIVE ARRAY-R4: assembled
+    build/array_core_native.o from self/native/array_core_x86_64.s (4 rt_array_*_native syms)"
+    + "HEXA_RT_ARRAY_NATIVE=1; ar'ing native array_core_native.o into runtime.a".
+  · `ar t runtime.a` = runtime.o + rt_hi_native.o + array_core_native.o. `nm runtime.a`:
+    rt_array_{get,set,len,pop}_native = T; runtime.o references rt_array_get/set_native as U →
+    RESOLVED within runtime.a. ⇒ the native get/set bodies are LIVE in the shipped runtime.a.
+  · `bash tool/release_build` (linux-x86_64): full self-host build → "[release_build] PASS —
+    ./hexa built". The shipped ./hexa links the native array bodies.
+  · Real array program (push/get/set/len/pop on int/string/bool) linked against the shipped
+    runtime.a → **exit=6** (all correct: STR + BOOL element tags survive through the native
+    delegation; the C oracle + r3 direct gate already locked bit-exactness).
+  · 3-target safety: linux-arm64 TARGET → resolve_native_array_core_seed leaves
+    HEXA_RT_ARRAY_NATIVE UNSET (no seed) → C #else element path → no link break. arm64-darwin
+    seed cross-assembles clean (clang -target arm64-apple-darwin → 2024 B Mach-O .o, 0 errors).
+  · Fixpoint safety: selfhost_byteeq_gate.sh compares the COMPILER's emitted .o (gen3==gen4),
+    NOT the linked runtime.a — my change touches only runtime.a, so byteeq-real is structurally
+    unaffected (compiler binary unchanged).
+
+────────────────────────────────────────────────────────────────────────────────────────
+3. THE HONEST BYTE-DELTA — NO runtime_core.c DECREASE (c9, the decisive number)
+────────────────────────────────────────────────────────────────────────────────────────
+  runtime.a:        +~3.8 KB  (array_core_native.o added)  ← native bodies now LIVE
+  runtime_core.c:   +0        (the C #else element body STAYS — see §4)
+  ls self/*.c:      +0        (no file dropped)
+  ⇒ This is NOT the "first non-string runtime-substrate ls byte-DECREASE". It is the
+    native-bodies-LIVE-in-runtime.a milestone: the M5-relink mechanism (relink a native rt_*.o
+    into the shipped runtime.a) proven for the FIRST NON-STRING family. That is the prerequisite
+    brick for M6 (dropping the whole runtime_core.c once ALL families are native-seeded), the
+    exact array twin of the alloc lane's named "x86_64 rt_arena ELF emitter → M5 relink" brick
+    (F-ALLOC-R2-X86-ARENA): both are DORMANT-parity bricks that go non-dormant together at M5.
+
+────────────────────────────────────────────────────────────────────────────────────────
+4. WHY NO DECREASE — 🧱 the linux-arm64 no-seed wall (c16, why the #else can't drop)
+────────────────────────────────────────────────────────────────────────────────────────
+  The rt_str ls-reduction dropped a SEPARATE file (`runtime_hi_gen.c`, ~188 L) from `ls`. The
+  array element bodies have NO separate _gen.c — they are inline 1-liner C in runtime_core.c
+  (`return HX_ARR_ITEMS(arr)[idx];` / `... = val;`). To get a runtime_core.c byte-DECREASE the
+  get/set `#else` must be DROPPED — but that leaves `hexa_array_get/set` with NO body on any
+  NO-SEED target. linux-arm64 has NO native seed for ANY family (even rt_str keeps the C path
+  there: it links runtime_hi_gen.c, the hexat-transpiled C, on linux-arm64). There is no
+  array equivalent of runtime_hi_gen.c, so dropping the #else → undefined `hexa_array_get` on
+  linux-arm64 → release_build link FAIL (the F-LEGB-STANDALONE-ELSE-NOGO pattern). So a genuine
+  array byte-DECREASE is BLOCKED on **linux-arm64 native codegen maturity** (a campaign-wide
+  pre-existing blocker, the same wall flagged in F-LEG-B-CAUSAL-CHAIN) OR a decision to drop
+  linux-arm64 array support — NOT resolvable in r4. Honest partial (c9): the LIVE-in-runtime.a
+  milestone landed; the byte-DECREASE did not, and the bytes went UP (runtime.a +3.8KB).
+
+────────────────────────────────────────────────────────────────────────────────────────
+5. r5 / what's missing for the genuine drop
+────────────────────────────────────────────────────────────────────────────────────────
+  The genuine non-string ls byte-DECREASE needs ONE of:
+   (a) a linux-arm64 native seed path (array_core_arm64-linux.s + the analogous rt_hi linux-arm64
+       seed) so ALL THREE targets are seed-covered → then the get/set #else can drop safely. This
+       is gated on linux-arm64 native codegen (the x86_64/arm64-darwin seeds exist; arm64-linux
+       does not — campaign M-level work). OR
+   (b) the M5 standalone redesign that relinks ALL families' native rt_*.o and drops runtime_core.c
+       wholesale (M6) — the LIVE-in-runtime.a bricks (this r4 + the alloc arena brick) are exactly
+       its inputs.
+  Depletion test for the eventual drop: build_aprime + faithful-3target + byteeq-real GREEN with
+  the #else dropped on ALL targets + runtime_core.c bytes DECREASE + nm runtime.a rt_array_*_native
+  = T on all 3 + b4_array_native_gate exit on real arm64 + x86_64 hosts.
+  GO for the LIVE-in-runtime.a milestone (proven, green-able, ADD-only to runtime.a, fixpoint
+  preserved); the byte-DECREASE is HONESTLY DEFERRED to the linux-arm64-seed / M5 redesign (c9).
+
+────────────────────────────────────────────────────────────────────────────
+UPDATE (byte-DECREASE ACHIEVED — the deferred-from-r3 reduction lands):
+  The linux-arm64 seed gap is closed and the #else IS dropped. Decisive branch:
+  build_native_linux_arm64:84 ALREADY calls stage_resolve_runtime_a w/ TARGET=
+  linux-arm64 (consume hook exists) → NOT M-level redesign. Two plumbing edits
+  (regen arm64-linux target + resolver linux-arm64 case) freeze the 3rd seed;
+  the get/set #else (HX_ARR_ITEMS[idx]) is dropped to an unconditional native
+  call; single-TU dev builds (build_aprime stage4/5 + build_native_linux_arm64
+  stage4) link build/array_core_native.o (rt_hi Z2a mirror).
+  CAPTURED (aiden x86_64):
+    - byte-DECREASE = 1264 B / 24 L  (origin/main 412623B·8762L → 411359B·8738L)
+      [earlier −5 was a CONTAMINATED control: aiden local `main` ref = stale
+       array-r4 WIP commit 257a7e994, not origin/main; corrected w/ origin/main]
+    - build_aprime.sh smoke exit(42)==42 PASS (native array path in the compiler)
+    - nm build/runtime.a: rt_array_{get,set,len,pop}_native = T + hexa_array_get/set T
+    - arm64-linux seed: 254L, .globl 4/4 (no underscore, ELF), only extern bl
+      hexa_to_int, all __hx_* inlined (0 undefined refs)
+  blast-radius MEASURED: ALL authoritative gates (byteeq-real/faithful-3/release/
+  determinism/miscompile) use release_build → runtime.a (seed ar'd) + byteeq is an
+  OBJECT compare (cc-gen3.o, runtime-independent); build_aprime + build_native_
+  linux_arm64 are in NO workflow (dev single-TU) → #else drop is gate-safe.
+  Residual: aarch64 assembly of the linux-arm64 seed is unverified locally (no
+  cross-assembler on aiden/mini) → PR CI faithful linux-arm64 is the authority.

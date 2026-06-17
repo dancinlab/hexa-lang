@@ -1,0 +1,161 @@
+F-ALLOC-R1-FEASIBILITY — ALLOC-floor reducible: hexa-source bump arena over raw
+                          mmap is FEASIBLE + NON-CIRCULAR (RAN, aiden x86_64) (2026-06-17)
+================================================================================
+LANE: alloc r1 (RT-NATIVE-ZEROC fleet). Branch rt-native-alloc-r1-feasibility.
+GOAL: determine with RAN evidence whether the runtime's allocation substrate
+(bump/arena allocator + malloc/calloc/realloc shim) can be expressed in .hexa
+over the EXISTING raw-mem + syscall intrinsics, WITHOUT recursing into the heap
+it implements. The Go/Rust precedent: their allocators are written in their own
+language over an mmap syscall — the irreducible floor is the syscall instruction
++ libm, NOT the allocator logic above it.
+
+================================================================================
+1. SUBSTRATE MAP (RAN — read the real C bodies)
+================================================================================
+Two distinct allocation tiers in self/runtime_core_emit.hexa + the native
+codegen runtime:
+
+  TIER A — bump ARENA (the substrate floor itself):
+    self/codegen/runtime_arm64.hexa:2221+ ALREADY emits a FULL hexa-source bump
+    arena over RAW arm64 mmap (SYS_mmap=197, svc #0x80):
+      rt_arena_init(size_mb) → mmap anon RW slab, store base/ptr/end into a
+        shared 24-byte _arena_state (__const, adrp+add PAGE21/PAGEOFF12 relocs).
+      rt_arena_alloc / reset / release — bump cursor, O(1), munmap (SYS_munmap=73).
+    runtime_core_emit.hexa: __hexa_val_mark_top (mark-stack watermark, int),
+      hexa_array_arena_alloc_items(n) (hands out HexaVal* from the bump region
+      when mark_top>0), hexa_val_heapify (escape-to-malloc on arena exit),
+      neg-cap sentinel (HX_ARR_CAP<0 ⇒ items point into arena, not malloc).
+    PRIMITIVE OPS NEEDED: mmap/munmap syscall · raw 64/32/8 load+store · int
+      compare (bound check) · int add (bump) · int shift (MB→bytes). NO HexaVal
+      construction in the arena BODY — state is pure int64/pointer space.
+
+  TIER B — libc malloc shim (the renamed legacy floor):
+    runtime_core_emit.hexa:361-380 — malloc/realloc/calloc/free are #define'd to
+    hxlcl_malloc/realloc/calloc/free (libc-rename shims). The map _impl
+    hashtable + to_string recursive buffer + array push/reserve alloc-half route
+    through these. hxlcl_malloc is NOT itself reimplemented — it is the libc
+    allocator (the thing TIER A's bump arena exists to AVOID for hot paths).
+
+  MAP _impl (ALLOC-WALLED, the named r1 target family):
+    hexa_map_set_impl/remove_impl + hmap_alloc_ex/hmap_grow/hmap_find + key
+    intern. PRIMITIVE OPS: calloc(sized, zeroed) · realloc (order-array grow) ·
+    hxlcl_strdup (key intern = malloc+memcpy) · HexaMapTable struct field
+    load/store · FNV-1a hash (pure int) · HexaVal {.tag=TAG_MAP}+HX_SET_MAP_*
+    construction.
+
+================================================================================
+2. INTRINSIC-COVERAGE TALLY (RAN — grep'd both backends + bind whitelist)
+================================================================================
+Existing __hx_* surface (bind.hexa whitelist + x86_64_linux.hexa + arm64_darwin.hexa):
+  __hx_syscall0, __hx_syscall6          (0-arg + 6-arg raw syscall; result = int HexaVal)
+  __hx_ptr_load64/store64               (64-bit raw load/store @ ptr+off)
+  __hx_ptr_load32/store32               (32-bit — int len/cap fields)
+  __hx_ptr_load8/store8                 (byte — #3478 M1 + #3479 M4 PTR8)
+  __hx_payload_add/sub/mul/eq/lt/.../nz (int/float payload arithmetic + compare)
+  __hx_tag, __hx_make_val               (tag read + {tag,payload} construct — array lane #3488)
+
+  ┌────────────────────────────────┬──────────┬──────────────────────────────────┐
+  │ SUBSTRATE PRIMITIVE OP          │ STATUS   │ INTRINSIC                        │
+  ├────────────────────────────────┼──────────┼──────────────────────────────────┤
+  │ mmap (6-arg)                    │ COVERED  │ __hx_syscall6(9/197, ...)        │
+  │ munmap (2-arg)                  │ COVERED  │ __hx_syscall6(11/73, base,len,..)│
+  │ raw 64-bit load/store           │ COVERED  │ __hx_ptr_load64/store64          │
+  │ raw 32-bit load/store (len/cap) │ COVERED  │ __hx_ptr_load32/store32          │
+  │ raw byte load/store (key bytes) │ COVERED  │ __hx_ptr_load8/store8            │
+  │ bump-pointer arithmetic         │ COVERED  │ int payload add/mul/shift        │
+  │ bound/compare check             │ COVERED  │ __hx_payload_lt/ge/eq + int cmp  │
+  │ HexaVal {tag,payload} construct │ COVERED* │ __hx_make_val (array lane #3488) │
+  ├────────────────────────────────┼──────────┼──────────────────────────────────┤
+  │ MISSING intrinsics              │   ZERO   │ — none —                         │
+  └────────────────────────────────┴──────────┴──────────────────────────────────┘
+  (*) __hx_make_val landed on the array-r2 branch (build/aprime_m4 carries it);
+      not yet merged to main. Needed ONLY for the HexaVal-RETURNING families
+      (map_*, array push), NOT for the arena BODY (which is pure int/pointer).
+
+  6-arg mmap CONFIRMED to fit __hx_syscall6: x86_64_linux.hexa:1663 stages args
+  into rdi,rsi,rdx,r10,r8,r9 + num→rax + `syscall`; arm64 stages x0..x5 + x16 +
+  svc #0x80. Both take/return INT-payload HexaVals (_x86_hv_payload reads the int
+  payload; _x86_hv_store_leaf stores an int-tagged HexaVal). 6 args exactly = the
+  full mmap ABI. ⇒ ZERO new intrinsics required for the arena floor.
+
+================================================================================
+3. CIRCULARITY VERDICT — NON-CIRCULAR (decisive, like the B1 nanbox finding)
+================================================================================
+A hexa-source bump arena over a pre-mmap'd region recurses into NO heap. The
+arena state (base ptr, cursor, addresses) lives entirely in int64/pointer space
+— mmap returns a raw address as an INT HexaVal, the cursor is int arithmetic,
+cells are addressed by __hx_ptr_store64/load64. NO string literal, NO array temp,
+NO HexaVal boxing is created inside the allocator body ⇒ no recursion into
+hexa_array/hexa_map.
+
+PROOF (RAN on aiden x86_64, build/aprime_m4):
+  PoC scripts/scratch/rt_native/bump_arena_linux_poc.hexa — Linux x86_64 flavor
+  (mmap=9, MAP_PRIVATE|ANON=0x22, munmap=11):
+    arena_new(8192) = __hx_syscall6(9,0,size,3,34,-1,0)  → raw mmap slab
+    bump 200 cells, store cell[i]=i^2 via __hx_ptr_store64
+    read back + sum via __hx_ptr_load64;  arena_free = __hx_syscall6(11,...)
+    exit(sum == 2646700 ? 0 : 1)   // Σ i^2, i∈0..199 = 199·200·399/6 = 2646700
+
+  emit:  aprime_m4 _drv.hexa --emit=asm --target=x86_64-linux-gnu  → rc=0, 404 L asm
+  as:    as --64 → rc=0
+  link:  gcc -no-pie + build/runtime.o + build/rt_hi_native.o -lm → rc=0
+  RUN:   /tmp/poc ; exit=0   ★ arena fidelity EXACT (200 cells round-trip) ★
+
+  NON-CIRCULARITY witness (nm/objdump on poc.o):
+    arena_new/put/get/free = T (defined in-object) symbols.
+    grep malloc|calloc|realloc|free|mmap over poc.o symbols → NONE referenced.
+    `syscall` instruction count in poc.o = exactly 2 (mmap + munmap) = the
+      irreducible floor, nothing above it.
+    Only undefined symbols = hexa_add_slow, hexa_mul, hexa_exit (generic int
+      arith + exit; their int bodies return hexa_int(...) = stack value, NO
+      alloc — verified runtime_core_emit.hexa:7240/8607). The arena body has
+      ZERO hidden heap dependency.
+
+  ⇒ A hexa bump/arena allocator IS self-contained. FEASIBLE + NON-CIRCULAR.
+
+================================================================================
+4. CLASSIFICATION (c16 taxonomy) + NAMED r2
+================================================================================
+VERDICT: GO + NON-CIRCULAR (with a partial gate on the construct-half).
+
+  · ARENA FLOOR (bump alloc/reset/release over mmap) = GO, intrinsics 100%
+    covered, non-circular. The arm64 native runtime ALREADY emits this in
+    hexa-source (runtime_arm64.hexa rt_arena_*); the x86_64 equivalent is a
+    bounded codegen mirror, NOT a missing intrinsic.
+  · MALLOC/CALLOC/REALLOC shim over the arena = GO for the FIXED-size +
+    bump-from-arena cases (calloc = mmap-zeroed bump; the kernel zero-fills
+    fresh anon mmap pages, so a fresh-page bump IS calloc). REALLOC of an
+    order array = alloc-new + ptr-copy (covered by __hx_ptr_*). General free()
+    of an arbitrary malloc'd block stays the libc floor (bump arenas free in
+    bulk, not per-object — same trade-off Go/Rust make above the syscall).
+  · HexaVal-RETURNING families (map_get/keys/.../set/remove, to_string_*, array
+    push) = GATED-on-make_val. Their alloc-half is feasible over the arena, but
+    they CONSTRUCT a HexaVal result ({.tag=TAG_MAP}+HX_SET_MAP_*) — that half is
+    the CONSTRUCT-WALL the array lane's __hx_make_val (#3488) unlocks. Sequence
+    AFTER the array lane lands make_val on main.
+
+  NAMED r2 (post-array-lane-merge):
+    "Port hexa_arena_alloc / the bump-from-arena calloc to a hexa-source body
+     over __hx_syscall6 mmap + __hx_ptr_* (mirror runtime_arm64.hexa's rt_arena_*
+     into the x86_64 native runtime + the runtime_core_emit standalone path),
+     proving the FIRST ALLOC-WALLED family's allocator-HALF is C-free. The
+     HexaVal-returning families (map_*) chain behind __hx_make_val (#3488)."
+
+================================================================================
+5. HONEST RESIDUAL (c9)
+================================================================================
+  · This is FEASIBILITY evidence, NOT runtime integration. The PoC proves the
+    mechanism (mmap→bump→roundtrip, non-circular, zero C alloc); wiring it into
+    runtime_core's hexa_arena_alloc + flipping the map _impl allocator is the r2+
+    port work, gated on __hx_make_val for the construct-half.
+  · free() of arbitrary blocks + the libc hxlcl_malloc general allocator are NOT
+    claimed reducible here — bump arenas (like Go/Rust's mmap allocators) do bulk
+    reset, not per-object free. The general-purpose malloc/free of long-lived
+    non-arena objects is a real residual above the syscall floor (an ACCOUNTING
+    floor, re-assessable, NOT a hard ceiling — same status the ARCHITECTURE
+    documents for the irreducible syscall+libm floor).
+  · No compiler edit landed this round (docs + PoC only) ⇒ no CI gate trip; the
+    PoC reuses the already-shipped __hx_syscall6/__hx_ptr_* intrinsics.
+
+CONCLUSION: ALLOC floor is REDUCIBLE. The genuine irreducible floor is the
+syscall instruction (already wrapped) + libm — NOT the allocator logic. r1 = GO.

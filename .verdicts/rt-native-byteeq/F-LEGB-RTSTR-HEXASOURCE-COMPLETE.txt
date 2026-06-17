@@ -1,0 +1,21 @@
+F-LEGB-RTSTR-HEXASOURCE-COMPLETE — rt_str 패밀리는 hexa-source 레벨 이미 완료 (2026-06-17)
+================================================================================
+주장(falsified): "다음 floor-안전 rt_str 그룹(index_of/replace/char_at 등)을 awk-synth
+                  Z2a 패턴으로 누적하면 ls self/*.c 가 준다."
+
+검증(c2·c9, mini 로컬 grep — 빌드불요):
+  1. index 패밀리(index_of/index_of_from/last_index_of/count_substr)는 runtime_core.c 에서
+     전부 `extern` 선언 → C-body 아님. 실제 정의는 hexa-source 3곳:
+       self/runtime_pure.hexa · self/rt/string.hexa · stdlib/runtime/ctype.hexa
+  2. runtime.c substrate 의 rt_str C-body 5종(substr/slice/bytes/parse_int/parse_float)도
+     전부 hexa-source 정의 보유(위 3파일) → 이미 native, extern 은 그걸 참조.
+  3. runtime.c 전체 rt_str C-body 대조: 진짜 'C-only'(hexa-source 정의 0) = 0개.
+
+결론(FALSIFIED): rt_str 패밀리는 hexa-source 레벨에서 이미 완료. "다음 rt_str 그룹 누적"은
+  이미-native 함수 재포팅 = 헛수고. (하마터면 index_of 포팅으로 한 사이클 낭비할 뻔.)
+
+진짜 잔여(ING #7/#14 재확인): runtime.c/runtime_core.c 의 #else(standalone) C-body 폴백이
+  native hexa-source 를 중복 → 파일을 붙잡음. 진짜 ls 감소 = standalone 빌드가 hexa-source
+  rt_*.o 를 항상 링크하게 만들어 #else 제거. 이게 leg B 진짜 첫 블로커(연구 아닌 빌드재설계).
+
+다음: standalone #else 중복제거 조사/착수(aiden, CI faithful 3-target + byteeq-real 게이트).

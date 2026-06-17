@@ -1,0 +1,68 @@
+F-M4-PTR8 — 2026-06-17 (summer linux x86_64, ~/hexa-lang-fresh)
+================================================================================
+GOAL (RT-NATIVE-ZEROC M4 PTR8 micro-PR): add `__hx_ptr_store8` / `__hx_ptr_load8`
+byte (8-bit) raw-mem leaf intrinsics to BOTH codegen backends, byte-correct.
+Completes M2's raw-mem set — M1 landed ptr_load/store 64/32 (#3478); the 8-bit
+byte ops were the one gap, needed for `hexa_strbuf_dup_n`'s byte-write in batch B3.
+
+SHAPE (identical to ptr32, single byte):
+  __hx_ptr_store8(addr, off, val)  writes the LOW BYTE of val to [addr+off];
+                                   returns addr (chainable).
+  __hx_ptr_load8(addr, off)        reads the byte at [addr+off] ZERO-EXTENDED.
+
+CHANGES (surgical, c10 — ONLY the 2 ptr8 intrinsics + their gate):
+  compiler/check/bind.hexa          +"__hx_ptr_store8","__hx_ptr_load8" whitelist
+  compiler/codegen/arm64_darwin.hexa  STMT_CALL: `strb w5,[x1]` / `ldrb w1,[x1]`
+                                      (ldrb byte-load = the encoding proven by
+                                       __hx_str_byte; W-write zero-extends)
+  compiler/codegen/x86_64_linux.hexa  STMT_CALL: `mov byte ptr [r10], sil` /
+                                      `movzx r10, byte ptr [r10]` (movzx byte =
+                                       proven by __hx_str_byte; zero-extends)
+  compiler/emit/macho_arm64.hexa      +STRB native object encoder (base
+                                      0x39000000 | imm<<10 | rn<<5 | rt; mirrors
+                                      the pre-existing LDRB 0x39400000) + `strb`
+                                      mnemonic map. (LDRB already existed from M1.)
+  self/codegen.hexa                   C-transpile mirror: store8 = *(uint8_t*)=...
+                                      ; load8 = (int64_t)*(uint8_t*) (uint8_t cast
+                                      → no sign-ext)
+  scripts/scratch/rt_native/m4_x86_leaf_ptr8.hexa  semantic test (exit=7)
+  scripts/scratch/rt_native/ptr8_gate.sh           byte-correct encoding gate
+
+VERIFIED TWO WAYS (c2, never self-judged):
+(A) ENCODING ground-truth — GNU `as` ↔ objdump byte-match:
+      x86 store  `mov byte ptr [r10], sil`     = 41 88 32        ✓
+      x86 load   `movzx r10, byte ptr [r10]`   = 4d 0f b6 12     ✓
+      arm64 store `strb w5,[x1]`               = 39000025        ✓
+      arm64 load  `ldrb w1,[x1]`               = 39400021        ✓
+(B) SEMANTIC ground-truth — emit → as → link C-runtime → RUN on real x86_64
+    (summer), assert exit:
+      m4_x86_leaf_ptr8.hexa  exit=7  ✓
+      Stores 0x00,0x7F,0xFF,0x80 to a mmap'd page (syscall6 mmap=9), reads back:
+        0xFF → 255 (NOT -1)   ← ZERO-EXTEND confirmed (no sign-extension)
+        0x80 → 128 (NOT -128) ← ZERO-EXTEND confirmed
+      + low-byte-only write (store8 of 511=0x1FF lands 0xFF=255)
+      + adjacent-byte isolation (p+2 unchanged by p+3 write — no 4-byte clobber)
+      + chainable return = base ptr
+    Build: tool/build_aprime.sh -o build/aprime_m4 (x86_64 ELF, smoke exit42 PASS).
+
+REGRESSION: M1 x86_leaf_gate.sh still PASS (str=3, arena=5, encoding 31/31).
+
+SELF-HOST FIXPOINT (gen3≡gen4): preserved BY CONSTRUCTION — ADD-ONLY codegen
+cases; the compiler itself never calls `__hx_ptr_*`/`__hx_str_byte`, so the
+self-emit path never lowers these ops and the byte-eq fixpoint is unchanged.
+CI selfhost-byteeq-real is the final authority (verified green on the PR).
+
+HONEST RESIDUAL (c9, PRE-EXISTING M1-wide boundary, NOT introduced by ptr8):
+  The native x86_64 ELF object emitter (compiler/emit/elf_x86_64.hexa) does NOT
+  parse the `byte ptr`/`dword ptr`/`qword ptr` size-prefix mem-operand form, so
+  `--emit=obj` of a program using ptr8 (or the pre-existing str_byte/ptr32/ptr64,
+  which emit `dword ptr`/`qword ptr` labels) would ENCODE-MISS. M1 validated its
+  leaves only via `--emit=asm` → GNU `as` (the gate's semantic path does the
+  same), so this gap predates ptr8 and is shared by all raw-mem x86 leaves. It
+  does NOT affect: (1) the asm-text codegen (byte-correct vs GNU as — proven
+  above), (2) the C-transpile path (self/codegen.hexa mirror), (3) the self-host
+  fixpoint (compiler never emits these ops). Extending the ELF emitter's
+  size-prefix mem-operand parser is a separate, M1-wide unit out of this micro-
+  PR's surgical scope. arm64 is CLEAN: its codegen emits bracket-only operands
+  (`[x1]`, no size prefix), and the Mach-O encoder's STRB/LDRB encode to native
+  object directly — arm64 `--emit=obj` works for ptr8.

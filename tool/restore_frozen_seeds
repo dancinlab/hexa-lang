@@ -42,16 +42,25 @@ FROZEN_SEED_REF="${FROZEN_SEED_REF:-151c52c82502e93d01735c58b43b017d102fee63}"
 # The frozen seed set: self/runtime.c + the .c fragments it #includes (derived
 # from `git show <ref>:self/runtime.c | grep '#include "'`) + the transpiler
 # seed self/native/hexa_cc.c (needed by stage_prebuild_hexat to build hexat).
-# RT-NATIVE Z2a: runtime_hi_gen.c dropped from the seed set when the native
-# path is active (HEXA_ZEROC_RT_HI=1) — rt_str_* now come from the native
-# build/rt_hi_native.o (assembled from self/native/runtime_hi_native.s), so the
-# C intermediate is never restored/generated. Default keeps the C seed.
-_RT_HI_SEED="self/runtime_hi_gen.c"
-[ "${HEXA_ZEROC_RT_HI:-0}" = "1" ] && _RT_HI_SEED=""
+# RT-NATIVE Z2a: runtime_hi_gen.c is NO LONGER restored from the frozen blob.
+# The frozen 151c52c8 blob is a STALE 6-fn copy (split/lines/pad_left/pad_right/
+# repeat/center); the SSOT has since grown the casefold/trim group (rt_str_to_upper/
+# to_lower/trim → 9 fn) AND its C #ifndef bodies in runtime_core_emit.hexa are
+# RETIRED — so the regenerated runtime_core.c expects the 9-fn gen.c as the sole
+# provider. Restoring the 6-fn blob → "undefined reference to rt_str_to_upper/trim"
+# on the seeds-removed (faithful-nobaseline) link. Previously stage_resolve_runtime_a
+# tried to runtime-regen the 9-fn gen.c via a native hexat, but that regen is FLAKY
+# on the seeds-removed CI host (the committed per-target hexat seed fails to exec
+# there). The robust fix: SYNTHESIZE the 9-fn gen.c DETERMINISTICALLY from the
+# committed emitter SSOT (self/runtime_hi_gen_emit.hexa) with a pure-awk un-escaper
+# (NO hexat / NO runtime) in the post-restore block below — so the seeds-removed
+# path needs no runtime regen. The frozen blob is kept only as a NO-OP-SAFE fallback
+# if the emitter SSOT is absent. When the native path is active (HEXA_ZEROC_RT_HI=1)
+# rt_str_* come from build/rt_hi_native.o and gen.c is never needed at all.
+[ "${HEXA_ZEROC_RT_HI:-0}" = "1" ] && _RT_HI_NATIVE=1 || _RT_HI_NATIVE=0
 FROZEN_SEEDS=(
   self/runtime.c
   self/runtime_core.c
-  ${_RT_HI_SEED:+$_RT_HI_SEED}
   self/native/hexa_cc.c
   self/native/tensor_kernels.c
   self/native/net.c
@@ -132,6 +141,114 @@ if [ -f "$rt" ] && ! grep -q 'OP-17 (HEXA-0POD' "$rt"; then
     { print }
   ' "$rt" > "$rt.op17" && mv "$rt.op17" "$rt"
   echo "[restore_frozen_seeds] OP-17: injected 9 #undef (-Wmacro-redefined hygiene) into $rt"
+fi
+
+# ── RT-NATIVE leg B Z2a (trim-ends group) — scrub frozen runtime.c C bodies ───
+# The casefold/trim group's C bodies were ABSENT from the frozen 151c52c8
+# runtime.c, so no scrub was needed for them. The trim-ends siblings
+# (rt_str_trim_start / rt_str_trim_end) ARE still present in the frozen blob as
+# `#ifndef HEXA_HAS_HEXA_RT_STDLIB` C bodies (the seeds-removed runtime.a is
+# compiled WITHOUT that macro, so those bodies WOULD compile). Now that the SSOT
+# moved both fns into the HI-tier runtime_hi_gen.c (synthesized below) the gen.c
+# provides them on every target → leaving the frozen C bodies in place would be a
+# DUPLICATE symbol at the app link. Delete the two C definition bodies (signature
+# line through the column-0 closing brace) from the restored runtime.c; the empty
+# `#ifndef`/`#endif` shells left behind compile harmlessly. NO-OP-SAFE: if the
+# bodies are already absent (e.g. a future frozen-ref drop), the awk leaves the
+# file unchanged. Idempotent (re-running finds nothing to delete).
+if [ -f "$rt" ] && grep -q 'HexaVal rt_str_trim_start(HexaVal s) {' "$rt"; then
+  before=$(wc -l < "$rt")
+  awk '
+    /^HexaVal rt_str_trim_start\(HexaVal s\) \{$/ { skip=1 }
+    /^HexaVal rt_str_trim_end\(HexaVal s\) \{$/   { skip=1 }
+    {
+      if (skip) {
+        if ($0 == "}") { skip=0; next }
+        next
+      }
+      print
+    }
+  ' "$rt" > "$rt.z2atrim" && mv "$rt.z2atrim" "$rt"
+  after=$(wc -l < "$rt")
+  echo "[restore_frozen_seeds] RT-NATIVE Z2a: scrubbed frozen rt_str_trim_start/end C bodies from $rt ($((before-after)) lines; gen.c now sole provider)"
+fi
+
+# ── RT-NATIVE leg B Z2a — SYNTHESIZE the 9-fn runtime_hi_gen.c seed ───────────
+# The casefold/trim group (rt_str_to_upper/to_lower/trim) grew the HI-tier
+# rt_str_* SSOT from 6→9 fn and RETIRED the matching C #ifndef bodies from
+# runtime_core_emit.hexa. The frozen 151c52c8 runtime_hi_gen.c blob is a stale
+# 6-fn copy, so on the seeds-removed path the regenerated runtime_core.c (no C
+# bodies) + a 6-fn gen.c → "undefined reference to rt_str_to_upper/trim" at the
+# app link. The deterministic, hexat-free fix: materialize the 9-fn gen.c by
+# un-escaping the committed emitter SSOT (self/runtime_hi_gen_emit.hexa) — its
+# `buf = buf + "..."` lines ARE the emitted .c text VERBATIM (proven byte-
+# identical to the extract.sh hexat output). This needs NO runtime regen, so it
+# is immune to the flaky _resolve_native_hexat seeds-removed regen path.
+# NO-OP-SAFE: if the emitter SSOT is absent or the synthesis is malformed, fall
+# back to restoring the frozen 6-fn blob (never weaker than the prior behavior).
+# Skipped entirely when the native seed path is active (rt_str_* from
+# build/rt_hi_native.o; gen.c never #included).
+if [ "${_RT_HI_NATIVE:-0}" != "1" ]; then
+  _RHG="self/runtime_hi_gen.c"
+  _RHG_EMIT="self/runtime_hi_gen_emit.hexa"
+  _rhg_done=0
+  if [ -f "$_RHG_EMIT" ]; then
+    _rhg_tmp="$(mktemp -t rhg_synth.XXXXXX)" || _rhg_tmp=""
+    if [ -n "$_rhg_tmp" ]; then
+      # Pure-awk un-escaper: extract the `    buf = buf + "<C-line>"` literals and
+      # decode \n \t \" \\ to reproduce runtime_hi_gen.c exactly.
+      awk '
+        {
+          line = $0
+          pfx = "    buf = buf + \""
+          if (substr(line, 1, length(pfx)) != pfx) next
+          body = substr(line, length(pfx) + 1)
+          if (substr(body, length(body), 1) != "\"") next
+          body = substr(body, 1, length(body) - 1)
+          out = ""; n = length(body); i = 1
+          while (i <= n) {
+            c = substr(body, i, 1)
+            if (c == "\\" && i < n) {
+              d = substr(body, i+1, 1)
+              if (d == "n")  { out = out "\n"; i += 2; continue }
+              if (d == "t")  { out = out "\t"; i += 2; continue }
+              if (d == "\"") { out = out "\""; i += 2; continue }
+              if (d == "\\") { out = out "\\"; i += 2; continue }
+              out = out "\\"; i += 1; continue
+            }
+            out = out c; i += 1
+          }
+          printf "%s", out
+        }
+      ' "$_RHG_EMIT" > "$_rhg_tmp" 2>/dev/null || true
+      # Validate: must carry all 14 fn (3 casefold/trim + 2 trim-ends + 3 search
+      # predicates) + ctor.
+      if [ -s "$_rhg_tmp" ] \
+         && grep -q 'HexaVal rt_str_to_upper(HexaVal s) {' "$_rhg_tmp" \
+         && grep -q 'HexaVal rt_str_to_lower(HexaVal s) {' "$_rhg_tmp" \
+         && grep -q 'HexaVal rt_str_trim(HexaVal s) {' "$_rhg_tmp" \
+         && grep -q 'HexaVal rt_str_trim_start(HexaVal s) {' "$_rhg_tmp" \
+         && grep -q 'HexaVal rt_str_trim_end(HexaVal s) {' "$_rhg_tmp" \
+         && grep -q 'HexaVal rt_str_starts_with_b(HexaVal s, HexaVal prefix) {' "$_rhg_tmp" \
+         && grep -q 'HexaVal rt_str_ends_with_b(HexaVal s, HexaVal suffix) {' "$_rhg_tmp" \
+         && grep -q 'HexaVal rt_str_contains_b(HexaVal s, HexaVal sub) {' "$_rhg_tmp" \
+         && grep -q '__hexa_rt_strlit_init_ctor' "$_rhg_tmp"; then
+        cp -f "$_rhg_tmp" "$_RHG"
+        echo "[restore_frozen_seeds] RT-NATIVE Z2a: synthesized 14-fn $_RHG from $_RHG_EMIT ($(wc -l < "$_RHG") lines, hexat-free)"
+        _rhg_done=1
+      fi
+      rm -f "$_rhg_tmp"
+    fi
+  fi
+  if [ "$_rhg_done" != "1" ]; then
+    # Fallback: restore the frozen 6-fn blob (prior behavior; stale but present).
+    if git checkout "$FROZEN_SEED_REF" -- "$_RHG" 2>/dev/null; then
+      git reset -q -- "$_RHG" 2>/dev/null || true
+      echo "[restore_frozen_seeds] RT-NATIVE Z2a: emitter synth unavailable — restored FROZEN 6-fn $_RHG (fallback; runtime regen may be needed)" >&2
+    else
+      echo "[restore_frozen_seeds] RT-NATIVE Z2a: WARN cannot synth or restore $_RHG" >&2
+    fi
+  fi
 fi
 
 # ── OP-18 (HEXA-0POD) — L3 fused-dispatch host fallbacks ──────────────────────

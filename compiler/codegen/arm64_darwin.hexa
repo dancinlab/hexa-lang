@@ -1902,6 +1902,39 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // RT-NATIVE M5-syscall: `__hx_target_os()` → int HexaVal compile-time OS
+        // const. This is the arm64-DARWIN backend, so the value is 1 (darwin), per
+        // self/rt/syscall.hexa's convention (__TARGET_OS__ == 1 ⇒ darwin). 0-arg:
+        // x1 = payload = 1, x0 = tag = TAG_INT(0). ADD-only leaf (no `bl`).
+        if s.op == "__hx_target_os" {
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
+                             _arm64_op_label("#1"), "__hx_target_os: 1 = darwin"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_target_os: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // RT-NATIVE M4 ARRAY-R2: `__hx_make_val(tag, payload)` — the symmetric
+        // WRITE-half of `__hx_tag`. Builds a {tag, payload} 16-byte HexaVal from
+        // two raw int64 words: tag→lo eightbyte (x0), payload→hi eightbyte (x1),
+        // with NO `bl` (non-circular leaf, like `__hx_tag`). Both args are
+        // int-boxed HexaVals, so the WANTED word is each arg's PAYLOAD (hi = x1/x3
+        // of the x0:x1 / x2:x3 pairs). Lets a raw payload word loaded from an array
+        // slot be re-stamped with its real element tag WITHOUT going through
+        // hexa_int/hexa_str/… (which would force a fixed tag and lose the caller's
+        // intended tag). `_hv_load` clobbers its lo/hi pair as scratch, so arg0 and
+        // arg1 are loaded into DISJOINT pairs (x0:x1 then x2:x3); the tag survives
+        // in x1, the payload in x3. Then move both into the result {x0=tag, x1=pl}.
+        if s.op == "__hx_make_val" && len(s.args) >= 2 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // tag word  → x1 = payload
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // pl word   → x3 = payload
+            buf.push(_arm64_instr2("mov", _arm64_op_reg("x0"),
+                             _arm64_op_reg("x1"), "__hx_make_val: lo = tag word"))
+            buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"),
+                             _arm64_op_reg("x3"), "__hx_make_val: hi = payload word"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // RT-NATIVE UNLOCK-2b: native leaf-compare intrinsics — `__hx_payload_eq(a,b)`
         // compares the HexaVal PAYLOADS (hi eightbyte = x1) as raw i64 → bool, INLINE
         // (cmp/cset, no `bl _hexa_eq`). `__hx_payload_nz(v)` = `payload != 0` → bool.
@@ -1932,11 +1965,14 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // (__hx_payload_lt/gt/le/ge) — `cmp x1,x3; cset x0,<cond>` → bool, INLINE.
         // Unblocks the native dispatch core's hexa_cmp_lt/gt/le/ge int leaves.
         if (s.op == "__hx_payload_lt" || s.op == "__hx_payload_gt"
-            || s.op == "__hx_payload_le" || s.op == "__hx_payload_ge") && len(s.args) >= 2 {
+            || s.op == "__hx_payload_le" || s.op == "__hx_payload_ge"
+            || s.op == "__hx_payload_eq" || s.op == "__hx_payload_ne") && len(s.args) >= 2 {
             let mut _pcond = "lt"
             if s.op == "__hx_payload_gt" { _pcond = "gt" }
             if s.op == "__hx_payload_le" { _pcond = "le" }
             if s.op == "__hx_payload_ge" { _pcond = "ge" }
+            if s.op == "__hx_payload_eq" { _pcond = "eq" }
+            if s.op == "__hx_payload_ne" { _pcond = "ne" }
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // a → x1=payload
             buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // b → x3=payload
             buf.push(_arm64_instr2("cmp", _arm64_op_reg("x1"),
@@ -1952,10 +1988,13 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // mul, no `bl _hexa_add`). Unblocks the native dispatch core's int-int
         // arithmetic leaves (hexa_add_slow/sub/mul fast path).
         if (s.op == "__hx_payload_add" || s.op == "__hx_payload_sub"
-            || s.op == "__hx_payload_mul") && len(s.args) >= 2 {
+            || s.op == "__hx_payload_mul" || s.op == "__hx_payload_and"
+            || s.op == "__hx_payload_xor") && len(s.args) >= 2 {
             let mut _aop = "add"
             if s.op == "__hx_payload_sub" { _aop = "sub" }
             if s.op == "__hx_payload_mul" { _aop = "mul" }
+            if s.op == "__hx_payload_and" { _aop = "and" }
+            if s.op == "__hx_payload_xor" { _aop = "eor" }
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // a → x1=payload
             buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // b → x3=payload
             buf.push(_arm64_instr3(_aop, _arm64_op_reg("x1"), _arm64_op_reg("x1"),
@@ -2155,6 +2194,38 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // RT-NATIVE M4 PTR8: `__hx_ptr_store8(ptr, off=0, val)` → write the low
+        // byte of `val` to `ptr + off`. Mirrors ptr_store32 but `strb w` (store
+        // byte). Returns ptr (chainable). Unblocks `hexa_strbuf_dup_n` byte-write.
+        if s.op == "__hx_ptr_store8" && len(s.args) >= 3 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // ptr → x1
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // off → x3
+            buf = _hv_load(buf, s.args[2], st, rm, "x4", "x5")  // val → x5
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x1"), _arm64_op_reg("x1"),
+                             _arm64_op_reg("x3"), "__hx_ptr_store8: addr = ptr + off"))
+            buf.push(_arm64_instr2("strb", _arm64_op_reg("w5"),
+                             _arm64_op_label("[x1]"), "__hx_ptr_store8: *(u8*)addr = val"))
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // reload ptr for return
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_ptr_store8: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // RT-NATIVE M4 PTR8: `__hx_ptr_load8(ptr, off=0)` → read the byte at
+        // `ptr + off` ZERO-EXTENDED. Mirrors ptr_load32 but `ldrb w` (load byte,
+        // W-write zero-extends — same encoding proven by __hx_str_byte).
+        if s.op == "__hx_ptr_load8" && len(s.args) >= 2 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // ptr → x1
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // off → x3
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x1"), _arm64_op_reg("x1"),
+                             _arm64_op_reg("x3"), "__hx_ptr_load8: addr = ptr + off"))
+            buf.push(_arm64_instr2("ldrb", _arm64_op_reg("w1"),
+                             _arm64_op_label("[x1]"), "__hx_ptr_load8: w1 = *(u8*)addr (zero-ext)"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_ptr_load8: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // RT-NATIVE UNLOCK-6: `__hx_to_double(v)` → float HexaVal coercing
         // an int-or-float operand to double (dispatch core's mixed int/float
         // compare: `__hx_to_double(a) < __hx_to_double(b)`). BRANCHLESS via
@@ -2173,6 +2244,17 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              "__hx_to_double: float→keep bits, int→converted"))
             buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
                              _arm64_op_label("#1"), "__hx_to_double: TAG_FLOAT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // RT-NATIVE M5-syscall-c: `__hx_str_ptr(s)` → int HexaVal whose payload IS
+        // the string's char* base (the STR payload x1). Same str-payload load as
+        // __hx_str_byte, minus the +index and byte deref — for handing a cstring to
+        // a raw syscall (sys_open). The shipping analog of P7-7 `hexa_ptr_addr`.
+        if s.op == "__hx_str_ptr" && len(s.args) >= 1 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // s → x1 = char* base
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_str_ptr: TAG_INT"))
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }

@@ -63,11 +63,71 @@ mkdir -p build
 #   · no hexa runner  → keep the in-tree .c (no change).
 #   · emitter fails   → keep the in-tree .c (warn, non-fatal).
 # On a SHA-identical regen the runtime.c TU is byte-unchanged (PERF UNCHANGED).
+
+# Deterministic, hexat-FREE un-escaper for a *_emit.hexa SSOT → its emitted .c.
+# The emitter bodies are pure `    buf = buf + "<C-line>"` literals whose un-escaped
+# (\n \t \" \\) content IS the .c text VERBATIM. Used as the PRIMARY regen path so
+# the SSOT regen no longer depends on a working hexa runner / native hexat (both
+# FLAKY: the local runner aborts with a dyld _real_args fault, and the seeds-removed
+# CI host can't exec the committed hexat seed). Prints to stdout. Returns 3 if the
+# emitter has no recognizable buf-literal lines (caller then falls back to a runner).
+_unescape_emit_to_c() {
+    awk '
+      BEGIN { saw = 0 }
+      {
+        line = $0
+        pfx = "    buf = buf + \""
+        if (substr(line, 1, length(pfx)) != pfx) next
+        body = substr(line, length(pfx) + 1)
+        if (substr(body, length(body), 1) != "\"") next
+        body = substr(body, 1, length(body) - 1)
+        saw = 1
+        out = ""; n = length(body); i = 1
+        while (i <= n) {
+          c = substr(body, i, 1)
+          if (c == "\\" && i < n) {
+            d = substr(body, i+1, 1)
+            if (d == "n")  { out = out "\n"; i += 2; continue }
+            if (d == "t")  { out = out "\t"; i += 2; continue }
+            if (d == "\"") { out = out "\""; i += 2; continue }
+            if (d == "\\") { out = out "\\"; i += 2; continue }
+            out = out "\\"; i += 1; continue
+          }
+          out = out c; i += 1
+        }
+        printf "%s", out
+      }
+      END { if (!saw) exit 3 }
+    ' "$1"
+}
+
 regen_runtime_core_from_emitter() {
     local emitter="self/runtime_core_emit.hexa"
     local dst="self/runtime_core.c"
     [ -f "$emitter" ] || { echo "[stage_resolve_runtime_a] runtime_core.c regen SKIP — emitter absent"; return 0; }
 
+    # PRIMARY (deterministic, hexat-FREE): un-escape the committed emitter SSOT.
+    # RT-NATIVE leg B Z2a: the casefold/trim C #ifndef bodies are RETIRED from
+    # runtime_core_emit.hexa (the 9-fn gen.c is the sole rt_str_to_upper/to_lower/
+    # trim provider), so this regen MUST run even when NO hexa runner is available —
+    # else the FROZEN stale runtime_core.c (which still carries those 3 C bodies) +
+    # the 9-fn gen.c → "redefinition of rt_str_*". The awk un-escape reproduces the
+    # emitter's own .c output byte-for-byte and needs NO runner, so it is immune to
+    # the FLAKY local-runner dyld fault / seeds-removed hexat-exec failure that left
+    # 3 prior CI cycles oscillating between undefined↔duplicate.
+    local atmp
+    atmp="$(mktemp -t regen_runtime_core_awk.XXXXXX)" || atmp=""
+    if [ -n "$atmp" ] && _unescape_emit_to_c "$emitter" > "$atmp" 2>/dev/null \
+       && [ -s "$atmp" ] && grep -q 'HexaVal hexa_str_join' "$atmp"; then
+        cp -f "$atmp" "$dst"
+        rm -f "$atmp"
+        echo "[stage_resolve_runtime_a] runtime_core.c SYNTHESIZED from emitter SSOT (awk un-escape, $(wc -l < "$dst") lines, hexat-free)"
+        reconcile_runtime_c_ssot_dups
+        return 0
+    fi
+    rm -f "$atmp"
+
+    # FALLBACK: the interp .c-text emitter via an edge/external hexa runner.
     # Resolve a hexa runner that can `run` a .hexa file end-to-end.
     #   1. an external hexa-run / hexa on PATH (local dev parity), else
     #   2. the prior edge `hexa` binary (CI: same asset stage_regen_hexa_cc uses).
@@ -139,12 +199,193 @@ reconcile_runtime_c_ssot_dups() {
 # fallback so there is exactly ONE compile recipe (no drift). The runtime_core.c
 # emitter-regen runs FIRST so the compiled .a carries the SSOT (not the stale
 # frozen fragment) — see regen_runtime_core_from_emitter above.
+# ── RT-NATIVE leg B Z2a — arch-aware native rt_hi seed → build/rt_hi_native.o ──
+# Assemble build/rt_hi_native.o from the frozen native .s seed matching the
+# build TARGET, and AUTO-ENABLE the native rt_str_* path (HEXA_ZEROC_RT_HI=1) so
+# runtime_hi_gen.c is never #included on that platform. Runs BEFORE
+# restore_frozen_seeds (which reads HEXA_ZEROC_RT_HI to skip gen.c synthesis) and
+# BEFORE build_runtime_a_from_source (which ar's the .o). The seed is a frozen
+# bootstrap artifact (like self/runtime.c) so this needs no native compiler here.
+#   arm64-darwin → self/native/runtime_hi_native.s  (Mach-O, _rt_str_* underscore)
+#   x86_64-linux → self/native/runtime_hi_x86_64.s  (ELF, rt_str_* no underscore)
+#   linux-arm64  → no seed yet → stays on the C (awk-synth gen.c) path.
+# Idempotent · NO-OP-SAFE: if the seed is absent or assembly fails, leaves
+# HEXA_ZEROC_RT_HI untouched so the legacy C path takes over. Override by
+# pre-setting HEXA_ZEROC_RT_HI=0 to force the C path even when a seed exists.
+resolve_native_rt_hi_seed() {
+    [ "${HEXA_ZEROC_RT_HI:-x}" = "0" ] && return 0   # explicit opt-out
+    [ -f build/rt_hi_native.o ] && { export HEXA_ZEROC_RT_HI=1; return 0; }
+    local seed="" tgt="${TARGET:-}"
+    [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
+        "Darwin arm64") tgt="darwin-arm64" ;;
+        "Linux x86_64") tgt="linux-x86_64" ;;
+        "Linux aarch64"|"Linux arm64") tgt="linux-arm64" ;;
+    esac
+    case "$tgt" in
+        darwin-arm64) seed="self/native/runtime_hi_native.s" ;;
+        linux-x86_64) seed="self/native/runtime_hi_x86_64.s" ;;
+        *)            seed="" ;;   # linux-arm64 + unknown → C path
+    esac
+    [ -n "$seed" ] && [ -f "$seed" ] || return 0
+    mkdir -p build
+    # Strip the leading `// ` header comment block (asm comment syntax differs by
+    # target: `;` Mach-O / `#` ELF — both reject `//`), then assemble with $CC.
+    # The temp MUST end in `.s` so $CC treats it as assembly — a fixed build/
+    # path guarantees that (mktemp's `XXXXXX.s` template is unportable: macOS
+    # appends the random suffix AFTER the `.s`, breaking the extension).
+    # SAFETY: only adopt the native path if the seed actually exports ALL 14
+    # rt_str_* the SSOT runtime_core.c expects — a stale/partial seed (e.g.
+    # pre-search-predicate, 11 fn) would otherwise yield `undefined reference` at
+    # the app link. Counted from the seed's `.globl` directives (toolchain-free,
+    # no nm dependency). On a shortfall, skip the native path → legacy C gen.c.
+    local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?rt_str_' "$seed" 2>/dev/null || echo 0)"
+    if [ "${nsyms:-0}" -lt 14 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE Z2a: seed $seed exports only $nsyms/14 rt_str_* — falling back to C gen.c path" >&2
+        return 0
+    fi
+    local s_tmp="build/rt_hi_seed.s"
+    grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
+    if $CC -c "$s_tmp" -o build/rt_hi_native.o 2>/dev/null; then
+        export HEXA_ZEROC_RT_HI=1
+        echo "[stage_resolve_runtime_a] RT-NATIVE Z2a: assembled build/rt_hi_native.o from $seed (TARGET=$tgt, $nsyms rt_str_* syms) → native rt_str_* path"
+    else
+        echo "[stage_resolve_runtime_a] RT-NATIVE Z2a: WARN assemble of $seed failed — falling back to C gen.c path" >&2
+    fi
+    rm -f "$s_tmp"
+}
+
+# ── RT-NATIVE leg B M4 ARRAY-R4 — array-core READ-half native seed → build/array_core_native.o ──
+# The array twin of resolve_native_rt_hi_seed: assemble build/array_core_native.o
+# from the arch-matched frozen self/native/array_core_*.s seed, and AUTO-ENABLE
+# the native array element path (HEXA_RT_ARRAY_NATIVE=1) so hexa_array_get/set
+# delegate to rt_array_get_native/set_native (raw-mem + __hx_make_val, gen2-only
+# intrinsics the hexat C-transpile bootstrap cannot lower — hence a frozen .s
+# seed, exactly like rt_str). All 3 production targets now carry a seed
+# (darwin-arm64 + linux-x86_64 + linux-arm64, r4). On an unknown target or an
+# assemble failure, HEXA_RT_ARRAY_NATIVE stays unset and the C element body in
+# runtime_core.c ships unchanged (the no-seed fallback). Override by pre-setting
+# HEXA_RT_ARRAY_NATIVE=0 to force the C path even when a seed exists.
+resolve_native_array_core_seed() {
+    [ "${HEXA_RT_ARRAY_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
+    [ -f build/array_core_native.o ] && { export HEXA_RT_ARRAY_NATIVE=1; return 0; }
+    local seed="" tgt="${TARGET:-}"
+    [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
+        "Darwin arm64") tgt="darwin-arm64" ;;
+        "Linux x86_64") tgt="linux-x86_64" ;;
+        "Linux aarch64"|"Linux arm64") tgt="linux-arm64" ;;
+    esac
+    case "$tgt" in
+        darwin-arm64) seed="self/native/array_core_arm64.s" ;;
+        linux-x86_64) seed="self/native/array_core_x86_64.s" ;;
+        linux-arm64)  seed="self/native/array_core_arm64-linux.s" ;;
+        *)            seed="" ;;   # unknown → C #else path
+    esac
+    [ -n "$seed" ] && [ -f "$seed" ] || return 0
+    mkdir -p build
+    # SAFETY: only adopt the native path if the seed exports ALL 5 element fns
+    # the runtime_core.c delegation expects — a stale/partial seed would yield an
+    # `undefined reference` at the app link. Counted from `.globl` (toolchain-free).
+    local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?rt_array_(get|set|len|pop|shift)_native' "$seed" 2>/dev/null || echo 0)"
+    if [ "${nsyms:-0}" -lt 5 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE ARRAY-R4: seed $seed exports only $nsyms/5 rt_array_*_native — falling back to C #else path" >&2
+        return 0
+    fi
+    local s_tmp="build/array_core_seed.s"
+    grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
+    if $CC -c "$s_tmp" -o build/array_core_native.o 2>/dev/null; then
+        export HEXA_RT_ARRAY_NATIVE=1
+        echo "[stage_resolve_runtime_a] RT-NATIVE ARRAY-R4: assembled build/array_core_native.o from $seed (TARGET=$tgt, $nsyms rt_array_*_native syms) → native array element path"
+    else
+        echo "[stage_resolve_runtime_a] RT-NATIVE ARRAY-R4: WARN assemble of $seed failed — falling back to C #else path" >&2
+    fi
+    rm -f "$s_tmp"
+}
+
+resolve_native_map_core_seed() {
+    [ "${HEXA_RT_MAP_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
+    [ -f build/map_core_native.o ] && { export HEXA_RT_MAP_NATIVE=1; return 0; }
+    local seed="" tgt="${TARGET:-}"
+    [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
+        "Darwin arm64") tgt="darwin-arm64" ;;
+        "Linux x86_64") tgt="linux-x86_64" ;;
+        "Linux aarch64"|"Linux arm64") tgt="linux-arm64" ;;
+    esac
+    case "$tgt" in
+        darwin-arm64) seed="self/native/map_core_arm64.s" ;;
+        linux-x86_64) seed="self/native/map_core_x86_64.s" ;;
+        linux-arm64)  seed="self/native/map_core_arm64-linux.s" ;;
+        *)            seed="" ;;   # unknown → C #else path
+    esac
+    [ -n "$seed" ] && [ -f "$seed" ] || return 0
+    mkdir -p build
+    # SAFETY: only adopt the native path if the seed exports ALL 4 probe fns
+    # the runtime_core.c delegation expects — a stale/partial seed would yield an
+    # `undefined reference` at the app link. Counted from `.globl` (toolchain-free).
+    local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?rt_map_(get|fnv1a|strcmp0|contains)_native' "$seed" 2>/dev/null || echo 0)"
+    if [ "${nsyms:-0}" -lt 4 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE MAP-R3: seed $seed exports only $nsyms/4 rt_map_*_native — falling back to C #else path" >&2
+        return 0
+    fi
+    local s_tmp="build/map_core_seed.s"
+    grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
+    if $CC -c "$s_tmp" -o build/map_core_native.o 2>/dev/null; then
+        export HEXA_RT_MAP_NATIVE=1
+        echo "[stage_resolve_runtime_a] RT-NATIVE MAP-R3: assembled build/map_core_native.o from $seed (TARGET=$tgt, $nsyms rt_map_*_native syms) → native map probe path"
+    else
+        echo "[stage_resolve_runtime_a] RT-NATIVE MAP-R3: WARN assemble of $seed failed — falling back to C #else path" >&2
+    fi
+    rm -f "$s_tmp"
+}
+
+# ── RT-NATIVE leg B Route B — linked-block arena native seed → build/alloc_syscall_native.o ──
+# The arena twin of resolve_native_array_core_seed: assemble the arch-matched
+# frozen self/native/alloc_syscall_*.s seed (a full HexaArenaBlock-chain arena +
+# syscall layer, C-ABI equivalent to runtime_core_emit.hexa's C arena) into
+# build/alloc_syscall_native.o so the arena C `#else` (under HEXA_RT_ALLOC_NATIVE)
+# can drop. OPT-IN: gated on HEXA_RT_ALLOC_NATIVE=1 (NOT auto-on like array/map)
+# until the whole-runtime byteeq/faithful/RSS-OOM measurement confirms the native
+# arena replaces the C arena wholesale (the mark 16-byte struct-return ABI + the
+# heapify↔envelope wiring are the measured-unknowns). Default unset ⇒ C arena
+# stays ⇒ byteeq-inert.
+resolve_native_alloc_syscall_seed() {
+    [ "${HEXA_RT_ALLOC_NATIVE:-x}" != "1" ] && return 0   # opt-IN until measured
+    [ -f build/alloc_syscall_native.o ] && return 0
+    local seed="" tgt="${TARGET:-}"
+    [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
+        "Darwin arm64") tgt="darwin-arm64" ;;
+        "Linux x86_64") tgt="linux-x86_64" ;;
+        "Linux aarch64"|"Linux arm64") tgt="linux-arm64" ;;
+    esac
+    case "$tgt" in
+        darwin-arm64) seed="self/native/alloc_syscall_arm64.s" ;;
+        linux-x86_64) seed="self/native/alloc_syscall_x86_64.s" ;;
+        linux-arm64)  seed="self/native/alloc_syscall_arm64-linux.s" ;;
+        *)            seed="" ;;
+    esac
+    [ -n "$seed" ] && [ -f "$seed" ] || return 0
+    mkdir -p build
+    local nsyms; nsyms="$(grep -cE '^[[:space:]]*\.globl' "$seed" 2>/dev/null || echo 0)"
+    if [ "${nsyms:-0}" -lt 30 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE ALLOC-RB: seed $seed exports only $nsyms — falling back to C arena" >&2
+        return 0
+    fi
+    local s_tmp="build/alloc_syscall_seed.s"
+    grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
+    if $CC -c "$s_tmp" -o build/alloc_syscall_native.o 2>/dev/null; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE ALLOC-RB: assembled build/alloc_syscall_native.o from $seed (TARGET=$tgt, $nsyms syms) → native arena path"
+    else
+        echo "[stage_resolve_runtime_a] RT-NATIVE ALLOC-RB: WARN assemble of $seed failed — C arena" >&2
+    fi
+    rm -f "$s_tmp"
+}
+
 build_runtime_a_from_source() {
     regen_runtime_core_from_emitter
     # RT-NATIVE Z2a (gated): supply rt_str_* from a NATIVE-compiled object
-    # (build/rt_hi_native.o, assembled from the self/native/runtime_hi_native.s
-    # frozen seed) instead of the hexat-transpiled runtime_hi_gen.c #include —
-    # so runtime_hi_gen.c is never needed. Default path unchanged.
+    # (build/rt_hi_native.o, assembled from the self/native/runtime_hi_*.s
+    # frozen seed by resolve_native_rt_hi_seed) instead of the hexat-transpiled
+    # runtime_hi_gen.c #include — so runtime_hi_gen.c is never needed. Default
+    # path unchanged.
     local extra_obj=""
     if [ "${HEXA_ZEROC_RT_HI:-0}" = "1" ] && [ -f build/rt_hi_native.o ]; then
         sed -i.zbak 's|#include "runtime_hi_gen.c"|/* RT-NATIVE Z2a: rt_str_* from native build/rt_hi_native.o */|' self/runtime_core.c
@@ -152,11 +393,49 @@ build_runtime_a_from_source() {
         extra_obj="build/rt_hi_native.o"
         echo "[stage_resolve_runtime_a] RT-NATIVE Z2a: runtime_hi_gen.c #include removed; ar'ing native rt_hi_native.o into runtime.a"
     fi
-    $CC $CFLAGS -I self -c self/runtime.c -o build/runtime.o
+    # RT-NATIVE ARRAY-R4 (gated): when the array_core seed is active, define
+    # HEXA_RT_ARRAY_NATIVE for the runtime.c compile (so hexa_array_get/set take
+    # the native arm) and ar build/array_core_native.o into runtime.a so its
+    # rt_array_*_native symbols resolve. The C #else element bodies stay in
+    # runtime_core.c as the no-seed fallback (dead on seed targets).
+    local rt_array_def=""
+    if [ "${HEXA_RT_ARRAY_NATIVE:-0}" = "1" ] && [ -f build/array_core_native.o ]; then
+        rt_array_def="-DHEXA_RT_ARRAY_NATIVE=1"
+        extra_obj="$extra_obj build/array_core_native.o"
+        echo "[stage_resolve_runtime_a] RT-NATIVE ARRAY-R4: HEXA_RT_ARRAY_NATIVE=1; ar'ing native array_core_native.o into runtime.a"
+    fi
+    local rt_map_def=""
+    if [ "${HEXA_RT_MAP_NATIVE:-0}" = "1" ] && [ -f build/map_core_native.o ]; then
+        rt_map_def="-DHEXA_RT_MAP_NATIVE=1"
+        extra_obj="$extra_obj build/map_core_native.o"
+        echo "[stage_resolve_runtime_a] RT-NATIVE MAP-R3: HEXA_RT_MAP_NATIVE=1; ar'ing native map_core_native.o into runtime.a"
+    fi
+    # RT-NATIVE Route B (gated, opt-IN): native linked-block arena replaces the C
+    # arena `#else` in runtime_core.c when HEXA_RT_ALLOC_NATIVE=1 + seed object built.
+    local rt_alloc_def=""
+    if [ "${HEXA_RT_ALLOC_NATIVE:-0}" = "1" ] && [ -f build/alloc_syscall_native.o ]; then
+        rt_alloc_def="-DHEXA_RT_ALLOC_NATIVE=1"
+        extra_obj="$extra_obj build/alloc_syscall_native.o"
+        echo "[stage_resolve_runtime_a] RT-NATIVE ALLOC-RB: HEXA_RT_ALLOC_NATIVE=1; ar'ing native alloc_syscall_native.o into runtime.a"
+    fi
+    $CC $CFLAGS $rt_array_def $rt_map_def $rt_alloc_def -I self -c self/runtime.c -o build/runtime.o
     ar rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     echo "$RA"
 }
+
+# Assemble the arch-matched native rt_hi seed (sets HEXA_ZEROC_RT_HI=1 on the
+# platforms that have one) BEFORE either branch — restore_frozen_seeds reads
+# HEXA_ZEROC_RT_HI to decide whether to synthesize runtime_hi_gen.c at all.
+resolve_native_rt_hi_seed
+# RT-NATIVE ARRAY-R4: assemble the arch-matched native array_core seed (sets
+# HEXA_RT_ARRAY_NATIVE=1 on all 3 production targets — darwin-arm64 + linux-x86_64
+# + linux-arm64). Unknown targets keep the C element path.
+resolve_native_array_core_seed
+resolve_native_map_core_seed
+# RT-NATIVE Route B: assemble the native linked-block arena seed (opt-IN via
+# HEXA_RT_ALLOC_NATIVE=1 until the whole-runtime measurement confirms it).
+resolve_native_alloc_syscall_seed
 
 if [ -f self/runtime.c ]; then
     echo "stage_resolve_runtime_a: seeds present — building runtime.a from source"

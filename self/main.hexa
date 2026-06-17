@@ -89,6 +89,9 @@ fn cmd_help() {
     println("  cloud [run|nohup|poll|copy-to|copy-from] <host> [--port N] [--insecure] -- <argv...>")
     println("                                          structured-argv remote dispatch (PR #81/#84/#86/#88)")
     println("    e.g. hexa cloud run ubu-2 -- python3 train.py    (also: cloud copy-to / copy-from)")
+    println("  deck <domain> <slug> '<spec>' | domains | prototypes [<domain>]")
+    println("                                          generic input-deck 빵틀 (emit → exports/<d>/decks/<slug>/; rtsc full, others stub)")
+    println("    e.g. hexa deck rtsc YSbH6 '{\"prototype\":\"a15_ysbh6\",\"prefix\":\"ysbh6\"}'    (domains: hexa deck domains)")
     println("  dojo <domain> <slug> '<spec>' [--lang=hexa|py|both]")
     println("                                          cloud training-job 빵틀 (.hexa+.py+run.sh → exports/<d>/dojo/<slug>/)")
     println("    e.g. hexa dojo llm smoke '{\"model\":\"gpt2\",\"epochs\":1}'    (domains: hexa dojo domains)")
@@ -7507,6 +7510,30 @@ if len(av) < 3 {
             if file_exists(inst_path) { lp_script = inst_path }
         }
         cmd_run(lp_script, lp_args)
+    } else if sub == "deck" {
+        // stdlib/deck/cli.hexa dispatch — generic 6-domain input-deck
+        // generator (빵틀 · sibling of dojo). `hexa deck <domain> <slug>
+        // '<spec-json>'` emits the per-domain deck file-set into
+        // exports/<domain>/decks/<slug>/ (rtsc full impl; chem/chip/bio/
+        // nuclear/material honest exit-1 stub). `hexa deck domains` /
+        // `hexa deck prototypes [<domain>]` list coverage. The emitter is
+        // pure (gen.hexa/rtsc.hexa); cli.hexa owns the disk write via
+        // stdlib/io.write_text. Pure-hexa string assembly — runs via
+        // cmd_run (compile-then-exec), no AOT build needed (same stdlib
+        // hot-swap path as dojo).
+        let __inst_dk = install_dir_from_argv0()
+        let mut dk_args = []
+        let mut dki = 3
+        while dki < len(av) {
+            dk_args.push(av[dki])
+            dki = dki + 1
+        }
+        let mut dk_script = "stdlib/deck/cli.hexa"
+        if len(__inst_dk) > 0 {
+            let inst_path = __inst_dk + "/stdlib/deck/cli.hexa"
+            if file_exists(inst_path) { dk_script = inst_path }
+        }
+        cmd_run(dk_script, dk_args)
     } else if sub == "dojo" {
         // stdlib/dojo/cli.hexa dispatch — generic cloud training-job
         // generator (학습 빵틀 · sibling of deck). `hexa dojo <domain>

@@ -1,0 +1,33 @@
+F-LEGB-Z2A-CASEFOLD-SYNTH — hexat-FREE awk un-escaper regen (CANDIDATE)
+================================================================================
+CLAIM: casefold/trim C #ifndef 바디를 SSOT 에서 retire 하고 linux 도 9-fn native
+gen.c 로 제공하되, regen 을 hexat/runner 의존 없는 결정적 awk un-escaper 로 수행해
+3-CI-사이클 진동(undefined↔duplicate)의 근본원인(flaky regen)을 제거한다.
+
+MECHANISM (c1 root-cause):
+  *_emit.hexa 의 `    buf = buf + "<C줄>"` 는 순수 리터럴 → un-escape(\n \t \" \\)
+  하면 emitter .c 출력과 byte-identical. awk 1-pass, runner 불요.
+  stage_resolve_runtime_a 의 PRIMARY regen 경로(runner=fallback).
+
+LOCAL VERIFY (c2, captured):
+  - bash -n stage_resolve_runtime_a / restore_frozen_seeds : OK
+  - 충돌마커: 0
+  - awk un-escape runtime_core_emit.hexa  → rc=0, 8734 lines
+  - awk un-escape runtime_hi_gen_emit.hexa → rc=0, 270 lines
+  - regen core.c: `HexaVal rt_str_to_upper(HexaVal s);` (전방선언, L909)
+  - gen.c:        `HexaVal rt_str_to_upper(HexaVal s) {` (정의, L201)
+  → 선언+정의 분리, duplicate=0 undefined=0 (구조적 정답)
+
+AUTHORITATIVE JUDGE: CI faithful-nobaseline (linux-x86_64 + linux-arm64).
+  로컬은 구조까지만. 전체 seeds-removed 빌드/링크는 CI 가 판정(saga 교훈:
+  self-report 아닌 CI 출력이 증거).
+
+STATUS: LANDED (#3455, merge d99ecc321) — CI faithful-nobaseline FULL GREEN.
+  run 27642745829 (SHA 00004e7ff):
+    faithful-nobaseline (linux-x86_64) : success  ← 3-사이클 진동 해소
+    faithful-nobaseline (linux-arm64)  : success
+    faithful-nobaseline (darwin-arm64) : success
+    non-success job: 0
+  머지된 winning-combo(#3451, linux=C floor) 대비 strict improvement:
+  linux 도 native(9-fn gen.c) + flaky-regen 근본 제거(awk un-escape).
+  CI 가 authoritative 판정 — self-report 아닌 캡처 출력이 증거(c2).

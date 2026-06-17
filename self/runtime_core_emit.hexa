@@ -2485,6 +2485,25 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "// 여기서 일찍 선언.\n"
     buf = buf + "void hexa_throw(HexaVal err);\n"
     buf = buf + "\n"
+    // RT-NATIVE-ZEROC M4 B4 array-core READ-half (r4) — emitter-source rationale
+    // (NOT emitted; keeps runtime_core.c minimal for the genuine byte-decrease):
+    // hexa_array_get/set delegate UNCONDITIONALLY to the raw-mem hexa-source bodies
+    // (stdlib/runtime/array_core.hexa::rt_array_{get,set}_native). The C
+    // `#else HX_ARR_ITEMS(arr)[idx]` fallback was DROPPED here — the first genuine
+    // non-string runtime-substrate runtime_core.c byte-decrease. The bodies use
+    // native-only leaf intrinsics (__hx_ptr_load64 + __hx_make_val, r2 #3488) that
+    // ONLY the native gen2 compiler lowers (the hexat C-transpile bootstrap does
+    // NOT, and the array stdlib is not in the compiler flatten closure), so they
+    // enter the runtime ONLY via the frozen .s seed
+    // (self/native/array_core_{arm64,x86_64,arm64-linux}.s) ar'd into runtime.a by
+    // stage_resolve_runtime_a::resolve_native_array_core_seed (all 3 production
+    // targets) + linked into the single-TU dev builds (build_aprime /
+    // build_native_linux_arm64). PROVEN: nm = rt_array_*_native T (intrinsics
+    // inlined, zero undefined __hx_*) + direct-call gate 12/12 + C-diff gate 32/32.
+    buf = buf + "// array element read/write: native raw-mem bodies (array_core.hexa).\n"
+    buf = buf + "extern HexaVal rt_array_get_native(HexaVal arr, HexaVal idx);\n"
+    buf = buf + "extern HexaVal rt_array_set_native(HexaVal arr, HexaVal idx, HexaVal v);\n"
+    buf = buf + "\n"
     buf = buf + "HexaVal hexa_array_get(HexaVal arr, int64_t idx) {\n"
     buf = buf + "    // B13: tag guard — without this, a TAG_STR (from hexa_add fallthrough)\n"
     buf = buf + "    // reaches here and we read .arr.len from an unrelated union slot\n"
@@ -2531,7 +2550,7 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "        hexa_throw(hexa_str(_buf));\n"
     buf = buf + "        return hexa_void();\n"
     buf = buf + "    }\n"
-    buf = buf + "    return HX_ARR_ITEMS(arr)[idx];\n"
+    buf = buf + "    return rt_array_get_native(arr, hexa_int(idx));\n"
     buf = buf + "}\n"
     buf = buf + "\n"
     buf = buf + "// .last() codegen helper — single-eval the obj expression (HX_ARR_LEN is a\n"
@@ -2582,7 +2601,7 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "        return arr;\n"
     buf = buf + "    }\n"
     buf = buf + "    // In-place mutate (no copy — caller reassigns)\n"
-    buf = buf + "    HX_ARR_ITEMS(arr)[idx] = val;\n"
+    buf = buf + "    rt_array_set_native(arr, hexa_int(idx), val);\n"
     buf = buf + "    // ω-interp-2: SETTER for the per-frame \"dirty\" flag. Any direct write to\n"
     buf = buf + "    // a host-array element is the canonical \"slot may now contain arena Vals\"\n"
     buf = buf + "    // event — covers `array_store[idx] = items.push(item)` from\n"
@@ -3062,6 +3081,19 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "    return v;\n"
     buf = buf + "}\n"
     buf = buf + "#else\n"
+    // RT-NATIVE-ZEROC M4 map-r3: the standalone (non-HEXA_HAS) map element LOOKUP
+    // delegates the in-table hash probe to the raw-mem hexa-source body
+    // (stdlib/runtime/map_core.hexa::rt_map_get_native — fnv1a + open-addressing
+    // probe + strcmp, all __hx_payload_*/__hx_ptr_* leaves; gate-proven byte-exact
+    // vs this C path, map_core_gate.c exit 21). The native body enters the runtime
+    // ONLY via the frozen .s seed (self/native/map_core_{arm64,x86_64,arm64-linux}.s)
+    // ar'd into runtime.a by stage_resolve_runtime_a::resolve_native_map_core_seed
+    // (all 3 production targets) + linked into the single-TU dev builds. The C
+    // wrapper keeps the valstruct / NULL-table guards + the not-found stderr (the
+    // native body returns TAG_VOID on miss); only the alloc-free probe is delegated
+    // — the array twin's #else-drop pattern (array-r4). The key is boxed to a
+    // TAG_INT HexaVal (hexa fns receive every param as a 16-byte HexaVal).
+    buf = buf + "extern HexaVal rt_map_get_native(HexaVal m, HexaVal key);\n"
     buf = buf + "HexaVal hexa_map_get(HexaVal m, const char* key) {\n"
     buf = buf + "    // rt 32-G: route Val field access to flat struct accessor.\n"
     buf = buf + "    if (HX_IS_VALSTRUCT(m)) {\n"
@@ -3071,12 +3103,11 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "        fprintf(stderr, \"map key '%s' not found\\n\", key);\n"
     buf = buf + "        return hexa_void();\n"
     buf = buf + "    }\n"
-    buf = buf + "    HexaMapTable* t = HX_MAP_TBL(m);\n"
-    buf = buf + "    uint32_t h = hexa_fnv1a_str(key);\n"
-    buf = buf + "    int si = hmap_find(t, key, h);\n"
-    buf = buf + "    if (si >= 0) return t->vals[si];\n"
-    buf = buf + "    fprintf(stderr, \"map key '%s' not found\\n\", key);\n"
-    buf = buf + "    return hexa_void();\n"
+    buf = buf + "    HexaVal v = rt_map_get_native(m, hexa_int((int64_t)(intptr_t)key));\n"
+    buf = buf + "    if (HX_TAG(v) == TAG_VOID) {\n"
+    buf = buf + "        fprintf(stderr, \"map key '%s' not found\\n\", key);\n"
+    buf = buf + "    }\n"
+    buf = buf + "    return v;\n"
     buf = buf + "}\n"
     buf = buf + "#endif\n"
     buf = buf + "\n"
@@ -3260,10 +3291,16 @@ fn emit_runtime_core_to(out_path: str) {
     if buf.len() > 65536 { _flush_runtime_core(out_path, buf); buf = "" }
     buf = buf + "}\n"
     buf = buf + "#else\n"
+    // RT-NATIVE-ZEROC M4 map-r4: the standalone `in` / contains probe delegates
+    // to the raw-mem hexa-source body (map_core.hexa::rt_map_contains_native —
+    // same open-addressing walk as rt_map_get_native, returns a {0,1} TAG_INT
+    // HexaVal for slot-present, value-independent like the C `hmap_find>=0`). The
+    // native body enters via the same frozen map_core .s seed; the C wrapper keeps
+    // the NULL-table guard + boxes the key to a TAG_INT HexaVal.
+    buf = buf + "extern HexaVal rt_map_contains_native(HexaVal m, HexaVal key);\n"
     buf = buf + "int hexa_map_contains_key(HexaVal m, const char* key) {\n"
     buf = buf + "    if (!HX_MAP_TBL(m)) return 0;\n"
-    buf = buf + "    uint32_t h = hexa_fnv1a_str(key);\n"
-    buf = buf + "    return hmap_find(HX_MAP_TBL(m), key, h) >= 0;\n"
+    buf = buf + "    return (int)HX_INT(rt_map_contains_native(m, hexa_int((int64_t)(intptr_t)key)));\n"
     buf = buf + "}\n"
     buf = buf + "#endif\n"
     buf = buf + "\n"
@@ -3932,6 +3969,7 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "static uintptr_t __hx_arena_lo = (uintptr_t)-1;\n"
     buf = buf + "static uintptr_t __hx_arena_hi = 0;\n"
     buf = buf + "\n"
+    buf = buf + "#ifndef HEXA_RT_ALLOC_NATIVE  // RT-NATIVE Route B: when set, the native linked-block arena (build/alloc_syscall_native.o, from self/rt/alloc.hexa) provides hexa_arena_on/alloc/mark/rewind/reset; the C bodies below are the no-seed fallback.\n"
     buf = buf + "static int hexa_arena_on(void) {\n"
     buf = buf + "    if (__hexa_arena_enabled < 0) {\n"
     buf = buf + "        const char* e = hxlcl_getenv(\"HEXA_STR_ARENA\");\n"
@@ -4046,6 +4084,13 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "    for (HexaArenaBlock* b = __hexa_arena.head; b; b = b->next) b->used = 0;\n"
     buf = buf + "    __hexa_arena.cur = __hexa_arena.head;\n"
     buf = buf + "}\n"
+    buf = buf + "#else  // HEXA_RT_ALLOC_NATIVE: arena provided by the native seed (self/rt/alloc.hexa → build/alloc_syscall_native.o); declare the C-ABI surface the rest of runtime.c calls.\n"
+    buf = buf + "extern int hexa_arena_on(void);\n"
+    buf = buf + "extern void* hexa_arena_alloc(size_t n);\n"
+    buf = buf + "extern HexaArenaMark hexa_arena_mark(void);\n"
+    buf = buf + "extern void hexa_arena_rewind(HexaArenaMark m);\n"
+    buf = buf + "extern void hexa_arena_reset(void);\n"
+    buf = buf + "#endif  // HEXA_RT_ALLOC_NATIVE\n"
     buf = buf + "\n"
     buf = buf + "// ── rt 32-L: Val arena scope stack + heapify ─────────────\n"
     buf = buf + "// Goal: bump-allocate short-lived `Val { ... }` struct literals (the dominant\n"
@@ -5707,7 +5752,15 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "// a silent miscompile (`[].pop() + 1` -> \"void1\" garbage). Now matches the\n"
     if buf.len() > 65536 { _flush_runtime_core(out_path, buf); buf = "" }
     buf = buf + "// sibling array.last()/array.get() contract — throw on empty/non-array.\n"
-    buf = buf + "#ifndef HEXA_HAS_HEXA_RT_STDLIB\n"
+    // RT-NATIVE-ZEROC M4 array-r5: array.pop delegates UNCONDITIONALLY to the
+    // raw-mem hexa-source body (array_core.hexa::rt_array_pop_native — reads
+    // items[len-1] via rt_array_get_native + truncates len via __hx_ptr_store64,
+    // byte-exact vs the dropped C body, gate 32/32). The seed already ships
+    // rt_array_pop_native (array-r4 wiring); this collapses BOTH the standalone C
+    // body AND the #else rt_array_pop closure path into one native call. The
+    // non-array / empty guards stay C (they throw). shift keeps its #ifndef/#else
+    // — no shift seed yet.
+    buf = buf + "extern HexaVal rt_array_pop_native(HexaVal arr);\n"
     buf = buf + "HexaVal hexa_array_pop(HexaVal arr) {\n"
     buf = buf + "    if (!HX_IS_ARRAY(arr)) {\n"
     buf = buf + "        char _buf[128];\n"
@@ -5719,47 +5772,16 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "        hexa_throw(hexa_str(\"array.pop(): empty array\"));\n"
     buf = buf + "        return hexa_void();\n"
     buf = buf + "    }\n"
-    buf = buf + "    int n = HX_ARR_LEN(arr);\n"
-    buf = buf + "    HexaVal last = HX_ARR_ITEMS(arr)[n - 1];\n"
-    buf = buf + "    HX_SET_ARR_LEN(arr, n - 1);\n"
-    buf = buf + "    return last;\n"
+    buf = buf + "    return rt_array_pop_native(arr);\n"
     buf = buf + "}\n"
-    buf = buf + "HexaVal hexa_array_shift(HexaVal arr) {\n"
-    buf = buf + "    if (!HX_IS_ARRAY(arr)) {\n"
-    buf = buf + "        char _buf[128];\n"
-    buf = buf + "        snprintf(_buf, sizeof(_buf), \"array.shift(): container is not an array (tag=%d)\", (int)HX_TAG(arr));\n"
-    buf = buf + "        hexa_throw(hexa_str(_buf));\n"
-    buf = buf + "        return hexa_void();\n"
-    buf = buf + "    }\n"
-    buf = buf + "    if (HX_ARR_LEN(arr) == 0) {\n"
-    buf = buf + "        hexa_throw(hexa_str(\"array.shift(): empty array\"));\n"
-    buf = buf + "        return hexa_void();\n"
-    buf = buf + "    }\n"
-    buf = buf + "    HexaVal first = HX_ARR_ITEMS(arr)[0];\n"
-    buf = buf + "    int n = HX_ARR_LEN(arr);\n"
-    buf = buf + "    for (int i = 0; i < n - 1; i++) {\n"
-    buf = buf + "        HX_ARR_ITEMS(arr)[i] = HX_ARR_ITEMS(arr)[i + 1];\n"
-    buf = buf + "    }\n"
-    buf = buf + "    HX_SET_ARR_LEN(arr, n - 1);\n"
-    buf = buf + "    return first;\n"
-    buf = buf + "}\n"
-    buf = buf + "#else\n"
-    buf = buf + "extern HexaVal rt_array_pop(HexaVal arr);\n"
-    buf = buf + "extern HexaVal rt_array_shift(HexaVal arr);\n"
-    buf = buf + "HexaVal hexa_array_pop(HexaVal arr) {\n"
-    buf = buf + "    if (!HX_IS_ARRAY(arr)) {\n"
-    buf = buf + "        char _buf[128];\n"
-    buf = buf + "        snprintf(_buf, sizeof(_buf), \"array.pop(): container is not an array (tag=%d)\", (int)HX_TAG(arr));\n"
-    buf = buf + "        hexa_throw(hexa_str(_buf));\n"
-    buf = buf + "        return hexa_void();\n"
-    buf = buf + "    }\n"
-    buf = buf + "    if (HX_ARR_LEN(arr) == 0) {\n"
-    buf = buf + "        hexa_throw(hexa_str(\"array.pop(): empty array\"));\n"
-    buf = buf + "        return hexa_void();\n"
     if buf.len() > 65536 { _flush_runtime_core(out_path, buf); buf = "" }
-    buf = buf + "    }\n"
-    buf = buf + "    return rt_array_pop(arr);\n"
-    buf = buf + "}\n"
+    // array-r6: array.shift delegates UNCONDITIONALLY to the raw-mem hexa-source
+    // body (array_core.hexa::rt_array_shift_native — items[0] saved via the get
+    // path + 16-byte slide of every later element + len truncate, byte-exact vs
+    // the dropped C body). The seed ships rt_array_shift_native (regen 5 globl);
+    // collapses both the standalone C body and the #else rt_array_shift closure.
+    // non-array / empty guards stay C (they throw).
+    buf = buf + "extern HexaVal rt_array_shift_native(HexaVal arr);\n"
     buf = buf + "HexaVal hexa_array_shift(HexaVal arr) {\n"
     buf = buf + "    if (!HX_IS_ARRAY(arr)) {\n"
     buf = buf + "        char _buf[128];\n"
@@ -5771,9 +5793,8 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "        hexa_throw(hexa_str(\"array.shift(): empty array\"));\n"
     buf = buf + "        return hexa_void();\n"
     buf = buf + "    }\n"
-    buf = buf + "    return rt_array_shift(arr);\n"
+    buf = buf + "    return rt_array_shift_native(arr);\n"
     buf = buf + "}\n"
-    buf = buf + "#endif\n"
     buf = buf + "\n"
     buf = buf + "// Step-3 cycle 25 port (float array fast-path).\n"
     buf = buf + "HexaVal hexa_array_reverse(HexaVal arr) {\n"
@@ -8357,22 +8378,12 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "// hexa_str_* shims forward to rt_str_* after the include.\n"
     buf = buf + "// ─────────────────────────────────────────────────────────────────────\n"
     buf = buf + "\n"
-    buf = buf + "// M1 full · str_ext Step 5 (hxa-20260423-003): rt_str_trim — codegen\n"
-    buf = buf + "// emits rt_str_* directly; hexa_str_trim shim retired.\n"
-    buf = buf + "// Step-3 cycle 49 — rt_str_trim moves to hexa source. C body stays\n"
-    buf = buf + "// for the no-stdlib path.\n"
-    buf = buf + "#ifndef HEXA_HAS_HEXA_RT_STDLIB\n"
-    buf = buf + "HexaVal rt_str_trim(HexaVal s) {\n"
-    buf = buf + "    if (!HX_IS_STR(s)) return s;\n"
-    buf = buf + "    char* str = HX_STR(s);\n"
-    buf = buf + "    while (*str == ' ' || *str == '\\t' || *str == '\\n' || *str == '\\r') str++;\n"
-    buf = buf + "    int len = hxlcl_strlen(str);\n"
-    buf = buf + "    while (len > 0 && (str[len-1] == ' ' || str[len-1] == '\\t' || str[len-1] == '\\n' || str[len-1] == '\\r')) len--;\n"
-    if buf.len() > 65536 { _flush_runtime_core(out_path, buf); buf = "" }
-    buf = buf + "    char* result = hxlcl_strndup(str, len);\n"
-    buf = buf + "    return hexa_str_own(result);\n"
-    buf = buf + "}\n"
-    buf = buf + "#endif\n"
+    buf = buf + "// RT-NATIVE leg B Z2a (casefold/trim group): rt_str_trim's C body is RETIRED.\n"
+    buf = buf + "// It now ships from the self/runtime_hi.hexa SSOT — the runtime_hi_gen.c\n"
+    buf = buf + "// #include below (linux/no-stdlib) or the native runtime_hi_native.s seed\n"
+    buf = buf + "// (Darwin). The .hexa body uses only byte_at + substring (char_code_at +\n"
+    buf = buf + "// hexa_str_substring, both defined above), so it is valid in BOTH the\n"
+    buf = buf + "// stdlib and no-stdlib TUs — no #ifndef fallback needed.\n"
     buf = buf + "\n"
     buf = buf + "// Step-3 cycle 44 port — string replace-all dispatches to rt_str_replace\n"
     buf = buf + "// in stdlib/runtime/ctype.hexa. The hexa path is O(n*m) (no strstr;\n"
@@ -8420,25 +8431,12 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "#endif\n"
     buf = buf + "\n"
     if buf.len() > 65536 { _flush_runtime_core(out_path, buf); buf = "" }
-    buf = buf + "// M1 full · str_ext Step 5 (hxa-20260423-003): rt_str_to_upper/lower —\n"
-    buf = buf + "// codegen emits rt_str_* directly; hexa_str_to_upper/lower shims retired.\n"
-    buf = buf + "// Step-3 cycle 50 — both move to hexa source. C bodies stay for the\n"
-    buf = buf + "// no-stdlib path.\n"
-    buf = buf + "#ifndef HEXA_HAS_HEXA_RT_STDLIB\n"
-    buf = buf + "HexaVal rt_str_to_upper(HexaVal s) {\n"
-    buf = buf + "    if (!HX_IS_STR(s)) return s;\n"
-    buf = buf + "    char* r = hxlcl_strdup(HX_STR(s));\n"
-    buf = buf + "    for (int i = 0; r[i]; i++) if (r[i] >= 'a' && r[i] <= 'z') r[i] -= 32;\n"
-    buf = buf + "    return hexa_str_own(r);\n"
-    buf = buf + "}\n"
-    buf = buf + "\n"
-    buf = buf + "HexaVal rt_str_to_lower(HexaVal s) {\n"
-    buf = buf + "    if (!HX_IS_STR(s)) return s;\n"
-    buf = buf + "    char* r = hxlcl_strdup(HX_STR(s));\n"
-    buf = buf + "    for (int i = 0; r[i]; i++) if (r[i] >= 'A' && r[i] <= 'Z') r[i] += 32;\n"
-    buf = buf + "    return hexa_str_own(r);\n"
-    buf = buf + "}\n"
-    buf = buf + "#endif\n"
+    buf = buf + "// RT-NATIVE leg B Z2a (casefold/trim group): rt_str_to_upper/to_lower C\n"
+    buf = buf + "// bodies are RETIRED — they ship from the self/runtime_hi.hexa SSOT (the\n"
+    buf = buf + "// runtime_hi_gen.c #include below on linux/no-stdlib, or the native\n"
+    buf = buf + "// runtime_hi_native.s seed on Darwin). The .hexa casefold remaps a-z/A-Z\n"
+    buf = buf + "// via a 26-char lookup slice using only byte_at + substring, so it is valid\n"
+    buf = buf + "// in BOTH the stdlib and no-stdlib TUs — no #ifndef fallback needed.\n"
     buf = buf + "\n"
     buf = buf + "// Step-3 cycle 43 port — float-style fast-path for all-string arrays\n"
     buf = buf + "// dispatches to rt_str_join_str (ctype.hexa). Mixed-type arrays still\n"

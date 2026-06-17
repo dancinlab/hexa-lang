@@ -103,6 +103,21 @@ pub fn deck_disk_required_gb(q_points: int, scratch_gb_per_q: int) -> int {
     return q_points * scratch_gb_per_q
 }
 
+// deck_elph_scratch_gb_est — fine-mesh-aware per-q `_ph0` scratch estimate (GB).
+// The legacy hand-passed 5-18 GB/q UNDERESTIMATES dense-fine-k el-ph: the 16^3
+// fine k-mesh LaOs3Si2/LaRu3Si2 cells MEASURED >40 GB/q (the 40G vast disk-wall,
+// 2026-06-17). Scale with the fine k-point count (per-axis nk, cubed) and atom
+// count, floored at 40 (el-ph minimum disk; 40G was the ruled-out wall):
+//   est ≈ (nk^3 · nat) / 600   ·  12^3/nat6 -> 17 (→40 floor)  ·  16^3/nat6 -> 40 (the measured wall)  ·  20^3/nat6 -> 80
+// This is the realistic scratch_gb_per_q to feed deck_disk_fits / the runtime
+// preflight, replacing the old 5-18 guess that let a 40G pod pass then davcio-die.
+pub fn deck_elph_scratch_gb_est(nk_fine: int, nat: int) -> int {
+    if nk_fine <= 0 || nat <= 0 { return 40 }
+    let est = (nk_fine * nk_fine * nk_fine * nat) / 600
+    if est < 40 { return 40 }
+    return est
+}
+
 // deck_disk_fits — does a target pod's free disk cover the required scratch?
 // free_disk_gb < required → false (the caller WARNs). required == 0 (unknown
 // q / scratch) → true (nothing to gate on — never a false alarm).

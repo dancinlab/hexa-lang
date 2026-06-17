@@ -1,0 +1,86 @@
+F-LEGB-Z2A-SEARCH-PREDICATES — string-search predicate group → native SSOT (awk-synth)
+================================================================================
+CLAIM: casefold(#3455)/trim-ends(#3457) 의 green awk-synth Z2a 패턴을 정확히 같은
+방식으로 다음 floor-안전 그룹 rt_str_starts_with_b / rt_str_ends_with_b /
+rt_str_contains_b 에 적용한다. x86_64 native seed FIX(#3462) 후 양 타깃(arm64-darwin
++ x86_64-linux) 모두 HexaVal string 함수 native codegen 정확 → 누적 가능.
+
+GROUP (floor-safe, c1):
+  rt_str_starts_with_b / rt_str_ends_with_b / rt_str_contains_b — 순수 byte_at
+  비교 + len. libc/syscall/libm 의존 0. seed group(split/.../trim-ends)과 동일
+  leaf builtin(byte_at + len + substring). 직전까지 stdlib/runtime/ctype.hexa 에
+  거주(active C-runtime 빌드 전용) — 이 그룹을 HI-tier native seed SSOT
+  self/runtime_hi.hexa 로 이동(11→14 fn) = casefold/trim 과 동일 migration.
+
+DIFF vs casefold/trim-ends (c1 근본):
+  - rt_str_contains_b 는 ctype.hexa 에서 rt_str_index_of 를 호출했으나, 시드는
+    index_of 바디를 carry 하지 않음. → contains_b 를 substring-scan INLINE 으로
+    재작성(rt_str_index_of dep 제거) → 그룹이 fully self-contained(새 seed 의존 0).
+  - frozen 151c52c8 runtime.c 에 starts_with/ends_with/hexa_str_contains 의 C
+    바디 부재(L4662 call-site 1개뿐) → trim-ends 처럼 frozen-scrub 불요(casefold 와
+    동일). runtime_core_emit.hexa 의 `#else extern rt_str_*_b + bridge` 구조는
+    이미 존재·미변경(rt_str_*_b 를 이미 extern 참조) → 시드/gen.c 가 sole provider.
+
+MECHANISM (①②③④):
+  ① self/runtime_hi.hexa SSOT: 3 fn 추가(byte_at compare + inline scan) + selftest.
+  ② self/native/{runtime_hi_native.s, runtime_hi_x86_64.s}: 11→14 fn REGEN
+     (tool/regen_runtime_hi_native_s.sh all — aprime_cc --emit=asm lib-only,
+      x86_64 는 PIC fixup mov→lea + PIE-link sanity).
+  ③ self/runtime_hi_gen.c (extract_runtime_hi.sh) + self/runtime_hi_gen_emit.hexa
+     (reverse-transform, awk un-escape == gen.c byte-id) 14 fn.
+  ④ stdlib/runtime/ctype.hexa 3 fn 제거(migration note, duplicate-symbol 회피).
+  + 카운트 11→14: regen_runtime_hi_native_s.sh(.globl>=14 + header) ·
+    stage_resolve_runtime_a(.globl safety guard) · build_aprime.sh comment ·
+    restore_frozen_seeds(awk-synth gen.c 검증 grep 3 신규 시그니처 require).
+
+LOCAL VERIFY (aiden, c2 — 캡처 PENDING):
+  - regen all → 14 .globl rt_str_* 양 타깃, cross-assemble + PIE-OK.
+  - extract.sh gen.c 14 fn.
+  - emitter awk un-escape == extract.sh gen.c BYTE-IDENTICAL (diff empty) — HARD GATE.
+  - C-differential harness: starts_with/ends_with/contains 14-case 매트릭스 vs
+    구 C 의미(empty prefix/needle 포함) PASS.
+
+AUTHORITATIVE JUDGE: CI — faithful-nobaseline 3-job(linux-x86_64 · linux-arm64 ·
+  darwin-arm64) + selfhost-byteeq-real + darwin byteeq/determinism/codegen-guard.
+  로컬은 구조까지만(c9: self-report 아닌 CI 출력이 증거).
+
+STATUS: CANDIDATE — awaiting CI faithful-nobaseline + byteeq-real verdict.
+
+
+--- REGEN + CODEGEN-FIX + INDEPENDENT VERIFY (2026-06-17) ---
+CODEGEN ROOT-CAUSE (c9, found during regen): the 3 search predicates are the
+FIRST bool-returning fns in the native seed. The x86_64 backend
+(x86_64_linux.hexa) had no `const_bool` case in _x86_op_resolve /
+_x86_tag_resolve / _x86_64_op_for_operand_st → `return true`/`return false`
+fell through to payload=imm 0 + tag default=TAG_INT. Every bool predicate
+silently returned false (C-differential 6/14, all true cases failed). #3462
+pair-model carried local/call/string tags but missed immediate const_bool
+literals (arm64_darwin.hexa already handled them, TAG_BOOL=2).
+FIX: add const_bool cases (payload=int_val 0/1, tag=TAG_BOOL=2) to x86_64,
+arm64 parity. After fix the seed emits mov rdx,1/mov rax,2 (true) and
+mov rdx,0/mov rax,2 (false). compiler/codegen/x86_64_linux.hexa +21L.
+
+REGEN (committed c27ce80e3): both seeds 14 .globl rt_str_* (x86_64 cross-assemble
++ PIE-OK; arm64 Mach-O 14-globl content). emitter runtime_hi_gen_emit.hexa
+14 fn, awk-synth == extract.sh gen.c BYTE-IDENTICAL (389L). Counts 14-consistent
+across runtime_hi.hexa · both seeds · emitter · regen `>=14` · stage_resolve
+`<14` guard · build_aprime/restore_frozen_seeds comments.
+
+INDEPENDENT RE-VERIFY (summer linux x86_64 — aiden host went DOWN mid-run; summer
+reproduced the whole gate fresh from the committed branch):
+  - committed 14-fn x86_64 seed assembles clean (clang -c) → 14 T rt_str_* syms,
+    incl rt_str_starts_with_b / ends_with_b / contains_b.
+  - C-differential harness scripts/scratch/rt_native/search_predicates_gate.c
+    linked against the native seed + rebuilt runtime.a:
+      ===== SEARCH-PREDICATE GATE: 18/18 match, 0 mismatch =====  (GATE-EXIT=0)
+    (18 cases incl empty prefix/needle, suffix>s, exact, prefix/suffix-as-
+     substring, needle>hay — all vs OLD C strncmp/strcmp/strstr semantics.)
+    const_bool fix CONFIRMED: every true case returns 1 (pre-fix all returned 0).
+  - emitter awk-unescape (mirror of restore_frozen_seeds synth) diff'd vs the
+    committed self/runtime_hi_gen.c → ZERO diff (BYTE-IDENTICAL-EMITTER-MATCH).
+
+STATUS: LANDED-pending-CI — local + summer gates GREEN (18/18 native-seed C-diff,
+  byte-identical emitter, 14-count consistent, x86_64 const_bool codegen fix).
+  PR opened; CI faithful-nobaseline (linux-x86_64·linux-arm64·darwin-arm64) +
+  selfhost-byteeq-real is the AUTHORITATIVE merge judge (c9 — no self-merge on a
+  pending byte-eq, no --admin override).

@@ -1,0 +1,50 @@
+// RT-NATIVE-ZEROC M1 — x86_64 `__hx_*` leaf-intrinsic parity test (core).
+// Exercises the int compares / arithmetic / float arithmetic+compare /
+// to_double / tag leaves — NO syscalls (OS-portable). Mirror of the proven
+// arm64 rt_core_batch2.hexa. Expected exit code = 16 (all leaves correct).
+fn rt_lt_i(a, b) -> bool { return __hx_payload_lt(a, b) }
+fn rt_gt_i(a, b) -> bool { return __hx_payload_gt(a, b) }
+fn rt_le_i(a, b) -> bool { return __hx_payload_le(a, b) }
+fn rt_ge_i(a, b) -> bool { return __hx_payload_ge(a, b) }
+fn rt_eq_i(a, b) -> bool { return __hx_payload_eq(a, b) }
+fn rt_nz(a)     -> bool  { return __hx_payload_nz(a) }
+fn rt_add(a, b) -> int   { return __hx_payload_add(a, b) }
+fn rt_sub(a, b) -> int   { return __hx_payload_sub(a, b) }
+fn rt_mul(a, b) -> int   { return __hx_payload_mul(a, b) }
+fn rt_flt(a, b) -> bool  { return __hx_payload_flt(__hx_to_double(a), __hx_to_double(b)) }
+fn rt_fle(a, b) -> bool  { return __hx_payload_fle(__hx_to_double(a), __hx_to_double(b)) }
+fn rt_fgt(a, b) -> bool  { return __hx_payload_fgt(__hx_to_double(a), __hx_to_double(b)) }
+fn rt_fadd(a, b) -> float { return __hx_payload_fadd(__hx_to_double(a), __hx_to_double(b)) }
+
+fn main() {
+  let mut ok = 0
+  // int relational + eq + nz (6). FALSE cases are asserted POSITIVELY (the leaf
+  // returns false → the guarded `ok+1` is SKIPPED, leaving the running total
+  // unchanged) rather than via `!` — the x86_64 backend has no `unop`/`!`
+  // lowering yet (emits `nop`), a PRE-EXISTING gap orthogonal to these leaves.
+  // We instead exercise each FALSE leaf by adding a compensating +1 only when
+  // it correctly returns false (i.e. the if-body is NOT taken).
+  if rt_lt_i(3, 5)  { ok = ok + 1 }      // 3<5  T  → +1
+  if rt_lt_i(5, 3)  { ok = ok + 100 }    // 5<3  F  → body skipped (poison if taken)
+  ok = ok + 1                            //         → counts the correct FALSE
+  if rt_gt_i(5, 3)  { ok = ok + 1 }      // 5>3  T
+  if rt_le_i(4, 4)  { ok = ok + 1 }      // 4<=4 T
+  if rt_ge_i(4, 4)  { ok = ok + 1 }      // 4>=4 T
+  if rt_eq_i(7, 7)  { ok = ok + 1 }      // 7==7 T
+  // arith (3)
+  if __hx_payload_eq(rt_add(20, 22), 42) { ok = ok + 1 }   // 42
+  if __hx_payload_eq(rt_sub(50, 8), 42)  { ok = ok + 1 }   // 42
+  if __hx_payload_eq(rt_mul(6, 7), 42)   { ok = ok + 1 }   // 42
+  // nz (2)
+  if rt_nz(5)   { ok = ok + 1 }          // 5 != 0  T → +1
+  if rt_nz(0)   { ok = ok + 100 }        // 0 != 0  F → body skipped (poison)
+  ok = ok + 1                            //         → counts the correct FALSE
+  // float compare (3) — NaN-correct ordered idiom
+  if rt_flt(1.5, 2.5)  { ok = ok + 1 }   // 1.5<2.5 T
+  if rt_fle(2.5, 2.5)  { ok = ok + 1 }   // 2.5<=2.5 T
+  if rt_fgt(3.5, 2.5)  { ok = ok + 1 }   // 3.5>2.5 T
+  // float arith + tag (2)
+  if rt_fgt(rt_fadd(1.0, 1.5), 2.0) { ok = ok + 1 }  // 2.5 > 2.0 T
+  if __hx_payload_eq(__hx_tag(7), 0) { ok = ok + 1 } // tag of int = TAG_INT(0)
+  exit(ok)   // expect 16
+}

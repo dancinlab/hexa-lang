@@ -1,0 +1,121 @@
+// stdlib/runtime/array_core.hexa — RT-NATIVE-ZEROC M4 B4 array-core READ-half.
+//
+// The hexa-source bodies for the LOW-LEVEL array element-access primitives
+// (get / set / pop / len) that runtime_core.c kept C-side until r2 because the
+// element they return is a 16-byte HexaVal whose REAL tag could not be
+// reconstructed from a raw payload word (every __hx_* leaf boxes TAG_INT —
+// WALL-1 from F-M4-B4-ARRAY). r2 (#3488) landed __hx_make_val(tag, payload),
+// the symmetric write-half of __hx_tag, which re-stamps an arbitrary tag onto a
+// raw payload word WITHOUT boxing-loss. That unblocks the READ-half ports here.
+//
+// CIRCULARITY (r1 trap, c1): these are the very primitives `arr[idx]` lowers to
+// (hexa_index_get -> hexa_array_get), so the bodies must NOT use `arr[idx]` /
+// len(arr) / .push — those re-enter the runtime and are self-recursive. Every
+// element access here is RAW MEM via __hx_ptr_load64 / __hx_ptr_store64 over the
+// HexaArr descriptor, exactly the sequence the C body compiles to.
+//
+// LAYOUT (locked by scripts/scratch/rt_native/b4_array_gate.c, 32/32 on main):
+//   the array HexaVal's payload word (= __hx_payload_add(arr, 0)) is HexaArr*.
+//   HexaArr { HexaVal* items @0;  int64_t len @8;  int64_t cap @16 }  sizeof 24
+//   element stride in items[] = sizeof(HexaVal) = 16:  tag @ +0,  payload @ +8.
+//
+// ALLOC stays C (WALL-2, alloc lane domain): new / push / reserve / snapshot all
+// touch calloc/realloc/arena/heapify and are NOT ported here. set/pop are
+// alloc-free (in-place index write / pure length decrement) so they DO port.
+//
+// These live in the LINKED rt-stdlib object set (imported by compiler/main.hexa
+// alongside numeric.hexa::rt_len). The runtime_core_emit.hexa #ifdef
+// HEXA_HAS_HEXA_RT_STDLIB arm delegates to them; the #else C body is retained
+// for the standalone smoke link (F-LEGB-STANDALONE-ELSE-NOGO).
+
+// ── descriptor helpers ──────────────────────────────────────────────
+//
+// arr_ptr: raw HexaArr* (as int64) read out of the array HexaVal's payload
+// union slot. __hx_payload_add(arr, 0) = HX_INT(arr) + 0 = the payload word; for
+// a TAG_ARRAY value HX_INT aliases arr_ptr (union, same offset). NO tag check —
+// the C wrapper has already guarded HX_IS_ARRAY before delegating.
+
+// NOT @pure: every body touches raw memory through __hx_ptr_load64 /
+// __hx_ptr_store64 (loads of mutable descriptor state, stores with side
+// effects). @pure would license the optimizer to CSE/elide these — wrong for
+// raw-mem. Mirrors rt_array_for_each (also side-effecting, also un-pure).
+
+// rt_array_len_native: HexaArr.len @ offset 8 of the descriptor.
+pub fn rt_array_len_native(arr: HexaVal) -> int {
+    let arr_ptr = __hx_payload_add(arr, 0)
+    return __hx_ptr_load64(arr_ptr, 8) as int
+}
+
+// rt_array_get_native: read the element's {tag, payload} 16-byte image at
+// items + idx*16 and reconstruct the REAL HexaVal via __hx_make_val. NO bounds
+// check / throw here — the C wrapper keeps that and only delegates the in-bounds
+// element read (mirrors hexa_array_pop's guard-C / body-rt split).
+pub fn rt_array_get_native(arr: HexaVal, idx: HexaVal) -> HexaVal {
+    let arr_ptr = __hx_payload_add(arr, 0)
+    let items = __hx_ptr_load64(arr_ptr, 0)
+    let off = __hx_payload_mul(idx, 16)              // idx * stride
+    let tag = __hx_ptr_load64(items, off)            // element tag word @ +0
+    let pay = __hx_ptr_load64(items, __hx_payload_add(off, 8))  // payload @ +8
+    return __hx_make_val(tag, pay)
+}
+
+// rt_array_set_native: in-place write of v's {tag, payload} into items[idx].
+// Decompose v with __hx_tag (tag word) + __hx_payload_add(v, 0) (payload word),
+// write both eightbytes raw. In-place index assign into existing capacity = NO
+// growth = alloc-free. Returns arr (the C wrapper handles the dirty-flag side
+// effect + bounds throw).
+pub fn rt_array_set_native(arr: HexaVal, idx: HexaVal, v: HexaVal) -> HexaVal {
+    let arr_ptr = __hx_payload_add(arr, 0)
+    let items = __hx_ptr_load64(arr_ptr, 0)
+    let off = __hx_payload_mul(idx, 16)
+    let tag = __hx_tag(v)
+    let pay = __hx_payload_add(v, 0)
+    __hx_ptr_store64(items, off, tag)                // tag word @ +0
+    __hx_ptr_store64(items, __hx_payload_add(off, 8), pay)      // payload @ +8
+    return arr
+}
+
+// rt_array_pop_native: return the last element (via the get path at len-1) then
+// shrink the logical length by storing len-1 to HexaArr.len @ +8. Pure length
+// edit — NO realloc, NO free (slots beyond the new len become unreachable
+// through this handle, matching the C body). The C wrapper keeps the empty /
+// non-array guard + throw and delegates only the non-empty pop.
+pub fn rt_array_pop_native(arr: HexaVal) -> HexaVal {
+    let arr_ptr = __hx_payload_add(arr, 0)
+    let len = __hx_ptr_load64(arr_ptr, 8)
+    let last_idx = __hx_payload_sub(len, 1)
+    let last = rt_array_get_native(arr, last_idx)
+    __hx_ptr_store64(arr_ptr, 8, last_idx)           // len <- len - 1
+    return last
+}
+
+// rt_array_shift_native: remove + return items[0], sliding every later element
+// down one slot, then shrink len. The slide COPIES each 16-byte {tag,payload}
+// image verbatim (raw int64 load/store of both eightbytes) — no tag
+// reconstruction needed mid-copy, the element image moves intact. `first` is
+// reconstructed via the get path so the returned value keeps its REAL tag.
+// Alloc-free (in-place memmove + length decrement), so it ports like pop. The C
+// wrapper keeps the empty / non-array guard + throw. All raw-int leaves,
+// un-nested (one op per temp), mirroring the C `for i<n-1: items[i]=items[i+1]`.
+pub fn rt_array_shift_native(arr: HexaVal) -> HexaVal {
+    let arr_ptr = __hx_payload_add(arr, 0)
+    let items = __hx_ptr_load64(arr_ptr, 0)
+    let len = __hx_ptr_load64(arr_ptr, 8)
+    let zero = __hx_payload_add(0, 0)                // HexaVal{TAG_INT, 0} (idx param is HexaVal)
+    let first = rt_array_get_native(arr, zero)       // items[0], tag-faithful
+    let last = __hx_payload_sub(len, 1)              // n - 1
+    let mut i = 0
+    while __hx_payload_lt(i, last) {
+        let off = __hx_payload_mul(i, 16)            // items[i]   byte offset
+        let noff = __hx_payload_add(off, 16)         // items[i+1] byte offset
+        let t = __hx_ptr_load64(items, noff)         // copy tag word
+        let noff8 = __hx_payload_add(noff, 8)
+        let p = __hx_ptr_load64(items, noff8)        // copy payload word
+        __hx_ptr_store64(items, off, t)
+        let off8 = __hx_payload_add(off, 8)
+        __hx_ptr_store64(items, off8, p)
+        i = __hx_payload_add(i, 1)
+    }
+    __hx_ptr_store64(arr_ptr, 8, last)               // len <- n - 1
+    return first
+}

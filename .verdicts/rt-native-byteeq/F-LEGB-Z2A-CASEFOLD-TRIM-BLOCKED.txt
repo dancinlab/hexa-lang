@@ -1,0 +1,85 @@
+F-LEGB-Z2A-CASEFOLD-TRIM — RT-NATIVE leg B group #2 attempt
+================================================================
+date: 2026-06-17
+verdict: 🧱 HONEST BLOCK (c9/c16) — mechanism+parity PROVEN, but a clean land
+         regresses the linux release path; reverted clean (toolchain untouched).
+
+GROUP CHOSEN (self-contained, non-floor value-ops, 3 fns):
+  rt_str_to_upper / rt_str_to_lower / rt_str_trim
+  - ASCII case fold + whitespace trim; deps only byte_at/byte_len/substring/
+    bytes_to_str_raw (all native-codegen-supported leaf builtins).
+  - Direct siblings of the already-landed Z2a seed group (split/lines/pad/
+    repeat/center) — same codegen dispatch, same runtime_hi.hexa namespace.
+
+WHAT WAS PROVEN (all locally, Darwin arm64):
+  1. NATIVE EMIT: extended self/runtime_hi.hexa (lib-only, head -193) →
+     aprime_cc --emit=asm → 9 rt_str_* T symbols, NO main (selftest stripped).
+     Existing 6 fns byte-IDENTICAL to committed seed (only 3 new fns appended).
+  2. BEHAVIORAL PARITY: native seed rt_str_{to_upper,to_lower,trim} vs the C
+     #ifndef bodies (renamed cref_*), linked + run, 16 inputs ×3 ops:
+        ===== PARITY RESULT: 48/48 match · 0 mismatch =====
+     (edge cases: empty, all-ws, mixed, \t\r\n, non-alpha, "Hello, World!").
+  3. RUNTIME.A SUBSTITUTION: HEXA_ZEROC_RT_HI=1 build → all 9 rt_str_* are T in
+     rt_hi_native.o (native, zero C); NONE in runtime.o (C amalgam). Real drop-in.
+  4. FULL ACTIVE BUILD: build_aprime.sh rc=0, smoke exit(6*7)==42 PASS, no
+     duplicate symbols. runtime_core.c shrunk 8082→8056 (26 lines C removed).
+  5. DUAL-CONFIG GATE PASS: active + standalone both compile.
+  6. STANDALONE RT_UND=0 invariant preserved (all 9 seed-only, like split).
+  7. FUNCTIONAL: "  hi  ".trim() → "hi" through native rt_str_trim end-to-end.
+     (.to_upper()/.to_lower() emit `bl _to_upper` — a PRE-EXISTING codegen
+      method-dispatch gap in the shipped aprime, identical in MAIN aprime_cc;
+      unrelated to this runtime change. The free-fn rt_str_to_upper is correct.)
+
+THE BLOCKER (why it cannot land clean):
+  The Darwin collision/linux-dependency triangle:
+   - aprime binary link = ap_post.c (compiles stdlib/runtime/ctype.hexa) +
+     rt_hi_native.o (seed). On Darwin HEXA_ZEROC_RT_HI=1 auto-on → seed linked.
+   - ctype.hexa ALSO defines rt_str_{to_upper,to_lower,trim} → DUPLICATE SYMBOL
+     with the seed at the Darwin link. So they MUST be removed from ctype.hexa.
+   - BUT on linux HEXA_ZEROC_RT_HI is NOT auto-on → seed NOT linked → the linux
+     active build gets these 3 ONLY from ctype.hexa. Removing ctype → linux
+     release build has UNDEFINED rt_str_to_upper/to_lower/trim.
+   - The linux fallback would be self/runtime_hi_gen.c (the split-group pattern),
+     but it is a FROZEN seed with only the 5 split fns. Regenerating it via
+     tool/extract_runtime_hi.sh hits a PRE-EXISTING drift: current hexat emits a
+     module-suffixed `__hexa_strlit_init__runtime_hi`, while the extract.sh footer
+     hardcodes `__hexa_rt_strlit_init()` → "undeclared function" at compile.
+     (The frozen 5-fn gen has the non-suffixed name, so it still works today;
+      ANY regen with current hexat drifts — independent of these 3 fns.)
+   - Also: runtime_core_emit.hexa would need forward decls for hexa_bytes_to_str_raw
+     + hexa_str_byte_at before the runtime_hi_gen.c #include (one-line each, easy).
+
+  => A clean land requires: (a) fix tool/extract_runtime_hi.sh strlit-init naming
+     vs current hexat ABI, (b) add the 2 forward decls to runtime_core_emit.hexa,
+     (c) regen runtime_hi_gen.c (9 fns) + update its emitter SSOT, (d) VERIFY the
+     linux-x86_64 + linux-arm64 release/cross builds (pod-gated). Steps (a)+(d)
+     are the real wall — pre-existing toolchain drift + cross-arch verification.
+
+NEXT GROUP CANDIDATE (avoids the triangle entirely):
+  Do the standalone/linux unblock FIRST (RT-NATIVE.md Z2c item 1), specifically:
+  fix tool/extract_runtime_hi.sh + regen runtime_hi_gen.c to 9 fns under a linux
+  cross byte-eq gate. Once runtime_hi_gen.c is the unified linux fallback (like
+  split), THIS group + every #ifndef value-op group becomes a clean seed-move.
+  Until then, single-group C-body removal stays blocked by the ctype/linux dep.
+
+DEPLETION CONDITION for this lane:
+  This lane (incremental per-group C-body removal) is BLOCKED until the linux
+  runtime_hi_gen.c regen path is fixed (extract.sh drift). After that fix lands,
+  the lane re-opens and the casefold/trim group is the first ready move (its
+  Darwin seed + parity are already proven here; re-derive cheaply).
+
+revert: git checkout — all 4 source files; worktree CLEAN (verified). c7 intact.
+
+────────────────────────────────────────────────────────────────
+FOLLOW-UP (2026-06-17): unblock step (a) RESOLVED.
+  tool/extract_runtime_hi.sh no longer hardcodes the strlit-init name in the
+  ctor footer. It now auto-detects the symbol hexat emits (bare
+  `__hexa_strlit_init` OR module-suffixed `__hexa_strlit_init__runtime_hi`) and
+  applies the same `__hexa_rt_` rename the bodies get, so footer-call == body-def
+  for BOTH ABI forms. Verified by construction (logic test, both cases MATCH).
+  Cannot run the full regen locally (no hexat build) nor linux cross byte-eq
+  (pod) — those remain steps (c)+(d). Step (b) (2 fwd decls in
+  runtime_core_emit.hexa) deferred to the regen session that can build-verify it
+  (target symbol hexa_bytes_to_str_raw not locatable in the emitter SSOT from
+  here; blind-editing a core-file generator is unsafe — c2/c9).
+  => "real wall" blocker (a) is down; (c)+(d) genuinely need hexat+pod.

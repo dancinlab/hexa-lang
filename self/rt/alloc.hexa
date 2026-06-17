@@ -1,312 +1,195 @@
-// self/rt/alloc.hexa — P7-7b: hexa allocator over syscall(mmap/munmap)
+// self/rt/alloc.hexa — P7-7b → Route B: hexa LINKED-BLOCK arena over mmap.
 //
-// Replaces runtime.c malloc/free/realloc. Mirrors the existing arena
-// semantics from runtime.c:
+// Replaces runtime.c's C arena (runtime_core_emit.hexa:3937-4085) — C-ABI
+// equivalent so the C arena `#else` can drop:
+//   · same HexaArenaBlock {next,cap,used,data[]} layout (raw memory)
+//   · the 16-byte HexaArenaMark {block,used} struct == HexaVal {tag,payload}
+//     layout, so a hexa fn returning __hx_make_val(block,used) is byte-identical
+//     to the C struct return (ABI-compatible at the rax:rdx / SysV boundary).
+//   · carries the address-envelope (#3524) for hexa_val_heapify's O(1) range-
+//     reject (without it self-compile RSS → 10-16GB OOM).
 //
-//   hexa_arena_on() / hexa_arena_rewind(mark) / hexa_arena_reset()
-//   hexa_ptr_alloc(size) / hexa_ptr_free(ptr, size)
+// DATA STRUCTURE (Route B, F-M5-ROUTEB-LINKEDBLOCK): a HexaArenaBlock chain in
+// raw memory, NOT the b2 pool table (whose int mark is ABI-incompatible with the
+// C HexaArenaMark {block*,used}). Each block:
+//   block + 0  : next (HexaArenaBlock*, 0 = last)
+//   block + 8  : cap  (size_t, data capacity)
+//   block + 16 : used (size_t, bump offset into data)
+//   block + 24 : data[cap]
+// __arena_head = first block (never unmapped); __arena_cur = current bump block.
+// rewind/reset set used=0 and KEEP blocks for reuse (never unmap) — matches C.
 //
-// Design
-// ------
-//
-// Two allocators in one module:
-//
-//   1. Arena (bump pointer, scope-rewindable). Primary allocator for
-//      short-lived values from compiler passes. Contiguous region
-//      grown in POOL_PAGE_SIZE chunks via mmap ANON.
-//
-//   2. Page allocator (one mmap per large alloc). For objects with
-//      long/independent lifetimes (interned strings, global tables).
-//      ptr_free(ptr, size) calls sys_munmap directly.
-//
-// No free-list, no fragmentation logic. Arena resets are O(1). If
-// arena overruns the current pool, we mmap a new POOL_PAGE_SIZE region
-// and link it via a small header. The old region stays live until
-// arena_reset(), at which point every pool page munmaps.
-//
-// Thread safety: single-threaded (matches runtime.c — no pthread
-// anywhere). If/when threads are added, use @syscall(gettid) +
-// per-thread arenas.
+// Memory intrinsics are the shipping __hx_ptr_load64/store64 (+offset); syscalls
+// the M5 leaf surface (sys_mmap over __hx_syscall6). Thread safety: single-
+// threaded (matches runtime.c).
 
 use self::rt::syscall
 
-// ═══════════════════════════════════════════════════════════════════
-// Constants
-// ═══════════════════════════════════════════════════════════════════
+@pure fn HEXA_ARENA_BLOCK_SIZE() -> int { return 1048576 }   // 1 MB default block
+@pure fn BLOCK_HDR() -> int { return 24 }                     // next + cap + used
 
-@pure fn POOL_PAGE_SIZE() -> int { return 1048576 }  // 1 MB per pool page
-@pure fn ARENA_MAX_POOLS() -> int { return 256 }      // up to 256 MB/arena
+let mut __arena_head = 0
+let mut __arena_cur = 0
 
-// ═══════════════════════════════════════════════════════════════════
-// ArenaPool — header for a single mmap'd region
-// ═══════════════════════════════════════════════════════════════════
+// ── Route B address-envelope (carry-forward #3524) ────────────────────
+// Every block's data range extends [__arena_env_lo, __arena_env_hi); the C
+// heapify's O(1) pointer-range reject reads the matching C __hx_arena_lo/hi
+// (wired at the seed-relink step). lo=0 ⇒ uninitialised; hi=0 ⇒ empty.
+let mut __arena_env_lo = 0
+let mut __arena_env_hi = 0
 
-struct ArenaPool {
-    base: int,    // pointer returned by mmap
-    size: int,    // allocated size (POOL_PAGE_SIZE or larger)
-    used: int     // bytes consumed from this pool
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// Arena — bump pointer across a list of mmap'd pools
-// ═══════════════════════════════════════════════════════════════════
-
-struct Arena {
-    pools: [ArenaPool],
-    current: int,   // index into pools of the active (append) pool
-    total_used: int,
-    enabled: int    // 0 = disabled (route to page alloc), 1 = enabled
-}
-
-fn arena_new() -> Arena {
-    return Arena{ pools: [], current: -1, total_used: 0, enabled: 1 }
-}
-
-// Map a new pool page via mmap ANON.
-fn arena_grow(a: Arena) -> Arena {
-    let flags = MAP_PRIVATE() + flag_map_anon()
-    let prot = PROT_READ() + PROT_WRITE()
-    let base = sys_mmap(0, POOL_PAGE_SIZE(), prot, flags, -1, 0)
-    if base < 0 {
-        // sys_mmap returned -errno. Arena overflow → abort.
-        sys_exit(137)  // SIGKILL-equivalent code
-        return a
+fn __env_extend(base: int, size: int) {
+    if __arena_env_lo == 0 {
+        __arena_env_lo = base
+    } else {
+        if base < __arena_env_lo { __arena_env_lo = base }
     }
-    let pool = ArenaPool{ base: base, size: POOL_PAGE_SIZE(), used: 0 }
-    let mut new_pools = a.pools
-    new_pools.push(pool)
-    return Arena{
-        pools: new_pools,
-        current: len(new_pools) - 1,
-        total_used: a.total_used,
-        enabled: a.enabled
-    }
+    let top = base + size
+    if top > __arena_env_hi { __arena_env_hi = top }
 }
 
-// Round up `n` to `align` boundary.
+fn hexa_arena_env_lo() -> int { return __arena_env_lo }
+fn hexa_arena_env_hi() -> int { return __arena_env_hi }
+
 @pure fn align_up(n: int, align: int) -> int {
     return ((n + align - 1) / align) * align
 }
 
-// Allocate `size` bytes from the arena. Returns a raw pointer (int).
-fn arena_alloc(a: Arena, size: int) -> int {
-    let mut ar = a
-    let aligned = align_up(size, 8)
+// ── HexaArenaBlock raw-mem accessors (single __hx_ptr_* op each) ───────
+fn __blk_next(b: int) -> int { return __hx_ptr_load64(b, 0) }
+fn __blk_cap(b: int) -> int { return __hx_ptr_load64(b, 8) }
+fn __blk_used(b: int) -> int { return __hx_ptr_load64(b, 16) }
+fn __blk_set_next(b: int, v: int) { __hx_ptr_store64(b, 0, v) }
+fn __blk_set_cap(b: int, v: int) { __hx_ptr_store64(b, 8, v) }
+fn __blk_set_used(b: int, v: int) { __hx_ptr_store64(b, 16, v) }
 
-    // Large allocs bypass arena (go straight to mmap).
-    if aligned > POOL_PAGE_SIZE() / 2 {
-        return page_alloc(aligned)
-    }
-
-    // Ensure we have a pool with room.
-    if ar.current < 0 {
-        ar = arena_grow(ar)
-    }
-    let pool = ar.pools[ar.current]
-    if pool.used + aligned > pool.size {
-        ar = arena_grow(ar)
-    }
-
-    let cur = ar.pools[ar.current]
-    let addr = cur.base + cur.used
-    let new_used = cur.used + aligned
-    // Mutate in place via index write (hexa array mutation).
-    ar.pools[ar.current] = ArenaPool{
-        base: cur.base,
-        size: cur.size,
-        used: new_used
-    }
-    return addr
-}
-
-// Record a "mark" for later rewind.
-struct ArenaMark {
-    pool_idx: int,
-    used: int
-}
-
-fn arena_mark(a: Arena) -> ArenaMark {
-    if a.current < 0 {
-        return ArenaMark{ pool_idx: -1, used: 0 }
-    }
-    let p = a.pools[a.current]
-    return ArenaMark{ pool_idx: a.current, used: p.used }
-}
-
-// Rewind to a prior mark; any pools after mark.pool_idx are unmapped.
-fn arena_rewind(a: Arena, mark: ArenaMark) -> Arena {
-    let mut ar = a
-    // Unmap any pools created after the mark.
-    let mut i = len(ar.pools) - 1
-    while i > mark.pool_idx {
-        let p = ar.pools[i]
-        sys_munmap(p.base, p.size)
-        ar.pools = ar.pools.pop()
-        i = i - 1
-    }
-    if mark.pool_idx >= 0 {
-        let p = ar.pools[mark.pool_idx]
-        ar.pools[mark.pool_idx] = ArenaPool{ base: p.base, size: p.size, used: mark.used }
-        ar.current = mark.pool_idx
-    } else {
-        ar.current = -1
-    }
-    return ar
-}
-
-// Drop every pool. Call at program end or between sessions.
-fn arena_reset(a: Arena) -> Arena {
-    let mut i = 0
-    while i < len(a.pools) {
-        let p = a.pools[i]
-        sys_munmap(p.base, p.size)
-        i = i + 1
-    }
-    return arena_new()
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// Page allocator — one mmap per alloc, one munmap per free
-// ═══════════════════════════════════════════════════════════════════
-
-fn page_alloc(size: int) -> int {
-    let aligned = align_up(size, 4096)
+// Map a new block with >= min_cap data bytes. Returns block base (0 = OOM).
+fn hexa_arena_new_block(min_cap: int) -> int {
+    let mut cap = HEXA_ARENA_BLOCK_SIZE()
+    if min_cap > cap { cap = min_cap }
+    let total = BLOCK_HDR() + cap
     let flags = MAP_PRIVATE() + flag_map_anon()
     let prot = PROT_READ() + PROT_WRITE()
-    let addr = sys_mmap(0, aligned, prot, flags, -1, 0)
-    if addr < 0 {
+    let base = sys_mmap(0, total, prot, flags, -1, 0)
+    if base < 0 {
         sys_exit(137)
         return 0
     }
-    return addr
+    __blk_set_next(base, 0)
+    __blk_set_cap(base, cap)
+    __blk_set_used(base, 0)
+    __env_extend(base + BLOCK_HDR(), cap)   // data range → envelope
+    return base
 }
-
-fn page_free(addr: int, size: int) -> int {
-    let aligned = align_up(size, 4096)
-    return sys_munmap(addr, aligned)
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// Global allocator instance + runtime.c compat shims
-// ═══════════════════════════════════════════════════════════════════
-//
-// runtime.c exposes:
-//   hexa_arena_on / hexa_arena_rewind / hexa_arena_reset
-//   hexa_ptr_alloc(size) / hexa_ptr_free(ptr, size)
-//
-// We replicate the same surface. The global `__hexa_arena` is
-// populated at program start by rt_init() and referenced by every
-// alloc path. A small-int "mark" is encoded as pool_idx * (POOL_PAGE_SIZE+1) + used.
-
-let mut __hexa_arena = arena_new()
 
 fn rt_init() {
-    // mmap the first pool eagerly so the first alloc is O(1).
-    __hexa_arena = arena_grow(__hexa_arena)
+    __arena_head = hexa_arena_new_block(HEXA_ARENA_BLOCK_SIZE())
+    __arena_cur = __arena_head
 }
 
 fn hexa_arena_on() -> int {
-    return __hexa_arena.enabled
+    return 1
 }
 
-fn hexa_arena_mark() -> ArenaMark {
-    return arena_mark(__hexa_arena)
+// Allocate n bytes (8-aligned) from the arena. Returns data ptr (0 = OOM).
+// Large requests (> block size) get their own big block (matches the C arena —
+// no separate page allocator). Bump on cur; on overflow, walk forward to reuse a
+// rewound-empty tail block, else append a fresh one.
+fn hexa_arena_alloc(n: int) -> int {
+    let aligned = align_up(n, 8)
+    let mut sz = aligned
+    if sz == 0 { sz = 8 }
+    if __arena_head == 0 {
+        __arena_head = hexa_arena_new_block(sz)
+        __arena_cur = __arena_head
+        if __arena_head == 0 { return 0 }
+    }
+    let mut b = __arena_cur
+    if __blk_used(b) + sz > __blk_cap(b) {
+        let mut nb = __blk_next(b)
+        while nb != 0 {
+            if __blk_cap(nb) >= sz { break }
+            nb = __blk_next(nb)
+        }
+        if nb == 0 {
+            nb = hexa_arena_new_block(sz)
+            if nb == 0 { return 0 }
+            let mut tail = __arena_cur
+            while __blk_next(tail) != 0 { tail = __blk_next(tail) }
+            __blk_set_next(tail, nb)
+        }
+        __blk_set_used(nb, 0)
+        __arena_cur = nb
+        b = nb
+    }
+    let p = b + BLOCK_HDR() + __blk_used(b)
+    __blk_set_used(b, __blk_used(b) + sz)
+    return p
 }
 
-fn hexa_arena_rewind(mark: ArenaMark) {
-    __hexa_arena = arena_rewind(__hexa_arena, mark)
+// HexaArenaMark = {block @0, used @8} == HexaVal {tag @0, payload @8}: returning
+// __hx_make_val(block, used) is byte-identical to the C struct return.
+fn hexa_arena_mark() -> HexaVal {
+    if __arena_cur == 0 { return __hx_make_val(0, 0) }
+    return __hx_make_val(__arena_cur, __blk_used(__arena_cur))
+}
+
+// rewind(m): m.block (word0) up to m.used (word1); later blocks emptied (kept).
+fn hexa_arena_rewind(m: HexaVal) {
+    let block = __hx_tag(m)             // HexaArenaMark.block
+    let used = __hx_payload_add(m, 0)   // HexaArenaMark.used
+    if block == 0 {
+        if __arena_head != 0 {
+            __blk_set_used(__arena_head, 0)
+            __arena_cur = __arena_head
+        }
+        return
+    }
+    __blk_set_used(block, used)
+    let mut b = __blk_next(block)
+    while b != 0 {
+        __blk_set_used(b, 0)
+        b = __blk_next(b)
+    }
+    __arena_cur = block
 }
 
 fn hexa_arena_reset() {
-    __hexa_arena = arena_reset(__hexa_arena)
+    if __arena_head == 0 { return }
+    let mut b = __arena_head
+    while b != 0 {
+        __blk_set_used(b, 0)
+        b = __blk_next(b)
+    }
+    __arena_cur = __arena_head
 }
 
+// ── runtime.c-compat shims ────────────────────────────────────────────
+// All allocation routes through the arena (no individual free — freed en masse
+// via reset/rewind, matching the C arena's lifetime model).
 fn hexa_ptr_alloc(size: int) -> int {
-    if __hexa_arena.enabled == 1 {
-        return arena_alloc(__hexa_arena, size)
-    }
-    return page_alloc(size)
+    return hexa_arena_alloc(size)
 }
 
 fn hexa_ptr_free(ptr: int, size: int) -> int {
-    // Arena allocs are freed en masse via arena_reset. Individual free
-    // is only honored for page allocs (large objects >= POOL_PAGE_SIZE/2).
-    if size >= POOL_PAGE_SIZE() / 2 {
-        return page_free(ptr, size)
-    }
-    // Small allocs: no-op. Reclaimed on next arena_reset.
     return 0
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// Memory intrinsics — typed load/store at raw addresses
-// ═══════════════════════════════════════════════════════════════════
-//
-// These wrappers expose raw memory access needed by arena headers and
-// the I/O byte-path (see self/rt/io.hexa). They are thin over compiler
-// builtins that codegen lowers to single instructions — no libc memcpy.
-//
-// Signatures mirror runtime.c hexa_ptr_read / hexa_ptr_write.
-//
-// Lowering contract (for ir/lowering.hexa and self/codegen/):
-//
-//   __mem_store8(addr, val)         — 1-byte write
-//     ARM64 : STRB Wval, [Xaddr]           ; 0x39000000 | (addr<<5) | val
-//     x86_64: MOV byte ptr [Raddr], Val8   ; 88 /r
-//
-//   __mem_load8(addr) -> int        — 1-byte unsigned read (zext to 64)
-//     ARM64 : LDRB Wdst, [Xaddr]           ; 0x39400000 | (addr<<5) | dst
-//     x86_64: MOVZX Rdst, byte ptr [Raddr] ; 0F B6 /r
-//
-//   __mem_store64(addr, val)        — 8-byte (word) write
-//     ARM64 : STR  Xval, [Xaddr]           ; 0xF9000000 | (addr<<5) | val
-//     x86_64: MOV qword ptr [Raddr], Rval  ; REX.W 89 /r
-//
-//   __mem_load64(addr) -> int       — 8-byte word read
-//     ARM64 : LDR  Xdst, [Xaddr]           ; 0xF9400000 | (addr<<5) | dst
-//     x86_64: MOV Rdst, qword ptr [Raddr]  ; REX.W 8B /r
-//
-// Offset is pre-added on the hexa side (one ADD per access). A future
-// pass can fuse ptr+offset into the addressing mode (ARM64 LDR with
-// imm12 scaled; x86 [base+disp32]), but the current regalloc contract
-// keeps it simple: the address is a plain register.
-//
-// STATUS (2026-04-19): builtins are recognized as *names* by the
-// resolver but no IR→machine lowering exists yet. Calls will either
-// resolve to the C fallbacks in runtime.c (hexa_ptr_read/write, word)
-// or fail link for the byte variants. Once P7-7b-lowering lands,
-// self/codegen/memop.hexa should emit the single-instruction forms
-// above and regalloc should treat __mem_* as leaf ops with 0 clobbers.
-//
-// Until lowering exists, keep the @inline annotation: the interpreter
-// path falls through to runtime.c, and the compiled path will be one
-// emit op once the lowering table is populated.
-
+// ── Memory intrinsics — typed load/store at raw addresses ─────────────
 @inline fn hexa_ptr_write_byte(ptr: int, offset: int, val: int) -> int {
-    // Lowered to STRB [ptr + offset], val (ARM64) / MOV m8,r8 (x86)
-    return __mem_store8(ptr + offset, val)
+    __hx_ptr_store8(ptr, offset, val)
+    return val
 }
 
 @inline fn hexa_ptr_read_byte(ptr: int, offset: int) -> int {
-    // Lowered to LDRB val, [ptr + offset] (ARM64) / MOVZX r,m8 (x86)
-    return __mem_load8(ptr + offset)
+    return __hx_ptr_load8(ptr, offset)
 }
 
-// Word-sized (64-bit) access — used by arena/pool headers and any
-// pointer-tagged payload. Offset is expected to be 8-byte aligned;
-// ARM64 LDR/STR with unaligned word addresses faults on some cores.
 @inline fn hexa_ptr_write_64(ptr: int, offset: int, val: int) -> int {
-    // Lowered to STR Xval, [ptr + offset] (ARM64) / MOV m64,r64 (x86)
-    return __mem_store64(ptr + offset, val)
+    __hx_ptr_store64(ptr, offset, val)
+    return val
 }
 
 @inline fn hexa_ptr_read_64(ptr: int, offset: int) -> int {
-    // Lowered to LDR Xdst, [ptr + offset] (ARM64) / MOV r64,m64 (x86)
-    return __mem_load64(ptr + offset)
+    return __hx_ptr_load64(ptr, offset)
 }
-
-// __mem_store8 / __mem_load8 / __mem_store64 / __mem_load64 are
-// compiler builtins recognized by codegen.
-// (TODO: wire in ir/lowering.hexa + self/codegen/memop.hexa — same
-// shape as self/codegen/syscall.hexa. Until then byte variants rely
-// on runtime.c fallback for the word forms; byte path is interpreter-only.)

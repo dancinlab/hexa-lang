@@ -51,7 +51,7 @@
     "README.md"
   ],
   "docs": {
-    "architecture": "ARCHITECTURE.md",
+    "architecture": "ARCHITECTURE.json",
     "log": "CHANGELOG.md",
     "scratchDir": "scripts/scratch",
     "scopeDirs": [
@@ -62,7 +62,9 @@
       "README.en.md",
       "README.ko.md",
       "CHANGELOG.md",
-      "ARCHITECTURE.md",
+      "ARCHITECTURE.json",
+      "architecture.html",
+      "serve.py",
       "CLAUDE.md",
       "AGENTS.md",
       "LICENSE",

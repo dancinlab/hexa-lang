@@ -49,13 +49,12 @@ pub fn rt_str_char_count(s: string) -> int {
     return rt_utf8_cpcount(s)
 }
 
-// Step 3 cycle 57 — string contains (substring search). True when `sub`
-// appears anywhere in `s`. Reuses cycle-54's rt_str_index_of for the
-// scan logic — `index_of != -1` is the canonical predicate.
-pub fn rt_str_contains_b(s: string, sub: string) -> bool {
-    if rt_str_index_of(s, sub) >= 0 { return true }
-    return false
-}
+// Step 3 cycle 57 — string contains (substring search). MIGRATED to the
+// native HI-tier seed self/runtime_hi.hexa (RT-NATIVE leg B Z2c, string-search
+// predicate group) — rt_str_contains_b now lives there (self-contained inline
+// substring scan, no rt_str_index_of dep), provided to both targets via the
+// native .s seed + runtime_hi_gen.c. Removed here to avoid a duplicate symbol
+// at the Darwin/active link (the seed group is the sole provider).
 
 // Step 3 cycle 57 — string byte-equality. C body uses pointer-equality
 // fast-path for interned strings then strcmp — we replicate the byte-
@@ -73,34 +72,11 @@ pub fn rt_str_eq_b(a: string, b: string) -> bool {
     return true
 }
 
-// Step 3 cycle 56 — prefix / suffix predicates. Hexa fns return bool;
-// the C wrappers keep their `int` return signature (codegen wraps in
-// `hexa_bool(rt_str_starts_with(...))`) so we use `_b` suffix names
-// here and let the C bridge extract via `hexa_truthy(...) ? 1 : 0`.
-pub fn rt_str_starts_with_b(s: string, prefix: string) -> bool {
-    let plen = byte_len(prefix)
-    let slen = byte_len(s)
-    if plen > slen { return false }
-    let mut i = 0
-    while i < plen {
-        if s.byte_at(i) != prefix.byte_at(i) { return false }
-        i = i + 1
-    }
-    return true
-}
-
-pub fn rt_str_ends_with_b(s: string, suffix: string) -> bool {
-    let sfxlen = byte_len(suffix)
-    let slen = byte_len(s)
-    if sfxlen > slen { return false }
-    let offset = slen - sfxlen
-    let mut i = 0
-    while i < sfxlen {
-        if s.byte_at(offset + i) != suffix.byte_at(i) { return false }
-        i = i + 1
-    }
-    return true
-}
+// Step 3 cycle 56 — prefix / suffix predicates. MIGRATED to the native
+// HI-tier seed self/runtime_hi.hexa (RT-NATIVE leg B Z2c, string-search
+// predicate group) — rt_str_starts_with_b / rt_str_ends_with_b now live there,
+// provided to both targets via the native .s seed + runtime_hi_gen.c. Removed
+// here to avoid a duplicate symbol at the Darwin/active link.
 
 // Step 3 cycle 55 — first occurrence at-or-after byte offset `start`.
 // st < 0 clamps to 0; st > hlen returns -1; empty needle returns st
@@ -533,100 +509,23 @@ pub fn rt_pad_right(s: string, width: int) -> string {
     return s + bytes_to_str_raw(bytes)
 }
 
-// Step 3 cycle 50 — ASCII case conversion. Non-ASCII bytes pass through
-// unchanged (UTF-8 continuation bytes have high bit set, won't match
-// the 'a'-'z' or 'A'-'Z' range). Collect bytes into [int] then one-shot
-// `bytes_to_str_raw` so we avoid O(n²) string concat.
-pub fn rt_str_to_upper(s: string) -> string {
-    let n = byte_len(s)
-    let mut bytes: [int] = []
-    let mut i = 0
-    while i < n {
-        let b = s.byte_at(i)
-        if b >= 97 && b <= 122 {
-            bytes = bytes.push(b - 32)
-        } else {
-            bytes = bytes.push(b)
-        }
-        i = i + 1
-    }
-    return bytes_to_str_raw(bytes)
-}
+// RT-NATIVE leg B Z2a (casefold/trim group) — rt_str_to_upper / rt_str_to_lower
+// / rt_str_trim MOVED to the self/runtime_hi.hexa SSOT. They now ship as native
+// (Darwin: self/native/runtime_hi_native.s seed) or hexat-transpiled
+// (linux: self/runtime_hi_gen.c) rt_str_* — zero C, no duplicate symbol with
+// the native seed at the Darwin link.
 
-pub fn rt_str_to_lower(s: string) -> string {
-    let n = byte_len(s)
-    let mut bytes: [int] = []
-    let mut i = 0
-    while i < n {
-        let b = s.byte_at(i)
-        if b >= 65 && b <= 90 {
-            bytes = bytes.push(b + 32)
-        } else {
-            bytes = bytes.push(b)
-        }
-        i = i + 1
-    }
-    return bytes_to_str_raw(bytes)
-}
+// RT-NATIVE leg B Z2a (trim-ends group): rt_str_trim_start / rt_str_trim_end
+// MOVED to the self/runtime_hi.hexa SSOT (siblings of rt_str_trim, same byte_at
+// + substring leaf body). They now ship from the runtime_hi_gen.c #include
+// (synthesized hexat-free from self/runtime_hi_gen_emit.hexa) on every target,
+// and the frozen self/runtime.c's #ifndef C bodies are scrubbed at
+// tool/restore_frozen_seeds so there is no duplicate symbol on the seeds-removed
+// (faithful-nobaseline) link.
 
-// Step 3 cycle 49 — strip trailing whitespace (mirror of trim_start).
-pub fn rt_str_trim_end(s: string) -> string {
-    let n = byte_len(s)
-    let mut b_end = n
-    while b_end > 0 {
-        let b = s.byte_at(b_end - 1)
-        if b == 32 || b == 9 || b == 10 || b == 13 {
-            b_end = b_end - 1
-        } else {
-            break
-        }
-    }
-    return s.substring(0, b_end)
-}
-
-// Step 3 cycle 49 — strip both leading and trailing whitespace.
-// Could be implemented as trim_end(trim_start(s)) but inlining halves
-// the string allocations.
-pub fn rt_str_trim(s: string) -> string {
-    let n = byte_len(s)
-    let mut a = 0
-    while a < n {
-        let b = s.byte_at(a)
-        if b == 32 || b == 9 || b == 10 || b == 13 {
-            a = a + 1
-        } else {
-            break
-        }
-    }
-    let mut b_end = n
-    while b_end > a {
-        let b = s.byte_at(b_end - 1)
-        if b == 32 || b == 9 || b == 10 || b == 13 {
-            b_end = b_end - 1
-        } else {
-            break
-        }
-    }
-    return s.substring(a, b_end)
-}
-
-// Step 3 cycle 48 — strip leading whitespace (space, tab, LF, CR).
-// Replaces the C-direct rt_str_trim_start in self/runtime.c:2970 when
-// HEXA_HAS_HEXA_RT_STDLIB is defined. The C body uses strdup; this
-// uses the substring builtin (perf-31 single-shot alloc).
-pub fn rt_str_trim_start(s: string) -> string {
-    let n = byte_len(s)
-    let mut a = 0
-    while a < n {
-        let b = s.byte_at(a)
-        if b == 32 || b == 9 || b == 10 || b == 13 {
-            a = a + 1
-        } else {
-            break
-        }
-    }
-    return s.substring(a, n)
-}
+// RT-NATIVE leg B Z2a (casefold/trim group): rt_str_trim MOVED to the
+// self/runtime_hi.hexa SSOT (see the to_upper/to_lower note above). It now
+// ships native (Darwin seed) / hexat-transpiled (linux gen.c) as rt_str_*.
 
 // Step 3 cycle 47 — UTF-8 codepoint walker. Returns an array of
 // 1-codepoint strings ("한글hi".chars().len() == 4, not 8). ASCII

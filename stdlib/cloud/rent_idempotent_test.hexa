@@ -13,6 +13,12 @@
 // live registry) lives at `hexa cloud rent --selftest` in cloud_cli.hexa;
 // this file is the CI-runnable unit check of the helper in isolation.
 //
+// HERMETIC over the ING.jsonl SSOT: the registry now lives in per-project
+// ING.jsonl rows scanned under a root. We point that root at a fresh temp dir
+// via the `./.hexa-cloud-ing-sandbox` sentinel (the runtime's setenv() is a
+// no-op, so the file-based override is how an in-process test isolates), and
+// pre-create the project subdirs so a real sibling repo is NEVER touched.
+//
 // Run:   hexa run stdlib/cloud/rent_idempotent_test.hexa
 // PASS:  exits 0, prints "rent_idempotent_test PASS".
 
@@ -26,18 +32,17 @@ fn _t_assert(cond: int, label: str) {
 }
 
 fn _t_sandbox() -> str {
-    let real = env_var("HOME") + "/.hx/cloud/active-pods.json"
-    let _ = exec("mkdir -p " + env_var("HOME") + "/.hx/cloud 2>/dev/null")
     let sb = exec("mktemp -d /tmp/hexa-rent-idem.XXXXXX 2>/dev/null").trim()
-    let _ = exec("test -f " + real + " && cp -p " + real + " " + sb + "/SAVED.json || true")
-    let _ = exec("rm -f " + real + " 2>/dev/null")
+    // pre-create the project repo dirs this test attributes pods to, so
+    // _reg_project_file routes their rows under the sandbox (not a real repo).
+    let _ = exec("mkdir -p " + sb + "/anima " + sb + "/demiurge " + sb + "/_cwd 2>/dev/null")
+    // sentinel → the registry's scan root + cwd-fallback live under the sandbox.
+    write_file("./.hexa-cloud-ing-sandbox", sb + "\n")
     return sb
 }
 
 fn _t_restore(sb: str) {
-    let real = env_var("HOME") + "/.hx/cloud/active-pods.json"
-    let _ = exec("rm -f " + real + " 2>/dev/null")
-    let _ = exec("test -f " + sb + "/SAVED.json && cp -p " + sb + "/SAVED.json " + real + " || true")
+    let _ = exec("rm -f ./.hexa-cloud-ing-sandbox 2>/dev/null")
     let _ = exec("rm -rf " + sb + " 2>/dev/null")
 }
 

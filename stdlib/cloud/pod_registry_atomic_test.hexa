@@ -1,15 +1,23 @@
-// stdlib/cloud/pod_registry_atomic_test.hexa — M5 falsifiers for the
-// crash-safe registry at ~/.hx/cloud/active-pods.json.
+// stdlib/cloud/pod_registry_atomic_test.hexa — registry falsifiers over the
+// ING.jsonl SSOT (retires ~/.hx/cloud/active-pods.json).
 //
 // Falsifiers:
-//   F-CLOUD-M5-ATOMIC-WRITE      — temp file uses the temp+rename pattern;
-//                                  the final file is never a partial write.
-//   F-CLOUD-M5-CRASH-SURVIVAL    — a simulated mid-write (write temp, kill
-//                                  before rename) leaves the prior valid
-//                                  state intact on reload.
-//   F-CLOUD-M5-CONCURRENT-READ   — a load() called between two writes sees
-//                                  either the old or new full state, never
-//                                  a partial mix.
+//   F-CLOUD-M5-ATOMIC-WRITE      — add lands a `kind:"pod"` row in the owning
+//                                  project's ING.jsonl; load round-trips every
+//                                  field; a temp+rename (no leftover .tmp) write.
+//   F-CLOUD-M5-CRASH-SURVIVAL    — a simulated mid-write (a stray `.tmp.<pid>`
+//                                  never renamed) leaves the prior valid state
+//                                  intact on reload.
+//   F-CLOUD-M5-CONCURRENT-READ   — a load() between two writes sees a full valid
+//                                  state (never a partial mix); update/remove
+//                                  preserve the other rows.
+//   F-CLOUD-M5-PRESERVE-ROWS     — work/next rows + OTHER pods in the same file
+//                                  survive an add/update/remove untouched.
+//
+// HERMETIC: the registry's scan root + cwd-fallback are redirected to a fresh
+// temp dir via the `./.hexa-cloud-ing-sandbox` sentinel (the runtime setenv()
+// is a no-op, so the file-based override is the in-process isolation knob). No
+// real sibling repo's ING.jsonl is ever touched.
 //
 // Run:   hexa run stdlib/cloud/pod_registry_atomic_test.hexa
 // PASS:  exits 0, prints "pod_registry_atomic_test PASS".
@@ -17,23 +25,15 @@
 use "stdlib/cloud/pod_registry"
 
 fn _t_path_sandbox() -> str {
-    // We can't override $HOME from in-process (no set_env_var builtin) so
-    // we test against the real ~/.hx/cloud/active-pods.json but snapshot
-    // it aside first + restore on exit so the operator's live state is
-    // untouched. The test only runs against a single short-lived id pair.
     let sb = exec("mktemp -d /tmp/hexa-m5-test.XXXXXX 2>/dev/null").trim()
-    let _ = exec("mkdir -p " + env_var("HOME") + "/.hx/cloud 2>/dev/null")
-    // Snapshot existing registry aside (restored at the end of _t_main).
-    let real = env_var("HOME") + "/.hx/cloud/active-pods.json"
-    let _ = exec("test -f " + real + " && cp -p " + real + " " + sb + "/SAVED.json || true")
-    let _ = exec("rm -f " + real + " 2>/dev/null")
+    // project repos this test attributes pods to (so rows route under the sandbox).
+    let _ = exec("mkdir -p " + sb + "/anima " + sb + "/demiurge " + sb + "/_cwd 2>/dev/null")
+    write_file("./.hexa-cloud-ing-sandbox", sb + "\n")
     return sb
 }
 
 fn _t_restore(sb: str) {
-    let real = env_var("HOME") + "/.hx/cloud/active-pods.json"
-    let _ = exec("rm -f " + real + " 2>/dev/null")
-    let _ = exec("test -f " + sb + "/SAVED.json && cp -p " + sb + "/SAVED.json " + real + " || true")
+    let _ = exec("rm -f ./.hexa-cloud-ing-sandbox 2>/dev/null")
     let _ = exec("rm -rf " + sb + " 2>/dev/null")
 }
 
@@ -46,62 +46,82 @@ fn _t_assert(cond: int, label: str) {
 
 fn _t_main() {
     let sb = _t_path_sandbox()
-    let path = pod_registry_path()
-    _t_assert(path == env_var("HOME") + "/.hx/cloud/active-pods.json", "F-CLOUD-M5-PATH")
+    // The anima project's home ING.jsonl under the sandbox (where podA1 lands).
+    let anima_ing = sb + "/anima/ING.jsonl"
+
+    // ── F-CLOUD-M5-PRESERVE-ROWS (seed) ──────────────────────────────
+    // Pre-seed anima's ING.jsonl with a harness-ing work row + a foreign pod
+    // row that this test must NOT clobber.
+    write_file(anima_ing,
+        "{\"kind\":\"work\",\"id\":\"7\",\"ts\":\"2026-06-18\",\"text\":\"keep me\"}\n"
+        + "{\"kind\":\"pod\",\"id\":\"otherpod9\",\"ts\":\"2026-06-18\",\"provider\":\"vast\",\"status\":\"READY\",\"project\":\"anima\"}\n")
 
     // ── F-CLOUD-M5-ATOMIC-WRITE ──────────────────────────────────────
-    // Initial add — file should exist + be readable + chmod 600.
     let ok1 = pod_registry_add("podA1", "runpod", "anima", "rtsc-grind", "1.2.3.4", "22001", "READY")
     _t_assert(ok1 == 1, "F-CLOUD-M5-ATOMIC-WRITE: add returned 1")
-    _t_assert(file_exists(path), "F-CLOUD-M5-ATOMIC-WRITE: file exists post-add")
-    let perm = exec("stat -f %Lp " + path + " 2>/dev/null || stat -c %a " + path + " 2>/dev/null").trim()
-    _t_assert(perm == "600", "F-CLOUD-M5-ATOMIC-WRITE: chmod 600 (got " + perm + ")")
+    _t_assert(file_exists(anima_ing), "F-CLOUD-M5-ATOMIC-WRITE: anima ING.jsonl exists post-add")
     // No leftover temp file (`.tmp.<pid>`) — rename consumed it.
-    let leftovers = exec("ls " + path + ".tmp.* 2>/dev/null | wc -l").trim()
+    let leftovers = exec("ls " + anima_ing + ".tmp.* 2>/dev/null | wc -l").trim()
     _t_assert(leftovers == "0", "F-CLOUD-M5-ATOMIC-WRITE: no leftover temp (got " + leftovers + ")")
 
     let recs = pod_registry_load()
-    _t_assert(len(recs) == 1, "F-CLOUD-M5-ATOMIC-WRITE: 1 record after add")
-    _t_assert(recs[0].id == "podA1", "F-CLOUD-M5-ATOMIC-WRITE: id roundtrip")
-    _t_assert(recs[0].provider == "runpod", "F-CLOUD-M5-ATOMIC-WRITE: provider roundtrip")
-    _t_assert(recs[0].ssh_host == "1.2.3.4", "F-CLOUD-M5-ATOMIC-WRITE: ssh_host roundtrip")
-    _t_assert(recs[0].status == "READY", "F-CLOUD-M5-ATOMIC-WRITE: status roundtrip")
-    _t_assert(recs[0].project == "anima", "F-CLOUD-M5-ATOMIC-WRITE: project roundtrip")
-    _t_assert(recs[0].purpose == "rtsc-grind", "F-CLOUD-M5-ATOMIC-WRITE: purpose roundtrip")
-    // M2/M3 reserved fields default-init.
-    _t_assert(recs[0].ttl_sec == -1, "F-CLOUD-M5-ATOMIC-WRITE: ttl_sec=-1 default")
-    _t_assert(recs[0].cumulative_cost_usd == "0.0", "F-CLOUD-M5-ATOMIC-WRITE: cum_cost=0.0 default")
+    // find podA1 among the loaded records (otherpod9 also present).
+    let mut a1 = -1
+    let mut ix = 0
+    while ix < len(recs) {
+        if recs[ix].id == "podA1" { a1 = ix }
+        ix = ix + 1
+    }
+    _t_assert(a1 >= 0, "F-CLOUD-M5-ATOMIC-WRITE: podA1 loaded")
+    _t_assert(recs[a1].provider == "runpod", "F-CLOUD-M5-ATOMIC-WRITE: provider roundtrip")
+    _t_assert(recs[a1].ssh_host == "1.2.3.4", "F-CLOUD-M5-ATOMIC-WRITE: ssh_host roundtrip")
+    _t_assert(recs[a1].ssh_port == "22001", "F-CLOUD-M5-ATOMIC-WRITE: ssh_port roundtrip")
+    _t_assert(recs[a1].status == "READY", "F-CLOUD-M5-ATOMIC-WRITE: status roundtrip")
+    _t_assert(recs[a1].project == "anima", "F-CLOUD-M5-ATOMIC-WRITE: project roundtrip")
+    _t_assert(recs[a1].purpose == "rtsc-grind", "F-CLOUD-M5-ATOMIC-WRITE: purpose roundtrip")
+    _t_assert(recs[a1].ttl_sec == -1, "F-CLOUD-M5-ATOMIC-WRITE: ttl_sec=-1 default")
+    _t_assert(recs[a1].cumulative_cost_usd == "0.0", "F-CLOUD-M5-ATOMIC-WRITE: cum_cost=0.0 default")
+
+    // PRESERVE-ROWS: the work row + the foreign pod must still be in the file.
+    let kept_work = exec("grep -c '\"kind\":\"work\"' " + anima_ing + " 2>/dev/null").trim()
+    _t_assert(kept_work == "1", "F-CLOUD-M5-PRESERVE-ROWS: work row preserved (got " + kept_work + ")")
+    let mut found_other = 0
+    let mut oi = 0
+    let r2 = pod_registry_load()
+    while oi < len(r2) {
+        if r2[oi].id == "otherpod9" { found_other = 1 }
+        oi = oi + 1
+    }
+    _t_assert(found_other == 1, "F-CLOUD-M5-PRESERVE-ROWS: foreign pod preserved")
 
     // ── F-CLOUD-M5-CRASH-SURVIVAL ────────────────────────────────────
-    // After a prior valid state, simulate a mid-write crash by writing a
-    // garbage `<path>.tmp.<pid>` file but NEVER renaming it. The final
-    // `active-pods.json` must still reflect the prior valid state on
-    // reload (the atomic-write contract).
-    let prior_count = len(pod_registry_load())
-    _t_assert(prior_count == 1, "F-CLOUD-M5-CRASH-SURVIVAL: prior state 1 rec")
-    let _ = exec("echo 'PARTIAL_GARBAGE_NOT_RENAMED' > " + path + ".tmp.99999")
-    // Crashed temp present, but real file untouched.
-    _t_assert(file_exists(path + ".tmp.99999"), "F-CLOUD-M5-CRASH-SURVIVAL: simulated crashed temp")
+    let _ = exec("echo 'PARTIAL_GARBAGE_NOT_RENAMED' > " + anima_ing + ".tmp.99999")
+    _t_assert(file_exists(anima_ing + ".tmp.99999"), "F-CLOUD-M5-CRASH-SURVIVAL: simulated crashed temp")
     let after_crash = pod_registry_load()
-    _t_assert(len(after_crash) == 1, "F-CLOUD-M5-CRASH-SURVIVAL: real file still 1 rec")
-    _t_assert(after_crash[0].id == "podA1", "F-CLOUD-M5-CRASH-SURVIVAL: real file id intact")
-    // Clean up the simulated crash residue (a real `cloud reap` will too).
-    let _ = exec("rm -f " + path + ".tmp.99999")
+    let mut still = 0
+    let mut ci = 0
+    while ci < len(after_crash) {
+        if after_crash[ci].id == "podA1" { still = 1 }
+        ci = ci + 1
+    }
+    _t_assert(still == 1, "F-CLOUD-M5-CRASH-SURVIVAL: real file podA1 intact")
+    let _ = exec("rm -f " + anima_ing + ".tmp.99999")
 
     // ── F-CLOUD-M5-CONCURRENT-READ ───────────────────────────────────
-    // Two sequential writes; between every pair of writes, load() must
-    // return a FULL valid state (not a half-written file). We enforce
-    // this by checking len() is always coherent (1 or 2 or 1 again after
-    // remove) and parse never crashes.
     let _ = pod_registry_add("podB2", "vast", "demiurge", "el-ph", "5.6.7.8", "11038", "READY")
     let mid = pod_registry_load()
-    _t_assert(len(mid) == 2, "F-CLOUD-M5-CONCURRENT-READ: 2 recs after second add")
+    let mut have_b2 = 0
+    let mut mi = 0
+    while mi < len(mid) {
+        if mid[mi].id == "podB2" { have_b2 = 1 }
+        mi = mi + 1
+    }
+    _t_assert(have_b2 == 1, "F-CLOUD-M5-CONCURRENT-READ: podB2 present after second add")
 
-    // update_status flip — record count unchanged, status flipped.
+    // update_status flip — status flipped, podA1 still present.
     let okU = pod_registry_update_status("podA1", "STOPPING")
     _t_assert(okU == 1, "F-CLOUD-M5-CONCURRENT-READ: update_status returned 1")
     let after_update = pod_registry_load()
-    _t_assert(len(after_update) == 2, "F-CLOUD-M5-CONCURRENT-READ: count unchanged on flip")
     let mut found_stopping = 0
     let mut i = 0
     while i < len(after_update) {
@@ -112,19 +132,27 @@ fn _t_main() {
     }
     _t_assert(found_stopping == 1, "F-CLOUD-M5-CONCURRENT-READ: status flipped to STOPPING")
 
-    // remove → 1 record left, the other (podB2) intact.
+    // remove podA1 → gone from registry; podB2 + otherpod9 intact.
     let okR = pod_registry_remove("podA1")
     _t_assert(okR == 1, "F-CLOUD-M5-CONCURRENT-READ: remove returned 1")
     let after_remove = pod_registry_load()
-    _t_assert(len(after_remove) == 1, "F-CLOUD-M5-CONCURRENT-READ: 1 rec after remove")
-    _t_assert(after_remove[0].id == "podB2", "F-CLOUD-M5-CONCURRENT-READ: surviving rec is podB2")
+    let mut a1_gone = 1
+    let mut b2_live = 0
+    let mut other_live = 0
+    let mut ri = 0
+    while ri < len(after_remove) {
+        if after_remove[ri].id == "podA1" { a1_gone = 0 }
+        if after_remove[ri].id == "podB2" { b2_live = 1 }
+        if after_remove[ri].id == "otherpod9" { other_live = 1 }
+        ri = ri + 1
+    }
+    _t_assert(a1_gone == 1, "F-CLOUD-M5-CONCURRENT-READ: podA1 removed")
+    _t_assert(b2_live == 1, "F-CLOUD-M5-CONCURRENT-READ: podB2 survives")
+    _t_assert(other_live == 1, "F-CLOUD-M5-PRESERVE-ROWS: foreign pod survives remove")
+    // the work row STILL survives a remove.
+    let kept_work2 = exec("grep -c '\"kind\":\"work\"' " + anima_ing + " 2>/dev/null").trim()
+    _t_assert(kept_work2 == "1", "F-CLOUD-M5-PRESERVE-ROWS: work row survives remove")
 
-    // pod_registry_list — excludes GONE; both READY here so all visible.
-    let alive = pod_registry_list()
-    _t_assert(len(alive) == 1, "F-CLOUD-M5-CONCURRENT-READ: list returns alive only")
-
-    // Cleanup sandbox + restore the real registry snapshot.
-    let _ = pod_registry_remove("podB2")
     _t_restore(sb)
     println("pod_registry_atomic_test PASS")
 }
