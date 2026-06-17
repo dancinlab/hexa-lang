@@ -337,6 +337,48 @@ resolve_native_map_core_seed() {
     rm -f "$s_tmp"
 }
 
+# ── RT-NATIVE leg B Route B — linked-block arena native seed → build/alloc_syscall_native.o ──
+# The arena twin of resolve_native_array_core_seed: assemble the arch-matched
+# frozen self/native/alloc_syscall_*.s seed (a full HexaArenaBlock-chain arena +
+# syscall layer, C-ABI equivalent to runtime_core_emit.hexa's C arena) into
+# build/alloc_syscall_native.o so the arena C `#else` (under HEXA_RT_ALLOC_NATIVE)
+# can drop. OPT-IN: gated on HEXA_RT_ALLOC_NATIVE=1 (NOT auto-on like array/map)
+# until the whole-runtime byteeq/faithful/RSS-OOM measurement confirms the native
+# arena replaces the C arena wholesale (the mark 16-byte struct-return ABI + the
+# heapify↔envelope wiring are the measured-unknowns). Default unset ⇒ C arena
+# stays ⇒ byteeq-inert.
+resolve_native_alloc_syscall_seed() {
+    [ "${HEXA_RT_ALLOC_NATIVE:-x}" != "1" ] && return 0   # opt-IN until measured
+    [ -f build/alloc_syscall_native.o ] && return 0
+    local seed="" tgt="${TARGET:-}"
+    [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
+        "Darwin arm64") tgt="darwin-arm64" ;;
+        "Linux x86_64") tgt="linux-x86_64" ;;
+        "Linux aarch64"|"Linux arm64") tgt="linux-arm64" ;;
+    esac
+    case "$tgt" in
+        darwin-arm64) seed="self/native/alloc_syscall_arm64.s" ;;
+        linux-x86_64) seed="self/native/alloc_syscall_x86_64.s" ;;
+        linux-arm64)  seed="self/native/alloc_syscall_arm64-linux.s" ;;
+        *)            seed="" ;;
+    esac
+    [ -n "$seed" ] && [ -f "$seed" ] || return 0
+    mkdir -p build
+    local nsyms; nsyms="$(grep -cE '^[[:space:]]*\.globl' "$seed" 2>/dev/null || echo 0)"
+    if [ "${nsyms:-0}" -lt 30 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE ALLOC-RB: seed $seed exports only $nsyms — falling back to C arena" >&2
+        return 0
+    fi
+    local s_tmp="build/alloc_syscall_seed.s"
+    grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
+    if $CC -c "$s_tmp" -o build/alloc_syscall_native.o 2>/dev/null; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE ALLOC-RB: assembled build/alloc_syscall_native.o from $seed (TARGET=$tgt, $nsyms syms) → native arena path"
+    else
+        echo "[stage_resolve_runtime_a] RT-NATIVE ALLOC-RB: WARN assemble of $seed failed — C arena" >&2
+    fi
+    rm -f "$s_tmp"
+}
+
 build_runtime_a_from_source() {
     regen_runtime_core_from_emitter
     # RT-NATIVE Z2a (gated): supply rt_str_* from a NATIVE-compiled object
@@ -368,7 +410,15 @@ build_runtime_a_from_source() {
         extra_obj="$extra_obj build/map_core_native.o"
         echo "[stage_resolve_runtime_a] RT-NATIVE MAP-R3: HEXA_RT_MAP_NATIVE=1; ar'ing native map_core_native.o into runtime.a"
     fi
-    $CC $CFLAGS $rt_array_def $rt_map_def -I self -c self/runtime.c -o build/runtime.o
+    # RT-NATIVE Route B (gated, opt-IN): native linked-block arena replaces the C
+    # arena `#else` in runtime_core.c when HEXA_RT_ALLOC_NATIVE=1 + seed object built.
+    local rt_alloc_def=""
+    if [ "${HEXA_RT_ALLOC_NATIVE:-0}" = "1" ] && [ -f build/alloc_syscall_native.o ]; then
+        rt_alloc_def="-DHEXA_RT_ALLOC_NATIVE=1"
+        extra_obj="$extra_obj build/alloc_syscall_native.o"
+        echo "[stage_resolve_runtime_a] RT-NATIVE ALLOC-RB: HEXA_RT_ALLOC_NATIVE=1; ar'ing native alloc_syscall_native.o into runtime.a"
+    fi
+    $CC $CFLAGS $rt_array_def $rt_map_def $rt_alloc_def -I self -c self/runtime.c -o build/runtime.o
     ar rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     echo "$RA"
@@ -383,6 +433,9 @@ resolve_native_rt_hi_seed
 # + linux-arm64). Unknown targets keep the C element path.
 resolve_native_array_core_seed
 resolve_native_map_core_seed
+# RT-NATIVE Route B: assemble the native linked-block arena seed (opt-IN via
+# HEXA_RT_ALLOC_NATIVE=1 until the whole-runtime measurement confirms it).
+resolve_native_alloc_syscall_seed
 
 if [ -f self/runtime.c ]; then
     echo "stage_resolve_runtime_a: seeds present — building runtime.a from source"
