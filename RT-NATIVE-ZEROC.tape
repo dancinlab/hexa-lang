@@ -115,3 +115,22 @@
   element returns AND B1 nanbox.hexa file-reduction (hexa_int=__hx_make_val(0,n)).
   WALL-2 alloc is SEPARATE (needs B2 arena + malloc-floor decision). No
   runtime/emitter change (ADD: gate.c + verdict). verdict F-M4-B4-ARRAY.
+
+2026-06-17 :: 🧱 m5 r2 — runtime_core.c standalone-#else 인구조사 TERMINAL (per-family
+  drop lane EXHAUSTED). r1 의 marker-filter 인구조사(F-LEGB-RTCORE-PURE-CANDIDATES-ZERO)와
+  독립적으로 r2 의 정밀 프레임(standalone #else 경로)으로 재실행 — 수렴. 생성된
+  self/runtime_core.c(8734L) 를 파서로 walk: 37 `#ifdef HEXA_HAS_HEXA_RT_STDLIB` guarded
+  블록(with #else:35, no-#else:2), 43 delegate-extern, ~40 guarded fn. 결정적 검증:
+  43/43 native-arm extern(rt_null_coal/rt_len/rt_map_*/rt_print*/rt_cmp_*/rt_eq_*/
+  rt_add_slow/sub/mul/div/mod 등) 전부 hexa-source body 보유(self/rt/core.hexa ·
+  stdlib/runtime/numeric.hexa) = ALREADY-NATIVE. auto-classifier 가 6개를 PURE? 후보로
+  표시했으나 본문 RAN: map_set/remove→_impl(ALLOC) · println→printf/fflush(stdio substrate) ·
+  to_string→재귀버퍼(ALLOC) · null_coal/len = 진짜 pure 이나 rt_null_coal/rt_len 이미
+  hexa-source(self/rt/core.hexa:32,45) = ALREADY-NATIVE. PURE-PORTABLE(포트 필요) 버킷 = 0.
+  #else 정체: runtime_core.c:3173 "standalone link doesn't define HEXA_HAS_HEXA_RT_STDLIB" —
+  full aprime_cc 빌드는 native arm 선택, #else = 이미-native 코드의 standalone-link 중복.
+  결론: per-family native-seed 드롭 레버 EXHAUSTED(c16 TRUE-CEILING — migratable body 부재).
+  잔여 ls 레버 단 둘, m5-per-family 범위 밖: (i) __hx_make_val construct-unlock(array-r2 lane,
+  CONSTRUCT-WALLED arith/cmp/eq/to_string 13패밀리) (ii) standalone #else 중복제거/runtime.c
+  substrate 재설계(M5 standalone-redesign lane, build 작업). 포트 강제 안 함(c9). runtime_core.c
+  byte delta = 0. verdict F-M5-R2-RTCORE-CENSUS. m5 DEPLETED(per-family-drop lane).

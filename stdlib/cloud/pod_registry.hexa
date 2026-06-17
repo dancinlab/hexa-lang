@@ -685,42 +685,21 @@ fn cloud_pods_reconcile_prune() -> int {
         pruned = pruned + 1
         pi = pi + 1
     }
-    // AUTO-ADOPT real orphans (alive on provider, untracked) so an untracked
-    // billing pod can never PERSIST. pod_registry_add is an idempotent upsert:
-    // a never-tracked id gets a fresh row (provider known, purpose flags the
-    // auto-adopt, status RUNNING, ssh_host/port empty → self-healed on the next
-    // run/exec via _resolve_via_provider); an existing row is preserved (empty
-    // project/purpose keep the prior attribution). Non-destructive — only
-    // RECORDS the pod (unlike auto-reap, which stays human-gated).
+    // Surface real orphans (alive on provider, untracked) for human action.
     let mut reg_ids = []
     let mut k = 0
     while k < len(reg) { reg_ids.push(reg[k].id); k = k + 1 }
-    let mut adopted = 0
     let mut ai = 0
     while ai < len(alive) {
         let id = alive[ai]
         if _recon_id_in(reg_ids, id) == 0 {
-            // provider = whichever authoritative set the id came from (runpod
-            // ids are in rl.pod_ids; everything else is a vast instance id).
-            let mut prov = "vast"
-            if _recon_id_in(rl.pod_ids, id) == 1 { prov = "runpod" }
-            let ok = pod_registry_add(id, prov, "", "auto-adopted-on-contact", "", "", "RUNNING")
-            if ok == 1 {
-                println("[cloud] pods: ADOPTED " + id
-                    + " — alive on " + prov + ", was untracked → registered (attribute via `cloud attribute`)")
-                adopted = adopted + 1
-            } else {
-                println("[cloud] pods: ORPHAN " + id
-                    + " — alive on " + prov + ", untracked (auto-adopt refused — non-pod-id; `cloud reap`)")
-            }
+            println("[cloud] pods: ORPHAN " + id
+                + " — alive on provider, untracked (adopt or `cloud reap`)")
         }
         ai = ai + 1
     }
     if pruned > 0 {
         println("[cloud] pods: pruned " + str(pruned) + " ghost row(s) against authoritative myself.pods")
-    }
-    if adopted > 0 {
-        println("[cloud] pods: auto-adopted " + str(adopted) + " orphan(s) → tracked (orphan-prevention; non-destructive)")
     }
     return pruned
 }
