@@ -168,7 +168,7 @@ fn forge_compress(text: string, rounds: int, threshold: float) -> ForgeReport {
         println("  [Round " + to_string(i) + "] " + to_string(comp_chars) + " chars | r=" + to_string(r) + " | dr=" + to_string(delta_r))
 
         // 라운드 결과 파일 저장
-        let round_path = "bench/runs/" + run_id + "/round_" + to_string(i) + ".tf"
+        let round_path = "state/bench/runs/" + run_id + "/round_" + to_string(i) + ".tf"
         write_file(round_path, compressed)
 
         if i > 0 && delta_r < threshold {

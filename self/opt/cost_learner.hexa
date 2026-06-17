@@ -145,7 +145,7 @@ fn bias_tag(observed, predicted) {
 }
 
 fn analyze() {
-    let path = env_var("HEXA_LANG") + "/bench/bench_results.jsonl"
+    let path = env_var("HEXA_LANG") + "/state/bench/bench_results.jsonl"
     let records = load_records(path)
     let entries = registry_entries()
 
@@ -178,7 +178,7 @@ fn analyze() {
         let bias = bias_tag(obs, pred)
         let mut sugg = ""
         if cnt == 0 {
-            sugg = "no data — add bench/" + needle + "_*.hexa"
+            sugg = "no data — add state/bench/" + needle + "_*.hexa"
         } else if cnt < 3 {
             sugg = "observed — collect >=3 runs before rewrite"
         } else {

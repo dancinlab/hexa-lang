@@ -34,7 +34,8 @@ hexa-lang/
 ├─ atlas/           — atlas working area + `.n6` export/inspection artifacts
 ├─ spec/            — language + format specification
 ├─ tests/, test/    — smoke · core-invariant · regression suites
-├─ bench/           — performance benchmarks
+├─ state/           — unified artifact root (c5 · git-tracked): verdicts/ · bench/ (perf
+│                     benchmarks) · scratch/ (임시 산출물) · proposals/ · phase runs
 ├─ docs/            — supplementary documentation + logo
 ├─ ARCHITECTURE.json — architecture SSOT (JSON 트리, update in place) + architecture.html 뷰어 + serve.py
 ├─ CHANGELOG.md     — append-only history / decisions

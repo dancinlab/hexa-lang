@@ -122,7 +122,7 @@ fn _gather_sources_listfile() -> string {
     // feedback_interp_push_quadratic / feedback_hexa_on2_concat).
     // Returns the tmp path; empty string on failure.
     let list_path = "/tmp/migrate_fn_attr_list.txt"
-    let cmd = "find self scripts stdlib bench examples tests tests_auto -type f -name '*.hexa' ! -path '*/build/*' ! -path '*/target/*' ! -name '*.bak' ! -name '*.hexanoport*' ! -path '*/self/native/*' 2>/dev/null > " + list_path
+    let cmd = "find self scripts stdlib state/bench state/scratch examples tests tests_auto -type f -name '*.hexa' ! -path '*/build/*' ! -path '*/target/*' ! -name '*.bak' ! -name '*.hexanoport*' ! -path '*/self/native/*' 2>/dev/null > " + list_path
     try { let _ = exec(cmd) } catch e { return "" }
     return list_path
 }

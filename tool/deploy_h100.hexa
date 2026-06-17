@@ -186,11 +186,11 @@ while k < len(build_files) {
 let test_files = [
     "self/test_hxlayer.hexa",
     "self/bench_hxlayer.hexa",
-    "bench/hxblas_linux.hexa",
-    "bench/grad_checkpoint.hexa",
-    "bench/async_ckpt.hexa",
-    "bench/native_int_specialize.hexa",
-    "bench/matmul_256.hexa"
+    "state/bench/hxblas_linux.hexa",
+    "state/bench/grad_checkpoint.hexa",
+    "state/bench/async_ckpt.hexa",
+    "state/bench/native_int_specialize.hexa",
+    "state/bench/matmul_256.hexa"
 ]
 let mut t = 0
 let mut test_uploaded = 0

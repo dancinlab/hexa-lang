@@ -139,7 +139,7 @@ fn main() {
     let ts = _iso_now()
 
     // 1. Inventory bench/*.hexa
-    let bench_dir = _root() + "/bench"
+    let bench_dir = _root() + "/state/bench"
     let raw_ls = to_string(exec("ls " + _sh_q(bench_dir) + " 2>/dev/null | grep '\\.hexa$'"))
     let bench_files = _split_lines(raw_ls)
     let bench_count = len(bench_files)

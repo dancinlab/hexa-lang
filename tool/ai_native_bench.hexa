@@ -125,7 +125,7 @@ fn bench_file(path, iters, warmup) {
     println("    avg=" + to_string(avg / 1000) + "us median=" + to_string(med / 1000) + "us min=" + to_string(mn / 1000) + "us max=" + to_string(mx / 1000) + "us")
     // Append to results file (non-fatal if fs_append unavailable)
     try {
-        let out_path = env_var("HEXA_LANG") + "/bench/bench_results.jsonl"
+        let out_path = env_var("HEXA_LANG") + "/state/bench/bench_results.jsonl"
         exec("echo '" + record + "' >> '" + out_path + "'")
     } catch e { }
     return record
@@ -133,7 +133,7 @@ fn bench_file(path, iters, warmup) {
 
 fn list_bench_files() {
     try {
-        let raw = exec("ls " + env_var("HEXA_LANG") + "/bench/*.hexa 2>/dev/null").trim()
+        let raw = exec("ls " + env_var("HEXA_LANG") + "/state/bench/*.hexa 2>/dev/null").trim()
         if raw == "" { return [] }
         return raw.split("\n")
     } catch e { return [] }

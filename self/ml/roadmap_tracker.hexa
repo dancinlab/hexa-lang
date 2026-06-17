@@ -405,7 +405,7 @@ fn rt_run_default() {
 
     // Fallback: shared/todo JSON이 존재하면 기존 트래커도 실행
     let rt_roadmap_default = "shared/todo/anima_zeta_surpass.json"
-    let rt_bench_default = "bench/zeta_compare.jsonl"
+    let rt_bench_default = "state/bench/zeta_compare.jsonl"
     if file_exists(rt_roadmap_default) {
         let empty_ids = []
         let empty_paths = []

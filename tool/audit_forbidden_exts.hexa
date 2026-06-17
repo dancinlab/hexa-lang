@@ -135,7 +135,8 @@ let BUILD_ORCH_PREFIXES: [string] = [
     "scripts/",
     "tests/integration/",
     "test/regression/",
-    "bench/",
+    "state/bench/",
+    "state/scratch/",
 ]
 let BUILD_ORCH_EXACT: [string] = [
     "install.sh",

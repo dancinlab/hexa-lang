@@ -92,8 +92,8 @@ fn main() {
     let g3_apc  = file_present("build/aprime_cc")
 
     // Gate 4 — verdicts directory
-    let g4_dir  = file_present(".verdicts/compiler-selfhost-fixpoint")
-    let g4_scf  = file_present(".verdicts/compiler-selfhost-fixpoint/scaffold-status.txt")
+    let g4_dir  = file_present("state/verdicts/compiler-selfhost-fixpoint")
+    let g4_scf  = file_present("state/verdicts/compiler-selfhost-fixpoint/scaffold-status.txt")
 
     let mut body = ""
     body = body + "# F3-roi152 fixpoint precheck — " + str(timestamp()) + "\n"
@@ -154,9 +154,9 @@ fn main() {
     body = body + "         doc/audit/loop_guard_hexa_cc_rollback_20260420.md is the SSOT.\n"
 
     // Make sure verdicts dir is present (additive — never wipes)
-    let _mk = exec_with_status("mkdir -p .verdicts/compiler-selfhost-fixpoint")
+    let _mk = exec_with_status("mkdir -p state/verdicts/compiler-selfhost-fixpoint")
 
-    let out_path = ".verdicts/compiler-selfhost-fixpoint/precheck-status.txt"
+    let out_path = "state/verdicts/compiler-selfhost-fixpoint/precheck-status.txt"
     write_file(out_path, body)
     println(body)
     println("[precheck] verdict -> " + out_path)

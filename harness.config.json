@@ -53,7 +53,7 @@
   "docs": {
     "architecture": "ARCHITECTURE.json",
     "log": "CHANGELOG.md",
-    "scratchDir": "scripts/scratch",
+    "scratchDir": "state/scratch",
     "scopeDirs": [
       ""
     ],
