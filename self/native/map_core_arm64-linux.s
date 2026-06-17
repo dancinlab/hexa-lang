@@ -530,6 +530,273 @@ _L4090_rt_map_get_native_bb9:
     add sp, sp, #880 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
+.globl rt_map_contains_native
+.hidden rt_map_contains_native
+    .p2align 2
+rt_map_contains_native:
+    .loc 1 115 0
+    stp x29, x30, [sp, #-16]! // prologue: save fp/lr
+    mov x29, sp // prologue: set fp
+    sub sp, sp, #720 // sp adj
+    stp x0, x1, [sp, #0] // ingress param 0
+    stp x2, x3, [sp, #16] // ingress param 1
+_L4090_rt_map_contains_native_bb0:
+    ldp x0, x1, [sp, #0] // hv load L0
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
+    movz x0, #0 // __hx_payload_add: TAG_INT
+    stp x0, x1, [sp, #32] // hv store L2
+    ldp x0, x1, [sp, #32] // hv load L2
+    stp x0, x1, [sp, #48] // hv store L3
+    ldp x0, x1, [sp, #48] // hv load L3
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    add x1, x1, x3 // __hx_ptr_load64: addr = ptr + off
+    ldr x1, [x1] // __hx_ptr_load64: x1 = *(addr)
+    movz x0, #0 // __hx_ptr_load64: TAG_INT
+    stp x0, x1, [sp, #64] // hv store L4
+    ldp x0, x1, [sp, #64] // hv load L4
+    stp x0, x1, [sp, #80] // hv store L5
+    ldp x0, x1, [sp, #80] // hv load L5
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    add x1, x1, x3 // __hx_ptr_load64: addr = ptr + off
+    ldr x1, [x1] // __hx_ptr_load64: x1 = *(addr)
+    movz x0, #0 // __hx_ptr_load64: TAG_INT
+    stp x0, x1, [sp, #96] // hv store L6
+    ldp x0, x1, [sp, #96] // hv load L6
+    stp x0, x1, [sp, #112] // hv store L7
+    ldp x0, x1, [sp, #80] // hv load L5
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #16 // hv const_int val
+    add x1, x1, x3 // __hx_ptr_load64: addr = ptr + off
+    ldr x1, [x1] // __hx_ptr_load64: x1 = *(addr)
+    movz x0, #0 // __hx_ptr_load64: TAG_INT
+    stp x0, x1, [sp, #128] // hv store L8
+    ldp x0, x1, [sp, #128] // hv load L8
+    stp x0, x1, [sp, #144] // hv store L9
+    ldp x0, x1, [sp, #144] // hv load L9
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #65535 // imm 0-15
+    movk x3, #65535, lsl #16 // imm 16-31
+    and x1, x1, x3 // __hx_payload_and: x1 = a.pl and b.pl
+    movz x0, #0 // __hx_payload_and: TAG_INT
+    stp x0, x1, [sp, #160] // hv store L10
+    ldp x0, x1, [sp, #160] // hv load L10
+    stp x0, x1, [sp, #176] // hv store L11
+    ldp x0, x1, [sp, #16] // hv load L1
+    bl rt_map_fnv1a_native // call rt_map_fnv1a_native
+    stp x0, x1, [sp, #192] // hv store L12
+    ldp x0, x1, [sp, #192] // hv load L12
+    stp x0, x1, [sp, #208] // hv store L13
+    ldp x0, x1, [sp, #176] // hv load L11
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #1 // hv const_int val
+    sub x1, x1, x3 // __hx_payload_sub: x1 = a.pl sub b.pl
+    movz x0, #0 // __hx_payload_sub: TAG_INT
+    stp x0, x1, [sp, #224] // hv store L14
+    ldp x0, x1, [sp, #224] // hv load L14
+    stp x0, x1, [sp, #240] // hv store L15
+    ldp x0, x1, [sp, #208] // hv load L13
+    ldp x2, x3, [sp, #240] // hv load L15
+    and x1, x1, x3 // __hx_payload_and: x1 = a.pl and b.pl
+    movz x0, #0 // __hx_payload_and: TAG_INT
+    stp x0, x1, [sp, #256] // hv store L16
+    ldp x0, x1, [sp, #256] // hv load L16
+    stp x0, x1, [sp, #272] // hv store L17
+    movz x0, #0 // hv const_int: TAG_INT
+    movz x1, #0 // hv const_int val
+    stp x0, x1, [sp, #288] // hv store L18
+    b _L4090_rt_map_contains_native_bb1 // branch
+_L4090_rt_map_contains_native_bb1:
+    ldp x0, x1, [sp, #288] // hv load L18
+    ldp x2, x3, [sp, #176] // hv load L11
+    cmp x1, x3 // __hx_payload_lt: cmp payloads
+    cset x0, lt // __hx_payload_lt: x0 = (a.pl lt b.pl)
+    bl hexa_bool // __hx_payload_lt: box bool
+    stp x0, x1, [sp, #304] // hv store L19
+    ldp x0, x1, [sp, #304] // hv load L19
+    bl hexa_truthy // br_cond: truthy → w0
+    uxtw x0, w0 // br_cond: zext w0
+    cbz x0, _L4090_rt_map_contains_native_bb3 // br_cond: !truthy -> else
+    b _L4090_rt_map_contains_native_bb2 // branch -> then
+_L4090_rt_map_contains_native_bb2:
+    ldp x0, x1, [sp, #272] // hv load L17
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #16 // hv const_int val
+    mul x1, x1, x3 // __hx_payload_mul: x1 = a.pl mul b.pl
+    movz x0, #0 // __hx_payload_mul: TAG_INT
+    stp x0, x1, [sp, #320] // hv store L20
+    ldp x0, x1, [sp, #320] // hv load L20
+    stp x0, x1, [sp, #336] // hv store L21
+    ldp x0, x1, [sp, #112] // hv load L7
+    ldp x2, x3, [sp, #336] // hv load L21
+    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
+    movz x0, #0 // __hx_payload_add: TAG_INT
+    stp x0, x1, [sp, #352] // hv store L22
+    ldp x0, x1, [sp, #352] // hv load L22
+    stp x0, x1, [sp, #368] // hv store L23
+    ldp x0, x1, [sp, #368] // hv load L23
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    add x1, x1, x3 // __hx_ptr_load64: addr = ptr + off
+    ldr x1, [x1] // __hx_ptr_load64: x1 = *(addr)
+    movz x0, #0 // __hx_ptr_load64: TAG_INT
+    stp x0, x1, [sp, #384] // hv store L24
+    ldp x0, x1, [sp, #384] // hv load L24
+    stp x0, x1, [sp, #400] // hv store L25
+    ldp x0, x1, [sp, #400] // hv load L25
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    cmp x1, x3 // __hx_payload_eq: cmp payloads
+    cset x0, eq // __hx_payload_eq: x0 = (a.pl == b.pl)
+    bl hexa_bool // __hx_payload_eq: box bool
+    stp x0, x1, [sp, #416] // hv store L26
+    ldp x0, x1, [sp, #416] // hv load L26
+    bl hexa_truthy // br_cond: truthy → w0
+    uxtw x0, w0 // br_cond: zext w0
+    cbz x0, _L4090_rt_map_contains_native_bb5 // br_cond: !truthy -> else
+    b _L4090_rt_map_contains_native_bb4 // branch -> then
+_L4090_rt_map_contains_native_bb3:
+    movz x0, #0 // hv const_int: TAG_INT
+    movz x1, #0 // hv const_int val
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    mov x0, x1 // __hx_make_val: lo = tag word
+    mov x1, x3 // __hx_make_val: hi = payload word
+    add x15, sp, #704 // hv frame base
+    stp x0, x1, [x15] // hv store L44
+    add x15, sp, #704 // hv frame base
+    ldp x0, x1, [x15] // hv load L44
+    add sp, sp, #720 // sp adj
+    ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
+    ret // return
+_L4090_rt_map_contains_native_bb4:
+    movz x0, #0 // hv const_int: TAG_INT
+    movz x1, #0 // hv const_int val
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    mov x0, x1 // __hx_make_val: lo = tag word
+    mov x1, x3 // __hx_make_val: hi = payload word
+    stp x0, x1, [sp, #448] // hv store L28
+    ldp x0, x1, [sp, #448] // hv load L28
+    add sp, sp, #720 // sp adj
+    ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
+    ret // return
+_L4090_rt_map_contains_native_bb5:
+    ldp x0, x1, [sp, #368] // hv load L23
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #8 // hv const_int val
+    add x1, x1, x3 // __hx_ptr_load64: addr = ptr + off
+    ldr x1, [x1] // __hx_ptr_load64: x1 = *(addr)
+    movz x0, #0 // __hx_ptr_load64: TAG_INT
+    stp x0, x1, [sp, #464] // hv store L29
+    ldp x0, x1, [sp, #464] // hv load L29
+    stp x0, x1, [sp, #480] // hv store L30
+    ldp x0, x1, [sp, #480] // hv load L30
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #65535 // imm 0-15
+    movk x3, #65535, lsl #16 // imm 16-31
+    and x1, x1, x3 // __hx_payload_and: x1 = a.pl and b.pl
+    movz x0, #0 // __hx_payload_and: TAG_INT
+    stp x0, x1, [sp, #496] // hv store L31
+    ldp x0, x1, [sp, #496] // hv load L31
+    add x15, sp, #512 // hv frame base
+    stp x0, x1, [x15] // hv store L32
+    add x15, sp, #512 // hv frame base
+    ldp x0, x1, [x15] // hv load L32
+    ldp x2, x3, [sp, #208] // hv load L13
+    cmp x1, x3 // __hx_payload_eq: cmp payloads
+    cset x0, eq // __hx_payload_eq: x0 = (a.pl == b.pl)
+    bl hexa_bool // __hx_payload_eq: box bool
+    add x15, sp, #528 // hv frame base
+    stp x0, x1, [x15] // hv store L33
+    add x15, sp, #528 // hv frame base
+    ldp x0, x1, [x15] // hv load L33
+    bl hexa_truthy // br_cond: truthy → w0
+    uxtw x0, w0 // br_cond: zext w0
+    cbz x0, _L4090_rt_map_contains_native_bb7 // br_cond: !truthy -> else
+    b _L4090_rt_map_contains_native_bb6 // branch -> then
+_L4090_rt_map_contains_native_bb6:
+    ldp x0, x1, [sp, #400] // hv load L25
+    ldp x2, x3, [sp, #16] // hv load L1
+    bl rt_map_strcmp0_native // call rt_map_strcmp0_native
+    add x15, sp, #560 // hv frame base
+    stp x0, x1, [x15] // hv store L35
+    add x15, sp, #560 // hv frame base
+    ldp x0, x1, [x15] // hv load L35
+    add x15, sp, #576 // hv frame base
+    stp x0, x1, [x15] // hv store L36
+    add x15, sp, #576 // hv frame base
+    ldp x0, x1, [x15] // hv load L36
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    cmp x1, x3 // __hx_payload_eq: cmp payloads
+    cset x0, eq // __hx_payload_eq: x0 = (a.pl == b.pl)
+    bl hexa_bool // __hx_payload_eq: box bool
+    add x15, sp, #592 // hv frame base
+    stp x0, x1, [x15] // hv store L37
+    add x15, sp, #592 // hv frame base
+    ldp x0, x1, [x15] // hv load L37
+    bl hexa_truthy // br_cond: truthy → w0
+    uxtw x0, w0 // br_cond: zext w0
+    cbz x0, _L4090_rt_map_contains_native_bb9 // br_cond: !truthy -> else
+    b _L4090_rt_map_contains_native_bb8 // branch -> then
+_L4090_rt_map_contains_native_bb7:
+    ldp x0, x1, [sp, #272] // hv load L17
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #1 // hv const_int val
+    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
+    movz x0, #0 // __hx_payload_add: TAG_INT
+    add x15, sp, #640 // hv frame base
+    stp x0, x1, [x15] // hv store L40
+    add x15, sp, #640 // hv frame base
+    ldp x0, x1, [x15] // hv load L40
+    add x15, sp, #656 // hv frame base
+    stp x0, x1, [x15] // hv store L41
+    add x15, sp, #656 // hv frame base
+    ldp x0, x1, [x15] // hv load L41
+    ldp x2, x3, [sp, #240] // hv load L15
+    and x1, x1, x3 // __hx_payload_and: x1 = a.pl and b.pl
+    movz x0, #0 // __hx_payload_and: TAG_INT
+    add x15, sp, #672 // hv frame base
+    stp x0, x1, [x15] // hv store L42
+    add x15, sp, #672 // hv frame base
+    ldp x0, x1, [x15] // hv load L42
+    stp x0, x1, [sp, #272] // hv store L17
+    ldp x0, x1, [sp, #288] // hv load L18
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #1 // hv const_int val
+    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
+    movz x0, #0 // __hx_payload_add: TAG_INT
+    add x15, sp, #688 // hv frame base
+    stp x0, x1, [x15] // hv store L43
+    add x15, sp, #688 // hv frame base
+    ldp x0, x1, [x15] // hv load L43
+    stp x0, x1, [sp, #288] // hv store L18
+    b _L4090_rt_map_contains_native_bb1 // branch
+_L4090_rt_map_contains_native_bb8:
+    movz x0, #0 // hv const_int: TAG_INT
+    movz x1, #0 // hv const_int val
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #1 // hv const_int val
+    mov x0, x1 // __hx_make_val: lo = tag word
+    mov x1, x3 // __hx_make_val: hi = payload word
+    add x15, sp, #624 // hv frame base
+    stp x0, x1, [x15] // hv store L39
+    add x15, sp, #624 // hv frame base
+    ldp x0, x1, [x15] // hv load L39
+    add sp, sp, #720 // sp adj
+    ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
+    ret // return
+_L4090_rt_map_contains_native_bb9:
+    b _L4090_rt_map_contains_native_bb7 // branch
+    movz x0, #4 // ret void: TAG_VOID
+    movz x1, #0 // ret void: payload 0
+    add sp, sp, #720 // sp adj
+    ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
+    ret // return
 .section .hexa.cap,"",@progbits
 _hexa_cap_manifest:
 .section .hexa.abi,"",@progbits

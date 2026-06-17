@@ -50,8 +50,8 @@ rt_map_fnv1a_native:
     mov [rbp - 144], r11 # store tag L4
     jmp .L4090_rt_map_fnv1a_native_bb1 # branch
 .L4090_rt_map_fnv1a_native_bb1:
-    mov r10, r15 # hv payload
     mov r11, 0 # hv payload
+    mov r10, r15 # hv payload
     cmp r10, r11 # __hx_payload_ne: cmp payloads
     setne al # __hx_payload_ne: al = predicate
     movzx r10, al # __hx_payload_ne: zero-extend bool
@@ -63,8 +63,8 @@ rt_map_fnv1a_native:
     jz .L4090_rt_map_fnv1a_native_bb3 # jump-if-zero -> else
     jmp .L4090_rt_map_fnv1a_native_bb2 # jump -> then
 .L4090_rt_map_fnv1a_native_bb2:
-    mov r10, r12 # hv payload
     mov r11, r15 # hv payload
+    mov r10, r12 # hv payload
     xor r10, r11 # __hx_payload_xor: r10 = a.pl xor b.pl
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 160], r11 # store tag L6
@@ -73,8 +73,8 @@ rt_map_fnv1a_native:
     mov r12, r10 # assign L1
     mov r11, [rbp - 160] # tag L6 from tag-slot
     mov [rbp - 120], r11 # store tag L1
-    mov r10, r12 # hv payload
     mov r11, 16777619 # hv payload
+    mov r10, r12 # hv payload
     imul r10, r11 # __hx_payload_mul: r10 = a.pl imul b.pl
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 168], r11 # store tag L7
@@ -84,9 +84,9 @@ rt_map_fnv1a_native:
     mov [rbp - 80], r10 # spill L8 to slot
     mov r11, [rbp - 168] # tag L7 from tag-slot
     mov [rbp - 176], r11 # store tag L8
+    mov r11, 4294967295 # hv payload
     mov r10, [rbp - 80] # reload L8 from spill slot
     mov r10, r10 # hv payload
-    mov r11, 4294967295 # hv payload
     and r10, r11 # __hx_payload_and: r10 = a.pl and b.pl
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 184], r11 # store tag L9
@@ -95,8 +95,8 @@ rt_map_fnv1a_native:
     mov r12, r10 # assign L1
     mov r11, [rbp - 184] # tag L9 from tag-slot
     mov [rbp - 120], r11 # store tag L1
-    mov r10, r13 # hv payload
     mov r11, 1 # hv payload
+    mov r10, r13 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 192], r11 # store tag L10
@@ -226,8 +226,8 @@ rt_map_strcmp0_native:
     pop rbp # epilogue: restore rbp
     ret # return
 .L4090_rt_map_strcmp0_native_bb5:
-    mov r10, r13 # hv payload
     mov r11, 1 # hv payload
+    mov r10, r13 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 200], r11 # store tag L10
@@ -288,8 +288,8 @@ rt_map_get_native:
     mov [rbp - 464], rdx # store tag L1
     mov r12, rcx # ingress param payload
 .L4090_rt_map_get_native_bb0:
-    mov r10, rbx # hv payload
     mov r11, 0 # hv payload
+    mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r13, r10 # leaf: payload → dst L2
     mov r11, 0 # materialize tag imm 0
@@ -347,9 +347,9 @@ rt_map_get_native:
     mov [rbp - 104], r10 # spill L11 to slot
     mov r11, [rbp - 536] # tag L10 from tag-slot
     mov [rbp - 544], r11 # store tag L11
+    mov r11, 4294967295 # hv payload
     mov r10, [rbp - 104] # reload L11 from spill slot
     mov r10, r10 # hv payload
-    mov r11, 4294967295 # hv payload
     and r10, r11 # __hx_payload_and: r10 = a.pl and b.pl
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 552], r11 # store tag L12
@@ -370,9 +370,9 @@ rt_map_get_native:
     mov [rbp - 136], r10 # spill L15 to slot
     mov r11, [rbp - 568] # tag L14 from tag-slot
     mov [rbp - 576], r11 # store tag L15
+    mov r11, 1 # hv payload
     mov r10, [rbp - 120] # reload L13 from spill slot
     mov r10, r10 # hv payload
-    mov r11, 1 # hv payload
     sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 584], r11 # store tag L16
@@ -382,10 +382,10 @@ rt_map_get_native:
     mov [rbp - 152], r10 # spill L17 to slot
     mov r11, [rbp - 584] # tag L16 from tag-slot
     mov [rbp - 592], r11 # store tag L17
-    mov r10, [rbp - 136] # reload L15 from spill slot
-    mov r10, r10 # hv payload
     mov r11, [rbp - 152] # reload L17 from spill slot
     mov r11, r11 # hv payload
+    mov r10, [rbp - 136] # reload L15 from spill slot
+    mov r10, r10 # hv payload
     and r10, r11 # __hx_payload_and: r10 = a.pl and b.pl
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 600], r11 # store tag L18
@@ -401,10 +401,10 @@ rt_map_get_native:
     mov [rbp - 616], r11 # store tag L20
     jmp .L4090_rt_map_get_native_bb1 # branch
 .L4090_rt_map_get_native_bb1:
-    mov r10, [rbp - 176] # reload L20 from spill slot
-    mov r10, r10 # hv payload
     mov r11, [rbp - 120] # reload L13 from spill slot
     mov r11, r11 # hv payload
+    mov r10, [rbp - 176] # reload L20 from spill slot
+    mov r10, r10 # hv payload
     cmp r10, r11 # __hx_payload_lt: cmp payloads
     setl al # __hx_payload_lt: al = predicate
     movzx r10, al # __hx_payload_lt: zero-extend bool
@@ -416,9 +416,9 @@ rt_map_get_native:
     jz .L4090_rt_map_get_native_bb3 # jump-if-zero -> else
     jmp .L4090_rt_map_get_native_bb2 # jump -> then
 .L4090_rt_map_get_native_bb2:
+    mov r11, 16 # hv payload
     mov r10, [rbp - 168] # reload L19 from spill slot
     mov r10, r10 # hv payload
-    mov r11, 16 # hv payload
     imul r10, r11 # __hx_payload_mul: r10 = a.pl imul b.pl
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 632], r11 # store tag L22
@@ -428,10 +428,10 @@ rt_map_get_native:
     mov [rbp - 200], r10 # spill L23 to slot
     mov r11, [rbp - 632] # tag L22 from tag-slot
     mov [rbp - 640], r11 # store tag L23
-    mov r10, [rbp - 72] # reload L7 from spill slot
-    mov r10, r10 # hv payload
     mov r11, [rbp - 200] # reload L23 from spill slot
     mov r11, r11 # hv payload
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    mov r10, r10 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 648], r11 # store tag L24
@@ -515,9 +515,9 @@ rt_map_get_native:
     mov [rbp - 272], r10 # spill L32 to slot
     mov r11, [rbp - 704] # tag L31 from tag-slot
     mov [rbp - 712], r11 # store tag L32
+    mov r11, 4294967295 # hv payload
     mov r10, [rbp - 272] # reload L32 from spill slot
     mov r10, r10 # hv payload
-    mov r11, 4294967295 # hv payload
     and r10, r11 # __hx_payload_and: r10 = a.pl and b.pl
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 720], r11 # store tag L33
@@ -570,9 +570,9 @@ rt_map_get_native:
     jz .L4090_rt_map_get_native_bb9 # jump-if-zero -> else
     jmp .L4090_rt_map_get_native_bb8 # jump -> then
 .L4090_rt_map_get_native_bb7:
+    mov r11, 1 # hv payload
     mov r10, [rbp - 168] # reload L19 from spill slot
     mov r10, r10 # hv payload
-    mov r11, 1 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 856], r11 # store tag L50
@@ -582,10 +582,10 @@ rt_map_get_native:
     mov [rbp - 424], r10 # spill L51 to slot
     mov r11, [rbp - 856] # tag L50 from tag-slot
     mov [rbp - 864], r11 # store tag L51
-    mov r10, [rbp - 424] # reload L51 from spill slot
-    mov r10, r10 # hv payload
     mov r11, [rbp - 152] # reload L17 from spill slot
     mov r11, r11 # hv payload
+    mov r10, [rbp - 424] # reload L51 from spill slot
+    mov r10, r10 # hv payload
     and r10, r11 # __hx_payload_and: r10 = a.pl and b.pl
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 872], r11 # store tag L52
@@ -595,9 +595,9 @@ rt_map_get_native:
     mov [rbp - 168], r10 # spill L19 to slot
     mov r11, [rbp - 872] # tag L52 from tag-slot
     mov [rbp - 608], r11 # store tag L19
+    mov r11, 1 # hv payload
     mov r10, [rbp - 176] # reload L20 from spill slot
     mov r10, r10 # hv payload
-    mov r11, 1 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 880], r11 # store tag L53
@@ -609,9 +609,9 @@ rt_map_get_native:
     mov [rbp - 616], r11 # store tag L20
     jmp .L4090_rt_map_get_native_bb1 # branch
 .L4090_rt_map_get_native_bb8:
+    mov r11, 16 # hv payload
     mov r10, [rbp - 168] # reload L19 from spill slot
     mov r10, r10 # hv payload
-    mov r11, 16 # hv payload
     imul r10, r11 # __hx_payload_mul: r10 = a.pl imul b.pl
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 784], r11 # store tag L41
@@ -621,9 +621,9 @@ rt_map_get_native:
     mov [rbp - 352], r10 # spill L42 to slot
     mov r11, [rbp - 784] # tag L41 from tag-slot
     mov [rbp - 792], r11 # store tag L42
+    mov r11, 8 # hv payload
     mov r10, [rbp - 352] # reload L42 from spill slot
     mov r10, r10 # hv payload
-    mov r11, 8 # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 800], r11 # store tag L43
@@ -682,6 +682,360 @@ rt_map_get_native:
 .L4090_rt_map_get_native_bb9:
     jmp .L4090_rt_map_get_native_bb7 # branch
     add rsp, 848 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
+    pop rbp # epilogue: restore rbp
+    ret # return
+.globl rt_map_contains_native
+.hidden rt_map_contains_native
+    .p2align 4
+rt_map_contains_native:
+    .loc 1 115 0
+    push rbp # prologue: save rbp
+    mov rbp, rsp # prologue: set rbp
+    push rbx # prologue: save rbx
+    push r12 # prologue: save r12
+    push r13 # prologue: save r13
+    push r14 # prologue: save r14
+    push r15 # prologue: save r15
+    sub rsp, 8 # prologue: callee-save align pad
+    sub rsp, 688 # prologue: alloc spill frame
+    mov [rbp - 376], rdi # store tag L0
+    mov rbx, rsi # ingress param payload
+    mov [rbp - 384], rdx # store tag L1
+    mov r12, rcx # ingress param payload
+.L4090_rt_map_contains_native_bb0:
+    mov r11, 0 # hv payload
+    mov r10, rbx # hv payload
+    add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
+    mov r13, r10 # leaf: payload → dst L2
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 392], r11 # store tag L2
+    mov r14, r13 # assign L3
+    mov r11, [rbp - 392] # tag L2 from tag-slot
+    mov [rbp - 400], r11 # store tag L3
+    mov r10, r14 # hv payload
+    mov r11, 0 # hv payload
+    add r10, r11 # __hx_ptr_load64: addr = ptr + off
+    mov r10, qword ptr [r10] # __hx_ptr_load64: r10 = *(addr)
+    mov r15, r10 # leaf: payload → dst L4
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 408], r11 # store tag L4
+    mov r10, r15 # assign L5
+    mov [rbp - 56], r10 # spill L5 to slot
+    mov r11, [rbp - 408] # tag L4 from tag-slot
+    mov [rbp - 416], r11 # store tag L5
+    mov r10, [rbp - 56] # reload L5 from spill slot
+    mov r10, r10 # hv payload
+    mov r11, 0 # hv payload
+    add r10, r11 # __hx_ptr_load64: addr = ptr + off
+    mov r10, qword ptr [r10] # __hx_ptr_load64: r10 = *(addr)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 424], r11 # store tag L6
+    mov [rbp - 64], r10 # spill L6 to slot
+    mov r11, [rbp - 64] # reload L6 from spill slot
+    mov r10, r11 # assign L7
+    mov [rbp - 72], r10 # spill L7 to slot
+    mov r11, [rbp - 424] # tag L6 from tag-slot
+    mov [rbp - 432], r11 # store tag L7
+    mov r10, [rbp - 56] # reload L5 from spill slot
+    mov r10, r10 # hv payload
+    mov r11, 16 # hv payload
+    add r10, r11 # __hx_ptr_load64: addr = ptr + off
+    mov r10, qword ptr [r10] # __hx_ptr_load64: r10 = *(addr)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 440], r11 # store tag L8
+    mov [rbp - 80], r10 # spill L8 to slot
+    mov r11, [rbp - 80] # reload L8 from spill slot
+    mov r10, r11 # assign L9
+    mov [rbp - 88], r10 # spill L9 to slot
+    mov r11, [rbp - 440] # tag L8 from tag-slot
+    mov [rbp - 448], r11 # store tag L9
+    mov r11, 4294967295 # hv payload
+    mov r10, [rbp - 88] # reload L9 from spill slot
+    mov r10, r10 # hv payload
+    and r10, r11 # __hx_payload_and: r10 = a.pl and b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 456], r11 # store tag L10
+    mov [rbp - 96], r10 # spill L10 to slot
+    mov r11, [rbp - 96] # reload L10 from spill slot
+    mov r10, r11 # assign L11
+    mov [rbp - 104], r10 # spill L11 to slot
+    mov r11, [rbp - 456] # tag L10 from tag-slot
+    mov [rbp - 464], r11 # store tag L11
+    mov rsi, r12 # hv arg payload
+    mov rdi, [rbp - 384] # tag L1 from tag-slot
+    call rt_map_fnv1a_native # call rt_map_fnv1a_native
+    mov [rbp - 472], rax # store tag L12
+    mov r10, rdx # hv: unbox user-call result payload
+    mov [rbp - 112], r10 # spill L12 to slot
+    mov r11, [rbp - 112] # reload L12 from spill slot
+    mov r10, r11 # assign L13
+    mov [rbp - 120], r10 # spill L13 to slot
+    mov r11, [rbp - 472] # tag L12 from tag-slot
+    mov [rbp - 480], r11 # store tag L13
+    mov r11, 1 # hv payload
+    mov r10, [rbp - 104] # reload L11 from spill slot
+    mov r10, r10 # hv payload
+    sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 488], r11 # store tag L14
+    mov [rbp - 128], r10 # spill L14 to slot
+    mov r11, [rbp - 128] # reload L14 from spill slot
+    mov r10, r11 # assign L15
+    mov [rbp - 136], r10 # spill L15 to slot
+    mov r11, [rbp - 488] # tag L14 from tag-slot
+    mov [rbp - 496], r11 # store tag L15
+    mov r11, [rbp - 136] # reload L15 from spill slot
+    mov r11, r11 # hv payload
+    mov r10, [rbp - 120] # reload L13 from spill slot
+    mov r10, r10 # hv payload
+    and r10, r11 # __hx_payload_and: r10 = a.pl and b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 504], r11 # store tag L16
+    mov [rbp - 144], r10 # spill L16 to slot
+    mov r11, [rbp - 144] # reload L16 from spill slot
+    mov r10, r11 # assign L17
+    mov [rbp - 152], r10 # spill L17 to slot
+    mov r11, [rbp - 504] # tag L16 from tag-slot
+    mov [rbp - 512], r11 # store tag L17
+    mov r10, 0 # assign L18
+    mov [rbp - 160], r10 # spill L18 to slot
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 520], r11 # store tag L18
+    jmp .L4090_rt_map_contains_native_bb1 # branch
+.L4090_rt_map_contains_native_bb1:
+    mov r11, [rbp - 104] # reload L11 from spill slot
+    mov r11, r11 # hv payload
+    mov r10, [rbp - 160] # reload L18 from spill slot
+    mov r10, r10 # hv payload
+    cmp r10, r11 # __hx_payload_lt: cmp payloads
+    setl al # __hx_payload_lt: al = predicate
+    movzx r10, al # __hx_payload_lt: zero-extend bool
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 528], r11 # store tag L19
+    mov [rbp - 168], r10 # spill L19 to slot
+    mov r10, [rbp - 168] # reload L19 from spill slot
+    test r10, r10 # br_cond test
+    jz .L4090_rt_map_contains_native_bb3 # jump-if-zero -> else
+    jmp .L4090_rt_map_contains_native_bb2 # jump -> then
+.L4090_rt_map_contains_native_bb2:
+    mov r11, 16 # hv payload
+    mov r10, [rbp - 152] # reload L17 from spill slot
+    mov r10, r10 # hv payload
+    imul r10, r11 # __hx_payload_mul: r10 = a.pl imul b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 536], r11 # store tag L20
+    mov [rbp - 176], r10 # spill L20 to slot
+    mov r11, [rbp - 176] # reload L20 from spill slot
+    mov r10, r11 # assign L21
+    mov [rbp - 184], r10 # spill L21 to slot
+    mov r11, [rbp - 536] # tag L20 from tag-slot
+    mov [rbp - 544], r11 # store tag L21
+    mov r11, [rbp - 184] # reload L21 from spill slot
+    mov r11, r11 # hv payload
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    mov r10, r10 # hv payload
+    add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 552], r11 # store tag L22
+    mov [rbp - 192], r10 # spill L22 to slot
+    mov r11, [rbp - 192] # reload L22 from spill slot
+    mov r10, r11 # assign L23
+    mov [rbp - 200], r10 # spill L23 to slot
+    mov r11, [rbp - 552] # tag L22 from tag-slot
+    mov [rbp - 560], r11 # store tag L23
+    mov r10, [rbp - 200] # reload L23 from spill slot
+    mov r10, r10 # hv payload
+    mov r11, 0 # hv payload
+    add r10, r11 # __hx_ptr_load64: addr = ptr + off
+    mov r10, qword ptr [r10] # __hx_ptr_load64: r10 = *(addr)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 568], r11 # store tag L24
+    mov [rbp - 208], r10 # spill L24 to slot
+    mov r11, [rbp - 208] # reload L24 from spill slot
+    mov r10, r11 # assign L25
+    mov [rbp - 216], r10 # spill L25 to slot
+    mov r11, [rbp - 568] # tag L24 from tag-slot
+    mov [rbp - 576], r11 # store tag L25
+    mov r10, [rbp - 216] # reload L25 from spill slot
+    mov r10, r10 # hv payload
+    mov r11, 0 # hv payload
+    cmp r10, r11 # __hx_payload_eq: cmp payloads
+    sete al # __hx_payload_eq: al = (a==b)
+    movzx r10, al # __hx_payload_eq: zero-extend bool
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 584], r11 # store tag L26
+    mov [rbp - 224], r10 # spill L26 to slot
+    mov r10, [rbp - 224] # reload L26 from spill slot
+    test r10, r10 # br_cond test
+    jz .L4090_rt_map_contains_native_bb5 # jump-if-zero -> else
+    jmp .L4090_rt_map_contains_native_bb4 # jump -> then
+.L4090_rt_map_contains_native_bb3:
+    mov r10, 0 # hv payload
+    mov r11, 0 # hv payload
+    mov [rbp - 728], r11 # store tag L44
+    mov [rbp - 368], r10 # spill L44 to slot
+    mov rdx, [rbp - 368] # reload L44 from spill slot
+    mov rdx, rdx # hv arg payload
+    mov rax, [rbp - 728] # tag L44 from tag-slot
+    add rsp, 688 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
+    pop rbp # epilogue: restore rbp
+    ret # return
+.L4090_rt_map_contains_native_bb4:
+    mov r10, 0 # hv payload
+    mov r11, 0 # hv payload
+    mov [rbp - 600], r11 # store tag L28
+    mov [rbp - 240], r10 # spill L28 to slot
+    mov rdx, [rbp - 240] # reload L28 from spill slot
+    mov rdx, rdx # hv arg payload
+    mov rax, [rbp - 600] # tag L28 from tag-slot
+    add rsp, 688 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
+    pop rbp # epilogue: restore rbp
+    ret # return
+.L4090_rt_map_contains_native_bb5:
+    mov r10, [rbp - 200] # reload L23 from spill slot
+    mov r10, r10 # hv payload
+    mov r11, 8 # hv payload
+    add r10, r11 # __hx_ptr_load64: addr = ptr + off
+    mov r10, qword ptr [r10] # __hx_ptr_load64: r10 = *(addr)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 608], r11 # store tag L29
+    mov [rbp - 248], r10 # spill L29 to slot
+    mov r11, [rbp - 248] # reload L29 from spill slot
+    mov r10, r11 # assign L30
+    mov [rbp - 256], r10 # spill L30 to slot
+    mov r11, [rbp - 608] # tag L29 from tag-slot
+    mov [rbp - 616], r11 # store tag L30
+    mov r11, 4294967295 # hv payload
+    mov r10, [rbp - 256] # reload L30 from spill slot
+    mov r10, r10 # hv payload
+    and r10, r11 # __hx_payload_and: r10 = a.pl and b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 624], r11 # store tag L31
+    mov [rbp - 264], r10 # spill L31 to slot
+    mov r11, [rbp - 264] # reload L31 from spill slot
+    mov r10, r11 # assign L32
+    mov [rbp - 272], r10 # spill L32 to slot
+    mov r11, [rbp - 624] # tag L31 from tag-slot
+    mov [rbp - 632], r11 # store tag L32
+    mov r10, [rbp - 272] # reload L32 from spill slot
+    mov r10, r10 # hv payload
+    mov r11, [rbp - 120] # reload L13 from spill slot
+    mov r11, r11 # hv payload
+    cmp r10, r11 # __hx_payload_eq: cmp payloads
+    sete al # __hx_payload_eq: al = (a==b)
+    movzx r10, al # __hx_payload_eq: zero-extend bool
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 640], r11 # store tag L33
+    mov [rbp - 280], r10 # spill L33 to slot
+    mov r10, [rbp - 280] # reload L33 from spill slot
+    test r10, r10 # br_cond test
+    jz .L4090_rt_map_contains_native_bb7 # jump-if-zero -> else
+    jmp .L4090_rt_map_contains_native_bb6 # jump -> then
+.L4090_rt_map_contains_native_bb6:
+    mov rsi, [rbp - 216] # reload L25 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 576] # tag L25 from tag-slot
+    mov rcx, r12 # hv arg payload
+    mov rdx, [rbp - 384] # tag L1 from tag-slot
+    call rt_map_strcmp0_native # call rt_map_strcmp0_native
+    mov [rbp - 656], rax # store tag L35
+    mov r10, rdx # hv: unbox user-call result payload
+    mov [rbp - 296], r10 # spill L35 to slot
+    mov r11, [rbp - 296] # reload L35 from spill slot
+    mov r10, r11 # assign L36
+    mov [rbp - 304], r10 # spill L36 to slot
+    mov r11, [rbp - 656] # tag L35 from tag-slot
+    mov [rbp - 664], r11 # store tag L36
+    mov r10, [rbp - 304] # reload L36 from spill slot
+    mov r10, r10 # hv payload
+    mov r11, 0 # hv payload
+    cmp r10, r11 # __hx_payload_eq: cmp payloads
+    sete al # __hx_payload_eq: al = (a==b)
+    movzx r10, al # __hx_payload_eq: zero-extend bool
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 672], r11 # store tag L37
+    mov [rbp - 312], r10 # spill L37 to slot
+    mov r10, [rbp - 312] # reload L37 from spill slot
+    test r10, r10 # br_cond test
+    jz .L4090_rt_map_contains_native_bb9 # jump-if-zero -> else
+    jmp .L4090_rt_map_contains_native_bb8 # jump -> then
+.L4090_rt_map_contains_native_bb7:
+    mov r11, 1 # hv payload
+    mov r10, [rbp - 152] # reload L17 from spill slot
+    mov r10, r10 # hv payload
+    add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 696], r11 # store tag L40
+    mov [rbp - 336], r10 # spill L40 to slot
+    mov r11, [rbp - 336] # reload L40 from spill slot
+    mov r10, r11 # assign L41
+    mov [rbp - 344], r10 # spill L41 to slot
+    mov r11, [rbp - 696] # tag L40 from tag-slot
+    mov [rbp - 704], r11 # store tag L41
+    mov r11, [rbp - 136] # reload L15 from spill slot
+    mov r11, r11 # hv payload
+    mov r10, [rbp - 344] # reload L41 from spill slot
+    mov r10, r10 # hv payload
+    and r10, r11 # __hx_payload_and: r10 = a.pl and b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 712], r11 # store tag L42
+    mov [rbp - 352], r10 # spill L42 to slot
+    mov r11, [rbp - 352] # reload L42 from spill slot
+    mov r10, r11 # assign L17
+    mov [rbp - 152], r10 # spill L17 to slot
+    mov r11, [rbp - 712] # tag L42 from tag-slot
+    mov [rbp - 512], r11 # store tag L17
+    mov r11, 1 # hv payload
+    mov r10, [rbp - 160] # reload L18 from spill slot
+    mov r10, r10 # hv payload
+    add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 720], r11 # store tag L43
+    mov [rbp - 360], r10 # spill L43 to slot
+    mov r11, [rbp - 360] # reload L43 from spill slot
+    mov r10, r11 # assign L18
+    mov [rbp - 160], r10 # spill L18 to slot
+    mov r11, [rbp - 720] # tag L43 from tag-slot
+    mov [rbp - 520], r11 # store tag L18
+    jmp .L4090_rt_map_contains_native_bb1 # branch
+.L4090_rt_map_contains_native_bb8:
+    mov r10, 1 # hv payload
+    mov r11, 0 # hv payload
+    mov [rbp - 688], r11 # store tag L39
+    mov [rbp - 328], r10 # spill L39 to slot
+    mov rdx, [rbp - 328] # reload L39 from spill slot
+    mov rdx, rdx # hv arg payload
+    mov rax, [rbp - 688] # tag L39 from tag-slot
+    add rsp, 688 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
+    pop rbp # epilogue: restore rbp
+    ret # return
+.L4090_rt_map_contains_native_bb9:
+    jmp .L4090_rt_map_contains_native_bb7 # branch
+    add rsp, 688 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
     pop r15 # epilogue: restore r15
     pop r14 # epilogue: restore r14

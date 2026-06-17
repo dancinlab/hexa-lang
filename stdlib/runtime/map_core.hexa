@@ -104,3 +104,38 @@ pub fn rt_map_get_native(m: HexaVal, keyp: HexaVal) -> HexaVal {
     }
     return __hx_make_val(4, 0)                            // not found (safety net)
 }
+
+// rt_map_contains_native: the `in` / hexa_map_contains_key probe — returns a
+// TAG_INT HexaVal {0,1} mirroring the C `hmap_find(t,key,h) >= 0` (slot PRESENT,
+// independent of the stored value, so a key mapped to void still counts). Same
+// open-addressing walk as rt_map_get_native, minus the value extraction. The C
+// wrapper extracts HX_INT(...) and keeps the NULL-table guard. All raw-int
+// leaves, un-nested (codegen clobber fix #3503 also removes the un-nest need,
+// but un-nested stays the clear form).
+pub fn rt_map_contains_native(m: HexaVal, keyp: HexaVal) -> HexaVal {
+    let map_ptr = __hx_payload_add(m, 0)
+    let t = __hx_ptr_load64(map_ptr, 0)
+    let slots = __hx_ptr_load64(t, 0)
+    let cap_raw = __hx_ptr_load64(t, 16)
+    let ht_cap = __hx_payload_and(cap_raw, 4294967295)
+    let h = rt_map_fnv1a_native(keyp)
+    let mask = __hx_payload_sub(ht_cap, 1)
+    let mut idx = __hx_payload_and(h, mask)
+    let mut steps = 0
+    while __hx_payload_lt(steps, ht_cap) {
+        let soff = __hx_payload_mul(idx, 16)
+        let slot = __hx_payload_add(slots, soff)
+        let slot_key = __hx_ptr_load64(slot, 0)
+        if __hx_payload_eq(slot_key, 0) { return __hx_make_val(0, 0) }  // empty → not present
+        let hash_raw = __hx_ptr_load64(slot, 8)
+        let slot_hash = __hx_payload_and(hash_raw, 4294967295)
+        if __hx_payload_eq(slot_hash, h) {
+            let cmp = rt_map_strcmp0_native(slot_key, keyp)
+            if __hx_payload_eq(cmp, 0) { return __hx_make_val(0, 1) }   // present
+        }
+        let nxt = __hx_payload_add(idx, 1)
+        idx = __hx_payload_and(nxt, mask)
+        steps = __hx_payload_add(steps, 1)
+    }
+    return __hx_make_val(0, 0)                            // not found
+}
