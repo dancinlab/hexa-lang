@@ -54,6 +54,37 @@ use self::rt::syscall
 
 let mut __arena_tbl = 0
 
+// ── ROUTE B (in progress): arena address-envelope ─────────────────────
+// C arena keeps `__hx_arena_lo/hi` (runtime_core_emit.hexa:3969-3970) so
+// hexa_val_heapify does an O(1) pointer-range reject — WITHOUT it the
+// self-compile re-heapifies already-heapified strings O(n²) → 10-16GB RSS
+// (OOM). Every mmap'd region (pool page + large page) must extend the
+// envelope. This is the byteeq/RSS-critical half of Route B
+// (F-M5-R3-MAPSET-ORCHESTRATION); the C-ABI half (HexaArenaMark struct /
+// void* hexa_arena_alloc) is the other. Held here as module-globals; the
+// seed-relink step wires these to the C `__hx_arena_lo/hi` the heapify
+// reads (extern), or heapify itself is ported alongside.
+//   lo = 0 sentinel ⇒ uninitialised (first map sets it); hi = 0 ⇒ empty.
+let mut __arena_env_lo = 0
+let mut __arena_env_hi = 0
+
+// Extend the arena envelope to cover [base, base+size). Plain-int (matches
+// this file's address arithmetic; addresses are positive int64 mmap returns).
+fn __env_extend(base: int, size: int) {
+    if __arena_env_lo == 0 {
+        __arena_env_lo = base
+    } else {
+        if base < __arena_env_lo { __arena_env_lo = base }
+    }
+    let top = base + size
+    if top > __arena_env_hi { __arena_env_hi = top }
+}
+
+// Envelope accessors — the seed-relink wires heapify's O(1) reject to these
+// (a pointer p is arena-resident iff __arena_env_lo <= p < __arena_env_hi).
+fn hexa_arena_env_lo() -> int { return __arena_env_lo }
+fn hexa_arena_env_hi() -> int { return __arena_env_hi }
+
 @pure fn align_up(n: int, align: int) -> int {
     return ((n + align - 1) / align) * align
 }
@@ -82,6 +113,7 @@ fn __arena_grow() {
     __p_set_size(n, POOL_PAGE_SIZE())
     __p_set_used(n, 0)
     __a_set_np(n + 1)
+    __env_extend(base, POOL_PAGE_SIZE())   // Route B: cover this pool page
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -97,6 +129,7 @@ fn page_alloc(size: int) -> int {
         sys_exit(137)
         return 0
     }
+    __env_extend(addr, aligned)   // Route B: cover this large page
     return addr
 }
 
