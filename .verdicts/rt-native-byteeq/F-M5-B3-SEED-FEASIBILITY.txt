@@ -1,0 +1,69 @@
+F-M5-B3-SEED-FEASIBILITY — the alloc+syscall standalone seed is emittable: a
+                            flattened self/rt/alloc.hexa (alloc+syscall) native-
+                            emits as a library .s with 116 defined-globals, the
+                            read-half array_core seed pattern applies. b3 = freeze
+                            + ar + #else drop. (2026-06-18, RAN aiden aprime_gv)
+================================================================================
+LANE: M5 standalone-redesign, b3 (RT-NATIVE-ZEROC fleet).
+GOAL: confirm the alloc+syscall native body can be frozen into a `.s` seed (the
+read-half array_core mechanism) so the C `#else` arena/syscall bodies can drop.
+
+================================================================================
+1. RESULT (c2 — aiden RAN, aprime_gv)
+================================================================================
+  python3 tool/larm64_flatten.py self/rt/alloc.hexa /tmp/alloc-flat.hexa   (alloc+syscall)
+  aprime_gv _drv.hexa --emit=asm --target=x86_64-linux-gnu /tmp/alloc-flat.hexa
+    → emit rc = 0, NO error / ENCODE-MISS / undefined-name
+    → 116 `.globl` symbols, including sys_read/write/open/close/lseek/unlink/
+      mkdir/mmap/munmap/exit/getrandom/clock_gettime/fork/execve/wait/pipe/dup/
+      nanosleep + __arena_grow + rt_init + (hexa_arena_*/hexa_ptr_* family).
+  ⇒ the FULL alloc+syscall library native-emits as a self-contained .s — exactly
+    the read-half array_core seed shape (regen_array_core_native_s.sh), now over
+    the M5-completed leaf surface (__hx_syscall6/__hx_ptr_*/__hx_target_os/
+    __hx_str_ptr + the global-write path). This is the seed b3 freezes.
+
+================================================================================
+2. b3 EXECUTION PLAN (read-half array_core pattern + 2 deltas)
+================================================================================
+  Pattern (tool/regen_array_core_native_s.sh): SSOT.hexa → aprime --emit=asm
+  --target=<triple> → normalize `.file` path + frozen header → self/native/
+  <name>_<triple>.s (3 targets) → ar into runtime.a → drop the C `#else`.
+
+  b3 = the same, for alloc+syscall, with TWO deltas vs array_core:
+    Δ1 FLATTEN: alloc.hexa `use self::rt::syscall`, so the seed source is the
+       FLATTENED alloc+syscall (larm64_flatten), not a single file. (array_core
+       was dependency-free raw-intrinsic.)
+    Δ2 GLOBAL .data: the seed carries the `__arena_tbl` module-global `.data g0:`
+       slot (the global-write path, F-M5-GSLOT-VAL-DONE) — array_core had no
+       global state. The seed's g0 + the C runtime's arena globals must not
+       collide at link (the b2 gate proved native-overrides-C via weaken; b3
+       must DROP the C `#else` so only the native def remains — no weaken).
+
+  STEPS (each its own PR, byteeq+faithful-3target gated):
+    b3a — freeze self/native/alloc_syscall_{x86_64,arm64,arm64-linux}.s (regen
+          script, 3-target, defined-global sanity); byteeq-inert (not yet linked).
+    b3b — ar the seed into runtime.a (stage_resolve_runtime_a) + drop the
+          alloc+syscall C `#else` in runtime_core.c/runtime.c so the native defs
+          are the sole bodies → the FIRST alloc-lane `ls`/byte reduction.
+          GATE: byteeq-real (gen3≡gen4) + faithful-nobaseline 3-target +
+          miscompile-zero + the b2 gate still RUNs exit 0 (now via real link, no
+          weaken).
+
+================================================================================
+3. HONEST RESIDUAL (c9)
+================================================================================
+  · This is FEASIBILITY (the seed emits, 116 globals) — NOT yet frozen, ar'd, or
+    #else-dropped. b3a/b3b are the port-work; `ls self/*.c == ∅` unchanged.
+  · b3b's #else drop is the memory-integrity-sensitive step (global arena state)
+    — gated by the b2 RUN-exit-0 (already proven) becoming a real-link RUN (no
+    weaken) + the 3-target faithful suite. Same seed→drop discipline read-half
+    used across 13 PRs; alloc+syscall is one larger seed (flatten + global).
+  · arm64 module-global write parity (arm64_darwin _arm64_emit_dst_writeback
+    spill-only) is needed before the arm64 seed (b3a arm64) RUNs — a bounded
+    mirror of the x86_64 fix (adrp g@PAGE + str home,[x15,g@PAGEOFF]).
+
+CONCLUSION: the alloc+syscall standalone seed is emittable (116 defined-globals,
+read-half pattern applies) — b3 feasibility is RAN-confirmed. The remaining
+port-work (freeze 3-target → ar → C `#else` drop, faithful-gated) is the
+read-half seed→drop mechanism at one-larger scale; the next concrete brick is
+b3a (freeze the seed) once arm64 write-parity lands for the arm64 target.
