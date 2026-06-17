@@ -950,7 +950,7 @@ fn _x86_hv_payload(buf: [LInstr], o: Operand, st: X86StrTab, rm: X86RegMap,
 // destination value `id`: the payload (raw register `pay_reg`) into the dst's
 // home reg, the constant `tag` into its tag-slot, then the spill writeback. The
 // x86_64 counterpart of arm64's `_hv_store_dst(buf, rm, dst, x0_tag, x1_pay)`.
-fn _x86_hv_store_leaf(buf: [LInstr], rm: X86RegMap, id: i64,
+fn _x86_hv_store_leaf(buf: [LInstr], rm: X86RegMap, id: i64, arena_id: i64,
                       pay_reg: string, tag: i64) -> [LInstr] {
     let mut out = buf
     let dst_name = _x86_dst_reg(rm, id)
@@ -959,7 +959,7 @@ fn _x86_hv_store_leaf(buf: [LInstr], rm: X86RegMap, id: i64,
                          "leaf: payload → dst L" + to_string(id)))
     }
     out = _x86_store_tag_imm(out, rm, id, tag)
-    out = _x86_emit_dst_writeback(out, rm, id)
+    out = _x86_emit_dst_writeback(out, rm, id, arena_id)
     return out
 }
 
@@ -968,7 +968,7 @@ fn _x86_hv_store_leaf(buf: [LInstr], rm: X86RegMap, id: i64,
 // tag is a runtime word, not a fixed TAG_*. `pay_reg` holds the payload, `tag_reg`
 // the tag. Writes payload→dst home, tag→dst tag-slot, then the spill writeback.
 // `tag_reg` must be disjoint from `pay_reg` and from the dst home reg.
-fn _x86_hv_store_leaf_tagreg(buf: [LInstr], rm: X86RegMap, id: i64,
+fn _x86_hv_store_leaf_tagreg(buf: [LInstr], rm: X86RegMap, id: i64, arena_id: i64,
                              pay_reg: string, tag_reg: string) -> [LInstr] {
     let mut out = buf
     let dst_name = _x86_dst_reg(rm, id)
@@ -977,7 +977,7 @@ fn _x86_hv_store_leaf_tagreg(buf: [LInstr], rm: X86RegMap, id: i64,
                          "leaf: payload → dst L" + to_string(id)))
     }
     out = _x86_store_tag_reg(out, rm, id, tag_reg)
-    out = _x86_emit_dst_writeback(out, rm, id)
+    out = _x86_emit_dst_writeback(out, rm, id, arena_id)
     return out
 }
 
@@ -1117,8 +1117,20 @@ fn _x86_op_resolve(o: Operand, st: X86StrTab, rm: X86RegMap,
     return _x86_op_imm(0)
 }
 
-fn _x86_emit_dst_writeback(buf: [LInstr], rm: X86RegMap, id: i64) -> [LInstr] {
+fn _x86_emit_dst_writeback(buf: [LInstr], rm: X86RegMap, id: i64, arena_id: i64) -> [LInstr] {
     let mut out = buf
+    // RT-NATIVE M5-gslot-val: module-global dst. The lower marks a write to a
+    // module-global with the sentinel arena_id == -999 (id = global_id); the
+    // backend must store the payload to the `.data` slot `[rip+g<id>]` (the slot
+    // emit_asm emits), mirroring the READ side (_x86_op_resolve global, which
+    // loads `[rip+g<id>]`). Without this the write fell through to a stack spill
+    // slot (lost on return) → the global stayed `.data`-zero → near-null deref.
+    if arena_id == -999 {
+        let home = _x86_dst_reg(rm, id)
+        out.push(_x86_instr2("mov", _x86_op_label("[rip+g" + to_string(id) + "]"),
+                         _x86_op_reg(home), "global write: g" + to_string(id)))
+        return out
+    }
     if _x86_is_spilled(rm, id) {
         out = _x86_store_spill(out, rm, id, "r10")
     }
@@ -1171,7 +1183,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
                 i = i + 1
             }
-            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
             return buf
         }
         // struct_lit constructor (map-backed). MIR args =
@@ -1209,7 +1221,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
                 i = i + 2
             }
-            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
             return buf
         }
         // RFC 074 Phase 4 — multi-cell enum payload constructor.
@@ -1244,7 +1256,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
                 i = i + 2
             }
-            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
             return buf
         }
         // field access (map-backed, symmetric to struct_lit/enum_path):
@@ -1267,7 +1279,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
                              "field: capture result payload"))
             buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
-            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
             return buf
         }
         // array/map subscript: base[idx]. hir_to_mir lowers `a[i]` to
@@ -1297,7 +1309,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
                              "index: capture element payload"))
             buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
-            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
             return buf
         }
         // index-set: `arr[i] = v` / `map[k] = v`. hir_to_mir lowers an
@@ -1320,7 +1332,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                                  _x86_op_reg("rdx"),
                                  "index_set: store-back container payload"))
                 buf = _x86_store_tag_reg(buf, rm, cont.local_id, "rax")
-                buf = _x86_emit_dst_writeback(buf, rm, cont.local_id)
+                buf = _x86_emit_dst_writeback(buf, rm, cont.local_id, 0)
             }
             return buf
         }
@@ -1331,7 +1343,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             let src = _x86_op_resolve(s.args[0], st, rm, src_scratch, opts)
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
             buf.push(_x86_instr2("mov", dst, src, "assign L" + to_string(s.dst.id)))
-            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
             // PAIR-MODEL — carry the source value's tag to the dst so an
             // assigned string/array keeps its HexaVal tag (e.g. `let x = s`).
             buf = _x86_tag_resolve(buf, s.args[0], rm, "r11")
@@ -1362,7 +1374,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                     buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"), "capture concat result payload"))
                 }
                 buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
-                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
                 return buf
             }
 
@@ -1393,7 +1405,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                                      "binop " + s.op + ": capture result payload"))
                 }
                 buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
-                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
                 return buf
             }
 
@@ -1426,7 +1438,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                                      "binop " + s.op + ": capture bool payload"))
                 }
                 buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
-                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
                 return buf
             }
 
@@ -1457,7 +1469,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                                      "binop !=: capture bool payload"))
                 }
                 buf = _x86_store_tag_imm(buf, rm, s.dst.id, 2) // TAG_BOOL
-                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
                 return buf
             }
 
@@ -1480,7 +1492,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 buf.push(_x86_instr2("movzx", dst, _x86_op_reg("al"),
                                  "zero-extend al into dst"))
                 buf = _x86_store_tag_imm(buf, rm, s.dst.id, 2) // TAG_BOOL
-                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
                 return buf
             }
 
@@ -1504,7 +1516,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
                                  "idiv quotient → dst"))
                 buf = _x86_store_tag_imm(buf, rm, s.dst.id, 0) // TAG_INT
-                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
                 return buf
             }
             buf.push(_x86_instr2("mov", dst, a, "binop lhs into dst"))
@@ -1530,7 +1542,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             }
             buf.push(_x86_instr2(mnemonic, dst, b_real, "binop " + s.op))
             buf = _x86_store_tag_imm(buf, rm, s.dst.id, 0) // TAG_INT (arith/bitwise)
-            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
         }
         return buf
     }
@@ -1555,7 +1567,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf = _x86_tag_resolve(buf, s.args[0], rm, dst_name)  // dst = v.tag
             if s.dst.id >= 0 {
                 buf = _x86_store_tag_imm(buf, rm, s.dst.id, 0)    // result TAG_INT
-                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
             }
             return buf
         }
@@ -1573,7 +1585,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf = _x86_hv_payload(buf, s.args[1], st, rm, "r10", opts)  // payload word → r10
             buf = _x86_hv_payload(buf, s.args[0], st, rm, "r11", opts)  // tag word     → r11
             if s.dst.id >= 0 {
-                buf = _x86_hv_store_leaf_tagreg(buf, rm, s.dst.id, "r10", "r11")
+                buf = _x86_hv_store_leaf_tagreg(buf, rm, s.dst.id, s.dst.arena_id, "r10", "r11")
             }
             return buf
         }
@@ -1591,7 +1603,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              "__hx_payload_eq: zero-extend bool"))
             if s.dst.id >= 0 {
                 buf = _x86_store_tag_imm(buf, rm, s.dst.id, 2)
-                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
             }
             return buf
         }
@@ -1605,7 +1617,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              "__hx_payload_nz: zero-extend bool"))
             if s.dst.id >= 0 {
                 buf = _x86_store_tag_imm(buf, rm, s.dst.id, 2)
-                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
             }
             return buf
         }
@@ -1632,7 +1644,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              s.op + ": zero-extend bool"))
             if s.dst.id >= 0 {
                 buf = _x86_store_tag_imm(buf, rm, s.dst.id, 2)
-                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
             }
             return buf
         }
@@ -1656,7 +1668,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)
             buf.push(_x86_instr2(_aop, _x86_op_reg("r10"), _x86_op_reg("r11"),
                              s.op + ": r10 = a.pl " + _aop + " b.pl"))
-            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, s.dst.arena_id, "r10", 0) }
             return buf
         }
         // UNLOCK-4: scalar double-precision FP arithmetic → float HexaVal
@@ -1679,7 +1691,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              s.op + ": xmm0 = a.f " + _fop + " b.f"))
             buf.push(_x86_instr2("movq", _x86_op_reg("r10"), _x86_op_reg("xmm0"),
                              s.op + ": r10 = result bits"))
-            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 1) }
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, s.dst.arena_id, "r10", 1) }
             return buf
         }
         // UNLOCK-4: scalar double-precision FP compare → bool HexaVal, INLINE.
@@ -1718,7 +1730,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              s.op + ": zero-extend bool"))
             if s.dst.id >= 0 {
                 buf = _x86_store_tag_imm(buf, rm, s.dst.id, 2)
-                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
             }
             return buf
         }
@@ -1747,7 +1759,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              "__hx_to_double: tag == TAG_FLOAT?"))
             buf.push(_x86_instr2("cmove", _x86_op_reg("r10"), _x86_op_reg("r11"),
                              "__hx_to_double: if FLOAT keep original bits"))
-            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 1) }
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, s.dst.arena_id, "r10", 1) }
             return buf
         }
         // RT-NATIVE M5-syscall-c: `__hx_str_ptr(s)` → int HexaVal whose payload IS
@@ -1756,7 +1768,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // a raw syscall (sys_open). The shipping analog of P7-7 `hexa_ptr_addr`.
         if s.op == "__hx_str_ptr" && len(s.args) >= 1 {
             buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)  // r10 = char* base
-            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, s.dst.arena_id, "r10", 0) }
             return buf
         }
         // UNLOCK-5: `__hx_str_byte(s, i)` → int HexaVal of the unsigned byte at
@@ -1769,7 +1781,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              "__hx_str_byte: r10 = s + i"))
             buf.push(_x86_instr2("movzx", _x86_op_reg("r10"),
                              _x86_op_label("byte ptr [r10]"), "__hx_str_byte: r10 = s[i]"))
-            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, s.dst.arena_id, "r10", 0) }
             return buf
         }
         // UNLOCK-7: `__hx_arr_len(v)` → int HexaVal of an array's element count.
@@ -1782,7 +1794,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf.push(_x86_instr2("mov", _x86_op_reg("r10d"),
                              _x86_op_label("dword ptr [r10 + 8]"),
                              "__hx_arr_len: r10d = arr->len (int32, zero-ext)"))
-            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, s.dst.arena_id, "r10", 0) }
             return buf
         }
         // RT-NATIVE M5-syscall: `__hx_target_os()` → int HexaVal compile-time OS
@@ -1792,7 +1804,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         if s.op == "__hx_target_os" {
             buf.push(_x86_instr2("mov", _x86_op_reg("r10"), _x86_op_imm(0),
                              "__hx_target_os: 0 = linux"))
-            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, s.dst.arena_id, "r10", 0) }
             return buf
         }
         // UNLOCK-8: `__hx_syscall0(num)` → int HexaVal of a 0-arg Linux syscall.
@@ -1804,7 +1816,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf.push(_x86_instr0("syscall", "__hx_syscall0: Linux syscall"))
             buf.push(_x86_instr2("mov", _x86_op_reg("r10"), _x86_op_reg("rax"),
                              "__hx_syscall0: r10 = result"))
-            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, s.dst.arena_id, "r10", 0) }
             return buf
         }
         // UNLOCK-9: `__hx_syscall6(num, a0..a5)` → int HexaVal. x86_64 Linux
@@ -1841,7 +1853,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             // anyway, but free here) before the dst-write tag materialization.
             buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_reg("rax"),
                              "__hx_syscall6: r11 = result"))
-            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r11", 0) }
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, s.dst.arena_id, "r11", 0) }
             return buf
         }
         // UNLOCK-10: `__hx_ptr_store64(ptr, off, val)` — write 64-bit `val` to
@@ -1857,7 +1869,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              _x86_op_reg("rsi"), "__hx_ptr_store64: *(addr) = val"))
             // chainable return = original ptr (reload, r10 was mutated).
             buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)
-            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, s.dst.arena_id, "r10", 0) }
             return buf
         }
         // UNLOCK-10: `__hx_ptr_load64(ptr, off)` — read 64-bit int at ptr+off.
@@ -1868,7 +1880,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              "__hx_ptr_load64: addr = ptr + off"))
             buf.push(_x86_instr2("mov", _x86_op_reg("r10"),
                              _x86_op_label("qword ptr [r10]"), "__hx_ptr_load64: r10 = *(addr)"))
-            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, s.dst.arena_id, "r10", 0) }
             return buf
         }
         // UNLOCK-11: `__hx_ptr_store32(ptr, off, val)` — write low 32 bits of
@@ -1882,7 +1894,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf.push(_x86_instr2("mov", _x86_op_label("dword ptr [r10]"),
                              _x86_op_reg("esi"), "__hx_ptr_store32: *(addr) = (i32)val"))
             buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)  // reload ptr
-            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, s.dst.arena_id, "r10", 0) }
             return buf
         }
         // UNLOCK-11: `__hx_ptr_load32(ptr, off)` — read 32-bit int at ptr+off
@@ -1895,7 +1907,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf.push(_x86_instr2("mov", _x86_op_reg("r10d"),
                              _x86_op_label("dword ptr [r10]"),
                              "__hx_ptr_load32: r10d = *(i32*)addr (zero-ext)"))
-            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, s.dst.arena_id, "r10", 0) }
             return buf
         }
         // RT-NATIVE M4 PTR8: `__hx_ptr_store8(ptr, off=0, val)` — write the low
@@ -1911,7 +1923,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf.push(_x86_instr2("mov", _x86_op_label("byte ptr [r10]"),
                              _x86_op_reg("sil"), "__hx_ptr_store8: *(u8*)addr = (u8)val"))
             buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)  // reload ptr
-            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, s.dst.arena_id, "r10", 0) }
             return buf
         }
         // RT-NATIVE M4 PTR8: `__hx_ptr_load8(ptr, off=0)` — read the byte at
@@ -1925,7 +1937,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf.push(_x86_instr2("movzx", _x86_op_reg("r10"),
                              _x86_op_label("byte ptr [r10]"),
                              "__hx_ptr_load8: r10 = *(u8*)addr (zero-ext)"))
-            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, s.dst.arena_id, "r10", 0) }
             return buf
         }
         // SELFHOST-NEXT x86_64: map builtin/runtime names to their linkable
@@ -2012,7 +2024,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                             "hv: unbox call result (" + src_reg + ")"))
                     }
                 }
-                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
             }
             return buf
         }
@@ -2066,7 +2078,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
                     "hv: unbox user-call result payload"))
             }
-            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
         }
         return buf
     }
@@ -2117,7 +2129,7 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             let base_op = _x86_op_resolve(s.args[0], st, rm, "r11", opts)
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
             buf.push(_x86_instr2("mov", dst, base_op, "load"))
-            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
             // PAIR-MODEL — carry the loaded value's tag into the dst tag-slot.
             buf = _x86_tag_resolve(buf, s.args[0], rm, "r11")
             buf = _x86_store_tag_reg(buf, rm, s.dst.id, "r11")
