@@ -5744,7 +5744,15 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "// a silent miscompile (`[].pop() + 1` -> \"void1\" garbage). Now matches the\n"
     if buf.len() > 65536 { _flush_runtime_core(out_path, buf); buf = "" }
     buf = buf + "// sibling array.last()/array.get() contract — throw on empty/non-array.\n"
-    buf = buf + "#ifndef HEXA_HAS_HEXA_RT_STDLIB\n"
+    // RT-NATIVE-ZEROC M4 array-r5: array.pop delegates UNCONDITIONALLY to the
+    // raw-mem hexa-source body (array_core.hexa::rt_array_pop_native — reads
+    // items[len-1] via rt_array_get_native + truncates len via __hx_ptr_store64,
+    // byte-exact vs the dropped C body, gate 32/32). The seed already ships
+    // rt_array_pop_native (array-r4 wiring); this collapses BOTH the standalone C
+    // body AND the #else rt_array_pop closure path into one native call. The
+    // non-array / empty guards stay C (they throw). shift keeps its #ifndef/#else
+    // — no shift seed yet.
+    buf = buf + "extern HexaVal rt_array_pop_native(HexaVal arr);\n"
     buf = buf + "HexaVal hexa_array_pop(HexaVal arr) {\n"
     buf = buf + "    if (!HX_IS_ARRAY(arr)) {\n"
     buf = buf + "        char _buf[128];\n"
@@ -5756,11 +5764,10 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "        hexa_throw(hexa_str(\"array.pop(): empty array\"));\n"
     buf = buf + "        return hexa_void();\n"
     buf = buf + "    }\n"
-    buf = buf + "    int n = HX_ARR_LEN(arr);\n"
-    buf = buf + "    HexaVal last = HX_ARR_ITEMS(arr)[n - 1];\n"
-    buf = buf + "    HX_SET_ARR_LEN(arr, n - 1);\n"
-    buf = buf + "    return last;\n"
+    buf = buf + "    return rt_array_pop_native(arr);\n"
     buf = buf + "}\n"
+    if buf.len() > 65536 { _flush_runtime_core(out_path, buf); buf = "" }
+    buf = buf + "#ifndef HEXA_HAS_HEXA_RT_STDLIB\n"
     buf = buf + "HexaVal hexa_array_shift(HexaVal arr) {\n"
     buf = buf + "    if (!HX_IS_ARRAY(arr)) {\n"
     buf = buf + "        char _buf[128];\n"
@@ -5781,22 +5788,7 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "    return first;\n"
     buf = buf + "}\n"
     buf = buf + "#else\n"
-    buf = buf + "extern HexaVal rt_array_pop(HexaVal arr);\n"
     buf = buf + "extern HexaVal rt_array_shift(HexaVal arr);\n"
-    buf = buf + "HexaVal hexa_array_pop(HexaVal arr) {\n"
-    buf = buf + "    if (!HX_IS_ARRAY(arr)) {\n"
-    buf = buf + "        char _buf[128];\n"
-    buf = buf + "        snprintf(_buf, sizeof(_buf), \"array.pop(): container is not an array (tag=%d)\", (int)HX_TAG(arr));\n"
-    buf = buf + "        hexa_throw(hexa_str(_buf));\n"
-    buf = buf + "        return hexa_void();\n"
-    buf = buf + "    }\n"
-    buf = buf + "    if (HX_ARR_LEN(arr) == 0) {\n"
-    buf = buf + "        hexa_throw(hexa_str(\"array.pop(): empty array\"));\n"
-    buf = buf + "        return hexa_void();\n"
-    if buf.len() > 65536 { _flush_runtime_core(out_path, buf); buf = "" }
-    buf = buf + "    }\n"
-    buf = buf + "    return rt_array_pop(arr);\n"
-    buf = buf + "}\n"
     buf = buf + "HexaVal hexa_array_shift(HexaVal arr) {\n"
     buf = buf + "    if (!HX_IS_ARRAY(arr)) {\n"
     buf = buf + "        char _buf[128];\n"
