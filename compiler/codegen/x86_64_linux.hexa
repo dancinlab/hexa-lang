@@ -2484,13 +2484,26 @@ pub fn codegen_x86_64_linux(module: MModule, opts: CodegenOptions) -> LModule {
         funcs.push(_x86_64_lower_func(module.funcs[i], st, modhash, opts))
         i = i + 1
     }
+    // RT-NATIVE M5-gslot (2026-06-18): register module-global slot labels so
+    // emit_asm emits a `.data` slot (`g<id>: .quad 0 .quad 0`) for each. The
+    // codegen already REFERENCES module-globals as `g<id>` (_x86_op_resolve),
+    // but this list was left `[]` — so a standalone single-module emit produced
+    // `g<id>` references with no defining slot → link "undefined reference to g0"
+    // (the gap that blocked the alloc+syscall b2 gate). arm64_darwin already does
+    // this (gnames); x86_64 is ELF, so the labels are bare `g<id>` (no `_`).
+    let mut gnames: [string] = []
+    let mut gi = 0
+    while gi < len(module.globals) {
+        gnames.push("g" + to_string(module.globals[gi].id))
+        gi = gi + 1
+    }
     return LModule {
         file: module.file,
         target: "x86_64-linux-gnu",
         funcs: funcs,
         rodata: _x86_strtab_to_rodata(st),
         bss: [],
-        globals: [],
+        globals: gnames,
         floats: []
     }
 }
