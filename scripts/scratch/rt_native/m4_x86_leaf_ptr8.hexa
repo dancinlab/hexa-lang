@@ -1,0 +1,31 @@
+// RT-NATIVE-ZEROC M4 PTR8 — x86_64 byte store/load leaf parity test.
+// mmap a page, write the four corner bytes 0x00, 0x7F, 0xFF, 0x80 with
+// __hx_ptr_store8, read them back with __hx_ptr_load8, and assert the
+// round-trip is EXACT and ZERO-EXTENDED (0xFF → 255 NOT -1, 0x80 → 128
+// NOT -128). Adjacent-byte isolation is checked by writing distinct values
+// at p+0..p+3 and verifying each load sees only its own byte. NO C shim —
+// pure native byte-level raw-mem leaves. Expected exit = 7.
+//   x86_64 mmap(0, 4096, PROT_READ|WRITE=3, MAP_PRIVATE|ANON=0x22, -1, 0)
+fn main() {
+  let p = __hx_syscall6(9, 0, 4096, 3, 34, -1, 0)   // mmap → page base
+  let mut ok = 0
+  // Write the four corner bytes at consecutive offsets.
+  __hx_ptr_store8(p, 0, 0)     // 0x00
+  __hx_ptr_store8(p, 1, 127)   // 0x7F
+  __hx_ptr_store8(p, 2, 255)   // 0xFF  — must load back as 255, not -1
+  __hx_ptr_store8(p, 3, 128)   // 0x80  — must load back as 128, not -128
+  // Read back: exact value + ZERO-extend (no sign-extension).
+  if __hx_payload_eq(__hx_ptr_load8(p, 0), 0)   { ok = ok + 1 }
+  if __hx_payload_eq(__hx_ptr_load8(p, 1), 127) { ok = ok + 1 }
+  if __hx_payload_eq(__hx_ptr_load8(p, 2), 255) { ok = ok + 1 }  // ZERO-EXT
+  if __hx_payload_eq(__hx_ptr_load8(p, 3), 128) { ok = ok + 1 }  // ZERO-EXT
+  // store8 writes only the LOW byte: storing 0x1FF (511) lands 0xFF = 255.
+  __hx_ptr_store8(p, 4, 511)
+  if __hx_payload_eq(__hx_ptr_load8(p, 4), 255) { ok = ok + 1 }  // low byte only
+  // Adjacent bytes are independent (no 4-byte clobber): p+2 still 255, p+3 128.
+  if __hx_payload_eq(__hx_ptr_load8(p, 2), 255) { ok = ok + 1 }
+  // store8 chainable return = base ptr.
+  if __hx_payload_eq(__hx_ptr_store8(p, 5, 9), p) { ok = ok + 1 }
+  __hx_syscall6(11, p, 4096, 0, 0, 0, 0)            // munmap
+  exit(ok)   // expect 7
+}

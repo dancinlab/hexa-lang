@@ -1211,6 +1211,60 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
             return buf
         }
+        // array/map subscript: base[idx]. hir_to_mir lowers `a[i]` to
+        // STMT_ASSIGN op="index" args=[base, idx]. Without this dedicated
+        // branch the default-assign fall-through below would just copy the
+        // BASE container payload into dst (and carry the container's TAG_ARRAY
+        // tag) — every `a[i]` returned the whole array pointer, so a numeric
+        // binop on it added two array pointers and the loaded element carried
+        // tag=TAG_ARRAY instead of TAG_INT/TAG_FLOAT (the confirmed
+        // fn-param array-index corruption; arm64_darwin.hexa already had this
+        // branch — x86_64 was missing it). @root-cause-ok: route through
+        // hexa_index_get(container, key) exactly as the arm64 path does — the
+        // runtime dispatches arrays via hexa_array_get, unwraps VALSTRUCT, and
+        // returns the element as a properly-tagged HexaVal {tag,payload} pair.
+        //
+        // SysV AMD64: both args are 16B INTEGER-class HexaVal pairs passed by
+        // value — arg0 (container) → rdi:rsi, arg1 (key) → rdx:rcx. Box the
+        // container's CARRIED tag (recovered from its tag-slot, not the
+        // operand-kind default) so a param array reaches the runtime as
+        // TAG_ARRAY. The 16B return comes back tag:payload in rax:rdx.
+        if s.op == "index" && len(s.args) >= 2 {
+            let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
+            buf = _x86_hv_box_arg(buf, s.args[0], st, rm, "rdi", "rsi", opts)  // container
+            buf = _x86_hv_box_arg(buf, s.args[1], st, rm, "rdx", "rcx", opts)  // key
+            buf.push(_x86_instr1("call", _x86_op_label("hexa_index_get"),
+                             "index: hexa_index_get"))
+            buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                             "index: capture element payload"))
+            buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
+            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+            return buf
+        }
+        // index-set: `arr[i] = v` / `map[k] = v`. hir_to_mir lowers an
+        // index-lhs assignment to STMT_ASSIGN op="index_set" with
+        // args = [container, key, value]; there is no dst local. Mirror the
+        // arm64 path: three HexaVal pairs → container rdi:rsi, key rdx:rcx,
+        // value r8:r9 (SysV INTEGER-class eightbyte sequence). hexa_index_set
+        // RETURNS the (possibly relocated) container HexaVal — it is NOT a
+        // pure side effect — so store the result (rax:rdx) back into the
+        // container lvalue when it is a storable local/global.
+        if s.op == "index_set" && len(s.args) >= 3 {
+            buf = _x86_hv_box_arg(buf, s.args[0], st, rm, "rdi", "rsi", opts)  // container
+            buf = _x86_hv_box_arg(buf, s.args[1], st, rm, "rdx", "rcx", opts)  // key
+            buf = _x86_hv_box_arg(buf, s.args[2], st, rm, "r8", "r9", opts)    // value
+            buf.push(_x86_instr1("call", _x86_op_label("hexa_index_set"),
+                             "index_set: hexa_index_set"))
+            let cont = s.args[0]
+            if cont.kind == "local" {
+                buf.push(_x86_instr2("mov", _x86_op_reg(_x86_dst_reg(rm, cont.local_id)),
+                                 _x86_op_reg("rdx"),
+                                 "index_set: store-back container payload"))
+                buf = _x86_store_tag_reg(buf, rm, cont.local_id, "rax")
+                buf = _x86_emit_dst_writeback(buf, rm, cont.local_id)
+            }
+            return buf
+        }
         if len(s.args) >= 1 {
             let mut src_scratch = "r10"
             if _x86_is_spilled(rm, s.dst.id) { src_scratch = "r11" }
@@ -1636,6 +1690,36 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf.push(_x86_instr2("mov", _x86_op_reg("r10d"),
                              _x86_op_label("dword ptr [r10]"),
                              "__hx_ptr_load32: r10d = *(i32*)addr (zero-ext)"))
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            return buf
+        }
+        // RT-NATIVE M4 PTR8: `__hx_ptr_store8(ptr, off=0, val)` — write the low
+        // BYTE of `val` to ptr+off. Mirrors ptr_store32 but `mov byte ptr [addr],
+        // sil` (sil = low byte of rsi). Returns ptr (chainable). Unblocks the
+        // byte-write in `hexa_strbuf_dup_n`.
+        if s.op == "__hx_ptr_store8" && len(s.args) >= 3 {
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)  // ptr
+            buf = _x86_hv_payload(buf, s.args[1], st, rm, "r11", opts)  // off
+            buf = _x86_hv_payload(buf, s.args[2], st, rm, "rsi", opts)  // val
+            buf.push(_x86_instr2("add", _x86_op_reg("r10"), _x86_op_reg("r11"),
+                             "__hx_ptr_store8: addr = ptr + off"))
+            buf.push(_x86_instr2("mov", _x86_op_label("byte ptr [r10]"),
+                             _x86_op_reg("sil"), "__hx_ptr_store8: *(u8*)addr = (u8)val"))
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)  // reload ptr
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            return buf
+        }
+        // RT-NATIVE M4 PTR8: `__hx_ptr_load8(ptr, off=0)` — read the byte at
+        // ptr+off ZERO-EXTENDED. Mirrors ptr_load32 but `movzx r10, byte ptr
+        // [addr]` (the exact byte-load encoding proven by __hx_str_byte).
+        if s.op == "__hx_ptr_load8" && len(s.args) >= 2 {
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)  // ptr
+            buf = _x86_hv_payload(buf, s.args[1], st, rm, "r11", opts)  // off
+            buf.push(_x86_instr2("add", _x86_op_reg("r10"), _x86_op_reg("r11"),
+                             "__hx_ptr_load8: addr = ptr + off"))
+            buf.push(_x86_instr2("movzx", _x86_op_reg("r10"),
+                             _x86_op_label("byte ptr [r10]"),
+                             "__hx_ptr_load8: r10 = *(u8*)addr (zero-ext)"))
             if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
             return buf
         }
