@@ -6208,6 +6208,14 @@ fn gen2_expr(node) {
             if name == "__hx_ptr_load32" {
                 return "hexa_int((int64_t)*(int32_t*)((char*)(intptr_t)HX_INT(" + gen2_expr(node.args[0]) + ") + HX_INT(" + gen2_expr(node.args[1]) + ")))"
             }
+            // RT-NATIVE M4 PTR8: write/read a single BYTE. store writes the low
+            // byte of val; load reads zero-extended (uint8_t cast → no sign-ext).
+            if name == "__hx_ptr_store8" {
+                return "({ int64_t __pp = HX_INT(" + gen2_expr(node.args[0]) + "); *(uint8_t*)((char*)(intptr_t)__pp + HX_INT(" + gen2_expr(node.args[1]) + ")) = (uint8_t)HX_INT(" + gen2_expr(node.args[2]) + "); hexa_int(__pp); })"
+            }
+            if name == "__hx_ptr_load8" {
+                return "hexa_int((int64_t)*(uint8_t*)((char*)(intptr_t)HX_INT(" + gen2_expr(node.args[0]) + ") + HX_INT(" + gen2_expr(node.args[1]) + ")))"
+            }
             if name == "__map_ptr_eq" {
                 return "hexa_bool((HX_MAP_TBL(" + gen2_expr(node.args[0]) + ") == HX_MAP_TBL(" + gen2_expr(node.args[1]) + ")))"
             }

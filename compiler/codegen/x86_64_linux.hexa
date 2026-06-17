@@ -1639,6 +1639,36 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
             return buf
         }
+        // RT-NATIVE M4 PTR8: `__hx_ptr_store8(ptr, off=0, val)` — write the low
+        // BYTE of `val` to ptr+off. Mirrors ptr_store32 but `mov byte ptr [addr],
+        // sil` (sil = low byte of rsi). Returns ptr (chainable). Unblocks the
+        // byte-write in `hexa_strbuf_dup_n`.
+        if s.op == "__hx_ptr_store8" && len(s.args) >= 3 {
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)  // ptr
+            buf = _x86_hv_payload(buf, s.args[1], st, rm, "r11", opts)  // off
+            buf = _x86_hv_payload(buf, s.args[2], st, rm, "rsi", opts)  // val
+            buf.push(_x86_instr2("add", _x86_op_reg("r10"), _x86_op_reg("r11"),
+                             "__hx_ptr_store8: addr = ptr + off"))
+            buf.push(_x86_instr2("mov", _x86_op_label("byte ptr [r10]"),
+                             _x86_op_reg("sil"), "__hx_ptr_store8: *(u8*)addr = (u8)val"))
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)  // reload ptr
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            return buf
+        }
+        // RT-NATIVE M4 PTR8: `__hx_ptr_load8(ptr, off=0)` — read the byte at
+        // ptr+off ZERO-EXTENDED. Mirrors ptr_load32 but `movzx r10, byte ptr
+        // [addr]` (the exact byte-load encoding proven by __hx_str_byte).
+        if s.op == "__hx_ptr_load8" && len(s.args) >= 2 {
+            buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)  // ptr
+            buf = _x86_hv_payload(buf, s.args[1], st, rm, "r11", opts)  // off
+            buf.push(_x86_instr2("add", _x86_op_reg("r10"), _x86_op_reg("r11"),
+                             "__hx_ptr_load8: addr = ptr + off"))
+            buf.push(_x86_instr2("movzx", _x86_op_reg("r10"),
+                             _x86_op_label("byte ptr [r10]"),
+                             "__hx_ptr_load8: r10 = *(u8*)addr (zero-ext)"))
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            return buf
+        }
         // SELFHOST-NEXT x86_64: map builtin/runtime names to their linkable
         // C runtime symbol (print -> hexa_print_val, println -> hexa_println,
         // exit -> hexa_exit, etc.) — the same mapping the arm64 direct-asm
