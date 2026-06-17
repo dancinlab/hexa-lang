@@ -43,6 +43,7 @@ HexaVal hexa_array_get(HexaVal arr, int64_t idx);
 HexaVal hexa_array_set(HexaVal arr, int64_t idx, HexaVal val);
 HexaVal hexa_array_push(HexaVal arr, HexaVal item);
 HexaVal hexa_array_pop(HexaVal arr);
+HexaVal hexa_array_shift(HexaVal arr);
 HexaVal hexa_array_reserve(HexaVal arr, int n);
 HexaVal hexa_val_snapshot_array(HexaVal v);
 
@@ -157,6 +158,21 @@ int main(void) {
         HexaVal popped = hexa_array_pop(a);
         ok("pop returns float", HX_IS_FLOAT(popped) && HX_FLOAT(popped) == 3.5);
         eq_i("pop len", arr_view(a).len, 41);
+    }
+
+    /* shift: returns first, slides every later elem down one, len shrinks.
+     * Exercises rt_array_shift_native's 16-byte slide + tag-faithful first. */
+    {
+        HexaVal sa = hexa_array_new();
+        sa = hexa_array_push(sa, hexa_int(10));
+        sa = hexa_array_push(sa, hexa_int(20));
+        sa = hexa_array_push(sa, hexa_str("c"));
+        HexaVal shf = hexa_array_shift(sa);
+        ok("shift returns first int", HX_IS_INT(shf) && HX_INT(shf) == 10);
+        eq_i("shift len", arr_view(sa).len, 2);
+        elem_eq("shift slid [0] int", sa, 0, hexa_int(20));
+        HexaVal s1 = hexa_array_get(sa, 1);
+        ok("shift slid [1] str tag+val", HX_IS_STR(s1) && HX_STR(s1) && strcmp(HX_STR(s1), "c") == 0);
     }
 
     /* reserve: grow cap to 128 without changing len; existing elems intact */
