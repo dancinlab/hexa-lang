@@ -89,6 +89,14 @@ fn _hexa_name_is_reserved(s) {
     if s == "isnan" { return true }
     if s == "isinf" { return true }
     if s == "signbit" { return true }
+    if s == "isnormal" { return true }
+    if s == "fpclassify" { return true }
+    if s == "isgreater" { return true }
+    if s == "isgreaterequal" { return true }
+    if s == "isless" { return true }
+    if s == "islessequal" { return true }
+    if s == "islessgreater" { return true }
+    if s == "isunordered" { return true }
     // string.h functions
     if s == "strchr" { return true }
     if s == "strrchr" { return true }

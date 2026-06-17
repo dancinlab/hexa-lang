@@ -3336,6 +3336,19 @@ fn user_fn_name(name) {
     if name == "floor" { return "hexa_user_floor" }
     if name == "ceil" { return "hexa_user_ceil" }
     if name == "round" { return "hexa_user_round" }
+    // <math.h> function-like (type-generic) macros — collide as macros, not symbols
+    if name == "isfinite" { return "hexa_user_isfinite" }
+    if name == "isnan" { return "hexa_user_isnan" }
+    if name == "isinf" { return "hexa_user_isinf" }
+    if name == "signbit" { return "hexa_user_signbit" }
+    if name == "isnormal" { return "hexa_user_isnormal" }
+    if name == "fpclassify" { return "hexa_user_fpclassify" }
+    if name == "isgreater" { return "hexa_user_isgreater" }
+    if name == "isgreaterequal" { return "hexa_user_isgreaterequal" }
+    if name == "isless" { return "hexa_user_isless" }
+    if name == "islessequal" { return "hexa_user_islessequal" }
+    if name == "islessgreater" { return "hexa_user_islessgreater" }
+    if name == "isunordered" { return "hexa_user_isunordered" }
     if name == "time" { return "hexa_user_time" }
     if name == "clock" { return "hexa_user_clock" }
     if name == "exit" { return "hexa_user_exit" }

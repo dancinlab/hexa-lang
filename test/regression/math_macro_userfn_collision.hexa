@@ -1,0 +1,58 @@
+// math.h macro / user-fn collision guard (handoff #4, follows PR #3320).
+//
+// Background: the C-backend emits a user-defined `fn isfinite(x)` as a
+// file-scope C function `HexaVal isfinite(HexaVal x)`. Once runtime.h pulls in
+// `<math.h>`, `isfinite` (and isnan/isinf/signbit/isnormal/fpclassify/
+// isgreater[equal]/isless[equal]/islessgreater/isunordered) are FUNCTION-LIKE
+// MACROS, not symbols — so the macro expands at the decl AND the call site and
+// clang fails with, e.g.:
+//
+//   error: expected identifier or '('
+//     HexaVal isfinite(HexaVal x);
+//           ^
+//   note: expanded from macro 'isfinite'
+//
+// Fix: `_hexa_name_is_reserved` in self/codegen.hexa (and the parallel
+// `user_fn_name` in self/build_c.hexa) list these names so the C-backend
+// mangles a user `fn isfinite` -> `u_isfinite` consistently at the definition
+// and every call site, sidestepping the macro. Genuine intrinsic use is
+// unaffected: the known-user-fn check precedes the math-builtin interception.
+//
+// How to exercise (must transpile to C AND clang-compile WITHOUT error):
+//
+//   self/native/hexat test/regression/math_macro_userfn_collision.hexa /tmp/m.c
+//   # then the host build pipeline compiles /tmp/m.c with runtime.h (=> <math.h>)
+//   # or simply:  hexa build test/regression/math_macro_userfn_collision.hexa --backend=c
+//
+// Expected: rc 0, prints "75", and NO clang "expanded from macro" errors.
+// A regression (a missing name in the reserved list) re-introduces the clang
+// macro-collision failure at the emitted decl/def/call sites.
+
+fn isfinite(x)       { if x == x { return 1 } return 0 }
+fn isnan(x)          { if x != x { return 1 } return 0 }
+fn isinf(x)          { return 0 }
+fn signbit(x)        { if x < 0 { return 1 } return 0 }
+fn isnormal(x)       { return 1 }
+fn fpclassify(x)     { return 4 }
+fn isgreater(a, b)   { if a > b { return 1 } return 0 }
+fn isless(a, b)      { if a < b { return 1 } return 0 }
+fn islessgreater(a, b) { if a != b { return 1 } return 0 }
+fn isunordered(a, b) { return 0 }
+
+fn main() {
+    let mut acc = 0
+    acc = acc + isfinite(7)            // 1
+    acc = acc + isnan(7)              // 0
+    acc = acc + isinf(7)             // 0
+    acc = acc + signbit(0 - 3)       // 1
+    acc = acc + isnormal(7)          // 1
+    acc = acc + fpclassify(7)        // 4
+    acc = acc + isgreater(9, 2)      // 1
+    acc = acc + isless(2, 9)         // 1
+    acc = acc + islessgreater(1, 2)  // 1
+    acc = acc + isunordered(1, 2)    // 0
+    // sum = 1+0+0+1+1+4+1+1+1+0 = 10; scale to a distinctive code
+    let code = acc + 65              // 75
+    println(to_string(code))
+    return 0
+}
