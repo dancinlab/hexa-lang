@@ -44,3 +44,29 @@
   leaves; asm-text/C-transpile/fixpoint unaffected, arm64 --emit=obj fine.
   gate scripts/scratch/rt_native/ptr8_gate.sh · verdict F-M4-PTR8. M2 raw-mem
   set complete (64/32/8). PTR8 [x].
+
+2026-06-17 :: M4 B4 array-core — mechanism-BLOCKED (construct WALL-1 + alloc
+  WALL-2), array_core.hexa NOT viable, __hx_make_val NAMED as the lever.
+  Read self/runtime_core.c struct+fn bodies (HexaArr{items@0,len@8,cap@16}/24;
+  HexaVal{tag@0,payload@8}/16; element stride 16; cap<0 arena-sentinel; grow
+  ladder 8,16,32,64). WALL-1 (B1 twin): hexa_array_get/pop/new return a 16B
+  HexaVal ELEMENT but NO (tag,payload)->HexaVal intrinsic exists — every __hx_*
+  leaf boxes its result TAG_INT/BOOL/FLOAT (grep-confirmed both backends +
+  self/codegen.hexa); a raw payload-word load comes back hexa_int(word), the
+  element's real tag lost+unre-stampable. `arr[idx]` in hexa source lowers to
+  hexa_index_get (RAN build/hexat probe2) = circular. WALL-2: new=calloc,
+  push/reserve=realloc+arena(__hexa_val_mark_top/arena_alloc_items/neg-cap)+
+  hexa_val_heapify+_hx_stats, snapshot=arena->heap promote = real substrate,
+  not intrinsic-expressible. C-diff gate scripts/scratch/rt_native/
+  b4_array_gate.c links STANDALONE runtime.c (PRIMARY CI config) + drives
+  new/push(empty,single,grow-to-40=>cap64)/set/get/mixed-tag(str+float)/pop/
+  reserve(128)/snapshot-identity, asserting layout + each element's raw 16B
+  {tag,payload} image. RAN on summer x86_64: GATE PASS 32/32, 0 fails.
+  array_core.hexa NOT authored (c9/c10, circular/redundant). #else drop = NO
+  until M5 (gate LINKED that standalone runtime.c => C bodies LIVE; delete =>
+  release_build ./hexa link fail). UNBLOCKING LEVER (NAMED, r2): __hx_make_val(
+  tag,payload)->HexaVal = the symmetric write-half of __hx_tag; ADD-only both
+  backends + C-mirror + bind => fixpoint structurally preserved; unblocks B4/B5
+  element returns AND B1 nanbox.hexa file-reduction (hexa_int=__hx_make_val(0,n)).
+  WALL-2 alloc is SEPARATE (needs B2 arena + malloc-floor decision). No
+  runtime/emitter change (ADD: gate.c + verdict). verdict F-M4-B4-ARRAY.
