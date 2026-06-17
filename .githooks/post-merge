@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# .githooks/post-merge — post-pull build-hygiene gate (handoff #11).
+#
+# `git pull` = fetch + merge, and git runs this hook after the merge completes.
+# A pull into an existing pool-host checkout updates the tracked source SSOTs but
+# leaves the OLD .gitignore'd generated artifacts (self/runtime.c,
+# self/runtime_core.c, self/runtime_hi_gen.c, self/native/hexa_cc.c, build/hexat)
+# on disk → the next build links stale generated text against new source and
+# fails with clang `redefinition` / link errors or SEGVs at runtime (see
+# tool/selfcheck header for the field reports). This hook runs tool/selfcheck to
+# detect + invalidate + refresh those artifacts so the next build is clean.
+#
+# Opt-in (same as the other .githooks): git config core.hooksPath .githooks
+# No-op safe: a merge that changed no SSOT leaves nothing stale → selfcheck is a
+# no-op. Never blocks the merge (a refresh failure is reported, exit 0 kept so
+# the pull itself always succeeds; the build will surface a real problem).
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+[ -f "$ROOT/tool/selfcheck" ] || exit 0
+
+echo "[post-merge] running build-hygiene selfcheck (tool/selfcheck)…"
+if ! bash "$ROOT/tool/selfcheck"; then
+  echo "[post-merge] ⚠ selfcheck reported a refresh problem — see output above;" >&2
+  echo "[post-merge]   run \`bash tool/selfcheck\` manually before building." >&2
+fi
+exit 0
