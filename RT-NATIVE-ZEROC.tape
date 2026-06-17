@@ -253,3 +253,18 @@ r4 = freeze array_core_{x86_64,arm64}.s + ar into runtime.a + define HEXA_RT_ARR
   * Completion = (M4) drop each construct-walled family via the array template + (arena lane)
     unlock alloc-walled + (M5) standalone redesign linking all native rt_*.o + (M6) wholesale
     runtime_core.c drop + ls self/*.c==∅ with gen3≡gen4 on both targets. ~15-family scale.
+
+## [M5 feasibility PROVEN] 2026-06-17
+- PROBE (aiden, captured): `build/hexat self/rt/core.hexa /tmp/core_gen.c` → rc=0, 392 lines C,
+  emits rt_eq / rt_cmp_{lt,gt,le,ge} / rt_len / rt_truthy bodies (externs rt_add/hexa_bool resolve
+  from runtime.c). ⇒ the runtime_hi_gen.c (rt_str) gen.c-bundle pattern GENERALIZES to the pure
+  self/rt/*.hexa families (0 __hx_): hexat transpiles them to standalone C with NO native .s seed.
+- M5 IMPLEMENTATION (next focused cycle — fixpoint-sensitive, deserves a clean run, NOT a rushed
+  tail): generate gen.c bundles for the pure rt_* families (core + numeric + …) the way
+  extract_runtime_hi.sh does for rt_str; have stage_resolve_runtime_a #include them into the
+  standalone runtime build + define HEXA_HAS_HEXA_RT_STDLIB for those fns; drop the now-duplicate
+  #else bodies wholesale → a LARGE runtime_core.c byte-DECREASE in one cycle. GATE = build_aprime
+  + faithful 3-target + byteeq-real GREEN (the gen3≡gen4 fixpoint is the campaign invariant — must
+  not tune-to-green; verify by captured CI). Residual after pure-family M5 = alloc-walled families
+  (map _impl/snapshot, stdio) → arena lane (hexa allocator over mmap+__hx_ptr_*) OR honest-keep as
+  Go/Rust-equivalent substrate floor. Then M6 = wholesale runtime_core.c drop + ls self/*.c==∅.
