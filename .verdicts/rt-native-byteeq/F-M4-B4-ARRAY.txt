@@ -1,0 +1,133 @@
+F-M4-B4-ARRAY — RT-NATIVE-ZEROC M4 batch B4 (array-core) status + can-drop-#else verdict
+==========================================================================================
+verdict date: 2026-06-17 · method c2/c9/c16 (read actual struct + fn bodies + RAN a
+C-differential gate on real x86_64 summer + transpiled construct/decompose probes — never
+self-judged) · summer repo @ ee0e6affc (main, M1+ptr8+B1 landed) · all heavy work via
+`harness pool on summer` (~/hexa-lang-fresh)
+
+TL;DR
+─────
+B4's array-core family is the SAME class of finding as B1: a hexa-source array_core.hexa is
+NOT viable, blocked at TWO mechanism walls below the type system. The byte-eq ORACLE is
+established by a fresh 32/32 C-differential gate (b4_array_gate.c) that locks the HexaArr
+layout + the C array fns' behaviour — this oracle is the deliverable a native object is
+measured against once the unblocking intrinsic lands.
+
+  WALL 1 (CONSTRUCT, the B1 twin) — get/pop/new return a 16-byte HexaVal ELEMENT, but there
+    is NO "make HexaVal from (tag,payload)" intrinsic. Every M1 leaf intrinsic RETURNS a
+    TAG_INT/BOOL/FLOAT-boxed value (proven: all __hx_* lowerings box with TAG_INT `#0`, both
+    backends + self/codegen.hexa). A raw load of an element's payload word comes back as
+    hexa_int(word) — the element's REAL tag is lost and cannot be re-stamped. So a native
+    hexa_array_get/pop CANNOT reconstruct the element it read. And `arr[idx]` in hexa source
+    lowers to `hexa_index_get(arr, idx)` (RAN: build/hexat probe2.hexa) — a CALL back into
+    the C runtime = self-recursive / circular, exactly like B1's HexaVal{...}→hexa_int.
+
+  WALL 2 (ALLOC) — hexa_array_new = calloc(1,sizeof(HexaArr)); hexa_array_push/reserve =
+    realloc + the arena subsystem (__hexa_val_mark_top, hexa_array_arena_alloc_items,
+    hexa_array_arena_on, negative-cap sentinel) + hexa_val_heapify (push-escape analysis) +
+    _hx_stats_* counters; hexa_val_snapshot_array = hexa_array_promote_to_heap (arena→heap
+    deep-copy). NONE of malloc/calloc/realloc/arena/heapify/stats is intrinsic-expressible.
+    These are genuine substrate, NOT pure raw-mem.
+
+So B4 = BLOCKED-AT-MECHANISM (construct + alloc), file-reduction BLOCKED-on-M5. The batch's
+real product is the verification artifact (b4_array_gate.c, 32/32) + this classification +
+the named unblocking intrinsic (__hx_make_val).
+
+────────────────────────────────────────────────────────────────────────────────────────
+1. EXACT STRUCT LAYOUT (c2 — read from self/runtime_core.c:1073, 1112)
+────────────────────────────────────────────────────────────────────────────────────────
+  HexaArr { HexaVal* items @0 (8B); int64_t len @8; int64_t cap @16 }  sizeof = 24
+  HexaVal { HexaTag tag @0 (8B incl pad); union payload @8 (8B) }       sizeof = 16
+  arr_ptr is the HexaVal payload (offset 8 of the TAG_ARRAY HexaVal).
+  Element stride in items[] = 16. cap<0 = arena-sentinel (abs(cap)=real cap); cap>=0 = heap.
+  Capacity-doubling ladder: real_cap<8 ? 8 : real_cap*2  →  8,16,32,64,128...
+  TAG_INT=0 FLOAT=1 BOOL=2 STR=3 VOID=4 ARRAY=5 (self/runtime_core.c:1018).
+  MEASURED by the gate: sizeof(HexaVal)=16, sizeof(HexaArr)=24, items@0 len@8 cap@16 — all
+  asserted PASS, so any native port's __hx_ptr_load64/store64 offset arithmetic is exact.
+
+────────────────────────────────────────────────────────────────────────────────────────
+2. C-DIFFERENTIAL GATE (c2 — RAN on real x86_64 summer, NOT self-judged)
+────────────────────────────────────────────────────────────────────────────────────────
+scripts/scratch/rt_native/b4_array_gate.c — two halves:
+  PART A (LAYOUT): asserts sizeof(HexaVal)=16, items@0/len@8/cap@16, sizeof(HexaArr)=24.
+  PART B (BEHAVIOUR): drives the LIVE standalone-runtime.c array fns through
+    new()(empty: len0/cap0/items NULL) → push 1 → push to 40 (cap ladder → 64) →
+    set[5]=-7 (+ neighbour isolation) → mixed-tag push (str "hi" + float 3.5, raw image
+    survives) → pop (returns 3.5, len shrinks) → reserve(128) (len preserved, elems intact)
+    → snapshot_array on heap-backed = identity. Each stored element's raw 16-byte
+    {tag,payload} image is asserted vs a freshly-constructed expected HexaVal.
+
+BUILD: cc -O2 -std=gnu11 -D_GNU_SOURCE -I self b4_array_gate.c self/runtime.c -lm -o /tmp/b4gate
+RESULT (summer, x86_64, gcc, STANDALONE runtime.c — the PRIMARY CI/release config):
+    HexaVal sizeof=16  HexaArr sizeof=24
+    PART A (layout) + PART B (behaviour) ran.
+    GATE PASS — 32 checks, 0 fails
+→ The byte-eq behaviour + layout oracle is locked. This is the spec a native array_core.o
+  must reproduce bit-for-bit once WALL 1/2 are unblocked.
+
+────────────────────────────────────────────────────────────────────────────────────────
+3. WHY NO stdlib/runtime/array_core.hexa WAS AUTHORED (c9 + c16, empirical)
+────────────────────────────────────────────────────────────────────────────────────────
+Probe (RAN, build/hexat on summer):
+  • probe2.hexa: `fn f(arr:HexaVal,idx:int)->HexaVal { return arr[idx] }`
+      → `return hexa_index_get(arr, idx)` — CALLS the C runtime = circular (B1 twin).
+  • probe3.hexa: full raw-intrinsic reconstruct via __hx_payload_add(arr,0) (raw arr_ptr) +
+      __hx_ptr_load64(items, 8) → the loaded payload comes back hexa_int(word). NO intrinsic
+      re-stamps the element's real tag → cannot return the original HexaVal. (Note: build/hexat
+      is the stale C-transpile path and emits hexa_call2(__hx_*,...) not inlined; the
+      authoritative inlining is in the native aprime/gen3 codegen, but the structural verdict
+      — every intrinsic boxes as TAG_INT, none constructs an arbitrary-tag HexaVal — holds at
+      BOTH the C-mirror (self/codegen.hexa) and native backends, grep-confirmed.)
+GREP-confirmed absence: no __hx_make / __hx_box / __hx_pack / from_tag / make_val intrinsic in
+  self/codegen.hexa, compiler/check/bind.hexa, or either backend. Every __hx_* result is
+  hexa_int/hexa_bool/hexa_float boxed.
+CLASSIFICATION (c16): NOT a fixpoint break and NOT a lowering bug — "already-native at
+  mechanism / not-source-expressible" finding (twin of F-M4-B1-NANBOX + F-LEGB-RTSTR). The
+  task's array_core.hexa premise rested on a HexaVal-element-constructibility that does not
+  hold. Authoring a circular/redundant file would violate c9/c10. NO file authored.
+
+────────────────────────────────────────────────────────────────────────────────────────
+4. CAN THE C #else ARRAY BODIES BE DROPPED?  → NO. MUST STAY UNTIL M5. (c9 honest)
+────────────────────────────────────────────────────────────────────────────────────────
+Same as B1 / F-LEGB-STANDALONE-ELSE-NOGO: the authoritative CI byteeq/release path
+(release_build → stage_resolve_runtime_a) compiles self/runtime.c in STANDALONE config, which
+DEFINES hexa_array_new/get/set/push/pop/reserve/snapshot_array as strong symbols. The gate
+LINKED exactly that standalone runtime.c successfully (32/32) — proving the C bodies are LIVE.
+Drop them → standalone runtime.a leaves them undefined → release_build ./hexa link FAILS.
+DROP-VERDICT: MUST STAY until M5 (build_runtime_a_from_source links a native array_core.o into
+  the standalone runtime.a + excises the #else + frozen-seed bump). M5 = build redesign, NOT
+  this batch — AND M5 is itself blocked on the WALL-1 construct intrinsic for array-core.
+
+────────────────────────────────────────────────────────────────────────────────────────
+5. THE UNBLOCKING INTRINSIC (the real next lever for array/map element-returning fns)
+────────────────────────────────────────────────────────────────────────────────────────
+WALL 1 is unblocked by ONE new leaf intrinsic — a HexaVal CONSTRUCTOR from raw words:
+    __hx_make_val(tag_int, payload_int) -> HexaVal
+      C-mirror:  return (HexaVal){ .tag=(HexaTag)HX_INT(tag), .i=HX_INT(payload) };
+      arm64:     mov x0,<tag>; mov x1,<payload>  (already the _hv ABI shape)
+      x86_64:    the {tag,payload} pair model (#3462) — the inverse of __hx_tag.
+  This is the SYMMETRIC counterpart of __hx_tag (read tag) — the missing write/construct half.
+  With it, hexa_array_get = read tag-word + payload-word at items+idx*16 → __hx_make_val. It
+  is ADD-ONLY (compiler never calls it) so the fixpoint is structurally preserved, identical
+  to the M1 / ptr8 precedent. It ALSO unblocks B1's nanbox.hexa file-reduction (hexa_int =
+  __hx_make_val(0,n)) and the map-core element returns (B5). WALL 2 (alloc) is NOT unblocked
+  by this — it needs the arena port (B2, Strategy A) + a malloc/calloc intrinsic OR keeping
+  malloc as the irreducible floor.
+
+────────────────────────────────────────────────────────────────────────────────────────
+DELIVERABLE OF THIS BATCH
+────────────────────────────────────────────────────────────────────────────────────────
+  • scripts/scratch/rt_native/b4_array_gate.c — the c2 differential gate (32/32 PASS on real
+    x86_64 summer, re-runnable byte+layout oracle for the array-core family on both targets).
+  • This verdict — B4 = mechanism-BLOCKED (construct WALL-1 + alloc WALL-2), file-reduction
+    BLOCKED-on-M5, array_core.hexa NOT viable; the __hx_make_val constructor intrinsic NAMED
+    as the single lever that unblocks the element-returning array (and map) fns.
+NEXT round for the array lane (r2): the __hx_make_val constructor-intrinsic micro-PR — the
+  symmetric write-half of __hx_tag, ADD-ONLY both backends + C-mirror + bind whitelist, the
+  one lever that turns B4/B5 element returns AND B1 nanbox.hexa file-reduction from
+  BLOCKED→viable. Depletion test for r2: emit→as→link→RUN on real x86_64 a probe that
+  __hx_make_val(TAG_STR, ptr) round-trips through __hx_tag back to TAG_STR (tag survives,
+  not flattened to TAG_INT) + arm64/x86 GNU-as↔objdump byte-id + aprime smoke exit42 +
+  gen3≡gen4 byteeq-real preserved (ADD-only ⇒ structural). If __hx_make_val lands, r3 = B4
+  array_core.hexa re-attempt (now get/set/pop/len expressible; new/push/reserve still
+  WALL-2 alloc-blocked → those stay C #else until B2 arena + malloc-floor decision).
