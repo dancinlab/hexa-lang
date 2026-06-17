@@ -1,0 +1,41 @@
+F-LEGB-RTCORE-PURE-CANDIDATES-ZERO — runtime_core.c 전수조사: 진짜 native-seed 포트 후보 = 0 (2026-06-17)
+================================================================================
+주장(검증대상): "Z2a native-seed 메커니즘을 runtime_core.c 의 NEW 그룹(rt_str 이외)으로
+                 확장하면 self/*.c 가 준다."
+
+방법(c2·c9, aiden 빌드 — 정적 전수조사, /tmp/inv_phase1.py·inv_phase2.py):
+  runtime_core.c 의 모든 `HexaVal fn(...){...}` REAL C-body 정의를 파서로 추출하고
+  3중 필터를 적용:
+    (a) extern/forward-decl 제외 → REAL_DEF = 169개
+    (b) PURE 필터(libc/libm/syscall 마커 부재) → PURE = 84개 / IMPURE = 85개
+    (c) hexa-source 부재(grep '(fn|@pure fn|pub fn) <name>') → 후보로 진입
+  84개 PURE 생존자를 callee/매크로 단위로 1개씩 본문 확인.
+
+결과(FALSIFIED — 진짜 후보 0):
+  84 PURE 생존자는 전부 다음 5범주 중 하나 — native-seed(.byte_at/.substring/
+  .char_code_at) 로 표현 불가 또는 이미-native:
+
+  1) nanbox tag-constructor 원시함수 (hexa_int/float/bool/void, hexa_bits_to_float,
+     hexa_enum_str/_v) — `{.tag=…, .payload}` 직접 구성. native-seed 메커니즘이 *이것 위에*
+     세워짐 → 포팅은 순환. 기반 substrate.
+  2) syscall/allocator substrate (hexa_mkdir=mkdir(), hexa_str_own_with_len=
+     hexa_strbuf_dup_n, __hexa_last_error=글로벌상태, rt_file_*/rt_fs_*/rt_path_exists=
+     hxlcl_stat/S_ISREG) — 마커필터가 rt_*위임 때문에 놓쳤으나 syscall 바닥. floor.
+  3) map/dict (hexa_map_*, __map_*) — HX_MAP_TBL·hmap_find·hexa_fnv1a_str raw 해시테이블
+     /포인터 연산. seed 문자열 원시함수로 표현 불가.
+  4) array (hexa_array_*, hexa_val_snapshot_array) — HX_ARR_ITEMS/HX_SET_ARR_* raw 메모리
+     /capacity 조작. 표현 불가.
+  5) string/math 위임 래퍼 (hexa_str_replace→rt_str_replace, hexa_str_split→rt_str_split,
+     hexa_pad_*→rt_pad_*, hexa_str_char_at→rt_str_char_at, hexa_log10/log2/tanh→
+     rt_log10/log2/tanh[libm]) — type-guard + 1줄 delegate. 실로직은 rt_* 헬퍼에 있고
+     rt_str_* 는 #3467 로 이미 hexa-source 보유. rt_log/tanh 는 libm(CLAUDE.md 'stdlib
+     trig=libm' 정책). 래퍼 포팅 = 이미-native 재포팅 또는 정책위반.
+
+결론: #3467(rt_str hexa-source-complete)을 runtime_core.c 의 *전체* pure-candidate 집합으로
+  확장 검증 — 진짜 포트 후보 0. leg B 의 남은 self/*.c 는 'portable pure 함수' 가 아니라
+  substrate floor(nanbox/syscall/alloc/raw-mem) + standalone #else 중복(ING #14/#15) 이다.
+  port 를 강제하지 않음(c9). Z2a awk-synth 누적 경로는 여기서 EXHAUSTED.
+
+진짜 잔여 경로(재확인, ING #14/#15): self/*.c 3개는 전부 gitignored 빌드생성물(clean=∅).
+  ls 실감소는 standalone #else 폴백 제거(runtime.c/runtime_core.c 의 #else 가 hexa-source
+  native 정의를 중복 → 파일 붙잡음) = 연구가 아닌 빌드 재설계. 이게 leg B 진짜 다음 블로커.
