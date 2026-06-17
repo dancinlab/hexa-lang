@@ -1,0 +1,100 @@
+F-M5-ALLOC-B2-SYSCALL-WALL — self/rt/alloc.hexa de-circularized (raw-mem table,
+                              shipping __hx_ptr_*); its integration emit is blocked
+                              by syscall.hexa's P7-7 abstraction (`syscall()` builtin
+                              + `__TARGET_OS__` const) which the SHIPPING backend
+                              does not lower — the next M5 brick, scoped here.
+                              (2026-06-18, RAN aiden aprime_m4)
+================================================================================
+LANE: M5 standalone-redesign, alloc sub-unit b2 (RT-NATIVE-ZEROC fleet).
+GOAL: re-author self/rt/alloc.hexa over the b1-proven raw-mem arena body
+(F-M5-ALLOC-B1-MULTIPOOL-RAN), keeping the runtime.c-compat surface (11 consumers
+call hexa_ptr_alloc(size)), then emit+run the whole module as the C-diff gate.
+
+================================================================================
+1. WHAT LANDED (the de-circularization, c10 surgical)
+================================================================================
+self/rt/alloc.hexa rewritten:
+  · `struct Arena { pools: [ArenaPool] }` + arena_grow's `new_pools.push(pool)` +
+    `len(pools)` + index-write  →  a RAW MEMORY pool table at module-global
+    `__arena_tbl` (one mmap'd region): np at +0, pool i {base,size,used} at
+    24+i*24, all via __hx_ptr_load64/store64. The F-M5-ALLOC-CIRCULAR-DEP cycle
+    (arena-alloc → array-push-grow → arena-alloc) is GONE.
+  · `__mem_store64/load64` / `__mem_store8/load8` (P7-7 names, lowered only by
+    self/codegen/memop.hexa) → shipping `__hx_ptr_store64/load64/store8/load8`.
+  · `struct ArenaMark` → an int-encoded mark (pool_idx*(POOL+1)+used), matching
+    the b1 PoC.
+  · runtime.c-compat surface preserved: hexa_arena_on/mark/rewind/reset,
+    hexa_ptr_alloc(size), hexa_ptr_free(ptr,size), hexa_ptr_{read,write}_{byte,64}.
+  alloc.hexa is a DORMANT skeleton (linked nowhere in the shipped build) ⇒ this
+  edit is byteeq-inert (dead during self-emit; selfhost-byteeq-real untouched).
+
+The arena MECHANISM this body implements is already RAN-proven exit 0 + non-
+circular by b1 (the same raw-table grow/mark/rewind/reset over __hx_syscall6 +
+__hx_ptr_*). This round ports that proven body into the real module.
+
+================================================================================
+2. THE WALL (c2 — aiden RAN, emit FAILED, recorded honestly)
+================================================================================
+b2 gate = flatten(self/rt/alloc.hexa) [alloc + syscall, 480 L] + a driver main
+(rt_init → 3 cross-pool hexa_ptr_alloc → mark/rewind reuse → reset). aiden
+aprime_m4 --emit=asm --target=x86_64-linux-gnu:
+
+  emit rc = 1
+    HX2001 undefined name `__TARGET_OS__`   (syscall.hexa:27-28, target_is_linux/darwin)
+    HX2001 undefined name `syscall`         (syscall.hexa sys_mmap/munmap/exit bodies)
+
+  ROOT CAUSE: self/rt/syscall.hexa is a P7-7 abstraction built on TWO things the
+  SHIPPING backend (compiler/codegen) does not provide:
+    (a) the `syscall(num, args...)` BUILTIN — lowered only by self/codegen/
+        syscall.hexa (the P7-7 native-compiler experiment), NOT compiler/codegen.
+        The shipping backend's syscall surface is the M1 leaf `__hx_syscall0/6`.
+    (b) `__TARGET_OS__` — a codegen-INJECTED const (0=linux/1=darwin) that the
+        shipping backend does not inject, so target_is_linux() is undefined.
+  alloc.hexa calls sys_mmap/sys_munmap/sys_exit (the right abstraction — target
+  dispatch belongs in syscall.hexa, not inlined per b1's linux-hardcoded PoC), so
+  it inherits this wall. b1 only ran because it inlined __hx_syscall6(9,...) with
+  linux-hardcoded numbers, bypassing syscall.hexa entirely.
+
+================================================================================
+3. CLASSIFICATION (c16) — this is the M5 PATTERN, not an alloc-specific snag
+================================================================================
+WALL TYPE = (c) substrate/codegen gap. The whole self/rt/ P7-7 tree is written
+against the P7-7 intrinsic surface (`syscall()` builtin, `__mem_*`, `__TARGET_OS__`)
++ self/codegen lowering. The SHIPPED runtime objects (read-half: array_core /
+map_core seeds) were emitted by the SHIPPING backend (aprime = compiler/codegen)
+using the M-series leaves (__hx_ptr_*, __hx_syscall6). So M5 = port the self/rt/
+tree from the P7-7 surface to the shipping leaf surface, module by module:
+  · syscall.hexa  → `syscall()` → __hx_syscall6; `__TARGET_OS__` → a shipping-
+    backend-injected target const (or per-target .s seeds like rt_str/array_core).
+  · alloc.hexa    → DONE this round (uses sys_mmap, unblocked once syscall.hexa is).
+  · io/fmt/proc/fs/intern/math → each over the same P7-7 surface, same port.
+
+  NAMED NEXT BRICK (M5-syscall): "Port self/rt/syscall.hexa to the shipping
+   backend — replace the `syscall(num,...)` builtin calls with __hx_syscall6/0
+   and resolve `__TARGET_OS__` (either inject it as a shipping-backend const, or
+   freeze per-target .s seeds the way array_core/rt_str do). DEPLETION TEST: the
+   b2 gate (flatten alloc+syscall + driver) native-emits + RUNs exit 0 on aiden
+   x86_64 (and cross-emits arm64), proving alloc+syscall integrate C-free — the
+   alloc body is already correct (this round), syscall is the missing floor."
+
+================================================================================
+4. HONEST RESIDUAL (c9)
+================================================================================
+  · alloc.hexa's de-circularization LANDED as source but its INTEGRATION emit is
+    NOT yet green — blocked on syscall.hexa (§2). The arena mechanism is proven
+    (b1 exit 0); the module-level emit waits on the syscall port. Stated plainly,
+    not hidden behind the dormant-skeleton safety.
+  · The `g<id>` module-global data-slot gap (b1 §2) is STILL pending too: even
+    once syscall.hexa is ported, `__arena_tbl` (a module-global `let mut`) will
+    need its .bss/.data slot defined in standalone emit. b1 sidestepped it
+    global-free; the real alloc.hexa is global (11 consumers need the no-handle
+    surface), so g<id> must be solved at the M5 standalone-relink (b3).
+  · `ls self/*.c == ∅` remains the multi-session horizon. This round converts the
+    alloc body from "circular P7-7 draft" to "proven raw-mem body" and LOCATES
+    the two remaining codegen substrate gaps (syscall surface + g<id> slot) with
+    RAN evidence, so the path is now a concrete brick list, not an open question.
+
+CONCLUSION: alloc.hexa is de-circularized over the b1-proven body; the M5 alloc
+lane's remaining blockers are now precisely two shipping-backend substrate gaps —
+the syscall.hexa P7-7-surface port (next brick) and the g<id> global-slot
+definition (b3 relink) — both RAN-evidenced, neither alloc-specific.
