@@ -1,0 +1,129 @@
+// HEXA Standard Library — qforge/wannier_ginterp_polar
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE L4.w+ — POLAR (long-range / Fröhlich) extension of the EPW-style
+// Wannier |g| q-interpolation (stdlib/qforge/wannier_ginterp).
+//
+// ── WHY ─────────────────────────────────────────────────────────────────────
+// The plain Wannier interpolation (wannier_ginterp) is EXACT only when g(R) is
+// SHORT-RANGED — contained in the coarse mesh's Wigner-Seitz R-box. Its own g5
+// gate ships a NEGATIVE CONTROL proving that a LONG-ranged g(R) (a polar
+// Fröhlich dipole tail, ~1/q as q→0) is ALIASED by a coarse mesh and the
+// interpolated λ does NOT reproduce the dense λ. That long-range failure is
+// exactly what blocks the #1 el-ph speedup lever on POLAR materials — the Os/Co
+// metal-oxide flat-band RTSC candidates that also hit the k-sampling (magmom)
+// wall. Non-polar metallic hydrides (CaH6/LaH10/YH10) are fine without it; polar
+// oxides are NOT.
+//
+// ── THE EPW FIX (range separation) ──────────────────────────────────────────
+// @cite Verdi & Giustino 2015, PRL 115, 176401 — "Fröhlich Electron-Phonon
+//       Vertex from First Principles." The polar (long-range) part g_L(q) of the
+//       el-ph vertex has a CLOSED analytic form (dipole: Born charges Z* and the
+//       high-frequency dielectric tensor ε∞), divergent ~1/q at Γ. EPW subtracts
+//       g_L from g BEFORE Wannier interpolation — the residual g_S = g − g_L is
+//       SHORT-RANGED and interpolates exactly — then ADDS g_L back analytically
+//       at the dense q'. This module implements that subtract → interpolate →
+//       add-back round-trip.
+//
+//        g(q_c)  ──(− g_L(q_c))──▶  g_S(q_c)            [now short-ranged]
+//             g_S(R) = forward-DFT(g_S(q_c))            [wannier_ginterp, exact]
+//        g(q') = inverse-DFT(g_S(R))  +  g_L(q')        [add the polar tail back]
+//
+// ── THE LONG-RANGE MODEL g_L (caller-supplied closure) ──────────────────────
+// g_L must be (a) CLOSED-FORM — evaluable at ANY q (so it can be added back at
+// dense q' the coarse run never sampled) and (b) the genuine long-range content
+// (so the residual is short-ranged). The caller passes it as a closure
+//   lr : fn(qx,qy,qz) -> [re, im]
+// In a REAL cell, lr is the Verdi-Giustino dipole g_L built from the DFPT Born
+// charges Z* and ε∞ (a phonon/DFPT provider supplies these). The g5 gate uses an
+// ANALYTIC stand-in lr (a known far-R term) — the d6 honest scope: the METHOD
+// (subtract/add-back round-trip) is what is pinned exactly; the physical Z*/ε∞
+// that define lr come from DFPT, not fabricated here.
+//
+// d3/d19 reuse (compose, don't reinvent):
+//   - forward/inverse DFT + GReal : stdlib/qforge/wannier_ginterp
+//   - q-mesh / λ driver           : stdlib/qforge/mpgrid · metallic_a2f
+
+use "stdlib/qforge/wannier_ginterp"
+use "stdlib/qforge/mpgrid"
+use "stdlib/qforge/metallic_a2f"
+
+// ── FORWARD (polar): subtract g_L(q) on the coarse mesh, then build g_S(R) ────
+//
+// Returns the GReal of the SHORT-RANGED residual g_S = g − g_L. Because the
+// caller-supplied lr removes the long-range tail, g_S is contained in the coarse
+// rbox and its forward DFT is aliasing-free — the exactness wannier_ginterp
+// pins for short-ranged g(R). Pair with qforge_g_at_q_polar (adds g_L back).
+//
+//   coarse        : the coarse MpGrid (the EXPENSIVE per-q DFPT mesh)
+//   g_re, g_im    : the FULL complex g(q) sampled on coarse (len = npoints)
+//   rbox          : R-box half-width (Wigner-Seitz of the coarse q-supercell)
+//   lr            : closure q -> [re,im], the closed-form long-range g_L(q)
+pub fn qforge_g_to_real_polar(coarse: MpGrid, g_re: [float], g_im: [float],
+                              rbox: int, lr) -> GReal {
+    let nq = coarse.npoints
+    if len(g_re) != nq || len(g_im) != nq {
+        return qforge_g_to_real(coarse, g_re, g_im, rbox)  // delegate the err path
+    }
+    // g_S(q_c) = g(q_c) − g_L(q_c)  on every coarse point (range separation)
+    let mut gs_re: [float] = []
+    let mut gs_im: [float] = []
+    let mut i = 0
+    while i < nq {
+        let qx = coarse.coords[3 * i]
+        let qy = coarse.coords[3 * i + 1]
+        let qz = coarse.coords[3 * i + 2]
+        let gl = lr(qx, qy, qz)
+        gs_re.push(g_re[i] - gl[0])
+        gs_im.push(g_im[i] - gl[1])
+        i = i + 1
+    }
+    // the residual is short-ranged ⇒ the plain (exact) forward DFT applies
+    return qforge_g_to_real(coarse, gs_re, gs_im, rbox)
+}
+
+// ── INVERSE (polar): interpolate the short-range residual, add g_L(q') back ───
+//
+// g(q') = [ Σ_R g_S(R) e^{+i2π q'·R} ]  +  g_L(q')   — the short-range part comes
+// from the exact Wannier inverse, the long-range tail from the closed-form model
+// evaluated directly at the dense q'. Returns [re, im].
+pub fn qforge_g_at_q_polar(greal: GReal, lr, qx: float, qy: float,
+                           qz: float) -> [float] {
+    let gs = qforge_g_at_q(greal, qx, qy, qz)   // short-range residual interp
+    let gl = lr(qx, qy, qz)                      // closed-form polar tail
+    return [gs[0] + gl[0], gs[1] + gl[1]]
+}
+
+// |g(q')|² with the polar tail restored — the quantity α²F consumes. (Square
+// AFTER restoring g_L: |g|² is not band-limited, so the EPW-correct order is
+// interpolate-then-add-then-square.)
+pub fn qforge_g2_at_q_polar(greal: GReal, lr, qx: float, qy: float,
+                            qz: float) -> float {
+    let g = qforge_g_at_q_polar(greal, lr, qx, qy, qz)
+    return g[0] * g[0] + g[1] * g[1]
+}
+
+// ── end-to-end (polar): coarse |g| (+ polar model) → dense λ, no dense DFPT ───
+//
+// Mirror of qforge_wann_lambda_dense with the Fröhlich range-separation: build
+// g_S(R) from the polar-subtracted coarse samples, then sweep the DENSE mesh
+// with a provider that interpolates g_S and adds g_L(q') back before squaring.
+pub fn qforge_wann_lambda_dense_polar(coarse: MpGrid,
+                                      coarse_g_re: [float], coarse_g_im: [float],
+                                      rbox: int, lr,
+                                      dense: MpGrid, omega_of_q,
+                                      e_fermi: float, n_ef: float,
+                                      omega_grid: [float],
+                                      sigma_el: float, sigma_ph: float) -> float {
+    let greal = qforge_g_to_real_polar(coarse, coarse_g_re, coarse_g_im, rbox, lr)
+    if greal.ok == 0 { return -1.0 }
+    let provider = fn(qx: float, qy: float, qz: float) -> [float] {
+        let w = omega_of_q(qx, qy, qz)
+        let g2 = qforge_g2_at_q_polar(greal, lr, qx, qy, qz)
+        return [w, g2, 0.0, 0.0]
+    }
+    return qforge_metallic_lambda_mesh(dense, provider, 1, e_fermi, n_ef,
+                                       omega_grid, sigma_el, sigma_ph)
+}

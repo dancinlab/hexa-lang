@@ -1,0 +1,189 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// wannier_ginterp_polar_selftest.hexa — QFORGE L4.w+ (polar / Fröhlich
+// range-separated Wannier |g| q-interpolation) g5 gate.
+//
+// Pins the EPW range-separation fix: a LONG-RANGED (polar) g(q) — the exact case
+// the base wannier_ginterp g5 gate certifies as a NEGATIVE CONTROL (aliased by a
+// coarse mesh, interpolated λ does NOT reproduce dense λ) — is reproduced
+// EXACTLY once the closed-form long-range tail g_L(q) is subtracted before
+// interpolation and added back at the dense q' (Verdi-Giustino, PRL 115 176401).
+//
+// We reuse the BASE gate's own long-range fixture VERBATIM:
+//   g_long(q) = g_short(q) + 0.5·e^{+i2π·(3·qx)}    (a far |R|=3 term)
+// and treat the far term as the (analytic) long-range model
+//   g_L(q) = 0.5·e^{+i2π·(3·qx)}                    (closed-form, any q)
+// so the residual g_S = g_long − g_L = g_short is short-ranged (|R|≤1) and
+// interpolates exactly. This is the SAME g_long the base gate proves FAILS
+// without polar handling — here it PASSES with it. Honest d6 scope: the METHOD
+// (subtract → interp → add-back) is pinned exactly; the physical g_L in a real
+// cell is the dipole vertex built from DFPT Born charges Z* and ε∞, not here.
+//
+// g5 CHECKS (numerical identity — NO LLM judge):
+//  (1) PLAIN FAILS (🔴, the base neg-control, re-pinned) — interpolating the FULL
+//      g_long on a coarse 3×3×3 (rbox=1) does NOT reproduce the direct dense λ
+//      (rel-ε ≫ 1%): the long-range tail is aliased.
+//  (2) POLAR ROUND-TRIP IDENTITY (🔵) — subtract g_L on coarse, interp residual,
+//      add g_L back: at every COARSE q the result equals g_long(q) to < 1e-10.
+//  (3) POLAR COARSE→DENSE EXACTNESS (🟢, the headline) — the polar-interpolated λ
+//      on a DENSE 6×6×6 mesh (from a COARSE 3×3×3) matches the DIRECT dense λ
+//      (true g_long on every dense q) to rel-ε < 1e-9 — the FAIL of (1) is FIXED.
+//  (4) FIX IS REAL (🟢 distinctness) — the polar λ differs materially from the
+//      PLAIN (broken) λ of (1), so (3) is a genuine correction, not a tautology.
+//
+// Run:  HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run \
+//         stdlib/qforge/wannier_ginterp_polar_selftest.hexa
+// PASS: exits printing "wannier_ginterp_polar_selftest PASS".
+
+use "stdlib/qforge/wannier_ginterp"
+use "stdlib/qforge/wannier_ginterp_polar"
+use "stdlib/qforge/metallic_a2f"
+use "stdlib/qforge/mpgrid"
+use "stdlib/material/sim"
+
+let _WP_TWOPI: float = 6.28318530717958647692
+let _WP_NEF:   float = 1.0
+let _WP_SIGEL: float = 0.05
+let _WP_SIGPH: float = 1.5
+let _WP_W0:    float = 300.0
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _assert(name: str, cond: bool, detail: str) -> int {
+    if cond { println("PASS " + name + "  " + detail) ; return 0 }
+    println("FAIL " + name + "  " + detail) ; return 1
+}
+
+fn _grid(wlo: float, whi: float, ng: int) -> [float] {
+    let mut g: [float] = []
+    let step = (whi - wlo) / to_float(ng - 1)
+    let mut j = 0
+    while j < ng { g.push(wlo + step * to_float(j)) ; j = j + 1 }
+    return g
+}
+
+fn _omega_of_q(qx: float, qy: float, qz: float) -> float {
+    let aq = _abs(qx) + _abs(qy) + _abs(qz)
+    return _WP_W0 * (1.0 + 0.6 * aq)
+}
+
+// short-range g(R): Γ + 3 nearest-shell terms (|R|≤1) — interpolates exactly.
+fn _g_short(qx: float, qy: float, qz: float) -> [float] {
+    let mut re = 1.0
+    let mut im = 0.0
+    let p1 = _WP_TWOPI * qx ;  re = re + 0.4 * cos(p1) ; im = im + 0.4 * sin(p1)
+    let p2 = _WP_TWOPI * qy ;  re = re + 0.3 * cos(p2) ; im = im + 0.3 * sin(p2)
+    let p3 = _WP_TWOPI * qz ;  re = re + 0.2 * cos(p3) ; im = im + 0.2 * sin(p3)
+    return [re, im]
+}
+
+// the LONG-RANGE model g_L(q) = 0.5·e^{+i2π·3·qx} — a far |R|=3 term, closed-form
+// at any q. The stand-in for the Verdi-Giustino dipole tail (real cell: from Z*/ε∞).
+fn _g_lr(qx: float, qy: float, qz: float) -> [float] {
+    let p = _WP_TWOPI * 3.0 * qx
+    return [0.5 * cos(p), 0.5 * sin(p)]
+}
+
+// the FULL long-ranged g(q) = g_short(q) + g_L(q) — the base gate's neg-control.
+fn _g_long(qx: float, qy: float, qz: float) -> [float] {
+    let gs = _g_short(qx, qy, qz)
+    let gl = _g_lr(qx, qy, qz)
+    return [gs[0] + gl[0], gs[1] + gl[1]]
+}
+
+fn _sample(grid: MpGrid, gfn) -> [[float]] {
+    let mut gre: [float] = []
+    let mut gim: [float] = []
+    let mut i = 0
+    while i < grid.npoints {
+        let qx = grid.coords[3 * i]
+        let qy = grid.coords[3 * i + 1]
+        let qz = grid.coords[3 * i + 2]
+        let g = gfn(qx, qy, qz)
+        gre.push(g[0]) ; gim.push(g[1])
+        i = i + 1
+    }
+    return [gre, gim]
+}
+
+// DIRECT-dense λ reference: true g_long on every dense q, squared (no interp).
+fn _direct_lambda(dense: MpGrid, gfn, og: [float]) -> float {
+    let prov = fn(qx: float, qy: float, qz: float) -> [float] {
+        let g = gfn(qx, qy, qz)
+        let g2 = g[0] * g[0] + g[1] * g[1]
+        return [_omega_of_q(qx, qy, qz), g2, 0.0, 0.0]
+    }
+    return qforge_metallic_lambda_mesh(dense, prov, 1, 0.0, _WP_NEF, og,
+                                       _WP_SIGEL, _WP_SIGPH)
+}
+
+fn main() {
+    let mut fails = 0
+
+    let coarse = qforge_mp_grid(3, 3, 3, 0, 0, 0)
+    let dense  = qforge_mp_grid(6, 6, 6, 0, 0, 0)
+    let rbox   = 1
+    println("[mesh] coarse nq=" + to_string(coarse.npoints) +
+            " (3×3×3)  dense nq=" + to_string(dense.npoints) +
+            " (6×6×6)  rbox=" + to_string(rbox))
+
+    let og = _grid(50.0, 700.0, 64)
+
+    // the coarse g_long samples (the only "DFPT" data the method gets)
+    let cs = _sample(coarse, _g_long)
+    let gre = cs[0] ; let gim = cs[1]
+
+    // the gold reference: direct dense λ of the TRUE g_long
+    let lam_direct = _direct_lambda(dense, _g_long, og)
+    println("[ref ] direct dense λ(g_long) = " + to_string(lam_direct))
+
+    // ── (1) PLAIN (no polar) FAILS — re-pin the base neg-control ──────────────
+    let lam_plain = qforge_wann_lambda_dense(coarse, gre, gim, rbox, dense,
+                                             _omega_of_q, 0.0, _WP_NEF, og,
+                                             _WP_SIGEL, _WP_SIGPH)
+    let rel_plain = _abs(lam_plain - lam_direct) / _abs(lam_direct)
+    println("[plain] λ=" + to_string(lam_plain) + "  rel-ε=" + to_string(rel_plain))
+    fails = fails + _assert("🔴 PLAIN long-range interp does NOT reproduce dense λ (rel-ε > 1%)",
+                            rel_plain > 0.01,
+                            "(rel-ε=" + to_string(rel_plain) + " — aliased polar tail)")
+
+    // ── (2) POLAR round-trip identity at coarse q ─────────────────────────────
+    let greal_p = qforge_g_to_real_polar(coarse, gre, gim, rbox, _g_lr)
+    fails = fails + _assert("greal_polar ok==1", greal_p.ok == 1,
+                            "(err=" + greal_p.err + ")")
+    let mut max_rt = 0.0
+    let mut i = 0
+    while i < coarse.npoints {
+        let qx = coarse.coords[3 * i]
+        let qy = coarse.coords[3 * i + 1]
+        let qz = coarse.coords[3 * i + 2]
+        let gi = qforge_g_at_q_polar(greal_p, _g_lr, qx, qy, qz)
+        let gt = _g_long(qx, qy, qz)
+        let d  = _abs(gi[0] - gt[0]) + _abs(gi[1] - gt[1])
+        if d > max_rt { max_rt = d }
+        i = i + 1
+    }
+    fails = fails + _assert("🔵 POLAR round-trip identity at coarse q (max|Δ| < 1e-10)",
+                            max_rt < 1e-10, "(max|Δ|=" + to_string(max_rt) + ")")
+
+    // ── (3) POLAR coarse→dense EXACTNESS (the headline; (1)'s FAIL fixed) ──────
+    let lam_polar = qforge_wann_lambda_dense_polar(coarse, gre, gim, rbox, _g_lr,
+                                                   dense, _omega_of_q, 0.0,
+                                                   _WP_NEF, og, _WP_SIGEL, _WP_SIGPH)
+    let rel_polar = _abs(lam_polar - lam_direct) / _abs(lam_direct)
+    println("[polar] λ=" + to_string(lam_polar) + "  rel-ε=" + to_string(rel_polar))
+    fails = fails + _assert("🟢 POLAR interp REPRODUCES dense λ (rel-ε < 1e-9)",
+                            rel_polar < 1e-9,
+                            "(rel-ε=" + to_string(rel_polar) + " — Fröhlich tail restored)")
+
+    // ── (4) the fix is REAL — polar λ differs materially from the broken plain λ
+    let sep = _abs(lam_polar - lam_plain) / _abs(lam_direct)
+    fails = fails + _assert("🟢 fix is real: polar λ ≠ plain(broken) λ (Δrel > 1%)",
+                            sep > 0.01, "(Δrel=" + to_string(sep) + ")")
+
+    if fails == 0 {
+        println("wannier_ginterp_polar_selftest PASS")
+    } else {
+        println("wannier_ginterp_polar_selftest FAIL (" + to_string(fails) + ")")
+    }
+}
