@@ -1,0 +1,126 @@
+F-M5-ALLOC-CIRCULAR-DEP — M5 alloc native-compile's FIRST blocker is a CIRCULAR
+                           dependency in self/rt/alloc.hexa: the arena models its
+                           pool list as a hexa `[ArenaPool]` array + `.push()`,
+                           so arena-alloc recurses into array-push-grow which
+                           recurses into arena-alloc (2026-06-18, RAN = source read)
+================================================================================
+LANE: M5 standalone-redesign, alloc sub-unit (RT-NATIVE-ZEROC fleet).
+CONTEXT: handoff #17 briefed "alloc-r2 = array push grow port / arm64-arena →
+x86_64 mirror + #else byte-decrease". That briefed deliverable was already RAN-
+NO-GO'd by F-ALLOC-R2-X86-ARENA (#else-excise = the forbidden delete = a REAL
+link regression, duplicate of F-LEGB-STANDALONE-ELSE-NOGO). That verdict named
+the two live levers: (1) M5 standalone-redesign (link native rt_*.o so #else can
+actually be dropped) and (2) r3 = map_* (make_val-unlocked construct half).
+This round PIVOTS onto lever (1) and locates its concrete first blocker.
+
+================================================================================
+1. THE FINDING (RAN — read self/rt/alloc.hexa, the M5 endpoint module)
+================================================================================
+self/rt/mod.hexa is the runtime-replacement index (P7-7); it `use`s
+self::rt::alloc as the hexa-source replacement for runtime.c's malloc/free/
+realloc + arena. M5 = native-compile that tree → rt_*.o → link into the
+standalone build → the C `#else` bodies become droppable (the array READ-half
+lane #3494 proved this mechanism: a native .s seed DEFINES the symbol, then the
+#else is excised → byte-DECREASE).
+
+For M5 to compile self/rt/alloc.hexa into a SELF-CONTAINED rt_*.o (the
+non-circular property F-ALLOC-R1's PoC demonstrated), the arena body must touch
+NO heap-allocating hexa surface. It does:
+
+  self/rt/alloc.hexa:55   struct Arena { pools: [ArenaPool], ... }   // hexa array field
+  self/rt/alloc.hexa:62   return Arena{ pools: [], ... }             // array literal alloc
+  self/rt/alloc.hexa:77   new_pools.push(pool)                       // ARRAY PUSH ← the cycle
+  self/rt/alloc.hexa:80   current: len(new_pools) - 1                // array len
+  self/rt/alloc.hexa:140  let mut i = len(ar.pools) - 1              // array len
+  self/rt/alloc.hexa:160  while i < len(a.pools)                     // array len
+
+  THE CYCLE:
+    arena_grow()  --.push(pool)-->  hexa_array_push
+    hexa_array_push  --grow beyond cap-->  hexa_array_arena_alloc_items / arena
+    arena  --pool overflow-->  arena_grow()        ◀── closes the loop
+
+  This is exactly the recursion F-ALLOC-R1-FEASIBILITY's PoC AVOIDED: that PoC
+  (scripts/scratch/rt_native/bump_arena_linux_poc.hexa) addressed cells with raw
+  __hx_ptr_store64/load64 over a mmap'd region — ZERO hexa array, ZERO push,
+  ZERO HexaVal boxing in the allocator body ⇒ non-circular (nm witness: only
+  `syscall`×2 = mmap+munmap, no malloc/calloc/realloc referenced). The shipped
+  P7-7 skeleton, by contrast, holds its pool table in a `[ArenaPool]` hexa array
+  and grows it with `.push()` ⇒ circular. The skeleton is a CORRECTNESS-of-shape
+  draft, NOT a non-circular substrate.
+
+================================================================================
+2. SCOPE BOUNDING (RAN — array_ops.hexa + map_ops.hexa are WRAPPERS, not bodies)
+================================================================================
+The other two self/rt write-family modules do NOT carry the alloc body — they
+delegate the low-level alloc primitive to the host (runtime.c) and only wrap the
+higher-order pure ops:
+
+  self/rt/array_ops.hexa:1-7  "Runtime.c kept the low-level HeapDescriptor
+    primitives (new / get / set / len / reserve); everything else here runs in
+    pure hexa." → rt_array_* = thin wrappers over *_pure.hexa. NO alloc body.
+  self/rt/map_ops.hexa:1-7   "Low-level allocation (new / set / get via the
+    host) stays in the host primitive." rt_map_set is a FUNCTIONAL copy (keys()
+    loop + out[k]=v), NOT the hmap_grow allocator. NO alloc body.
+
+  ⇒ The genuine write/alloc C body that must be ported for ls-reduction lives in
+    self/runtime_core_emit.hexa (hexa_array_push: HeapDescriptor + realloc +
+    arena-resident vs heap-promote vs geometric-grow vs mark-stack/heapify), and
+    its allocator floor is self/rt/alloc.hexa's arena. The arena is the root: fix
+    its circularity first, then the push body can route grow through a
+    non-circular native arena.
+
+================================================================================
+3. CLASSIFICATION (c16 taxonomy)
+================================================================================
+WALL TYPE = (b) wrong-shape / variable-confound — NOT a true ceiling. The arena
+substrate IS reducible (F-ALLOC-R1 proved the mechanism non-circular over raw
+__hx_ptr_*). The P7-7 skeleton merely drafted the arena with the wrong data
+representation (hexa array instead of raw-mem pool table), which reintroduces the
+cycle. The fix is a re-representation, not a new intrinsic (intrinsic coverage =
+100% per F-ALLOC-R1 §2).
+
+NAMED NEXT BRICK (M5-alloc-b1):
+  "Re-represent self/rt/alloc.hexa's pool table in raw memory (mirror the
+   F-ALLOC-R1 PoC): replace `pools: [ArenaPool]` + `.push()` + `len(pools)` with
+   a FIXED-size pool table addressed by __hx_ptr_load64/store64 over a small
+   mmap'd (or module-global .bss) header region — ARENA_MAX_POOLS()=256 slots ×
+   {base,size,used} = 6 KB fixed, no growth, no hexa array. arena_grow then
+   bumps the slot count via __hx_ptr_store64, not array push. This makes the
+   arena body self-contained (the non-circular property M5 native-compile
+   requires). DEPLETION TEST: native-emit self/rt/alloc.hexa on aiden →
+   nm/objdump witness ZERO undefined hexa_array_push / __hx_make_val / malloc /
+   calloc / realloc (only the 2-syscall mmap/munmap floor), + a C-diff gate
+   (alloc_arena_gate, like b4_array_gate 32/32) proving N bump/reset/rewind
+   round-trips byte-exact vs the C arena. NO #else drop this brick (that is the
+   M5 standalone-relink, gated separately) — this brick proves the arena body is
+   C-free + non-circular, the prerequisite for every downstream write-half port."
+
+  COORDINATE: r3 = map_* (the make_val construct-half family, F-ALLOC-R2 §5) is
+  the PARALLEL lever and does NOT collide — it ports the map construct-half over
+  __hx_make_val; M5-alloc-b1 owns the arena floor underneath. Both feed the same
+  M5 standalone-relink endpoint.
+
+================================================================================
+4. HONEST RESIDUAL (c9)
+================================================================================
+  · This round is a SOURCE-READ finding (RAN = the four cited line numbers in
+    self/rt/alloc.hexa + the two wrapper-module headers), NOT a build. No code
+    changed, no CI gate touched, byteeq-real on main = untouched (last GREEN:
+    #3506 array-r6 lane). The PoC pattern it points to (F-ALLOC-R1) was already
+    RAN on aiden.
+  · M5-alloc-b1 (the raw-mem re-representation) is the next brick and DOES touch
+    code — but self/rt/alloc.hexa is a DORMANT skeleton (linked nowhere in the
+    shipped build; mod.hexa's execution gates are all `[ ]` unrun), so editing it
+    is byteeq-inert (dead during self-emit) ⇒ safe to land WIP, with the real
+    proof being the aiden native-emit + C-diff gate, not an LLM self-judgement.
+  · The irreducible floor stands (ARCHITECTURE.json): syscall instruction
+    (wrapped via __hx_syscall6) + libm. The arena ABOVE that floor is reducible;
+    this verdict just records that the P7-7 draft of it was circular and names
+    the de-circularization brick.
+
+CONCLUSION: M5's alloc sub-unit is blocked not by a missing capability but by the
+P7-7 skeleton representing the arena with a hexa array (`[ArenaPool]` + `.push()`)
+that recurses into the very allocator it implements. M5-alloc-b1 = re-represent
+the pool table in raw memory (F-ALLOC-R1 PoC pattern), making the arena body
+self-contained + non-circular — the prerequisite for the M5 standalone relink
+that lets the write-half C `#else` bodies finally drop.
