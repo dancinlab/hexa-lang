@@ -4261,6 +4261,21 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
             if s.kind == STMT_ASSIGN && s.op == "index_set" {
                 needs_idxs_addr = true
             }
+            // RFC 055 atomic-add/min/max/cas - the 3-arg (4-arg cas)
+            // STMT_CALL emit at `_nvptx_lower_stmt` reuses the SAME shared
+            // `%rd_idxs_addr` scratch for its addr-compute trio
+            // (mul.lo.s64 + add.s64 + atom.global.*). A kernel that uses an
+            // atomic but NO `index_set` would otherwise leave the reg
+            // undeclared in the `.reg` bank -> ptxas "Unknown symbol".
+            // Mirror the store-path declaration so any atom call also
+            // reserves the scratch. (idx_addr completes inline per stmt,
+            // so a single shared reg is safe - same invariant as index_set.)
+            if s.kind == STMT_CALL && (s.op == "gpu_atomic_add" || s.op == "gpu_atomic_min" || s.op == "gpu_atomic_max") && len(s.args) >= 3 {
+                needs_idxs_addr = true
+            }
+            if s.kind == STMT_CALL && s.op == "gpu_atomic_cas" && len(s.args) >= 4 {
+                needs_idxs_addr = true
+            }
             sk = sk + 1
         }
         bk = bk + 1
