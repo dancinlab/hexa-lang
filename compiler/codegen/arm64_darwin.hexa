@@ -1973,10 +1973,13 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // mul, no `bl _hexa_add`). Unblocks the native dispatch core's int-int
         // arithmetic leaves (hexa_add_slow/sub/mul fast path).
         if (s.op == "__hx_payload_add" || s.op == "__hx_payload_sub"
-            || s.op == "__hx_payload_mul") && len(s.args) >= 2 {
+            || s.op == "__hx_payload_mul" || s.op == "__hx_payload_and"
+            || s.op == "__hx_payload_xor") && len(s.args) >= 2 {
             let mut _aop = "add"
             if s.op == "__hx_payload_sub" { _aop = "sub" }
             if s.op == "__hx_payload_mul" { _aop = "mul" }
+            if s.op == "__hx_payload_and" { _aop = "and" }
+            if s.op == "__hx_payload_xor" { _aop = "eor" }
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // a → x1=payload
             buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // b → x3=payload
             buf.push(_arm64_instr3(_aop, _arm64_op_reg("x1"), _arm64_op_reg("x1"),
