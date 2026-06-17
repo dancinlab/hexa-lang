@@ -12,7 +12,7 @@
 //     use self::rt::syscall
 //
 //     fn write_line(s: string) -> int {
-//         let addr = hexa_ptr_addr(s)
+//         let addr = __hx_str_ptr(s)
 //         return sys_write(1, addr, len(s))
 //     }
 //
@@ -160,7 +160,7 @@ fn sys_exit(code: int) -> int {
 fn sys_getrandom(buf: int, len: int, flags: int) -> int {
     if target_is_linux() { return _sc3(SYS_LINUX_GETRANDOM(), buf, len, flags) }
     // Darwin has no getrandom; fall back to /dev/urandom via open+read
-    let fd = sys_open(hexa_ptr_addr("/dev/urandom"), 0, 0)
+    let fd = sys_open(__hx_str_ptr("/dev/urandom"), 0, 0)
     if fd < 0 { return fd }
     let n = sys_read(fd, buf, len)
     sys_close(fd)

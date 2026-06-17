@@ -13,7 +13,7 @@
 //     use self::rt::syscall
 //
 //     fn write_line(s: string) -> int {
-//         let addr = hexa_ptr_addr(s)
+//         let addr = __hx_str_ptr(s)
 //         return sys_write(1, addr, len(s))
 //     }
 //
@@ -161,7 +161,7 @@ fn sys_exit(code: int) -> int {
 fn sys_getrandom(buf: int, len: int, flags: int) -> int {
     if target_is_linux() { return _sc3(SYS_LINUX_GETRANDOM(), buf, len, flags) }
     // Darwin has no getrandom; fall back to /dev/urandom via open+read
-    let fd = sys_open(hexa_ptr_addr("/dev/urandom"), 0, 0)
+    let fd = sys_open(__hx_str_ptr("/dev/urandom"), 0, 0)
     if fd < 0 { return fd }
     let n = sys_read(fd, buf, len)
     sys_close(fd)
@@ -494,8 +494,7 @@ fn hexa_ptr_free(ptr: int, size: int) -> int {
     return __hx_ptr_load64(ptr, offset)
 }
 
-// ── b2 driver: exercise the de-circularized global arena over the ported
-//    syscall.hexa (M5-syscall-b: syscall()→__hx_syscall6, __TARGET_OS__→__hx_target_os) ──
+// ── b2 driver: alloc over the fully-ported syscall.hexa (M5-syscall a/b/c) ──
 fn main() {
     rt_init()
     let p0 = hexa_ptr_alloc(400000)
