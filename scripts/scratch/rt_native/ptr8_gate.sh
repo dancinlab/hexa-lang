@@ -69,13 +69,17 @@ probe:
     ret
 EOF
     OK=0
+    AOBJDUMP="objdump"
     if [ "$AARCH_AS" = "clang-arm64" ]; then
         clang -c -target arm64-apple-darwin -o /tmp/ptr8_arm_probe.o /tmp/ptr8_arm_probe.s 2>/tmp/ptr8_arm.err && OK=1
+        command -v llvm-objdump >/dev/null 2>&1 && AOBJDUMP="llvm-objdump"
     else
         "$AARCH_AS" -o /tmp/ptr8_arm_probe.o /tmp/ptr8_arm_probe.s 2>/tmp/ptr8_arm.err && OK=1
+        # use the matching aarch64 objdump (GNU x86 objdump can't read aarch64).
+        command -v aarch64-linux-gnu-objdump >/dev/null 2>&1 && AOBJDUMP="aarch64-linux-gnu-objdump"
     fi
     if [ "$OK" = 1 ]; then
-        ADUMP="$(objdump -d /tmp/ptr8_arm_probe.o 2>/dev/null || llvm-objdump -d /tmp/ptr8_arm_probe.o 2>/dev/null)"
+        ADUMP="$($AOBJDUMP -d /tmp/ptr8_arm_probe.o 2>/dev/null)"
         # strb w5,[x1] = 0x39000025 ; ldrb w1,[x1] = 0x39400021 (little-endian bytes 25 00 00 39 / 21 00 40 39)
         achk() { if echo "$ADUMP" | grep -qiE "$1"; then echo "  ✓ arm64 $2"; else echo "  ✗ arm64 MISSING $2 [$1]"; fail=1; fi; }
         achk "39000025|25 00 00 39" "strb w5,[x1]"
