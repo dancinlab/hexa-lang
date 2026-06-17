@@ -1,0 +1,116 @@
+F-M5-ALLOC-B1-MULTIPOOL-RAN — multi-pool raw-mem bump arena (de-circularized)
+                               native-emits + RUNs exit 0 on real x86_64, fully
+                               non-circular; + a module-global codegen gap found
+                               and sidestepped (2026-06-18, RAN aiden aprime_m4)
+================================================================================
+LANE: M5 standalone-redesign, alloc sub-unit b1 (RT-NATIVE-ZEROC fleet).
+GOAL: prove the de-circularization blueprint from F-M5-ALLOC-CIRCULAR-DEP — a
+multi-pool bump arena whose pool list is RAW MEMORY (a fixed mmap'd table over
+__hx_ptr_load64/store64) instead of a hexa `[ArenaPool]` array + `.push()` —
+actually native-emits and runs correctly through the SHIPPING x86_64 backend,
+with the full arena semantics (grow across pools, mark/rewind, reset), and is
+non-circular (touches no hexa_array_push / malloc / calloc / realloc).
+
+================================================================================
+1. DECISIVE RESULT (c2 — aiden RAN, build/aprime_m4, real x86_64)
+================================================================================
+PoC: scripts/scratch/rt_native/multipool_arena_poc.hexa (global-free form).
+Recipe (the x86_leaf_gate.sh SEMANTIC path):
+  aprime_m4 _drv.hexa --emit=asm --target=x86_64-linux-gnu -o /tmp/mp.s <poc>
+  as --64 → /tmp/mp.o
+  gcc -no-pie /tmp/mp.o runtime.o rt_hi_native.o map_core_native.o
+             array_core_native.o -lm → /tmp/mp
+  /tmp/mp ; echo $?
+
+  emit rc = 0      (no ENCODE-MISS, no error)
+  as   rc = 0
+  link rc = 0
+  RUN  exit = 0    ★ PASS ★
+
+  The exit-0 asserts, in one program:
+    · 3× 400 KB allocs cross a pool boundary (pool0 holds 2 @ 800 KB < 1 MB; the
+      3rd forces arena_grow → pool1) — sentinels 111+222+333 read back = 666.
+    · pool count a_np(tbl) == 2 after the grow.
+    · arena_mark → arena_alloc(1000) → arena_rewind: a fresh alloc reuses the
+      EXACT marked address (pt2 == pt) — rewind restored the bump cursor.
+    · arena_reset → a_np(tbl) == 0 (all pools munmap'd).
+
+  NON-CIRCULAR WITNESS (nm /tmp/mp.o):
+    grep push|malloc|calloc|realloc|hexa_array|hexa_map → NONE referenced.
+    objdump syscall count = 5 (the mmap/munmap floor, nothing above it).
+  ⇒ the arena body recurses into NO heap. The F-M5-ALLOC-CIRCULAR-DEP cycle
+    (arena-alloc → array-push-grow → arena-alloc) is BROKEN: the pool table is
+    raw int/pointer space, grown by __hx_ptr_store64 to slot N, not array push.
+
+================================================================================
+2. CODEGEN GAP FOUND (c9 — the first attempt FAILED, recorded honestly)
+================================================================================
+The FIRST PoC used module-global mutable state (`let mut __tbl = 0`, `let mut
+__np = 0`). It emitted (emit rc=0) but FAILED at LINK:
+    /tmp/mp.o: in function `tbl_base': undefined reference to `g0'
+The shipping x86_64 backend lowers a module-global `let mut` int to a `g<id>`
+symbol (g0, g1, …) but does NOT emit the .bss/.data slot that DEFINES it in a
+standalone single-module emit — it expects the slot to come from the whole-
+program data section the full compiler build provides. This is WHY the read-half
+lane never hit this wall: array/map accessors carry NO global state (every op
+takes its container as an arg), so they never reference a g<id>.
+
+SIDESTEP (not a compiler edit — c10/c18, no escape-hatch added): hold ALL arena
+state IN the mmap'd table region itself (pool count at header word, pool headers
+after), threaded by the single `tbl` int returned from arena_init and passed to
+every op. ZERO module globals → ZERO g<id> refs → links clean. The runtime.c
+glue can keep that one `tbl` int in a C global and call arena_alloc(tbl, n), so
+the runtime.c surface (hexa_ptr_alloc(size)) is unaffected — the global lives on
+the C side, the hexa arena body is global-free.
+
+  This g<id>-slot-definition gap is a REAL, separately-named residual for the
+  full M5 standalone-relink (when native rt_*.o must define its own data slots),
+  but it is NOT on the critical path for the arena body, which is global-free.
+
+================================================================================
+3. CLASSIFICATION (c16) + NAMED NEXT BRICK
+================================================================================
+WALL on the arena mechanism = CLEARED. The blueprint RUNs. The remaining alloc
+work is integration, not feasibility:
+
+  NAMED M5-alloc-b2 — "Re-author self/rt/alloc.hexa over this proven blueprint":
+    replace `struct Arena { pools: [ArenaPool], ... }` + arena_grow's
+    `new_pools.push(pool)` + `len(pools)` + the `__mem_*` intrinsics (the P7-7
+    skeleton's pre-__hx_ptr_* names; self/codegen/memop.hexa lowers them but the
+    SHIPPING compiler/codegen only knows __hx_ptr_*) with the global-free
+    raw-table body proven here (__hx_syscall6 mmap + __hx_ptr_load64/store64).
+    Keep the runtime.c-compat surface (hexa_arena_on/mark/rewind/reset,
+    hexa_ptr_alloc/free) as thin wrappers over arena_*(tbl, …), with `tbl` held
+    by rt_init. DEPLETION TEST: a C-diff gate (alloc_arena_gate.c) RAN on aiden
+    — N bump/mark/rewind/reset ops byte-exact vs the C arena in runtime_core.c,
+    + the nm non-circular witness. alloc.hexa is a DORMANT skeleton (linked
+    nowhere in the shipped build), so the edit is byteeq-inert (safe WIP).
+
+  THEN M5-alloc-b3 — wire the native arena object into the M5 standalone-relink
+    (the larm64_flatten self/rt tree → native rt_*.o path, M5a #3497), so the
+    write `#else` bodies in runtime_core.c can finally drop (the ls-reduction).
+    This is where the g<id> data-slot gap (§2) must be solved for any genuinely
+    global runtime state.
+
+================================================================================
+4. HONEST RESIDUAL (c9)
+================================================================================
+  · This is the MECHANISM proof (arena body native-emits + runs + non-circular),
+    NOT yet a runtime port or an ls reduction. self/rt/alloc.hexa is UNCHANGED
+    this round; b2 does that edit, b3 does the relink/#else-drop.
+  · The PoC links against the read-half seed objects (map_core_native.o /
+    array_core_native.o) only because aiden's prebuilt runtime.o already expects
+    rt_map_contains_native etc. (main's #3504 state); that is incidental to the
+    arena proof, which references none of them (nm §1).
+  · The g<id> module-global data-slot gap (§2) is a real, recorded residual for
+    b3, not swept under the rug. The arena is global-free by design, so it does
+    not block b2.
+  · The irreducible floor stands (ARCHITECTURE.json): syscall instruction
+    (wrapped via __hx_syscall6, 5 in this PoC) + libm. The arena ABOVE it is now
+    PROVEN reducible end-to-end, not merely feasible-on-paper.
+
+CONCLUSION: the de-circularized multi-pool arena is no longer a hypothesis — it
+native-emits and RUNs exit 0 on real x86_64, fully non-circular, with grow /
+mark / rewind / reset all byte-exact. M5-alloc-b2 (re-author self/rt/alloc.hexa
+over this blueprint, C-diff-gated) is unblocked; the global-state codegen slot is
+deferred to the b3 relink where it actually matters.
