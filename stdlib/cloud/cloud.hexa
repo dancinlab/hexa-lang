@@ -149,6 +149,62 @@ fn _ssh_capture_status(host: str, ssh_opts: [str], remote: str) -> SshCapture {
     return SshCapture { body: res[0], err: res[1], local_rc: res[2] }
 }
 
+// ── transport-truncation auto-retry (gap-3 flaky-proxy) ──────────────
+//
+// A vast.ai / RunPod SSH proxy intermittently truncates the command stream
+// mid-flight: the remote login shell receives a CUT command line (`bash -c`
+// with no body, `rm` with no operand) and errors out, OR the captured output
+// loses its trailing __CLOUD_*__ marker. The dispatcher already DETECTS this
+// (rc < 0 = "no exit-code marker") but used to surface it as a one-shot
+// failure, forcing every caller to hand-roll a retry loop. _ssh_capture_retry
+// rides out the blip: when the marker is missing AND ssh itself connected
+// (local_rc != 255), it re-sends the SAME remote command up to _CLOUD_RETRY_N
+// times with a growing backoff.
+//
+// NOT retried: (a) a present marker — `remote exit N` is a real result, even a
+// non-zero one; (b) local_rc == 255 — a genuine transport OUTAGE (host
+// unreachable / auth / changed key) where retry only burns billing, handled by
+// _ssh_transport_outage. Only the in-between "ssh connected but the command
+// got cut" state is retried.
+//
+// Semantics are AT-LEAST-ONCE: a marker lost AFTER the command fully ran would
+// re-run it. This is safe for the dispatch the CLI actually issues — a
+// truncated DELIVERY almost never executed a coherent command, and the common
+// remote ops (df / ls / pgrep / rm -rf / pkill / mkdir -p) are idempotent. A
+// caller dispatching a non-idempotent side effect over a known-flaky proxy
+// should use --script (stdin, byte-exact) or carry its own dedupe key.
+fn _cloud_retry_n() -> int { return 2 }
+
+// _cloud_backoff — seconds to wait before retry `attempt` (0-based), as the
+// argument to a local `sleep`. Grows so a still-recovering proxy gets more
+// room on the later attempt without stalling the fast common case.
+fn _cloud_backoff(attempt: int) -> str {
+    if attempt == 0 { return "0.4" }
+    return "1.0"
+}
+
+// _ssh_capture_retry — _ssh_capture_status with transport-truncation retry.
+// `marker` is the exit-code marker the caller will parse (e.g. "__CLOUD_RC__=");
+// a missing marker with ssh connected (local_rc != 255) triggers a re-send.
+fn _ssh_capture_retry(host: str, ssh_opts: [str], remote: str, marker: str) -> SshCapture {
+    let mut cap = _ssh_capture_status(host, ssh_opts, remote)
+    let mut attempt = 0
+    while attempt < _cloud_retry_n() {
+        let rc = _parse_uint_after(cap.body, marker)
+        if rc >= 0 {
+            return cap            // marker present — a real remote exit code
+        }
+        if cap.local_rc == 255 {
+            return cap            // transport outage — retry would just bill
+        }
+        // ssh connected but the command was cut mid-stream → back off + re-send.
+        exec_capture("sleep " + _cloud_backoff(attempt))
+        cap = _ssh_capture_status(host, ssh_opts, remote)
+        attempt = attempt + 1
+    }
+    return cap
+}
+
 // _ssh_capture — _ssh_capture_status keeping only the captured body, for
 // callers that do not discriminate transport failure (poll / sha256).
 fn _ssh_capture(host: str, ssh_opts: [str], remote: str) -> str {
@@ -367,7 +423,7 @@ fn cloud_run_wall_opts(host: str, ssh_opts: [str], argv: [str], max_wall: int) -
         prefix = "timeout " + str(max_wall) + " "
     }
     let remote = prefix + _join_argv(argv) + " 2>&1; echo __CLOUD_RC__=$?"
-    let cap = _ssh_capture_status(host, ssh_opts, remote)
+    let cap = _ssh_capture_retry(host, ssh_opts, remote, "__CLOUD_RC__=")
     let out = cap.body
     let rc = _parse_uint_after(out, "__CLOUD_RC__=")
     let body = _strip_marker(out, "__CLOUD_RC__=")
@@ -464,7 +520,24 @@ fn cloud_run_script_opts(host: str, ssh_opts: [str], body: str) -> CloudResult {
     // _shq-quoted for the LOCAL /bin/sh -c so it reaches printf as one literal
     // (newlines preserved), then flows over the ssh stdin byte-for-byte.
     let local = "printf '%s' " + _shq_local(body) + " | " + _ssh_cmd(host, ssh_opts, remote)
-    let res = exec_capture(local)
+    // Same transport-truncation retry as _ssh_capture_retry, inlined because the
+    // stdin-pipe transport is exec_capture(local), not _ssh_capture_status.
+    let mut res = exec_capture(local)
+    let mut sattempt = 0
+    while sattempt < _cloud_retry_n() {
+        let prc = _parse_uint_after(res[0], "__CLOUD_RC__=")
+        if prc >= 0 {
+            sattempt = _cloud_retry_n()        // marker present — done
+        } else {
+            if res[2] == 255 {
+                sattempt = _cloud_retry_n()    // transport outage — stop
+            } else {
+                exec_capture("sleep " + _cloud_backoff(sattempt))
+                res = exec_capture(local)
+                sattempt = sattempt + 1
+            }
+        }
+    }
     let out = res[0]
     let rc = _parse_uint_after(out, "__CLOUD_RC__=")
     let body_out = _strip_marker(out, "__CLOUD_RC__=")
@@ -495,7 +568,7 @@ fn cloud_exec_opts(host: str, ssh_opts: [str], cmd_str: str) -> CloudResult {
         return _cloud_fail("cloud_exec: empty cmd_str")
     }
     let remote = cmd_str + " 2>&1; echo __CLOUD_RC__=$?"
-    let cap = _ssh_capture_status(host, ssh_opts, remote)
+    let cap = _ssh_capture_retry(host, ssh_opts, remote, "__CLOUD_RC__=")
     let out = cap.body
     let rc = _parse_uint_after(out, "__CLOUD_RC__=")
     let body = _strip_marker(out, "__CLOUD_RC__=")
