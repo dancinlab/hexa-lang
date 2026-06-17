@@ -787,6 +787,31 @@ fn _x86_hv_arith_sym(op: string) -> string {
     return ""
 }
 
+// Tag-aware ORDERED-comparison binop → runtime helper symbol. Mirrors arm64's
+// _hv_binop_sym comparison subset (< <= > >= ==): like arithmetic, the SEMANTICS
+// of these ops depend on the operand TAGS (a FLOAT compare is an IEEE-754
+// ordered compare; an INT compare is a two's-complement compare), so they MUST
+// route through the tag-dispatching runtime helper rather than a raw integer
+// `cmp` on the payloads. The prior x86_64 path emitted a raw `cmp reg, <imm>` +
+// setcc — for a FLOAT operand whose payload is the 64-bit IEEE-754 bit pattern
+// that (a) GNU `as` REJECTS the imm64 form ("operand type mismatch for cmp")
+// and (b) even when both sides are registers it compares the raw bits as signed
+// ints, giving wrong results for negatives / NaN. `!=` has no runtime symbol
+// (handled separately via hexa_eq + hexa_truthy + xor, mirroring arm64).
+// Each helper returns a HexaVal-bool {TAG_BOOL, 0|1} in rax:rdx.
+fn _x86_hv_cmp_sym(op: string) -> string {
+    if op == "==" || op == "eq"  || op == "cmp_eq" { return "hexa_eq" }
+    if op == "<"  || op == "lt"  || op == "cmp_lt" { return "hexa_cmp_lt" }
+    if op == ">"  || op == "gt"  || op == "cmp_gt" { return "hexa_cmp_gt" }
+    if op == "<=" || op == "le"  || op == "cmp_le" { return "hexa_cmp_le" }
+    if op == ">=" || op == "ge"  || op == "cmp_ge" { return "hexa_cmp_ge" }
+    return ""
+}
+
+fn _x86_is_cmp_ne(op: string) -> bool {
+    return op == "!=" || op == "ne" || op == "cmp_ne"
+}
+
 // SETcc suffix for source comparison op. Returns "" if not a
 // comparison.
 fn _x86_setcc_suffix(op: string) -> string {
@@ -1368,6 +1393,70 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                                      "binop " + s.op + ": capture result payload"))
                 }
                 buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
+                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+                return buf
+            }
+
+            // Tag-aware ORDERED comparisons (< <= > >= ==): route through the
+            // runtime's tag-dispatching helper EXACTLY as arm64_darwin.hexa does
+            // (_hv_binop_sym). @root-cause-ok: the prior x86_64 path emitted a
+            // raw `cmp <reg>, <b>` + setcc on the PAYLOADS and hardcoded the
+            // result tag to TAG_BOOL. For a FLOAT operand whose payload is the
+            // 64-bit IEEE-754 BIT PATTERN that produced `cmp reg, <imm64>` which
+            // GNU `as` rejects outright ("operand type mismatch for cmp"), and
+            // even reg/reg it compared the float bits as signed integers (wrong
+            // for negatives / NaN). Same root-cause CLASS as the arithmetic
+            // tag-dispatch fix (#3483). The runtime helper inspects both
+            // operands' tags, performs an int- or IEEE-754-ordered compare
+            // accordingly, and returns a correctly-tagged HexaVal-bool
+            // {TAG_BOOL, 0|1} (rax:rdx). Box both args as full HexaVal pairs
+            // (a→rdi:rsi, b→rdx:rcx) so their carried tags reach the helper.
+            // NB: integer-only programs keep identical results (the helper takes
+            // the int path → same 0/1 bool); this repairs the float/mixed case
+            // the raw-int+imm64 model dropped. This block returns before the
+            // raw-setcc path below, which is now dead for these ops.
+            let _cmp_sym = _x86_hv_cmp_sym(s.op)
+            if len(_cmp_sym) > 0 {
+                buf = _x86_hv_box_arg(buf, s.args[0], st, rm, "rdi", "rsi", opts)
+                buf = _x86_hv_box_arg(buf, s.args[1], st, rm, "rdx", "rcx", opts)
+                buf.push(_x86_instr1("call", _x86_op_label(_cmp_sym),
+                                 "binop " + s.op + ": tag-dispatch " + _cmp_sym))
+                if dst.reg.name != "rdx" {
+                    buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                                     "binop " + s.op + ": capture bool payload"))
+                }
+                buf = _x86_store_tag_reg(buf, rm, s.dst.id, "rax")
+                buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
+                return buf
+            }
+
+            // Tag-aware `!=`: no runtime hexa_cmp_ne symbol exists, so mirror
+            // arm64_darwin.hexa — compute hexa_eq, take hexa_truthy of it, flip
+            // the low bit, and box as TAG_BOOL. @root-cause-ok: same class as
+            // above (the prior raw `cmp+setne` on float bits was both `as`-
+            // rejected for imm64 and semantically wrong). hexa_eq returns a
+            // HexaVal-bool in rax:rdx; hexa_truthy takes a HexaVal (rdi:rsi) and
+            // returns a C int (raw, in rax/eax).
+            if _x86_is_cmp_ne(s.op) {
+                buf = _x86_hv_box_arg(buf, s.args[0], st, rm, "rdi", "rsi", opts)
+                buf = _x86_hv_box_arg(buf, s.args[1], st, rm, "rdx", "rcx", opts)
+                buf.push(_x86_instr1("call", _x86_op_label("hexa_eq"),
+                                 "binop !=: tag-dispatch hexa_eq"))
+                // Move the HexaVal-bool result (rax:rdx) into hexa_truthy's arg
+                // pair (rdi:rsi) — order rdi←rax then rsi←rdx is clobber-safe.
+                buf.push(_x86_instr2("mov", _x86_op_reg("rdi"), _x86_op_reg("rax"),
+                                 "binop !=: eq.tag → truthy arg lo"))
+                buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), _x86_op_reg("rdx"),
+                                 "binop !=: eq.payload → truthy arg hi"))
+                buf.push(_x86_instr1("call", _x86_op_label("hexa_truthy"),
+                                 "binop !=: truthy(eq) → rax"))
+                buf.push(_x86_instr2("xor", _x86_op_reg("rax"), _x86_op_imm(1),
+                                 "binop !=: !truthy"))
+                if dst.reg.name != "rax" {
+                    buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
+                                     "binop !=: capture bool payload"))
+                }
+                buf = _x86_store_tag_imm(buf, rm, s.dst.id, 2) // TAG_BOOL
                 buf = _x86_emit_dst_writeback(buf, rm, s.dst.id)
                 return buf
             }
