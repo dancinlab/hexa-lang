@@ -162,9 +162,25 @@ if [ ! -f "$REPO/build/array_core_native.o" ]; then
 fi
 ARRAY_CORE_OBJ="$REPO/build/array_core_native.o"
 
+# ── RT-NATIVE MAP-R3: native array-core element object ──────────────────────
+# runtime_core.c's hexa_map_get delegate UNCONDITIONALLY to
+# rt_array_{get,set}_native (C `#else` dropped for the byte-decrease), so this
+# single-TU cc_native compile MUST link the native array seed object.
+MAP_CORE_OBJ=""
+MAP_SEED="$REPO/self/native/map_core_arm64-linux.s"
+if [ ! -f "$REPO/build/map_core_native.o" ] && [ -f "$MAP_SEED" ]; then
+    grep -vE '^// ' "$MAP_SEED" > "$WORK/map_seed.s" 2>/dev/null || cp "$MAP_SEED" "$WORK/map_seed.s"
+    $CC -c "$WORK/map_seed.s" -o "$REPO/build/map_core_native.o" 2>/dev/null \
+        && log "stage4: assembled build/map_core_native.o from $MAP_SEED"
+fi
+if [ ! -f "$REPO/build/map_core_native.o" ]; then
+    fail map "build/map_core_native.o missing (no arm64-linux seed); cc_native hexa_map_get undefined" 2
+fi
+MAP_CORE_OBJ="$REPO/build/map_core_native.o"
+
 # ── stage 4: gcc compile the native compiler (no -arch; native aarch64) ───────
 log "stage4: gcc compile -> cc_native"
-CL_ERR="$($CC $GCC_FLAGS -I self -I . "$WORK/ap_post.c" "$ARRAY_CORE_OBJ" -o "$WORK/cc_native" -lm -ldl 2>&1 | grep -iE 'error:|undefined' | head -10)"
+CL_ERR="$($CC $GCC_FLAGS -I self -I . "$WORK/ap_post.c" "$ARRAY_CORE_OBJ" "$MAP_CORE_OBJ" -o "$WORK/cc_native" -lm -ldl 2>&1 | grep -iE 'error:|undefined' | head -10)"
 if [ -n "$CL_ERR" ] || [ ! -x "$WORK/cc_native" ]; then
     echo "$CL_ERR" >&2
     fail gcc "cc_native compile/link failed"
