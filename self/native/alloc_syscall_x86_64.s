@@ -7,7 +7,7 @@
 //   enter runtime.a ONLY via this seed. RUN-proven (F-M5-GSLOT-VAL-DONE, exit 0).
 //   ABI: ELF x86_64.
 # hexa-lang emit pass — target=x86_64-linux-gnu
-# source: /tmp/regen_alloc_syscall.QmAZpJ/alloc-flat.hexa
+# source: /tmp/regen_alloc_syscall.fLDGUs/alloc-flat.hexa
 .intel_syntax noprefix
 .file 1 "self/rt/alloc.hexa"
 .text
@@ -25,7 +25,7 @@ target_is_linux:
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
     sub rsp, 16 # prologue: alloc spill frame
-.La3fa_target_is_linux_bb0:
+.L188d_target_is_linux_bb0:
     mov r10, 0 # __hx_target_os: 0 = linux
     mov rbx, r10 # leaf: payload → dst L0
     mov r11, 0 # materialize tag imm 0
@@ -62,7 +62,7 @@ target_is_darwin:
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
     sub rsp, 16 # prologue: alloc spill frame
-.La3fa_target_is_darwin_bb0:
+.L188d_target_is_darwin_bb0:
     mov r10, 0 # __hx_target_os: 0 = linux
     mov rbx, r10 # leaf: payload → dst L0
     mov r11, 0 # materialize tag imm 0
@@ -101,7 +101,7 @@ _sc0:
     sub rsp, 16 # prologue: alloc spill frame
     mov [rbp - 56], rdi # store tag L0
     mov rbx, rsi # ingress param payload
-.La3fa__sc0_bb0:
+.L188d__sc0_bb0:
     mov rax, rbx # hv payload
     syscall # __hx_syscall0: Linux syscall
     mov r10, rax # __hx_syscall0: r10 = result
@@ -137,7 +137,7 @@ _sc1:
     mov rbx, rsi # ingress param payload
     mov [rbp - 64], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.La3fa__sc1_bb0:
+.L188d__sc1_bb0:
     mov rdi, r12 # hv payload
     mov rsi, 0 # hv payload
     mov rdx, 0 # hv payload
@@ -181,7 +181,7 @@ _sc2:
     mov r12, rcx # ingress param payload
     mov [rbp - 72], r8 # store tag L2
     mov r13, r9 # ingress param payload
-.La3fa__sc2_bb0:
+.L188d__sc2_bb0:
     mov rdi, r12 # hv payload
     mov rsi, r13 # hv payload
     mov rdx, 0 # hv payload
@@ -229,7 +229,7 @@ _sc3:
     mov [rbp - 80], r10 # store tag L3
     mov r10, [rbp + 24] # ingress stack param 3 payload
     mov r14, r10 # ingress stack param payload
-.La3fa__sc3_bb0:
+.L188d__sc3_bb0:
     mov rdi, r12 # hv payload
     mov rsi, r13 # hv payload
     mov rdx, r14 # hv payload
@@ -281,7 +281,7 @@ _sc4:
     mov [rbp - 96], r10 # store tag L4
     mov r10, [rbp + 40] # ingress stack param 4 payload
     mov r15, r10 # ingress stack param payload
-.La3fa__sc4_bb0:
+.L188d__sc4_bb0:
     mov rdi, r12 # hv payload
     mov rsi, r13 # hv payload
     mov rdx, r14 # hv payload
@@ -343,7 +343,7 @@ _sc6:
     mov [rbp - 128], r10 # store tag L6
     mov r10, [rbp + 72] # ingress stack param 6 payload
     mov [rbp - 64], r10 # spill L6 to slot
-.La3fa__sc6_bb0:
+.L188d__sc6_bb0:
     mov rdi, r12 # hv payload
     mov rsi, r13 # hv payload
     mov rdx, r14 # hv payload
@@ -384,7 +384,7 @@ SYS_LINUX_READ:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_READ_bb0:
+.L188d_SYS_LINUX_READ_bb0:
     mov rdx, 0 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -408,7 +408,7 @@ SYS_LINUX_WRITE:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_WRITE_bb0:
+.L188d_SYS_LINUX_WRITE_bb0:
     mov rdx, 1 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -432,7 +432,7 @@ SYS_LINUX_OPEN:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_OPEN_bb0:
+.L188d_SYS_LINUX_OPEN_bb0:
     mov rdx, 2 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -456,7 +456,7 @@ SYS_LINUX_CLOSE:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_CLOSE_bb0:
+.L188d_SYS_LINUX_CLOSE_bb0:
     mov rdx, 3 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -480,7 +480,7 @@ SYS_LINUX_STAT:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_STAT_bb0:
+.L188d_SYS_LINUX_STAT_bb0:
     mov rdx, 4 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -504,7 +504,7 @@ SYS_LINUX_FSTAT:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_FSTAT_bb0:
+.L188d_SYS_LINUX_FSTAT_bb0:
     mov rdx, 5 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -528,7 +528,7 @@ SYS_LINUX_LSEEK:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_LSEEK_bb0:
+.L188d_SYS_LINUX_LSEEK_bb0:
     mov rdx, 8 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -552,7 +552,7 @@ SYS_LINUX_MMAP:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_MMAP_bb0:
+.L188d_SYS_LINUX_MMAP_bb0:
     mov rdx, 9 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -576,7 +576,7 @@ SYS_LINUX_MUNMAP:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_MUNMAP_bb0:
+.L188d_SYS_LINUX_MUNMAP_bb0:
     mov rdx, 11 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -600,7 +600,7 @@ SYS_LINUX_BRK:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_BRK_bb0:
+.L188d_SYS_LINUX_BRK_bb0:
     mov rdx, 12 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -624,7 +624,7 @@ SYS_LINUX_IOCTL:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_IOCTL_bb0:
+.L188d_SYS_LINUX_IOCTL_bb0:
     mov rdx, 16 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -648,7 +648,7 @@ SYS_LINUX_PIPE:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_PIPE_bb0:
+.L188d_SYS_LINUX_PIPE_bb0:
     mov rdx, 22 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -672,7 +672,7 @@ SYS_LINUX_NANOSLEEP:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_NANOSLEEP_bb0:
+.L188d_SYS_LINUX_NANOSLEEP_bb0:
     mov rdx, 35 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -696,7 +696,7 @@ SYS_LINUX_FORK:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_FORK_bb0:
+.L188d_SYS_LINUX_FORK_bb0:
     mov rdx, 57 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -720,7 +720,7 @@ SYS_LINUX_EXECVE:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_EXECVE_bb0:
+.L188d_SYS_LINUX_EXECVE_bb0:
     mov rdx, 59 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -744,7 +744,7 @@ SYS_LINUX_WAIT4:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_WAIT4_bb0:
+.L188d_SYS_LINUX_WAIT4_bb0:
     mov rdx, 61 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -768,7 +768,7 @@ SYS_LINUX_DUP2:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_DUP2_bb0:
+.L188d_SYS_LINUX_DUP2_bb0:
     mov rdx, 33 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -792,7 +792,7 @@ SYS_LINUX_GETDENTS64:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_GETDENTS64_bb0:
+.L188d_SYS_LINUX_GETDENTS64_bb0:
     mov rdx, 217 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -816,7 +816,7 @@ SYS_LINUX_CLOCK_GETTIME:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_CLOCK_GETTIME_bb0:
+.L188d_SYS_LINUX_CLOCK_GETTIME_bb0:
     mov rdx, 228 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -840,7 +840,7 @@ SYS_LINUX_EXIT_GROUP:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_EXIT_GROUP_bb0:
+.L188d_SYS_LINUX_EXIT_GROUP_bb0:
     mov rdx, 231 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -864,7 +864,7 @@ SYS_LINUX_UNLINKAT:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_UNLINKAT_bb0:
+.L188d_SYS_LINUX_UNLINKAT_bb0:
     mov rdx, 263 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -888,7 +888,7 @@ SYS_LINUX_MKDIRAT:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_MKDIRAT_bb0:
+.L188d_SYS_LINUX_MKDIRAT_bb0:
     mov rdx, 258 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -912,7 +912,7 @@ SYS_LINUX_GETRANDOM:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_LINUX_GETRANDOM_bb0:
+.L188d_SYS_LINUX_GETRANDOM_bb0:
     mov rdx, 318 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -936,7 +936,7 @@ SYS_DARWIN_EXIT:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_DARWIN_EXIT_bb0:
+.L188d_SYS_DARWIN_EXIT_bb0:
     mov rdx, 33554433 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -960,7 +960,7 @@ SYS_DARWIN_FORK:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_DARWIN_FORK_bb0:
+.L188d_SYS_DARWIN_FORK_bb0:
     mov rdx, 33554434 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -984,7 +984,7 @@ SYS_DARWIN_READ:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_DARWIN_READ_bb0:
+.L188d_SYS_DARWIN_READ_bb0:
     mov rdx, 33554435 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1008,7 +1008,7 @@ SYS_DARWIN_WRITE:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_DARWIN_WRITE_bb0:
+.L188d_SYS_DARWIN_WRITE_bb0:
     mov rdx, 33554436 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1032,7 +1032,7 @@ SYS_DARWIN_OPEN:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_DARWIN_OPEN_bb0:
+.L188d_SYS_DARWIN_OPEN_bb0:
     mov rdx, 33554437 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1056,7 +1056,7 @@ SYS_DARWIN_CLOSE:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_DARWIN_CLOSE_bb0:
+.L188d_SYS_DARWIN_CLOSE_bb0:
     mov rdx, 33554438 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1080,7 +1080,7 @@ SYS_DARWIN_WAIT4:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_DARWIN_WAIT4_bb0:
+.L188d_SYS_DARWIN_WAIT4_bb0:
     mov rdx, 33554439 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1104,7 +1104,7 @@ SYS_DARWIN_UNLINK:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_DARWIN_UNLINK_bb0:
+.L188d_SYS_DARWIN_UNLINK_bb0:
     mov rdx, 33554442 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1128,7 +1128,7 @@ SYS_DARWIN_LSEEK:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_DARWIN_LSEEK_bb0:
+.L188d_SYS_DARWIN_LSEEK_bb0:
     mov rdx, 33554631 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1152,7 +1152,7 @@ SYS_DARWIN_EXECVE:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_DARWIN_EXECVE_bb0:
+.L188d_SYS_DARWIN_EXECVE_bb0:
     mov rdx, 33554491 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1176,7 +1176,7 @@ SYS_DARWIN_MUNMAP:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_DARWIN_MUNMAP_bb0:
+.L188d_SYS_DARWIN_MUNMAP_bb0:
     mov rdx, 33554505 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1200,7 +1200,7 @@ SYS_DARWIN_MMAP:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_DARWIN_MMAP_bb0:
+.L188d_SYS_DARWIN_MMAP_bb0:
     mov rdx, 33554629 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1224,7 +1224,7 @@ SYS_DARWIN_FSTAT64:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_DARWIN_FSTAT64_bb0:
+.L188d_SYS_DARWIN_FSTAT64_bb0:
     mov rdx, 33554621 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1248,7 +1248,7 @@ SYS_DARWIN_GETDIRENTRIES:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_DARWIN_GETDIRENTRIES_bb0:
+.L188d_SYS_DARWIN_GETDIRENTRIES_bb0:
     mov rdx, 33554772 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1272,7 +1272,7 @@ SYS_DARWIN_GETDIRENTRIES64:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_DARWIN_GETDIRENTRIES64_bb0:
+.L188d_SYS_DARWIN_GETDIRENTRIES64_bb0:
     mov rdx, 33554776 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1296,7 +1296,7 @@ SYS_DARWIN_MKDIR:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_DARWIN_MKDIR_bb0:
+.L188d_SYS_DARWIN_MKDIR_bb0:
     mov rdx, 33554568 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1320,7 +1320,7 @@ SYS_DARWIN_NANOSLEEP:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_DARWIN_NANOSLEEP_bb0:
+.L188d_SYS_DARWIN_NANOSLEEP_bb0:
     mov rdx, 33554629 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1344,7 +1344,7 @@ SYS_DARWIN_CLOCK_GETTIME:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_SYS_DARWIN_CLOCK_GETTIME_bb0:
+.L188d_SYS_DARWIN_CLOCK_GETTIME_bb0:
     mov rdx, 33558008 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -1375,14 +1375,14 @@ sys_read:
     mov r12, rcx # ingress param payload
     mov [rbp - 104], r8 # store tag L2
     mov r13, r9 # ingress param payload
-.La3fa_sys_read_bb0:
+.L188d_sys_read_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 112], rax # store tag L3
     mov r14, rdx # hv: unbox user-call result payload
     test r14, r14 # br_cond test
-    jz .La3fa_sys_read_bb2 # jump-if-zero -> else
-    jmp .La3fa_sys_read_bb1 # jump -> then
-.La3fa_sys_read_bb1:
+    jz .L188d_sys_read_bb2 # jump-if-zero -> else
+    jmp .L188d_sys_read_bb1 # jump -> then
+.L188d_sys_read_bb1:
     call SYS_LINUX_READ # call SYS_LINUX_READ
     mov [rbp - 128], rax # store tag L5
     mov r10, rdx # hv: unbox user-call result payload
@@ -1416,7 +1416,7 @@ sys_read:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_sys_read_bb2:
+.L188d_sys_read_bb2:
     call SYS_DARWIN_READ # call SYS_DARWIN_READ
     mov [rbp - 144], rax # store tag L7
     mov r10, rdx # hv: unbox user-call result payload
@@ -1470,14 +1470,14 @@ sys_write:
     mov r12, rcx # ingress param payload
     mov [rbp - 104], r8 # store tag L2
     mov r13, r9 # ingress param payload
-.La3fa_sys_write_bb0:
+.L188d_sys_write_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 112], rax # store tag L3
     mov r14, rdx # hv: unbox user-call result payload
     test r14, r14 # br_cond test
-    jz .La3fa_sys_write_bb2 # jump-if-zero -> else
-    jmp .La3fa_sys_write_bb1 # jump -> then
-.La3fa_sys_write_bb1:
+    jz .L188d_sys_write_bb2 # jump-if-zero -> else
+    jmp .L188d_sys_write_bb1 # jump -> then
+.L188d_sys_write_bb1:
     call SYS_LINUX_WRITE # call SYS_LINUX_WRITE
     mov [rbp - 128], rax # store tag L5
     mov r10, rdx # hv: unbox user-call result payload
@@ -1511,7 +1511,7 @@ sys_write:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_sys_write_bb2:
+.L188d_sys_write_bb2:
     call SYS_DARWIN_WRITE # call SYS_DARWIN_WRITE
     mov [rbp - 144], rax # store tag L7
     mov r10, rdx # hv: unbox user-call result payload
@@ -1565,14 +1565,14 @@ sys_open:
     mov r12, rcx # ingress param payload
     mov [rbp - 104], r8 # store tag L2
     mov r13, r9 # ingress param payload
-.La3fa_sys_open_bb0:
+.L188d_sys_open_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 112], rax # store tag L3
     mov r14, rdx # hv: unbox user-call result payload
     test r14, r14 # br_cond test
-    jz .La3fa_sys_open_bb2 # jump-if-zero -> else
-    jmp .La3fa_sys_open_bb1 # jump -> then
-.La3fa_sys_open_bb1:
+    jz .L188d_sys_open_bb2 # jump-if-zero -> else
+    jmp .L188d_sys_open_bb1 # jump -> then
+.L188d_sys_open_bb1:
     call SYS_LINUX_OPEN # call SYS_LINUX_OPEN
     mov [rbp - 128], rax # store tag L5
     mov r10, rdx # hv: unbox user-call result payload
@@ -1606,7 +1606,7 @@ sys_open:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_sys_open_bb2:
+.L188d_sys_open_bb2:
     call SYS_DARWIN_OPEN # call SYS_DARWIN_OPEN
     mov [rbp - 144], rax # store tag L7
     mov r10, rdx # hv: unbox user-call result payload
@@ -1656,14 +1656,14 @@ sys_close:
     sub rsp, 80 # prologue: alloc spill frame
     mov [rbp - 72], rdi # store tag L0
     mov rbx, rsi # ingress param payload
-.La3fa_sys_close_bb0:
+.L188d_sys_close_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 80], rax # store tag L1
     mov r12, rdx # hv: unbox user-call result payload
     test r12, r12 # br_cond test
-    jz .La3fa_sys_close_bb2 # jump-if-zero -> else
-    jmp .La3fa_sys_close_bb1 # jump -> then
-.La3fa_sys_close_bb1:
+    jz .L188d_sys_close_bb2 # jump-if-zero -> else
+    jmp .L188d_sys_close_bb1 # jump -> then
+.L188d_sys_close_bb1:
     call SYS_LINUX_CLOSE # call SYS_LINUX_CLOSE
     mov [rbp - 96], rax # store tag L3
     mov r14, rdx # hv: unbox user-call result payload
@@ -1685,7 +1685,7 @@ sys_close:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_sys_close_bb2:
+.L188d_sys_close_bb2:
     call SYS_DARWIN_CLOSE # call SYS_DARWIN_CLOSE
     mov [rbp - 112], rax # store tag L5
     mov r10, rdx # hv: unbox user-call result payload
@@ -1731,14 +1731,14 @@ sys_lseek:
     mov r12, rcx # ingress param payload
     mov [rbp - 104], r8 # store tag L2
     mov r13, r9 # ingress param payload
-.La3fa_sys_lseek_bb0:
+.L188d_sys_lseek_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 112], rax # store tag L3
     mov r14, rdx # hv: unbox user-call result payload
     test r14, r14 # br_cond test
-    jz .La3fa_sys_lseek_bb2 # jump-if-zero -> else
-    jmp .La3fa_sys_lseek_bb1 # jump -> then
-.La3fa_sys_lseek_bb1:
+    jz .L188d_sys_lseek_bb2 # jump-if-zero -> else
+    jmp .L188d_sys_lseek_bb1 # jump -> then
+.L188d_sys_lseek_bb1:
     call SYS_LINUX_LSEEK # call SYS_LINUX_LSEEK
     mov [rbp - 128], rax # store tag L5
     mov r10, rdx # hv: unbox user-call result payload
@@ -1772,7 +1772,7 @@ sys_lseek:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_sys_lseek_bb2:
+.L188d_sys_lseek_bb2:
     call SYS_DARWIN_LSEEK # call SYS_DARWIN_LSEEK
     mov [rbp - 144], rax # store tag L7
     mov r10, rdx # hv: unbox user-call result payload
@@ -1822,14 +1822,14 @@ sys_unlink:
     sub rsp, 80 # prologue: alloc spill frame
     mov [rbp - 72], rdi # store tag L0
     mov rbx, rsi # ingress param payload
-.La3fa_sys_unlink_bb0:
+.L188d_sys_unlink_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 80], rax # store tag L1
     mov r12, rdx # hv: unbox user-call result payload
     test r12, r12 # br_cond test
-    jz .La3fa_sys_unlink_bb2 # jump-if-zero -> else
-    jmp .La3fa_sys_unlink_bb1 # jump -> then
-.La3fa_sys_unlink_bb1:
+    jz .L188d_sys_unlink_bb2 # jump-if-zero -> else
+    jmp .L188d_sys_unlink_bb1 # jump -> then
+.L188d_sys_unlink_bb1:
     call SYS_LINUX_UNLINKAT # call SYS_LINUX_UNLINKAT
     mov [rbp - 96], rax # store tag L3
     mov r14, rdx # hv: unbox user-call result payload
@@ -1859,7 +1859,7 @@ sys_unlink:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_sys_unlink_bb2:
+.L188d_sys_unlink_bb2:
     call SYS_DARWIN_UNLINK # call SYS_DARWIN_UNLINK
     mov [rbp - 112], rax # store tag L5
     mov r10, rdx # hv: unbox user-call result payload
@@ -1903,14 +1903,14 @@ sys_mkdir:
     mov rbx, rsi # ingress param payload
     mov [rbp - 88], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.La3fa_sys_mkdir_bb0:
+.L188d_sys_mkdir_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 96], rax # store tag L2
     mov r13, rdx # hv: unbox user-call result payload
     test r13, r13 # br_cond test
-    jz .La3fa_sys_mkdir_bb2 # jump-if-zero -> else
-    jmp .La3fa_sys_mkdir_bb1 # jump -> then
-.La3fa_sys_mkdir_bb1:
+    jz .L188d_sys_mkdir_bb2 # jump-if-zero -> else
+    jmp .L188d_sys_mkdir_bb1 # jump -> then
+.L188d_sys_mkdir_bb1:
     call SYS_LINUX_MKDIRAT # call SYS_LINUX_MKDIRAT
     mov [rbp - 112], rax # store tag L4
     mov r15, rdx # hv: unbox user-call result payload
@@ -1942,7 +1942,7 @@ sys_mkdir:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_sys_mkdir_bb2:
+.L188d_sys_mkdir_bb2:
     call SYS_DARWIN_MKDIR # call SYS_DARWIN_MKDIR
     mov [rbp - 128], rax # store tag L6
     mov r10, rdx # hv: unbox user-call result payload
@@ -2002,16 +2002,16 @@ sys_mmap:
     mov [rbp - 152], r10 # store tag L5
     mov r10, [rbp + 56] # ingress stack param 5 payload
     mov [rbp - 56], r10 # spill L5 to slot
-.La3fa_sys_mmap_bb0:
+.L188d_sys_mmap_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 160], rax # store tag L6
     mov r10, rdx # hv: unbox user-call result payload
     mov [rbp - 64], r10 # spill L6 to slot
     mov r10, [rbp - 64] # reload L6 from spill slot
     test r10, r10 # br_cond test
-    jz .La3fa_sys_mmap_bb2 # jump-if-zero -> else
-    jmp .La3fa_sys_mmap_bb1 # jump -> then
-.La3fa_sys_mmap_bb1:
+    jz .L188d_sys_mmap_bb2 # jump-if-zero -> else
+    jmp .L188d_sys_mmap_bb1 # jump -> then
+.L188d_sys_mmap_bb1:
     call SYS_LINUX_MMAP # call SYS_LINUX_MMAP
     mov [rbp - 176], rax # store tag L8
     mov r10, rdx # hv: unbox user-call result payload
@@ -2058,7 +2058,7 @@ sys_mmap:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_sys_mmap_bb2:
+.L188d_sys_mmap_bb2:
     call SYS_DARWIN_MMAP # call SYS_DARWIN_MMAP
     mov [rbp - 192], rax # store tag L10
     mov r10, rdx # hv: unbox user-call result payload
@@ -2123,14 +2123,14 @@ sys_munmap:
     mov rbx, rsi # ingress param payload
     mov [rbp - 88], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.La3fa_sys_munmap_bb0:
+.L188d_sys_munmap_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 96], rax # store tag L2
     mov r13, rdx # hv: unbox user-call result payload
     test r13, r13 # br_cond test
-    jz .La3fa_sys_munmap_bb2 # jump-if-zero -> else
-    jmp .La3fa_sys_munmap_bb1 # jump -> then
-.La3fa_sys_munmap_bb1:
+    jz .L188d_sys_munmap_bb2 # jump-if-zero -> else
+    jmp .L188d_sys_munmap_bb1 # jump -> then
+.L188d_sys_munmap_bb1:
     call SYS_LINUX_MUNMAP # call SYS_LINUX_MUNMAP
     mov [rbp - 112], rax # store tag L4
     mov r15, rdx # hv: unbox user-call result payload
@@ -2156,7 +2156,7 @@ sys_munmap:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_sys_munmap_bb2:
+.L188d_sys_munmap_bb2:
     call SYS_DARWIN_MUNMAP # call SYS_DARWIN_MUNMAP
     mov [rbp - 128], rax # store tag L6
     mov r10, rdx # hv: unbox user-call result payload
@@ -2200,14 +2200,14 @@ sys_exit:
     sub rsp, 80 # prologue: alloc spill frame
     mov [rbp - 72], rdi # store tag L0
     mov rbx, rsi # ingress param payload
-.La3fa_sys_exit_bb0:
+.L188d_sys_exit_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 80], rax # store tag L1
     mov r12, rdx # hv: unbox user-call result payload
     test r12, r12 # br_cond test
-    jz .La3fa_sys_exit_bb2 # jump-if-zero -> else
-    jmp .La3fa_sys_exit_bb1 # jump -> then
-.La3fa_sys_exit_bb1:
+    jz .L188d_sys_exit_bb2 # jump-if-zero -> else
+    jmp .L188d_sys_exit_bb1 # jump -> then
+.L188d_sys_exit_bb1:
     call SYS_LINUX_EXIT_GROUP # call SYS_LINUX_EXIT_GROUP
     mov [rbp - 96], rax # store tag L3
     mov r14, rdx # hv: unbox user-call result payload
@@ -2229,7 +2229,7 @@ sys_exit:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_sys_exit_bb2:
+.L188d_sys_exit_bb2:
     call SYS_DARWIN_EXIT # call SYS_DARWIN_EXIT
     mov [rbp - 112], rax # store tag L5
     mov r10, rdx # hv: unbox user-call result payload
@@ -2275,14 +2275,14 @@ sys_getrandom:
     mov r12, rcx # ingress param payload
     mov [rbp - 152], r8 # store tag L2
     mov r13, r9 # ingress param payload
-.La3fa_sys_getrandom_bb0:
+.L188d_sys_getrandom_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 160], rax # store tag L3
     mov r14, rdx # hv: unbox user-call result payload
     test r14, r14 # br_cond test
-    jz .La3fa_sys_getrandom_bb2 # jump-if-zero -> else
-    jmp .La3fa_sys_getrandom_bb1 # jump -> then
-.La3fa_sys_getrandom_bb1:
+    jz .L188d_sys_getrandom_bb2 # jump-if-zero -> else
+    jmp .L188d_sys_getrandom_bb1 # jump -> then
+.L188d_sys_getrandom_bb1:
     call SYS_LINUX_GETRANDOM # call SYS_LINUX_GETRANDOM
     mov [rbp - 176], rax # store tag L5
     mov r10, rdx # hv: unbox user-call result payload
@@ -2316,7 +2316,7 @@ sys_getrandom:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_sys_getrandom_bb2:
+.L188d_sys_getrandom_bb2:
     lea r10, [rip+.LCstr0] # hv payload: &str .LCstr0
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 192], r11 # store tag L7
@@ -2349,9 +2349,9 @@ sys_getrandom:
     mov [rbp - 96], r10 # spill L10 to slot
     mov r10, [rbp - 96] # reload L10 from spill slot
     test r10, r10 # br_cond test
-    jz .La3fa_sys_getrandom_bb4 # jump-if-zero -> else
-    jmp .La3fa_sys_getrandom_bb3 # jump -> then
-.La3fa_sys_getrandom_bb3:
+    jz .L188d_sys_getrandom_bb4 # jump-if-zero -> else
+    jmp .L188d_sys_getrandom_bb3 # jump -> then
+.L188d_sys_getrandom_bb3:
     mov rdx, [rbp - 88] # reload L9 from spill slot
     mov rdx, rdx # hv arg payload
     mov rax, [rbp - 208] # tag L9 from tag-slot
@@ -2364,7 +2364,7 @@ sys_getrandom:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_sys_getrandom_bb4:
+.L188d_sys_getrandom_bb4:
     mov rsi, [rbp - 88] # reload L9 from spill slot
     mov rsi, rsi # hv arg payload
     mov rdi, [rbp - 208] # tag L9 from tag-slot
@@ -2418,14 +2418,14 @@ sys_clock_gettime:
     mov rbx, rsi # ingress param payload
     mov [rbp - 88], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.La3fa_sys_clock_gettime_bb0:
+.L188d_sys_clock_gettime_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 96], rax # store tag L2
     mov r13, rdx # hv: unbox user-call result payload
     test r13, r13 # br_cond test
-    jz .La3fa_sys_clock_gettime_bb2 # jump-if-zero -> else
-    jmp .La3fa_sys_clock_gettime_bb1 # jump -> then
-.La3fa_sys_clock_gettime_bb1:
+    jz .L188d_sys_clock_gettime_bb2 # jump-if-zero -> else
+    jmp .L188d_sys_clock_gettime_bb1 # jump -> then
+.L188d_sys_clock_gettime_bb1:
     call SYS_LINUX_CLOCK_GETTIME # call SYS_LINUX_CLOCK_GETTIME
     mov [rbp - 112], rax # store tag L4
     mov r15, rdx # hv: unbox user-call result payload
@@ -2451,7 +2451,7 @@ sys_clock_gettime:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_sys_clock_gettime_bb2:
+.L188d_sys_clock_gettime_bb2:
     call SYS_DARWIN_CLOCK_GETTIME # call SYS_DARWIN_CLOCK_GETTIME
     mov [rbp - 128], rax # store tag L6
     mov r10, rdx # hv: unbox user-call result payload
@@ -2493,14 +2493,14 @@ sys_fork:
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
     sub rsp, 64 # prologue: alloc spill frame
-.La3fa_sys_fork_bb0:
+.L188d_sys_fork_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 64], rax # store tag L0
     mov rbx, rdx # hv: unbox user-call result payload
     test rbx, rbx # br_cond test
-    jz .La3fa_sys_fork_bb2 # jump-if-zero -> else
-    jmp .La3fa_sys_fork_bb1 # jump -> then
-.La3fa_sys_fork_bb1:
+    jz .L188d_sys_fork_bb2 # jump-if-zero -> else
+    jmp .L188d_sys_fork_bb1 # jump -> then
+.L188d_sys_fork_bb1:
     call SYS_LINUX_FORK # call SYS_LINUX_FORK
     mov [rbp - 80], rax # store tag L2
     mov r13, rdx # hv: unbox user-call result payload
@@ -2520,7 +2520,7 @@ sys_fork:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_sys_fork_bb2:
+.L188d_sys_fork_bb2:
     call SYS_DARWIN_FORK # call SYS_DARWIN_FORK
     mov [rbp - 96], rax # store tag L4
     mov r15, rdx # hv: unbox user-call result payload
@@ -2562,14 +2562,14 @@ sys_execve:
     mov r12, rcx # ingress param payload
     mov [rbp - 104], r8 # store tag L2
     mov r13, r9 # ingress param payload
-.La3fa_sys_execve_bb0:
+.L188d_sys_execve_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 112], rax # store tag L3
     mov r14, rdx # hv: unbox user-call result payload
     test r14, r14 # br_cond test
-    jz .La3fa_sys_execve_bb2 # jump-if-zero -> else
-    jmp .La3fa_sys_execve_bb1 # jump -> then
-.La3fa_sys_execve_bb1:
+    jz .L188d_sys_execve_bb2 # jump-if-zero -> else
+    jmp .L188d_sys_execve_bb1 # jump -> then
+.L188d_sys_execve_bb1:
     call SYS_LINUX_EXECVE # call SYS_LINUX_EXECVE
     mov [rbp - 128], rax # store tag L5
     mov r10, rdx # hv: unbox user-call result payload
@@ -2603,7 +2603,7 @@ sys_execve:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_sys_execve_bb2:
+.L188d_sys_execve_bb2:
     call SYS_DARWIN_EXECVE # call SYS_DARWIN_EXECVE
     mov [rbp - 144], rax # store tag L7
     mov r10, rdx # hv: unbox user-call result payload
@@ -2661,14 +2661,14 @@ sys_wait4:
     mov [rbp - 120], r10 # store tag L3
     mov r10, [rbp + 24] # ingress stack param 3 payload
     mov r14, r10 # ingress stack param payload
-.La3fa_sys_wait4_bb0:
+.L188d_sys_wait4_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 128], rax # store tag L4
     mov r15, rdx # hv: unbox user-call result payload
     test r15, r15 # br_cond test
-    jz .La3fa_sys_wait4_bb2 # jump-if-zero -> else
-    jmp .La3fa_sys_wait4_bb1 # jump -> then
-.La3fa_sys_wait4_bb1:
+    jz .L188d_sys_wait4_bb2 # jump-if-zero -> else
+    jmp .L188d_sys_wait4_bb1 # jump -> then
+.L188d_sys_wait4_bb1:
     call SYS_LINUX_WAIT4 # call SYS_LINUX_WAIT4
     mov [rbp - 144], rax # store tag L6
     mov r10, rdx # hv: unbox user-call result payload
@@ -2706,7 +2706,7 @@ sys_wait4:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_sys_wait4_bb2:
+.L188d_sys_wait4_bb2:
     call SYS_DARWIN_WAIT4 # call SYS_DARWIN_WAIT4
     mov [rbp - 160], rax # store tag L8
     mov r10, rdx # hv: unbox user-call result payload
@@ -2760,14 +2760,14 @@ sys_pipe:
     sub rsp, 48 # prologue: alloc spill frame
     mov [rbp - 56], rdi # store tag L0
     mov rbx, rsi # ingress param payload
-.La3fa_sys_pipe_bb0:
+.L188d_sys_pipe_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 64], rax # store tag L1
     mov r12, rdx # hv: unbox user-call result payload
     test r12, r12 # br_cond test
-    jz .La3fa_sys_pipe_bb2 # jump-if-zero -> else
-    jmp .La3fa_sys_pipe_bb1 # jump -> then
-.La3fa_sys_pipe_bb1:
+    jz .L188d_sys_pipe_bb2 # jump-if-zero -> else
+    jmp .L188d_sys_pipe_bb1 # jump -> then
+.L188d_sys_pipe_bb1:
     call SYS_LINUX_PIPE # call SYS_LINUX_PIPE
     mov [rbp - 80], rax # store tag L3
     mov r14, rdx # hv: unbox user-call result payload
@@ -2789,7 +2789,7 @@ sys_pipe:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_sys_pipe_bb2:
+.L188d_sys_pipe_bb2:
     mov rdx, -1 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 48 # epilogue: free spill frame
@@ -2819,14 +2819,14 @@ sys_dup2:
     mov rbx, rsi # ingress param payload
     mov [rbp - 72], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.La3fa_sys_dup2_bb0:
+.L188d_sys_dup2_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 80], rax # store tag L2
     mov r13, rdx # hv: unbox user-call result payload
     test r13, r13 # br_cond test
-    jz .La3fa_sys_dup2_bb2 # jump-if-zero -> else
-    jmp .La3fa_sys_dup2_bb1 # jump -> then
-.La3fa_sys_dup2_bb1:
+    jz .L188d_sys_dup2_bb2 # jump-if-zero -> else
+    jmp .L188d_sys_dup2_bb1 # jump -> then
+.L188d_sys_dup2_bb1:
     call SYS_LINUX_DUP2 # call SYS_LINUX_DUP2
     mov [rbp - 96], rax # store tag L4
     mov r15, rdx # hv: unbox user-call result payload
@@ -2852,7 +2852,7 @@ sys_dup2:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_sys_dup2_bb2:
+.L188d_sys_dup2_bb2:
     mov rdx, -1 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 64 # epilogue: free spill frame
@@ -2882,14 +2882,14 @@ sys_nanosleep:
     mov rbx, rsi # ingress param payload
     mov [rbp - 88], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.La3fa_sys_nanosleep_bb0:
+.L188d_sys_nanosleep_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 96], rax # store tag L2
     mov r13, rdx # hv: unbox user-call result payload
     test r13, r13 # br_cond test
-    jz .La3fa_sys_nanosleep_bb2 # jump-if-zero -> else
-    jmp .La3fa_sys_nanosleep_bb1 # jump -> then
-.La3fa_sys_nanosleep_bb1:
+    jz .L188d_sys_nanosleep_bb2 # jump-if-zero -> else
+    jmp .L188d_sys_nanosleep_bb1 # jump -> then
+.L188d_sys_nanosleep_bb1:
     call SYS_LINUX_NANOSLEEP # call SYS_LINUX_NANOSLEEP
     mov [rbp - 112], rax # store tag L4
     mov r15, rdx # hv: unbox user-call result payload
@@ -2915,7 +2915,7 @@ sys_nanosleep:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_sys_nanosleep_bb2:
+.L188d_sys_nanosleep_bb2:
     call SYS_DARWIN_NANOSLEEP # call SYS_DARWIN_NANOSLEEP
     mov [rbp - 128], rax # store tag L6
     mov r10, rdx # hv: unbox user-call result payload
@@ -2956,7 +2956,7 @@ O_RDONLY:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_O_RDONLY_bb0:
+.L188d_O_RDONLY_bb0:
     mov rdx, 0 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -2980,7 +2980,7 @@ O_WRONLY:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_O_WRONLY_bb0:
+.L188d_O_WRONLY_bb0:
     mov rdx, 1 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -3004,7 +3004,7 @@ O_RDWR:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_O_RDWR_bb0:
+.L188d_O_RDWR_bb0:
     mov rdx, 2 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -3028,7 +3028,7 @@ O_CREAT_LINUX:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_O_CREAT_LINUX_bb0:
+.L188d_O_CREAT_LINUX_bb0:
     mov rdx, 64 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -3052,7 +3052,7 @@ O_APPEND_LINUX:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_O_APPEND_LINUX_bb0:
+.L188d_O_APPEND_LINUX_bb0:
     mov rdx, 1024 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -3076,7 +3076,7 @@ O_TRUNC_LINUX:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_O_TRUNC_LINUX_bb0:
+.L188d_O_TRUNC_LINUX_bb0:
     mov rdx, 512 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -3100,7 +3100,7 @@ O_CREAT_DARWIN:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_O_CREAT_DARWIN_bb0:
+.L188d_O_CREAT_DARWIN_bb0:
     mov rdx, 512 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -3124,7 +3124,7 @@ O_APPEND_DARWIN:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_O_APPEND_DARWIN_bb0:
+.L188d_O_APPEND_DARWIN_bb0:
     mov rdx, 8 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -3148,7 +3148,7 @@ O_TRUNC_DARWIN:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_O_TRUNC_DARWIN_bb0:
+.L188d_O_TRUNC_DARWIN_bb0:
     mov rdx, 1024 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -3173,14 +3173,14 @@ flag_o_creat:
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
     sub rsp, 32 # prologue: alloc spill frame
-.La3fa_flag_o_creat_bb0:
+.L188d_flag_o_creat_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 56], rax # store tag L0
     mov rbx, rdx # hv: unbox user-call result payload
     test rbx, rbx # br_cond test
-    jz .La3fa_flag_o_creat_bb2 # jump-if-zero -> else
-    jmp .La3fa_flag_o_creat_bb1 # jump -> then
-.La3fa_flag_o_creat_bb1:
+    jz .L188d_flag_o_creat_bb2 # jump-if-zero -> else
+    jmp .L188d_flag_o_creat_bb1 # jump -> then
+.L188d_flag_o_creat_bb1:
     call O_CREAT_LINUX # call O_CREAT_LINUX
     mov [rbp - 72], rax # store tag L2
     mov r13, rdx # hv: unbox user-call result payload
@@ -3195,7 +3195,7 @@ flag_o_creat:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_flag_o_creat_bb2:
+.L188d_flag_o_creat_bb2:
     call O_CREAT_DARWIN # call O_CREAT_DARWIN
     mov [rbp - 80], rax # store tag L3
     mov r14, rdx # hv: unbox user-call result payload
@@ -3224,14 +3224,14 @@ flag_o_append:
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
     sub rsp, 32 # prologue: alloc spill frame
-.La3fa_flag_o_append_bb0:
+.L188d_flag_o_append_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 56], rax # store tag L0
     mov rbx, rdx # hv: unbox user-call result payload
     test rbx, rbx # br_cond test
-    jz .La3fa_flag_o_append_bb2 # jump-if-zero -> else
-    jmp .La3fa_flag_o_append_bb1 # jump -> then
-.La3fa_flag_o_append_bb1:
+    jz .L188d_flag_o_append_bb2 # jump-if-zero -> else
+    jmp .L188d_flag_o_append_bb1 # jump -> then
+.L188d_flag_o_append_bb1:
     call O_APPEND_LINUX # call O_APPEND_LINUX
     mov [rbp - 72], rax # store tag L2
     mov r13, rdx # hv: unbox user-call result payload
@@ -3246,7 +3246,7 @@ flag_o_append:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_flag_o_append_bb2:
+.L188d_flag_o_append_bb2:
     call O_APPEND_DARWIN # call O_APPEND_DARWIN
     mov [rbp - 80], rax # store tag L3
     mov r14, rdx # hv: unbox user-call result payload
@@ -3275,14 +3275,14 @@ flag_o_trunc:
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
     sub rsp, 32 # prologue: alloc spill frame
-.La3fa_flag_o_trunc_bb0:
+.L188d_flag_o_trunc_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 56], rax # store tag L0
     mov rbx, rdx # hv: unbox user-call result payload
     test rbx, rbx # br_cond test
-    jz .La3fa_flag_o_trunc_bb2 # jump-if-zero -> else
-    jmp .La3fa_flag_o_trunc_bb1 # jump -> then
-.La3fa_flag_o_trunc_bb1:
+    jz .L188d_flag_o_trunc_bb2 # jump-if-zero -> else
+    jmp .L188d_flag_o_trunc_bb1 # jump -> then
+.L188d_flag_o_trunc_bb1:
     call O_TRUNC_LINUX # call O_TRUNC_LINUX
     mov [rbp - 72], rax # store tag L2
     mov r13, rdx # hv: unbox user-call result payload
@@ -3297,7 +3297,7 @@ flag_o_trunc:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_flag_o_trunc_bb2:
+.L188d_flag_o_trunc_bb2:
     call O_TRUNC_DARWIN # call O_TRUNC_DARWIN
     mov [rbp - 80], rax # store tag L3
     mov r14, rdx # hv: unbox user-call result payload
@@ -3325,7 +3325,7 @@ PROT_READ:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_PROT_READ_bb0:
+.L188d_PROT_READ_bb0:
     mov rdx, 1 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -3349,7 +3349,7 @@ PROT_WRITE:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_PROT_WRITE_bb0:
+.L188d_PROT_WRITE_bb0:
     mov rdx, 2 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -3373,7 +3373,7 @@ PROT_EXEC:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_PROT_EXEC_bb0:
+.L188d_PROT_EXEC_bb0:
     mov rdx, 4 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -3397,7 +3397,7 @@ MAP_PRIVATE:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_MAP_PRIVATE_bb0:
+.L188d_MAP_PRIVATE_bb0:
     mov rdx, 2 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -3421,7 +3421,7 @@ MAP_ANON_LINUX:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_MAP_ANON_LINUX_bb0:
+.L188d_MAP_ANON_LINUX_bb0:
     mov rdx, 32 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -3445,7 +3445,7 @@ MAP_ANON_DARWIN:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_MAP_ANON_DARWIN_bb0:
+.L188d_MAP_ANON_DARWIN_bb0:
     mov rdx, 4096 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -3470,14 +3470,14 @@ flag_map_anon:
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
     sub rsp, 32 # prologue: alloc spill frame
-.La3fa_flag_map_anon_bb0:
+.L188d_flag_map_anon_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 56], rax # store tag L0
     mov rbx, rdx # hv: unbox user-call result payload
     test rbx, rbx # br_cond test
-    jz .La3fa_flag_map_anon_bb2 # jump-if-zero -> else
-    jmp .La3fa_flag_map_anon_bb1 # jump -> then
-.La3fa_flag_map_anon_bb1:
+    jz .L188d_flag_map_anon_bb2 # jump-if-zero -> else
+    jmp .L188d_flag_map_anon_bb1 # jump -> then
+.L188d_flag_map_anon_bb1:
     call MAP_ANON_LINUX # call MAP_ANON_LINUX
     mov [rbp - 72], rax # store tag L2
     mov r13, rdx # hv: unbox user-call result payload
@@ -3492,7 +3492,7 @@ flag_map_anon:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_flag_map_anon_bb2:
+.L188d_flag_map_anon_bb2:
     call MAP_ANON_DARWIN # call MAP_ANON_DARWIN
     mov [rbp - 80], rax # store tag L3
     mov r14, rdx # hv: unbox user-call result payload
@@ -3520,7 +3520,7 @@ CLOCK_REALTIME:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_CLOCK_REALTIME_bb0:
+.L188d_CLOCK_REALTIME_bb0:
     mov rdx, 0 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -3544,7 +3544,7 @@ CLOCK_MONOTONIC_LINUX:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_CLOCK_MONOTONIC_LINUX_bb0:
+.L188d_CLOCK_MONOTONIC_LINUX_bb0:
     mov rdx, 1 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -3568,7 +3568,7 @@ CLOCK_MONOTONIC_DARWIN:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_CLOCK_MONOTONIC_DARWIN_bb0:
+.L188d_CLOCK_MONOTONIC_DARWIN_bb0:
     mov rdx, 6 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -3593,14 +3593,14 @@ clock_monotonic:
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
     sub rsp, 32 # prologue: alloc spill frame
-.La3fa_clock_monotonic_bb0:
+.L188d_clock_monotonic_bb0:
     call target_is_linux # call target_is_linux
     mov [rbp - 56], rax # store tag L0
     mov rbx, rdx # hv: unbox user-call result payload
     test rbx, rbx # br_cond test
-    jz .La3fa_clock_monotonic_bb2 # jump-if-zero -> else
-    jmp .La3fa_clock_monotonic_bb1 # jump -> then
-.La3fa_clock_monotonic_bb1:
+    jz .L188d_clock_monotonic_bb2 # jump-if-zero -> else
+    jmp .L188d_clock_monotonic_bb1 # jump -> then
+.L188d_clock_monotonic_bb1:
     call CLOCK_MONOTONIC_LINUX # call CLOCK_MONOTONIC_LINUX
     mov [rbp - 72], rax # store tag L2
     mov r13, rdx # hv: unbox user-call result payload
@@ -3615,7 +3615,7 @@ clock_monotonic:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_clock_monotonic_bb2:
+.L188d_clock_monotonic_bb2:
     call CLOCK_MONOTONIC_DARWIN # call CLOCK_MONOTONIC_DARWIN
     mov [rbp - 80], rax # store tag L3
     mov r14, rdx # hv: unbox user-call result payload
@@ -3643,7 +3643,7 @@ POOL_PAGE_SIZE:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_POOL_PAGE_SIZE_bb0:
+.L188d_POOL_PAGE_SIZE_bb0:
     mov rdx, 1048576 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -3667,8 +3667,163 @@ ARENA_MAX_POOLS:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_ARENA_MAX_POOLS_bb0:
+.L188d_ARENA_MAX_POOLS_bb0:
     mov rdx, 256 # hv arg payload
+    mov rax, 0 # tag default = TAG_INT
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
+    pop rbp # epilogue: restore rbp
+    ret # return
+.globl __env_extend
+.hidden __env_extend
+    .p2align 4
+__env_extend:
+    .loc 1 350 0
+    push rbp # prologue: save rbp
+    mov rbp, rsp # prologue: set rbp
+    push rbx # prologue: save rbx
+    push r12 # prologue: save r12
+    push r13 # prologue: save r13
+    push r14 # prologue: save r14
+    push r15 # prologue: save r15
+    sub rsp, 8 # prologue: callee-save align pad
+    sub rsp, 128 # prologue: alloc spill frame
+    mov [rbp - 96], rdi # store tag L0
+    mov rbx, rsi # ingress param payload
+    mov [rbp - 104], rdx # store tag L1
+    mov r12, rcx # ingress param payload
+.L188d___env_extend_bb0:
+    mov r10, [rip+g1] # load global value: g1
+    mov rsi, [rip+g1] # load global value: g1
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 104] # tag g1 from tag-slot
+    mov rcx, 0 # hv arg payload
+    mov rdx, 0 # tag default = TAG_INT
+    call hexa_eq # binop ==: tag-dispatch hexa_eq
+    mov r13, rdx # binop ==: capture bool payload
+    mov [rbp - 112], rax # store tag L2
+    test r13, r13 # br_cond test
+    jz .L188d___env_extend_bb2 # jump-if-zero -> else
+    jmp .L188d___env_extend_bb1 # jump -> then
+.L188d___env_extend_bb1:
+    mov r12, rbx # assign L1
+    mov [rip+g1], r12 # global write: g1
+    mov r11, [rbp - 96] # tag L0 from tag-slot
+    mov [rbp - 104], r11 # store tag L1
+    jmp .L188d___env_extend_bb5 # branch
+.L188d___env_extend_bb2:
+    mov r11, [rip+g1] # load global value: g1
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 96] # tag L0 from tag-slot
+    mov rcx, [rip+g1] # load global value: g1
+    mov rcx, rcx # hv arg payload
+    mov rdx, [rbp - 104] # tag g1 from tag-slot
+    call hexa_cmp_lt # binop <: tag-dispatch hexa_cmp_lt
+    mov r15, rdx # binop <: capture bool payload
+    mov [rbp - 128], rax # store tag L4
+    test r15, r15 # br_cond test
+    jz .L188d___env_extend_bb4 # jump-if-zero -> else
+    jmp .L188d___env_extend_bb3 # jump -> then
+.L188d___env_extend_bb3:
+    mov r12, rbx # assign L1
+    mov [rip+g1], r12 # global write: g1
+    mov r11, [rbp - 96] # tag L0 from tag-slot
+    mov [rbp - 104], r11 # store tag L1
+    jmp .L188d___env_extend_bb4 # branch
+.L188d___env_extend_bb4:
+    jmp .L188d___env_extend_bb5 # branch
+.L188d___env_extend_bb5:
+    mov rsi, rbx # hv arg payload
+    mov rdi, [rbp - 96] # tag L0 from tag-slot
+    mov rcx, r12 # hv arg payload
+    mov rdx, [rbp - 104] # tag L1 from tag-slot
+    call hexa_add_slow # binop +: tag-dispatch hexa_add_slow
+    mov r10, rdx # binop +: capture result payload
+    mov [rbp - 144], rax # store tag L6
+    mov [rbp - 64], r10 # spill L6 to slot
+    mov r11, [rbp - 64] # reload L6 from spill slot
+    mov r10, r11 # assign L7
+    mov [rbp - 72], r10 # spill L7 to slot
+    mov r11, [rbp - 144] # tag L6 from tag-slot
+    mov [rbp - 152], r11 # store tag L7
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    mov r11, [rip+g2] # load global value: g2
+    mov rsi, [rbp - 72] # reload L7 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 152] # tag L7 from tag-slot
+    mov rcx, [rip+g2] # load global value: g2
+    mov rcx, rcx # hv arg payload
+    mov rdx, [rbp - 112] # tag g2 from tag-slot
+    call hexa_cmp_gt # binop >: tag-dispatch hexa_cmp_gt
+    mov r10, rdx # binop >: capture bool payload
+    mov [rbp - 160], rax # store tag L8
+    mov [rbp - 80], r10 # spill L8 to slot
+    mov r10, [rbp - 80] # reload L8 from spill slot
+    test r10, r10 # br_cond test
+    jz .L188d___env_extend_bb7 # jump-if-zero -> else
+    jmp .L188d___env_extend_bb6 # jump -> then
+.L188d___env_extend_bb6:
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    mov r13, r10 # assign L2
+    mov [rip+g2], r13 # global write: g2
+    mov r11, [rbp - 152] # tag L7 from tag-slot
+    mov [rbp - 112], r11 # store tag L2
+    jmp .L188d___env_extend_bb7 # branch
+.L188d___env_extend_bb7:
+    add rsp, 128 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
+    pop rbp # epilogue: restore rbp
+    ret # return
+.globl hexa_arena_env_lo
+.hidden hexa_arena_env_lo
+    .p2align 4
+hexa_arena_env_lo:
+    .loc 1 362 0
+    push rbp # prologue: save rbp
+    mov rbp, rsp # prologue: set rbp
+    push rbx # prologue: save rbx
+    push r12 # prologue: save r12
+    push r13 # prologue: save r13
+    push r14 # prologue: save r14
+    push r15 # prologue: save r15
+    sub rsp, 8 # prologue: callee-save align pad
+.L188d_hexa_arena_env_lo_bb0:
+    mov rdx, [rip+g1] # load global value: g1
+    mov rdx, rdx # hv arg payload
+    mov rax, 0 # tag default = TAG_INT
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
+    pop rbp # epilogue: restore rbp
+    ret # return
+.globl hexa_arena_env_hi
+.hidden hexa_arena_env_hi
+    .p2align 4
+hexa_arena_env_hi:
+    .loc 1 363 0
+    push rbp # prologue: save rbp
+    mov rbp, rsp # prologue: set rbp
+    push rbx # prologue: save rbx
+    push r12 # prologue: save r12
+    push r13 # prologue: save r13
+    push r14 # prologue: save r14
+    push r15 # prologue: save r15
+    sub rsp, 8 # prologue: callee-save align pad
+.L188d_hexa_arena_env_hi_bb0:
+    mov rdx, [rip+g2] # load global value: g2
+    mov rdx, rdx # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
     pop r15 # epilogue: restore r15
@@ -3682,7 +3837,7 @@ ARENA_MAX_POOLS:
 .hidden align_up
     .p2align 4
 align_up:
-    .loc 1 334 0
+    .loc 1 365 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -3696,7 +3851,7 @@ align_up:
     mov rbx, rsi # ingress param payload
     mov [rbp - 72], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.La3fa_align_up_bb0:
+.L188d_align_up_bb0:
     mov rsi, rbx # hv arg payload
     mov rdi, [rbp - 64] # tag L0 from tag-slot
     mov rcx, r12 # hv arg payload
@@ -3742,7 +3897,7 @@ align_up:
 .hidden __a_np
     .p2align 4
 __a_np:
-    .loc 1 339 0
+    .loc 1 370 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -3752,7 +3907,7 @@ __a_np:
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
     sub rsp, 16 # prologue: alloc spill frame
-.La3fa___a_np_bb0:
+.L188d___a_np_bb0:
     mov r10, [rip+g0] # load global value: g0
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -3776,7 +3931,7 @@ __a_np:
 .hidden __a_set_np
     .p2align 4
 __a_set_np:
-    .loc 1 340 0
+    .loc 1 371 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -3788,7 +3943,7 @@ __a_set_np:
     sub rsp, 16 # prologue: alloc spill frame
     mov [rbp - 56], rdi # store tag L0
     mov rbx, rsi # ingress param payload
-.La3fa___a_set_np_bb0:
+.L188d___a_set_np_bb0:
     mov r10, [rip+g0] # load global value: g0
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -3815,7 +3970,7 @@ __a_set_np:
 .hidden __p_base
     .p2align 4
 __p_base:
-    .loc 1 341 0
+    .loc 1 372 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -3827,7 +3982,7 @@ __p_base:
     sub rsp, 32 # prologue: alloc spill frame
     mov [rbp - 56], rdi # store tag L0
     mov rbx, rsi # ingress param payload
-.La3fa___p_base_bb0:
+.L188d___p_base_bb0:
     mov rsi, rbx # hv arg payload
     mov rdi, [rbp - 56] # tag L0 from tag-slot
     mov rcx, 24 # hv arg payload
@@ -3865,7 +4020,7 @@ __p_base:
 .hidden __p_size
     .p2align 4
 __p_size:
-    .loc 1 342 0
+    .loc 1 373 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -3877,7 +4032,7 @@ __p_size:
     sub rsp, 48 # prologue: alloc spill frame
     mov [rbp - 56], rdi # store tag L0
     mov rbx, rsi # ingress param payload
-.La3fa___p_size_bb0:
+.L188d___p_size_bb0:
     mov rsi, rbx # hv arg payload
     mov rdi, [rbp - 56] # tag L0 from tag-slot
     mov rcx, 24 # hv arg payload
@@ -3922,7 +4077,7 @@ __p_size:
 .hidden __p_used
     .p2align 4
 __p_used:
-    .loc 1 343 0
+    .loc 1 374 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -3934,7 +4089,7 @@ __p_used:
     sub rsp, 48 # prologue: alloc spill frame
     mov [rbp - 56], rdi # store tag L0
     mov rbx, rsi # ingress param payload
-.La3fa___p_used_bb0:
+.L188d___p_used_bb0:
     mov rsi, rbx # hv arg payload
     mov rdi, [rbp - 56] # tag L0 from tag-slot
     mov rcx, 24 # hv arg payload
@@ -3979,7 +4134,7 @@ __p_used:
 .hidden __p_set_base
     .p2align 4
 __p_set_base:
-    .loc 1 344 0
+    .loc 1 375 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -3993,7 +4148,7 @@ __p_set_base:
     mov rbx, rsi # ingress param payload
     mov [rbp - 64], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.La3fa___p_set_base_bb0:
+.L188d___p_set_base_bb0:
     mov rsi, rbx # hv arg payload
     mov rdi, [rbp - 56] # tag L0 from tag-slot
     mov rcx, 24 # hv arg payload
@@ -4034,7 +4189,7 @@ __p_set_base:
 .hidden __p_set_size
     .p2align 4
 __p_set_size:
-    .loc 1 345 0
+    .loc 1 376 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -4048,7 +4203,7 @@ __p_set_size:
     mov rbx, rsi # ingress param payload
     mov [rbp - 72], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.La3fa___p_set_size_bb0:
+.L188d___p_set_size_bb0:
     mov rsi, rbx # hv arg payload
     mov rdi, [rbp - 64] # tag L0 from tag-slot
     mov rcx, 24 # hv arg payload
@@ -4097,7 +4252,7 @@ __p_set_size:
 .hidden __p_set_used
     .p2align 4
 __p_set_used:
-    .loc 1 346 0
+    .loc 1 377 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -4111,7 +4266,7 @@ __p_set_used:
     mov rbx, rsi # ingress param payload
     mov [rbp - 72], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.La3fa___p_set_used_bb0:
+.L188d___p_set_used_bb0:
     mov rsi, rbx # hv arg payload
     mov rdi, [rbp - 64] # tag L0 from tag-slot
     mov rcx, 24 # hv arg payload
@@ -4160,7 +4315,7 @@ __p_set_used:
 .hidden __arena_grow
     .p2align 4
 __arena_grow:
-    .loc 1 349 0
+    .loc 1 380 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -4169,58 +4324,58 @@ __arena_grow:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-    sub rsp, 320 # prologue: alloc spill frame
-.La3fa___arena_grow_bb0:
+    sub rsp, 352 # prologue: alloc spill frame
+.L188d___arena_grow_bb0:
     call __a_np # call __a_np
-    mov [rbp - 192], rax # store tag L0
+    mov [rbp - 208], rax # store tag L0
     mov rbx, rdx # hv: unbox user-call result payload
     mov r12, rbx # assign L1
-    mov r11, [rbp - 192] # tag L0 from tag-slot
-    mov [rbp - 200], r11 # store tag L1
+    mov r11, [rbp - 208] # tag L0 from tag-slot
+    mov [rbp - 216], r11 # store tag L1
     call MAP_PRIVATE # call MAP_PRIVATE
-    mov [rbp - 208], rax # store tag L2
+    mov [rbp - 224], rax # store tag L2
     mov r13, rdx # hv: unbox user-call result payload
     call flag_map_anon # call flag_map_anon
-    mov [rbp - 216], rax # store tag L3
+    mov [rbp - 232], rax # store tag L3
     mov r14, rdx # hv: unbox user-call result payload
     mov rsi, r13 # hv arg payload
-    mov rdi, [rbp - 208] # tag L2 from tag-slot
+    mov rdi, [rbp - 224] # tag L2 from tag-slot
     mov rcx, r14 # hv arg payload
-    mov rdx, [rbp - 216] # tag L3 from tag-slot
+    mov rdx, [rbp - 232] # tag L3 from tag-slot
     call hexa_add_slow # binop +: tag-dispatch hexa_add_slow
     mov r15, rdx # binop +: capture result payload
-    mov [rbp - 224], rax # store tag L4
+    mov [rbp - 240], rax # store tag L4
     mov r10, r15 # assign L5
     mov [rbp - 56], r10 # spill L5 to slot
-    mov r11, [rbp - 224] # tag L4 from tag-slot
-    mov [rbp - 232], r11 # store tag L5
+    mov r11, [rbp - 240] # tag L4 from tag-slot
+    mov [rbp - 248], r11 # store tag L5
     call PROT_READ # call PROT_READ
-    mov [rbp - 240], rax # store tag L6
+    mov [rbp - 256], rax # store tag L6
     mov r10, rdx # hv: unbox user-call result payload
     mov [rbp - 64], r10 # spill L6 to slot
     call PROT_WRITE # call PROT_WRITE
-    mov [rbp - 248], rax # store tag L7
+    mov [rbp - 264], rax # store tag L7
     mov r10, rdx # hv: unbox user-call result payload
     mov [rbp - 72], r10 # spill L7 to slot
     mov r10, [rbp - 64] # reload L6 from spill slot
     mov r11, [rbp - 72] # reload L7 from spill slot
     mov rsi, [rbp - 64] # reload L6 from spill slot
     mov rsi, rsi # hv arg payload
-    mov rdi, [rbp - 240] # tag L6 from tag-slot
+    mov rdi, [rbp - 256] # tag L6 from tag-slot
     mov rcx, [rbp - 72] # reload L7 from spill slot
     mov rcx, rcx # hv arg payload
-    mov rdx, [rbp - 248] # tag L7 from tag-slot
+    mov rdx, [rbp - 264] # tag L7 from tag-slot
     call hexa_add_slow # binop +: tag-dispatch hexa_add_slow
     mov r10, rdx # binop +: capture result payload
-    mov [rbp - 256], rax # store tag L8
+    mov [rbp - 272], rax # store tag L8
     mov [rbp - 80], r10 # spill L8 to slot
     mov r11, [rbp - 80] # reload L8 from spill slot
     mov r10, r11 # assign L9
     mov [rbp - 88], r10 # spill L9 to slot
-    mov r11, [rbp - 256] # tag L8 from tag-slot
-    mov [rbp - 264], r11 # store tag L9
+    mov r11, [rbp - 272] # tag L8 from tag-slot
+    mov [rbp - 280], r11 # store tag L9
     call POOL_PAGE_SIZE # call POOL_PAGE_SIZE
-    mov [rbp - 272], rax # store tag L10
+    mov [rbp - 288], rax # store tag L10
     mov r10, rdx # hv: unbox user-call result payload
     mov [rbp - 96], r10 # spill L10 to slot
     sub rsp, 48 # hv: reserve 3 16B stack arg slots
@@ -4234,49 +4389,49 @@ __arena_grow:
     mov [rsp + 24], r11 # hv stack arg 4 payload
     mov r11, [rbp - 56] # reload L5 from spill slot
     mov r11, r11 # hv arg payload
-    mov r10, [rbp - 232] # tag L5 from tag-slot
+    mov r10, [rbp - 248] # tag L5 from tag-slot
     mov [rsp], r10 # hv stack arg 3 tag
     mov [rsp + 8], r11 # hv stack arg 3 payload
     mov rsi, 0 # hv arg payload
     mov rdi, 0 # tag default = TAG_INT
     mov rcx, [rbp - 96] # reload L10 from spill slot
     mov rcx, rcx # hv arg payload
-    mov rdx, [rbp - 272] # tag L10 from tag-slot
+    mov rdx, [rbp - 288] # tag L10 from tag-slot
     mov r9, [rbp - 88] # reload L9 from spill slot
     mov r9, r9 # hv arg payload
-    mov r8, [rbp - 264] # tag L9 from tag-slot
+    mov r8, [rbp - 280] # tag L9 from tag-slot
     call sys_mmap # call sys_mmap
     add rsp, 48 # hv: pop 3 stack arg slots
-    mov [rbp - 280], rax # store tag L11
+    mov [rbp - 296], rax # store tag L11
     mov r10, rdx # hv: unbox user-call result payload
     mov [rbp - 104], r10 # spill L11 to slot
     mov r11, [rbp - 104] # reload L11 from spill slot
     mov r10, r11 # assign L12
     mov [rbp - 112], r10 # spill L12 to slot
-    mov r11, [rbp - 280] # tag L11 from tag-slot
-    mov [rbp - 288], r11 # store tag L12
+    mov r11, [rbp - 296] # tag L11 from tag-slot
+    mov [rbp - 304], r11 # store tag L12
     mov r10, [rbp - 112] # reload L12 from spill slot
     mov rsi, [rbp - 112] # reload L12 from spill slot
     mov rsi, rsi # hv arg payload
-    mov rdi, [rbp - 288] # tag L12 from tag-slot
+    mov rdi, [rbp - 304] # tag L12 from tag-slot
     mov rcx, 0 # hv arg payload
     mov rdx, 0 # tag default = TAG_INT
     call hexa_cmp_lt # binop <: tag-dispatch hexa_cmp_lt
     mov r10, rdx # binop <: capture bool payload
-    mov [rbp - 296], rax # store tag L13
+    mov [rbp - 312], rax # store tag L13
     mov [rbp - 120], r10 # spill L13 to slot
     mov r10, [rbp - 120] # reload L13 from spill slot
     test r10, r10 # br_cond test
-    jz .La3fa___arena_grow_bb2 # jump-if-zero -> else
-    jmp .La3fa___arena_grow_bb1 # jump -> then
-.La3fa___arena_grow_bb1:
+    jz .L188d___arena_grow_bb2 # jump-if-zero -> else
+    jmp .L188d___arena_grow_bb1 # jump -> then
+.L188d___arena_grow_bb1:
     mov rsi, 137 # hv arg payload
     mov rdi, 0 # tag default = TAG_INT
     call sys_exit # call sys_exit
-    mov [rbp - 312], rax # store tag L15
+    mov [rbp - 328], rax # store tag L15
     mov r10, rdx # hv: unbox user-call result payload
     mov [rbp - 136], r10 # spill L15 to slot
-    add rsp, 320 # epilogue: free spill frame
+    add rsp, 352 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
     pop r15 # epilogue: restore r15
     pop r14 # epilogue: restore r14
@@ -4285,56 +4440,70 @@ __arena_grow:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa___arena_grow_bb2:
+.L188d___arena_grow_bb2:
     mov rsi, r12 # hv arg payload
-    mov rdi, [rbp - 200] # tag L1 from tag-slot
+    mov rdi, [rbp - 216] # tag L1 from tag-slot
     mov rcx, [rbp - 112] # reload L12 from spill slot
     mov rcx, rcx # hv arg payload
-    mov rdx, [rbp - 288] # tag L12 from tag-slot
+    mov rdx, [rbp - 304] # tag L12 from tag-slot
     call __p_set_base # call __p_set_base
-    mov [rbp - 320], rax # store tag L16
+    mov [rbp - 336], rax # store tag L16
     mov r10, rdx # hv: unbox user-call result payload
     mov [rbp - 144], r10 # spill L16 to slot
     call POOL_PAGE_SIZE # call POOL_PAGE_SIZE
-    mov [rbp - 328], rax # store tag L17
+    mov [rbp - 344], rax # store tag L17
     mov r10, rdx # hv: unbox user-call result payload
     mov [rbp - 152], r10 # spill L17 to slot
     mov rsi, r12 # hv arg payload
-    mov rdi, [rbp - 200] # tag L1 from tag-slot
+    mov rdi, [rbp - 216] # tag L1 from tag-slot
     mov rcx, [rbp - 152] # reload L17 from spill slot
     mov rcx, rcx # hv arg payload
-    mov rdx, [rbp - 328] # tag L17 from tag-slot
+    mov rdx, [rbp - 344] # tag L17 from tag-slot
     call __p_set_size # call __p_set_size
-    mov [rbp - 336], rax # store tag L18
+    mov [rbp - 352], rax # store tag L18
     mov r10, rdx # hv: unbox user-call result payload
     mov [rbp - 160], r10 # spill L18 to slot
     mov rsi, r12 # hv arg payload
-    mov rdi, [rbp - 200] # tag L1 from tag-slot
+    mov rdi, [rbp - 216] # tag L1 from tag-slot
     mov rcx, 0 # hv arg payload
     mov rdx, 0 # tag default = TAG_INT
     call __p_set_used # call __p_set_used
-    mov [rbp - 344], rax # store tag L19
+    mov [rbp - 360], rax # store tag L19
     mov r10, rdx # hv: unbox user-call result payload
     mov [rbp - 168], r10 # spill L19 to slot
     mov rsi, r12 # hv arg payload
-    mov rdi, [rbp - 200] # tag L1 from tag-slot
+    mov rdi, [rbp - 216] # tag L1 from tag-slot
     mov rcx, 1 # hv arg payload
     mov rdx, 0 # tag default = TAG_INT
     call hexa_add_slow # binop +: tag-dispatch hexa_add_slow
     mov r10, rdx # binop +: capture result payload
-    mov [rbp - 352], rax # store tag L20
+    mov [rbp - 368], rax # store tag L20
     mov [rbp - 176], r10 # spill L20 to slot
     mov rsi, [rbp - 176] # reload L20 from spill slot
     mov rsi, rsi # hv arg payload
-    mov rdi, [rbp - 352] # tag L20 from tag-slot
+    mov rdi, [rbp - 368] # tag L20 from tag-slot
     call __a_set_np # call __a_set_np
-    mov [rbp - 360], rax # store tag L21
+    mov [rbp - 376], rax # store tag L21
     mov r10, rdx # hv: unbox user-call result payload
     mov [rbp - 184], r10 # spill L21 to slot
-    mov rdx, [rbp - 184] # reload L21 from spill slot
+    call POOL_PAGE_SIZE # call POOL_PAGE_SIZE
+    mov [rbp - 384], rax # store tag L22
+    mov r10, rdx # hv: unbox user-call result payload
+    mov [rbp - 192], r10 # spill L22 to slot
+    mov rsi, [rbp - 112] # reload L12 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 304] # tag L12 from tag-slot
+    mov rcx, [rbp - 192] # reload L22 from spill slot
+    mov rcx, rcx # hv arg payload
+    mov rdx, [rbp - 384] # tag L22 from tag-slot
+    call __env_extend # call __env_extend
+    mov [rbp - 392], rax # store tag L23
+    mov r10, rdx # hv: unbox user-call result payload
+    mov [rbp - 200], r10 # spill L23 to slot
+    mov rdx, [rbp - 200] # reload L23 from spill slot
     mov rdx, rdx # hv arg payload
-    mov rax, [rbp - 360] # tag L21 from tag-slot
-    add rsp, 320 # epilogue: free spill frame
+    mov rax, [rbp - 392] # tag L23 from tag-slot
+    add rsp, 352 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
     pop r15 # epilogue: restore r15
     pop r14 # epilogue: restore r14
@@ -4347,7 +4516,7 @@ __arena_grow:
 .hidden page_alloc
     .p2align 4
 page_alloc:
-    .loc 1 368 0
+    .loc 1 400 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -4356,64 +4525,64 @@ page_alloc:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-    sub rsp, 224 # prologue: alloc spill frame
-    mov [rbp - 144], rdi # store tag L0
+    sub rsp, 240 # prologue: alloc spill frame
+    mov [rbp - 152], rdi # store tag L0
     mov rbx, rsi # ingress param payload
-.La3fa_page_alloc_bb0:
+.L188d_page_alloc_bb0:
     mov rsi, rbx # hv arg payload
-    mov rdi, [rbp - 144] # tag L0 from tag-slot
+    mov rdi, [rbp - 152] # tag L0 from tag-slot
     mov rcx, 4096 # hv arg payload
     mov rdx, 0 # tag default = TAG_INT
     call align_up # call align_up
-    mov [rbp - 152], rax # store tag L1
+    mov [rbp - 160], rax # store tag L1
     mov r12, rdx # hv: unbox user-call result payload
     mov r13, r12 # assign L2
-    mov r11, [rbp - 152] # tag L1 from tag-slot
-    mov [rbp - 160], r11 # store tag L2
+    mov r11, [rbp - 160] # tag L1 from tag-slot
+    mov [rbp - 168], r11 # store tag L2
     call MAP_PRIVATE # call MAP_PRIVATE
-    mov [rbp - 168], rax # store tag L3
+    mov [rbp - 176], rax # store tag L3
     mov r14, rdx # hv: unbox user-call result payload
     call flag_map_anon # call flag_map_anon
-    mov [rbp - 176], rax # store tag L4
+    mov [rbp - 184], rax # store tag L4
     mov r15, rdx # hv: unbox user-call result payload
     mov rsi, r14 # hv arg payload
-    mov rdi, [rbp - 168] # tag L3 from tag-slot
+    mov rdi, [rbp - 176] # tag L3 from tag-slot
     mov rcx, r15 # hv arg payload
-    mov rdx, [rbp - 176] # tag L4 from tag-slot
+    mov rdx, [rbp - 184] # tag L4 from tag-slot
     call hexa_add_slow # binop +: tag-dispatch hexa_add_slow
     mov r10, rdx # binop +: capture result payload
-    mov [rbp - 184], rax # store tag L5
+    mov [rbp - 192], rax # store tag L5
     mov [rbp - 56], r10 # spill L5 to slot
     mov r11, [rbp - 56] # reload L5 from spill slot
     mov r10, r11 # assign L6
     mov [rbp - 64], r10 # spill L6 to slot
-    mov r11, [rbp - 184] # tag L5 from tag-slot
-    mov [rbp - 192], r11 # store tag L6
+    mov r11, [rbp - 192] # tag L5 from tag-slot
+    mov [rbp - 200], r11 # store tag L6
     call PROT_READ # call PROT_READ
-    mov [rbp - 200], rax # store tag L7
+    mov [rbp - 208], rax # store tag L7
     mov r10, rdx # hv: unbox user-call result payload
     mov [rbp - 72], r10 # spill L7 to slot
     call PROT_WRITE # call PROT_WRITE
-    mov [rbp - 208], rax # store tag L8
+    mov [rbp - 216], rax # store tag L8
     mov r10, rdx # hv: unbox user-call result payload
     mov [rbp - 80], r10 # spill L8 to slot
     mov r10, [rbp - 72] # reload L7 from spill slot
     mov r11, [rbp - 80] # reload L8 from spill slot
     mov rsi, [rbp - 72] # reload L7 from spill slot
     mov rsi, rsi # hv arg payload
-    mov rdi, [rbp - 200] # tag L7 from tag-slot
+    mov rdi, [rbp - 208] # tag L7 from tag-slot
     mov rcx, [rbp - 80] # reload L8 from spill slot
     mov rcx, rcx # hv arg payload
-    mov rdx, [rbp - 208] # tag L8 from tag-slot
+    mov rdx, [rbp - 216] # tag L8 from tag-slot
     call hexa_add_slow # binop +: tag-dispatch hexa_add_slow
     mov r10, rdx # binop +: capture result payload
-    mov [rbp - 216], rax # store tag L9
+    mov [rbp - 224], rax # store tag L9
     mov [rbp - 88], r10 # spill L9 to slot
     mov r11, [rbp - 88] # reload L9 from spill slot
     mov r10, r11 # assign L10
     mov [rbp - 96], r10 # spill L10 to slot
-    mov r11, [rbp - 216] # tag L9 from tag-slot
-    mov [rbp - 224], r11 # store tag L10
+    mov r11, [rbp - 224] # tag L9 from tag-slot
+    mov [rbp - 232], r11 # store tag L10
     sub rsp, 48 # hv: reserve 3 16B stack arg slots
     mov r11, 0 # hv arg payload
     mov r10, 0 # tag default = TAG_INT
@@ -4425,50 +4594,50 @@ page_alloc:
     mov [rsp + 24], r11 # hv stack arg 4 payload
     mov r11, [rbp - 64] # reload L6 from spill slot
     mov r11, r11 # hv arg payload
-    mov r10, [rbp - 192] # tag L6 from tag-slot
+    mov r10, [rbp - 200] # tag L6 from tag-slot
     mov [rsp], r10 # hv stack arg 3 tag
     mov [rsp + 8], r11 # hv stack arg 3 payload
     mov rsi, 0 # hv arg payload
     mov rdi, 0 # tag default = TAG_INT
     mov rcx, r13 # hv arg payload
-    mov rdx, [rbp - 160] # tag L2 from tag-slot
+    mov rdx, [rbp - 168] # tag L2 from tag-slot
     mov r9, [rbp - 96] # reload L10 from spill slot
     mov r9, r9 # hv arg payload
-    mov r8, [rbp - 224] # tag L10 from tag-slot
+    mov r8, [rbp - 232] # tag L10 from tag-slot
     call sys_mmap # call sys_mmap
     add rsp, 48 # hv: pop 3 stack arg slots
-    mov [rbp - 232], rax # store tag L11
+    mov [rbp - 240], rax # store tag L11
     mov r10, rdx # hv: unbox user-call result payload
     mov [rbp - 104], r10 # spill L11 to slot
     mov r11, [rbp - 104] # reload L11 from spill slot
     mov r10, r11 # assign L12
     mov [rbp - 112], r10 # spill L12 to slot
-    mov r11, [rbp - 232] # tag L11 from tag-slot
-    mov [rbp - 240], r11 # store tag L12
+    mov r11, [rbp - 240] # tag L11 from tag-slot
+    mov [rbp - 248], r11 # store tag L12
     mov r10, [rbp - 112] # reload L12 from spill slot
     mov rsi, [rbp - 112] # reload L12 from spill slot
     mov rsi, rsi # hv arg payload
-    mov rdi, [rbp - 240] # tag L12 from tag-slot
+    mov rdi, [rbp - 248] # tag L12 from tag-slot
     mov rcx, 0 # hv arg payload
     mov rdx, 0 # tag default = TAG_INT
     call hexa_cmp_lt # binop <: tag-dispatch hexa_cmp_lt
     mov r10, rdx # binop <: capture bool payload
-    mov [rbp - 248], rax # store tag L13
+    mov [rbp - 256], rax # store tag L13
     mov [rbp - 120], r10 # spill L13 to slot
     mov r10, [rbp - 120] # reload L13 from spill slot
     test r10, r10 # br_cond test
-    jz .La3fa_page_alloc_bb2 # jump-if-zero -> else
-    jmp .La3fa_page_alloc_bb1 # jump -> then
-.La3fa_page_alloc_bb1:
+    jz .L188d_page_alloc_bb2 # jump-if-zero -> else
+    jmp .L188d_page_alloc_bb1 # jump -> then
+.L188d_page_alloc_bb1:
     mov rsi, 137 # hv arg payload
     mov rdi, 0 # tag default = TAG_INT
     call sys_exit # call sys_exit
-    mov [rbp - 264], rax # store tag L15
+    mov [rbp - 272], rax # store tag L15
     mov r10, rdx # hv: unbox user-call result payload
     mov [rbp - 136], r10 # spill L15 to slot
     mov rdx, 0 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
-    add rsp, 224 # epilogue: free spill frame
+    add rsp, 240 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
     pop r15 # epilogue: restore r15
     pop r14 # epilogue: restore r14
@@ -4477,11 +4646,20 @@ page_alloc:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_page_alloc_bb2:
+.L188d_page_alloc_bb2:
+    mov rsi, [rbp - 112] # reload L12 from spill slot
+    mov rsi, rsi # hv arg payload
+    mov rdi, [rbp - 248] # tag L12 from tag-slot
+    mov rcx, r13 # hv arg payload
+    mov rdx, [rbp - 168] # tag L2 from tag-slot
+    call __env_extend # call __env_extend
+    mov [rbp - 280], rax # store tag L16
+    mov r10, rdx # hv: unbox user-call result payload
+    mov [rbp - 144], r10 # spill L16 to slot
     mov rdx, [rbp - 112] # reload L12 from spill slot
     mov rdx, rdx # hv arg payload
-    mov rax, [rbp - 240] # tag L12 from tag-slot
-    add rsp, 224 # epilogue: free spill frame
+    mov rax, [rbp - 248] # tag L12 from tag-slot
+    add rsp, 240 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
     pop r15 # epilogue: restore r15
     pop r14 # epilogue: restore r14
@@ -4494,7 +4672,7 @@ page_alloc:
 .hidden page_free
     .p2align 4
 page_free:
-    .loc 1 380 0
+    .loc 1 413 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -4508,7 +4686,7 @@ page_free:
     mov rbx, rsi # ingress param payload
     mov [rbp - 64], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.La3fa_page_free_bb0:
+.L188d_page_free_bb0:
     mov rsi, r12 # hv arg payload
     mov rdi, [rbp - 64] # tag L1 from tag-slot
     mov rcx, 4096 # hv arg payload
@@ -4541,7 +4719,7 @@ page_free:
 .hidden rt_init
     .p2align 4
 rt_init:
-    .loc 1 396 0
+    .loc 1 429 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -4551,7 +4729,7 @@ rt_init:
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
     sub rsp, 240 # prologue: alloc spill frame
-.La3fa_rt_init_bb0:
+.L188d_rt_init_bb0:
     call MAP_PRIVATE # call MAP_PRIVATE
     mov [rbp - 152], rax # store tag L0
     mov rbx, rdx # hv: unbox user-call result payload
@@ -4657,9 +4835,9 @@ rt_init:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .La3fa_rt_init_bb2 # jump-if-zero -> else
-    jmp .La3fa_rt_init_bb1 # jump -> then
-.La3fa_rt_init_bb1:
+    jz .L188d_rt_init_bb2 # jump-if-zero -> else
+    jmp .L188d_rt_init_bb1 # jump -> then
+.L188d_rt_init_bb1:
     mov rsi, 137 # hv arg payload
     mov rdi, 0 # tag default = TAG_INT
     call sys_exit # call sys_exit
@@ -4675,7 +4853,7 @@ rt_init:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_rt_init_bb2:
+.L188d_rt_init_bb2:
     mov r10, [rip+g0] # load global value: g0
     mov r10, r10 # hv payload
     mov r11, 0 # hv payload
@@ -4707,7 +4885,7 @@ rt_init:
 .hidden hexa_arena_on
     .p2align 4
 hexa_arena_on:
-    .loc 1 410 0
+    .loc 1 443 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -4716,7 +4894,7 @@ hexa_arena_on:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-.La3fa_hexa_arena_on_bb0:
+.L188d_hexa_arena_on_bb0:
     mov rdx, 1 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 8 # epilogue: drop callee-save align pad
@@ -4731,7 +4909,7 @@ hexa_arena_on:
 .hidden hexa_arena_mark
     .p2align 4
 hexa_arena_mark:
-    .loc 1 414 0
+    .loc 1 447 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -4741,7 +4919,7 @@ hexa_arena_mark:
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
     sub rsp, 144 # prologue: alloc spill frame
-.La3fa_hexa_arena_mark_bb0:
+.L188d_hexa_arena_mark_bb0:
     call __a_np # call __a_np
     mov [rbp - 104], rax # store tag L0
     mov rbx, rdx # hv: unbox user-call result payload
@@ -4753,9 +4931,9 @@ hexa_arena_mark:
     mov r12, rdx # binop ==: capture bool payload
     mov [rbp - 112], rax # store tag L1
     test r12, r12 # br_cond test
-    jz .La3fa_hexa_arena_mark_bb2 # jump-if-zero -> else
-    jmp .La3fa_hexa_arena_mark_bb1 # jump -> then
-.La3fa_hexa_arena_mark_bb1:
+    jz .L188d_hexa_arena_mark_bb2 # jump-if-zero -> else
+    jmp .L188d_hexa_arena_mark_bb1 # jump -> then
+.L188d_hexa_arena_mark_bb1:
     mov rdx, -1 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 144 # epilogue: free spill frame
@@ -4767,7 +4945,7 @@ hexa_arena_mark:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_hexa_arena_mark_bb2:
+.L188d_hexa_arena_mark_bb2:
     call __a_np # call __a_np
     mov [rbp - 128], rax # store tag L3
     mov r14, rdx # hv: unbox user-call result payload
@@ -4843,7 +5021,7 @@ hexa_arena_mark:
 .hidden hexa_arena_rewind
     .p2align 4
 hexa_arena_rewind:
-    .loc 1 420 0
+    .loc 1 453 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -4855,7 +5033,7 @@ hexa_arena_rewind:
     sub rsp, 352 # prologue: alloc spill frame
     mov [rbp - 208], rdi # store tag L0
     mov rbx, rsi # ingress param payload
-.La3fa_hexa_arena_rewind_bb0:
+.L188d_hexa_arena_rewind_bb0:
     mov rsi, rbx # hv arg payload
     mov rdi, [rbp - 208] # tag L0 from tag-slot
     mov rcx, 0 # hv arg payload
@@ -4864,9 +5042,9 @@ hexa_arena_rewind:
     mov r12, rdx # binop <: capture bool payload
     mov [rbp - 216], rax # store tag L1
     test r12, r12 # br_cond test
-    jz .La3fa_hexa_arena_rewind_bb2 # jump-if-zero -> else
-    jmp .La3fa_hexa_arena_rewind_bb1 # jump -> then
-.La3fa_hexa_arena_rewind_bb1:
+    jz .L188d_hexa_arena_rewind_bb2 # jump-if-zero -> else
+    jmp .L188d_hexa_arena_rewind_bb1 # jump -> then
+.L188d_hexa_arena_rewind_bb1:
     call hexa_arena_reset # call hexa_arena_reset
     mov [rbp - 232], rax # store tag L3
     mov r14, rdx # hv: unbox user-call result payload
@@ -4879,7 +5057,7 @@ hexa_arena_rewind:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_hexa_arena_rewind_bb2:
+.L188d_hexa_arena_rewind_bb2:
     call POOL_PAGE_SIZE # call POOL_PAGE_SIZE
     mov [rbp - 240], rax # store tag L4
     mov r15, rdx # hv: unbox user-call result payload
@@ -4966,8 +5144,8 @@ hexa_arena_rewind:
     mov [rbp - 136], r10 # spill L15 to slot
     mov r11, [rbp - 320] # tag L14 from tag-slot
     mov [rbp - 328], r11 # store tag L15
-    jmp .La3fa_hexa_arena_rewind_bb3 # branch
-.La3fa_hexa_arena_rewind_bb3:
+    jmp .L188d_hexa_arena_rewind_bb3 # branch
+.L188d_hexa_arena_rewind_bb3:
     mov r10, [rbp - 136] # reload L15 from spill slot
     mov r11, [rbp - 72] # reload L7 from spill slot
     mov rsi, [rbp - 136] # reload L15 from spill slot
@@ -4982,9 +5160,9 @@ hexa_arena_rewind:
     mov [rbp - 144], r10 # spill L16 to slot
     mov r10, [rbp - 144] # reload L16 from spill slot
     test r10, r10 # br_cond test
-    jz .La3fa_hexa_arena_rewind_bb5 # jump-if-zero -> else
-    jmp .La3fa_hexa_arena_rewind_bb4 # jump -> then
-.La3fa_hexa_arena_rewind_bb4:
+    jz .L188d_hexa_arena_rewind_bb5 # jump-if-zero -> else
+    jmp .L188d_hexa_arena_rewind_bb4 # jump -> then
+.L188d_hexa_arena_rewind_bb4:
     mov rsi, [rbp - 136] # reload L15 from spill slot
     mov rsi, rsi # hv arg payload
     mov rdi, [rbp - 328] # tag L15 from tag-slot
@@ -5024,8 +5202,8 @@ hexa_arena_rewind:
     mov [rbp - 136], r10 # spill L15 to slot
     mov r11, [rbp - 368] # tag L20 from tag-slot
     mov [rbp - 328], r11 # store tag L15
-    jmp .La3fa_hexa_arena_rewind_bb3 # branch
-.La3fa_hexa_arena_rewind_bb5:
+    jmp .L188d_hexa_arena_rewind_bb3 # branch
+.L188d_hexa_arena_rewind_bb5:
     mov r10, [rbp - 72] # reload L7 from spill slot
     mov rsi, [rbp - 72] # reload L7 from spill slot
     mov rsi, rsi # hv arg payload
@@ -5069,7 +5247,7 @@ hexa_arena_rewind:
 .hidden hexa_arena_reset
     .p2align 4
 hexa_arena_reset:
-    .loc 1 437 0
+    .loc 1 470 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -5079,12 +5257,12 @@ hexa_arena_reset:
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
     sub rsp, 96 # prologue: alloc spill frame
-.La3fa_hexa_arena_reset_bb0:
+.L188d_hexa_arena_reset_bb0:
     mov rbx, 0 # assign L0
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 80], r11 # store tag L0
-    jmp .La3fa_hexa_arena_reset_bb1 # branch
-.La3fa_hexa_arena_reset_bb1:
+    jmp .L188d_hexa_arena_reset_bb1 # branch
+.L188d_hexa_arena_reset_bb1:
     call __a_np # call __a_np
     mov [rbp - 88], rax # store tag L1
     mov r12, rdx # hv: unbox user-call result payload
@@ -5096,9 +5274,9 @@ hexa_arena_reset:
     mov r13, rdx # binop <: capture bool payload
     mov [rbp - 96], rax # store tag L2
     test r13, r13 # br_cond test
-    jz .La3fa_hexa_arena_reset_bb3 # jump-if-zero -> else
-    jmp .La3fa_hexa_arena_reset_bb2 # jump -> then
-.La3fa_hexa_arena_reset_bb2:
+    jz .L188d_hexa_arena_reset_bb3 # jump-if-zero -> else
+    jmp .L188d_hexa_arena_reset_bb2 # jump -> then
+.L188d_hexa_arena_reset_bb2:
     mov rsi, rbx # hv arg payload
     mov rdi, [rbp - 80] # tag L0 from tag-slot
     call __p_base # call __p_base
@@ -5129,8 +5307,8 @@ hexa_arena_reset:
     mov rbx, r10 # assign L0
     mov r11, [rbp - 128] # tag L6 from tag-slot
     mov [rbp - 80], r11 # store tag L0
-    jmp .La3fa_hexa_arena_reset_bb1 # branch
-.La3fa_hexa_arena_reset_bb3:
+    jmp .L188d_hexa_arena_reset_bb1 # branch
+.L188d_hexa_arena_reset_bb3:
     mov rsi, 0 # hv arg payload
     mov rdi, 0 # tag default = TAG_INT
     call __a_set_np # call __a_set_np
@@ -5153,7 +5331,7 @@ hexa_arena_reset:
 .hidden hexa_ptr_alloc
     .p2align 4
 hexa_ptr_alloc:
-    .loc 1 446 0
+    .loc 1 479 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -5165,7 +5343,7 @@ hexa_ptr_alloc:
     sub rsp, 464 # prologue: alloc spill frame
     mov [rbp - 264], rdi # store tag L0
     mov rbx, rsi # ingress param payload
-.La3fa_hexa_ptr_alloc_bb0:
+.L188d_hexa_ptr_alloc_bb0:
     mov rsi, rbx # hv arg payload
     mov rdi, [rbp - 264] # tag L0 from tag-slot
     mov rcx, 8 # hv arg payload
@@ -5196,9 +5374,9 @@ hexa_ptr_alloc:
     mov [rbp - 56], r10 # spill L5 to slot
     mov r10, [rbp - 56] # reload L5 from spill slot
     test r10, r10 # br_cond test
-    jz .La3fa_hexa_ptr_alloc_bb2 # jump-if-zero -> else
-    jmp .La3fa_hexa_ptr_alloc_bb1 # jump -> then
-.La3fa_hexa_ptr_alloc_bb1:
+    jz .L188d_hexa_ptr_alloc_bb2 # jump-if-zero -> else
+    jmp .L188d_hexa_ptr_alloc_bb1 # jump -> then
+.L188d_hexa_ptr_alloc_bb1:
     mov rsi, r13 # hv arg payload
     mov rdi, [rbp - 280] # tag L2 from tag-slot
     call page_alloc # call page_alloc
@@ -5217,7 +5395,7 @@ hexa_ptr_alloc:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_hexa_ptr_alloc_bb2:
+.L188d_hexa_ptr_alloc_bb2:
     call __a_np # call __a_np
     mov [rbp - 328], rax # store tag L8
     mov r10, rdx # hv: unbox user-call result payload
@@ -5234,15 +5412,15 @@ hexa_ptr_alloc:
     mov [rbp - 88], r10 # spill L9 to slot
     mov r10, [rbp - 88] # reload L9 from spill slot
     test r10, r10 # br_cond test
-    jz .La3fa_hexa_ptr_alloc_bb4 # jump-if-zero -> else
-    jmp .La3fa_hexa_ptr_alloc_bb3 # jump -> then
-.La3fa_hexa_ptr_alloc_bb3:
+    jz .L188d_hexa_ptr_alloc_bb4 # jump-if-zero -> else
+    jmp .L188d_hexa_ptr_alloc_bb3 # jump -> then
+.L188d_hexa_ptr_alloc_bb3:
     call __arena_grow # call __arena_grow
     mov [rbp - 352], rax # store tag L11
     mov r10, rdx # hv: unbox user-call result payload
     mov [rbp - 104], r10 # spill L11 to slot
-    jmp .La3fa_hexa_ptr_alloc_bb4 # branch
-.La3fa_hexa_ptr_alloc_bb4:
+    jmp .L188d_hexa_ptr_alloc_bb4 # branch
+.L188d_hexa_ptr_alloc_bb4:
     call __a_np # call __a_np
     mov [rbp - 360], rax # store tag L12
     mov r10, rdx # hv: unbox user-call result payload
@@ -5300,15 +5478,15 @@ hexa_ptr_alloc:
     mov [rbp - 160], r10 # spill L18 to slot
     mov r10, [rbp - 160] # reload L18 from spill slot
     test r10, r10 # br_cond test
-    jz .La3fa_hexa_ptr_alloc_bb6 # jump-if-zero -> else
-    jmp .La3fa_hexa_ptr_alloc_bb5 # jump -> then
-.La3fa_hexa_ptr_alloc_bb5:
+    jz .L188d_hexa_ptr_alloc_bb6 # jump-if-zero -> else
+    jmp .L188d_hexa_ptr_alloc_bb5 # jump -> then
+.L188d_hexa_ptr_alloc_bb5:
     call __arena_grow # call __arena_grow
     mov [rbp - 424], rax # store tag L20
     mov r10, rdx # hv: unbox user-call result payload
     mov [rbp - 176], r10 # spill L20 to slot
-    jmp .La3fa_hexa_ptr_alloc_bb6 # branch
-.La3fa_hexa_ptr_alloc_bb6:
+    jmp .L188d_hexa_ptr_alloc_bb6 # branch
+.L188d_hexa_ptr_alloc_bb6:
     call __a_np # call __a_np
     mov [rbp - 432], rax # store tag L21
     mov r10, rdx # hv: unbox user-call result payload
@@ -5402,7 +5580,7 @@ hexa_ptr_alloc:
 .hidden hexa_ptr_free
     .p2align 4
 hexa_ptr_free:
-    .loc 1 463 0
+    .loc 1 496 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -5416,7 +5594,7 @@ hexa_ptr_free:
     mov rbx, rsi # ingress param payload
     mov [rbp - 80], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.La3fa_hexa_ptr_free_bb0:
+.L188d_hexa_ptr_free_bb0:
     call POOL_PAGE_SIZE # call POOL_PAGE_SIZE
     mov [rbp - 88], rax # store tag L2
     mov r13, rdx # hv: unbox user-call result payload
@@ -5435,9 +5613,9 @@ hexa_ptr_free:
     mov r15, rdx # binop >=: capture bool payload
     mov [rbp - 104], rax # store tag L4
     test r15, r15 # br_cond test
-    jz .La3fa_hexa_ptr_free_bb2 # jump-if-zero -> else
-    jmp .La3fa_hexa_ptr_free_bb1 # jump -> then
-.La3fa_hexa_ptr_free_bb1:
+    jz .L188d_hexa_ptr_free_bb2 # jump-if-zero -> else
+    jmp .L188d_hexa_ptr_free_bb1 # jump -> then
+.L188d_hexa_ptr_free_bb1:
     mov rsi, rbx # hv arg payload
     mov rdi, [rbp - 72] # tag L0 from tag-slot
     mov rcx, r12 # hv arg payload
@@ -5458,7 +5636,7 @@ hexa_ptr_free:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.La3fa_hexa_ptr_free_bb2:
+.L188d_hexa_ptr_free_bb2:
     mov rdx, 0 # hv arg payload
     mov rax, 0 # tag default = TAG_INT
     add rsp, 80 # epilogue: free spill frame
@@ -5474,7 +5652,7 @@ hexa_ptr_free:
 .hidden hexa_ptr_write_byte
     .p2align 4
 hexa_ptr_write_byte:
-    .loc 1 479 0
+    .loc 1 512 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -5490,7 +5668,7 @@ hexa_ptr_write_byte:
     mov r12, rcx # ingress param payload
     mov [rbp - 72], r8 # store tag L2
     mov r13, r9 # ingress param payload
-.La3fa_hexa_ptr_write_byte_bb0:
+.L188d_hexa_ptr_write_byte_bb0:
     mov r10, rbx # hv payload
     mov r11, r12 # hv payload
     mov rsi, r13 # hv payload
@@ -5515,7 +5693,7 @@ hexa_ptr_write_byte:
 .hidden hexa_ptr_read_byte
     .p2align 4
 hexa_ptr_read_byte:
-    .loc 1 484 0
+    .loc 1 517 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -5529,7 +5707,7 @@ hexa_ptr_read_byte:
     mov rbx, rsi # ingress param payload
     mov [rbp - 64], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.La3fa_hexa_ptr_read_byte_bb0:
+.L188d_hexa_ptr_read_byte_bb0:
     mov r10, rbx # hv payload
     mov r11, r12 # hv payload
     add r10, r11 # __hx_ptr_load8: addr = ptr + off
@@ -5552,7 +5730,7 @@ hexa_ptr_read_byte:
 .hidden hexa_ptr_write_64
     .p2align 4
 hexa_ptr_write_64:
-    .loc 1 488 0
+    .loc 1 521 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -5568,7 +5746,7 @@ hexa_ptr_write_64:
     mov r12, rcx # ingress param payload
     mov [rbp - 72], r8 # store tag L2
     mov r13, r9 # ingress param payload
-.La3fa_hexa_ptr_write_64_bb0:
+.L188d_hexa_ptr_write_64_bb0:
     mov r10, rbx # hv payload
     mov r11, r12 # hv payload
     mov rsi, r13 # hv payload
@@ -5593,7 +5771,7 @@ hexa_ptr_write_64:
 .hidden hexa_ptr_read_64
     .p2align 4
 hexa_ptr_read_64:
-    .loc 1 493 0
+    .loc 1 526 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -5607,7 +5785,7 @@ hexa_ptr_read_64:
     mov rbx, rsi # ingress param payload
     mov [rbp - 64], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.La3fa_hexa_ptr_read_64_bb0:
+.L188d_hexa_ptr_read_64_bb0:
     mov r10, rbx # hv payload
     mov r11, r12 # hv payload
     add r10, r11 # __hx_ptr_load64: addr = ptr + off
@@ -5638,13 +5816,21 @@ main:
     push r14 # prologue: save r14
     push r15 # prologue: save r15
     sub rsp, 8 # prologue: callee-save align pad
-    sub rsp, 16 # prologue: alloc spill frame
-.La3fa_main_bb0:
+    sub rsp, 32 # prologue: alloc spill frame
+.L188d_main_bb0:
     mov rbx, 0 # assign L0
     mov [rip+g0], rbx # global write: g0
     mov r11, 0 # tag default = TAG_INT
     mov [rbp - 56], r11 # store tag L0
-    add rsp, 16 # epilogue: free spill frame
+    mov r12, 0 # assign L1
+    mov [rip+g1], r12 # global write: g1
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 64], r11 # store tag L1
+    mov r13, 0 # assign L2
+    mov [rip+g2], r13 # global write: g2
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 72], r11 # store tag L2
+    add rsp, 32 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
     pop r15 # epilogue: restore r15
     pop r14 # epilogue: restore r14
@@ -5659,6 +5845,14 @@ main:
 .section .data
     .p2align 3
 g0:
+    .quad 0
+    .quad 0
+    .p2align 3
+g1:
+    .quad 0
+    .quad 0
+    .p2align 3
+g2:
     .quad 0
     .quad 0
 .section .hexa.cap,"",@progbits
