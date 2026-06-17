@@ -1,3 +1,12 @@
+⛔ FALSIFIED (2026-06-17, by F-LEGB-STANDALONE-ELSE-NOGO / PR #3472) ⛔
+이 verdict 의 "standalone #else = 죽은 코드" 결론은 반증됨. 이 survey 는 build_aprime /
+build_native_* 계열(전부 HEXA_HAS=1)만 봤고 `tool/stage_resolve_runtime_a:271` 을 놓침 —
+거기서 release/byteeq/miscompile/determinism CI 가 runtime.c 를 매크로 없이(standalone)
+컴파일해 #else C-body(33 rt_* DEFINED)를 build/runtime.a 로 만들어 출하 ./hexa 에 링크함.
+즉 standalone #else 는 죽은 코드가 아니라 PRIMARY 출하 런타임 = honest-keep. 아래 내용은
+역사적 기록으로만 보존.
+═══════════════════════════════════════════════════════════════
+
 F-LEG-B-DEADCODE-PATH — 2026-06-16
 ═══════════════════════════════════════════════════════════════
 leg B(ls self/*.c == ∅) 파일 축소의 안전한 경로 발견 — standalone(neither)
