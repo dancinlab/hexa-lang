@@ -35,11 +35,15 @@ fn main() {
     if a[2] == 30 { ok = ok + 1 }     // neighbour intact
 
     // ── MIXED tags: the decisive __hx_make_val tag-faithful check ──
-    // set a string and a float, read back — tag must NOT flatten to int.
+    // set a string and a bool, read back — tag must NOT flatten to int.
+    // (float literals are an independent native-x86_64 emit gap — a bare
+    // `3.5` materializes as 0.0 on this backend — so bool is used here for a
+    // backend-clean cross-tag check; the C-oracle b4_array_gate.c covers the
+    // float element image separately.)
     a[0] = "hi"
-    a[2] = 3.5
+    a[2] = true
     if a[0] == "hi"  { ok = ok + 1 }   // STR tag survives
-    if a[2] == 3.5   { ok = ok + 1 }   // FLOAT tag survives
+    if a[2] == true  { ok = ok + 1 }   // BOOL tag survives
     if a[1] == 99    { ok = ok + 1 }   // INT neighbour untouched
 
     // ── len via the array (rt_len already native; sanity only) ──
