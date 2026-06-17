@@ -59,10 +59,25 @@ emit_one() {
         printf '//   module-global write path). hexat C-transpile cannot lower these, so they\n'
         printf '//   enter runtime.a ONLY via this seed. RUN-proven (F-M5-GSLOT-VAL-DONE, exit 0).\n'
         printf '//   ABI: %s.\n' "$abi"
+        # Normalize the flatten path, THEN strip the synthesized entry `main`
+        # (aprime --emit=asm adds a default entry; the flattened alloc.hexa has no
+        # `fn main`). A library seed must NOT export `main` — it would multiple-
+        # definition-clash with runtime.o's main at runtime.a ar. Drop the
+        # `.globl/.type/.size main` directives + the `main:`-to-next-symbol body.
         sed -E -e 's#"[^"]*alloc-flat\.hexa"#"self/rt/alloc.hexa"#g' \
-               -e 's#^// source: .*alloc-flat\.hexa#// source: self/rt/alloc.hexa#' "$raw"
+               -e 's#^// source: .*alloc-flat\.hexa#// source: self/rt/alloc.hexa#' "$raw" \
+        | awk '
+            /^[[:space:]]*\.(globl|type|size|p2align|align)[[:space:]].*\<main\>/ { next }
+            /^_?main:[[:space:]]*$/ { inmain=1; next }
+            inmain==1 && (/^[[:space:]]*\.(globl|type)[[:space:]]/ || /^[A-Za-z_][A-Za-z0-9_]*:[[:space:]]*$/) { inmain=0 }
+            inmain!=1 { print }
+        '
     } > "$out"
-    echo "[regen_alloc_syscall] $triple → $out ($n globl)"
+    # Sanity: the stripped seed must NOT export main.
+    if grep -qE '^[[:space:]]*\.globl[[:space:]]+_?main$' "$out"; then
+        echo "[regen_alloc_syscall] ERROR: $out still exports main after strip" >&2; exit 1
+    fi
+    echo "[regen_alloc_syscall] $triple → $out ($n globl, main-stripped)"
 }
 
 case "$WHICH" in
