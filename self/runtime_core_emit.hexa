@@ -5767,7 +5767,13 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "    return rt_array_pop_native(arr);\n"
     buf = buf + "}\n"
     if buf.len() > 65536 { _flush_runtime_core(out_path, buf); buf = "" }
-    buf = buf + "#ifndef HEXA_HAS_HEXA_RT_STDLIB\n"
+    // array-r6: array.shift delegates UNCONDITIONALLY to the raw-mem hexa-source
+    // body (array_core.hexa::rt_array_shift_native — items[0] saved via the get
+    // path + 16-byte slide of every later element + len truncate, byte-exact vs
+    // the dropped C body). The seed ships rt_array_shift_native (regen 5 globl);
+    // collapses both the standalone C body and the #else rt_array_shift closure.
+    // non-array / empty guards stay C (they throw).
+    buf = buf + "extern HexaVal rt_array_shift_native(HexaVal arr);\n"
     buf = buf + "HexaVal hexa_array_shift(HexaVal arr) {\n"
     buf = buf + "    if (!HX_IS_ARRAY(arr)) {\n"
     buf = buf + "        char _buf[128];\n"
@@ -5779,30 +5785,8 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "        hexa_throw(hexa_str(\"array.shift(): empty array\"));\n"
     buf = buf + "        return hexa_void();\n"
     buf = buf + "    }\n"
-    buf = buf + "    HexaVal first = HX_ARR_ITEMS(arr)[0];\n"
-    buf = buf + "    int n = HX_ARR_LEN(arr);\n"
-    buf = buf + "    for (int i = 0; i < n - 1; i++) {\n"
-    buf = buf + "        HX_ARR_ITEMS(arr)[i] = HX_ARR_ITEMS(arr)[i + 1];\n"
-    buf = buf + "    }\n"
-    buf = buf + "    HX_SET_ARR_LEN(arr, n - 1);\n"
-    buf = buf + "    return first;\n"
+    buf = buf + "    return rt_array_shift_native(arr);\n"
     buf = buf + "}\n"
-    buf = buf + "#else\n"
-    buf = buf + "extern HexaVal rt_array_shift(HexaVal arr);\n"
-    buf = buf + "HexaVal hexa_array_shift(HexaVal arr) {\n"
-    buf = buf + "    if (!HX_IS_ARRAY(arr)) {\n"
-    buf = buf + "        char _buf[128];\n"
-    buf = buf + "        snprintf(_buf, sizeof(_buf), \"array.shift(): container is not an array (tag=%d)\", (int)HX_TAG(arr));\n"
-    buf = buf + "        hexa_throw(hexa_str(_buf));\n"
-    buf = buf + "        return hexa_void();\n"
-    buf = buf + "    }\n"
-    buf = buf + "    if (HX_ARR_LEN(arr) == 0) {\n"
-    buf = buf + "        hexa_throw(hexa_str(\"array.shift(): empty array\"));\n"
-    buf = buf + "        return hexa_void();\n"
-    buf = buf + "    }\n"
-    buf = buf + "    return rt_array_shift(arr);\n"
-    buf = buf + "}\n"
-    buf = buf + "#endif\n"
     buf = buf + "\n"
     buf = buf + "// Step-3 cycle 25 port (float array fast-path).\n"
     buf = buf + "HexaVal hexa_array_reverse(HexaVal arr) {\n"

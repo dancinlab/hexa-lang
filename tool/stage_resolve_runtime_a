@@ -282,12 +282,12 @@ resolve_native_array_core_seed() {
     esac
     [ -n "$seed" ] && [ -f "$seed" ] || return 0
     mkdir -p build
-    # SAFETY: only adopt the native path if the seed exports ALL 4 element fns
+    # SAFETY: only adopt the native path if the seed exports ALL 5 element fns
     # the runtime_core.c delegation expects — a stale/partial seed would yield an
     # `undefined reference` at the app link. Counted from `.globl` (toolchain-free).
-    local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?rt_array_(get|set|len|pop)_native' "$seed" 2>/dev/null || echo 0)"
-    if [ "${nsyms:-0}" -lt 4 ]; then
-        echo "[stage_resolve_runtime_a] RT-NATIVE ARRAY-R4: seed $seed exports only $nsyms/4 rt_array_*_native — falling back to C #else path" >&2
+    local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?rt_array_(get|set|len|pop|shift)_native' "$seed" 2>/dev/null || echo 0)"
+    if [ "${nsyms:-0}" -lt 5 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE ARRAY-R4: seed $seed exports only $nsyms/5 rt_array_*_native — falling back to C #else path" >&2
         return 0
     fi
     local s_tmp="build/array_core_seed.s"
@@ -322,8 +322,8 @@ resolve_native_map_core_seed() {
     # the runtime_core.c delegation expects — a stale/partial seed would yield an
     # `undefined reference` at the app link. Counted from `.globl` (toolchain-free).
     local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?rt_map_(get|fnv1a|strcmp0|contains)_native' "$seed" 2>/dev/null || echo 0)"
-    if [ "${nsyms:-0}" -lt 4 ]; then
-        echo "[stage_resolve_runtime_a] RT-NATIVE MAP-R3: seed $seed exports only $nsyms/4 rt_map_*_native — falling back to C #else path" >&2
+    if [ "${nsyms:-0}" -lt 5 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE MAP-R3: seed $seed exports only $nsyms/5 rt_map_*_native — falling back to C #else path" >&2
         return 0
     fi
     local s_tmp="build/map_core_seed.s"

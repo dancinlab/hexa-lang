@@ -88,3 +88,33 @@ pub fn rt_array_pop_native(arr: HexaVal) -> HexaVal {
     __hx_ptr_store64(arr_ptr, 8, last_idx)           // len <- len - 1
     return last
 }
+
+// rt_array_shift_native: remove + return items[0], sliding every later element
+// down one slot, then shrink len. The slide COPIES each 16-byte {tag,payload}
+// image verbatim (raw int64 load/store of both eightbytes) — no tag
+// reconstruction needed mid-copy, the element image moves intact. `first` is
+// reconstructed via the get path so the returned value keeps its REAL tag.
+// Alloc-free (in-place memmove + length decrement), so it ports like pop. The C
+// wrapper keeps the empty / non-array guard + throw. All raw-int leaves,
+// un-nested (one op per temp), mirroring the C `for i<n-1: items[i]=items[i+1]`.
+pub fn rt_array_shift_native(arr: HexaVal) -> HexaVal {
+    let arr_ptr = __hx_payload_add(arr, 0)
+    let items = __hx_ptr_load64(arr_ptr, 0)
+    let len = __hx_ptr_load64(arr_ptr, 8)
+    let first = rt_array_get_native(arr, 0)          // items[0], tag-faithful
+    let last = __hx_payload_sub(len, 1)              // n - 1
+    let mut i = 0
+    while __hx_payload_lt(i, last) {
+        let off = __hx_payload_mul(i, 16)            // items[i]   byte offset
+        let noff = __hx_payload_add(off, 16)         // items[i+1] byte offset
+        let t = __hx_ptr_load64(items, noff)         // copy tag word
+        let noff8 = __hx_payload_add(noff, 8)
+        let p = __hx_ptr_load64(items, noff8)        // copy payload word
+        __hx_ptr_store64(items, off, t)
+        let off8 = __hx_payload_add(off, 8)
+        __hx_ptr_store64(items, off8, p)
+        i = __hx_payload_add(i, 1)
+    }
+    __hx_ptr_store64(arr_ptr, 8, last)               // len <- n - 1
+    return first
+}
