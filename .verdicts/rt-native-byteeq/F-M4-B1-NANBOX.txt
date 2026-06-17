@@ -1,0 +1,109 @@
+F-M4-B1-NANBOX — RT-NATIVE-ZEROC M4 batch B1 (nanbox-ctor) status + can-drop-#else verdict
+==========================================================================================
+verdict date: 2026-06-17 · method c2/c9/c16 (read actual source + RAN a C-differential gate
+on real x86_64 aiden + transpiled a HexaVal-ctor probe — never self-judged)
+aiden repo @ dfbbc8708 (main, M1 landed) · all builds/reads via `harness pool on aiden`
+
+TL;DR
+─────
+B1's nanbox-ctor family (hexa_int/float/bool/void/bits_to_float/enum_str/enum_str_v) is
+ALREADY natively expressed — three independent ways — and BYTE-EQ to the C ctors is
+re-confirmed by a fresh 35/35 C-differential gate on real x86_64. BUT:
+  • The C `#else`/default ctor bodies CANNOT be dropped until M5 (the standalone-build
+    redesign). The authoritative CI byteeq/release path links the STANDALONE runtime.a,
+    which DEFINES these ctors; removing them = release_build link failure.
+  • The task's proposed deliverable — an aprime-compiled `stdlib/runtime/nanbox.hexa`
+    with `fn hexa_int(n:int)->HexaVal {...}` — is NOT viable: a HexaVal struct-literal in
+    hexa source lowers to a CALL to hexa_int (self-recursive). The ctors live BELOW the
+    type system; only a byte-emitter (the landed `rt_hexa_*`) or codegen intrinsic can
+    express them. This is the SAME class of finding as F-LEGB-RTSTR-HEXASOURCE-COMPLETE
+    (already-native via a different mechanism; the asked-for file would be redundant /
+    impossible). NO file authored — honest c10 (surgical) + c9 (no fake).
+
+So B1 = DONE-AT-MECHANISM, BLOCKED-AT-FILE-REDUCTION (on M5, not on the ctor). This batch's
+real product is the verification artifact (b1_nanbox_gate.c, 35/35) + this classification.
+
+────────────────────────────────────────────────────────────────────────────────────────
+1. THREE EXISTING NATIVE EXPRESSIONS OF THE B1 CTORS (all landed, pre-this-batch)
+────────────────────────────────────────────────────────────────────────────────────────
+(a) codegen-inlined `_hv_load`/`_hv_store` (compiler/codegen/arm64_darwin.hexa ~1090):
+    every int/float/bool/void literal lowers DIRECTLY to `movz tag` + `movz/ldr payload`
+    register writes — no runtime call. This IS hexa_int/bool/void/float inlined at the
+    call site. x86_64 carries the full {tag,payload} pair model (#3462) + M1 landed the
+    25 `__hx_*` leaf intrinsics (grep -c __hx_ x86_64_linux.hexa = 73).
+(b) HEXA_RT_SELFEMIT byte-emitter (self/codegen/runtime_arm64.hexa rt_hexa_void/int/bool/
+    float/enum_str/enum_str_v, bundled by test/native_build/emit_hexa_val_ctors_o.hexa):
+    each ctor = 12 bytes = 3 hand-encoded aarch64 instructions exporting the strong
+    `_hexa_*` symbol. Under -DHEXA_RT_SELFEMIT runtime_core.c emits them as `extern` and
+    ld64 binds every callsite to the self-emit .o. Self-documented byte-confirmed vs
+    `as -arch arm64` (otool) + JIT-exec-correct. ACTIVATED only by the opt-in
+    HEXA_RT_SELFEMIT=1 env (arm64 Mach-O only) in tool/build_hexa_cli.hexa — NOT by the
+    authoritative byteeq gate.
+(c) `__hx_*` bind-whitelist intrinsics (compiler/check/bind.hexa ~1221) for the read side
+    (__hx_tag/__hx_payload_*) — the value-destructure counterpart of the ctors.
+
+The C `#else` bodies (self/runtime_core_emit.hexa ~1505) are the 1-line aggregate literals:
+  hexa_int(n){return (HexaVal){.tag=TAG_INT,.i=n};} … 3-way #ifdef:
+  #ifdef HEXA_RT_SELFEMIT extern  /  #else  C body  /  #endif   (per ctor).
+
+────────────────────────────────────────────────────────────────────────────────────────
+2. C-DIFFERENTIAL GATE (c2 — RAN, NOT self-judged)
+────────────────────────────────────────────────────────────────────────────────────────
+scripts/scratch/rt_native/b1_nanbox_gate.c — two halves:
+  PART A: links the STANDALONE runtime.c (the PRIMARY CI config — no -DHEXA_HAS, no
+          -DHEXA_RT_SELFEMIT) and asserts the 16-byte {tag,payload} image of every ctor
+          over: ints {0,±1,±42,INT64_MIN/MAX,±1234567890123}, floats {0,-0,±1,3.14,
+          DBL_MAX,DBL_MIN,±inf,NaN}, bools {0,1}, void, bits_to_float reinterprets, enum ptr.
+  PART B: hard-codes the arm64 rt_hexa_* byte sequences (from runtime_arm64.hexa) and
+          asserts each decodes to the exact `as -arch arm64` encoding with the correct
+          TAG_* movz immediate (TAG_INT=0/FLOAT=1/BOOL=2/VOID=4/ENUM=11).
+
+RESULT (aiden, x86_64, gcc -O2 -std=gnu11, standalone runtime.c):
+    HexaVal sizeof = 16, TAG_VOID=4 TAG_ENUM=11
+    PART A … PART B …
+    GATE PASS — 35 checks, 0 fails
+→ byte-identical confirmed by captured output. (arm64 JIT-exec run-side is the arm64 CI
+  faithful target's job; PART B verifies the encoding + tag constants on x86_64.)
+
+────────────────────────────────────────────────────────────────────────────────────────
+3. CAN THE C `#else` NANBOX BODIES BE DROPPED?  → NO. MUST STAY UNTIL M5. (c9 honest)
+────────────────────────────────────────────────────────────────────────────────────────
+Re-confirms F-LEGB-STANDALONE-ELSE-NOGO for the ctor family specifically:
+  • grep HEXA_RT_SELFEMIT over tool/release_build, tool/stage_resolve_runtime_a,
+    .github/workflows/*.yml = EMPTY → SELFEMIT is NOT in the authoritative byteeq path.
+  • The CI/release primary builder (release_build → stage_resolve_runtime_a:271) compiles
+    self/runtime.c in STANDALONE config. MEASURED on aiden:
+       gcc -O2 -std=gnu11 -I self -c self/runtime.c → nm:
+       T hexa_int  T hexa_float  T hexa_bool  T hexa_void  T hexa_bits_to_float  T hexa_enum_str
+    All DEFINED (strong T). Drop the #else bodies → standalone runtime.a leaves them
+    undefined → release_build's ./hexa link FAILS. → #else is LIVE, not dead code.
+DROP-VERDICT: MUST STAY until M5 (`build_runtime_a_from_source()` links native rt_*.o into
+  the standalone runtime.a + excises the matching #else). M5 = build redesign + frozen-seed
+  coherence bump, NOT this batch.
+
+────────────────────────────────────────────────────────────────────────────────────────
+4. WHY NO `stdlib/runtime/nanbox.hexa` WAS AUTHORED (c9 + c16, empirical)
+────────────────────────────────────────────────────────────────────────────────────────
+Probe (RAN, ./build/hexat on aiden):
+    pub fn hexa_int_probe(n: int) -> HexaVal { return HexaVal { tag: 0, payload: n } }
+  transpiled to:
+    HexaVal hexa_int_probe(HexaVal n) { … return … HexaVal(hexa_int(0), n); }
+  i.e. a HexaVal struct-literal in hexa source emits a CALL to `hexa_int` — the very ctor.
+  numeric.hexa's own comment says it plainly: "hexa typing doesn't model the HexaVal union
+  directly" (that's why hexa_abs is split into rt_abs_int/rt_abs_float — you cannot
+  construct/destructure the union in hexa source). A hexa-source nanbox.hexa would be
+  SELF-RECURSIVE / impossible; the byte-emitter rt_hexa_* (mechanism (b)) is the correct
+  and complete native form. Authoring a redundant/circular file would violate c9/c10.
+CLASSIFICATION (c16): this is NOT a fixpoint break and NOT a lowering bug — it is a
+  "already-native via the only viable mechanism" finding (twin of F-LEGB-RTSTR). The
+  task's nanbox.hexa premise rested on a HexaVal-source-constructibility that does not hold.
+
+────────────────────────────────────────────────────────────────────────────────────────
+DELIVERABLE OF THIS BATCH
+────────────────────────────────────────────────────────────────────────────────────────
+  • scripts/scratch/rt_native/b1_nanbox_gate.c — the c2 differential gate (35/35 PASS,
+    re-runnable byte oracle for the ctor family on both targets).
+  • This verdict — B1 = mechanism-DONE, file-reduction BLOCKED-on-M5, nanbox.hexa NOT viable.
+NEXT (unchanged real blocker): M5 standalone-build redesign (link native rt_*.o into
+  runtime.a + excise #else + frozen-seed bump) — the single gate for ls self/*.c reduction.
+  Until then every B-batch is mechanism-confirm + gate, not file-drop.
