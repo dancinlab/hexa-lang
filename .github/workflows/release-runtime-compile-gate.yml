@@ -1,0 +1,80 @@
+name: release-runtime-compile-gate
+
+# ── install.sh-path RUNTIME COMPILE gate (anima ING [54] recurrence-prevention) ─
+#
+# The 0.1.0-dispatch install.sh break (Ubuntu 24.04 / clang-18 / glibc-2.39:
+# "error: redefinition of 'rt_str_to_upper'") was invisible to release CI because
+# the RELEASE build regenerates self/runtime_core.c from the emitter SSOT
+# (tool/stage_resolve_runtime_a), whereas install.sh restores the frozen seed via
+# tool/restore_frozen_seeds directly and never runs that regen. So a frozen-seed ↔
+# emitter drift that leaves the restored runtime self-contradictory shipped green.
+#
+# This gate walks the INSTALL path on the clang-18 / 24.04 floor: it runs
+# tool/restore_frozen_seeds, then compiles self/runtime.c with the canonical
+# install-path flags (no -DHEXA_HAS_HEXA_RT_STDLIB → the #ifndef C bodies are
+# LIVE, exactly as on a user machine) and FAILS on any redefinition / duplicate
+# symbol / compile error. It needs NO hexa binary and NO network, so it runs on
+# every PR that touches the runtime SSOT or the seed/install tooling.
+#
+# A runner that lacks a usable compiler (or a header the runtime needs) exits 2 →
+# remapped to neutral, so an infra miss never false-fails a PR.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tool/restore_frozen_seeds'
+      - 'tool/release_runtime_compile_gate'
+      - 'install.sh'
+      - 'self/runtime*.hexa'
+      - 'self/runtime*.c'
+      - 'self/native/**'
+      - '.github/workflows/release-runtime-compile-gate.yml'
+  pull_request:
+    paths:
+      - 'tool/restore_frozen_seeds'
+      - 'tool/release_runtime_compile_gate'
+      - 'install.sh'
+      - 'self/runtime*.hexa'
+      - 'self/runtime*.c'
+      - 'self/native/**'
+      - '.github/workflows/release-runtime-compile-gate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-compile-gate:
+    name: install.sh runtime compile (clang-18, ubuntu-24.04)
+    runs-on: ubuntu-latest      # ubuntu-latest == Ubuntu 24.04 (the install floor)
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # restore_frozen_seeds fetches the pinned frozen ref on demand; a shallow
+          # checkout is fine (the tool handles the on-demand fetch itself).
+          fetch-depth: 1
+
+      - name: Install clang-18 (24.04 floor) + headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          # clang-18 is in the 24.04 archive; libssl-dev pulls <openssl/*.h> so the
+          # gate exercises the same headers a real install build sees (no infra skip).
+          sudo apt-get install -y -qq clang-18 libssl-dev || sudo apt-get install -y -qq clang libssl-dev
+          clang-18 --version || clang --version
+
+      - name: Gate — restore seeds + compile self/runtime.c (clang-18)
+        shell: bash
+        run: |
+          # The Actions shell injects -e; capture the gate's exit so the
+          # exit-2-neutral remap runs instead of aborting first.
+          rc=0
+          bash tool/release_runtime_compile_gate || rc=$?
+          if [ "$rc" = 2 ]; then
+            echo "::notice::runtime-compile gate NEUTRAL — no usable compiler/header on this runner"
+            exit 0
+          fi
+          exit "$rc"
