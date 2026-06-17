@@ -1,0 +1,86 @@
+F-M5-SYSCALL-B-PORTED — self/rt/syscall.hexa ported off the P7-7 `syscall()`
+                         builtin + `__TARGET_OS__` ident onto the shipping
+                         `__hx_syscall6`/`__hx_target_os()` leaves; integration
+                         emit RAN-located TWO remaining P7-7-intrinsic gaps
+                         (hexa_ptr_addr, g<id> global slot). (2026-06-18, aiden)
+================================================================================
+LANE: M5 standalone-redesign, syscall sub-unit b (RT-NATIVE-ZEROC fleet).
+GOAL: rewrite syscall.hexa's `syscall(N,…)` builtin calls to the M1 leaf
+`__hx_syscall6` (+ `__hx_syscall0`) and `__TARGET_OS__` → `__hx_target_os()`
+(landed M5-syscall-a), then turn the b2 gate (flatten alloc+syscall + driver)
+green — proving alloc+syscall integrate C-free over the shipping leaf surface.
+
+================================================================================
+1. WHAT LANDED (the syscall-surface port, c10)
+================================================================================
+self/rt/syscall.hexa, all 25 call sites rewritten via a balanced-paren parser:
+  · `syscall(N, a…)` → `_scK(N, a…)` shim (@inline) → `__hx_syscall6(N, a…, 0-fill
+    to 6)`; 0-arg `syscall(N)` → `_sc0(N)` → `__hx_syscall0(N)`. Arities used:
+    0 (fork), 1 (close/exit/pipe), 2 (munmap/dup2/nanosleep), 3 (read/write/open/
+    lseek/mkdirat/getrandom/clock_gettime/execve/unlinkat), 4 (wait4), 6 (mmap).
+  · `__TARGET_OS__ == k` → `__hx_target_os() == k` (the M5-syscall-a intrinsic).
+  Verify: grep raw `return …syscall(` + `__TARGET_OS__ ==` in the rebuilt b2 gate
+  = 0; `_scK`/`__hx_syscall6`/`__hx_target_os` = 44. syscall.hexa is a DORMANT
+  skeleton → byteeq-inert (selfhost-byteeq-real untouched).
+
+================================================================================
+2. INTEGRATION EMIT — TWO REMAINING GAPS (c2/c9, aiden aprime_m5a, x86_64)
+================================================================================
+b2 gate (flatten alloc+syscall [496 L] + driver: rt_init → 3 cross-pool
+hexa_ptr_alloc → mark/rewind → reset). aprime_m5a --emit=asm --target=x86_64-
+linux-gnu:
+
+  emit rc = 1
+    HX2001 undefined name `hexa_ptr_addr`   (syscall.hexa:163, sys_getrandom
+                                             DARWIN fallback: sys_open(
+                                             hexa_ptr_addr("/dev/urandom"),…))
+
+  GAP 1 — `hexa_ptr_addr` (string → raw cstring pointer) is ANOTHER P7-7
+  intrinsic absent from the shipping backend (grep compiler/ = 0). Used at
+  EXACTLY ONE site: the sys_getrandom darwin fallback (darwin has no getrandom
+  syscall, so it reads /dev/urandom). Unrelated to the alloc path (mmap/munmap/
+  exit), but flatten pulls all of syscall.hexa in, so it blocks the gate emit.
+
+  GAP 2 — `g<id>` module-global data slot (already named in b1/b2): alloc.hexa's
+  `__arena_tbl` (a module-global `let mut`) emits an undefined `g<id>` in a
+  standalone single-module emit. This would surface at LINK once GAP 1 is past
+  emit. b1 sidestepped it global-free in the PoC; the real alloc.hexa is global
+  (11 consumers need the no-handle hexa_ptr_alloc(size) surface).
+
+================================================================================
+3. CLASSIFICATION (c16) — the M5 P7-7-surface port is a SEQUENCE of leaf adds
+================================================================================
+WALL TYPE (c) substrate/codegen. Each self/rt module written against the P7-7
+surface reveals its intrinsic deps as we port it; the shipping backend needs a
+leaf for each. So far: `__hx_target_os` (a, DONE) → now `hexa_ptr_addr` (string→
+ptr) + the `g<id>` global-slot mechanism. These are bounded, ADD-only codegen
+leaves (the read-half `__hx_*` pattern), not open-ended.
+
+  NAMED NEXT BRICKS (either order; both ADD-only codegen):
+   · M5-syscall-c = add a shipping `hexa_ptr_addr`-equivalent leaf (string literal
+     → cstring pointer; the backend already lays out string rodata + `lea`s it for
+     printf-style calls — expose that address as an int HexaVal). Then the b2 gate
+     emit passes GAP 1.
+   · M5-gslot = define the `g<id>` module-global `.bss`/.data slot in standalone
+     single-module emit (or const-fold a global whose only writer is rt_init).
+     Then the b2 gate LINKS + RUNs exit 0 = alloc+syscall C-free integration proof.
+
+================================================================================
+4. HONEST RESIDUAL (c9)
+================================================================================
+  · The syscall-SURFACE port (syscall()→__hx_syscall6, __TARGET_OS__→
+    __hx_target_os) is COMPLETE and correct (0 raw call sites left), but the b2
+    gate is NOT yet green — blocked by GAP 1 (hexa_ptr_addr) at emit, and GAP 2
+    (g<id>) would block at link. So "alloc+syscall integrate C-free" is PROVEN-
+    PENDING, not yet demonstrated end-to-end. Stated plainly.
+  · syscall.hexa + the rebuilt gate land as source (dormant, byteeq-inert); the
+    RUN-green proof waits on the two leaf adds. No CI regression (no shipping
+    compiler edit this round; aprime_m5a unchanged).
+  · `ls self/*.c == ∅` unchanged. The M5 port is a sequence of bounded ADD-only
+    codegen leaves (target_os ✓ → ptr_addr → g-slot), each RAN-surfaced as the
+    next module is flattened — the honest shape of the remaining work.
+
+CONCLUSION: syscall.hexa is off the P7-7 syscall()/__TARGET_OS__ surface; the b2
+gate now blocks on two further bounded leaf gaps — `hexa_ptr_addr` (string→ptr,
+1 site) at emit and the `g<id>` global slot at link — both named as the next
+ADD-only codegen bricks that turn the alloc+syscall integration green.
