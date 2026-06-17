@@ -294,3 +294,25 @@ r4 = freeze array_core_{x86_64,arm64}.s + ar into runtime.a + define HEXA_RT_ARR
 - HONEST horizon (c9): "RT-NATIVE-ZEROC 모두 완료" = a MAJOR multi-session campaign (complete the
   self/rt/ runtime-replacement tree + the 3 blockers above). This session LANDED array-r4 (−1264 B,
   13/13 CI green) + fully mapped M5/M6 to concrete executable sub-units. Completion is NOT one-turn.
+
+## [session handoff — next-brick terrain explored] 2026-06-17
+- LANDED this session: #3494 ARRAY-R4 byte-DECREASE −1264B (13/13 CI green) · #3495/#3496 M5/M6
+  full mapping · #3497 M5a (larm64_flatten resolves `use self::rt::`, compiler flatten byte-identical).
+- NEXT-BRICK terrain probed (so the next cycle skips re-derivation):
+  * map READ-half is NOT a clean array-template fit: HexaMapTable = open-addressing hash
+    (slots[HexaMapSlot{key:char*@0, hash:u32@8, order_idx:int@12}=16B] @0, vals:HexaVal*@8,
+    ht_cap:int@16, …); hmap_find = fnv1a(key) + open-addressing probe + strcmp. map_get takes
+    `const char* key` (raw C string, NOT HexaVal) ⇒ porting needs fnv1a + strcmp over __hx_ptr_load8
+    on a char* + a probe loop — substantial, and the char* signature fights the HexaVal-centric
+    intrinsics. Viable but ~3× the array effort; do as a dedicated cycle if pursued.
+  * M5c rt-stdlib #else (rt_null_coal/rt_len/rt_eq/cmp): the native arm delegates to hexa-source
+    bodies (self/rt/core.hexa · stdlib/runtime/numeric.hexa) that call helpers via `hexa_call1`
+    (DYNAMIC dispatch, e.g. float_of) — NOT a static use/import edge, so larm64_flatten can't
+    assemble the closure. Needs the FULL rt-stdlib bundle (numeric+core+convert) transpiled together
+    OR a dynamic-symbol-table seed. = the genuine wholesale M5, careful + large.
+  * libc-floor (self/rt/mod.hexa, now flattenable via M5a → 8 files/2093L): P7-7 skeleton
+    (except/ffi/intern deferred; math = Taylor/Newton libm-replacement). The syscall/mmap/libm core
+    is the "irreducible substrate" (architecture) — partial honest-keep candidate (Go/Rust-equiv).
+- ASSESSMENT (c9): each remaining brick is a substantial, fixpoint-sensitive, dedicated cycle. No
+  quick clean brick remains after array (the sole new-port construct-walled case). "모두 완료"
+  (ls==∅) = a major multi-session campaign with the above three lanes, all mapped + gated.
