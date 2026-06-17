@@ -1224,6 +1224,7 @@ fn _bind_builtin_names() -> [string] {
         // hexa_type_of/eq/truthy natively (Z2c dispatch core) instead of `bl _hexa_type_of`.
         "__hx_tag", "__hx_payload_eq", "__hx_payload_nz",
         "__hx_payload_lt", "__hx_payload_gt", "__hx_payload_le", "__hx_payload_ge",
+        "__hx_payload_eq", "__hx_payload_ne",
         "__hx_payload_add", "__hx_payload_sub", "__hx_payload_mul",
         "__hx_payload_and", "__hx_payload_xor",
         "__hx_payload_fadd", "__hx_payload_fsub", "__hx_payload_fmul", "__hx_payload_fdiv",

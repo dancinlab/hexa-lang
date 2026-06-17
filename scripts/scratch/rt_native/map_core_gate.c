@@ -25,7 +25,7 @@
 #include "runtime.h"
 
 /* native port (gen2-emitted object); key passed as int64 pointer value. */
-extern HexaVal rt_map_get_native(HexaVal m, int64_t keyp);
+extern HexaVal rt_map_get_native(HexaVal m, HexaVal keyp);  /* key boxed as TAG_INT HexaVal */
 
 /* 16-byte image equality of two HexaVals (tag word + payload word). */
 static int hv_eq(HexaVal a, HexaVal b) { return memcmp(&a, &b, sizeof(HexaVal)) == 0; }
@@ -38,7 +38,7 @@ static void chk(int cond, const char* what) {
 /* compare native vs C for a present key — tags + payloads must match bit-exact */
 static void chk_key(HexaVal m, const char* key) {
     HexaVal c = hexa_map_get(m, key);
-    HexaVal n = rt_map_get_native(m, (int64_t)(intptr_t)key);
+    HexaVal n = rt_map_get_native(m, hexa_int((int64_t)(intptr_t)key));
     char buf[128];
     snprintf(buf, sizeof(buf), "get('%s') native==C (tag %d vs %d)", key, (int)HX_TAG(n), (int)HX_TAG(c));
     chk(hv_eq(n, c), buf);
@@ -73,7 +73,7 @@ int main(void) {
 
     /* MISSING key — C path returns TAG_VOID (after a stderr msg); native returns
      * __hx_make_val(4,0) = TAG_VOID. Compare tags only (C prints, native silent). */
-    HexaVal miss_n = rt_map_get_native(m, (int64_t)(intptr_t)"no_such_key");
+    HexaVal miss_n = rt_map_get_native(m, hexa_int((int64_t)(intptr_t)"no_such_key"));
     chk(HX_TAG(miss_n) == TAG_VOID, "missing key native -> TAG_VOID");
 
     if (fails == 0) { printf("[map_core_gate] PASS (all native==C, %d checks)\n", 11); return 21; }
