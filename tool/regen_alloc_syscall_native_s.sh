@@ -67,9 +67,12 @@ emit_one() {
         sed -E -e 's#"[^"]*alloc-flat\.hexa"#"self/rt/alloc.hexa"#g' \
                -e 's#^// source: .*alloc-flat\.hexa#// source: self/rt/alloc.hexa#' "$raw" \
         | awk '
-            /^[[:space:]]*\.(globl|type|size|p2align|align)[[:space:]].*\<main\>/ { next }
+            /^[[:space:]]*\.globl[[:space:]]+_?main$/ { next }
+            /^[[:space:]]*\.type[[:space:]]+_?main,/ { next }
+            /^[[:space:]]*\.size[[:space:]]+_?main,/ { next }
             /^_?main:[[:space:]]*$/ { inmain=1; next }
-            inmain==1 && (/^[[:space:]]*\.(globl|type)[[:space:]]/ || /^[A-Za-z_][A-Za-z0-9_]*:[[:space:]]*$/) { inmain=0 }
+            inmain==1 && /^[A-Za-z_][A-Za-z0-9_]*:[[:space:]]*$/ { inmain=0 }
+            inmain==1 && /^[[:space:]]*\.globl[[:space:]]/ { inmain=0 }
             inmain!=1 { print }
         '
     } > "$out"
