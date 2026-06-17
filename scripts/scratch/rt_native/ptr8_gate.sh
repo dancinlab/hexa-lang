@@ -44,8 +44,8 @@ if as --64 -o /tmp/ptr8_x86_probe.o /tmp/ptr8_x86_probe.s 2>/tmp/ptr8_x86_as.err
         if echo "$hit" | grep -qiE "\b$2\b"; then echo "  ✓ x86 $1  [$2]"
         else echo "  ✗ x86 ENC MISMATCH: $1 want=$2 got=[$hit]"; fail=1; fi
     }
-    # store byte: mov byte ptr [r10], sil  → REX.RB(45) 88 /r, modrm 32
-    check_enc "mov +BYTE PTR \[r10\],sil" "45 88 32"
+    # store byte: mov byte ptr [r10], sil  → REX.B(41) 88 /r, modrm 32
+    check_enc "mov +BYTE PTR \[r10\],sil" "41 88 32"
     # load byte zero-ext: movzx r10, byte ptr [r10] → REX.WRB(4d) 0f b6 12
     check_enc "movzx +r10,BYTE PTR \[r10\]" "4d 0f b6 12"
 else
