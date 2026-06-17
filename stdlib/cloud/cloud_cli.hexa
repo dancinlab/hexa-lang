@@ -540,7 +540,7 @@ fn _auto_register(reg_token: str, host: str, pid: int) -> str {
     synth.push("--verdict=PENDING")
     synth.push("--pid=" + pid_s)
     let _ = pods_local_add(synth, 0)
-    println("[cloud] 📋 registered jid=" + jid + " in " + cwd + "/pods.json")
+    println("[cloud] 📋 registered jid=" + jid + " in " + cwd + "/ING.jsonl")
     return jid
 }
 
@@ -565,7 +565,7 @@ fn _rent_register_pods_json(pod_id: str, host: str, provider: str, owner: str) -
     synth.push("--stage=rented")
     synth.push("--verdict=PENDING")
     let _ = pods_local_add(synth, 0)
-    println("[cloud] 📋 registered jid=" + jid + " (pod " + pod_id + ") in " + cwd + "/pods.json — `cloud dispatch verdict " + jid + " PASS` once a deck lands")
+    println("[cloud] 📋 registered jid=" + jid + " (pod " + pod_id + ") in " + cwd + "/ING.jsonl — `cloud dispatch verdict " + jid + " PASS` once a deck lands")
     return jid
 }
 
@@ -593,34 +593,42 @@ fn _emit_rent_result(pod_id: str, host: str, provider: str, state: str, project:
     println(line)
 }
 
-// _teardown_verdict_if_registered — Fix B worker. After `cloud poll`
-// detects DEAD, scan ./pods.json's jobs for one whose `pid` matches the
-// polled pid. On hit, rewrite verdict=FAIL (we do NOT have the remote
-// exit code from a bare poll, so we default conservative — a launcher
-// that wants PASS can call `cloud dispatch verdict <jid> PASS` itself).
-// On miss, no-op (job was never registered → no advisory churn). Returns
-// 1 iff a verdict was written, else 0.
+// _teardown_verdict_if_registered — Fix B worker. After `cloud poll` detects
+// DEAD, scan ./ING.jsonl's `kind:"pod"` rows' folded jobs[] for a job whose
+// `pid` matches the polled pid. On hit, rewrite verdict=FAIL (we do NOT have
+// the remote exit code from a bare poll, so we default conservative — a
+// launcher that wants PASS can call `cloud dispatch verdict <jid> PASS`
+// itself). On miss, no-op. Returns 1 iff a verdict was written, else 0.
 fn _teardown_verdict_if_registered(pid: int) -> int {
-    let path = "./pods.json"
+    let path = "./ING.jsonl"
     let r = exec_capture("test -e " + path + " && echo y")
     if r[0] != "y\n" { return 0 }
     let raw = read_file(path)
     if len(raw.trim()) == 0 { return 0 }
-    let root = json_parse(raw)
-    let jobs = json_object_get_object(root, "jobs")
-    let job_ids = json_object_keys(jobs)
+    let lines = raw.split("\n")
     let mut i = 0
-    while i < len(job_ids) {
-        let jid = job_ids[i]
-        let j = json_object_get(jobs, jid)
-        let jpid = json_object_get_int(j, "pid", 0)
-        let verdict = json_object_get_str(j, "verdict", "")
-        // Only re-verdict PENDING rows — never overwrite a caller-set
-        // PASS/FAIL/DOWN. Matches "no escape hatch but no clobber" (s11).
-        if jpid == pid && verdict == "PENDING" {
-            let _ = pods_local_verdict(jid, "FAIL")
-            println("[cloud] 📋 teardown verdict=FAIL jid=" + jid)
-            return 1
+    while i < len(lines) {
+        let ln = lines[i].trim()
+        if len(ln) > 0 {
+            let row = json_parse(ln)
+            if json_object_get_str(row, "kind", "") == "pod" && json_object_has(row, "jobs") {
+                let jarr = json_object_get_array(row, "jobs")
+                let mut k = 0
+                while k < len(jarr) {
+                    let j = jarr[k]
+                    let jpid = json_object_get_int(j, "pid", 0)
+                    let verdict = json_object_get_str(j, "verdict", "")
+                    let jid = json_object_get_str(j, "job_id", "")
+                    // Only re-verdict PENDING rows — never overwrite a
+                    // caller-set PASS/FAIL/DOWN (s11: no clobber).
+                    if jpid == pid && verdict == "PENDING" && len(jid) > 0 {
+                        let _ = pods_local_verdict(jid, "FAIL")
+                        println("[cloud] 📋 teardown verdict=FAIL jid=" + jid)
+                        return 1
+                    }
+                    k = k + 1
+                }
+            }
         }
         i = i + 1
     }
@@ -1228,11 +1236,13 @@ fn _print_fail_tail(out: str, exit_code: int, n: int) {
 //   5. a STOPPING pod            → NOT reused (on its way out)
 //   6. blank project/purpose      → find returns "" (dedup disabled)
 fn _cloud_rent_selftest() -> int {
-    let real = env_var("HOME") + "/.hx/cloud/active-pods.json"
-    let _ = exec("mkdir -p " + env_var("HOME") + "/.hx/cloud 2>/dev/null")
-    let saved = exec("mktemp /tmp/hexa-rent-selftest.XXXXXX 2>/dev/null").trim()
-    let _ = exec("test -f " + real + " && cp -p " + real + " " + saved + " || true")
-    let _ = exec("rm -f " + real + " 2>/dev/null")
+    // Hermetic over the ING.jsonl SSOT: redirect the registry's scan root +
+    // cwd-fallback to a fresh temp dir via the `./.hexa-cloud-ing-sandbox`
+    // sentinel (pre-creating the project repo dirs this selftest attributes to)
+    // so NO real sibling repo's ING.jsonl is touched.
+    let sbx = exec("mktemp -d /tmp/hexa-rent-selftest.XXXXXX 2>/dev/null").trim()
+    let _ = exec("mkdir -p " + sbx + "/anima " + sbx + "/demiurge " + sbx + "/_cwd 2>/dev/null")
+    write_file("./.hexa-cloud-ing-sandbox", sbx + "\n")
     let mut ok = 1
 
     // 1. empty registry → no reuse.
@@ -1304,10 +1314,9 @@ fn _cloud_rent_selftest() -> int {
         ok = 0
     }
 
-    // restore the operator's live registry.
-    let _ = exec("rm -f " + real + " 2>/dev/null")
-    let _ = exec("test -f " + saved + " && cp -p " + saved + " " + real + " || true")
-    let _ = exec("rm -f " + saved + " 2>/dev/null")
+    // tear down the sandbox (the operator's live ING.jsonl was never touched).
+    let _ = exec("rm -f ./.hexa-cloud-ing-sandbox 2>/dev/null")
+    let _ = exec("rm -rf " + sbx + " 2>/dev/null")
 
     if ok == 1 {
         println("rent_selftest PASS — idempotent-rent dedup verified (no provider call)")
@@ -2504,7 +2513,7 @@ fn _watchdog_budget_guard(api_key: str, kill: int) -> int {
         println("[cloud] watchdog budget: $" + str(spent_d) + " accrued / $" + cap_usd + " cap — under budget")
         return 0
     }
-    println("[cloud] ⚠ watchdog budget BREACH: $" + str(spent_d) + " accrued ≥ $" + cap_usd + " cap (./pods.json)")
+    println("[cloud] ⚠ watchdog budget BREACH: $" + str(spent_d) + " accrued ≥ $" + cap_usd + " cap (./ING.jsonl)")
     let victim = pod_registry_lowest_value_id()
     if len(victim) == 0 {
         println("[cloud] watchdog budget: no running pod to sacrifice")

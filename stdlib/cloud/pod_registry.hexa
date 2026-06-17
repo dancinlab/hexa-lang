@@ -18,17 +18,111 @@
 
 use "stdlib/cloud/runpod"
 use "stdlib/cloud/vast"
+use "stdlib/alloc/json"
+use "stdlib/alloc/json_object"
 
-// ── paths ────────────────────────────────────────────────────────────
+// ── paths (ING.jsonl SSOT — retires ~/.hexa-cloud/pods.jsonl + ~/.hx/cloud/active-pods.json) ──
+//
+// The pod registry no longer lives in a global file. Pods are tracked in each
+// project's `./ING.jsonl` `kind:"pod"` rows (the SAME rows pods_local.hexa +
+// harness `ing` share). The GLOBAL cross-project billing/orphan view is
+// reconstructed by SCANNING every sibling project's ING.jsonl under
+// $HOME/dancinlab (the orphan-defense that survived the 7×A100 reboot incident
+// — see header below — now spans repos by union, not one central file).
+//
+// A pod's HOME file = its owning project's ING.jsonl (`<root>/<project>/ING.jsonl`
+// when that repo exists), else the cwd `./ING.jsonl` (the renting project).
 
-// _reg_dir / _reg_file — $HOME-resolved registry location (g13 portable).
-// Mirrors vast.hexa's _vast_claim_dir so both live under ~/.hexa-cloud.
-fn _reg_dir() -> str {
-    return env_var("HOME") + "/.hexa-cloud"
+use "stdlib/cloud/pods_local"
+
+// _reg_sandbox — a test-isolation root override. "" in normal operation. Set
+// by EITHER the HEXA_CLOUD_ING_ROOT env (the canonical hermetic knob) OR — since
+// the runtime's setenv() is a no-op, so an in-process test cannot export an env
+// — a `./.hexa-cloud-ing-sandbox` sentinel FILE whose first line is the sandbox
+// dir. When sandboxed, BOTH the sibling-scan root AND the cwd-fallback live
+// under the sandbox, so a test (or any caller) NEVER touches a real sibling repo.
+fn _reg_sandbox() -> str {
+    let e = env_var("HEXA_CLOUD_ING_ROOT")
+    if len(e) > 0 {
+        return e
+    }
+    let sentinel = "./.hexa-cloud-ing-sandbox"
+    let r = exec_capture("test -f " + sentinel + " && echo y")
+    if r[0] == "y\n" {
+        let raw = read_file(sentinel)
+        let s = raw.trim()
+        if len(s) > 0 {
+            return s
+        }
+    }
+    return ""
 }
 
-fn _reg_file() -> str {
-    return _reg_dir() + "/pods.jsonl"
+// _reg_ing_root — the sibling-scan root. The sandbox override (env / sentinel)
+// wins; else $HOME/dancinlab (every project repo's ING.jsonl is scanned).
+fn _reg_ing_root() -> str {
+    let sb = _reg_sandbox()
+    if len(sb) > 0 {
+        return sb
+    }
+    return env_var("HOME") + "/dancinlab"
+}
+
+// _reg_cwd_ing — the local ING.jsonl for a pod with no resolvable project home.
+// Normally the cwd `./ING.jsonl`; under a sandbox, `<sandbox>/_cwd/ING.jsonl`
+// so an unattributed/blank-project pod also stays inside the test sandbox.
+fn _reg_cwd_ing() -> str {
+    let sb = _reg_sandbox()
+    if len(sb) > 0 {
+        return sb + "/_cwd/ING.jsonl"
+    }
+    return "./ING.jsonl"
+}
+
+// _reg_project_file — the home ING.jsonl for a project. `<root>/<project>/ING.jsonl`
+// when the project repo dir exists, else the cwd ING.jsonl (so an unattributed /
+// no-repo pod still lands somewhere durable). project "" / "unattributed" → cwd.
+fn _reg_project_file(project: str) -> str {
+    if len(project) == 0 || project == "unattributed" {
+        return _reg_cwd_ing()
+    }
+    let cand = _reg_ing_root() + "/" + project + "/ING.jsonl"
+    let dir = _reg_ing_root() + "/" + project
+    let r = exec_capture("test -d " + _reg_shq(dir) + " && echo y")
+    if r[0] == "y\n" {
+        return cand
+    }
+    return _reg_cwd_ing()
+}
+
+// _reg_ing_files — every ING.jsonl to scan for the global registry view: each
+// `<root>/*/ING.jsonl` plus the cwd `./ING.jsonl`, deduped (order-preserving).
+// Best-effort: a missing root contributes nothing.
+fn _reg_ing_files() -> [str] {
+    let mut out = []
+    let root = _reg_ing_root()
+    let found = exec("ls -d " + _reg_shq(root) + "/*/ING.jsonl 2>/dev/null").trim()
+    if len(found) > 0 {
+        let lines = found.split("\n")
+        let mut i = 0
+        while i < len(lines) {
+            let p = lines[i].trim()
+            if len(p) > 0 && _recon_id_in(out, p) == 0 { out.push(p) }
+            i = i + 1
+        }
+    }
+    // Add the cwd ING.jsonl unless the sibling glob already covered it (cwd is
+    // a repo under <root>). Compare by realpath so `./ING.jsonl` and the
+    // absolute `<root>/<cwd-repo>/ING.jsonl` dedup correctly (no double-scan).
+    let cwd_abs = exec("cd \"$(dirname ./ING.jsonl)\" 2>/dev/null && printf '%s/ING.jsonl' \"$(pwd -P)\"").trim()
+    let mut covered = 0
+    let mut k = 0
+    while k < len(out) {
+        if out[k] == cwd_abs { covered = 1 }
+        k = k + 1
+    }
+    if covered == 0 { out.push(_reg_cwd_ing()) }
+    return out
 }
 
 // _reg_shq — POSIX-quote a token for the local /bin/sh -c (mkdir/date).
@@ -239,54 +333,21 @@ fn _pod_id_looks_valid(pod_id: str) -> int {
     return 1
 }
 
+// pod_registry_record — LEGACY shim, now folded onto the unified ING/M5 layer.
+// Was a separate ~/.hexa-cloud/pods.jsonl writer; the registry is now the
+// per-project ING.jsonl `kind:"pod"` rows. Maps the legacy {label,status}
+// to the M5 record: label→purpose, status running→READY / closed→GONE. project
+// is left "" (the upsert preserves any project a prior pod_registry_add set, so
+// calling record() after add() at rent never erases attribution). The #1229
+// sink guard lives in pod_registry_add.
 fn pod_registry_record(pod_id: str, label: str, status: str) {
     if len(pod_id) == 0 {
         return
     }
-    // Sink guard (#1229 B): never record a non-pod-id token (ssh destination,
-    // host/IP, path, or argv fragment) — it only ever GHOSTs in reconcile.
-    if _pod_id_looks_valid(pod_id) == 0 {
-        eprintln("[cloud] registry: refusing non-pod-id '" + pod_id
-            + "' (expected a provider instance-id; use `cloud adopt <id>` to track an existing pod)")
-        return
-    }
-    let dir = _reg_dir()
-    let _ = exec("mkdir -p " + _reg_shq(dir) + " 2>/dev/null")
-    let path = _reg_file()
-    let now = _reg_now_iso()
-
-    // Preserve the original created_at if this id is already tracked.
-    let mut created = now
-    let mut rebuilt = ""
-    if file_exists(path) {
-        let body = read_file(path)
-        let lines = body.split("\n")
-        let mut i = 0
-        while i < len(lines) {
-            let line = lines[i]
-            if len(line) > 0 {
-                let id = _reg_field(line, "pod_id")
-                if id == pod_id {
-                    let prev = _reg_field(line, "created_at")
-                    if len(prev) > 0 {
-                        created = prev
-                    }
-                    // drop the stale record; the fresh one is appended below
-                } else {
-                    rebuilt = rebuilt + line + "\n"
-                }
-            }
-            i = i + 1
-        }
-    }
-
-    let rec = "{\"pod_id\":\"" + _reg_jstr(pod_id) + "\","
-        + "\"label\":\"" + _reg_jstr(label) + "\","
-        + "\"created_at\":\"" + _reg_jstr(created) + "\","
-        + "\"last_seen\":\"" + _reg_jstr(now) + "\","
-        + "\"status\":\"" + _reg_jstr(status) + "\"}"
-    rebuilt = rebuilt + rec + "\n"
-    write_file(path, rebuilt)
+    let mut st = status
+    if status == "running" { st = "READY" }
+    if status == "closed" { st = "GONE" }
+    let _ = pod_registry_add(pod_id, "", "", label, "", "", st)
 }
 
 // ── read verb (cloud orphans) ────────────────────────────────────────
@@ -301,43 +362,39 @@ struct PodRow {
     stale:      int    // 1 iff created > stale_hours ago and not closed
 }
 
-// pod_registry_rows — parse pods.jsonl into PodRow records, flagging each as
-// stale when its created_at is older than `stale_hours` and its status is not
-// "closed". Empty list when the registry file does not exist yet.
+// pod_registry_rows — derive the legacy PodRow view from the unified ING/M5
+// registry (pod_registry_load). label=purpose, last_seen=last_heartbeat; a M5
+// "GONE" status maps to the legacy "closed" so the orphans/reconcile staleness
+// logic (which checks `status != "closed"`) is unchanged. Flags each row stale
+// when created_at is older than `stale_hours` and the pod is not closed.
 fn pod_registry_rows(stale_hours: int) -> [PodRow] {
     let mut rows = []
-    let path = _reg_file()
-    if !file_exists(path) {
-        return rows
-    }
+    let records = pod_registry_load()
     let now = _reg_now_sec()
     let threshold = stale_hours * 3600
-    let body = read_file(path)
-    let lines = body.split("\n")
     let mut i = 0
-    while i < len(lines) {
-        let line = lines[i]
-        if len(line) > 0 {
-            let id = _reg_field(line, "pod_id")
-            if len(id) > 0 {
-                let created = _reg_field(line, "created_at")
-                let status = _reg_field(line, "status")
-                let mut stale = 0
-                if status != "closed" && now > 0 {
-                    let csec = _reg_iso_to_sec(created)
-                    if csec > 0 && (now - csec) > threshold {
-                        stale = 1
-                    }
+    while i < len(records) {
+        let r = records[i]
+        let id = r.id
+        if len(id) > 0 {
+            let created = r.created_at
+            let mut status = r.status
+            if status == "GONE" { status = "closed" }
+            let mut stale = 0
+            if status != "closed" && now > 0 {
+                let csec = _reg_iso_to_sec(created)
+                if csec > 0 && (now - csec) > threshold {
+                    stale = 1
                 }
-                rows.push(PodRow {
-                    pod_id: id,
-                    label: _reg_field(line, "label"),
-                    created_at: created,
-                    last_seen: _reg_field(line, "last_seen"),
-                    status: status,
-                    stale: stale
-                })
             }
+            rows.push(PodRow {
+                pod_id: id,
+                label: r.purpose,
+                created_at: created,
+                last_seen: r.last_heartbeat,
+                status: status,
+                stale: stale
+            })
         }
         i = i + 1
     }
@@ -350,8 +407,8 @@ fn pod_registry_rows(stale_hours: int) -> [PodRow] {
 fn cloud_orphans_print(stale_hours: int) -> int {
     let rows = pod_registry_rows(stale_hours)
     if len(rows) == 0 {
-        println("[cloud] pod registry empty (" + _reg_file() + ")")
-        println("[cloud] pods dispatched via `cloud run` / `cloud nohup` are tracked here.")
+        println("[cloud] pod registry empty (ING.jsonl kind:\"pod\" rows across " + _reg_ing_root() + "/*/)")
+        println("[cloud] pods dispatched via `cloud run` / `cloud nohup` / `cloud rent` are tracked here.")
         return 0
     }
     println("POD/HOST                 STATUS    CREATED               LABEL          FLAG")
@@ -369,7 +426,7 @@ fn cloud_orphans_print(stale_hours: int) -> int {
         i = i + 1
     }
     println("[cloud] " + str(len(rows)) + " tracked · " + str(stale_n)
-        + " stale (created > " + str(stale_hours) + "h ago, not closed) · " + _reg_file())
+        + " stale (created > " + str(stale_hours) + "h ago, not closed) · ING.jsonl SSOT (" + _reg_ing_root() + "/*/)")
     return stale_n
 }
 
@@ -423,44 +480,14 @@ fn pod_registry_forget(pod_id: str) -> int {
     if len(pod_id) == 0 {
         return 0
     }
-    let path = _reg_file()
-    if !file_exists(path) {
-        return 0
-    }
-    let body = read_file(path)
-    let lines = body.split("\n")
-    let now = _reg_now_iso()
-    let mut found = 0
-    let mut rebuilt = ""
-    let mut i = 0
-    while i < len(lines) {
-        let line = lines[i]
-        if len(line) > 0 {
-            if found == 0 && _reg_field(line, "pod_id") == pod_id {
-                // Close this row in place: preserve label + created_at, flip
-                // status=closed, refresh last_seen. Rebuilt verbatim so an
-                // ssh-form / IP / alias / flag-as-id row (legacy pollution
-                // the write-side guard now blocks) can still be closed.
-                found = 1
-                let label = _reg_field(line, "label")
-                let created = _reg_field(line, "created_at")
-                rebuilt = rebuilt
-                    + "{\"pod_id\":\"" + _reg_jstr(pod_id) + "\","
-                    + "\"label\":\"" + _reg_jstr(label) + "\","
-                    + "\"created_at\":\"" + _reg_jstr(created) + "\","
-                    + "\"last_seen\":\"" + _reg_jstr(now) + "\","
-                    + "\"status\":\"closed\"}\n"
-            } else {
-                rebuilt = rebuilt + line + "\n"
-            }
-        }
-        i = i + 1
-    }
-    if found == 0 {
-        return 0
-    }
-    write_file(path, rebuilt)
-    return 1
+    // Unified ING/M5 layer: a "forgotten" pod is its row flipped to status=GONE
+    // (pod_registry_list / rows exclude GONE, so the launch history survives but
+    // the pod stops being claimed alive). update_status finds the record across
+    // the per-project ING.jsonl set + persists in place (preserving every other
+    // field + row). The legacy ssh-form/IP/alias GHOST-cleanup case is moot now:
+    // such non-pod-id rows never become tracked records (`_pod_id_looks_valid`
+    // filters them at load), so there is nothing to close for those shapes.
+    return pod_registry_update_status(pod_id, "GONE")
 }
 
 // ── reconcile (ORPHAN / GHOST / OK classification) ────────────────────
@@ -571,7 +598,7 @@ fn cloud_reconcile_print() -> int {
     }
     let rows = pod_registry_reconcile_rows(provider_ids)
     if len(rows) == 0 {
-        println("[cloud] reconcile clean — no tracked pods and no live provider pods (" + _reg_file() + ")")
+        println("[cloud] reconcile clean — no tracked pods and no live provider pods (ING.jsonl SSOT " + _reg_ing_root() + "/*/)")
         return 0
     }
     println("POD/HOST                 STATUS    LABEL          CLASS")
@@ -587,7 +614,7 @@ fn cloud_reconcile_print() -> int {
         i = i + 1
     }
     println("[cloud] " + str(len(rows)) + " reconciled · " + str(drift)
-        + " drift (ORPHAN=adopt|stop · GHOST=forget) · " + _reg_file())
+        + " drift (ORPHAN=adopt|stop · GHOST=forget) · ING.jsonl SSOT (" + _reg_ing_root() + "/*/)")
     return drift
 }
 
@@ -704,34 +731,37 @@ fn cloud_pods_reconcile_prune() -> int {
     return pruned
 }
 
-// ── M5 — agent-crash-safe pod registry @ ~/.hx/cloud/active-pods.json ─
+// ── M5 — crash-safe pod registry over ING.jsonl (cross-project SSOT) ──
 //
-// Canonical M5 SSOT (CLOUD.md M5): a single-file JSON registry written
-// ATOMICALLY via temp-file + rename(2). The legacy JSONL above remains for
-// backwards compat (read by `cloud orphans`/`cloud reconcile`). The new
-// `~/.hx/cloud/active-pods.json` carries the richer per-pod record that M2
-// (TTL deadman) and M3 (cost cap) extend in place — the schema reserves
-// `ttl_sec` · `max_cost_usd` · `cumulative_cost_usd` keys NOW so no schema
-// migration is needed when those milestones land.
+// SSOT MIGRATION (2026-06-18): the registry no longer lives in a single global
+// file (`~/.hx/cloud/active-pods.json`). Each pod is a `kind:"pod"` row in its
+// OWNING PROJECT's `./ING.jsonl` — the SAME row pods_local.hexa + harness `ing`
+// share. The GLOBAL cross-project billing/orphan view (the defense born of the
+// 7×A100-after-reboot incident — see file header) is RECONSTRUCTED by scanning
+// every sibling `$HOME/dancinlab/*/ING.jsonl`. The orphan/billing/down-guard
+// logic below is UNCHANGED; only its storage backend moved.
 //
-// Crash-safety: every mutation writes `<path>.tmp.<pid>` first, then
-// rename(2) to the final path. POSIX rename is atomic on the same fs, so a
-// reader either sees the prior valid state or the new valid state, never a
-// partial write. The dir + file are `chmod 700`/`600` (private — may hold
-// ssh endpoints + provider ids).
+// Per-pod home file = `_reg_project_file(project)` (the project repo's ING.jsonl
+// when it exists, else cwd ./ING.jsonl). A pod's row also carries the
+// pods_local-owned fields (host / jobs[] / gpu / purpose / cost / ts) and the
+// harness-ing fields; writes here PRESERVE those (read-merge-write per row), and
+// every NON-(matching-pod) line in the target file is re-emitted verbatim, so
+// work/next rows + OTHER pods' rows are never clobbered.
 //
-// Wire points (additive — existing pod_registry_record/forget/adopt
-// untouched): `cloud rent` success → pod_registry_add(...status=READY).
+// Crash-safety: every per-file mutation writes `<path>.tmp.<pid>` first, then
+// rename(2) to the final path (POSIX-atomic on the same fs) + a `.bak` snapshot
+// — same hardening the M5 single-file + pods_local writers had.
+//
+// Wire points (UNCHANGED): `cloud rent` success → pod_registry_add(...READY).
 // `cloud down` confirmed teardown → pod_registry_remove(id). Status flips
 // (STOPPING, GONE) go through pod_registry_update_status.
 
-// _m5_dir / _m5_path — canonical M5 location (g13 $HOME-resolved).
-fn _m5_dir() -> str {
-    return env_var("HOME") + "/.hx/cloud"
-}
-
+// pod_registry_path — DEPRECATED single-file path (retained as a compat shim
+// for callers/tests that print it). The live SSOT is now the per-project
+// ING.jsonl set (`_reg_ing_files()`); this returns the cwd ING.jsonl as the
+// canonical "where this project's pods live" answer.
 fn pod_registry_path() -> str {
-    return _m5_dir() + "/active-pods.json"
+    return _reg_cwd_ing()
 }
 
 // _m5_pid — current process pid (for the temp-file suffix). Falls back to
@@ -745,13 +775,10 @@ fn _m5_pid() -> str {
     return exec("date +%s%N 2>/dev/null").trim()
 }
 
-// _m5_ensure_dir — mkdir -p the registry dir + chmod 700 (private).
-fn _m5_ensure_dir() {
-    let dir = _m5_dir()
-    let _ = exec("mkdir -p " + _reg_shq(dir) + " 2>/dev/null && chmod 700 " + _reg_shq(dir) + " 2>/dev/null")
-}
-
-// PodRecord — one parsed M5 record. Fields mirror the JSON schema 1-to-1.
+// PodRecord — one parsed registry record (one ING.jsonl `kind:"pod"` row).
+// `src` is the source ING.jsonl path the row came from (the per-file write
+// target); "" for a freshly-constructed record not yet persisted (its home is
+// resolved from `project` at write time). All other fields mirror the schema.
 struct PodRecord {
     id:                    str,
     provider:              str,    // "runpod" | "vast" | "ssh"
@@ -773,143 +800,99 @@ struct PodRecord {
     // gone (kill -0) OR (now − last_heartbeat) > max_ttl_sec.
     owner_pid:             int,    // -1 = unset (no owner pid recorded)
     last_heartbeat:        str,    // ISO-8601 UTC; "" = unset (never beaten)
-    max_ttl_sec:           int     // -1 = unset (no self-expiry signal)
+    max_ttl_sec:           int,    // -1 = unset (no self-expiry signal)
+    src:                   str     // source ING.jsonl path; "" = not yet persisted
 }
 
-// _m5_numfield — sniff the bare (unquoted) value of "key":value out of a
-// flat JSON record, stopping at `,` or `}`. Returns "" if absent. Used for
-// JSON-numeric/null fields (ttl_sec, cumulative_cost_usd) that the writer
-// emits unquoted, which the quoted-string `_reg_field` reader cannot see.
-fn _m5_numfield(rec: str, key: str) -> str {
-    let marker = "\"" + key + "\":"
-    let at = rec.index_of(marker)
-    if at < 0 {
-        return ""
+// _reg_row_record — build a PodRecord from one parsed ING.jsonl `kind:"pod"`
+// JSON row object (already json_parse'd), tagged with its source file `src`.
+// Reads the rich M5 fields, defaulting unset numerics to -1 / "0.0" so a
+// minimal harness-ing-authored pod row (only provider/gpu/purpose/cost) reads
+// back cleanly. `created_at` falls back to the row's `ts` (harness ing stamps
+// `ts`, not `created_at`) so age/accrual math still has an anchor.
+fn _reg_row_record(row, src: str) -> PodRecord {
+    let id = json_object_get_str(row, "id", "")
+    let mut created = json_object_get_str(row, "created_at", "")
+    if len(created) == 0 {
+        created = json_object_get_str(row, "ts", "")
     }
-    let start = at + len(marker)
-    let n = len(rec)
-    let mut i = start
-    while i < n {
-        let c = rec.substring(i, i + 1)
-        if c == "," || c == "}" {
-            return rec.substring(start, i).trim()
-        }
-        i = i + 1
+    let ttl = to_int(json_object_get_int(row, "ttl_sec", -1))
+    let opid = to_int(json_object_get_int(row, "owner_pid", -1))
+    let mttl = to_int(json_object_get_int(row, "max_ttl_sec", -1))
+    let mut cum = json_object_get_str(row, "cumulative_cost_usd", "")
+    if len(cum) == 0 { cum = "0.0" }
+    return PodRecord {
+        id: id,
+        provider: json_object_get_str(row, "provider", ""),
+        created_at: created,
+        rented_by: json_object_get_str(row, "rented_by", ""),
+        project: json_object_get_str(row, "project", ""),
+        purpose: json_object_get_str(row, "purpose", ""),
+        ssh_host: json_object_get_str(row, "ssh_host", ""),
+        ssh_port: json_object_get_str(row, "ssh_port", ""),
+        status: json_object_get_str(row, "status", ""),
+        ttl_sec: ttl,
+        max_cost_usd: json_object_get_str(row, "max_cost_usd", ""),
+        cumulative_cost_usd: cum,
+        cost_per_hr_usd: json_object_get_str(row, "cost_per_hr_usd", ""),
+        owner_pid: opid,
+        last_heartbeat: json_object_get_str(row, "last_heartbeat", ""),
+        max_ttl_sec: mttl,
+        src: src
     }
-    return rec.substring(start, n).trim()
 }
 
-// _m5_parse — minimal JSON-array reader for our flat schema. We do NOT
-// pull in stdlib/alloc/json here to keep the M5 layer dependency-free
-// (the legacy JSONL above also hand-rolls its parsing). Records are split
-// on the top-level `},{` separator inside the "pods":[ ... ] array. Each
-// record's fields are read via the same `_reg_field` helper used above.
-fn _m5_parse_records(body: str) -> [PodRecord] {
+// _reg_load_file — parse one ING.jsonl file, returning its `kind:"pod"` rows
+// as PodRecords. Best-effort: a missing/empty file → []. ONLY rows whose `id`
+// is a VALID provider pod-id (`_pod_id_looks_valid`) become records — this
+// excludes harness-ing's free-form prose pod notes (ids with spaces / sentences)
+// so the billing/orphan scan never mistakes a human note for a live billing pod.
+fn _reg_load_file(path: str) -> [PodRecord] {
     let mut out = []
-    let pods_at = body.index_of("\"pods\":[")
-    if pods_at < 0 {
+    if !file_exists(path) {
         return out
     }
-    let start = pods_at + 8
-    // Scan to the matching closing `]` at brace-depth 0.
-    let n = len(body)
-    let mut i = start
-    let mut depth = 0
-    let mut end = -1
-    while i < n {
-        let c = body.substring(i, i + 1)
-        if c == "{" {
-            depth = depth + 1
-        } else if c == "}" {
-            depth = depth - 1
-        } else if c == "]" && depth == 0 {
-            end = i
-            i = n
+    let body = read_file(path)
+    if len(body.trim()) == 0 {
+        return out
+    }
+    let lines = body.split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        let ln = lines[i].trim()
+        if len(ln) > 0 {
+            let row = json_parse(ln)
+            if json_object_get_str(row, "kind", "") == "pod" {
+                let id = json_object_get_str(row, "id", "")
+                if len(id) > 0 && _pod_id_looks_valid(id) == 1 {
+                    out.push(_reg_row_record(row, path))
+                }
+            }
         }
         i = i + 1
-    }
-    if end < 0 {
-        return out
-    }
-    let arr = body.substring(start, end)
-    // Split on `},{` boundary (works because our writer emits records
-    // separated by exactly `},{` with no whitespace).
-    let chunks = arr.split("},{")
-    let mut k = 0
-    while k < len(chunks) {
-        let mut rec = chunks[k]
-        // Re-add the stripped braces (split removed them on both sides).
-        if rec.index_of("{") != 0 {
-            rec = "{" + rec
-        }
-        if rec.substring(len(rec) - 1, len(rec)) != "}" {
-            rec = rec + "}"
-        }
-        let id = _reg_field(rec, "id")
-        if len(id) > 0 {
-            // `ttl_sec` is JSON-numeric/null — we hand-emit it unquoted, so
-            // sniff the value directly out of the record bytes (_reg_field
-            // only reads quoted strings).
-            let mut ttl = -1
-            let ttl_num = _m5_numfield(rec, "ttl_sec")
-            if len(ttl_num) > 0 && ttl_num != "null" {
-                ttl = _reg_atoi(ttl_num)
-            }
-            // `cumulative_cost_usd` likewise unquoted; default "0.0" when absent.
-            let mut cum = _m5_numfield(rec, "cumulative_cost_usd")
-            if len(cum) == 0 || cum == "null" {
-                cum = "0.0"
-            }
-            // M6 heartbeat-TTL — owner_pid + max_ttl_sec are JSON-numeric/null
-            // (sniffed unquoted); last_heartbeat is a quoted string. All absent
-            // → unset defaults, so a pre-M6 record reads back cleanly (no migration).
-            let mut opid = -1
-            let opid_num = _m5_numfield(rec, "owner_pid")
-            if len(opid_num) > 0 && opid_num != "null" {
-                opid = _reg_atoi(opid_num)
-            }
-            let mut mttl = -1
-            let mttl_num = _m5_numfield(rec, "max_ttl_sec")
-            if len(mttl_num) > 0 && mttl_num != "null" {
-                mttl = _reg_atoi(mttl_num)
-            }
-            out.push(PodRecord {
-                id: id,
-                provider: _reg_field(rec, "provider"),
-                created_at: _reg_field(rec, "created_at"),
-                rented_by: _reg_field(rec, "rented_by"),
-                project: _reg_field(rec, "project"),
-                purpose: _reg_field(rec, "purpose"),
-                ssh_host: _reg_field(rec, "ssh_host"),
-                ssh_port: _reg_field(rec, "ssh_port"),
-                status: _reg_field(rec, "status"),
-                ttl_sec: ttl,
-                max_cost_usd: _reg_field(rec, "max_cost_usd"),
-                cumulative_cost_usd: cum,
-                cost_per_hr_usd: _reg_field(rec, "cost_per_hr_usd"),
-                owner_pid: opid,
-                last_heartbeat: _reg_field(rec, "last_heartbeat"),
-                max_ttl_sec: mttl
-            })
-        }
-        k = k + 1
     }
     return out
 }
 
-// pod_registry_load — read the canonical M5 file, return the parsed
-// records. Empty list when the file is absent OR mid-write corrupt (the
-// atomic-write contract makes the latter impossible, but degrade safely).
+// pod_registry_load — the GLOBAL cross-project registry view: scan every
+// sibling `$HOME/dancinlab/*/ING.jsonl` (+ cwd) and union their machine pod
+// rows into PodRecords. This is how the billing/orphan/down-guard defense
+// spans projects now that the central active-pods.json is retired. Empty when
+// no ING.jsonl carries a valid machine pod row.
 fn pod_registry_load() -> [PodRecord] {
-    let path = pod_registry_path()
-    if !file_exists(path) {
-        return []
+    let mut out = []
+    let files = _reg_ing_files()
+    let mut f = 0
+    while f < len(files) {
+        let recs = _reg_load_file(files[f])
+        let mut j = 0
+        while j < len(recs) {
+            out.push(recs[j])
+            j = j + 1
+        }
+        f = f + 1
     }
-    let body = read_file(path)
-    if len(body.trim()) == 0 {
-        return []
-    }
-    return _m5_parse_records(body)
+    return out
 }
 
 // PodEndpoint — the ssh destination resolved out of the M5 registry for a
@@ -946,74 +929,187 @@ fn pod_registry_resolve_endpoint(pod_id: str) -> PodEndpoint {
     return PodEndpoint { host: r.ssh_host, port: r.ssh_port, resolved: 1 }
 }
 
-// _m5_emit_record — serialize one PodRecord as a flat JSON object (no
-// outer braces stripping; the array writer joins with `,`).
-fn _m5_emit_record(r: PodRecord) -> str {
-    let mut ttl_field = "null"
-    if r.ttl_sec >= 0 {
-        ttl_field = str(r.ttl_sec)
+// _reg_set_num — set "key":int on a row, or remove the key when v < 0 (unset).
+fn _reg_set_num(row, key: str, v: int) {
+    if v >= 0 {
+        let _ = json_object_set(row, key, v)
+    } else {
+        let _ = json_object_delete(row, key)
     }
-    let mut cost_field = "0.0"
-    if len(r.cumulative_cost_usd) > 0 {
-        cost_field = r.cumulative_cost_usd
-    }
-    let mut max_cost_field = "null"
-    if len(r.max_cost_usd) > 0 {
-        max_cost_field = "\"" + _reg_jstr(r.max_cost_usd) + "\""
-    }
-    let mut rate_field = "null"
-    if len(r.cost_per_hr_usd) > 0 {
-        rate_field = "\"" + _reg_jstr(r.cost_per_hr_usd) + "\""
-    }
-    // M6 heartbeat-TTL — numeric pid/max_ttl emit unquoted (null when unset),
-    // last_heartbeat is a quoted string (empty when never beaten).
-    let mut opid_field = "null"
-    if r.owner_pid >= 0 {
-        opid_field = str(r.owner_pid)
-    }
-    let mut mttl_field = "null"
-    if r.max_ttl_sec >= 0 {
-        mttl_field = str(r.max_ttl_sec)
-    }
-    return "{\"id\":\"" + _reg_jstr(r.id) + "\","
-        + "\"provider\":\"" + _reg_jstr(r.provider) + "\","
-        + "\"created_at\":\"" + _reg_jstr(r.created_at) + "\","
-        + "\"rented_by\":\"" + _reg_jstr(r.rented_by) + "\","
-        + "\"project\":\"" + _reg_jstr(r.project) + "\","
-        + "\"purpose\":\"" + _reg_jstr(r.purpose) + "\","
-        + "\"ssh_host\":\"" + _reg_jstr(r.ssh_host) + "\","
-        + "\"ssh_port\":\"" + _reg_jstr(r.ssh_port) + "\","
-        + "\"status\":\"" + _reg_jstr(r.status) + "\","
-        + "\"ttl_sec\":" + ttl_field + ","
-        + "\"max_cost_usd\":" + max_cost_field + ","
-        + "\"cumulative_cost_usd\":" + cost_field + ","
-        + "\"cost_per_hr_usd\":" + rate_field + ","
-        + "\"owner_pid\":" + opid_field + ","
-        + "\"last_heartbeat\":\"" + _reg_jstr(r.last_heartbeat) + "\","
-        + "\"max_ttl_sec\":" + mttl_field + "}"
 }
 
-// _m5_write_atomic — write the records to ~/.hx/cloud/active-pods.json
-// via temp-file + rename(2). The temp file lives in the SAME directory
-// as the target so rename is on the same fs (atomic). `chmod 600` runs
-// on the temp BEFORE the rename so the final file is private from the
-// moment it appears at its canonical path.
-fn _m5_write_atomic(records: [PodRecord]) {
-    _m5_ensure_dir()
-    let path = pod_registry_path()
+// _reg_set_str — set "key":"val" when non-empty, else remove the key.
+fn _reg_set_str(row, key: str, val: str) {
+    if len(val) > 0 {
+        let _ = json_object_set(row, key, val)
+    } else {
+        let _ = json_object_delete(row, key)
+    }
+}
+
+// _reg_merge_record_into_row — stamp a PodRecord's M5 fields onto an ING pod
+// `row` JSON object (kind:"pod"), PRESERVING every field the row already had
+// that pod_registry does NOT own (host / jobs / gpu / purpose-display / cost /
+// any future key) so a co-managed pods_local/harness-ing row is never stripped.
+// The shared `ts` is refreshed; `id` + `kind` are stamped (idempotent).
+fn _reg_merge_record_into_row(row, r: PodRecord) {
+    let now = _reg_now_iso()
+    let _ = json_object_set(row, "kind", "pod")
+    let _ = json_object_set(row, "id", r.id)
+    let _ = json_object_set(row, "ts", now)
+    _reg_set_str(row, "provider", r.provider)
+    _reg_set_str(row, "created_at", r.created_at)
+    _reg_set_str(row, "rented_by", r.rented_by)
+    _reg_set_str(row, "project", r.project)
+    // `purpose` is shared with harness ing — always reflect the M5 purpose.
+    _reg_set_str(row, "purpose", r.purpose)
+    _reg_set_str(row, "ssh_host", r.ssh_host)
+    _reg_set_str(row, "ssh_port", r.ssh_port)
+    _reg_set_str(row, "status", r.status)
+    _reg_set_num(row, "ttl_sec", r.ttl_sec)
+    _reg_set_str(row, "max_cost_usd", r.max_cost_usd)
+    let mut cum = r.cumulative_cost_usd
+    if len(cum) == 0 { cum = "0.0" }
+    let _ = json_object_set(row, "cumulative_cost_usd", cum)
+    _reg_set_str(row, "cost_per_hr_usd", r.cost_per_hr_usd)
+    _reg_set_num(row, "owner_pid", r.owner_pid)
+    _reg_set_str(row, "last_heartbeat", r.last_heartbeat)
+    _reg_set_num(row, "max_ttl_sec", r.max_ttl_sec)
+}
+
+// _reg_write_file — rewrite ONE ING.jsonl file applying `recs` (the records
+// that belong to this file). Per line: a `kind:"pod"` row whose id matches a
+// record is MERGED in place (preserving its non-registry fields) and the
+// record marked written; every other line (work/next, other pods, anything)
+// is re-emitted verbatim. Records with no existing row are appended as fresh
+// pod rows. Records that carry `_remove==1` (id in `remove_ids`) drop their row
+// entirely. Atomic: mktemp in the file's dir + `.bak` snapshot + `mv -f`.
+fn _reg_write_file(path: str, recs: [PodRecord], remove_ids: [str]) {
+    // ensure the parent dir exists (a project repo always will; cwd always does).
+    let dir = exec("dirname " + _reg_shq(path) + " 2>/dev/null").trim()
+    if len(dir) > 0 {
+        let _ = exec("mkdir -p " + _reg_shq(dir) + " 2>/dev/null")
+    }
+    let mut written = []   // ids of recs already merged onto an existing row
+    let mut out = ""
+    if file_exists(path) {
+        let body = read_file(path)
+        let lines = body.split("\n")
+        let mut i = 0
+        while i < len(lines) {
+            let ln = lines[i].trim()
+            if len(ln) == 0 {
+                i = i + 1
+                continue
+            }
+            let row = json_parse(ln)
+            let is_pod = json_object_get_str(row, "kind", "") == "pod"
+            let rid = json_object_get_str(row, "id", "")
+            if is_pod && _recon_id_in(remove_ids, rid) == 1 {
+                // dropped pod — skip this line entirely.
+                i = i + 1
+                continue
+            }
+            let mut handled = 0
+            if is_pod && len(rid) > 0 {
+                let mut k = 0
+                while k < len(recs) {
+                    if recs[k].id == rid {
+                        _reg_merge_record_into_row(row, recs[k])
+                        written.push(rid)
+                        handled = 1
+                        k = len(recs)
+                    } else {
+                        k = k + 1
+                    }
+                }
+            }
+            if handled == 1 {
+                out = out + json_stringify_value(row) + "\n"
+            } else {
+                // verbatim — work/next, other pods, anything else.
+                out = out + ln + "\n"
+            }
+            i = i + 1
+        }
+    }
+    // append any record that had no existing row (and isn't being removed).
+    let mut a = 0
+    while a < len(recs) {
+        let r = recs[a]
+        if _recon_id_in(written, r.id) == 0 && _recon_id_in(remove_ids, r.id) == 0 {
+            let row = json_parse("{}")
+            _reg_merge_record_into_row(row, r)
+            out = out + json_stringify_value(row) + "\n"
+        }
+        a = a + 1
+    }
+    // atomic write (mktemp in the target dir + .bak rotation + rename).
+    if file_exists(path) {
+        let _ = exec("cp -p " + _reg_shq(path) + " " + _reg_shq(path) + ".bak 2>/dev/null")
+    }
     let tmp = path + ".tmp." + _m5_pid()
-    let mut body = "{\"version\":1,\"pods\":["
+    write_file(tmp, out)
+    let _ = exec("mv -f " + _reg_shq(tmp) + " " + _reg_shq(path) + " 2>/dev/null")
+}
+
+// _reg_target_file — the home ING.jsonl a record persists to: its loaded
+// `src`, else the owning project's repo file (`_reg_project_file`).
+fn _reg_target_file(r: PodRecord) -> str {
+    if len(r.src) > 0 {
+        return r.src
+    }
+    return _reg_project_file(r.project)
+}
+
+// _reg_persist_one — persist a SINGLE mutated record to its home file (merge
+// in place, preserving every other row). This is the common write path for the
+// per-id mutators (add/update/set_*) — it touches ONLY the affected file, so a
+// status flip never rewrites sibling repos' ING.jsonl. Atomic + .bak per file.
+fn _reg_persist_one(r: PodRecord) {
+    let path = _reg_target_file(r)
+    let mut recs = []
+    recs.push(r)
+    let no_remove = []
+    _reg_write_file(path, recs, no_remove)
+}
+
+// _reg_remove_one — drop a SINGLE record's pod row from its home file (the
+// confirmed-teardown path), preserving every other row. Atomic + .bak.
+fn _reg_remove_one(r: PodRecord) {
+    let path = _reg_target_file(r)
+    let no_recs = []
+    let mut rm = []
+    rm.push(r.id)
+    _reg_write_file(path, no_recs, rm)
+}
+
+// _m5_write_atomic — persist the full record set across its per-project home
+// ING.jsonl files (used by bulk callers). Records are grouped by target file;
+// each touched file is rewritten via _reg_write_file (merge-preserving every
+// other row). The per-id mutators use _reg_persist_one instead (single file).
+fn _m5_write_atomic(records: [PodRecord]) {
+    // Collect the distinct target files + the records routed to each.
+    let mut files = []
     let mut i = 0
     while i < len(records) {
-        if i > 0 {
-            body = body + ","
-        }
-        body = body + _m5_emit_record(records[i])
+        let tgt = _reg_target_file(records[i])
+        if _recon_id_in(files, tgt) == 0 { files.push(tgt) }
         i = i + 1
     }
-    body = body + "]}\n"
-    write_file(tmp, body)
-    let _ = exec("chmod 600 " + _reg_shq(tmp) + " 2>/dev/null && mv -f " + _reg_shq(tmp) + " " + _reg_shq(path))
+    let mut f = 0
+    while f < len(files) {
+        let path = files[f]
+        let mut recs = []
+        let mut j = 0
+        while j < len(records) {
+            if _reg_target_file(records[j]) == path { recs.push(records[j]) }
+            j = j + 1
+        }
+        let no_remove = []
+        _reg_write_file(path, recs, no_remove)
+        f = f + 1
+    }
 }
 
 // _m5_find — return the index of `pod_id` in `records`, or -1.
@@ -1098,15 +1194,17 @@ fn pod_registry_add(pod_id: str, provider: str, project: str, purpose: str, ssh_
             // alive, so refresh last_heartbeat; preserve owner_pid/max_ttl.
             owner_pid: prev.owner_pid,
             last_heartbeat: now,
-            max_ttl_sec: prev.max_ttl_sec
+            max_ttl_sec: prev.max_ttl_sec,
+            src: prev.src
         }
+        _reg_persist_one(records[idx])
     } else {
         // First rent — stamp the M6 heartbeat-TTL owner-death/expiry signal:
         // the owning OS pid (kill -0 liveness), a last-heartbeat ts, and a
         // default max-ttl (env HEXA_CLOUD_MAX_TTL_SEC, else 6h). The reaper
         // treats a still-billing pod as dead-owned when the pid is gone OR
         // (now − last_heartbeat) > max_ttl_sec.
-        records.push(PodRecord {
+        let fresh = PodRecord {
             id: pod_id,
             provider: provider,
             created_at: now,
@@ -1122,10 +1220,11 @@ fn pod_registry_add(pod_id: str, provider: str, project: str, purpose: str, ssh_
             cost_per_hr_usd: "",
             owner_pid: _reg_owner_pid(),
             last_heartbeat: now,
-            max_ttl_sec: _reg_default_max_ttl_sec()
-        })
+            max_ttl_sec: _reg_default_max_ttl_sec(),
+            src: ""
+        }
+        _reg_persist_one(fresh)
     }
-    _m5_write_atomic(records)
     return 1
 }
 
@@ -1158,9 +1257,10 @@ fn pod_registry_update_status(pod_id: str, status: str) -> int {
         // A status flip is owner activity → refresh the heartbeat.
         owner_pid: prev.owner_pid,
         last_heartbeat: _reg_now_iso(),
-        max_ttl_sec: prev.max_ttl_sec
+        max_ttl_sec: prev.max_ttl_sec,
+        src: prev.src
     }
-    _m5_write_atomic(records)
+    _reg_persist_one(records[idx])
     return 1
 }
 
@@ -1198,9 +1298,10 @@ fn pod_registry_set_limits(pod_id: str, ttl_sec: int, max_cost_usd: str, cost_pe
         cost_per_hr_usd: cost_per_hr_usd,
         owner_pid: prev.owner_pid,
         last_heartbeat: prev.last_heartbeat,
-        max_ttl_sec: prev.max_ttl_sec
+        max_ttl_sec: prev.max_ttl_sec,
+        src: prev.src
     }
-    _m5_write_atomic(records)
+    _reg_persist_one(records[idx])
     return 1
 }
 
@@ -1237,9 +1338,10 @@ fn pod_registry_set_dph(pod_id: str, cost_per_hr_usd: str) -> int {
         cost_per_hr_usd: cost_per_hr_usd,
         owner_pid: prev.owner_pid,
         last_heartbeat: prev.last_heartbeat,
-        max_ttl_sec: prev.max_ttl_sec
+        max_ttl_sec: prev.max_ttl_sec,
+        src: prev.src
     }
-    _m5_write_atomic(records)
+    _reg_persist_one(records[idx])
     return 1
 }
 
@@ -1593,15 +1695,8 @@ fn pod_registry_remove(pod_id: str) -> int {
     if idx < 0 {
         return 0
     }
-    let mut kept = []
-    let mut i = 0
-    while i < len(records) {
-        if i != idx {
-            kept.push(records[i])
-        }
-        i = i + 1
-    }
-    _m5_write_atomic(kept)
+    // Drop only this pod's row from its home file (preserve every other row).
+    _reg_remove_one(records[idx])
     return 1
 }
 
