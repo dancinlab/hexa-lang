@@ -268,3 +268,29 @@ r4 = freeze array_core_{x86_64,arm64}.s + ar into runtime.a + define HEXA_RT_ARR
   not tune-to-green; verify by captured CI). Residual after pure-family M5 = alloc-walled families
   (map _impl/snapshot, stdio) → arena lane (hexa allocator over mmap+__hx_ptr_*) OR honest-keep as
   Go/Rust-equivalent substrate floor. Then M6 = wholesale runtime_core.c drop + ls self/*.c==∅.
+
+## [M5/M6 mechanism FULLY MAPPED — concrete blockers + execution path] 2026-06-17
+- ENDPOINT identified: `self/rt/mod.hexa` = the runtime-replacement module index ("collectively
+  replace self/runtime.c"), `use self::rt::{syscall,alloc,io,fmt,proc,fs,math,...}`. M5/M6 = complete
+  + transpile + wire this to drop runtime_core.c.
+- PROBED on aiden (captured) — 3 concrete M5 blockers, each a bounded sub-unit for the next cycle:
+  1. PER-FAMILY transpile is NOT self-contained: `hexat self/rt/core.hexa` rc=0 but the C FAILS to
+     compile — core.hexa calls `hexa_call1(float_of, …)` (float_of = a HEXA fn in convert.hexa, NOT a
+     C builtin). ⇒ each gen.c bundle needs its inter-family CLOSURE, not a single file.
+  2. CLOSURE FLATTEN gap: `tool/larm64_flatten.py self/rt/mod.hexa` only walks `import "path"` edges,
+     NOT the `use self::rt::x` path syntax the rt tree uses → produced 34L (skeleton only, modules
+     unresolved). M5 needs a `use`-path resolver (extend larm64_flatten) OR import-style conversion.
+  3. mod.hexa is a P7-7 SKELETON (2026-04-17): except/ffi/intern DEFERRED; the math module is a
+     Taylor/Newton libm-replacement (codegen-fragile per CLAUDE.md trig rule) — completion needed.
+- EXECUTION PATH (next cycles, each gated by build_aprime + faithful-3 + byteeq-real, NO tune-to-green):
+  (M5a) extend larm64_flatten.py to resolve `use self::rt::` → flatten the rt closure.
+  (M5b) hexat-transpile the flattened closure → rt_full_gen.c (mirror runtime_hi_gen.c) + resolve the
+        float_of/int_of_float closure (convert.hexa) so it compiles in the runtime.c TU.
+  (M5c) wire stage_resolve_runtime_a to #include rt_full_gen.c into the standalone build + define
+        HEXA_HAS_HEXA_RT_STDLIB for the covered fns → drop their #else WHOLESALE = large byte-DECREASE.
+  (arena) alloc-walled families (map _impl/snapshot, stdio) via a hexa allocator over mmap+__hx_ptr_*
+        OR honest-keep as Go/Rust-equivalent substrate floor.
+  (M6) wholesale runtime_core.c drop + ls self/*.c == ∅ with gen3≡gen4 on both targets.
+- HONEST horizon (c9): "RT-NATIVE-ZEROC 모두 완료" = a MAJOR multi-session campaign (complete the
+  self/rt/ runtime-replacement tree + the 3 blockers above). This session LANDED array-r4 (−1264 B,
+  13/13 CI green) + fully mapped M5/M6 to concrete executable sub-units. Completion is NOT one-turn.
