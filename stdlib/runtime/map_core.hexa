@@ -13,9 +13,13 @@
 // probe SIGSEGV). The raw-int leaves used:
 //   __hx_payload_add/sub/mul (signed i64 arith) · __hx_payload_and/xor (#3499)
 //   · __hx_payload_lt/eq/ne (cmp → bool, work in if/while conditions).
-// Each leaf returns a {TAG_INT, result} HexaVal; chaining extracts payloads, so
-// intermediate values stay raw-int faithful. __hx_ptr_load8/64 read raw memory.
-// __hx_make_val(tag, payload) re-stamps the matched value's REAL element tag.
+//
+// NESTING: each __hx_payload_* / __hx_ptr_* call writes EXACTLY ONE `let` — NO
+// nested intrinsic args (e.g. NOT `and(mul(h,k), m)`). A native-codegen clobber
+// (r10/r11 / x1/x3 scratch reuse) corrupts the outer op when an intrinsic is a
+// direct arg to another (measured: nested fnv → SIGSEGV; un-nested → byte-exact
+// vs C). Un-nested = one op per temp, exactly like array_core's straight-line
+// form. (Codegen nested-intrinsic clobber = a separate finding, not fixed here.)
 //
 // LAYOUT (mirrors runtime_core_emit.hexa, locked by map_core_gate.c):
 //   m payload  = HexaMap*;  HexaMap { HexaMapTable* tbl @0; ... }
@@ -27,15 +31,16 @@
 //   with __hx_ptr_load8.
 
 // rt_map_fnv1a_native: FNV-1a over the NUL-terminated key bytes at `keyp`.
-// 32-bit arithmetic — mask to 0xFFFFFFFF after each multiply via __hx_payload_and
-// so the result is byte-identical to the C `uint32_t` hexa_fnv1a_str.
+// 32-bit arithmetic — mask to 0xFFFFFFFF after each multiply so the result is
+// byte-identical to the C `uint32_t` hexa_fnv1a_str.
 fn rt_map_fnv1a_native(keyp: int) -> int {
     let mut h = 2166136261
     let mut i = 0
     let mut b = __hx_ptr_load8(keyp, 0)
     while __hx_payload_ne(b, 0) {
         h = __hx_payload_xor(h, b)
-        h = __hx_payload_and(__hx_payload_mul(h, 16777619), 4294967295)  // *= 16777619 mod 2^32
+        let prod = __hx_payload_mul(h, 16777619)         // *= 16777619
+        h = __hx_payload_and(prod, 4294967295)           // mod 2^32
         i = __hx_payload_add(i, 1)
         b = __hx_ptr_load8(keyp, i)
     }
@@ -49,46 +54,51 @@ fn rt_map_strcmp0_native(a: int, b: int) -> int {
     let mut ca = __hx_ptr_load8(a, 0)
     let mut cb = __hx_ptr_load8(b, 0)
     while __hx_payload_eq(ca, cb) {
-        if __hx_payload_eq(ca, 0) { return 0 }       // both ended, equal
+        if __hx_payload_eq(ca, 0) { return 0 }           // both ended, equal
         j = __hx_payload_add(j, 1)
         ca = __hx_ptr_load8(a, j)
         cb = __hx_ptr_load8(b, j)
     }
-    return 1                                          // mismatch
+    return 1                                              // mismatch
 }
 
 // rt_map_get_native: open-addressing probe identical to hmap_find, returning the
 // matched value (re-stamped via __hx_make_val) or a TAG_VOID sentinel
 // (__hx_make_val(4, 0); TAG_VOID = 4). The C wrapper keeps the valstruct /
 // NULL-table guards + the not-found stderr message + key coercion, and delegates
-// only the in-table probe. The probe is bounded by ht_cap steps — the C `while
-// slots[idx].key` terminates at an empty slot (load < 75% guarantees one); the
-// bound is an equivalent safety net.
+// only the in-table probe. The probe is bounded by ht_cap steps (the C `while
+// slots[idx].key` terminates at an empty slot; load < 75% guarantees one).
 pub fn rt_map_get_native(m: HexaVal, keyp: int) -> HexaVal {
-    let map_ptr = __hx_payload_add(m, 0)             // HexaMap*
-    let t = __hx_ptr_load64(map_ptr, 0)              // HexaMap.tbl @0
-    let slots = __hx_ptr_load64(t, 0)                // HexaMapTable.slots @0
-    let vals = __hx_ptr_load64(t, 8)                 // HexaMapTable.vals @8
-    let ht_cap = __hx_payload_and(__hx_ptr_load64(t, 16), 4294967295)  // ht_cap @16 (low 32b)
+    let map_ptr = __hx_payload_add(m, 0)                 // HexaMap*
+    let t = __hx_ptr_load64(map_ptr, 0)                  // HexaMap.tbl @0
+    let slots = __hx_ptr_load64(t, 0)                    // HexaMapTable.slots @0
+    let vals = __hx_ptr_load64(t, 8)                     // HexaMapTable.vals @8
+    let cap_raw = __hx_ptr_load64(t, 16)                 // ht_cap @16 (+ pad)
+    let ht_cap = __hx_payload_and(cap_raw, 4294967295)   // low 32b
     let h = rt_map_fnv1a_native(keyp)
     let mask = __hx_payload_sub(ht_cap, 1)
     let mut idx = __hx_payload_and(h, mask)
     let mut steps = 0
     while __hx_payload_lt(steps, ht_cap) {
-        let slot = __hx_payload_add(slots, __hx_payload_mul(idx, 16))   // HexaMapSlot @ idx
-        let slot_key = __hx_ptr_load64(slot, 0)      // .key @0
+        let soff = __hx_payload_mul(idx, 16)             // HexaMapSlot @ idx
+        let slot = __hx_payload_add(slots, soff)
+        let slot_key = __hx_ptr_load64(slot, 0)          // .key @0
         if __hx_payload_eq(slot_key, 0) { return __hx_make_val(4, 0) }  // empty → TAG_VOID
-        let slot_hash = __hx_payload_and(__hx_ptr_load64(slot, 8), 4294967295)  // .hash @8 (u32)
+        let hash_raw = __hx_ptr_load64(slot, 8)          // .hash @8 (u32 + order_idx)
+        let slot_hash = __hx_payload_and(hash_raw, 4294967295)
         if __hx_payload_eq(slot_hash, h) {
-            if __hx_payload_eq(rt_map_strcmp0_native(slot_key, keyp), 0) {
-                let voff = __hx_payload_mul(idx, 16)                    // vals[idx] {tag,payload}
+            let cmp = rt_map_strcmp0_native(slot_key, keyp)
+            if __hx_payload_eq(cmp, 0) {
+                let voff = __hx_payload_mul(idx, 16)     // vals[idx] {tag,payload}
+                let poff = __hx_payload_add(voff, 8)
                 let tag = __hx_ptr_load64(vals, voff)
-                let pay = __hx_ptr_load64(vals, __hx_payload_add(voff, 8))
+                let pay = __hx_ptr_load64(vals, poff)
                 return __hx_make_val(tag, pay)
             }
         }
-        idx = __hx_payload_and(__hx_payload_add(idx, 1), mask)
+        let nxt = __hx_payload_add(idx, 1)
+        idx = __hx_payload_and(nxt, mask)
         steps = __hx_payload_add(steps, 1)
     }
-    return __hx_make_val(4, 0)                        // not found (safety net)
+    return __hx_make_val(4, 0)                            // not found (safety net)
 }
