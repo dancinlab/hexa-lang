@@ -45,3 +45,42 @@ AUTHORITATIVE JUDGE: CI — faithful-nobaseline 3-job(linux-x86_64 · linux-arm6
   로컬은 구조까지만(c9: self-report 아닌 CI 출력이 증거).
 
 STATUS: CANDIDATE — awaiting CI faithful-nobaseline + byteeq-real verdict.
+
+
+--- REGEN + CODEGEN-FIX + INDEPENDENT VERIFY (2026-06-17) ---
+CODEGEN ROOT-CAUSE (c9, found during regen): the 3 search predicates are the
+FIRST bool-returning fns in the native seed. The x86_64 backend
+(x86_64_linux.hexa) had no `const_bool` case in _x86_op_resolve /
+_x86_tag_resolve / _x86_64_op_for_operand_st → `return true`/`return false`
+fell through to payload=imm 0 + tag default=TAG_INT. Every bool predicate
+silently returned false (C-differential 6/14, all true cases failed). #3462
+pair-model carried local/call/string tags but missed immediate const_bool
+literals (arm64_darwin.hexa already handled them, TAG_BOOL=2).
+FIX: add const_bool cases (payload=int_val 0/1, tag=TAG_BOOL=2) to x86_64,
+arm64 parity. After fix the seed emits mov rdx,1/mov rax,2 (true) and
+mov rdx,0/mov rax,2 (false). compiler/codegen/x86_64_linux.hexa +21L.
+
+REGEN (committed c27ce80e3): both seeds 14 .globl rt_str_* (x86_64 cross-assemble
++ PIE-OK; arm64 Mach-O 14-globl content). emitter runtime_hi_gen_emit.hexa
+14 fn, awk-synth == extract.sh gen.c BYTE-IDENTICAL (389L). Counts 14-consistent
+across runtime_hi.hexa · both seeds · emitter · regen `>=14` · stage_resolve
+`<14` guard · build_aprime/restore_frozen_seeds comments.
+
+INDEPENDENT RE-VERIFY (summer linux x86_64 — aiden host went DOWN mid-run; summer
+reproduced the whole gate fresh from the committed branch):
+  - committed 14-fn x86_64 seed assembles clean (clang -c) → 14 T rt_str_* syms,
+    incl rt_str_starts_with_b / ends_with_b / contains_b.
+  - C-differential harness scripts/scratch/rt_native/search_predicates_gate.c
+    linked against the native seed + rebuilt runtime.a:
+      ===== SEARCH-PREDICATE GATE: 18/18 match, 0 mismatch =====  (GATE-EXIT=0)
+    (18 cases incl empty prefix/needle, suffix>s, exact, prefix/suffix-as-
+     substring, needle>hay — all vs OLD C strncmp/strcmp/strstr semantics.)
+    const_bool fix CONFIRMED: every true case returns 1 (pre-fix all returned 0).
+  - emitter awk-unescape (mirror of restore_frozen_seeds synth) diff'd vs the
+    committed self/runtime_hi_gen.c → ZERO diff (BYTE-IDENTICAL-EMITTER-MATCH).
+
+STATUS: LANDED-pending-CI — local + summer gates GREEN (18/18 native-seed C-diff,
+  byte-identical emitter, 14-count consistent, x86_64 const_bool codegen fix).
+  PR opened; CI faithful-nobaseline (linux-x86_64·linux-arm64·darwin-arm64) +
+  selfhost-byteeq-real is the AUTHORITATIVE merge judge (c9 — no self-merge on a
+  pending byte-eq, no --admin override).
