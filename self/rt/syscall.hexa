@@ -24,11 +24,27 @@
 // Target selection (compile-time, resolved by codegen --target flag)
 // ═══════════════════════════════════════════════════════════════════
 
-@pure fn target_is_linux() -> bool { return __TARGET_OS__ == 0 }
-@pure fn target_is_darwin() -> bool { return __TARGET_OS__ == 1 }
+@pure fn target_is_linux() -> bool { return __hx_target_os() == 0 }
+@pure fn target_is_darwin() -> bool { return __hx_target_os() == 1 }
 
-// __TARGET_OS__ is a codegen-injected constant:
+// __hx_target_os() is a shipping-backend leaf intrinsic (RT-NATIVE M5-syscall-a,
+// 2026-06-18): x86_64_linux → 0, arm64_darwin → 1. It replaces the old P7-7
+// `__TARGET_OS__` codegen-injected ident which only self/codegen knew.
 //   0 = linux,  1 = darwin,  2 = (reserved for freebsd)
+
+// ═══════════════════════════════════════════════════════════════════
+// syscall shim — route the P7-7 `syscall(num, args…)` builtin (not lowered by
+// the shipping compiler/codegen) to the M1 leaf `__hx_syscall6` (num + EXACTLY
+// 6 args; 0-fill the unused tail) / `__hx_syscall0` (num only). RT-NATIVE
+// M5-syscall-b, 2026-06-18.
+// ═══════════════════════════════════════════════════════════════════
+
+@inline fn _sc0(n: int) -> int { return __hx_syscall0(n) }
+@inline fn _sc1(n: int, a: int) -> int { return __hx_syscall6(n, a, 0, 0, 0, 0, 0) }
+@inline fn _sc2(n: int, a: int, b: int) -> int { return __hx_syscall6(n, a, b, 0, 0, 0, 0) }
+@inline fn _sc3(n: int, a: int, b: int, c: int) -> int { return __hx_syscall6(n, a, b, c, 0, 0, 0) }
+@inline fn _sc4(n: int, a: int, b: int, c: int, d: int) -> int { return __hx_syscall6(n, a, b, c, d, 0, 0) }
+@inline fn _sc6(n: int, a: int, b: int, c: int, d: int, e: int, f: int) -> int { return __hx_syscall6(n, a, b, c, d, e, f) }
 
 // ═══════════════════════════════════════════════════════════════════
 // Linux syscall numbers (x86_64 + arm64 unified — Linux unified ABI)
@@ -86,63 +102,63 @@
 // ═══════════════════════════════════════════════════════════════════
 
 fn sys_read(fd: int, buf: int, len: int) -> int {
-    if target_is_linux() { return syscall(SYS_LINUX_READ(), fd, buf, len) }
-    return syscall(SYS_DARWIN_READ(), fd, buf, len)
+    if target_is_linux() { return _sc3(SYS_LINUX_READ(), fd, buf, len) }
+    return _sc3(SYS_DARWIN_READ(), fd, buf, len)
 }
 
 fn sys_write(fd: int, buf: int, len: int) -> int {
-    if target_is_linux() { return syscall(SYS_LINUX_WRITE(), fd, buf, len) }
-    return syscall(SYS_DARWIN_WRITE(), fd, buf, len)
+    if target_is_linux() { return _sc3(SYS_LINUX_WRITE(), fd, buf, len) }
+    return _sc3(SYS_DARWIN_WRITE(), fd, buf, len)
 }
 
 fn sys_open(path_cstr: int, flags: int, mode: int) -> int {
-    if target_is_linux() { return syscall(SYS_LINUX_OPEN(), path_cstr, flags, mode) }
-    return syscall(SYS_DARWIN_OPEN(), path_cstr, flags, mode)
+    if target_is_linux() { return _sc3(SYS_LINUX_OPEN(), path_cstr, flags, mode) }
+    return _sc3(SYS_DARWIN_OPEN(), path_cstr, flags, mode)
 }
 
 fn sys_close(fd: int) -> int {
-    if target_is_linux() { return syscall(SYS_LINUX_CLOSE(), fd) }
-    return syscall(SYS_DARWIN_CLOSE(), fd)
+    if target_is_linux() { return _sc1(SYS_LINUX_CLOSE(), fd) }
+    return _sc1(SYS_DARWIN_CLOSE(), fd)
 }
 
 fn sys_lseek(fd: int, off: int, whence: int) -> int {
-    if target_is_linux() { return syscall(SYS_LINUX_LSEEK(), fd, off, whence) }
-    return syscall(SYS_DARWIN_LSEEK(), fd, off, whence)
+    if target_is_linux() { return _sc3(SYS_LINUX_LSEEK(), fd, off, whence) }
+    return _sc3(SYS_DARWIN_LSEEK(), fd, off, whence)
 }
 
 fn sys_unlink(path_cstr: int) -> int {
     if target_is_linux() {
         // Linux uses unlinkat(AT_FDCWD=-100, path, 0)
-        return syscall(SYS_LINUX_UNLINKAT(), -100, path_cstr, 0)
+        return _sc3(SYS_LINUX_UNLINKAT(), -100, path_cstr, 0)
     }
-    return syscall(SYS_DARWIN_UNLINK(), path_cstr)
+    return _sc1(SYS_DARWIN_UNLINK(), path_cstr)
 }
 
 fn sys_mkdir(path_cstr: int, mode: int) -> int {
     if target_is_linux() {
         // Linux: mkdirat(AT_FDCWD=-100, path, mode) — raw mkdir(2)=83 was dropped.
-        return syscall(SYS_LINUX_MKDIRAT(), -100, path_cstr, mode)
+        return _sc3(SYS_LINUX_MKDIRAT(), -100, path_cstr, mode)
     }
-    return syscall(SYS_DARWIN_MKDIR(), path_cstr, mode)
+    return _sc2(SYS_DARWIN_MKDIR(), path_cstr, mode)
 }
 
 fn sys_mmap(addr: int, size: int, prot: int, flags: int, fd: int, off: int) -> int {
-    if target_is_linux() { return syscall(SYS_LINUX_MMAP(), addr, size, prot, flags, fd, off) }
-    return syscall(SYS_DARWIN_MMAP(), addr, size, prot, flags, fd, off)
+    if target_is_linux() { return _sc6(SYS_LINUX_MMAP(), addr, size, prot, flags, fd, off) }
+    return _sc6(SYS_DARWIN_MMAP(), addr, size, prot, flags, fd, off)
 }
 
 fn sys_munmap(addr: int, size: int) -> int {
-    if target_is_linux() { return syscall(SYS_LINUX_MUNMAP(), addr, size) }
-    return syscall(SYS_DARWIN_MUNMAP(), addr, size)
+    if target_is_linux() { return _sc2(SYS_LINUX_MUNMAP(), addr, size) }
+    return _sc2(SYS_DARWIN_MUNMAP(), addr, size)
 }
 
 fn sys_exit(code: int) -> int {
-    if target_is_linux() { return syscall(SYS_LINUX_EXIT_GROUP(), code) }
-    return syscall(SYS_DARWIN_EXIT(), code)
+    if target_is_linux() { return _sc1(SYS_LINUX_EXIT_GROUP(), code) }
+    return _sc1(SYS_DARWIN_EXIT(), code)
 }
 
 fn sys_getrandom(buf: int, len: int, flags: int) -> int {
-    if target_is_linux() { return syscall(SYS_LINUX_GETRANDOM(), buf, len, flags) }
+    if target_is_linux() { return _sc3(SYS_LINUX_GETRANDOM(), buf, len, flags) }
     // Darwin has no getrandom; fall back to /dev/urandom via open+read
     let fd = sys_open(hexa_ptr_addr("/dev/urandom"), 0, 0)
     if fd < 0 { return fd }
@@ -152,8 +168,8 @@ fn sys_getrandom(buf: int, len: int, flags: int) -> int {
 }
 
 fn sys_clock_gettime(clk: int, ts_ptr: int) -> int {
-    if target_is_linux() { return syscall(SYS_LINUX_CLOCK_GETTIME(), clk, ts_ptr) }
-    return syscall(SYS_DARWIN_CLOCK_GETTIME(), clk, ts_ptr)
+    if target_is_linux() { return _sc2(SYS_LINUX_CLOCK_GETTIME(), clk, ts_ptr) }
+    return _sc2(SYS_DARWIN_CLOCK_GETTIME(), clk, ts_ptr)
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -164,20 +180,20 @@ fn sys_clock_gettime(clk: int, ts_ptr: int) -> int {
 // Signatures match the Linux unified ABI; Darwin uses the same layout.
 
 fn sys_fork() -> int {
-    if target_is_linux() { return syscall(SYS_LINUX_FORK()) }
-    return syscall(SYS_DARWIN_FORK())
+    if target_is_linux() { return _sc0(SYS_LINUX_FORK()) }
+    return _sc0(SYS_DARWIN_FORK())
 }
 
 // argv_ptr / envp_ptr are int addresses of NULL-terminated cstring arrays.
 fn sys_execve(path_cstr: int, argv_ptr: int, envp_ptr: int) -> int {
-    if target_is_linux() { return syscall(SYS_LINUX_EXECVE(), path_cstr, argv_ptr, envp_ptr) }
-    return syscall(SYS_DARWIN_EXECVE(), path_cstr, argv_ptr, envp_ptr)
+    if target_is_linux() { return _sc3(SYS_LINUX_EXECVE(), path_cstr, argv_ptr, envp_ptr) }
+    return _sc3(SYS_DARWIN_EXECVE(), path_cstr, argv_ptr, envp_ptr)
 }
 
 // wait4(pid, &status, options, &rusage). rusage_ptr = 0 to skip.
 fn sys_wait4(pid: int, status_ptr: int, options: int, rusage_ptr: int) -> int {
-    if target_is_linux() { return syscall(SYS_LINUX_WAIT4(), pid, status_ptr, options, rusage_ptr) }
-    return syscall(SYS_DARWIN_WAIT4(), pid, status_ptr, options, rusage_ptr)
+    if target_is_linux() { return _sc4(SYS_LINUX_WAIT4(), pid, status_ptr, options, rusage_ptr) }
+    return _sc4(SYS_DARWIN_WAIT4(), pid, status_ptr, options, rusage_ptr)
 }
 
 // pipe(fds[2]) — fds_ptr is int addr of a 2-int array (8 bytes each on 64-bit,
@@ -185,7 +201,7 @@ fn sys_wait4(pid: int, status_ptr: int, options: int, rusage_ptr: int) -> int {
 // Linux pipe() returns read-end in rax and writes read/write fds to fds_ptr[0..1]
 // (actually writes both slots; return value is 0 on success, -errno on error).
 fn sys_pipe(fds_ptr: int) -> int {
-    if target_is_linux() { return syscall(SYS_LINUX_PIPE(), fds_ptr) }
+    if target_is_linux() { return _sc1(SYS_LINUX_PIPE(), fds_ptr) }
     // Darwin has no plain pipe() via BSD syscall — kernel returns r0/r1 in
     // two return regs. Current codegen exposes only the first return value,
     // so Darwin path is incomplete; pipe-based exec is Linux-only for now.
@@ -193,14 +209,14 @@ fn sys_pipe(fds_ptr: int) -> int {
 }
 
 fn sys_dup2(oldfd: int, newfd: int) -> int {
-    if target_is_linux() { return syscall(SYS_LINUX_DUP2(), oldfd, newfd) }
+    if target_is_linux() { return _sc2(SYS_LINUX_DUP2(), oldfd, newfd) }
     // Darwin dup2 syscall number not yet catalogued — see proc.hexa blocker.
     return -1
 }
 
 fn sys_nanosleep(req_ptr: int, rem_ptr: int) -> int {
-    if target_is_linux() { return syscall(SYS_LINUX_NANOSLEEP(), req_ptr, rem_ptr) }
-    return syscall(SYS_DARWIN_NANOSLEEP(), req_ptr, rem_ptr)
+    if target_is_linux() { return _sc2(SYS_LINUX_NANOSLEEP(), req_ptr, rem_ptr) }
+    return _sc2(SYS_DARWIN_NANOSLEEP(), req_ptr, rem_ptr)
 }
 
 // ═══════════════════════════════════════════════════════════════════
