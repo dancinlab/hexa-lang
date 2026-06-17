@@ -195,3 +195,37 @@ r4 = freeze array_core_{x86_64,arm64}.s + ar into runtime.a + define HEXA_RT_ARR
   runtime.a rt_array_*_native=T (from .o not #else) + b4_array_native_gate exit12 on real
   arm64+x86_64 + runtime_core.c bytes DECREASE. array twin of alloc lane's M5 relink brick.
   verdict F-M4-B4-ARRAY-R3-READHALF. GO (proven partial, zero-regression).
+
+2026-06-17 :: ALLOC r1 FEASIBILITY — ALLOC-floor REDUCIBLE (GO + non-circular).
+  census(F-M5-R2)의 ALLOC-WALLED 버킷(map _impl·to_string·array push 의 alloc-half
+  + bump-arena substrate)이 .hexa 로 표현 가능한지 RAN 조사. 결과:
+  ① 인트린식 커버리지 = 100% (MISSING 0): mmap/munmap=__hx_syscall6(9/197·11/73,
+     6-arg ABI 확인) · raw 64/32/8 load+store=__hx_ptr_* · bump arith=int payload ·
+     bound cmp=__hx_payload_lt/ge · construct=__hx_make_val(array-r2 #3488).
+  ② 순환성 = NON-CIRCULAR (결정타). bump arena 는 pre-mmap 영역 위 int64/pointer
+     공간에 전부 상주 — arena BODY 가 HexaVal box/string lit/array temp 를 만들지
+     않음 ⇒ hexa_array/map 으로 재귀 없음.
+  ③ PoC RAN (aiden x86_64, build/aprime_m4): bump_arena_linux_poc.hexa —
+     mmap(9) 8192B 슬랩 → 200 cell i^2 store/load 왕복 → munmap(11) →
+     exit(sum==2646700?0:1). emit rc=0(404L asm)·as rc=0·gcc -no-pie+runtime.o
+     link rc=0·RUN exit=0 ★ arena fidelity EXACT. 비순환 witness(nm/objdump):
+     arena_* = T 심볼 · malloc/calloc/realloc/free/mmap 심볼참조 0 · syscall 명령
+     정확히 2개(mmap+munmap=floor) · 잔여 undef = hexa_add_slow/mul/exit(int 바디
+     =hexa_int(..) 스택값, alloc 없음).
+  분류(c16): ARENA 플로어(bump alloc/reset/release over mmap)=GO·인트린식 100%·
+  비순환(arm64 native runtime 이 이미 runtime_arm64.hexa rt_arena_* 로 hexa-source
+  방출; x86_64 는 codegen 미러, missing-intrinsic 아님). calloc=fresh-anon-page
+  bump(커널 zero-fill)·realloc order=alloc+ptr-copy = GO. HexaVal-RETURNING 패밀리
+  (map_*/array push)=GATED-on-make_val(construct-half = array-r2 #3488 unlock).
+  HONEST 잔여: 임의 블록 free + 범용 hxlcl_malloc 은 reducible 주장 안 함(bump arena
+  는 bulk reset, per-object free 아님 — Go/Rust 도 syscall 위 동일 트레이드오프) =
+  accounting floor, re-assessable. 진짜 irreducible floor = syscall 명령+libm,
+  allocator 로직 아님. compiler edit 0(docs+PoC only, CI 무영향).
+  verdict F-ALLOC-R1-FEASIBILITY. PoC scripts/scratch/rt_native/bump_arena_linux_poc.hexa.
+  NEXT(r2, array-lane #3488 merge 후): hexa_arena_alloc/bump-from-arena calloc 를
+  __hx_syscall6 mmap+__hx_ptr_* hexa-source 바디로 포팅(runtime_arm64.hexa rt_arena_*
+  를 x86_64 native runtime + standalone path 로 미러) = 첫 ALLOC-WALLED 패밀리
+  allocator-half C-free 증명. map_* 는 __hx_make_val 뒤에 체이닝.
+  (NOTE: r1 의 "x86_64 = bounded mirror" 프레이밍은 후속 F-ALLOC-R2-X86-ARENA 가 정정 —
+  arm64 rt_arena_* 는 dormant machine-code emitter(portable hexa 아님), shipped-runtime
+  parity gap 없음. feasibility + non-circularity 발견은 유효.)
