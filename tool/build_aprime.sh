@@ -285,6 +285,28 @@ if [ ! -f "$REPO/build/array_core_native.o" ]; then
 fi
 ARRAY_CORE_OBJ="$REPO/build/array_core_native.o"
 
+# ── RT-NATIVE MAP-R3: native map-core probe object ───────────
+# runtime_core.c's hexa_map_get probe now delegate UNCONDITIONALLY to
+# rt_array_{get,set}_native (the C `#else HX_ARR_ITEMS` fallback was dropped for
+# the genuine runtime_core.c byte-decrease), so this single-TU compile of
+# runtime.c MUST link the native array seed object. Assemble it from the
+# arch-matched frozen .s seed (the array twin of the rt_hi Z2a object above).
+MAP_CORE_OBJ=""
+case "$(uname -sm 2>/dev/null)" in
+    "Linux x86_64")                 MAP_SEED="$REPO/self/native/map_core_x86_64.s" ;;
+    "Linux aarch64"|"Linux arm64")  MAP_SEED="$REPO/self/native/map_core_arm64-linux.s" ;;
+    *)                              MAP_SEED="$REPO/self/native/map_core_arm64.s" ;;
+esac
+if [ ! -f "$REPO/build/map_core_native.o" ] && [ -f "$MAP_SEED" ]; then
+    grep -vE '^// ' "$MAP_SEED" > "$TMP/map_seed.s" 2>/dev/null || cp "$MAP_SEED" "$TMP/map_seed.s"
+    ${CC:-clang} -c $ARCH_FLAG "$TMP/map_seed.s" -o "$REPO/build/map_core_native.o" 2>/dev/null \
+        && echo "  [3/5] RT-NATIVE MAP-R3: assembled build/map_core_native.o from $MAP_SEED"
+fi
+if [ ! -f "$REPO/build/map_core_native.o" ]; then
+    echo "build_aprime: MAP-R3 build/map_core_native.o missing (no seed for $(uname -m)); runtime_core.c hexa_map_get probe will be undefined" >&2; exit 1
+fi
+MAP_CORE_OBJ="$REPO/build/map_core_native.o"
+
 # ── stage 4: clang ─────────────────────────────────────────────────
 mkdir -p "$(dirname "$OUT")"
 # Cycle 43: -dead_strip + -ffunction-sections + -Oz shrinks aprime_cc
@@ -302,7 +324,7 @@ CL_ERR="$(clang -Oz $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
     -ffunction-sections -fdata-sections $DEAD_STRIP \
     -fno-builtin-bzero -fno-builtin-memcpy -fno-builtin-strlen \
     -D_FORTIFY_SOURCE=0 -fno-stack-protector \
-    -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
+    -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
 # ZERO-C Z2a: restore the warm runtime_core.c artifact ONLY when runtime_hi_gen.c
 # still exists (legacy gated test). When the file is permanently gone (default
 # Z2a path) keep the `#include` removed — restoring it would make the stage-5
@@ -331,7 +353,7 @@ fi
 clang -c -O2 $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE $EXTRA_DEFS -Wno-trigraphs -I self -I . \
     self/runtime.c -o "$RTO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
 clang $ARCH_FLAG "$SMS" -c -o "$SMO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
-clang $ARCH_FLAG "$SMO" "$RTO" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:' | head -5
+clang $ARCH_FLAG "$SMO" "$RTO" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:' | head -5
 if [ ! -x "$SMB" ]; then
     echo "build_aprime: smoke link failed" >&2
     exit 2

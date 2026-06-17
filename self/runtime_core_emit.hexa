@@ -3081,6 +3081,19 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "    return v;\n"
     buf = buf + "}\n"
     buf = buf + "#else\n"
+    // RT-NATIVE-ZEROC M4 map-r3: the standalone (non-HEXA_HAS) map element LOOKUP
+    // delegates the in-table hash probe to the raw-mem hexa-source body
+    // (stdlib/runtime/map_core.hexa::rt_map_get_native — fnv1a + open-addressing
+    // probe + strcmp, all __hx_payload_*/__hx_ptr_* leaves; gate-proven byte-exact
+    // vs this C path, map_core_gate.c exit 21). The native body enters the runtime
+    // ONLY via the frozen .s seed (self/native/map_core_{arm64,x86_64,arm64-linux}.s)
+    // ar'd into runtime.a by stage_resolve_runtime_a::resolve_native_map_core_seed
+    // (all 3 production targets) + linked into the single-TU dev builds. The C
+    // wrapper keeps the valstruct / NULL-table guards + the not-found stderr (the
+    // native body returns TAG_VOID on miss); only the alloc-free probe is delegated
+    // — the array twin's #else-drop pattern (array-r4). The key is boxed to a
+    // TAG_INT HexaVal (hexa fns receive every param as a 16-byte HexaVal).
+    buf = buf + "extern HexaVal rt_map_get_native(HexaVal m, HexaVal key);\n"
     buf = buf + "HexaVal hexa_map_get(HexaVal m, const char* key) {\n"
     buf = buf + "    // rt 32-G: route Val field access to flat struct accessor.\n"
     buf = buf + "    if (HX_IS_VALSTRUCT(m)) {\n"
@@ -3090,12 +3103,11 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "        fprintf(stderr, \"map key '%s' not found\\n\", key);\n"
     buf = buf + "        return hexa_void();\n"
     buf = buf + "    }\n"
-    buf = buf + "    HexaMapTable* t = HX_MAP_TBL(m);\n"
-    buf = buf + "    uint32_t h = hexa_fnv1a_str(key);\n"
-    buf = buf + "    int si = hmap_find(t, key, h);\n"
-    buf = buf + "    if (si >= 0) return t->vals[si];\n"
-    buf = buf + "    fprintf(stderr, \"map key '%s' not found\\n\", key);\n"
-    buf = buf + "    return hexa_void();\n"
+    buf = buf + "    HexaVal v = rt_map_get_native(m, hexa_int((int64_t)(intptr_t)key));\n"
+    buf = buf + "    if (HX_TAG(v) == TAG_VOID) {\n"
+    buf = buf + "        fprintf(stderr, \"map key '%s' not found\\n\", key);\n"
+    buf = buf + "    }\n"
+    buf = buf + "    return v;\n"
     buf = buf + "}\n"
     buf = buf + "#endif\n"
     buf = buf + "\n"
