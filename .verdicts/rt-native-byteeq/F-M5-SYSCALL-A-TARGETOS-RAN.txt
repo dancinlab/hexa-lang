@@ -1,0 +1,76 @@
+F-M5-SYSCALL-A-TARGETOS-RAN — `__hx_target_os()` compile-time OS-const intrinsic
+                               added to the shipping backend (ADD-only), native-
+                               emits + RUNs correct on both targets. Resolves the
+                               `__TARGET_OS__` half of the M5-syscall wall.
+                               (2026-06-18, RAN aiden aprime_m5a)
+================================================================================
+LANE: M5 standalone-redesign, syscall sub-unit a (RT-NATIVE-ZEROC fleet).
+CONTEXT: F-M5-ALLOC-B2-SYSCALL-WALL found that self/rt/syscall.hexa is a P7-7
+abstraction over (a) a `syscall(num,…)` builtin and (b) a codegen-injected
+`__TARGET_OS__` const — neither exists in the shipping backend. This brick lands
+(b): a shipping-backend OS const, so syscall.hexa can select per-target syscall
+numbers natively. (a) — `syscall()` → `__hx_syscall6` rewrite — is M5-syscall-b.
+
+================================================================================
+1. WHAT LANDED (ADD-only, c10)
+================================================================================
+`__hx_target_os()` — a 0-arg leaf intrinsic returning an int HexaVal compile-time
+OS constant, value chosen by the PER-TARGET backend (matches self/rt/syscall.hexa:
+__TARGET_OS__==0 ⇒ linux, ==1 ⇒ darwin):
+  · compiler/check/bind.hexa        — whitelist "__hx_target_os"
+  · compiler/codegen/x86_64_linux.hexa  — `__hx_target_os()` → mov r10,0 +
+       _x86_hv_store_leaf (const-int HexaVal 0 = linux). Mirrors __hx_syscall0.
+  · compiler/codegen/arm64_darwin.hexa  — `__hx_target_os()` → movz x1,#1
+       (payload=1=darwin) + movz x0,#0 (tag=TAG_INT) + _hv_store_dst. Mirrors
+       __hx_tag.
+No `bl`/`call`, no payload load — pure immediate. The compiler source NEVER calls
+__hx_target_os, so self-emit is unchanged ⇒ gen3≡gen4 preserved (CI selfhost-
+byteeq-real is the authority; read-half added __hx_tag/__hx_make_val the same way).
+
+================================================================================
+2. DECISIVE RESULT (c2 — aiden RAN, rebuilt aprime_m5a, real x86_64)
+================================================================================
+build: tool/build_aprime.sh -o build/aprime_m5a → [5/5] smoke exit(42)==42 PASS
+       (compiler rebuild with the 3 codegen edits — no regression).
+probe:  scripts/scratch/rt_native/target_os_probe.hexa = `fn main(){ exit(__hx_target_os()) }`
+
+  x86_64-linux : aprime_m5a --emit=asm --target=x86_64-linux-gnu → emit rc=0,
+                 as rc=0, link rc=0, RUN **exit=0** (= linux const). ★
+  arm64-darwin : aprime_m5a --emit=asm --target=arm64-apple-darwin → emit OK,
+                 asm shows `movz x1, #1 ; __hx_target_os: 1 = darwin` +
+                 `movz x0, #0 ; __hx_target_os: TAG_INT` + `stp x0, x1`. ★
+  ⇒ both targets emit the correct per-OS const; x86_64 RAN end-to-end exit 0.
+
+================================================================================
+3. CLASSIFICATION (c16) + NAMED NEXT BRICK
+================================================================================
+WALL TYPE (c) substrate/codegen gap — RESOLVED for the OS-const half (ADD-only,
+no new failure mode; the dispatch `if` is dead during self-emit).
+
+  NAMED M5-syscall-b: "Port self/rt/syscall.hexa off the P7-7 surface — replace
+   every `syscall(N, a…)` builtin call with `__hx_syscall6(N, a…, 0-fill to 6)`
+   (and `__hx_syscall0(N)` for the 0-arg forms), and replace the `__TARGET_OS__`
+   ident with a call to `__hx_target_os()` (landed here). DEPLETION TEST: the b2
+   gate (flatten alloc+syscall + driver, scripts/scratch/rt_native/
+   alloc_b2_gate.hexa) native-emits + RUNs exit 0 on aiden x86_64 — proving
+   alloc+syscall integrate C-free over the shipping leaf surface. Then b3 =
+   standalone-relink (where the `g<id>` module-global .bss-slot gap for
+   __arena_tbl must be solved)."
+
+================================================================================
+4. HONEST RESIDUAL (c9)
+================================================================================
+  · This lands ONLY the `__TARGET_OS__` half. syscall.hexa still calls the
+    `syscall()` builtin (undefined in the shipping backend) — the b2 gate will
+    still fail to emit until M5-syscall-b rewrites those calls. So alloc+syscall
+    integration is NOT yet green; this is the first of the two syscall-wall edits.
+  · The `g<id>` module-global data-slot gap (b1/b2) is still pending for b3.
+  · CI selfhost-byteeq-real is the fixpoint authority for this codegen edit; the
+    smoke-42 rebuild + the probe RUN are the local evidence that the intrinsic is
+    correct and the compiler didn't regress. `ls self/*.c == ∅` unchanged this
+    round (intrinsic addition, no runtime port shipped yet).
+
+CONCLUSION: the OS-const half of the M5-syscall wall is down — `__hx_target_os()`
+is a shipping-backend leaf, RAN-correct on both targets, ADD-only (byteeq-safe).
+M5-syscall-b (rewrite syscall.hexa's `syscall()` calls to `__hx_syscall6` + use
+`__hx_target_os()`) is unblocked and will turn the b2 gate green.
