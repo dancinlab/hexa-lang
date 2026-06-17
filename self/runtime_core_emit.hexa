@@ -2485,24 +2485,22 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "// 여기서 일찍 선언.\n"
     buf = buf + "void hexa_throw(HexaVal err);\n"
     buf = buf + "\n"
-    buf = buf + "// RT-NATIVE-ZEROC M4 B4 array-core READ-half (r4): the in-bounds element\n"
-    buf = buf + "// read/write cores delegate UNCONDITIONALLY to the raw-mem hexa-source bodies\n"
-    buf = buf + "// (stdlib/runtime/array_core.hexa::rt_array_get_native/set_native). The C\n"
-    buf = buf + "// `#else HX_ARR_ITEMS(arr)[idx]` fallback was DROPPED here (r4) — the first\n"
-    buf = buf + "// genuine non-string runtime-substrate `runtime_core.c` byte-decrease. The\n"
-    buf = buf + "// bodies use native-only leaf intrinsics (__hx_ptr_load64 + __hx_make_val,\n"
-    buf = buf + "// r2 #3488) that ONLY the native gen2 compiler (self/codegen.hexa) lowers — the\n"
-    buf = buf + "// hexat C-transpile bootstrap does NOT, and the array stdlib is not in the\n"
-    buf = buf + "// compiler flatten closure — so the bodies enter the runtime ONLY via a native-\n"
-    buf = buf + "// emitted frozen .s seed (self/native/array_core_{arm64,x86_64,arm64-linux}.s),\n"
-    buf = buf + "// ar'd into runtime.a by stage_resolve_runtime_a::resolve_native_array_core_seed\n"
-    buf = buf + "// (all 3 production targets) and linked into the single-TU dev builds\n"
-    buf = buf + "// (build_aprime / build_native_linux_arm64). The native path is PROVEN: nm of\n"
-    buf = buf + "// the native-emitted array_core.o = rt_array_*_native T (intrinsics inlined,\n"
-    buf = buf + "// zero undefined __hx_*) + direct-call gate 12/12 (int/str/bool tag-faithful)\n"
-    buf = buf + "// + C-diff gate 32/32. The fn still keeps the non-array / OOB guards + throw\n"
-    buf = buf + "// routing + dirty flag; only the alloc-free element {tag,payload} touch is\n"
-    buf = buf + "// delegated.\n"
+    // RT-NATIVE-ZEROC M4 B4 array-core READ-half (r4) — emitter-source rationale
+    // (NOT emitted; keeps runtime_core.c minimal for the genuine byte-decrease):
+    // hexa_array_get/set delegate UNCONDITIONALLY to the raw-mem hexa-source bodies
+    // (stdlib/runtime/array_core.hexa::rt_array_{get,set}_native). The C
+    // `#else HX_ARR_ITEMS(arr)[idx]` fallback was DROPPED here — the first genuine
+    // non-string runtime-substrate runtime_core.c byte-decrease. The bodies use
+    // native-only leaf intrinsics (__hx_ptr_load64 + __hx_make_val, r2 #3488) that
+    // ONLY the native gen2 compiler lowers (the hexat C-transpile bootstrap does
+    // NOT, and the array stdlib is not in the compiler flatten closure), so they
+    // enter the runtime ONLY via the frozen .s seed
+    // (self/native/array_core_{arm64,x86_64,arm64-linux}.s) ar'd into runtime.a by
+    // stage_resolve_runtime_a::resolve_native_array_core_seed (all 3 production
+    // targets) + linked into the single-TU dev builds (build_aprime /
+    // build_native_linux_arm64). PROVEN: nm = rt_array_*_native T (intrinsics
+    // inlined, zero undefined __hx_*) + direct-call gate 12/12 + C-diff gate 32/32.
+    buf = buf + "// array element read/write: native raw-mem bodies (array_core.hexa).\n"
     buf = buf + "extern HexaVal rt_array_get_native(HexaVal arr, HexaVal idx);\n"
     buf = buf + "extern HexaVal rt_array_set_native(HexaVal arr, HexaVal idx, HexaVal v);\n"
     buf = buf + "\n"
