@@ -1612,11 +1612,14 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // UNLOCK-2b ext: signed-i64 relational payload compares → bool.
         // setl/setg/setle/setge (signed cond codes, matching arm64 lt/gt/le/ge).
         if (s.op == "__hx_payload_lt" || s.op == "__hx_payload_gt"
-            || s.op == "__hx_payload_le" || s.op == "__hx_payload_ge") && len(s.args) >= 2 {
+            || s.op == "__hx_payload_le" || s.op == "__hx_payload_ge"
+            || s.op == "__hx_payload_eq" || s.op == "__hx_payload_ne") && len(s.args) >= 2 {
             let mut _scc = "setl"
             if s.op == "__hx_payload_gt" { _scc = "setg" }
             if s.op == "__hx_payload_le" { _scc = "setle" }
             if s.op == "__hx_payload_ge" { _scc = "setge" }
+            if s.op == "__hx_payload_eq" { _scc = "sete" }
+            if s.op == "__hx_payload_ne" { _scc = "setne" }
             buf = _x86_hv_payload(buf, s.args[0], st, rm, "r10", opts)
             buf = _x86_hv_payload(buf, s.args[1], st, rm, "r11", opts)
             buf.push(_x86_instr2("cmp", _x86_op_reg("r10"), _x86_op_reg("r11"),

@@ -2,42 +2,41 @@
 //
 // The hexa-source raw-mem body for the map element LOOKUP primitive
 // (hexa_map_get's in-table hash probe). The array twin
-// (stdlib/runtime/array_core.hexa) proved the template: walk the descriptor via
-// __hx_ptr_load* and re-stamp the returned element's REAL tag with
-// __hx_make_val (#3488). map adds an open-addressing hash probe (fnv1a + linear
-// probe + strcmp) over the lookup key, all in raw memory.
+// (stdlib/runtime/array_core.hexa) proved the raw-mem template; map adds an
+// open-addressing hash probe (fnv1a + linear probe + strcmp) over the lookup
+// key, all in raw memory.
 //
-// ALLOC stays C (WALL-2, alloc lane): map_new / set_impl / remove_impl /
-// snapshot touch calloc/realloc/arena and are NOT ported here. The pure LOOKUP
-// (read-half) is alloc-free, so it ports.
+// ALL arithmetic / bitwise / comparison uses the raw-int leaf intrinsics, NOT
+// the plain hexa `+ * & ^ == != <` operators — those lower to HexaVal runtime
+// helpers (hexa_add_slow / hexa_mul / hexa_band / hexa_eq) which misinterpret
+// the raw int64 words passed here from C (measured: plain `16 & 0xFFFFFFFF` = 0,
+// probe SIGSEGV). The raw-int leaves used:
+//   __hx_payload_add/sub/mul (signed i64 arith) · __hx_payload_and/xor (#3499)
+//   · __hx_payload_lt/eq/ne (cmp → bool, work in if/while conditions).
+// Each leaf returns a {TAG_INT, result} HexaVal; chaining extracts payloads, so
+// intermediate values stay raw-int faithful. __hx_ptr_load8/64 read raw memory.
+// __hx_make_val(tag, payload) re-stamps the matched value's REAL element tag.
 //
 // LAYOUT (mirrors runtime_core_emit.hexa, locked by map_core_gate.c):
 //   m payload  = HexaMap*;  HexaMap { HexaMapTable* tbl @0; ... }
 //   HexaMapTable { HexaMapSlot* slots @0;  HexaVal* vals @8;  int ht_cap @16; ... }
 //   HexaMapSlot { char* key @0;  uint32_t hash @8;  int order_idx @12 }  stride 16
-//   element vals[] stride = sizeof(HexaVal) = 16:  tag @ +0,  payload @ +8.
+//   vals[] stride = sizeof(HexaVal) = 16:  tag @ +0,  payload @ +8.
 //   The lookup `key` arrives as a raw `const char*` (NUL-terminated), passed as
 //   an int64 pointer value (the C wrapper casts it) so the body reads its bytes
 //   with __hx_ptr_load8.
-//
-// CIRCULARITY: must NOT use m[key] / .get (re-enters hexa_map_get) — every
-// access is raw mem. The fnv1a + strcmp + probe exactly mirror the C
-// hexa_fnv1a_str / hmap_find that the #else compiles to, so the slot chosen is
-// byte-identical to the C path (gate-verified). All loops are condition-based
-// (the proven self/rt/*.hexa pattern); no `loop {}` / `while true`.
 
 // rt_map_fnv1a_native: FNV-1a over the NUL-terminated key bytes at `keyp`.
-// 32-bit arithmetic — mask to 0xFFFFFFFF after each multiply so the result is
-// byte-identical to the C `uint32_t` hexa_fnv1a_str (else the masked-down probe
-// index differs and the lookup MISSes).
+// 32-bit arithmetic — mask to 0xFFFFFFFF after each multiply via __hx_payload_and
+// so the result is byte-identical to the C `uint32_t` hexa_fnv1a_str.
 fn rt_map_fnv1a_native(keyp: int) -> int {
     let mut h = 2166136261
     let mut i = 0
     let mut b = __hx_ptr_load8(keyp, 0)
-    while b != 0 {
-        h = h ^ b
-        h = (h * 16777619) & 4294967295        // *= 16777619 mod 2^32
-        i = i + 1
+    while __hx_payload_ne(b, 0) {
+        h = __hx_payload_xor(h, b)
+        h = __hx_payload_and(__hx_payload_mul(h, 16777619), 4294967295)  // *= 16777619 mod 2^32
+        i = __hx_payload_add(i, 1)
         b = __hx_ptr_load8(keyp, i)
     }
     return h
@@ -49,48 +48,47 @@ fn rt_map_strcmp0_native(a: int, b: int) -> int {
     let mut j = 0
     let mut ca = __hx_ptr_load8(a, 0)
     let mut cb = __hx_ptr_load8(b, 0)
-    while ca == cb {
-        if ca == 0 { return 0 }                // both ended, equal
-        j = j + 1
+    while __hx_payload_eq(ca, cb) {
+        if __hx_payload_eq(ca, 0) { return 0 }       // both ended, equal
+        j = __hx_payload_add(j, 1)
         ca = __hx_ptr_load8(a, j)
         cb = __hx_ptr_load8(b, j)
     }
-    return 1                                    // mismatch
+    return 1                                          // mismatch
 }
 
 // rt_map_get_native: open-addressing probe identical to hmap_find, returning the
 // matched value (re-stamped via __hx_make_val) or a TAG_VOID sentinel
 // (__hx_make_val(4, 0); TAG_VOID = 4). The C wrapper keeps the valstruct /
 // NULL-table guards + the not-found stderr message + key coercion, and delegates
-// only the in-table probe (mirrors the array guard-C / body-rt split). The probe
-// is bounded by ht_cap steps — the C `while slots[idx].key` terminates at an
-// empty slot (load < 75% guarantees one); the bound is an equivalent safety net
-// that returns VOID if (never in practice) no empty slot is hit.
+// only the in-table probe. The probe is bounded by ht_cap steps — the C `while
+// slots[idx].key` terminates at an empty slot (load < 75% guarantees one); the
+// bound is an equivalent safety net.
 pub fn rt_map_get_native(m: HexaVal, keyp: int) -> HexaVal {
     let map_ptr = __hx_payload_add(m, 0)             // HexaMap*
     let t = __hx_ptr_load64(map_ptr, 0)              // HexaMap.tbl @0
     let slots = __hx_ptr_load64(t, 0)                // HexaMapTable.slots @0
     let vals = __hx_ptr_load64(t, 8)                 // HexaMapTable.vals @8
-    let ht_cap = __hx_ptr_load64(t, 16) & 4294967295 // ht_cap @16 (int, low 32b)
+    let ht_cap = __hx_payload_and(__hx_ptr_load64(t, 16), 4294967295)  // ht_cap @16 (low 32b)
     let h = rt_map_fnv1a_native(keyp)
-    let mask = ht_cap - 1
-    let mut idx = h & mask
+    let mask = __hx_payload_sub(ht_cap, 1)
+    let mut idx = __hx_payload_and(h, mask)
     let mut steps = 0
-    while steps < ht_cap {
-        let slot = slots + (idx * 16)                // HexaMapSlot @ idx
+    while __hx_payload_lt(steps, ht_cap) {
+        let slot = __hx_payload_add(slots, __hx_payload_mul(idx, 16))   // HexaMapSlot @ idx
         let slot_key = __hx_ptr_load64(slot, 0)      // .key @0
-        if slot_key == 0 { return __hx_make_val(4, 0) }   // empty → TAG_VOID
-        let slot_hash = __hx_ptr_load64(slot, 8) & 4294967295  // .hash @8 (u32)
-        if slot_hash == h {
-            if rt_map_strcmp0_native(slot_key, keyp) == 0 {
-                let voff = idx * 16                  // vals[idx] {tag,payload}
+        if __hx_payload_eq(slot_key, 0) { return __hx_make_val(4, 0) }  // empty → TAG_VOID
+        let slot_hash = __hx_payload_and(__hx_ptr_load64(slot, 8), 4294967295)  // .hash @8 (u32)
+        if __hx_payload_eq(slot_hash, h) {
+            if __hx_payload_eq(rt_map_strcmp0_native(slot_key, keyp), 0) {
+                let voff = __hx_payload_mul(idx, 16)                    // vals[idx] {tag,payload}
                 let tag = __hx_ptr_load64(vals, voff)
-                let pay = __hx_ptr_load64(vals, voff + 8)
+                let pay = __hx_ptr_load64(vals, __hx_payload_add(voff, 8))
                 return __hx_make_val(tag, pay)
             }
         }
-        idx = (idx + 1) & mask
-        steps = steps + 1
+        idx = __hx_payload_and(__hx_payload_add(idx, 1), mask)
+        steps = __hx_payload_add(steps, 1)
     }
     return __hx_make_val(4, 0)                        // not found (safety net)
 }
