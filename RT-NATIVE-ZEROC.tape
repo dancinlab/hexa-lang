@@ -45,6 +45,29 @@
   gate scripts/scratch/rt_native/ptr8_gate.sh · verdict F-M4-PTR8. M2 raw-mem
   set complete (64/32/8). PTR8 [x].
 
+2026-06-17 :: M5 PILOT (rt_str) — drop-mechanism ALREADY PROVEN+SHIPPED, honest
+  ALREADY-DONE (c2/c9/c16, verdict F-M5-PILOT-RTSTR). Investigation-first task to
+  prove the .c-content-drop on rt_str (standalone links native rt_*.o + excise
+  #else + byteeq-real green) found the work ALREADY LANDED by the Z2a campaign
+  (#3455 casefold/trim · #3457 trim-ends · #3465 search-pred _b). MEASURED on aiden
+  x86_64 (the EXACT CI builder CC=gcc bash tool/stage_resolve_runtime_a):
+  resolve_native_rt_hi_seed runs UNCONDITIONALLY + auto-sets HEXA_ZEROC_RT_HI=1
+  (seed exists for darwin-arm64 + linux-x86_64) → build_runtime_a_from_source
+  sed-removes runtime_hi_gen.c #include + ar's build/rt_hi_native.o (14 rt_str_*
+  syms). nm build/runtime.o: only the 2 int-return BRIDGES (starts_with/ends_with)
+  are T; the 8 task-named fns (to_upper/to_lower/trim/trim_start/trim_end/
+  starts_with_b/ends_with_b/contains_b + casefold) = EXTERN-only (bodies in the
+  .o). Emitter rt_str body count 3(d99ecc321^) → 0(main). runtime_core.c=411120B.
+  Standalone link: all rt_str_* resolved, NO undefined. byteeq-real CI GREEN on
+  main (selfhost-byteeq-gate.yml = STANDALONE config). LONE residual = the 2
+  int-return bridges' standalone #ifndef C body (hxlcl_strncmp/strcmp, codegen
+  emits the int-return symbol; seed exports only _b HexaVal form) — ABI adapter
+  below the type system, NO native body to migrate (twin of F-M4-B1 nanbox); drop
+  needs new hand-asm seed fns ×2 ABIs OR a codegen call-site change → leaves the
+  Z2a template → deferred codegen/seed micro-unit, NOT faked (c9/c10). RE-CONFIRMS
+  F-LEGB-RTSTR-HEXASOURCE-COMPLETE + #3468 (Z2a EXHAUSTED). No emitter/build/seed
+  edit → fixpoint untouched. NO PR (no genuine new drop without faking). Real
+  ls==∅ lever stays M4 common-core port + runtime.c substrate redesign.
 2026-06-17 :: M4 B4 array-core — mechanism-BLOCKED (construct WALL-1 + alloc
   WALL-2), array_core.hexa NOT viable, __hx_make_val NAMED as the lever.
   Read self/runtime_core.c struct+fn bodies (HexaArr{items@0,len@8,cap@16}/24;
