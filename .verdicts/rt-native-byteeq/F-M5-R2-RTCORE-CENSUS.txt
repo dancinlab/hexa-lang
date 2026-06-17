@@ -1,0 +1,90 @@
+F-M5-R2-RTCORE-CENSUS — runtime_core.c standalone #else census: PURE-PORTABLE bucket = 0 (terminal) (2026-06-17)
+================================================================================
+LANE: m5 r2 (RT-NATIVE-ZEROC fleet). Branch rt-native-m5-r2-rtcore-census.
+주장(검증대상): "runtime_core.c 의 standalone #else C-body 중 (a) migratable native body 보유
+                + (b) LIVE #else C body 유지 = PURE-PORTABLE 패밀리가 존재하면, Z2a 드롭
+                템플릿으로 첫 non-string ls 감소를 점화할 수 있다."
+
+방법(c2·c9 — RAN, 정적 전수조사, 추측 아님):
+  r1 의 marker-filter 인구조사(F-LEGB-RTCORE-PURE-CANDIDATES-ZERO)와 독립적으로,
+  r2 의 정확한 프레임(standalone #else 경로)으로 재실행:
+  생성된 self/runtime_core.c (8734L, freshly built) 를 파서로 walk
+  (/tmp/m5r2_classify.py · /tmp/m5r2_bucket.py · /tmp/m5r2_verify.py):
+    1. 모든 `#ifdef HEXA_HAS_HEXA_RT_STDLIB ... #else ... #endif` 블록 추출.
+    2. 각 #else arm 의 top-level C fn-def + native arm 의 delegate extern 식별.
+    3. #else body 에 construct({.tag=}/__hx_make_val/HX_SET_) / alloc(malloc/
+       _impl/strdup/HX_MAP/HX_ARR) / stdio-substrate(printf/fflush/getenv) 마커 검사.
+    4. 각 native-arm extern(rt_*) 의 hexa-source body 존재 여부를 grep 으로 검증
+       (self/rt/ · self/runtime_pure.hexa · stdlib/runtime/).
+
+결과 — RAN 집계 (37 guarded 블록, 43 delegate-extern, ~40 guarded fn):
+
+  TOTAL `#ifdef HEXA_HAS_HEXA_RT_STDLIB` 블록 = 37 (with #else arm: 35 · no #else: 2)
+
+  버킷 분류 (블록 단위):
+  ┌─────────────────────┬───────┬──────────────────────────────────────────────┐
+  │ BUCKET              │ count │ fns                                          │
+  ├─────────────────────┼───────┼──────────────────────────────────────────────┤
+  │ ALREADY-NATIVE      │  37   │ ★ 전부 ★ — 43/43 native-arm extern 이        │
+  │ (no port needed)    │       │   hexa-source body 보유 (아래 결정적 검증)    │
+  ├─────────────────────┼───────┼──────────────────────────────────────────────┤
+  │ CONSTRUCT-WALLED    │ (13)  │ arith hexa_add_slow/sub/mul/div/mod/to_int · │
+  │ (array-r2 도메인,    │       │   cmp_lt/gt/le/ge · eq_int/float/bool/       │
+  │  SKIP·tally only)   │       │   valstruct/str · to_string_scalar ·         │
+  │                     │       │   valstruct_repr/to_string_map · print/eprint│
+  │                     │       │   → {tag,payload} HexaVal 직접 구성 (B1/B4 벽)│
+  ├─────────────────────┼───────┼──────────────────────────────────────────────┤
+  │ ALLOC-WALLED        │ (15)  │ map_get/keys/values/contains/entries/merge/  │
+  │ (substrate, defer)  │       │   map_values/filter_keys/invert/from_array/  │
+  │                     │       │   count/any/all/set/remove(→_impl 해시테이블) │
+  │                     │       │   · to_string_array/eq_array_deep/eq_map_ptr │
+  │                     │       │   · println/print/eprintln/eprint(stdio floor)│
+  │                     │       │   → malloc/_impl/HX_MAP/printf/fflush         │
+  ├─────────────────────┼───────┼──────────────────────────────────────────────┤
+  │ PURE-PORTABLE       │   0   │ ★ EMPTY ★                                    │
+  │ (needs a port)      │       │                                              │
+  └─────────────────────┴───────┴──────────────────────────────────────────────┘
+  (CONSTRUCT/ALLOC tally 는 블록 중복 카운트 포함 — 결정 신호는 PURE=0)
+
+결정적 검증 (왜 PURE-PORTABLE=0, c2 RAN):
+  auto-classifier 가 6개를 PURE-PORTABLE? 후보로 표시:
+    hexa_null_coal · hexa_len · hexa_map_set · hexa_map_remove · hexa_println · hexa_to_string
+  본문을 RAN 으로 직접 읽음:
+    - hexa_map_set/remove → hexa_map_set_impl/remove_impl (raw 해시테이블) = ALLOC-WALLED.
+    - hexa_println → hexa_print_val + printf + fflush + hxlcl_getenv = stdio SUBSTRATE.
+    - hexa_to_string → _hexa_to_string_rec (재귀 버퍼 할당) = ALLOC-WALLED.
+    - hexa_null_coal / hexa_len → 유일하게 진짜 pure (tag/string read, 입력 pass-through
+      또는 int64 반환, NO construct/alloc).
+  그러나 결정타: native-arm extern rt_* 43/43 전부 hexa-source body 보유.
+    rt_null_coal / rt_len 둘 다 self/rt/core.hexa:32,45 + stdlib/runtime/numeric.hexa:
+    1216,1231 에 이미 hexa-source 정의. → 이 2개는 ALREADY-NATIVE.
+    포팅 = 이미-native 재포팅 (r1 의 index_of 함정과 동일, c9).
+
+  ⇒ "migratable native body 보유 + LIVE #else 유지 + NOT already-native" 집합 = 공집합.
+
+#else 의 정체 확정 (build flag 추적, RAN grep):
+  runtime_core.c:3173 "standalone link (smoke test path doesn't define
+  HEXA_HAS_HEXA_RT_STDLIB)". 즉 35개 #else C-body 는 standalone smoke-link 에서만 도달;
+  full aprime_cc 빌드는 ap_post.c 가 HEXA_HAS_HEXA_RT_STDLIB 정의 → native arm 선택 →
+  43개 전부 hexa-source rt_* 로 delegate. #else = 이미-native 코드의 standalone-link 중복.
+
+결론 (🧱 TERMINAL — per-family-drop lane EXHAUSTED, c9 honest):
+  r2 의 정밀 standalone-#else 프레임 인구조사가 r1 의 marker-filter 인구조사
+  (F-LEGB-RTCORE-PURE-CANDIDATES-ZERO) 와 독립적으로 수렴:
+  PURE-PORTABLE(포트 필요) 버킷 = 0. runtime_core.c 의 모든 guarded 패밀리는
+  ALREADY-NATIVE(43/43 extern hexa-source 보유) · CONSTRUCT-WALLED(array-r2 도메인) ·
+  ALLOC/SUBSTRATE-WALLED(map _impl·stdio·deep-eq) 중 하나.
+  per-family native-seed 드롭 레버는 migratable body 에 대해 EXHAUSTED.
+
+  잔여 ls 레버 = 단 둘, 둘 다 m5-per-family 범위 밖:
+    (i)  __hx_make_val construct-unlock — CONSTRUCT-WALLED 13패밀리 해제 (array-r2 lane 소유).
+    (ii) standalone #else 중복제거 / runtime.c substrate 재설계 — standalone 빌드가
+         hexa-source rt_*.o 를 항상 링크하게 만들어 35개 #else 블록 삭제 (build 재설계,
+         연구 아님; M5 standalone-redesign lane).
+
+c16 wall taxonomy: per-family-drop lane = TRUE-CEILING (migratable body 부재 — 남은 #else
+  는 already-native 중복이거나 substrate). 잔여 두 레버는 INVESTMENT(construct-unlock build
+  작업 + standalone link 재설계), 연구-closed-negative 아님.
+
+m5 DEPLETED (per-family-drop lane). 포트 강제 안 함 — filler 없음 (c9).
+runtime_core.c byte delta = 0 (포트 미발생; 강제 드롭이 정직한 결과를 위조하므로).
