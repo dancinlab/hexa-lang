@@ -1,0 +1,81 @@
+F-LEGB-STANDALONE-ELSE-NOGO — 2026-06-17
+═══════════════════════════════════════════════════════════════
+RT-NATIVE leg B "standalone #else 재설계" 의 KEY UNKNOWN(liveness) 결정 단위.
+질문: standalone(non-HEXA_HAS) 경로가 실제 LIVE 인가 — #else C-body 폴백을
+컴파일하는 SHIPPING/CI/bootstrap 빌드가 존재하는가?
+
+────────────────────────────────────────────────────────────────
+결론: standalone 경로는 LIVE — 그것도 PRIMARY(CI/release) 경로다.
+DECISION = honest NO-GO (#else C-body 는 제거 불가, c9 valid-keep).
+────────────────────────────────────────────────────────────────
+
+이 결정은 선행 verdict F-LEG-B-DEADCODE-PATH(2026-06-16, "standalone=죽은
+코드, neither 경로 쓰는 실제 빌드 0개")를 **반증·정정**한다. 선행 조사는
+build_aprime.sh / build_native_linux_* / cross_build_ccnative 패밀리만
+훑어 (전부 HEXA_HAS=1) → "standalone dead" 결론. 그러나 CI release/byteeq
+게이트가 실제로 쓰는 runtime 빌더 tool/stage_resolve_runtime_a 를 놓쳤다.
+
+
+── LIVENESS 증거 (c2 — 전부 캡처출력, self-judged 아님) ──────────
+
+CI 게이트 → runtime 빌드 체인 (grep 캡처):
+  selfhost-byteeq-gate.yml:71  → bash tool/release_build
+  release.yml:125/249/294      → bash tool/release_build
+  (miscompile-zero-gate / determinism-gate 도 release_build 경유)
+
+  tool/release_build:68  → bash tool/stage_resolve_runtime_a   (Stage 0b)
+  tool/release_build:54  → export HEXA_PREBUILT_RUNTIME=$PWD/build/runtime.a
+
+  tool/stage_resolve_runtime_a:37  CFLAGS="-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs"
+  tool/stage_resolve_runtime_a:271 $CC $CFLAGS -I self -c self/runtime.c -o build/runtime.o
+                                   ↑ -DHEXA_HAS_HEXA_RT_STDLIB 없음 = STANDALONE config.
+
+  caller 중 CFLAGS_COMMON/CFLAGS 에 HEXA_HAS 주입하는 곳 = 0 (grep 캡처 empty).
+  stage_build_hexa 의 source-fallback compile(line 5/12/26)도 plain $CFLAGS
+  ($RT_ARG)= 매크로 없음. 즉 prebuilt .a(standalone) 링크 OR source 컴파일
+  둘 다 standalone.
+
+aiden(linux x86_64, ~/hexa-lang @ eedef2a07) 실측 — 실제 CI 빌더 직접 실행:
+  $ CC=gcc bash tool/stage_resolve_runtime_a
+  → build/runtime.a = 551566B  (성공, standalone config)
+  → nm build/runtime.o | grep -c ' T rt_'  = 33  (rt_* DEFINED = #else C-body)
+
+  대조 gate-ON 컴파일 (build_aprime 패밀리 config):
+  $ gcc ... -DHEXA_HAS_HEXA_RT_STDLIB=1 -I self -c self/runtime.c
+  → rc=0, rt_* DEFINED(T) = 21,  rt_* UNDEFINED(U) = 155
+  → standalone 33-DEFINED 중 12개 + 155 extern = #else 폴백이 제공하는 몸체.
+
+  의미: standalone runtime.a 는 self-contained(33 rt_* 자체 정의). #else 를
+  제거하면 build/runtime.a 가 rt_* 미정의 → release_build 의 ./hexa 링크 실패.
+  #else C-body = 죽은 코드 아님 = release/byteeq 게이트의 실제 shipped runtime.
+
+
+── standalone 을 쓰는 정확한 빌드 config (deliverable) ─────────────
+  1. tool/release_build (→ stage_resolve_runtime_a, line 271) — PRIMARY.
+     소비처: selfhost-byteeq-gate.yml, release.yml(3 job), miscompile-zero,
+     determinism-gate. = authoritative CI judge 본인.
+  2. tool/cross_build_runtime_linux_arm64 (line 88-89, "gate OFF") —
+     cross_build_ccnative_linux_arm64 가 stage4b 에서 호출(line 178).
+  대조(standalone 아님, HEXA_HAS=1): build_aprime.sh, build_native_linux_*,
+  cross_build_ccnative 의 compiler-TU 스테이지 = aprime/transpile bootstrap 경로.
+
+  → 즉 두 빌드 패밀리가 공존: aprime(HEXA_HAS=1, hexa-source 위임) vs
+    release/standalone(#else C-body). release 가 PRIMARY shipping.
+
+
+── 판정 (c9·c16) ──────────────────────────────────────────────
+standalone #else C-body 는 Go/Rust 의 freestanding substrate 와 동급 —
+release/CI 가 실제로 컴파일·링크하는 honest 폴백. 제거는 tool/release_build
+와 그 위 모든 게이트를 깨뜨린다(substrate 아닌 REAL regression). c9 에 따라
+honest NO-GO = valid 결과. 어떤 #else 블록도 제거하지 않음. 에미터
+(runtime_core_emit.hexa) 미편집.
+
+선행 F-LEG-B-DEADCODE-PATH 의 "dead code" framing = SUPERSEDED(불완전한
+빌드스크립트 survey). leg B 의 standalone-#else 는 제거-가능 dead code 가
+아니라 LIVE-primary runtime.
+
+leg B ls self/*.c==∅ 의 진짜 잔여(재확정): #else 제거가 아니라 ①공통 1190 fn
+코어를 hexa-native 로 전수(다세션, 거대) + ②standalone 빌드가 hexa-source
+rt_*.o 를 ABI-정합 링크하도록 재설계(F-LEG-B-STANDALONE-SCOPE 의 HexaVal↔
+float ABI wrapper) — 둘 다 #else 의 단순 삭제로는 불가. substrate floor
+(syscall/libm/map-raw-mem)= honest-keep, ARCHITECTURE.json 문서화 유지.
