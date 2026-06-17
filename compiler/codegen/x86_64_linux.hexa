@@ -1776,6 +1776,16 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
             return buf
         }
+        // RT-NATIVE M5-syscall: `__hx_target_os()` → int HexaVal compile-time OS
+        // const. This is the x86_64-LINUX backend, so the value is 0 (linux), per
+        // self/rt/syscall.hexa's convention (__TARGET_OS__ == 0 ⇒ linux). 0-arg,
+        // no payload load — just an immediate into the result. ADD-only leaf.
+        if s.op == "__hx_target_os" {
+            buf.push(_x86_instr2("mov", _x86_op_reg("r10"), _x86_op_imm(0),
+                             "__hx_target_os: 0 = linux"))
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, "r10", 0) }
+            return buf
+        }
         // UNLOCK-8: `__hx_syscall0(num)` → int HexaVal of a 0-arg Linux syscall.
         // x86_64 ABI: number in rax, `syscall`, result in rax. (Linux, NOT the
         // BSD svc #0x80 of macOS arm64 — the syscall numbers differ per OS but

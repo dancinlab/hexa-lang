@@ -1236,6 +1236,13 @@ fn _bind_builtin_names() -> [string] {
         // from an array slot can be re-stamped with its real element tag (unblocks
         // B4/B5 element returns). 2 args. arm64 + x86_64 STMT_CALL special-case.
         "__hx_make_val",
+        // RT-NATIVE M5-syscall (2026-06-18): `__hx_target_os()` — 0-arg compile-time
+        // OS const (0=linux, 1=darwin, matching self/rt/syscall.hexa's convention),
+        // emitted as a const-int HexaVal by the per-target backend (x86_64_linux→0,
+        // arm64_darwin→1). Lets self/rt/syscall.hexa drop the codegen-injected
+        // `__TARGET_OS__` ident (which only self/codegen knew) and select the
+        // per-target syscall number natively. ADD-only: the compiler never calls it.
+        "__hx_target_os",
         // N5-pre STEP2: builtins the compiler source calls but were absent from this allowlist
         // (HX2001). All have C-level defs: bytes_to_str_raw -> self/codegen.hexa:7155
         // (hexa_bytes_to_str_raw); __arr_alloc_items_zero[_int] are s4_flatc_post-injected statics.

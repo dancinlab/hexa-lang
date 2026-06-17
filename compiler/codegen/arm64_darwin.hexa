@@ -1902,6 +1902,18 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // RT-NATIVE M5-syscall: `__hx_target_os()` → int HexaVal compile-time OS
+        // const. This is the arm64-DARWIN backend, so the value is 1 (darwin), per
+        // self/rt/syscall.hexa's convention (__TARGET_OS__ == 1 ⇒ darwin). 0-arg:
+        // x1 = payload = 1, x0 = tag = TAG_INT(0). ADD-only leaf (no `bl`).
+        if s.op == "__hx_target_os" {
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
+                             _arm64_op_label("#1"), "__hx_target_os: 1 = darwin"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_target_os: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // RT-NATIVE M4 ARRAY-R2: `__hx_make_val(tag, payload)` — the symmetric
         // WRITE-half of `__hx_tag`. Builds a {tag, payload} 16-byte HexaVal from
         // two raw int64 words: tag→lo eightbyte (x0), payload→hi eightbyte (x1),

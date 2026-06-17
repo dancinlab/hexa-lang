@@ -1,0 +1,5 @@
+// RT-NATIVE M5-syscall-a probe — __hx_target_os() compile-time OS const.
+// x86_64-linux backend → 0 (linux) ⇒ exit 0.  arm64-darwin backend → 1 ⇒ exit 1.
+fn main() {
+    exit(__hx_target_os())
+}
