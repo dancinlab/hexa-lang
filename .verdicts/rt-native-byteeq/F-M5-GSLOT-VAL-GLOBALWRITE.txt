@@ -1,0 +1,83 @@
+F-M5-GSLOT-VAL-GLOBALWRITE — the b2-gate RUN segfault root cause is RAN-isolated:
+                              x86_64 codegen has NO module-global WRITE path (only
+                              READ). `__arena_tbl = mmap(...)` never stores to
+                              `[rip+g0]`, so the global stays .data-zero → arena
+                              ptr 0 → near-null deref. (2026-06-18, aiden asm read)
+================================================================================
+LANE: M5 standalone-redesign, gslot-val sub-unit (RT-NATIVE-ZEROC fleet).
+GOAL: fix the x86_64 global value-model so the b2 alloc+syscall gate RUNs exit 0
+(F-M5-GSLOT-DATA-SLOT closed the link gap; RUN segfaulted).
+
+================================================================================
+1. ROOT CAUSE (c2 — aiden RAN, /tmp/ab2.s asm read)
+================================================================================
+grep `g0` in the gate's emitted asm:
+  · `mov r10, [rip+g0]   # load global value: g0`  ×17  (READS)
+  · `mov [rip+g0], …`                                ×0  (WRITES — NONE)
+The global is only ever READ, never WRITTEN. rt_init's `__arena_tbl = sys_mmap(…)`
+produces no store to `[rip+g0]`, so g0 stays at its `.data` zero-init. Every
+`hexa_ptr_alloc` then loads `__arena_tbl == 0`, computes `__hx_ptr_load64(0, …)`
+→ near-null deref → SIGSEGV.
+
+CONFIRMING the codegen gap: `_x86_emit_dst_writeback` (x86_64_linux.hexa:1120) is
+  fn _x86_emit_dst_writeback(buf, rm, id) {
+    if _x86_is_spilled(rm, id) { out = _x86_store_spill(out, rm, id, "r10") }
+    return out
+  }
+— it writes back ONLY to a spill stack slot; there is NO `o.kind == "global"`
+branch that stores to `[rip+g<id>]`. The READ side DOES handle globals
+(_x86_op_resolve, lines 672/731/1053: load `[rip+g<id>]` + tag-slot), but the
+WRITE side was never implemented. arm64 may or may not have the same gap (not yet
+exercised — b2 arm64 RUN not run). read-half never hit this: its accessors carry
+no module-global STATE (every value is an arg/return), so nothing ever wrote a
+global. alloc.hexa's `__arena_tbl` is the first module-global the native backend
+must WRITE.
+
+================================================================================
+2. CLASSIFICATION (c16) + NAMED NEXT BRICK
+================================================================================
+WALL TYPE (c) substrate/codegen — a genuine missing capability (global write),
+not a tuning issue. Bounded: the READ side is the mirror template.
+
+  MECHANISM PINNED (2026-06-18, mir.hexa + codegen read): a global dst is NOT an
+  Operand{kind:"global"} — `Stmt.dst` is a `Local`, and a Local is global iff
+  `Local.arena_id == 0` (mir.hexa:30 "0 = global/static, >0 = function-local
+  arena"). The READ side resolves Operand{kind:"global", global_id} → `g<id>`
+  (_x86_op_resolve, x86_64_linux.hexa:732). The WRITE side
+  (`_x86_emit_dst_writeback`, line 1120) only does `if _x86_is_spilled(rm,id)
+  store_spill` — it NEVER checks `arena_id == 0`, so a write to a module-global
+  dst goes to a spill stack slot (or nowhere), never to `[rip+g<id>]`. That is
+  the write gap, exactly.
+
+  NAMED M5-gslot-val (implementation): "Make the x86_64 dst-writeback global-aware
+   — when the ASSIGN dst Local has `arena_id == 0`, emit `mov [rip+g<dst.id>],
+   <payload home reg>` (+ the tag half: the READ side loads the global tag from a
+   tag-slot at lines 672-677, so the write must populate that tag-slot OR store
+   the tag to `[rip+g<dst.id>+8]` and make the read use it — pick the consistent
+   pair). `_x86_emit_dst_writeback` needs the dst's arena_id (thread the Local,
+   not just id, OR have rm carry an id→arena_id map). The READ path
+   (_x86_op_resolve global) is the mirror. Audit arm64_darwin for the same write
+   gap. DEPLETION TEST: the b2 gate (scripts/scratch/rt_native/alloc_b2_gate.hexa)
+   RUNs exit 0 on aiden x86_64 (3-dup hexa_arena_* weaken in runtime.o =
+   native-overrides-C) + cross-emit arm64. ADD/fix → gen3≡gen4 (CI byteeq-real
+   authority — this touches the shipping dst-writeback so byteeq is the gate)."
+
+  THEN b2 gate green = alloc+syscall C-free integration proven → b3 standalone-
+  relink (native rt_*.o replaces C #else) → write #else drop = ls reduction.
+
+================================================================================
+3. HONEST RESIDUAL (c9)
+================================================================================
+  · This round is DIAGNOSIS (asm read), no code change — the root cause (no
+    global write path) is RAN-isolated, not a guess (g0 store count = 0 is the
+    direct evidence; the `_x86_emit_dst_writeback` spill-only body confirms it).
+  · The fix (global write codegen) is the next brick; it is a real codegen edit
+    (a new store path), gated by the b2 RUN-exit-0 test + CI byteeq-real.
+  · `ls self/*.c == ∅` unchanged. The M5 sequence stands: target_os ✓ → syscall()
+    ✓ → str_ptr ✓ → gslot-link ✓ → **gslot-val (global write, next)** → b2 RUN
+    green → b3 relink (#else drop = ls↓) → r3 map_* → io/fmt/proc/fs/intern/math.
+
+CONCLUSION: the segfault is a missing x86_64 module-global WRITE path (READ-only
+backend), RAN-isolated via the asm (17 g0 reads, 0 writes) + the spill-only
+_x86_emit_dst_writeback. The fix mirrors the existing global READ side — the
+next brick that turns the b2 alloc+syscall gate RUN-green.
