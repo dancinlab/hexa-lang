@@ -1,0 +1,54 @@
+// b4_array_native_gate.hexa — RT-NATIVE-ZEROC M4 B4 array-core READ-half (r3)
+// native-path gate. Drives the HEXA_HAS_HEXA_RT_STDLIB delegation
+// (hexa_array_get/set -> rt_array_get_native/set_native, raw-mem +
+// __hx_make_val) through normal hexa array syntax and asserts the element
+// images survive bit-for-bit, including MIXED tags (int / string / float) —
+// the decisive check that __hx_make_val re-stamps the real element tag rather
+// than flattening to TAG_INT.
+//
+// Built with tool/build_aprime.sh (defines HEXA_HAS_HEXA_RT_STDLIB → native
+// arm) on real aiden x86_64 + arm64. `arr[i]` here lowers to hexa_index_get ->
+// hexa_array_get -> rt_array_get_native (the ported path); the assertions run
+// at the user level so a wrong tag/payload shows as a failed equality.
+//
+// Positive accumulation (the x86_64 backend has no logical-not lowering): each
+// correct outcome bumps `ok`; expected exit = 12.
+
+fn main() {
+    let mut ok = 0
+
+    // ── build via push (alloc path, C #else — exercises growth) ──
+    let mut a = []
+    a.push(10)
+    a.push(20)
+    a.push(30)
+
+    // ── get round-trip (int elements) ──
+    if a[0] == 10 { ok = ok + 1 }
+    if a[1] == 20 { ok = ok + 1 }
+    if a[2] == 30 { ok = ok + 1 }
+
+    // ── set in-place then get (int) ──
+    a[1] = 99
+    if a[1] == 99 { ok = ok + 1 }
+    if a[0] == 10 { ok = ok + 1 }     // neighbour intact
+    if a[2] == 30 { ok = ok + 1 }     // neighbour intact
+
+    // ── MIXED tags: the decisive __hx_make_val tag-faithful check ──
+    // set a string and a float, read back — tag must NOT flatten to int.
+    a[0] = "hi"
+    a[2] = 3.5
+    if a[0] == "hi"  { ok = ok + 1 }   // STR tag survives
+    if a[2] == 3.5   { ok = ok + 1 }   // FLOAT tag survives
+    if a[1] == 99    { ok = ok + 1 }   // INT neighbour untouched
+
+    // ── len via the array (rt_len already native; sanity only) ──
+    if a.len() == 3  { ok = ok + 1 }
+
+    // ── set with a longer string then read (payload pointer re-stamp) ──
+    a[1] = "world!!"
+    if a[1] == "world!!" { ok = ok + 1 }
+    if a[0] == "hi"      { ok = ok + 1 }   // string neighbour intact
+
+    exit(ok)   // expect 12
+}
