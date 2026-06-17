@@ -45,6 +45,51 @@
   gate scripts/scratch/rt_native/ptr8_gate.sh · verdict F-M4-PTR8. M2 raw-mem
   set complete (64/32/8). PTR8 [x].
 
+2026-06-17 :: M4 ARRAY-R2 — __hx_make_val(tag,payload) constructor-intrinsic
+  LANDED (the symmetric WRITE-half of __hx_tag; c2/c9/c10, verdict
+  F-M4-ARRAY-R2-MAKEVAL). The NAMED unblocking lever from B4 (F-M4-B4-ARRAY) +
+  B1 (F-M4-B1-NANBOX): WRITES a {tag,payload} 16B HexaVal from two raw int64
+  words WITHOUT hexa_int/float/str boxing (which forces a fixed tag and loses
+  the caller's tag), so an array-slot payload word can be re-stamped with its
+  REAL element tag. ADD-only 4 files, mirrors the landed __hx_tag/__hx_payload_*
+  leaves: bind.hexa allowlist · arm64_darwin STMT_CALL leaf (disjoint x0:x1/
+  x2:x3 load, lo=tag hi=payload, stp, NO bl) · x86_64_linux STMT_CALL leaf +
+  _x86_hv_store_leaf_tagreg (reg tag not const: payload→r10 dst/spill, tag→r11→
+  tag-slot, NO call) · self/codegen C-transpile ((HexaVal){.tag=(HexaTag)HX_INT
+  (t),.i=HX_INT(p)}). DECISIVE (c2, aiden real x86_64 emit→as→link→run):
+  makeval_gate exit=8 — TAG SURVIVES round-trip: make_val(TAG_STR,P)→__hx_tag==3
+  (STR), NOT flattened to TAG_INT(0); +FLOAT/BOOL/INT + 4 payload-exact. No
+  regression: M1 leaf gate PASS (enc 7/7 + core16/str3/arena5) + aprime smoke 42.
+  Fixpoint: grep __hx_make_val over compiler/self/tool/stdlib = 0 call-sites
+  outside the 4 def files → new branch dead during self-emit → whole-compiler
+  bytes unchanged (interactive whole-compiler obj byte-eq = pool-wrapper OOM,
+  infra limit not a regression; CI selfhost-byteeq-real authority). probe
+  m4_makeval_roundtrip.hexa, gate makeval_gate.sh. Next r3 = B4 array_core
+  re-attempt (get/set/pop/len via __hx_ptr_load64 + __hx_make_val; new/push/
+  reserve stay C #else, WALL-2 alloc-blocked).
+2026-06-17 :: M5 PILOT (rt_str) — drop-mechanism ALREADY PROVEN+SHIPPED, honest
+  ALREADY-DONE (c2/c9/c16, verdict F-M5-PILOT-RTSTR). Investigation-first task to
+  prove the .c-content-drop on rt_str (standalone links native rt_*.o + excise
+  #else + byteeq-real green) found the work ALREADY LANDED by the Z2a campaign
+  (#3455 casefold/trim · #3457 trim-ends · #3465 search-pred _b). MEASURED on aiden
+  x86_64 (the EXACT CI builder CC=gcc bash tool/stage_resolve_runtime_a):
+  resolve_native_rt_hi_seed runs UNCONDITIONALLY + auto-sets HEXA_ZEROC_RT_HI=1
+  (seed exists for darwin-arm64 + linux-x86_64) → build_runtime_a_from_source
+  sed-removes runtime_hi_gen.c #include + ar's build/rt_hi_native.o (14 rt_str_*
+  syms). nm build/runtime.o: only the 2 int-return BRIDGES (starts_with/ends_with)
+  are T; the 8 task-named fns (to_upper/to_lower/trim/trim_start/trim_end/
+  starts_with_b/ends_with_b/contains_b + casefold) = EXTERN-only (bodies in the
+  .o). Emitter rt_str body count 3(d99ecc321^) → 0(main). runtime_core.c=411120B.
+  Standalone link: all rt_str_* resolved, NO undefined. byteeq-real CI GREEN on
+  main (selfhost-byteeq-gate.yml = STANDALONE config). LONE residual = the 2
+  int-return bridges' standalone #ifndef C body (hxlcl_strncmp/strcmp, codegen
+  emits the int-return symbol; seed exports only _b HexaVal form) — ABI adapter
+  below the type system, NO native body to migrate (twin of F-M4-B1 nanbox); drop
+  needs new hand-asm seed fns ×2 ABIs OR a codegen call-site change → leaves the
+  Z2a template → deferred codegen/seed micro-unit, NOT faked (c9/c10). RE-CONFIRMS
+  F-LEGB-RTSTR-HEXASOURCE-COMPLETE + #3468 (Z2a EXHAUSTED). No emitter/build/seed
+  edit → fixpoint untouched. NO PR (no genuine new drop without faking). Real
+  ls==∅ lever stays M4 common-core port + runtime.c substrate redesign.
 2026-06-17 :: M4 B4 array-core — mechanism-BLOCKED (construct WALL-1 + alloc
   WALL-2), array_core.hexa NOT viable, __hx_make_val NAMED as the lever.
   Read self/runtime_core.c struct+fn bodies (HexaArr{items@0,len@8,cap@16}/24;

@@ -1,0 +1,142 @@
+F-M5-PILOT-RTSTR — M5 drop-mechanism pilot on rt_str = ALREADY PROVEN+SHIPPED
+================================================================================
+verdict date: 2026-06-17 · method c2/c9/c16 (RAN the actual CI/release runtime
+builder on real x86_64 aiden + nm/grep the produced objects + git-archaeology of
+the Z2a landings — never self-judged) · aiden repo @ 8048ac991 (main, M1/M2/PTR8
+landed) · all builds/reads via `harness pool on aiden`.
+
+TL;DR
+─────
+The M5 pilot's GOAL — "prove the .c-content-drop mechanism end-to-end on rt_str
+(make the STANDALONE build link the native rt_str_*.o + excise the matching #else
+C bodies)" — is ALREADY DONE and SHIPPED on both targets (darwin-arm64 +
+linux-x86_64). The cumulative Z2a campaign (#3455 casefold/trim · #3457 trim-ends
+· #3465 search-predicates _b) ALREADY:
+  (1) generalized the HEXA_ZEROC_RT_HI native-seed path to the STANDALONE config
+      (tool/stage_resolve_runtime_a: resolve_native_rt_hi_seed runs
+      UNCONDITIONALLY and auto-enables HEXA_ZEROC_RT_HI=1 whenever a target seed
+      exists — which it does for darwin-arm64 + linux-x86_64), and
+  (2) EXCISED the rt_str casefold/trim/contains/search-predicate #else C bodies
+      from the emitter (self/runtime_core_emit.hexa), and
+  (3) ar's the native build/rt_hi_native.o into runtime.a + sed-removes the
+      runtime_hi_gen.c #include in build_runtime_a_from_source().
+CI byteeq-real (selfhost-byteeq-gate.yml → release_build → stage_resolve_runtime_a,
+the STANDALONE config) is GREEN on current main with this in place.
+
+→ The task's PREMISE ("the rt_str #else bodies in runtime_core.c are LIVE and need
+  M5 excision") is FALSIFIED by measurement. M5-for-rt_str was completed by the
+  prior session before this task was dispatched. This RE-CONFIRMS the prior
+  verdicts F-LEGB-RTSTR-HEXASOURCE-COMPLETE + F-LEGB-RTCORE-PURE-CANDIDATES-ZERO
+  (#3468 "진짜 native-seed 포트 후보 0, Z2a 누적 EXHAUSTED").
+
+DELIVERABLE = honest ALREADY-DONE verdict (c9) + the precise measured residual.
+No PR (no genuine new drop available without crossing the proven Z2a template;
+faking a drop is FORBIDDEN per c9). NO emitter / build-script / seed change.
+
+────────────────────────────────────────────────────────────────────────────────
+1. MEASURED GROUND TRUTH (c2 — RAN the real CI builder on aiden x86_64)
+────────────────────────────────────────────────────────────────────────────────
+$ CC=gcc bash tool/stage_resolve_runtime_a            # the EXACT byteeq/release path
+  → resolve_native_rt_hi_seed: assembled build/rt_hi_native.o from
+    self/native/runtime_hi_x86_64.s (TARGET=linux-x86_64, 14 rt_str_* syms)
+    → native rt_str_* path (HEXA_ZEROC_RT_HI=1 auto-set)
+  → build_runtime_a_from_source: runtime_hi_gen.c #include REMOVED; ar'ing
+    native rt_hi_native.o into runtime.a
+  → build/runtime.a = 551566B
+
+$ nm build/runtime.o | grep ' T rt_str_'        # standalone-compiled runtime_core.c
+    rt_str_starts_with        ← int-return BRIDGE (the only rt_str BODY left)
+    rt_str_ends_with          ← int-return BRIDGE (the only rt_str BODY left)
+$ nm build/rt_hi_native.o | grep -c ' T rt_str' = 14   # native seed provides the bodies
+    (split, lines, pad_left, pad_right, repeat, center, to_upper, to_lower, trim,
+     trim_start, trim_end, starts_with_b, ends_with_b, contains_b)
+
+$ wc -c self/runtime_core.c (after emitter regen) = 411120B
+
+ALL 8 task-named rt_str functions (to_upper/to_lower/trim/trim_start/trim_end/
+starts_with_b/ends_with_b/contains_b + casefold) are EXTERN-only in the standalone
+runtime_core.c — their bodies ship from build/rt_hi_native.o. Confirmed by:
+  $ grep -E 'HexaVal rt_str_(to_upper|to_lower|trim|trim_start|trim_end|contains_b|
+            starts_with_b|ends_with_b)\(.*\) \{' self/runtime_core.c  →  EMPTY (0 bodies)
+
+────────────────────────────────────────────────────────────────────────────────
+2. GIT ARCHAEOLOGY — the drop already happened (c2)
+────────────────────────────────────────────────────────────────────────────────
+Pre-Z2a emitter (d99ecc321^, before #3455) had 3 rt_str casefold/trim BODY defs;
+current main has 0:
+  $ git show d99ecc321^:self/runtime_core_emit.hexa | grep -cE 'rt_str_(to_upper|
+      to_lower|trim|trim_start|trim_end|contains_b|starts_with_b|ends_with_b)\(.*\) \{'
+      = 3
+  $ grep -cE  ... self/runtime_core_emit.hexa  = 0
+(trim-ends #3457 + search-predicate _b #3465 bodies were add-then-retired in their
+own commits, so the cumulative count dropped across the campaign exceeds 3.)
+Landings: d99ecc321/#3455 (casefold/trim) · e9bf3b872/#3457 (trim-ends) ·
+102036cd6/#3465 (search-predicates _b). All CI full-green at land.
+
+────────────────────────────────────────────────────────────────────────────────
+3. THE LONE rt_str RESIDUAL (precisely characterized, c9·c16)
+────────────────────────────────────────────────────────────────────────────────
+self/runtime_core.c:5214-5224 (standalone #ifndef HEXA_HAS_HEXA_RT_STDLIB branch)
+still carries TWO int-return C bodies, ~16 lines total:
+    int rt_str_starts_with(HexaVal s, HexaVal prefix) {
+        if (!HX_IS_STR(s) || !HX_IS_STR(prefix)) return 0;
+        return hxlcl_strncmp(HX_STR(s), HX_STR(prefix), HX_STRLEN(prefix)) == 0;
+    }
+    int rt_str_ends_with(HexaVal s, HexaVal suffix) { ...hxlcl_strcmp... }
+These are LIVE: codegen emits the INT-RETURN symbol (self/codegen.hexa:442/445;
+arm64_darwin.hexa:1456/1457 "→ int (box bool)"). The native seed exports only the
+HexaVal-return `_b` variants (rt_str_starts_with_b / ends_with_b), NOT the
+int-return form, so the bridge cannot be satisfied by the existing rt_hi_native.o.
+
+WHY this is NOT a "next Z2a increment" (c16 classification = build-wiring/ABI, not
+a portable-fn gap):
+  · The Z2a template = "fn already has a hexa-source/byte-emitter native body →
+    move it to the HI-tier seed SSOT + extern it." These 2 bridges have NO native
+    body to move: they are a C int-return ABI adapter that boxes a bool, living
+    BELOW the HexaVal type system (same class as the nanbox ctors in F-M4-B1).
+  · Dropping them requires EITHER (a) hand-authoring 2 new int-return functions in
+    BOTH seed .s files (runtime_hi_x86_64.s ELF + runtime_hi_native.s Mach-O) —
+    raw string-compare assembly across 2 ABIs, high-risk, OR (b) a codegen change
+    to emit `rt_str_*_b` + inline bool-box at the call site (touching the emit
+    contract on both backends). Both cross OUT of the proven "excise #else + ar
+    native .o" mechanism and risk byteeq-real divergence. Per c10 (surgical) +
+    c9 (no fake), neither is the rt_str M5 pilot — they are a separate, larger
+    codegen/seed unit, correctly deferred.
+
+────────────────────────────────────────────────────────────────────────────────
+4. VERDICT
+────────────────────────────────────────────────────────────────────────────────
+M5 drop-mechanism PILOT on rt_str = PROVEN + SHIPPED (by prior Z2a #3455/#3457/
+#3465). The mechanism the task asked to demonstrate — standalone build links the
+native rt_*.o and the matching #else C bodies are excised, with byteeq-real green
+— is exactly what the auto-enabled HEXA_ZEROC_RT_HI path in stage_resolve_runtime_a
+already does for the rt_str casefold/trim/contains/search-predicate group on both
+targets. Measured runtime_core.c content for those 8 fns = 0 bodies (all extern).
+
+So M5-as-a-MILESTONE is NOT a fake and NOT blocked — for rt_str it is DONE. The
+generalizable lesson the pilot was meant to establish is ALREADY the live default:
+a frozen native .s seed + an auto-enable guard + #else-excised emitter + ar-into-.a
+= genuine .c-content drop, byteeq-real green. The remaining campaign work is to
+REPLICATE this on families that still HAVE a native body to migrate; the 2
+int-return rt_str bridges are NOT such a case (no native body; ABI adapter below
+the type system) and are deferred to a codegen/seed unit, not faked here.
+
+ls self/*.c is still {runtime.c, runtime_core.c} = 2 because those two amalgam
+files are the substrate container; rt_str's drop reduced their rt_str CONTENT (8
+fn bodies → 0) without removing the files — exactly the "content drop, not file
+removal" reality F-LEGB-STANDALONE-ELSE-NOGO + F-M4-B1 already named. File-count
+==∅ needs the WHOLE common-core port (M4, many sessions) + runtime.c substrate
+redesign, not a single-family pilot.
+
+GATES (all c2, captured above, not self-judged):
+  · standalone link: rt_str_* resolved (native .o, 14 syms) — NO undefined. PASS.
+  · byte-count: rt_str's 8-fn bodies already 0 in runtime_core.c (the drop the
+    pilot targeted is already realized); no NEW drop available without leaving the
+    proven template. MEASURED.
+  · byteeq-real CI: GREEN on current main (selfhost-byteeq-gate.yml, the STANDALONE
+    config) — gh run list shows success at f25be1e0a / c592ae3f2 et al.
+
+NEXT (unchanged real blocker, re-confirmed): the genuine ls==∅ lever is the M4
+common-core port (families WITH a migratable native body) + the runtime.c/
+runtime_core.c substrate redesign — NOT a per-family pilot. The 2 int-return rt_str
+bridges are a deferred codegen/seed micro-unit (not Z2a-shaped).
