@@ -15,6 +15,9 @@
 import re, os, sys
 entry = sys.argv[1] if len(sys.argv) > 1 else "compiler/main.hexa"
 out_path = sys.argv[2] if len(sys.argv) > 2 else "build/larm64/cc-flat.hexa"
+# Repo root = parent of this tool/ dir, so `use a::b::c` resolves to a/b/c.hexa
+# regardless of cwd.
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 seen = []; sset = set()
 STUB = ('pub let ATLAS_HASH: string = "fixture"\n'
         'pub let ATLAS_SOURCE_COUNT: i64 = 0\n'
@@ -32,6 +35,13 @@ def walk(f):
         if not p.endswith(".hexa"): p += ".hexa"
         for c in [p, os.path.join(d, p), os.path.join(d, os.path.basename(p))]:
             if os.path.exists(os.path.normpath(c)): deps.append(os.path.normpath(c)); break
+    # `use self::rt::syscall` (`::`-path form, no quotes) — used by self/rt/mod.hexa
+    # to pull the runtime-replacement module tree. Map `a::b::c` -> `a/b/c.hexa`
+    # relative to the repo root (ROOT), falling back to the entry dir.
+    for m in re.finditer(r'^\s*use\s+([A-Za-z_][\w]*(?:::[A-Za-z_][\w]*)+)\s*$', txt, re.M):
+        rel = m.group(1).replace("::", os.sep) + ".hexa"
+        for c in [os.path.join(ROOT, rel), os.path.join(d, rel), rel]:
+            if os.path.exists(os.path.normpath(c)): deps.append(os.path.normpath(c)); break
     for x in deps: walk(x)
     seen.append(f)
 walk(entry)
@@ -41,6 +51,8 @@ for f in seen:
         out.append("// STUB\n" + STUB); continue
     t = open(f, encoding="utf-8", errors="replace").read()
     t = re.sub(r'^\s*(import|use)\s+"[^"]*".*$', '', t, flags=re.M)
+    # strip the `::`-path `use a::b::c` lines too (resolved above, no quotes)
+    t = re.sub(r'^\s*use\s+[A-Za-z_][\w]*(?:::[A-Za-z_][\w]*)+\s*$', '', t, flags=re.M)
     out.append("// ==== " + f + " ====\n" + t)
 open(out_path, "w").write("\n".join(out))
 print("flatten:", len(seen), "files", ("\n".join(out)).count(chr(10)) + 1, "lines")
