@@ -2383,13 +2383,45 @@ fn _dft_failure_is_corrupt_recover(out_text: str) -> int {
 // genuine non-walltime crash would otherwise spin), logging each cycle so a tail
 // shows progress. The stage_cmd is the reused guarded builder (mpirun/env/recover
 // untouched) — this only WRAPS it; we never duplicate the compute invocation.
-fn _dft_self_resume_wrap(stage_cmd: str, procname: str, out: str, max_cycles: int) -> str {
+//
+// CORRUPT-RECOVER SELF-HEAL (item-6 root cause, 2026-06-18): the bare loop blindly
+// re-runs `recover=.true.` (baked into ph.in) every cycle. A teardown-kill leaves a
+// per-q `_ph0/<prefix>.q_N/<prefix>.save` half-written, so EVERY recover cycle then
+// dies reading the SAME corrupt XML (PARSE_ERR / runParser / closing tag) making no
+// progress — the daemon burns all `max_cycles` failing identically (the observed
+// "8 cycle 실패"). The CONTROLLER `--resume` path already classifies this and
+// salvages (per-q scratch reset + recover=.false. start_q recompute), but the
+// AUTONOMOUS pod-side daemon never did. So: after each cycle that did NOT reach
+// __DFT_DONE__, inspect the freshly-appended `out` for a corrupt-recover signature
+// (the SAME signature set as `_dft_failure_is_corrupt_recover`, kept in sync); on a
+// hit, run `salvage_cmd` ONCE (it deletes the corrupt per-q `_ph0` scratch + stale
+// recover files and relaunches recover=.false. start_q→nq) so the NEXT recover cycle
+// reads a clean state. The salvage is gated by a durable `.dft_self_salvaged` marker
+// so a re-corruption (genuine fault) is NOT re-salvaged forever — it then exhausts
+// the cycle bound like any non-walltime crash. salvage_cmd "" disables the self-heal
+// (the loop degrades to the prior behaviour — used by structural unit fixtures).
+fn _dft_self_resume_wrap(stage_cmd: str, procname: str, out: str, max_cycles: int, salvage_cmd: str) -> str {
     let probe = _dft_stage_probe_cmd(procname, out)
+    // corrupt-recover signature probe over the in-place stage stdout, mirroring
+    // `_dft_failure_is_corrupt_recover` (PURE classifier) so the pod-side self-heal
+    // trigger and the controller salvage classifier stay in lockstep.
+    let corrupt_sig = "grep -qE 'PARSE_ERR|runParser|PARTIAL_EL_PHON not found"
+        + "|closing tag not found' /root/deck/" + out
+        + " || { grep -q 'cannot open file' /root/deck/" + out
+        + " && grep -q '_ph0' /root/deck/" + out + "; }"
+    // self-heal block: run ONCE per daemon (durable marker), only when a corrupt
+    // recover is detected AND a salvage_cmd was supplied. Empty salvage_cmd → no-op.
+    let heal = if salvage_cmd == "" { "" } else {
+        " if [ ! -f /root/deck/.dft_self_salvaged ] && { " + corrupt_sig + "; }; then "
+        + "echo \"[dft-self-resume] CORRUPT-RECOVER detected — salvaging (per-q scratch reset · recover=.false.) $(date -u +%FT%TZ)\"; "
+        + "touch /root/deck/.dft_self_salvaged; "
+        + salvage_cmd + "; sleep 5; fi;"
+    }
     return "n=0; while [ \"$(" + probe + ")\" != __DFT_DONE__ ] && [ $n -lt "
         + to_string(max_cycles) + " ]; do n=$((n+1)); "
         + "echo \"[dft-self-resume] cycle $n/" + to_string(max_cycles)
         + " (recover relaunch) $(date -u +%FT%TZ)\"; "
-        + stage_cmd + "; sleep 5; done; "
+        + stage_cmd + ";" + heal + " sleep 5; done; "
         + "echo \"[dft-self-resume] loop exit after $n cycle(s) — probe=$(" + probe + ")\""
 }
 
@@ -3105,7 +3137,7 @@ fn _dft_resume(deck: str) -> int {
         // walltime kill auto-relaunches (recover=.true.) on the SAME pod until ph is
         // terminal — no controller `--resume` round-trip (the 13/20-stalled fix).
         let phon_log = _dft_remote_logfile("phon")
-        let phon_cmd = _dft_self_resume_wrap(_dft_scfph_cmd(np, walltime_h), "ph.x", "ph.out", 8)
+        let phon_cmd = _dft_self_resume_wrap(_dft_scfph_cmd(np, walltime_h), "ph.x", "ph.out", 8, _dft_salvage_cmd(np, walltime_h))
         let phon_argv = _dft_detach_argv(phon_cmd)
         let launched = cloud_nohup_opts(host, ssh_opts, phon_argv, phon_log)
         if launched.ok == 0 {
@@ -3159,7 +3191,7 @@ fn _dft_resume(deck: str) -> int {
                 println("[dft-run] --resume: ph WALLTIME-KILLED (Maximum CPU time / max_seconds) — NOT a crash.")
                 println("[dft-run]   recover-relaunching el-ph (recover=.true.) on the SAME pod " + iid + " — NO teardown (q-point progress preserved).")
                 let phon_log = _dft_remote_logfile("phon")
-                let phon_cmd = _dft_self_resume_wrap(_dft_scfph_cmd(np, walltime_h), "ph.x", "ph.out", 8)
+                let phon_cmd = _dft_self_resume_wrap(_dft_scfph_cmd(np, walltime_h), "ph.x", "ph.out", 8, _dft_salvage_cmd(np, walltime_h))
                 let phon_argv = _dft_detach_argv(phon_cmd)
                 let relaunched = cloud_nohup_opts(host, ssh_opts, phon_argv, phon_log)
                 if relaunched.ok == 0 {

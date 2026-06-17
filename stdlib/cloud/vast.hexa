@@ -677,10 +677,54 @@ fn vast_create(offer_id: str, image: str, disk_gb: int) -> VastInstance {
     return vast_create_labeled(offer_id, image, disk_gb, "")
 }
 
+// ── item-15: onstart authorized_keys injection (SSH-key reject fix) ─────
+// A freshly-created vast.ai instance attaches whatever SSH keys are registered
+// in the *vast account*, NOT the local default key. When the account has no key
+// (or the wrong one) registered, the new pod REJECTS the local default key
+// (`Permission denied (publickey)`), so the post-rent reachability gate then
+// DESTROYS a perfectly healthy pod — and a re-rent hits the same wall forever
+// (the observed "vast 신규 인스턴스 SSH key 거부" loop). The robust fix is to make
+// the pod accept the local default key UNCONDITIONALLY: pass the local public
+// key through `--onstart-cmd`, which runs inside the container at boot and
+// appends the key to root's authorized_keys (idempotent — only when absent).
+//
+// _vast_local_pubkey — read the local default public key (ed25519 first, then
+// rsa) so it can be baked into the onstart hook. Returns "" when neither exists
+// (caller then omits the onstart and falls back to the account-key behaviour).
+fn _vast_local_pubkey() -> str {
+    let home = env_var("HOME")
+    let ed = home + "/.ssh/id_ed25519.pub"
+    if file_exists(ed) {
+        return read_file(ed).trim()
+    }
+    let rsa = home + "/.ssh/id_rsa.pub"
+    if file_exists(rsa) {
+        return read_file(rsa).trim()
+    }
+    return ""
+}
+
+// vast_onstart_inject_key_cmd — PURE: the onstart-hook shell that appends `pubkey`
+// to root's authorized_keys IFF it is not already present (idempotent), so the pod
+// accepts the local default key regardless of vast-account key registration. The
+// `grep -qxF` guard keeps a reboot/onstart re-run from duplicating the line. An
+// empty pubkey yields "" (no hook) — the caller then omits `--onstart-cmd`.
+pub fn vast_onstart_inject_key_cmd(pubkey: str) -> str {
+    if len(pubkey) == 0 {
+        return ""
+    }
+    return "mkdir -p /root/.ssh && chmod 700 /root/.ssh && "
+        + "grep -qxF " + _shq_local(pubkey) + " /root/.ssh/authorized_keys 2>/dev/null || "
+        + "echo " + _shq_local(pubkey) + " >> /root/.ssh/authorized_keys; "
+        + "chmod 600 /root/.ssh/authorized_keys"
+}
+
 // vast_create_labeled — vast_create + a provider-side `--label <slug>` so a raw
 // `vastai show instances` surfaces the project-purpose attribution (@L3). A
 // blank label is omitted (identical to vast_create). The label is shell-quoted
-// so a slug can never break the create command line.
+// so a slug can never break the create command line. item-15: also injects the
+// local default pubkey via `--onstart-cmd` so the new pod accepts the Mac default
+// key even when the vast account has no/wrong key registered (SSH-reject fix).
 fn vast_create_labeled(offer_id: str, image: str, disk_gb: int, label: str) -> VastInstance {
     let vc = _vastai_path()
     if len(vc) == 0 {
@@ -693,10 +737,17 @@ fn vast_create_labeled(offer_id: str, image: str, disk_gb: int, label: str) -> V
     if len(label) > 0 {
         label_arg = " --label " + _shq_local(label)
     }
+    // item-15: onstart authorized_keys injection (omitted when no local pubkey).
+    let onstart = vast_onstart_inject_key_cmd(_vast_local_pubkey())
+    let mut onstart_arg = ""
+    if len(onstart) > 0 {
+        onstart_arg = " --onstart-cmd " + _shq_local(onstart)
+    }
     let cmd = _shq_local(vc) + " create instance " + _shq_local(offer_id)
         + " --image " + _shq_local(image)
         + " --disk " + _shq_local(to_string(disk_gb))
         + label_arg
+        + onstart_arg
         + " --ssh --direct"
         + " --raw 2>&1"
     let out = exec(cmd)
