@@ -173,6 +173,50 @@ if [ -f "$rt" ] && grep -q 'HexaVal rt_str_trim_start(HexaVal s) {' "$rt"; then
   echo "[restore_frozen_seeds] RT-NATIVE Z2a: scrubbed frozen rt_str_trim_start/end C bodies from $rt ($((before-after)) lines; gen.c now sole provider)"
 fi
 
+# ── RT-NATIVE leg B Z2a (casefold/trim group) — scrub the 3 frozen runtime_core.c
+# C bodies so the synthesized runtime_hi_gen.c is their sole provider (closes the
+# install.sh clang-18 redefinition class). ──────────────────────────────────────
+# The frozen 151c52c8 self/runtime_core.c blob still ships the casefold/trim group
+# (rt_str_trim @7445, rt_str_to_upper @7506, rt_str_to_lower @7513) as
+# `#ifndef HEXA_HAS_HEXA_RT_STDLIB` C bodies. The HI-tier SSOT moved all three into
+# runtime_hi_gen.c (synthesized below) and RETIRED their core.c bodies in the emitter
+# (self/runtime_core_emit.hexa now emits ONLY the prototypes). runtime_core.c
+# `#include "runtime_hi_gen.c"`, so the restored frozen core.c bodies + the 9-fn gen.c
+# = two definitions of rt_str_to_upper/to_lower/trim in ONE TU → clang-18
+# "error: redefinition of 'rt_str_to_upper'" (strict; older toolchains were lenient).
+# The release pipeline never hit this: tool/stage_resolve_runtime_a regenerates core.c
+# from the emitter SSOT — but install.sh calls THIS script directly (not the stage_*
+# sequence), so the user-facing build kept the stale bodies and broke on every 24.04
+# host. This is the EXACT trim-ends scrub above, extended to the casefold/trim trio:
+# a TARGETED in-place delete of the three C bodies (signature line through the
+# column-0 closing brace), leaving the frozen core.c otherwise byte-identical. A
+# narrow scrub — NOT a full emitter-regen — is deliberate: the CURRENT emitter core.c
+# delegates array/map accessors to rt_array_get_native / rt_map_get_native (RT-NATIVE
+# read-half), which require the per-arch native .o seeds that the release stage_*
+# assembles but install.sh does NOT — so regenerating the whole core.c here would
+# trade the redefinition error for an `undefined reference` link error. The frozen
+# core.c keeps its self-contained C array/map fallbacks (no seed needed) and its
+# frozen f64<->bits coherence (no SSOT-migration reconcile needed). NO-OP-SAFE +
+# idempotent: the grep guard skips when the bodies are already absent.
+_RTC="self/runtime_core.c"
+if [ -f "$_RTC" ] && grep -q '^HexaVal rt_str_to_upper(HexaVal s) {' "$_RTC"; then
+  before=$(wc -l < "$_RTC")
+  awk '
+    /^HexaVal rt_str_to_upper\(HexaVal s\) \{$/ { skip=1 }
+    /^HexaVal rt_str_to_lower\(HexaVal s\) \{$/ { skip=1 }
+    /^HexaVal rt_str_trim\(HexaVal s\) \{$/     { skip=1 }
+    {
+      if (skip) {
+        if ($0 == "}") { skip=0; next }
+        next
+      }
+      print
+    }
+  ' "$_RTC" > "$_RTC.z2acase" && mv "$_RTC.z2acase" "$_RTC"
+  after=$(wc -l < "$_RTC")
+  echo "[restore_frozen_seeds] RT-NATIVE Z2a: scrubbed frozen rt_str_to_upper/to_lower/trim C bodies from $_RTC ($((before-after)) lines; gen.c now sole provider)"
+fi
+
 # ── RT-NATIVE leg B Z2a — SYNTHESIZE the 9-fn runtime_hi_gen.c seed ───────────
 # The casefold/trim group (rt_str_to_upper/to_lower/trim) grew the HI-tier
 # rt_str_* SSOT from 6→9 fn and RETIRED the matching C #ifndef bodies from

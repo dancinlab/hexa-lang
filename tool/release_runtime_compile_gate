@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────
+# tool/release_runtime_compile_gate — install.sh-path RUNTIME COMPILE gate.
+#
+# PURPOSE (anima ING [54] recurrence-prevention)
+#   install.sh restores the bootstrap C runtime via `tool/restore_frozen_seeds`
+#   (NOT the release stage_* sequence), then the shipped `hexa` compiles that
+#   restored self/runtime.c with the host clang on the user's machine. A drift
+#   between the frozen seed and the live emitter SSOT can leave the restored
+#   runtime self-CONTRADICTORY — e.g. a function defined BOTH in the frozen
+#   runtime_core.c and in the synthesized runtime_hi_gen.c that core.c
+#   `#include`s — which strict modern toolchains reject:
+#
+#     self/runtime_hi_gen.c:215: error: redefinition of 'rt_str_to_upper'
+#     self/runtime_core.c:7506:  note: previous definition is here
+#
+#   That exact failure (Ubuntu 24.04 / clang-18 / glibc-2.39) took the whole
+#   0.1.0-dispatch install offline for the #1 downstream consumer (anima), and
+#   the release CI never caught it because the RELEASE build regenerates
+#   runtime_core.c from the emitter (stage_resolve_runtime_a) while install.sh
+#   does not. This gate closes that blind spot: it walks the INSTALL path —
+#   `restore_frozen_seeds` then a single -O2 compile of self/runtime.c — and
+#   FAILS on any redefinition / duplicate-symbol / compile error.
+#
+# WHAT IT ASSERTS
+#   1. restore_frozen_seeds produces a coherent self/runtime.c (+ core.c + gen.c).
+#   2. `clang -O2 -c self/runtime.c` (the canonical install-path TU; the same
+#      -Wno-trigraphs -fbracket-depth=4096 -I self flags self/main.hexa uses,
+#      WITHOUT -DHEXA_HAS_HEXA_RT_STDLIB — i.e. the #ifndef C bodies are LIVE,
+#      exactly as on a user machine) compiles to an object with RC=0 and NO
+#      "redefinition" diagnostics.
+#
+# It is TOOLCHAIN-STRICT on purpose: prefer clang-18 (matches the 24.04 floor)
+# but accept any clang/cc; -Werror is NOT used (the runtime carries benign
+# -Wmacro-redefined warnings the OP-17 patch already documents), but a
+# redefinition ERROR or a non-zero compile RC is fatal.
+#
+# Exit codes: 0 PASS · 1 FAIL (real regression) · 2 SETUP/INFRA (no compiler).
+# Extension-less (not .sh) per the tool/stage_* / tool/release_* precedent.
+# ─────────────────────────────────────────────────────────────────────────
+set -uo pipefail
+
+fail() { echo "[release_runtime_compile_gate] FAIL — $*" >&2; exit 1; }
+infra() { echo "[release_runtime_compile_gate] SETUP/INFRA — $*" >&2; exit 2; }
+
+# Pick a C compiler: prefer the explicit 24.04 floor (clang-18), then clang, cc.
+CC_BIN=""
+for c in clang-18 clang cc gcc; do
+  if command -v "$c" >/dev/null 2>&1; then CC_BIN="$c"; break; fi
+done
+[ -n "$CC_BIN" ] || infra "no C compiler on PATH (clang-18/clang/cc/gcc)"
+echo "[release_runtime_compile_gate] compiler: $("$CC_BIN" --version 2>/dev/null | head -1)"
+
+# 1) Restore the bootstrap seeds via the EXACT tool install.sh runs.
+[ -x tool/restore_frozen_seeds ] || [ -f tool/restore_frozen_seeds ] \
+  || infra "tool/restore_frozen_seeds missing — repo layout changed?"
+echo "[release_runtime_compile_gate] restoring bootstrap seeds (install.sh path)…"
+bash tool/restore_frozen_seeds >/tmp/rfs.log 2>&1 \
+  || { cat /tmp/rfs.log >&2; fail "restore_frozen_seeds exited non-zero"; }
+[ -f self/runtime.c ] || fail "self/runtime.c not produced by restore_frozen_seeds"
+
+# 2) Compile self/runtime.c with the canonical install-path flags (self/main.hexa
+#    L3318: clang -O2 <cflags> -Wno-trigraphs -fbracket-depth=4096 -I self -c).
+#    We deliberately do NOT pass -DHEXA_HAS_HEXA_RT_STDLIB so the #ifndef C bodies
+#    are compiled — the precise condition under which the rt_str_* redefinition
+#    fired on a user machine. OpenSSL/sodium feature macros are omitted (the
+#    redefinition class is independent of them); a missing <openssl/*.h> would be
+#    an INFRA miss, not the regression we gate, so guard for it below.
+OBJ="$(mktemp -t hexa_rt_gate.XXXXXX).o"
+CLOG="$(mktemp -t hexa_rt_gate_log.XXXXXX)"
+echo "[release_runtime_compile_gate] compiling self/runtime.c ($CC_BIN -O2, install-path flags)…"
+"$CC_BIN" -O2 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 \
+  -I self -c self/runtime.c -o "$OBJ" >"$CLOG" 2>&1
+rc=$?
+
+# A redefinition / duplicate-symbol diagnostic is the regression we exist to catch
+# — fatal even if it somehow rode alongside a zero RC.
+if grep -qiE "error: redefinition of|duplicate symbol|conflicting types for" "$CLOG"; then
+  echo "── compiler diagnostics ─────────────────────────────────────" >&2
+  grep -iE "error: redefinition of|duplicate symbol|conflicting types for|note: previous" "$CLOG" | head -30 >&2
+  rm -f "$OBJ" "$CLOG"
+  fail "self/runtime.c has DUPLICATE/REDEFINED symbols on $CC_BIN (the install.sh 24.04/clang-18 break class)"
+fi
+
+if [ "$rc" != 0 ]; then
+  # Distinguish a real compile regression from an infra miss (missing header).
+  if grep -qiE "fatal error: .*\.h.* file not found|No such file or directory" "$CLOG"; then
+    echo "── compiler diagnostics (header/infra) ──────────────────────" >&2
+    grep -iE "file not found|No such file" "$CLOG" | head -10 >&2
+    rm -f "$OBJ" "$CLOG"
+    infra "self/runtime.c needs a header absent on this runner (not the redefinition regression)"
+  fi
+  echo "── compiler diagnostics ─────────────────────────────────────" >&2
+  grep -iE "error:" "$CLOG" | head -30 >&2
+  rm -f "$OBJ" "$CLOG"
+  fail "self/runtime.c failed to compile (RC=$rc) on $CC_BIN"
+fi
+
+[ -s "$OBJ" ] || { rm -f "$OBJ" "$CLOG"; fail "compile reported success but produced no object"; }
+echo "[release_runtime_compile_gate] PASS — self/runtime.c compiled clean on $CC_BIN ($(wc -c < "$OBJ") bytes, no redefinition)"
+rm -f "$OBJ" "$CLOG"
+exit 0
