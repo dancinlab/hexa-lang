@@ -67,9 +67,17 @@ fn st_project_out(w: [float], occ: [[float]], m: int, n: int) -> [float] {
     while pass < 2 {
         let mut j = 0
         while j < m {
-            let c = st_dot(occ[j], v, n)
-            let mut i = 0
-            while i < n { v[i] = v[i] - c * occ[j][i] ; i = i + 1 }
+            // DEGENERATE-SAFE GUARD (c1/c17): a degenerate davidson manifold can
+            // hand back a malformed occ row (len != n) or a mis-counted m; the
+            // bare occ[j][i] then indexes out of bounds → SIGSEGV (the documented
+            // "Sternheimer degenerate-subspace crash"). Skip any row that breaks
+            // the length-n contract — a wrong-length vector cannot contribute a
+            // valid ⟨ψₘ|w⟩ projection anyway, so skipping is the correct guard.
+            if len(occ[j]) == n {
+                let c = st_dot(occ[j], v, n)
+                let mut i = 0
+                while i < n { v[i] = v[i] - c * occ[j][i] ; i = i + 1 }
+            }
             j = j + 1
         }
         pass = pass + 1
