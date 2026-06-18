@@ -62,6 +62,11 @@ This file is the single governance SSOT (md 단일화) — edit directives here,
 - **HF namespace** — all HuggingFace uploads/Collections live under the `dancinlab` org.
 - **L0 edits** — editing a lockdown file (see `harness.config.json` → `lockdown.files`)
   requires updating `CHANGELOG.md` in the same change.
+- **release → pool 동기화** — 신규 릴리스(`vX.Y.Z` 태그 발행) 직후 pool 공유 호스트
+  (`aiden`·`summer`)에도 그 릴리스를 `install.sh` 로 세팅(동기화)한다 —
+  `harness pool on <host> 'curl -fsSL https://raw.githubusercontent.com/dancinlab/hexa-lang/<tag>/install.sh | sh'`.
+  pool 의 빌드·byteeq·measure 가 stale 바이너리/시드를 물지 않도록(자기복제 측정 신뢰성·c2),
+  릴리스마다 공유자원을 최신 prebuilt 로 맞춘다.
 
 ## Harness
 
