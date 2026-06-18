@@ -11886,6 +11886,14 @@ fn _native_arr_noescape_scan(stmts) {
 // element reads are the only uses, so the boxed-HexaArr surface is never needed.
 // The legacy HEXA_NATIVE_ARR env flag is an OR escape hatch: when set, fire even
 // without the proof (isolated lowering test / the original opt-in behavior).
+//
+// qforge val-arena blocker c17 NOTE: the AUTO-FIRE lane now sees call-arguments
+// as escapes (see _expr_escapes_name → node.args), so a packed-f64 binding can
+// no longer reach a fn-value call boundary and be misread as boxed. The
+// off-by-default env-flag lane STILL bypasses the proof — packing an escaping
+// binding under HEXA_NATIVE_ARR=1 remains a manual-opt-in hazard (the callee
+// reads the contiguous double[] via the boxed 16B-stride surface → tag
+// corruption); the blocker reproduces with the flag OFF, which this fix closes.
 fn _native_arr_autofire_ok(name) {
     if _is_native_arr_noescape(name) { return true }
     return _native_arr_enabled()
