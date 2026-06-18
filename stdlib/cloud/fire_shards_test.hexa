@@ -1,0 +1,102 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/fire_shards_test.hexa — falsifier suite for `hexa cloud
+// fire-shards`. The verb splits a job list into N line-balanced shards on the
+// pod and stagger-fires each detached. The PURE builders in fire_shards.hexa
+// (placeholder substitution · remote split cmd · per-shard launch block · plan
+// text) are exercised here with NO network / NO pod — the emitted bash text is
+// the falsifier, asserted byte-for-byte. The CLI glue (host resolve, copy-to,
+// remote exec, Monitor handle, registration) lives in cloud_cli.hexa and is
+// covered by the dry-run preview captured in the PR; this test pins the logic
+// the dry-run + the live launch share.
+//
+// Falsifiers:
+//   F-FS-SUBST       — {shard}/{i}/{out}/{log} substitute; unknown {x} kept; {{ }} escape
+//   F-FS-SUBST-NOSH  — a template with no {shard} is the caller's error (asserted at CLI); here we prove subst leaves it untouched
+//   F-FS-SPLIT       — the remote split cmd is `split -d -n l/N` with a shard-count marker
+//   F-FS-LAUNCH      — the per-shard launch block detaches via setsid + emits a pid marker per shard, with stagger sleeps
+//   F-FS-ZPAD        — index zero-pads 2-wide to line up with `split -d` suffixes
+//
+// Run:   hexa run stdlib/cloud/fire_shards_test.hexa
+// PASS:  exits 0, prints "fire_shards_test PASS".
+
+use "stdlib/cloud/fire_shards"
+
+fn _ck(name: str, got: str, want: str) {
+    if got != want {
+        println("  FAIL: " + name)
+        println("    got : " + got)
+        println("    want: " + want)
+        exit(1)
+    }
+}
+
+fn _ck_contains(name: str, hay: str, needle: str) {
+    if hay.index_of(needle) < 0 {
+        println("  FAIL: " + name + " — missing substring")
+        println("    needle: " + needle)
+        println("    in    : " + hay)
+        exit(1)
+    }
+}
+
+fn main() {
+    // F-FS-ZPAD — 2-wide zero-pad lines up with `split -d` numeric suffix.
+    _ck("zpad 0", _fs_zpad2(0), "00")
+    _ck("zpad 7", _fs_zpad2(7), "07")
+    _ck("zpad 12", _fs_zpad2(12), "12")
+
+    // F-FS-SUBST — every placeholder substitutes; unknown token kept verbatim.
+    let tmpl = "hexa run cli bin {shard} {out} 110 40 # i={i} log={log}"
+    let got = _fs_subst(tmpl, "/work/sh_03", "03", "/work/sh_03.out", "/work/sh_03.log")
+    _ck("subst all", got, "hexa run cli bin /work/sh_03 /work/sh_03.out 110 40 # i=03 log=/work/sh_03.log")
+
+    // unknown {token} survives with braces; {{ }} → literal braces.
+    _ck("subst unknown kept", _fs_subst("a {nope} b", "S", "0", "O", "L"), "a {nope} b")
+    _ck("subst brace escape", _fs_subst("{{lit}} {shard}", "S", "0", "O", "L"), "{lit} S")
+
+    // F-FS-SUBST-NOSH — a template with no {shard} is left untouched (the CLI
+    // rejects it; the pure subst must not invent one).
+    _ck("subst no shard", _fs_subst("echo hi", "S", "0", "O", "L"), "echo hi")
+
+    // F-FS-SPLIT — line-balanced split with a shard-count marker.
+    let sp = _fs_remote_split("/tmp/b/jobs.tsv", "/tmp/b", "shard_", 12)
+    _ck("split cmd", sp,
+        "mkdir -p '/tmp/b' && split -d -n l/12 '/tmp/b/jobs.tsv' '/tmp/b/shard_' && echo __FS_SHARDS__=$(ls '/tmp/b/shard_'* 2>/dev/null | wc -l | tr -d ' ')")
+
+    // F-FS-LAUNCH — per-shard block: setsid detach + a pid marker per shard +
+    // stagger sleep between (not after the last). 3 shards, stagger 8.
+    let blk = _fs_launch_block("run {shard}", "", "/w", "s_", 3, 8)
+    // shard 0 fires, captures pid, sleeps 8; shard 1 same; shard 2 fires, no
+    // trailing sleep.
+    _ck_contains("launch shard0 setsid", blk, "setsid bash -c 'run /w/s_00' </dev/null >'/w/s_00.log' 2>&1 &")
+    _ck_contains("launch shard0 pid", blk, "echo __FS_PID__0=$!")
+    _ck_contains("launch stagger", blk, "sleep 8")
+    _ck_contains("launch shard2", blk, "setsid bash -c 'run /w/s_02' </dev/null >'/w/s_02.log' 2>&1 &")
+    _ck_contains("launch shard2 pid", blk, "echo __FS_PID__2=$!")
+    // exactly two stagger sleeps for three shards (between 0-1 and 1-2, none after 2).
+    let mut sleeps = 0
+    let parts = blk.split("sleep 8\n")
+    sleeps = len(parts) - 1
+    if sleeps != 2 {
+        println("  FAIL: stagger count — got " + to_string(sleeps) + " sleeps for 3 shards, want 2")
+        exit(1)
+    }
+
+    // pre (env + source) is prepended INSIDE each shard's subshell.
+    let blk2 = _fs_launch_block("run {shard}", ". /env.sh && env A=1 ", "/w", "s_", 1, 0)
+    _ck_contains("launch with pre", blk2, "setsid bash -c '. /env.sh && env A=1 run /w/s_00'")
+
+    // full launcher tallies + emits the dir marker.
+    let lr = _fs_remote_launcher("run {shard}", "", "/w", "s_", 2, 0)
+    _ck_contains("launcher tally", lr, "echo __FS_LAUNCHED__=2")
+    _ck_contains("launcher dir", lr, "echo __FS_DIR__='/w'")
+
+    // plan text — preview lists the split + every per-shard command.
+    let plan = _fs_plan_text("root@h", "jobs.tsv", "/w/jobs.tsv", "/w", "s_", "run {shard}", "", 2, 4)
+    _ck_contains("plan header", plan, "2 shard(s) on root@h")
+    _ck_contains("plan stagger", plan, "stagger: 4s")
+    _ck_contains("plan shard0", plan, "[shard 00] run /w/s_00")
+    _ck_contains("plan shard1", plan, "[shard 01] run /w/s_01")
+
+    println("fire_shards_test PASS")
+}
