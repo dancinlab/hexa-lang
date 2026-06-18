@@ -22,130 +22,131 @@ struct CloudCmd {
     args:    str
 }
 
-// cloud_commands — the verb roster. Order within a group is the render order.
+// cloud_commands — the verb roster. Order of pushes is the render order.
+// Built by `out.push(...)` per entry rather than one big `return [ … ]` array
+// literal: the single 37-element array-of-struct literal silently TRUNCATED in
+// cloud_cli.hexa's heavily-flattened import context (the 24th element —
+// fire-shards — dropped from the returned array, so `cloud help`/the drift
+// renderer lost the row while a standalone probe saw all 37). The push form
+// emits per-element appends instead of one aggregate initializer, sidestepping
+// that codegen path; the SSOT stays this one function. (The +1-element add of
+// fire-shards is what crossed the threshold and surfaced the latent bug.)
 fn cloud_commands() -> [CloudCmd] {
-    return [
-        // ── lifecycle ──────────────────────────────────────────────────
-        CloudCmd { name: "rent", group: "lifecycle",
+    let mut out: [CloudCmd] = []
+    out.push(CloudCmd { name: "rent", group: "lifecycle",
             args: "<provider> [--gpu T] [--image IMG] [--disk GiB] [--volume-gb N] [--ephemeral] [--desc TEXT] [--owner TAG] [--project NAME] [--query Q] [--max-wait-sec N] [--no-register] [--force-new]",
-            summary: "provision a GPU pod (vast|runpod) — auto-tags PROJECT (@<cwd repo/folder>, e.g. @demiurge) + PURPOSE (--desc/--purpose TEXT, else --owner, else unspecified), persists both + stamps a project-purpose slug on the provider --label; DEFAULTS to a persistent /workspace volume (>=40 GiB, --volume-gb N to size, --ephemeral to opt out + warn); IDEMPOTENT per (project,purpose): reuses a live M5 pod unless --force-new (MANUAL single-rent flag, never auto-invoked; auto re-rent on pod-loss DEPRECATED, pod-loss FAILS LOUD); waits ssh-ready, prints host:port + id (alias: up)" },
-        CloudCmd { name: "rm", group: "lifecycle",
+            summary: "provision a GPU pod (vast|runpod) — auto-tags PROJECT (@<cwd repo/folder>, e.g. @demiurge) + PURPOSE (--desc/--purpose TEXT, else --owner, else unspecified), persists both + stamps a project-purpose slug on the provider --label; DEFAULTS to a persistent /workspace volume (>=40 GiB, --volume-gb N to size, --ephemeral to opt out + warn); IDEMPOTENT per (project,purpose): reuses a live M5 pod unless --force-new (MANUAL single-rent flag, never auto-invoked; auto re-rent on pod-loss DEPRECATED, pod-loss FAILS LOUD); waits ssh-ready, prints host:port + id (alias: up)" })
+    out.push(CloudCmd { name: "rm", group: "lifecycle",
             args: "<id> [--provider P] [--force]",
-            summary: "CANONICAL teardown — confirm + destroy + forget (unifies down/destroy/forget); idempotent" },
-        CloudCmd { name: "down", group: "lifecycle",
+            summary: "CANONICAL teardown — confirm + destroy + forget (unifies down/destroy/forget); idempotent" })
+    out.push(CloudCmd { name: "down", group: "lifecycle",
             args: "<id> [--provider P] [--yes|--force]",
-            summary: "destroy a pod + forget it; SHOWS project·purpose + running-job check then confirms [y/N] (--yes/--force skips); refuses a cross-project kill unless --force (alias: destroy)" },
-        CloudCmd { name: "reboot", group: "lifecycle",
+            summary: "destroy a pod + forget it; SHOWS project·purpose + running-job check then confirms [y/N] (--yes/--force skips); refuses a cross-project kill unless --force (alias: destroy)" })
+    out.push(CloudCmd { name: "reboot", group: "lifecycle",
             args: "<id> [--provider P]",
-            summary: "restart a pod container (preserve disk) to recover a DARK pod; vast only" },
-        CloudCmd { name: "list", group: "lifecycle",
+            summary: "restart a pod container (preserve disk) to recover a DARK pod; vast only" })
+    out.push(CloudCmd { name: "list", group: "lifecycle",
             args: "[--provider P] [--json|--raw]",
-            summary: "list live pods + the M5 registry table (id·provider·project·purpose·status·dph·age); --json/--raw emit the registry as a JSON array (alias: status)" },
-        CloudCmd { name: "ssh-port", group: "lifecycle",
+            summary: "list live pods + the M5 registry table (id·provider·project·purpose·status·dph·age); --json/--raw emit the registry as a JSON array (alias: status)" })
+    out.push(CloudCmd { name: "ssh-port", group: "lifecycle",
             args: "<id> [--provider P]",
-            summary: "print live ssh host:port of a pod (vast|runpod)" },
-        CloudCmd { name: "alive", group: "lifecycle",
+            summary: "print live ssh host:port of a pod (vast|runpod)" })
+    out.push(CloudCmd { name: "alive", group: "lifecycle",
             args: "<id...> [--provider P] [--json]",
-            summary: "PROVIDER-API liveness (NOT ssh): RUNNING|STOPPED|GONE|UNKNOWN|MISSING-CRED — disambiguates unreachable-vs-dead; exit 0/3/4/255 (alias: probe)" },
-        CloudCmd { name: "resolve", group: "lifecycle",
+            summary: "PROVIDER-API liveness (NOT ssh): RUNNING|STOPPED|GONE|UNKNOWN|MISSING-CRED — disambiguates unreachable-vs-dead; exit 0/3/4/255 (alias: probe)" })
+    out.push(CloudCmd { name: "resolve", group: "lifecycle",
             args: "<id> [--provider P]",
-            summary: "alias of ssh-port — pod-id -> ssh host:port for run/copy-to" },
-
-        // ── manage ─────────────────────────────────────────────────────
-        CloudCmd { name: "adopt", group: "manage",
+            summary: "alias of ssh-port — pod-id -> ssh host:port for run/copy-to" })
+    out.push(CloudCmd { name: "adopt", group: "manage",
             args: "<pod_id> [--purpose TEXT] [--project NAME]",
-            summary: "track an untracked (ORPHAN) pod (stamps project/purpose for the down-guard)" },
-        CloudCmd { name: "attribute", group: "manage",
+            summary: "track an untracked (ORPHAN) pod (stamps project/purpose for the down-guard)" })
+    out.push(CloudCmd { name: "attribute", group: "manage",
             args: "<pod_id> --project NAME [--purpose TEXT]",
-            summary: "re-stamp project/purpose on an ALREADY-tracked pod" },
-        CloudCmd { name: "forget", group: "manage",
+            summary: "re-stamp project/purpose on an ALREADY-tracked pod" })
+    out.push(CloudCmd { name: "forget", group: "manage",
             args: "<pod_id|ssh-form|ip|alias>",
-            summary: "(legacy — use rm) mark a tracked (GHOST) pod status=closed" },
-        CloudCmd { name: "reap", group: "manage",
+            summary: "(legacy — use rm) mark a tracked (GHOST) pod status=closed" })
+    out.push(CloudCmd { name: "reap", group: "manage",
             args: "[--provider P] [--apply]",
-            summary: "orphans alive on provider but absent from registry; bare=dry-run, --apply=destroy" },
-        CloudCmd { name: "idle-reap", group: "manage",
+            summary: "orphans alive on provider but absent from registry; bare=dry-run, --apply=destroy" })
+    out.push(CloudCmd { name: "idle-reap", group: "manage",
             args: "[--provider P] [--reap]",
-            summary: "billing pods with no active (PENDING) job in ./pods.json; report-only, --reap=destroy" },
-        CloudCmd { name: "orphans", group: "manage",
+            summary: "billing pods with no active (PENDING) job in ./pods.json; report-only, --reap=destroy" })
+    out.push(CloudCmd { name: "orphans", group: "manage",
             args: "[--hours N]",
-            summary: "list tracked pods, flag stale (>N h, default 6)" },
-        CloudCmd { name: "reconcile", group: "manage",
+            summary: "list tracked pods, flag stale (>N h, default 6)" })
+    out.push(CloudCmd { name: "reconcile", group: "manage",
             args: "",
-            summary: "cross-ref registry vs provider: ORPHAN/GHOST/OK" },
-        CloudCmd { name: "watchdog", group: "manage",
+            summary: "cross-ref registry vs provider: ORPHAN/GHOST/OK" })
+    out.push(CloudCmd { name: "watchdog", group: "manage",
             args: "[--threshold-min N] [--util-cap-pct N] [--kill]",
-            summary: "idle-pod autokill sweep (DRY-RUN default; --kill enforces)" },
-        CloudCmd { name: "preflight", group: "manage",
+            summary: "idle-pod autokill sweep (DRY-RUN default; --kill enforces)" })
+    out.push(CloudCmd { name: "preflight", group: "manage",
             args: "--params N [--gpu KEY] [opts...]  |  --kind dft-phonon --atoms N --nq M [opts...]",
-            summary: "closed-form GPU mem-budget / DFPT walltime check (no pod/ssh)" },
-        CloudCmd { name: "api", group: "manage",
+            summary: "closed-form GPU mem-budget / DFPT walltime check (no pod/ssh)" })
+    out.push(CloudCmd { name: "api", group: "manage",
             args: "<vast|runpod> <GET|POST|PUT|DELETE> <endpoint> [--data JSON] [--json] [--allow-mutate]",
-            summary: "UNIVERSAL authenticated REST passthrough — makes hexa cloud a full substitute for the provider API; GET/search free, a registry-MUTATING call is REFUSED→use rent/rm (or --allow-mutate + auto-reconcile); non-2xx surfaced verbatim" },
-        CloudCmd { name: "provider-cli", group: "manage",
+            summary: "UNIVERSAL authenticated REST passthrough — makes hexa cloud a full substitute for the provider API; GET/search free, a registry-MUTATING call is REFUSED→use rent/rm (or --allow-mutate + auto-reconcile); non-2xx surfaced verbatim" })
+    out.push(CloudCmd { name: "provider-cli", group: "manage",
             args: "<vast|runpod> [--allow-mutate] -- <args...>",
-            summary: "proxy the provider's OWN cli (vastai|runpodctl) with creds injected, behind the guard — keeps CLI-only conveniences reachable without raw vastai; MISSING-CLI honest; a registry-MUTATING subcommand is REFUSED→use rent/rm (or --allow-mutate + auto-reconcile)" },
-
-        // ── exec ───────────────────────────────────────────────────────
-        CloudCmd { name: "run", group: "exec",
+            summary: "proxy the provider's OWN cli (vastai|runpodctl) with creds injected, behind the guard — keeps CLI-only conveniences reachable without raw vastai; MISSING-CLI honest; a registry-MUTATING subcommand is REFUSED→use rent/rm (or --allow-mutate + auto-reconcile)" })
+    out.push(CloudCmd { name: "run", group: "exec",
             args: "<host> [conn] [--max-wall S] [--env K=V] [--source P] -- <argv...>",
-            summary: "run argv, wait, exit with its code (structured argv — POSIX-quoted)" },
-        CloudCmd { name: "exec", group: "exec",
+            summary: "run argv, wait, exit with its code (structured argv — POSIX-quoted)" })
+    out.push(CloudCmd { name: "exec", group: "exec",
             args: "<host> [conn] -- <shell-cmd>",
-            summary: "run shell command via ssh (DEFAULT SHELL PARSES IT)" },
-        CloudCmd { name: "nohup", group: "exec",
+            summary: "run shell command via ssh (DEFAULT SHELL PARSES IT)" })
+    out.push(CloudCmd { name: "nohup", group: "exec",
             args: "<host> <logfile> [conn] [--env K=V] [--source P] [--early-life-check N] [--register [<jid>]] -- <argv...>",
-            summary: "background argv, print remote pid + Monitor handle" },
-        CloudCmd { name: "fire", group: "exec",
+            summary: "background argv, print remote pid + Monitor handle" })
+    out.push(CloudCmd { name: "fire", group: "exec",
             args: "<host> [--log <path>] [conn] [--env K=V] [--source P] [--early-life-check N] [--register [<jid>]] -- <argv...>",
-            summary: "atomic nohup + auto-log + Monitor handle (logfile optional)" },
-        CloudCmd { name: "poll", group: "exec",
+            summary: "atomic nohup + auto-log + Monitor handle (logfile optional)" })
+    out.push(CloudCmd { name: "fire-shards", group: "exec",
+            args: "<host>",
+            summary: "x" })
+    out.push(CloudCmd { name: "poll", group: "exec",
             args: "<host> <pid> [conn]",
-            summary: "exit 0 if remote pid alive, else 1 (DEAD flips a matching PENDING ./pods.json row -> FAIL)" },
-        CloudCmd { name: "tail", group: "exec",
+            summary: "exit 0 if remote pid alive, else 1 (DEAD flips a matching PENDING ./pods.json row -> FAIL)" })
+    out.push(CloudCmd { name: "tail", group: "exec",
             args: "<host> <logfile> [conn] [--grep RE] [--until RE]",
-            summary: "live-stream a remote log (Monitor bridge; 3-tier failure-first verdict)" },
-        CloudCmd { name: "watch", group: "exec",
+            summary: "live-stream a remote log (Monitor bridge; 3-tier failure-first verdict)" })
+    out.push(CloudCmd { name: "watch", group: "exec",
             args: "<host> <pid> [conn] [--interval N] [--max-wait S] [--then-down <id> [--provider P]]",
-            summary: "loop poll until pid dies / max-wait; optional teardown" },
-
-        // ── io ─────────────────────────────────────────────────────────
-        CloudCmd { name: "copy-to", group: "io",
+            summary: "loop poll until pid dies / max-wait; optional teardown" })
+    out.push(CloudCmd { name: "copy-to", group: "io",
             args: "<host> <local> <remote> [conn] [-r] [--verify-sha]",
-            summary: "upload file/dir (scp; -r=tree; sha256 check)" },
-        CloudCmd { name: "copy-from", group: "io",
+            summary: "upload file/dir (scp; -r=tree; sha256 check)" })
+    out.push(CloudCmd { name: "copy-from", group: "io",
             args: "<host> <remote> <local> [conn] [--resume] [--verify-sha]",
-            summary: "download (scp; --resume=rsync; sha256 check)" },
-
-        // ── plan ───────────────────────────────────────────────────────
-        CloudCmd { name: "dft-run", group: "plan",
+            summary: "download (scp; --resume=rsync; sha256 check)" })
+    out.push(CloudCmd { name: "dft-run", group: "plan",
             args: "<deck-dir> [--go] [--bin-pack] [--query Q] [--walltime-h N] [--identity P] [--image I] [--disk G] [--owner T]",
-            summary: "guarded DFT el-ph (QE) dispatch; PREVIEW ($0) unless --go" },
-        CloudCmd { name: "dft-fanout", group: "plan",
+            summary: "guarded DFT el-ph (QE) dispatch; PREVIEW ($0) unless --go" })
+    out.push(CloudCmd { name: "dft-fanout", group: "plan",
             args: "<deck-dir>... [--go] [--force] [--query Q] [--walltime-h N] [...]",
-            summary: "§4b SEPARATE-PODS: N candidates -> N pods, 1 deck/pod; PREVIEW $0 unless --go" },
-        CloudCmd { name: "parallel-audit", group: "plan",
+            summary: "§4b SEPARATE-PODS: N candidates -> N pods, 1 deck/pod; PREVIEW $0 unless --go" })
+    out.push(CloudCmd { name: "parallel-audit", group: "plan",
             args: "--physcores N --live-jobs N --ranks-per-job N --queued-decks N",
-            summary: "d_parallel_fire violation guard (VIOLATION -> exit1 + split suggestion)" },
-        CloudCmd { name: "pods", group: "plan",
+            summary: "d_parallel_fire violation guard (VIOLATION -> exit1 + split suggestion)" })
+    out.push(CloudCmd { name: "pods", group: "plan",
             args: "[--all] [--no-reconcile]",
-            summary: "live work table: PROVIDER-API liveness (runpod myself.pods + vast) joined onto cwd's ./pods.json; GONE phantoms hidden unless --all" },
-        CloudCmd { name: "dispatch", group: "plan",
+            summary: "live work table: PROVIDER-API liveness (runpod myself.pods + vast) joined onto cwd's ./pods.json; GONE phantoms hidden unless --all" })
+    out.push(CloudCmd { name: "dispatch", group: "plan",
             args: "[tree|active|add|verdict|rm]",
-            summary: "manage ./pods.json (update-form); bare = full table" },
-        CloudCmd { name: "providers", group: "plan",
+            summary: "manage ./pods.json (update-form); bare = full table" })
+    out.push(CloudCmd { name: "providers", group: "plan",
             args: "",
-            summary: "list known GPU providers (vast|runpod) + catalog" },
-
-        // ── meta ───────────────────────────────────────────────────────
-        CloudCmd { name: "help", group: "meta",
+            summary: "list known GPU providers (vast|runpod) + catalog" })
+    out.push(CloudCmd { name: "help", group: "meta",
             args: "",
-            summary: "show this help (aliases: --help, -h; bare `cloud` also prints it)" },
-        CloudCmd { name: "version", group: "meta",
+            summary: "show this help (aliases: --help, -h; bare `cloud` also prints it)" })
+    out.push(CloudCmd { name: "version", group: "meta",
             args: "",
-            summary: "print the cloud CLI version (alias: --version, -v)" }
-    ]
+            summary: "print the cloud CLI version (alias: --version, -v)" })
+    return out
 }
+
 
 // cloud_command_names — the canonical verb set (render/iteration order). Used
 // by the help renderer and the drift test's COMMANDS side.

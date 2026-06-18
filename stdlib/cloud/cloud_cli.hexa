@@ -14,6 +14,7 @@ use "stdlib/cloud/watchdog"
 use "stdlib/cloud/vast"
 use "stdlib/cloud/runpod"
 use "stdlib/cloud/dft_dispatch"
+use "stdlib/cloud/fire_shards"
 use "stdlib/cloud/pods_local"
 use "stdlib/cloud/parallel_audit"
 use "stdlib/cloud/providers_catalog"
@@ -2548,7 +2549,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "reboot" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "alive" || t == "probe" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "idle-reap" || t == "adopt" || t == "attribute" || t == "forget" || t == "api" || t == "provider-cli" || t == "dft-run" || t == "dft-fanout" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "reboot" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "fire-shards" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "alive" || t == "probe" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "idle-reap" || t == "adopt" || t == "attribute" || t == "forget" || t == "api" || t == "provider-cli" || t == "dft-run" || t == "dft-fanout" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -3051,6 +3052,138 @@ fn main() {
             exit(rc)
         }
         exit(1)
+    }
+    if sub == "fire-shards" {
+        // GENERIC sharded-batch dispatch (root-fix for the hand-rolled
+        // /tmp/<x>_launch.sh anti-pattern): split a job list into N line-
+        // balanced shards on the pod, then stagger-fire each shard detached via
+        // the SAME setsid-nohup mechanism cloud fire/nohup use. ONE copy-to + a
+        // REMOTE `split -n l/<N>` (no N local copy-to's), ONE consolidated
+        // Monitor handle + ONE optional ./pods.json registration. See
+        // stdlib/cloud/fire_shards.hexa for the pure builders + the placeholder
+        // convention ({shard}/{i}/{out}/{log}).
+        if si + 1 >= len(av) {
+            println("[cloud] fire-shards: usage — cloud fire-shards <host> --jobs <file> --shards <N> --cmd '<tmpl>' [--stagger S] [--remote-dir D] [--prefix P] [conn] [--env K=V] [--source P] [--register [<jid>]] [--dry-run]")
+            println("           {shard}=remote shard path · {i}=zero-padded index · {out}=<shard>.out · {log}=<shard>.log; --cmd MUST contain {shard}.")
+            exit(2)
+        }
+        let _id = _checked_host(av[si + 1])
+        let _rh = _resolve_cloud_host(_id)
+        _guard_resolved_or_die("fire-shards", _id, _rh)
+        let host = _rh.host
+        if _rh.resolved == 1 {
+            println("[cloud] fire-shards: resolved pod-id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
+        }
+        let ssh_opts = _apply_resolved_port(_ssh_opts_cli(av, si + 2), _rh)
+        let job_file = _flag_val(av, si + 2, "--jobs", "")
+        let shards = _cli_atoi(_flag_val(av, si + 2, "--shards", "0"))
+        let tmpl = _flag_val(av, si + 2, "--cmd", "")
+        let stagger = _cli_atoi(_flag_val(av, si + 2, "--stagger", "0"))
+        let remote_dir = _flag_val(av, si + 2, "--remote-dir", "/tmp/fire-shards-" + str(timestamp()))
+        let prefix = _flag_val(av, si + 2, "--prefix", "shard_")
+        let dry_run = _has_flag(av, si + 2, "--dry-run")
+        let reg_token = _register_cli(av, si + 2)
+        // env / source compose into the per-shard `pre` exactly as cloud fire's
+        // --env (env K=V prefix) / --source (. <f> &&) do, so a shard runs in the
+        // same toolchain context (conda/PATH) a single fire would.
+        let env_kvs = _env_args_cli(av, si + 2)
+        let src_files = _source_args_cli(av, si + 2)
+        // validation — root-cause loud, never a silent half-launch.
+        if len(job_file) == 0 || shards <= 0 || len(tmpl) == 0 {
+            println("[cloud] fire-shards: need --jobs <file> --shards <N> --cmd '<tmpl>' (got jobs='" + job_file + "' shards=" + str(shards) + " cmd='" + tmpl + "')")
+            exit(2)
+        }
+        if tmpl.index_of("{shard}") < 0 {
+            println("[cloud] fire-shards: --cmd template has no {shard} placeholder — a shard launcher that ignores its shard is a bug. Add {shard} (and optionally {out}/{log}/{i}).")
+            exit(2)
+        }
+        let job_remote = remote_dir + "/" + _basename(job_file)
+        // assemble the per-shard `pre` (env K=V … and . <src> && …), reused by
+        // both the plan text and the live launcher so preview == reality.
+        let mut pre = ""
+        let mut ei = 0
+        while ei < len(src_files) {
+            pre = pre + ". " + _shq_src(src_files[ei]) + " && "
+            ei = ei + 1
+        }
+        if len(env_kvs) > 0 {
+            pre = pre + "env"
+            let mut vi = 0
+            while vi < len(env_kvs) {
+                pre = pre + " " + _shq_src(env_kvs[vi])
+                vi = vi + 1
+            }
+            pre = pre + " "
+        }
+        // PLAN (always print) — the exact split + per-shard commands.
+        print(_fs_plan_text(host, job_file, job_remote, remote_dir, prefix, tmpl, pre, shards, stagger))
+        if dry_run == 1 {
+            exit(0)
+        }
+        if !file_exists(job_file) {
+            println("[cloud] fire-shards: local --jobs file not found: " + job_file)
+            exit(2)
+        }
+        // ① upload the job file (ONE copy-to), creating the remote dir first.
+        let _mk = cloud_exec_opts(host, ssh_opts, "mkdir -p " + _shq_src(remote_dir))
+        if _mk.ok == 0 {
+            println("[cloud] fire-shards: remote mkdir failed — " + _mk.message)
+            exit(1)
+        }
+        let up = _copy_to_run(host, ssh_opts, job_file, job_remote, 0)
+        if up.ok == 0 {
+            println("[cloud] fire-shards: upload failed — " + up.message)
+            exit(1)
+        }
+        println("[cloud] fire-shards: uploaded " + job_file + " -> " + host + ":" + job_remote)
+        // ② remote line-balanced split into N shard files.
+        let sp = cloud_exec_opts(host, ssh_opts, _fs_remote_split(job_remote, remote_dir, prefix, shards))
+        if sp.ok == 0 {
+            println("[cloud] fire-shards: remote split failed — " + sp.message)
+            exit(1)
+        }
+        let made = _parse_uint_after(sp.stdout_, "__FS_SHARDS__=")
+        if made != shards {
+            println("[cloud] fire-shards: split produced " + str(made) + " shard file(s), expected " + str(shards)
+                + " — the job file likely has fewer lines than shards. Reduce --shards.")
+            exit(1)
+        }
+        println("[cloud] fire-shards: split into " + str(made) + " shard(s) under " + host + ":" + remote_dir + "/" + prefix + "NN")
+        // ③ stagger-fire every shard detached (the launcher returns at once —
+        // each shard is backgrounded with setsid, so the ssh call does not block).
+        let launcher = _fs_remote_launcher(tmpl, pre, remote_dir, prefix, shards, stagger)
+        let fr = cloud_exec_opts(host, ssh_opts, launcher)
+        if fr.ok == 0 {
+            println("[cloud] fire-shards: launcher failed — " + fr.message)
+            exit(1)
+        }
+        let launched = _parse_uint_after(fr.stdout_, "__FS_LAUNCHED__=")
+        println("[cloud] fire-shards: launched " + str(launched) + " shard(s) (stagger " + str(stagger) + "s) — pids in launcher output above; per-shard logs at " + remote_dir + "/" + prefix + "NN.log")
+        // ④ ONE consolidated Monitor handle covering the whole batch. There is no
+        // single batch pid (N detached shards), so the handle's pid is 0 and
+        // `log`/`tail_cmd` point at the shard log DIRECTORY glob — a harness tails
+        // every shard log at once. shards/dir carried so a driver can fan poll.
+        if fr.ok == 1 {
+            let glob = remote_dir + "/" + prefix + "*.log"
+            println("__MONITOR_HANDLE__={"
+                + "\"host\":" + _mh_json_str(host)
+                + ",\"pid\":0"
+                + ",\"shards\":" + str(launched)
+                + ",\"dir\":" + _mh_json_str(remote_dir)
+                + ",\"log\":" + _mh_json_str(glob)
+                + ",\"tail_cmd\":" + _mh_json_str("hexa cloud exec " + host + " -- tail -n +1 -f " + glob)
+                + "}")
+            // ⑤ ONE ./pods.json row for the whole batch (not N untracked
+            // launches) — same _auto_register gateway nohup/fire use. pid 0 is a
+            // batch sentinel (no single tracked pid); the dir/shards live in the
+            // Monitor handle above for a driver to fan out polls.
+            if len(reg_token) > 0 {
+                let _ = _auto_register(reg_token, host, 0)
+            } else {
+                println("[cloud] 📋 ledger: hexa cloud dispatch add <jid> 0 \"$(pwd)\" --host " + host + "  # batch row (--register to automate)")
+            }
+        }
+        exit(0)
     }
     if sub == "poll" {
         if si + 2 >= len(av) {
