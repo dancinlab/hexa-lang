@@ -1,0 +1,119 @@
+F-M7-ROUTEB-GLOBAL-TAG-SECTION — the measure-6 single residual wall (RC=139
+                                 SIGSEGV in __env_extend) is CLEARED. Root cause
+                                 was TWO x86_64-vs-arm64 asymmetries: (1) module-
+                                 global TAG never persisted to [rip+g<id>+8], and
+                                 (2) the regen main-strip awk SWALLOWED the
+                                 '.section .data' directive, so the g<id> slots
+                                 inherited .text (read-only) → a write to
+                                 [rip+g<id>] SIGSEGV'd. Both fixed; hexat built
+                                 with the native arena now transpiles the whole
+                                 compiler RC=0. (2026-06-18, aiden x86_64 RAN)
+================================================================================
+LANE: RT-NATIVE-ZEROC Route B, measure-7 / routeb-r4 (alloc lane, isolated wt).
+GOAL: clear measure-6's single residual wall (the native arena's first reach into
+its own allocator SIGSEGVs in __env_extend ← hexa_arena_new_block ← hexa_arena_
+alloc ← hexa_str_concat, RC=139), so the arena C `#else` can drop.
+
+================================================================================
+1. ROOT CAUSE (c2 — gdb + objdump on aiden, decisive, NOT a guess)
+================================================================================
+measure-6 framed the wall as "x86_64 global-tag persistence codegen 결함 — g+8
+write 시드에 0개". That was HALF the story. RUNNING the genuine repro (a hexat
+built with HEXA_RT_ALLOC_NATIVE=1, the heaviest real hexa program) under gdb
+isolated TWO distinct asymmetries vs arm64:
+
+(1) MODULE-GLOBAL TAG NEVER PERSISTED (the named wall, real):
+    x86_64 global WRITE stored only the payload to word0 ([rip+g<id>]); the tag
+    went to a per-FUNCTION frame tag-slot. x86_64 global READ recovered the tag
+    from the READING function's OWN frame tag-slot. So a global written in fn A
+    and read in fn B → B's frame tag-slot was never populated → tag = TAG_INT(0).
+    arm64 has NO such gap: ldp/stp move BOTH 16-byte words of the `g<id>` .data
+    slot (the slot IS the cross-function SSOT).
+
+(2) THE g<id> SLOTS LANDED IN .text (read-only) — THE ACTUAL RC=139 (the deeper
+    wall measure-6 could not see because it never RAN the heavy repro):
+    gdb faulting instruction (the genuine RC=139):
+        => mov %r13, 0x...(%rip)   # <g2>     ← global PAYLOAD write, SIGSEGV
+    objdump -t on the assembled seed:
+        g0..g3   l   .text   ← READ-ONLY section
+    __env_extend's `__arena_env_lo = base` (a write to [rip+g2]) hit a read-only
+    .text page → SIGSEGV. Mechanism: the x86_64 emit places `main:` BEFORE the
+    `.section .data` + `g<id>: .quad 0 .quad 0` slots. The regen script's
+    main-strip awk set `inmain=1` at `main:` and skipped lines until a `symbol:`
+    or `.globl` — but `.section .data` is NEITHER, so the directive was SWALLOWED;
+    `g0:` (a symbol:) survived but inherited the prior `.text` section. arm64
+    Mach-O is unaffected (its global pool emits into __DATA,__data separately).
+    (Compounding: aiden's awk is mawk 1.3.4, which does NOT support `\b` — the
+    first section-stop patch used `\b` and silently never matched.)
+
+================================================================================
+2. THE FIX (c1, three commits — ADD-only codegen + regen-script + regen seed)
+================================================================================
+  · compiler/codegen/x86_64_linux.hexa (ADD-only, byteeq-inert):
+    - _x86_emit_dst_writeback global path (arena_id==-999) now ALSO persists the
+      tag to [rip+g<id>+8] (reload from the dst's frame tag-slot, default
+      TAG_INT) — mirrors arm64's stp lo,hi,[g<id>].
+    - _x86_tag_resolve global case now reads the tag from [rip+g<id>+8] (the
+      cross-function SSOT) instead of the per-function frame tag-slot.
+  · tool/regen_alloc_syscall_native_s.sh: the main-body skip also terminates on a
+    section directive — mawk-safe pattern `\.(section|data|text|bss|rodata)([[:space:]]|$)`
+    (NOT `\b`) — so `.section .data` survives → g<id> slots land WRITABLE.
+  · self/native/alloc_syscall_x86_64.s: regenerated (frozen seed). New seed:
+    32 `[rip+g<id>+8]` tag writes (was 0), g0..g3 under `.section .data`, inline
+    .LCstr0 (python re-apply now self-skips, no dup).
+
+================================================================================
+3. DECISIVE RESULT (c2 — aiden x86_64 RAN, the genuine whole-runtime measure)
+================================================================================
+  · regen seed: g0..g3 in .data (objdump -t), 32 g+8 tag writes, assembles clean.
+  · build/alloc_syscall_native.o: g0..g3 .data, `mov %r11,..(%rip) # <g2+0x8>` present.
+  · CLEAN-isolation whole-runtime ON build (rm stale build/hexat + runtime.a +
+    seed obj, force-regen — measure-5's stale-build trap avoided):
+      HEXA_RT_ALLOC_NATIVE=1 → runtime.a links the patched native arena seed.
+  · hexat (built ON, the heaviest real hexa program) transpiles:
+      compiler/main.hexa             → RC=0 (2448 L of C)   ★ was RC=139 ★
+      lexer/parser/types/hir_to_mir/x86_64_linux/asm/catalog → 7/7 OK
+      lexer.hexa repeatability        → 8/8 OK (no flake)
+    The measure-6 RC=139 (__env_extend SIGSEGV) is GONE.
+  · OFF (C arena) differential baseline: 7/7 OK (byteeq-inert confirmed).
+  · determinism: alloc-flat (exercises the global write+tag paths) emitted twice
+    = byte-identical (30968B) — the codegen change is deterministic.
+
+================================================================================
+4. HONEST RESIDUAL (c9)
+================================================================================
+  · The full gen3≡gen4 whole-compiler fixpoint is gated by PR CI (selfhost-
+    byteeq-real) — the authoritative gate for this shipping codegen change. The
+    on-aiden whole-compiler 2-emit determinism check was NOT completed locally:
+    duplicate aprime processes contended on shared /tmp output + the pool wrapper
+    flaked on nonzero-exit pkills; substituted the alloc-flat determinism oracle
+    (byte-identical) which exercises the exact modified paths. CI is the gate.
+  · `ls self/*.c` (tracked) is UNCHANGED — the tracked `self/*.c` are CUDA/qwen
+    wrappers; the arena C body lives in the runtime_core_emit.hexa emitter (a
+    gitignored generated runtime_core.c). The reducible artifact is the arena C
+    `#ifndef HEXA_RT_ALLOC_NATIVE .. #else` body = 115 emitter lines (runtime_
+    core_emit.hexa:3972-4086), now PROVABLY replaceable by the native seed.
+  · The `#else` DROP itself (the genuine substrate-byte reduction) is measure-8,
+    NOT this round: it requires the byteeq CI to pass first, then excise the 115L
+    C arena body + flip HEXA_RT_ALLOC_NATIVE default-on. measure-7 is the RUN-
+    PROOF that the native arena is correct end-to-end (the prerequisite the whole
+    Route B alloc lane was driving toward), the alloc-lane twin of array-r6.
+
+================================================================================
+5. CLASSIFICATION (c16) + NEXT
+================================================================================
+WALL CLEARED. measure-6's single residual (RC=139 __env_extend SIGSEGV) is
+resolved by (1) the x86_64 module-global tag-persist codegen mirror + (2) the
+regen `.section .data` survival fix. The native linked-block arena (self/rt/
+alloc.hexa) now runs the whole compiler C-free end-to-end on x86_64.
+
+  NEXT (measure-8): after CI green, DROP the arena C `#else` (115L) + flip
+  HEXA_RT_ALLOC_NATIVE default-on = the FIRST genuine alloc-substrate byte
+  reduction (the alloc twin of the array-lane #else drop). Then r3 = map_set/
+  keys + io/fmt/proc/fs/intern/math module ports.
+
+CONCLUSION: the measure-6 wall was a compound x86_64-vs-arm64 asymmetry — module-
+global tag non-persistence AND the regen awk swallowing `.section .data` (g<id>
+slots → read-only .text → write SIGSEGV). Both fixed ADD-only; the native arena
+now runs the whole compiler RC=0. The arena `#else` drop (ls reduction) is the
+now-unblocked measure-8 brick.
