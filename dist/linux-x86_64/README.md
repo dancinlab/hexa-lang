@@ -13,21 +13,41 @@ Static musl link — no glibc dependency, runs on Linux kernels ≥ 2.6.32.
 
 ## Rebuild recipe
 
-Requires zig on host (macOS or Linux ARM64/x86_64):
+> **CORRECTION (ING #2, 2026-06-19):** the old recipe compiled ONLY
+> `self/native/hexa_cc.c`, which `#include "runtime.h"` (prototypes only) — it
+> linked with `undefined reference to hexa_str` (the runtime *definitions* live in
+> `self/runtime.c`). The runtime SOURCE must be in the link line. Also the frozen
+> `self/runtime.c` seed must first be made musl-portable: run
+> `bash tool/restore_frozen_seeds` (its ING #2 patch hoists the POSIX system
+> headers above the libc-override macro block + guards `<linux/sched.h>`), which
+> is what produces the seed on a `.c=0` checkout anyway.
 
 ```
-zig cc -target x86_64-linux-musl -O2 -std=gnu11 -D_GNU_SOURCE \
-       -Wno-trigraphs -I self \
-       self/native/hexa_cc.c \
-       -o dist/linux-x86_64/hexa_v2 -lm
-```
+# 0. restore + musl-patch the frozen runtime seed (no-op if already present)
+bash tool/restore_frozen_seeds
 
-Alternative (host must be x86_64 Linux or have x86_64-linux-musl-gcc):
-
-```
+# 1. static-musl link — runtime.c (definitions) + hexa_cc.c (transpiler + main)
 x86_64-linux-musl-gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-       -I self self/native/hexa_cc.c \
+       -I self \
+       self/runtime.c self/native/hexa_cc.c \
        -o dist/linux-x86_64/hexa_v2 -static -lm
+```
+
+Verify: `ldd dist/linux-x86_64/hexa_v2` → "not a dynamic executable".
+
+`zig cc -target x86_64-linux-musl …` works as a drop-in for the compiler if a
+musl cross-gcc is unavailable (add `self/runtime.c` to its link line too).
+
+For the FULL `./hexa` self-host driver (not just the stage0 transpiler), the
+release pipeline builds it static-musl via:
+
+```
+unset HEXA_PREBUILT_RUNTIME    # link runtime from SOURCE, not the glibc runtime.a
+TARGET=linux-x86_64-musl CC=x86_64-linux-musl-gcc LIBS="-static -lm" \
+  bash tool/release_build && \
+TARGET=linux-x86_64-musl CC=x86_64-linux-musl-gcc LIBS="-static -lm" \
+  bash tool/release_package
+# → hexa-linux-x86_64-musl.tar.gz  (statically-linked ./hexa + build/ + precompile/)
 ```
 
 ## Usage on Linux pod
