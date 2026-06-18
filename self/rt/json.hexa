@@ -14,8 +14,8 @@
 // from index 0 and discards the trailing cursor.
 //
 // Supports: null / true / false / numbers (int or float via '.' / 'e')
-//           / strings (with \n \t \" \\ \/ \b \f \r escapes; \uXXXX passes
-//           through literally for round-trip safety) / arrays / objects.
+//           / strings (with \n \t \" \\ \/ \b \f \r escapes; \uXXXX decoded
+//           to UTF-8, incl. UTF-16 surrogate pairs) / arrays / objects.
 // Parse errors return `void` — the host treats void as "no value".
 //
 // Stringifier
@@ -40,6 +40,48 @@ use self::rt::string
 
 @pure fn _jp_is_digit(c: int) -> bool {
     return c >= 48 && c <= 57
+}
+
+// Hex-digit value (0-15) of a byte, or -1 if not a hex digit.
+@pure fn _jp_hex_val(c: int) -> int {
+    if c >= 48 && c <= 57  { return c - 48 }       // '0'-'9'
+    if c >= 65 && c <= 70  { return c - 65 + 10 }  // 'A'-'F'
+    if c >= 97 && c <= 102 { return c - 97 + 10 }  // 'a'-'f'
+    return -1
+}
+
+// Parse exactly 4 hex digits at s[p..p+4) into a 16-bit value, or -1 if
+// any of the 4 bytes is not a hex digit / out of range.
+@pure fn _jp_hex4(s: string, p: int) -> int {
+    let n = len(s)
+    if p + 4 > n { return -1 }
+    let h0 = _jp_hex_val(char_code(s, p))
+    let h1 = _jp_hex_val(char_code(s, p + 1))
+    let h2 = _jp_hex_val(char_code(s, p + 2))
+    let h3 = _jp_hex_val(char_code(s, p + 3))
+    if h0 < 0 || h1 < 0 || h2 < 0 || h3 < 0 { return -1 }
+    return (h0 * 4096) + (h1 * 256) + (h2 * 16) + h3
+}
+
+// Encode a Unicode code point as UTF-8 bytes, pushing each onto `codes`.
+// Matches rt_from_char_code's branch ladder (RFC 3629). Code points are
+// already masked to valid ranges by the caller.
+fn _jp_push_utf8(codes, cp: int) {
+    if cp < 128 {                            // 1-byte ASCII
+        codes.push(cp)
+    } else if cp < 2048 {                    // 2-byte
+        codes.push(192 + (cp / 64))
+        codes.push(128 + (cp % 64))
+    } else if cp < 65536 {                   // 3-byte
+        codes.push(224 + (cp / 4096))
+        codes.push(128 + ((cp / 64) % 64))
+        codes.push(128 + (cp % 64))
+    } else {                                 // 4-byte
+        codes.push(240 + (cp / 262144))
+        codes.push(128 + ((cp / 4096) % 64))
+        codes.push(128 + ((cp / 64) % 64))
+        codes.push(128 + (cp % 64))
+    }
 }
 
 fn _jp_skip_ws(s: string, i: int) -> int {
@@ -73,20 +115,43 @@ fn _jp_parse_string(s: string, i: int) {
             if e == 98      { codes.push(8);  p = p + 2; continue }   // \b
             if e == 102     { codes.push(12); p = p + 2; continue }   // \f
             if e == 117 {
-                // \uXXXX — pass through all 6 bytes literally (matches
-                // runtime.c L5709-5720; full unicode decode is left for
-                // a later pass).
-                if p + 5 < n {
-                    let mut k = 0
-                    while k < 6 {
-                        codes.push(char_code(s, p + k))
-                        k = k + 1
+                // \uXXXX — decode the 4 hex digits to a code point and
+                // emit its UTF-8 bytes. UTF-16 surrogate pairs
+                // (\uD800-\uDBFF followed by \uDC00-\uDFFF) recombine to a
+                // single astral code point. Matches standard JSON unicode
+                // escape semantics (RFC 8259 §7).
+                let cp = _jp_hex4(s, p + 2)
+                if cp < 0 {
+                    // Malformed escape — emit the literal 'u' and advance
+                    // past the backslash+u, leaving the rest to be scanned.
+                    codes.push(117)
+                    p = p + 2
+                    continue
+                }
+                if cp >= 55296 && cp <= 56319 {     // high surrogate D800-DBFF
+                    // Expect a following \uXXXX low surrogate.
+                    if p + 11 < n && char_code(s, p + 6) == 92
+                                  && char_code(s, p + 7) == 117 {
+                        let lo = _jp_hex4(s, p + 8)
+                        if lo >= 56320 && lo <= 57343 {  // low DC00-DFFF
+                            let astral = 65536 + ((cp - 55296) * 1024) + (lo - 56320)
+                            _jp_push_utf8(codes, astral)
+                            p = p + 12
+                            continue
+                        }
                     }
+                    // Lone high surrogate — emit U+FFFD replacement.
+                    _jp_push_utf8(codes, 65533)
                     p = p + 6
                     continue
                 }
-                codes.push(117)
-                p = p + 2
+                if cp >= 56320 && cp <= 57343 {     // lone low surrogate
+                    _jp_push_utf8(codes, 65533)
+                    p = p + 6
+                    continue
+                }
+                _jp_push_utf8(codes, cp)
+                p = p + 6
                 continue
             }
             // Unknown escape — emit the literal escape char.

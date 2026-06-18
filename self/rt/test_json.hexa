@@ -42,6 +42,14 @@ check("stringify:string",      rt_json_stringify("hello", false) == "\"hello\"")
 let v5 = rt_json_parse("\"a\\nb\"")
 check("parse:escape-newline",  v5 == "a\nb")
 
+// \uXXXX unicode escapes → UTF-8.
+let u1 = rt_json_parse("\"\\u0041\"")
+check("parse:u-ascii",         u1 == "A")
+let u2 = rt_json_parse("\"\\ud55c\"")    // 한 U+D55C
+check("parse:u-cjk",           u2 == "한")
+let u3 = rt_json_parse("\"\\ud83d\\ude00\"")  // 😀 U+1F600 surrogate pair
+check("parse:u-surrogate",     u3 == "😀")
+
 // ── bool ────────────────────────────────────────────────────────────
 let v6 = rt_json_parse("true")
 check("parse:bool-true",       v6 == true)

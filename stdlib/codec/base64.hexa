@@ -8,10 +8,19 @@
 // subset: base64 of the {UTF-8, hex, base64} trio).
 //
 // Surface:
-//   pub fn base64_encode(bytes: [int]) -> string
-//   pub fn base64_decode(s: string) -> [int]
-//   pub fn base64_encode_str(s: string) -> string   (convenience: utf-8 bytes → b64)
-//   pub fn base64_decode_str(s: string) -> string   (convenience: b64 → bytes-as-string)
+//   pub fn codec_base64_encode(bytes: [int]) -> string
+//   pub fn codec_base64_decode(s: string) -> [int]
+//   pub fn codec_base64_encode_str(s: string) -> string   (convenience: utf-8 bytes → b64)
+//   pub fn codec_base64_decode_str(s: string) -> string   (convenience: b64 → bytes-as-string)
+//
+// Symbol-naming note (AOT link safety): these are namespaced
+// `codec_base64_*` — NOT bare `base64_encode`/`base64_decode`. The bare
+// names are both a compiler builtin (a 1-arg call rewrites to the C
+// runtime `hexa_base64_encode(string)` at codegen time) AND global
+// symbols in the linked runtime.o, so a user `pub fn base64_*` had its
+// `[int]`-API call hijacked by the builtin rewrite AND collided at link
+// time (`multiple definition`). Namespacing decouples the stdlib
+// `[int]`-API from the builtin string base64 entirely.
 //
 // Invariants:
 //   • Encoder produces canonical RFC 4648 alphabet (A-Z, a-z, 0-9, +, /, =).
@@ -36,7 +45,7 @@ fn _b64_idx(c: int) -> int {
 }
 
 @pure
-pub fn base64_encode(bytes: [int]) -> string {
+pub fn codec_base64_encode(bytes: [int]) -> string {
     let n = len(bytes)
     if n == 0 { return "" }
     let mut out: [int] = []
@@ -79,7 +88,7 @@ pub fn base64_encode(bytes: [int]) -> string {
 }
 
 @pure
-pub fn base64_decode(s: string) -> [int] {
+pub fn codec_base64_decode(s: string) -> [int] {
     let n = byte_len(s)
     if n == 0 { return [] }
     // Filtered input: skip whitespace.
@@ -140,7 +149,7 @@ pub fn base64_decode(s: string) -> [int] {
 }
 
 @pure
-pub fn base64_encode_str(s: string) -> string {
+pub fn codec_base64_encode_str(s: string) -> string {
     let n = byte_len(s)
     let mut bytes: [int] = []
     let mut i = 0
@@ -148,10 +157,10 @@ pub fn base64_encode_str(s: string) -> string {
         bytes.push(s.byte_at(i))
         i = i + 1
     }
-    return base64_encode(bytes)
+    return codec_base64_encode(bytes)
 }
 
 @pure
-pub fn base64_decode_str(s: string) -> string {
-    return bytes_to_str_raw(base64_decode(s))
+pub fn codec_base64_decode_str(s: string) -> string {
+    return bytes_to_str_raw(codec_base64_decode(s))
 }
