@@ -1,7 +1,0 @@
-@discovery := "HEXA-FUSION ⑤b — device gelu (×3) + groupnorm (×2) glue fusion (sequential stack on ⑤)" :: lane [active]
-  id     = "F-CLM-DEVFEED-GELU-EQ + F-CLM-DEVFEED-GROUPNORM-EQ"
-  seed   = "③ fwd-only 0% util floor — after ⑤ fused the residual-add, the next-highest interpreted host glue in clm_prod_fwd is gelu ×3 (hg0/ex0/ex1) then groupnorm ×2 (h0→hn0, y→yn). gelu = erf-based elementwise (no reduction); groupnorm = per-group REDUCTION (the bit-exactness HARD case)."
-  target = "🟢 numerical — byte-eq max|Δ|=0 oracle for BOTH ops (device == host), all prior F-CLM-DEVFEED-* held at 0.0, env-gated CLM_PROD_DEVRESIDENT default-off byte-identical"
-  result = "F-CLM-DEVFEED-GELU-EQ = 1 (max|Δ|=0.0); F-CLM-DEVFEED-GROUPNORM-EQ = 1 (max|Δ| y=0 xhat=0 mean=0 inv=0); ALL-PASS exit 0. gelu uses the EXACT erf-based _nn_gelu formula (1/√2 literal, x·cdf order); groupnorm device kernel reduces SEQUENTIALLY (t outer, c inner) one-thread-per-group + Newton-Raphson 40-iter sqrt (NO CUDA rsqrt, NO tree re-assoc) → strict 0, no ULP delta needed."
-  verdict = ".verdicts/hexa-fusion-l3-glue/F-CLM-DEVFEED-GELU-GN-EQ.txt"
-  next   = "remaining interpreted glue inventory toward W2 self-host pod util fire: expert-pack copy j-loop (T·d t_set, ex0/ex1 → ex_out) · nn_moe_router_fwd (logits_r·ex_out → y, probs) · nn_embedding_fwd (token gather xe). After gelu+groupnorm land, the fwd interpreted-glue residue is the pack copy + moe-router + embedding gather. W1 §③ floor closing — fuse pack/router next, then refire pod util to test MEAN ascent off 0.49%."
