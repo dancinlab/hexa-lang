@@ -84,7 +84,7 @@ emit_one() {
             /^_?main:[[:space:]]*$/ { inmain=1; next }
             inmain==1 && /^[A-Za-z_][A-Za-z0-9_]*:[[:space:]]*$/ { inmain=0 }
             inmain==1 && /^[[:space:]]*\.globl[[:space:]]/ { inmain=0 }
-            inmain==1 && /^[[:space:]]*\.(section|data|text|bss|rodata)\b/ { inmain=0 }
+            inmain==1 && /^[[:space:]]*\.(section|data|text|bss|rodata)([[:space:]]|$)/ { inmain=0 }
             inmain!=1 { print }
         '
     } > "$out"
