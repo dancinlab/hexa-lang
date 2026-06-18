@@ -64,6 +64,24 @@ echo "  HEXA_PREBUILT_RUNTIME=$HEXA_PREBUILT_RUNTIME"
 echo "  CFLAGS_COMMON=$CFLAGS_COMMON"
 echo "::endgroup::"
 
+# ── Embed release version into version_str() (display + cache-key freshness) ──
+# version_str() ships a static "0.1.0-dispatch" default in-repo (dev builds). A
+# release build injects the real tag here so `hexa version` reports the shipped
+# version AND the run-cache key (sha+version_str) differs per release — no stale
+# cross-release cache reuse. Source: HEXA_BUILD_VERSION env (release.yml passes
+# setup.release_tag = vX.Y.Z | edge), else the exact git tag (manual builds;
+# CI checkout is shallow so the env path is primary), else leave the dev default.
+# Restored on EXIT so the checkout/byteeq seeds stay pristine. Both self-host
+# gens compile the SAME patched source → gen3≡gen4 byteeq is preserved.
+_HXVER="${HEXA_BUILD_VERSION:-$(git describe --tags --exact-match 2>/dev/null || true)}"
+if [ -n "${_HXVER}" ] && [ "${_HXVER}" != "0.1.0-dispatch" ] && grep -q 'return "0.1.0-dispatch"' self/main.hexa; then
+    _vsafe="$(printf '%s' "${_HXVER}" | tr -cd 'A-Za-z0-9._-')"
+    cp self/main.hexa "/tmp/main.hexa.vbak.$$"
+    trap 'cp -f "/tmp/main.hexa.vbak.$$" self/main.hexa 2>/dev/null || true; rm -f "/tmp/main.hexa.vbak.$$"' EXIT
+    perl -0pi -e "s/return \"0\.1\.0-dispatch\"/return \"${_vsafe}\"/" self/main.hexa
+    echo "[release_build] version_str() injected: ${_vsafe}"
+fi
+
 echo "::group::Stage 0b — resolve prebuilt runtime archive (runtime.a)"
 bash tool/stage_resolve_runtime_a
 echo "::endgroup::"
