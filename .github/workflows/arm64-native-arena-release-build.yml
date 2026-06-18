@@ -107,11 +107,8 @@ jobs:
           [ -n "$HEXA" ] || { echo "FAIL: no ./hexa produced by release_build" >&2; exit 1; }
           "$HEXA" --version || true
           mkdir -p /tmp/r1
-          cat > /tmp/r1/exit42.hexa <<'EOF'
-fn main() -> int {
-    return 6 * 7
-}
-EOF
+          printf 'fn main() -> int {\n    return 6 * 7\n}\n' > /tmp/r1/exit42.hexa
+          cat /tmp/r1/exit42.hexa
           set +e
           "$HEXA" run /tmp/r1/exit42.hexa
           ec=$?
@@ -120,11 +117,8 @@ EOF
           if [ "$ec" -ne 42 ]; then
             echo "FAIL: exit42.hexa returned $ec (expected 42) under native arm64 arena" >&2; exit 1
           fi
-          cat > /tmp/r1/hello.hexa <<'EOF'
-fn main() {
-    print("hello-arm64-native-arena")
-}
-EOF
+          printf 'fn main() {\n    print("hello-arm64-native-arena")\n}\n' > /tmp/r1/hello.hexa
+          cat /tmp/r1/hello.hexa
           set +e
           OUT="$("$HEXA" run /tmp/r1/hello.hexa 2>&1)"
           ec=$?
