@@ -122,6 +122,7 @@ jobs:
           # flows through faithful unchanged. The converged edge ships on the
           # NEXT roll after this merges.
           HEXA_SEED_CONVERGE: "1"
+          HEXA_BUILD_VERSION: ${{ needs.setup.outputs.release_tag }}
         run: bash tool/release_build
 
       # ── macOS Developer ID signing (GATED · skips cleanly when secrets
@@ -257,6 +258,7 @@ jobs:
           # darwin-arm64 job for the full rationale. Scoped to the release
           # edge-build; the shared release_build + faithful gate stay default-OFF.
           HEXA_SEED_CONVERGE: "1"
+          HEXA_BUILD_VERSION: ${{ needs.setup.outputs.release_tag }}
         run: bash tool/release_build
 
       - name: Package — shared release_package (Stage 3 + tarball)
@@ -315,6 +317,7 @@ jobs:
           # darwin-arm64 job for the full rationale. Scoped to the release
           # edge-build; the shared release_build + faithful gate stay default-OFF.
           HEXA_SEED_CONVERGE: "1"
+          HEXA_BUILD_VERSION: ${{ needs.setup.outputs.release_tag }}
         run: bash tool/release_build
 
       - name: Package — shared release_package (Stage 3 + tarball)
@@ -393,6 +396,7 @@ jobs:
           HEXA_STATIC_DEPS: "1"
           GH_TOKEN: ${{ github.token }}
           HEXA_SEED_CONVERGE: "1"
+          HEXA_BUILD_VERSION: ${{ needs.setup.outputs.release_tag }}
         run: |
           unset HEXA_PREBUILT_RUNTIME
           bash tool/release_build
