@@ -44,15 +44,34 @@ else
     echo "stage_build_hexa: source path — compiling self/runtime.c"
 fi
 
+# ── RT-NATIVE Route B ALLOC-RB: link the native arena seed as a SEPARATE object ──
+# (mirrors tool/build_aprime.sh's ALLOC_CORE_OBJ + tool/stage_prebuild_hexat — the
+# measure-8 darwin-arm64/linux-arm64 link-fix, issue #3553). When the prebuilt
+# runtime.a is the link arg and HEXA_RT_ALLOC_NATIVE!=0 (default-ON as of
+# measure-8), runtime.o references hexa_arena_alloc/__blk_used/... out of
+# build/alloc_syscall_native.o, but that seed back-references hexa_eq/__hx_make_val
+# in runtime.o — a cycle single-pass archive linkers (ld64, linux-arm64) can't
+# resolve from an archive member. Listing the seed as a SEPARATE explicit object
+# (always on the cmdline, not archive-pull) breaks the cycle on every target.
+# Guarded on HEXA_RT_ALLOC_NATIVE + seed presence so a =0 revert / source build is
+# byte-for-byte unchanged.
+ALLOC_OBJ=""
+if [ "$RT_ARG" != "self/runtime.c" ] \
+   && [ "${HEXA_RT_ALLOC_NATIVE:-1}" != "0" ] \
+   && [ -f "$ROOT/build/alloc_syscall_native.o" ]; then
+    ALLOC_OBJ="$ROOT/build/alloc_syscall_native.o"
+    echo "stage_build_hexa: RT-NATIVE ALLOC-RB — linking native arena seed as separate object ($ALLOC_OBJ)"
+fi
+
 echo "::group::Stage 0 — compile self-hosted transpiler (hexa_v2)"
-$CC $CFLAGS -I self self/native/hexa_cc.c "$RT_ARG" -o build/hexa_v2 $LIBS
+$CC $CFLAGS -I self self/native/hexa_cc.c "$RT_ARG" $ALLOC_OBJ -o build/hexa_v2 $LIBS
 file build/hexa_v2
 echo "::endgroup::"
 
 echo "::group::Stage 1 — flatten + transpile self/main.hexa -> build/stage1/main.c"
 export HEXA_LANG="$ROOT"
 ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
-$CC $CFLAGS -I self build/stage1/module_loader.c "$RT_ARG" -o build/hexa_module_loader $LIBS
+$CC $CFLAGS -I self build/stage1/module_loader.c "$RT_ARG" $ALLOC_OBJ -o build/hexa_module_loader $LIBS
 export HEXA_MODULE_LOADER="$ROOT/build/hexa_module_loader"
 ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
 # Transpiling the large flattened main_expanded.hexa (~11k lines) drives deep
@@ -66,6 +85,6 @@ export HEXA_MODULE_LOADER="$ROOT/build/hexa_module_loader"
 echo "::endgroup::"
 
 echo "::group::Stage 2 — compile CLI driver ($OUT_HEXA)"
-$CC $CFLAGS -I self build/stage1/main.c "$RT_ARG" -o "$OUT_HEXA" $LIBS
+$CC $CFLAGS -I self build/stage1/main.c "$RT_ARG" $ALLOC_OBJ -o "$OUT_HEXA" $LIBS
 file "$OUT_HEXA"
 echo "::endgroup::"
