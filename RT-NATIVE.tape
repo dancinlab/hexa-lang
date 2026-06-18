@@ -1,9 +1,0 @@
-# RT-NATIVE.tape — append-only step log
-@V := "RT-NATIVE" :: log
-- 2026-06-15 22:22 todo: Z3 arena: malloc-MVP 단일세션·byte-eq 0 / Z2b tag: codegen 이미 native·블로커=boxing ABI / Z4 setjmp: Darwin 이미 naked-asm(zero C)·honest-keep
-- 2026-06-15 22:26 todo: Z2a-done 잔여: cross-platform .s seed 3개(arm64-darwin✓ verified · x86_64-linux · arm64-linux) 모두 native 여야 runtime_hi_gen.c rm 가능 → linux 검증 pod 필요. Z2c(954fn) = 진짜 multi-week 벌크. Z4 setjmp Darwin 이미 native(honest-keep).
-- 2026-06-15 23:03 todo: Z2a x86_64-linux POD(aiden) 결과: -no-pie 링크 통과하나 aprime_z2a_lin SEGFAULT — x86_64 native codegen 의 rt_str_* rodata/HexaVal-ABI 버그(메모리 RUNG2 연결). runtime_hi_gen.c 제거는 x86_64 codegen 수정 선행 = Z2c-class. arm64-darwin Z2a✓ · arm64-linux 미검증.
-- 2026-06-15 23:08 todo: x86_64 ROOT CAUSE(pod gdb): x86_64 codegen 은 모든 값=raw 1-reg int 모델 → hexa_array_new 의 16B HexaVal 반환(rax:rdx)서 payload 버림 → 배열 NULL → push segfault. 고치려면 x86_64 값모델 전면개편(raw→HexaVal 쌍 운반, arm64 x0:x1 동형) = codegen 아키텍처 작업 multi-week. arm64-darwin 은 쌍모델 있어 작동(Z2a✓).
-- 2026-06-15 23:29 todo: Z3 linchpin 실측: native 컴파일러 포인터(*Void) OK 하나 extern fn malloc → void-stub 생성(undefined extern 아님). Z3 native arena 는 codegen FFI/extern-fn 수정 OR mmap-via-svc syscall intrinsic 선행. 남은 5/8 전부 native-codegen 성숙(FFI·@tag·x86_64 값모델)+954fn 으로 수렴 = multi-week.
-- 2026-06-16 00:07 todo: UNLOCK-1(extern FFI)·UNLOCK-2(@tag __hx_tag)·둘다 DONE+fixpoint보존(#3393/#3395). 이제 Z2c dispatch core(hexa_type_of= switch on __hx_tag → 문자열; eq/truthy)·Z3 arena(extern malloc) 둘다 unblock. 다음: hexa_type_of native .hexa 포팅 → seed-link 통합.
-- 2026-06-16 00:09 todo: Z3 vs Z2c 다음단계 평가: Z3 arena = inline 포인터/struct 산술(&b.data[used]) 필요 = 더 깊은 codegen. Z2c dispatch core(hexa_type_of= switch on __hx_tag → 문자열; eq/truthy) = 포인터 불필요·@tag 로 fully unblocked = 더 tractable. → 다음 진입점 = Z2c dispatch core 포팅(hexa_type_of native .hexa) → seed-link 통합. UNLOCK-1·2 done.
