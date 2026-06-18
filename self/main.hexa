@@ -1288,10 +1288,37 @@ fn hxc_dump(path: string) -> i64 {
 //   CC env > NATIVE_CC env > clang on PATH > cc on PATH > gcc on PATH.
 // Mirrors tool/build_hexa_cli_native.hexa _default_native_cc(); adds the
 // gcc tail + a fatal error when nothing is found.
-fn _cc_which(name) {
-    let r = exec_with_status("command -v " + name + " 2>/dev/null")
+//
+// PROBE ROBUSTNESS (darwin-arm64 nobaseline-gate regression, #3605 → fix):
+// the original probe used ONLY `command -v <name>`. On the GitHub Actions
+// macos-latest runner that builtin returned empty for clang/cc/gcc through
+// hexa's `/bin/sh -c` exec (so all 3 probes failed → the fatal below fired
+// even though /usr/bin/clang exists), while the sibling tool
+// build_hexa_cli_native.hexa::_which (which uses `which <name>`) resolved
+// it fine. So probe with BOTH `command -v` and `which`, then fall back to
+// a direct `-x <abs>` test on the canonical toolchain locations. Any one
+// hit resolves the compiler — environment-independent on darwin AND linux.
+fn _cc_probe_cmd(cmd) {
+    let r = exec_with_status(cmd)
     if r[1] != 0 { return "" }
     return r[0].trim()
+}
+fn _cc_which(name) {
+    // 1. POSIX `command -v` (shell builtin).
+    let cv = _cc_probe_cmd("command -v " + name + " 2>/dev/null")
+    if cv != "" { return cv }
+    // 2. `which` (mirrors build_hexa_cli_native.hexa::_which; works on the
+    //    macos runner where `command -v` came back empty through our exec).
+    let wh = _cc_probe_cmd("which " + name + " 2>/dev/null")
+    if wh != "" { return wh }
+    // 3. Direct `-x` test on the canonical absolute install paths so the
+    //    probe still resolves even when neither PATH-search builtin does
+    //    (e.g. a stripped/missing PATH in the child shell). Covers Xcode
+    //    CLT (/usr/bin) + Homebrew (/opt/homebrew, /usr/local) on darwin
+    //    and the standard linux locations.
+    let abs = _cc_probe_cmd("for p in /usr/bin/" + name + " /opt/homebrew/bin/" + name + " /usr/local/bin/" + name + " /bin/" + name + "; do [ -x \"$p\" ] && { printf '%s' \"$p\"; break; }; done")
+    if abs != "" { return abs }
+    return ""
 }
 // Memoize so the PATH probes run once per process (the build/run path
 // resolves the compiler several times — rt.o compile, link, etc.).
@@ -1305,6 +1332,16 @@ fn host_cc() {
     if _cc_which("clang") != "" { __host_cc_cached = "clang"; return "clang" }
     if _cc_which("cc") != "" { __host_cc_cached = "cc"; return "cc" }
     if _cc_which("gcc") != "" { __host_cc_cached = "gcc"; return "gcc" }
+    // Safety net (pre-#3605 behavior restore): when every probe is
+    // INCONCLUSIVE on darwin, default to `clang` rather than fataling —
+    // clang ships with the Xcode CLT and is always invocable via PATH on
+    // macOS, so a hardcoded `clang` is the correct pre-regression default.
+    // (linux pods genuinely without a compiler still fatal below — they
+    // need an install; darwin never does.)
+    let uname_s = exec_with_status("uname -s 2>/dev/null")
+    if uname_s[1] == 0 && uname_s[0].trim() == "Darwin" {
+        __host_cc_cached = "clang"; return "clang"
+    }
     eprintln("error: no host C compiler found — install clang (or gcc), or set CC=<compiler>")
     exit(1)
 }
