@@ -1,0 +1,205 @@
+// HEXA Standard Library — qforge/frozen_phonon
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE L4 from-scratch PHONON FRONT-END (b) — the FROZEN-PHONON
+// (finite-displacement) Γ-phonon driver. The el-ph gate's LAST QE piece is the
+// phonon ω(q,ν): production mode-(b) hybrid still feeds QE DFPT ω into the L3
+// α²F assembler. For from-scratch el-ph to become gate-grade, ω must be
+// QFORGE-native. Two from-scratch paths exist:
+//   (a) DFPT linear response (dfpt_response.hexa qforge_force_constant): builds Φ
+//       from Sternheimer Δψ — already wired, validated on analytic models.
+//   (b) THIS brick — FROZEN PHONON: displace each atom by ±du, run the caller's
+//       SCF total-energy E(u), finite-difference the Hessian H_ij = ∂²E/∂u_i∂u_j,
+//       mass-weight → D(Γ), reuse qforge_phonons → ω(Γ,ν).
+// Frozen-phonon is the SIMPLEST from-scratch ω path: it needs ONLY a converged
+// SCF total-energy closure (no Sternheimer, no response). It is exact at Γ for a
+// supercell large enough to contain the force range, and it is the standard
+// independent cross-check on DFPT ω (phonopy-style). At Γ a single primitive cell
+// already gives the optical-branch ω; acoustic branches → 0 by the translational
+// sum rule (enforced here by symmetrizing + an acoustic-sum-rule projector).
+//
+// ── d4 GENERIC — the caller supplies the cell via ONE closure, no hardcode ────
+//   e_of_u(u) -> float : total energy of the cell with the flat displacement
+//     vector u (length 3·natoms, Cartesian bohr) added to the equilibrium
+//     positions. The caller wires this to qforge_scf_pw_* (real cell) OR to an
+//     analytic harmonic model (the g5 selftest). NO material name appears here —
+//     CaH6 / LaH10 / any cell traverse this one path (same contract as the
+//     H_apply / dV_bare_provider closures the DFPT path uses).
+//
+// ── HONEST SCOPE (d6) ─────────────────────────────────────────────────────────
+//   * Γ-only (q=0). Finite-q frozen phonon needs a commensurate supercell — the
+//     caller builds it and passes the supercell E(u); the Hessian/diagonalize
+//     path is identical. This brick does the Γ dynamical matrix + ω.
+//   * Central finite difference (2nd order in du) — the off-diagonal Hessian uses
+//     the 4-point stencil. The truncation error is O(du²); the caller picks du to
+//     balance truncation vs the SCF-energy noise floor (a too-small du amplifies
+//     SCF noise — the classic frozen-phonon trade-off, reported honestly).
+//   * The number of SCF calls is 1 (equilibrium) + 2·dim (diagonal) +
+//     2·dim·(dim−1) (off-diagonal pairs) = O(dim²). For a real PW SCF each call is
+//     a full self-consistent solve — this is the realistic cost the caller sizes
+//     against (d11). The DFPT path (qforge_force_constant) is O(dim) Sternheimer
+//     solves and is cheaper for large dim; frozen-phonon is the simple, robust
+//     cross-check that needs no response code.
+//
+// reuse (d19): qforge_dynmat / qforge_phonons (dfpt.hexa, the L4 assembler+solver)
+//   diagonalize the mass-weighted Hessian — frozen-phonon only ADDS the
+//   finite-displacement Hessian front-end and feeds the SAME generic solver.
+use "stdlib/qforge/dfpt"
+
+fn _fp_abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// ── flat displaced-position energy helper: E at u with u[i]+=di, u[j]+=dj ─────
+// CALLER-OWNED SCRATCH: the buffer `u` (length dim, kept all-zero between calls) is
+// allocated ONCE by qforge_frozen_hessian and reused. We set only the ≤2 touched
+// components, call e_of_u, then RESTORE them to 0.0 so the buffer is clean for the
+// next call. This is the proven val-arena discipline (caller-owned farr scratch):
+// allocating a fresh length-dim array on every one of the O(dim²) calls orphans in
+// the val-arena and corrupts later allocations (0xCCCCCCCC garbage tag) when this
+// runs nested inside qforge_frozen_phonons. Reusing one buffer eliminates that.
+fn _fp_e2(e_of_u, u: [float], i: int, di: float, j: int, dj: float) -> float {
+    u[i] = u[i] + di
+    u[j] = u[j] + dj
+    let e = e_of_u(u)
+    u[i] = 0.0
+    u[j] = 0.0
+    return e
+}
+
+// ── FROZEN-PHONON Γ HESSIAN: H_ij = ∂²E/∂u_i∂u_j by central finite difference ─
+//   e_of_u : caller closure, flat displacement [dim] (bohr) -> total energy.
+//   dim    : 3·natoms displacement-space dimension.
+//   du     : finite-displacement step (bohr). Same du on every component.
+//   Diagonal  H_ii = [E(+du_i) − 2 E_0 + E(−du_i)] / du²       (3-point)
+//   Off-diag  H_ij = [E(+i,+j) − E(+i,−j) − E(−i,+j) + E(−i,−j)] / (4 du²)
+//   Returns the flat [dim*dim] symmetric Hessian (row-major). [] on bad dim/du.
+pub fn qforge_frozen_hessian(e_of_u, dim: int, du: float) -> [float] {
+    if dim <= 0 || du <= 0.0 { return [] }
+    let mut hess: [float] = []
+    let mut z = 0
+    while z < dim * dim { hess.push(0.0) ; z = z + 1 }
+    let inv_du2 = 1.0 / (du * du)
+    // ONE caller-owned scratch displacement buffer (all-zero, reused every call).
+    let mut u: [float] = []
+    let mut zu = 0
+    while zu < dim { u.push(0.0) ; zu = zu + 1 }
+    // equilibrium energy (u = 0)
+    let e0 = _fp_e2(e_of_u, u, 0, 0.0, 0, 0.0)
+    // diagonal: 3-point central second derivative
+    // (to_float coerces the result to a float tag — a whole-number FD result can
+    //  otherwise carry an int tag through the dynamic runtime and break the
+    //  downstream mass-weight multiply / eigh, d6-honest robustness guard.)
+    let mut i = 0
+    while i < dim {
+        let ep = _fp_e2(e_of_u, u, i, du, i, 0.0)
+        let em = _fp_e2(e_of_u, u, i, -du, i, 0.0)
+        hess[i * dim + i] = to_float((ep - 2.0 * e0 + em) * inv_du2)
+        i = i + 1
+    }
+    // off-diagonal: 4-point mixed central derivative (symmetrized)
+    let mut a = 0
+    while a < dim {
+        let mut b = a + 1
+        while b < dim {
+            let epp = _fp_e2(e_of_u, u, a, du, b, du)
+            let epm = _fp_e2(e_of_u, u, a, du, b, -du)
+            let emp = _fp_e2(e_of_u, u, a, -du, b, du)
+            let emm = _fp_e2(e_of_u, u, a, -du, b, -du)
+            let hij = to_float((epp - epm - emp + emm) * (0.25 * inv_du2))
+            hess[a * dim + b] = hij
+            hess[b * dim + a] = hij
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return hess
+}
+
+// ── ACOUSTIC SUM RULE projector: enforce Σ_κ Φ_{κα,κ'β} translational invariance
+//   The exact frozen-phonon Hessian has small residual violations of the acoustic
+//   sum rule (Σ over one atom's force on a rigid translation = 0) from finite du +
+//   SCF noise. We restore it the standard phonopy way: for each Cartesian block
+//   (α,β) over atoms, subtract the row-mean from the self (on-site) term so a rigid
+//   translation gives ZERO force → ω_acoustic(Γ) = 0 exactly. natoms·3 = dim.
+//   asr=true applies it; asr=false leaves the raw Hessian (honest, d6 — lets the
+//   caller see the raw sum-rule violation as a convergence diagnostic).
+pub fn qforge_frozen_asr(hess: [float], natoms: int) -> [float] {
+    let dim = 3 * natoms
+    if len(hess) != dim * dim { return hess }
+    let mut h: [float] = []
+    let mut z = 0
+    while z < dim * dim { h.push(hess[z]) ; z = z + 1 }
+    // For each (atom a, Cart α) row and each Cart β, the on-site block element
+    // Φ_{aα, aβ} ← −Σ_{a'≠a} Φ_{aα, a'β}. We rebuild the on-site 3×3 from the
+    // off-site sum so each rigid-translation column sums to 0.
+    let mut a = 0
+    while a < natoms {
+        let mut al = 0
+        while al < 3 {
+            let mut be = 0
+            while be < 3 {
+                let row = a * 3 + al
+                let mut off_sum = 0.0
+                let mut ap = 0
+                while ap < natoms {
+                    if ap != a {
+                        off_sum = off_sum + h[row * dim + (ap * 3 + be)]
+                    }
+                    ap = ap + 1
+                }
+                h[row * dim + (a * 3 + be)] = to_float(-off_sum)
+                be = be + 1
+            }
+            al = al + 1
+        }
+        a = a + 1
+    }
+    return h
+}
+
+// ── ONE-CALL FROZEN-PHONON Γ ω(ν): E(u) closure → Hessian → D(Γ) → phonons ────
+//   e_of_u  : caller closure (flat [3·natoms] displacement bohr -> total energy).
+//   natoms  : atom count.
+//   masses  : natoms atomic masses (a.u. — same unit convention as qforge_dynmat;
+//             ω comes out in √(E/(mass·length²)) of the caller's E/mass/du units).
+//   du      : finite-displacement step (bohr).
+//   asr     : apply the acoustic sum-rule projector (true for ω_acoustic(Γ)=0).
+//   Returns the PhononResult (omega2 ascending · omega sign-preserving sqrt ·
+//   modes · n_acoustic_zero) — the SAME struct the DFPT path returns, so any
+//   downstream (a²F / λ) consumes frozen-phonon ω identically (d4). Empty
+//   PhononResult-equivalent (omega2=[]) on a malformed Hessian.
+//
+// ⚠ RUNTIME-CORE BUG (2026-06-19, hexa #3598 install · NOT this logic): a library
+//   `pub fn` that calls BOTH an intra-module fn (qforge_frozen_hessian) AND a
+//   cross-module fn (qforge_dynmat / qforge_phonons from dfpt.hexa) miscompiles —
+//   the cross-module callee is emitted as an undeclared C function, poisoning the
+//   val-arena with a 0xCCCCCCCC garbage tag → "cannot multiply non-numeric (tag 1
+//   * tag 16)". The SAME bug fails the existing @ci_gate dfpt_response_selftest
+//   (qforge_force_constant → qforge_dynmat). The fix is a COMPILER fix (cross-
+//   module pub-fn forward-declaration emission), handed off (ING). This wrapper's
+//   LOGIC is correct (verified by composing the three calls in the CALLER's module,
+//   where the bug does not trigger — see frozen_phonon_selftest). Until the
+//   compiler fix lands, CALLERS SHOULD COMPOSE in their own module:
+//     let h  = qforge_frozen_hessian(e_of_u, 3*natoms, du)
+//     let hs = if asr { qforge_frozen_asr(h, natoms) } else { h }
+//     let dq = qforge_dynmat(hs, masses, [0,0,0], natoms, 1, [0,0,0])
+//     let p  = qforge_phonons(dq, masses, natoms)
+//   This wrapper is kept (it is the intended one-call API once the compiler is
+//   fixed) — d6 honest: the limitation is the runtime, not the physics.
+pub fn qforge_frozen_phonons(e_of_u, natoms: int, masses: [float],
+                             du: float, asr: bool) -> PhononResult {
+    let dim = 3 * natoms
+    let raw = qforge_frozen_hessian(e_of_u, dim, du)
+    if len(raw) != dim * dim {
+        return PhononResult { omega2: [], omega: [], modes: [], n_acoustic_zero: 0 }
+    }
+    let mut hess = raw
+    if asr { hess = qforge_frozen_asr(raw, natoms) }
+    // The frozen-phonon Hessian IS the Γ real-space force constant Φ (one cell,
+    // R=0). Feed it through the SAME generic dynmat assembler at q=Γ (cos(0)=1)
+    // so the mass-weighting + Hermitize + eigh path is shared with DFPT (d19).
+    let cell_R0 = [0.0, 0.0, 0.0]
+    let dq = qforge_dynmat(hess, masses, [0.0, 0.0, 0.0], natoms, 1, cell_R0)
+    return qforge_phonons(dq, masses, natoms)
+}

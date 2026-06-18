@@ -1,0 +1,154 @@
+// @ci_gate — deterministic · network-free · NO pod ops · 해석적 분산과 대조하는
+//            FROZEN-PHONON (유한변위) Γ-포논 g5 게이트
+//
+// frozen_phonon_selftest.hexa — QFORGE L4 from-scratch 포논 프론트-엔드(b) g5 gate.
+//
+// 검증 전략 (d6 정직): 닫힌형 조화 에너지 모델 E(u)=½ uᵀΦu 를 e_of_u 클로저로
+// 공급한다. Φ 는 우리가 정한 해석적 힘상수. 그러면:
+//   (1) 유한변위 Hessian 이 Φ 를 정확히 복원해야 한다 (조화모델이라 FD 오차=0).
+//   (2) 질량가중 → qforge_phonons 의 ω 가 닫힌형 분산공식과 일치해야 한다.
+//   (3) 같은 Φ 를 기존 해석적 DFPT 경로(qforge_dynmat+qforge_phonons)에 직접 넣은
+//       ω 와 frozen-phonon ω 가 head-to-head 로 동일해야 한다 (브릿지 정합).
+//   (4) 음향 sum-rule 투영기가 rigid-translation 의 force-constant 열합을 0 으로 만든다.
+//   (5) du 민감도: 조화모델은 FD 오차 0 이므로 du 가 달라도 Hessian 불변(불안정 부재).
+// 어떤 케이스도 ω 를 조작하지 않는다 — FD 머신이 알려진 물리를 복원하는지만 본다(d6).
+//
+// 닫힌형 분산: 2원자 사슬(M1,M2,K) Γ 광학모드 ω_opt=√(2K(1/M1+1/M2)), 음향 ω=0.
+//   (기존 dfpt_selftest 케이스 C 와 동일 물리 — frozen-phonon 으로 독립 재유도.)
+//
+// ⚠ COMPOSITION NOTE: the dynmat+phonons step is composed HERE in the main module
+//   (not via the qforge_frozen_phonons wrapper) to dodge a runtime-core cross-
+//   module pub-fn codegen bug (hexa #3598 — see frozen_phonon.hexa header; it also
+//   fails dfpt_response_selftest). The PHYSICS is identical; only the call site
+//   moves. Once the compiler fix lands, the wrapper one-call API is used directly.
+//
+// Run:  hexa run stdlib/qforge/frozen_phonon_selftest.hexa
+// PASS: "qforge_frozen_phonon_selftest PASS".
+use "stdlib/qforge/frozen_phonon"
+use "stdlib/qforge/dfpt"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_bool(name: str, got: bool, want: bool) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+
+// ── module-global analytic force-constant Φ for the e_of_u harmonic closure ───
+//   E(u) = ½ Σ_ij Φ_ij u_i u_j. Hexa passes named fns (not capturing lambdas), so
+//   the closure reads Φ from a module global the test sets before each call (same
+//   pattern as sternheimer_selftest's G_MAT). FP_PHI = flat dim*dim, FP_DIM = dim.
+let mut FP_PHI: [float] = []
+let mut FP_DIM: int = 0
+fn fp_set(phi: [float], dim: int) { FP_PHI = phi ; FP_DIM = dim }
+
+// the caller closure: total energy of the harmonic model at displacement u.
+fn harmonic_e(u: [float]) -> float {
+    let dim = FP_DIM
+    let mut e = 0.0
+    let mut i = 0
+    while i < dim {
+        let mut j = 0
+        while j < dim {
+            e = e + 0.5 * FP_PHI[i * dim + j] * u[i] * u[j]
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return e
+}
+
+fn main() {
+    let mut fails = 0
+    println("── QFORGE frozen-phonon (유한변위) Γ-포논 g5 게이트 (프론트-엔드 b) ──")
+
+    let K = 1.0
+    let M1 = 1.0
+    let M2 = 2.0
+    let BIG = 1.0e6
+    let du = 1.0e-3
+
+    // ── diatomic-chain Γ force constant Φ (dim=6: 2 atoms × xyz) ──────────────
+    //   x-branch chain-coupled: Φxx = [[2K,−2K],[−2K,2K]] over the two atoms.
+    //   y/z self-stiffened by BIG so the x-branch is the lowest (acoustic+optical),
+    //   leaving a SINGLE zero mode (eigh-safe; matches dfpt_selftest case C).
+    let dim = 6
+    let mut phi: [float] = []
+    let mut z = 0
+    while z < 36 { phi.push(0.0) ; z = z + 1 }
+    phi[0 * 6 + 0] = 2.0 * K          // x0,x0
+    phi[3 * 6 + 3] = 2.0 * K          // x1,x1
+    phi[0 * 6 + 3] = -2.0 * K         // x0,x1
+    phi[3 * 6 + 0] = -2.0 * K         // x1,x0
+    phi[1 * 6 + 1] = BIG              // y0
+    phi[2 * 6 + 2] = BIG              // z0
+    phi[4 * 6 + 4] = BIG              // y1
+    phi[5 * 6 + 5] = BIG              // z1
+    fp_set(phi, dim)
+    let masses = [M1, M2]
+
+    // ── (1) finite-displacement Hessian recovers Φ exactly (harmonic → FD-exact) ─
+    let hess = qforge_frozen_hessian(harmonic_e, dim, du)
+    fails = fails + _ck_bool("(1) hessian length == dim*dim", len(hess) == 36, true)
+    fails = fails + _ck_close("(1) H[x0,x0] = 2K", hess[0 * 6 + 0], 2.0 * K, 1.0e-6)
+    fails = fails + _ck_close("(1) H[x0,x1] = −2K (off-diag mixed FD)", hess[0 * 6 + 3], -2.0 * K, 1.0e-6)
+    fails = fails + _ck_close("(1) H[x1,x0] = −2K (symmetric)", hess[3 * 6 + 0], -2.0 * K, 1.0e-6)
+    fails = fails + _ck_close("(1) H[y0,y0] = BIG", hess[1 * 6 + 1], BIG, 1.0e1)
+    // off-diagonal that must be EXACTLY 0 (no spurious x–y coupling)
+    fails = fails + _ck_close("(1) H[x0,y0] = 0 (no spurious coupling)", hess[0 * 6 + 1], 0.0, 1.0e-6)
+
+    // ── (2) frozen-phonon ω matches closed-form diatomic dispersion at Γ ───────
+    //   Compose hessian → dynmat(Γ) → phonons IN-MODULE (cross-module-bug-safe).
+    //   acoustic ω=0 (x-branch translational sum rule already in Φ), optical
+    //   ω=√(2K(1/M1+1/M2)). NO ASR here (Φ already satisfies the x-branch rule;
+    //   ASR on the BIG y/z would zero them and create a degenerate eigh block).
+    let dqf = qforge_dynmat(hess, masses, [0.0, 0.0, 0.0], 2, 1, [0.0, 0.0, 0.0])
+    let pf = qforge_phonons(dqf, masses, 2)
+    let w_opt_an = sqrt(2.0 * K * (1.0 / M1 + 1.0 / M2))
+    fails = fails + _ck_close("(2) ω_acoustic(Γ) = 0 (frozen-phonon)", pf.omega[0], 0.0, 1.0e-6)
+    fails = fails + _ck_close("(2) ω_optical(Γ) = √(2K(1/M1+1/M2))", pf.omega[1], w_opt_an, 1.0e-5)
+
+    // ── (3) HEAD-TO-HEAD bridge: same Φ via the analytic DFPT path == frozen ───
+    //   Feed the SAME analytic Φ straight into qforge_dynmat/qforge_phonons (the
+    //   analytic-DFPT-Φ consumer) at Γ; its ω must equal the frozen-phonon ω.
+    let dqa = qforge_dynmat(phi, masses, [0.0, 0.0, 0.0], 2, 1, [0.0, 0.0, 0.0])
+    let pa = qforge_phonons(dqa, masses, 2)
+    fails = fails + _ck_close("(3) bridge: frozen ω_opt == analytic-DFPT ω_opt",
+                              pf.omega[1], pa.omega[1], 1.0e-5)
+    fails = fails + _ck_close("(3) bridge: frozen ω_acoustic == analytic ω_acoustic",
+                              pf.omega[0], pa.omega[0], 1.0e-6)
+
+    // ── (4) ASR projector forces the rigid-translation force-constant column to 0 ─
+    //   Build a sum-rule-BROKEN Φ (perturb the x0 on-site), apply qforge_frozen_asr,
+    //   and verify the x-branch rigid-translation column now sums to 0 (the property
+    //   that GUARANTEES ω_acoustic(Γ)=0). Check the Hessian directly (matrix
+    //   property — no eigh on the BIG-degenerate matrix, which eigh can't factor).
+    let mut phi_b: [float] = []
+    let mut zb = 0
+    while zb < 36 { phi_b.push(phi[zb]) ; zb = zb + 1 }
+    phi_b[0 * 6 + 0] = 2.5 * K        // break Σ rule on the x0 on-site term
+    let asr_h = qforge_frozen_asr(phi_b, 2)
+    // x-column (β=x) rigid-translation sum over the x0 row = Φ[x0,x0]+Φ[x0,x1].
+    let xcol_sum = asr_h[0 * 6 + 0] + asr_h[0 * 6 + 3]
+    fails = fails + _ck_close("(4) ASR: x-row rigid-translation column-sum = 0",
+                              xcol_sum, 0.0, 1.0e-9)
+    // and the raw (broken) Φ does NOT satisfy it (2.5K + (−2K) = 0.5K ≠ 0).
+    let raw_sum = phi_b[0 * 6 + 0] + phi_b[0 * 6 + 3]
+    fails = fails + _ck_bool("(4) raw (broken) column-sum ≠ 0 (ASR was needed)",
+                             _abs(raw_sum) > 1.0e-6, true)
+
+    // ── (5) du-insensitivity on a harmonic model (FD error == 0 → Hessian invariant)
+    //   A harmonic E has EXACT central-difference 2nd derivative for any du. The
+    //   recovered Φ at du and du/10 must agree → no FD-truncation bias (the real-
+    //   cell noise/truncation trade-off is anharmonic, reported honestly, d6).
+    fp_set(phi, dim)
+    let hess_fine = qforge_frozen_hessian(harmonic_e, dim, du / 10.0)
+    fails = fails + _ck_close("(5) H[x0,x1](du) == H[x0,x1](du/10) (harmonic FD-exact)",
+                              hess[0 * 6 + 3], hess_fine[0 * 6 + 3], 1.0e-5)
+
+    if fails == 0 { println("qforge_frozen_phonon_selftest PASS") }
+    else { println("qforge_frozen_phonon_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
