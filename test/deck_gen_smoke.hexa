@@ -102,6 +102,19 @@ fn _yh10_spec() -> DeckSpec {
     return spec
 }
 
+fn _mg2pth6_spec() -> DeckSpec {
+    let spec = deck_spec_new()
+    spec_set(spec, "prototype",     "x2mh6_antifluorite")
+    spec_set(spec, "prefix",        "mg2pth6")
+    spec_set(spec, "a_site_symbol", "Mg")
+    spec_set(spec, "a_site_mass",   "24.305")
+    spec_set(spec, "a_site_upf",    "Mg.upf")
+    spec_set(spec, "m_site_symbol", "Pt")
+    spec_set(spec, "m_site_mass",   "195.084")
+    spec_set(spec, "m_site_upf",    "Pt.upf")
+    return spec
+}
+
 fn _write_all(files: [DeckFile], dir: string) {
     let _mk = exec("mkdir -p " + dir)
     let mut i = 0
@@ -150,6 +163,21 @@ fn main() {
     let yh10_files = gen_deck("rtsc", _yh10_spec())
     println("  emitted " + str(len(yh10_files)) + " files (expect 4)")
     _write_all(yh10_files, "/tmp/deck_gen_smoke/YH10")
+    println("")
+
+    // ── 2d. RTSC Mg2PtH6 (x2mh6_antifluorite prototype) — emit + gate sanity ─
+    println("## 2d. RTSC Mg2PtH6 (x2mh6_antifluorite prototype) — emit + metal/semiconductor gate")
+    let pt_files = gen_deck("rtsc", _mg2pth6_spec())
+    println("  emitted " + str(len(pt_files)) + " files (expect 7: vc-relax,scf,nscf,dos,ph,RUNBOOK,setup_env)")
+    let pt_dir = "/tmp/deck_gen_smoke/Mg2PtH6"
+    _write_all(pt_files, pt_dir)
+    // GUARDS: nat=9 antifluorite · tetrahedra DOS gate · ph metal-only guard · masses
+    let _g1 = exec("grep -q 'nat             = 9' " + pt_dir + "/vc-relax.in && echo '  G1 PASS nat=9 antifluorite' || echo '  G1 FAIL'")
+    let _g2 = exec("grep -q \"Pt  195.084\" " + pt_dir + "/vc-relax.in && echo '  G2 PASS Pt mass 195.084' || echo '  G2 FAIL'")
+    let _g3 = exec("grep -q 'tetrahedra' " + pt_dir + "/nscf.in && echo '  G3 PASS nscf tetrahedra DOS' || echo '  G3 FAIL'")
+    let _g4 = exec("grep -q 'SEMICONDUCTOR' " + pt_dir + "/dos.in && echo '  G4 PASS metal/semiconductor verdict' || echo '  G4 FAIL'")
+    let _g5 = exec("grep -q 'RUN ONLY IF metal' " + pt_dir + "/ph.in && echo '  G5 PASS ph metal-only guard' || echo '  G5 FAIL'")
+    let _g6 = exec("grep -q 'ibrav           = 2' " + pt_dir + "/vc-relax.in && echo '  G6 PASS ibrav=2 FCC Fm-3m' || echo '  G6 FAIL'")
     println("")
 
     // ── 3. Nuclear — top_k_next.json envelope smoke ───────────────────

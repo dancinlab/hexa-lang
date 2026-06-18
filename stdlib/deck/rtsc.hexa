@@ -64,7 +64,7 @@ import "stdlib/cloud/fill_plan.hexa"
 // single edit needed to register a new prototype (alongside its emitter).
 // Keep this list in lockstep with the dispatch branches in `emit_rtsc`.
 pub fn rtsc_prototypes() -> [string] {
-    return ["beh8_clathrate", "perovskite_pm3m", "im3m_group17", "sodalite_im3m_yh10", "a15_ysbh6", "li2mgh16", "pm3n_bc_clathrate"]
+    return ["beh8_clathrate", "perovskite_pm3m", "im3m_group17", "sodalite_im3m_yh10", "a15_ysbh6", "li2mgh16", "pm3n_bc_clathrate", "x2mh6_antifluorite"]
 }
 
 // ── pub entry point ──────────────────────────────────────────────────
@@ -92,6 +92,21 @@ pub fn emit_rtsc(spec: DeckSpec) -> [DeckFile] {
         deck_push(files, "scf.in",      _rtsc_beh8_scf(spec))
         deck_push(files, "ph.in",       _rtsc_beh8_ph(spec))
         deck_push(files, "RUNBOOK.md",  _rtsc_beh8_runbook(spec))
+        return files
+    }
+    if proto == "x2mh6_antifluorite" {
+        // X2MH6 K2PtCl6-type antifluorite (Fm-3m, 9-atom primitive): M @ 4a
+        // (0,0,0), X @ 8c (1/4,1/4,1/4)×2, H @ 24e octahedron. Emits the
+        // metal-vs-semiconductor verdict chain (scf → nscf → dos) BEFORE ph,
+        // because the undoped [MH6] anion can be a band-filled semiconductor
+        // (Mg2RuH6/Mg2OsH6 family) — a free DOS(E_F) gate is the go/no-go for
+        // the (paid) el-ph DFPT. d_deck_always + d6 + d_novel_only.
+        deck_push(files, "vc-relax.in", _rtsc_x2mh6_vc_relax(spec))
+        deck_push(files, "scf.in",      _rtsc_x2mh6_scf(spec))
+        deck_push(files, "nscf.in",     _rtsc_x2mh6_nscf(spec))
+        deck_push(files, "dos.in",      _rtsc_x2mh6_dos(spec))
+        deck_push(files, "ph.in",       _rtsc_x2mh6_ph(spec))
+        deck_push(files, "RUNBOOK.md",  _rtsc_x2mh6_runbook(spec))
         return files
     }
     if proto == "perovskite_pm3m" {
@@ -349,6 +364,221 @@ fn _rtsc_beh8_ph(spec: DeckSpec) -> string {
     s = s + "  alpha_mix(1)        = 0.3\n"
     s = s + "  max_seconds         = " + max_secs + "       ! " + walltime_cmt + "\n"
     s = s + "/\n"
+    return s
+}
+
+// ── X2MH6 antifluorite prototype (Mg2PtH6 · K2PtCl6-type Fm-3m) ──────
+//
+// 9-atom fcc primitive: M @ 4a (0,0,0) · X @ 8c (1/4,1/4,1/4)+(3/4,3/4,3/4)
+// · H @ 24e octahedron around M (Pt-H ~1.6 A). The primitive-fcc crystal
+// coords below are M^{-1}·r_conv of the conventional (±x,0,0)/(0,±x,0)/
+// (0,0,±x) octahedron (x≈0.24): each H → a (∓x,±x,±x)-type triplet.
+// Spec keys: prefix · a_site_symbol/mass/upf (X=Mg) · m_site_symbol/mass/upf
+// (M=Pt) · celldm_bohr · ecutwfc/ecutrho (Pt 18e semicore → high) · h_x.
+fn _rtsc_x2mh6_common_species(spec: DeckSpec) -> string {
+    let x_sym  = spec_get_or(spec, "a_site_symbol", "Mg")
+    let x_mass = spec_get_or(spec, "a_site_mass",   "24.305")
+    let x_upf  = spec_get_or(spec, "a_site_upf",    "Mg.upf")
+    let m_sym  = spec_get_or(spec, "m_site_symbol", "Pt")
+    let m_mass = spec_get_or(spec, "m_site_mass",   "195.084")
+    let m_upf  = spec_get_or(spec, "m_site_upf",    "Pt.upf")
+    let mut s = ""
+    s = s + "ATOMIC_SPECIES\n"
+    s = s + "  " + m_sym + "  " + m_mass + "   " + m_upf + "\n"
+    s = s + "  " + x_sym + "  " + x_mass + "   " + x_upf + "\n"
+    s = s + "  H    1.008   H.upf\n"
+    return s
+}
+
+// _rtsc_x2mh6_positions — the 9-atom antifluorite octahedron (primitive fcc).
+fn _rtsc_x2mh6_positions(spec: DeckSpec) -> string {
+    let x_sym = spec_get_or(spec, "a_site_symbol", "Mg")
+    let m_sym = spec_get_or(spec, "m_site_symbol", "Pt")
+    let hx    = spec_get_or(spec, "h_x", "0.24")     // M-H bond fraction (~1.6 A / a)
+    let nhx   = "-" + hx
+    let mut s = ""
+    s = s + "ATOMIC_POSITIONS crystal\n"
+    s = s + "  " + m_sym + "   0.0000000   0.0000000   0.0000000   ! M @ 4a\n"
+    s = s + "  " + x_sym + "   0.2500000   0.2500000   0.2500000   ! X @ 8c\n"
+    s = s + "  " + x_sym + "   0.7500000   0.7500000   0.7500000   ! X @ 8c\n"
+    s = s + "  H   " + nhx + "  " + hx + "  " + hx + "   ! H @ 24e octahedron (Mx^-1 of (x,0,0))\n"
+    s = s + "  H   " + hx + "  " + nhx + "  " + nhx + "   ! (-x,0,0)\n"
+    s = s + "  H   " + hx + "  " + nhx + "  " + hx + "   ! (0,x,0)\n"
+    s = s + "  H   " + nhx + "  " + hx + "  " + nhx + "   ! (0,-x,0)\n"
+    s = s + "  H   " + hx + "  " + hx + "  " + nhx + "   ! (0,0,x)\n"
+    s = s + "  H   " + nhx + "  " + nhx + "  " + hx + "   ! (0,0,-x)\n"
+    return s
+}
+
+fn _rtsc_x2mh6_vc_relax(spec: DeckSpec) -> string {
+    let prefix  = spec_get_or(spec, "prefix", "mg2pth6")
+    let celldm  = spec_get_or(spec, "celldm_bohr", "12.585")  // a~6.66 A (Mg2IrH6 seed)
+    let ecutwfc = spec_get_or(spec, "ecutwfc", "90")          // Pt 18e semicore → high
+    let ecutrho = spec_get_or(spec, "ecutrho", "360")
+    let k_relax = spec_get_or(spec, "k_relax", "12")
+    let x_sym   = spec_get_or(spec, "a_site_symbol", "Mg")
+    let m_sym   = spec_get_or(spec, "m_site_symbol", "Pt")
+    let mut s = ""
+    s = s + "&CONTROL\n"
+    s = s + "  calculation     = 'vc-relax'\n"
+    s = s + "  prefix          = '" + prefix + "'\n"
+    s = s + "  outdir          = './out'\n"
+    s = s + "  pseudo_dir      = './pseudo'\n"
+    s = s + "  forc_conv_thr   = 1.0d-4\n"
+    s = s + "  etot_conv_thr   = 1.0d-6\n"
+    s = s + "  tstress         = .true.\n"
+    s = s + "  tprnfor         = .true.\n"
+    s = s + "  nstep           = 200\n"
+    s = s + "/\n"
+    s = s + "&SYSTEM\n"
+    s = s + "  ibrav           = 2                ! FCC, Fm-3m (SG 225) — K2PtCl6 antifluorite\n"
+    s = s + "  celldm(1)       = " + celldm + "           ! a_conv ~6.66 A (Mg2IrH6 a=6.655 seed)\n"
+    s = s + "  nat             = 9                ! 1 " + m_sym + " + 2 " + x_sym + " + 6 H ([" + m_sym + "H6] octahedron)\n"
+    s = s + "  ntyp            = 3\n"
+    s = s + "  ecutwfc         = " + ecutwfc + "               ! " + m_sym + " semicore → high ecut\n"
+    s = s + "  ecutrho         = " + ecutrho + "\n"
+    s = s + "  nosym           = .true.           ! guard — avoid checkallsym crash\n"
+    s = s + "  occupations     = 'smearing'\n"
+    s = s + "  smearing        = 'mp'             ! d15 — metallic-case aid (if semiconductor, harmless)\n"
+    s = s + "  degauss         = 0.01             ! d15 small-gap SCF aid\n"
+    s = s + "/\n"
+    s = s + "&ELECTRONS\n"
+    s = s + "  conv_thr        = 1.0d-10\n"
+    s = s + "  mixing_beta     = 0.3\n"
+    s = s + "  electron_maxstep = 400             ! d15 maxiter 400\n"
+    s = s + "/\n"
+    s = s + "&IONS\n  ion_dynamics    = 'bfgs'\n/\n"
+    s = s + "&CELL\n  cell_dynamics   = 'bfgs'\n  cell_dofree     = 'all'\n/\n"
+    s = s + _rtsc_x2mh6_common_species(spec)
+    s = s + "\n"
+    s = s + _rtsc_x2mh6_positions(spec)
+    s = s + "\n"
+    s = s + "K_POINTS automatic\n  " + k_relax + " " + k_relax + " " + k_relax + "  0 0 0\n"
+    return s
+}
+
+fn _rtsc_x2mh6_scf(spec: DeckSpec) -> string {
+    let prefix  = spec_get_or(spec, "prefix", "mg2pth6")
+    let celldm  = spec_get_or(spec, "celldm_bohr", "12.585")
+    let ecutwfc = spec_get_or(spec, "ecutwfc", "90")
+    let ecutrho = spec_get_or(spec, "ecutrho", "360")
+    let k_scf   = spec_get_or(spec, "k_scf", "16")
+    let mut s = ""
+    s = s + "&CONTROL\n"
+    s = s + "  calculation     = 'scf'\n"
+    s = s + "  prefix          = '" + prefix + "'\n"
+    s = s + "  outdir          = './out'\n"
+    s = s + "  pseudo_dir      = './pseudo'\n"
+    s = s + "  verbosity       = 'high'           ! print HOMO/LUMO + Fermi for metal/semiconductor verdict\n"
+    s = s + "/\n"
+    s = s + "&SYSTEM\n"
+    s = s + "  ibrav           = 2                ! REPLACE celldm(1) with relaxed value from vc-relax.out\n"
+    s = s + "  celldm(1)       = " + celldm + "\n"
+    s = s + "  nat             = 9\n"
+    s = s + "  ntyp            = 3\n"
+    s = s + "  ecutwfc         = " + ecutwfc + "\n"
+    s = s + "  ecutrho         = " + ecutrho + "\n"
+    s = s + "  nosym           = .true.\n"
+    s = s + "  occupations     = 'smearing'\n"
+    s = s + "  smearing        = 'mp'\n"
+    s = s + "  degauss         = 0.01\n"
+    s = s + "/\n"
+    s = s + "&ELECTRONS\n  conv_thr = 1.0d-10\n  mixing_beta = 0.3\n  electron_maxstep = 400\n/\n"
+    s = s + _rtsc_x2mh6_common_species(spec)
+    s = s + "\n! REPLACE positions with relaxed ATOMIC_POSITIONS from vc-relax.out\n"
+    s = s + _rtsc_x2mh6_positions(spec)
+    s = s + "\n"
+    s = s + "K_POINTS automatic\n  " + k_scf + " " + k_scf + " " + k_scf + "  0 0 0\n"
+    return s
+}
+
+fn _rtsc_x2mh6_nscf(spec: DeckSpec) -> string {
+    let prefix  = spec_get_or(spec, "prefix", "mg2pth6")
+    let celldm  = spec_get_or(spec, "celldm_bohr", "12.585")
+    let ecutwfc = spec_get_or(spec, "ecutwfc", "90")
+    let ecutrho = spec_get_or(spec, "ecutrho", "360")
+    let k_nscf  = spec_get_or(spec, "k_nscf", "24")     // dense k for DOS(E_F)
+    let mut s = ""
+    s = s + "&CONTROL\n  calculation = 'nscf'\n  prefix = '" + prefix + "'\n  outdir = './out'\n  pseudo_dir = './pseudo'\n  verbosity = 'high'\n/\n"
+    s = s + "&SYSTEM\n"
+    s = s + "  ibrav           = 2\n"
+    s = s + "  celldm(1)       = " + celldm + "\n"
+    s = s + "  nat             = 9\n  ntyp = 3\n"
+    s = s + "  ecutwfc         = " + ecutwfc + "\n  ecutrho = " + ecutrho + "\n"
+    s = s + "  nosym           = .true.\n"
+    s = s + "  occupations     = 'tetrahedra'   ! tetrahedron DOS — accurate N(E_F) for the metal/semiconductor verdict\n"
+    s = s + "/\n"
+    s = s + "&ELECTRONS\n  conv_thr = 1.0d-10\n/\n"
+    s = s + _rtsc_x2mh6_common_species(spec)
+    s = s + "\n"
+    s = s + _rtsc_x2mh6_positions(spec)
+    s = s + "\n"
+    s = s + "K_POINTS automatic\n  " + k_nscf + " " + k_nscf + " " + k_nscf + "  0 0 0\n"
+    return s
+}
+
+fn _rtsc_x2mh6_dos(spec: DeckSpec) -> string {
+    let prefix = spec_get_or(spec, "prefix", "mg2pth6")
+    let mut s = ""
+    s = s + "&DOS\n"
+    s = s + "  prefix   = '" + prefix + "'\n"
+    s = s + "  outdir   = './out'\n"
+    s = s + "  fildos   = '" + prefix + ".dos'\n"
+    s = s + "  DeltaE   = 0.01\n"
+    s = s + "/\n"
+    s = s + "! VERDICT: grep the Fermi energy in nscf.out, read " + prefix + ".dos at E=E_F.\n"
+    s = s + "!   DOS(E_F) > 0  → METAL  → proceed to ph.in el-ph DFPT.\n"
+    s = s + "!   DOS(E_F) ≈ 0 (gap) → SEMICONDUCTOR → undoped phonon-SC dead (closed-negative, d_paper_significance).\n"
+    return s
+}
+
+fn _rtsc_x2mh6_ph(spec: DeckSpec) -> string {
+    let prefix   = spec_get_or(spec, "prefix", "mg2pth6")
+    let m_sym    = spec_get_or(spec, "m_site_symbol", "Pt")
+    let x_sym    = spec_get_or(spec, "a_site_symbol", "Mg")
+    let nq       = spec_get_or(spec, "nq", "4")            // 4x4x4 q default
+    let max_secs = spec_get_or(spec, "max_seconds", "504000")
+    let mut s = ""
+    s = s + x_sym + "2" + m_sym + "H6 electron-phonon " + nq + "x" + nq + "x" + nq + " q (X2MH6 antifluorite · RUN ONLY IF metal per dos.in verdict)\n"
+    s = s + "&inputph\n"
+    s = s + "  prefix              = '" + prefix + "'\n"
+    s = s + "  outdir              = './out'\n"
+    s = s + "  fildyn              = '" + prefix + ".dyn'\n"
+    s = s + "  fildvscf            = 'dvscf'\n"
+    s = s + "  ldisp               = .true.\n"
+    s = s + "  nq1                 = " + nq + "\n  nq2 = " + nq + "\n  nq3 = " + nq + "\n"
+    s = s + "  tr2_ph              = 1.0d-14\n"
+    s = s + "  electron_phonon     = 'simple'     ! Allen-Dynes Tc from lambda/omega_log\n"
+    s = s + "  el_ph_sigma         = 0.005\n"
+    s = s + "  el_ph_nsigma        = 10\n"
+    s = s + "  recover             = .true.       ! checkpoint-safe / resumable\n"
+    s = s + "  alpha_mix(1)        = 0.3\n"
+    s = s + "  max_seconds         = " + max_secs + "\n"
+    s = s + "/\n"
+    return s
+}
+
+fn _rtsc_x2mh6_runbook(spec: DeckSpec) -> string {
+    let prefix = spec_get_or(spec, "prefix", "mg2pth6")
+    let x_sym  = spec_get_or(spec, "a_site_symbol", "Mg")
+    let m_sym  = spec_get_or(spec, "m_site_symbol", "Pt")
+    let mut s = ""
+    s = s + "# " + x_sym + "2" + m_sym + "H6 — X2MH6 antifluorite el-ph RUNBOOK\n\n"
+    s = s + "| 항목 | 값 |\n|---|---|\n"
+    s = s + "| 공간군 | **Fm-3m (SG 225)**, K2PtCl6 antifluorite · 9-atom fcc primitive |\n"
+    s = s + "| 자리 | " + m_sym + " @ 4a(0,0,0) · " + x_sym + " @ 8c(¼¼¼)×2 · H @ 24e 8면체 |\n"
+    s = s + "| pseudo | " + m_sym + " 18e semicore(고ecut) · " + x_sym + " · H — PseudoDojo ONCV stringent (d13) |\n\n"
+    s = s + "## 절차 (d16 → 금속/반도체 게이트 → d6 → el-ph)\n"
+    s = s + "1. `pseudo/` 에 ONCV UPF 배치(" + m_sym + " 18e). pseudo_dir 확인.\n"
+    s = s + "2. **vc-relax** → 완화 celldm(1)+ATOMIC_POSITIONS 를 scf.in/nscf.in 에 반영.\n"
+    s = s + "3. **scf** (d16 1-iter free dry-run 먼저) → 수렴.\n"
+    s = s + "4. **금속/반도체 게이트 (사활)**: `nscf`(tetrahedra·dense-k) → `dos.x < dos.in`.\n"
+    s = s + "   - DOS(E_F) > 0 → **METAL** → 5번 진행.\n"
+    s = s + "   - 갭 → **SEMICONDUCTOR** → 무도핑 phonon-SC 없음 = closed-negative 박제, el-ph 중단.\n"
+    s = s + "5. **d6 동적안정**: `ph.in` 1-q(Γ) matdyn 허수모드 0 확인 후 풀 q.\n"
+    s = s + "6. **el-ph**: 풀 " + prefix + ".dyn + elph.inp_lambda.* 수확 → λ/ω_log → Allen-Dynes Tc.\n\n"
+    s = s + "> 무도핑 stoichiometric 타깃(d_novel_only) — 떠도는 78K/108K 는 전자도핑 결과(회피).\n"
+    s = s + "> 진짜 발견 = 무도핑 수렴 λ(금속이면 Δ vs λ_Γ proxy / 반도체면 closed-negative).\n"
     return s
 }
 
