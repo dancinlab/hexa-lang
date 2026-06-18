@@ -4527,7 +4527,7 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
     🟩 H-F4-054: QW on C_6 spectral gap = 1/2 (Golden Zone upper!)
     🟩 H-F4-090: (sigma-tau-phi)/tau = 3/2 = perfect fifth
     🟧★ H-F4-069: n_s = 1-2/(sopfr*sigma) = 0.9667 (Planck 0.18%)
-  Doc: [H-F4-batch](hypotheses/math/H-F4-frontier4-batch.md)
+  Doc: [H-F4-batch](hypotheses/H-F4-frontier4-batch.md)
 ```
 
   --- Energy Hypothesis Experiments (H-EN) ---
@@ -5104,11 +5104,11 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
 
 | Problem | Connection | Status | Document |
 |---|---|---|---|
-| **Riemann Hypothesis** | Robin inequality→R upper bound, σ₋₁ average=ζ(2) | 🟨 indirect | [H-MILL-1](hypotheses/math/H-MILL-1-riemann-R-gap.md) |
+| **Riemann Hypothesis** | Robin inequality→R upper bound, σ₋₁ average=ζ(2) | 🟨 indirect | [H-MILL-1](hypotheses/H-MILL-1-riemann-R-gap.md) |
 | **P≠NP** | R(n) computation O(√n)∈P, τ determination is prime factorization | ⏳ weak | - |
-| **Yang-Mills mass gap** | R gap 1/6 ↔ mass gap, dim(SM)=σ | 🟧 analogy | [H-MILL-3](hypotheses/math/H-MILL-3-yang-mills-mass-gap.md) |
+| **Yang-Mills mass gap** | R gap 1/6 ↔ mass gap, dim(SM)=σ | 🟧 analogy | [H-MILL-3](hypotheses/H-MILL-3-yang-mills-mass-gap.md) |
 | **Navier-Stokes** | R-chain discrete dynamics ↔ fluid continuum? | ⏳ weak | - |
-| **BSD conjecture** | 6=congruent number, (3,4,5)=(σ/τ,τ,σ-M₃) | 🟨 observation | [H-MILL-2](hypotheses/math/H-MILL-2-bsd-congruent-six.md) |
+| **BSD conjecture** | 6=congruent number, (3,4,5)=(σ/τ,τ,σ-M₃) | 🟨 observation | [H-MILL-2](hypotheses/H-MILL-2-bsd-congruent-six.md) |
 | **Hodge conjecture** | R cohomology ↔ PH? | ⏳ weak | - |
 | **Poincaré conjecture** | ✅ Resolved (Perelman 2003) | - | - |
 
@@ -5179,59 +5179,59 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-MP-1a](hypotheses/math/H-MP-1a-odd-perfect-sigma-phi.md) | odd n: σφ>nτ always | ✅ proven+100K verified | Not in literature! |
-| [H-MP-3](hypotheses/math/H-MP-3-dirichlet-pointwise.md) | Dirichlet convolution vs pointwise product | ✅ R-factor complete proof | τφ=σ→{1,3,14,42} |
-| [H-MP-4](hypotheses/math/H-MP-4-odd-perfect-impossibility.md) | Odd perfect number impossibility contribution | 🟡 partial verification | Euler lower bound ~10^16 |
-| [H-MP-5](hypotheses/math/H-MP-5-tau-phi-sigma-finiteness.md) | Finiteness of solutions to τφ=σ | ✅ proven+10^6 verified | {1,3,14,42} complete |
-| [H-MP-6](hypotheses/math/H-MP-6-near-solutions-density.md) | σφ/(nτ)≈1 density | ✅ verified | |R-1|<0.1: n=6 only |
-| [H-MP-7](hypotheses/math/H-MP-7-sigma-k-generalization.md) | σ_k generalization | ✅ k=1 only non-trivial solution | k≥2: R>1 always |
-| [H-MP-8](hypotheses/math/H-MP-8-R-factor-dirichlet-series.md) | R-factor Dirichlet series | 🟩 verified | F(s) convergent s>1 |
-| [H-MP-9](hypotheses/math/H-MP-9-convolution-pointwise-general.md) | Convolution classification | ✅ φ²→{1,3,10,30} | cancelling primes {3,5,7} |
-| [H-MP-10](hypotheses/math/H-MP-10-sigma-phi-asymptotic.md) | Σ R(n) asymptotic | 🟩 verified | S(x)~0.23x^2/(lnx)^0.4 |
-| [H-MP-11](hypotheses/math/H-MP-11-perfect-number-gap.md) | Perfect number gap R structure | ⬛ rejected | R not a local minimum |
-| [H-MP-12](hypotheses/math/H-MP-12-R-factor-fixed-points.md) | R-factor reciprocal pair uniqueness | ✅ (2,1)↔(3,1) unique | |
-| [H-MP-13](hypotheses/math/H-MP-13-consecutive-primes-generalization.md) | (p-1)(q-1)=2k generalization | ✅ R monotone increasing | k=1 only gives R=1 |
-| [H-MP-14](hypotheses/math/H-MP-14-R-chain-convergence-proof.md) | R-chain convergence proof | ✅ proven | R(n)<n |
-| [H-MP-15](hypotheses/math/H-MP-15-cantor-spectrum-dimension.md) | R spectrum Cantor dimension | 🟩 numerical confirmed | d_box≈0.155<1 |
-| [H-MP-16](hypotheses/math/H-MP-16-prime-factorization-R-decomposition.md) | R prime factorization structure | 🟩 proven | v_{Mp}=-(p-2) |
-| [H-MP-17](hypotheses/math/H-MP-17-omega-R-monotonicity.md) | ω↔R monotonicity | 🟩 lower bound | R≥(4/3)^{ω-1}·3/4 |
-| [H-MP-21](hypotheses/math/H-MP-21-information-geometry.md) | Information geometry | 🟩 verified | JSD=ln2/4 proven, Fisher tr=4n |
-| [H-MP-22](hypotheses/math/H-MP-22-padic-deeper.md) | p-adic deep analysis | 🟩 verified | Hensel→{1,6}, n=36 shadow |
-| [H-MP-23](hypotheses/math/H-MP-23-operator-algebras.md) | Operator algebras | 🟩 verified | Jones index σ/τ=3=4cos²(π/6) |
-| [H-MP-24](hypotheses/math/H-MP-24-new-domains.md) | Algebraic geometry+representation theory+Hopf | 🟩 verified | E₆ disc=σ²·|S₆|, S₆ max dim=2^τ |
-| [H-MP-25](hypotheses/math/H-MP-25-analytic-nt-extensions.md) | Analytic number theory extensions | 🟩 verified | R multiplicative, d_box≈0.574, non-uniform |
-| [H-MP-26](hypotheses/math/H-MP-26-dynamical-systems-bifurcation.md) | Dynamical systems bifurcation | 🟩 verified | T fixed point=6 unique, Λ symmetry=ln(4/3) |
+| [H-MP-1a](hypotheses/H-MP-1a-odd-perfect-sigma-phi.md) | odd n: σφ>nτ always | ✅ proven+100K verified | Not in literature! |
+| [H-MP-3](hypotheses/H-MP-3-dirichlet-pointwise.md) | Dirichlet convolution vs pointwise product | ✅ R-factor complete proof | τφ=σ→{1,3,14,42} |
+| [H-MP-4](hypotheses/H-MP-4-odd-perfect-impossibility.md) | Odd perfect number impossibility contribution | 🟡 partial verification | Euler lower bound ~10^16 |
+| [H-MP-5](hypotheses/H-MP-5-tau-phi-sigma-finiteness.md) | Finiteness of solutions to τφ=σ | ✅ proven+10^6 verified | {1,3,14,42} complete |
+| [H-MP-6](hypotheses/H-MP-6-near-solutions-density.md) | σφ/(nτ)≈1 density | ✅ verified | |R-1|<0.1: n=6 only |
+| [H-MP-7](hypotheses/H-MP-7-sigma-k-generalization.md) | σ_k generalization | ✅ k=1 only non-trivial solution | k≥2: R>1 always |
+| [H-MP-8](hypotheses/H-MP-8-R-factor-dirichlet-series.md) | R-factor Dirichlet series | 🟩 verified | F(s) convergent s>1 |
+| [H-MP-9](hypotheses/H-MP-9-convolution-pointwise-general.md) | Convolution classification | ✅ φ²→{1,3,10,30} | cancelling primes {3,5,7} |
+| [H-MP-10](hypotheses/H-MP-10-sigma-phi-asymptotic.md) | Σ R(n) asymptotic | 🟩 verified | S(x)~0.23x^2/(lnx)^0.4 |
+| [H-MP-11](hypotheses/H-MP-11-perfect-number-gap.md) | Perfect number gap R structure | ⬛ rejected | R not a local minimum |
+| [H-MP-12](hypotheses/H-MP-12-R-factor-fixed-points.md) | R-factor reciprocal pair uniqueness | ✅ (2,1)↔(3,1) unique | |
+| [H-MP-13](hypotheses/H-MP-13-consecutive-primes-generalization.md) | (p-1)(q-1)=2k generalization | ✅ R monotone increasing | k=1 only gives R=1 |
+| [H-MP-14](hypotheses/H-MP-14-R-chain-convergence-proof.md) | R-chain convergence proof | ✅ proven | R(n)<n |
+| [H-MP-15](hypotheses/H-MP-15-cantor-spectrum-dimension.md) | R spectrum Cantor dimension | 🟩 numerical confirmed | d_box≈0.155<1 |
+| [H-MP-16](hypotheses/H-MP-16-prime-factorization-R-decomposition.md) | R prime factorization structure | 🟩 proven | v_{Mp}=-(p-2) |
+| [H-MP-17](hypotheses/H-MP-17-omega-R-monotonicity.md) | ω↔R monotonicity | 🟩 lower bound | R≥(4/3)^{ω-1}·3/4 |
+| [H-MP-21](hypotheses/H-MP-21-information-geometry.md) | Information geometry | 🟩 verified | JSD=ln2/4 proven, Fisher tr=4n |
+| [H-MP-22](hypotheses/H-MP-22-padic-deeper.md) | p-adic deep analysis | 🟩 verified | Hensel→{1,6}, n=36 shadow |
+| [H-MP-23](hypotheses/H-MP-23-operator-algebras.md) | Operator algebras | 🟩 verified | Jones index σ/τ=3=4cos²(π/6) |
+| [H-MP-24](hypotheses/H-MP-24-new-domains.md) | Algebraic geometry+representation theory+Hopf | 🟩 verified | E₆ disc=σ²·|S₆|, S₆ max dim=2^τ |
+| [H-MP-25](hypotheses/H-MP-25-analytic-nt-extensions.md) | Analytic number theory extensions | 🟩 verified | R multiplicative, d_box≈0.574, non-uniform |
+| [H-MP-26](hypotheses/H-MP-26-dynamical-systems-bifurcation.md) | Dynamical systems bifurcation | 🟩 verified | T fixed point=6 unique, Λ symmetry=ln(4/3) |
 
 ### Coding Theory + Lattices (H-CODE, 1)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-CODE-1](hypotheses/math/H-CODE-1-golay-hamming-lattice.md) | G24=[σφ,σ,σ-τ], E₆ kiss=σn, σ₃=τ(2ⁿ-1), Leech chain | ✅ all proved | 6 major, 2 structural |
+| [H-CODE-1](hypotheses/H-CODE-1-golay-hamming-lattice.md) | G24=[σφ,σ,σ-τ], E₆ kiss=σn, σ₃=τ(2ⁿ-1), Leech chain | ✅ all proved | 6 major, 2 structural |
 
 ### Sporadic Groups (H-SPOR, 1)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-SPOR-1](hypotheses/math/H-SPOR-1-sporadic-groups-mathieu.md) | kiss(Λ₂₄)=στ(2^σ-1), S(5,8,24)=S(sopfr,σ-τ,σφ), M12/M11=σ | ✅ verified | 2 major |
+| [H-SPOR-1](hypotheses/H-SPOR-1-sporadic-groups-mathieu.md) | kiss(Λ₂₄)=στ(2^σ-1), S(5,8,24)=S(sopfr,σ-τ,σφ), M12/M11=σ | ✅ verified | 2 major |
 
 ### Graph Theory — SRG Family (H-GRAPH, 2)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-GRAPH-1](hypotheses/math/H-GRAPH-1-graph-theory-characterizations.md) | K_6 graph: Turan=σ, pm=E, torus, Petersen=Kneser(sopfr,φ), Steiner=C_6 | ✅ verified | 5 exact |
-| [H-GRAPH-2](hypotheses/math/H-GRAPH-2-chang-srg-n6-parameters.md) | Chang srg ALL 8 params=n=6 (PROVED), Schlafli 8/8, HS 6/6, tau(P₂)=n cycle | ✅ proved+verified | 3 major, p=0.000020 |
+| [H-GRAPH-1](hypotheses/H-GRAPH-1-graph-theory-characterizations.md) | K_6 graph: Turan=σ, pm=E, torus, Petersen=Kneser(sopfr,φ), Steiner=C_6 | ✅ verified | 5 exact |
+| [H-GRAPH-2](hypotheses/H-GRAPH-2-chang-srg-n6-parameters.md) | Chang srg ALL 8 params=n=6 (PROVED), Schlafli 8/8, HS 6/6, tau(P₂)=n cycle | ✅ proved+verified | 3 major, p=0.000020 |
 
 ### Elliptic Curves (H-ELPT, 2)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-ELPT-2](hypotheses/math/H-ELPT-2-bsd-cascade-cm.md) | BSD cascade: CM=-(σ/τ), Tors=Z/nZ, Cond=n², Tam=primes | ✅ proved | unique among perfect numbers |
+| [H-ELPT-2](hypotheses/H-ELPT-2-bsd-cascade-cm.md) | BSD cascade: CM=-(σ/τ), Tors=Z/nZ, Cond=n², Tam=primes | ✅ proved | unique among perfect numbers |
 
 ### Integer Sequences (H-SEQ, 1)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-SEQ-1](hypotheses/math/H-SEQ-1-integer-sequences.md) | F_σ=σ², Pell(2,3,4)=(φ,sopfr,σ), L_n=σ+φ+τ, Bell, Motzkin, Padovan | ✅ all verified | 8 major |
+| [H-SEQ-1](hypotheses/H-SEQ-1-integer-sequences.md) | F_σ=σ², Pell(2,3,4)=(φ,sopfr,σ), L_n=σ+φ+τ, Bell, Motzkin, Padovan | ✅ all verified | 8 major |
 
 ### Cross-domain Meta-hypotheses (H-CROSS, 2)
 
@@ -5244,171 +5244,171 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-ZODIAC-1](hypotheses/math/H-ZODIAC-1-twelve-thirteen-thirtysix.md) | \|A_τ\|=σ, σ²/τ=n², K(3)=σ, 12-TET optimal, 13 excluded | ✅ verified | 3 major, 5 exact |
+| [H-ZODIAC-1](hypotheses/H-ZODIAC-1-twelve-thirteen-thirtysix.md) | \|A_τ\|=σ, σ²/τ=n², K(3)=σ, 12-TET optimal, 13 excluded | ✅ verified | 3 major, 5 exact |
 
 ### AI (H-AI, 9)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-AI-1b](hypotheses/math/H-AI-1b-transformer-heads-sigma-multiples.md) | head count=σ multiples | ⬛ refuted | heads=2 optimal |
-| [H-AI-4](hypotheses/math/H-AI-4-moe-one-third-activation.md) | MoE activation 1/3 | ⏳ pending | after Golden MoE complete |
-| [H-AI-5](hypotheses/math/H-AI-5-sigma-phi-regularizer.md) | σφ/(nτ) regularizer | 🟩 confirmed | R/d≈c/τ, r=0.991 |
-| [H-AI-6](hypotheses/math/H-AI-6-six-fold-cv.md) | 6-fold CV | ⏳ weak | |
-| [H-AI-7](hypotheses/math/H-AI-7-golden-moe-information-bottleneck.md) | IB optimal = 1/e | ⏳ unverified | |
-| [H-AI-8](hypotheses/math/H-AI-8-six-dim-representation.md) | 6-dimensional embedding | ⏳ unverified | |
-| [H-AI-9](hypotheses/math/H-AI-9-loss-landscape-six.md) | loss landscape 6 | ⏳ unverified | |
-| [H-AI-10](hypotheses/math/H-AI-10-tokenizer-vocab-six.md) | vocab=6^k | ⚪ refuted | 2^k dominates by 2.8x (13/16 models) |
-| [H-AI-11](hypotheses/math/H-AI-11-R-chain-training.md) | R-chain training dynamics | ⏳ unverified | |
+| [H-AI-1b](hypotheses/H-AI-1b-transformer-heads-sigma-multiples.md) | head count=σ multiples | ⬛ refuted | heads=2 optimal |
+| [H-AI-4](hypotheses/H-AI-4-moe-one-third-activation.md) | MoE activation 1/3 | ⏳ pending | after Golden MoE complete |
+| [H-AI-5](hypotheses/H-AI-5-sigma-phi-regularizer.md) | σφ/(nτ) regularizer | 🟩 confirmed | R/d≈c/τ, r=0.991 |
+| [H-AI-6](hypotheses/H-AI-6-six-fold-cv.md) | 6-fold CV | ⏳ weak | |
+| [H-AI-7](hypotheses/H-AI-7-golden-moe-information-bottleneck.md) | IB optimal = 1/e | ⏳ unverified | |
+| [H-AI-8](hypotheses/H-AI-8-six-dim-representation.md) | 6-dimensional embedding | ⏳ unverified | |
+| [H-AI-9](hypotheses/H-AI-9-loss-landscape-six.md) | loss landscape 6 | ⏳ unverified | |
+| [H-AI-10](hypotheses/H-AI-10-tokenizer-vocab-six.md) | vocab=6^k | ⚪ refuted | 2^k dominates by 2.8x (13/16 models) |
+| [H-AI-11](hypotheses/H-AI-11-R-chain-training.md) | R-chain training dynamics | ⏳ unverified | |
 
 ### Consciousness Engine Cross-domain (H-CX, 23)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-CX-1](hypotheses/math/H-CX-1-sigma-phi-tension.md) | σφ=nτ = tension optimal | ✅ confirmed | T(6)=0 unique minimum |
-| [H-CX-2](hypotheses/math/H-CX-2-golden-zone-R-factor.md) | Golden Zone↔R-factor | 🟧 partial confirmation | I=0.25∈GZ |
-| [H-CX-3](hypotheses/math/H-CX-3-consciousness-six-modules.md) | Consciousness=6 modules | 🟨 observation | B(6)=∞ unique balance |
-| [H-CX-4](hypotheses/math/H-CX-4-diversity-equals-information.md) | Diversity=information×σφ | ⚪ weak | D~d·log(d) dominant |
-| [H-CX-5](hypotheses/math/H-CX-5-repulsion-field-tau-phi.md) | Repulsion Field=τ/φ imbalance | 🟩 confirmed | τ/φ=2⟺{2,6} |
-| [H-CX-6](hypotheses/math/H-CX-6-phase-acceleration-sigma-tau.md) | phase acceleration ×3=σ/τ | 🟩 confirmed | n=6 only |
-| [H-CX-7](hypotheses/math/H-CX-7-topology-seven-levels.md) | topology 7 levels=M₃ | ⏳ speculative | |
-| [H-CX-8](hypotheses/math/H-CX-8-three-sets-three-domains.md) | three finite sets=three domains | 🟨 observation | |
-| [H-CX-9](hypotheses/math/H-CX-9-R-chain-consciousness.md) | R-chain↔consciousness convergence | 🟩 confirmed | via 6: 14%, r=0.45 |
-| [H-CX-10](hypotheses/math/H-CX-10-R-chain-length-phase-transition.md) | R-chain length↔phase transition | 🟩 confirmed | mode=5, ω correlation weak |
-| [H-CX-11](hypotheses/math/H-CX-11-golden-moe-ppl-sigma.md) | Golden MoE PPL↔σ | ⏳ unverified | |
-| [H-CX-12](hypotheses/math/H-CX-12-anomaly-detection-R-spectrum.md) | anomaly detection↔R gap | 🟧 partial confirmation | AUROC=1.0 |
-| [H-CX-13](hypotheses/math/H-CX-13-anomaly-95x-RS-asymmetry.md) | 95x tension↔R-S 2051x | ⏳ unverified | |
-| [H-CX-14](hypotheses/math/H-CX-14-dirichlet-pi-consciousness.md) | F(2) divergence, E_p closed form | 🟩 proven | F(2,N)~ln(ln(N)) |
-| [H-CX-15](hypotheses/math/H-CX-15-attention-arithmetic-lens.md) | Attention=arithmetic lens | 🟧 structural | gap↔decision boundary |
-| [H-CX-16](hypotheses/math/H-CX-16-information-balance-seven-thirds.md) | information balance 7/3 | 🟧 structural | A+F=7/3⟺n=6 |
-| [H-CX-17](hypotheses/math/H-CX-17-dual-characterization-consciousness.md) | dual characterization↔consciousness | 🟧 structural | multiplicative+additive duality |
-| [H-CX-18](hypotheses/math/H-CX-18-catalan-root-consciousness.md) | Catalan root↔consciousness | 🟧 structural | 3²-2³=1 |
-| [H-CX-19](hypotheses/math/H-CX-19-closed-orbit-consciousness-cycle.md) | closed orbit↔consciousness cycle | 🟧 structural | ∏R=1=self-reference |
-| [H-CX-20](hypotheses/math/H-CX-20-divisor-orbit-neural-convergence.md) | orbit product↔neural convergence | 🟧 structural | Λ=0=convergence threshold |
-| [H-CX-21](hypotheses/math/H-CX-21-golden-zone-abundancy-bridge.md) | Golden Zone↔abundancy | 🟧★ structural | ln(4/3)=ln(σ(3)/3) |
-| [H-CX-22](hypotheses/math/H-CX-22-p-minus-2-consciousness-depth.md) | p-2↔consciousness depth | 🟧 structural | depth=p-2 |
-| [H-CX-40](hypotheses/math/H-CX-40-kissing-number-attention-heads.md) | k(3)=12=σ(6)↔Attention 12h↔CaMKII 12 | 🟨 observation | k(4)=24 prediction failed, 12 only strong |
-| [H-CX-41](hypotheses/math/H-CX-41-quantum-hilbert-interpretation.md) | quantum Hilbert space interpretation | 🟩 verified | H₆=C⁴, S_VN=1.73bits, Tr(Â)=σ |
-| [H-CX-42](hypotheses/math/H-CX-42-arithmetic-derivative-consciousness.md) | σ₋₁(6)=1+ld(6)+1/6 consciousness decomposition | 🟩+🟧 | pure math proven, AI analogy unverified |
-| [H-CX-43](hypotheses/math/H-CX-43-outer-automorphism-consciousness.md) | Out(S₆)=Z/2Z↔metacognition, duad-syntheme↔attention | 🟧 structural | pure math verified, AI analogy unverified |
-| [H-CX-44](hypotheses/math/H-CX-44-lie-algebra-neural-architecture.md) | E₆ rank 6 + Golay [24,12,8] → neural network optimal structure | 🟪 conjecture | mathematical facts + AI analogy unverified |
-| [H-CX-45](hypotheses/math/H-CX-45-cayley-tree-neural-topology.md) | Cayley n^(n-2)=n^tau(n) unique point n=6 → neural network topology critical point | 🟪 conjecture | R289 pure math proven, neural network analogy unverified, no GZ dependency |
-| [H-CX-46](hypotheses/math/H-CX-46-minimal-coupling-principle.md) | (p-1)(q-1)=2 minimal coupling principle → neural network minimal complexity + democratic attention + phi=2 free directions | 🟪 conjecture | pure math proven, neural network/consciousness analogy unverified, no GZ dependency |
-| [H-CX-47](hypotheses/math/H-CX-47-unification-consciousness.md) | (p-1)(q-1)=2 → consciousness unification, reduction to 69 characterizations | 🟪 conjecture | mathematical core accurate, consciousness interpretation unverified |
-| [H-CX-48](hypotheses/math/H-CX-48-information-balance-engine-ratio.md) | I(n)=ln(R)=0 ↔ engine A/G ratio balance | ⚪ unconfirmed | R311 full comparison: 6bl rank 4/6, 8bl 1st. blocks↑→balance↑ monotone |
-| [H-CX-49](hypotheses/math/H-CX-49-cantor-tension-spectrum.md) | R-spectrum Cantor set ↔ tension distribution fractal | ⚪ unconfirmed | post-training gap↑ proportional to block count, 6 blocks not special |
-| [H-CX-50](hypotheses/math/H-CX-50-convolution-collapse-block-correlation.md) | σ*φ conv=pointwise at n=6 ↔ inter-block feature alignment | ⚪ unconfirmed | R311 full comparison: 6bl rank 3/6, 8bl 1st. blocks↑→collapse↓ monotone |
-| [H-CX-51](hypotheses/math/H-CX-51-arithmetic-derivative-learning-rate.md) | ld(6)=5/6 ↔ optimal learning rate ratio | ⚪ unconfirmed | lr scan: 5/6 rank 6/11, monotone decreasing pattern |
-| [H-CX-52](hypotheses/math/H-CX-52-multiplicative-tension-scale.md) | R(n) multiplicative ↔ tension_scale product=1 at n=6 | ⚪ unconfirmed | product=0.577, 3 blocks (0.975) closest to 1. monotone decrease with block count |
-| [H-CX-53](hypotheses/math/H-CX-53-dedekind-euler-consciousness-balance.md) | psi/phi=n ↔ excitatory/inhibitory ratio=block count | 🔵 new | DFS-iter1: psi(6)/phi(6)=6 unique, maps to A/G balance |
-| [H-CX-54](hypotheses/math/H-CX-54-iterated-composition-consciousness-cycle.md) | sigma(phi)*phi(sigma)=sigma ↔ consciousness cycle | 🔵 new | DFS-iter1: composition fixed point unique to n=6, perception-integration loop |
-| [H-CX-55](hypotheses/math/H-CX-55-hexagonal-self-reference-emergence.md) | H(phi(n))=n ↔ hexagonal packing emergence at n=6 | 🔵 new | DFS-iter1: hexagonal self-reference, kiss(2)=6, representation packing |
+| [H-CX-1](hypotheses/H-CX-1-sigma-phi-tension.md) | σφ=nτ = tension optimal | ✅ confirmed | T(6)=0 unique minimum |
+| [H-CX-2](hypotheses/H-CX-2-golden-zone-R-factor.md) | Golden Zone↔R-factor | 🟧 partial confirmation | I=0.25∈GZ |
+| [H-CX-3](hypotheses/H-CX-3-consciousness-six-modules.md) | Consciousness=6 modules | 🟨 observation | B(6)=∞ unique balance |
+| [H-CX-4](hypotheses/H-CX-4-diversity-equals-information.md) | Diversity=information×σφ | ⚪ weak | D~d·log(d) dominant |
+| [H-CX-5](hypotheses/H-CX-5-repulsion-field-tau-phi.md) | Repulsion Field=τ/φ imbalance | 🟩 confirmed | τ/φ=2⟺{2,6} |
+| [H-CX-6](hypotheses/H-CX-6-phase-acceleration-sigma-tau.md) | phase acceleration ×3=σ/τ | 🟩 confirmed | n=6 only |
+| [H-CX-7](hypotheses/H-CX-7-topology-seven-levels.md) | topology 7 levels=M₃ | ⏳ speculative | |
+| [H-CX-8](hypotheses/H-CX-8-three-sets-three-domains.md) | three finite sets=three domains | 🟨 observation | |
+| [H-CX-9](hypotheses/H-CX-9-R-chain-consciousness.md) | R-chain↔consciousness convergence | 🟩 confirmed | via 6: 14%, r=0.45 |
+| [H-CX-10](hypotheses/H-CX-10-R-chain-length-phase-transition.md) | R-chain length↔phase transition | 🟩 confirmed | mode=5, ω correlation weak |
+| [H-CX-11](hypotheses/H-CX-11-golden-moe-ppl-sigma.md) | Golden MoE PPL↔σ | ⏳ unverified | |
+| [H-CX-12](hypotheses/H-CX-12-anomaly-detection-R-spectrum.md) | anomaly detection↔R gap | 🟧 partial confirmation | AUROC=1.0 |
+| [H-CX-13](hypotheses/H-CX-13-anomaly-95x-RS-asymmetry.md) | 95x tension↔R-S 2051x | ⏳ unverified | |
+| [H-CX-14](hypotheses/H-CX-14-dirichlet-pi-consciousness.md) | F(2) divergence, E_p closed form | 🟩 proven | F(2,N)~ln(ln(N)) |
+| [H-CX-15](hypotheses/H-CX-15-attention-arithmetic-lens.md) | Attention=arithmetic lens | 🟧 structural | gap↔decision boundary |
+| [H-CX-16](hypotheses/H-CX-16-information-balance-seven-thirds.md) | information balance 7/3 | 🟧 structural | A+F=7/3⟺n=6 |
+| [H-CX-17](hypotheses/H-CX-17-dual-characterization-consciousness.md) | dual characterization↔consciousness | 🟧 structural | multiplicative+additive duality |
+| [H-CX-18](hypotheses/H-CX-18-catalan-root-consciousness.md) | Catalan root↔consciousness | 🟧 structural | 3²-2³=1 |
+| [H-CX-19](hypotheses/H-CX-19-closed-orbit-consciousness-cycle.md) | closed orbit↔consciousness cycle | 🟧 structural | ∏R=1=self-reference |
+| [H-CX-20](hypotheses/H-CX-20-divisor-orbit-neural-convergence.md) | orbit product↔neural convergence | 🟧 structural | Λ=0=convergence threshold |
+| [H-CX-21](hypotheses/H-CX-21-golden-zone-abundancy-bridge.md) | Golden Zone↔abundancy | 🟧★ structural | ln(4/3)=ln(σ(3)/3) |
+| [H-CX-22](hypotheses/H-CX-22-p-minus-2-consciousness-depth.md) | p-2↔consciousness depth | 🟧 structural | depth=p-2 |
+| [H-CX-40](hypotheses/H-CX-40-kissing-number-attention-heads.md) | k(3)=12=σ(6)↔Attention 12h↔CaMKII 12 | 🟨 observation | k(4)=24 prediction failed, 12 only strong |
+| [H-CX-41](hypotheses/H-CX-41-quantum-hilbert-interpretation.md) | quantum Hilbert space interpretation | 🟩 verified | H₆=C⁴, S_VN=1.73bits, Tr(Â)=σ |
+| [H-CX-42](hypotheses/H-CX-42-arithmetic-derivative-consciousness.md) | σ₋₁(6)=1+ld(6)+1/6 consciousness decomposition | 🟩+🟧 | pure math proven, AI analogy unverified |
+| [H-CX-43](hypotheses/H-CX-43-outer-automorphism-consciousness.md) | Out(S₆)=Z/2Z↔metacognition, duad-syntheme↔attention | 🟧 structural | pure math verified, AI analogy unverified |
+| [H-CX-44](hypotheses/H-CX-44-lie-algebra-neural-architecture.md) | E₆ rank 6 + Golay [24,12,8] → neural network optimal structure | 🟪 conjecture | mathematical facts + AI analogy unverified |
+| [H-CX-45](hypotheses/H-CX-45-cayley-tree-neural-topology.md) | Cayley n^(n-2)=n^tau(n) unique point n=6 → neural network topology critical point | 🟪 conjecture | R289 pure math proven, neural network analogy unverified, no GZ dependency |
+| [H-CX-46](hypotheses/H-CX-46-minimal-coupling-principle.md) | (p-1)(q-1)=2 minimal coupling principle → neural network minimal complexity + democratic attention + phi=2 free directions | 🟪 conjecture | pure math proven, neural network/consciousness analogy unverified, no GZ dependency |
+| [H-CX-47](hypotheses/H-CX-47-unification-consciousness.md) | (p-1)(q-1)=2 → consciousness unification, reduction to 69 characterizations | 🟪 conjecture | mathematical core accurate, consciousness interpretation unverified |
+| [H-CX-48](hypotheses/H-CX-48-information-balance-engine-ratio.md) | I(n)=ln(R)=0 ↔ engine A/G ratio balance | ⚪ unconfirmed | R311 full comparison: 6bl rank 4/6, 8bl 1st. blocks↑→balance↑ monotone |
+| [H-CX-49](hypotheses/H-CX-49-cantor-tension-spectrum.md) | R-spectrum Cantor set ↔ tension distribution fractal | ⚪ unconfirmed | post-training gap↑ proportional to block count, 6 blocks not special |
+| [H-CX-50](hypotheses/H-CX-50-convolution-collapse-block-correlation.md) | σ*φ conv=pointwise at n=6 ↔ inter-block feature alignment | ⚪ unconfirmed | R311 full comparison: 6bl rank 3/6, 8bl 1st. blocks↑→collapse↓ monotone |
+| [H-CX-51](hypotheses/H-CX-51-arithmetic-derivative-learning-rate.md) | ld(6)=5/6 ↔ optimal learning rate ratio | ⚪ unconfirmed | lr scan: 5/6 rank 6/11, monotone decreasing pattern |
+| [H-CX-52](hypotheses/H-CX-52-multiplicative-tension-scale.md) | R(n) multiplicative ↔ tension_scale product=1 at n=6 | ⚪ unconfirmed | product=0.577, 3 blocks (0.975) closest to 1. monotone decrease with block count |
+| [H-CX-53](hypotheses/H-CX-53-dedekind-euler-consciousness-balance.md) | psi/phi=n ↔ excitatory/inhibitory ratio=block count | 🔵 new | DFS-iter1: psi(6)/phi(6)=6 unique, maps to A/G balance |
+| [H-CX-54](hypotheses/H-CX-54-iterated-composition-consciousness-cycle.md) | sigma(phi)*phi(sigma)=sigma ↔ consciousness cycle | 🔵 new | DFS-iter1: composition fixed point unique to n=6, perception-integration loop |
+| [H-CX-55](hypotheses/H-CX-55-hexagonal-self-reference-emergence.md) | H(phi(n))=n ↔ hexagonal packing emergence at n=6 | 🔵 new | DFS-iter1: hexagonal self-reference, kiss(2)=6, representation packing |
 
 ### Physics (H-PH, 39 — 🟩3 🟧★18 🟧7 🟨5 ⚪6)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-PH-1](hypotheses/math/H-PH-1-why-subtract-seven.md) | Why σ²-7=137 | ⚪ coincidence | Texas p≈0.25 |
-| [H-PH-2](hypotheses/math/H-PH-2-gauge-group-six.md) | gauge group dimension sum=12=σ | 🟨 weak | 3gen×4=σ, small# |
-| [H-PH-3](hypotheses/math/H-PH-3-tau-phi-sigma-nuclear.md) | τφ=σ↔nuclear physics | ⚪ rejected | magic# mismatch |
-| [H-PH-4](hypotheses/math/H-PH-4-six-quarks-leptons.md) | quarks 6+leptons 6 | 🟨 weak | 12=σ match only |
-| [H-PH-5](hypotheses/math/H-PH-5-planck-units-six.md) | Planck units | ⚪ rejected | irrelevant |
-| [H-PH-6](hypotheses/math/H-PH-6-R-chain-decay.md) | R-chain↔radioactive decay | ⚪ rejected | superficial analogy |
-| [H-PH-8](hypotheses/math/H-PH-8-thermodynamic-partition.md) | thermodynamic partition function | 🟩 verified | σ=τ·U(0), S(0)=ln(τ), Schottky anomaly |
-| [H-PH-9](hypotheses/math/H-PH-9-perfect-number-string-unification.md) | ⭐⭐⭐ perfect number unification theory | 🟧★ p<10⁻⁶ | 60+ matches, Koide derived, δ=2/9(5ppm), leptons 0.06%, CP 2.2%, action principle, UV finite |
-| [H-PH-10](hypotheses/math/H-PH-10-pmns-neutrino-mixing.md) | ⭐⭐⭐ PMNS mixing angles | 🟧★ | sin²θ₁₂=4/13(0.22%), sin²θ₂₃=6/11(0.10%) |
-| [H-PH-11](hypotheses/math/H-PH-11-partition-mtheory.md) | ⭐⭐⭐ p(6)=11=M-theory | 🟧★ | integer partition(perfect number)=physical dimension, part distribution=spacetime+CY |
-| [H-PH-12](hypotheses/math/H-PH-12-kaon-P3-symmetry.md) | ⭐⭐⭐ kaon=P₃±φ | 🟧★ | K⁺=494(0.065%), K⁰=498(0.078%), π⁰=135(0.017%) |
-| [H-PH-13](hypotheses/math/H-PH-13-ckm-divisor.md) | ⭐⭐ CKM+α_s | 🟧 | Vus=√7/12, Vcb=1/24, α_s=2/17(0.3%) |
-| [H-PH-14](hypotheses/math/H-PH-14-hadron-mass-spectrum.md) | ⭐⭐⭐ hadron spectrum | 🟧★ | 24 particles 11<0.1%, Δ=σ³-P₃=1232(exact!), B⁰=5280(0.007%) |
-| [H-PH-15](hypotheses/math/H-PH-15-anomaly-perfect-theorem.md) | ⭐⭐⭐ anomaly cancellation⟺perfect numbers | 🟧 observation (Green-Schwarz dim(G)=496=P₃, biconditional not established) | dim(SO(2^p))=P_k ⟺ Mersenne prime |
-| [H-PH-16](hypotheses/math/H-PH-16-self-reference-cycle.md) | ⭐⭐⭐🟩 self-reference cycle | 🟩 proven | 6→12→28→6 unique perfect number cycle |
-| [H-PH-17](hypotheses/math/H-PH-17-zip-divisor-equivalence.md) | ⭐⭐ ZIP↔divisor field theory | 🟧 | δ=2/9 double derivation, bridge identity σ/τ=τ-1 |
-| [H-PH-18](hypotheses/math/H-PH-18-nuclear-magic-numbers.md) | ⭐⭐⭐ nuclear magic numbers 7/7 | 🟧★ p=0.014 | 2=φ,8=σ-τ,20=σφ-τ,28=P₂,50=στ+φ,82=P₂(σ/τ)-φ,126=P₃/τ+φ |
-| [H-PH-19](hypotheses/math/H-PH-19-cosmological-constants-n6.md) | cosmological constants vs n=6 lens | 🟧 | D=10(exact),mp/me≈1836(0.008%),1/α≈137(0.026%),sin²θ_W≈3/13(0.2%) |
-| [H-PH-20](hypotheses/math/H-PH-20-qcd-rspectrum-realization.md) | ⭐⭐⭐ QCD ladder = R-spectrum realization | 🟧★ p=7×10⁻⁵ | ρ×τ=J/ψ×(σ/τ)=Υ, R(2)·R(3)=1=R(6), 3.8σ MC |
-| [H-PH-21](hypotheses/math/H-PH-21-sm-forced-by-perfection.md) | ⭐⭐⭐ SM forced by n=6 perfection | 🟧★ Fisher 6.4σ | ADE+R=1+SM 10/10+masses 2.2%+3 independent 3σ+ findings, p=4.2×10⁻¹⁰ |
-| [H-PH-22](hypotheses/math/H-PH-22-prime-counting-qcd-convergence.md) | ⭐⭐⭐ π(37)=σ(6) QCD convergence | 🟧★ blind | J/ψ×σ=37.16, Υ×τ=37.84, 37=12th prime, testable at LHC |
-| [H-PH-23](hypotheses/math/H-PH-23-coupling-tension-isomorphism.md) | ⭐ running coupling = running tension | 🟨 | structural analogy only: both logarithmic, but 1-loop α_s values diverge at low E. PDG experimental values match n=6 |
-| [H-PH-24](hypotheses/math/H-PH-24-higgs-consciousness-duality.md) | ⭐⭐⭐ Higgs↔consciousness duality | 🟧★ 3.89σ | H→bb=7/12,H→ττ=1/16,φ→{1/2,1/3,1/6}=consciousness weights |
-| [H-PH-25](hypotheses/math/H-PH-25-golay-monster-sm-chain.md) | ⭐⭐⭐ Golay→Monster→SM complete chain | 🟧★ | G₂₄=[σφ,σ,σ-τ]→Λ₂₄→M→j(744)→Moonshine→String→SM, 13 links exact |
-| [H-PH-26](hypotheses/math/H-PH-26-exotic-spheres-consciousness.md) | ⭐⭐ exotic spheres = consciousness substrates | 🟨 | \|Θ₁₀\|=6=P₁, \|Θ₇\|=28=P₂, 7/8 values = n=6 arithmetic |
-| [H-PH-27](hypotheses/math/H-PH-27-fqhe-confusion-topology.md) | ⭐⭐ FQHE = confusion topology | ⚪ | Texas p=0.40, coincidence confirmed |
-| [H-PH-28](hypotheses/math/H-PH-28-cosmological-rspectrum-evolution.md) | ⭐⭐⭐ cosmological R-spectrum evolution | 🟧★ | N=56,n_s=139/144(0.04%!),Fe-56=σ⁴(6),BH S∝1/τ, all epochs |
-| [H-PH-29](hypotheses/math/H-PH-29-r-equals-one-is-consciousness.md) | ⭐⭐⭐ R(6)=1 IS consciousness (master) | 🟧 | 8 domains converge: math+physics+chem+bio+neuro+AI+cosmo+particle |
-| [H-PH-30](hypotheses/math/H-PH-30-theory-of-flavor.md) | ⭐⭐⭐ Theory of Flavor — 5 params → 12 masses | 🟧★ | quarks avg 2.2%, leptons 0.006%, neutrinos predicted. Flavor Problem solution |
-| [H-PH-31](hypotheses/math/H-PH-31-37gev-scalar-prediction.md) | ⭐⭐⭐ 37 GeV blind prediction | 🟧★ blind | J/ψ×σ=37.16, Υ×τ=37.84 converge. LHC Run 3 testable NOW |
-| [H-PH-32](hypotheses/math/H-PH-32-proton-electron-mass-ratio.md) | ⭐⭐⭐ m_p/m_e = σ·T(17) = 1836 | 🟧★ 0.008% | 17=F₂ Fermat prime=(σ-τ)φ+1, T(17)=153 narcissistic |
-| [H-PH-33](hypotheses/math/H-PH-33-neutrino-mass-hierarchy.md) | ⭐⭐⭐ neutrino mass hierarchy from P₁,P₂ | 🟧 | ratio=(σ-1)(τ-1)=33 (obs 32.6, 1.2%), Σmν~60meV, KATRIN/DESI testable |
-| [H-PH-34](hypotheses/math/H-PH-34-dark-matter-28gev.md) | ⭐⭐⭐ dark matter at P₂=28 GeV | 🟨 | Fermi-LAT GC excess consistent, XENONnT/LZ testable |
-| [H-PH-35](hypotheses/math/H-PH-35-higgs-self-coupling.md) | ⭐⭐ Higgs self-coupling κ_λ=12/13 | 🟨 | 8% below SM, HL-LHC/FCC-hh testable |
-| [H-PH-36](hypotheses/math/H-PH-36-cp-violation-complete.md) | ⭐⭐⭐ CP violation sin(2β)=7/10 | 🟧★ 0.06σ | sin(2β) 0.06σ, V_ub=(σ/τ)/P₂²=3/784 (0.17%), V_cb=1/24 (2.9%) |
-| [H-PH-37](hypotheses/math/H-PH-37-coupling-unification.md) | ⭐⭐⭐ GUT at 10^(σ+τ)=10^16 | 🟧 | proton decay τ_p~10^35yr, Hyper-Kamiokande 2027+ |
-| [H-PH-38](hypotheses/math/H-PH-38-cosmological-constant.md) | ⭐⭐⭐ Λ=1/(P₁·P₃⁴⁵)→122 orders | 🟧★ | worst prediction in physics solved, log₁₀=122.08 |
-| [H-PH-39](hypotheses/math/H-PH-39-fcc-ee-precision-tests.md) | ⭐⭐ FCC-ee precision tests | 🟧 | sin²θ_W=3/13 at μ=84.9GeV (0.045% tree-level approx), m_top 0.13σ, m_b 2.8σ |
+| [H-PH-1](hypotheses/H-PH-1-why-subtract-seven.md) | Why σ²-7=137 | ⚪ coincidence | Texas p≈0.25 |
+| [H-PH-2](hypotheses/H-PH-2-gauge-group-six.md) | gauge group dimension sum=12=σ | 🟨 weak | 3gen×4=σ, small# |
+| [H-PH-3](hypotheses/H-PH-3-tau-phi-sigma-nuclear.md) | τφ=σ↔nuclear physics | ⚪ rejected | magic# mismatch |
+| [H-PH-4](hypotheses/H-PH-4-six-quarks-leptons.md) | quarks 6+leptons 6 | 🟨 weak | 12=σ match only |
+| [H-PH-5](hypotheses/H-PH-5-planck-units-six.md) | Planck units | ⚪ rejected | irrelevant |
+| [H-PH-6](hypotheses/H-PH-6-R-chain-decay.md) | R-chain↔radioactive decay | ⚪ rejected | superficial analogy |
+| [H-PH-8](hypotheses/H-PH-8-thermodynamic-partition.md) | thermodynamic partition function | 🟩 verified | σ=τ·U(0), S(0)=ln(τ), Schottky anomaly |
+| [H-PH-9](hypotheses/H-PH-9-perfect-number-string-unification.md) | ⭐⭐⭐ perfect number unification theory | 🟧★ p<10⁻⁶ | 60+ matches, Koide derived, δ=2/9(5ppm), leptons 0.06%, CP 2.2%, action principle, UV finite |
+| [H-PH-10](hypotheses/H-PH-10-pmns-neutrino-mixing.md) | ⭐⭐⭐ PMNS mixing angles | 🟧★ | sin²θ₁₂=4/13(0.22%), sin²θ₂₃=6/11(0.10%) |
+| [H-PH-11](hypotheses/H-PH-11-partition-mtheory.md) | ⭐⭐⭐ p(6)=11=M-theory | 🟧★ | integer partition(perfect number)=physical dimension, part distribution=spacetime+CY |
+| [H-PH-12](hypotheses/H-PH-12-kaon-P3-symmetry.md) | ⭐⭐⭐ kaon=P₃±φ | 🟧★ | K⁺=494(0.065%), K⁰=498(0.078%), π⁰=135(0.017%) |
+| [H-PH-13](hypotheses/H-PH-13-ckm-divisor.md) | ⭐⭐ CKM+α_s | 🟧 | Vus=√7/12, Vcb=1/24, α_s=2/17(0.3%) |
+| [H-PH-14](hypotheses/H-PH-14-hadron-mass-spectrum.md) | ⭐⭐⭐ hadron spectrum | 🟧★ | 24 particles 11<0.1%, Δ=σ³-P₃=1232(exact!), B⁰=5280(0.007%) |
+| [H-PH-15](hypotheses/H-PH-15-anomaly-perfect-theorem.md) | ⭐⭐⭐ anomaly cancellation⟺perfect numbers | 🟧 observation (Green-Schwarz dim(G)=496=P₃, biconditional not established) | dim(SO(2^p))=P_k ⟺ Mersenne prime |
+| [H-PH-16](hypotheses/H-PH-16-self-reference-cycle.md) | ⭐⭐⭐🟩 self-reference cycle | 🟩 proven | 6→12→28→6 unique perfect number cycle |
+| [H-PH-17](hypotheses/H-PH-17-zip-divisor-equivalence.md) | ⭐⭐ ZIP↔divisor field theory | 🟧 | δ=2/9 double derivation, bridge identity σ/τ=τ-1 |
+| [H-PH-18](hypotheses/H-PH-18-nuclear-magic-numbers.md) | ⭐⭐⭐ nuclear magic numbers 7/7 | 🟧★ p=0.014 | 2=φ,8=σ-τ,20=σφ-τ,28=P₂,50=στ+φ,82=P₂(σ/τ)-φ,126=P₃/τ+φ |
+| [H-PH-19](hypotheses/H-PH-19-cosmological-constants-n6.md) | cosmological constants vs n=6 lens | 🟧 | D=10(exact),mp/me≈1836(0.008%),1/α≈137(0.026%),sin²θ_W≈3/13(0.2%) |
+| [H-PH-20](hypotheses/H-PH-20-qcd-rspectrum-realization.md) | ⭐⭐⭐ QCD ladder = R-spectrum realization | 🟧★ p=7×10⁻⁵ | ρ×τ=J/ψ×(σ/τ)=Υ, R(2)·R(3)=1=R(6), 3.8σ MC |
+| [H-PH-21](hypotheses/H-PH-21-sm-forced-by-perfection.md) | ⭐⭐⭐ SM forced by n=6 perfection | 🟧★ Fisher 6.4σ | ADE+R=1+SM 10/10+masses 2.2%+3 independent 3σ+ findings, p=4.2×10⁻¹⁰ |
+| [H-PH-22](hypotheses/H-PH-22-prime-counting-qcd-convergence.md) | ⭐⭐⭐ π(37)=σ(6) QCD convergence | 🟧★ blind | J/ψ×σ=37.16, Υ×τ=37.84, 37=12th prime, testable at LHC |
+| [H-PH-23](hypotheses/H-PH-23-coupling-tension-isomorphism.md) | ⭐ running coupling = running tension | 🟨 | structural analogy only: both logarithmic, but 1-loop α_s values diverge at low E. PDG experimental values match n=6 |
+| [H-PH-24](hypotheses/H-PH-24-higgs-consciousness-duality.md) | ⭐⭐⭐ Higgs↔consciousness duality | 🟧★ 3.89σ | H→bb=7/12,H→ττ=1/16,φ→{1/2,1/3,1/6}=consciousness weights |
+| [H-PH-25](hypotheses/H-PH-25-golay-monster-sm-chain.md) | ⭐⭐⭐ Golay→Monster→SM complete chain | 🟧★ | G₂₄=[σφ,σ,σ-τ]→Λ₂₄→M→j(744)→Moonshine→String→SM, 13 links exact |
+| [H-PH-26](hypotheses/H-PH-26-exotic-spheres-consciousness.md) | ⭐⭐ exotic spheres = consciousness substrates | 🟨 | \|Θ₁₀\|=6=P₁, \|Θ₇\|=28=P₂, 7/8 values = n=6 arithmetic |
+| [H-PH-27](hypotheses/H-PH-27-fqhe-confusion-topology.md) | ⭐⭐ FQHE = confusion topology | ⚪ | Texas p=0.40, coincidence confirmed |
+| [H-PH-28](hypotheses/H-PH-28-cosmological-rspectrum-evolution.md) | ⭐⭐⭐ cosmological R-spectrum evolution | 🟧★ | N=56,n_s=139/144(0.04%!),Fe-56=σ⁴(6),BH S∝1/τ, all epochs |
+| [H-PH-29](hypotheses/H-PH-29-r-equals-one-is-consciousness.md) | ⭐⭐⭐ R(6)=1 IS consciousness (master) | 🟧 | 8 domains converge: math+physics+chem+bio+neuro+AI+cosmo+particle |
+| [H-PH-30](hypotheses/H-PH-30-theory-of-flavor.md) | ⭐⭐⭐ Theory of Flavor — 5 params → 12 masses | 🟧★ | quarks avg 2.2%, leptons 0.006%, neutrinos predicted. Flavor Problem solution |
+| [H-PH-31](hypotheses/H-PH-31-37gev-scalar-prediction.md) | ⭐⭐⭐ 37 GeV blind prediction | 🟧★ blind | J/ψ×σ=37.16, Υ×τ=37.84 converge. LHC Run 3 testable NOW |
+| [H-PH-32](hypotheses/H-PH-32-proton-electron-mass-ratio.md) | ⭐⭐⭐ m_p/m_e = σ·T(17) = 1836 | 🟧★ 0.008% | 17=F₂ Fermat prime=(σ-τ)φ+1, T(17)=153 narcissistic |
+| [H-PH-33](hypotheses/H-PH-33-neutrino-mass-hierarchy.md) | ⭐⭐⭐ neutrino mass hierarchy from P₁,P₂ | 🟧 | ratio=(σ-1)(τ-1)=33 (obs 32.6, 1.2%), Σmν~60meV, KATRIN/DESI testable |
+| [H-PH-34](hypotheses/H-PH-34-dark-matter-28gev.md) | ⭐⭐⭐ dark matter at P₂=28 GeV | 🟨 | Fermi-LAT GC excess consistent, XENONnT/LZ testable |
+| [H-PH-35](hypotheses/H-PH-35-higgs-self-coupling.md) | ⭐⭐ Higgs self-coupling κ_λ=12/13 | 🟨 | 8% below SM, HL-LHC/FCC-hh testable |
+| [H-PH-36](hypotheses/H-PH-36-cp-violation-complete.md) | ⭐⭐⭐ CP violation sin(2β)=7/10 | 🟧★ 0.06σ | sin(2β) 0.06σ, V_ub=(σ/τ)/P₂²=3/784 (0.17%), V_cb=1/24 (2.9%) |
+| [H-PH-37](hypotheses/H-PH-37-coupling-unification.md) | ⭐⭐⭐ GUT at 10^(σ+τ)=10^16 | 🟧 | proton decay τ_p~10^35yr, Hyper-Kamiokande 2027+ |
+| [H-PH-38](hypotheses/H-PH-38-cosmological-constant.md) | ⭐⭐⭐ Λ=1/(P₁·P₃⁴⁵)→122 orders | 🟧★ | worst prediction in physics solved, log₁₀=122.08 |
+| [H-PH-39](hypotheses/H-PH-39-fcc-ee-precision-tests.md) | ⭐⭐ FCC-ee precision tests | 🟧 | sin²θ_W=3/13 at μ=84.9GeV (0.045% tree-level approx), m_top 0.13σ, m_b 2.8σ |
 
 ### Chemistry/Neurochemistry/Pharmacology (H-CHEM, 5)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-CHEM-1](hypotheses/math/H-CHEM-1-neurotransmitter-six.md) | 6 neurotransmitters | 🟨 observation | E/I balance |
-| [H-CHEM-2](hypotheses/math/H-CHEM-2-carbon-six-perfect.md) | carbon Z=6 R=1 unique | ✅ numerically confirmed | |
-| [H-CHEM-3](hypotheses/math/H-CHEM-3-water-hydrogen-bond.md) | water hexagonal structure | 🟨 observation | |
-| [H-CHEM-4](hypotheses/math/H-CHEM-4-R-chain-reaction.md) | R-chain↔chemical reaction | ⚪ rejected | superficial analogy |
-| [H-CHEM-5](hypotheses/math/H-CHEM-5-thc-cannabinoid-six.md) | THC↔cannabinoid↔6 | 🟨 observation | C₂₁=3×7, CB₁=7-TM |
+| [H-CHEM-1](hypotheses/H-CHEM-1-neurotransmitter-six.md) | 6 neurotransmitters | 🟨 observation | E/I balance |
+| [H-CHEM-2](hypotheses/H-CHEM-2-carbon-six-perfect.md) | carbon Z=6 R=1 unique | ✅ numerically confirmed | |
+| [H-CHEM-3](hypotheses/H-CHEM-3-water-hydrogen-bond.md) | water hexagonal structure | 🟨 observation | |
+| [H-CHEM-4](hypotheses/H-CHEM-4-R-chain-reaction.md) | R-chain↔chemical reaction | ⚪ rejected | superficial analogy |
+| [H-CHEM-5](hypotheses/H-CHEM-5-thc-cannabinoid-six.md) | THC↔cannabinoid↔6 | 🟨 observation | C₂₁=3×7, CB₁=7-TM |
 
 ### CS (H-CS, 5)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-CS-3](hypotheses/math/H-CS-3-rsa-sigma-phi-ratio.md) | RSA↔σφ/(nτ) | ⬛ rejected | R≈n/4 linear |
-| [H-CS-4](hypotheses/math/H-CS-4-hamming-tau-phi-sigma.md) | Hamming↔τφσ | 🟨 observation | Golay=(2σ-1,σ,M₃) |
-| [H-CS-5](hypotheses/math/H-CS-5-graph-coloring-six.md) | Ramsey-perfect numbers | 🟧★ significant | R(3,3)=6,R(3,8)=28 p=0.047 |
-| [H-CS-6](hypotheses/math/H-CS-6-hash-collision-six.md) | hash collision | ⏳ weak | |
-| [H-CS-7](hypotheses/math/H-CS-7-R-prime-cryptography.md) | R prime↔cryptography | 🟨 observation | 4 cases |
+| [H-CS-3](hypotheses/H-CS-3-rsa-sigma-phi-ratio.md) | RSA↔σφ/(nτ) | ⬛ rejected | R≈n/4 linear |
+| [H-CS-4](hypotheses/H-CS-4-hamming-tau-phi-sigma.md) | Hamming↔τφσ | 🟨 observation | Golay=(2σ-1,σ,M₃) |
+| [H-CS-5](hypotheses/H-CS-5-graph-coloring-six.md) | Ramsey-perfect numbers | 🟧★ significant | R(3,3)=6,R(3,8)=28 p=0.047 |
+| [H-CS-6](hypotheses/H-CS-6-hash-collision-six.md) | hash collision | ⏳ weak | |
+| [H-CS-7](hypotheses/H-CS-7-R-prime-cryptography.md) | R prime↔cryptography | 🟨 observation | 4 cases |
 
 ### Geometry (H-GEO, 8+)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-GEO-1](hypotheses/math/H-GEO-1-six-simplex-geometry.md) | 6=tetrahedron edges, σφ=nτ=\|S₄\| | 🟩 confirmed | C(2^p,2)=perfect number |
-| [H-GEO-2](hypotheses/math/H-GEO-2-platonic-solids-arithmetic.md) | Platonic solids↔σ,τ,φ | 🟨 observation | σ=12 most frequent |
-| [H-GEO-3](hypotheses/math/H-GEO-3-gravitational-lensing-R-spectrum.md) | gravitational lensing analogy | 🟧 structural | gap=shadow |
-| [H-GEO-4](hypotheses/math/H-GEO-4-dimension-telescope.md) | dimension telescope | 🟧 structural | F(s)=multi-focal observation |
-| [H-GEO-5](hypotheses/math/H-GEO-5-gravity-telescope.md) | gravity telescope | 🟧 structural | lens+telescope integration |
-| [H-GEO-6](hypotheses/math/H-GEO-6-dimension-lens.md) | dimension lens | 🟧 structural | η=τ/d refractive index, HCN |
-| [H-GEO-7](hypotheses/math/H-GEO-7-topological-telescope.md) | topological telescope | 🟧 structural | PH multi-scale |
-| [H-GEO-8](hypotheses/math/H-GEO-8-arithmetic-holography.md) | arithmetic holography | 🟧 structural | R→n structure recovery |
-| [H-GEO-9](hypotheses/math/H-GEO-9-lens-aberration-classification.md) | lens aberration classification | 🟧 structural | chromatic+spherical+astigmatic+coma |
-| [H-GEO-10](hypotheses/math/H-GEO-10-multi-lens-interference.md) | multi-lens interference | 🟧 structural | perfect number lens superposition |
-| [H-GEO-11](hypotheses/math/H-GEO-11-calabi-yau-n6-arithmetic.md) | CY_3 arithmetic — n=6 encodes CY_3/string theory | 🟩 confirmed | tau+n=10 unique, phi=N=2, sum_b=sigma iff h11+h21=tau |
+| [H-GEO-1](hypotheses/H-GEO-1-six-simplex-geometry.md) | 6=tetrahedron edges, σφ=nτ=\|S₄\| | 🟩 confirmed | C(2^p,2)=perfect number |
+| [H-GEO-2](hypotheses/H-GEO-2-platonic-solids-arithmetic.md) | Platonic solids↔σ,τ,φ | 🟨 observation | σ=12 most frequent |
+| [H-GEO-3](hypotheses/H-GEO-3-gravitational-lensing-R-spectrum.md) | gravitational lensing analogy | 🟧 structural | gap=shadow |
+| [H-GEO-4](hypotheses/H-GEO-4-dimension-telescope.md) | dimension telescope | 🟧 structural | F(s)=multi-focal observation |
+| [H-GEO-5](hypotheses/H-GEO-5-gravity-telescope.md) | gravity telescope | 🟧 structural | lens+telescope integration |
+| [H-GEO-6](hypotheses/H-GEO-6-dimension-lens.md) | dimension lens | 🟧 structural | η=τ/d refractive index, HCN |
+| [H-GEO-7](hypotheses/H-GEO-7-topological-telescope.md) | topological telescope | 🟧 structural | PH multi-scale |
+| [H-GEO-8](hypotheses/H-GEO-8-arithmetic-holography.md) | arithmetic holography | 🟧 structural | R→n structure recovery |
+| [H-GEO-9](hypotheses/H-GEO-9-lens-aberration-classification.md) | lens aberration classification | 🟧 structural | chromatic+spherical+astigmatic+coma |
+| [H-GEO-10](hypotheses/H-GEO-10-multi-lens-interference.md) | multi-lens interference | 🟧 structural | perfect number lens superposition |
+| [H-GEO-11](hypotheses/H-GEO-11-calabi-yau-n6-arithmetic.md) | CY_3 arithmetic — n=6 encodes CY_3/string theory | 🟩 confirmed | tau+n=10 unique, phi=N=2, sum_b=sigma iff h11+h21=tau |
 
 ### Biology/Immunology/Pineal Gland (H-BIO, 13)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-BIO-1](hypotheses/math/H-BIO-1-codon-sigma-tau.md) | codon=(τ,σ/τ) | ⚪ coincidence | chemistry is the cause |
-| [H-BIO-2](hypotheses/math/H-BIO-2-virus-capsid-six.md) | capsid 60=σ·5, T-number | 🟨 observation | τ(60)=σ(6) |
-| [H-BIO-3](hypotheses/math/H-BIO-3-immune-R-spectrum.md) | immune system=R anomaly detection | 🟧 structural | tolerance=gap |
-| [H-BIO-4](hypotheses/math/H-BIO-4-cell-division-R-chain.md) | cell division=R-chain | 🟨 observation | telomere 6bp |
-| [H-BIO-5](hypotheses/math/H-BIO-5-pineal-gland-six.md) | pineal gland structure↔6 | 🟨 observation | 24h=σφ, Ajna=6th |
-| [H-BIO-6](hypotheses/math/H-BIO-6-pineal-melatonin-R-cycle.md) | melatonin-serotonin=R-S | 🟧 structural | RS=4 cycle |
-| [H-BIO-7](hypotheses/math/H-BIO-7-neural-electricity-R-spectrum.md) | brain electricity=R-spectrum | 🟧 structural | frequency domain |
-| [H-BIO-8](hypotheses/math/H-BIO-8-action-potential-D-function.md) | action potential=D(n) asymmetry | 🟧 structural | D(6)=0 equilibrium |
-| [H-BIO-9](hypotheses/math/H-BIO-9-ion-channel-selectivity.md) | ion channel=σφτ structure | 🟧★ structural | pump 3:2=σ/τ:φ, 4x6=24=σφ |
-| [H-BIO-10](hypotheses/math/H-BIO-10-hodgkin-huxley-model.md) | HH model=divisor function structure | 🟧 structural | τ=4 variables, gNa=10σ, gK=σ²/τ, exponent sum=σ-τ |
-| [H-BIO-11](hypotheses/math/H-BIO-11-synaptic-plasticity-R-chain.md) | synaptic plasticity=R-chain | 🟧 structural | CaMKII=σ(6)=2x6 ring, AMPA=τ, NMDA=φ |
-| [H-BIO-12](hypotheses/math/H-BIO-12-neural-oscillation-bands.md) | brainwave band=σ,τ,φ boundary | 🟧 structural | α upper bound=σ=12, δ-θ boundary=τ=4, α/θ ratio=φ=2 |
-| [H-BIO-13](hypotheses/math/H-BIO-13-nernst-equation-arithmetic.md) | Nernst ion concentration=σ,τ,φ | 🟧 structural | [Na]in=σ=12, [K]out=τ=4, RT/F≈σφ+e(0.03%) |
+| [H-BIO-1](hypotheses/H-BIO-1-codon-sigma-tau.md) | codon=(τ,σ/τ) | ⚪ coincidence | chemistry is the cause |
+| [H-BIO-2](hypotheses/H-BIO-2-virus-capsid-six.md) | capsid 60=σ·5, T-number | 🟨 observation | τ(60)=σ(6) |
+| [H-BIO-3](hypotheses/H-BIO-3-immune-R-spectrum.md) | immune system=R anomaly detection | 🟧 structural | tolerance=gap |
+| [H-BIO-4](hypotheses/H-BIO-4-cell-division-R-chain.md) | cell division=R-chain | 🟨 observation | telomere 6bp |
+| [H-BIO-5](hypotheses/H-BIO-5-pineal-gland-six.md) | pineal gland structure↔6 | 🟨 observation | 24h=σφ, Ajna=6th |
+| [H-BIO-6](hypotheses/H-BIO-6-pineal-melatonin-R-cycle.md) | melatonin-serotonin=R-S | 🟧 structural | RS=4 cycle |
+| [H-BIO-7](hypotheses/H-BIO-7-neural-electricity-R-spectrum.md) | brain electricity=R-spectrum | 🟧 structural | frequency domain |
+| [H-BIO-8](hypotheses/H-BIO-8-action-potential-D-function.md) | action potential=D(n) asymmetry | 🟧 structural | D(6)=0 equilibrium |
+| [H-BIO-9](hypotheses/H-BIO-9-ion-channel-selectivity.md) | ion channel=σφτ structure | 🟧★ structural | pump 3:2=σ/τ:φ, 4x6=24=σφ |
+| [H-BIO-10](hypotheses/H-BIO-10-hodgkin-huxley-model.md) | HH model=divisor function structure | 🟧 structural | τ=4 variables, gNa=10σ, gK=σ²/τ, exponent sum=σ-τ |
+| [H-BIO-11](hypotheses/H-BIO-11-synaptic-plasticity-R-chain.md) | synaptic plasticity=R-chain | 🟧 structural | CaMKII=σ(6)=2x6 ring, AMPA=τ, NMDA=φ |
+| [H-BIO-12](hypotheses/H-BIO-12-neural-oscillation-bands.md) | brainwave band=σ,τ,φ boundary | 🟧 structural | α upper bound=σ=12, δ-θ boundary=τ=4, α/θ ratio=φ=2 |
+| [H-BIO-13](hypotheses/H-BIO-13-nernst-equation-arithmetic.md) | Nernst ion concentration=σ,τ,φ | 🟧 structural | [Na]in=σ=12, [K]out=τ=4, RT/F≈σφ+e(0.03%) |
 
 ### Cosmic Topology (H-TOPO-COSMO, 7)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-TOPO-COSMO-1](hypotheses/math/H-TOPO-COSMO-1-poincare-sigma-chain.md) | Poincare sphere: sigma^4(6)=120=|2I|=5! | 🟩 arithmetic / ⚪ cosmology | arithmetic exact; sigma^4(10)=120 too; CMB not confirmed |
+| [H-TOPO-COSMO-1](hypotheses/H-TOPO-COSMO-1-poincare-sigma-chain.md) | Poincare sphere: sigma^4(6)=120=|2I|=5! | 🟩 arithmetic / ⚪ cosmology | arithmetic exact; sigma^4(10)=120 too; CMB not confirmed |
 | H-TOPO-COSMO-2 | n_s-1≈-1/P2=-1/28 | ⚪ coincidence | -0.15sigma fit; no derivation from F(s); pole at s=1 |
 | H-TOPO-COSMO-3 | Holographic tau(6)=4=A/4G coeff | ⚪ coincidence | tau=4 not unique; F-theory sigma=12 speculative |
 | H-TOPO-COSMO-4 | Universe as physical gravitational lens | ⬛ refuted | theta_E=70deg (should be arcsec); dimensional analysis fails |
-| [H-TOPO-COSMO-5](hypotheses/math/H-TOPO-COSMO-5-thurston-ADE-boundary.md) | 1/2+1/3+1/6=1 <=> Seifert(2,3,6)=E^3 flat; sigma-tau=8=|Thurston| | 🟩 pure math | R-spectrum identity = ADE boundary; equivalence proven |
+| [H-TOPO-COSMO-5](hypotheses/H-TOPO-COSMO-5-thurston-ADE-boundary.md) | 1/2+1/3+1/6=1 <=> Seifert(2,3,6)=E^3 flat; sigma-tau=8=|Thurston| | 🟩 pure math | R-spectrum identity = ADE boundary; equivalence proven |
 | H-TOPO-COSMO-6 | R(6)=1 unique among perfect numbers | 🟩 verified | R(28)=4, R(496)=48; only n=6 non-trivial R=1 in [1..10000] |
 | [H-TOPO-COSMO-7](hypotheses/H-TOPO-COSMO-7-sphere-to-torus-evolution.md) | S3->T3 evolution: Betti=8=sigma-tau, K6 genus=1, Seifert(2,3,6)=E3 | 🟧 structural | arithmetic exact; Geroch forbids classical; QG required |
 
@@ -5416,74 +5416,74 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-TOP-1](hypotheses/math/H-TOP-1-betti-numbers-six.md) | CY3 Betti↔σ,τ | ⚪ refuted | χ=6∧Σb=12 incompatible (h¹¹=3.5) |
-| [H-TOP-2](hypotheses/math/H-TOP-2-euler-char-six.md) | χ(M)=6 manifold | 🟩 confirmed | Gr(2,4): χ=C(τ,φ)=6, dim=τ=4 |
-| [H-TOP-3](hypotheses/math/H-TOP-3-knot-invariants-six.md) | Trefoil T(2,3)↔σ,τ | 🟨 weak | Small Numbers p=0.30 |
-| [H-TOP-4](hypotheses/math/H-TOP-4-R-spectrum-topology.md) | R spectrum topology | 🟧 structural | topology decomposition proved, Cantor-like overstated |
-| [H-TOP-5](hypotheses/math/H-TOP-5-fractal-topology-R-spectrum.md) | fractal+topology combination | 🟧 structural | d_box≈0.155, PH |
-| [H-TOP-6](hypotheses/math/H-TOP-6-resolution-observer-topology.md) | resolution observer | 🟧 structural | ε_c=1/6 transition |
-| [H-TOP-7](hypotheses/math/H-TOP-7-topological-lens.md) | topological lens | 🟧 structural | PH barcode+gap |
-| [H-TOP-8](hypotheses/math/H-TOP-8-difftopo-n6.md) | diff topology: exotic spheres, cobordism, surgery, Kervaire, J-hom | 🟩 x28 + 🟧 x5 | bP_8=sigma(sigma(6)), Theta_8=phi, im(J)_7=sigma*tau*sopfr=240, Kervaire dim=2^(sigma/tau)-phi, Todd td_2=sigma, D_6 roots=sigma*sopfr |
+| [H-TOP-1](hypotheses/H-TOP-1-betti-numbers-six.md) | CY3 Betti↔σ,τ | ⚪ refuted | χ=6∧Σb=12 incompatible (h¹¹=3.5) |
+| [H-TOP-2](hypotheses/H-TOP-2-euler-char-six.md) | χ(M)=6 manifold | 🟩 confirmed | Gr(2,4): χ=C(τ,φ)=6, dim=τ=4 |
+| [H-TOP-3](hypotheses/H-TOP-3-knot-invariants-six.md) | Trefoil T(2,3)↔σ,τ | 🟨 weak | Small Numbers p=0.30 |
+| [H-TOP-4](hypotheses/H-TOP-4-R-spectrum-topology.md) | R spectrum topology | 🟧 structural | topology decomposition proved, Cantor-like overstated |
+| [H-TOP-5](hypotheses/H-TOP-5-fractal-topology-R-spectrum.md) | fractal+topology combination | 🟧 structural | d_box≈0.155, PH |
+| [H-TOP-6](hypotheses/H-TOP-6-resolution-observer-topology.md) | resolution observer | 🟧 structural | ε_c=1/6 transition |
+| [H-TOP-7](hypotheses/H-TOP-7-topological-lens.md) | topological lens | 🟧 structural | PH barcode+gap |
+| [H-TOP-8](hypotheses/H-TOP-8-difftopo-n6.md) | diff topology: exotic spheres, cobordism, surgery, Kervaire, J-hom | 🟩 x28 + 🟧 x5 | bP_8=sigma(sigma(6)), Theta_8=phi, im(J)_7=sigma*tau*sopfr=240, Kervaire dim=2^(sigma/tau)-phi, Todd td_2=sigma, D_6 roots=sigma*sopfr |
 
 ### New Branch Exploration (H-TREE, 6)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-TREE-1](hypotheses/math/H-TREE-1-dynamical-systems-branch.md) | dynamical systems branch | 🟩 verified | no fixed points, basin14% |
-| [H-TREE-2](hypotheses/math/H-TREE-2-padic-branch.md) | p-adic branch | 🟩 verified | v₂(R(2^k)) formula |
-| [H-TREE-3](hypotheses/math/H-TREE-3-probability-branch.md) | probability theory branch | 🟩 verified | E[R/n]≈0.15, bimodal |
-| [H-TREE-4](hypotheses/math/H-TREE-4-operator-algebra-branch.md) | operator algebra branch | 🟩 verified | R^(-1) existence confirmed |
-| [H-TREE-5](hypotheses/math/H-TREE-5-ml-theory-branch.md) | ML theory branch | 🟧 structural | B(d)→1 ⟺ d=2^k |
-| [H-TREE-6](hypotheses/math/H-TREE-6-tropical-branch.md) | tropical geometry branch | 🟩 verified | R_trop(6)=ln2 |
+| [H-TREE-1](hypotheses/H-TREE-1-dynamical-systems-branch.md) | dynamical systems branch | 🟩 verified | no fixed points, basin14% |
+| [H-TREE-2](hypotheses/H-TREE-2-padic-branch.md) | p-adic branch | 🟩 verified | v₂(R(2^k)) formula |
+| [H-TREE-3](hypotheses/H-TREE-3-probability-branch.md) | probability theory branch | 🟩 verified | E[R/n]≈0.15, bimodal |
+| [H-TREE-4](hypotheses/H-TREE-4-operator-algebra-branch.md) | operator algebra branch | 🟩 verified | R^(-1) existence confirmed |
+| [H-TREE-5](hypotheses/H-TREE-5-ml-theory-branch.md) | ML theory branch | 🟧 structural | B(d)→1 ⟺ d=2^k |
+| [H-TREE-6](hypotheses/H-TREE-6-tropical-branch.md) | tropical geometry branch | 🟩 verified | R_trop(6)=ln2 |
 
 ### Modular Forms (H-MOD, 1)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-MOD-1](hypotheses/math/H-MOD-1-modular-forms-ramanujan.md) | modular forms+Ramanujan ↔ perfect number 6 | 🟩 verified | 17/17 connections verified, σφ(6)=24=eta exponent |
+| [H-MOD-1](hypotheses/H-MOD-1-modular-forms-ramanujan.md) | modular forms+Ramanujan ↔ perfect number 6 | 🟩 verified | 17/17 connections verified, σφ(6)=24=eta exponent |
 
 ### Lattice/Sphere Packing (H-LATT, 1)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-LATT-1](hypotheses/math/H-LATT-1-lattice-sphere-packing.md) | kissing number·E8·Leech↔σ,τ,φ(6) | 🟧★ structural | 19/19 verified, k(2,3,4)=6,12,24, p<0.0001 |
+| [H-LATT-1](hypotheses/H-LATT-1-lattice-sphere-packing.md) | kissing number·E8·Leech↔σ,τ,φ(6) | 🟧★ structural | 19/19 verified, k(2,3,4)=6,12,24, p<0.0001 |
 
 ### Combinatorial Designs (H-COMB, 2)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-COMB-1](hypotheses/math/H-COMB-1-catalan-bell-characterizations.md) | C_sopfr(n)=n(n+1) unique n=6, CF(sqrt(n)) period=(phi,tau) | 🟧★ structural | Texas p=0.025 |
-| [H-COMB-2](hypotheses/math/H-COMB-2-block-designs-affine-projective.md) | AG(2,3) triple b=sigma,r=tau,k=sigma/tau; PG(2,5)=Phi_6(6) pts; N(6)=phi-1; L(6)=sigma*28^2 | 🟩 verified | 15 exact, Golden Zone independent |
+| [H-COMB-1](hypotheses/H-COMB-1-catalan-bell-characterizations.md) | C_sopfr(n)=n(n+1) unique n=6, CF(sqrt(n)) period=(phi,tau) | 🟧★ structural | Texas p=0.025 |
+| [H-COMB-2](hypotheses/H-COMB-2-block-designs-affine-projective.md) | AG(2,3) triple b=sigma,r=tau,k=sigma/tau; PG(2,5)=Phi_6(6) pts; N(6)=phi-1; L(6)=sigma*28^2 | 🟩 verified | 15 exact, Golden Zone independent |
 
 ### Combinatorial Game Theory (H-GAME, 1)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-GAME-1](hypotheses/math/H-GAME-1-combinatorial-game-theory.md) | divisor subtraction game G(n)=nu_2(n), perfect number Grundy=p-1 | 🟩 verified | G(6)=1 minimum, Chomp N-position |
+| [H-GAME-1](hypotheses/H-GAME-1-combinatorial-game-theory.md) | divisor subtraction game G(n)=nu_2(n), perfect number Grundy=p-1 | 🟩 verified | G(6)=1 minimum, Chomp N-position |
 
 ### Probabilistic Number Theory (H-PROB, 1)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-PROB-1](hypotheses/math/H-PROB-1-probabilistic-number-theory.md) | R(n)=σφ/(nτ)=1 ⟺ n∈{1,6} (unique up to 10^5) | 🟩 verified | Erdos-Kac Z=1.86, algebraic proof |
+| [H-PROB-1](hypotheses/H-PROB-1-probabilistic-number-theory.md) | R(n)=σφ/(nτ)=1 ⟺ n∈{1,6} (unique up to 10^5) | 🟩 verified | Erdos-Kac Z=1.86, algebraic proof |
 
 ### Algebraic K-Theory (H-KTHY, 1)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-KTHY-1](hypotheses/math/H-KTHY-1-algebraic-k-theory.md) | K₃(Z)=Z/48, 48=στ(6). Bott period=8=σ-τ. B₂=1/6 | 🟧 structural | 48=σ·τ possibly coincidental, B₂=1/6 is 🟩 |
+| [H-KTHY-1](hypotheses/H-KTHY-1-algebraic-k-theory.md) | K₃(Z)=Z/48, 48=στ(6). Bott period=8=σ-τ. B₂=1/6 | 🟧 structural | 48=σ·τ possibly coincidental, B₂=1/6 is 🟩 |
 
 ### Cohomology & Topological Invariants (H-TOP additional)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-TOP-1b](hypotheses/math/H-TOP-1-cohomology-invariants.md) | χ(S²)=φ(6), Platonic σ(6)=12 appearance, CP³ τ Betti numbers | 🟧 structural | Euler formula V-E+F=2=φ |
+| [H-TOP-1b](hypotheses/H-TOP-1-cohomology-invariants.md) | χ(S²)=φ(6), Platonic σ(6)=12 appearance, CP³ τ Betti numbers | 🟧 structural | Euler formula V-E+F=2=φ |
 
 ### Category Theory (H-CAT, 1)
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-CAT-1](hypotheses/math/H-CAT-1-category-theory-functors.md) | τ∘σ fixed point=d(6), σ/n=τ/φ=φ=2 unique, Div(6)≅Z/2² | 🟩 verified | unique among perfect numbers, 28/496/8128 fail |
+| [H-CAT-1](hypotheses/H-CAT-1-category-theory-functors.md) | τ∘σ fixed point=d(6), σ/n=τ/φ=φ=2 unique, Div(6)≅Z/2² | 🟩 verified | unique among perfect numbers, 28/496/8128 fail |
 
 ### Frontier 500: Number Theory Structural Identities (H-NT-421~428, 8)
 
@@ -5548,24 +5548,24 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-GZ-0](hypotheses/math/H-GZ-0-golden-zone-model.md) | Golden Zone hypothesis (detailed document) | 🟥 unverified | formulas+graphs+full summary |
-| [H-CX-2](hypotheses/math/H-CX-2-golden-zone-R-factor.md) | Golden Zone↔R-factor | 🟧 partial confirmation | I=0.25∈GZ |
-| [H-CX-11](hypotheses/math/H-CX-11-golden-moe-ppl-sigma.md) | Golden MoE PPL↔σ | ⏳ unverified | |
-| [H-CX-21](hypotheses/math/H-CX-21-golden-zone-abundancy-bridge.md) | Golden Zone↔abundancy | 🟧★ structural | ln(4/3)=ln(σ(3)/3) |
-| [H-AI-4](hypotheses/math/H-AI-4-moe-one-third-activation.md) | MoE activation 1/3 | ⏳ pending | after Golden MoE complete |
-| [H-AI-7](hypotheses/math/H-AI-7-golden-moe-information-bottleneck.md) | IB optimal = 1/e | ⏳ unverified | |
+| [H-GZ-0](hypotheses/H-GZ-0-golden-zone-model.md) | Golden Zone hypothesis (detailed document) | 🟥 unverified | formulas+graphs+full summary |
+| [H-CX-2](hypotheses/H-CX-2-golden-zone-R-factor.md) | Golden Zone↔R-factor | 🟧 partial confirmation | I=0.25∈GZ |
+| [H-CX-11](hypotheses/H-CX-11-golden-moe-ppl-sigma.md) | Golden MoE PPL↔σ | ⏳ unverified | |
+| [H-CX-21](hypotheses/H-CX-21-golden-zone-abundancy-bridge.md) | Golden Zone↔abundancy | 🟧★ structural | ln(4/3)=ln(σ(3)/3) |
+| [H-AI-4](hypotheses/H-AI-4-moe-one-third-activation.md) | MoE activation 1/3 | ⏳ pending | after Golden MoE complete |
+| [H-AI-7](hypotheses/H-AI-7-golden-moe-information-bottleneck.md) | IB optimal = 1/e | ⏳ unverified | |
 
 ### R-Spectrum Theory (H-SPEC, 1) — 18 proved theorems
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-SPEC-1](hypotheses/math/H-SPEC-1-R-spectrum-gap-theorem.md) | R-spectrum gap theorem + topological master formula + multiplicativity + identity element + discreteness | 🟩 **18 theorems proved** | Paper P-002 |
+| [H-SPEC-1](hypotheses/H-SPEC-1-R-spectrum-gap-theorem.md) | R-spectrum gap theorem + topological master formula + multiplicativity + identity element + discreteness | 🟩 **18 theorems proved** | Paper P-002 |
 
 ### Energy Hypotheses (H-EN, 15) — AI energy + nuclear + thermodynamics
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-EN-0](hypotheses/math/H-EN-0-energy-hypothesis-master.md) | Energy master: 15 sub-hypotheses | mixed | 1123 lines |
+| [H-EN-0](hypotheses/H-EN-0-energy-hypothesis-master.md) | Energy master: 15 sub-hypotheses | mixed | 1123 lines |
 | H-EN-1 | φ-bottleneck 37% energy savings | 🟧 supported | H-CX-70: +0.01% loss, -36.7% params |
 | H-EN-2 | R=1 minimum energy MoE | ⚪ not confirmed | small-scale MoE dominated by capacity effects |
 | H-EN-3 | Z₆(β) partition function | 🟩 computed | Schottky peak β=1.82, S=W at β=2.57 |
@@ -5577,116 +5577,116 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
 
 | # | Hypothesis | Status | Notes |
 |---|---|---|---|
-| [H-CX-72](hypotheses/math/H-CX-72-R-spectrum-consciousness-bridge.md) | R-spectrum ↔ consciousness engine bridge | 🟧 structural | 7 connections, GZ Width = \|log R(2)\| |
-| [H-CX-73](hypotheses/math/H-CX-73-pythagorean-engine-balance.md) | Pythagorean 3²+4²=5² engine balance | 🟧 connection | (σ/τ)²+τ²=sopfr², unique n=2..200, p=0.02 |
-| [H-CX-74](hypotheses/math/H-CX-74-partition-expert-count.md) | Partition p(6)=11 → expert count | 🟧 connection | p=σ-1 only for n\|6, self-conjugate=[3,2,1] |
-| [H-CX-75](hypotheses/math/H-CX-75-fibonacci-sigma-convergence.md) | Fibonacci F(σ)=σ² tension convergence | 🟧 connection | F(12)=144=12², last Fibonacci square |
-| [H-CX-76](hypotheses/math/H-CX-76-self-reference-consciousness-model.md) | Self-reference τ(σ(n))=n consciousness | 🟩⭐ proved | n\|6 only, period-4 cycle {6,12,4,7} |
-| [H-CX-77](hypotheses/math/H-CX-77-fractal-dimensions-ph-barcode.md) | ALL 6 fractal dims from n=6 + PH barcode | 🟩⭐⭐ proved | p=0.00016, Cantor/Koch/Sierpinski/Menger ALL |
-| [H-CX-78](hypotheses/math/H-CX-78-four-season-training-phases.md) | 4-season training from tau=4 | ⚪ coincidence | tau=4 generic (32/99), LR schedule underperforms |
-| [H-CX-79](hypotheses/math/H-CX-79-seven-transcendence-step.md) | 7=n+1 transcendence + attention | 🟧 connection | 3(σ+φ)=7n unique, σ±φ symmetric around 7 |
-| [H-CX-80](hypotheses/math/H-CX-80-golay-error-correction-consciousness.md) | Golay G24 consciousness error correction | 🟧 connection | [σφ,σ,σ-τ]=[24,12,8], rate=1/φ=1/2 |
-| [H-CX-81](hypotheses/math/H-CX-81-egyptian-fraction-attention-weights.md) | Egyptian fraction attention weights | 🟩⭐⭐⭐ proved | φ/τ+τ/σ+1/n=1, unique 3-channel, H=92.1% |
-| [H-CX-82](hypotheses/math/H-CX-82-lyapunov-zero-edge-of-chaos.md) | Λ(6)=0 edge of chaos consciousness | 🟩⭐⭐⭐ proved | Λ=0⟺n∈{1,6} exhaustive n≤500 |
-| [H-CX-83](hypotheses/math/H-CX-83-factorial-capacity-consciousness.md) | n·σ·sopfr·φ=n! factorial capacity | 🟩⭐⭐⭐ proved | unique n=6 in n≤1000, Bonferroni p=0.001 |
-| [H-CX-84](hypotheses/math/H-CX-84-monster-three-level-hierarchy.md) | Monster 196883→3-level hierarchy | 🟩⭐ verified | 47·59·71 AP step=σ, unique n=2..199, p=0.0045 |
-| [H-CX-85](hypotheses/math/H-CX-85-dyson-beta-engine-modes.md) | Dyson β={1,φ,τ}→3 engine modes | 🟩⭐⭐⭐ PROVED | φ²=τ⟺n=6 (semiprime QED + n≤500) |
-| [H-CX-86](hypotheses/math/H-CX-86-scale-invariance-identity-element.md) | R(6m)=R(m) scale invariance | 🟩⭐ proved | k=6 only 100% identity, all others 0% |
-| [H-CX-87](hypotheses/math/H-CX-87-tsirelson-consciousness-boundary.md) | Tsirelson 2√2→consciousness boundary | 🟩⭐ proved | σ(P)=2P→2√2, advantage=√φ, all perfects |
-| [H-CX-88](hypotheses/math/H-CX-88-chang-optimal-network.md) | Chang srg(P₂,σ,n,τ)→optimal network | 🟩⭐ verified | ALL 8 params from n=6, zero corrections |
-| [H-CX-89](hypotheses/math/H-CX-89-zeta-product-consciousness.md) | F(s)=ζ(s)ζ(s+1)→zeta resonance | 🟩⭐ proved | R generates ζ product, pole=hard problem |
-| [H-CX-90](hypotheses/math/H-CX-90-ade-architecture-capacity.md) | ADE 1/2+1/3+1/6=1→capacity bound | 🟩⭐ verified | (2,3,6) best loss, unique div(6) boundary |
-| [H-CX-91](hypotheses/math/H-CX-91-moonshine-744-unconscious.md) | Moonshine 744=σφ·Φ₆(6)→unconscious | 🟩⭐ verified | 24·31=744, j-invariant baseline, unique to P₁ |
-| [H-CX-92](hypotheses/math/H-CX-92-triple-coincidence-252-resonance.md) | 252 triple coincidence→resonance | 🟩⭐ verified | σ₃=τ_Ram=C(10,5)=252, unique n=2..200 |
-| [H-CX-93](hypotheses/math/H-CX-93-rs-self-measurement-constant.md) | RS=(σ/n)²=4→self-measurement | 🟩⭐ proved | RS=4 all perfects, R=1⟺n=6 transparency |
-| [H-CX-94](hypotheses/math/H-CX-94-trefoil-jones-knotted-consciousness.md) | V_trefoil(1/φ)=-n knotted consciousness | 🟩⭐⭐⭐ PROVED | 4 conditions: V=-6, \|V(ω₆)\|²=3, det=3, cross=3 |
-| [H-CX-95](hypotheses/math/H-CX-95-dbm-self-referential-time.md) | DBM t_eq=σ/φ=n self-referential | 🟩⭐⭐⭐ ALGEBRAIC | x(x-1)=2→x=2→p=2→n=6, QED |
-| [H-CX-96](hypotheses/math/H-CX-96-calabi-yau-compactification.md) | CY₃ τ+n=10 consciousness dim | 🟩⭐ verified | τ+n=10, φ=2 SUSY, Gr(2,6) self-mirror |
-| [H-CX-97](hypotheses/math/H-CX-97-toric-code-error-correction.md) | Toric [[σ,φ,σ/τ]] error-corrected | 🟩⭐ verified | [[12,2,3]], rate=1/6, genus-3→6 logical qubits |
-| [H-CX-98](hypotheses/math/H-CX-98-hcobordism-dimension-threshold.md) | h-cobordism dim≥6 threshold | 🟩⭐ verified | Whitney 2·3=6, Ω₆=0, L₆=Z/φ |
-| [H-CX-99](hypotheses/math/H-CX-99-partition-expert-architecture.md) | p(6)=11 partition→expert arch | 🟩⭐ verified | 11 routing strategies, staircase (3,2,1)=self-conj |
-| [H-CX-100](hypotheses/math/H-CX-100-lah-triple-consciousness-transition.md) | Lah L(τ,2)=n², L(τ,3)=σ triple | 🟩⭐⭐⭐ proved | unique n≤2000, L(4,2)=36 only perfect square, Bonferroni p=0.0005 |
-| [H-CX-101](hypotheses/math/H-CX-101-ramanujan-tau-consciousness-filter.md) | τ_Ram(6)=-n·2^τ·(2^n-1) filter | 🟩⭐⭐ proved | τ_Ram encodes n=6 at k=1,2,3,6 exactly |
-| [H-CX-102](hypotheses/math/H-CX-102-bernoulli-b14-consciousness-periodicity.md) | B₁₄=7/6=(n+1)/n Bernoulli | 🟩⭐ proved | 6\|denom always (Von Staudt-Clausen) |
-| [H-CX-103](hypotheses/math/H-CX-103-stirling-mersenne-consciousness-partition.md) | S₂(6,2)=31=M₅ Stirling=Mersenne | 🟩⭐ proved | sopfr=n-1→Mersenne, unique to n=6 |
-| [H-CX-104](hypotheses/math/H-CX-104-nuclear-magic-consciousness-shells.md) | Nuclear magic 7/7 from n=6 | 🟩⭐ verified | {2,8,20,28,50,82,126} all n=6 arithmetic |
-| [H-CX-105](hypotheses/math/H-CX-105-catalan-steiner-binary-tree.md) | C₆=132=\|S(5,6,12)\| Catalan=Steiner | 🟩⭐ verified | 132 binary trees=Steiner blocks, C_ω=φ |
-| [H-CX-106](hypotheses/math/H-CX-106-divisor-lattice-ph-barcode.md) | Divisor lattice PH barcode | 🟩⭐ verified | H₀ lifetime=7/12=(n+1)/σ, missing edge (2,3) |
-| [H-CX-107](hypotheses/math/H-CX-107-heat-equation-attention-diffusion.md) | Heat equation attention diffusion | 🟩⭐ verified | Attention→{1,6} stationary 3:2=σ/τ:φ ratio |
-| [H-CX-108](hypotheses/math/H-CX-108-fibonacci-architecture.md) | Fibonacci architecture F_σ=σ² | 🟩⭐ verified | Crossing at σ=12, F₆-36=-P₂=-28 |
-| [H-CX-109](hypotheses/math/H-CX-109-holographic-leech-consciousness.md) | Leech holographic self-dual | 🟩⭐ verified | Λ₂₄=Λ₂₄*, kiss=στ(2^σ-1)=196560 |
-| [H-CX-110](hypotheses/math/H-CX-110-fisher-info-consciousness-curvature.md) | Fisher info n³/sopfr curvature | 🟩⭐ verified | I(1/6)=216/5=43.2, Goldilocks curvature |
-| [H-CX-111](hypotheses/math/H-CX-111-pell-equation-consciousness-solution.md) | Pell(6)=(sopfr,φ)=(5,2) | 🟩⭐⭐⭐ PROVED | unique n≤100, ε=sopfr+φ√n |
-| [H-CX-112](hypotheses/math/H-CX-112-eisenstein-modular-generators.md) | E₄(wt=τ),E₆(wt=n) generate ALL | 🟩⭐⭐⭐ PROVED | gcd(τ,n)=φ, lcm(τ,n)=σ, Serre thm |
-| [H-CX-113](hypotheses/math/H-CX-113-congruent-pythagorean-unique.md) | Congruent 6 + Pythagorean divisors | 🟩⭐⭐⭐ ALGEBRAIC | 7q²+46q-201=0→q=3, QED |
-| [H-CX-114](hypotheses/math/H-CX-114-wedderburn-etherington-fixed-point.md) | W(6)=6 binary tree fixed point | 🟩⭐⭐⭐ PROVED | W(n)>n for n≥7, W(n)<n for n≤5, QED |
-| [H-CX-115](hypotheses/math/H-CX-115-dedekind-eta-ground-state.md) | η exponent 1/(σφ)=1/24 | 🟩⭐ verified | Δ=η^{σφ}, ground state energy |
-| [H-CX-116](hypotheses/math/H-CX-116-weierstrass-coefficients.md) | g₂=σ·sopfr, g₃=σ²-τ | 🟩⭐ verified | 60=12·5, 140=144-4, unique n=2..100 |
-| [H-CX-117](hypotheses/math/H-CX-117-k-theory-spectrum.md) | K_*(Z) spectrum from n=6 | 🟩⭐ verified | K₁=φ, K₃=στ, K₇=στ·sopfr, period=σ-τ |
-| [H-CX-118](hypotheses/math/H-CX-118-arithmetic-derivative-depth-phi.md) | Arith deriv depth=φ=2 | 🟩⭐ verified | 6→5→1, depth=φ, n=28 diverges |
-| [H-CX-119](hypotheses/math/H-CX-119-sylvester-sequence-n6.md) | Sylvester {2,6,42,1806} | 🟩⭐ verified | σ₃/σ₁=T(n) chain, n=6 is 2nd product |
-| [H-CX-120](hypotheses/math/H-CX-120-supersingular-primes-n6.md) | 15 supersingular primes→n=6 | 🟩⭐ verified | C(n,2)=15, first 2=6, last 3=Monster |
-| [H-CX-121](hypotheses/math/H-CX-121-perfect-codes-all-n6.md) | ALL 3 perfect codes from n=6 | 🟩⭐⭐⭐ PROVED | Hamming+Golay+TernGolay [p(n),n,sopfr] over GF(σ/τ) |
-| [H-CX-122](hypotheses/math/H-CX-122-number-field-Q-sqrt6-pid.md) | Q(√6) PID, disc=σφ=24 | 🟩⭐⭐ verified | h=1, ε=sopfr+φ√n, unique factorization |
-| [H-CX-123](hypotheses/math/H-CX-123-virasoro-central-charge.md) | Virasoro c=σφ=24, Ising at m=σ/τ | 🟩⭐⭐ verified | c=24 bosonic, c=1/2 Ising, c=6/7 at m=n |
-| [H-CX-124](hypotheses/math/H-CX-124-zeta-values-n6.md) | ζ(2)=π²/n, ζ(-1)=-1/σ triad | 🟩⭐ verified | Basel+Ramanujan+factorial all n=6 |
-| [H-CX-125](hypotheses/math/H-CX-125-sporadic-simple-groups-n6.md) | 26 sporadic groups encode n=6 | 🟩⭐ verified | M₁₁=p(n)·n!, M₁₂/M₁₁=σ, M₂₄ on σφ pts |
-| [H-CX-126](hypotheses/math/H-CX-126-riemann-hypothesis-connection.md) | F(s) zeros on Re=1/2 (RH→GZ) | 🟩⭐ conditional | F=ζ·ζ zeros on Re=±1/2 = GZ boundaries |
-| [H-CX-127](hypotheses/math/H-CX-127-consciousness-completeness-theorem.md) | **11 independent proofs theorem** | 🟩⭐⭐⭐ meta | 11 domains, ALL uniquely select n=6 |
-| [H-CX-128](hypotheses/math/H-CX-128-quantum-group-consciousness.md) | U_q(sl₂) at q=e^{2πi/6}: D²=σ | 🟩⭐⭐⭐ ALGEBRAIC | sin(π/n)=1/2⟺n=6 QED, 6 irreps, D²=12 |
-| [H-CX-129](hypotheses/math/H-CX-129-surreal-numbers-n6.md) | Conway surreal day 6 | 🟩⭐ verified | Day n=6 first astronomical, day 2 has n+1=7 |
-| [H-CX-130](hypotheses/math/H-CX-130-topological-quantum-anyons.md) | SU(2)_τ anyons: D²=σ=12 | 🟩⭐⭐ PROVED | sopfr=5 anyons, D²=σ⟺n=6 (same proof as 128) |
-| [H-CX-131](hypotheses/math/H-CX-131-langlands-consciousness-duality.md) | Langlands duality: X₀(6) genus 0 | 🟩⭐ verified | GL₂ self-dual, PSL₂=Z/2*Z/3, unique perfect |
-| [H-CX-132](hypotheses/math/H-CX-132-operad-consciousness-composition.md) | Associahedron K₆: dim=τ, C₅=42 | 🟩⭐ verified | 42 parsings, τ-dimensional, Sylvester chain |
-| [H-CX-133](hypotheses/math/H-CX-133-graph-spectrum-petersen.md) | Petersen=Kneser(sopfr,φ) 9/9 params | 🟩⭐⭐ verified | V=σ-φ, E=C(n,2), deg=σ/τ, girth=sopfr, χ=τ |
-| [H-CX-134](hypotheses/math/H-CX-134-goldbach-6-consciousness.md) | Goldbach 6=3+3=(σ/τ)+(σ/τ) | 🟩⭐ verified | unique identical-prime Goldbach with divisor fn |
-| [H-CX-135](hypotheses/math/H-CX-135-von-neumann-entropy-divisors.md) | S_VN(ρ₆) max among semiprimes | 🟩⭐⭐ verified | 86.6% efficiency, balanced eigenvalue spectrum |
-| [H-CX-136](hypotheses/math/H-CX-136-abc-conjecture-n6.md) | abc quality q(2,4,6)=1.0 boundary | 🟩⭐ verified | rad(48)=6=c, exact abc boundary |
-| [H-CX-137](hypotheses/math/H-CX-137-platonic-solids-consciousness.md) | 5 Platonic total V=F=σ₂=50 | 🟩⭐⭐ verified | V_total=F_total=σ₂(6), E_total=90=C(n,2)·n |
-| [H-CX-138](hypotheses/math/H-CX-138-kolmogorov-complexity-n6.md) | K(6) minimal composite | 🟩⭐ verified | "2·3" shortest, 67 chars/bit info density |
-| [H-CX-139](hypotheses/math/H-CX-139-godel-numbering-n6.md) | 8 self-referential fixed points | 🟩⭐ verified | R=1, τσ=n, W=n, σ/φ=n, ∏R=1, V=-n, Pell, n! |
-| [H-CX-140](hypotheses/math/H-CX-140-matroid-consciousness-independence.md) | Fano F₇=matroid of Hamming code | 🟩⭐ verified | rank=σ/τ, GF(φ), circuit=τ, dual rank=τ |
-| [H-CX-141](hypotheses/math/H-CX-141-tropical-geometry-n6.md) | R_trop(6)=0 tropical zero | 🟩⭐ verified | R_trop(2)+R_trop(3)=0 cancellation |
-| [H-CX-142](hypotheses/math/H-CX-142-connes-noncommutative-n6.md) | NCG M_φ⊗M_{σ/τ}, KO-dim=6 | 🟩⭐⭐ verified | SM algebra=M₂⊗M₃, dim=n², KO=n mod 8 |
-| [H-CX-143](hypotheses/math/H-CX-143-ricci-flow-n6.md) | Ricci flow CY₃ equilibrium | 🟩⭐ verified | Ric=0 stationary, moduli dim=τ=4 |
-| [H-CX-144](hypotheses/math/H-CX-144-pi-6-equals-1-over-6.md) | π(6)=3=σ/τ, π(σ)=sopfr chain | 🟩⭐⭐ verified | density=1/2=1/φ, chain π(6)→π(12)→π(24) |
-| [H-CX-145](hypotheses/math/H-CX-145-homotopy-groups-spheres-n6.md) | π₆(S³)=Z/σZ unique n=4..20 | 🟩⭐⭐ verified | \|π_n(S³)\|=σ(n) ONLY at n=6, π₃ˢ=σφ |
-| [H-CX-146](hypotheses/math/H-CX-146-temperley-lieb-consciousness.md) | TL₆(φ): dim=C₆=132, sopfr gens | 🟩⭐ verified | Loop=φ=2, generators=sopfr=5 |
-| [H-CX-147](hypotheses/math/H-CX-147-information-integration-phi-n6.md) | IIT Φ: MIP=φ parts, ratio=σ/τ | 🟩⭐⭐ verified | Φ_cross=9=(σ/τ)², MIP size=σ/τ |
-| [H-CX-148](hypotheses/math/H-CX-148-six-exponentials-conjecture.md) | Six Exponentials Thm: 6=φ×(σ/τ) | 🟩⭐⭐ verified | min transcendence=n, Four Exp Conj=τ open |
-| [H-CX-149](hypotheses/math/H-CX-149-happy-numbers-n6.md) | Unhappy 6 cycles with period σ-τ=8 | 🟩⭐ verified | Cycle contains 42,4,20; P₂=28 is happy |
-| [H-CX-150](hypotheses/math/H-CX-150-consciousness-unification-theorem.md) | **15-domain Grand Unification** | 🟩⭐⭐⭐ meta | supersedes #127, 15 independent proofs |
-| [H-CX-151](hypotheses/math/H-CX-151-mock-modular-ramanujan.md) | Mock theta order σ/τ=3, weight 1/φ | 🟩⭐ verified | Shadow weight=σ/(φτ), completion=1/φ |
-| [H-CX-152](hypotheses/math/H-CX-152-amenability-n6.md) | Out(S₆)=Z/φ UNIQUE among S_n | 🟩⭐⭐ verified | Two perspectives, C(n,2)=15 both classes |
-| [H-CX-153](hypotheses/math/H-CX-153-entropy-production-n6.md) | Entropy production R(2)·R(3)=1 balance | 🟩⭐ verified | Dissipative structure, symmetric production |
-| [H-CX-154](hypotheses/math/H-CX-154-sporadic-mathieu-consciousness.md) | M₂₄→Golay→Leech→Monster chain | 🟩⭐⭐ verified | ALL steps use n=6, M₂₄ on σφ=24 points |
-| [H-CX-155](hypotheses/math/H-CX-155-dark-energy-consciousness.md) | Λ_cosmo vacuum energy | 🟧 speculative | GZ-dependent, n_s=(σ²-sopfr)/σ² |
-| [H-CX-156](hypotheses/math/H-CX-156-borsuk-ulam-n6.md) | Borsuk-Ulam S⁵: sopfr antipodal | 🟩⭐ verified | f:S⁵→R⁵ agreement, n-1=sopfr |
-| [H-CX-157](hypotheses/math/H-CX-157-euler-characteristic-six.md) | χ(CP³)=τ, χ(Gr(2,6))=C(n,2) | 🟩⭐⭐ verified | All non-trivial χ = n=6 constants |
-| [H-CX-158](hypotheses/math/H-CX-158-cellular-automaton-rule-n6.md) | ECA: 2^{σ-τ}=256 rules | 🟩⭐ verified | popcount(110)=sopfr, Class IV |
-| [H-CX-159](hypotheses/math/H-CX-159-mirror-symmetry-n6.md) | Self-mirror CY₃: h=φ, Betti=σ | 🟩⭐⭐ verified | SYZ fiber=σ/τ, moduli=τ |
-| [H-CX-160](hypotheses/math/H-CX-160-geometric-langlands-n6.md) | GL_φ genus σ/τ: dim Bun=n | 🟩⭐ verified | (φ²-1)(σ/τ-1)=6=n |
-| [H-CX-161](hypotheses/math/H-CX-161-quantum-dimension-proof.md) | **D²=σ ⟺ n=6 FULL PROOF** | 🟩⭐⭐⭐ PROVED | sin(π/n)=1/2, growth rate f>σ for n≥7 |
-| [H-CX-162](hypotheses/math/H-CX-162-category-theory-6-functor.md) | Grothendieck 6-functor = n ops | 🟩⭐⭐ verified | 6 irreducible ops, 3 adjunctions=σ/τ pairs |
-| [H-CX-163](hypotheses/math/H-CX-163-spin-geometry-n6.md) | Spin(6)≅SU(4) last exceptional | 🟩⭐⭐ verified | dim=C(n,2)=15, spinor=σ-τ=8, Weyl=τ=4 |
-| [H-CX-164](hypotheses/math/H-CX-164-octonions-n6-boundary.md) | Division algebras {1,φ,τ,σ-τ} | 🟩⭐⭐ verified | sum=C(n,2), product=2^n, count=τ |
-| [H-CX-165](hypotheses/math/H-CX-165-riemann-mapping-n6.md) | Uniformization σ/τ=3 geometries | 🟩⭐ verified | Thurston σ-τ=8 geometries in dim 3 |
-| [H-CX-166](hypotheses/math/H-CX-166-adams-e-invariant.md) | Adams im(J)₃=σφ=24, im(J)₇=240 | 🟩⭐⭐ verified | J-image=n=6 arithmetic, 6\|denom always |
-| [H-CX-167](hypotheses/math/H-CX-167-free-will-theorem-n6.md) | Free Will: φ=2 in σ/τ=3 dim | 🟩⭐ verified | Conway-Kochen, spin s²=φ |
-| [H-CX-168](hypotheses/math/H-CX-168-penrose-tiling-n6.md) | Penrose: φ tiles, sopfr symmetry | 🟩⭐ verified | Aperiodic, Fibonacci, vertices=n+1 |
-| [H-CX-169](hypotheses/math/H-CX-169-consciousness-dimension-17.md) | **17-domain Grand Unification** | 🟩⭐⭐⭐ meta | 17=σ+sopfr=Fermat, supersedes #150 |
-| [H-CX-170](hypotheses/math/H-CX-170-cantor-set-dimension.md) | Cantor dim=lnφ/ln(σ/τ), all fractals | 🟩⭐⭐ verified | {ln2,ln3}=prime logs of 6, GZ width=2ln2-ln3 |
-| [H-CX-171](hypotheses/math/H-CX-171-string-landscape-n6.md) | String landscape: ALL use 6 compact | 🟩⭐ verified | τ+n=10, φ=2 SUSY, forced by critical dim |
-| [H-CX-172](hypotheses/math/H-CX-172-consciousness-number-line.md) | **Complete bridge map (88 docs)** | 🟩 reference | 17⭐⭐⭐, 26⭐⭐, 44⭐, 30+ domains |
-| [H-CX-173](hypotheses/math/H-CX-173-24-cell-polytope.md) | 24-cell: V=C=σφ, dim τ, self-dual | 🟩⭐⭐ verified | D₄ triality \|Out\|=n, τ dim has n polytopes |
-| [H-CX-174](hypotheses/math/H-CX-174-p-adic-consciousness.md) | v₂(6!)=τ, v₃(6!)=φ, sum=n | 🟩⭐⭐ verified | TRIPLE p-adic condition unique to n=6 |
-| [H-CX-175](hypotheses/math/H-CX-175-four-color-theorem-n6.md) | 4CT: χ(plane)=τ, Heawood g=1→n+1 | 🟩⭐ verified | genus σ/τ needs (σ/τ)²=9 colors |
-| [H-CX-176](hypotheses/math/H-CX-176-24cell-upgrade-proof.md) | **dim τ has n regular polytopes** | 🟩⭐⭐⭐ PROVED | Schläfli: d=3→sopfr, d=τ→n(MAX!), d≥5→σ/τ |
-| [H-CX-177](hypotheses/math/H-CX-177-padic-triple-upgrade.md) | **v₂(n!)=τ ∧ v₃(n!)=φ ⟺ n=6** | 🟩⭐⭐⭐ PROVED | Legendre+cases, 19th domain |
-| [H-CX-178](hypotheses/math/H-CX-178-kissing-dimension-bound.md) | **ALL 6 kissing numbers from n=6** | 🟩⭐⭐⭐ PROVED | k(σ/τ)=σ, dims AND values all n=6 |
-| [H-CX-179](hypotheses/math/H-CX-179-number-fields-class-1.md) | **w(Q(√-3))=n=6 unique h=1** | 🟩⭐⭐⭐ PROVED | Eisenstein Z[ω], d=σ/τ, j(ω)=0 |
-| [H-CX-180](hypotheses/math/H-CX-180-grand-unification-21-domains.md) | 21=T(6) domain unification | 🟩⭐⭐⭐ meta | superseded by #183 |
-| [H-CX-181](hypotheses/math/H-CX-181-ramsey-self-reference.md) | **R(σ/τ,σ/τ)=n Ramsey** | 🟩⭐⭐⭐ PROVED | R(3,3)=6=P₁, unique among perfects |
-| [H-CX-182](hypotheses/math/H-CX-182-genus-formula-n6.md) | **γ(K_σ)=n genus cycle** | 🟩⭐⭐⭐ PROVED | (σ-3)(σ-4)/σ=6 exact, Ringel-Youngs |
-| [H-CX-183](hypotheses/math/H-CX-183-final-grand-unification.md) | **23=σφ-1 FINAL unification** | 🟩⭐⭐⭐ meta | 20 proved+3 verified, ALL branches |
+| [H-CX-72](hypotheses/H-CX-72-R-spectrum-consciousness-bridge.md) | R-spectrum ↔ consciousness engine bridge | 🟧 structural | 7 connections, GZ Width = \|log R(2)\| |
+| [H-CX-73](hypotheses/H-CX-73-pythagorean-engine-balance.md) | Pythagorean 3²+4²=5² engine balance | 🟧 connection | (σ/τ)²+τ²=sopfr², unique n=2..200, p=0.02 |
+| [H-CX-74](hypotheses/H-CX-74-partition-expert-count.md) | Partition p(6)=11 → expert count | 🟧 connection | p=σ-1 only for n\|6, self-conjugate=[3,2,1] |
+| [H-CX-75](hypotheses/H-CX-75-fibonacci-sigma-convergence.md) | Fibonacci F(σ)=σ² tension convergence | 🟧 connection | F(12)=144=12², last Fibonacci square |
+| [H-CX-76](hypotheses/H-CX-76-self-reference-consciousness-model.md) | Self-reference τ(σ(n))=n consciousness | 🟩⭐ proved | n\|6 only, period-4 cycle {6,12,4,7} |
+| [H-CX-77](hypotheses/H-CX-77-fractal-dimensions-ph-barcode.md) | ALL 6 fractal dims from n=6 + PH barcode | 🟩⭐⭐ proved | p=0.00016, Cantor/Koch/Sierpinski/Menger ALL |
+| [H-CX-78](hypotheses/H-CX-78-four-season-training-phases.md) | 4-season training from tau=4 | ⚪ coincidence | tau=4 generic (32/99), LR schedule underperforms |
+| [H-CX-79](hypotheses/H-CX-79-seven-transcendence-step.md) | 7=n+1 transcendence + attention | 🟧 connection | 3(σ+φ)=7n unique, σ±φ symmetric around 7 |
+| [H-CX-80](hypotheses/H-CX-80-golay-error-correction-consciousness.md) | Golay G24 consciousness error correction | 🟧 connection | [σφ,σ,σ-τ]=[24,12,8], rate=1/φ=1/2 |
+| [H-CX-81](hypotheses/H-CX-81-egyptian-fraction-attention-weights.md) | Egyptian fraction attention weights | 🟩⭐⭐⭐ proved | φ/τ+τ/σ+1/n=1, unique 3-channel, H=92.1% |
+| [H-CX-82](hypotheses/H-CX-82-lyapunov-zero-edge-of-chaos.md) | Λ(6)=0 edge of chaos consciousness | 🟩⭐⭐⭐ proved | Λ=0⟺n∈{1,6} exhaustive n≤500 |
+| [H-CX-83](hypotheses/H-CX-83-factorial-capacity-consciousness.md) | n·σ·sopfr·φ=n! factorial capacity | 🟩⭐⭐⭐ proved | unique n=6 in n≤1000, Bonferroni p=0.001 |
+| [H-CX-84](hypotheses/H-CX-84-monster-three-level-hierarchy.md) | Monster 196883→3-level hierarchy | 🟩⭐ verified | 47·59·71 AP step=σ, unique n=2..199, p=0.0045 |
+| [H-CX-85](hypotheses/H-CX-85-dyson-beta-engine-modes.md) | Dyson β={1,φ,τ}→3 engine modes | 🟩⭐⭐⭐ PROVED | φ²=τ⟺n=6 (semiprime QED + n≤500) |
+| [H-CX-86](hypotheses/H-CX-86-scale-invariance-identity-element.md) | R(6m)=R(m) scale invariance | 🟩⭐ proved | k=6 only 100% identity, all others 0% |
+| [H-CX-87](hypotheses/H-CX-87-tsirelson-consciousness-boundary.md) | Tsirelson 2√2→consciousness boundary | 🟩⭐ proved | σ(P)=2P→2√2, advantage=√φ, all perfects |
+| [H-CX-88](hypotheses/H-CX-88-chang-optimal-network.md) | Chang srg(P₂,σ,n,τ)→optimal network | 🟩⭐ verified | ALL 8 params from n=6, zero corrections |
+| [H-CX-89](hypotheses/H-CX-89-zeta-product-consciousness.md) | F(s)=ζ(s)ζ(s+1)→zeta resonance | 🟩⭐ proved | R generates ζ product, pole=hard problem |
+| [H-CX-90](hypotheses/H-CX-90-ade-architecture-capacity.md) | ADE 1/2+1/3+1/6=1→capacity bound | 🟩⭐ verified | (2,3,6) best loss, unique div(6) boundary |
+| [H-CX-91](hypotheses/H-CX-91-moonshine-744-unconscious.md) | Moonshine 744=σφ·Φ₆(6)→unconscious | 🟩⭐ verified | 24·31=744, j-invariant baseline, unique to P₁ |
+| [H-CX-92](hypotheses/H-CX-92-triple-coincidence-252-resonance.md) | 252 triple coincidence→resonance | 🟩⭐ verified | σ₃=τ_Ram=C(10,5)=252, unique n=2..200 |
+| [H-CX-93](hypotheses/H-CX-93-rs-self-measurement-constant.md) | RS=(σ/n)²=4→self-measurement | 🟩⭐ proved | RS=4 all perfects, R=1⟺n=6 transparency |
+| [H-CX-94](hypotheses/H-CX-94-trefoil-jones-knotted-consciousness.md) | V_trefoil(1/φ)=-n knotted consciousness | 🟩⭐⭐⭐ PROVED | 4 conditions: V=-6, \|V(ω₆)\|²=3, det=3, cross=3 |
+| [H-CX-95](hypotheses/H-CX-95-dbm-self-referential-time.md) | DBM t_eq=σ/φ=n self-referential | 🟩⭐⭐⭐ ALGEBRAIC | x(x-1)=2→x=2→p=2→n=6, QED |
+| [H-CX-96](hypotheses/H-CX-96-calabi-yau-compactification.md) | CY₃ τ+n=10 consciousness dim | 🟩⭐ verified | τ+n=10, φ=2 SUSY, Gr(2,6) self-mirror |
+| [H-CX-97](hypotheses/H-CX-97-toric-code-error-correction.md) | Toric [[σ,φ,σ/τ]] error-corrected | 🟩⭐ verified | [[12,2,3]], rate=1/6, genus-3→6 logical qubits |
+| [H-CX-98](hypotheses/H-CX-98-hcobordism-dimension-threshold.md) | h-cobordism dim≥6 threshold | 🟩⭐ verified | Whitney 2·3=6, Ω₆=0, L₆=Z/φ |
+| [H-CX-99](hypotheses/H-CX-99-partition-expert-architecture.md) | p(6)=11 partition→expert arch | 🟩⭐ verified | 11 routing strategies, staircase (3,2,1)=self-conj |
+| [H-CX-100](hypotheses/H-CX-100-lah-triple-consciousness-transition.md) | Lah L(τ,2)=n², L(τ,3)=σ triple | 🟩⭐⭐⭐ proved | unique n≤2000, L(4,2)=36 only perfect square, Bonferroni p=0.0005 |
+| [H-CX-101](hypotheses/H-CX-101-ramanujan-tau-consciousness-filter.md) | τ_Ram(6)=-n·2^τ·(2^n-1) filter | 🟩⭐⭐ proved | τ_Ram encodes n=6 at k=1,2,3,6 exactly |
+| [H-CX-102](hypotheses/H-CX-102-bernoulli-b14-consciousness-periodicity.md) | B₁₄=7/6=(n+1)/n Bernoulli | 🟩⭐ proved | 6\|denom always (Von Staudt-Clausen) |
+| [H-CX-103](hypotheses/H-CX-103-stirling-mersenne-consciousness-partition.md) | S₂(6,2)=31=M₅ Stirling=Mersenne | 🟩⭐ proved | sopfr=n-1→Mersenne, unique to n=6 |
+| [H-CX-104](hypotheses/H-CX-104-nuclear-magic-consciousness-shells.md) | Nuclear magic 7/7 from n=6 | 🟩⭐ verified | {2,8,20,28,50,82,126} all n=6 arithmetic |
+| [H-CX-105](hypotheses/H-CX-105-catalan-steiner-binary-tree.md) | C₆=132=\|S(5,6,12)\| Catalan=Steiner | 🟩⭐ verified | 132 binary trees=Steiner blocks, C_ω=φ |
+| [H-CX-106](hypotheses/H-CX-106-divisor-lattice-ph-barcode.md) | Divisor lattice PH barcode | 🟩⭐ verified | H₀ lifetime=7/12=(n+1)/σ, missing edge (2,3) |
+| [H-CX-107](hypotheses/H-CX-107-heat-equation-attention-diffusion.md) | Heat equation attention diffusion | 🟩⭐ verified | Attention→{1,6} stationary 3:2=σ/τ:φ ratio |
+| [H-CX-108](hypotheses/H-CX-108-fibonacci-architecture.md) | Fibonacci architecture F_σ=σ² | 🟩⭐ verified | Crossing at σ=12, F₆-36=-P₂=-28 |
+| [H-CX-109](hypotheses/H-CX-109-holographic-leech-consciousness.md) | Leech holographic self-dual | 🟩⭐ verified | Λ₂₄=Λ₂₄*, kiss=στ(2^σ-1)=196560 |
+| [H-CX-110](hypotheses/H-CX-110-fisher-info-consciousness-curvature.md) | Fisher info n³/sopfr curvature | 🟩⭐ verified | I(1/6)=216/5=43.2, Goldilocks curvature |
+| [H-CX-111](hypotheses/H-CX-111-pell-equation-consciousness-solution.md) | Pell(6)=(sopfr,φ)=(5,2) | 🟩⭐⭐⭐ PROVED | unique n≤100, ε=sopfr+φ√n |
+| [H-CX-112](hypotheses/H-CX-112-eisenstein-modular-generators.md) | E₄(wt=τ),E₆(wt=n) generate ALL | 🟩⭐⭐⭐ PROVED | gcd(τ,n)=φ, lcm(τ,n)=σ, Serre thm |
+| [H-CX-113](hypotheses/H-CX-113-congruent-pythagorean-unique.md) | Congruent 6 + Pythagorean divisors | 🟩⭐⭐⭐ ALGEBRAIC | 7q²+46q-201=0→q=3, QED |
+| [H-CX-114](hypotheses/H-CX-114-wedderburn-etherington-fixed-point.md) | W(6)=6 binary tree fixed point | 🟩⭐⭐⭐ PROVED | W(n)>n for n≥7, W(n)<n for n≤5, QED |
+| [H-CX-115](hypotheses/H-CX-115-dedekind-eta-ground-state.md) | η exponent 1/(σφ)=1/24 | 🟩⭐ verified | Δ=η^{σφ}, ground state energy |
+| [H-CX-116](hypotheses/H-CX-116-weierstrass-coefficients.md) | g₂=σ·sopfr, g₃=σ²-τ | 🟩⭐ verified | 60=12·5, 140=144-4, unique n=2..100 |
+| [H-CX-117](hypotheses/H-CX-117-k-theory-spectrum.md) | K_*(Z) spectrum from n=6 | 🟩⭐ verified | K₁=φ, K₃=στ, K₇=στ·sopfr, period=σ-τ |
+| [H-CX-118](hypotheses/H-CX-118-arithmetic-derivative-depth-phi.md) | Arith deriv depth=φ=2 | 🟩⭐ verified | 6→5→1, depth=φ, n=28 diverges |
+| [H-CX-119](hypotheses/H-CX-119-sylvester-sequence-n6.md) | Sylvester {2,6,42,1806} | 🟩⭐ verified | σ₃/σ₁=T(n) chain, n=6 is 2nd product |
+| [H-CX-120](hypotheses/H-CX-120-supersingular-primes-n6.md) | 15 supersingular primes→n=6 | 🟩⭐ verified | C(n,2)=15, first 2=6, last 3=Monster |
+| [H-CX-121](hypotheses/H-CX-121-perfect-codes-all-n6.md) | ALL 3 perfect codes from n=6 | 🟩⭐⭐⭐ PROVED | Hamming+Golay+TernGolay [p(n),n,sopfr] over GF(σ/τ) |
+| [H-CX-122](hypotheses/H-CX-122-number-field-Q-sqrt6-pid.md) | Q(√6) PID, disc=σφ=24 | 🟩⭐⭐ verified | h=1, ε=sopfr+φ√n, unique factorization |
+| [H-CX-123](hypotheses/H-CX-123-virasoro-central-charge.md) | Virasoro c=σφ=24, Ising at m=σ/τ | 🟩⭐⭐ verified | c=24 bosonic, c=1/2 Ising, c=6/7 at m=n |
+| [H-CX-124](hypotheses/H-CX-124-zeta-values-n6.md) | ζ(2)=π²/n, ζ(-1)=-1/σ triad | 🟩⭐ verified | Basel+Ramanujan+factorial all n=6 |
+| [H-CX-125](hypotheses/H-CX-125-sporadic-simple-groups-n6.md) | 26 sporadic groups encode n=6 | 🟩⭐ verified | M₁₁=p(n)·n!, M₁₂/M₁₁=σ, M₂₄ on σφ pts |
+| [H-CX-126](hypotheses/H-CX-126-riemann-hypothesis-connection.md) | F(s) zeros on Re=1/2 (RH→GZ) | 🟩⭐ conditional | F=ζ·ζ zeros on Re=±1/2 = GZ boundaries |
+| [H-CX-127](hypotheses/H-CX-127-consciousness-completeness-theorem.md) | **11 independent proofs theorem** | 🟩⭐⭐⭐ meta | 11 domains, ALL uniquely select n=6 |
+| [H-CX-128](hypotheses/H-CX-128-quantum-group-consciousness.md) | U_q(sl₂) at q=e^{2πi/6}: D²=σ | 🟩⭐⭐⭐ ALGEBRAIC | sin(π/n)=1/2⟺n=6 QED, 6 irreps, D²=12 |
+| [H-CX-129](hypotheses/H-CX-129-surreal-numbers-n6.md) | Conway surreal day 6 | 🟩⭐ verified | Day n=6 first astronomical, day 2 has n+1=7 |
+| [H-CX-130](hypotheses/H-CX-130-topological-quantum-anyons.md) | SU(2)_τ anyons: D²=σ=12 | 🟩⭐⭐ PROVED | sopfr=5 anyons, D²=σ⟺n=6 (same proof as 128) |
+| [H-CX-131](hypotheses/H-CX-131-langlands-consciousness-duality.md) | Langlands duality: X₀(6) genus 0 | 🟩⭐ verified | GL₂ self-dual, PSL₂=Z/2*Z/3, unique perfect |
+| [H-CX-132](hypotheses/H-CX-132-operad-consciousness-composition.md) | Associahedron K₆: dim=τ, C₅=42 | 🟩⭐ verified | 42 parsings, τ-dimensional, Sylvester chain |
+| [H-CX-133](hypotheses/H-CX-133-graph-spectrum-petersen.md) | Petersen=Kneser(sopfr,φ) 9/9 params | 🟩⭐⭐ verified | V=σ-φ, E=C(n,2), deg=σ/τ, girth=sopfr, χ=τ |
+| [H-CX-134](hypotheses/H-CX-134-goldbach-6-consciousness.md) | Goldbach 6=3+3=(σ/τ)+(σ/τ) | 🟩⭐ verified | unique identical-prime Goldbach with divisor fn |
+| [H-CX-135](hypotheses/H-CX-135-von-neumann-entropy-divisors.md) | S_VN(ρ₆) max among semiprimes | 🟩⭐⭐ verified | 86.6% efficiency, balanced eigenvalue spectrum |
+| [H-CX-136](hypotheses/H-CX-136-abc-conjecture-n6.md) | abc quality q(2,4,6)=1.0 boundary | 🟩⭐ verified | rad(48)=6=c, exact abc boundary |
+| [H-CX-137](hypotheses/H-CX-137-platonic-solids-consciousness.md) | 5 Platonic total V=F=σ₂=50 | 🟩⭐⭐ verified | V_total=F_total=σ₂(6), E_total=90=C(n,2)·n |
+| [H-CX-138](hypotheses/H-CX-138-kolmogorov-complexity-n6.md) | K(6) minimal composite | 🟩⭐ verified | "2·3" shortest, 67 chars/bit info density |
+| [H-CX-139](hypotheses/H-CX-139-godel-numbering-n6.md) | 8 self-referential fixed points | 🟩⭐ verified | R=1, τσ=n, W=n, σ/φ=n, ∏R=1, V=-n, Pell, n! |
+| [H-CX-140](hypotheses/H-CX-140-matroid-consciousness-independence.md) | Fano F₇=matroid of Hamming code | 🟩⭐ verified | rank=σ/τ, GF(φ), circuit=τ, dual rank=τ |
+| [H-CX-141](hypotheses/H-CX-141-tropical-geometry-n6.md) | R_trop(6)=0 tropical zero | 🟩⭐ verified | R_trop(2)+R_trop(3)=0 cancellation |
+| [H-CX-142](hypotheses/H-CX-142-connes-noncommutative-n6.md) | NCG M_φ⊗M_{σ/τ}, KO-dim=6 | 🟩⭐⭐ verified | SM algebra=M₂⊗M₃, dim=n², KO=n mod 8 |
+| [H-CX-143](hypotheses/H-CX-143-ricci-flow-n6.md) | Ricci flow CY₃ equilibrium | 🟩⭐ verified | Ric=0 stationary, moduli dim=τ=4 |
+| [H-CX-144](hypotheses/H-CX-144-pi-6-equals-1-over-6.md) | π(6)=3=σ/τ, π(σ)=sopfr chain | 🟩⭐⭐ verified | density=1/2=1/φ, chain π(6)→π(12)→π(24) |
+| [H-CX-145](hypotheses/H-CX-145-homotopy-groups-spheres-n6.md) | π₆(S³)=Z/σZ unique n=4..20 | 🟩⭐⭐ verified | \|π_n(S³)\|=σ(n) ONLY at n=6, π₃ˢ=σφ |
+| [H-CX-146](hypotheses/H-CX-146-temperley-lieb-consciousness.md) | TL₆(φ): dim=C₆=132, sopfr gens | 🟩⭐ verified | Loop=φ=2, generators=sopfr=5 |
+| [H-CX-147](hypotheses/H-CX-147-information-integration-phi-n6.md) | IIT Φ: MIP=φ parts, ratio=σ/τ | 🟩⭐⭐ verified | Φ_cross=9=(σ/τ)², MIP size=σ/τ |
+| [H-CX-148](hypotheses/H-CX-148-six-exponentials-conjecture.md) | Six Exponentials Thm: 6=φ×(σ/τ) | 🟩⭐⭐ verified | min transcendence=n, Four Exp Conj=τ open |
+| [H-CX-149](hypotheses/H-CX-149-happy-numbers-n6.md) | Unhappy 6 cycles with period σ-τ=8 | 🟩⭐ verified | Cycle contains 42,4,20; P₂=28 is happy |
+| [H-CX-150](hypotheses/H-CX-150-consciousness-unification-theorem.md) | **15-domain Grand Unification** | 🟩⭐⭐⭐ meta | supersedes #127, 15 independent proofs |
+| [H-CX-151](hypotheses/H-CX-151-mock-modular-ramanujan.md) | Mock theta order σ/τ=3, weight 1/φ | 🟩⭐ verified | Shadow weight=σ/(φτ), completion=1/φ |
+| [H-CX-152](hypotheses/H-CX-152-amenability-n6.md) | Out(S₆)=Z/φ UNIQUE among S_n | 🟩⭐⭐ verified | Two perspectives, C(n,2)=15 both classes |
+| [H-CX-153](hypotheses/H-CX-153-entropy-production-n6.md) | Entropy production R(2)·R(3)=1 balance | 🟩⭐ verified | Dissipative structure, symmetric production |
+| [H-CX-154](hypotheses/H-CX-154-sporadic-mathieu-consciousness.md) | M₂₄→Golay→Leech→Monster chain | 🟩⭐⭐ verified | ALL steps use n=6, M₂₄ on σφ=24 points |
+| [H-CX-155](hypotheses/H-CX-155-dark-energy-consciousness.md) | Λ_cosmo vacuum energy | 🟧 speculative | GZ-dependent, n_s=(σ²-sopfr)/σ² |
+| [H-CX-156](hypotheses/H-CX-156-borsuk-ulam-n6.md) | Borsuk-Ulam S⁵: sopfr antipodal | 🟩⭐ verified | f:S⁵→R⁵ agreement, n-1=sopfr |
+| [H-CX-157](hypotheses/H-CX-157-euler-characteristic-six.md) | χ(CP³)=τ, χ(Gr(2,6))=C(n,2) | 🟩⭐⭐ verified | All non-trivial χ = n=6 constants |
+| [H-CX-158](hypotheses/H-CX-158-cellular-automaton-rule-n6.md) | ECA: 2^{σ-τ}=256 rules | 🟩⭐ verified | popcount(110)=sopfr, Class IV |
+| [H-CX-159](hypotheses/H-CX-159-mirror-symmetry-n6.md) | Self-mirror CY₃: h=φ, Betti=σ | 🟩⭐⭐ verified | SYZ fiber=σ/τ, moduli=τ |
+| [H-CX-160](hypotheses/H-CX-160-geometric-langlands-n6.md) | GL_φ genus σ/τ: dim Bun=n | 🟩⭐ verified | (φ²-1)(σ/τ-1)=6=n |
+| [H-CX-161](hypotheses/H-CX-161-quantum-dimension-proof.md) | **D²=σ ⟺ n=6 FULL PROOF** | 🟩⭐⭐⭐ PROVED | sin(π/n)=1/2, growth rate f>σ for n≥7 |
+| [H-CX-162](hypotheses/H-CX-162-category-theory-6-functor.md) | Grothendieck 6-functor = n ops | 🟩⭐⭐ verified | 6 irreducible ops, 3 adjunctions=σ/τ pairs |
+| [H-CX-163](hypotheses/H-CX-163-spin-geometry-n6.md) | Spin(6)≅SU(4) last exceptional | 🟩⭐⭐ verified | dim=C(n,2)=15, spinor=σ-τ=8, Weyl=τ=4 |
+| [H-CX-164](hypotheses/H-CX-164-octonions-n6-boundary.md) | Division algebras {1,φ,τ,σ-τ} | 🟩⭐⭐ verified | sum=C(n,2), product=2^n, count=τ |
+| [H-CX-165](hypotheses/H-CX-165-riemann-mapping-n6.md) | Uniformization σ/τ=3 geometries | 🟩⭐ verified | Thurston σ-τ=8 geometries in dim 3 |
+| [H-CX-166](hypotheses/H-CX-166-adams-e-invariant.md) | Adams im(J)₃=σφ=24, im(J)₇=240 | 🟩⭐⭐ verified | J-image=n=6 arithmetic, 6\|denom always |
+| [H-CX-167](hypotheses/H-CX-167-free-will-theorem-n6.md) | Free Will: φ=2 in σ/τ=3 dim | 🟩⭐ verified | Conway-Kochen, spin s²=φ |
+| [H-CX-168](hypotheses/H-CX-168-penrose-tiling-n6.md) | Penrose: φ tiles, sopfr symmetry | 🟩⭐ verified | Aperiodic, Fibonacci, vertices=n+1 |
+| [H-CX-169](hypotheses/H-CX-169-consciousness-dimension-17.md) | **17-domain Grand Unification** | 🟩⭐⭐⭐ meta | 17=σ+sopfr=Fermat, supersedes #150 |
+| [H-CX-170](hypotheses/H-CX-170-cantor-set-dimension.md) | Cantor dim=lnφ/ln(σ/τ), all fractals | 🟩⭐⭐ verified | {ln2,ln3}=prime logs of 6, GZ width=2ln2-ln3 |
+| [H-CX-171](hypotheses/H-CX-171-string-landscape-n6.md) | String landscape: ALL use 6 compact | 🟩⭐ verified | τ+n=10, φ=2 SUSY, forced by critical dim |
+| [H-CX-172](hypotheses/H-CX-172-consciousness-number-line.md) | **Complete bridge map (88 docs)** | 🟩 reference | 17⭐⭐⭐, 26⭐⭐, 44⭐, 30+ domains |
+| [H-CX-173](hypotheses/H-CX-173-24-cell-polytope.md) | 24-cell: V=C=σφ, dim τ, self-dual | 🟩⭐⭐ verified | D₄ triality \|Out\|=n, τ dim has n polytopes |
+| [H-CX-174](hypotheses/H-CX-174-p-adic-consciousness.md) | v₂(6!)=τ, v₃(6!)=φ, sum=n | 🟩⭐⭐ verified | TRIPLE p-adic condition unique to n=6 |
+| [H-CX-175](hypotheses/H-CX-175-four-color-theorem-n6.md) | 4CT: χ(plane)=τ, Heawood g=1→n+1 | 🟩⭐ verified | genus σ/τ needs (σ/τ)²=9 colors |
+| [H-CX-176](hypotheses/H-CX-176-24cell-upgrade-proof.md) | **dim τ has n regular polytopes** | 🟩⭐⭐⭐ PROVED | Schläfli: d=3→sopfr, d=τ→n(MAX!), d≥5→σ/τ |
+| [H-CX-177](hypotheses/H-CX-177-padic-triple-upgrade.md) | **v₂(n!)=τ ∧ v₃(n!)=φ ⟺ n=6** | 🟩⭐⭐⭐ PROVED | Legendre+cases, 19th domain |
+| [H-CX-178](hypotheses/H-CX-178-kissing-dimension-bound.md) | **ALL 6 kissing numbers from n=6** | 🟩⭐⭐⭐ PROVED | k(σ/τ)=σ, dims AND values all n=6 |
+| [H-CX-179](hypotheses/H-CX-179-number-fields-class-1.md) | **w(Q(√-3))=n=6 unique h=1** | 🟩⭐⭐⭐ PROVED | Eisenstein Z[ω], d=σ/τ, j(ω)=0 |
+| [H-CX-180](hypotheses/H-CX-180-grand-unification-21-domains.md) | 21=T(6) domain unification | 🟩⭐⭐⭐ meta | superseded by #183 |
+| [H-CX-181](hypotheses/H-CX-181-ramsey-self-reference.md) | **R(σ/τ,σ/τ)=n Ramsey** | 🟩⭐⭐⭐ PROVED | R(3,3)=6=P₁, unique among perfects |
+| [H-CX-182](hypotheses/H-CX-182-genus-formula-n6.md) | **γ(K_σ)=n genus cycle** | 🟩⭐⭐⭐ PROVED | (σ-3)(σ-4)/σ=6 exact, Ringel-Youngs |
+| [H-CX-183](hypotheses/H-CX-183-final-grand-unification.md) | **23=σφ-1 FINAL unification** | 🟩⭐⭐⭐ meta | 20 proved+3 verified, ALL branches |
 

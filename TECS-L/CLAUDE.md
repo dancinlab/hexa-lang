@@ -12,9 +12,9 @@ theorem atlas + `hexa verify` g5 게이트 위로 재근거화한다.
 ```
 TECS-L/
 ├─ README.md        — 거시↔양자 Math System Map (단일 수학지도 · 색깔 범례 11종 + 노드그래프)
-├─ hypotheses/      — 가설 문서 3074 (archive-TECS-L docs/hypotheses + math/docs/hypotheses 박제)
+├─ hypotheses/      — 가설 문서 3074 (서브폴더 없이 평면 통합 · docs/hypotheses + math/docs/hypotheses)
 │  ├─ NNN-slug.md   — 번호 체계 가설 (002-golden-zone-universality … 132-second-law)
-│  └─ math/         — math 도메인 가설 339
+│  └─ H-XX-NNN-*.md — 도메인 가설 (H-AI-·H-CX-·H-NT- 등)
 ├─ archive/         — 원천 문서 박제 (README.md + math/README.md = Math System Map 원본)
 │  └─ SOURCE.md     — 출처 기록
 └─ CLAUDE.md        — 이 파일
