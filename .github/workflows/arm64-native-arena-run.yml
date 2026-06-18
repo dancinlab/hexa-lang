@@ -120,13 +120,7 @@ jobs:
             echo "NATIVE-ARM64-ARENA RUN-PASS (exit 42, no SIGSEGV)"
           elif [ "$rc" -eq 139 ] || [ "$rc" -ge 128 ]; then
             echo "NATIVE-ARM64-ARENA STILL SIGSEGV (rc=$rc) — capture backtrace"
-            cat > /tmp/run.gdb <<'GDB'
-            run /tmp/arena42.hexa
-            bt
-            info registers x0 x1 x8 x16
-            disassemble $pc-16,$pc+16
-            quit
-GDB
+            printf 'run /tmp/arena42.hexa\nbt\ninfo registers x0 x1 x8 x16\nx/8i $pc\nquit\n' > /tmp/run.gdb
             HEXA_RT_ALLOC_NATIVE=1 gdb -q -batch -x /tmp/run.gdb --args ./hexa run /tmp/arena42.hexa 2>&1 | tail -60 || true
             exit 1
           else
