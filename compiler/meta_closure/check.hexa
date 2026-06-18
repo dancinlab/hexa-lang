@@ -155,7 +155,13 @@ use "compiler/_cli_args/parse"
 fn main() {
     let args = cli_args()
     let seed = cli_find_flag(args, "--seed", "")
-    let path = cli_find_flag(args, "--file", cli_positional(args, 0, ""))
+    // @convergence state=ossified id=METACLOSURE-SEED-POSITIONAL value="path defaulted to cli_positional(0) → `--seed \"expr\"` mis-bound expr as a filename (file-not-found) since the file-branch precedes the seed-branch; sister `absolute` works only because it has no --file path" threshold="bare positional is a --file ONLY when --seed is absent"
+    // --file explicit wins; a bare positional is a discovery file ONLY when
+    // --seed is absent (else `--seed "expr"` mis-reads expr as a path → no-op).
+    let mut path = cli_find_flag(args, "--file", "")
+    if len(path) == 0 && len(seed) == 0 {
+        path = cli_positional(args, 0, "")
+    }
 
     let mut discoveries: array = []
     if len(path) > 0 {
