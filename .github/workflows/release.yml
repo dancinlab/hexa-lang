@@ -387,6 +387,10 @@ jobs:
           TARGET: linux-x86_64-musl
           CC: x86_64-linux-musl-gcc
           LIBS: "-static -lm"
+          # Drop the optional OpenSSL/libsodium binds — a `-static` musl link has
+          # no host glibc shared libs to satisfy `-lssl -lcrypto`/`-lsodium`
+          # (os_clang_cflags/ldflags honor this; the crypto stubs return errors).
+          HEXA_STATIC_DEPS: "1"
           GH_TOKEN: ${{ github.token }}
           HEXA_SEED_CONVERGE: "1"
         run: |
@@ -399,6 +403,7 @@ jobs:
           TARGET: linux-x86_64-musl
           CC: x86_64-linux-musl-gcc
           LIBS: "-static -lm"
+          HEXA_STATIC_DEPS: "1"
           GH_TOKEN: ${{ github.token }}
         run: |
           unset HEXA_PREBUILT_RUNTIME
