@@ -61,9 +61,16 @@ This file is the single governance SSOT (md 단일화) — edit directives here,
   **retired**: 구 `atlas/`(소문자) 폴더 · `TECS-L/` 명칭 · TECS-L 다문서(`TECS-L.md`·
   `TECS-L.log.md`·`n6.md`·`docs/`·`millennium/`·`.verdicts/`) · `.tape` 원장(CLAIMS 등).
   **n=6 은 지도 중심이 아니라 노드 1개** (lattice-as-tool · 외부 영역 anchor 금지) ·
-  미판독·미검증·lattice-fit·미증명 conjecture 는 🔵 승격 금지(c2).
-- **verify is ambient** — a successful `🔵`/`🟢` `hexa verify` auto-folds the verified atom
-  into the atlas; verify is the single canonical surface — no separate `atlas register` ceremony.
+  미판독·미검증·lattice-fit·미증명 conjecture 는 🔵 승격 금지(c2). · **atlas 거버넌스 단일 기록** — atlas 영역 규칙은
+  이 루트 CLAUDE.md 가 단독 SSOT (별도 `atlas/CLAUDE.md` 파일 없음 · retired).
+- **verify is ambient · atlas 2-layer 자동적재** — 아틀라스는 2층이다: **사람층** `atlas/README.md`
+  + `atlas/hypotheses/*.md`(수학 지도), **기계층 SSOT** `compiler/atlas/embedded.gen.hexa`(verdict atom).
+  적재는 **항상 둘 다**로 간다(사람층만 갱신하고 기계층 누락 금지 · c2). `🔵`/`🟢` `hexa verify`
+  성공 시 atom 이 embedded.gen.hexa 로 **자동 fold**(verify = 단일 canonical 표면 · 별도 `atlas register`
+  ceremony 없음). `hexa loop --dfs` 도 동일 경로(emit→verify-gate→absorb→fold · `PR if >0`). 빌드 불가
+  환경(mini)에서 만든 DFS/fleet 검증 노드는 `state/novel-dfs/*_fold.py` 로 `@F` kind atom
+  (`verified:false` · 고전이면 cite 명시 · 🔵 승격은 `hexa verify` 통과로만)을 embedded.gen.hexa 에
+  **PR-fold** 해 기계층 적재를 보장한다.
 - **domain audits** — land as `hexa verify --<axis> <domain>` subcommands (one CLI surface,
   no new top-level verbs).
 - **stdlib trig = libm** — signal/math modules use native libm trig (`cos`/`sin`/…), never
