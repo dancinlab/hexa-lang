@@ -184,25 +184,53 @@ fn _cloud_backoff(attempt: int) -> str {
 }
 
 // _ssh_capture_retry — _ssh_capture_status with transport-truncation retry.
-// `marker` is the exit-code marker the caller will parse (e.g. "__CLOUD_RC__=");
-// a missing marker with ssh connected (local_rc != 255) triggers a re-send.
-fn _ssh_capture_retry(host: str, ssh_opts: [str], remote: str, marker: str) -> SshCapture {
+// `marker` is the END exit-code marker the caller will parse (e.g.
+// "__CLOUD_RC__="); `begin` (when non-empty) is a HEAD marker the caller emits
+// BEFORE the command. A complete capture has BOTH: the END marker proves the
+// tail arrived, the BEGIN marker proves the head arrived. A flaky vast/RunPod
+// proxy can drop a chunk and leave a stray END marker with the head gone (or
+// vice-versa); requiring both ends makes the integrity check symmetric so such
+// a truncation triggers a re-send instead of silently returning a partial body.
+// Pass begin == "" to disable the head check (END-only, the legacy behavior).
+fn _ssh_capture_retry(host: str, ssh_opts: [str], remote: str, marker: str, begin: str) -> SshCapture {
     let mut cap = _ssh_capture_status(host, ssh_opts, remote)
     let mut attempt = 0
     while attempt < _cloud_retry_n() {
         let rc = _parse_uint_after(cap.body, marker)
-        if rc >= 0 {
-            return cap            // marker present — a real remote exit code
+        let head_ok = begin == "" || cap.body.index_of(begin) >= 0
+        if rc >= 0 && head_ok {
+            return cap            // both ends present — a complete remote result
         }
         if cap.local_rc == 255 {
             return cap            // transport outage — retry would just bill
         }
-        // ssh connected but the command was cut mid-stream → back off + re-send.
+        // ssh connected but the stream was cut (missing END marker OR missing
+        // BEGIN = head truncated) → back off + re-send.
         exec_capture("sleep " + _cloud_backoff(attempt))
         cap = _ssh_capture_status(host, ssh_opts, remote)
         attempt = attempt + 1
     }
     return cap
+}
+
+// _strip_begin_marker — drop the HEAD marker line (the inverse of _strip_marker,
+// which drops the marker line and everything AFTER). Returns everything after
+// the first newline that follows `marker`; "" if the marker has no trailing
+// newline (a head-truncated body). Marker absent → unchanged.
+fn _strip_begin_marker(out: str, marker: str) -> str {
+    let at = out.index_of(marker)
+    if at < 0 {
+        return out
+    }
+    let n = len(out)
+    let mut j = at
+    while j < n {
+        if out.substring(j, j + 1) == "\n" {
+            return out.substring(j + 1, n)
+        }
+        j = j + 1
+    }
+    return ""
 }
 
 // _ssh_capture — _ssh_capture_status keeping only the captured body, for
@@ -422,17 +450,22 @@ fn cloud_run_wall_opts(host: str, ssh_opts: [str], argv: [str], max_wall: int) -
         // `timeout <sec> <argv...>` — SIGTERM at <sec>, exit 124 on expiry.
         prefix = "timeout " + str(max_wall) + " "
     }
-    let remote = prefix + _join_argv(argv) + " 2>&1; echo __CLOUD_RC__=$?"
-    let cap = _ssh_capture_retry(host, ssh_opts, remote, "__CLOUD_RC__=")
+    // Bracket the output with a HEAD (__CLOUD_BEGIN__) + TAIL (__CLOUD_RC__=)
+    // marker so a partial-stream truncation that loses either end is caught
+    // (integrity guard — a stray tail marker with the head gone used to read as
+    // a complete empty body).
+    let remote = "echo __CLOUD_BEGIN__; " + prefix + _join_argv(argv) + " 2>&1; echo __CLOUD_RC__=$?"
+    let cap = _ssh_capture_retry(host, ssh_opts, remote, "__CLOUD_RC__=", "__CLOUD_BEGIN__")
     let out = cap.body
     let rc = _parse_uint_after(out, "__CLOUD_RC__=")
-    let body = _strip_marker(out, "__CLOUD_RC__=")
-    if rc < 0 {
+    let head_ok = out.index_of("__CLOUD_BEGIN__") >= 0
+    let body = _strip_begin_marker(_strip_marker(out, "__CLOUD_RC__="), "__CLOUD_BEGIN__")
+    if rc < 0 || !head_ok {
         if cap.local_rc == 255 {
             return _ssh_transport_outage("cloud_run", body, cap.err)
         }
         return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: body,
-            message: "cloud_run: no exit-code marker — ssh transport failure or remote shell died", logfile: "" }
+            message: "cloud_run: TRUNCATED output — integrity markers incomplete (head/tail lost in transport) after retries; re-run", logfile: "" }
     }
     if max_wall > 0 && rc == 124 {
         return CloudResult { ok: 0, exit_code: 124, pid: 0, stdout_: body,
@@ -567,17 +600,20 @@ fn cloud_exec_opts(host: str, ssh_opts: [str], cmd_str: str) -> CloudResult {
     if len(cmd_str) == 0 {
         return _cloud_fail("cloud_exec: empty cmd_str")
     }
-    let remote = cmd_str + " 2>&1; echo __CLOUD_RC__=$?"
-    let cap = _ssh_capture_retry(host, ssh_opts, remote, "__CLOUD_RC__=")
+    // HEAD + TAIL integrity markers (see cloud_run_wall_opts) — a partial-stream
+    // truncation that loses either end triggers a re-send, not a silent partial.
+    let remote = "echo __CLOUD_BEGIN__; " + cmd_str + " 2>&1; echo __CLOUD_RC__=$?"
+    let cap = _ssh_capture_retry(host, ssh_opts, remote, "__CLOUD_RC__=", "__CLOUD_BEGIN__")
     let out = cap.body
     let rc = _parse_uint_after(out, "__CLOUD_RC__=")
-    let body = _strip_marker(out, "__CLOUD_RC__=")
-    if rc < 0 {
+    let head_ok = out.index_of("__CLOUD_BEGIN__") >= 0
+    let body = _strip_begin_marker(_strip_marker(out, "__CLOUD_RC__="), "__CLOUD_BEGIN__")
+    if rc < 0 || !head_ok {
         if cap.local_rc == 255 {
             return _ssh_transport_outage("cloud_exec", body, cap.err)
         }
         return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: body,
-            message: "cloud_exec: no exit-code marker — ssh transport failure or remote shell died", logfile: "" }
+            message: "cloud_exec: TRUNCATED output — integrity markers incomplete (head/tail lost in transport) after retries; re-run", logfile: "" }
     }
     let mut ok = 0
     if rc == 0 {
