@@ -357,6 +357,21 @@ resolve_native_alloc_syscall_seed() {
         "Linux x86_64") tgt="linux-x86_64" ;;
         "Linux aarch64"|"Linux arm64") tgt="linux-arm64" ;;
     esac
+    # linux-arm64 RELEASE WALL (v0.241.0/.1 arm64 SIGSEGV root-cause): measure-8
+    # (#3568) flipped this seed from opt-IN to default-ON, which on linux-arm64
+    # activates the native arm64 arena seed (self/native/alloc_syscall_arm64-linux.s)
+    # for the FIRST time in a release. That seed returns a bad allocation pointer
+    # on aarch64 — the stage-0 transpiler `hexa_v2` then SIGSEGVs in
+    # hxlcl_memcpy <- hexa_struct_pack_map <- type_check while transpiling
+    # module_loader.hexa (gdb-confirmed on ubuntu-24.04-arm, dest=x0=0x0). x86_64
+    # + darwin-arm64 are unaffected (their seeds are RUN-proven). Until the arm64
+    # seed is fixed + RUN-proven, KEEP linux-arm64 on the C arena fallback (the
+    # green-through-v0.240.0 path; restored live in runtime_core_emit.hexa #3583).
+    # Override with HEXA_RT_ALLOC_NATIVE_ARM64=1 once the seed is proven.
+    if [ "$tgt" = "linux-arm64" ] && [ "${HEXA_RT_ALLOC_NATIVE_ARM64:-0}" != "1" ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE ALLOC-RB: linux-arm64 native arena seed UNPROVEN (v0.241 SIGSEGV) — staying on C arena (HEXA_RT_ALLOC_NATIVE_ARM64=1 to force)" >&2
+        return 0
+    fi
     case "$tgt" in
         darwin-arm64) seed="self/native/alloc_syscall_arm64.s" ;;
         linux-x86_64) seed="self/native/alloc_syscall_x86_64.s" ;;
