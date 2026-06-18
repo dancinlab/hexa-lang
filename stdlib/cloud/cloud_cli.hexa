@@ -1777,7 +1777,18 @@ fn _down_confirm_gate(id: str, provider: str, force: int) -> int {
     println(q)
     let ans = sys_stdin_read_line()
     if _rm_confirm_yes(ans) == 0 {
-        println("[cloud] down: cancelled (no destroy issued)")
+        // RECURRENCE GUARD (트러블슈팅 재발금지): an empty/EOF read means a
+        // NON-INTERACTIVE stdin (agent / pipe / `hexa cloud run`). Silently
+        // "cancelling" there leaves the pod ALIVE + billing while the caller
+        // assumes the teardown went through (this bit a demiurge session: a flaky
+        // pod survived `rm` without --force and kept billing until a --force rerun).
+        // Make the non-interactive case LOUD + actionable so a pod-leak can't hide.
+        if len(ans.trim()) == 0 {
+            println("[cloud] down: NOT DESTROYED — non-interactive stdin gave no [y/N] answer.")
+            println("[cloud]   pod " + id + " is STILL ALIVE + billing → re-run with --force (or --yes).")
+        } else {
+            println("[cloud] down: cancelled (no destroy issued)")
+        }
         return 0
     }
     return 1

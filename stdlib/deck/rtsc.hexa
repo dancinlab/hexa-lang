@@ -648,7 +648,14 @@ fn _rtsc_beh8_runbook(spec: DeckSpec) -> string {
     s = s + "\n"
     s = s + "# --- 0. conda env (QE 7.x) ---\n"
     s = s + "source ~/miniconda3/etc/profile.d/conda.sh\n"
-    s = s + "conda activate qe          # pw.x / ph.x 제공 환경 (없으면: conda create -n qe -c conda-forge qe)\n"
+    // QE env activation — ENV-ROBUST (트러블슈팅 재발금지): prefer conda, fall back to
+    // micromamba. A vast/runpod pod often ships micromamba (not conda); a bare
+    // `conda activate qe` then fails and the run never starts (a demiurge session lost
+    // time to exactly this). Detect whichever is present, else fail LOUD.
+    s = s + "# QE env (pw.x/ph.x) — conda OR micromamba (없으면: <conda|micromamba> create -n qe -c conda-forge qe)\n"
+    s = s + "if command -v conda >/dev/null 2>&1; then conda activate qe\n"
+    s = s + "elif command -v micromamba >/dev/null 2>&1; then eval \"$(micromamba shell hook -s bash)\"; micromamba activate qe\n"
+    s = s + "else echo 'FATAL: no conda/micromamba on PATH — create the qe env first'; exit 1; fi\n"
     s = s + "export OMP_NUM_THREADS=1\n"
     s = s + "NP=$(nproc)                 # physcores; oversubscribe 금지 (feedback: vast el-ph safe launch)\n"
     s = s + "\n"
