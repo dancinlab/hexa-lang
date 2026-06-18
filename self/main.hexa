@@ -3993,11 +3993,28 @@ fn _run_cache_base_key(file) {
     return sha256_file(file).substring(0, 16) + "_" + version_str()
 }
 
+// @convergence state=ossified id=CLI-RUNCACHE-STALE-ABI value="local run-cache key used only sha(source)+static version_str('0.1.0-dispatch') → toolchain upgrade reused a stale hexa_run.<key> .o built against an older runtime ABI → dyld 'Symbol not found: _regex_match/_json_stringify/_contains_key' on v0.241.x" threshold="fold running-binary size+mtime into the LOCAL cache key (precompile probe base-key unchanged so shipped precompile still hits)"
+fn _self_build_tag() {
+    // build-identity of the running hexa binary (size + mtime_ns) so any
+    // toolchain rebuild/upgrade invalidates the local run-cache. fs_stat →
+    // [size, mtime_ns, is_dir, mode]; empty/failed → degrade to no tag (safe:
+    // worst case = current static-version behaviour, never a wrong-ABI hit
+    // once the binary mtime differs).
+    let av = args()
+    if len(av) == 0 { return "" }
+    let st = fs_stat(av[0])
+    if len(st) >= 2 { return to_string(st[0]) + "x" + to_string(st[1]) }
+    return ""
+}
+
 fn _run_cache_key(file) {
     let base = _run_cache_base_key(file)
     let closure = _import_closure_hash(file)
-    if len(closure) == 0 { return base }
-    return base + "_" + closure.substring(0, 16)
+    let _bt = _self_build_tag()
+    let _sfx = ""
+    if len(_bt) > 0 { _sfx = "_" + _bt }
+    if len(closure) == 0 { return base + _sfx }
+    return base + "_" + closure.substring(0, 16) + _sfx
 }
 
 // `hexa run <file>` and the `hexa://run` URL action are user-direct
