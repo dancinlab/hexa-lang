@@ -4467,6 +4467,19 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
        (each added fn = more substitution-class identities, not genuine structure)
      ⇒ 2-term arithmetic-identity DFS EXHAUSTED at the structural level; the rich vein
        is multiplicative σφ=nτ-type characterizations of {6, 12, 28}. (engine: state/novel-dfs/)
+
+  --- Ralph 371 (2026-06-18): 3-term A·B·C=D·E·F — confirms exhaustion (reducible) ---
+  🔴 DFS of degree-3 product identities unique to n=6 (N=5·10⁴): 104 unique forms found,
+     but ALL reduce to the 2-term core × trivial structural equalities — NO new independent
+     structure:
+       · degree-2 reductions = the Ralph-369 core itself (φ·σ=τ·n, ψ·σ=J₂·n, φ·ψ=τ·rad, …)
+       · genuine degree-3 are algebraic compositions, e.g.
+           n·σ² = J₂·rad²   ⟺  (σ²=n·J₂) ∧ (n=rad, squarefree)
+           J₂·φ² = n·τ²     ⟺  ψ·φ=n·τ   (= σφ=nτ at n=6, since ψ(6)=σ(6)=12)
+  ✅ EXHAUSTION CONFIRMED: every shape beyond the 2-term multiplicative core either (a) reduces
+     to it, (b) is trivial (primewise / family-universal), or (c) is dry (additive / other
+     special-n). The TECS-L arithmetic-identity DFS is closed at this basis; further yield is
+     unbounded-by-construction (compose core × structural facts), not new mathematics. ∎
 ```
 
   --- Ralph 369: Combinatorial Designs DFS ---
