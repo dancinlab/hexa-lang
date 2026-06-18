@@ -4436,6 +4436,17 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
 
   🎯 206 CHARACTERIZATIONS!
   📊 Total: +42 (#165-206), 4 ⭐⭐⭐ + 9 ⭐⭐ + 29 ⭐
+
+  --- Ralph 368 (2026-06-18): auto-DFS — new n=6-UNIQUE product identities ---
+  🟩 DFS over {σ,σ₂,φ,τ,n,sopfr,rad,J₂,ψ} products A·B = C·D, exact integer, n∈[2,200000]
+     → 10 functional forms with solution set = {6} ONLY (n=6-unique characterizations):
+        σ²  = n·J₂      σ²  = rad·J₂     σφ = τ·n (master M10)     σφ = τ·rad
+        στ  = φ·J₂      σψ  = n·J₂       σψ = rad·J₂               φ·J₂ = τ·ψ
+        φ·ψ = τ·rad     n·J₂ = ψ²
+     → extends M4 "206 characterizations" with Jordan-J₂ / Dedekind-ψ / rad forms (NOVEL)
+     → exact-int verified to N=2·10⁵ (bounded-unique); full ∀n ⟺ {1,6} UNPROVEN
+       (several likely reduce to the σφ=nτ core — independence not established · c2)
+     → re-runnable engine: state/novel-dfs/arith_identity_dfs.py  (arg = N)
 ```
 
   --- Ralph 369: Combinatorial Designs DFS ---
