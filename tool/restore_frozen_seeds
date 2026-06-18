@@ -1959,6 +1959,103 @@ OP38_EOF
   echo "[restore_frozen_seeds] OP-38: appended OFF-CUDA clm_prod glue host fallbacks (gelu/_bwd · ce_grad · int4_quant/_bwd · groupnorm_bwd · moe_router_bwd · embedding_bwd_scatter · groupnorm_gelu_residual + adamw/keepmv/adamw_fused/clm_megafwd rc=-1 stubs) to $rt"
 fi
 
+# ── ING #2 (static-musl) — musl-portable system-header hoist ─────────────────
+# GOAL: a glibc-free single static ELF (x86_64-linux-musl) so consumers install
+# on any pod OS regardless of the host glibc floor. The frozen self/runtime.c
+# (151c52c8…) #defines libc names (strlen/memcpy/strncpy/…) as `hxlcl_*` function-
+# like macros (the zero-libc-floor override block ~the `#define strlen(s)` line).
+# Those macros must stay active for all CODE that follows — but they ALSO leak
+# into any SYSTEM HEADER parsed after the block. On glibc/Darwin the POSIX headers
+# pulled by the post-block native/*.c (sys/un.h, sched.h, …) do NOT re-declare the
+# overridden names, so nothing fires. On musl SEVERAL of them re-declare e.g.
+# `size_t strlen(const char *);` (musl <sys/un.h> for SUN_LEN, musl <sched.h> for
+# the CPU-set helpers) at top level → the macro expands the prototype to garbage:
+#   runtime.c:<line>: error: expected declaration specifiers or '...' before '('
+# FIX (musl-portable, glibc/Darwin BYTEEQ-INERT — proven: gcc -c runtime.c byte-
+# identical .o before/after): hoist the POSIX system headers that the post-block
+# native/*.c pull in to the TOP system-include region (before the macro block),
+# so the later include-guarded re-include in net.c/namespace.c/etc. is a no-op and
+# no system prototype is ever macro-mangled. Purely additive #include lines on an
+# already-pulled, include-guarded set → no codegen change on glibc/Darwin. Anchor
+# on the unique top include `#include <arpa/inet.h>` (only present near the file
+# head). Idempotent via the marker guard.
+rt="self/runtime.c"
+if [ -f "$rt" ] && ! grep -q 'ING #2 (static-musl) — musl-portable header hoist' "$rt"; then
+  awk '
+    /^#include <arpa\/inet\.h>/ && !done {
+      print
+      print "// ING #2 (static-musl) — musl-portable header hoist: parse every POSIX"
+      print "// system header the post-macro-block native/*.c pull in HERE (before the"
+      print "// libc-override `#define strlen hxlcl_strlen` block), so on musl their libc"
+      print "// re-declarations are seen with clean names. byteeq-inert on glibc/Darwin"
+      print "// (idempotent include-guarded re-include in net.c/namespace.c/etc.)."
+      print "#include <sched.h>"
+      print "#include <poll.h>"
+      print "#include <pthread.h>"
+      print "#include <termios.h>"
+      print "#include <netinet/in.h>"
+      print "#include <sys/un.h>"
+      print "#include <sys/file.h>"
+      print "#include <sys/ioctl.h>"
+      print "#include <sys/mount.h>"
+      print "#include <sys/select.h>"
+      print "#include <sys/syscall.h>"
+      print "#include <sys/time.h>"
+      print "#include <sys/types.h>"
+      print "#include <sys/uio.h>"
+      print "#if defined(__has_include)"
+      print "#  if __has_include(<pty.h>)"
+      print "#    include <pty.h>"
+      print "#  endif"
+      print "#  if __has_include(<util.h>)"
+      print "#    include <util.h>"
+      print "#  endif"
+      print "#endif"
+      done=1
+      next
+    }
+    { print }
+  ' "$rt" > "$rt.ing2" && mv "$rt.ing2" "$rt"
+  echo "[restore_frozen_seeds] ING #2: hoisted POSIX system headers into $rt (musl-portable, glibc-byteeq-inert)"
+fi
+
+# ── ING #2 (static-musl) — guard <linux/sched.h> + provide CLONE_* on musl ────
+# self/native/namespace.c #include <linux/sched.h> for the CLONE_NEW* constants.
+# That kernel header is absent from the musl sysroot (musl ships its own subset),
+# so a musl build dies: 'fatal error: linux/sched.h: No such file'. glibc bundles
+# the Linux kernel headers, so glibc is unaffected. FIX (byteeq-inert on glibc):
+# include <linux/sched.h> only when __has_include sees it (glibc path unchanged),
+# and unconditionally #define the CLONE_NEW* values when still undefined (musl
+# path). The numeric values are the stable Linux UAPI constants. Idempotent.
+ns="self/native/namespace.c"
+if [ -f "$ns" ] && grep -q '#include <linux/sched.h>' "$ns" \
+   && ! grep -q 'ING #2 (static-musl)' "$ns"; then
+  awk '
+    /#include <linux\/sched\.h>/ {
+      print "// ING #2 (static-musl) — <linux/sched.h> is absent on the musl sysroot;"
+      print "// include it only when present (glibc), else define the CLONE_NEW* UAPI"
+      print "// constants directly. byteeq-inert on glibc (header still drives the values)."
+      print "#if defined(__has_include)"
+      print "#  if __has_include(<linux/sched.h>)"
+      print "#    include <linux/sched.h>     /* CLONE_NEW* (glibc) */"
+      print "#  endif"
+      print "#endif"
+      print "#ifndef CLONE_NEWNS"
+      print "#  define CLONE_NEWNS     0x00020000"
+      print "#  define CLONE_NEWCGROUP 0x02000000"
+      print "#  define CLONE_NEWUTS    0x04000000"
+      print "#  define CLONE_NEWIPC    0x08000000"
+      print "#  define CLONE_NEWUSER   0x10000000"
+      print "#  define CLONE_NEWPID    0x20000000"
+      print "#  define CLONE_NEWNET    0x40000000"
+      print "#endif"
+      next
+    }
+    { print }
+  ' "$ns" > "$ns.ing2" && mv "$ns.ing2" "$ns"
+  echo "[restore_frozen_seeds] ING #2: guarded <linux/sched.h> + CLONE_* fallback in $ns (musl-portable)"
+fi
+
 # Unstage everything we just restored so the index reflects the graduated tree;
 # the working-tree files remain as the ephemeral build input.
 git reset -q -- "${FROZEN_SEEDS[@]}" 2>/dev/null || true
