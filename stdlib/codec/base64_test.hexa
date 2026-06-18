@@ -37,34 +37,34 @@ fn main() {
     while i < len(plains) {
         // encode matches the golden vector
         total = total + 1
-        if base64_encode_str(plains[i]) == b64s[i] { pass = pass + 1 } else { eprintln("FAIL encode " + plains[i]) }
+        if codec_base64_encode_str(plains[i]) == b64s[i] { pass = pass + 1 } else { eprintln("FAIL encode " + plains[i]) }
 
         // decode of the golden vector matches the plaintext bytes
         total = total + 1
-        if _eq(base64_decode(b64s[i]), _bytes(plains[i])) == 1 { pass = pass + 1 } else { eprintln("FAIL decode " + b64s[i]) }
+        if _eq(codec_base64_decode(b64s[i]), _bytes(plains[i])) == 1 { pass = pass + 1 } else { eprintln("FAIL decode " + b64s[i]) }
 
         // round-trip identity: decode(encode(p)) == p  (the OP-75 lock)
         total = total + 1
-        if base64_decode_str(base64_encode_str(plains[i])) == plains[i] { pass = pass + 1 } else { eprintln("FAIL roundtrip " + plains[i]) }
+        if codec_base64_decode_str(codec_base64_encode_str(plains[i])) == plains[i] { pass = pass + 1 } else { eprintln("FAIL roundtrip " + plains[i]) }
 
         i = i + 1
     }
 
     // Whitespace tolerance: line-folded base64 still decodes ("foobar").
     total = total + 1
-    if base64_decode_str("Zm9v\nYmFy") == "foobar" { pass = pass + 1 } else { eprintln("FAIL whitespace fold") }
+    if codec_base64_decode_str("Zm9v\nYmFy") == "foobar" { pass = pass + 1 } else { eprintln("FAIL whitespace fold") }
 
     // Invalid byte (non-alphabet) -> [] (empty).
     total = total + 1
-    if len(base64_decode("@@@@")) == 0 { pass = pass + 1 } else { eprintln("FAIL invalid byte") }
+    if len(codec_base64_decode("@@@@")) == 0 { pass = pass + 1 } else { eprintln("FAIL invalid byte") }
 
     // Binary round-trip over all single-byte values 0..255 (1-byte msgs
     // exercise the rem==2 trailing-group path that OP-75 restored).
     let mut bvalbad = 0
     let mut k = 0
     while k < 256 {
-        let enc = base64_encode([k])
-        let dec = base64_decode(enc)
+        let enc = codec_base64_encode([k])
+        let dec = codec_base64_decode(enc)
         if _eq(dec, [k]) != 1 { bvalbad = bvalbad + 1 }
         k = k + 1
     }
