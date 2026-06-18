@@ -1167,6 +1167,7 @@ fn main() {
     let mut file = ""
     if len(av) >= 4 { file = av[3] }
     else if len(av) >= 3 { file = av[2] }
+    else if len(av) >= 2 { file = av[1] }  // standalone bin/hexa-check <file> (CLI-ARGV-STANDALONE-PREFIX)
     if len(file) == 0 {
         println("usage: hexa check <file>")
         exit(2)
