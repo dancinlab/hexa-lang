@@ -90,6 +90,10 @@ This file is the single governance SSOT (md 단일화) — edit directives here,
   GREEN** 일 때만 새 stable 태그로 승격한다. **"x86 만 green" 은 승격 불가**(v0.241.0 arm64 asset 미발행
   회귀 교훈 — 한 타깃 그린이 전체 그린 아님). 즉 실험은 edge 에서 검증·soak, stable 은 전타깃 green
   승격 — 이것이 [self-host ≠ release 회귀]의 운영 방식이다(소비자=stale-but-stable, 실험=edge).
+  **기계적 강제**: `release.yml` 의 각 플랫폼 잡(x86_64·arm64·darwin)은 asset 을 **prerelease 로만**
+  업로드하고 Latest 를 마킹하지 않는다 — `finalize` 잡(`needs:` 3타깃 전부)이 3/3 성공 시에만 태그를
+  stable Latest 로 flip 한다. 한 타깃이라도 실패하면 finalize 가 skip 돼 릴리스가 prerelease 로 남고
+  `install.sh` 의 stable 해석이 그 부분(2/3) 릴리스를 건너뛴다(v0.241.0/.1 2/3-Latest 사고 차단).
 
 ## Harness
 
