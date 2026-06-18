@@ -30,4 +30,9 @@ TECS-L/
   tier(🟧/🟠/🟥 등)로 정직 표기. Golden Zone-의존 주장은 🟥 (모델 미검증 시 동반 미검증).
 - **박제 문서 무수정**: `archive/`·`hypotheses/` 는 원본 faithful copy — 편집하지 말고
   새 발견·재근거화는 README 지도/atlas atom 으로 반영.
+- **수학 DFS (NOVEL 축 · 계속)**: 산술함수 항등식 공간을 **정확 정수연산**으로 DFS 탐색해
+  특이 해집합(σφ=nτ⟺{1,6} 류)을 찾는다. 엔진 = `state/novel-dfs/arith_identity_dfs.py`
+  (재실행·N 인자). **새 발견은 별도 .md 만들지 말고 `README.md` 의 "DFS Exploration Status"
+  (Ralph N 연대기)에 이어 기록** + verify atom 은 `embedded.gen.hexa`. 유한 sweep =
+  bounded-unique(🟩), 전칭 ⟺ 은 증명 전까지 미주장(c2).
 - 상세 history 는 `../CHANGELOG.md` + git.
