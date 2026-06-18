@@ -1,0 +1,135 @@
+name: arm64-native-arena-run
+
+# RT-NATIVE measure-8 — RUN-prove the linux-arm64 NATIVE arm64 arena seed
+# (self/native/alloc_syscall_arm64-linux.s) on a free ubuntu-24.04-arm runner.
+#
+# Root-cause fixed in this branch: the arm64 codegen emitted the Darwin/XNU
+# syscall ABI (svc #0x80 + x16 + __hx_target_os=darwin) and x86_64 Linux
+# syscall NUMBERS even for the arm64-linux triple → mmap mis-syscall → bad
+# arena base → SIGSEGV (#3597). The codegen now emits svc #0 + x8 +
+# __hx_target_os=0 for arm64-linux, and syscall.hexa selects the aarch64-Linux
+# numbers (mmap=222 / munmap=215 / exit_group=94) via the new __hx_target_arch.
+#
+# This workflow: builds a native arm64-linux compiler, REGENERATES the seed
+# from the patched source+codegen, assembles it, and forces a .hexa program
+# through the native arena (HEXA_RT_ALLOC_NATIVE=1). RUN exit42 + no SIGSEGV =
+# the native arm64 arena is RUN-proven and the C #else body can drop on all
+# targets. Throwaway diagnostic; deleted before the fix lands as stable.
+
+on:
+  push:
+    branches:
+      - "fix/native-arm64-arena-linux-syscall-abi"
+  workflow_dispatch:
+
+jobs:
+  arena-run:
+    name: native arm64 arena assemble + RUN (exit42, HEXA_RT_ALLOC_NATIVE=1)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: deps
+        shell: bash
+        run: |
+          set -x
+          sudo apt-get update -y
+          sudo apt-get install -y clang gcc binutils gdb python3 || true
+          uname -m; cc --version || true
+
+      # 1) Build the bootstrap compiler (hexat) from the PATCHED source — it
+      #    carries the new arm64-linux syscall-ABI codegen.
+      - name: Build — release_build (Stage 0b→0/1/2) [PATCHED codegen]
+        shell: bash
+        env:
+          TARGET: linux-arm64
+          CC: gcc
+          LIBS: "-lm -ldl"
+          GH_TOKEN: ${{ github.token }}
+          HEXA_SEED_CONVERGE: "1"
+        run: bash tool/release_build
+
+      # 2) Regenerate the arm64-linux native arena seed from the patched source
+      #    using the freshly-built compiler (cross/native emit on this runner).
+      - name: Regenerate native arm64-linux arena seed [from patched codegen]
+        shell: bash
+        run: |
+          set -x
+          # Find a native compiler capable of --emit=asm --target=arm64-linux-gnu.
+          APRIME=""
+          for c in build/aprime_cc build/hexat ./hexa build/gen3; do
+            if [ -x "$c" ]; then APRIME="$c"; break; fi
+          done
+          echo "APRIME candidate = $APRIME"
+          test -n "$APRIME"
+          cp self/native/alloc_syscall_arm64-linux.s /tmp/seed.before.s || true
+          APRIME="$APRIME" bash tool/regen_alloc_syscall_native_s.sh arm64-linux
+          echo "=== seed syscall-ABI AFTER regen (must be Linux: svc #0 + x8 + target_os=0) ==="
+          grep -nE "svc #0\b|svc #0x80|x16, .*syscall|x8.*syscall|target_os: [01]" self/native/alloc_syscall_arm64-linux.s | head -20
+          echo "=== svc form counts (expect svc #0 > 0, svc #0x80 == 0) ==="
+          grep -c "svc #0$"   self/native/alloc_syscall_arm64-linux.s || true
+          grep -c "svc #0x80" self/native/alloc_syscall_arm64-linux.s || true
+          # Hard gate: the regenerated seed MUST be the Linux ABI.
+          if grep -q "svc #0x80" self/native/alloc_syscall_arm64-linux.s; then
+            echo "FAIL: regenerated arm64-linux seed still carries XNU svc #0x80" >&2; exit 1
+          fi
+          grep -q "svc #0$" self/native/alloc_syscall_arm64-linux.s || { echo "FAIL: no Linux svc #0 trap in seed" >&2; exit 1; }
+
+      # 3) Rebuild the native arena .o + a fresh aprime FORCING the native arena,
+      #    then RUN an arena-exercising program (exit 42).
+      - name: Build native-arena compiler + RUN arena exit42
+        shell: bash
+        env:
+          CC: gcc
+          LIBS: "-lm -ldl"
+          HEXA_RT_ALLOC_NATIVE: "1"
+        run: |
+          set -x
+          rm -f build/alloc_syscall_native.o
+          # Re-run build_aprime with the native arena seed forced on.
+          if [ -f tool/build_aprime.sh ]; then
+            HEXA_RT_ALLOC_NATIVE=1 bash tool/build_aprime.sh || true
+          fi
+          ls -l build/alloc_syscall_native.o || { echo "native arena .o not built" >&2; exit 1; }
+          echo "=== confirm the assembled .o uses Linux syscall trap ==="
+          objdump -d build/alloc_syscall_native.o 2>/dev/null | grep -iE "svc|#0x80" | head -20 || true
+          # A small program that allocates (heap/array → native arena bump) then
+          # exits 42. The allocation forces rt_init → hexa_arena_new_block →
+          # sys_mmap (the SIGSEGV site). If mmap is now a valid Linux syscall the
+          # arena base is good and the program exits 42; otherwise SIGSEGV (139).
+          cat > /tmp/arena42.hexa <<'EOF'
+          fn main() {
+              let mut xs = []
+              let mut i = 0
+              while i < 4096 {
+                  xs = xs + [i]
+                  i = i + 1
+              }
+              let n = len(xs)
+              if n == 4096 { exit(42) }
+              exit(7)
+          }
+          EOF
+          set +e
+          HEXA_RT_ALLOC_NATIVE=1 ./hexa run /tmp/arena42.hexa
+          rc=$?
+          set -e
+          echo "arena42 exit rc = $rc"
+          if [ "$rc" -eq 42 ]; then
+            echo "NATIVE-ARM64-ARENA RUN-PASS (exit 42, no SIGSEGV)"
+          elif [ "$rc" -eq 139 ] || [ "$rc" -ge 128 ]; then
+            echo "NATIVE-ARM64-ARENA STILL SIGSEGV (rc=$rc) — capture backtrace"
+            cat > /tmp/run.gdb <<'GDB'
+            run /tmp/arena42.hexa
+            bt
+            info registers x0 x1 x8 x16
+            disassemble $pc-16,$pc+16
+            quit
+GDB
+            HEXA_RT_ALLOC_NATIVE=1 gdb -q -batch -x /tmp/run.gdb --args ./hexa run /tmp/arena42.hexa 2>&1 | tail -60 || true
+            exit 1
+          else
+            echo "UNEXPECTED rc=$rc (build/run path issue, not the arena crash)"
+            exit 1
+          fi
