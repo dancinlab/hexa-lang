@@ -1371,32 +1371,10 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         if len(s.args) >= 1 {
             let mut src_scratch = "r10"
             if _x86_is_spilled(rm, s.dst.id) { src_scratch = "r11" }
+            buf = _x86_op_rm(buf, s.args[0], st, rm, src_scratch, opts)
+            let src = _x86_op_resolve(s.args[0], st, rm, src_scratch, opts)
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
-            // QA ZQA-1 — a const_str ASSIGN source must materialize the string
-            // ADDRESS, not `mov reg, .LCstrN`. _x86_op_resolve returns the bare
-            // `.LCstrN` label, which the asm-text renderer prints as `mov reg,
-            // .LCstrN`; GNU `as` (Intel syntax) assembles a bare symbol operand
-            // as a MEMORY LOAD (`mov reg, [.LCstrN]`), reading the first 8 bytes
-            // of the string AS a pointer → the loaded garbage is then passed to
-            // hxlcl_strlen → SIGSEGV. `let a = "foo"; println(a)` reproduced this
-            // on x86_64 (rdi = 0x<string-bytes>); an INLINE literal arg dodged it
-            // because _x86_hv_box_arg / _x86_hv_payload already use the RIP-rel
-            // `lea`. Align the plain-assign path: const_str → `lea dst, [rip+lbl]`
-            // (address-of, the PIC-correct way to take a data address), mirroring
-            // those helpers. Non-str sources keep the existing mov-of-resolve.
-            // @convergence: do NOT revert to `mov dst, <const_str label>` — that
-            // is the GAS Intel-syntax memory-load trap (see comment + 887).
-            if s.args[0].kind == "const_str" {
-                let mut sl = _x86_strtab_lookup(st, s.args[0].str_val)
-                if len(sl) == 0 { sl = s.args[0].str_val }
-                buf.push(_x86_instr2("lea", dst,
-                                 _x86_op_label("[rip+" + sl + "]"),
-                                 "assign L" + to_string(s.dst.id) + ": &str " + sl))
-            } else {
-                buf = _x86_op_rm(buf, s.args[0], st, rm, src_scratch, opts)
-                let src = _x86_op_resolve(s.args[0], st, rm, src_scratch, opts)
-                buf.push(_x86_instr2("mov", dst, src, "assign L" + to_string(s.dst.id)))
-            }
+            buf.push(_x86_instr2("mov", dst, src, "assign L" + to_string(s.dst.id)))
             // PAIR-MODEL — carry the source value's tag to the dst so an
             // assigned string/array keeps its HexaVal tag (e.g. `let x = s`).
             // RT-NATIVE measure-9 (tag-corruption root-cause): the tag-slot
