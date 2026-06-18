@@ -1,0 +1,33 @@
+# TECS-L — 도메인 가이드 (sub-CLAUDE)
+
+> hexa-lang **거버넌스 SSOT 는 repo-root `../CLAUDE.md`** (이 파일은 그 하위 도메인 안내일 뿐, 충돌 시 root 우선).
+> 출처 참고: `dancinlab/archive-TECS-L:CLAUDE.md` 는 4줄 SPECKIT 스텁이라 박제 대신 본 가이드로 대체.
+
+## 이 디렉터리는 무엇인가
+
+`TECS-L/` = **범용 우주-법칙 발견 엔진**(수론·물리·우주·생명/의식 수학)의 사람용 원장.
+`dancinlab/archive-TECS-L`(의식연속성 엔진 원본 코퍼스, 375+ 가설)를 hexa-lang 의
+theorem atlas + `hexa verify` g5 게이트 위로 재근거화한다.
+
+```
+TECS-L/
+├─ README.md        — 거시↔양자 Math System Map (단일 수학지도 · 색깔 범례 11종 + 노드그래프)
+├─ hypotheses/      — 가설 문서 3074 (archive-TECS-L docs/hypotheses + math/docs/hypotheses 박제)
+│  ├─ NNN-slug.md   — 번호 체계 가설 (002-golden-zone-universality … 132-second-law)
+│  └─ math/         — math 도메인 가설 339
+├─ archive/         — 원천 문서 박제 (README.md + math/README.md = Math System Map 원본)
+│  └─ SOURCE.md     — 출처 기록
+└─ CLAUDE.md        — 이 파일
+```
+
+## 작업 규칙 (root 거버넌스 + 도메인 보강)
+
+- **검증 atom 기계 SSOT** = `../compiler/atlas/embedded.gen.hexa` (rodata, frozen). 가설을
+  "검증됨" 으로 올리려면 `hexa verify` g5 PASS → atom fold (root `verify is ambient` 룰).
+- **n=6 은 노드 1개** (lattice-as-tool · 외부 영역 anchor 금지 · `../LATTICE_POLICY.md`).
+  지도 중심은 거시↔양자 다리(bridges)이지 특정 숫자가 아니다.
+- **정직(c2)**: 미판독 수식·미검증 모델·lattice-fit·미증명 conjecture 는 날조하지 않고
+  tier(🟧/🟠/🟥 등)로 정직 표기. Golden Zone-의존 주장은 🟥 (모델 미검증 시 동반 미검증).
+- **박제 문서 무수정**: `archive/`·`hypotheses/` 는 원본 faithful copy — 편집하지 말고
+  새 발견·재근거화는 README 지도/atlas atom 으로 반영.
+- 상세 history 는 `../CHANGELOG.md` + git.

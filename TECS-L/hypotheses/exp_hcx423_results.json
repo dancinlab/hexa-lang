@@ -1,0 +1,28 @@
+{
+  "awake": {
+    "mean_tension": 1.950845673129385,
+    "std_tension": 1.5389145956037842,
+    "ratio_vs_awake": 1.0
+  },
+  "sleep": {
+    "mean_tension": 0.001593928616213106,
+    "std_tension": 2.168404344971009e-19,
+    "ratio_vs_awake": 0.0008170449555121691
+  },
+  "dream": {
+    "mean_tension": 2.5889626521827034,
+    "std_tension": 1.205076285457521,
+    "ratio_vs_awake": 1.327097621222751
+  },
+  "lucid": {
+    "mean_tension": 1.4260697727601253,
+    "std_tension": 0.7069647831781902,
+    "ratio_vs_awake": 0.731000812828286
+  },
+  "nightmare": {
+    "mean_tension": 45.58225166578947,
+    "std_tension": 18.509450655969488,
+    "ratio_vs_awake": 23.365380610896914
+  },
+  "n_clusters": 2
+}
