@@ -14,6 +14,13 @@
 #   HEXA_SKIP_SRC   set to 1 to skip the stdlib/self/ source clone
 #                   (NOTE: `hexa build` of `use "stdlib/..."` programs will
 #                    then fail — the source tree provides stdlib/)
+#   HEXA_MUSL       linux-x86_64 only: force (1) / disable (0) the statically
+#                   linked, glibc-independent `hexa-linux-x86_64-musl.tar.gz`
+#                   asset. Unset = auto-detect (use musl on a musl host or when
+#                   the host glibc is older than the build floor). darwin/arm64
+#                   are unaffected. The musl asset is an `edge` supplementary
+#                   target, so on stable tags the installer falls back to the
+#                   dynamic glibc asset automatically.
 
 set -eu
 
@@ -48,24 +55,102 @@ need_cmd() {
     command -v "$1" >/dev/null 2>&1 || { red "missing: $1"; exit 1; }
 }
 
+# Decide whether the linux-x86_64 install should prefer the statically-linked,
+# glibc-independent `-musl` asset over the dynamic glibc tarball. This is the
+# consumer-side half of the static-musl edge target (release.yml
+# release-linux-x86_64-musl): a dynamic glibc binary dies with
+# `GLIBC_2.xx not found` on a host whose glibc is older than the build floor
+# (ubuntu-22.04 → glibc 2.35) or on a pure-musl host (Alpine) that has no glibc
+# at all. The static-musl ELF runs on any of them.
+#
+# Scope: linux-x86_64 ONLY (the only target with a musl asset). Returns 0
+# (prefer musl) / 1 (keep glibc). ADDITIVE — the glibc path is the default and
+# is only overridden on an explicit opt-in or a positively-detected need, so
+# normal modern-glibc x86_64 installs are unchanged.
+#
+#   HEXA_MUSL=1  → force musl ; HEXA_MUSL=0 → force glibc (escape hatch).
+#   auto (unset) → musl when the host is musl-based OR glibc < MUSL_GLIBC_FLOOR.
+MUSL_GLIBC_FLOOR_MAJOR=2
+MUSL_GLIBC_FLOOR_MINOR=34
+prefer_musl() {
+    # Only linux-x86_64 has a musl asset.
+    [ "$(detect_target)" = "linux-x86_64" ] || return 1
+
+    # Explicit override wins.
+    case "${HEXA_MUSL:-}" in
+        1) return 0 ;;
+        0) return 1 ;;
+    esac
+
+    # Pure-musl host (e.g. Alpine): `ldd --version` names musl, or there is no
+    # glibc-style libc at all. ldd is in busybox on Alpine and prints to stderr.
+    local ldd_out
+    ldd_out="$( (ldd --version) 2>&1 | head -1 )"
+    case "$ldd_out" in
+        *musl*) return 0 ;;
+    esac
+
+    # glibc host: read the runtime glibc version (getconf is the portable probe;
+    # `ldd --version` is the fallback). Prefer musl when it is older than the
+    # build floor so the dynamic asset's GLIBC_2.xx symbols would be missing.
+    local ver major minor
+    ver="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $NF}')"
+    [ -n "$ver" ] || ver="$(printf '%s\n' "$ldd_out" | awk '{print $NF}')"
+    major="${ver%%.*}"
+    minor="${ver#*.}"; minor="${minor%%.*}"
+    case "$major" in ''|*[!0-9]*) return 1 ;; esac   # unparseable → keep glibc
+    case "$minor" in ''|*[!0-9]*) minor=0 ;; esac
+    if [ "$major" -lt "$MUSL_GLIBC_FLOOR_MAJOR" ] \
+       || { [ "$major" -eq "$MUSL_GLIBC_FLOOR_MAJOR" ] && [ "$minor" -lt "$MUSL_GLIBC_FLOOR_MINOR" ]; }; then
+        return 0
+    fi
+    return 1
+}
+
 install_hexa() {
     bold "▸ installing hexa (compiler)"
-    local target tag base url tmp src
+    local target tag base asset url tmp src
     target="$(detect_target)"
     tag="$HEXA_VERSION"
     base="https://github.com/${HEXA_REPO}/releases"
 
-    if [ "$tag" = "latest" ]; then
-        url="${base}/latest/download/hexa-${target}.tar.gz"
-    else
-        url="${base}/download/${tag}/hexa-${target}.tar.gz"
+    # Asset selection. Default = the per-target tarball (`hexa-${target}`). On
+    # linux-x86_64, prefer the static-musl asset when the host needs it (old or
+    # absent glibc) or it is forced via HEXA_MUSL — see prefer_musl(). The musl
+    # tarball's inner dir is `hexa-linux-x86_64-musl/`, matching the asset name.
+    asset="hexa-${target}"
+    if prefer_musl; then
+        asset="hexa-${target}-musl"
+        dim "  glibc-independent host → preferring static-musl asset"
     fi
+
+    _asset_url() {
+        if [ "$tag" = "latest" ]; then
+            echo "${base}/latest/download/${1}.tar.gz"
+        else
+            echo "${base}/download/${tag}/${1}.tar.gz"
+        fi
+    }
+    url="$(_asset_url "$asset")"
 
     tmp="$(mktemp -d)"
 
     dim "  fetching $url"
     if ! curl -fsSL "$url" -o "$tmp/hexa.tar.gz"; then
-        red "  ✗ release asset not found: hexa-${target}.tar.gz"
+        # The musl asset is an `edge` supplementary target; on stable tags it
+        # does not exist. Fall back to the dynamic glibc asset rather than fail
+        # — this keeps a forced/auto-musl request working on a stable channel
+        # (it just lands the glibc binary, which is what shipped before).
+        if [ "$asset" != "hexa-${target}" ]; then
+            dim "  ⚠ ${asset}.tar.gz not found (musl asset is edge-only) → glibc asset"
+            asset="hexa-${target}"
+            url="$(_asset_url "$asset")"
+            dim "  fetching $url"
+            curl -fsSL "$url" -o "$tmp/hexa.tar.gz" || true
+        fi
+    fi
+    if [ ! -s "$tmp/hexa.tar.gz" ]; then
+        red "  ✗ release asset not found: ${asset}.tar.gz"
         red "    (tag: ${tag}, repo: ${HEXA_REPO})"
         echo ""
         echo "  Fallback: build from source"
@@ -77,10 +162,11 @@ install_hexa() {
 
     tar -xzf "$tmp/hexa.tar.gz" -C "$tmp"
 
-    # Archive layout: hexa-{target}/{hexa, build/<sidecar binaries>}
+    # Archive layout: <asset>/{hexa, build/<sidecar binaries>}
     # Dispatcher resolves sidecar binaries relative to argv[0] (<dir>/build/),
-    # so preserve the build/ directory alongside the hexa binary.
-    src="$tmp/hexa-${target}"
+    # so preserve the build/ directory alongside the hexa binary. `asset` is the
+    # tarball basename actually fetched (musl or glibc), matching the inner dir.
+    src="$tmp/${asset}"
     [ -d "$src" ] || src="$tmp"
 
     # Dispatcher resolves its sidecar binaries via dirname(argv[0]).
