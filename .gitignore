@@ -188,7 +188,6 @@ Dockerfile.bak.*
 ING.jsonl.bak
 ING.jsonl.tmp.*
 .hexa-cloud-ing-sandbox
-archive/
 
 # Jekyll/static site generator output for docs/ — source is the .md files
 docs/_site/
@@ -294,7 +293,3 @@ test/native_build/classd_behavioral_harness.c
 .harness/logs/
 .harness/handoff/
 drafts/
-
-# TECS-L/archive/ — 의도적 문서 박제(archive-TECS-L 원천), 범용 archive/ 무시에서 예외
-!TECS-L/archive/
-!TECS-L/archive/**
