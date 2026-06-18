@@ -31,10 +31,12 @@
 
 // sgemm via builtin `matmul`:
 //   * builtin computes C' = A · B without alpha/beta support.
-//   * Builtin arg order is `matmul(A, B, M, N, K)` (M, N = output dims;
-//     K = contraction dim) — confirmed against the self-host
-//     interpreter at self/hexa_full.hexa:11069-11094. The CblasSgemm-
-//     flavoured (m, n, k) ordering is translated here.
+//   * Builtin arg order is `matmul(A, B, M, K, N)` (M = output rows,
+//     K = contraction dim, N = output cols) — the runtime loop
+//     (self/runtime.c hexa_matmul) iterates i<M, j<N, p<K with
+//     A[i*K+p]·B[p*N+j], so the middle positional arg is K, not N.
+//     The CblasSgemm-flavoured (m, n, k) call signature is translated
+//     to the builtin's (M, K, N) order here.
 //   * For the common case (alpha=1, beta=0, C empty) we take the
 //     builtin path; otherwise we fold alpha/beta in a post-pass to
 //     avoid a second full-matmul for trivial scalings.
@@ -44,10 +46,10 @@ pub fn sgemm_ffi(m: int, n: int, k: int,
     let has_c = len(C) >= m * n
     let simple = alpha == 1.0 && (beta == 0.0 || has_c == false)
     if simple {
-        return matmul(A, B, m, n, k)
+        return matmul(A, B, m, k, n)
     }
     // alpha != 1 or C accumulation: still use builtin matmul, then fold.
-    let prod = matmul(A, B, m, n, k)
+    let prod = matmul(A, B, m, k, n)
     let mut out = []
     let total = m * n
     let mut i = 0
