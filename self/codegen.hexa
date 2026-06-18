@@ -11561,6 +11561,25 @@ fn _expr_escapes_name(node, name) {
             i = i + 1
         }
     }
+    // ZQA-2 SOUNDNESS FIX: a Call / MethodCall node carries its argument list
+    // in `node.args`, NOT `node.items`. The generic recursion above never
+    // visited `.args`, so a bare `name` passed as a call argument —
+    // `write_bytes(path, xs)` — was INVISIBLE to the escape proof. The binding
+    // was then wrongly judged non-escaping and AUTO-FIRED native-i64/f64
+    // contiguous storage (hexa_arr_i64_new). But `write_bytes` (and every
+    // opaque builtin/user fn) reads the descriptor as a boxed HexaArr
+    // (`HX_ARR_ITEMS` = HexaVal[16-byte-stride]) over what is really an
+    // int64_t[8-byte-stride] buffer → silent byte corruption: write_bytes wrote
+    // [255,0,0,0,0,0] for the literal [0,255,128,1,254,7] (the read-back length
+    // was correct, only the values were misread). Any appearance of `name` in
+    // an argument position is an escape — scan `.args` like the other slots.
+    if type_of(node.args) != "string" {
+        let mut i = 0
+        while i < len(node.args) {
+            if _expr_escapes_name(node.args[i], name) { return true }
+            i = i + 1
+        }
+    }
     if type_of(node.cond) != "string" {
         if _expr_escapes_name(node.cond, name) { return true }
     }
