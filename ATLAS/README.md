@@ -4480,6 +4480,26 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
      to it, (b) is trivial (primewise / family-universal), or (c) is dry (additive / other
      special-n). The ATLAS arithmetic-identity DFS is closed at this basis; further yield is
      unbounded-by-construction (compose core × structural facts), not new mathematics. ∎
+
+  --- Ralph 372 (2026-06-18): NEW BASIS — composed/iterated arithmetic functions ---
+  🟢 σ∘σ, σ∘φ, φ∘σ, φ∘φ open a vein the first-order 2-term core could NOT express
+     (function composition ≠ product of values). Exact-int sweep n∈[2,2·10⁵]:
+     · σ(σ(n)) = 2n          ⟺ {2,4,16,64,4096,65536} = 2^(p−1), 2^p−1 Mersenne
+                               = SUPERPERFECT numbers (known, OEIS A019279 · Suryanarayana 1969)
+     · σ(σ(n)) = σ(n)+n      ⟺ {3,7,31,127,8191,131071} = MERSENNE PRIMES
+                               PROOF (⟹): n=2^p−1 prime ⇒ σ(n)=2^p ⇒ σ(σ(n))=2^(p+1)−1=σ(n)+n.
+                               (⟸ bounded-verified to 2·10⁵) — ties to ATLAS Mersenne node
+     · σ(φ(n)) = n           ⟺ {3,15,28,255,744,2418,20440,65535} (28=perfect · 255,65535=2^k−1)
+     · φ(σ(n)) = n           ⟺ {2,8,12,128,240,720,6912,32768}
+  🟦 sparse special-sets (bounded, novelty-honest — likely known, not OEIS-checked here):
+     · σ(σ(n)) = 4n          ⟺ {15, 1023, 29127}   (1023 = 2^10−1)
+     · σ(φ(n)) = 2n          ⟺ {1209} ONLY          (singleton in range · 1209 = 3·13·31)
+     · σ(n)+φ(n) = σ(σ(n))   ⟺ {2} ONLY
+  → STATUS: composed-function vein OPEN (productive) — reproduces known structured sequences
+     (superperfect / Mersenne) = cross-validation of the DFS engine, + sparse new characterizations.
+     engine: state/novel-dfs/ ; canonical surface `hexa loop` analytical cycle is cooldown-saturated
+     (0 new emit) so genuine frontier = this new basis (+ `--fire` LLM path, budget-gated). c2: σ(σ)=σ+n
+     ⟹Mersenne proven, all ⟸ bounded; sparse sets not claimed novel (OEIS lookup pending).
 ```
 
   --- Ralph 369: Combinatorial Designs DFS ---
