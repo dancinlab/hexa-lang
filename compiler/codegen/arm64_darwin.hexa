@@ -2726,7 +2726,16 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
     // + every other call). Use codegen_options_default() locally —
     // matches the RFC 070 G7-A.native intent (all callers pass the
     // zero-seed default until the actual GOT-load body lands).
-    let opts = codegen_options_default()
+    //
+    // RT-NATIVE measure-8: the OS/arch-specific syscall ABI emit in
+    // _emit_arm64_stmt (__hx_target_os/__hx_syscall0/6) keys off
+    // opts.target_triple, but the local default leaves it "". Stamp it from
+    // cg_target (the ELF-vs-Mach-O selector already threaded here) so the
+    // arm64-linux-gnu seed gets the Linux trap (svc #0 / x8 / os=0) instead
+    // of the XNU default (#3597 root-cause). Non-arm64-linux callers pass
+    // cg_target == "" (or darwin), so target_triple stays "" → darwin emit
+    // is byte-identical.
+    let opts = CodegenOptions { shared: 0, target_triple: cg_target }
     let mut instrs = []
 
     // #26 self-host fixpoint — forced-copy the MFunc identity fields up
