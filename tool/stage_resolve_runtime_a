@@ -372,12 +372,26 @@ resolve_native_alloc_syscall_seed() {
     fi
     local s_tmp="build/alloc_syscall_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
-    if $CC -c "$s_tmp" -o build/alloc_syscall_native.o 2>/dev/null; then
+    # RT-NATIVE ALLOC-RB elf-arm64 reloc fix (#3553 linux-arm64 link wall): the seed
+    # asm carries Mach-O `@PAGE`/`@PAGEOFF` reloc syntax (asm.hexa's canonical arm64
+    # dialect, parsed by hexa's OWN ELF emitter elf_arm64.hexa). darwin-arm64 assembles
+    # it fine (clang-darwin groks @PAGE) but the EXTERNAL GNU-as on a linux-arm64 build
+    # rejects them → seed assemble fails → with measure-8's C-arena #else dropped the
+    # link has undefined hexa_arena_alloc/__blk_used/.... Convert to the ELF equivalents
+    # (`adrp x,sym` + `add x,x,:lo12:sym`) for the GNU-as path only. The alloc seed is the
+    # only native seed addressing a string literal (.LCstrN) + module globals (gN) via
+    # adrp+add, so rt_hi/array/map seeds never hit this. Verified: converted seed cross-
+    # assembles (clang -target aarch64-linux-gnu) + exports global T arena syms.
+    case "$tgt" in
+        linux-arm64) sed -i.bak -E 's/(\badrp\b[^,]*,[[:space:]]*)([A-Za-z0-9_.]+)@PAGE\b/\1\2/g; s/([A-Za-z0-9_.]+)@PAGEOFF\b/:lo12:\1/g' "$s_tmp" && rm -f "$s_tmp.bak" ;;
+    esac
+    if $CC -c "$s_tmp" -o build/alloc_syscall_native.o 2>build/alloc_syscall_native.err; then
         echo "[stage_resolve_runtime_a] RT-NATIVE ALLOC-RB: assembled build/alloc_syscall_native.o from $seed (TARGET=$tgt, $nsyms syms) → native arena path"
     else
-        echo "[stage_resolve_runtime_a] RT-NATIVE ALLOC-RB: WARN assemble of $seed failed — C arena" >&2
+        echo "[stage_resolve_runtime_a] RT-NATIVE ALLOC-RB: WARN assemble of $seed failed — C arena. asm err:" >&2
+        head -5 build/alloc_syscall_native.err >&2
     fi
-    rm -f "$s_tmp"
+    rm -f "$s_tmp" build/alloc_syscall_native.err
 }
 
 build_runtime_a_from_source() {

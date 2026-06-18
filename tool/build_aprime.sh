@@ -325,6 +325,12 @@ if [ "${HEXA_RT_ALLOC_NATIVE:-1}" != "0" ]; then
     esac
     if [ ! -f "$REPO/build/alloc_syscall_native.o" ] && [ -f "$ALLOC_SEED" ]; then
         grep -vE '^// ' "$ALLOC_SEED" > "$TMP/alloc_seed.s" 2>/dev/null || cp "$ALLOC_SEED" "$TMP/alloc_seed.s"
+        # elf-arm64 reloc fix (#3553): the seed's Mach-O @PAGE/@PAGEOFF reloc syntax
+        # (asm.hexa's arm64 dialect) is rejected by GNU-as on linux-arm64 — convert to
+        # ELF `:lo12:` for that target only (darwin keeps @PAGE · x86_64 has none).
+        case "$(uname -sm 2>/dev/null)" in
+            "Linux aarch64"|"Linux arm64") sed -i.bak -E 's/(\badrp\b[^,]*,[[:space:]]*)([A-Za-z0-9_.]+)@PAGE\b/\1\2/g; s/([A-Za-z0-9_.]+)@PAGEOFF\b/:lo12:\1/g' "$TMP/alloc_seed.s" && rm -f "$TMP/alloc_seed.s.bak" ;;
+        esac
         ${CC:-clang} -c $ARCH_FLAG "$TMP/alloc_seed.s" -o "$REPO/build/alloc_syscall_native.o" 2>/dev/null \
             && echo "  [3/5] RT-NATIVE ALLOC-RB: assembled build/alloc_syscall_native.o from $ALLOC_SEED"
     fi
