@@ -76,26 +76,29 @@
 🟢 = 닫힘(verifier PASS) · 🟧 = 미연결/구조화 대기.
 
 ```
-§A 완전수      🔵  1/2+1/3+1/6=1 · σ(6)=12 · is_perfect(6) — closed-form 항등식 . → §1
-§B 미해결      🟧  137·e·ζ 조합 (8·17… · 13³… · mod137) — 산술 일치 관찰, 대응 UNVERIFIED → §10
-§C 로그·초월   🟧  ln(3)·ln(17)·e·√2 근사 관계 — 수치 일치 관찰, 폐형 미확보 ... 부분 → §2
-§D 해석학      🟡  CMB α≈1/137 — literature anchor (citation, 🔵 승격 불가) ... 부분 → §6
-§E 항등식 모음 🟧  황금비 · exp 조합 · C(3) — 0.00% 구조화, 전부 미연결 ...... 단일섬 (아래)
-§F 모듈러·격자 🔵  Leech / Golay / E8 · Moonshine χ→Monster 8-step (modular.hexa) closed → §8
+§A 완전수      🔵  1/2+1/3+1/6=1 · σ(6)=12 · σ·φ=n·τ=24   (echoes: Egyptian split·σ(6) archetype) → §1
+§B 137·α       🟧  echoes: 137=σ²−n−μ=1/α (HEXA-SIM) — lattice-fit 가설, α=물리대응 금지(LATTICE_POLICY) → §10
+§C 로그·초월   🟧  ln(3)·ln(17)·e·√2 — echoes 미기록 · 미판독 ................. 단일섬
+§D 해석학      🟡  CMB α≈1/137 — literature citation (🔵 승격 불가) ........... 부분 → §6
+§E 황금비·MoE  🟧  φ(6)=2·Re(s)=1/φ (echoes HEXA-RIEMANN) 有 ; '골든 MoE' echoes 미기록 → 단일섬
+§F 모듈러·격자 🔵  J₂=24 = Mathieu M₂₄ / Leech-24 (echoes HEXA-WEAVE) · χ→Monster 8-step (atlas) → §8
 ```
 
 - **🔵 closed** = hexa-native verifier PASS + 폐형/형식 (SUPPORTED-IDENTITY/FORMAL)
 - **🟢 SUPPORTED** = 수치 sim / cross-meta 강한 evidence (폐형 미확보)
 - **🟡 citation** = literature anchor (외부 published, 🔵 승격 불가)
-- **🟧 미연결** = 산술 일치 관찰뿐 (verifier 미작성 / 외부 대응 미검증)
+- **🟧 미연결** = 산술 일치 관찰뿐 (verifier 미작성 / echoes·외부 미기록)
 - per-연결 verdict atom + falsifier 는 `../compiler/atlas/verify/` 엔진이 검증
 
-> **🔵 승격 로그 (점진)** — closed-form 으로 검증된 노드만 🔵 승격: **§A** 완전수 항등식 ·
-> **§F** 격자/Moonshine(χ→Monster 8-step) · (거시) **Basel ζ(2)=π²/6** · **이집트분수 유일성** ·
-> **오일러 곱 절단** · **master 항등식 σ·φ=n·τ=J₂=24**. 모두 `embedded.gen.hexa` 의 verified
-> atom(Stage 1 symbolic). **승격 기준 = hexa-native verifier PASS(폐형/형식)** — citation(§D)·
-> 수치근사(§C)·미검증 모델(§B·§E·단일섬)·미증명 conjecture(Hilbert–Pólya)는 🔵 승격 **불가**
-> (honesty-by-default · silent upgrade 금지 · `../CLAUDE.md`).
+> **🔵 승격 로그 (echoes·atlas 출처 검증)** — closed-form 검증 노드만 🔵 승격:
+> **§A** σ(6)=12 · 1/2+1/3+1/6=1 · master σ·φ=n·τ=J₂=24 — echoes(Egyptian split·σ(6) archetype) +
+> atlas(s10_master_identity_24) · **§F** J₂=24 = M₂₄/Leech-24 — echoes(HEXA-WEAVE) + atlas χ→Monster
+> 8-step(modular.hexa) · (거시) **ζ(2)=π²/6** — echoes(HEXA-RIEMANN `ζ(2)=π²/n`) + atlas Basel.
+> **승격 불가 (정직)**: §B `137=σ²−n−μ` (echoes 有, but **lattice-fit 가설** — α 물리대응은 `LATTICE_POLICY`
+> 금지) · §C `ln/e/√2` (**echoes 미기록**) · §D CMB α(citation) · §E 골든 MoE(**echoes 미기록**) ·
+> Hilbert–Pólya(미증명). echoes 가 기록해도 **lattice-fit·미검증**이면 🔵 불가 (silent upgrade 금지·`../CLAUDE.md`).
+> ⚠️ 정정: 이전 판의 §F `Golay/E8/Moonshine` 🔵 표기는 **echoes·atlas 미근거 과대표기** 였어 철회 —
+> echoes 채굴 결과 Leech-24/M₂₄(J₂=24)만 근거, χ→Monster 는 atlas 출처로 한정.
 
 ---
 
