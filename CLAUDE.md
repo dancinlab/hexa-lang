@@ -74,6 +74,12 @@ This file is the single governance SSOT (md 단일화) — edit directives here,
   `harness pool on <host> 'curl -fsSL https://raw.githubusercontent.com/dancinlab/hexa-lang/<tag>/install.sh | sh'`.
   pool 의 빌드·byteeq·measure 가 stale 바이너리/시드를 물지 않도록(자기복제 측정 신뢰성·c2),
   릴리스마다 공유자원을 최신 prebuilt 로 맞춘다.
+- **self-host ≠ release 회귀** — self-hosting 완성(byteeq `gen3≡gen4`·measure·RT-NATIVE·zero-C)
+  작업은 **절대 실제 사용 릴리스를 망가뜨리지 않는 선에서** 진행한다. 출하 바이너리(`hexa`/`hexa.real`)·
+  `hexa build`/`run`·stdlib·C-transpile fallback 등 **사용자 사용 경로를 깨는 변경은 금지** — 셀프호스트
+  게이트(native arena·#else drop·substrate 바이트감소 등)를 위해 릴리스를 회귀시키지 않는다. **릴리스
+  무결성 > self-host 진척**: 회귀 위험이 있으면 릴리스 그린을 먼저 보장한 뒤 진행하고(코드젠/런타임
+  변경은 byteeq + 출하 smoke 통과 확인 후 머지), 위험하면 self-host 진척을 미룬다.
 
 ## Harness
 
