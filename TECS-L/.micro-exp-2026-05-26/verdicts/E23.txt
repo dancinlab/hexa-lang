@@ -1,6 +1,0 @@
-=== E23 : hexa verify --expr gamma0_index 30 72 ===
-verify --expr gamma0_index(30)=72
-  calc   = 72  == expected 72
-  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
-  absorb = ⚠ atlas register did NOT confirm fold; invocation:
-           hexa atlas register --from-verify gamma0_index 30 72
