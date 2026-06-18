@@ -412,12 +412,22 @@ jobs:
       - name: Verify static (no dynamic deps)
         shell: bash
         run: |
-          file dist/hexa-linux-x86_64-musl/hexa
-          if ldd dist/hexa-linux-x86_64-musl/hexa 2>&1 | grep -qiE 'not a dynamic executable|동적 실행'; then
+          BIN=dist/hexa-linux-x86_64-musl/hexa
+          file "$BIN"
+          # CAPTURE first, then grep. `ldd <static-bin>` exits non-zero (and the
+          # `-q` short-circuit can SIGPIPE it), which under the default
+          # `bash -e -o pipefail` shell would make `ldd … | grep -q` fail the
+          # pipeline even when the match is present (false-positive "dynamically
+          # linked"). `|| true` keeps the non-zero exit from tripping `-e`; we
+          # judge linkage from the captured text + `file` output instead.
+          LDD_OUT="$(ldd "$BIN" 2>&1 || true)"
+          FILE_OUT="$(file "$BIN")"
+          echo "$LDD_OUT"
+          if printf '%s\n' "$LDD_OUT" | grep -qiE 'not a dynamic executable|동적 실행' \
+             || printf '%s\n' "$FILE_OUT" | grep -qiE 'statically linked'; then
             echo "✓ statically linked — no glibc dependency"
           else
             echo "✗ binary is dynamically linked — static-musl build regressed" >&2
-            ldd dist/hexa-linux-x86_64-musl/hexa || true
             exit 1
           fi
 
