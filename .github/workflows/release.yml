@@ -227,7 +227,12 @@ jobs:
   release-linux-x86_64:
     name: release (linux-x86_64)
     needs: setup
-    runs-on: ubuntu-latest
+    # glibc-floor (#3553-followup): build on ubuntu-22.04 (glibc 2.35), NOT
+    # ubuntu-latest (24.04 → glibc 2.39). glibc is backward-compatible, so a
+    # binary linked against 2.35 runs on 2.35 (22.04) AND 2.39 (24.04) — the
+    # 24.04-built binary failed on 22.04 cloud pods with "GLIBC_2.38 not found".
+    # 22.04 is the portability floor that covers current cloud images.
+    runs-on: ubuntu-22.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
@@ -272,7 +277,11 @@ jobs:
   release-linux-arm64:
     name: release (linux-arm64)
     needs: setup
-    runs-on: ubuntu-24.04-arm
+    # glibc-floor (#3553-followup): build on ubuntu-22.04-arm (glibc 2.35), NOT
+    # ubuntu-24.04-arm (glibc 2.39) — backward-compat means the 2.35-linked
+    # binary runs on 22.04 AND 24.04 arm64 cloud pods (the 24.04 build hit
+    # "GLIBC_2.38 not found" on 22.04). 22.04-arm is GA alongside 24.04-arm.
+    runs-on: ubuntu-22.04-arm
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6

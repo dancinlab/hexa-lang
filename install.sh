@@ -143,6 +143,27 @@ EOF
         ln -sf "$HX_BIN/hx-selfhost-cli" "$HX_BIN/hexa.real"
         green "  ✓ selfhost-default marker → re-applied native tier2 flip"
     fi
+    # glibc preflight (Linux only) — the prebuilt binary is built on ubuntu-22.04
+    # (glibc 2.35 floor) so it runs on 22.04+ cloud pods. If the host glibc is
+    # OLDER still (e.g. 20.04 / glibc 2.31), exec fails with a cryptic
+    # "GLIBC_2.xx not found" dynamic-loader error — surface a clear, actionable
+    # message instead so the failure is understandable (not a silent crash).
+    if [ "$(uname -s)" = "Linux" ]; then
+        if ! "$HX_BIN/hexa.real" --version >/dev/null 2>"$tmp/glibc.err"; then
+            if grep -q "GLIBC_" "$tmp/glibc.err" 2>/dev/null; then
+                red "  ✗ hexa cannot run on this host's glibc:"
+                red "    $(grep -m1 GLIBC_ "$tmp/glibc.err")"
+                hostglibc="$(ldd --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+$' || echo '?')"
+                red "    host glibc: ${hostglibc} — the hexa release needs ≥ 2.35 (ubuntu 22.04+)."
+                echo "    Fix: use a glibc ≥ 2.35 image (ubuntu 22.04 / 24.04, debian 12+), OR" >&2
+                echo "    build from source: git clone https://github.com/${HEXA_REPO}.git && cd hexa-lang && ./hexa install.hexa" >&2
+                rm -rf "$tmp"
+                return 1
+            fi
+            # non-glibc failure (e.g. missing lib) — show it but don't hard-fail the install
+            dim "  (note: hexa.real --version exited nonzero: $(head -1 "$tmp/glibc.err" 2>/dev/null))"
+        fi
+    fi
     green "  ✓ $HX_BIN/hexa"
     rm -rf "$tmp"
 }
