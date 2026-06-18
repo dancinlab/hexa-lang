@@ -42,21 +42,28 @@
 // tensor/dispatch.hexa for the canonical entry point.
 
 // ── tensor_matmul_ffi ─────────────────────────────────────────────
-// Effective builtin signature: matmul(A, B, M, N, K) where M = output
-// rows, N = output cols, K = contraction dim. The doc-comment at
-// self/runtime.c:7311 names the formals (a, b, mv, kv, nv) but the
-// actual indexing in the kernel body — `A[i*k+p]` over `i ∈ [0,m)`,
-// `j ∈ [0,n)`, `p ∈ [0,k)` — matches the cblas (M, N, K) calling
-// convention used by the stdlib/linalg sister (sgemm_ffi calls
-// `matmul(A, B, m, n, k)`). Verified empirically against numpy:
-//     matmul([1..6], [1..6], 2, 2, 3) → [22, 28, 49, 64]   (✓ numpy)
-//     matmul([1..6], [1..6], 2, 3, 2) → [9, 12, 15, 19, 26, 33]  (✗)
-// We adopt (M, N, K) — the same order as stdlib/linalg/ffi.hexa.
+// Builtin signature (GROUND TRUTH = the C kernel body in
+// self/runtime.c hexa_matmul, formals `a, b, mv, kv, nv`): the kernel
+// indexes `A[i*k+p]` over `i ∈ [0,m)`, `B[p*n+j]` over `j ∈ [0,n)`,
+// `p ∈ [0,k)`, and emits `m*n` outputs — i.e. it computes
+// C[M,N] = A[M,K] · B[K,N] when called as `matmul(A, B, M, K, N)`.
+// Positional order is (M, K, N), NOT (M, N, K).
+//
+// The prior (M, N, K) order was a latent bug: it only AGREES with the
+// kernel when N == K (square / equal output-col & contraction dims),
+// which is why the 2×2 oracle passed while the 3×4·4×2 case produced a
+// 12-element garbage result (out-rows×K) instead of the [3,2] product.
+// Caught by QA lane AQA-1; numpy oracle for 3×4·4×2 is [2,7,10,15,18,23]:
+//     matmul([1..12], [[1,-1],[0,2],[3,0],[-2,1]], 3, 2, 4) → 12 elts (✗)
+//     matmul([1..12], [[1,-1],[0,2],[3,0],[-2,1]], 3, 4, 2) → [2,7,10,15,18,23] (✓)
+// @convergence AQA-1: matmul builtin arg order is (M, K, N); the
+// stdlib/linalg sister (sgemm_ffi) carried the same N↔K swap and is
+// fixed in lockstep.
 pub fn tensor_matmul_ffi(A: Tensor, B: Tensor) -> Tensor {
     let M = A.shape[0]
     let K = A.shape[1]
     let N = B.shape[1]
-    let raw = matmul(A.data, B.data, M, N, K)
+    let raw = matmul(A.data, B.data, M, K, N)
     return Tensor { shape: [M, N], dtype: A.dtype, data: raw }
 }
 
