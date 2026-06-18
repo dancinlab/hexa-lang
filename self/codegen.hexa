@@ -8589,6 +8589,33 @@ fn gen2_expr(node) {
                 }
             }
         }
+        // @convergence — recurrence-class codegen escape bug. UNSHADOW F1 native-i64/
+        // f64 STORAGE (codegen.hexa:3040, 8559) lowers a proven no-escape monomorphic
+        // array literal to CONTIGUOUS int64_t[]/double[] (hexa_arr_i64_new), but the
+        // ONLY native-aware read site is the proven-in-range LOOP arm above. ANY read
+        // that is NOT a proven loop read — a SCALAR/literal index `a[0]`, a non-loop
+        // `a[i]`, an expression index — fell through to the polymorphic hexa_index_get
+        // → hexa_array_get, which reads the raw int64_t/double cells as 16-byte
+        // HexaVal[] (wrong stride) → garbage/SEGV. The _native_arr_noescape escape
+        // proof ADMITS native storage (it treats every `a[i]` as a non-escaping read)
+        // but never enforced that those reads have a native-aware load path. Root-cause
+        // fix (NOT a shadow guard): when the receiver is a proven native-storage
+        // known-int/float array, BOX-ON-READ through the layout-aware runtime helper
+        // (hexa_arr_i64_box / hexa_arr_f64_box — bounds-checked, returns a proper
+        // boxed HexaVal) instead of the polymorphic hexa_index_get. This closes every
+        // non-proven-loop read shape over native storage with no regression (proven-
+        // loop reads + .push-built + boxed arrays are untouched).
+        if type_of(node.left) != "string" && node.left.kind == "Ident" {
+            let _nls = node.left.name
+            if _native_arr_autofire_ok(_nls) {
+                if _is_known_intarr_name(_nls) {
+                    return "hexa_arr_i64_box(" + gen2_expr(node.left) + ", (int64_t)HX_INT(" + gen2_expr(node.right) + "))"
+                }
+                if _is_known_floatarr_name(_nls) {
+                    return "hexa_arr_f64_box(" + gen2_expr(node.left) + ", (int64_t)HX_INT(" + gen2_expr(node.right) + "))"
+                }
+            }
+        }
         return "hexa_index_get(" + gen2_expr(node.left) + ", " + gen2_expr(node.right) + ")"
     }
 
