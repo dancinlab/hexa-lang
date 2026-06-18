@@ -1345,7 +1345,8 @@ fn os_clang_cflags() {
     // `-lsodium` → `cannot find -lssl` at link. Both binds are optional (the
     // native stubs return errors when the symbol is undefined), so a static build
     // simply ships without them. Mirrored in os_clang_ldflags.
-    let static_deps = env("HEXA_STATIC_DEPS") == "1"
+    // @convergence state=ossified id=MUSL-OPENSSL-STATIC-DEPS value="static-musl release pkg(build_precompile) linked -lssl/-lcrypto → musl toolchain has no glibc-shared OpenSSL/libsodium → ld cannot find -lssl; HEXA_STATIC_DEPS env did not propagate through the nested hexa-run AOT compile spawn" threshold="detect musl toolchain at flag-compute point (host_cc contains musl) → treat as static_deps, env-independent; non-musl CC (clang/gcc) unaffected so 3-target byteeq inert"
+    let static_deps = env("HEXA_STATIC_DEPS") == "1" || host_cc().contains("musl")
     // 2026-05-14: libsodium optional bind for stdlib/crypto + SSH client.
     // Probe via pkg-config; on Mac without pkg-config, fall back to the
     // Homebrew default install path. If nothing is found, leave the
@@ -1374,7 +1375,7 @@ fn os_clang_ldflags() {
     // HEXA_STATIC_DEPS=1 — see os_clang_cflags: a `-static` musl link has no
     // glibc shared OpenSSL/libsodium to satisfy these, and the cflags side
     // already dropped the -DHEXA_HAS_* defines, so skip the link flags too.
-    if env("HEXA_STATIC_DEPS") == "1" { return base }
+    if env("HEXA_STATIC_DEPS") == "1" || host_cc().contains("musl") { return base }   // @convergence id=MUSL-OPENSSL-STATIC-DEPS (musl CC → no glibc-shared OpenSSL/libsodium; env-independent twin of the cflags guard)
     // 2026-05-14: libsodium link flags (when found via pkg-config or brew).
     let probe = exec("pkg-config --libs libsodium 2>/dev/null")
     if probe != "" { base = base + " " + probe.trim() }
