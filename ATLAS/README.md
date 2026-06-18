@@ -4512,6 +4512,23 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
        — low novelty; the structural 🔵 are the composite targets {4,6,9,12,14,18,28,35,72,108}.
      all exact-int verified to N=5·10⁴ (bounded-unique); full ∀n ⟺ unproven (likely several reduce).
      engine: state/novel-dfs/blue_harvest.py (re-runnable, prints all 103 with solution sets).
+
+  --- Ralph 374 (2026-06-18): 🔵 STRUCTURAL harvest — 12-fn basis, degenerate-free (n≥4) ---
+  🔵 12-fn basis {σ,σ₂,σ₃,φ,τ,n,sopfr,rad,J₂,ψ,Ω,ω}, singleton AB=CD, target n≥4 (drops the
+     degenerate n=2,3 collapse). exact-int, bounded-unique to N=6·10⁴:
+     64 structural characterizations over 20 composite targets —
+       n=4:17  n=6:14  n=8:4  n=9:2  n=12:7  n=14:1  n=16:1  n=18:2  n=24:1  n=28:3  n=35:1
+       n=36:1  n=72:3  n=108:1  n=234:1  n=270:1  n=3840:1  n=6144:1  n=24384:1  n=28380:1
+     (count PLATEAUS at ~64 from N=2·10⁴→6·10⁴ — basis-limited not range-limited; larger N only
+      adds sparse large targets {24384,28380} and tightens uniqueness, e.g. n=8 dropped 6→4 as a
+      2nd solution appeared = bounded-unique self-correcting.)
+  ── 🔵 BLUE TALLY (goal: 100 discovered) ──────────────────────────────────────────
+     Ralph 369 (n=6 product) 10 · 370 (n=12,28 + coarse) 14 · 372 (composed: superperfect,
+     Mersenne char, σφ=n, φσ=n, σσ=4n, σφ=2n, σ+φ=σσ) 7-set · 373 (singleton harvest) 103
+     · 374 (12-fn structural) 64. TOTAL exact-verified 🔵 atoms ≫ 100 (≈190 distinct identities;
+     structural/non-degenerate core ≈ 64+ across composite targets + composed-fn set). c2 honesty:
+     all bounded-unique to stated N (full ∀n ⟺ unproven); n=2 degenerate atoms flagged (Ralph 373).
+     engine: state/novel-dfs/blue_harvest_12fn.py.
 ```
 
   --- Ralph 369: Combinatorial Designs DFS ---
