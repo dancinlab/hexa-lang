@@ -80,7 +80,7 @@
 §B 137·α       🟧  echoes: 137=σ²−n−μ=1/α (HEXA-SIM) — lattice-fit 가설, α=물리대응 금지(LATTICE_POLICY) → §10
 §C 로그·초월   🟧  ln(3)·ln(17)·e·√2 — echoes 미기록 · 미판독 ................. 단일섬
 §D 해석학      🟡  CMB α≈1/137 — literature citation (🔵 승격 불가) ........... 부분 → §6
-§E 황금비·MoE  🟡  φ(6)=2·Re(s)=1/φ(echoes) · 골든 MoE→Three-Gap/Fib-hashing 연결(아래 🔗) · φ²=φ+1 🔵 closed
+§E 골든 MoE    🔴  골든=Golden Zone×SI savant(anima SAVANT) · MoE k/N≈1/e · n6↔1/e CLOSED-NEG(TECS-L m7) · 황금비 아님
 §F 모듈러·격자 🔵  J₂=24 = Mathieu M₂₄ / Leech-24 (echoes HEXA-WEAVE) · χ→Monster 8-step (atlas) → §8
 ```
 
@@ -95,8 +95,9 @@
 > atlas(s10_master_identity_24) · **§F** J₂=24 = M₂₄/Leech-24 — echoes(HEXA-WEAVE) + atlas χ→Monster
 > 8-step(modular.hexa) · (거시) **ζ(2)=π²/6** — echoes(HEXA-RIEMANN `ζ(2)=π²/n`) + atlas Basel.
 > **승격 불가 (정직)**: §B `137=σ²−n−μ` (echoes 有, but **lattice-fit 가설** — α 물리대응은 `LATTICE_POLICY`
-> 금지) · §C `ln/e/√2` (**echoes 미기록**) · §D CMB α(citation) · §E 골든 MoE(**echoes 미기록**) ·
-> Hilbert–Pólya(미증명). echoes 가 기록해도 **lattice-fit·미검증**이면 🔵 불가 (silent upgrade 금지·`../CLAUDE.md`).
+> 금지) · §C `ln/e/√2` (**echoes 미기록**) · §D CMB α(citation) · §E 골든 MoE = **Golden Zone×SI savant**
+> (anima SAVANT, 황금비 아님) — n6↔1/e 는 🔴 **closed-negative**(TECS-L m7) · Hilbert–Pólya(미증명).
+> echoes/anima 가 기록해도 **lattice-fit·미검증·초월수**면 🔵 불가 (silent upgrade 금지·`../CLAUDE.md`).
 > ⚠️ 정정: 이전 판의 §F `Golay/E8/Moonshine` 🔵 표기는 **echoes·atlas 미근거 과대표기** 였어 철회 —
 > echoes 채굴 결과 Leech-24/M₂₄(J₂=24)만 근거, χ→Monster 는 atlas 출처로 한정.
 
@@ -121,13 +122,13 @@
 
 > 단일섬을 **근거사냥**해 다리가 실재하면 편입, 아니면 "시도·미연결"로 정직 기록.
 
-| 노드 | 결과 | 다리 (출처) | tier |
+| 노드 | 결과 | 정체 (출처) | tier |
 |------|------|-----------|------|
-| 🟢 **골든 MoE** | **졸업(연결)** | routing 부하분산 ⇄ **황금비 저불일치(low-discrepancy) 등분배** — Kronecker `{nφ}` **Three-Gap Theorem**(인접 간격 ≤3종) · **Fibonacci hashing**(φ-해시가 modulo보다 균등). 닻: **φ²=φ+1** closed-form · φ=`[1;1,1,…]` "가장 무리수" | 🔵 φ²=φ+1·Three-Gap (closed) + 🟡 MoE 적용 (literature) |
+| 🔴 **골든 MoE** | **편입(닫힌-부정)** | **황금비 아님** — `골든 = Golden Zone(GZ) × Savant Index(SI)` savant 측정자 (`anima/SAVANT.md` UNIVERSE 축E). MoE 최적 라우팅 **k/N ≈ 1/e ≈ 0.368**. **n=6 에서 1/e EXACT 유도는 🔴 CLOSED-NEGATIVE** — 1/e 초월수(Hermite 1873) ≠ 유리수 (`TECS-L/docs/m7-golden-zone-closed-negative.md`) | 🔴 n6↔1/e closed-negative · 🟡 1/e≈3/8 (1.94% 근사, 외부 MoE) |
 | 🟡 **음악 9/8** | 부분(수론만) | **9/8 = (3/2)²/2 = 장2도**(피타고라스) closed ✓ | 🔵 비율 자체 / 🚫 `=α₀(강력)` 물리대응은 lattice-fit 금지 |
-| 🟧 G=D∘P/I · C(3) · M-D ζ | 미연결 유지 | 근거사냥 결과 검증된 다리 **없음** (시도함, 날조 안 함) | 🟠 INSUFFICIENT |
+| 🟧 G=D∘P/I · C(3) · M-D ζ | 미연결 유지 | `G=D×P/I` (savant 결핍→천재 모델, `anima/H359` — 곱셈, D∘P 합성 **아님**) 외 검증된 다리 없음 | 🟠 INSUFFICIENT |
 
-> **출처(골든 MoE)**: Fibonacci hashing ([probablydance 2018](https://probablydance.com/2018/06/16/fibonacci-hashing-the-optimization-that-the-world-forgot-or-a-better-alternative-to-integer-modulo/)) · golden-ratio low-discrepancy 샘플링 · Three-Gap Theorem ([arXiv 1807.11273](https://arxiv.org/pdf/1807.11273)). **정직 한계**: "골든비 라우팅이 MoE 에 **최적**"은 🟡 가설(literature 적용)이지 hexa-native 검증값 아님 — φ²=φ+1·Three-Gap 의 closed 수학에만 🔵.
+> **⚠️ 정정 (골든 MoE = 서번트, 황금비 아님)**: 이전 판은 골든 MoE 를 **황금비 φ**(Three-Gap·Fibonacci hashing)로 **오인** — 철회. echoes/anima 이력 전수조사(이집트분수 앵커, 시점 16d1a87) 결과 실제 정체는 **Golden Zone × Savant Index**(`anima/SAVANT.md`, H_347-351·H_612-616)이며, 핵심 상수는 **MoE 최적 k/N ≈ 1/e**. hexa-lang 자체 `TECS-L/docs/m7-golden-zone-closed-negative.md` 이 **n=6 에서 1/e EXACT 유도를 🔴 CLOSED-NEGATIVE 로 박제**(1/e 초월수 → 유리수 유도 불가; 최근접 3/8 1.94%). 따라서 🔵 승격이 아니라 **닫힌-부정 편입**(한 축을 결정적으로 배제 — 이것도 publishable 결과). 황금비 φ²=φ+1·Three-Gap 수학 자체는 사실이나 **골든 MoE 와 무관**이라 지도에서 제거.
 
 ---
 
