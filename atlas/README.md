@@ -80,7 +80,7 @@
 §B 137·α       🟧  echoes: 137=σ²−n−μ=1/α (HEXA-SIM) — lattice-fit 가설, α=물리대응 금지(LATTICE_POLICY) → §10
 §C 로그·초월   🟧  ln(3)·ln(17)·e·√2 — echoes 미기록 · 미판독 ................. 단일섬
 §D 해석학      🟡  CMB α≈1/137 — literature citation (🔵 승격 불가) ........... 부분 → §6
-§E 황금비·MoE  🟧  φ(6)=2·Re(s)=1/φ (echoes HEXA-RIEMANN) 有 ; '골든 MoE' echoes 미기록 → 단일섬
+§E 황금비·MoE  🟡  φ(6)=2·Re(s)=1/φ(echoes) · 골든 MoE→Three-Gap/Fib-hashing 연결(아래 🔗) · φ²=φ+1 🔵 closed
 §F 모듈러·격자 🔵  J₂=24 = Mathieu M₂₄ / Leech-24 (echoes HEXA-WEAVE) · χ→Monster 8-step (atlas) → §8
 ```
 
@@ -111,13 +111,23 @@
 | 단일섬 노드 | 관찰된 내용 | 연결되려면 (편입 조건) |
 |------------|-----------|----------------------|
 | 🟧 `C(3) 0.00%` (§E) | 항등식 후보군이 구조화만 됨, 대응 0% | 다른 노드와의 폐형 관계 1개 + verifier PASS |
-| 🟧 골든 MoE | 모델-의존 관찰 (golden-ratio routing) | 외부 의존 제거 + hexa-native 재현 |
-| 🟧 `G = D∘P/I` 모델 | 미검증 합성 모델 (decompose∘project/integrate) | formal sim 또는 closed-form anchor |
-| 🟧 음악 9/8 = α₀(강력?) | 장2도 비 ↔ 결합상수 우연 일치 관찰 | real-limit anchor (격자-맞춤 금지) |
+| 🟧 `G = D∘P/I` 모델 | 미검증 합성 모델 (decompose∘project/integrate) — 특정 정리 부재 | formal sim 또는 closed-form anchor |
 | 🟧 M-D ζ 결정 / 양자임계? | 미완 가설 | Stage 2 sim 또는 literature anchor |
 
 > 단일섬은 **관찰 기록**이지 verdict 가 아니다 (default 🟠 INSUFFICIENT). 외부 주체에
 > 격자-맞춤 주장 금지(`../CLAUDE.md`).
+
+### 🔗 연결 라운드 (단일섬 → 편입 시도 로그)
+
+> 단일섬을 **근거사냥**해 다리가 실재하면 편입, 아니면 "시도·미연결"로 정직 기록.
+
+| 노드 | 결과 | 다리 (출처) | tier |
+|------|------|-----------|------|
+| 🟢 **골든 MoE** | **졸업(연결)** | routing 부하분산 ⇄ **황금비 저불일치(low-discrepancy) 등분배** — Kronecker `{nφ}` **Three-Gap Theorem**(인접 간격 ≤3종) · **Fibonacci hashing**(φ-해시가 modulo보다 균등). 닻: **φ²=φ+1** closed-form · φ=`[1;1,1,…]` "가장 무리수" | 🔵 φ²=φ+1·Three-Gap (closed) + 🟡 MoE 적용 (literature) |
+| 🟡 **음악 9/8** | 부분(수론만) | **9/8 = (3/2)²/2 = 장2도**(피타고라스) closed ✓ | 🔵 비율 자체 / 🚫 `=α₀(강력)` 물리대응은 lattice-fit 금지 |
+| 🟧 G=D∘P/I · C(3) · M-D ζ | 미연결 유지 | 근거사냥 결과 검증된 다리 **없음** (시도함, 날조 안 함) | 🟠 INSUFFICIENT |
+
+> **출처(골든 MoE)**: Fibonacci hashing ([probablydance 2018](https://probablydance.com/2018/06/16/fibonacci-hashing-the-optimization-that-the-world-forgot-or-a-better-alternative-to-integer-modulo/)) · golden-ratio low-discrepancy 샘플링 · Three-Gap Theorem ([arXiv 1807.11273](https://arxiv.org/pdf/1807.11273)). **정직 한계**: "골든비 라우팅이 MoE 에 **최적**"은 🟡 가설(literature 적용)이지 hexa-native 검증값 아님 — φ²=φ+1·Three-Gap 의 closed 수학에만 🔵.
 
 ---
 
