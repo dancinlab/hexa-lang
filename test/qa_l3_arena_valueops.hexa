@@ -1,0 +1,279 @@
+// test/qa_l3_arena_valueops.hexa — QA LANE L3
+//
+// Full-surface QA of the runtime value-op + arena substrate that the decode
+// hot path (and RT-NATIVE measure-8) exercises. Tests the SHIPPING operators
+// (==, <, >, +, -, *, /, %) which lower to hexa_eq / hexa_cmp_* / hexa_add /
+// hexa_div ... → the numeric.hexa rt_* port (byte-identical to runtime_core.c
+// C oracle by design). Expected values confirmed against runtime_core.c:
+//   hexa_eq      (L7135)  — cross-type numeric, -0.0==0.0, NaN!=NaN, str/arr
+//   hexa_cmp_*   (L8595)  — __raw_cmp3: 0/1/2 ordered, 3 NaN-unordered, 4 throw
+//   hexa_add..mod(L7026..) — int+int int, any-float float, str/arr concat,
+//                            int/int + float/float div0 THROW, mixed IEEE
+//   hexa_to_string(L6789) — int "5", whole-float "%.1f", NaN/inf canonical
+//
+// DEFAULT shipping build (C arena, HEXA_RT_ALLOC_NATIVE OFF). Run:
+//   hexa test/qa_l3_arena_valueops.hexa
+
+let mut PASS = 0
+let mut FAIL = 0
+
+fn ck(name, ok) {
+    if ok {
+        PASS = PASS + 1
+        print("PASS "); println(name)
+    } else {
+        FAIL = FAIL + 1
+        print("FAIL "); println(name)
+    }
+}
+
+// ck_eq: assert got==want (string form) so a mismatch prints got/want.
+fn ck_eq(name, got, want) {
+    if got == want {
+        PASS = PASS + 1
+        print("PASS "); println(name)
+    } else {
+        FAIL = FAIL + 1
+        print("FAIL "); print(name)
+        print(" got="); print(to_string(got))
+        print(" want="); println(to_string(want))
+    }
+}
+
+// ── float helpers (NaN / inf produced via runtime arithmetic) ──────────
+// mixed int/float div-by-zero is IEEE (no throw): 0/0.0 -> NaN, 1/0.0 -> inf.
+fn make_nan() -> float { return 0 / 0.0 }
+fn make_pinf() -> float { return 1 / 0.0 }
+fn make_ninf() -> float { let m = 0 - 1; return m / 0.0 }
+
+// ─────────────────────────────────────────────────────────────────────
+// 1. EQUALITY across all tags
+// ─────────────────────────────────────────────────────────────────────
+ck("eq:int==int",        5 == 5)
+ck("eq:int!=int",        !(5 == 6))
+ck("eq:float==float",    2.5 == 2.5)
+ck("eq:float!=float",    !(2.5 == 2.6))
+ck("eq:bool==bool",      true == true)
+ck("eq:bool!=bool",      !(true == false))
+ck("eq:str==str",        "abc" == "abc")
+ck("eq:str!=str",        !("abc" == "abd"))
+ck("eq:str-empty",       "" == "")
+// cross-type numeric: int<->float coerce (C L7140-7141)
+ck("eq:cross 2==2.0",    2 == 2.0)
+ck("eq:cross 2.0==2",    2.0 == 2)
+ck("eq:cross 2!=2.5",    !(2 == 2.5))
+// -0.0 == 0.0 (IEEE)
+ck("eq:negzero==zero",   (0.0 - 0.0) == 0.0)
+ck("eq:negzero literal", -0.0 == 0.0)
+// array structural eq (C L7202 deep)
+ck("eq:arr==arr",        [1, 2, 3] == [1, 2, 3])
+ck("eq:arr!=len",        !([1, 2] == [1, 2, 3]))
+ck("eq:arr!=elem",       !([1, 2, 3] == [1, 9, 3]))
+ck("eq:arr nested",      [[1, 2], [3]] == [[1, 2], [3]])
+ck("eq:arr empty",       [] == [])
+ck("eq:arr cross-elem",  [1, 2] == [1.0, 2.0])
+// mismatched tags -> false (C L7142)
+ck("eq:int!=str",        !(5 == "5"))
+ck("eq:bool!=int",       !(true == 1))
+ck("eq:str!=arr",        !("a" == [1]))
+ck("eq:void==void",      void == void)
+// NaN: NaN != NaN (every comparison false; eq via a<=b&&a>=b both false)
+ck("eq:nan!=nan",        !(make_nan() == make_nan()))
+
+// ─────────────────────────────────────────────────────────────────────
+// 2. ORDERING (lt/gt/le/ge) across int·float·str + NaN + incomparable
+// ─────────────────────────────────────────────────────────────────────
+ck("lt:int",             2 < 3)
+ck("lt:int-false",       !(3 < 2))
+ck("gt:int",             5 > 4)
+ck("le:int-eq",          4 <= 4)
+ck("le:int-lt",          3 <= 4)
+ck("ge:int-eq",          5 >= 5)
+ck("ge:int-gt",          6 >= 5)
+ck("lt:float",           1.5 < 2.5)
+ck("gt:float",           3.5 > 2.0)
+ck("le:float-eq",        2.5 <= 2.5)
+ck("lt:cross int/float", 2 < 2.5)
+ck("gt:cross float/int", 2.5 > 2)
+// string lexicographic (C __raw_cmp3 strcmp)
+ck("lt:str-lex",         "apple" < "banana")
+ck("gt:str-lex",         "banana" > "apple")
+ck("lt:str-prefix",      "ab" < "abc")
+ck("le:str-eq",          "x" <= "x")
+ck("ge:str",             "z" >= "a")
+// NaN: all comparisons false (code 3 unordered)
+ck("nan:!(nan<1)",       !(make_nan() < 1.0))
+ck("nan:!(nan>1)",       !(make_nan() > 1.0))
+ck("nan:!(nan<=1)",      !(make_nan() <= 1.0))
+ck("nan:!(nan>=1)",      !(make_nan() >= 1.0))
+ck("nan:!(1<=nan)",      !(1.0 <= make_nan()))
+// inf ordering
+ck("inf:pinf>big",       make_pinf() > 1e308)
+ck("inf:ninf<small",     make_ninf() < (0.0 - 1e308))
+// incomparable cross-type ordering -> THROW (code 4)
+let mut threw_cmp = false
+try { let r = (1 < "a") } catch e { threw_cmp = true }
+ck("cmp:int<str throws", threw_cmp)
+let mut threw_cmp2 = false
+try { let r = ([1] < [2]) } catch e { threw_cmp2 = true }
+ck("cmp:arr<arr throws", threw_cmp2)
+
+// ─────────────────────────────────────────────────────────────────────
+// 3. ARITHMETIC add/sub/mul/div/mod — int·float·mixed + zero behavior
+// ─────────────────────────────────────────────────────────────────────
+ck_eq("add:int+int",     2 + 3, 5)
+ck_eq("add:float+float", 1.5 + 2.5, 4.0)
+ck_eq("add:mix int+flt", 1 + 2.5, 3.5)       // any-float -> float
+ck_eq("add:mix flt+int", 2.5 + 1, 3.5)
+ck_eq("add:str concat",  "foo" + "bar", "foobar")
+ck("add:arr concat",     ([1, 2] + [3, 4]) == [1, 2, 3, 4])
+ck_eq("sub:int",         10 - 4, 6)
+ck_eq("sub:float",       5.0 - 1.5, 3.5)
+ck_eq("sub:mix",         5 - 1.5, 3.5)
+ck_eq("sub:neg result",  3 - 10, 0 - 7)
+ck_eq("mul:int",         3 * 4, 12)
+ck_eq("mul:float",       2.0 * 0.5, 1.0)
+ck_eq("mul:mix",         2 * 0.5, 1.0)
+ck_eq("div:int trunc",   10 / 3, 3)          // int/int -> int truncate
+ck_eq("div:int exact",   12 / 4, 3)
+ck_eq("div:float",       1.0 / 4.0, 0.25)
+ck_eq("div:mix",         1 / 4.0, 0.25)
+ck_eq("mod:int",         10 % 3, 1)
+ck_eq("mod:int neg",     (0 - 10) % 3, (0 - 1) % 1 - 0 - 1)  // -10%3 = -1 (C trunc)
+ck_eq("mod:float",       5.5 % 2.0, 1.5)
+// overflow boundary: 64-bit int wraps (two's complement, native add)
+// 2^62 = 4611686018427387904 ; +itself overflows to negative.
+ck("add:near-max ok",    (4611686018427387903 + 0) == 4611686018427387903)
+// div-by-zero: int/int THROWS
+let mut threw_divi = false
+try { let r = (5 / 0) } catch e { threw_divi = true }
+ck("div:int/0 throws",   threw_divi)
+// mod-by-zero: int/int THROWS
+let mut threw_modi = false
+try { let r = (5 % 0) } catch e { threw_modi = true }
+ck("mod:int/0 throws",   threw_modi)
+// float/float div-by-zero THROWS (pure float path)
+let mut threw_divf = false
+try { let r = (5.0 / 0.0) } catch e { threw_divf = true }
+ck("div:flt/0.0 throws", threw_divf)
+// mixed int/float div-by-zero does NOT throw -> IEEE inf
+let mut mixed_inf = false
+try {
+    let r = (1 / 0.0)
+    mixed_inf = (r > 1e308)
+} catch e { mixed_inf = false }
+ck("div:1/0.0 = +inf",   mixed_inf)
+// non-numeric arithmetic THROWS (str - int)
+let mut threw_strsub = false
+try { let r = ("ab" - 3) } catch e { threw_strsub = true }
+ck("sub:str-int throws", threw_strsub)
+
+// ─────────────────────────────────────────────────────────────────────
+// 4. to_string for every tag — exact format (C hexa_to_string)
+// ─────────────────────────────────────────────────────────────────────
+ck_eq("ts:int",          to_string(5), "5")
+ck_eq("ts:int-neg",      to_string(0 - 7), "-7")
+ck_eq("ts:int-zero",     to_string(0), "0")
+ck_eq("ts:float-whole",  to_string(3.0), "3.0")       // %.1f for whole floats
+ck_eq("ts:float-zero",   to_string(0.0), "0.0")
+ck_eq("ts:float-frac",   to_string(2.5), "2.5")
+ck_eq("ts:float-quarter", to_string(0.25), "0.25")
+ck_eq("ts:bool-true",    to_string(true), "true")
+ck_eq("ts:bool-false",   to_string(false), "false")
+ck_eq("ts:str",          to_string("hi"), "hi")
+ck_eq("ts:str-empty",    to_string(""), "")
+ck_eq("ts:void",         to_string(void), "void")
+ck_eq("ts:array",        to_string([1, 2, 3]), "[1, 2, 3]")
+ck_eq("ts:array-empty",  to_string([]), "[]")
+ck_eq("ts:array-mixed",  to_string([1, "a", true]), "[1, a, true]")
+ck_eq("ts:array-nested", to_string([[1, 2], [3]]), "[[1, 2], [3]]")
+ck_eq("ts:array-float",  to_string([1.0, 2.5]), "[1.0, 2.5]")
+// NaN / inf canonical casing (Rust-style: "NaN"/"inf"/"-inf")
+ck_eq("ts:nan",          to_string(make_nan()), "NaN")
+ck_eq("ts:pinf",         to_string(make_pinf()), "inf")
+ck_eq("ts:ninf",         to_string(make_ninf()), "-inf")
+
+// ─────────────────────────────────────────────────────────────────────
+// 5. ARENA — many allocations (multi-block >1MB), concat, no corruption
+// ─────────────────────────────────────────────────────────────────────
+// Each iteration builds + retains strings/arrays; allocator must walk
+// multiple 1MB blocks without corrupting earlier live values.
+let mut acc = ""
+let mut i = 0
+while i < 4000 {
+    acc = acc + "x"            // grows a string; ~ allocations across blocks
+    i = i + 1
+}
+ck_eq("arena:concat len 4000", len(acc), 4000)
+ck("arena:concat head ok", char_code(acc, 0) == 120)   // 'x'
+ck("arena:concat tail ok", char_code(acc, 3999) == 120)
+
+// Build many distinct arrays to force >1MB of arena traffic; verify the
+// FIRST one is still intact after thousands of later allocations (no
+// rewind here — pure allocation pressure).
+let first = [11, 22, 33]
+let mut arrs = []
+let mut j = 0
+while j < 20000 {
+    let tmp = [j, j + 1, j + 2]
+    arrs = push(arrs, len(tmp))
+    j = j + 1
+}
+ck("arena:20k arrays len", len(arrs) == 20000)
+ck("arena:first survives", first == [11, 22, 33])
+ck("arena:last array seam", arrs[19999] == 3)
+
+// String concat under heavy allocation interleave: two independent
+// growers must not clobber each other (no cross-block corruption).
+let mut s1 = ""
+let mut s2 = ""
+let mut k = 0
+while k < 2000 {
+    s1 = s1 + "A"
+    s2 = s2 + "BB"
+    k = k + 1
+}
+ck("arena:interleave s1 len", len(s1) == 2000)
+ck("arena:interleave s2 len", len(s2) == 4000)
+ck("arena:interleave s1 char", char_code(s1, 1999) == 65)  // 'A'
+ck("arena:interleave s2 char", char_code(s2, 3999) == 66)  // 'B'
+
+// ─────────────────────────────────────────────────────────────────────
+// 6. DETERMINISM — recompute the whole numeric surface twice; identical.
+// (mark/rewind/reset are internal to the C arena and not user-callable in
+//  hexa source; determinism across a heavy alloc+free cycle is the
+//  user-visible proxy for arena rewind/reset correctness.)
+// ─────────────────────────────────────────────────────────────────────
+fn surface_digest() -> string {
+    let mut d = ""
+    d = d + to_string(2 + 3) + ","
+    d = d + to_string(1.5 + 2.5) + ","
+    d = d + to_string(10 / 3) + ","
+    d = d + to_string(10 % 3) + ","
+    d = d + to_string("a" + "b") + ","
+    d = d + to_string([1, 2] + [3]) + ","
+    d = d + to_string(2 == 2.0) + ","
+    d = d + to_string(2 < 3) + ","
+    d = d + to_string(make_nan()) + ","
+    d = d + to_string(make_pinf())
+    return d
+}
+let run1 = surface_digest()
+// churn the arena hard between runs
+let mut churn = ""
+let mut c = 0
+while c < 5000 { churn = churn + "z"; c = c + 1 }
+let run2 = surface_digest()
+ck("determinism:run1==run2", run1 == run2)
+ck_eq("determinism:digest", run1, "5,4.0,3,1,ab,[1, 2, 3],true,true,NaN,inf")
+
+// ─────────────────────────────────────────────────────────────────────
+println("")
+print("SCORECARD arena/value-ops QA: ")
+print(to_string(PASS)); print(" PASS / ")
+print(to_string(FAIL)); println(" FAIL")
+if FAIL == 0 {
+    println("RESULT: ALL PASS")
+} else {
+    println("RESULT: HAS FAILURES")
+}
