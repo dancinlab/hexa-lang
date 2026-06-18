@@ -307,19 +307,17 @@ if [ ! -f "$REPO/build/map_core_native.o" ]; then
 fi
 MAP_CORE_OBJ="$REPO/build/map_core_native.o"
 
-# ── RT-NATIVE Route B ALLOC-RB: native linked-block arena (OPT-IN) ───
-# Whole-runtime measurement lane. When HEXA_RT_ALLOC_NATIVE=1, the C arena
-# `#else` in runtime_core.c (hexa_arena_on/alloc/mark/rewind/reset) is dropped
-# (-DHEXA_RT_ALLOC_NATIVE on the runtime.c compile) and the native HexaArenaBlock-
-# chain arena (self/rt/alloc.hexa) supplies those symbols from
-# build/alloc_syscall_native.o — the arena twin of the array/map seed objects.
-# UNLIKE array/map (auto-on) this stays OPT-IN until the whole-runtime byteeq/RSS
-# measurement confirms the 16-byte mark struct-return ABI + the heapify↔envelope
-# wiring (__hx_arena_lo/hi → hexa_arena_env_lo/hi); default unset ⇒ C arena ⇒
-# byteeq-inert.
+# ── RT-NATIVE Route B ALLOC-RB: native linked-block arena (DEFAULT-ON) ───
+# As of measure-8 (2026-06-18) the C arena body is DROPPED from runtime_core_emit.hexa
+# and the native HexaArenaBlock-chain arena (self/rt/alloc.hexa → build/
+# alloc_syscall_native.o) is the sole arena — auto-on like the array/map seeds. The
+# whole-runtime byteeq/faithful/RSS measurement (measure-6/7) confirmed the 16-byte
+# mark struct-return ABI + the heapify↔envelope wiring (__hx_arena_lo/hi →
+# hexa_arena_env_lo/hi). Set HEXA_RT_ALLOC_NATIVE=0 to revert (build then fails to
+# resolve hexa_arena_* — revert is via git, not a live C fallback).
 ALLOC_CORE_OBJ=""
 ALLOC_DEF=""
-if [ "${HEXA_RT_ALLOC_NATIVE:-0}" = "1" ]; then
+if [ "${HEXA_RT_ALLOC_NATIVE:-1}" != "0" ]; then
     case "$(uname -sm 2>/dev/null)" in
         "Linux x86_64")                 ALLOC_SEED="$REPO/self/native/alloc_syscall_x86_64.s" ;;
         "Linux aarch64"|"Linux arm64")  ALLOC_SEED="$REPO/self/native/alloc_syscall_arm64-linux.s" ;;
