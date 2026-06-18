@@ -295,6 +295,122 @@ if [ "${_RT_HI_NATIVE:-0}" != "1" ]; then
   fi
 fi
 
+# ── UNSHADOW F1 (typed-array shim) — inject HexaArrI64/F64 into frozen core ────
+# The frozen self/runtime_core.c (151c52c8…, .c-graduation parent) PREDATES the
+# native typed-array storage shims (UNSHADOW [HEADLINE] F1 + its F64 mirror), so
+# the restored seed has NEITHER the HexaArrI64/HexaArrF64 struct typedefs NOR the
+# 8 helper bodies hexa_arr_{i64,f64}_{new,push,len,box}. But the codegen emits a
+# `hexa_arr_f64_new(...)/hexa_arr_f64_push(...)` (resp. i64) construction for any
+# statically-proven monomorphic float/int array LITERAL (self/codegen.hexa ~3045/
+# 3077), and the tracked self/runtime.h already forward-declares all 8. So a .hexa
+# carrying a float-array literal (e.g. `[1.0, 2.0, 3.0]`) LINKED against the
+# seeds-removed release runtime.a died with `undefined reference to hexa_arr_f64_new`.
+# The deterministic, hexat-free fix (same precedent as the Z2a gen.c synth above):
+# splice the typedefs + the 8 helper bodies into the restored runtime_core.c,
+# verbatim from the emitter SSOT (self/runtime_core_emit.hexa). The two structs go
+# right after `} HexaArr;` (so HexaVal->arr_ptr can carry either descriptor) and
+# the 8 helpers right after the `hexa_array_new()` body. Dependencies they use —
+# HX_SET_ARR_PTR / hexa_throw / hexa_str / hexa_int / hexa_float / TAG_ARRAY — all
+# already exist in the frozen blob. Idempotent: a marker guards re-injection.
+_RTC="self/runtime_core.c"
+if [ -f "$_RTC" ] && ! grep -q 'UNSHADOW F1 typed-array shim (restore-injected)' "$_RTC"; then
+  awk '
+    # 1) struct typedefs immediately after the HexaArr typedef close.
+    /^} HexaArr;$/ {
+      print
+      print ""
+      print "// UNSHADOW F1 typed-array shim (restore-injected): native contiguous"
+      print "// int64_t[]/double[] storage descriptors. Layout-match HexaArr (ptr,len,cap)"
+      print "// so a TAG_ARRAY HexaVal carries either via the SAME arr_ptr union slot."
+      print "typedef struct HexaArrI64 {"
+      print "    int64_t* data;"
+      print "    int64_t len;"
+      print "    int64_t cap;"
+      print "} HexaArrI64;"
+      print ""
+      print "typedef struct HexaArrF64 {"
+      print "    double* data;"
+      print "    int64_t len;"
+      print "    int64_t cap;"
+      print "} HexaArrF64;"
+      next
+    }
+    # 2) the 8 helper bodies immediately after the hexa_array_new() body close.
+    #    Match the first column-0 "}" that follows the array_new signature line.
+    /^HexaVal hexa_array_new\(\) \{$/ { in_an = 1 }
+    {
+      print
+      if (in_an && $0 == "}") {
+        in_an = 0
+        print ""
+        print "// UNSHADOW F1 typed-array shim (restore-injected): the 8 helper bodies the"
+        print "// codegen emits for proven monomorphic-i64/f64 array literals (forward-decl"
+        print "// in self/runtime.h). Verbatim from self/runtime_core_emit.hexa."
+        print "HexaVal hexa_arr_i64_new(int cap) {"
+        print "    HexaArrI64* a = (HexaArrI64*)malloc(sizeof(HexaArrI64));"
+        print "    if (!a) { fprintf(stderr, \"OOM in arr_i64_new\\n\"); exit(1); }"
+        print "    if (cap < 1) cap = 1;"
+        print "    a->data = (int64_t*)malloc(sizeof(int64_t) * (size_t)cap);"
+        print "    if (!a->data) { fprintf(stderr, \"OOM in arr_i64_new data\\n\"); exit(1); }"
+        print "    a->len = 0; a->cap = cap;"
+        print "    HexaVal v = {.tag=TAG_ARRAY};"
+        print "    HX_SET_ARR_PTR(v, (HexaArr*)a);"
+        print "    return v;"
+        print "}"
+        print "HexaVal hexa_arr_i64_push(HexaVal v, int64_t x) {"
+        print "    HexaArrI64* a = (HexaArrI64*)v.arr_ptr;"
+        print "    if (a->len >= a->cap) {"
+        print "        a->cap *= 2;"
+        print "        a->data = (int64_t*)realloc(a->data, sizeof(int64_t) * (size_t)a->cap);"
+        print "        if (!a->data) { fprintf(stderr, \"OOM in arr_i64_push\\n\"); exit(1); }"
+        print "    }"
+        print "    a->data[a->len++] = x;"
+        print "    return v;"
+        print "}"
+        print "int hexa_arr_i64_len(HexaVal v) { return ((HexaArrI64*)v.arr_ptr)->len; }"
+        print "HexaVal hexa_arr_i64_box(HexaVal v, int64_t i) {"
+        print "    HexaArrI64* a = (HexaArrI64*)v.arr_ptr;"
+        print "    if (i < 0 || i >= a->len) { hexa_throw(hexa_str(\"index out of bounds\")); }"
+        print "    return hexa_int(a->data[i]);"
+        print "}"
+        print "HexaVal hexa_arr_f64_new(int cap) {"
+        print "    HexaArrF64* a = (HexaArrF64*)malloc(sizeof(HexaArrF64));"
+        print "    if (!a) { fprintf(stderr, \"OOM in arr_f64_new\\n\"); exit(1); }"
+        print "    if (cap < 1) cap = 1;"
+        print "    a->data = (double*)malloc(sizeof(double) * (size_t)cap);"
+        print "    if (!a->data) { fprintf(stderr, \"OOM in arr_f64_new data\\n\"); exit(1); }"
+        print "    a->len = 0; a->cap = cap;"
+        print "    HexaVal v = {.tag=TAG_ARRAY};"
+        print "    HX_SET_ARR_PTR(v, (HexaArr*)a);"
+        print "    return v;"
+        print "}"
+        print "HexaVal hexa_arr_f64_push(HexaVal v, double x) {"
+        print "    HexaArrF64* a = (HexaArrF64*)v.arr_ptr;"
+        print "    if (a->len >= a->cap) {"
+        print "        a->cap *= 2;"
+        print "        a->data = (double*)realloc(a->data, sizeof(double) * (size_t)a->cap);"
+        print "        if (!a->data) { fprintf(stderr, \"OOM in arr_f64_push\\n\"); exit(1); }"
+        print "    }"
+        print "    a->data[a->len++] = x;"
+        print "    return v;"
+        print "}"
+        print "int hexa_arr_f64_len(HexaVal v) { return ((HexaArrF64*)v.arr_ptr)->len; }"
+        print "HexaVal hexa_arr_f64_box(HexaVal v, int64_t i) {"
+        print "    HexaArrF64* a = (HexaArrF64*)v.arr_ptr;"
+        print "    if (i < 0 || i >= a->len) { hexa_throw(hexa_str(\"index out of bounds\")); }"
+        print "    return hexa_float(a->data[i]);"
+        print "}"
+      }
+    }
+  ' "$_RTC" > "$_RTC.f1arr" \
+    && grep -q 'HexaVal hexa_arr_f64_new(int cap) {' "$_RTC.f1arr" \
+    && grep -q 'HexaVal hexa_arr_i64_new(int cap) {' "$_RTC.f1arr" \
+    && grep -q 'typedef struct HexaArrF64 {' "$_RTC.f1arr" \
+    && mv "$_RTC.f1arr" "$_RTC" \
+    && echo "[restore_frozen_seeds] UNSHADOW F1: injected HexaArrI64/F64 typedefs + 8 typed-array helpers into $_RTC" \
+    || { rm -f "$_RTC.f1arr"; echo "[restore_frozen_seeds] UNSHADOW F1: WARN typed-array shim injection failed (left frozen $_RTC as-is)" >&2; }
+fi
+
 # ── OP-18 (HEXA-0POD) — L3 fused-dispatch host fallbacks ──────────────────────
 # The frozen self/runtime.c (151c52c8…, .c-graduation parent) predates the L3
 # kernel-fusion glue, so it has NO host body for the bare fused dispatchers
