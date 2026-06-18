@@ -670,13 +670,18 @@ fn _x86_tag_resolve(buf: [LInstr], o: Operand, rm: X86RegMap, scratch: string) -
         }
     }
     if o.kind == "global" {
-        let off = _x86_tag_off(rm, o.global_id)
-        if off >= 0 {
-            out.push(_x86_instr2("mov", _x86_op_reg(scratch),
-                             _x86_op_mem("rbp", _x86_frame_off(off)),
-                             "tag g" + to_string(o.global_id) + " from tag-slot"))
-            return out
-        }
+        // RT-NATIVE M5 routeb-r4 (measure-7): a module-global's tag is the SSOT in
+        // its OWN `.data` slot word1 (`[rip+g<id>+8]`), written by the global-store
+        // path in _x86_emit_dst_writeback (mirroring arm64's `ldp lo,hi,[g<id>]`
+        // which reads tag+payload from the slot together). The per-FUNCTION frame
+        // tag-slot is NOT cross-function-visible, so a reader in a different
+        // function from the writer must read the slot word1, not its own frame
+        // tag-slot (which a foreign writer never populated → stale TAG_INT=0). This
+        // is the read mirror of the +8 tag persist on the write side.
+        out.push(_x86_instr2("mov", _x86_op_reg(scratch),
+                         _x86_op_label("[rip+g" + to_string(o.global_id) + "+8]"),
+                         "tag g" + to_string(o.global_id) + " from global slot+8"))
+        return out
     }
     // RT-NATIVE Z2c — a `const_bool` literal (`true`/`false`) carries TAG_BOOL=2,
     // NOT the operand-kind default 0. x86_64 parity with arm64_darwin.hexa
@@ -1129,6 +1134,33 @@ fn _x86_emit_dst_writeback(buf: [LInstr], rm: X86RegMap, id: i64, arena_id: i64)
         let home = _x86_dst_reg(rm, id)
         out.push(_x86_instr2("mov", _x86_op_label("[rip+g" + to_string(id) + "]"),
                          _x86_op_reg(home), "global write: g" + to_string(id)))
+        // RT-NATIVE M5 routeb-r4 (measure-7): PERSIST THE TAG too. The payload
+        // store above mirrored arm64's `stp lo,hi` only half-way — arm64 writes
+        // BOTH 16B words of the `g<id>: .quad 0 .quad 0` slot (word0=payload,
+        // word1=tag), x86_64 wrote word0 only, leaving `[rip+g<id>+8]` permanently
+        // zero. A module-global's tag must live in its OWN `.data` slot (the
+        // cross-FUNCTION SSOT, like arm64) — a frame tag-slot is per-function, so a
+        // DIFFERENT function reading the global never saw the writer's tag (every
+        // cross-fn global read came back TAG_INT=0). Symptom: arena `__env_extend`
+        // updated the arena-table global's payload but its tag stayed 0 → tag3→tag0
+        // miscompile → SIGSEGV once the C-ABI bridge routed execution into the
+        // native arena. FIX: read the tag the caller just stored into this dst's
+        // frame tag-slot and persist it to `[rip+g<id>+8]` (the slot word1). If the
+        // dst carries no frame tag-slot, default TAG_INT=0 (the prior implicit
+        // value — byte-eq for any global that was never tag-tracked).
+        let toff = _x86_tag_off(rm, id)
+        if toff >= 0 {
+            out.push(_x86_instr2("mov", _x86_op_reg("r11"),
+                             _x86_op_mem("rbp", _x86_frame_off(toff)),
+                             "global tag: reload g" + to_string(id) + " tag-slot"))
+        } else {
+            out.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_imm(0),
+                             "global tag: untracked g" + to_string(id) + " = TAG_INT"))
+        }
+        out.push(_x86_instr2("mov",
+                         _x86_op_label("[rip+g" + to_string(id) + "+8]"),
+                         _x86_op_reg("r11"),
+                         "global tag write: g" + to_string(id) + "+8"))
         return out
     }
     if _x86_is_spilled(rm, id) {
