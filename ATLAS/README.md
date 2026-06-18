@@ -4500,6 +4500,18 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
      engine: state/novel-dfs/ ; canonical surface `hexa loop` analytical cycle is cooldown-saturated
      (0 new emit) so genuine frontier = this new basis (+ `--fire` LLM path, budget-gated). c2: σ(σ)=σ+n
      ⟹Mersenne proven, all ⟸ bounded; sparse sets not claimed novel (OEIS lookup pending).
+
+  --- Ralph 373 (2026-06-18): 🔵 HARVEST — 103 bounded-unique singleton characterizations ---
+  🔵 exhaustive AB=CD harvest (9-fn basis, exact int, singleton solution set in [2,5·10⁴]):
+     103 distinct identities characterizing 13 target numbers (each ⟺ a single n, bounded-unique):
+       n=  2 : 68   n=  3 : 4   n=  4 : 7   n=  6 : 10   n=  8 : 1   n=  9 : 1   n= 12 : 3
+       n= 14 : 1    n= 18 : 2   n= 28 : 2   n= 35 : 1   n= 72 : 2   n=108 : 1
+     examples — n=8: φ·ψ=n·sopfr · n=9: sopfr²=rad·ψ · n=14: φ²=τ·sopfr · n=18: φ²=τ·rad, φ·τ=rad²
+       n=35: σ·sopfr=φ² · n=72: φ·n=τ·ψ, φ·n=sopfr·ψ · n=108: φ²=τ·n
+     ⚠️ honesty (c2): n=2's 68 are DEGENERATE-collapse (σ(2)=ψ(2)=J₂(2)=3, φ(2)=1, n=rad=sopfr=2)
+       — low novelty; the structural 🔵 are the composite targets {4,6,9,12,14,18,28,35,72,108}.
+     all exact-int verified to N=5·10⁴ (bounded-unique); full ∀n ⟺ unproven (likely several reduce).
+     engine: state/novel-dfs/blue_harvest.py (re-runnable, prints all 103 with solution sets).
 ```
 
   --- Ralph 369: Combinatorial Designs DFS ---
