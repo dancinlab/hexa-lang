@@ -1903,14 +1903,37 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             return buf
         }
         // RT-NATIVE M5-syscall: `__hx_target_os()` → int HexaVal compile-time OS
-        // const. This is the arm64-DARWIN backend, so the value is 1 (darwin), per
-        // self/rt/syscall.hexa's convention (__TARGET_OS__ == 1 ⇒ darwin). 0-arg:
-        // x1 = payload = 1, x0 = tag = TAG_INT(0). ADD-only leaf (no `bl`).
+        // const, per self/rt/syscall.hexa's convention (__TARGET_OS__ == 1 ⇒
+        // darwin, 0 ⇒ linux). This arm64 backend serves BOTH platforms — the
+        // value is target-selected: 1 for arm64-apple-darwin, 0 for the ELF
+        // arm64-linux-gnu triple. Baking darwin (1) on linux made the seed
+        // mis-route mmap/munmap via the BSD svc #0x80 / x16 path → bad arena
+        // base → SIGSEGV (linux-arm64 native arena wall, #3597). 0-arg: x1 =
+        // payload, x0 = tag = TAG_INT(0). ADD-only leaf (no `bl`).
         if s.op == "__hx_target_os" {
+            let mut os_imm = "#1"
+            let mut os_why = "__hx_target_os: 1 = darwin"
+            if opts.target_triple == "arm64-linux-gnu" {
+                os_imm = "#0"
+                os_why = "__hx_target_os: 0 = linux"
+            }
             buf.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
-                             _arm64_op_label("#1"), "__hx_target_os: 1 = darwin"))
+                             _arm64_op_label(os_imm), os_why))
             buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
                              _arm64_op_label("#0"), "__hx_target_os: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // RT-NATIVE measure-8: `__hx_target_arch()` → int HexaVal CPU-arch const.
+        // This is the arm64 backend (darwin AND linux), so the value is always 1
+        // (arm64), per self/rt/syscall.hexa's convention (0 ⇒ x86_64, 1 ⇒ arm64).
+        // Lets the source pick the aarch64-Linux syscall numbers (mmap=222 etc.)
+        // distinct from x86_64-Linux (mmap=9). 0-arg leaf, no `bl`.
+        if s.op == "__hx_target_arch" {
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
+                             _arm64_op_label("#1"), "__hx_target_arch: 1 = arm64"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_target_arch: TAG_INT"))
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
@@ -2076,16 +2099,25 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             return buf
         }
         // RT-NATIVE UNLOCK-8: `__hx_syscall0(num)` → int HexaVal of a 0-arg
-        // BSD syscall result. macOS arm64 ABI: syscall number in x16, trap via
-        // `svc #0x80`, result in x0. This is the Z3 arena foundation — a native
-        // syscall-emit (mmap/munmap path) with NO C shim. Verified via getuid
-        // (#24) which returns the caller's uid deterministically.
+        // syscall result. The aarch64 syscall ABI is OS-specific:
+        //   macOS/XNU : syscall number in x16, trap `svc #0x80`, result x0.
+        //   Linux     : syscall number in x8,  trap `svc #0`,    result x0.
+        // The seed must match the target kernel — baking the XNU form on
+        // linux-arm64 routed mmap via the wrong trap → bad arena base → SIGSEGV
+        // (#3597). This is the Z3 arena foundation — a native syscall-emit
+        // (mmap/munmap path) with NO C shim. Verified via getuid (#24).
         if s.op == "__hx_syscall0" && len(s.args) >= 1 {
+            let mut num_reg = "x16"
+            let mut trap_imm = "#0x80"
+            if opts.target_triple == "arm64-linux-gnu" {
+                num_reg = "x8"
+                trap_imm = "#0"
+            }
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // num → x1
-            buf.push(_arm64_instr2("mov", _arm64_op_reg("x16"),
-                             _arm64_op_reg("x1"), "__hx_syscall0: x16 = syscall num"))
-            buf.push(_arm64_instr1("svc", _arm64_op_label("#0x80"),
-                             "__hx_syscall0: BSD syscall trap"))
+            buf.push(_arm64_instr2("mov", _arm64_op_reg(num_reg),
+                             _arm64_op_reg("x1"), "__hx_syscall0: " + num_reg + " = syscall num"))
+            buf.push(_arm64_instr1("svc", _arm64_op_label(trap_imm),
+                             "__hx_syscall0: syscall trap"))
             buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"),
                              _arm64_op_reg("x0"), "__hx_syscall0: payload = result"))
             buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
@@ -2094,13 +2126,25 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             return buf
         }
         // RT-NATIVE UNLOCK-9: `__hx_syscall6(num, a0..a5)` → int HexaVal of a
-        // 6-arg BSD syscall result. The mmap/munmap path = native arena (Z3)
-        // with NO C malloc shim. macOS arm64: args in x0..x5, number in x16,
-        // `svc #0x80`, result x0. Each arg's INT payload is staged into a
-        // callee-temp (x9..x14) FIRST — `_hv_load` clobbers x0..x3 as scratch,
-        // so loading directly into x0..x5 would corrupt earlier args — then
-        // moved into x0..x5 in one block just before the trap.
+        // 6-arg syscall result. The mmap/munmap path = native arena (Z3) with
+        // NO C malloc shim. Args go in x0..x5 on BOTH aarch64 ABIs; only the
+        // syscall-number register + trap differ:
+        //   macOS/XNU : number in x16, `svc #0x80`.
+        //   Linux     : number in x8,  `svc #0`.
+        // (Baking the XNU form on linux-arm64 made mmap return a bad base →
+        // SIGSEGV on first arena write, #3597.) Each arg's INT payload is staged
+        // into a callee-temp (x9..x14) FIRST — `_hv_load` clobbers x0..x3 as
+        // scratch, so loading directly into x0..x5 would corrupt earlier args —
+        // then moved into x0..x5 in one block just before the trap.
+        //
+        // ORDERING NOTE: darwin stages the number into x16 BEFORE the x0..x5
+        // fill (x16 ∉ {x0..x5}, so it survives) — kept byte-identical to the
+        // frozen darwin seed. Linux's number register IS x8, which the _hv_load
+        // payload scratch and the arg-fill would clobber; so on linux the
+        // number is parked in x15 (callee-clobber, ∉ {x0..x5}) until AFTER the
+        // fill, then landed in x8 immediately before the trap.
         if s.op == "__hx_syscall6" && len(s.args) >= 7 {
+            let elf_abi = opts.target_triple == "arm64-linux-gnu"
             let tmps = ["x9", "x10", "x11", "x12", "x13", "x14"]
             let mut ai = 1
             while ai <= 6 {
@@ -2110,16 +2154,29 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 ai = ai + 1
             }
             buf = _hv_load(buf, s.args[0], st, rm, "x7", "x8")  // num → x8
-            buf.push(_arm64_instr2("mov", _arm64_op_reg("x16"),
-                             _arm64_op_reg("x8"), "__hx_syscall6: x16 = syscall num"))
+            if elf_abi {
+                // park num in x15; x8 (the linux number reg) is needed as fill scratch.
+                buf.push(_arm64_instr2("mov", _arm64_op_reg("x15"),
+                                 _arm64_op_reg("x8"), "__hx_syscall6: stage syscall num"))
+            } else {
+                buf.push(_arm64_instr2("mov", _arm64_op_reg("x16"),
+                                 _arm64_op_reg("x8"), "__hx_syscall6: x16 = syscall num"))
+            }
             let mut mi = 0
             while mi <= 5 {
                 buf.push(_arm64_instr2("mov", _arm64_op_reg("x" + to_string(mi)),
                                  _arm64_op_reg(tmps[mi]), "__hx_syscall6: arg -> x" + to_string(mi)))
                 mi = mi + 1
             }
-            buf.push(_arm64_instr1("svc", _arm64_op_label("#0x80"),
-                             "__hx_syscall6: BSD syscall trap"))
+            if elf_abi {
+                buf.push(_arm64_instr2("mov", _arm64_op_reg("x8"),
+                                 _arm64_op_reg("x15"), "__hx_syscall6: x8 = syscall num"))
+                buf.push(_arm64_instr1("svc", _arm64_op_label("#0"),
+                                 "__hx_syscall6: Linux syscall trap"))
+            } else {
+                buf.push(_arm64_instr1("svc", _arm64_op_label("#0x80"),
+                                 "__hx_syscall6: BSD syscall trap"))
+            }
             buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"),
                              _arm64_op_reg("x0"), "__hx_syscall6: payload = result"))
             buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
@@ -2669,7 +2726,16 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
     // + every other call). Use codegen_options_default() locally —
     // matches the RFC 070 G7-A.native intent (all callers pass the
     // zero-seed default until the actual GOT-load body lands).
-    let opts = codegen_options_default()
+    //
+    // RT-NATIVE measure-8: the OS/arch-specific syscall ABI emit in
+    // _emit_arm64_stmt (__hx_target_os/__hx_syscall0/6) keys off
+    // opts.target_triple, but the local default leaves it "". Stamp it from
+    // cg_target (the ELF-vs-Mach-O selector already threaded here) so the
+    // arm64-linux-gnu seed gets the Linux trap (svc #0 / x8 / os=0) instead
+    // of the XNU default (#3597 root-cause). Non-arm64-linux callers pass
+    // cg_target == "" (or darwin), so target_triple stays "" → darwin emit
+    // is byte-identical.
+    let opts = CodegenOptions { shared: 0, target_triple: cg_target }
     let mut instrs = []
 
     // #26 self-host fixpoint — forced-copy the MFunc identity fields up

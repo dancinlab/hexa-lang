@@ -1854,6 +1854,16 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, s.dst.arena_id, "r10", 0) }
             return buf
         }
+        // RT-NATIVE measure-8: `__hx_target_arch()` → int HexaVal CPU-arch const.
+        // This is the x86_64 backend, so the value is 0 (x86_64), per
+        // self/rt/syscall.hexa's convention (0 ⇒ x86_64, 1 ⇒ arm64). Lets the
+        // source pick arch-specific Linux syscall numbers. 0-arg leaf.
+        if s.op == "__hx_target_arch" {
+            buf.push(_x86_instr2("mov", _x86_op_reg("r10"), _x86_op_imm(0),
+                             "__hx_target_arch: 0 = x86_64"))
+            if s.dst.id >= 0 { buf = _x86_hv_store_leaf(buf, rm, s.dst.id, s.dst.arena_id, "r10", 0) }
+            return buf
+        }
         // UNLOCK-8: `__hx_syscall0(num)` → int HexaVal of a 0-arg Linux syscall.
         // x86_64 ABI: number in rax, `syscall`, result in rax. (Linux, NOT the
         // BSD svc #0x80 of macOS arm64 — the syscall numbers differ per OS but

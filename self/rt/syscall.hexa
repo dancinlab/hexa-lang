@@ -32,6 +32,14 @@
 // `__TARGET_OS__` codegen-injected ident which only self/codegen knew.
 //   0 = linux,  1 = darwin,  2 = (reserved for freebsd)
 
+// __hx_target_arch() is the companion CPU-arch leaf intrinsic (RT-NATIVE
+// measure-8, 2026-06-19): x86_64 → 0, arm64 → 1. Linux syscall NUMBERS are
+// arch-specific (x86_64 mmap=9 vs aarch64 mmap=222), so the Linux branch must
+// also discriminate arch — baking the x86_64 numbers on arm64-linux mis-routed
+// mmap → bad arena base → SIGSEGV (#3597 native-arm64-arena wall).
+//   0 = x86_64,  1 = arm64
+@pure fn target_is_arm64() -> bool { return __hx_target_arch() == 1 }
+
 // ═══════════════════════════════════════════════════════════════════
 // syscall shim — route the P7-7 `syscall(num, args…)` builtin (not lowered by
 // the shipping compiler/codegen) to the M1 leaf `__hx_syscall6` (num + EXACTLY
@@ -73,6 +81,19 @@
 @pure fn SYS_LINUX_UNLINKAT()     -> int { return 263 }
 @pure fn SYS_LINUX_MKDIRAT()      -> int { return 258 }
 @pure fn SYS_LINUX_GETRANDOM()    -> int { return 318 }
+
+// ═══════════════════════════════════════════════════════════════════
+// Linux aarch64 (arm64) syscall numbers — DISTINCT from x86_64 above.
+// The aarch64 ABI uses the asm-generic unified table (mmap=222, munmap=215,
+// exit_group=94, …), NOT the x86_64 legacy numbers. Only the arena-critical
+// calls are listed here (the native arm64 arena seed flattens sys_mmap +
+// sys_exit; sys_munmap backs reset/rewind). Extend as more arm64-linux sys_*
+// graduate to native. (#3597 root-cause: x86_64 numbers on arm64 → bad mmap.)
+// ═══════════════════════════════════════════════════════════════════
+
+@pure fn SYS_LINUX_ARM64_MMAP()       -> int { return 222 }
+@pure fn SYS_LINUX_ARM64_MUNMAP()     -> int { return 215 }
+@pure fn SYS_LINUX_ARM64_EXIT_GROUP() -> int { return 94 }
 
 // ═══════════════════════════════════════════════════════════════════
 // Darwin syscall numbers (BSD layer, OR 0x2000000 baked in)
@@ -143,17 +164,26 @@ fn sys_mkdir(path_cstr: int, mode: int) -> int {
 }
 
 fn sys_mmap(addr: int, size: int, prot: int, flags: int, fd: int, off: int) -> int {
-    if target_is_linux() { return _sc6(SYS_LINUX_MMAP(), addr, size, prot, flags, fd, off) }
+    if target_is_linux() {
+        if target_is_arm64() { return _sc6(SYS_LINUX_ARM64_MMAP(), addr, size, prot, flags, fd, off) }
+        return _sc6(SYS_LINUX_MMAP(), addr, size, prot, flags, fd, off)
+    }
     return _sc6(SYS_DARWIN_MMAP(), addr, size, prot, flags, fd, off)
 }
 
 fn sys_munmap(addr: int, size: int) -> int {
-    if target_is_linux() { return _sc2(SYS_LINUX_MUNMAP(), addr, size) }
+    if target_is_linux() {
+        if target_is_arm64() { return _sc2(SYS_LINUX_ARM64_MUNMAP(), addr, size) }
+        return _sc2(SYS_LINUX_MUNMAP(), addr, size)
+    }
     return _sc2(SYS_DARWIN_MUNMAP(), addr, size)
 }
 
 fn sys_exit(code: int) -> int {
-    if target_is_linux() { return _sc1(SYS_LINUX_EXIT_GROUP(), code) }
+    if target_is_linux() {
+        if target_is_arm64() { return _sc1(SYS_LINUX_ARM64_EXIT_GROUP(), code) }
+        return _sc1(SYS_LINUX_EXIT_GROUP(), code)
+    }
     return _sc1(SYS_DARWIN_EXIT(), code)
 }
 
