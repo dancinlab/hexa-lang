@@ -961,6 +961,12 @@ fn codegen(ast) {
     // (Patch issue: archive/patches/runtime-h-incomplete-after-phase-1-3-b.md)
     let runtime_inc = if env("HEXA_USE_RUNTIME_C") != "" { "runtime.c" } else { "runtime.h" }
     parts.push("#include \"" + runtime_inc + "\"\n\n")
+    // @convergence darwin-exc-dispatch: NOTE this `codegen()` entry is legacy —
+    // the live transpile entry is `codegen_full()` below, which emits the
+    // platform-guarded `hxlcl_setjmp` declaration. The try/catch call site in
+    // `gen2_stmt` (shared by both) emits `hxlcl_setjmp(&__jb)` to stay a MATCHED
+    // pair with `hexa_throw`'s `hxlcl_longjmp` (see codegen_full for the full
+    // rationale of the darwin-arm64 silent-death root-cause).
 
     // ── C3: collect known global names for closure free-var analysis ──
     _known_fn_globals = []
@@ -3737,7 +3743,9 @@ fn _gen2_stmt_inner(node, depth) {
         let pad2 = gen2_indent(depth + 1)
         chunks.push(pad2 + "int __try_saved __attribute__((cleanup(__hexa_try_cleanup))) = __hexa_try_top; (void)__try_saved;\n")
         chunks.push(pad2 + "jmp_buf __jb; HexaVal __err = hexa_void();\n")
-        chunks.push(pad2 + "if (setjmp(__jb) == 0) {\n")
+        // @convergence darwin-exc-dispatch: hxlcl_setjmp (NOT libc setjmp) —
+        // matched pair with hexa_throw's hxlcl_longjmp. See module preamble.
+        chunks.push(pad2 + "if (hxlcl_setjmp(&__jb) == 0) {\n")
         chunks.push(pad2 + "    __hexa_try_push(&__jb);\n")
         if type_of(try_body) != "string" {
             let mut ti = 0
@@ -3778,7 +3786,9 @@ fn _gen2_stmt_inner(node, depth) {
         let rpad = gen2_indent(depth + 1)
         rc.push(rpad + "int __try_saved __attribute__((cleanup(__hexa_try_cleanup))) = __hexa_try_top; (void)__try_saved;\n")
         rc.push(rpad + "jmp_buf __jb; HexaVal __err = hexa_void();\n")
-        rc.push(rpad + "if (setjmp(__jb) == 0) {\n")
+        // @convergence darwin-exc-dispatch: hxlcl_setjmp (NOT libc setjmp) —
+        // matched pair with hexa_throw's hxlcl_longjmp. See module preamble.
+        rc.push(rpad + "if (hxlcl_setjmp(&__jb) == 0) {\n")
         rc.push(rpad + "    __hexa_try_push(&__jb);\n")
         if type_of(r_body) != "string" {
             let mut rbi = 0
@@ -13671,6 +13681,27 @@ fn codegen_full(ast) {
     // PHASE 1.3.B (2026-05-15) — second emit site (gen2_module main path);
     // mirror of line 679 in the gen2_program path. See first site for rationale.
     out_parts.push("#include \"runtime.h\"\n\n")
+    // @convergence darwin-exc-dispatch: try/catch lowering saves its catch frame
+    // and `hexa_throw` (runtime) restores it — they MUST be a MATCHED
+    // setjmp/longjmp pair. `hexa_throw` ALWAYS resumes via `hxlcl_longjmp`, so the
+    // save MUST be `hxlcl_setjmp` (NEVER libc setjmp):
+    //   - arm64-darwin: hxlcl_setjmp/longjmp are hand-written naked asm with a
+    //     168-byte jmp_buf layout INCOMPATIBLE with libc's. Saving with libc
+    //     `setjmp` then restoring with `hxlcl_longjmp` reads garbage sp/lr → the
+    //     process silently dies (exit 0 / SIGSEGV) and the catch never runs. This
+    //     was the darwin-only "try/catch swallows the program" defect.
+    //   - x86_64-linux: `hxlcl_setjmp(buf)` is `#define`d to
+    //     `setjmp(*(jmp_buf*)(buf))`, so `hxlcl_setjmp(&__jb)` expands
+    //     BYTE-IDENTICALLY to the old `setjmp(__jb)` — linux is unaffected.
+    // app.c is a SEPARATE TU from runtime.c and runtime.h does not re-export
+    // hxlcl_setjmp, so declare the platform-correct form here (mirroring
+    // runtime.c's own arm64-darwin/linux split). RECURRENCE-PRONE: any future
+    // edit swapping the call site back to bare `setjmp` re-opens the defect.
+    out_parts.push("#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)\n")
+    out_parts.push("int hxlcl_setjmp(void *buf) __asm__(\"_hxlcl_setjmp\");\n")
+    out_parts.push("#elif !defined(hxlcl_setjmp)\n")
+    out_parts.push("#define hxlcl_setjmp(buf) setjmp(*(jmp_buf *)(buf))\n")
+    out_parts.push("#endif\n\n")
     out_parts.push(fwd_parts.join(""))
     out_parts.push("\n")
     out_parts.push(global_parts.join(""))
