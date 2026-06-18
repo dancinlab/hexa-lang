@@ -87,14 +87,6 @@ pub fn emit_rtsc(spec: DeckSpec) -> [DeckFile] {
     // (트러블슈팅 재발금지 — see deck_pod_qe_bootstrap in gen.hexa).
     deck_push(files, "setup_env.sh", deck_pod_qe_bootstrap())
 
-    // el-ph PRODUCTION runner + short launcher (every prototype): the canonical
-    // disk-safe q-batched runner (recover · _ph0 cleanup · k-parallel · q-shard)
-    // + truncation-robust detached launcher. Emit them so a pod runs
-    // `bash launch.sh [SQ LQ]` instead of a hand-written run script
-    // (트러블슈팅 재발금지 — see deck_pod_elph_runner / deck_pod_short_launcher).
-    deck_push(files, "run_prod.sh", deck_pod_elph_runner())
-    deck_push(files, "launch.sh", deck_pod_short_launcher())
-
     if proto == "beh8_clathrate" {
         deck_push(files, "vc-relax.in", _rtsc_beh8_vc_relax(spec))
         deck_push(files, "scf.in",      _rtsc_beh8_scf(spec))
