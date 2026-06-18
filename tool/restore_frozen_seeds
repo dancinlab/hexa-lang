@@ -217,6 +217,43 @@ if [ -f "$_RTC" ] && grep -q '^HexaVal rt_str_to_upper(HexaVal s) {' "$_RTC"; th
   echo "[restore_frozen_seeds] RT-NATIVE Z2a: scrubbed frozen rt_str_to_upper/to_lower/trim C bodies from $_RTC ($((before-after)) lines; gen.c now sole provider)"
 fi
 
+# ── ranged read_bytes_at SIGSEGV fix (#3352 propagation) ─────────────────────
+# The frozen 151c52c8 runtime_core.c blob seeks in rt_read_bytes_at (its only
+# offset-seeking reader; rt_read_f32_at is newer and absent from this blob)
+# with the UNSHIMMED fseeko/_fseeki64 on the FILE* returned by fopen. Under the
+# runtime's libc shim layer that fopen is `#define fopen hxlcl_fopen`, whose handle
+# is NOT a real libc FILE* — so a real fseeko/_fseeki64 dereferences a bogus FILE
+# (flockfile path) and SIGSEGVs on any ranged read (offset > 0). The SSOT emitter
+# (self/runtime_core_emit.hexa, #3352 2026-06-15) already replaced that block with
+# the SHIMMED `fseek(f, (long)off, SEEK_SET)` (`long` = 64-bit on LP64 over
+# hxlcl_lseek(off_t), so >2 GB offsets are honored), but the fix never reached the
+# COMPILED runtime: install.sh restores this frozen blob directly and never re-runs
+# the emitter, so every install/build still shipped the crashing fseeko (anima
+# H_1431 R3 — ranged read_bytes_at segfault forcing full-load). Same precedent as
+# the OP-17 / Z2a scrubs above: a deterministic, hexat-free, in-place patch that
+# rewrites the 5-line `#if _WIN32 / _fseeki64 / #else / fseeko / #endif` block to
+# the single shimmed `fseek` call. The unique `fseeko((off_t)off` token gates
+# idempotency (re-runs find nothing once patched).
+if [ -f "$_RTC" ] && grep -q 'fseeko(f, (off_t)off, SEEK_SET)' "$_RTC"; then
+  before=$(wc -l < "$_RTC")
+  awk '
+    # Drop the 5-line WIN32/fseeko seek block; emit the shimmed fseek in its place.
+    /^    \/\/ Use 64-bit seek where available; on macOS\/Linux fseeko is standard\.$/ {
+      print "    // SHIMMED fseek (#3352): fopen is `#define fopen hxlcl_fopen`, whose"
+      print "    // handle is NOT a real libc FILE*, so the unshimmed fseeko/_fseeki64"
+      print "    // dereference a bogus FILE and SIGSEGV on any ranged read (offset>0)."
+      print "    // hxlcl_fseek takes `long` (64-bit on LP64) over hxlcl_lseek(off_t),"
+      print "    // so >2 GB offsets are honored."
+      print "    if (fseek(f, (long)off, SEEK_SET) != 0) { fclose(f); return hexa_array_new(); }"
+      drop=5
+      next
+    }
+    { if (drop > 0) { drop--; next } print }
+  ' "$_RTC" > "$_RTC.rbfix" && mv "$_RTC.rbfix" "$_RTC"
+  after=$(wc -l < "$_RTC")
+  echo "[restore_frozen_seeds] read_bytes_at: replaced frozen fseeko ranged-seek with shimmed fseek (#3352) in $_RTC ($((before-after)) lines)"
+fi
+
 # ── RT-NATIVE leg B Z2a — SYNTHESIZE the 9-fn runtime_hi_gen.c seed ───────────
 # The casefold/trim group (rt_str_to_upper/to_lower/trim) grew the HI-tier
 # rt_str_* SSOT from 6→9 fn and RETIRED the matching C #ifndef bodies from
