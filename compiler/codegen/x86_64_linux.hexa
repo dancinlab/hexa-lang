@@ -1375,11 +1375,26 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             let src = _x86_op_resolve(s.args[0], st, rm, src_scratch, opts)
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
             buf.push(_x86_instr2("mov", dst, src, "assign L" + to_string(s.dst.id)))
-            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
             // PAIR-MODEL — carry the source value's tag to the dst so an
             // assigned string/array keeps its HexaVal tag (e.g. `let x = s`).
+            // RT-NATIVE measure-9 (tag-corruption root-cause): the tag-slot
+            // store MUST precede the writeback. For a module-global dst
+            // (arena_id == -999) _x86_emit_dst_writeback PERSISTS the frame
+            // tag-slot to the global's `.data` slot word1 (`[rip+g<id>+8]`);
+            // when the writeback ran FIRST (the prior order) it read a STALE /
+            // uninitialized frame tag-slot and wrote garbage (observed tag
+            // 0x100000 = 1<<20) into the global's persisted tag — a later
+            // cross-function read of `[rip+g<id>+8]` then fed that garbage to
+            // the comparison helper ("cannot compare tag 0 with tag 1048576").
+            // The local-only paths (array_lit/struct_lit/index_set) already
+            // store the tag BEFORE the writeback; this aligns the plain-assign
+            // path with them (and with arm64's atomic stp lo,hi global store).
+            // Reorder ONLY — byte-eq-inert for any dst whose tag-slot was
+            // already correct (non-global, or global whose slot happened to
+            // hold the right tag). x86_64-ONLY; arm64 fixpoint untouched.
             buf = _x86_tag_resolve(buf, s.args[0], rm, "r11")
             buf = _x86_store_tag_reg(buf, rm, s.dst.id, "r11")
+            buf = _x86_emit_dst_writeback(buf, rm, s.dst.id, s.dst.arena_id)
         }
         return buf
     }
