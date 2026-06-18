@@ -216,8 +216,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.setup.outputs.release_tag }}
-          prerelease: ${{ needs.setup.outputs.is_tag != 'true' }}
-          make_latest: ${{ needs.setup.outputs.is_tag == 'true' && 'true' || 'false' }}
+          # all-3-green gate (v0.241.0/.1 lesson): each platform job uploads its
+          # asset as a PRERELEASE and never marks Latest. The `finalize` job
+          # promotes the tag to stable Latest ONLY after all three targets
+          # succeed. If any target fails (e.g. arm64), the release stays
+          # prerelease → install.sh's stable/latest resolution skips the
+          # partial release instead of shipping a 2/3 asset set as Latest.
+          prerelease: true
+          make_latest: false
           target_commitish: ${{ github.sha }}
           files: hexa-darwin-arm64.tar.gz
           fail_on_unmatched_files: true
@@ -266,8 +272,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.setup.outputs.release_tag }}
-          prerelease: ${{ needs.setup.outputs.is_tag != 'true' }}
-          make_latest: ${{ needs.setup.outputs.is_tag == 'true' && 'true' || 'false' }}
+          # all-3-green gate (v0.241.0/.1 lesson): each platform job uploads its
+          # asset as a PRERELEASE and never marks Latest. The `finalize` job
+          # promotes the tag to stable Latest ONLY after all three targets
+          # succeed. If any target fails (e.g. arm64), the release stays
+          # prerelease → install.sh's stable/latest resolution skips the
+          # partial release instead of shipping a 2/3 asset set as Latest.
+          prerelease: true
+          make_latest: false
           target_commitish: ${{ github.sha }}
           files: hexa-linux-x86_64.tar.gz
           fail_on_unmatched_files: true
@@ -318,9 +330,38 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.setup.outputs.release_tag }}
-          prerelease: ${{ needs.setup.outputs.is_tag != 'true' }}
-          make_latest: ${{ needs.setup.outputs.is_tag == 'true' && 'true' || 'false' }}
+          # all-3-green gate (v0.241.0/.1 lesson): each platform job uploads its
+          # asset as a PRERELEASE and never marks Latest. The `finalize` job
+          # promotes the tag to stable Latest ONLY after all three targets
+          # succeed. If any target fails (e.g. arm64), the release stays
+          # prerelease → install.sh's stable/latest resolution skips the
+          # partial release instead of shipping a 2/3 asset set as Latest.
+          prerelease: true
+          make_latest: false
           target_commitish: ${{ github.sha }}
           files: hexa-linux-arm64.tar.gz
           fail_on_unmatched_files: true
+          generate_release_notes: true
+
+  # ── Finalize — all-3-green gate (promote tag to stable Latest) ──────
+  # `needs` lists all three platform jobs, so GitHub skips this job unless
+  # EVERY target succeeded (a failed/skipped dependency skips finalize). Only
+  # then is the release flipped from prerelease → stable + marked Latest. This
+  # is the mechanical enforcement of the [릴리스 채널 규율] rule in CLAUDE.md:
+  # stable ships only when x86_64 · arm64 · darwin are ALL green (3/3 assets).
+  # Edge (branch push, is_tag != true) stays a rolling prerelease — finalize is
+  # gated off — so `HEXA_VERSION=edge` consumers keep getting every main push.
+  finalize:
+    name: finalize (all-3-green → stable Latest)
+    needs: [setup, release-macos-arm64, release-linux-x86_64, release-linux-arm64]
+    if: needs.setup.outputs.is_tag == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Promote release to stable Latest (3/3 assets confirmed)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.setup.outputs.release_tag }}
+          prerelease: false
+          make_latest: true
+          target_commitish: ${{ github.sha }}
           generate_release_notes: true
