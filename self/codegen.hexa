@@ -11553,6 +11553,24 @@ fn _expr_escapes_name(node, name) {
             i = i + 1
         }
     }
+    // PACKED-F64 TAG-PRESERVE (qforge val-arena blocker, c17): a `Call` node
+    // carries its argument expressions in `node.args` (NOT `node.items`). A
+    // packed-f64 / -i64 literal-array binding whose only use is as a CALL
+    // ARGUMENT — `f(xs)`, `H_apply(xs)`, or a fn-value `hexa_call1(f, xs)` —
+    // was MISSED by this escape scan, so the binding wrongly auto-fired native
+    // contiguous double[]/int64[] storage while the callee read it through the
+    // boxed `arr_ptr->items[i]` (16B HexaVal stride) surface → garbage tag →
+    // "cannot multiply non-numeric operand". Treat any appearance of `name`
+    // inside the arg list as an escape so the binding stays boxed (correct +
+    // conservative, matching the measure-9 #3551 / pair-model #3462 tag-slot
+    // discipline). Function-position (callee) is already covered via node.left.
+    if type_of(node.args) != "string" {
+        let mut i = 0
+        while i < len(node.args) {
+            if _expr_escapes_name(node.args[i], name) { return true }
+            i = i + 1
+        }
+    }
     if type_of(node.fields) != "string" {
         let mut i = 0
         while i < len(node.fields) {
