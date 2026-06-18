@@ -13,6 +13,14 @@
 //
 // DEFAULT shipping build (C arena, HEXA_RT_ALLOC_NATIVE OFF). Run:
 //   hexa test/qa_l3_arena_valueops.hexa
+//
+// HOST NOTE (QA L3, 2026-06-18, v0.240.0): the darwin-arm64 prebuilt's
+// hand-written naked-asm setjmp/longjmp (try/catch unwinding) is DEFECTIVE —
+// a `throw` inside `try { } catch` silently terminates the process (exit 0)
+// instead of running the catch handler. The throw-bearing cases below
+// (cmp:*throws, div:int/0 throws, sub:str-int throws, div:rt flt/0.0 throws)
+// therefore HANG/ABORT on darwin-arm64; they pass on linux-x86_64 (libc
+// setjmp). Run the throw-free subset on darwin-arm64. See scorecard verdict.
 
 let mut PASS = 0
 let mut FAIL = 0
@@ -45,6 +53,9 @@ fn ck_eq(name, got, want) {
 fn make_nan() -> float { return 0 / 0.0 }
 fn make_pinf() -> float { return 1 / 0.0 }
 fn make_ninf() -> float { let m = 0 - 1; return m / 0.0 }
+// opaque passthrough — defeats compile-time const-fold so a div-by-zero hits
+// the runtime rt_div (which throws) rather than the codegen IEEE fold.
+fn _opf(x: float) -> float { return x }
 
 // ─────────────────────────────────────────────────────────────────────
 // 1. EQUALITY across all tags
@@ -152,17 +163,21 @@ ck("div:int/0 throws",   threw_divi)
 let mut threw_modi = false
 try { let r = (5 % 0) } catch e { threw_modi = true }
 ck("mod:int/0 throws",   threw_modi)
-// float/float div-by-zero THROWS (pure float path)
-let mut threw_divf = false
-try { let r = (5.0 / 0.0) } catch e { threw_divf = true }
-ck("div:flt/0.0 throws", threw_divf)
-// mixed int/float div-by-zero does NOT throw -> IEEE inf
-let mut mixed_inf = false
-try {
-    let r = (1 / 0.0)
-    mixed_inf = (r > 1e308)
-} catch e { mixed_inf = false }
-ck("div:1/0.0 = +inf",   mixed_inf)
+// float/float div-by-zero: DOCUMENTED ASYMMETRY (codegen.hexa:5402-5446,
+// PROBE r14-T). A LITERAL float div-by-zero is constant-folded to IEEE inf
+// at compile time (`5.0/0.0`→inf) — NOT thrown. A RUNTIME (opaque-operand)
+// float div-by-zero DOES throw via rt_div. Int div-by-zero ALWAYS throws
+// (const-fold bails on int /,% — const_fold.hexa:49,53). So we assert the
+// literal path folds to +inf (matches the language's intentional IEEE rule).
+ck("div:lit 5.0/0.0=+inf", (5.0 / 0.0) > 1e308)
+// mixed int/float literal div-by-zero also folds to IEEE inf
+ck("div:1/0.0 = +inf",   (1 / 0.0) > 1e308)
+// runtime (opaque-operand) pure-float div-by-zero DOES throw (rt_div path,
+// not const-folded). _opf passes the value through so the divisor is not a
+// compile-time literal.
+let mut threw_divf_rt = false
+try { let r = (_opf(5.0) / _opf(0.0)) } catch e { threw_divf_rt = true }
+ck("div:rt flt/0.0 throws", threw_divf_rt)
 // non-numeric arithmetic THROWS (str - int)
 let mut threw_strsub = false
 try { let r = ("ab" - 3) } catch e { threw_strsub = true }
