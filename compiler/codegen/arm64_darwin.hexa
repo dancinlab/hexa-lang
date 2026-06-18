@@ -1911,8 +1911,12 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // base → SIGSEGV (linux-arm64 native arena wall, #3597). 0-arg: x1 =
         // payload, x0 = tag = TAG_INT(0). ADD-only leaf (no `bl`).
         if s.op == "__hx_target_os" {
-            let __os_imm = if opts.target_triple == "arm64-linux-gnu" { "#0" } else { "#1" }
-            let __os_why = if opts.target_triple == "arm64-linux-gnu" { "__hx_target_os: 0 = linux" } else { "__hx_target_os: 1 = darwin" }
+            let mut __os_imm = "#1"
+            let mut __os_why = "__hx_target_os: 1 = darwin"
+            if opts.target_triple == "arm64-linux-gnu" {
+                __os_imm = "#0"
+                __os_why = "__hx_target_os: 0 = linux"
+            }
             buf.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
                              _arm64_op_label(__os_imm), __os_why))
             buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
@@ -2103,12 +2107,16 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // (#3597). This is the Z3 arena foundation — a native syscall-emit
         // (mmap/munmap path) with NO C shim. Verified via getuid (#24).
         if s.op == "__hx_syscall0" && len(s.args) >= 1 {
-            let __linux = opts.target_triple == "arm64-linux-gnu"
-            let __numreg = if __linux { "x8" } else { "x16" }
+            let mut __numreg = "x16"
+            let mut __trap = "#0x80"
+            if opts.target_triple == "arm64-linux-gnu" {
+                __numreg = "x8"
+                __trap = "#0"
+            }
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // num → x1
             buf.push(_arm64_instr2("mov", _arm64_op_reg(__numreg),
                              _arm64_op_reg("x1"), "__hx_syscall0: " + __numreg + " = syscall num"))
-            buf.push(_arm64_instr1("svc", _arm64_op_label(if __linux { "#0" } else { "#0x80" }),
+            buf.push(_arm64_instr1("svc", _arm64_op_label(__trap),
                              "__hx_syscall0: syscall trap"))
             buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"),
                              _arm64_op_reg("x0"), "__hx_syscall0: payload = result"))
