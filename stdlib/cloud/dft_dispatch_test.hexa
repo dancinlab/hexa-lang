@@ -473,7 +473,8 @@ fn main() {
     // duplicated mpirun/recover logic), (2) re-uses the honest DONE probe as the
     // loop predicate (not a bare JOB DONE), and (3) is bounded by max_cycles.
     let inner = _dft_scfph_cmd(28, 12)
-    let wrapped = _dft_self_resume_wrap(inner, "ph.x", "ph.out", 8)
+    let salv = _dft_salvage_cmd(28, 12)
+    let wrapped = _dft_self_resume_wrap(inner, "ph.x", "ph.out", 8, salv)
     _check("self-resume: carries the EXACT inner guarded stage cmd (no dup logic)",
         _has(wrapped, inner), 1)
     _check("self-resume: inner still has ph.x recover-capable invocation",
@@ -495,8 +496,38 @@ fn main() {
     _check("self-resume: while precedes the inner stage cmd",
         _lt_index(wrapped, "while", inner), 1)
     // a different cap value flows through (no hardcoded 8 inside the builder).
-    let wrapped5 = _dft_self_resume_wrap(inner, "ph.x", "ph.out", 5)
+    let wrapped5 = _dft_self_resume_wrap(inner, "ph.x", "ph.out", 5, salv)
     _check("self-resume: cap is parametric (5 flows through)", _has(wrapped5, "lt 5"), 1)
+
+    // ── item-6 CORRUPT-RECOVER SELF-HEAL (pod-side daemon, 2026-06-18) ──
+    // The daemon must NOT blindly re-run recover=.true. forever on a corrupt
+    // recover: after a non-DONE cycle it inspects ph.out for the SAME corrupt
+    // signatures `_dft_failure_is_corrupt_recover` keys on, and on a hit runs the
+    // salvage (per-q scratch reset + recover=.false.) ONCE (durable marker).
+    _check("self-heal: carries the salvage shell (corrupt-recover path)",
+        _has(wrapped, salv), 1)
+    _check("self-heal: keys on the PARSE_ERR corrupt-recover signature",
+        _has(wrapped, "PARSE_ERR"), 1)
+    _check("self-heal: keys on the runParser corrupt-recover signature",
+        _has(wrapped, "runParser"), 1)
+    _check("self-heal: keys on the _ph0 'cannot open file' co-signature",
+        _has(wrapped, "cannot open file"), 1)
+    _check("self-heal: ONE-shot durable marker (.dft_self_salvaged) gates re-salvage",
+        _has(wrapped, ".dft_self_salvaged"), 1)
+    // the salvage runs INSIDE the loop body, AFTER the stage cmd, BEFORE done.
+    _check("self-heal: salvage sits inside the loop (before done)",
+        _lt_index(wrapped, salv, "done"), 1)
+    _check("self-heal: stage cmd precedes the salvage (heal is post-cycle)",
+        _lt_index(wrapped, inner, salv), 1)
+    // EMPTY salvage_cmd disables the self-heal (structural-fixture / opt-out path):
+    // no salvage shell, no marker, no signature probe — degrades to the prior loop.
+    let wrapped_nosalv = _dft_self_resume_wrap(inner, "ph.x", "ph.out", 8, "")
+    _check("self-heal: empty salvage_cmd → NO marker (opt-out)",
+        _has(wrapped_nosalv, ".dft_self_salvaged"), 0)
+    _check("self-heal: empty salvage_cmd → NO PARSE_ERR probe (opt-out)",
+        _has(wrapped_nosalv, "PARSE_ERR"), 0)
+    _check("self-heal: empty salvage_cmd still carries the inner stage cmd",
+        _has(wrapped_nosalv, inner), 1)
 
     // resume terminal-step contract: a missing state stamp → run --detach first.
     let nodeck = "/tmp/dft_resume_nostate_test"

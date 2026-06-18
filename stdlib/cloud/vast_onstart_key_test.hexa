@@ -1,0 +1,67 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/vast_onstart_key_test.hexa — guards the item-15 onstart
+// authorized_keys injection (vast.hexa vast_onstart_inject_key_cmd).
+//
+// THE BUG: a freshly-created vast.ai instance attaches whatever SSH keys are
+// registered in the vast ACCOUNT, not the local default key. When the account
+// has no/wrong key registered the new pod rejects the local default key
+// (`Permission denied (publickey)`), and the post-rent reachability gate then
+// DESTROYS a healthy pod — a re-rent hits the same wall forever. The fix bakes
+// the local default pubkey into the create call via `--onstart-cmd`, which runs
+// inside the container at boot and appends the key to root's authorized_keys
+// (idempotent) so the pod accepts the local default key regardless of the
+// vast-account key registration.
+//
+// vast.hexa is a library (no top-level main), so `use` is side-effect-free.
+//
+// Run:   hexa run stdlib/cloud/vast_onstart_key_test.hexa
+// PASS:  exits 0, prints "vast_onstart_key_test PASS".
+
+use "stdlib/cloud/vast"
+
+fn _check(case: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + case + " — got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+    println("  ok: " + case)
+}
+
+// _has — 1 iff substring `t` occurs in `s`.
+fn _has(s: str, t: str) -> int {
+    let mut i = 0
+    let n = len(s) - len(t)
+    while i <= n {
+        if s.substring(i, i + len(t)) == t {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn main() {
+    let pk = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITESTKEY user@mac"
+    let cmd = vast_onstart_inject_key_cmd(pk)
+
+    // 1) the onstart hook carries the EXACT pubkey (so the pod trusts the local key)
+    _check("onstart: carries the local pubkey", _has(cmd, "AAAAITESTKEY"), 1)
+    // 2) it targets root's authorized_keys (vast containers run as root)
+    _check("onstart: writes /root/.ssh/authorized_keys", _has(cmd, "/root/.ssh/authorized_keys"), 1)
+    // 3) it creates ~/.ssh first (a bare image may not have it)
+    _check("onstart: mkdir -p /root/.ssh", _has(cmd, "mkdir -p /root/.ssh"), 1)
+    // 4) IDEMPOTENT — `grep -qxF || echo >>` so a reboot/onstart re-run never
+    //    duplicates the line.
+    _check("onstart: idempotent grep guard", _has(cmd, "grep -qxF"), 1)
+    _check("onstart: appends (not clobbers) authorized_keys", _has(cmd, ">> /root/.ssh/authorized_keys"), 1)
+    // 5) tightens perms (sshd rejects a world-writable authorized_keys)
+    _check("onstart: chmod 700 on .ssh", _has(cmd, "chmod 700 /root/.ssh"), 1)
+    _check("onstart: chmod 600 on authorized_keys", _has(cmd, "chmod 600 /root/.ssh/authorized_keys"), 1)
+
+    // 6) EMPTY pubkey → empty hook (caller then omits --onstart-cmd and falls
+    //    back to the account-key behaviour; never emits a broken `echo  >>`).
+    let empty = vast_onstart_inject_key_cmd("")
+    _check("onstart: empty pubkey → empty hook (no --onstart-cmd)", len(empty), 0)
+
+    println("vast_onstart_key_test PASS")
+}
