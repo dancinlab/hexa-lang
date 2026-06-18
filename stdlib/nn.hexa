@@ -42,13 +42,30 @@ pub fn sigmoid(x) {
 
 // ── Activation: Tanh ─────────────────────────────────────
 // tanh(x) = (exp(2x) - 1) / (exp(2x) + 1)  element-wise
+//
+// Overflow guard: the naive `exp(2x)` form returns NaN for x ≳ 354
+// (exp(2x) → +inf → inf/inf), and on shorter-range builds (or after the
+// gelu cubic blows the argument up) NaN appears far earlier. tanh
+// saturates to ±1.0 to FULL f64 precision once |x| ≥ 20
+// (1 − tanh(20) ≈ 8e-18 < 1 ulp at 1.0), so clamping the argument to
+// ±20 is mathematically exact in the saturated tail AND removes the
+// overflow entirely — bit-identical to the unclamped form for every
+// |x| < 20.  @convergence
+@pure
+fn _tanh_scalar(x: float) -> float {
+    let mut a = x
+    if a > 20.0 { a = 20.0 }
+    if a < 0.0 - 20.0 { a = 0.0 - 20.0 }
+    let e2x = exp(2.0 * a)
+    return (e2x - 1.0) / (e2x + 1.0)
+}
+
 pub fn tanh_activation(x) {
     let n = len(x)
     let mut out = []
     let mut i = 0
     while i < n {
-        let e2x = exp(2.0 * x[i])
-        out.push((e2x - 1.0) / (e2x + 1.0))
+        out.push(_tanh_scalar(x[i]))
         i = i + 1
     }
     return out
@@ -93,8 +110,13 @@ pub fn gelu(x_val) {
     let c = 0.7978845608
     let x3 = x_val * x_val * x_val
     let z = c * (x_val + 0.044715 * x3)
-    let e2z = exp(2.0 * z)
-    let t = (e2z - 1.0) / (e2z + 1.0)
+    // _tanh_scalar clamps z so the inner exp(2z) cannot overflow:
+    // unclamped, gelu(x) → NaN for x ≳ 26 (the cubic drives 2z past the
+    // exp range), corrupting any forward pass with large pre-activations.
+    // The clamp is exact — tanh(z) is already ±1.0 to full precision
+    // wherever it engages, so gelu(x) → x (positive tail) / 0 (negative
+    // tail) as it should.  @convergence
+    let t = _tanh_scalar(z)
     return 0.5 * x_val * (1.0 + t)
 }
 
