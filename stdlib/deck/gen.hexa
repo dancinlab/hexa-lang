@@ -145,3 +145,58 @@ pub fn deck_disk_preflight_line(q_points: int, scratch_gb_per_q: int, free_disk_
     }
     return s + " — OK (fits)"
 }
+
+// deck_pod_qe_bootstrap — the canonical "install QE 7.x on a BARE pod" script
+// (micromamba). Emit this instead of hand-writing a per-campaign setup script:
+// it carries the hard-won guards from a demiurge RTSC session (트러블슈팅 재발금지 —
+// every guard below cost a wasted compute cycle to learn):
+//   G1 bzip2/curl/tar via apt BEFORE `tar -xj` — a bare vast/runpod pod often
+//      ships WITHOUT bzip2, so micromamba's .tar.bz2 silently fails to extract
+//      ("bzip2: Cannot exec") and pw.x is never installed.
+//   G2 install with a retry + verify the binary actually runs (`--version`).
+//   G3 idempotent env create — skip when pw.x already resolves in the qe env.
+//   G4 FAIL-LOUD: print "QE SETUP DONE" ONLY when `which pw.x` succeeds in the
+//      env, else "QE SETUP FAILED: <reason>" + exit 1. QE binaries have no
+//      `-h`/`--version` that exits 0, so `which` is the correct liveness probe
+//      (a `pw.x -h` probe false-FAILS a good install). A prior unconditional
+//      "DONE" made a watcher fire sizing against a pod with no pw.x → a whole
+//      session of silent empty scf.out.
+// Self-detaches to ~/qe_setup.log when BG!=1 so a dispatcher can fire-and-poll.
+pub fn deck_pod_qe_bootstrap() -> string {
+    let mut s = "#!/usr/bin/env bash\n"
+    s = s + "# QE 7.x env bootstrap (micromamba) — hexa deck canonical · fail-loud.\n"
+    s = s + "if [ \"${BG:-}\" != \"1\" ]; then\n"
+    s = s + "  BG=1 nohup bash \"$0\" > \"$HOME/qe_setup.log\" 2>&1 & echo \"qe-setup launched pid=$!\"; exit 0\n"
+    s = s + "fi\n"
+    s = s + "set -uo pipefail\n"
+    s = s + "export MAMBA_ROOT_PREFIX=\"$HOME/micromamba\"\n"
+    s = s + "MM=\"$HOME/bin/micromamba\"\n"
+    s = s + "ensure_deps() {\n"
+    s = s + "  command -v bzip2 >/dev/null 2>&1 && command -v curl >/dev/null 2>&1 && return 0\n"
+    s = s + "  echo '[setup] installing bzip2/curl/tar (tar -xj dep)...'\n"
+    s = s + "  (apt-get update -qq && apt-get install -y -qq bzip2 curl tar) >/dev/null 2>&1 || true\n"
+    s = s + "}\n"
+    s = s + "if [ ! -x \"$MM\" ]; then\n"
+    s = s + "  ensure_deps; mkdir -p \"$HOME/bin\"\n"
+    s = s + "  for try in 1 2; do\n"
+    s = s + "    curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C \"$HOME\" bin/micromamba 2>/dev/null\n"
+    s = s + "    [ -x \"$MM\" ] && break\n"
+    s = s + "  done\n"
+    s = s + "fi\n"
+    s = s + "if [ ! -x \"$MM\" ] || ! \"$MM\" --version >/dev/null 2>&1; then\n"
+    s = s + "  echo '=== QE SETUP FAILED: micromamba not installed (bzip2/curl tar -xj from micro.mamba.pm) ==='; exit 1\n"
+    s = s + "fi\n"
+    s = s + "echo \"[setup] micromamba $(\"$MM\" --version 2>/dev/null) OK\"\n"
+    s = s + "if \"$MM\" run -n qe which pw.x >/dev/null 2>&1; then\n"
+    s = s + "  echo '[setup] qe env already has pw.x — skipping create'\n"
+    s = s + "else\n"
+    s = s + "  echo '[setup] creating qe env (qe + openmpi from conda-forge)...'\n"
+    s = s + "  \"$MM\" create -y -n qe -c conda-forge qe openmpi 2>&1 | tail -5\n"
+    s = s + "fi\n"
+    s = s + "if \"$MM\" run -n qe which pw.x >/dev/null 2>&1; then\n"
+    s = s + "  echo '=== QE SETUP DONE ==='\n"
+    s = s + "else\n"
+    s = s + "  echo '=== QE SETUP FAILED: pw.x not found in qe env ==='; exit 1\n"
+    s = s + "fi\n"
+    return s
+}

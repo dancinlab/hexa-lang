@@ -1,0 +1,58 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// stdlib/deck/pod_bootstrap_test.hexa — deck_pod_qe_bootstrap selftest:
+// the canonical QE-env bootstrap emit carries every guard a demiurge RTSC
+// session paid a wasted compute cycle to learn (트러블슈팅 재발금지):
+//   G1 bzip2/apt ensured BEFORE `tar -xj` (bare pod lacks bzip2 → .tar.bz2
+//      extract dies → micromamba never installs).
+//   G2 micromamba install retry loop + `--version` runnable check.
+//   G3 idempotent env create (skip when pw.x already resolves).
+//   G4 FAIL-LOUD: "QE SETUP DONE" only when `which pw.x` succeeds, else
+//      "QE SETUP FAILED" + exit 1 — and NEVER the false-negative `pw.x -h`
+//      probe (QE bins have no `-h` exiting 0).
+//
+// Run:  hexa run stdlib/deck/pod_bootstrap_test.hexa
+// PASS: exits 0, prints "deck_pod_bootstrap_test PASS".
+use "stdlib/deck/gen"
+
+fn _has(case: str, s: str, sub: str) {
+    if !s.contains(sub) {
+        println("  FAIL: " + case + " — missing '" + sub + "'")
+        exit(1)
+    }
+    println("  ok: " + case)
+}
+
+fn _hasnt(case: str, s: str, sub: str) {
+    if s.contains(sub) {
+        println("  FAIL: " + case + " — should NOT contain '" + sub + "'")
+        exit(1)
+    }
+    println("  ok: " + case)
+}
+
+fn main() {
+    println("# deck_pod_bootstrap_test — QE-env bootstrap guards")
+    let b = deck_pod_qe_bootstrap()
+
+    // G1 — bzip2/curl/tar ensured before the bz2 tar extract.
+    _has("G1 ensure_deps fn", b, "ensure_deps")
+    _has("G1 apt bzip2", b, "bzip2")
+    _has("G1 tar -xj extract", b, "tar -xj")
+
+    // G2 — retry + runnable verify.
+    _has("G2 micromamba source", b, "micro.mamba.pm")
+    _has("G2 version check", b, "--version")
+
+    // G3 — idempotent env create (skip-when-present).
+    _has("G3 idempotent skip", b, "already has pw.x")
+    _has("G3 env create", b, "create -y -n qe")
+
+    // G4 — fail-loud with the CORRECT `which pw.x` liveness probe.
+    _has("G4 done sentinel", b, "QE SETUP DONE")
+    _has("G4 failed sentinel", b, "QE SETUP FAILED")
+    _has("G4 which probe", b, "which pw.x")
+    _hasnt("G4 no `pw.x -h` false-negative probe", b, "pw.x -h")
+
+    println("deck_pod_bootstrap_test PASS")
+}

@@ -81,6 +81,12 @@ pub fn emit_rtsc(spec: DeckSpec) -> [DeckFile] {
               + _rtsc_proto_csv() + "]")
     }
 
+    // QE-env bootstrap (every prototype): the canonical fail-loud micromamba+QE
+    // installer (bzip2 guard · idempotent · `which pw.x` liveness). Emit it so a
+    // bare pod can `bash setup_env.sh` instead of a hand-written setup script
+    // (트러블슈팅 재발금지 — see deck_pod_qe_bootstrap in gen.hexa).
+    deck_push(files, "setup_env.sh", deck_pod_qe_bootstrap())
+
     if proto == "beh8_clathrate" {
         deck_push(files, "vc-relax.in", _rtsc_beh8_vc_relax(spec))
         deck_push(files, "scf.in",      _rtsc_beh8_scf(spec))
