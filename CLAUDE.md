@@ -77,6 +77,19 @@ This file is the single governance SSOT (md 단일화) — edit directives here,
   `harness pool on <host> 'curl -fsSL https://raw.githubusercontent.com/dancinlab/hexa-lang/<tag>/install.sh | sh'`.
   pool 의 빌드·byteeq·measure 가 stale 바이너리/시드를 물지 않도록(자기복제 측정 신뢰성·c2),
   릴리스마다 공유자원을 최신 prebuilt 로 맞춘다.
+- **self-host ≠ release 회귀** — self-hosting 완성(byteeq `gen3≡gen4`·measure·RT-NATIVE·zero-C)
+  작업은 **절대 실제 사용 릴리스를 망가뜨리지 않는 선에서** 진행한다. 출하 바이너리(`hexa`/`hexa.real`)·
+  `hexa build`/`run`·stdlib·C-transpile fallback 등 **사용자 사용 경로를 깨는 변경은 금지** — 셀프호스트
+  게이트(native arena·#else drop·substrate 바이트감소 등)를 위해 릴리스를 회귀시키지 않는다. **릴리스
+  무결성 > self-host 진척**: 회귀 위험이 있으면 릴리스 그린을 먼저 보장한 뒤 진행하고(코드젠/런타임
+  변경은 byteeq + 출하 smoke 통과 확인 후 머지), 위험하면 self-host 진척을 미룬다.
+- **릴리스 채널 규율 (edge=실험 · stable=승격)** — self-host 진척(byteeq·measure·RT-NATIVE·zero-C·
+  static-musl 등 실험적 변경)은 `main` push → **edge prerelease**(`HEXA_VERSION=edge` 로 설치)로 상시
+  흘린다. 소비자 기본 경로(`install.sh` → 최신 stable `vX.Y.Z`)는 **3타깃(x86_64-linux·arm64-linux·
+  darwin-arm64) 릴리스 잡 전부 GREEN + install.sh 소비자 스모크(`hexa --version` + hello/exit42 run)
+  GREEN** 일 때만 새 stable 태그로 승격한다. **"x86 만 green" 은 승격 불가**(v0.241.0 arm64 asset 미발행
+  회귀 교훈 — 한 타깃 그린이 전체 그린 아님). 즉 실험은 edge 에서 검증·soak, stable 은 전타깃 green
+  승격 — 이것이 [self-host ≠ release 회귀]의 운영 방식이다(소비자=stale-but-stable, 실험=edge).
 
 ## Harness
 
