@@ -56,13 +56,26 @@ jobs:
         shell: bash
         run: |
           set -x
-          # Find a native compiler capable of --emit=asm --target=arm64-linux-gnu.
+          # The regen needs a NATIVE compiler that can `--emit=asm
+          # --target=arm64-linux-gnu`. build/hexat is the C-transpile bootstrap
+          # and CANNOT emit native asm (run 27787910448: "emitted only 0 globl");
+          # ./hexa is the self-hosted NATIVE driver and can. Prefer the native
+          # ones; never use hexat for regen.
           APRIME=""
-          for c in build/aprime_cc build/hexat ./hexa build/gen3; do
+          for c in build/aprime_cc build/gen3 ./hexa; do
             if [ -x "$c" ]; then APRIME="$c"; break; fi
           done
           echo "APRIME candidate = $APRIME"
           test -n "$APRIME"
+          # Sanity probe: confirm this binary actually emits native arm64-linux
+          # asm before trusting the regen (avoids a silent 0-globl seed).
+          printf 'fn _p() {}\n' > /tmp/probe_drv.hexa
+          if ! "$APRIME" /tmp/probe_drv.hexa --emit=asm --target=arm64-linux-gnu -o /tmp/probe.s >/dev/null 2>&1 || [ ! -s /tmp/probe.s ]; then
+            echo "FAIL: $APRIME cannot --emit=asm --target=arm64-linux-gnu (no native asm emitter)" >&2
+            "$APRIME" /tmp/probe_drv.hexa --emit=asm --target=arm64-linux-gnu -o /tmp/probe.s 2>&1 | tail -20 || true
+            exit 1
+          fi
+          echo "asm-emit probe OK ($(wc -l < /tmp/probe.s) lines)"
           cp self/native/alloc_syscall_arm64-linux.s /tmp/seed.before.s || true
           APRIME="$APRIME" bash tool/regen_alloc_syscall_native_s.sh arm64-linux
           echo "=== seed syscall-ABI AFTER regen (must be Linux: svc #0 + x8 + target_os=0) ==="
