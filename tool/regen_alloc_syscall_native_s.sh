@@ -64,6 +64,17 @@ emit_one() {
         # `fn main`). A library seed must NOT export `main` — it would multiple-
         # definition-clash with runtime.o's main at runtime.a ar. Drop the
         # `.globl/.type/.size main` directives + the `main:`-to-next-symbol body.
+        #
+        # routeb-r4 (measure-7) FIX: the `main`-body skip must ALSO terminate on a
+        # SECTION directive (`.section`/`.data`/`.text`/`.bss`/`.rodata`). The
+        # x86_64 emit places `main:` BEFORE the `.section .data` + `g<id>: .quad 0
+        # .quad 0` module-global slots; the old skip only stopped at `symbol:` /
+        # `.globl`, so it SWALLOWED the `.section .data` directive that precedes
+        # `g0:`. The global slots then inherited `.text` (read-only) → a write to
+        # `[rip+g<id>]` (arena `__env_extend` updating __arena_env_lo/hi) SIGSEGV'd
+        # on the read-only page. Stopping on the section directive keeps `.section
+        # .data` in the seed so the slots land writable (arm64 Mach-O was never
+        # affected — its global pool is emitted into __DATA,__data separately).
         sed -E -e 's#"[^"]*alloc-flat\.hexa"#"self/rt/alloc.hexa"#g' \
                -e 's#^// source: .*alloc-flat\.hexa#// source: self/rt/alloc.hexa#' "$raw" \
         | awk '
@@ -73,6 +84,7 @@ emit_one() {
             /^_?main:[[:space:]]*$/ { inmain=1; next }
             inmain==1 && /^[A-Za-z_][A-Za-z0-9_]*:[[:space:]]*$/ { inmain=0 }
             inmain==1 && /^[[:space:]]*\.globl[[:space:]]/ { inmain=0 }
+            inmain==1 && /^[[:space:]]*\.(section|data|text|bss|rodata)\b/ { inmain=0 }
             inmain!=1 { print }
         '
     } > "$out"
