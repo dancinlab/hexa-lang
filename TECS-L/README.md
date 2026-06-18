@@ -4437,7 +4437,7 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
   🎯 206 CHARACTERIZATIONS!
   📊 Total: +42 (#165-206), 4 ⭐⭐⭐ + 9 ⭐⭐ + 29 ⭐
 
-  --- Ralph 368 (2026-06-18): auto-DFS — new n=6-UNIQUE product identities ---
+  --- Ralph 369 (2026-06-18): auto-DFS — new n=6-UNIQUE product identities ---
   🟩 DFS over {σ,σ₂,φ,τ,n,sopfr,rad,J₂,ψ} products A·B = C·D, exact integer, n∈[2,200000]
      → 10 functional forms with solution set = {6} ONLY (n=6-unique characterizations):
         σ²  = n·J₂      σ²  = rad·J₂     σφ = τ·n (master M10)     σφ = τ·rad
@@ -4447,6 +4447,26 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
      → exact-int verified to N=2·10⁵ (bounded-unique); full ∀n ⟺ {1,6} UNPROVEN
        (several likely reduce to the σφ=nτ core — independence not established · c2)
      → re-runnable engine: state/novel-dfs/arith_identity_dfs.py  (arg = N)
+
+  --- Ralph 370 (2026-06-18): DFS-to-exhaustion of the 2-term product vein ---
+  🟩 NEW special-n-unique product identities (fixed 9-fn basis, exact-int, n∈[2,2·10⁵]):
+     n=28 (2nd perfect number) — solution set = {28} ONLY:
+        σ·τ = φ·n   (56·6 = 12·28 = 336)        σ·rad = n²   (56·14 = 28² = 784)
+     n=12 (=σ(6)) — solution set = {12} ONLY:
+        σ·ψ = sopfr·J₂  (28·24 = 7·96 = 672)     τ·ψ = n²   (6·24 = 12² = 144)
+        n² = rad·ψ   (144 = 6·24)
+  🟦 coarse-basis extension {+σ₃,Ω,ω} (Ω,ω = small consts at these n — weaker novelty):
+        n=6 : σ·Ω=τ·rad, σ·ω=τ·n, τ·n=ψ·ω, τ·rad=ψ·Ω
+        n=12: σ·Ω=n·sopfr, φ·n=ψ·ω, φ·Ω=rad·ω, τ²=n·Ω      n=28: σ·Ω=φ·rad
+  🔴 EXHAUSTION boundary (vein declared dry · c2):
+     · family-universal A·B=C·D (∀prime/∀p²/∀2p/∀pq) = TRIVIAL only (49 primewise
+       substitutions from σ(p)=ψ(p)=p+1 and n=rad=sopfr at primes; 0 nontrivial)
+     · additive A+B=C+D = DRY (0 universal, 0 special-n-unique for {6,12,28})
+     · perfect-subset(≥2) / 496 / 8128 / primorial{30,210,2310} / 24 = DRY (no 2-term form)
+     · arbitrary basis-expansion keeps producing → UNBOUNDED BY CONSTRUCTION
+       (each added fn = more substitution-class identities, not genuine structure)
+     ⇒ 2-term arithmetic-identity DFS EXHAUSTED at the structural level; the rich vein
+       is multiplicative σφ=nτ-type characterizations of {6, 12, 28}. (engine: state/novel-dfs/)
 ```
 
   --- Ralph 369: Combinatorial Designs DFS ---
