@@ -1,0 +1,76 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/cloud_secure_default_test.hexa — falsifier suite for the
+// COMMUNITY-RENT GUARD: every RunPod rent must default to SECURE (dedicated)
+// cloud, and only reach the community-inclusive ALL pool on an EXPLICIT
+// opt-in (RUNPOD_COMMUNITY=1 / HEXA_CLOUD_COMMUNITY=1). Community hosts are
+// reclaimable and collapse runs mid-flight (substrate collapse); SECURE is
+// the safe default. Mirrors runpod.hexa:_runpod_community_opt_in /
+// _runpod_cloud_type (private, env-reading) as PURE functions with the env
+// values INJECTED — the mirror-test pattern matches cloud_provider_routing_test.hexa.
+// NO live runpodctl / GraphQL call, NO pod create.
+//
+// Falsifiers:
+//   F-CLOUD-SECURE-DEFAULT     — no opt-in env → cloudType "SECURE"
+//   F-CLOUD-COMMUNITY-OPTIN    — RUNPOD_COMMUNITY=1      → "ALL"
+//   F-CLOUD-COMMUNITY-OPTIN-2  — HEXA_CLOUD_COMMUNITY=1  → "ALL"
+//   F-CLOUD-COMMUNITY-OFF      — "0" / other value       → "SECURE" (NOT opt-in)
+//
+// Run:   hexa run stdlib/cloud/cloud_secure_default_test.hexa
+// PASS:  exits 0, prints "cloud_secure_default_test PASS — N/N cases".
+
+// Mirror of runpod.hexa:_runpod_community_opt_in (private), env INJECTED.
+// 1 iff either opt-in env equals exactly "1".
+fn _community_opt_in_pure(runpod_community: str, hexa_cloud_community: str) -> int {
+    if runpod_community == "1" { return 1 }
+    if hexa_cloud_community == "1" { return 1 }
+    return 0
+}
+
+// Mirror of runpod.hexa:_runpod_cloud_type (private). SECURE unless opt-in.
+fn _cloud_type_pure(runpod_community: str, hexa_cloud_community: str) -> str {
+    if _community_opt_in_pure(runpod_community, hexa_cloud_community) == 1 {
+        return "ALL"
+    }
+    return "SECURE"
+}
+
+fn _ck_str(name: str, got: str, want: str) {
+    if got != want {
+        println("  FAIL: " + name + " got '" + got + "' want '" + want + "'")
+        exit(1)
+    }
+}
+
+fn main() {
+    let mut n = 0
+
+    // F-CLOUD-SECURE-DEFAULT — no opt-in (both env unset/"") → SECURE.
+    _ck_str("default no env", _cloud_type_pure("", ""), "SECURE")
+    n = n + 1
+
+    // F-CLOUD-COMMUNITY-OPTIN — RUNPOD_COMMUNITY=1 → ALL (community pool).
+    _ck_str("RUNPOD_COMMUNITY=1", _cloud_type_pure("1", ""), "ALL")
+    n = n + 1
+
+    // F-CLOUD-COMMUNITY-OPTIN-2 — HEXA_CLOUD_COMMUNITY=1 → ALL.
+    _ck_str("HEXA_CLOUD_COMMUNITY=1", _cloud_type_pure("", "1"), "ALL")
+    n = n + 1
+
+    // F-CLOUD-COMMUNITY-OFF — "0" is NOT opt-in → SECURE (no accidental
+    // community from a falsy-but-present value).
+    _ck_str("RUNPOD_COMMUNITY=0", _cloud_type_pure("0", ""), "SECURE")
+    n = n + 1
+
+    // A non-"1" truthy-looking value ("true"/"yes") must NOT opt in — only
+    // exactly "1" flips the guard (no fuzzy parsing surprises).
+    _ck_str("RUNPOD_COMMUNITY=true", _cloud_type_pure("true", ""), "SECURE")
+    n = n + 1
+    _ck_str("HEXA_CLOUD_COMMUNITY=yes", _cloud_type_pure("", "yes"), "SECURE")
+    n = n + 1
+
+    // Both set → still ALL (opt-in is OR).
+    _ck_str("both opt-in", _cloud_type_pure("1", "1"), "ALL")
+    n = n + 1
+
+    println("cloud_secure_default_test PASS — " + str(n) + "/" + str(n) + " cases")
+}

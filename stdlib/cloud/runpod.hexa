@@ -75,6 +75,38 @@ fn _runpodctl_path() -> str {
     return on_path
 }
 
+// ── cloud-type policy — SECURE by default, community opt-in only ──────
+//
+// COMMUNITY-RENT GUARD (substrate-collapse prevention). RunPod community
+// cloud hosts are 3rd-party machines that can be RECLAIMED at the owner's
+// whim — a community pod can vanish mid-run (substrate collapse), wiping a
+// training/render run. SECURE (dedicated datacenter) hosts do not get pulled
+// out from under us. So we DEFAULT to SECURE for every rent and only permit
+// the community-inclusive pool when the caller EXPLICITLY opts in — matching
+// the edge scripts/hegre_pod_provision.sh pattern (SECURE default · community
+// opt-in · auto-fallback on repeated SECURE supply failure).
+//
+// Opt-in env (any → community-inclusive pool `ALL`):
+//   RUNPOD_COMMUNITY=1   ·   HEXA_CLOUD_COMMUNITY=1
+// Anything else (unset / "0" / other) → "SECURE" (the safe default).
+//
+// `cloudType: ALL` includes COMMUNITY; the GraphQL mutation has no dedicated
+// COMMUNITY literal, so the opt-in maps to ALL (community-permitting) and the
+// default maps to SECURE (dedicated-only). The runpodctl CLI takes the same
+// literal via --cloud-type.
+fn _runpod_community_opt_in() -> int {
+    if env_var("RUNPOD_COMMUNITY") == "1" { return 1 }
+    if env_var("HEXA_CLOUD_COMMUNITY") == "1" { return 1 }
+    return 0
+}
+
+// _runpod_cloud_type — the cloudType literal for a rent. SECURE unless the
+// caller opted into community (then ALL = community-permitting pool).
+fn _runpod_cloud_type() -> str {
+    if _runpod_community_opt_in() == 1 { return "ALL" }
+    return "SECURE"
+}
+
 // ── credential resolution — single SSOT for CLI · dispatch · watchdog ──
 
 // _toml_str_field — extract a flat-TOML `<key> = "<value>"` (first match, "" if none).
@@ -268,7 +300,7 @@ fn _runpod_create_cli(rpc: str, gpu_type: str, image: str, pubkey: str, name: st
         + " --container-disk-in-gb 80"
         + vol_flag
         + " --volume-mount-path /workspace"
-        + " --cloud-type SECURE"
+        + " --cloud-type " + _runpod_cloud_type()
         + " -o json 2>&1"
     let out = exec(cmd)
     let parsed = json_parse(out)
@@ -295,7 +327,10 @@ fn _runpod_create_api(api_key: str, gpu_type: str, image: str, pubkey: str, name
     // the legacy ephemeral behavior (the explicit `--ephemeral` opt-out path).
     let mut vol = volume_gb
     if vol < 0 { vol = 0 }
-    let body = "{\"query\":\"mutation { podFindAndDeployOnDemand(input:{cloudType: ALL, gpuCount:1, volumeInGb:" + str(vol) + ", containerDiskInGb:80, minVcpuCount:8, minMemoryInGb:32, gpuTypeId:\\\"" + gpu_type + "\\\", name:\\\"" + name + "\\\", imageName:\\\"" + image + "\\\", dockerArgs:\\\"\\\", ports:\\\"22/tcp\\\", volumeMountPath:\\\"/workspace\\\", env:[{key:\\\"PUBLIC_KEY\\\", value:\\\"" + pubkey + "\\\"}]}) { id machineId costPerHr } }\"}"
+    // cloudType DEFAULTS to SECURE (dedicated) — community is reclaimable and
+    // collapses runs mid-flight. Community opt-in (RUNPOD_COMMUNITY=1) maps to
+    // the ALL pool. See _runpod_cloud_type.
+    let body = "{\"query\":\"mutation { podFindAndDeployOnDemand(input:{cloudType: " + _runpod_cloud_type() + ", gpuCount:1, volumeInGb:" + str(vol) + ", containerDiskInGb:80, minVcpuCount:8, minMemoryInGb:32, gpuTypeId:\\\"" + gpu_type + "\\\", name:\\\"" + name + "\\\", imageName:\\\"" + image + "\\\", dockerArgs:\\\"\\\", ports:\\\"22/tcp\\\", volumeMountPath:\\\"/workspace\\\", env:[{key:\\\"PUBLIC_KEY\\\", value:\\\"" + pubkey + "\\\"}]}) { id machineId costPerHr } }\"}"
     let resp = _runpod_post(api_key, body, 60)
     if len(resp) == 0 {
         return _runpod_fail_pod("create (api): empty response (HTTPS / auth failure)")
