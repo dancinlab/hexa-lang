@@ -6,6 +6,12 @@
 //   module-global write path). hexat C-transpile cannot lower these, so they
 //   enter runtime.a ONLY via this seed. RUN-proven (F-M5-GSLOT-VAL-DONE, exit 0).
 //   ABI: ELF aarch64.
+//   ELF reloc fixup (measure-8 #3553 faithful linux-arm64 wall): the arm64
+//   codegen emits PC-relative page refs in Mach-O textual form (adrp sym@PAGE /
+//   add sym@PAGEOFF) for both darwin and linux; GNU-as on linux needs the ELF
+//   textual form (bare symbol on adrp + :lo12:sym on add). The g<id> module-
+//   global + .LCstr0 cstring refs are translated to ELF form by the regen
+//   script's arm64-linux post-process so `as` assembles this seed.
 // hexa-lang emit pass — target=arm64-linux-gnu
 // source: self/rt/alloc.hexa
 .file 1 "self/rt/alloc.hexa"
@@ -1291,8 +1297,8 @@ _L33e7_sys_getrandom_bb1:
     ret // return
 _L33e7_sys_getrandom_bb2:
     movz x0, #3 // hv const_str: TAG_STR
-    adrp x1, .LCstr0@PAGE // hv str ptr page
-    add x1, x1, .LCstr0@PAGEOFF // hv str ptr off
+    adrp x1, .LCstr0 // hv str ptr page
+    add x1, x1, :lo12:.LCstr0 // hv str ptr off
     movz x0, #0 // __hx_str_ptr: TAG_INT
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
@@ -2023,8 +2029,8 @@ __env_extend:
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
 _L33e7___env_extend_bb0:
-    adrp x0, g2@PAGE // hv global page
-    add x0, x0, g2@PAGEOFF // hv global off
+    adrp x0, g2 // hv global page
+    add x0, x0, :lo12:g2 // hv global off
     ldp x0, x1, [x0] // hv load global g2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
@@ -2037,14 +2043,14 @@ _L33e7___env_extend_bb0:
     b _L33e7___env_extend_bb1 // branch -> then
 _L33e7___env_extend_bb1:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x15, g2@PAGE // hv global page (store)
-    add x15, x15, g2@PAGEOFF // hv global off (store)
+    adrp x15, g2 // hv global page (store)
+    add x15, x15, :lo12:g2 // hv global off (store)
     stp x0, x1, [x15] // hv store global g2
     b _L33e7___env_extend_bb5 // branch
 _L33e7___env_extend_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x2, g2@PAGE // hv global page
-    add x2, x2, g2@PAGEOFF // hv global off
+    adrp x2, g2 // hv global page
+    add x2, x2, :lo12:g2 // hv global off
     ldp x2, x3, [x2] // hv load global g2
     bl hexa_cmp_lt // binop <
     stp x0, x1, [sp, #64] // hv store L4
@@ -2055,8 +2061,8 @@ _L33e7___env_extend_bb2:
     b _L33e7___env_extend_bb3 // branch -> then
 _L33e7___env_extend_bb3:
     ldp x0, x1, [sp, #0] // hv load L0
-    adrp x15, g2@PAGE // hv global page (store)
-    add x15, x15, g2@PAGEOFF // hv global off (store)
+    adrp x15, g2 // hv global page (store)
+    add x15, x15, :lo12:g2 // hv global off (store)
     stp x0, x1, [x15] // hv store global g2
     b _L33e7___env_extend_bb4 // branch
 _L33e7___env_extend_bb4:
@@ -2069,8 +2075,8 @@ _L33e7___env_extend_bb5:
     ldp x0, x1, [sp, #96] // hv load L6
     stp x0, x1, [sp, #112] // hv store L7
     ldp x0, x1, [sp, #112] // hv load L7
-    adrp x2, g3@PAGE // hv global page
-    add x2, x2, g3@PAGEOFF // hv global off
+    adrp x2, g3 // hv global page
+    add x2, x2, :lo12:g3 // hv global off
     ldp x2, x3, [x2] // hv load global g3
     bl hexa_cmp_gt // binop >
     stp x0, x1, [sp, #128] // hv store L8
@@ -2081,8 +2087,8 @@ _L33e7___env_extend_bb5:
     b _L33e7___env_extend_bb6 // branch -> then
 _L33e7___env_extend_bb6:
     ldp x0, x1, [sp, #112] // hv load L7
-    adrp x15, g3@PAGE // hv global page (store)
-    add x15, x15, g3@PAGEOFF // hv global off (store)
+    adrp x15, g3 // hv global page (store)
+    add x15, x15, :lo12:g3 // hv global off (store)
     stp x0, x1, [x15] // hv store global g3
     b _L33e7___env_extend_bb7 // branch
 _L33e7___env_extend_bb7:
@@ -2099,8 +2105,8 @@ hexa_arena_env_lo:
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
 _L33e7_hexa_arena_env_lo_bb0:
-    adrp x0, g2@PAGE // hv global page
-    add x0, x0, g2@PAGEOFF // hv global off
+    adrp x0, g2 // hv global page
+    add x0, x0, :lo12:g2 // hv global off
     ldp x0, x1, [x0] // hv load global g2
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
@@ -2112,8 +2118,8 @@ hexa_arena_env_hi:
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
 _L33e7_hexa_arena_env_hi_bb0:
-    adrp x0, g3@PAGE // hv global page
-    add x0, x0, g3@PAGEOFF // hv global off
+    adrp x0, g3 // hv global page
+    add x0, x0, :lo12:g3 // hv global off
     ldp x0, x1, [x0] // hv load global g3
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
@@ -2125,8 +2131,8 @@ hexa_arena_head:
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
 _L33e7_hexa_arena_head_bb0:
-    adrp x0, g0@PAGE // hv global page
-    add x0, x0, g0@PAGEOFF // hv global off
+    adrp x0, g0 // hv global page
+    add x0, x0, :lo12:g0 // hv global off
     ldp x0, x1, [x0] // hv load global g0
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
@@ -2138,8 +2144,8 @@ hexa_arena_cur:
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
 _L33e7_hexa_arena_cur_bb0:
-    adrp x0, g1@PAGE // hv global page
-    add x0, x0, g1@PAGEOFF // hv global off
+    adrp x0, g1 // hv global page
+    add x0, x0, :lo12:g1 // hv global off
     ldp x0, x1, [x0] // hv load global g1
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
@@ -2469,14 +2475,14 @@ _L33e7_rt_init_bb0:
     bl hexa_arena_new_block // call hexa_arena_new_block
     stp x0, x1, [sp, #16] // hv store L1
     ldp x0, x1, [sp, #16] // hv load L1
-    adrp x15, g0@PAGE // hv global page (store)
-    add x15, x15, g0@PAGEOFF // hv global off (store)
+    adrp x15, g0 // hv global page (store)
+    add x15, x15, :lo12:g0 // hv global off (store)
     stp x0, x1, [x15] // hv store global g0
-    adrp x0, g0@PAGE // hv global page
-    add x0, x0, g0@PAGEOFF // hv global off
+    adrp x0, g0 // hv global page
+    add x0, x0, :lo12:g0 // hv global off
     ldp x0, x1, [x0] // hv load global g0
-    adrp x15, g1@PAGE // hv global page (store)
-    add x15, x15, g1@PAGEOFF // hv global off (store)
+    adrp x15, g1 // hv global page (store)
+    add x15, x15, :lo12:g1 // hv global off (store)
     stp x0, x1, [x15] // hv store global g1
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
@@ -2530,8 +2536,8 @@ _L33e7_hexa_arena_alloc_bb1:
     stp x0, x1, [sp, #48] // hv store L3
     b _L33e7_hexa_arena_alloc_bb2 // branch
 _L33e7_hexa_arena_alloc_bb2:
-    adrp x0, g0@PAGE // hv global page
-    add x0, x0, g0@PAGEOFF // hv global off
+    adrp x0, g0 // hv global page
+    add x0, x0, :lo12:g0 // hv global off
     ldp x0, x1, [x0] // hv load global g0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
@@ -2547,17 +2553,17 @@ _L33e7_hexa_arena_alloc_bb3:
     bl hexa_arena_new_block // call hexa_arena_new_block
     stp x0, x1, [sp, #128] // hv store L8
     ldp x0, x1, [sp, #128] // hv load L8
-    adrp x15, g0@PAGE // hv global page (store)
-    add x15, x15, g0@PAGEOFF // hv global off (store)
+    adrp x15, g0 // hv global page (store)
+    add x15, x15, :lo12:g0 // hv global off (store)
     stp x0, x1, [x15] // hv store global g0
-    adrp x0, g0@PAGE // hv global page
-    add x0, x0, g0@PAGEOFF // hv global off
+    adrp x0, g0 // hv global page
+    add x0, x0, :lo12:g0 // hv global off
     ldp x0, x1, [x0] // hv load global g0
-    adrp x15, g1@PAGE // hv global page (store)
-    add x15, x15, g1@PAGEOFF // hv global off (store)
+    adrp x15, g1 // hv global page (store)
+    add x15, x15, :lo12:g1 // hv global off (store)
     stp x0, x1, [x15] // hv store global g1
-    adrp x0, g0@PAGE // hv global page
-    add x0, x0, g0@PAGEOFF // hv global off
+    adrp x0, g0 // hv global page
+    add x0, x0, :lo12:g0 // hv global off
     ldp x0, x1, [x0] // hv load global g0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
@@ -2569,8 +2575,8 @@ _L33e7_hexa_arena_alloc_bb3:
     cbz x0, _L33e7_hexa_arena_alloc_bb6 // br_cond: !truthy -> else
     b _L33e7_hexa_arena_alloc_bb5 // branch -> then
 _L33e7_hexa_arena_alloc_bb4:
-    adrp x0, g1@PAGE // hv global page
-    add x0, x0, g1@PAGEOFF // hv global off
+    adrp x0, g1 // hv global page
+    add x0, x0, :lo12:g1 // hv global off
     ldp x0, x1, [x0] // hv load global g1
     stp x0, x1, [sp, #176] // hv store L11
     ldp x0, x1, [sp, #176] // hv load L11
@@ -2724,8 +2730,8 @@ _L33e7_hexa_arena_alloc_bb15:
     add x15, sp, #544 // hv frame base
     stp x0, x1, [x15] // hv store L34
     ldp x0, x1, [sp, #288] // hv load L18
-    adrp x15, g1@PAGE // hv global page (store)
-    add x15, x15, g1@PAGEOFF // hv global off (store)
+    adrp x15, g1 // hv global page (store)
+    add x15, x15, :lo12:g1 // hv global off (store)
     stp x0, x1, [x15] // hv store global g1
     ldp x0, x1, [sp, #288] // hv load L18
     stp x0, x1, [sp, #176] // hv store L11
@@ -2737,8 +2743,8 @@ _L33e7_hexa_arena_alloc_bb16:
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
 _L33e7_hexa_arena_alloc_bb17:
-    adrp x0, g1@PAGE // hv global page
-    add x0, x0, g1@PAGEOFF // hv global off
+    adrp x0, g1 // hv global page
+    add x0, x0, :lo12:g1 // hv global off
     ldp x0, x1, [x0] // hv load global g1
     stp x0, x1, [sp, #464] // hv store L29
     b _L33e7_hexa_arena_alloc_bb18 // branch
@@ -2789,8 +2795,8 @@ hexa_arena_mark:
     mov x29, sp // prologue: set fp
     sub sp, sp, #80 // sp adj
 _L33e7_hexa_arena_mark_bb0:
-    adrp x0, g1@PAGE // hv global page
-    add x0, x0, g1@PAGEOFF // hv global off
+    adrp x0, g1 // hv global page
+    add x0, x0, :lo12:g1 // hv global off
     ldp x0, x1, [x0] // hv load global g1
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
@@ -2814,13 +2820,13 @@ _L33e7_hexa_arena_mark_bb1:
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
 _L33e7_hexa_arena_mark_bb2:
-    adrp x0, g1@PAGE // hv global page
-    add x0, x0, g1@PAGEOFF // hv global off
+    adrp x0, g1 // hv global page
+    add x0, x0, :lo12:g1 // hv global off
     ldp x0, x1, [x0] // hv load global g1
     bl __blk_used // call __blk_used
     stp x0, x1, [sp, #48] // hv store L3
-    adrp x0, g1@PAGE // hv global page
-    add x0, x0, g1@PAGEOFF // hv global off
+    adrp x0, g1 // hv global page
+    add x0, x0, :lo12:g1 // hv global off
     ldp x0, x1, [x0] // hv load global g1
     ldp x2, x3, [sp, #48] // hv load L3
     mov x0, x1 // __hx_make_val: lo = tag word
@@ -2865,8 +2871,8 @@ _L33e7_hexa_arena_rewind_bb0:
     cbz x0, _L33e7_hexa_arena_rewind_bb2 // br_cond: !truthy -> else
     b _L33e7_hexa_arena_rewind_bb1 // branch -> then
 _L33e7_hexa_arena_rewind_bb1:
-    adrp x0, g0@PAGE // hv global page
-    add x0, x0, g0@PAGEOFF // hv global off
+    adrp x0, g0 // hv global page
+    add x0, x0, :lo12:g0 // hv global off
     ldp x0, x1, [x0] // hv load global g0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
@@ -2892,18 +2898,18 @@ _L33e7_hexa_arena_rewind_bb2:
     stp x0, x1, [sp, #192] // hv store L12
     b _L33e7_hexa_arena_rewind_bb5 // branch
 _L33e7_hexa_arena_rewind_bb3:
-    adrp x0, g0@PAGE // hv global page
-    add x0, x0, g0@PAGEOFF // hv global off
+    adrp x0, g0 // hv global page
+    add x0, x0, :lo12:g0 // hv global off
     ldp x0, x1, [x0] // hv load global g0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
     bl __blk_set_used // call __blk_set_used
     stp x0, x1, [sp, #144] // hv store L9
-    adrp x0, g0@PAGE // hv global page
-    add x0, x0, g0@PAGEOFF // hv global off
+    adrp x0, g0 // hv global page
+    add x0, x0, :lo12:g0 // hv global off
     ldp x0, x1, [x0] // hv load global g0
-    adrp x15, g1@PAGE // hv global page (store)
-    add x15, x15, g1@PAGEOFF // hv global off (store)
+    adrp x15, g1 // hv global page (store)
+    add x15, x15, :lo12:g1 // hv global off (store)
     stp x0, x1, [x15] // hv store global g1
     b _L33e7_hexa_arena_rewind_bb4 // branch
 _L33e7_hexa_arena_rewind_bb4:
@@ -2940,8 +2946,8 @@ _L33e7_hexa_arena_rewind_bb6:
     b _L33e7_hexa_arena_rewind_bb5 // branch
 _L33e7_hexa_arena_rewind_bb7:
     ldp x0, x1, [sp, #32] // hv load L2
-    adrp x15, g1@PAGE // hv global page (store)
-    add x15, x15, g1@PAGEOFF // hv global off (store)
+    adrp x15, g1 // hv global page (store)
+    add x15, x15, :lo12:g1 // hv global off (store)
     stp x0, x1, [x15] // hv store global g1
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
@@ -2957,8 +2963,8 @@ hexa_arena_reset:
     mov x29, sp // prologue: set fp
     sub sp, sp, #96 // sp adj
 _L33e7_hexa_arena_reset_bb0:
-    adrp x0, g0@PAGE // hv global page
-    add x0, x0, g0@PAGEOFF // hv global off
+    adrp x0, g0 // hv global page
+    add x0, x0, :lo12:g0 // hv global off
     ldp x0, x1, [x0] // hv load global g0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
@@ -2976,8 +2982,8 @@ _L33e7_hexa_arena_reset_bb1:
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
 _L33e7_hexa_arena_reset_bb2:
-    adrp x0, g0@PAGE // hv global page
-    add x0, x0, g0@PAGEOFF // hv global off
+    adrp x0, g0 // hv global page
+    add x0, x0, :lo12:g0 // hv global off
     ldp x0, x1, [x0] // hv load global g0
     stp x0, x1, [sp, #32] // hv store L2
     b _L33e7_hexa_arena_reset_bb3 // branch
@@ -3008,11 +3014,11 @@ _L33e7_hexa_arena_reset_bb4:
     stp x0, x1, [sp, #32] // hv store L2
     b _L33e7_hexa_arena_reset_bb3 // branch
 _L33e7_hexa_arena_reset_bb5:
-    adrp x0, g0@PAGE // hv global page
-    add x0, x0, g0@PAGEOFF // hv global off
+    adrp x0, g0 // hv global page
+    add x0, x0, :lo12:g0 // hv global off
     ldp x0, x1, [x0] // hv load global g0
-    adrp x15, g1@PAGE // hv global page (store)
-    add x15, x15, g1@PAGEOFF // hv global off (store)
+    adrp x15, g1 // hv global page (store)
+    add x15, x15, :lo12:g1 // hv global off (store)
     stp x0, x1, [x15] // hv store global g1
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
@@ -3147,23 +3153,23 @@ _L33e7_hexa_ptr_read_64_bb0:
 _L33e7_main_bb0:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
-    adrp x15, g0@PAGE // hv global page (store)
-    add x15, x15, g0@PAGEOFF // hv global off (store)
+    adrp x15, g0 // hv global page (store)
+    add x15, x15, :lo12:g0 // hv global off (store)
     stp x0, x1, [x15] // hv store global g0
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
-    adrp x15, g1@PAGE // hv global page (store)
-    add x15, x15, g1@PAGEOFF // hv global off (store)
+    adrp x15, g1 // hv global page (store)
+    add x15, x15, :lo12:g1 // hv global off (store)
     stp x0, x1, [x15] // hv store global g1
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
-    adrp x15, g2@PAGE // hv global page (store)
-    add x15, x15, g2@PAGEOFF // hv global off (store)
+    adrp x15, g2 // hv global page (store)
+    add x15, x15, :lo12:g2 // hv global off (store)
     stp x0, x1, [x15] // hv store global g2
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
-    adrp x15, g3@PAGE // hv global page (store)
-    add x15, x15, g3@PAGEOFF // hv global off (store)
+    adrp x15, g3 // hv global page (store)
+    add x15, x15, :lo12:g3 // hv global off (store)
     stp x0, x1, [x15] // hv store global g3
     movz x0, #4 // ret void: TAG_VOID
     movz x1, #0 // ret void: payload 0
