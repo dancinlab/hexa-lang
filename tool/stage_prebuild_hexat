@@ -98,32 +98,8 @@ if [ ! -f "$RA" ]; then
   exit 1
 fi
 
-# ── RT-NATIVE Route B ALLOC-RB: link the native arena seed as a SEPARATE object ──
-# (mirrors tool/build_aprime.sh's ALLOC_CORE_OBJ; root-cause of the measure-8
-# darwin-arm64 + linux-arm64 link fail — issue #3553).
-#
-# When HEXA_RT_ALLOC_NATIVE!=0 (default-ON as of measure-8) the C arena `#else`
-# body is dropped from runtime_core.c, so runtime.o has NO arena definitions and
-# references hexa_arena_alloc/__blk_used/... out of build/alloc_syscall_native.o.
-# That seed is ALSO an `ar` member of runtime.a — but there is a CYCLE: the seed
-# (hexa_arena_new_block → __env_extend's `==` → hexa_eq, and arena_rewind too)
-# references hexa_eq/__hx_make_val/rt_eq_int back in runtime.o. ld64 (darwin) and
-# the linux-arm64 linker are single-pass over archive members and do NOT re-scan,
-# so the runtime.o → seed → runtime.o back-edge never re-pulls the seed →
-# "Undefined symbols: hexa_arena_alloc, ...". GNU ld on linux-x86_64 re-scans, so
-# x86_64 passed; build_aprime.sh sidesteps it on x86_64 by listing the seed as a
-# SEPARATE explicit object. Do the same here (and in stage_build_hexa): a separate
-# object is on the cmdline unconditionally (not archive-pull), so the cycle is
-# resolved on every target. Guarded on HEXA_RT_ALLOC_NATIVE so a =0 revert build
-# (C arena present, no seed) is byte-for-byte unchanged.
-ALLOC_OBJ=""
-if [ "${HEXA_RT_ALLOC_NATIVE:-1}" != "0" ] && [ -f "$ROOT/build/alloc_syscall_native.o" ]; then
-  ALLOC_OBJ="$ROOT/build/alloc_syscall_native.o"
-  echo "[stage_prebuild_hexat] RT-NATIVE ALLOC-RB: linking native arena seed as separate object ($ALLOC_OBJ) — breaks runtime.o↔seed archive cycle"
-fi
-
 echo "[stage_prebuild_hexat] building build/hexat from hexa_cc.c + runtime.a"
-$CC $CFLAGS -I "$ROOT" -I "$ROOT/self" "$CC_SRC" "$RA" $ALLOC_OBJ -o "$HEXAT" $LIBS
+$CC $CFLAGS -I "$ROOT" -I "$ROOT/self" "$CC_SRC" "$RA" -o "$HEXAT" $LIBS
 test -x "$HEXAT"
 echo "[stage_prebuild_hexat] build/hexat = $(wc -c < "$HEXAT") bytes"
 
@@ -174,7 +150,7 @@ if [ "${HEXA_SEED_CONVERGE:-0}" = "1" ]; then
       break
     fi
     cp "$NEW" "$CC_SRC"
-    $CC $CFLAGS -I "$ROOT" -I "$ROOT/self" "$CC_SRC" "$RA" $ALLOC_OBJ -o "$HEXAT" $LIBS
+    $CC $CFLAGS -I "$ROOT" -I "$ROOT/self" "$CC_SRC" "$RA" -o "$HEXAT" $LIBS
     test -x "$HEXAT"
     i=$((i+1))
     echo "[stage_prebuild_hexat] seed-converge: pass $i — seed=$(wc -c < "$CC_SRC")B hexat=$(wc -c < "$HEXAT")B"
