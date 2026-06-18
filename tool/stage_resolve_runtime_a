@@ -342,13 +342,14 @@ resolve_native_map_core_seed() {
 # frozen self/native/alloc_syscall_*.s seed (a full HexaArenaBlock-chain arena +
 # syscall layer, C-ABI equivalent to runtime_core_emit.hexa's C arena) into
 # build/alloc_syscall_native.o so the arena C `#else` (under HEXA_RT_ALLOC_NATIVE)
-# can drop. OPT-IN: gated on HEXA_RT_ALLOC_NATIVE=1 (NOT auto-on like array/map)
-# until the whole-runtime byteeq/faithful/RSS-OOM measurement confirms the native
-# arena replaces the C arena wholesale (the mark 16-byte struct-return ABI + the
-# heapify↔envelope wiring are the measured-unknowns). Default unset ⇒ C arena
-# stays ⇒ byteeq-inert.
+# can drop. DEFAULT-ON (measure-8, 2026-06-18): the whole-runtime byteeq/faithful/
+# RSS-OOM measurement (measure-6/7) confirmed the native arena replaces the C arena
+# wholesale (mark 16-byte struct-return ABI + heapify↔envelope wiring both proven),
+# so this is now auto-on like array/map. The C arena body has been DROPPED from
+# runtime_core_emit.hexa — set HEXA_RT_ALLOC_NATIVE=0 to revert (build then fails to
+# resolve hexa_arena_*; revert is via git, not a live C fallback).
 resolve_native_alloc_syscall_seed() {
-    [ "${HEXA_RT_ALLOC_NATIVE:-x}" != "1" ] && return 0   # opt-IN until measured
+    [ "${HEXA_RT_ALLOC_NATIVE:-1}" = "0" ] && return 0   # default-ON; =0 to revert
     [ -f build/alloc_syscall_native.o ] && return 0
     local seed="" tgt="${TARGET:-}"
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -413,7 +414,7 @@ build_runtime_a_from_source() {
     # RT-NATIVE Route B (gated, opt-IN): native linked-block arena replaces the C
     # arena `#else` in runtime_core.c when HEXA_RT_ALLOC_NATIVE=1 + seed object built.
     local rt_alloc_def=""
-    if [ "${HEXA_RT_ALLOC_NATIVE:-0}" = "1" ] && [ -f build/alloc_syscall_native.o ]; then
+    if [ "${HEXA_RT_ALLOC_NATIVE:-1}" != "0" ] && [ -f build/alloc_syscall_native.o ]; then
         rt_alloc_def="-DHEXA_RT_ALLOC_NATIVE=1"
         extra_obj="$extra_obj build/alloc_syscall_native.o"
         echo "[stage_resolve_runtime_a] RT-NATIVE ALLOC-RB: HEXA_RT_ALLOC_NATIVE=1; ar'ing native alloc_syscall_native.o into runtime.a"
@@ -433,8 +434,9 @@ resolve_native_rt_hi_seed
 # + linux-arm64). Unknown targets keep the C element path.
 resolve_native_array_core_seed
 resolve_native_map_core_seed
-# RT-NATIVE Route B: assemble the native linked-block arena seed (opt-IN via
-# HEXA_RT_ALLOC_NATIVE=1 until the whole-runtime measurement confirms it).
+# RT-NATIVE Route B: assemble the native linked-block arena seed (DEFAULT-ON as of
+# measure-8; C arena body dropped from runtime_core_emit.hexa. HEXA_RT_ALLOC_NATIVE=0
+# reverts via git).
 resolve_native_alloc_syscall_seed
 
 if [ -f self/runtime.c ]; then
