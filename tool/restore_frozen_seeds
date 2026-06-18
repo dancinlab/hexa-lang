@@ -448,6 +448,114 @@ if [ -f "$_RTC" ] && ! grep -q 'UNSHADOW F1 typed-array shim (restore-injected)'
     || { rm -f "$_RTC.f1arr"; echo "[restore_frozen_seeds] UNSHADOW F1: WARN typed-array shim injection failed (left frozen $_RTC as-is)" >&2; }
 fi
 
+# ── FARR-READ R1 (frozen-seed stale fix) — inject rt_read_f32_at into frozen core ─
+# The frozen self/runtime_core.c (151c52c8…, the .c-graduation parent) PREDATES the
+# native ranged-float reader rt_read_f32_at (the "load-once-generation" enabler that
+# decodes LE IEEE-754 f32s straight into a native farr double[], 8 B/elem, with NO
+# boxed-HexaVal byte intermediate — closing the ~16× boxing footprint that jetsam-
+# SIGKILLs a resident multi-GB weight set). The HI-tier SSOT self/runtime_core_emit.hexa
+# DOES emit the full rt_read_f32_at forward-decl + body, and the RELEASE pipeline picks
+# it up because tool/stage_resolve_runtime_a regenerates runtime_core.c WHOLE from that
+# emitter (regen_runtime_core_from_emitter). But install.sh calls THIS script directly
+# (NOT the stage_* sequence) and leaves the stale frozen runtime_core.c in place, so the
+# user-facing release ships runtime_core.c with `grep -c rt_read_f32_at` = 0 → any .hexa
+# using read_f32_at fails to LINK (undefined reference). (Pool-sync measured exactly this
+# on v0.241.5 across two hosts: emitter has 5 occurrences, shipped runtime_core.c had 0.)
+# Same fix-class + precedent as the #3352 ranged-read_bytes_at fseeko scrub above (which
+# noted "rt_read_f32_at is newer and absent from this blob") — this completes that work.
+#
+# WHY a SURGICAL inject, NOT a whole-file emitter-regen here: the CURRENT emitter core.c
+# `extern`s rt_array_get_native / rt_map_get_native unconditionally (the RT-NATIVE read-
+# half whose bodies live ONLY in the per-arch native .s seeds that stage_resolve_runtime_a
+# ar's into runtime.a — but install.sh compiles runtime.c as a single TU and does NOT
+# assemble those seeds). So a whole-file regen here would trade the rt_read_f32_at-missing
+# bug for an `undefined reference to rt_array_get_native` LINK error. The frozen core.c
+# keeps its self-contained C array/map fallbacks (no seed needed). rt_read_f32_at itself
+# is fully self-contained on the install link: it calls ONLY hexa_farr_zeros / hexa_farr_set
+# (defined in the runtime.c amalgam that #includes this fragment) + libc fopen/fseek/fread
+# + the HX_* / hexa_int / hexa_float macros — ALL present in the frozen blob. It introduces
+# NO native-seed extern, so injecting it is byte-eq-safe (this is the SAME targeted-inject
+# pattern as the Z2a gen.c / F1 typed-array / OP-18 host-fallback blocks; NOT a regen).
+# Verbatim from self/runtime_core_emit.hexa (proven the un-escaped buf-literal == the .c).
+# The forward-decl goes right after the frozen rt_read_bytes_at decl; the body goes right
+# before the rt_write_bytes_append body (the emitter's ordering). The body uses the SAME
+# SHIMMED fseek as the #3352 fix above (NOT fseeko — same hxlcl-handle SIGSEGV hazard).
+# Idempotent: the body-present grep guards re-injection; NO-OP-SAFE if a future frozen-ref
+# already carries rt_read_f32_at.
+_RTC="self/runtime_core.c"
+if [ -f "$_RTC" ] && ! grep -q '^HexaVal rt_read_f32_at(HexaVal path, HexaVal byte_off, HexaVal n_floats) {$' "$_RTC"; then
+  awk '
+    # 1) forward-decl immediately after the rt_read_bytes_at prototype.
+    /^HexaVal rt_read_bytes_at\(HexaVal path, HexaVal offset, HexaVal nbytes\);$/ {
+      print
+      print "// FARR-READ R1 (restore-injected): ranged native-float reader forward-decl"
+      print "// + its hexa_farr_zeros/hexa_farr_set deps. The farr table lives in the OUTER"
+      print "// runtime.c, which #includes this fragment, so those two are DEFINED later in"
+      print "// the TU — forward-declare them here (verbatim from runtime_core_emit.hexa) so"
+      print "// the rt_read_f32_at body below links within the single runtime.c TU. Without"
+      print "// these, an implicit-int decl conflicts with the runtime.c forward-decls."
+      print "HexaVal rt_read_f32_at(HexaVal path, HexaVal byte_off, HexaVal n_floats);"
+      print "HexaVal hexa_farr_zeros(HexaVal n_v);"
+      print "HexaVal hexa_farr_set(HexaVal h_v, HexaVal i_v, HexaVal x_v);"
+      next
+    }
+    # 2) full body immediately before the rt_write_bytes_append body.
+    /^HexaVal rt_write_bytes_append\(HexaVal path, HexaVal arr\) \{$/ && !body_done {
+      print "// FARR-READ R1 (restore-injected): rt_read_f32_at — ranged native-float"
+      print "// reader (load-once-generation enabler). Decodes n_floats LE IEEE-754 f32s"
+      print "// from path@byte_off DIRECTLY into a fresh farr double[] (8 B/elem) via the"
+      print "// public hexa_farr_set entry point — NO boxed-byte intermediate. Self-"
+      print "// contained on the install link (deps hexa_farr_zeros/set live in the"
+      print "// runtime.c amalgam; no native-seed extern). Verbatim from"
+      print "// self/runtime_core_emit.hexa. Byte-identical to bytes_to_f32_le(read_bytes_at)."
+      print "HexaVal rt_read_f32_at(HexaVal path, HexaVal byte_off, HexaVal n_floats) {"
+      print "    int64_t off = HX_IS_INT(byte_off) ? HX_INT(byte_off)"
+      print "                : (HX_TAG(byte_off) == TAG_FLOAT ? (int64_t)HX_FLOAT(byte_off) : -1);"
+      print "    int64_t nf  = HX_IS_INT(n_floats) ? HX_INT(n_floats)"
+      print "                : (HX_TAG(n_floats) == TAG_FLOAT ? (int64_t)HX_FLOAT(n_floats) : 0);"
+      print "    if (off < 0 || nf <= 0) return hexa_farr_zeros(hexa_int(0));"
+      print "    FILE* f = fopen(HX_STR(path), \"rb\");"
+      print "    if (!f) return hexa_farr_zeros(hexa_int(0));"
+      print "    // SHIMMED fseek (#3352 hazard): fopen is `#define fopen hxlcl_fopen`, whose"
+      print "    // handle is NOT a real libc FILE*, so the unshimmed fseeko/_fseeki64 would"
+      print "    // SIGSEGV on any ranged read. `long` off = 64-bit on LP64 over hxlcl_lseek."
+      print "    if (fseek(f, (long)off, SEEK_SET) != 0) { fclose(f); return hexa_farr_zeros(hexa_int(0)); }"
+      print "    HexaVal fh = hexa_farr_zeros(hexa_int(nf));"
+      print "    int64_t hid = HX_INT(fh);"
+      print "    const int64_t CHUNK_FLOATS = 2097152;  // 2M floats = 8 MB per chunk"
+      print "    unsigned char* cbuf = (unsigned char*)malloc((size_t)CHUNK_FLOATS * 4);"
+      print "    if (!cbuf) { fclose(f); return fh; }"
+      print "    int64_t done = 0;"
+      print "    while (done < nf) {"
+      print "        int64_t want = nf - done;"
+      print "        if (want > CHUNK_FLOATS) want = CHUNK_FLOATS;"
+      print "        int64_t got_bytes = (int64_t)fread(cbuf, 1, (size_t)(want * 4), f);"
+      print "        int64_t got_floats = got_bytes / 4;  // ignore a trailing partial f32"
+      print "        for (int64_t i = 0; i < got_floats; i++) {"
+      print "            float fv;"
+      print "            memcpy(&fv, cbuf + i * 4, 4);"
+      print "            hexa_farr_set(fh, hexa_int(done + i), hexa_float((double)fv));"
+      print "        }"
+      print "        done += got_floats;"
+      print "        if (got_floats < want) break;  // EOF / short read"
+      print "    }"
+      print "    (void)hid;"
+      print "    free(cbuf);"
+      print "    fclose(f);"
+      print "    return fh;"
+      print "}"
+      print ""
+      body_done = 1
+    }
+    { print }
+  ' "$_RTC" > "$_RTC.farrread" \
+    && grep -q '^HexaVal rt_read_f32_at(HexaVal path, HexaVal byte_off, HexaVal n_floats) {$' "$_RTC.farrread" \
+    && grep -q '^HexaVal rt_read_f32_at(HexaVal path, HexaVal byte_off, HexaVal n_floats);$' "$_RTC.farrread" \
+    && mv "$_RTC.farrread" "$_RTC" \
+    && echo "[restore_frozen_seeds] FARR-READ R1: injected rt_read_f32_at (decl+body) into $_RTC" \
+    || { rm -f "$_RTC.farrread"; echo "[restore_frozen_seeds] FARR-READ R1: WARN rt_read_f32_at injection failed (left frozen $_RTC as-is)" >&2; }
+fi
+
 # ── OP-18 (HEXA-0POD) — L3 fused-dispatch host fallbacks ──────────────────────
 # The frozen self/runtime.c (151c52c8…, .c-graduation parent) predates the L3
 # kernel-fusion glue, so it has NO host body for the bare fused dispatchers
