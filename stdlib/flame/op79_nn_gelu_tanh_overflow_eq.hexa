@@ -1,0 +1,142 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  op79_nn_gelu_tanh_overflow_eq.hexa — AQA-2 · nn.gelu / nn.tanh overflow ORACLE
+//
+//  ROOT CAUSE (pre-fix): stdlib/nn.hexa computed tanh as
+//      t = (exp(2z) - 1) / (exp(2z) + 1)
+//  with NO argument clamp.  For a large pre-activation the inner exp(2z)
+//  overflows to +inf, so t = inf/inf = NaN and the activation returns NaN.
+//  gelu(x) drives z = c·(x + 0.044715·x³) — the CUBIC — so NaN appears for
+//  x ≳ 26 even though gelu(x) should simply → x in that tail.  A single NaN
+//  pre-activation poisons the whole forward pass.
+//
+//  FIX: clamp the tanh argument to ±20.  tanh saturates to ±1.0 to full f64
+//  precision once |arg| ≥ 20 (1 − tanh(20) ≈ 8e-18 < 1 ulp), so the clamp is
+//  BIT-EXACT for every |arg| < 20 and merely removes the overflow tail.
+//
+//  This oracle inlines the FIXED scalar twins and locks:
+//   F-OP79-TANH-NONAN   tanh over a wide range (incl. ±1000) is FINITE (no NaN/inf)
+//   F-OP79-GELU-NONAN   gelu over a wide range (incl. ±1000) is FINITE (no NaN/inf)
+//   F-OP79-TANH-SAT     tanh(±large) saturates to ±1.0 exactly
+//   F-OP79-GELU-TAIL    gelu(+large) → x  and  gelu(−large) → 0   (saturated tail)
+//   F-OP79-NORMAL-EXACT in the |arg| < 20 range the clamped form is byte-identical
+//                       to the unclamped reference (clamp never engages)
+// ════════════════════════════════════════════════════════════════════════════
+
+// FIXED scalar tanh (mirrors stdlib/nn.hexa _tanh_scalar).
+fn tanh_scalar(x: float) -> float {
+    let mut a = x
+    if a > 20.0 { a = 20.0 }
+    if a < 0.0 - 20.0 { a = 0.0 - 20.0 }
+    let e2x = exp(2.0 * a)
+    return (e2x - 1.0) / (e2x + 1.0)
+}
+
+// FIXED scalar gelu (mirrors stdlib/nn.hexa gelu).
+fn gelu_scalar(x_val: float) -> float {
+    let c = 0.7978845608
+    let x3 = x_val * x_val * x_val
+    let z = c * (x_val + 0.044715 * x3)
+    let t = tanh_scalar(z)
+    return 0.5 * x_val * (1.0 + t)
+}
+
+// Unclamped reference tanh — ONLY safe to call for |arg| < 20 (the normal
+// range), used to prove the clamp is bit-identical where it never engages.
+fn tanh_unclamped(x: float) -> float {
+    let e2x = exp(2.0 * x)
+    return (e2x - 1.0) / (e2x + 1.0)
+}
+
+// finite(v) = v is neither NaN nor ±inf.  NaN != NaN; inf - inf = NaN.
+fn is_finite(v: float) -> bool {
+    if v != v { return false }            // NaN
+    let probe = v - v                     // ±inf → NaN, finite → 0.0
+    if probe != probe { return false }    // ±inf
+    return true
+}
+
+fn abs_f(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn main() {
+    println("=== AQA-2 OP-79 · nn.gelu / nn.tanh overflow guard oracle ===")
+    let mut pass = 0
+    let mut total = 0
+
+    // ── F-OP79-TANH-NONAN + F-OP79-GELU-NONAN ──
+    // Wide sweep including the formerly-NaN tail.
+    let probes = [0.0 - 1000.0, 0.0 - 100.0, 0.0 - 30.0, 0.0 - 5.0,
+                  0.0 - 0.7, 0.0, 0.3, 0.7, 5.0, 26.0, 30.0, 100.0, 1000.0]
+    let mut tanh_ok = true
+    let mut gelu_ok = true
+    let mut i = 0
+    while i < len(probes) {
+        if is_finite(tanh_scalar(probes[i])) == false { tanh_ok = false }
+        if is_finite(gelu_scalar(probes[i])) == false { gelu_ok = false }
+        i = i + 1
+    }
+    total = total + 1
+    if tanh_ok {
+        pass = pass + 1
+        println("PASS  F-OP79-TANH-NONAN   tanh finite over [-1000 .. 1000] (no NaN/inf)")
+    } else {
+        println("FAIL  F-OP79-TANH-NONAN   tanh produced NaN/inf")
+    }
+    total = total + 1
+    if gelu_ok {
+        pass = pass + 1
+        println("PASS  F-OP79-GELU-NONAN   gelu finite over [-1000 .. 1000] (no NaN/inf)")
+    } else {
+        println("FAIL  F-OP79-GELU-NONAN   gelu produced NaN/inf (cubic-driven exp overflow)")
+    }
+
+    // ── F-OP79-TANH-SAT ── tanh(±large) = ±1.0 exactly
+    total = total + 1
+    let tp = tanh_scalar(1000.0)
+    let tn = tanh_scalar(0.0 - 1000.0)
+    if tp == 1.0 && tn == (0.0 - 1.0) {
+        pass = pass + 1
+        println("PASS  F-OP79-TANH-SAT     tanh(+1000)=1.0  tanh(-1000)=-1.0  (exact saturation)")
+    } else {
+        println("FAIL  F-OP79-TANH-SAT     tanh(+1000)=" + str(tp) + "  tanh(-1000)=" + str(tn))
+    }
+
+    // ── F-OP79-GELU-TAIL ── gelu(+large)→x, gelu(-large)→0
+    total = total + 1
+    let gp = gelu_scalar(100.0)
+    let gn = gelu_scalar(0.0 - 100.0)
+    if abs_f(gp - 100.0) < 1.0e-9 && abs_f(gn) < 1.0e-9 {
+        pass = pass + 1
+        println("PASS  F-OP79-GELU-TAIL    gelu(+100)=" + str(gp) + "→100  gelu(-100)=" + str(gn) + "→0")
+    } else {
+        println("FAIL  F-OP79-GELU-TAIL    gelu(+100)=" + str(gp) + "  gelu(-100)=" + str(gn))
+    }
+
+    // ── F-OP79-NORMAL-EXACT ── clamp never engages for |arg| < 20 ⇒ byte-identical
+    total = total + 1
+    let normal = [0.0 - 5.0, 0.0 - 0.7, 0.0, 0.3, 0.7, 1.5, 5.0, 10.0, 19.0]
+    let mut exact = true
+    i = 0
+    while i < len(normal) {
+        let a = tanh_scalar(normal[i])
+        let b = tanh_unclamped(normal[i])
+        if a != b { exact = false }
+        i = i + 1
+    }
+    if exact {
+        pass = pass + 1
+        println("PASS  F-OP79-NORMAL-EXACT tanh clamp byte-identical to unclamped for |arg|<20 (max|Δ|=0)")
+    } else {
+        println("FAIL  F-OP79-NORMAL-EXACT clamp changed a normal-range value")
+    }
+
+    println("=== OP-79: " + to_string(pass) + "/" + to_string(total) + " PASS ===")
+    if pass == total {
+        println("PASS — nn.gelu / nn.tanh are overflow-safe: finite over the full range, exact")
+        println("saturation in the tail, BYTE-IDENTICAL to the old form in the normal range.")
+    } else {
+        println("FAIL — overflow guard regression")
+    }
+}
