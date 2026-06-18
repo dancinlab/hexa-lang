@@ -1,0 +1,22 @@
+device=cuda experts=8 epochs=12 seeds=[0, 1]
+  n_active=2 (rest=75.0%)  acc=51.35%  seeds=[51.3, 51.4]
+  n_active=3 (rest=62.5%)  acc=52.74%  seeds=[52.7, 52.8]
+  n_active=4 (rest=50.0%)  acc=53.58%  seeds=[53.4, 53.8]
+  n_active=5 (rest=37.5%)  acc=53.80%  seeds=[53.9, 53.7]
+  n_active=6 (rest=25.0%)  acc=54.72%  seeds=[54.6, 54.9]
+  n_active=7 (rest=12.5%)  acc=54.47%  seeds=[54.9, 54.1]
+  n_active=8 (rest= 0.0%)  acc=54.72%  seeds=[54.7, 54.7]
+
+===== GOLDEN MoE 억제율 SWEEP 결과 =====
+n_active   rest%  mean_acc%
+       2   75.0      51.35
+       3   62.5      52.74
+       4   50.0      53.58
+       5   37.5      53.80  <- rest 37.5% ≈ 1/e
+       6   25.0      54.72
+       7   12.5      54.47
+       8    0.0      54.72
+
+PEAK: n_active=8 rest=0.0% acc=54.72%
+VERDICT: 🔴 peak @ rest 0.0% (n_active=8) ≠ 1/e 예측(n_active=5) — 명제 falsified at this scale
+elapsed 189s
