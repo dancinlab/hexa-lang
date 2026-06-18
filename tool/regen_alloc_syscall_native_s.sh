@@ -115,6 +115,33 @@ print('  [regen_alloc_syscall] re-applied .LCstr0 rodata (x86_64 codegen gap)')
 PY
             fi
             ;;
+        arm64-linux-*)
+            # arm64-linux codegen gap (measure-8 #3553 faithful linux-arm64 wall):
+            # the arm64 codegen emits PC-relative page refs in Mach-O textual form
+            # — `adrp Xd, sym@PAGE` + `add Xd, Xn, sym@PAGEOFF` — for BOTH darwin
+            # AND linux. clang(darwin) and the internal ELF object emitter (--emit=
+            # obj) both accept `@PAGE`/`@PAGEOFF`, but the GNU assembler (`as`, used
+            # to assemble this .s seed into runtime.a on linux-arm64) does NOT — it
+            # needs the ELF aarch64 textual form: a bare symbol on `adrp` (→
+            # R_AARCH64_ADR_PREL_PG_HI21) and `:lo12:sym` on the `add` (→
+            # R_AARCH64_ADD_ABS_LO12_NC). The alloc seed references the __arena_tbl
+            # module-global (g<id>) + the "/dev/urandom" cstring (.LCstr0), so it
+            # emits these page-ref pairs (the array/map seeds reference no global/
+            # cstring → no page refs → they assembled fine, masking the gap). The C
+            # arena body was dropped in measure-8, so a failed assemble → unresolved
+            # hexa_arena_* → link fail (NOT a C-arena fallback). Translate the
+            # textual reloc syntax to GNU-as ELF form so the seed assembles.
+            # Remove once the arm64 codegen emits ELF textual relocs for the linux
+            # target directly (it already emits the correct ELF *relocations* via
+            # --emit=obj; only the --emit=asm TEXTUAL form is Mach-O-shaped).
+            if grep -q '@PAGE' "$out"; then
+                perl -i -pe 's/(adrp\s+[xw]\d+,\s*)([._A-Za-z][._A-Za-z0-9]*)\@PAGE\b/$1$2/; s/(add\s+[xw]\d+,\s*[xw]\d+,\s*)([._A-Za-z][._A-Za-z0-9]*)\@PAGEOFF\b/$1:lo12:$2/' "$out"
+                if grep -q '@PAGE' "$out"; then
+                    echo "[regen_alloc_syscall] ERROR: $triple still has @PAGE after ELF reloc translate" >&2; exit 1
+                fi
+                echo "  [regen_alloc_syscall] translated @PAGE/@PAGEOFF → ELF :lo12: (arm64-linux GNU-as codegen gap)"
+            fi
+            ;;
     esac
     # Sanity: the stripped seed must NOT export main.
     if grep -qE '^[[:space:]]*\.globl[[:space:]]+_?main$' "$out"; then
