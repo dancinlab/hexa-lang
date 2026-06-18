@@ -1,0 +1,1363 @@
+{
+  "mode": "scan",
+  "limit": 100000,
+  "target": 6,
+  "sieve_time_s": 0.126,
+  "scan_time_s": 118.772,
+  "unique_equations": [
+    {
+      "lhs": "n",
+      "rhs": "sopfr+1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n",
+      "rhs": "sigma/phi",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n",
+      "rhs": "sigma/phi",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n-1",
+      "rhs": "tau+1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n-1",
+      "rhs": "sopfr",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n-2",
+      "rhs": "tau",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n-2",
+      "rhs": "phi^2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n-2",
+      "rhs": "sopfr-1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n-2",
+      "rhs": "sigma_m1*2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n-2",
+      "rhs": "sigma_m1^2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n+2",
+      "rhs": "tau*omega",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n+2",
+      "rhs": "sigma-tau",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n/2",
+      "rhs": "sigma_m1+1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n/2",
+      "rhs": "sigma/tau",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n/3",
+      "rhs": "sigma/n",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n/3",
+      "rhs": "mu+1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n/3",
+      "rhs": "mu*2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n/3",
+      "rhs": "sigma_m1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "tau-1",
+      "rhs": "n/sigma_m1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma*2",
+      "rhs": "n*tau",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma/n",
+      "rhs": "phi",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma/n",
+      "rhs": "Omega",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma/n",
+      "rhs": "mu+1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma/n",
+      "rhs": "mu*2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma/n",
+      "rhs": "tau/phi",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma/n",
+      "rhs": "n-tau",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi+1",
+      "rhs": "n/sigma_m1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi-1",
+      "rhs": "(sigma-n)/n",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n/phi",
+      "rhs": "sigma_m1+1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n/phi",
+      "rhs": "n/sigma_m1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n/phi",
+      "rhs": "sigma/tau",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n/phi",
+      "rhs": "sopfr-omega",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi/n",
+      "rhs": "sigma_m1/n",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "omega+1",
+      "rhs": "n/sigma_m1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "Omega+1",
+      "rhs": "n/sigma_m1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "Omega-1",
+      "rhs": "(sigma-n)/n",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "rad",
+      "rhs": "sigma-n",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n/rad",
+      "rhs": "sigma_m1-1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n/rad",
+      "rhs": "(sigma-n)/n",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "rad/n",
+      "rhs": "sigma_m1-1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "rad/n",
+      "rhs": "(sigma-n)/n",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "rad/n",
+      "rhs": "n-sopfr",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "mu",
+      "rhs": "(sigma-n)/n",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "mu*2",
+      "rhs": "n-tau",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "mu^2",
+      "rhs": "(sigma-n)/n",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma_m1",
+      "rhs": "n-tau",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma_m1-1",
+      "rhs": "n-sopfr",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma_m1*2",
+      "rhs": "n-phi",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma_m1^2",
+      "rhs": "n-phi",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n/sigma_m1",
+      "rhs": "sigma/tau",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n/sigma_m1",
+      "rhs": "sopfr-omega",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n/sigma_m1",
+      "rhs": "3",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma_m1/n",
+      "rhs": "phi/rad",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma*phi",
+      "rhs": "n*tau",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma/phi",
+      "rhs": "sigma-n",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma*omega",
+      "rhs": "n*tau",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma-n",
+      "rhs": "sigma/phi",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "(sigma-n)/n",
+      "rhs": "n-sopfr",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n*omega",
+      "rhs": "12",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n+tau",
+      "rhs": "10",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n*tau",
+      "rhs": "24",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n-tau",
+      "rhs": "2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n-sopfr",
+      "rhs": "1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "tau",
+      "rhs": "phi^2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "tau",
+      "rhs": "sigma_m1*2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "tau",
+      "rhs": "sigma_m1^2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "tau",
+      "rhs": "rad-phi",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "tau-1",
+      "rhs": "sigma_m1+1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "tau-1",
+      "rhs": "sigma/tau",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "tau^2",
+      "rhs": "sigma+tau",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma",
+      "rhs": "rad*2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma",
+      "rhs": "phi*rad",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma",
+      "rhs": "rad*omega",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi",
+      "rhs": "mu+1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi",
+      "rhs": "mu*2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi",
+      "rhs": "sigma_m1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi",
+      "rhs": "tau/phi",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi+1",
+      "rhs": "sigma_m1+1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi-1",
+      "rhs": "mu",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi-1",
+      "rhs": "sigma_m1-1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi*2",
+      "rhs": "omega^2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi*2",
+      "rhs": "sopfr-1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi*2",
+      "rhs": "sigma_m1*2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi*2",
+      "rhs": "sigma_m1^2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi*2",
+      "rhs": "rad-phi",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi^2",
+      "rhs": "omega*2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi^2",
+      "rhs": "sigma_m1*2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi^2",
+      "rhs": "sigma_m1^2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi^2",
+      "rhs": "phi+omega",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "omega^2",
+      "rhs": "phi+omega",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "Omega",
+      "rhs": "sigma_m1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "Omega+1",
+      "rhs": "sigma_m1+1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "Omega-1",
+      "rhs": "sigma_m1-1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "Omega*2",
+      "rhs": "sigma_m1*2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "Omega*2",
+      "rhs": "rad-phi",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "Omega^2",
+      "rhs": "sigma_m1*2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "Omega^2",
+      "rhs": "sigma_m1^2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "Omega^2",
+      "rhs": "phi+omega",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sopfr-1",
+      "rhs": "sigma_m1*2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sopfr-1",
+      "rhs": "sigma_m1^2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "rad",
+      "rhs": "tau+phi",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "rad",
+      "rhs": "sigma/phi",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "rad",
+      "rhs": "phi+tau",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "rad",
+      "rhs": "sigma/phi",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "mu",
+      "rhs": "sigma_m1-1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "mu+1",
+      "rhs": "sigma_m1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "mu*2",
+      "rhs": "sigma_m1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "mu*2",
+      "rhs": "tau/phi",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "mu^2",
+      "rhs": "sigma_m1-1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma_m1",
+      "rhs": "tau/phi",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma_m1+1",
+      "rhs": "sigma/tau",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma_m1+1",
+      "rhs": "sopfr-omega",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma_m1*2",
+      "rhs": "phi*omega",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma_m1*2",
+      "rhs": "phi+omega",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma_m1*2",
+      "rhs": "rad-phi",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma_m1^2",
+      "rhs": "phi*omega",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma_m1^2",
+      "rhs": "phi+omega",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma_m1^2",
+      "rhs": "rad-phi",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "tau*phi",
+      "rhs": "phi+rad",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma*phi",
+      "rhs": "tau*rad",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi+omega",
+      "rhs": "4",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi*rad",
+      "rhs": "12",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi+rad",
+      "rhs": "phi*tau",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi+rad",
+      "rhs": "8",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma-phi",
+      "rhs": "10",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma-tau",
+      "rhs": "8",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "rad-phi",
+      "rhs": "4",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n",
+      "rhs": "6",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n-1",
+      "rhs": "5",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n-2",
+      "rhs": "4",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n+2",
+      "rhs": "8",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "2n",
+      "rhs": "12",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n/2",
+      "rhs": "3",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "n/3",
+      "rhs": "2",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "sigma_m1+1",
+      "rhs": "n/sigma_m1",
+      "solutions": [
+        6
+      ]
+    },
+    {
+      "lhs": "phi*omega",
+      "rhs": "phi+omega",
+      "solutions": [
+        6
+      ]
+    }
+  ],
+  "few_solution_equations": [
+    {
+      "lhs": "n-2",
+      "rhs": "omega*2",
+      "solutions": [
+        4,
+        6
+      ]
+    },
+    {
+      "lhs": "n-2",
+      "rhs": "omega^2",
+      "solutions": [
+        3,
+        6
+      ]
+    },
+    {
+      "lhs": "n-2",
+      "rhs": "Omega*2",
+      "solutions": [
+        6,
+        8
+      ]
+    },
+    {
+      "lhs": "n-2",
+      "rhs": "Omega^2",
+      "solutions": [
+        3,
+        6
+      ]
+    },
+    {
+      "lhs": "n-2",
+      "rhs": "phi+omega",
+      "solutions": [
+        6,
+        9
+      ]
+    },
+    {
+      "lhs": "n-2",
+      "rhs": "rad-phi",
+      "solutions": [
+        3,
+        6
+      ]
+    },
+    {
+      "lhs": "n+2",
+      "rhs": "tau*phi",
+      "solutions": [
+        4,
+        6
+      ]
+    },
+    {
+      "lhs": "n+2",
+      "rhs": "phi+rad",
+      "solutions": [
+        3,
+        6
+      ]
+    },
+    {
+      "lhs": "n+2",
+      "rhs": "phi*tau",
+      "solutions": [
+        4,
+        6
+      ]
+    },
+    {
+      "lhs": "n/2",
+      "rhs": "omega+1",
+      "solutions": [
+        4,
+        6
+      ]
+    },
+    {
+      "lhs": "n/2",
+      "rhs": "Omega+1",
+      "solutions": [
+        6,
+        8
+      ]
+    },
+    {
+      "lhs": "n/3",
+      "rhs": "omega",
+      "solutions": [
+        3,
+        6
+      ]
+    },
+    {
+      "lhs": "n/3",
+      "rhs": "Omega",
+      "solutions": [
+        3,
+        6
+      ]
+    },
+    {
+      "lhs": "n/3",
+      "rhs": "tau/phi",
+      "solutions": [
+        3,
+        6
+      ]
+    },
+    {
+      "lhs": "n/3",
+      "rhs": "n-tau",
+      "solutions": [
+        3,
+        6
+      ]
+    },
+    {
+      "lhs": "tau-1",
+      "rhs": "n/phi",
+      "solutions": [
+        4,
+        6
+      ]
+    },
+    {
+      "lhs": "phi-1",
+      "rhs": "n/rad",
+      "solutions": [
+        3,
+        6
+      ]
+    },
+    {
+      "lhs": "phi-1",
+      "rhs": "rad/n",
+      "solutions": [
+        3,
+        6
+      ]
+    },
+    {
+      "lhs": "n/phi",
+      "rhs": "Omega+1",
+      "solutions": [
+        2,
+        6
+      ]
+    },
+    {
+      "lhs": "omega*2",
+      "rhs": "n-phi",
+      "solutions": [
+        4,
+        6
+      ]
+    },
+    {
+      "lhs": "Omega",
+      "rhs": "n-tau",
+      "solutions": [
+        3,
+        6
+      ]
+    },
+    {
+      "lhs": "Omega*2",
+      "rhs": "n-phi",
+      "solutions": [
+        6,
+        16
+      ]
+    },
+    {
+      "lhs": "mu",
+      "rhs": "n-sopfr",
+      "solutions": [
+        4,
+        6
+      ]
+    },
+    {
+      "lhs": "mu^2",
+      "rhs": "n-sopfr",
+      "solutions": [
+        4,
+        6
+      ]
+    },
+    {
+      "lhs": "tau/phi",
+      "rhs": "n-tau",
+      "solutions": [
+        3,
+        6
+      ]
+    },
+    {
+      "lhs": "tau+omega",
+      "rhs": "sigma-n",
+      "solutions": [
+        6,
+        9
+      ]
+    },
+    {
+      "lhs": "sigma-n",
+      "rhs": "6",
+      "solutions": [
+        6,
+        25
+      ]
+    },
+    {
+      "lhs": "n-phi",
+      "rhs": "4",
+      "solutions": [
+        6,
+        8
+      ]
+    },
+    {
+      "lhs": "tau",
+      "rhs": "phi*2",
+      "solutions": [
+        2,
+        6
+      ]
+    },
+    {
+      "lhs": "tau-1",
+      "rhs": "phi+1",
+      "solutions": [
+        6,
+        12
+      ]
+    },
+    {
+      "lhs": "tau*2",
+      "rhs": "sigma-tau",
+      "solutions": [
+        5,
+        6
+      ]
+    },
+    {
+      "lhs": "sigma",
+      "rhs": "12",
+      "solutions": [
+        6,
+        11
+      ]
+    },
+    {
+      "lhs": "sigma*2",
+      "rhs": "tau*rad",
+      "solutions": [
+        6,
+        32760
+      ]
+    },
+    {
+      "lhs": "sigma*2",
+      "rhs": "24",
+      "solutions": [
+        6,
+        11
+      ]
+    },
+    {
+      "lhs": "phi",
+      "rhs": "omega",
+      "solutions": [
+        2,
+        6
+      ]
+    },
+    {
+      "lhs": "phi+1",
+      "rhs": "omega+1",
+      "solutions": [
+        2,
+        6
+      ]
+    },
+    {
+      "lhs": "phi+1",
+      "rhs": "sigma/tau",
+      "solutions": [
+        6,
+        30
+      ]
+    },
+    {
+      "lhs": "phi-1",
+      "rhs": "omega-1",
+      "solutions": [
+        2,
+        6
+      ]
+    },
+    {
+      "lhs": "phi-1",
+      "rhs": "mu^2",
+      "solutions": [
+        3,
+        6
+      ]
+    },
+    {
+      "lhs": "phi*2",
+      "rhs": "omega*2",
+      "solutions": [
+        2,
+        6
+      ]
+    },
+    {
+      "lhs": "phi*2",
+      "rhs": "phi+omega",
+      "solutions": [
+        2,
+        6
+      ]
+    },
+    {
+      "lhs": "phi^2",
+      "rhs": "omega^2",
+      "solutions": [
+        2,
+        6
+      ]
+    },
+    {
+      "lhs": "phi^2",
+      "rhs": "Omega*2",
+      "solutions": [
+        4,
+        6
+      ]
+    },
+    {
+      "lhs": "phi^2",
+      "rhs": "sopfr-1",
+      "solutions": [
+        2,
+        6
+      ]
+    },
+    {
+      "lhs": "phi^2",
+      "rhs": "phi*omega",
+      "solutions": [
+        2,
+        6
+      ]
+    },
+    {
+      "lhs": "phi^2",
+      "rhs": "rad-phi",
+      "solutions": [
+        2,
+        6
+      ]
+    },
+    {
+      "lhs": "omega+1",
+      "rhs": "sigma/tau",
+      "solutions": [
+        3,
+        6
+      ]
+    },
+    {
+      "lhs": "omega+1",
+      "rhs": "sopfr-omega",
+      "solutions": [
+        3,
+        6
+      ]
+    },
+    {
+      "lhs": "omega*2",
+      "rhs": "sopfr-1",
+      "solutions": [
+        3,
+        6
+      ]
+    },
+    {
+      "lhs": "omega*2",
+      "rhs": "phi+omega",
+      "solutions": [
+        2,
+        6
+      ]
+    }
+  ]
+}

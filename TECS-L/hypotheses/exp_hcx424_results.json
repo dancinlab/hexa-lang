@@ -1,0 +1,55 @@
+{
+  "results": [
+    {
+      "hidden_dim": 2,
+      "total_params": 320,
+      "field_acc": 9.166666666666666,
+      "eq_acc": 7.777777777777778,
+      "full_acc": 8.61111111111111,
+      "field_advantage": 0.5555555555555554,
+      "tension": 1.1701035463313691
+    },
+    {
+      "hidden_dim": 8,
+      "total_params": 1220,
+      "field_acc": 23.61111111111111,
+      "eq_acc": 6.944444444444445,
+      "full_acc": 23.61111111111111,
+      "field_advantage": 0.0,
+      "tension": 2.1100571302202837
+    },
+    {
+      "hidden_dim": 32,
+      "total_params": 4820,
+      "field_acc": 34.72222222222222,
+      "eq_acc": 11.11111111111111,
+      "full_acc": 35.55555555555556,
+      "field_advantage": -0.8333333333333357,
+      "tension": 2.2261985504384345
+    },
+    {
+      "hidden_dim": 128,
+      "total_params": 19220,
+      "field_acc": 60.0,
+      "eq_acc": 7.222222222222221,
+      "full_acc": 58.88888888888889,
+      "field_advantage": 1.1111111111111072,
+      "tension": 2.1895347801834517
+    },
+    {
+      "hidden_dim": 512,
+      "total_params": 76820,
+      "field_acc": 62.5,
+      "eq_acc": 10.0,
+      "full_acc": 60.27777777777777,
+      "field_advantage": 2.2222222222222285,
+      "tension": 2.91512254908401
+    }
+  ],
+  "fits": {
+    "linear_r2": 0.708367395377554,
+    "log_r2": 0.37762072170856975,
+    "power_r2": 0.2410097565242567,
+    "best_fit": "linear"
+  }
+}
