@@ -216,6 +216,12 @@ resolve_native_rt_hi_seed() {
     [ "${HEXA_ZEROC_RT_HI:-x}" = "0" ] && return 0   # explicit opt-out
     [ -f build/rt_hi_native.o ] && { export HEXA_ZEROC_RT_HI=1; return 0; }
     local seed="" tgt="${TARGET:-}"
+    # The static-musl edge build sets TARGET=linux-x86_64-musl. The frozen native
+    # .s seeds are ELF-object/x86_64-ABI artifacts shared by glibc and musl (same
+    # SysV ABI, same ELF format), so map the `-musl` variant onto its base target
+    # here — otherwise the case below falls through to the no-seed `#else` path
+    # and the dropped C arena/element bodies leave rt_*_native undefined at link.
+    tgt="${tgt%-musl}"
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
         "Darwin arm64") tgt="darwin-arm64" ;;
         "Linux x86_64") tgt="linux-x86_64" ;;
@@ -269,6 +275,12 @@ resolve_native_array_core_seed() {
     [ "${HEXA_RT_ARRAY_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
     [ -f build/array_core_native.o ] && { export HEXA_RT_ARRAY_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
+    # The static-musl edge build sets TARGET=linux-x86_64-musl. The frozen native
+    # .s seeds are ELF-object/x86_64-ABI artifacts shared by glibc and musl (same
+    # SysV ABI, same ELF format), so map the `-musl` variant onto its base target
+    # here — otherwise the case below falls through to the no-seed `#else` path
+    # and the dropped C arena/element bodies leave rt_*_native undefined at link.
+    tgt="${tgt%-musl}"
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
         "Darwin arm64") tgt="darwin-arm64" ;;
         "Linux x86_64") tgt="linux-x86_64" ;;
@@ -305,6 +317,12 @@ resolve_native_map_core_seed() {
     [ "${HEXA_RT_MAP_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
     [ -f build/map_core_native.o ] && { export HEXA_RT_MAP_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
+    # The static-musl edge build sets TARGET=linux-x86_64-musl. The frozen native
+    # .s seeds are ELF-object/x86_64-ABI artifacts shared by glibc and musl (same
+    # SysV ABI, same ELF format), so map the `-musl` variant onto its base target
+    # here — otherwise the case below falls through to the no-seed `#else` path
+    # and the dropped C arena/element bodies leave rt_*_native undefined at link.
+    tgt="${tgt%-musl}"
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
         "Darwin arm64") tgt="darwin-arm64" ;;
         "Linux x86_64") tgt="linux-x86_64" ;;
@@ -352,6 +370,12 @@ resolve_native_alloc_syscall_seed() {
     [ "${HEXA_RT_ALLOC_NATIVE:-1}" = "0" ] && return 0   # default-ON; =0 to revert
     [ -f build/alloc_syscall_native.o ] && return 0
     local seed="" tgt="${TARGET:-}"
+    # The static-musl edge build sets TARGET=linux-x86_64-musl. The frozen native
+    # .s seeds are ELF-object/x86_64-ABI artifacts shared by glibc and musl (same
+    # SysV ABI, same ELF format), so map the `-musl` variant onto its base target
+    # here — otherwise the case below falls through to the no-seed `#else` path
+    # and the dropped C arena/element bodies leave rt_*_native undefined at link.
+    tgt="${tgt%-musl}"
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
         "Darwin arm64") tgt="darwin-arm64" ;;
         "Linux x86_64") tgt="linux-x86_64" ;;
