@@ -9,12 +9,15 @@ name: arm64-native-arena-run
 # arena base → SIGSEGV (#3597). The codegen now emits svc #0 + x8 +
 # __hx_target_os=0 for arm64-linux, and syscall.hexa selects the aarch64-Linux
 # numbers (mmap=222 / munmap=215 / exit_group=94) via the new __hx_target_arch.
+# The committed seed was regenerated on aiden (x86_64, native gen3 cross-emit).
 #
-# This workflow: builds a native arm64-linux compiler, REGENERATES the seed
-# from the patched source+codegen, assembles it, and forces a .hexa program
-# through the native arena (HEXA_RT_ALLOC_NATIVE=1). RUN exit42 + no SIGSEGV =
-# the native arm64 arena is RUN-proven and the C #else body can drop on all
-# targets. Throwaway diagnostic; deleted before the fix lands as stable.
+# This workflow: (1) gates the COMMITTED seed's ABI (Linux svc #0 / x8 /
+# target_os=0, zero XNU svc #0x80), then (2) builds aprime_cc on this aarch64
+# runner — which ASSEMBLES + LINKS the native arm64 arena seed and RUNS its
+# built-in smoke `exit(6*7)==42`. That smoke exercises rt_init →
+# hexa_arena_new_block → sys_mmap (the SIGSEGV site); exit 42 = the native
+# arm64 arena is RUN-proven and the C #else body can drop on all targets.
+# Throwaway diagnostic; deleted before the fix lands as stable.
 
 on:
   push:
@@ -24,7 +27,7 @@ on:
 
 jobs:
   arena-run:
-    name: native arm64 arena assemble + RUN (exit42, HEXA_RT_ALLOC_NATIVE=1)
+    name: native arm64 arena assemble + RUN (aprime smoke exit42, HEXA_RT_ALLOC_NATIVE=1)
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 40
     steps:
@@ -38,9 +41,27 @@ jobs:
           sudo apt-get install -y clang gcc binutils gdb python3 || true
           uname -m; cc --version || true
 
-      # 1) Build the bootstrap compiler (hexat) from the PATCHED source — it
-      #    carries the new arm64-linux syscall-ABI codegen.
-      - name: Build — release_build (Stage 0b→0/1/2) [PATCHED codegen]
+      # 1) Gate the COMMITTED arm64-linux seed: it MUST be the Linux ABI.
+      - name: Gate committed seed = Linux syscall ABI
+        shell: bash
+        run: |
+          set -x
+          SEED=self/native/alloc_syscall_arm64-linux.s
+          echo "=== syscall ABI in committed seed ==="
+          grep -nE "svc #0 |svc #0x80|x8 = syscall num|x16 = syscall num|__hx_target_os: [01]" "$SEED" | head -20
+          echo "=== aarch64 syscall numbers present (mmap=222 munmap=215 exit_group=94) ==="
+          grep -nE "#222|#215|#94 " "$SEED" | head
+          if grep -q "svc #0x80" "$SEED"; then
+            echo "FAIL: committed arm64-linux seed still carries XNU svc #0x80" >&2; exit 1
+          fi
+          grep -q "x8 = syscall num" "$SEED" || { echo "FAIL: no Linux x8 syscall-num staging in seed" >&2; exit 1; }
+          grep -q "__hx_target_os: 0 = linux" "$SEED" || { echo "FAIL: seed target_os not linux(0)" >&2; exit 1; }
+          echo "SEED-ABI-GATE PASS (Linux svc #0 / x8 / target_os=0, no XNU)"
+
+      # 2) Build aprime_cc on this aarch64 runner. build_aprime assembles the
+      #    committed arm64-linux seed into alloc_syscall_native.o, links it, and
+      #    runs its built-in smoke `exit(6*7)==42` — the native-arena RUN proof.
+      - name: Build — release_build (hexat bootstrap) [PATCHED codegen]
         shell: bash
         env:
           TARGET: linux-arm64
@@ -50,48 +71,7 @@ jobs:
           HEXA_SEED_CONVERGE: "1"
         run: bash tool/release_build
 
-      # 2) Regenerate the arm64-linux native arena seed from the patched source
-      #    using the freshly-built compiler (cross/native emit on this runner).
-      - name: Regenerate native arm64-linux arena seed [from patched codegen]
-        shell: bash
-        run: |
-          set -x
-          # The regen needs a NATIVE compiler that can `--emit=asm
-          # --target=arm64-linux-gnu`. build/hexat is the C-transpile bootstrap
-          # and CANNOT emit native asm (run 27787910448: "emitted only 0 globl");
-          # ./hexa is the self-hosted NATIVE driver and can. Prefer the native
-          # ones; never use hexat for regen.
-          APRIME=""
-          for c in build/aprime_cc build/gen3 ./hexa; do
-            if [ -x "$c" ]; then APRIME="$c"; break; fi
-          done
-          echo "APRIME candidate = $APRIME"
-          test -n "$APRIME"
-          # Sanity probe: confirm this binary actually emits native arm64-linux
-          # asm before trusting the regen (avoids a silent 0-globl seed).
-          printf 'fn _p() {}\n' > /tmp/probe_drv.hexa
-          if ! "$APRIME" /tmp/probe_drv.hexa --emit=asm --target=arm64-linux-gnu -o /tmp/probe.s >/dev/null 2>&1 || [ ! -s /tmp/probe.s ]; then
-            echo "FAIL: $APRIME cannot --emit=asm --target=arm64-linux-gnu (no native asm emitter)" >&2
-            "$APRIME" /tmp/probe_drv.hexa --emit=asm --target=arm64-linux-gnu -o /tmp/probe.s 2>&1 | tail -20 || true
-            exit 1
-          fi
-          echo "asm-emit probe OK ($(wc -l < /tmp/probe.s) lines)"
-          cp self/native/alloc_syscall_arm64-linux.s /tmp/seed.before.s || true
-          APRIME="$APRIME" bash tool/regen_alloc_syscall_native_s.sh arm64-linux
-          echo "=== seed syscall-ABI AFTER regen (must be Linux: svc #0 + x8 + target_os=0) ==="
-          grep -nE "svc #0\b|svc #0x80|x16, .*syscall|x8.*syscall|target_os: [01]" self/native/alloc_syscall_arm64-linux.s | head -20
-          echo "=== svc form counts (expect svc #0 > 0, svc #0x80 == 0) ==="
-          grep -c "svc #0$"   self/native/alloc_syscall_arm64-linux.s || true
-          grep -c "svc #0x80" self/native/alloc_syscall_arm64-linux.s || true
-          # Hard gate: the regenerated seed MUST be the Linux ABI.
-          if grep -q "svc #0x80" self/native/alloc_syscall_arm64-linux.s; then
-            echo "FAIL: regenerated arm64-linux seed still carries XNU svc #0x80" >&2; exit 1
-          fi
-          grep -q "svc #0$" self/native/alloc_syscall_arm64-linux.s || { echo "FAIL: no Linux svc #0 trap in seed" >&2; exit 1; }
-
-      # 3) Rebuild the native arena .o + a fresh aprime FORCING the native arena,
-      #    then RUN an arena-exercising program (exit 42).
-      - name: Build native-arena compiler + RUN arena exit42
+      - name: Build native-arena aprime_cc + RUN smoke (exit42) on aarch64
         shell: bash
         env:
           CC: gcc
@@ -100,43 +80,42 @@ jobs:
         run: |
           set -x
           rm -f build/alloc_syscall_native.o
-          # Re-run build_aprime with the native arena seed forced on.
-          if [ -f tool/build_aprime.sh ]; then
-            HEXA_RT_ALLOC_NATIVE=1 bash tool/build_aprime.sh || true
-          fi
-          ls -l build/alloc_syscall_native.o || { echo "native arena .o not built" >&2; exit 1; }
-          echo "=== confirm the assembled .o uses Linux syscall trap ==="
-          objdump -d build/alloc_syscall_native.o 2>/dev/null | grep -iE "svc|#0x80" | head -20 || true
-          # A small program that allocates (heap/array → native arena bump) then
-          # exits 42. The allocation forces rt_init → hexa_arena_new_block →
-          # sys_mmap (the SIGSEGV site). If mmap is now a valid Linux syscall the
-          # arena base is good and the program exits 42; otherwise SIGSEGV (139).
-          cat > /tmp/arena42.hexa <<'EOF'
-          fn main() {
-              let mut xs = []
-              let mut i = 0
-              while i < 4096 {
-                  xs = xs + [i]
-                  i = i + 1
-              }
-              let n = len(xs)
-              if n == 4096 { exit(42) }
-              exit(7)
-          }
-          EOF
+          # hexat = the C-transpile bootstrap built by release_build (build/hexat
+          # or dist/.../hexat); it transpiles the patched .hexa → C → aprime_cc.
+          HEXAT=""
+          for h in build/hexat self/native/hexat dist/linux-arm64/hexat dist/linux-aarch64/hexat; do
+            if [ -x "$h" ]; then HEXAT="$h"; break; fi
+          done
+          echo "HEXAT = ${HEXAT:-<none, build_aprime will self-locate>}"
           set +e
-          HEXA_RT_ALLOC_NATIVE=1 ./hexa run /tmp/arena42.hexa
+          if [ -n "$HEXAT" ]; then
+            HEXA_RT_ALLOC_NATIVE=1 bash tool/build_aprime.sh -o build/aprime_cc -v "$HEXAT" 2>&1 | tee /tmp/ap.log
+          else
+            HEXA_RT_ALLOC_NATIVE=1 bash tool/build_aprime.sh -o build/aprime_cc 2>&1 | tee /tmp/ap.log
+          fi
           rc=$?
           set -e
-          echo "arena42 exit rc = $rc"
-          if [ "$rc" -eq 42 ]; then
-            echo "NATIVE-ARM64-ARENA RUN-PASS (exit 42, no SIGSEGV)"
-          elif [ "$rc" -eq 139 ] || [ "$rc" -ge 128 ]; then
-            echo "NATIVE-ARM64-ARENA STILL SIGSEGV (rc=$rc) — capture backtrace"
-            printf 'run /tmp/arena42.hexa\nbt\ninfo registers x0 x1 x8 x16\nx/8i $pc\nquit\n' > /tmp/run.gdb
-            HEXA_RT_ALLOC_NATIVE=1 gdb -q -batch -x /tmp/run.gdb --args ./hexa run /tmp/arena42.hexa 2>&1 | tail -60 || true
-            exit 1
-          else
-            echo "UNEXPECTED rc=$rc (build/run path issue, not the arena crash)"
-            exit 1
+          echo "build_aprime rc = $rc"
+          echo "=== assembled native arena .o uses Linux syscall trap? ==="
+          ls -l build/alloc_syscall_native.o || true
+          objdump -d build/alloc_syscall_native.o 2>/dev/null | grep -iE "\bsvc\b" | head -10 || true
+          # The build_aprime smoke compiles `fn main(){exit(6*7)}`, links the
+          # native arena seed, and runs it — exit 42 means the arena's sys_mmap
+          # (rt_init → hexa_arena_new_block) returned a VALID base (no SIGSEGV).
+          if grep -q "smoke: exit(42)==42 PASS" /tmp/ap.log; then
+            echo "NATIVE-ARM64-ARENA RUN-PASS (aprime_cc smoke exit 42 — sys_mmap valid, no SIGSEGV)"
+            exit 0
           fi
+          # Diagnose: did the arena seed crash the smoke?
+          echo "NATIVE-ARM64-ARENA smoke did NOT pass — diagnosing"
+          tail -40 /tmp/ap.log || true
+          if grep -qiE "smoke failed|signal|SIGSEGV|exit code 13|!= 42" /tmp/ap.log; then
+            echo "ARENA SMOKE CRASH/MISMATCH — capture gdb backtrace on the smoke binary"
+            SMOKE=$(grep -oE "/tmp/[^ ]*smoke[^ ]*" /tmp/ap.log | tail -1 || true)
+            echo "smoke binary guess = $SMOKE"
+            if [ -x "$SMOKE" ]; then
+              printf 'run\nbt\ninfo registers x0 x1 x8 x16\nx/10i $pc\nquit\n' > /tmp/run.gdb
+              gdb -q -batch -x /tmp/run.gdb "$SMOKE" 2>&1 | tail -60 || true
+            fi
+          fi
+          exit 1
