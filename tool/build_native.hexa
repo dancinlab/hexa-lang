@@ -44,7 +44,23 @@ let script_path = av[1]
 let hexa_dir = exec("cd \"$(dirname '" + script_path + "')/../\" && pwd").trim()
 let build_dir = hexa_dir + "/build/native_tmp"
 let mut hexat_path = if env("HEXA_V2") != "" { env("HEXA_V2") } else { hexa_dir + "/self/native/hexat" }
-let cc = if env("CC") != "" { env("CC") } else { "clang" }
+// Resolve a host C compiler via a fallback chain so a pod with only
+// gcc/cc (no clang) still works: CC > NATIVE_CC > clang > cc > gcc.
+fn _bn_which(name) {
+    let r = exec_with_status("command -v " + name + " >/dev/null 2>&1")
+    if r[1] != 0 { return "" }
+    return name
+}
+fn _resolve_cc() {
+    if env("CC") != "" { return env("CC") }
+    if env("NATIVE_CC") != "" { return env("NATIVE_CC") }
+    if _bn_which("clang") != "" { return "clang" }
+    if _bn_which("cc") != "" { return "cc" }
+    if _bn_which("gcc") != "" { return "gcc" }
+    die("no host C compiler found — install clang (or gcc), or set CC=<compiler>")
+    return ""
+}
+let cc = _resolve_cc()
 let uname = exec("uname -s").trim()
 
 // ── --clean ────────────────────────────────────────────────────

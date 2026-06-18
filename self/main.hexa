@@ -1280,6 +1280,58 @@ fn hxc_dump(path: string) -> i64 {
     return 0
 }
 
+// ── host C compiler resolution (clang → cc → gcc fallback) ───
+// The C-transpile build/run path needs a host C compiler. clang was
+// historically hardcoded, which fails instantly on a pod that only has
+// gcc/cc (no clang). Resolve a real compiler via a fallback chain so the
+// pipeline works on any *nix dev/CI host. Priority:
+//   CC env > NATIVE_CC env > clang on PATH > cc on PATH > gcc on PATH.
+// Mirrors tool/build_hexa_cli_native.hexa _default_native_cc(); adds the
+// gcc tail + a fatal error when nothing is found.
+fn _cc_which(name) {
+    let r = exec_with_status("command -v " + name + " 2>/dev/null")
+    if r[1] != 0 { return "" }
+    return r[0].trim()
+}
+// Memoize so the PATH probes run once per process (the build/run path
+// resolves the compiler several times — rt.o compile, link, etc.).
+let mut __host_cc_cached = ""
+fn host_cc() {
+    if __host_cc_cached != "" { return __host_cc_cached }
+    let env_cc = env("CC")
+    if env_cc != "" { __host_cc_cached = env_cc; return env_cc }
+    let env_ncc = env("NATIVE_CC")
+    if env_ncc != "" { __host_cc_cached = env_ncc; return env_ncc }
+    if _cc_which("clang") != "" { __host_cc_cached = "clang"; return "clang" }
+    if _cc_which("cc") != "" { __host_cc_cached = "cc"; return "cc" }
+    if _cc_which("gcc") != "" { __host_cc_cached = "gcc"; return "gcc" }
+    eprintln("error: no host C compiler found — install clang (or gcc), or set CC=<compiler>")
+    exit(1)
+}
+// is_clang_cc: true when the resolved compiler is clang (used to gate
+// clang-only flags like -fbracket-depth that gcc rejects). zig cc and a
+// CC=clang override both count as clang.
+fn _cc_is_clang() {
+    let cc = host_cc()
+    let probe = exec("'" + cc + "' --version 2>/dev/null | head -1 | tr -d ' \\n\\t'")
+    if probe.contains("clang") { return true }
+    return false
+}
+// cc_deep_nest_cflags: large generated TUs (500+ embedded source segments)
+// can exceed clang's default bracket-nesting limit. `-fbracket-depth=4096`
+// is clang-only — gcc has a much higher default and rejects the flag — so
+// emit it only when the resolved compiler is clang. `-Wno-trigraphs` is
+// accepted by both clang and gcc, so it is always safe to include.
+// Returns a trailing-space-padded string (mirrors os_clang_cflags shape).
+let mut __cc_deep_nest_cached = "?"
+fn cc_deep_nest_cflags() {
+    if __cc_deep_nest_cached != "?" { return __cc_deep_nest_cached }
+    let mut f = "-Wno-trigraphs "
+    if _cc_is_clang() { f = f + "-fbracket-depth=4096 " }
+    __cc_deep_nest_cached = f
+    return f
+}
+
 // ── OS-specific clang flags (Mac vs Linux/glibc) ────────────
 // glibc 는 POSIX/GNU 확장(strdup/popen/pclose) 을 기본 숨김 → `-D_GNU_SOURCE`.
 // 수학 심볼(sqrt/pow/fmod) 은 자동 링크 안 됨 → `-lm`.
@@ -1424,9 +1476,9 @@ fn cmd_cc() {
         if rt_stamp == "stale" {
             let mut rt_cmd = ""
             if uname == "Linux" {
-                rt_cmd = "clang -O2 -D_GNU_SOURCE -c '" + rt_c + "' -o '" + rt_o + "' 2>&1"
+                rt_cmd = host_cc() + " -O2 -D_GNU_SOURCE -c '" + rt_c + "' -o '" + rt_o + "' 2>&1"
             } else {
-                rt_cmd = "clang -O2 -c '" + rt_c + "' -o '" + rt_o + "' 2>&1"
+                rt_cmd = host_cc() + " -O2 -c '" + rt_c + "' -o '" + rt_o + "' 2>&1"
             }
             println("  [rt] " + rt_cmd)
             let rt_out = exec(rt_cmd)
@@ -1435,11 +1487,11 @@ fn cmd_cc() {
     }
     let mut cmd = ""
     if uname == "Linux" {
-        cmd = "clang -O2 -D_GNU_SOURCE -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexat' -lm 2>&1"
+        cmd = host_cc() + " -O2 -D_GNU_SOURCE -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexat' -lm 2>&1"
     } else {
         // macOS (Darwin) — libSystem 이 libm 자동 포함, _GNU_SOURCE 무의미.
         // 단, `-I self` 는 runtime.h 경로 해석에 반드시 필요.
-        cmd = "clang -O2 -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexat' 2>&1"
+        cmd = host_cc() + " -O2 -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexat' 2>&1"
     }
     println("  " + cmd)
     let r = exec(cmd)
@@ -1932,7 +1984,7 @@ fn cmd_regen_cc() {
     // ubu-2: the merged regen C now compiles to .o with ZERO errors and the
     // link produces a working hexat that emits `__arr_raw_len` INLINE
     // (HX_ARR_LEN) instead of the stale hexa_call1(__arr_raw_len, ...).
-    let cc_obj = "clang -O2 " + os_clang_cflags() + "-I '" + __hxroot + "/self' -x c -c -Wno-trigraphs -fbracket-depth=4096 " + out_new + " -o /tmp/hexa_cc.new.o 2>&1 | head -40"
+    let cc_obj = host_cc() + " -O2 " + os_clang_cflags() + "-I '" + __hxroot + "/self' -x c -c " + cc_deep_nest_cflags() + out_new + " -o /tmp/hexa_cc.new.o 2>&1 | head -40"
     println("  " + cc_obj)
     let cc_obj_out = exec(cc_obj)
     if len(cc_obj_out) > 0 { println(cc_obj_out) }
@@ -1958,7 +2010,7 @@ fn cmd_regen_cc() {
             let mut rt_defs = ""
             if uname_link == "Linux" { rt_defs = "-D_GNU_SOURCE " }
             else if uname_link == "Darwin" { rt_defs = "-D_DARWIN_C_SOURCE " }
-            let rt_cmd = "clang -O2 " + rt_defs + "-c '" + rt_c + "' -o '" + rt_o + "' 2>&1"
+            let rt_cmd = host_cc() + " -O2 " + rt_defs + "-c '" + rt_c + "' -o '" + rt_o + "' 2>&1"
             println("  [rt] auto-build (self/runtime.o missing): " + rt_cmd)
             let rt_out = exec(rt_cmd)
             if len(rt_out) > 0 { println(rt_out) }
@@ -1973,7 +2025,7 @@ fn cmd_regen_cc() {
                 return
             }
         }
-        let cc_link = "clang -O2 /tmp/hexa_cc.new.o '" + __hxroot + "/self/runtime.o' -o /tmp/hexat.new" + os_clang_ldflags() + " 2>&1 | head -40"
+        let cc_link = host_cc() + " -O2 /tmp/hexa_cc.new.o '" + __hxroot + "/self/runtime.o' -o /tmp/hexat.new" + os_clang_ldflags() + " 2>&1 | head -40"
         println("  " + cc_link)
         let cc_link_out = exec(cc_link)
         if len(cc_link_out) > 0 { println(cc_link_out) }
@@ -3112,7 +3164,7 @@ fn cmd_build(src, out, c_only, target, shared) {
             println("  [native rt] NOTE: HEXA_NATIVE_RT_PTR_ALLOC=1 alone leaves alloc/free pair-mismatched (mmap + libc free = UB). Add HEXA_NATIVE_RT_PTR_FREE=1 for pair-safe closure (#1326 residual (B)).")
         }
         let __ntmp = exec("printf '%s.tmp.%s' '" + out + "' \"$$\"")
-        let __nlink = "clang -O2 " + __nshared_link + os_clang_cflags() + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __nself + "' " + __nrt_native_o + "'" + __nasm + "' '" + __nrtc + "' -o '" + __ntmp + "'" + os_clang_ldflags() + " 2>&1"
+        let __nlink = host_cc() + " -O2 " + __nshared_link + os_clang_cflags() + cc_deep_nest_cflags() + "-I '" + __nself + "' " + __nrt_native_o + "'" + __nasm + "' '" + __nrtc + "' -o '" + __ntmp + "'" + os_clang_ldflags() + " 2>&1"
         println("  [native 2/2] " + __nlink)
         let __nr2 = exec(__nlink)
         if len(__nr2) > 0 { println("    " + __nr2) }
@@ -3315,7 +3367,7 @@ fn cmd_build(src, out, c_only, target, shared) {
                 // keep the hot `runtime.<sha>.o` hit path zero-cost).
                 _hexa_cache_gc(_rt_cache, _hexa_cache_cap_mb(), _hexa_cache_ttl_days())
                 let _rt_tmp = _rt_cand + ".tmp." + to_string(mono_ns())
-                let _rt_cc = "clang -O2 " + os_clang_cflags() + strict_fp_cflags(__runtime_c) + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' -c '" + __runtime_c + "' -o '" + _rt_tmp + "' 2>&1"
+                let _rt_cc = host_cc() + " -O2 " + os_clang_cflags() + strict_fp_cflags(__runtime_c) + cc_deep_nest_cflags() + "-I '" + __self_dir + "' -c '" + __runtime_c + "' -o '" + _rt_tmp + "' 2>&1"
                 // Hardening (#2415 follow-up): the runtime.<sha>.o cache
                 // compile was the last raw `exec(_rt_cc)` clang on a popen pipe
                 // in the build path. Route it through _hexa_clang_capped (file
@@ -3342,7 +3394,7 @@ fn cmd_build(src, out, c_only, target, shared) {
     if _same_tu { _rt_input = "" }
     else if len(_rt_obj) > 0 { _rt_input = "'" + _rt_obj + "'" }
     if len(target) == 0 {
-        compile = "clang -O2 " + _shared_cflags + os_clang_cflags() + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " " + _rt_input + " -o '" + tmp + "'" + os_clang_ldflags() + " 2>&1"
+        compile = host_cc() + " -O2 " + _shared_cflags + os_clang_cflags() + _strict + cc_deep_nest_cflags() + "-I '" + __self_dir + "' " + c_file + " " + _rt_input + " -o '" + tmp + "'" + os_clang_ldflags() + " 2>&1"
     } else {
         let zt = target_zig_triple(target)
         if len(zt) == 0 {
@@ -3381,7 +3433,7 @@ fn cmd_build(src, out, c_only, target, shared) {
     if shared == "1" { _tmp_test = "-e" }
     let tmp_chk = exec("test " + _tmp_test + " '" + tmp + "' && printf yes || printf no")
     if tmp_chk != "yes" {
-        let _cc_label = "clang"
+        let _cc_label = host_cc()
         if len(target) > 0 { _cc_label = "zig cc" }
         println("error: " + _cc_label + " compile failed — binary not produced: " + tmp)
         exit(1)
