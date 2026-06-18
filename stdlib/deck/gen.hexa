@@ -200,3 +200,83 @@ pub fn deck_pod_qe_bootstrap() -> string {
     s = s + "fi\n"
     return s
 }
+
+// deck_pod_elph_runner — the canonical DISK-SAFE q-batched el-ph PRODUCTION
+// runner. Emit this instead of hand-writing a per-campaign run script (a
+// demiurge RTSC session hand-wrote it three times — d_deck_always). It carries
+// every guard that cost a wasted compute cycle to learn (트러블슈팅 재발금지):
+//   G1 DISK-SAFE q-batching: each irreducible q needs O(40GB) dvscf scratch, so
+//      a single pod cannot hold all q at once. Run 2-q batches; after each, save
+//      the small elph.inp_lambda.<q> + *.dyn* then DROP the large out/_ph0
+//      scratch before the next batch (a prior all-q-at-once run disk-fulled).
+//   G2 recover=.true. (set in ph.in) rides pod reboots; a batch resumes from its
+//      _ph0 checkpoint. Per-batch _ph0 wipe is only AFTER that batch's JOB DONE.
+//   G3 k-parallel: -npool $NPOOL (k-grid is embarrassingly parallel) + -np $NP,
+//      both env-overridable; defaults 192/6 suit a many-core pod.
+//   G4 SELF-GUARD at launch: kill any stale ph.x/ph_b (would corrupt _ph0), drop
+//      stale scratch. The SCF (out/*.save) is PRESERVED — only _ph0 is cleared.
+//   G5 FAIL-LOUD: a batch with no "JOB DONE" prints the tail + exits non-zero
+//      (never silently continues past a broken q).
+//   G6 q-range args START_Q END_Q for d_qforge_parallel multi-pod sharding.
+// Self-locating (cd to its own dir) so it is portable across pods/cells; uses a
+// prefix-agnostic *.dyn* glob. env-robust: micromamba else conda.
+pub fn deck_pod_elph_runner() -> string {
+    let mut s = "#!/usr/bin/env bash\n"
+    s = s + "# el-ph PRODUCTION — disk-safe q-batched runner (hexa deck canonical).\n"
+    s = s + "set -uo pipefail\n"
+    s = s + "D=\"$(cd \"$(dirname \"$0\")\" && pwd)\"; cd \"$D\" || exit 2\n"
+    s = s + "# G4 self-guard: drop stale ph.x + _ph0 (SCF out/*.save preserved).\n"
+    s = s + "pkill -9 -f \"ph.x\" 2>/dev/null || true\n"
+    s = s + "pkill -9 -f \"ph_b\" 2>/dev/null || true\n"
+    s = s + "sleep 3\n"
+    s = s + "rm -rf out/_ph0 2>/dev/null || true\n"
+    s = s + "# env-robust: micromamba else conda.\n"
+    s = s + "if [ -x \"$HOME/bin/micromamba\" ]; then RUN=\"$HOME/bin/micromamba run -n qe\"\n"
+    s = s + "elif command -v conda >/dev/null 2>&1; then RUN=\"conda run -n qe\"\n"
+    s = s + "else echo 'FATAL: no micromamba/conda — run setup_env.sh first'; exit 1; fi\n"
+    s = s + "export OMP_NUM_THREADS=1\n"
+    s = s + "NP=\"${NP:-192}\"; NPOOL=\"${NPOOL:-6}\"\n"
+    s = s + "MPI=\"$RUN mpirun -np $NP --allow-run-as-root --bind-to none\"\n"
+    s = s + "mkdir -p elph_out\n"
+    s = s + "SQ=\"${1:-1}\"; LQ=\"${2:-99}\"\n"
+    s = s + "echo \"=== ELPH PROD q$SQ..$LQ on $(hostname) NP=$NP npool=$NPOOL ===\"\n"
+    s = s + "q=$SQ\n"
+    s = s + "while [ \"$q\" -le \"$LQ\" ]; do\n"
+    s = s + "  e=$((q+1)); [ \"$e\" -gt \"$LQ\" ] && e=$LQ\n"
+    s = s + "  if [ -f \"elph_out/.done_${q}_${e}\" ]; then echo \"batch q$q-$e already done\"; q=$((e+1)); continue; fi\n"
+    s = s + "  sed -e \"s/^  ! *start_q.*/  start_q = $q/\" -e \"s/^  ! *last_q.*/  last_q = $e/\" ph.in > \"ph_b${q}_${e}.in\"\n"
+    s = s + "  echo \"=== BATCH q$q-$e START $(date +%H:%M) ===\"\n"
+    s = s + "  $MPI ph.x -npool $NPOOL -in \"ph_b${q}_${e}.in\" > \"ph_b${q}_${e}.out\" 2>&1\n"
+    s = s + "  if grep -qi \"JOB DONE\" \"ph_b${q}_${e}.out\"; then\n"
+    s = s + "    cp ./*.dyn* elph_out/ 2>/dev/null || true\n"
+    s = s + "    cp elph.inp_lambda.* elph_out/ 2>/dev/null || true\n"
+    s = s + "    touch \"elph_out/.done_${q}_${e}\"\n"
+    s = s + "    rm -rf out/_ph0 2>/dev/null || true\n"
+    s = s + "    echo \"=== BATCH q$q-$e DONE $(date +%H:%M) ===\"\n"
+    s = s + "  else\n"
+    s = s + "    echo \"=== BATCH q$q-$e FAIL ===\"; tail -20 \"ph_b${q}_${e}.out\"; exit 1\n"
+    s = s + "  fi\n"
+    s = s + "  q=$((e+1))\n"
+    s = s + "done\n"
+    s = s + "echo \"=== ELPH PROD q$SQ..$LQ ALL DONE ===\"\n"
+    return s
+}
+
+// deck_pod_short_launcher — robust DETACHED launcher for the el-ph runner. A
+// SHORT remote command (`bash launch.sh`) survives a flaky vast/RunPod proxy
+// where an inline `nohup ... &` one-liner gets truncated mid-stream (트러블슈팅
+// 재발금지 — a demiurge session lost a launch to exactly that). Kills any stale
+// runner/ph.x, then backgrounds run_prod.sh (same dir) with q-range args.
+pub fn deck_pod_short_launcher() -> string {
+    let mut s = "#!/usr/bin/env bash\n"
+    s = s + "# short detached launcher for run_prod.sh (hexa deck canonical).\n"
+    s = s + "pkill -9 -f run_prod.sh 2>/dev/null || true\n"
+    s = s + "pkill -9 -f \"ph.x\"     2>/dev/null || true\n"
+    s = s + "sleep 3\n"
+    s = s + "D=\"$(cd \"$(dirname \"$0\")\" && pwd)\"; cd \"$D\" || exit 2\n"
+    s = s + "rm -rf out/_ph0 2>/dev/null || true\n"
+    s = s + "SQ=\"${1:-1}\"; LQ=\"${2:-99}\"\n"
+    s = s + "nohup bash \"$D/run_prod.sh\" \"$SQ\" \"$LQ\" > \"$D/prod.log\" 2>&1 &\n"
+    s = s + "echo \"LAUNCHED run_prod q$SQ..$LQ pid=$!\"\n"
+    return s
+}
