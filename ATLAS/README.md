@@ -4478,7 +4478,7 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
            J₂·φ² = n·τ²     ⟺  ψ·φ=n·τ   (= σφ=nτ at n=6, since ψ(6)=σ(6)=12)
   ✅ EXHAUSTION CONFIRMED: every shape beyond the 2-term multiplicative core either (a) reduces
      to it, (b) is trivial (primewise / family-universal), or (c) is dry (additive / other
-     special-n). The TECS-L arithmetic-identity DFS is closed at this basis; further yield is
+     special-n). The ATLAS arithmetic-identity DFS is closed at this basis; further yield is
      unbounded-by-construction (compose core × structural facts), not new mathematics. ∎
 ```
 

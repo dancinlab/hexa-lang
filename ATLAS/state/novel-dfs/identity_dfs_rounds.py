@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TECS-L NOVEL math-DFS — multi-shape rounds to exhaustion (exact integer · c2).
+"""ATLAS NOVEL math-DFS — multi-shape rounds to exhaustion (exact integer · c2).
 Rounds: (1) product A·B=C·D special-n-unique, (2) family-universal (∀prime/p²/2p/pq),
 (3) perfect-number characterizations, (4) other special-n, (5) coarse-basis {σ₃,Ω,ω},
 (6) additive A+B=C+D. Finds the rich vein = multiplicative {6,12,28} characterizations;

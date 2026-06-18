@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TECS-L NOVEL 수학 DFS — 산술함수 곱 항등식 A·B = C·D 의 특이 해집합 탐색.
+"""ATLAS NOVEL 수학 DFS — 산술함수 곱 항등식 A·B = C·D 의 특이 해집합 탐색.
 순수 정수연산(부동소수 없음·c2). σφ=nτ⟺{1,6} (M10) 류의 'n=6 유일 특성식'을 DFS로 확장.
 함수: σ(sig)·σ₂(sig2)·φ(phi)·τ(tau)·n·sopfr·rad·J₂(Jordan)·ψ(Dedekind)."""
 import itertools, sys
