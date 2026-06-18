@@ -360,12 +360,17 @@ resolve_native_map_core_seed() {
 # frozen self/native/alloc_syscall_*.s seed (a full HexaArenaBlock-chain arena +
 # syscall layer, C-ABI equivalent to runtime_core_emit.hexa's C arena) into
 # build/alloc_syscall_native.o so the arena C `#else` (under HEXA_RT_ALLOC_NATIVE)
-# can drop. DEFAULT-ON (measure-8, 2026-06-18): the whole-runtime byteeq/faithful/
-# RSS-OOM measurement (measure-6/7) confirmed the native arena replaces the C arena
-# wholesale (mark 16-byte struct-return ABI + heapify↔envelope wiring both proven),
-# so this is now auto-on like array/map. The C arena body has been DROPPED from
-# runtime_core_emit.hexa — set HEXA_RT_ALLOC_NATIVE=0 to revert (build then fails to
-# resolve hexa_arena_*; revert is via git, not a live C fallback).
+# is bypassed. DEFAULT-ON (measure-8, all 3 targets RUN-proven): x86_64 + darwin-arm64
+# (measure-6/7) + linux-arm64 (r1 2026-06-19, full release_build on aarch64) confirmed
+# the native arena replaces the C arena wholesale (mark 16-byte struct-return ABI +
+# heapify↔envelope wiring all proven), so this is auto-on like array/map. The C arena
+# body in runtime_core_emit.hexa's `#else` arm is RETAINED as the no-seed / revert
+# safety net (byteeq-inert while native is active — it lives in !HEXA_RT_ALLOC_NATIVE
+# and is never compiled on a seed target); set HEXA_RT_ALLOC_NATIVE=0 to revert all
+# targets to that live C arena, or HEXA_RT_ALLOC_NATIVE_ARM64=0 for linux-arm64 only.
+# Dropping that #else body (the genuine substrate byte reduction) is deferred until
+# the linux-arm64 native arena has soaked on the edge channel (invariant: no #3597
+# regression; the fallback stays a live net until soak, not just one full-build PASS).
 resolve_native_alloc_syscall_seed() {
     [ "${HEXA_RT_ALLOC_NATIVE:-1}" = "0" ] && return 0   # default-ON; =0 to revert
     [ -f build/alloc_syscall_native.o ] && return 0
@@ -381,19 +386,22 @@ resolve_native_alloc_syscall_seed() {
         "Linux x86_64") tgt="linux-x86_64" ;;
         "Linux aarch64"|"Linux arm64") tgt="linux-arm64" ;;
     esac
-    # linux-arm64 RELEASE WALL (v0.241.0/.1 arm64 SIGSEGV root-cause): measure-8
-    # (#3568) flipped this seed from opt-IN to default-ON, which on linux-arm64
-    # activates the native arm64 arena seed (self/native/alloc_syscall_arm64-linux.s)
-    # for the FIRST time in a release. That seed returns a bad allocation pointer
-    # on aarch64 — the stage-0 transpiler `hexa_v2` then SIGSEGVs in
-    # hxlcl_memcpy <- hexa_struct_pack_map <- type_check while transpiling
-    # module_loader.hexa (gdb-confirmed on ubuntu-24.04-arm, dest=x0=0x0). x86_64
-    # + darwin-arm64 are unaffected (their seeds are RUN-proven). Until the arm64
-    # seed is fixed + RUN-proven, KEEP linux-arm64 on the C arena fallback (the
-    # green-through-v0.240.0 path; restored live in runtime_core_emit.hexa #3583).
-    # Override with HEXA_RT_ALLOC_NATIVE_ARM64=1 once the seed is proven.
-    if [ "$tgt" = "linux-arm64" ] && [ "${HEXA_RT_ALLOC_NATIVE_ARM64:-0}" != "1" ]; then
-        echo "[stage_resolve_runtime_a] RT-NATIVE ALLOC-RB: linux-arm64 native arena seed UNPROVEN (v0.241 SIGSEGV) — staying on C arena (HEXA_RT_ALLOC_NATIVE_ARM64=1 to force)" >&2
+    # linux-arm64 native arm64 arena: RUN-PROVEN (measure-8 r1, 2026-06-19). The
+    # v0.241.0/.1 arm64 SIGSEGV (#3597) root-caused to the arm64-linux arena seed
+    # carrying the Darwin/XNU syscall ABI (svc #0x80 + x16 + target_os=darwin) and
+    # x86_64 syscall NUMBERS — mmap mis-syscalled → bad arena base → stage-0 hexa_v2
+    # SIGSEGV in hxlcl_memcpy <- hexa_struct_pack_map <- type_check. #3615 fixed the
+    # arm64 codegen syscall ABI (svc #0 + x8 + target_os=0 + aarch64 numbers
+    # mmap=222/munmap=215/exit_group=94) and regenerated the seed. measure-8 r1 then
+    # ran the FULL tool/release_build on ubuntu-24.04-arm with the native arm64 arena
+    # ON: Stage 0/1/2 + the exact #3597 site (`module_loader.hexa` transpile) PASSED
+    # → `[release_build] PASS — ./hexa built (TARGET=linux-arm64)` (the narrow exit42
+    # smoke of #3615 did not exercise that site; the full path now does). So
+    # linux-arm64 joins x86_64 + darwin-arm64 in the uniform default-ON native-arena
+    # regime (the array/map seed pattern). HEXA_RT_ALLOC_NATIVE_ARM64=0 reverts
+    # linux-arm64 to the no-seed path; HEXA_RT_ALLOC_NATIVE=0 reverts all targets.
+    if [ "$tgt" = "linux-arm64" ] && [ "${HEXA_RT_ALLOC_NATIVE_ARM64:-1}" = "0" ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE ALLOC-RB: linux-arm64 native arena seed disabled via HEXA_RT_ALLOC_NATIVE_ARM64=0 — no-seed path" >&2
         return 0
     fi
     case "$tgt" in
