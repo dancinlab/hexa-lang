@@ -1276,17 +1276,26 @@ pub fn rt_null_coal(a: HexaVal, b: HexaVal) -> HexaVal {
 
 // TAG_INT same-tag branch. Both operands guaranteed TAG_INT by the C
 // wrapper's tag guard. `(a <= b) && (a >= b)` ⟺ `HX_INT(a) == HX_INT(b)`.
+// 🚫 수렴[금지]: @no_arena 를 빼지 말 것 — native arena(HEXA_RT_ALLOC_NATIVE=1, measure-8)
+//   에서 hexa_arena_rewind(seed)가 `block == 0` 을 `call hexa_eq` 로 lower → C hexa_eq
+//   TAG_INT → rt_eq_int. arena-wrapped 면 그 return(__hexa_fn_arena_return)이
+//   scope_pop → native hexa_arena_rewind 재진입 → 무한재귀 SIGSEGV. 이 비교 프리미티브
+//   들은 scope-pop 경로 안에서 호출되므로 arena scope 를 절대 건드리면 안 된다
+//   (bool 만 반환, 할당 0 — @no_arena 의미상 정합. cf. rt_to_string_array).
+@no_arena
 pub fn rt_eq_int(a: HexaVal, b: HexaVal) -> bool {
     return a <= b && a >= b
 }
 
 // TAG_FLOAT same-tag branch (byte-exact incl. NaN — see header).
+@no_arena
 pub fn rt_eq_float(a: HexaVal, b: HexaVal) -> bool {
     return a <= b && a >= b
 }
 
 // TAG_BOOL same-tag branch. Phrased without `==`/comparison on HexaVals
 // so it is recursion-safe with no fast-path dependence.
+@no_arena
 pub fn rt_eq_bool(a: HexaVal, b: HexaVal) -> bool {
     let ab: bool = a as bool
     let bb: bool = b as bool
@@ -1670,21 +1679,28 @@ pub fn rt_add_slow(a: HexaVal, b: HexaVal) -> HexaVal {
 // type_of-`==`(hexa_eq) → rt_eq → string-eq cmp → hexa_cmp_le → rt_cmp_le = INFINITE
 // RECURSION. The code is tested with __raw_code_is (C int-eq) — NEVER hexa `==`/`<`
 // (→ rt_eq → cmp). `||` is logical. Throw message uses type names (vs C tags).
+// 🚫 수렴[금지]: @no_arena 필수 — rt_eq_int 의 `a <= b`/`a >= b` 가 hexa_cmp_le/ge → C →
+//   rt_cmp_le/ge 로 들어오므로 이들도 scope-pop 경로 안에 있다. arena-wrapped 면
+//   rt_eq_int 만 @no_arena 로 막아도 rt_cmp_le 의 return 이 scope_pop → rewind 재진입.
+@no_arena
 pub fn rt_cmp_lt(a: HexaVal, b: HexaVal) -> bool {
     let c = __raw_cmp3(a, b)
     if __raw_code_is(c, 4) { throw "cannot compare " + type_of(a) + " with " + type_of(b) + " (operator <)" }
     return __raw_code_is(c, 0)
 }
+@no_arena
 pub fn rt_cmp_gt(a: HexaVal, b: HexaVal) -> bool {
     let c = __raw_cmp3(a, b)
     if __raw_code_is(c, 4) { throw "cannot compare " + type_of(a) + " with " + type_of(b) + " (operator >)" }
     return __raw_code_is(c, 2)
 }
+@no_arena
 pub fn rt_cmp_le(a: HexaVal, b: HexaVal) -> bool {
     let c = __raw_cmp3(a, b)
     if __raw_code_is(c, 4) { throw "cannot compare " + type_of(a) + " with " + type_of(b) + " (operator <=)" }
     return __raw_code_is(c, 0) || __raw_code_is(c, 1)
 }
+@no_arena
 pub fn rt_cmp_ge(a: HexaVal, b: HexaVal) -> bool {
     let c = __raw_cmp3(a, b)
     if __raw_code_is(c, 4) { throw "cannot compare " + type_of(a) + " with " + type_of(b) + " (operator >=)" }
