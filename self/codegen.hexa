@@ -8418,7 +8418,13 @@ fn gen2_expr(node) {
                 return cg_string_sym("str_parse_float") + "(" + obj + ")"
             }
             if method == "pad_left" {
-                return "hexa_pad_left(" + obj + ", " + gen2_expr(node.args[0]) + ")"
+                // QA-L2: the 2-arg hexa_pad_left(s, width) hardcodes a SPACE
+                // pad and silently DROPS the user's pad-char arg, so
+                // `"7".pad_left(3,"0")` returned "  7" not "007". Route to the
+                // 3-arg rt_str_pad_left(s, width, pad) — the same form used by
+                // `pad_start` above and the gen2_method_builtin fallback (which
+                // is why `.pad_right(...)` already honored its pad char).
+                return cg_string_sym("str_pad_left") + "(" + obj + ", " + gen2_expr(node.args[0]) + ", " + gen2_expr(node.args[1]) + ")"
             }
             // Last-resort fallback — route anything unhandled through
             // gen2_method_builtin which has the comprehensive array method
