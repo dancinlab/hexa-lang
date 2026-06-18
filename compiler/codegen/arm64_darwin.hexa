@@ -1911,14 +1911,14 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // base → SIGSEGV (linux-arm64 native arena wall, #3597). 0-arg: x1 =
         // payload, x0 = tag = TAG_INT(0). ADD-only leaf (no `bl`).
         if s.op == "__hx_target_os" {
-            let mut __os_imm = "#1"
-            let mut __os_why = "__hx_target_os: 1 = darwin"
+            let mut os_imm = "#1"
+            let mut os_why = "__hx_target_os: 1 = darwin"
             if opts.target_triple == "arm64-linux-gnu" {
-                __os_imm = "#0"
-                __os_why = "__hx_target_os: 0 = linux"
+                os_imm = "#0"
+                os_why = "__hx_target_os: 0 = linux"
             }
             buf.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
-                             _arm64_op_label(__os_imm), __os_why))
+                             _arm64_op_label(os_imm), os_why))
             buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
                              _arm64_op_label("#0"), "__hx_target_os: TAG_INT"))
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
@@ -2107,16 +2107,16 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // (#3597). This is the Z3 arena foundation — a native syscall-emit
         // (mmap/munmap path) with NO C shim. Verified via getuid (#24).
         if s.op == "__hx_syscall0" && len(s.args) >= 1 {
-            let mut __numreg = "x16"
-            let mut __trap = "#0x80"
+            let mut num_reg = "x16"
+            let mut trap_imm = "#0x80"
             if opts.target_triple == "arm64-linux-gnu" {
-                __numreg = "x8"
-                __trap = "#0"
+                num_reg = "x8"
+                trap_imm = "#0"
             }
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // num → x1
-            buf.push(_arm64_instr2("mov", _arm64_op_reg(__numreg),
-                             _arm64_op_reg("x1"), "__hx_syscall0: " + __numreg + " = syscall num"))
-            buf.push(_arm64_instr1("svc", _arm64_op_label(__trap),
+            buf.push(_arm64_instr2("mov", _arm64_op_reg(num_reg),
+                             _arm64_op_reg("x1"), "__hx_syscall0: " + num_reg + " = syscall num"))
+            buf.push(_arm64_instr1("svc", _arm64_op_label(trap_imm),
                              "__hx_syscall0: syscall trap"))
             buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"),
                              _arm64_op_reg("x0"), "__hx_syscall0: payload = result"))
@@ -2144,7 +2144,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // number is parked in x15 (callee-clobber, ∉ {x0..x5}) until AFTER the
         // fill, then landed in x8 immediately before the trap.
         if s.op == "__hx_syscall6" && len(s.args) >= 7 {
-            let __linux = opts.target_triple == "arm64-linux-gnu"
+            let elf_abi = opts.target_triple == "arm64-linux-gnu"
             let tmps = ["x9", "x10", "x11", "x12", "x13", "x14"]
             let mut ai = 1
             while ai <= 6 {
@@ -2154,7 +2154,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 ai = ai + 1
             }
             buf = _hv_load(buf, s.args[0], st, rm, "x7", "x8")  // num → x8
-            if __linux {
+            if elf_abi {
                 // park num in x15; x8 (the linux number reg) is needed as fill scratch.
                 buf.push(_arm64_instr2("mov", _arm64_op_reg("x15"),
                                  _arm64_op_reg("x8"), "__hx_syscall6: stage syscall num"))
@@ -2168,7 +2168,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                                  _arm64_op_reg(tmps[mi]), "__hx_syscall6: arg -> x" + to_string(mi)))
                 mi = mi + 1
             }
-            if __linux {
+            if elf_abi {
                 buf.push(_arm64_instr2("mov", _arm64_op_reg("x8"),
                                  _arm64_op_reg("x15"), "__hx_syscall6: x8 = syscall num"))
                 buf.push(_arm64_instr1("svc", _arm64_op_label("#0"),
