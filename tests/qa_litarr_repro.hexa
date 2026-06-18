@@ -1,0 +1,18 @@
+fn main() {
+    let a = [10, 20, 30]
+    println("len=" + to_string(len(a)))
+    println("a0=" + to_string(a[0]))
+    println("a1=" + to_string(a[1]))
+    println("a2=" + to_string(a[2]))
+
+    let z = [0, 0, 0, 0]
+    println("z len=" + to_string(len(z)))
+    println("z0=" + to_string(z[0]) + " z3=" + to_string(z[3]))
+
+    let mut p = []
+    p.push(10)
+    p.push(20)
+    p.push(30)
+    println("p0=" + to_string(p[0]) + " p1=" + to_string(p[1]) + " p2=" + to_string(p[2]))
+    println("DONE")
+}

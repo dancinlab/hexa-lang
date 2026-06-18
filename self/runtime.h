@@ -497,6 +497,8 @@ HexaVal hexa_valstruct_new_v(HexaVal, HexaVal, HexaVal, HexaVal, HexaVal,
                              HexaVal, HexaVal, HexaVal, HexaVal, HexaVal,
                              HexaVal, HexaVal);                                    /* runtime.c:884 (proto), def 2774 — 12-arg */
 HexaVal rt_write_bytes(HexaVal path, HexaVal arr);                                 /* runtime.c:788 (proto), def 5196 */
+HexaVal rt_write_bytes_append(HexaVal path, HexaVal arr);                          /* runtime_core.c:7659 — P4 streaming append; proto was MISSING here → C-transpile path emitted an implicit-decl call that fails to compile (QA-L1) */
+HexaVal rt_write_bytes_append_v(HexaVal path, HexaVal arr);                        /* runtime_core.c — append variant (TAG_VALSTRUCT items, interp dispatch) */
 HexaVal hexa_ceil(HexaVal v);                                                      /* runtime.c:5483 */
 HexaVal hexa_floor(HexaVal v);                                                     /* runtime.c:5464 */
 HexaVal hexa_math_isfinite(HexaVal x);                                             /* runtime.c:849 (proto) */
