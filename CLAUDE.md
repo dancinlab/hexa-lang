@@ -31,7 +31,7 @@ hexa-lang/
 ├─ self/            — self-hosting bootstrap (compiler written in .hexa that builds itself)
 ├─ tool/            — hx package manager (hx.hexa) · atlas CLI (atlas_cli.hexa) · linker (hexa_ld.hexa)
 ├─ bin/             — CLI front-end shims (hexa-run · hexa-fast · hexa-commit · hexa-push)
-├─ TECS-L/          — `README.md` 단일 원장 = 수학 지도 (발견 엔진 · 거시↔양자) · atlas/ retired
+├─ ATLAS/           — `README.md` 단일 원장 = 수학 지도 (발견 엔진 · 거시↔양자) · 구 TECS-L/·atlas/(소문자) retired
 ├─ spec/            — language + format specification
 ├─ tests/, test/    — smoke · core-invariant · regression suites
 ├─ bench/           — performance benchmarks
@@ -52,13 +52,16 @@ This file is the single governance SSOT (md 단일화) — edit directives here,
   without a scoped subject or a `WIPE-OK:` trailer.
 - **atlas fold** — fold atlas nodes only into `compiler/atlas/embedded.gen.hexa` via
   branch → commit → PR (never elsewhere).
-- **TECS-L math-map** — 발견 엔진(수론·물리·우주·생명)의 사람용 원장은 `TECS-L/README.md`
-  **단일 SSOT** (n=6 축0 출발 · 거시↔양자 수학 지도). 지도는 README.md 에 **점진적으로
-  그려나간다** (one-shot 아님 · 검증된 노드/다리를 계속 채움). 검증 atom 의 기계 SSOT 는
-  `compiler/atlas/embedded.gen.hexa`, history 는 CHANGELOG + git. **retired**: `atlas/` 폴더 ·
-  TECS-L 다문서(`TECS-L.md`·`TECS-L.log.md`·`n6.md`·`docs/`·`millennium/`·`.verdicts/`) ·
-  `.tape` 원장(CLAIMS 등). **n=6 은 지도 중심이 아니라 노드 1개** (lattice-as-tool · 외부
-  영역 anchor 금지) · 미판독·미검증·lattice-fit·미증명 conjecture 는 🔵 승격 금지(c2).
+- **ATLAS math-map** — 발견 엔진(수론·물리·우주·생명)의 사람용 원장은 `ATLAS/README.md`
+  **단일 SSOT** (n=6 축0 출발 · 거시↔양자 수학 지도 · 구 `TECS-L/` 에서 개명 2026-06-18).
+  지도는 README.md 에 **점진적으로 그려나간다** (one-shot 아님 · 검증된 노드/다리를 계속
+  채움). 검증 atom 의 기계 SSOT 는 `compiler/atlas/embedded.gen.hexa`, history 는 CHANGELOG +
+  git. **수학 DFS 는 `hexa loop --dfs` 로 진행** (external-LLM 단일 surface · 예산캡 + verify
+  게이트 · ad-hoc 스크립트 금지), 결과는 `ATLAS/README.md` 연대기 + `ATLAS/CLAUDE.md` 에 기록.
+  **retired**: 구 `atlas/`(소문자) 폴더 · `TECS-L/` 명칭 · TECS-L 다문서(`TECS-L.md`·
+  `TECS-L.log.md`·`n6.md`·`docs/`·`millennium/`·`.verdicts/`) · `.tape` 원장(CLAIMS 등).
+  **n=6 은 지도 중심이 아니라 노드 1개** (lattice-as-tool · 외부 영역 anchor 금지) ·
+  미판독·미검증·lattice-fit·미증명 conjecture 는 🔵 승격 금지(c2).
 - **verify is ambient** — a successful `🔵`/`🟢` `hexa verify` auto-folds the verified atom
   into the atlas; verify is the single canonical surface — no separate `atlas register` ceremony.
 - **domain audits** — land as `hexa verify --<axis> <domain>` subcommands (one CLI surface,
