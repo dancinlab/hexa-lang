@@ -1,6 +1,0 @@
-=== E14 : hexa verify --expr tau 33550336 26 ===
-verify --expr tau(33550336)=26
-  calc   = 26  == expected 26
-  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
-  absorb = ⚠ atlas register did NOT confirm fold; invocation:
-           hexa atlas register --from-verify tau 33550336 26
