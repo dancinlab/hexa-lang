@@ -1,0 +1,133 @@
+F-M6-ROUTEB-CABI-BRIDGE — measure-6 SOLVED the val-arena C-ABI half: the
+   native arena seed uses the HexaVal 2-register ABI, the C runtime declared
+   the seed entries as plain C scalars. The bridge eliminates the
+   `tag 3 - tag 0` miscompile AND the self-recursion. The wall is now precisely
+   re-classified to a SEED-CODEGEN defect (global tag not persisted to .data),
+   not the ABI and not a heapify .hexa port. (2026-06-18, aiden Linux x86_64, RAN)
+================================================================================
+LANE: RT-NATIVE-ZEROC Route B, routeb measure-6 (val-arena heapify).
+GOAL: make HEXA_RT_ALLOC_NATIVE=1 whole-compiler transpile miscompile-zero so the
+      arena C `#else` can drop / runtime_core.c wc can shrink (first substrate ls
+      reduction).
+
+================================================================================
+1. ROOT CAUSE (decisive, objdump + gdb on aiden x86_64)
+================================================================================
+measure-5's classification ("val-arena heapify .hexa full port") was WRONG, and
+its supporting measurements were taken against a STALE build/hexat (stage_prebuild
+_hexat no-ops when build/hexat exists → the supposed native/OFF tests reused a
+binary linked against a different arena). Clean-rebuild isolation revealed the
+actual root cause:
+
+The native arena seed (self/native/alloc_syscall_x86_64.s, from self/rt/alloc.hexa,
+compiled by aprime_cc) uses the HexaVal TWO-REGISTER ABI for every scalar:
+  · int ARG  → {rdi = tag, rsi = payload}
+  · RETURN   → {rax = tag, rdx = payload}
+but runtime_core_emit.hexa declared the seed entries as PLAIN C:
+  extern long hexa_arena_head(void);   extern long __blk_used(long b);
+  extern void* hexa_arena_alloc(size_t n);   (+ cur/env_lo/env_hi/blk_next/cap/data)
+A plain-C caller reads the return from rax (= the TAG, always 0) and passes the
+arg in rdi (the seed's TAG slot, leaving the payload it reads from rsi uninit).
+Consequences:
+  · hexa_arena_on()        → 0  (arena reported OFF → str_concat used malloc, so
+                                  the arena path was never even taken)
+  · hexa_arena_alloc(n)    → bogus pointer (value was in rdx; rax=tag returned)
+  · head/cur/env_lo/hi/blk_*→ 0 / garbage
+= the val-arena `cannot subtract non-numeric operand (tag 3 - tag 0)` miscompile
+(and, with a partially-correct ABI, a SIGSEGV in hexa_arena_reset/cur).
+(hexa_arena_mark/rewind/reset already MATCH the C ABI: HexaArenaMark {block,used}
+is the same 16-byte layout the seed returns via __hx_make_val; reset is void(void).)
+
+================================================================================
+2. THE FIX (Route B C-ABI bridge — byteeq-inert, opt-in only)
+================================================================================
+self/runtime_core_emit.hexa, all under #ifdef HEXA_RT_ALLOC_NATIVE:
+  · Alias each scalar seed symbol to its TRUE HexaVal signature via
+    `extern HexaVal __hxseed_X(...) __asm__("X")` (HexaVal {tag@0,payload@8} ⇒ the
+    SysV 16-byte struct ABI passes/returns in exactly the seed's rdi:rsi / rax:rdx
+    pairs).
+  · Wrap each in a `static inline` __hxw_* that extracts HX_INT (and constructs
+    hexa_int(arg) for the arg-taking ones).
+  · A function-like #define redirects the plain call-site spelling (hexa_arena_cur()
+    etc.) to the __hxw_ wrapper, so the 36 runtime.c call sites stay textually
+    unchanged. The seed token inside __asm__("...") is a string literal → never
+    macro-expanded → the alias still binds the real seed symbol.
+  · forward decls of hexa_arena_alloc guarded under #ifndef HEXA_RT_ALLOC_NATIVE.
+
+fix1 → fix2 history: fix1 named the wrappers with the seed's OWN plain names as
+static-inline; clang emitted those as real symbols that SHADOWED the seed → the
+__asm__-aliased extern resolved back to the wrapper → INFINITE SELF-RECURSION
+(SIGSEGV stack overflow in hexa_arena_cur, RC=139). fix2's distinct __hxw_ names +
+#define redirect cured that. fix1 ALREADY removed the `tag 3 - tag 0` error,
+confirming the 2-reg ABI diagnosis.
+
+================================================================================
+3. MEASUREMENT (aiden Linux x86_64, clean isolated worktree /tmp/m6wt)
+================================================================================
+  · NATIVE build (HEXA_RT_ALLOC_NATIVE=1): runtime.c synth RC=0 (gen runtime_core.c
+    has 23 __hxw_), C compile RC=0, hexat link RC=0 (2120760 B). The C-ABI bridge
+    compiles clean — no static-decl/linkage/undefined errors.
+  · TINY native repro (string concat + println): tag-errors = 0 (the `tag 3 - tag 0`
+    miscompile is GONE) — but RC=139, SIGSEGV with this backtrace:
+        #0 __env_extend            (seed)
+        #1 hexa_arena_new_block    (seed)
+        #2 hexa_arena_alloc        (seed)   ← reached correctly = bridge works
+        #3 hexa_str_concat         (C runtime)
+        #4 hexa_add_slow … keyword_kind … tokenize_impl … main
+    The arena path is now being EXECUTED (proof the bridge fixed hexa_arena_on→1
+    and hexa_arena_alloc), and the crash is INSIDE the seed, at the FIRST block's
+    envelope update.
+  · OFF (default C arena, no seed, ALLOC-RB=0): tiny RC=0, 0 tag-errors
+    = byteeq-inert CONFIRMED (the fix is entirely #ifdef HEXA_RT_ALLOC_NATIVE).
+  (whole-flat 45k not run: tiny crashes deterministically at the FIRST arena alloc,
+   which is strictly stronger and far cheaper than the 45k run.)
+
+================================================================================
+4. NEW WALL (seed-codegen, precisely localized)
+================================================================================
+__env_extend(base, size) updates the seed's address-envelope globals
+__arena_env_lo/hi (g2/g3). The seed disasm shows it WRITES the global PAYLOAD to
+[rip+gN] but reads the global TAG from a per-FUNCTION stack slot
+(`mov rdi, [rbp-112] # tag g2 from tag-slot`) — and there are ZERO writes to
+[rip+gN+8] anywhere in the seed. So a global's TAG half is never persisted to its
+.data slot; each call reads the tag from an uninitialised stack slot → garbage tag
+→ the int comparisons (`__arena_env_lo == 0`, `base < __arena_env_lo`,
+`top > __arena_env_hi`) tag-dispatch through hexa_eq / hexa_cmp_lt / hexa_cmp_gt /
+hexa_add_slow on a corrupt tag → fault.
+
+This is a pre-existing aprime_cc MODULE-GLOBAL tagged-value codegen defect
+(F-M5-GSLOT-DATA-SLOT area: a global is a 16-byte {payload@g, tag@g+8} HexaVal, but
+the global-write path only stores the payload, never the tag, and the global-read
+path reads the tag from a stack slot). It was MASKED until now because the broken
+C-ABI made hexa_arena_on() return 0, so the arena path (and __env_extend) was never
+reached. The C-ABI bridge is what exposed it.
+
+================================================================================
+5. CLASSIFICATION + NEXT (c2 → forward progress, wall re-classified, NOT a port)
+================================================================================
+  · Route B C-ABI half = SOLVED (the `tag 3 - tag 0` miscompile + recursion are
+    gone; the arena path executes; OFF stays byteeq-inert). LANDED.
+  · measure-5's "val-arena heapify .hexa full port" wall is FALSIFIED — no heapify
+    port is needed; the C heapify logic is fine.
+  · NEW single wall = aprime_cc global tagged-value codegen: persist the global TAG
+    to [rip+gN+8] on write + read it from there (not a stack slot). Fix in the
+    codegen, regen the 3 seeds, re-measure. Expected to then pass the tiny + whole-
+    flat native transpile → arena C `#else` drop → first runtime_core.c wc / ls
+    reduction.
+
+================================================================================
+6. DEPLETION
+================================================================================
+  · C-ABI mismatch (the measure-4/5 wall): CLOSED.
+  · Seed global-tag persistence: the SINGLE remaining wall before the arena `#else`
+    drops. Narrow, codegen-localized (not an ABI, not a heapify port).
+  · All measure-6 edits landed byteeq-inert (OFF default unaffected; opt-in
+    HEXA_RT_ALLOC_NATIVE only) → genuine forward progress, shipped, not a revert.
+
+CONCLUSION: measure-6 bridged the native-arena seed's HexaVal 2-register ABI to the
+plain-C runtime surface (the real measure-4/5 root cause, which stale-hexat had
+hidden), eliminating the `tag 3 - tag 0` miscompile and the self-recursion and
+driving execution INTO the arena path. The whole-compiler still segfaults because
+of a pre-existing seed global-tag codegen defect in __env_extend — wall
+re-classified from "val-arena heapify .hexa port" to "aprime_cc global tagged-value
+.data tag-slot persistence" (measure-7). byteeq-inert.
