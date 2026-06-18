@@ -1,0 +1,223 @@
+// QA LANE L1 — io/fs full-surface harness (anima weight-loading path).
+// Each case prints PASS <name> or FAIL <name> got=.. want=..
+// Builtins exercised: write_file/read_file, write_bytes/read_file_bytes,
+// read_bytes_at (ranged), write_bytes_append, append_file, delete_file,
+// file_exists, file_size, mkdir, list_dir.
+
+fn report(name: string, ok: bool, got: string, want: string) {
+    if ok {
+        println("PASS " + name)
+    } else {
+        println("FAIL " + name + " got=" + got + " want=" + want)
+    }
+}
+
+fn arr_eq(a: [int], b: [int]) -> bool {
+    if len(a) != len(b) { return false }
+    let mut i = 0
+    while i < len(a) {
+        if a[i] != b[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn arr_str(a: [int]) -> string {
+    let mut s = "["
+    let mut i = 0
+    while i < len(a) {
+        if i > 0 { s = s + "," }
+        s = s + to_string(a[i])
+        i = i + 1
+    }
+    return s + "]"
+}
+
+fn main() {
+    let dir = "/tmp/qa_iofs_l1"
+    mkdir(dir)
+    let base = dir + "/f"
+
+    // ---- 1. write_file / read_file text round-trip ----
+    let p1 = base + "_text.txt"
+    write_file(p1, "hello world")
+    let r1 = read_file(p1)
+    report("text_roundtrip", r1 == "hello world", "\"" + r1 + "\"", "\"hello world\"")
+
+    // ---- 2. empty file ----
+    let p2 = base + "_empty.txt"
+    write_file(p2, "")
+    let r2 = read_file(p2)
+    report("empty_read_file", r2 == "", "\"" + r2 + "\"", "\"\"")
+    let r2b = read_file_bytes(p2)
+    report("empty_read_bytes", len(r2b) == 0, to_string(len(r2b)), "0")
+    report("empty_file_size", file_size(p2) == 0, to_string(file_size(p2)), "0")
+    report("empty_exists", file_exists(p2), "false", "true")
+
+    // ---- 3. missing-file error paths ----
+    let pmiss = dir + "/does_not_exist_xyz"
+    report("missing_exists", file_exists(pmiss) == false, "true", "false")
+    report("missing_read_file", read_file(pmiss) == "", "\"" + read_file(pmiss) + "\"", "\"\"")
+    report("missing_read_bytes", len(read_file_bytes(pmiss)) == 0, to_string(len(read_file_bytes(pmiss))), "0")
+    report("missing_file_size", file_size(pmiss) == 0, to_string(file_size(pmiss)), "0")
+
+    // ---- 4. binary bytes incl 0x00 and 0xFF, inline literal array ----
+    let pbin = base + "_bin.dat"
+    let inline_bytes = [0, 255, 1, 254, 128, 127, 0, 0, 255]
+    write_bytes(pbin, inline_bytes)
+    let rbin = read_file_bytes(pbin)
+    report("binary_inline_roundtrip", arr_eq(rbin, inline_bytes), arr_str(rbin), arr_str(inline_bytes))
+    report("binary_inline_size", file_size(pbin) == 9, to_string(file_size(pbin)), "9")
+
+    // ---- 5. write_bytes via let-bound array (the "all-zeros" suspect) ----
+    let zb = [0, 0, 0, 0, 0, 0, 0, 0]
+    let pz = base + "_zeros.dat"
+    write_bytes(pz, zb)
+    let rz = read_file_bytes(pz)
+    report("write_bytes_letbound_zeros", arr_eq(rz, zb), arr_str(rz), arr_str(zb))
+
+    // ---- 6. write_bytes via pushed array ----
+    let mut pushed = []
+    let mut i = 0
+    while i < 16 {
+        pushed.push(i * 7 % 256)
+        i = i + 1
+    }
+    let pp = base + "_pushed.dat"
+    write_bytes(pp, pushed)
+    let rp = read_file_bytes(pp)
+    report("write_bytes_pushed", arr_eq(rp, pushed), arr_str(rp), arr_str(pushed))
+
+    // ---- 7. write_bytes non-all-zero let-bound (re-confirm #non-repro) ----
+    let nz = [10, 20, 30, 40, 50]
+    let pnz = base + "_nz.dat"
+    write_bytes(pnz, nz)
+    let rnz = read_file_bytes(pnz)
+    report("write_bytes_letbound_nonzero", arr_eq(rnz, nz), arr_str(rnz), arr_str(nz))
+
+    // ---- 8. ranged read_bytes_at: build a 64-byte known file ----
+    let mut seq = []
+    let mut j = 0
+    while j < 64 {
+        seq.push(j)
+        j = j + 1
+    }
+    let pseq = base + "_seq.dat"
+    write_bytes(pseq, seq)
+    report("ranged_file_size", file_size(pseq) == 64, to_string(file_size(pseq)), "64")
+
+    // 8a. ranged at offset 0
+    let ra0 = read_bytes_at(pseq, 0, 8)
+    let want0 = [0, 1, 2, 3, 4, 5, 6, 7]
+    report("ranged_offset0", arr_eq(ra0, want0), arr_str(ra0), arr_str(want0))
+
+    // 8b. ranged mid (offset 30, 10 bytes)
+    let ram = read_bytes_at(pseq, 30, 10)
+    let wantm = [30, 31, 32, 33, 34, 35, 36, 37, 38, 39]
+    report("ranged_mid", arr_eq(ram, wantm), arr_str(ram), arr_str(wantm))
+
+    // 8c. ranged at EOF boundary (offset 60, ask 8 -> only 4 left)
+    let rae = read_bytes_at(pseq, 60, 8)
+    let wante = [60, 61, 62, 63]
+    report("ranged_eof_short", arr_eq(rae, wante), arr_str(rae), arr_str(wante))
+
+    // 8d. ranged exactly at EOF (offset 64) -> empty
+    let rea = read_bytes_at(pseq, 64, 8)
+    report("ranged_at_eof_empty", len(rea) == 0, to_string(len(rea)), "0")
+
+    // 8e. ranged past EOF (offset 1000) -> empty
+    let rpe = read_bytes_at(pseq, 1000, 8)
+    report("ranged_past_eof_empty", len(rpe) == 0, to_string(len(rpe)), "0")
+
+    // 8f. 0-length read -> empty
+    let rzl = read_bytes_at(pseq, 0, 0)
+    report("ranged_zero_len_empty", len(rzl) == 0, to_string(len(rzl)), "0")
+
+    // 8g. ranged on missing file -> empty
+    let rmf = read_bytes_at(pmiss, 0, 8)
+    report("ranged_missing_empty", len(rmf) == 0, to_string(len(rmf)), "0")
+
+    // 8h. ranged preserves 0x00/0xFF (re-write a marker file)
+    let mark = [0, 255, 0, 255]
+    let pmark = base + "_mark.dat"
+    write_bytes(pmark, mark)
+    let rmk = read_bytes_at(pmark, 0, 4)
+    report("ranged_binary_extremes", arr_eq(rmk, mark), arr_str(rmk), arr_str(mark))
+
+    // ---- 9. large file > 1MB, ranged read in the middle ----
+    let big = base + "_big.dat"
+    let mut chunk = []
+    let mut k = 0
+    while k < 1024 {
+        chunk.push(k % 256)
+        k = k + 1
+    }
+    // write 1200 KB by appending the 1KB chunk 1200 times
+    delete_file(big)
+    let mut w = 0
+    while w < 1200 {
+        write_bytes_append(big, chunk)
+        w = w + 1
+    }
+    let bigsz = file_size(big)
+    report("large_file_size", bigsz == 1228800, to_string(bigsz), "1228800")
+    // ranged read at offset 500000 should equal (500000 % 256)..
+    let off = 500000
+    let rb = read_bytes_at(big, off, 4)
+    let mut wb = []
+    let mut m = 0
+    while m < 4 {
+        wb.push((off + m) % 256)
+        m = m + 1
+    }
+    report("large_ranged_mid", arr_eq(rb, wb), arr_str(rb), arr_str(wb))
+
+    // ---- 10. write_bytes_append semantics ----
+    let pap = base + "_append.dat"
+    delete_file(pap)
+    write_bytes(pap, [1, 2, 3])
+    write_bytes_append(pap, [4, 5, 6])
+    let rap = read_file_bytes(pap)
+    let wap = [1, 2, 3, 4, 5, 6]
+    report("write_bytes_append", arr_eq(rap, wap), arr_str(rap), arr_str(wap))
+
+    // ---- 11. append_file (text) semantics ----
+    let ptap = base + "_tappend.txt"
+    delete_file(ptap)
+    write_file(ptap, "AA")
+    append_file(ptap, "BB")
+    let rtap = read_file(ptap)
+    report("append_file_text", rtap == "AABB", "\"" + rtap + "\"", "\"AABB\"")
+
+    // ---- 12. mkdir / list_dir ----
+    let sub = dir + "/sub_xyz"
+    mkdir(sub)
+    write_file(sub + "/a.txt", "a")
+    write_file(sub + "/b.txt", "b")
+    let entries = list_dir(sub)
+    // expect 2 entries (a.txt, b.txt), order not guaranteed
+    let saw_a = (entries[0] == "a.txt") || (len(entries) > 1 && entries[1] == "a.txt")
+    let saw_b = (entries[0] == "b.txt") || (len(entries) > 1 && entries[1] == "b.txt")
+    report("list_dir_count", len(entries) == 2, to_string(len(entries)), "2")
+    report("list_dir_contents", saw_a && saw_b, "a=" + to_string(saw_a) + " b=" + to_string(saw_b), "both true")
+    let emptydir = dir + "/empty_xyz"
+    mkdir(emptydir)
+    report("list_dir_empty", len(list_dir(emptydir)) == 0, to_string(len(list_dir(emptydir))), "0")
+    report("list_dir_missing", len(list_dir(dir + "/nope_xyz")) == 0, to_string(len(list_dir(dir + "/nope_xyz"))), "0")
+
+    // ---- 13. delete_file then exists ----
+    let pdel = base + "_del.txt"
+    write_file(pdel, "x")
+    report("pre_delete_exists", file_exists(pdel), "false", "true")
+    delete_file(pdel)
+    report("post_delete_gone", file_exists(pdel) == false, "true", "false")
+
+    // ---- 14. overwrite (write_file truncates) ----
+    let pov = base + "_ov.txt"
+    write_file(pov, "longer content here")
+    write_file(pov, "x")
+    let rov = read_file(pov)
+    report("overwrite_truncates", rov == "x", "\"" + rov + "\"", "\"x\"")
+
+    println("DONE")
+}
