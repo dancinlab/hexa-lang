@@ -607,6 +607,19 @@ jobs:
           nvcc --version | grep -i release
           # cuBLAS dev libs must be present for the link (no GPU needed to link).
           find "${CUDA_PATH:-/usr/local/cuda}" \( -name 'libcublas*' -o -name 'libcudart*' \) 2>/dev/null | head
+          # `-lcuda` (CUDA driver API) resolves against the toolkit's build-only
+          # stub on a GPU-less runner — assert the stub exists so a toolkit layout
+          # change is caught here (fail-loud) rather than deep in the link.
+          CUDA_HOME="${CUDA_PATH:-/usr/local/cuda}"
+          STUB_DIR="$CUDA_HOME/targets/x86_64-linux/lib/stubs"
+          [ -d "$STUB_DIR" ] || STUB_DIR="$CUDA_HOME/lib64/stubs"
+          if [ -f "$STUB_DIR/libcuda.so" ]; then
+            echo "✓ libcuda.so driver stub present: $STUB_DIR/libcuda.so"
+          else
+            echo "✗ libcuda.so driver stub NOT found under $STUB_DIR — -lcuda link will fail" >&2
+            find "$CUDA_HOME" -name 'libcuda.so*' 2>/dev/null | head
+            exit 1
+          fi
 
       # Build with HEXA_CUDA=1: stage_resolve_runtime_a folds runtime_cuda.o +
       # runtime_cuda_dlink.o into runtime.a + compiles runtime.c -DHEXA_CUDA; the
@@ -630,11 +643,17 @@ jobs:
         run: |
           set -euo pipefail
           export CUDA_HOME="${CUDA_PATH:-/usr/local/cuda}"
-          # The cuBLAS shared libs live under the toolkit lib dir; add it to LIBS'
-          # search path so the hexa binary's link finds -lcudart/-lcublas.
+          # The cuBLAS/cudart shared libs live under the toolkit lib dir; add it to
+          # LIBS' search path so the hexa binary's link finds -lcudart/-lcublas.
           CUDA_LIB="$CUDA_HOME/targets/x86_64-linux/lib"
           [ -d "$CUDA_LIB" ] || CUDA_LIB="$CUDA_HOME/lib64"
-          export LIBS="-L$CUDA_LIB $LIBS"
+          # `-lcuda` is the CUDA *driver* API (libcuda.so) — it is NOT shipped by
+          # the cudart/cuBLAS runtime packages, only by the NVIDIA driver. A GPU-
+          # less CI runner has no driver, so libcuda.so lives ONLY in the toolkit's
+          # `stubs/` dir (a link-time stub; the real driver resolves at run time on
+          # the consumer's GPU host). Add stubs/ to the search path so the build-
+          # only link of `-lcuda` resolves (else `ld: cannot find -lcuda`).
+          export LIBS="-L$CUDA_LIB -L$CUDA_LIB/stubs $LIBS"
           unset HEXA_PREBUILT_RUNTIME
           bash tool/release_build
 
@@ -652,7 +671,8 @@ jobs:
           export CUDA_HOME="${CUDA_PATH:-/usr/local/cuda}"
           CUDA_LIB="$CUDA_HOME/targets/x86_64-linux/lib"
           [ -d "$CUDA_LIB" ] || CUDA_LIB="$CUDA_HOME/lib64"
-          export LIBS="-L$CUDA_LIB $LIBS"
+          # stubs/ supplies the build-only libcuda.so driver stub (see Build step).
+          export LIBS="-L$CUDA_LIB -L$CUDA_LIB/stubs $LIBS"
           unset HEXA_PREBUILT_RUNTIME
           bash tool/release_package
 
