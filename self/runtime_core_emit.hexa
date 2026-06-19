@@ -3109,6 +3109,9 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + " * through its own surface symbol. The `hexa_map_set` symbol now lives\n"
     buf = buf + " * further down as a thin dispatch wrapper that prefers `rt_map_set`\n"
     buf = buf + " * when HEXA_HAS_HEXA_RT_STDLIB is defined. */\n"
+    buf = buf + "#ifdef HEXA_RT_MAP_NATIVE\n"
+    buf = buf + "extern HexaVal rt_map_set_inplace_native(HexaVal m, HexaVal keyp, HexaVal val);\n"
+    buf = buf + "#endif\n"
     buf = buf + "HexaVal hexa_map_set_impl(HexaVal m, const char* key, HexaVal val) {\n"
     buf = buf + "    // rt 32-G: route Val field mutation to flat struct.\n"
     buf = buf + "    if (HX_IS_VALSTRUCT(m)) {\n"
@@ -3125,10 +3128,24 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "    // Check if key exists (O(1) average)\n"
     buf = buf + "    int si = hmap_find(t, key, h);\n"
     buf = buf + "    if (si >= 0) {\n"
+    // RT-NATIVE-ZEROC M4 map-construct r1: the alloc-free in-place UPDATE branch
+    // delegates the dual writeback (vals[si] + order_vals[order_idx]) to the
+    // raw-mem hexa-source body (stdlib/runtime/map_core.hexa::
+    // rt_map_set_inplace_native), the construct-half write twin of
+    // rt_map_get_native — gate-proven byte-exact vs these two C stores. The body
+    // enters the runtime ONLY via the frozen .s seed (self/native/map_core_*.s)
+    // ar'd by stage_resolve_runtime_a; the INSERT path below (strdup + grow +
+    // order realloc) stays C (irreducible allocator floor, array_push twin). Key
+    // boxed as TAG_INT pointer value (hexa fns receive every param as HexaVal).
+    buf = buf + "#ifdef HEXA_RT_MAP_NATIVE\n"
+    buf = buf + "        rt_map_set_inplace_native(m, hexa_int((int64_t)(intptr_t)key), val);\n"
+    buf = buf + "        return m;\n"
+    buf = buf + "#else\n"
     buf = buf + "        t->vals[si] = val;\n"
     buf = buf + "        // ROI-24: O(1) order-array update via cached order_idx\n"
     buf = buf + "        t->order_vals[t->slots[si].order_idx] = val;\n"
     buf = buf + "        return m;\n"
+    buf = buf + "#endif\n"
     buf = buf + "    }\n"
     buf = buf + "\n"
     buf = buf + "    // Grow hash table if needed\n"
