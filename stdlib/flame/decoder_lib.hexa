@@ -345,6 +345,26 @@ pub fn nn_decoder_grad(ids: int, target_t: int,
     }
     let _ = farr_free(dzr)
 
+    // Per-layer scratch farrs hoisted OUT of the backward loop: their
+    // shapes (T·d, bp_total, bc_total) are loop-invariant, so allocate
+    // once and reuse across all n_layer iterations instead of alloc+free
+    // per layer (STAGE3 alloc-churn cut, mirrors nn_decoder_fwd r1 #3673).
+    // Byte-identity is preserved:
+    //   · Xin / Bp_l / Bc_l are FULLY overwritten by their copy-in loops
+    //     every iteration (p_x<T·d, p_p<bp_total, p_c<bc_total), so no
+    //     re-zero is needed.
+    //   · Bg_l and dX_l are ACCUMULATED into (`+=`) by nn_decoder_block_bwd
+    //     (Bg via _db_grad_accum_farr / read-modify-write; dX_out via the
+    //     `cur + dh + dx_contrib` residual store), so a reused buffer must
+    //     start zeroed — re-zero both in place at the top of each iteration
+    //     (same calloc-zero memory traffic as the original farr_zeros).
+    let bp_sz = bp_total(d, nh, nkv, h)
+    let bc_sz = bc_total(T, d, nh, nkv, h)
+    let Xin = farr_zeros(T * d)
+    let Bp_l = farr_zeros(bp_sz)
+    let Bc_l = farr_zeros(bc_sz)
+    let Bg_l = farr_zeros(bp_sz)
+    let dX_l = farr_zeros(T * d)
     // reverse through blocks L-1 → 0
     let mut l_b = n_layer - 1
     while l_b >= 0 {
@@ -358,33 +378,42 @@ pub fn nn_decoder_grad(ids: int, target_t: int,
             mc_off_block(l_b - 1, T, d, nh, nkv, h, V, n_layer)
                 + bc_off_Xout(T, d, nh, nkv, h)
         }
-        let Xin = farr_zeros(T * d)
+        // Xin fully overwritten by copy-in.
         let mut p_x = 0
         while p_x < T * d {
             let _ = farr_set(Xin, p_x, farr_get(Mc, prev_Xout_off + p_x))
             p_x = p_x + 1
         }
-        // Copy block param + cache into scratch farrs.
-        let Bp_l = farr_zeros(bp_total(d, nh, nkv, h))
+        // Copy block param + cache into scratch farrs (fully overwritten).
         let mut p_p = 0
-        while p_p < bp_total(d, nh, nkv, h) {
+        while p_p < bp_sz {
             let _ = farr_set(Bp_l, p_p, farr_get(M, bp_off + p_p))
             p_p = p_p + 1
         }
-        let Bc_l = farr_zeros(bc_total(T, d, nh, nkv, h))
         let mut p_c = 0
-        while p_c < bc_total(T, d, nh, nkv, h) {
+        while p_c < bc_sz {
             let _ = farr_set(Bc_l, p_c, farr_get(Mc, bc_off + p_c))
             p_c = p_c + 1
         }
+        // Re-zero the two accumulator buffers in place — nn_decoder_block_bwd
+        // accumulates (`+=`) into Bg_l and dX_l, so a reused buffer must
+        // start zeroed each iteration.
+        let mut zg = 0
+        while zg < bp_sz {
+            let _ = farr_set(Bg_l, zg, 0.0)
+            zg = zg + 1
+        }
+        let mut zd = 0
+        while zd < T * d {
+            let _ = farr_set(dX_l, zd, 0.0)
+            zd = zd + 1
+        }
         // dXout = current dXc
-        let Bg_l = farr_zeros(bp_total(d, nh, nkv, h))
-        let dX_l = farr_zeros(T * d)
         nn_decoder_block_bwd(Xin, Bp_l, Bc_l, dXc, dX_l, Bg_l,
                              cos, sin, T, d, nh, nkv, h)
         // accumulate Bg_l into Mg.block[l_b]
         let mut p_g = 0
-        while p_g < bp_total(d, nh, nkv, h) {
+        while p_g < bp_sz {
             let cur = farr_get(Mg, bg_off + p_g)
             let _ = farr_set(Mg, bg_off + p_g, cur + farr_get(Bg_l, p_g))
             p_g = p_g + 1
@@ -395,13 +424,13 @@ pub fn nn_decoder_grad(ids: int, target_t: int,
             let _ = farr_set(dXc, p_d, farr_get(dX_l, p_d))
             p_d = p_d + 1
         }
-        let _ = farr_free(Xin)
-        let _ = farr_free(Bp_l)
-        let _ = farr_free(Bc_l)
-        let _ = farr_free(Bg_l)
-        let _ = farr_free(dX_l)
         l_b = l_b - 1
     }
+    let _ = farr_free(Xin)
+    let _ = farr_free(Bp_l)
+    let _ = farr_free(Bc_l)
+    let _ = farr_free(Bg_l)
+    let _ = farr_free(dX_l)
 
     // (b) embedding scatter-add tied-weight term:
     //   dtemb[ids[i]·d + c] += dXc[i·d + c]  for i in 0..T

@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────
+# tool/build_cuda_runtime — build the CUDA-enabled hexa runtime objects and
+# the cuda_gemm_verify harness, then run the PRIMARY anima #2386 verdict
+# (cuda_available 0→1 + GPU-vs-CPU GEMM speedup + rel-RMS correctness).
+#
+# Proven on the pool host `aiden` (RTX 5070, sm_120, nvcc 13.0):
+#   BUILD=CUDA   cuda_available()=1  cuda_device_count()=1
+#   [d=1024] CUDA 347 GFLOP/s vs CPU 22 GFLOP/s  → ~15x   rel_rms 4.3e-16
+#   [d=2048] CUDA 404 GFLOP/s vs CPU 18 GFLOP/s  → ~25x   rel_rms 5.1e-16
+#
+# The default release build is CPU-only (no cuBLAS dep) — this is the OPT-IN
+# CUDA path (HEXA_CUDA). self-host ≠ release: additive, does not change the
+# default build or the byteeq fixpoint (the GPU path is runtime opt-in).
+#
+# Env:
+#   CUDA_HOME   CUDA toolkit root      (default: /usr/local/cuda-13.0)
+#   SM          GPU arch               (default: 120 for RTX 50-series)
+#   PREBUILT_RT prebuilt CPU runtime.a (default: $HOME/.hx/bin/build/runtime.a)
+#
+# Extension-less (not .sh) per the tool/stage_* / tool/release_build precedent
+# (sidecar hook blocks .sh Write/Edit). Invoke as `bash tool/build_cuda_runtime`.
+# ─────────────────────────────────────────────────────────────────────────
+set -euo pipefail
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO"
+
+CUDA_HOME="${CUDA_HOME:-/usr/local/cuda-13.0}"
+SM="${SM:-120}"
+PREBUILT_RT="${PREBUILT_RT:-$HOME/.hx/bin/build/runtime.a}"
+HEXA="${HEXA:-$HOME/.local/bin/hexa}"
+CINC="$CUDA_HOME/targets/x86_64-linux/include"
+CLIB="$CUDA_HOME/targets/x86_64-linux/lib"
+export PATH="$CUDA_HOME/bin:$PATH"
+
+mkdir -p build/cuda
+B=build/cuda
+
+echo "=== probe ==="
+command -v nvcc >/dev/null || { echo "no nvcc on PATH ($CUDA_HOME/bin)"; exit 1; }
+nvcc --version | grep -i release
+nvidia-smi --query-gpu=name,compute_cap --format=csv,noheader || true
+[ -f "$PREBUILT_RT" ] || { echo "no prebuilt runtime.a at $PREBUILT_RT (run a normal hexa build first)"; exit 1; }
+
+echo "=== extract RT-NATIVE cores from prebuilt runtime.a (CUDA-independent) ==="
+( cd "$B" && ar x "$PREBUILT_RT" )
+CORES="$B/rt_hi_native.o $B/array_core_native.o $B/map_core_native.o $B/alloc_syscall_native.o $B/intern_core_native.o"
+
+echo "=== regen runtime_cuda.c + runtime_bf16.c from emitter SSOT ==="
+"$HEXA" run self/cuda/runtime_bf16_emit.hexa self/cuda/runtime_bf16.c >/dev/null
+"$HEXA" run self/cuda/runtime_cuda_emit.hexa self/cuda/runtime_cuda.c >/dev/null
+# emitter must emit _hx_dt_exp_dev exactly once (ing-cuda-build dup-def fix)
+n=$(grep -c '_hx_dt_exp_dev(double x) {' self/cuda/runtime_cuda.c || true)
+[ "$n" = "1" ] || { echo "runtime_cuda.c has $n _hx_dt_exp_dev defs (expected 1) — emitter dup-def regressed"; exit 1; }
+
+echo "=== nvcc runtime_cuda.o (sm_$SM) + device-link ==="
+nvcc -x cu -DHEXA_CUDA -rdc=true -gencode arch=compute_$SM,code=sm_$SM -O2 -w \
+     -I "$CINC/cccl" -I "$CINC" -I self -I self/cuda -I . \
+     -c self/cuda/runtime_cuda.c -o "$B/runtime_cuda.o"
+nvcc -dlink -gencode arch=compute_$SM,code=sm_$SM "$B/runtime_cuda.o" \
+     -o "$B/runtime_cuda_dlink.o" -lcudadevrt
+
+echo "=== host runtime.o (-DHEXA_CUDA + the RT-NATIVE flag set) ==="
+RTFLAGS="-DHEXA_RT_ARRAY_NATIVE=1 -DHEXA_RT_MAP_NATIVE=1 -DHEXA_RT_INTERN_NATIVE=1 -DHEXA_RT_ALLOC_NATIVE=1"
+gcc -O2 -D_GNU_SOURCE -DHEXA_HAS_OPENSSL -DHEXA_CUDA $RTFLAGS -w \
+    -I self -I . -I "$CINC" -c self/runtime.c -o "$B/runtime_cuda_host.o"
+
+echo "=== PRIMARY verify harness — CPU vs CUDA ==="
+# (A) CPU-only: archived CPU runtime.o + cores
+( cd "$B" && ar x "$PREBUILT_RT" runtime.o )
+gcc -O2 -D_GNU_SOURCE -DHEXA_HAS_OPENSSL -w -I self -I . \
+    tool/cuda_gemm_verify.c "$B/runtime.o" $CORES \
+    -lm -lpthread -lssl -lcrypto -o "$B/gemm_cpu"
+# (B) CUDA: host runtime.o (HEXA_CUDA) + runtime_cuda.o + dlink + cuBLAS/cudart
+gcc -O2 -D_GNU_SOURCE -DHEXA_HAS_OPENSSL -DHEXA_CUDA -w -I self -I . -I "$CINC" \
+    -c tool/cuda_gemm_verify.c -o "$B/harness_cuda.o"
+g++ -O2 "$B/harness_cuda.o" "$B/runtime_cuda_host.o" "$B/runtime_cuda.o" \
+    "$B/runtime_cuda_dlink.o" $CORES \
+    -L"$CLIB" -lcudart -lcublas -lcuda -lcudadevrt -lm -lpthread -lssl -lcrypto -ldl \
+    -o "$B/gemm_cuda"
+
+echo "### CPU-only build ###"
+"$B/gemm_cpu"
+echo "### CUDA build (sm_$SM) ###"
+LD_LIBRARY_PATH="$CLIB:${LD_LIBRARY_PATH:-}" "$B/gemm_cuda"
+echo "=== DONE — CUDA runtime objects in $B/, harness binaries gemm_cpu / gemm_cuda ==="
