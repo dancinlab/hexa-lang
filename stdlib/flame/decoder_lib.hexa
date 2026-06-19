@@ -117,6 +117,21 @@ pub fn nn_decoder_fwd(ids: int, M: int, Mc: int, cos: int, sin: int,
     // 2. n_layer blocks. Each block reads Xc and writes Bc (with Bc.Xout
     // = next layer's Xc). For l=0, Xc = X (oX in Mc). For l>0, Xc =
     // prev block's Xout offset.
+    // Per-layer scratch farrs hoisted OUT of the loop: their shapes
+    // (T·d, bp_total, bc_total) are loop-invariant, so we allocate once
+    // and reuse across all n_layer iterations instead of alloc+free per
+    // layer (STAGE3 alloc-churn cut). Byte-identity is preserved:
+    //   · Xc / Bp_l are FULLY overwritten by their copy-in loops every
+    //     iteration (k<T·d, p<bp_total), so no re-zero is needed.
+    //   · Bc_l is re-zeroed in place at the top of each iteration —
+    //     nn_decoder_block_fwd does NOT write every Bc slot (the causal
+    //     attention P is lower-triangular only), and the full bc_total
+    //     is copied back into Mc, so a reused buffer must start zeroed.
+    let bp_sz = bp_total(d, nh, nkv, h)
+    let bc_sz = bc_total(T, d, nh, nkv, h)
+    let Xc = farr_zeros(T * d)
+    let Bp_l = farr_zeros(bp_sz)
+    let Bc_l = farr_zeros(bc_sz)
     let mut l = 0
     while l < n_layer {
         let bp_off = m_off_block(l, d, nh, nkv, h, V, n_layer)
@@ -125,9 +140,8 @@ pub fn nn_decoder_fwd(ids: int, M: int, Mc: int, cos: int, sin: int,
         // farr_matmul/inline ops in nn_decoder_block_fwd read from
         // arbitrary base `X` — but `X` here is a farr_id with offset
         // implicit at 0. To pass a sub-region we'd need a slice;
-        // workaround: copy the per-layer input into a small scratch
-        // farr. (No farr-slice op in flame yet.)
-        let Xc = farr_zeros(T * d)
+        // workaround: copy the per-layer input into a scratch farr.
+        // (No farr-slice op in flame yet.) Fully overwrites Xc.
         let prev_off = if l == 0 {
             oX
         } else {
@@ -139,27 +153,30 @@ pub fn nn_decoder_fwd(ids: int, M: int, Mc: int, cos: int, sin: int,
             let _ = farr_set(Xc, k, farr_get(Mc, prev_off + k))
             k = k + 1
         }
-        // Per-block param/cache scratch — alloc + copy in/out (similar
-        // workaround for missing per-region API).
-        let Bp_l = farr_zeros(bp_total(d, nh, nkv, h))
+        // Per-block param scratch — fully overwrites Bp_l.
         let mut p = 0
-        while p < bp_total(d, nh, nkv, h) {
+        while p < bp_sz {
             let _ = farr_set(Bp_l, p, farr_get(M, bp_off + p))
             p = p + 1
         }
-        let Bc_l = farr_zeros(bc_total(T, d, nh, nkv, h))
+        // Re-zero Bc_l in place (block writes only a subset of slots).
+        let mut z = 0
+        while z < bc_sz {
+            let _ = farr_set(Bc_l, z, 0.0)
+            z = z + 1
+        }
         nn_decoder_block_fwd(Xc, Bp_l, Bc_l, cos, sin, T, d, nh, nkv, h)
         // copy Bc_l back into Mc at block l's slot.
         let mut q = 0
-        while q < bc_total(T, d, nh, nkv, h) {
+        while q < bc_sz {
             let _ = farr_set(Mc, bc_off + q, farr_get(Bc_l, q))
             q = q + 1
         }
-        let _ = farr_free(Xc)
-        let _ = farr_free(Bp_l)
-        let _ = farr_free(Bc_l)
         l = l + 1
     }
+    let _ = farr_free(Xc)
+    let _ = farr_free(Bp_l)
+    let _ = farr_free(Bc_l)
 
     // 3. Read last-layer Xout last-position into zr ; final RMSNorm.
     let last_bc_off = mc_off_block(n_layer - 1, T, d, nh, nkv, h, V, n_layer)
@@ -585,11 +602,18 @@ pub fn nn_decoder_fwd_with_readout(ids: int, M: int, Mc: int,
     // Phase 2 — n_layer blocks (verbatim from nn_decoder_fwd, with
     // optional readout snapshot at the end of block `layer_idx`).
     let want_block = layer_idx >= 0 && layer_idx < n_layer
+    // Per-layer scratch hoisted out of the loop (loop-invariant shapes);
+    // see nn_decoder_fwd for the byte-identity rationale (Xc/Bp_l fully
+    // overwritten each iter, Bc_l re-zeroed in place).
+    let bp_sz = bp_total(d, nh, nkv, h)
+    let bc_sz = bc_total(T, d, nh, nkv, h)
+    let Xc = farr_zeros(T * d)
+    let Bp_l = farr_zeros(bp_sz)
+    let Bc_l = farr_zeros(bc_sz)
     let mut l = 0
     while l < n_layer {
         let bp_off = m_off_block(l, d, nh, nkv, h, V, n_layer)
         let bc_off = mc_off_block(l, T, d, nh, nkv, h, V, n_layer)
-        let Xc = farr_zeros(T * d)
         let prev_off = if l == 0 {
             oX
         } else {
@@ -601,16 +625,19 @@ pub fn nn_decoder_fwd_with_readout(ids: int, M: int, Mc: int,
             let _ = farr_set(Xc, k, farr_get(Mc, prev_off + k))
             k = k + 1
         }
-        let Bp_l = farr_zeros(bp_total(d, nh, nkv, h))
         let mut p = 0
-        while p < bp_total(d, nh, nkv, h) {
+        while p < bp_sz {
             let _ = farr_set(Bp_l, p, farr_get(M, bp_off + p))
             p = p + 1
         }
-        let Bc_l = farr_zeros(bc_total(T, d, nh, nkv, h))
+        let mut z = 0
+        while z < bc_sz {
+            let _ = farr_set(Bc_l, z, 0.0)
+            z = z + 1
+        }
         nn_decoder_block_fwd(Xc, Bp_l, Bc_l, cos, sin, T, d, nh, nkv, h)
         let mut q = 0
-        while q < bc_total(T, d, nh, nkv, h) {
+        while q < bc_sz {
             let _ = farr_set(Mc, bc_off + q, farr_get(Bc_l, q))
             q = q + 1
         }
@@ -627,11 +654,11 @@ pub fn nn_decoder_fwd_with_readout(ids: int, M: int, Mc: int,
                 rc_c = rc_c + 1
             }
         }
-        let _ = farr_free(Xc)
-        let _ = farr_free(Bp_l)
-        let _ = farr_free(Bc_l)
         l = l + 1
     }
+    let _ = farr_free(Xc)
+    let _ = farr_free(Bp_l)
+    let _ = farr_free(Bc_l)
 
     // Phase 3 — final RMSNorm (verbatim, populates Mc.zr/zT_xn/zT_inv).
     let last_bc_off = mc_off_block(n_layer - 1, T, d, nh, nkv, h, V, n_layer)
