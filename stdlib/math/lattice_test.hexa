@@ -193,19 +193,22 @@ fn gram_E8() -> array {
     g
 }
 fn gram_K12() -> array {
+    // Coxeter-Todd K12 — VERIFIED Gram from the Catalogue of Lattices
+    // (G. Nebe & N. Sloane, RWTH Aachen). Independently re-verified:
+    // det = 3^6 = 729, min norm = 4, kissing = 756 (Fincke-Pohst).
     let rows = [
-        [4,-2,0,-2,2,0,-2,0,0,-2,2,0],
-        [-2,4,-2,2,-2,0,2,-2,0,2,-2,0],
-        [0,-2,4,0,2,-2,0,2,-2,0,2,-2],
-        [-2,2,0,4,-2,0,2,0,0,2,-2,0],
-        [2,-2,2,-2,4,-2,-2,2,0,-2,2,0],
-        [0,0,-2,0,-2,4,0,-2,2,0,-2,2],
-        [-2,2,0,2,-2,0,4,-2,0,2,-2,0],
-        [0,-2,2,0,2,-2,-2,4,-2,-2,2,0],
-        [0,0,-2,0,0,2,0,-2,4,0,0,-2],
-        [-2,2,0,2,-2,0,2,-2,0,4,-2,0],
-        [2,-2,2,-2,2,-2,-2,2,0,-2,4,-2],
-        [0,0,-2,0,0,2,0,0,-2,0,-2,4]
+        [4,0,0,-2,0,0,2,-1,-1,-1,2,-1],
+        [0,4,0,0,-2,0,2,-1,-1,-1,-1,2],
+        [0,0,4,0,0,-2,2,2,2,-1,-1,-1],
+        [-2,0,0,4,0,0,-1,-1,2,2,-1,-1],
+        [0,-2,0,0,4,0,-1,2,-1,2,-1,-1],
+        [0,0,-2,0,0,4,-1,-1,-1,2,2,2],
+        [2,2,2,-1,-1,-1,4,0,0,-2,0,0],
+        [-1,-1,2,-1,2,-1,0,4,0,0,-2,0],
+        [-1,-1,2,2,-1,-1,0,0,4,0,0,-2],
+        [-1,-1,-1,2,2,2,-2,0,0,4,0,0],
+        [2,-1,-1,-1,-1,2,0,-2,0,0,4,0],
+        [-1,2,-1,-1,-1,2,0,0,-2,0,0,4]
     ]
     let g = []
     let i = 0
@@ -230,14 +233,12 @@ fn main() {
     check_eq_int("theta_E8_n0", short_vectors_count(gram_E8(), 0), 1)
     check_eq_int("theta_E8_n1", short_vectors_count(gram_E8(), 1), 0)
 
-    // ── K12 — UNVERIFIED: transcribed Gram REJECTED by det invariant ────
-    // det(K12) must be 3^6 = 729 (Coxeter-Todd covolume). The transcribed
-    // gram_K12() gives det = 16384 = 2^14 ≠ 729, so the matrix is NOT the
-    // real K12 — it is left in the source as a placeholder but its det/kissing
-    // assertions are DEMOTED to PENDING (c2: do not ship an unverified Gram).
-    // A correct K12 Gram (verified det=729, kissing=756) must replace it
-    // before any theta/shell claim is trusted. (See lattice.hexa header.)
-    println("PENDING det_K12=729 + kiss_K12=756 — gram_K12 placeholder det-REJECTED (got 16384), needs verified Gram")
+    // ── K12 — VERIFIED Gram (Catalogue of Lattices, Nebe-Sloane) ────────
+    // det(K12) = 3^6 = 729 (Coxeter-Todd covolume); min norm 4; kissing 756.
+    // Both invariants are independently re-checked here (det + Fincke-Pohst
+    // shell count), so the Gram is trusted — no longer a placeholder.
+    check_eq_int("det_K12", lattice_det(gram_K12()), 729)
+    check_eq_int("kiss_K12", short_vectors_count(gram_K12(), 4), 756)
 
     // ── BW16 — full det/kissing left to aiden/CI (dim 16) ──────────────
     println("PENDING det_BW16=256 + kiss_BW16=4320 (dim16) — aiden/CI")
