@@ -24,6 +24,7 @@ grep -nE "HEXA_RT_ARRAY_ARENA_NATIVE=1|RT-NATIVE ARRAY-R4|ALLOC-RB" /tmp/srra.lo
 echo "--- seed arena bridge symbol ---"
 nm build/array_core_native.o 2>/dev/null | grep -E "rt_array_arena_alloc_items_native|hexa_arena_alloc" | head
 
+CC="${CC:-clang}"
 CFLAGS="-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -I self"
 SEEDS="build/array_core_native.o build/alloc_syscall_native.o"
 
