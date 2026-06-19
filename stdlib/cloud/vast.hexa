@@ -345,8 +345,32 @@ fn _vast_contains_underscore(s: str) -> int {
     return 0
 }
 
+// _vast_all_digits — 1 iff every char of `s` is 0-9 (a bare GPU COUNT like
+// "1"/"2", the natural reading of the `--gpu N` usage string). Such a value
+// must NOT become `gpu_name=1` (vast has no GPU literally named "1" → the
+// search returns [] → "no matching offers" with the offer pool actually full);
+// vast_gpu_predicate maps a bare count to `num_gpus>=N` instead. Empty -> 0.
+// Equality-only char check to match this module's dependency-free style.
+fn _vast_all_digits(s: str) -> int {
+    if len(s) == 0 {
+        return 0
+    }
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c != "0" && c != "1" && c != "2" && c != "3" && c != "4"
+           && c != "5" && c != "6" && c != "7" && c != "8" && c != "9" {
+            return 0
+        }
+        i = i + 1
+    }
+    return 1
+}
+
 // vast_gpu_predicate — turn a `--gpu` value into a vast query predicate.
 //   empty            -> "" (no filter)
+//   bare count (N)   -> num_gpus>=N  (the `--gpu N` usage reading; a digit-only
+//                       value is a COUNT, not a SKU name — never `gpu_name=N`)
 //   already exact    -> gpu_name=<v> (contains `_`, e.g. H100_NVL)
 //   known family     -> gpu_name in [V1,V2,...] (vast `in` list; verified to
 //                       parse + return offers; vast has NO `~` partial match)
@@ -356,6 +380,9 @@ fn _vast_contains_underscore(s: str) -> int {
 pub fn vast_gpu_predicate(gpu: str) -> str {
     if len(gpu) == 0 {
         return ""
+    }
+    if _vast_all_digits(gpu) == 1 {
+        return "num_gpus>=" + gpu
     }
     if _vast_contains_underscore(gpu) == 1 {
         return "gpu_name=" + gpu
