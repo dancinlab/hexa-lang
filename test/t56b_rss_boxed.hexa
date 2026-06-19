@@ -10,9 +10,10 @@
 //  returns empty on /proc/self/statm).
 //
 //  Keeps the boxed int[] resident (sum it) so the allocator can't free
-//  it before the peak-RSS sample. NOTE: does NOT call bytes_to_f32_le
-//  (that builtin crashes the v0.241.10 transpiler — separate bug,
-//  reported); the boxed int[] alone is the boxing-blowup witness.
+//  it before the peak-RSS sample. The boxed int[] alone is the
+//  boxing-blowup witness (one HexaVal box per byte); a full decode into
+//  a boxed [float] via bytes_to_f32_le(arr, off) would add the per-elem
+//  float boxes on top — this witness already isolates the ~16 B/byte head.
 let path = "/tmp/_t56_raw_f32.bin"
 let bytes = file_size(path)
 let raw = read_bytes_at(path, 0, bytes)   // boxed int per byte (~16 B/byte)
