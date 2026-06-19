@@ -335,6 +335,49 @@ install_src() {
         return 1
     fi
 
+    # standalone-rtlink: resolve build/runtime.a via stage_resolve_runtime_a so
+    # the installed toolchain links the SAME native-seed-bearing runtime archive
+    # the release/CI path builds — NOT just the surgically-patched frozen seed.
+    #
+    # WHY: restore_frozen_seeds above leaves a STALE frozen runtime_core.c. The
+    # release pipeline instead runs stage_resolve_runtime_a, which (1) regenerates
+    # runtime_core.c from its emitter SSOT and (2) assembles the arch-matched
+    # native rt_{array,map}_*_native bodies from self/native/{array,map}_core_*.s
+    # into runtime.a. The regenerated runtime_core.c declares those native symbols
+    # `extern` UNCONDITIONALLY (#3629), so a plain `clang -c runtime.c` link can no
+    # longer resolve them — only the runtime.a that ar's the assembled native
+    # objects can. Running the canonical tool HERE (cwd=$HX_SRC, the same recipe
+    # build_aprime.sh Stage 0b uses) closes the install↔release gap: the consumer
+    # link picks up runtime.a via resolve_prebuilt_runtime()'s env-free fallback
+    # (main.hexa: <hxroot>/build/runtime.a), so rt_*_native resolve with 0
+    # residual-undefined. NON-FATAL: on failure we leave the surgically-patched
+    # frozen seed (status quo) and warn — the legacy C #else element bodies in the
+    # frozen runtime_core.c still satisfy the link, so no regression.
+    bold "▸ resolving native runtime.a (stage_resolve_runtime_a — release parity)"
+    _rtlink_ok=0
+    if [ -x "$HX_SRC/tool/stage_resolve_runtime_a" ]; then
+        if ( cd "$HX_SRC" \
+             && CC="${CC:-clang}" \
+                CFLAGS_COMMON="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}" \
+                bash tool/stage_resolve_runtime_a >/dev/null 2>&1 ) \
+            && [ -f "$HX_SRC/build/runtime.a" ]; then
+            # Mirror the archive next to the driver dir ($HX_BIN) too: a consumer
+            # `hexa build` with HEXA_LANG unset resolves hxroot via argv0 ->
+            # $HX_BIN, and resolve_prebuilt_runtime() looks for <hxroot>/build/
+            # runtime.a. The pre-warm build below sets HEXA_LANG=$HX_SRC so it
+            # finds the $HX_SRC copy; real consumer builds find the $HX_BIN copy.
+            mkdir -p "$HX_BIN/build"
+            cp -f "$HX_SRC/build/runtime.a" "$HX_BIN/build/runtime.a" 2>/dev/null || true
+            _rtlink_ok=1
+            green "  ✓ $HX_SRC/build/runtime.a + $HX_BIN/build/runtime.a (native rt_*_native linked)"
+        else
+            red "  ⚠ stage_resolve_runtime_a failed — falling back to surgically-patched frozen seed."
+            red "    (legacy C #else element bodies still satisfy the link; no regression.)"
+        fi
+    else
+        dim "  ⚠ stage_resolve_runtime_a missing — using surgically-patched frozen seed (status quo)"
+    fi
+
     # The `hexa build` flatten step (resolve_module_loader_compiled in
     # self/main.hexa) needs a COMPILED module_loader binary at
     # <install>/build/hexa_module_loader. It is .gitignored, so the clone

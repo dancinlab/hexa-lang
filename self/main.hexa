@@ -1489,6 +1489,24 @@ fn resolve_prebuilt_runtime() {
     if len(p) > 0 && file_exists(p) {
         return p
     }
+    // standalone-rtlink: env-free persistent fallback. A consumer running
+    // `hexa build` in a fresh shell carries NO HEXA_PREBUILT_RUNTIME, so the
+    // installer (install.sh -> stage_resolve_runtime_a) persists the native-
+    // seed-bearing runtime.a at <hxroot>/build/runtime.a and we resolve it
+    // here. That archive ar's the arch-matched rt_{array,map}_*_native objects
+    // (assembled from self/native/{array,map}_core_*.s) so the consumer link
+    // resolves those native symbols — the plain content-hash runtime.<sha>.o
+    // path (clang -c runtime.c, NO native seeds) cannot. Falls through to the
+    // content-hash/source path when the marker archive is absent (no regression
+    // on an installer that did not run the regen, or an in-tree from-source
+    // checkout that links runtime.c directly).
+    let __root = resolve_hxroot()
+    if len(__root) > 0 {
+        let __ra = __root + "/build/runtime.a"
+        if file_exists(__ra) {
+            return __ra
+        }
+    }
     return ""
 }
 
