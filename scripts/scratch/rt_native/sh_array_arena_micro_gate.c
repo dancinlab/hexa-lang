@@ -43,6 +43,7 @@ HV  hexa_add_slow(HV a, HV b) { HV r; r.tag = 0; r.pay = a.pay + b.pay; return r
 HV  hexa_sub(HV a, HV b)    { HV r; r.tag = 0; r.pay = a.pay - b.pay; return r; }
 HV  hexa_mul(HV a, HV b)    { HV r; r.tag = 0; r.pay = a.pay * b.pay; return r; }
 HV  hexa_div(HV a, HV b)    { HV r; r.tag = 0; r.pay = b.pay ? a.pay / b.pay : 0; return r; }
+HV  hexa_to_int(HV v)       { HV r; r.tag = 0; r.pay = v.pay; return r; }  /* `as int` cast in rt_array_len_native (unused by this gate) */
 
 int main(void) {
     rt_init_hv();
