@@ -216,6 +216,34 @@ fn gram_K12() -> array {
     g
 }
 
+fn gram_BW16() -> array {
+    // Barnes-Wall BW16 — VERIFIED Gram from the Catalogue of Lattices
+    // (G. Nebe & N. Sloane, RWTH Aachen). Independently re-verified:
+    // det = 2^8 = 256, min norm = 4, kissing = 4320 (Fincke-Pohst).
+    let rows = [
+        [4,2,2,1,2,1,-2,-2,-1,-1,0,0,-1,2,2,2],
+        [2,4,1,2,1,2,-1,-1,-2,1,1,-1,1,0,0,1],
+        [2,1,4,2,2,1,0,0,0,0,-1,-1,-1,0,0,2],
+        [1,2,2,4,1,2,0,0,0,0,1,0,0,-1,0,1],
+        [2,1,2,1,4,2,-2,-2,-1,-1,1,1,-2,2,0,2],
+        [1,2,1,2,2,4,-1,-1,-2,1,2,1,-1,1,0,0],
+        [-2,-1,0,0,-2,-1,4,2,2,0,0,0,0,-2,-2,-2],
+        [-2,-1,0,0,-2,-1,2,4,2,0,-2,-2,2,-2,-1,-1],
+        [-1,-2,0,0,-1,-2,2,2,4,-2,-1,0,0,-1,0,-1],
+        [-1,1,0,0,-1,1,0,0,-2,4,0,-1,1,-1,0,-1],
+        [0,1,-1,1,1,2,0,-2,-1,0,4,2,-1,1,0,-1],
+        [0,-1,-1,0,1,1,0,-2,0,-1,2,4,-2,1,0,-1],
+        [-1,1,-1,0,-2,-1,0,2,0,1,-1,-2,4,-2,0,0],
+        [2,0,0,-1,2,1,-2,-2,-1,-1,1,1,-2,4,2,0],
+        [2,0,0,0,0,0,-2,-1,0,0,0,0,0,2,4,0],
+        [2,1,2,1,2,0,-2,-1,-1,-1,-1,-1,0,0,0,4]
+    ]
+    let g = []
+    let i = 0
+    while i < 16 { let j = 0; while j < 16 { g.push(rows[i][j]); j = j + 1 } i = i + 1 }
+    g
+}
+
 fn main() {
     // ── A2 / D4 / E8 — local, fully verified ───────────────────────────
     check_eq_int("det_A2", lattice_det(gram_A2()), 3)
@@ -240,8 +268,11 @@ fn main() {
     check_eq_int("det_K12", lattice_det(gram_K12()), 729)
     check_eq_int("kiss_K12", short_vectors_count(gram_K12(), 4), 756)
 
-    // ── BW16 — full det/kissing left to aiden/CI (dim 16) ──────────────
-    println("PENDING det_BW16=256 + kiss_BW16=4320 (dim16) — aiden/CI")
+    // ── BW16 (Barnes-Wall, dim 16) — VERIFIED Gram (Catalogue, Nebe-Sloane)
+    // det = 2^8 = 256; min norm 4; kissing 4320. Both invariants re-checked
+    // locally (det + Fincke-Pohst shell count).
+    check_eq_int("det_BW16", lattice_det(gram_BW16()), 256)
+    check_eq_int("kiss_BW16", short_vectors_count(gram_BW16(), 4), 4320)
 
     if failed_name == "" {
         println("OK lattice " + to_string(pass_count) + "/" + to_string(total_count))
