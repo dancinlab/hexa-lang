@@ -95,7 +95,7 @@ function renderBlocks(blocks, depth){
     }
     else if (b.type === 'table'){
       html += '<table><thead><tr>' + b.columns.map(c=>'<th>'+inline(c)+'</th>').join('') + '</tr></thead><tbody>';
-      html += b.rows.map(r=>'<tr>'+r.map(c=>'<td>'+inline(c)+'</td>').join('')+'</tr>').join('');
+      html += b.rows.map(r=>'<tr>'+r.map(c=>'<td>'+(Array.isArray(c)?'<ul>'+c.map(i=>'<li>'+inline(i)+'</li>').join('')+'</ul>':inline(c))+'</td>').join('')+'</tr>').join('');
       html += '</tbody></table>';
     }
     else if (b.type === 'subsection'){
