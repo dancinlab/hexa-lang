@@ -120,8 +120,12 @@ This file is the single governance SSOT (md 단일화) — edit directives here,
   (c1 root-cause) ⓓ **그 지점만** 정렬(정렬이지 fudge 아님). 정답지 못 보는 경우(closed·
   덤프불가)에만 black-box. 정답지 정확복제 후 잔차는 강제로 맞추지 말고 출처(pseudo·grid·
   precision) 정직 기록. **hexa 정답지 매핑**: GEMM/farr_matmul perf → **OpenBLAS·BLIS**
-  microkernel(packing+register-tiling+캐시블로킹, roofline 80%+ 정답지 — 단순 FMA 플래그는
-  ~10%에 그침) · LLM decode/weight 적재(boxing·KV-cache) → **llama.cpp·ggml**(mmap+contiguous
+  microkernel(packing+register-tiling+캐시블로킹) — **측정 실증**(aiden Zen5): FMA/march 플래그
+  만지기는 roofline **~10–24% 천장**(r3 #3644 — "플래그 함정") · 검증된 **BLIS GEBP 알고리즘
+  차용**(MR6 NR8 MC72 KC256 NC4080 packing+3단 캐시블로킹)으로 **80% OpenBLAS roofline**
+  (r4 #3649 — 101~106 GFLOP/s, i6 대비 **3.3~4.8× 도약**) → **reference 알고리즘을 펼쳐
+  차용하는 것이 파라미터 튜닝보다 압도적 레버**임을 수치로 증명(black-box sweep 의 반례) ·
+  LLM decode/weight 적재(boxing·KV-cache) → **llama.cpp·ggml**(mmap+contiguous
   unboxed tensor) · QFORGE el-ph |g|² 등 from-scratch 물리 재현 → **Quantum ESPRESSO** 중간값
   덤프 대조 · 수치 커널 → **numpy·scipy·LAPACK**. **동등 도달은 출발점이지 종착점이 아니다
   (parity→beyond-parity 탐색 · implement-to-wall 과 결합)** — reference 차용으로 **동등 수준
