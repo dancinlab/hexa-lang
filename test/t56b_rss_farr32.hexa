@@ -1,0 +1,20 @@
+// t56b_rss_farr32.hexa — RSS of the UNBOXED ranged load (farr32).
+//  Loads a prebuilt raw f32 .bin fully via read_f32_array_at into a
+//  farr32 (native float[], 4 B/elem), touches every element so it stays
+//  resident, and exits. Peak RSS is captured externally by
+//  /usr/bin/time -v (the in-hexa /proc/self/statm reader is unreliable —
+//  read_file returns empty on /proc files). Sibling t56b_rss_boxed.hexa
+//  loads the SAME file the boxed way (read_bytes_at → boxed int[]).
+//  The pair is the 2-process RSS proof: farr32 tracks 4 B/elem, boxed
+//  tracks ~16 B/byte = ~64 B/f32.
+let path = "/tmp/_t56_raw_f32.bin"
+let bytes = file_size(path)
+let nf = bytes / 4
+let data = read_f32_array_at(path, 0, nf)
+let mut acc = 0.0
+let mut i = 0
+while i < nf {
+    acc = acc + farr32_get(data, i)
+    i = i + 1
+}
+println("FARR32 raw_MB=" + to_string(bytes / 1048576) + " nf=" + to_string(nf) + " checksum=" + to_string(acc))
