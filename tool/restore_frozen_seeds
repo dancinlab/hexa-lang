@@ -349,6 +349,153 @@ if [ -f "$rt" ] && ! grep -q 'gemm-omp r1' "$rt"; then
   fi
 fi
 
+# ── gemm-perf r4 — BLIS-style packed GEBP microkernel (opt-in, verdict-level) ─
+# REFERENCE-FIRST (c23, user 2026-06-19): the 14% roofline wall is broken not by
+# tuning tile/unroll guesses but by borrowing the VERIFIED BLIS/OpenBLAS GEBP
+# algorithm — packing (A→Ã, B→B̃ cache-aligned) + register-blocking mr×nr
+# microkernel + 3-level cache blocking (mc·kc·nc). Constants extracted from BLIS
+# config/zen3/bli_cntx_init_zen3.c (NOT guessed): MR=6, NR=8, MC=72, KC=256,
+# NC=4080 for dgemm (bli_dgemm_haswell_asm_6x8). Measured on aiden (Ryzen 5
+# 9600X Zen5, clang-18 -O3 -march=native -ffp-contract=fast, OMP_NUM_THREADS=1):
+#   d=512  i6=30.1  GEBP=101.2  OpenBLAS=125.6 → GEBP 81% of roofline (i6 24%)
+#   d=768  i6=32.6  GEBP=105.2  OpenBLAS=129.4 → GEBP 81% (i6 25%)
+#   d=1024 i6=30.3  GEBP=103.5  OpenBLAS=129.6 → GEBP 80% (i6 23%)
+#   d=2048 i6=22.1  GEBP=105.9  OpenBLAS=132.6 → GEBP 80% (i6 17%)
+# i.e. a pure-C portable GEBP (compiler auto-vectorizes the 6×8 microkernel — no
+# hand asm) reaches ~80% of OpenBLAS, a ~3.3–4.8× lift over the shipped i6 kernel.
+# This confirms the r2 "packing closed-negative" note was scoped to the OLD
+# strict-FP scalar-mulsd build; once the microkernel VECTORIZES (-march=native,
+# shipped via r3 HEXA_OMP), packing's cache-residency win dominates the pack cost.
+#
+# BIT-CHANGE → OPT-IN ONLY: the kc-tiling + packing REORDERS the k-summation (each
+# C[i,j] now sums in KC=256 chunks, not k=0..K-1 monotonic) → BIT-DIFFERENT from
+# the default ikj kernel (measured FNV differs every size; max rel-err vs OpenBLAS
+# 2e-13…8e-10 = round-off, same order OpenBLAS itself uses). So GEBP is gated
+# behind `#ifdef _OPENMP` — it compiles ONLY in the HEXA_OMP=1 build (which is
+# already verdict-level, NOT byte-exact). The DEFAULT ship has no -fopenmp →
+# _OPENMP undefined → the entire GEBP block + dispatch vanish at preprocess →
+# the default binary is BYTE-IDENTICAL to the i6/r2 kernel (faithful-nobaseline
+# 3-target unchanged). Composes with gemm-omp: the GEBP outer jc/ic loops carry
+# the `#pragma omp parallel for` (each thread owns whole mc×nc C-blocks; the
+# per-block accum order is fixed regardless of thread count → thread-count-
+# invariant within the GEBP path). SSOT = immutable frozen blob (151c52c8…) →
+# post-restore awk patch (r1/r2/gemm-omp precedent). Idempotent: marker
+# (gemm-perf r4) blocks double-apply. Runs AFTER r1/r2/gemm-omp (sees final form).
+if [ -f "$rt" ] && ! grep -q 'gemm-perf r4' "$rt"; then
+  # Piece 1: inject the static GEBP function (+ pack/microkernel helpers) right
+  # before the `HexaVal hexa_farr_matmul(` definition line. Entire block is inside
+  # `#ifdef _OPENMP` so it is absent from the default (no -fopenmp) build.
+  awk '
+    /^HexaVal hexa_farr_matmul\(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,$/ && !done {
+      print "#ifdef _OPENMP"
+      print "// gemm-perf r4 — BLIS-style packed GEBP (opt-in; compiled only with -fopenmp)."
+      print "// Constants from BLIS config/zen3 (MR=6 NR=8 MC=72 KC=256 NC=4080). Packs A→Ap"
+      print "// (MR-row micropanels) and B→Bp (NR-col micropanels) into cache-aligned buffers,"
+      print "// then runs the mr×nr register microkernel over a rank-KC update. ~80% of"
+      print "// OpenBLAS roofline single-thread (vs ~20% for the ikj kernel). Bit-different"
+      print "// from the default kernel (kc-tiled summation) → verdict-level, opt-in only."
+      print "#define HX_GEBP_MR 6"
+      print "#define HX_GEBP_NR 8"
+      print "static void hx_gebp_microkernel(int64_t kc, const double* Ap, const double* Bp,"
+      print "                                double* C, int64_t ldc, int64_t mr, int64_t nr) {"
+      print "    double acc[HX_GEBP_MR][HX_GEBP_NR];"
+      print "    for (int ii = 0; ii < HX_GEBP_MR; ii++)"
+      print "        for (int jj = 0; jj < HX_GEBP_NR; jj++) acc[ii][jj] = 0.0;"
+      print "    for (int64_t p = 0; p < kc; p++) {"
+      print "        const double* a = Ap + p * HX_GEBP_MR;"
+      print "        const double* b = Bp + p * HX_GEBP_NR;"
+      print "        for (int ii = 0; ii < HX_GEBP_MR; ii++)"
+      print "            for (int jj = 0; jj < HX_GEBP_NR; jj++) acc[ii][jj] += a[ii] * b[jj];"
+      print "    }"
+      print "    for (int64_t ii = 0; ii < mr; ii++)"
+      print "        for (int64_t jj = 0; jj < nr; jj++) C[ii * ldc + jj] += acc[ii][jj];"
+      print "}"
+      print "static void hx_gebp_packA(const double* A, int64_t lda, int64_t mc, int64_t kc,"
+      print "                          double* Ap) {"
+      print "    int64_t pos = 0;"
+      print "    for (int64_t i = 0; i < mc; i += HX_GEBP_MR) {"
+      print "        int64_t mr = (mc - i < HX_GEBP_MR) ? (mc - i) : HX_GEBP_MR;"
+      print "        for (int64_t p = 0; p < kc; p++)"
+      print "            for (int ii = 0; ii < HX_GEBP_MR; ii++)"
+      print "                Ap[pos++] = (ii < mr) ? A[(i + ii) * lda + p] : 0.0;"
+      print "    }"
+      print "}"
+      print "static void hx_gebp_packB(const double* B, int64_t ldb, int64_t kc, int64_t nc,"
+      print "                          double* Bp) {"
+      print "    int64_t pos = 0;"
+      print "    for (int64_t j = 0; j < nc; j += HX_GEBP_NR) {"
+      print "        int64_t nr = (nc - j < HX_GEBP_NR) ? (nc - j) : HX_GEBP_NR;"
+      print "        for (int64_t p = 0; p < kc; p++)"
+      print "            for (int jj = 0; jj < HX_GEBP_NR; jj++)"
+      print "                Bp[pos++] = (jj < nr) ? B[p * ldb + (j + jj)] : 0.0;"
+      print "    }"
+      print "}"
+      print "// Returns 1 on success (C populated), 0 if buffer alloc failed (caller falls"
+      print "// back to the bit-identical ikj kernel). C must be pre-zeroed by the caller."
+      print "static int hx_farr_matmul_gebp(const double* A, const double* B, double* C,"
+      print "                               int64_t M, int64_t K, int64_t N) {"
+      print "    const int64_t MC = 72, KC = 256, NC = 4080;"
+      print "    int64_t apn = (MC + HX_GEBP_MR) * KC, bpn = (NC + HX_GEBP_NR) * KC;"
+      print "    double* Ap = (double*) aligned_alloc(64, (size_t) apn * sizeof(double) + 4096);"
+      print "    double* Bp = (double*) aligned_alloc(64, (size_t) bpn * sizeof(double) + 4096);"
+      print "    if (!Ap || !Bp) { free(Ap); free(Bp); return 0; }"
+      print "    for (int64_t jc = 0; jc < N; jc += NC) {"
+      print "        int64_t nc = (N - jc < NC) ? (N - jc) : NC;"
+      print "        for (int64_t pc = 0; pc < K; pc += KC) {"
+      print "            int64_t kc = (K - pc < KC) ? (K - pc) : KC;"
+      print "            hx_gebp_packB(B + pc * N + jc, N, kc, nc, Bp);"
+      print "            for (int64_t ic = 0; ic < M; ic += MC) {"
+      print "                int64_t mc = (M - ic < MC) ? (M - ic) : MC;"
+      print "                hx_gebp_packA(A + ic * K + pc, K, mc, kc, Ap);"
+      print "                for (int64_t jr = 0; jr < nc; jr += HX_GEBP_NR) {"
+      print "                    int64_t nr = (nc - jr < HX_GEBP_NR) ? (nc - jr) : HX_GEBP_NR;"
+      print "                    for (int64_t ir = 0; ir < mc; ir += HX_GEBP_MR) {"
+      print "                        int64_t mr = (mc - ir < HX_GEBP_MR) ? (mc - ir) : HX_GEBP_MR;"
+      print "                        hx_gebp_microkernel(kc, Ap + (ir / HX_GEBP_MR) * HX_GEBP_MR * kc,"
+      print "                                            Bp + (jr / HX_GEBP_NR) * HX_GEBP_NR * kc,"
+      print "                                            C + (ic + ir) * N + (jc + jr), N, mr, nr);"
+      print "                    }"
+      print "                }"
+      print "            }"
+      print "        }"
+      print "    }"
+      print "    free(Ap); free(Bp);"
+      print "    return 1;"
+      print "}"
+      print "#endif /* _OPENMP — gemm-perf r4 GEBP */"
+      done=1
+    }
+    { print }
+  ' "$rt" > "$rt.gpr4a" && mv "$rt.gpr4a" "$rt"
+  # Piece 2: inject the dispatch at the kernel entry, right before the r1 i6
+  # comment line. Large shapes route to GEBP under _OPENMP; tiny shapes (which
+  # the i6 kernel already handles cache-resident) and the default build stay on
+  # the bit-identical ikj path. C is zero-filled by hexa_farr_zeros above.
+  awk '
+    /^    \/\/ gemm-perf r1 — register-blocked i6: 6 output rows processed per$/ && !done {
+      print "#ifdef _OPENMP"
+      print "    // gemm-perf r4 — opt-in BLIS GEBP dispatch (compiled only with -fopenmp)."
+      print "    // Route shapes large enough to amortize packing to the packed GEBP path"
+      print "    // (~80% roofline). The gate (M*K and K*N both > 8192) mirrors the CUDA"
+      print "    // dim-gate above so the tiny byte-eq oracle shapes never reach GEBP."
+      print "    // GEBP is bit-different (kc-tiled accum) but verdict-level — this whole"
+      print "    // block is absent from the default (no -fopenmp) build. C is pre-zeroed."
+      print "    if ((M * K) > 8192 && (K * N) > 8192) {"
+      print "        if (hx_farr_matmul_gebp(A, B, C, M, K, N)) { return c_handle; }"
+      print "        /* alloc failed → fall through to the bit-identical ikj kernel */"
+      print "    }"
+      print "#endif"
+      done=1
+    }
+    { print }
+  ' "$rt" > "$rt.gpr4b" && mv "$rt.gpr4b" "$rt"
+  if grep -q 'gemm-perf r4' "$rt"; then
+    echo "[restore_frozen_seeds] gemm-perf r4: BLIS-style packed GEBP (opt-in #ifdef _OPENMP, ~80% roofline) into $rt"
+  else
+    echo "[restore_frozen_seeds] gemm-perf r4: WARN — anchor not found, farr_matmul left as r1/r2"
+  fi
+fi
+
 # ── RT-NATIVE leg B Z2a (trim-ends group) — scrub frozen runtime.c C bodies ───
 # The casefold/trim group's C bodies were ABSENT from the frozen 151c52c8
 # runtime.c, so no scrub was needed for them. The trim-ends siblings
