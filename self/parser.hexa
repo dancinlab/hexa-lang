@@ -1342,6 +1342,20 @@ fn parse_stmt() {
     let kind = p_peek_kind()
 
     if kind == "Let" { return parse_let() }
+    // `var x = …` is a CONTEXTUAL mutable-let decl (sugar for `let mut x = …`).
+    // `var` is NOT a reserved keyword — it lexes as an ordinary Ident so that
+    // existing bindings named `var` (e.g. `let var = variance; var = var + d`)
+    // keep working. We only treat it as a decl keyword at statement start when
+    // it is immediately followed by `IDENT (= | :)` — the unambiguous decl
+    // shape. `var = …` (assignment to a binding named var) and `var.foo` /
+    // `var + 1` (uses of such a binding) fall through to expression parsing.
+    if kind == "Ident" && p_peek().value == "var" {
+        let _v_name = p_peek_ahead(1)
+        let _v_after = p_peek_ahead(2)
+        if _v_name.kind == "Ident" && (_v_after.kind == "Eq" || _v_after.kind == "Colon") {
+            return parse_let()
+        }
+    }
     if kind == "Const" { return parse_const() }
     if kind == "Static" { return parse_static() }
     if kind == "Fn" { return parse_fn_decl() }
@@ -1543,8 +1557,12 @@ fn parse_stmt() {
 //   let {x, y} = expr            → MapDestructLetStmt
 
 fn parse_let() {
-    p_advance() // consume 'let'
-    let mut is_mut = false
+    // `var x = …` is sugar for `let mut x = …` (same LetMutStmt node). The
+    // entry token is `let` or `var`; capture it before consuming so `var`
+    // implies mutability without a following `mut` token.
+    let _decl_kw = p_peek()
+    p_advance() // consume 'let' or 'var'
+    let mut is_mut = (_decl_kw.value == "var")
     if p_peek_kind() == "Mut" {
         p_advance()
         is_mut = true

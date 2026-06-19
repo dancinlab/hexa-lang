@@ -1532,8 +1532,13 @@ fn parse_continue_expr() -> Expr {
 
 fn parse_let_expr(anns: [Annotation]) -> Expr {
     let kw = peek()
+    // `var x = …` is sugar for `let mut x = …`. `var` is NOT a reserved
+    // keyword (it lexes as an ordinary Ident so bindings named `var` keep
+    // working) — the contextual dispatch in parse_stmt only routes the
+    // `var IDENT (= | :)` shape here. A `var` leader implies mutability.
+    let _is_var_kw = same_kind(kw.kind, TokenKind::Ident) && kw.text == "var"
     advance()
-    let is_mut = eat(TokenKind::KwMut)
+    let is_mut = _is_var_kw || eat(TokenKind::KwMut)
     let name_tok = expect(TokenKind::Ident)
     // optional `: Type` — RFC 085 Step B: capture the type's name (notably
     // `Array:<N>` for sized arrays from `[T; N]` syntax) and encode it into
@@ -1578,6 +1583,18 @@ fn parse_stmt() -> Expr {
     }
     if check_kind(TokenKind::KwLet) {
         return parse_let_expr(anns)
+    }
+    // Contextual `var x = …` (mutable-let sugar). `var` is an ordinary Ident;
+    // only the unambiguous `var IDENT (= | :)` decl shape routes to
+    // parse_let_expr. `var = …` / `var.foo` / `var + 1` (uses of a binding
+    // named `var`) fall through to expression parsing.
+    if check_kind(TokenKind::Ident) && peek().text == "var" {
+        let _vn = peek_at(1)
+        let _va = peek_at(2)
+        if same_kind(_vn.kind, TokenKind::Ident)
+           && (same_kind(_va.kind, TokenKind::Eq) || same_kind(_va.kind, TokenKind::Colon)) {
+            return parse_let_expr(anns)
+        }
     }
     return parse_expr()
 }

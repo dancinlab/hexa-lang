@@ -140,6 +140,15 @@ fn readdir_darwin(fd: int) -> [string] {
     return out
 }
 
+// NOTE: the WRITE-half native primitives (fs_write_all_native /
+// fs_append_all_native) do NOT live here. fs.hexa `use`s self::rt::syscall
+// + self::rt::alloc, so flattening it for a frozen seed would re-export the
+// whole syscall + arena symbol set (122 globals) that the alloc seed already
+// owns → multiple-definition at runtime.a ar. The write prims are therefore a
+// SELF-CONTAINED standalone SSOT (stdlib/runtime/fs_write_core.hexa) with zero
+// external `.globl` (the array_core model), frozen into self/native/fs_core_*.s
+// by tool/regen_fs_core_native_s.sh. See that file.
+
 // ═══════════════════════════════════════════════════════════════════
 // rt_* aliases — names used by hexa_full / compile pipeline
 // ═══════════════════════════════════════════════════════════════════
