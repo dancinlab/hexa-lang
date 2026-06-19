@@ -1,0 +1,101 @@
+// stdlib/math/codes_test.hexa — weight-enumerator self-check on the extended
+// binary Golay code [24,12,8]. Verifies the canonical weight distribution
+//   A_0=1 · A_8=759 · A_12=2576 · A_16=759 · A_24=1  (min distance 8)
+// against the generator G = [I_12 | B] (bordered quadratic-residue B). These
+// are the integers registered as `golay24_*` in `hexa verify` (tool/verify_cli).
+
+// Local copies of the codes.hexa weight-enumerator primitives (self-contained
+// test, mirrors stdlib/math/lattice_test.hexa convention).
+fn code_weights(gen: array, k: int, n: int) -> array {
+    let total = 1
+    let t = 0
+    while t < k { total = total * 2; t = t + 1 }
+    let weights = []
+    let msg = 0
+    while msg < total {
+        let wt = 0
+        let j = 0
+        while j < n {
+            let bit = 0
+            let i = 0
+            let mp = msg
+            while i < k {
+                if (mp % 2) == 1 { bit = (bit + gen[i * n + j]) % 2 }
+                mp = mp / 2
+                i = i + 1
+            }
+            wt = wt + bit
+            j = j + 1
+        }
+        weights.push(wt)
+        msg = msg + 1
+    }
+    weights
+}
+
+fn weight_count(weights: array, total: int, target: int) -> int {
+    let c = 0
+    let i = 0
+    while i < total {
+        if weights[i] == target { c = c + 1 }
+        i = i + 1
+    }
+    c
+}
+
+fn min_distance(weights: array, total: int) -> int {
+    let m = 0
+    let i = 0
+    while i < total {
+        let w = weights[i]
+        if w > 0 {
+            if m == 0 { m = w }
+            else { if w < m { m = w } }
+        }
+        i = i + 1
+    }
+    m
+}
+
+fn gen_golay24() -> array {
+    // G = [I_12 | B], 12×24 over GF(2). Weight enum independently checked
+    // (4096 codewords) vs the Catalogue / MacWilliams values.
+    let rows = [
+        [1,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1],
+        [0,1,0,0,0,0,0,0,0,0,0,0,1,1,1,0,1,1,1,0,0,0,1,0],
+        [0,0,1,0,0,0,0,0,0,0,0,0,1,1,0,1,1,1,0,0,0,1,0,1],
+        [0,0,0,1,0,0,0,0,0,0,0,0,1,0,1,1,1,0,0,0,1,0,1,1],
+        [0,0,0,0,1,0,0,0,0,0,0,0,1,1,1,1,0,0,0,1,0,1,1,0],
+        [0,0,0,0,0,1,0,0,0,0,0,0,1,1,1,0,0,0,1,0,1,1,0,1],
+        [0,0,0,0,0,0,1,0,0,0,0,0,1,1,0,0,0,1,0,1,1,0,1,1],
+        [0,0,0,0,0,0,0,1,0,0,0,0,1,0,0,0,1,0,1,1,0,1,1,1],
+        [0,0,0,0,0,0,0,0,1,0,0,0,1,0,0,1,0,1,1,0,1,1,1,0],
+        [0,0,0,0,0,0,0,0,0,1,0,0,1,0,1,0,1,1,0,1,1,1,0,0],
+        [0,0,0,0,0,0,0,0,0,0,1,0,1,1,0,1,1,0,1,1,1,0,0,0],
+        [0,0,0,0,0,0,0,0,0,0,0,1,1,0,1,1,0,1,1,1,0,0,0,1]
+    ]
+    let g = []
+    let i = 0
+    while i < 12 { let j = 0; while j < 24 { g.push(rows[i][j]); j = j + 1 } i = i + 1 }
+    g
+}
+
+fn check_eq_int(name: string, got: int, want: int) -> int {
+    if got == want { println("PASS " + name + " = " + to_string(got)); return 1 }
+    println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want))
+    return 0
+}
+
+fn main() {
+    let ws = code_weights(gen_golay24(), 12, 24)
+    let total = 4096
+    let p = 0
+    p = p + check_eq_int("golay24_a0",       weight_count(ws, total, 0), 1)
+    p = p + check_eq_int("golay24_min_dist", min_distance(ws, total), 8)
+    p = p + check_eq_int("golay24_a8",       weight_count(ws, total, 8), 759)
+    p = p + check_eq_int("golay24_a12",      weight_count(ws, total, 12), 2576)
+    p = p + check_eq_int("golay24_a16",      weight_count(ws, total, 16), 759)
+    p = p + check_eq_int("golay24_a24",      weight_count(ws, total, 24), 1)
+    if p == 6 { println("OK codes 6/6") }
+    else { println("FAILED codes " + to_string(p) + "/6") }
+}
