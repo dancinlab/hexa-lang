@@ -11,7 +11,7 @@
 #      (the dummy `_drv.hexa` first token satisfies the standalone driver's
 #       "missing SOURCE" guard; the real lib source is the trailing arg).
 #   3) prepend the frozen-seed header (provenance + ABI notes).
-#   4) sanity: cross-assemble + assert all 14 rt_str_* are defined-global (T).
+#   4) sanity: cross-assemble + assert all 15 rt_str_* are defined-global (T).
 #
 # NOTE on determinism: the emitted GLOBAL symbol set (the ABI/linkage contract)
 # is byte-identical across regen runs, but local `.L<hex>_bbN` basic-block label
@@ -53,7 +53,7 @@ emit_one() {
     local raw="$TMP/raw.s"
     "$APRIME" "$TMP/_drv.hexa" --emit=asm --target="$triple" -o "$raw" "$LIB" >/dev/null 2>&1
     local n; n="$(grep -cE '^\.globl[[:space:]]+_?rt_str_' "$raw" || echo 0)"
-    [ "$n" -ge 14 ] || { echo "[regen_rt_hi] ERROR: $triple emitted only $n/14 rt_str_*" >&2; exit 1; }
+    [ "$n" -ge 15 ] || { echo "[regen_rt_hi] ERROR: $triple emitted only $n/15 rt_str_*" >&2; exit 1; }
     # PIC fixup (x86_64-linux only): the emitter loads a few string-literal
     # addresses with an ABSOLUTE `mov <reg>, .LCstrN`, which yields an
     # R_X86_64_32S relocation against `.rodata` — REJECTED when linking the
@@ -75,7 +75,7 @@ emit_one() {
         printf '//   --target=%s -o %s runtime_hi_lib.hexa (lib-only head of self/runtime_hi.hexa).\n' "$triple" "$(basename "$out")"
         printf '//   Provides rt_str_* (zero C): split/lines/pad_left/pad_right/repeat/center +\n'
         printf '//   to_upper/to_lower/trim/trim_start/trim_end +\n'
-        printf '//   starts_with_b/ends_with_b/contains_b (14 fns). ABI: %s.\n' "$abi"
+        printf '//   starts_with_b/ends_with_b/contains_b + from_int (15 fns). ABI: %s.\n' "$abi"
         printf '//   Lets this target avoid #include "runtime_hi_gen.c" (leg B ls-reduction).\n'
         # Normalize the `.file`/source path (a per-run mktemp tmpdir) to a fixed
         # string so the frozen seed is byte-deterministic across regen runs — the
@@ -101,6 +101,9 @@ emit_one() {
                 printf 'typedef struct{long a,b;}HexaVal;HexaVal rt_str_trim(HexaVal);int main(void){HexaVal z={0,0};rt_str_trim(z);return 0;}\n' > "$stub"
                 # define the hexa_* externs the seed calls so the stub link resolves
                 printf 'HexaVal hexa_array_new(void){HexaVal z={0,0};return z;}void hexa_array_push(HexaVal a,HexaVal b){(void)a;(void)b;}long hexa_len(HexaVal a){(void)a;return 0;}HexaVal hexa_str_byte_at(HexaVal a,long b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_str_join(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_str_substring(HexaVal a,long b,long c){(void)a;(void)b;(void)c;HexaVal z={0,0};return z;}HexaVal hexa_int(long a){(void)a;HexaVal z={0,0};return z;}HexaVal hexa_eq(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}int hexa_truthy(HexaVal a){(void)a;return 0;}\n' >> "$stub"
+                # arithmetic/compare/index externs introduced by rt_str_from_int
+                # (the construct-half itoa prim — integer math + array index).
+                printf 'HexaVal hexa_add_slow(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_sub(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_mul(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_div(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_mod(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_cmp_lt(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_cmp_le(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_cmp_gt(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_cmp_ge(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}HexaVal hexa_index_get(HexaVal a,HexaVal b){(void)a;(void)b;HexaVal z={0,0};return z;}\n' >> "$stub"
                 # Prefer a full cross toolchain (zig cc) for the PIE LINK — plain
                 # clang on a non-linux host has no linux crt/libc and fails the
                 # link for reasons unrelated to relocations (false negative). zig
