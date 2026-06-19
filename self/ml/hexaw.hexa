@@ -279,11 +279,19 @@ fn hexaw_save_binary(path, names, shapes, datas) {
 }
 
 // ── HexaW record struct ─────────────────────────────────
+//  boxing-unbox r2: `datas[i]` is now a **farr32 handle** (native FP32
+//  float[] handle, 4 B/elem) — NOT a boxed [float] array. The boxed
+//  per-element f32 (176 B/elem → 44× blowup, jetsam on real weights)
+//  is gone: HEXAW2 tensors are streamed straight off disk into a farr32
+//  via read_f32_array_at (RSS≈raw f32 size, 1×). `counts[i]` carries the
+//  element count (farr32 has no boxed len()), so consumers index via
+//  farr32_get(hexaw_tensor(...), i) and size via hexaw_count(...).
 struct HexawRecord {
     path: string,
     names: array,
     shapes: array,
-    datas: array
+    datas: array,
+    counts: array
 }
 
 // ── LOAD ─────────────────────────────────────────────────
@@ -295,21 +303,23 @@ struct HexawRecord {
 //  would return the same HexawRecord for every path. For big single-
 //  shot loads callers can cache the record themselves.
 fn hexaw_load(path) {
-    // Peek first 7 bytes to disambiguate format. read_file_bytes
-    // with no length still loads the whole file — fine for the
-    // smoke test (KB-range) but the native converter path reads
-    // HEXAW2 tensors on demand via hexaw_load_binary_streaming.
-    let raw = read_file_bytes(path)
-    let nb = len(raw)
+    // Peek just the 7-byte magic via read_bytes_at — NO whole-file slurp.
+    // boxing-unbox r2: the prior read_file_bytes(path) boxed EVERY byte of
+    // the file (~16 B/byte AOT) before we even knew the format; for a 56GB
+    // HEXAW2 dump that is instant jetsam. We now read the 7-byte magic only,
+    // then the HEXAW2 path streams each tensor's f32 payload directly off
+    // disk into a farr32 (1× RSS) via read_f32_array_at.
+    let magic = read_bytes_at(path, 0, 7)
+    let nb = len(magic)
     if nb < 7 {
         println("[hexaw] ERROR: empty/short file " + path)
-        return HexawRecord { path: path, names: [], shapes: [], datas: [] }
+        return HexawRecord { path: path, names: [], shapes: [], datas: [], counts: [] }
     }
     // Magic byte 0-5 = "HEXAW", byte 6 = '1' or '2'
-    if raw[0] == 72 && raw[1] == 69 && raw[2] == 88 && raw[3] == 65 && raw[4] == 87 && raw[5] == 50 {
-        return hexaw_load_binary_from_bytes(path, raw)
+    if magic[0] == 72 && magic[1] == 69 && magic[2] == 88 && magic[3] == 65 && magic[4] == 87 && magic[5] == 50 {
+        return hexaw_load_binary(path)
     }
-    // Legacy text path — reuse existing tokenizer
+    // Legacy text path — reuse existing tokenizer (HEXAW1 = KB smoke files)
     let src = read_file(path)
     return hexaw_load_text(path, src)
 }
@@ -320,22 +330,23 @@ fn hexaw_load_text(path, src) {
     let ntok = len(toks)
     if ntok < 2 {
         println("[hexaw] ERROR: empty/short file " + path)
-        return HexawRecord { path: path, names: [], shapes: [], datas: [] }
+        return HexawRecord { path: path, names: [], shapes: [], datas: [], counts: [] }
     }
     if toks[0] != "HEXAW1" {
         println("[hexaw] ERROR: bad magic " + toks[0])
-        return HexawRecord { path: path, names: [], shapes: [], datas: [] }
+        return HexawRecord { path: path, names: [], shapes: [], datas: [], counts: [] }
     }
     let n = to_int(toks[1])
     let mut names = []
     let mut shapes = []
     let mut datas = []
+    let mut counts = []
     let mut p = 2
     let mut t = 0
     while t < n {
         if p >= ntok {
             println("[hexaw] ERROR: truncated header")
-            return HexawRecord { path: path, names: names, shapes: shapes, datas: datas }
+            return HexawRecord { path: path, names: names, shapes: shapes, datas: datas, counts: counts }
         }
         let name = toks[p]; p = p + 1
         let ndim = to_int(toks[p]); p = p + 1
@@ -347,103 +358,125 @@ fn hexaw_load_text(path, src) {
             d = d + 1
         }
         let count = to_int(toks[p]); p = p + 1
-        let mut data = []
+        // r2: text values parse into a farr32 handle (4 B/elem), not a boxed
+        // [float]. HEXAW1 is KB smoke-test only, so the per-element set loop
+        // here is fine — it keeps hexaw_tensor's return type uniform (farr32).
+        let data = farr32_zeros(count)
         let mut j = 0
         while j < count {
-            data = data + [to_float(toks[p])]
+            farr32_set(data, j, to_float(toks[p]))
             p = p + 1
             j = j + 1
         }
         names = names + [name]
         shapes = shapes + [shape]
         datas = datas + [data]
+        counts = counts + [count]
         t = t + 1
     }
-    return HexawRecord { path: path, names: names, shapes: shapes, datas: datas }
+    return HexawRecord { path: path, names: names, shapes: shapes, datas: datas, counts: counts }
 }
 
-// HEXAW2 binary parser — walks newline-delimited header fields
-// then pulls count*4 raw bytes per tensor and decodes f32 LE.
-// Accepts the full byte array (caller has already slurped the file).
-fn hexaw_load_binary_from_bytes(path, raw) {
-    let nb = len(raw)
-    let mut pos = 0
-    // Skip "HEXAW2\n"
-    pos = 7
-    // Read n_tensors (ASCII digits until \n)
-    let mut nstr = ""
-    while pos < nb && raw[pos] != 10 {
-        nstr = nstr + to_string(from_char_code(raw[pos]))
-        pos = pos + 1
+// ── HEXAW2 header-field reader (boxing-unbox r2) ─────────
+//  Reads ASCII bytes from `path` starting at absolute byte `off` up to
+//  (but not including) the next 0x0A newline, returning [field_string,
+//  next_off] where next_off is the byte just PAST the newline. Headers
+//  are tiny (a name line + a few decimal-int lines per tensor), so a
+//  bounded HDR_WIN read per field is O(header) transient — never the
+//  payload. `want_str` controls UTF-8 decode (name) vs leave-as-bytes.
+// (plain byte I/O parse — no formula, so no @cite/@verify/@grace needed at S8)
+fn _hexaw_read_field(path, off, want_str) {
+    let HDR_WIN = 4096
+    let mut field_bytes = []
+    let mut o = off
+    let mut found_nl = false
+    while !found_nl {
+        let win = read_bytes_at(path, o, HDR_WIN)
+        let wlen = len(win)
+        if wlen == 0 {
+            // EOF before newline — return what we have.
+            break
+        }
+        let mut k = 0
+        while k < wlen {
+            if win[k] == 10 {
+                o = o + k + 1
+                found_nl = true
+                break
+            }
+            field_bytes.push(win[k] & 0xFF)
+            k = k + 1
+        }
+        if !found_nl {
+            o = o + wlen
+            if wlen < HDR_WIN { break }   // short read = EOF
+        }
     }
-    pos = pos + 1
-    let n = to_int(nstr)
+    if want_str {
+        // UTF-8 decode ONCE (tensor names may be non-ASCII; OP-127 class).
+        return [bytes_to_str_raw(field_bytes), o]
+    }
+    // ASCII digit field — string form for to_int (provably <0x80).
+    let mut s = ""
+    let mut i = 0
+    let m = len(field_bytes)
+    while i < m {
+        s = s + to_string(from_char_code(field_bytes[i]))
+        i = i + 1
+    }
+    return [s, o]
+}
+
+// HEXAW2 binary parser — STREAMING (boxing-unbox r2).
+//  Walks newline-delimited header fields directly off `path` (bounded
+//  header reads), and for each tensor loads its count×f32 LE payload
+//  DIRECTLY into a farr32 handle via read_f32_array_at(path, payload_off,
+//  count). No whole-file slurp, no boxed-byte intermediate, no boxed
+//  [float] — RSS per tensor ≈ raw f32 size (1×). datas[i] is a farr32
+//  handle; counts[i] is the element count.
+fn hexaw_load_binary(path) {
+    // Skip "HEXAW2\n" (7 bytes), then read n_tensors.
+    let nres = _hexaw_read_field(path, 7, false)
+    let n = to_int(nres[0])
+    let mut pos = nres[1]
     let mut names = []
     let mut shapes = []
     let mut datas = []
+    let mut counts = []
     let mut t = 0
     while t < n {
-        // name line
-        // OP-127: tensor names can be non-ASCII UTF-8 on disk. Accumulate the
-        // raw bytes and decode the UTF-8 sequence ONCE via bytes_to_str_raw —
-        // the prior per-byte from_char_code re-encoded each byte as a codepoint
-        // and double-encoded any byte >=0x80 into mojibake (OP-79/OP-125 class).
-        // (The ndim/dims/count fields below stay per-byte: ASCII digits only,
-        //  consumed by to_int — provably <0x80, no double-encode possible.)
-        let mut name_bytes = []
-        while pos < nb && raw[pos] != 10 {
-            name_bytes.push(raw[pos] & 0xFF)
-            pos = pos + 1
-        }
-        let name = bytes_to_str_raw(name_bytes)
-        pos = pos + 1
+        // name line (UTF-8 decode)
+        let nmres = _hexaw_read_field(path, pos, true)
+        let name = nmres[0]
+        pos = nmres[1]
         // ndim
-        let mut ndstr = ""
-        while pos < nb && raw[pos] != 10 {
-            ndstr = ndstr + to_string(from_char_code(raw[pos]))
-            pos = pos + 1
-        }
-        pos = pos + 1
-        let ndim = to_int(ndstr)
+        let ndres = _hexaw_read_field(path, pos, false)
+        let ndim = to_int(ndres[0])
+        pos = ndres[1]
         // dims
         let mut shape = []
         let mut d = 0
         while d < ndim {
-            let mut ds = ""
-            while pos < nb && raw[pos] != 10 {
-                ds = ds + to_string(from_char_code(raw[pos]))
-                pos = pos + 1
-            }
-            pos = pos + 1
-            shape = shape + [to_int(ds)]
+            let dres = _hexaw_read_field(path, pos, false)
+            shape = shape + [to_int(dres[0])]
+            pos = dres[1]
             d = d + 1
         }
         // count
-        let mut cs = ""
-        while pos < nb && raw[pos] != 10 {
-            cs = cs + to_string(from_char_code(raw[pos]))
-            pos = pos + 1
-        }
-        pos = pos + 1
-        let count = to_int(cs)
-        // payload: count * 4 bytes LE f32
-        let mut data = []
-        let mut j = 0
-        while j < count {
-            let b0 = raw[pos]
-            let b1 = raw[pos + 1]
-            let b2 = raw[pos + 2]
-            let b3 = raw[pos + 3]
-            pos = pos + 4
-            data = data + [hexaw_bytes_to_f32(b0, b1, b2, b3)]
-            j = j + 1
-        }
+        let cres = _hexaw_read_field(path, pos, false)
+        let count = to_int(cres[0])
+        pos = cres[1]
+        // payload begins at byte `pos`. Stream count f32s LE straight into
+        // a farr32 (4 B/elem, RSS≈raw) — NO boxed bytes, NO per-element box.
+        let data = read_f32_array_at(path, pos, count)
+        pos = pos + count * 4
         names = names + [name]
         shapes = shapes + [shape]
         datas = datas + [data]
+        counts = counts + [count]
         t = t + 1
     }
-    return HexawRecord { path: path, names: names, shapes: shapes, datas: datas }
+    return HexawRecord { path: path, names: names, shapes: shapes, datas: datas, counts: counts }
 }
 
 // ── @memoize weight_dict cache — lookup flat data by name ─
@@ -454,11 +487,27 @@ fn hexaw_tensor(hxw, name) {
     let mut i = 0
     while i < n {
         if names[i] == name {
+            // r2: datas[i] is a farr32 handle (4 B/elem), not a boxed [float].
+            // Index with farr32_get(handle, j); size with hexaw_count(hxw, name).
             return hxw.datas[i]
         }
         i = i + 1
     }
-    return []
+    // Miss → empty farr32 handle (uniform type; hexaw_count returns 0).
+    return farr32_zeros(0)
+}
+
+// ── element count for a tensor (r2: farr32 has no boxed len()) ─
+//  Returns the number of f32 elements in `name`'s data, or 0 if absent.
+fn hexaw_count(hxw, name) {
+    let names = hxw.names
+    let n = len(names)
+    let mut i = 0
+    while i < n {
+        if names[i] == name { return hxw.counts[i] }
+        i = i + 1
+    }
+    return 0
 }
 
 // ── shape lookup ─────────────────────────────────────────
@@ -474,8 +523,27 @@ fn hexaw_shape(hxw, name) {
 }
 
 // ── JSON-style weight dict → hexaw tuple (convenience) ──
-//  Accepts parallel arrays (names, shapes, datas). A JSON
-//  bridge can be added once json_parse returns a struct.
+//  Accepts parallel arrays (names, shapes, datas). r2: `datas` here may
+//  be boxed [float] arrays (in-memory construction path); we convert
+//  each into a farr32 handle so hexaw_tensor's return type stays uniform
+//  and the consumers' farr32_get index path works unchanged.
 fn hexaw_from_arrays(names, shapes, datas) {
-    return HexawRecord { path: "", names: names, shapes: shapes, datas: datas }
+    let n = len(datas)
+    let mut fdatas = []
+    let mut counts = []
+    let mut i = 0
+    while i < n {
+        let d = datas[i]
+        let c = len(d)
+        let h = farr32_zeros(c)
+        let mut j = 0
+        while j < c {
+            farr32_set(h, j, d[j])
+            j = j + 1
+        }
+        fdatas = fdatas + [h]
+        counts = counts + [c]
+        i = i + 1
+    }
+    return HexawRecord { path: "", names: names, shapes: shapes, datas: fdatas, counts: counts }
 }

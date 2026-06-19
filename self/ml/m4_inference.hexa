@@ -296,11 +296,12 @@ fn m4_kv_write_slab(ptr, layer, pos, vec_ptr, n_kv_heads, head_dim, max_seq) {
 // Memory savings: 7B f32 = 28GB -> bf16 = 14GB (fits M4 16GB)
 
 fn m4_pack_tensor_bf16(f32_data, numel) {
-    // f32_data is a hexa array -- pack to raw f32 buffer first, then bf16
+    // boxing-unbox r2: f32_data is now a farr32 handle (4 B/elem) from
+    // hexaw_tensor, not a boxed [float]. Index via farr32_get.
     let f32_buf = alloc_raw(numel * 4)
     let mut i = 0
     while i < numel {
-        write_f32(f32_buf, i * 4, f32_data[i])
+        write_f32(f32_buf, i * 4, farr32_get(f32_data, i))
         i = i + 1
     }
     let bf16_buf = bf16_pack(f32_buf, numel)
@@ -309,11 +310,11 @@ fn m4_pack_tensor_bf16(f32_data, numel) {
 }
 
 fn m4_pack_tensor_f32(f32_data, numel) {
-    // Pack hexa array to raw f32 buffer
+    // r2: farr32 handle in, raw f32 buffer out. Index via farr32_get.
     let buf = alloc_raw(numel * 4)
     let mut i = 0
     while i < numel {
-        write_f32(buf, i * 4, f32_data[i])
+        write_f32(buf, i * 4, farr32_get(f32_data, i))
         i = i + 1
     }
     return buf

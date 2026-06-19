@@ -38,8 +38,8 @@ use "self/ml/hexaw.hexa"
 
 // ── LoRA weight pair for one projection in one layer ──────────────
 struct LoraLayerWeight {
-    A: array,       // [rank, d_in] — flat float array
-    B: array,       // [d_out, rank] — flat float array
+    A: array,       // [rank, d_in] — farr32 handle (4 B/elem); index farr32_get(A, k)
+    B: array,       // [d_out, rank] — farr32 handle (4 B/elem); index farr32_get(B, k)
     d_in: int,
     d_out: int
 }
@@ -74,24 +74,19 @@ fn lora_scale(alpha, rank) {
 fn _load_pair(hxw, prefix, rank, d_in, d_out) {
     let a_name = prefix + ".A"
     let b_name = prefix + ".B"
-    let a_data = hexaw_tensor(hxw, a_name)
-    let b_data = hexaw_tensor(hxw, b_name)
-    if a_data == nil || b_data == nil {
-        // Missing pair — return zeros (adapter doesn't touch this projection)
-        let mut a_zeros = []
-        let mut i = 0
-        while i < rank * d_in {
-            a_zeros.push(0.0)
-            i = i + 1
-        }
-        let mut b_zeros = []
-        i = 0
-        while i < d_out * rank {
-            b_zeros.push(0.0)
-            i = i + 1
-        }
+    // boxing-unbox r2: hexaw_tensor → farr32 handle (4 B/elem); presence is
+    // tested via hexaw_count (a miss returns count 0, not a nil handle).
+    let a_cnt = hexaw_count(hxw, a_name)
+    let b_cnt = hexaw_count(hxw, b_name)
+    if a_cnt == 0 || b_cnt == 0 {
+        // Missing pair — return zero farr32 handles (adapter doesn't touch
+        // this projection; farr32_zeros initialises every element to 0.0).
+        let a_zeros = farr32_zeros(rank * d_in)
+        let b_zeros = farr32_zeros(d_out * rank)
         return LoraLayerWeight { A: a_zeros, B: b_zeros, d_in: d_in, d_out: d_out }
     }
+    let a_data = hexaw_tensor(hxw, a_name)
+    let b_data = hexaw_tensor(hxw, b_name)
     return LoraLayerWeight { A: a_data, B: b_data, d_in: d_in, d_out: d_out }
 }
 
@@ -109,24 +104,17 @@ fn load_lora(path) {
     let mut alpha = 1.0
     let mut n_layers = 0
 
-    // Try reading metadata tensors (single-element)
-    let rank_t = hexaw_tensor(hxw, "lora.meta.rank")
-    if rank_t != nil {
-        if len(rank_t) > 0 {
-            rank = to_int(rank_t[0])
-        }
+    // Try reading metadata tensors (single-element). boxing-unbox r2:
+    // hexaw_tensor → farr32 handle; presence/size via hexaw_count, value
+    // via farr32_get (the old != nil / len() / [0] boxed-array path).
+    if hexaw_count(hxw, "lora.meta.rank") > 0 {
+        rank = to_int(farr32_get(hexaw_tensor(hxw, "lora.meta.rank"), 0))
     }
-    let alpha_t = hexaw_tensor(hxw, "lora.meta.alpha")
-    if alpha_t != nil {
-        if len(alpha_t) > 0 {
-            alpha = alpha_t[0]
-        }
+    if hexaw_count(hxw, "lora.meta.alpha") > 0 {
+        alpha = farr32_get(hexaw_tensor(hxw, "lora.meta.alpha"), 0)
     }
-    let nlayer_t = hexaw_tensor(hxw, "lora.meta.n_layers")
-    if nlayer_t != nil {
-        if len(nlayer_t) > 0 {
-            n_layers = to_int(nlayer_t[0])
-        }
+    if hexaw_count(hxw, "lora.meta.n_layers") > 0 {
+        n_layers = to_int(farr32_get(hexaw_tensor(hxw, "lora.meta.n_layers"), 0))
     }
 
     // Fallback: scan names for max layer index
@@ -154,18 +142,19 @@ fn load_lora(path) {
 
     println("[lora] Loading adapter: rank=" + str(rank) + " alpha=" + str(alpha) + " layers=" + str(n_layers))
 
-    // Infer dimensions from first available A tensor
-    let probe = hexaw_tensor(hxw, "lora.layers.0.attn_q.A")
+    // Infer dimensions from first available A tensor. r2: element count via
+    // hexaw_count (a miss is count 0, not a nil handle).
+    let probe_cnt = hexaw_count(hxw, "lora.layers.0.attn_q.A")
     let mut dim = 4096
-    if probe != nil {
-        dim = len(probe) / rank
+    if probe_cnt > 0 {
+        dim = probe_cnt / rank
     }
     // FFN dim heuristic: 4x base dim (LLaMA convention)
     let mut ff_dim = dim * 4
 
-    let probe_gate = hexaw_tensor(hxw, "lora.layers.0.ffn_gate.A")
-    if probe_gate != nil {
-        ff_dim = len(probe_gate) / rank
+    let probe_gate_cnt = hexaw_count(hxw, "lora.layers.0.ffn_gate.A")
+    if probe_gate_cnt > 0 {
+        ff_dim = probe_gate_cnt / rank
     }
 
     // Load all layers
@@ -220,7 +209,7 @@ fn apply_lora_delta(base_result_ptr, input_vec_ptr, lw, rank, scale, rows, cols)
         let mut dot = 0.0
         let mut c = 0
         while c < cols {
-            let a_val = lw.A[r * cols + c]
+            let a_val = farr32_get(lw.A, r * cols + c)
             let x_val = deref_f32(input_vec_ptr, c * 4)
             dot = dot + a_val * x_val
             c = c + 1
@@ -235,7 +224,7 @@ fn apply_lora_delta(base_result_ptr, input_vec_ptr, lw, rank, scale, rows, cols)
         let mut dot = 0.0
         let mut r2 = 0
         while r2 < rank {
-            dot = dot + lw.B[i * rank + r2] * intermediate[r2]
+            dot = dot + farr32_get(lw.B, i * rank + r2) * intermediate[r2]
             r2 = r2 + 1
         }
         let cur = deref_f32(base_result_ptr, i * 4)
