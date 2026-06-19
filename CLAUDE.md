@@ -122,8 +122,9 @@ This file is the single governance SSOT (md 단일화) — edit directives here,
   precision) 정직 기록. **hexa 정답지 매핑**: GEMM/farr_matmul perf → **OpenBLAS·BLIS**
   microkernel(packing+register-tiling+캐시블로킹) — **측정 실증**(aiden Zen5): FMA/march 플래그
   만지기는 roofline **~10–24% 천장**(r3 #3644 — "플래그 함정") · 검증된 **BLIS GEBP 알고리즘
-  차용**(MR6 NR8 MC72 KC256 NC4080 packing+3단 캐시블로킹)으로 **80% OpenBLAS roofline**
-  (r4 #3649 — 101~106 GFLOP/s, i6 대비 **3.3~4.8× 도약**) → **reference 알고리즘을 펼쳐
+  차용**(MR6 NR8 MC72 KC256 NC4080 packing+3단 캐시블로킹 + separate restrict 마이크로커널)으로
+  **62~79% OpenBLAS roofline**(r4 #3652 — 83~107 GFLOP/s, 135 GFLOP/s 베이스라인 **실측**, i6
+  대비 **3.5~4.5× 도약**) → **reference 알고리즘을 펼쳐
   차용하는 것이 파라미터 튜닝보다 압도적 레버**임을 수치로 증명(black-box sweep 의 반례) ·
   LLM decode/weight 적재(boxing·KV-cache) → **llama.cpp·ggml**(mmap+contiguous
   unboxed tensor) · QFORGE el-ph |g|² 등 from-scratch 물리 재현 → **Quantum ESPRESSO** 중간값
