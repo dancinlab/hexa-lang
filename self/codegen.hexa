@@ -936,6 +936,46 @@ fn _gen2_lift_nested_decls(ast) {
     return out_ast
 }
 
+// ── RT-NATIVE drop-guard (sh-ctranspile-dropguard) ──────────────────────
+// When `hexa build`/`hexa run` links the prebuilt native runtime.a (the
+// shipped consumer path — see self/main.hexa resolve_prebuilt_runtime), that
+// archive's alloc_syscall_native.o + the array/map/str seeds already EXPORT a
+// set of `.globl` symbols (sys_exit, sys_write, hexa_arena_alloc, target_is_*,
+// _sc*, rt_init, …). Some of those symbols ALSO have hexa SOURCE definitions
+// (self/rt/syscall.hexa, self/rt/alloc.hexa) that get pulled into a user
+// closure that `use`s them — e.g. `hexa cloud` (cloud_cli.hexa → rt/syscall).
+// The C-transpile then emits the program-C body of `sys_exit` etc., and the
+// final link sees `multiple definition of 'sys_exit'` (runtime.a seed vs the
+// program .o). v0.241.11 release regression.
+//
+// FIX: when the native runtime.a is the link input, main.hexa scans its
+// exported symbols (nm) and passes the list in HEXA_RT_NATIVE_DROP (space-
+// padded, e.g. " sys_exit hexa_arena_alloc … "). Here we DROP the program-C
+// BODY emission of any FnDecl/PureFnDecl whose name is in that set — the
+// forward declaration (gen2_fn_forward) is STILL emitted, so call sites
+// resolve to the canonical native runtime symbol with the identical HexaVal
+// 16-byte pair ABI (the native seed was emitted by this same codegen).
+//
+// CONDITIONAL on the native runtime.a actually being linked: the env var is
+// UNSET on the from-source (#else / content-hash runtime.<sha>.o) path, where
+// runtime.c carries NO native sys_exit seed, so dropping the body would leave
+// the symbol UNDEFINED. Unset → empty drop-set → byte-for-byte the prior emit.
+fn _gen2_rt_native_drop_set() {
+    let raw = env("HEXA_RT_NATIVE_DROP")
+    if len(raw) == 0 { return "" }
+    // Normalize to a single leading+trailing-space-padded token stream so a
+    // whole-token membership test (`.contains(" name ")`) can never match a
+    // substring (sys_exit ⊄ sys_exit_group). main.hexa already space-joins,
+    // but pad defensively in case a single bare symbol was passed.
+    return " " + raw.trim() + " "
+}
+
+// Whole-token membership test against the space-padded drop-set.
+fn _gen2_is_rt_native_provided(name, dropset) {
+    if len(dropset) == 0 { return false }
+    return dropset.contains(" " + name + " ")
+}
+
 fn codegen(ast) {
     // Lift any FnDecl / StructDecl nested at the top of a fn body to
     // module scope — C has no nested fns / local types. Hexa arrays
@@ -1140,6 +1180,10 @@ fn codegen(ast) {
     // 'euler_phi'". First-wins matches the existing thunk policy
     // (line 3118) and promote_to_atlas (compiler/discover/promote.hexa:382).
     let mut _fn_emit_seen = []
+    // RT-NATIVE drop-guard: native-runtime.a-provided symbols to emit
+    // forward-decl-only for (skip the colliding program-C body). Empty on the
+    // from-source link path. See _gen2_rt_native_drop_set above.
+    let _rt_native_drop = _gen2_rt_native_drop_set()
     let mut i = 0
     while i < len(ast) {
         let k = ast[i].kind
@@ -1168,6 +1212,18 @@ fn codegen(ast) {
             _fn_emit_seen.push(_fn_name)
             if ast[i].name == "main" { has_user_main = true }
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
+            // RT-NATIVE drop-guard: when this symbol is provided by the linked
+            // native runtime.a, emit the forward decl ONLY (above) and SKIP the
+            // body — the call resolves to the runtime seed, avoiding `multiple
+            // definition`. `main` is never in the drop-set (program entry).
+            // @inline_always fns are `static inline` (internal linkage) — they
+            // never collide with the external seed symbol, and a body-less
+            // `static inline …;` would be malformed, so they are NEVER dropped.
+            if _gen2_is_rt_native_provided(_fn_name, _rt_native_drop) && !gen2_has_inline_always(ast[i]) {
+                eprintln("[rt-drop] fn `" + _fn_name + "` provided by native runtime.a — emitting forward-decl only (body dropped)")
+                i = i + 1
+                continue
+            }
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
         } else if k == "ExternFnDecl" {
             // Generate extern FFI wrapper
@@ -1210,6 +1266,15 @@ fn codegen(ast) {
             }
             _fn_emit_seen.push(_pfn_name)
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
+            // RT-NATIVE drop-guard (pure-fn twin): SYS_* number consts +
+            // target_is_* live in self/rt/syscall.hexa as @pure fns and are
+            // ALSO exported by the native seed. Forward-decl-only when linked.
+            // (@inline_always = static inline never collides — see FnDecl note.)
+            if _gen2_is_rt_native_provided(_pfn_name, _rt_native_drop) && !gen2_has_inline_always(ast[i]) {
+                eprintln("[rt-drop] fn `" + _pfn_name + "` provided by native runtime.a — emitting forward-decl only (body dropped)")
+                i = i + 1
+                continue
+            }
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
         } else if k == "AsyncFnDecl" {
             // RFC-022 §3.1 / §4.1 D3 — `async fn` runs synchronously in
@@ -13538,6 +13603,10 @@ fn codegen_full(ast) {
     // emitter (script-body / pure-eval path) still emits duplicate
     // FnDecls and clang rejects the link.
     let mut _fn_emit_seen2 = []
+    // RT-NATIVE drop-guard (LIVE transpile path): native-runtime.a-provided
+    // symbols to forward-decl-only (skip the colliding program-C body). Empty
+    // on the from-source link path. See _gen2_rt_native_drop_set.
+    let _rt_native_drop2 = _gen2_rt_native_drop_set()
     let mut i = 0
     while i < len(ast) {
         let k = ast[i].kind
@@ -13566,6 +13635,14 @@ fn codegen_full(ast) {
             _fn_emit_seen2.push(_fn_name2)
             if ast[i].name == "main" { has_user_main = true }
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
+            // RT-NATIVE drop-guard: symbol provided by the linked native
+            // runtime.a → forward-decl only, skip the body (resolves to the
+            // seed, no `multiple definition`). static-inline never dropped.
+            if _gen2_is_rt_native_provided(_fn_name2, _rt_native_drop2) && !gen2_has_inline_always(ast[i]) {
+                eprintln("[rt-drop] fn `" + _fn_name2 + "` provided by native runtime.a — emitting forward-decl only (body dropped)")
+                i = i + 1
+                continue
+            }
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
         } else if k == "ExternFnDecl" {
             let ew = gen2_extern_wrapper(ast[i])
@@ -13605,6 +13682,12 @@ fn codegen_full(ast) {
             }
             _fn_emit_seen2.push(_pfn_name2)
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
+            // RT-NATIVE drop-guard (pure-fn twin): SYS_* consts + target_is_*.
+            if _gen2_is_rt_native_provided(_pfn_name2, _rt_native_drop2) && !gen2_has_inline_always(ast[i]) {
+                eprintln("[rt-drop] fn `" + _pfn_name2 + "` provided by native runtime.a — emitting forward-decl only (body dropped)")
+                i = i + 1
+                continue
+            }
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
         } else if k == "AsyncFnDecl" {
             // RFC-022 §3.1 / §4.1 D3 — `async fn` runs synchronously in
@@ -13624,6 +13707,12 @@ fn codegen_full(ast) {
             }
             _fn_emit_seen2.push(_afn_name2)
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
+            // RT-NATIVE drop-guard (async twin — completeness; no async sys_*).
+            if _gen2_is_rt_native_provided(_afn_name2, _rt_native_drop2) && !gen2_has_inline_always(ast[i]) {
+                eprintln("[rt-drop] fn `" + _afn_name2 + "` provided by native runtime.a — emitting forward-decl only (body dropped)")
+                i = i + 1
+                continue
+            }
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
         } else if k == "ComptimeConst" || k == "ConstStmt" {
             // Same comptime fold as codegen_c2 (kept in sync — T0 lesson).

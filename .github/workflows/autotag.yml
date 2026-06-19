@@ -33,7 +33,11 @@ jobs:
           set -euo pipefail
 
           # 최신 semver 태그 (없으면 v0.0.0 부터 시작).
-          last="$(git tag --list 'v*' --sort=-v:refname | head -1)"
+          # `git for-each-ref --count=1` 로 최상위 1개를 직접 받는다 — 옛
+          # `git tag --sort | head -1` 은 태그가 많아지면 head 가 파이프를 일찍
+          # 닫아 git 에 SIGPIPE → `set -o pipefail` 아래 exit 141 로 스크립트가 첫
+          # 줄에서 죽었다(태그 자동생성 전면 중단 근본원인). 파이프 자체를 제거.
+          last="$(git for-each-ref --sort=-v:refname --format='%(refname:short)' --count=1 'refs/tags/v*')"
           [ -z "$last" ] && last="v0.0.0"
           base="${last#v}"
           IFS=. read -r MA MI PA <<<"$base"
