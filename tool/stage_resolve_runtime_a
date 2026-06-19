@@ -519,6 +519,57 @@ resolve_native_str_core_seed() {
     rm -f "$s_tmp"
 }
 
+# ── RT-NATIVE leg B M4 NUM-FLOAT (sh-num-float lane) — num-float parse native seed → build/num_float_core_native.o ──
+# The float twin of resolve_native_num_core_seed (sh-num-native): assemble
+# build/num_float_core_native.o from the arch-matched frozen
+# self/native/num_float_core_*.s seed, and AUTO-ENABLE the native string→f64 parse
+# path (HEXA_RT_NUM_PARSE_FLOAT_NATIVE=1) so __hx_to_double's string-coercion arm
+# delegates to rt_parse_float_native (raw-mem byte scan + integer mantissa fold +
+# __hx_to_double cast + __hx_payload_{fmul,fdiv} Clinger fast-path scale — gen2-only
+# leaves the hexat C-transpile bootstrap cannot lower, hence a frozen .s seed). The
+# native body is bit-exact to strtod on its fast-path domain (mantissa<=2^53 AND
+# |exp10|<=22) and returns a TAG_VOID sentinel out of domain so the C wrapper falls
+# back to strtod — so the result is byte-identical to strtod for EVERY input. On an
+# unknown target or assemble failure, HEXA_RT_NUM_PARSE_FLOAT_NATIVE stays unset and
+# the C hxlcl_atof body in runtime_core.c ships unchanged (the no-seed fallback —
+# #3583 lesson). Override by pre-setting HEXA_RT_NUM_PARSE_FLOAT_NATIVE=0.
+resolve_native_num_float_core_seed() {
+    [ "${HEXA_RT_NUM_PARSE_FLOAT_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
+    [ -f build/num_float_core_native.o ] && { export HEXA_RT_NUM_PARSE_FLOAT_NATIVE=1; return 0; }
+    local seed="" tgt="${TARGET:-}"
+    tgt="${tgt%-musl}"
+    [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
+        "Darwin arm64") tgt="darwin-arm64" ;;
+        "Linux x86_64") tgt="linux-x86_64" ;;
+        "Linux aarch64"|"Linux arm64") tgt="linux-arm64" ;;
+    esac
+    case "$tgt" in
+        darwin-arm64) seed="self/native/num_float_core_arm64.s" ;;
+        linux-x86_64) seed="self/native/num_float_core_x86_64.s" ;;
+        linux-arm64)  seed="self/native/num_float_core_arm64-linux.s" ;;
+        *)            seed="" ;;   # unknown → C #else path
+    esac
+    [ -n "$seed" ] && [ -f "$seed" ] || return 0
+    mkdir -p build
+    # SAFETY: only adopt the native path if the seed exports the parse fn the
+    # runtime_core.c delegation expects — a stale/partial seed would yield an
+    # `undefined reference` at the app link. Counted from `.globl` (toolchain-free).
+    local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?rt_parse_float_native' "$seed" 2>/dev/null || echo 0)"
+    if [ "${nsyms:-0}" -lt 1 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE NUM-FLOAT: seed $seed exports only $nsyms/1 rt_parse_float_native — falling back to C #else path" >&2
+        return 0
+    fi
+    local s_tmp="build/num_float_core_seed.s"
+    grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
+    if $CC -c "$s_tmp" -o build/num_float_core_native.o 2>/dev/null; then
+        export HEXA_RT_NUM_PARSE_FLOAT_NATIVE=1
+        echo "[stage_resolve_runtime_a] RT-NATIVE NUM-FLOAT: assembled build/num_float_core_native.o from $seed (TARGET=$tgt, $nsyms rt_parse_float_native syms) → native string→f64 parse path"
+    else
+        echo "[stage_resolve_runtime_a] RT-NATIVE NUM-FLOAT: WARN assemble of $seed failed — falling back to C #else path" >&2
+    fi
+    rm -f "$s_tmp"
+}
+
 # ── RT-NATIVE leg B M4 NUM (sh-num-native lane) — num-core parse native seed → build/num_core_native.o ──
 # The num twin of resolve_native_str_core_seed: assemble build/num_core_native.o
 # from the arch-matched frozen self/native/num_core_*.s seed, and AUTO-ENABLE the
@@ -906,6 +957,17 @@ build_runtime_a_from_source() {
         extra_obj="$extra_obj build/valop_core_native.o"
         echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: HEXA_RT_VALOP_NATIVE=1; ar'ing native valop_core_native.o into runtime.a"
     fi
+    # RT-NATIVE NUM-FLOAT (sh-num-float lane, gated): when the num_float_core seed
+    # is active, define HEXA_RT_NUM_PARSE_FLOAT_NATIVE for the runtime.c compile (so
+    # __hx_to_double's string→f64 path takes the native Clinger arm) and ar
+    # build/num_float_core_native.o into runtime.a so rt_parse_float_native resolves.
+    # The C hxlcl_atof `#else` stays in runtime_core.c as the no-seed fallback.
+    local rt_numf_def=""
+    if [ "${HEXA_RT_NUM_PARSE_FLOAT_NATIVE:-0}" = "1" ] && [ -f build/num_float_core_native.o ]; then
+        rt_numf_def="-DHEXA_RT_NUM_PARSE_FLOAT_NATIVE=1"
+        extra_obj="$extra_obj build/num_float_core_native.o"
+        echo "[stage_resolve_runtime_a] RT-NATIVE NUM-FLOAT: HEXA_RT_NUM_PARSE_FLOAT_NATIVE=1; ar'ing native num_float_core_native.o into runtime.a"
+    fi
     # RT-NATIVE Route B (gated, opt-IN): native linked-block arena replaces the C
     # arena `#else` in runtime_core.c when HEXA_RT_ALLOC_NATIVE=1 + seed object built.
     local rt_alloc_def=""
@@ -950,7 +1012,7 @@ build_runtime_a_from_source() {
     # links cuBLAS (os_clang_ldflags' HEXA_CUDA branch supplies the host libs on
     # the consumer's GPU host where libcuda.so.1 exists). additive · self-host ≠
     # release: the default (non-CUDA) build never enters the cuda arm.
-    $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_valop_def $rt_alloc_def -I self -c self/runtime.c -o build/runtime.o
+    $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_valop_def $rt_alloc_def -I self -c self/runtime.c -o build/runtime.o
     ar rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     if [ "${HEXA_CUDA:-0}" = "1" ] && [ -f build/runtime_cuda.o ] && [ -f build/runtime_cuda_dlink.o ]; then
@@ -958,7 +1020,7 @@ build_runtime_a_from_source() {
         local _cinc="$_cuda_home/targets/x86_64-linux/include"
         [ -d "$_cinc" ] || _cinc="$_cuda_home/include"
         echo "[stage_resolve_runtime_a] CUDA-R1: building SEPARATE consumer archive build/runtime.cuda.a (runtime.c -DHEXA_CUDA -I$_cinc + runtime_cuda.o + runtime_cuda_dlink.o); toolchain keeps the CPU build/runtime.a (libcuda-free, GPU-less-host-runnable)"
-        $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_valop_def $rt_alloc_def -DHEXA_CUDA -I "$_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o
+        $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_valop_def $rt_alloc_def -DHEXA_CUDA -I "$_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o
         ar rcs build/runtime.cuda.a build/runtime_cuda_host.o $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
         ls -la build/runtime.cuda.a
     fi
@@ -986,6 +1048,10 @@ resolve_native_fs_core_seed
 # seed (sets HEXA_RT_STR_EQ_NATIVE=1 on all 3 production targets). Unknown targets
 # keep the C strcmp path.
 resolve_native_str_core_seed
+# RT-NATIVE NUM-FLOAT (sh-num-float lane): assemble the arch-matched native
+# num_float_core seed (sets HEXA_RT_NUM_PARSE_FLOAT_NATIVE=1 on all 3 production
+# targets). Unknown targets / missing seed keep the C hxlcl_atof string→f64 path.
+resolve_native_num_float_core_seed
 # RT-NATIVE NUM (sh-num-native lane): assemble the arch-matched native num_core
 # seed (sets HEXA_RT_NUM_PARSE_INT_NATIVE=1 on all 3 production targets). Unknown
 # targets / missing seed keep the C strtoll string→int path.

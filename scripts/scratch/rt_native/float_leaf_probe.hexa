@@ -1,0 +1,23 @@
+// float_leaf_probe.hexa — de-risk probe for the num-float seed (sh-num-float).
+// Confirms the float-arithmetic leaf intrinsics (__hx_to_double int→f64 cast +
+// __hx_payload_fmul / fdiv / fadd / flt) actually lower + run correctly in a
+// gen2-native seed object, BEFORE building the full rt_parse_int_float parser on
+// top of them. Takes two int payloads (a, b) and returns
+// (double)a / (double)b * 10.0 + (double)a  — exercising int→double, fdiv, fmul,
+// fadd in one straight-line body. The C gate compares to the same f64 expression.
+pub fn rt_float_probe(av: HexaVal, bv: HexaVal) -> float {
+    let af = __hx_to_double(av)
+    let bf = __hx_to_double(bv)
+    let q = __hx_payload_fdiv(af, bf)
+    let ten = __hx_to_double_const_ten()
+    let m = __hx_payload_fmul(q, ten)
+    let r = __hx_payload_fadd(m, af)
+    return r
+}
+
+// helper: produce the f64 constant 10.0 from an int literal via the cast leaf
+// (avoids relying on a float literal lowering inside the seed).
+fn __hx_to_double_const_ten() -> float {
+    let ten_i = __hx_payload_add(0, 10)
+    return __hx_to_double(ten_i)
+}
