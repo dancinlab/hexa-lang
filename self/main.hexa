@@ -1413,6 +1413,32 @@ fn os_clang_ldflags() {
     // glibc shared OpenSSL/libsodium to satisfy these, and the cflags side
     // already dropped the -DHEXA_HAS_* defines, so skip the link flags too.
     if env("HEXA_STATIC_DEPS") == "1" || host_cc().contains("musl") { return base }   // @convergence id=MUSL-OPENSSL-STATIC-DEPS (musl CC → no glibc-shared OpenSSL/libsodium; env-independent twin of the cflags guard)
+    // ── HEXA_CUDA=1 (opt-in · `-cuda` release variant) — pull cuBLAS/cudart so a
+    // consumer `hexa build`/`run` program links the CUDA-enabled runtime.a (which
+    // ar's runtime_cuda.o + the nvcc -dlink device blob, folded in by
+    // stage_resolve_runtime_a's resolve_cuda_runtime_seed). The CPU default build
+    // NEVER sets HEXA_CUDA, so these flags are absent there — additive + opt-in,
+    // no regression to the default CPU release (self-host ≠ release ABSOLUTE).
+    // Order: -lcudadevrt MUST follow runtime_cuda_dlink.o (the device blob it
+    // resolves); the runtime.a is already on the link line BEFORE os_clang_ldflags,
+    // so appending the cuda libs here satisfies that ordering. Lib dir resolved
+    // from CUDA_HOME (release job sets it) with the targets/x86_64-linux/lib
+    // toolkit layout fallback; -L lets the loader find libcudart/libcublas at link.
+    if env("HEXA_CUDA") == "1" {
+        let cuda_home = env("CUDA_HOME")
+        let mut cuda_l = ""
+        if cuda_home != "" {
+            // toolkit layout: $CUDA_HOME/targets/x86_64-linux/lib (preferred) or
+            // $CUDA_HOME/lib64 (classic). Probe for whichever holds libcudart.
+            let tgt_lib = cuda_home + "/targets/x86_64-linux/lib"
+            let lib64 = cuda_home + "/lib64"
+            let cuda_probe = exec("test -f '" + tgt_lib + "/libcudart.so' && printf '" + tgt_lib + "' || (test -f '" + lib64 + "/libcudart.so' && printf '" + lib64 + "' || printf '')")
+            if cuda_probe != "" { cuda_l = " -L" + cuda_probe.trim() }
+        }
+        // cudadevrt is a STATIC archive shipped by the toolkit (device-runtime for
+        // the -dlink blob); cudart/cublas/cuda are the host-side shared libs.
+        return base + cuda_l + " -lcudart -lcublas -lcuda -lcudadevrt"
+    }
     // 2026-05-14: libsodium link flags (when found via pkg-config or brew).
     let probe = exec("pkg-config --libs libsodium 2>/dev/null")
     if probe != "" { base = base + " " + probe.trim() }
