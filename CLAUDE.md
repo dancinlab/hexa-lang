@@ -101,6 +101,16 @@ This file is the single governance SSOT (md 단일화) — edit directives here,
   업로드하고 Latest 를 마킹하지 않는다 — `finalize` 잡(`needs:` 3타깃 전부)이 3/3 성공 시에만 태그를
   stable Latest 로 flip 한다. 한 타깃이라도 실패하면 finalize 가 skip 돼 릴리스가 prerelease 로 남고
   `install.sh` 의 stable 해석이 그 부분(2/3) 릴리스를 건너뛴다(v0.241.0/.1 2/3-Latest 사고 차단).
+- **implement-to-the-wall (벽까지 구현)** — 모든 구현·개선·조사는 **벽(🧱)에 닿을 때까지**
+  민다 — 중간에 "발견/진단만 하고 STOP" 금지(c1·c3 punt 금지). 한 라운드가 끝나면 honest
+  next round(r2·r3…)를 **명명**하고, 멈추는 건 오직 ⓐ 목표 달성(🏁) 또는 ⓑ **측정된**
+  닫힌-음성 벽(🧱: 효율 roofline·정확성·기능에서 더 나아갈 honest 다음 단계 부재)일 때뿐이다.
+  근본원인을 **머지까지** 끌고 간다(증상 패치·shadow 가드 금지). 벽은 **캡처된 수치**로
+  증명한다(LLM 자가판정 금지·c2 — 예: roofline %·byte-eq Δ·measured GFLOP/s). filler 라운드를
+  지어내지 않는다(g0). **가드레일은 위 [self-host ≠ release 회귀] 가 절대 상위** — byteeq 3타깃
+  GREEN + 출하 smoke 통과 전에는 머지 금지(릴리스 무결성 > 진척). 비트동일 개선은 게이트 없이
+  기본빌드로(예: gemm-perf #3636 무게이트 2.4×), 비트변경·환경의존 개선만 opt-in 토글로 격리한다
+  (예: gemm-omp #3634 `HEXA_OMP=1`).
 
 ## Harness
 
