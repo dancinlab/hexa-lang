@@ -111,6 +111,20 @@ This file is the single governance SSOT (md 단일화) — edit directives here,
   GREEN + 출하 smoke 통과 전에는 머지 금지(릴리스 무결성 > 진척). 비트동일 개선은 게이트 없이
   기본빌드로(예: gemm-perf #3636 무게이트 2.4×), 비트변경·환경의존 개선만 opt-in 토글로 격리한다
   (예: gemm-omp #3634 `HEXA_OMP=1`).
+- **reference-first 구현 (정답지 펼쳐 차용 · commons c23 의 hexa 적용)** — 알려진
+  알고리즘을 from-scratch 구현·개선할 때는 **타 언어·패키지가 이미 구현해 검증한 코드를
+  정답지(reference)로 펼쳐 보고 그 전략을 차용**한다. 목표 수치를 좇아 파라미터(타일·언롤·
+  블로킹 상수·튜닝값)를 흔드는 **black-box 추측 sweep 금지**(compute 낭비 + tune-to-green
+  위험·c2). white-box 차분: ⓐ reference 소스 정독→알고리즘·검증상수 추출(파일:라인 인용)
+  ⓑ reference 중간값 실행 덤프 ⓒ 내 구현의 같은 양과 **성분별 1:1 대조**→발산점 수치 특정
+  (c1 root-cause) ⓓ **그 지점만** 정렬(정렬이지 fudge 아님). 정답지 못 보는 경우(closed·
+  덤프불가)에만 black-box. 정답지 정확복제 후 잔차는 강제로 맞추지 말고 출처(pseudo·grid·
+  precision) 정직 기록. **hexa 정답지 매핑**: GEMM/farr_matmul perf → **OpenBLAS·BLIS**
+  microkernel(packing+register-tiling+캐시블로킹, roofline 80%+ 정답지 — 단순 FMA 플래그는
+  ~10%에 그침) · LLM decode/weight 적재(boxing·KV-cache) → **llama.cpp·ggml**(mmap+contiguous
+  unboxed tensor) · QFORGE el-ph |g|² 등 from-scratch 물리 재현 → **Quantum ESPRESSO** 중간값
+  덤프 대조 · 수치 커널 → **numpy·scipy·LAPACK**. **가드레일은 위 [self-host ≠ release 회귀]
+  가 절대 상위**(reference 차용도 byteeq 3타깃 GREEN 전 머지 금지·비트변경은 opt-in 격리).
 
 ## Harness
 
