@@ -230,14 +230,17 @@ must("order preserved [0]", m.names[0] == "model.layers.0.self_attn.q_proj.weigh
 must("order preserved [1]", m.names[1] == "model.layers.0.self_attn.k_proj.weight")
 must("order preserved [2]", m.names[2] == "lm_head.weight")
 
+// boxing-unbox r2: m.datas[i] is a farr32 handle; index farr32_get, size hexaw_count.
 // q_proj merged values
 let q_out = m.datas[0]
-must("q_proj len", len(q_out) == d_out * d_in)
+let q_cnt = hexaw_count(m, "model.layers.0.self_attn.q_proj.weight")
+must("q_proj len", q_cnt == d_out * d_in)
 let mut qi = 0
 let mut qok = true
-while qi < len(q_out) {
-    if !approx(q_out[qi], w_q_expected[qi]) {
-        println("  diff idx=" + to_string(qi) + " got=" + to_string(q_out[qi]) + " want=" + to_string(w_q_expected[qi]))
+while qi < q_cnt {
+    let qv = farr32_get(q_out, qi)
+    if !approx(qv, w_q_expected[qi]) {
+        println("  diff idx=" + to_string(qi) + " got=" + to_string(qv) + " want=" + to_string(w_q_expected[qi]))
         qok = false
     }
     qi = qi + 1
@@ -246,20 +249,22 @@ must("q_proj values match reference (2-adapter chain)", qok)
 
 // k_proj byte-through
 let k_out = m.datas[1]
+let k_cnt = hexaw_count(m, "model.layers.0.self_attn.k_proj.weight")
 let mut ki = 0
 let mut kok = true
-while ki < len(k_out) {
-    if !approx(k_out[ki], w_k[ki]) { kok = false }
+while ki < k_cnt {
+    if !approx(farr32_get(k_out, ki), w_k[ki]) { kok = false }
     ki = ki + 1
 }
 must("k_proj byte-through (non-target)", kok)
 
 // lm_head byte-through
 let lm_out = m.datas[2]
+let lm_cnt = hexaw_count(m, "lm_head.weight")
 let mut li = 0
 let mut lmok = true
-while li < len(lm_out) {
-    if !approx(lm_out[li], w_lm[li]) { lmok = false }
+while li < lm_cnt {
+    if !approx(farr32_get(lm_out, li), w_lm[li]) { lmok = false }
     li = li + 1
 }
 must("lm_head byte-through (non-target)", lmok)
