@@ -570,6 +570,69 @@ resolve_native_num_core_seed() {
     rm -f "$s_tmp"
 }
 
+# ── RT-NATIVE leg B M4 VALOP (sh-val-core lane) — valop-core scalar value-op native seed → build/valop_core_native.o ──
+# The value-op twin of resolve_native_num_core_seed: assemble build/valop_core_native.o
+# from the arch-matched frozen self/native/valop_core_*.s seed, and AUTO-ENABLE the
+# native scalar value-op path (HEXA_RT_VALOP_NATIVE=1) so hexa_truthy / hexa_sub /
+# hexa_mul delegate their SCALAR fast paths (int/float/bool tag-dispatch) to the
+# native seed (rt_truthy_native / rt_sub_native / rt_mul_native — raw __hx_tag tag
+# read + raw int/float payload arith + __hx_make_val re-box, gen2-only intrinsics
+# the hexat C-transpile bootstrap cannot lower, hence a frozen .s seed, exactly
+# like array/map/str/num_core). byte-identical (native == C scalar switch arms over
+# the tested input space incl int/float/bool/void + NaN + ±0.0), so it is default-
+# eligible. On an unknown target or assemble failure, HEXA_RT_VALOP_NATIVE stays
+# unset and the C scalar bodies in runtime_core.c ship unchanged (the no-seed
+# fallback). Override by pre-setting HEXA_RT_VALOP_NATIVE=0 to force the C path.
+resolve_native_valop_core_seed() {
+    [ "${HEXA_RT_VALOP_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
+    [ -f build/valop_core_native.o ] && { export HEXA_RT_VALOP_NATIVE=1; return 0; }
+    local seed="" tgt="${TARGET:-}"
+    tgt="${tgt%-musl}"; tgt="${tgt%-cuda}"
+    [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
+        "Darwin arm64") tgt="darwin-arm64" ;;
+        "Linux x86_64") tgt="linux-x86_64" ;;
+        "Linux aarch64"|"Linux arm64") tgt="linux-arm64" ;;
+    esac
+    # x86_64-ONLY adoption (sh-val-core r1): the scalar value-op seed is byte-eq
+    # proven + self-host-byteeq GREEN on linux-x86_64 (gen3≡gen4, faithful +
+    # selfhost-byteeq-real PASS). The arm64 seeds are byte-FAITHFUL in isolation
+    # (standalone valop_core_gate.c → 32/32 0-fail under qemu-aarch64), BUT the
+    # arm64 self-host SEGFAULTs when hexa_v2 runs with them folded in: the arm64
+    # codegen lowers every `if <bool-HexaVal>` via `bl hexa_truthy` (x86_64 inlines
+    # it — the valop x86_64 seed has ZERO `call`s), so on the value-op hot path the
+    # bl-heavy seed fns (14x bl hexa_bool + 6x bl hexa_truthy each) diverge/blow the
+    # stack inside hexa_v2 (#3704 — MEASURED on qemu-aarch64: darwin-arm64 +
+    # linux-arm64 both SIGSEGV at `hexa_v2 self/module_loader.hexa`, x86_64 PASS).
+    # Until the arm64 br_cond inline-truthy path lands, arm64 keeps the C scalar
+    # switch (no regress, release-safe) — the [self-host != release] guardrail:
+    # x86_64 native now, arm64 C fallback, NO arm64 release regression.
+    case "$tgt" in
+        linux-x86_64) seed="self/native/valop_core_x86_64.s" ;;
+        darwin-arm64|linux-arm64) return 0 ;;   # arm64 → C scalar path (br_cond bl-hexa_truthy hot-path SIGSEGV, #3704)
+        *)            seed="" ;;   # unknown → C scalar path
+    esac
+    [ -n "$seed" ] && [ -f "$seed" ] || return 0
+    mkdir -p build
+    # SAFETY: only adopt the native path if the seed exports ALL THREE fns the
+    # runtime_core.c delegation expects — a stale/partial seed would yield an
+    # `undefined reference` at the app link. Counted from `.globl` (toolchain-free).
+    local ok=1 sym n
+    for sym in rt_truthy_native rt_sub_native rt_mul_native; do
+        n="$(grep -cE "^\.globl[[:space:]]+_?${sym}\$" "$seed" 2>/dev/null || echo 0)"
+        [ "${n:-0}" -ge 1 ] || { ok=0; echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: seed $seed exports only $n/1 $sym — falling back to C scalar path" >&2; }
+    done
+    [ "$ok" = "1" ] || return 0
+    local s_tmp="build/valop_core_seed.s"
+    grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
+    if $CC -c "$s_tmp" -o build/valop_core_native.o 2>/dev/null; then
+        export HEXA_RT_VALOP_NATIVE=1
+        echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: assembled build/valop_core_native.o from $seed (TARGET=$tgt, 3/3 rt_*_native syms) → native scalar value-op path"
+    else
+        echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: WARN assemble of $seed failed — falling back to C scalar path" >&2
+    fi
+    rm -f "$s_tmp"
+}
+
 # ── RT-NATIVE leg B Route B — linked-block arena native seed → build/alloc_syscall_native.o ──
 # The arena twin of resolve_native_array_core_seed: assemble the arch-matched
 # frozen self/native/alloc_syscall_*.s seed (a full HexaArenaBlock-chain arena +
@@ -811,6 +874,17 @@ build_runtime_a_from_source() {
         extra_obj="$extra_obj build/num_core_native.o"
         echo "[stage_resolve_runtime_a] RT-NATIVE NUM: HEXA_RT_NUM_PARSE_INT_NATIVE=1; ar'ing native num_core_native.o into runtime.a"
     fi
+    # RT-NATIVE VALOP (sh-val-core lane, gated): when the valop_core seed is active,
+    # define HEXA_RT_VALOP_NATIVE for the runtime.c compile (so hexa_truthy/sub/mul
+    # take the native scalar arm) and ar build/valop_core_native.o into runtime.a so
+    # rt_truthy_native/rt_sub_native/rt_mul_native resolve. The C scalar bodies stay
+    # in runtime_core.c as the no-seed fallback.
+    local rt_valop_def=""
+    if [ "${HEXA_RT_VALOP_NATIVE:-0}" = "1" ] && [ -f build/valop_core_native.o ]; then
+        rt_valop_def="-DHEXA_RT_VALOP_NATIVE=1"
+        extra_obj="$extra_obj build/valop_core_native.o"
+        echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: HEXA_RT_VALOP_NATIVE=1; ar'ing native valop_core_native.o into runtime.a"
+    fi
     # RT-NATIVE Route B (gated, opt-IN): native linked-block arena replaces the C
     # arena `#else` in runtime_core.c when HEXA_RT_ALLOC_NATIVE=1 + seed object built.
     local rt_alloc_def=""
@@ -844,7 +918,7 @@ build_runtime_a_from_source() {
         extra_obj="$extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o"
         echo "[stage_resolve_runtime_a] CUDA-R1: HEXA_CUDA=1; runtime.c -DHEXA_CUDA -I$_cinc; ar'ing runtime_cuda.o + runtime_cuda_dlink.o into runtime.a"
     fi
-    $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_alloc_def $rt_cuda_def -I self -c self/runtime.c -o build/runtime.o
+    $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_valop_def $rt_alloc_def $rt_cuda_def -I self -c self/runtime.c -o build/runtime.o
     ar rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     echo "$RA"
@@ -875,6 +949,10 @@ resolve_native_str_core_seed
 # seed (sets HEXA_RT_NUM_PARSE_INT_NATIVE=1 on all 3 production targets). Unknown
 # targets / missing seed keep the C strtoll string→int path.
 resolve_native_num_core_seed
+# RT-NATIVE VALOP (sh-val-core lane): assemble the arch-matched native valop_core
+# seed (sets HEXA_RT_VALOP_NATIVE=1 on all 3 production targets). Unknown targets /
+# missing seed keep the C scalar value-op switch (hexa_truthy/sub/mul).
+resolve_native_valop_core_seed
 # RT-NATIVE Route B: assemble the native linked-block arena seed (DEFAULT-ON as of
 # measure-8; C arena body dropped from runtime_core_emit.hexa. HEXA_RT_ALLOC_NATIVE=0
 # reverts via git).
