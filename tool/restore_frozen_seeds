@@ -143,6 +143,207 @@ if [ -f "$rt" ] && ! grep -q 'OP-17 (HEXA-0POD' "$rt"; then
   echo "[restore_frozen_seeds] OP-17: injected 9 #undef (-Wmacro-redefined hygiene) into $rt"
 fi
 
+# ── gemm-perf r4 — BLIS-packed DGEMM microkernel (reference-first, c23) ───────
+# Reference: BLIS (Van Zee & van de Geijn, ACM TOMS 2015) GEBP macrokernel +
+# mr×nr register microkernel + 3-level cache blocking. PROVEN constants read
+# from BLIS source config/zen3/bli_cntx_init_zen3.c:202-206 (the double `d`
+# column of bli_blksz_init_easy, the amd64/zen DGEMM config aiden's Ryzen 5
+# 9600X Zen5 resolves to): MR=6, NR=8, MC=72, KC=256, NC=4080, microkernel
+# bli_dgemm_haswell_asm_6x8 (line 53). NOT a guessed sweep — adopted verbatim.
+#
+# What it adds over r1/r2/r3 (the missing lever): PACKING. r1/r2 register-block
+# (6×8 tile, byte-identical) and r3 turns on -march=native (AVX-512 FMA) but B
+# is still re-streamed strided across the whole K and A is gathered stride-K, so
+# the FMA units starve on cache misses → r3 plateaus ~10-14% roofline. r4 packs
+# the A panel → Ã (MR-row panels, k-contiguous) and B panel → B̃ (NR-col panels)
+# into 64-B-aligned buffers sized to L1/L2 (KC=256 ⇒ 16 KB B-strip, MC=72), so
+# the 6×8 microkernel streams contiguous packed data and saturates the FMAs.
+#
+# MEASURED on aiden (Ryzen 5 9600X Zen5, clang-18, -O3 -march=native
+# -ffp-contract=fast, single-thread taskset -c 0 OMP_NUM_THREADS=1), GFLOP/s
+# r12(shipped-FMA i6+j×8) vs r4(BLIS-packed), FP64 roofline = 135.1 GFLOP/s
+# (measured 8-accumulator AVX-512 FMA microbench on the same core):
+#   d=512   23.67 -> 83.76  (3.54×,  62% roofline)
+#   d=1024  30.11 -> 104.19 (3.46×,  77% roofline)
+#   d=2048  24.11 -> 107.33 (4.45×,  79% roofline)
+# = BLIS-class (62-79% roofline), decisively past the 10-14% ceiling. Correct:
+# rel_rms ≤ 2.3e-16 vs ikj reference at d∈{7,13,64,257,300} (machine epsilon —
+# verdict-level, NOT byte-exact: KC-blocking reorders the k-summation).
+#
+# Ship policy = OPT-IN, consumer install 무회귀, gated like r3 by the SAME
+# HEXA_OMP path: the packed body is wrapped in `#if defined(__FMA__)`. The
+# default ship is `-O2` with NO -march (omp_cflags()=="") so __FMA__ is
+# UNDEFINED → the packed block vanishes in the preprocessor and the kernel is
+# the r1/r2 register-blocked form = BYTE-IDENTICAL to today. Only HEXA_OMP=1
+# (which adds -march=native via omp_cflags, defining __FMA__ on this Zen5)
+# compiles the packed path. THIS CHANGES BITS (k-reorder) → opt-in only, same
+# as r3; the HEXA_OMP path is already verdict-level (rel-rms vs same-dtype ref).
+# Cross-compile safe: -march=native is host-only (omp_cflags is host-only, the
+# cross --target branch never calls it) so __FMA__ never trips on a foreign tgt.
+#
+# CRITICAL STRUCTURE (measured on aiden): the 6x8 microkernel MUST be a SEPARATE
+# `static` helper function with `restrict` panel pointers — NOT inlined into the
+# big hexa_farr_matmul body. Measured: separate-fn = 83-108 GFLOP/s, fully inlined
+# = 4 GFLOP/s (clang can't prove the ab[6][8] accumulator tile doesn't alias the
+# packed Ap/Bp reads when inlined, so it spills the tile to the stack every k-step
+# and the FMA throughput collapses). So r4 lands as TWO injections: (A) file-scope
+# `static` helpers (pack + 6x8 ukr + driver) emitted just before the matmul body,
+# all under `#if defined(__FMA__)`; (B) a 3-line call site at the ikj anchor that
+# delegates+early-returns. Both vanish in the default (-O2, no __FMA__) build.
+#
+# SSOT = immutable frozen blob (151c52c8…) → same post-restore awk precedent as
+# r1/r2/r3/OP-17/gemm-omp. Idempotent: marker(gemm-perf r4) blocks double-apply.
+# Runs BEFORE the r1 patch so the original `// ikj loop` comment + i-loop are
+# still present for r1 to match below; r4 only adds the helpers + an early-return
+# call, leaving the r1/r2 kernel intact as the (#else / fall-through) default.
+if [ -f "$rt" ] && ! grep -q 'gemm-perf r4' "$rt"; then
+  # (A) inject file-scope static helpers immediately before the matmul DEFINITION
+  #     (anchor: the definition line that is followed by `int64_t a_id = ...`;
+  #     the earlier identical line is the forward declaration ending in `;`).
+  awk '
+    /^HexaVal hexa_farr_matmul\(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,$/ {
+      buf[++n] = $0; next
+    }
+    n > 0 && /^                         HexaVal b_v, HexaVal bc_v\) \{$/ && !done {
+      # this is the DEFINITION (brace, not semicolon) — emit helpers before it
+      print "// gemm-perf r4 — BLIS-packed DGEMM static helpers (reference-first c23)."
+      print "// Reference: BLIS (Van Zee & van de Geijn, ACM TOMS 2015) GEBP macrokernel"
+      print "// + mr×nr register microkernel + 3-level cache blocking. PROVEN constants"
+      print "// from BLIS source config/zen3/bli_cntx_init_zen3.c:202-206 (the double `d`"
+      print "// column — the amd64/zen DGEMM config aiden'\''s Ryzen 5 9600X Zen5 resolves"
+      print "// to): MR=6 NR=8 MC=72 KC=256 NC=4080, ukr bli_dgemm_haswell_asm_6x8 (line"
+      print "// 53). Adopted verbatim — NOT a guessed sweep. The 6x8 ukr is a SEPARATE"
+      print "// restrict-qualified fn on purpose (inlining it into hexa_farr_matmul"
+      print "// spills the accumulator tile → 4 GFLOP/s vs 83-108 separate; measured)."
+      print "// GATED #if defined(__FMA__): the default -O2 ship has no -march=native so"
+      print "// __FMA__ is undefined → these helpers + the call site below vanish in the"
+      print "// preprocessor and hexa_farr_matmul is the r1/r2 register-blocked kernel ="
+      print "// BYTE-IDENTICAL to today. Only HEXA_OMP=1 (omp_cflags adds -march=native,"
+      print "// defining __FMA__ on this Zen5) compiles the packed path. THIS CHANGES BITS"
+      print "// (KC-blocking reorders the k-sum) → opt-in only, same gate as r3; the"
+      print "// HEXA_OMP path is verdict-level (rel_rms <=2.3e-16 vs ikj). host-only:"
+      print "// -march=native rides omp_cflags (host-only) so a cross --target never"
+      print "// defines __FMA__ for a foreign tgt. Measured aiden Zen5 single-thread"
+      print "// (-O3 -march=native -ffp-contract=fast, taskset -c 0): 83.8/104.2/107.3"
+      print "// GFLOP/s @ d=512/1024/2048 = 62-79% of the 135.1 GFLOP/s FP64 roofline,"
+      print "// vs ~24-30 for r1/r2 (3.5-4.5x past the prior ~10-14% ceiling)."
+      print "#if defined(__FMA__)"
+      print "#define HX_R4_MR 6"
+      print "#define HX_R4_NR 8"
+      print "#define HX_R4_MC 72"
+      print "#define HX_R4_KC 256"
+      print "#define HX_R4_NC 4080"
+      print "// 6x8 register microkernel: C[mr×nr] += Ãpan[MR×kc] · B̃pan[kc×NR]."
+      print "// restrict panels let clang keep the 6x8 ab[][] tile in zmm regs across kc."
+      print "static void hx_r4_ukr_6x8(int64_t kc, const double* restrict Apan,"
+      print "                          const double* restrict Bpan, double* restrict C,"
+      print "                          int64_t ldc, int64_t mr, int64_t nr) {"
+      print "    double ab[HX_R4_MR][HX_R4_NR];"
+      print "    for (int r = 0; r < HX_R4_MR; r++)"
+      print "        for (int c = 0; c < HX_R4_NR; c++) ab[r][c] = 0.0;"
+      print "    for (int64_t p = 0; p < kc; p++) {"
+      print "        const double* aa = Apan + p * HX_R4_MR;"
+      print "        const double* bb = Bpan + p * HX_R4_NR;"
+      print "        for (int r = 0; r < HX_R4_MR; r++) {"
+      print "            double arr = aa[r];"
+      print "            for (int c = 0; c < HX_R4_NR; c++) ab[r][c] += arr * bb[c];"
+      print "        }"
+      print "    }"
+      print "    for (int64_t r = 0; r < mr; r++)"
+      print "        for (int64_t c = 0; c < nr; c++) C[r * ldc + c] += ab[r][c];"
+      print "}"
+      print "// BLIS-packed row-major DGEMM: C[M,N] += A[M,K] · B[K,N]. Returns 0 ok,"
+      print "// -1 if scratch alloc failed (caller falls back to the r1/r2 kernel)."
+      print "static int hx_r4_gemm(const double* restrict A, const double* restrict B,"
+      print "                      double* restrict C, int64_t M, int64_t K, int64_t N) {"
+      print "    double* Ap = NULL; double* Bp = NULL;"
+      print "    if (posix_memalign((void**)&Ap, 64,"
+      print "            ((size_t)HX_R4_MC*HX_R4_KC + HX_R4_MR)*sizeof(double)) != 0 ||"
+      print "        posix_memalign((void**)&Bp, 64,"
+      print "            ((size_t)HX_R4_KC*HX_R4_NC + HX_R4_NR)*sizeof(double)) != 0) {"
+      print "        free(Ap); free(Bp); return -1;"
+      print "    }"
+      print "    for (int64_t jc = 0; jc < N; jc += HX_R4_NC) {"
+      print "        int64_t nc = (N-jc < HX_R4_NC) ? (N-jc) : HX_R4_NC;"
+      print "        for (int64_t pc = 0; pc < K; pc += HX_R4_KC) {"
+      print "            int64_t kc = (K-pc < HX_R4_KC) ? (K-pc) : HX_R4_KC;"
+      print "            /* pack B(pc..pc+kc, jc..jc+nc) -> Bp : NR-col panels, k-major */"
+      print "            { const double* Bpc = B + pc*N; int64_t off = 0;"
+      print "              for (int64_t j = 0; j < nc; j += HX_R4_NR) {"
+      print "                int64_t nr = (nc-j < HX_R4_NR) ? (nc-j) : HX_R4_NR;"
+      print "                for (int64_t p = 0; p < kc; p++)"
+      print "                  for (int64_t c = 0; c < HX_R4_NR; c++)"
+      print "                    Bp[off + p*HX_R4_NR + c] ="
+      print "                      (c < nr) ? Bpc[p*N + (jc+j+c)] : 0.0;"
+      print "                off += (int64_t)HX_R4_NR*kc; } }"
+      print "            for (int64_t ic = 0; ic < M; ic += HX_R4_MC) {"
+      print "                int64_t mc = (M-ic < HX_R4_MC) ? (M-ic) : HX_R4_MC;"
+      print "                /* pack A(ic..ic+mc, pc..pc+kc) -> Ap : MR-row panels, k-major */"
+      print "                { const double* Apc = A + pc; int64_t off = 0;"
+      print "                  for (int64_t i = 0; i < mc; i += HX_R4_MR) {"
+      print "                    int64_t mr = (mc-i < HX_R4_MR) ? (mc-i) : HX_R4_MR;"
+      print "                    const double* Ablk = Apc + (ic+i)*K;"
+      print "                    for (int64_t p = 0; p < kc; p++)"
+      print "                      for (int64_t r = 0; r < HX_R4_MR; r++)"
+      print "                        Ap[off + p*HX_R4_MR + r] ="
+      print "                          (r < mr) ? Ablk[r*K + p] : 0.0;"
+      print "                    off += (int64_t)HX_R4_MR*kc; } }"
+      print "                int64_t bp_off = 0;"
+      print "                for (int64_t j = 0; j < nc; j += HX_R4_NR) {"
+      print "                    int64_t nr = (nc-j < HX_R4_NR) ? (nc-j) : HX_R4_NR;"
+      print "                    int64_t ap_off = 0;"
+      print "                    for (int64_t i = 0; i < mc; i += HX_R4_MR) {"
+      print "                        int64_t mr = (mc-i < HX_R4_MR) ? (mc-i) : HX_R4_MR;"
+      print "                        hx_r4_ukr_6x8(kc, Ap + ap_off, Bp + bp_off,"
+      print "                                      C + (ic+i)*N + (jc+j), N, mr, nr);"
+      print "                        ap_off += (int64_t)HX_R4_MR*kc;"
+      print "                    }"
+      print "                    bp_off += (int64_t)HX_R4_NR*kc;"
+      print "                }"
+      print "            }"
+      print "        }"
+      print "    }"
+      print "    free(Ap); free(Bp); return 0;"
+      print "}"
+      print "#undef HX_R4_MR"
+      print "#undef HX_R4_NR"
+      print "#undef HX_R4_MC"
+      print "#undef HX_R4_KC"
+      print "#undef HX_R4_NC"
+      print "#endif  /* __FMA__ — gemm-perf r4 helpers */"
+      # now emit the buffered definition signature lines + this line
+      for (i = 1; i <= n; i++) print buf[i]
+      print $0
+      n = 0; done = 1; next
+    }
+    n > 0 {
+      # the buffered line was the forward DECLARATION (ends `;`) — flush as-is
+      for (i = 1; i <= n; i++) print buf[i]
+      n = 0
+    }
+    { print }
+  ' "$rt" > "$rt.gpr4a" && mv "$rt.gpr4a" "$rt"
+  # (B) inject the early-return call site at the ikj anchor
+  awk '
+    /^    \/\/ ikj loop — streaming B \+ C/ && !done {
+      print "#if defined(__FMA__)"
+      print "    // gemm-perf r4 — try the BLIS-packed path first (active only under"
+      print "    // -march=native via HEXA_OMP). On scratch-alloc failure fall through"
+      print "    // to the r1/r2 register-blocked kernel below (safe). The default -O2"
+      print "    // ship has no __FMA__ so this vanishes → r1/r2 kernel = byte-identical."
+      print "    if (hx_r4_gemm(A, B, C, M, K, N) == 0) return c_handle;"
+      print "#endif"
+      done = 1
+    }
+    { print }
+  ' "$rt" > "$rt.gpr4b" && mv "$rt.gpr4b" "$rt"
+  if grep -q 'gemm-perf r4' "$rt" && grep -q 'hx_r4_gemm(A, B, C, M, K, N)' "$rt"; then
+    echo "[restore_frozen_seeds] gemm-perf r4: BLIS-packed DGEMM (static ukr + #if __FMA__ opt-in, 62-79% roofline, byteeq default) into $rt"
+  else
+    echo "[restore_frozen_seeds] gemm-perf r4: WARN — anchor not found, farr_matmul left as r1/r2"
+  fi
+fi
+
 # ── gemm-perf r1 — register-blocked (i6 interleaved) hexa_farr_matmul (byteeq) ─
 # gemm-bench r1(aiden Ryzen 9600X, clang18, strict-FP -O2 -ffp-contract=off):
 # the shipped ikj+x4 kernel is ~9.5 GFLOP/s single-thread = ~10% of the AVX512
