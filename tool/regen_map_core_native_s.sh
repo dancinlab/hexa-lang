@@ -66,11 +66,13 @@ emit_one() {
         printf '//   ABI: %s. External: hexa_to_int (runtime.c).\n' "$abi"
         printf '//   Lets stage_resolve_runtime_a define HEXA_RT_ARRAY_NATIVE + ar this .o into\n'
         printf '//   runtime.a so hexa_array_get/set delegate to the native bodies.\n'
-        # Normalize the `.file` quoted path AND the unquoted `// source: <abspath>`
-        # comment (emitted by some backends) so the frozen seed is byte-stable and
-        # host-independent (no /home/<user> path leaks into the committed artifact).
+        # Normalize the `.file` quoted path AND the unquoted `<cmt> source: <abspath>`
+        # comment (emitted by the backends with `//`, `#`, or `;` comment prefixes —
+        # the x86 backend uses `#`, the arm64 backend `;`) so the frozen seed is
+        # byte-stable and host-independent (no /home/<user> or /tmp/<wt> path leaks
+        # into the committed artifact).
         sed -E -e 's#"[^"]*map_core\.hexa"#"stdlib/runtime/map_core.hexa"#g' \
-               -e 's#^// source: .*map_core\.hexa#// source: stdlib/runtime/map_core.hexa#' "$raw"
+               -e 's#^([[:space:]]*(//|#|;))[[:space:]]*source:[[:space:]]*.*map_core\.hexa#\1 source: stdlib/runtime/map_core.hexa#' "$raw"
     } > "$out"
     # Sanity: cross-assemble + count defined-global rt_map_*_native.
     local cc_extra="" s="$TMP/check.s" o="$TMP/check.o"

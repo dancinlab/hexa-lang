@@ -30,7 +30,15 @@ extern HexaVal rt_map_contains_native(HexaVal m, HexaVal keyp);  /* {0,1} TAG_IN
 extern HexaVal rt_map_set_inplace_native(HexaVal m, HexaVal keyp, HexaVal val);  /* construct-half: in-place overwrite, returns {0,1} found */
 
 /* 16-byte image equality of two HexaVals (tag word + payload word). */
-static int hv_eq(HexaVal a, HexaVal b) { return memcmp(&a, &b, sizeof(HexaVal)) == 0; }
+/* Semantic 16-byte HexaVal equality: tag (low 4 bytes) + payload (8 bytes @ +8).
+ * NOT a raw 16-byte memcmp — HexaVal is { HexaTag tag; union{...}; } so there are
+ * 4 UNDEFINED padding bytes between the 4-byte enum tag and the 8-aligned union.
+ * A function that RETURNS a HexaVal by value (hexa_map_get) leaves those pad bytes
+ * nondeterministic in the register-pair return, so a raw memcmp over all 16 bytes
+ * spuriously differs on padding even when tag+payload are identical (measured:
+ * vals[] storage byte-identical native==C, yet by-value memcmp diffs on pad). The
+ * value IS (tag, payload); compare exactly those. */
+static int hv_eq(HexaVal a, HexaVal b) { return HX_TAG(a) == HX_TAG(b) && a.i == b.i; }
 
 static int fails = 0;
 static void chk(int cond, const char* what) {
