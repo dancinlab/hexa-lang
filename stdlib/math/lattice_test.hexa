@@ -244,6 +244,45 @@ fn gram_BW16() -> array {
     g
 }
 
+fn gram_Leech() -> array {
+    // Leech lattice Lambda_24 — VERIFIED Gram from the Catalogue of Lattices
+    // (G. Nebe & N. Sloane, RWTH Aachen). Independently re-verified:
+    // det = 1 (even unimodular), min norm = 4 (no norm-2 vectors). By Conway's
+    // uniqueness theorem these two invariants pin Lambda_24. kissing = 196560
+    // (norm-4 shell) is NOT enumerated locally (24-dim FP too heavy) — det +
+    // min-norm (no norm-2) are the locally-checked invariants.
+    let rows = [
+        [8,4,4,4,4,4,4,2,4,4,4,2,4,2,2,2,4,2,2,2,0,0,0,-3],
+        [4,4,2,2,2,2,2,2,2,2,2,2,2,2,1,1,2,1,1,2,1,0,0,-1],
+        [4,2,4,2,2,2,2,2,2,2,2,2,2,1,2,1,2,2,1,1,1,0,0,-1],
+        [4,2,2,4,2,2,2,2,2,2,2,2,2,1,1,2,2,1,2,1,1,0,0,-1],
+        [4,2,2,2,4,2,2,2,2,2,2,1,2,2,2,2,2,2,2,2,1,0,0,-1],
+        [4,2,2,2,2,4,2,2,2,2,2,1,2,2,1,1,2,1,2,1,0,0,0,-1],
+        [4,2,2,2,2,2,4,2,2,2,2,1,2,1,2,1,2,1,1,2,0,0,0,-1],
+        [2,2,2,2,2,2,2,4,1,1,1,2,1,2,2,2,1,2,2,2,2,0,0,1],
+        [4,2,2,2,2,2,2,1,4,2,2,2,2,2,2,2,2,2,2,2,1,1,1,-1],
+        [4,2,2,2,2,2,2,1,2,4,2,2,2,2,1,1,2,2,1,1,0,1,0,-1],
+        [4,2,2,2,2,2,2,1,2,2,4,2,2,1,2,1,2,1,2,1,0,0,1,-1],
+        [2,2,2,2,1,1,1,2,2,2,2,4,1,2,2,2,1,2,2,2,2,1,1,1],
+        [4,2,2,2,2,2,2,1,2,2,2,1,4,2,2,2,2,1,1,1,1,1,1,-1],
+        [2,2,1,1,2,2,1,2,2,2,1,2,2,4,2,2,1,2,2,2,2,2,1,1],
+        [2,1,2,1,2,1,2,2,2,1,2,2,2,2,4,2,1,2,2,2,2,1,2,1],
+        [2,1,1,2,2,1,1,2,2,1,1,2,2,2,2,4,1,2,2,2,2,1,1,1],
+        [4,2,2,2,2,2,2,1,2,2,2,1,2,1,1,1,4,2,2,2,1,1,1,-1],
+        [2,1,2,1,2,1,1,2,2,2,1,2,1,2,2,2,2,4,2,2,2,2,1,1],
+        [2,1,1,2,2,2,1,2,2,1,2,2,1,2,2,2,2,2,4,2,2,1,2,1],
+        [2,2,1,1,2,1,2,2,2,1,1,2,1,2,2,2,2,2,2,4,2,1,1,1],
+        [0,1,1,1,1,0,0,2,1,0,0,2,1,2,2,2,1,2,2,2,4,2,2,2],
+        [0,0,0,0,0,0,0,0,1,1,0,1,1,2,1,1,1,2,1,1,2,4,2,2],
+        [0,0,0,0,0,0,0,0,1,0,1,1,1,1,2,1,1,1,2,1,2,2,4,2],
+        [-3,-1,-1,-1,-1,-1,-1,1,-1,-1,-1,1,-1,1,1,1,-1,1,1,1,2,2,2,4]
+    ]
+    let g = []
+    let i = 0
+    while i < 24 { let j = 0; while j < 24 { g.push(rows[i][j]); j = j + 1 } i = i + 1 }
+    g
+}
+
 fn main() {
     // ── A2 / D4 / E8 — local, fully verified ───────────────────────────
     check_eq_int("det_A2", lattice_det(gram_A2()), 3)
@@ -273,6 +312,12 @@ fn main() {
     // locally (det + Fincke-Pohst shell count).
     check_eq_int("det_BW16", lattice_det(gram_BW16()), 256)
     check_eq_int("kiss_BW16", short_vectors_count(gram_BW16(), 4), 4320)
+
+    // ── Leech Lambda_24 — VERIFIED Gram (Catalogue, Nebe-Sloane) ────────
+    // det = 1 (even unimodular) + min norm 4 (no norm-2 vectors) ⇒ Lambda_24
+    // by Conway uniqueness. kissing 196560 (norm-4) left to CI (24-dim FP heavy).
+    check_eq_int("det_Leech", lattice_det(gram_Leech()), 1)
+    check_eq_int("minnorm_Leech_no_norm2", short_vectors_count(gram_Leech(), 2), 0)
 
     if failed_name == "" {
         println("OK lattice " + to_string(pass_count) + "/" + to_string(total_count))
