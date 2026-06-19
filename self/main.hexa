@@ -1429,6 +1429,34 @@ fn os_clang_ldflags() {
     return base
 }
 
+// ── gemm-omp r1 — opt-in OpenMP cflags (consumer無회귀 · libgomp probe) ──────
+// gemm-bench r1 측정: farr_matmul i-loop OpenMP row-parallel = 3.78~4.86×,
+// schedule(static) 행소유로 BIT-IDENTICAL (restore_frozen_seeds 가 #ifdef _OPENMP
+// 가드 pragma 를 frozen runtime.c 에 post-restore 삽입). 이 함수는 OPT-IN gate:
+//   • HEXA_OMP 미설정/≠1  → "" (기본 ship = 단일스레드, byte-identical 무회귀)
+//   • HEXA_OMP=1 + clang `-fopenmp` 링크 probe 성공 → "-fopenmp " (가속 ON)
+//   • HEXA_OMP=1 인데 libgomp/-fopenmp 부재(musl-static / darwin no-libomp) →
+//     경고 1줄 + "" (단일스레드 폴백 — 소비자 install 절대 안 깸)
+// cflags(컴파일)·ldflags(링크) 양쪽에 동일 `-fopenmp` 가 필요하므로 한 헬퍼가
+// 컴파일·링크 둘 다에서 호출된다. probe 는 빌드당 1회 캐시.
+let mut __omp_cflags_cached = "?"   // sentinel = unprobed (cflags are never just "?")
+fn omp_cflags() {
+    if __omp_cflags_cached != "?" { return __omp_cflags_cached }
+    if env("HEXA_OMP") != "1" { __omp_cflags_cached = ""; return "" }
+    // libgomp/-fopenmp availability probe: try to compile+link a trivial OpenMP
+    // TU with the resolved host CC. musl-static and a no-libomp Darwin both fail
+    // here → single-thread fallback (NOT a build break).
+    let probe = exec("printf 'int main(){return 0;}' | " + host_cc() + " -fopenmp -x c - -o /dev/null 2>/dev/null && printf yes || printf no")
+    if probe == "yes" {
+        println("  [omp] HEXA_OMP=1 — farr_matmul row-parallel ENABLED (-fopenmp, schedule(static) byteeq-safe)")
+        __omp_cflags_cached = "-fopenmp "
+    } else {
+        eprintln("  [omp] HEXA_OMP=1 requested but `" + host_cc() + " -fopenmp` does not link (no libgomp/libomp) — falling back to single-thread (no regression)")
+        __omp_cflags_cached = ""
+    }
+    return __omp_cflags_cached
+}
+
 // ── B20 / roadmap 55 Phase 1 — strict-FP clang flags ─────────
 // codegen emits `/* HEXA_STRICT_FP_TU: 1 */` at the top of generated
 // C when the translation unit contains any @strict_fp fn. Detect the
@@ -3429,14 +3457,21 @@ fn cmd_build(src, out, c_only, target, shared) {
         if len(_rt_obj) == 0 {
         let _rt_sha = exec("cat '" + __self_dir + "'/runtime*.c '" + __self_dir + "'/runtime*.h '" + __self_dir + "'/native/*.c '" + __self_dir + "'/native/*.h 2>/dev/null | shasum -a 1 2>/dev/null | cut -d' ' -f1").trim()
         if len(_rt_sha) > 0 {
-            let _rt_cand = _rt_cache + "/runtime." + _rt_sha + ".o"
+            // gemm-omp r1: an `-fopenmp` runtime object is NOT interchangeable
+            // with the default single-thread object, yet the sha key only hashes
+            // SOURCE. Namespace the cache filename when OMP is on so the two never
+            // collide (a default build NEVER picks up an OMP object and vice versa).
+            let _omp_cf = omp_cflags()
+            let mut _omp_tag = ""
+            if _omp_cf != "" { _omp_tag = ".omp" }
+            let _rt_cand = _rt_cache + "/runtime." + _rt_sha + _omp_tag + ".o"
             if !file_exists(_rt_cand) {
                 exec("mkdir -p '" + _rt_cache + "' 2>/dev/null")
                 // GO M1: lazy GC probe (only triggers on cache miss to
                 // keep the hot `runtime.<sha>.o` hit path zero-cost).
                 _hexa_cache_gc(_rt_cache, _hexa_cache_cap_mb(), _hexa_cache_ttl_days())
                 let _rt_tmp = _rt_cand + ".tmp." + to_string(mono_ns())
-                let _rt_cc = host_cc() + " -O2 " + os_clang_cflags() + strict_fp_cflags(__runtime_c) + cc_deep_nest_cflags() + "-I '" + __self_dir + "' -c '" + __runtime_c + "' -o '" + _rt_tmp + "' 2>&1"
+                let _rt_cc = host_cc() + " -O2 " + _omp_cf + os_clang_cflags() + strict_fp_cflags(__runtime_c) + cc_deep_nest_cflags() + "-I '" + __self_dir + "' -c '" + __runtime_c + "' -o '" + _rt_tmp + "' 2>&1"
                 // Hardening (#2415 follow-up): the runtime.<sha>.o cache
                 // compile was the last raw `exec(_rt_cc)` clang on a popen pipe
                 // in the build path. Route it through _hexa_clang_capped (file
@@ -3463,7 +3498,10 @@ fn cmd_build(src, out, c_only, target, shared) {
     if _same_tu { _rt_input = "" }
     else if len(_rt_obj) > 0 { _rt_input = "'" + _rt_obj + "'" }
     if len(target) == 0 {
-        compile = host_cc() + " -O2 " + _shared_cflags + os_clang_cflags() + _strict + cc_deep_nest_cflags() + "-I '" + __self_dir + "' " + c_file + " " + _rt_input + " -o '" + tmp + "'" + os_clang_ldflags() + " 2>&1"
+        // gemm-omp r1: opt-in `-fopenmp` at the final link too, so libgomp/libomp
+        // is pulled when the runtime object carries OpenMP (HEXA_OMP=1 + probe).
+        // "" when OMP off → link command byte-identical to the prior default ship.
+        compile = host_cc() + " -O2 " + omp_cflags() + _shared_cflags + os_clang_cflags() + _strict + cc_deep_nest_cflags() + "-I '" + __self_dir + "' " + c_file + " " + _rt_input + " -o '" + tmp + "'" + os_clang_ldflags() + " 2>&1"
     } else {
         let zt = target_zig_triple(target)
         if len(zt) == 0 {

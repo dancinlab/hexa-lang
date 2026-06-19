@@ -143,6 +143,45 @@ if [ -f "$rt" ] && ! grep -q 'OP-17 (HEXA-0POD' "$rt"; then
   echo "[restore_frozen_seeds] OP-17: injected 9 #undef (-Wmacro-redefined hygiene) into $rt"
 fi
 
+# ── gemm-omp r1 — opt-in OpenMP i-loop for hexa_farr_matmul (byteeq-safe) ─────
+# gemm-bench r1 측정: farr_matmul d×d 싱글스레드 = ~10 GFLOP/s (FP64 roofline 3%,
+# strict-FP 바운드라 SIMD reassoc 불가). 유일 안전 레버 = OpenMP `parallel for`
+# on the i-loop (출력 행마다 한 스레드가 소유 → 행별 ikj accum order 보존 →
+# 스레드수 무관 BIT-IDENTICAL by construction; schedule(static) 필수). 측정값:
+# 38.8 GFLOP/s(3.78×) baseline · 49.8(4.86×) march-native, V0~V3-omp 전부 byte-eq.
+#
+# 출하 정책 = OPT-IN, 소비자 install 무회귀:
+#   • 패치는 `#ifdef _OPENMP` 가드 1줄(#pragma) 만 삽입. 기본 빌드는 `-fopenmp`
+#     없어 `_OPENMP` 미정의 → 전처리 후 pragma 텍스트가 사라져 종전과 BYTE-IDENTICAL.
+#   • `-fopenmp` 는 self/main.hexa 가 HEXA_OMP=1 + libgomp probe 통과 시에만 추가
+#     (없으면 단일스레드 폴백). musl-static/darwin libgomp 부재 시 자동 단일스레드.
+# SSOT = immutable frozen blob (151c52c8…) 라 OP-17 와 동일하게 post-restore awk
+# patch 로 land. Idempotent: marker(gemm-omp r1) 가 재-restore 시 이중삽입 차단.
+if [ -f "$rt" ] && ! grep -q 'gemm-omp r1' "$rt"; then
+  # Anchor on the unique ikj-loop comment; inject the #ifdef _OPENMP pragma
+  # immediately before the `for (int64_t i = 0; i < M; i++)` row-loop that follows.
+  awk '
+    /^    \/\/ ikj loop — streaming B \+ C/ { in_ikj=1 }
+    in_ikj && /^    for \(int64_t i = 0; i < M; i\+\+\) \{/ && !done {
+      print "    // gemm-omp r1 — opt-in OpenMP row-parallel (byteeq-safe: schedule(static)"
+      print "    // gives each output row i a single owning thread, so the per-row ikj accum"
+      print "    // order is preserved for ANY thread count → bit-identical. Inert unless the"
+      print "    // build adds -fopenmp (HEXA_OMP=1 + libgomp probe in self/main.hexa); the"
+      print "    // default ship has no -fopenmp so _OPENMP is undefined and this vanishes."
+      print "#ifdef _OPENMP"
+      print "#pragma omp parallel for schedule(static)"
+      print "#endif"
+      done=1
+    }
+    { print }
+  ' "$rt" > "$rt.ompr1" && mv "$rt.ompr1" "$rt"
+  if grep -q 'gemm-omp r1' "$rt"; then
+    echo "[restore_frozen_seeds] gemm-omp r1: injected #ifdef _OPENMP parallel-for on farr_matmul i-loop into $rt"
+  else
+    echo "[restore_frozen_seeds] gemm-omp r1: WARN — ikj anchor not found, farr_matmul left single-thread (in-tree as-is)"
+  fi
+fi
+
 # ── RT-NATIVE leg B Z2a (trim-ends group) — scrub frozen runtime.c C bodies ───
 # The casefold/trim group's C bodies were ABSENT from the frozen 151c52c8
 # runtime.c, so no scrub was needed for them. The trim-ends siblings
