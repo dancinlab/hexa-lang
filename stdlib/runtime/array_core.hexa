@@ -20,8 +20,9 @@
 //   element stride in items[] = sizeof(HexaVal) = 16:  tag @ +0,  payload @ +8.
 //
 // ALLOC stays C (WALL-2, alloc lane domain): new / push / reserve / snapshot all
-// touch calloc/realloc/arena/heapify and are NOT ported here. set/pop are
-// alloc-free (in-place index write / pure length decrement) so they DO port.
+// touch calloc/realloc/arena/heapify and are NOT ported here. set/pop/shift/
+// truncate are alloc-free (in-place index write / pure length edit) so they DO
+// port.
 //
 // These live in the LINKED rt-stdlib object set (imported by compiler/main.hexa
 // alongside numeric.hexa::rt_len). The runtime_core_emit.hexa #ifdef
@@ -118,4 +119,27 @@ pub fn rt_array_shift_native(arr: HexaVal) -> HexaVal {
     }
     __hx_ptr_store64(arr_ptr, 8, last)               // len <- n - 1
     return first
+}
+
+// rt_array_truncate_native: shrink the array's LOGICAL length to new_len,
+// clamped into [0, len]. Pure length store @ HexaArr.len +8 — NO realloc, NO
+// free (the items buffer + capacity are retained for amortized re-growth, slots
+// beyond new_len become unreachable through this handle). The exact alloc-free
+// in-place edit the C body does (HX_SET_ARR_LEN after clamp), so it ports like
+// pop/shift. new_len arrives as a HexaVal{TAG_INT, n}; raw-payload compares via
+// __hx_payload_lt. The C wrapper keeps the non-array guard (returns arr) and
+// delegates only the length edit. Returns arr.
+pub fn rt_array_truncate_native(arr: HexaVal, new_len_v: HexaVal) -> HexaVal {
+    let arr_ptr = __hx_payload_add(arr, 0)
+    let len = __hx_ptr_load64(arr_ptr, 8)            // current logical length
+    let zero = __hx_payload_add(0, 0)                // HexaVal{TAG_INT, 0}
+    let mut n = __hx_payload_add(new_len_v, 0)       // raw new_len payload
+    if __hx_payload_lt(n, zero) {                    // clamp low: n < 0 -> 0
+        n = zero
+    }
+    if __hx_payload_lt(len, n) {                     // clamp high: n > len -> len
+        n = __hx_payload_add(len, 0)
+    }
+    __hx_ptr_store64(arr_ptr, 8, n)                  // len <- clamped new_len
+    return arr
 }
