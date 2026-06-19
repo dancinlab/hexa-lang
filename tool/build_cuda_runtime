@@ -45,7 +45,20 @@ nvidia-smi --query-gpu=name,compute_cap --format=csv,noheader || true
 
 echo "=== extract RT-NATIVE cores from prebuilt runtime.a (CUDA-independent) ==="
 ( cd "$B" && ar x "$PREBUILT_RT" )
-CORES="$B/rt_hi_native.o $B/array_core_native.o $B/map_core_native.o $B/alloc_syscall_native.o $B/intern_core_native.o"
+# @convergence state=completed id=BUILD-CUDA-CORES-STALE value="fs_core_native.o 누락"
+#   threshold="새 runtime.c native seed 추가 시 core-list 동기화"
+#   — Root-cause fix (#3668 FS-R1 staleness): do NOT hand-enumerate the RT-NATIVE
+#   cores. `ar x` above already extracted EVERY member of runtime.a into $B/,
+#   so collect the *_native.o set DYNAMICALLY (rt_hi · array · map · intern · fs ·
+#   str · alloc — whatever stage_resolve_runtime_a ar'd in for this target). A
+#   hardcoded list goes stale whenever a new native seed lands in runtime.c (FS-R1
+#   #887b2493f added fs_write_all_native → fs_core_native.o, which the old 5-entry
+#   list omitted → harness link `undefined reference to fs_write_all_native`). The
+#   glob auto-tracks future seeds, so the list can never drift again. runtime.o is
+#   excluded by the *_native.o pattern (it is linked separately below).
+CORES="$(ls "$B"/*_native.o 2>/dev/null | tr '\n' ' ')"
+[ -n "$CORES" ] || { echo "no RT-NATIVE *_native.o cores extracted from $PREBUILT_RT — stale/non-native runtime.a?"; exit 1; }
+echo "[build_cuda_runtime] RT-NATIVE cores (dynamic from runtime.a): $CORES"
 
 echo "=== regen runtime_cuda.c + runtime_bf16.c from emitter SSOT ==="
 "$HEXA" run self/cuda/runtime_bf16_emit.hexa self/cuda/runtime_bf16.c >/dev/null
