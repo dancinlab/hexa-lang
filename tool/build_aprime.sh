@@ -337,18 +337,20 @@ if [ "${HEXA_RT_ALLOC_NATIVE:-1}" != "0" ]; then
 fi
 
 # ── RT-NATIVE STR (sh-construct-str + sh-str-scan lanes): native public-string scan/compare ─
-# Assemble the arch-matched str_core seed + define HEXA_RT_STR_EQ_NATIVE and
-# HEXA_RT_STR_STARTS_WITH_NATIVE so hexa_str_eq's + rt_str_starts_with's
-# distinct-pointer compares delegate to rt_str_eq_native / rt_str_starts_with_native
-# (raw-mem __hx_ptr_load8 NUL-stop walks). byte-identical to the C strcmp/strncmp
-# bodies. The C `#else` is RETAINED — if the seed is missing for $(uname -m) we
-# simply do NOT define the macros and the C path ships unchanged (#3583 fallback
-# lesson, unlike array/map this is NOT a hard fail). One seed .o carries both
-# symbols, so it is assembled + linked once. Set HEXA_RT_STR_EQ_NATIVE=0 /
-# HEXA_RT_STR_STARTS_WITH_NATIVE=0 to force the C path per-prim even when a seed exists.
+# Assemble the arch-matched str_core seed + define HEXA_RT_STR_EQ_NATIVE,
+# HEXA_RT_STR_STARTS_WITH_NATIVE and HEXA_RT_STR_ENDS_WITH_NATIVE so hexa_str_eq's
+# + rt_str_starts_with's + rt_str_ends_with's distinct-pointer compares delegate to
+# rt_str_eq_native / rt_str_starts_with_native / rt_str_ends_with_native (raw-mem
+# __hx_ptr_load8 NUL-stop walks). byte-identical to the C strcmp/strncmp bodies.
+# The C `#else` is RETAINED — if the seed is missing for $(uname -m) we simply do
+# NOT define the macros and the C path ships unchanged (#3583 fallback lesson,
+# unlike array/map this is NOT a hard fail). One seed .o carries all three symbols,
+# so it is assembled + linked once. Set HEXA_RT_STR_EQ_NATIVE=0 /
+# HEXA_RT_STR_STARTS_WITH_NATIVE=0 / HEXA_RT_STR_ENDS_WITH_NATIVE=0 to force the C
+# path per-prim even when a seed exists.
 STR_CORE_OBJ=""
 STR_DEF=""
-if [ "${HEXA_RT_STR_EQ_NATIVE:-1}" != "0" ] || [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-1}" != "0" ]; then
+if [ "${HEXA_RT_STR_EQ_NATIVE:-1}" != "0" ] || [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-1}" != "0" ] || [ "${HEXA_RT_STR_ENDS_WITH_NATIVE:-1}" != "0" ]; then
     case "$(uname -sm 2>/dev/null)" in
         "Linux x86_64")                 STR_SEED="$REPO/self/native/str_core_x86_64.s" ;;
         "Linux aarch64"|"Linux arm64")  STR_SEED="$REPO/self/native/str_core_arm64-linux.s" ;;
@@ -363,6 +365,7 @@ if [ "${HEXA_RT_STR_EQ_NATIVE:-1}" != "0" ] || [ "${HEXA_RT_STR_STARTS_WITH_NATI
         STR_CORE_OBJ="$REPO/build/str_core_native.o"
         [ "${HEXA_RT_STR_EQ_NATIVE:-1}" != "0" ] && STR_DEF="$STR_DEF -DHEXA_RT_STR_EQ_NATIVE=1"
         [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-1}" != "0" ] && STR_DEF="$STR_DEF -DHEXA_RT_STR_STARTS_WITH_NATIVE=1"
+        [ "${HEXA_RT_STR_ENDS_WITH_NATIVE:-1}" != "0" ] && STR_DEF="$STR_DEF -DHEXA_RT_STR_ENDS_WITH_NATIVE=1"
         echo "  [3/5] RT-NATIVE STR: defs [$STR_DEF] — native string scan/compare path"
     else
         echo "  [3/5] RT-NATIVE STR: no seed for $(uname -m) — C strcmp/strncmp #else path (no-seed fallback)" >&2

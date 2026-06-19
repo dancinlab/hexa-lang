@@ -113,3 +113,53 @@ pub fn rt_str_starts_with_native(s: HexaVal, prefix: HexaVal) -> bool {
     // so reaching here always means a genuine prefix-byte mismatch → no match.
     return __hx_payload_eq(cp, 0)                     // true iff prefix ended exactly at the diff point
 }
+
+// rt_str_ends_with_native (str r3 — sh-str-scan): true when `s` ends with
+// `suffix`, byte-faithful to the C body's
+// `sfxlen <= slen && hxlcl_strcmp(HX_STR(s) + slen - sfxlen, HX_STR(suffix)) == 0`.
+// Unlike the forward prefix scan (rt_str_starts_with_native), ends_with needs the
+// TAIL OFFSET: the suffix is matched against the LAST sfxlen bytes of s, so we
+// must first measure both lengths (raw NUL-stop byte walks — no HX_STRLEN, that is
+// a C macro the hexa source can't observe), reject sfxlen > slen, then compare
+// s[off + k] vs suffix[k] for k in [0, sfxlen) where off = slen - sfxlen.
+//
+// LENGTHS: walk each buffer to its 0x00 incrementing a counter — the same NUL-stop
+// the C strlen does. OFFSET arithmetic uses the raw-int leaves __hx_payload_add /
+// __hx_payload_sub; the length guard uses __hx_payload_lt (sfxlen < slen+1, i.e.
+// sfxlen <= slen) — all registered raw-int leaf intrinsics (map_core uses lt). The
+// tail compare reuses the __hx_payload_eq byte-equality discipline of r1/r2.
+//
+// READ-ONLY / NO ALLOC, un-nested (1-op-per-temp, NESTING-SEGV guard). The C
+// wrapper (rt_str_ends_with in runtime_core_emit.hexa) keeps the TAG_STR guards;
+// this body is the distinct-pointer length+tail byte walk it delegates to.
+pub fn rt_str_ends_with_native(s: HexaVal, suffix: HexaVal) -> bool {
+    let ps = __hx_payload_add(s, 0)                  // char* of haystack
+    let px = __hx_payload_add(suffix, 0)             // char* of suffix
+    // measure slen — NUL-stop byte walk over s (== C strlen)
+    let mut slen = 0
+    let mut cs = __hx_ptr_load8(ps, 0)
+    while __hx_payload_ne(cs, 0) {
+        slen = __hx_payload_add(slen, 1)
+        cs = __hx_ptr_load8(ps, slen)
+    }
+    // measure sfxlen — NUL-stop byte walk over suffix
+    let mut sfxlen = 0
+    let mut cx = __hx_ptr_load8(px, 0)
+    while __hx_payload_ne(cx, 0) {
+        sfxlen = __hx_payload_add(sfxlen, 1)
+        cx = __hx_ptr_load8(px, sfxlen)
+    }
+    // suffix longer than haystack → cannot be a suffix (matches `sfxlen > slen`)
+    if __hx_payload_lt(slen, sfxlen) { return false }
+    // tail compare: s[off + k] vs suffix[k] for k in [0, sfxlen), off = slen - sfxlen
+    let off = __hx_payload_sub(slen, sfxlen)
+    let mut k = 0
+    while __hx_payload_lt(k, sfxlen) {
+        let idx = __hx_payload_add(off, k)
+        let a = __hx_ptr_load8(ps, idx)
+        let b = __hx_ptr_load8(px, k)
+        if __hx_payload_ne(a, b) { return false }    // tail byte differs → not a suffix
+        k = __hx_payload_add(k, 1)
+    }
+    return true                                       // all sfxlen tail bytes matched (empty suffix → true)
+}
