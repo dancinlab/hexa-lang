@@ -26,16 +26,26 @@
 #   (restore_frozen_seeds). /usr/lib/x86_64-linux-gnu/crt1.o for native link/run.
 #
 # ── Usage ────────────────────────────────────────────────────────────────────
-#   tool/build_native_linux_x86_64 [-r REPO] [-w WORK] [--self-emit]
+#   tool/build_native_linux_x86_64 [-r REPO] [-w WORK] [--self-emit] [--byteeq]
 #     -r REPO       repo root (default: cwd; must hold compiler/main.hexa)
 #     -w WORK       scratch/output dir (default: $REPO/build/lx8664) — NOT /tmp
 #     --self-emit   ALSO run the compiler self-emit (heavy; cc_native emits its
 #                   own flattened source to an ELF x86-64 `.o`)
+#     --byteeq      ALSO run the gen3→gen4 byte-eq fixpoint LOCALLY on this host
+#                   (heavy; no PR-CI round-trip). cc_native is the graduated
+#                   x86-64 native compiler (gen "gen3"); it re-emits its OWN
+#                   flattened source TWICE (cc-gen3.o, cc-gen4.o) and asserts
+#                   byte-identity — the deterministic self-reproduction fixpoint
+#                   the darwin path proves via build_selfhost.sh. Prints a
+#                   BYTEEQ=BYTE-EQ|DIFFER@n line. This is the thing that
+#                   previously could only run in PR CI.
 #
 # ── Exit codes ───────────────────────────────────────────────────────────────
 #   0  cc_native built + hi.hexa emitted native ELF .o + linked + RAN rc 7
+#      (with --byteeq: AND the gen3→gen4 self-emit is byte-identical, 0 ENCODE-MISS)
 #   1  build failure (flatten/transpile/gcc/link)
-#   2  emit/run failure (binary built but the hi.hexa native run != rc 7)
+#   2  emit/run failure (binary built but the hi.hexa native run != rc 7), OR
+#      --byteeq DIFFER (gen3.o != gen4.o) / ENCODE-MISS on a full-compiler emit
 #   3  bad invocation / missing inputs
 # ─────────────────────────────────────────────────────────────────────────
 set -u
@@ -43,12 +53,14 @@ set -u
 REPO="$(pwd)"
 WORK=""
 SELF_EMIT=0
+BYTEEQ=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         -r) REPO="$2"; shift 2 ;;
         -w) WORK="$2"; shift 2 ;;
         --self-emit) SELF_EMIT=1; shift ;;
+        --byteeq) BYTEEQ=1; shift ;;
         *) echo "build_native_linux_x86_64: unknown arg '$1'" >&2; exit 3 ;;
     esac
 done
@@ -139,9 +151,39 @@ RTARR
     log "stage3: rt_array link-fill appended"
 fi
 
+# ── RT-NATIVE ARRAY-R4: native array-core element object ──────────────────────
+# runtime_core.c's hexa_array_get/set delegate UNCONDITIONALLY to
+# rt_array_{get,set}_native (C `#else` dropped for the byte-decrease, #3494), so
+# this single-TU cc_native compile MUST link the native array seed object.
+# (Mirrors build_native_linux_arm64; the arm64 sibling already does this — x86_64
+# was simply not updated in lockstep, leaving cc_native with undefined
+# rt_array_*_native at link.) The x86_64 seed has no -linux suffix variant —
+# Linux x86-64 uses self/native/array_core_x86_64.s directly.
+ARRAY_SEED="$REPO/self/native/array_core_x86_64.s"
+if [ ! -f "$REPO/build/array_core_native.o" ] && [ -f "$ARRAY_SEED" ]; then
+    grep -vE '^// ' "$ARRAY_SEED" > "$WORK/array_seed.s" 2>/dev/null || cp "$ARRAY_SEED" "$WORK/array_seed.s"
+    $CC -c "$WORK/array_seed.s" -o "$REPO/build/array_core_native.o" 2>/dev/null \
+        && log "stage4: assembled build/array_core_native.o from $ARRAY_SEED"
+fi
+[ -f "$REPO/build/array_core_native.o" ] || fail array "build/array_core_native.o missing (no x86_64 seed); cc_native rt_array_*_native undefined" 2
+ARRAY_CORE_OBJ="$REPO/build/array_core_native.o"
+
+# ── RT-NATIVE MAP-R3: native map-core element object ──────────────────────────
+# runtime_core.c's hexa_map_get delegates UNCONDITIONALLY to rt_map_get_native
+# (C `#else` dropped, #3502), so this single-TU compile MUST link the native map
+# seed object too.
+MAP_SEED="$REPO/self/native/map_core_x86_64.s"
+if [ ! -f "$REPO/build/map_core_native.o" ] && [ -f "$MAP_SEED" ]; then
+    grep -vE '^// ' "$MAP_SEED" > "$WORK/map_seed.s" 2>/dev/null || cp "$MAP_SEED" "$WORK/map_seed.s"
+    $CC -c "$WORK/map_seed.s" -o "$REPO/build/map_core_native.o" 2>/dev/null \
+        && log "stage4: assembled build/map_core_native.o from $MAP_SEED"
+fi
+[ -f "$REPO/build/map_core_native.o" ] || fail map "build/map_core_native.o missing (no x86_64 seed); cc_native rt_map_get_native undefined" 2
+MAP_CORE_OBJ="$REPO/build/map_core_native.o"
+
 # ── stage 4: gcc compile the native compiler (native x86_64) ──────────────────
 log "stage4: gcc compile -> cc_native"
-CL_ERR="$($CC $GCC_FLAGS -I self -I . "$WORK/ap_post.c" -o "$WORK/cc_native" -lm -ldl 2>&1 | grep -iE 'error:|undefined' | head -10)"
+CL_ERR="$($CC $GCC_FLAGS -I self -I . "$WORK/ap_post.c" "$ARRAY_CORE_OBJ" "$MAP_CORE_OBJ" -o "$WORK/cc_native" -lm -ldl 2>&1 | grep -iE 'error:|undefined' | head -10)"
 if [ -n "$CL_ERR" ] || [ ! -x "$WORK/cc_native" ]; then
     echo "$CL_ERR" >&2
     fail gcc "cc_native compile/link failed"
@@ -176,6 +218,50 @@ if [ "$SELF_EMIT" = 1 ]; then
     SZ=$(stat -c%s "$WORK/cc-self.o" 2>/dev/null || echo 0)
     log "stage6: self-emit rc=$SRC encode-miss=$MISS cc-self.o=$SZ B"
     grep ENCODE-MISS "$WORK/selfemit.log" 2>/dev/null | head -5
+fi
+
+# ── stage 7 (optional --byteeq): gen3→gen4 BYTE-EQ FIXPOINT, LOCAL on x86-64 ───
+# The thing that previously could only run in PR CI. cc_native is the graduated
+# x86-64 native compiler (the gen "gen3" analogue — built via the hexat→gcc
+# bootstrap above). The deterministic self-host fixpoint is SELF-REPRODUCTION:
+# the same compiler, re-emitting the SAME flattened source, must produce the
+# byte-identical object on every run. We emit twice (cc-gen3.o, cc-gen4.o) and
+# assert cc-gen3.o == cc-gen4.o with 0 ENCODE-MISS — exactly LEG A of
+# tool/selfhost_byteeq_gate.sh, but RUN here on the x86-64 build host so the
+# self-host loop no longer round-trips through ~15-25min PR-CI byteeq-real.
+if [ "$BYTEEQ" = 1 ]; then
+    log "stage7: BYTE-EQ — gen3→gen4 self-emit fixpoint (heavy, two full self-emits)"
+    mkdir -p "$WORK/noatlas"
+    bemit() { # $1=out.o $2=log
+        HEXA_ATLAS_EMBED="$WORK/noatlas" "$WORK/cc_native" _drv.hexa --emit=obj \
+            --backend=native --target=x86_64-linux-gnu --ignore-errors \
+            -o "$1" "$WORK/cc-flat.hexa" > "$2" 2>&1
+    }
+    bemit "$WORK/cc-gen3.o" "$WORK/byteeq-gen3.log"; G3_RC=$?
+    bemit "$WORK/cc-gen4.o" "$WORK/byteeq-gen4.log"; G4_RC=$?
+    G3_SZ=$(stat -c%s "$WORK/cc-gen3.o" 2>/dev/null || echo 0)
+    G4_SZ=$(stat -c%s "$WORK/cc-gen4.o" 2>/dev/null || echo 0)
+    G3_EM=$(grep -c ENCODE-MISS "$WORK/byteeq-gen3.log" 2>/dev/null || echo 0)
+    G4_EM=$(grep -c ENCODE-MISS "$WORK/byteeq-gen4.log" 2>/dev/null || echo 0)
+    log "stage7: gen3 rc=$G3_RC objsize=$G3_SZ encode_miss=$G3_EM"
+    log "stage7: gen4 rc=$G4_RC objsize=$G4_SZ encode_miss=$G4_EM"
+    if [ "$G3_SZ" -eq 0 ] || [ "$G4_SZ" -eq 0 ]; then
+        log "stage7: BYTEEQ=SETUP/INFRA — a full-compiler emit produced 0 bytes"
+        grep ENCODE-MISS "$WORK/byteeq-gen3.log" 2>/dev/null | head -3
+        fail byteeq "full-compiler self-emit produced 0 bytes (build-floor)" 2
+    fi
+    if [ "$G3_EM" -ne 0 ] || [ "$G4_EM" -ne 0 ]; then
+        log "stage7: BYTEEQ=ENCODE-MISS (gen3=$G3_EM gen4=$G4_EM)"
+        grep ENCODE-MISS "$WORK/byteeq-gen3.log" 2>/dev/null | head -5
+        fail byteeq "ENCODE-MISS on a full-compiler emit (gen3=$G3_EM gen4=$G4_EM)" 2
+    fi
+    if cmp "$WORK/cc-gen3.o" "$WORK/cc-gen4.o" > "$WORK/byteeq-gate.log" 2>&1; then
+        log "stage7: BYTEEQ=BYTE-EQ — cc-gen3.o == cc-gen4.o ($G4_SZ B, 0 ENCODE-MISS). x86_64-linux SELF-HOST FIXPOINT held LOCALLY."
+    else
+        FIRST=$(cmp "$WORK/cc-gen3.o" "$WORK/cc-gen4.o" 2>&1 | grep -oE 'byte [0-9]+' | grep -oE '[0-9]+' | head -1)
+        log "stage7: BYTEEQ=DIFFER@${FIRST:-NA} — cc-gen3.o != cc-gen4.o (sz3=$G3_SZ sz4=$G4_SZ); NOT a fixpoint"
+        fail byteeq "gen3.o != gen4.o (DIFFER@${FIRST:-NA})" 2
+    fi
 fi
 
 log "DONE — cc_native + native-emit milestone PASS (HEAD=$HEAD_SHA)"
