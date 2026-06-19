@@ -1,13 +1,23 @@
 // ═══════════════════════════════════════════════════════════════
-//  self/ml/kv_cache.hexa — Transformer KV-cache (flat 1D, immutable)
+//  self/ml/kv_cache.hexa — Transformer KV-cache (flat 1D, in-place)
 //
 //  Layout:
-//    keys / values : flat 1D Tensor, size = n_layers * max_len * n_heads * head_dim
+//    keys / values : flat 1D array, size = n_layers * max_len * n_heads * head_dim
 //    index(layer, pos, h, d) = ((layer*max_len + pos)*n_heads + h)*head_dim + d
 //
-//  Pattern: immutable — append returns a NEW KVCache (new flat arrays copied).
-//  Rationale: complex index assignment (t[i][j][k] = v) 미지원 회피.
-//  flat 1D + per-append full copy 로 파서 안전 + slab 단위만 덮어씀.
+//  Pattern: in-place slab write — arrays are pre-allocated ONCE at init
+//  (kv_cache_new), then each append mutates only this token's slab
+//  (n_heads * head_dim elements per layer) at the correct offset via
+//  `cache.keys[base + i] = k_flat[i]`. NO full-tensor copy, NO new struct.
+//
+//  @convergence STALE-RATIONALE: the old header claimed "complex index
+//  assignment t[i][j][k]=v 미지원" forced a per-append full-tensor copy
+//  (O(T × total) churn). That claim is FALSE — flat 1D index writes on a
+//  struct array field (`cache.keys[base + i] = v`) work today; proven by
+//  self/bench/kv_cache_decode_bench.hexa `kv_write` (:339). Cost is now
+//  O(T × slab): for GPT-2 (24 layers, max_len=512) that is n_layers*max_len
+//  = 12,288× fewer copies per append. Class: stale-capability rationale —
+//  re-test the parser claim before designing around it.
 // ═══════════════════════════════════════════════════════════════
 
 struct KVCache {
@@ -25,11 +35,19 @@ fn kv_cache_idx(layer, pos, h, d, max_len, n_heads, head_dim) {
     return ((layer * max_len + pos) * n_heads + h) * head_dim + d
 }
 
-// ── constructor: allocate zero-filled flat tensors ────────────
+// ── constructor: allocate zero-filled flat arrays ONCE ────────
+//    Plain mutable arrays so appends can write slabs in place
+//    (proven pattern: self/bench/kv_cache_decode_bench.hexa tiny_kv_new).
 fn kv_cache_new(n_layers, max_len, n_heads, head_dim) {
     let total = n_layers * max_len * n_heads * head_dim
-    let keys   = tensor_zeros(total)
-    let values = tensor_zeros(total)
+    let mut keys   = []
+    let mut values = []
+    let mut i = 0
+    while i < total {
+        keys.push(0.0)
+        values.push(0.0)
+        i = i + 1
+    }
     return KVCache {
         keys: keys,
         values: values,
@@ -41,51 +59,31 @@ fn kv_cache_new(n_layers, max_len, n_heads, head_dim) {
     }
 }
 
-// ── append: returns NEW KVCache with slab (layer,pos) overwritten ──
+// ── append: write this token's slab IN PLACE, mutate cache, return it ──
 //    k_flat / v_flat length == n_heads * head_dim
+//    O(slab) per call — NO full-tensor copy, NO new struct alloc.
+//    In-place index write on a struct array field is proven by
+//    self/bench/kv_cache_decode_bench.hexa `kv_write` (:339).
 @hot
 fn kv_cache_append(cache: KVCache, layer, pos, k_flat, v_flat) {
     let max_len  = cache.max_len
     let n_heads  = cache.n_heads
     let head_dim = cache.head_dim
     let slab     = n_heads * head_dim
-    let total    = cache.n_layers * max_len * slab
     let base     = ((layer * max_len + pos) * n_heads) * head_dim
 
-    // Copy keys/values into fresh arrays; overwrite the slab region.
-    let mut new_k = []
-    let mut new_v = []
+    // Overwrite only this (layer,pos) slab; the rest of the cache is untouched.
     let mut i = 0
-    while i < total {
-        let offset = i - base
-        if offset >= 0 {
-            if offset < slab {
-                new_k.push(k_flat[offset])
-                new_v.push(v_flat[offset])
-            } else {
-                new_k.push(cache.keys[i])
-                new_v.push(cache.values[i])
-            }
-        } else {
-            new_k.push(cache.keys[i])
-            new_v.push(cache.values[i])
-        }
+    while i < slab {
+        cache.keys[base + i]   = k_flat[i]
+        cache.values[base + i] = v_flat[i]
         i = i + 1
     }
 
     let advance_seq = pos + 1
-    let mut new_seq = cache.seq_len
-    if advance_seq > new_seq { new_seq = advance_seq }
+    if advance_seq > cache.seq_len { cache.seq_len = advance_seq }
 
-    return KVCache {
-        keys: tensor(new_k),
-        values: tensor(new_v),
-        seq_len: new_seq,
-        max_len: max_len,
-        n_layers: cache.n_layers,
-        n_heads: n_heads,
-        head_dim: head_dim
-    }
+    return cache
 }
 
 // ── reset: fresh zero-filled cache, same shape ────────────────
@@ -165,8 +163,108 @@ fn kv_cache_get_val(cache: KVCache, layer, pos, h, d) {
     return true
 }
 
+// ── REFERENCE: the OLD full-tensor-copy append (oracle for equivalence) ──
+//    Identical observable semantics to the pre-fix kv_cache_append:
+//    copy ENTIRE flat arrays into fresh ones, overwrite the slab region,
+//    return a brand-new struct. Kept ONLY as the correctness oracle.
+fn kv_cache_append_refcopy(cache: KVCache, layer, pos, k_flat, v_flat) {
+    let max_len  = cache.max_len
+    let n_heads  = cache.n_heads
+    let head_dim = cache.head_dim
+    let slab     = n_heads * head_dim
+    let total    = cache.n_layers * max_len * slab
+    let base     = ((layer * max_len + pos) * n_heads) * head_dim
+
+    let mut new_k = []
+    let mut new_v = []
+    let mut i = 0
+    while i < total {
+        let offset = i - base
+        if offset >= 0 {
+            if offset < slab {
+                new_k.push(k_flat[offset])
+                new_v.push(v_flat[offset])
+            } else {
+                new_k.push(cache.keys[i])
+                new_v.push(cache.values[i])
+            }
+        } else {
+            new_k.push(cache.keys[i])
+            new_v.push(cache.values[i])
+        }
+        i = i + 1
+    }
+
+    let advance_seq = pos + 1
+    let mut new_seq = cache.seq_len
+    if advance_seq > new_seq { new_seq = advance_seq }
+
+    return KVCache {
+        keys: new_k,
+        values: new_v,
+        seq_len: new_seq,
+        max_len: max_len,
+        n_layers: cache.n_layers,
+        n_heads: n_heads,
+        head_dim: head_dim
+    }
+}
+
+// ── EQUIVALENCE GATE: in-place append ≡ reference full-copy append ──
+//    Runs an N-step, multi-layer decode through BOTH the new in-place
+//    append and the old full-copy reference, then asserts the two caches
+//    hold byte-identical K/V at every element. This is the correctness
+//    oracle the r2 fix must pass: identical cached K/V vs reference.
+@test fn test_kv_cache_inplace_equiv_refcopy() {
+    let n_layers = 3
+    let max_len  = 8
+    let n_heads  = 2
+    let head_dim = 2
+    let slab     = n_heads * head_dim   // 4
+
+    let mut fast = kv_cache_new(n_layers, max_len, n_heads, head_dim)   // new in-place
+    let mut ref  = kv_cache_new(n_layers, max_len, n_heads, head_dim)   // old full-copy
+
+    // N decode steps; each step writes every layer's slab for this position.
+    let steps = 6
+    let mut pos = 0
+    while pos < steps {
+        let mut layer = 0
+        while layer < n_layers {
+            // deterministic per-(pos,layer,j) values
+            let mut k = []
+            let mut v = []
+            let mut j = 0
+            while j < slab {
+                let base_val = to_float((pos * 100 + layer * 10 + j) + 1)
+                k.push(base_val)
+                v.push(base_val * 2.0)
+                j = j + 1
+            }
+            fast = kv_cache_append(fast, layer, pos, k, v)
+            ref  = kv_cache_append_refcopy(ref, layer, pos, k, v)
+            layer = layer + 1
+        }
+        pos = pos + 1
+    }
+
+    if fast.seq_len != ref.seq_len { return false }
+
+    // Assert every element of both flat arrays matches (full-tensor compare).
+    let total = n_layers * max_len * slab
+    let mut i = 0
+    while i < total {
+        if fast.keys[i]   != ref.keys[i]   { return false }
+        if fast.values[i] != ref.values[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
 // Smoke driver
 let _r1 = test_kv_cache_append()
 let _r2 = test_kv_cache_reset()
-println("kv_cache append: " + to_string(_r1))
-println("kv_cache reset : " + to_string(_r2))
+let _r3 = test_kv_cache_inplace_equiv_refcopy()
+println("kv_cache append      : " + to_string(_r1))
+println("kv_cache reset       : " + to_string(_r2))
+println("kv_cache inplace==ref : " + to_string(_r3))
