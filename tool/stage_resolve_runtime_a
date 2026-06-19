@@ -239,14 +239,16 @@ resolve_native_rt_hi_seed() {
     # The temp MUST end in `.s` so $CC treats it as assembly — a fixed build/
     # path guarantees that (mktemp's `XXXXXX.s` template is unportable: macOS
     # appends the random suffix AFTER the `.s`, breaking the extension).
-    # SAFETY: only adopt the native path if the seed actually exports ALL 14
+    # SAFETY: only adopt the native path if the seed actually exports ALL 15
     # rt_str_* the SSOT runtime_core.c expects — a stale/partial seed (e.g.
-    # pre-search-predicate, 11 fn) would otherwise yield `undefined reference` at
-    # the app link. Counted from the seed's `.globl` directives (toolchain-free,
-    # no nm dependency). On a shortfall, skip the native path → legacy C gen.c.
+    # pre-search-predicate, 11 fn; or pre-from_int, 14 fn) would otherwise yield
+    # `undefined reference` at the app link. Counted from the seed's `.globl`
+    # directives (toolchain-free, no nm dependency). On a shortfall, skip the
+    # native path → legacy C gen.c (the construct-half WRITE prim rt_str_from_int
+    # was added 2026-06-19, bumping the family 14→15).
     local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?rt_str_' "$seed" 2>/dev/null || echo 0)"
-    if [ "${nsyms:-0}" -lt 14 ]; then
-        echo "[stage_resolve_runtime_a] RT-NATIVE Z2a: seed $seed exports only $nsyms/14 rt_str_* — falling back to C gen.c path" >&2
+    if [ "${nsyms:-0}" -lt 15 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE Z2a: seed $seed exports only $nsyms/15 rt_str_* — falling back to C gen.c path" >&2
         return 0
     fi
     local s_tmp="build/rt_hi_seed.s"
