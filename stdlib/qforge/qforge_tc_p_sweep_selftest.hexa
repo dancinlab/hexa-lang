@@ -70,6 +70,7 @@ fn _size_at(p: float) -> QforgeDeck {
         name: "p-sized-model", h_diag: h_diag, n: 1, nocc: 1,
         phi: phi, masses: masses, qvec: qvec, natoms: 1, ncells: 1, cell_R: cell_R,
         dv_modes: dv_modes,
+        nbra: 0, eps_bra: [],
         e_fermi: p,                 // ← P stashed here for the model run_at (d6 stand-in)
         n_ef: 1.0, omega_grid: grid, mode_weight: 0.0,
         sigma_el: 0.0, sigma_ph: 0.0, mu_star: 0.10, n_mats: 1

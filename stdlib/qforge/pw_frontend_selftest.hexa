@@ -254,6 +254,7 @@ fn _ck_synth_compose() -> int {
         phi: [4.0,0.0,0.0, 0.0,5.0,0.0, 0.0,0.0,6.0], masses: [1.0],
         qvec: [0.0,0.0,0.0], natoms: 1, ncells: 1, cell_R: [0.0,0.0,0.0],
         dv_modes: [dv0],
+        nbra: 0, eps_bra: [],
         e_fermi: 0.0, n_ef: 1.0, omega_grid: grid, mode_weight: 0.05,
         sigma_el: 0.05, sigma_ph: 50.0, mu_star: 0.10, n_mats: 256
     }
