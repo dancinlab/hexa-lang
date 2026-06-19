@@ -21,6 +21,14 @@
 #                   are unaffected. The musl asset is an `edge` supplementary
 #                   target, so on stable tags the installer falls back to the
 #                   dynamic glibc asset automatically.
+#   HEXA_CUDA       linux-x86_64 only: set to 1 to install the cuBLAS-enabled
+#                   `hexa-linux-x86_64-cuda.tar.gz` asset (GPU-accelerated GEMM
+#                   via the CUDA-folded runtime.a — anima #2386). OPT-IN ONLY:
+#                   never auto-preferred (it pulls a cuBLAS/cudart runtime
+#                   dependency + assumes an NVIDIA GPU at run time). The cuda
+#                   asset is an `edge` supplementary target, so on stable tags
+#                   the installer falls back to the CPU glibc asset
+#                   automatically. Takes precedence over HEXA_MUSL when both =1.
 
 set -eu
 
@@ -70,6 +78,22 @@ need_cmd() {
 #
 #   HEXA_MUSL=1  → force musl ; HEXA_MUSL=0 → force glibc (escape hatch).
 #   auto (unset) → musl when the host is musl-based OR glibc < MUSL_GLIBC_FLOOR.
+# Decide whether the linux-x86_64 install should pull the cuBLAS-enabled `-cuda`
+# asset (release.yml release-linux-x86_64-cuda). OPT-IN ONLY (HEXA_CUDA=1) — it is
+# NEVER auto-preferred because it adds a cuBLAS/cudart runtime dependency and
+# assumes an NVIDIA GPU at run time (a CPU-only or non-NVIDIA host would get a
+# binary that fails to dlopen libcudart). The default stays the CPU glibc asset.
+#
+# Scope: linux-x86_64 ONLY (the only target with a cuda asset). Returns 0 (prefer
+# cuda) / 1 (keep default). Like the musl asset it is `edge`-supplementary, so a
+# stable-tag install with no cuda asset falls back to the CPU glibc tarball (the
+# generic edge-asset fallback in install_hexa).
+prefer_cuda() {
+    [ "$(detect_target)" = "linux-x86_64" ] || return 1
+    [ "${HEXA_CUDA:-}" = "1" ] || return 1
+    return 0
+}
+
 MUSL_GLIBC_FLOOR_MAJOR=2
 MUSL_GLIBC_FLOOR_MINOR=34
 prefer_musl() {
@@ -119,7 +143,13 @@ install_hexa() {
     # absent glibc) or it is forced via HEXA_MUSL — see prefer_musl(). The musl
     # tarball's inner dir is `hexa-linux-x86_64-musl/`, matching the asset name.
     asset="hexa-${target}"
-    if prefer_musl; then
+    if prefer_cuda; then
+        # HEXA_CUDA=1 opt-in (linux-x86_64): cuBLAS-enabled asset. Takes precedence
+        # over musl (a CUDA host is glibc + has an NVIDIA GPU; the cuda asset is a
+        # dynamic glibc binary, not static-musl).
+        asset="hexa-${target}-cuda"
+        dim "  HEXA_CUDA=1 → preferring cuBLAS-enabled asset (GPU-accelerated)"
+    elif prefer_musl; then
         asset="hexa-${target}-musl"
         dim "  glibc-independent host → preferring static-musl asset"
     fi
@@ -137,9 +167,10 @@ install_hexa() {
 
     dim "  fetching $url"
     if ! curl -fsSL "$url" -o "$tmp/hexa.tar.gz"; then
-        # The musl asset is an `edge` supplementary target; on stable tags it
-        # does not exist. Fall back to the dynamic glibc asset rather than fail
-        # — this keeps a forced/auto-musl request working on a stable channel
+        # The musl AND cuda assets are `edge` supplementary targets; on stable
+        # tags they do not exist. Fall back to the default glibc asset rather than
+        # fail — this keeps a forced/auto-musl or HEXA_CUDA=1 request working on a
+        # stable channel
         # (it just lands the glibc binary, which is what shipped before).
         if [ "$asset" != "hexa-${target}" ]; then
             dim "  ⚠ ${asset}.tar.gz not found (musl asset is edge-only) → glibc asset"
