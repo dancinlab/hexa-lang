@@ -26,14 +26,31 @@ nm build/array_core_native.o 2>/dev/null | grep -E "rt_array_arena_alloc_items_n
 
 CC="${CC:-clang}"
 CFLAGS="-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -I self"
-SEEDS="build/array_core_native.o build/alloc_syscall_native.o"
+# Link EVERY native seed the stage produced (array + alloc are the lane under
+# test; map/intern/fs/rt_hi are co-resident in this runtime_core.c and their
+# native delegations are wired the same in both A and B builds, so they cancel
+# out of the byte-eq — the ONLY config delta between the two builds is the
+# HEXA_RT_ARRAY_ARENA_NATIVE define). Mirrors the real stage_resolve link set.
+# Link the array + alloc seeds (lane under test) PLUS map/intern/fs seeds, which
+# are co-resident in this runtime_core.c TU (their native delegations are wired
+# identically in both A and B builds — only HEXA_RT_ARRAY_ARENA_NATIVE differs —
+# so they cancel out of the byte-eq). rt_hi is EXCLUDED: its native path needs a
+# separate `#include "runtime_hi_gen.c"` sed in the TU (HEXA_ZEROC_RT_HI), out of
+# scope for this gate; without the define runtime.c keeps its C rt_str bodies.
+SEEDS="$(ls build/array_core_native.o build/alloc_syscall_native.o build/map_core_native.o build/intern_core_native.o build/fs_core_native.o 2>/dev/null | tr '\n' ' ')"
+NATIVE_DEFS="-DHEXA_RT_ALLOC_NATIVE=1 -DHEXA_RT_ARRAY_NATIVE=1"
+[ -f build/map_core_native.o ]    && NATIVE_DEFS="$NATIVE_DEFS -DHEXA_RT_MAP_NATIVE=1"
+[ -f build/intern_core_native.o ] && NATIVE_DEFS="$NATIVE_DEFS -DHEXA_RT_INTERN_NATIVE=1"
+[ -f build/fs_core_native.o ]     && NATIVE_DEFS="$NATIVE_DEFS -DHEXA_RT_FS_NATIVE=1"
+echo "NATIVE_DEFS=$NATIVE_DEFS"
+echo "SEEDS=$SEEDS"
 
 build_and_run() {
     local tag="$1" arena_def="$2" out="$3"
     echo "--- build $tag ($arena_def) ---"
-    $CC $CFLAGS -DHEXA_RT_ALLOC_NATIVE=1 -DHEXA_RT_ARRAY_NATIVE=1 -UHEXA_RT_MAP_NATIVE -UHEXA_RT_INTERN_NATIVE -UHEXA_RT_FS_NATIVE $arena_def \
+    $CC $CFLAGS $NATIVE_DEFS $arena_def \
         -c self/runtime.c -o /tmp/rt_${tag}.o 2>/tmp/cc_${tag}.log || { echo "RT COMPILE FAIL $tag"; tail -20 /tmp/cc_${tag}.log; return 1; }
-    $CC $CFLAGS -DHEXA_RT_ALLOC_NATIVE=1 -DHEXA_RT_ARRAY_NATIVE=1 -UHEXA_RT_MAP_NATIVE -UHEXA_RT_INTERN_NATIVE -UHEXA_RT_FS_NATIVE $arena_def \
+    $CC $CFLAGS $NATIVE_DEFS $arena_def \
         -c scripts/scratch/rt_native/sh_array_arena_byteeq_gate.c -o /tmp/gate_${tag}.o 2>/tmp/gatecc_${tag}.log || { echo "GATE COMPILE FAIL $tag"; tail -20 /tmp/gatecc_${tag}.log; return 1; }
     $CC /tmp/gate_${tag}.o /tmp/rt_${tag}.o $SEEDS -o /tmp/gate_${tag} -lm 2>/tmp/link_${tag}.log || { echo "LINK FAIL $tag"; tail -20 /tmp/link_${tag}.log; return 1; }
     /tmp/gate_${tag} > "$out" 2>&1 || { echo "RUN FAIL $tag"; cat "$out"; return 1; }
