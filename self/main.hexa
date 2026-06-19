@@ -1434,11 +1434,29 @@ fn os_clang_ldflags() {
 // schedule(static) 행소유로 BIT-IDENTICAL (restore_frozen_seeds 가 #ifdef _OPENMP
 // 가드 pragma 를 frozen runtime.c 에 post-restore 삽입). 이 함수는 OPT-IN gate:
 //   • HEXA_OMP 미설정/≠1  → "" (기본 ship = 단일스레드, byte-identical 무회귀)
-//   • HEXA_OMP=1 + clang `-fopenmp` 링크 probe 성공 → "-fopenmp " (가속 ON)
+//   • HEXA_OMP=1 + clang `-fopenmp` 링크 probe 성공 →
+//     "-fopenmp -march=native -ffp-contract=fast " (가속 ON)
 //   • HEXA_OMP=1 인데 libgomp/-fopenmp 부재(musl-static / darwin no-libomp) →
 //     경고 1줄 + "" (단일스레드 폴백 — 소비자 install 절대 안 깸)
 // cflags(컴파일)·ldflags(링크) 양쪽에 동일 `-fopenmp` 가 필요하므로 한 헬퍼가
 // 컴파일·링크 둘 다에서 호출된다. probe 는 빌드당 1회 캐시.
+//
+// gemm-perf r3 (2026-06-19) — FMA/SIMD opt-in FOLDED into THIS gate (no new
+// env var, ④-std). HEXA_OMP=1 already namespaces the runtime.o cache key with
+// `.omp`, so adding host-native vectorization here NEVER touches the default
+// (HEXA_OMP unset → "") byte-identical ship. Measured single-thread on aiden
+// (Ryzen 5 9600X, clang-18, OMP_NUM_THREADS=1): the farr_matmul ikj kernel
+// lifts ~1.55–1.70× (d512 9.86→16.78, d1024 10.02→16.90, d2048 8.65→13.44
+// GFLOP/s). The WIN is carried by `-march=native` (AVX-512 vector FMA); the
+// scalar default `+=` already FMA-contracts so `-ffp-contract=fast` is a no-op
+// here but kept to make contraction explicit/robust for other kernels in the
+// TU. THIS CHANGES BITS — `-march=native` reorders the vectorized reduction
+// (measured 1-ULP shift, 0x..2744→0x..2748 @d256 adversarial data), which is
+// EXACTLY why it must stay opt-in. The HEXA_OMP path is verdict-level (rel-rms
+// vs same-dtype ref), NOT byte-exact; the default ship stays bit-frozen.
+// `-march=native` is host-only — all callers are the native (len(target)==0)
+// build + the host runtime.o cache; the cross-`--target` branch never calls
+// this helper, so a cross-compile never sees `-march=native`.
 let mut __omp_cflags_cached = "?"   // sentinel = unprobed (cflags are never just "?")
 fn omp_cflags() {
     if __omp_cflags_cached != "?" { return __omp_cflags_cached }
@@ -1449,7 +1467,8 @@ fn omp_cflags() {
     let probe = exec("printf 'int main(){return 0;}' | " + host_cc() + " -fopenmp -x c - -o /dev/null 2>/dev/null && printf yes || printf no")
     if probe == "yes" {
         println("  [omp] HEXA_OMP=1 — farr_matmul row-parallel ENABLED (-fopenmp, schedule(static) byteeq-safe)")
-        __omp_cflags_cached = "-fopenmp "
+        println("  [omp] HEXA_OMP=1 — host-native FMA/SIMD ON (-march=native -ffp-contract=fast, ~1.7x single-thread; bits differ from default, opt-in only)")
+        __omp_cflags_cached = "-fopenmp -march=native -ffp-contract=fast "
     } else {
         eprintln("  [omp] HEXA_OMP=1 requested but `" + host_cc() + " -fopenmp` does not link (no libgomp/libomp) — falling back to single-thread (no regression)")
         __omp_cflags_cached = ""
