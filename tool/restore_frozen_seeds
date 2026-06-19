@@ -344,6 +344,198 @@ if [ -f "$rt" ] && ! grep -q 'gemm-perf r4' "$rt"; then
   fi
 fi
 
+# ── gemm-perf r5 — BEYOND-PARITY: GEMM+bias-epilogue FUSION (opt-in) ──────────
+# parity (matching OpenBLAS) is the FLOOR, not the goal (CLAUDE.md #3647). r5 is
+# the hexa direct-emit lever a STANDALONE BLAS structurally CANNOT do: fold the
+# bias-add epilogue INTO the r4 GEBP microkernel write-back — at the LAST k-block
+# (rank-K complete) apply C = C + acc + bias[j] while the 6x8 microtile is hot in
+# zmm regs / L1 — ELIMINATING the separate full-tensor epilogue pass and, when C
+# spills L3, its DRAM round-trip. A standalone BLAS must return C to the caller
+# who then re-reads the whole tensor to add bias (cuBLAS/cuDNN "3rd option";
+# MoE conv-fuse #2859 precedent). MEASURED on aiden (Ryzen 5 9600X Zen5, clang-18,
+# single-thread, fused vs r4-GEBP + separate-bias-pass; max|Δ|=0 — identical math
+# AND k-reduction order):
+#   prefill  M=512  K=768 N=50257 (C=196MB) two-pass 405 → fused 392 ms  +3.31%
+#   train    M=4096 K=768 N=3072  (C=96MB)  two-pass 195 → fused 184 ms  +5.54%
+#   large    M=16384 K=128 N=8192 (C=1GB)   two-pass 454 → fused 363 ms  +20.1%
+#   decode   M=1    K=768 N=50257 (C=0.4MB cache-resident)              +0.61% (≈noise)
+# The win SCALES with (output size vs 32MB L3) × (epilogue cheapness): it pays in
+# PREFILL + TRAINING (large M → output spills L3) and is ≈free at single-token
+# decode (M=1 → C cache-resident, the separate pass is already free). HONEST
+# NEGATIVE SCOPE (measured): a COMPUTE-BOUND epilogue (gelu via dt_erf/libm-erf)
+# does NOT benefit (fusion −0.2…−3%: the gelu cost dominates the round-trip AND
+# the scalar-tail fused write-back de-vectorizes the transcendental) → r5 fuses
+# ONLY the memory-bound bias/residual-add, NOT activations. Lever ⓑ (deterministic
+# GEBP) was FALSIFIED: our GEBP is bit-identical across OMP_NUM_THREADS=1/2/4/8,
+# but so is OpenBLAS here (measured d=1024/2048/4096) → not a differentiator.
+# SAME GATE AS r4: the fused helpers + dispatch are `#if defined(__FMA__)` (active
+# only in the -march=native HEXA_OMP build); the default -O2 ship has no __FMA__ →
+# the whole block vanishes in cpp → byte-identical. hexa_farr_matmul_bias is
+# ALWAYS defined (the codegen builtin resolves it on every target); the default
+# build uses a byte-identical fallback (plain hexa_farr_matmul + monotone bias).
+# SSOT = frozen blob → post-restore awk (r1/r2/r3/omp/r4 precedent). Idempotent:
+# marker (gemm-perf r5). Runs AFTER r4 (reuses HX_R4_* tile constants / shape).
+if [ -f "$rt" ] && grep -q 'gemm-perf r4' "$rt" && ! grep -q 'gemm-perf r5' "$rt"; then
+  # Inject the bias-fused helpers + hexa_farr_matmul_bias right before the REAL
+  # hexa_farr_matmul definition (anchor = its unique preceding comment line), which
+  # is AFTER the _hx_farr_table/_hx_farr_count decls the wrapper needs. Self-contained
+  # (re-#defines HX_R4_* — r4 #undef'd them; bias ukr is its own static fn).
+  awk '
+    /^\/\/ \(see tmp_rfc032_smoke\.hexa\)\.$/ && !done {
+      print
+      print "// ═══════════════════════════════════════════════════════════════════"
+      print "#if defined(__FMA__)"
+      print "// gemm-perf r5 — bias-fused BLIS-packed DGEMM (opt-in, same __FMA__ gate as"
+      print "// r4). Identical packing/blocking to hx_r4_gemm; the only delta is the ukr"
+      print "// applies C = C + ab + bias[j] at the LAST k-block (full-K reduced) → the"
+      print "// bias epilogue is folded into the hot write-back, no separate tensor pass."
+      print "#define HX_R5_MR 6"
+      print "#define HX_R5_NR 8"
+      print "#define HX_R5_MC 72"
+      print "#define HX_R5_KC 256"
+      print "#define HX_R5_NC 4080"
+      print "static void hx_r5_ukr_6x8_bias(int64_t kc, const double* restrict Apan,"
+      print "                               const double* restrict Bpan, double* restrict C,"
+      print "                               int64_t ldc, int64_t mr, int64_t nr,"
+      print "                               int last_k, const double* restrict bias, int64_t j0) {"
+      print "    double ab[HX_R5_MR][HX_R5_NR];"
+      print "    for (int r = 0; r < HX_R5_MR; r++)"
+      print "        for (int c = 0; c < HX_R5_NR; c++) ab[r][c] = 0.0;"
+      print "    for (int64_t p = 0; p < kc; p++) {"
+      print "        const double* aa = Apan + p * HX_R5_MR;"
+      print "        const double* bb = Bpan + p * HX_R5_NR;"
+      print "        for (int r = 0; r < HX_R5_MR; r++) {"
+      print "            double arr = aa[r];"
+      print "            for (int c = 0; c < HX_R5_NR; c++) ab[r][c] += arr * bb[c];"
+      print "        }"
+      print "    }"
+      print "    if (!last_k) {"
+      print "        for (int64_t r = 0; r < mr; r++)"
+      print "            for (int64_t c = 0; c < nr; c++) C[r * ldc + c] += ab[r][c];"
+      print "    } else {"
+      print "        for (int64_t r = 0; r < mr; r++)"
+      print "            for (int64_t c = 0; c < nr; c++)"
+      print "                C[r * ldc + c] = C[r * ldc + c] + ab[r][c] + bias[j0 + c];"
+      print "    }"
+      print "}"
+      print "// C[M,N] = A[M,K]·B[K,N] + bias (row-broadcast). Returns 0 ok, -1 alloc fail."
+      print "static int hx_r5_gemm_bias(const double* restrict A, const double* restrict B,"
+      print "                           double* restrict C, int64_t M, int64_t K, int64_t N,"
+      print "                           const double* restrict bias) {"
+      print "    double* Ap = NULL; double* Bp = NULL;"
+      print "    if (posix_memalign((void**)&Ap, 64,"
+      print "            ((size_t)HX_R5_MC*HX_R5_KC + HX_R5_MR)*sizeof(double)) != 0 ||"
+      print "        posix_memalign((void**)&Bp, 64,"
+      print "            ((size_t)HX_R5_KC*HX_R5_NC + HX_R5_NR)*sizeof(double)) != 0) {"
+      print "        free(Ap); free(Bp); return -1;"
+      print "    }"
+      print "    for (int64_t jc = 0; jc < N; jc += HX_R5_NC) {"
+      print "        int64_t nc = (N-jc < HX_R5_NC) ? (N-jc) : HX_R5_NC;"
+      print "        for (int64_t pc = 0; pc < K; pc += HX_R5_KC) {"
+      print "            int64_t kc = (K-pc < HX_R5_KC) ? (K-pc) : HX_R5_KC;"
+      print "            int last_k = (pc + HX_R5_KC >= K);"
+      print "            { const double* Bpc = B + pc*N; int64_t off = 0;"
+      print "              for (int64_t j = 0; j < nc; j += HX_R5_NR) {"
+      print "                int64_t nr = (nc-j < HX_R5_NR) ? (nc-j) : HX_R5_NR;"
+      print "                for (int64_t p = 0; p < kc; p++)"
+      print "                  for (int64_t c = 0; c < HX_R5_NR; c++)"
+      print "                    Bp[off + p*HX_R5_NR + c] ="
+      print "                      (c < nr) ? Bpc[p*N + (jc+j+c)] : 0.0;"
+      print "                off += (int64_t)HX_R5_NR*kc; } }"
+      print "            for (int64_t ic = 0; ic < M; ic += HX_R5_MC) {"
+      print "                int64_t mc = (M-ic < HX_R5_MC) ? (M-ic) : HX_R5_MC;"
+      print "                { const double* Apc = A + pc; int64_t off = 0;"
+      print "                  for (int64_t i = 0; i < mc; i += HX_R5_MR) {"
+      print "                    int64_t mr = (mc-i < HX_R5_MR) ? (mc-i) : HX_R5_MR;"
+      print "                    const double* Ablk = Apc + (ic+i)*K;"
+      print "                    for (int64_t p = 0; p < kc; p++)"
+      print "                      for (int64_t r = 0; r < HX_R5_MR; r++)"
+      print "                        Ap[off + p*HX_R5_MR + r] ="
+      print "                          (r < mr) ? Ablk[r*K + p] : 0.0;"
+      print "                    off += (int64_t)HX_R5_MR*kc; } }"
+      print "                int64_t bp_off = 0;"
+      print "                for (int64_t j = 0; j < nc; j += HX_R5_NR) {"
+      print "                    int64_t nr = (nc-j < HX_R5_NR) ? (nc-j) : HX_R5_NR;"
+      print "                    int64_t ap_off = 0;"
+      print "                    for (int64_t i = 0; i < mc; i += HX_R5_MR) {"
+      print "                        int64_t mr = (mc-i < HX_R5_MR) ? (mc-i) : HX_R5_MR;"
+      print "                        hx_r5_ukr_6x8_bias(kc, Ap + ap_off, Bp + bp_off,"
+      print "                                           C + (ic+i)*N + (jc+j), N, mr, nr,"
+      print "                                           last_k, bias, jc+j);"
+      print "                        ap_off += (int64_t)HX_R5_MR*kc;"
+      print "                    }"
+      print "                    bp_off += (int64_t)HX_R5_NR*kc;"
+      print "                }"
+      print "            }"
+      print "        }"
+      print "    }"
+      print "    free(Ap); free(Bp); return 0;"
+      print "}"
+      print "#undef HX_R5_MR"
+      print "#undef HX_R5_NR"
+      print "#undef HX_R5_MC"
+      print "#undef HX_R5_KC"
+      print "#undef HX_R5_NC"
+      print "#endif  /* __FMA__ — gemm-perf r5 bias-fused helpers */"
+      print ""
+      print "// hexa_farr_matmul_bias(A, Ar, Ac, B, Bc, bias) -> C = A@B + bias (row-bcast)."
+      print "// ALWAYS defined (the codegen builtin resolves it on every target). Fused path"
+      print "// is opt-in (#if __FMA__, via HEXA_OMP -march=native); default build uses a"
+      print "// byte-identical fallback = hexa_farr_matmul then a monotone bias add."
+      print "HexaVal hexa_farr_matmul_bias(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,"
+      print "                              HexaVal b_v, HexaVal bc_v, HexaVal bias_v) {"
+      print "    int64_t M = hexa_as_num(ar_v), K = hexa_as_num(ac_v), N = hexa_as_num(bc_v);"
+      print "    int64_t bias_id = hexa_as_num(bias_v);"
+      print "#if defined(__FMA__)"
+      print "    if (M > 0 && K > 0 && N > 0 && bias_id >= 0 && bias_id < _hx_farr_count) {"
+      print "        int64_t a_id = hexa_as_num(a_v), b_id = hexa_as_num(b_v);"
+      print "        if (a_id >= 0 && a_id < _hx_farr_count && b_id >= 0 && b_id < _hx_farr_count) {"
+      print "            HexaFarrEntry* ae0 = &_hx_farr_table[a_id];"
+      print "            HexaFarrEntry* be0 = &_hx_farr_table[b_id];"
+      print "            HexaFarrEntry* bse = &_hx_farr_table[bias_id];"
+      print "            if (ae0->buf && be0->buf && bse->buf && ae0->len >= M*K"
+      print "                && be0->len >= K*N && bse->len >= N) {"
+      print "                HexaVal c_handle = hexa_farr_zeros(hexa_int(M * N));"
+      print "                int64_t c_id = HX_INT(c_handle);"
+      print "                if (c_id >= 0 && c_id < _hx_farr_count) {"
+      print "                    HexaFarrEntry* ae = &_hx_farr_table[a_id];"
+      print "                    HexaFarrEntry* be = &_hx_farr_table[b_id];"
+      print "                    HexaFarrEntry* bs = &_hx_farr_table[bias_id];"
+      print "                    HexaFarrEntry* ce = &_hx_farr_table[c_id];"
+      print "                    if (ae->buf && be->buf && bs->buf && ce->buf && ce->len >= M*N) {"
+      print "                        if (hx_r5_gemm_bias(ae->buf, be->buf, ce->buf,"
+      print "                                            M, K, N, bs->buf) == 0) return c_handle;"
+      print "                    }"
+      print "                }"
+      print "            }"
+      print "        }"
+      print "    }"
+      print "#endif"
+      print "    // Byte-identical fallback (default build + any unsupported shape): plain"
+      print "    // matmul, then add bias (row-broadcast). Same bits as an unfused two-pass."
+      print "    HexaVal c_handle = hexa_farr_matmul(a_v, ar_v, ac_v, b_v, bc_v);"
+      print "    int64_t c_id = HX_INT(c_handle);"
+      print "    if (c_id < 0 || c_id >= _hx_farr_count) return c_handle;"
+      print "    if (bias_id < 0 || bias_id >= _hx_farr_count) return c_handle;"
+      print "    HexaFarrEntry* ce = &_hx_farr_table[c_id];"
+      print "    HexaFarrEntry* bs = &_hx_farr_table[bias_id];"
+      print "    if (!ce->buf || !bs->buf || ce->len < M*N || bs->len < N) return c_handle;"
+      print "    double* C = ce->buf; const double* bias = bs->buf;"
+      print "    for (int64_t i = 0; i < M; i++)"
+      print "        for (int64_t j = 0; j < N; j++) C[i*N + j] = C[i*N + j] + bias[j];"
+      print "    return c_handle;"
+      print "}"
+      done=1
+    }
+    { print }
+  ' "$rt" > "$rt.gpr5" && mv "$rt.gpr5" "$rt"
+  if grep -q 'gemm-perf r5' "$rt" && grep -q 'hx_r5_gemm_bias(' "$rt"; then
+    echo "[restore_frozen_seeds] gemm-perf r5: bias-fused GEBP epilogue (hexa_farr_matmul_bias; #if __FMA__ opt-in, default byte-id fallback) into $rt"
+  else
+    echo "[restore_frozen_seeds] gemm-perf r5: WARN — tmp_rfc032_smoke anchor not found, hexa_farr_matmul_bias NOT injected"
+  fi
+fi
+
 # ── gemm-perf r1 — register-blocked (i6 interleaved) hexa_farr_matmul (byteeq) ─
 # gemm-bench r1(aiden Ryzen 9600X, clang18, strict-FP -O2 -ffp-contract=off):
 # the shipped ikj+x4 kernel is ~9.5 GFLOP/s single-thread = ~10% of the AVX512
