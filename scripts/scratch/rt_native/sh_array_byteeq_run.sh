@@ -31,9 +31,9 @@ SEEDS="build/array_core_native.o build/alloc_syscall_native.o"
 build_and_run() {
     local tag="$1" arena_def="$2" out="$3"
     echo "--- build $tag ($arena_def) ---"
-    $CC $CFLAGS -DHEXA_RT_ALLOC_NATIVE=1 -DHEXA_RT_ARRAY_NATIVE=1 $arena_def \
+    $CC $CFLAGS -DHEXA_RT_ALLOC_NATIVE=1 -DHEXA_RT_ARRAY_NATIVE=1 -UHEXA_RT_MAP_NATIVE -UHEXA_RT_INTERN_NATIVE -UHEXA_RT_FS_NATIVE $arena_def \
         -c self/runtime.c -o /tmp/rt_${tag}.o 2>/tmp/cc_${tag}.log || { echo "RT COMPILE FAIL $tag"; tail -20 /tmp/cc_${tag}.log; return 1; }
-    $CC $CFLAGS -DHEXA_RT_ALLOC_NATIVE=1 -DHEXA_RT_ARRAY_NATIVE=1 $arena_def \
+    $CC $CFLAGS -DHEXA_RT_ALLOC_NATIVE=1 -DHEXA_RT_ARRAY_NATIVE=1 -UHEXA_RT_MAP_NATIVE -UHEXA_RT_INTERN_NATIVE -UHEXA_RT_FS_NATIVE $arena_def \
         -c scripts/scratch/rt_native/sh_array_arena_byteeq_gate.c -o /tmp/gate_${tag}.o 2>/tmp/gatecc_${tag}.log || { echo "GATE COMPILE FAIL $tag"; tail -20 /tmp/gatecc_${tag}.log; return 1; }
     $CC /tmp/gate_${tag}.o /tmp/rt_${tag}.o $SEEDS -o /tmp/gate_${tag} -lm 2>/tmp/link_${tag}.log || { echo "LINK FAIL $tag"; tail -20 /tmp/link_${tag}.log; return 1; }
     /tmp/gate_${tag} > "$out" 2>&1 || { echo "RUN FAIL $tag"; cat "$out"; return 1; }
