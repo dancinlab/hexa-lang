@@ -33,8 +33,16 @@ static HV mk(int64_t x) { HV v; v.tag = 0; v.pay = x; return v; }
 /* Minimal runtime prims the alloc seed references for its int `==`/`!=` tests
  * (e.g. `if __arena_head == 0`, `while nb != 0`). Payload-equality + payload-
  * nonzero are exactly the seed's integer semantics here. HexaVal 2-register ABI. */
-HV  hexa_eq(HV a, HV b)  { HV r; r.tag = 0; r.pay = (a.pay == b.pay) ? 1 : 0; return r; }
-int hexa_truthy(HV v)    { return v.pay != 0; }
+HV  hexa_eq(HV a, HV b)     { HV r; r.tag = 0; r.pay = (a.pay == b.pay) ? 1 : 0; return r; }
+int hexa_truthy(HV v)       { return v.pay != 0; }
+HV  hexa_cmp_lt(HV a, HV b) { HV r; r.tag = 0; r.pay = (a.pay <  b.pay) ? 1 : 0; return r; }
+HV  hexa_cmp_gt(HV a, HV b) { HV r; r.tag = 0; r.pay = (a.pay >  b.pay) ? 1 : 0; return r; }
+HV  hexa_cmp_le(HV a, HV b) { HV r; r.tag = 0; r.pay = (a.pay <= b.pay) ? 1 : 0; return r; }
+HV  hexa_cmp_ge(HV a, HV b) { HV r; r.tag = 0; r.pay = (a.pay >= b.pay) ? 1 : 0; return r; }
+HV  hexa_add_slow(HV a, HV b) { HV r; r.tag = 0; r.pay = a.pay + b.pay; return r; }
+HV  hexa_sub(HV a, HV b)    { HV r; r.tag = 0; r.pay = a.pay - b.pay; return r; }
+HV  hexa_mul(HV a, HV b)    { HV r; r.tag = 0; r.pay = a.pay * b.pay; return r; }
+HV  hexa_div(HV a, HV b)    { HV r; r.tag = 0; r.pay = b.pay ? a.pay / b.pay : 0; return r; }
 
 int main(void) {
     rt_init_hv();
