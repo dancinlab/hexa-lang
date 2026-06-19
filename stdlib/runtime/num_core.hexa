@@ -1,0 +1,220 @@
+// stdlib/runtime/num_core.hexa — RT-NATIVE-ZEROC M4 num-core PARSE half.
+//
+// The hexa-source raw-mem body for the public string→int parse primitive: the
+// string-coercion path of hexa_as_num (runtime_core_emit.hexa) / hexa_to_int —
+// the strtoll-faithful decimal/hex scan+accumulate. The array twin
+// (stdlib/runtime/array_core.hexa) proved the raw-mem template; map added an
+// open-addressing probe (map_core.hexa); str added the public string-equality
+// byte walk (str_core.hexa). This NUM lane ports the public parse surface —
+// distinct from intern/map/str: those WALK bytes for a comparison; this WALKS
+// bytes AND ACCUMULATES an integer (the first arithmetic-over-bytes native
+// prim — sign + base detect + digit fold + strtoll-faithful overflow clamp).
+//
+// READ-ONLY / NO ALLOC: a byte scan over one existing string buffer + integer
+// accumulation in registers. No calloc/realloc/arena — so it ports here. The
+// alloc-bearing FORMAT direction (int→str / float→str → hexa_strbuf_alloc) is
+// the array-write lane class (needs an arena), NOT this lane (#3583-style WALL
+// boundary). int→str's alloc-free core already shipped via the io lane's
+// rt_str_from_int seed; this lane is its inverse READ half.
+//
+// RAW-MEM, un-nested (NESTING finding, map_core.hexa): every __hx_payload_* /
+// __hx_ptr_* call writes EXACTLY ONE `let` — NO nested intrinsic args. A native
+// codegen clobber (r10/r11 / x1/x3 scratch reuse, #3503) corrupts the outer op
+// when an intrinsic is a direct arg to another (measured in the map lane: nested
+// → SEGV, un-nested → byte-exact vs C). One op per temp, exactly like array_core
+// / str_core's straight-line form.
+//
+// ALL arithmetic / comparison uses the raw-int leaf intrinsics (__hx_payload_add
+// /sub/mul/and/eq/ne/lt), NOT the plain hexa `+ - * & == != <` operators — those
+// lower to HexaVal runtime helpers (hexa_add_slow / hexa_band / hexa_eq / hexa_lt)
+// which misinterpret the raw byte/int words. The __hx_ptr_load8 leaf reads one
+// byte ZERO-EXTENDED into a TAG_INT payload (proven by str_core / m4_x86_leaf_ptr8),
+// so the 0x00 NUL terminator compares as the int 0.
+//
+// LAYOUT (mirrors str_core.hexa): a TAG_STR HexaVal's payload word
+// (= __hx_payload_add(s, 0)) is the data `char*` (HX_STR(v) == v.s; payload
+// aliases .s in the union, same offset). The buffer is NUL-terminated, so a
+// NUL-stop byte scan is byte-faithful to the C body's strtoll over HX_STR(v).
+//
+// SEMANTICS (byte-faithful to hexa_as_num's string-coercion path,
+// runtime_core_emit.hexa, which is `strtoll(cs, NULL, base)` with
+// base = (post-sign "0x"/"0X") ? 16 : 10):
+//   1. skip leading C-isspace bytes (0x09 0x0A 0x0B 0x0C 0x0D 0x20)
+//   2. optional single '+' / '-' sign
+//   3. if next two bytes are '0' then 'x'/'X' → base 16 (consume the prefix),
+//      else base 10
+//   4. fold base-N digits (0-9, plus a-f/A-F for hex) into the magnitude,
+//      stopping at the first non-digit
+//   5. OVERFLOW: strtoll-faithful clamp — a positive magnitude that would pass
+//      INT64_MAX clamps to INT64_MAX; a negative one that would pass |INT64_MIN|
+//      clamps to INT64_MIN (the standard cutoff/cutlim algorithm, base-specific
+//      constants). This matches the shipped C strtoll, NOT the wraparound the
+//      hexat C-transpile pure body (ctype.hexa::rt_atoll) does — the seed path is
+//      the byte-faithful one.
+//   6. apply sign.
+//
+// CIRCULARITY (array/map/str r1 trap, c1): the body must NOT use `s.byte_at(i)` /
+// `byte_len(s)` — those re-enter the runtime (hexa_str_byte_at / hexa_byte_len)
+// and would be self-recursive. Every byte access here is RAW MEM via
+// __hx_ptr_load8 over the data pointer, exactly the sequence the C strtoll body
+// compiles to.
+//
+// These live in the LINKED rt-stdlib object set, provided to the shipped
+// runtime.a ONLY via the frozen .s seed (self/native/num_core_*.s) — the
+// __hx_ptr_load8 / __hx_payload_* leaves are gen2-native-only (the hexat
+// C-transpile bootstrap cannot lower them), exactly like array/map/str_core. The
+// runtime_core_emit.hexa `#ifdef HEXA_RT_NUM_PARSE_INT_NATIVE` arm delegates to
+// this body; the C `#else` (strtoll) is RETAINED for the no-seed fallback.
+
+// NOT @pure: the body touches raw memory through __hx_ptr_load8 (loads of an
+// external buffer's bytes). @pure would license the optimizer to CSE/elide the
+// loads — wrong for raw-mem. Mirrors str_core's rt_str_eq_native (also un-pure).
+
+// rt_parse_int_native: parse the TAG_STR HexaVal `s`'s NUL-terminated buffer as a
+// strtoll-faithful signed integer (auto base 10 / 0x-hex), returning the int64
+// payload. The C wrapper keeps the TAG_STR guard (hexa source can't observe the
+// TAG); it delegates only the byte scan + accumulate. Returns 0 for a string with
+// no digits (strtoll's no-conversion → 0).
+pub fn rt_parse_int_native(s: HexaVal) -> int {
+    let p = __hx_payload_add(s, 0)                   // char* of s (payload word)
+    let mut i = 0
+
+    // 1. skip C-isspace leading bytes: 0x09(9) 0x0A(10) 0x0B(11) 0x0C(12) 0x0D(13) 0x20(32).
+    // The 9..13 contiguous block is one range test; 0x20 (space) is the separate case.
+    let mut ws = 1
+    while __hx_payload_ne(ws, 0) {
+        let sb = __hx_ptr_load8(p, i)
+        let is_sp = __hx_payload_eq(sb, 32)          // space
+        let ge9 = __hx_payload_lt(8, sb)             // sb > 8  (i.e. sb >= 9)
+        let le13 = __hx_payload_lt(sb, 14)           // sb < 14 (i.e. sb <= 13)
+        let in_tab = __hx_payload_and(ge9, le13)     // \t \n \v \f \r block
+        let any = __hx_payload_add(is_sp, in_tab)    // >0 when sb is whitespace
+        if __hx_payload_ne(any, 0) {
+            i = __hx_payload_add(i, 1)               // consume one whitespace byte
+        } else {
+            ws = 0                                    // first non-whitespace → stop
+        }
+    }
+
+    // cursor byte after whitespace skip.
+    let mut c = __hx_ptr_load8(p, i)
+
+    // 2. optional sign
+    let mut neg = 0
+    if __hx_payload_eq(c, 43) {                       // '+'
+        i = __hx_payload_add(i, 1)
+        c = __hx_ptr_load8(p, i)
+    } else if __hx_payload_eq(c, 45) {                // '-'
+        neg = 1
+        i = __hx_payload_add(i, 1)
+        c = __hx_ptr_load8(p, i)
+    }
+
+    // 3. base detect: "0" then "x"/"X" → base 16 (consume), else base 10
+    let mut base = 10
+    if __hx_payload_eq(c, 48) {                        // '0'
+        let i1 = __hx_payload_add(i, 1)
+        let c1 = __hx_ptr_load8(p, i1)
+        let is_x = __hx_payload_eq(c1, 120)            // 'x'
+        let is_X = __hx_payload_eq(c1, 88)             // 'X'
+        let is_hex = __hx_payload_add(is_x, is_X)
+        if __hx_payload_ne(is_hex, 0) {
+            base = 16
+            i = __hx_payload_add(i, 2)
+            c = __hx_ptr_load8(p, i)
+        }
+    }
+
+    // cutoff / cutlim for strtoll-faithful overflow clamp. Positive bound is
+    // INT64_MAX (9223372036854775807); negative bound magnitude is |INT64_MIN|
+    // (9223372036854775808 = INT64_MAX + 1). cutoff = bound / base, cutlim =
+    // bound % base — precomputed (no integer-divide leaf available).
+    //   base 10 positive: 922337203685477580 r 7    negative: 922337203685477580 r 8
+    //   base 16 positive: 576460752303423487 r 15   negative: 576460752303423488 r 0
+    let mut cutoff = 922337203685477580
+    let mut cutlim = 7
+    if __hx_payload_ne(neg, 0) {
+        cutoff = 922337203685477580
+        cutlim = 8
+    }
+    if __hx_payload_eq(base, 16) {
+        if __hx_payload_eq(neg, 0) {
+            cutoff = 576460752303423487
+            cutlim = 15
+        } else {
+            cutoff = 576460752303423488
+            cutlim = 0
+        }
+    }
+
+    // 4 + 5. fold digits with overflow clamp.
+    let mut acc = 0
+    let mut consumed = 0
+    let mut overflowed = 0
+    let mut go = 1
+    while __hx_payload_ne(go, 0) {
+        let b = __hx_ptr_load8(p, i)
+        let mut d = 0
+        let mut isdig = 0
+        let ge0 = __hx_payload_lt(47, b)               // b > 47 (>= '0')
+        let le9 = __hx_payload_lt(b, 58)               // b < 58 (<= '9')
+        let dec = __hx_payload_and(ge0, le9)
+        if __hx_payload_ne(dec, 0) {
+            d = __hx_payload_sub(b, 48)
+            isdig = 1
+        } else if __hx_payload_eq(base, 16) {
+            let gea = __hx_payload_lt(96, b)           // b > 96 (>= 'a')
+            let lef = __hx_payload_lt(b, 103)          // b < 103 (<= 'f')
+            let lower = __hx_payload_and(gea, lef)
+            let geA = __hx_payload_lt(64, b)           // b > 64 (>= 'A')
+            let leF = __hx_payload_lt(b, 71)           // b < 71 (<= 'F')
+            let upper = __hx_payload_and(geA, leF)
+            if __hx_payload_ne(lower, 0) {
+                d = __hx_payload_sub(b, 87)            // 'a'(97) - 10
+                isdig = 1
+            } else if __hx_payload_ne(upper, 0) {
+                d = __hx_payload_sub(b, 55)            // 'A'(65) - 10
+                isdig = 1
+            }
+        }
+        if __hx_payload_eq(isdig, 0) {
+            go = 0
+        } else {
+            // overflow check: acc > cutoff || (acc == cutoff && d > cutlim)
+            let over_hi = __hx_payload_lt(cutoff, acc)         // cutoff < acc
+            let at_lim = __hx_payload_eq(acc, cutoff)
+            let d_over = __hx_payload_lt(cutlim, d)            // cutlim < d
+            let at_over = __hx_payload_and(at_lim, d_over)
+            let any_over = __hx_payload_add(over_hi, at_over)
+            if __hx_payload_ne(any_over, 0) {
+                overflowed = 1
+            } else {
+                let m = __hx_payload_mul(acc, base)
+                acc = __hx_payload_add(m, d)
+            }
+            consumed = __hx_payload_add(consumed, 1)
+            i = __hx_payload_add(i, 1)
+        }
+    }
+
+    // strtoll no-conversion: no digits consumed → 0.
+    if __hx_payload_eq(consumed, 0) {
+        return 0
+    }
+
+    // 5. clamp on overflow to the signed bound.
+    if __hx_payload_ne(overflowed, 0) {
+        if __hx_payload_ne(neg, 0) {
+            let min1 = __hx_payload_sub(0, 9223372036854775807)
+            let imin = __hx_payload_sub(min1, 1)              // INT64_MIN
+            return imin
+        }
+        return 9223372036854775807                            // INT64_MAX
+    }
+
+    // 6. apply sign.
+    if __hx_payload_ne(neg, 0) {
+        return __hx_payload_sub(0, acc)
+    }
+    return acc
+}
