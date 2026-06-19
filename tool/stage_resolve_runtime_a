@@ -830,6 +830,17 @@ build_runtime_a_from_source() {
         rt_array_arena_def="-DHEXA_RT_ARRAY_ARENA_NATIVE=1"
         echo "[stage_resolve_runtime_a] sh-array-write: HEXA_RT_ARRAY_ARENA_NATIVE=1; hexa_array_arena_alloc_items → native arena bridge"
     fi
+    # sh-array-grow (r2): route hexa_array_push's ARENA grow-branch (alloc + live-
+    # element memcpy + descriptor rewrite) through the native raw-mem body
+    # (rt_array_grow_arena_native → rt_array_arena_alloc_items_native → native
+    # hexa_arena_alloc) under the SAME both-seeds-native condition. The cap-double +
+    # mark_top/arena gates + the malloc-promote fallback stay C. Either seed absent
+    # → the C #else (arena_alloc_items + hxlcl_memcpy + HX_SET_ARR_*) stays, byte-eq.
+    local rt_array_grow_def=""
+    if [ -n "$rt_array_def" ] && [ -n "$rt_alloc_def" ]; then
+        rt_array_grow_def="-DHEXA_RT_ARRAY_GROW_NATIVE=1"
+        echo "[stage_resolve_runtime_a] sh-array-grow: HEXA_RT_ARRAY_GROW_NATIVE=1; hexa_array_push arena grow-branch → native raw-mem body"
+    fi
     # CUDA-R1 (gated, opt-IN): when HEXA_CUDA survived resolve_cuda_runtime_seed
     # (nvcc objects built), compile runtime.c with -DHEXA_CUDA + the cuBLAS header
     # include dir (the HEXA_CUDA block in the amalgam #include's cublas_v2.h /
@@ -844,7 +855,7 @@ build_runtime_a_from_source() {
         extra_obj="$extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o"
         echo "[stage_resolve_runtime_a] CUDA-R1: HEXA_CUDA=1; runtime.c -DHEXA_CUDA -I$_cinc; ar'ing runtime_cuda.o + runtime_cuda_dlink.o into runtime.a"
     fi
-    $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_alloc_def $rt_cuda_def -I self -c self/runtime.c -o build/runtime.o
+    $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_array_grow_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_alloc_def $rt_cuda_def -I self -c self/runtime.c -o build/runtime.o
     ar rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     echo "$RA"

@@ -78,6 +78,46 @@ pub fn rt_array_arena_alloc_items_native(n: int) -> int {
     return hexa_arena_alloc(bytes)
 }
 
+// rt_array_grow_arena_native (sh-array-grow, r2): the ARENA grow-branch of
+// hexa_array_push as one raw-mem body. Allocates a NEW arena slab of `new_cap`
+// HexaVal slots via the native arena (rt_array_arena_alloc_items_native →
+// hexa_arena_alloc), COPIES the live `len` element images (raw 16-byte {tag,
+// payload} pairs — no tag reconstruction, the images move intact, mirroring the
+// shift slide) into it, then rewrites the descriptor in place: items @0 = new
+// slab, cap @16 = -new_cap (negative = from_arena sentinel). Returns the new
+// items pointer, or 0 if the arena is OOM/off — the C wrapper treats 0 as the
+// signal to fall back to hexa_array_promote_to_heap (malloc, NOT arena-routable,
+// stays C). The C wrapper keeps ALL gates: the cap-double (needs real_cap), the
+// __hexa_val_mark_top live-mark + hexa_array_arena_on check, and the malloc
+// promote — this delegates ONLY the arena alloc + memcpy + descriptor rewrite,
+// the exact read-half guard-C / body-native split. `new_cap` arrives as a plain
+// int (the caller computed real_cap<8?8:real_cap*2). Un-nested leaves.
+pub fn rt_array_grow_arena_native(arr: HexaVal, new_cap: int) -> int {
+    let next_items = rt_array_arena_alloc_items_native(new_cap)
+    if next_items == 0 {
+        return 0                                     // arena OOM/off → C malloc-promote
+    }
+    let arr_ptr = __hx_payload_add(arr, 0)
+    let old_items = __hx_ptr_load64(arr_ptr, 0)      // current items buffer
+    let len = __hx_ptr_load64(arr_ptr, 8)            // live element count
+    // Copy each live element's 16-byte {tag,payload} image verbatim (2 raw int64
+    // words/element), the byte-exact equivalent of memcpy(next,old,len*16).
+    let mut i = 0
+    while __hx_payload_lt(i, len) {
+        let off = __hx_payload_mul(i, 16)            // element byte offset
+        let off8 = __hx_payload_add(off, 8)
+        let t = __hx_ptr_load64(old_items, off)      // tag word
+        let p = __hx_ptr_load64(old_items, off8)     // payload word
+        __hx_ptr_store64(next_items, off, t)
+        __hx_ptr_store64(next_items, off8, p)
+        i = __hx_payload_add(i, 1)
+    }
+    __hx_ptr_store64(arr_ptr, 0, next_items)         // items @0 <- new arena slab
+    let neg_cap = __hx_payload_sub(0, new_cap)       // -new_cap (from_arena sentinel)
+    __hx_ptr_store64(arr_ptr, 16, neg_cap)           // cap @16 <- -new_cap
+    return next_items
+}
+
 // rt_array_len_native: HexaArr.len @ offset 8 of the descriptor.
 pub fn rt_array_len_native(arr: HexaVal) -> int {
     let arr_ptr = __hx_payload_add(arr, 0)
