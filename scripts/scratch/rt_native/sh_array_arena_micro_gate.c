@@ -30,6 +30,12 @@ extern HV rt_array_arena_alloc_items_hv(HV n) __asm__("rt_array_arena_alloc_item
 
 static HV mk(int64_t x) { HV v; v.tag = 0; v.pay = x; return v; }
 
+/* Minimal runtime prims the alloc seed references for its int `==`/`!=` tests
+ * (e.g. `if __arena_head == 0`, `while nb != 0`). Payload-equality + payload-
+ * nonzero are exactly the seed's integer semantics here. HexaVal 2-register ABI. */
+HV  hexa_eq(HV a, HV b)  { HV r; r.tag = 0; r.pay = (a.pay == b.pay) ? 1 : 0; return r; }
+int hexa_truthy(HV v)    { return v.pay != 0; }
+
 int main(void) {
     rt_init_hv();
 
