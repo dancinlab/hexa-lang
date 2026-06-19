@@ -323,3 +323,52 @@ pub fn qforge_h_apply_forge(ham: PwHam, v: [float]) -> [float] {
     let _f3 = farr_free(cC)
     return out
 }
+
+// ── BATCHED GPU-GEMM apply (Ψ ↦ H·Ψ) — the production hot-path seam ────────────
+//   QFORGE-PERF Lane A ⚡ FIX. The per-vector qforge_h_apply_forge above re-
+//   marshals + re-transfers the ENTIRE dense H[n,n] for ONE matvec — a single
+//   GEMV is memory-bound (AI≈0.25) AND transfer-dominated, so it loses to CPU at
+//   every cell we run (QFORGE-PERF.md K1: wall Δ < 1, 🔴 NOT FASTER). But the
+//   Davidson/Sternheimer inner loop applies H to a BLOCK of m bands per iter. We
+//   fold those m applies into ONE GEMM H[n,n]@Ψ[n,m]: H is transferred ONCE
+//   (amortized over m matvecs) and the math runs at GEMM (tensor-roof) intensity
+//   AI≈m, opening exactly the roof K2 (Davidson VᵀHV) already proved (45-61×).
+//
+//   Measured (RTX 5070 sm_120 · nvptx_happly_block_host.cu, the .cu parity twin):
+//   GEMM beats CPU everywhere except the smallest case and beats the per-band
+//   GEMV path 4-38×; n=2048 m=64 → 74.9× vs CPU, 37.97× vs per-band GEMV
+//   (parity max_rel ≤ 4.7e-11, FP64-tol). This is the batched H-apply seam the
+//   engine should call instead of m× qforge_h_apply_forge.
+//
+//   psi_flat : ROW-MAJOR Ψ[n,m] — psi_flat[i*m + b] = (band b)[i], length n*m.
+//   m        : block width (= nbands / nocc).
+//   Returns ROW-MAJOR Y[n,m] (Y[i*m+b] = (H·band_b)[i]), length n*m; [] on a
+//   shape mismatch or bad dispatch handle (caller falls back to the scalar path).
+//   On a no-GPU build forge_dispatch_matmul routes to the IDENTICAL FP64 CPU GEMM
+//   (byte-eq to m× the scalar qforge_h_apply, same Σ_j H[i,j]·Ψ[j,b] FP64 order).
+pub fn qforge_h_apply_forge_block(ham: PwHam, psi_flat: [float], m: int) -> [float] {
+    let n = ham.n
+    if n == 0 || m <= 0 { return [] }
+    if len(psi_flat) != n * m { return [] }
+    // Stage H[n,n] (row-major) and Ψ[n,m] (row-major) into farr handles.
+    let hA = farr_zeros(n * n)
+    let mut i = 0
+    while i < n * n { let _s = farr_set(hA, i, ham.h[i]) ; i = i + 1 }
+    let pB = farr_zeros(n * m)
+    let mut kk = 0
+    while kk < n * m { let _s = farr_set(pB, kk, psi_flat[kk]) ; kk = kk + 1 }
+    // GPU/CPU dispatch: C[n,m] = H[n,n] @ Ψ[n,m]  (ONE GEMM, H transferred once).
+    let cC = forge_dispatch_matmul(hA, n, n, pB, m)
+    if cC < 0 {
+        let _f1 = farr_free(hA)
+        let _f2 = farr_free(pB)
+        return []
+    }
+    let mut out: [float] = []
+    let mut t = 0
+    while t < n * m { out.push(farr_get(cC, t)) ; t = t + 1 }
+    let _f1 = farr_free(hA)
+    let _f2 = farr_free(pB)
+    let _f3 = farr_free(cC)
+    return out
+}

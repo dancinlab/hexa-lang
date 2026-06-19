@@ -186,6 +186,99 @@ pub fn qforge_scf(H_of_rho, rho_of_psi, n: int, nbands: int, nelec: int,
                        iters: iters, converged: converged }
 }
 
+// ── QFORGE-PERF round 2: BLOCK-WIRED SCF (GPU-GEMM Davidson hot path) ──────────
+//   Identical SCF math to qforge_scf above, but each inner diagonalize calls
+//   qforge_davidson_block — which folds the per-iteration m× scalar H-apply into
+//   ONE GEMM H[n,n]@Ψ[n,m] via the caller's BLOCK closure. On a CUDA-built hexa
+//   that GEMM fires cuBLAS (74.9× vs CPU at n=2048,m=64; QFORGE-PERF.bench.md §8);
+//   on a no-GPU build it routes to the identical FP64 CPU GEMM and is still a few×
+//   faster than the scalar loop (CPU GEMM-tier wins; davidson_block_e2e_bench).
+//
+//   d4 generic contract preserved — the driver names NO physics:
+//     H_of_rho        : rho -> H_apply(v)            (scalar matrix-free, kept for
+//                                                      diag extraction + [] fallback)
+//     H_block_of_rho  : rho -> H_block(psi_flat, m)  (ROW-MAJOR Ψ[n,m] -> Y[n,m])
+//   The two closures MUST describe the SAME H(rho); the production PW caller builds
+//   both from the same assembled PwHam (scf_pw.hexa: qforge_pw_h_apply /
+//   qforge_pw_h_apply_block over the shared PW_HAM slot). If H_block returns [] for
+//   an iteration (bad GPU handle / shape) qforge_davidson_block transparently falls
+//   back to the scalar path, so the result is ALWAYS bit-identical to qforge_scf
+//   (eigenvalues parity max |Δλ| ≤ 9e-16, machine-eps; davidson_block_e2e_bench).
+//
+//   This is a SEPARATE entry so qforge_scf stays byte-identical for every existing
+//   caller (no-regression) — exactly the qforge_scf_smeared convention.
+pub fn qforge_scf_block(H_of_rho, H_block_of_rho, rho_of_psi,
+                        n: int, nbands: int, nelec: int,
+                        mix: float, tol: float, max_iter: int) -> ScfResult {
+    let mut a = mix
+    if a <= 0.0 { a = 0.1 }
+    if a > 1.0 { a = 1.0 }
+
+    let mut rho = []
+    let mut i = 0
+    let rho0 = to_float(nelec) / to_float(n)
+    while i < n { rho.push(rho0) ; i = i + 1 }
+
+    let occ = scf_occupations(nbands, nelec)
+
+    let mut evals = []
+    let mut e_total = 0.0
+    let mut e_prev = 0.0
+    let mut iters = 0
+    let mut converged = false
+    let mut first = true
+
+    while iters < max_iter {
+        iters = iters + 1
+
+        // (1) 입력 밀도로 H_apply(스칼라) + H_block(배치) 둘 다 조립 — 같은 H(ρ).
+        let H_apply = H_of_rho(rho)
+        let H_block = H_block_of_rho(rho)
+
+        // H 의 대각선(Davidson 전처리기용) — 스칼라 apply 로 추출(블록과 동일 H).
+        let mut diag = []
+        let mut d = 0
+        while d < n {
+            let mut e = []
+            let mut t = 0
+            while t < n { if t == d { e.push(1.0) } else { e.push(0.0) } ; t = t + 1 }
+            let col = H_apply(e)
+            diag.push(col[d])
+            d = d + 1
+        }
+
+        // (2) 최저 nbands 대각화 — BLOCK 경로(반복당 GEMM 1회; davidson.hexa d4).
+        let dr = qforge_davidson_block(H_apply, H_block, diag, n, nbands, 1.0e-10, 200)
+        evals = dr.evals
+
+        // (3) 점유 → (4) 새 밀도 (호출자 rho_of_psi).
+        let psis = scf_slice_psis(dr.evecs, nbands, n)
+        let rho_out = rho_of_psi(psis, occ, nbands)
+
+        e_total = scf_band_energy(evals, occ, nbands)
+
+        let dr_rho = scf_dmax(rho, rho_out, n)
+        let dr_e = if first { tol + 1.0 } else { scf_abs(e_total - e_prev) }
+        let resid = if dr_rho > dr_e { dr_rho } else { dr_e }
+
+        let mut rho_new = []
+        let mut k = 0
+        while k < n { rho_new.push((1.0 - a) * rho[k] + a * rho_out[k]) ; k = k + 1 }
+        rho = rho_new
+
+        e_prev = e_total
+        first = false
+
+        if resid < tol {
+            converged = true
+            return ScfResult { rho: rho, evals: evals, e_total: e_total,
+                               iters: iters, converged: true }
+        }
+    }
+    return ScfResult { rho: rho, evals: evals, e_total: e_total,
+                       iters: iters, converged: converged }
+}
+
 // ── M5.8: SMEARED + ANDERSON SCF (the metallic-convergence driver) ─────────────
 // qforge_scf above fills FIXED INTEGER occupation + PLAIN LINEAR mixing — for a
 // METAL the integer fill swaps as bands cross E_F → ρ limit-cycle that linear

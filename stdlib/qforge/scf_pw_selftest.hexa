@@ -223,6 +223,31 @@ fn main() {
     fails = fails + _ck_true("(E)(d) original qforge_scf_pw FE path unchanged",
                              scfE2.converged && _abs(scfE2.evals[0]) < 1.0e-8)
 
+    // (F) BLOCK-WIRED production parity (QFORGE-PERF round 2): the GPU-GEMM
+    //   Davidson seam (qforge_scf_pw_h_block) must drive the SAME in-loop-V_H SCF
+    //   as the scalar qforge_scf_pw_h and land BIT-IDENTICAL eigenvalues/energy.
+    //   Same cell as (E)(c). On this no-GPU build the block apply routes through
+    //   the FP64 CPU GEMM; the wiring is what's under test (parity, not speed).
+    let scfB = qforge_scf_pw_h_block(k0, eg, empty_f, empty_f, empty_f, empty_f, 0.0,
+                                     empty_f, empty_i, empty_f, 0, 100.0, empty_f, 0,
+                                     1, 1, NE, eb1, eb2, eb3,
+                                     3, 2, 0.4, 1.0e-8, 400)
+    fails = fails + _ck_true("(F)(a) block-wired SCF converges (qforge_scf_pw_h_block)",
+                             scfB.converged)
+    fails = fails + _ck_true("(F)(b) block-wired iters == scalar iters (same conv path)",
+                             scfB.iters == scfE.iters)
+    let mut maxdl = 0.0
+    let mut fb = 0
+    while fb < 3 {
+        let dd = _abs(scfB.evals[fb] - scfE.evals[fb])
+        if dd > maxdl { maxdl = dd }
+        fb = fb + 1
+    }
+    fails = fails + _ck_close("(F)(c) block-wired eigenvalues == scalar (max|Δλ|<1e-10)",
+                              maxdl, 0.0, 1.0e-10)
+    fails = fails + _ck_close("(F)(d) block-wired E_total == scalar E_total",
+                              scfB.e_total, scfE.e_total, 1.0e-10)
+
     if fails == 0 { println("qforge_scf_pw_selftest PASS") }
     else { println("qforge_scf_pw_selftest FAIL — " + to_string(fails) + " case(s)") }
 }
