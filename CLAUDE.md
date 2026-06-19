@@ -138,7 +138,15 @@ This file is the single governance SSOT (md 단일화) — edit directives here,
   fusion/arena 특화 — 범용 라이브러리가 못 하는 호출경계 제거) ⓒ **device-resident·@cite 검증
   학습**(flame/forge) ⓓ **도메인 융합**(예: GEMM+conv 단일 saturating 커널 — cuDNN/cuBLAS 가
   못 주는 3rd option). 단 추월도 **측정 수치로 증명**(roofline %·GFLOP/s·byte-eq Δ — LLM
-  자가판정 금지·c2), filler 추월 주장 금지(g0). 즉: reference 로 parity 까지 빠르게 → 측정된
+  자가판정 금지·c2), filler 추월 주장 금지(g0). **추월 실증·정직**(r5 #3656): ⓑ+ⓓ **GEMM+
+  epilogue(bias/residual) fusion** — BLAS 가 별도 패스로 강제하는 것을 codegen 이 타일-hot 시
+  융합해 메모리 왕복 제거 → **+20%**(large, max|Δ|=0)·prefill +3.3%·MLP +5.5%. **그러나 측정이
+  레버를 가린다**(아무거나 융합 ≠ 이득): ⓐ byte-eq 결정성은 추월 레버 **아님 falsified**
+  (OpenBLAS 도 같은 빌드서 thread-무관 비트동일, r5 측정) · **gelu 같은 compute-bound epilogue
+  융합은 closed-neg**(연산비용 > 왕복절감, 스칼라-tail de-vectorize) → bias/residual 같은
+  memory-bound epilogue 만 융합. 다음 추월 r6 = **chained-GEMM fusion**(`gelu(x@W1)@W2` 의 중간
+  activation 을 DRAM 에 미실체화 — FlashAttention 정신, cuBLAS 가 호출경계 때문에 못 하는 것).
+  즉: reference 로 parity 까지 빠르게 → 측정된
   parity 확인 → reference 의 미탐색/비결정 영역을 hexa 강점으로 추월하는 r(n+1) 명명·진행.
   **가드레일은 위 [self-host ≠ release 회귀]
   가 절대 상위**(reference 차용도 byteeq 3타깃 GREEN 전 머지 금지·비트변경은 opt-in 격리).
