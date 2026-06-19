@@ -1,0 +1,147 @@
+// stdlib/runtime/valop_core.hexa — RT-NATIVE-ZEROC M4 VALOP-core (sh-val-core).
+//
+// The hexa-source raw-mem bodies for the SCALAR value-op kernel of the runtime:
+// the tag-dispatch + scalar int/float/bool arithmetic & truthiness that
+// hexa_truthy / hexa_sub / hexa_mul (runtime_core_emit.hexa) compute on a
+// HexaVal's {tag, payload} image. The array twin (array_core.hexa) proved the
+// __hx_tag / __hx_make_val read/write template; num (num_core.hexa) proved the
+// raw byte→int accumulate; this VALOP lane is the FIRST to TAG-DISPATCH a
+// HexaVal natively (read the tag word, branch on TAG_INT/FLOAT/BOOL, recompute,
+// re-box) without re-entering the C runtime — the keystone the floor census
+// flagged as the largest un-ported on-path family (~34 on-path, no native seed).
+//
+// READ-ONLY / NO ALLOC: each body reads one-or-two HexaVal images (tag + payload
+// words held in registers) and returns a scalar HexaVal. No calloc/realloc/arena,
+// no libm, no @syscall — so the SCALAR cases port here. The non-scalar arms
+// (string concat / array concat / map / valstruct / the cross-type ↔ string
+// throw paths) re-enter the runtime (HX_STR/len/hmap/throw) and STAY C — the C
+// wrapper guards them and delegates only the scalar fast path. That C↔native
+// split mirrors array_core's guard-C / body-rt split exactly.
+//
+// RAW-MEM, un-nested (NESTING finding, map_core.hexa): every __hx_* call writes
+// EXACTLY ONE `let` — NO nested intrinsic args. The native-codegen nested-
+// intrinsic clobber (#3503) corrupts the outer op when an intrinsic is a direct
+// arg to another. One op per temp, straight-line, exactly like array/num_core.
+//
+// ALL tag reads / payload arithmetic / comparison use the raw leaf intrinsics
+// (__hx_tag · __hx_payload_add/eq/lt · __hx_payload_fadd/fsub/fmul/fdiv ·
+// __hx_to_double · __hx_make_val), NOT the plain hexa `+ - * == <` operators —
+// those lower to the HexaVal runtime helpers (hexa_add_slow / hexa_eq / hexa_sub)
+// we are PORTING, so using them here would be self-recursive (the array/map/str
+// r1 circularity trap, c1). The intrinsics lower inline on the gen2 native
+// backend; the hexat C-transpile bootstrap cannot lower them — hence these enter
+// the shipped runtime.a ONLY via the frozen .s seed (self/native/valop_core_*.s),
+// exactly like array/map/str/num_core. runtime_core_emit.hexa's
+// `#ifdef HEXA_RT_VALOP_NATIVE` arms delegate to these bodies; the C `#else`
+// (the legacy switch) is RETAINED for the no-seed fallback.
+
+// NOT @pure: __hx_tag / __hx_to_double read the HexaVal union fields by tag; the
+// optimizer must not CSE/elide across the tag branch (a @pure annotation would
+// license that). Mirrors array_core's bodies (also un-pure).
+
+// Tag constants (runtime_core_emit.hexa:1109):
+//   TAG_INT = 0, TAG_FLOAT = 1, TAG_BOOL = 2, TAG_STR = 3, TAG_VOID = 4
+
+// rt_truthy_native: the SCALAR arm of hexa_truthy (runtime_core_emit.hexa:7509).
+// Returns hexa_bool(1)/hexa_bool(0) — but as a plain int payload the C wrapper
+// reads via hexa_truthy(...) (the seed result is a TAG_BOOL HexaVal whose payload
+// is 0/1, the same image hexa_bool produces). Byte-faithful to the C switch arms:
+//   TAG_BOOL  → HX_BOOL(v)            (payload word, 0/1)
+//   TAG_INT   → HX_INT(v)  != 0
+//   TAG_FLOAT → HX_FLOAT(v) != 0.0    (NaN is non-zero → truthy, matches C)
+//   TAG_VOID  → 0
+// The C wrapper handles TAG_STR / TAG_ARRAY / TAG_MAP / TAG_VALSTRUCT (len /
+// HX_STR / hmap / pointer — runtime re-entry) and only delegates the 4 scalar
+// tags above; on any other tag this body returns the C default (1) too. Returns
+// a TAG_BOOL HexaVal (tag 2) so the result image is identical to hexa_bool's.
+fn rt_truthy_native(v: HexaVal) -> HexaVal {
+    let tag = __hx_tag(v)
+
+    // TAG_BOOL (2): result is the payload word verbatim (already 0/1).
+    if __hx_payload_eq(tag, 2) {
+        let p = __hx_payload_add(v, 0)               // HX_BOOL(v) (== HX_INT, union)
+        return __hx_make_val(2, p)
+    }
+
+    // TAG_INT (0): payload != 0.
+    if __hx_payload_eq(tag, 0) {
+        let p = __hx_payload_add(v, 0)               // HX_INT(v)
+        let nz = __hx_payload_ne(p, 0)               // bool 0/1 image
+        let nzp = __hx_payload_add(nz, 0)            // payload word of the bool
+        return __hx_make_val(2, nzp)
+    }
+
+    // TAG_FLOAT (1): HX_FLOAT(v) != 0.0 (NaN → true, matches C `!= 0.0`).
+    // The native backend has no float `!=` leaf, so express `v != 0.0` as
+    // `!(v <= 0.0 && v >= 0.0)`: le && ge is true ONLY for ±0.0 (both false for
+    // NaN, exactly one true for any nonzero finite). So iszero captures ±0.0 and
+    // truthy = !iszero gives ±0.0→0, NaN→1, finite-nonzero→1 — byte-faithful to C.
+    if __hx_payload_eq(tag, 1) {
+        let zf = __hx_to_double(0)                   // 0.0 as a float HexaVal
+        let le = __hx_payload_fle(v, zf)             // v <= 0.0  (false for NaN)
+        let ge = __hx_payload_fge(v, zf)             // v >= 0.0  (false for NaN)
+        let lep = __hx_payload_add(le, 0)
+        let gep = __hx_payload_add(ge, 0)
+        let iszero = __hx_payload_and(lep, gep)      // 1 ONLY for ±0.0; 0 for NaN & nonzero
+        let truthy = __hx_payload_eq(iszero, 0)      // bool: NOT iszero
+        let tp = __hx_payload_add(truthy, 0)
+        return __hx_make_val(2, tp)
+    }
+
+    // TAG_VOID (4): falsy.
+    if __hx_payload_eq(tag, 4) {
+        return __hx_make_val(2, 0)
+    }
+
+    // Any other tag reaching the native body: the C default (return 1). The C
+    // wrapper only delegates the scalar tags, so this is a safety net.
+    return __hx_make_val(2, 1)
+}
+
+// rt_sub_native: the SCALAR numeric arm of hexa_sub (runtime_core.c via
+// numeric.hexa::rt_sub). Byte-faithful to the int-int and float/mixed paths:
+//   int  - int  → TAG_INT (payload subtract)
+//   else (any float, with the other int coerced to double) → TAG_FLOAT
+// bool→int coercion (true=1) and the non-numeric throw STAY in the C wrapper —
+// it pre-coerces bool operands to TAG_INT and rejects non-numeric BEFORE
+// delegating, so this body only ever sees TAG_INT / TAG_FLOAT operands. Mirrors
+// the rt_sub dispatch in numeric.hexa, but native (no type_of re-entry).
+fn rt_sub_native(a: HexaVal, b: HexaVal) -> HexaVal {
+    let ta = __hx_tag(a)
+    let tb = __hx_tag(b)
+    let a_int = __hx_payload_eq(ta, 0)               // a is TAG_INT
+    let b_int = __hx_payload_eq(tb, 0)               // b is TAG_INT
+    let both_int = __hx_payload_and(a_int, b_int)
+    if __hx_payload_ne(both_int, 0) {
+        let r = __hx_payload_sub(a, b)               // HX_INT(a) - HX_INT(b)
+        let rp = __hx_payload_add(r, 0)
+        return __hx_make_val(0, rp)
+    }
+    let af = __hx_to_double(a)                        // int|float → double
+    let bf = __hx_to_double(b)
+    let rf = __hx_payload_fsub(af, bf)               // double subtract, TAG_FLOAT
+    let rfp = __hx_payload_add(rf, 0)
+    return __hx_make_val(1, rfp)
+}
+
+// rt_mul_native: the SCALAR numeric arm of hexa_mul (same shape as rt_sub_native,
+// proven by numeric.hexa::rt_mul). int*int → TAG_INT; any float → TAG_FLOAT. The
+// C wrapper owns bool→int coerce + non-numeric throw (hexa_mul has no string-
+// repeat), so this body only sees TAG_INT / TAG_FLOAT.
+fn rt_mul_native(a: HexaVal, b: HexaVal) -> HexaVal {
+    let ta = __hx_tag(a)
+    let tb = __hx_tag(b)
+    let a_int = __hx_payload_eq(ta, 0)
+    let b_int = __hx_payload_eq(tb, 0)
+    let both_int = __hx_payload_and(a_int, b_int)
+    if __hx_payload_ne(both_int, 0) {
+        let r = __hx_payload_mul(a, b)               // HX_INT(a) * HX_INT(b)
+        let rp = __hx_payload_add(r, 0)
+        return __hx_make_val(0, rp)
+    }
+    let af = __hx_to_double(a)
+    let bf = __hx_to_double(b)
+    let rf = __hx_payload_fmul(af, bf)
+    let rfp = __hx_payload_add(rf, 0)
+    return __hx_make_val(1, rfp)
+}
