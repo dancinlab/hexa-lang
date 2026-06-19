@@ -1433,7 +1433,13 @@ fn os_clang_ldflags() {
             let tgt_lib = cuda_home + "/targets/x86_64-linux/lib"
             let lib64 = cuda_home + "/lib64"
             let cuda_probe = exec("test -f '" + tgt_lib + "/libcudart.so' && printf '" + tgt_lib + "' || (test -f '" + lib64 + "/libcudart.so' && printf '" + lib64 + "' || printf '')")
-            if cuda_probe != "" { cuda_l = " -L" + cuda_probe.trim() }
+            // libcuda.so (the CUDA driver stub) ships ONLY in <lib>/stubs on a
+            // GPU-less build host (the real driver lib appears at run time on a GPU
+            // box). Without the stubs search path `-lcuda` fails the link with
+            // "ld: cannot find -lcuda" — #3696 added stubs to release_package's
+            // FINAL link but this self-compile (hexa run) cuda LIBS still omitted it.
+            // @convergence state=in_flight id=CUDA-STUBS-SELFCOMPILE value="hexa run self-compile cuda link omitted -L<lib>/stubs → ld cannot find -lcuda in -cuda release Package step" threshold="release -cuda job Package step green (libcuda resolved from stubs)"
+            if cuda_probe != "" { cuda_l = " -L" + cuda_probe.trim() + " -L" + cuda_probe.trim() + "/stubs" }
         }
         // cudadevrt is a STATIC archive shipped by the toolkit (device-runtime for
         // the -dlink blob); cudart/cublas/cuda are the host-side shared libs.
