@@ -83,19 +83,24 @@ function inline(s){
 }
 function slug(s){ return s.toLowerCase().replace(/[^\w]+/g,'-').replace(/^-|-$/g,''); }
 
+// A table cell may be a string OR a nested array of child items (c4: piled cells
+// split into one node per logical item). Render arrays as <ul> recursively so an
+// item that itself decomposes further nests to arbitrary depth.
+function cell(c){ return Array.isArray(c) ? '<ul>'+c.map(i=>'<li>'+cell(i)+'</li>').join('')+'</ul>' : inline(c); }
+
 function renderBlocks(blocks, depth){
   let html = '';
   for (const b of blocks){
     if (b.type === 'prose'){ html += '<p>'+inline(b.text)+'</p>'; }
     else if (b.type === 'list'){
-      html += '<ul>' + b.items.map(i=>'<li>'+inline(i)+'</li>').join('') + '</ul>';
+      html += '<ul>' + b.items.map(i=>'<li>'+cell(i)+'</li>').join('') + '</ul>';
     }
     else if (b.type === 'codeblock'){
       html += '<pre><code>'+esc(b.text)+'</code></pre>';
     }
     else if (b.type === 'table'){
       html += '<table><thead><tr>' + b.columns.map(c=>'<th>'+inline(c)+'</th>').join('') + '</tr></thead><tbody>';
-      html += b.rows.map(r=>'<tr>'+r.map(c=>'<td>'+inline(c)+'</td>').join('')+'</tr>').join('');
+      html += b.rows.map(r=>'<tr>'+r.map(c=>'<td>'+cell(c)+'</td>').join('')+'</tr>').join('');
       html += '</tbody></table>';
     }
     else if (b.type === 'subsection'){
