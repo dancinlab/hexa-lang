@@ -1413,6 +1413,32 @@ fn os_clang_ldflags() {
     // glibc shared OpenSSL/libsodium to satisfy these, and the cflags side
     // already dropped the -DHEXA_HAS_* defines, so skip the link flags too.
     if env("HEXA_STATIC_DEPS") == "1" || host_cc().contains("musl") { return base }   // @convergence id=MUSL-OPENSSL-STATIC-DEPS (musl CC → no glibc-shared OpenSSL/libsodium; env-independent twin of the cflags guard)
+    // ── HEXA_CUDA=1 (opt-in · `-cuda` release variant) — pull cuBLAS/cudart so a
+    // consumer `hexa build`/`run` program links the CUDA-enabled runtime.a (which
+    // ar's runtime_cuda.o + the nvcc -dlink device blob, folded in by
+    // stage_resolve_runtime_a's resolve_cuda_runtime_seed). The CPU default build
+    // NEVER sets HEXA_CUDA, so these flags are absent there — additive + opt-in,
+    // no regression to the default CPU release (self-host ≠ release ABSOLUTE).
+    // Order: -lcudadevrt MUST follow runtime_cuda_dlink.o (the device blob it
+    // resolves); the runtime.a is already on the link line BEFORE os_clang_ldflags,
+    // so appending the cuda libs here satisfies that ordering. Lib dir resolved
+    // from CUDA_HOME (release job sets it) with the targets/x86_64-linux/lib
+    // toolkit layout fallback; -L lets the loader find libcudart/libcublas at link.
+    if env("HEXA_CUDA") == "1" {
+        let cuda_home = env("CUDA_HOME")
+        let mut cuda_l = ""
+        if cuda_home != "" {
+            // toolkit layout: $CUDA_HOME/targets/x86_64-linux/lib (preferred) or
+            // $CUDA_HOME/lib64 (classic). Probe for whichever holds libcudart.
+            let tgt_lib = cuda_home + "/targets/x86_64-linux/lib"
+            let lib64 = cuda_home + "/lib64"
+            let cuda_probe = exec("test -f '" + tgt_lib + "/libcudart.so' && printf '" + tgt_lib + "' || (test -f '" + lib64 + "/libcudart.so' && printf '" + lib64 + "' || printf '')")
+            if cuda_probe != "" { cuda_l = " -L" + cuda_probe.trim() }
+        }
+        // cudadevrt is a STATIC archive shipped by the toolkit (device-runtime for
+        // the -dlink blob); cudart/cublas/cuda are the host-side shared libs.
+        return base + cuda_l + " -lcudart -lcublas -lcuda -lcudadevrt"
+    }
     // 2026-05-14: libsodium link flags (when found via pkg-config or brew).
     let probe = exec("pkg-config --libs libsodium 2>/dev/null")
     if probe != "" { base = base + " " + probe.trim() }
@@ -1555,6 +1581,35 @@ fn resolve_prebuilt_runtime() {
         }
     }
     return ""
+}
+
+// ── RT-NATIVE drop-guard (sh-ctranspile-dropguard) ──────────────────────
+// Scan a prebuilt native runtime.a for the symbols it DEFINES with external
+// linkage, returning a space-joined token list (" sys_exit hexa_arena_alloc
+// … ") for HEXA_RT_NATIVE_DROP. The C-transpile (codegen.hexa
+// _gen2_is_rt_native_provided) drops the program-C BODY of any hexa-source fn
+// whose name is in this set, keeping only the forward decl — so a user closure
+// that `use`s self/rt/syscall.hexa (e.g. `hexa cloud` → cloud_cli → rt/syscall)
+// no longer double-defines `sys_exit` against alloc_syscall_native.o.
+//
+// Principled `.globl` scan (not a hardcoded sys_exit special-case): nm lists
+// every defined external symbol; we keep the uppercase-type (defined, global)
+// rows and strip the one platform underscore (Mach-O `_sys_exit` → `sys_exit`;
+// ELF has none). Best-effort — if nm is missing / the archive is unreadable the
+// list is EMPTY and the drop is a no-op (the link then fails loud exactly as
+// before, never a silent miscompile).
+fn _rt_native_drop_list(runtime_a) {
+    if len(runtime_a) == 0 { return "" }
+    // `nm -g` = external symbols only. Keep DEFINED rows (type letter is one of
+    // T/D/B/R/S/W — uppercase = global-defined; lowercase = local; U = undef).
+    // awk col $2 is the type letter (col $1 = address, blank for undef rows so
+    // those collapse to $1=U and are skipped). Strip a single leading `_`
+    // (Mach-O) so the emitted token matches the hexa fn name. NUL/space-join.
+    let _scan = "nm -g '" + runtime_a + "' 2>/dev/null"
+        + " | awk '$2 ~ /^[TDBRSW]$/ { s=$3; sub(/^_/, \"\", s); print s }'"
+        + " | sort -u | tr '\\n' ' '"
+    let _out = exec(_scan)
+    return _out.trim()
 }
 
 fn cmd_cc() {
@@ -3337,6 +3392,22 @@ fn cmd_build(src, out, c_only, target, shared) {
     // build. §lto-unwall measured this flips #2-ext rt_str 🔴→WIN −31%.
     let _same_tu = env_var("HEXA_SAME_TU") == "1" && shared != "1" && len(target) == 0
     if _same_tu { v2_env = v2_env + "HEXA_USE_RUNTIME_C=1 " }
+    // RT-NATIVE drop-guard: if THIS build will link the prebuilt native
+    // runtime.a (same condition as the link-side resolution at [rt] below —
+    // native host, non-shared, non-cross, and NOT same-TU which inlines the
+    // runtime into the user TU), scan its exported symbols and pass them to
+    // the transpile so codegen drops the colliding program-C bodies (sys_exit
+    // etc.). UNSET on the from-source / same-TU / cross paths → no drop, where
+    // runtime.c carries no native seed and the body must still be emitted.
+    if !_same_tu && shared != "1" && len(target) == 0 {
+        let _dg_rt = resolve_prebuilt_runtime()
+        if len(_dg_rt) > 0 {
+            let _dg_syms = _rt_native_drop_list(_dg_rt)
+            if len(_dg_syms) > 0 {
+                v2_env = v2_env + "HEXA_RT_NATIVE_DROP='" + _dg_syms + "' "
+            }
+        }
+    }
     let trans = v2_env + v2 + " " + __actual_src + " " + c_file + " 2>&1"
     println("  [1/2] " + trans)
     let r1 = exec(trans)

@@ -221,7 +221,7 @@ resolve_native_rt_hi_seed() {
     # SysV ABI, same ELF format), so map the `-musl` variant onto its base target
     # here — otherwise the case below falls through to the no-seed `#else` path
     # and the dropped C arena/element bodies leave rt_*_native undefined at link.
-    tgt="${tgt%-musl}"
+    tgt="${tgt%-musl}"; tgt="${tgt%-cuda}"   # -cuda variant shares the linux-x86_64 ELF/SysV rt-seeds
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
         "Darwin arm64") tgt="darwin-arm64" ;;
         "Linux x86_64") tgt="linux-x86_64" ;;
@@ -239,14 +239,16 @@ resolve_native_rt_hi_seed() {
     # The temp MUST end in `.s` so $CC treats it as assembly — a fixed build/
     # path guarantees that (mktemp's `XXXXXX.s` template is unportable: macOS
     # appends the random suffix AFTER the `.s`, breaking the extension).
-    # SAFETY: only adopt the native path if the seed actually exports ALL 14
+    # SAFETY: only adopt the native path if the seed actually exports ALL 15
     # rt_str_* the SSOT runtime_core.c expects — a stale/partial seed (e.g.
-    # pre-search-predicate, 11 fn) would otherwise yield `undefined reference` at
-    # the app link. Counted from the seed's `.globl` directives (toolchain-free,
-    # no nm dependency). On a shortfall, skip the native path → legacy C gen.c.
+    # pre-search-predicate, 11 fn; or pre-from_int, 14 fn) would otherwise yield
+    # `undefined reference` at the app link. Counted from the seed's `.globl`
+    # directives (toolchain-free, no nm dependency). On a shortfall, skip the
+    # native path → legacy C gen.c (the construct-half WRITE prim rt_str_from_int
+    # was added 2026-06-19, bumping the family 14→15).
     local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?rt_str_' "$seed" 2>/dev/null || echo 0)"
-    if [ "${nsyms:-0}" -lt 14 ]; then
-        echo "[stage_resolve_runtime_a] RT-NATIVE Z2a: seed $seed exports only $nsyms/14 rt_str_* — falling back to C gen.c path" >&2
+    if [ "${nsyms:-0}" -lt 15 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE Z2a: seed $seed exports only $nsyms/15 rt_str_* — falling back to C gen.c path" >&2
         return 0
     fi
     local s_tmp="build/rt_hi_seed.s"
@@ -280,7 +282,7 @@ resolve_native_array_core_seed() {
     # SysV ABI, same ELF format), so map the `-musl` variant onto its base target
     # here — otherwise the case below falls through to the no-seed `#else` path
     # and the dropped C arena/element bodies leave rt_*_native undefined at link.
-    tgt="${tgt%-musl}"
+    tgt="${tgt%-musl}"; tgt="${tgt%-cuda}"   # -cuda variant shares the linux-x86_64 ELF/SysV rt-seeds
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
         "Darwin arm64") tgt="darwin-arm64" ;;
         "Linux x86_64") tgt="linux-x86_64" ;;
@@ -322,7 +324,7 @@ resolve_native_map_core_seed() {
     # SysV ABI, same ELF format), so map the `-musl` variant onto its base target
     # here — otherwise the case below falls through to the no-seed `#else` path
     # and the dropped C arena/element bodies leave rt_*_native undefined at link.
-    tgt="${tgt%-musl}"
+    tgt="${tgt%-musl}"; tgt="${tgt%-cuda}"   # -cuda variant shares the linux-x86_64 ELF/SysV rt-seeds
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
         "Darwin arm64") tgt="darwin-arm64" ;;
         "Linux x86_64") tgt="linux-x86_64" ;;
@@ -376,7 +378,7 @@ resolve_native_intern_core_seed() {
     [ "${HEXA_RT_INTERN_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
     [ -f build/intern_core_native.o ] && { export HEXA_RT_INTERN_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
-    tgt="${tgt%-musl}"
+    tgt="${tgt%-musl}"; tgt="${tgt%-cuda}"   # -cuda variant shares the linux-x86_64 ELF/SysV rt-seeds
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
         "Darwin arm64") tgt="darwin-arm64" ;;
         "Linux x86_64") tgt="linux-x86_64" ;;
@@ -428,7 +430,7 @@ resolve_native_fs_core_seed() {
     # The static-musl edge build sets TARGET=linux-x86_64-musl. The frozen native
     # .s seeds are ELF-object/x86_64-ABI artifacts shared by glibc and musl (same
     # SysV ABI, same ELF format), so map the `-musl` variant onto its base target.
-    tgt="${tgt%-musl}"
+    tgt="${tgt%-musl}"; tgt="${tgt%-cuda}"   # -cuda variant shares the linux-x86_64 ELF/SysV rt-seeds
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
         "Darwin arm64") tgt="darwin-arm64" ;;
         "Linux x86_64") tgt="linux-x86_64" ;;
@@ -521,6 +523,57 @@ resolve_native_str_core_seed() {
     rm -f "$s_tmp"
 }
 
+# ── RT-NATIVE leg B M4 NUM (sh-num-native lane) — num-core parse native seed → build/num_core_native.o ──
+# The num twin of resolve_native_str_core_seed: assemble build/num_core_native.o
+# from the arch-matched frozen self/native/num_core_*.s seed, and AUTO-ENABLE the
+# native string→int parse path (HEXA_RT_NUM_PARSE_INT_NATIVE=1) so hexa_as_num's
+# string-coercion arm delegates to rt_parse_int_native (raw-mem __hx_ptr_load8
+# byte scan + digit fold + strtoll-faithful overflow clamp — gen2-only intrinsics
+# the hexat C-transpile bootstrap cannot lower, hence a frozen .s seed, exactly
+# like array/map/str_core). byte-identical (native == C hxlcl_strtoll over the
+# tested input space incl INT64_MIN/MAX + overflow edges), so it is default-
+# eligible like array/map/str. On an unknown target or assemble failure,
+# HEXA_RT_NUM_PARSE_INT_NATIVE stays unset and the C strtoll body in
+# runtime_core.c ships unchanged (the no-seed fallback — #3583 lesson). Override
+# by pre-setting HEXA_RT_NUM_PARSE_INT_NATIVE=0 to force the C path even when a
+# seed exists.
+resolve_native_num_core_seed() {
+    [ "${HEXA_RT_NUM_PARSE_INT_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
+    [ -f build/num_core_native.o ] && { export HEXA_RT_NUM_PARSE_INT_NATIVE=1; return 0; }
+    local seed="" tgt="${TARGET:-}"
+    tgt="${tgt%-musl}"
+    [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
+        "Darwin arm64") tgt="darwin-arm64" ;;
+        "Linux x86_64") tgt="linux-x86_64" ;;
+        "Linux aarch64"|"Linux arm64") tgt="linux-arm64" ;;
+    esac
+    case "$tgt" in
+        darwin-arm64) seed="self/native/num_core_arm64.s" ;;
+        linux-x86_64) seed="self/native/num_core_x86_64.s" ;;
+        linux-arm64)  seed="self/native/num_core_arm64-linux.s" ;;
+        *)            seed="" ;;   # unknown → C #else path
+    esac
+    [ -n "$seed" ] && [ -f "$seed" ] || return 0
+    mkdir -p build
+    # SAFETY: only adopt the native path if the seed exports the parse fn the
+    # runtime_core.c delegation expects — a stale/partial seed would yield an
+    # `undefined reference` at the app link. Counted from `.globl` (toolchain-free).
+    local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?rt_parse_int_native' "$seed" 2>/dev/null || echo 0)"
+    if [ "${nsyms:-0}" -lt 1 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE NUM: seed $seed exports only $nsyms/1 rt_parse_int_native — falling back to C #else path" >&2
+        return 0
+    fi
+    local s_tmp="build/num_core_seed.s"
+    grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
+    if $CC -c "$s_tmp" -o build/num_core_native.o 2>/dev/null; then
+        export HEXA_RT_NUM_PARSE_INT_NATIVE=1
+        echo "[stage_resolve_runtime_a] RT-NATIVE NUM: assembled build/num_core_native.o from $seed (TARGET=$tgt, $nsyms rt_parse_int_native syms) → native string→int parse path"
+    else
+        echo "[stage_resolve_runtime_a] RT-NATIVE NUM: WARN assemble of $seed failed — falling back to C #else path" >&2
+    fi
+    rm -f "$s_tmp"
+}
+
 # ── RT-NATIVE leg B Route B — linked-block arena native seed → build/alloc_syscall_native.o ──
 # The arena twin of resolve_native_array_core_seed: assemble the arch-matched
 # frozen self/native/alloc_syscall_*.s seed (a full HexaArenaBlock-chain arena +
@@ -546,7 +599,7 @@ resolve_native_alloc_syscall_seed() {
     # SysV ABI, same ELF format), so map the `-musl` variant onto its base target
     # here — otherwise the case below falls through to the no-seed `#else` path
     # and the dropped C arena/element bodies leave rt_*_native undefined at link.
-    tgt="${tgt%-musl}"
+    tgt="${tgt%-musl}"; tgt="${tgt%-cuda}"   # -cuda variant shares the linux-x86_64 ELF/SysV rt-seeds
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
         "Darwin arm64") tgt="darwin-arm64" ;;
         "Linux x86_64") tgt="linux-x86_64" ;;
@@ -591,6 +644,93 @@ resolve_native_alloc_syscall_seed() {
         echo "[stage_resolve_runtime_a] RT-NATIVE ALLOC-RB: WARN assemble of $seed failed — C arena" >&2
     fi
     rm -f "$s_tmp"
+}
+
+# ── CUDA-R1 (`-cuda` release variant · opt-IN HEXA_CUDA=1) — fold the CUDA
+# runtime objects into runtime.a so a consumer `hexa build`/`run` program links
+# cuBLAS-backed GEMM (anima #2386). This is the BUILD-time half of the opt-in
+# CUDA path (the link-flag half is os_clang_ldflags' HEXA_CUDA branch). DEFAULT
+# build NEVER sets HEXA_CUDA → this is a no-op there (self-host ≠ release: the
+# CPU release tarball + the gen3≡gen4 byteeq fixpoint are untouched).
+#
+# Mirrors tool/build_cuda_runtime (the GPU-verified #3680 recipe) for the object
+# build, but stops at producing the two relocatable objects + signalling the
+# runtime.c compile flag — it does NOT run the GEMM verdict harness (that is the
+# aiden GPU-verify authority; CI is GPU-less build-only).
+#
+#   runtime_cuda.o       nvcc -x cu -DHEXA_CUDA -rdc=true (relocatable device code)
+#   runtime_cuda_dlink.o nvcc -dlink (device-link blob → resolved by -lcudadevrt)
+#
+# On success: build/runtime_cuda.o + build/runtime_cuda_dlink.o exist and
+# HEXA_CUDA=1 stays set so build_runtime_a_from_source compiles runtime.c with
+# -DHEXA_CUDA and ar's both objects in. NON-FATAL + NO-OP-SAFE: on a missing nvcc
+# / missing emitter / compile failure it WARNS and unsets HEXA_CUDA so the build
+# falls back to the CPU runtime.a (a `-cuda` job then ships a CPU asset — caught
+# by the job's own post-build cuda_available probe, not a silent CPU ship).
+resolve_cuda_runtime_seed() {
+    [ "${HEXA_CUDA:-0}" = "1" ] || return 0   # opt-in only
+    local SM="${SM:-120}"
+    local CUDA_HOME_D="${CUDA_HOME:-/usr/local/cuda}"
+    local CINC="$CUDA_HOME_D/targets/x86_64-linux/include"
+    [ -d "$CINC" ] || CINC="$CUDA_HOME_D/include"
+    export PATH="$CUDA_HOME_D/bin:$PATH"
+    if ! command -v nvcc >/dev/null 2>&1; then
+        echo "[stage_resolve_runtime_a] CUDA-R1: WARN no nvcc on PATH ($CUDA_HOME_D/bin) — unsetting HEXA_CUDA, CPU runtime.a" >&2
+        unset HEXA_CUDA; return 0
+    fi
+    mkdir -p build
+    # Regen runtime_cuda.c (+ runtime_bf16.c) from their emitter SSOT, exactly as
+    # build_cuda_runtime does (the emitter must emit _hx_dt_exp_dev once — the
+    # #3680 dup-def fix; we re-assert it here so a regression is caught at build).
+    # Both .c are .gitignore'd build inputs (absent on a fresh checkout) AND the
+    # cuda emitter uses string-concat returns (NOT the `buf = buf + "…"` line
+    # literals the runtime_core awk un-escaper handles) → a hexa RUNNER is
+    # REQUIRED. resolve_cuda_runtime_seed runs at Stage 0b BEFORE ./hexa or
+    # build/hexat exist, so resolve a runner: PATH hexa(-run) for local dev, else
+    # the prior BASE edge `hexa-linux-x86_64.tar.gz` binary (a CPU hexa runs the
+    # cuda emitter fine — it just prints C text). The cuda edge asset itself is
+    # chicken-egg on the first run, so we pull the base x86_64 edge, not EDGE_ASSET.
+    local RUNNER=""
+    if command -v hexa-run >/dev/null 2>&1; then RUNNER="hexa-run"
+    elif command -v hexa >/dev/null 2>&1; then RUNNER="hexa run"
+    elif [ -x build/hexat ]; then RUNNER="build/hexat run"
+    else
+        local _edge_dir="/tmp/edge_cuda_runner"
+        rm -rf "$_edge_dir"; mkdir -p "$_edge_dir"
+        if gh release download edge --repo "${GITHUB_REPOSITORY:-dancinlab/hexa-lang}" \
+              --pattern "hexa-linux-x86_64.tar.gz" --dir "$_edge_dir" --clobber 2>/tmp/cuda_dl.err \
+           && tar xzf "$_edge_dir/hexa-linux-x86_64.tar.gz" -C "$_edge_dir" 2>/dev/null; then
+            local _edge_hexa
+            _edge_hexa="$(find "$_edge_dir" -name hexa -type f 2>/dev/null | head -1)"
+            if [ -n "$_edge_hexa" ]; then chmod +x "$_edge_hexa" 2>/dev/null || true; RUNNER="$_edge_hexa run"; fi
+        fi
+    fi
+    if [ -z "$RUNNER" ]; then
+        echo "[stage_resolve_runtime_a] CUDA-R1: WARN no hexa runner to emit runtime_cuda.c — unsetting HEXA_CUDA, CPU runtime.a" >&2
+        unset HEXA_CUDA; return 0
+    fi
+    HEXA_LANG="$ROOT" $RUNNER self/cuda/runtime_bf16_emit.hexa self/cuda/runtime_bf16.c >/dev/null 2>&1 || true
+    HEXA_LANG="$ROOT" $RUNNER self/cuda/runtime_cuda_emit.hexa self/cuda/runtime_cuda.c >/dev/null 2>&1 || true
+    if [ ! -f self/cuda/runtime_cuda.c ]; then
+        echo "[stage_resolve_runtime_a] CUDA-R1: WARN runtime_cuda.c not emitted (runner failed?) — unsetting HEXA_CUDA, CPU runtime.a" >&2
+        unset HEXA_CUDA; return 0
+    fi
+    local ndef; ndef="$(grep -c '_hx_dt_exp_dev(double x) {' self/cuda/runtime_cuda.c || true)"
+    if [ "$ndef" != "1" ]; then
+        echo "[stage_resolve_runtime_a] CUDA-R1: WARN runtime_cuda.c has $ndef _hx_dt_exp_dev defs (expected 1) — emitter dup-def regressed; unsetting HEXA_CUDA" >&2
+        unset HEXA_CUDA; return 0
+    fi
+    # nvcc relocatable device code + device-link (mirrors build_cuda_runtime).
+    if nvcc -x cu -DHEXA_CUDA -rdc=true -gencode arch=compute_$SM,code=sm_$SM -O2 -w \
+            -I "$CINC/cccl" -I "$CINC" -I self -I self/cuda -I . \
+            -c self/cuda/runtime_cuda.c -o build/runtime_cuda.o \
+       && nvcc -dlink -gencode arch=compute_$SM,code=sm_$SM build/runtime_cuda.o \
+            -o build/runtime_cuda_dlink.o -lcudadevrt; then
+        echo "[stage_resolve_runtime_a] CUDA-R1: built build/runtime_cuda.o + runtime_cuda_dlink.o (sm_$SM) → folding into runtime.a (-DHEXA_CUDA)"
+    else
+        echo "[stage_resolve_runtime_a] CUDA-R1: WARN nvcc compile/dlink failed — unsetting HEXA_CUDA, CPU runtime.a" >&2
+        unset HEXA_CUDA; rm -f build/runtime_cuda.o build/runtime_cuda_dlink.o; return 0
+    fi
 }
 
 build_runtime_a_from_source() {
@@ -670,6 +810,17 @@ build_runtime_a_from_source() {
         extra_obj="$extra_obj build/str_core_native.o"
         echo "[stage_resolve_runtime_a] RT-NATIVE STR: defs [$rt_str_def]; ar'ing native str_core_native.o into runtime.a"
     fi
+    # RT-NATIVE NUM (sh-num-native lane, gated): when the num_core seed is active,
+    # define HEXA_RT_NUM_PARSE_INT_NATIVE for the runtime.c compile (so hexa_as_num's
+    # string→int path takes the native arm) and ar build/num_core_native.o into
+    # runtime.a so rt_parse_int_native resolves. The C strtoll `#else` stays in
+    # runtime_core.c as the no-seed fallback.
+    local rt_num_def=""
+    if [ "${HEXA_RT_NUM_PARSE_INT_NATIVE:-0}" = "1" ] && [ -f build/num_core_native.o ]; then
+        rt_num_def="-DHEXA_RT_NUM_PARSE_INT_NATIVE=1"
+        extra_obj="$extra_obj build/num_core_native.o"
+        echo "[stage_resolve_runtime_a] RT-NATIVE NUM: HEXA_RT_NUM_PARSE_INT_NATIVE=1; ar'ing native num_core_native.o into runtime.a"
+    fi
     # RT-NATIVE Route B (gated, opt-IN): native linked-block arena replaces the C
     # arena `#else` in runtime_core.c when HEXA_RT_ALLOC_NATIVE=1 + seed object built.
     local rt_alloc_def=""
@@ -678,7 +829,21 @@ build_runtime_a_from_source() {
         extra_obj="$extra_obj build/alloc_syscall_native.o"
         echo "[stage_resolve_runtime_a] RT-NATIVE ALLOC-RB: HEXA_RT_ALLOC_NATIVE=1; ar'ing native alloc_syscall_native.o into runtime.a"
     fi
-    $CC $CFLAGS $rt_array_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_alloc_def -I self -c self/runtime.c -o build/runtime.o
+    # CUDA-R1 (gated, opt-IN): when HEXA_CUDA survived resolve_cuda_runtime_seed
+    # (nvcc objects built), compile runtime.c with -DHEXA_CUDA + the cuBLAS header
+    # include dir (the HEXA_CUDA block in the amalgam #include's cublas_v2.h /
+    # cuda_runtime.h) and ar BOTH device objects in. The host-side cuBLAS link
+    # libs are added by os_clang_ldflags' HEXA_CUDA branch at the consumer link.
+    local rt_cuda_def=""
+    if [ "${HEXA_CUDA:-0}" = "1" ] && [ -f build/runtime_cuda.o ] && [ -f build/runtime_cuda_dlink.o ]; then
+        local _cuda_home="${CUDA_HOME:-/usr/local/cuda}"
+        local _cinc="$_cuda_home/targets/x86_64-linux/include"
+        [ -d "$_cinc" ] || _cinc="$_cuda_home/include"
+        rt_cuda_def="-DHEXA_CUDA -I $_cinc"
+        extra_obj="$extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o"
+        echo "[stage_resolve_runtime_a] CUDA-R1: HEXA_CUDA=1; runtime.c -DHEXA_CUDA -I$_cinc; ar'ing runtime_cuda.o + runtime_cuda_dlink.o into runtime.a"
+    fi
+    $CC $CFLAGS $rt_array_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_alloc_def $rt_cuda_def -I self -c self/runtime.c -o build/runtime.o
     ar rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     echo "$RA"
@@ -705,10 +870,18 @@ resolve_native_fs_core_seed
 # seed (sets HEXA_RT_STR_EQ_NATIVE=1 on all 3 production targets). Unknown targets
 # keep the C strcmp path.
 resolve_native_str_core_seed
+# RT-NATIVE NUM (sh-num-native lane): assemble the arch-matched native num_core
+# seed (sets HEXA_RT_NUM_PARSE_INT_NATIVE=1 on all 3 production targets). Unknown
+# targets / missing seed keep the C strtoll string→int path.
+resolve_native_num_core_seed
 # RT-NATIVE Route B: assemble the native linked-block arena seed (DEFAULT-ON as of
 # measure-8; C arena body dropped from runtime_core_emit.hexa. HEXA_RT_ALLOC_NATIVE=0
 # reverts via git).
 resolve_native_alloc_syscall_seed
+# CUDA-R1 (opt-IN HEXA_CUDA=1 · `-cuda` release variant): nvcc-build the CUDA
+# runtime objects so build_runtime_a_from_source folds them into runtime.a +
+# compiles runtime.c -DHEXA_CUDA. No-op (HEXA_CUDA unset) on every default build.
+resolve_cuda_runtime_seed
 
 if [ -f self/runtime.c ]; then
     echo "stage_resolve_runtime_a: seeds present — building runtime.a from source"
