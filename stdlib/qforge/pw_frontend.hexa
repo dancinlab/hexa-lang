@@ -897,6 +897,35 @@ pub fn qforge_pw_frontend_phonons_scr(deck_dir: str, npw_cap: int, xc_mode: int,
                                       sigma: float, nq: int, screened: bool,
                                       scr_beta: float, scr_mdepth: int,
                                       scr_maxit: int) -> QpwFrontendResult {
+    // default FS double-delta σ_el = the Einstein-default 0.05 Ha (sentinel ≤0 =
+    // keep deck default). The explicit-σ entry below overrides it for matched-σ.
+    return qforge_pw_frontend_phonons_scr_sig(deck_dir, npw_cap, xc_mode, sigma,
+                                              nq, screened, scr_beta, scr_mdepth,
+                                              scr_maxit, -1.0)
+}
+
+// ── qforge_pw_frontend_phonons_scr_sig — screened DFPT with an EXPLICIT el-ph
+//    Fermi-surface double-delta σ_el (the QE-matched-σ entry, d6) ─────────────
+//
+//   Identical to qforge_pw_frontend_phonons_scr but exposes `sigma_el_ha`, the
+//   FERMI-SURFACE double-delta Gaussian width (Hartree) used by qforge_run's
+//   α²F assembler (qforge_a2f_from_elph_impl → qforge_gaussian_delta). Until now
+//   this was frozen at the Einstein-default 0.05 Ha, so a QFORGE↔QE λ comparison
+//   could only be PROJECTED onto QE's σ curve, never run at a MATCHED σ.
+//
+//   sigma_el_ha : el-ph FS double-delta σ in Hartree (QFORGE's δ_σ convention,
+//                 variance σ²). To match a QE degauss (Ry) use
+//                   sigma_el_ha = qforge_qe_degauss_to_sigma(degauss_Ry · 0.5)
+//                 (the /√2 convention bridge + Ry→Ha). A value ≤ 0 keeps the deck
+//                 default (0.05 Ha) — the legacy behaviour the other entries use.
+//   The override is applied to the PRODUCTION deck AFTER the band rebuild, so the
+//   whole SCF→DFPT→|g|² chain is byte-identical and ONLY the FS broadening moves
+//   — the clean lever for the matched-σ residual ruling (physics vs convention).
+pub fn qforge_pw_frontend_phonons_scr_sig(deck_dir: str, npw_cap: int,
+                                          xc_mode: int, sigma: float, nq: int,
+                                          screened: bool, scr_beta: float,
+                                          scr_mdepth: int, scr_maxit: int,
+                                          sigma_el_ha: float) -> QpwFrontendResult {
     // ── ① converged SCF via the keystone front-end (Einstein-default deck) ──
     let fe = qforge_pw_frontend(deck_dir, npw_cap, xc_mode, sigma, 1236.4)
     if !fe.ok { return fe }
@@ -1168,7 +1197,13 @@ pub fn qforge_pw_frontend_phonons_scr(deck_dir: str, npw_cap: int, xc_mode: int,
     // samples the genuine dispersion (anchored to the band's own scale).
     let prod = qpw_deck_with_phonons(fe.deck, phi_k, masses, [0.0, 0.0, 0.0],
                                      1, 1, cellR, dv_modes)
-    let deck = _qpwd_deck_with_band(prod, opt_band, eps_occ, nocc)
+    let deck_band = _qpwd_deck_with_band(prod, opt_band, eps_occ, nocc)
+    // EXPLICIT-σ override (matched-σ entry): swap the FS double-delta σ_el only
+    // when the caller passed a positive sigma_el_ha; otherwise keep the deck
+    // default (0.05 Ha) verbatim — every other field is preserved (d4 data).
+    let deck = if sigma_el_ha > 0.0 {
+        _qpwd_deck_with_sigma_el(deck_band, sigma_el_ha)
+    } else { deck_band }
 
     let nb = len(opt_band)
     let wlog = qforge_qmesh_omega_log(opt_band)
@@ -1316,6 +1351,21 @@ fn _qpwd_deck_with_band(deck: QforgeDeck, band: [float], eps_occ: [float],
         dv_modes: deck.dv_modes,
         e_fermi: e_fermi, n_ef: deck.n_ef, omega_grid: grid,
         mode_weight: deck.mode_weight, sigma_el: deck.sigma_el,
+        sigma_ph: deck.sigma_ph, mu_star: deck.mu_star, n_mats: deck.n_mats
+    }
+}
+
+// overwrite ONLY the FS double-delta σ_el on a deck (matched-σ override) — every
+// other field is carried verbatim. σ_el is the electron Gaussian width feeding
+// qforge_a2f_from_elph_impl; this is the single lever the matched-σ entry moves.
+fn _qpwd_deck_with_sigma_el(deck: QforgeDeck, sigma_el_ha: float) -> QforgeDeck {
+    return QforgeDeck {
+        name: deck.name, h_diag: deck.h_diag, n: deck.n, nocc: deck.nocc,
+        phi: deck.phi, masses: deck.masses, qvec: deck.qvec,
+        natoms: deck.natoms, ncells: deck.ncells, cell_R: deck.cell_R,
+        dv_modes: deck.dv_modes,
+        e_fermi: deck.e_fermi, n_ef: deck.n_ef, omega_grid: deck.omega_grid,
+        mode_weight: deck.mode_weight, sigma_el: sigma_el_ha,
         sigma_ph: deck.sigma_ph, mu_star: deck.mu_star, n_mats: deck.n_mats
     }
 }
