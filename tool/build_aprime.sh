@@ -336,6 +336,39 @@ if [ "${HEXA_RT_ALLOC_NATIVE:-1}" != "0" ]; then
     echo "  [3/5] RT-NATIVE ALLOC-RB: HEXA_RT_ALLOC_NATIVE=1 — native arena path (C arena #else dropped)"
 fi
 
+# ── RT-NATIVE STR (sh-construct-str + sh-str-scan lanes): native public-string scan/compare ─
+# Assemble the arch-matched str_core seed + define HEXA_RT_STR_EQ_NATIVE and
+# HEXA_RT_STR_STARTS_WITH_NATIVE so hexa_str_eq's + rt_str_starts_with's
+# distinct-pointer compares delegate to rt_str_eq_native / rt_str_starts_with_native
+# (raw-mem __hx_ptr_load8 NUL-stop walks). byte-identical to the C strcmp/strncmp
+# bodies. The C `#else` is RETAINED — if the seed is missing for $(uname -m) we
+# simply do NOT define the macros and the C path ships unchanged (#3583 fallback
+# lesson, unlike array/map this is NOT a hard fail). One seed .o carries both
+# symbols, so it is assembled + linked once. Set HEXA_RT_STR_EQ_NATIVE=0 /
+# HEXA_RT_STR_STARTS_WITH_NATIVE=0 to force the C path per-prim even when a seed exists.
+STR_CORE_OBJ=""
+STR_DEF=""
+if [ "${HEXA_RT_STR_EQ_NATIVE:-1}" != "0" ] || [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-1}" != "0" ]; then
+    case "$(uname -sm 2>/dev/null)" in
+        "Linux x86_64")                 STR_SEED="$REPO/self/native/str_core_x86_64.s" ;;
+        "Linux aarch64"|"Linux arm64")  STR_SEED="$REPO/self/native/str_core_arm64-linux.s" ;;
+        *)                              STR_SEED="$REPO/self/native/str_core_arm64.s" ;;
+    esac
+    if [ ! -f "$REPO/build/str_core_native.o" ] && [ -f "$STR_SEED" ]; then
+        grep -vE '^// ' "$STR_SEED" > "$TMP/str_seed.s" 2>/dev/null || cp "$STR_SEED" "$TMP/str_seed.s"
+        ${CC:-clang} -c $ARCH_FLAG "$TMP/str_seed.s" -o "$REPO/build/str_core_native.o" 2>/dev/null \
+            && echo "  [3/5] RT-NATIVE STR: assembled build/str_core_native.o from $STR_SEED"
+    fi
+    if [ -f "$REPO/build/str_core_native.o" ]; then
+        STR_CORE_OBJ="$REPO/build/str_core_native.o"
+        [ "${HEXA_RT_STR_EQ_NATIVE:-1}" != "0" ] && STR_DEF="$STR_DEF -DHEXA_RT_STR_EQ_NATIVE=1"
+        [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-1}" != "0" ] && STR_DEF="$STR_DEF -DHEXA_RT_STR_STARTS_WITH_NATIVE=1"
+        echo "  [3/5] RT-NATIVE STR: defs [$STR_DEF] — native string scan/compare path"
+    else
+        echo "  [3/5] RT-NATIVE STR: no seed for $(uname -m) — C strcmp/strncmp #else path (no-seed fallback)" >&2
+    fi
+fi
+
 # ── stage 4: clang ─────────────────────────────────────────────────
 mkdir -p "$(dirname "$OUT")"
 # Cycle 43: -dead_strip + -ffunction-sections + -Oz shrinks aprime_cc
@@ -352,8 +385,8 @@ mkdir -p "$(dirname "$OUT")"
 CL_ERR="$(clang -Oz $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
     -ffunction-sections -fdata-sections $DEAD_STRIP \
     -fno-builtin-bzero -fno-builtin-memcpy -fno-builtin-strlen \
-    -D_FORTIFY_SOURCE=0 -fno-stack-protector $ALLOC_DEF \
-    -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
+    -D_FORTIFY_SOURCE=0 -fno-stack-protector $ALLOC_DEF $STR_DEF \
+    -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $STR_CORE_OBJ -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
 # ZERO-C Z2a: restore the warm runtime_core.c artifact ONLY when runtime_hi_gen.c
 # still exists (legacy gated test). When the file is permanently gone (default
 # Z2a path) keep the `#include` removed — restoring it would make the stage-5

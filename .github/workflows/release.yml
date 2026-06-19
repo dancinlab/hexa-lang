@@ -446,6 +446,274 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
 
+  # ── Linux arm64 STATIC-MUSL (ING #2 r2 — edge-only supplementary asset) ────
+  # The arm64 half of the static-musl target. release-linux-arm64 above runs on
+  # ubuntu-24.04-arm (glibc 2.39) and DEFERS the arm64 glibc-floor problem here:
+  # arm64 cloud pods on glibc < 2.39 die with `GLIBC_2.xx not found` on the
+  # dynamic asset. This job ships a glibc-FREE single static ELF that runs on ANY
+  # arm64 pod OS regardless of host glibc floor (or pure-musl Alpine-arm64).
+  #
+  # Built NATIVELY on ubuntu-24.04-arm (NOT cross-compiled — aiden/summer are
+  # x86_64 and can't build arm64-musl natively; this is the only zero-cost arm64
+  # build surface). Ubuntu's `musl-tools` on an arm64 host ships an aarch64-native
+  # `/usr/bin/musl-gcc`; we symlink it to `aarch64-linux-musl-gcc` (the name the
+  # build scripts expect via $CC). Runtime linked from SOURCE (HEXA_PREBUILT_RUNTIME
+  # unset → each stage compiles self/runtime.c, musl-portable via the ING #2
+  # post-restore header-hoist patch in tool/restore_frozen_seeds; glibc-byteeq-inert).
+  #
+  # SUPPLEMENTARY + EDGE-FIRST: NOT in `finalize`'s needs list, so it NEVER gates
+  # the stable 3-green promotion — it ships an EXTRA prerelease asset
+  # `hexa-linux-arm64-musl.tar.gz` alongside the existing targets. The dynamic
+  # glibc `hexa-linux-arm64.tar.gz` is UNCHANGED (additive target, not a replace).
+  release-linux-arm64-musl:
+    name: release (linux-arm64-musl · static · edge)
+    needs: setup
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install musl toolchain (aarch64-native)
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl-tools musl-dev
+          # On an arm64 host, ubuntu's musl-tools ships an aarch64-native
+          # /usr/bin/musl-gcc. The build scripts expect `aarch64-linux-musl-gcc`
+          # → symlink it if absent (mirrors the x86_64-musl job's symlink).
+          if ! command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
+            sudo ln -sf "$(command -v musl-gcc)" /usr/local/bin/aarch64-linux-musl-gcc
+          fi
+          aarch64-linux-musl-gcc --version | head -1
+
+      # Static-musl link from SOURCE runtime — HEXA_PREBUILT_RUNTIME left UNSET so
+      # every stage compiles self/runtime.c (musl-portable via ING #2 patch). LIBS
+      # carries `-static` so the final ./hexa + every intermediate links statically.
+      - name: Build — shared release_build (static musl, source runtime)
+        shell: bash
+        env:
+          TARGET: linux-arm64-musl
+          CC: aarch64-linux-musl-gcc
+          LIBS: "-static -lm"
+          # Drop optional OpenSSL/libsodium binds — a `-static` musl link has no
+          # host glibc shared libs to satisfy `-lssl -lcrypto`/`-lsodium`.
+          HEXA_STATIC_DEPS: "1"
+          GH_TOKEN: ${{ github.token }}
+          HEXA_SEED_CONVERGE: "1"
+          HEXA_BUILD_VERSION: ${{ needs.setup.outputs.release_tag }}
+        run: |
+          unset HEXA_PREBUILT_RUNTIME
+          bash tool/release_build
+
+      - name: Package — shared release_package (static musl tarball)
+        shell: bash
+        env:
+          TARGET: linux-arm64-musl
+          CC: aarch64-linux-musl-gcc
+          LIBS: "-static -lm"
+          HEXA_STATIC_DEPS: "1"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          unset HEXA_PREBUILT_RUNTIME
+          bash tool/release_package
+
+      - name: Verify static (no dynamic deps)
+        shell: bash
+        run: |
+          BIN=dist/hexa-linux-arm64-musl/hexa
+          file "$BIN"
+          # CAPTURE first, then grep — `ldd <static-bin>` exits non-zero and a
+          # `-q` short-circuit can SIGPIPE it, which under `bash -e -o pipefail`
+          # would fail the pipeline even on a present match. `|| true` keeps the
+          # non-zero exit from tripping `-e`; judge linkage from text + `file`.
+          LDD_OUT="$(ldd "$BIN" 2>&1 || true)"
+          FILE_OUT="$(file "$BIN")"
+          echo "$LDD_OUT"
+          # Capture --version proof (verify bar c2).
+          "$BIN" --version || true
+          if printf '%s\n' "$LDD_OUT" | grep -qiE 'not a dynamic executable|동적 실행' \
+             || printf '%s\n' "$FILE_OUT" | grep -qiE 'statically linked'; then
+            echo "✓ statically linked — no glibc dependency"
+          else
+            echo "✗ binary is dynamically linked — static-musl build regressed" >&2
+            exit 1
+          fi
+
+      - name: Upload to GitHub Release (supplementary edge asset)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.setup.outputs.release_tag }}
+          prerelease: true
+          make_latest: false
+          target_commitish: ${{ github.sha }}
+          files: hexa-linux-arm64-musl.tar.gz
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+  # ── Linux x86_64 CUDA (ing-cuda-release — edge-only supplementary asset) ──────
+  # A cuBLAS-enabled hexa so consumers (anima #2386) install a prebuilt GPU build
+  # instead of a CPU-only one (the shipped install.sh hexa reports
+  # cuda_available()==0 — #3674). The CUDA runtime objects (runtime_cuda.o +
+  # the nvcc -dlink device blob) fold into the shipped build/runtime.a
+  # (stage_resolve_runtime_a's resolve_cuda_runtime_seed, gated HEXA_CUDA=1), and
+  # os_clang_ldflags' HEXA_CUDA branch adds -lcudart/-lcublas/-lcuda/-lcudadevrt
+  # so a consumer `hexa build`/`run` program links cuBLAS. The hexa binary ITSELF
+  # also links runtime.a-with-cuda, so its LIBS carries the cuBLAS libs too.
+  #
+  # GPU-LESS CI: the GitHub runner has nvcc + cuBLAS headers/libs (Jimver/cuda-
+  # toolkit) but NO GPU — the job COMPILES + LINKS cuBLAS GREEN but CANNOT run a
+  # GPU GEMM. That is fine: the GPU-vs-CPU 15-25× verdict + cuda_available()==1
+  # was proven on the pool host aiden (RTX 5070) in #3680 — aiden is the GPU-
+  # verify authority. CI here = build + link + upload only.
+  #
+  # SUPPLEMENTARY + EDGE-FIRST: NOT in `finalize`'s needs list, so it NEVER gates
+  # the stable 3-green promotion — it ships an EXTRA prerelease asset
+  # `hexa-linux-x86_64-cuda.tar.gz` alongside the 3 default targets. The default
+  # glibc `hexa-linux-x86_64.tar.gz` is UNCHANGED (additive; self-host ≠ release
+  # ABSOLUTE). install.sh selects this asset only on HEXA_CUDA=1 opt-in (never
+  # auto-prefers it — cuBLAS dep + GPU assumption).
+  release-linux-x86_64-cuda:
+    name: release (linux-x86_64-cuda · cuBLAS · edge)
+    needs: setup
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+
+      # CUDA toolkit (nvcc + cuBLAS headers/libs) on the GPU-LESS runner — Jimver
+      # action installs a full toolkit (network sub-packages, no driver/GPU). The
+      # cuBLAS dev libs ship in the toolkit, so the link resolves -lcublas/-lcudart.
+      - name: Install CUDA toolkit (nvcc + cuBLAS, build-only · no GPU)
+        uses: Jimver/cuda-toolkit@v0.2.21
+        id: cuda-toolkit
+        with:
+          cuda: '12.6.2'
+          method: 'network'
+          # `sub-packages` prepends `cuda-` (→ cuda-nvcc-12-6, cuda-cudart-12-6,
+          # cuda-cudart-dev-12-6) — those resolve. cuBLAS is the exception: the
+          # NVIDIA cuda-ubuntu2204 repo ships it as `libcublas-12-6` /
+          # `libcublas-dev-12-6` (NO `cuda-` prefix), so `cublas`/`cublas-dev` in
+          # sub-packages mapped to the nonexistent `cuda-cublas-12-6` →
+          # "E: Unable to locate package" (Jimver issue #371). cuBLAS therefore
+          # goes through `non-cuda-sub-packages` (no prefix → libcublas-12-6).
+          sub-packages: '["nvcc", "cudart", "cudart-dev"]'
+          non-cuda-sub-packages: '["libcublas", "libcublas-dev"]'
+
+      - name: Probe CUDA toolkit (build-only — no GPU on CI)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CUDA_PATH=${CUDA_PATH:-<unset>}  (toolkit version ${{ steps.cuda-toolkit.outputs.cuda }})"
+          nvcc --version | grep -i release
+          # cuBLAS dev libs must be present for the link (no GPU needed to link).
+          find "${CUDA_PATH:-/usr/local/cuda}" \( -name 'libcublas*' -o -name 'libcudart*' \) 2>/dev/null | head
+          # `-lcuda` (CUDA driver API) resolves against the toolkit's build-only
+          # stub on a GPU-less runner — assert the stub exists so a toolkit layout
+          # change is caught here (fail-loud) rather than deep in the link.
+          CUDA_HOME="${CUDA_PATH:-/usr/local/cuda}"
+          STUB_DIR="$CUDA_HOME/targets/x86_64-linux/lib/stubs"
+          [ -d "$STUB_DIR" ] || STUB_DIR="$CUDA_HOME/lib64/stubs"
+          if [ -f "$STUB_DIR/libcuda.so" ]; then
+            echo "✓ libcuda.so driver stub present: $STUB_DIR/libcuda.so"
+          else
+            echo "✗ libcuda.so driver stub NOT found under $STUB_DIR — -lcuda link will fail" >&2
+            find "$CUDA_HOME" -name 'libcuda.so*' 2>/dev/null | head
+            exit 1
+          fi
+
+      # Build with HEXA_CUDA=1: stage_resolve_runtime_a folds runtime_cuda.o +
+      # runtime_cuda_dlink.o into runtime.a + compiles runtime.c -DHEXA_CUDA; the
+      # hexa binary's own link (stage_build_hexa `$RT_ARG $LIBS`) needs the cuBLAS
+      # libs too, so LIBS carries them. SM=75 is the build-time -gencode arch
+      # (Turing) — a forward-compatible PTX/sass floor for the relocatable device
+      # code; the actual GPU arch is the consumer's at run time (cuBLAS is arch-
+      # agnostic at the host API). HEXA_PREBUILT_RUNTIME unset → runtime.a built
+      # fresh with the CUDA fold. CUDA_HOME → the toolkit the action installed.
+      - name: Build — shared release_build (CUDA runtime.a, cuBLAS link)
+        shell: bash
+        env:
+          TARGET: linux-x86_64-cuda
+          CC: gcc
+          LIBS: "-lm -ldl -lcudart -lcublas -lcuda -lcudadevrt"
+          HEXA_CUDA: "1"
+          SM: "75"
+          GH_TOKEN: ${{ github.token }}
+          HEXA_SEED_CONVERGE: "1"
+          HEXA_BUILD_VERSION: ${{ needs.setup.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          export CUDA_HOME="${CUDA_PATH:-/usr/local/cuda}"
+          # The cuBLAS/cudart shared libs live under the toolkit lib dir; add it to
+          # LIBS' search path so the hexa binary's link finds -lcudart/-lcublas.
+          CUDA_LIB="$CUDA_HOME/targets/x86_64-linux/lib"
+          [ -d "$CUDA_LIB" ] || CUDA_LIB="$CUDA_HOME/lib64"
+          # `-lcuda` is the CUDA *driver* API (libcuda.so) — it is NOT shipped by
+          # the cudart/cuBLAS runtime packages, only by the NVIDIA driver. A GPU-
+          # less CI runner has no driver, so libcuda.so lives ONLY in the toolkit's
+          # `stubs/` dir (a link-time stub; the real driver resolves at run time on
+          # the consumer's GPU host). Add stubs/ to the search path so the build-
+          # only link of `-lcuda` resolves (else `ld: cannot find -lcuda`).
+          export LIBS="-L$CUDA_LIB -L$CUDA_LIB/stubs $LIBS"
+          unset HEXA_PREBUILT_RUNTIME
+          bash tool/release_build
+
+      - name: Package — shared release_package (CUDA tarball)
+        shell: bash
+        env:
+          TARGET: linux-x86_64-cuda
+          CC: gcc
+          LIBS: "-lm -ldl -lcudart -lcublas -lcuda -lcudadevrt"
+          HEXA_CUDA: "1"
+          SM: "75"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          export CUDA_HOME="${CUDA_PATH:-/usr/local/cuda}"
+          CUDA_LIB="$CUDA_HOME/targets/x86_64-linux/lib"
+          [ -d "$CUDA_LIB" ] || CUDA_LIB="$CUDA_HOME/lib64"
+          # stubs/ supplies the build-only libcuda.so driver stub (see Build step).
+          export LIBS="-L$CUDA_LIB -L$CUDA_LIB/stubs $LIBS"
+          unset HEXA_PREBUILT_RUNTIME
+          bash tool/release_package
+
+      - name: Verify CUDA fold (runtime.a carries cuda objects · build-only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          RA="dist/hexa-linux-x86_64-cuda/build/runtime.a"
+          [ -f "$RA" ] || { echo "✗ $RA missing — CUDA package regressed" >&2; exit 1; }
+          MEMBERS="$(ar t "$RA")"
+          echo "$MEMBERS"
+          # The two nvcc objects MUST be in the shipped runtime.a — else the
+          # consumer link has no device code (silent CPU fallback). This is the CI
+          # build-only depletion check (GPU run deferred to aiden #3680).
+          if printf '%s\n' "$MEMBERS" | grep -q 'runtime_cuda.o' \
+             && printf '%s\n' "$MEMBERS" | grep -q 'runtime_cuda_dlink.o'; then
+            echo "✓ runtime.a carries runtime_cuda.o + runtime_cuda_dlink.o (cuBLAS-enabled)"
+          else
+            echo "✗ runtime.a is missing the CUDA objects — resolve_cuda_runtime_seed did not fold (CPU fallback shipped)" >&2
+            exit 1
+          fi
+          # The hexa binary linked cuBLAS — confirm the dynamic deps (build-only;
+          # a GPU is not needed to inspect the link).
+          BIN="dist/hexa-linux-x86_64-cuda/hexa"
+          if ldd "$BIN" 2>&1 | grep -iqE 'cublas|cudart'; then
+            echo "✓ hexa links libcublas/libcudart"
+          else
+            echo "::warning::hexa ldd shows no cublas/cudart (lazy-bound?) — runtime.a fold is the authoritative check"
+          fi
+
+      - name: Upload to GitHub Release (supplementary edge asset)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.setup.outputs.release_tag }}
+          prerelease: true
+          make_latest: false
+          target_commitish: ${{ github.sha }}
+          files: hexa-linux-x86_64-cuda.tar.gz
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
   # ── Finalize — all-3-green gate (promote tag to stable Latest) ──────
   # `needs` lists all three platform jobs, so GitHub skips this job unless
   # EVERY target succeeded (a failed/skipped dependency skips finalize). Only
