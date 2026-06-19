@@ -13603,6 +13603,10 @@ fn codegen_full(ast) {
     // emitter (script-body / pure-eval path) still emits duplicate
     // FnDecls and clang rejects the link.
     let mut _fn_emit_seen2 = []
+    // RT-NATIVE drop-guard (LIVE transpile path): native-runtime.a-provided
+    // symbols to forward-decl-only (skip the colliding program-C body). Empty
+    // on the from-source link path. See _gen2_rt_native_drop_set.
+    let _rt_native_drop2 = _gen2_rt_native_drop_set()
     let mut i = 0
     while i < len(ast) {
         let k = ast[i].kind
@@ -13631,6 +13635,14 @@ fn codegen_full(ast) {
             _fn_emit_seen2.push(_fn_name2)
             if ast[i].name == "main" { has_user_main = true }
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
+            // RT-NATIVE drop-guard: symbol provided by the linked native
+            // runtime.a → forward-decl only, skip the body (resolves to the
+            // seed, no `multiple definition`). static-inline never dropped.
+            if _gen2_is_rt_native_provided(_fn_name2, _rt_native_drop2) && !gen2_has_inline_always(ast[i]) {
+                eprintln("[rt-drop] fn `" + _fn_name2 + "` provided by native runtime.a — emitting forward-decl only (body dropped)")
+                i = i + 1
+                continue
+            }
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
         } else if k == "ExternFnDecl" {
             let ew = gen2_extern_wrapper(ast[i])
@@ -13670,6 +13682,12 @@ fn codegen_full(ast) {
             }
             _fn_emit_seen2.push(_pfn_name2)
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
+            // RT-NATIVE drop-guard (pure-fn twin): SYS_* consts + target_is_*.
+            if _gen2_is_rt_native_provided(_pfn_name2, _rt_native_drop2) && !gen2_has_inline_always(ast[i]) {
+                eprintln("[rt-drop] fn `" + _pfn_name2 + "` provided by native runtime.a — emitting forward-decl only (body dropped)")
+                i = i + 1
+                continue
+            }
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
         } else if k == "AsyncFnDecl" {
             // RFC-022 §3.1 / §4.1 D3 — `async fn` runs synchronously in
@@ -13689,6 +13707,12 @@ fn codegen_full(ast) {
             }
             _fn_emit_seen2.push(_afn_name2)
             fwd_parts.push(gen2_fn_forward(ast[i]) + "\n")
+            // RT-NATIVE drop-guard (async twin — completeness; no async sys_*).
+            if _gen2_is_rt_native_provided(_afn_name2, _rt_native_drop2) && !gen2_has_inline_always(ast[i]) {
+                eprintln("[rt-drop] fn `" + _afn_name2 + "` provided by native runtime.a — emitting forward-decl only (body dropped)")
+                i = i + 1
+                continue
+            }
             fn_parts.push(gen2_fn_decl(ast[i]) + "\n\n")
         } else if k == "ComptimeConst" || k == "ConstStmt" {
             // Same comptime fold as codegen_c2 (kept in sync — T0 lesson).
