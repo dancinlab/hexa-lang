@@ -1,4 +1,4 @@
-// HEXA Standard Library — math/abs
+// HEXA Standard Library — floating-point absolute value (fabs)
 //
 // @version 0.1.0
 // @capabilities [pure]
