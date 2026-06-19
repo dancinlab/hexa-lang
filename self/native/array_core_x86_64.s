@@ -61,11 +61,252 @@ rt_array_arena_alloc_items_native:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
+.globl rt_array_grow_arena_native
+.hidden rt_array_grow_arena_native
+    .p2align 4
+rt_array_grow_arena_native:
+    .loc 1 95 0
+    push rbp # prologue: save rbp
+    mov rbp, rsp # prologue: set rbp
+    push rbx # prologue: save rbx
+    push r12 # prologue: save r12
+    push r13 # prologue: save r13
+    push r14 # prologue: save r14
+    push r15 # prologue: save r15
+    sub rsp, 8 # prologue: callee-save align pad
+    sub rsp, 432 # prologue: alloc spill frame
+    mov [rbp - 248], rdi # store tag L0
+    mov rbx, rsi # ingress param payload
+    mov [rbp - 256], rdx # store tag L1
+    mov r12, rcx # ingress param payload
+.L01db_rt_array_grow_arena_native_bb0:
+    mov rsi, r12 # hv arg payload
+    mov rdi, [rbp - 256] # tag L1 from tag-slot
+    call rt_array_arena_alloc_items_native # call rt_array_arena_alloc_items_native
+    mov [rbp - 264], rax # store tag L2
+    mov r13, rdx # hv: unbox user-call result payload
+    mov r14, r13 # assign L3
+    mov r11, [rbp - 264] # tag L2 from tag-slot
+    mov [rbp - 272], r11 # store tag L3
+    mov rsi, r14 # hv arg payload
+    mov rdi, [rbp - 272] # tag L3 from tag-slot
+    mov rcx, 0 # hv arg payload
+    mov rdx, 0 # tag default = TAG_INT
+    call hexa_eq # binop ==: tag-dispatch hexa_eq
+    mov r15, rdx # binop ==: capture bool payload
+    mov [rbp - 280], rax # store tag L4
+    test r15, r15 # br_cond test
+    jz .L01db_rt_array_grow_arena_native_bb2 # jump-if-zero -> else
+    jmp .L01db_rt_array_grow_arena_native_bb1 # jump -> then
+.L01db_rt_array_grow_arena_native_bb1:
+    mov rdx, 0 # hv arg payload
+    mov rax, 0 # tag default = TAG_INT
+    add rsp, 432 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
+    pop rbp # epilogue: restore rbp
+    ret # return
+.L01db_rt_array_grow_arena_native_bb2:
+    mov r11, 0 # hv payload
+    mov r10, rbx # hv payload
+    add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 296], r11 # store tag L6
+    mov [rbp - 64], r10 # spill L6 to slot
+    mov r11, [rbp - 64] # reload L6 from spill slot
+    mov r10, r11 # assign L7
+    mov r11, [rbp - 296] # tag L6 from tag-slot
+    mov [rbp - 304], r11 # store tag L7
+    mov [rbp - 72], r10 # spill L7 to slot
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    mov r10, r10 # hv payload
+    mov r11, 0 # hv payload
+    add r10, r11 # __hx_ptr_load64: addr = ptr + off
+    mov r10, qword ptr [r10] # __hx_ptr_load64: r10 = *(addr)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 312], r11 # store tag L8
+    mov [rbp - 80], r10 # spill L8 to slot
+    mov r11, [rbp - 80] # reload L8 from spill slot
+    mov r10, r11 # assign L9
+    mov r11, [rbp - 312] # tag L8 from tag-slot
+    mov [rbp - 320], r11 # store tag L9
+    mov [rbp - 88], r10 # spill L9 to slot
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    mov r10, r10 # hv payload
+    mov r11, 8 # hv payload
+    add r10, r11 # __hx_ptr_load64: addr = ptr + off
+    mov r10, qword ptr [r10] # __hx_ptr_load64: r10 = *(addr)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 328], r11 # store tag L10
+    mov [rbp - 96], r10 # spill L10 to slot
+    mov r11, [rbp - 96] # reload L10 from spill slot
+    mov r10, r11 # assign L11
+    mov r11, [rbp - 328] # tag L10 from tag-slot
+    mov [rbp - 336], r11 # store tag L11
+    mov [rbp - 104], r10 # spill L11 to slot
+    mov r10, 0 # assign L12
+    mov r11, 0 # tag default = TAG_INT
+    mov [rbp - 344], r11 # store tag L12
+    mov [rbp - 112], r10 # spill L12 to slot
+    jmp .L01db_rt_array_grow_arena_native_bb3 # branch
+.L01db_rt_array_grow_arena_native_bb3:
+    mov r11, [rbp - 104] # reload L11 from spill slot
+    mov r11, r11 # hv payload
+    mov r10, [rbp - 112] # reload L12 from spill slot
+    mov r10, r10 # hv payload
+    cmp r10, r11 # __hx_payload_lt: cmp payloads
+    setl al # __hx_payload_lt: al = predicate
+    movzx r10, al # __hx_payload_lt: zero-extend bool
+    mov r11, 2 # materialize tag imm 2
+    mov [rbp - 352], r11 # store tag L13
+    mov [rbp - 120], r10 # spill L13 to slot
+    mov r10, [rbp - 120] # reload L13 from spill slot
+    test r10, r10 # br_cond test
+    jz .L01db_rt_array_grow_arena_native_bb5 # jump-if-zero -> else
+    jmp .L01db_rt_array_grow_arena_native_bb4 # jump -> then
+.L01db_rt_array_grow_arena_native_bb4:
+    mov r11, 16 # hv payload
+    mov r10, [rbp - 112] # reload L12 from spill slot
+    mov r10, r10 # hv payload
+    imul r10, r11 # __hx_payload_mul: r10 = a.pl imul b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 360], r11 # store tag L14
+    mov [rbp - 128], r10 # spill L14 to slot
+    mov r11, [rbp - 128] # reload L14 from spill slot
+    mov r10, r11 # assign L15
+    mov r11, [rbp - 360] # tag L14 from tag-slot
+    mov [rbp - 368], r11 # store tag L15
+    mov [rbp - 136], r10 # spill L15 to slot
+    mov r11, 8 # hv payload
+    mov r10, [rbp - 136] # reload L15 from spill slot
+    mov r10, r10 # hv payload
+    add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 376], r11 # store tag L16
+    mov [rbp - 144], r10 # spill L16 to slot
+    mov r11, [rbp - 144] # reload L16 from spill slot
+    mov r10, r11 # assign L17
+    mov r11, [rbp - 376] # tag L16 from tag-slot
+    mov [rbp - 384], r11 # store tag L17
+    mov [rbp - 152], r10 # spill L17 to slot
+    mov r10, [rbp - 88] # reload L9 from spill slot
+    mov r10, r10 # hv payload
+    mov r11, [rbp - 136] # reload L15 from spill slot
+    mov r11, r11 # hv payload
+    add r10, r11 # __hx_ptr_load64: addr = ptr + off
+    mov r10, qword ptr [r10] # __hx_ptr_load64: r10 = *(addr)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 392], r11 # store tag L18
+    mov [rbp - 160], r10 # spill L18 to slot
+    mov r11, [rbp - 160] # reload L18 from spill slot
+    mov r10, r11 # assign L19
+    mov r11, [rbp - 392] # tag L18 from tag-slot
+    mov [rbp - 400], r11 # store tag L19
+    mov [rbp - 168], r10 # spill L19 to slot
+    mov r10, [rbp - 88] # reload L9 from spill slot
+    mov r10, r10 # hv payload
+    mov r11, [rbp - 152] # reload L17 from spill slot
+    mov r11, r11 # hv payload
+    add r10, r11 # __hx_ptr_load64: addr = ptr + off
+    mov r10, qword ptr [r10] # __hx_ptr_load64: r10 = *(addr)
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 408], r11 # store tag L20
+    mov [rbp - 176], r10 # spill L20 to slot
+    mov r11, [rbp - 176] # reload L20 from spill slot
+    mov r10, r11 # assign L21
+    mov r11, [rbp - 408] # tag L20 from tag-slot
+    mov [rbp - 416], r11 # store tag L21
+    mov [rbp - 184], r10 # spill L21 to slot
+    mov r10, r14 # hv payload
+    mov r11, [rbp - 136] # reload L15 from spill slot
+    mov r11, r11 # hv payload
+    mov rsi, [rbp - 168] # reload L19 from spill slot
+    mov rsi, rsi # hv payload
+    add r10, r11 # __hx_ptr_store64: addr = ptr + off
+    mov qword ptr [r10], rsi # __hx_ptr_store64: *(addr) = val
+    mov r10, r14 # hv payload
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 424], r11 # store tag L22
+    mov [rbp - 192], r10 # spill L22 to slot
+    mov r10, r14 # hv payload
+    mov r11, [rbp - 152] # reload L17 from spill slot
+    mov r11, r11 # hv payload
+    mov rsi, [rbp - 184] # reload L21 from spill slot
+    mov rsi, rsi # hv payload
+    add r10, r11 # __hx_ptr_store64: addr = ptr + off
+    mov qword ptr [r10], rsi # __hx_ptr_store64: *(addr) = val
+    mov r10, r14 # hv payload
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 432], r11 # store tag L23
+    mov [rbp - 200], r10 # spill L23 to slot
+    mov r11, 1 # hv payload
+    mov r10, [rbp - 112] # reload L12 from spill slot
+    mov r10, r10 # hv payload
+    add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 440], r11 # store tag L24
+    mov [rbp - 208], r10 # spill L24 to slot
+    mov r11, [rbp - 208] # reload L24 from spill slot
+    mov r10, r11 # assign L12
+    mov r11, [rbp - 440] # tag L24 from tag-slot
+    mov [rbp - 344], r11 # store tag L12
+    mov [rbp - 112], r10 # spill L12 to slot
+    jmp .L01db_rt_array_grow_arena_native_bb3 # branch
+.L01db_rt_array_grow_arena_native_bb5:
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    mov r10, r10 # hv payload
+    mov r11, 0 # hv payload
+    mov rsi, r14 # hv payload
+    add r10, r11 # __hx_ptr_store64: addr = ptr + off
+    mov qword ptr [r10], rsi # __hx_ptr_store64: *(addr) = val
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    mov r10, r10 # hv payload
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 448], r11 # store tag L25
+    mov [rbp - 216], r10 # spill L25 to slot
+    mov r11, r12 # hv payload
+    mov r10, 0 # hv payload
+    sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 456], r11 # store tag L26
+    mov [rbp - 224], r10 # spill L26 to slot
+    mov r11, [rbp - 224] # reload L26 from spill slot
+    mov r10, r11 # assign L27
+    mov r11, [rbp - 456] # tag L26 from tag-slot
+    mov [rbp - 464], r11 # store tag L27
+    mov [rbp - 232], r10 # spill L27 to slot
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    mov r10, r10 # hv payload
+    mov r11, 16 # hv payload
+    mov rsi, [rbp - 232] # reload L27 from spill slot
+    mov rsi, rsi # hv payload
+    add r10, r11 # __hx_ptr_store64: addr = ptr + off
+    mov qword ptr [r10], rsi # __hx_ptr_store64: *(addr) = val
+    mov r10, [rbp - 72] # reload L7 from spill slot
+    mov r10, r10 # hv payload
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 472], r11 # store tag L28
+    mov [rbp - 240], r10 # spill L28 to slot
+    mov rdx, r14 # hv arg payload
+    mov rax, [rbp - 272] # tag L3 from tag-slot
+    add rsp, 432 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
+    pop rbp # epilogue: restore rbp
+    ret # return
 .globl rt_array_len_native
 .hidden rt_array_len_native
     .p2align 4
 rt_array_len_native:
-    .loc 1 82 0
+    .loc 1 122 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -114,7 +355,7 @@ rt_array_len_native:
 .hidden rt_array_get_native
     .p2align 4
 rt_array_get_native:
-    .loc 1 91 0
+    .loc 1 131 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -217,7 +458,7 @@ rt_array_get_native:
 .hidden rt_array_set_native
     .p2align 4
 rt_array_set_native:
-    .loc 1 105 0
+    .loc 1 145 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -334,7 +575,7 @@ rt_array_set_native:
 .hidden rt_array_pop_native
     .p2align 4
 rt_array_pop_native:
-    .loc 1 121 0
+    .loc 1 161 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -417,7 +658,7 @@ rt_array_pop_native:
 .hidden rt_array_shift_native
     .p2align 4
 rt_array_shift_native:
-    .loc 1 138 0
+    .loc 1 178 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx
@@ -655,7 +896,7 @@ rt_array_shift_native:
 .hidden rt_array_truncate_native
     .p2align 4
 rt_array_truncate_native:
-    .loc 1 169 0
+    .loc 1 209 0
     push rbp # prologue: save rbp
     mov rbp, rsp # prologue: set rbp
     push rbx # prologue: save rbx

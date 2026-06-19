@@ -41,11 +41,179 @@ _L01db_rt_array_arena_alloc_items_native_bb0:
     add sp, sp, #64 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
+.globl rt_array_grow_arena_native
+.hidden rt_array_grow_arena_native
+    .p2align 2
+rt_array_grow_arena_native:
+    .loc 1 95 0
+    stp x29, x30, [sp, #-16]! // prologue: save fp/lr
+    mov x29, sp // prologue: set fp
+    sub sp, sp, #464 // sp adj
+    stp x0, x1, [sp, #0] // ingress param 0
+    stp x2, x3, [sp, #16] // ingress param 1
+_L01db_rt_array_grow_arena_native_bb0:
+    ldp x0, x1, [sp, #16] // hv load L1
+    bl rt_array_arena_alloc_items_native // call rt_array_arena_alloc_items_native
+    stp x0, x1, [sp, #32] // hv store L2
+    ldp x0, x1, [sp, #32] // hv load L2
+    stp x0, x1, [sp, #48] // hv store L3
+    ldp x0, x1, [sp, #48] // hv load L3
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    bl hexa_eq // binop ==
+    stp x0, x1, [sp, #64] // hv store L4
+    ldp x0, x1, [sp, #64] // hv load L4
+    bl hexa_truthy // br_cond: truthy → w0
+    uxtw x0, w0 // br_cond: zext w0
+    cbz x0, _L01db_rt_array_grow_arena_native_bb2 // br_cond: !truthy -> else
+    b _L01db_rt_array_grow_arena_native_bb1 // branch -> then
+_L01db_rt_array_grow_arena_native_bb1:
+    movz x0, #0 // hv const_int: TAG_INT
+    movz x1, #0 // hv const_int val
+    add sp, sp, #464 // sp adj
+    ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
+    ret // return
+_L01db_rt_array_grow_arena_native_bb2:
+    ldp x0, x1, [sp, #0] // hv load L0
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
+    movz x0, #0 // __hx_payload_add: TAG_INT
+    stp x0, x1, [sp, #96] // hv store L6
+    ldp x0, x1, [sp, #96] // hv load L6
+    stp x0, x1, [sp, #112] // hv store L7
+    ldp x0, x1, [sp, #112] // hv load L7
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    add x1, x1, x3 // __hx_ptr_load64: addr = ptr + off
+    ldr x1, [x1] // __hx_ptr_load64: x1 = *(addr)
+    movz x0, #0 // __hx_ptr_load64: TAG_INT
+    stp x0, x1, [sp, #128] // hv store L8
+    ldp x0, x1, [sp, #128] // hv load L8
+    stp x0, x1, [sp, #144] // hv store L9
+    ldp x0, x1, [sp, #112] // hv load L7
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #8 // hv const_int val
+    add x1, x1, x3 // __hx_ptr_load64: addr = ptr + off
+    ldr x1, [x1] // __hx_ptr_load64: x1 = *(addr)
+    movz x0, #0 // __hx_ptr_load64: TAG_INT
+    stp x0, x1, [sp, #160] // hv store L10
+    ldp x0, x1, [sp, #160] // hv load L10
+    stp x0, x1, [sp, #176] // hv store L11
+    movz x0, #0 // hv const_int: TAG_INT
+    movz x1, #0 // hv const_int val
+    stp x0, x1, [sp, #192] // hv store L12
+    b _L01db_rt_array_grow_arena_native_bb3 // branch
+_L01db_rt_array_grow_arena_native_bb3:
+    ldp x0, x1, [sp, #192] // hv load L12
+    ldp x2, x3, [sp, #176] // hv load L11
+    cmp x1, x3 // __hx_payload_lt: cmp payloads
+    cset x0, lt // __hx_payload_lt: x0 = (a.pl lt b.pl)
+    bl hexa_bool // __hx_payload_lt: box bool
+    stp x0, x1, [sp, #208] // hv store L13
+    ldp x0, x1, [sp, #208] // hv load L13
+    bl hexa_truthy // br_cond: truthy → w0
+    uxtw x0, w0 // br_cond: zext w0
+    cbz x0, _L01db_rt_array_grow_arena_native_bb5 // br_cond: !truthy -> else
+    b _L01db_rt_array_grow_arena_native_bb4 // branch -> then
+_L01db_rt_array_grow_arena_native_bb4:
+    ldp x0, x1, [sp, #192] // hv load L12
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #16 // hv const_int val
+    mul x1, x1, x3 // __hx_payload_mul: x1 = a.pl mul b.pl
+    movz x0, #0 // __hx_payload_mul: TAG_INT
+    stp x0, x1, [sp, #224] // hv store L14
+    ldp x0, x1, [sp, #224] // hv load L14
+    stp x0, x1, [sp, #240] // hv store L15
+    ldp x0, x1, [sp, #240] // hv load L15
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #8 // hv const_int val
+    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
+    movz x0, #0 // __hx_payload_add: TAG_INT
+    stp x0, x1, [sp, #256] // hv store L16
+    ldp x0, x1, [sp, #256] // hv load L16
+    stp x0, x1, [sp, #272] // hv store L17
+    ldp x0, x1, [sp, #144] // hv load L9
+    ldp x2, x3, [sp, #240] // hv load L15
+    add x1, x1, x3 // __hx_ptr_load64: addr = ptr + off
+    ldr x1, [x1] // __hx_ptr_load64: x1 = *(addr)
+    movz x0, #0 // __hx_ptr_load64: TAG_INT
+    stp x0, x1, [sp, #288] // hv store L18
+    ldp x0, x1, [sp, #288] // hv load L18
+    stp x0, x1, [sp, #304] // hv store L19
+    ldp x0, x1, [sp, #144] // hv load L9
+    ldp x2, x3, [sp, #272] // hv load L17
+    add x1, x1, x3 // __hx_ptr_load64: addr = ptr + off
+    ldr x1, [x1] // __hx_ptr_load64: x1 = *(addr)
+    movz x0, #0 // __hx_ptr_load64: TAG_INT
+    stp x0, x1, [sp, #320] // hv store L20
+    ldp x0, x1, [sp, #320] // hv load L20
+    stp x0, x1, [sp, #336] // hv store L21
+    ldp x0, x1, [sp, #48] // hv load L3
+    ldp x2, x3, [sp, #240] // hv load L15
+    ldp x4, x5, [sp, #304] // hv load L19
+    add x1, x1, x3 // __hx_ptr_store64: addr = ptr + off
+    str x5, [x1] // __hx_ptr_store64: *(addr) = val
+    movz x0, #0 // __hx_ptr_store64: TAG_INT (ret ptr)
+    ldp x0, x1, [sp, #48] // hv load L3
+    movz x0, #0 // __hx_ptr_store64: TAG_INT
+    stp x0, x1, [sp, #352] // hv store L22
+    ldp x0, x1, [sp, #48] // hv load L3
+    ldp x2, x3, [sp, #272] // hv load L17
+    ldp x4, x5, [sp, #336] // hv load L21
+    add x1, x1, x3 // __hx_ptr_store64: addr = ptr + off
+    str x5, [x1] // __hx_ptr_store64: *(addr) = val
+    movz x0, #0 // __hx_ptr_store64: TAG_INT (ret ptr)
+    ldp x0, x1, [sp, #48] // hv load L3
+    movz x0, #0 // __hx_ptr_store64: TAG_INT
+    stp x0, x1, [sp, #368] // hv store L23
+    ldp x0, x1, [sp, #192] // hv load L12
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #1 // hv const_int val
+    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
+    movz x0, #0 // __hx_payload_add: TAG_INT
+    stp x0, x1, [sp, #384] // hv store L24
+    ldp x0, x1, [sp, #384] // hv load L24
+    stp x0, x1, [sp, #192] // hv store L12
+    b _L01db_rt_array_grow_arena_native_bb3 // branch
+_L01db_rt_array_grow_arena_native_bb5:
+    ldp x0, x1, [sp, #112] // hv load L7
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    ldp x4, x5, [sp, #48] // hv load L3
+    add x1, x1, x3 // __hx_ptr_store64: addr = ptr + off
+    str x5, [x1] // __hx_ptr_store64: *(addr) = val
+    movz x0, #0 // __hx_ptr_store64: TAG_INT (ret ptr)
+    ldp x0, x1, [sp, #112] // hv load L7
+    movz x0, #0 // __hx_ptr_store64: TAG_INT
+    stp x0, x1, [sp, #400] // hv store L25
+    movz x0, #0 // hv const_int: TAG_INT
+    movz x1, #0 // hv const_int val
+    ldp x2, x3, [sp, #16] // hv load L1
+    sub x1, x1, x3 // __hx_payload_sub: x1 = a.pl sub b.pl
+    movz x0, #0 // __hx_payload_sub: TAG_INT
+    stp x0, x1, [sp, #416] // hv store L26
+    ldp x0, x1, [sp, #416] // hv load L26
+    stp x0, x1, [sp, #432] // hv store L27
+    ldp x0, x1, [sp, #112] // hv load L7
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #16 // hv const_int val
+    ldp x4, x5, [sp, #432] // hv load L27
+    add x1, x1, x3 // __hx_ptr_store64: addr = ptr + off
+    str x5, [x1] // __hx_ptr_store64: *(addr) = val
+    movz x0, #0 // __hx_ptr_store64: TAG_INT (ret ptr)
+    ldp x0, x1, [sp, #112] // hv load L7
+    movz x0, #0 // __hx_ptr_store64: TAG_INT
+    stp x0, x1, [sp, #448] // hv store L28
+    ldp x0, x1, [sp, #48] // hv load L3
+    add sp, sp, #464 // sp adj
+    ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
+    ret // return
 .globl rt_array_len_native
 .hidden rt_array_len_native
     .p2align 2
 rt_array_len_native:
-    .loc 1 82 0
+    .loc 1 122 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
     sub sp, sp, #80 // sp adj
@@ -77,7 +245,7 @@ _L01db_rt_array_len_native_bb0:
 .hidden rt_array_get_native
     .p2align 2
 rt_array_get_native:
-    .loc 1 91 0
+    .loc 1 131 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
     sub sp, sp, #224 // sp adj
@@ -144,7 +312,7 @@ _L01db_rt_array_get_native_bb0:
 .hidden rt_array_set_native
     .p2align 2
 rt_array_set_native:
-    .loc 1 105 0
+    .loc 1 145 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
     sub sp, sp, #256 // sp adj
@@ -223,7 +391,7 @@ _L01db_rt_array_set_native_bb0:
 .hidden rt_array_pop_native
     .p2align 2
 rt_array_pop_native:
-    .loc 1 121 0
+    .loc 1 161 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
     sub sp, sp, #160 // sp adj
@@ -278,7 +446,7 @@ _L01db_rt_array_pop_native_bb0:
 .hidden rt_array_shift_native
     .p2align 2
 rt_array_shift_native:
-    .loc 1 138 0
+    .loc 1 178 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
     sub sp, sp, #496 // sp adj
@@ -444,7 +612,7 @@ _L01db_rt_array_shift_native_bb3:
 .hidden rt_array_truncate_native
     .p2align 2
 rt_array_truncate_native:
-    .loc 1 169 0
+    .loc 1 209 0
     stp x29, x30, [sp, #-16]! // prologue: save fp/lr
     mov x29, sp // prologue: set fp
     sub sp, sp, #256 // sp adj
