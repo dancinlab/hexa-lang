@@ -446,6 +446,110 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
 
+  # ── Linux arm64 STATIC-MUSL (ING #2 r2 — edge-only supplementary asset) ────
+  # The arm64 half of the static-musl target. release-linux-arm64 above runs on
+  # ubuntu-24.04-arm (glibc 2.39) and DEFERS the arm64 glibc-floor problem here:
+  # arm64 cloud pods on glibc < 2.39 die with `GLIBC_2.xx not found` on the
+  # dynamic asset. This job ships a glibc-FREE single static ELF that runs on ANY
+  # arm64 pod OS regardless of host glibc floor (or pure-musl Alpine-arm64).
+  #
+  # Built NATIVELY on ubuntu-24.04-arm (NOT cross-compiled — aiden/summer are
+  # x86_64 and can't build arm64-musl natively; this is the only zero-cost arm64
+  # build surface). Ubuntu's `musl-tools` on an arm64 host ships an aarch64-native
+  # `/usr/bin/musl-gcc`; we symlink it to `aarch64-linux-musl-gcc` (the name the
+  # build scripts expect via $CC). Runtime linked from SOURCE (HEXA_PREBUILT_RUNTIME
+  # unset → each stage compiles self/runtime.c, musl-portable via the ING #2
+  # post-restore header-hoist patch in tool/restore_frozen_seeds; glibc-byteeq-inert).
+  #
+  # SUPPLEMENTARY + EDGE-FIRST: NOT in `finalize`'s needs list, so it NEVER gates
+  # the stable 3-green promotion — it ships an EXTRA prerelease asset
+  # `hexa-linux-arm64-musl.tar.gz` alongside the existing targets. The dynamic
+  # glibc `hexa-linux-arm64.tar.gz` is UNCHANGED (additive target, not a replace).
+  release-linux-arm64-musl:
+    name: release (linux-arm64-musl · static · edge)
+    needs: setup
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install musl toolchain (aarch64-native)
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl-tools musl-dev
+          # On an arm64 host, ubuntu's musl-tools ships an aarch64-native
+          # /usr/bin/musl-gcc. The build scripts expect `aarch64-linux-musl-gcc`
+          # → symlink it if absent (mirrors the x86_64-musl job's symlink).
+          if ! command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
+            sudo ln -sf "$(command -v musl-gcc)" /usr/local/bin/aarch64-linux-musl-gcc
+          fi
+          aarch64-linux-musl-gcc --version | head -1
+
+      # Static-musl link from SOURCE runtime — HEXA_PREBUILT_RUNTIME left UNSET so
+      # every stage compiles self/runtime.c (musl-portable via ING #2 patch). LIBS
+      # carries `-static` so the final ./hexa + every intermediate links statically.
+      - name: Build — shared release_build (static musl, source runtime)
+        shell: bash
+        env:
+          TARGET: linux-arm64-musl
+          CC: aarch64-linux-musl-gcc
+          LIBS: "-static -lm"
+          # Drop optional OpenSSL/libsodium binds — a `-static` musl link has no
+          # host glibc shared libs to satisfy `-lssl -lcrypto`/`-lsodium`.
+          HEXA_STATIC_DEPS: "1"
+          GH_TOKEN: ${{ github.token }}
+          HEXA_SEED_CONVERGE: "1"
+          HEXA_BUILD_VERSION: ${{ needs.setup.outputs.release_tag }}
+        run: |
+          unset HEXA_PREBUILT_RUNTIME
+          bash tool/release_build
+
+      - name: Package — shared release_package (static musl tarball)
+        shell: bash
+        env:
+          TARGET: linux-arm64-musl
+          CC: aarch64-linux-musl-gcc
+          LIBS: "-static -lm"
+          HEXA_STATIC_DEPS: "1"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          unset HEXA_PREBUILT_RUNTIME
+          bash tool/release_package
+
+      - name: Verify static (no dynamic deps)
+        shell: bash
+        run: |
+          BIN=dist/hexa-linux-arm64-musl/hexa
+          file "$BIN"
+          # CAPTURE first, then grep — `ldd <static-bin>` exits non-zero and a
+          # `-q` short-circuit can SIGPIPE it, which under `bash -e -o pipefail`
+          # would fail the pipeline even on a present match. `|| true` keeps the
+          # non-zero exit from tripping `-e`; judge linkage from text + `file`.
+          LDD_OUT="$(ldd "$BIN" 2>&1 || true)"
+          FILE_OUT="$(file "$BIN")"
+          echo "$LDD_OUT"
+          # Capture --version proof (verify bar c2).
+          "$BIN" --version || true
+          if printf '%s\n' "$LDD_OUT" | grep -qiE 'not a dynamic executable|동적 실행' \
+             || printf '%s\n' "$FILE_OUT" | grep -qiE 'statically linked'; then
+            echo "✓ statically linked — no glibc dependency"
+          else
+            echo "✗ binary is dynamically linked — static-musl build regressed" >&2
+            exit 1
+          fi
+
+      - name: Upload to GitHub Release (supplementary edge asset)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.setup.outputs.release_tag }}
+          prerelease: true
+          make_latest: false
+          target_commitish: ${{ github.sha }}
+          files: hexa-linux-arm64-musl.tar.gz
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
   # ── Linux x86_64 CUDA (ing-cuda-release — edge-only supplementary asset) ──────
   # A cuBLAS-enabled hexa so consumers (anima #2386) install a prebuilt GPU build
   # instead of a CPU-only one (the shipped install.sh hexa reports

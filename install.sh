@@ -71,10 +71,11 @@ need_cmd() {
 # (ubuntu-22.04 → glibc 2.35) or on a pure-musl host (Alpine) that has no glibc
 # at all. The static-musl ELF runs on any of them.
 #
-# Scope: linux-x86_64 ONLY (the only target with a musl asset). Returns 0
-# (prefer musl) / 1 (keep glibc). ADDITIVE — the glibc path is the default and
-# is only overridden on an explicit opt-in or a positively-detected need, so
-# normal modern-glibc x86_64 installs are unchanged.
+# Scope: linux-x86_64 AND linux-arm64 (both targets ship a musl asset; the arm64
+# musl asset landed in ING #2 r2). Returns 0 (prefer musl) / 1 (keep glibc).
+# ADDITIVE — the glibc path is the default and is only overridden on an explicit
+# opt-in or a positively-detected need, so normal modern-glibc installs are
+# unchanged on either arch.
 #
 #   HEXA_MUSL=1  → force musl ; HEXA_MUSL=0 → force glibc (escape hatch).
 #   auto (unset) → musl when the host is musl-based OR glibc < MUSL_GLIBC_FLOOR.
@@ -97,8 +98,11 @@ prefer_cuda() {
 MUSL_GLIBC_FLOOR_MAJOR=2
 MUSL_GLIBC_FLOOR_MINOR=34
 prefer_musl() {
-    # Only linux-x86_64 has a musl asset.
-    [ "$(detect_target)" = "linux-x86_64" ] || return 1
+    # Only the linux targets have a musl asset (x86_64 + arm64).
+    case "$(detect_target)" in
+        linux-x86_64|linux-arm64) ;;
+        *) return 1 ;;
+    esac
 
     # Explicit override wins.
     case "${HEXA_MUSL:-}" in
@@ -139,9 +143,10 @@ install_hexa() {
     base="https://github.com/${HEXA_REPO}/releases"
 
     # Asset selection. Default = the per-target tarball (`hexa-${target}`). On
-    # linux-x86_64, prefer the static-musl asset when the host needs it (old or
-    # absent glibc) or it is forced via HEXA_MUSL — see prefer_musl(). The musl
-    # tarball's inner dir is `hexa-linux-x86_64-musl/`, matching the asset name.
+    # the linux targets (x86_64 + arm64), prefer the static-musl asset when the
+    # host needs it (old or absent glibc) or it is forced via HEXA_MUSL — see
+    # prefer_musl(). The musl tarball's inner dir is `hexa-${target}-musl/`,
+    # matching the asset name.
     asset="hexa-${target}"
     if prefer_cuda; then
         # HEXA_CUDA=1 opt-in (linux-x86_64): cuBLAS-enabled asset. Takes precedence

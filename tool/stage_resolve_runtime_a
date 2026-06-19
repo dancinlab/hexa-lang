@@ -239,14 +239,16 @@ resolve_native_rt_hi_seed() {
     # The temp MUST end in `.s` so $CC treats it as assembly — a fixed build/
     # path guarantees that (mktemp's `XXXXXX.s` template is unportable: macOS
     # appends the random suffix AFTER the `.s`, breaking the extension).
-    # SAFETY: only adopt the native path if the seed actually exports ALL 14
+    # SAFETY: only adopt the native path if the seed actually exports ALL 15
     # rt_str_* the SSOT runtime_core.c expects — a stale/partial seed (e.g.
-    # pre-search-predicate, 11 fn) would otherwise yield `undefined reference` at
-    # the app link. Counted from the seed's `.globl` directives (toolchain-free,
-    # no nm dependency). On a shortfall, skip the native path → legacy C gen.c.
+    # pre-search-predicate, 11 fn; or pre-from_int, 14 fn) would otherwise yield
+    # `undefined reference` at the app link. Counted from the seed's `.globl`
+    # directives (toolchain-free, no nm dependency). On a shortfall, skip the
+    # native path → legacy C gen.c (the construct-half WRITE prim rt_str_from_int
+    # was added 2026-06-19, bumping the family 14→15).
     local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?rt_str_' "$seed" 2>/dev/null || echo 0)"
-    if [ "${nsyms:-0}" -lt 14 ]; then
-        echo "[stage_resolve_runtime_a] RT-NATIVE Z2a: seed $seed exports only $nsyms/14 rt_str_* — falling back to C gen.c path" >&2
+    if [ "${nsyms:-0}" -lt 15 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE Z2a: seed $seed exports only $nsyms/15 rt_str_* — falling back to C gen.c path" >&2
         return 0
     fi
     local s_tmp="build/rt_hi_seed.s"
@@ -461,6 +463,55 @@ resolve_native_fs_core_seed() {
     rm -f "$s_tmp"
 }
 
+# ── RT-NATIVE leg B M4 STR (sh-construct-str lane) — str-core scan/compare native seed → build/str_core_native.o ──
+# The str twin of resolve_native_array_core_seed: assemble build/str_core_native.o
+# from the arch-matched frozen self/native/str_core_*.s seed, and AUTO-ENABLE the
+# native public-string equality path (HEXA_RT_STR_EQ_NATIVE=1) so hexa_str_eq's
+# distinct-pointer byte-compare delegates to rt_str_eq_native (raw-mem
+# __hx_ptr_load8 NUL-stop walk — gen2-only intrinsics the hexat C-transpile
+# bootstrap cannot lower, hence a frozen .s seed, exactly like array/map/rt_str).
+# byte-identical (native == C strcmp), so it is default-eligible like array/map.
+# On an unknown target or assemble failure, HEXA_RT_STR_EQ_NATIVE stays unset and
+# the C strcmp body in runtime_core.c ships unchanged (the no-seed fallback —
+# #3583 lesson). Override by pre-setting HEXA_RT_STR_EQ_NATIVE=0 to force the C
+# path even when a seed exists.
+resolve_native_str_core_seed() {
+    [ "${HEXA_RT_STR_EQ_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
+    [ -f build/str_core_native.o ] && { export HEXA_RT_STR_EQ_NATIVE=1; return 0; }
+    local seed="" tgt="${TARGET:-}"
+    tgt="${tgt%-musl}"
+    [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
+        "Darwin arm64") tgt="darwin-arm64" ;;
+        "Linux x86_64") tgt="linux-x86_64" ;;
+        "Linux aarch64"|"Linux arm64") tgt="linux-arm64" ;;
+    esac
+    case "$tgt" in
+        darwin-arm64) seed="self/native/str_core_arm64.s" ;;
+        linux-x86_64) seed="self/native/str_core_x86_64.s" ;;
+        linux-arm64)  seed="self/native/str_core_arm64-linux.s" ;;
+        *)            seed="" ;;   # unknown → C #else path
+    esac
+    [ -n "$seed" ] && [ -f "$seed" ] || return 0
+    mkdir -p build
+    # SAFETY: only adopt the native path if the seed exports the scan/compare fn
+    # the runtime_core.c delegation expects — a stale/partial seed would yield an
+    # `undefined reference` at the app link. Counted from `.globl` (toolchain-free).
+    local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?rt_str_eq_native' "$seed" 2>/dev/null || echo 0)"
+    if [ "${nsyms:-0}" -lt 1 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE STR: seed $seed exports only $nsyms/1 rt_str_eq_native — falling back to C #else path" >&2
+        return 0
+    fi
+    local s_tmp="build/str_core_seed.s"
+    grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
+    if $CC -c "$s_tmp" -o build/str_core_native.o 2>/dev/null; then
+        export HEXA_RT_STR_EQ_NATIVE=1
+        echo "[stage_resolve_runtime_a] RT-NATIVE STR: assembled build/str_core_native.o from $seed (TARGET=$tgt, $nsyms rt_str_eq_native syms) → native string-equality path"
+    else
+        echo "[stage_resolve_runtime_a] RT-NATIVE STR: WARN assemble of $seed failed — falling back to C #else path" >&2
+    fi
+    rm -f "$s_tmp"
+}
+
 # ── RT-NATIVE leg B Route B — linked-block arena native seed → build/alloc_syscall_native.o ──
 # The arena twin of resolve_native_array_core_seed: assemble the arch-matched
 # frozen self/native/alloc_syscall_*.s seed (a full HexaArenaBlock-chain arena +
@@ -669,6 +720,17 @@ build_runtime_a_from_source() {
         extra_obj="$extra_obj build/fs_core_native.o"
         echo "[stage_resolve_runtime_a] RT-NATIVE FS-R1: HEXA_RT_FS_NATIVE=1; ar'ing native fs_core_native.o into runtime.a"
     fi
+    # RT-NATIVE STR (sh-construct-str lane, gated): when the str_core seed is
+    # active, define HEXA_RT_STR_EQ_NATIVE for the runtime.c compile (so
+    # hexa_str_eq's distinct-pointer compare takes the native arm) and ar
+    # build/str_core_native.o into runtime.a so rt_str_eq_native resolves. The C
+    # strcmp `#else` stays in runtime_core.c as the no-seed fallback.
+    local rt_str_def=""
+    if [ "${HEXA_RT_STR_EQ_NATIVE:-0}" = "1" ] && [ -f build/str_core_native.o ]; then
+        rt_str_def="-DHEXA_RT_STR_EQ_NATIVE=1"
+        extra_obj="$extra_obj build/str_core_native.o"
+        echo "[stage_resolve_runtime_a] RT-NATIVE STR: HEXA_RT_STR_EQ_NATIVE=1; ar'ing native str_core_native.o into runtime.a"
+    fi
     # RT-NATIVE Route B (gated, opt-IN): native linked-block arena replaces the C
     # arena `#else` in runtime_core.c when HEXA_RT_ALLOC_NATIVE=1 + seed object built.
     local rt_alloc_def=""
@@ -691,7 +753,7 @@ build_runtime_a_from_source() {
         extra_obj="$extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o"
         echo "[stage_resolve_runtime_a] CUDA-R1: HEXA_CUDA=1; runtime.c -DHEXA_CUDA -I$_cinc; ar'ing runtime_cuda.o + runtime_cuda_dlink.o into runtime.a"
     fi
-    $CC $CFLAGS $rt_array_def $rt_map_def $rt_intern_def $rt_fs_def $rt_alloc_def $rt_cuda_def -I self -c self/runtime.c -o build/runtime.o
+    $CC $CFLAGS $rt_array_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_alloc_def $rt_cuda_def -I self -c self/runtime.c -o build/runtime.o
     ar rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     echo "$RA"
@@ -714,6 +776,10 @@ resolve_native_intern_core_seed
 # HEXA_RT_FS_NATIVE=1 on all 3 production targets). Unknown targets keep the C
 # fopen/fwrite write path (the retained `#else` fallback).
 resolve_native_fs_core_seed
+# RT-NATIVE STR (sh-construct-str lane): assemble the arch-matched native str_core
+# seed (sets HEXA_RT_STR_EQ_NATIVE=1 on all 3 production targets). Unknown targets
+# keep the C strcmp path.
+resolve_native_str_core_seed
 # RT-NATIVE Route B: assemble the native linked-block arena seed (DEFAULT-ON as of
 # measure-8; C arena body dropped from runtime_core_emit.hexa. HEXA_RT_ALLOC_NATIVE=0
 # reverts via git).
