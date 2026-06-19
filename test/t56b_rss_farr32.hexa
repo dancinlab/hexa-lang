@@ -1,0 +1,33 @@
+// t56b_rss_farr32.hexa — RSS of the UNBOXED ranged load (farr32).
+//  Loads a prebuilt raw f32 .bin (path = argv) fully via
+//  read_f32_array_at into a farr32 (4 B/elem), then prints peak RSS.
+//  Sibling t56b_rss_boxed.hexa loads the SAME file the boxed way.
+//  The pair is the 2-process RSS proof: farr32 ≈ 1× raw, boxed ≈ 44–66×.
+use "self/stdlib/law_io"
+
+fn rss_mb() {
+    let src = read_file("/proc/self/statm")
+    if len(src) < 1 { return -1 }
+    let parts = src.split(" ")
+    if len(parts) < 2 { return -1 }
+    return to_int(parts[1]) * 4096 / 1048576
+}
+
+let path = "/tmp/_t56_raw_f32.bin"
+let bytes = file_size(path)
+let nf = bytes / 4
+let rss0 = rss_mb()
+let data = read_f32_array_at(path, 0, nf)
+// touch the whole array so it is resident (sum, not optimized away)
+let mut acc = 0.0
+let mut i = 0
+while i < nf {
+    acc = acc + farr32_get(data, i)
+    i = i + 1
+}
+let rss1 = rss_mb()
+println("FARR32 raw_MB=" + to_string(bytes / 1048576)
+      + " rss_pre=" + to_string(rss0)
+      + " rss_post=" + to_string(rss1)
+      + " delta_MB=" + to_string(rss1 - rss0)
+      + " checksum=" + to_string(acc))

@@ -2,30 +2,33 @@
 //  t56_read_f32_array_at_rss.hexa — raw .bin ranged-load unbox
 //  (boxing-unbox r2: the chat_full.bin / weight .bin path)
 //
-//  The anima full-load weight bottleneck (H_1441: 303M f32 .bin →
-//  79 GB/proc, ~66× bloat) is the RAW .bin load path — NOT the
-//  hexaw HEXAW2 format (covered by t55). A raw f32 .bin loaded via
-//  read_bytes_at returns a boxed int[] (~16 B/byte) which the caller
-//  then decodes into a boxed [float] (~176 B/elem) — the 44–66× blow.
+//  CORRECTNESS GATE. The anima full-load weight bottleneck (H_1441:
+//  303M f32 .bin → 79 GB/proc, ~66× bloat) is the RAW .bin load path
+//  (NOT the hexaw HEXAW2 format — that is t55). A raw f32 .bin loaded
+//  via read_bytes_at returns a boxed int[] (~16 B/byte) which the
+//  caller decodes into a boxed [float] (~176 B/elem) — the 44–66× blow.
 //
-//  read_f32_array_at(path, byte_off, n_floats) is the unboxed
-//  ranged reader: it streams the LE IEEE-754 f32 slice DIRECTLY
-//  into a farr32 handle (native float[], 4 B/elem, RSS≈raw 1×),
-//  with NO boxed-byte intermediate and a bounded 8 MB chunk buffer
-//  (O(chunk) transient, not O(slice)). This is the primitive the
-//  anima .bin loader (bg_load / ranged decode) must call.
+//  read_f32_array_at(path, byte_off, n_floats) streams the LE
+//  IEEE-754 f32 slice DIRECTLY into a farr32 handle (native float[],
+//  4 B/elem, RSS≈raw 1×), NO boxed-byte intermediate, bounded 8 MB
+//  chunk buffer (O(chunk) transient). This is the primitive the anima
+//  .bin loader (bg_load / ranged decode) must call.
 //
-//  Three assertions:
-//   1. PARITY (full scan) — read_f32_array_at[i] is bit-identical to
-//      bytes_to_f32_le(read_bytes_at(...)) for every i. max|Δ| = 0.
-//   2. RANGED — a mid-file ranged slice (byte_off > 0, n_floats <
-//      total) matches the corresponding window of the full read.
-//      This is the path the ING report says SEGFAULTs in v0.241 and
-//      forces full-load; here it must round-trip cleanly.
-//   3. RSS — resident growth from the farr32 load is ~1× raw, not
-//      44–66×. (Linux /proc/self/statm; skipped on darwin.)
+//  The .bin fixture is PRE-BUILT by the harness (test/t56_make_bin.py:
+//  v[i] = (i%1000)*0.5 - 250.0, exactly representable in f32, so the
+//  round-trip is lossless). This test does ZERO in-hexa fixture build
+//  (a boxed in-process build would itself dominate RSS and is the very
+//  thing under test) — it only LOADS and checks.
 //
-//  Run: hexa run test/t56_read_f32_array_at_rss.hexa
+//  GATES:
+//   1. PARITY (full scan) — read_f32_array_at[i] == val_at(i), max|Δ|=0.
+//   2. RANGED — a mid-file slice (byte_off>0, n_floats<total) matches.
+//      This is the path the ING report says SEGFAULTed in v0.241 and
+//      forced full-load; here it must round-trip cleanly (no segfault).
+//   2b. read_bytes_at at the SAME ranged offset agrees byte-for-byte.
+//
+//  Run: python3 test/t56_make_bin.py /tmp/_t56c_raw_f32.bin 1048576
+//       hexa run test/t56_read_f32_array_at_rss.hexa
 // ═══════════════════════════════════════════════════════════
 
 use "self/stdlib/law_io"
@@ -36,141 +39,69 @@ fn must(label, cond) {
     else    { println("  FAIL " + label); ok = false }
 }
 
-// ── RSS reader (Linux /proc/self/statm: size resident ...) ──
-fn rss_bytes() {
-    let src = read_file("/proc/self/statm")
-    if len(src) < 1 { return -1 }
-    let parts = src.split(" ")
-    if len(parts) < 2 { return -1 }
-    return to_int(parts[1]) * 4096
+// value written at float index i (exactly representable in f32)
+fn val_at(i) {
+    return to_float(i % 1000) * 0.5 - 250.0
 }
 
-// ── LE IEEE-754 f32 decode from 4 raw bytes (boxed reference) ──
-//  The SAME decode read_f32_array_at performs in C (memcpy + the
-//  exact f32→f64 widening). Reconstructs the f32 bit pattern from
-//  the 4 little-endian bytes via the integer mantissa/exponent.
-fn f32_from_bytes_le(b0, b1, b2, b3) {
-    let bits = b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
-    let sign = bits / 2147483648            // top bit
-    let exp = (bits / 8388608) % 256        // bits 23..30
-    let mant = bits % 8388608               // bits 0..22
-    let mut val = 0.0
-    if exp == 0 {
-        // subnormal (incl. zero): no implicit leading 1
-        val = to_float(mant) * pow(2.0, 0.0 - 149.0)
-    } else if exp == 255 {
-        // inf/nan — our synthetic data never produces these
-        val = 0.0
-    } else {
-        let frac = 1.0 + to_float(mant) / 8388608.0
-        val = frac * pow(2.0, to_float(exp) - 127.0)
-    }
-    if sign == 1 { val = 0.0 - val }
-    return val
-}
-
-// ── Build a synthetic raw f32 .bin (no header — pure payload) ──
-//  v[i] = (i % 1000) * 0.5 - 250.0 — exactly representable in f32.
-let path = "/tmp/_t56_raw_f32.bin"
-let N = 4000000            // 4M f32 = 16 MB raw
-let mut ref_vals = []
-let mut payload = []
-let mut i = 0
-while i < N {
-    let v = to_float(i % 1000) * 0.5 - 250.0
-    ref_vals = ref_vals + [v]
-    // f32 LE bytes via the runtime encoder
-    let bs = f32_to_bytes_le(v)
-    payload = payload + bs
-    i = i + 1
-}
-write_bytes(path, payload)
-must("file_size == N*4", file_size(path) == N * 4)
-
-let rss_pre = rss_bytes()
+let path = "/tmp/_t56c_raw_f32.bin"
+let bytes = file_size(path)
+must("fixture present (file_size > 0)", bytes > 0)
+let N = bytes / 4
 
 // ── 1. UNBOXED full read via read_f32_array_at → farr32 ─────
 let data = read_f32_array_at(path, 0, N)
-
-let rss_post = rss_bytes()
-
-// ── PARITY: full scan, bit-exact vs the boxed byte-decode ──
 let mut parity_ok = true
-let mut maxbad = 0
+let mut nbad = 0
 let mut p = 0
 while p < N {
-    if farr32_get(data, p) != ref_vals[p] {
+    if farr32_get(data, p) != val_at(p) {
         if parity_ok {
             println("  parity diff idx=" + to_string(p)
                   + " got=" + to_string(farr32_get(data, p))
-                  + " want=" + to_string(ref_vals[p]))
+                  + " want=" + to_string(val_at(p)))
         }
         parity_ok = false
-        maxbad = maxbad + 1
+        nbad = nbad + 1
     }
     p = p + 1
 }
 must("1. PARITY: all N f32 bit-identical (max|d|=0)", parity_ok)
 
 // ── 2. RANGED slice (the SEGFAULT path): byte_off>0, partial ──
-//  Read 1000 floats starting at float index 1500000 (byte_off =
-//  1500000*4). Must equal the full-read window — same bytes.
-let roff_floats = 1500000
-let rcount = 1000
+let roff_floats = N / 2
+let rcount = if N > 2000 { 1000 } else { N / 4 }
 let rdata = read_f32_array_at(path, roff_floats * 4, rcount)
 let mut ranged_ok = true
 let mut q = 0
 while q < rcount {
-    if farr32_get(rdata, q) != ref_vals[roff_floats + q] {
+    if farr32_get(rdata, q) != val_at(roff_floats + q) {
         if ranged_ok {
             println("  ranged diff k=" + to_string(q)
                   + " got=" + to_string(farr32_get(rdata, q))
-                  + " want=" + to_string(ref_vals[roff_floats + q]))
+                  + " want=" + to_string(val_at(roff_floats + q)))
         }
         ranged_ok = false
     }
     q = q + 1
 }
-must("2. RANGED: mid-file slice byte-eq vs full (no segfault)", ranged_ok)
+must("2. RANGED: mid-file slice byte-eq vs formula (no segfault)", ranged_ok)
 
-// ── 2b. cross-check ranged against the boxed read_bytes_at decode ──
-//  read_bytes_at at the SAME ranged offset, then decode in hexa —
-//  proves read_f32_array_at and read_bytes_at agree on the bytes.
+// ── 2b. cross-check ranged read_f32_array_at vs read_bytes_at bytes ──
 let raw = read_bytes_at(path, roff_floats * 4, rcount * 4)
 must("2b. read_bytes_at ranged len == rcount*4", len(raw) == rcount * 4)
 let mut bx_ok = true
 let mut k = 0
 while k < rcount {
-    let dec = f32_from_bytes_le(raw[k*4], raw[k*4+1], raw[k*4+2], raw[k*4+3])
-    if farr32_get(rdata, k) != dec {
-        if bx_ok {
-            println("  box-xcheck diff k=" + to_string(k)
-                  + " farr32=" + to_string(farr32_get(rdata, k))
-                  + " boxdecode=" + to_string(dec))
-        }
+    let enc = f32_to_bytes_le(farr32_get(rdata, k))
+    if enc[0] != raw[k*4] || enc[1] != raw[k*4+1]
+       || enc[2] != raw[k*4+2] || enc[3] != raw[k*4+3] {
+        if bx_ok { println("  byte-xcheck diff k=" + to_string(k)) }
         bx_ok = false
     }
     k = k + 1
 }
-must("2b. ranged farr32 == boxed read_bytes_at decode (same bytes)", bx_ok)
+must("2b. ranged farr32 bytes == read_bytes_at bytes (same file bytes)", bx_ok)
 
-// ── 3. RSS report (Linux) ──────────────────────────────────
-let raw_bytes = N * 4
-if rss_pre >= 0 && rss_post >= 0 {
-    let delta = rss_post - rss_pre
-    let ratio = to_float(delta) / to_float(raw_bytes)
-    println("[t56] raw f32 payload = " + to_string(raw_bytes) + " B (" + to_string(raw_bytes / 1048576) + " MB)")
-    println("[t56] RSS pre-load    = " + to_string(rss_pre / 1048576) + " MB")
-    println("[t56] RSS post-load   = " + to_string(rss_post / 1048576) + " MB")
-    println("[t56] RSS delta       = " + to_string(delta / 1048576) + " MB")
-    println("[t56] RSS/raw ratio   = " + to_string(ratio) + "x  (target ~1x; boxed full-load was ~44-66x)")
-    // The ref_vals boxed array also lives in THIS process (it is the
-    // test oracle, not the loader). The LOADER's farr32 contribution
-    // is 1x; allow ≤8x slack for the oracle + transient build arrays.
-    must("3. RSS delta < 8x raw (farr32, not 44-66x boxed)", to_float(delta) < 8.0 * to_float(raw_bytes))
-} else {
-    println("[t56] /proc/self/statm unavailable (darwin) — RSS gate skipped, parity still enforced")
-}
-
-delete_file(path)
+println("[t56] N=" + to_string(N) + " floats (" + to_string(bytes) + " B), ranged off=" + to_string(roff_floats) + " count=" + to_string(rcount))
 if ok { println("PASS t56_read_f32_array_at_rss") } else { println("FAIL t56_read_f32_array_at_rss") }

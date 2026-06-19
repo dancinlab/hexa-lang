@@ -1,0 +1,44 @@
+// t56b_rss_boxed.hexa — RSS of the OLD BOXED full-load path.
+//  Loads the SAME raw f32 .bin via read_bytes_at (boxed int[],
+//  ~16 B/byte) then decodes into a boxed [float] (the pre-r2 anima
+//  bg_load shape). Prints peak RSS — the 44–66× baseline that
+//  read_f32_array_at (t56b_rss_farr32) replaces with ~1×.
+//  Smaller N than the farr32 sibling is fine — the RATIO is the proof.
+use "self/stdlib/law_io"
+
+fn rss_mb() {
+    let src = read_file("/proc/self/statm")
+    if len(src) < 1 { return -1 }
+    let parts = src.split(" ")
+    if len(parts) < 2 { return -1 }
+    return to_int(parts[1]) * 4096 / 1048576
+}
+
+let path = "/tmp/_t56_raw_f32.bin"
+let bytes = file_size(path)
+let nf = bytes / 4
+let rss0 = rss_mb()
+// OLD PATH: read_bytes_at → boxed int[], then decode → boxed [float].
+let raw = read_bytes_at(path, 0, bytes)   // boxed int per byte (~16 B/byte)
+let mut vals = []
+let mut i = 0
+while i < nf {
+    let b0 = raw[i*4]
+    let b1 = raw[i*4+1]
+    let b2 = raw[i*4+2]
+    let b3 = raw[i*4+3]
+    vals.push(bytes_to_f32_le([b0, b1, b2, b3]))   // boxed float per elem
+    i = i + 1
+}
+let rss1 = rss_mb()
+let mut acc = 0.0
+let mut k = 0
+while k < nf {
+    acc = acc + vals[k]
+    k = k + 1
+}
+println("BOXED raw_MB=" + to_string(bytes / 1048576)
+      + " rss_pre=" + to_string(rss0)
+      + " rss_post=" + to_string(rss1)
+      + " delta_MB=" + to_string(rss1 - rss0)
+      + " checksum=" + to_string(acc))
