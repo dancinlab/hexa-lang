@@ -1,0 +1,62 @@
+// stdlib/math/codes.hexa — binary linear code weight enumerator (GF(2)).
+//
+// Computes the weight distribution A_w of an [n,k] binary linear code from its
+// k×n generator matrix (flattened row-major, entries in {0,1}). The weight
+// enumerator is the macro↔quantum bridge object behind classical↔quantum error
+// correction (MacWilliams identity; Golay [24,12,8] underlies the Leech lattice
+// via Construction A). Pure bit/integer arithmetic — no libm or atlas dep, so no
+// S8 citation gate triggers (mirrors stdlib/math/lattice.hexa).
+
+// code_weights — return the array of all 2^k codeword Hamming weights.
+pub fn code_weights(gen: array, k: int, n: int) -> array {
+    let total = 1
+    let t = 0
+    while t < k { total = total * 2; t = t + 1 }
+    let weights = []
+    let msg = 0
+    while msg < total {
+        let wt = 0
+        let j = 0
+        while j < n {
+            let bit = 0
+            let i = 0
+            let mp = msg
+            while i < k {
+                if (mp % 2) == 1 { bit = (bit + gen[i * n + j]) % 2 }
+                mp = mp / 2
+                i = i + 1
+            }
+            wt = wt + bit
+            j = j + 1
+        }
+        weights.push(wt)
+        msg = msg + 1
+    }
+    weights
+}
+
+// weight_count — # of codewords of exactly the given Hamming weight (A_w).
+pub fn weight_count(weights: array, total: int, target: int) -> int {
+    let c = 0
+    let i = 0
+    while i < total {
+        if weights[i] == target { c = c + 1 }
+        i = i + 1
+    }
+    c
+}
+
+// min_distance — minimum nonzero Hamming weight = the code's minimum distance d.
+pub fn min_distance(weights: array, total: int) -> int {
+    let m = 0
+    let i = 0
+    while i < total {
+        let w = weights[i]
+        if w > 0 {
+            if m == 0 { m = w }
+            else { if w < m { m = w } }
+        }
+        i = i + 1
+    }
+    m
+}
