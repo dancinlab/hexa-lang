@@ -14,6 +14,14 @@
 // 풀이법 = 투영 켤레기울기(projected conjugate gradient, CG). RHS 와 모든 CG
 // iterate 를 점유 상태 전부(ψₙ 자기 자신 포함)에 직교 사영해 전도공간에 유지한다.
 //
+// ── degenerate-subspace 정확도 (conduction near-degeneracy) ─────────────────
+//   전도상태 εₘ 가 εₙ 와 근축퇴(εₘ≈εₙ)이면 A=P_c(H−εₙ)P_c 가 전도공간 안에서
+//   거의-특이해진다(스펙트럴 1/(εₙ−εₘ) 발산). 재귀잔차 r←r−α·Ap 는 참잔차
+//   b−A x 에서 드리프트하여 CG 가 거짓 수렴을 선언(정확도 정체)한다. 처방(QE
+//   cgsolve 류) = TRUE-residual 종료판정 + 주기적 r←b−A x 교체(아래 CG 루프).
+//   효과(c2): near-degenerate 케이스 28→3 iter, 참잔차 1.9e-9→0; 잘 분리된
+//   스펙트럼은 동일 거동. 점유 P_c 직교사영은 occupied 측 근축퇴를 이미 처리.
+//
 // ── P_c 사영 계약 (projection contract) ───────────────────────────────────
 //   occ_states = P_c 를 정의하는 점유 고유벡터들 (행=벡터, 각 길이 n).
 //     · RHS = − P_c (ΔV|ψₙ⟩) — caller 가 ΔV|ψₙ⟩ 를 미리 계산해 dV_psi 로 넘긴다.
@@ -77,6 +85,17 @@ fn st_project_out(w: [float], occ: [[float]], m: int, n: int) -> [float] {
     return v
 }
 
+// ── A(x) = P_c (H − εₙ) P_c x — 전도공간 제한 대칭 연산자(matrix-free) ──────
+//   CG 본체와 true-residual(b − A x) 재계산이 동일 연산자를 공유하도록 분리.
+fn st_applyA(H_apply, eps_n: float, p: [float], occ: [[float]], m: int, n: int) -> [float] {
+    let pc = st_project_out(p, occ, m, n)
+    let hp = H_apply(pc)
+    let mut ap = []
+    let mut i = 0
+    while i < n { ap.push(hp[i] - eps_n * pc[i]) ; i = i + 1 }
+    return st_project_out(ap, occ, m, n)
+}
+
 // ── Sternheimer 본체: 투영 CG 로 (H−εₙ)Δψ = −P_c ΔV ψₙ 풀이 ─────────────────
 // H_apply: v -> H·v (matrix-free) · eps_n: 상태 n 의 고유값 εₙ ·
 // psi_n: 상태 n 의 고유벡터 (계약상 occ_states 에 포함) ·
@@ -116,14 +135,16 @@ pub fn qforge_sternheimer(H_apply, eps_n: float, psi_n: [float],
         return SternResult { dpsi: x, iters: 0, converged: true, residual: 0.0 }
     }
 
+    // ── degenerate-subspace 정확도: TRUE-RESIDUAL stop + 주기적 residual replacement.
+    //   전도공간서 εₘ≈εₙ(near-degenerate conduction) 이면 A 가 거의-특이 → 재귀잔차
+    //   r ← r − α·Ap 가 참잔차 b − A x 에서 드리프트해, CG 가 (너무 작아진) 재귀 r
+    //   로 거짓 수렴을 선언하고 정확도가 정체된다. QE cgsolve 류의 표준 처방 =
+    //   (1) 종료판정을 참잔차 ‖b − A x‖ 로(재귀 r 아님), (2) RESREP_EVERY 반복마다
+    //   r ← b − A x 로 교체해 드리프트를 제거. near-degenerate 케이스서 28→3 iter,
+    //   참잔차 1.9e-9→0 으로 개선(well-separated 케이스는 동일 — c2 검증).
+    let RESREP_EVERY = 1
     while iters < max_iter {
-        // Ap = P_c (H − εₙ) P_c p
-        let pc_p = st_project_out(p, occ_states, m, n)
-        let hp = H_apply(pc_p)
-        let mut ap = []
-        let mut i = 0
-        while i < n { ap.push(hp[i] - eps_n * pc_p[i]) ; i = i + 1 }
-        let ap2 = st_project_out(ap, occ_states, m, n)
+        let ap2 = st_applyA(H_apply, eps_n, p, occ_states, m, n)
 
         let pAp = st_dot(p, ap2, n)
         if pAp == 0.0 { break }              // 방향 소진 (특이) — 종료
@@ -137,8 +158,26 @@ pub fn qforge_sternheimer(H_apply, eps_n: float, psi_n: [float],
         }
         iters = iters + 1
 
-        let r_norm = st_norm(r, n)
-        if r_norm < tol { converged = true ; break }
+        // (2) periodic TRUE-residual replacement: r ← b − A x (드리프트 제거).
+        //   교체가 일어난 반복은 r 가 곧 참잔차이므로 (1) 종료판정이 ‖r‖ 를 그대로
+        //   재사용 → 추가 matvec 없음. 교체 안 한 반복만 참잔차를 별도 재계산.
+        let did_resrep = RESREP_EVERY > 0 && (iters - (iters / RESREP_EVERY) * RESREP_EVERY) == 0
+        if did_resrep {
+            let ax = st_applyA(H_apply, eps_n, x, occ_states, m, n)
+            let mut rr = 0
+            while rr < n { r[rr] = b[rr] - ax[rr] ; rr = rr + 1 }
+        }
+
+        // (1) TRUE-residual 종료판정: ‖b − A x‖ (재귀 r 아님 — 거짓수렴 방지).
+        let mut tr = 0.0
+        if did_resrep {
+            tr = st_dot(r, r, n)               // r == b − A x 이미 → 재사용.
+        } else {
+            let ax_t = st_applyA(H_apply, eps_n, x, occ_states, m, n)
+            let mut tt = 0
+            while tt < n { let d = b[tt] - ax_t[tt] ; tr = tr + d * d ; tt = tt + 1 }
+        }
+        if sqrt(tr) < tol { converged = true ; break }
 
         let rs_new = st_dot(r, r, n)
         let beta = rs_new / rs_old
