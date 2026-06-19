@@ -123,7 +123,19 @@ This file is the single governance SSOT (md 단일화) — edit directives here,
   microkernel(packing+register-tiling+캐시블로킹, roofline 80%+ 정답지 — 단순 FMA 플래그는
   ~10%에 그침) · LLM decode/weight 적재(boxing·KV-cache) → **llama.cpp·ggml**(mmap+contiguous
   unboxed tensor) · QFORGE el-ph |g|² 등 from-scratch 물리 재현 → **Quantum ESPRESSO** 중간값
-  덤프 대조 · 수치 커널 → **numpy·scipy·LAPACK**. **가드레일은 위 [self-host ≠ release 회귀]
+  덤프 대조 · 수치 커널 → **numpy·scipy·LAPACK**. **동등 도달은 출발점이지 종착점이 아니다
+  (parity→beyond-parity 탐색 · implement-to-wall 과 결합)** — reference 차용으로 **동등 수준
+  (parity)** 에 도달하면 거기서 멈추지 말고, **reference 가 못 가진 hexa 고유 강점으로 그것을
+  뛰어넘는(beyond-parity) 방향을 honest next round 로 탐색**한다. parity 는 "빠르게 벽까지
+  도달"하는 수단(추격자 비용 절감)이고, 추월이 진짜 목표다. **hexa 추월 레버**(reference 가
+  구조적으로 안 하는 것): ⓐ **byte-eq 결정성**(gen3≡gen4 fixpoint·검증가능 재현 — BLAS/ggml
+  은 비결정 reduction 허용) ⓑ **no-LLVM 직접 네이티브 emit**(codegen 이 커널을 직접 빚어
+  fusion/arena 특화 — 범용 라이브러리가 못 하는 호출경계 제거) ⓒ **device-resident·@cite 검증
+  학습**(flame/forge) ⓓ **도메인 융합**(예: GEMM+conv 단일 saturating 커널 — cuDNN/cuBLAS 가
+  못 주는 3rd option). 단 추월도 **측정 수치로 증명**(roofline %·GFLOP/s·byte-eq Δ — LLM
+  자가판정 금지·c2), filler 추월 주장 금지(g0). 즉: reference 로 parity 까지 빠르게 → 측정된
+  parity 확인 → reference 의 미탐색/비결정 영역을 hexa 강점으로 추월하는 r(n+1) 명명·진행.
+  **가드레일은 위 [self-host ≠ release 회귀]
   가 절대 상위**(reference 차용도 byteeq 3타깃 GREEN 전 머지 금지·비트변경은 opt-in 격리).
 
 ## Harness
