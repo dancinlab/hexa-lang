@@ -7838,6 +7838,13 @@ fn gen2_expr(node) {
                 }
             }
             if len(node.args) == 6 {
+                // gemm-perf r5 (BEYOND-PARITY): farr_matmul_bias(A,Ar,Ac,B,Bc,bias)
+                // -> C = A@B + bias (row-broadcast). The hexa direct-emit lever a
+                // standalone BLAS structurally cannot do: bias-add fused into the GEBP
+                // microkernel write-back (HEXA_OMP build; default = byte-id matmul+bias).
+                if name == "farr_matmul_bias" {
+                    return "hexa_farr_matmul_bias(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
+                }
                 // HEXA-FUSION L3 (BWD glue half · ⑤-bwd2): forge_dispatch_embedding_
                 // bwd_scatter(dx, ids, dtable, T, d, V) -> int rc. The
                 // nn_embedding_bwd_scatter host glue (dtable[tok·d+c] += dx[i·d+c],

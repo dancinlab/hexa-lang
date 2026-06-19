@@ -942,6 +942,8 @@ HexaVal hexa_farr_len(HexaVal h_v);                                    /* runtim
 HexaVal hexa_farr_free(HexaVal h_v);                                   /* runtime.c */
 HexaVal hexa_farr_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
                          HexaVal b_v, HexaVal bc_v);                    /* runtime.c — RFC 032 */
+HexaVal hexa_farr_matmul_bias(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
+                              HexaVal b_v, HexaVal bc_v, HexaVal bias_v); /* runtime.c — gemm-perf r5 bias-fused epilogue */
 HexaVal hexa_farr_copy(HexaVal src_v);                                 /* runtime.c — RFC 033 */
 /* FP32 forge mirror — same int-handle/HexaVal returns as the FP64 farr_*.
  * Without these prototypes a codegenned trainer.c (#include "runtime.h")
