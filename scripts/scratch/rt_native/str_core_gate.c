@@ -1,22 +1,25 @@
 /* str_core_gate.c — RT-NATIVE-ZEROC M4 str-core scan/compare C-differential gate (c2).
  *
- * Byte-eq oracle for the native public-string equality port
- * (stdlib/runtime/str_core.hexa::rt_str_eq_native) against the standalone
- * runtime.c C path (hexa_str_eq's hxlcl_strcmp(...)==0). The native body does the
- * SAME NUL-terminated byte walk in raw memory (__hx_ptr_load8 over each data
- * pointer); this gate proves the bool result is IDENTICAL to the C strcmp oracle
- * for: equal strings, prefix-differ, length-differ (one a prefix of the other),
- * the empty string, embedded-mid-difference, single-char, and long strings — and
- * that the end-to-end hexa_str_eq wrapper (compiled with -DHEXA_RT_STR_EQ_NATIVE)
- * agrees with the reference C strcmp for the same pairs.
+ * Byte-eq oracle for the native public-string scan/compare ports
+ * (stdlib/runtime/str_core.hexa::rt_str_eq_native + rt_str_starts_with_native,
+ * str r2 sh-str-scan) against the standalone runtime.c C path (hexa_str_eq's
+ * hxlcl_strcmp(...)==0 + rt_str_starts_with's hxlcl_strncmp(s,prefix,plen)==0).
+ * Each native body does the SAME NUL-terminated byte walk in raw memory
+ * (__hx_ptr_load8 over each data pointer); this gate proves the bool result is
+ * IDENTICAL to the C strcmp/strncmp oracles for: equal strings, prefix-differ,
+ * length-differ (one a prefix of the other), the empty string,
+ * embedded-mid-difference, single-char, and long strings — and that the
+ * end-to-end wrappers (compiled with -DHEXA_RT_STR_EQ_NATIVE +
+ * -DHEXA_RT_STR_STARTS_WITH_NATIVE) agree with the reference C for the same pairs.
  *
- * NO ALLOC: rt_str_eq_native is pure raw-byte read — this is the alloc-free
+ * NO ALLOC: both prims are pure raw-byte reads — this is the alloc-free
  * scan/compare surface (concat / substring / replace are the alloc lane's WALL,
  * not exercised here).
  *
  * Build (x86_64 / arm64, native str_core.o + standalone runtime.c):
  *   <aprime_cc> _drv --emit=obj --target=<t> -o str_core.o str_core.hexa
- *   cc -O2 -std=gnu11 -D_GNU_SOURCE -DHEXA_RT_STR_EQ_NATIVE=1 -I self \
+ *   cc -O2 -std=gnu11 -D_GNU_SOURCE -DHEXA_RT_STR_EQ_NATIVE=1 \
+ *      -DHEXA_RT_STR_STARTS_WITH_NATIVE=1 -I self \
  *      str_core_gate.c self/runtime.c str_core.o -o /tmp/strgate && /tmp/strgate ; echo $?
  *
  * Exit code = 23 on FULL pass (distinct sentinel); 1..N on the first failing
@@ -30,11 +33,13 @@
 #include <string.h>
 #include "runtime.h"
 
-/* native port (gen2-emitted object): two TAG_STR HexaVals → bool HexaVal. */
+/* native ports (gen2-emitted object): two TAG_STR HexaVals → bool HexaVal. */
 extern HexaVal rt_str_eq_native(HexaVal a, HexaVal b);
+extern HexaVal rt_str_starts_with_native(HexaVal s, HexaVal prefix);
 
-/* end-to-end C wrapper (returns int 0/1). */
+/* end-to-end C wrappers (return int 0/1). */
 int hexa_str_eq(HexaVal a, HexaVal b);
+int rt_str_starts_with(HexaVal s, HexaVal prefix);
 
 static int fails = 0, checks = 0;
 static void chk(int cond, const char* what) {
@@ -60,6 +65,28 @@ static void chk_pair(const char* a, const char* b) {
     /* end-to-end wrapper agreement (TAG_STR guard + intern fast-path + native body) */
     int wr = hexa_str_eq(va, vb);
     snprintf(buf, sizeof(buf), "hexa_str_eq(\"%s\",\"%s\") wrapper=%d ref=%d", a, b, wr, ref);
+    chk(wr == ref, buf);
+}
+
+/* Reference C oracle for starts_with: the EXACT semantics the C `#else` body
+ * produces — strncmp(s, prefix, strlen(prefix)) == 0. */
+static int c_oracle_sw(const char* s, const char* prefix) {
+    return strncmp(s, prefix, strlen(prefix)) == 0;
+}
+
+/* Drive native rt_str_starts_with_native + the reference oracle on (s, prefix)
+ * and assert agreement, then the end-to-end rt_str_starts_with wrapper. Distinct
+ * heap HexaVals via hexa_str. */
+static void chk_pair_sw(const char* s, const char* prefix) {
+    HexaVal vs = hexa_str(s);
+    HexaVal vp = hexa_str(prefix);
+    int nat = hexa_truthy(rt_str_starts_with_native(vs, vp)) ? 1 : 0;
+    int ref = c_oracle_sw(s, prefix);
+    char buf[200];
+    snprintf(buf, sizeof(buf), "rt_str_starts_with_native(\"%s\",\"%s\") native=%d ref=%d", s, prefix, nat, ref);
+    chk(nat == ref, buf);
+    int wr = rt_str_starts_with(vs, vp);
+    snprintf(buf, sizeof(buf), "rt_str_starts_with(\"%s\",\"%s\") wrapper=%d ref=%d", s, prefix, wr, ref);
     chk(wr == ref, buf);
 }
 
@@ -97,6 +124,33 @@ int main(void) {
         const char* u3 = "caf\xC3\xA8";   /* cafè — last byte differs */
         chk_pair(u1, u2);
         chk_pair(u1, u3);
+    }
+
+    /* PART C — starts_with oracle: native == reference strncmp across the cases.
+     * Covers empty prefix (always true), empty haystack, prefix==haystack,
+     * proper prefix, NON-prefix (first/mid/last byte differs), prefix LONGER than
+     * haystack (haystack NUL must abort the walk → false), and UTF-8 bytes. */
+    chk_pair_sw("", "");                     /* empty prefix of empty → true */
+    chk_pair_sw("hello", "");                /* empty prefix → true */
+    chk_pair_sw("", "h");                    /* non-empty prefix of empty → false */
+    chk_pair_sw("hello", "hello");           /* whole-string prefix → true */
+    chk_pair_sw("hello", "hell");            /* proper prefix → true */
+    chk_pair_sw("hello", "he");              /* short proper prefix → true */
+    chk_pair_sw("hello", "h");               /* single-char prefix → true */
+    chk_pair_sw("hello", "x");               /* first byte differs → false */
+    chk_pair_sw("hello", "hxllo");           /* mid byte differs → false */
+    chk_pair_sw("hello", "hellp");           /* last prefix byte differs → false */
+    chk_pair_sw("hell", "hello");            /* prefix LONGER than haystack → false */
+    chk_pair_sw("hello", "hellox");          /* prefix one byte too long → false */
+    chk_pair_sw("a", "a");                   /* single equal → true */
+    chk_pair_sw("a", "b");                   /* single differ → false */
+    chk_pair_sw("abcdefghijklmnopqrstuvwxyz", "abcdefghijklm");  /* long proper prefix → true */
+    chk_pair_sw("abcdefghijklmnopqrstuvwxyz", "abcdefghijklM");  /* long prefix last-differ → false */
+    {
+        const char* hay = "caf\xC3\xA9 latte";   /* "café latte" */
+        chk_pair_sw(hay, "caf\xC3\xA9");          /* UTF-8 multibyte prefix → true */
+        chk_pair_sw(hay, "caf\xC3\xA8");          /* UTF-8 last-byte differs → false */
+        chk_pair_sw(hay, "caf");                  /* ASCII-only prefix → true */
     }
 
     if (fails == 0) printf("[str_core_gate] GATE PASS — %d checks, 0 fails\n", checks);

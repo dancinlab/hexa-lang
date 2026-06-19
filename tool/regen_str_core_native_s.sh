@@ -49,19 +49,24 @@ emit_one() {
     "$APRIME" "$TMP/_drv.hexa" --emit=asm --target="$triple" -o "$raw" "$SRC" >/dev/null 2>&1
     local n; n="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?rt_str_eq_native' "$raw" || echo 0)"
     [ "$n" -ge 1 ] || { echo "[regen_str_core] ERROR: $triple emitted only $n/1 rt_str_eq_native" >&2; exit 1; }
+    # r2 (sh-str-scan): the seed now also carries rt_str_starts_with_native.
+    local nsw; nsw="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?rt_str_starts_with_native' "$raw" || echo 0)"
+    [ "$nsw" -ge 1 ] || { echo "[regen_str_core] ERROR: $triple emitted only $nsw/1 rt_str_starts_with_native" >&2; exit 1; }
     {
-        printf '// %s — FROZEN BOOTSTRAP SEED (RT-NATIVE leg B M4 STR — sh-construct-str).\n' "$(basename "$out")"
+        printf '// %s — FROZEN BOOTSTRAP SEED (RT-NATIVE leg B M4 STR — sh-construct-str + sh-str-scan).\n' "$(basename "$out")"
         printf '// GENERATED: tool/regen_str_core_native_s.sh — aprime_cc _drv.hexa --emit=asm\n'
         printf '//   --target=%s -o %s stdlib/runtime/str_core.hexa.\n' "$triple" "$(basename "$out")"
-        printf '//   Provides the str-core scan/compare half (rt_str_eq_native) as a native\n'
-        printf '//   raw-mem body (__hx_ptr_load8 NUL-stop byte walk over both data pointers,\n'
-        printf '//   byte-faithful to the C hxlcl_strcmp(...)==0). These intrinsics are\n'
-        printf '//   gen2-native-only (the hexat C-transpile bootstrap cannot lower them), so\n'
-        printf '//   the body enters the shipped runtime.a ONLY via this seed — the rt_hi /\n'
+        printf '//   Provides the str-core scan/compare prims (rt_str_eq_native +\n'
+        printf '//   rt_str_starts_with_native, str r2 sh-str-scan) as native raw-mem bodies\n'
+        printf '//   (__hx_ptr_load8 NUL-stop byte walks, byte-faithful to the C\n'
+        printf '//   hxlcl_strcmp(...)==0 / hxlcl_strncmp(s,prefix,plen)==0). These intrinsics\n'
+        printf '//   are gen2-native-only (the hexat C-transpile bootstrap cannot lower them),\n'
+        printf '//   so the bodies enter the shipped runtime.a ONLY via this seed — the rt_hi /\n'
         printf '//   array_core mechanism (resolve_native_str_core_seed).\n'
         printf '//   ABI: %s. External: NONE (fully self-contained).\n' "$abi"
-        printf '//   Lets stage_resolve_runtime_a define HEXA_RT_STR_EQ_NATIVE + ar this .o into\n'
-        printf '//   runtime.a so hexa_str_eq delegates to the native body.\n'
+        printf '//   Lets stage_resolve_runtime_a define HEXA_RT_STR_EQ_NATIVE +\n'
+        printf '//   HEXA_RT_STR_STARTS_WITH_NATIVE + ar this .o into runtime.a so hexa_str_eq /\n'
+        printf '//   rt_str_starts_with delegate to the native bodies.\n'
         sed -E -e 's#"[^"]*str_core\.hexa"#"stdlib/runtime/str_core.hexa"#g' \
                -e 's#^// source: .*str_core\.hexa#// source: stdlib/runtime/str_core.hexa#' "$raw"
     } > "$out"
@@ -74,10 +79,11 @@ emit_one() {
     esac
     if $CC $cc_extra -c "$s" -o "$o" 2>/dev/null; then
         local t; t="$( (nm "$o" 2>/dev/null || echo) | grep -cE ' T _?rt_str_eq_native')"
-        echo "[regen_str_core] $triple → $out ($n globl · $t T)"
+        local tsw; tsw="$( (nm "$o" 2>/dev/null || echo) | grep -cE ' T _?rt_str_starts_with_native')"
+        echo "[regen_str_core] $triple → $out (eq:$n globl/$t T · starts_with:$nsw globl/$tsw T)"
     else
         echo "[regen_str_core] WARN $triple: cross-assemble check skipped (no matching toolchain)" >&2
-        echo "[regen_str_core] $triple → $out ($n globl)"
+        echo "[regen_str_core] $triple → $out (eq:$n globl · starts_with:$nsw globl)"
     fi
 }
 
