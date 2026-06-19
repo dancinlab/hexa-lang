@@ -48,8 +48,8 @@ emit_one() {
     local triple="$1" out="$2" abi="$3"
     local raw="$TMP/raw.s"
     "$APRIME" "$TMP/_drv.hexa" --emit=asm --target="$triple" -o "$raw" "$SRC" >/dev/null 2>&1
-    local n; n="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?rt_array_(get|set|len|pop|shift)_native' "$raw" || echo 0)"
-    [ "$n" -ge 5 ] || { echo "[regen_array_core] ERROR: $triple emitted only $n/5 rt_array_*_native" >&2; exit 1; }
+    local n; n="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?rt_array_(get|set|len|pop|shift|truncate)_native' "$raw" || echo 0)"
+    [ "$n" -ge 6 ] || { echo "[regen_array_core] ERROR: $triple emitted only $n/6 rt_array_*_native" >&2; exit 1; }
     {
         printf '// %s — FROZEN BOOTSTRAP SEED (RT-NATIVE leg B M4 ARRAY-R4).\n' "$(basename "$out")"
         printf '// GENERATED: tool/regen_array_core_native_s.sh — aprime_cc _drv.hexa --emit=asm\n'
@@ -77,7 +77,7 @@ emit_one() {
         arm64-linux-gnu)  [ "$(uname -s)" = Darwin ] && cc_extra="-target aarch64-linux-gnu" ;;
     esac
     if $CC $cc_extra -c "$s" -o "$o" 2>/dev/null; then
-        local t; t="$( (nm "$o" 2>/dev/null || echo) | grep -cE ' T _?rt_array_(get|set|len|pop|shift)_native')"
+        local t; t="$( (nm "$o" 2>/dev/null || echo) | grep -cE ' T _?rt_array_(get|set|len|pop|shift|truncate)_native')"
         echo "[regen_array_core] $triple → $out ($n globl · $t T)"
     else
         echo "[regen_array_core] WARN $triple: cross-assemble check skipped (no matching toolchain)" >&2
