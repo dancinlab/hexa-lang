@@ -72,3 +72,44 @@ pub fn rt_str_eq_native(a: HexaVal, b: HexaVal) -> bool {
     }
     return false                                      // first mismatching byte
 }
+
+// rt_str_starts_with_native (str r2 — sh-str-scan): true when `s` begins with
+// `prefix`, byte-faithful to the C body's
+// `hxlcl_strncmp(HX_STR(s), HX_STR(prefix), HX_STRLEN(prefix)) == 0`. SAME
+// raw-mem template as rt_str_eq_native — a NUL-stop byte walk, but driven by the
+// PREFIX terminator (not a symmetric both-NUL stop): we consume prefix bytes
+// until the prefix's NUL, comparing each against the same-offset haystack byte.
+//
+// The C reference uses `strncmp(s, prefix, plen)`; here the prefix is its own
+// NUL-terminated buffer, so walking to the prefix's 0x00 is exactly `plen`
+// bytes. If the haystack is SHORTER, its NUL (read as int 0 via __hx_ptr_load8)
+// will never equal the corresponding non-NUL prefix byte → the mismatch branch
+// returns false (matching strncmp, which stops at s's NUL and reports !=). The
+// empty prefix (first byte NUL) returns true immediately — strncmp(...,0)==0.
+//
+// READ-ONLY / NO ALLOC, un-nested (1-op-per-temp, NESTING-SEGV guard), raw-int
+// leaf comparison via __hx_payload_eq ONLY — the IDENTICAL intrinsic set as
+// rt_str_eq_native (no __hx_payload_ne), so the body resolves under the same
+// proven gate. The C wrapper (rt_str_starts_with in runtime_core_emit.hexa)
+// keeps the TAG_STR guards; this body is the distinct-pointer byte walk it
+// delegates to.
+pub fn rt_str_starts_with_native(s: HexaVal, prefix: HexaVal) -> bool {
+    let ps = __hx_payload_add(s, 0)                  // char* of haystack
+    let pp = __hx_payload_add(prefix, 0)             // char* of prefix
+    let mut j = 0
+    let mut cp = __hx_ptr_load8(pp, 0)
+    let mut cs = __hx_ptr_load8(ps, 0)
+    // Walk while the prefix byte equals the haystack byte. Uses ONLY the
+    // __hx_payload_eq leaf (same intrinsic set as rt_str_eq_native — no _ne) so
+    // the body resolves under the identical proven gate.
+    while __hx_payload_eq(cp, cs) {
+        if __hx_payload_eq(cp, 0) { return true }    // prefix exhausted (both NUL here) → match
+        j = __hx_payload_add(j, 1)
+        cp = __hx_ptr_load8(pp, j)
+        cs = __hx_ptr_load8(ps, j)
+    }
+    // Loop exited because cp != cs. If the prefix had already ended (cp == 0)
+    // the bytes would have matched (haystack NUL) and we'd have returned above,
+    // so reaching here always means a genuine prefix-byte mismatch → no match.
+    return __hx_payload_eq(cp, 0)                     // true iff prefix ended exactly at the diff point
+}

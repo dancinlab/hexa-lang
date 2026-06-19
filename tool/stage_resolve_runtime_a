@@ -466,18 +466,21 @@ resolve_native_fs_core_seed() {
 # ── RT-NATIVE leg B M4 STR (sh-construct-str lane) — str-core scan/compare native seed → build/str_core_native.o ──
 # The str twin of resolve_native_array_core_seed: assemble build/str_core_native.o
 # from the arch-matched frozen self/native/str_core_*.s seed, and AUTO-ENABLE the
-# native public-string equality path (HEXA_RT_STR_EQ_NATIVE=1) so hexa_str_eq's
-# distinct-pointer byte-compare delegates to rt_str_eq_native (raw-mem
-# __hx_ptr_load8 NUL-stop walk — gen2-only intrinsics the hexat C-transpile
-# bootstrap cannot lower, hence a frozen .s seed, exactly like array/map/rt_str).
-# byte-identical (native == C strcmp), so it is default-eligible like array/map.
-# On an unknown target or assemble failure, HEXA_RT_STR_EQ_NATIVE stays unset and
-# the C strcmp body in runtime_core.c ships unchanged (the no-seed fallback —
-# #3583 lesson). Override by pre-setting HEXA_RT_STR_EQ_NATIVE=0 to force the C
-# path even when a seed exists.
+# native public-string scan/compare path so hexa_str_eq + rt_str_starts_with
+# delegate their distinct-pointer byte-compares to the raw-mem hexa-source bodies
+# (rt_str_eq_native / rt_str_starts_with_native, str r2 sh-str-scan — __hx_ptr_load8
+# NUL-stop walks — gen2-only intrinsics the hexat C-transpile bootstrap cannot
+# lower, hence a frozen .s seed, exactly like array/map/rt_str). byte-identical
+# (native == C strcmp/strncmp), so default-eligible like array/map. Both seed
+# symbols are exported by one .o, so the two macros (HEXA_RT_STR_EQ_NATIVE +
+# HEXA_RT_STR_STARTS_WITH_NATIVE) are enabled together when the seed assembles.
+# On an unknown target or assemble failure, both stay unset and the C
+# strcmp/strncmp bodies in runtime_core.c ship unchanged (the no-seed fallback —
+# #3583 lesson). Override per-prim by pre-setting HEXA_RT_STR_EQ_NATIVE=0 /
+# HEXA_RT_STR_STARTS_WITH_NATIVE=0 to force the C path even when a seed exists.
 resolve_native_str_core_seed() {
-    [ "${HEXA_RT_STR_EQ_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
-    [ -f build/str_core_native.o ] && { export HEXA_RT_STR_EQ_NATIVE=1; return 0; }
+    [ "${HEXA_RT_STR_EQ_NATIVE:-x}" = "0" ] && [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-x}" = "0" ] && return 0   # both opted out
+    [ -f build/str_core_native.o ] && { [ "${HEXA_RT_STR_EQ_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_EQ_NATIVE=1; [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_STARTS_WITH_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -493,19 +496,21 @@ resolve_native_str_core_seed() {
     esac
     [ -n "$seed" ] && [ -f "$seed" ] || return 0
     mkdir -p build
-    # SAFETY: only adopt the native path if the seed exports the scan/compare fn
+    # SAFETY: only adopt the native path if the seed exports BOTH scan/compare fns
     # the runtime_core.c delegation expects — a stale/partial seed would yield an
     # `undefined reference` at the app link. Counted from `.globl` (toolchain-free).
     local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?rt_str_eq_native' "$seed" 2>/dev/null || echo 0)"
-    if [ "${nsyms:-0}" -lt 1 ]; then
-        echo "[stage_resolve_runtime_a] RT-NATIVE STR: seed $seed exports only $nsyms/1 rt_str_eq_native — falling back to C #else path" >&2
+    local nsw; nsw="$(grep -cE '^\.globl[[:space:]]+_?rt_str_starts_with_native' "$seed" 2>/dev/null || echo 0)"
+    if [ "${nsyms:-0}" -lt 1 ] || [ "${nsw:-0}" -lt 1 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE STR: seed $seed exports eq:$nsyms/1 starts_with:$nsw/1 — falling back to C #else path" >&2
         return 0
     fi
     local s_tmp="build/str_core_seed.s"
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
     if $CC -c "$s_tmp" -o build/str_core_native.o 2>/dev/null; then
-        export HEXA_RT_STR_EQ_NATIVE=1
-        echo "[stage_resolve_runtime_a] RT-NATIVE STR: assembled build/str_core_native.o from $seed (TARGET=$tgt, $nsyms rt_str_eq_native syms) → native string-equality path"
+        [ "${HEXA_RT_STR_EQ_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_EQ_NATIVE=1
+        [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_STARTS_WITH_NATIVE=1
+        echo "[stage_resolve_runtime_a] RT-NATIVE STR: assembled build/str_core_native.o from $seed (TARGET=$tgt, eq:$nsyms starts_with:$nsw syms) → native string scan/compare path"
     else
         echo "[stage_resolve_runtime_a] RT-NATIVE STR: WARN assemble of $seed failed — falling back to C #else path" >&2
     fi
@@ -771,16 +776,23 @@ build_runtime_a_from_source() {
         extra_obj="$extra_obj build/fs_core_native.o"
         echo "[stage_resolve_runtime_a] RT-NATIVE FS-R1: HEXA_RT_FS_NATIVE=1; ar'ing native fs_core_native.o into runtime.a"
     fi
-    # RT-NATIVE STR (sh-construct-str lane, gated): when the str_core seed is
-    # active, define HEXA_RT_STR_EQ_NATIVE for the runtime.c compile (so
-    # hexa_str_eq's distinct-pointer compare takes the native arm) and ar
-    # build/str_core_native.o into runtime.a so rt_str_eq_native resolves. The C
-    # strcmp `#else` stays in runtime_core.c as the no-seed fallback.
-    local rt_str_def=""
+    # RT-NATIVE STR (sh-construct-str + sh-str-scan lanes, gated): when the
+    # str_core seed is active, define HEXA_RT_STR_EQ_NATIVE +
+    # HEXA_RT_STR_STARTS_WITH_NATIVE for the runtime.c compile (so hexa_str_eq's
+    # and rt_str_starts_with's distinct-pointer compares take the native arms) and
+    # ar build/str_core_native.o (which carries BOTH rt_str_eq_native +
+    # rt_str_starts_with_native) into runtime.a ONCE. The C strcmp/strncmp `#else`
+    # bodies stay in runtime_core.c as the no-seed fallback.
+    local rt_str_def="" rt_str_seeded=0
     if [ "${HEXA_RT_STR_EQ_NATIVE:-0}" = "1" ] && [ -f build/str_core_native.o ]; then
-        rt_str_def="-DHEXA_RT_STR_EQ_NATIVE=1"
+        rt_str_def="$rt_str_def -DHEXA_RT_STR_EQ_NATIVE=1"; rt_str_seeded=1
+    fi
+    if [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-0}" = "1" ] && [ -f build/str_core_native.o ]; then
+        rt_str_def="$rt_str_def -DHEXA_RT_STR_STARTS_WITH_NATIVE=1"; rt_str_seeded=1
+    fi
+    if [ "$rt_str_seeded" = "1" ]; then
         extra_obj="$extra_obj build/str_core_native.o"
-        echo "[stage_resolve_runtime_a] RT-NATIVE STR: HEXA_RT_STR_EQ_NATIVE=1; ar'ing native str_core_native.o into runtime.a"
+        echo "[stage_resolve_runtime_a] RT-NATIVE STR: defs [$rt_str_def]; ar'ing native str_core_native.o into runtime.a"
     fi
     # RT-NATIVE NUM (sh-num-native lane, gated): when the num_core seed is active,
     # define HEXA_RT_NUM_PARSE_INT_NATIVE for the runtime.c compile (so hexa_as_num's
