@@ -181,9 +181,41 @@ fi
 [ -f "$REPO/build/map_core_native.o" ] || fail map "build/map_core_native.o missing (no x86_64 seed); cc_native rt_map_get_native undefined" 2
 MAP_CORE_OBJ="$REPO/build/map_core_native.o"
 
+# ── RT-NATIVE Z2a: native rt_str_* (runtime_hi) seed object ────────────────────
+# The string-op family (rt_str_trim/split/contains_b/starts_with_b/ends_with_b/…,
+# #3465) was ported to hexa-source bodies; runtime_core.c then drops its
+# `#include "runtime_hi_gen.c"` C fallback and references rt_str_* EXTERNALLY
+# whenever the native rt_hi seed is adopted (stage_resolve_runtime_a's
+# HEXA_ZEROC_RT_HI=1 path). When that happened (build/rt_hi_native.o present),
+# this single-TU cc_native compile MUST link it too — else cc_native has
+# undefined rt_str_trim/split/… at link (the second link gap the array/map fix
+# uncovered). If build/rt_hi_native.o is ABSENT, runtime_core.c kept the C
+# runtime_hi_gen.c include (legacy path) and supplies rt_str_* itself — linking
+# nothing extra (and NOT double-defining). The seed has 14 rt_str_* globls; a
+# partial/stale seed would yield its own undefined-ref, so assemble only the
+# full one (mirrors stage_resolve_runtime_a's nsyms guard).
+RT_HI_OBJ=""
+RT_HI_SEED="$REPO/self/native/runtime_hi_x86_64.s"
+if [ ! -f "$REPO/build/rt_hi_native.o" ] && [ -f "$RT_HI_SEED" ]; then
+    NSYMS="$(grep -cE '^\.globl[[:space:]]+_?rt_str_' "$RT_HI_SEED" 2>/dev/null || echo 0)"
+    if [ "${NSYMS:-0}" -ge 14 ]; then
+        grep -vE '^// ' "$RT_HI_SEED" > "$WORK/rt_hi_seed.s" 2>/dev/null || cp "$RT_HI_SEED" "$WORK/rt_hi_seed.s"
+        $CC -c "$WORK/rt_hi_seed.s" -o "$REPO/build/rt_hi_native.o" 2>/dev/null \
+            && log "stage4: assembled build/rt_hi_native.o from $RT_HI_SEED ($NSYMS rt_str_* syms)"
+    else
+        log "stage4: runtime_hi seed exports only ${NSYMS}/14 rt_str_* — leaving C runtime_hi_gen.c path"
+    fi
+fi
+# Link the rt_hi seed iff it was produced (Z2a external mode). Absent → C path
+# already provides rt_str_*; linking it would duplicate-define.
+if [ -f "$REPO/build/rt_hi_native.o" ]; then
+    RT_HI_OBJ="$REPO/build/rt_hi_native.o"
+    log "stage4: linking native rt_hi seed (rt_str_* from build/rt_hi_native.o)"
+fi
+
 # ── stage 4: gcc compile the native compiler (native x86_64) ──────────────────
 log "stage4: gcc compile -> cc_native"
-CL_ERR="$($CC $GCC_FLAGS -I self -I . "$WORK/ap_post.c" "$ARRAY_CORE_OBJ" "$MAP_CORE_OBJ" -o "$WORK/cc_native" -lm -ldl 2>&1 | grep -iE 'error:|undefined' | head -10)"
+CL_ERR="$($CC $GCC_FLAGS -I self -I . "$WORK/ap_post.c" "$ARRAY_CORE_OBJ" "$MAP_CORE_OBJ" $RT_HI_OBJ -o "$WORK/cc_native" -lm -ldl 2>&1 | grep -iE 'error:|undefined' | head -10)"
 if [ -n "$CL_ERR" ] || [ ! -x "$WORK/cc_native" ]; then
     echo "$CL_ERR" >&2
     fail gcc "cc_native compile/link failed"
