@@ -1252,6 +1252,61 @@
           ]
         }
       ]
+    },
+    {
+      "id": "atlas",
+      "title": "Atlas — math-map + novelhunt campaign",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "거시(정수론) ↔ 양자(격자·모듈러형식·CFT·QEC) 수학 지도. 사람층 원장=atlas/README.md + atlas/hypotheses/H-*.md, 기계 SSOT=compiler/atlas/embedded.gen.hexa(@F verdict atom). 적재는 항상 양층(verify is ambient · CLAUDE.md)."
+        }
+      ],
+      "novelhunt": {
+        "goal": "거시↔양자 결정적 novel(Fields/필즈급) 후보를 정직 verify-gate로 발굴. 날조 금지(c2). LLM은 'breakthrough/필즈급' 선언 불가 — 🟧+ 후보는 형식증명(Lean)/전문가 검토로 에스컬레이션.",
+        "tiers": {
+          "🔵": "hexa verify PASS + closed-form (기계 검증)",
+          "🟢": "exact/머신정밀 classical (novel 아님)",
+          "🟡": "proven theorem · hexa verifier 미작성",
+          "🟧": "미기록·UNPROVEN coincidence (형식검토 대기)",
+          "❌": "falsified / 거짓"
+        },
+        "fold_policy": "verify is ambient: 🔵/🟢 hexa verify auto-fold; 빌드불가(mini)는 state/novel-dfs/fleet_fold.py로 @F atom PR-fold. 사람층 README + 기계층 embedded.gen.hexa 둘 다 적재.",
+        "fleet_lanes": {
+          "theta": "🧱 closed-classical (E8·Leech·isospectral·Niemeier; rank≥32 research-open)",
+          "modular": "🏁 DRAINED (1-dim weights {4,6,8,10,14}; k=12 cusp closes)",
+          "spectral": "🏁 DRAINED (Poisson→θ→ζ-FE·heat-kernel·von Mangoldt·func-det; 잔여 Hilbert–Pólya conjecture)",
+          "codes": "🏁 DRAINED (MacWilliams·Broué–Enguehard·Gleason 환동형 — codes↔modular 환수준 완성)",
+          "novelhunt-q": "🏁 DRAINED (SU(2)_k; (A′) folklore FALSIFIED)",
+          "partitions": "🏁 DRAINED (Euler·Ramanujan·Rogers–Ramanujan; 잔여 rank/crank·mock theta)",
+          "novelhunt-mod": "🏁 DRAINED r1 (weight-24 dim2·level-3: novel 0, 기존 Eisenstein 합동 환원·CM 반증; K₁₂ shell=검증Gram 부재 미산출)"
+        },
+        "candidates": [
+          {
+            "id": "H-NOVEL-1",
+            "tier": "🟢-negative",
+            "note": "level-1 weight≤12: novel 0 (차원적 닫힘)"
+          },
+          {
+            "id": "H-NOVEL-2",
+            "tier": "🟢-negative",
+            "note": "weight-24 dim2·level-3 dim≥2: novel 0 (기존 Eisenstein 합동 환원·CM 반증)"
+          },
+          {
+            "id": "H-NOVEL-3",
+            "tier": "🟢-folklore",
+            "note": "양자차원 Galois-trace=사면체수 FALSIFIED as novel (full-sum 오인)"
+          }
+        ],
+        "scoreboard": {
+          "novel_blue": 0,
+          "novel_orange_pending": 0,
+          "classical_atoms": 18,
+          "falsified": 1,
+          "status": "CAMPAIGN DRAINED (7/7 lanes) — 거시↔양자 novel 0건. 검증으로 입증된 정직 결론: weight≤24·level≤3 모듈러 영역 + 격자-theta·부호·분할·스펙트럼 vein 전부 차원적/구조적으로 닫힘(고전 강제). 남은 진짜 여지=검증된 외부 격자 Gram(K₁₂/BW₁₆/Λ₂₄, Sage/LMFDB) shell 산술 — LLM 단독 아닌 외부 데이터 모드.",
+          "honesty": "날조 0 · LLM breakthrough 선언 없음 · 음성도 검증으로 박제(c2)."
+        }
+      }
     }
   ]
 }
