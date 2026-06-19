@@ -48,8 +48,10 @@ emit_one() {
     local triple="$1" out="$2" abi="$3"
     local raw="$TMP/raw.s"
     "$APRIME" "$TMP/_drv.hexa" --emit=asm --target="$triple" -o "$raw" "$SRC" >/dev/null 2>&1
-    local n; n="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?rt_array_(get|set|len|pop|shift|truncate)_native' "$raw" || echo 0)"
-    [ "$n" -ge 6 ] || { echo "[regen_array_core] ERROR: $triple emitted only $n/6 rt_array_*_native" >&2; exit 1; }
+    # 6 read-half element fns + 1 alloc-bearing arena bridge (sh-array-write:
+    # rt_array_arena_alloc_items_native → native hexa_arena_alloc) = 7 globl.
+    local n; n="$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?rt_array_(get|set|len|pop|shift|truncate|arena_alloc_items)_native' "$raw" || echo 0)"
+    [ "$n" -ge 7 ] || { echo "[regen_array_core] ERROR: $triple emitted only $n/7 rt_array_*_native" >&2; exit 1; }
     {
         printf '// %s — FROZEN BOOTSTRAP SEED (RT-NATIVE leg B M4 ARRAY-R4).\n' "$(basename "$out")"
         printf '// GENERATED: tool/regen_array_core_native_s.sh — aprime_cc _drv.hexa --emit=asm\n'
@@ -57,12 +59,15 @@ emit_one() {
         printf '//   Provides the array-core READ-half (rt_array_get_native / rt_array_set_native /\n'
         printf '//   rt_array_len_native / rt_array_pop_native) as native raw-mem bodies\n'
         printf '//   (__hx_ptr_load64/store64 over the HexaArr descriptor + __hx_make_val tag\n'
-        printf '//   re-stamp). These intrinsics are gen2-native-only (the hexat C-transpile\n'
-        printf '//   bootstrap cannot lower them), so the bodies enter the shipped runtime.a ONLY\n'
-        printf '//   via this seed — the rt_hi mechanism (resolve_native_rt_hi_seed / Z2a).\n'
-        printf '//   ABI: %s. External: hexa_to_int (runtime.c).\n' "$abi"
-        printf '//   Lets stage_resolve_runtime_a define HEXA_RT_ARRAY_NATIVE + ar this .o into\n'
-        printf '//   runtime.a so hexa_array_get/set delegate to the native bodies.\n'
+        printf '//   re-stamp), PLUS the alloc-bearing arena bridge rt_array_arena_alloc_items_native\n'
+        printf '//   (sh-array-write "alloc not a wall": n*16 bytes via the already-native\n'
+        printf '//   hexa_arena_alloc — self/rt/alloc.hexa). These intrinsics are gen2-native-only\n'
+        printf '//   (the hexat C-transpile bootstrap cannot lower them), so the bodies enter the\n'
+        printf '//   shipped runtime.a ONLY via this seed — the rt_hi mechanism (resolve_native_rt_hi_seed / Z2a).\n'
+        printf '//   ABI: %s. External: hexa_to_int (runtime.c) + hexa_arena_alloc (alloc seed).\n' "$abi"
+        printf '//   Lets stage_resolve_runtime_a define HEXA_RT_ARRAY_NATIVE (+ HEXA_RT_ARRAY_ARENA_NATIVE\n'
+        printf '//   when the alloc seed is native) + ar this .o into runtime.a so hexa_array_get/set\n'
+        printf '//   delegate to the native bodies + hexa_array_arena_alloc_items uses the native arena.\n'
         # Normalize the `.file` quoted path AND the unquoted `// source: <abspath>`
         # comment (emitted by some backends) so the frozen seed is byte-stable and
         # host-independent (no /home/<user> path leaks into the committed artifact).
@@ -77,7 +82,7 @@ emit_one() {
         arm64-linux-gnu)  [ "$(uname -s)" = Darwin ] && cc_extra="-target aarch64-linux-gnu" ;;
     esac
     if $CC $cc_extra -c "$s" -o "$o" 2>/dev/null; then
-        local t; t="$( (nm "$o" 2>/dev/null || echo) | grep -cE ' T _?rt_array_(get|set|len|pop|shift|truncate)_native')"
+        local t; t="$( (nm "$o" 2>/dev/null || echo) | grep -cE ' T _?rt_array_(get|set|len|pop|shift|truncate|arena_alloc_items)_native')"
         echo "[regen_array_core] $triple → $out ($n globl · $t T)"
     else
         echo "[regen_array_core] WARN $triple: cross-assemble check skipped (no matching toolchain)" >&2
