@@ -589,7 +589,15 @@ jobs:
         with:
           cuda: '12.6.2'
           method: 'network'
-          sub-packages: '["nvcc", "cudart", "cublas", "cublas-dev", "cudart-dev"]'
+          # `sub-packages` prepends `cuda-` (→ cuda-nvcc-12-6, cuda-cudart-12-6,
+          # cuda-cudart-dev-12-6) — those resolve. cuBLAS is the exception: the
+          # NVIDIA cuda-ubuntu2204 repo ships it as `libcublas-12-6` /
+          # `libcublas-dev-12-6` (NO `cuda-` prefix), so `cublas`/`cublas-dev` in
+          # sub-packages mapped to the nonexistent `cuda-cublas-12-6` →
+          # "E: Unable to locate package" (Jimver issue #371). cuBLAS therefore
+          # goes through `non-cuda-sub-packages` (no prefix → libcublas-12-6).
+          sub-packages: '["nvcc", "cudart", "cudart-dev"]'
+          non-cuda-sub-packages: '["libcublas", "libcublas-dev"]'
 
       - name: Probe CUDA toolkit (build-only — no GPU on CI)
         shell: bash
