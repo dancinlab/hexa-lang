@@ -784,6 +784,10 @@ fn main() {
         i = i + 1
     }
     if start < 0 { start = 1 }
+    // Skip a leading "--" separator (present when invoked via
+    // `hexa run stdlib/stdlib_cli.hexa -- <sub> ...`); the builtin path
+    // never includes it, so this is harmless there.
+    if start < n && argv[start] == "--" { start = start + 1 }
 
     let mut sub = ""
     if start < n { sub = argv[start] }
