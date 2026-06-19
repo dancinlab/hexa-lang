@@ -959,4 +959,58 @@ _Ldd24_rt_parse_int_native_bb46:
     movz x0, #0 // __hx_payload_sub: TAG_INT
     add x15, sp, #1920 // hv frame base
     stp x0, x1, [x15] // hv store L120
-    add x15, sp, #1920 // hv
+    add x15, sp, #1920 // hv frame base
+    ldp x0, x1, [x15] // hv load L120
+    add x15, sp, #1936 // hv frame base
+    stp x0, x1, [x15] // hv store L121
+    add x15, sp, #1936 // hv frame base
+    ldp x0, x1, [x15] // hv load L121
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #1 // hv const_int val
+    sub x1, x1, x3 // __hx_payload_sub: x1 = a.pl sub b.pl
+    movz x0, #0 // __hx_payload_sub: TAG_INT
+    add x15, sp, #1952 // hv frame base
+    stp x0, x1, [x15] // hv store L122
+    add x15, sp, #1952 // hv frame base
+    ldp x0, x1, [x15] // hv load L122
+    add x15, sp, #1968 // hv frame base
+    stp x0, x1, [x15] // hv store L123
+    add x15, sp, #1968 // hv frame base
+    ldp x0, x1, [x15] // hv load L123
+    add sp, sp, #2032 // sp adj
+    ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
+    ret // return
+_Ldd24_rt_parse_int_native_bb47:
+    movz x0, #0 // hv const_int: TAG_INT
+    movz x1, #65535 // imm 0-15
+    movk x1, #65535, lsl #16 // imm 16-31
+    movk x1, #65535, lsl #32 // imm 32-47
+    movk x1, #32767, lsl #48 // imm 48-63
+    add sp, sp, #2032 // sp adj
+    ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
+    ret // return
+_Ldd24_rt_parse_int_native_bb48:
+    movz x0, #0 // hv const_int: TAG_INT
+    movz x1, #0 // hv const_int val
+    add x15, sp, #912 // hv frame base
+    ldp x2, x3, [x15] // hv load L57
+    sub x1, x1, x3 // __hx_payload_sub: x1 = a.pl sub b.pl
+    movz x0, #0 // __hx_payload_sub: TAG_INT
+    add x15, sp, #2016 // hv frame base
+    stp x0, x1, [x15] // hv store L126
+    add x15, sp, #2016 // hv frame base
+    ldp x0, x1, [x15] // hv load L126
+    add sp, sp, #2032 // sp adj
+    ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
+    ret // return
+_Ldd24_rt_parse_int_native_bb49:
+    add x15, sp, #912 // hv frame base
+    ldp x0, x1, [x15] // hv load L57
+    add sp, sp, #2032 // sp adj
+    ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
+    ret // return
+.section .hexa.cap,"",@progbits
+_hexa_cap_manifest:
+.section .hexa.abi,"",@progbits
+_hexa_abi_stamp:
+    .byte 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
