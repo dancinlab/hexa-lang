@@ -175,8 +175,25 @@ install_hexa() {
     # name and place a thin shim at $HX_BIN/hexa that exec's it with an
     # absolute argv[0]. Mirrors the source-tree `hexa` → `hexa.real` shim.
     install -m 0755 "$src/hexa" "$HX_BIN/hexa.real"
+    # standalone-rtlink: the shim exports HEXA_PREBUILT_RUNTIME at the persisted
+    # native-seed runtime.a ($HX_BIN/build/runtime.a, dropped by install_src's
+    # stage_resolve_runtime_a step) so a consumer `hexa build`/`run` in a FRESH
+    # shell links that archive — without it the shipped binary compiles a
+    # content-hash runtime.<sha>.o from `clang -c runtime.c` which, after the
+    # emitter-regen declared rt_{array,map}_*_native extern, can no longer
+    # resolve those symbols (undefined reference at the app link). This is the
+    # ONLY channel that reaches the CURRENTLY-shipped binary (its
+    # resolve_prebuilt_runtime() already honors the env var; the env-free
+    # <hxroot>/build/runtime.a fallback only lands in a future binary). Guards:
+    # respect a user-set HEXA_PREBUILT_RUNTIME (do not override), and only export
+    # when the archive actually exists (install_src may have failed / been skipped
+    # — then fall through to the legacy content-hash path with the unpatched
+    # frozen seed, no regression).
     cat > "$HX_BIN/hexa" <<EOF
 #!/bin/bash
+if [ -z "\${HEXA_PREBUILT_RUNTIME:-}" ] && [ -f "$HX_BIN/build/runtime.a" ]; then
+    export HEXA_PREBUILT_RUNTIME="$HX_BIN/build/runtime.a"
+fi
 exec "$HX_BIN/hexa.real" "\$@"
 EOF
     chmod 0755 "$HX_BIN/hexa"
