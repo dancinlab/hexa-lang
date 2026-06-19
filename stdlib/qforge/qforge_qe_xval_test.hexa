@@ -16,8 +16,14 @@
 // el-ph verdict records in the demiurge repo (exports/material_discovery/):
 //   Nb   : rtsc_nb_dft_elph_ambient_proof_20260522.json  (λ=1.171 ω_log=193.0K
 //          → Tc 16.8/14.8 K @ μ*=0.10/0.13; ambient elemental BCS anchor)
-//   CaH6 : rtsc_cah6_dft_4x4x4q_textbook_proof_20260524.json (λ=4.376
-//          ω_log=1236.4K → 255.1/245.1 K; clathrate, ~150 GPa)
+//   CaH6 : rtsc_cah6_dft_4x4x4q_textbook_proof_20260524.json (4×4×4 q-mesh,
+//          PRIMARY broad σ=0.015 Ry: λ_BZ=4.376 ω_log=1236.4K → 255.1/245.1 K;
+//          clathrate, ~150 GPa). NB: λ_BZ is broadening-dependent — the SAME
+//          record's ladder (results_by_broadening) gives σ=0.020→4.193,
+//          0.025→3.717, 0.030→3.403. The headline "4.376" is the σ=0.015 point
+//          ONLY; cross-val must compare at a MATCHED broadening, not against the
+//          tightest-σ single value (the QFORGE bare 4×4×4 λ=4.137 sits at QE's
+//          σ≈0.021 Ry, i.e. rel-ε −1.35% vs QE@0.020, not −5.47% vs QE@0.015).
 //   H3S  : rtsc_h3s_dft_6x6x6q_textbook_proof_20260522.json  (λ=2.619
 //          ω_log=1154.3K → 194.8/184.3 K; Im-3m, 200 GPa, Drozdov-repro)
 //   YH10 : rtsc_yh10_dft_elph_20260528.json (PRIMARY broad 0.02 Ry: λ=2.8197
