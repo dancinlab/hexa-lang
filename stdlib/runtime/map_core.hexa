@@ -139,3 +139,68 @@ pub fn rt_map_contains_native(m: HexaVal, keyp: HexaVal) -> HexaVal {
     }
     return __hx_make_val(0, 0)                            // not found
 }
+
+// rt_map_set_inplace_native: the CONSTRUCT-half write twin (M4 map-construct r1).
+// Ports ONLY the alloc-free in-place UPDATE branch of hexa_map_set_impl — the
+// `si >= 0` (key-already-present) case: overwrite the stored value in BOTH the
+// hash-indexed vals[idx] AND the insertion-order order_vals[order_idx] (the
+// ROI-24 O(1) cached-order-index update), exactly like the C
+//   t->vals[si] = val;  t->order_vals[t->slots[si].order_idx] = val;
+// This is the map analogue of rt_array_set_native (alloc-free raw-mem slot
+// write). Returns a TAG_INT {0,1}: 1 = key found + value written in place (C
+// caller returns m), 0 = key absent (C caller falls through to the INSERT path —
+// hxlcl_strdup + load-factor hmap_grow + order-array realloc + len bump, which
+// stays in C as the irreducible allocator/intern floor, exactly as array_push /
+// array_new stay in C while only the in-place array set is native).
+//
+// LAYOUT (in addition to the read-half offsets, locked by map_core_gate.c):
+//   HexaMapSlot { key @0; hash @8 (u32); order_idx @12 (int) }  stride 16
+//   HexaMapTable { slots @0; vals @8; ht_cap @16(+pad); order_keys @24;
+//                  order_vals @32; len @40; order_cap @44; from_arena @48 }
+//   vals[]/order_vals[] stride = sizeof(HexaVal) = 16: tag @+0, payload @+8.
+// All raw-int leaves, un-nested (the codegen nested-intrinsic clobber note from
+// the read-half applies identically — one op per temp).
+pub fn rt_map_set_inplace_native(m: HexaVal, keyp: HexaVal, val: HexaVal) -> HexaVal {
+    let map_ptr = __hx_payload_add(m, 0)                 // HexaMap*
+    let t = __hx_ptr_load64(map_ptr, 0)                  // HexaMap.tbl @0
+    let slots = __hx_ptr_load64(t, 0)                    // HexaMapTable.slots @0
+    let vals = __hx_ptr_load64(t, 8)                     // HexaMapTable.vals @8
+    let order_vals = __hx_ptr_load64(t, 32)              // HexaMapTable.order_vals @32
+    let cap_raw = __hx_ptr_load64(t, 16)                 // ht_cap @16 (+ pad)
+    let ht_cap = __hx_payload_and(cap_raw, 4294967295)   // low 32b
+    let h = rt_map_fnv1a_native(keyp)
+    let mask = __hx_payload_sub(ht_cap, 1)
+    let mut idx = __hx_payload_and(h, mask)
+    let mut steps = 0
+    let vtag = __hx_tag(val)
+    let vpay = __hx_payload_add(val, 0)
+    while __hx_payload_lt(steps, ht_cap) {
+        let soff = __hx_payload_mul(idx, 16)             // HexaMapSlot @ idx
+        let slot = __hx_payload_add(slots, soff)
+        let slot_key = __hx_ptr_load64(slot, 0)          // .key @0
+        if __hx_payload_eq(slot_key, 0) { return __hx_make_val(0, 0) }  // empty → absent
+        let hash_raw = __hx_ptr_load64(slot, 8)          // .hash @8 (u32 + order_idx packed)
+        let slot_hash = __hx_payload_and(hash_raw, 4294967295)
+        if __hx_payload_eq(slot_hash, h) {
+            let cmp = rt_map_strcmp0_native(slot_key, keyp)
+            if __hx_payload_eq(cmp, 0) {
+                // vals[idx] = val  (tag @+0, payload @+8)
+                let voff = __hx_payload_mul(idx, 16)
+                let voff8 = __hx_payload_add(voff, 8)
+                __hx_ptr_store64(vals, voff, vtag)
+                __hx_ptr_store64(vals, voff8, vpay)
+                // order_vals[slot.order_idx] = val  (ROI-24 cached index @ slot+12)
+                let oi = __hx_ptr_load32(slot, 12)       // HexaMapSlot.order_idx @+12 (int32)
+                let ooff = __hx_payload_mul(oi, 16)
+                let ooff8 = __hx_payload_add(ooff, 8)
+                __hx_ptr_store64(order_vals, ooff, vtag)
+                __hx_ptr_store64(order_vals, ooff8, vpay)
+                return __hx_make_val(0, 1)               // found + written in place
+            }
+        }
+        let nxt = __hx_payload_add(idx, 1)
+        idx = __hx_payload_and(nxt, mask)
+        steps = __hx_payload_add(steps, 1)
+    }
+    return __hx_make_val(0, 0)                            // absent (insert in C)
+}

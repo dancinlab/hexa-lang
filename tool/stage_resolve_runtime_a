@@ -336,12 +336,18 @@ resolve_native_map_core_seed() {
     esac
     [ -n "$seed" ] && [ -f "$seed" ] || return 0
     mkdir -p build
-    # SAFETY: only adopt the native path if the seed exports ALL 4 probe fns
-    # the runtime_core.c delegation expects — a stale/partial seed would yield an
+    # SAFETY: only adopt the native path if the seed exports ALL the rt_map_*_native
+    # fns the runtime_core.c delegation expects — a stale/partial seed would yield an
     # `undefined reference` at the app link. Counted from `.globl` (toolchain-free).
+    # The 4 READ-half probes (get/fnv1a/strcmp0/contains, map-r3/r4) PLUS the
+    # CONSTRUCT-half in-place write (set_inplace, map-construct r1). A pre-construct
+    # seed that lacks set_inplace fails this check → falls back to the C #else path
+    # (release-safe: a not-yet-regenerated seed never link-breaks hexa_map_set_impl,
+    # which references rt_map_set_inplace_native only under -DHEXA_RT_MAP_NATIVE).
     local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?rt_map_(get|fnv1a|strcmp0|contains)_native' "$seed" 2>/dev/null || echo 0)"
-    if [ "${nsyms:-0}" -lt 4 ]; then
-        echo "[stage_resolve_runtime_a] RT-NATIVE MAP-R3: seed $seed exports only $nsyms/4 rt_map_*_native — falling back to C #else path" >&2
+    local ninpl; ninpl="$(grep -cE '^\.globl[[:space:]]+_?rt_map_set_inplace_native' "$seed" 2>/dev/null || echo 0)"
+    if [ "${nsyms:-0}" -lt 4 ] || [ "${ninpl:-0}" -lt 1 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE MAP: seed $seed exports $nsyms/4 read + $ninpl/1 set_inplace rt_map_*_native — falling back to C #else path (seed needs regen via tool/regen_map_core_native_s.sh)" >&2
         return 0
     fi
     local s_tmp="build/map_core_seed.s"
@@ -351,6 +357,106 @@ resolve_native_map_core_seed() {
         echo "[stage_resolve_runtime_a] RT-NATIVE MAP-R3: assembled build/map_core_native.o from $seed (TARGET=$tgt, $nsyms rt_map_*_native syms) → native map probe path"
     else
         echo "[stage_resolve_runtime_a] RT-NATIVE MAP-R3: WARN assemble of $seed failed — falling back to C #else path" >&2
+    fi
+    rm -f "$s_tmp"
+}
+
+# ── RT-NATIVE leg B M4 INTERN-R1 — intern-core READ-half native seed → build/intern_core_native.o ──
+# The string-intern twin of resolve_native_map_core_seed: assemble
+# build/intern_core_native.o from the arch-matched frozen self/native/intern_core_*.s
+# seed (intern_core.hexa::rt_intern_find_native + rt_intern_strcmp0_native — the
+# open-addressing find probe over HexaInternTable's char** buckets + uint32_t*
+# hashes, byte-exact vs the C lookup loop), and AUTO-ENABLE HEXA_RT_INTERN_NATIVE=1
+# so hexa_intern's find half delegates to the native body. The C insert/grow WRITE
+# half + length-cap + lazy-init + stats stay C-side; only the alloc-free probe is
+# delegated (map-r3 #else pattern). On any seed-missing / assemble failure,
+# HEXA_RT_INTERN_NATIVE stays unset and the C lookup loop in runtime_core.c runs.
+# Set HEXA_RT_INTERN_NATIVE=0 to force the C path even when a seed exists.
+resolve_native_intern_core_seed() {
+    [ "${HEXA_RT_INTERN_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
+    [ -f build/intern_core_native.o ] && { export HEXA_RT_INTERN_NATIVE=1; return 0; }
+    local seed="" tgt="${TARGET:-}"
+    tgt="${tgt%-musl}"
+    [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
+        "Darwin arm64") tgt="darwin-arm64" ;;
+        "Linux x86_64") tgt="linux-x86_64" ;;
+        "Linux aarch64"|"Linux arm64") tgt="linux-arm64" ;;
+    esac
+    case "$tgt" in
+        darwin-arm64) seed="self/native/intern_core_arm64.s" ;;
+        linux-x86_64) seed="self/native/intern_core_x86_64.s" ;;
+        linux-arm64)  seed="self/native/intern_core_arm64-linux.s" ;;
+        *)            seed="" ;;   # unknown → C #else path
+    esac
+    [ -n "$seed" ] && [ -f "$seed" ] || return 0
+    mkdir -p build
+    # SAFETY: only adopt the native path if the seed exports BOTH probe fns the
+    # runtime_core.c delegation expects — a stale/partial seed would yield an
+    # `undefined reference` at the app link. Counted from `.globl` (toolchain-free).
+    local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?rt_intern_(find|strcmp0)_native' "$seed" 2>/dev/null || echo 0)"
+    if [ "${nsyms:-0}" -lt 2 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE INTERN-R1: seed $seed exports only $nsyms/2 rt_intern_*_native — falling back to C #else path" >&2
+        return 0
+    fi
+    local s_tmp="build/intern_core_seed.s"
+    grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
+    if $CC -c "$s_tmp" -o build/intern_core_native.o 2>/dev/null; then
+        export HEXA_RT_INTERN_NATIVE=1
+        echo "[stage_resolve_runtime_a] RT-NATIVE INTERN-R1: assembled build/intern_core_native.o from $seed (TARGET=$tgt, $nsyms rt_intern_*_native syms) → native intern probe path"
+    else
+        echo "[stage_resolve_runtime_a] RT-NATIVE INTERN-R1: WARN assemble of $seed failed — falling back to C #else path" >&2
+    fi
+    rm -f "$s_tmp"
+}
+
+# ── RT-NATIVE leg B FS-R1 — FS-core WRITE-half native seed → build/fs_core_native.o ──
+# The FS-write twin of resolve_native_array_core_seed: assemble build/fs_core_native.o
+# from the arch-matched frozen self/native/fs_core_*.s seed, and AUTO-ENABLE the
+# native FS write path (HEXA_RT_FS_NATIVE=1) so rt_write_bytes / rt_write_bytes_append
+# delegate to the native syscall bodies (fs_write_all_native / fs_append_all_native —
+# open(O_WRONLY|O_CREAT|O_TRUNC|O_APPEND)+write+close over __hx_syscall6, intrinsics the
+# hexat C-transpile bootstrap cannot lower — hence a frozen .s seed, exactly like
+# array_core). All 3 production targets carry a seed (darwin-arm64 + linux-x86_64 +
+# linux-arm64). On a seedless/unknown target, or assemble failure, HEXA_RT_FS_NATIVE
+# stays unset and the C fopen/fwrite write bodies in runtime_core.c ship unchanged
+# (the no-seed `#else` fallback is RETAINED — #3583 lesson, soak-gated separately).
+# Override by pre-setting HEXA_RT_FS_NATIVE=0 to force the C path even when a seed exists.
+resolve_native_fs_core_seed() {
+    [ "${HEXA_RT_FS_NATIVE:-x}" = "0" ] && return 0   # explicit opt-out
+    [ -f build/fs_core_native.o ] && { export HEXA_RT_FS_NATIVE=1; return 0; }
+    local seed="" tgt="${TARGET:-}"
+    # The static-musl edge build sets TARGET=linux-x86_64-musl. The frozen native
+    # .s seeds are ELF-object/x86_64-ABI artifacts shared by glibc and musl (same
+    # SysV ABI, same ELF format), so map the `-musl` variant onto its base target.
+    tgt="${tgt%-musl}"
+    [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
+        "Darwin arm64") tgt="darwin-arm64" ;;
+        "Linux x86_64") tgt="linux-x86_64" ;;
+        "Linux aarch64"|"Linux arm64") tgt="linux-arm64" ;;
+    esac
+    case "$tgt" in
+        darwin-arm64) seed="self/native/fs_core_arm64.s" ;;
+        linux-x86_64) seed="self/native/fs_core_x86_64.s" ;;
+        linux-arm64)  seed="self/native/fs_core_arm64-linux.s" ;;
+        *)            seed="" ;;   # unknown → C #else path
+    esac
+    [ -n "$seed" ] && [ -f "$seed" ] || return 0
+    mkdir -p build
+    # SAFETY: only adopt the native path if the seed exports BOTH write fns the
+    # runtime_core.c delegation expects — a stale/partial seed would yield an
+    # `undefined reference` at the app link. Counted from `.globl` (toolchain-free).
+    local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?fs_(write|append)_all_native' "$seed" 2>/dev/null || echo 0)"
+    if [ "${nsyms:-0}" -lt 2 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE FS-R1: seed $seed exports only $nsyms/2 fs_*_all_native — falling back to C #else path" >&2
+        return 0
+    fi
+    local s_tmp="build/fs_core_seed.s"
+    grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
+    if $CC -c "$s_tmp" -o build/fs_core_native.o 2>/dev/null; then
+        export HEXA_RT_FS_NATIVE=1
+        echo "[stage_resolve_runtime_a] RT-NATIVE FS-R1: assembled build/fs_core_native.o from $seed (TARGET=$tgt, $nsyms fs_*_all_native syms) → native FS write path"
+    else
+        echo "[stage_resolve_runtime_a] RT-NATIVE FS-R1: WARN assemble of $seed failed — falling back to C #else path" >&2
     fi
     rm -f "$s_tmp"
 }
@@ -507,6 +613,24 @@ build_runtime_a_from_source() {
         extra_obj="$extra_obj build/map_core_native.o"
         echo "[stage_resolve_runtime_a] RT-NATIVE MAP-R3: HEXA_RT_MAP_NATIVE=1; ar'ing native map_core_native.o into runtime.a"
     fi
+    local rt_intern_def=""
+    if [ "${HEXA_RT_INTERN_NATIVE:-0}" = "1" ] && [ -f build/intern_core_native.o ]; then
+        rt_intern_def="-DHEXA_RT_INTERN_NATIVE=1"
+        extra_obj="$extra_obj build/intern_core_native.o"
+        echo "[stage_resolve_runtime_a] RT-NATIVE INTERN-R1: HEXA_RT_INTERN_NATIVE=1; ar'ing native intern_core_native.o into runtime.a"
+    fi
+    # RT-NATIVE FS-R1 (gated): when the fs_core seed is active, define
+    # HEXA_RT_FS_NATIVE for the runtime.c compile (so rt_write_bytes /
+    # rt_write_bytes_append take the native syscall arm) and ar
+    # build/fs_core_native.o into runtime.a so its fs_*_all_native symbols
+    # resolve. The C fopen/fwrite write bodies stay in runtime_core.c as the
+    # no-seed `#else` fallback (#3583 — never drop the fallback; dead on seed targets).
+    local rt_fs_def=""
+    if [ "${HEXA_RT_FS_NATIVE:-0}" = "1" ] && [ -f build/fs_core_native.o ]; then
+        rt_fs_def="-DHEXA_RT_FS_NATIVE=1"
+        extra_obj="$extra_obj build/fs_core_native.o"
+        echo "[stage_resolve_runtime_a] RT-NATIVE FS-R1: HEXA_RT_FS_NATIVE=1; ar'ing native fs_core_native.o into runtime.a"
+    fi
     # RT-NATIVE STR (sh-construct-str lane, gated): when the str_core seed is
     # active, define HEXA_RT_STR_EQ_NATIVE for the runtime.c compile (so
     # hexa_str_eq's distinct-pointer compare takes the native arm) and ar
@@ -526,7 +650,7 @@ build_runtime_a_from_source() {
         extra_obj="$extra_obj build/alloc_syscall_native.o"
         echo "[stage_resolve_runtime_a] RT-NATIVE ALLOC-RB: HEXA_RT_ALLOC_NATIVE=1; ar'ing native alloc_syscall_native.o into runtime.a"
     fi
-    $CC $CFLAGS $rt_array_def $rt_map_def $rt_str_def $rt_alloc_def -I self -c self/runtime.c -o build/runtime.o
+    $CC $CFLAGS $rt_array_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_alloc_def -I self -c self/runtime.c -o build/runtime.o
     ar rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     echo "$RA"
@@ -541,6 +665,14 @@ resolve_native_rt_hi_seed
 # + linux-arm64). Unknown targets keep the C element path.
 resolve_native_array_core_seed
 resolve_native_map_core_seed
+# RT-NATIVE INTERN-R1: assemble the arch-matched native intern_core seed (sets
+# HEXA_RT_INTERN_NATIVE=1 on all 3 production targets). Unknown targets / missing
+# seed keep the C intern lookup loop.
+resolve_native_intern_core_seed
+# RT-NATIVE FS-R1: assemble the arch-matched native fs_core WRITE-half seed (sets
+# HEXA_RT_FS_NATIVE=1 on all 3 production targets). Unknown targets keep the C
+# fopen/fwrite write path (the retained `#else` fallback).
+resolve_native_fs_core_seed
 # RT-NATIVE STR (sh-construct-str lane): assemble the arch-matched native str_core
 # seed (sets HEXA_RT_STR_EQ_NATIVE=1 on all 3 production targets). Unknown targets
 # keep the C strcmp path.

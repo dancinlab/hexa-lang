@@ -1,0 +1,107 @@
+// ═══════════════════════════════════════════════════════════
+//  t56_read_f32_array_at_rss.hexa — raw .bin ranged-load unbox
+//  (boxing-unbox r2: the chat_full.bin / weight .bin path)
+//
+//  CORRECTNESS GATE. The anima full-load weight bottleneck (H_1441:
+//  303M f32 .bin → 79 GB/proc, ~66× bloat) is the RAW .bin load path
+//  (NOT the hexaw HEXAW2 format — that is t55). A raw f32 .bin loaded
+//  via read_bytes_at returns a boxed int[] (~16 B/byte) which the
+//  caller decodes into a boxed [float] (~176 B/elem) — the 44–66× blow.
+//
+//  read_f32_array_at(path, byte_off, n_floats) streams the LE
+//  IEEE-754 f32 slice DIRECTLY into a farr32 handle (native float[],
+//  4 B/elem, RSS≈raw 1×), NO boxed-byte intermediate, bounded 8 MB
+//  chunk buffer (O(chunk) transient). This is the primitive the anima
+//  .bin loader (bg_load / ranged decode) must call.
+//
+//  The .bin fixture is PRE-BUILT by the harness (test/t56_make_bin.py:
+//  v[i] = (i%1000)*0.5 - 250.0, exactly representable in f32, so the
+//  round-trip is lossless). This test does ZERO in-hexa fixture build
+//  (a boxed in-process build would itself dominate RSS and is the very
+//  thing under test) — it only LOADS and checks.
+//
+//  GATES:
+//   1. PARITY (full scan) — read_f32_array_at[i] == val_at(i), max|Δ|=0.
+//   2. RANGED — a mid-file slice (byte_off>0, n_floats<total) matches.
+//      This is the path the ING report says SEGFAULTed in v0.241 and
+//      forced full-load; here it must round-trip cleanly (no segfault).
+//   2b. read_bytes_at at the SAME ranged offset agrees byte-for-byte.
+//
+//  Run: python3 test/t56_make_bin.py /tmp/_t56c_raw_f32.bin 1048576
+//       hexa run test/t56_read_f32_array_at_rss.hexa
+// ═══════════════════════════════════════════════════════════
+
+use "self/stdlib/law_io"
+
+let mut ok = true
+fn must(label, cond) {
+    if cond { println("  ok   " + label) }
+    else    { println("  FAIL " + label); ok = false }
+}
+
+// value written at float index i (exactly representable in f32)
+fn val_at(i) {
+    return to_float(i % 1000) * 0.5 - 250.0
+}
+
+let path = "/tmp/_t56c_raw_f32.bin"
+let bytes = file_size(path)
+must("fixture present (file_size > 0)", bytes > 0)
+let N = bytes / 4
+
+// ── 1. UNBOXED full read via read_f32_array_at → farr32 ─────
+let data = read_f32_array_at(path, 0, N)
+let mut parity_ok = true
+let mut nbad = 0
+let mut p = 0
+while p < N {
+    if farr32_get(data, p) != val_at(p) {
+        if parity_ok {
+            println("  parity diff idx=" + to_string(p)
+                  + " got=" + to_string(farr32_get(data, p))
+                  + " want=" + to_string(val_at(p)))
+        }
+        parity_ok = false
+        nbad = nbad + 1
+    }
+    p = p + 1
+}
+must("1. PARITY: all N f32 bit-identical (max|d|=0)", parity_ok)
+
+// ── 2. RANGED slice (the SEGFAULT path): byte_off>0, partial ──
+let roff_floats = N / 2
+let rcount = if N > 2000 { 1000 } else { N / 4 }
+let rdata = read_f32_array_at(path, roff_floats * 4, rcount)
+let mut ranged_ok = true
+let mut q = 0
+while q < rcount {
+    if farr32_get(rdata, q) != val_at(roff_floats + q) {
+        if ranged_ok {
+            println("  ranged diff k=" + to_string(q)
+                  + " got=" + to_string(farr32_get(rdata, q))
+                  + " want=" + to_string(val_at(roff_floats + q)))
+        }
+        ranged_ok = false
+    }
+    q = q + 1
+}
+must("2. RANGED: mid-file slice byte-eq vs formula (no segfault)", ranged_ok)
+
+// ── 2b. cross-check ranged read_f32_array_at vs read_bytes_at bytes ──
+let raw = read_bytes_at(path, roff_floats * 4, rcount * 4)
+must("2b. read_bytes_at ranged len == rcount*4", len(raw) == rcount * 4)
+let mut bx_ok = true
+let mut k = 0
+while k < rcount {
+    let enc = f32_to_bytes_le(farr32_get(rdata, k))
+    if enc[0] != raw[k*4] || enc[1] != raw[k*4+1]
+       || enc[2] != raw[k*4+2] || enc[3] != raw[k*4+3] {
+        if bx_ok { println("  byte-xcheck diff k=" + to_string(k)) }
+        bx_ok = false
+    }
+    k = k + 1
+}
+must("2b. ranged farr32 bytes == read_bytes_at bytes (same file bytes)", bx_ok)
+
+println("[t56] N=" + to_string(N) + " floats (" + to_string(bytes) + " B), ranged off=" + to_string(roff_floats) + " count=" + to_string(rcount))
+if ok { println("PASS t56_read_f32_array_at_rss") } else { println("FAIL t56_read_f32_array_at_rss") }

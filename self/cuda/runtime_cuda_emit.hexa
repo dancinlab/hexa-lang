@@ -4107,20 +4107,12 @@ fn emit_runtime_cuda_c() -> str {
             " * kernel for the causal-masked attention path.\n" +
             " * ──────────────────────────────────────────────────────────────────── */\n" +
             "\n" +
-            "/* __device__ port of flame_g7_dt_exp (tool/flame_phase4d7_block_fwd_\n" +
-            " * primitive.c:78-85). Byte-for-byte the same algorithm: range-reduce by\n" +
-            " * halving while |xr| > 0.25 (counting r halvings), 12-term Taylor\n" +
-            " * (k = 1..11, term *= xr/k, acc += term), then square the result r\n" +
-            " * times. Same operations, same order ⇒ bit-identical to the CPU\n" +
-            " * reference modulo NONE (pure fp64 ops, identical sequence). */\n" +
-            "__device__ __forceinline__ double _hx_dt_exp_dev(double x) {\n" +
-            "    int r = 0; double xr = x;\n" +
-            "    while ((xr > 0.0 ? xr : -xr) > 0.25) { xr = xr / 2.0; r = r + 1; }\n" +
-            "    double term = 1.0, acc = 1.0;\n" +
-            "    for (int k = 1; k < 12; k++) { term = term * xr / (double)k; acc = acc + term; }\n" +
-            "    for (int s = 0; s < r; s++) acc = acc * acc;\n" +
-            "    return acc;\n" +
-            "}\n" +
+            "/* _hx_dt_exp_dev (flame_g7_dt_exp device port) is emitted ONCE near the\n" +
+            " * top of this TU (OP-19b canonical __device__ static def, before the\n" +
+            " * causal-softmax / GELU kernels). The previously-duplicated second\n" +
+            " * definition here was a hard nvcc redefinition error under -DHEXA_CUDA\n" +
+            " * (ing-cuda-build) — removed; the single canonical def is reachable from\n" +
+            " * every kernel below. */\n" +
             "\n" +
             "__global__ void _hx_cuda_kern_causal_softmax_rows(const double* __restrict__ X,\n" +
             "                                                  double* __restrict__ Y,\n" +
