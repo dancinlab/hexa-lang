@@ -479,8 +479,8 @@ resolve_native_fs_core_seed() {
 # #3583 lesson). Override per-prim by pre-setting HEXA_RT_STR_EQ_NATIVE=0 /
 # HEXA_RT_STR_STARTS_WITH_NATIVE=0 to force the C path even when a seed exists.
 resolve_native_str_core_seed() {
-    [ "${HEXA_RT_STR_EQ_NATIVE:-x}" = "0" ] && [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-x}" = "0" ] && [ "${HEXA_RT_STR_ENDS_WITH_NATIVE:-x}" = "0" ] && return 0   # all opted out
-    [ -f build/str_core_native.o ] && { [ "${HEXA_RT_STR_EQ_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_EQ_NATIVE=1; [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_STARTS_WITH_NATIVE=1; [ "${HEXA_RT_STR_ENDS_WITH_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_ENDS_WITH_NATIVE=1; return 0; }
+    [ "${HEXA_RT_STR_EQ_NATIVE:-x}" = "0" ] && [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-x}" = "0" ] && [ "${HEXA_RT_STR_ENDS_WITH_NATIVE:-x}" = "0" ] && [ "${HEXA_RT_STR_INDEX_OF_NATIVE:-x}" = "0" ] && [ "${HEXA_RT_STR_CONTAINS_NATIVE:-x}" = "0" ] && return 0   # all opted out
+    [ -f build/str_core_native.o ] && { [ "${HEXA_RT_STR_EQ_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_EQ_NATIVE=1; [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_STARTS_WITH_NATIVE=1; [ "${HEXA_RT_STR_ENDS_WITH_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_ENDS_WITH_NATIVE=1; [ "${HEXA_RT_STR_INDEX_OF_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_INDEX_OF_NATIVE=1; [ "${HEXA_RT_STR_CONTAINS_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_CONTAINS_NATIVE=1; return 0; }
     local seed="" tgt="${TARGET:-}"
     tgt="${tgt%-musl}"
     [ -z "$tgt" ] && case "$(uname -sm 2>/dev/null)" in
@@ -502,8 +502,10 @@ resolve_native_str_core_seed() {
     local nsyms; nsyms="$(grep -cE '^\.globl[[:space:]]+_?rt_str_eq_native' "$seed" 2>/dev/null || echo 0)"
     local nsw; nsw="$(grep -cE '^\.globl[[:space:]]+_?rt_str_starts_with_native' "$seed" 2>/dev/null || echo 0)"
     local new; new="$(grep -cE '^\.globl[[:space:]]+_?rt_str_ends_with_native' "$seed" 2>/dev/null || echo 0)"
-    if [ "${nsyms:-0}" -lt 1 ] || [ "${nsw:-0}" -lt 1 ] || [ "${new:-0}" -lt 1 ]; then
-        echo "[stage_resolve_runtime_a] RT-NATIVE STR: seed $seed exports eq:$nsyms/1 starts_with:$nsw/1 ends_with:$new/1 — falling back to C #else path" >&2
+    local nio; nio="$(grep -cE '^\.globl[[:space:]]+_?rt_str_index_of_native' "$seed" 2>/dev/null || echo 0)"
+    local nco; nco="$(grep -cE '^\.globl[[:space:]]+_?rt_str_contains_native' "$seed" 2>/dev/null || echo 0)"
+    if [ "${nsyms:-0}" -lt 1 ] || [ "${nsw:-0}" -lt 1 ] || [ "${new:-0}" -lt 1 ] || [ "${nio:-0}" -lt 1 ] || [ "${nco:-0}" -lt 1 ]; then
+        echo "[stage_resolve_runtime_a] RT-NATIVE STR: seed $seed exports eq:$nsyms/1 starts_with:$nsw/1 ends_with:$new/1 index_of:$nio/1 contains:$nco/1 — falling back to C #else path" >&2
         return 0
     fi
     local s_tmp="build/str_core_seed.s"
@@ -512,7 +514,9 @@ resolve_native_str_core_seed() {
         [ "${HEXA_RT_STR_EQ_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_EQ_NATIVE=1
         [ "${HEXA_RT_STR_STARTS_WITH_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_STARTS_WITH_NATIVE=1
         [ "${HEXA_RT_STR_ENDS_WITH_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_ENDS_WITH_NATIVE=1
-        echo "[stage_resolve_runtime_a] RT-NATIVE STR: assembled build/str_core_native.o from $seed (TARGET=$tgt, eq:$nsyms starts_with:$nsw ends_with:$new syms) → native string scan/compare path"
+        [ "${HEXA_RT_STR_INDEX_OF_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_INDEX_OF_NATIVE=1
+        [ "${HEXA_RT_STR_CONTAINS_NATIVE:-x}" != "0" ] && export HEXA_RT_STR_CONTAINS_NATIVE=1
+        echo "[stage_resolve_runtime_a] RT-NATIVE STR: assembled build/str_core_native.o from $seed (TARGET=$tgt, eq:$nsyms starts:$nsw ends:$new index_of:$nio contains:$nco syms) → native string scan/compare path"
     else
         echo "[stage_resolve_runtime_a] RT-NATIVE STR: WARN assemble of $seed failed — falling back to C #else path" >&2
     fi
@@ -795,6 +799,12 @@ build_runtime_a_from_source() {
     fi
     if [ "${HEXA_RT_STR_ENDS_WITH_NATIVE:-0}" = "1" ] && [ -f build/str_core_native.o ]; then
         rt_str_def="$rt_str_def -DHEXA_RT_STR_ENDS_WITH_NATIVE=1"; rt_str_seeded=1
+    fi
+    if [ "${HEXA_RT_STR_INDEX_OF_NATIVE:-0}" = "1" ] && [ -f build/str_core_native.o ]; then
+        rt_str_def="$rt_str_def -DHEXA_RT_STR_INDEX_OF_NATIVE=1"; rt_str_seeded=1
+    fi
+    if [ "${HEXA_RT_STR_CONTAINS_NATIVE:-0}" = "1" ] && [ -f build/str_core_native.o ]; then
+        rt_str_def="$rt_str_def -DHEXA_RT_STR_CONTAINS_NATIVE=1"; rt_str_seeded=1
     fi
     if [ "$rt_str_seeded" = "1" ]; then
         extra_obj="$extra_obj build/str_core_native.o"
