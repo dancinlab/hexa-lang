@@ -230,6 +230,83 @@ if [ -f "$rt" ] && ! grep -q 'gemm-perf r1' "$rt"; then
   fi
 fi
 
+# ── gemm-perf r2 — j-strip unrolled (6×8 tile) hexa_farr_matmul (byteeq) ────
+# gemm-bench r1 analysis(aiden Ryzen 9600X, clang18, strict-FP -O2 -ffp-contract=off):
+# r1 i6 kernel achieves ~22.9 GFLOP/s @ d=1024 = ~13% of AVX512 FP64 roofline.
+# The r1 j-inner-loop does 6×1=6 independent multiply-adds per cycle (6 scalar
+# mulsd per Bk[j] load). By unrolling j by 8 we load B[k,j:j+8] once (8 scalars)
+# and issue 6×8=48 independent multiply-adds — the OOO window is 8× wider. This
+# is pure ILP exploitation: no packing overhead, no malloc, no k-block boundary.
+# Byte-identical: k-accumulation order per C[i,j] is UNCHANGED (k ascending,
+# j ascending within k, strip endpoints match the plain loop). Tail handles
+# N%8 via single-column loop (same as r1 tail logic).
+# B-packing analysis (honest): with strict-FP scalar mulsd the kernel is
+# instruction-throughput-bound, NOT memory-bound (B already accessed
+# sequentially in j). Pack-overhead (malloc+memcpy O(K*N)) cannot pay back
+# on a single call at these sizes → packing closed-negative (see PR body).
+# The j-strip tile (no pack) is the only byte-identical win on this kernel.
+# SSOT = immutable frozen blob (151c52c8…) → same precedent as r1. Idempotent:
+# marker(gemm-perf r2) blocks double-apply on re-restore. Runs after r1 patch
+# (which emits the i6 i-loop), replaces the r1 j-inner-loop body only.
+if [ -f "$rt" ] && ! grep -q 'gemm-perf r2' "$rt"; then
+  # Anchor on the r1 gemm-perf comment (already emitted by the r1 patch above).
+  # Replace the inner j-loop body inside the 6-row block with the j×8 unrolled
+  # version. The r1 kernel structure is:
+  #   for (int64_t k = 0; k < K; k++) {
+  #       double a0 = A0[k], ..., a5 = A5[k];
+  #       const double* Bk = B + k * N;
+  #       for (int64_t j = 0; j < N; j++) {          ← replace this j-loop
+  #           double b = Bk[j];
+  #           C0[j] += a0 * b; ... C5[j] += a5 * b;
+  #       }
+  #   }
+  # We emit the r2 j×8-unrolled j-loop in place of the `for (j < N; j++)` block.
+  # Idempotent anchor: the r1 "for (j < N)" line is unique inside the gemm-perf
+  # section (the tail loop's inner j-loop uses a different variable name j2 guard).
+  awk '
+    /^    \/\/ gemm-perf r1 — register-blocked i6:/ { in_gpr1=1 }
+    in_gpr1 && /^            for \(int64_t j = 0; j < N; j\+\+\) \{/ && !done {
+      print "            // gemm-perf r2 — j×8 strip unroll: load 8 B columns per k-step,"
+      print "            // issue 6×8=48 independent mulsd ops (vs 6×1 in r1) → wider OOO"
+      print "            // window. k/j accumulation order UNCHANGED → BIT-IDENTICAL."
+      print "            int64_t j = 0;"
+      print "            for (; j + 8 <= N; j += 8) {"
+      print "                double b0=Bk[j],b1=Bk[j+1],b2=Bk[j+2],b3=Bk[j+3];"
+      print "                double b4=Bk[j+4],b5=Bk[j+5],b6=Bk[j+6],b7=Bk[j+7];"
+      print "                C0[j]+=a0*b0; C0[j+1]+=a0*b1; C0[j+2]+=a0*b2; C0[j+3]+=a0*b3;"
+      print "                C0[j+4]+=a0*b4; C0[j+5]+=a0*b5; C0[j+6]+=a0*b6; C0[j+7]+=a0*b7;"
+      print "                C1[j]+=a1*b0; C1[j+1]+=a1*b1; C1[j+2]+=a1*b2; C1[j+3]+=a1*b3;"
+      print "                C1[j+4]+=a1*b4; C1[j+5]+=a1*b5; C1[j+6]+=a1*b6; C1[j+7]+=a1*b7;"
+      print "                C2[j]+=a2*b0; C2[j+1]+=a2*b1; C2[j+2]+=a2*b2; C2[j+3]+=a2*b3;"
+      print "                C2[j+4]+=a2*b4; C2[j+5]+=a2*b5; C2[j+6]+=a2*b6; C2[j+7]+=a2*b7;"
+      print "                C3[j]+=a3*b0; C3[j+1]+=a3*b1; C3[j+2]+=a3*b2; C3[j+3]+=a3*b3;"
+      print "                C3[j+4]+=a3*b4; C3[j+5]+=a3*b5; C3[j+6]+=a3*b6; C3[j+7]+=a3*b7;"
+      print "                C4[j]+=a4*b0; C4[j+1]+=a4*b1; C4[j+2]+=a4*b2; C4[j+3]+=a4*b3;"
+      print "                C4[j+4]+=a4*b4; C4[j+5]+=a4*b5; C4[j+6]+=a4*b6; C4[j+7]+=a4*b7;"
+      print "                C5[j]+=a5*b0; C5[j+1]+=a5*b1; C5[j+2]+=a5*b2; C5[j+3]+=a5*b3;"
+      print "                C5[j+4]+=a5*b4; C5[j+5]+=a5*b5; C5[j+6]+=a5*b6; C5[j+7]+=a5*b7;"
+      print "            }"
+      print "            for (; j < N; j++) {"
+      print "                double b = Bk[j];"
+      print "                C0[j]+=a0*b; C1[j]+=a1*b; C2[j]+=a2*b;"
+      print "                C3[j]+=a3*b; C4[j]+=a4*b; C5[j]+=a5*b;"
+      print "            }"
+      done=1; suppress=1; next
+    }
+    suppress {
+      # skip the entire r1 j-loop body + its closing brace (12-space indent level)
+      if ($0 ~ /^            \}$/) { suppress=0; next }
+      next
+    }
+    { print }
+  ' "$rt" > "$rt.gpr2" && mv "$rt.gpr2" "$rt"
+  if grep -q 'gemm-perf r2' "$rt"; then
+    echo "[restore_frozen_seeds] gemm-perf r2: j×8-strip unrolled (6×8 tile) hexa_farr_matmul (byteeq) into $rt"
+  else
+    echo "[restore_frozen_seeds] gemm-perf r2: WARN — r1 j-loop anchor not found, farr_matmul left as r1"
+  fi
+fi
+
 # ── gemm-omp r1 — opt-in OpenMP i-loop for hexa_farr_matmul (byteeq-safe) ─────
 # gemm-bench r1 측정: farr_matmul d×d 싱글스레드 = ~10 GFLOP/s (FP64 roofline 3%,
 # strict-FP 바운드라 SIMD reassoc 불가). 유일 안전 레버 = OpenMP `parallel for`
