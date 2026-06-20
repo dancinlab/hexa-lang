@@ -60,7 +60,13 @@ fn emit_runtime_cuda_c() -> str {
             "#include <string.h>\n" +
             "\n" +
             "#include <cuda_runtime.h>\n" +
+            "/* HEXA_NO_CUBLAS — fully cuBLAS-free forge variant. Every cublas* call-site\n" +
+            " * is #ifndef-guarded to its own-kernel; the header + handle machinery compile\n" +
+            " * out so the TU links with ZERO -lcublas (own-kernels own 100%% of GEMM/gemv).\n" +
+            " * STANDARD build (macro unset) is byte-identical — the guard is OFF by default. */\n" +
+            "#ifndef HEXA_NO_CUBLAS\n" +
             "#include <cublas_v2.h>\n" +
+            "#endif\n" +
             "/* HEXA-TRAIN-FLOOR bf16 lever — __nv_bfloat16 device type for the\n" +
             " * in-place bf16-MAC gemv slice (RFC 049 storage class is the sibling\n" +
             " * runtime_bf16.c TU #include'd at the file tail; this header makes the\n" +
@@ -288,6 +294,7 @@ fn emit_runtime_cuda_c() -> str {
             "#endif /* __CUDACC__ */\n" +
             "\n" +
             "/* cuBLAS handle — lazy init. */\n" +
+            "#ifndef HEXA_NO_CUBLAS\n" +
             "static cublasHandle_t g_cublas = NULL;\n" +
             "\n" +
             "static int _ensure_cublas(void) {\n" +
@@ -306,6 +313,11 @@ fn emit_runtime_cuda_c() -> str {
             "    if (_forge_async_on()) cublasSetStream(g_cublas, _forge_stream());\n" +
             "    return 0;\n" +
             "}\n" +
+            "#else\n" +
+            "/* HEXA_NO_CUBLAS: no handle, _ensure_cublas is a no-op (own-kernels never use\n" +
+            " * it; it stays as a callable so the GEMM entry guards need not be touched). */\n" +
+            "static int _ensure_cublas(void) { return 0; }\n" +
+            "#endif\n" +
             "\n" +
             "/* Upload host buf → device. Allocate if needed. Returns 0 ok / -1 err. */\n" +
             "static int _h2d(int64_t id) {\n" +
@@ -784,8 +796,12 @@ fn emit_runtime_cuda_c() -> str {
             " * (own) unless HEXA_OWN_GEMM=0 explicitly reverts to cuBLAS. Any other value\n" +
             " * (unset / =1 / etc.) keeps own-GEMM. */\n" +
             "static int _forge_own_gemm_on(void) {\n" +
+            "#ifdef HEXA_NO_CUBLAS\n" +
+            "    return 1;  /* cuBLAS-free variant: own-GEMM is the ONLY path (no opt-out). */\n" +
+            "#else\n" +
             "    const char* v = getenv(\"HEXA_OWN_GEMM\");\n" +
             "    return (v && v[0] == '0') ? 0 : 1;\n" +
+            "#endif\n" +
             "}\n" +
             "\n" +
             "/* within HEXA_TF32_FASTMODE: own mma.sync TF32 is the DEFAULT (byte-CHANGING\n" +
@@ -793,8 +809,12 @@ fn emit_runtime_cuda_c() -> str {
             " * non-deterministic fastmode lane; the default non-fastmode FP64 path is\n" +
             " * untouched). Returns 1 (own) unless HEXA_TF32_OWN=0 reverts to cublasGemmEx. */\n" +
             "static int _forge_tf32_own_on(void) {\n" +
+            "#ifdef HEXA_NO_CUBLAS\n" +
+            "    return 1;  /* cuBLAS-free: own mma.sync TF32 is the ONLY tf32 path. */\n" +
+            "#else\n" +
             "    const char* v = getenv(\"HEXA_TF32_OWN\");\n" +
             "    return (v && v[0] == '0') ? 0 : 1;\n" +
+            "#endif\n" +
             "}\n" +
             "\n" +
             "/* OP-24: deterministic TF32 tensor-op GEMM on FP64 row-major farr device buffers.\n" +
@@ -805,6 +825,7 @@ fn emit_runtime_cuda_c() -> str {
             " * TF32 tensor-op, cast the fp32 result back into C_dev. Returns 0 ok / -1 err.\n" +
             " * Uses a PEDANTIC-math cuBLAS handle (lazy, separate from g_cublas which stays\n" +
             " * fp64-strict for the default Dgemm path) so the TF32 self-byte-eq is portable. */\n" +
+            "#ifndef HEXA_NO_CUBLAS\n" +
             "static cublasHandle_t g_cublas_tf32 = NULL;\n" +
             "static int _ensure_cublas_tf32(void) {\n" +
             "    if (g_cublas_tf32) return 0;\n" +
@@ -862,6 +883,7 @@ fn emit_runtime_cuda_c() -> str {
             "    cudaFree(Af); cudaFree(Bf); cudaFree(Cf);\n" +
             "    return 0;\n" +
             "}\n" +
+            "#endif /* !HEXA_NO_CUBLAS (TF32 cublasGemmEx path) */\n" +
             "\n" +
             "/* ===== census r3 OWN-TF32 PARITY KERNEL (no cuBLAS) ===========================\n" +
             " * PORT of self/native/mma_sm120/owngemm_sm120.cu `gemm_sm120` — the PARITY TF32\n" +
@@ -1112,6 +1134,7 @@ fn emit_runtime_cuda_c() -> str {
             "        dim3 _ggrd((unsigned)((N + 15) / 16), (unsigned)((M + 15) / 16));\n" +
             "        _hx_k_gemm<<<_ggrd, _gblk, 0, _forge_stream()>>>(A_dev, B_dev, C_dev, M, K, N);\n" +
             "        if (_forge_launch_check(\"own_gemm\") != 0) return -1;\n" +
+            "#ifndef HEXA_NO_CUBLAS\n" +
             "    } else if (_forge_tf32_fastmode()) {\n" +
             "        /* HEXA-0POD OP-24: TF32 fast-mode (opt-in). FP64 default is UNTOUCHED above;\n" +
             "         * this branch only fires when HEXA_TF32_FASTMODE is set. census r3 (7->0):\n" +
@@ -1140,6 +1163,9 @@ fn emit_runtime_cuda_c() -> str {
             "        return -1;\n" +
             "    }\n" +
             "    }\n" +
+            "#else\n" +
+            "    }\n" +
+            "#endif\n" +
             "    /* L2-b: sync the forge stream before reading the GEMM result back (async-on);\n" +
             "     * no-op when async-off (default stream). Keeps D2H race-free + byte-eq. */\n" +
             "    if (_forge_sync() != 0) return -1;\n" +
@@ -1244,6 +1270,7 @@ fn emit_runtime_cuda_c() -> str {
             "        dim3 _bgrd((unsigned)((N + 15) / 16), (unsigned)((M + 15) / 16), (unsigned)batch);\n" +
             "        _hx_k_gemm_strided_batched<<<_bgrd, _bblk, 0, _forge_stream()>>>(A_dev, B_dev, C_dev, M, K, N, batch);\n" +
             "        if (_forge_launch_check(\"own_gemm_batched\") != 0) return -1;\n" +
+            "#ifndef HEXA_NO_CUBLAS\n" +
             "    } else {\n" +
             "    cublasStatus_t st = cublasDgemmStridedBatched(\n" +
             "        g_cublas, CUBLAS_OP_N, CUBLAS_OP_N,\n" +
@@ -1259,6 +1286,9 @@ fn emit_runtime_cuda_c() -> str {
             "        return -1;\n" +
             "    }\n" +
             "    }\n" +
+            "#else\n" +
+            "    }\n" +
+            "#endif\n" +
             "    if (_forge_sync() != 0) return -1;\n" +
             "    cudaError_t er = cudaMemcpy(ce->buf, C_dev,\n" +
             "                                (size_t)(batch * M * N) * sizeof(double),\n" +
@@ -1353,6 +1383,7 @@ fn emit_runtime_cuda_c() -> str {
             "        dim3 _ggrd((unsigned)((N + 15) / 16), (unsigned)((K + 15) / 16));\n" +
             "        _hx_k_gemm_t<<<_ggrd, _gblk, 0, _forge_stream()>>>(A_dev, B_dev, C_dev, M, K, N);\n" +
             "        if (_forge_launch_check(\"own_gemm_t\") != 0) return -1;\n" +
+            "#ifndef HEXA_NO_CUBLAS\n" +
             "    } else {\n" +
             "    static int _gemmt_fired = 0;\n" +
             "    if (!_gemmt_fired) { _gemmt_fired = 1;\n" +
@@ -1371,6 +1402,9 @@ fn emit_runtime_cuda_c() -> str {
             "        return -1;\n" +
             "    }\n" +
             "    }\n" +
+            "#else\n" +
+            "    }  /* NO_CUBLAS: close the _forge_own_gemm_on() own-branch (cuBLAS else removed) */\n" +
+            "#endif\n" +
             "    if (_forge_sync() != 0) return -1;\n" +
             "    cudaError_t er = cudaMemcpy(ce->buf, C_dev,\n" +
             "                                (size_t)(K * N) * sizeof(double),\n" +
@@ -1827,6 +1861,72 @@ fn emit_runtime_cuda_c() -> str {
             "#else\n" +
             "    (void)a_id; (void)b_id; (void)out_id; (void)n;\n" +
             "    fprintf(stderr, \"[cuda] residual_add: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* HEXA-FUSION fusion-r2 (BEYOND-PARITY) — own-GEMM with the residual epilogue\n" +
+            " * FUSED into the C-store site. The default path runs _hx_k_gemm then a SEPARATE\n" +
+            " * _hx_k_residual_add (a full M*N DRAM round-trip: write C, read C+R, write C).\n" +
+            " * This kernel adds R at the store site register-resident -> one launch, no\n" +
+            " * round-trip. byte-eq by construction: same acc (same K-loop association as\n" +
+            " * _hx_k_gemm) + same R[i] add -> C[m*N+n] = acc + R[m*N+n] reproduces the\n" +
+            " * 2-call result CHARACTER-FOR-CHARACTER (max|delta|=0, MEASURED aiden RTX 5070\n" +
+            " * sm_120: bit_ne=0 across D=1024/2048/4096, all K). MEASURED WIN is regime-split\n" +
+            " * (the epilogue is only a fraction of a compute-bound square GEMM): for the\n" +
+            " * memory-bound projection shape (large M=N, small K -- the residual-add-after-\n" +
+            " * linear shape in transformer/CLM fwd) fusion is 1.15x (K=64) .. 2.07x (K=8) at\n" +
+            " * D=4096; for square K=D it is ~1.003x (epilogue ~0.2%% of GEMM). cuBLAS GemmEx\n" +
+            " * structurally cannot fuse this (no cuBLASLt epilogue here). Env-gated\n" +
+            " * HEXA_FUSE_EPILOGUE; the DEFAULT GEMM+residual path is UNTOUCHED (byte-neutral). */\n" +
+            "__global__ void _hx_k_gemm_fused_residual(const double* __restrict__ A,\n" +
+            "                                          const double* __restrict__ B,\n" +
+            "                                          const double* __restrict__ R,\n" +
+            "                                          double* __restrict__ C,\n" +
+            "                                          int64_t M, int64_t K, int64_t N) {\n" +
+            "    int64_t n = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "    int64_t m = (int64_t)blockIdx.y * blockDim.y + threadIdx.y;\n" +
+            "    if (m >= M || n >= N) return;\n" +
+            "    double acc = 0.0;\n" +
+            "    for (int64_t k = 0; k < K; k++) acc += A[m * K + k] * B[k * N + n];\n" +
+            "    C[m * N + n] = acc + R[m * N + n];\n" +
+            "}\n" +
+            "\n" +
+            "/* fusion-r2 fused entry point: C[M,N] = A[M,K].B[K,N] + R[M,N], one launch.\n" +
+            " * Only invoked when stdlib forge calls it under HEXA_FUSE_EPILOGUE; the default\n" +
+            " * GEMM-then-residual_add API path is unchanged. Same 16x16 block / N-x-M grid as\n" +
+            " * the own-GEMM default (_hx_k_gemm) so the byte-eq guarantee holds. */\n" +
+            "int _hx_cuda_farr_gemm_residual_fused_gpu(int64_t a_id, int64_t b_id,\n" +
+            "                                          int64_t r_id, int64_t c_id,\n" +
+            "                                          int64_t M, int64_t K, int64_t N) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (M <= 0 || K <= 0 || N <= 0) return -1;\n" +
+            "    if (_h2d(a_id) != 0) return -1;\n" +
+            "    if (_h2d(b_id) != 0) return -1;\n" +
+            "    if (_h2d(r_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(c_id, M * N) != 0) return -1;\n" +
+            "    const double* A = g_slots[a_id].d_buf;\n" +
+            "    const double* B = g_slots[b_id].d_buf;\n" +
+            "    const double* R = g_slots[r_id].d_buf;\n" +
+            "    double*       C = g_slots[c_id].d_buf;\n" +
+            "    dim3 _fblk(16, 16);\n" +
+            "    dim3 _fgrd((unsigned)((N + 15) / 16), (unsigned)((M + 15) / 16));\n" +
+            "    static int _fuse_epi_fired = 0;\n" +
+            "    if (!_fuse_epi_fired) { _fuse_epi_fired = 1;\n" +
+            "        fprintf(stderr, \"[FUSE-EPILOGUE-FIRED] _hx_k_gemm_fused_residual (1 launch, no DRAM round-trip)\\n\"); }\n" +
+            "    _hx_k_gemm_fused_residual<<<_fgrd, _fblk, 0, _forge_stream()>>>(A, B, R, C, M, K, N);\n" +
+            "    if (_forge_launch_check(\"gemm_residual_fused\") != 0) return -1;\n" +
+            "    {\n" +
+            "        HexaFarrEntry* e = &_hx_farr_table[c_id];\n" +
+            "        e->d_buf      = (void*)g_slots[c_id].d_buf;\n" +
+            "        e->loc        = FARR_DEVICE;\n" +
+            "        e->dirty_host = 0;\n" +
+            "        e->dirty_dev  = 0;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)a_id; (void)b_id; (void)r_id; (void)c_id; (void)M; (void)K; (void)N;\n" +
+            "    fprintf(stderr, \"[cuda] gemm_residual_fused: built without __CUDACC__\\n\");\n" +
             "    return -1;\n" +
             "#endif\n" +
             "}\n" +
@@ -5295,6 +5395,7 @@ fn emit_runtime_cuda_c() -> str {
             "        if (_forge_launch_check(\"own_matmul_t\") != 0) return -1;\n" +
             "        return _d2h_out(out_id, C);\n" +
             "    }\n" +
+            "#ifndef HEXA_NO_CUBLAS\n" +
             "    /* row-major: out[1·C] = u[1·R] · M[R·C]\n" +
             "     * → cuBLAS Dgemm(N,N, m=C, n=1, k=R, alpha, M_dev, ldb=C, U_dev, lda=R,\n" +
             "     *                beta, O_dev, ldc=C) */\n" +
@@ -5311,6 +5412,10 @@ fn emit_runtime_cuda_c() -> str {
             "        return -1;\n" +
             "    }\n" +
             "    return _d2h_out(out_id, C);\n" +
+            "#else\n" +
+            "    fprintf(stderr, \"[cuda] matmul_t: own path should have returned\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
             "}\n" +
             "\n" +
             "/* packed_gemv_offset: out[i] = Σ_j P[off + i·cols + j]·U[j], out[rows].\n" +
@@ -5467,7 +5572,25 @@ fn emit_runtime_cuda_c() -> str {
             "        }\n" +
             "        return _d2h_out(out_id, rows);\n" +
             "    }\n" +
+            "#ifdef HEXA_NO_CUBLAS\n" +
+            "    /* cuBLAS-free: large-rows also goes own (the own FP64 kernel fired above\n" +
+            "     * under _forge_own_gemm_on()==1, so this point is unreachable for CUDACC;\n" +
+            "     * run the own kernel here too for robustness, then return). */\n" +
+            "    {\n" +
+            "        dim3 grid((unsigned)rows), block(HX_RR_BLOCK);\n" +
+            "        _hx_k_packed_gemv_offset<<<grid, block>>>(g_slots[p_id].d_buf, off,\n" +
+            "                                                  U_dev, O_dev, rows, cols);\n" +
+            "        cudaError_t ker = cudaDeviceSynchronize();\n" +
+            "        if (ker != cudaSuccess) {\n" +
+            "            fprintf(stderr, \"[cuda] packed_gemv_offset own(large) failed: %s\\n\",\n" +
+            "                    cudaGetErrorString(ker));\n" +
+            "            return -1;\n" +
+            "        }\n" +
+            "        return _d2h_out(out_id, rows);\n" +
+            "    }\n" +
             "#endif\n" +
+            "#endif\n" +
+            "#ifndef HEXA_NO_CUBLAS\n" +
             "    if (_ensure_cublas() != 0) return -1;\n" +
             "    const double alpha = 1.0, beta = 0.0;\n" +
             "    cublasStatus_t st = cublasDgemv(g_cublas, CUBLAS_OP_T,\n" +
@@ -5482,6 +5605,10 @@ fn emit_runtime_cuda_c() -> str {
             "        return -1;\n" +
             "    }\n" +
             "    return _d2h_out(out_id, rows);\n" +
+            "#else\n" +
+            "    fprintf(stderr, \"[cuda] packed_gemv_offset: no CUDA device path\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
             "}\n" +
             "\n" +
             "/* outer: u⊗v = [R·C].  u [R], v [C], out row-major [R,C].\n" +
@@ -5525,6 +5652,7 @@ fn emit_runtime_cuda_c() -> str {
             "        if (_forge_launch_check(\"own_outer\") != 0) return -1;\n" +
             "        return _d2h_out(out_id, R * C);\n" +
             "    }\n" +
+            "#ifndef HEXA_NO_CUBLAS\n" +
             "    cublasStatus_t st = cublasDgemm(g_cublas,\n" +
             "                                    CUBLAS_OP_N, CUBLAS_OP_N,\n" +
             "                                    (int)C, (int)R, 1,\n" +
@@ -5538,6 +5666,10 @@ fn emit_runtime_cuda_c() -> str {
             "        return -1;\n" +
             "    }\n" +
             "    return _d2h_out(out_id, R * C);\n" +
+            "#else\n" +
+            "    fprintf(stderr, \"[cuda] outer: own path should have returned\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
             "}\n" +
             "\n" +
             "/* ══════════════════════════════════════════════════════════════════\n" +

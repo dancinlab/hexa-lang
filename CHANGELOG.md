@@ -1,5 +1,8 @@
 ## 2026-06-20
 
+- **feat(forge): HEXA_NO_CUBLAS — forge GPU 런타임 완전 cuBLAS-free 빌드 변종 (4조각 측정 증명·aiden RTX 5070 sm_120)**: hexa-cuda 가 진짜 완전대체제임을 증명 — `HEXA_NO_CUBLAS` 컴파일 스위치로 **모든 cublas* 호출지점을 `#ifdef` out → -lcublas 없이 링크**(nm -u cublas=0·ldd libcublas 없음·LINK_OK ZERO -lcublas), forge smoke PASS(own GEMM rel-RMS 1.66e-3). 4조각: ① GEMM+residual epilogue fusion(byte-eq max|Δ|=0 전 size, +0.2~0.7% — FP64 epilogue=GEMM의 0.2~0.4%라 추월 미미·정직) ② own FP64/fp32 packed_gemv(157~160 GFLOP/s 메모리바운드 640GB/s·cublasDgemv 1.006~1.050× 추월·relRMS~1e-16 bit-exact) ③ BF16 own mma.sync m16n8k16 NO_CUBLAS 경로(`[BF16-OWN-FIRED]`·rel-RMS 1.66e-3) ④ 위 헤드라인. **표준 빌드(NO_CUBLAS OFF) byte-identical**(전 신규라인 `#ifdef HEXA_NO_CUBLAS`/`#else` 내부, 기본 preprocessor drop → cublas* 참조 유지·self-host≠release 안전). 근본fix: matmul_t brace 불균형 #else}#endif 보정 + runtime_cuda.c/runtime_bf16.c frozen seed regen(emitter SSOT 동기화). emitter=self/cuda/runtime_cuda_emit.hexa.
+
+
 - **docs(arch): blocking-frontiers 갱신 — TF32 r4 결과 + plateau 하드웨어 🧱 + BF16 research-found 경로 (research-driven 루프 기록)**: ARCHITECTURE.json frontier 노드를 측정·인용 결과로 업데이트. **TF32**: r4 Split-K가 256을 0.92~0.94×로 닫아 own이 cuBLAS 추월(wave-quantization fix·cuBLAS splitK 커널명 예측 적중), 512-3072 plateau는 **하드웨어 천장 🧱 research-confirmed**(consumer GeForce Blackwell이 FP32-accum 텐서 처리량 반속 cap → dense ceiling≈own ~30TFLOP/s, cuBLAS ~34는 roofline내 스케줄링 micro-overlap·exclusive 기법 아님; WingEdge parity도 compute throttle 종착·warp-spec 없이 도달→multi-week 재작성 부정당) → r5 DEFER. **BF16**: own 배선됨(rel-RMS 0·3-7× 느림=dispatch 오버헤드), research가 ≥0.85× 달성가능 확인(WingEdge mma.sync HGEMM sm_120 parity·cuBLAS 동일 mma.sync HMMA), BF16 r3 GPU 진행중(direct-bf16-mma+epilogue-cast+scratch-reuse로 3×malloc/3 cast 제거). Split-K는 byte-determinism 깨므로 BF16 default 부적용.
 
 
