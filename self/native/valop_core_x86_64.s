@@ -13,7 +13,7 @@
 //   Lets stage_resolve_runtime_a define HEXA_RT_VALOP_NATIVE + ar this .o
 //   into runtime.a so hexa_truthy/sub/mul/add scalar paths go native.
 # hexa-lang emit pass — target=x86_64-linux-gnu
-# source: /home/aiden/scratch-valadd-ship/stdlib/runtime/valop_core.hexa
+# source: /home/aiden/scratch-valadd-clean/stdlib/runtime/valop_core.hexa
 .intel_syntax noprefix
 .file 1 "stdlib/runtime/valop_core.hexa"
 .text
@@ -33,7 +33,7 @@ rt_truthy_native:
     sub rsp, 608 # prologue: alloc spill frame
     mov [rbp - 336], rdi # store tag L0
     mov rbx, rsi # ingress param payload
-.Le9bf_rt_truthy_native_bb0:
+.Lfe07_rt_truthy_native_bb0:
     mov r12, [rbp - 336] # tag L0 from tag-slot
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 344], r11 # store tag L1
@@ -48,9 +48,9 @@ rt_truthy_native:
     mov r11, 2 # materialize tag imm 2
     mov [rbp - 360], r11 # store tag L3
     test r14, r14 # br_cond test
-    jz .Le9bf_rt_truthy_native_bb2 # jump-if-zero -> else
-    jmp .Le9bf_rt_truthy_native_bb1 # jump -> then
-.Le9bf_rt_truthy_native_bb1:
+    jz .Lfe07_rt_truthy_native_bb2 # jump-if-zero -> else
+    jmp .Lfe07_rt_truthy_native_bb1 # jump -> then
+.Lfe07_rt_truthy_native_bb1:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -79,7 +79,7 @@ rt_truthy_native:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.Le9bf_rt_truthy_native_bb2:
+.Lfe07_rt_truthy_native_bb2:
     mov r10, r13 # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -90,9 +90,9 @@ rt_truthy_native:
     mov [rbp - 80], r10 # spill L8 to slot
     mov r10, [rbp - 80] # reload L8 from spill slot
     test r10, r10 # br_cond test
-    jz .Le9bf_rt_truthy_native_bb4 # jump-if-zero -> else
-    jmp .Le9bf_rt_truthy_native_bb3 # jump -> then
-.Le9bf_rt_truthy_native_bb3:
+    jz .Lfe07_rt_truthy_native_bb4 # jump-if-zero -> else
+    jmp .Lfe07_rt_truthy_native_bb3 # jump -> then
+.Lfe07_rt_truthy_native_bb3:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -147,7 +147,7 @@ rt_truthy_native:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.Le9bf_rt_truthy_native_bb4:
+.Lfe07_rt_truthy_native_bb4:
     mov r10, r13 # hv payload
     mov r11, 1 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -158,9 +158,9 @@ rt_truthy_native:
     mov [rbp - 152], r10 # spill L17 to slot
     mov r10, [rbp - 152] # reload L17 from spill slot
     test r10, r10 # br_cond test
-    jz .Le9bf_rt_truthy_native_bb6 # jump-if-zero -> else
-    jmp .Le9bf_rt_truthy_native_bb5 # jump -> then
-.Le9bf_rt_truthy_native_bb5:
+    jz .Lfe07_rt_truthy_native_bb6 # jump-if-zero -> else
+    jmp .Lfe07_rt_truthy_native_bb5 # jump -> then
+.Lfe07_rt_truthy_native_bb5:
     mov r10, 0 # hv payload
     mov rax, 0 # tag default = TAG_INT
     mov r11, r10 # __hx_to_double: r11 = original (float) bits
@@ -288,7 +288,7 @@ rt_truthy_native:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.Le9bf_rt_truthy_native_bb6:
+.Lfe07_rt_truthy_native_bb6:
     mov r10, r13 # hv payload
     mov r11, 4 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -299,9 +299,9 @@ rt_truthy_native:
     mov [rbp - 304], r10 # spill L36 to slot
     mov r10, [rbp - 304] # reload L36 from spill slot
     test r10, r10 # br_cond test
-    jz .Le9bf_rt_truthy_native_bb8 # jump-if-zero -> else
-    jmp .Le9bf_rt_truthy_native_bb7 # jump -> then
-.Le9bf_rt_truthy_native_bb7:
+    jz .Lfe07_rt_truthy_native_bb8 # jump-if-zero -> else
+    jmp .Lfe07_rt_truthy_native_bb7 # jump -> then
+.Lfe07_rt_truthy_native_bb7:
     mov r10, 0 # hv payload
     mov r11, 2 # hv payload
     mov [rbp - 640], r11 # store tag L38
@@ -318,7 +318,7 @@ rt_truthy_native:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.Le9bf_rt_truthy_native_bb8:
+.Lfe07_rt_truthy_native_bb8:
     mov r10, 1 # hv payload
     mov r11, 2 # hv payload
     mov [rbp - 648], r11 # store tag L39
@@ -353,7 +353,7 @@ rt_sub_native:
     mov rbx, rsi # ingress param payload
     mov [rbp - 248], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.Le9bf_rt_sub_native_bb0:
+.Lfe07_rt_sub_native_bb0:
     mov r13, [rbp - 240] # tag L0 from tag-slot
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 256], r11 # store tag L2
@@ -418,9 +418,9 @@ rt_sub_native:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .Le9bf_rt_sub_native_bb2 # jump-if-zero -> else
-    jmp .Le9bf_rt_sub_native_bb1 # jump -> then
-.Le9bf_rt_sub_native_bb1:
+    jz .Lfe07_rt_sub_native_bb2 # jump-if-zero -> else
+    jmp .Lfe07_rt_sub_native_bb1 # jump -> then
+.Lfe07_rt_sub_native_bb1:
     mov r11, r12 # hv payload
     mov r10, rbx # hv payload
     sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
@@ -461,7 +461,7 @@ rt_sub_native:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.Le9bf_rt_sub_native_bb2:
+.Lfe07_rt_sub_native_bb2:
     mov r10, rbx # hv payload
     mov rax, [rbp - 240] # tag L0 from tag-slot
     mov r11, r10 # __hx_to_double: r11 = original (float) bits
@@ -555,7 +555,7 @@ rt_mul_native:
     mov rbx, rsi # ingress param payload
     mov [rbp - 248], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.Le9bf_rt_mul_native_bb0:
+.Lfe07_rt_mul_native_bb0:
     mov r13, [rbp - 240] # tag L0 from tag-slot
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 256], r11 # store tag L2
@@ -620,9 +620,9 @@ rt_mul_native:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .Le9bf_rt_mul_native_bb2 # jump-if-zero -> else
-    jmp .Le9bf_rt_mul_native_bb1 # jump -> then
-.Le9bf_rt_mul_native_bb1:
+    jz .Lfe07_rt_mul_native_bb2 # jump-if-zero -> else
+    jmp .Lfe07_rt_mul_native_bb1 # jump -> then
+.Lfe07_rt_mul_native_bb1:
     mov r11, r12 # hv payload
     mov r10, rbx # hv payload
     imul r10, r11 # __hx_payload_mul: r10 = a.pl imul b.pl
@@ -663,7 +663,7 @@ rt_mul_native:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.Le9bf_rt_mul_native_bb2:
+.Lfe07_rt_mul_native_bb2:
     mov r10, rbx # hv payload
     mov rax, [rbp - 240] # tag L0 from tag-slot
     mov r11, r10 # __hx_to_double: r11 = original (float) bits
@@ -757,7 +757,7 @@ rt_add_native:
     mov rbx, rsi # ingress param payload
     mov [rbp - 248], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.Le9bf_rt_add_native_bb0:
+.Lfe07_rt_add_native_bb0:
     mov r13, [rbp - 240] # tag L0 from tag-slot
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 256], r11 # store tag L2
@@ -822,9 +822,9 @@ rt_add_native:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .Le9bf_rt_add_native_bb2 # jump-if-zero -> else
-    jmp .Le9bf_rt_add_native_bb1 # jump -> then
-.Le9bf_rt_add_native_bb1:
+    jz .Lfe07_rt_add_native_bb2 # jump-if-zero -> else
+    jmp .Lfe07_rt_add_native_bb1 # jump -> then
+.Lfe07_rt_add_native_bb1:
     mov r11, r12 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -865,7 +865,7 @@ rt_add_native:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.Le9bf_rt_add_native_bb2:
+.Lfe07_rt_add_native_bb2:
     mov r10, rbx # hv payload
     mov rax, [rbp - 240] # tag L0 from tag-slot
     mov r11, r10 # __hx_to_double: r11 = original (float) bits
