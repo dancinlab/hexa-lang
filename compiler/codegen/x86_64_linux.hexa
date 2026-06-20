@@ -220,7 +220,15 @@ pub struct X86RegMap {
     ids: [i64],
     regs: [string],
     slots: [i64],
-    tag_base: i64
+    tag_base: i64,
+    // #3712 — id → index-into-`ids` direct array (sized maxid+1, -1 = absent).
+    // The per-operand reg/spill/tag lookups (_x86_reg_lookup / _x86_is_spilled
+    // / _x86_spill_offset / _x86_tag_off) probe this in O(1) instead of an
+    // O(len(ids)) `_x86_index_of` scan — collapsing per-function codegen from
+    // O(stmts·locals) to O(stmts) (the #3709 deep-spine fix exposed this
+    // O(n²) on the 7000-binop runtime_cuda_emit). Built once from the final
+    // `ids` order, so every lookup returns the identical slot — byte-eq NEUTRAL.
+    id2idx: [i64]
 }
 
 pub struct X86AllocResult {
@@ -278,15 +286,62 @@ fn _x86_index_of(ids: [i64], id: i64) -> i64 {
     return -1
 }
 
+// #3712 — O(1) id→slot membership for the live-range build. Local ids are
+// dense non-negative ints (hir_to_mir `next_local` counter), so a direct-
+// indexed `id2slot[id]` array (sized maxid+1, -1 = absent) replaces the
+// O(len(ids)) `_x86_index_of` linear probe that made this O(locals²) — the
+// gen3 obj-emit wall the #3709 deep-spine fix exposed on the 7000-binop
+// runtime_cuda_emit (crash → O(n²) hang). Byte-eq NEUTRAL: `ids` keeps the
+// exact first-occurrence order (push sites unchanged) and every interval is
+// overwritten to [0,pos] below regardless — only the probe gets faster.
+fn _x86_max_local_id(mf: MFunc) -> i64 {
+    let mut m = -1
+    let mut li = 0
+    while li < len(mf.locals) {
+        if mf.locals[li].id > m { m = mf.locals[li].id }
+        li = li + 1
+    }
+    let mut pi = 0
+    while pi < len(mf.params) {
+        if mf.params[pi].id > m { m = mf.params[pi].id }
+        pi = pi + 1
+    }
+    let mut bi = 0
+    while bi < len(mf.blocks) {
+        let blk = mf.blocks[bi]
+        let mut si = 0
+        while si < len(blk.stmts) {
+            let s = blk.stmts[si]
+            if s.dst.id > m { m = s.dst.id }
+            let mut ai = 0
+            while ai < len(s.args) {
+                if s.args[ai].kind == "local" && s.args[ai].local_id > m {
+                    m = s.args[ai].local_id
+                }
+                ai = ai + 1
+            }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    return m
+}
+
 fn _x86_compute_live_ranges(mf: MFunc) -> X86Intervals {
     let mut ids: [i64] = []
     let mut starts: [i64] = []
     let mut ends: [i64] = []
 
+    let maxid = _x86_max_local_id(mf)
+    let mut id2slot: [i64] = []
+    let mut zi = 0
+    while zi <= maxid { id2slot.push(-1); zi = zi + 1 }
+
     let mut li = 0
     while li < len(mf.locals) {
         let id = mf.locals[li].id
-        if id >= 0 && _x86_index_of(ids, id) < 0 {
+        if id >= 0 && id2slot[id] < 0 {
+            id2slot[id] = len(ids)
             ids.push(id)
             starts.push(-1)
             ends.push(-1)
@@ -297,7 +352,7 @@ fn _x86_compute_live_ranges(mf: MFunc) -> X86Intervals {
     let mut pi = 0
     while pi < len(mf.params) {
         let pid = mf.params[pi].id
-        let idx = _x86_index_of(ids, pid)
+        let idx = if pid >= 0 && pid <= maxid { id2slot[pid] } else { -1 }
         if idx >= 0 {
             if starts[idx] < 0 { starts[idx] = 0 }
             if ends[idx] < 0   { ends[idx] = 0 }
@@ -314,12 +369,13 @@ fn _x86_compute_live_ranges(mf: MFunc) -> X86Intervals {
             let s = blk.stmts[si]
             let did = s.dst.id
             if did >= 0 {
-                let mut idx = _x86_index_of(ids, did)
+                let mut idx = id2slot[did]
                 if idx < 0 {
+                    idx = len(ids)
+                    id2slot[did] = idx
                     ids.push(did)
                     starts.push(pos)
                     ends.push(pos)
-                    idx = len(ids) - 1
                 } else {
                     if starts[idx] < 0 || pos < starts[idx] { starts[idx] = pos }
                     if pos > ends[idx] { ends[idx] = pos }
@@ -331,12 +387,13 @@ fn _x86_compute_live_ranges(mf: MFunc) -> X86Intervals {
                 if o.kind == "local" {
                     let lid = o.local_id
                     if lid >= 0 {
-                        let mut idx2 = _x86_index_of(ids, lid)
+                        let mut idx2 = id2slot[lid]
                         if idx2 < 0 {
+                            idx2 = len(ids)
+                            id2slot[lid] = idx2
                             ids.push(lid)
                             starts.push(pos)
                             ends.push(pos)
-                            idx2 = len(ids) - 1
                         } else {
                             if starts[idx2] < 0 || pos < starts[idx2] {
                                 starts[idx2] = pos
@@ -434,48 +491,53 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
     let mut active_idx: [i64] = []
     let mut next_slot: i64 = 0
 
+    // #3712 — precompute is_param[slot] (O(1)) so the per-active param test in
+    // the expiry sweep + victim search isn't an O(params) inner scan per active
+    // per step. Indexed by position in `iv.ids` (same as map_*/active_idx).
+    // Byte-eq NEUTRAL: identical boolean as the `mf.params` scan, just cached.
+    let mut is_param_slot: [bool] = []
+    let mut isp_i = 0
+    while isp_i < len(iv.ids) { is_param_slot.push(false); isp_i = isp_i + 1 }
+    let mut isp_p = 0
+    while isp_p < len(mf.params) {
+        // O(params·ids) ONE-TIME (not per-step); params are few. The per-active
+        // hot-path test below reads the cached is_param_slot[] in O(1).
+        let pidx = _x86_index_of(iv.ids, mf.params[isp_p].id)
+        if pidx >= 0 { is_param_slot[pidx] = true }
+        isp_p = isp_p + 1
+    }
+
+    // #3712 — O(1)-per-step active-list maintenance.
+    //
+    // The "conservative whole-function liveness" pass ABOVE unconditionally
+    // overwrites EVERY interval to `starts[i]=0, ends[i]=pos` (the loop that
+    // ends at `ends[ei] = pos`). Under that invariant the array-of-active
+    // bookkeeping the original linear-scan did per step is provably a no-op
+    // beyond an append:
+    //   • expiry `ends[ai] < cur_start` == `pos < 0` → FALSE → nothing ever
+    //     expires (active never shrinks, pool never refilled mid-scan);
+    //   • ordered insert `ends[active] > cur_end` == `pos > pos` → FALSE →
+    //     `cur` is always appended at the END (never spliced mid-list);
+    //   • victim `ends[victim] > ends[cur]` == `pos > pos` → FALSE → the
+    //     register-steal branch is never taken; an out-of-pool value always
+    //     takes the plain-spill else.
+    // So the per-step O(active) array REBUILDS (keep/na/na2 allocations) that
+    // made reg-assign O(N²) are pure overhead here. We collapse them to an
+    // O(1) append + the SAME pool-pop / spill decisions, giving identical
+    // map_regs / map_slots / next_slot for every value (byte-eq NEUTRAL) at
+    // O(N) total. This is what makes the 7000-local runtime_cuda_emit compile
+    // in practical time after the #3709 deep-spine fix removed the crash.
+    // Coupled to the equal-interval invariant the pass above guarantees: if
+    // that liveness model is ever changed to non-uniform intervals, the
+    // self-host byteeq gate (gen3≡gen4 + faithful, exercised on the WHOLE
+    // compiler) breaks immediately — so this cannot silently miscompile.
     let mut s = 0
     while s < len(order) {
         let cur = order[s]
-        let cur_start = iv.starts[cur]
-
-        let mut keep: [i64] = []
-        let mut e = 0
-        while e < len(active_idx) {
-            let ai = active_idx[e]
-            if iv.ends[ai] < cur_start {
-                let was = map_regs[ai]
-                let mut is_param = false
-                let mut pp = 0
-                while pp < len(mf.params) {
-                    if mf.params[pp].id == iv.ids[ai] { is_param = true }
-                    pp = pp + 1
-                }
-                if !is_param && len(was) > 0 && map_slots[ai] < 0 {
-                    pool.push(was)
-                }
-            } else {
-                keep.push(ai)
-            }
-            e = e + 1
-        }
-        active_idx = keep
 
         if len(map_regs[cur]) > 0 {
-            let cur_end = iv.ends[cur]
-            let mut na: [i64] = []
-            let mut placed = false
-            let mut t = 0
-            while t < len(active_idx) {
-                if !placed && iv.ends[active_idx[t]] > cur_end {
-                    na.push(cur)
-                    placed = true
-                }
-                na.push(active_idx[t])
-                t = t + 1
-            }
-            if !placed { na.push(cur) }
-            active_idx = na
+            // pre-colored (param pre-color path) — already has a reg; track it.
+            active_idx.push(cur)
             s = s + 1
             continue
         }
@@ -491,66 +553,14 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
             pool = np
             map_regs[cur] = r
             map_slots[cur] = -1
-            let cur_end = iv.ends[cur]
-            let mut na: [i64] = []
-            let mut placed = false
-            let mut t = 0
-            while t < len(active_idx) {
-                if !placed && iv.ends[active_idx[t]] > cur_end {
-                    na.push(cur)
-                    placed = true
-                }
-                na.push(active_idx[t])
-                t = t + 1
-            }
-            if !placed { na.push(cur) }
-            active_idx = na
+            active_idx.push(cur)
         } else {
-            let mut victim_pos = len(active_idx) - 1
-            while victim_pos >= 0 {
-                let v = active_idx[victim_pos]
-                let mut is_param = false
-                let mut pp = 0
-                while pp < len(mf.params) {
-                    if mf.params[pp].id == iv.ids[v] { is_param = true }
-                    pp = pp + 1
-                }
-                if !is_param { break }
-                victim_pos = victim_pos - 1
-            }
-
-            if victim_pos >= 0 && iv.ends[active_idx[victim_pos]] > iv.ends[cur] {
-                let v = active_idx[victim_pos]
-                map_regs[cur] = map_regs[v]
-                map_slots[cur] = -1
-                map_regs[v] = ""
-                map_slots[v] = next_slot
-                next_slot = next_slot + 8
-                let mut na: [i64] = []
-                let mut t = 0
-                while t < len(active_idx) {
-                    if t != victim_pos { na.push(active_idx[t]) }
-                    t = t + 1
-                }
-                let cur_end = iv.ends[cur]
-                let mut na2: [i64] = []
-                let mut placed = false
-                let mut tt = 0
-                while tt < len(na) {
-                    if !placed && iv.ends[na[tt]] > cur_end {
-                        na2.push(cur)
-                        placed = true
-                    }
-                    na2.push(na[tt])
-                    tt = tt + 1
-                }
-                if !placed { na2.push(cur) }
-                active_idx = na2
-            } else {
-                map_regs[cur] = ""
-                map_slots[cur] = next_slot
-                next_slot = next_slot + 8
-            }
+            // pool exhausted: under whole-fn liveness no resident value has a
+            // later end than `cur` (all ends equal), so the steal branch is
+            // dead → plain spill, exactly as the original's else.
+            map_regs[cur] = ""
+            map_slots[cur] = next_slot
+            next_slot = next_slot + 8
         }
         s = s + 1
     }
@@ -564,12 +574,37 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
     let rem = frame - (frame / 16) * 16
     if rem != 0 { frame = frame + (16 - rem) }
 
-    let map = X86RegMap { ids: map_ids, regs: map_regs, slots: map_slots, tag_base: tag_base }
+    // #3712 — build the O(1) id→index array from the final `map_ids` order.
+    let mut rm_maxid: i64 = -1
+    let mut mj = 0
+    while mj < len(map_ids) {
+        if map_ids[mj] > rm_maxid { rm_maxid = map_ids[mj] }
+        mj = mj + 1
+    }
+    let mut rm_id2idx: [i64] = []
+    let mut zj = 0
+    while zj <= rm_maxid { rm_id2idx.push(-1); zj = zj + 1 }
+    let mut mk = 0
+    while mk < len(map_ids) {
+        if map_ids[mk] >= 0 { rm_id2idx[map_ids[mk]] = mk }
+        mk = mk + 1
+    }
+
+    let map = X86RegMap { ids: map_ids, regs: map_regs, slots: map_slots, tag_base: tag_base, id2idx: rm_id2idx }
     return X86AllocResult { map: map, frame_size: frame }
 }
 
+// #3712 — O(1) RegMap probe: id → index-into-`ids` (-1 = absent/out-of-range).
+// Replaces the O(len(ids)) `_x86_index_of(rm.ids, id)` linear scan at the
+// per-operand codegen lookups. Returns the identical slot the scan would
+// (built from the same `ids` order) → byte-eq NEUTRAL.
+fn _x86_rm_idx(rm: X86RegMap, id: i64) -> i64 {
+    if id < 0 || id >= len(rm.id2idx) { return -1 }
+    return rm.id2idx[id]
+}
+
 fn _x86_reg_lookup(rm: X86RegMap, id: i64) -> string {
-    let idx = _x86_index_of(rm.ids, id)
+    let idx = _x86_rm_idx(rm, id)
     if idx < 0 { return _x86_64_reg_for_local(id) }
     if rm.slots[idx] >= 0 { return "r10" }
     if len(rm.regs[idx]) == 0 { return _x86_64_reg_for_local(id) }
@@ -577,13 +612,13 @@ fn _x86_reg_lookup(rm: X86RegMap, id: i64) -> string {
 }
 
 fn _x86_is_spilled(rm: X86RegMap, id: i64) -> bool {
-    let idx = _x86_index_of(rm.ids, id)
+    let idx = _x86_rm_idx(rm, id)
     if idx < 0 { return false }
     return rm.slots[idx] >= 0
 }
 
 fn _x86_spill_offset(rm: X86RegMap, id: i64) -> i64 {
-    let idx = _x86_index_of(rm.ids, id)
+    let idx = _x86_rm_idx(rm, id)
     if idx < 0 { return 0 }
     return rm.slots[idx]
 }
@@ -594,7 +629,7 @@ fn _x86_spill_offset(rm: X86RegMap, id: i64) -> i64 {
 // register of its 16B pair), here kept in a parallel frame region so the rest
 // of the raw-int payload model is untouched.
 fn _x86_tag_off(rm: X86RegMap, id: i64) -> i64 {
-    let idx = _x86_index_of(rm.ids, id)
+    let idx = _x86_rm_idx(rm, id)
     if idx < 0 { return -1 }
     return rm.tag_base + idx * 8
 }
