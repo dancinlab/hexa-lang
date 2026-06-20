@@ -1402,6 +1402,8 @@ fn emit_runtime_cuda_c() -> str {
             "        return -1;\n" +
             "    }\n" +
             "    }\n" +
+            "#else\n" +
+            "    }  /* NO_CUBLAS: close the _forge_own_gemm_on() own-branch (cuBLAS else removed) */\n" +
             "#endif\n" +
             "    if (_forge_sync() != 0) return -1;\n" +
             "    cudaError_t er = cudaMemcpy(ce->buf, C_dev,\n" +
