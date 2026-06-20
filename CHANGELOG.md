@@ -1,5 +1,8 @@
 ## 2026-06-20
 
+- **docs(governance): native-canonical-default 원칙 CLAUDE.md 박제 — 기본=native/own/canonical, 플래그는 제약 전용 (polarity 역전 금지)**: 사용자 거버넌스 결정 — 기본 경로는 항상 hexa-native/own 이어야 하고, 외부 의존(cuBLAS·벤더 BLAS 등)·비결정·실험·legacy fallback 은 **플래그로 opt-in 하는 제약으로만** 존재한다. **역전 절대 금지**(native 를 플래그 뒤로, 외부의존을 기본으로 두면 안 됨). 플래그 명명도 켜는 것=제약/외부의존 활성화여야 함(`HEXA_USE_<vendor>`·`HEXA_<feat>_FALLBACK` ○ / `HEXA_NO_<vendor>` ✗). **#3742 의 `HEXA_NO_CUBLAS` 는 polarity 거꾸로였음(native 가 opt-in) → 교정 대상**: own 이 default, cuBLAS 는 `HEXA_USE_CUBLAS` opt-in 으로 뒤집어야 함(BF16 ~2× 느림은 수용 · 빠른 cuBLAS 경로는 플래그로 보존 → self-host≠release '경로 안 깨짐'과 양립).
+
+
 - **feat(forge): HEXA_NO_CUBLAS — forge GPU 런타임 완전 cuBLAS-free 빌드 변종 (4조각 측정 증명·aiden RTX 5070 sm_120)**: hexa-cuda 가 진짜 완전대체제임을 증명 — `HEXA_NO_CUBLAS` 컴파일 스위치로 **모든 cublas* 호출지점을 `#ifdef` out → -lcublas 없이 링크**(nm -u cublas=0·ldd libcublas 없음·LINK_OK ZERO -lcublas), forge smoke PASS(own GEMM rel-RMS 1.66e-3). 4조각: ① GEMM+residual epilogue fusion(byte-eq max|Δ|=0 전 size, +0.2~0.7% — FP64 epilogue=GEMM의 0.2~0.4%라 추월 미미·정직) ② own FP64/fp32 packed_gemv(157~160 GFLOP/s 메모리바운드 640GB/s·cublasDgemv 1.006~1.050× 추월·relRMS~1e-16 bit-exact) ③ BF16 own mma.sync m16n8k16 NO_CUBLAS 경로(`[BF16-OWN-FIRED]`·rel-RMS 1.66e-3) ④ 위 헤드라인. **표준 빌드(NO_CUBLAS OFF) byte-identical**(전 신규라인 `#ifdef HEXA_NO_CUBLAS`/`#else` 내부, 기본 preprocessor drop → cublas* 참조 유지·self-host≠release 안전). 근본fix: matmul_t brace 불균형 #else}#endif 보정 + runtime_cuda.c/runtime_bf16.c frozen seed regen(emitter SSOT 동기화). emitter=self/cuda/runtime_cuda_emit.hexa.
 
 

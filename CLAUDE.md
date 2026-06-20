@@ -75,6 +75,18 @@ This file is the single governance SSOT (md 단일화) — edit directives here,
   no new top-level verbs).
 - **stdlib trig = libm** — signal/math modules use native libm trig (`cos`/`sin`/…), never
   hand-rolled Taylor series (codegen-fragile).
+- **native-canonical-default · 플래그는 제약 전용 (polarity 역전 금지)** — 기본 경로는 **항상
+  hexa-native/own/canonical** 이어야 한다. 외부 의존(cuBLAS·외부 BLAS·벤더 라이브러리 등)·
+  비결정·실험·legacy fallback 은 **플래그(env/컴파일 매크로)로 opt-in 하는 "제약"으로만** 존재한다.
+  **역전 절대 금지**: native 를 플래그 뒤로 숨기고 외부의존을 기본으로 두면 안 된다. 올바른 polarity
+  예 — forge GPU GEMM: **own 커널이 default**, cuBLAS 는 `HEXA_USE_CUBLAS` 같은 opt-in 으로만
+  (잘못된 예 = `HEXA_NO_CUBLAS` 로 native 를 opt-in 시키는 것 · #3742 도입 시 polarity 거꾸로였음,
+  교정 대상). 플래그 명명도 이 방향을 따른다 — 켜는 것이 "제약/외부의존 활성화"여야지, native 활성화가
+  아니다(`HEXA_USE_<vendor>`·`HEXA_<feature>_FALLBACK` ○ / `HEXA_NO_<vendor>` ✗). native-default 가
+  perf 회귀를 일으키면(예: consumer-GPU BF16 ~2× 느림) **polarity 는 유지하되** 빠른 외부의존 경로를
+  opt-in 플래그로 남겨 선택 가능케 한다(felt-default = native, 빠른 길은 명시 opt-in). 이는 위
+  [self-host ≠ release 회귀]의 "사용자 경로를 깨지 말라"와 양립한다 — 느려지는 건 깨지는 게 아니며,
+  빠른 cuBLAS 경로는 플래그로 보존된다.
 - **external LLM** — invoke external LLMs only via `hexa loop --dfs` (budget cap + verify gate).
 - **HF namespace** — all HuggingFace uploads/Collections live under the `dancinlab` org.
 - **L0 edits** — editing a lockdown file (see `harness.config.json` → `lockdown.files`)
