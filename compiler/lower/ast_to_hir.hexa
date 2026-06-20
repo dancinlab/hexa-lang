@@ -1656,35 +1656,71 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
     }
 
     // ── binop: type from operand types (numeric promotion same-kind) ──
+    //
+    // ITERATIVE LEFT-SPINE FLATTEN (#3709). The parser's precedence-climbing
+    // (parse_additive/_multiplicative/…) builds same-operator runs as a
+    // LEFT-LEANING tree: `a + b + c + …` parses to `((a+b)+c)…`, so child[0]
+    // is itself a binop down the whole chain. A naive `_lower_expr(child[0])`
+    // recursion is then as deep as the chain. A single 7004-line emitter
+    // function (self/cuda/runtime_cuda_emit.hexa — one `let s = "…" + "…" +
+    // …` of ~7000 `+`) drove _lower_expr ~7000 frames deep and SIGSEGV'd
+    // gen3's own stack while compiling it (the -cuda release runtime_cuda.c
+    // emit failure). We descend the child[0] spine with an explicit worklist
+    // and rebuild the HExpr bottom-up — IDENTICAL tree shape + left-to-right
+    // scope threading as the recursion, with O(1) native stack depth.
     if _hir_is_binop_kind(k) {
+        // Collect the left spine: spine[0] is the OUTERMOST node (== e), each
+        // next is its child[0] while that child is also a binop. The deepest
+        // node's child[0] is the spine BASE (a non-binop, lowered normally).
+        let mut spine: [Expr] = []
+        let mut cur = e
+        spine.push(cur)
+        while _hir_is_binop_kind(cur.children[0].kind) {
+            cur = cur.children[0]
+            spine.push(cur)
+        }
+        // Lower the base (deepest child[0]) first — matches the recursion,
+        // which fully lowers the leftmost leaf before any enclosing binop.
         let mut new_sc = sc
-        let mut kids: [HExpr] = []
-        let mut i = 0
-        while i < len(e.children) {
-            let r = _lower_expr(e.children[i], atlas, new_sc)
-            kids.push(r.expr)
-            new_sc = r.sc
-            i = i + 1
-        }
-        let mut t = _hir_empty_type()
-        if _hir_is_compare_op(e.text) {
-            t = _hir_t_bool()
-        } else if len(kids) >= 2 {
-            let lt = kids[0].typ
-            let rt = kids[1].typ
-            if _hir_is_numeric(lt) && _hir_is_numeric(rt) && lt.kind == rt.kind {
-                t = lt
-            } else if len(lt.kind) > 0 && lt.kind != "?" {
-                t = lt
-            } else {
-                t = rt
+        let base_r = _lower_expr(spine[len(spine) - 1].children[0], atlas, new_sc)
+        let mut acc = base_r.expr
+        new_sc = base_r.sc
+        // Unwind from the deepest spine node outward. For each node, child[0]
+        // is the accumulated left HExpr (`acc`); lower the remaining children
+        // (child[1..], shallow — the right operands) in order, threading scope.
+        let mut si = len(spine) - 1
+        while si >= 0 {
+            let node = spine[si]
+            let mut kids: [HExpr] = []
+            kids.push(acc)
+            let mut ci = 1
+            while ci < len(node.children) {
+                let r = _lower_expr(node.children[ci], atlas, new_sc)
+                kids.push(r.expr)
+                new_sc = r.sc
+                ci = ci + 1
             }
-        } else if len(kids) == 1 {
-            t = kids[0].typ
+            let mut t = _hir_empty_type()
+            if _hir_is_compare_op(node.text) {
+                t = _hir_t_bool()
+            } else if len(kids) >= 2 {
+                let lt = kids[0].typ
+                let rt = kids[1].typ
+                if _hir_is_numeric(lt) && _hir_is_numeric(rt) && lt.kind == rt.kind {
+                    t = lt
+                } else if len(lt.kind) > 0 && lt.kind != "?" {
+                    t = lt
+                } else {
+                    t = rt
+                }
+            } else if len(kids) == 1 {
+                t = kids[0].typ
+            }
+            acc = _mk_hexpr(_expr_kind_tag(node.kind), node.span, t, node.text,
+                            kids, _empty_atlas_binding(), _hir_miss_def_id())
+            si = si - 1
         }
-        let h = _mk_hexpr(kind_tag, e.span, t, e.text,
-                          kids, _empty_atlas_binding(), _hir_miss_def_id())
-        return LowerResult { expr: h, sc: new_sc }
+        return LowerResult { expr: acc, sc: new_sc }
     }
 
     // ── unop: type from operand ─────────────────────────────
