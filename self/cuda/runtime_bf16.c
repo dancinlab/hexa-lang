@@ -567,15 +567,25 @@ extern "C" __global__ void _hx_k_gemm_bf16_owngemm(const float* __restrict__ A,
 }
 #endif
 
-/* HEXA_BF16_OWN: own mma.sync m16n8k16 BF16 GEMM is the DEFAULT pure-BF16
- * matmul (byte-CHANGING vs cublasGemmEx — different tensor-op accum — but
- * within the gate rel-RMS<=1e-2 vs cublasGemmEx-BF16, file-header contract
- * C2 which already forbids cross-impl bit-equality for BF16). Returns 1
- * (own) unless HEXA_BF16_OWN=0 reverts to cublasGemmEx. Mirrors
- * runtime_cuda.c _forge_own_gemm_on / _forge_tf32_own_on. */
+/* HEXA_BF16_OWN: own mma.sync m16n8k16 BF16 GEMM is the cuBLAS-FREE pure-BF16
+ * matmul replacement, but ships OPT-IN (default OFF -> cublasGemmEx) because
+ * it is MEASURED materially slower than cublasGemmEx-BF16 on sm_120 (aiden RTX
+ * 5070, this round): correctness PASSES (own-vs-cuBLAS-BF16 rel-RMS=0, own-vs-
+ * FP64=1.66e-3 == cuBLAS) but the production path (upcast bf16->fp32 + own GEMM
+ * + downcast fp32->bf16 + 3x cudaMalloc) runs 3.1x (S=2048) .. 7.1x (S=512)
+ * SLOWER than cublasGemmEx (own 21.3/9.5/2.7 vs cuBLAS 66.2/48.4/19.3 TFLOP/s
+ * @S=2048/1024/512). The self-host>=release guardrail forbids shipping a
+ * default-path perf regression on the live cuda release, so own is opt-in:
+ * HEXA_BF16_OWN=1 enables it (cuBLAS-call 2->0, the link-removal prerequisite),
+ * default/unset keeps cublasGemmEx. (Mirrors _forge_own_gemm_on / _forge_tf32_own_on
+ * polarity but INVERTED: FP64-own is bit-id-fast so default-ON; BF16-own is
+ * slower so default-OFF until a perf round closes the kernel gap.) byte-CHANGING
+ * vs cublasGemmEx (different tensor-op accum) but within file-header contract
+ * C2 which already forbids cross-impl BF16 bit-equality. Returns 1 (own) ONLY
+ * when HEXA_BF16_OWN=1. */
 static int _forge_bf16_own_on(void) {
     const char* v = getenv("HEXA_BF16_OWN");
-    return (v && v[0] == '0') ? 0 : 1;
+    return (v && v[0] == '1') ? 1 : 0;
 }
 
 /* OWN-BF16 dispatcher: row-major C[M,N] = A[M,K] @ B[K,N] on BF16 device
