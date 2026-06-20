@@ -2,7 +2,8 @@
  *
  * Byte-eq oracle for the native SCALAR value-op port
  * (stdlib/runtime/valop_core.hexa::rt_truthy_native / rt_sub_native /
- * rt_mul_native) against the standalone runtime.c C scalar switch arms.
+ * rt_mul_native / rt_add_native) against the standalone runtime.c C scalar
+ * switch arms.
  *
  * Proves, for the int/float/bool/void scalar tags:
  *   - rt_truthy_native(v)  == the C hexa_truthy scalar switch (incl. NaN→true,
@@ -10,6 +11,8 @@
  *   - rt_sub_native(a,b)   == the C int-int / int|float subtract (exact int64 &
  *     bit-identical double via memcmp)
  *   - rt_mul_native(a,b)   == the C int-int / int|float multiply
+ *   - rt_add_native(a,b)   == the C int-int / int|float add (int64 wrap +
+ *     bit-identical double, incl. inf+-inf=NaN)
  * and that the end-to-end wrappers (hexa_truthy / hexa_sub / hexa_mul, compiled
  * -DHEXA_RT_VALOP_NATIVE) agree with the same C reference.
  *
@@ -44,10 +47,12 @@
 extern HexaVal rt_truthy_native(HexaVal v);
 extern HexaVal rt_sub_native(HexaVal a, HexaVal b);
 extern HexaVal rt_mul_native(HexaVal a, HexaVal b);
+extern HexaVal rt_add_native(HexaVal a, HexaVal b);
 
 int hexa_truthy(HexaVal v);
 HexaVal hexa_sub(HexaVal a, HexaVal b);
 HexaVal hexa_mul(HexaVal a, HexaVal b);
+HexaVal hexa_add_slow(HexaVal a, HexaVal b);
 
 static int fails = 0, checks = 0;
 static void chk(int cond, const char* what) {
@@ -117,6 +122,25 @@ static void chk_mul(HexaVal a, HexaVal b, const char* what) {
     }
 }
 
+/* C reference scalar add: int-int → int (wraps like C int64); else double. */
+static void chk_add(HexaVal a, HexaVal b, const char* what) {
+    HexaVal nv = rt_add_native(a, b);
+    char buf[160];
+    if (HX_IS_INT(a) && HX_IS_INT(b)) {
+        int64_t ref = HX_INT(a) + HX_INT(b);
+        snprintf(buf, sizeof(buf), "rt_add_native %s native=%lld ref=%lld tag=%d",
+                 what, (long long)HX_INT(nv), (long long)ref, (int)HX_TAG(nv));
+        chk(HX_TAG(nv) == TAG_INT && HX_INT(nv) == ref, buf);
+    } else {
+        double da = HX_IS_FLOAT(a) ? HX_FLOAT(a) : (double)HX_INT(a);
+        double db = HX_IS_FLOAT(b) ? HX_FLOAT(b) : (double)HX_INT(b);
+        double ref = da + db;
+        snprintf(buf, sizeof(buf), "rt_add_native %s native=%g ref=%g tag=%d",
+                 what, HX_FLOAT(nv), ref, (int)HX_TAG(nv));
+        chk(HX_TAG(nv) == TAG_FLOAT && dbits_eq(HX_FLOAT(nv), ref), buf);
+    }
+}
+
 int main(void) {
     chk(sizeof(HexaVal) == 16, "sizeof(HexaVal)==16");
 
@@ -157,6 +181,20 @@ int main(void) {
     chk_mul(hexa_float(0.1), hexa_float(0.1), "0.1*0.1 (rounding)");
     chk_mul(hexa_float(NAN), hexa_float(2.0), "NaN*2");
 
+    /* PART E — add (same int-int / int|float / float-float shape as sub/mul). */
+    chk_add(hexa_int(10), hexa_int(3), "10+3");
+    chk_add(hexa_int(-4), hexa_int(7), "-4+7");
+    chk_add(hexa_int(0), hexa_int(0), "0+0");
+    chk_add(hexa_int(INT64_MAX), hexa_int(1), "MAX+1 wrap");   /* C int64 wrap, native must match */
+    chk_add(hexa_int(INT64_MIN), hexa_int(-1), "MIN+-1 wrap");
+    chk_add(hexa_float(1.5), hexa_float(0.25), "1.5+0.25");
+    chk_add(hexa_int(5), hexa_float(2.0), "5+2.0 mixed");
+    chk_add(hexa_float(2.0), hexa_int(5), "2.0+5 mixed");
+    chk_add(hexa_float(0.1), hexa_float(0.2), "0.1+0.2 (rounding)");
+    chk_add(hexa_float(INFINITY), hexa_float(1.0), "inf+1");
+    chk_add(hexa_float(INFINITY), hexa_float(-INFINITY), "inf+-inf=NaN");
+    chk_add(hexa_float(NAN), hexa_float(2.0), "NaN+2");
+
 #ifdef HEXA_HAS_HEXA_RT_STDLIB
     /* PART D — end-to-end wrapper agreement (only when rt-stdlib deps linked). */
     chk(hexa_truthy(hexa_int(0)) == 0, "wrap truthy int0");
@@ -165,6 +203,12 @@ int main(void) {
     chk(HX_INT(hexa_sub(hexa_int(9), hexa_int(2))) == 7, "wrap sub 9-2");
     chk(HX_INT(hexa_mul(hexa_int(6), hexa_int(7))) == 42, "wrap mul 6*7");
     chk(dbits_eq(HX_FLOAT(hexa_sub(hexa_float(1.5), hexa_float(0.5))), 1.0), "wrap sub f");
+    /* hexa_add_slow is the slow-path wrapper that carries the native add arm
+     * (the int+int hexa_add MACRO never reaches it). Scalar numeric operands
+     * delegate to rt_add_native; verify the wrapper round-trip. */
+    chk(HX_INT(hexa_add_slow(hexa_int(40), hexa_int(2))) == 42, "wrap add_slow 40+2");
+    chk(dbits_eq(HX_FLOAT(hexa_add_slow(hexa_float(1.5), hexa_float(0.5))), 2.0), "wrap add_slow f");
+    chk(dbits_eq(HX_FLOAT(hexa_add_slow(hexa_int(3), hexa_float(0.5))), 3.5), "wrap add_slow mixed");
 #endif
 
     if (fails == 0) printf("[valop_core_gate] GATE PASS — %d checks, 0 fails\n", checks);
