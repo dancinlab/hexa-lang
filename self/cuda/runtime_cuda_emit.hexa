@@ -779,6 +779,24 @@ fn emit_runtime_cuda_c() -> str {
             "    return (v && v[0]) ? 1 : 0;\n" +
             "}\n" +
             "\n" +
+            "/* own-GEMM is now the DEFAULT (FP64 own _hx_k_gemm == cuBLAS bit-identical,\n" +
+            " * rel-RMS 0 byte-neutral; cuBLAS Dgemm is the opt-OUT fallback). Returns 1\n" +
+            " * (own) unless HEXA_OWN_GEMM=0 explicitly reverts to cuBLAS. Any other value\n" +
+            " * (unset / =1 / etc.) keeps own-GEMM. */\n" +
+            "static int _forge_own_gemm_on(void) {\n" +
+            "    const char* v = getenv(\"HEXA_OWN_GEMM\");\n" +
+            "    return (v && v[0] == '0') ? 0 : 1;\n" +
+            "}\n" +
+            "\n" +
+            "/* within HEXA_TF32_FASTMODE: own mma.sync TF32 is the DEFAULT (byte-CHANGING\n" +
+            " * vs cublasGemmEx — different tensor-op accum — but confined to the already\n" +
+            " * non-deterministic fastmode lane; the default non-fastmode FP64 path is\n" +
+            " * untouched). Returns 1 (own) unless HEXA_TF32_OWN=0 reverts to cublasGemmEx. */\n" +
+            "static int _forge_tf32_own_on(void) {\n" +
+            "    const char* v = getenv(\"HEXA_TF32_OWN\");\n" +
+            "    return (v && v[0] == '0') ? 0 : 1;\n" +
+            "}\n" +
+            "\n" +
             "/* OP-24: deterministic TF32 tensor-op GEMM on FP64 row-major farr device buffers.\n" +
             " * Computes C[M,N] = A[M,K] . B[K,N] (same row->col trick + arg layout as the\n" +
             " * cublasDgemm default path: cublas sees row-major as col-major transposed, so the\n" +
@@ -1082,10 +1100,11 @@ fn emit_runtime_cuda_c() -> str {
             "     * Dgemm(N,N, m=N, n=M, k=K, alpha, B_dev, ldb=N, A_dev, lda=K,\n" +
             "     *       beta, C_dev, ldc=N) — produces column-major (N×M), which\n" +
             "     * IS the row-major C (M×N). */\n" +
-            "    /* HEXA-FUSION Phase 1a: env HEXA_OWN_GEMM swaps cublasDgemm for our own\n" +
-            "     * _hx_k_gemm (row-major, naive). OFF → cublasDgemm unchanged (byte-identical\n" +
-            "     * to prior build). cuBLAS stays the correctness oracle for A/B comparison. */\n" +
-            "    if (getenv(\"HEXA_OWN_GEMM\") && getenv(\"HEXA_OWN_GEMM\")[0]) {\n" +
+            "    /* HEXA-FUSION Phase 1a: own _hx_k_gemm (row-major, naive) is now the\n" +
+            "     * DEFAULT GEMM (FP64 own == cuBLAS bit-identical, rel-RMS 0 byte-neutral).\n" +
+            "     * HEXA_OWN_GEMM=0 opt-OUT reverts to cublasDgemm (which stays the A/B\n" +
+            "     * correctness oracle). cuBLAS is no longer a hard dependency. */\n" +
+            "    if (_forge_own_gemm_on()) {\n" +
             "        static int _own_gemm_fired = 0;\n" +
             "        if (!_own_gemm_fired) { _own_gemm_fired = 1;\n" +
             "            fprintf(stderr, \"[OWN-GEMM-FIRED] _hx_k_gemm DEVICE path (no cuBLAS)\\n\"); }\n" +
@@ -1102,7 +1121,7 @@ fn emit_runtime_cuda_c() -> str {
             "         * else cublasGemmEx (the prior default TF32 path, byte-identical when OWN\n" +
             "         * unset). This makes forge cuBLAS-INDEPENDENT (cublasGemmEx 1->0): the LAST\n" +
             "         * cuBLAS dependency now has a parity own-kernel replacement. */\n" +
-            "        if (getenv(\"HEXA_TF32_OWN\") && getenv(\"HEXA_TF32_OWN\")[0]) {\n" +
+            "        if (_forge_tf32_own_on()) {\n" +
             "            if (_hx_cuda_gemm_tf32_own_dev(A_dev, B_dev, C_dev, M, K, N) != 0) return -1;\n" +
             "        } else {\n" +
             "            if (_hx_cuda_gemm_tf32_dev(A_dev, B_dev, C_dev, M, K, N) != 0) return -1;\n" +
@@ -1217,7 +1236,7 @@ fn emit_runtime_cuda_c() -> str {
             "    /* Swapped (B,A) so the row-major buffers map to the right column-\n" +
             "     * major problem; strideB = K·N (the cuBLAS-A operand here),\n" +
             "     * strideA = M·K (the cuBLAS-B operand), strideC = M·N. */\n" +
-            "    if (getenv(\"HEXA_OWN_GEMM\") && getenv(\"HEXA_OWN_GEMM\")[0]) {\n" +
+            "    if (_forge_own_gemm_on()) {\n" +
             "        static int _own_bgemm_fired = 0;\n" +
             "        if (!_own_bgemm_fired) { _own_bgemm_fired = 1;\n" +
             "            fprintf(stderr, \"[OWN-GEMM-FIRED] _hx_k_gemm_strided_batched DEVICE path (no cuBLAS)\\n\"); }\n" +
@@ -1326,7 +1345,7 @@ fn emit_runtime_cuda_c() -> str {
             "    double* C_dev = cs->d_buf;\n" +
             "    const double alpha = 1.0;\n" +
             "    const double beta  = 0.0;\n" +
-            "    if (getenv(\"HEXA_OWN_GEMM\") && getenv(\"HEXA_OWN_GEMM\")[0]) {\n" +
+            "    if (_forge_own_gemm_on()) {\n" +
             "        static int _own_gemmt_fired = 0;\n" +
             "        if (!_own_gemmt_fired) { _own_gemmt_fired = 1;\n" +
             "            fprintf(stderr, \"[OWN-GEMM-FIRED] _hx_k_gemm_t DEVICE path (no cuBLAS)\\n\"); }\n" +
@@ -5265,7 +5284,7 @@ fn emit_runtime_cuda_c() -> str {
             "     * (naive K-accum order vs cuBLAS-tiled) — rel-RMS within TOL_MATMUL,\n" +
             "     * cuBLAS demoted to correctness oracle. OFF (default) keeps the exact\n" +
             "     * cublasDgemm path below byte-identical to the prior build. */\n" +
-            "    if (getenv(\"HEXA_OWN_GEMM\") && getenv(\"HEXA_OWN_GEMM\")[0]) {\n" +
+            "    if (_forge_own_gemm_on()) {\n" +
             "        static int _own_matmult_fired = 0;\n" +
             "        if (!_own_matmult_fired) { _own_matmult_fired = 1;\n" +
             "            fprintf(stderr, \"[OWN-GEMM-FIRED] _hx_k_gemm (matmul_t) DEVICE path (no cuBLAS)\\n\"); }\n" +
@@ -5363,7 +5382,7 @@ fn emit_runtime_cuda_c() -> str {
             "     * fp32/bf16 mixed-precision kernels still take precedence (a separate,\n" +
             "     * deliberately-narrowed-precision choice). OFF (default) → falls\n" +
             "     * through to the existing gate, byte-identical to the prior build. */\n" +
-            "    if ((getenv(\"HEXA_OWN_GEMM\") && getenv(\"HEXA_OWN_GEMM\")[0]) &&\n" +
+            "    if (_forge_own_gemm_on() &&\n" +
             "        _hx_train_dtype() == HX_TRAIN_DTYPE_FP64) {\n" +
             "        static int _own_gemv_fired = 0;\n" +
             "        if (!_own_gemv_fired) { _own_gemv_fired = 1;\n" +
@@ -5495,7 +5514,7 @@ fn emit_runtime_cuda_c() -> str {
             "     * output cell → ZERO reduction → BIT-EXACT vs cuBLAS (and vs the CPU\n" +
             "     * c3_outer oracle): max|Δ| = 0, same as the F-RFC041-OUTER-EXACT\n" +
             "     * contract. OFF (default) keeps the exact cublasDgemm path byte-id. */\n" +
-            "    if (getenv(\"HEXA_OWN_GEMM\") && getenv(\"HEXA_OWN_GEMM\")[0]) {\n" +
+            "    if (_forge_own_gemm_on()) {\n" +
             "        static int _own_outer_fired = 0;\n" +
             "        if (!_own_outer_fired) { _own_outer_fired = 1;\n" +
             "            fprintf(stderr, \"[OWN-GEMM-FIRED] _hx_k_gemm (outer, k=1) DEVICE path (no cuBLAS)\\n\"); }\n" +

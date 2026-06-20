@@ -102,13 +102,13 @@ perf victory over the vendor library.
 > 의 6 GEMM 호출 전부 own-kernel env 게이트의 OFF 폴백으로 강등). flame 은 이 경로를
 > 자동 상속한다(직접 cuBLAS 호출 0건 · 모든 GEMM 이 forge 게이트 런처로 수렴).
 >
-> **결정적(byte-eq) GPU 학습 스위치.** cloud/dojo 잡에서 아래 env 를 켜면 own-kernel 이
-> cuBLAS 를 대체한다 — **OFF 비트동일 · additive opt-in** (켜지 않으면 기존 cuBLAS 경로
-> 0줄 변경):
-> - `HEXA_OWN_GEMM=1` — FP64(기본) GEMM 전체를 own `_hx_k_gemm` 으로 (cuBLAS 호출 0,
->   `[OWN-GEMM-FIRED] … (no cuBLAS)` 마커로 실증). flame 기본 학습 경로가 이것.
-> - `HEXA_TF32_OWN=1` — `HEXA_TF32_FASTMODE` 하위 게이트 · TF32 fastmode 를 own
->   `mma.sync` parity 커널로.
+> **결정적(byte-eq) GPU 학습 — own-kernel 이 이제 기본.** cloud/dojo 잡은 별도 설정 없이
+> own-GEMM 으로 돌고(cuBLAS 호출 0), 필요시 아래 env 로 opt-OUT 한다:
+> - `HEXA_OWN_GEMM=0` — FP64(기본) GEMM 을 cuBLAS Dgemm 으로 되돌림. default(미설정)는
+>   own `_hx_k_gemm`(`[OWN-GEMM-FIRED] … (no cuBLAS)` 마커) — FP64 own==cuBLAS bit-identical
+>   이라 default-ON 이 byte-neutral. flame 기본 학습 경로가 이것.
+> - `HEXA_TF32_OWN=0` — `HEXA_TF32_FASTMODE` 하위 레인의 own `mma.sync` 를 cublasGemmEx 로
+>   되돌림. default 는 own(byte-changing vs cuBLAS — 이미 비결정 fastmode 레인 안).
 >
 > cloud 는 `cloud_validate_env_passthrough` 가 dispatcher 의 `--env` 전달을 검증할 뿐
 > allowlist 차단이 아니므로, 이 두 env 는 별도 배선 없이 그대로 pod 로 전달된다.
