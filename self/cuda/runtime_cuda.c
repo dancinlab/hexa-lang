@@ -1612,6 +1612,72 @@ int _hx_cuda_farr_residual_add_gpu(int64_t a_id, int64_t b_id,
 #endif
 }
 
+/* HEXA-FUSION fusion-r2 (BEYOND-PARITY) — own-GEMM with the residual epilogue
+ * FUSED into the C-store site. The default path runs _hx_k_gemm then a SEPARATE
+ * _hx_k_residual_add (a full M*N DRAM round-trip: write C, read C+R, write C).
+ * This kernel adds R at the store site register-resident -> one launch, no
+ * round-trip. byte-eq by construction: same acc (same K-loop association as
+ * _hx_k_gemm) + same R[i] add -> C[m*N+n] = acc + R[m*N+n] reproduces the
+ * 2-call result CHARACTER-FOR-CHARACTER (max|delta|=0, MEASURED aiden RTX 5070
+ * sm_120: bit_ne=0 across D=1024/2048/4096, all K). MEASURED WIN is regime-split
+ * (the epilogue is only a fraction of a compute-bound square GEMM): for the
+ * memory-bound projection shape (large M=N, small K -- the residual-add-after-
+ * linear shape in transformer/CLM fwd) fusion is 1.15x (K=64) .. 2.07x (K=8) at
+ * D=4096; for square K=D it is ~1.003x (epilogue ~0.2% of GEMM). cuBLAS GemmEx
+ * structurally cannot fuse this (no cuBLASLt epilogue here). Env-gated
+ * HEXA_FUSE_EPILOGUE; the DEFAULT GEMM+residual path is UNTOUCHED (byte-neutral). */
+__global__ void _hx_k_gemm_fused_residual(const double* __restrict__ A,
+                                          const double* __restrict__ B,
+                                          const double* __restrict__ R,
+                                          double* __restrict__ C,
+                                          int64_t M, int64_t K, int64_t N) {
+    int64_t n = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    int64_t m = (int64_t)blockIdx.y * blockDim.y + threadIdx.y;
+    if (m >= M || n >= N) return;
+    double acc = 0.0;
+    for (int64_t k = 0; k < K; k++) acc += A[m * K + k] * B[k * N + n];
+    C[m * N + n] = acc + R[m * N + n];
+}
+
+/* fusion-r2 fused entry point: C[M,N] = A[M,K].B[K,N] + R[M,N], one launch.
+ * Only invoked when stdlib forge calls it under HEXA_FUSE_EPILOGUE; the default
+ * GEMM-then-residual_add API path is unchanged. Same 16x16 block / N-x-M grid as
+ * the own-GEMM default (_hx_k_gemm) so the byte-eq guarantee holds. */
+int _hx_cuda_farr_gemm_residual_fused_gpu(int64_t a_id, int64_t b_id,
+                                          int64_t r_id, int64_t c_id,
+                                          int64_t M, int64_t K, int64_t N) {
+#ifdef __CUDACC__
+    if (M <= 0 || K <= 0 || N <= 0) return -1;
+    if (_h2d(a_id) != 0) return -1;
+    if (_h2d(b_id) != 0) return -1;
+    if (_h2d(r_id) != 0) return -1;
+    if (_ensure_dev_alloc_out(c_id, M * N) != 0) return -1;
+    const double* A = g_slots[a_id].d_buf;
+    const double* B = g_slots[b_id].d_buf;
+    const double* R = g_slots[r_id].d_buf;
+    double*       C = g_slots[c_id].d_buf;
+    dim3 _fblk(16, 16);
+    dim3 _fgrd((unsigned)((N + 15) / 16), (unsigned)((M + 15) / 16));
+    static int _fuse_epi_fired = 0;
+    if (!_fuse_epi_fired) { _fuse_epi_fired = 1;
+        fprintf(stderr, "[FUSE-EPILOGUE-FIRED] _hx_k_gemm_fused_residual (1 launch, no DRAM round-trip)\n"); }
+    _hx_k_gemm_fused_residual<<<_fgrd, _fblk, 0, _forge_stream()>>>(A, B, R, C, M, K, N);
+    if (_forge_launch_check("gemm_residual_fused") != 0) return -1;
+    {
+        HexaFarrEntry* e = &_hx_farr_table[c_id];
+        e->d_buf      = (void*)g_slots[c_id].d_buf;
+        e->loc        = FARR_DEVICE;
+        e->dirty_host = 0;
+        e->dirty_dev  = 0;
+    }
+    return 0;
+#else
+    (void)a_id; (void)b_id; (void)r_id; (void)c_id; (void)M; (void)K; (void)N;
+    fprintf(stderr, "[cuda] gemm_residual_fused: built without __CUDACC__\n");
+    return -1;
+#endif
+}
+
 /* HEXA-0POD OP-19b — device-side deterministic transcendentals, shared by
  * every device GELU kernel below (_hx_k_gelu, _hx_k_gelu2, _hx_gelu_dev,
  * _hx_k_gelu_bwd) AND the CE-grad kernel (F-OP19). Defined ONCE here, before
