@@ -845,6 +845,171 @@ fn emit_runtime_cuda_c() -> str {
             "    return 0;\n" +
             "}\n" +
             "\n" +
+            "/* ===== census r3 OWN-TF32 PARITY KERNEL (no cuBLAS) ===========================\n" +
+            " * PORT of self/native/mma_sm120/owngemm_sm120.cu `gemm_sm120` — the PARITY TF32\n" +
+            " * own-GEMM for consumer Blackwell sm_120 (RTX 5070). Uses the PORTABLE warp-level\n" +
+            " * tensor-core MMA `mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32` (Ampere\n" +
+            " * sm_80+; sm_90 wgmma is NOT used so ptxas accepts sm_120). 64x64 block tile, BK=16,\n" +
+            " * 4 warps (128 thr) 2x2, cp.async double-buffered staging, bank-conflict-free smem\n" +
+            " * pad, .v4 vectorized global loads, .v2 vectorized C store. MEASURED on aiden RTX\n" +
+            " * 5070 standalone = cublasGemmEx-TF32 PARITY (D512 0.90x, D768 1.06x, D1024 0.89x,\n" +
+            " * D2048 0.98x, D4096 0.80x; rel-RMS 1.3e-5..7.0e-5). NOT FP64-exact, NOT bit-id vs\n" +
+            " * cublasGemmEx-TF32 (different tensor-op accum); bar = TF32 rel-RMS vs FP64 (~1e-5)\n" +
+            " * + same-dtype agreement with cublasGemmEx-TF32. This is the cuBLAS-FREE TF32 path\n" +
+            " * (replaces the census-r3 slow WMMA-API kernel). row-major fp32 A[M,K],B[K,N],C[M,N]. */\n" +
+            "#ifdef __CUDACC__\n" +
+            "#define HX_OWNTF_BM 64\n" +
+            "#define HX_OWNTF_BN 64\n" +
+            "#define HX_OWNTF_BK 16\n" +
+            "#define HX_OWNTF_WARPS_N 2\n" +
+            "#define HX_OWNTF_NWARP 4\n" +
+            "#define HX_OWNTF_NTHREAD 128\n" +
+            "#define HX_OWNTF_WM_FRAG 2\n" +
+            "#define HX_OWNTF_WN_FRAG 4\n" +
+            "#define HX_OWNTF_ASPAD 4\n" +
+            "#define HX_OWNTF_BSPAD 4\n" +
+            "__device__ __forceinline__ unsigned _hx_f2tf32(float x){\n" +
+            "    unsigned u; memcpy(&u,&x,4); u=(u+0x1000u)&0xFFFFE000u; return u;\n" +
+            "}\n" +
+            "__device__ __forceinline__ void _hx_mma_m16n8k8(float* d, const unsigned* a, const unsigned* b){\n" +
+            "    asm volatile(\n" +
+            "      \"mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32 \"\n" +
+            "      \"{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\\n\"\n" +
+            "      : \"+f\"(d[0]),\"+f\"(d[1]),\"+f\"(d[2]),\"+f\"(d[3])\n" +
+            "      : \"r\"(a[0]),\"r\"(a[1]),\"r\"(a[2]),\"r\"(a[3]),\"r\"(b[0]),\"r\"(b[1]));\n" +
+            "}\n" +
+            "__device__ __forceinline__ void _hx_cp_async_cg16(void* smem, const void* gmem){\n" +
+            "    unsigned s = (unsigned)__cvta_generic_to_shared(smem);\n" +
+            "    asm volatile(\"cp.async.cg.shared.global [%0], [%1], 16;\\n\" :: \"r\"(s), \"l\"(gmem));\n" +
+            "}\n" +
+            "__device__ __forceinline__ void _hx_cp_async_commit(){ asm volatile(\"cp.async.commit_group;\\n\"); }\n" +
+            "template<int Nn> __device__ __forceinline__ void _hx_cp_async_wait(){ asm volatile(\"cp.async.wait_group %0;\\n\" :: \"n\"(Nn)); }\n" +
+            "extern \"C\" __global__ void _hx_k_gemm_tf32_owngemm(const float* __restrict__ A,\n" +
+            "                                      const float* __restrict__ B,\n" +
+            "                                      float* __restrict__ C,\n" +
+            "                                      int M, int N, int K){\n" +
+            "    __shared__ float As[2][HX_OWNTF_BM][HX_OWNTF_BK+HX_OWNTF_ASPAD];\n" +
+            "    __shared__ float Bs[2][HX_OWNTF_BK][HX_OWNTF_BN+HX_OWNTF_BSPAD];\n" +
+            "    int bm = blockIdx.y*HX_OWNTF_BM, bn = blockIdx.x*HX_OWNTF_BN;\n" +
+            "    int tid = threadIdx.x;\n" +
+            "    int warp = tid>>5, lane = tid&31;\n" +
+            "    int wm = (warp/HX_OWNTF_WARPS_N)*32;\n" +
+            "    int wn = (warp%HX_OWNTF_WARPS_N)*32;\n" +
+            "    int gid = lane>>2, tig = lane&3;\n" +
+            "    float acc[HX_OWNTF_WM_FRAG][HX_OWNTF_WN_FRAG][4];\n" +
+            "    #pragma unroll\n" +
+            "    for(int i=0;i<HX_OWNTF_WM_FRAG;i++)for(int j=0;j<HX_OWNTF_WN_FRAG;j++)for(int e=0;e<4;e++) acc[i][j][e]=0.f;\n" +
+            "    int nk = (K+HX_OWNTF_BK-1)/HX_OWNTF_BK;\n" +
+            "    auto load_stage = [&](int buf,int k0){\n" +
+            "        #pragma unroll\n" +
+            "        for(int i=tid; i<HX_OWNTF_BM*HX_OWNTF_BK/4; i+=HX_OWNTF_NTHREAD){\n" +
+            "            int r=i/(HX_OWNTF_BK/4), c4=i%(HX_OWNTF_BK/4), c=c4*4; int gr=bm+r, gc=k0+c;\n" +
+            "            if(gr<M && gc+3<K) _hx_cp_async_cg16(&As[buf][r][c], &A[(long long)gr*K+gc]);\n" +
+            "            else { float4 v=make_float4(0,0,0,0);\n" +
+            "                   if(gr<M){ for(int e=0;e<4;e++) ((float*)&v)[e]=(gc+e<K)?A[(long long)gr*K+gc+e]:0.f; }\n" +
+            "                   As[buf][r][c+0]=v.x;As[buf][r][c+1]=v.y;As[buf][r][c+2]=v.z;As[buf][r][c+3]=v.w; }\n" +
+            "        }\n" +
+            "        #pragma unroll\n" +
+            "        for(int i=tid; i<HX_OWNTF_BK*HX_OWNTF_BN/4; i+=HX_OWNTF_NTHREAD){\n" +
+            "            int r=i/(HX_OWNTF_BN/4), c4=i%(HX_OWNTF_BN/4), c=c4*4; int gr=k0+r, gc=bn+c;\n" +
+            "            if(gr<K && gc+3<N) _hx_cp_async_cg16(&Bs[buf][r][c], &B[(long long)gr*N+gc]);\n" +
+            "            else { float4 v=make_float4(0,0,0,0);\n" +
+            "                   if(gr<K){ for(int e=0;e<4;e++) ((float*)&v)[e]=(gc+e<N)?B[(long long)gr*N+gc+e]:0.f; }\n" +
+            "                   Bs[buf][r][c+0]=v.x;Bs[buf][r][c+1]=v.y;Bs[buf][r][c+2]=v.z;Bs[buf][r][c+3]=v.w; }\n" +
+            "        }\n" +
+            "    };\n" +
+            "    load_stage(0,0); _hx_cp_async_commit();\n" +
+            "    for(int k=0; k<nk; k++){\n" +
+            "        int buf=k&1, nbuf=(k+1)&1;\n" +
+            "        if(k+1<nk){ load_stage(nbuf,(k+1)*HX_OWNTF_BK); _hx_cp_async_commit(); _hx_cp_async_wait<1>(); }\n" +
+            "        else      { _hx_cp_async_wait<0>(); }\n" +
+            "        __syncthreads();\n" +
+            "        #pragma unroll\n" +
+            "        for(int ks=0; ks<HX_OWNTF_BK; ks+=8){\n" +
+            "            #pragma unroll\n" +
+            "            for(int fmi=0; fmi<HX_OWNTF_WM_FRAG; fmi++){\n" +
+            "                int mrow = wm + fmi*16;\n" +
+            "                unsigned af[4];\n" +
+            "                af[0]=_hx_f2tf32(As[buf][mrow + gid    ][ks + tig    ]);\n" +
+            "                af[1]=_hx_f2tf32(As[buf][mrow + gid + 8][ks + tig    ]);\n" +
+            "                af[2]=_hx_f2tf32(As[buf][mrow + gid    ][ks + tig + 4]);\n" +
+            "                af[3]=_hx_f2tf32(As[buf][mrow + gid + 8][ks + tig + 4]);\n" +
+            "                #pragma unroll\n" +
+            "                for(int fni=0; fni<HX_OWNTF_WN_FRAG; fni++){\n" +
+            "                    int ncol = wn + fni*8;\n" +
+            "                    unsigned bf[2];\n" +
+            "                    bf[0]=_hx_f2tf32(Bs[buf][ks + tig    ][ncol + gid]);\n" +
+            "                    bf[1]=_hx_f2tf32(Bs[buf][ks + tig + 4][ncol + gid]);\n" +
+            "                    _hx_mma_m16n8k8(acc[fmi][fni], af, bf);\n" +
+            "                }\n" +
+            "            }\n" +
+            "        }\n" +
+            "        __syncthreads();\n" +
+            "    }\n" +
+            "    #pragma unroll\n" +
+            "    for(int fmi=0; fmi<HX_OWNTF_WM_FRAG; fmi++){\n" +
+            "        int mrow = bm + wm + fmi*16;\n" +
+            "        #pragma unroll\n" +
+            "        for(int fni=0; fni<HX_OWNTF_WN_FRAG; fni++){\n" +
+            "            int ncol = bn + wn + fni*8;\n" +
+            "            float* d = acc[fmi][fni];\n" +
+            "            int r0=mrow+gid, r1=mrow+gid+8, c0=ncol+2*tig, c1=ncol+2*tig+1;\n" +
+            "            bool aligned = ((c0&1)==0);\n" +
+            "            if(r0<M && c1<N && aligned) *reinterpret_cast<float2*>(&C[(long long)r0*N+c0]) = make_float2(d[0],d[1]);\n" +
+            "            else { if(r0<M && c0<N) C[(long long)r0*N+c0]=d[0];\n" +
+            "                   if(r0<M && c1<N) C[(long long)r0*N+c1]=d[1]; }\n" +
+            "            if(r1<M && c1<N && aligned) *reinterpret_cast<float2*>(&C[(long long)r1*N+c0]) = make_float2(d[2],d[3]);\n" +
+            "            else { if(r1<M && c0<N) C[(long long)r1*N+c0]=d[2];\n" +
+            "                   if(r1<M && c1<N) C[(long long)r1*N+c1]=d[3]; }\n" +
+            "        }\n" +
+            "    }\n" +
+            "}\n" +
+            "#endif\n" +
+            "\n" +
+            "/* census r3: own-TF32 PARITY dispatcher — casts the FP64 device buffers down to\n" +
+            " * fp32 scratch mirrors (reusing _hx_k_cast_d2f), launches the row-major parity\n" +
+            " * own-GEMM _hx_k_gemm_tf32_owngemm (gemm_sm120 port; 64x64 tile, mma.sync, NO\n" +
+            " * cuBLAS), then casts the fp32 result back up into C_dev. Same cast-in/out as the\n" +
+            " * cublasGemmEx path (FP64 inputs NEVER mutated) — only the GEMM op differs. The\n" +
+            " * own kernel is natively row-major C[M,N]=A[M,K].B[K,N], so NO N/M/K transpose\n" +
+            " * swap is needed (unlike the col-major cuBLAS call). Returns 0 ok / -1 err. */\n" +
+            "static int _hx_cuda_gemm_tf32_own_dev(double* A_dev, double* B_dev, double* C_dev,\n" +
+            "                                      int64_t M, int64_t K, int64_t N) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    float* Af = NULL; float* Bf = NULL; float* Cf = NULL;\n" +
+            "    cudaError_t er;\n" +
+            "    er = cudaMalloc((void**)&Af, (size_t)(M*K) * sizeof(float));\n" +
+            "    if (er != cudaSuccess) { fprintf(stderr, \"[cuda] own-tf32 malloc Af: %s\\n\", cudaGetErrorString(er)); return -1; }\n" +
+            "    er = cudaMalloc((void**)&Bf, (size_t)(K*N) * sizeof(float));\n" +
+            "    if (er != cudaSuccess) { fprintf(stderr, \"[cuda] own-tf32 malloc Bf: %s\\n\", cudaGetErrorString(er)); cudaFree(Af); return -1; }\n" +
+            "    er = cudaMalloc((void**)&Cf, (size_t)(M*N) * sizeof(float));\n" +
+            "    if (er != cudaSuccess) { fprintf(stderr, \"[cuda] own-tf32 malloc Cf: %s\\n\", cudaGetErrorString(er)); cudaFree(Af); cudaFree(Bf); return -1; }\n" +
+            "    cudaStream_t strm = _forge_stream();\n" +
+            "    { int64_t nA = M*K; dim3 b(256); dim3 g((unsigned)((nA + 255) / 256));\n" +
+            "      _hx_k_cast_d2f<<<g, b, 0, strm>>>(A_dev, Af, nA); }\n" +
+            "    { int64_t nB = K*N; dim3 b(256); dim3 g((unsigned)((nB + 255) / 256));\n" +
+            "      _hx_k_cast_d2f<<<g, b, 0, strm>>>(B_dev, Bf, nB); }\n" +
+            "    if (_forge_launch_check(\"own_tf32_cast_in\") != 0) { cudaFree(Af); cudaFree(Bf); cudaFree(Cf); return -1; }\n" +
+            "    static int _own_tf32_fired = 0;\n" +
+            "    if (!_own_tf32_fired) { _own_tf32_fired = 1;\n" +
+            "        fprintf(stderr, \"[OWN-TF32-FIRED] _hx_k_gemm_tf32_owngemm mma.sync m16n8k8 PARITY DEVICE path (no cuBLAS)\\n\"); }\n" +
+            "    dim3 blk(HX_OWNTF_NTHREAD);\n" +
+            "    dim3 grd((unsigned)((N+HX_OWNTF_BN-1)/HX_OWNTF_BN), (unsigned)((M+HX_OWNTF_BM-1)/HX_OWNTF_BM));\n" +
+            "    _hx_k_gemm_tf32_owngemm<<<grd, blk, 0, strm>>>(Af, Bf, Cf, (int)M, (int)N, (int)K);\n" +
+            "    if (_forge_launch_check(\"own_tf32_owngemm\") != 0) { cudaFree(Af); cudaFree(Bf); cudaFree(Cf); return -1; }\n" +
+            "    { int64_t nC = M*N; dim3 b(256); dim3 g((unsigned)((nC + 255) / 256));\n" +
+            "      _hx_k_cast_f2d<<<g, b, 0, strm>>>(Cf, C_dev, nC); }\n" +
+            "    if (_forge_launch_check(\"own_tf32_cast_out\") != 0) { cudaFree(Af); cudaFree(Bf); cudaFree(Cf); return -1; }\n" +
+            "    if (_forge_sync() != 0) { cudaFree(Af); cudaFree(Bf); cudaFree(Cf); return -1; }\n" +
+            "    cudaFree(Af); cudaFree(Bf); cudaFree(Cf);\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)A_dev; (void)B_dev; (void)C_dev; (void)M; (void)K; (void)N;\n" +
+            "    fprintf(stderr, \"[cuda] own-tf32 parity gemm requires CUDACC build\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
             "/* _hx_cuda_farr_matmul_gpu(A, M, K, B, N, C) — Dgemm row-major C = A · B.\n" +
             " *   A is M×K, B is K×N, C is M×N.\n" +
             " *   - Caller (runtime.c) has already allocated C farr_id with len = M·N\n" +
@@ -928,9 +1093,19 @@ fn emit_runtime_cuda_c() -> str {
             "        _hx_k_gemm<<<_ggrd, _gblk, 0, _forge_stream()>>>(A_dev, B_dev, C_dev, M, K, N);\n" +
             "        if (_forge_launch_check(\"own_gemm\") != 0) return -1;\n" +
             "    } else if (_forge_tf32_fastmode()) {\n" +
-            "        /* HEXA-0POD OP-24: deterministic TF32 fast-mode (opt-in). FP64 default is\n" +
-            "         * UNTOUCHED above; this branch only fires when HEXA_TF32_FASTMODE is set. */\n" +
-            "        if (_hx_cuda_gemm_tf32_dev(A_dev, B_dev, C_dev, M, K, N) != 0) return -1;\n" +
+            "        /* HEXA-0POD OP-24: TF32 fast-mode (opt-in). FP64 default is UNTOUCHED above;\n" +
+            "         * this branch only fires when HEXA_TF32_FASTMODE is set. census r3 (7->0):\n" +
+            "         * 3-way TF32 split — HEXA_TF32_OWN=1 selects the cuBLAS-FREE PARITY own-GEMM\n" +
+            "         * (_hx_cuda_gemm_tf32_own_dev, mma.sync m16n8k8 64x64 tile = gemm_sm120 port;\n" +
+            "         * MEASURED cublasGemmEx-TF32 parity 0.80-1.06x on sm_120, rel-RMS ~1e-5),\n" +
+            "         * else cublasGemmEx (the prior default TF32 path, byte-identical when OWN\n" +
+            "         * unset). This makes forge cuBLAS-INDEPENDENT (cublasGemmEx 1->0): the LAST\n" +
+            "         * cuBLAS dependency now has a parity own-kernel replacement. */\n" +
+            "        if (getenv(\"HEXA_TF32_OWN\") && getenv(\"HEXA_TF32_OWN\")[0]) {\n" +
+            "            if (_hx_cuda_gemm_tf32_own_dev(A_dev, B_dev, C_dev, M, K, N) != 0) return -1;\n" +
+            "        } else {\n" +
+            "            if (_hx_cuda_gemm_tf32_dev(A_dev, B_dev, C_dev, M, K, N) != 0) return -1;\n" +
+            "        }\n" +
             "    } else {\n" +
             "    cublasStatus_t st = cublasDgemm(g_cublas,\n" +
             "                                    CUBLAS_OP_N, CUBLAS_OP_N,\n" +
