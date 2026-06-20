@@ -283,6 +283,16 @@ EOF
         cp -R "$src/build/." "$HX_BIN/build/"
         chmod -R u+rwX,go+rX "$HX_BIN/build"
     fi
+    # #3723 fix — mark a cuda-runtime install so a consumer `hexa run/build` auto-links
+    # cudart/cublas WITHOUT needing HEXA_CUDA=1 on every invocation. The cuda asset's
+    # runtime.a (runtime_cuda.o) references cudaLaunchKernel/cublas; main.hexa
+    # os_clang_ldflags reads $HX_HOME/.cuda-runtime and adds -lcudart -lcublas when
+    # present. Idempotent: a CPU/musl (re)install REMOVES the marker (no stale cuda link).
+    if [ "${asset##*-}" = "cuda" ]; then
+        : > "$HX_HOME/.cuda-runtime" 2>/dev/null || true
+    else
+        rm -f "$HX_HOME/.cuda-runtime" 2>/dev/null || true
+    fi
     # macOS — defeat the two kill vectors a DOWNLOADED binary hits that a
     # local build does not:
     #   (1) Gatekeeper quarantine — curl'd assets carry com.apple.quarantine,
