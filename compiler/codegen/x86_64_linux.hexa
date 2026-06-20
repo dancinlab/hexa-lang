@@ -491,6 +491,22 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
     let mut active_idx: [i64] = []
     let mut next_slot: i64 = 0
 
+    // #3712 — precompute is_param[slot] (O(1)) so the per-active param test in
+    // the expiry sweep + victim search isn't an O(params) inner scan per active
+    // per step. Indexed by position in `iv.ids` (same as map_*/active_idx).
+    // Byte-eq NEUTRAL: identical boolean as the `mf.params` scan, just cached.
+    let mut is_param_slot: [bool] = []
+    let mut isp_i = 0
+    while isp_i < len(iv.ids) { is_param_slot.push(false); isp_i = isp_i + 1 }
+    let mut isp_p = 0
+    while isp_p < len(mf.params) {
+        // O(params·ids) ONE-TIME (not per-step); params are few. The per-active
+        // hot-path test below reads the cached is_param_slot[] in O(1).
+        let pidx = _x86_index_of(iv.ids, mf.params[isp_p].id)
+        if pidx >= 0 { is_param_slot[pidx] = true }
+        isp_p = isp_p + 1
+    }
+
     let mut s = 0
     while s < len(order) {
         let cur = order[s]
@@ -502,12 +518,7 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
             let ai = active_idx[e]
             if iv.ends[ai] < cur_start {
                 let was = map_regs[ai]
-                let mut is_param = false
-                let mut pp = 0
-                while pp < len(mf.params) {
-                    if mf.params[pp].id == iv.ids[ai] { is_param = true }
-                    pp = pp + 1
-                }
+                let is_param = is_param_slot[ai]
                 if !is_param && len(was) > 0 && map_slots[ai] < 0 {
                     pool.push(was)
                 }
@@ -566,13 +577,7 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
             let mut victim_pos = len(active_idx) - 1
             while victim_pos >= 0 {
                 let v = active_idx[victim_pos]
-                let mut is_param = false
-                let mut pp = 0
-                while pp < len(mf.params) {
-                    if mf.params[pp].id == iv.ids[v] { is_param = true }
-                    pp = pp + 1
-                }
-                if !is_param { break }
+                if !is_param_slot[v] { break }
                 victim_pos = victim_pos - 1
             }
 
