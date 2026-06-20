@@ -12,7 +12,7 @@
 //   Lets stage_resolve_runtime_a define HEXA_RT_VALOP_NATIVE + ar this .o
 //   into runtime.a so hexa_truthy/hexa_sub/hexa_mul scalar paths go native.
 ; hexa-lang emit pass — target=arm64-apple-darwin
-; source: /home/aiden/scratch-valcore/stdlib/runtime/valop_core.hexa
+; source: stdlib/runtime/valop_core.hexa
 .file 1 "stdlib/runtime/valop_core.hexa"
 .section __TEXT,__text,regular,pure_instructions
 .globl _rt_truthy_native
@@ -24,7 +24,7 @@ _rt_truthy_native:
     mov x29, sp ; prologue: set fp
     sub sp, sp, #640 ; sp adj
     stp x0, x1, [sp, #0] ; ingress param 0
-__Le0aa_rt_truthy_native_bb0:
+__L760b_rt_truthy_native_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     mov x1, x0 ; __hx_tag: payload = v.tag
     movz x0, #0 ; __hx_tag: TAG_INT
@@ -39,11 +39,9 @@ __Le0aa_rt_truthy_native_bb0:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #48] ; hv store L3
     ldp x0, x1, [sp, #48] ; hv load L3
-    bl _hexa_truthy ; br_cond: truthy → w0
-    uxtw x0, w0 ; br_cond: zext w0
-    cbz x0, __Le0aa_rt_truthy_native_bb2 ; br_cond: !truthy -> else
-    b __Le0aa_rt_truthy_native_bb1 ; branch -> then
-__Le0aa_rt_truthy_native_bb1:
+    cbz x1, __L760b_rt_truthy_native_bb2 ; br_cond: !payload -> else
+    b __L760b_rt_truthy_native_bb1 ; branch -> then
+__L760b_rt_truthy_native_bb1:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -62,7 +60,7 @@ __Le0aa_rt_truthy_native_bb1:
     add sp, sp, #640 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__Le0aa_rt_truthy_native_bb2:
+__L760b_rt_truthy_native_bb2:
     ldp x0, x1, [sp, #32] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -71,11 +69,9 @@ __Le0aa_rt_truthy_native_bb2:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #128] ; hv store L8
     ldp x0, x1, [sp, #128] ; hv load L8
-    bl _hexa_truthy ; br_cond: truthy → w0
-    uxtw x0, w0 ; br_cond: zext w0
-    cbz x0, __Le0aa_rt_truthy_native_bb4 ; br_cond: !truthy -> else
-    b __Le0aa_rt_truthy_native_bb3 ; branch -> then
-__Le0aa_rt_truthy_native_bb3:
+    cbz x1, __L760b_rt_truthy_native_bb4 ; br_cond: !payload -> else
+    b __L760b_rt_truthy_native_bb3 ; branch -> then
+__L760b_rt_truthy_native_bb3:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -111,7 +107,7 @@ __Le0aa_rt_truthy_native_bb3:
     add sp, sp, #640 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__Le0aa_rt_truthy_native_bb4:
+__L760b_rt_truthy_native_bb4:
     ldp x0, x1, [sp, #32] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #1 ; hv const_int val
@@ -120,11 +116,9 @@ __Le0aa_rt_truthy_native_bb4:
     bl _hexa_bool ; __hx_payload_eq: box bool
     stp x0, x1, [sp, #272] ; hv store L17
     ldp x0, x1, [sp, #272] ; hv load L17
-    bl _hexa_truthy ; br_cond: truthy → w0
-    uxtw x0, w0 ; br_cond: zext w0
-    cbz x0, __Le0aa_rt_truthy_native_bb6 ; br_cond: !truthy -> else
-    b __Le0aa_rt_truthy_native_bb5 ; branch -> then
-__Le0aa_rt_truthy_native_bb5:
+    cbz x1, __L760b_rt_truthy_native_bb6 ; br_cond: !payload -> else
+    b __L760b_rt_truthy_native_bb5 ; branch -> then
+__L760b_rt_truthy_native_bb5:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     scvtf d0, x1 ; __hx_to_double: d0 = (double)int
@@ -213,7 +207,7 @@ __Le0aa_rt_truthy_native_bb5:
     add sp, sp, #640 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__Le0aa_rt_truthy_native_bb6:
+__L760b_rt_truthy_native_bb6:
     ldp x0, x1, [sp, #32] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #4 ; hv const_int val
@@ -224,11 +218,9 @@ __Le0aa_rt_truthy_native_bb6:
     stp x0, x1, [x15] ; hv store L36
     add x15, sp, #576 ; hv frame base
     ldp x0, x1, [x15] ; hv load L36
-    bl _hexa_truthy ; br_cond: truthy → w0
-    uxtw x0, w0 ; br_cond: zext w0
-    cbz x0, __Le0aa_rt_truthy_native_bb8 ; br_cond: !truthy -> else
-    b __Le0aa_rt_truthy_native_bb7 ; branch -> then
-__Le0aa_rt_truthy_native_bb7:
+    cbz x1, __L760b_rt_truthy_native_bb8 ; br_cond: !payload -> else
+    b __L760b_rt_truthy_native_bb7 ; branch -> then
+__L760b_rt_truthy_native_bb7:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #2 ; hv const_int val
     movz x2, #0 ; hv const_int: TAG_INT
@@ -242,7 +234,7 @@ __Le0aa_rt_truthy_native_bb7:
     add sp, sp, #640 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__Le0aa_rt_truthy_native_bb8:
+__L760b_rt_truthy_native_bb8:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #2 ; hv const_int val
     movz x2, #0 ; hv const_int: TAG_INT
@@ -266,7 +258,7 @@ _rt_sub_native:
     sub sp, sp, #448 ; sp adj
     stp x0, x1, [sp, #0] ; ingress param 0
     stp x2, x3, [sp, #16] ; ingress param 1
-__Le0aa_rt_sub_native_bb0:
+__L760b_rt_sub_native_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     mov x1, x0 ; __hx_tag: payload = v.tag
     movz x0, #0 ; __hx_tag: TAG_INT
@@ -312,11 +304,9 @@ __Le0aa_rt_sub_native_bb0:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #192] ; hv store L12
     ldp x0, x1, [sp, #192] ; hv load L12
-    bl _hexa_truthy ; br_cond: truthy → w0
-    uxtw x0, w0 ; br_cond: zext w0
-    cbz x0, __Le0aa_rt_sub_native_bb2 ; br_cond: !truthy -> else
-    b __Le0aa_rt_sub_native_bb1 ; branch -> then
-__Le0aa_rt_sub_native_bb1:
+    cbz x1, __L760b_rt_sub_native_bb2 ; br_cond: !payload -> else
+    b __L760b_rt_sub_native_bb1 ; branch -> then
+__L760b_rt_sub_native_bb1:
     ldp x0, x1, [sp, #0] ; hv load L0
     ldp x2, x3, [sp, #16] ; hv load L1
     sub x1, x1, x3 ; __hx_payload_sub: x1 = a.pl sub b.pl
@@ -342,7 +332,7 @@ __Le0aa_rt_sub_native_bb1:
     add sp, sp, #448 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__Le0aa_rt_sub_native_bb2:
+__L760b_rt_sub_native_bb2:
     ldp x0, x1, [sp, #0] ; hv load L0
     scvtf d0, x1 ; __hx_to_double: d0 = (double)int
     fmov x2, d0 ; __hx_to_double: x2 = int-as-double bits
@@ -399,7 +389,7 @@ _rt_mul_native:
     sub sp, sp, #448 ; sp adj
     stp x0, x1, [sp, #0] ; ingress param 0
     stp x2, x3, [sp, #16] ; ingress param 1
-__Le0aa_rt_mul_native_bb0:
+__L760b_rt_mul_native_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     mov x1, x0 ; __hx_tag: payload = v.tag
     movz x0, #0 ; __hx_tag: TAG_INT
@@ -445,11 +435,9 @@ __Le0aa_rt_mul_native_bb0:
     bl _hexa_bool ; __hx_payload_ne: box bool
     stp x0, x1, [sp, #192] ; hv store L12
     ldp x0, x1, [sp, #192] ; hv load L12
-    bl _hexa_truthy ; br_cond: truthy → w0
-    uxtw x0, w0 ; br_cond: zext w0
-    cbz x0, __Le0aa_rt_mul_native_bb2 ; br_cond: !truthy -> else
-    b __Le0aa_rt_mul_native_bb1 ; branch -> then
-__Le0aa_rt_mul_native_bb1:
+    cbz x1, __L760b_rt_mul_native_bb2 ; br_cond: !payload -> else
+    b __L760b_rt_mul_native_bb1 ; branch -> then
+__L760b_rt_mul_native_bb1:
     ldp x0, x1, [sp, #0] ; hv load L0
     ldp x2, x3, [sp, #16] ; hv load L1
     mul x1, x1, x3 ; __hx_payload_mul: x1 = a.pl mul b.pl
@@ -475,7 +463,7 @@ __Le0aa_rt_mul_native_bb1:
     add sp, sp, #448 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
-__Le0aa_rt_mul_native_bb2:
+__L760b_rt_mul_native_bb2:
     ldp x0, x1, [sp, #0] ; hv load L0
     scvtf d0, x1 ; __hx_to_double: d0 = (double)int
     fmov x2, d0 ; __hx_to_double: x2 = int-as-double bits

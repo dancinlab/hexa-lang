@@ -593,22 +593,23 @@ resolve_native_valop_core_seed() {
         "Linux x86_64") tgt="linux-x86_64" ;;
         "Linux aarch64"|"Linux arm64") tgt="linux-arm64" ;;
     esac
-    # x86_64-ONLY adoption (sh-val-core r1): the scalar value-op seed is byte-eq
+    # ALL-TARGET adoption (sh-val-core r2): the scalar value-op seed is byte-eq
     # proven + self-host-byteeq GREEN on linux-x86_64 (gen3≡gen4, faithful +
     # selfhost-byteeq-real PASS). The arm64 seeds are byte-FAITHFUL in isolation
-    # (standalone valop_core_gate.c → 32/32 0-fail under qemu-aarch64), BUT the
-    # arm64 self-host SEGFAULTs when hexa_v2 runs with them folded in: the arm64
-    # codegen lowers every `if <bool-HexaVal>` via `bl hexa_truthy` (x86_64 inlines
-    # it — the valop x86_64 seed has ZERO `call`s), so on the value-op hot path the
-    # bl-heavy seed fns (14x bl hexa_bool + 6x bl hexa_truthy each) diverge/blow the
-    # stack inside hexa_v2 (#3704 — MEASURED on qemu-aarch64: darwin-arm64 +
-    # linux-arm64 both SIGSEGV at `hexa_v2 self/module_loader.hexa`, x86_64 PASS).
-    # Until the arm64 br_cond inline-truthy path lands, arm64 keeps the C scalar
-    # switch (no regress, release-safe) — the [self-host != release] guardrail:
-    # x86_64 native now, arm64 C fallback, NO arm64 release regression.
+    # (standalone valop_core_gate.c → 32/32 0-fail under qemu-aarch64). The arm64
+    # self-host previously SIGSEGV'd when hexa_v2 ran with the seed folded in: the
+    # arm64 codegen lowered every `if <bool-HexaVal>` via `bl hexa_truthy` (x86_64
+    # inlines it — the valop x86_64 seed has ZERO `call`s), so on the value-op hot
+    # path the bl-heavy seed fns diverged/blew the stack inside hexa_v2 (#3704 —
+    # MEASURED on qemu-aarch64). r2 (#3704-followup): arm64 br_cond now INLINES the
+    # truthy test (`cbz x1, else` on the payload word, matching x86_64's
+    # `test cond; jz`; arm64_darwin.hexa _STMT_BR_COND), so the `bl hexa_truthy`
+    # hot-path calls are gone and arm64 self-host runs clean → all 3 targets adopt
+    # the native scalar value-op path.
     case "$tgt" in
         linux-x86_64) seed="self/native/valop_core_x86_64.s" ;;
-        darwin-arm64|linux-arm64) return 0 ;;   # arm64 → C scalar path (br_cond bl-hexa_truthy hot-path SIGSEGV, #3704)
+        darwin-arm64) seed="self/native/valop_core_arm64.s" ;;
+        linux-arm64)  seed="self/native/valop_core_arm64-linux.s" ;;
         *)            seed="" ;;   # unknown → C scalar path
     esac
     [ -n "$seed" ] && [ -f "$seed" ] || return 0
