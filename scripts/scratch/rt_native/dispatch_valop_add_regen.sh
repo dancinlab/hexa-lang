@@ -15,9 +15,14 @@
 # Evidence is printed to stdout with [EVIDENCE] markers. Exit 0 = lane green.
 set -uo pipefail
 
-REPO_URL="git@github.com:dancinlab/hexa-lang.git"
+REPO_URL="https://github.com/dancinlab/hexa-lang.git"   # aiden has no SSH key
 BRANCH="sh-val-core-add-native"
 WT="$HOME/scratch-valadd-$$"   # unique per-run (collision guard, sh-str-scan lesson)
+# A prebuilt native compiler (aprime_cc) may already exist from a prior valop
+# lane; reusing it skips the ~6min self-emit build. The compiler only LOWERS the
+# leaf intrinsics — it needs no knowledge of rt_add_native, so an older aprime_cc
+# emits the new source correctly. Override with APRIME_PREBUILT=.
+APRIME_PREBUILT="${APRIME_PREBUILT:-$HOME/scratch-valcore/build/aprime_cc}"
 
 log() { printf '[valadd] %s\n' "$*"; }
 ev()  { printf '[EVIDENCE] %s\n' "$*"; }
@@ -33,24 +38,23 @@ git fetch origin "$BRANCH" >/dev/null 2>&1
 git checkout "$BRANCH" >/dev/null 2>&1 || { log "checkout $BRANCH failed"; exit 1; }
 ev "HEAD=$(git rev-parse --short HEAD) branch=$BRANCH"
 
-# ── 2) build aprime_cc (native compiler) ────────────────────────────────
-# hexat (C-transpile bootstrap) is required. Prefer a recent dist checkout's
-# hexat; fall back to the repo's self/native/hexat.
-HEXAT=""
-for c in "$WT/self/native/hexat" "$HOME/.hx/dist/linux-x86_64/hexat" "$(command -v hexat 2>/dev/null)"; do
-    [ -n "$c" ] && [ -x "$c" ] && { HEXAT="$c"; break; }
-done
-log "hexat=$HEXAT"
-
+# ── 2) native compiler (aprime_cc) — reuse prebuilt, else build ──────────
 export HEXA_RT_ALLOC_NATIVE=0   # dodge stage-5 smoke arena multiple-def (brcond memory)
-if [ -n "$HEXAT" ]; then
-    bash tool/build_aprime.sh -o build/aprime_cc -v "$HEXAT" 2>&1 | tail -25
+APRIME=""
+if [ -x "$APRIME_PREBUILT" ]; then
+    APRIME="$APRIME_PREBUILT"
+    ev "reusing prebuilt aprime_cc: $APRIME"
 else
-    bash tool/build_aprime.sh -o build/aprime_cc 2>&1 | tail -25
+    HEXAT=""
+    for c in "$WT/self/native/hexat" "$HOME/.hx/dist/linux-x86_64/hexat" "$(command -v hexat 2>/dev/null)"; do
+        [ -n "$c" ] && [ -x "$c" ] && { HEXAT="$c"; break; }
+    done
+    log "no prebuilt; building aprime_cc (hexat=$HEXAT)"
+    if [ -n "$HEXAT" ]; then bash tool/build_aprime.sh -o build/aprime_cc -v "$HEXAT" 2>&1 | tail -25
+    else                    bash tool/build_aprime.sh -o build/aprime_cc 2>&1 | tail -25; fi
+    APRIME="$WT/build/aprime_cc"
 fi
-APRIME="$WT/build/aprime_cc"
-[ -x "$APRIME" ] || { log "aprime_cc not built"; exit 2; }
-ev "aprime_cc built: $($APRIME --version 2>/dev/null | head -1 || echo '(no --version)')"
+[ -x "$APRIME" ] || { log "aprime_cc unavailable"; exit 2; }
 
 # ── 3) regen the 3 valop seeds ──────────────────────────────────────────
 APRIME="$APRIME" CC="${CC:-clang}" bash tool/regen_valop_core_native_s.sh all 2>&1 | tail -20
@@ -83,21 +87,19 @@ else
     exit 4
 fi
 
-# ── 5) commit regenerated seeds back to the branch ──────────────────────
-if ! git diff --quiet self/native/valop_core_x86_64.s self/native/valop_core_arm64.s self/native/valop_core_arm64-linux.s; then
-    git add self/native/valop_core_x86_64.s self/native/valop_core_arm64.s self/native/valop_core_arm64-linux.s
-    git -c user.name=nbcorr-agent -c user.email=nerve011235@gmail.com commit -q -m "feat(self-host valop): regen valop_core_*.s seeds with rt_add_native (4-sym)
-
-Regenerated on $(uname -sm) from stdlib/runtime/valop_core.hexa via the fixed
-aprime_cc; each seed now exports rt_truthy/sub/mul/add_native (4 globl). Focused
-micro-byteeq (valop_core_gate.c, native rt_add_native vs C add oracle) = exit 25
-full pass, byte-identical incl int64 wrap + bit-identical double + inf/NaN.
-
-Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
-    git push origin "$BRANCH" 2>&1 | tail -3
-    ev "seeds committed + pushed: $(git rev-parse --short HEAD)"
+# ── 5) ship regenerated seeds back via base64 (mini commits+pushes) ─────
+# aiden has no push auth; emit each seed base64 between sentinels so the parent
+# (mini, with push auth) can reconstruct + commit. pool flattens multiline so
+# base64 is the safe channel.
+if git diff --quiet self/native/valop_core_x86_64.s self/native/valop_core_arm64.s self/native/valop_core_arm64-linux.s; then
+    ev "SEEDS_UNCHANGED — regenerated seeds byte-identical to committed (no diff)"
 else
-    ev "seeds byte-IDENTICAL to committed (no regen diff) — already current"
+    ev "SEEDS_CHANGED — shipping regenerated seeds base64:"
+    for s in self/native/valop_core_x86_64.s self/native/valop_core_arm64.s self/native/valop_core_arm64-linux.s; do
+        echo "===SEED_B64_BEGIN $s==="
+        base64 "$s"
+        echo "===SEED_B64_END $s==="
+    done
 fi
 
 log "DONE — lane green"
