@@ -94,9 +94,14 @@ perf victory over the vendor library.
 > 70.7 TFLOP/s · 6.09× off · "parity 미달성")는 **H100 `sm_90a` `wgmma`** 의
 > 것이다 — forge 출하 parity 측정 호스트(**RTX 5070 `sm_120`**)와 **다른 HW** 이고,
 > consumer Blackwell `sm_120` 엔 `wgmma` 가 없다. **`sm_120` 실측 결론은 정반대다**:
-> forge own-GEMM 이 cuBLAS **PARITY** 에 도달했다 — TF32 own `mma.sync` 1.10×
-> bit-exact · FP64 own 1.15~1.24× (`sm_120` 엔 FP64 텐서코어가 없어 cuBLAS Dgemm 도
-> SIMT 폴백이라 own 이 오히려 빠름). 따라서 "parity 미달성 · 가치는 ownership 이지
+> forge own-GEMM 이 cuBLAS **PARITY** 에 도달했다 — **FP64 own 1.15~1.24× (전 shape
+> 더 빠름 · rel-RMS 0 bit-exact)** — `sm_120` 엔 FP64 텐서코어가 없어 cuBLAS Dgemm 도
+> SIMT 폴백이라 own 이 오히려 빠르다. **TF32 own `mma.sync` 는 cuBLAS-TF32 의 roofline 에
+> 막힌 parity-band** (2026-06-20 sm_120 square sweep 실측: @768 1.05×·@2048 parity·256/
+> 512/1024/4096 은 cuBLAS 가 12~46% 빠름 · opt/pipe 변종 전수 측정도 cuBLAS 미추월),
+> vs cuBLAS-TF32 정확도는 rel-RMS ~1e-5 (FP64-ref 게이트 PASS · bit-exact 아님 — bit-exact 인
+> 건 FP64 own 뿐). 즉 TF32 own 의 가치는 perf 가 아니라 byte-eq 결정성·cuBLAS 독립이다.
+> 따라서 "parity 미달성 · 가치는 ownership 이지
 > perf 아님" 은 **stale H100 결론**이고, **forge 는 production GEMM 에서 cuBLAS 호출
 > 7→0 으로 독립**했다 (FP64 PR #3718 + TF32 PR #3727 · `self/cuda/runtime_cuda_emit.hexa`
 > 의 6 GEMM 호출 전부 own-kernel env 게이트의 OFF 폴백으로 강등). flame 은 이 경로를
