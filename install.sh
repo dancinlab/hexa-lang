@@ -21,14 +21,16 @@
 #                   are unaffected. The musl asset is an `edge` supplementary
 #                   target, so on stable tags the installer falls back to the
 #                   dynamic glibc asset automatically.
-#   HEXA_CUDA       linux-x86_64 only: set to 1 to install the cuBLAS-enabled
+#   HEXA_CUDA       linux-x86_64 only: install the cuBLAS-enabled
 #                   `hexa-linux-x86_64-cuda.tar.gz` asset (GPU-accelerated GEMM
-#                   via the CUDA-folded runtime.a — anima #2386). OPT-IN ONLY:
-#                   never auto-preferred (it pulls a cuBLAS/cudart runtime
-#                   dependency + assumes an NVIDIA GPU at run time). The cuda
-#                   asset is an `edge` supplementary target, so on stable tags
-#                   the installer falls back to the CPU glibc asset
-#                   automatically. Takes precedence over HEXA_MUSL when both =1.
+#                   via the CUDA-folded runtime.a → cuda_available()=1, anima
+#                   #2386). =1 forces it; =0 forces the CPU glibc asset. UNSET =
+#                   AUTO: prefer cuda when the host has an NVIDIA GPU (nvidia-smi)
+#                   AND a resolvable cuBLAS/cudart runtime (so a GPU consumer's
+#                   install lands cuda_available()=1 without opt-in — #3701). The
+#                   cuda asset is `edge`-supplementary, so on stable tags where it
+#                   is absent the installer falls back to the CPU glibc asset
+#                   automatically. Takes precedence over HEXA_MUSL when both apply.
 
 set -eu
 
@@ -80,19 +82,56 @@ need_cmd() {
 #   HEXA_MUSL=1  → force musl ; HEXA_MUSL=0 → force glibc (escape hatch).
 #   auto (unset) → musl when the host is musl-based OR glibc < MUSL_GLIBC_FLOOR.
 # Decide whether the linux-x86_64 install should pull the cuBLAS-enabled `-cuda`
-# asset (release.yml release-linux-x86_64-cuda). OPT-IN ONLY (HEXA_CUDA=1) — it is
-# NEVER auto-preferred because it adds a cuBLAS/cudart runtime dependency and
-# assumes an NVIDIA GPU at run time (a CPU-only or non-NVIDIA host would get a
-# binary that fails to dlopen libcudart). The default stays the CPU glibc asset.
+# asset (release.yml release-linux-x86_64-cuda). The cuda binary links cuBLAS so a
+# consumer `hexa build`/`run` program gets GPU-accelerated GEMM (cuda_available()
+# == 1 — anima #2386); the default CPU glibc asset reports cuda_available() == 0.
 #
-# Scope: linux-x86_64 ONLY (the only target with a cuda asset). Returns 0 (prefer
-# cuda) / 1 (keep default). Like the musl asset it is `edge`-supplementary, so a
-# stable-tag install with no cuda asset falls back to the CPU glibc tarball (the
-# generic edge-asset fallback in install_hexa).
+# Selection (linux-x86_64 ONLY — the only target with a cuda asset):
+#   HEXA_CUDA=1  → force cuda (explicit opt-in, unchanged).
+#   HEXA_CUDA=0  → force CPU glibc (explicit opt-out / escape hatch).
+#   unset (auto) → AUTO-PREFER cuda when the host BOTH (a) has an NVIDIA GPU
+#                  (`nvidia-smi -L` lists ≥1 device) AND (b) has the cuBLAS/cudart
+#                  runtime libs resolvable (ldconfig or the usual CUDA lib dirs).
+#                  Requiring BOTH avoids shipping a cuBLAS-linked binary that
+#                  would fail to load libcudart on a GPU host without the CUDA
+#                  runtime installed — in that case we keep the CPU asset. This is
+#                  the consumer half of #3701 (a GPU consumer's `install.sh hexa`
+#                  now lands cuda_available()=1 without needing HEXA_CUDA=1).
+#
+# Returns 0 (prefer cuda) / 1 (keep default). The cuda asset is `edge`-
+# supplementary, so a stable-tag install where the asset is absent falls back to
+# the CPU glibc tarball (the generic edge-asset fallback in install_hexa) — the
+# auto-prefer never hard-fails an install.
+_has_nvidia_gpu() {
+    command -v nvidia-smi >/dev/null 2>&1 || return 1
+    # `nvidia-smi -L` lists one line per GPU ("GPU 0: ..."). Empty / error → none.
+    nvidia-smi -L 2>/dev/null | grep -q '^GPU ' || return 1
+    return 0
+}
+_has_cuda_runtime() {
+    # cuBLAS/cudart resolvable via the dynamic loader cache or a standard CUDA
+    # install dir. The cuda binary links -lcudart -lcublas, so without these it
+    # would fail to start — keep the CPU asset in that case.
+    if command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q 'libcudart\.so'; then
+        return 0
+    fi
+    for d in /usr/local/cuda/lib64 /usr/local/cuda/targets/x86_64-linux/lib \
+             /usr/lib/x86_64-linux-gnu /usr/lib64; do
+        [ -e "$d"/libcudart.so* ] 2>/dev/null && return 0
+    done
+    return 1
+}
 prefer_cuda() {
     [ "$(detect_target)" = "linux-x86_64" ] || return 1
-    [ "${HEXA_CUDA:-}" = "1" ] || return 1
-    return 0
+    case "${HEXA_CUDA:-}" in
+        1) return 0 ;;   # explicit opt-in
+        0) return 1 ;;   # explicit opt-out
+    esac
+    # auto: GPU present AND cuda runtime libs resolvable → prefer cuda.
+    if _has_nvidia_gpu && _has_cuda_runtime; then
+        return 0
+    fi
+    return 1
 }
 
 MUSL_GLIBC_FLOOR_MAJOR=2
@@ -153,7 +192,11 @@ install_hexa() {
         # over musl (a CUDA host is glibc + has an NVIDIA GPU; the cuda asset is a
         # dynamic glibc binary, not static-musl).
         asset="hexa-${target}-cuda"
-        dim "  HEXA_CUDA=1 → preferring cuBLAS-enabled asset (GPU-accelerated)"
+        if [ "${HEXA_CUDA:-}" = "1" ]; then
+            dim "  HEXA_CUDA=1 → preferring cuBLAS-enabled asset (GPU-accelerated)"
+        else
+            dim "  NVIDIA GPU + cuda runtime detected → preferring cuBLAS-enabled asset (cuda_available=1; HEXA_CUDA=0 to opt out)"
+        fi
     elif prefer_musl; then
         asset="hexa-${target}-musl"
         dim "  glibc-independent host → preferring static-musl asset"
@@ -178,7 +221,7 @@ install_hexa() {
         # stable channel
         # (it just lands the glibc binary, which is what shipped before).
         if [ "$asset" != "hexa-${target}" ]; then
-            dim "  ⚠ ${asset}.tar.gz not found (musl asset is edge-only) → glibc asset"
+            dim "  ⚠ ${asset}.tar.gz not found (musl/cuda assets are edge-supplementary) → glibc asset"
             asset="hexa-${target}"
             url="$(_asset_url "$asset")"
             dim "  fetching $url"

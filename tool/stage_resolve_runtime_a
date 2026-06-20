@@ -739,40 +739,60 @@ resolve_cuda_runtime_seed() {
         unset HEXA_CUDA; return 0
     fi
     mkdir -p build
-    # Regen runtime_cuda.c (+ runtime_bf16.c) from their emitter SSOT, exactly as
-    # build_cuda_runtime does (the emitter must emit _hx_dt_exp_dev once — the
-    # #3680 dup-def fix; we re-assert it here so a regression is caught at build).
-    # Both .c are .gitignore'd build inputs (absent on a fresh checkout) AND the
-    # cuda emitter uses string-concat returns (NOT the `buf = buf + "…"` line
-    # literals the runtime_core awk un-escaper handles) → a hexa RUNNER is
-    # REQUIRED. resolve_cuda_runtime_seed runs at Stage 0b BEFORE ./hexa or
-    # build/hexat exist, so resolve a runner: PATH hexa(-run) for local dev, else
-    # the prior BASE edge `hexa-linux-x86_64.tar.gz` binary (a CPU hexa runs the
-    # cuda emitter fine — it just prints C text). The cuda edge asset itself is
-    # chicken-egg on the first run, so we pull the base x86_64 edge, not EDGE_ASSET.
-    local RUNNER=""
-    if command -v hexa-run >/dev/null 2>&1; then RUNNER="hexa-run"
-    elif command -v hexa >/dev/null 2>&1; then RUNNER="hexa run"
-    elif [ -x build/hexat ]; then RUNNER="build/hexat run"
+    # ── FROZEN-SEED FIRST (#3701 — stable -cuda asset never shipped) ──────────
+    # runtime_cuda.c (+ runtime_bf16.c) are the DETERMINISTIC output of their
+    # *_emit.hexa SSOTs (byte-eq re-emit verified) and are now CHECKED IN as
+    # build seeds. The committed seed is the PRIMARY path: when it is present AND
+    # has the canonical single _hx_dt_exp_dev def, use it as-is and SKIP the
+    # runner emit. This is the root-cause fix for the chicken-egg / stale-prebuilt
+    # trap: resolve_cuda_runtime_seed runs at Stage 0b — BEFORE build/hexat is
+    # built (Stage 0a-pre) — so the only emit-runner is the prior STALE edge
+    # binary, whose native-run fast-path can SIGSEGV before writing the 333KB file
+    # → "runtime_cuda.c not emitted" → the -cuda nvcc fold is skipped → the whole
+    # -cuda asset silently never ships (v0.245.x had NO hexa-*-cuda.tar.gz). A
+    # committed seed removes the dependency on any runner at all. If the seed is
+    # absent or regressed (e.g. someone edited the emitter without regenerating),
+    # fall back to the runner-emit path below so a fresh emit still works locally.
+    local _cuda_ndef
+    _cuda_ndef="$(grep -c '_hx_dt_exp_dev(double x) {' self/cuda/runtime_cuda.c 2>/dev/null || true)"
+    if [ -f self/cuda/runtime_cuda.c ] && [ "$_cuda_ndef" = "1" ]; then
+        echo "[stage_resolve_runtime_a] CUDA-R1: using checked-in frozen seed self/cuda/runtime_cuda.c (no runner emit — stale-runner-immune, #3701)"
+        # runtime_bf16.c rides along as a frozen seed too (committed); it has no
+        # _hx_dt_exp_dev contract to assert, so presence is enough.
     else
-        local _edge_dir="/tmp/edge_cuda_runner"
-        rm -rf "$_edge_dir"; mkdir -p "$_edge_dir"
-        if gh release download edge --repo "${GITHUB_REPOSITORY:-dancinlab/hexa-lang}" \
-              --pattern "hexa-linux-x86_64.tar.gz" --dir "$_edge_dir" --clobber 2>/tmp/cuda_dl.err \
-           && tar xzf "$_edge_dir/hexa-linux-x86_64.tar.gz" -C "$_edge_dir" 2>/dev/null; then
-            local _edge_hexa
-            _edge_hexa="$(find "$_edge_dir" -name hexa -type f 2>/dev/null | head -1)"
-            if [ -n "$_edge_hexa" ]; then chmod +x "$_edge_hexa" 2>/dev/null || true; RUNNER="$_edge_hexa run"; fi
+        # Seed absent/regressed → emit from the *_emit.hexa SSOT via a hexa RUNNER.
+        # The cuda emitter uses string-concat returns (NOT the `buf = buf + "…"`
+        # line literals the runtime_core awk un-escaper handles) → a hexa RUNNER is
+        # REQUIRED. At Stage 0b ./hexa / build/hexat do not exist, so resolve a
+        # runner: PATH hexa(-run) for local dev, else the prior BASE edge
+        # `hexa-linux-x86_64.tar.gz` binary (a CPU hexa runs the cuda emitter fine —
+        # it just prints C text). The cuda edge asset is chicken-egg on the first
+        # run, so we pull the base x86_64 edge, not EDGE_ASSET.
+        echo "[stage_resolve_runtime_a] CUDA-R1: frozen seed absent/regressed (ndef='$_cuda_ndef') — emitting from *_emit.hexa SSOT via runner" >&2
+        local RUNNER=""
+        if command -v hexa-run >/dev/null 2>&1; then RUNNER="hexa-run"
+        elif command -v hexa >/dev/null 2>&1; then RUNNER="hexa run"
+        elif [ -x build/hexat ]; then RUNNER="build/hexat run"
+        else
+            local _edge_dir="/tmp/edge_cuda_runner"
+            rm -rf "$_edge_dir"; mkdir -p "$_edge_dir"
+            if gh release download edge --repo "${GITHUB_REPOSITORY:-dancinlab/hexa-lang}" \
+                  --pattern "hexa-linux-x86_64.tar.gz" --dir "$_edge_dir" --clobber 2>/tmp/cuda_dl.err \
+               && tar xzf "$_edge_dir/hexa-linux-x86_64.tar.gz" -C "$_edge_dir" 2>/dev/null; then
+                local _edge_hexa
+                _edge_hexa="$(find "$_edge_dir" -name hexa -type f 2>/dev/null | head -1)"
+                if [ -n "$_edge_hexa" ]; then chmod +x "$_edge_hexa" 2>/dev/null || true; RUNNER="$_edge_hexa run"; fi
+            fi
         fi
+        if [ -z "$RUNNER" ]; then
+            echo "[stage_resolve_runtime_a] CUDA-R1: WARN no hexa runner to emit runtime_cuda.c (and no frozen seed) — unsetting HEXA_CUDA, CPU runtime.a" >&2
+            unset HEXA_CUDA; return 0
+        fi
+        HEXA_LANG="$ROOT" $RUNNER self/cuda/runtime_bf16_emit.hexa self/cuda/runtime_bf16.c >/dev/null 2>&1 || true
+        HEXA_LANG="$ROOT" $RUNNER self/cuda/runtime_cuda_emit.hexa self/cuda/runtime_cuda.c >/dev/null 2>&1 || true
     fi
-    if [ -z "$RUNNER" ]; then
-        echo "[stage_resolve_runtime_a] CUDA-R1: WARN no hexa runner to emit runtime_cuda.c — unsetting HEXA_CUDA, CPU runtime.a" >&2
-        unset HEXA_CUDA; return 0
-    fi
-    HEXA_LANG="$ROOT" $RUNNER self/cuda/runtime_bf16_emit.hexa self/cuda/runtime_bf16.c >/dev/null 2>&1 || true
-    HEXA_LANG="$ROOT" $RUNNER self/cuda/runtime_cuda_emit.hexa self/cuda/runtime_cuda.c >/dev/null 2>&1 || true
     if [ ! -f self/cuda/runtime_cuda.c ]; then
-        echo "[stage_resolve_runtime_a] CUDA-R1: WARN runtime_cuda.c not emitted (runner failed?) — unsetting HEXA_CUDA, CPU runtime.a" >&2
+        echo "[stage_resolve_runtime_a] CUDA-R1: WARN runtime_cuda.c absent (no frozen seed + runner failed?) — unsetting HEXA_CUDA, CPU runtime.a" >&2
         unset HEXA_CUDA; return 0
     fi
     local ndef; ndef="$(grep -c '_hx_dt_exp_dev(double x) {' self/cuda/runtime_cuda.c || true)"
