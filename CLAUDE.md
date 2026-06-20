@@ -148,6 +148,13 @@ This file is the single governance SSOT (md 단일화) — edit directives here,
   activation 을 DRAM 에 미실체화 — FlashAttention 정신, cuBLAS 가 호출경계 때문에 못 하는 것).
   즉: reference 로 parity 까지 빠르게 → 측정된
   parity 확인 → reference 의 미탐색/비결정 영역을 hexa 강점으로 추월하는 r(n+1) 명명·진행.
+  **cuBLAS 독립 실증**(2026-06-20 · #3718 FP64 + #3727 TF32 · #3721 close): forge production
+  GEMM(`self/cuda/runtime_cuda_emit.hexa`)의 cuBLAS 호출 **7→0** — FP64 6지점(own 1.15~1.24×
+  빠름)+TF32 1지점(own mma.sync m16n8k8 production-path **0.85~0.97× parity**·relRMS==cuBLAS)
+  own-kernel 대체, opt-in(`HEXA_OWN_GEMM`/`HEXA_TF32_OWN`)·OFF 비트동일. census r3 'TF32
+  0.2~0.3× 속도천장 🧱' 는 **잘못된 커널(WMMA 고수준 API) 측정 오류로 falsified** —
+  reference-first parity 커널(`owngemm_sm120.cu` mma.sync)이 이미 in-tree 였고 production 배선만
+  누락이던 것(c23 ⓑ no-LLVM 직접 emit 으로 cuBLAS 의존 제거 실증 · byte-eq 결정성 = cuBLAS 미제공 moat).
   **가드레일은 위 [self-host ≠ release 회귀]
   가 절대 상위**(reference 차용도 byteeq 3타깃 GREEN 전 머지 금지·비트변경은 opt-in 격리).
 
