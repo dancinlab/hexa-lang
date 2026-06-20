@@ -670,7 +670,8 @@ resolve_native_valop_core_seed() {
     # `undefined reference` at the app link. Counted from `.globl` (toolchain-free).
     local ok=1 sym n
     for sym in rt_truthy_native rt_sub_native rt_mul_native rt_add_native \
-               rt_cmp_lt_native rt_cmp_gt_native rt_cmp_le_native rt_cmp_ge_native; do
+               rt_cmp_lt_native rt_cmp_gt_native rt_cmp_le_native rt_cmp_ge_native \
+               rt_div_native rt_mod_native; do
         n="$(grep -cE "^\.globl[[:space:]]+_?${sym}\$" "$seed" 2>/dev/null || echo 0)"
         [ "${n:-0}" -ge 1 ] || { ok=0; echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: seed $seed exports only $n/1 $sym — falling back to C scalar path" >&2; }
     done
@@ -679,7 +680,7 @@ resolve_native_valop_core_seed() {
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
     if $CC -c "$s_tmp" -o build/valop_core_native.o 2>/dev/null; then
         export HEXA_RT_VALOP_NATIVE=1
-        echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: assembled build/valop_core_native.o from $seed (TARGET=$tgt, 8/8 rt_*_native syms incl cmp) → native scalar value-op path"
+        echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: assembled build/valop_core_native.o from $seed (TARGET=$tgt, 10/10 rt_*_native syms incl cmp+div/mod) → native scalar value-op path"
     else
         echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: WARN assemble of $seed failed — falling back to C scalar path" >&2
     fi

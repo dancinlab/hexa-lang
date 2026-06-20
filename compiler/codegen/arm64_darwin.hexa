@@ -2027,6 +2027,37 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // int-div-leaf: signed-i64 quotient (__hx_payload_div → sdiv) and
+        // remainder (__hx_payload_mod → sdiv + msub: rem = a - (a/b)*b). Result
+        // int HexaVal {TAG_INT, …}, INLINE. Separate block from add/sub/mul so
+        // that 3-op family stays untouched (byte-eq). Divide-by-zero is the C
+        // wrapper's job (zero-throw = runtime re-entry); the leaf assumes b != 0,
+        // exactly like the C `/`/`%` it mirrors. The aarch64 sdiv is round-toward-
+        // zero (truncating), matching C int64 `/`. x4 = free scratch (a→x0:x1,
+        // b→x2:x3 from the loads).
+        if (s.op == "__hx_payload_div" || s.op == "__hx_payload_mod")
+            && len(s.args) >= 2 {
+            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // a → x1=payload
+            buf = _hv_load(buf, s.args[1], st, rm, "x2", "x3")  // b → x3=payload
+            if s.op == "__hx_payload_div" {
+                buf.push(_arm64_instr3("sdiv", _arm64_op_reg("x1"),
+                                 _arm64_op_reg("x1"), _arm64_op_reg("x3"),
+                                 s.op + ": x1 = a.pl / b.pl (trunc)"))
+            } else {
+                // rem = a - (a / b) * b   →   sdiv x4,x1,x3 ; msub x1,x4,x3,x1
+                buf.push(_arm64_instr3("sdiv", _arm64_op_reg("x4"),
+                                 _arm64_op_reg("x1"), _arm64_op_reg("x3"),
+                                 s.op + ": x4 = a.pl / b.pl"))
+                buf.push(_arm64_instr4("msub", _arm64_op_reg("x1"),
+                                 _arm64_op_reg("x4"), _arm64_op_reg("x3"),
+                                 _arm64_op_reg("x1"),
+                                 s.op + ": x1 = a.pl - x4*b.pl (rem)"))
+            }
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), s.op + ": TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // RT-NATIVE UNLOCK-4: scalar double-precision FP arithmetic
         // (__hx_payload_fadd/fsub/fmul/fdiv) → result float HexaVal
         // {TAG_FLOAT, a.f OP b.f}, INLINE. The 8-byte payload IS the IEEE-754

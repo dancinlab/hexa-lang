@@ -52,6 +52,8 @@ extern HexaVal rt_cmp_lt_native(HexaVal a, HexaVal b);
 extern HexaVal rt_cmp_gt_native(HexaVal a, HexaVal b);
 extern HexaVal rt_cmp_le_native(HexaVal a, HexaVal b);
 extern HexaVal rt_cmp_ge_native(HexaVal a, HexaVal b);
+extern HexaVal rt_div_native(HexaVal a, HexaVal b);
+extern HexaVal rt_mod_native(HexaVal a, HexaVal b);
 
 int hexa_truthy(HexaVal v);
 HexaVal hexa_sub(HexaVal a, HexaVal b);
@@ -61,6 +63,8 @@ HexaVal hexa_cmp_lt(HexaVal a, HexaVal b);
 HexaVal hexa_cmp_gt(HexaVal a, HexaVal b);
 HexaVal hexa_cmp_le(HexaVal a, HexaVal b);
 HexaVal hexa_cmp_ge(HexaVal a, HexaVal b);
+HexaVal hexa_div(HexaVal a, HexaVal b);
+HexaVal hexa_mod(HexaVal a, HexaVal b);
 
 static int fails = 0, checks = 0;
 static void chk(int cond, const char* what) {
@@ -177,6 +181,26 @@ static void chk_cmp(HexaVal a, HexaVal b, const char* what) {
     }
 }
 
+/* int-int div/mod native vs C int64 / and % (truncating; sign of % follows
+ * dividend). Caller MUST pass b != 0 and avoid INT64_MIN/-1 (both UB the leaf
+ * shares with C — the C wrapper guards zero, overflow is unguarded in both). */
+static void chk_div(HexaVal a, HexaVal b, const char* what) {
+    HexaVal nv = rt_div_native(a, b);
+    int64_t ref = HX_INT(a) / HX_INT(b);
+    char buf[160];
+    snprintf(buf, sizeof(buf), "rt_div_native %s native=%lld ref=%lld tag=%d",
+             what, (long long)HX_INT(nv), (long long)ref, (int)HX_TAG(nv));
+    chk(HX_TAG(nv) == TAG_INT && HX_INT(nv) == ref, buf);
+}
+static void chk_mod(HexaVal a, HexaVal b, const char* what) {
+    HexaVal nv = rt_mod_native(a, b);
+    int64_t ref = HX_INT(a) % HX_INT(b);
+    char buf[160];
+    snprintf(buf, sizeof(buf), "rt_mod_native %s native=%lld ref=%lld tag=%d",
+             what, (long long)HX_INT(nv), (long long)ref, (int)HX_TAG(nv));
+    chk(HX_TAG(nv) == TAG_INT && HX_INT(nv) == ref, buf);
+}
+
 int main(void) {
     chk(sizeof(HexaVal) == 16, "sizeof(HexaVal)==16");
 
@@ -250,6 +274,25 @@ int main(void) {
     chk_cmp(hexa_float(INFINITY), hexa_float(1.0), "inf?1");
     chk_cmp(hexa_float(-INFINITY), hexa_float(INFINITY), "-inf?inf");
 
+    /* PART G — int div/mod (the new __hx_payload_div/mod leaves). All 4 sign
+     * combos + truncation + remainder-sign-follows-dividend. b!=0, no MIN/-1. */
+    chk_div(hexa_int(17), hexa_int(5), "17/5");
+    chk_div(hexa_int(-17), hexa_int(5), "-17/5 (trunc → -3)");
+    chk_div(hexa_int(17), hexa_int(-5), "17/-5 (trunc → -3)");
+    chk_div(hexa_int(-17), hexa_int(-5), "-17/-5 (→ 3)");
+    chk_div(hexa_int(0), hexa_int(7), "0/7");
+    chk_div(hexa_int(20), hexa_int(4), "20/4 exact");
+    chk_div(hexa_int(7), hexa_int(1), "7/1");
+    chk_div(hexa_int(INT64_MAX), hexa_int(2), "MAX/2");
+    chk_div(hexa_int(INT64_MIN), hexa_int(2), "MIN/2");
+    chk_mod(hexa_int(17), hexa_int(5), "17%5 (→ 2)");
+    chk_mod(hexa_int(-17), hexa_int(5), "-17%5 (→ -2, sign of dividend)");
+    chk_mod(hexa_int(17), hexa_int(-5), "17%-5 (→ 2)");
+    chk_mod(hexa_int(-17), hexa_int(-5), "-17%-5 (→ -2)");
+    chk_mod(hexa_int(20), hexa_int(4), "20%4 (→ 0)");
+    chk_mod(hexa_int(7), hexa_int(1), "7%1 (→ 0)");
+    chk_mod(hexa_int(INT64_MIN), hexa_int(7), "MIN%7");
+
 #ifdef HEXA_HAS_HEXA_RT_STDLIB
     /* PART D — end-to-end wrapper agreement (only when rt-stdlib deps linked). */
     chk(hexa_truthy(hexa_int(0)) == 0, "wrap truthy int0");
@@ -271,6 +314,14 @@ int main(void) {
     chk(hexa_truthy(hexa_cmp_ge(hexa_float(2.5), hexa_float(2.5))) == 1, "wrap cmp 2.5>=2.5");
     chk(hexa_truthy(hexa_cmp_lt(hexa_int(3), hexa_float(3.5))) == 1, "wrap cmp 3<3.5 mixed");
     chk(hexa_truthy(hexa_cmp_lt(hexa_float(NAN), hexa_float(1.0))) == 0, "wrap cmp NaN<1 false");
+    /* div/mod wrappers (hexa_div/hexa_mod — int/int nonzero delegate to native;
+     * zero-div throw + float path stay in rt_div/rt_mod, NOT exercised here to
+     * avoid the longjmp). */
+    chk(HX_INT(hexa_div(hexa_int(17), hexa_int(5))) == 3, "wrap div 17/5");
+    chk(HX_INT(hexa_div(hexa_int(-17), hexa_int(5))) == -3, "wrap div -17/5");
+    chk(HX_INT(hexa_mod(hexa_int(17), hexa_int(5))) == 2, "wrap mod 17%5");
+    chk(HX_INT(hexa_mod(hexa_int(-17), hexa_int(5))) == -2, "wrap mod -17%5");
+    chk(dbits_eq(HX_FLOAT(hexa_div(hexa_float(7.0), hexa_float(2.0))), 3.5), "wrap div f (rt_div path)");
 #endif
 
     if (fails == 0) printf("[valop_core_gate] GATE PASS — %d checks, 0 fails\n", checks);

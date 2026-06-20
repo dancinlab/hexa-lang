@@ -1774,6 +1774,38 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r10", 0) }
             return
         }
+        // int-div-leaf: signed-i64 quotient (__hx_payload_div) / remainder
+        // (__hx_payload_mod) → int HexaVal {TAG_INT, …}. x86_64 idiv has a fixed
+        // RDX:RAX dividend + dual quo(RAX)/rem(RDX) output, so it does NOT fit the
+        // 2-op `op r10,r11` shape above — separate block (the add/sub/mul family
+        // stays byte-eq untouched). Load b→r11, a→r10 (same order as the arith
+        // block: b first to avoid the spill-through-r10 nested-intrinsic clobber),
+        // then `mov rax,r10; cqo; idiv r11` (cqo sign-extends RAX→RDX:RAX for
+        // signed 64-bit divide). Quotient→RAX, remainder→RDX; copy the wanted one
+        // into r10 and store. r10/r11 survive cqo/idiv (only RAX/RDX are clobbered).
+        // Divide-by-zero is the C wrapper's job (zero-throw = runtime re-entry, out
+        // of the leaf); the leaf assumes b != 0, exactly like C int64 `/`/`%`
+        // (idiv is round-toward-zero, matching C). INT64_MIN/-1 overflows (#DE) —
+        // same UB as C, the wrapper need not guard it (matches C body).
+        if (s.op == "__hx_payload_div" || s.op == "__hx_payload_mod")
+            && len(s.args) >= 2 {
+            _x86_hv_payload(s.args[1], st, rm, "r11", opts)
+            _x86_hv_payload(s.args[0], st, rm, "r10", opts)
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rax"), _x86_op_reg("r10"),
+                             s.op + ": rax = a.pl (dividend)"))
+            _x86_buf.push(_x86_instr0("cqo", s.op + ": sign-extend rax → rdx:rax"))
+            _x86_buf.push(_x86_instr1("idiv", _x86_op_reg("r11"),
+                             s.op + ": rax=quo rdx=rem (a.pl / b.pl)"))
+            if s.op == "__hx_payload_div" {
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r10"), _x86_op_reg("rax"),
+                                 s.op + ": r10 = quotient"))
+            } else {
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r10"), _x86_op_reg("rdx"),
+                                 s.op + ": r10 = remainder"))
+            }
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r10", 0) }
+            return
+        }
         // UNLOCK-4: scalar double-precision FP arithmetic → float HexaVal
         // {TAG_FLOAT, …}. The 8-byte payload IS the IEEE-754 bit pattern; movq
         // copies GPR↔xmm, the SSE op runs, movq copies result bits back.
