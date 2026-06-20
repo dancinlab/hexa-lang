@@ -50,10 +50,10 @@ g++ -O2 "$B/bf16_harness.o" "$B/runtime_cuda_host.o" "$B/runtime_cuda.o" \
     -L"$CLIB" -lcudart -lcublas -lcuda -lcudadevrt -lm -lpthread -lssl -lcrypto -ldl \
     -o "$B/bf16_smoke"
 
-echo "### OWN (default) ###"
+echo "### cuBLAS (default, HEXA_BF16_OWN unset) — must NOT print [BF16-OWN-FIRED] ###"
 LD_LIBRARY_PATH="$CLIB:${LD_LIBRARY_PATH:-}" "$B/bf16_smoke"
-echo "### cuBLAS (HEXA_BF16_OWN=0) ###"
-HEXA_BF16_OWN=0 LD_LIBRARY_PATH="$CLIB:${LD_LIBRARY_PATH:-}" "$B/bf16_smoke"
+echo "### OWN (HEXA_BF16_OWN=1) — must print [BF16-OWN-FIRED] ###"
+HEXA_BF16_OWN=1 LD_LIBRARY_PATH="$CLIB:${LD_LIBRARY_PATH:-}" "$B/bf16_smoke"
 
 echo "=== own-vs-cuBLAS-BF16 rel-RMS (the campaign gate, <=1e-2) ==="
 python3 - <<'PY'

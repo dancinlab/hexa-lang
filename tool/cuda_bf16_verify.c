@@ -117,7 +117,7 @@ int main(int argc, char** argv) {
     if (argc > 1) { sizes[0] = atoi(argv[1]); nsz = 1; }
     /* Are we the own run or the cuBLAS run? read the env we ourselves see. */
     const char* ow = getenv("HEXA_BF16_OWN");
-    int own_mode = !(ow && ow[0]=='0');
+    int own_mode = (ow && ow[0]=='1');  /* opt-in: own only when HEXA_BF16_OWN=1 */
     printf("=== BF16 production matmul (%s) ===\n", own_mode ? "OWN default" : "cuBLAS HEXA_BF16_OWN=0");
     for (int si = 0; si < nsz; si++) {
         int64_t S = sizes[si], M=S, N=S, K=S;
