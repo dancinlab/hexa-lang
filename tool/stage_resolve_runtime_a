@@ -925,23 +925,43 @@ build_runtime_a_from_source() {
         rt_array_arena_def="-DHEXA_RT_ARRAY_ARENA_NATIVE=1"
         echo "[stage_resolve_runtime_a] sh-array-write: HEXA_RT_ARRAY_ARENA_NATIVE=1; hexa_array_arena_alloc_items → native arena bridge"
     fi
-    # CUDA-R1 (gated, opt-IN): when HEXA_CUDA survived resolve_cuda_runtime_seed
-    # (nvcc objects built), compile runtime.c with -DHEXA_CUDA + the cuBLAS header
-    # include dir (the HEXA_CUDA block in the amalgam #include's cublas_v2.h /
-    # cuda_runtime.h) and ar BOTH device objects in. The host-side cuBLAS link
-    # libs are added by os_clang_ldflags' HEXA_CUDA branch at the consumer link.
-    local rt_cuda_def=""
+    # ── CUDA-R1 DUAL-RUNTIME (#3701 r2 — libcuda.so.1 bootstrap wall) ─────────
+    # The primary build/runtime.a is ALWAYS the CPU archive (runtime.o WITHOUT
+    # -DHEXA_CUDA, NO cuda objects). The bootstrap/self-build toolchain (hexat,
+    # hexa_v2, module_loader, the final hexa driver — stage_prebuild_hexat +
+    # stage_build_hexa) links this primary archive, so NONE of those binaries gets
+    # a libcuda.so.1 DT_NEEDED → they RUN on the GPU-less CI build host (the
+    # self-host seed-converge/regen + Stage 0 step EXECUTES hexa_v2).
+    #
+    # Why CPU-only is REQUIRED (not just preferred): runtime.c's hexa_farr_matmul,
+    # when compiled -DHEXA_CUDA, CALLS extern _hx_cuda_farr_matmul_gpu
+    # (self/runtime.c:8259) → the linker pulls runtime_cuda.o → which needs
+    # cuBLAS/libcuda → the toolchain binary becomes hard-linked against
+    # libcuda.so.1 even though the compiler never runs a GEMM. So merely dropping
+    # -lcuda from the binary LIBS is insufficient (it would leave undefined
+    # _hx_cuda_* symbols); runtime.o itself must be the non-CUDA build for the
+    # toolchain. THIS is the libcuda.so.1 exit-127 wall (#3701 r2): the prior
+    # single-archive build folded -DHEXA_CUDA into the one runtime.a every stage
+    # used, so hexa_v2 could not load on the GPU-less builder.
+    #
+    # The CONSUMER archive (cuBLAS-enabled: runtime.o -DHEXA_CUDA + both nvcc
+    # objects) is built SEPARATELY as build/runtime.cuda.a. stage_precompile_package
+    # swaps it in as the shipped build/runtime.a so a consumer `hexa build`/`run`
+    # links cuBLAS (os_clang_ldflags' HEXA_CUDA branch supplies the host libs on
+    # the consumer's GPU host where libcuda.so.1 exists). additive · self-host ≠
+    # release: the default (non-CUDA) build never enters the cuda arm.
+    $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_valop_def $rt_alloc_def -I self -c self/runtime.c -o build/runtime.o
+    ar rcs "$RA" build/runtime.o $extra_obj
+    ls -la "$RA"
     if [ "${HEXA_CUDA:-0}" = "1" ] && [ -f build/runtime_cuda.o ] && [ -f build/runtime_cuda_dlink.o ]; then
         local _cuda_home="${CUDA_HOME:-/usr/local/cuda}"
         local _cinc="$_cuda_home/targets/x86_64-linux/include"
         [ -d "$_cinc" ] || _cinc="$_cuda_home/include"
-        rt_cuda_def="-DHEXA_CUDA -I $_cinc"
-        extra_obj="$extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o"
-        echo "[stage_resolve_runtime_a] CUDA-R1: HEXA_CUDA=1; runtime.c -DHEXA_CUDA -I$_cinc; ar'ing runtime_cuda.o + runtime_cuda_dlink.o into runtime.a"
+        echo "[stage_resolve_runtime_a] CUDA-R1: building SEPARATE consumer archive build/runtime.cuda.a (runtime.c -DHEXA_CUDA -I$_cinc + runtime_cuda.o + runtime_cuda_dlink.o); toolchain keeps the CPU build/runtime.a (libcuda-free, GPU-less-host-runnable)"
+        $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_valop_def $rt_alloc_def -DHEXA_CUDA -I "$_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o
+        ar rcs build/runtime.cuda.a build/runtime_cuda_host.o $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
+        ls -la build/runtime.cuda.a
     fi
-    $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_valop_def $rt_alloc_def $rt_cuda_def -I self -c self/runtime.c -o build/runtime.o
-    ar rcs "$RA" build/runtime.o $extra_obj
-    ls -la "$RA"
     echo "$RA"
 }
 

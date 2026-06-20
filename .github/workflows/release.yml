@@ -553,18 +553,26 @@ jobs:
   # ── Linux x86_64 CUDA (ing-cuda-release — edge-only supplementary asset) ──────
   # A cuBLAS-enabled hexa so consumers (anima #2386) install a prebuilt GPU build
   # instead of a CPU-only one (the shipped install.sh hexa reports
-  # cuda_available()==0 — #3674). The CUDA runtime objects (runtime_cuda.o +
-  # the nvcc -dlink device blob) fold into the shipped build/runtime.a
-  # (stage_resolve_runtime_a's resolve_cuda_runtime_seed, gated HEXA_CUDA=1), and
-  # os_clang_ldflags' HEXA_CUDA branch adds -lcudart/-lcublas/-lcuda/-lcudadevrt
-  # so a consumer `hexa build`/`run` program links cuBLAS. The hexa binary ITSELF
-  # also links runtime.a-with-cuda, so its LIBS carries the cuBLAS libs too.
+  # cuda_available()==0 — #3674).
+  #
+  # DUAL-RUNTIME (#3701 r2 — libcuda.so.1 bootstrap wall): the CUDA runtime
+  # objects (runtime_cuda.o + the nvcc -dlink device blob) + a -DHEXA_CUDA
+  # runtime.o fold into a SEPARATE build/runtime.cuda.a, which
+  # stage_precompile_package ships as the consumer build/runtime.a. The bootstrap
+  # toolchain (hexat / hexa_v2 / the hexa driver) links the CPU build/runtime.a
+  # (libcuda-FREE), so it RUNS on the GPU-less CI builder. The consumer's cuBLAS
+  # host libs are added at the consumer's link by os_clang_ldflags' HEXA_CUDA
+  # branch — NO pipeline binary links cuBLAS, so none gets a libcuda.so.1
+  # DT_NEEDED. The earlier single-archive build folded -DHEXA_CUDA into the one
+  # runtime.a every stage used → hexa_v2 died with `libcuda.so.1: cannot open
+  # shared object` (exit 127) when the self-host regen executed it on the driver-
+  # less runner. The job's LIBS is therefore CPU-only (`-lm -ldl`).
   #
   # GPU-LESS CI: the GitHub runner has nvcc + cuBLAS headers/libs (Jimver/cuda-
-  # toolkit) but NO GPU — the job COMPILES + LINKS cuBLAS GREEN but CANNOT run a
-  # GPU GEMM. That is fine: the GPU-vs-CPU 15-25× verdict + cuda_available()==1
-  # was proven on the pool host aiden (RTX 5070) in #3680 — aiden is the GPU-
-  # verify authority. CI here = build + link + upload only.
+  # toolkit) but NO GPU — the job COMPILES the device code + ar's the consumer
+  # archive GREEN but CANNOT run a GPU GEMM. That is fine: the GPU-vs-CPU 15-25×
+  # verdict + cuda_available()==1 was proven on the pool host aiden (RTX 5070) in
+  # #3680 — aiden is the GPU-verify authority. CI here = build + archive + upload.
   #
   # SUPPLEMENTARY + EDGE-FIRST: NOT in `finalize`'s needs list, so it NEVER gates
   # the stable 3-green promotion — it ships an EXTRA prerelease asset
@@ -621,20 +629,28 @@ jobs:
             exit 1
           fi
 
-      # Build with HEXA_CUDA=1: stage_resolve_runtime_a folds runtime_cuda.o +
-      # runtime_cuda_dlink.o into runtime.a + compiles runtime.c -DHEXA_CUDA; the
-      # hexa binary's own link (stage_build_hexa `$RT_ARG $LIBS`) needs the cuBLAS
-      # libs too, so LIBS carries them. SM=75 is the build-time -gencode arch
-      # (Turing) — a forward-compatible PTX/sass floor for the relocatable device
-      # code; the actual GPU arch is the consumer's at run time (cuBLAS is arch-
-      # agnostic at the host API). HEXA_PREBUILT_RUNTIME unset → runtime.a built
-      # fresh with the CUDA fold. CUDA_HOME → the toolkit the action installed.
-      - name: Build — shared release_build (CUDA runtime.a, cuBLAS link)
+      # Build with HEXA_CUDA=1 — DUAL-RUNTIME (#3701 r2 · libcuda.so.1 bootstrap
+      # wall). LIBS is CPU-ONLY (`-lm -ldl`, NO cuBLAS): stage_resolve_runtime_a
+      # builds the CPU build/runtime.a (libcuda-free) that the bootstrap toolchain
+      # (hexat / hexa_v2 / the hexa driver) links + RUNS on this GPU-less builder
+      # (the self-host seed-converge + Stage 0 EXECUTE hexa_v2), AND it builds a
+      # SEPARATE build/runtime.cuda.a (runtime.c -DHEXA_CUDA + runtime_cuda.o +
+      # runtime_cuda_dlink.o) which stage_precompile_package ships as the consumer
+      # build/runtime.a. The consumer's cuBLAS host libs are added at the
+      # consumer's link by os_clang_ldflags' HEXA_CUDA branch (NOT here — no
+      # pipeline binary links cuBLAS, so no libcuda.so.1 DT_NEEDED on the builder).
+      # Prior single-archive build folded -DHEXA_CUDA into the one runtime.a every
+      # stage used → hexa_v2 failed to load libcuda.so.1 (exit 127) on the GPU-less
+      # runner. CUDA_HOME is still needed so the -DHEXA_CUDA runtime.c compile of
+      # the consumer archive finds cublas_v2.h / cuda_runtime.h headers. SM=75 =
+      # build-time -gencode (Turing) PTX/sass floor; consumer GPU arch resolves at
+      # run time. HEXA_PREBUILT_RUNTIME unset → runtime.a(s) built fresh.
+      - name: Build — shared release_build (dual CPU+CUDA runtime.a, no cuBLAS on toolchain)
         shell: bash
         env:
           TARGET: linux-x86_64-cuda
           CC: gcc
-          LIBS: "-lm -ldl -lcudart -lcublas -lcuda -lcudadevrt"
+          LIBS: "-lm -ldl"
           HEXA_CUDA: "1"
           SM: "75"
           GH_TOKEN: ${{ github.token }}
@@ -642,41 +658,36 @@ jobs:
           HEXA_BUILD_VERSION: ${{ needs.setup.outputs.release_tag }}
         run: |
           set -euo pipefail
+          # CUDA_HOME → the toolkit the action installed; the consumer-archive
+          # runtime.c compile uses its include dir for cublas_v2.h/cuda_runtime.h.
+          # No cuBLAS LINK libs are added (the toolchain links the CPU runtime.a).
           export CUDA_HOME="${CUDA_PATH:-/usr/local/cuda}"
-          # The cuBLAS/cudart shared libs live under the toolkit lib dir; add it to
-          # LIBS' search path so the hexa binary's link finds -lcudart/-lcublas.
-          CUDA_LIB="$CUDA_HOME/targets/x86_64-linux/lib"
-          [ -d "$CUDA_LIB" ] || CUDA_LIB="$CUDA_HOME/lib64"
-          # `-lcuda` is the CUDA *driver* API (libcuda.so) — it is NOT shipped by
-          # the cudart/cuBLAS runtime packages, only by the NVIDIA driver. A GPU-
-          # less CI runner has no driver, so libcuda.so lives ONLY in the toolkit's
-          # `stubs/` dir (a link-time stub; the real driver resolves at run time on
-          # the consumer's GPU host). Add stubs/ to the search path so the build-
-          # only link of `-lcuda` resolves (else `ld: cannot find -lcuda`).
-          export LIBS="-L$CUDA_LIB -L$CUDA_LIB/stubs $LIBS"
           unset HEXA_PREBUILT_RUNTIME
           bash tool/release_build
 
-      - name: Package — shared release_package (CUDA tarball)
+      # NOTE: HEXA_CUDA is intentionally NOT set in the Package step. release_package
+      # → stage_precompile_package precompiles the shipped scripts via `./hexa run`
+      # and then swaps build/runtime.cuda.a in as the consumer runtime.a. If
+      # HEXA_CUDA=1 were set here, os_clang_ldflags would add cuBLAS to the
+      # PRECOMPILE binaries' link → those binaries (run/checked on the GPU-less
+      # builder) would gain a libcuda.so.1 DT_NEEDED and fail. The runtime.cuda.a
+      # swap is independent of HEXA_CUDA env (it keys off the file's presence), so
+      # the consumer still gets the cuBLAS archive while precompile stays CPU.
+      - name: Package — shared release_package (ships consumer CUDA runtime.a)
         shell: bash
         env:
           TARGET: linux-x86_64-cuda
           CC: gcc
-          LIBS: "-lm -ldl -lcudart -lcublas -lcuda -lcudadevrt"
-          HEXA_CUDA: "1"
+          LIBS: "-lm -ldl"
           SM: "75"
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           export CUDA_HOME="${CUDA_PATH:-/usr/local/cuda}"
-          CUDA_LIB="$CUDA_HOME/targets/x86_64-linux/lib"
-          [ -d "$CUDA_LIB" ] || CUDA_LIB="$CUDA_HOME/lib64"
-          # stubs/ supplies the build-only libcuda.so driver stub (see Build step).
-          export LIBS="-L$CUDA_LIB -L$CUDA_LIB/stubs $LIBS"
           unset HEXA_PREBUILT_RUNTIME
           bash tool/release_package
 
-      - name: Verify CUDA fold (runtime.a carries cuda objects · build-only)
+      - name: Verify CUDA dual-runtime (shipped runtime.a = cuda · hexa binary = libcuda-free)
         shell: bash
         run: |
           set -euo pipefail
@@ -684,24 +695,30 @@ jobs:
           [ -f "$RA" ] || { echo "✗ $RA missing — CUDA package regressed" >&2; exit 1; }
           MEMBERS="$(ar t "$RA")"
           echo "$MEMBERS"
-          # The two nvcc objects MUST be in the shipped runtime.a — else the
-          # consumer link has no device code (silent CPU fallback). This is the CI
-          # build-only depletion check (GPU run deferred to aiden #3680).
+          # The SHIPPED consumer runtime.a (= build/runtime.cuda.a, swapped in by
+          # stage_precompile_package) MUST carry the two nvcc objects — else the
+          # consumer link has no device code (silent CPU fallback). CI build-only
+          # depletion check (GPU run deferred to aiden #3680).
           if printf '%s\n' "$MEMBERS" | grep -q 'runtime_cuda.o' \
              && printf '%s\n' "$MEMBERS" | grep -q 'runtime_cuda_dlink.o'; then
-            echo "✓ runtime.a carries runtime_cuda.o + runtime_cuda_dlink.o (cuBLAS-enabled)"
+            echo "✓ shipped runtime.a carries runtime_cuda.o + runtime_cuda_dlink.o (consumer cuBLAS-enabled)"
           else
-            echo "✗ runtime.a is missing the CUDA objects — resolve_cuda_runtime_seed did not fold (CPU fallback shipped)" >&2
+            echo "✗ shipped runtime.a is missing the CUDA objects — dual-runtime swap did not happen (CPU fallback shipped)" >&2
             exit 1
           fi
-          # The hexa binary linked cuBLAS — confirm the dynamic deps (build-only;
-          # a GPU is not needed to inspect the link).
+          # DUAL-RUNTIME ASSERTION (#3701 r2): the hexa DRIVER binary must be
+          # libcuda-FREE — it links the CPU runtime.a so it RUNS on a host without
+          # the NVIDIA driver (the whole reason it failed before was a libcuda.so.1
+          # DT_NEEDED). A consumer's `hexa build`/`run` links cuBLAS at THEIR link
+          # (os_clang_ldflags), not via the driver binary. Fail loud if the driver
+          # regained a cuda dependency (the bug would silently return).
           BIN="dist/hexa-linux-x86_64-cuda/hexa"
-          if ldd "$BIN" 2>&1 | grep -iqE 'cublas|cudart'; then
-            echo "✓ hexa links libcublas/libcudart"
-          else
-            echo "::warning::hexa ldd shows no cublas/cudart (lazy-bound?) — runtime.a fold is the authoritative check"
+          if ldd "$BIN" 2>&1 | grep -iqE 'libcuda\.so|libcublas|libcudart'; then
+            echo "✗ hexa driver binary links a cuda lib — dual-runtime regressed (toolchain must use the CPU runtime.a)" >&2
+            ldd "$BIN" 2>&1 | grep -iE 'cuda|cublas' || true
+            exit 1
           fi
+          echo "✓ hexa driver binary is libcuda-free (runs on GPU-less + GPU hosts; consumer link adds cuBLAS)"
 
       - name: Upload to GitHub Release (supplementary edge asset)
         uses: softprops/action-gh-release@v2
