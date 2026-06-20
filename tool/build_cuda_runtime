@@ -67,8 +67,19 @@ echo "=== regen runtime_cuda.c + runtime_bf16.c from emitter SSOT ==="
 n=$(grep -c '_hx_dt_exp_dev(double x) {' self/cuda/runtime_cuda.c || true)
 [ "$n" = "1" ] || { echo "runtime_cuda.c has $n _hx_dt_exp_dev defs (expected 1) — emitter dup-def regressed"; exit 1; }
 
+# native-canonical-default: forge defaults to OWN kernels + ZERO -lcublas. Set
+# HEXA_USE_CUBLAS=1 to restore the cuBLAS fast path (opt-in constraint + -lcublas).
+USE_CUBLAS="${USE_CUBLAS:-${HEXA_USE_CUBLAS:-0}}"
+if [ "$USE_CUBLAS" = "1" ]; then
+  CUBLAS_MACRO="-DHEXA_USE_CUBLAS"; CUBLAS_LDLIB="-lcublas"
+  echo "[build_cuda_runtime] HEXA_USE_CUBLAS=1 — opt-in cuBLAS fast path (+ -lcublas)"
+else
+  CUBLAS_MACRO=""; CUBLAS_LDLIB=""
+  echo "[build_cuda_runtime] DEFAULT — own kernels, cuBLAS-free (no -lcublas)"
+fi
+
 echo "=== nvcc runtime_cuda.o (sm_$SM) + device-link ==="
-nvcc -x cu -DHEXA_CUDA -rdc=true -gencode arch=compute_$SM,code=sm_$SM -O2 -w \
+nvcc -x cu -DHEXA_CUDA $CUBLAS_MACRO -rdc=true -gencode arch=compute_$SM,code=sm_$SM -O2 -w \
      -I "$CINC/cccl" -I "$CINC" -I self -I self/cuda -I . \
      -c self/cuda/runtime_cuda.c -o "$B/runtime_cuda.o"
 nvcc -dlink -gencode arch=compute_$SM,code=sm_$SM "$B/runtime_cuda.o" \
@@ -85,12 +96,13 @@ echo "=== PRIMARY verify harness — CPU vs CUDA ==="
 gcc -O2 -D_GNU_SOURCE -DHEXA_HAS_OPENSSL -w -I self -I . \
     tool/cuda_gemm_verify.c "$B/runtime.o" $CORES \
     -lm -lpthread -lssl -lcrypto -o "$B/gemm_cpu"
-# (B) CUDA: host runtime.o (HEXA_CUDA) + runtime_cuda.o + dlink + cuBLAS/cudart
+# (B) CUDA: host runtime.o (HEXA_CUDA) + runtime_cuda.o + dlink + cudart
+#     ($CUBLAS_LDLIB = -lcublas only when HEXA_USE_CUBLAS=1; default = cuBLAS-free)
 gcc -O2 -D_GNU_SOURCE -DHEXA_HAS_OPENSSL -DHEXA_CUDA -w -I self -I . -I "$CINC" \
     -c tool/cuda_gemm_verify.c -o "$B/harness_cuda.o"
 g++ -O2 "$B/harness_cuda.o" "$B/runtime_cuda_host.o" "$B/runtime_cuda.o" \
     "$B/runtime_cuda_dlink.o" $CORES \
-    -L"$CLIB" -lcudart -lcublas -lcuda -lcudadevrt -lm -lpthread -lssl -lcrypto -ldl \
+    -L"$CLIB" -lcudart $CUBLAS_LDLIB -lcuda -lcudadevrt -lm -lpthread -lssl -lcrypto -ldl \
     -o "$B/gemm_cuda"
 
 echo "### CPU-only build ###"
