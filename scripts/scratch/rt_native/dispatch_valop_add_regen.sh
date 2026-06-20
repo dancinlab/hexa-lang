@@ -46,7 +46,7 @@ if [ -x "$APRIME_PREBUILT" ]; then
     ev "reusing prebuilt aprime_cc: $APRIME"
 else
     HEXAT=""
-    for c in "$WT/self/native/hexat" "$HOME/.hx/dist/linux-x86_64/hexat" "$(command -v hexat 2>/dev/null)"; do
+    for c in "$WT/self/native/hexat" "$HOME/hexa-lang/build/hexat" "$HOME/.hx/dist/linux-x86_64/hexat" "$(command -v hexat 2>/dev/null)"; do
         [ -n "$c" ] && [ -x "$c" ] && { HEXAT="$c"; break; }
     done
     log "no prebuilt; building aprime_cc (hexat=$HEXAT)"
@@ -66,6 +66,17 @@ for s in self/native/valop_core_x86_64.s self/native/valop_core_arm64.s self/nat
     [ "$n" -ge 1 ] || ALLOK=0
 done
 [ "$ALLOK" = 1 ] || { log "a seed is missing rt_add_native"; exit 3; }
+
+# CRITICAL #3714 guard: the arm64 seeds must contain ZERO `bl hexa_truthy`. A
+# pre-#3714 aprime_cc lowers `if <bool-HexaVal>` (br_cond) via `bl hexa_truthy`,
+# which recurses infinitely once the seed is default-ON → SIGSEGV on arm64
+# self-host (the exact failure this guard prevents). x86_64 always inlined, so
+# only arm64 is at risk. The compiler MUST be #3714-fixed (cbz inline).
+for s in self/native/valop_core_arm64.s self/native/valop_core_arm64-linux.s; do
+    nbl=$(grep -cE 'bl[[:space:]]+_?hexa_truthy' "$s" 2>/dev/null || echo 0)
+    ev "seed $s bl hexa_truthy = $nbl (MUST be 0 — #3714 recursion guard)"
+    [ "$nbl" = 0 ] || { log "REGRESSION: $s has $nbl bl hexa_truthy → stale pre-#3714 compiler. ABORT (would SIGSEGV arm64 self-host)."; exit 5; }
+done
 
 # ── 4) focused micro-byteeq (x86_64 native add vs C add oracle) ──────────
 # runtime.c is GENERATED (not checked in). Source it (+ runtime.h) from the
