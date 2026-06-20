@@ -61,7 +61,7 @@ APRIME="$APRIME" CC="${CC:-clang}" bash tool/regen_valop_core_native_s.sh all 2>
 # assert all 3 seeds now export rt_add_native (.globl)
 ALLOK=1
 for s in self/native/valop_core_x86_64.s self/native/valop_core_arm64.s self/native/valop_core_arm64-linux.s; do
-    n=$(grep -cE '^[[:space:]]*\.globl[[:space:]]+_?rt_add_native$' "$s" 2>/dev/null || echo 0)
+    n=$(grep -E '^[[:space:]]*\.globl[[:space:]]+_?rt_add_native$' "$s" 2>/dev/null | wc -l | tr -d ' ')
     ev "seed $s .globl rt_add_native = $n"
     [ "$n" -ge 1 ] || ALLOK=0
 done
@@ -73,7 +73,9 @@ done
 # self-host (the exact failure this guard prevents). x86_64 always inlined, so
 # only arm64 is at risk. The compiler MUST be #3714-fixed (cbz inline).
 for s in self/native/valop_core_arm64.s self/native/valop_core_arm64-linux.s; do
-    nbl=$(grep -cE 'bl[[:space:]]+_?hexa_truthy' "$s" 2>/dev/null || echo 0)
+    # NB: `grep -c … || echo 0` is buggy (grep -c exits 1 on zero matches → prints
+    # "0\n0"); count via grep|wc -l so a true 0 stays a clean single "0".
+    nbl=$(grep -E 'bl[[:space:]]+_?hexa_truthy' "$s" 2>/dev/null | wc -l | tr -d ' ')
     ev "seed $s bl hexa_truthy = $nbl (MUST be 0 — #3714 recursion guard)"
     [ "$nbl" = 0 ] || { log "REGRESSION: $s has $nbl bl hexa_truthy → stale pre-#3714 compiler. ABORT (would SIGSEGV arm64 self-host)."; exit 5; }
 done
