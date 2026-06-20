@@ -1,0 +1,175 @@
+// HEXA Standard Library — qforge/mae
+//
+// QFORGE work#28 stage 3/3 — MAGNETIC ANISOTROPY ENERGY via the FORCE THEOREM.
+// (demiurge RAREEARTH-FREE 발주 최종목표: rare-earth-free permanent-magnet screening
+//  needs the magneto-crystalline anisotropy energy, MAE, which is THE SOC observable.)
+//
+// Stage 1 gave noncollinear spinor SCF; stage 2 gave SOC (H_SOC=ξ·L·S). MAE is the
+// energy cost of rotating the magnetization away from its easy axis — it is what
+// makes a magnet "hard". It is TINY (μeV/atom) relative to the total energy, so it
+// is NOT computed as a difference of two fully self-consistent total energies (the
+// SCF noise would swamp it). Instead the MAGNETIC FORCE THEOREM (Jansen, PRB 59,
+// 4699 (1999)) is used:
+//
+//   1. Converge ONE self-consistent noncollinear+SOC SCF → a FIXED potential
+//      (exchange field magnitude |B(r)| per site + the SOC shells ξ in the LATTICE
+//      frame).
+//   2. For each magnetization direction (θ,φ): rotate the exchange field to point
+//      along m̂(θ,φ) = (sinθcosφ, sinθsinφ, cosθ) (a global SU(2) spin rotation of
+//      the spinor quantization axis — QE input angle1=θ, angle2=φ), keep the SOC
+//      fixed in the lattice frame, and recompute the BAND-ENERGY SUM
+//        E_band(θ,φ) = Σ_occ ε_i(θ,φ)         (NON-self-consistently)
+//   3. MAE = E_band(hard axis) − E_band(easy axis).
+//
+//   Why it works: at the self-consistent point the total energy is stationary wrt
+//   the density, so to first order the change in E under a small potential rotation
+//   equals the change in the band-energy sum at FIXED density (Andersen's force
+//   theorem). The SOC, fixed in the lattice frame, makes E_band depend on the angle.
+//
+// ── reference (c23: Quantum ESPRESSO + Jansen 1999 are the answer key) ─────────
+//   QE PW/src — noncollinear potential global spin-rotation (input angle1/angle2
+//        = polar/azimuthal angle of the starting magnetization); the exchange field
+//        B = |B|·m̂(angle1,angle2). force-theorem band-energy difference.
+//   Jansen, PRB 59, 4699 (1999) — the magnetic force theorem for MAE: fix the
+//        self-consistent density, vary the SOC quantization axis, take ΔE_band.
+//   The uniaxial form E(θ) = E₀ + K₁ sin²θ (+ K₂ sin⁴θ …) — K₁ the 1st-order
+//        magneto-crystalline anisotropy constant (μeV/atom). K₁>0 ⇒ easy axis ‖ẑ.
+use "stdlib/qforge/noncollinear"
+use "stdlib/qforge/soc"
+use "stdlib/qforge/smearing"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// ── a frozen self-consistent state (the force-theorem input) ──────────────────
+//   T_apply: the converged scalar kinetic+V real op (frozen).
+//   bmag: the converged exchange-field magnitude |B(r)| per site (length n).
+//   shells: the SOC shells (ξ in the lattice frame, frozen).
+//   nelec, sigma, nbands: filling/smearing of the band-energy sum.
+pub struct FrozenScf {
+    bmag:   [float],
+    shells: [SocShell],
+    n:      int,
+    nbands: int,
+    nelec:  int,
+    sigma:  float
+}
+
+// ── m̂(θ,φ) unit direction ────────────────────────────────────────────────────
+//   θ polar (from +ẑ), φ azimuthal (from +x̂ in xy-plane). radians.
+pub fn qforge_mhat(theta: float, phi: float) -> [float] {
+    let st = sin(theta) ; let ct = cos(theta)
+    let sp = sin(phi)   ; let cp = cos(phi)
+    return [st * cp, st * sp, ct]
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// BAND-ENERGY SUM at a fixed magnetization direction (θ,φ) — the force-theorem core
+// ════════════════════════════════════════════════════════════════════════════
+//   Builds H = T·I + (|B|·m̂)·σ + H_SOC at the requested direction, diagonalizes
+//   the full 2n spinor problem, fills nelec, returns the band-energy sum Σ occ·ε.
+//   T_apply is the frozen converged scalar op; the SOC shells stay in the lattice
+//   frame (that is what ties E to the angle).
+pub fn qforge_band_energy_dir(fs: FrozenScf, T_apply, theta: float, phi: float) -> float {
+    let n = fs.n
+    let mh = qforge_mhat(theta, phi)
+    // exchange field B(r) = |B(r)|·m̂  (the rotated noncollinear potential).
+    let mut bx: [float] = [] ; let mut by: [float] = []
+    let mut bz: [float] = [] ; let mut vv: [float] = []
+    let mut i = 0
+    while i < n {
+        let bm = fs.bmag[i]
+        bx.push(bm * mh[0]) ; by.push(bm * mh[1]) ; bz.push(bm * mh[2])
+        vv.push(0.0)                       // V is inside T_apply (V-in-T split)
+        i = i + 1
+    }
+    let pot = NcPotential { v: vv, bx: bx, by: by, bz: bz, n: n }
+    // full spinor H (local Pauli + SOC) → diagonalize.
+    let AB = qforge_build_spinor_h_soc(T_apply, pot, fs.shells, n)
+    let d = 2 * n
+    let eg = qforge_eigh_complex(AB[0], AB[1], d, fs.nbands)
+    let evals = eg[0]
+    // fill: single Fermi level over the spinor spectrum (spin_deg=1), band sum.
+    let occ = qforge_fermi_occupations(evals, fs.nbands, fs.nelec, fs.sigma, 1.0)
+    let mut e_band = 0.0
+    let mut b = 0
+    while b < fs.nbands { e_band = e_band + occ[b] * evals[b] ; b = b + 1 }
+    // include the smearing entropy so the Mermin free energy is the variational
+    // quantity (same convention as the SCF driver).
+    e_band = e_band - fs.sigma * qforge_smearing_entropy(occ, 1.0)
+    return e_band
+}
+
+// ── MAE between two directions (the headline number) ──────────────────────────
+//   MAE = E_band(hard) − E_band(easy). Positive ⇒ "easy" really is the easy axis.
+pub fn qforge_mae(fs: FrozenScf, T_apply,
+                  theta_easy: float, phi_easy: float,
+                  theta_hard: float, phi_hard: float) -> float {
+    let e_easy = qforge_band_energy_dir(fs, T_apply, theta_easy, phi_easy)
+    let e_hard = qforge_band_energy_dir(fs, T_apply, theta_hard, phi_hard)
+    return e_hard - e_easy
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// E(θ) ANISOTROPY CURVE  +  uniaxial K₁ fit
+// ════════════════════════════════════════════════════════════════════════════
+//   Sweep θ ∈ [0,π/2] at fixed φ, return [theta_k, E(theta_k)] for nθ points.
+//   result[k*2] = θ_k, result[k*2+1] = E_band(θ_k) − E_band(0)  (E relative to ẑ).
+pub fn qforge_mae_curve(fs: FrozenScf, T_apply, phi: float, ntheta: int) -> [float] {
+    let pi = 3.14159265358979323846
+    let e0 = qforge_band_energy_dir(fs, T_apply, 0.0, phi)
+    let mut out: [float] = []
+    let mut k = 0
+    while k < ntheta {
+        let theta = 0.5 * pi * to_float(k) / to_float(ntheta - 1)
+        let e = qforge_band_energy_dir(fs, T_apply, theta, phi) - e0
+        out.push(theta)
+        out.push(e)
+        k = k + 1
+    }
+    return out
+}
+
+// ── least-squares fit E(θ) ≈ K₁·sin²θ (+ K₂·sin⁴θ) → [K1, K2, rms] ────────────
+//   The 1st-order uniaxial magneto-crystalline anisotropy constant K₁ (and K₂),
+//   plus the RMS of the fit residual (closeness of the curve to the uniaxial form).
+//   Linear LS in the two basis functions s=sin²θ, s²: normal equations 2×2 solve.
+pub fn qforge_fit_uniaxial(curve: [float], ntheta: int) -> [float] {
+    // accumulate Gram matrix [[Σs², Σs³],[Σs³, Σs⁴]] and rhs [Σ E·s, Σ E·s²].
+    let mut g00 = 0.0 ; let mut g01 = 0.0 ; let mut g11 = 0.0
+    let mut r0 = 0.0  ; let mut r1 = 0.0
+    let mut k = 0
+    while k < ntheta {
+        let theta = curve[k * 2]
+        let e = curve[k * 2 + 1]
+        let st = sin(theta)
+        let s = st * st          // sin²θ
+        let s2 = s * s           // sin⁴θ
+        g00 = g00 + s * s
+        g01 = g01 + s * s2
+        g11 = g11 + s2 * s2
+        r0 = r0 + e * s
+        r1 = r1 + e * s2
+        k = k + 1
+    }
+    // 2×2 solve [g00 g01; g01 g11] [K1;K2] = [r0;r1].
+    let det = g00 * g11 - g01 * g01
+    let mut K1 = 0.0 ; let mut K2 = 0.0
+    if _abs(det) > 1.0e-300 {
+        K1 = (r0 * g11 - r1 * g01) / det
+        K2 = (g00 * r1 - g01 * r0) / det
+    }
+    // residual rms.
+    let mut ss = 0.0
+    k = 0
+    while k < ntheta {
+        let theta = curve[k * 2]
+        let e = curve[k * 2 + 1]
+        let st = sin(theta)
+        let s = st * st
+        let fit = K1 * s + K2 * s * s
+        ss = ss + (e - fit) * (e - fit)
+        k = k + 1
+    }
+    let rms = sqrt(ss / to_float(ntheta))
+    return [K1, K2, rms]
+}
