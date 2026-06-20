@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
-# tool/build_no_cublas_smoke — piece ④ HEADLINE: build a forge cuda runtime with
-# ZERO cuBLAS. Compiles runtime_cuda.c (which #includes runtime_bf16.c at its tail)
-# with -DHEXA_NO_CUBLAS so every cublas* call-site #ifdef's to an own-kernel, then
-# LINKS WITHOUT -lcublas. The proof: the TU links with no undefined cublas* symbol
-# and a forge smoke (GEMM + gemv + outer + epilogue) produces correct output.
+# tool/build_no_cublas_smoke — native-canonical-default proof harness. The forge
+# cuda runtime now defaults to OWN kernels and links WITHOUT -lcublas; cuBLAS is an
+# OPT-IN constraint behind -DHEXA_USE_CUBLAS.
+#
+#   DEFAULT (no flag)        : own kernels, links WITHOUT -lcublas      (the headline)
+#   USE_CUBLAS=1 ./build...  : restores cuBLAS fast path + -lcublas     (the opt-in)
+#
+# This script builds the DEFAULT (cuBLAS-free) variant and asserts: (a) the object
+# references no undefined cublas* symbol, (b) the link line carries no -lcublas, and
+# (c) a forge smoke (GEMM + gemv + outer + epilogue) produces correct output. Set
+# USE_CUBLAS=1 to instead build the opt-in cuBLAS path (links WITH -lcublas) and
+# prove that constraint path still compiles + runs.
 #
 # Run on aiden (RTX 5070 sm_120) after a `hexa run` works (matched prebuilt runtime.a).
 set -euo pipefail
@@ -18,6 +25,19 @@ CLIB="$CUDA_HOME/targets/x86_64-linux/lib"
 export PATH="$CUDA_HOME/bin:$PATH"
 mkdir -p build/cuda; B=build/cuda; rm -f "$B"/*.o 2>/dev/null || true
 
+# ---- polarity switch: default = own/cuBLAS-free, USE_CUBLAS=1 = opt-in cuBLAS ----
+USE_CUBLAS="${USE_CUBLAS:-0}"
+if [ "$USE_CUBLAS" = "1" ]; then
+  CUBLAS_MACRO="-DHEXA_USE_CUBLAS"
+  CUBLAS_LDLIB="-lcublas"
+  VARIANT="HEXA_USE_CUBLAS (opt-in cuBLAS fast path)"
+else
+  CUBLAS_MACRO=""
+  CUBLAS_LDLIB=""
+  VARIANT="DEFAULT (own kernels, cuBLAS-free, ZERO -lcublas)"
+fi
+echo "=== variant: $VARIANT ==="
+
 echo "=== probe ==="; nvcc --version | grep -i release
 [ -f "$PREBUILT_RT" ] || { echo "no prebuilt runtime.a at $PREBUILT_RT"; exit 1; }
 
@@ -30,19 +50,24 @@ echo "=== regen runtime_bf16.c + runtime_cuda.c from emitter SSOT ==="
 "$HEXA" run self/cuda/runtime_bf16_emit.hexa self/cuda/runtime_bf16.c >/dev/null
 "$HEXA" run self/cuda/runtime_cuda_emit.hexa self/cuda/runtime_cuda.c >/dev/null
 
-echo "=== nvcc runtime_cuda.o with -DHEXA_NO_CUBLAS (sm_$SM) + dlink ==="
-nvcc -x cu -DHEXA_CUDA -DHEXA_NO_CUBLAS -rdc=true \
+echo "=== nvcc runtime_cuda.o ${CUBLAS_MACRO:-(no cublas macro)} (sm_$SM) + dlink ==="
+nvcc -x cu -DHEXA_CUDA $CUBLAS_MACRO -rdc=true \
      -gencode arch=compute_$SM,code=sm_$SM -O2 -w \
      -I "$CINC/cccl" -I "$CINC" -I self -I self/cuda -I . \
      -c self/cuda/runtime_cuda.c -o "$B/runtime_cuda.o"
 nvcc -dlink -gencode arch=compute_$SM,code=sm_$SM "$B/runtime_cuda.o" \
      -o "$B/runtime_cuda_dlink.o" -lcudadevrt
 
-echo "=== ASSERT: no cublas symbols referenced by the object ==="
-if nm "$B/runtime_cuda.o" 2>/dev/null | grep -i ' U cublas' ; then
-  echo "FATAL: runtime_cuda.o still references undefined cublas* symbols"; exit 1
+if [ "$USE_CUBLAS" = "1" ]; then
+  echo "=== (opt-in) cublas* symbols expected in the object ==="
+  nm "$B/runtime_cuda.o" 2>/dev/null | grep -i ' U cublas' || true
 else
-  echo "OK: no undefined cublas* symbols in runtime_cuda.o"
+  echo "=== ASSERT: no cublas symbols referenced by the object ==="
+  if nm "$B/runtime_cuda.o" 2>/dev/null | grep -i ' U cublas' ; then
+    echo "FATAL: runtime_cuda.o still references undefined cublas* symbols"; exit 1
+  else
+    echo "OK: no undefined cublas* symbols in runtime_cuda.o"
+  fi
 fi
 
 echo "=== host runtime.o (-DHEXA_CUDA + RT-NATIVE flags) ==="
@@ -50,16 +75,25 @@ RTFLAGS="-DHEXA_RT_ARRAY_NATIVE=1 -DHEXA_RT_MAP_NATIVE=1 -DHEXA_RT_INTERN_NATIVE
 gcc -O2 -D_GNU_SOURCE -DHEXA_HAS_OPENSSL -DHEXA_CUDA $RTFLAGS -w \
     -I self -I . -I "$CINC" -c self/runtime.c -o "$B/runtime_cuda_host.o"
 
-echo "=== link forge smoke harness WITHOUT -lcublas (the headline) ==="
+echo "=== link forge smoke harness ${CUBLAS_LDLIB:-WITHOUT -lcublas (the headline)} ==="
 gcc -O2 -w -c tool/cuda_no_cublas_smoke.c -o "$B/nocublas_harness.o"
-# NOTE: link line has NO -lcublas. If any cublas* symbol survived a guard, this
+# DEFAULT link line has NO -lcublas. If any cublas* symbol survived a guard, this
 # fails with an undefined-reference link error — that is the proof gate.
-g++ -O2 "$B/nocublas_harness.o" "$B/runtime_cuda_host.o" "$B/runtime_cuda.o" \
-    "$B/runtime_cuda_dlink.o" $CORES \
-    -L"$CLIB" -lcudart -lcuda -lcudadevrt -lm -lpthread -lssl -lcrypto -ldl \
-    -o "$B/nocublas_smoke"
-echo "LINK_OK: forge cuda runtime linked with ZERO -lcublas"
+LINKLINE=(g++ -O2 "$B/nocublas_harness.o" "$B/runtime_cuda_host.o" "$B/runtime_cuda.o"
+    "$B/runtime_cuda_dlink.o" $CORES
+    -L"$CLIB" -lcudart -lcuda -lcudadevrt $CUBLAS_LDLIB -lm -lpthread -lssl -lcrypto -ldl
+    -o "$B/nocublas_smoke")
+echo "LINK_LINE: ${LINKLINE[*]}"
+"${LINKLINE[@]}"
+if [ "$USE_CUBLAS" = "1" ]; then
+  echo "LINK_OK: forge cuda runtime linked WITH -lcublas (opt-in path)"
+else
+  echo "LINK_OK: forge cuda runtime linked with ZERO -lcublas"
+fi
+
+echo "=== ldd: libcublas presence in the smoke binary ==="
+ldd "$B/nocublas_smoke" | grep -i cublas || echo "(no libcublas in ldd — cuBLAS-free)"
 
 echo "=== run forge smoke (own GEMM + gemv + outer + epilogue, correctness) ==="
 LD_LIBRARY_PATH="$CLIB:${LD_LIBRARY_PATH:-}" "$B/nocublas_smoke"
-echo "=== DONE ==="
+echo "=== DONE ($VARIANT) ==="

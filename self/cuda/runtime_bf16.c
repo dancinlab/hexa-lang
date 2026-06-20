@@ -321,13 +321,13 @@ int hexa_farr_bf16_to_f64(const HexaFarrBf16* src, double* dst, int64_t n) {
 #ifdef HEXA_CUDA
 
 #include <cuda_runtime.h>
-#ifndef HEXA_NO_CUBLAS
+#ifdef HEXA_USE_CUBLAS
 #include <cublas_v2.h>
 #else
-/* HEXA_NO_CUBLAS — cuBLAS-free BF16 substrate. cublas_v2.h is gone, but the
+/* default (no HEXA_USE_CUBLAS) — cuBLAS-free BF16 substrate. cublas_v2.h is gone, but the
  * bf16 entry-point SIGNATURES still mention cublas types/enums (cublasStatus_t,
  * cublasOperation_t, CUBLAS_OP_N, ...). Provide a minimal local shim so the
- * code compiles; every actual cublas* CALL is #ifndef-guarded to an own kernel.
+ * code compiles; every actual cublas* CALL is #ifdef HEXA_USE_CUBLAS-guarded to an own kernel.
  * These typedefs/enums are link-free (no symbol) — they only keep signatures. */
 typedef int cublasStatus_t;
 typedef int cublasOperation_t;
@@ -599,7 +599,7 @@ extern "C" __global__ void _hx_k_gemm_bf16_owngemm(const float* __restrict__ A,
  * C2 which already forbids cross-impl BF16 bit-equality. Returns 1 (own) ONLY
  * when HEXA_BF16_OWN=1. */
 static int _forge_bf16_own_on(void) {
-#ifdef HEXA_NO_CUBLAS
+#ifndef HEXA_USE_CUBLAS
     return 1;  /* cuBLAS-free: own mma.sync BF16 is the ONLY BF16 path. */
 #else
     const char* v = getenv("HEXA_BF16_OWN");
@@ -675,13 +675,13 @@ static cublasStatus_t _hx_gemm_ex_bf16(cublasOperation_t opA,
         return (rc == 0) ? CUBLAS_STATUS_SUCCESS : CUBLAS_STATUS_EXECUTION_FAILED;
     }
 #endif
-#ifdef HEXA_NO_CUBLAS
+#ifndef HEXA_USE_CUBLAS
     /* cuBLAS-free: the own kernel only handles the standard opN/opN contiguous
      * shape (the ONLY shape production emits). A non-standard op here is
      * unreachable in production; fail loudly rather than link cublasGemmEx. */
     (void)A; (void)B; (void)C; (void)lda; (void)ldb; (void)ldc;
     (void)opA; (void)opB; (void)m; (void)n; (void)k;
-    fprintf(stderr, "[bf16] HEXA_NO_CUBLAS: non-standard GemmEx op unsupported (own opN/opN only)\n");
+    fprintf(stderr, "[bf16] cuBLAS-free default: non-standard GemmEx op unsupported (own opN/opN only)\n");
     return CUBLAS_STATUS_NOT_SUPPORTED;
 #else
     const float alpha = 1.0f, beta = 0.0f;
@@ -933,7 +933,7 @@ int hexa_farr_layercast_linear_bf16_gpu(const float* X, int64_t M, int64_t K,
      * gemm(opN,opN, N, M, K, W, N, X, K, Y, N). Try the mixed FP32xBF16
      * GemmEx first (modern cuBLAS 12.x); FP32 accumulator. */
     const float alpha = 1.0f, beta = 0.0f;
-#ifdef HEXA_NO_CUBLAS
+#ifndef HEXA_USE_CUBLAS
     /* cuBLAS-free: upcast the BF16 weight to FP32, then run the own mma.sync
      * GEMM (which consumes FP32, RN-converts to bf16 at the fragment load —
      * the same effective BF16xFP32 numerics as the cublasGemmEx path). X is

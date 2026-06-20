@@ -60,11 +60,13 @@ fn emit_runtime_cuda_c() -> str {
             "#include <string.h>\n" +
             "\n" +
             "#include <cuda_runtime.h>\n" +
-            "/* HEXA_NO_CUBLAS — fully cuBLAS-free forge variant. Every cublas* call-site\n" +
-            " * is #ifndef-guarded to its own-kernel; the header + handle machinery compile\n" +
-            " * out so the TU links with ZERO -lcublas (own-kernels own 100%% of GEMM/gemv).\n" +
-            " * STANDARD build (macro unset) is byte-identical — the guard is OFF by default. */\n" +
-            "#ifndef HEXA_NO_CUBLAS\n" +
+            "/* HEXA_USE_CUBLAS — cuBLAS is an OPT-IN constraint (native-canonical-default).\n" +
+            " * By DEFAULT (macro unset) every cublas* call-site routes to its own-kernel;\n" +
+            " * the header + handle machinery compile out so the TU links with ZERO -lcublas\n" +
+            " * (own-kernels own 100%% of GEMM/gemv). Define HEXA_USE_CUBLAS to restore the\n" +
+            " * cuBLAS fast path + -lcublas. own==cuBLAS numerically (FP64 bit-identical),\n" +
+            " * so the gate changes SPEED, not output. */\n" +
+            "#ifdef HEXA_USE_CUBLAS\n" +
             "#include <cublas_v2.h>\n" +
             "#endif\n" +
             "/* HEXA-TRAIN-FLOOR bf16 lever — __nv_bfloat16 device type for the\n" +
@@ -294,7 +296,7 @@ fn emit_runtime_cuda_c() -> str {
             "#endif /* __CUDACC__ */\n" +
             "\n" +
             "/* cuBLAS handle — lazy init. */\n" +
-            "#ifndef HEXA_NO_CUBLAS\n" +
+            "#ifdef HEXA_USE_CUBLAS\n" +
             "static cublasHandle_t g_cublas = NULL;\n" +
             "\n" +
             "static int _ensure_cublas(void) {\n" +
@@ -314,7 +316,7 @@ fn emit_runtime_cuda_c() -> str {
             "    return 0;\n" +
             "}\n" +
             "#else\n" +
-            "/* HEXA_NO_CUBLAS: no handle, _ensure_cublas is a no-op (own-kernels never use\n" +
+            "/* default (no HEXA_USE_CUBLAS): no handle, _ensure_cublas is a no-op (own-kernels never use\n" +
             " * it; it stays as a callable so the GEMM entry guards need not be touched). */\n" +
             "static int _ensure_cublas(void) { return 0; }\n" +
             "#endif\n" +
@@ -796,7 +798,7 @@ fn emit_runtime_cuda_c() -> str {
             " * (own) unless HEXA_OWN_GEMM=0 explicitly reverts to cuBLAS. Any other value\n" +
             " * (unset / =1 / etc.) keeps own-GEMM. */\n" +
             "static int _forge_own_gemm_on(void) {\n" +
-            "#ifdef HEXA_NO_CUBLAS\n" +
+            "#ifndef HEXA_USE_CUBLAS\n" +
             "    return 1;  /* cuBLAS-free variant: own-GEMM is the ONLY path (no opt-out). */\n" +
             "#else\n" +
             "    const char* v = getenv(\"HEXA_OWN_GEMM\");\n" +
@@ -809,7 +811,7 @@ fn emit_runtime_cuda_c() -> str {
             " * non-deterministic fastmode lane; the default non-fastmode FP64 path is\n" +
             " * untouched). Returns 1 (own) unless HEXA_TF32_OWN=0 reverts to cublasGemmEx. */\n" +
             "static int _forge_tf32_own_on(void) {\n" +
-            "#ifdef HEXA_NO_CUBLAS\n" +
+            "#ifndef HEXA_USE_CUBLAS\n" +
             "    return 1;  /* cuBLAS-free: own mma.sync TF32 is the ONLY tf32 path. */\n" +
             "#else\n" +
             "    const char* v = getenv(\"HEXA_TF32_OWN\");\n" +
@@ -825,7 +827,7 @@ fn emit_runtime_cuda_c() -> str {
             " * TF32 tensor-op, cast the fp32 result back into C_dev. Returns 0 ok / -1 err.\n" +
             " * Uses a PEDANTIC-math cuBLAS handle (lazy, separate from g_cublas which stays\n" +
             " * fp64-strict for the default Dgemm path) so the TF32 self-byte-eq is portable. */\n" +
-            "#ifndef HEXA_NO_CUBLAS\n" +
+            "#ifdef HEXA_USE_CUBLAS\n" +
             "static cublasHandle_t g_cublas_tf32 = NULL;\n" +
             "static int _ensure_cublas_tf32(void) {\n" +
             "    if (g_cublas_tf32) return 0;\n" +
@@ -883,7 +885,7 @@ fn emit_runtime_cuda_c() -> str {
             "    cudaFree(Af); cudaFree(Bf); cudaFree(Cf);\n" +
             "    return 0;\n" +
             "}\n" +
-            "#endif /* !HEXA_NO_CUBLAS (TF32 cublasGemmEx path) */\n" +
+            "#endif /* HEXA_USE_CUBLAS (TF32 cublasGemmEx path) */\n" +
             "\n" +
             "/* ===== census r3 OWN-TF32 PARITY KERNEL (no cuBLAS) ===========================\n" +
             " * PORT of self/native/mma_sm120/owngemm_sm120.cu `gemm_sm120` — the PARITY TF32\n" +
@@ -1134,7 +1136,7 @@ fn emit_runtime_cuda_c() -> str {
             "        dim3 _ggrd((unsigned)((N + 15) / 16), (unsigned)((M + 15) / 16));\n" +
             "        _hx_k_gemm<<<_ggrd, _gblk, 0, _forge_stream()>>>(A_dev, B_dev, C_dev, M, K, N);\n" +
             "        if (_forge_launch_check(\"own_gemm\") != 0) return -1;\n" +
-            "#ifndef HEXA_NO_CUBLAS\n" +
+            "#ifdef HEXA_USE_CUBLAS\n" +
             "    } else if (_forge_tf32_fastmode()) {\n" +
             "        /* HEXA-0POD OP-24: TF32 fast-mode (opt-in). FP64 default is UNTOUCHED above;\n" +
             "         * this branch only fires when HEXA_TF32_FASTMODE is set. census r3 (7->0):\n" +
@@ -1270,7 +1272,7 @@ fn emit_runtime_cuda_c() -> str {
             "        dim3 _bgrd((unsigned)((N + 15) / 16), (unsigned)((M + 15) / 16), (unsigned)batch);\n" +
             "        _hx_k_gemm_strided_batched<<<_bgrd, _bblk, 0, _forge_stream()>>>(A_dev, B_dev, C_dev, M, K, N, batch);\n" +
             "        if (_forge_launch_check(\"own_gemm_batched\") != 0) return -1;\n" +
-            "#ifndef HEXA_NO_CUBLAS\n" +
+            "#ifdef HEXA_USE_CUBLAS\n" +
             "    } else {\n" +
             "    cublasStatus_t st = cublasDgemmStridedBatched(\n" +
             "        g_cublas, CUBLAS_OP_N, CUBLAS_OP_N,\n" +
@@ -1383,7 +1385,7 @@ fn emit_runtime_cuda_c() -> str {
             "        dim3 _ggrd((unsigned)((N + 15) / 16), (unsigned)((K + 15) / 16));\n" +
             "        _hx_k_gemm_t<<<_ggrd, _gblk, 0, _forge_stream()>>>(A_dev, B_dev, C_dev, M, K, N);\n" +
             "        if (_forge_launch_check(\"own_gemm_t\") != 0) return -1;\n" +
-            "#ifndef HEXA_NO_CUBLAS\n" +
+            "#ifdef HEXA_USE_CUBLAS\n" +
             "    } else {\n" +
             "    static int _gemmt_fired = 0;\n" +
             "    if (!_gemmt_fired) { _gemmt_fired = 1;\n" +
@@ -5395,7 +5397,7 @@ fn emit_runtime_cuda_c() -> str {
             "        if (_forge_launch_check(\"own_matmul_t\") != 0) return -1;\n" +
             "        return _d2h_out(out_id, C);\n" +
             "    }\n" +
-            "#ifndef HEXA_NO_CUBLAS\n" +
+            "#ifdef HEXA_USE_CUBLAS\n" +
             "    /* row-major: out[1·C] = u[1·R] · M[R·C]\n" +
             "     * → cuBLAS Dgemm(N,N, m=C, n=1, k=R, alpha, M_dev, ldb=C, U_dev, lda=R,\n" +
             "     *                beta, O_dev, ldc=C) */\n" +
@@ -5572,7 +5574,7 @@ fn emit_runtime_cuda_c() -> str {
             "        }\n" +
             "        return _d2h_out(out_id, rows);\n" +
             "    }\n" +
-            "#ifdef HEXA_NO_CUBLAS\n" +
+            "#ifndef HEXA_USE_CUBLAS\n" +
             "    /* cuBLAS-free: large-rows also goes own (the own FP64 kernel fired above\n" +
             "     * under _forge_own_gemm_on()==1, so this point is unreachable for CUDACC;\n" +
             "     * run the own kernel here too for robustness, then return). */\n" +
@@ -5590,7 +5592,7 @@ fn emit_runtime_cuda_c() -> str {
             "    }\n" +
             "#endif\n" +
             "#endif\n" +
-            "#ifndef HEXA_NO_CUBLAS\n" +
+            "#ifdef HEXA_USE_CUBLAS\n" +
             "    if (_ensure_cublas() != 0) return -1;\n" +
             "    const double alpha = 1.0, beta = 0.0;\n" +
             "    cublasStatus_t st = cublasDgemv(g_cublas, CUBLAS_OP_T,\n" +
@@ -5652,7 +5654,7 @@ fn emit_runtime_cuda_c() -> str {
             "        if (_forge_launch_check(\"own_outer\") != 0) return -1;\n" +
             "        return _d2h_out(out_id, R * C);\n" +
             "    }\n" +
-            "#ifndef HEXA_NO_CUBLAS\n" +
+            "#ifdef HEXA_USE_CUBLAS\n" +
             "    cublasStatus_t st = cublasDgemm(g_cublas,\n" +
             "                                    CUBLAS_OP_N, CUBLAS_OP_N,\n" +
             "                                    (int)C, (int)R, 1,\n" +

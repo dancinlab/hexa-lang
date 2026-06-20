@@ -1455,8 +1455,15 @@ fn os_clang_ldflags() {
             if cuda_probe != "" { cuda_l = " -L" + cuda_probe.trim() + " -L" + cuda_probe.trim() + "/stubs" }
         }
         // cudadevrt is a STATIC archive shipped by the toolkit (device-runtime for
-        // the -dlink blob); cudart/cublas/cuda are the host-side shared libs.
-        return base + cuda_l + " -lcudart -lcublas -lcuda -lcudadevrt"
+        // the -dlink blob); cudart/cuda are the host-side shared libs always needed
+        // (cudaLaunchKernel / device alloc). cuBLAS is now an OPT-IN constraint
+        // (native-canonical-default): the forge runtime_cuda.o defaults to OWN
+        // kernels with ZERO undefined cublas* symbols, so -lcublas is dead weight by
+        // default — only HEXA_USE_CUBLAS=1 (the opt-in cuBLAS fast path, which emits
+        // cublas* call-sites) needs it. This keeps the consumer link cuBLAS-FREE by
+        // default (no libcublas DT_NEEDED), matching the cuBLAS-independent runtime.
+        let cublas_l = if env("HEXA_USE_CUBLAS") == "1" { " -lcublas" } else { "" }
+        return base + cuda_l + " -lcudart" + cublas_l + " -lcuda -lcudadevrt"
     }
     // 2026-05-14: libsodium link flags (when found via pkg-config or brew).
     let probe = exec("pkg-config --libs libsodium 2>/dev/null")

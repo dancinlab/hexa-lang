@@ -1,7 +1,8 @@
-/* cuda_no_cublas_smoke.c — piece ④ HEADLINE smoke for the HEXA_NO_CUBLAS variant.
+/* cuda_no_cublas_smoke.c — HEADLINE smoke for the native-canonical-default forge
+ * cuda runtime (own kernels are the DEFAULT; cuBLAS is opt-in -DHEXA_USE_CUBLAS).
  *
  * Drives the production BF16 matmul entry point hexa_farr_matmul_bf16_gpu
- * (runtime_bf16.c, #include'd into runtime_cuda.c) which, under -DHEXA_NO_CUBLAS,
+ * (runtime_bf16.c, #include'd into runtime_cuda.c) which, by DEFAULT (no macro),
  * routes to the OWN mma.sync m16n8k16 kernel (_hx_k_gemm_bf16_owngemm) — NO cuBLAS.
  *
  * The PROOF is two-fold:
@@ -91,7 +92,7 @@ int main(int argc, char** argv) {
     int sizes[] = {512, 1024, 2048};
     int nsz = 3;
     if (argc > 1) { sizes[0] = atoi(argv[1]); nsz = 1; }
-    printf("=== HEXA_NO_CUBLAS forge GEMM smoke (own mma.sync BF16, ZERO cuBLAS) ===\n");
+    printf("=== native-default forge GEMM smoke (own mma.sync BF16, ZERO cuBLAS) ===\n");
     int fail = 0;
     for (int si = 0; si < nsz; si++) {
         int64_t S = sizes[si], M=S, N=S, K=S;
