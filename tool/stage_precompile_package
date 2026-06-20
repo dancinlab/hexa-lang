@@ -36,7 +36,18 @@ stage="dist/hexa-${TARGET}"
 mkdir -p "$stage/build" "$stage/release/precompile"
 cp hexa "$stage/hexa"
 cp build/hexa_module_loader "$stage/build/hexa_module_loader"
-cp build/runtime.a "$stage/build/runtime.a"
+# CUDA-R1 DUAL-RUNTIME (#3701 r2): the toolchain built + precompiled against the
+# CPU build/runtime.a (libcuda-free, so hexa_v2 + the precompile binaries run on
+# the GPU-less builder). The CONSUMER, however, must receive the cuBLAS-enabled
+# archive so its `hexa build`/`run` links a real cuda GEMM body. When the cuda
+# build produced build/runtime.cuda.a (HEXA_CUDA path), ship THAT as the tarball's
+# build/runtime.a; else ship the CPU archive unchanged (every default target).
+if [ -f build/runtime.cuda.a ]; then
+    echo "[stage_precompile_package] CUDA-R1: shipping consumer cuBLAS archive build/runtime.cuda.a as build/runtime.a (toolchain used the CPU runtime.a)"
+    cp build/runtime.cuda.a "$stage/build/runtime.a"
+else
+    cp build/runtime.a "$stage/build/runtime.a"
+fi
 # Ship the self-hosted transpiler too — post-PR2 (seeds git-removed) the
 # `hexa cc --regen` step has no self/native/hexa_cc.c to bootstrap build/hexat
 # from, so stage_prebuild_hexat must pull a prebuilt build/hexat from THIS edge
