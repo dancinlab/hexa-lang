@@ -90,6 +90,29 @@ win here is **ownership and completeness** — a persistent whole-step kernel *c
 call our device GEMM in-line where it can never call cuBLAS — **not** a util or
 perf victory over the vendor library.
 
+> ⚠️ **HW-귀속 정정 (2026-06-20 · forge cuBLAS 7→0).** 위 W-ladder 수치(W10
+> 70.7 TFLOP/s · 6.09× off · "parity 미달성")는 **H100 `sm_90a` `wgmma`** 의
+> 것이다 — forge 출하 parity 측정 호스트(**RTX 5070 `sm_120`**)와 **다른 HW** 이고,
+> consumer Blackwell `sm_120` 엔 `wgmma` 가 없다. **`sm_120` 실측 결론은 정반대다**:
+> forge own-GEMM 이 cuBLAS **PARITY** 에 도달했다 — TF32 own `mma.sync` 1.10×
+> bit-exact · FP64 own 1.15~1.24× (`sm_120` 엔 FP64 텐서코어가 없어 cuBLAS Dgemm 도
+> SIMT 폴백이라 own 이 오히려 빠름). 따라서 "parity 미달성 · 가치는 ownership 이지
+> perf 아님" 은 **stale H100 결론**이고, **forge 는 production GEMM 에서 cuBLAS 호출
+> 7→0 으로 독립**했다 (FP64 PR #3718 + TF32 PR #3727 · `self/cuda/runtime_cuda_emit.hexa`
+> 의 6 GEMM 호출 전부 own-kernel env 게이트의 OFF 폴백으로 강등). flame 은 이 경로를
+> 자동 상속한다(직접 cuBLAS 호출 0건 · 모든 GEMM 이 forge 게이트 런처로 수렴).
+>
+> **결정적(byte-eq) GPU 학습 스위치.** cloud/dojo 잡에서 아래 env 를 켜면 own-kernel 이
+> cuBLAS 를 대체한다 — **OFF 비트동일 · additive opt-in** (켜지 않으면 기존 cuBLAS 경로
+> 0줄 변경):
+> - `HEXA_OWN_GEMM=1` — FP64(기본) GEMM 전체를 own `_hx_k_gemm` 으로 (cuBLAS 호출 0,
+>   `[OWN-GEMM-FIRED] … (no cuBLAS)` 마커로 실증). flame 기본 학습 경로가 이것.
+> - `HEXA_TF32_OWN=1` — `HEXA_TF32_FASTMODE` 하위 게이트 · TF32 fastmode 를 own
+>   `mma.sync` parity 커널로.
+>
+> cloud 는 `cloud_validate_env_passthrough` 가 dispatcher 의 `--env` 전달을 검증할 뿐
+> allowlist 차단이 아니므로, 이 두 env 는 별도 배선 없이 그대로 pod 로 전달된다.
+
 **The W-ladder (own-GEMM, `wgmma`+TMA on native `sm_90a`).** Each rung is
 bit-exact (rel-RMS 0); the lift is occupancy, not precision:
 
