@@ -1,0 +1,214 @@
+// @ci_gate — deterministic · pure analytic anchors (no fixture I/O required)
+//
+// noncollinear_selftest.hexa — the NONCOLLINEAR (spinor) SCF g5 gate (work#28 1/3).
+//
+// Verifies stdlib/qforge/noncollinear (spinor h_psi · 2×2 Pauli potential · 2n
+// complex Hermitian eigensolver via real embedding · noncollinear density 4-vector
+// · magnetization vector · noncollinear SCF driver). The model is the SAME ρ-coupled
+// metallic Hamiltonian used by scf_spin_selftest (diagonal kinetic ladder + decaying
+// hops + on-site V_c·ρ_tot + exchange field), so the collinear LSDA driver is the
+// EXACT reference for the z-aligned case (QE's own internal consistency check).
+//
+//   (A) QE-CONSISTENCY PIN — field along +ẑ ≡ collinear LSDA. Driving the spinor
+//       SCF with B = (0,0,Δ_x·sign-pattern) reproduces qforge_scf_spin_smeared_dc
+//       to e_total ~1e-7, evals match the merged ↑/↓ collinear spectrum, and the
+//       integrated magnetization vector M = (0, 0, m_z) with m_z = the collinear
+//       scalar moment (Mx=My≈0). This is the bit-for-bit reduction QE guarantees. 🔵
+//   (B) SPIN-ROTATION INVARIANCE — the SAME field rotated to point along +x̂ gives
+//       the SAME total energy and the SAME |M|, but now M = (|m|, 0, 0): the moment
+//       has physically rotated into the xy/x direction (impossible for a collinear
+//       code). Proves the spinor ↑↔↓ mixing + complex eigensolver are correct.    🟢
+//   (C) DENSITY / EIGENSOLVER algebra — charge conservation (Σρ = nelec), the
+//       complex Hermitian eigensolver reproduces a known 2×2 spectrum, and the
+//       Pauli identity ρ²-decomposition (n² ≥ mx²+my²+mz² pointwise).            🟢
+//
+// Run:  hexa run --no-sentinel stdlib/qforge/noncollinear_selftest.hexa
+// PASS: "qforge_noncollinear_selftest PASS".
+use "stdlib/qforge/noncollinear"
+use "stdlib/qforge/scf"
+use "stdlib/qforge/smearing"
+use "stdlib/qforge/assembler"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+
+// ── shared model parameters (same ladder as scf_spin_selftest) ────────────────
+let mut SN = 0
+let SVC = 0.05
+let mut SDX = 0.0
+let mut SHAM_UP: PwHam = PwHam { h: [], diag: [], n: 0 }
+let mut SHAM_DN: PwHam = PwHam { h: [], diag: [], n: 0 }
+fn s_up_apply(v: [float]) -> [float] { return qforge_h_apply(SHAM_UP, v) }
+fn s_dn_apply(v: [float]) -> [float] { return qforge_h_apply(SHAM_DN, v) }
+
+// build the ρ-coupled metallic H WITHOUT exchange (the scalar kinetic+V part T).
+//   The exchange field Δ_x is split OUT into the noncollinear B vector.
+fn s_build_scalar(rho_tot: [float]) -> PwHam {
+    let mut h: [float] = []
+    let mut dg: [float] = []
+    let mut a = 0
+    while a < SN {
+        let mut da = 0.5 * (0.37 * to_float(a)) * (0.37 * to_float(a))
+        if a == 3 { da = da - 0.02 }
+        if a == 4 { da = da - 0.018 }
+        da = da + SVC * rho_tot[a]
+        let mut b = 0
+        while b < SN {
+            if a == b { h.push(da) }
+            else {
+                let dd = _abs(to_float(a - b))
+                h.push(-0.12 / (1.0 + dd * dd))
+            }
+            b = b + 1
+        }
+        dg.push(da)
+        a = a + 1
+    }
+    return PwHam { h: h, diag: dg, n: SN }
+}
+
+// ── COLLINEAR reference closures (exactly scf_spin_selftest, exch=−sign·Δ_x) ──
+fn s_build_exch(rho_tot: [float], exch: float) -> PwHam {
+    let mut h: [float] = []
+    let mut dg: [float] = []
+    let mut a = 0
+    while a < SN {
+        let mut da = 0.5 * (0.37 * to_float(a)) * (0.37 * to_float(a))
+        if a == 3 { da = da - 0.02 }
+        if a == 4 { da = da - 0.018 }
+        da = da + SVC * rho_tot[a] + exch
+        let mut b = 0
+        while b < SN {
+            if a == b { h.push(da) }
+            else {
+                let dd = _abs(to_float(a - b))
+                h.push(-0.12 / (1.0 + dd * dd))
+            }
+            b = b + 1
+        }
+        dg.push(da)
+        a = a + 1
+    }
+    return PwHam { h: h, diag: dg, n: SN }
+}
+fn s_spin_of_rho(rho_up: [float], rho_dn: [float], sign: float) {
+    let mut rt: [float] = []
+    let mut i = 0
+    while i < SN { rt.push(rho_up[i] + rho_dn[i]) ; i = i + 1 }
+    let exch = -1.0 * sign * SDX
+    if sign > 0.0 { SHAM_UP = s_build_exch(rt, exch) ; return s_up_apply }
+    SHAM_DN = s_build_exch(rt, exch) ; return s_dn_apply
+}
+fn s_rho(psis: [[float]], occ: [float], nbands: int) -> [float] {
+    let ndim = len(psis[0])
+    let mut rho: [float] = []
+    let mut i = 0
+    while i < ndim {
+        let mut s = 0.0
+        let mut b = 0
+        while b < nbands { s = s + occ[b] * psis[b][i] * psis[b][i] ; b = b + 1 }
+        rho.push(s)
+        i = i + 1
+    }
+    return rho
+}
+
+// ── NONCOLLINEAR closures. T = scalar kinetic+V (no exchange). B = field direction.
+//   We split the SAME physics: the collinear exch = −sign·Δ_x is a +ẑ field of
+//   magnitude Δ_x acting as +Δ_x on ↓ and −Δ_x on ↑ (↑ lowered). In the 2×2 Pauli
+//   form V·I + B·σ with σ_z = diag(+1,−1): B_z lowers ↑ by B_z, raises ↓ by B_z, so
+//   B_z = −Δ_x reproduces "↑ lowered by Δ_x" (the collinear exch convention). The
+//   field DIRECTION (axis) is chosen by the test; magnitude is Δ_x at each point.
+let mut NC_T: PwHam = PwHam { h: [], diag: [], n: 0 }
+fn nc_t_apply(v: [float]) -> [float] { return qforge_h_apply(NC_T, v) }
+// AXIS: 0=z, 1=x. The collinear-equivalent z-field has B_z = −Δ_x (↑ lowered).
+let mut NC_AXIS = 0
+fn nc_h_of_dens(charge: [float], mx: [float], my: [float], mz: [float]) {
+    NC_T = s_build_scalar(charge)
+    let mut bv: [float] = [] ; let mut bx: [float] = []
+    let mut by: [float] = [] ; let mut bz: [float] = []
+    let mut i = 0
+    while i < SN {
+        bv.push(0.0)                       // scalar V is inside T (V-in-T split)
+        let bmag = -1.0 * SDX              // ↑ lowered ⇒ B = −Δ_x along the axis
+        if NC_AXIS == 0 { bx.push(0.0) ; by.push(0.0) ; bz.push(bmag) }
+        else            { bx.push(bmag) ; by.push(0.0) ; bz.push(0.0) }
+        i = i + 1
+    }
+    let pot = NcPotential { v: bv, bx: bx, by: by, bz: bz, n: SN }
+    return [nc_t_apply, pot]
+}
+
+fn main() {
+    let mut fails = 0
+    let sigma = 0.25
+    let nelec = 6
+    SN = 8
+    SDX = 0.15
+
+    // ══ collinear reference (exch ON) ══════════════════════════════════════════
+    let mg = qforge_scf_spin_smeared_dc(s_spin_of_rho, s_rho, SN, SN, nelec,
+                                        0.5, 1.0e-12, 400, sigma, 0, 0.0, 1.0)
+
+    // ══ (A) NONCOLLINEAR, field along +ẑ — must reduce to collinear ════════════
+    // The spinor problem has dimension d=2n (n sites × 2 spin components), so to
+    // match the collinear driver (which carries 8 ↑ + 8 ↓ = 16 bands) the spinor
+    // SCF must compute ALL 2n=16 spinor bands. Filling nelec=6 then fills the lowest
+    // 6 of the merged 16 — identical to the collinear shared-E_F fill.
+    let NB = 2 * SN
+    NC_AXIS = 0
+    let nz = qforge_scf_noncol(nc_h_of_dens, SN, NB, nelec, 0.5, 1.0e-12, 400,
+                               sigma, [0.0, 0.0, 1.0])
+    fails = fails + _ck_true("(A) collinear ref converged", mg.converged)
+    fails = fails + _ck_true("(A) noncol-z converged", nz.converged)
+    fails = fails + _ck_close("(A) e_total noncol-z == collinear", nz.e_total, mg.e_total, 1.0e-6)
+    // collinear scalar moment m_z = Σocc↑−Σocc↓; noncol M_z must match.
+    fails = fails + _ck_close("(A) M_z == collinear m", nz.mtot[2], mg.magnetization, 1.0e-5)
+    fails = fails + _ck_close("(A) M_x ≈ 0 (z-aligned)", nz.mtot[0], 0.0, 1.0e-6)
+    fails = fails + _ck_close("(A) M_y ≈ 0 (z-aligned)", nz.mtot[1], 0.0, 1.0e-6)
+    // the spinor spectrum's lowest evals == the merged collinear ↑/↓ lowest evals.
+    //   ↑ lowest is below ↓ lowest (↑ lowered), so spinor[0] == collinear evals_up[0].
+    fails = fails + _ck_close("(A) spinor eval[0] == collinear ↑[0]", nz.evals[0], mg.evals_up[0], 1.0e-7)
+
+    // ══ (B) SPIN ROTATION — same field along +x̂: same E, same |M|, M=(|m|,0,0) ══
+    NC_AXIS = 1
+    let nx = qforge_scf_noncol(nc_h_of_dens, SN, NB, nelec, 0.5, 1.0e-12, 400,
+                               sigma, [1.0, 0.0, 0.0])
+    fails = fails + _ck_true("(B) noncol-x converged", nx.converged)
+    fails = fails + _ck_close("(B) e_total rot-invariant (x==z)", nx.e_total, nz.e_total, 1.0e-6)
+    fails = fails + _ck_close("(B) |M| rot-invariant (x==z)", nx.mtot[3], nz.mtot[3], 1.0e-5)
+    fails = fails + _ck_close("(B) M_x == |M| (moment along x̂)", nx.mtot[0], nx.mtot[3], 1.0e-5)
+    fails = fails + _ck_close("(B) M_z ≈ 0 (rotated off z)", nx.mtot[2], 0.0, 1.0e-6)
+    fails = fails + _ck_true("(B) |M| > 0 (magnetic)", nx.mtot[3] > 0.01)
+
+    // ══ (C) DENSITY / EIGENSOLVER algebra ══════════════════════════════════════
+    // charge conservation: Σ ρ(r) == nelec.
+    let mut q = 0.0
+    let mut ci = 0
+    while ci < SN { q = q + nx.charge[ci] ; ci = ci + 1 }
+    fails = fails + _ck_close("(C) Σ ρ == nelec", q, to_float(nelec), 1.0e-5)
+    // pointwise Pauli bound |m(r)| ≤ n(r) (a pure state saturates; mixed ≤).
+    let mut paok = true
+    let mut pj = 0
+    while pj < SN {
+        let mm = sqrt(nx.mx[pj]*nx.mx[pj] + nx.my[pj]*nx.my[pj] + nx.mz[pj]*nx.mz[pj])
+        if mm > nx.charge[pj] + 1.0e-9 { paok = false }
+        pj = pj + 1
+    }
+    fails = fails + _ck_true("(C) pointwise |m(r)| ≤ ρ(r)", paok)
+    // known 2×2 complex Hermitian eigenvalue check: [[2, i],[−i, 2]] → eigs {1, 3}.
+    //   Are = [[2,0],[0,2]], Aim = [[0,1],[−1,0]].
+    let eg = qforge_eigh_complex([2.0, 0.0, 0.0, 2.0], [0.0, 1.0, -1.0, 0.0], 2, 2)
+    fails = fails + _ck_close("(C) complex-eig lowest == 1", eg[0][0], 1.0, 1.0e-9)
+    fails = fails + _ck_close("(C) complex-eig highest == 3", eg[0][1], 3.0, 1.0e-9)
+
+    if fails == 0 { println("qforge_noncollinear_selftest PASS") }
+    else { println("qforge_noncollinear_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

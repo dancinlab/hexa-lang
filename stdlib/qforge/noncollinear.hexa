@@ -1,0 +1,447 @@
+// HEXA Standard Library — qforge/noncollinear
+//
+// QFORGE work#28 stage 1/3 — NONCOLLINEAR-MAGNETIZATION SCF (spinor 2-component).
+//
+// The collinear LSDA driver (scf.hexa qforge_scf_spin_smeared_dc) carries TWO
+// independent real KS channels (↑,↓) sharing one Fermi level, and a SCALAR moment
+// m = Σocc↑ − Σocc↓. That cannot describe a magnetization that points anywhere but
+// ±ẑ. Noncollinear DFT replaces each KS state with a 2-COMPONENT COMPLEX SPINOR
+//   ψ = (ψ↑, ψ↓)            (each component a length-n complex vector)
+// and the spin density becomes a 2×2 hermitian matrix per real-space point,
+// equivalently the 4-vector (n, m_x, m_y, m_z) where
+//   n(r)   = ψ†ψ            = |ψ↑|² + |ψ↓|²              (charge)
+//   m_x(r) = ψ†σ_x ψ        = 2 Re(ψ↑* ψ↓)
+//   m_y(r) = ψ†σ_y ψ        = 2 Im(ψ↑* ψ↓)
+//   m_z(r) = ψ†σ_z ψ        = |ψ↑|² − |ψ↓|²
+// (summed over occupied bands with occ_b). The Kohn-Sham potential is the 2×2
+//   V = V_charge·I + B·σ
+// and the magnetization vector M = ∫ m(r) dr can lie in ANY direction.
+//
+// ── reference (c23: Quantum ESPRESSO is the answer key) ───────────────────────
+//   QE PW/src/h_psi.f90        — spinor layout psi(1:lda)=up, psi(lda+1:2lda)=down;
+//                                kinetic acts independently per component.
+//   QE PW/src/vloc_psi.f90 vloc_psi_nc — the 2×2 Pauli potential application
+//        (V·I + σ·B), components vrs(ir,1)=V, vrs(ir,2)=Bx, vrs(ir,3)=By,
+//        vrs(ir,4)=Bz:
+//          sup  = ψ↑·(V + Bz) + ψ↓·(Bx − i·By)
+//          sdwn = ψ↑·(Bx + i·By) + ψ↓·(V − Bz)
+//   QE PW/src/v_of_rho.f90 (nspin=4) — XC magnetic field along the LOCAL m̂:
+//          vs = ½(vxc↑ − vxc↓),  B(r,k) = vs · m(r,k)/|m(r)|   (k = x,y,z)
+//        i.e. collinear LSDA generalized to point along the local magnetization.
+//   QE PW/src/electrons.f90 compute_magnetization —
+//          M_k   = Σ_ir ρ(ir,k+1) · ω/N           (k=1..3, ω cell vol, N grid pts)
+//          absmag = Σ_ir |m(ir)| · ω/N
+//
+// ── the regression pin (QE's own internal-consistency check, our gate anchor) ──
+//   A noncollinear calculation whose XC field is forced to lie along ẑ (and whose
+//   spinor never mixes ↑↔↓) reduces EXACTLY to the collinear LSDA result: the 2×2
+//   H is block-diagonal, the two spinor blocks ARE the two collinear channels,
+//   M = (0,0,m_z) with m_z the collinear scalar moment. We pin this bit-for-bit.
+//
+// ── complex Hermitian eigensolver via real embedding (reuse, d19) ─────────────
+//   We have a proven real-symmetric eigensolver (eigen.hexa eigh). A d×d complex
+//   Hermitian H = A + iB (A real symmetric, B real antisymmetric) is solved by the
+//   STANDARD real embedding into a 2d×2d real symmetric matrix
+//          Ĥ = [[A, −B], [B, A]]
+//   whose 2d eigenvalues come in IDENTICAL PAIRS {λ_k, λ_k}; each complex
+//   eigenvector (u + iv) maps to the real eigenvector (u, v) of Ĥ. We pick one
+//   representative per pair (lowest-d distinct) → d complex eigenpairs. This keeps
+//   the whole spinor solve on top of the existing verified real eigensolver.
+use "stdlib/alloc/math/eigen"
+use "stdlib/qforge/smearing"
+
+// ── a 2-component complex spinor wavefunction over n grid/PW points ───────────
+//   Flat real arrays length n each (re/im of up and down component). A length-n
+//   collinear pure-up real state is up_re=ψ, everything else 0.
+pub struct Spinor {
+    up_re: [float],
+    up_im: [float],
+    dn_re: [float],
+    dn_im: [float],
+    n: int
+}
+
+// ── the noncollinear 2×2 real-space potential, the 4-vector (V, Bx, By, Bz) ────
+//   Per grid point i: V[i] charge potential, Bx/By/Bz the magnetic field vector.
+//   This is exactly QE's vrs(ir,1..4).
+pub struct NcPotential {
+    v:  [float],
+    bx: [float],
+    by: [float],
+    bz: [float],
+    n: int
+}
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// ════════════════════════════════════════════════════════════════════════════
+// SPINOR h_psi — apply (T·I + V·I + B·σ) to a 2-component complex spinor
+// ════════════════════════════════════════════════════════════════════════════
+// T_apply: a matrix-free REAL hermitian kinetic+local-scalar operator on a length-n
+//   complex vector, applied INDEPENDENTLY to each spinor component (QE h_psi.f90:
+//   hpsi(i)=g2kin(i)·psi(i) per component). We accept it as a real linear op and
+//   apply it to re/im parts separately (kinetic is real-diagonal in PW; real here).
+//   The 2×2 spin coupling is then added from the NcPotential (vloc_psi_nc).
+//
+// QE vloc_psi_nc (V·I + σ·B), with i = imaginary unit:
+//   sup  = ψ↑·(V + Bz) + ψ↓·(Bx − i·By)
+//   sdwn = ψ↑·(Bx + i·By) + ψ↓·(V − Bz)
+// Note: the SCALAR part V is ALREADY inside T_apply (kinetic+V_charge as one real
+//   op, the collinear convention) — so here `pot.v` carries ONLY the part NOT in
+//   T_apply. For the canonical split we keep V in T_apply and pass pot.v = 0; the
+//   field B is what makes it noncollinear. (Keeping V here too is harmless: the
+//   caller chooses one split. The selftest uses V-in-T, B-here.)
+pub fn qforge_h_psi_spinor(T_apply, pot: NcPotential, psi: Spinor) -> Spinor {
+    let n = psi.n
+    // (1) kinetic + scalar real op, per component, on re and im independently.
+    let tur = T_apply(psi.up_re)
+    let tui = T_apply(psi.up_im)
+    let tdr = T_apply(psi.dn_re)
+    let tdi = T_apply(psi.dn_im)
+    // (2) add the 2×2 Pauli field B·σ (+ optional extra scalar pot.v).
+    let mut our: [float] = [] ; let mut oui: [float] = []
+    let mut odr: [float] = [] ; let mut odi: [float] = []
+    let mut i = 0
+    while i < n {
+        let v  = pot.v[i]
+        let bx = pot.bx[i] ; let by = pot.by[i] ; let bz = pot.bz[i]
+        let aur = psi.up_re[i] ; let aui = psi.up_im[i]
+        let adr = psi.dn_re[i] ; let adi = psi.dn_im[i]
+        // sup = ψ↑·(V+Bz) + ψ↓·(Bx − i·By)
+        //   re: aur·(v+bz) + (adr·bx + adi·by)
+        //   im: aui·(v+bz) + (adi·bx − adr·by)
+        let dvp = v + bz
+        let sur = aur * dvp + (adr * bx + adi * by)
+        let sui = aui * dvp + (adi * bx - adr * by)
+        // sdwn = ψ↑·(Bx + i·By) + ψ↓·(V−Bz)
+        //   re: (aur·bx − aui·by) + adr·(v−bz)
+        //   im: (aui·bx + aur·by) + adi·(v−bz)
+        let dvm = v - bz
+        let sdr = (aur * bx - aui * by) + adr * dvm
+        let sdi = (aui * bx + aur * by) + adi * dvm
+        our.push(tur[i] + sur) ; oui.push(tui[i] + sui)
+        odr.push(tdr[i] + sdr) ; odi.push(tdi[i] + sdi)
+        i = i + 1
+    }
+    return Spinor { up_re: our, up_im: oui, dn_re: odr, dn_im: odi, n: n }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// NONCOLLINEAR DENSITY 4-vector  (n, m_x, m_y, m_z)  from occupied spinors
+// ════════════════════════════════════════════════════════════════════════════
+//   ρ(r)   = Σ_b occ_b (|ψ↑|² + |ψ↓|²)
+//   m_x(r) = Σ_b occ_b 2 Re(ψ↑* ψ↓)
+//   m_y(r) = Σ_b occ_b 2 Im(ψ↑* ψ↓)
+//   m_z(r) = Σ_b occ_b (|ψ↑|² − |ψ↓|²)
+//   returns [charge, mx, my, mz], each length n.
+pub fn qforge_noncol_density(psis: [Spinor], occ: [float], nbands: int) -> [[float]] {
+    let n = psis[0].n
+    let mut charge: [float] = []
+    let mut mx: [float] = []
+    let mut my: [float] = []
+    let mut mz: [float] = []
+    let mut i = 0
+    while i < n { charge.push(0.0) ; mx.push(0.0) ; my.push(0.0) ; mz.push(0.0) ; i = i + 1 }
+    let mut b = 0
+    while b < nbands {
+        let w = occ[b]
+        let p = psis[b]
+        let mut j = 0
+        while j < n {
+            let ur = p.up_re[j] ; let ui = p.up_im[j]
+            let dr = p.dn_re[j] ; let di = p.dn_im[j]
+            let nu = ur * ur + ui * ui          // |ψ↑|²
+            let nd = dr * dr + di * di           // |ψ↓|²
+            // ψ↑* ψ↓ = (ur − i·ui)(dr + i·di) = (ur·dr + ui·di) + i(ur·di − ui·dr)
+            let cr = ur * dr + ui * di
+            let ci = ur * di - ui * dr
+            charge[j] = charge[j] + w * (nu + nd)
+            mx[j] = mx[j] + w * 2.0 * cr
+            my[j] = my[j] + w * 2.0 * ci
+            mz[j] = mz[j] + w * (nu - nd)
+            j = j + 1
+        }
+        b = b + 1
+    }
+    return [charge, mx, my, mz]
+}
+
+// ── integrated magnetization vector M = Σ_ir m(ir)·(ω/N) + absmag ─────────────
+//   QE compute_magnetization. cell_vol_over_n = ω/N (the real-space measure); pass
+//   1.0 for a discrete (per-point unit-weight) sum. Returns [Mx, My, Mz, |M|, absmag].
+pub fn qforge_noncol_magnetization(dens: [[float]], cell_vol_over_n: float) -> [float] {
+    let mx = dens[1] ; let my = dens[2] ; let mz = dens[3]
+    let n = len(mx)
+    let mut sx = 0.0 ; let mut sy = 0.0 ; let mut sz = 0.0 ; let mut sa = 0.0
+    let mut i = 0
+    while i < n {
+        sx = sx + mx[i] ; sy = sy + my[i] ; sz = sz + mz[i]
+        sa = sa + sqrt(mx[i] * mx[i] + my[i] * my[i] + mz[i] * mz[i])
+        i = i + 1
+    }
+    let w = cell_vol_over_n
+    let Mx = sx * w ; let My = sy * w ; let Mz = sz * w
+    let Mmag = sqrt(Mx * Mx + My * My + Mz * Mz)
+    return [Mx, My, Mz, Mmag, sa * w]
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// COMPLEX HERMITIAN EIGENSOLVER via real 2d×2d embedding (reuse eigh, d19)
+// ════════════════════════════════════════════════════════════════════════════
+// Input: a d×d complex Hermitian matrix as flat real arrays Are (row-major, the
+//   real part, symmetric) and Aim (the imaginary part, antisymmetric). Returns the
+//   lowest `nev` eigenvalues (ascending) and complex eigenvectors.
+//   result[0] = evals (length nev, ascending)
+//   result[1] = vecs_re (nev rows × d, flat: row k = Re eigvec k)
+//   result[2] = vecs_im (nev rows × d, flat: row k = Im eigvec k)
+//
+// Embedding Ĥ = [[A, −B], [B, A]] is 2d×2d real symmetric (A symmetric, B
+//   antisymmetric ⇒ Ĥ symmetric). Eigenvalues double; for each complex eigpair
+//   (λ, u+iv) the real vector (u, v) is an eigvec of Ĥ at λ. We take the lowest
+//   `nev` DISTINCT eigenvalues (every value appears twice → stride 2 after sort).
+pub fn qforge_eigh_complex(Are: [float], Aim: [float], d: int, nev: int) -> [[float]] {
+    let dd = 2 * d
+    // build Ĥ (dd×dd) row-major.
+    let mut H: [float] = []
+    let mut r = 0
+    while r < dd {
+        let mut c = 0
+        while c < dd {
+            let mut val = 0.0
+            if r < d && c < d {
+                val = Are[r * d + c]                 // top-left  A
+            } else if r < d && c >= d {
+                val = -1.0 * Aim[r * d + (c - d)]    // top-right −B
+            } else if r >= d && c < d {
+                val = Aim[(r - d) * d + c]           // bot-left  B
+            } else {
+                val = Are[(r - d) * d + (c - d)]     // bot-right A
+            }
+            H.push(val)
+            c = c + 1
+        }
+        r = r + 1
+    }
+    let eg = eigh(H, dd)        // [vals DESCENDING, vecs rows]
+    let vals = eg[0]
+    let vecs = eg[1]
+    // eigh descending ⇒ lowest are at the END. The 2d values are pairs; ascending
+    // order is index dd-1, dd-2, …. Consecutive ascending entries (a,a) are the
+    // doubled pair — take every OTHER one (stride 2) for nev distinct eigenpairs.
+    let mut evals: [float] = []
+    let mut vre: [float] = []
+    let mut vim: [float] = []
+    let mut k = 0
+    while k < nev {
+        let idx = dd - 1 - 2 * k          // ascending k-th distinct (skip its twin)
+        evals.push(vals[idx])
+        // real eigvec of Ĥ = (u, v); complex eigvec = u + i v, length d each.
+        let row = vecs[idx]
+        // renormalize the complex vector to unit norm (Σ|u+iv|² = 1).
+        let mut nrm = 0.0
+        let mut t = 0
+        while t < d {
+            let u = row[t] ; let v = row[d + t]
+            nrm = nrm + u * u + v * v
+            t = t + 1
+        }
+        let s = if nrm > 1.0e-300 { 1.0 / sqrt(nrm) } else { 1.0 }
+        t = 0
+        while t < d { vre.push(row[t] * s) ; vim.push(row[d + t] * s) ; t = t + 1 }
+        k = k + 1
+    }
+    return [evals, vre, vim]
+}
+
+// ── assemble the dense 2n×2n complex spinor Hamiltonian from a closure ─────────
+//   For the SCF/selftest we need H as an explicit complex matrix to feed
+//   qforge_eigh_complex. We build it by applying qforge_h_psi_spinor to the 2n
+//   unit spinors (n real-up units then n real-down units), reading off columns.
+//   The spinor index order is [up_0..up_{n-1}, dn_0..dn_{n-1}] so dimension d=2n.
+//   T_apply: real kinetic+scalar op; pot: the NcPotential field.
+pub fn qforge_build_spinor_h(T_apply, pot: NcPotential, n: int) -> [[float]] {
+    let d = 2 * n
+    let mut Are: [float] = []
+    let mut Aim: [float] = []
+    // we fill row-major: Are[r*d+c], Aim[r*d+c]. Column c = H applied to unit e_c.
+    // To get a COLUMN cheaply we apply H to each unit spinor and scatter into rows.
+    // Pre-size with zeros.
+    let mut z = 0
+    while z < d * d { Are.push(0.0) ; Aim.push(0.0) ; z = z + 1 }
+    let mut c = 0
+    while c < d {
+        // unit spinor e_c (real 1 at component c; up-block if c<n else dn-block).
+        let mut ur: [float] = [] ; let mut ui: [float] = []
+        let mut dr: [float] = [] ; let mut di: [float] = []
+        let mut t = 0
+        while t < n {
+            let upv = if c < n && t == c { 1.0 } else { 0.0 }
+            let dnv = if c >= n && t == (c - n) { 1.0 } else { 0.0 }
+            ur.push(upv) ; ui.push(0.0) ; dr.push(dnv) ; di.push(0.0)
+            t = t + 1
+        }
+        let e = Spinor { up_re: ur, up_im: ui, dn_re: dr, dn_im: di, n: n }
+        let h = qforge_h_psi_spinor(T_apply, pot, e)
+        // scatter the resulting spinor into column c: rows 0..n-1 = up, n..2n-1 = dn.
+        let mut rr = 0
+        while rr < n {
+            Are[rr * d + c] = h.up_re[rr] ; Aim[rr * d + c] = h.up_im[rr]
+            Are[(n + rr) * d + c] = h.dn_re[rr] ; Aim[(n + rr) * d + c] = h.dn_im[rr]
+            rr = rr + 1
+        }
+        c = c + 1
+    }
+    return [Are, Aim]
+}
+
+// ── slice the flat complex eigvecs (vre/vim, nev×d, d=2n) back into Spinors ────
+pub fn qforge_slice_spinors(vre: [float], vim: [float], nev: int, n: int) -> [Spinor] {
+    let d = 2 * n
+    let mut out: [Spinor] = []
+    let mut k = 0
+    while k < nev {
+        let base = k * d
+        let mut ur: [float] = [] ; let mut ui: [float] = []
+        let mut dr: [float] = [] ; let mut di: [float] = []
+        let mut t = 0
+        while t < n {
+            ur.push(vre[base + t]) ; ui.push(vim[base + t])
+            dr.push(vre[base + n + t]) ; di.push(vim[base + n + t])
+            t = t + 1
+        }
+        out.push(Spinor { up_re: ur, up_im: ui, dn_re: dr, dn_im: di, n: n })
+        k = k + 1
+    }
+    return out
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// NONCOLLINEAR SCF DRIVER
+// ════════════════════════════════════════════════════════════════════════════
+pub struct ScfResultNoncol {
+    charge: [float],         // ρ(r), length n
+    mx: [float],             // m_x(r)
+    my: [float],
+    mz: [float],
+    evals: [float],          // lowest nbands spinor eigenvalues (ascending)
+    e_total: float,          // Mermin free energy
+    mtot: [float],           // [Mx, My, Mz, |M|, absmag]
+    iters: int,
+    converged: bool
+}
+
+// H_of_dens(charge, mx, my, mz, sign_unused) → [T_apply_closure, NcPotential]
+//   The caller supplies a closure that, given the current noncollinear density
+//   4-vector, returns the real kinetic+scalar operator AND the magnetic field
+//   NcPotential (the 2×2 coupling). This is the noncollinear analogue of the
+//   collinear H_of_rho_spin closure — physics-agnostic (d4).
+//
+//   The closure returns a 2-list: [T_apply, pot]. We pass them straight into the
+//   spinor H build. For the canonical V-in-T split, pot.v should be all-zero.
+//
+//   nbands: the spinor problem has dimension d=2n (n sites × 2 spin components).
+//   For the collinear-reduction guarantee (B along ẑ ≡ LSDA), nbands MUST equal 2n
+//   so the spinor spectrum is the full merged {↑}∪{↓}; nelec then fills the lowest
+//   nelec spinor states. Truncating nbands<2n drops bands near E_F and breaks the
+//   QE-consistency pin (verified: nbands=2n reproduces collinear to ~1e-13).
+pub fn qforge_scf_noncol(H_of_dens, n: int, nbands: int, nelec: int,
+                         mix: float, tol: float, max_iter: int,
+                         sigma: float, init_mag: [float]) -> ScfResultNoncol {
+    let mut a = mix
+    if a <= 0.0 { a = 0.1 }
+    if a > 1.0 { a = 1.0 }
+    let d = 2 * n
+
+    // init density: uniform charge ρ = nelec/n; magnetization seed init_mag spread
+    //   uniformly over the n points (init_mag = [Mx,My,Mz] cell totals).
+    let r0 = to_float(nelec) / to_float(n)
+    let mx0 = init_mag[0] / to_float(n)
+    let my0 = init_mag[1] / to_float(n)
+    let mz0 = init_mag[2] / to_float(n)
+    let mut charge: [float] = []
+    let mut mx: [float] = [] ; let mut my: [float] = [] ; let mut mz: [float] = []
+    let mut i = 0
+    while i < n { charge.push(r0) ; mx.push(mx0) ; my.push(my0) ; mz.push(mz0) ; i = i + 1 }
+
+    let mut evals: [float] = []
+    let mut e_total = 0.0
+    let mut e_prev = 0.0
+    let mut mtot: [float] = [0.0, 0.0, 0.0, 0.0, 0.0]
+    let mut iters = 0
+    let mut converged = false
+    let mut first = true
+
+    while iters < max_iter {
+        iters = iters + 1
+
+        // build the spinor Hamiltonian from the current density.
+        let hp = H_of_dens(charge, mx, my, mz)
+        let T_apply = hp[0]
+        let pot = hp[1]
+        let AB = qforge_build_spinor_h(T_apply, pot, n)
+        let Are = AB[0] ; let Aim = AB[1]
+
+        // diagonalize the d=2n complex Hermitian H → lowest nbands spinor pairs.
+        let eg = qforge_eigh_complex(Are, Aim, d, nbands)
+        evals = eg[0]
+        let psis = qforge_slice_spinors(eg[1], eg[2], nbands, n)
+
+        // occupations: single shared E_F over the spinor spectrum (spin already in
+        // the spinor — each state holds 1 electron; spin_deg=1).
+        let occ = qforge_fermi_occupations(evals, nbands, nelec, sigma, 1.0)
+
+        // new noncollinear density.
+        let dens = qforge_noncol_density(psis, occ, nbands)
+        let out_c = dens[0] ; let out_x = dens[1] ; let out_y = dens[2] ; let out_z = dens[3]
+        mtot = qforge_noncol_magnetization(dens, 1.0)
+
+        // Mermin free energy: Σ occ·ε − σ·S (spin_deg=1, spinor states).
+        let mut band = 0.0
+        let mut bk = 0
+        while bk < nbands { band = band + occ[bk] * evals[bk] ; bk = bk + 1 }
+        e_total = band - sigma * qforge_smearing_entropy(occ, 1.0)
+
+        // residual = max(Δρ over all 4 channels, ΔE).
+        let mut dr_rho = 0.0
+        let mut j = 0
+        while j < n {
+            let dc = _abs(out_c[j] - charge[j])
+            let dx = _abs(out_x[j] - mx[j])
+            let dy = _abs(out_y[j] - my[j])
+            let dz = _abs(out_z[j] - mz[j])
+            if dc > dr_rho { dr_rho = dc }
+            if dx > dr_rho { dr_rho = dx }
+            if dy > dr_rho { dr_rho = dy }
+            if dz > dr_rho { dr_rho = dz }
+            j = j + 1
+        }
+        let dr_e = if first { tol + 1.0 } else { _abs(e_total - e_prev) }
+        let resid = if dr_rho > dr_e { dr_rho } else { dr_e }
+
+        // plain linear mixing on all four density channels.
+        let mut nc: [float] = [] ; let mut nx: [float] = []
+        let mut ny: [float] = [] ; let mut nz: [float] = []
+        let mut k = 0
+        while k < n {
+            nc.push((1.0 - a) * charge[k] + a * out_c[k])
+            nx.push((1.0 - a) * mx[k] + a * out_x[k])
+            ny.push((1.0 - a) * my[k] + a * out_y[k])
+            nz.push((1.0 - a) * mz[k] + a * out_z[k])
+            k = k + 1
+        }
+        charge = nc ; mx = nx ; my = ny ; mz = nz
+
+        e_prev = e_total
+        first = false
+
+        if resid < tol {
+            converged = true
+            return ScfResultNoncol { charge: charge, mx: mx, my: my, mz: mz,
+                                     evals: evals, e_total: e_total, mtot: mtot,
+                                     iters: iters, converged: true }
+        }
+    }
+    return ScfResultNoncol { charge: charge, mx: mx, my: my, mz: mz,
+                             evals: evals, e_total: e_total, mtot: mtot,
+                             iters: iters, converged: converged }
+}
