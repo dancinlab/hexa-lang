@@ -625,8 +625,8 @@ resolve_native_num_core_seed() {
 # The value-op twin of resolve_native_num_core_seed: assemble build/valop_core_native.o
 # from the arch-matched frozen self/native/valop_core_*.s seed, and AUTO-ENABLE the
 # native scalar value-op path (HEXA_RT_VALOP_NATIVE=1) so hexa_truthy / hexa_sub /
-# hexa_mul delegate their SCALAR fast paths (int/float/bool tag-dispatch) to the
-# native seed (rt_truthy_native / rt_sub_native / rt_mul_native — raw __hx_tag tag
+# hexa_mul / hexa_add delegate their SCALAR fast paths (int/float/bool tag-dispatch)
+# to the native seed (rt_truthy/sub/mul/add_native — raw __hx_tag tag
 # read + raw int/float payload arith + __hx_make_val re-box, gen2-only intrinsics
 # the hexat C-transpile bootstrap cannot lower, hence a frozen .s seed, exactly
 # like array/map/str/num_core). byte-identical (native == C scalar switch arms over
@@ -669,7 +669,7 @@ resolve_native_valop_core_seed() {
     # runtime_core.c delegation expects — a stale/partial seed would yield an
     # `undefined reference` at the app link. Counted from `.globl` (toolchain-free).
     local ok=1 sym n
-    for sym in rt_truthy_native rt_sub_native rt_mul_native; do
+    for sym in rt_truthy_native rt_sub_native rt_mul_native rt_add_native; do
         n="$(grep -cE "^\.globl[[:space:]]+_?${sym}\$" "$seed" 2>/dev/null || echo 0)"
         [ "${n:-0}" -ge 1 ] || { ok=0; echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: seed $seed exports only $n/1 $sym — falling back to C scalar path" >&2; }
     done
@@ -678,7 +678,7 @@ resolve_native_valop_core_seed() {
     grep -vE '^// ' "$seed" > "$s_tmp" 2>/dev/null || cp "$seed" "$s_tmp"
     if $CC -c "$s_tmp" -o build/valop_core_native.o 2>/dev/null; then
         export HEXA_RT_VALOP_NATIVE=1
-        echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: assembled build/valop_core_native.o from $seed (TARGET=$tgt, 3/3 rt_*_native syms) → native scalar value-op path"
+        echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: assembled build/valop_core_native.o from $seed (TARGET=$tgt, 4/4 rt_*_native syms) → native scalar value-op path"
     else
         echo "[stage_resolve_runtime_a] RT-NATIVE VALOP: WARN assemble of $seed failed — falling back to C scalar path" >&2
     fi
@@ -947,10 +947,10 @@ build_runtime_a_from_source() {
         echo "[stage_resolve_runtime_a] RT-NATIVE NUM: HEXA_RT_NUM_PARSE_INT_NATIVE=1; ar'ing native num_core_native.o into runtime.a"
     fi
     # RT-NATIVE VALOP (sh-val-core lane, gated): when the valop_core seed is active,
-    # define HEXA_RT_VALOP_NATIVE for the runtime.c compile (so hexa_truthy/sub/mul
+    # define HEXA_RT_VALOP_NATIVE for the runtime.c compile (so hexa_truthy/sub/mul/add
     # take the native scalar arm) and ar build/valop_core_native.o into runtime.a so
-    # rt_truthy_native/rt_sub_native/rt_mul_native resolve. The C scalar bodies stay
-    # in runtime_core.c as the no-seed fallback.
+    # rt_truthy_native/rt_sub_native/rt_mul_native/rt_add_native resolve. The C scalar
+    # bodies stay in runtime_core.c as the no-seed fallback.
     local rt_valop_def=""
     if [ "${HEXA_RT_VALOP_NATIVE:-0}" = "1" ] && [ -f build/valop_core_native.o ]; then
         rt_valop_def="-DHEXA_RT_VALOP_NATIVE=1"
