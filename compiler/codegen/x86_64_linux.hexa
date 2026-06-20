@@ -507,43 +507,37 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
         isp_p = isp_p + 1
     }
 
+    // #3712 — O(1)-per-step active-list maintenance.
+    //
+    // The "conservative whole-function liveness" pass ABOVE unconditionally
+    // overwrites EVERY interval to `starts[i]=0, ends[i]=pos` (the loop that
+    // ends at `ends[ei] = pos`). Under that invariant the array-of-active
+    // bookkeeping the original linear-scan did per step is provably a no-op
+    // beyond an append:
+    //   • expiry `ends[ai] < cur_start` == `pos < 0` → FALSE → nothing ever
+    //     expires (active never shrinks, pool never refilled mid-scan);
+    //   • ordered insert `ends[active] > cur_end` == `pos > pos` → FALSE →
+    //     `cur` is always appended at the END (never spliced mid-list);
+    //   • victim `ends[victim] > ends[cur]` == `pos > pos` → FALSE → the
+    //     register-steal branch is never taken; an out-of-pool value always
+    //     takes the plain-spill else.
+    // So the per-step O(active) array REBUILDS (keep/na/na2 allocations) that
+    // made reg-assign O(N²) are pure overhead here. We collapse them to an
+    // O(1) append + the SAME pool-pop / spill decisions, giving identical
+    // map_regs / map_slots / next_slot for every value (byte-eq NEUTRAL) at
+    // O(N) total. This is what makes the 7000-local runtime_cuda_emit compile
+    // in practical time after the #3709 deep-spine fix removed the crash.
+    // Coupled to the equal-interval invariant the pass above guarantees: if
+    // that liveness model is ever changed to non-uniform intervals, the
+    // self-host byteeq gate (gen3≡gen4 + faithful, exercised on the WHOLE
+    // compiler) breaks immediately — so this cannot silently miscompile.
     let mut s = 0
     while s < len(order) {
         let cur = order[s]
-        let cur_start = iv.starts[cur]
-
-        let mut keep: [i64] = []
-        let mut e = 0
-        while e < len(active_idx) {
-            let ai = active_idx[e]
-            if iv.ends[ai] < cur_start {
-                let was = map_regs[ai]
-                let is_param = is_param_slot[ai]
-                if !is_param && len(was) > 0 && map_slots[ai] < 0 {
-                    pool.push(was)
-                }
-            } else {
-                keep.push(ai)
-            }
-            e = e + 1
-        }
-        active_idx = keep
 
         if len(map_regs[cur]) > 0 {
-            let cur_end = iv.ends[cur]
-            let mut na: [i64] = []
-            let mut placed = false
-            let mut t = 0
-            while t < len(active_idx) {
-                if !placed && iv.ends[active_idx[t]] > cur_end {
-                    na.push(cur)
-                    placed = true
-                }
-                na.push(active_idx[t])
-                t = t + 1
-            }
-            if !placed { na.push(cur) }
-            active_idx = na
+            // pre-colored (param pre-color path) — already has a reg; track it.
+            active_idx.push(cur)
             s = s + 1
             continue
         }
@@ -559,60 +553,14 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
             pool = np
             map_regs[cur] = r
             map_slots[cur] = -1
-            let cur_end = iv.ends[cur]
-            let mut na: [i64] = []
-            let mut placed = false
-            let mut t = 0
-            while t < len(active_idx) {
-                if !placed && iv.ends[active_idx[t]] > cur_end {
-                    na.push(cur)
-                    placed = true
-                }
-                na.push(active_idx[t])
-                t = t + 1
-            }
-            if !placed { na.push(cur) }
-            active_idx = na
+            active_idx.push(cur)
         } else {
-            let mut victim_pos = len(active_idx) - 1
-            while victim_pos >= 0 {
-                let v = active_idx[victim_pos]
-                if !is_param_slot[v] { break }
-                victim_pos = victim_pos - 1
-            }
-
-            if victim_pos >= 0 && iv.ends[active_idx[victim_pos]] > iv.ends[cur] {
-                let v = active_idx[victim_pos]
-                map_regs[cur] = map_regs[v]
-                map_slots[cur] = -1
-                map_regs[v] = ""
-                map_slots[v] = next_slot
-                next_slot = next_slot + 8
-                let mut na: [i64] = []
-                let mut t = 0
-                while t < len(active_idx) {
-                    if t != victim_pos { na.push(active_idx[t]) }
-                    t = t + 1
-                }
-                let cur_end = iv.ends[cur]
-                let mut na2: [i64] = []
-                let mut placed = false
-                let mut tt = 0
-                while tt < len(na) {
-                    if !placed && iv.ends[na[tt]] > cur_end {
-                        na2.push(cur)
-                        placed = true
-                    }
-                    na2.push(na[tt])
-                    tt = tt + 1
-                }
-                if !placed { na2.push(cur) }
-                active_idx = na2
-            } else {
-                map_regs[cur] = ""
-                map_slots[cur] = next_slot
-                next_slot = next_slot + 8
-            }
+            // pool exhausted: under whole-fn liveness no resident value has a
+            // later end than `cur` (all ends equal), so the steal branch is
+            // dead → plain spill, exactly as the original's else.
+            map_regs[cur] = ""
+            map_slots[cur] = next_slot
+            next_slot = next_slot + 8
         }
         s = s + 1
     }
