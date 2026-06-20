@@ -29,13 +29,13 @@ nvcc --version | grep -i release || true
 nvidia-smi --query-gpu=name,compute_cap --format=csv,noheader || true
 command -v "$HEXA" >/dev/null || { echo "no hexa at $HEXA"; exit 1; }
 
-echo "=== emit fresh runtime_cuda.c from modified emitter ==="
-# emit both bf16 (dependency) and cuda into self/cuda so the #include resolves
-"$HEXA" run self/cuda/runtime_bf16_emit.hexa self/cuda/runtime_bf16.c || \
-  "$HEXA" self/cuda/runtime_bf16_emit.hexa self/cuda/runtime_bf16.c
-"$HEXA" run self/cuda/runtime_cuda_emit.hexa "$B/runtime_cuda.c" || \
-  "$HEXA" self/cuda/runtime_cuda_emit.hexa "$B/runtime_cuda.c"
-# the emitted TU does #include "runtime_bf16.c" relative to its own dir → copy it next to it
+echo "=== emit fresh runtime_cuda.c from modified emitter (python extractor — hexa-free) ==="
+# aiden's prebuilt runtime.a is stale (rt_map_set_inplace_native undefined) so
+# `hexa run` of the emitter fails to LINK; the python extractor reproduces
+# emit_runtime_cuda_c() byte-identically (validated: parent-emit == checked-in C).
+python3 tool/emit_runtime_cuda_via_python.py self/cuda/runtime_cuda_emit.hexa "$B/runtime_cuda.c"
+# the emitted TU does #include "runtime_bf16.c" relative to ITS dir → place the
+# checked-in bf16 C next to it (bf16 emitter unchanged this lane).
 cp self/cuda/runtime_bf16.c "$B/runtime_bf16.c"
 grep -c "HEXA_OWN_GEMM" "$B/runtime_cuda.c" | sed 's/^/HEXA_OWN_GEMM occurrences: /'
 
