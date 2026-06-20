@@ -13,17 +13,21 @@ export PATH=/usr/local/cuda-13.0/bin:$PATH
 cd "$(git rev-parse --show-toplevel)"
 
 OUT=/tmp/owntf_prod_$$
-RC=$OUT.runtime_cuda.c
+# Emit runtime_cuda.c INTO self/cuda/ so its relative `#include "runtime_bf16.c"`
+# resolves to the checked-in sibling. Temp name; removed on exit.
+RC=self/cuda/_owntf_runtime_cuda_$$.c
+trap 'rm -f "$RC"' EXIT
 HARNESS=$OUT.harness.cu
 BIN=$OUT.bin
 
-echo "[1/3] emit runtime_cuda.c from runtime_cuda_emit.hexa"
+echo "[1/3] emit runtime_cuda.c from runtime_cuda_emit.hexa (into self/cuda/ for bf16 sibling)"
 python3 tool/emit_runtime_cuda_via_python.py self/cuda/runtime_cuda_emit.hexa "$RC"
 echo "  new syms: $(grep -c '_hx_k_gemm_tf32_owngemm\|_hx_cuda_gemm_tf32_own_dev\|HEXA_TF32_OWN' "$RC")"
 
 echo "[2/3] build harness (#include emitted runtime, sm_120)"
-# substitute the emitted runtime path into the harness include
-sed "s|\"OWNTF_RUNTIME_C\"|\"$RC\"|" tool/own_tf32_production_path.cu > "$HARNESS"
+# substitute the emitted runtime ABSOLUTE path into the harness include
+RC_ABS="$(pwd)/$RC"
+sed "s|\"OWNTF_RUNTIME_C\"|\"$RC_ABS\"|" tool/own_tf32_production_path.cu > "$HARNESS"
 
 nvcc -O3 -arch=sm_120 -DHEXA_CUDA -x cu "$HARNESS" -o "$BIN" \
      -lcudart -lcublas -lcuda 2>&1 | tail -30
