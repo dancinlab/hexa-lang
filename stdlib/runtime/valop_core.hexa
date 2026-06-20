@@ -145,3 +145,31 @@ fn rt_mul_native(a: HexaVal, b: HexaVal) -> HexaVal {
     let rfp = __hx_payload_add(rf, 0)
     return __hx_make_val(1, rfp)
 }
+
+// rt_add_native: the SCALAR numeric arm of hexa_add_slow (the slow path behind the
+// int+int hexa_add MACRO). Same shape as rt_sub_native/rt_mul_native, proven by
+// numeric.hexa::rt_add_slow's scalar branches: int+int → TAG_INT (payload add),
+// else (any float, the other int coerced to double) → TAG_FLOAT. The C wrapper
+// (hexa_add_slow under HEXA_RT_VALOP_NATIVE) owns bool→int coerce, the array-concat
+// branch, and the to_string/str_concat fallback — it delegates here ONLY when both
+// operands are already TAG_INT/TAG_FLOAT, so this body never sees a string/array/
+// bool/void. Mirrors rt_sub_native exactly with `+` in place of `-` (the int arm
+// uses __hx_payload_add(a,b) — the 2-arg signed-i64 add that boxes TAG_INT, same
+// leaf rt_sub_native uses for subtract; the float arm uses __hx_payload_fadd).
+fn rt_add_native(a: HexaVal, b: HexaVal) -> HexaVal {
+    let ta = __hx_tag(a)
+    let tb = __hx_tag(b)
+    let a_int = __hx_payload_eq(ta, 0)               // a is TAG_INT
+    let b_int = __hx_payload_eq(tb, 0)               // b is TAG_INT
+    let both_int = __hx_payload_and(a_int, b_int)
+    if __hx_payload_ne(both_int, 0) {
+        let r = __hx_payload_add(a, b)               // HX_INT(a) + HX_INT(b)
+        let rp = __hx_payload_add(r, 0)
+        return __hx_make_val(0, rp)
+    }
+    let af = __hx_to_double(a)                        // int|float → double
+    let bf = __hx_to_double(b)
+    let rf = __hx_payload_fadd(af, bf)               // double add, TAG_FLOAT
+    let rfp = __hx_payload_add(rf, 0)
+    return __hx_make_val(1, rfp)
+}
