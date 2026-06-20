@@ -2626,16 +2626,21 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
     }
     if s.kind == _STMT_BR_COND {
         if len(s.args) > 0 {
-            // cond HexaVal → x0:x1; hexa_truthy → int w0; zero-extend
-            // (callee leaves upper x0 unspecified) then cbz to else.
+            // INLINE-TRUTHY (no `bl hexa_truthy`). cond HexaVal → x0:x1
+            // (x0=tag, x1=payload). Branch directly on the payload word:
+            // `cbz x1, else` ≡ x86_64's `test cond,cond; jz else`
+            // (x86_64_linux.hexa _STMT_BR_COND ~L2175). Branch conditions
+            // reaching br_cond are TAG_BOOL (comparison results, payload
+            // 0/1) or TAG_INT (payload = int value), so payload-nonzero ==
+            // truthy for every operand the lowerer feeds here — same as the
+            // x86_64 backend, which ships this exact semantics GREEN. The
+            // old `bl hexa_truthy` was the lone reason the valop-core native
+            // seed SIGSEGV'd in the arm64 self-host value-op hot path (6× bl
+            // per func vs x86_64's 0); removing the call closes that gap.
             buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")
-            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_truthy"),
-                             "br_cond: truthy → w0"))
-            buf.push(_arm64_instr2("uxtw", _arm64_op_reg("x0"),
-                             _arm64_op_reg("w0"), "br_cond: zext w0"))
             let else_lab = _arm64_block_label(modhash, fname, s.target_block_else)
-            buf.push(_arm64_instr2("cbz", _arm64_op_reg("x0"),
-                             _arm64_op_label(else_lab), "br_cond: !truthy -> else"))
+            buf.push(_arm64_instr2("cbz", _arm64_op_reg("x1"),
+                             _arm64_op_label(else_lab), "br_cond: !payload -> else"))
         }
         let then_lab = _arm64_block_label(modhash, fname, s.target_block)
         buf.push(_arm64_instr1("b", _arm64_op_label(then_lab), "branch -> then"))

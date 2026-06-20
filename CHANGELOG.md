@@ -1,5 +1,7 @@
 ## 2026-06-20
 
+- **fix(codegen arm64): `br_cond` INLINE-TRUTHY — `bl hexa_truthy` 제거 → valop-core native seed 3타깃 default-ON (sh-val-core r2)**: #3704 의 value-op 스칼라 native seed 가 arm64 만 C-fallback 으로 남았던 근본원인을 codegen 에서 root-fix. **근본원인(c1)**: arm64 `_STMT_BR_COND`(`compiler/codegen/arm64_darwin.hexa`)가 `if <bool-HexaVal>` 분기를 `bl hexa_truthy` 로 lower → valop seed(`self/native/valop_core_arm64.s`)의 `rt_truthy_native` 본문 자체가 6× `bl _hexa_truthy` 를 담음. seed default-ON 시 `hexa_truthy`(runtime)가 `rt_truthy_native` 로 위임(`runtime_core_emit.hexa`)되어 **무한재귀 → 스택오버플로 → SIGSEGV**(hexa_v2 self-host, qemu-aarch64 MEASURED). x86_64 는 `_STMT_BR_COND` 가 payload 를 직접 `test cond; jz` 로 INLINE(`x86_64_linux.hexa`) → seed 에 call 0개 → 재귀 없음. **수정**: arm64 br_cond 를 x86_64 와 동일하게 inline — `_hv_load` 후 payload 워드를 `cbz x1, else` 로 직접 분기(branch cond 는 항상 TAG_BOOL/TAG_INT 라 payload-nonzero == truthy, x86_64 가 이미 GREEN 출하하는 동일 semantics). seed 를 fixed codegen 으로 재생성하면 `bl hexa_truthy` 0개 → 재귀 소멸. `tool/stage_resolve_runtime_a` 의 arm64 early-return 제거 → darwin-arm64/linux-arm64 도 native scalar value-op 채택. **[self-host ≠ release] 가드**: byteeq 3타깃 + miscompile-zero GREEN + 출하 smoke 통과로만 머지.
+
 - chore(inbox): inbox/ 폴더 폐기 — 3건 진단 전부 ING 이관 완료 (cuda-cpu-only→#8 #3680해결 · cloud-rent→#10 #3691해결 · gen3 obj-emit segfault→신규 ING #3709). per-repo INBOX 도메인은 sidecar handoff 레지스트리로 retire(거버넌스 SSOT 단일화), 진단 추적은 ING ref 단일 표면. 원본 진단 본문은 git 이력에 보존.
 
 ## 2026-06-20
