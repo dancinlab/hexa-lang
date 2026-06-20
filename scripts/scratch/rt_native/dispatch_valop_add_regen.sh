@@ -68,6 +68,19 @@ done
 [ "$ALLOK" = 1 ] || { log "a seed is missing rt_add_native"; exit 3; }
 
 # ── 4) focused micro-byteeq (x86_64 native add vs C add oracle) ──────────
+# runtime.c is GENERATED (not checked in). Source it (+ runtime.h) from the
+# prebuilt worktree's already-emitted copy; the gate (no HEXA_HAS_HEXA_RT_STDLIB)
+# only needs the constructors + #else scalar bodies, so a runtime.c from any
+# valop lane works — we compare the NEW seed's rt_add_native DIRECTLY (PART E)
+# vs the C oracle in the gate itself.
+PREBUILT_WT="$(dirname "$(dirname "$APRIME_PREBUILT")")"   # …/scratch-valcore
+RT_C=""; RT_INC=""
+for d in "$PREBUILT_WT/self" "$WT/self"; do
+    [ -f "$d/runtime.c" ] && [ -f "$d/runtime.h" ] && { RT_C="$d/runtime.c"; RT_INC="$d"; break; }
+done
+[ -n "$RT_C" ] || { log "no generated runtime.c found (prebuilt=$PREBUILT_WT)"; exit 4; }
+ev "runtime.c=$RT_C"
+
 TMP="$(mktemp -d)"
 "$APRIME" scripts/scratch/rt_native/_drv.hexa --emit=obj --target=x86_64-linux-gnu \
     -o "$TMP/valop_core.o" stdlib/runtime/valop_core.hexa 2>&1 | tail -5
@@ -76,8 +89,8 @@ nm "$TMP/valop_core.o" 2>/dev/null | grep -E ' T _?rt_(truthy|sub|mul|add)_nativ
 # build the gate WITHOUT HEXA_HAS_HEXA_RT_STDLIB → pure-C #else wrappers, compare
 # the native seed fns DIRECTLY (PART A/B/C/E) against the C oracle (self-contained).
 GATE_BIN="$TMP/vgate"
-if clang -O2 -std=gnu11 -D_GNU_SOURCE -DHEXA_RT_VALOP_NATIVE=1 -I self \
-        scripts/scratch/rt_native/valop_core_gate.c self/runtime.c "$TMP/valop_core.o" \
+if clang -O2 -std=gnu11 -D_GNU_SOURCE -DHEXA_RT_VALOP_NATIVE=1 -I "$RT_INC" \
+        scripts/scratch/rt_native/valop_core_gate.c "$RT_C" "$TMP/valop_core.o" \
         -lm -o "$GATE_BIN" 2>"$TMP/cc.err"; then
     "$GATE_BIN"; rc=$?
     ev "valop_core_gate (native rt_add_native vs C add oracle) exit=$rc (25=full pass)"
