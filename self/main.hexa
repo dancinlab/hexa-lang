@@ -1424,8 +1424,21 @@ fn os_clang_ldflags() {
     // so appending the cuda libs here satisfies that ordering. Lib dir resolved
     // from CUDA_HOME (release job sets it) with the targets/x86_64-linux/lib
     // toolkit layout fallback; -L lets the loader find libcudart/libcublas at link.
-    if env("HEXA_CUDA") == "1" {
-        let cuda_home = env("CUDA_HOME")
+    // cuda link is active when EITHER (a) HEXA_CUDA=1 explicit opt-in, OR (b) the
+    // INSTALLED runtime.a is the cuBLAS build — install.sh drops $HX_HOME/.cuda-runtime
+    // when it pulls the `-cuda` asset (prefer_cuda). Without (b) a consumer who got
+    // the cuda asset (GPU auto-detect) had to pass HEXA_CUDA=1 on EVERY `hexa run/build`
+    // or runtime_cuda.o's cudaLaunchKernel/cublas symbols went undefined at link
+    // (#3723 link wall). HEXA_CUDA=0 stays a hard opt-out. A CPU install / self-host
+    // source build has no marker → cuda_on=false → byte-identical to before (NEUTRAL).
+    // @convergence state=in_flight id=CUDA-RUNTIME-MARKER value="cuda asset consumer needed HEXA_CUDA=1 on EVERY hexa build else cudaLaunchKernel/cublas undefined (-lcudart env-gated); install.sh auto-pulls cuda asset but build did not auto-link (#3723 v6b)" threshold="cuda asset hexa run/build links cudart WITHOUT env (marker-detected); CPU install byte-identical"
+    let hx_home = if env("HX_HOME") != "" { env("HX_HOME") } else { env("HOME") + "/.hx" }
+    let cuda_marked = exec("test -f '" + hx_home + "/.cuda-runtime' && printf 1 || printf 0").trim()
+    let cuda_on = env("HEXA_CUDA") == "1" || (env("HEXA_CUDA") != "0" && cuda_marked == "1")
+    if cuda_on {
+        // CUDA_HOME from env (release job sets it); else the standard toolkit root on
+        // a consumer GPU host (libcudart resolves from /usr/local/cuda/lib64).
+        let cuda_home = if env("CUDA_HOME") != "" { env("CUDA_HOME") } else { "/usr/local/cuda" }
         let mut cuda_l = ""
         if cuda_home != "" {
             // toolkit layout: $CUDA_HOME/targets/x86_64-linux/lib (preferred) or
