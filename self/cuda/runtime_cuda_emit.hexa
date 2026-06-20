@@ -5083,6 +5083,23 @@ fn emit_runtime_cuda_c() -> str {
             "    double* U_dev = g_slots[u_id].d_buf;\n" +
             "    double* O_dev = g_slots[out_id].d_buf;\n" +
             "    const double alpha = 1.0, beta = 0.0;\n" +
+            "    /* HEXA_OWN_GEMM (CUDA-OWN) — reuse the in-file _hx_k_gemm row-major\n" +
+            "     * C=A·B kernel for out[1,C] = u[1,R] · M[R,C] (M_outer=1, K=R, N=C;\n" +
+            "     * A=U_dev[1,R], B=M_dev[R,C], C=O_dev[1,C]). NOT bit-eq vs cuBLAS\n" +
+            "     * (naive K-accum order vs cuBLAS-tiled) — rel-RMS within TOL_MATMUL,\n" +
+            "     * cuBLAS demoted to correctness oracle. OFF (default) keeps the exact\n" +
+            "     * cublasDgemm path below byte-identical to the prior build. */\n" +
+            "    if (getenv(\"HEXA_OWN_GEMM\") && getenv(\"HEXA_OWN_GEMM\")[0]) {\n" +
+            "        static int _own_matmult_fired = 0;\n" +
+            "        if (!_own_matmult_fired) { _own_matmult_fired = 1;\n" +
+            "            fprintf(stderr, \"[OWN-GEMM-FIRED] _hx_k_gemm (matmul_t) DEVICE path (no cuBLAS)\\n\"); }\n" +
+            "        dim3 _mblk(16, 16);\n" +
+            "        dim3 _mgrd((unsigned)((C + 15) / 16), 1u);\n" +
+            "        _hx_k_gemm<<<_mgrd, _mblk, 0, _forge_stream()>>>(U_dev, M_dev, O_dev,\n" +
+            "                                                         (int64_t)1, R, C);\n" +
+            "        if (_forge_launch_check(\"own_matmul_t\") != 0) return -1;\n" +
+            "        return _d2h_out(out_id, C);\n" +
+            "    }\n" +
             "    /* row-major: out[1·C] = u[1·R] · M[R·C]\n" +
             "     * → cuBLAS Dgemm(N,N, m=C, n=1, k=R, alpha, M_dev, ldb=C, U_dev, lda=R,\n" +
             "     *                beta, O_dev, ldc=C) */\n" +
@@ -5159,6 +5176,33 @@ fn emit_runtime_cuda_c() -> str {
             "    double* U_dev = g_slots[u_id].d_buf;\n" +
             "    double* O_dev = g_slots[out_id].d_buf;\n" +
             "#ifdef __CUDACC__\n" +
+            "    /* HEXA_OWN_GEMM (CUDA-OWN) — force the in-file FP64 on-device gemv\n" +
+            "     * kernel _hx_k_packed_gemv_offset (one block per output row, fixed\n" +
+            "     * block-tree reduction) regardless of the rows-size crossover gate\n" +
+            "     * below. This OWNS the cublasDgemv(packed_gemv_offset) call: under\n" +
+            "     * HEXA_OWN_GEMM the FP64 path never reaches cuBLAS. NOT bit-eq vs\n" +
+            "     * cuBLAS (block-tree reduction order vs cuBLAS-tiled) — rel-RMS within\n" +
+            "     * TOL_MATMUL, cuBLAS demoted to oracle. Checked before the dtype\n" +
+            "     * slices so own-FP64 wins for the default (fp64) dtype; the opt-in\n" +
+            "     * fp32/bf16 mixed-precision kernels still take precedence (a separate,\n" +
+            "     * deliberately-narrowed-precision choice). OFF (default) → falls\n" +
+            "     * through to the existing gate, byte-identical to the prior build. */\n" +
+            "    if ((getenv(\"HEXA_OWN_GEMM\") && getenv(\"HEXA_OWN_GEMM\")[0]) &&\n" +
+            "        _hx_train_dtype() == HX_TRAIN_DTYPE_FP64) {\n" +
+            "        static int _own_gemv_fired = 0;\n" +
+            "        if (!_own_gemv_fired) { _own_gemv_fired = 1;\n" +
+            "            fprintf(stderr, \"[OWN-GEMM-FIRED] _hx_k_packed_gemv_offset DEVICE path (no cuBLAS)\\n\"); }\n" +
+            "        dim3 grid_o((unsigned)rows), block_o(HX_RR_BLOCK);\n" +
+            "        _hx_k_packed_gemv_offset<<<grid_o, block_o>>>(g_slots[p_id].d_buf, off,\n" +
+            "                                                      U_dev, O_dev, rows, cols);\n" +
+            "        cudaError_t oer = cudaDeviceSynchronize();\n" +
+            "        if (oer != cudaSuccess) {\n" +
+            "            fprintf(stderr, \"[cuda] packed_gemv_offset own kernel failed: %s\\n\",\n" +
+            "                    cudaGetErrorString(oer));\n" +
+            "            return -1;\n" +
+            "        }\n" +
+            "        return _d2h_out(out_id, rows);\n" +
+            "    }\n" +
             "    /* HEXA-TRAIN-FLOOR bf16 lever — bf16 dtype slice (opt-in). When\n" +
             "     * HEXA_TRAIN_DTYPE selects bf16, run the bf16-MAC on-device gemv\n" +
             "     * kernel: operands narrowed fp64→bf16 (RNE) at load, multiply-\n" +
@@ -5269,6 +5313,23 @@ fn emit_runtime_cuda_c() -> str {
             "    double* V_dev = g_slots[v_id].d_buf;\n" +
             "    double* O_dev = g_slots[out_id].d_buf;\n" +
             "    const double alpha = 1.0, beta = 0.0;\n" +
+            "    /* HEXA_OWN_GEMM (CUDA-OWN) — reuse the in-file _hx_k_gemm row-major\n" +
+            "     * C=A·B kernel for out[R,C] = u[R,1] · v[1,C] (M_outer=R, K=1, N=C;\n" +
+            "     * A=U_dev[R,1], B=V_dev[1,C], C=O_dev[R,C]). K=1 → SINGLE product per\n" +
+            "     * output cell → ZERO reduction → BIT-EXACT vs cuBLAS (and vs the CPU\n" +
+            "     * c3_outer oracle): max|Δ| = 0, same as the F-RFC041-OUTER-EXACT\n" +
+            "     * contract. OFF (default) keeps the exact cublasDgemm path byte-id. */\n" +
+            "    if (getenv(\"HEXA_OWN_GEMM\") && getenv(\"HEXA_OWN_GEMM\")[0]) {\n" +
+            "        static int _own_outer_fired = 0;\n" +
+            "        if (!_own_outer_fired) { _own_outer_fired = 1;\n" +
+            "            fprintf(stderr, \"[OWN-GEMM-FIRED] _hx_k_gemm (outer, k=1) DEVICE path (no cuBLAS)\\n\"); }\n" +
+            "        dim3 _oblk(16, 16);\n" +
+            "        dim3 _ogrd((unsigned)((C + 15) / 16), (unsigned)((R + 15) / 16));\n" +
+            "        _hx_k_gemm<<<_ogrd, _oblk, 0, _forge_stream()>>>(U_dev, V_dev, O_dev,\n" +
+            "                                                         R, (int64_t)1, C);\n" +
+            "        if (_forge_launch_check(\"own_outer\") != 0) return -1;\n" +
+            "        return _d2h_out(out_id, R * C);\n" +
+            "    }\n" +
             "    cublasStatus_t st = cublasDgemm(g_cublas,\n" +
             "                                    CUBLAS_OP_N, CUBLAS_OP_N,\n" +
             "                                    (int)C, (int)R, 1,\n" +
