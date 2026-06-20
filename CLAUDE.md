@@ -10,7 +10,7 @@ still shrinking (M3 open), an irreducible-bootstrap assessment, **not** a perman
 [ARCHITECTURE.json](ARCHITECTURE.json) → Self-host status for the honest accounting (사람용 뷰어 `architecture.html`, `python3 serve.py`). Every
 formula-bearing function must cite an atlas law (`@cite(L[id])`), carry an active `@verify`, or
 declare a `@grace` — otherwise the build refuses to emit a binary (stage S8, fatal `HX8004`).
-The full architecture SSOT is [ARCHITECTURE.json](ARCHITECTURE.json) (JSON 트리 — 사람은 `architecture.html` 뷰어로 봄, `python3 serve.py`); this file is the single governance SSOT (md 단일화 — `project.tape`·`ARCHITECTURE.md` retired). **Domains** are folded into ARCHITECTURE.json → `domains` section (final-form registry: `@goal` + status + remaining); the per-domain `*.md` snapshots, `*.log.md`/`*.tape` step-logs, and `DOMAINS.tape` roster are **retired** (2026-06-17) — ARCHITECTURE.json is now the sole domain record, milestone history lives in CHANGELOG.md + git.
+The full architecture SSOT is [ARCHITECTURE.json](ARCHITECTURE.json) (JSON 트리 — 사람은 `architecture.html` 뷰어로 봄, `python3 serve.py`); this file is the single governance SSOT (md 단일화 — `project.tape`·`ARCHITECTURE.md` retired). **Domain tracking is fully retired** (2026-06-20): the per-domain `*.md` snapshots, `*.log.md`/`*.tape` step-logs, `DOMAINS.tape` roster (retired 2026-06-17), **AND the ARCHITECTURE.json `domains` section itself** are all gone. ARCHITECTURE.json now holds only the architecture tree (structure · modules · dataflow); domain/milestone status + history live in **CHANGELOG.md + git** only (no domain registry).
 
 ## Structure
 
