@@ -883,7 +883,8 @@ fn emit_runtime_cuda_c() -> str {
             "    asm volatile(\"cp.async.cg.shared.global [%0], [%1], 16;\\n\" :: \"r\"(s), \"l\"(gmem));\n" +
             "}\n" +
             "__device__ __forceinline__ void _hx_cp_async_commit(){ asm volatile(\"cp.async.commit_group;\\n\"); }\n" +
-            "template<int Nn> __device__ __forceinline__ void _hx_cp_async_wait(){ asm volatile(\"cp.async.wait_group %0;\\n\" :: \"n\"(Nn)); }\n" +
+            "__device__ __forceinline__ void _hx_cp_async_wait1(){ asm volatile(\"cp.async.wait_group 1;\\n\"); }\n" +
+            "__device__ __forceinline__ void _hx_cp_async_wait0(){ asm volatile(\"cp.async.wait_group 0;\\n\"); }\n" +
             "extern \"C\" __global__ void _hx_k_gemm_tf32_owngemm(const float* __restrict__ A,\n" +
             "                                      const float* __restrict__ B,\n" +
             "                                      float* __restrict__ C,\n" +
@@ -921,8 +922,8 @@ fn emit_runtime_cuda_c() -> str {
             "    load_stage(0,0); _hx_cp_async_commit();\n" +
             "    for(int k=0; k<nk; k++){\n" +
             "        int buf=k&1, nbuf=(k+1)&1;\n" +
-            "        if(k+1<nk){ load_stage(nbuf,(k+1)*HX_OWNTF_BK); _hx_cp_async_commit(); _hx_cp_async_wait<1>(); }\n" +
-            "        else      { _hx_cp_async_wait<0>(); }\n" +
+            "        if(k+1<nk){ load_stage(nbuf,(k+1)*HX_OWNTF_BK); _hx_cp_async_commit(); _hx_cp_async_wait1(); }\n" +
+            "        else      { _hx_cp_async_wait0(); }\n" +
             "        __syncthreads();\n" +
             "        #pragma unroll\n" +
             "        for(int ks=0; ks<HX_OWNTF_BK; ks+=8){\n" +
