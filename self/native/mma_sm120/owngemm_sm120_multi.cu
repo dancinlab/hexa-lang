@@ -19,6 +19,45 @@
 // as OP-1 (so rel-RMS vs cuBLAS-TF32 stays at the OP-1 ~1e-5 level, gate <= 1e-2).
 //
 // Build: build_owngemm_multi.sh (run on aiden). Mode 0 = GATE, 1 = PERF.
+//
+// ====================================================================
+// r2 VERDICT — MEASURED on aiden RTX 5070 (sm_120), all rel-RMS <= 1e-2 PASS.
+// Ratios below = own_TFLOP/s vs cuBLAS-TF32 (>1.0 == cuBLAS faster). The r1
+// 64x64 baseline own TFLOP/s is in [brackets].
+//
+//   size | 64x64 base | 128x128 (L1)  | 128x64 (L1) | cuBLAS faster by
+//   -----|------------|---------------|-------------|------------------
+//    256 | [4.05] 1.07x own | (64x64 fallback)        | small launch-bound
+//    512 | [16.30]    | 16.26 (1.11x) | 11.86 (1.49x)| big tile UNDER-FILLS
+//    768 | [24.39]    | 16.98 (1.35x) | 18.37 (1.25x)| 64x64 best
+//   1024 | [24.94]    | 19.05 (1.48x) | 23.81 (1.18x)| 64x64 best
+//   1536 | [29.96]    | 29.24 (1.16x) | 28.90 (1.17x)| ~tie, cuBLAS wins
+//   2048 | [29.94]    | 27.72 (1.11x) | 29.29 (1.04x)| 64x64 best
+//   3072 | [29.86]    | 31.64 (1.08x) | 30.57 (1.12x)| 128x128 slight gain
+//   4096 | [27.18]    | 30.98 (1.08x) | 29.29 (1.15x)| 128x128 +14% recovers
+//
+// LEVER1 (multi-tile): the 128x128 tile WINS ONLY at 3072/4096 (+6/+14% over
+//   64x64) and REGRESSES the 512-2048 mid-band by up to -30% — the 5070's ~48
+//   SMs cannot fill a large-CTA grid (64 acc-regs/thr, 256 thr/CTA => few
+//   CTAs/SM => occupancy under-fill). 128x64 splits the difference but is also
+//   strictly worse than 64x64 below 2048. Even where 128x128 helps (4096), it
+//   is still 1.08x off cuBLAS. NO size reaches parity (>=0.97x).
+// LEVER2 (deeper cp.async, DEEP=3/4): REGRESSED everywhere (3-stage 1.4-1.8x
+//   off, 4-stage worse) — the predicted smem-occupancy cliff. FALSIFIED-CLOSED.
+// LEVER3 (XOR smem swizzle): catastrophic regression (2.0-4.7x off) — swizzling
+//   forces the scalar cp.async store (de-vectorized 128-bit loads) which dwarfs
+//   any bank-conflict saving on this memory-bound consumer card. FALSIFIED-CLOSED.
+//
+// CONCLUSION (r1-named legitimate wall, now MEASURED): on consumer sm_120 the
+// own mma.sync kernel is occupancy-bound, not reuse-bound. The r1 64x64 tile is
+// already at the consumer-card sweet spot; the reference large-tile/deep-pipe/
+// swizzle levers (which pay off on datacenter sm_90/sm_100 with 100+ SMs and
+// wgmma) do NOT transfer to the 48-SM 5070. cuBLAS's residual ~8-15% mid-band
+// edge is its in-house per-size heuristic kernel selection (cublasGemmEx picks
+// among many internal tiles per shape) — an advantage hexa cannot match with a
+// single hand-written mma.sync tile on this card. 🧱 closed-negative for r2.
+// This file is RESEARCH-ONLY; the shipped owngemm_sm120.cu (64x64) is unchanged.
+// ====================================================================
 
 #include <cstdio>
 #include <cstdlib>
