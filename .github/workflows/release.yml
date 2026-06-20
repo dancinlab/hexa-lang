@@ -741,8 +741,25 @@ jobs:
   # gated off — so `HEXA_VERSION=edge` consumers keep getting every main push.
   finalize:
     name: finalize (all-3-green → stable Latest)
-    needs: [setup, release-macos-arm64, release-linux-x86_64, release-linux-arm64]
-    if: needs.setup.outputs.is_tag == 'true'
+    # Depend on EVERY upload job (incl. the supplementary musl/cuda lanes) so
+    # finalize is the LAST job to touch the release. Previously it needed only
+    # the 3 core targets; a supplementary lane (e.g. linux-arm64-musl) that
+    # finished AFTER finalize re-stamped the same tag with `prerelease: true`
+    # (every per-target job uploads with prerelease:true/make_latest:false),
+    # clobbering finalize's flip back to prerelease — which is exactly why
+    # v0.246..v0.262 all stranded as Pre-release and the consumer `Latest`
+    # froze at v0.245.3. Running finalize strictly last eliminates the race.
+    needs: [setup, release-macos-arm64, release-linux-x86_64, release-linux-arm64, release-linux-x86_64-musl, release-linux-arm64-musl, release-linux-x86_64-cuda]
+    # always() => finalize still runs even if a supplementary musl/cuda lane
+    # failed; the explicit 3-CORE success gate keeps stable promotion contingent
+    # on the 3 core targets ONLY (musl/cuda are supplementary, never block stable —
+    # mirrors the prior 3-core-needs intent, now without the clobber race).
+    if: >-
+      always() &&
+      needs.setup.outputs.is_tag == 'true' &&
+      needs.release-macos-arm64.result == 'success' &&
+      needs.release-linux-x86_64.result == 'success' &&
+      needs.release-linux-arm64.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Promote release to stable Latest (3/3 assets confirmed)
