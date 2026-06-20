@@ -1737,8 +1737,29 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
             } else if len(kids) == 1 {
                 t = kids[0].typ
             }
-            acc = _mk_hexpr(_expr_kind_tag(node.kind), node.span, t, node.text,
-                            kids, _empty_atlas_binding(), _hir_miss_def_id())
+            // PERF (deep-spine O(n²) kill): build the wrapper node with an
+            // INLINE struct literal, NOT `_mk_hexpr(...)`. A function call
+            // returns through `__hexa_fn_arena_return`, which deep-heapifies the
+            // return value — and the return value's `children` embeds `acc`, the
+            // O(N)-deep accumulated tree, so calling `_mk_hexpr` per spine node
+            // heapified the WHOLE growing tree each iteration → O(N²) (measured
+            // on aiden: depth-4000 = 371s, 8.4× over depth-2000 = 44s; >80% in
+            // hexa_val_heapify under the deep-flatten path). The inline literal
+            // is evaluated in place (no fn-arena return boundary), so the tree
+            // is heapified only ONCE at the final `return LowerResult` —
+            // collapsing the spine build from O(N²) to O(N). Field-for-field
+            // identical to `_mk_hexpr` (annotations: [] default) → byte-eq
+            // NEUTRAL.
+            acc = HExpr {
+                kind: _expr_kind_tag(node.kind),
+                span: node.span,
+                typ: t,
+                text: node.text,
+                children: kids,
+                atlas: _empty_atlas_binding(),
+                def: _hir_miss_def_id(),
+                annotations: []
+            }
             si = si - 1
         }
         return LowerResult { expr: acc, sc: new_sc }
