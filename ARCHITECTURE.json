@@ -942,6 +942,113 @@
       ]
     },
     {
+      "id": "blocking-frontiers",
+      "title": "Blocking frontiers (measured walls + research state)",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Every architectural wall that currently blocks a stated goal is recorded here with its MEASURED root-cause and its RESEARCH STATE — so a future research-first round (c23) can target it instead of re-deriving. A wall is 🔬OPEN (untried reference-backed levers remain), 🧱MEASURED-CLOSED (levers tried + falsified with captured numbers), or 📦DEFERRED (feasible but gated on a policy/risk-budget decision). Status + history live in CHANGELOG+git; this node is the current-state index only (update-in-place)."
+        },
+        {
+          "type": "subsection",
+          "title": "forge GPU GEMM → cuBLAS independence (`-lcublas` removal)",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "Goal: ship the forge cuda runtime with NO `-lcublas` link (full GPU GEMM self-sufficiency). Production GEMM cuBLAS calls were taken 7→0 by own-kernel default-ON (#3718 FP64 · #3727/#3734 TF32, `self/cuda/runtime_cuda_emit.hexa`), but the link flag + opt-out fallbacks remain. Census (r1, read-only): 12 cuBLAS touchpoints."
+            },
+            {
+              "type": "list",
+              "items": [
+                "✅ FP64 GEMM (single/batched/tn/outer) — own `_hx_k_gemm` default-ON, bit-identical to cublasDgemm (sm_120 has no FP64 tensorcore → cuBLAS also SIMT), 1.1~3.1× faster. cuBLAS-free on default path.",
+                "🔬 TF32 GEMM — own `mma.sync` opt-in default within HEXA_TF32_FASTMODE; perf parity is its own OPEN frontier (see next subsection). Blocks `-lcublas` removal because the HEXA_TF32_OWN=0 escape-hatch still references cublasGemmEx.",
+                "📦 BF16 GEMM — own kernel `self/native/mma_sm120/owngemm_sm120_bf16.cu` (mma.sync.m16n8k16) EXISTS in-tree but production wiring missing (runtime_bf16_emit.hexa still calls cublasGemmEx at :470,:717). Wiring lane in progress (HEXA_BF16_OWN gate, TF32-census-r3 pattern). DEFERRED on parity measurement.",
+                "🧱 packed_gemv FP32 — no own kernel (cublasDgemv fallback for fp32/bf16 dtype slices). FP64 packed_gemv own-kernel ships.",
+                "📦 `-lcublas` removal — blocked by: (a) BF16 production wiring, (b) own FP32 packed-gemv, (c) policy: HEXA_OWN_GEMM=0/HEXA_TF32_OWN=0 escape-hatches double as the cuBLAS correctness ORACLE; dropping them (must `#ifdef` out the call-sites, not just default away — linker needs the symbols) loses the validation oracle. Decision-gated, not a measured wall."
+              ]
+            },
+            {
+              "type": "prose",
+              "text": "Next research target: wire BF16 own (in-tree) + write FP32 packed-gemv own → then `-lcublas` removal needs only the escape-hatch policy call. Build/measure on aiden/summer free pool (NOT paid vast); byteeq 3-target + cuda smoke gate; opt-in fastmode lanes are byteeq-neutral on the default FP64 path. SSOT detail: memory `project_hexa_forge_cublas_independence`."
+            }
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "TF32 own-GEMM sm_120 parity vs cuBLAS",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "Goal: own TF32 GEMM (`owngemm_sm120.cu`, 64×64 + cp.async 2-stage + mma.sync.m16n8k8) reaches cuBLAS-TF32 perf parity (≥0.97×) so TF32 own can be the perf default (today it is opt-in; cuBLAS is faster at most sizes). Accuracy already PASS (rel-RMS ~1e-5, gate ≤1e-2). HW: consumer RTX 5070 sm_120 (NO tcgen05/TMEM/wgmma — mma.sync.m16n8k8 is the instruction ceiling, confirmed)."
+            },
+            {
+              "type": "table",
+              "columns": [
+                "size",
+                "own/cuBLAS off-ratio (>1=cuBLAS faster)"
+              ],
+              "rows": [
+                [
+                  "256",
+                  "1.24×"
+                ],
+                [
+                  "512",
+                  "1.10×"
+                ],
+                [
+                  "768",
+                  "0.96× (own wins)"
+                ],
+                [
+                  "1024",
+                  "1.13×"
+                ],
+                [
+                  "1536",
+                  "1.13×"
+                ],
+                [
+                  "2048",
+                  "1.01× (parity)"
+                ],
+                [
+                  "3072",
+                  "1.14×"
+                ],
+                [
+                  "4096",
+                  "1.25×"
+                ]
+              ]
+            },
+            {
+              "type": "list",
+              "items": [
+                "🧱 r2 levers MEASURED-FALSIFIED (aiden sm_120, captured): multi-config tiling 128×128/128×64 (helps only 4096, wrecks 768/1024 sweet-spot) · deeper cp.async 3/4-stage (smem-occupancy cliff, 1.4-1.8× regress) · smem XOR swizzle (de-vectorizes 128-bit store, 2-4.7× regress). Root cause: 48-SM 5070 is occupancy-bound, NOT reuse-bound — datacenter (sm_90/100, 100+ SM, wgmma) levers don't transfer.",
+                "🔬 r3 research REOPENED the wall: cuBLAS's actual sm_120 TF32 kernel name = `nvjet_sm120_..._tmaAB_..._splitK_TNNN` = split-K + TMA — two PUBLIC techniques our kernel uses NEITHER. A public sm_120 mma.sync kernel (WingEdge) already reaches cuBLAS parity via TMA. So the gap is named work-decomposition, not unmatchable in-house tuning.",
+                "🔬 r4 IN PROGRESS (untried, reference-backed): Stream-K/Split-K work-decomposition (arxiv:2301.03598; CUTLASS ex47 runs it on plain mma.sync — targets wave-quantization at 256/512/1024, converges to DataParallel at even-tiling sizes so 768/2048 sweet-spots protected) + TMA loads (`cp.async.bulk.tensor`, targets 4096 memory-bound). aiden GPU impl on a variant kernel (shipped 64×64 untouched = byteeq-neutral)."
+              ]
+            },
+            {
+              "type": "prose",
+              "text": "Next research target: if Stream-K+TMA (r4) reach parity → PR (byteeq+smoke) + TF32 own perf-default. If they also miss → final honest 🧱 (would contradict the WingEdge parity claim; capture why). Lesson: shallow 1-pass research (r1) mis-concluded 'same instruction = wall'; deep research (r3 kernel-name decode) found the real untried levers — research-first must go deep before declaring a wall."
+            }
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "self-host zero-c (`ls self/*.c == ∅`)",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "📦 DEFERRED — the on-path native-seed floor is EXHAUSTED (valop 7-prim + 6 seed families default-ON, byteeq gen3≡gen4 3-target GREEN; see Self-host status). The only remaining lever to fully drop the C substrate is zero-c leg B = io.hexa whole-runtime flip (rt.c substrate replacement, RUNTIME-PORT M3) — an architecture migration with shipped-runtime regression risk, gated on its own risk budget + explicit start decision (self-host≠release ABSOLUTE). Residual besides leg B = irreducible-J (raw svc/syscall emit · libm · HexaVal struct · _start/CRT) + off-path-K (~84%, free/realloc/spawn/popen/async). print-fmt/fd-write census = @syscall irreducible (lateral relocation, not floor reduction). SSOT: memory `project_hexa_selfhost_floor_census` + `project_hexa_zeroc_breakthrough`."
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "component-map",
       "title": "Component map",
       "blocks": [
