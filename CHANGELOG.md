@@ -1,5 +1,8 @@
 ## 2026-06-20
 
+- **docs(arch): blocking-frontiers 갱신 — TF32 r4 결과 + plateau 하드웨어 🧱 + BF16 research-found 경로 (research-driven 루프 기록)**: ARCHITECTURE.json frontier 노드를 측정·인용 결과로 업데이트. **TF32**: r4 Split-K가 256을 0.92~0.94×로 닫아 own이 cuBLAS 추월(wave-quantization fix·cuBLAS splitK 커널명 예측 적중), 512-3072 plateau는 **하드웨어 천장 🧱 research-confirmed**(consumer GeForce Blackwell이 FP32-accum 텐서 처리량 반속 cap → dense ceiling≈own ~30TFLOP/s, cuBLAS ~34는 roofline내 스케줄링 micro-overlap·exclusive 기법 아님; WingEdge parity도 compute throttle 종착·warp-spec 없이 도달→multi-week 재작성 부정당) → r5 DEFER. **BF16**: own 배선됨(rel-RMS 0·3-7× 느림=dispatch 오버헤드), research가 ≥0.85× 달성가능 확인(WingEdge mma.sync HGEMM sm_120 parity·cuBLAS 동일 mma.sync HMMA), BF16 r3 GPU 진행중(direct-bf16-mma+epilogue-cast+scratch-reuse로 3×malloc/3 cast 제거). Split-K는 byte-determinism 깨므로 BF16 default 부적용.
+
+
 - **docs(arch): ARCHITECTURE.json 에 `blocking-frontiers` 섹션 추가 — 측정된 벽 + research-state 박제 (research-targetable SSOT)**: 현재 stated-goal 을 막는 아키텍처 벽들을 메모리에 흩지 말고 설계 SSOT(ARCHITECTURE.json)에 **측정 root-cause + research-state**로 기록 → 다음 research-first 라운드(c23)가 재유도 없이 표적화. 3 frontier 노드: ⓐ **forge GPU GEMM → cuBLAS 독립(`-lcublas` 제거)** — FP64 own default ✅·TF32 🔬·BF16 in-tree 배선대기 📦·FP32 packed-gemv 🧱·`-lcublas` 제거는 escape-hatch oracle 정책 게이트 📦. ⓑ **TF32 own sm_120 parity** — r2 multi-tile/deep/swizzle 🧱measured-falsified(48-SM occupancy-bound) → r3 research 가 cuBLAS=`splitK+tmaAB` 커널명 디코드로 미시도 레버 특정 → r4 Stream-K+TMA 🔬 진행. ⓒ **zero-c leg B** 📦(self-host floor 소진 후 잔여, rt.c 통째교체 risk budget 게이트). 상태범례 🔬OPEN/🧱MEASURED-CLOSED/📦DEFERRED. round-trip 청결 삽입(107+/0-), JSON 유효. SSOT detail = 각 memory 파일 cross-ref.
 
 
