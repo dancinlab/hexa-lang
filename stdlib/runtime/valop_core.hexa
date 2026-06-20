@@ -173,3 +173,95 @@ fn rt_add_native(a: HexaVal, b: HexaVal) -> HexaVal {
     let rfp = __hx_payload_add(rf, 0)
     return __hx_make_val(1, rfp)
 }
+
+// ── rt_cmp_{lt,gt,le,ge}_native: the SCALAR ordered-compare arm of hexa_cmp_*
+// (runtime_core.c #else: int-int via HX_INT(a) < HX_INT(b), float/valstruct via
+// __hx_to_double(a) < __hx_to_double(b)). Each returns a TAG_BOOL HexaVal (0/1),
+// byte-identical to hexa_bool(...). The C wrapper (hexa_cmp_* under
+// HEXA_RT_VALOP_NATIVE) keeps the enum-pair (_hexa_enum_pair_idx), string
+// (hxlcl_strcmp), and incomparable-throw (_hx_cmp_guard) arms — all runtime
+// re-entry — and delegates here ONLY when both operands are scalar int/float
+// (no enum/str), exactly the array/map guard-C / body-native split. The int arm
+// uses the __hx_payload_{lt,gt,le,ge} signed-i64 compare leaves (map_core/rt_str
+// proven); the float/mixed arm uses __hx_to_double + __hx_payload_{flt,fgt,fle,
+// fge} — NO runtime call, no recursion (the rt_cmp hexa-source path's eq→cmp_le
+// circularity does NOT apply: these read raw leaves, never hexa_eq/hexa_cmp).
+// un-nested 1-op-per-temp (NESTING-SEGV guard); the float compare's NaN behavior
+// matches C's `<`/`>`/`<=`/`>=` (all false for NaN) since the leaves lower to the
+// same ucomisd/fcmp the C operators emit.
+//
+// rt_cmp_lt_native: a < b.
+fn rt_cmp_lt_native(a: HexaVal, b: HexaVal) -> HexaVal {
+    let ta = __hx_tag(a)
+    let tb = __hx_tag(b)
+    let a_int = __hx_payload_eq(ta, 0)               // a is TAG_INT
+    let b_int = __hx_payload_eq(tb, 0)               // b is TAG_INT
+    let both_int = __hx_payload_and(a_int, b_int)
+    if __hx_payload_ne(both_int, 0) {
+        let lt = __hx_payload_lt(a, b)               // HX_INT(a) < HX_INT(b)
+        let ltp = __hx_payload_add(lt, 0)
+        return __hx_make_val(2, ltp)
+    }
+    let af = __hx_to_double(a)                        // int|float → double
+    let bf = __hx_to_double(b)
+    let flt = __hx_payload_flt(af, bf)               // af < bf (false for NaN)
+    let fltp = __hx_payload_add(flt, 0)
+    return __hx_make_val(2, fltp)
+}
+
+// rt_cmp_gt_native: a > b.
+fn rt_cmp_gt_native(a: HexaVal, b: HexaVal) -> HexaVal {
+    let ta = __hx_tag(a)
+    let tb = __hx_tag(b)
+    let a_int = __hx_payload_eq(ta, 0)
+    let b_int = __hx_payload_eq(tb, 0)
+    let both_int = __hx_payload_and(a_int, b_int)
+    if __hx_payload_ne(both_int, 0) {
+        let gt = __hx_payload_gt(a, b)               // HX_INT(a) > HX_INT(b)
+        let gtp = __hx_payload_add(gt, 0)
+        return __hx_make_val(2, gtp)
+    }
+    let af = __hx_to_double(a)
+    let bf = __hx_to_double(b)
+    let fgt = __hx_payload_fgt(af, bf)               // af > bf (false for NaN)
+    let fgtp = __hx_payload_add(fgt, 0)
+    return __hx_make_val(2, fgtp)
+}
+
+// rt_cmp_le_native: a <= b.
+fn rt_cmp_le_native(a: HexaVal, b: HexaVal) -> HexaVal {
+    let ta = __hx_tag(a)
+    let tb = __hx_tag(b)
+    let a_int = __hx_payload_eq(ta, 0)
+    let b_int = __hx_payload_eq(tb, 0)
+    let both_int = __hx_payload_and(a_int, b_int)
+    if __hx_payload_ne(both_int, 0) {
+        let le = __hx_payload_le(a, b)               // HX_INT(a) <= HX_INT(b)
+        let lep = __hx_payload_add(le, 0)
+        return __hx_make_val(2, lep)
+    }
+    let af = __hx_to_double(a)
+    let bf = __hx_to_double(b)
+    let fle = __hx_payload_fle(af, bf)               // af <= bf (false for NaN)
+    let flep = __hx_payload_add(fle, 0)
+    return __hx_make_val(2, flep)
+}
+
+// rt_cmp_ge_native: a >= b.
+fn rt_cmp_ge_native(a: HexaVal, b: HexaVal) -> HexaVal {
+    let ta = __hx_tag(a)
+    let tb = __hx_tag(b)
+    let a_int = __hx_payload_eq(ta, 0)
+    let b_int = __hx_payload_eq(tb, 0)
+    let both_int = __hx_payload_and(a_int, b_int)
+    if __hx_payload_ne(both_int, 0) {
+        let ge = __hx_payload_ge(a, b)               // HX_INT(a) >= HX_INT(b)
+        let gep = __hx_payload_add(ge, 0)
+        return __hx_make_val(2, gep)
+    }
+    let af = __hx_to_double(a)
+    let bf = __hx_to_double(b)
+    let fge = __hx_payload_fge(af, bf)               // af >= bf (false for NaN)
+    let fgep = __hx_payload_add(fge, 0)
+    return __hx_make_val(2, fgep)
+}
