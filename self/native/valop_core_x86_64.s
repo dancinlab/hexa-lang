@@ -2,18 +2,18 @@
 // GENERATED: tool/regen_valop_core_native_s.sh — aprime_cc _drv.hexa --emit=asm
 //   --target=x86_64-linux-gnu -o valop_core_x86_64.s stdlib/runtime/valop_core.hexa.
 //   Provides the SCALAR value-op core (rt_truthy_native, rt_sub_native,
-//   rt_mul_native, rt_add_native, rt_cmp_*_native) as native raw-mem bodies: __hx_tag
+//   rt_mul_native, rt_add_native, rt_cmp_*_native, rt_div_native, rt_mod_native) as native raw-mem bodies: __hx_tag
 //   tag-read + raw int/float payload arithmetic + __hx_make_val re-box,
-//   byte-faithful to the C hexa_truthy/sub/mul/add/cmp scalar arms. The
+//   byte-faithful to the C hexa_truthy/sub/mul/add/cmp/div/mod scalar arms. The
 //   intrinsics are
 //   gen2-native-only (the hexat C-transpile bootstrap cannot lower them), so
 //   the bodies enter the shipped runtime.a ONLY via this seed — the array/
 //   num_core mechanism (resolve_native_valop_core_seed).
 //   ABI: ELF, no underscore. External: NONE (fully self-contained).
 //   Lets stage_resolve_runtime_a define HEXA_RT_VALOP_NATIVE + ar this .o
-//   into runtime.a so hexa_truthy/sub/mul/add/cmp scalar paths go native.
+//   into runtime.a so hexa_truthy/sub/mul/add/cmp/div/mod scalar paths go native.
 # hexa-lang emit pass — target=x86_64-linux-gnu
-# source: /home/aiden/scratch-valcmp/stdlib/runtime/valop_core.hexa
+# source: /home/aiden/scratch-valdiv/stdlib/runtime/valop_core.hexa
 .intel_syntax noprefix
 .file 1 "stdlib/runtime/valop_core.hexa"
 .text
@@ -33,7 +33,7 @@ rt_truthy_native:
     sub rsp, 608 # prologue: alloc spill frame
     mov [rbp - 336], rdi # store tag L0
     mov rbx, rsi # ingress param payload
-.L9cae_rt_truthy_native_bb0:
+.La994_rt_truthy_native_bb0:
     mov r12, [rbp - 336] # tag L0 from tag-slot
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 344], r11 # store tag L1
@@ -48,9 +48,9 @@ rt_truthy_native:
     mov r11, 2 # materialize tag imm 2
     mov [rbp - 360], r11 # store tag L3
     test r14, r14 # br_cond test
-    jz .L9cae_rt_truthy_native_bb2 # jump-if-zero -> else
-    jmp .L9cae_rt_truthy_native_bb1 # jump -> then
-.L9cae_rt_truthy_native_bb1:
+    jz .La994_rt_truthy_native_bb2 # jump-if-zero -> else
+    jmp .La994_rt_truthy_native_bb1 # jump -> then
+.La994_rt_truthy_native_bb1:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -79,7 +79,7 @@ rt_truthy_native:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L9cae_rt_truthy_native_bb2:
+.La994_rt_truthy_native_bb2:
     mov r10, r13 # hv payload
     mov r11, 0 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -90,9 +90,9 @@ rt_truthy_native:
     mov [rbp - 80], r10 # spill L8 to slot
     mov r10, [rbp - 80] # reload L8 from spill slot
     test r10, r10 # br_cond test
-    jz .L9cae_rt_truthy_native_bb4 # jump-if-zero -> else
-    jmp .L9cae_rt_truthy_native_bb3 # jump -> then
-.L9cae_rt_truthy_native_bb3:
+    jz .La994_rt_truthy_native_bb4 # jump-if-zero -> else
+    jmp .La994_rt_truthy_native_bb3 # jump -> then
+.La994_rt_truthy_native_bb3:
     mov r11, 0 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -147,7 +147,7 @@ rt_truthy_native:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L9cae_rt_truthy_native_bb4:
+.La994_rt_truthy_native_bb4:
     mov r10, r13 # hv payload
     mov r11, 1 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -158,9 +158,9 @@ rt_truthy_native:
     mov [rbp - 152], r10 # spill L17 to slot
     mov r10, [rbp - 152] # reload L17 from spill slot
     test r10, r10 # br_cond test
-    jz .L9cae_rt_truthy_native_bb6 # jump-if-zero -> else
-    jmp .L9cae_rt_truthy_native_bb5 # jump -> then
-.L9cae_rt_truthy_native_bb5:
+    jz .La994_rt_truthy_native_bb6 # jump-if-zero -> else
+    jmp .La994_rt_truthy_native_bb5 # jump -> then
+.La994_rt_truthy_native_bb5:
     mov r10, 0 # hv payload
     mov rax, 0 # tag default = TAG_INT
     mov r11, r10 # __hx_to_double: r11 = original (float) bits
@@ -288,7 +288,7 @@ rt_truthy_native:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L9cae_rt_truthy_native_bb6:
+.La994_rt_truthy_native_bb6:
     mov r10, r13 # hv payload
     mov r11, 4 # hv payload
     cmp r10, r11 # __hx_payload_eq: cmp payloads
@@ -299,9 +299,9 @@ rt_truthy_native:
     mov [rbp - 304], r10 # spill L36 to slot
     mov r10, [rbp - 304] # reload L36 from spill slot
     test r10, r10 # br_cond test
-    jz .L9cae_rt_truthy_native_bb8 # jump-if-zero -> else
-    jmp .L9cae_rt_truthy_native_bb7 # jump -> then
-.L9cae_rt_truthy_native_bb7:
+    jz .La994_rt_truthy_native_bb8 # jump-if-zero -> else
+    jmp .La994_rt_truthy_native_bb7 # jump -> then
+.La994_rt_truthy_native_bb7:
     mov r10, 0 # hv payload
     mov r11, 2 # hv payload
     mov [rbp - 640], r11 # store tag L38
@@ -318,7 +318,7 @@ rt_truthy_native:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L9cae_rt_truthy_native_bb8:
+.La994_rt_truthy_native_bb8:
     mov r10, 1 # hv payload
     mov r11, 2 # hv payload
     mov [rbp - 648], r11 # store tag L39
@@ -353,7 +353,7 @@ rt_sub_native:
     mov rbx, rsi # ingress param payload
     mov [rbp - 248], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.L9cae_rt_sub_native_bb0:
+.La994_rt_sub_native_bb0:
     mov r13, [rbp - 240] # tag L0 from tag-slot
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 256], r11 # store tag L2
@@ -418,9 +418,9 @@ rt_sub_native:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L9cae_rt_sub_native_bb2 # jump-if-zero -> else
-    jmp .L9cae_rt_sub_native_bb1 # jump -> then
-.L9cae_rt_sub_native_bb1:
+    jz .La994_rt_sub_native_bb2 # jump-if-zero -> else
+    jmp .La994_rt_sub_native_bb1 # jump -> then
+.La994_rt_sub_native_bb1:
     mov r11, r12 # hv payload
     mov r10, rbx # hv payload
     sub r10, r11 # __hx_payload_sub: r10 = a.pl sub b.pl
@@ -461,7 +461,7 @@ rt_sub_native:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L9cae_rt_sub_native_bb2:
+.La994_rt_sub_native_bb2:
     mov r10, rbx # hv payload
     mov rax, [rbp - 240] # tag L0 from tag-slot
     mov r11, r10 # __hx_to_double: r11 = original (float) bits
@@ -555,7 +555,7 @@ rt_mul_native:
     mov rbx, rsi # ingress param payload
     mov [rbp - 248], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.L9cae_rt_mul_native_bb0:
+.La994_rt_mul_native_bb0:
     mov r13, [rbp - 240] # tag L0 from tag-slot
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 256], r11 # store tag L2
@@ -620,9 +620,9 @@ rt_mul_native:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L9cae_rt_mul_native_bb2 # jump-if-zero -> else
-    jmp .L9cae_rt_mul_native_bb1 # jump -> then
-.L9cae_rt_mul_native_bb1:
+    jz .La994_rt_mul_native_bb2 # jump-if-zero -> else
+    jmp .La994_rt_mul_native_bb1 # jump -> then
+.La994_rt_mul_native_bb1:
     mov r11, r12 # hv payload
     mov r10, rbx # hv payload
     imul r10, r11 # __hx_payload_mul: r10 = a.pl imul b.pl
@@ -663,7 +663,7 @@ rt_mul_native:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L9cae_rt_mul_native_bb2:
+.La994_rt_mul_native_bb2:
     mov r10, rbx # hv payload
     mov rax, [rbp - 240] # tag L0 from tag-slot
     mov r11, r10 # __hx_to_double: r11 = original (float) bits
@@ -757,7 +757,7 @@ rt_add_native:
     mov rbx, rsi # ingress param payload
     mov [rbp - 248], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.L9cae_rt_add_native_bb0:
+.La994_rt_add_native_bb0:
     mov r13, [rbp - 240] # tag L0 from tag-slot
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 256], r11 # store tag L2
@@ -822,9 +822,9 @@ rt_add_native:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L9cae_rt_add_native_bb2 # jump-if-zero -> else
-    jmp .L9cae_rt_add_native_bb1 # jump -> then
-.L9cae_rt_add_native_bb1:
+    jz .La994_rt_add_native_bb2 # jump-if-zero -> else
+    jmp .La994_rt_add_native_bb1 # jump -> then
+.La994_rt_add_native_bb1:
     mov r11, r12 # hv payload
     mov r10, rbx # hv payload
     add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
@@ -865,7 +865,7 @@ rt_add_native:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L9cae_rt_add_native_bb2:
+.La994_rt_add_native_bb2:
     mov r10, rbx # hv payload
     mov rax, [rbp - 240] # tag L0 from tag-slot
     mov r11, r10 # __hx_to_double: r11 = original (float) bits
@@ -959,7 +959,7 @@ rt_cmp_lt_native:
     mov rbx, rsi # ingress param payload
     mov [rbp - 248], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.L9cae_rt_cmp_lt_native_bb0:
+.La994_rt_cmp_lt_native_bb0:
     mov r13, [rbp - 240] # tag L0 from tag-slot
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 256], r11 # store tag L2
@@ -1024,9 +1024,9 @@ rt_cmp_lt_native:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L9cae_rt_cmp_lt_native_bb2 # jump-if-zero -> else
-    jmp .L9cae_rt_cmp_lt_native_bb1 # jump -> then
-.L9cae_rt_cmp_lt_native_bb1:
+    jz .La994_rt_cmp_lt_native_bb2 # jump-if-zero -> else
+    jmp .La994_rt_cmp_lt_native_bb1 # jump -> then
+.La994_rt_cmp_lt_native_bb1:
     mov r11, r12 # hv payload
     mov r10, rbx # hv payload
     cmp r10, r11 # __hx_payload_lt: cmp payloads
@@ -1069,7 +1069,7 @@ rt_cmp_lt_native:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L9cae_rt_cmp_lt_native_bb2:
+.La994_rt_cmp_lt_native_bb2:
     mov r10, rbx # hv payload
     mov rax, [rbp - 240] # tag L0 from tag-slot
     mov r11, r10 # __hx_to_double: r11 = original (float) bits
@@ -1164,7 +1164,7 @@ rt_cmp_gt_native:
     mov rbx, rsi # ingress param payload
     mov [rbp - 248], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.L9cae_rt_cmp_gt_native_bb0:
+.La994_rt_cmp_gt_native_bb0:
     mov r13, [rbp - 240] # tag L0 from tag-slot
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 256], r11 # store tag L2
@@ -1229,9 +1229,9 @@ rt_cmp_gt_native:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L9cae_rt_cmp_gt_native_bb2 # jump-if-zero -> else
-    jmp .L9cae_rt_cmp_gt_native_bb1 # jump -> then
-.L9cae_rt_cmp_gt_native_bb1:
+    jz .La994_rt_cmp_gt_native_bb2 # jump-if-zero -> else
+    jmp .La994_rt_cmp_gt_native_bb1 # jump -> then
+.La994_rt_cmp_gt_native_bb1:
     mov r11, r12 # hv payload
     mov r10, rbx # hv payload
     cmp r10, r11 # __hx_payload_gt: cmp payloads
@@ -1274,7 +1274,7 @@ rt_cmp_gt_native:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L9cae_rt_cmp_gt_native_bb2:
+.La994_rt_cmp_gt_native_bb2:
     mov r10, rbx # hv payload
     mov rax, [rbp - 240] # tag L0 from tag-slot
     mov r11, r10 # __hx_to_double: r11 = original (float) bits
@@ -1369,7 +1369,7 @@ rt_cmp_le_native:
     mov rbx, rsi # ingress param payload
     mov [rbp - 248], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.L9cae_rt_cmp_le_native_bb0:
+.La994_rt_cmp_le_native_bb0:
     mov r13, [rbp - 240] # tag L0 from tag-slot
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 256], r11 # store tag L2
@@ -1434,9 +1434,9 @@ rt_cmp_le_native:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L9cae_rt_cmp_le_native_bb2 # jump-if-zero -> else
-    jmp .L9cae_rt_cmp_le_native_bb1 # jump -> then
-.L9cae_rt_cmp_le_native_bb1:
+    jz .La994_rt_cmp_le_native_bb2 # jump-if-zero -> else
+    jmp .La994_rt_cmp_le_native_bb1 # jump -> then
+.La994_rt_cmp_le_native_bb1:
     mov r11, r12 # hv payload
     mov r10, rbx # hv payload
     cmp r10, r11 # __hx_payload_le: cmp payloads
@@ -1479,7 +1479,7 @@ rt_cmp_le_native:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L9cae_rt_cmp_le_native_bb2:
+.La994_rt_cmp_le_native_bb2:
     mov r10, rbx # hv payload
     mov rax, [rbp - 240] # tag L0 from tag-slot
     mov r11, r10 # __hx_to_double: r11 = original (float) bits
@@ -1574,7 +1574,7 @@ rt_cmp_ge_native:
     mov rbx, rsi # ingress param payload
     mov [rbp - 248], rdx # store tag L1
     mov r12, rcx # ingress param payload
-.L9cae_rt_cmp_ge_native_bb0:
+.La994_rt_cmp_ge_native_bb0:
     mov r13, [rbp - 240] # tag L0 from tag-slot
     mov r11, 0 # materialize tag imm 0
     mov [rbp - 256], r11 # store tag L2
@@ -1639,9 +1639,9 @@ rt_cmp_ge_native:
     mov [rbp - 112], r10 # spill L12 to slot
     mov r10, [rbp - 112] # reload L12 from spill slot
     test r10, r10 # br_cond test
-    jz .L9cae_rt_cmp_ge_native_bb2 # jump-if-zero -> else
-    jmp .L9cae_rt_cmp_ge_native_bb1 # jump -> then
-.L9cae_rt_cmp_ge_native_bb1:
+    jz .La994_rt_cmp_ge_native_bb2 # jump-if-zero -> else
+    jmp .La994_rt_cmp_ge_native_bb1 # jump -> then
+.La994_rt_cmp_ge_native_bb1:
     mov r11, r12 # hv payload
     mov r10, rbx # hv payload
     cmp r10, r11 # __hx_payload_ge: cmp payloads
@@ -1684,7 +1684,7 @@ rt_cmp_ge_native:
     pop rbx # epilogue: restore rbx
     pop rbp # epilogue: restore rbp
     ret # return
-.L9cae_rt_cmp_ge_native_bb2:
+.La994_rt_cmp_ge_native_bb2:
     mov r10, rbx # hv payload
     mov rax, [rbp - 240] # tag L0 from tag-slot
     mov r11, r10 # __hx_to_double: r11 = original (float) bits
@@ -1753,6 +1753,122 @@ rt_cmp_ge_native:
     mov rdx, rdx # hv arg payload
     mov rax, [rbp - 456] # tag L27 from tag-slot
     add rsp, 416 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
+    pop rbp # epilogue: restore rbp
+    ret # return
+.globl rt_div_native
+.hidden rt_div_native
+    .p2align 4
+rt_div_native:
+    .loc 1 281 0
+    push rbp # prologue: save rbp
+    mov rbp, rsp # prologue: set rbp
+    push rbx # prologue: save rbx
+    push r12 # prologue: save r12
+    push r13 # prologue: save r13
+    push r14 # prologue: save r14
+    push r15 # prologue: save r15
+    sub rsp, 8 # prologue: callee-save align pad
+    sub rsp, 80 # prologue: alloc spill frame
+    mov [rbp - 72], rdi # store tag L0
+    mov rbx, rsi # ingress param payload
+    mov [rbp - 80], rdx # store tag L1
+    mov r12, rcx # ingress param payload
+.La994_rt_div_native_bb0:
+    mov r11, r12 # hv payload
+    mov r10, rbx # hv payload
+    mov rax, r10 # __hx_payload_div: rax = a.pl (dividend)
+    cqo # __hx_payload_div: sign-extend rax → rdx:rax
+    idiv r11 # __hx_payload_div: rax=quo rdx=rem (a.pl / b.pl)
+    mov r10, rax # __hx_payload_div: r10 = quotient
+    mov r13, r10 # leaf: payload → dst L2
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 88], r11 # store tag L2
+    mov r14, r13 # assign L3
+    mov r11, [rbp - 88] # tag L2 from tag-slot
+    mov [rbp - 96], r11 # store tag L3
+    mov r11, 0 # hv payload
+    mov r10, r14 # hv payload
+    add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
+    mov r15, r10 # leaf: payload → dst L4
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 104], r11 # store tag L4
+    mov r10, r15 # assign L5
+    mov r11, [rbp - 104] # tag L4 from tag-slot
+    mov [rbp - 112], r11 # store tag L5
+    mov [rbp - 56], r10 # spill L5 to slot
+    mov r10, [rbp - 56] # reload L5 from spill slot
+    mov r10, r10 # hv payload
+    mov r11, 0 # hv payload
+    mov [rbp - 120], r11 # store tag L6
+    mov [rbp - 64], r10 # spill L6 to slot
+    mov rdx, [rbp - 64] # reload L6 from spill slot
+    mov rdx, rdx # hv arg payload
+    mov rax, [rbp - 120] # tag L6 from tag-slot
+    add rsp, 80 # epilogue: free spill frame
+    add rsp, 8 # epilogue: drop callee-save align pad
+    pop r15 # epilogue: restore r15
+    pop r14 # epilogue: restore r14
+    pop r13 # epilogue: restore r13
+    pop r12 # epilogue: restore r12
+    pop rbx # epilogue: restore rbx
+    pop rbp # epilogue: restore rbp
+    ret # return
+.globl rt_mod_native
+.hidden rt_mod_native
+    .p2align 4
+rt_mod_native:
+    .loc 1 288 0
+    push rbp # prologue: save rbp
+    mov rbp, rsp # prologue: set rbp
+    push rbx # prologue: save rbx
+    push r12 # prologue: save r12
+    push r13 # prologue: save r13
+    push r14 # prologue: save r14
+    push r15 # prologue: save r15
+    sub rsp, 8 # prologue: callee-save align pad
+    sub rsp, 80 # prologue: alloc spill frame
+    mov [rbp - 72], rdi # store tag L0
+    mov rbx, rsi # ingress param payload
+    mov [rbp - 80], rdx # store tag L1
+    mov r12, rcx # ingress param payload
+.La994_rt_mod_native_bb0:
+    mov r11, r12 # hv payload
+    mov r10, rbx # hv payload
+    mov rax, r10 # __hx_payload_mod: rax = a.pl (dividend)
+    cqo # __hx_payload_mod: sign-extend rax → rdx:rax
+    idiv r11 # __hx_payload_mod: rax=quo rdx=rem (a.pl / b.pl)
+    mov r10, rdx # __hx_payload_mod: r10 = remainder
+    mov r13, r10 # leaf: payload → dst L2
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 88], r11 # store tag L2
+    mov r14, r13 # assign L3
+    mov r11, [rbp - 88] # tag L2 from tag-slot
+    mov [rbp - 96], r11 # store tag L3
+    mov r11, 0 # hv payload
+    mov r10, r14 # hv payload
+    add r10, r11 # __hx_payload_add: r10 = a.pl add b.pl
+    mov r15, r10 # leaf: payload → dst L4
+    mov r11, 0 # materialize tag imm 0
+    mov [rbp - 104], r11 # store tag L4
+    mov r10, r15 # assign L5
+    mov r11, [rbp - 104] # tag L4 from tag-slot
+    mov [rbp - 112], r11 # store tag L5
+    mov [rbp - 56], r10 # spill L5 to slot
+    mov r10, [rbp - 56] # reload L5 from spill slot
+    mov r10, r10 # hv payload
+    mov r11, 0 # hv payload
+    mov [rbp - 120], r11 # store tag L6
+    mov [rbp - 64], r10 # spill L6 to slot
+    mov rdx, [rbp - 64] # reload L6 from spill slot
+    mov rdx, rdx # hv arg payload
+    mov rax, [rbp - 120] # tag L6 from tag-slot
+    add rsp, 80 # epilogue: free spill frame
     add rsp, 8 # epilogue: drop callee-save align pad
     pop r15 # epilogue: restore r15
     pop r14 # epilogue: restore r14

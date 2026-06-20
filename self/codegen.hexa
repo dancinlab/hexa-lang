@@ -6253,6 +6253,15 @@ fn gen2_expr(node) {
             if name == "__hx_payload_mul" {
                 return "hexa_int(HX_INT(" + gen2_expr(node.args[0]) + ") * HX_INT(" + gen2_expr(node.args[1]) + "))"
             }
+            // int-div-leaf: signed-i64 quotient / remainder (C `/` `%` on int64_t
+            // == idiv/sdiv). Divide-by-zero is the C wrapper's job (zero-throw =
+            // runtime re-entry, stays out of the leaf); the leaf assumes b != 0.
+            if name == "__hx_payload_div" {
+                return "hexa_int(HX_INT(" + gen2_expr(node.args[0]) + ") / HX_INT(" + gen2_expr(node.args[1]) + "))"
+            }
+            if name == "__hx_payload_mod" {
+                return "hexa_int(HX_INT(" + gen2_expr(node.args[0]) + ") % HX_INT(" + gen2_expr(node.args[1]) + "))"
+            }
             if name == "__hx_payload_and" {
                 return "hexa_int(HX_INT(" + gen2_expr(node.args[0]) + ") & HX_INT(" + gen2_expr(node.args[1]) + "))"
             }

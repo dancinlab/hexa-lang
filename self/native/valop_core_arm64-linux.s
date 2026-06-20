@@ -2,16 +2,16 @@
 // GENERATED: tool/regen_valop_core_native_s.sh — aprime_cc _drv.hexa --emit=asm
 //   --target=arm64-linux-gnu -o valop_core_arm64-linux.s stdlib/runtime/valop_core.hexa.
 //   Provides the SCALAR value-op core (rt_truthy_native, rt_sub_native,
-//   rt_mul_native, rt_add_native, rt_cmp_*_native) as native raw-mem bodies: __hx_tag
+//   rt_mul_native, rt_add_native, rt_cmp_*_native, rt_div_native, rt_mod_native) as native raw-mem bodies: __hx_tag
 //   tag-read + raw int/float payload arithmetic + __hx_make_val re-box,
-//   byte-faithful to the C hexa_truthy/sub/mul/add/cmp scalar arms. The
+//   byte-faithful to the C hexa_truthy/sub/mul/add/cmp/div/mod scalar arms. The
 //   intrinsics are
 //   gen2-native-only (the hexat C-transpile bootstrap cannot lower them), so
 //   the bodies enter the shipped runtime.a ONLY via this seed — the array/
 //   num_core mechanism (resolve_native_valop_core_seed).
 //   ABI: ELF aarch64, no underscore. External: NONE (fully self-contained).
 //   Lets stage_resolve_runtime_a define HEXA_RT_VALOP_NATIVE + ar this .o
-//   into runtime.a so hexa_truthy/sub/mul/add/cmp scalar paths go native.
+//   into runtime.a so hexa_truthy/sub/mul/add/cmp/div/mod scalar paths go native.
 // hexa-lang emit pass — target=arm64-linux-gnu
 // source: stdlib/runtime/valop_core.hexa
 .file 1 "stdlib/runtime/valop_core.hexa"
@@ -25,7 +25,7 @@ rt_truthy_native:
     mov x29, sp // prologue: set fp
     sub sp, sp, #640 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
-_L9cae_rt_truthy_native_bb0:
+_La994_rt_truthy_native_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     mov x1, x0 // __hx_tag: payload = v.tag
     movz x0, #0 // __hx_tag: TAG_INT
@@ -40,9 +40,9 @@ _L9cae_rt_truthy_native_bb0:
     bl hexa_bool // __hx_payload_eq: box bool
     stp x0, x1, [sp, #48] // hv store L3
     ldp x0, x1, [sp, #48] // hv load L3
-    cbz x1, _L9cae_rt_truthy_native_bb2 // br_cond: !payload -> else
-    b _L9cae_rt_truthy_native_bb1 // branch -> then
-_L9cae_rt_truthy_native_bb1:
+    cbz x1, _La994_rt_truthy_native_bb2 // br_cond: !payload -> else
+    b _La994_rt_truthy_native_bb1 // branch -> then
+_La994_rt_truthy_native_bb1:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
@@ -61,7 +61,7 @@ _L9cae_rt_truthy_native_bb1:
     add sp, sp, #640 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_L9cae_rt_truthy_native_bb2:
+_La994_rt_truthy_native_bb2:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
@@ -70,9 +70,9 @@ _L9cae_rt_truthy_native_bb2:
     bl hexa_bool // __hx_payload_eq: box bool
     stp x0, x1, [sp, #128] // hv store L8
     ldp x0, x1, [sp, #128] // hv load L8
-    cbz x1, _L9cae_rt_truthy_native_bb4 // br_cond: !payload -> else
-    b _L9cae_rt_truthy_native_bb3 // branch -> then
-_L9cae_rt_truthy_native_bb3:
+    cbz x1, _La994_rt_truthy_native_bb4 // br_cond: !payload -> else
+    b _La994_rt_truthy_native_bb3 // branch -> then
+_La994_rt_truthy_native_bb3:
     ldp x0, x1, [sp, #0] // hv load L0
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #0 // hv const_int val
@@ -108,7 +108,7 @@ _L9cae_rt_truthy_native_bb3:
     add sp, sp, #640 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_L9cae_rt_truthy_native_bb4:
+_La994_rt_truthy_native_bb4:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #1 // hv const_int val
@@ -117,9 +117,9 @@ _L9cae_rt_truthy_native_bb4:
     bl hexa_bool // __hx_payload_eq: box bool
     stp x0, x1, [sp, #272] // hv store L17
     ldp x0, x1, [sp, #272] // hv load L17
-    cbz x1, _L9cae_rt_truthy_native_bb6 // br_cond: !payload -> else
-    b _L9cae_rt_truthy_native_bb5 // branch -> then
-_L9cae_rt_truthy_native_bb5:
+    cbz x1, _La994_rt_truthy_native_bb6 // br_cond: !payload -> else
+    b _La994_rt_truthy_native_bb5 // branch -> then
+_La994_rt_truthy_native_bb5:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #0 // hv const_int val
     scvtf d0, x1 // __hx_to_double: d0 = (double)int
@@ -208,7 +208,7 @@ _L9cae_rt_truthy_native_bb5:
     add sp, sp, #640 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_L9cae_rt_truthy_native_bb6:
+_La994_rt_truthy_native_bb6:
     ldp x0, x1, [sp, #32] // hv load L2
     movz x2, #0 // hv const_int: TAG_INT
     movz x3, #4 // hv const_int val
@@ -219,9 +219,9 @@ _L9cae_rt_truthy_native_bb6:
     stp x0, x1, [x15] // hv store L36
     add x15, sp, #576 // hv frame base
     ldp x0, x1, [x15] // hv load L36
-    cbz x1, _L9cae_rt_truthy_native_bb8 // br_cond: !payload -> else
-    b _L9cae_rt_truthy_native_bb7 // branch -> then
-_L9cae_rt_truthy_native_bb7:
+    cbz x1, _La994_rt_truthy_native_bb8 // br_cond: !payload -> else
+    b _La994_rt_truthy_native_bb7 // branch -> then
+_La994_rt_truthy_native_bb7:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #2 // hv const_int val
     movz x2, #0 // hv const_int: TAG_INT
@@ -235,7 +235,7 @@ _L9cae_rt_truthy_native_bb7:
     add sp, sp, #640 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_L9cae_rt_truthy_native_bb8:
+_La994_rt_truthy_native_bb8:
     movz x0, #0 // hv const_int: TAG_INT
     movz x1, #2 // hv const_int val
     movz x2, #0 // hv const_int: TAG_INT
@@ -259,7 +259,7 @@ rt_sub_native:
     sub sp, sp, #448 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_L9cae_rt_sub_native_bb0:
+_La994_rt_sub_native_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     mov x1, x0 // __hx_tag: payload = v.tag
     movz x0, #0 // __hx_tag: TAG_INT
@@ -305,9 +305,9 @@ _L9cae_rt_sub_native_bb0:
     bl hexa_bool // __hx_payload_ne: box bool
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv load L12
-    cbz x1, _L9cae_rt_sub_native_bb2 // br_cond: !payload -> else
-    b _L9cae_rt_sub_native_bb1 // branch -> then
-_L9cae_rt_sub_native_bb1:
+    cbz x1, _La994_rt_sub_native_bb2 // br_cond: !payload -> else
+    b _La994_rt_sub_native_bb1 // branch -> then
+_La994_rt_sub_native_bb1:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #16] // hv load L1
     sub x1, x1, x3 // __hx_payload_sub: x1 = a.pl sub b.pl
@@ -333,7 +333,7 @@ _L9cae_rt_sub_native_bb1:
     add sp, sp, #448 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_L9cae_rt_sub_native_bb2:
+_La994_rt_sub_native_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     scvtf d0, x1 // __hx_to_double: d0 = (double)int
     fmov x2, d0 // __hx_to_double: x2 = int-as-double bits
@@ -390,7 +390,7 @@ rt_mul_native:
     sub sp, sp, #448 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_L9cae_rt_mul_native_bb0:
+_La994_rt_mul_native_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     mov x1, x0 // __hx_tag: payload = v.tag
     movz x0, #0 // __hx_tag: TAG_INT
@@ -436,9 +436,9 @@ _L9cae_rt_mul_native_bb0:
     bl hexa_bool // __hx_payload_ne: box bool
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv load L12
-    cbz x1, _L9cae_rt_mul_native_bb2 // br_cond: !payload -> else
-    b _L9cae_rt_mul_native_bb1 // branch -> then
-_L9cae_rt_mul_native_bb1:
+    cbz x1, _La994_rt_mul_native_bb2 // br_cond: !payload -> else
+    b _La994_rt_mul_native_bb1 // branch -> then
+_La994_rt_mul_native_bb1:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #16] // hv load L1
     mul x1, x1, x3 // __hx_payload_mul: x1 = a.pl mul b.pl
@@ -464,7 +464,7 @@ _L9cae_rt_mul_native_bb1:
     add sp, sp, #448 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_L9cae_rt_mul_native_bb2:
+_La994_rt_mul_native_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     scvtf d0, x1 // __hx_to_double: d0 = (double)int
     fmov x2, d0 // __hx_to_double: x2 = int-as-double bits
@@ -521,7 +521,7 @@ rt_add_native:
     sub sp, sp, #448 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_L9cae_rt_add_native_bb0:
+_La994_rt_add_native_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     mov x1, x0 // __hx_tag: payload = v.tag
     movz x0, #0 // __hx_tag: TAG_INT
@@ -567,9 +567,9 @@ _L9cae_rt_add_native_bb0:
     bl hexa_bool // __hx_payload_ne: box bool
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv load L12
-    cbz x1, _L9cae_rt_add_native_bb2 // br_cond: !payload -> else
-    b _L9cae_rt_add_native_bb1 // branch -> then
-_L9cae_rt_add_native_bb1:
+    cbz x1, _La994_rt_add_native_bb2 // br_cond: !payload -> else
+    b _La994_rt_add_native_bb1 // branch -> then
+_La994_rt_add_native_bb1:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #16] // hv load L1
     add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
@@ -595,7 +595,7 @@ _L9cae_rt_add_native_bb1:
     add sp, sp, #448 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_L9cae_rt_add_native_bb2:
+_La994_rt_add_native_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     scvtf d0, x1 // __hx_to_double: d0 = (double)int
     fmov x2, d0 // __hx_to_double: x2 = int-as-double bits
@@ -652,7 +652,7 @@ rt_cmp_lt_native:
     sub sp, sp, #448 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_L9cae_rt_cmp_lt_native_bb0:
+_La994_rt_cmp_lt_native_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     mov x1, x0 // __hx_tag: payload = v.tag
     movz x0, #0 // __hx_tag: TAG_INT
@@ -698,9 +698,9 @@ _L9cae_rt_cmp_lt_native_bb0:
     bl hexa_bool // __hx_payload_ne: box bool
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv load L12
-    cbz x1, _L9cae_rt_cmp_lt_native_bb2 // br_cond: !payload -> else
-    b _L9cae_rt_cmp_lt_native_bb1 // branch -> then
-_L9cae_rt_cmp_lt_native_bb1:
+    cbz x1, _La994_rt_cmp_lt_native_bb2 // br_cond: !payload -> else
+    b _La994_rt_cmp_lt_native_bb1 // branch -> then
+_La994_rt_cmp_lt_native_bb1:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #16] // hv load L1
     cmp x1, x3 // __hx_payload_lt: cmp payloads
@@ -727,7 +727,7 @@ _L9cae_rt_cmp_lt_native_bb1:
     add sp, sp, #448 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_L9cae_rt_cmp_lt_native_bb2:
+_La994_rt_cmp_lt_native_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     scvtf d0, x1 // __hx_to_double: d0 = (double)int
     fmov x2, d0 // __hx_to_double: x2 = int-as-double bits
@@ -784,7 +784,7 @@ rt_cmp_gt_native:
     sub sp, sp, #448 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_L9cae_rt_cmp_gt_native_bb0:
+_La994_rt_cmp_gt_native_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     mov x1, x0 // __hx_tag: payload = v.tag
     movz x0, #0 // __hx_tag: TAG_INT
@@ -830,9 +830,9 @@ _L9cae_rt_cmp_gt_native_bb0:
     bl hexa_bool // __hx_payload_ne: box bool
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv load L12
-    cbz x1, _L9cae_rt_cmp_gt_native_bb2 // br_cond: !payload -> else
-    b _L9cae_rt_cmp_gt_native_bb1 // branch -> then
-_L9cae_rt_cmp_gt_native_bb1:
+    cbz x1, _La994_rt_cmp_gt_native_bb2 // br_cond: !payload -> else
+    b _La994_rt_cmp_gt_native_bb1 // branch -> then
+_La994_rt_cmp_gt_native_bb1:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #16] // hv load L1
     cmp x1, x3 // __hx_payload_gt: cmp payloads
@@ -859,7 +859,7 @@ _L9cae_rt_cmp_gt_native_bb1:
     add sp, sp, #448 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_L9cae_rt_cmp_gt_native_bb2:
+_La994_rt_cmp_gt_native_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     scvtf d0, x1 // __hx_to_double: d0 = (double)int
     fmov x2, d0 // __hx_to_double: x2 = int-as-double bits
@@ -916,7 +916,7 @@ rt_cmp_le_native:
     sub sp, sp, #448 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_L9cae_rt_cmp_le_native_bb0:
+_La994_rt_cmp_le_native_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     mov x1, x0 // __hx_tag: payload = v.tag
     movz x0, #0 // __hx_tag: TAG_INT
@@ -962,9 +962,9 @@ _L9cae_rt_cmp_le_native_bb0:
     bl hexa_bool // __hx_payload_ne: box bool
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv load L12
-    cbz x1, _L9cae_rt_cmp_le_native_bb2 // br_cond: !payload -> else
-    b _L9cae_rt_cmp_le_native_bb1 // branch -> then
-_L9cae_rt_cmp_le_native_bb1:
+    cbz x1, _La994_rt_cmp_le_native_bb2 // br_cond: !payload -> else
+    b _La994_rt_cmp_le_native_bb1 // branch -> then
+_La994_rt_cmp_le_native_bb1:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #16] // hv load L1
     cmp x1, x3 // __hx_payload_le: cmp payloads
@@ -991,7 +991,7 @@ _L9cae_rt_cmp_le_native_bb1:
     add sp, sp, #448 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_L9cae_rt_cmp_le_native_bb2:
+_La994_rt_cmp_le_native_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     scvtf d0, x1 // __hx_to_double: d0 = (double)int
     fmov x2, d0 // __hx_to_double: x2 = int-as-double bits
@@ -1048,7 +1048,7 @@ rt_cmp_ge_native:
     sub sp, sp, #448 // sp adj
     stp x0, x1, [sp, #0] // ingress param 0
     stp x2, x3, [sp, #16] // ingress param 1
-_L9cae_rt_cmp_ge_native_bb0:
+_La994_rt_cmp_ge_native_bb0:
     ldp x0, x1, [sp, #0] // hv load L0
     mov x1, x0 // __hx_tag: payload = v.tag
     movz x0, #0 // __hx_tag: TAG_INT
@@ -1094,9 +1094,9 @@ _L9cae_rt_cmp_ge_native_bb0:
     bl hexa_bool // __hx_payload_ne: box bool
     stp x0, x1, [sp, #192] // hv store L12
     ldp x0, x1, [sp, #192] // hv load L12
-    cbz x1, _L9cae_rt_cmp_ge_native_bb2 // br_cond: !payload -> else
-    b _L9cae_rt_cmp_ge_native_bb1 // branch -> then
-_L9cae_rt_cmp_ge_native_bb1:
+    cbz x1, _La994_rt_cmp_ge_native_bb2 // br_cond: !payload -> else
+    b _La994_rt_cmp_ge_native_bb1 // branch -> then
+_La994_rt_cmp_ge_native_bb1:
     ldp x0, x1, [sp, #0] // hv load L0
     ldp x2, x3, [sp, #16] // hv load L1
     cmp x1, x3 // __hx_payload_ge: cmp payloads
@@ -1123,7 +1123,7 @@ _L9cae_rt_cmp_ge_native_bb1:
     add sp, sp, #448 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
-_L9cae_rt_cmp_ge_native_bb2:
+_La994_rt_cmp_ge_native_bb2:
     ldp x0, x1, [sp, #0] // hv load L0
     scvtf d0, x1 // __hx_to_double: d0 = (double)int
     fmov x2, d0 // __hx_to_double: x2 = int-as-double bits
@@ -1168,6 +1168,79 @@ _L9cae_rt_cmp_ge_native_bb2:
     stp x0, x1, [sp, #432] // hv store L27
     ldp x0, x1, [sp, #432] // hv load L27
     add sp, sp, #448 // sp adj
+    ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
+    ret // return
+.globl rt_div_native
+.hidden rt_div_native
+    .p2align 2
+rt_div_native:
+    .loc 1 281 0
+    stp x29, x30, [sp, #-16]! // prologue: save fp/lr
+    mov x29, sp // prologue: set fp
+    sub sp, sp, #112 // sp adj
+    stp x0, x1, [sp, #0] // ingress param 0
+    stp x2, x3, [sp, #16] // ingress param 1
+_La994_rt_div_native_bb0:
+    ldp x0, x1, [sp, #0] // hv load L0
+    ldp x2, x3, [sp, #16] // hv load L1
+    sdiv x1, x1, x3 // __hx_payload_div: x1 = a.pl / b.pl (trunc)
+    movz x0, #0 // __hx_payload_div: TAG_INT
+    stp x0, x1, [sp, #32] // hv store L2
+    ldp x0, x1, [sp, #32] // hv load L2
+    stp x0, x1, [sp, #48] // hv store L3
+    ldp x0, x1, [sp, #48] // hv load L3
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
+    movz x0, #0 // __hx_payload_add: TAG_INT
+    stp x0, x1, [sp, #64] // hv store L4
+    ldp x0, x1, [sp, #64] // hv load L4
+    stp x0, x1, [sp, #80] // hv store L5
+    movz x0, #0 // hv const_int: TAG_INT
+    movz x1, #0 // hv const_int val
+    ldp x2, x3, [sp, #80] // hv load L5
+    mov x0, x1 // __hx_make_val: lo = tag word
+    mov x1, x3 // __hx_make_val: hi = payload word
+    stp x0, x1, [sp, #96] // hv store L6
+    ldp x0, x1, [sp, #96] // hv load L6
+    add sp, sp, #112 // sp adj
+    ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
+    ret // return
+.globl rt_mod_native
+.hidden rt_mod_native
+    .p2align 2
+rt_mod_native:
+    .loc 1 288 0
+    stp x29, x30, [sp, #-16]! // prologue: save fp/lr
+    mov x29, sp // prologue: set fp
+    sub sp, sp, #112 // sp adj
+    stp x0, x1, [sp, #0] // ingress param 0
+    stp x2, x3, [sp, #16] // ingress param 1
+_La994_rt_mod_native_bb0:
+    ldp x0, x1, [sp, #0] // hv load L0
+    ldp x2, x3, [sp, #16] // hv load L1
+    sdiv x4, x1, x3 // __hx_payload_mod: x4 = a.pl / b.pl
+    msub x1, x4, x3, x1 // __hx_payload_mod: x1 = a.pl - x4*b.pl (rem)
+    movz x0, #0 // __hx_payload_mod: TAG_INT
+    stp x0, x1, [sp, #32] // hv store L2
+    ldp x0, x1, [sp, #32] // hv load L2
+    stp x0, x1, [sp, #48] // hv store L3
+    ldp x0, x1, [sp, #48] // hv load L3
+    movz x2, #0 // hv const_int: TAG_INT
+    movz x3, #0 // hv const_int val
+    add x1, x1, x3 // __hx_payload_add: x1 = a.pl add b.pl
+    movz x0, #0 // __hx_payload_add: TAG_INT
+    stp x0, x1, [sp, #64] // hv store L4
+    ldp x0, x1, [sp, #64] // hv load L4
+    stp x0, x1, [sp, #80] // hv store L5
+    movz x0, #0 // hv const_int: TAG_INT
+    movz x1, #0 // hv const_int val
+    ldp x2, x3, [sp, #80] // hv load L5
+    mov x0, x1 // __hx_make_val: lo = tag word
+    mov x1, x3 // __hx_make_val: hi = payload word
+    stp x0, x1, [sp, #96] // hv store L6
+    ldp x0, x1, [sp, #96] // hv load L6
+    add sp, sp, #112 // sp adj
     ldp x29, x30, [sp], #16 // epilogue: restore fp/lr
     ret // return
 .section .hexa.cap,"",@progbits

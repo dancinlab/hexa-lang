@@ -265,3 +265,28 @@ fn rt_cmp_ge_native(a: HexaVal, b: HexaVal) -> HexaVal {
     let fgep = __hx_payload_add(fge, 0)
     return __hx_make_val(2, fgep)
 }
+
+// ── rt_div_native / rt_mod_native: the INT-INT arm of hexa_div / hexa_mod,
+// unlocked by the new __hx_payload_div / __hx_payload_mod codegen leaves (signed
+// i64 idiv/sdiv + remainder). int/int → TAG_INT. The C wrapper (hexa_div/hexa_mod
+// under HEXA_RT_VALOP_NATIVE) keeps EVERYTHING ELSE in C: the divide-by-zero
+// throw (hexa_throw = runtime re-entry, OUT of the leaf class), bool→int coerce,
+// the float/mixed IEEE path (rt_div's __raw_*_f / fdiv), and the non-numeric
+// throw. It delegates here ONLY when both operands are TAG_INT *and* the divisor
+// is nonzero — so this body never divides by zero (the leaf's only UB, same as C
+// int64 `/`/`%`; INT64_MIN/-1 #DE is the identical UB the C body also leaves
+// unguarded). Mirrors rt_sub/mul/add_native exactly, with the int-div leaves.
+//
+// rt_div_native: int/int quotient (truncating toward zero, == C `/`).
+fn rt_div_native(a: HexaVal, b: HexaVal) -> HexaVal {
+    let r = __hx_payload_div(a, b)                   // HX_INT(a) / HX_INT(b)
+    let rp = __hx_payload_add(r, 0)
+    return __hx_make_val(0, rp)
+}
+
+// rt_mod_native: int/int remainder (sign follows dividend, == C `%`).
+fn rt_mod_native(a: HexaVal, b: HexaVal) -> HexaVal {
+    let r = __hx_payload_mod(a, b)                   // HX_INT(a) % HX_INT(b)
+    let rp = __hx_payload_add(r, 0)
+    return __hx_make_val(0, rp)
+}
