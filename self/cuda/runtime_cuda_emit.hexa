@@ -73,6 +73,12 @@ fn emit_runtime_cuda_c() -> str {
             "#ifdef __CUDACC__\n" +
             "#include <cooperative_groups.h>\n" +
             "namespace _hxcg = cooperative_groups;\n" +
+            "/* census r3 (OWN-TF32): WMMA mma.sync Tensor-Core fragments for the own\n" +
+            " * TF32 GEMM that replaces the last cuBLAS dependency (cublasGemmEx). The\n" +
+            " * WMMA 16x16x8 TF32 API lowers to mma.sync.aligned.m16n8k8.f32.tf32.tf32.f32\n" +
+            " * (Ampere sm_80+ path) — sm_90 wgmma is NOT used, so this compiles + runs on\n" +
+            " * consumer Blackwell (sm_120, no wgmma). MUST be top-level (C++ templates). */\n" +
+            "#include <mma.h>\n" +
             "#endif\n" +
             "\n" +
             "/* C linkage for the public surface so that C harnesses (or runtime.c on\n" +
@@ -845,6 +851,84 @@ fn emit_runtime_cuda_c() -> str {
             "    return 0;\n" +
             "}\n" +
             "\n" +
+            "/* census r3 (OWN-TF32, no-cuBLAS): our OWN TF32 Tensor-Core GEMM via the WMMA\n" +
+            " * mma.sync path — the replacement for the last cuBLAS dependency (cublasGemmEx).\n" +
+            " * Row-major C[M,N] = A[M,K] . B[K,N] directly on the FP64 device buffers; inputs\n" +
+            " * are cast double->float->tf32 (~10-bit mantissa) so this is NOT FP64-exact and\n" +
+            " * NOT bit-identical to cublasGemmEx-TF32 (different tensor-op tiling/accum order):\n" +
+            " * the correctness bar is TF32 rel-RMS vs FP64 (~1e-3) and same-dtype agreement\n" +
+            " * with cublasGemmEx-TF32 (oracle), NOT byte-eq. One warp (32 threads) owns one\n" +
+            " * 16x16 C tile; K stepped by 8 (TF32 frag = 16x16x8). A/B sub-tiles are staged to\n" +
+            " * __shared__ with edge zero-pad + per-element __float_to_tf32 round, so the WMMA\n" +
+            " * load is a fixed row_major layout. The WMMA 16x16x8 TF32 op lowers to\n" +
+            " * mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32 (Ampere sm_80+ instruction);\n" +
+            " * sm_90 wgmma is NOT used, so ptxas compiles + runs on consumer Blackwell sm_120\n" +
+            " * (no wgmma). No separate fp32 scratch buffers (vs the cublasGemmEx path) — the\n" +
+            " * cast happens inline during staging, saving 3 device allocs + 3 cast launches. */\n" +
+            "#ifdef __CUDACC__\n" +
+            "__global__ void _hx_k_gemm_tf32_mma(const double* __restrict__ A,\n" +
+            "                                    const double* __restrict__ B,\n" +
+            "                                    double* __restrict__ C,\n" +
+            "                                    int64_t M, int64_t K, int64_t N) {\n" +
+            "    const int64_t row0 = (int64_t)blockIdx.y * 16;   /* C row block (m) */\n" +
+            "    const int64_t col0 = (int64_t)blockIdx.x * 16;   /* C col block (n) */\n" +
+            "    __shared__ float As[16*8];   /* row-major 16x8  A[row0+i, t+l] */\n" +
+            "    __shared__ float Bs[8*16];   /* row-major 8x16  B[t+l, col0+j] */\n" +
+            "    __shared__ float Cs[16*16];\n" +
+            "    nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, 16,16,8, nvcuda::wmma::precision::tf32, nvcuda::wmma::row_major> a_frag;\n" +
+            "    nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, 16,16,8, nvcuda::wmma::precision::tf32, nvcuda::wmma::row_major> b_frag;\n" +
+            "    nvcuda::wmma::fragment<nvcuda::wmma::accumulator, 16,16,8, float> c_frag;\n" +
+            "    nvcuda::wmma::fill_fragment(c_frag, 0.0f);\n" +
+            "    int tid = threadIdx.x;   /* 0..31 (one warp) */\n" +
+            "    for (int64_t t = 0; t < K; t += 8) {\n" +
+            "        for (int idx = tid; idx < 128; idx += 32) {       /* stage As 16x8 */\n" +
+            "            int i = idx >> 3, l = idx & 7;\n" +
+            "            int64_t r = row0 + i, kk = t + l;\n" +
+            "            float v = (r < M && kk < K) ? (float)A[r * K + kk] : 0.0f;\n" +
+            "            As[idx] = nvcuda::wmma::__float_to_tf32(v);\n" +
+            "        }\n" +
+            "        for (int idx = tid; idx < 128; idx += 32) {       /* stage Bs 8x16 */\n" +
+            "            int l = idx >> 4, j = idx & 15;\n" +
+            "            int64_t kk = t + l, c = col0 + j;\n" +
+            "            float v = (kk < K && c < N) ? (float)B[kk * N + c] : 0.0f;\n" +
+            "            Bs[idx] = nvcuda::wmma::__float_to_tf32(v);\n" +
+            "        }\n" +
+            "        __syncwarp();\n" +
+            "        nvcuda::wmma::load_matrix_sync(a_frag, As, 8);\n" +
+            "        nvcuda::wmma::load_matrix_sync(b_frag, Bs, 16);\n" +
+            "        nvcuda::wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);\n" +
+            "        __syncwarp();\n" +
+            "    }\n" +
+            "    nvcuda::wmma::store_matrix_sync(Cs, c_frag, 16, nvcuda::wmma::mem_row_major);\n" +
+            "    for (int idx = tid; idx < 256; idx += 32) {\n" +
+            "        int i = idx >> 4, j = idx & 15;\n" +
+            "        int64_t r = row0 + i, c = col0 + j;\n" +
+            "        if (r < M && c < N) C[r * N + c] = (double)Cs[idx];\n" +
+            "    }\n" +
+            "}\n" +
+            "#endif\n" +
+            "\n" +
+            "/* census r3: own-TF32 dispatcher — launches _hx_k_gemm_tf32_mma over the FP64\n" +
+            " * device buffers (one warp per 16x16 C tile). Returns 0 ok / -1 err. NO cuBLAS. */\n" +
+            "static int _hx_cuda_gemm_tf32_own_dev(double* A_dev, double* B_dev, double* C_dev,\n" +
+            "                                      int64_t M, int64_t K, int64_t N) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    static int _own_tf32_fired = 0;\n" +
+            "    if (!_own_tf32_fired) { _own_tf32_fired = 1;\n" +
+            "        fprintf(stderr, \"[OWN-TF32-FIRED] _hx_k_gemm_tf32_mma WMMA mma.sync DEVICE path (no cuBLAS)\\n\"); }\n" +
+            "    dim3 blk(32);                                       /* one warp per C tile */\n" +
+            "    dim3 grd((unsigned)((N + 15) / 16), (unsigned)((M + 15) / 16));\n" +
+            "    _hx_k_gemm_tf32_mma<<<grd, blk, 0, _forge_stream()>>>(A_dev, B_dev, C_dev, M, K, N);\n" +
+            "    if (_forge_launch_check(\"own_tf32_mma\") != 0) return -1;\n" +
+            "    if (_forge_sync() != 0) return -1;\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)A_dev; (void)B_dev; (void)C_dev; (void)M; (void)K; (void)N;\n" +
+            "    fprintf(stderr, \"[cuda] own-tf32 mma requires CUDACC build\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
             "/* _hx_cuda_farr_matmul_gpu(A, M, K, B, N, C) — Dgemm row-major C = A · B.\n" +
             " *   A is M×K, B is K×N, C is M×N.\n" +
             " *   - Caller (runtime.c) has already allocated C farr_id with len = M·N\n" +
@@ -928,9 +1012,22 @@ fn emit_runtime_cuda_c() -> str {
             "        _hx_k_gemm<<<_ggrd, _gblk, 0, _forge_stream()>>>(A_dev, B_dev, C_dev, M, K, N);\n" +
             "        if (_forge_launch_check(\"own_gemm\") != 0) return -1;\n" +
             "    } else if (_forge_tf32_fastmode()) {\n" +
-            "        /* HEXA-0POD OP-24: deterministic TF32 fast-mode (opt-in). FP64 default is\n" +
-            "         * UNTOUCHED above; this branch only fires when HEXA_TF32_FASTMODE is set. */\n" +
-            "        if (_hx_cuda_gemm_tf32_dev(A_dev, B_dev, C_dev, M, K, N) != 0) return -1;\n" +
+            "        /* HEXA-0POD OP-24: TF32 fast-mode (opt-in). FP64 default is UNTOUCHED above;\n" +
+            "         * this branch only fires when HEXA_TF32_FASTMODE is set. census r3: a\n" +
+            "         * cuBLAS-INDEPENDENT own TF32 path now EXISTS via _hx_cuda_gemm_tf32_own_dev\n" +
+            "         * (WMMA mma.sync, no cuBLAS) and is selected by HEXA_TF32_OWN=1 — this is\n" +
+            "         * what makes the whole-step megakernel possible (a persistent kernel cannot\n" +
+            "         * call cuBLAS). MEASURED on consumer Blackwell sm_120 (RTX 5070, no wgmma):\n" +
+            "         * own mma.sync is ~0.2-0.3x of cublasGemmEx-TF32 even tuned (the consumer\n" +
+            "         * mma.sync throughput ceiling — cuBLAS uses sm_120 tensor-op scheduling the\n" +
+            "         * WMMA API cannot express). So cublasGemmEx STAYS the DEFAULT TF32 path\n" +
+            "         * (no silent perf regression); own-TF32 is opt-in for cuBLAS-free builds and\n" +
+            "         * is the same-dtype-accurate replacement (own/ref == cublas/ref rel-RMS). */\n" +
+            "        if (getenv(\"HEXA_TF32_OWN\") && getenv(\"HEXA_TF32_OWN\")[0]) {\n" +
+            "            if (_hx_cuda_gemm_tf32_own_dev(A_dev, B_dev, C_dev, M, K, N) != 0) return -1;\n" +
+            "        } else {\n" +
+            "            if (_hx_cuda_gemm_tf32_dev(A_dev, B_dev, C_dev, M, K, N) != 0) return -1;\n" +
+            "        }\n" +
             "    } else {\n" +
             "    cublasStatus_t st = cublasDgemm(g_cublas,\n" +
             "                                    CUBLAS_OP_N, CUBLAS_OP_N,\n" +
