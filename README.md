@@ -82,7 +82,7 @@ A binary appears only when every fatal stage passes. The atlas (4.2 MB) is baked
 
 `stdlib/flame` is what you build *with* hexa-lang: a compiler-only neural-network training stdlib (autograd tape · layers · optimizers · tensor primitives) lowered through the same 8-stage strict-lint gate that compiles the compiler itself. No PyTorch wrapping, no ATen import, no Python in the trained binary.
 
-`self/forge` is what flame calls into: a GPU substrate that pairs device-resident hexa arrays (`farr`) with own GEMM kernels — the FP64 and TF32 GEMM paths are **cuBLAS-free** (`HEXA_OWN_GEMM=1` / `HEXA_TF32_OWN=1` retire all 7 production `cublasDgemm`/`cublasGemmEx` calls, measured 0.85~1.24× parity on sm_120) — plus 11 hand-emit `.cu` kernels covering the elementwise / reduction / norm surface, all under a byte-equal correctness contract, plus a BF16 Tensor-Core "mega-kernel" path (RFC 049/060) for the in-kernel-GEMM regime. cuBLAS is still the default GEMM (parity, not a hard dependency); the own-kernel path is the vendor-independent option.
+`self/forge` is what flame calls into: a GPU substrate that pairs device-resident hexa arrays (`farr`) with own GEMM kernels — the FP64 and TF32 GEMM paths are **cuBLAS-free by default** (own kernels retire all 7 production `cublasDgemm`/`cublasGemmEx` calls; `HEXA_OWN_GEMM=0` / `HEXA_TF32_OWN=0` opt-OUT back to cuBLAS — measured 0.85~1.24× parity on sm_120, FP64 own bit-identical to cuBLAS) — plus 11 hand-emit `.cu` kernels covering the elementwise / reduction / norm surface, all under a byte-equal correctness contract, plus a BF16 Tensor-Core "mega-kernel" path (RFC 049/060) for the in-kernel-GEMM regime. own-GEMM is now the default device GEMM (cuBLAS is the opt-out fallback, no longer a hard dependency); the FP64 default is byte-neutral, the TF32 own path (under `HEXA_TF32_FASTMODE`) is byte-changing vs cuBLAS but confined to that already-approximate lane.
 
 `@gpu_kernel → nvptx` (**hexa-cuda**) is how you author a GPU kernel *without leaving hexa*: annotate a function `@gpu_kernel`, write it with the device intrinsics (`gpu_thread_id_x` · `@shared let` · `gpu_barrier` · `gpu_atomic_add` · `gpu_warp_shuffle`), and `hexa build --target=nvptx` emits ptxas-clean PTX for `sm_80` / `sm_90` — no `.cu`, no `nvcc`, no CUDA-C transpile (silicon-proven: vec-add / saxpy run bit-exact on a native H100). It is the kernel-authoring primitive that **forge**'s own device kernels and your own custom kernels both share; you practice it in `hexa dojo`.
 
@@ -145,10 +145,10 @@ What flame + forge buys instead is a **different axis cuBLAS-using stacks cannot
 
 ### We now own the GEMM too — the device stack is 100 % hexa-ownable (CUDA-OWN campaign)
 
-The substrate above calls **cuBLAS** for the GEMM itself — the one piece forge did not own. The CUDA-OWN campaign closes that last gap: an **env-gated own-GEMM** (`HEXA_OWN_GEMM` family) routes every matmul through a hexa-emit kernel instead of cuBLAS. **OFF by default → cuBLAS stays the default path**; flip the env and the entire device GEMM is hexa source — FP64, FP32, and a CUTLASS-grade TF32 WMMA2 tiled kernel.
+The substrate above used to call **cuBLAS** for the GEMM itself — the one piece forge did not own. The CUDA-OWN campaign closed that last gap: the **own-GEMM** (`HEXA_OWN_GEMM` family) now routes every matmul through a hexa-emit kernel instead of cuBLAS. **ON by default → own-GEMM is the default path**; `HEXA_OWN_GEMM=0` opt-OUT reverts to cuBLAS. The default device GEMM is hexa source — FP64 (bit-identical to cuBLAS), FP32, and a CUTLASS-grade TF32 WMMA2 tiled kernel.
 
 ```
-forge GEMM dispatch (env HEXA_OWN_GEMM / _WMMA2 — OFF == cuBLAS default):
+forge GEMM dispatch (own-GEMM default-ON; HEXA_OWN_GEMM=0 == cuBLAS opt-out):
   OFF  → cuBLAS Dgemm / Sgemm                         (vendor, default)
   ON   → _hx_k_gemm (FP64)  ·  _hx_k_sgemm_cm (FP32)  ·  _hx_k_sgemm_cm_wmma2 (TF32 WMMA2)
          └─ launcher precedence WMMA2 > WMMA > TILED > naive ─┘   100 % hexa-ownable
