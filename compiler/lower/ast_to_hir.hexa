@@ -1604,6 +1604,23 @@ fn _desugar_for(e: Expr) -> Expr {
     return _mk_ast_block(outer, sp)
 }
 
+// #3709 — detect a left-spine binop chain deep enough that the recursive
+// _lower_expr would risk overflowing gen3's own native stack. Bounded walk
+// (stops at the threshold). Below the threshold the recursive arm runs
+// UNCHANGED so the byte-eq baseline for hand-written code is untouched; only
+// pathological generated chains (e.g. the 7000-`+` runtime_cuda_emit.hexa
+// string build) take the iterative flatten — where recursion would crash.
+fn _hir_lower_binop_spine_deep(e: Expr) -> bool {
+    let mut depth = 0
+    let mut cur = e
+    while _hir_is_binop_kind(cur.kind) && len(cur.children) > 0 {
+        depth = depth + 1
+        if depth > 1000 { return true }
+        cur = cur.children[0]
+    }
+    return false
+}
+
 fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
     let k = e.kind
     let kind_tag = _expr_kind_tag(k)
@@ -1655,27 +1672,31 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
         return LowerResult { expr: h, sc: sc }
     }
 
-    // ── binop: type from operand types (numeric promotion same-kind) ──
+    // ── binop: deep left-spine FLATTEN (#3709) ──────────────────────────
     //
-    // ITERATIVE LEFT-SPINE FLATTEN (#3709). The parser's precedence-climbing
-    // (parse_additive/_multiplicative/…) builds same-operator runs as a
-    // LEFT-LEANING tree: `a + b + c + …` parses to `((a+b)+c)…`, so child[0]
-    // is itself a binop down the whole chain. A naive `_lower_expr(child[0])`
-    // recursion is then as deep as the chain. A single 7004-line emitter
-    // function (self/cuda/runtime_cuda_emit.hexa — one `let s = "…" + "…" +
-    // …` of ~7000 `+`) drove _lower_expr ~7000 frames deep and SIGSEGV'd
-    // gen3's own stack while compiling it (the -cuda release runtime_cuda.c
-    // emit failure). We descend the child[0] spine with an explicit worklist
-    // and rebuild the HExpr bottom-up — IDENTICAL tree shape + left-to-right
-    // scope threading as the recursion, with O(1) native stack depth.
-    if _hir_is_binop_kind(k) {
-        // Collect the left spine: spine[0] is the OUTERMOST node (== e), each
-        // next is its child[0] while that child is also a binop. The deepest
-        // node's child[0] is the spine BASE (a non-binop, lowered normally).
+    // The parser's precedence-climbing (parse_additive/_multiplicative/…)
+    // builds same-operator runs as a LEFT-LEANING tree: `a + b + c + …`
+    // parses to `((a+b)+c)…`, so child[0] is itself a binop down the whole
+    // chain. A naive `_lower_expr(child[0])` recursion is then as deep as the
+    // chain. A single 7004-line emitter function (self/cuda/runtime_cuda_
+    // emit.hexa — one `let s = "…" + "…" + …` of ~7000 `+`) drove _lower_expr
+    // ~7000 frames deep and SIGSEGV'd gen3's own stack while compiling it
+    // (the -cuda release runtime_cuda.c emit failure, EXIT=139 gdb-confirmed).
+    //
+    // ONLY pathological deep spines take this iterative path; everything
+    // below the threshold falls through to the proven recursive binop arm
+    // below UNCHANGED, so the byte-eq baseline for all hand-written code is
+    // untouched (recursion crashes on the deep spine — there is no prior
+    // baseline to violate there). We descend the child[0] spine with an
+    // explicit worklist and rebuild the HExpr bottom-up — IDENTICAL tree
+    // shape + left-to-right scope threading as the recursion, O(1) stack.
+    if _hir_is_binop_kind(k) && _hir_lower_binop_spine_deep(e) {
+        // spine[0] OUTERMOST (== e); each next is its child[0] while that
+        // child is also a binop. The deepest node's child[0] is the BASE.
         let mut spine: [Expr] = []
         let mut cur = e
         spine.push(cur)
-        while _hir_is_binop_kind(cur.children[0].kind) {
+        while len(cur.children) > 0 && _hir_is_binop_kind(cur.children[0].kind) {
             cur = cur.children[0]
             spine.push(cur)
         }
@@ -1721,6 +1742,38 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
             si = si - 1
         }
         return LowerResult { expr: acc, sc: new_sc }
+    }
+
+    // ── binop: type from operand types (numeric promotion same-kind) ──
+    if _hir_is_binop_kind(k) {
+        let mut new_sc = sc
+        let mut kids: [HExpr] = []
+        let mut i = 0
+        while i < len(e.children) {
+            let r = _lower_expr(e.children[i], atlas, new_sc)
+            kids.push(r.expr)
+            new_sc = r.sc
+            i = i + 1
+        }
+        let mut t = _hir_empty_type()
+        if _hir_is_compare_op(e.text) {
+            t = _hir_t_bool()
+        } else if len(kids) >= 2 {
+            let lt = kids[0].typ
+            let rt = kids[1].typ
+            if _hir_is_numeric(lt) && _hir_is_numeric(rt) && lt.kind == rt.kind {
+                t = lt
+            } else if len(lt.kind) > 0 && lt.kind != "?" {
+                t = lt
+            } else {
+                t = rt
+            }
+        } else if len(kids) == 1 {
+            t = kids[0].typ
+        }
+        let h = _mk_hexpr(kind_tag, e.span, t, e.text,
+                          kids, _empty_atlas_binding(), _hir_miss_def_id())
+        return LowerResult { expr: h, sc: new_sc }
     }
 
     // ── unop: type from operand ─────────────────────────────

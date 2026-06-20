@@ -851,6 +851,25 @@ fn _collect_free(e: HExpr, bound: [string], acc: [string],
 
 // ── HExpr lowering core ─────────────────────────────────────
 
+// #3709 — detect a left-spine binop chain deep enough that the recursive
+// _lower_hexpr would risk overflowing gen3's own native stack. Only such
+// pathological chains (e.g. the 7000-`+` runtime_cuda_emit.hexa string
+// build) take the iterative path; everything below the threshold keeps the
+// proven recursive lowering UNCHANGED, so the byte-eq baseline for all
+// hand-written code is untouched (the iterative path is only ever exercised
+// where recursion would otherwise crash — there is no prior baseline to
+// violate there). Walk is O(depth) but bounded: it stops at the threshold.
+fn _hir_binop_left_spine_deep(e: HExpr) -> bool {
+    let mut depth = 0
+    let mut cur = e
+    while cur.kind == "binop" && len(cur.children) >= 2 {
+        depth = depth + 1
+        if depth > 1000 { return true }
+        cur = cur.children[0]
+    }
+    return false
+}
+
 fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     let k = e.kind
 
@@ -1068,6 +1087,68 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     // §3 P1/P2.
     //
     // ── binop → STMT_BINOP ──────────────────────────────────
+    //
+    // ITERATIVE LEFT-SPINE FLATTEN (#3709). Mirrors the _lower_expr fix in
+    // ast_to_hir.hexa: same-operator runs parse LEFT-LEANING (`a+b+c+…` →
+    // `((a+b)+c)…`), so child[0] is another binop all the way down. A naive
+    // `_lower_hexpr(child[0])` recursion is as deep as the chain — the same
+    // 7000-deep `+` emitter (self/cuda/runtime_cuda_emit.hexa) that blew
+    // _lower_expr's stack also drives THIS HIR→MIR pass ~7000 frames deep.
+    // We descend the child[0] spine with an explicit worklist and emit
+    // STMT_BINOP bottom-up — IDENTICAL post-order statement emission +
+    // _lr_locals mutation + ctx threading as the recursion, O(1) stack.
+    if k == "binop" && _hir_binop_left_spine_deep(e) {
+        // Collect the spine: spine[0] OUTERMOST (== e), each next is its
+        // child[0] while that child is also a 2-child binop.
+        let mut spine: [HExpr] = []
+        let mut cur = e
+        spine.push(cur)
+        while cur.children[0].kind == "binop" && len(cur.children[0].children) >= 2 {
+            cur = cur.children[0]
+            spine.push(cur)
+        }
+        // Lower the spine base (deepest child[0]) first — matches the
+        // recursion fully lowering the leftmost leaf before any binop emit.
+        let mut acc = _lower_hexpr(ctx, spine[len(spine) - 1].children[0])
+        let mut cur_ctx = acc.ctx
+        let mut left_op = acc.operand
+        // Unwind deepest→outermost. Each node: lower its right child, emit
+        // STMT_BINOP(left_op, right) into a fresh local, propagate as left.
+        let mut si = len(spine) - 1
+        while si >= 0 {
+            let bnode = spine[si]
+            let rr0 = _lower_hexpr(cur_ctx, bnode.children[1])
+            let mut bctx = _fresh_local(rr0.ctx, bnode.typ, "t")
+            let braw_dst = _lr_locals[len(_lr_locals) - 1]
+            let bdst_precision = _precision_from_typ_kind(bnode.typ.kind)
+            let bdst = Local {
+                id: braw_dst.id,
+                arena_id: braw_dst.arena_id,
+                type_id: braw_dst.type_id,
+                name_hint: braw_dst.name_hint,
+                precision: bdst_precision,
+                space: ""
+            }
+            _lr_locals[len(_lr_locals) - 1] = bdst
+            let bop_name = _op_with_precision(bnode.text, bdst_precision)
+            let mut bargs: [Operand] = []
+            bargs.push(left_op)
+            bargs.push(rr0.operand)
+            let bs = Stmt {
+                kind: STMT_BINOP,
+                dst: bdst,
+                op: bop_name,
+                args: bargs,
+                target_block: -1,
+                target_block_else: -1
+            }
+            bctx = _push_stmt(bctx, bs)
+            cur_ctx = bctx
+            left_op = _local_op(bdst.id)
+            si = si - 1
+        }
+        return _value(cur_ctx, left_op)
+    }
     if k == "binop" {
         if len(e.children) < 2 { return _no_value(ctx) }
         let lr = _lower_hexpr(ctx, e.children[0])
