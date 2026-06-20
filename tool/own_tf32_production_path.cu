@@ -16,6 +16,11 @@
 #define OWNTF_PROD_HARNESS 1
 #include "OWNTF_RUNTIME_C"   // replaced by build script with emitted /tmp/runtime_cuda.c path
 
+// farr-registry globals (defined in the host runtime, not this harness). The
+// emitted runtime's farr GPU helpers reference them, but the TF32-GEMM path we
+// measure never touches the registry — provide empty defs to satisfy the linker.
+extern "C" { HexaFarrEntry* _hx_farr_table = nullptr; int64_t _hx_farr_count = 0; }
+
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
