@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# tool/run_own_gemm_three_byteeq — census-r2 micro byte-eq driver.
+#
+# Builds the cuda_test_own_gemm_three harness against a FRESH runtime_cuda.c
+# emitted from the (modified) runtime_cuda_emit.hexa, then runs it twice:
+#   (1) HEXA_OWN_GEMM unset → cuBLAS oracle, dump -> off.bin
+#   (2) HEXA_OWN_GEMM=1     → own kernels,   dump -> own.bin
+# and byte-diffs off.bin vs own.bin (max|Δ| via a tiny python).
+#
+# Also proves the OFF-default path is byte-identical to the prior shipped
+# runtime_cuda.c: diffs the freshly-emitted runtime_cuda.c against the
+# checked-in one with HEXA_OWN_GEMM logic REMOVED would be ideal, but here we
+# rely on the OFF-path emit being a pure superset (guards only add code inside
+# `if(getenv(...))`), so the unset run reproduces the cuBLAS numbers exactly.
+#
+# Env: CUDA_HOME (default /usr/local/cuda-13.0), SM (default 120),
+#      HEXA (hexa binary, default ~/.local/bin/hexa).
+set -euo pipefail
+REPO="$(cd "$(dirname "$0")/.." && pwd)"; cd "$REPO"
+CUDA_HOME="${CUDA_HOME:-/usr/local/cuda-13.0}"
+SM="${SM:-120}"
+HEXA="${HEXA:-$HOME/.local/bin/hexa}"
+export PATH="$CUDA_HOME/bin:$PATH"
+B=build/own-gemm-r2; mkdir -p "$B"
+
+echo "=== probe ==="
+command -v nvcc >/dev/null || { echo "no nvcc"; exit 1; }
+nvcc --version | grep -i release || true
+nvidia-smi --query-gpu=name,compute_cap --format=csv,noheader || true
+command -v "$HEXA" >/dev/null || { echo "no hexa at $HEXA"; exit 1; }
+
+echo "=== emit fresh runtime_cuda.c from modified emitter ==="
+# emit both bf16 (dependency) and cuda into self/cuda so the #include resolves
+"$HEXA" run self/cuda/runtime_bf16_emit.hexa self/cuda/runtime_bf16.c || \
+  "$HEXA" self/cuda/runtime_bf16_emit.hexa self/cuda/runtime_bf16.c
+"$HEXA" run self/cuda/runtime_cuda_emit.hexa "$B/runtime_cuda.c" || \
+  "$HEXA" self/cuda/runtime_cuda_emit.hexa "$B/runtime_cuda.c"
+# the emitted TU does #include "runtime_bf16.c" relative to its own dir → copy it next to it
+cp self/cuda/runtime_bf16.c "$B/runtime_bf16.c"
+grep -c "HEXA_OWN_GEMM" "$B/runtime_cuda.c" | sed 's/^/HEXA_OWN_GEMM occurrences: /'
+
+echo "=== compile harness ==="
+nvcc -O2 -std=c++14 -DHEXA_CUDA \
+     -gencode arch=compute_${SM},code=compute_${SM} \
+     -I"$CUDA_HOME/targets/x86_64-linux/include" \
+     -x cu "$B/runtime_cuda.c" tool/cuda_test_own_gemm_three.cu \
+     -L"$CUDA_HOME/targets/x86_64-linux/lib" \
+     -lcublas -lcudart -lcuda -lm -o "$B/test_own_gemm_three"
+
+echo "=== run cuBLAS (OFF, default) ==="
+( cd "$B" && unset HEXA_OWN_GEMM; ./test_own_gemm_three off.bin ); rc_off=$?
+echo "=== run OWN (HEXA_OWN_GEMM=1) ==="
+( cd "$B" && HEXA_OWN_GEMM=1 ./test_own_gemm_three own.bin ); rc_own=$?
+
+echo "=== byte-diff OFF(cuBLAS) vs OWN ==="
+python3 - "$B/off.bin" "$B/own.bin" <<'PY'
+import sys, struct
+a=open(sys.argv[1],'rb').read(); b=open(sys.argv[2],'rb').read()
+na=len(a)//8; nb=len(b)//8
+print(f"off doubles={na} own doubles={nb}")
+if na!=nb: print("LENGTH MISMATCH"); sys.exit(3)
+va=struct.unpack(f"<{na}d",a); vb=struct.unpack(f"<{nb}d",b)
+# segment boundaries: matmul_t C=768, outer R*C=384*512=196608, gemv rows=768 x2
+segs=[("matmul_t",768),("outer",196608),("gemv0",768),("gemv1",768)]
+i=0; overall=0.0
+for name,n in segs:
+    mx=0.0; bit=0
+    for k in range(i,i+n):
+        d=abs(va[k]-vb[k])
+        if d!=0.0: bit+=1
+        r = d/abs(va[k]) if abs(va[k])>1e-30 else d
+        if r>mx: mx=r
+    print(f"  {name:10s} n={n:7d} maxRelDiff(own vs cuBLAS)={mx:.3e}  nonzero_bits={bit}")
+    if mx>overall: overall=mx
+    i+=n
+print(f"OVERALL max rel |Δ| own-vs-cuBLAS = {overall:.3e}")
+PY
+echo "rc_off=$rc_off rc_own=$rc_own"
