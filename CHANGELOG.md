@@ -1,4 +1,9 @@
-## fix(install): `/etc/profile.d/hexa.sh` 시스템 PATH — 비대화형/로그인 셸서 `hexa` not-found 차단 (ING #80)
+## fix(install): `HEXA_CUDA=1` 설치가 cuBLAS 런타임을 CPU 로 덮어써 `cuda_available()=0` 차단 (ING #82)
+
+`HEXA_CUDA=1` 로 edge cuda 자산을 깔아도 `cuda_available()=0`(CPU 바이너리)으로 떨어지던 근본 2버그를 교정 (ING #82, anima GPU decode 막힘).
+
+- **FIX-1 (근본·toolchain-consistent) — `_hx_cuda_farr_silu_gate_gpu` extern-before-use**: frozen `self/runtime.c`(151c52c8…)가 `hexa_farr_silu_gate_gpu` 의 `#ifdef HEXA_CUDA` 블록 안에서 `_hx_cuda_farr_silu_gate_gpu()` 를 **호출한 ~581줄 뒤에** extern 을 선언 — 형제 cuda 디스패처(matmul/softmax/rmsnorm/add/scale)는 전부 사용 전 선언인데 이것만 역순. CI 는 gcc(implicit-decl=경고로 통과)지만 install 은 `CC=clang -std=gnu11`(C99=에러) → cuda 런타임 컴파일이 하드-에러 → CPU 로 폴백. runtime.c 는 emitter 없는 frozen blob 이라 `tool/restore_frozen_seeds` 의 결정적 post-restore awk 패치로 **호출 직전에 함수-로컬 extern 을 주입**(matmul:8249 선례와 동일). 뒤의 중복 extern 은 유지(동일 extern 재선언은 합법 C). OFF-CUDA 는 `#ifdef HEXA_CUDA` 전체가 전처리 제거 → **CPU 런타임 byte-unchanged**(clang -E CPU 전처리 SHA256 동일 캡처). clang `-std=gnu11`: OLD=implicit-decl 에러 exit1 → NEW=clean exit0. (`tool/restore_frozen_seeds`)
+- **FIX-2 (방어) — cuda 자산의 cuBLAS runtime.a 덮어쓰기 차단**: cuda 자산 tarball 이 싣는 cuBLAS-링크 `build/runtime.a`(runtime_cuda.o + native rt_*_native 시드)를 `install_hexa` 가 `$HX_BIN/build/` 로 복사한 뒤, `install_src` 의 `stage_resolve_runtime_a` 가 **CPU 전용 runtime.a 를 재빌드해 그 위에 `cp`** 로 덮어써 cuda 객체를 날렸음(자산은 정상, install 이 망가뜨림). cuda 자산일 때 `stage_resolve_runtime_a` overwrite 를 **건너뛰고** tarball 의 cuBLAS runtime.a 를 보존(+ pre-warm 일관성 위해 `$HX_SRC/build/` 로도 미러). (`install.sh`)
 
 `install.sh` 가 per-user rc(`~/.bashrc`·`~/.zshrc`)에만 PATH 를 써서, 클라우드 pod 의 detach/비대화형 셸(setsid·nohup·`hexa cloud nohup/fire` 가 emit 하는 `bash -c` 원샷)은 `~/.hx/bin` 을 PATH 에 못 얻어 bare `hexa` 가 `command not found` 로 조용히 죽었음(ING #80, anima H_1464 conc-80 decode 전량 실패로 발견). install 이 `/etc/profile.d/hexa.sh`(로그인 셸 `bash -lc` 가 source)도 best-effort 로 설치 — `/etc/profile.d` 쓰기 가능할 때만(pod root), 미권한 유저는 per-user rc 유지. 클라우드측 보완(=`cloud exec/nohup` 이 원격 명령을 로그인 셸로 실행)은 cloud 도메인 후속. (`install.sh`)
 
