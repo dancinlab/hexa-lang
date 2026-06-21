@@ -2895,11 +2895,19 @@ fn _x86_ascii_code(ch: string) -> i64 {
 }
 
 fn _x86_str_to_hex_bytes(s: string) -> string {
-    let cs = s.chars()
+    // r22 — UTF-8-preserving rodata bytes (direct port of arm64_darwin.hexa
+    // _str_to_hex_bytes Cycle-39 fix). The prior s.chars() + _x86_ascii_code
+    // path mapped every non-ASCII byte (>= 0x80 = a UTF-8 continuation byte)
+    // to ? (63) via the ASCII-only lookup's `return 63` fallthrough — so a
+    // string literal with a multibyte char emitted 0x3f instead of the real
+    // bytes (the dominant r20/r21 silent-differ once the global-param-clobber
+    // was fixed). s.bytes() returns per-byte i64 entries (raw 0..255),
+    // preserving every UTF-8 byte verbatim.
+    let bs = s.bytes()
     let mut out = ""
     let mut i = 0
-    while i < len(cs) {
-        out = out + _x86_byte_to_hex(_x86_ascii_code(cs[i]))
+    while i < len(bs) {
+        out = out + _x86_byte_to_hex(bs[i])
         i = i + 1
     }
     out = out + "00"
