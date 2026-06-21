@@ -1478,10 +1478,24 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
         if len(s.args) >= 1 {
             let mut src_scratch = "r10"
             if _x86_is_spilled(rm, s.dst.id) { src_scratch = "r11" }
-            _x86_op_rm(s.args[0], st, rm, src_scratch, opts)
-            let src = _x86_op_resolve(s.args[0], st, rm, src_scratch, opts)
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
-            _x86_buf.push(_x86_instr2("mov", dst, src, "assign L" + to_string(s.dst.id)))
+            // r18 — a string-literal assignment (let s = LITERAL) must load
+            // the ADDRESS of the .LCstr (RIP-relative lea), NOT a mov dst,label
+            // which assembles as an absolute 32-bit imm (R_X86_64_32S reloc —
+            // invalid under PIE) AND a wrong value, so a later s.trim()/method
+            // call deref'd garbage → SEGV (c8_string_methods). Mirrors the
+            // const_str arms in _x86_hv_box_arg / _x86_emit_cstr_key.
+            if s.args[0].kind == "const_str" {
+                let mut _slbl = _x86_strtab_lookup(st, s.args[0].str_val)
+                if len(_slbl) == 0 { _slbl = s.args[0].str_val }
+                _x86_buf.push(_x86_instr2("lea", dst,
+                                 _x86_op_label("[rip+" + _slbl + "]"),
+                                 "assign L" + to_string(s.dst.id) + ": &str " + _slbl))
+            } else {
+                _x86_op_rm(s.args[0], st, rm, src_scratch, opts)
+                let src = _x86_op_resolve(s.args[0], st, rm, src_scratch, opts)
+                _x86_buf.push(_x86_instr2("mov", dst, src, "assign L" + to_string(s.dst.id)))
+            }
             // PAIR-MODEL — carry the source value's tag to the dst so an
             // assigned string/array keeps its HexaVal tag (e.g. `let x = s`).
             // RT-NATIVE measure-9 (tag-corruption root-cause): the tag-slot
