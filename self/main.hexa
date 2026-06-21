@@ -4245,6 +4245,27 @@ fn _run_cache_key(file) {
 // tree-walking interpreter is retired — g_interp_deprecated). The
 // absorbed-verb sites (lsp / test / check / qrng / batch / …) call
 // cmd_run directly.
+// ING #79 root-fix: non-fatal probe of host C-compiler availability (mirrors
+// host_cc() resolution WITHOUT the :1345 fatal). Returns true iff a C compiler
+// is invocable ($CC / $NATIVE_CC override, or clang/cc/gcc on PATH, or darwin
+// where clang ships with the Xcode CLT). Used by cmd_run_user_direct to AUTO-
+// ENGAGE the native cold path on a clang-less host (vast/runpod pods) instead
+// of letting the inner `hexa build` fatal "no host C compiler found".
+fn _host_cc_available() -> bool {
+    // Test/forcing hook: HEXA_ASSUME_NO_CC=1 simulates the clang-less-pod
+    // condition on a clang-bearing host (and is an explicit operator escape
+    // to force the native route). Checked FIRST so it overrides real probes.
+    if env("HEXA_ASSUME_NO_CC") == "1" { return false }
+    if env("CC") != "" { return true }
+    if env("NATIVE_CC") != "" { return true }
+    if _cc_which("clang") != "" { return true }
+    if _cc_which("cc") != "" { return true }
+    if _cc_which("gcc") != "" { return true }
+    // darwin always has clang via the Xcode CLT (host_cc()'s pre-fatal default).
+    let uname_s = exec_with_status("uname -s 2>/dev/null")
+    if uname_s[1] == 0 && uname_s[0].trim() == "Darwin" { return true }
+    return false
+}
 fn cmd_run_user_direct(file, extra_args) {
     // `hexa run <file>` COMPILES then executes — the tree-walking
     // interpreter is retired (g_interp_deprecated). compile OK → exec the
@@ -4301,7 +4322,15 @@ fn cmd_run_user_direct(file, extra_args) {
     // build` loop below UNTOUCHED, so no program that worked before can break.
     // MEASURED viable on x86_64-linux: aprime --emit=obj → ld+crt+runtime.a+-lm
     // -lc -lpthread → rc-correct binary, zero clang execve.
-    if !file_exists(tmpbin) && env("HEXA_RUN_NATIVE") == "1" {
+    // ING #79: engage the native cold path when EITHER explicitly opted in
+    // (HEXA_RUN_NATIVE=1) OR no host C compiler is available (clang-less pod —
+    // the inner `hexa build` would otherwise fatal "no host C compiler found").
+    // The no-cc trigger is byte/release-safe by construction: it only changes
+    // the currently-FATAL path (a clang-less host = instant death today); hosts
+    // WITH clang keep _host_cc_available()==true → unchanged behavior. Set
+    // HEXA_RUN_CTRANSPILE=1 to force the C path even on a clang-bearing host.
+    let _run_native_on = (env("HEXA_RUN_NATIVE") == "1" || !_host_cc_available()) && env("HEXA_RUN_CTRANSPILE") != "1"
+    if !file_exists(tmpbin) && _run_native_on {
         let _ncc = resolve_native_cc()
         let _nrt = resolve_prebuilt_runtime()
         let _nld = exec("command -v ld 2>/dev/null | tr -d '\n'")
