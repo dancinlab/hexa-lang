@@ -1253,8 +1253,27 @@ fn _x86_dst_reg(rm: X86RegMap, id: i64) -> string {
     return _x86_reg_lookup(rm, id)
 }
 
+// r14 — count STMT_TRY_SETJMP in a fn; each gets a 256-byte jmp_buf slot
+// (glibc jmp_buf is 200 B; 256 = 16-aligned headroom) reserved at the BOTTOM
+// of the frame ([rsp + slot*256]). Mirrors
+// arm64_darwin.hexa::_arm64_count_try_setjmp.
+fn _x86_count_try_setjmp(mf: MFunc) -> i64 {
+    let mut n = 0
+    let mut bi = 0
+    while bi < len(mf.blocks) {
+        let blk = mf.blocks[bi]
+        let mut si = 0
+        while si < len(blk.stmts) {
+            if blk.stmts[si].kind == "try_setjmp" { n = n + 1 }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    return n
+}
 fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                     st: X86StrTab, rm: X86RegMap, spill_frame: i64,
+                    try_buf_bytes: i64, try_slot_idx: i64,
                     opts: CodegenOptions) {
     if s.kind == _STMT_ASSIGN {
         // array_lit constructor: dst = hexa_array_new(); then
@@ -2330,6 +2349,60 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
         }
         return
     }
+    if s.kind == "try_setjmp" {
+        // jmp_buf slot at [rsp + slot*256] (bottom of frame). lea &jbuf →
+        // rdi, call libc setjmp; on nonzero return (longjmp-resumed) jump
+        // to catch (target_block_else); on first call (0) push jbuf onto the
+        // runtime try-stack then jump into the try body (target_block).
+        let _off = try_slot_idx * 256
+        _x86_buf.push(_x86_instr2("lea", _x86_op_reg("rdi"),
+                         _x86_op_mem("rsp", _off),
+                         "try_setjmp: &jbuf[" + to_string(try_slot_idx) + "]"))
+        _x86_buf.push(_x86_instr1("call", _x86_op_label("setjmp"),
+                         "try_setjmp: call libc setjmp (hxlcl_setjmp is a macro on x86_64)"))
+        _x86_buf.push(_x86_instr2("test", _x86_op_reg("eax"), _x86_op_reg("eax"),
+                         "try_setjmp: setjmp rc"))
+        let _catch_lab = _x86_64_block_label(modhash, fname, s.target_block_else)
+        _x86_buf.push(_x86_instr1("jnz", _x86_op_label(_catch_lab),
+                         "try_setjmp: rc!=0 -> catch"))
+        _x86_buf.push(_x86_instr2("lea", _x86_op_reg("rdi"),
+                         _x86_op_mem("rsp", _off),
+                         "try_setjmp: &jbuf for push"))
+        _x86_buf.push(_x86_instr1("call", _x86_op_label("__hexa_try_push"),
+                         "try_setjmp: register jbuf"))
+        let _try_lab = _x86_64_block_label(modhash, fname, s.target_block)
+        _x86_buf.push(_x86_instr1("jmp", _x86_op_label(_try_lab),
+                         "try_setjmp: enter try body"))
+        return
+    }
+    if s.kind == "try_pop" {
+        _x86_buf.push(_x86_instr1("call", _x86_op_label("__hexa_try_pop"),
+                         "try_pop: drop jbuf from try-stack"))
+        return
+    }
+    if s.kind == "try_last_err" {
+        // catch entry — __hexa_last_error() → HexaVal in rax:rdx → dst.
+        _x86_buf.push(_x86_instr1("call", _x86_op_label("__hexa_last_error"),
+                         "try_last_err: HexaVal __hexa_last_error()"))
+        if s.dst.id >= 0 {
+            let _d = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
+            _x86_store_tag_reg(rm, s.dst.id, "rax")
+            _x86_buf.push(_x86_instr2("mov", _d, _x86_op_reg("rdx"),
+                             "try_last_err: capture err payload"))
+            _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+        }
+        return
+    }
+    if s.kind == "throw" {
+        // box err HexaVal → rdi:rsi; hexa_throw longjmps to the top try
+        // frame (or exits). Never returns; the lowerer terminated the block.
+        if len(s.args) >= 1 {
+            _x86_hv_box_arg(s.args[0], st, rm, "rdi", "rsi", opts)
+        }
+        _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_throw"),
+                         "throw: hexa_throw(err)"))
+        return
+    }
     _x86_buf.push(_x86_instr0("nop", "unhandled stmt kind " + s.kind))
     return
 }
@@ -2343,7 +2416,11 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
     // C6 — run linear-scan regalloc up front.
     let alloc = _x86_64_assign_regs(mf)
     let rm = alloc.map
-    let spill_frame = alloc.frame_size
+    // r14 — fold jmp_buf (256 B / try; glibc jmp_buf=200 B) into the frame;
+    // bottom-of-frame at [rsp + slot*256], below the rbp-relative spill slots.
+    let _try_cnt = _x86_count_try_setjmp(mf)
+    let _try_buf_bytes = _try_cnt * 256
+    let spill_frame = alloc.frame_size + _try_buf_bytes
 
     // Prologue
     _x86_buf.push(_x86_instr1("push", _x86_op_reg("rbp"), "prologue: save rbp"))
@@ -2418,14 +2495,19 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
         p = p + 1
     }
 
+    let mut _x86_try_idx_acc = 0
     let mut bi = 0
     while bi < len(mf.blocks) {
         let blk = mf.blocks[bi]
         _x86_buf.push(_x86_instr0("label", _x86_64_block_label(modhash, mf.name, blk.id)))
         let mut si = 0
         while si < len(blk.stmts) {
+            // r14 — monotonic jmp_buf slot per try_setjmp (POP reuses its slot)
+            let _cur_try = _x86_try_idx_acc
+            if blk.stmts[si].kind == "try_setjmp" { _x86_try_idx_acc = _x86_try_idx_acc + 1 }
             _emit_x86_64_stmt(modhash, mf.name,
-                                       blk.stmts[si], st, rm, spill_frame, opts)
+                                       blk.stmts[si], st, rm, spill_frame,
+                                       _try_buf_bytes, _cur_try, opts)
             si = si + 1
         }
         bi = bi + 1
