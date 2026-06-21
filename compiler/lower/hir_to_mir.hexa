@@ -1418,6 +1418,39 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                 return _no_value(ctx_mm)
             }
         }
+        // r8 ROOT B — multi-arg print/println split (mirror self/codegen.hexa:6063).
+        // hexa_println/print_val/eprintln take ONE HexaVal; a single multi-arg call
+        // drops args[1..]. Emit print_val(op="print") per non-last arg, then let the
+        // normal STMT_CALL below handle the LAST arg with the original verb.
+        // Scope: println/print (stdout) only — the non-last arg uses op="print"
+        // (→hexa_print_val, mapped in _builtin_runtime_sym). eprintln/eprint are
+        // EXCLUDED (native has no "eprint"→hexa_eprint_val sym; splitting them would
+        // emit an undefined ref) — they keep the current single-call behavior (no
+        // regression). The corpus print-empty bugs (c1/c3/c7) all use println.
+        let _is_print_fam = callee_text == "println" || callee_text == "print"
+        if _is_print_fam && len(arg_ops) > 1 {
+            let mut _pi = 0
+            while _pi < len(arg_ops) - 1 {
+                let mut _pctx = _fresh_local(ctx_r, e.typ, "print_arg")
+                let _pdst = _lr_locals[len(_lr_locals) - 1]
+                let mut _pargs: [Operand] = []
+                _pargs.push(arg_ops[_pi])
+                let _ps = Stmt {
+                    kind: STMT_CALL,
+                    dst: _pdst,
+                    op: "print",
+                    args: _pargs,
+                    target_block: -1,
+                    target_block_else: -1
+                }
+                ctx_r = _push_stmt(_pctx, _ps)
+                _pi = _pi + 1
+            }
+            // reduce arg_ops to just the LAST arg for the trailing call below
+            let mut _last: [Operand] = []
+            _last.push(arg_ops[len(arg_ops) - 1])
+            arg_ops = _last
+        }
         let mut ctx2 = _fresh_local(ctx_r, e.typ, "call_ret")
         let dst = _lr_locals[len(_lr_locals) - 1]
         let s = Stmt {

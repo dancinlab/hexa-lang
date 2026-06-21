@@ -840,6 +840,8 @@ fn _x86_is_arith_div(op: string) -> bool { return op == "div" || op == "/" }
 fn _x86_is_bit_and(op: string) -> bool   { return op == "and" || op == "&" }
 fn _x86_is_bit_or(op: string) -> bool    { return op == "or"  || op == "|" }
 fn _x86_is_bit_xor(op: string) -> bool   { return op == "xor" || op == "^" }
+fn _x86_is_shift_l(op: string) -> bool   { return op == "shl" || op == "<<" }
+fn _x86_is_shift_r(op: string) -> bool   { return op == "shr" || op == ">>" }
 fn _x86_is_concat(op: string) -> bool    { return op == "concat" }
 
 // Tag-aware arithmetic binop → runtime helper symbol. Mirrors arm64's
@@ -1634,6 +1636,27 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                 _x86_buf.push(_x86_instr1("idiv", divisor, "binop /"))
                 _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
                                  "idiv quotient → dst"))
+                _x86_store_tag_imm(rm, s.dst.id, 0) // TAG_INT
+                _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+                return
+            }
+            // r8 ROOT B — shift `<<`/`>>`. No native case existed → fell to
+            // the default mnemonic "add" (a<<8 emitted as add dst,8). x86 shift
+            // count must be in CL; >> is arithmetic (sar) for signed i64
+            // (matches arm64 asr). Emit mov dst,a / mov rcx,count / shl|sar dst,cl.
+            if _x86_is_shift_l(s.op) || _x86_is_shift_r(s.op) {
+                // x86 shift count must be in CL. Collision-safe order: load the
+                // count into rcx FIRST (b lives in b_scratch=r11), then load lhs
+                // into r10 (a_scratch), shift r10 by cl, write dst LAST. dst may
+                // be rcx (allocatable) but rcx is already consumed by the shift;
+                // dst may be r10 (then the final mov is a harmless self-move).
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rcx"), b, "shift count → rcx (cl)"))
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r10"), a, "shift lhs → r10"))
+                let mut _sm = "shl"
+                if _x86_is_shift_r(s.op) { _sm = "sar" }
+                _x86_buf.push(_x86_instr2(_sm, _x86_op_reg("r10"), _x86_op_reg("cl"),
+                                 "binop " + s.op + " (count in cl)"))
+                _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("r10"), "shift result → dst"))
                 _x86_store_tag_imm(rm, s.dst.id, 0) // TAG_INT
                 _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
                 return

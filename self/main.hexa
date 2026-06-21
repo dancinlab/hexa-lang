@@ -4337,8 +4337,28 @@ fn cmd_run_user_direct(file, extra_args) {
         if len(_ncc) > 0 && len(_nrt) > 0 && len(_nld) > 0 {
             let _nobj = tmpbin + ".no." + to_string(mono_ns()) + ".o"
             let _nbin = tmpbin + ".nb." + to_string(mono_ns())
-            // 1) native object emit (no clang)
-            let _ne = exec("'" + _ncc + "' _drv.hexa --emit=obj --target=x86_64-linux-gnu -o '" + _nobj + "' '" + file + "' 2>&1")
+            // r8 ROOT A — flatten the use-closure BEFORE native emit (mirrors
+            // cmd_build:3076 flatten). aprime --emit=obj on the un-flattened
+            // single file leaves `use`/`import`/`from`/`pub use` closure symbols
+            // undefined at the ld link (e.g. `undefined reference to has_key`) →
+            // fallback to clang. Flattening (module_loader → expanded .hexa) puts
+            // every closure symbol in one TU so the native .o links standalone.
+            // Non-import programs skip flatten (file used as-is). On flatten
+            // failure/absent loader, fall through to the clang path (delegate-
+            // fallback intact) by leaving _nsrc empty → native block no-ops.
+            let mut _nsrc = file
+            let _nprobe = read_file(file)
+            let _nhas_imp = _nprobe.contains("\nuse \"") || _nprobe.starts_with("use \"") || _nprobe.contains("\nimport \"") || _nprobe.starts_with("import \"") || _nprobe.contains("\nfrom \"") || _nprobe.starts_with("from \"") || _nprobe.contains("\npub use \"") || _nprobe.starts_with("pub use \"") || _nprobe.contains("\npub import \"") || _nprobe.starts_with("pub import \"")
+            if _nhas_imp {
+                let _nml = resolve_module_loader_compiled()
+                if len(_nml) > 0 {
+                    let _nexp = runtime_tmpname("hexa_run_native_expanded") + ".hexa"
+                    let _ = exec(module_loader_env_prefix() + "'" + _nml + "' '" + file + "' '" + _nexp + "' 2>&1")
+                    if file_exists(_nexp) { _nsrc = _nexp } else { _nsrc = "" }
+                } else { _nsrc = "" }
+            }
+            // 1) native object emit (no clang) — on the flattened source
+            let _ne = if len(_nsrc) > 0 { exec("'" + _ncc + "' _drv.hexa --emit=obj --target=x86_64-linux-gnu -o '" + _nobj + "' '" + _nsrc + "' 2>&1") } else { "flatten-failed-skip-native" }
             let _nobj_ok = exec("test -s '" + _nobj + "' && printf yes || printf no")
             if _nobj_ok == "yes" {
                 // 2) ld link (no clang): crt + runtime.a + libm/libc/pthread.
