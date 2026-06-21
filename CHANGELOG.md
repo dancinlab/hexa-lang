@@ -20,6 +20,9 @@
 ## docs: 폐기된 forge/flame README 잔여 깨진 링크 정리 (#3754 후속)
 
 #3754가 self/forge/README + stdlib/flame/README를 폐기 후 남은 dead 링크 3곳을 PERF.md/PLAN.md로 재지정: gpu/HANDOFF.md·rfc_050_flame_forge_integration.md·stdlib/flame/STATUS.md. broken-link 0 확인. doc-only.
+## fix(self): typecheck — array 리터럴이 `[T]` list 어노테이션과 unify (phantom mismatch 제거)
+
+`self/type_checker.hexa`(= `hexa typecheck` 백엔드)의 `types_compatible`가 exact-string compare라, `-> [str]`로 선언된 함수가 array 리터럴(`["a","b"]`·`[]`·`ids.push(); return ids`)을 반환하면 추론값이 generic 토큰 `"array"`로 잡혀 선언 `"[str]"`과 불일치로 오판 → `stdlib/cloud/vast.hexa`에서만 `expected '[str]', got 'array'` phantom 에러 16건(`_vast_default_filters`·`_vast_gpu_variants`·`instance_ids` field 등). 출하 native/C codegen은 정상 컴파일 — self-checker만 drift(이미 고친 `str`/`String`→`string` 별칭 정규화와 동일 class). 근본수정: `tc_is_list_annotation`(`[`로 시작·`]`로 끝나는 어노테이션 판정) 추가 + `types_compatible`에서 한쪽이 generic `array`이고 다른 쪽이 `[T]` list 어노테이션이면 unify(element-type 불명이므로 어떤 `[T]`와도 호환). 출하 컴파일러의 구조적 List/Array Type 모델 미러(reference-first) — 보수적이라 비-list mismatch(int vs [str]·string vs int)는 그대로 에러. 임베디드 self-test 15→18 (Test 11a/11b array·[] 통과 + Test 12 int-into-[str] 여전히 에러, 기존 Test 4/9 genuine mismatch 유지). 로컬 `hexa` 바이너리는 stale 컴파일본이라 `hexa typecheck`는 옛 로직을 돌림 → 로컬 권위는 `hexa run self/type_checker.hexa` self-test, 크로스타깃 증명은 PR CI.
 
 ## docs: self/forge/README.md + stdlib/flame/README.md 폐기 (삭제)
 
