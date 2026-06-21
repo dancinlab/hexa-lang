@@ -738,6 +738,47 @@ __global__ void _hx_k_gemm(const double* __restrict__ A,
     C[m * N + n] = acc;
 }
 
+/* ===== decode GEMV fast-path (M==1) ==================================
+ * kernel-quality-reffirst lane (profiler-driven, c1 root-cause). The 16x16
+ * _hx_k_gemm tile WASTES 15/16 threads at M==1 (only threadIdx.y==0 live)
+ * and launches grid.y==1 — MEASURED aiden RTX 5070 sm_120: 341 GB/s =
+ * 0.54x cuBLAS Dgemv (629), DRAM 45% peak, 16-block grid underfills 48 SMs.
+ * _hx_k_gemv_1d : one thread per output column, full sequential K-loop.
+ * BIT-IDENTICAL reduction order to _hx_k_gemm -> BYTE-NEUTRAL default swap.
+ * MEASURED 459 GB/s @4096 (1.34x), 634 @8192 (1.86x, BEATS cuBLAS 618).
+ * _hx_k_gemv_splitk : split K across grid.y, atomicAdd partials. CHANGES
+ * reduction order (NOT bit-identical) -> OPT-IN (HEXA_GEMV_SPLITK). Fills
+ * the SMs when N is too small for the 1D path: MEASURED @2048 = 1167 GB/s
+ * = 3.49x naive, parity/beats cuBLAS (1163); DRAM 45%->95.2% (ncu),
+ * grid 16->128 blocks; relRMS vs cuBLAS 5.5e-15 (fp round-off). */
+__global__ void _hx_k_gemv_1d(const double* __restrict__ A,
+                              const double* __restrict__ B,
+                              double* __restrict__ C,
+                              int64_t K, int64_t N) {
+    int64_t n = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (n >= N) return;
+    double acc = 0.0;
+    for (int64_t k = 0; k < K; k++) acc += A[k] * B[k * N + n];
+    C[n] = acc;
+}
+__global__ void _hx_k_gemv_splitk(const double* __restrict__ A,
+                                  const double* __restrict__ B,
+                                  double* __restrict__ C,
+                                  int64_t K, int64_t N, int KS) {
+    int64_t n = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (n >= N) return;
+    int64_t kc = (K + KS - 1) / KS;
+    int64_t k0 = (int64_t)blockIdx.y * kc;
+    int64_t k1 = k0 + kc; if (k1 > K) k1 = K;
+    double acc = 0.0;
+    for (int64_t k = k0; k < k1; k++) acc += A[k] * B[k * N + n];
+    atomicAdd(&C[n], acc);
+}
+static int _forge_gemv_splitk_on(void) {
+    const char* v = getenv("HEXA_GEMV_SPLITK");
+    return (v && v[0] && v[0] != '0') ? 1 : 0;
+}
+
 /* HEXA-0POD OP-24 (TF32 LIVE-WIRE) — deterministic TF32 fast-mode for the live
  * forge GEMM dispatch. OP-20 PROVED (aiden RTX 5070): a TF32 tensor-op step is
  * self-byte-eq run-to-run (max|delta|=0) AND W14-tol vs FP64 (rel-RMS ~1e-6) AND
@@ -1108,10 +1149,30 @@ int _hx_cuda_farr_matmul_gpu(int64_t a_id, int64_t M, int64_t K,
         static int _own_gemm_fired = 0;
         if (!_own_gemm_fired) { _own_gemm_fired = 1;
             fprintf(stderr, "[OWN-GEMM-FIRED] _hx_k_gemm DEVICE path (no cuBLAS)\n"); }
+        if (M == 1) {
+            /* decode GEMV fast-path (kernel-quality-reffirst lane). The 16x16
+             * tile wastes 15/16 threads at M==1. _hx_k_gemv_1d is BYTE-IDENTICAL
+             * (same sequential K-loop reduction as _hx_k_gemm) -> default path.
+             * HEXA_GEMV_SPLITK opt-in adds K-splitting (atomicAdd, NOT bit-id)
+             * to fill the SMs at small N. */
+            if (_forge_gemv_splitk_on()) {
+                int _ks = 8; /* knee measured @sm_120: 128 blocks saturates DRAM 95% */
+                cudaMemsetAsync(C_dev, 0, (size_t)N * sizeof(double), _forge_stream());
+                dim3 _vblk(256);
+                dim3 _vgrd((unsigned)((N + 255) / 256), (unsigned)_ks);
+                _hx_k_gemv_splitk<<<_vgrd, _vblk, 0, _forge_stream()>>>(A_dev, B_dev, C_dev, K, N, _ks);
+            } else {
+                dim3 _vblk(256);
+                dim3 _vgrd((unsigned)((N + 255) / 256));
+                _hx_k_gemv_1d<<<_vgrd, _vblk, 0, _forge_stream()>>>(A_dev, B_dev, C_dev, K, N);
+            }
+            if (_forge_launch_check("own_gemv") != 0) return -1;
+        } else {
         dim3 _gblk(16, 16);
         dim3 _ggrd((unsigned)((N + 15) / 16), (unsigned)((M + 15) / 16));
         _hx_k_gemm<<<_ggrd, _gblk, 0, _forge_stream()>>>(A_dev, B_dev, C_dev, M, K, N);
         if (_forge_launch_check("own_gemm") != 0) return -1;
+        }
 #ifdef HEXA_USE_CUBLAS
     } else if (_forge_tf32_fastmode()) {
         /* HEXA-0POD OP-24: TF32 fast-mode (opt-in). FP64 default is UNTOUCHED above;

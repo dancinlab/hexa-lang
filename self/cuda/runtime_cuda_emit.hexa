@@ -766,14 +766,14 @@ fn emit_runtime_cuda_c() -> str {
             " * kernel-quality-reffirst lane (profiler-driven, c1 root-cause). The 16x16\n" +
             " * _hx_k_gemm tile WASTES 15/16 threads at M==1 (only threadIdx.y==0 live)\n" +
             " * and launches grid.y==1 — MEASURED aiden RTX 5070 sm_120: 341 GB/s =\n" +
-            " * 0.54x cuBLAS Dgemv (629), DRAM 45%% peak, 16-block grid underfills 48 SMs.\n" +
+            " * 0.54x cuBLAS Dgemv (629), DRAM 45% peak, 16-block grid underfills 48 SMs.\n" +
             " * _hx_k_gemv_1d : one thread per output column, full sequential K-loop.\n" +
             " * BIT-IDENTICAL reduction order to _hx_k_gemm -> BYTE-NEUTRAL default swap.\n" +
             " * MEASURED 459 GB/s @4096 (1.34x), 634 @8192 (1.86x, BEATS cuBLAS 618).\n" +
             " * _hx_k_gemv_splitk : split K across grid.y, atomicAdd partials. CHANGES\n" +
             " * reduction order (NOT bit-identical) -> OPT-IN (HEXA_GEMV_SPLITK). Fills\n" +
             " * the SMs when N is too small for the 1D path: MEASURED @2048 = 1167 GB/s\n" +
-            " * = 3.49x naive, parity/beats cuBLAS (1163); DRAM 45%%->95.2%% (ncu),\n" +
+            " * = 3.49x naive, parity/beats cuBLAS (1163); DRAM 45%->95.2% (ncu),\n" +
             " * grid 16->128 blocks; relRMS vs cuBLAS 5.5e-15 (fp round-off). */\n" +
             "__global__ void _hx_k_gemv_1d(const double* __restrict__ A,\n" +
             "                              const double* __restrict__ B,\n" +
@@ -1180,7 +1180,7 @@ fn emit_runtime_cuda_c() -> str {
             "             * HEXA_GEMV_SPLITK opt-in adds K-splitting (atomicAdd, NOT bit-id)\n" +
             "             * to fill the SMs at small N. */\n" +
             "            if (_forge_gemv_splitk_on()) {\n" +
-            "                int _ks = 8; /* knee measured @sm_120: 128 blocks saturates DRAM 95%% */\n" +
+            "                int _ks = 8; /* knee measured @sm_120: 128 blocks saturates DRAM 95% */\n" +
             "                cudaMemsetAsync(C_dev, 0, (size_t)N * sizeof(double), _forge_stream());\n" +
             "                dim3 _vblk(256);\n" +
             "                dim3 _vgrd((unsigned)((N + 255) / 256), (unsigned)_ks);\n" +
