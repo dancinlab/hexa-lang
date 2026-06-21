@@ -11,7 +11,9 @@
     "tool/audit_forbidden_exts.hexa",
     "tool/install_firmware_hook.hexa",
     "tool/build_hexat_linux.hexa",
-    "tool/build_precompile.hexa"
+    "tool/build_precompile.hexa",
+    "stdlib/cloud/cloud_cli.hexa",
+    "stdlib/sim_universe/sim_universe.hexa"
   ],
   "descriptions": {
     "tool/build_hexa_cli.hexa":      "core CLI bootstrap — `hexa` driver build entry. Original M3 demo entry. Fired on every fresh-checkout dev cycle.",
@@ -23,7 +25,9 @@
     "tool/audit_forbidden_exts.hexa":"FIRMWARE.md G-T0 banned-source-extension audit. 2 commits / 3 months. Fired by .githooks/pre-commit AND CI bootstrap.",
     "tool/install_firmware_hook.hexa":"FIRMWARE.md G-T3 pre-push hook installer. Fired once per fresh checkout — fits 'sub-second first-call' UX goal exactly.",
     "tool/build_hexat_linux.hexa": "cross-build hexat transpiler for linux/x86_64 from macOS. Fired by anima CLM dispatch and release-prep. (Renamed from build_hexa_v2_linux.hexa in #1221; manifest ref was stale → Stage-3 'manifest missing on disk'.)",
-    "tool/build_precompile.hexa":    "self — the precompile builder itself. Fired by release CI to populate release/precompile/. Including in manifest means subsequent CI runs hit cache (bootstrap acceleration)."
+    "tool/build_precompile.hexa":    "self — the precompile builder itself. Fired by release CI to populate release/precompile/. Including in manifest means subsequent CI runs hit cache (bootstrap acceleration).",
+    "stdlib/cloud/cloud_cli.hexa":   "`hexa cloud <verb>` CLI (pod lifecycle · structured-argv remote dispatch). CLI-facing, user-fired routinely via /cloud + /pod. Shipping a source/version-keyed cache entry makes the cmd_run dispatch path fast AND staleness-proof, replacing the unrefreshed standalone bin/hexa-cloud (ING #66/#67).",
+    "stdlib/sim_universe/sim_universe.hexa": "`hexa sim-universe <verb>` CLI (RFC 046 sim experiments). CLI-facing. Same standalone-stale class as cloud_cli — cached here so dispatch rides the source/version-keyed cmd_run path, not an unrefreshed bin/hexa-sim-universe."
   },
   "categories": {
     "tool/build_hexa_cli.hexa":      "build",
@@ -35,7 +39,9 @@
     "tool/audit_forbidden_exts.hexa":"audit",
     "tool/install_firmware_hook.hexa":"install",
     "tool/build_hexat_linux.hexa": "build",
-    "tool/build_precompile.hexa":    "build"
+    "tool/build_precompile.hexa":    "build",
+    "stdlib/cloud/cloud_cli.hexa":   "cloud",
+    "stdlib/sim_universe/sim_universe.hexa": "sim"
   },
   "schema_notes": "M6 schema extension (additive only — `tool/build_precompile.hexa::_parse_scripts` only reads the `\"scripts\"` array, ignoring everything else). `descriptions` = per-entry human reasoning (1-line per script, mirrors `scripts` keys). `categories` = coarse bucket (build/atlas/verify/inbox/install/audit) for future filtering verbs (e.g. `--category=atlas`). Both fields are documentation-only today; future M7+ may surface them via `--list --verbose` once a richer parser lands. Adding/removing scripts: update `scripts` (load-bearing) AND mirror the entry in `descriptions` + `categories` (lint-only)."
 }
