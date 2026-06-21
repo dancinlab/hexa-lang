@@ -143,6 +143,65 @@ if [ -f "$rt" ] && ! grep -q 'OP-17 (HEXA-0POD' "$rt"; then
   echo "[restore_frozen_seeds] OP-17: injected 9 #undef (-Wmacro-redefined hygiene) into $rt"
 fi
 
+# ── FARR-NOOP-FREE-DECODE-LEAK — route packed-array buffers to the REAL libc ──
+# @convergence(state="ossified", id="FARR-NOOP-FREE-DECODE-LEAK")
+# The frozen self/runtime.c memory family is an mmap-backed bump allocator whose
+# `free` is a NOOP (`hxlcl_free` empty body; file-wide `#define free hxlcl_free`).
+# Fine for a one-shot compile, but every TRANSIENT packed-array buffer (farr f64,
+# farr32 f32, farr_int i64) a long-running program allocates is leaked for the
+# process lifetime → RSS climbs monotonically → host-OOM. ROOT CAUSE of anima's
+# engine-native G6 decode wall (H_1464: a 303M byte-LM decode RSS 91→125 GB,
+# ~2 GB/min, earlyoom-killed, 90-frag run never completes; a single GEN=110
+# decode worker measured 25.8 GB RSS where resident weights are only ~5 GB).
+# MEASURED (incoming/patches/farr-noop-free-decode-leak.md): 20k × 1.5 MB iters —
+# noop-free 29.7–30.3 GB linear vs real __libc_free FLAT 5.2 MB.
+#
+# The SSOT is the immutable frozen blob (151c52c8…, the .c-graduation parent),
+# so the fix lands here as a deterministic post-restore patch (same precedent as
+# OP-17 above + the gemm-perf awk patches below). FARR-SCOPE ONLY — the compiler
+# bump allocator (everything else) is UNTOUCHED, preserving its one-shot speed.
+# glibc exposes __libc_calloc/__libc_free under DISTINCT names, so the file-wide
+# `#define calloc/free → hxlcl_*` shims do NOT rewrite them; non-glibc (Darwin
+# one-shot dev builds) falls back to plain calloc/free (no leak concern there).
+# Idempotent: the HXFARR_CALLOC marker guards against double-injection.
+if [ -f "$rt" ] && ! grep -q 'HXFARR_CALLOC' "$rt"; then
+  awk '
+    # (1) Insert the HXFARR macro block immediately BEFORE the farr_zeros body.
+    /^HexaVal hexa_farr_zeros\(HexaVal n_v\) \{$/ && !hdr {
+      print "/* @convergence(state=\"ossified\", id=\"FARR-NOOP-FREE-DECODE-LEAK\") */"
+      print "/* FARR-NOOP-FREE-DECODE-LEAK FIX (post-restore, restore_frozen_seeds):"
+      print " * route the packed-array (farr/farr32/farr_int) bulk buffers to the REAL"
+      print " * reclaiming libc allocator, NOT the noop-free bump allocator. FARR-scope"
+      print " * only; the compiler bump allocator is untouched. See"
+      print " * incoming/patches/farr-noop-free-decode-leak.md for root-cause + proof. */"
+      print "#if defined(__GLIBC__)"
+      print "extern void *__libc_calloc(size_t, size_t);"
+      print "extern void  __libc_free(void *);"
+      print "#define HXFARR_CALLOC(nm,sz) __libc_calloc((nm),(sz))"
+      print "#define HXFARR_FREE(p)       __libc_free((p))"
+      print "#else"
+      print "#define HXFARR_CALLOC(nm,sz) calloc((nm),(sz))   /* one-shot Darwin dev builds */"
+      print "#define HXFARR_FREE(p)       free((p))"
+      print "#endif"
+      hdr=1
+    }
+    # (2) Route the 3 zeros-fn calloc sites to HXFARR_CALLOC (byte-identical args).
+    /^        buf = \(double\*\)calloc\(\(size_t\)n, sizeof\(double\)\);$/ {
+      print "        buf = (double*)HXFARR_CALLOC((size_t)n, sizeof(double));"; next }
+    /^        buf = \(float\*\)calloc\(\(size_t\)n, sizeof\(float\)\);$/ {
+      print "        buf = (float*)HXFARR_CALLOC((size_t)n, sizeof(float));"; next }
+    /^        buf = \(int64_t\*\)calloc\(\(size_t\)n, sizeof\(int64_t\)\);$/ {
+      print "        buf = (int64_t*)HXFARR_CALLOC((size_t)n, sizeof(int64_t));"; next }
+    # (3) Route the 3 bulk-buffer free sites (farr/farr32/farr_int) to HXFARR_FREE.
+    /^    if \(e->buf\) \{ free\(e->buf\); e->buf = NULL; e->len = 0; \}$/ {
+      print "    if (e->buf) { HXFARR_FREE(e->buf); e->buf = NULL; e->len = 0; }"; next }
+    { print }
+  ' "$rt" > "$rt.farrfix" && mv "$rt.farrfix" "$rt"
+  _hxf_n=$(grep -c 'HXFARR_FREE(e->buf)' "$rt")
+  _hxf_c=$(grep -c 'HXFARR_CALLOC((size_t)n' "$rt")
+  echo "[restore_frozen_seeds] FARR-NOOP-FREE: routed farr buffers to libc (calloc=$_hxf_c free=$_hxf_n) in $rt"
+fi
+
 # ── gemm-perf r4 — BLIS-packed DGEMM microkernel (reference-first, c23) ───────
 # Reference: BLIS (Van Zee & van de Geijn, ACM TOMS 2015) GEBP macrokernel +
 # mr×nr register microkernel + 3-level cache blocking. PROVEN constants read
