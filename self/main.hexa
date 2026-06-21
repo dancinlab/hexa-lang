@@ -4329,7 +4329,19 @@ fn cmd_run_user_direct(file, extra_args) {
     // the currently-FATAL path (a clang-less host = instant death today); hosts
     // WITH clang keep _host_cc_available()==true → unchanged behavior. Set
     // HEXA_RUN_CTRANSPILE=1 to force the C path even on a clang-bearing host.
-    let _run_native_on = (env("HEXA_RUN_NATIVE") == "1" || !_host_cc_available()) && env("HEXA_RUN_CTRANSPILE") != "1"
+    // r26 — DEFAULT-ON FLIP (ING #79 / leg-B goal). Native-first is now the
+    // DEFAULT for ALL hosts: the native --emit=obj cold path runs for every
+    // `hexa run` unless the user opts OUT with HEXA_RUN_CTRANSPILE=1 (the
+    // documented revert). The delegate-fallback below is INTACT — any native
+    // emit/link FAILURE (emit-fail program, unsupported construct, the @lazy
+    // niche) falls through to the clang `hexa build` path, so no program that
+    // worked before can break. Justification: the r9-r25 leg-B campaign closed
+    // the 12-construct corpus + the broad-corpus silent-differ tail to
+    // (true-silent)=0-modulo-the-@lazy-niche (which loudly self-fails, not
+    // silent), proven via the flatten-faithful 361-corpus audit + 3-target
+    // byteeq + shipping smoke. HEXA_RUN_NATIVE=1 is kept as a no-op accepted
+    // synonym (still forces native) for back-compat with existing invocations.
+    let _run_native_on = env("HEXA_RUN_CTRANSPILE") != "1"
     if !file_exists(tmpbin) && _run_native_on {
         let _ncc = resolve_native_cc()
         let _nrt = resolve_prebuilt_runtime()
