@@ -495,7 +495,10 @@ install_src() {
     # asset was fine, the install clobbered it). The shipped cuBLAS runtime.a already has
     # the native rt_*_native seeds (built by the same release recipe), so it satisfies the
     # consumer link without a rebuild. Skip stage_resolve_runtime_a entirely for cuda.
-    if [ "${asset##*-}" = "cuda" ] && [ -f "$HX_BIN/build/runtime.a" ]; then
+    # Detect "cuda install" via the $HX_HOME/.cuda-runtime marker install_hexa drops for a
+    # cuda asset (line ~317) — install-local + always in scope (the $asset var is set in a
+    # different function and unreliable under `set -u`/dash).
+    if [ -f "$HX_HOME/.cuda-runtime" ] && [ -f "$HX_BIN/build/runtime.a" ]; then
         # Mirror the cuBLAS archive into $HX_SRC/build/ too so the pre-warm build
         # (HEXA_LANG=$HX_SRC) links it instead of content-hash-compiling a CPU
         # runtime.c — keeping the warmed object cuda-consistent with the shim.
