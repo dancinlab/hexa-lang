@@ -6306,10 +6306,23 @@ fn gen2_expr(node) {
             if name == "__hx_arr_len" {
                 return "hexa_int(HX_ARR_LEN(" + gen2_expr(node.args[0]) + "))"
             }
+            // RT-NATIVE SYSCALL (leg-B r3, opt-in HEXA_RT_SYSCALL_NATIVE):
+            // lower __hx_syscall0/6 to a RAW syscall instruction (x86_64 `syscall`
+            // 0f05 / arm64 `svc #0`) instead of libc `syscall()`, dropping the libc
+            // dep for EVERY C-transpiled syscall user (fs/io/proc). Default OFF emits
+            // the IDENTICAL libc text (byte-neutral). Off the compiler self-compile
+            // byteeq path (the compiler closure has 0 __hx_syscall6 call-sites; the
+            // .s seeds use the native backend, not this C-transpile lowering).
             if name == "__hx_syscall0" {
+                if env("HEXA_RT_SYSCALL_NATIVE") != "" {
+                    return "hexa_int(({ long __hx_scr;\n#if defined(__x86_64__)\n long __hx_scn=(long)HX_INT(" + gen2_expr(node.args[0]) + "); register long __hx_r10 __asm__(\"r10\")=0; register long __hx_r8 __asm__(\"r8\")=0; register long __hx_r9 __asm__(\"r9\")=0; __asm__ volatile(\"syscall\":\"=a\"(__hx_scr):\"0\"(__hx_scn),\"r\"(__hx_r10),\"r\"(__hx_r8),\"r\"(__hx_r9):\"rcx\",\"r11\",\"memory\");\n#else\n __hx_scr=syscall((long)HX_INT(" + gen2_expr(node.args[0]) + "));\n#endif\n __hx_scr; }))"
+                }
                 return "hexa_int(syscall((long)HX_INT(" + gen2_expr(node.args[0]) + ")))"
             }
             if name == "__hx_syscall6" {
+                if env("HEXA_RT_SYSCALL_NATIVE") != "" {
+                    return "hexa_int(({ long __hx_scr;\n#if defined(__x86_64__)\n long __hx_scn=(long)HX_INT(" + gen2_expr(node.args[0]) + "), __hx_sca=(long)HX_INT(" + gen2_expr(node.args[1]) + "), __hx_scb=(long)HX_INT(" + gen2_expr(node.args[2]) + "), __hx_scc=(long)HX_INT(" + gen2_expr(node.args[3]) + "); register long __hx_r10 __asm__(\"r10\")=(long)HX_INT(" + gen2_expr(node.args[4]) + "); register long __hx_r8 __asm__(\"r8\")=(long)HX_INT(" + gen2_expr(node.args[5]) + "); register long __hx_r9 __asm__(\"r9\")=(long)HX_INT(" + gen2_expr(node.args[6]) + "); __asm__ volatile(\"syscall\":\"=a\"(__hx_scr):\"0\"(__hx_scn),\"D\"(__hx_sca),\"S\"(__hx_scb),\"d\"(__hx_scc),\"r\"(__hx_r10),\"r\"(__hx_r8),\"r\"(__hx_r9):\"rcx\",\"r11\",\"memory\");\n#else\n __hx_scr=syscall((long)HX_INT(" + gen2_expr(node.args[0]) + "), (long)HX_INT(" + gen2_expr(node.args[1]) + "), (long)HX_INT(" + gen2_expr(node.args[2]) + "), (long)HX_INT(" + gen2_expr(node.args[3]) + "), (long)HX_INT(" + gen2_expr(node.args[4]) + "), (long)HX_INT(" + gen2_expr(node.args[5]) + "), (long)HX_INT(" + gen2_expr(node.args[6]) + "));\n#endif\n __hx_scr; }))"
+                }
                 return "hexa_int(syscall((long)HX_INT(" + gen2_expr(node.args[0]) + "), (long)HX_INT(" + gen2_expr(node.args[1]) + "), (long)HX_INT(" + gen2_expr(node.args[2]) + "), (long)HX_INT(" + gen2_expr(node.args[3]) + "), (long)HX_INT(" + gen2_expr(node.args[4]) + "), (long)HX_INT(" + gen2_expr(node.args[5]) + "), (long)HX_INT(" + gen2_expr(node.args[6]) + ")))"
             }
             if name == "__hx_ptr_store64" {
