@@ -1,3 +1,7 @@
+## docs: self/forge/README.md + stdlib/flame/README.md 폐기 (삭제)
+
+두 서브시스템 README를 폐기(삭제) — RFC 040 시절 cuBLAS-Dgemm 기반 서술이 own-default·sm_120 측정 시대와 어긋나 유지보수 부채였고, 정확한 현황은 루트 README flame/forge 섹션 + ARCHITECTURE.json + self/forge/PARADIGM.md·PLAN.md·stdlib/flame/PERF.md·PLAN.md(존속)로 충분. 루트 README의 flame/README 링크 2곳은 stdlib/flame/PERF.md로 재지정(broken-link 0). 부수 문서(gpu/HANDOFF·rfc_050·flame/STATUS)의 잔여 포인터는 후속 정리. doc-only.
+
 ## docs(readme): #3752 후속 — self/forge/README 변경 폐기복원 + 루트 README BF16 sm_120 측정 보강
 
 #3752가 self/forge/README 수정본을 머지했으나 사용자 지시는 그 파일 폐기 → #3752 직전 원본으로 복원. 루트 README flame/forge 섹션 BF16 결론에 sm_120 측정 보강: H100 sm_90 wgmma 11.5× off와 별개로 consumer RTX 5070 sm_120 BF16 raw-GEMM own = ~2× off(HMMA issue-cadence/occupancy HW ceiling, ldmatrix .b16 form-correct). doc-only.
