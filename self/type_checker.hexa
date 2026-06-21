@@ -663,7 +663,7 @@ fn tc_alias_graph_reaches(start, target) {
 // operators lift uniformly across the 3 universes). We only *record* the
 // level under `tc_universes_enabled`; no new rejections are emitted here.
 fn tc_universe_level(ann) {
-    if ann == "int" || ann == "float" || ann == "bool" || ann == "string" || ann == "char" { return 0 }
+    if ann == "int" || ann == "float" || ann == "bool" || ann == "string" || ann == "str" || ann == "String" || ann == "char" { return 0 }
     if ann == "type" { return 2 }
     return 1
 }
@@ -945,6 +945,13 @@ fn annotation_to_type(ann) {
     if ann == "float" { return "float" }
     if ann == "bool" { return "bool" }
     if ann == "string" { return "string" }
+    // `str` / `String` are surface spellings of the canonical string type —
+    // normalize them here so a `str`-annotated field/return reconciles with a
+    // StringLit (inferred "string"). Mirrors the shipping compiler
+    // (compiler/check/types.hexa: `n == "string" || "String" || "str"`),
+    // which this self-test checker had drifted from — the source of the
+    // phantom `expected 'str', got 'string'` mismatches.
+    if ann == "str" || ann == "String" { return "string" }
     if ann == "char" { return "char" }
     if ann == "void" { return "void" }
     if ann == "any" { return "any" }

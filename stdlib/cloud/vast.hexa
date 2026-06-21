@@ -501,6 +501,93 @@ fn vast_search_offers(query: str, verified_only: int) -> VastOffer {
     return VastOffer { ok: 1, offer_id: ids[0], dph: _vast_offer_dph(out, ids[0]), message: "search offers — " + to_string(len(ids)) + " offers (unlocked pick)" }
 }
 
+// vast_offer_by_id — PIN a specific offer id (the `--offer <id>` rent path).
+// vast.ai's search results rotate every few minutes, so a `--query` that
+// LOOKED like "$0.53/h 1.5TB" can silently bind a $30/h box on the next call
+// (the 2026-06-21 anima incident). Pinning the exact offer id removes that
+// race: this confirms the offer is STILL listed (rentable) and captures its
+// live dph BEFORE create, so the caller commits to a known box at a known
+// rate. `id=<n>` is vast's own offer predicate; the general (unverified) pool
+// is searched so a non-verified box the human explicitly named is reachable.
+fn vast_offer_by_id(offer_id: str) -> VastOffer {
+    if len(offer_id) == 0 {
+        return _vast_fail_offer("offer-by-id: empty offer id")
+    }
+    let vc = _vastai_path()
+    if len(vc) == 0 {
+        return _vast_fail_offer("vastai not found (set VASTAI_DISABLE=1 to silence)")
+    }
+    let cmd = _shq_local(vc) + " search offers " + _shq_local("id=" + offer_id)
+        + " -n --raw 2>&1"
+    let out = exec(cmd)
+    let ids = _vast_collect_offer_ids(out)
+    // Confirm the pinned id is actually in the listing — a rotated-away or
+    // non-rentable offer FAILS LOUD here instead of binding the wrong box.
+    let mut found = 0
+    let mut i = 0
+    while i < len(ids) {
+        if ids[i] == offer_id {
+            found = 1
+        }
+        i = i + 1
+    }
+    if found == 0 {
+        return _vast_fail_offer("offer " + offer_id + " not listed / not rentable (rotated away?) — " + out.substring(0, 200))
+    }
+    return VastOffer { ok: 1, offer_id: offer_id, dph: _vast_offer_dph(out, offer_id), message: "offer pinned " + offer_id }
+}
+
+// _vast_dph_to_float — sanitize a dph string ("$27.51/h" → 27.51) for the
+// pre-rent rate ceiling. Keeps only digits / sign / decimal / exponent, then
+// parse_float; 0.0 when empty/unparseable (a missing rate cannot trip the
+// ceiling — the guard is opt-in and only fires on a KNOWN rate over the cap).
+fn _vast_dph_to_float(s: str) -> float {
+    let mut clean = ""
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        let cc = char_code(c)
+        let is_digit = cc >= 48 && cc <= 57
+        let is_sym = c == "." || c == "-" || c == "+" || c == "e" || c == "E"
+        if is_digit || is_sym {
+            clean = clean + c
+        }
+        i = i + 1
+    }
+    if len(clean) == 0 {
+        return 0.0
+    }
+    return clean.parse_float()
+}
+
+// vast_pick_offer — single rent-time offer selector. A non-empty `pin_offer`
+// takes the box-specific `--offer <id>` path (vast_offer_by_id); otherwise the
+// legacy query search. Public so cloud_cli picks WITHOUT touching this file's
+// private helpers (underscore fns are file-local across `use`).
+fn vast_pick_offer(pin_offer: str, query: str, verified_only: int) -> VastOffer {
+    if len(pin_offer) > 0 {
+        return vast_offer_by_id(pin_offer)
+    }
+    return vast_search_offers(query, verified_only)
+}
+
+// vast_dph_exceeds — 1 iff a KNOWN rate `dph` is strictly over the ceiling
+// `cap` (both sanitized via _vast_dph_to_float). Returns 0 when either is
+// empty/unparseable/≤0 — the --max-dph guard is opt-in and only fires on a
+// known rate over a positive cap. Public wrapper over the file-local parser.
+fn vast_dph_exceeds(dph: str, cap: str) -> int {
+    if len(dph) == 0 || len(cap) == 0 {
+        return 0
+    }
+    let rate = _vast_dph_to_float(dph)
+    let ceil = _vast_dph_to_float(cap)
+    if ceil > 0.0 && rate > ceil {
+        return 1
+    }
+    return 0
+}
+
 // ── parallel-track claim lock ─────────────────────────────────────────
 // (archive/patches/vast-offer-machine-claim-lock-for-parallel-tracks.md)
 //

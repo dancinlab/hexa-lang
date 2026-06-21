@@ -116,6 +116,16 @@ fn _cloud_help() {
     println("variables all parse on the remote side. Use `exec` for ad-hoc")
     println("inspection (`cd /work && nvidia-smi | head -5`); caller owns quoting.")
     println("`host` is an ssh destination or ~/.ssh/config alias.")
+    println("")
+    println("provisioning flags (rent):")
+    println("  --query Q       (vast) raw offer predicate; picks the first match.")
+    println("  --offer ID      (vast) PIN a specific offer id — skips the query")
+    println("                  search and binds THAT box; offers rotate, so a")
+    println("                  --query that looked cheap can bind a different box.")
+    println("                  Confirms the offer is still listed + captures its")
+    println("                  dph BEFORE create.  e.g. cloud rent vast --offer 40455967")
+    println("  --max-dph USD   (vast) rate ceiling — REFUSE any offer over USD/hr")
+    println("                  before the billing create (works on --offer + --query).")
 }
 
 // _mh_json_str — JSON-encode a path-typed string for the __MONITOR_HANDLE__=
@@ -1392,15 +1402,34 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
             return 0
         }
     }
+    // --offer <id> — PIN a specific box (box-specific rent). vast offers
+    // rotate every few minutes, so a `--query` that looked like the cheap
+    // 1.5TB box can silently bind a $30/h box on the next call (2026-06-21
+    // anima incident). Pinning the exact id confirms it is still listed +
+    // captures its live dph BEFORE create, so the human commits to a known
+    // box at a known rate. Empty → legacy query-search path (unchanged).
+    let pin_offer = _flag_val(av, start, "--offer", "")
+    // --max-dph <usd> — pre-rent rate ceiling (opt-in). REFUSES the rent if
+    // the chosen offer's dollars-per-hour exceeds <usd>, on BOTH the pinned
+    // and the query-search path — the direct guard against the rate surprise.
+    let max_dph = _flag_val(av, start, "--max-dph", "")
     // verified_only=1 → vast.hexa applies the campaign-proven default
     // filters (reliability>=0.95 + verified + rentable). An explicit
-    // --query opts into the caller's raw predicate string instead.
-    let offer = vast_search_offers(query, 1)
+    // --query opts into the caller's raw predicate string instead. A
+    // non-empty --offer takes the box-specific pin path (vast_pick_offer).
+    let offer = vast_pick_offer(pin_offer, query, 1)
     if offer.ok == 0 {
         println("[cloud] rent vast: " + offer.message)
         return 1
     }
-    println("[cloud] rent vast: picked offer " + offer.offer_id)
+    // Rate ceiling — refuse a box over --max-dph BEFORE the billing create.
+    if vast_dph_exceeds(offer.dph, max_dph) == 1 {
+        // Release the claim lock so a sibling rent can reuse the offer.
+        vast_offer_release(offer.offer_id)
+        println("[cloud] rent vast: REFUSED — offer " + offer.offer_id + " is $" + offer.dph + "/hr > --max-dph $" + max_dph + "/hr (no pod created)")
+        return 1
+    }
+    println("[cloud] rent vast: picked offer " + offer.offer_id + " ($" + offer.dph + "/hr)")
     let inst = vast_create_labeled(offer.offer_id, image, disk_gb, prov_label)
     if inst.ok == 0 {
         // create failed → return the offer claim so a sibling can reuse it.
@@ -2586,12 +2615,13 @@ fn main() {
         // RENTED a real pod because -h/--help was just an unparsed trailing
         // token. Print usage and exit 0 — creating NOTHING.
         if _has_flag(av, si + 1, "--help") == 1 || _has_flag(av, si + 1, "-h") == 1 {
-            println("usage: cloud rent <vast|runpod> [--gpu FAMILY|N] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N] [--no-register] [--force-new]")
+            println("usage: cloud rent <vast|runpod> [--gpu FAMILY|N] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--offer ID] [--max-dph USD] [--max-wait-sec N] [--no-register] [--force-new]")
+            println("  --offer ID   (vast) PIN a specific offer id — skips the query search and binds THAT box, confirming it is still listed + capturing its dph before create (offers rotate; --query can silently bind a different box). --max-dph USD refuses any offer over USD/hr BEFORE billing.")
             println("  IDEMPOTENT per (project,owner): a repeated same-key rent REUSES the live M5 pod; --force-new is a MANUAL flag to provision one fresh pod (never auto-invoked). Automatic re-rent on pod-loss is DEPRECATED — pod-loss FAILS LOUD; rent again explicitly. `cloud rent --selftest` checks the dedup offline.")
             return
         }
         if si + 1 >= len(av) {
-            println("[cloud] rent: missing <provider> — usage: cloud rent <vast|runpod> [--gpu FAMILY|N] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N]")
+            println("[cloud] rent: missing <provider> — usage: cloud rent <vast|runpod> [--gpu FAMILY|N] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--offer ID] [--max-dph USD] [--max-wait-sec N]")
             exit(2)
         }
         let provider = av[si + 1]
