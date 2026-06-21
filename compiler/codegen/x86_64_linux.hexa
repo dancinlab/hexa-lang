@@ -1094,11 +1094,24 @@ fn _x86_store_spill(rm: X86RegMap, id: i64, src_reg: string) {
 // the last op wrote in rax — e.g. a hexa_cmp_lt loop guard leaves TAG_BOOL=2
 // in rax, so a fizzbuzz `for i in 1..25 {}` program exits 2 instead of 0. The
 // C-transpile path ends such a main with an explicit `return 0`; mirror that.
-fn _x86_emit_zero_ret_pair() {
-    _x86_buf.push(_x86_instr2("xor", _x86_op_reg("eax"), _x86_op_reg("eax"),
-                     "fall-through return: tag = 0"))
+fn _x86_emit_zero_ret_pair(is_main: bool) {
+    // r25 — a value-less return must carry the RIGHT tag. For the top-level
+    // `main`, the C ABI exit code = EAX = the tag half, so main keeps tag=0
+    // (TAG_INT → process exit 0; r15's fix). For a value-less return from ANY
+    // OTHER fn, the caller reads rax as the HexaVal tag — a void-returning fn
+    // (`fn rv(){}`; `let v=rv()`) must hand back TAG_VOID(4) so `type_of(v)`
+    // == "void" (r24-tail t38_nanbox). Mirrors arm64_darwin.hexa #40 ret-void.
+    let mut _rt_tag = 0    // TAG_INT (main exit-code path)
+    if !is_main { _rt_tag = 4 }   // TAG_VOID (every other value-less return)
+    if _rt_tag == 0 {
+        _x86_buf.push(_x86_instr2("xor", _x86_op_reg("eax"), _x86_op_reg("eax"),
+                         "fall-through return: tag = 0 (main exit-code)"))
+    } else {
+        _x86_buf.push(_x86_instr2("mov", _x86_op_reg("eax"), _x86_op_imm(_rt_tag),
+                         "value-less return: tag = TAG_VOID"))
+    }
     _x86_buf.push(_x86_instr2("xor", _x86_op_reg("edx"), _x86_op_reg("edx"),
-                     "fall-through return: payload = 0"))
+                     "value-less return: payload = 0"))
     return
 }
 
@@ -2545,8 +2558,9 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
     }
     if s.kind == _STMT_RETURN {
         if len(s.args) < 1 {
-            // r15 — bare `return` carries no value: default the SysV pair to 0.
-            _x86_emit_zero_ret_pair()
+            // r15/r25 — bare `return` carries no value: main → tag 0 (exit
+            // code), every other fn → TAG_VOID so type_of(rv()) == "void".
+            _x86_emit_zero_ret_pair(fname == "main")
         }
         if len(s.args) >= 1 {
             // PAIR-MODEL — a user .hexa fn returns a 16-byte HexaVal in the
@@ -2789,9 +2803,10 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
             }
         }
     }
-    // r15 — fall-through (no explicit return reached): default the return pair
-    // to 0 so a top-level program / value-less tail exits 0, not the stale rax.
-    _x86_emit_zero_ret_pair()
+    // r15/r25 — fall-through (no explicit return reached): main → tag 0 (so a
+    // top-level program exits 0, not stale rax), every other fn → TAG_VOID so
+    // a void-returning fn's result reads type_of == "void".
+    _x86_emit_zero_ret_pair(mf.name == "main")
     _x86_emit_epilogue(spill_frame)
 
     return LFunc {
