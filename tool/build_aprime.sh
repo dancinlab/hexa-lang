@@ -372,6 +372,20 @@ if [ "${HEXA_RT_STR_EQ_NATIVE:-1}" != "0" ] || [ "${HEXA_RT_STR_STARTS_WITH_NATI
     fi
 fi
 
+# -- HEXA_RT_PRINT_NATIVE (leg-B prerequisite, OPT-IN default-OFF) ------------
+# When HEXA_RT_PRINT_NATIVE=1 the restored substrate self/runtime.c gets its
+# Linux hxlcl_write swapped for a raw `syscall` body (tool/restore_frozen_seeds
+# injection, gated by the SAME env). Pass -DHEXA_RT_PRINT_NATIVE so the injected
+# #ifdef selects the raw-syscall arm; unset (default) leaves the libc write()
+# #else -> the compiler binary is byte-identical to baseline. Affects the
+# compiler's OWN on-path print leaf (rt_print/eprintln -> __fd_write_bytes ->
+# hxlcl_write), so it is the byteeq-relevant flip (#18 on-path fragility test).
+PRINT_DEF=""
+if [ "${HEXA_RT_PRINT_NATIVE:-0}" != "0" ]; then
+    PRINT_DEF="-DHEXA_RT_PRINT_NATIVE=1"
+    echo "  [3/5] RT-NATIVE PRINT: HEXA_RT_PRINT_NATIVE=1 — x86_64 raw-syscall hxlcl_write (libc write dropped on print leaf)"
+fi
+
 # ── stage 4: clang ─────────────────────────────────────────────────
 mkdir -p "$(dirname "$OUT")"
 # Cycle 43: -dead_strip + -ffunction-sections + -Oz shrinks aprime_cc
@@ -388,7 +402,7 @@ mkdir -p "$(dirname "$OUT")"
 CL_ERR="$(clang -Oz $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
     -ffunction-sections -fdata-sections $DEAD_STRIP \
     -fno-builtin-bzero -fno-builtin-memcpy -fno-builtin-strlen \
-    -D_FORTIFY_SOURCE=0 -fno-stack-protector $ALLOC_DEF $STR_DEF \
+    -D_FORTIFY_SOURCE=0 -fno-stack-protector $ALLOC_DEF $STR_DEF $PRINT_DEF \
     -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $STR_CORE_OBJ -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
 # ZERO-C Z2a: restore the warm runtime_core.c artifact ONLY when runtime_hi_gen.c
 # still exists (legacy gated test). When the file is permanently gone (default
