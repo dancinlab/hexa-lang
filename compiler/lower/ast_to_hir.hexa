@@ -1581,6 +1581,26 @@ fn _desugar_for(e: Expr) -> Expr {
     let loop_var = e.text
     let iter_e = _pick_for_iter(e.children, _mk_ast_ident(loop_var, sp))
     let body_e = _pick_for_body(e.children, _mk_ast_block([], sp))
+    // r13 — range iter `for i in lo..hi` → counter while-loop (ABI-safe; no
+    // hexa_range_array int-arg). `let mut i=lo; while i </<= hi { body; i=i+1 }`.
+    if _hir_is_binop_kind(iter_e.kind) && (iter_e.text == "range" || iter_e.text == "range_inclusive") && len(iter_e.children) >= 2 {
+        let _rlo = iter_e.children[0]
+        let _rhi = iter_e.children[1]
+        let mut _rcmp = "<"
+        if iter_e.text == "range_inclusive" { _rcmp = "<=" }
+        let _rlet = _mk_ast_let(loop_var, true, _rlo, sp)
+        let _rcond = _mk_ast_binop(_rcmp, _mk_ast_ident(loop_var, sp), _rhi, sp)
+        let _rinc = _mk_ast_assign("=", _mk_ast_ident(loop_var, sp),
+            _mk_ast_binop("+", _mk_ast_ident(loop_var, sp), _mk_ast_lit_int("1", sp), sp), sp)
+        let mut _rwbody: [Expr] = []
+        _rwbody.push(body_e)
+        _rwbody.push(_rinc)
+        let _rwhile = _mk_ast_while(_rcond, _mk_ast_block(_rwbody, sp), sp)
+        let mut _router: [Expr] = []
+        _router.push(_rlet)
+        _router.push(_rwhile)
+        return _mk_ast_block(_router, sp)
+    }
     let uid = _next_for_uid()
     let it_name  = "__for_it_"  + to_string(uid)
     let idx_name = "__for_idx_" + to_string(uid)

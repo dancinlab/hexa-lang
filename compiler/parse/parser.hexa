@@ -215,6 +215,9 @@ fn tag_of(k: TokenKind) -> string {
         TokenKind::Shr -> "Shr",
         TokenKind::At -> "At",
         TokenKind::Dot -> "Dot",
+        TokenKind::DotDot -> "DotDot",
+        TokenKind::DotDotEq -> "DotDotEq",
+        TokenKind::DotDotDot -> "DotDotDot",
         TokenKind::KwFn -> "KwFn",
         TokenKind::KwLet -> "KwLet",
         TokenKind::KwMut -> "KwMut",
@@ -575,11 +578,39 @@ fn parse_equality() -> Expr {
     return left
 }
 
+// r13 — range expr `a..b` (exclusive) / `a..=b` (inclusive) as a BinOp with
+// text "range"/"range_inclusive" (no new ExprKind variant → no exhaustive-match
+// churn; same idiom as is/as). children=[lo,hi]. Sits between comparison and
+// additive (operands are additive). The native lower (hir_to_mir) turns an
+// Index whose rhs is a range BinOp into hexa_array_slice, and a for-iter range
+// into the range-array; mirrors the self/C-path Range handling.
+fn parse_range() -> Expr {
+    let lo = parse_additive()
+    if check_kind(TokenKind::DotDot) || check_kind(TokenKind::DotDotEq) {
+        let op = advance()
+        let mut rtext = "range"
+        if same_kind(op.kind, TokenKind::DotDotEq) { rtext = "range_inclusive" }
+        let hi = parse_additive()
+        let mut rkids = []
+        rkids.push(lo)
+        rkids.push(hi)
+        return Expr {
+            kind: ExprKind::BinOp,
+            span: op.span,
+            text: rtext,
+            annotations: [],
+            children: rkids,
+            atlas_ref: empty_atlas()
+        }
+    }
+    return lo
+}
+
 fn parse_comparison() -> Expr {
-    let mut left = parse_additive()
+    let mut left = parse_range()
     while check_kind(TokenKind::Lt) || check_kind(TokenKind::Le) || check_kind(TokenKind::Gt) || check_kind(TokenKind::Ge) {
         let op = advance()
-        let right = parse_additive()
+        let right = parse_range()
         let mut kids = []
         kids.push(left)
         kids.push(right)

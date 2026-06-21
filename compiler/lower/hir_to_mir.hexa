@@ -2731,6 +2731,21 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     // ── index: base[idx] → STMT_ASSIGN op="index" args=[base, idx] ─
     if k == "index" {
         if len(e.children) < 2 { return _no_value(ctx) }
+        // r13 — `arr[lo..hi]` / `arr[lo..=hi]`: the rhs is a range BinOp
+        // (text "range"/"range_inclusive", children=[lo,hi]). Lower to
+        // hexa_array_slice(base, lo, hi) (hi+1 for inclusive) instead of
+        // hexa_index_get, which would be handed a range value and crash.
+        // Mirrors self/codegen.hexa:8602-8613.
+        let _ridx = e.children[1]
+        if _ridx.kind == "binop" && (_ridx.text == "range" || _ridx.text == "range_inclusive") && len(_ridx.children) >= 2 {
+            let _slo = _ridx.children[0]
+            let mut _shi = _ridx.children[1]
+            if _ridx.text == "range_inclusive" {
+                _shi = _hir_add(_shi, _hir_lit_int("1", e), e)
+            }
+            let _sl = _hir_call3("hexa_array_slice", e.children[0], _slo, _shi, e)
+            return _lower_hexpr(ctx, _sl)
+        }
         let lr = _lower_hexpr(ctx, e.children[0])
         let rr = _lower_hexpr(lr.ctx, e.children[1])
         let mut ctx2 = _fresh_local(rr.ctx, e.typ, "idx")
@@ -3277,6 +3292,51 @@ fn _hir_call1(fn_name: string, arg: HExpr, proto: HExpr) -> HExpr {
         atlas: AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" },
         def: DefId { module: "", index: -1 },
         annotations: []
+    }
+}
+
+// r13 — 3-arg builtin call HExpr (callee + a0,a1,a2). Used to synthesize
+// hexa_array_slice(base, lo, hi) for range-index slices.
+fn _hir_call3(fn_name: string, a0: HExpr, a1: HExpr, a2: HExpr, proto: HExpr) -> HExpr {
+    let callee = HExpr {
+        kind: "ident", span: proto.span,
+        typ: Type { kind: "", def: DefId { module: "", index: -1 }, args: [], ret: [], domain: "", unit: "" },
+        text: fn_name, children: [],
+        atlas: AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" },
+        def: DefId { module: "", index: -1 }, annotations: []
+    }
+    let mut kids: [HExpr] = []
+    kids.push(callee)
+    kids.push(a0)
+    kids.push(a1)
+    kids.push(a2)
+    return HExpr {
+        kind: "call", span: proto.span, typ: proto.typ, text: "", children: kids,
+        atlas: AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" },
+        def: DefId { module: "", index: -1 }, annotations: []
+    }
+}
+
+// r13 — literal-int HExpr (for the inclusive `..=` hi+1 adjustment).
+fn _hir_lit_int(v: string, proto: HExpr) -> HExpr {
+    return HExpr {
+        kind: "literal_int", span: proto.span,
+        typ: Type { kind: "int", def: DefId { module: "", index: -1 }, args: [], ret: [], domain: "", unit: "" },
+        text: v, children: [],
+        atlas: AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" },
+        def: DefId { module: "", index: -1 }, annotations: []
+    }
+}
+
+// r13 — binop `a + b` HExpr (hi + 1 for inclusive range end).
+fn _hir_add(a: HExpr, b: HExpr, proto: HExpr) -> HExpr {
+    let mut kids: [HExpr] = []
+    kids.push(a)
+    kids.push(b)
+    return HExpr {
+        kind: "binop", span: proto.span, typ: proto.typ, text: "+", children: kids,
+        atlas: AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" },
+        def: DefId { module: "", index: -1 }, annotations: []
     }
 }
 
