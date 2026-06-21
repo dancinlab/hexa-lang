@@ -1,3 +1,7 @@
+## fix(install): `/etc/profile.d/hexa.sh` 시스템 PATH — 비대화형/로그인 셸서 `hexa` not-found 차단 (ING #80)
+
+`install.sh` 가 per-user rc(`~/.bashrc`·`~/.zshrc`)에만 PATH 를 써서, 클라우드 pod 의 detach/비대화형 셸(setsid·nohup·`hexa cloud nohup/fire` 가 emit 하는 `bash -c` 원샷)은 `~/.hx/bin` 을 PATH 에 못 얻어 bare `hexa` 가 `command not found` 로 조용히 죽었음(ING #80, anima H_1464 conc-80 decode 전량 실패로 발견). install 이 `/etc/profile.d/hexa.sh`(로그인 셸 `bash -lc` 가 source)도 best-effort 로 설치 — `/etc/profile.d` 쓰기 가능할 때만(pod root), 미권한 유저는 per-user rc 유지. 클라우드측 보완(=`cloud exec/nohup` 이 원격 명령을 로그인 셸로 실행)은 cloud 도메인 후속. (`install.sh`)
+
 ## fix(cloud): `hexa cloud` 목록/임대/전송 정확성 묶음 — per-provider liveness + 함정 #71~78 + 원샷 bootstrap
 
 (아래 #71~74 위에 이어 #75~78 추가) 전부 `stdlib/cloud` 소스·`hexa run` 컴파일+실행 확정·help-drift 게이트 GREEN(38 verbs).
