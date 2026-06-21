@@ -656,6 +656,22 @@ update_path_hint() {
         echo '    export PATH="$HOME/.hx/bin:$PATH"   # bash/zsh'
         echo '    fish_add_path "$HOME/.hx/bin"        # fish'
     fi
+
+    # ── ING #80: system-wide PATH for login / non-interactive shells ──────────
+    # The per-user rc above is read ONLY by INTERACTIVE shells. Cloud pods launch
+    # `hexa run` from detached / non-interactive shells (setsid · nohup · the
+    # `bash -c` one-liner emitted by `hexa cloud nohup/fire`), which never source
+    # ~/.bashrc → a bare `hexa` is "command not found" and the job dies silently.
+    # /etc/profile.d/hexa.sh is sourced by LOGIN shells (`bash -lc`), so a
+    # login-shell launch finds hexa on PATH (cloud-side complement: have
+    # `cloud exec/nohup` run the remote command via a login shell). Best-effort:
+    # written only when /etc/profile.d is writable (e.g. root on a pod); an
+    # unprivileged user silently keeps the per-user rc above.
+    if [ -d /etc/profile.d ] && [ -w /etc/profile.d ] && [ ! -f /etc/profile.d/hexa.sh ]; then
+        if printf '# hexa-lang (ING #80) — PATH for login/non-interactive shells\nexport PATH="$HOME/.hx/bin:$PATH"\n' > /etc/profile.d/hexa.sh 2>/dev/null; then
+            green "  ✓ system PATH: /etc/profile.d/hexa.sh (login shells)"
+        fi
+    fi
 }
 
 main() {
