@@ -1500,6 +1500,30 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
         // RETURNS the (possibly relocated) container HexaVal — it is NOT a
         // pure side effect — so store the result (rax:rdx) back into the
         // container lvalue when it is a storable local/global.
+        // r24 — struct field assignment `obj.field = val`. hir_to_mir lowers
+        // it to op="field_set" args=[base_struct, field_name_str, val]. Structs
+        // are map-backed, so a field write is hexa_map_set(map, const-char* key,
+        // val): map → rdi:rsi (16B HexaVal), key → rdx (const char* via the
+        // RIP-relative cstr-key lea — NOT a HexaVal), val → rcx:r8. Mirrors the
+        // struct_lit per-field map_set ABI. hexa_map_set RETURNS the (possibly
+        // relocated) map HexaVal — store it back into the base lvalue so the
+        // caller sees the mutation.
+        if s.op == "field_set" && len(s.args) >= 3 {
+            _x86_hv_box_arg(s.args[0], st, rm, "rdi", "rsi", opts)  // base map
+            _x86_emit_cstr_key(s.args[1], st, rm, "rdx", opts)      // field key (const char*)
+            _x86_hv_box_arg(s.args[2], st, rm, "rcx", "r8", opts)   // val
+            _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_map_set"),
+                             "field_set: hexa_map_set(struct, key, val)"))
+            let fbase = s.args[0]
+            if fbase.kind == "local" {
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg(_x86_dst_reg(rm, fbase.local_id)),
+                                 _x86_op_reg("rdx"),
+                                 "field_set: store-back struct payload"))
+                _x86_store_tag_reg(rm, fbase.local_id, "rax")
+                _x86_emit_dst_writeback(rm, fbase.local_id, 0)
+            }
+            return
+        }
         if s.op == "index_set" && len(s.args) >= 3 {
             _x86_hv_box_arg(s.args[0], st, rm, "rdi", "rsi", opts)  // container
             _x86_hv_box_arg(s.args[1], st, rm, "rdx", "rcx", opts)  // key
