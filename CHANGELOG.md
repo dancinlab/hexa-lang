@@ -1,3 +1,7 @@
+## docs: 폐기된 forge/flame README 잔여 깨진 링크 정리 (#3754 후속)
+
+#3754가 self/forge/README + stdlib/flame/README를 폐기 후 남은 dead 링크 3곳을 PERF.md/PLAN.md로 재지정: gpu/HANDOFF.md·rfc_050_flame_forge_integration.md·stdlib/flame/STATUS.md. broken-link 0 확인. doc-only.
+
 ## docs: self/forge/README.md + stdlib/flame/README.md 폐기 (삭제)
 
 두 서브시스템 README를 폐기(삭제) — RFC 040 시절 cuBLAS-Dgemm 기반 서술이 own-default·sm_120 측정 시대와 어긋나 유지보수 부채였고, 정확한 현황은 루트 README flame/forge 섹션 + ARCHITECTURE.json + self/forge/PARADIGM.md·PLAN.md·stdlib/flame/PERF.md·PLAN.md(존속)로 충분. 루트 README의 flame/README 링크 2곳은 stdlib/flame/PERF.md로 재지정(broken-link 0). 부수 문서(gpu/HANDOFF·rfc_050·flame/STATUS)의 잔여 포인터는 후속 정리. doc-only.
