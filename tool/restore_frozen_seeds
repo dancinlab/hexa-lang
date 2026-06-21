@@ -1344,6 +1344,39 @@ if [ -f "$rt" ] && ! grep -q 'OP-19e (HEXA-0POD' "$rt"; then
   echo "[restore_frozen_seeds] OP-19e: rewrote env capture to POSIX environ (musl-safe) in $rt"
 fi
 
+# ── ING-82 — silu_gate_gpu extern-before-use (toolchain-consistent CUDA link) ──
+# The frozen self/runtime.c (151c52c8…) declares `extern int _hx_cuda_farr_silu_
+# gate_gpu(...)` ~581 lines AFTER its first CALL inside hexa_farr_silu_gate_gpu's
+# `#ifdef HEXA_CUDA` block. Every SIBLING cuda dispatcher (matmul/softmax/rmsnorm/
+# add/scale) declares its extern BEFORE first use, so on a CUDA build (HEXA_CUDA
+# defined) under a strict-C99 compiler (clang -c, the install.sh default) the
+# silu call is an implicit-declaration ERROR — runtime.cuda.a fails to compile.
+# CI uses gcc (implicit-decl = warning), so the gap only bites at install →
+# `HEXA_CUDA=1` lands a CPU binary (cuda_available()=0). gcc never errored, so
+# the frozen blob shipped the out-of-order decl (ING #82, anima GPU decode).
+#
+# Fix (root, matches the matmul precedent at frozen-runtime.c:8249 — a function-
+# LOCAL extern right before the call): inject the silu_gate_gpu extern decl
+# immediately before its first use. The trailing late decl (line ~10338) stays —
+# a redundant identical extern is legal C, so this is a pure prepend, not a move,
+# and is byte-equivalent to the sibling convention. OFF-CUDA the whole #ifdef
+# block (decl included) is preprocessed away, so the CPU build is UNCHANGED.
+# Deterministic, idempotent (marker guard on the inserted comment).
+if [ -f "$rt" ] && ! grep -q 'ING-82 silu_gate_gpu extern-before-use' "$rt"; then
+  awk '
+    /^    int rc = _hx_cuda_farr_silu_gate_gpu\(a_id, b_id, n, out_id\);$/ && !patched {
+      print "    // ING-82 silu_gate_gpu extern-before-use — declare BEFORE the call"
+      print "    // (mirrors the matmul/softmax/rmsnorm siblings) so HEXA_CUDA builds"
+      print "    // compile under strict-C99 clang, not just gcc (implicit-decl warns)."
+      print "    extern int _hx_cuda_farr_silu_gate_gpu(int64_t a_id, int64_t b_id,"
+      print "                                           int64_t n, int64_t out_id);"
+      patched=1
+    }
+    { print }
+  ' "$rt" > "$rt.ing82" && mv "$rt.ing82" "$rt"
+  echo "[restore_frozen_seeds] ING-82: injected silu_gate_gpu extern-before-use (HEXA_CUDA clang-safe) in $rt"
+fi
+
 # ── OP-32b (HEXA-0POD) — flame STDP pair-dispatch host fallback ───────────────
 # The frozen self/runtime.c (151c52c8…, .c-graduation parent) predates the flame
 # spiking STDP GPU seam (archive/patches/archive/flame-stdp-pair-gpu-kernel.md,
