@@ -120,6 +120,9 @@ fn cloud_commands() -> [CloudCmd] {
     out.push(CloudCmd { name: "copy-from", group: "io",
             args: "<host> <remote> <local> [conn] [--resume] [--verify-sha]",
             summary: "download (scp; --resume=rsync; sha256 check)" })
+    out.push(CloudCmd { name: "bootstrap", group: "io",
+            args: "<id> [--hexa edge|stable] [--push local:remote]... [--exec 'cmd'] [conn]",
+            summary: "one-shot pod setup: install hexa + SEQUENTIAL parent-mkdir+scp-retry+sha pushes + exec (composes the #71~77 trap-free primitives)" })
     out.push(CloudCmd { name: "dft-run", group: "plan",
             args: "<deck-dir> [--go] [--bin-pack] [--query Q] [--walltime-h N] [--identity P] [--image I] [--disk G] [--owner T]",
             summary: "guarded DFT el-ph (QE) dispatch; PREVIEW ($0) unless --go" })

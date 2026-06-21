@@ -624,10 +624,19 @@ fn cloud_reconcile_print() -> int {
 // `ids` is a trustworthy "provider reports none"); `ok == 0` iff BOTH the
 // runpod (myself.pods, CLI-fallback) and vast (show instances) queries were
 // degraded → callers must NOT treat the empty set as "everything is dead".
+// runpod_ok / vast_ok carry PER-PROVIDER authority so a consumer can judge a
+// pod GONE only against the provider that actually answered. The merged `ok`
+// (≥1 provider answered) is NOT enough on its own: when one provider degrades
+// but the other answers, the merged `ids` holds only the answering provider's
+// pods, so a blind membership test would falsely mark every pod of the degraded
+// provider GONE (g63 — never invent GONE from a blind probe). Consumers that
+// classify liveness MUST gate on the owning provider's flag, not merged `ok`.
 struct ProviderAlive {
-    ok:      int,
-    ids:     [str],
-    message: str
+    ok:        int,
+    runpod_ok: int,
+    vast_ok:   int,
+    ids:       [str],
+    message:   str
 }
 
 // cloud_provider_alive_ids — resolve the merged provider-alive id set the way
@@ -653,7 +662,7 @@ pub fn cloud_provider_alive_ids() -> ProviderAlive {
     } else if vl.ok == 0 {
         msg = "runpod-only (vast degraded) — " + msg
     }
-    return ProviderAlive { ok: ok, ids: ids, message: msg }
+    return ProviderAlive { ok: ok, runpod_ok: rl.ok, vast_ok: vl.ok, ids: ids, message: msg }
 }
 
 // cloud_pods_reconcile_prune — ACTIVE reconcile pass for `cloud pods` (anima
