@@ -4291,6 +4291,46 @@ fn cmd_run_user_direct(file, extra_args) {
         let _dbin = _daemon_autospawn_path(file)
         if len(_dbin) > 0 { tmpbin = _dbin }
     }
+    // ── leg-B run-native cold path (opt-in HEXA_RUN_NATIVE=1) ──────────────
+    // CLANG-FREE cold compile: native-emit (aprime_cc --emit=obj) + system `ld`
+    // link (NOT clang) → cache + exec. Restores the #3325 native-route pattern
+    // (gen --emit=obj → linker → exec, native-first + delegate-fallback) adapted
+    // to this cold path. DEFAULT OFF (the shipped C-transpile+clang path is
+    // unchanged = release-safe / self-host≠release); HEXA_RUN_NATIVE=1 opts in.
+    // On ANY native-emit OR link failure → falls through to the clang `hexa
+    // build` loop below UNTOUCHED, so no program that worked before can break.
+    // MEASURED viable on x86_64-linux: aprime --emit=obj → ld+crt+runtime.a+-lm
+    // -lc -lpthread → rc-correct binary, zero clang execve.
+    if !file_exists(tmpbin) && env("HEXA_RUN_NATIVE") == "1" {
+        let _ncc = resolve_native_cc()
+        let _nrt = resolve_prebuilt_runtime()
+        let _nld = exec("command -v ld 2>/dev/null | tr -d '\n'")
+        if len(_ncc) > 0 && len(_nrt) > 0 && len(_nld) > 0 {
+            let _nobj = tmpbin + ".no." + to_string(mono_ns()) + ".o"
+            let _nbin = tmpbin + ".nb." + to_string(mono_ns())
+            // 1) native object emit (no clang)
+            let _ne = exec("'" + _ncc + "' _drv.hexa --emit=obj --target=x86_64-linux-gnu -o '" + _nobj + "' '" + file + "' 2>&1")
+            let _nobj_ok = exec("test -s '" + _nobj + "' && printf yes || printf no")
+            if _nobj_ok == "yes" {
+                // 2) ld link (no clang): crt + runtime.a + libm/libc/pthread.
+                // crt dir auto-detected (gnu-preferred over musl).
+                let _crt = exec("for d in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do test -f "$d/crt1.o" && { printf '%s' "$d"; break; }; done")
+                let _dl = exec("for f in /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-x86-64.so.2; do test -e "$f" && { printf '%s' "$f"; break; }; done")
+                if len(_crt) > 0 && len(_dl) > 0 {
+                    let _lnk = "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _crt + "/crt1.o' '" + _crt + "/crti.o' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lm -lpthread --end-group '" + _crt + "/crtn.o' -L'" + _crt + "' -o '" + _nbin + "' 2>&1"
+                    let _lr = exec(_lnk)
+                    let _nbin_ok = exec("test -x '" + _nbin + "' && printf yes || printf no")
+                    if _nbin_ok == "yes" {
+                        // atomic-rename into the cache slot; exec path below picks it up.
+                        let _rn = exec("mv -f '" + _nbin + "' '" + tmpbin + "' 2>/dev/null")
+                        if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[run-native] clang-free: aprime --emit=obj + ld → " + tmpbin) }
+                    } else if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[run-native] ld link failed → clang fallback: " + _lr) }
+                }
+            } else if env_var("HEXA_RUN_NATIVE_TRACE") == "1" { eprintln("[run-native] native-emit failed → clang fallback: " + _ne) }
+            // best-effort cleanup of the intermediate object
+            let _ = exec("rm -f '" + _nobj + "' 2>/dev/null")
+        }
+    }
     if !file_exists(tmpbin) {
         // 2nd clang site, parent-pipe variant (#2415 closed the inner build's
         // own clang pipe; THIS is the `hexa run` -> `hexa build` SUBPROCESS
