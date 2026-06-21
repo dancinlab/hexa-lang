@@ -1,0 +1,146 @@
+atlas_aliases_smoke	B_LD	IMPORT	/tmp/legb-r20-3276845/test/atlas_aliases_smoke.hexa:580:(.text+0x50ae): undefine
+atlas_atom_meta_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+atlas_cycle_append_smoke	B_EMIT	IMPORT	HX2001
+atlas_doctrine_smoke	B_LD	IMPORT	/tmp/legb-r20-3276845/test/atlas_doctrine_smoke.hexa:580:(.text+0x50ae): undefin
+atlas_materials_limits_smoke	B_LD	IMPORT	/tmp/legb-r20-3276845/test/atlas_materials_limits_smoke.hexa:580:(.text+0x50ae):
+atlas_n6_axes_smoke	B_LD	IMPORT	/tmp/legb-r20-3276845/test/atlas_n6_axes_smoke.hexa:580:(.text+0x50ae): undefine
+atlas_real_limits_smoke	B_LD	IMPORT	/tmp/legb-r20-3276845/test/atlas_real_limits_smoke.hexa:580:(.text+0x50ae): unde
+atlas_tecsl_verify_smoke	B_EMIT	IMPORT	HX2006
+atlas_verify_smoke	B_EMIT	IMPORT	HX2006
+atlas_wave3_smoke	B_LD	IMPORT	/tmp/legb-r20-3276845/test/atlas_wave3_smoke.hexa:580:(.text+0x50ae): undefined 
+calc_cli_smoke	C_DIFFER	IMPORT	nrc=1 crc=0
+catalan_combinatorial_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+congruence_chain_engine_smoke	C_DIFFER	IMPORT	nrc=1 crc=0
+convergence_cluster_smoke	C_DIFFER	IMPORT	nrc=1 crc=0
+deck_gen_smoke	B_EMIT	IMPORT	HX2001
+deck_orchestration_selftest	B_EMIT	IMPORT	HX2001
+deck_rtsc_bytecompat	B_EMIT	IMPORT	HX2001
+deck_validate_gate_selftest	B_EMIT	IMPORT	HX2001
+dft_fanout_plan_selftest	C_DIFFER		nrc=0 crc=0
+divisor_field_theory_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+egyptian_fraction_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+factorial_structure_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+flame_ag_derive_test	B_EMIT	IMPORT	HX2001
+flame_ag_extract_sd11_compile_test	B_EMIT	IMPORT	HX2001
+flame_ag_extract_sd12_compile_test	B_EMIT	IMPORT	HX2001
+flame_ag_extract_sd13_compile_test	B_EMIT	IMPORT	HX2001
+flame_ag_extract_sd14_compile_test	B_EMIT	IMPORT	HX2001
+flame_ag_extract_test	B_EMIT	IMPORT	HX2001
+ftl_n6_constants_smoke	C_DIFFER	IMPORT	nrc=1 crc=0
+ftl_tribunal_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+generator_finder_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+hashset_smoke	B_EMIT	IMPORT	HX2001
+iit4_approx_phi_smoke	B_EMIT	IMPORT	HX2001
+linux_hexat_trim_repro	C_DIFFER		nrc=5 crc=0
+lora_cuda_equiv_test_emit	B_LD		/tmp/legb-r20-3276845/test/lora_cuda_equiv_test_emit.hexa:277:(.text+0x3a73): un
+mult_order_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+n6_lattice_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+n6_uniqueness_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+native_map_signed_zero_smoke	B_EMIT		
+nstate_calculator_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+nuclear_r4_anchor_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+op143_sort_stable	B_EMIT	IMPORT	HX2006
+op145_let_reassign_loop	C_DIFFER		nrc=0 crc=0
+pascal_perfect_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+perfect_number_engine_smoke	C_DIFFER	IMPORT	nrc=1 crc=0
+physics_constant_engine_smoke	C_DIFFER	IMPORT	nrc=1 crc=0
+platonic_solids_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+prime_pair_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+qa_l3_arena_valueops	B_EMIT		HX2001
+reachability_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+regress_dict_keys_let_bind	A_PASS		rc=0
+regression	B_EMIT	IMPORT	HX2001
+repo_taxonomy_audit_smoke	C_DIFFER	IMPORT	nrc=137 crc=0
+rfc036_phi_rs_smoke	B_EMIT		HX2001
+sigma_phi_tau_uniqueness_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+static_index_lazy_poc_smoke	A_PASS	IMPORT	rc=0
+symmetric_group_s6_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+t33_mut_arena	A_PASS		rc=0
+t33_repro_minimal	A_PASS		rc=0
+t34_net_listen_smoke	C_DIFFER		nrc=139 crc=0
+t35_hxqwen14b_abi_smoke	B_LD		/tmp/legb-r20-3276845/test/t35_hxqwen14b_abi_smoke.hexa:25:(.text+0x143): undefi
+t36_serve_alm_smoke	B_EMIT	IMPORT	HX2001
+t37_attr_pub_fn	A_PASS		rc=0
+t37_hxqwen14b_day2_smoke	B_LD		/tmp/legb-r20-3276845/test/t37_hxqwen14b_day2_smoke.hexa:31:(.text+0x143): undef
+t38_nanbox_smoke	C_DIFFER		nrc=0 crc=0
+t38_test_attr	B_LD		(.text+0x1b): undefined reference to `main'
+t39_resource_attrs	A_PASS		rc=0
+t40_evolution_attrs	A_PASS		rc=0
+t41_recovery_attrs	A_PASS		rc=0
+t42_for_in_range	C_DIFFER		nrc=0 crc=0
+t43_closures_hof	B_LD		/tmp/legb-r20-3276845/test/t43_closures_hof.hexa:5:(.text+0xfad): undefined refe
+t44_array_methods	B_LD		/tmp/legb-r20-3276845/test/t44_array_methods.hexa:5:(.text+0x713): undefined ref
+t45_string_methods	B_LD		/tmp/legb-r20-3276845/test/t45_string_methods.hexa:4:(.text+0xa82): undefined re
+t45b_string_methods_utf8	B_EMIT		HX2001
+t46_dict_ops	B_EMIT		HX2001
+t47_let_mut_zero	A_PASS		rc=0
+t48_val_arena	A_PASS		rc=0
+t48_write_bytes_binary	B_LD		/tmp/legb-r20-3276845/test/t48_write_bytes_binary.hexa:13:(.text+0x1aa): undefin
+t49_runtime_string_pure	B_EMIT		HX2001
+t50_arena_pure	A_PASS		rc=0
+t51_limit_singleton	A_PASS		rc=0
+t52_safetensors_to_hexaw	B_EMIT	IMPORT	HX2001
+t53_qwen_bpe	B_EMIT	IMPORT	HX2001
+t54_lora_to_hexaw	B_EMIT	IMPORT	HX2001
+t54_qwen_bpe_multibyte_roundtrip	B_EMIT	IMPORT	HX2001
+t55_hexaw_farr32_rss	B_EMIT	IMPORT	HX2001
+t55_literal_ban	A_PASS		rc=0
+t56_brace_lock	A_PASS		rc=0
+t56_read_f32_array_at_rss	B_EMIT	IMPORT	HX2001
+t56b_rss_boxed	B_LD		/tmp/legb-r20-3276845/test/t56b_rss_boxed.hexa:17:(.text+0xb9): undefined refere
+t56b_rss_farr32	B_EMIT		HX2001
+t57_scope_strict	A_PASS		rc=0
+t58_on2_concat	A_PASS		rc=0
+t59_geometry2d_pure	C_DIFFER		nrc=0 crc=1
+t59_testgen_fixture	A_PASS		rc=0
+t60_bubble_fixture	A_PASS		rc=0
+t60_regex_mini_pure	C_DIFFER		nrc=1 crc=1
+t61_profile_fixture	A_PASS		rc=0
+t62_lazy_attr	C_DIFFER		nrc=0 crc=0
+t62_lazy_attr_bad_arg	B_LD		(.text+0x1b): undefined reference to `main'
+t62_lazy_attr_bad_ossify	B_LD		(.text+0x1b): undefined reference to `main'
+t_batch22_print_fmt_pure	C_DIFFER		nrc=0 crc=0
+t_batch23_datetime_pure	A_PASS		rc=0
+t_cert_bucket_split	C_DIFFER	IMPORT	nrc=0 crc=0
+t_cert_roundtrip	C_DIFFER	IMPORT	nrc=0 crc=0
+t_cmd_url_args_passthrough	A_PASS		rc=1
+t_exec_env_reproducible	B_EMIT		HX1101
+t_ffi_marshal_skeleton	C_DIFFER	IMPORT	nrc=0 crc=0
+t_float_mod_codegen	B_EMIT		HX2001
+t_macro_depth_default	C_DIFFER		nrc=0 crc=0
+t_macro_depth_override	C_DIFFER		nrc=0 crc=0
+t_macro_depth_valid	C_DIFFER		nrc=0 crc=0
+t_multiarch_cpu_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+t_op124_float_negate_constfold	B_LD		/tmp/legb-r20-3276845/test/t_op124_float_negate_constfold.hexa:31:(.text+0xc4): 
+t_op124_multiline_arith_continuation	A_PASS		rc=0
+t_parser_lt_generic_disambig	A_PASS		rc=0
+t_parser_macro_invocation	B_EMIT		HX2001
+t_parser_select_attr	B_EMIT		HX2001
+t_range_precedence	A_PASS		rc=0
+t_select_dispatch_parse	B_LD	IMPORT	/tmp/legb-r20-3276845/test/t_select_dispatch_parse.hexa:82:(.text+0x111c): undef
+t_statusline_4panel	A_PASS		rc=0
+t_typealias_occurs_check	C_DIFFER		nrc=0 crc=0
+test_auto_marker	A_PASS		rc=0
+test_drill_classify	B_LD		/tmp/legb-r20-3276845/test/test_drill_classify.hexa:11:(.text+0x19): undefined r
+test_native_multi_calls	B_EMIT		HX0012
+test_phi_extractor_ffi	B_EMIT		HX2001
+texas_sharpshooter_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+three_root_theorem_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+vortex_math_verifier_smoke	C_DIFFER	IMPORT	nrc=0 crc=0
+m_cache_gc_test	C_DIFFER		nrc=0 crc=0
+m_cache_import_closure_test	C_DIFFER		nrc=0 crc=0
+m_daemon_r1_test	B_LD		/tmp/legb-r20-3276845/tests/m_daemon_r1_test.hexa:78:(.text+0xe65): undefined re
+m_daemon_r2_test	B_LD		/tmp/legb-r20-3276845/tests/m_daemon_r2_test.hexa:109:(.text+0x14e7): undefined 
+m_daemon_r3_test	B_LD		/tmp/legb-r20-3276845/tests/m_daemon_r3_test.hexa:92:(.text+0x957): undefined re
+m_daemon_r4_atlas_flush_test	B_LD		/tmp/legb-r20-3276845/tests/m_daemon_r4_atlas_flush_test.hexa:109:(.text+0xbbb):
+m_daemon_r4_codegen_test	B_EMIT		HX2001
+m_precompile_hit_test	B_EMIT		HX2001
+m_sleep_ms_test	C_DIFFER		nrc=139 crc=0
+m_version_str_consistency_test	B_EMIT		HX3004
+qa_iofs_l1	B_LD		/tmp/legb-r20-3276845/tests/qa_iofs_l1.hexa:47:(.text+0xc74): undefined referenc
+qa_litarr_repro	A_PASS		rc=0
+runtime_h_smoke_byte_diff	C_DIFFER		nrc=0 crc=0
+runtime_h_smoke_emit	B_LD		/tmp/legb-r20-3276845/tests/runtime_h_smoke_emit.hexa:102:(.text+0x11e3): undefi
+test_attr_mandatory	B_EMIT	IMPORT	HX2001
+test_module_gate	B_EMIT	IMPORT	HX2001
+test_tape_grammar	C_DIFFER	IMPORT	nrc=1 crc=0
