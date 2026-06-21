@@ -2219,7 +2219,16 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                         _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg(src_reg),
                             "hv: unbox call result (" + src_reg + ")"))
                     }
-                    _x86_store_tag_imm(rm, s.dst.id, 0) // TAG_INT
+                    // r16 — a ret-box builtin returns a raw int in eax; its
+                    // HexaVal tag is TAG_INT for len(...) but TAG_BOOL for the
+                    // bool-returning str builtins (contains/starts_with/ends_with
+                    // — _builtin_ret_box(s.op)=="bool"). Without the bool tag the
+                    // result carries TAG_INT and println formats it as 1/0 instead
+                    // of true/false (c5_multi_fn_alias `ends_ok`: native "ends:1"
+                    // vs C-path "ends:true"). Mirrors arm64_darwin.hexa _emit_bool_box.
+                    let mut _retbox_tag = 0 // TAG_INT
+                    if _builtin_ret_box(s.op) == "bool" { _retbox_tag = 2 } // TAG_BOOL
+                    _x86_store_tag_imm(rm, s.dst.id, _retbox_tag)
                 } else {
                     _x86_store_tag_reg(rm, s.dst.id, "rax")
                     if dst.reg.name != src_reg {
