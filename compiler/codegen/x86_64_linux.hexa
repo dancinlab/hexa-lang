@@ -1088,6 +1088,20 @@ fn _x86_store_spill(rm: X86RegMap, id: i64, src_reg: string) {
     return
 }
 
+// r15 — zero the SysV return pair (rax:rdx = tag:payload) for a fall-through
+// (implicit) return. Without this, control falling off the end of a fn (a
+// top-level program's synthetic main, or a value-less tail) leaves whatever
+// the last op wrote in rax — e.g. a hexa_cmp_lt loop guard leaves TAG_BOOL=2
+// in rax, so a fizzbuzz `for i in 1..25 {}` program exits 2 instead of 0. The
+// C-transpile path ends such a main with an explicit `return 0`; mirror that.
+fn _x86_emit_zero_ret_pair() {
+    _x86_buf.push(_x86_instr2("xor", _x86_op_reg("eax"), _x86_op_reg("eax"),
+                     "fall-through return: tag = 0"))
+    _x86_buf.push(_x86_instr2("xor", _x86_op_reg("edx"), _x86_op_reg("edx"),
+                     "fall-through return: payload = 0"))
+    return
+}
+
 // PAIR-MODEL — emit the function-exit tail: free the spill frame, pop the
 // callee-save align pad, restore rbx/r12-r15 (reverse push order) and rbp, ret.
 // Shared by the RETURN statement and the safety epilogue so both honor the
@@ -2267,6 +2281,10 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
         return
     }
     if s.kind == _STMT_RETURN {
+        if len(s.args) < 1 {
+            // r15 — bare `return` carries no value: default the SysV pair to 0.
+            _x86_emit_zero_ret_pair()
+        }
         if len(s.args) >= 1 {
             // PAIR-MODEL — a user .hexa fn returns a 16-byte HexaVal in the
             // SysV INTEGER-class return pair rax:rdx (tag:payload). Box the
@@ -2445,6 +2463,9 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
             }
         }
     }
+    // r15 — fall-through (no explicit return reached): default the return pair
+    // to 0 so a top-level program / value-less tail exits 0, not the stale rax.
+    _x86_emit_zero_ret_pair()
     _x86_emit_epilogue(spill_frame)
 
     return LFunc {
