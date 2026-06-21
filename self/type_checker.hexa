@@ -979,6 +979,17 @@ fn annotation_to_type(ann) {
 // Type compatibility check
 // ══════════════════════════════════════════════════════════════
 
+// A declared list annotation has the surface form `[T]` — starts with `[`
+// and ends with `]` (e.g. `[str]`, `[int]`, `[[float]]`). Used by
+// types_compatible to unify the generic inferred `array` token with any
+// concrete list annotation. Mirrors the shipping compiler's List/Array Type.
+fn tc_is_list_annotation(t) {
+    if len(t) < 2 { return false }
+    if t.substring(0, 1) != "[" { return false }
+    if t.substring(len(t) - 1, len(t)) != "]" { return false }
+    return true
+}
+
 fn types_compatible(expected, actual) {
     if expected == "unknown" { return true }
     if actual == "unknown" { return true }
@@ -987,6 +998,18 @@ fn types_compatible(expected, actual) {
     if expected == actual { return true }
     // int -> float coercion
     if expected == "float" && actual == "int" { return true }
+    // List/array unification: an array literal (or `[]`) infers as the generic
+    // token "array" (element type unknown — `tc_infer_expr` doesn't reconstruct
+    // [T] from items), while a declared list annotation `[str]`/`[int]`/… keeps
+    // its surface spelling. The shipping compiler models these as a structured
+    // List/Array Type and unifies them; this string-based self-checker had
+    // drifted into an exact compare and flagged phantom
+    // `expected '[str]', got 'array'` mismatches. Mirror the shipping behavior:
+    // the generic `array` is element-agnostic, so it unifies with ANY declared
+    // `[T]` list annotation (and vice-versa). Conservative — this only relaxes
+    // array-vs-[T]; non-list mismatches (int vs [str], string vs int) still error.
+    if expected == "array" && tc_is_list_annotation(actual) { return true }
+    if actual == "array" && tc_is_list_annotation(expected) { return true }
     // C4: Type params are compatible with any concrete type
     if expected == "typeparam" { return true }
     if actual == "typeparam" { return true }
@@ -2135,6 +2158,42 @@ let errs10 = type_check(s10)
 assert len(errs10) == 0
 test_pass = test_pass + 1
 println("PASS: Test 10 — nested fn return type isolation (inner:int, outer:string)")
+
+// ── Test 11: list return type — array literal & [] unify with [str] ──
+// Regression: a fn declared `-> [str]` returning an array literal (or `[]`)
+// infers the value as the generic token "array"; the exact-compare checker
+// used to flag a phantom `expected '[str]', got 'array'` mismatch.
+
+let mut body11a = []
+body11a.push(ret_stmt(nd("Array", "")))
+let mut s11a = []
+s11a.push(fn_decl("strs", [], body11a, "[str]"))
+let errs11a = type_check(s11a)
+assert len(errs11a) == 0
+test_pass = test_pass + 1
+println("PASS: Test 11a — fn -> [str] returning array literal accepted")
+
+let mut body11b = []
+body11b.push(ret_stmt(nd("Array", "")))
+let mut s11b = []
+s11b.push(fn_decl("empty_strs", [], body11b, "[str]"))
+let errs11b = type_check(s11b)
+assert len(errs11b) == 0
+test_pass = test_pass + 1
+println("PASS: Test 11b — fn -> [str] returning [] accepted")
+
+// ── Test 12: genuine mismatch into a list type STILL errors ─────────
+// Conservative guard: returning an int (5) from a fn declared `-> [str]`
+// must still be reported (do not over-suppress).
+
+let mut body12 = []
+body12.push(ret_stmt(lit("IntLit", "5")))
+let mut s12 = []
+s12.push(fn_decl("bad_list", [], body12, "[str]"))
+let errs12 = type_check(s12)
+assert type_errors_has(errs12, "Return type mismatch")
+test_pass = test_pass + 1
+println("PASS: Test 12 — fn -> [str] returning int (5) still flagged")
 
 // ── Summary ────────────────────────────────────────────────────
 
