@@ -1439,6 +1439,34 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
         // container's CARRIED tag (recovered from its tag-slot, not the
         // operand-kind default) so a param array reaches the runtime as
         // TAG_ARRAY. The 16B return comes back tag:payload in rax:rdx.
+        // r17 — closure-expression site. hir_to_mir lowers a closure to
+        // STMT_ASSIGN op="closure_new" with args = [env_array, lambda_name_str,
+        // arity_int] and emits the lifted __hexa_lambda_N MFunc separately.
+        // Runtime ABI: hexa_closure_new(void* fn_ptr, int arity, HexaVal env)
+        // — fn_ptr → rdi, arity (C int) → esi, env HexaVal pair → rdx:rcx;
+        // returns the TAG_CLOSURE HexaVal in rax:rdx. fn_ptr = address of the
+        // lifted lambda symbol via RIP-relative lea. Mirrors arm64_darwin.hexa.
+        if s.op == "closure_new" && len(s.args) >= 3 {
+            let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
+            let lam_sym = s.args[1].str_val
+            let arity = s.args[2].int_val
+            // rdi = &__hexa_lambda_N (RIP-relative address-of).
+            _x86_buf.push(_x86_instr2("lea", _x86_op_reg("rdi"),
+                             _x86_op_label("[rip+" + lam_sym + "]"),
+                             "closure_new: lambda fn-ptr"))
+            // esi = arity (C int).
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("esi"),
+                             _x86_op_imm(arity), "closure_new: arity"))
+            // rdx:rcx = env array HexaVal.
+            _x86_hv_box_arg(s.args[0], st, rm, "rdx", "rcx", opts)
+            _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_closure_new"),
+                             "closure_new: build TAG_CLOSURE"))
+            _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                             "closure_new: capture closure payload"))
+            _x86_store_tag_reg(rm, s.dst.id, "rax")
+            _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+            return
+        }
         if s.op == "index" && len(s.args) >= 2 {
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
             _x86_hv_box_arg(s.args[0], st, rm, "rdi", "rsi", opts)  // container
@@ -2294,6 +2322,91 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             if dst.reg.name != "rdx" {
                 _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
                     "hv: unbox user-call result payload"))
+            }
+            _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+        }
+        return
+    }
+    if s.kind == "call_indirect" && len(s.args) >= 1 {
+        // r17 — indirect call through a closure VALUE (TAG_CLOSURE). Mirrors
+        // arm64_darwin.hexa STMT_CALL_INDIRECT. HexaClo layout (runtime.h:77):
+        //   struct HexaClo { void* fn_ptr; int arity; HexaVal* env_box; }
+        //   → fn_ptr @0, env_box @16. The callee payload (args[0] hi) is the
+        // HexaClo*. Dispatch ABI is env-first: the lifted __hexa_lambda_N takes
+        // (env, a1..aN), so env → pair0 (rdi:rsi) and call args → pair1
+        // (rdx:rcx), pair2 (r8:r9), pair3+ → 16B stack slots. fn_ptr + env_box
+        // are pushed to the stack so the arg boxing (which clobbers the SysV
+        // arg regs + r10/r11) cannot lose them.
+        let arg_n = len(s.args)
+        // 1. callee → r10:r11 ; r11 = HexaClo* payload.
+        _x86_hv_box_arg(s.args[0], st, rm, "r10", "r11", opts)
+        // 2. fn_ptr = [clo+0] → rax ; env_box = [clo+16] → rcx. Push both
+        //    (keep 16B alignment with one 16B push pair).
+        _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rax"),
+                         _x86_op_mem("r11", 0), "call_indirect: fn_ptr = clo->fn_ptr"))
+        _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rcx"),
+                         _x86_op_mem("r11", 16), "call_indirect: env_box = clo->env_box"))
+        _x86_buf.push(_x86_instr1("push", _x86_op_reg("rax"),
+                         "call_indirect: save fn_ptr"))
+        _x86_buf.push(_x86_instr1("push", _x86_op_reg("rcx"),
+                         "call_indirect: save env_box"))
+        // 3. call args a1.. → pairs 1,2,3.. (env occupies pair0). args ≥ pair3
+        //    spill to 16B stack slots above the two saved 8B words.
+        let mut overflow_n = 0
+        if arg_n - 1 > 2 { overflow_n = (arg_n - 1) - 2 }
+        if overflow_n > 0 {
+            _x86_buf.push(_x86_instr2("sub", _x86_op_reg("rsp"),
+                _x86_op_imm(overflow_n * 16),
+                "call_indirect: reserve " + to_string(overflow_n) + " 16B stack args"))
+        }
+        let mut k = arg_n - 1
+        while k >= 1 {
+            // outgoing pair index for call-arg k is k (env is pair 0).
+            if k <= 2 {
+                let lo = _x86_hv_pair_lo(k)
+                let hi = _x86_hv_pair_hi(k)
+                _x86_hv_box_arg(s.args[k], st, rm, lo, hi, opts)
+            } else {
+                _x86_hv_box_arg(s.args[k], st, rm, "r10", "r11", opts)
+                let off = (k - 3) * 16
+                _x86_buf.push(_x86_instr2("mov", _x86_op_mem("rsp", off),
+                    _x86_op_reg("r10"), "call_indirect: stack arg " + to_string(k) + " tag"))
+                _x86_buf.push(_x86_instr2("mov", _x86_op_mem("rsp", off + 8),
+                    _x86_op_reg("r11"), "call_indirect: stack arg " + to_string(k) + " payload"))
+            }
+            k = k - 1
+        }
+        // 4. env HexaVal = *env_box → rdi:rsi (pair0). env_box was pushed at
+        //    [rsp + overflow_n*16] (below the reserved stack-arg region).
+        _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"),
+                         _x86_op_mem("rsp", overflow_n * 16),
+                         "call_indirect: reload env_box"))
+        _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rdi"),
+                         _x86_op_mem("r11", 0), "call_indirect: env tag = *env_box[0]"))
+        _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rsi"),
+                         _x86_op_mem("r11", 8), "call_indirect: env payload = *env_box[8]"))
+        // 5. reload fn_ptr (pushed below env_box) → r11, indirect call.
+        _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"),
+                         _x86_op_mem("rsp", overflow_n * 16 + 8),
+                         "call_indirect: reload fn_ptr"))
+        _x86_buf.push(_x86_instr1("call", _x86_op_reg("r11"),
+                         "call_indirect: call closure fn_ptr"))
+        // 6. tear down: pop the reserved stack args + the two saved words.
+        if overflow_n > 0 {
+            _x86_buf.push(_x86_instr2("add", _x86_op_reg("rsp"),
+                _x86_op_imm(overflow_n * 16),
+                "call_indirect: pop stack args"))
+        }
+        _x86_buf.push(_x86_instr2("add", _x86_op_reg("rsp"), _x86_op_imm(16),
+                         "call_indirect: pop saved env_box + fn_ptr"))
+        // 7. result HexaVal rax:rdx → dst slot.
+        if s.dst.id >= 0 {
+            let dst_name = _x86_dst_reg(rm, s.dst.id)
+            let dst = _x86_op_reg(dst_name)
+            _x86_store_tag_reg(rm, s.dst.id, "rax")
+            if dst.reg.name != "rdx" {
+                _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                    "call_indirect: unbox result payload"))
             }
             _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
         }
