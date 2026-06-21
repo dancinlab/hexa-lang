@@ -129,7 +129,7 @@ A binary appears only when every fatal stage passes. The atlas (4.2 MB) is baked
 |---|---|---|
 | **forge BF16-TC mega-kernel** (RFC 049 Stage 1, A100) | **9.67× faster than FP64 cuBLAS** @ Llama-7B FFN shape | $0.10 fire · paradigm verdict from Phase R 14-fire $2.91 campaign |
 | forge Phase R / RFC 060 closure | FP64 mega-kernel **KILLED** (1.8-4.4× slower than per-op) · BF16 substrate **PASS** | RFC 060 100% closure · BF16-TC is the cuBLAS-relative wall path |
-| flame `ag_tape` d=768 · 12-layer (A100) | per-step wall recorded · **PyTorch wall speedup NOT measured** | prior README "2.95× / 1.26-1.76× faster than PyTorch eager" was a unit mismatch (full-run / 1-step) — **RETRACTED** per `stdlib/flame/README.md` correction 2026-05-19 |
+| flame `ag_tape` d=768 · 12-layer (A100) | per-step wall recorded · **PyTorch wall speedup NOT measured** | prior README "2.95× / 1.26-1.76× faster than PyTorch eager" was a unit mismatch (full-run / 1-step) — **RETRACTED** per the flame perf-retraction (2026-05-19, see `stdlib/flame/PERF.md`) |
 | **flame batch-fill SM-fill** (CLMConvMoE, H100) | **≥1.3× @B=2, 2.95× @B=32** self-speedup (byte-eq B=1 max\|Δ\|=0; B>1 causal-conv seam-only Δ) | batch FILLS the SMs (B=1 under-fills, util 1-2%); capped ~3× by the interpreted per-step glue (token-pack + CE-grad + AdamW ∝ B·Tw) — ~3x cap is STRUCTURAL (serial un-fused FP64 op-DAG); uncap = precision-change OR right-sized GPU, NOT interpreter (#2915) |
 | flame vs PyTorch (matched-dtype, `F-BENCH-1`, RTX 5070) | **matched-dtype the gap is SINGLE-DIGIT: FP64 flame ties/wins (B=2 0.84× torch-eager, B=4/8 flame faster); TF32 torch 3.03× (B=1) → 7.88× (B=8)** ahead (cuBLAS-tuned GEMM vs flame's naive tiled GEMM). The old **~1656× / ~2207×** was flame-FP64-vs-torch-TF32 + a 2-point extrapolation of the **interpreted** full trainer at batch=1 — re-contextualized to single-digit by the matched-dtype `F-BENCH-1`. | honest: flame value = byte-exact · device-resident · no-LLVM, NOT step-rate; kernel-fusion (capture/replay, fwd+bwd) = ~1.0× closed-neg |
 
@@ -308,7 +308,7 @@ Honest scope on where it *doesn't*: a single huge GEMM (already compute-bound, t
 
 **One line**: cuBLAS = a one-dish specialist (master of the stew). hexa fusion = a one-pan dinner (multiple steps in sequence on the same heat). Users whose workload's time distribution overlaps the four scenarios above land on hexa's real gap.
 
-Detail: `stdlib/flame/README.md` (canonical perf table + RETRACTION note) · `stdlib/flame/PERF.md` · `stdlib/flame/PLAN.md` (campaign log + cycle ledger) · `self/forge/PLAN.md` · `self/forge/PARADIGM.md` (Phase R measured verdicts) · `GPU.md` §1h-1o fusion-moat fires · `GPU.easy.md` (friendly persona sidecar) · `state/anima_handoff_2026_05_19.md` (integration recipe).
+Detail: `stdlib/flame/PERF.md` (canonical perf table + RETRACTION note) · `stdlib/flame/PLAN.md` (campaign log + cycle ledger) · `self/forge/PLAN.md` · `self/forge/PARADIGM.md` (Phase R measured verdicts) · `GPU.md` §1h-1o fusion-moat fires · `GPU.easy.md` (friendly persona sidecar) · `state/anima_handoff_2026_05_19.md` (integration recipe).
 
 * * *
 
