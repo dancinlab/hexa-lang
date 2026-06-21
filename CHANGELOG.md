@@ -1,3 +1,12 @@
+## fix(cloud): `hexa cloud` 목록/임대/전송 정확성 묶음 — per-provider liveness + 함정 #71~78 + 원샷 bootstrap
+
+(아래 #71~74 위에 이어 #75~78 추가) 전부 `stdlib/cloud` 소스·`hexa run` 컴파일+실행 확정·help-drift 게이트 GREEN(38 verbs).
+
+- **#75 copy-to 부모 자동생성**: scp 는 원격 대상의 부모 디렉토리를 못 만들어 `/root/anima/state/...` 로의 copy-to 가 조용한 `scp exit 1` 로 죽었음. copy-to 가 전송 전 원격 부모를 `mkdir -p`(`_remote_dirname`+`cloud_exec_opts`, idempotent·`--no-mkparent` opt-out). (`cloud_cli.hexa`)
+- **#76 동시 copy-to race**: vast proxy 가 동시 scp 스트림을 race-drop → help 에 "다중 대용량은 순차(또는 `cloud bootstrap`)" 명시 + #74 재시도로 transient 완화(stateless CLI 라 연결풀링은 과설계, 순차가 정답). (`cloud_cli.hexa`)
+- **#77 대형 pod 부팅시간**: 2TB 램 pod 는 ssh-ready 까지 5분+ 인데 `--max-wait-sec` 기본 180s 가 짧아 created→destroyed 낭비. 기본 180→**300s** 상향(vast·runpod 양 경로) + 타임아웃 시 "대형 pod 는 `--max-wait-sec 600`" 힌트. leak-safety auto-destroy 는 불변(회귀 없음). (`cloud_cli.hexa`)
+- **#78 `cloud bootstrap` 원샷**: 매 pod 마다 반복하던 install→mkdir→copy-to→exec 을 한 커맨드로 — `cloud bootstrap <id> [--hexa edge|stable] [--push local:remote]... [--exec 'cmd']`. 내부에서 #71~77 함정-free primitive 를 **순차** 조합(부모 mkdir #75 + scp 재시도 #74 + sha 검증 + 한 번에 하나 #76). 검증된 verb(exec/copy-to) 합성·렌트 안 함. roster+dispatch 등록. (`cloud_cli.hexa`·`cloud_commands.hexa`)
+
 ## fix(cloud): `hexa cloud` 목록/임대 정확성 묶음 — per-provider liveness + vast rent 함정 4종 (ING #71~74)
 
 `hexa cloud` 가 실제 runpod/vast 상태를 잘못 보고하거나 엉뚱한 박스를 임대하던 일련의 문제를 근본수정. 전부 `stdlib/cloud` 소스 픽스(컴파일러 무관·byteeq 무영향) — 로컬 `hexa run` 으로 컴파일+실행 RC=0 확정, 권위는 PR CI.

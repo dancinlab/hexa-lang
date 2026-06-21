@@ -110,7 +110,11 @@ fn _cloud_help() {
     println("  NB: for LARGE pod transfers use `copy-to` (scp, auto-retries a dropped")
     println("      stream up to 3×) — NOT raw `rsync` over a vast proxy, which drops")
     println("      mid-stream ('unexpected end of file'). copy-to + --verify-sha is the")
-    println("      stable path; pair with `--recursive` for a tree.")
+    println("      stable path; pair with `--recursive` for a tree. copy-to auto-creates")
+    println("      the remote PARENT dir (mkdir -p; --no-mkparent opts out).")
+    println("      Run MULTIPLE big transfers SEQUENTIALLY (not concurrent nohup) — a")
+    println("      vast proxy races concurrent scp streams and silently drops one; or")
+    println("      use `cloud bootstrap` which sequences them.")
     println("")
     println("`run` uses structured argv — every token POSIX-quoted before ssh, so")
     println("no remote shell parsing / glob / /* */ comment mis-parse can corrupt")
@@ -1382,6 +1386,60 @@ fn _cpu_ram_mb_suspect(query: str) -> int {
     return 0
 }
 
+// _push_args_cli — collect every `--push <local:remote>` pair (repeatable),
+// stopping at `--`. The bootstrap one-shot (ING #78) sequences these uploads.
+fn _push_args_cli(av: [str], start: int) -> [str] {
+    let mut out = []
+    let mut i = start
+    while i < len(av) {
+        let t = av[i]
+        if t == "--" { return out }
+        else if t == "--push" {
+            out.push(_need_val(av, i, "--push"))
+            i = i + 2
+        } else {
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// _split_first_colon — split "local:remote" on the FIRST ':' into [local, remote].
+// Local filesystem paths rarely contain ':'; a remote path never starts with one.
+// Returns [whole, ""] when there is no ':'.
+fn _split_first_colon(s: str) -> [str] {
+    let mut i = 0
+    while i < len(s) {
+        if s.substring(i, i + 1) == ":" {
+            return [s.substring(0, i), s.substring(i + 1, len(s))]
+        }
+        i = i + 1
+    }
+    return [s, ""]
+}
+
+// _remote_dirname — the parent directory of a remote path, i.e. everything
+// before the last "/". "/root/anima/state/x.bin" → "/root/anima/state";
+// "bins" (no slash) → "" (cwd-relative, no parent to create). Trailing slashes
+// are trimmed first so ".../state/" → ".../state"'s parent ".../" collapses
+// sanely. Used by copy-to to `mkdir -p` the destination parent (ING #75).
+fn _remote_dirname(path: str) -> str {
+    let mut p = path
+    // trim trailing slashes (but keep a lone "/")
+    while len(p) > 1 && p.substring(len(p) - 1, len(p)) == "/" {
+        p = p.substring(0, len(p) - 1)
+    }
+    let mut last = -1
+    let mut i = 0
+    while i < len(p) {
+        if p.substring(i, i + 1) == "/" { last = i }
+        i = i + 1
+    }
+    if last < 0 { return "" }
+    if last == 0 { return "/" }
+    return p.substring(0, last)
+}
+
 // _cloud_rent_vast — vast.ai provision path: search-offers → create → wait
 // ssh-ready → register. Prints host:port + instance id. Returns the exit
 // code (0 ok, 1 failure). The created instance is registered with the
@@ -1419,7 +1477,7 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     // M1 — bounded SSH-readiness gate. Default 180s; 0/negative = legacy
     // unbounded (opt-in). Caps the rent so a ghost-RUNNING pod whose ssh
     // transport never comes up (exit 255 forever) can't bleed billing.
-    let max_wait_sec = _cli_atoi(_flag_val(av, start, "--max-wait-sec", "180"))
+    let max_wait_sec = _cli_atoi(_flag_val(av, start, "--max-wait-sec", "300"))
     // M2/M3 — opt-in guard limits (stored in registry after READY).
     let ttl_sec = _ttl_to_sec(_flag_val(av, start, "--ttl", ""))
     let max_cost = _flag_val(av, start, "--max-cost-usd", "")
@@ -1551,6 +1609,7 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
             if v.ok == 1 {
                 let _ = pod_registry_forget(inst.instance_id)
                 println("[cloud] rent: SSH never ready within " + str(max_wait_sec) + "s, pod " + inst.instance_id + " destroyed")
+                println("[cloud] rent: large-RAM (2TB) pods can take 5min+ to boot — retry with `--max-wait-sec 600` (ING #77)")
             } else {
                 println("[cloud] rent: SSH never ready within " + str(max_wait_sec) + "s, pod " + inst.instance_id + " ALIVE — manual destroy required (vast_destroy: " + v.message + ")")
             }
@@ -1625,7 +1684,7 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     // M1 — bounded SSH-readiness gate (default 180s). The 2026-05-28
     // RunPod H100 SXM dump (pod RUNNING + ssh exit 255 forever) is the
     // motivating incident; without a cap a dead-ssh pod bleeds billing.
-    let max_wait_sec = _cli_atoi(_flag_val(av, start, "--max-wait-sec", "180"))
+    let max_wait_sec = _cli_atoi(_flag_val(av, start, "--max-wait-sec", "300"))
     // M2/M3 — opt-in guard limits stored in the M5 registry after READY.
     // ttl: --ttl 30m/90s/3600 → deadman teardown. cost: --max-cost-usd 5.
     let ttl_sec = _ttl_to_sec(_flag_val(av, start, "--ttl", ""))
@@ -2649,7 +2708,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "reboot" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "fire-shards" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "alive" || t == "probe" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "idle-reap" || t == "adopt" || t == "attribute" || t == "forget" || t == "api" || t == "provider-cli" || t == "dft-run" || t == "dft-fanout" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "reboot" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "fire-shards" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "alive" || t == "probe" || t == "copy-to" || t == "copy-from" || t == "bootstrap" || t == "orphans" || t == "reconcile" || t == "reap" || t == "idle-reap" || t == "adopt" || t == "attribute" || t == "forget" || t == "api" || t == "provider-cli" || t == "dft-run" || t == "dft-fanout" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -3827,6 +3886,19 @@ fn main() {
         if _has_flag(av, si + 2, "-r") == 1 {
             want_recursive = 1
         }
+        // ING #75 — scp can't create a missing destination PARENT, so a
+        // copy-to into /root/anima/state/... died with a silent `scp exit 1`
+        // when the parent dir didn't exist. mkdir -p the remote parent FIRST
+        // (idempotent; no-op when the dir already exists or the dest is
+        // cwd-relative with no parent). `--no-mkparent` opts out.
+        let _rparent = _remote_dirname(remote_path)
+        if len(_rparent) > 0 && _has_flag(av, si + 2, "--no-mkparent") == 0 {
+            let _mk = cloud_exec_opts(host, ssh_opts, "mkdir -p " + _shq(_rparent))
+            if _mk.ok == 0 {
+                println("[cloud] copy-to: ⚠ remote mkdir -p " + _rparent + " failed (rc "
+                    + to_string(_mk.exit_code) + ") — scp may fail if the parent is absent")
+            }
+        }
         let r = _copy_to_run(host, ssh_opts, local_path, remote_path, want_recursive)
         println("[cloud] " + r.message + " · " + local_path + " -> " + host + ":" + remote_path)
         if r.ok == 1 && _has_flag(av, si + 2, "--verify-sha") == 1 {
@@ -3835,6 +3907,80 @@ fn main() {
             exit(v.exit_code)
         }
         exit(r.exit_code)
+    }
+    if sub == "bootstrap" {
+        // ING #78 — one-shot pod setup that composes the now-hardened
+        // primitives so a fresh pod never re-treads the #71~77 traps:
+        //   [--hexa edge|stable]  install hexa on the pod
+        //   [--push local:remote] (repeatable)  SEQUENTIAL copy-to with auto
+        //        parent-mkdir (#75) + scp retry (#74) + sha verify, one stream
+        //        at a time (#76 — never concurrent over a vast proxy)
+        //   [--exec cmd]          run a final command on the pod
+        // Pure composition of verified verbs (exec/copy-to); rents nothing.
+        if si + 1 >= len(av) {
+            println("[cloud] bootstrap: usage — cloud bootstrap <id> [--hexa edge|stable] [--push local:remote]... [--exec 'cmd'] [--port N] [--insecure]")
+            exit(2)
+        }
+        let _id = _checked_host(av[si + 1])
+        let _rh = _resolve_cloud_host(_id)
+        _guard_resolved_or_die("bootstrap", _id, _rh)
+        let host = _rh.host
+        let ssh_opts = _apply_resolved_port(_ssh_opts_cli(av, si + 2), _rh)
+        // 1) install hexa (optional)
+        let hexa_ver = _flag_val(av, si + 2, "--hexa", "")
+        if len(hexa_ver) > 0 {
+            let mut inst_cmd = "curl -fsSL https://raw.githubusercontent.com/dancinlab/hexa-lang/main/install.sh | sh"
+            if hexa_ver == "edge" {
+                inst_cmd = "curl -fsSL https://raw.githubusercontent.com/dancinlab/hexa-lang/main/install.sh | HEXA_VERSION=edge sh"
+            }
+            println("[cloud] bootstrap: installing hexa (" + hexa_ver + ") …")
+            let ir = cloud_exec_opts(host, ssh_opts, inst_cmd)
+            if ir.ok == 0 {
+                println("[cloud] bootstrap: hexa install FAILED (rc " + to_string(ir.exit_code) + ") — aborting")
+                exit(ir.exit_code)
+            }
+        }
+        // 2) sequential pushes (parent-mkdir + scp-retry + verify, one at a time)
+        let pushes = _push_args_cli(av, si + 2)
+        let mut pi = 0
+        while pi < len(pushes) {
+            let pair = _split_first_colon(pushes[pi])
+            let lp = pair[0]
+            let rp = pair[1]
+            if len(rp) == 0 {
+                println("[cloud] bootstrap: --push '" + pushes[pi] + "' missing :remote — skipped")
+                pi = pi + 1
+                continue
+            }
+            let parent = _remote_dirname(rp)
+            if len(parent) > 0 {
+                let _ = cloud_exec_opts(host, ssh_opts, "mkdir -p " + _shq(parent))
+            }
+            println("[cloud] bootstrap: push " + lp + " -> " + rp + " …")
+            let cr = _copy_to_run(host, ssh_opts, lp, rp, 1)
+            if cr.ok == 0 {
+                println("[cloud] bootstrap: push FAILED (" + cr.message + ") — aborting")
+                exit(cr.exit_code)
+            }
+            let v = cloud_verify_sha(host, ssh_opts, rp, lp)
+            println("[cloud] bootstrap: verify-sha " + rp + " — " + v.message)
+            if v.exit_code != 0 {
+                println("[cloud] bootstrap: sha mismatch — aborting")
+                exit(v.exit_code)
+            }
+            pi = pi + 1
+        }
+        // 3) final exec (optional)
+        let exec_cmd = _flag_val(av, si + 2, "--exec", "")
+        if len(exec_cmd) > 0 {
+            println("[cloud] bootstrap: exec " + exec_cmd)
+            let er = cloud_exec_opts(host, ssh_opts, exec_cmd)
+            if len(er.stdout_) > 0 { print(er.stdout_) }
+            println("[cloud] bootstrap: " + er.message)
+            exit(er.exit_code)
+        }
+        println("[cloud] bootstrap: DONE (" + to_string(len(pushes)) + " push(es))")
+        exit(0)
     }
     if sub == "copy-from" {
         if si + 1 >= len(av) {
