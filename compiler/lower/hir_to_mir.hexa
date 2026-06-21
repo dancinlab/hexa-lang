@@ -1607,6 +1607,33 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         // runtime dispatches arrays via hexa_array_set and unwraps
         // VALSTRUCT, mirroring the existing index-get path
         // (7b00bd54).
+        // r24 — field-lhs assign `obj.field = val`. The prior path lowered a
+        // field lhs the same as an ident lhs (fresh local + rebind), which
+        // SILENTLY DROPPED the store on the actual struct map — every
+        // `c.depth = c.depth+1` through a fn param left the caller's struct
+        // unchanged (structs are map-backed reference values, so a field write
+        // must mutate the backing map). Mirrors the index-lhs path: route
+        // through op="field_set" args=[base, "<name>"_str, val] → codegen emits
+        // hexa_map_set(base, key, val), symmetric to the field-read map_get.
+        // (C-path self/codegen.hexa:3287 "Field assignment: obj.field = val".)
+        if lhs.kind == "field" && len(lhs.children) >= 1 {
+            let fbr = _lower_hexpr(ctx, lhs.children[0])
+            let frr = _lower_hexpr(fbr.ctx, e.children[1])
+            let mut fargs: [Operand] = []
+            fargs.push(fbr.operand)
+            fargs.push(_const_str_op(lhs.text))
+            fargs.push(frr.operand)
+            let fs = Stmt {
+                kind: STMT_ASSIGN,
+                dst: _miss_local(),
+                op: "field_set",
+                args: fargs,
+                target_block: -1,
+                target_block_else: -1
+            }
+            let fctx = _push_stmt(frr.ctx, fs)
+            return _no_value(fctx)
+        }
         if lhs.kind == "index" && len(lhs.children) >= 2 {
             let br = _lower_hexpr(ctx, lhs.children[0])
             let kr = _lower_hexpr(br.ctx, lhs.children[1])
