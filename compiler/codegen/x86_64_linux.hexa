@@ -1506,7 +1506,18 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
         if len(s.args) >= 1 {
             let mut src_scratch = "r10"
             if _x86_is_spilled(rm, s.dst.id) { src_scratch = "r11" }
-            let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
+            // r21 — global-reassign-clobbers-param fix. For a module-global
+            // dst (arena_id == -999) s.dst.id is the GLOBAL id, and
+            // _x86_dst_reg(rm, id) maps it to the LOCAL reg slot of that same
+            // small id — which is a LIVE PARAM when global_id == param_local_id
+            // (e.g. `let mut PASS=0; fn check(label,cond){ PASS=PASS+1 }` →
+            // global PASS id 0 aliases param `label` local 0 → `mov rbx,src`
+            // clobbers label before `"..."+label` reads it). Route a global
+            // assign through a dedicated scratch (rcx — free here; arg regs
+            // already consumed, r10/r11 used as src_scratch) so it never
+            // touches a local reg slot; the writeback stores it to [rip+g<id>].
+            let _g_dst = s.dst.arena_id == -999
+            let dst = if _g_dst { _x86_op_reg("rcx") } else { _x86_op_reg(_x86_dst_reg(rm, s.dst.id)) }
             // r18 — a string-literal assignment (let s = LITERAL) must load
             // the ADDRESS of the .LCstr (RIP-relative lea), NOT a mov dst,label
             // which assembles as an absolute 32-bit imm (R_X86_64_32S reloc —
@@ -1542,8 +1553,22 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             // already correct (non-global, or global whose slot happened to
             // hold the right tag). x86_64-ONLY; arm64 fixpoint untouched.
             _x86_tag_resolve(s.args[0], rm, "r11")
-            _x86_store_tag_reg(rm, s.dst.id, "r11")
-            _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+            if _g_dst {
+                // r21 — global dst: persist payload (rcx) + tag (r11) DIRECTLY
+                // to the .data slot [rip+g<id>] / [rip+g<id>+8]; never write a
+                // local reg/tag slot (those alias a live param when ids collide).
+                _x86_buf.push(_x86_instr2("mov",
+                                 _x86_op_label("[rip+g" + to_string(s.dst.id) + "]"),
+                                 _x86_op_reg("rcx"),
+                                 "global write: g" + to_string(s.dst.id) + " (r21 scratch)"))
+                _x86_buf.push(_x86_instr2("mov",
+                                 _x86_op_label("[rip+g" + to_string(s.dst.id) + "+8]"),
+                                 _x86_op_reg("r11"),
+                                 "global tag write: g" + to_string(s.dst.id) + "+8 (r21)"))
+            } else {
+                _x86_store_tag_reg(rm, s.dst.id, "r11")
+                _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+            }
         }
         return
     }
