@@ -957,6 +957,26 @@ fn _x86_hv_tag_for(o: Operand) -> i64 {
 // RIP-relative `lea reg, [rip+label]` (address-of), the canonical x86_64
 // way to take a data address position-independently. Int payloads keep the
 // existing single-register resolve (a register, immediate, or spill reload).
+// r10 ROOT B — emit a const char* map KEY (the ADDRESS of the .LCstr) into
+// `reg`. The bug it fixes: `_x86_op_resolve` returns a bare label and `mov
+// reg, .LCstr` assembles as a MEMORY LOAD of the string bytes (movabs of the
+// content), not the address — so hexa_map_get/set got a garbage key pointer
+// (map_get → empty result, map_set → SEGV in hexa_map_set_impl). lea gives the
+// real RIP-relative address. const_str operands only; a non-const_str key
+// (rare) falls back to the resolve+mov path (load its payload).
+fn _x86_emit_cstr_key(o: Operand, st: X86StrTab, rm: X86RegMap, reg: string, opts: CodegenOptions) {
+    if o.kind == "const_str" {
+        let mut lbl = _x86_strtab_lookup(st, o.str_val)
+        if len(lbl) == 0 { lbl = o.str_val }
+        _x86_buf.push(_x86_instr2("lea", _x86_op_reg(reg),
+                         _x86_op_label("[rip+" + lbl + "]"),
+                         "map key (const char*): &" + lbl))
+        return
+    }
+    _x86_op_rm(o, st, rm, reg, opts)
+    let k = _x86_op_resolve(o, st, rm, reg, opts)
+    _x86_buf.push(_x86_instr2("mov", _x86_op_reg(reg), k, "map key (payload)"))
+}
 fn _x86_hv_box_arg(o: Operand, st: X86StrTab, rm: X86RegMap,
                    lo: string, hi: string, opts: CodegenOptions) {
     if o.kind == "const_str" {
@@ -1292,16 +1312,14 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             _x86_store_tag_reg(rm, s.dst.id, "rax")
             let mut i = 1
             while i + 1 < len(s.args) {
-                _x86_op_rm(s.args[i], st, rm, "r10", opts)
-                let key = _x86_op_resolve(s.args[i], st, rm, "r10", opts)
-                _x86_op_rm(s.args[i + 1], st, rm, "r11", opts)
-                let val = _x86_op_resolve(s.args[i + 1], st, rm, "r11", opts)
-                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), key,
-                                 "struct_lit: field key"))
-                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rdx"), val,
-                                 "struct_lit: field val"))
-                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rdi"), dst,
-                                 "struct_lit: map arg"))
+                // val (HexaVal) → rcx(tag):r8(payload)
+                _x86_hv_box_arg(s.args[i + 1], st, rm, "rcx", "r8", opts)
+                // key (const char*) → rdx — lea the ADDRESS, not the content
+                _x86_emit_cstr_key(s.args[i], st, rm, "rdx", opts)
+                // map (HexaVal m) → rdi(tag):rsi(payload) — set LAST.
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), dst,
+                                 "struct_lit: map payload"))
+                _x86_tag_resolve_local(rm, s.dst.id, "rdi")
                 _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_map_set"),
                                  "struct_lit: set field"))
                 _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
@@ -1358,10 +1376,8 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             // carried tag (TAG_MAP) reaches the runtime tag-dispatch.
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
             _x86_hv_box_arg(s.args[0], st, rm, "rdi", "rsi", opts)
-            _x86_op_rm(s.args[1], st, rm, "rdx", opts)
-            let key = _x86_op_resolve(s.args[1], st, rm, "rdx", opts)
-            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rdx"), key,
-                             "field: key"))
+            // field map_get key (const char*) → rdx — lea the ADDRESS (r10 ROOT B)
+            _x86_emit_cstr_key(s.args[1], st, rm, "rdx", opts)
             _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_map_get"),
                              "field: hexa_map_get"))
             _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
