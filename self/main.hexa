@@ -4314,8 +4314,8 @@ fn cmd_run_user_direct(file, extra_args) {
             if _nobj_ok == "yes" {
                 // 2) ld link (no clang): crt + runtime.a + libm/libc/pthread.
                 // crt dir auto-detected (gnu-preferred over musl).
-                let _crt = exec("for d in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do test -f "$d/crt1.o" && { printf '%s' "$d"; break; }; done")
-                let _dl = exec("for f in /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-x86-64.so.2; do test -e "$f" && { printf '%s' "$f"; break; }; done")
+                let _crt = exec("for d in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do if [ -f $d/crt1.o ]; then printf %s $d; break; fi; done")
+                let _dl = exec("for f in /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-x86-64.so.2; do if [ -e $f ]; then printf %s $f; break; fi; done")
                 if len(_crt) > 0 && len(_dl) > 0 {
                     let _lnk = "'" + _nld + "' --dynamic-linker '" + _dl + "' '" + _crt + "/crt1.o' '" + _crt + "/crti.o' '" + _nobj + "' '" + _nrt + "' --start-group -lc -lm -lpthread --end-group '" + _crt + "/crtn.o' -L'" + _crt + "' -o '" + _nbin + "' 2>&1"
                     let _lr = exec(_lnk)
