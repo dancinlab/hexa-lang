@@ -107,6 +107,10 @@ fn _cloud_help() {
     println("  --recursive,-r  (copy-to) copy a directory tree (scp -r).")
     println("  --verify-sha    (copy-to/copy-from) after transfer, compare sha256 of")
     println("                  local vs remote; exit 103 mismatch / 104 if no sha tool.")
+    println("  NB: for LARGE pod transfers use `copy-to` (scp, auto-retries a dropped")
+    println("      stream up to 3×) — NOT raw `rsync` over a vast proxy, which drops")
+    println("      mid-stream ('unexpected end of file'). copy-to + --verify-sha is the")
+    println("      stable path; pair with `--recursive` for a tree.")
     println("")
     println("`run` uses structured argv — every token POSIX-quoted before ssh, so")
     println("no remote shell parsing / glob / /* */ comment mis-parse can corrupt")
@@ -119,6 +123,11 @@ fn _cloud_help() {
     println("")
     println("provisioning flags (rent):")
     println("  --query Q       (vast) raw offer predicate; picks the first match.")
+    println("                  NB: cpu_ram is in GB (2TB RAM = `cpu_ram>=2000`,")
+    println("                  NOT the MB value `cloud api /bundles` reports).")
+    println("  --include-unverified  (vast) also search unverified host-machines —")
+    println("                  reaches cheap large-RAM / CPU-only boxes the default")
+    println("                  verified=true filter hides. (= adds `verified=false`.)")
     println("  --offer ID      (vast) PIN a specific offer id — skips the query")
     println("                  search and binds THAT box; offers rotate, so a")
     println("                  --query that looked cheap can bind a different box.")
@@ -1337,6 +1346,42 @@ fn _cloud_rent_selftest() -> int {
     return 1
 }
 
+// _cpu_ram_mb_suspect — 1 iff `query` constrains `cpu_ram` with a value that
+// looks like MEGABYTES mistakenly passed where vast's query DSL expects
+// GIGABYTES (ING #71). vast `cpu_ram` is GB (2TB box = `cpu_ram>=2000`), but
+// the `cloud api /bundles` JSON reports cpu_ram in MB (2052096) — so a user
+// who copies the MB number into `--query 'cpu_ram>=2000000'` asks for ~2M GB
+// (impossible) and gets a SILENT 0-match. Heuristic: a cpu_ram value ≥ 100000
+// (= 100 TB as GB) is almost certainly an MB value. Scans the first digit run
+// after the `cpu_ram` token's operator.
+fn _cpu_ram_mb_suspect(query: str) -> int {
+    let at = query.index_of("cpu_ram")
+    if at < 0 { return 0 }
+    // Skip the field name + operator/space chars to the first digit.
+    let mut i = at + 7
+    let mut digits = ""
+    let mut in_num = 0
+    while i < len(query) {
+        let c = query.substring(i, i + 1)
+        if c >= "0" && c <= "9" {
+            digits = digits + c
+            in_num = 1
+        } else if in_num == 1 {
+            // first non-digit after the number ends the scan
+            i = len(query)
+        } else if c == "=" || c == ">" || c == "<" || c == " " {
+            // still skipping the operator gap before the number
+        } else {
+            // a non-operator before any digit → not a numeric cpu_ram constraint
+            return 0
+        }
+        i = i + 1
+    }
+    if len(digits) == 0 { return 0 }
+    if _cli_atoi(digits) >= 100000 { return 1 }
+    return 0
+}
+
 // _cloud_rent_vast — vast.ai provision path: search-offers → create → wait
 // ssh-ready → register. Prints host:port + instance id. Returns the exit
 // code (0 ok, 1 failure). The created instance is registered with the
@@ -1413,6 +1458,32 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     // the chosen offer's dollars-per-hour exceeds <usd>, on BOTH the pinned
     // and the query-search path — the direct guard against the rate surprise.
     let max_dph = _flag_val(av, start, "--max-dph", "")
+    // --include-unverified — reach the cheap large-RAM / CPU-only boxes that the
+    // default `verified=true` filter hides (ING #73). Appends `verified=false`,
+    // which _vast_build_query now treats as a caller override (drops the default
+    // verified=true). No-op on the --offer pin path (it searches the general
+    // pool already). Skip if the caller already set verified in --query.
+    if _has_flag(av, start, "--include-unverified") == 1 && query.index_of("verified") < 0 {
+        if len(query) > 0 { query = query + " verified=false" }
+        else { query = "verified=false" }
+    }
+    // --max-dph search injection (ING #72): push the ceiling into the SEARCH
+    // predicate (`dph_total<=N`) so an over-budget box is never even picked —
+    // not only refused post-pick. The post-pick vast_dph_exceeds guard below
+    // stays as the authoritative belt-and-suspenders (catches a rotated rate).
+    // Only inject on the query-search path (pin path is a single named box) and
+    // only when the caller didn't already constrain dph_total.
+    if len(max_dph) > 0 && len(pin_offer) == 0 && query.index_of("dph_total") < 0 {
+        if len(query) > 0 { query = query + " dph_total<=" + max_dph }
+        else { query = "dph_total<=" + max_dph }
+    }
+    // cpu_ram unit guard (ING #71): vast's query DSL `cpu_ram` is in GB
+    // (2TB = cpu_ram>=2000); a value ≥100000 is almost certainly an MB number
+    // copied from `cloud api /bundles` → an impossible filter → silent 0-match.
+    if _cpu_ram_mb_suspect(query) == 1 {
+        println("[cloud] rent vast: ⚠ --query cpu_ram looks like MEGABYTES — vast cpu_ram is in GB")
+        println("                   (2TB RAM = `cpu_ram>=2000`, NOT 2000000). An MB value matches 0 offers.")
+    }
     // verified_only=1 → vast.hexa applies the campaign-proven default
     // filters (reliability>=0.95 + verified + rentable). An explicit
     // --query opts into the caller's raw predicate string instead. A
@@ -2818,8 +2889,16 @@ fn main() {
         if pa.ok == 0 {
             println("[cloud] pods: provider liveness UNREACHABLE (" + pa.message
                 + ") — showing tracked jobs UNVERIFIED (not confirmed alive)")
+        } else if pa.runpod_ok == 0 {
+            println("[cloud] pods: runpod degraded (" + pa.message
+                + ") — its pods shown UNKNOWN (not GONE); vast authoritative")
+        } else if pa.vast_ok == 0 {
+            println("[cloud] pods: vast degraded (" + pa.message
+                + ") — its pods shown UNKNOWN (not GONE); runpod authoritative")
         }
-        exit(pods_local_print_table_live(false, pa.ok, pa.ids, show_all))
+        // Per-provider authority — a degraded provider must not GONE its own
+        // pods (the merged-ok bug: vast-only ok=1 marked live runpod pods GONE).
+        exit(pods_local_print_table_live(false, pa.runpod_ok, pa.vast_ok, pa.ids, show_all))
     }
     if sub == "dispatch" {
         // Manage the per-project ./pods.json manifest:

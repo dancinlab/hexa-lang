@@ -322,14 +322,31 @@ fn _scp_capture(scp_opts: [str], src: str, dst: str) -> CloudResult {
         i = i + 1
     }
     cmd = cmd + " " + _shq(src) + " " + _shq(dst)
-    let res = exec_capture(cmd)
-    let rc = res[2]
+    // BOUNDED RETRY (ING #74) — a large transfer over a flaky vast proxy
+    // (sshN.vast.ai) can drop mid-stream ('unexpected end of file' / the
+    // keepalive-forced non-zero exit above). scp is NOT resumable, so a retry
+    // re-copies from scratch, but scp-over-proxy was empirically the STABLE
+    // transport (raw rsync dropped where scp succeeded), so a transient drop
+    // usually clears on the next attempt. 3 attempts total; the last result's
+    // exit code + stdout are surfaced.
+    let mut res = exec_capture(cmd)
+    let mut rc = res[2]
+    let mut attempt = 1
+    while rc != 0 && attempt < 3 {
+        attempt = attempt + 1
+        res = exec_capture(cmd)
+        rc = res[2]
+    }
     let mut ok = 0
     if rc == 0 {
         ok = 1
     }
+    let mut msg = "scp exit " + to_string(rc)
+    if attempt > 1 {
+        msg = msg + " (after " + to_string(attempt) + " attempts)"
+    }
     return CloudResult { ok: ok, exit_code: rc, pid: 0, stdout_: res[0],
-        message: "scp exit " + to_string(rc), logfile: "" }
+        message: msg, logfile: "" }
 }
 
 // ── marker parsing ───────────────────────────────────────────────────

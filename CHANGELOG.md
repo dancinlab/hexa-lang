@@ -1,3 +1,13 @@
+## fix(cloud): `hexa cloud` 목록/임대 정확성 묶음 — per-provider liveness + vast rent 함정 4종 (ING #71~74)
+
+`hexa cloud` 가 실제 runpod/vast 상태를 잘못 보고하거나 엉뚱한 박스를 임대하던 일련의 문제를 근본수정. 전부 `stdlib/cloud` 소스 픽스(컴파일러 무관·byteeq 무영향) — 로컬 `hexa run` 으로 컴파일+실행 RC=0 확정, 권위는 PR CI.
+
+- **per-provider liveness (GONE 오판 근본수정)**: `cloud_provider_alive_ids` 의 병합 `ok` 가 "한 provider라도 응답하면 1" 이라, runpod 쿼리가 일시 degraded 인데 vast 가 응답하면 **merged ok=1 + ids=vast만** → `cloud pods` 표가 살아있는 runpod 팟을 전부 `GONE` 으로 오판(g63 "blind probe 로 GONE 날조 금지" 위반). fix: `ProviderAlive` 에 `runpod_ok`/`vast_ok` per-provider 권위 추가 → `pods_local_print_table_live` 가 각 job 의 pod-provider 에 맞는 ok 로만 GONE 판정(해당 provider 가 degraded 면 UNKNOWN, GONE 아님). reconcile/reap 은 이미 provider별 판정이라 무영향. (`pod_registry.hexa`·`pods_local.hexa`·`cloud_cli.hexa`)
+- **#73 verified=true default override**: `_vast_build_query` 가 default `verified=true`/`rentable=true`/`reliability>=0.95` 를 caller `--query` 와 무관히 prepend → 싼 대형램 unverified 박스가 영구 제외. fix: caller query 가 이미 그 필드를 언급하면 해당 default 를 **drop**(token-order last-wins 의존 제거). 편의 플래그 `--include-unverified`(= `verified=false`) 신설. (`vast.hexa`·`cloud_cli.hexa`)
+- **#72 --max-dph search 주입**: rate ceiling 을 search predicate `dph_total<=N` 로 주입해 초과 박스를 **애초에 pick 안 함**(기존 pick-후 `vast_dph_exceeds` 가드는 belt-and-suspenders 로 유지). query-search 경로만, caller 가 dph_total 안 줬을 때. (`cloud_cli.hexa`)
+- **#71 cpu_ram 단위 가드**: vast DSL `cpu_ram` 은 GB(2TB=`cpu_ram>=2000`)인데 `cloud api /bundles` 는 MB 보고 → 사용자가 MB값을 query 에 넣으면 조용한 0매칭. `_cpu_ram_mb_suspect`(값 ≥100000 = MB 의심) 경고 + `--help` 에 "cpu_ram in GB" 명시. (`cloud_cli.hexa`)
+- **#74 copy-to 대용량 안정화**: vast proxy 로 raw rsync 는 mid-stream drop('unexpected end of file')하나 scp(copy-to)는 안정 — `_scp_capture` 에 bounded 재시도(3회) 추가(transient drop 자동 복구) + `--help` 에 "대용량은 copy-to(scp), raw rsync 금지" 명시. rsync 전환은 안정성 회귀라 배제. (`cloud.hexa`·`cloud_cli.hexa`)
+
 ## docs: 폐기된 forge/flame README 잔여 깨진 링크 정리 (#3754 후속)
 
 #3754가 self/forge/README + stdlib/flame/README를 폐기 후 남은 dead 링크 3곳을 PERF.md/PLAN.md로 재지정: gpu/HANDOFF.md·rfc_050_flame_forge_integration.md·stdlib/flame/STATUS.md. broken-link 0 확인. doc-only.
