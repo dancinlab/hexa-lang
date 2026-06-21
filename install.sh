@@ -283,6 +283,31 @@ EOF
         cp -R "$src/build/." "$HX_BIN/build/"
         chmod -R u+rwX,go+rX "$HX_BIN/build"
     fi
+    # Place the shipped precompile cache at the install dir. The tarball carries
+    # release/precompile/hexa_run.<key> (stage_precompile_package), and the
+    # compiler's _precompile_lookup probes <install_dir>/release/precompile/ — but
+    # nothing placed it here, so the shipped cache never reached consumers and
+    # every `hexa run <shipped-script>` (and `hexa cloud` via cmd_run) re-forked
+    # clang. release/precompile/ is .gitignore'd, so the install_src clone can NOT
+    # deliver it either — the tarball is the ONLY channel. Keys are
+    # sha256(source)[:16] + "_" + version, so a stale entry can never be served
+    # (source/version change → cache miss → recompile); placing it is purely a
+    # cold-start speedup with no staleness risk.
+    if [ -d "$src/release/precompile" ]; then
+        mkdir -p "$HX_BIN/release/precompile"
+        cp -R "$src/release/precompile/." "$HX_BIN/release/precompile/"
+        chmod -R u+rwX,go+rX "$HX_BIN/release/precompile"
+    fi
+    # Purge any stale standalone sub-binaries from a prior LOCAL build. `hexa
+    # cloud` / `hexa sim-universe` prefer an install-dir bin/hexa-<sub> binary
+    # over the source/version-keyed cmd_run path — and that standalone binary is
+    # NOT shipped or refreshed by the release, so a once-built one (e.g. a 6/5
+    # bin/hexa-cloud that predates a merged source fix) silently shadows every
+    # later change (ING #66/#67 — `--offer` ignored). Removing it forces dispatch
+    # through cmd_run, which is source-hash + version keyed and therefore can
+    # never go stale. A fresh standalone built from current source is fine; this
+    # only removes the unrefreshed shadow.
+    rm -f "$HX_BIN/bin/hexa-cloud" "$HX_BIN/bin/hexa-sim-universe" 2>/dev/null || true
     # #3723 fix — mark a cuda-runtime install so a consumer `hexa run/build` auto-links
     # cudart/cublas WITHOUT needing HEXA_CUDA=1 on every invocation. The cuda asset's
     # runtime.a (runtime_cuda.o) references cudaLaunchKernel/cublas; main.hexa
