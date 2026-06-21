@@ -89,7 +89,8 @@ draft 2026-05-17). Its honest scope:
 **Why it's not on a critical chain yet (g3 honest)**: forge's Phase R fires
 (`PARADIGM.md` §1) anchor that *a hand-written WMMA kernel is feasible* (C
 Stage 2 Phase 3 — 41-43% Tensor Core peak), so the codegen path can emit
-*correct* GPU code. **UPDATE (2026-06-21, measured RTX 5070 sm_120)**: own kernels now reach cuBLAS PARITY on dense GEMM (TF32 BSPAD=8 median ~1.11×, S2048 1.01×; FP64 bit-identical) and BEAT cuBLAS on M=1 decode GEMV (1.04~2.00×, memory-roofline-bound) — own-GEMM is the DEFAULT, cuBLAS is opt-in (`HEXA_USE_CUBLAS`). The residual ~13% on large dense TF32 is the consumer sm_120 HMMA issue-cadence floor (cuBLAS uses the identical instruction), not a CUTLASS-tuning gap. RFC 055 is therefore **P2** (not
+*correct* GPU code. It will not *beat cuBLAS on raw GEMM throughput* —
+CUTLASS-level tuning is a multi-week effort. RFC 055 is therefore **P2** (not
 blocking flame Phase 4-D or any current shipping fire). Sequencing: ship
 flame+forge on the C/CUDA substrate; close `@D g5` for the GPU lane when the
 RFC 055 backend has enough kernel coverage to substitute without regressing
@@ -98,10 +99,11 @@ forge's measured oracles (`g_blue_closed_mandate`).
 **What changes inside forge when RFC 055 lands**: `self/cuda/runtime_cuda.c`
 kernels get re-derived as `.hexa` files (still under `self/forge/` per
 `g_forge_substrate_role` — the *directory* boundary stays, only the *language*
-flips). cuBLAS Dgemm stays as an opt-in fallback only (`HEXA_USE_CUBLAS`; own GEMM reaches parity, GEMV beats it — measured sm_120, so it is no longer the unmatchable vendor-library default). The RFC 050 `_v1` ABI is the
+flips). cuBLAS Dgemm stays as a fallback (raw GEMM is a vendor-library win
+that hexa-native is not expected to match). The RFC 050 `_v1` ABI is the
 stable surface across the transition: flame source compiled against
 `forge >= 1.0` does not change when the kernels behind the ABI flip from C/CUDA
-to hexa-emitted PTX. Same dispatch, different substrate. (NOTE: the RFC-055 future is now largely PRESENT — own `.cu`/emitted GEMM kernels are the cuBLAS-free DEFAULT, cuBLAS is the opt-in `HEXA_USE_CUBLAS` fallback, not a hard dep; "raw GEMM is a vendor win hexa can't match" is refuted — own = parity on dense GEMM, beats cuBLAS on decode GEMV, measured sm_120.)
+to hexa-emitted PTX. Same dispatch, different substrate.
 
 ## Verified oracles (forge correctness floor)
 

@@ -1,3 +1,7 @@
+## docs(readme): #3752 후속 — self/forge/README 변경 폐기복원 + 루트 README BF16 sm_120 측정 보강
+
+#3752가 self/forge/README 수정본을 머지했으나 사용자 지시는 그 파일 폐기 → #3752 직전 원본으로 복원. 루트 README flame/forge 섹션 BF16 결론에 sm_120 측정 보강: H100 sm_90 wgmma 11.5× off와 별개로 consumer RTX 5070 sm_120 BF16 raw-GEMM own = ~2× off(HMMA issue-cadence/occupancy HW ceiling, ldmatrix .b16 form-correct). doc-only.
+
 ## docs(readme): forge GEMV decode 추월 반영 — 전수조사 결과 stale 0, GEMV beat만 누락 보강
 
 README+ARCHITECTURE 전수조사(README 전체 + ARCHITECTURE.json + FLAME+FORGE 문서) 결과 **stale perf 주장 0** — H100 sm_90 수치(9.35×·11.5×)는 모두 hardware-라벨 정확, sm_120 parity 주장 정확, polarity(HEXA_USE_CUBLAS own-default) 정확. 유일 누락 = 이번 세션 신규 측정 **own M=1 decode GEMV가 cuBLAS 추월(1.04~2.00× memory-bound bit-exact, RTX 5070 sm_120)** — 루트 README forge 설명 2곳에 반영(own-GEMM 'never a beat'는 dense GEMM 한정 명확화, GEMV는 별도 커널로 추월). ARCHITECTURE TF32 frontier는 #3749로 이미 반영(parity terminal + 베껴쓰기×돌파분 전략). doc-only.
