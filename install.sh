@@ -486,7 +486,27 @@ install_src() {
     # frozen runtime_core.c still satisfy the link, so no regression.
     bold "▸ resolving native runtime.a (stage_resolve_runtime_a — release parity)"
     _rtlink_ok=0
-    if [ -x "$HX_SRC/tool/stage_resolve_runtime_a" ]; then
+    # ING-82 guard — do NOT overwrite a cuda asset's cuBLAS-linked runtime.a with a
+    # CPU rebuild. The cuda tarball ships build/runtime.a containing runtime_cuda.o
+    # (cudart/cublas refs + the native rt_*_native seeds), already copied verbatim to
+    # $HX_BIN/build/runtime.a by install_hexa. stage_resolve_runtime_a below rebuilds a
+    # CPU-only runtime.a (no -DHEXA_CUDA, no runtime_cuda.o) and `cp`s it OVER that one,
+    # so a `HEXA_CUDA=1` install lands cuda_available()=0 (the original ING #82 bug — the
+    # asset was fine, the install clobbered it). The shipped cuBLAS runtime.a already has
+    # the native rt_*_native seeds (built by the same release recipe), so it satisfies the
+    # consumer link without a rebuild. Skip stage_resolve_runtime_a entirely for cuda.
+    # Detect "cuda install" via the $HX_HOME/.cuda-runtime marker install_hexa drops for a
+    # cuda asset (line ~317) — install-local + always in scope (the $asset var is set in a
+    # different function and unreliable under `set -u`/dash).
+    if [ -f "$HX_HOME/.cuda-runtime" ] && [ -f "$HX_BIN/build/runtime.a" ]; then
+        # Mirror the cuBLAS archive into $HX_SRC/build/ too so the pre-warm build
+        # (HEXA_LANG=$HX_SRC) links it instead of content-hash-compiling a CPU
+        # runtime.c — keeping the warmed object cuda-consistent with the shim.
+        mkdir -p "$HX_SRC/build"
+        cp -f "$HX_BIN/build/runtime.a" "$HX_SRC/build/runtime.a" 2>/dev/null || true
+        green "  ✓ cuda asset — keeping tarball's cuBLAS runtime.a (skip CPU stage_resolve overwrite)"
+        _rtlink_ok=1
+    elif [ -x "$HX_SRC/tool/stage_resolve_runtime_a" ]; then
         if ( cd "$HX_SRC" \
              && CC="${CC:-clang}" \
                 CFLAGS_COMMON="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}" \
