@@ -1367,6 +1367,9 @@ pub fn _builtin_runtime_sym(name: string) -> string {
     if name == "timestamp"     { return "hexa_timestamp" }
     if name == "utc_iso_now"   { return "hexa_utc_iso_now" }
     if name == "trim"          { return "rt_str_trim" }
+    if name == "parse_int"     { return "hexa_str_parse_int" }  // r18 — free/method int-parse
+    if name == "to_upper"      { return "rt_str_to_upper" }     // r18 — was unmapped
+    if name == "to_lower"      { return "rt_str_to_lower" }     // r18 — was unmapped
     if name == "type_of"       { return "hexa_type_of" }
     if name == "typeof"        { return "hexa_type_of" }  // keyword-form alias of type_of
     if name == "write_file"    { return "rt_write_file" }
