@@ -1099,6 +1099,15 @@ fn parse_primary() -> Expr {
     if check_kind(TokenKind::KwThrow) {
         return parse_throw_expr()
     }
+    if check_kind(TokenKind::Pipe) || check_kind(TokenKind::PipePipe) {
+        // r17 — pipe-lambda `|x| body` / `|x, y| body` / `|| body` (zero-arg).
+        // At the START of a primary expression a `|`/`||` can only open a
+        // closure (bitwise-or / logical-or need a left operand). Mirrors the
+        // C-path self/parser.hexa parse_primary BitOr/Or arms; produces the
+        // SAME ExprKind::Closure node as parse_closure_expr so the existing
+        // lambda-lift lowering handles it.
+        return parse_pipe_closure()
+    }
     if check_kind(TokenKind::KwFn) {
         // closure-expression `fn(params) { body }` in expression position —
         // RFC C1. Top-level `fn name(...)` items never reach parse_primary
@@ -1462,6 +1471,67 @@ fn parse_throw_expr() -> Expr {
 //
 // Codegen is DEFERRED: a Closure that reaches hir_to_mir emits HX1104
 // ("closure codegen not yet implemented — RFC C2/C3"), NOT HX2001.
+// r17 — pipe-lambda `|params| body`. Params are bare comma-separated idents
+// between two `|` (or `||` = zero params), then a block or a bare-expr body.
+// Builds the SAME ExprKind::Closure node as parse_closure_expr (text = param
+// count, children = [param_0 .. param_{n-1}, body]) so HIR/MIR lambda-lift +
+// the indirect-call codegen handle both surfaces uniformly. Ref: C-path
+// self/parser.hexa parse_primary BitOr/Or arms.
+fn parse_pipe_closure() -> Expr {
+    let kw = peek()
+    let mut kids = []
+    let mut n_params = 0
+    if check_kind(TokenKind::PipePipe) {
+        // `||` — zero-arg lambda; the `||` token already covers both bars.
+        advance()
+    } else {
+        advance() // consume opening `|`
+        if !check_kind(TokenKind::Pipe) {
+            kids.push(parse_closure_param())
+            n_params = n_params + 1
+            while check_kind(TokenKind::Comma) {
+                advance()
+                if check_kind(TokenKind::Pipe) { break }
+                kids.push(parse_closure_param())
+                n_params = n_params + 1
+            }
+        }
+        eat(TokenKind::Pipe) // consume closing `|`
+    }
+    // Body: a `{ ... }` block or a single bare expression (wrapped so the
+    // body child is always an ExprKind::Block, matching parse_closure_expr).
+    let body = parse_pipe_closure_body()
+    kids.push(body)
+    return Expr {
+        kind: ExprKind::Closure,
+        span: kw.span,
+        text: to_string(n_params),
+        annotations: [],
+        children: kids,
+        atlas_ref: empty_atlas()
+    }
+}
+
+// Closure body for the pipe-lambda form: a brace block lowers via
+// parse_block_expr; a bare expr `|x| x * 2` is wrapped into a single-child
+// Block whose tail is that expr. _lower_closure auto-returns a block tail
+// value (`if !has_returned { if has_value { return tail } }`), so no explicit
+// Return node is needed — the body child is uniformly an ExprKind::Block.
+fn parse_pipe_closure_body() -> Expr {
+    if check_kind(TokenKind::LBrace) {
+        return parse_block_expr()
+    }
+    let e = parse_expr()
+    return Expr {
+        kind: ExprKind::Block,
+        span: e.span,
+        text: "",
+        annotations: [],
+        children: [e],
+        atlas_ref: empty_atlas()
+    }
+}
+
 fn parse_closure_expr() -> Expr {
     let kw = peek()
     advance() // consume 'fn'
