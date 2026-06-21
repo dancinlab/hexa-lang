@@ -124,4 +124,4 @@ implementation*.
   landed, 055-P1/P2 = steps 2–4 above
 - `self/native/gpu_codegen_stub.c` — rt#45 `@gpu` codegen skeleton
 - `self/forge/PLAN.md` — GPU substrate roadmap
-- `stdlib/flame/README.md` — "honest floor" / cuBLAS roofline framing
+- `stdlib/flame/PERF.md` — "honest floor" / cuBLAS roofline framing (README retired #3754)
