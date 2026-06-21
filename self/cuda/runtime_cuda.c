@@ -926,7 +926,15 @@ static int _hx_cuda_gemm_tf32_dev(double* A_dev, double* B_dev, double* C_dev,
 #define HX_OWNTF_WM_FRAG 2
 #define HX_OWNTF_WN_FRAG 4
 #define HX_OWNTF_ASPAD 4
-#define HX_OWNTF_BSPAD 4
+/* BSPAD=8 (not 4): the m16n8k8 B-fragment read Bs[ks+tig][ncol+gid] strides
+ * rows by (BN+BSPAD). BSPAD=4 -> stride 68, 68%32==4, so the 32 warp lanes
+ * (tig 0-3 rows x gid 0-7 cols) collide on banks {tig*4+gid} (~245x conflicts).
+ * BSPAD=8 -> stride 72, 72%32==8, lanes hit {tig*8+gid} = all 32 banks distinct.
+ * MEASURED aiden sm_120: smem ld-conflicts 67.36M->274.7k (245x drop), TF32
+ * square +3.8% (S4096 26.8->27.85 TFLOP/s); rel-RMS unchanged (pad-only). The
+ * residual gap to cuBLAS is latency-bound (issue 36%, shallow 2-stage), not
+ * bank conflicts. */
+#define HX_OWNTF_BSPAD 8
 __device__ __forceinline__ unsigned _hx_f2tf32(float x){
     unsigned u; memcpy(&u,&x,4); u=(u+0x1000u)&0xFFFFE000u; return u;
 }

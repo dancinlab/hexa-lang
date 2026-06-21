@@ -69,8 +69,14 @@ __device__ __forceinline__ void cp_async_commit(){ asm volatile("cp.async.commit
 template<int N> __device__ __forceinline__ void cp_async_wait(){ asm volatile("cp.async.wait_group %0;\n" :: "n"(N)); }
 
 // Bank-conflict-free smem pad — break the 32-bank stride on the fragment loads.
+// BSPAD=8 (not 4): the m16n8k8 B-fragment read Bs[ks+tig][ncol+gid] strides rows by
+// (BN+BSPAD). BSPAD=4 -> stride 68, 68%32==4, so the warp's 32 lanes (tig 0-3 rows x
+// gid 0-7 cols) collide on banks {tig*4+gid}. BSPAD=8 -> stride 72, 72%32==8, lanes
+// hit {tig*8+gid} = all 32 banks distinct. MEASURED aiden sm_120 (ncu): smem
+// ld-conflicts 67.36M->274.7k (245x drop), TF32 square +3.8% (S4096 26.8->27.85
+// TFLOP/s); rel-RMS unchanged (pad-only). Residual gap is latency-bound (issue 36%).
 #define ASPAD 4
-#define BSPAD 4
+#define BSPAD 8
 
 // Tiled TF32 GEMM. A,B,C row-major. HEXA-0POD OP-1 (#PR): tuned over the original
 // F-BENCH-5 baseline (verdict .verdicts/hexa-0pod/F-OP1-SM120-OWNGEMM.txt). Three
