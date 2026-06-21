@@ -1014,7 +1014,18 @@ build_runtime_a_from_source() {
     # links cuBLAS (os_clang_ldflags' HEXA_CUDA branch supplies the host libs on
     # the consumer's GPU host where libcuda.so.1 exists). additive · self-host ≠
     # release: the default (non-CUDA) build never enters the cuda arm.
-    $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_valop_def $rt_alloc_def -I self -c self/runtime.c -o build/runtime.o
+    # RT-NATIVE PRINT (leg-B prerequisite, gated opt-IN): when HEXA_RT_PRINT_NATIVE=1
+    # the restored self/runtime.c had its Linux hxlcl_write swapped for a raw `syscall`
+    # body (tool/restore_frozen_seeds injection under the same env). Define
+    # -DHEXA_RT_PRINT_NATIVE so the injected #ifdef selects the raw-syscall arm; unset
+    # (default) leaves the libc write() #else -> runtime.a byte-identical to baseline.
+    # No seed .o (the override is in-TU in runtime.c), so nothing is ar'd here.
+    local rt_print_def=""
+    if [ "${HEXA_RT_PRINT_NATIVE:-0}" != "0" ]; then
+        rt_print_def="-DHEXA_RT_PRINT_NATIVE=1"
+        echo "[stage_resolve_runtime_a] RT-NATIVE PRINT: HEXA_RT_PRINT_NATIVE=1; x86_64 raw-syscall hxlcl_write (libc write dropped on print leaf)"
+    fi
+    $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_valop_def $rt_alloc_def $rt_print_def -I self -c self/runtime.c -o build/runtime.o
     ar rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     if [ "${HEXA_CUDA:-0}" = "1" ] && [ -f build/runtime_cuda.o ] && [ -f build/runtime_cuda_dlink.o ]; then
@@ -1022,7 +1033,7 @@ build_runtime_a_from_source() {
         local _cinc="$_cuda_home/targets/x86_64-linux/include"
         [ -d "$_cinc" ] || _cinc="$_cuda_home/include"
         echo "[stage_resolve_runtime_a] CUDA-R1: building SEPARATE consumer archive build/runtime.cuda.a (runtime.c -DHEXA_CUDA -I$_cinc + runtime_cuda.o + runtime_cuda_dlink.o); toolchain keeps the CPU build/runtime.a (libcuda-free, GPU-less-host-runnable)"
-        $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_valop_def $rt_alloc_def -DHEXA_CUDA -I "$_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o
+        $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_CUDA -I "$_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o
         ar rcs build/runtime.cuda.a build/runtime_cuda_host.o $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
         ls -la build/runtime.cuda.a
     fi

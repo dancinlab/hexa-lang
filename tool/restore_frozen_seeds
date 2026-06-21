@@ -143,6 +143,51 @@ if [ -f "$rt" ] && ! grep -q 'OP-17 (HEXA-0POD' "$rt"; then
   echo "[restore_frozen_seeds] OP-17: injected 9 #undef (-Wmacro-redefined hygiene) into $rt"
 fi
 
+# -- HEXA_RT_PRINT_NATIVE -- x86_64 raw-syscall hxlcl_write (leg-B prerequisite) --
+# OPT-IN (default OFF -> byte-neutral). The frozen self/runtime.c routes the Linux
+# hxlcl_write through libc write() (the `return (long)write(...)` Linux body) -- a
+# DELIBERATE substrate choice (the "libc-fallback syscall layer for Linux" comment;
+# cycle-66 dropped raw svc for read/write/close over carry-flag/EINTR/pair-return
+# bugs). That makes the on-path print leaf (rt_print -> __fd_write_bytes ->
+# hxlcl_write) bottom out in libc write on x86_64, while arm64-Darwin already
+# raw-traps via svc #0x80. This patch supplies the x86_64 raw-syscall twin
+# (SYS_write=1; rdi/rsi/rdx; result rax) so x86_64 reaches arm64 print parity and
+# the standalone io.hexa runtime (leg-B whole-runtime flip, r3) has a libc-free
+# write to depend on. ERROR CONTRACT mirrors arm64 _hxlcl_syscall3_cf EXACTLY: on a
+# kernel -errno return (rax in [-4095,-1]) set errno (= hexa-native hxlcl_errno,
+# file-wide #define errno hxlcl_errno) and return -1; else return the byte count --
+# so callers (== 1 / == n / < 0 checks) are unchanged vs the libc body. Replaces
+# ONLY the Linux body via #ifdef so the libc #else stays the untouched default.
+if [ -n "${HEXA_RT_PRINT_NATIVE:-}" ] && [ -f "$rt" ] && ! grep -q 'HEXA_RT_PRINT_NATIVE raw-syscall' "$rt"; then
+  awk '
+    /^static long __attribute__\(\(noinline\)\) hxlcl_write\(int fd, const void \*buf, unsigned long n\) \{ return \(long\)write\(fd, buf, \(size_t\)n\); \}$/ && !done {
+      print "// HEXA_RT_PRINT_NATIVE raw-syscall x86_64 hxlcl_write (leg-B prerequisite --"
+      print "// injected by tool/restore_frozen_seeds under -DHEXA_RT_PRINT_NATIVE). Drops the"
+      print "// libc write() dep on the on-path print leaf; errno contract == arm64 _cf."
+      print "#if defined(HEXA_RT_PRINT_NATIVE) && defined(__x86_64__)"
+      print "static long __attribute__((noinline)) hxlcl_write(int fd, const void *buf, unsigned long n) {"
+      print "    long _r;"
+      print "    __asm__ volatile(\"syscall\" : \"=a\"(_r)"
+      print "                     : \"0\"((long)1), \"D\"((long)fd), \"S\"((long)buf), \"d\"((long)n)"
+      print "                     : \"rcx\", \"r11\", \"memory\");"
+      print "    if (_r < 0 && _r >= -4095) { errno = (int)(-_r); return -1; }"
+      print "    return _r;"
+      print "}"
+      print "#else"
+      print "static long __attribute__((noinline)) hxlcl_write(int fd, const void *buf, unsigned long n) { return (long)write(fd, buf, (size_t)n); }"
+      print "#endif"
+      done=1
+      next
+    }
+    { print }
+  ' "$rt" > "$rt.rtprint" && mv "$rt.rtprint" "$rt"
+  if grep -q "HEXA_RT_PRINT_NATIVE raw-syscall" "$rt"; then
+    echo "[restore_frozen_seeds] HEXA_RT_PRINT_NATIVE: injected x86_64 raw-syscall hxlcl_write into $rt"
+  else
+    echo "[restore_frozen_seeds] HEXA_RT_PRINT_NATIVE: WARN anchor (Linux libc hxlcl_write) not found -- no injection" >&2
+  fi
+fi
+
 # ── FARR-NOOP-FREE-DECODE-LEAK — route packed-array buffers to the REAL libc ──
 # @convergence(state="ossified", id="FARR-NOOP-FREE-DECODE-LEAK")
 # The frozen self/runtime.c memory family is an mmap-backed bump allocator whose
