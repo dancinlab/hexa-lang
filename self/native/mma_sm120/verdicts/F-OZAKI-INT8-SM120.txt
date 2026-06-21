@@ -1,6 +1,27 @@
 r-ozaki-int8 — Ozaki-scheme INT8 GEMM, sm_120 (RTX 5070), aiden CUDA 13.0.88
 LAST cited TF32 speed-overturn lever (INT8 TC ~4x TF32 rate on GeForce).
 All numbers CAPTURED from /tmp/owngemm_ozaki_int8 on aiden (c2, no fabrication).
+HEADLINE VERDICT: FAIL / CLOSED-NEGATIVE — TF32 speed cap is now genuinely DRY.
+
+== LARGE-N PERF (NSPL=4, no host FP64) — captured ==
+  S=4096  own 4.67 TFLOP/s  cuBLAS-TF32 33.92  off=7.26x  speedup=0.138x
+  S=8192  own 4.49 TFLOP/s  cuBLAS-TF32 34.97  off=7.80x  speedup=0.128x
+  S=12288 own 4.43 TFLOP/s  cuBLAS-TF32 35.09  off=7.92x  speedup=0.126x
+  S=16384 own 4.41 TFLOP/s  cuBLAS-TF32 35.18  off=7.97x  speedup=0.125x
+  NSPL=6: S=8192 2.15 TF (16.01x), S=16384 2.10 TF (16.75x).
+  -> own throughput FLAT ~4.4 TF/s across all large n; curve does NOT rise toward
+     parity; off-ratio slightly WORSENS with n. NO crossover. The 5080-paper
+     crossover beats *native SGEMM*, NOT *cuBLAS-TF32 tensor* — does not transfer.
+
+== ROOT-CAUSE NUMBER (the measured wall) ==
+  Triangular OS-II pruning NSPL=4 = N(N+1)/2 = 10 IMMA full-GEMM products/output.
+  Cited INT8:TF32 rate ~4x. Break-even needs rate-adv >= split mult: 4x >= 10x =
+  FALSE. Best-case useful = 4/10 = 0.4x; measured 0.125-0.14x (further dragged by
+  split/recombine + s8 B-gather memory traffic). NSPL=6 (21 products) -> 0.06x,
+  confirming the linear work-multiplier penalty. INT8:TF32 (4x) < N-split (10x) =
+  closed condition, MEASURED.
+
+-- below: small-n + accuracy + determinism (captured earlier) --
 
 ISA: mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 — ACCEPTED by ptxas sm_120.
 

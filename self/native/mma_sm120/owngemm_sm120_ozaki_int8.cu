@@ -412,7 +412,7 @@ int main(int argc,char**argv){
     run_cublas(dR); CK(cudaDeviceSynchronize());
     CK(cudaMemcpy(hR,dR,szC*4,cudaMemcpyDeviceToHost));
     { double se=0,sr=0; for(size_t i=0;i<szC;i++){ double dd=(double)hC[i]-(double)hR[i]; se+=dd*dd; sr+=(double)hR[i]*(double)hR[i]; if(fabs(dd)>maxd_cb)maxd_cb=fabs(dd);} relrms_cb=sr>0?sqrt(se/szC)/sqrt(sr/szC):0; }
-    if(S<=4096){
+    if(S<=2048){
         double* hF=(double*)malloc(szC*8); ref_fp64(hA,hB,hF,M,N,K);
         double se=0,sr=0; for(size_t i=0;i<szC;i++){ double dd=(double)hC[i]-hF[i]; se+=dd*dd; sr+=hF[i]*hF[i]; } relrms_fp64=sr>0?sqrt(se/szC)/sqrt(sr/szC):0;
         // also cuBLAS-TF32's own rel-RMS vs FP64 for context
