@@ -1,0 +1,28 @@
+r-ozaki-int8 — Ozaki-scheme INT8 GEMM, sm_120 (RTX 5070), aiden CUDA 13.0.88
+LAST cited TF32 speed-overturn lever (INT8 TC ~4x TF32 rate on GeForce).
+All numbers CAPTURED from /tmp/owngemm_ozaki_int8 on aiden (c2, no fabrication).
+
+ISA: mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 — ACCEPTED by ptxas sm_120.
+
+ACCURACY (rel-RMS vs FP64 ref) — Ozaki-INT8 BEATS cuBLAS-TF32 accuracy:
+  S=512  NSPL=4  own=5.833e-06   cuBLAS-TF32=9.898e-04  (own ~170x more accurate)
+  S=1024 NSPL=4  own=6.487e-06   cuBLAS-TF32=6.215e-04
+  S=2048 NSPL=4  own=4.841e-06   cuBLAS-TF32=5.373e-04  (own ~111x more accurate)
+  NSPL sweep @2048: accuracy SATURATES at NSPL=4 (4.8e-6); 5/6/7 give no gain.
+  -> TF32-level accuracy target (<=~1e-5) MET at NSPL=4. Fragment layout CORRECT.
+
+DETERMINISM (run-to-run byte-eq):
+  S=2048 NSPL=4  max|delta|=0.000e+00  PASS (bit-identical) — integer EFT moat holds.
+
+PERF (NSPL=4, the minimal TF32-accuracy split count) vs cuBLAS-TF32:
+  S=512   own  1.39 TFLOP/s   cuBLAS 18.46   off=13.25x  speedup=0.075x
+  S=1024  own  3.16 TFLOP/s   cuBLAS 28.13   off= 8.90x  speedup=0.112x
+  S=2048  own  4.30 TFLOP/s   cuBLAS 30.72   off= 7.15x  speedup=0.140x
+  S>=4096 large-n: pool exit -1 (aiden contention) — retry pending.
+
+VERDICT (small-n + trend): Ozaki-INT8 LOSES badly at small n (0.075-0.14x), trend
+improving but ~7x from parity at n=2048. Root: triangular pruning does N(N+1)/2=10
+IMMA full-GEMM products per output (10x redundant work vs 1 TF32 GEMM); the FLOP
+counter divides useful rate by ~10. Effective INT8 ~43 TOPS @2048 << card INT8 peak
+(split/recombine + memory bound, not hitting tensor peak). Reaching >=1.0x needs own
+to ~7x at n=2048 OR the 10x-work amortization to invert at very large n.
