@@ -1572,6 +1572,65 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
         }
         return
     }
+    if s.kind == _STMT_UNOP {
+        // r23 — unary minus / boolean negation. The x86_64 backend had NO
+        // STMT_UNOP handler at all (arm64_darwin.hexa:2683 has it), so `!b`
+        // / `-x` fell through to the default nop → an UNTAGGED garbage HexaVal.
+        // For `!b` that garbage is truthy → `if !b` mis-branches AND a later
+        // arith on it sees a non-numeric tag (the r20/r22 "cannot divide
+        // non-numeric operand (tag 4=VOID)" silent-differ in the physics
+        // engines — triviality_score(is_identity=false,...) took the
+        // is_identity branch because `!has_op` produced garbage). Port the
+        // arm64 lowering: `-x` = hexa_sub(0, x); `!x`/`not x` = truthy → xor 1
+        // → box TAG_BOOL.
+        if len(s.args) >= 1 {
+            let dst_name = _x86_dst_reg(rm, s.dst.id)
+            let dst = _x86_op_reg(dst_name)
+            if s.op == "-" || s.op == "neg" {
+                // 0 - x via hexa_sub: a=0 (rdi:rsi = TAG_INT,0), b=x (rdx:rcx).
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rdi"), _x86_op_imm(0),
+                                 "unop -: a.tag=TAG_INT"))
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), _x86_op_imm(0),
+                                 "unop -: a.payload=0"))
+                _x86_hv_box_arg(s.args[0], st, rm, "rdx", "rcx", opts)
+                _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_sub"),
+                                 "unop -: 0 - x"))
+                if dst.reg.name != "rdx" {
+                    _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                                     "unop -: capture result payload"))
+                }
+                _x86_store_tag_reg(rm, s.dst.id, "rax")
+                _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+                return
+            }
+            if s.op == "!" || s.op == "not" {
+                // truthy(x) → rax (C int); xor 1 → !truthy; box TAG_BOOL.
+                _x86_hv_box_arg(s.args[0], st, rm, "rdi", "rsi", opts)
+                _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_truthy"),
+                                 "unop !: truthy(x) → rax"))
+                _x86_buf.push(_x86_instr2("xor", _x86_op_reg("rax"), _x86_op_imm(1),
+                                 "unop !: !truthy"))
+                if dst.reg.name != "rax" {
+                    _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
+                                     "unop !: capture bool payload"))
+                }
+                _x86_store_tag_imm(rm, s.dst.id, 2) // TAG_BOOL
+                _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+                return
+            }
+            // Unknown unop — pass the value through (closer to a no-op than an
+            // uninitialized slot; mirrors arm64). payload = x, tag carried.
+            let mut _u_scratch = "r10"
+            if _x86_is_spilled(rm, s.dst.id) { _u_scratch = "r11" }
+            _x86_op_rm(s.args[0], st, rm, _u_scratch, opts)
+            let _usrc = _x86_op_resolve(s.args[0], st, rm, _u_scratch, opts)
+            _x86_buf.push(_x86_instr2("mov", dst, _usrc, "unop passthrough"))
+            _x86_tag_resolve(s.args[0], rm, "r11")
+            _x86_store_tag_reg(rm, s.dst.id, "r11")
+            _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+        }
+        return
+    }
     if s.kind == _STMT_BINOP {
         if len(s.args) >= 2 {
             let a_scratch = "r10"
