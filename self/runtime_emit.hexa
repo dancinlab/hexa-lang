@@ -33,7 +33,7 @@
 //     is dropped).
 //   * frozen blob 151c52c8 is NOT touched — this is a NEW, separate file.
 //
-// PORTED BODIES (batch 1 of 558 → leaf rt_* cluster, 12 of the 19 rt_*):
+// PORTED BODIES — batch 1 (leaf rt_* cluster, 12 of the 19 rt_*):
 //   rt_isalnum rt_isalpha            (integer range classify)
 //   rt_net_fail rt_net_zero rt_posix_ok   (constant returns)
 //   rt_pthread_noop rt_pthread_create_policy  (constant returns)
@@ -41,6 +41,19 @@
 // The remaining 7 rt_* (rt_append_file rt_delete_file rt_read_lines
 // rt_fs_append_atomic rt_fs_stat rt_fs_rotate_if_over rt_fs_mkdir_p) need
 // syscall/libc fs wrappers → deferred to a later batch (honest residual).
+//
+// PORTED BODIES — batch 2 (libm-leaf hexa_math_* cluster, ING #35 r14):
+//   hexa_math_tanh tan asin acos atan atan2 pow lgamma tgamma erf erfc
+//   j0 j1 isnan isinf isfinite   (16 self-contained one-line libm wrappers)
+// These delegate to native libm; the libm symbol stays an UNDEFINED ref in
+// the object-only seed .o and is resolved by -lm at the FINAL link. So they
+// are emittable LEAVES — libm is a link-time dep, not an in-body wall. This
+// RE-TESTS and FALSIFIES the "libm is irreducible" assumption for the wrapper
+// surface (the irreducible part is the libm *implementation*, not the hexa
+// wrapper, which this emitter now supplies from .hexa SSOT).
+// EXCLUDED from batch 2: hexa_math_sin cos log exp fmod — they route through
+// the STATIC hxlcl_sin/cos/log/exp/fmod helpers internal to runtime.c (not
+// self-contained in this seed TU); deferred until those statics are emitted.
 //
 // Invocation:  hexa-run runtime_emit.hexa <output-path>
 // Default output path (if argv missing): "runtime_hi_seed.c" in cwd.
@@ -146,6 +159,32 @@ fn emit_runtime_hi_seed_to(out_path: str) {
     buf = buf + "    HexaVal shifted = hexa_float(HX_FLOAT(x) - PI_HALF);\n"
     buf = buf + "    return rt_cos(shifted);\n"
     buf = buf + "}\n"
+    buf = buf + "\n"
+    buf = buf + "// ── hexa_math_* libm-leaf wrappers (frozen runtime.c L5813-5908) ──\n"
+    buf = buf + "// VERBATIM ports of the #ifndef HEXA_HAS_HEXA_RT_STDLIB (libm-direct)\n"
+    buf = buf + "// branch — self-contained one-line wrappers that delegate to native\n"
+    buf = buf + "// libm (tanh/asin/erf/j0/…). The libm symbol stays an UNDEFINED ref in\n"
+    buf = buf + "// this seed .o (object-only) and is resolved by -lm at the final link —\n"
+    buf = buf + "// proving the 'libm is irreducible' assumption FALSE for these leaves:\n"
+    buf = buf + "// the body itself is hexa-emittable C, libm is just a link-time dep.\n"
+    buf = buf + "// (sin/cos/log/exp/fmod EXCLUDED — they route through static hxlcl_*\n"
+    buf = buf + "//  helpers internal to runtime.c, not self-contained in this TU.)\n"
+    buf = buf + "HexaVal hexa_math_tanh(HexaVal x) { return hexa_float(tanh(HX_FLOAT(x))); }\n"
+    buf = buf + "HexaVal hexa_math_tan(HexaVal x)  { return hexa_float(tan(HX_FLOAT(x))); }\n"
+    buf = buf + "HexaVal hexa_math_asin(HexaVal x) { return hexa_float(asin(HX_FLOAT(x))); }\n"
+    buf = buf + "HexaVal hexa_math_acos(HexaVal x) { return hexa_float(acos(HX_FLOAT(x))); }\n"
+    buf = buf + "HexaVal hexa_math_atan(HexaVal x) { return hexa_float(atan(HX_FLOAT(x))); }\n"
+    buf = buf + "HexaVal hexa_math_atan2(HexaVal y, HexaVal x) { return hexa_float(atan2(HX_FLOAT(y), HX_FLOAT(x))); }\n"
+    buf = buf + "HexaVal hexa_math_pow(HexaVal b, HexaVal e) { return hexa_float(pow(HX_FLOAT(b), HX_FLOAT(e))); }\n"
+    buf = buf + "HexaVal hexa_math_lgamma(HexaVal x)   { return hexa_float(lgamma(HX_FLOAT(x))); }\n"
+    buf = buf + "HexaVal hexa_math_tgamma(HexaVal x)   { return hexa_float(tgamma(HX_FLOAT(x))); }\n"
+    buf = buf + "HexaVal hexa_math_erf(HexaVal x)      { return hexa_float(erf(HX_FLOAT(x))); }\n"
+    buf = buf + "HexaVal hexa_math_erfc(HexaVal x)     { return hexa_float(erfc(HX_FLOAT(x))); }\n"
+    buf = buf + "HexaVal hexa_math_j0(HexaVal x)       { return hexa_float(j0(HX_FLOAT(x))); }\n"
+    buf = buf + "HexaVal hexa_math_j1(HexaVal x)       { return hexa_float(j1(HX_FLOAT(x))); }\n"
+    buf = buf + "HexaVal hexa_math_isnan(HexaVal x)    { return hexa_bool(isnan(HX_FLOAT(x)) ? 1 : 0); }\n"
+    buf = buf + "HexaVal hexa_math_isinf(HexaVal x)    { return hexa_bool(isinf(HX_FLOAT(x)) ? 1 : 0); }\n"
+    buf = buf + "HexaVal hexa_math_isfinite(HexaVal x) { return hexa_bool(isfinite(HX_FLOAT(x)) ? 1 : 0); }\n"
     if buf.len() > 0 { _flush_runtime_hi(out_path, buf) }
 }
 

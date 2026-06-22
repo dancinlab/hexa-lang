@@ -27,5 +27,11 @@ ${CC:-clang} -c -O2 ${ARCH_FLAG:-} -std=gnu11 -D_GNU_SOURCE $EXTRA -Wno-trigraph
     -I "$ROOT/self" -I "$ROOT" "$TU" -o "$OUT" 2>&1 | grep -iE 'error:' | head -8
 [ -f "$OUT" ] || { echo "regen_runtime_hi_seed: compile failed (no $OUT)" >&2; exit 2; }
 N="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(rt_isalnum|rt_isalpha|rt_net_fail|rt_net_zero|rt_posix_ok|rt_pthread_noop|rt_pthread_create_policy|rt_fmod|rt_exp|rt_log|rt_cos|rt_sin)$')"
-echo "regen_runtime_hi_seed: $OUT — $N/12 HI-tier leaf rt_* bodies exported"
-[ "$N" = "12" ] || { echo "regen_runtime_hi_seed: expected 12, got $N" >&2; exit 3; }
+# r14 (ING #35 batch 2) — the libm-leaf hexa_math_* cluster: 16 self-contained
+# one-line wrappers that delegate to native libm (tanh/asin/erf/j0/…). The libm
+# symbol stays an UNDEFINED ref in this object-only .o and is resolved by -lm at
+# the final link, so these are emittable leaves (libm = link-dep, not a body wall).
+M="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(hexa_math_tanh|hexa_math_tan|hexa_math_asin|hexa_math_acos|hexa_math_atan|hexa_math_atan2|hexa_math_pow|hexa_math_lgamma|hexa_math_tgamma|hexa_math_erf|hexa_math_erfc|hexa_math_j0|hexa_math_j1|hexa_math_isnan|hexa_math_isinf|hexa_math_isfinite)$')"
+echo "regen_runtime_hi_seed: $OUT — $N/12 leaf rt_* + $M/16 libm-leaf hexa_math_* bodies exported"
+[ "$N" = "12" ] || { echo "regen_runtime_hi_seed: expected 12 rt_*, got $N" >&2; exit 3; }
+[ "$M" = "16" ] || { echo "regen_runtime_hi_seed: expected 16 hexa_math_*, got $M" >&2; exit 4; }
