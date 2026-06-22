@@ -1,6 +1,9 @@
 ## docs(release): 릴리스 채널 2개로 정리 — `edge` → `test` 개명 (stable + test)
 
 릴리스 채널 명칭 혼동 제거: 롤링 prerelease 채널 `edge` 를 **`test`** 로 개명해 채널을 딱 둘(**`stable`** = 검증된 소비자 `vX.Y.Z` Latest · **`test`** = 실험 롤링)로 단순화. `edge` 가 "채널 이름"과 "edge-supplementary 자산" 두 뜻으로 겹쳐 쓰이던 것도 해소("test-channel-supplementary"). 변경: `release.yml`(롤링 태그 `edge`→`test`, force-move·잡명·N5 컨버전스 주석 일관 개명) · `install.sh`(`HEXA_VERSION=edge`→`test` 역호환 alias 추가 + 자산 용어 정리) · `CLAUDE.md`(채널 규율 규칙 개명). **역호환 보존**: 기존 `HEXA_VERSION=edge` 설치는 install.sh 가 `test` 로 자동 리다이렉트하고 release.yml 이 legacy `edge` git 태그를 같은 커밋에 계속 둔다 → pool-sync·anima 문서 등 기존 소비자 무파손. 기존 `edge` 릴리스 자산은 삭제하지 않음(frozen).
+## docs(architecture): hexa run routing = clang-free default-ON (leg-B r26+r27 반영)
+
+ARCHITECTURE.json self-host-status 의 `hexa run` routing 행을 🟡(native-first + delegate, safety>coverage) → ✅ 로 갱신. r26(#3782 `HEXA_RUN_NATIVE` 전 호스트 default-ON) + r27(#3783 `install.sh` 가 `build/aprime_cc` 출하 consumer-live) + r7(#3766 no-host-cc 자동 native) 머지로 `hexa run` 이 모든 호스트에서 C 컴파일러 없이 동작(cold path = `aprime_cc --emit=obj` → system `ld` → cache+exec). C-transpile delegate-fallback 은 native-emit 갭(closures emit-fail · `@lazy` niche)만. 도달 경로 = ROOT-A flatten(#3767) + ROOT-B native-codegen 갭 r10~r25 전수 + broad-corpus silent-differ 감사 (c) true-silent ~0. 이력은 git; 진행중 잔여(zero-c leg B io.hexa flip)는 ING.
 ## fix(build_aprime): warm-tree 에서 stale `runtime_core.c` 재생성 — alloc multiple-definition 벽 종결 (zero-c leg-B r2a)
 
 `self/runtime_core.c` 는 `self/runtime_core_emit.hexa` 에서 emit 되는 **.gitignore'd 생성
