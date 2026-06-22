@@ -68,4 +68,22 @@ typedef struct {
 extern HexaArena __hexa_arena;
 extern int __hexa_val_region_returns_enabled;
 
+/* (6) the CORE-tier prototypes runtime.h omits — the cross-tier helpers the
+ *     frozen HI-tier body calls. These mirror the runtime_core.c definitions
+ *     (now external under the drop via HX_RTCORE_LOCAL / _INLINE). */
+size_t      hexa_strlen_v_inline(const char* s);
+size_t      _hx_self_rss_bytes(void);
+int         _hx_stats_on(void);
+int         hexa_array_contains(HexaVal arr, HexaVal item);
+const char* hexa_str_as_ptr(HexaVal v);
+HexaVal     hexa_str_count_substr(HexaVal s, HexaVal sub);
+HexaVal     hexa_str_own(char* s);
+HexaVal     hexa_str_own_with_len(char* s, size_t len);
+char*       hexa_strbuf_alloc(size_t len);
+void        hexa_val_arena_heapify_return(void);
+int         hexa_val_arena_on(void);
+void        hexa_val_arena_scope_pop(void);
+void        hexa_val_arena_scope_push(void);
+HexaVal     hexa_valstruct_int(HexaVal v);
+
 #endif /* HEXA_RUNTIME_CORE_DECLS_H */
