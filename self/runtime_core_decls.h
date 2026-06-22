@@ -4,7 +4,7 @@
  * ────────────
  * When the whole-file `#include "runtime_core.c"` is DROPPED from the frozen
  * runtime.c (HEXA_ZEROC_DROP_RTCORE_INCLUDE, default OFF — top-level
- * `ls self/*.c` 3→1), the trailing runtime.c HI-tier body loses every
+ * top-level `self` C-file count 3→1), the trailing runtime.c HI-tier body loses every
  * declaration runtime_core.c used to supply by textual concatenation: the
  * HexaVal type-ABI (struct + HX_* macros), the base aggregate types
  * (HexaArr/HexaMap/HexaFn/HexaClo/HexaValStruct/HexaMapTable + the HexaArena
