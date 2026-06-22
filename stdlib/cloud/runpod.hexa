@@ -747,6 +747,38 @@ fn runpod_terminate_unless(api_key: str, pod_id: str, skip: bool) -> int {
     return runpod_terminate(api_key, pod_id)
 }
 
+// runpod_pod_exists — post-terminate 404 cross-check (ING #34-(2)). A
+// runpodctl `pod delete` (or the API mutation) can return a "not found" /
+// success-shaped reply while the pod is STILL ALIVE and billing (a stale
+// cache, a races-with-migration delete, or a podId the CLI silently no-ops).
+// Treating "delete returned" as "pod gone" leaks billing. This re-reads the
+// pod via the GraphQL `pod(input:{podId})` query: a TERMINATED pod resolves
+// to `data.pod == null`, so a non-null object means the pod is still live.
+// Returns 1 = still exists (DANGER, keep billing), 0 = confirmed gone (or the
+// query itself failed — caller treats an inconclusive read as "can't confirm
+// alive", not a false alarm; the loud warn only fires on a definite 1).
+fn runpod_pod_exists(api_key: str, pod_id: str) -> int {
+    if len(pod_id) == 0 {
+        return 0
+    }
+    let body = "{\"query\":\"query { pod(input:{podId:\\\"" + pod_id + "\\\"}) { id desiredStatus } }\"}"
+    let resp = _runpod_post(api_key, body, 30)
+    if len(resp) == 0 {
+        return 0
+    }
+    let parsed = json_parse(resp)
+    let pod_v = json_object_get_path(parsed, "data.pod")
+    // data.pod is null/absent for a terminated pod → not a map → gone.
+    if type_of(pod_v) != "map" {
+        return 0
+    }
+    let pid = json_object_get_str(pod_v, "id", "")
+    if len(pid) > 0 {
+        return 1
+    }
+    return 0
+}
+
 // ── pod list ─────────────────────────────────────────────────────────
 
 struct RunPodList {
