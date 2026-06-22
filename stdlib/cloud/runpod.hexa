@@ -342,7 +342,7 @@ fn _runpod_create_api(api_key: str, gpu_type: str, image: str, pubkey: str, name
 // cpu5c,cpu5g,cpu5m} (the order is the rent-preference order); cpuFlavorPriority
 // "availability" lets RunPod pick whichever flavor is free.
 
-// _runpod_is_cpu_selector — true when the rent `--gpu` value names the CPU
+// runpod_is_cpu_selector — true when the rent `--gpu` value names the CPU
 // path rather than a GPU type. Accepts "cpu", "none", or empty (case-insensitive,
 // trimmed). Anything else is a GPU type id and routes the GPU path.
 fn runpod_is_cpu_selector(gpu_type: str) -> int {
