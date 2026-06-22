@@ -36,6 +36,34 @@
  *     redefine HexaVal_ with an incompatible duplicate). */
 #include "runtime.h"
 
+/* (1b) the HX_* accessor/mutator macros runtime.h does NOT carry (it has 25 of
+ *      ~46; abi.h has the rest but re-typedefs HexaVal_ → redefinition clash, so
+ *      we copy ONLY the missing MACROS here — idempotent, no type redefinition).
+ *      HX_VSF in particular gates every `.vs->field` deref in the frozen body. */
+#ifndef HX_VSF
+#define HX_ARR_CAP(v)   ((v).arr_ptr->cap)
+#define HX_ARR_ITEMS(v) ((v).arr_ptr->items)
+#define HX_ARR_LEN(v)   ((v).arr_ptr->len)
+#define HX_IS_BOOL(v)   ((v).tag == TAG_BOOL)
+#define HX_IS_VALSTRUCT(v) ((v).tag == TAG_VALSTRUCT)
+#define HX_IS_VOID(v)   ((v).tag == TAG_VOID)
+#define HX_MAP_LEN(v)   ((v).map_ptr->len)
+#define HX_SET_ARR_CAP(v, n)   ((v).arr_ptr->cap = (n))
+#define HX_SET_ARR_ITEMS(v, p) ((v).arr_ptr->items = (p))
+#define HX_SET_ARR_LEN(v, n)   ((v).arr_ptr->len = (n))
+#define HX_SET_ARR_PTR(v, p)   ((v).arr_ptr = (p))
+#define HX_SET_BOOL(v, b)      ((v).b = (b))
+#define HX_SET_FLOAT(v, f)     ((v).f = (f))
+#define HX_SET_INT(v, n)       ((v).i = (n))
+#define HX_SET_MAP_LEN(v, n)   ((v).map_ptr->len = (n))
+#define HX_SET_MAP_PTR(v, p)   ((v).map_ptr = (p))
+#define HX_SET_MAP_TBL(v, t)   ((v).map_ptr->tbl = (t))
+#define HX_SET_STR(v, p)       ((v).s = (p))
+#define HX_SET_TAG(v, t)       ((v).tag = (t))
+#define HX_SET_VS(v, p)        ((v).vs = (p))
+#define HX_VSF(v, field)       (HX_VS(v)->field)
+#endif
+
 /* (2) the FULL HexaValStruct flat struct — runtime.h only forward-declares it
  *     (`typedef struct HexaValStruct HexaValStruct;`), but the frozen HI-tier
  *     body dereferences `.vs->field` (HX_VSF), needing the complete type. This
