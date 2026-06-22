@@ -486,6 +486,33 @@ if [ "${HEXA_ZEROC_RT_CORE_MATH:-0}" != "0" ]; then
     RTCORE_MATH_OBJ="$REPO/build/rtcore_math_native.o"
     RTCORE_MATH_DEF="-DHEXA_RT_CORE_MATH_NATIVE=1"
     echo "  [3/5] ZERO-C RT-CORE-MATH: HEXA_ZEROC_RT_CORE_MATH=1 — 4 transcendental wrappers (sin/cos/exp/log) linked from native seed .o"
+# -- HEXA_ZEROC_RT_CORE_MATH2 (leg-B r8 else-math link de-risk, OPT-IN OFF) --
+# When HEXA_ZEROC_RT_CORE_MATH2=1, the 12 seed-portable #else-armed math wrappers
+# (hexa_sqrt/pow/floor/ceil/u_floor/abs/tan/log10/round/tanh/log2/to_float) are
+# LINKED from a standalone object (build/rtcore_math2_native.o, assembled from
+# self/native/rtcore_math2.c) instead of compiled inline in runtime_core.c.
+# -DHEXA_RT_CORE_MATH2_NATIVE externs them out of the inline runtime_core.c (the
+# narrow math2-only guard, NOT the broad HEXA_RT_SELFEMIT). Each lives inside a
+# `#ifndef HEXA_HAS_HEXA_RT_STDLIB / #else / #endif` pair; in the shipping build
+# the #else arm already delegates to an EXTERNAL rt_* core, so the seed copies that
+# delegate verbatim and a 3rd #if level externs the hexa_* definition out of the
+# shipping arm (the #ifndef standalone arm is untouched). Default (unset):
+# byte-IDENTICAL — the seed is not built/linked and the inline #else delegate
+# bodies are compiled verbatim (cpp-proven). Does NOT drop the .c file
+# (all-or-nothing). Revert via env.
+RTCORE_MATH2_OBJ=""
+RTCORE_MATH2_DEF=""
+if [ "${HEXA_ZEROC_RT_CORE_MATH2:-0}" != "0" ]; then
+    if [ ! -f "$REPO/build/rtcore_math2_native.o" ]; then
+        CC="${CC:-clang}" ARCH_FLAG="$ARCH_FLAG" bash tool/regen_rtcore_math2_native_o.sh "$REPO/build/rtcore_math2_native.o" >&2 \
+            || { echo "build_aprime: HEXA_ZEROC_RT_CORE_MATH2=1 but rtcore_math2_native.o build failed" >&2; exit 1; }
+    fi
+    if [ ! -f "$REPO/build/rtcore_math2_native.o" ]; then
+        echo "build_aprime: HEXA_ZEROC_RT_CORE_MATH2=1 but build/rtcore_math2_native.o missing" >&2; exit 1
+    fi
+    RTCORE_MATH2_OBJ="$REPO/build/rtcore_math2_native.o"
+    RTCORE_MATH2_DEF="-DHEXA_RT_CORE_MATH2_NATIVE=1"
+    echo "  [3/5] ZERO-C RT-CORE-MATH2: HEXA_ZEROC_RT_CORE_MATH2=1 — 12 #else-armed math wrappers (sqrt/pow/floor/ceil/u_floor/abs/tan/log10/round/tanh/log2/to_float) linked from native seed .o"
 fi
 
 # ── stage 4: clang ─────────────────────────────────────────────────
@@ -504,8 +531,8 @@ mkdir -p "$(dirname "$OUT")"
 CL_ERR="$(clang -Oz $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
     -ffunction-sections -fdata-sections $DEAD_STRIP \
     -fno-builtin-bzero -fno-builtin-memcpy -fno-builtin-strlen \
-    -D_FORTIFY_SOURCE=0 -fno-stack-protector $ALLOC_DEF $STR_DEF $PRINT_DEF $RTCORE_LEAF_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF \
-    -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $STR_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
+    -D_FORTIFY_SOURCE=0 -fno-stack-protector $ALLOC_DEF $STR_DEF $PRINT_DEF $RTCORE_LEAF_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF $RTCORE_MATH2_DEF \
+    -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $STR_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MATH2_OBJ -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
 # ZERO-C Z2a: restore the warm runtime_core.c artifact ONLY when runtime_hi_gen.c
 # still exists (legacy gated test). When the file is permanently gone (default
 # Z2a path) keep the `#include` removed — restoring it would make the stage-5
@@ -531,10 +558,10 @@ EXTRA_DEFS=""
 if [ "$(uname -s)" = "Darwin" ]; then
     EXTRA_DEFS="-D_DARWIN_C_SOURCE"
 fi
-clang -c -O2 $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE $EXTRA_DEFS $ALLOC_DEF $RTCORE_LEAF_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF -Wno-trigraphs -I self -I . \
+clang -c -O2 $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE $EXTRA_DEFS $ALLOC_DEF $RTCORE_LEAF_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF $RTCORE_MATH2_DEF -Wno-trigraphs -I self -I . \
     self/runtime.c -o "$RTO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
 clang $ARCH_FLAG "$SMS" -c -o "$SMO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
-clang $ARCH_FLAG "$SMO" "$RTO" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:' | head -5
+clang $ARCH_FLAG "$SMO" "$RTO" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MATH2_OBJ -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:' | head -5
 if [ ! -x "$SMB" ]; then
     echo "build_aprime: smoke link failed" >&2
     exit 2
