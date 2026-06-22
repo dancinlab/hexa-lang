@@ -389,6 +389,7 @@ fn _runpod_cpu_rest_body(image: str, pubkey: str, name: str, vol: int, cdisk: in
     return "{\"computeType\":\"CPU\""
         + ",\"cpuFlavorIds\":[" + flavors + "]"
         + ",\"cpuFlavorPriority\":\"availability\""
+        + ",\"cloudType\":\"COMMUNITY\""
         + ",\"vcpuCount\":" + str(nv)
         + ",\"containerDiskInGb\":" + str(cdisk)
         + ",\"volumeInGb\":" + str(vol)
@@ -401,16 +402,22 @@ fn _runpod_cpu_rest_body(image: str, pubkey: str, name: str, vol: int, cdisk: in
 }
 
 // _runpod_create_cpu_rest — deploy a CPU-only pod via the REST v1 API.
-// vcpu <= 0 defaults to 4. disk_gb / volume_gb <= 0 default to 80 / 0.
+// vcpu <= 0 defaults to 4. CPU containerDiskInGb is capped at 20 (RunPod limit);
+// `--disk` routes to the persistent volumeInGb instead. cloudType=COMMUNITY.
 // flavors_csv is a `--cpu-flavor` comma-list or "" for the default set.
 fn _runpod_create_cpu_rest(api_key: str, image: str, pubkey: str, name: str, volume_gb: int, disk_gb: int, vcpu: int, flavors_csv: str) -> RunPodPod {
     if len(api_key) == 0 {
         return _runpod_fail_pod("create cpu (rest): missing runpod.api_key (CPU pods need the REST v1 API token)")
     }
-    let mut cdisk = disk_gb
-    if cdisk <= 0 { cdisk = 80 }
+    // CPU pods (REST v1) hard-cap containerDiskInGb at 20 — a larger value makes
+    // RunPod REFUSE create ("Container Disk must be <= 20"; edge-proven with
+    // container 600). So the requested `--disk` sizes the PERSISTENT VOLUME
+    // (volumeInGb) instead, and containerDiskInGb stays a small fixed floor.
     let mut vol = volume_gb
+    if vol <= 0 { vol = disk_gb }   // --disk → persistent /workspace volume on CPU
     if vol < 0 { vol = 0 }
+    let mut cdisk = disk_gb
+    if cdisk <= 0 || cdisk > 20 { cdisk = 20 }
     let mut nv = vcpu
     if nv <= 0 { nv = 4 }
     let body = _runpod_cpu_rest_body(image, pubkey, name, vol, cdisk, nv, flavors_csv)

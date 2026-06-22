@@ -70,6 +70,11 @@ fn main() {
     if !cpu_def.contains("\"computeType\":\"CPU\"") {
         println("FAIL cpu-computetype"); fails = fails + 1
     }
+    // edge-proven: SECURE cloud is perpetually "no instances"; COMMUNITY has the
+    // wide CPU stock. The CPU REST body MUST request cloudType=COMMUNITY.
+    if !cpu_def.contains("\"cloudType\":\"COMMUNITY\"") {
+        println("FAIL cpu-cloudtype-community"); fails = fails + 1
+    }
     if !cpu_def.contains("\"vcpuCount\":8") {
         println("FAIL cpu-vcpu"); fails = fails + 1
     }
