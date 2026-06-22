@@ -85,7 +85,11 @@ jobs:
           set -euo pipefail
           git tag -f test "${{ github.sha }}"
           git push origin -f test
-          # back-compat alias: keep legacy `edge` tag at same commit
+          # back-compat alias: keep legacy `edge` tag at same commit. Create the
+          # local `edge` tag first — the runner is a fetch-depth:1 checkout with no
+          # pre-existing `edge` ref, so a bare `push -f edge` fails with
+          # "src refspec edge does not match any" (broke every release 2026-06-22).
+          git tag -f edge "${{ github.sha }}"
           git push origin -f edge   # legacy alias (HEXA_VERSION=edge); install.sh also redirects edge→test
   # ── macOS arm64 (Apple Silicon) ────────────────────────────
   release-macos-arm64:
