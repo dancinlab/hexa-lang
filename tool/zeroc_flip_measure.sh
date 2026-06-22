@@ -234,6 +234,108 @@ if [ -f "$U" ]; then
     grep -E "$SVC_RE" "$U" | sed 's/^/    /' || true
     echo "  --- full dump at: $U ---"
 fi
+# ── PROBE-C: the `#include "runtime_core.c"` WHOLE-FILE DROP (3→1 measure) ──
+# This is the r7 measurement the campaign goal turns on: physically drop the
+# single `#include "runtime_core.c"` line (via the NON-FROZEN post-restore
+# guard tool/zeroc_drop_rtcore_include.sh, flag HEXA_ZEROC_DROP_RTCORE_INCLUDE)
+# and report — REPRODUCIBLY, from this committed script, never a hand-run —
+#   (1) the top-level `ls self/*.c | wc -l` count WITH the drop ON (goal 3→1:
+#       runtime_core.c + its child runtime_hi_gen.c gone from the compile),
+#   (2) the DEFAULT (flag OFF) byte-neutrality proof: clang -E -P (no drop -D)
+#       SHA of the patched runtime.c == the frozen runtime.c SHA, and
+#   (3) the HONEST compile residue WITH the drop ON: the set of declarations
+#       (struct typedefs / static-inline helpers / hexa_*/rt_* forward decls)
+#       the trailing runtime.c loses when runtime_core.c is dropped — the REAL
+#       wall, measured, not the optimistic "19 cascade rt_*" link-only number.
 echo "════════════════════════════════════════════════════════════════"
-echo "DONE. Artifacts in $OUT_DIR (undef_A.txt = the reproducible dump)."
+echo "[C/1] PROBE-C: whole-file `#include \"runtime_core.c\"` drop (3→1 measure)"
+
+# (1) top-level ls self/*.c BEFORE the drop (expect 3: runtime.c / runtime_core.c
+#     / runtime_hi_gen.c — all gitignored generated artifacts at self/ top level).
+restore_and_regen() {
+    bash tool/restore_frozen_seeds        >/dev/null 2>&1
+    bash tool/regen_runtime_core_c.sh     >/dev/null 2>&1
+}
+restore_and_regen
+LS_BEFORE=$(ls self/*.c 2>/dev/null | wc -l | tr -d ' ')
+echo "      ls self/*.c BEFORE drop : $LS_BEFORE"
+echo "LS_SELFC_BEFORE=$LS_BEFORE"
+ls self/*.c 2>/dev/null | sed 's/^/        /'
+
+# (2) DEFAULT byte-neutrality: SHA the preprocessed frozen runtime.c (flag OFF)
+#     vs the SAME after the drop-guard patch (still flag OFF). MUST match.
+EP="-E -P -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -I self -I ."
+[ "$(uname -s)" = "Darwin" ] && EP="$EP -D_DARWIN_C_SOURCE"
+SHA_FROZEN=$($CC $EP self/runtime.c 2>/dev/null | sha256sum 2>/dev/null | awk '{print $1}')
+[ -z "$SHA_FROZEN" ] && SHA_FROZEN=$($CC $EP self/runtime.c 2>/dev/null | shasum -a 256 | awk '{print $1}')
+# apply the post-restore drop-guard (idempotent; default OFF — transparent)
+if [ -f tool/zeroc_drop_rtcore_include.sh ]; then
+    bash tool/zeroc_drop_rtcore_include.sh >/dev/null 2>&1
+    GUARD_N=$(grep -c 'ZEROC_DROP_RTCORE_INCLUDE_GUARD' self/runtime.c 2>/dev/null || echo 0)
+    echo "      drop-guard applied (marker sites: $GUARD_N)"
+else
+    GUARD_N=0
+    echo "      WARN: tool/zeroc_drop_rtcore_include.sh absent — drop not exercised"
+fi
+SHA_PATCHED_OFF=$($CC $EP self/runtime.c 2>/dev/null | sha256sum 2>/dev/null | awk '{print $1}')
+[ -z "$SHA_PATCHED_OFF" ] && SHA_PATCHED_OFF=$($CC $EP self/runtime.c 2>/dev/null | shasum -a 256 | awk '{print $1}')
+echo "      default(OFF) -E -P SHA frozen  : $SHA_FROZEN"
+echo "      default(OFF) -E -P SHA patched : $SHA_PATCHED_OFF"
+if [ -n "$SHA_FROZEN" ] && [ "$SHA_FROZEN" = "$SHA_PATCHED_OFF" ]; then
+    echo "DEFAULT_BYTE_IDENTICAL=YES   (drop-guard transparent when flag OFF)"
+else
+    echo "DEFAULT_BYTE_IDENTICAL=NO    (PR-BLOCKED — guard changes default output)"
+fi
+
+# (3) the drop ON: count what the compile SEES after the include is guarded out,
+#     and measure the honest declaration residue. We count `ls self/*.c` the
+#     same (the files still EXIST on disk — they are gitignored generated
+#     artifacts), so the "3→1" is about what the BUILD COMPILES, proven via the
+#     preprocessed-source line drop + the missing-declaration set, NOT a `git rm`.
+echo "[C/2] drop ON — compiled-source residue (honest wall)"
+ON_E="$OUT_DIR/rt_dropON.E.c"
+$CC $EP -DHEXA_ZEROC_DROP_RTCORE_INCLUDE self/runtime.c > "$ON_E" 2>/dev/null
+ON_LINES=$(wc -l < "$ON_E" 2>/dev/null | tr -d ' ')
+OFF_E="$OUT_DIR/rt_dropOFF.E.c"
+$CC $EP self/runtime.c > "$OFF_E" 2>/dev/null
+OFF_LINES=$(wc -l < "$OFF_E" 2>/dev/null | tr -d ' ')
+DROPPED=$(( OFF_LINES - ON_LINES ))
+echo "      preprocessed runtime.c lines  OFF=$OFF_LINES  ON=$ON_LINES  dropped=$DROPPED"
+echo "      (dropped lines == the runtime_core.c + runtime_hi_gen.c body amalgamation)"
+# does the ON-preprocessed source still pull in runtime_hi_gen.c content?
+HI_ON=$(grep -c 'runtime_hi_gen' "$ON_E" 2>/dev/null | tr -d ' ')
+echo "      runtime_hi_gen refs in ON-preprocessed: $HI_ON (comment refs only if >0)"
+
+# compile the drop-ON TU and capture the declaration gap (the REAL wall).
+DROP_DEFS="-DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE $CLUSTER_DEFS"
+C_ERR="$OUT_DIR/dropC_err.txt"
+$CC $CFLAGS $DROP_DEFS -ferror-limit=100000 self/runtime.c -o "$OUT_DIR/rt_dropC.o" 2>"$C_ERR"
+C_RC=$?
+# distinct undeclared identifiers (functions + types) the trailing TU now misses
+grep -oE "implicit declaration of function '[A-Za-z0-9_]+'|call to undeclared function '[A-Za-z0-9_]+'|unknown type name '[A-Za-z0-9_]+'" "$C_ERR" 2>/dev/null \
+    | grep -oE "'[A-Za-z0-9_]+'" | tr -d "'" | sort -u > "$OUT_DIR/dropC_undecl.txt"
+C_UNDECL=$(wc -l < "$OUT_DIR/dropC_undecl.txt" 2>/dev/null | tr -d ' ')
+# split the residue: struct types / static-inline-blocked / cascade rt_* / other hexa_*
+C_TYPES=$(grep -cE '^(Hexa[A-Z])' "$OUT_DIR/dropC_undecl.txt" 2>/dev/null | tr -d ' ')
+C_RTSTAR=$(grep -cE '^rt_' "$OUT_DIR/dropC_undecl.txt" 2>/dev/null | tr -d ' ')
+C_HEXASTAR=$(grep -cE '^hexa_' "$OUT_DIR/dropC_undecl.txt" 2>/dev/null | tr -d ' ')
+if [ "$C_RC" -eq 0 ]; then
+    echo "      DROP-ON COMPILES — runtime_core.c declarations fully supplied elsewhere"
+    echo "DROP_ON_COMPILES=YES"
+    echo "LS_SELFC_AFTER=1   (runtime_core.c + runtime_hi_gen.c no longer compiled)"
+else
+    echo "      DROP-ON DOES NOT COMPILE — declaration residue (the honest wall):"
+    echo "      total undeclared idents : $C_UNDECL"
+    echo "        struct types (Hexa*)  : $C_TYPES   (ABI typedef block — header-extract debt)"
+    echo "        cascade rt_*          : $C_RTSTAR"
+    echo "        hexa_* helpers        : $C_HEXASTAR"
+    echo "DROP_ON_COMPILES=NO"
+    echo "LS_SELFC_AFTER=$LS_BEFORE   (drop NOT reached — count unchanged; residue blocks compile)"
+    echo "      --- residue dump: $OUT_DIR/dropC_undecl.txt ---"
+    sed 's/^/        /' "$OUT_DIR/dropC_undecl.txt" 2>/dev/null | head -80
+fi
+
+echo "════════════════════════════════════════════════════════════════"
+echo "DONE. Artifacts in $OUT_DIR (undef_A.txt = reproducible PROBE-A dump;"
+echo "      dropC_undecl.txt = reproducible PROBE-C include-drop residue)."
 exit 0
