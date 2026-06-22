@@ -1,0 +1,54 @@
+// test/target_detect_builtins_smoke.hexa — ING #32 friendly OS/arch-detect
+// builtins smoke. Exercises all 6 source-callable target-detect builtins:
+//   __hx_target_os()  __hx_target_arch()                  (pre-existing leaves)
+//   target_is_darwin() target_is_linux()                  (ING #32 friendly OS)
+//   target_is_arm64()  target_is_x86_64()                 (ING #32 friendly arch)
+//
+// Before ING #32 the four `target_is_*` names were undeclared in ordinary
+// `hexa build`/`run` source (they were only @pure fn wrappers inside
+// self/rt/syscall.hexa, invisible outside the self-host runtime). This file
+// merely COMPILING + RUNNING is the regression check (anima's report). The
+// printed constants are target-selected at codegen time:
+//   arm64-darwin :  os=1 arch=1  darwin=1 linux=0 arm64=1 x86_64=0
+//   x86_64-linux :  os=0 arch=0  darwin=0 linux=1 arm64=0 x86_64=1
+//   arm64-linux  :  os=0 arch=1  darwin=0 linux=1 arm64=1 x86_64=0
+//
+// Run:  hexa run test/target_detect_builtins_smoke.hexa
+// Sentinel: __TARGET_DETECT_SMOKE__ PASS|FAIL on the final line.
+
+fn b2i(b: bool) -> int {
+    if b { return 1 }
+    return 0
+}
+
+fn main() {
+    let os = __hx_target_os()
+    let arch = __hx_target_arch()
+    let is_darwin = b2i(target_is_darwin())
+    let is_linux = b2i(target_is_linux())
+    let is_arm64 = b2i(target_is_arm64())
+    let is_x86_64 = b2i(target_is_x86_64())
+
+    println("__hx_target_os=" + str(os))
+    println("__hx_target_arch=" + str(arch))
+    println("target_is_darwin=" + str(is_darwin))
+    println("target_is_linux=" + str(is_linux))
+    println("target_is_arm64=" + str(is_arm64))
+    println("target_is_x86_64=" + str(is_x86_64))
+
+    // Cross-check: friendly OS names must agree with __hx_target_os, and the
+    // two OS flags + two arch flags are each mutually exclusive.
+    let mut fails = 0
+    if is_darwin != b2i(os == 1) { fails = fails + 1 }
+    if is_linux != b2i(os == 0) { fails = fails + 1 }
+    if is_arm64 != b2i(arch == 1) { fails = fails + 1 }
+    if is_x86_64 != b2i(arch == 0) { fails = fails + 1 }
+    if is_darwin + is_linux != 1 { fails = fails + 1 }
+    if is_arm64 + is_x86_64 != 1 { fails = fails + 1 }
+
+    if fails == 0 {
+        println("__TARGET_DETECT_SMOKE__ PASS")
+    } else {
+        println("__TARGET_DETECT_SMOKE__ FAIL fails=" + str(fails))
+    }
+}
