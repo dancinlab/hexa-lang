@@ -102,13 +102,16 @@ This file is the single governance SSOT (md 단일화) — edit directives here,
   게이트(native arena·#else drop·substrate 바이트감소 등)를 위해 릴리스를 회귀시키지 않는다. **릴리스
   무결성 > self-host 진척**: 회귀 위험이 있으면 릴리스 그린을 먼저 보장한 뒤 진행하고(코드젠/런타임
   변경은 byteeq + 출하 smoke 통과 확인 후 머지), 위험하면 self-host 진척을 미룬다.
-- **릴리스 채널 규율 (edge=실험 · stable=승격)** — self-host 진척(byteeq·measure·RT-NATIVE·zero-C·
-  static-musl 등 실험적 변경)은 `main` push → **edge prerelease**(`HEXA_VERSION=edge` 로 설치)로 상시
-  흘린다. 소비자 기본 경로(`install.sh` → 최신 stable `vX.Y.Z`)는 **3타깃(x86_64-linux·arm64-linux·
-  darwin-arm64) 릴리스 잡 전부 GREEN + install.sh 소비자 스모크(`hexa --version` + hello/exit42 run)
-  GREEN** 일 때만 새 stable 태그로 승격한다. **"x86 만 green" 은 승격 불가**(v0.241.0 arm64 asset 미발행
-  회귀 교훈 — 한 타깃 그린이 전체 그린 아님). 즉 실험은 edge 에서 검증·soak, stable 은 전타깃 green
-  승격 — 이것이 [self-host ≠ release 회귀]의 운영 방식이다(소비자=stale-but-stable, 실험=edge).
+- **릴리스 채널 규율 (단 2채널: test=실험 · stable=승격)** — 채널은 딱 둘이다: **`stable`**(소비자 기본,
+  검증된 `vX.Y.Z` Latest) 과 **`test`**(실험 롤링 prerelease, `main` push 마다 갱신). self-host 진척
+  (byteeq·measure·RT-NATIVE·zero-C·static-musl 등 실험적 변경)은 `main` push → **test prerelease**
+  (`HEXA_VERSION=test` 로 설치)로 상시 흘린다. *(구 채널명 `edge` 는 `test` 로 개명 2026-06 — `HEXA_VERSION=edge`
+  는 install.sh 가 `test` 로 자동 리다이렉트하는 역호환 alias 로만 남는다.)* 소비자 기본 경로(`install.sh` →
+  최신 stable `vX.Y.Z`)는 **3타깃(x86_64-linux·arm64-linux·darwin-arm64) 릴리스 잡 전부 GREEN + install.sh
+  소비자 스모크(`hexa --version` + hello/exit42 run) GREEN** 일 때만 새 stable 태그로 승격한다.
+  **"x86 만 green" 은 승격 불가**(v0.241.0 arm64 asset 미발행 회귀 교훈 — 한 타깃 그린이 전체 그린 아님).
+  즉 실험은 test 에서 검증·soak, stable 은 전타깃 green 승격 — 이것이 [self-host ≠ release 회귀]의 운영
+  방식이다(소비자=stale-but-stable, 실험=test).
   **기계적 강제**: `release.yml` 의 각 플랫폼 잡(x86_64·arm64·darwin)은 asset 을 **prerelease 로만**
   업로드하고 Latest 를 마킹하지 않는다 — `finalize` 잡(`needs:` 3타깃 전부)이 3/3 성공 시에만 태그를
   stable Latest 로 flip 한다. 한 타깃이라도 실패하면 finalize 가 skip 돼 릴리스가 prerelease 로 남고

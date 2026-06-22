@@ -26,7 +26,7 @@ name: release
 on:
   push:
     tags: ['v*']
-    branches: [main]      # → rolling `edge` prerelease (install via HEXA_VERSION=edge)
+    branches: [main]      # → rolling `test` prerelease (install via HEXA_VERSION=test; `edge` is a back-compat alias)
   workflow_dispatch:
     inputs:
       tag:
@@ -34,11 +34,11 @@ on:
         required: true
 
 permissions:
-  contents: write  # gh release upload + edge tag force-move
+  contents: write  # gh release upload + test tag force-move
 
 # Tag push (v*) keeps every run — distinct group per tag, no cancellation.
-# Main push only ever needs the latest commit's edge build; cancel any
-# older in-flight edge run when a newer main push lands.
+# Main push only ever needs the latest commit's test build; cancel any
+# older in-flight test run when a newer main push lands.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: ${{ github.ref_type == 'branch' }}
@@ -47,7 +47,7 @@ env:
   CFLAGS_COMMON: "-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs"
 
 jobs:
-  # ── Setup — decide release tag + force-move `edge` on main push ────
+  # ── Setup — decide release tag + force-move `test` on main push ────
   setup:
     name: setup
     runs-on: ubuntu-latest
@@ -69,22 +69,24 @@ jobs:
               echo "release_tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
               echo "is_tag=true" >> "$GITHUB_OUTPUT"
           else
-              echo "release_tag=edge" >> "$GITHUB_OUTPUT"
+              echo "release_tag=test" >> "$GITHUB_OUTPUT"
               echo "is_tag=false" >> "$GITHUB_OUTPUT"
           fi
           cat "$GITHUB_OUTPUT"
 
       # softprops/action-gh-release@v2 will create-or-update the release
       # at the named tag, but it does NOT move an existing tag to a new
-      # commit. For `edge` (rolling), force-move the git tag here so the
+      # commit. For `test` (rolling), force-move the git tag here so the
       # release's commit and the tag's commit stay in lock-step.
-      - name: Force-move `edge` tag (main push only)
+      - name: Force-move `test` tag (main push only)
         if: steps.c.outputs.is_tag != 'true'
         shell: bash
         run: |
           set -euo pipefail
-          git tag -f edge "${{ github.sha }}"
-          git push origin -f edge
+          git tag -f test "${{ github.sha }}"
+          git push origin -f test
+          # back-compat alias: keep legacy `edge` tag at same commit
+          git push origin -f edge   # legacy alias (HEXA_VERSION=edge); install.sh also redirects edge→test
   # ── macOS arm64 (Apple Silicon) ────────────────────────────
   release-macos-arm64:
     name: release (darwin-arm64)
@@ -110,17 +112,17 @@ jobs:
           CC: clang
           LIBS: ""
           GH_TOKEN: ${{ github.token }}
-          # ── N5 seed-convergence SHIP-BY-DEFAULT (edge-roll only) ──────────
+          # ── N5 seed-convergence SHIP-BY-DEFAULT (test-roll only) ──────────
           # Converge the bootstrap seed (self/native/hexa_cc.c) to its fixpoint
-          # DURING the edge roll so the shipped build/hexat already lowers the
+          # DURING the test roll so the shipped build/hexat already lowers the
           # forge OFF-CUDA 4-arg dispatches (clm_prod) correctly — every
           # downstream `hx install` build inherits the converged hexat via the
-          # edge tarball, with NO per-user HEXA_SEED_CONVERGE=1 opt-in. Scoped
-          # to the release edge-build ONLY (NOT the shared tool/release_build,
+          # test tarball, with NO per-user HEXA_SEED_CONVERGE=1 opt-in. Scoped
+          # to the release test-build ONLY (NOT the shared tool/release_build,
           # NOT the faithful-nobaseline gate, which both keep the default OFF):
-          # the gate edge-pulls the CURRENT edge (no-op prebuild) + runs the
+          # the gate test-pulls the CURRENT test (no-op prebuild) + runs the
           # determinism oracles, so convergence — a deterministic fixpoint —
-          # flows through faithful unchanged. The converged edge ships on the
+          # flows through faithful unchanged. The converged test ships on the
           # NEXT roll after this merges.
           HEXA_SEED_CONVERGE: "1"
           HEXA_BUILD_VERSION: ${{ needs.setup.outputs.release_tag }}
@@ -255,9 +257,9 @@ jobs:
           CC: gcc
           LIBS: "-lm -ldl"
           GH_TOKEN: ${{ github.token }}
-          # N5 seed-convergence SHIP-BY-DEFAULT (edge-roll only) — see the
+          # N5 seed-convergence SHIP-BY-DEFAULT (test-roll only) — see the
           # darwin-arm64 job for the full rationale. Scoped to the release
-          # edge-build; the shared release_build + faithful gate stay default-OFF.
+          # test-build; the shared release_build + faithful gate stay default-OFF.
           HEXA_SEED_CONVERGE: "1"
           HEXA_BUILD_VERSION: ${{ needs.setup.outputs.release_tag }}
         run: bash tool/release_build
@@ -314,9 +316,9 @@ jobs:
           CC: gcc
           LIBS: "-lm -ldl"
           GH_TOKEN: ${{ github.token }}
-          # N5 seed-convergence SHIP-BY-DEFAULT (edge-roll only) — see the
+          # N5 seed-convergence SHIP-BY-DEFAULT (test-roll only) — see the
           # darwin-arm64 job for the full rationale. Scoped to the release
-          # edge-build; the shared release_build + faithful gate stay default-OFF.
+          # test-build; the shared release_build + faithful gate stay default-OFF.
           HEXA_SEED_CONVERGE: "1"
           HEXA_BUILD_VERSION: ${{ needs.setup.outputs.release_tag }}
         run: bash tool/release_build
@@ -347,7 +349,7 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
 
-  # ── Linux x86_64 STATIC-MUSL (ING #2 — edge-only supplementary asset) ──────
+  # ── Linux x86_64 STATIC-MUSL (ING #2 — test-only supplementary asset) ──────
   # A glibc-FREE single static ELF so consumers (anima/…) install on ANY pod OS
   # regardless of the host glibc floor (no more `GLIBC_2.xx not found` on old/musl
   # pods). Built with x86_64-linux-musl-gcc + `-static`, runtime linked from SOURCE
@@ -362,7 +364,7 @@ jobs:
   # glibc `hexa-linux-x86_64.tar.gz` is UNCHANGED (additive target, not a replace).
   # install.sh's static-musl preference is a separate change (see ING #2 notes).
   release-linux-x86_64-musl:
-    name: release (linux-x86_64-musl · static · edge)
+    name: release (linux-x86_64-musl · static · test)
     needs: setup
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -436,7 +438,7 @@ jobs:
             exit 1
           fi
 
-      - name: Upload to GitHub Release (supplementary edge asset)
+      - name: Upload to GitHub Release (supplementary test asset)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.setup.outputs.release_tag }}
@@ -447,7 +449,7 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
 
-  # ── Linux arm64 STATIC-MUSL (ING #2 r2 — edge-only supplementary asset) ────
+  # ── Linux arm64 STATIC-MUSL (ING #2 r2 — test-only supplementary asset) ────
   # The arm64 half of the static-musl target. release-linux-arm64 above runs on
   # ubuntu-24.04-arm (glibc 2.39) and DEFERS the arm64 glibc-floor problem here:
   # arm64 cloud pods on glibc < 2.39 die with `GLIBC_2.xx not found` on the
@@ -467,7 +469,7 @@ jobs:
   # `hexa-linux-arm64-musl.tar.gz` alongside the existing targets. The dynamic
   # glibc `hexa-linux-arm64.tar.gz` is UNCHANGED (additive target, not a replace).
   release-linux-arm64-musl:
-    name: release (linux-arm64-musl · static · edge)
+    name: release (linux-arm64-musl · static · test)
     needs: setup
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
@@ -540,7 +542,7 @@ jobs:
             exit 1
           fi
 
-      - name: Upload to GitHub Release (supplementary edge asset)
+      - name: Upload to GitHub Release (supplementary test asset)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.setup.outputs.release_tag }}
@@ -551,7 +553,7 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
 
-  # ── Linux x86_64 CUDA (ing-cuda-release — edge-only supplementary asset) ──────
+  # ── Linux x86_64 CUDA (ing-cuda-release — test-only supplementary asset) ──────
   # A cuBLAS-enabled hexa so consumers (anima #2386) install a prebuilt GPU build
   # instead of a CPU-only one (the shipped install.sh hexa reports
   # cuda_available()==0 — #3674).
@@ -582,7 +584,7 @@ jobs:
   # ABSOLUTE). install.sh selects this asset only on HEXA_CUDA=1 opt-in (never
   # auto-prefers it — cuBLAS dep + GPU assumption).
   release-linux-x86_64-cuda:
-    name: release (linux-x86_64-cuda · cuBLAS · edge)
+    name: release (linux-x86_64-cuda · cuBLAS · test)
     needs: setup
     runs-on: ubuntu-22.04
     timeout-minutes: 35
@@ -652,7 +654,7 @@ jobs:
       # nvcc compile failed → resolve_cuda_runtime_seed non-fatally unset HEXA_CUDA
       # → build/runtime.cuda.a was never produced → the consumer runtime.a shipped
       # the CPU archive (no device objects) → the Verify step failed → the whole
-      # edge release never published (edge rotted at 2026-05-23). HEXA_PREBUILT_RUNTIME
+      # rolling test/edge prerelease had not published (the channel rotted at 2026-05-23). HEXA_PREBUILT_RUNTIME
       # unset → runtime.a(s) built fresh.
       - name: Build — shared release_build (dual CPU+CUDA runtime.a, no cuBLAS on toolchain)
         shell: bash
@@ -729,7 +731,7 @@ jobs:
           fi
           echo "✓ hexa driver binary is libcuda-free (runs on GPU-less + GPU hosts; consumer link adds cuBLAS)"
 
-      - name: Upload to GitHub Release (supplementary edge asset)
+      - name: Upload to GitHub Release (supplementary test asset)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.setup.outputs.release_tag }}
@@ -747,7 +749,7 @@ jobs:
   # is the mechanical enforcement of the [릴리스 채널 규율] rule in CLAUDE.md:
   # stable ships only when x86_64 · arm64 · darwin are ALL green (3/3 assets).
   # Edge (branch push, is_tag != true) stays a rolling prerelease — finalize is
-  # gated off — so `HEXA_VERSION=edge` consumers keep getting every main push.
+  # gated off — so `HEXA_VERSION=test` (and legacy `edge`) consumers keep getting every main push.
   finalize:
     name: finalize (all-3-green → stable Latest)
     # Depend on EVERY upload job (incl. the supplementary musl/cuda lanes) so
