@@ -8,7 +8,7 @@
 #   (C) the 3 dead-wrapper symbols are all covered by the SSOT archive
 #       (so deletion is undefined-ref-safe)
 set -uo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 echo "==== ING#33 r2 sweep — ROOT=$ROOT  branch=$(git branch --show-current) head=$(git rev-parse --short HEAD)"
 
