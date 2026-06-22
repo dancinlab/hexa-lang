@@ -29,14 +29,35 @@
 #define HEXA_RUNTIME_CORE_DECLS_H
 
 /* (1) the broad external prototype + base-type surface (HexaTag/HexaArr/…,
- *     HexaVal, and most hexa_* prototypes). runtime.h is the native-.o path's
- *     SSOT for runtime_core.c's external ABI. */
+ *     the FULL HexaVal struct + the HX_* accessor/mutator macros, and most
+ *     hexa_* prototypes). runtime.h is the native-.o path's SSOT for
+ *     runtime_core.c's external ABI — it already carries HexaVal + 25 HX_*
+ *     macros, so we do NOT also pull runtime_hexaval_abi.h here (that would
+ *     redefine HexaVal_ with an incompatible duplicate). */
 #include "runtime.h"
 
-/* (2) the HX_* accessor/mutator macro family + HexaVal (the always-on
- *     extracted type-ABI SSOT). Idempotent: guarded by its own include guard;
- *     a second inclusion (if runtime.h already pulled it) is a no-op. */
-#include "runtime_hexaval_abi.h"
+/* (2) the FULL HexaValStruct flat struct — runtime.h only forward-declares it
+ *     (`typedef struct HexaValStruct HexaValStruct;`), but the frozen HI-tier
+ *     body dereferences `.vs->field` (HX_VSF), needing the complete type. This
+ *     mirrors runtime_core.c:1309 verbatim. */
+#ifndef HEXA_RTCORE_DECLS_VALSTRUCT
+#define HEXA_RTCORE_DECLS_VALSTRUCT
+struct HexaValStruct {
+    int64_t tag_i;
+    int64_t int_val;
+    double  float_val;
+    int     bool_val;
+    int     from_arena;
+    HexaVal str_val;
+    HexaVal char_val;
+    HexaVal array_val;
+    HexaVal fn_name;
+    HexaVal fn_params;
+    HexaVal fn_body;
+    HexaVal struct_name;
+    HexaVal struct_fields;
+};
+#endif
 
 /* (3) the HexaArena bump-allocator struct pair — the frozen HI-tier body's
  *     arena-stats walk (`for (HexaArenaBlock* b = __hexa_arena.head; …)`)
@@ -55,6 +76,25 @@ typedef struct {
     HexaArenaBlock* cur;    /* current bump block */
 } HexaArena;
 #endif
+
+/* (3b) the interpreter weak-linked store globals + the interp array tag macro.
+ *      runtime_core.c emits these (4622, 4634); the frozen body's incremental-
+ *      heapify walk reads array_store / map_store / struct_store and compares
+ *      against HEXA_INTERP_TAG_ARRAY. The weak attrs mirror runtime_core.c so
+ *      the (absent) interpreter symbols resolve to common/zero. */
+#ifndef HEXA_RTCORE_DECLS_INTERP_STORES
+#define HEXA_RTCORE_DECLS_INTERP_STORES
+extern HexaVal array_store  __attribute__((weak));
+extern HexaVal map_store    __attribute__((weak));
+extern HexaVal struct_store __attribute__((weak));
+#ifndef HEXA_INTERP_TAG_ARRAY
+#define HEXA_INTERP_TAG_ARRAY  5
+#endif
+#endif
+
+/* (3c) the val-arena live-mark counter (rt 32-L), already external in
+ *      runtime_core.c (`extern int __hexa_val_mark_top;`). */
+extern int __hexa_val_mark_top;
 
 /* (4) HX_STRLEN — defined inline in runtime_core.c (not in abi.h). */
 #ifndef HX_STRLEN
@@ -85,5 +125,12 @@ int         hexa_val_arena_on(void);
 void        hexa_val_arena_scope_pop(void);
 void        hexa_val_arena_scope_push(void);
 HexaVal     hexa_valstruct_int(HexaVal v);
+
+/* (7) cross-tier file-scope statics promoted to external under the drop:
+ *     _hx_stats_array_new (the array-ctor stats counter incremented by the
+ *     body) and `join` (the str-join builtin fn-value the body seats at
+ *     module init, runtime.c:13437). */
+extern int64_t _hx_stats_array_new;
+extern HexaVal join;
 
 #endif /* HEXA_RUNTIME_CORE_DECLS_H */
