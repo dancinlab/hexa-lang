@@ -1,4 +1,40 @@
 - **feat(cli): `hexa gpu` / `hexa gpu status` 서브커맨드 — 바이너리 자체에서 GPU/flame/forge/cuda 상태를 SSOT 로 노출 + CLAUDE.md lockstep 규율**: 어떤 리포(anima 등)든 `hexa` 만 깔려 있으면 소스 grep 없이 GPU 능력/플래그/빌드변종을 바이너리에서 직접 조회하도록 만든다. `self/main.hexa` 에 `cmd_gpu_status()` 신규 + `cmd_gpu` 디스패치에 `status` 서브버브 추가(바레 `hexa gpu` 도 status 로 라우팅 — 기존 usage-error 보다 유용한 기본값; `hexa gpu help` 는 전체 서브버브 usage 유지). **PROBED(런타임 실측)** — `cuda_available()`/`cuda_device_count()`(RFC 040 fn carrier, 이 바이너리가 링크한 runtime.c 를 호출시점에 직접 읽음) + own-kernel 플래그 polarity(`HEXA_USE_CUBLAS`#ifdef opt-in · `HEXA_OWN_GEMM`/`HEXA_TF32_OWN` 런타임 own-default · `HEXA_TF32_FASTMODE` opt-in)를 현재 환경값 그대로 라벨링. **STATIC(독트린)** — 3-layer legend(flame=네이티브 트레이너 / forge=GPU 커널 own-default·cuBLAS opt-in / hexa-cuda=`-cuda` 자산에서만 `cuda_available()==1` 인 릴리스 빌드 변종) + measured-on-silicon(sm_120 RTX5070 = TF32 parity·GEMV/FP64 own 승·BF16 ~0.83~0.85× HW-bound; H100 sm_90 wgmma 는 다른 칩 — 혼동 금지). `cmd_help()` 에 `gpu [status]` 포인터 1줄 추가. CLAUDE.md governance 에 **hexa --help / hexa gpu lockstep** 지시 추가 — `hexa` CLI/릴리스 업데이트 시 새 GPU 능력·플래그·빌드변종·dtype parity 변화가 나면 같은 변경에서 `cmd_help()`/`cmd_gpu_status()` 텍스트를 무조건 lockstep 갱신(타 리포가 `hexa gpu` 를 SSOT 로 신뢰하므로 stale 금지). 순수 additive 서브커맨드(기존 fire/disasm/lint 디스패치 무영향) — self-host≠release: byteeq 3타깃 + 출하 smoke 가 PR CI 권위 게이트.
+## docs(release): 릴리스 채널 2개로 정리 — `edge` → `test` 개명 (stable + test)
+
+릴리스 채널 명칭 혼동 제거: 롤링 prerelease 채널 `edge` 를 **`test`** 로 개명해 채널을 딱 둘(**`stable`** = 검증된 소비자 `vX.Y.Z` Latest · **`test`** = 실험 롤링)로 단순화. `edge` 가 "채널 이름"과 "edge-supplementary 자산" 두 뜻으로 겹쳐 쓰이던 것도 해소("test-channel-supplementary"). 변경: `release.yml`(롤링 태그 `edge`→`test`, force-move·잡명·N5 컨버전스 주석 일관 개명) · `install.sh`(`HEXA_VERSION=edge`→`test` 역호환 alias 추가 + 자산 용어 정리) · `CLAUDE.md`(채널 규율 규칙 개명). **역호환 보존**: 기존 `HEXA_VERSION=edge` 설치는 install.sh 가 `test` 로 자동 리다이렉트하고 release.yml 이 legacy `edge` git 태그를 같은 커밋에 계속 둔다 → pool-sync·anima 문서 등 기존 소비자 무파손. 기존 `edge` 릴리스 자산은 삭제하지 않음(frozen).
+## docs(architecture): hexa run routing = clang-free default-ON (leg-B r26+r27 반영)
+
+ARCHITECTURE.json self-host-status 의 `hexa run` routing 행을 🟡(native-first + delegate, safety>coverage) → ✅ 로 갱신. r26(#3782 `HEXA_RUN_NATIVE` 전 호스트 default-ON) + r27(#3783 `install.sh` 가 `build/aprime_cc` 출하 consumer-live) + r7(#3766 no-host-cc 자동 native) 머지로 `hexa run` 이 모든 호스트에서 C 컴파일러 없이 동작(cold path = `aprime_cc --emit=obj` → system `ld` → cache+exec). C-transpile delegate-fallback 은 native-emit 갭(closures emit-fail · `@lazy` niche)만. 도달 경로 = ROOT-A flatten(#3767) + ROOT-B native-codegen 갭 r10~r25 전수 + broad-corpus silent-differ 감사 (c) true-silent ~0. 이력은 git; 진행중 잔여(zero-c leg B io.hexa flip)는 ING.
+## fix(build_aprime): warm-tree 에서 stale `runtime_core.c` 재생성 — alloc multiple-definition 벽 종결 (zero-c leg-B r2a)
+
+`self/runtime_core.c` 는 `self/runtime_core_emit.hexa` 에서 emit 되는 **.gitignore'd 생성
+산출물**이다. CLEAN 체크아웃에서는 STAGE-0(`tool/stage_resolve_runtime_a`)가 emitter SSOT 에서
+재생성하므로 항상 guard-consistent 하지만, **WARM tree** (재실행, 또는 CI 의 `-v <hexat>` 경로처럼
+기존 transpiler 를 공급하는 경우) 에서는 `build_aprime.sh` STAGE-0 가 regen 을 SKIP 한다
+(`[0/5] regen: SKIP — hexat + self/runtime.c already present`). 이때 트리에 **stale 한
+`runtime_core.c`** (pre-#3583 emitter 가 `#ifdef HEXA_RT_ALLOC_NATIVE / #else` guard 이전에 C arena
+body 를 **무조건** emit 하던 시절의 산출물) 가 남아있으면, 그게 단일-TU 컴파일로 들어가
+`-DHEXA_RT_ALLOC_NATIVE=1`(default-ON) 과 함께 빌드되며 C `hexa_arena_alloc` body 가 네이티브 seed
+`alloc_syscall_native.o`(역시 `hexa_arena_alloc` 정의) 와 충돌 → `multiple definition of
+hexa_arena_alloc` 링크 실패. **alloc seed 만 public 심볼명을 공유**(array/map/str seed 는 별도
+`rt_*_native` 심볼로 위임하므로 stale sibling .c 가 절대 충돌 안 함) — 그래서 alloc 만 C body 가
+`#else`-drop 돼야 하고 alloc 만 stale warm 산출물에 취약하다.
+
+**근본원인 실증** (aiden x86_64, warm-skip + stale `runtime_core.c` + `HEXA_RT_ALLOC_NATIVE=1`):
+clean STAGE-0 빌드는 GREEN(smoke exit42 PASS — emitter SSOT 자체는 이미 올바름), 그러나 warm tree 에
+stale 산출물을 주입하면 `build_aprime: clang failed` 로 EXIT=1 — stale 산출물 shape 에 따라
+`redefinition of '__hxw_arena_alloc'` / `too many arguments provided to function-like macro` /
+`call to undeclared function 'hexa_arena_cur'` / (완전 pre-guard 산출물은) `multiple definition of
+hexa_arena_alloc` 로 발현. 전부 동일 root = **stale warm-tree `runtime_core.c`**.
+
+**FIX**: warm 경로에서도 emitter SSOT 로부터 `runtime_core.c` 를 재생성한다 — 새 공유 hexat-free awk
+un-escaper `tool/regen_runtime_core_c.sh`(`stage_resolve_runtime_a` 의 PRIMARY regen 과 **동일한**
+un-escape · reference-first 로 검증된 sibling 복제). regen 은 byte-DETERMINISTIC 이라 이미 fresh 한
+warm tree 는 SHA-identical 산출물을 받아 **byte-neutral**(perf/byteeq drift 없음)이고, stale tree 만
+교정된다. 이로써 모든 타깃에서 native-canonical-default 가 dup-def 없이 유지되며,
+`HEXA_RT_ALLOC_NATIVE=0` 워크어라운드(linux 빌드를 조용히 C `#else` arena 로 회귀시켜
+self-host 회귀를 숨기던)가 불필요해진다. C `#else` fallback(no-seed 경로)은 **보존**(#3553/#3589
+#else-drop 과 달리 회귀 없음). (`tool/build_aprime.sh` · `tool/regen_runtime_core_c.sh`)
 
 - **feat(selfhost): runtime_hi arm64-linux native seed → linux-arm64 drops runtime_hi_gen.c (zero-c r1 · self/*.c 3→2 on all 3 production targets)**: the last C-hi_gen target closed. Before this round the RT-NATIVE leg-B Z2a `rt_hi` mechanism wired a native `runtime_hi_*.s` seed for darwin-arm64 (`runtime_hi_native.s`) and x86_64-linux (`runtime_hi_x86_64.s`) — both `#include "runtime_hi_gen.c"`-FREE — but linux-arm64 had NO seed, so `restore_frozen_seeds` SYNTHESIZED `self/runtime_hi_gen.c` (the 9-fn awk-unescape path) and that target kept 3 top-level `self/*.c` (`runtime.c` + `runtime_core.c` + `runtime_hi_gen.c`) vs 2 on the other two. This adds the missing third seed `self/native/runtime_hi_arm64-linux.s` (target `arm64-linux-gnu`, ELF aarch64, `rt_str_*` no-underscore + `.hidden`, 15/15 fns) — generated by `tool/regen_runtime_hi_native_s.sh arm64-linux` (new case) — and wires `tool/stage_resolve_runtime_a`'s `resolve_native_rt_hi_seed` `linux-arm64` case to it. EMITTER GAP FOUND + FIXED in the regen (NOT a codegen change): the shared arm64 codegen (`compiler/codegen/arm64_darwin.hexa`) emits Mach-O `@PAGE`/`@PAGEOFF` adrp/add pairs for `.LCstrN` string-literal address loads regardless of `--target`; the GNU/LLVM aarch64 ELF assembler instead spells the page-pair as a BARE symbol after `adrp` + a `:lo12:`-prefixed `add` operand (R_AARCH64_ADR_PREL_PG_HI21 / R_AARCH64_ADD_ABS_LO12_NC — the same relocations `@PAGE`/`@PAGEOFF` encode). rt_hi is the FIRST arm64-linux seed with string literals (the prior 8 families are pure raw-mem/arith → never hit this), so the regen now applies a text-spelling normalization for `arm64-linux-gnu` (mirrors the existing x86_64 `mov→lea [rip+…]` PIC fixup) — the `--emit=obj` direct ELF serializer (`compiler/emit/elf_arm64.hexa`) already emits the correct relocations, only the `--emit=asm` text path carried the Mach-O spelling. NET: all 3 production targets now assemble `build/rt_hi_native.o` from a frozen seed, set `HEXA_ZEROC_RT_HI=1`, and NEVER synthesize/`#include` `runtime_hi_gen.c` → uniform `ls self/*.c == 2`. byteeq-SAFE: a frozen-seed regen (no compiler/codegen/runtime.c body change); the C `gen.c` synth path is PRESERVED as the no-seed/assemble-fail fallback (self-host ≠ release). MEASURED (aiden x86_64 + qemu-aarch64-static cross): seed = 15/15 `.globl rt_str_*`, cross-assembles to a valid ELF-aarch64 object (15 `T rt_str_*`); qemu-aarch64 runtime smoke — `rt_str_trim` ran natively, returned, program exit 7 (designed); `resolve_native_rt_hi_seed TARGET=linux-arm64` → assembled `build/rt_hi_native.o` (15 rt_str_*) + set `HEXA_ZEROC_RT_HI=1`; `restore_frozen_seeds` top-level `self/*.c` 3→2 (`runtime_hi_gen.c` dropped, `runtime.c`+`runtime_core.c` remain). 3-target byteeq via PR CI. (zero-c r1)
 
