@@ -367,8 +367,28 @@ fn _vast_all_digits(s: str) -> int {
     return 1
 }
 
+// _vast_lc — ASCII-lowercase a short token (A-Z → a-z), dependency-free
+// char-walk to match this module's style. Used to accept `CPU`/`None` as well
+// as `cpu`/`none` for the `--gpu` CPU selector.
+fn _vast_lc(s: str) -> str {
+    let mut out = ""
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        let cc = char_code(c)
+        if cc >= 65 && cc <= 90 {
+            out = out + chr(cc + 32)
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out
+}
+
 // vast_gpu_predicate — turn a `--gpu` value into a vast query predicate.
 //   empty            -> "" (no filter)
+//   cpu / none       -> num_gpus=0 (CPU-only pool; GPU pool is the default)
 //   bare count (N)   -> num_gpus>=N  (the `--gpu N` usage reading; a digit-only
 //                       value is a COUNT, not a SKU name — never `gpu_name=N`)
 //   already exact    -> gpu_name=<v> (contains `_`, e.g. H100_NVL)
@@ -380,6 +400,18 @@ fn _vast_all_digits(s: str) -> int {
 pub fn vast_gpu_predicate(gpu: str) -> str {
     if len(gpu) == 0 {
         return ""
+    }
+    // CPU-only selector (`--gpu cpu` / `--gpu none`, ING #30-vast). vast's
+    // `search offers` returns GPU machines even with NO num_gpus constraint —
+    // MEASURED: `rentable=true verified=true reliability>=0.95` (the hexa
+    // default filter) surfaced 64 offers, ALL num_gpus>0, ZERO CPU-only; the
+    // CPU pool (cores 32-512, ~$0.011/hr) appears ONLY with an explicit
+    // `num_gpus=0`. Without this, `--gpu cpu` fell through to `gpu_name=cpu`
+    // (a GPU literally named "cpu") → 0 offers → "no matching offers". Map the
+    // CPU selector to `num_gpus=0` so the CPU pool is actually searched.
+    let glc = _vast_lc(gpu.trim())
+    if glc == "cpu" || glc == "none" {
+        return "num_gpus=0"
     }
     if _vast_all_digits(gpu) == 1 {
         return "num_gpus>=" + gpu
