@@ -1220,3 +1220,165 @@ fn cloud_expect_artifact(host: str, ssh_opts: [str], artifact_path: str) -> Clou
     let sz = _ssh_capture(host, ssh_opts, cloud_expect_artifact_cmd(artifact_path))
     return cloud_artifact_verdict(artifact_path, sz)
 }
+
+// ── (ING #34-(5)) sshd-bearing CPU image resolver ────────────────────
+//
+// A CPU pod rented from a BARE base image (`ubuntu:22.04`, `debian:*`,
+// `alpine`, `busybox`, raw `python:*`) has NO sshd installed, so the
+// onstart `PUBLIC_KEY` hook injects authorized_keys into a server that
+// never listens — ssh-ready then loops until the bounded gate times out
+// and DESTROYS a perfectly healthy (but unreachable) pod. The provider
+// SSH gate gives a sshd-bearing official image instead. `runpod/pytorch`
+// (the runpod GPU default) ships an sshd + the PUBLIC_KEY onstart hook,
+// so a CPU pod with no explicit `--image` (or a known sshd-less base)
+// resolves to it. An EXPLICIT user image is honored (we only warn).
+
+// _cloud_image_lacks_sshd — PURE heuristic: 1 iff `image` looks like a
+// bare base with no sshd (the known sshd-less Docker Hub bases). This is
+// a denylist, not an allowlist — an unknown/custom image is assumed to
+// carry sshd (no false upgrade of a user's deliberate choice).
+fn _cloud_image_lacks_sshd(image: str) -> int {
+    let g = image.trim().to_lower()
+    if len(g) == 0 { return 1 }
+    if g.index_of("ubuntu:") == 0 { return 1 }
+    if g == "ubuntu" { return 1 }
+    if g.index_of("debian:") == 0 { return 1 }
+    if g == "debian" { return 1 }
+    if g.index_of("alpine") == 0 { return 1 }
+    if g.index_of("busybox") == 0 { return 1 }
+    // bare `python:*` / `node:*` base images: no sshd either. Match the
+    // image name at the start so `runpod/python-ssh:..` is NOT caught.
+    if g.index_of("python:") == 0 { return 1 }
+    if g.index_of("node:") == 0 { return 1 }
+    return 0
+}
+
+// cloud_cpu_sshd_image — the official sshd-bearing CPU default image. A
+// pinned real tag (Docker Hub has no `:latest` for runpod/pytorch, so a
+// `:latest` would 404 at deploy) — the same image the runpod GPU path
+// defaults to, which ships sshd + the PUBLIC_KEY onstart hook. Overridable
+// via HEXA_CLOUD_CPU_IMAGE for a site that maintains its own sshd image.
+fn cloud_cpu_sshd_image() -> str {
+    let ov = env_var("HEXA_CLOUD_CPU_IMAGE")
+    if len(ov.trim()) > 0 {
+        return ov.trim()
+    }
+    return "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
+}
+
+// cloud_resolve_cpu_image — PURE: given the user's `--image` (default-filled
+// or explicit) and whether the caller left it at the provider default, return
+// the image to actually deploy for a CPU pod. `user_set==0` (no explicit
+// `--image`) AND the default looks sshd-less → swap to the sshd image. An
+// EXPLICIT sshd-less image is RETURNED UNCHANGED (the caller warns but obeys —
+// a user who typed `--image ubuntu:22.04` owns that choice). The chosen sshd
+// image is also returned unchanged.
+fn cloud_resolve_cpu_image(image: str, user_set: int, sshd_image: str) -> str {
+    if user_set == 1 {
+        return image
+    }
+    if _cloud_image_lacks_sshd(image) == 1 {
+        return sshd_image
+    }
+    return image
+}
+
+// ── (ING #34-(1)) /workspace volume mount df-check ───────────────────
+//
+// `--volume-in-gb N` (or the persistent-volume default) can SILENTLY not
+// mount: community CPU pods and some regions (EUR-IS-1 observed) bring the
+// pod up with /workspace backed by the 20-30 GiB container OVERLAY instead
+// of the requested network volume. Work written there is on ephemeral disk
+// and the requested capacity simply isn't present — a pod kill wipes it and
+// a large write hits ENOSPC. Post-rent we read `df` for /workspace and LOUD
+// warn if the device is the overlay OR the size is far below the request.
+
+// cloud_workspace_df_cmd — PURE: the remote one-liner reporting the
+// /workspace filesystem source + size-in-GiB on ONE line as `SRC GIB`.
+// `df -PB1G` forces 1-GiB blocks + POSIX single-line output; awk emits the
+// source device (col 1) and the total size (col 2, already in GiB). A
+// missing /workspace yields an empty/short line the verdict treats as
+// "can't confirm" (never a false alarm). Split out (pure) for unit test.
+fn cloud_workspace_df_cmd() -> str {
+    return "df -PB1G /workspace 2>/dev/null | awk 'NR==2{print $1, $2}'"
+}
+
+// cloud_workspace_df_verdict — PURE: turn the `SRC GIB` df line + the
+// REQUESTED volume size into a CloudResult. exit_code:
+//   0   mounted OK (a real device, size >= ~80% of request) — silent
+//   1   OVERLAY / tmpfs / shm backing → NOT the persistent volume (data loss)
+//   2   real device but size << request (volume under-provisioned / not the
+//       one asked for)
+//   3   inconclusive (no /workspace line) — caller stays quiet (no warn)
+// requested_gb <= 0 (ephemeral, no volume asked) → only the overlay check
+// matters for the "did my volume mount" question, so size is not flagged.
+fn cloud_workspace_df_verdict(df_line: str, requested_gb: int) -> CloudResult {
+    let line = df_line.trim()
+    if len(line) == 0 {
+        return CloudResult { ok: 0, exit_code: 3, pid: 0, stdout_: line,
+            message: "workspace_df_inconclusive (no /workspace mount line)", logfile: "" }
+    }
+    let parts = line.split(" ")
+    let src = parts[0].trim().to_lower()
+    // overlay / container-disk backing → the network volume did NOT mount.
+    if src.index_of("overlay") >= 0 || src.index_of("tmpfs") >= 0 || src.index_of("shm") >= 0 || src == "none" {
+        return CloudResult { ok: 0, exit_code: 1, pid: 0, stdout_: line,
+            message: "workspace_on_overlay (" + src + ") — persistent volume NOT mounted; /workspace is ephemeral container disk", logfile: "" }
+    }
+    // size check (only when a volume was requested). parts[1] is GiB.
+    if requested_gb > 0 && len(parts) >= 2 {
+        let got = _cloud_atoi(parts[1].trim())
+        // 80% floor absorbs fs overhead/rounding; below it = wrong/short volume.
+        let floor = (requested_gb * 8) / 10
+        if got > 0 && got < floor {
+            return CloudResult { ok: 0, exit_code: 2, pid: 0, stdout_: line,
+                message: "workspace_undersized (got " + str(got) + " GiB, requested " + str(requested_gb) + " GiB) — volume may be the container overlay, not the network volume", logfile: "" }
+        }
+    }
+    return CloudResult { ok: 1, exit_code: 0, pid: 0, stdout_: line,
+        message: "workspace OK (" + line + ")", logfile: "" }
+}
+
+// _cloud_atoi — leading decimal run; 0 if none (df GiB column parse).
+fn _cloud_atoi(s: str) -> int {
+    let n = len(s)
+    let mut i = 0
+    let mut val = 0
+    let mut seen = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c >= "0" && c <= "9" {
+            val = val * 10 + (_cloud_char_digit(c))
+            seen = 1
+            i = i + 1
+        } else {
+            i = n
+        }
+    }
+    if seen == 0 { return 0 }
+    return val
+}
+
+fn _cloud_char_digit(c: str) -> int {
+    if c == "0" { return 0 }
+    if c == "1" { return 1 }
+    if c == "2" { return 2 }
+    if c == "3" { return 3 }
+    if c == "4" { return 4 }
+    if c == "5" { return 5 }
+    if c == "6" { return 6 }
+    if c == "7" { return 7 }
+    if c == "8" { return 8 }
+    if c == "9" { return 9 }
+    return 0
+}
+
+// cloud_check_workspace_mount — LIVE: ssh the pod, read /workspace df, and
+// return the verdict. `requested_gb` is the volume size the rent asked for
+// (0 = ephemeral). Caller LOUD-warns on exit_code 1 or 2; exit_code 3 (no
+// mount line) and 0 (OK) stay quiet. Best-effort — an ssh transport failure
+// surfaces as inconclusive (exit 3), never a false data-loss alarm.
+fn cloud_check_workspace_mount(host: str, ssh_opts: [str], requested_gb: int) -> CloudResult {
+    let line = _ssh_capture(host, ssh_opts, cloud_workspace_df_cmd())
+    return cloud_workspace_df_verdict(line, requested_gb)
+}
