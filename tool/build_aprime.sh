@@ -80,6 +80,21 @@ esac
 # warm tree (or a re-run) is a no-op and the recipe stays byte-stable.
 if [ -x "$HEXA_V2" ] && [ -f self/runtime.c ]; then
     echo "  [0/5] regen: SKIP — hexat + self/runtime.c already present (warm tree)"
+    # zero-c leg-B r2a — alloc multiple-definition wall (warm-tree stale .c).
+    # STAGE-0 is skipped on a warm tree, so a STALE self/runtime_core.c (a
+    # .gitignore'd GENERATED artifact left from a pre-#3583 emitter, where the C
+    # arena body was emitted UNCONDITIONALLY before the `#ifdef
+    # HEXA_RT_ALLOC_NATIVE / #else` guard) would survive into the single-TU
+    # compile below. With HEXA_RT_ALLOC_NATIVE=1 that leaves the C
+    # `hexa_arena_alloc` body in the TU WHILE the native seed
+    # alloc_syscall_native.o ALSO defines it → `multiple definition of
+    # hexa_arena_alloc` link fail (alloc is the ONLY seed that shares the public
+    # symbol name; array/map/str seeds delegate to a distinct rt_*_native symbol
+    # so a stale sibling .c never clashes). Regenerate runtime_core.c from the
+    # emitter SSOT here too — the awk un-escape is byte-DETERMINISTIC, so an
+    # already-fresh tree gets a SHA-identical file (byte-neutral, no perf/byteeq
+    # drift) and a stale tree is corrected. Same un-escaper STAGE-0 uses.
+    bash tool/regen_runtime_core_c.sh "$REPO" 2>&1 | sed 's/^/  [0\/5] /'
 else
     echo "  [0/5] regen: clean checkout — restoring seeds + building hexat from SSOT"
     # STAGE-0 toolchain env (mirrors release CI Stage 0b contract).
