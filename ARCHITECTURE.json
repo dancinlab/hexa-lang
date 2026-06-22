@@ -64,8 +64,8 @@
             ],
             [
               "`hexa run` routing",
-              "🟡 native-first + C-transpile delegate-fallback (safety > coverage)",
-              "shim, native-route landing"
+              "✅ `HEXA_RUN_NATIVE` default-ON for ALL hosts — clang-free native cold path (`aprime_cc --emit=obj` → system `ld` → cache+exec, no C compiler); C-transpile delegate-fallback only for the native-emit gaps (closures emit-fail · `@lazy` niche). Consumer-live: `install.sh` ships `build/aprime_cc`, and a clang-less host auto-engages native (no host-cc probe is non-fatal).",
+              "leg-B r26 default-ON (#3782) · r27 ship aprime_cc (#3783) · r7 no-cc auto-engage (#3766); ROOT-A flatten (#3767) + ROOT-B native-codegen gaps r10–r25 (struct/field · println · shift · range/slice · try/catch · unary · UTF-8 rodata · void-tag · …); broad-corpus silent-differ audit drove (c) → ≈0 before flip"
             ]
           ]
         },

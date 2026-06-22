@@ -124,6 +124,8 @@ fn cmd_help() {
     println("    e.g. hexa loop --dfs --allow-llm --llm-cmd \"claude -p\" --target-absorb 10")
     println("                                          live LLM descent → 1 batched PR (compiler/atlas/embedded.gen.hexa)")
     println("                                          per @D g_atlas_absorb_direct (no .n6 shard, no inbox markdown intermediate)")
+    println("  gpu [status]                            GPU/flame/forge/cuda 상태 (cuda_available · own-kernel flags · 3-layer legend)")
+    println("    e.g. hexa gpu                           probe cuda + print subsystem SSOT view")
     println("  gpu fire <kernel.ptx> <host.c> [target] Remote GPU fire harness (GPU.md §7c)")
     println("                                          scp + nvcc + run + pull result.json")
     println("                                          default target = ubu-2 (RTX 5070 sm_120)")
@@ -5603,18 +5605,102 @@ fn cmd_gpu_lint(args) {
     }
 }
 
+// ─── cmd_gpu_status — `hexa gpu status` / bare `hexa gpu` ─────────────
+//
+// Make flame/forge/hexa-cuda + the live GPU state legible FROM THE BINARY
+// ITSELF, so any repo that has `hexa` installed (anima etc.) can SSOT-check
+// it without grepping the source tree. Two information classes, labelled
+// honestly:
+//   • PROBED  — read from this binary's linked runtime at call time:
+//                 cuda_available() / cuda_device_count() (RFC 040 carriers)
+//                 + the runtime env-flag polarity (HEXA_USE_CUBLAS etc.).
+//   • STATIC  — the 3-layer subsystem legend + measured-on-silicon notes;
+//                 these are doctrine/measurement facts, not runtime probes,
+//                 and are kept fresh via the CLAUDE.md `hexa gpu lockstep`
+//                 rule (update this text in the SAME change as any GPU
+//                 capability / flag / build-variant / dtype-parity change).
+//
+// cuda_available() == 1 ONLY in a `-cuda` release build variant (the stock
+// release `hexa` is CPU-only: subsystem wired but the CUDA runtime is not
+// compiled in → 0). See CLAUDE.md "CUDA-enabled hexa build".
+fn cmd_gpu_status() {
+    // ── PROBED: live runtime accessors (RFC 040 fn carriers in runtime.c) ──
+    let avail = cuda_available()
+    let ndev  = cuda_device_count()
+
+    println("HEXA GPU / subsystem status")
+    println("  version:           " + version_str())
+    println("")
+    println("RUNTIME PROBE  (this binary, read at call time)")
+    if avail != 0 {
+        println("  cuda_available():  1  (CUDA toolkit + device present — -cuda build variant)")
+        println("  cuda_device_count: " + str(ndev))
+    } else {
+        println("  cuda_available():  0  (CPU-only — stock release build, or no GPU/toolkit)")
+        println("  cuda_device_count: " + str(ndev))
+        println("    note: stock release `hexa` is CPU-only (subsystem wired, CUDA runtime")
+        println("          not compiled in). cuda_available()==1 needs the `-cuda` asset.")
+    }
+    println("")
+    println("OWN-KERNEL POLARITY  (native-canonical-default; cuBLAS = opt-in constraint)")
+    println("  Default path is ALWAYS hexa-own kernels; cuBLAS is opt-in only.")
+    // Runtime flags — own is the default; the flags below only CONSTRAIN.
+    let f_cublas   = env_var("HEXA_USE_CUBLAS")
+    let f_owngemm  = env_var("HEXA_OWN_GEMM")
+    let f_tf32own  = env_var("HEXA_TF32_OWN")
+    let f_tf32fast = env_var("HEXA_TF32_FASTMODE")
+    // HEXA_USE_CUBLAS — compile-time #ifdef opt-in to the cuBLAS path.
+    if len(f_cublas) > 0 {
+        println("  HEXA_USE_CUBLAS=" + f_cublas + "  → cuBLAS opt-in path ACTIVE (own-default overridden)")
+    } else {
+        println("  HEXA_USE_CUBLAS=(unset) → own kernels own 100% of GEMM/gemv (default)")
+    }
+    // HEXA_OWN_GEMM — runtime; own is default (1) unless =0 reverts to cuBLAS.
+    if f_owngemm == "0" {
+        println("  HEXA_OWN_GEMM=0     → FP64 GEMM reverted to cublasDgemm (own-default opt-OUT)")
+    } else {
+        println("  HEXA_OWN_GEMM=(default) → own FP64 GEMM active (byte-identical to cuBLAS)")
+    }
+    // HEXA_TF32_OWN — runtime; own is default unless =0 reverts to cublasGemmEx.
+    if f_tf32own == "0" {
+        println("  HEXA_TF32_OWN=0     → TF32 reverted to cublasGemmEx (within fastmode lane)")
+    } else {
+        println("  HEXA_TF32_OWN=(default) → own mma.sync TF32 active (within fastmode lane)")
+    }
+    // HEXA_TF32_FASTMODE — runtime opt-in; default 0 (FP64 stays the default dtype).
+    if len(f_tf32fast) > 0 {
+        println("  HEXA_TF32_FASTMODE=" + f_tf32fast + "  → TF32 fast lane ON (byte-changing approx)")
+    } else {
+        println("  HEXA_TF32_FASTMODE=(unset) → FP64 is the default dtype (deterministic)")
+    }
+    println("")
+    println("3-LAYER LEGEND  (static — doctrine; kept fresh via CLAUDE.md lockstep)")
+    println("  flame      native trainer (hexa-native CLMConvMoE; device-resident, byte-exact)")
+    println("  forge      GPU kernels (own-default GEMM/gemv/attn; cuBLAS opt-in via flags above)")
+    println("  hexa-cuda  release build VARIANT — cuda_available()==1 only with the `-cuda` asset")
+    println("             (stock release = CPU-only; build recipe in CLAUDE.md \"CUDA-enabled hexa build\")")
+    println("")
+    println("MEASURED ON SILICON  (static — do NOT conflate chips)")
+    println("  sm_120 (RTX 5070) = forge shipping parity host:")
+    println("    · TF32 GEMM   ≈ cuBLAS parity (own 1.02~1.10×, bit-exact)")
+    println("    · GEMV / FP64 = own beats cuBLAS (FP64 1.15~1.24×; own==cuBLAS bit-identical default)")
+    println("    · BF16/FP16   ≈ 0.83~0.85× cuBLAS (~15% gap, HW-bound — no sm_120 wgmma)")
+    println("  H100 sm_90 (wgmma) figures are a DIFFERENT chip — do not conflate with sm_120.")
+}
+
 fn cmd_gpu(args) {
     // args = av[3..]  (i.e. starts with the gpu sub-verb)
+    // Bare `hexa gpu` → status (the SSOT view other repos check), not an
+    // error — `hexa gpu help` still prints the full sub-verb usage.
     if len(args) == 0 {
-        println("usage: hexa gpu <fire|disasm|lint> ...")
-        println("  GPU CLI dispatcher (GPU.md §7c)")
-        println("  fire    scp PTX + host C → remote → nvcc + run → pull result.json")
-        println("  disasm  PTX opcode-family histogram (pure hexa scan, no ptxas)")
-        println("  lint    static checks: non-ASCII / sm-target / .reg count")
-        println("  env     HEXA_GPU_DRY=1  print the planned commands, do not execute")
-        exit(1)
+        cmd_gpu_status()
+        return 0
     }
     let sub = args[0]
+    if sub == "status" {
+        cmd_gpu_status()
+        return 0
+    }
     if sub == "disasm" {
         let mut rest = []
         let mut ri = 1
@@ -5712,10 +5798,14 @@ fn cmd_gpu(args) {
         println("hexa gpu — GPU CLI dispatcher (GPU.md §7c)")
         println("")
         println("USAGE")
+        println("  hexa gpu                                (bare) → status (alias of `hexa gpu status`)")
+        println("  hexa gpu status                         GPU / flame / forge / cuda state (SSOT view)")
         println("  hexa gpu fire   <kernel.ptx> <host.c> [target-host]")
         println("  hexa gpu disasm <kernel.ptx>")
         println("  hexa gpu lint   <kernel.ptx>")
         println("")
+        println("  status  PROBED cuda_available()/device_count + own-kernel flag polarity +")
+        println("          static 3-layer legend (flame/forge/hexa-cuda) + measured-on-silicon notes.")
         println("  fire    target-host defaults to 'ubu-2' (RTX 5070, sm_120).")
         println("          Remote workdir = /tmp/hexa_gpu_fire_<basename_noext>")
         println("          Pipeline: ssh-mkdir → scp → nvcc -O2 -arch=sm_90 + run → pull result.json")
@@ -5727,7 +5817,7 @@ fn cmd_gpu(args) {
         println("  HEXA_GPU_DRY=1   print planned commands, do not execute (fire only)")
     } else {
         eprintln("error: unknown gpu sub-verb '" + sub + "'")
-        eprintln("usage: hexa gpu <fire|disasm|lint> ...")
+        eprintln("usage: hexa gpu <status|fire|disasm|lint> ...")
         exit(2)
     }
 }
