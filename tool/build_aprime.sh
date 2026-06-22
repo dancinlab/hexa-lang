@@ -488,6 +488,183 @@ if [ "${HEXA_ZEROC_RT_CORE_MATH:-0}" != "0" ]; then
     echo "  [3/5] ZERO-C RT-CORE-MATH: HEXA_ZEROC_RT_CORE_MATH=1 — 4 transcendental wrappers (sin/cos/exp/log) linked from native seed .o"
 fi
 
+# -- HEXA_ZEROC_RT_CORE_MAP_QUERY_FOLD (leg-B map-query link de-risk, OPT-IN OFF) --
+# When HEXA_ZEROC_RT_CORE_MAP_QUERY_FOLD=1, the 8 UNGUARDED map-query symbols
+# (__map_has_cstr_v/__map_get_cstr_v/__map_order_key_at/__map_order_val_at/
+# __map_set_cstr_v/__map_remove_cstr_v/hexa_map_get_v/hexa_map_to_array) are LINKED
+# from a standalone object (build/rtcore_map_query_fold_native.o, assembled from
+# self/native/rtcore_map-query-fold.c) instead of compiled inline in
+# runtime_core.c. -DHEXA_RT_CORE_MAP_QUERY_FOLD_NATIVE externs them out of the
+# inline runtime_core.c (the narrow map-query guard, NOT the broad HEXA_RT_SELFEMIT).
+# Every immediate callee is external-linkage or a macro; all 8 are unguarded single-
+# body fns (no HEXA_HAS_HEXA_RT_STDLIB dependence), so the -DNATIVE extern is
+# collision-safe on BOTH the aprime link AND the stage-5 standalone smoke link. The
+# 11 dual-arm cluster fns + __map_ptr_eq (static inline) are EXCLUDED. Default
+# (unset): byte-IDENTICAL — the seed is not built/linked and the inline bodies are
+# compiled verbatim. Revert is via env.
+RTCORE_MAP_QUERY_FOLD_OBJ=""
+RTCORE_MAP_QUERY_FOLD_DEF=""
+if [ "${HEXA_ZEROC_RT_CORE_MAP_QUERY_FOLD:-0}" != "0" ]; then
+    if [ ! -f "$REPO/build/rtcore_map_query_fold_native.o" ]; then
+        CC="${CC:-clang}" ARCH_FLAG="$ARCH_FLAG" bash tool/regen_rtcore_map-query-fold_native_o.sh "$REPO/build/rtcore_map_query_fold_native.o" >&2 \
+            || { echo "build_aprime: HEXA_ZEROC_RT_CORE_MAP_QUERY_FOLD=1 but rtcore_map_query_fold_native.o build failed" >&2; exit 1; }
+    fi
+    if [ ! -f "$REPO/build/rtcore_map_query_fold_native.o" ]; then
+        echo "build_aprime: HEXA_ZEROC_RT_CORE_MAP_QUERY_FOLD=1 but build/rtcore_map_query_fold_native.o missing" >&2; exit 1
+    fi
+    RTCORE_MAP_QUERY_FOLD_OBJ="$REPO/build/rtcore_map_query_fold_native.o"
+    RTCORE_MAP_QUERY_FOLD_DEF="-DHEXA_RT_CORE_MAP_QUERY_FOLD_NATIVE=1"
+    echo "  [3/5] ZERO-C RT-CORE-MAP-QUERY-FOLD: HEXA_ZEROC_RT_CORE_MAP_QUERY_FOLD=1 — 8 map-query wrappers linked from native seed .o"
+fi
+
+# -- HEXA_ZEROC_RT_CORE_COLLECTION_MUTATE (leg-B r7 collection-mutate link de-risk, OPT-IN OFF) --
+# When HEXA_ZEROC_RT_CORE_COLLECTION_MUTATE=1, the 13 seed-portable map/array
+# mutate+query symbols (hexa_map_from_array/invert/merge/remove/remove_impl/set/
+# set_v + hexa_array_contains/last/pop/set/shift/truncate) are LINKED from a
+# standalone object (build/rtcore_collection-mutate_native.o, assembled from
+# self/native/rtcore_collection-mutate.c) instead of compiled inline in
+# runtime_core.c. -DHEXA_RT_CORE_COLLECTION_MUTATE_NATIVE externs them out of the
+# inline runtime_core.c (the narrow collection-mutate guard, NOT the broad
+# HEXA_RT_SELFEMIT). Every callee is external-linkage, a macro, or a seed-supplied
+# rt_array_*_native (the array_core .s seed, linked in both aprime + smoke);
+# hexa_array_sort is EXCLUDED (static qsort comparator hexa_sort_cmp + seed-absent
+# rt_array_sort_float), stays inline-C. Default (unset): byte-IDENTICAL — the seed
+# is not built/linked and the inline bodies are compiled verbatim. Revert is via env.
+RTCORE_COLLECTION_MUTATE_OBJ=""
+RTCORE_COLLECTION_MUTATE_DEF=""
+if [ "${HEXA_ZEROC_RT_CORE_COLLECTION_MUTATE:-0}" != "0" ]; then
+    if [ ! -f "$REPO/build/rtcore_collection-mutate_native.o" ]; then
+        CC="${CC:-clang}" ARCH_FLAG="$ARCH_FLAG" bash tool/regen_rtcore_collection-mutate_native_o.sh "$REPO/build/rtcore_collection-mutate_native.o" >&2 \
+            || { echo "build_aprime: HEXA_ZEROC_RT_CORE_COLLECTION_MUTATE=1 but rtcore_collection-mutate_native.o build failed" >&2; exit 1; }
+    fi
+    if [ ! -f "$REPO/build/rtcore_collection-mutate_native.o" ]; then
+        echo "build_aprime: HEXA_ZEROC_RT_CORE_COLLECTION_MUTATE=1 but build/rtcore_collection-mutate_native.o missing" >&2; exit 1
+    fi
+    RTCORE_COLLECTION_MUTATE_OBJ="$REPO/build/rtcore_collection-mutate_native.o"
+    RTCORE_COLLECTION_MUTATE_DEF="-DHEXA_RT_CORE_COLLECTION_MUTATE_NATIVE=1"
+    echo "  [3/5] ZERO-C RT-CORE-COLLECTION-MUTATE: HEXA_ZEROC_RT_CORE_COLLECTION_MUTATE=1 — 13 map/array mutate wrappers linked from native seed .o"
+fi
+
+# -- HEXA_ZEROC_RT_CORE_ARRAY_TYPED_LEAF (leg-B array-typed-leaf link de-risk, OPT-IN OFF) --
+# When HEXA_ZEROC_RT_CORE_ARRAY_TYPED_LEAF=1, the 10 seed-portable typed-array LEAF
+# ctors/accessors + zero-fill builders (hexa_arr_i64_new/_push/_len/_box,
+# hexa_arr_f64_new/_push/_len/_box, hexa_arr_zeros_leaf, hexa_arr_zeros_leaf_int)
+# are LINKED from a standalone object (build/rtcore_array_typed_leaf_native.o,
+# assembled from self/native/rtcore_array-typed-leaf.c) instead of compiled inline
+# in runtime_core.c. -DHEXA_RT_CORE_ARRAY_TYPED_LEAF_NATIVE externs them out of the
+# inline runtime_core.c (the narrow array-typed-leaf-only guard, NOT the broad
+# HEXA_RT_SELFEMIT). These 10 are emitted UNCONDITIONALLY inline (no #else arm) and
+# every callee is external-linkage (malloc/calloc/realloc/fprintf/exit/hexa_int/
+# hexa_float/hexa_throw/hexa_str/__hx_to_double) or a macro (HX_SET_ARR_*/HX_IS_INT/
+# HX_INT), so the cluster is directly seed-portable (no external-delegate route).
+# The arena fns (hexa_arena_mark/reset/rewind) are NOT included — under the shipping
+# HEXA_RT_ALLOC_NATIVE build they are already externed to the native alloc syscall
+# seed (no inline body to extern out). Default (unset): byte-IDENTICAL — the seed is
+# not built/linked and the inline #else bodies are compiled verbatim. Does NOT drop
+# the .c file (all-or-nothing). Revert via env.
+RTCORE_ATL_OBJ=""
+RTCORE_ATL_DEF=""
+if [ "${HEXA_ZEROC_RT_CORE_ARRAY_TYPED_LEAF:-0}" != "0" ]; then
+    if [ ! -f "$REPO/build/rtcore_array_typed_leaf_native.o" ]; then
+        CC="${CC:-clang}" ARCH_FLAG="$ARCH_FLAG" bash tool/regen_rtcore_array-typed-leaf_native_o.sh "$REPO/build/rtcore_array_typed_leaf_native.o" >&2 \
+            || { echo "build_aprime: HEXA_ZEROC_RT_CORE_ARRAY_TYPED_LEAF=1 but rtcore_array_typed_leaf_native.o build failed" >&2; exit 1; }
+    fi
+    if [ ! -f "$REPO/build/rtcore_array_typed_leaf_native.o" ]; then
+        echo "build_aprime: HEXA_ZEROC_RT_CORE_ARRAY_TYPED_LEAF=1 but build/rtcore_array_typed_leaf_native.o missing" >&2; exit 1
+    fi
+    RTCORE_ATL_OBJ="$REPO/build/rtcore_array_typed_leaf_native.o"
+    RTCORE_ATL_DEF="-DHEXA_RT_CORE_ARRAY_TYPED_LEAF_NATIVE=1"
+    echo "  [3/5] ZERO-C RT-CORE-ARRAY-TYPED-LEAF: HEXA_ZEROC_RT_CORE_ARRAY_TYPED_LEAF=1 — 10 typed-array leaf ctors/accessors linked from native seed .o"
+fi
+
+# -- HEXA_ZEROC_RT_CORE_FS_READ_WRITE (leg-B fs-read-write link de-risk, OPT-IN OFF) --
+# When HEXA_ZEROC_RT_CORE_FS_READ_WRITE=1, the 9 stdio-based binary file-I/O
+# HexaVal wrappers (rt_read_file/rt_write_bytes/rt_write_bytes_v/
+# rt_read_file_bytes/rt_read_bytes_at/rt_read_f32_at/rt_read_f32_array_at/
+# rt_write_bytes_append/rt_write_bytes_append_v) are LINKED from a standalone
+# object (build/rtcore_fs-read-write_native.o, assembled from
+# self/native/rtcore_fs-read-write.c) instead of compiled inline in
+# runtime_core.c. -DHEXA_RT_CORE_FS_READ_WRITE_NATIVE externs them out of the
+# inline runtime_core.c (the narrow fs-read-write guard, NOT the broad
+# HEXA_RT_SELFEMIT). Every callee of the 9 is external-linkage or a macro (the
+# seed-portability rule); rt_fs_append_atomic/rt_fs_stat/rt_fs_rotate_if_over are
+# EXCLUDED (config-conditional definers — they stay inline-C). Default (unset):
+# byte-IDENTICAL — the seed is not built/linked and the inline bodies compile
+# verbatim. Revert is via env.
+RTCORE_FS_RW_OBJ=""
+RTCORE_FS_RW_DEF=""
+if [ "${HEXA_ZEROC_RT_CORE_FS_READ_WRITE:-0}" != "0" ]; then
+    if [ ! -f "$REPO/build/rtcore_fs-read-write_native.o" ]; then
+        CC="${CC:-clang}" ARCH_FLAG="$ARCH_FLAG" bash tool/regen_rtcore_fs-read-write_native_o.sh "$REPO/build/rtcore_fs-read-write_native.o" >&2 \
+            || { echo "build_aprime: HEXA_ZEROC_RT_CORE_FS_READ_WRITE=1 but rtcore_fs-read-write_native.o build failed" >&2; exit 1; }
+    fi
+    if [ ! -f "$REPO/build/rtcore_fs-read-write_native.o" ]; then
+        echo "build_aprime: HEXA_ZEROC_RT_CORE_FS_READ_WRITE=1 but build/rtcore_fs-read-write_native.o missing" >&2; exit 1
+    fi
+    RTCORE_FS_RW_OBJ="$REPO/build/rtcore_fs-read-write_native.o"
+    RTCORE_FS_RW_DEF="-DHEXA_RT_CORE_FS_READ_WRITE_NATIVE=1"
+    echo "  [3/5] ZERO-C RT-CORE-FS-READ-WRITE: HEXA_ZEROC_RT_CORE_FS_READ_WRITE=1 — 9 fs-read-write wrappers linked from native seed .o"
+fi
+
+# -- HEXA_ZEROC_RT_CORE_ARITH_COERCE_FORMAT (leg-B arith-coerce-format link de-risk, OPT-IN OFF) --
+# When HEXA_ZEROC_RT_CORE_ARITH_COERCE_FORMAT=1, the 10 seed-portable numeric/
+# coercion/format wrappers (hexa_concat_many/hexa_fma/hexa_len/hexa_null_coal/
+# hexa_to_int/hexa_format/hexa_format_float/hexa_format_float_sci/hexa_print/
+# hexa_str_char_at) are LINKED from a standalone object
+# (build/rtcore_arith-coerce-format_native.o, assembled from
+# self/native/rtcore_arith-coerce-format.c) instead of compiled inline in
+# runtime_core.c. -DHEXA_RT_CORE_ARITH_COERCE_FORMAT_NATIVE externs them out of
+# the inline runtime_core.c (the narrow cluster-only guard, NOT the broad
+# HEXA_RT_SELFEMIT). Every callee of the 10 is external-linkage or a macro (the
+# seed-portability rule); hexa_add_slow/sub/mul/div/truthy (VALOP-lane inner
+# guard) and hexa_str_byte_at/char_code_at (HX_STRLEN→static-inline) are
+# EXCLUDED. Default (unset): byte-IDENTICAL — the seed is not built/linked and
+# the inline bodies are compiled verbatim. Revert is via env.
+RTCORE_ACF_OBJ=""
+RTCORE_ACF_DEF=""
+if [ "${HEXA_ZEROC_RT_CORE_ARITH_COERCE_FORMAT:-0}" != "0" ]; then
+    if [ ! -f "$REPO/build/rtcore_arith-coerce-format_native.o" ]; then
+        CC="${CC:-clang}" ARCH_FLAG="$ARCH_FLAG" bash tool/regen_rtcore_arith-coerce-format_native_o.sh "$REPO/build/rtcore_arith-coerce-format_native.o" >&2 \
+            || { echo "build_aprime: HEXA_ZEROC_RT_CORE_ARITH_COERCE_FORMAT=1 but rtcore_arith-coerce-format_native.o build failed" >&2; exit 1; }
+    fi
+    if [ ! -f "$REPO/build/rtcore_arith-coerce-format_native.o" ]; then
+        echo "build_aprime: HEXA_ZEROC_RT_CORE_ARITH_COERCE_FORMAT=1 but build/rtcore_arith-coerce-format_native.o missing" >&2; exit 1
+    fi
+    RTCORE_ACF_OBJ="$REPO/build/rtcore_arith-coerce-format_native.o"
+    RTCORE_ACF_DEF="-DHEXA_RT_CORE_ARITH_COERCE_FORMAT_NATIVE=1"
+    echo "  [3/5] ZERO-C RT-CORE-ARITH-COERCE-FORMAT: HEXA_ZEROC_RT_CORE_ARITH_COERCE_FORMAT=1 — 10 numeric/coercion/format wrappers linked from native seed .o"
+fi
+
+# -- HEXA_ZEROC_RT_CORE_RUNTIME_MISC (leg-B r8 runtime-misc link de-risk, OPT-IN OFF) --
+# When HEXA_ZEROC_RT_CORE_RUNTIME_MISC=1, the 11 seed-portable runtime-misc
+# symbols (__vs_ptr_eq / hexa_fnv1a_str / hexa_index_get / hexa_index_set /
+# hexa_iter_get / hexa_await_unwrap / hexa_valstruct_int / hexa_val_free_tree /
+# hexa_mkdir / __hexa_try_pop / __hexa_try_cleanup) are LINKED from a standalone
+# object (build/rtcore_runtime-misc_native.o, assembled from
+# self/native/rtcore_runtime-misc.c) instead of compiled inline in runtime_core.c.
+# -DHEXA_RT_CORE_RUNTIME_MISC_NATIVE externs them out of the inline runtime_core.c
+# (the narrow runtime-misc guard, NOT the broad HEXA_RT_SELFEMIT). Every callee
+# AND touched global of the 11 is external-linkage or a macro (the seed-portability
+# rule); __hexa_try_push (static __hexa_try_stack), __hexa_last_error (static
+# __hexa_error_val), hexa_args / hexa_real_args / hexa_script_path (static
+# _hexa_argc / _hexa_argv) are EXCLUDED — they stay inline-C. Default (unset):
+# byte-IDENTICAL — the seed is not built/linked and the inline #else bodies are
+# compiled verbatim. Revert is via env.
+RTCORE_RUNTIME_MISC_OBJ=""
+RTCORE_RUNTIME_MISC_DEF=""
+if [ "${HEXA_ZEROC_RT_CORE_RUNTIME_MISC:-0}" != "0" ]; then
+    if [ ! -f "$REPO/build/rtcore_runtime-misc_native.o" ]; then
+        CC="${CC:-clang}" ARCH_FLAG="$ARCH_FLAG" bash tool/regen_rtcore_runtime-misc_native_o.sh "$REPO/build/rtcore_runtime-misc_native.o" >&2 \
+            || { echo "build_aprime: HEXA_ZEROC_RT_CORE_RUNTIME_MISC=1 but rtcore_runtime-misc_native.o build failed" >&2; exit 1; }
+    fi
+    if [ ! -f "$REPO/build/rtcore_runtime-misc_native.o" ]; then
+        echo "build_aprime: HEXA_ZEROC_RT_CORE_RUNTIME_MISC=1 but build/rtcore_runtime-misc_native.o missing" >&2; exit 1
+    fi
+    RTCORE_RUNTIME_MISC_OBJ="$REPO/build/rtcore_runtime-misc_native.o"
+    RTCORE_RUNTIME_MISC_DEF="-DHEXA_RT_CORE_RUNTIME_MISC_NATIVE=1"
+    echo "  [3/5] ZERO-C RT-CORE-RUNTIME-MISC: HEXA_ZEROC_RT_CORE_RUNTIME_MISC=1 — 11 runtime-misc symbols linked from native seed .o"
+fi
+
 # ── stage 4: clang ─────────────────────────────────────────────────
 mkdir -p "$(dirname "$OUT")"
 # Cycle 43: -dead_strip + -ffunction-sections + -Oz shrinks aprime_cc
@@ -504,8 +681,8 @@ mkdir -p "$(dirname "$OUT")"
 CL_ERR="$(clang -Oz $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
     -ffunction-sections -fdata-sections $DEAD_STRIP \
     -fno-builtin-bzero -fno-builtin-memcpy -fno-builtin-strlen \
-    -D_FORTIFY_SOURCE=0 -fno-stack-protector $ALLOC_DEF $STR_DEF $PRINT_DEF $RTCORE_LEAF_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF \
-    -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $STR_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
+    -D_FORTIFY_SOURCE=0 -fno-stack-protector $ALLOC_DEF $STR_DEF $PRINT_DEF $RTCORE_LEAF_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF $RTCORE_MAP_QUERY_FOLD_DEF $RTCORE_COLLECTION_MUTATE_DEF $RTCORE_ATL_DEF $RTCORE_FS_RW_DEF $RTCORE_ACF_DEF $RTCORE_RUNTIME_MISC_DEF \
+    -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $STR_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MAP_QUERY_FOLD_OBJ $RTCORE_COLLECTION_MUTATE_OBJ $RTCORE_ATL_OBJ $RTCORE_FS_RW_OBJ $RTCORE_ACF_OBJ $RTCORE_RUNTIME_MISC_OBJ -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
 # ZERO-C Z2a: restore the warm runtime_core.c artifact ONLY when runtime_hi_gen.c
 # still exists (legacy gated test). When the file is permanently gone (default
 # Z2a path) keep the `#include` removed — restoring it would make the stage-5
@@ -531,10 +708,10 @@ EXTRA_DEFS=""
 if [ "$(uname -s)" = "Darwin" ]; then
     EXTRA_DEFS="-D_DARWIN_C_SOURCE"
 fi
-clang -c -O2 $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE $EXTRA_DEFS $ALLOC_DEF $RTCORE_LEAF_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF -Wno-trigraphs -I self -I . \
+clang -c -O2 $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE $EXTRA_DEFS $ALLOC_DEF $RTCORE_LEAF_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF $RTCORE_MAP_QUERY_FOLD_DEF $RTCORE_COLLECTION_MUTATE_DEF $RTCORE_ATL_DEF $RTCORE_FS_RW_DEF $RTCORE_ACF_DEF $RTCORE_RUNTIME_MISC_DEF -Wno-trigraphs -I self -I . \
     self/runtime.c -o "$RTO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
 clang $ARCH_FLAG "$SMS" -c -o "$SMO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
-clang $ARCH_FLAG "$SMO" "$RTO" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:' | head -5
+clang $ARCH_FLAG "$SMO" "$RTO" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MAP_QUERY_FOLD_OBJ $RTCORE_COLLECTION_MUTATE_OBJ $RTCORE_ATL_OBJ $RTCORE_FS_RW_OBJ $RTCORE_ACF_OBJ $RTCORE_RUNTIME_MISC_OBJ -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:' | head -5
 if [ ! -x "$SMB" ]; then
     echo "build_aprime: smoke link failed" >&2
     exit 2
