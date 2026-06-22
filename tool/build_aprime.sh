@@ -429,6 +429,34 @@ if [ "${HEXA_ZEROC_RT_CORE_LEAF:-0}" != "0" ]; then
     echo "  [3/5] ZERO-C RT-CORE-LEAF: HEXA_ZEROC_RT_CORE_LEAF=1 — 10 HexaVal ctors linked from native seed .o"
 fi
 
+# -- HEXA_ZEROC_RT_CORE_ARITH (leg-B r5 clean-6 arith link de-risk, OPT-IN OFF) --
+# When HEXA_ZEROC_RT_CORE_ARITH=1, the 6 seed-portable __raw_* / __map_raw_*
+# arith wrappers (__raw_idiv/__raw_imod/__raw_d2i/__raw_code_is/__raw_add_f/
+# __map_raw_len) are LINKED from a standalone object (build/rtcore_arith_native.o,
+# assembled from self/native/rtcore_arith.c) instead of compiled inline in
+# runtime_core.c. -DHEXA_RT_CORE_ARITH_NATIVE externs them out of the inline
+# runtime_core.c (the narrow arith-only guard, NOT the broad HEXA_RT_SELFEMIT).
+# Every callee of the 6 is external-linkage or a macro (the seed-portability
+# rule); __raw_fmod (static hxlcl_fmod) and __raw_cmp3 (static helpers) are
+# EXCLUDED — they stay inline-C. Default (unset): byte-IDENTICAL — the seed is
+# not built/linked and the inline #else bodies are compiled verbatim. Extends the
+# r4 leaf-cluster de-risk to the next seed-portable runtime_core.c symbol class;
+# does NOT drop the .c file (all-or-nothing). Revert is via env.
+RTCORE_ARITH_OBJ=""
+RTCORE_ARITH_DEF=""
+if [ "${HEXA_ZEROC_RT_CORE_ARITH:-0}" != "0" ]; then
+    if [ ! -f "$REPO/build/rtcore_arith_native.o" ]; then
+        CC="${CC:-clang}" ARCH_FLAG="$ARCH_FLAG" bash tool/regen_rtcore_arith_native_o.sh "$REPO/build/rtcore_arith_native.o" >&2 \
+            || { echo "build_aprime: HEXA_ZEROC_RT_CORE_ARITH=1 but rtcore_arith_native.o build failed" >&2; exit 1; }
+    fi
+    if [ ! -f "$REPO/build/rtcore_arith_native.o" ]; then
+        echo "build_aprime: HEXA_ZEROC_RT_CORE_ARITH=1 but build/rtcore_arith_native.o missing" >&2; exit 1
+    fi
+    RTCORE_ARITH_OBJ="$REPO/build/rtcore_arith_native.o"
+    RTCORE_ARITH_DEF="-DHEXA_RT_CORE_ARITH_NATIVE=1"
+    echo "  [3/5] ZERO-C RT-CORE-ARITH: HEXA_ZEROC_RT_CORE_ARITH=1 — 6 __raw_* arith wrappers linked from native seed .o"
+fi
+
 # ── stage 4: clang ─────────────────────────────────────────────────
 mkdir -p "$(dirname "$OUT")"
 # Cycle 43: -dead_strip + -ffunction-sections + -Oz shrinks aprime_cc
@@ -445,8 +473,8 @@ mkdir -p "$(dirname "$OUT")"
 CL_ERR="$(clang -Oz $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
     -ffunction-sections -fdata-sections $DEAD_STRIP \
     -fno-builtin-bzero -fno-builtin-memcpy -fno-builtin-strlen \
-    -D_FORTIFY_SOURCE=0 -fno-stack-protector $ALLOC_DEF $STR_DEF $PRINT_DEF $RTCORE_LEAF_DEF \
-    -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $STR_CORE_OBJ $RTCORE_LEAF_OBJ -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
+    -D_FORTIFY_SOURCE=0 -fno-stack-protector $ALLOC_DEF $STR_DEF $PRINT_DEF $RTCORE_LEAF_DEF $RTCORE_ARITH_DEF \
+    -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $STR_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_ARITH_OBJ -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
 # ZERO-C Z2a: restore the warm runtime_core.c artifact ONLY when runtime_hi_gen.c
 # still exists (legacy gated test). When the file is permanently gone (default
 # Z2a path) keep the `#include` removed — restoring it would make the stage-5
@@ -472,10 +500,10 @@ EXTRA_DEFS=""
 if [ "$(uname -s)" = "Darwin" ]; then
     EXTRA_DEFS="-D_DARWIN_C_SOURCE"
 fi
-clang -c -O2 $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE $EXTRA_DEFS $ALLOC_DEF $RTCORE_LEAF_DEF -Wno-trigraphs -I self -I . \
+clang -c -O2 $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE $EXTRA_DEFS $ALLOC_DEF $RTCORE_LEAF_DEF $RTCORE_ARITH_DEF -Wno-trigraphs -I self -I . \
     self/runtime.c -o "$RTO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
 clang $ARCH_FLAG "$SMS" -c -o "$SMO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
-clang $ARCH_FLAG "$SMO" "$RTO" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $RTCORE_LEAF_OBJ -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:' | head -5
+clang $ARCH_FLAG "$SMO" "$RTO" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_ARITH_OBJ -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:' | head -5
 if [ ! -x "$SMB" ]; then
     echo "build_aprime: smoke link failed" >&2
     exit 2
