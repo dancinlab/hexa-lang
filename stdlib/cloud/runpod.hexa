@@ -401,6 +401,29 @@ fn _runpod_cpu_rest_body(image: str, pubkey: str, name: str, vol: int, cdisk: in
         + "}"
 }
 
+// _runpod_cpu_resolve_body — PURE resolver+builder (no network): apply the CPU
+// REST v1 sizing rules to RAW (volume_gb, disk_gb, vcpu) and return the request
+// body. Factored out of _runpod_create_cpu_rest so the cap+routing is testable.
+// Rules (edge-proven, ING #31):
+//   - containerDiskInGb is HARD-CAPPED at 20 (RunPod refuses CPU create above
+//     it — "Container Disk must be <= 20", observed with container 600). <=0
+//     or >20 → 20.
+//   - volumeInGb (persistent /workspace) carries the real disk size: use
+//     volume_gb when positive, else fall back to disk_gb (so a bare `--disk N`
+//     with no volume still sizes the volume). The CLI already routes an explicit
+//     `--disk N` into volume_gb before calling, so a large --disk lands here.
+//   - vcpu <= 0 → 4.
+fn _runpod_cpu_resolve_body(image: str, pubkey: str, name: str, volume_gb: int, disk_gb: int, vcpu: int, flavors_csv: str) -> str {
+    let mut vol = volume_gb
+    if vol <= 0 { vol = disk_gb }   // --disk → persistent /workspace volume on CPU
+    if vol < 0 { vol = 0 }
+    let mut cdisk = disk_gb
+    if cdisk <= 0 || cdisk > 20 { cdisk = 20 }
+    let mut nv = vcpu
+    if nv <= 0 { nv = 4 }
+    return _runpod_cpu_rest_body(image, pubkey, name, vol, cdisk, nv, flavors_csv)
+}
+
 // _runpod_create_cpu_rest — deploy a CPU-only pod via the REST v1 API.
 // vcpu <= 0 defaults to 4. CPU containerDiskInGb is capped at 20 (RunPod limit);
 // `--disk` routes to the persistent volumeInGb instead. cloudType=COMMUNITY.
@@ -409,18 +432,8 @@ fn _runpod_create_cpu_rest(api_key: str, image: str, pubkey: str, name: str, vol
     if len(api_key) == 0 {
         return _runpod_fail_pod("create cpu (rest): missing runpod.api_key (CPU pods need the REST v1 API token)")
     }
-    // CPU pods (REST v1) hard-cap containerDiskInGb at 20 — a larger value makes
-    // RunPod REFUSE create ("Container Disk must be <= 20"; edge-proven with
-    // container 600). So the requested `--disk` sizes the PERSISTENT VOLUME
-    // (volumeInGb) instead, and containerDiskInGb stays a small fixed floor.
-    let mut vol = volume_gb
-    if vol <= 0 { vol = disk_gb }   // --disk → persistent /workspace volume on CPU
-    if vol < 0 { vol = 0 }
-    let mut cdisk = disk_gb
-    if cdisk <= 0 || cdisk > 20 { cdisk = 20 }
-    let mut nv = vcpu
-    if nv <= 0 { nv = 4 }
-    let body = _runpod_cpu_rest_body(image, pubkey, name, vol, cdisk, nv, flavors_csv)
+    let nv = if vcpu <= 0 { 4 } else { vcpu }
+    let body = _runpod_cpu_resolve_body(image, pubkey, name, volume_gb, disk_gb, vcpu, flavors_csv)
     let url = "https://rest.runpod.io/v1/pods"
     let h = #{"Content-Type": "application/json", "Authorization": "Bearer " + api_key}
     let resp = http_post_with_headers(url, h, body, 60)

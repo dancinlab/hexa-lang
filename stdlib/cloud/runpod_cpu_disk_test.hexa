@@ -116,6 +116,49 @@ fn main() {
         println("FAIL cpu-custom-vcpu"); fails = fails + 1
     }
 
+    // ── ③ GAP-1 cap+routing via the PURE RESOLVER (ING #31, edge-proven) ──
+    // _runpod_cpu_resolve_body applies the CPU sizing RULES that the raw body
+    // builder does NOT: containerDiskInGb HARD-CAP ≤20, --disk → volumeInGb.
+    // Big disk request (vol=600 from the CLI routing of --disk 600) must land in
+    // volumeInGb and clamp the container disk to 20.
+    let cpu_big = _runpod_cpu_resolve_body(img, pk, nm, 600, 600, 4, "")
+    println("--- CPU resolve body (disk routed: vol=600, raw disk=600) ---")
+    println(cpu_big)
+    if !cpu_big.contains("\"volumeInGb\":600") {
+        println("FAIL cpu-disk-routed-to-volume: --disk 600 must size volumeInGb"); fails = fails + 1
+    }
+    if !cpu_big.contains("\"containerDiskInGb\":20") {
+        println("FAIL cpu-container-capped-20: containerDiskInGb must clamp to ≤20"); fails = fails + 1
+    }
+    if cpu_big.contains("\"containerDiskInGb\":600") {
+        println("FAIL cpu-container-not-600: an oversize container disk would make RunPod refuse create"); fails = fails + 1
+    }
+    if !cpu_big.contains("\"cloudType\":\"COMMUNITY\"") {
+        println("FAIL cpu-resolve-community"); fails = fails + 1
+    }
+    // Bare --disk with NO explicit volume (vol=0, disk=300) → volume falls back
+    // to the disk size; container still ≤20.
+    let cpu_bare = _runpod_cpu_resolve_body(img, pk, nm, 0, 300, 4, "")
+    if !cpu_bare.contains("\"volumeInGb\":300") {
+        println("FAIL cpu-bare-disk-to-volume: vol<=0 must fall back to disk_gb"); fails = fails + 1
+    }
+    if !cpu_bare.contains("\"containerDiskInGb\":20") {
+        println("FAIL cpu-bare-container-20"); fails = fails + 1
+    }
+    // Defaults: no disk, no volume, no vcpu → vol 0, container 20, vcpu 4.
+    let cpu_dflt = _runpod_cpu_resolve_body(img, pk, nm, 0, 0, 0, "")
+    if !cpu_dflt.contains("\"containerDiskInGb\":20") {
+        println("FAIL cpu-default-container-20"); fails = fails + 1
+    }
+    if !cpu_dflt.contains("\"vcpuCount\":4") {
+        println("FAIL cpu-default-vcpu-4"); fails = fails + 1
+    }
+    // A small (≤20) disk passes through to BOTH container and volume fallback.
+    let cpu_small = _runpod_cpu_resolve_body(img, pk, nm, 0, 15, 2, "")
+    if !cpu_small.contains("\"containerDiskInGb\":15") {
+        println("FAIL cpu-small-disk-passthrough: a ≤20 disk keeps its value"); fails = fails + 1
+    }
+
     if fails == 0 {
         println("runpod_cpu_disk_test PASS")
         exit(0)

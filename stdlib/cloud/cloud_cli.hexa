@@ -1753,8 +1753,16 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     if runpod_is_cpu_selector(gpu) == 1 {
         let vcpu = _cli_atoi(_flag_val(av, start, "--vcpu", "4"))
         let flavors = _flag_val(av, start, "--cpu-flavor", "")
-        println("[cloud] rent runpod: CPU pod (computeType=CPU, " + str(vcpu) + " vCPU) via REST v1 API")
-        pod = runpod_create_cpu(api_key, image, pubkey, prov_label, volume_gb, disk_gb, vcpu, flavors)
+        // CPU disk routing (ING #31, edge-proven): RunPod caps a CPU pod's
+        // containerDiskInGb at 20, so a large `--disk` must size the PERSISTENT
+        // volume, not the container disk. `--disk N` (explicit) is the disk the
+        // user wants → it drives volumeInGb and takes precedence over the
+        // default volume; without --disk, the default /workspace volume stands.
+        // `_runpod_create_cpu_rest` caps containerDiskInGb ≤20 regardless.
+        let mut cpu_vol = volume_gb
+        if disk_gb > 0 { cpu_vol = disk_gb }
+        println("[cloud] rent runpod: CPU pod (computeType=CPU, " + str(vcpu) + " vCPU, /workspace volume " + str(cpu_vol) + " GiB, container disk ≤20, cloudType=COMMUNITY) via REST v1 API")
+        pod = runpod_create_cpu(api_key, image, pubkey, prov_label, cpu_vol, disk_gb, vcpu, flavors)
     } else {
         pod = runpod_create_vol(api_key, gpu, image, pubkey, prov_label, volume_gb, disk_gb)
     }
