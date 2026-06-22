@@ -1253,6 +1253,16 @@ fn _bind_builtin_names() -> [string] {
         // lets self/rt/syscall.hexa select the aarch64-Linux numbers natively.
         // ADD-only: the compiler never calls it.
         "__hx_target_arch",
+        // ING #32 friendly OS/arch-detect (2026-06-22): source-callable aliases of
+        // the `__hx_target_os()`/`__hx_target_arch()` leaf intrinsics, so user .hexa
+        // can branch on the build target WITHOUT importing self/rt/syscall (where the
+        // `@pure fn target_is_*()` wrappers live, invisible to ordinary `hexa build`
+        // source). Each is a 0-arg compile-time bool const emitted DIRECTLY as 1/0 by
+        // the per-target backend (arm64_darwin → darwin/arm64 = 1, x86_64_linux →
+        // linux/x86_64 = 1; the arm64-linux-gnu triple flips OS to linux). anima
+        // reported these as undeclared (they were only runtime .globl symbols, not
+        // source builtins). ADD-only leaves — the compiler never calls them.
+        "target_is_darwin", "target_is_linux", "target_is_arm64", "target_is_x86_64",
         // RT-NATIVE M5-syscall-c (2026-06-18): `__hx_str_ptr(s)` — the char* base
         // of a string HexaVal (its payload word) as an int HexaVal, for passing a
         // NUL-terminated cstring to a raw syscall (e.g. sys_open). The shipping

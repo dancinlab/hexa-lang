@@ -2187,6 +2187,21 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r10", 0) }
             return
         }
+        // ING #32 friendly OS/arch-detect builtins — source-callable 0-arg bool
+        // consts, emitted DIRECTLY (no `call` to the self/rt wrappers). This is the
+        // x86_64-LINUX backend, so target_is_linux/target_is_x86_64 = 1, and
+        // target_is_darwin/target_is_arm64 = 0. Immediate into the result leaf, no
+        // payload load (same shape as __hx_target_os here).
+        if s.op == "target_is_darwin" || s.op == "target_is_linux"
+           || s.op == "target_is_arm64" || s.op == "target_is_x86_64" {
+            let mut tg_val = 0
+            let mut tg_why = "target_is_*: 0 = false"
+            if s.op == "target_is_linux" { tg_val = 1 tg_why = "target_is_linux: 1 = true" }
+            else if s.op == "target_is_x86_64" { tg_val = 1 tg_why = "target_is_x86_64: 1 = true" }
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r10"), _x86_op_imm(tg_val), tg_why))
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r10", 0) }
+            return
+        }
         // UNLOCK-8: `__hx_syscall0(num)` → int HexaVal of a 0-arg Linux syscall.
         // x86_64 ABI: number in rax, `syscall`, result in rax. (Linux, NOT the
         // BSD svc #0x80 of macOS arm64 — the syscall numbers differ per OS but
