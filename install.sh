@@ -18,7 +18,7 @@
 #                   linked, glibc-independent `hexa-linux-x86_64-musl.tar.gz`
 #                   asset. Unset = auto-detect (use musl on a musl host or when
 #                   the host glibc is older than the build floor). darwin/arm64
-#                   are unaffected. The musl asset is an `edge` supplementary
+#                   are unaffected. The musl asset is a `test`-channel supplementary
 #                   target, so on stable tags the installer falls back to the
 #                   dynamic glibc asset automatically.
 #   HEXA_CUDA       linux-x86_64 only: install the cuBLAS-enabled
@@ -28,7 +28,7 @@
 #                   AUTO: prefer cuda when the host has an NVIDIA GPU (nvidia-smi)
 #                   AND a resolvable cuBLAS/cudart runtime (so a GPU consumer's
 #                   install lands cuda_available()=1 without opt-in — #3701). The
-#                   cuda asset is `edge`-supplementary, so on stable tags where it
+#                   cuda asset is `test`-channel-supplementary, so on stable tags where it
 #                   is absent the installer falls back to the CPU glibc asset
 #                   automatically. Takes precedence over HEXA_MUSL when both apply.
 
@@ -39,6 +39,9 @@ HX_BIN="$HX_HOME/bin"
 HX_SRC="$HX_HOME/src"
 HEXA_REPO="${HEXA_REPO:-dancinlab/hexa-lang}"
 HEXA_VERSION="${HEXA_VERSION:-latest}"
+# Channel rename (2026-06): the rolling prerelease is now `test` (was `edge`).
+# Accept HEXA_VERSION=edge as a back-compat alias → test.
+[ "$HEXA_VERSION" = "edge" ] && HEXA_VERSION="test"
 HEXA_BRANCH="${HEXA_BRANCH:-main}"
 
 bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -67,7 +70,7 @@ need_cmd() {
 
 # Decide whether the linux-x86_64 install should prefer the statically-linked,
 # glibc-independent `-musl` asset over the dynamic glibc tarball. This is the
-# consumer-side half of the static-musl edge target (release.yml
+# consumer-side half of the static-musl test-channel target (release.yml
 # release-linux-x86_64-musl): a dynamic glibc binary dies with
 # `GLIBC_2.xx not found` on a host whose glibc is older than the build floor
 # (ubuntu-22.04 → glibc 2.35) or on a pure-musl host (Alpine) that has no glibc
@@ -98,9 +101,9 @@ need_cmd() {
 #                  the consumer half of #3701 (a GPU consumer's `install.sh hexa`
 #                  now lands cuda_available()=1 without needing HEXA_CUDA=1).
 #
-# Returns 0 (prefer cuda) / 1 (keep default). The cuda asset is `edge`-
+# Returns 0 (prefer cuda) / 1 (keep default). The cuda asset is `test`-channel-
 # supplementary, so a stable-tag install where the asset is absent falls back to
-# the CPU glibc tarball (the generic edge-asset fallback in install_hexa) — the
+# the CPU glibc tarball (the generic rolling-asset fallback in install_hexa) — the
 # auto-prefer never hard-fails an install.
 _has_nvidia_gpu() {
     command -v nvidia-smi >/dev/null 2>&1 || return 1
@@ -215,13 +218,13 @@ install_hexa() {
 
     dim "  fetching $url"
     if ! curl -fsSL "$url" -o "$tmp/hexa.tar.gz"; then
-        # The musl AND cuda assets are `edge` supplementary targets; on stable
+        # The musl AND cuda assets are `test`-channel supplementary targets; on stable
         # tags they do not exist. Fall back to the default glibc asset rather than
         # fail — this keeps a forced/auto-musl or HEXA_CUDA=1 request working on a
         # stable channel
         # (it just lands the glibc binary, which is what shipped before).
         if [ "$asset" != "hexa-${target}" ]; then
-            dim "  ⚠ ${asset}.tar.gz not found (musl/cuda assets are edge-supplementary) → glibc asset"
+            dim "  ⚠ ${asset}.tar.gz not found (musl/cuda assets are test-channel-supplementary) → glibc asset"
             asset="hexa-${target}"
             url="$(_asset_url "$asset")"
             dim "  fetching $url"
