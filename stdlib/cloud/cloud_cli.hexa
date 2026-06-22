@@ -1478,8 +1478,27 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     // default even with no num_gpus constraint — the CPU pool surfaces ONLY
     // with `num_gpus=0` (which vast_gpu_predicate now emits for `--gpu cpu`).
     // Before this, `--gpu cpu` searched `gpu_name=cpu` → 0 offers.
+    let mut image_eff = image
     if gpu_pred == "num_gpus=0" {
         println("[cloud] rent vast: CPU-only pod (num_gpus=0; vast CPU pool, ~\$0.01/hr cores)")
+        // (ING #34-(5)) sshd-bearing default image for the CPU pool: the vast
+        // `--image` default is `ubuntu:22.04`, which has NO sshd → ssh-ready
+        // loops until the bounded gate destroys the (healthy) pod. With no
+        // explicit --image, swap a known sshd-less default to the official
+        // sshd image; an explicit user image is honored (warn only).
+        let v_image_set = _has_flag(av, start, "--image")
+        image_eff = cloud_resolve_cpu_image(image, v_image_set, cloud_cpu_sshd_image())
+        if v_image_set == 1 && _cloud_image_lacks_sshd(image) == 1 {
+            println("[cloud] rent vast: ⚠ --image " + image + " has no sshd — ssh-ready will likely fail until the bounded gate destroys the pod. Pick a sshd-bearing image (e.g. " + cloud_cpu_sshd_image() + ") or set HEXA_CLOUD_CPU_IMAGE.")
+        } else if image_eff != image {
+            println("[cloud] rent vast: CPU default image → " + image_eff + " (sshd-bearing; bare " + image + " has no sshd → ssh-ready would never succeed). Override with --image or HEXA_CLOUD_CPU_IMAGE.")
+        }
+        // (ING #34-(4)) --docker-args is a runpod-only knob; vast's create
+        // (`vastai create instance`) does not take it, so it is silently
+        // dropped. Warn rather than let the user assume it applied.
+        if _has_flag(av, start, "--docker-args") == 1 {
+            println("[cloud] rent vast: ⚠ --docker-args is IGNORED on vast (no equivalent create flag) — the value is dropped. Bake it into the image / use --env-file instead.")
+        }
     }
     // M1 — bounded SSH-readiness gate. Default 180s; 0/negative = legacy
     // unbounded (opt-in). Caps the rent so a ghost-RUNNING pod whose ssh
@@ -1566,7 +1585,7 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
         return 1
     }
     println("[cloud] rent vast: picked offer " + offer.offer_id + " ($" + offer.dph + "/hr)")
-    let inst = vast_create_labeled(offer.offer_id, image, disk_gb, prov_label)
+    let inst = vast_create_labeled(offer.offer_id, image_eff, disk_gb, prov_label)
     if inst.ok == 0 {
         // create failed → return the offer claim so a sibling can reuse it.
         vast_offer_release(offer.offer_id)
@@ -1628,6 +1647,18 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     }
     println("[cloud] rent vast: READY " + ssh.host + ":" + ssh.port + " (root@" + ssh.host + " -p " + ssh.port + ")")
     let _ = pod_registry_add(inst.instance_id, "vast", project, purpose, ssh.host, ssh.port, "READY")
+    // (ING #34-(1)) /workspace mount df-check: some images/regions bring
+    // /workspace up on the container overlay instead of the requested disk,
+    // so the capacity isn't there and writes silently land on ephemeral disk.
+    // Overlay is the authoritative signal; the size floor uses --disk (the
+    // vast instance-disk request). Only when --disk was sized (disk_gb > 0).
+    if disk_gb > 0 {
+        let v_ws = cloud_check_workspace_mount("root@" + ssh.host, vast_ssh_opts_id(ssh.port, rent_identity), disk_gb)
+        if v_ws.exit_code == 1 || v_ws.exit_code == 2 {
+            println("[cloud] rent vast: ⚠ /workspace MOUNT SUSPECT — " + v_ws.message)
+            println("                   work under /workspace may be on EPHEMERAL overlay (not the " + str(disk_gb) + " GiB disk). Verify: cloud run root@" + ssh.host + " -p " + ssh.port + " -- df -h /workspace")
+        }
+    }
     // Always capture the vast offer's hourly rate (dph_total) into the registry
     // so `cloud list` can render the dph column even without a cost-cap flag.
     // "" when the offer JSON didn't carry dph (column shows "-").
@@ -1753,6 +1784,26 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     if runpod_is_cpu_selector(gpu) == 1 {
         let vcpu = _cli_atoi(_flag_val(av, start, "--vcpu", "4"))
         let flavors = _flag_val(av, start, "--cpu-flavor", "")
+        // (ING #34-(4)) --docker-args is INERT on the CPU path: the REST v1
+        // CPU deploy body has no dockerArgs field (only the retired GPU
+        // GraphQL mutation carried it), so a `--docker-args …` here is
+        // SILENTLY dropped by the provider. Warn loudly rather than let the
+        // user believe their container args took effect.
+        if _has_flag(av, start, "--docker-args") == 1 {
+            println("[cloud] rent runpod: ⚠ --docker-args is IGNORED on a CPU pod (REST v1 computeType=CPU has no dockerArgs field) — the value is dropped. Use the image's onstart / an env var (--env-file) instead.")
+        }
+        // (ING #34-(5)) sshd-bearing default image: a bare base (ubuntu:22.04
+        // etc.) has no sshd, so ssh-ready loops until the bounded gate
+        // DESTROYS the healthy-but-unreachable pod. With no explicit --image,
+        // swap a known sshd-less default to the official sshd image; an
+        // explicit user image is honored (warn only).
+        let image_set = _has_flag(av, start, "--image")
+        let cpu_image = cloud_resolve_cpu_image(image, image_set, cloud_cpu_sshd_image())
+        if image_set == 1 && _cloud_image_lacks_sshd(image) == 1 {
+            println("[cloud] rent runpod: ⚠ --image " + image + " has no sshd — ssh-ready will likely fail until the bounded gate destroys the pod. Pick a sshd-bearing image (e.g. " + cloud_cpu_sshd_image() + ") or set HEXA_CLOUD_CPU_IMAGE.")
+        } else if cpu_image != image {
+            println("[cloud] rent runpod: CPU default image → " + cpu_image + " (sshd-bearing; bare " + image + " has no sshd → ssh-ready would never succeed). Override with --image or HEXA_CLOUD_CPU_IMAGE.")
+        }
         // CPU disk routing (ING #31, edge-proven): RunPod caps a CPU pod's
         // containerDiskInGb at 20, so a large `--disk` must size the PERSISTENT
         // volume, not the container disk. `--disk N` (explicit) is the disk the
@@ -1762,7 +1813,7 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
         let mut cpu_vol = volume_gb
         if disk_gb > 0 { cpu_vol = disk_gb }
         println("[cloud] rent runpod: CPU pod (computeType=CPU, " + str(vcpu) + " vCPU, /workspace volume " + str(cpu_vol) + " GiB, container disk ≤20, cloudType=COMMUNITY) via REST v1 API")
-        pod = runpod_create_cpu(api_key, image, pubkey, prov_label, cpu_vol, disk_gb, vcpu, flavors)
+        pod = runpod_create_cpu(api_key, cpu_image, pubkey, prov_label, cpu_vol, disk_gb, vcpu, flavors)
     } else {
         pod = runpod_create_vol(api_key, gpu, image, pubkey, prov_label, volume_gb, disk_gb)
     }
@@ -1809,6 +1860,18 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     }
     println("[cloud] rent runpod: READY " + port.ip + ":" + port.port + " (root@" + port.ip + " -p " + port.port + ")")
     let _ = pod_registry_add(pod.pod_id, "runpod", project, purpose, port.ip, port.port, "READY")
+    // (ING #34-(1)) volume mount df-check: a requested /workspace volume can
+    // SILENTLY land on the container overlay (community CPU + some regions),
+    // so the requested capacity isn't there and a pod kill wipes the data.
+    // Re-read `df /workspace` and LOUD-warn on overlay/undersize. Only when a
+    // persistent volume was actually requested (volume_gb > 0).
+    if volume_gb > 0 {
+        let wsv = cloud_check_workspace_mount("root@" + port.ip, runpod_pod_opts(port.port), volume_gb)
+        if wsv.exit_code == 1 || wsv.exit_code == 2 {
+            println("[cloud] rent runpod: ⚠ /workspace VOLUME MOUNT SUSPECT — " + wsv.message)
+            println("                     work written under /workspace may be on EPHEMERAL disk (pod kill wipes it) and the requested " + str(volume_gb) + " GiB may not be present. Verify: cloud run root@" + port.ip + " -p " + port.port + " -- df -h /workspace")
+        }
+    }
     // Always capture the RunPod hourly rate into the registry so `cloud list`
     // renders the dph column even without a cost-cap flag ("" → column "-").
     let mut dph_now = pod.cost_per_hr
@@ -2140,11 +2203,29 @@ fn _cloud_rm(id: str, provider_in: str, force: int) -> int {
     let _ = pod_registry_update_status(id, "STOPPING")
     let mut ok = 0
     let mut why = ""
+    // confirmed_alive — a DEFINITE "the provider still reports this pod live
+    // after the delete" signal (ING #34-(2)). When set we MUST NOT scrub the
+    // registry row: scrubbing would orphan a billing pod from tracking. An
+    // ambiguous/failed delete (ok==0 without this flag) still scrubs, matching
+    // the prior "confirmed-gone never lingers" semantics.
+    let mut confirmed_alive = 0
     if provider == "runpod" {
         let api_key = cloud_runpod_must_have_api_key("rm")
         ok = runpod_terminate(api_key, id)
         if ok == 1 {
-            why = "runpod terminated"
+            // (ING #34-(2)) "delete returned" ≠ "pod gone": a runpodctl
+            // `pod delete` can reply success/"not found" while the pod is
+            // STILL ALIVE and billing (stale cache, races a migration, a
+            // no-op podId). Cross-verify with a GraphQL pod-get: a live
+            // object means the delete did NOT take → DON'T claim success
+            // (and keep the registry row so the pod stays tracked).
+            if runpod_pod_exists(api_key, id) == 1 {
+                ok = 0
+                confirmed_alive = 1
+                why = "runpod terminate returned success but `pod get` STILL shows the pod LIVE — NOT deleted, BILLING CONTINUES. Retry `cloud rm " + id + "` or destroy via the RunPod console."
+            } else {
+                why = "runpod terminated (404-confirmed gone)"
+            }
         } else {
             why = "runpod terminate rejected"
         }
@@ -2152,9 +2233,23 @@ fn _cloud_rm(id: str, provider_in: str, force: int) -> int {
         let v = vast_destroy(id)
         ok = v.ok
         why = "vast: " + v.message
+        // vast_destroy already cross-verifies via `show instance` — a
+        // "LEAK SUSPECTED" verdict (ok==0 with a live status) is the same
+        // confirmed-alive case: keep the registry row.
+        if v.ok == 0 && v.message.index_of("LEAK SUSPECTED") >= 0 {
+            confirmed_alive = 1
+        }
     }
-    // Registry cleanup runs regardless of provider verdict — a confirmed-
-    // gone pod never lingers as a GHOST row. Mirrors _cloud_down semantics.
+    // Registry cleanup runs on a confirmed-gone OR an ambiguous teardown — a
+    // confirmed-gone pod never lingers as a GHOST row (mirrors _cloud_down).
+    // The ONE exception: a confirmed-STILL-ALIVE pod keeps its row so the
+    // billing pod stays tracked (ING #34-(2)), not orphaned out of the registry.
+    if confirmed_alive == 1 {
+        let _ = pod_registry_update_status(id, "RUNNING")
+        println("[cloud] rm: " + id + " — KEPT in registry (still live · billing); status reset to RUNNING")
+        println("[cloud] rm: " + id + " destroy FAILED — " + why)
+        return 1
+    }
     let _ = pod_registry_forget(id)
     let _ = pod_registry_remove(id)
     if ok == 1 {
@@ -2788,6 +2883,8 @@ fn main() {
             println("usage: cloud rent <vast|runpod> [--gpu FAMILY|N|cpu] [--image IMG] [--disk GiB] [--vcpu N] [--cpu-flavor IDS] [--owner TAG] [--query Q] [--offer ID] [--max-dph USD] [--max-wait-sec N] [--no-register] [--force-new]")
             println("  --gpu cpu    launch a CPU-only pod. runpod: REST v1 computeType=CPU (runpodctl can't) — --vcpu N (default 4) + --cpu-flavor cpu5c,cpu5g. vast: searches the CPU pool (num_gpus=0; vast's search returns GPU boxes by default — `--gpu cpu` used to find 0). --disk GiB now sizes the runpod container disk too (vast already wired it).")
             println("  --offer ID   (vast) PIN a specific offer id — skips the query search and binds THAT box, confirming it is still listed + capturing its dph before create (offers rotate; --query can silently bind a different box). --max-dph USD refuses any offer over USD/hr BEFORE billing.")
+            println("  CPU pods default to a sshd-bearing image (a bare ubuntu:22.04 has NO sshd → ssh-ready would loop until the gate destroys the pod). Override with --image or HEXA_CLOUD_CPU_IMAGE; --docker-args is IGNORED on CPU pods (warns).")
+            println("  POST-RENT GUARDS: warns if /workspace mounted on the container overlay instead of the requested volume (silent data loss); `cloud rm` cross-checks the provider after delete and KEEPS a still-live pod tracked (billing leak guard).")
             println("  IDEMPOTENT per (project,owner): a repeated same-key rent REUSES the live M5 pod; --force-new is a MANUAL flag to provision one fresh pod (never auto-invoked). Automatic re-rent on pod-loss is DEPRECATED — pod-loss FAILS LOUD; rent again explicitly. `cloud rent --selftest` checks the dedup offline.")
             return
         }
