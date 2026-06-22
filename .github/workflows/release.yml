@@ -16,6 +16,7 @@ name: release
 #   hexa-<target>/
 #     hexa                          # CLI binary (becomes ~/.hx/bin/hexa.real)
 #     build/hexa_module_loader      # `hexa build` flatten helper
+#     build/aprime_cc            # native compiler — r26 default-ON `hexa run` cold path (ING #79)
 #     release/precompile/           # GO M4 — pre-built cache binaries (hexa_run.<key>)
 #                                   # so first `hexa run <shipped-script>` skips clang fork
 #
@@ -642,9 +643,17 @@ jobs:
       # Prior single-archive build folded -DHEXA_CUDA into the one runtime.a every
       # stage used → hexa_v2 failed to load libcuda.so.1 (exit 127) on the GPU-less
       # runner. CUDA_HOME is still needed so the -DHEXA_CUDA runtime.c compile of
-      # the consumer archive finds cublas_v2.h / cuda_runtime.h headers. SM=75 =
-      # build-time -gencode (Turing) PTX/sass floor; consumer GPU arch resolves at
-      # run time. HEXA_PREBUILT_RUNTIME unset → runtime.a(s) built fresh.
+      # the consumer archive finds cublas_v2.h / cuda_runtime.h headers. SM=80 =
+      # build-time -gencode (Ampere) PTX/sass floor; consumer GPU arch resolves at
+      # run time (sm_80 PTX driver-JITs forward to sm_86/89/120/…). sm_80 is the
+      # HARD floor of self/cuda/runtime_cuda.c's own TF32 GEMM kernel — it uses
+      # `mma.sync.aligned.m16n8k8.…tf32` + `cp.async` (Ampere-only ptxas features,
+      # source comment line ~869). SM=75 (Turing) made ptxas REJECT those ops →
+      # nvcc compile failed → resolve_cuda_runtime_seed non-fatally unset HEXA_CUDA
+      # → build/runtime.cuda.a was never produced → the consumer runtime.a shipped
+      # the CPU archive (no device objects) → the Verify step failed → the whole
+      # edge release never published (edge rotted at 2026-05-23). HEXA_PREBUILT_RUNTIME
+      # unset → runtime.a(s) built fresh.
       - name: Build — shared release_build (dual CPU+CUDA runtime.a, no cuBLAS on toolchain)
         shell: bash
         env:
@@ -652,7 +661,7 @@ jobs:
           CC: gcc
           LIBS: "-lm -ldl"
           HEXA_CUDA: "1"
-          SM: "75"
+          SM: "80"
           GH_TOKEN: ${{ github.token }}
           HEXA_SEED_CONVERGE: "1"
           HEXA_BUILD_VERSION: ${{ needs.setup.outputs.release_tag }}
@@ -679,7 +688,7 @@ jobs:
           TARGET: linux-x86_64-cuda
           CC: gcc
           LIBS: "-lm -ldl"
-          SM: "75"
+          SM: "80"
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail

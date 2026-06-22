@@ -54,6 +54,21 @@ fi
 # tarball. Mirrors the runtime.a "frozen dough" precedent (#2019). Guarded so
 # older trees without a built hexat still package cleanly (additive no-op).
 [ -f build/hexat ] && cp build/hexat "$stage/build/hexat" || true
+# r27 (ING #79 consumer-live): ship the native compiler `aprime_cc` so the
+# default-ON `hexa run` native cold path (r26) actually ENGAGES on a fresh
+# consumer install. resolve_native_cc() probes <install>/build/aprime_cc; if
+# it is absent the r26 gate silently no-ops back to clang (the flip would be
+# inert on consumers). aprime_cc IS the build_aprime.sh output (the same
+# native --emit=obj compiler used by the cold path). Build it here if the
+# build stage did not (it needs build/hexat + build/runtime.a, both staged
+# above) so the toolchain that produced ./hexa also yields a matching
+# aprime_cc. Guarded: a build failure leaves aprime_cc absent → the install
+# falls back to the clang path cleanly (no regression, just not-yet-native).
+if [ ! -x build/aprime_cc ]; then
+    echo "[stage_precompile_package] r27: building native compiler build/aprime_cc (ING #79 default-ON cold path)"
+    bash tool/build_aprime.sh -o build/aprime_cc || echo "[stage_precompile_package] r27: aprime_cc build failed — install will clang-fallback (no regression)"
+fi
+[ -x build/aprime_cc ] && cp build/aprime_cc "$stage/build/aprime_cc" || true
 cp -R release/precompile/. "$stage/release/precompile/"
 tar -czf "hexa-${TARGET}.tar.gz" -C dist "hexa-${TARGET}"
 

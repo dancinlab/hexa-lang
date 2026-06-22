@@ -206,9 +206,10 @@ reconcile_runtime_c_ssot_dups() {
 # restore_frozen_seeds (which reads HEXA_ZEROC_RT_HI to skip gen.c synthesis) and
 # BEFORE build_runtime_a_from_source (which ar's the .o). The seed is a frozen
 # bootstrap artifact (like self/runtime.c) so this needs no native compiler here.
-#   arm64-darwin → self/native/runtime_hi_native.s  (Mach-O, _rt_str_* underscore)
-#   x86_64-linux → self/native/runtime_hi_x86_64.s  (ELF, rt_str_* no underscore)
-#   linux-arm64  → no seed yet → stays on the C (awk-synth gen.c) path.
+#   arm64-darwin → self/native/runtime_hi_native.s       (Mach-O, _rt_str_* underscore)
+#   x86_64-linux → self/native/runtime_hi_x86_64.s       (ELF, rt_str_* no underscore)
+#   linux-arm64  → self/native/runtime_hi_arm64-linux.s  (ELF aarch64, rt_str_* no underscore)
+# All 3 production targets now carry a seed → none synthesize runtime_hi_gen.c.
 # Idempotent · NO-OP-SAFE: if the seed is absent or assembly fails, leaves
 # HEXA_ZEROC_RT_HI untouched so the legacy C path takes over. Override by
 # pre-setting HEXA_ZEROC_RT_HI=0 to force the C path even when a seed exists.
@@ -230,7 +231,8 @@ resolve_native_rt_hi_seed() {
     case "$tgt" in
         darwin-arm64) seed="self/native/runtime_hi_native.s" ;;
         linux-x86_64) seed="self/native/runtime_hi_x86_64.s" ;;
-        *)            seed="" ;;   # linux-arm64 + unknown → C path
+        linux-arm64)  seed="self/native/runtime_hi_arm64-linux.s" ;;
+        *)            seed="" ;;   # unknown → C path
     esac
     [ -n "$seed" ] && [ -f "$seed" ] || return 0
     mkdir -p build
