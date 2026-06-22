@@ -1,3 +1,34 @@
+## fix(build_aprime): warm-tree 에서 stale `runtime_core.c` 재생성 — alloc multiple-definition 벽 종결 (zero-c leg-B r2a)
+
+`self/runtime_core.c` 는 `self/runtime_core_emit.hexa` 에서 emit 되는 **.gitignore'd 생성
+산출물**이다. CLEAN 체크아웃에서는 STAGE-0(`tool/stage_resolve_runtime_a`)가 emitter SSOT 에서
+재생성하므로 항상 guard-consistent 하지만, **WARM tree** (재실행, 또는 CI 의 `-v <hexat>` 경로처럼
+기존 transpiler 를 공급하는 경우) 에서는 `build_aprime.sh` STAGE-0 가 regen 을 SKIP 한다
+(`[0/5] regen: SKIP — hexat + self/runtime.c already present`). 이때 트리에 **stale 한
+`runtime_core.c`** (pre-#3583 emitter 가 `#ifdef HEXA_RT_ALLOC_NATIVE / #else` guard 이전에 C arena
+body 를 **무조건** emit 하던 시절의 산출물) 가 남아있으면, 그게 단일-TU 컴파일로 들어가
+`-DHEXA_RT_ALLOC_NATIVE=1`(default-ON) 과 함께 빌드되며 C `hexa_arena_alloc` body 가 네이티브 seed
+`alloc_syscall_native.o`(역시 `hexa_arena_alloc` 정의) 와 충돌 → `multiple definition of
+hexa_arena_alloc` 링크 실패. **alloc seed 만 public 심볼명을 공유**(array/map/str seed 는 별도
+`rt_*_native` 심볼로 위임하므로 stale sibling .c 가 절대 충돌 안 함) — 그래서 alloc 만 C body 가
+`#else`-drop 돼야 하고 alloc 만 stale warm 산출물에 취약하다.
+
+**근본원인 실증** (aiden x86_64, warm-skip + stale `runtime_core.c` + `HEXA_RT_ALLOC_NATIVE=1`):
+clean STAGE-0 빌드는 GREEN(smoke exit42 PASS — emitter SSOT 자체는 이미 올바름), 그러나 warm tree 에
+stale 산출물을 주입하면 `build_aprime: clang failed` 로 EXIT=1 — stale 산출물 shape 에 따라
+`redefinition of '__hxw_arena_alloc'` / `too many arguments provided to function-like macro` /
+`call to undeclared function 'hexa_arena_cur'` / (완전 pre-guard 산출물은) `multiple definition of
+hexa_arena_alloc` 로 발현. 전부 동일 root = **stale warm-tree `runtime_core.c`**.
+
+**FIX**: warm 경로에서도 emitter SSOT 로부터 `runtime_core.c` 를 재생성한다 — 새 공유 hexat-free awk
+un-escaper `tool/regen_runtime_core_c.sh`(`stage_resolve_runtime_a` 의 PRIMARY regen 과 **동일한**
+un-escape · reference-first 로 검증된 sibling 복제). regen 은 byte-DETERMINISTIC 이라 이미 fresh 한
+warm tree 는 SHA-identical 산출물을 받아 **byte-neutral**(perf/byteeq drift 없음)이고, stale tree 만
+교정된다. 이로써 모든 타깃에서 native-canonical-default 가 dup-def 없이 유지되며,
+`HEXA_RT_ALLOC_NATIVE=0` 워크어라운드(linux 빌드를 조용히 C `#else` arena 로 회귀시켜
+self-host 회귀를 숨기던)가 불필요해진다. C `#else` fallback(no-seed 경로)은 **보존**(#3553/#3589
+#else-drop 과 달리 회귀 없음). (`tool/build_aprime.sh` · `tool/regen_runtime_core_c.sh`)
+
 ## fix(install): `HEXA_CUDA=1` 설치가 cuBLAS 런타임을 CPU 로 덮어써 `cuda_available()=0` 차단 (ING #82)
 
 `HEXA_CUDA=1` 로 edge cuda 자산을 깔아도 `cuda_available()=0`(CPU 바이너리)으로 떨어지던 근본 2버그를 교정 (ING #82, anima GPU decode 막힘).
