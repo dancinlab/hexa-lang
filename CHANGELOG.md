@@ -1,3 +1,6 @@
+## docs(architecture): hexa run routing = clang-free default-ON (leg-B r26+r27 반영)
+
+ARCHITECTURE.json self-host-status 의 `hexa run` routing 행을 🟡(native-first + delegate, safety>coverage) → ✅ 로 갱신. r26(#3782 `HEXA_RUN_NATIVE` 전 호스트 default-ON) + r27(#3783 `install.sh` 가 `build/aprime_cc` 출하 consumer-live) + r7(#3766 no-host-cc 자동 native) 머지로 `hexa run` 이 모든 호스트에서 C 컴파일러 없이 동작(cold path = `aprime_cc --emit=obj` → system `ld` → cache+exec). C-transpile delegate-fallback 은 native-emit 갭(closures emit-fail · `@lazy` niche)만. 도달 경로 = ROOT-A flatten(#3767) + ROOT-B native-codegen 갭 r10~r25 전수 + broad-corpus silent-differ 감사 (c) true-silent ~0. 이력은 git; 진행중 잔여(zero-c leg B io.hexa flip)는 ING.
 ## fix(build_aprime): warm-tree 에서 stale `runtime_core.c` 재생성 — alloc multiple-definition 벽 종결 (zero-c leg-B r2a)
 
 `self/runtime_core.c` 는 `self/runtime_core_emit.hexa` 에서 emit 되는 **.gitignore'd 생성
