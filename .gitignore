@@ -295,6 +295,10 @@ self/native/wait.c
 self/runtime.c
 self/runtime_core.c
 self/runtime_hi_gen.c
+# RFC 061 ∅ r13 — runtime_hi_seed.c is the GENERATED artifact of the .hexa SSOT
+# emitter self/runtime_emit.hexa (regen via tool/regen_runtime_hi_seed_c.sh).
+# The emitter .hexa is the SSOT; the .c is reproduced byte-deterministically.
+self/native/runtime_hi_seed.c
 # Final 3 (regen/unused/.c-text · removed in #2065): hexa_cc.c = edge-regen via
 # stage_regen_hexa_cc; forge_tier_v1.c = unused via prebuilt; classd harness =
 # .c-text emitter regenerates. Listed so a regenerated copy stays untracked.

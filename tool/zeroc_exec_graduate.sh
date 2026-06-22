@@ -78,11 +78,32 @@ for n in array_core map_core alloc_syscall valop_core num_core num_float_core \
         && SEED_OBJS="$SEED_OBJS $out" && echo "      asm $out"
 done
 
-# the r9 arena-globals drop-ON seed (re-supplies the dropped CORE defs)
-echo "[2b] r9 arena-globals drop-ON seed…"
+# the r9 arena-globals drop-ON seed (re-supplies the dropped CORE defs).
+# PREPEND it: hexa_arena_alloc / hexa_strbuf_alloc are ALSO defined by
+# alloc_syscall_native.o, and under --allow-multiple-definition the FIRST
+# definition in link order wins. The arena-globals seed's arena_alloc is the
+# one consistent with the promoted file-scope `__hexa_arena` global it exports;
+# alloc_syscall's copy reads a different (uninitialized) arena → SIGSEGV. So the
+# arena-globals seed MUST precede alloc_syscall_native.o in SEED_OBJS.
+echo "[2b] r9 arena-globals drop-ON seed (prepended — arena defs must win)…"
 ARENA_O="build/rtcore_arena_globals_native.o"
 bash tool/regen_rtcore_arena_globals_native_o.sh "$ARENA_O" 2>&1 | sed 's/^/      /'
-[ -f "$ARENA_O" ] && SEED_OBJS="$SEED_OBJS $ARENA_O"
+[ -f "$ARENA_O" ] && SEED_OBJS="$ARENA_O $SEED_OBJS"
+
+# r11 rt_* CORE prim + hxlcl_* delegate seeds (cover the 42-undefined exec floor)
+echo "[2c] r11 rt_* CORE prim seed (self-contained numeric/coercion leaves)…"
+RTPRIM_O="build/zeroc_rt_core_prims.o"
+bash tool/regen_zeroc_rt_core_prims_o.sh "$RTPRIM_O" 2>&1 | sed 's/^/      /'
+[ -f "$RTPRIM_O" ] && SEED_OBJS="$SEED_OBJS $RTPRIM_O"
+
+echo "[2d] r11 hxlcl_* external-delegate seed (math→rt_*, libc→libc; #3798 pattern)…"
+HXLCL_O="build/zeroc_hxlcl_delegate.o"
+bash tool/regen_zeroc_hxlcl_delegate_o.sh "$HXLCL_O" 2>&1 | sed 's/^/      /'
+[ -f "$HXLCL_O" ] && SEED_OBJS="$SEED_OBJS $HXLCL_O"
+
+echo "[2e] r11 transpiled stdlib-runtime rt_* seed (ctype/io/math → rt_format/print/sqrt…)…"
+bash tool/regen_zeroc_stdlib_runtime_rt_o.sh build 2>&1 | sed 's/^/      /'
+for m in ctype io math; do [ -f "build/zeroc_rt_${m}.o" ] && SEED_OBJS="$SEED_OBJS build/zeroc_rt_${m}.o"; done
 
 # ── stage 3: compile the drop-ON runtime.o ─────────────────────────────────
 echo "[3] compile drop-ON runtime.o (core bodies dropped, decls from header)…"
