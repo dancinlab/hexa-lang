@@ -429,19 +429,21 @@ if [ "${HEXA_ZEROC_RT_CORE_LEAF:-0}" != "0" ]; then
     echo "  [3/5] ZERO-C RT-CORE-LEAF: HEXA_ZEROC_RT_CORE_LEAF=1 — 10 HexaVal ctors linked from native seed .o"
 fi
 
-# -- HEXA_ZEROC_RT_CORE_ARITH (leg-B r5 clean-6 arith link de-risk, OPT-IN OFF) --
-# When HEXA_ZEROC_RT_CORE_ARITH=1, the 6 seed-portable __raw_* / __map_raw_*
+# -- HEXA_ZEROC_RT_CORE_ARITH (leg-B r5 clean-6 + r6 +__raw_fmod arith link de-risk, OPT-IN OFF) --
+# When HEXA_ZEROC_RT_CORE_ARITH=1, the 7 seed-portable __raw_* / __map_raw_*
 # arith wrappers (__raw_idiv/__raw_imod/__raw_d2i/__raw_code_is/__raw_add_f/
-# __map_raw_len) are LINKED from a standalone object (build/rtcore_arith_native.o,
-# assembled from self/native/rtcore_arith.c) instead of compiled inline in
-# runtime_core.c. -DHEXA_RT_CORE_ARITH_NATIVE externs them out of the inline
-# runtime_core.c (the narrow arith-only guard, NOT the broad HEXA_RT_SELFEMIT).
-# Every callee of the 6 is external-linkage or a macro (the seed-portability
-# rule); __raw_fmod (static hxlcl_fmod) and __raw_cmp3 (static helpers) are
-# EXCLUDED — they stay inline-C. Default (unset): byte-IDENTICAL — the seed is
-# not built/linked and the inline #else bodies are compiled verbatim. Extends the
-# r4 leaf-cluster de-risk to the next seed-portable runtime_core.c symbol class;
-# does NOT drop the .c file (all-or-nothing). Revert is via env.
+# __map_raw_len + r6 __raw_fmod) are LINKED from a standalone object
+# (build/rtcore_arith_native.o, assembled from self/native/rtcore_arith.c) instead
+# of compiled inline in runtime_core.c. -DHEXA_RT_CORE_ARITH_NATIVE externs them
+# out of the inline runtime_core.c (the narrow arith-only guard, NOT the broad
+# HEXA_RT_SELFEMIT). Every callee of the 7 is external-linkage or a macro (the
+# seed-portability rule); r6 __raw_fmod routes through the EXTERNAL rt_fmod (the
+# frozen-static hxlcl_fmod is a 1-line delegate to it). __raw_cmp3 (frozen-static
+# hxlcl_strcmp, no external delegate) stays EXCLUDED inline-C — measured r6 wall.
+# Default (unset): byte-IDENTICAL — the seed is not built/linked and the inline
+# #else bodies are compiled verbatim. Extends the r4 leaf-cluster de-risk to the
+# next seed-portable runtime_core.c symbol class; does NOT drop the .c file
+# (all-or-nothing). Revert is via env.
 RTCORE_ARITH_OBJ=""
 RTCORE_ARITH_DEF=""
 if [ "${HEXA_ZEROC_RT_CORE_ARITH:-0}" != "0" ]; then
@@ -454,7 +456,7 @@ if [ "${HEXA_ZEROC_RT_CORE_ARITH:-0}" != "0" ]; then
     fi
     RTCORE_ARITH_OBJ="$REPO/build/rtcore_arith_native.o"
     RTCORE_ARITH_DEF="-DHEXA_RT_CORE_ARITH_NATIVE=1"
-    echo "  [3/5] ZERO-C RT-CORE-ARITH: HEXA_ZEROC_RT_CORE_ARITH=1 — 6 __raw_* arith wrappers linked from native seed .o"
+    echo "  [3/5] ZERO-C RT-CORE-ARITH: HEXA_ZEROC_RT_CORE_ARITH=1 — 7 __raw_* arith wrappers (r6 +__raw_fmod) linked from native seed .o"
 fi
 
 # ── stage 4: clang ─────────────────────────────────────────────────
