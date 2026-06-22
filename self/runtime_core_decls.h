@@ -33,8 +33,26 @@
  *     hexa_* prototypes). runtime.h is the native-.o path's SSOT for
  *     runtime_core.c's external ABI — it already carries HexaVal + 25 HX_*
  *     macros, so we do NOT also pull runtime_hexaval_abi.h here (that would
- *     redefine HexaVal_ with an incompatible duplicate). */
+ *     redefine HexaVal_ with an incompatible duplicate).
+ *
+ *     NEUTER the 4 forge-dispatch PROTOTYPES runtime.h carries: the FROZEN
+ *     runtime.c body SELF-DEFINES these as weak host-fallback stubs with K&R
+ *     empty-param lists (`HexaVal hexa_forge_dispatch_adamw_fused() {…}`,
+ *     runtime.c:16193), which CONFLICT with runtime.h's fully-typed
+ *     (HexaVal w_ids_v, …) prototypes. The body needs NO prototype (it defines
+ *     them), and the frozen def is immutable — so we rename runtime.h's protos
+ *     to throwaway symbols across the include, leaving the real names for the
+ *     body to define conflict-free. (Surgical: only these 4 names; everything
+ *     else in runtime.h is taken verbatim.) */
+#define hexa_forge_dispatch_adamw_fused  __hx_rtdecls_skip_fda
+#define forge_dispatch_adamw_fused       __hx_rtdecls_skip_fda2
+#define hexa_forge_dispatch_clm_megafwd  __hx_rtdecls_skip_fcm
+#define forge_dispatch_clm_megafwd       __hx_rtdecls_skip_fcm2
 #include "runtime.h"
+#undef hexa_forge_dispatch_adamw_fused
+#undef forge_dispatch_adamw_fused
+#undef hexa_forge_dispatch_clm_megafwd
+#undef forge_dispatch_clm_megafwd
 
 /* (1b) the HX_* accessor/mutator macros runtime.h does NOT carry (it has 25 of
  *      ~46; abi.h has the rest but re-typedefs HexaVal_ → redefinition clash, so
