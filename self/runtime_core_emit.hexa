@@ -1261,6 +1261,17 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "// HexaVal-by-value fields (rt 32-G redesign) have a complete type. HexaVal\n"
     buf = buf + "// only needs HexaValStruct as a *pointer* (.vs), so the forward decl above\n"
     buf = buf + "// (typedef struct HexaValStruct HexaValStruct) is sufficient here.\n"
+    // ── ZERO-C leg-B disentangle (ING #35, r3): HexaVal type-ABI contract ──
+    // The HexaVal struct + the HX_* accessor/mutator macro family below are the
+    // shared binary type-ABI contract (also carried by self/runtime.h for the
+    // native .o supply path). They are extracted to the SSOT header
+    // self/runtime_hexaval_abi.h. The DEFAULT build (HEXA_ZEROC_DROP_RTCORE
+    // unset) emits the block INLINE verbatim → clang -E -P (no -D) is
+    // byte-identical to baseline (the merge gate). Under the experimental
+    // HEXA_ZEROC_DROP_RTCORE flag the inline block is dropped for a single
+    // `#include "runtime_hexaval_abi.h"` (the disentangle). EXTRACTION is
+    // always-on; the #include-DROP is flag-gated (default OFF).
+    buf = buf + "#ifndef HEXA_ZEROC_DROP_RTCORE\n"
     buf = buf + "typedef struct HexaVal_ {\n"
     buf = buf + "    HexaTag tag;\n"
     buf = buf + "    union {\n"
@@ -1350,6 +1361,9 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "#define HX_IS_FN(v)     ((v).tag == TAG_FN)\n"
     buf = buf + "#define HX_IS_CLOSURE(v)((v).tag == TAG_CLOSURE)\n"
     buf = buf + "#define HX_IS_VALSTRUCT(v) ((v).tag == TAG_VALSTRUCT)\n"
+    buf = buf + "#else  // HEXA_ZEROC_DROP_RTCORE — disentangle: HexaVal ABI from shared SSOT header\n"
+    buf = buf + "#include \"runtime_hexaval_abi.h\"\n"
+    buf = buf + "#endif  // HEXA_ZEROC_DROP_RTCORE\n"
     buf = buf + "\n"
     buf = buf + "// rt 32-G Phase 0 (redesigned): flat C struct replacement for `Val` map.\n"
     buf = buf + "// Fields MUST mirror self/hexa_full.hexa `struct Val` exactly (order + types).\n"
