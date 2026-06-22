@@ -76,6 +76,19 @@ for s in arith math math2 map-query-fold collection-mutate array-typed-leaf \
 done
 CC=$CC ARCH_FLAG="${ARCH_FLAG:-}" bash tool/regen_zeroc_rt_core_prims_o.sh build/zeroc_rt_core_prims.o >/dev/null 2>&1 || true
 CC=$CC ARCH_FLAG="${ARCH_FLAG:-}" bash tool/regen_zeroc_hxlcl_delegate_o.sh build/zeroc_hxlcl_delegate.o >/dev/null 2>&1 || true
+# r13 — the NEW .hexa SSOT emitter for runtime.c PROPER's HI-tier bodies.
+# Gated under the experimental HEXA_ZEROC_DROP_RUNTIME flag (default OFF =
+# emitter not exercised, residual stays the 558 baseline; ON = the authored
+# batch is supplied from the emitter's seed, shrinking the residual). The
+# DEFAULT / shipping build never compiles this seed (byte-identical OFF).
+DROP_RUNTIME="${HEXA_ZEROC_DROP_RUNTIME:-0}"
+if [ "$DROP_RUNTIME" = "1" ]; then
+  CC=$CC ARCH_FLAG="${ARCH_FLAG:-}" bash tool/regen_runtime_hi_seed_o.sh build/runtime_hi_seed.o >/dev/null 2>&1 || true
+  echo "    HEXA_ZEROC_DROP_RUNTIME=1 — runtime_emit.hexa seed INCLUDED (r13 batch)"
+else
+  rm -f build/runtime_hi_seed.o 2>/dev/null || true
+  echo "    HEXA_ZEROC_DROP_RUNTIME=0 — runtime_emit.hexa seed EXCLUDED (baseline)"
+fi
 nm -g build/*.o 2>/dev/null | grep ' T ' | awk '{print $3}' | sed 's/^_//' | sort -u > "$OUT/seed_prov.txt"
 comm -23 "$OUT/hi_def.txt" "$OUT/seed_prov.txt" > "$OUT/residual.txt"
 RES_N=$(grep -c . "$OUT/residual.txt")

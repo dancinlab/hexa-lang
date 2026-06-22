@@ -1,0 +1,163 @@
+#!hexa strict
+// runtime_emit.hexa
+//   RFC 061 ∅ campaign — the FIRST batch of the .hexa SSOT emitter for
+//   self/runtime.c PROPER's 558 HI-tier bodies (ING #35, zero-c r13).
+//
+// WHY THIS EXISTS
+// ───────────────
+// r12 (tool/zeroc_drop_runtime_measure.sh) MEASURED that `ls self/*.c → 0`
+// is blocked NOT by a circular bootstrap floor (TRULY_CIRCULAR=0) but by the
+// fact that self/runtime.c PROPER (the frozen blob 151c52c8 amalgam) has NO
+// .hexa SSOT emitter — only the CORE tier (runtime_core.c) does, via
+// runtime_core_emit.hexa. The 558 HI-tier bodies have no supplier once
+// runtime.c is dropped from the compile, so the drop residual is 558.
+//
+// THIS FILE authors the FIRST tractable batch of those 558 — the 12
+// self-contained LEAF rt_* prims (no fs/syscall/runtime dependency, pure
+// arithmetic / constant / Taylor bodies). Each is ported VERBATIM from its
+// definition in the frozen runtime.c blob (the reference C source), in the
+// same `buf = buf + "<C-line>"` un-escapable form runtime_core_emit.hexa
+// uses — so tool/regen_runtime_hi_seed_c.sh (the awk un-escaper, identical to
+// regen_runtime_core_c.sh's) reproduces the .c VERBATIM and a 1-line TU
+// compiles it into a seed .o (build/runtime_hi_seed.o).
+//
+// SCOPE / SAFETY (self-host ≠ release ABSOLUTE TOP)
+// ─────────────────────────────────────────────────
+//   * This emitter + its emitted seed are EXPERIMENTAL. They are compiled and
+//     linked ONLY under the experimental HEXA_ZEROC_DROP_RUNTIME drop path
+//     (the r13 measure harness). The DEFAULT / shipping build NEVER compiles
+//     this seed — frozen runtime.c stays the SSOT on the default path and is
+//     byte-IDENTICAL. The seed bodies define the SAME symbols the frozen
+//     runtime.c defines, so they MUST NOT be linked together on the default
+//     build (they are mutually exclusive: seed supplies the body iff runtime.c
+//     is dropped).
+//   * frozen blob 151c52c8 is NOT touched — this is a NEW, separate file.
+//
+// PORTED BODIES (batch 1 of 558 → leaf rt_* cluster, 12 of the 19 rt_*):
+//   rt_isalnum rt_isalpha            (integer range classify)
+//   rt_net_fail rt_net_zero rt_posix_ok   (constant returns)
+//   rt_pthread_noop rt_pthread_create_policy  (constant returns)
+//   rt_fmod rt_exp rt_log rt_cos rt_sin   (self-contained Taylor / libm-free)
+// The remaining 7 rt_* (rt_append_file rt_delete_file rt_read_lines
+// rt_fs_append_atomic rt_fs_stat rt_fs_rotate_if_over rt_fs_mkdir_p) need
+// syscall/libc fs wrappers → deferred to a later batch (honest residual).
+//
+// Invocation:  hexa-run runtime_emit.hexa <output-path>
+// Default output path (if argv missing): "runtime_hi_seed.c" in cwd.
+
+let MODULE_NAME = "runtime_emit"
+
+fn _flush_runtime_hi(out_path: str, buf: str) {
+    let _ = exec("cat >> \"" + out_path + "\" <<'GEN_runtime_hi_EOF'\n" + buf + "GEN_runtime_hi_EOF")
+}
+
+fn emit_runtime_hi_seed_to(out_path: str) {
+    let _ = exec("printf '' > \"" + out_path + "\"")
+    let mut buf = ""
+    buf = buf + "// ═══════════════════════════════════════════════════════════\n"
+    buf = buf + "//  runtime_hi_seed.c — GENERATED from self/runtime_emit.hexa (SSOT).\n"
+    buf = buf + "//  RFC 061 ∅ campaign zero-c r13 — first batch of the runtime.c\n"
+    buf = buf + "//  PROPER HI-tier emitter (12 self-contained leaf rt_* prims).\n"
+    buf = buf + "//\n"
+    buf = buf + "//  Do NOT hand-edit. Re-run the emitter (tool/regen_runtime_hi_seed_c.sh)\n"
+    buf = buf + "//  if it ever changes. Bodies are VERBATIM ports of the frozen\n"
+    buf = buf + "//  runtime.c (blob 151c52c8) definitions — byte-faithful reference.\n"
+    buf = buf + "//\n"
+    buf = buf + "//  This seed is compiled ONLY under the experimental drop path. The\n"
+    buf = buf + "//  default / shipping build NEVER compiles it (frozen runtime.c stays\n"
+    buf = buf + "//  the SSOT, byte-identical). The symbols here are the SAME ones the\n"
+    buf = buf + "//  frozen runtime.c defines — they supply those bodies iff runtime.c\n"
+    buf = buf + "//  is dropped from the compile.\n"
+    buf = buf + "// ═══════════════════════════════════════════════════════════\n"
+    buf = buf + "\n"
+    buf = buf + "// ── ctype classify (frozen runtime.c L2240) ──────────────────\n"
+    buf = buf + "HexaVal rt_isalnum(HexaVal c) {\n"
+    buf = buf + "    int64_t v = HX_INT(c);\n"
+    buf = buf + "    int b = ((v >= 48 && v <= 57) ||\n"
+    buf = buf + "             (v >= 65 && v <= 90) ||\n"
+    buf = buf + "             (v >= 97 && v <= 122)) ? 1 : 0;\n"
+    buf = buf + "    return hexa_bool(b);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal rt_isalpha(HexaVal c) {\n"
+    buf = buf + "    int64_t v = HX_INT(c);\n"
+    buf = buf + "    int b = ((v >= 65 && v <= 90) ||\n"
+    buf = buf + "             (v >= 97 && v <= 122)) ? 1 : 0;\n"
+    buf = buf + "    return hexa_bool(b);\n"
+    buf = buf + "}\n"
+    buf = buf + "\n"
+    buf = buf + "// ── net delegation constants (frozen runtime.c L2484) ────────\n"
+    buf = buf + "HexaVal rt_net_fail(void) { return hexa_int(-1); }\n"
+    buf = buf + "HexaVal rt_net_zero(void) { return hexa_int(0); }\n"
+    buf = buf + "HexaVal rt_posix_ok(void) { return hexa_int(0); }\n"
+    buf = buf + "\n"
+    buf = buf + "// ── pthread noop policy (frozen runtime.c L2422) ─────────────\n"
+    buf = buf + "HexaVal rt_pthread_noop(void) { return hexa_int(0); }\n"
+    buf = buf + "HexaVal rt_pthread_create_policy(void) { return hexa_int(1); }\n"
+    buf = buf + "\n"
+    buf = buf + "// ── math helpers (frozen runtime.c L2345) ────────────────────\n"
+    buf = buf + "HexaVal rt_fmod(HexaVal x, HexaVal y) {\n"
+    buf = buf + "    double dx = HX_FLOAT(x), dy = HX_FLOAT(y);\n"
+    buf = buf + "    if (dy == 0.0) return hexa_float(0.0);\n"
+    buf = buf + "    double q = dx / dy;\n"
+    buf = buf + "    long long iq = (long long)q;\n"
+    buf = buf + "    return hexa_float(dx - (double)iq * dy);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal rt_exp(HexaVal x) {\n"
+    buf = buf + "    double dx = HX_FLOAT(x);\n"
+    buf = buf + "    const double LN2 = 0.6931471805599453;\n"
+    buf = buf + "    double n_d = dx / LN2;\n"
+    buf = buf + "    long long n = (long long)(n_d + (n_d >= 0.0 ? 0.5 : -0.5));\n"
+    buf = buf + "    double r = dx - (double)n * LN2;\n"
+    buf = buf + "    double r2 = r*r, r3 = r2*r, r4 = r2*r2;\n"
+    buf = buf + "    double sum = 1.0 + r + r2*0.5 + r3*(1.0/6.0) + r4*(1.0/24.0)\n"
+    buf = buf + "                 + r4*r*(1.0/120.0) + r4*r2*(1.0/720.0) + r4*r3*(1.0/5040.0);\n"
+    buf = buf + "    double pow2 = 1.0;\n"
+    buf = buf + "    if (n > 1023) n = 1023;\n"
+    buf = buf + "    if (n < -1022) n = -1022;\n"
+    buf = buf + "    if (n >= 0) for (long long i = 0; i < n; i++) pow2 *= 2.0;\n"
+    buf = buf + "    else for (long long i = 0; i < -n; i++) pow2 *= 0.5;\n"
+    buf = buf + "    return hexa_float(sum * pow2);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal rt_log(HexaVal x) {\n"
+    buf = buf + "    double dx = HX_FLOAT(x);\n"
+    buf = buf + "    if (dx <= 0.0) return hexa_float(-1e308);\n"
+    buf = buf + "    int e = 0;\n"
+    buf = buf + "    while (dx >= 2.0) { dx *= 0.5; e++; }\n"
+    buf = buf + "    while (dx < 1.0) { dx *= 2.0; e--; }\n"
+    buf = buf + "    double u = (dx - 1.0) / (dx + 1.0);\n"
+    buf = buf + "    double u2 = u*u, u3 = u2*u, u5 = u3*u2, u7 = u5*u2;\n"
+    buf = buf + "    double sum = 2.0 * (u + u3/3.0 + u5/5.0 + u7/7.0 + u7*u2/9.0);\n"
+    buf = buf + "    return hexa_float(sum + (double)e * 0.6931471805599453);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal rt_cos(HexaVal x) {\n"
+    buf = buf + "    double dx = HX_FLOAT(x);\n"
+    buf = buf + "    const double TWO_PI = 6.283185307179586;\n"
+    buf = buf + "    const double PI = 3.141592653589793;\n"
+    buf = buf + "    if (dx < 0.0) dx = -dx;\n"
+    buf = buf + "    while (dx >= TWO_PI) dx -= TWO_PI;\n"
+    buf = buf + "    if (dx > PI) dx = TWO_PI - dx;\n"
+    buf = buf + "    double x2 = dx*dx, x4 = x2*x2, x6 = x4*x2, x8 = x4*x4;\n"
+    buf = buf + "    double sum = 1.0 - x2/2.0 + x4/24.0 - x6/720.0 + x8/40320.0\n"
+    buf = buf + "                 - x8*x2/3628800.0 + x8*x4/479001600.0 - x8*x6/87178291200.0;\n"
+    buf = buf + "    return hexa_float(sum);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal rt_sin(HexaVal x) {\n"
+    buf = buf + "    const double PI_HALF = 1.5707963267948966;\n"
+    buf = buf + "    HexaVal shifted = hexa_float(HX_FLOAT(x) - PI_HALF);\n"
+    buf = buf + "    return rt_cos(shifted);\n"
+    buf = buf + "}\n"
+    if buf.len() > 0 { _flush_runtime_hi(out_path, buf) }
+}
+
+fn main() {
+    let argv = real_args()
+    let out_path = if argv.len() >= 1 { argv[0] } else { "runtime_hi_seed.c" }
+    emit_runtime_hi_seed_to(out_path)
+    let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
+    if exists_check != "y" {
+        println("[runtime_emit] FATAL: failed to write " + out_path)
+        exit(1)
+    }
+    println("[runtime_emit] wrote " + out_path)
+    exit(0)
+}
