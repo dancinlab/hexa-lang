@@ -88,6 +88,10 @@ This file is the single governance SSOT (md 단일화) — edit directives here,
   [self-host ≠ release 회귀]의 "사용자 경로를 깨지 말라"와 양립한다 — 느려지는 건 깨지는 게 아니며,
   빠른 cuBLAS 경로는 플래그로 보존된다.
 - **external LLM** — invoke external LLMs only via `hexa loop --dfs` (budget cap + verify gate).
+- **hexa --help / hexa gpu lockstep** — `hexa`(릴리스/CLI) 업데이트 시 `hexa --help`·`hexa gpu`
+  출력도 무조건 함께 갱신 — 새 GPU 능력·플래그·빌드변종·dtype parity 변화가 나면 같은 변경에서
+  `cmd_help()`/`cmd_gpu_status()` 텍스트를 lockstep 갱신한다(타 리포가 `hexa gpu`를 GPU/flame/forge/
+  cuda 상태 SSOT로 신뢰하므로 stale 금지).
 - **HF namespace** — all HuggingFace uploads/Collections live under the `dancinlab` org.
 - **L0 edits** — editing a lockdown file (see `harness.config.json` → `lockdown.files`)
   requires updating `CHANGELOG.md` in the same change.
