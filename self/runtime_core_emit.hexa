@@ -884,7 +884,7 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "// pointer into HexaVal.s uses heap-allocated memory (malloc / strdup /\n"
     buf = buf + "// arena_alloc), all of which sit on heap chunks with ≥16 bytes of\n"
     buf = buf + "// allocator metadata in front, so the load won't fault.\n"
-    buf = buf + "static inline size_t hexa_strlen_v_inline(const char* s) {\n"
+    buf = buf + "HX_RTCORE_LOCAL_INLINE size_t hexa_strlen_v_inline(const char* s) {\n"
     buf = buf + "    if (!s) return 0;\n"
     buf = buf + "    // sizeof(struct{...; char data[]}) == offset of flex array → header size\n"
     buf = buf + "    HexaStrHdr* hdr = (HexaStrHdr*)((const char*)s - sizeof(HexaStrHdr));\n"
