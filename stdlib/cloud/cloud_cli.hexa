@@ -1725,7 +1725,32 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     } else {
         println("[cloud] rent runpod: persistent /workspace volume " + str(volume_gb) + " GiB (pod-kill-survivable; --ephemeral to opt out)")
     }
-    let pod = runpod_create_vol(api_key, gpu, image, pubkey, prov_label, volume_gb)
+    // CONTAINER-DISK (`--disk GiB`, ING #30): runpod previously ignored --disk
+    // and hardcoded an 80 GiB container disk. Thread it through; <= 0 keeps the
+    // 80 GiB default inside runpod_create_vol. (vast already wires --disk.)
+    let mut disk_gb = 0
+    let dv = _flag_val(av, start, "--disk", "")
+    if len(dv) > 0 {
+        let d = _cli_atoi(dv)
+        if d > 0 { disk_gb = d }
+    }
+    if disk_gb > 0 {
+        println("[cloud] rent runpod: container disk " + str(disk_gb) + " GiB (--disk)")
+    }
+    // CPU-POD path (ING #30): `--gpu cpu` (or none/empty) launches a CPU-only
+    // pod via the REST v1 API (computeType:CPU) — runpodctl `pod create`
+    // requires a GPU. `--vcpu N` sizes the vCPU count (default 4); `--cpu-flavor
+    // cpu5c,cpu5g` overrides the flavor preference list. These flags are inert
+    // on the GPU path.
+    let mut pod = RunPodPod { ok: 0, pod_id: "", cost_per_hr: "", message: "" }
+    if runpod_is_cpu_selector(gpu) == 1 {
+        let vcpu = _cli_atoi(_flag_val(av, start, "--vcpu", "4"))
+        let flavors = _flag_val(av, start, "--cpu-flavor", "")
+        println("[cloud] rent runpod: CPU pod (computeType=CPU, " + str(vcpu) + " vCPU) via REST v1 API")
+        pod = runpod_create_cpu(api_key, image, pubkey, prov_label, volume_gb, disk_gb, vcpu, flavors)
+    } else {
+        pod = runpod_create_vol(api_key, gpu, image, pubkey, prov_label, volume_gb, disk_gb)
+    }
     if pod.ok == 0 {
         println("[cloud] rent runpod: " + pod.message)
         return 1
@@ -2745,7 +2770,8 @@ fn main() {
         // RENTED a real pod because -h/--help was just an unparsed trailing
         // token. Print usage and exit 0 — creating NOTHING.
         if _has_flag(av, si + 1, "--help") == 1 || _has_flag(av, si + 1, "-h") == 1 {
-            println("usage: cloud rent <vast|runpod> [--gpu FAMILY|N] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--offer ID] [--max-dph USD] [--max-wait-sec N] [--no-register] [--force-new]")
+            println("usage: cloud rent <vast|runpod> [--gpu FAMILY|N|cpu] [--image IMG] [--disk GiB] [--vcpu N] [--cpu-flavor IDS] [--owner TAG] [--query Q] [--offer ID] [--max-dph USD] [--max-wait-sec N] [--no-register] [--force-new]")
+            println("  --gpu cpu    (runpod) launch a CPU-only pod (REST v1 computeType=CPU; runpodctl can't). --vcpu N sizes vCPUs (default 4); --cpu-flavor cpu5c,cpu5g overrides the flavor preference. --disk GiB now sizes the runpod container disk too (was ignored).")
             println("  --offer ID   (vast) PIN a specific offer id — skips the query search and binds THAT box, confirming it is still listed + capturing its dph before create (offers rotate; --query can silently bind a different box). --max-dph USD refuses any offer over USD/hr BEFORE billing.")
             println("  IDEMPOTENT per (project,owner): a repeated same-key rent REUSES the live M5 pod; --force-new is a MANUAL flag to provision one fresh pod (never auto-invoked). Automatic re-rent on pod-loss is DEPRECATED — pod-loss FAILS LOUD; rent again explicitly. `cloud rent --selftest` checks the dedup offline.")
             return

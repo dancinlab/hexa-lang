@@ -245,7 +245,7 @@ fn _runpod_digit(c: str) -> int {
     return 0
 }
 
-fn _runpod_create_cli(rpc: str, gpu_type: str, image: str, pubkey: str, name: str, volume_gb: int) -> RunPodPod {
+fn _runpod_create_cli(rpc: str, gpu_type: str, image: str, pubkey: str, name: str, volume_gb: int, disk_gb: int) -> RunPodPod {
     // runpodctl 2.x: `pod create` (new form). Deprecated `create pod` emits
     // a warning line that breaks json_parse. Flags renamed: --gpu-id /
     // --image / --container-disk-in-gb / --cloud-type. --env now takes a
@@ -254,18 +254,23 @@ fn _runpod_create_cli(rpc: str, gpu_type: str, image: str, pubkey: str, name: st
     // PERSISTENT-VOLUME DEFAULT (@L3): --volume-in-gb mounts a persistent
     // network volume at /workspace so a pod kill does not wipe the run.
     // volume_gb <= 0 = ephemeral opt-out (no --volume-in-gb flag emitted).
+    // CONTAINER-DISK (`--disk GiB`, ING #30): disk_gb sizes the ephemeral
+    // container disk (--container-disk-in-gb). <= 0 falls back to 80 (the
+    // historical default) so a rent without --disk is unchanged.
     let env_json = "{\"PUBLIC_KEY\":\"" + pubkey + "\"}"
     let mut vol_flag = ""
     if volume_gb > 0 {
         vol_flag = " --volume-in-gb " + str(volume_gb)
     }
+    let mut cdisk = disk_gb
+    if cdisk <= 0 { cdisk = 80 }
     let cmd = _shq_local(rpc) + " pod create"
         + " --gpu-id " + _shq_local(gpu_type)
         + " --image " + _shq_local(image)
         + " --name " + _shq_local(name)
         + " --env " + _shq_local(env_json)
         + " --ports 22/tcp"
-        + " --container-disk-in-gb 80"
+        + " --container-disk-in-gb " + str(cdisk)
         + vol_flag
         + " --volume-mount-path /workspace"
         + " --cloud-type SECURE"
@@ -286,16 +291,27 @@ fn _runpod_create_cli(rpc: str, gpu_type: str, image: str, pubkey: str, name: st
     return _runpod_fail_pod("create (cli) failed: " + snippet + cloud_runpod_401_hint(snippet))
 }
 
-fn _runpod_create_api(api_key: str, gpu_type: str, image: str, pubkey: str, name: str, volume_gb: int) -> RunPodPod {
+// _runpod_gpu_gql_body — PURE GraphQL podFindAndDeployOnDemand request body
+// builder (no network) so the mutation string (incl. containerDiskInGb wiring,
+// ING #30) is capturable/assertable in a selftest. vol/cdisk are already-defaulted.
+fn _runpod_gpu_gql_body(gpu_type: str, image: str, pubkey: str, name: str, vol: int, cdisk: int) -> str {
+    return "{\"query\":\"mutation { podFindAndDeployOnDemand(input:{cloudType: ALL, gpuCount:1, volumeInGb:" + str(vol) + ", containerDiskInGb:" + str(cdisk) + ", minVcpuCount:8, minMemoryInGb:32, gpuTypeId:\\\"" + gpu_type + "\\\", name:\\\"" + name + "\\\", imageName:\\\"" + image + "\\\", dockerArgs:\\\"\\\", ports:\\\"22/tcp\\\", volumeMountPath:\\\"/workspace\\\", env:[{key:\\\"PUBLIC_KEY\\\", value:\\\"" + pubkey + "\\\"}]}) { id machineId costPerHr } }\"}"
+}
+
+fn _runpod_create_api(api_key: str, gpu_type: str, image: str, pubkey: str, name: str, volume_gb: int, disk_gb: int) -> RunPodPod {
     // `costPerHr` is on the Pod type returned by the mutation — request it so
     // the M3 cost-cap has a rate source captured at create time.
     // PERSISTENT-VOLUME DEFAULT (@L3): volumeInGb now defaults to a positive
     // persistent volume at /workspace (was hardcoded 0 = ephemeral, the exact
     // shape that lost a full training run on a pod kill). volume_gb <= 0 keeps
     // the legacy ephemeral behavior (the explicit `--ephemeral` opt-out path).
+    // CONTAINER-DISK (`--disk GiB`, ING #30): disk_gb sizes containerDiskInGb;
+    // <= 0 falls back to 80 (the historical default).
     let mut vol = volume_gb
     if vol < 0 { vol = 0 }
-    let body = "{\"query\":\"mutation { podFindAndDeployOnDemand(input:{cloudType: ALL, gpuCount:1, volumeInGb:" + str(vol) + ", containerDiskInGb:80, minVcpuCount:8, minMemoryInGb:32, gpuTypeId:\\\"" + gpu_type + "\\\", name:\\\"" + name + "\\\", imageName:\\\"" + image + "\\\", dockerArgs:\\\"\\\", ports:\\\"22/tcp\\\", volumeMountPath:\\\"/workspace\\\", env:[{key:\\\"PUBLIC_KEY\\\", value:\\\"" + pubkey + "\\\"}]}) { id machineId costPerHr } }\"}"
+    let mut cdisk = disk_gb
+    if cdisk <= 0 { cdisk = 80 }
+    let body = _runpod_gpu_gql_body(gpu_type, image, pubkey, name, vol, cdisk)
     let resp = _runpod_post(api_key, body, 60)
     if len(resp) == 0 {
         return _runpod_fail_pod("create (api): empty response (HTTPS / auth failure)")
@@ -312,13 +328,125 @@ fn _runpod_create_api(api_key: str, gpu_type: str, image: str, pubkey: str, name
     return _runpod_fail_pod("create (api): no id in response (no capacity / bad input)" + cloud_runpod_401_hint(resp))
 }
 
+// ── CPU-pod support (ING #30) ────────────────────────────────────────
+//
+// RunPod CPU pods are NOT deployable via runpodctl `pod create` (it requires
+// --gpu-id) nor via the retired GraphQL `podFindAndDeployOnDemand` mutation.
+// The VERIFIED CPU path is the REST v1 API (reference-first c23):
+//   POST https://rest.runpod.io/v1/pods   (Bearer <api_key>)
+//   body: { "computeType":"CPU", "cpuFlavorIds":[...], "vcpuCount":N,
+//           "containerDiskInGb":D, "volumeInGb":V, ... }
+// Source: https://docs.runpod.io/api-reference/pods/POST/pods — when
+// computeType=="CPU" the pod has no GPU and gpuTypeIds are ignored; the 201
+// response carries a top-level "id". cpuFlavorIds ∈ {cpu3c,cpu3g,cpu3m,
+// cpu5c,cpu5g,cpu5m} (the order is the rent-preference order); cpuFlavorPriority
+// "availability" lets RunPod pick whichever flavor is free.
+
+// _runpod_is_cpu_selector — true when the rent `--gpu` value names the CPU
+// path rather than a GPU type. Accepts "cpu", "none", or empty (case-insensitive,
+// trimmed). Anything else is a GPU type id and routes the GPU path.
+fn runpod_is_cpu_selector(gpu_type: str) -> int {
+    let g = gpu_type.trim().to_lower()
+    if len(g) == 0 { return 1 }
+    if g == "cpu" { return 1 }
+    if g == "none" { return 1 }
+    return 0
+}
+
+// _runpod_default_cpu_flavors — the default REST cpuFlavorIds JSON-array body.
+// Compute/general flavors across both generations, ordered for availability
+// (RunPod rents the first free one when cpuFlavorPriority is "availability").
+fn _runpod_default_cpu_flavors() -> str {
+    return "\"cpu3c\",\"cpu3g\",\"cpu5c\",\"cpu5g\""
+}
+
+// _runpod_cpu_flavors_json — turn a comma-list (`--cpu-flavor cpu5c,cpu5g`)
+// into a quoted JSON-array body, or the default set when unset/blank.
+fn _runpod_cpu_flavors_json(raw: str) -> str {
+    let r = raw.trim()
+    if len(r) == 0 { return _runpod_default_cpu_flavors() }
+    let parts = r.split(",")
+    let mut out = ""
+    let mut i = 0
+    while i < len(parts) {
+        let p = parts[i].trim()
+        if len(p) > 0 {
+            if len(out) > 0 { out = out + "," }
+            out = out + "\"" + p + "\""
+        }
+        i = i + 1
+    }
+    if len(out) == 0 { return _runpod_default_cpu_flavors() }
+    return out
+}
+
+// _runpod_cpu_rest_body — PURE REST v1 CPU-pod request body builder (no
+// network), so the construction can be captured/asserted in a selftest. All
+// numeric inputs are assumed already-defaulted by the caller. env is a JSON
+// OBJECT in REST v1 (the GraphQL path uses a [{key,value}] list instead).
+fn _runpod_cpu_rest_body(image: str, pubkey: str, name: str, vol: int, cdisk: int, nv: int, flavors_csv: str) -> str {
+    let flavors = _runpod_cpu_flavors_json(flavors_csv)
+    return "{\"computeType\":\"CPU\""
+        + ",\"cpuFlavorIds\":[" + flavors + "]"
+        + ",\"cpuFlavorPriority\":\"availability\""
+        + ",\"vcpuCount\":" + str(nv)
+        + ",\"containerDiskInGb\":" + str(cdisk)
+        + ",\"volumeInGb\":" + str(vol)
+        + ",\"volumeMountPath\":\"/workspace\""
+        + ",\"name\":\"" + name + "\""
+        + ",\"imageName\":\"" + image + "\""
+        + ",\"ports\":[\"22/tcp\"]"
+        + ",\"env\":{\"PUBLIC_KEY\":\"" + pubkey + "\"}"
+        + "}"
+}
+
+// _runpod_create_cpu_rest — deploy a CPU-only pod via the REST v1 API.
+// vcpu <= 0 defaults to 4. disk_gb / volume_gb <= 0 default to 80 / 0.
+// flavors_csv is a `--cpu-flavor` comma-list or "" for the default set.
+fn _runpod_create_cpu_rest(api_key: str, image: str, pubkey: str, name: str, volume_gb: int, disk_gb: int, vcpu: int, flavors_csv: str) -> RunPodPod {
+    if len(api_key) == 0 {
+        return _runpod_fail_pod("create cpu (rest): missing runpod.api_key (CPU pods need the REST v1 API token)")
+    }
+    let mut cdisk = disk_gb
+    if cdisk <= 0 { cdisk = 80 }
+    let mut vol = volume_gb
+    if vol < 0 { vol = 0 }
+    let mut nv = vcpu
+    if nv <= 0 { nv = 4 }
+    let body = _runpod_cpu_rest_body(image, pubkey, name, vol, cdisk, nv, flavors_csv)
+    let url = "https://rest.runpod.io/v1/pods"
+    let h = #{"Content-Type": "application/json", "Authorization": "Bearer " + api_key}
+    let resp = http_post_with_headers(url, h, body, 60)
+    if len(resp) == 0 {
+        return _runpod_fail_pod("create cpu (rest): empty response (HTTPS / auth failure / no CPU capacity)")
+    }
+    let parsed = json_parse(resp)
+    let id_v = json_object_get(parsed, "id")
+    if type_of(id_v) == "string" {
+        let pid = to_string(id_v)
+        if len(pid) > 0 {
+            let cph = _runpod_cost_str(json_object_get(parsed, "costPerHr"))
+            return RunPodPod { ok: 1, pod_id: pid, cost_per_hr: cph, message: "created (rest cpu) " + str(nv) + " vCPU" }
+        }
+    }
+    let snippet = resp.substring(0, 200)
+    return _runpod_fail_pod("create cpu (rest): no id in response (no CPU capacity / bad input): " + snippet + cloud_runpod_401_hint(resp))
+}
+
 // runpod_create_vol — create with an EXPLICIT persistent-volume size at
 // /workspace (@L3). volume_gb > 0 = persistent network volume; <= 0 =
-// ephemeral (the `--ephemeral` opt-out). CLI first, GraphQL API fallback.
-fn runpod_create_vol(api_key: str, gpu_type: str, image: str, pubkey: str, name: str, volume_gb: int) -> RunPodPod {
+// ephemeral (the `--ephemeral` opt-out). disk_gb sizes the container disk
+// (`--disk GiB`, ING #30; <= 0 → 80). When gpu_type names the CPU path
+// (cpu/none/empty) the REST v1 CPU API is used; otherwise CLI then GraphQL.
+fn runpod_create_vol(api_key: str, gpu_type: str, image: str, pubkey: str, name: str, volume_gb: int, disk_gb: int) -> RunPodPod {
+    // CPU-pod path (ING #30) — REST v1 is the only working CPU deploy route;
+    // runpodctl `pod create` requires --gpu-id and cannot launch a CPU pod.
+    if runpod_is_cpu_selector(gpu_type) == 1 {
+        return _runpod_create_cpu_rest(api_key, image, pubkey, name, volume_gb, disk_gb, 0, "")
+    }
     let rpc = _runpodctl_path()
     if len(rpc) > 0 {
-        // runpodctl `pod create` is the SUPPORTED deploy path. RunPod retired
+        // runpodctl `pod create` is the SUPPORTED GPU deploy path. RunPod retired
         // the GraphQL `podFindAndDeployOnDemand` mutation (api.runpod.io →
         // rest.runpod.io migration), so the API fallback below can no longer
         // create pods — it only MASKS the CLI's real error (e.g. capacity
@@ -326,20 +454,26 @@ fn runpod_create_vol(api_key: str, gpu_type: str, image: str, pubkey: str, name:
         // "no id (no capacity / bad input)". When runpodctl is present it is
         // authoritative: surface ITS result — success OR the actual error — so
         // the caller can react (switch GPU / cloud-type) instead of guessing.
-        return _runpod_create_cli(rpc, gpu_type, image, pubkey, name, volume_gb)
+        return _runpod_create_cli(rpc, gpu_type, image, pubkey, name, volume_gb, disk_gb)
     }
     // No runpodctl on this host — last-resort legacy GraphQL (likely dead;
     // returns a clear failure that points at installing runpodctl).
-    return _runpod_create_api(api_key, gpu_type, image, pubkey, name, volume_gb)
+    return _runpod_create_api(api_key, gpu_type, image, pubkey, name, volume_gb, disk_gb)
+}
+
+// runpod_create_cpu — explicit CPU-pod REST deploy with vCPU + flavor control
+// (ING #30). vcpu <= 0 → 4; flavors_csv "" → the default flavor set.
+fn runpod_create_cpu(api_key: str, image: str, pubkey: str, name: str, volume_gb: int, disk_gb: int, vcpu: int, flavors_csv: str) -> RunPodPod {
+    return _runpod_create_cpu_rest(api_key, image, pubkey, name, volume_gb, disk_gb, vcpu, flavors_csv)
 }
 
 // runpod_create — try CLI first, fall back to GraphQL API on CLI absence
 // or failure. `api_key` is only used by the API fallback path. DEFAULTS to a
 // persistent /workspace volume (runpod_default_volume_gb, plan @L3) — a pod
 // kill no longer wipes the run. Use runpod_create_vol for an explicit size /
-// the ephemeral opt-out.
+// the ephemeral opt-out. disk_gb 0 → the 80 GiB container-disk default.
 fn runpod_create(api_key: str, gpu_type: str, image: str, pubkey: str, name: str) -> RunPodPod {
-    return runpod_create_vol(api_key, gpu_type, image, pubkey, name, runpod_default_volume_gb())
+    return runpod_create_vol(api_key, gpu_type, image, pubkey, name, runpod_default_volume_gb(), 0)
 }
 
 // runpod_create_cascade — try each GPU type in order; first that succeeds
