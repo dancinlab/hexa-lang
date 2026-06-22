@@ -24,7 +24,27 @@
 //   __raw_add_f   → hexa_int/hexa_float(ext), __hx_to_double(ext),
 //                   HX_IS_BOOL/HX_BOOL(macro)
 //   __map_raw_len → hexa_int(ext), HX_MAP_LEN(macro)
-// EXPLICITLY EXCLUDED (NOT clean — internal-linkage static callee):
+//
+// zero-c r6 adds ONE more (clean-7):
+//   __raw_fmod    → rt_fmod(EXTERNAL), hexa_float/HX_FLOAT(ext/macro). The inline
+//                   #else body calls the frozen-STATIC hxlcl_fmod, which r5 flagged
+//                   as a blocker. r6 unblocks it WITHOUT touching the immutable
+//                   frozen blob: hxlcl_fmod is a 1-line delegate to the EXTERNAL
+//                   rt_fmod (frozen runtime.c:2299, no `static`), so the seed body
+//                   routes through rt_fmod directly — bit-identical, seed-portable.
+//
+// STILL EXCLUDED (measured WALL — frozen-immutable static callee, r6 honest 🧱):
+//   __raw_cmp3  → calls the frozen-STATIC hxlcl_fmod's sibling hxlcl_strcmp
+//                 (frozen runtime.c:324 `static int hxlcl_strcmp`) — TWICE in its
+//                 callee tree (directly in the str branch + transitively via the
+//                 static _hexa_enum_pair_idx). Unlike hxlcl_fmod, hxlcl_strcmp has
+//                 NO external delegate (no rt_strcmp exists), and the frozen blob
+//                 (the .c-graduation parent) is intentionally immutable, so the
+//                 static cannot be promoted via the editable emitter SSOT. Routing
+//                 around it would mean duplicating the strcmp byte-loop in the seed
+//                 + promoting 3 emitter statics that feed broader enum/cmp order
+//                 semantics — out of the low-risk link-de-risk scope. Stays inline.
+// (historical EXCLUDED note, r5 — superseded for __raw_fmod by the r6 entry above):
 //   __raw_fmod  → static hxlcl_fmod  (runtime.c:2357 `static double hxlcl_fmod`)
 //   __raw_cmp3  → static _hexa_enum_pair_idx / hxlcl_strcmp / _hx_int_slot_ordered
 // These two stay inline-C; a separate .o could not resolve the static callees.
@@ -51,6 +71,18 @@
 #define HX_MAP_LEN(v)   ((v).map_ptr->len)
 #endif
 
+// zero-c r6 — rt_fmod is the EXTERNAL (non-static) float-modulo core in the
+// frozen runtime.c (151c52c8…:2299 `HexaVal rt_fmod(...)`, no `static`). It is
+// the SAME body the inline __raw_fmod reaches via `hxlcl_fmod` — that static
+// helper (frozen runtime.c:2357) is literally
+// `HX_FLOAT(rt_fmod(hexa_float(x), hexa_float(y)))`. Routing the SEED body
+// through rt_fmod directly (extern) instead of hxlcl_fmod (static, unresolvable
+// across the .o boundary) is what makes __raw_fmod seed-portable in r6 — the
+// frozen static hxlcl_fmod is NOT promotable (the frozen blob is the immutable
+// .c-graduation parent), but its external delegate rt_fmod already is. runtime.h
+// does not declare rt_fmod, so re-declare the extern here (same prototype).
+extern HexaVal rt_fmod(HexaVal x, HexaVal y);
+
 HexaVal __raw_idiv(HexaVal a, HexaVal b) { return hexa_int(HX_INT(a) / HX_INT(b)); }
 HexaVal __raw_imod(HexaVal a, HexaVal b) { return hexa_int(HX_INT(a) % HX_INT(b)); }
 HexaVal __raw_d2i(HexaVal v) { return hexa_int((int64_t)__hx_to_double(v)); }
@@ -61,3 +93,15 @@ HexaVal __raw_add_f(HexaVal a, HexaVal b) {
     return hexa_float(__hx_to_double(a) + __hx_to_double(b));
 }
 HexaVal __map_raw_len(HexaVal m) { return hexa_int(HX_MAP_LEN(m)); }
+
+// zero-c r6 — __raw_fmod, made seed-portable by routing through EXTERNAL rt_fmod
+// instead of the frozen-static hxlcl_fmod. Semantically bit-identical to the
+// inline #else body `hexa_float(hxlcl_fmod(HX_FLOAT(a), HX_FLOAT(b)))`: expand
+// hxlcl_fmod = HX_FLOAT(rt_fmod(hexa_float(x), hexa_float(y))) and the outer
+// hexa_float(HX_FLOAT(...)) re-box is identity on a float result. Both the OFF
+// inline arm and this seed arm therefore compute the same bits; the OFF arm is
+// preserved verbatim (see runtime_core_emit.hexa #else) so the default build is
+// byte-identical.
+HexaVal __raw_fmod(HexaVal a, HexaVal b) {
+    return hexa_float(HX_FLOAT(rt_fmod(hexa_float(HX_FLOAT(a)), hexa_float(HX_FLOAT(b)))));
+}
