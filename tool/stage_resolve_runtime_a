@@ -856,7 +856,16 @@ resolve_cuda_runtime_seed() {
         unset HEXA_CUDA; return 0
     fi
     # nvcc relocatable device code + device-link (mirrors build_cuda_runtime).
+    # ING-35 #3 — CUDA-13 nvcc compiles -x cu (CUDA C++) of runtime_cuda.c and, by
+    # default, emits libstdc++ host symbols: __cxa_guard_{acquire,release,abort}
+    # (function-local-static guards) + __gxx_personality_v0/_Unwind_Resume (EH).
+    # The consumer `hexa` binary is C-LINKED (gcc/cc, no libstdc++), so those land
+    # as `undefined reference to '__cxa_guard_acquire'` at the final link (anima ING
+    # #35 cause-3). -Xcompiler -fno-threadsafe-statics drops the guard symbols
+    # (single-threaded static init is fine for these constants) and -fno-exceptions
+    # drops the EH personality — both are host-codegen-only, device code unchanged.
     if nvcc -x cu -DHEXA_CUDA -rdc=true -gencode arch=compute_$SM,code=sm_$SM -O2 -w \
+            -Xcompiler -fno-threadsafe-statics -Xcompiler -fno-exceptions \
             -I "$CINC/cccl" -I "$CINC" -I self -I self/cuda -I . \
             -c self/cuda/runtime_cuda.c -o build/runtime_cuda.o \
        && nvcc -dlink -gencode arch=compute_$SM,code=sm_$SM build/runtime_cuda.o \
@@ -1038,6 +1047,21 @@ build_runtime_a_from_source() {
         $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_CUDA -I "$_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o
         ar rcs build/runtime.cuda.a build/runtime_cuda_host.o $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
         ls -la build/runtime.cuda.a
+        # ING-35 #2 — fail loudly if the CUDA archive dropped a native-core seed the
+        # CPU archive carries (e.g. array_core_native.o). The cuda + cpu archives MUST
+        # share the same $extra_obj set; a member missing from runtime.cuda.a (but
+        # present in runtime.a) ships an archive whose rt_array_*_native (etc.) symbols
+        # go `undefined reference` at the consumer's C link (the anima ING #35 cause-2
+        # — a stale/hand-assembled archive without array_core_native.o). This asserts
+        # the canonical ar above can't silently regress to a missing-seed archive.
+        for _seed in $extra_obj; do
+            _m="$(basename "$_seed")"
+            if ! ar t build/runtime.cuda.a | grep -qx "$_m"; then
+                echo "[stage_resolve_runtime_a] CUDA-R1 FATAL: build/runtime.cuda.a missing native-core member '$_m' that build/runtime.a carries — consumer C link would hit undefined references (ING-35 #2)" >&2
+                return 1
+            fi
+        done
+        echo "[stage_resolve_runtime_a] CUDA-R1: runtime.cuda.a native-core parity OK ($(echo $extra_obj | wc -w) seed members present)"
     fi
     echo "$RA"
 }
