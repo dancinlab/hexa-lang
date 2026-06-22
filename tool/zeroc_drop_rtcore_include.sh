@@ -67,10 +67,18 @@ tmp="$(mktemp -t drop_rtcore_include.XXXXXX)" \
     || { echo "[drop_rtcore_include] mktemp failed" >&2; exit 1; }
 
 # Wrap the SINGLE literal include line. perl keeps it deterministic + exact.
+# Replace the bare include with: (drop-OFF) the include verbatim, else (drop-ON)
+# the decl-surface header that re-supplies runtime_core.c's declarations to the
+# trailing HI-tier body. Both arms are preprocessor-gated on the SAME flag, so
+# the drop-OFF (default) preprocessed output is byte-identical to the frozen
+# blob — the #if/#else/#endif tokens vanish under `clang -E -P`, leaving exactly
+# `#include "runtime_core.c"` (the byte-neutral merge gate).
 perl -pe '
   if ($_ eq "#include \"runtime_core.c\"\n") {
     $_ = "#ifndef HEXA_ZEROC_DROP_RTCORE_INCLUDE  /* ZEROC_DROP_RTCORE_INCLUDE_GUARD */\n"
        . "#include \"runtime_core.c\"\n"
+       . "#else  /* drop-ON: re-supply the CORE decl surface to the trailing body */\n"
+       . "#include \"runtime_core_decls.h\"\n"
        . "#endif  /* HEXA_ZEROC_DROP_RTCORE_INCLUDE */\n";
   }
 ' "$RT" > "$tmp" || { echo "[drop_rtcore_include] perl failed" >&2; rm -f "$tmp"; exit 1; }
