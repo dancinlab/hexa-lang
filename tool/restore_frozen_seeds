@@ -1092,7 +1092,21 @@ if [ -f "$rt" ] && ! grep -q 'OP-18 (HEXA-0POD' "$rt"; then
  * OP-18 (HEXA-0POD) — host fallbacks for the L3 fused dispatchers so the
  * WHOLE fused-dispatch family is 0-GPU `hexa run`-linkable + byte-eq.
  * `#ifndef HEXA_CUDA` only → GPU path (fusion_dispatch.c) UNCHANGED. */
-#ifndef HEXA_CUDA
+#if 1  /* ING#33: forge_dispatch host bodies must LINK under -DHEXA_CUDA too
+         (the assumed GPU-side fusion_dispatch.c was never wired into self/cuda/
+         or the release pipeline, so 31/33 forge_dispatch_* were undefined in the
+         CUDA-variant runtime.a → any -DHEXA_CUDA link of a TU that calls one
+         (e.g. anima nn_gn_gelu_fused_off → forge_dispatch_groupnorm_gelu) failed.
+         The host body is a correct CPU computation; weak under CUDA so a future
+         strong GPU override wins. CPU build is byte-neutral (.text/.rodata/.data
+         identical — was already-included when HEXA_CUDA undefined). */
+#ifndef HEXA_FORGE_HOST_WEAK
+#  ifdef HEXA_CUDA
+#    define HEXA_FORGE_HOST_WEAK __attribute__((weak))
+#  else
+#    define HEXA_FORGE_HOST_WEAK
+#  endif
+#endif
 #pragma STDC FP_CONTRACT OFF
 /* HEXA-0POD OP-19b — deterministic exp/erf, byte-identical to flame_math dt_exp/
  * dt_erf (A&S 7.1.26 + Taylor, BRANCHLESS, NO libm). The host GELU fallback must
@@ -1144,7 +1158,7 @@ static double _op18_moe_exp(double x) {
 }
 
 /* L3-a (OP-16): groupnorm_gelu(x,gamma,beta,y,a,mean,inv,xhat,T,C,G). */
-HexaVal forge_dispatch_groupnorm_gelu(HexaVal x_v, HexaVal gamma_v, HexaVal beta_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_groupnorm_gelu(HexaVal x_v, HexaVal gamma_v, HexaVal beta_v,
                                       HexaVal y_v, HexaVal a_v, HexaVal mean_v,
                                       HexaVal inv_v, HexaVal xhat_v,
                                       HexaVal t_v, HexaVal c_v, HexaVal g_v) {
@@ -1208,7 +1222,7 @@ HexaVal forge_dispatch_groupnorm_gelu(HexaVal x_v, HexaVal gamma_v, HexaVal beta
 }
 
 /* L3-b: gelu2(g0,a0,g1,a1,n) — two erf-GELU passes. */
-HexaVal forge_dispatch_gelu2(HexaVal g0_v, HexaVal a0_v, HexaVal g1_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_gelu2(HexaVal g0_v, HexaVal a0_v, HexaVal g1_v,
                              HexaVal a1_v, HexaVal n_v) {
     int64_t g0 = hexa_as_num(g0_v), a0 = hexa_as_num(a0_v);
     int64_t g1 = hexa_as_num(g1_v), a1 = hexa_as_num(a1_v);
@@ -1231,7 +1245,7 @@ HexaVal forge_dispatch_gelu2(HexaVal g0_v, HexaVal a0_v, HexaVal g1_v,
 
 /* L3-d: moe_block2(eo0,eo1,logits,ex0,ex1,ex_out,probs,y,T,E,C) —
  * gelu2 → expert_pack2 (E=2) → moe_router (OP-8 canonical order). */
-HexaVal forge_dispatch_moe_block2(HexaVal eo0_v, HexaVal eo1_v, HexaVal logits_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_moe_block2(HexaVal eo0_v, HexaVal eo1_v, HexaVal logits_v,
                                   HexaVal ex0_v, HexaVal ex1_v, HexaVal ex_out_v,
                                   HexaVal probs_v, HexaVal y_v,
                                   HexaVal t_v, HexaVal e_v, HexaVal c_v) {
@@ -1415,14 +1429,28 @@ if [ -f "$rt" ] && ! grep -q 'OP-32b (HEXA-0POD' "$rt"; then
  * scalar-order-identical to spiking_lib.hexa::flame_stdp_pair → host
  * dispatch BYTE-EQ vs the CPU reference by construction.
  * `#ifndef HEXA_CUDA` only → GPU path UNCHANGED. */
-#ifndef HEXA_CUDA
+#if 1  /* ING#33: forge_dispatch host bodies must LINK under -DHEXA_CUDA too
+         (the assumed GPU-side fusion_dispatch.c was never wired into self/cuda/
+         or the release pipeline, so 31/33 forge_dispatch_* were undefined in the
+         CUDA-variant runtime.a → any -DHEXA_CUDA link of a TU that calls one
+         (e.g. anima nn_gn_gelu_fused_off → forge_dispatch_groupnorm_gelu) failed.
+         The host body is a correct CPU computation; weak under CUDA so a future
+         strong GPU override wins. CPU build is byte-neutral (.text/.rodata/.data
+         identical — was already-included when HEXA_CUDA undefined). */
+#ifndef HEXA_FORGE_HOST_WEAK
+#  ifdef HEXA_CUDA
+#    define HEXA_FORGE_HOST_WEAK __attribute__((weak))
+#  else
+#    define HEXA_FORGE_HOST_WEAK
+#  endif
+#endif
 #pragma STDC FP_CONTRACT OFF
 /* forge_dispatch_stdp_pair(W, tr_pre, tr_post, spike, out,
  *                          A_plus, A_minus, w_max) -> int rc (0 ok / -1 err)
  * W: N×N row-major farr · tr_pre/tr_post/spike: length-N farrs ·
  * out: caller-allocated N×N farr, filled in place. N = len(spike)
  * (exactly t_len(spike), the hexa-side wrapper's n). */
-HexaVal hexa_forge_dispatch_stdp_pair(HexaVal W_v, HexaVal tr_pre_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_stdp_pair(HexaVal W_v, HexaVal tr_pre_v,
                                       HexaVal tr_post_v, HexaVal spike_v,
                                       HexaVal out_v, HexaVal A_plus_v,
                                       HexaVal A_minus_v, HexaVal w_max_v) {
@@ -1480,7 +1508,7 @@ HexaVal hexa_forge_dispatch_stdp_pair(HexaVal W_v, HexaVal tr_pre_v,
 /* Bare-symbol bootstrap seam — same pattern as forge_dispatch_matmul:
  * a deployed hexat that predates the 8-arg builtin registration emits a
  * literal forge_dispatch_stdp_pair(...) call. */
-HexaVal forge_dispatch_stdp_pair(HexaVal W_v, HexaVal tr_pre_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_stdp_pair(HexaVal W_v, HexaVal tr_pre_v,
                                  HexaVal tr_post_v, HexaVal spike_v,
                                  HexaVal out_v, HexaVal A_plus_v,
                                  HexaVal A_minus_v, HexaVal w_max_v) {
@@ -1539,7 +1567,21 @@ if [ -f "$rt" ] && ! grep -q 'OP-36 (HEXA-0POD' "$rt"; then
  * hexa_farr_matmul → byte-eq by construction) + hexa_ seam twins for
  * the OP-16/18 bare-only fallbacks.
  * `#ifndef HEXA_CUDA` only → GPU path UNCHANGED. */
-#ifndef HEXA_CUDA
+#if 1  /* ING#33: forge_dispatch host bodies must LINK under -DHEXA_CUDA too
+         (the assumed GPU-side fusion_dispatch.c was never wired into self/cuda/
+         or the release pipeline, so 31/33 forge_dispatch_* were undefined in the
+         CUDA-variant runtime.a → any -DHEXA_CUDA link of a TU that calls one
+         (e.g. anima nn_gn_gelu_fused_off → forge_dispatch_groupnorm_gelu) failed.
+         The host body is a correct CPU computation; weak under CUDA so a future
+         strong GPU override wins. CPU build is byte-neutral (.text/.rodata/.data
+         identical — was already-included when HEXA_CUDA undefined). */
+#ifndef HEXA_FORGE_HOST_WEAK
+#  ifdef HEXA_CUDA
+#    define HEXA_FORGE_HOST_WEAK __attribute__((weak))
+#  else
+#    define HEXA_FORGE_HOST_WEAK
+#  endif
+#endif
 
 /* HOLE-1 — forge_dispatch_matmul_t(A, M, K, B, N) -> new farr [K·N]:
  * C[K,N] = A[M,K]^T @ B[M,N] (contraction over M). Host oracle:
@@ -1548,7 +1590,7 @@ if [ -f "$rt" ] && ! grep -q 'OP-36 (HEXA-0POD' "$rt"; then
  * SAME hexa_farr_matmul the prior im2col_t+OP_N path bottoms out in →
  * m-ascending accumulation, bit-identical term-by-term
  * (clm_prod_transpose_elim_eq.hexa is the committed order proof). */
-HexaVal hexa_forge_dispatch_matmul_t(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_matmul_t(HexaVal a_v, HexaVal m_v, HexaVal k_v,
                                      HexaVal b_v, HexaVal n_v) {
     int64_t a_id = hexa_as_num(a_v);
     int64_t M    = hexa_as_num(m_v);
@@ -1586,7 +1628,7 @@ HexaVal hexa_forge_dispatch_matmul_t(HexaVal a_v, HexaVal m_v, HexaVal k_v,
 }
 /* Bare-symbol bootstrap seam (deployed hexat predating the 5-arg builtin
  * emits a literal forge_dispatch_matmul_t(...) call). */
-HexaVal forge_dispatch_matmul_t(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_matmul_t(HexaVal a_v, HexaVal m_v, HexaVal k_v,
                                 HexaVal b_v, HexaVal n_v) {
     return hexa_forge_dispatch_matmul_t(a_v, m_v, k_v, b_v, n_v);
 }
@@ -1598,7 +1640,7 @@ HexaVal forge_dispatch_matmul_t(HexaVal a_v, HexaVal m_v, HexaVal k_v,
  * scatter into caller-allocated c_all[g·M·N..]. Byte-eq vs the
  * per-problem path by construction (same fn, same values) — the
  * committed flame_forge_batched_test.hexa F-FORGE-BATCHED-EQ oracle. */
-HexaVal hexa_forge_dispatch_matmul_batched(HexaVal a_v, HexaVal m_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_matmul_batched(HexaVal a_v, HexaVal m_v,
                                            HexaVal k_v, HexaVal b_v,
                                            HexaVal n_v, HexaVal batch_v,
                                            HexaVal c_v) {
@@ -1660,7 +1702,7 @@ HexaVal hexa_forge_dispatch_matmul_batched(HexaVal a_v, HexaVal m_v,
 /* Bare-symbol bootstrap seam (the deployed prebuilt hexat has no 7-arg
  * batched builtin — its direct-C path emits the bare literal call;
  * live OP-36 repro: `_forge_dispatch_matmul_batched` undefined). */
-HexaVal forge_dispatch_matmul_batched(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_matmul_batched(HexaVal a_v, HexaVal m_v, HexaVal k_v,
                                       HexaVal b_v, HexaVal n_v,
                                       HexaVal batch_v, HexaVal c_v) {
     return hexa_forge_dispatch_matmul_batched(a_v, m_v, k_v, b_v, n_v,
@@ -1671,7 +1713,7 @@ HexaVal forge_dispatch_matmul_batched(HexaVal a_v, HexaVal m_v, HexaVal k_v,
  * hexat built from CURRENT self/codegen.hexa (which lowers these
  * builtins to hexa_forge_dispatch_*) also links against this seed.
  * Pure delegation — the OP-18 bodies above stay the single host SSOT. */
-HexaVal hexa_forge_dispatch_groupnorm_gelu(HexaVal x_v, HexaVal gamma_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_groupnorm_gelu(HexaVal x_v, HexaVal gamma_v,
                                            HexaVal beta_v, HexaVal y_v,
                                            HexaVal a_v, HexaVal mean_v,
                                            HexaVal inv_v, HexaVal xhat_v,
@@ -1680,11 +1722,11 @@ HexaVal hexa_forge_dispatch_groupnorm_gelu(HexaVal x_v, HexaVal gamma_v,
     return forge_dispatch_groupnorm_gelu(x_v, gamma_v, beta_v, y_v, a_v,
                                          mean_v, inv_v, xhat_v, t_v, c_v, g_v);
 }
-HexaVal hexa_forge_dispatch_gelu2(HexaVal g0_v, HexaVal a0_v, HexaVal g1_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_gelu2(HexaVal g0_v, HexaVal a0_v, HexaVal g1_v,
                                   HexaVal a1_v, HexaVal n_v) {
     return forge_dispatch_gelu2(g0_v, a0_v, g1_v, a1_v, n_v);
 }
-HexaVal hexa_forge_dispatch_moe_block2(HexaVal eo0_v, HexaVal eo1_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_moe_block2(HexaVal eo0_v, HexaVal eo1_v,
                                        HexaVal logits_v, HexaVal ex0_v,
                                        HexaVal ex1_v, HexaVal ex_out_v,
                                        HexaVal probs_v, HexaVal y_v,
@@ -1759,7 +1801,21 @@ if [ -f "$rt" ] && ! grep -q 'OP-37 (HEXA-0POD' "$rt"; then
  * expert_pack2/unpack2 · embedding · groupnorm · groupnorm_gelu_residual ·
  * moe_router. Reuses the OP-18 statics (_op18_gelu/_gn_sqrt/_moe_exp).
  * `#ifndef HEXA_CUDA` only → GPU path UNCHANGED. */
-#ifndef HEXA_CUDA
+#if 1  /* ING#33: forge_dispatch host bodies must LINK under -DHEXA_CUDA too
+         (the assumed GPU-side fusion_dispatch.c was never wired into self/cuda/
+         or the release pipeline, so 31/33 forge_dispatch_* were undefined in the
+         CUDA-variant runtime.a → any -DHEXA_CUDA link of a TU that calls one
+         (e.g. anima nn_gn_gelu_fused_off → forge_dispatch_groupnorm_gelu) failed.
+         The host body is a correct CPU computation; weak under CUDA so a future
+         strong GPU override wins. CPU build is byte-neutral (.text/.rodata/.data
+         identical — was already-included when HEXA_CUDA undefined). */
+#ifndef HEXA_FORGE_HOST_WEAK
+#  ifdef HEXA_CUDA
+#    define HEXA_FORGE_HOST_WEAK __attribute__((weak))
+#  else
+#    define HEXA_FORGE_HOST_WEAK
+#  endif
+#endif
 #pragma STDC FP_CONTRACT OFF
 
 /* ── small validation helpers (id in-range + buffer len) ───────────── */
@@ -1771,7 +1827,7 @@ if [ -f "$rt" ] && ! grep -q 'OP-37 (HEXA-0POD' "$rt"; then
  * xcol[t, ci*K+k] = (p>=0)?x[p,ci]:0, p = t - dil*(K-1-k). Writes ALL
  * cells (0 when p<0) so it does not rely on a pre-zeroed buffer — byte-eq
  * to clm_prod _clmp_im2col (t-outer, ci, k). */
-HexaVal hexa_forge_dispatch_im2col(HexaVal x_v, HexaVal xcol_v, HexaVal t_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_im2col(HexaVal x_v, HexaVal xcol_v, HexaVal t_v,
                                    HexaVal cin_v, HexaVal k_v, HexaVal dil_v) {
     int64_t x = hexa_as_num(x_v), xc = hexa_as_num(xcol_v);
     int64_t T = hexa_as_num(t_v), Cin = hexa_as_num(cin_v);
@@ -1790,7 +1846,7 @@ HexaVal hexa_forge_dispatch_im2col(HexaVal x_v, HexaVal xcol_v, HexaVal t_v,
             }
     return hexa_int(0);
 }
-HexaVal forge_dispatch_im2col(HexaVal x_v, HexaVal xcol_v, HexaVal t_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_im2col(HexaVal x_v, HexaVal xcol_v, HexaVal t_v,
                               HexaVal cin_v, HexaVal k_v, HexaVal dil_v) {
     return hexa_forge_dispatch_im2col(x_v, xcol_v, t_v, cin_v, k_v, dil_v);
 }
@@ -1798,7 +1854,7 @@ HexaVal forge_dispatch_im2col(HexaVal x_v, HexaVal xcol_v, HexaVal t_v,
 /* im2col_t(x, xcolT_out, T, Cin, K, dil) -> int rc. transpose form
  * xcolT[ci*K+k, t] = (p>=0)?x[p,ci]:0, len Cin*K*T. byte-eq to
  * clm_prod _clmp_im2col_t (j = ci*K+k, store at j*T+t). */
-HexaVal hexa_forge_dispatch_im2col_t(HexaVal x_v, HexaVal xct_v, HexaVal t_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_im2col_t(HexaVal x_v, HexaVal xct_v, HexaVal t_v,
                                      HexaVal cin_v, HexaVal k_v, HexaVal dil_v) {
     int64_t x = hexa_as_num(x_v), xct = hexa_as_num(xct_v);
     int64_t T = hexa_as_num(t_v), Cin = hexa_as_num(cin_v);
@@ -1817,7 +1873,7 @@ HexaVal hexa_forge_dispatch_im2col_t(HexaVal x_v, HexaVal xct_v, HexaVal t_v,
             }
     return hexa_int(0);
 }
-HexaVal forge_dispatch_im2col_t(HexaVal x_v, HexaVal xct_v, HexaVal t_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_im2col_t(HexaVal x_v, HexaVal xct_v, HexaVal t_v,
                                 HexaVal cin_v, HexaVal k_v, HexaVal dil_v) {
     return hexa_forge_dispatch_im2col_t(x_v, xct_v, t_v, cin_v, k_v, dil_v);
 }
@@ -1826,7 +1882,7 @@ HexaVal forge_dispatch_im2col_t(HexaVal x_v, HexaVal xct_v, HexaVal t_v,
  * dX[p,ci] = Σ_k (tt<T) dXcol[tt*Kdim + ci*K+k], tt = p + dil*(K-1-k).
  * ONE thread per dX cell, K taps summed in k-ascending order → byte-eq to
  * clm_prod _clmp_col2im (no atomics, deterministic). */
-HexaVal hexa_forge_dispatch_col2im(HexaVal dxc_v, HexaVal dx_v, HexaVal t_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_col2im(HexaVal dxc_v, HexaVal dx_v, HexaVal t_v,
                                    HexaVal cin_v, HexaVal k_v, HexaVal dil_v) {
     int64_t dxc = hexa_as_num(dxc_v), dx = hexa_as_num(dx_v);
     int64_t T = hexa_as_num(t_v), Cin = hexa_as_num(cin_v);
@@ -1848,14 +1904,14 @@ HexaVal hexa_forge_dispatch_col2im(HexaVal dxc_v, HexaVal dx_v, HexaVal t_v,
         }
     return hexa_int(0);
 }
-HexaVal forge_dispatch_col2im(HexaVal dxc_v, HexaVal dx_v, HexaVal t_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_col2im(HexaVal dxc_v, HexaVal dx_v, HexaVal t_v,
                               HexaVal cin_v, HexaVal k_v, HexaVal dil_v) {
     return hexa_forge_dispatch_col2im(dxc_v, dx_v, t_v, cin_v, k_v, dil_v);
 }
 
 /* db_colsum(dy, db_out, T, Cout) -> int rc. db[co] = Σ_{t} dy[t,co],
  * t-sequential per channel → byte-eq to clm_prod _clmp_db_colsum. */
-HexaVal hexa_forge_dispatch_db_colsum(HexaVal dy_v, HexaVal db_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_db_colsum(HexaVal dy_v, HexaVal db_v,
                                       HexaVal t_v, HexaVal cout_v) {
     int64_t dy = hexa_as_num(dy_v), db = hexa_as_num(db_v);
     int64_t T = hexa_as_num(t_v), Cout = hexa_as_num(cout_v);
@@ -1870,13 +1926,13 @@ HexaVal hexa_forge_dispatch_db_colsum(HexaVal dy_v, HexaVal db_v,
     }
     return hexa_int(0);
 }
-HexaVal forge_dispatch_db_colsum(HexaVal dy_v, HexaVal db_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_db_colsum(HexaVal dy_v, HexaVal db_v,
                                  HexaVal t_v, HexaVal cout_v) {
     return hexa_forge_dispatch_db_colsum(dy_v, db_v, t_v, cout_v);
 }
 
 /* residual_add(a, b, out, n) -> int rc. out[i] = a[i] + b[i]. */
-HexaVal hexa_forge_dispatch_residual_add(HexaVal a_v, HexaVal b_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_residual_add(HexaVal a_v, HexaVal b_v,
                                          HexaVal out_v, HexaVal n_v) {
     int64_t a = hexa_as_num(a_v), b = hexa_as_num(b_v);
     int64_t o = hexa_as_num(out_v), n = hexa_as_num(n_v);
@@ -1888,24 +1944,24 @@ HexaVal hexa_forge_dispatch_residual_add(HexaVal a_v, HexaVal b_v,
     for (int64_t i = 0; i < n; i++) O[i] = A[i] + B[i];
     return hexa_int(0);
 }
-HexaVal forge_dispatch_residual_add(HexaVal a_v, HexaVal b_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_residual_add(HexaVal a_v, HexaVal b_v,
                                     HexaVal out_v, HexaVal n_v) {
     return hexa_forge_dispatch_residual_add(a_v, b_v, out_v, n_v);
 }
 
 /* grad_sum2(a, b, out, n) -> int rc. out[i] = a[i] + b[i]. */
-HexaVal hexa_forge_dispatch_grad_sum2(HexaVal a_v, HexaVal b_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_grad_sum2(HexaVal a_v, HexaVal b_v,
                                       HexaVal out_v, HexaVal n_v) {
     return hexa_forge_dispatch_residual_add(a_v, b_v, out_v, n_v);
 }
-HexaVal forge_dispatch_grad_sum2(HexaVal a_v, HexaVal b_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_grad_sum2(HexaVal a_v, HexaVal b_v,
                                  HexaVal out_v, HexaVal n_v) {
     return hexa_forge_dispatch_residual_add(a_v, b_v, out_v, n_v);
 }
 
 /* grad_sum3(a, b, c, out, n) -> int rc. out[i] = (a[i]+b[i])+c[i]
  * (fixed left association → byte-eq to clm_prod _grad_sum3). */
-HexaVal hexa_forge_dispatch_grad_sum3(HexaVal a_v, HexaVal b_v, HexaVal c_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_grad_sum3(HexaVal a_v, HexaVal b_v, HexaVal c_v,
                                       HexaVal out_v, HexaVal n_v) {
     int64_t a = hexa_as_num(a_v), b = hexa_as_num(b_v), c = hexa_as_num(c_v);
     int64_t o = hexa_as_num(out_v), n = hexa_as_num(n_v);
@@ -1918,14 +1974,14 @@ HexaVal hexa_forge_dispatch_grad_sum3(HexaVal a_v, HexaVal b_v, HexaVal c_v,
     for (int64_t i = 0; i < n; i++) O[i] = A[i] + B[i] + C[i];
     return hexa_int(0);
 }
-HexaVal forge_dispatch_grad_sum3(HexaVal a_v, HexaVal b_v, HexaVal c_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_grad_sum3(HexaVal a_v, HexaVal b_v, HexaVal c_v,
                                  HexaVal out_v, HexaVal n_v) {
     return hexa_forge_dispatch_grad_sum3(a_v, b_v, c_v, out_v, n_v);
 }
 
 /* expert_pack2(ex0, ex1, ex_out, n) -> int rc. ex_out[0*n+j]=ex0[j],
  * ex_out[1*n+j]=ex1[j] (E=2 pack) → byte-eq to clm_prod _expert_pack2. */
-HexaVal hexa_forge_dispatch_expert_pack2(HexaVal ex0_v, HexaVal ex1_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_expert_pack2(HexaVal ex0_v, HexaVal ex1_v,
                                          HexaVal exo_v, HexaVal n_v) {
     int64_t e0 = hexa_as_num(ex0_v), e1 = hexa_as_num(ex1_v);
     int64_t eo = hexa_as_num(exo_v), n = hexa_as_num(n_v);
@@ -1937,14 +1993,14 @@ HexaVal hexa_forge_dispatch_expert_pack2(HexaVal ex0_v, HexaVal ex1_v,
     for (int64_t j = 0; j < n; j++) { EO[0 * n + j] = E0[j]; EO[1 * n + j] = E1[j]; }
     return hexa_int(0);
 }
-HexaVal forge_dispatch_expert_pack2(HexaVal ex0_v, HexaVal ex1_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_expert_pack2(HexaVal ex0_v, HexaVal ex1_v,
                                     HexaVal exo_v, HexaVal n_v) {
     return hexa_forge_dispatch_expert_pack2(ex0_v, ex1_v, exo_v, n_v);
 }
 
 /* expert_unpack2(dex_out, dex0, dex1, n) -> int rc. dex0[i]=dex_out[0*n+i],
  * dex1[i]=dex_out[1*n+i] → byte-eq to clm_prod _expert_unpack2. */
-HexaVal hexa_forge_dispatch_expert_unpack2(HexaVal dexo_v, HexaVal dex0_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_expert_unpack2(HexaVal dexo_v, HexaVal dex0_v,
                                            HexaVal dex1_v, HexaVal n_v) {
     int64_t deo = hexa_as_num(dexo_v), d0 = hexa_as_num(dex0_v);
     int64_t d1 = hexa_as_num(dex1_v), n = hexa_as_num(n_v);
@@ -1956,7 +2012,7 @@ HexaVal hexa_forge_dispatch_expert_unpack2(HexaVal dexo_v, HexaVal dex0_v,
     for (int64_t i = 0; i < n; i++) { D0[i] = DEO[0 * n + i]; D1[i] = DEO[1 * n + i]; }
     return hexa_int(0);
 }
-HexaVal forge_dispatch_expert_unpack2(HexaVal dexo_v, HexaVal dex0_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_expert_unpack2(HexaVal dexo_v, HexaVal dex0_v,
                                       HexaVal dex1_v, HexaVal n_v) {
     return hexa_forge_dispatch_expert_unpack2(dexo_v, dex0_v, dex1_v, n_v);
 }
@@ -1965,7 +2021,7 @@ HexaVal forge_dispatch_expert_unpack2(HexaVal dexo_v, HexaVal dex0_v,
  * tok = (int64_t)ids[i] (truncation == clm_prod nn_embedding_fwd to_int).
  * Pure gather → byte-eq. table len unknown here (tok-indexed) — validate
  * ids/out only + per-row tok bound against table.len. */
-HexaVal hexa_forge_dispatch_embedding(HexaVal ids_v, HexaVal table_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_embedding(HexaVal ids_v, HexaVal table_v,
                                       HexaVal out_v, HexaVal t_v, HexaVal d_v) {
     int64_t ids = hexa_as_num(ids_v), tab = hexa_as_num(table_v);
     int64_t out = hexa_as_num(out_v), T = hexa_as_num(t_v), d = hexa_as_num(d_v);
@@ -1984,7 +2040,7 @@ HexaVal hexa_forge_dispatch_embedding(HexaVal ids_v, HexaVal table_v,
     }
     return hexa_int(0);
 }
-HexaVal forge_dispatch_embedding(HexaVal ids_v, HexaVal table_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_embedding(HexaVal ids_v, HexaVal table_v,
                                  HexaVal out_v, HexaVal t_v, HexaVal d_v) {
     return hexa_forge_dispatch_embedding(ids_v, table_v, out_v, t_v, d_v);
 }
@@ -1994,7 +2050,7 @@ HexaVal forge_dispatch_embedding(HexaVal ids_v, HexaVal table_v,
  * out buffer): two-pass mean/var (t-outer, c-inner), eps=1e-5, 40-iter
  * Newton _op18_gn_sqrt, affine y = gamma*xhat + beta → byte-eq to
  * clm_prod nn_groupnorm_fwd / the verified groupnorm_gelu Y output. */
-HexaVal hexa_forge_dispatch_groupnorm(HexaVal x_v, HexaVal gamma_v, HexaVal beta_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_groupnorm(HexaVal x_v, HexaVal gamma_v, HexaVal beta_v,
                                       HexaVal y_v, HexaVal mean_v, HexaVal inv_v,
                                       HexaVal xhat_v, HexaVal t_v, HexaVal c_v,
                                       HexaVal g_v) {
@@ -2043,7 +2099,7 @@ HexaVal hexa_forge_dispatch_groupnorm(HexaVal x_v, HexaVal gamma_v, HexaVal beta
     }
     return hexa_int(0);
 }
-HexaVal forge_dispatch_groupnorm(HexaVal x_v, HexaVal gamma_v, HexaVal beta_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_groupnorm(HexaVal x_v, HexaVal gamma_v, HexaVal beta_v,
                                  HexaVal y_v, HexaVal mean_v, HexaVal inv_v,
                                  HexaVal xhat_v, HexaVal t_v, HexaVal c_v,
                                  HexaVal g_v) {
@@ -2064,7 +2120,7 @@ HexaVal forge_dispatch_groupnorm(HexaVal x_v, HexaVal gamma_v, HexaVal beta_v,
  * verified OP-18 moe_block2 uses) then sequential gate-weighted combine
  * y[t,c] = Σ_e probs[t,e]·ex_out[e*T*C + t*C + c]. GENERAL E. byte-eq to
  * clm_prod nn_moe_router_fwd. */
-HexaVal hexa_forge_dispatch_moe_router(HexaVal logits_v, HexaVal exo_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_moe_router(HexaVal logits_v, HexaVal exo_v,
                                        HexaVal probs_v, HexaVal y_v,
                                        HexaVal t_v, HexaVal e_v, HexaVal c_v) {
     int64_t lg = hexa_as_num(logits_v), eo = hexa_as_num(exo_v);
@@ -2098,7 +2154,7 @@ HexaVal hexa_forge_dispatch_moe_router(HexaVal logits_v, HexaVal exo_v,
         }
     return hexa_int(0);
 }
-HexaVal forge_dispatch_moe_router(HexaVal logits_v, HexaVal exo_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_moe_router(HexaVal logits_v, HexaVal exo_v,
                                   HexaVal probs_v, HexaVal y_v,
                                   HexaVal t_v, HexaVal e_v, HexaVal c_v) {
     return hexa_forge_dispatch_moe_router(logits_v, exo_v, probs_v, y_v, t_v, e_v, c_v);
@@ -2174,7 +2230,21 @@ if [ -f "$rt" ] && ! grep -q 'OP-38 (HEXA-0POD' "$rt"; then
  * moe_router_bwd · embedding_bwd_scatter · groupnorm_gelu_residual.
  * adamw/keepmv = rc=-1 fall-through (proven host opt_adamw_step). Reuses the
  * OP-18/OP-19b statics. `#ifndef HEXA_CUDA` only → GPU path UNCHANGED. */
-#ifndef HEXA_CUDA
+#if 1  /* ING#33: forge_dispatch host bodies must LINK under -DHEXA_CUDA too
+         (the assumed GPU-side fusion_dispatch.c was never wired into self/cuda/
+         or the release pipeline, so 31/33 forge_dispatch_* were undefined in the
+         CUDA-variant runtime.a → any -DHEXA_CUDA link of a TU that calls one
+         (e.g. anima nn_gn_gelu_fused_off → forge_dispatch_groupnorm_gelu) failed.
+         The host body is a correct CPU computation; weak under CUDA so a future
+         strong GPU override wins. CPU build is byte-neutral (.text/.rodata/.data
+         identical — was already-included when HEXA_CUDA undefined). */
+#ifndef HEXA_FORGE_HOST_WEAK
+#  ifdef HEXA_CUDA
+#    define HEXA_FORGE_HOST_WEAK __attribute__((weak))
+#  else
+#    define HEXA_FORGE_HOST_WEAK
+#  endif
+#endif
 #pragma STDC FP_CONTRACT OFF
 
 #ifndef _OP38_FA
@@ -2202,7 +2272,7 @@ static double _op38_qround(double x) {
 static double _op38_qabs(double x) { return x < 0.0 ? (0.0 - x) : x; }
 
 /* gelu(in, out, n) -> int rc. out[i] = _op18_gelu(in[i]). byte-eq nn_gelu_fwd. */
-HexaVal hexa_forge_dispatch_gelu(HexaVal in_v, HexaVal out_v, HexaVal n_v) {
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_gelu(HexaVal in_v, HexaVal out_v, HexaVal n_v) {
     int64_t in = hexa_as_num(in_v), out = hexa_as_num(out_v), n = hexa_as_num(n_v);
     if (n <= 0 || !_OP38_FA(in, n) || !_OP38_FA(out, n))    return hexa_int(-1);
     double* IN = _hx_farr_table[in].buf;
@@ -2210,13 +2280,13 @@ HexaVal hexa_forge_dispatch_gelu(HexaVal in_v, HexaVal out_v, HexaVal n_v) {
     for (int64_t i = 0; i < n; i++) O[i] = _op18_gelu(IN[i]);
     return hexa_int(0);
 }
-HexaVal forge_dispatch_gelu(HexaVal in_v, HexaVal out_v, HexaVal n_v) {
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_gelu(HexaVal in_v, HexaVal out_v, HexaVal n_v) {
     return hexa_forge_dispatch_gelu(in_v, out_v, n_v);
 }
 
 /* gelu_bwd(g, da, dg, n) -> int rc. dg[i] = da[i]·GELU'(g[i]). g = pre-act.
  * byte-eq nn_gelu_bwd. */
-HexaVal hexa_forge_dispatch_gelu_bwd(HexaVal g_v, HexaVal da_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_gelu_bwd(HexaVal g_v, HexaVal da_v,
                                      HexaVal dg_v, HexaVal n_v) {
     int64_t g = hexa_as_num(g_v), da = hexa_as_num(da_v);
     int64_t dg = hexa_as_num(dg_v), n = hexa_as_num(n_v);
@@ -2228,7 +2298,7 @@ HexaVal hexa_forge_dispatch_gelu_bwd(HexaVal g_v, HexaVal da_v,
     for (int64_t i = 0; i < n; i++) DG[i] = DA[i] * _op38_gelu_grad(G[i]);
     return hexa_int(0);
 }
-HexaVal forge_dispatch_gelu_bwd(HexaVal g_v, HexaVal da_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_gelu_bwd(HexaVal g_v, HexaVal da_v,
                                 HexaVal dg_v, HexaVal n_v) {
     return hexa_forge_dispatch_gelu_bwd(g_v, da_v, dg_v, n_v);
 }
@@ -2236,7 +2306,7 @@ HexaVal forge_dispatch_gelu_bwd(HexaVal g_v, HexaVal da_v,
 /* ce_grad(logits, targets, dlogits_out, T, V) -> int rc. Per-row softmax
  * (max-subtract, _op19b_dt_exp), grad = softmax·(1/T), then −(1/T) at the
  * target index. byte-eq clm_ce_grad. */
-HexaVal hexa_forge_dispatch_ce_grad(HexaVal lg_v, HexaVal tg_v, HexaVal dl_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_ce_grad(HexaVal lg_v, HexaVal tg_v, HexaVal dl_v,
                                     HexaVal t_v, HexaVal v_v) {
     int64_t lg = hexa_as_num(lg_v), tg = hexa_as_num(tg_v), dl = hexa_as_num(dl_v);
     int64_t T = hexa_as_num(t_v), V = hexa_as_num(v_v);
@@ -2263,7 +2333,7 @@ HexaVal hexa_forge_dispatch_ce_grad(HexaVal lg_v, HexaVal tg_v, HexaVal dl_v,
     }
     return hexa_int(0);
 }
-HexaVal forge_dispatch_ce_grad(HexaVal lg_v, HexaVal tg_v, HexaVal dl_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_ce_grad(HexaVal lg_v, HexaVal tg_v, HexaVal dl_v,
                                HexaVal t_v, HexaVal v_v) {
     return hexa_forge_dispatch_ce_grad(lg_v, tg_v, dl_v, t_v, v_v);
 }
@@ -2271,7 +2341,7 @@ HexaVal forge_dispatch_ce_grad(HexaVal lg_v, HexaVal tg_v, HexaVal dl_v,
 /* int4_quant(w, wq, sc, ql, mask, Cout, rest) -> int rc. Per-output-channel
  * symmetric fake-quant: s = max|W|/7 (1.0 if all-zero), q = round-half-away(W/s)
  * clamped [−7,7], mask = in-range (1.0/0.0), wq = q·s. byte-eq nn_int4_quant_fwd. */
-HexaVal hexa_forge_dispatch_int4_quant(HexaVal w_v, HexaVal wq_v, HexaVal sc_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_int4_quant(HexaVal w_v, HexaVal wq_v, HexaVal sc_v,
                                        HexaVal ql_v, HexaVal mask_v,
                                        HexaVal cout_v, HexaVal rest_v) {
     int64_t w = hexa_as_num(w_v), wq = hexa_as_num(wq_v), sc = hexa_as_num(sc_v);
@@ -2307,7 +2377,7 @@ HexaVal hexa_forge_dispatch_int4_quant(HexaVal w_v, HexaVal wq_v, HexaVal sc_v,
     }
     return hexa_int(0);
 }
-HexaVal forge_dispatch_int4_quant(HexaVal w_v, HexaVal wq_v, HexaVal sc_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_int4_quant(HexaVal w_v, HexaVal wq_v, HexaVal sc_v,
                                   HexaVal ql_v, HexaVal mask_v,
                                   HexaVal cout_v, HexaVal rest_v) {
     return hexa_forge_dispatch_int4_quant(w_v, wq_v, sc_v, ql_v, mask_v,
@@ -2316,7 +2386,7 @@ HexaVal forge_dispatch_int4_quant(HexaVal w_v, HexaVal wq_v, HexaVal sc_v,
 
 /* int4_quant_bwd(dy, mask, dW, n) -> int rc. Clipped-STE dW[i]=dy[i]·mask[i].
  * Dispatcher is 4-arg with flat n = Cout·rest. byte-eq nn_int4_quant_bwd. */
-HexaVal hexa_forge_dispatch_int4_quant_bwd(HexaVal dy_v, HexaVal mask_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_int4_quant_bwd(HexaVal dy_v, HexaVal mask_v,
                                            HexaVal dw_v, HexaVal n_v) {
     int64_t dy = hexa_as_num(dy_v), mk = hexa_as_num(mask_v);
     int64_t dw = hexa_as_num(dw_v), n = hexa_as_num(n_v);
@@ -2328,7 +2398,7 @@ HexaVal hexa_forge_dispatch_int4_quant_bwd(HexaVal dy_v, HexaVal mask_v,
     for (int64_t i = 0; i < n; i++) DW[i] = DY[i] * MK[i];
     return hexa_int(0);
 }
-HexaVal forge_dispatch_int4_quant_bwd(HexaVal dy_v, HexaVal mask_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_int4_quant_bwd(HexaVal dy_v, HexaVal mask_v,
                                       HexaVal dw_v, HexaVal n_v) {
     return hexa_forge_dispatch_int4_quant_bwd(dy_v, mask_v, dw_v, n_v);
 }
@@ -2337,7 +2407,7 @@ HexaVal forge_dispatch_int4_quant_bwd(HexaVal dy_v, HexaVal mask_v,
  * dgamma[c]=Σ_t dy·xhat, dbeta[c]=Σ_t dy (c-outer, t-inner); dX per group, two
  * passes (t-outer, c-inner): s1=Σ dxhat, s2=Σ dxhat·xhat (dxhat=dy·gamma); then
  * dX=inv·(dxhat − s1/m − xhat·s2/m). Reads SAVED inv. byte-eq nn_groupnorm_bwd. */
-HexaVal hexa_forge_dispatch_groupnorm_bwd(HexaVal xhat_v, HexaVal inv_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_groupnorm_bwd(HexaVal xhat_v, HexaVal inv_v,
                                           HexaVal gamma_v, HexaVal dy_v,
                                           HexaVal dgamma_v, HexaVal dbeta_v,
                                           HexaVal dx_v, HexaVal t_v,
@@ -2390,7 +2460,7 @@ HexaVal hexa_forge_dispatch_groupnorm_bwd(HexaVal xhat_v, HexaVal inv_v,
     }
     return hexa_int(0);
 }
-HexaVal forge_dispatch_groupnorm_bwd(HexaVal xhat_v, HexaVal inv_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_groupnorm_bwd(HexaVal xhat_v, HexaVal inv_v,
                                      HexaVal gamma_v, HexaVal dy_v,
                                      HexaVal dgamma_v, HexaVal dbeta_v,
                                      HexaVal dx_v, HexaVal t_v,
@@ -2404,7 +2474,7 @@ HexaVal forge_dispatch_groupnorm_bwd(HexaVal xhat_v, HexaVal inv_v,
  * Per-t two-pass: pass1 (e-outer,c-inner) dgate[e]=Σ_c dy·ex_out, dex_out[e]=
  * probs·dy, dot=Σ_e probs·dgate (dgate stashed in dlogits); pass2 dlogits[e]=
  * probs·(dgate−dot). Reads CACHED probs. byte-eq nn_moe_router_bwd. */
-HexaVal hexa_forge_dispatch_moe_router_bwd(HexaVal probs_v, HexaVal exo_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_moe_router_bwd(HexaVal probs_v, HexaVal exo_v,
                                            HexaVal dy_v, HexaVal dl_v,
                                            HexaVal dex_v, HexaVal t_v,
                                            HexaVal e_v, HexaVal c_v) {
@@ -2441,7 +2511,7 @@ HexaVal hexa_forge_dispatch_moe_router_bwd(HexaVal probs_v, HexaVal exo_v,
     }
     return hexa_int(0);
 }
-HexaVal forge_dispatch_moe_router_bwd(HexaVal probs_v, HexaVal exo_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_moe_router_bwd(HexaVal probs_v, HexaVal exo_v,
                                       HexaVal dy_v, HexaVal dl_v,
                                       HexaVal dex_v, HexaVal t_v,
                                       HexaVal e_v, HexaVal c_v) {
@@ -2453,7 +2523,7 @@ HexaVal forge_dispatch_moe_router_bwd(HexaVal probs_v, HexaVal exo_v,
  * scatter-add dtable[tok·d+c] += dX[i·d+c], i ascending, NO atomics. V unused
  * on host (it bounds the device vocab-row thread count). dtable pre-zeroed by
  * caller. byte-eq nn_embedding_bwd_scatter. */
-HexaVal hexa_forge_dispatch_embedding_bwd_scatter(HexaVal dx_v, HexaVal ids_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_embedding_bwd_scatter(HexaVal dx_v, HexaVal ids_v,
                                                   HexaVal dt_v, HexaVal t_v,
                                                   HexaVal d_v, HexaVal v_v) {
     int64_t dx = hexa_as_num(dx_v), ids = hexa_as_num(ids_v), dt = hexa_as_num(dt_v);
@@ -2475,7 +2545,7 @@ HexaVal hexa_forge_dispatch_embedding_bwd_scatter(HexaVal dx_v, HexaVal ids_v,
     }
     return hexa_int(0);
 }
-HexaVal forge_dispatch_embedding_bwd_scatter(HexaVal dx_v, HexaVal ids_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_embedding_bwd_scatter(HexaVal dx_v, HexaVal ids_v,
                                              HexaVal dt_v, HexaVal t_v,
                                              HexaVal d_v, HexaVal v_v) {
     return hexa_forge_dispatch_embedding_bwd_scatter(dx_v, ids_v, dt_v,
@@ -2486,7 +2556,7 @@ HexaVal forge_dispatch_embedding_bwd_scatter(HexaVal dx_v, HexaVal ids_v,
  * out = r + gelu(GN(x)); a = gelu out; y = pre-gelu GN out (for bwd). Same GN
  * two-pass (t-outer,c-inner, eps=1e-5, 40-iter _op18_gn_sqrt) as OP-37 groupnorm,
  * then a = _op18_gelu(y), out = r + a. byte-eq _groupnorm_gelu + _residual_add. */
-HexaVal hexa_forge_dispatch_groupnorm_gelu_residual(
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_groupnorm_gelu_residual(
         HexaVal x_v, HexaVal gamma_v, HexaVal beta_v, HexaVal r_v,
         HexaVal y_v, HexaVal a_v, HexaVal out_v, HexaVal mean_v, HexaVal inv_v,
         HexaVal xhat_v, HexaVal t_v, HexaVal c_v, HexaVal g_v) {
@@ -2545,7 +2615,7 @@ HexaVal hexa_forge_dispatch_groupnorm_gelu_residual(
     for (int64_t i = 0; i < n; i++) OUT[i] = R[i] + A[i];
     return hexa_int(0);
 }
-HexaVal forge_dispatch_groupnorm_gelu_residual(
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_groupnorm_gelu_residual(
         HexaVal x_v, HexaVal gamma_v, HexaVal beta_v, HexaVal r_v,
         HexaVal y_v, HexaVal a_v, HexaVal out_v, HexaVal mean_v, HexaVal inv_v,
         HexaVal xhat_v, HexaVal t_v, HexaVal c_v, HexaVal g_v) {
@@ -2560,7 +2630,7 @@ HexaVal forge_dispatch_groupnorm_gelu_residual(
  * opt_adamw_step). The OFF-CUDA link is satisfied (symbols defined); the update
  * runs through the verified host optimizer. NOT a silent wrong result — the
  * caller explicitly handles rc!=0 by running opt_adamw_step. */
-HexaVal hexa_forge_dispatch_adamw(HexaVal w_v, HexaVal g_v, HexaVal m_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_adamw(HexaVal w_v, HexaVal g_v, HexaVal m_v,
                                   HexaVal v_v, HexaVal n_v, HexaVal lr_v,
                                   HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
                                   HexaVal wd_v, HexaVal t_v) {
@@ -2568,21 +2638,21 @@ HexaVal hexa_forge_dispatch_adamw(HexaVal w_v, HexaVal g_v, HexaVal m_v,
     (void)b1_v; (void)b2_v; (void)eps_v; (void)wd_v; (void)t_v;
     return hexa_int(-1);
 }
-HexaVal forge_dispatch_adamw(HexaVal w_v, HexaVal g_v, HexaVal m_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_adamw(HexaVal w_v, HexaVal g_v, HexaVal m_v,
                              HexaVal v_v, HexaVal n_v, HexaVal lr_v,
                              HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
                              HexaVal wd_v, HexaVal t_v) {
     return hexa_forge_dispatch_adamw(w_v, g_v, m_v, v_v, n_v, lr_v,
                                      b1_v, b2_v, eps_v, wd_v, t_v);
 }
-HexaVal hexa_forge_dispatch_adamw_keepmv(HexaVal w_v, HexaVal g_v, HexaVal m_v,
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_adamw_keepmv(HexaVal w_v, HexaVal g_v, HexaVal m_v,
                                          HexaVal v_v, HexaVal n_v, HexaVal lr_v,
                                          HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
                                          HexaVal wd_v, HexaVal t_v) {
     return hexa_forge_dispatch_adamw(w_v, g_v, m_v, v_v, n_v, lr_v,
                                      b1_v, b2_v, eps_v, wd_v, t_v);
 }
-HexaVal forge_dispatch_adamw_keepmv(HexaVal w_v, HexaVal g_v, HexaVal m_v,
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_adamw_keepmv(HexaVal w_v, HexaVal g_v, HexaVal m_v,
                                     HexaVal v_v, HexaVal n_v, HexaVal lr_v,
                                     HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
                                     HexaVal wd_v, HexaVal t_v) {
@@ -2600,10 +2670,10 @@ HexaVal forge_dispatch_adamw_keepmv(HexaVal w_v, HexaVal g_v, HexaVal m_v,
  * to the proven unfused path. NOT a silent wrong result. Variadic arg count
  * (clm_megafwd 37, adamw_fused 12) → take no fixed params (hexa always supplies
  * the full arg list at the named call; the body ignores them and returns -1). */
-HexaVal hexa_forge_dispatch_adamw_fused() { return hexa_int(-1); }
-HexaVal forge_dispatch_adamw_fused()      { return hexa_int(-1); }
-HexaVal hexa_forge_dispatch_clm_megafwd() { return hexa_int(-1); }
-HexaVal forge_dispatch_clm_megafwd()      { return hexa_int(-1); }
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_adamw_fused() { return hexa_int(-1); }
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_adamw_fused()      { return hexa_int(-1); }
+HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_clm_megafwd() { return hexa_int(-1); }
+HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_clm_megafwd()      { return hexa_int(-1); }
 #undef _OP38_FA
 #pragma STDC FP_CONTRACT DEFAULT
 #endif
