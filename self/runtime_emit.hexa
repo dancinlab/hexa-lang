@@ -55,6 +55,23 @@
 // the STATIC hxlcl_sin/cos/log/exp/fmod helpers internal to runtime.c (not
 // self-contained in this seed TU); deferred until those statics are emitted.
 //
+// PORTED BODIES — batch 3 (HexaVal-tail accessor leaves, ING #35 r16):
+//   hexa_clamp hexa_is_empty hexa_byte_len hexa_from_cstring
+//   hexa_struct_free hexa_str_parse_float   (6 self-contained accessors)
+// Pure HexaVal struct-deref / tag-macro / int-encoded-pointer accessors. Each
+// is ported from the ACTIVE branch of frozen runtime.c — the drop-measure TU
+// does NOT define HEXA_HAS_HEXA_RT_STDLIB, so the #ifndef fallback branch is
+// the live one (clamp/str_parse_float); is_empty/byte_len/from_cstring/
+// struct_free are unguarded. All referenced helpers (__hx_to_double, hexa_int/
+// float/bool/str/void, HX_* macros, libc strtod/free) are supplied OUTSIDE the
+// residual (verified), so these are emittable leaves with no in-body wall.
+// EXCLUDED (HexaVal-tail but deep-coupled, honest residual): hexa_str_parse_int
+// (#else branch active → hxlcl_strtoll + hexa_throw + snprintf), hexa_array_
+// enumerate / hexa_str_bytes (#ifndef branch uses hexa_array_new/push = alloc
+// WALL-2), hexa_is_error / hexa_is_alpha (hxlcl_strncmp/isalpha statics),
+// hexa_chr_byte (hexa_strbuf_alloc), hexa_callback_slot_id (static __hexa_cb_
+// slots pool). Total emitter bodies now 28 → 34.
+//
 // Invocation:  hexa-run runtime_emit.hexa <output-path>
 // Default output path (if argv missing): "runtime_hi_seed.c" in cwd.
 
@@ -185,6 +202,74 @@ fn emit_runtime_hi_seed_to(out_path: str) {
     buf = buf + "HexaVal hexa_math_isnan(HexaVal x)    { return hexa_bool(isnan(HX_FLOAT(x)) ? 1 : 0); }\n"
     buf = buf + "HexaVal hexa_math_isinf(HexaVal x)    { return hexa_bool(isinf(HX_FLOAT(x)) ? 1 : 0); }\n"
     buf = buf + "HexaVal hexa_math_isfinite(HexaVal x) { return hexa_bool(isfinite(HX_FLOAT(x)) ? 1 : 0); }\n"
+    buf = buf + "\n"
+    buf = buf + "// ── HexaVal-tail accessor leaves (frozen runtime.c PROPER) — ING #35 r16 ──\n"
+    buf = buf + "// Self-contained struct-deref / tag-macro accessor bodies ported VERBATIM\n"
+    buf = buf + "// from the ACTIVE branch of the frozen runtime.c (the #ifndef\n"
+    buf = buf + "// HEXA_HAS_HEXA_RT_STDLIB fallback branch is the one the drop-measure TU\n"
+    buf = buf + "// compiles — it does NOT define HEXA_HAS_HEXA_RT_STDLIB). Every helper they\n"
+    buf = buf + "// reference (__hx_to_double, hexa_int/float/bool/str/void, HX_* macros,\n"
+    buf = buf + "// libc strtod/free) is supplied OUTSIDE the residual, so these are true\n"
+    buf = buf + "// emittable leaves — no alloc / hxlcl_* static / syscall / TAG_FN dispatch.\n"
+    buf = buf + "//\n"
+    buf = buf + "// HX_ARR_LEN / HX_STRLEN are defined in runtime_core_decls.h (the CORE\n"
+    buf = buf + "// tier), NOT in runtime.h which this object-only seed TU includes. They are\n"
+    buf = buf + "// re-declared here VERBATIM from runtime_core_decls.h (guarded #ifndef so a\n"
+    buf = buf + "// TU that DOES pull the core decls is unaffected). hexa_strlen_v_inline is\n"
+    buf = buf + "// a CORE-tier helper (runtime_core.c, supplied outside the residual) — its\n"
+    buf = buf + "// extern decl lets the seed reference it; resolved at the final link.\n"
+    buf = buf + "#ifndef HX_ARR_LEN\n"
+    buf = buf + "#define HX_ARR_LEN(v)   ((v).arr_ptr->len)\n"
+    buf = buf + "#endif\n"
+    buf = buf + "#ifndef HX_STRLEN\n"
+    buf = buf + "size_t hexa_strlen_v_inline(const char* s);\n"
+    buf = buf + "#define HX_STRLEN(v)    hexa_strlen_v_inline(HX_STR(v))\n"
+    buf = buf + "#endif\n"
+    buf = buf + "// clamp(x,lo,hi): scalar clamp, float result (frozen runtime.c #ifndef br).\n"
+    buf = buf + "HexaVal hexa_clamp(HexaVal xv, HexaVal lov, HexaVal hiv) {\n"
+    buf = buf + "    double x = __hx_to_double(xv);\n"
+    buf = buf + "    double lo = __hx_to_double(lov);\n"
+    buf = buf + "    double hi = __hx_to_double(hiv);\n"
+    buf = buf + "    if (x < lo) return hexa_float(lo);\n"
+    buf = buf + "    if (x > hi) return hexa_float(hi);\n"
+    buf = buf + "    return hexa_float(x);\n"
+    buf = buf + "}\n"
+    buf = buf + "// is_empty(v): array/str emptiness; everything else → empty.\n"
+    buf = buf + "HexaVal hexa_is_empty(HexaVal v) {\n"
+    buf = buf + "    if (HX_IS_ARRAY(v)) return hexa_bool(HX_ARR_LEN(v) == 0);\n"
+    buf = buf + "    if (HX_IS_STR(v)) {\n"
+    buf = buf + "        const char* s = HX_STR(v);\n"
+    buf = buf + "        return hexa_bool(!s || s[0] == '\\0');\n"
+    buf = buf + "    }\n"
+    buf = buf + "    return hexa_bool(1);\n"
+    buf = buf + "}\n"
+    buf = buf + "// byte_len(v): str byte length / array len / map len; else 0.\n"
+    buf = buf + "HexaVal hexa_byte_len(HexaVal v) {\n"
+    buf = buf + "    if (HX_IS_STR(v))   return hexa_int(HX_STR(v) ? (int64_t)HX_STRLEN(v) : 0);\n"
+    buf = buf + "    if (HX_IS_ARRAY(v)) return hexa_int((int64_t)HX_ARR_LEN(v));\n"
+    buf = buf + "    if (HX_IS_MAP(v)) {\n"
+    buf = buf + "        HexaMapTable* t = HX_MAP_TBL(v);\n"
+    buf = buf + "        return hexa_int(t ? (int64_t)t->len : 0);\n"
+    buf = buf + "    }\n"
+    buf = buf + "    return hexa_int(0);\n"
+    buf = buf + "}\n"
+    buf = buf + "// from_cstring(ptr): wrap a raw C-string pointer (int-encoded) as TAG_STR.\n"
+    buf = buf + "HexaVal hexa_from_cstring(HexaVal ptr) {\n"
+    buf = buf + "    uint64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;\n"
+    buf = buf + "    if (p == 0) return hexa_str(\"\");\n"
+    buf = buf + "    return hexa_str((const char*)(uintptr_t)p);\n"
+    buf = buf + "}\n"
+    buf = buf + "// struct_free(ptr): free a raw heap pointer (int-encoded); void result.\n"
+    buf = buf + "HexaVal hexa_struct_free(HexaVal ptr) {\n"
+    buf = buf + "    uint64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;\n"
+    buf = buf + "    if (p != 0) free((void*)(uintptr_t)p);\n"
+    buf = buf + "    return hexa_void();\n"
+    buf = buf + "}\n"
+    buf = buf + "// str_parse_float(s): strtod parse (libc link-time dep, #ifndef branch).\n"
+    buf = buf + "HexaVal hexa_str_parse_float(HexaVal s) {\n"
+    buf = buf + "    if (!HX_IS_STR(s)) return hexa_float(0.0);\n"
+    buf = buf + "    return hexa_float(strtod(HX_STR(s), NULL));\n"
+    buf = buf + "}\n"
     if buf.len() > 0 { _flush_runtime_hi(out_path, buf) }
 }
 
