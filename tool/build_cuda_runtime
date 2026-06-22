@@ -85,6 +85,34 @@ nvcc -x cu -DHEXA_CUDA $CUBLAS_MACRO -rdc=true -gencode arch=compute_$SM,code=sm
 nvcc -dlink -gencode arch=compute_$SM,code=sm_$SM "$B/runtime_cuda.o" \
      -o "$B/runtime_cuda_dlink.o" -lcudadevrt
 
+# ── ING-35/ING-82 — silu_gate_gpu extern-before-use guard (warm-tree CUDA build) ──
+# The frozen self/runtime.c (151c52c8…) declares `extern int _hx_cuda_farr_silu_
+# gate_gpu(...)` ~581 lines AFTER its first CALL inside hexa_farr_silu_gate_gpu's
+# `#ifdef HEXA_CUDA` block. restore_frozen_seeds injects the fix (ING-82), but this
+# script compiles whatever self/runtime.c is already in the warm tree — if that copy
+# was produced by a STALE (pre-#3784) restore_frozen_seeds it still has the
+# out-of-order decl. gcc -w below tolerates it (implicit-decl = suppressed warning),
+# but a strict-C99 host compiler (clang, or nvcc-as-clang) ERRORS with `call to
+# undeclared function '_hx_cuda_farr_silu_gate_gpu'` (the anima ING #35 failure).
+# Re-apply the same matmul-precedent inline extern HERE, idempotently, so the CUDA
+# host compile is toolchain-consistent regardless of how the warm tree was seeded.
+# OFF-CUDA the whole #ifdef block (this decl included) is preprocessed away, so the
+# default CPU build is byte-identical — verified empty preprocessed diff.
+if [ -f self/runtime.c ] && ! grep -q 'ING-82 silu_gate_gpu extern-before-use' self/runtime.c; then
+  awk '
+    /^    int rc = _hx_cuda_farr_silu_gate_gpu\(a_id, b_id, n, out_id\);$/ && !patched {
+      print "    // ING-82 silu_gate_gpu extern-before-use — declare BEFORE the call"
+      print "    // (mirrors the matmul/softmax/rmsnorm siblings) so HEXA_CUDA builds"
+      print "    // compile under strict-C99 clang, not just gcc (implicit-decl warns)."
+      print "    extern int _hx_cuda_farr_silu_gate_gpu(int64_t a_id, int64_t b_id,"
+      print "                                           int64_t n, int64_t out_id);"
+      patched=1
+    }
+    { print }
+  ' self/runtime.c > self/runtime.c.ing82 && mv self/runtime.c.ing82 self/runtime.c
+  echo "[build_cuda_runtime] ING-35/ING-82: injected silu_gate_gpu extern-before-use (warm-tree CUDA clang-safe)"
+fi
+
 echo "=== host runtime.o (-DHEXA_CUDA + the RT-NATIVE flag set) ==="
 RTFLAGS="-DHEXA_RT_ARRAY_NATIVE=1 -DHEXA_RT_MAP_NATIVE=1 -DHEXA_RT_INTERN_NATIVE=1 -DHEXA_RT_ALLOC_NATIVE=1"
 gcc -O2 -D_GNU_SOURCE -DHEXA_HAS_OPENSSL -DHEXA_CUDA $RTFLAGS -w \
