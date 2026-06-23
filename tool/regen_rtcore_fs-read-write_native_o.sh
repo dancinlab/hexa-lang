@@ -29,6 +29,11 @@ set -uo pipefail
 ROOT="$PWD"
 SEED="$ROOT/self/native/rtcore_fs-read-write.c"
 OUT="${1:-$ROOT/build/rtcore_fs-read-write_native.o}"
+# Regen the .c from its emitter SSOT (self/native/rtcore_fs-read-write_emit.hexa)
+# first, so the .c can be a .gitignore-d generated artifact (zero-c leg-B,
+# recursive zero-c ING #29 - one fewer tracked self/**/*.c). NO-OP-SAFE: emitter
+# absent keeps any in-tree .c; byte-DETERMINISTIC (fresh tree => SHA-identical).
+bash "$ROOT/tool/regen_rtcore_fs-read-write_c.sh" "$ROOT" >&2 || true
 [ -f "$SEED" ] || { echo "regen_rtcore_fs-read-write: missing $SEED" >&2; exit 1; }
 mkdir -p "$(dirname "$OUT")"
 TU="$(mktemp /tmp/rtcore_fs_rw_tu.XXXXXX.c)"; trap 'rm -f "$TU"' EXIT

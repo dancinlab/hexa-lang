@@ -31,6 +31,10 @@ set -uo pipefail
 ROOT="$PWD"
 SEED="$ROOT/self/native/rtcore_map-query-fold.c"
 OUT="${1:-$ROOT/build/rtcore_map_query_fold_native.o}"
+# zero-c leg-B (ING #29): the .c is a GENERATED, .gitignore'd artifact — regen it
+# from the emitter SSOT self/native/rtcore_map-query-fold_emit.hexa (byte-identical
+# by construction) BEFORE compiling, so the .c can stay untracked.
+bash "$ROOT/tool/regen_rtcore_map-query-fold_c.sh" "$ROOT" >&2 || true
 [ -f "$SEED" ] || { echo "regen_rtcore_map_query_fold: missing $SEED" >&2; exit 1; }
 mkdir -p "$(dirname "$OUT")"
 TU="$(mktemp /tmp/rtcore_map_query_fold_tu.XXXXXX.c)"; trap 'rm -f "$TU"' EXIT

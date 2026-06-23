@@ -308,3 +308,13 @@ test/native_build/classd_behavioral_harness.c
 .harness/logs/
 .harness/handoff/
 drafts/
+
+# zero-c recursive (ING #29): rtcore native seeds now generated from .hexa SSOT emitters (self/native/rtcore_*_emit.hexa)
+self/native/rtcore_arith.c
+self/native/rtcore_arith-coerce-format.c
+self/native/rtcore_array-typed-leaf.c
+self/native/rtcore_fs-read-write.c
+self/native/rtcore_leaf.c
+self/native/rtcore_map-query-fold.c
+self/native/rtcore_math.c
+self/native/rtcore_math2.c
