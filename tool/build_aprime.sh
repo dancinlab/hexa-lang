@@ -487,6 +487,7 @@ if [ "${HEXA_ZEROC_RT_CORE_MATH:-0}" != "0" ]; then
     RTCORE_MATH_OBJ="$REPO/build/rtcore_math_native.o"
     RTCORE_MATH_DEF="-DHEXA_RT_CORE_MATH_NATIVE=1"
     echo "  [3/5] ZERO-C RT-CORE-MATH: HEXA_ZEROC_RT_CORE_MATH=1 — 4 transcendental wrappers (sin/cos/exp/log) linked from native seed .o"
+fi
 # -- HEXA_ZEROC_RT_CORE_MATH2 (leg-B r8 else-math link de-risk, OPT-IN OFF) --
 # When HEXA_ZEROC_RT_CORE_MATH2=1, the 12 seed-portable #else-armed math wrappers
 # (hexa_sqrt/pow/floor/ceil/u_floor/abs/tan/log10/round/tanh/log2/to_float) are
