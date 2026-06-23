@@ -87,6 +87,17 @@ fn main() {
     println("[front-end] ecutwfc=" + to_string(fe.geom.ecutwfc) + " Ry  e_band="
             + to_string(fe.e_band) + " Ha")
     println("[front-end] deck.name=" + fe.deck.name)
+    // R2 FS-sampling diagnostic — bisected metallic E_F + bands straddling it.
+    println("[R2-FS] nbra=" + to_string(fe.deck.nbra) + " e_fermi(bisected)="
+            + to_string(fe.deck.e_fermi) + " Ha · sigma_el=" + to_string(fe.deck.sigma_el) + " Ha")
+    let mut _bi = 0
+    while _bi < len(fe.deck.eps_bra) {
+        let _tag = if _bi < fe.deck.nocc { "occ" } else { "CON" }
+        println("[R2-FS]   band[" + to_string(_bi) + "]=" + to_string(fe.deck.eps_bra[_bi])
+                + " (" + _tag + ") ε−E_F=" + to_string(fe.deck.eps_bra[_bi] - fe.deck.e_fermi)
+                + " |ε−E_F|/σ=" + to_string(_abs(fe.deck.eps_bra[_bi] - fe.deck.e_fermi) / fe.deck.sigma_el))
+        _bi = _bi + 1
+    }
     println("[front-end] note: " + fe.note)
 
     // ── qforge_run end-to-end: SCF→DFPT→elph→a2f→λ→Tc on the PRODUCTION deck ──

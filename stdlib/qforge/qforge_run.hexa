@@ -97,8 +97,22 @@ pub struct QforgeRunResult {
 //   cell_R    : the supercell R-vectors, flat ncells·3
 //   ── ③ el-ph inputs ──
 //   dv_modes  : nmode bundles, each a flat (nocc×n) bare ΔV|ψ_n⟩ for that mode
+//   ── ③′ METALLIC FERMI-SURFACE SAMPLING (R2 — the FS double-δ requires states
+//          that STRADDLE E_F, not just the occupied manifold on its HOMO) ──
+//   nbra       : number of BRA (scattered-into) bands ψ_{m,k+q} — the FS sample set.
+//                When > nocc this includes the empty/conduction bands just above E_F
+//                (the SCF already solves nocc+4); el-ph then samples the inter-band
+//                g_{mn}=⟨ψ_m|ΔV|ψ_n⟩ for m over ALL nbra bands, n over the occupied
+//                kets, so the FS double-δ δ(ε_m−E_F)·δ(ε_n−E_F) fires on the band
+//                pairs that actually cross the Fermi level (QE elphon.f90 structure).
+//                nbra ≤ nocc (or 0) keeps the legacy single-Γ on-shell behaviour.
+//   eps_bra    : the nbra band energies ε_m (ascending; the bra-set eigenvalues),
+//                staged by the front-end from the SCF spectrum (occupied+conduction).
 //   ── ④⑤⑥ el-ph→Tc tail parameters ──
 //   e_fermi, n_ef, omega_grid, mode_weight, sigma_el, sigma_ph, mu_star, n_mats
+//     e_fermi here is the REAL bisected metallic Fermi level (Σf(ε)=nelec over the
+//     full spectrum) — NOT the HOMO ε_{nocc-1}. The HOMO choice pinned every δ to a
+//     single occupied band and starved the FS sum at a physical σ (the R1 wall).
 pub struct QforgeDeck {
     name:        str,
     h_diag:      [float],
@@ -111,6 +125,8 @@ pub struct QforgeDeck {
     ncells:      int,
     cell_R:      [float],
     dv_modes:    [[float]],
+    nbra:        int,
+    eps_bra:     [float],
     e_fermi:     float,
     n_ef:        float,
     omega_grid:  [float],
@@ -166,7 +182,12 @@ pub fn qforge_run_tol(h_apply, deck: QforgeDeck, eig_tol: float,
     //   recovers the occupied manifold. d6: no self-consistency faked — the deck
     //   IS the converged operator (qforge_scf_pw_h is the production stager).
     let nocc = deck.nocc
-    let dav = qforge_davidson(h_apply, deck.h_diag, deck.n, nocc, eig_tol, eig_max_iter)
+    // R2: recover nbra ≥ nocc eigenpairs so the el-ph BRA set includes the empty/
+    // conduction bands just above E_F (the FS double-δ needs states straddling the
+    // Fermi level). nbra ≤ nocc (or 0/unset) falls back to the legacy occupied-only
+    // solve. Solving for more bands costs only davidson columns — H is unchanged.
+    let nbra = if deck.nbra > nocc { deck.nbra } else { nocc }
+    let dav = qforge_davidson(h_apply, deck.h_diag, deck.n, nbra, eig_tol, eig_max_iter)
     if !dav.converged {
         stages.push(QforgeStage { name: "scf", ok: 0, witness: -1.0,
                                   note: "davidson did not converge" })
@@ -184,8 +205,24 @@ pub fn qforge_run_tol(h_apply, deck: QforgeDeck, eig_tol: float,
         eps_occ.push(dav.evals[b])
         b = b + 1
     }
+    // unpack the FULL bra manifold ψ_m (m = 0..nbra) + ε_m — the FS sample set. The
+    // bra includes the conduction bands the occupied set excludes; the el-ph |g|² is
+    // then g_{mn}=⟨ψ_m|ΔV|ψ_n⟩ for m over all nbra, n over occupied (QE FS double-δ).
+    let mut bra: [[float]] = []
+    let mut eps_bra: [float] = []
+    let mut bb = 0
+    while bb < nbra {
+        let mut v: [float] = []
+        let mut i = 0
+        while i < deck.n { v.push(dav.evecs[bb * deck.n + i]) ; i = i + 1 }
+        bra.push(v)
+        eps_bra.push(dav.evals[bb])
+        bb = bb + 1
+    }
     stages.push(QforgeStage { name: "scf", ok: 1, witness: eps_occ[0],
-                              note: "qforge_davidson ψ,ε (Hartree+LDA-exch H)" })
+                              note: "qforge_davidson ψ,ε (Hartree+LDA-exch H) — "
+                                    + to_string(nbra) + " bands (nocc=" + to_string(nocc)
+                                    + ", " + to_string(nbra - nocc) + " conduction for FS bra)" })
 
     // ── ② DFPT: Φ → D(q) → ω(q,ν)  (qforge_dynmat ∘ qforge_phonons, d19) ──────
     let dq = qforge_dynmat(deck.phi, deck.masses, deck.qvec,
@@ -222,33 +259,69 @@ pub fn qforge_run_tol(h_apply, deck: QforgeDeck, eig_tol: float,
     }
 
     // ── ③ el-ph: converged ψ + bare ΔV|ψ → |g|²  (qforge_elph_g2, d19) ────────
-    //   Per mode µ, contract the Sternheimer-screened ΔV with the occupied
-    //   manifold; deposit the intra-band on-shell |g_nn|² samples (the Fermi-
-    //   surface double-δ the tail histograms). drho_to_dvscf = a 0 screening
-    //   kernel here (bare |g|²) — the in-repo screened path is @L5-limited.
+    //   Per mode µ, contract the bare ΔV with the occupied KETS (ψ_n, the n-index of
+    //   g) but project onto the FULL BRA manifold ψ_m (m over nbra bands, including
+    //   the conduction bands above E_F). qforge_elph_g2 returns g[m*nocc+n] =
+    //   ⟨ψ_m|ΔV|ψ_n⟩ — already inter-band. We deposit one (m,n) sample per band pair
+    //   with eps_k=ε_m (the SCATTERED-INTO state ε_{k+q}) and eps_kq=ε_n (the ket
+    //   ε_k), so the tail's FS double-δ δ(ε_m−E_F)·δ(ε_n−E_F) fires ONLY on the band
+    //   pairs that straddle the Fermi level — a TRUE metallic Fermi-surface sample,
+    //   not the single-Γ on-shell ε_n=ε_n=HOMO collapse (the R1 wall). drho_to_dvscf
+    //   = 0 kernel (bare |g|²); the screened path is @L5-limited.
+    //
+    //   R2 NOVELTY (d_novel_only): this is the metallic-FS sampling fix, orthogonal
+    //   to the screening-vertex closed-negative lane. With nbra=nocc (legacy decks)
+    //   the (m,n) set reduces to the occupied×occupied block and the behaviour is the
+    //   pre-R2 inter-band sum over occupied states only (no conduction straddle).
     let mut eps_k: [float] = []
     let mut eps_kq: [float] = []
     let mut g2: [float] = []
     let mut omega_qnu: [float] = []
-    let mut g2_total = 0.0
+    let mut g2_total = 0.0       // diagnostic: total |g|² over all (m,n) pairs sampled
+    let mut g2_diag = 0.0        // diagnostic: the legacy diagonal g_nn slice only
+    let mut g2_fs = 0.0          // diagnostic: |g|² of pairs with BOTH bands within 5σ of E_F
+    let mut nfs_pairs = 0        // diagnostic: count of such FS-straddling pairs
+    let _fs_win = 5.0 * deck.sigma_el
     let mut mu = 0
     while mu < nmode {
-        let er = qforge_elph_g2(h_apply, occ, occ, eps_occ, deck.dv_modes[mu],
+        // bra = full nbra manifold (FS sample set); occ = occupied kets; the bundle
+        // dv_modes[µ] is ΔV|ψ_n⟩ over the occupied kets (n-index), matching occ.
+        let er = qforge_elph_g2(h_apply, bra, occ, eps_occ, deck.dv_modes[mu],
                                 _qforge_zero_kernel, deck.n, eig_tol, eig_max_iter)
-        let mut nn = 0
-        while nn < nocc {
-            let gv = er.g2[nn * nocc + nn]
-            eps_k.push(eps_occ[nn])
-            eps_kq.push(eps_occ[nn])
-            g2.push(gv)
-            omega_qnu.push(omega_modes[mu])
-            g2_total = g2_total + gv
-            nn = nn + 1
+        let mut mm = 0
+        while mm < nbra {
+            let mut nn = 0
+            while nn < nocc {
+                let gv = er.g2[mm * nocc + nn]
+                eps_k.push(eps_bra[mm])      // ε_{k+q} = the scattered-into band ε_m
+                eps_kq.push(eps_occ[nn])     // ε_k     = the occupied ket band ε_n
+                g2.push(gv)
+                omega_qnu.push(omega_modes[mu])
+                g2_total = g2_total + gv
+                if mm == nn { g2_diag = g2_diag + gv }
+                // FS-window diagnostic: both bands near E_F → this pair actually
+                // contributes to the FS double-δ (the rest are δ-suppressed).
+                let _dm = eps_bra[mm] - deck.e_fermi
+                let _dn = eps_occ[nn] - deck.e_fermi
+                let _am = if _dm < 0.0 { -_dm } else { _dm }
+                let _an = if _dn < 0.0 { -_dn } else { _dn }
+                if _am < _fs_win && _an < _fs_win {
+                    g2_fs = g2_fs + gv
+                    nfs_pairs = nfs_pairs + 1
+                }
+                nn = nn + 1
+            }
+            mm = mm + 1
         }
         mu = mu + 1
     }
     stages.push(QforgeStage { name: "elph", ok: 1, witness: g2_total,
-                              note: "qforge_elph_g2 Σ|g|² (bare — screening @L5-limited)" })
+                              note: "qforge_elph_g2 Σ|g|² over " + to_string(nbra)
+                                    + "×" + to_string(nocc) + " (m,n) FS band pairs"
+                                    + " [diag-slice Σ|g_nn|²=" + to_string(g2_diag)
+                                    + " · FS-window(±5σ) Σ|g|²=" + to_string(g2_fs)
+                                    + " over " + to_string(nfs_pairs) + " pairs"
+                                    + "] (bare — screening @L5-limited)" })
 
     // ── ④⑤⑥ el-ph→Tc tail: forward to the verified qforge_elph_to_tc ─────────
     //   This is the QE-cross-validated tail (orchestrator.hexa) — α²F assembler
