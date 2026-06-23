@@ -88,7 +88,20 @@ S11="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(hexa_array_alloc|hexa_array_ze
 # callee protos are emitted fresh seed-local so the seed TU compiles WITHOUT
 # the frozen blob (151c52c8 never edited). Hard assert.
 S12="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(ad_matmul|adamw_step|adamw_step_mixed|ansatz_pack|exec_stream_async|exec_stream_close|exec_stream_close_stdin|exec_stream_kill|exec_stream_open|exec_stream_poll|exec_stream_write|farr_adamw_step_gpu|farr_adamw_step_inplace|farr_ce_seed|farr_ce_seed_gpu|farr_matmul_gpu|farr_packed_gemv_offset|farr_parameter_shift_grad|farr_pauli_exp_inplace|farr_pauli_expectation|farr_rope_bwd_gpu|farr_rope_gpu|farr_simplex_set|farr_uccsd_apply|farr_vec_blend|farr_vec_reflect|farr_vertex_copy|forge_dispatch_ffn_fp64_via_bf16|forge_dispatch_matmul|ham_pack|hexa_exec_stream_async|hexa_exec_stream_close|hexa_exec_stream_close_stdin|hexa_exec_stream_kill|hexa_exec_stream_open|hexa_exec_stream_poll|hexa_exec_stream_write|hexa_exec_with_status3|hexa_is_alpha|hexa_is_alphanumeric|hexa_json_decode|hexa_json_encode|hexa_term_getppid|hexa_term_install_sigint|hexa_term_install_sigwinch|hexa_term_isatty_stdin|hexa_term_isatty_stdout|hexa_term_raw_enter|hexa_term_raw_restore|hexa_term_read_byte|hexa_term_sigint_pending|hexa_term_sigwinch_pending)$')"
-echo "regen_runtime_hi_seed: $OUT — $N/12 leaf rt_* + $M/16 libm-leaf hexa_math_* + $A/13 HexaVal-tail accessor + $S6/10 str/coerce/poly (r19) + $S7/9 fs/ffi/ml + $S7B/5 hxlcl-math (r21) + $S8/8 hxlcl mem/str-static (r23) + $S9/4 ml/math array (r24) + $S10/11 time/sleep/input (r25) + $S11/2 carrier-emit array-ctor (r26) + $S12/52 carrier-emit bare-wrapper (r29) bodies exported"
+# r30 (ING #29 batch 13) -- CARRIER-EMIT real-impl harvest: the FP32 farr32
+# (8) + int64 farr_int (7 clean) handle-table subsystems. Each body routes
+# through a file-static handle table (_hx_farr32_* / _hx_iarr_* + freelist) --
+# the r24 census's '(C) forbidden-wall' class, FALSIFIED by r26: a file-static
+# carrier exports no link symbol + the frozen copy is in the DROPPED TU, so a
+# fresh co-located carrier in the seed TU collides with nothing. Every callee
+# supplied-outside-residual (hexa_as_num/int/float/void prims + __hx_to_double/
+# HX_INT runtime.h + hxlcl_memcpy r23-delegate + libc calloc/realloc/free).
+# Hard assert. STILL-WALLED (honest, measured r30): FP64 hexa_farr_matmul/
+# hexa_ad_matmul (337-ref _hx_farr_table + hx_r4_gemm -- deeply coupled) and
+# hexa_farr_int_fill_from_array (interp-coupled: struct HexaValStruct +
+# HX_ARR_ITEMS/LEN + array_store interp-unwrap, a frozen interp-ABI dep).
+S13="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(hexa_farr32_zeros|hexa_farr32_get|hexa_farr32_set|hexa_farr32_len|hexa_farr32_free|hexa_farr32_matmul|hexa_farr32_matmul_NT_b|hexa_farr32_matmul_NT_a|hexa_farr_int_zeros|hexa_farr_int_get|hexa_farr_int_set|hexa_farr_int_len|hexa_farr_int_copy|hexa_farr_int_sum|hexa_farr_int_free)$')"
+echo "regen_runtime_hi_seed: $OUT — $N/12 leaf rt_* + $M/16 libm-leaf hexa_math_* + $A/13 HexaVal-tail accessor + $S6/10 str/coerce/poly (r19) + $S7/9 fs/ffi/ml + $S7B/5 hxlcl-math (r21) + $S8/8 hxlcl mem/str-static (r23) + $S9/4 ml/math array (r24) + $S10/11 time/sleep/input (r25) + $S11/2 carrier-emit array-ctor (r26) + $S12/52 carrier-emit bare-wrapper (r29) + $S13/15 carrier-emit real-impl farr32+farr_int (r30) bodies exported"
 [ "$N" = "12" ] || { echo "regen_runtime_hi_seed: expected 12 rt_*, got $N" >&2; exit 3; }
 [ "$M" = "16" ] || { echo "regen_runtime_hi_seed: expected 16 hexa_math_*, got $M" >&2; exit 4; }
 [ "$A" = "13" ] || { echo "regen_runtime_hi_seed: expected 13 HexaVal-tail accessors, got $A" >&2; exit 5; }
@@ -100,3 +113,4 @@ echo "regen_runtime_hi_seed: $OUT — $N/12 leaf rt_* + $M/16 libm-leaf hexa_mat
 [ "$S10" = "11" ] || { echo "regen_runtime_hi_seed: expected 11 time/sleep/input (r25), got $S10" >&2; exit 11; }
 [ "$S11" = "2" ]  || { echo "regen_runtime_hi_seed: expected 2 carrier-emit array-ctor (r26), got $S11" >&2; exit 12; }
 [ "$S12" = "52" ] || { echo "regen_runtime_hi_seed: expected 52 carrier-emit bare-wrapper (r29), got $S12" >&2; exit 13; }
+[ "$S13" = "15" ] || { echo "regen_runtime_hi_seed: expected 15 carrier-emit real-impl farr32+farr_int (r30), got $S13" >&2; exit 14; }
