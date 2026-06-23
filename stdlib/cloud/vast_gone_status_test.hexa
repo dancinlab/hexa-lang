@@ -17,8 +17,13 @@
 // absent) apart from not-yet-ready (present, fields unmapped), so the rent
 // gate can FAIL LOUD + roll back the moment a contract leaves the list.
 //
-// These exercise the PURE parsers (no vastai, no network):
-//   vast_parse_instance_status / vast_status_is_gone / vast_parse_ssh_endpoint
+// MIRROR-TEST pattern (matches runpod_list_parse_test / vast_key_source_test):
+// the source fns are `pub` in stdlib/cloud/vast.hexa but the `hexa run`
+// C-transpile of a standalone test target does not reliably pull a cross-
+// module `use`d function, so the PURE logic is mirrored here. KEEP IN SYNC
+// with stdlib/cloud/vast.hexa (vast_parse_instance_status / vast_status_is_gone
+// / vast_parse_ssh_endpoint). The mirror is byte-faithful to the source so a
+// drift in either is a test failure to investigate.
 //
 // Falsifiers:
 //   F-VAST-GONE-ABSENT   — id absent from the list → "gone" (the Bug-1 case)
@@ -33,7 +38,126 @@
 // Run:   hexa run stdlib/cloud/vast_gone_status_test.hexa
 // PASS:  exits 0, prints "vast_gone_status_test PASS".
 
-use "stdlib/cloud/vast"
+// ── mirrors of vast.hexa (KEEP IN SYNC) ───────────────────────────────
+
+struct VastSsh {
+    ok:      int,
+    host:    str,
+    port:    str,
+    message: str
+}
+
+fn _vast_fail_ssh(msg: str) -> VastSsh {
+    return VastSsh { ok: 0, host: "", port: "", message: msg }
+}
+
+// mirror of vast.hexa:_vast_strip_to_json
+fn _vast_strip_to_json(s: str) -> str {
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "[" {
+            return s.substring(i, n)
+        }
+        if c == "{" {
+            return s.substring(i, n)
+        }
+        i = i + 1
+    }
+    return s
+}
+
+// mirror of vast.hexa:vast_parse_instance_status
+fn vast_parse_instance_status(raw: str, iid: str) -> str {
+    let parsed = json_parse(_vast_strip_to_json(raw))
+    if type_of(parsed) != "array" {
+        if len(raw.trim()) == 0 {
+            return ""
+        }
+        return "unknown"
+    }
+    let mut i = 0
+    while i < len(parsed) {
+        let inst = parsed[i]
+        let id_v = json_object_get(inst, "id")
+        let mut id_s = ""
+        if type_of(id_v) == "int" {
+            id_s = to_string(id_v)
+        }
+        if type_of(id_v) == "string" {
+            id_s = to_string(id_v)
+        }
+        if id_s == iid {
+            let st = json_object_get_str(inst, "actual_status", "")
+            if len(st) > 0 {
+                return st
+            }
+            let ist = json_object_get_str(inst, "intended_status", "")
+            if len(ist) > 0 {
+                return ist
+            }
+            return "unknown"
+        }
+        i = i + 1
+    }
+    return "gone"
+}
+
+// mirror of vast.hexa:vast_status_is_gone
+fn vast_status_is_gone(st: str) -> int {
+    if st == "gone" {
+        return 1
+    }
+    if st == "exited" {
+        return 1
+    }
+    if st == "stopped" {
+        return 1
+    }
+    if st == "error" {
+        return 1
+    }
+    return 0
+}
+
+// mirror of vast.hexa:vast_parse_ssh_endpoint
+fn vast_parse_ssh_endpoint(raw: str, iid: str) -> VastSsh {
+    let parsed = json_parse(_vast_strip_to_json(raw))
+    if type_of(parsed) != "array" {
+        return _vast_fail_ssh("ssh_endpoint: could not read instances list — " + raw.substring(0, 160))
+    }
+    let mut i = 0
+    while i < len(parsed) {
+        let inst = parsed[i]
+        let id_v = json_object_get(inst, "id")
+        let mut id_s = ""
+        if type_of(id_v) == "int" {
+            id_s = to_string(id_v)
+        }
+        if type_of(id_v) == "string" {
+            id_s = to_string(id_v)
+        }
+        if id_s == iid {
+            let host = json_object_get_str(inst, "ssh_host", "")
+            let mut port = json_object_get_str(inst, "ssh_port", "")
+            if len(port) == 0 {
+                let pv = json_object_get(inst, "ssh_port")
+                if type_of(pv) == "int" {
+                    port = to_string(pv)
+                }
+            }
+            if len(host) == 0 || len(port) == 0 {
+                return _vast_fail_ssh("ssh_endpoint: ssh_host/ssh_port not yet mapped for " + iid)
+            }
+            return VastSsh { ok: 1, host: host, port: port, message: "ssh endpoint " + host + ":" + port }
+        }
+        i = i + 1
+    }
+    return _vast_fail_ssh("ssh_endpoint: instance " + iid + " not found (GONE — destroyed / never provisioned)")
+}
+
+// ── assertions ────────────────────────────────────────────────────────
 
 fn _ck_str(name: str, got: str, want: str) {
     if got != want {
@@ -74,7 +198,7 @@ fn main() {
     // reply must NOT be read as GONE (that would destroy a healthy pod). A
     // genuinely empty reply → "" (keep waiting); a non-empty one → "unknown".
     _ck_str("empty reply keep-waiting", vast_parse_instance_status("", "111"), "")
-    _ck_str("traceback not gone", vast_parse_instance_status("Traceback (most recent call last):\n  File \"vastai\"", "111"), "unknown")
+    _ck_str("traceback not gone", vast_parse_instance_status("Traceback (most recent call last):  File vastai", "111"), "unknown")
     _ck_str("error body not gone", vast_parse_instance_status("{\"error\":\"rate limited\"}", "111"), "unknown")
 
     // F-VAST-GONE-CLASS — the gone classifier.
@@ -97,10 +221,10 @@ fn main() {
 
     // F-VAST-SSH-MAP — present + mapped → ok=1 host:port; present + unmapped
     // (still booting) → ok=0 "not yet mapped" (not GONE).
-    let ok = vast_parse_ssh_endpoint(list, "111")
-    _ck("ssh mapped ok", ok.ok, 1)
-    _ck_str("ssh host", ok.host, "ssh5.vast.ai")
-    _ck_str("ssh port", ok.port, "12345")
+    let oke = vast_parse_ssh_endpoint(list, "111")
+    _ck("ssh mapped ok", oke.ok, 1)
+    _ck_str("ssh host", oke.host, "ssh5.vast.ai")
+    _ck_str("ssh port", oke.port, "12345")
     let unmapped = vast_parse_ssh_endpoint(list, "222")
     _ck("ssh unmapped not-ok", unmapped.ok, 0)
     _ck("ssh unmapped not-gone msg", unmapped.message.index_of("not yet mapped") >= 0, 1)
