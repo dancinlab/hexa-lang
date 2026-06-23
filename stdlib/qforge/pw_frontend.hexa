@@ -89,6 +89,23 @@ use "stdlib/qforge/correlation"
 use "stdlib/qforge/screened_dv"
 use "stdlib/qforge/screening_anderson"
 use "stdlib/qforge/screening_pwfft"
+use "stdlib/sys"
+
+// ── gs-chi0 completeness-lever env overrides (recovery lane probe; default = prior) ──
+//   SCF ground-state precision the χ⁰ (independent-particle response) rides on. These
+//   read env once; unset → the established defaults (SCF tol 1e-6 / 200 it · dav 1e-8 /
+//   600 · nbands nocc+4). Used ONLY to MEASURE whether tightening the ground state moves
+//   λ toward QE 4.376 — d6 honest, no forcing.
+fn _gschi0_env_f(name: str, dflt: float) -> float {
+    let v = sys_env(name)
+    if len(v) < 1 { return dflt }
+    return to_float(v)
+}
+fn _gschi0_env_i(name: str, dflt: int) -> int {
+    let v = sys_env(name)
+    if len(v) < 1 { return dflt }
+    return to_int(v)
+}
 
 let _QPW_2PI: float = 6.28318530717958647692
 
@@ -588,12 +605,20 @@ pub fn qforge_pw_frontend(deck_dir: str, npw_cap: int, xc_mode: int,
     let k0 = [0.0, 0.0, 0.0]
     let tpa = _QPW_2PI / geom.a
     let eb1 = [tpa, 0.0, 0.0] ; let eb2 = [0.0, tpa, 0.0] ; let eb3 = [0.0, 0.0, tpa]
-    let nbands = nocc + 4
+    //   (b) unoccupied/empty-band completeness lever: nbands = nocc + GSCHI0_NEMPTY (4).
+    let n_empty = _gschi0_env_i("GSCHI0_NEMPTY", 4)
+    let nbands = nocc + n_empty
+    //   (a) SCF ground-state precision lever: tol / maxiter the χ⁰ rides on.
+    let scf_tol = _gschi0_env_f("GSCHI0_SCF_TOL", 1.0e-6)
+    let scf_mit = _gschi0_env_i("GSCHI0_SCF_MAXIT", 200)
     let scf = qforge_scf_pw_h_multi_smeared(
         k0, gvecs, geom.nspec, rs, rabs, vlocs, mlens, zs,
         poss, palens, betas, ls, dij, nprojs, blens, dlens,
         geom.omega, xc_mode, 1, 1, n, eb1, eb2, eb3,
-        nbands, nelec, 0.3, 1.0e-6, 200, sigma, 2.0, 6)
+        nbands, nelec, 0.3, scf_tol, scf_mit, sigma, 2.0, 6)
+    println("[gschi0] SCF tol=" + to_string(scf_tol) + " maxit=" + to_string(scf_mit)
+            + " nbands=" + to_string(nbands) + " (nocc+" + to_string(n_empty) + ")"
+            + " → converged=" + to_string(scf.converged) + " iters=" + to_string(scf.iters))
 
     // stage the converged ρ(r) for the screened-vertex Dyson kernel (d19 — the XC
     // evaluation point; same length-n (1,1,n) cubic grid the in-loop V_H[ρ] uses).
@@ -923,10 +948,16 @@ pub fn qforge_pw_frontend_phonons_scr(deck_dir: str, npw_cap: int, xc_mode: int,
     //   QPW_HAM was staged by qforge_pw_frontend = the converged dense H; qpw_h_apply
     //   applies it. davidson recovers the occupied eigenpairs (the same solve
     //   qforge_run does — d6, no separate fixed point faked).
-    let dav = qforge_davidson(qpw_h_apply, fe.deck.h_diag, n, nocc, 1.0e-8, 600)
+    //   (a') occupied-manifold diagonalization precision (the ψ_n the Sternheimer χ⁰
+    //   response rides on). Tightening this sharpens χ⁰ if the prior 1e-8 was loose.
+    let dav_tol = _gschi0_env_f("GSCHI0_DAV_TOL", 1.0e-8)
+    let dav_mit = _gschi0_env_i("GSCHI0_DAV_MAXIT", 600)
+    let dav = qforge_davidson(qpw_h_apply, fe.deck.h_diag, n, nocc, dav_tol, dav_mit)
     if !dav.converged {
         return _qpw_fe_err(geom, "DFPT: occupied-manifold davidson did not converge")
     }
+    println("[gschi0] occ-davidson tol=" + to_string(dav_tol) + " maxit=" + to_string(dav_mit)
+            + " → converged=" + to_string(dav.converged))
     let mut occ: [[float]] = []
     let mut eps_occ: [float] = []
     let mut b = 0

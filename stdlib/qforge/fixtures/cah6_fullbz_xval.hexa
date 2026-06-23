@@ -56,7 +56,13 @@ fn main() {
     //   SCREENED el-ph vertex: ΔV_scr = ε⁻¹·ΔV_bare via the Anderson-damped Dyson
     //   fixed point (the @L5 named breakthrough, screening_anderson.hexa, d2).
     let sigma = 0.02
-    let fe = qforge_pw_frontend_phonons_scr(deck_dir, npw_cap, 1, sigma, nq,
+    //   gs-chi0 lever (c-micro): xc_mode of the ground-state SCF the χ⁰ rides on.
+    //   0 = LDA-x only · 1 = LDA-x + PW92-c (default). env GSCHI0_XC_MODE overrides.
+    let xcm_env = sys_env("GSCHI0_XC_MODE")
+    let xc_mode = if len(xcm_env) > 0 { to_int(xcm_env) } else { 1 }
+    println("[gschi0] ground-state xc_mode=" + to_string(xc_mode)
+            + " (0=LDA-x · 1=LDA-x+PW92-c)")
+    let fe = qforge_pw_frontend_phonons_scr(deck_dir, npw_cap, xc_mode, sigma, nq,
                                             screened, scr_beta, scr_md, scr_maxit)
     if !fe.ok {
         println("DEFER — front-end failed: " + fe.error)
