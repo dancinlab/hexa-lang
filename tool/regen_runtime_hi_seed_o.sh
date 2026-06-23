@@ -42,8 +42,17 @@ A="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(hexa_clamp|hexa_is_empty|hexa_by
 # supplied OUTSIDE the residual). Informational count (the hard asserts stay on
 # the rt_*/math_*/accessor clusters); these supply HI-tier bodies, residual -10.
 S6="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(hexa_str_substr|hexa_str_bytes|hexa_to_bool|hexa_float_to_int|hexa_find_poly|hexa_bin|hexa_hex|hexa_one_hot|hexa_sum|hexa_dict_keys)$')"
-echo "regen_runtime_hi_seed: $OUT — $N/12 leaf rt_* + $M/16 libm-leaf hexa_math_* + $A/13 HexaVal-tail accessor + $S6/10 str/coerce/poly (r19) bodies exported"
+# r21 (ING #35 batch 7) — syscall/libc fs + ffi-dlsym + ml leaves (9 bodies)
+# whose every callee is supplied-outside-residual (libc getcwd/unlink/close/
+# mkdtemp/mkstemp/opendir/glob/dlsym = link-dep + supplied prims). Hard assert.
+S7="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(flush_stdout_c|hexa_cwd|hexa_matvec|hexa_tempdir|hexa_tempfile|rt_delete_file|hexa_listdir|hexa_glob|hexa_ffi_dlsym)$')"
+# r21 batch 7b — hxlcl-delegate math leaves (5). hxlcl_sin/cos/log/exp
+# supplied by zeroc_hxlcl_delegate.o seed (link-dep). Hard assert.
+S7B="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(hexa_math_sin|hexa_math_cos|hexa_math_log|hexa_math_exp|hexa_swiglu_vec)$')"
+echo "regen_runtime_hi_seed: $OUT — $N/12 leaf rt_* + $M/16 libm-leaf hexa_math_* + $A/13 HexaVal-tail accessor + $S6/10 str/coerce/poly (r19) + $S7/9 fs/ffi/ml + $S7B/5 hxlcl-math (r21) bodies exported"
 [ "$N" = "12" ] || { echo "regen_runtime_hi_seed: expected 12 rt_*, got $N" >&2; exit 3; }
 [ "$M" = "16" ] || { echo "regen_runtime_hi_seed: expected 16 hexa_math_*, got $M" >&2; exit 4; }
 [ "$A" = "13" ] || { echo "regen_runtime_hi_seed: expected 13 HexaVal-tail accessors, got $A" >&2; exit 5; }
 [ "$S6" = "10" ] || { echo "regen_runtime_hi_seed: expected 10 str/coerce/poly (r19), got $S6" >&2; exit 6; }
+[ "$S7" = "9" ] || { echo "regen_runtime_hi_seed: expected 9 fs/ffi/ml (r21), got $S7" >&2; exit 7; }
+[ "$S7B" = "5" ] || { echo "regen_runtime_hi_seed: expected 5 hxlcl-math (r21), got $S7B" >&2; exit 8; }
