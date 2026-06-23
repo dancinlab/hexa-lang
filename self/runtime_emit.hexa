@@ -108,10 +108,12 @@
 // runtime.h, these macros are not), an <string.h> include (range_field strcmp),
 // and extern forward-decls for the 6 supplied callees the restored runtime.h
 // does not declare (hexa_map_all/any, hexa_array_contains, hexa_str_as_ptr/
-// count_substr/own). EXCLUDED (file-static wall, honest residual):
-// hexa_array_alloc / hexa_array_zeros_float (route through the static
-// _hx_stats_array_new / _hx_stats_on counters internal to runtime.c — not
-// externalizable into a separate seed TU).
+// count_substr/own). ⟦r26 UPDATE: the EXCLUDED note below — hexa_array_alloc /
+// hexa_array_zeros_float "not externalizable, route through static
+// _hx_stats_array_new / _hx_stats_on" — is FALSIFIED. A *file-static* carrier
+// exports no link symbol and the frozen runtime_core.c copy is in the DROPPED
+// TU, so a fresh co-located carrier in the seed TU collides with nothing. Both
+// bodies are ported in batch 11 (r26) below with a seed-local carrier.⟧
 // Total emitter bodies now 41 → 88.
 //
 // PORTED BODIES — batch 6 (str/coerce/poly leaves, ING #35 r19):
@@ -1937,6 +1939,60 @@ fn emit_runtime_hi_seed_to(out_path: str) {
     buf = buf + "    }\n"
     buf = buf + "    rsn_buf[got] = 0;\n"
     buf = buf + "    return rsn_buf;\n"
+    buf = buf + "}\n"
+    buf = buf + "\n"
+    buf = buf + "// ── batch 11 (ING #35 r26) — CARRIER-EMIT: file-static DATA carrier ──\n"
+    buf = buf + "//  RFC061 r26 falsifies the r24 census's '(C) forbidden-wall' for the\n"
+    buf = buf + "//  _hx_stats counter carrier. The census claimed hexa_array_alloc /\n"
+    buf = buf + "//  hexa_array_zeros_float are unportable because their bodies touch the\n"
+    buf = buf + "//  file-static counters (_hx_stats_array_new) + guard (_hx_stats_on) that\n"
+    buf = buf + "//  live in self/runtime_core.c — which the drop path DROPS from the compile,\n"
+    buf = buf + "//  so the seed would see no carrier → 'needs frozen-blob de-static (forbidden)'.\n"
+    buf = buf + "//  MEASURED FALSE: the carrier is a *file-static*, so emitting a FRESH copy of\n"
+    buf = buf + "//  it co-located with the body IN THIS SEED TU collides with NOTHING — the\n"
+    buf = buf + "//  frozen runtime_core.c's static copy is in the DROPPED/uncompiled TU, and a\n"
+    buf = buf + "//  file-static exports no link symbol, so there is no duplicate-definition at\n"
+    buf = buf + "//  the final link either. The body then resolves _hx_stats_on / _hx_stats_\n"
+    buf = buf + "//  array_new against THIS TU's carrier. Same precedent as the r25 hexa_pinned_\n"
+    buf = buf + "//  epoch seed-local static duplication. The two bodies compile the SHIPPING\n"
+    buf = buf + "//  branch (HEXA_HAS_HEXA_RT_STDLIB defined → rt_array_alloc/zeros_float\n"
+    buf = buf + "//  delegate, the byte-faithful production path); rt_array_* are stdlib bodies\n"
+    buf = buf + "//  (stdlib/runtime/numeric.hexa) supplied-outside-residual at the final link.\n"
+    buf = buf + "//  The carrier is byte-faithful to runtime_core.c: _hx_stats_on lazily probes\n"
+    buf = buf + "//  HEXA_ALLOC_STATS (opt-in diagnostic) and registers an atexit dump; the dump\n"
+    buf = buf + "//  here prints only the array_new counter THIS seed maintains (the diagnostic\n"
+    buf = buf + "//  is drop-path-only stderr — never a byteeq surface; the DEFAULT/shipping\n"
+    buf = buf + "//  build never compiles this seed → byte-identical OFF). net DROP_RESIDUAL: -2.\n"
+    buf = buf + "extern char* hxlcl_getenv(const char* name);\n"
+    buf = buf + "extern int   hxlcl_atexit(void (*fn)(void));\n"
+    buf = buf + "extern HexaVal rt_array_alloc(HexaVal n);\n"
+    buf = buf + "extern HexaVal rt_array_zeros_float(HexaVal n);\n"
+    buf = buf + "// ── carrier: _hx_stats counter + guard (frozen runtime_core.c statics) ─\n"
+    buf = buf + "static int64_t _hx_r26_stats_array_new = 0;\n"
+    buf = buf + "static int     _hx_r26_stats_enabled   = -1;   // lazy env probe (frozen: -1)\n"
+    buf = buf + "static void _hx_r26_stats_dump(void) {\n"
+    buf = buf + "    fprintf(stderr, \"[HEXA_ALLOC_STATS] array_new=%lld\\n\",\n"
+    buf = buf + "            (long long)_hx_r26_stats_array_new);\n"
+    buf = buf + "}\n"
+    buf = buf + "static int _hx_stats_on(void) {\n"
+    buf = buf + "    if (_hx_r26_stats_enabled < 0) {\n"
+    buf = buf + "        const char* e = hxlcl_getenv(\"HEXA_ALLOC_STATS\");\n"
+    buf = buf + "        _hx_r26_stats_enabled = (e && e[0] && e[0] != '0') ? 1 : 0;\n"
+    buf = buf + "        if (_hx_r26_stats_enabled) hxlcl_atexit(_hx_r26_stats_dump);\n"
+    buf = buf + "    }\n"
+    buf = buf + "    return _hx_r26_stats_enabled;\n"
+    buf = buf + "}\n"
+    buf = buf + "// hexa_array_zeros_float (frozen runtime.c L5041 — HEXA_HAS_HEXA_RT_STDLIB branch)\n"
+    buf = buf + "HexaVal hexa_array_zeros_float(HexaVal nv) {\n"
+    buf = buf + "    if (_hx_stats_on()) _hx_r26_stats_array_new++;\n"
+    buf = buf + "    int64_t n = HX_IS_INT(nv) ? HX_INT(nv) : (int64_t)__hx_to_double(nv);\n"
+    buf = buf + "    return rt_array_zeros_float(hexa_int(n));\n"
+    buf = buf + "}\n"
+    buf = buf + "// hexa_array_alloc (frozen runtime.c L5073 — HEXA_HAS_HEXA_RT_STDLIB branch)\n"
+    buf = buf + "HexaVal hexa_array_alloc(HexaVal nv) {\n"
+    buf = buf + "    if (_hx_stats_on()) _hx_r26_stats_array_new++;\n"
+    buf = buf + "    int64_t n = HX_IS_INT(nv) ? HX_INT(nv) : (int64_t)__hx_to_double(nv);\n"
+    buf = buf + "    return rt_array_alloc(hexa_int(n));\n"
     buf = buf + "}\n"
     if buf.len() > 0 { _flush_runtime_hi(out_path, buf) }
 }

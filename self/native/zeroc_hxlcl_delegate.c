@@ -22,6 +22,18 @@
 // path), and the DEFAULT build never compiles this file (byte-identical OFF).
 //
 // Included by a 1-line TU with runtime.h in scope (HexaVal / HX_FLOAT).
+//
+// LSP false-positive guard (r26): standalone editor-clang analysis of this file
+// lacks the HexaVal ABI (the drop-path TU prepends `#include "runtime.h"`, the
+// editor does not), producing a recurring 'unknown type HexaVal' diagnostic
+// (r23/r25, 3×). runtime.h carries its own `HEXA_RUNTIME_H` include guard, so
+// pulling it in only when ABSENT resolves HexaVal for standalone analysis while
+// staying a NO-OP under the drop path (the guard is already defined there → the
+// include is skipped, no double-definition). This file is drop-path-only — NEVER
+// in the shipping/default build — so this is byteeq-NEUTRAL.
+#ifndef HEXA_RUNTIME_H
+#include "runtime.h"
+#endif
 
 #include <stdlib.h>
 #include <time.h>
