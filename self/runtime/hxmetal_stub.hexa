@@ -194,6 +194,10 @@ fn hxm_init() {
     HXM_SEL_UTF8    = sel_registerName(cstring("stringWithUTF8String:"))
     HXM_NSSTRING    = objc_getClass(cstring("NSString"))
     if HXM_NSSTRING == 0 { return 0 }
+    // @convergence state=ossified id=hxmetal-default-on-headless-device-check value="default-ON polarity 가 NSString(objc) 만 보고 live 진입 → headless/no-GPU darwin(GitHub Actions macOS 러너)서 MTLCreateSystemDefaultDevice()=nil 인데 HXM_LIVE=1 → device_non_null assert fail → faithful-nobaseline darwin RED (#3830)." threshold="default-ON 은 mac+Metal-device 둘 다일 때만 — MTLCreateSystemDefaultDevice()==0 이면 stub 폴백"
+    // headless / no-GPU (예: GitHub Actions macOS 러너) — Metal device 부재면
+    // live 진입을 막고 stub 폴백한다. default-ON 은 mac AND Metal-device 존재일 때만.
+    if MTLCreateSystemDefaultDevice() == 0 { return 0 }
     HXM_LIVE = 1
     return 0
 }
