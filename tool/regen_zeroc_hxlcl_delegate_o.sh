@@ -19,5 +19,10 @@ ${CC:-clang} -c -O2 ${ARCH_FLAG:-} -std=gnu11 -D_GNU_SOURCE $EXTRA -Wno-trigraph
     -I "$ROOT/self" -I "$ROOT" "$TU" -o "$OUT" 2>&1 | grep -iE 'error:' | head -8
 [ -f "$OUT" ] || { echo "regen_zeroc_hxlcl_delegate: compile failed (no $OUT)" >&2; exit 2; }
 N="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?hxlcl_(cos|sin|exp|log|fmod|atoll|atof|time|atexit|signal|getrusage|gmtime_r|strftime|execvp|popen|pclose|write)$')"
-echo "regen_zeroc_hxlcl_delegate: $OUT — $N/17 hxlcl_* delegates exported"
+# r23 — the 7 runtime.c-private mem/str statics now re-supplied as EXTERNAL
+# delegates (memcpy/memset/strlen/strncmp/strtoll/getenv/strdup). These were
+# seedprov=0 (file-static, no exported symbol) and WALLED 8 HI-tier bodies.
+R23="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?hxlcl_(memcpy|memset|strlen|strncmp|strtoll|getenv|strdup)$')"
+echo "regen_zeroc_hxlcl_delegate: $OUT — $N/17 hxlcl_* delegates + $R23/7 r23 mem/str statics exported"
 [ "$N" = "17" ] || { echo "regen_zeroc_hxlcl_delegate: expected 17, got $N" >&2; exit 3; }
+[ "$R23" = "7" ] || { echo "regen_zeroc_hxlcl_delegate: expected 7 r23 mem/str statics, got $R23" >&2; exit 4; }

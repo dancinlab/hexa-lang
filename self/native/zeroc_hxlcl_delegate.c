@@ -60,3 +60,88 @@ int       hxlcl_pclose(void *stream) { return pclose((FILE*)stream); }
 long hxlcl_write(int fd, const void *buf, unsigned long n) {
     return (long)write(fd, buf, (size_t)n);
 }
+
+// ── r23: 7 runtime.c-private mem/str statics (seedprov 0 → 1) ──────────────
+// These are `static __attribute__((noinline))` in the frozen runtime.c HEAD
+// (pre-`#include "runtime_core.c"` prologue, NOT post-boundary like the math 5),
+// so the arena-globals/drop seed TU sees the file-static forward-decls but the
+// linker has no exported symbol for them — UNSUPPLIED (seedprov=0). r21 MEASURED
+// they WALL 8 HI-tier bodies (hexa_is_error/list_dir/utc_iso_format/utc_iso_parse/
+// from_char_code/http_get + rt_append_file/rt_read_lines). We re-supply each as
+// an EXTERNAL (non-static) definition here, BYTE-FAITHFUL to the frozen body:
+//   * memcpy/memset/strlen/strncmp — verbatim scalar loops (output-identical to
+//     the frozen volatile-char loops; the `volatile` qualifier only blocks the
+//     compiler from folding to a libc memcpy/strlen, an OPTIMIZATION concern of
+//     the freestanding default build, NOT an output-bytes concern of this seed).
+//   * strtoll — VERBATIM reimplementation: the frozen hxlcl_strtoll is a custom
+//     parser (no LLONG_MAX overflow saturation, whitespace set = space/tab/nl
+//     only) that DEVIATES from libc strtoll, so we port the body, NOT route to
+//     libc (byte-faithful → reproduce exactly).
+//   * getenv — frozen hxlcl_getenv walks `environ` directly and its header comment
+//     states it "matches libc getenv semantics (case-sensitive, first match, NULL
+//     on miss)"; libc getenv gives output-identical results, so we delegate to it
+//     (avoids dragging the runtime.c-private `environ` capture into this TU).
+//   * strdup — frozen hxlcl_strdup is malloc(n+1)+byte-copy+NUL; libc strdup is
+//     the identical contract → output-identical bytes, delegate to libc.
+// This does NOT touch the immutable frozen blob; the DEFAULT build never compiles
+// this file (byte-identical OFF).
+#include <string.h>
+
+void *hxlcl_memcpy(void *dst, const void *src, size_t n) {
+    unsigned char *d = (unsigned char *)dst;
+    const unsigned char *s = (const unsigned char *)src;
+    for (size_t i = 0; i < n; i++) d[i] = s[i];
+    return dst;
+}
+void *hxlcl_memset(void *s, int c, size_t n) {
+    unsigned char *p = (unsigned char *)s;
+    unsigned char v = (unsigned char)c;
+    for (size_t i = 0; i < n; i++) p[i] = v;
+    return s;
+}
+size_t hxlcl_strlen(const char *s) {
+    if (!s) return 0;
+    size_t n = 0;
+    while (((const volatile char *)s)[n]) n++;
+    return n;
+}
+int hxlcl_strncmp(const char *a, const char *b, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        unsigned char ca = (unsigned char)a[i];
+        unsigned char cb = (unsigned char)b[i];
+        if (ca != cb) return (int)ca - (int)cb;
+        if (ca == 0) return 0;
+    }
+    return 0;
+}
+long long hxlcl_strtoll(const char *nptr, char **endptr, int base) {
+    if (!nptr) { if (endptr) *endptr = (char *)nptr; return 0; }
+    const char *s = nptr;
+    while (*s == ' ' || *s == '\t' || *s == '\n') s++;
+    int sign = 1;
+    if (*s == '-') { sign = -1; s++; }
+    else if (*s == '+') s++;
+    if (base == 0) {
+        if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) { base = 16; s += 2; }
+        else if (s[0] == '0') { base = 8; s++; }
+        else base = 10;
+    } else if (base == 16 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        s += 2;
+    }
+    unsigned long long n = 0;
+    for (;;) {
+        char c = *s;
+        int d;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if (c >= 'a' && c <= 'z') d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'Z') d = c - 'A' + 10;
+        else break;
+        if (d >= base) break;
+        n = n * (unsigned long long)base + (unsigned long long)d;
+        s++;
+    }
+    if (endptr) *endptr = (char *)s;
+    return (long long)((sign < 0) ? -(long long)n : (long long)n);
+}
+char *hxlcl_getenv(const char *name) { return getenv(name); }
+char *hxlcl_strdup(const char *s)    { return s ? strdup(s) : (char *)0; }
