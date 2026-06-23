@@ -152,7 +152,15 @@ if [ -z "$CPU_FORGE" ]; then
   infra "no forge_dispatch_* symbols found in the CPU object (nm format unexpected?) — cannot compare"
 fi
 # Symbols DEFINED in the CPU object but NOT defined in the -DHEXA_CUDA object.
-MISSING="$(comm -23 <(printf '%s\n' "$CPU_FORGE") <(printf '%s\n' "$CUDA_FORGE"))"
+# Use temp files (not bash process-substitution) so the comparison is correct
+# under POSIX sh too — `comm <(...) <(...)` syntax-errors under sh, which would
+# leave MISSING empty and silently FALSE-PASS the regression check.
+CPUF="$(mktemp -t hexa_rt_gate_cpuforge.XXXXXX)"
+CUDAF="$(mktemp -t hexa_rt_gate_cudaforge.XXXXXX)"
+printf '%s\n' "$CPU_FORGE"  > "$CPUF"
+printf '%s\n' "$CUDA_FORGE" > "$CUDAF"
+MISSING="$(comm -23 "$CPUF" "$CUDAF")"
+rm -f "$CPUF" "$CUDAF"
 if [ -n "$MISSING" ]; then
   echo "── forge_dispatch_* defined for CPU but MISSING under -DHEXA_CUDA ─" >&2
   printf '  %s\n' $MISSING >&2
