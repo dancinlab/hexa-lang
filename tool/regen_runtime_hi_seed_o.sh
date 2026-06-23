@@ -56,7 +56,13 @@ S7B="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(hexa_math_sin|hexa_math_cos|he
 # string-builder family (hexa_bytes_to_str_raw/hexa_chr_byte → hexa_strbuf_alloc
 # = static-inline + file-static counter, NOT delegatable; r19 verdict).
 S8="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(hexa_is_error|rt_read_lines|hexa_from_char_code|hexa_list_dir|rt_append_file|hexa_utc_iso_format|hexa_utc_iso_parse|hexa_http_get)$')"
-echo "regen_runtime_hi_seed: $OUT — $N/12 leaf rt_* + $M/16 libm-leaf hexa_math_* + $A/13 HexaVal-tail accessor + $S6/10 str/coerce/poly (r19) + $S7/9 fs/ffi/ml + $S7B/5 hxlcl-math (r21) + $S8/8 hxlcl mem/str-static (r23) bodies exported"
+# r24 (ING #35 batch 9) — ml/math array leaves (census-clean tail, 4 bodies).
+# r24 CENSUS measured the 309-body hexa_* tail: only these 4 are clean supplied-
+# link-dep leaves (every callee supplied-outside-residual or a supplied delegate
+# hxlcl_exp/fmod or libc malloc/free). The rest route through measured walls
+# (farr_gpu/syscall-static/strbuf/file-static pools/#ifdef-amalgam). Hard assert.
+S9="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(hexa_silu|hexa_softmax|hexa_math_fmod|hexa_farr_set_out_disposition)$')"
+echo "regen_runtime_hi_seed: $OUT — $N/12 leaf rt_* + $M/16 libm-leaf hexa_math_* + $A/13 HexaVal-tail accessor + $S6/10 str/coerce/poly (r19) + $S7/9 fs/ffi/ml + $S7B/5 hxlcl-math (r21) + $S8/8 hxlcl mem/str-static (r23) + $S9/4 ml/math array (r24) bodies exported"
 [ "$N" = "12" ] || { echo "regen_runtime_hi_seed: expected 12 rt_*, got $N" >&2; exit 3; }
 [ "$M" = "16" ] || { echo "regen_runtime_hi_seed: expected 16 hexa_math_*, got $M" >&2; exit 4; }
 [ "$A" = "13" ] || { echo "regen_runtime_hi_seed: expected 13 HexaVal-tail accessors, got $A" >&2; exit 5; }
@@ -64,3 +70,4 @@ echo "regen_runtime_hi_seed: $OUT — $N/12 leaf rt_* + $M/16 libm-leaf hexa_mat
 [ "$S7" = "9" ] || { echo "regen_runtime_hi_seed: expected 9 fs/ffi/ml (r21), got $S7" >&2; exit 7; }
 [ "$S7B" = "5" ] || { echo "regen_runtime_hi_seed: expected 5 hxlcl-math (r21), got $S7B" >&2; exit 8; }
 [ "$S8" = "8" ] || { echo "regen_runtime_hi_seed: expected 8 hxlcl mem/str-static (r23), got $S8" >&2; exit 9; }
+[ "$S9" = "4" ] || { echo "regen_runtime_hi_seed: expected 4 ml/math array (r24), got $S9" >&2; exit 10; }
