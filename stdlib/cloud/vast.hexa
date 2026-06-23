@@ -254,6 +254,69 @@ fn _vast_strip_to_json(s: str) -> str {
     return s
 }
 
+// ── rent-path watchdog (silent-hang fix) ──────────────────────────────
+// The rent/create path shells out to the `vastai` CLI with a bare exec()
+// that has NO walltime bound. When the vast API stalls (a stale offer that
+// rotated to rentable=false, a non-2xx create, a network hang) the exec
+// BLOCKS FOREVER — the rent wrapper looks hung while surfacing nothing,
+// even though `cloud api vast PUT asks/<offer>/` (which goes through
+// _api_method_curl's `--max-time`) returns the same error instantly. This
+// is the 2026-06-23 8×A100 silent-hang incident. The fix is to give every
+// rent-path vastai shellout the SAME bound: a `timeout <sec>` prefix (the
+// POSIX timeout(1) utility, exit 124 on expiry → falls through to the
+// existing fail-loud parse path). Bound is HEXA_VAST_EXEC_TIMEOUT seconds
+// (default 120 — a real create returns in a few s; 120s is pure stall
+// insurance), 0/empty disables. Prefix is "" when timeout(1) is absent so
+// the legacy unbounded behaviour is preserved (never breaks a working box).
+fn _vast_exec_timeout_sec() -> int {
+    let env_t = env_var("HEXA_VAST_EXEC_TIMEOUT")
+    if len(env_t) == 0 {
+        return 120
+    }
+    let t = to_int(env_t.trim())
+    if t < 0 {
+        return 0
+    }
+    return t
+}
+
+// _vast_timeout_prefix — "timeout <sec> " when timeout(1) is on PATH and the
+// bound is > 0, else "" (legacy unbounded). Memo-free; the `command -v`
+// probe is a cheap local builtin lookup. macOS ships `timeout` via coreutils
+// (gtimeout) — both names are probed so the watchdog still arms there.
+fn _vast_timeout_prefix() -> str {
+    let sec = _vast_exec_timeout_sec()
+    if sec <= 0 {
+        return ""
+    }
+    if len(exec("command -v timeout 2>/dev/null").trim()) > 0 {
+        return "timeout " + to_string(sec) + " "
+    }
+    if len(exec("command -v gtimeout 2>/dev/null").trim()) > 0 {
+        return "gtimeout " + to_string(sec) + " "
+    }
+    return ""
+}
+
+// _vast_exec_diag — render a vastai shellout's raw output for a fail-loud
+// message. Surfaces the reply VERBATIM (full, not truncated) so a provider
+// error / non-2xx body is visible — mirroring the `cloud api` passthrough
+// that always returned the error instantly. Empty output means the process
+// produced nothing, which on the bounded path is almost always the watchdog
+// SIGTERM (exit 124) — so we name that as the likely cause and the bound,
+// turning a former silent hang into an explicit "timed out after Ns" line.
+fn _vast_exec_diag(out: str) -> str {
+    let trimmed = out.trim()
+    if len(trimmed) == 0 {
+        let sec = _vast_exec_timeout_sec()
+        if sec > 0 {
+            return "(no output — the " + to_string(sec) + "s watchdog likely fired: the vastai call stalled/timed out. Raise HEXA_VAST_EXEC_TIMEOUT or re-pick an offer.)"
+        }
+        return "(no output from vastai)"
+    }
+    return trimmed
+}
+
 // ── offer search (inbox: vast-offer-pool-verified-filter-default.md) ──
 
 // _vast_default_filters — the demiurge-empirical default predicates that
@@ -512,12 +575,12 @@ fn vast_search_offers(query: str, verified_only: int) -> VastOffer {
         return _vast_fail_offer("vastai not found (set VASTAI_DISABLE=1 to silence)")
     }
     let eff = _vast_build_query(query, verified_only)
-    let cmd = _shq_local(vc) + " search offers " + _shq_local(eff)
+    let cmd = _vast_timeout_prefix() + _shq_local(vc) + " search offers " + _shq_local(eff)
         + " -n --raw 2>&1"
     let out = exec(cmd)
     let ids = _vast_collect_offer_ids(out)
     if len(ids) == 0 {
-        return _vast_fail_offer("search offers: no matching offers — " + out.substring(0, 200))
+        return _vast_fail_offer("search offers: no matching offers — " + _vast_exec_diag(out))
     }
     // Claim-lock: walk the candidate ids and pick the first one not
     // already claimed by a sibling rent on this host (best-effort, see
@@ -549,7 +612,12 @@ fn vast_offer_by_id(offer_id: str) -> VastOffer {
     if len(vc) == 0 {
         return _vast_fail_offer("vastai not found (set VASTAI_DISABLE=1 to silence)")
     }
-    let cmd = _shq_local(vc) + " search offers " + _shq_local("id=" + offer_id)
+    // `rentable=true` is ANDed with the id so an offer that is still LISTED
+    // but has rotated to non-rentable (the silent-hang root cause: it passes
+    // a bare `id=` confirm, then `vastai create` stalls/non-2xx) is rejected
+    // HERE, fail-loud, before any billing create is attempted.
+    let cmd = _vast_timeout_prefix() + _shq_local(vc) + " search offers "
+        + _shq_local("id=" + offer_id) + " " + _shq_local("rentable=true")
         + " -n --raw 2>&1"
     let out = exec(cmd)
     let ids = _vast_collect_offer_ids(out)
@@ -564,7 +632,7 @@ fn vast_offer_by_id(offer_id: str) -> VastOffer {
         i = i + 1
     }
     if found == 0 {
-        return _vast_fail_offer("offer " + offer_id + " not listed / not rentable (rotated away?) — " + out.substring(0, 200))
+        return _vast_fail_offer("offer " + offer_id + " not listed / not rentable (rotated away or rentable=false?) — re-pick with `cloud rent vast --query ...` or `cloud api vast GET 'bundles?q=...'`. vastai said: " + _vast_exec_diag(out))
     }
     return VastOffer { ok: 1, offer_id: offer_id, dph: _vast_offer_dph(out, offer_id), message: "offer pinned " + offer_id }
 }
@@ -889,7 +957,11 @@ fn vast_create_labeled(offer_id: str, image: str, disk_gb: int, label: str) -> V
     if len(onstart) > 0 {
         onstart_arg = " --onstart-cmd " + _shq_local(onstart)
     }
-    let cmd = _shq_local(vc) + " create instance " + _shq_local(offer_id)
+    // Watchdog prefix: a stalled `vastai create` (vast API hang on a stale
+    // offer) must NOT block forever — `timeout` SIGTERMs at the bound (exit
+    // 124, empty/partial output) and we fall through to the fail-loud path
+    // below rather than silently hanging the whole rent (silent-hang fix).
+    let cmd = _vast_timeout_prefix() + _shq_local(vc) + " create instance " + _shq_local(offer_id)
         + " --image " + _shq_local(image)
         + " --disk " + _shq_local(to_string(disk_gb))
         + label_arg
@@ -912,7 +984,12 @@ fn vast_create_labeled(offer_id: str, image: str, disk_gb: int, label: str) -> V
             return VastInstance { ok: 1, instance_id: iid2, message: "created (cli) on offer " + offer_id }
         }
     }
-    return _vast_fail_instance("create (cli) failed: " + out.substring(0, 200))
+    // No new_contract → create did NOT succeed. Surface the provider's reply
+    // VERBATIM (not a 200-char truncation) so a `success:false` / non-2xx /
+    // stale-offer / timeout reason is visible immediately, exactly like the
+    // `cloud api` passthrough. Empty output ⇒ the watchdog likely fired.
+    return _vast_fail_instance("create (cli) FAILED on offer " + offer_id
+        + " — no instance was created. vastai reply: " + _vast_exec_diag(out))
 }
 
 // ── teardown — THE CRITICAL FIX ───────────────────────────────────────
@@ -1098,6 +1175,20 @@ fn vast_build_query_TEST(query: str, verified_only: int) -> str {
 // live vastai.
 fn vast_strip_to_json_TEST(s: str) -> str {
     return _vast_strip_to_json(s)
+}
+
+// vast_exec_diag_TEST — public alias for the fail-loud rent diagnostic so the
+// silent-hang fix (empty output ⇒ name the watchdog; non-empty ⇒ surface the
+// reply verbatim) can be unit-tested without a live vastai stall.
+fn vast_exec_diag_TEST(out: str) -> str {
+    return _vast_exec_diag(out)
+}
+
+// vast_timeout_prefix_TEST — public alias for the rent-path watchdog prefix
+// builder so the bound resolution (env override, 0/disable, timeout(1) probe)
+// is testable.
+fn vast_timeout_prefix_TEST() -> str {
+    return _vast_timeout_prefix()
 }
 
 // vast_vastai_resolve_TEST — public alias for the PURE precedence resolver so
