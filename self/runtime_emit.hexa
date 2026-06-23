@@ -114,6 +114,29 @@
 // externalizable into a separate seed TU).
 // Total emitter bodies now 41 → 88.
 //
+// PORTED BODIES — batch 6 (str/coerce/poly leaves, ING #35 r19):
+//   hexa_str_substr hexa_str_bytes hexa_to_bool hexa_float_to_int
+//   hexa_find_poly hexa_bin hexa_hex hexa_one_hot hexa_sum hexa_dict_keys
+//   (10 bodies, the #ifndef HEXA_HAS_HEXA_RT_STDLIB live branch).
+// STRBUF VERDICT (the r18 lens applied to hexa_strbuf_alloc): UNLIKE
+// hexa_array_new / hexa_str_own (non-static EXPORTED bodies in runtime_core.c,
+// resolved at the final link), hexa_strbuf_alloc is `static inline` in
+// runtime_core.c — it is NOT in the residual AND produces NO exported link
+// symbol. A seed body calling it therefore CANNOT resolve it at the final link;
+// re-supplying its inline definition drags in the file-static _hx_mem_tick_ctr
+// counter + the private HexaStrHdr / HEXA_STR_MAGIC types (none in runtime.h).
+// So hexa_strbuf_alloc is a GENUINE file-static wall (NOT a portable-link-dep),
+// and the strbuf string-builder sub-family stays EXCLUDED. The 10 bodies above
+// are the str/map family members that DON'T route through strbuf — their callees
+// (hexa_str_substring / array_new/push/get/find / map_keys / truthy / str_own /
+// str_index_of, + libc malloc/snprintf/isnan) are ALL supplied-outside-residual,
+// so they are clean emittable leaves. EXCLUDED (genuine wall, honest residual):
+// hexa_chr_byte / hexa_bytes_to_str_raw (hexa_strbuf_alloc = static-inline +
+// file-static counter), hexa_from_char_code (hxlcl_strdup runtime.c-private
+// static), hexa_str_slice (hxlcl_strndup private static), hexa_str_parse_int
+// (hxlcl_strtoll private static), hexa_callback_slot_id (__hexa_cb_slots pool).
+// Total emitter bodies now 88 → 98.
+//
 // Invocation:  hexa-run runtime_emit.hexa <output-path>
 // Default output path (if argv missing): "runtime_hi_seed.c" in cwd.
 
@@ -1039,6 +1062,114 @@ fn emit_runtime_hi_seed_to(out_path: str) {
     buf = buf + "    }\n"
     buf = buf + "    return hexa_array_count(obj, arg);\n"
     buf = buf + "}\n"
+    buf = buf + "\n"
+    buf = buf + "// ── batch 6 (str/coerce/poly leaves, ING #35 r19) ────────────\n"
+    buf = buf + "// UNLOCKED by the r18 alloc-WALL-2 verdict (PORTABLE-LINK-DEP). 10 more\n"
+    buf = buf + "// HI-tier leaves whose every callee is supplied OUTSIDE the residual:\n"
+    buf = buf + "//   hexa_str_substr  (hexa_str_substring — runtime_core.c non-static + runtime.h)\n"
+    buf = buf + "//   hexa_str_bytes   (hexa_array_new/push — r18 link-dep, the #ifndef live branch)\n"
+    buf = buf + "//   hexa_to_bool     (hexa_truthy/bool — valop+core seed link-deps)\n"
+    buf = buf + "//   hexa_float_to_int(pure math + libc isnan/isinf — fully self-contained)\n"
+    buf = buf + "//   hexa_find_poly   (hexa_array_find — r18-seeded — + hexa_str_index_of/int)\n"
+    buf = buf + "//   hexa_bin hexa_hex(libc malloc/snprintf + hexa_str_own r18-extern)\n"
+    buf = buf + "//   hexa_one_hot     (hexa_array_new/push + hexa_float)\n"
+    buf = buf + "//   hexa_sum         (hexa_array_get + hexa_int/float)\n"
+    buf = buf + "//   hexa_dict_keys   (hexa_map_keys — runtime.h + runtime_core.c)\n"
+    buf = buf + "// strbuf verdict (r19): hexa_strbuf_alloc is static inline in runtime_core.c\n"
+    buf = buf + "// (NOT in residual, NOT an exported symbol) — it produces NO link symbol, so a\n"
+    buf = buf + "// body calling it cannot resolve at the final link like hexa_array_new/str_own;\n"
+    buf = buf + "// re-supplying it inline drags the file-static _hx_mem_tick_ctr counter +\n"
+    buf = buf + "// private HexaStrHdr/HEXA_STR_MAGIC = GENUINE file-static wall. So the strbuf\n"
+    buf = buf + "// string-builder sub-family (hexa_chr_byte/hexa_bytes_to_str_raw) stays EXCLUDED,\n"
+    buf = buf + "// as do the hxlcl_* private-static bodies (hexa_from_char_code=hxlcl_strdup,\n"
+    buf = buf + "// hexa_str_slice=hxlcl_strndup, hexa_str_parse_int=hxlcl_strtoll). The clean\n"
+    buf = buf + "// non-strbuf leaves above are emittable; total emitter bodies 88 -> 98.\n"
+    buf = buf + "// hexa_str_substr (frozen runtime.c — active #ifndef branch)\n"
+    buf = buf + "HexaVal hexa_str_substr(HexaVal s, HexaVal start_v, HexaVal len_v) {\n"
+    buf = buf + "    if (!HX_IS_STR(s)) return hexa_str(\"\");\n"
+    buf = buf + "    int64_t slen = (int64_t)HX_STRLEN(s);\n"
+    buf = buf + "    int64_t start = HX_IS_INT(start_v) ? HX_INT(start_v) : (int64_t)__hx_to_double(start_v);\n"
+    buf = buf + "    if (start < 0) start = 0;\n"
+    buf = buf + "    if (start > slen) start = slen;\n"
+    buf = buf + "    int64_t count;\n"
+    buf = buf + "    if (HX_TAG(len_v) == TAG_VOID) {\n"
+    buf = buf + "        count = slen - start;\n"
+    buf = buf + "    } else {\n"
+    buf = buf + "        count = HX_IS_INT(len_v) ? HX_INT(len_v) : (int64_t)__hx_to_double(len_v);\n"
+    buf = buf + "    }\n"
+    buf = buf + "    if (count < 0) count = 0;\n"
+    buf = buf + "    int64_t end_idx = start + count;\n"
+    buf = buf + "    if (end_idx > slen) end_idx = slen;\n"
+    buf = buf + "    return hexa_str_substring(s, hexa_int(start), hexa_int(end_idx));\n"
+    buf = buf + "}\n"
+    buf = buf + "// hexa_str_bytes (frozen runtime.c — active #ifndef branch)\n"
+    buf = buf + "HexaVal hexa_str_bytes(HexaVal s) {\n"
+    buf = buf + "    if (!HX_IS_STR(s)) return hexa_array_new();\n"
+    buf = buf + "    HexaVal out = hexa_array_new();\n"
+    buf = buf + "    for (const unsigned char* p = (const unsigned char*)HX_STR(s); *p; p++) {\n"
+    buf = buf + "        out = hexa_array_push(out, hexa_int((int64_t)*p));\n"
+    buf = buf + "    }\n"
+    buf = buf + "    return out;\n"
+    buf = buf + "}\n"
+    buf = buf + "// hexa_to_bool (frozen runtime.c — active #ifndef branch)\n"
+    buf = buf + "HexaVal hexa_to_bool(HexaVal v) { return hexa_bool(hexa_truthy(v) ? 1 : 0); }\n"
+    buf = buf + "// hexa_float_to_int (frozen runtime.c — active #ifndef branch)\n"
+    buf = buf + "int64_t hexa_float_to_int(double f) {\n"
+    buf = buf + "    if (isnan(f) || isinf(f)) return 0;\n"
+    buf = buf + "    if (f >= 9.2233720368547758e+18) return (int64_t)0x7fffffffffffffffLL;\n"
+    buf = buf + "    if (f <= -9.2233720368547758e+18) return (int64_t)0x8000000000000000LL;\n"
+    buf = buf + "    return (int64_t)f;\n"
+    buf = buf + "}\n"
+    buf = buf + "// hexa_find_poly (frozen runtime.c — active #ifndef branch)\n"
+    buf = buf + "HexaVal hexa_find_poly(HexaVal obj, HexaVal arg) {\n"
+    buf = buf + "    if (HX_IS_ARRAY(obj)) return hexa_array_find(obj, arg);\n"
+    buf = buf + "    return hexa_int(hexa_str_index_of(obj, arg));\n"
+    buf = buf + "}\n"
+    buf = buf + "// hexa_bin (frozen runtime.c — active #ifndef branch)\n"
+    buf = buf + "HexaVal hexa_bin(HexaVal n) {\n"
+    buf = buf + "    uint64_t v = HX_IS_INT(n) ? (uint64_t)HX_INT(n) : (uint64_t)HX_FLOAT(n);\n"
+    buf = buf + "    char buf[65]; int pos = 0;\n"
+    buf = buf + "    if (v == 0) { buf[pos++] = '0'; }\n"
+    buf = buf + "    while (v > 0 && pos < 64) { buf[pos++] = (char)('0' + (v & 1)); v >>= 1; }\n"
+    buf = buf + "    char* out = (char*)malloc(pos + 1);\n"
+    buf = buf + "    for (int i = 0; i < pos; i++) out[i] = buf[pos - 1 - i];\n"
+    buf = buf + "    out[pos] = 0;\n"
+    buf = buf + "    return hexa_str_own(out);\n"
+    buf = buf + "}\n"
+    buf = buf + "// hexa_hex (frozen runtime.c — active #ifndef branch)\n"
+    buf = buf + "HexaVal hexa_hex(HexaVal n) {\n"
+    buf = buf + "    uint64_t v = HX_IS_INT(n) ? (uint64_t)HX_INT(n) : (uint64_t)HX_FLOAT(n);\n"
+    buf = buf + "    char* out = (char*)malloc(20);\n"
+    buf = buf + "    snprintf(out, 20, \"%llx\", (unsigned long long)v);\n"
+    buf = buf + "    return hexa_str_own(out);\n"
+    buf = buf + "}\n"
+    buf = buf + "// hexa_one_hot (frozen runtime.c — active #ifndef branch)\n"
+    buf = buf + "HexaVal hexa_one_hot(HexaVal idxv, HexaVal nv) {\n"
+    buf = buf + "    int64_t idx = HX_IS_INT(idxv) ? HX_INT(idxv) : (int64_t)__hx_to_double(idxv);\n"
+    buf = buf + "    int64_t n = HX_IS_INT(nv) ? HX_INT(nv) : (int64_t)__hx_to_double(nv);\n"
+    buf = buf + "    HexaVal out = hexa_array_new();\n"
+    buf = buf + "    for (int64_t i = 0; i < n; i++) {\n"
+    buf = buf + "        out = hexa_array_push(out, hexa_float(i == idx ? 1.0 : 0.0));\n"
+    buf = buf + "    }\n"
+    buf = buf + "    return out;\n"
+    buf = buf + "}\n"
+    buf = buf + "// hexa_sum (frozen runtime.c — active #ifndef branch)\n"
+    buf = buf + "HexaVal hexa_sum(HexaVal a) {\n"
+    buf = buf + "    if (!HX_IS_ARRAY(a)) return hexa_int(0);\n"
+    buf = buf + "    int64_t n = (int64_t)HX_ARR_LEN(a);\n"
+    buf = buf + "    int has_float = 0;\n"
+    buf = buf + "    int64_t int_total = 0;\n"
+    buf = buf + "    double float_total = 0.0;\n"
+    buf = buf + "    for (int64_t i = 0; i < n; i++) {\n"
+    buf = buf + "        HexaVal e = hexa_array_get(a, i);\n"
+    buf = buf + "        if (HX_IS_FLOAT(e)) { has_float = 1; float_total += HX_FLOAT(e); }\n"
+    buf = buf + "        else { int_total += HX_INT(e); }\n"
+    buf = buf + "    }\n"
+    buf = buf + "    if (has_float) return hexa_float((double)int_total + float_total);\n"
+    buf = buf + "    return hexa_int(int_total);\n"
+    buf = buf + "}\n"
+    buf = buf + "// hexa_dict_keys (frozen runtime.c — active #ifndef branch)\n"
+    buf = buf + "HexaVal hexa_dict_keys(HexaVal m) { return hexa_map_keys(m); }\n"
     if buf.len() > 0 { _flush_runtime_hi(out_path, buf) }
 }
 
