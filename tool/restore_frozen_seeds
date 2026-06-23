@@ -1984,6 +1984,16 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_residual_add(HexaVal a_v, HexaV
     int64_t o = hexa_as_num(out_v), n = hexa_as_num(n_v);
     if (n <= 0 || !_OP37_FA(a, n) || !_OP37_FA(b, n) || !_OP37_FA(o, n))
         return hexa_int(-1);
+#ifdef HEXA_CUDA
+    /* ING#34 (anima train device-resident): elementwise out[i]=a[i]+b[i] on
+     * device (no FP reduction → byte-eq). Fall through to CPU oracle on rc<0. */
+    {
+        extern int _hx_cuda_farr_residual_add_gpu(int64_t, int64_t,
+                                                  int64_t, int64_t);
+        int grc = _hx_cuda_farr_residual_add_gpu(a, b, o, n);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* A = _hx_farr_table[a].buf;
     double* B = _hx_farr_table[b].buf;
     double* O = _hx_farr_table[o].buf;
@@ -2013,6 +2023,16 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_grad_sum3(HexaVal a_v, HexaVal 
     int64_t o = hexa_as_num(out_v), n = hexa_as_num(n_v);
     if (n <= 0 || !_OP37_FA(a, n) || !_OP37_FA(b, n) ||
         !_OP37_FA(c, n) || !_OP37_FA(o, n))                 return hexa_int(-1);
+#ifdef HEXA_CUDA
+    /* ING#34: device-resident out[i]=(a[i]+b[i])+c[i] (fixed left assoc, no
+     * cross-element reduction → byte-eq). Fall through to CPU oracle on rc<0. */
+    {
+        extern int _hx_cuda_farr_grad_sum3_gpu(int64_t, int64_t, int64_t,
+                                               int64_t, int64_t);
+        int grc = _hx_cuda_farr_grad_sum3_gpu(a, b, c, o, n);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* A = _hx_farr_table[a].buf;
     double* B = _hx_farr_table[b].buf;
     double* C = _hx_farr_table[c].buf;
@@ -2033,6 +2053,15 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_expert_pack2(HexaVal ex0_v, Hex
     int64_t eo = hexa_as_num(exo_v), n = hexa_as_num(n_v);
     if (n <= 0 || !_OP37_FA(e0, n) || !_OP37_FA(e1, n) || !_OP37_FA(eo, 2 * n))
         return hexa_int(-1);
+#ifdef HEXA_CUDA
+    /* ING#34: device-resident E=2 expert pack (pure scatter → byte-eq). */
+    {
+        extern int _hx_cuda_farr_expert_pack2_gpu(int64_t, int64_t,
+                                                  int64_t, int64_t);
+        int grc = _hx_cuda_farr_expert_pack2_gpu(e0, e1, eo, n);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* E0 = _hx_farr_table[e0].buf;
     double* E1 = _hx_farr_table[e1].buf;
     double* EO = _hx_farr_table[eo].buf;
@@ -2052,6 +2081,15 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_expert_unpack2(HexaVal dexo_v, 
     int64_t d1 = hexa_as_num(dex1_v), n = hexa_as_num(n_v);
     if (n <= 0 || !_OP37_FA(deo, 2 * n) || !_OP37_FA(d0, n) || !_OP37_FA(d1, n))
         return hexa_int(-1);
+#ifdef HEXA_CUDA
+    /* ING#34: device-resident E=2 expert unpack (pure gather → byte-eq). */
+    {
+        extern int _hx_cuda_farr_expert_unpack2_gpu(int64_t, int64_t,
+                                                    int64_t, int64_t);
+        int grc = _hx_cuda_farr_expert_unpack2_gpu(deo, d0, d1, n);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* DEO = _hx_farr_table[deo].buf;
     double* D0 = _hx_farr_table[d0].buf;
     double* D1 = _hx_farr_table[d1].buf;
@@ -2075,6 +2113,17 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_embedding(HexaVal ids_v, HexaVa
         return hexa_int(-1);
     if (tab < 0 || tab >= _hx_farr_count || !_hx_farr_table[tab].buf)
         return hexa_int(-1);
+#ifdef HEXA_CUDA
+    /* ING#34: device-resident embedding gather (out[i*d+c]=table[tok*d+c],
+     * tok=(int64_t)ids[i]). Pure gather → byte-eq for in-range tokens (byte
+     * vocab V=256 is always in range). Fall through to CPU oracle on rc<0. */
+    {
+        extern int _hx_cuda_farr_embedding_gpu(int64_t, int64_t,
+                                               int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_embedding_gpu(ids, tab, out, T, d);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* IDS = _hx_farr_table[ids].buf;
     double* TAB = _hx_farr_table[tab].buf;
     int64_t tablen = _hx_farr_table[tab].len;
@@ -2109,6 +2158,19 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_groupnorm(HexaVal x_v, HexaVal 
     if (!_OP37_FA(x, n) || !_OP37_FA(y, n) || !_OP37_FA(xh, n) ||
         !_OP37_FA(gm, C) || !_OP37_FA(bt, C) ||
         !_OP37_FA(mn, G) || !_OP37_FA(iv, G))               return hexa_int(-1);
+#ifdef HEXA_CUDA
+    /* ING#34: device-resident groupnorm fwd. The GPU kernel runs the per-group
+     * reduction single-thread in the EXACT host accumulation order (t-outer,
+     * c-inner) + the same 40-iter Newton-Raphson sqrt → byte-eq. Fall through
+     * to the CPU oracle on any GPU failure (rc<0). */
+    {
+        extern int _hx_cuda_farr_groupnorm_gpu(int64_t, int64_t, int64_t,
+                                               int64_t, int64_t, int64_t,
+                                               int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_groupnorm_gpu(x, gm, bt, y, mn, iv, xh, T, C, G);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* X = _hx_farr_table[x].buf;
     double* GM = _hx_farr_table[gm].buf;
     double* BT = _hx_farr_table[bt].buf;
@@ -2175,6 +2237,18 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_moe_router(HexaVal logits_v, He
     if (T <= 0 || E <= 0 || C <= 0)                         return hexa_int(-1);
     if (!_OP37_FA(lg, T * E) || !_OP37_FA(pr, T * E) ||
         !_OP37_FA(eo, E * T * C) || !_OP37_FA(y, T * C))    return hexa_int(-1);
+#ifdef HEXA_CUDA
+    /* ING#34: device-resident MoE router fwd (per-token softmax gate over E +
+     * weighted expert combine). One thread per token row in the SAME max-sub /
+     * exp / normalize / accumulate order as the host → byte-eq. Fall through to
+     * the CPU oracle on rc<0. */
+    {
+        extern int _hx_cuda_farr_moe_router_gpu(int64_t, int64_t, int64_t,
+                                                int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_moe_router_gpu(lg, eo, pr, y, T, E, C);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* LG = _hx_farr_table[lg].buf;
     double* EO = _hx_farr_table[eo].buf;
     double* PR = _hx_farr_table[pr].buf;
@@ -2321,6 +2395,15 @@ static double _op38_qabs(double x) { return x < 0.0 ? (0.0 - x) : x; }
 HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_gelu(HexaVal in_v, HexaVal out_v, HexaVal n_v) {
     int64_t in = hexa_as_num(in_v), out = hexa_as_num(out_v), n = hexa_as_num(n_v);
     if (n <= 0 || !_OP38_FA(in, n) || !_OP38_FA(out, n))    return hexa_int(-1);
+#ifdef HEXA_CUDA
+    /* ING#34: device-resident elementwise GELU (device erf = IEEE libm contract,
+     * same _op18_gelu form → byte-eq). Fall through to CPU oracle on rc<0. */
+    {
+        extern int _hx_cuda_farr_gelu_gpu(int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_gelu_gpu(in, out, n);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* IN = _hx_farr_table[in].buf;
     double* O  = _hx_farr_table[out].buf;
     for (int64_t i = 0; i < n; i++) O[i] = _op18_gelu(IN[i]);
@@ -2338,6 +2421,15 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_gelu_bwd(HexaVal g_v, HexaVal d
     int64_t dg = hexa_as_num(dg_v), n = hexa_as_num(n_v);
     if (n <= 0 || !_OP38_FA(g, n) || !_OP38_FA(da, n) || !_OP38_FA(dg, n))
         return hexa_int(-1);
+#ifdef HEXA_CUDA
+    /* ING#34: device-resident elementwise GELU backward (dg=da·GELU'(g), same
+     * cdf + x·pdf order + device erf/exp → byte-eq). Fall through on rc<0. */
+    {
+        extern int _hx_cuda_farr_gelu_bwd_gpu(int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_gelu_bwd_gpu(g, da, dg, n);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* G  = _hx_farr_table[g].buf;
     double* DA = _hx_farr_table[da].buf;
     double* DG = _hx_farr_table[dg].buf;
@@ -2359,6 +2451,18 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_ce_grad(HexaVal lg_v, HexaVal t
     if (T <= 0 || V <= 0)                                   return hexa_int(-1);
     if (!_OP38_FA(lg, T * V) || !_OP38_FA(tg, T) || !_OP38_FA(dl, T * V))
         return hexa_int(-1);
+#ifdef HEXA_CUDA
+    /* ING#34: device-resident CE gradient seed (per-row softmax + (p-1[tgt])/T).
+     * One thread per token row in the SAME max-sub/exp/normalize order + device
+     * exp → byte-eq for in-range targets (byte vocab always in range). Fall
+     * through to the CPU oracle on rc<0. */
+    {
+        extern int _hx_cuda_farr_ce_grad_gpu(int64_t, int64_t, int64_t,
+                                             int64_t, int64_t);
+        int grc = _hx_cuda_farr_ce_grad_gpu(lg, tg, dl, T, V);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* LG = _hx_farr_table[lg].buf;
     double* TG = _hx_farr_table[tg].buf;
     double* DL = _hx_farr_table[dl].buf;
@@ -2467,6 +2571,18 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_groupnorm_bwd(HexaVal xhat_v, H
     if (!_OP38_FA(xh, n) || !_OP38_FA(dy, n) || !_OP38_FA(dx, n) ||
         !_OP38_FA(gm, C) || !_OP38_FA(dgm, C) || !_OP38_FA(dbt, C) ||
         !_OP38_FA(iv, G))                                   return hexa_int(-1);
+#ifdef HEXA_CUDA
+    /* ING#34: device-resident groupnorm backward. One thread per group reduces
+     * dgamma/dbeta + the per-group dx in the EXACT host accumulation order →
+     * byte-eq. Fall through to the CPU oracle on rc<0. */
+    {
+        extern int _hx_cuda_farr_groupnorm_bwd_gpu(int64_t, int64_t, int64_t,
+                                                   int64_t, int64_t, int64_t,
+                                                   int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_groupnorm_bwd_gpu(xh, iv, gm, dy, dgm, dbt, dx, T, C, G);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* XH = _hx_farr_table[xh].buf;
     double* IV = _hx_farr_table[iv].buf;
     double* GM = _hx_farr_table[gm].buf;
@@ -2531,6 +2647,18 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_moe_router_bwd(HexaVal probs_v,
     if (!_OP38_FA(pr, T * E) || !_OP38_FA(dl, T * E) ||
         !_OP38_FA(eo, E * T * C) || !_OP38_FA(dy, T * C) ||
         !_OP38_FA(dex, E * T * C))                          return hexa_int(-1);
+#ifdef HEXA_CUDA
+    /* ING#34: device-resident MoE router backward (2-pass softmax Jacobian +
+     * dex fill). One thread per token row in the SAME order as the host →
+     * byte-eq. Fall through to the CPU oracle on rc<0. */
+    {
+        extern int _hx_cuda_farr_moe_router_bwd_gpu(int64_t, int64_t, int64_t,
+                                                    int64_t, int64_t, int64_t,
+                                                    int64_t, int64_t);
+        int grc = _hx_cuda_farr_moe_router_bwd_gpu(pr, eo, dy, dl, dex, T, E, C);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* PR = _hx_farr_table[pr].buf;
     double* EO = _hx_farr_table[eo].buf;
     double* DY = _hx_farr_table[dy].buf;
@@ -2578,6 +2706,19 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_embedding_bwd_scatter(HexaVal d
     if (!_OP38_FA(dx, T * d) || !_OP38_FA(ids, T))          return hexa_int(-1);
     if (dt < 0 || dt >= _hx_farr_count || !_hx_farr_table[dt].buf)
         return hexa_int(-1);
+#ifdef HEXA_CUDA
+    /* ING#34: device-resident embedding bwd scatter-add. The kernel uploads the
+     * caller's PRE-ZEROED dtable then accumulates over T positions with one
+     * thread group per vocab row (no atomics, deterministic) = host order →
+     * byte-eq. Requires V>0 (caller passes byte vocab 256). rc<0 → CPU oracle. */
+    if (V > 0) {
+        extern int _hx_cuda_farr_embedding_bwd_scatter_gpu(int64_t, int64_t,
+                                                           int64_t, int64_t,
+                                                           int64_t, int64_t);
+        int grc = _hx_cuda_farr_embedding_bwd_scatter_gpu(dx, ids, dt, T, d, V);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* DX = _hx_farr_table[dx].buf;
     double* IDS = _hx_farr_table[ids].buf;
     double* DT = _hx_farr_table[dt].buf;
