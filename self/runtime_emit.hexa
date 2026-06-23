@@ -3566,6 +3566,292 @@ fn emit_runtime_hi_seed_to(out_path: str) {
     buf = buf + "    return -1;\n"
     buf = buf + "#endif\n"
     buf = buf + "}\n"
+    buf = buf + "\n"
+    buf = buf + "// ── batch (ING #29 r32) — ptr load/store + IEEE bytes->f32 pure leaves ──\n"
+    buf = buf + "//  CENSUS-FIRST carrier-reachable cluster (r31 flagged ptr/tensor/safetensors).\n"
+    buf = buf + "//  7 bodies ported VERBATIM from self/native/tensor_kernels.c. ALL callees are\n"
+    buf = buf + "//  supplied OUTSIDE the residual: HX_IS_INT / HX_INT / HX_INT_U / HX_TAG /\n"
+    buf = buf + "//  HX_IS_ARRAY / HX_ARR_LEN / HX_ARR_ITEMS / HX_IS_FLOAT / HX_FLOAT /\n"
+    buf = buf + "//  TAG_VALSTRUCT (prologue macros) + __hx_to_double / hexa_void / hexa_float /\n"
+    buf = buf + "//  hexa_int / hexa_valstruct_int (supplied inline/extern) + memcpy (libc).\n"
+    buf = buf + "//  ZERO new file-static carrier needed — these are PURE leaves (stack buf[],\n"
+    buf = buf + "//  no malloc / no hexa_array_new / no syscall / no hxlcl_* static / no TAG_FN\n"
+    buf = buf + "//  dispatch). EXCLUDED from this cluster (alloc wall): hexa_f32_to_bytes_le /\n"
+    buf = buf + "//  hexa_f64_to_bytes_le / hexa_bytes_to_f64_le_v — they malloc + hexa_array_new\n"
+    buf = buf + "//  (calloc/realloc WALL-2, no malloc seed) → separate lane, NOT carrier-reachable.\n"
+    buf = buf + "// fwd proto (hexa_valstruct_int declared in runtime_core.c, NOT runtime.h => seed TU needs it)\n"
+    buf = buf + "extern HexaVal hexa_valstruct_int(HexaVal v);\n"
+    buf = buf + "HexaVal hexa_ptr_write_f32(HexaVal ptr, HexaVal offset, HexaVal val) {\n"
+    buf = buf + "    int64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;\n"
+    buf = buf + "    int64_t off = HX_IS_INT(offset) ? HX_INT_U(offset) : 0;\n"
+    buf = buf + "    if (p == 0) return hexa_void();\n"
+    buf = buf + "    float f = (float)__hx_to_double(val);\n"
+    buf = buf + "    memcpy((uint8_t*)(uintptr_t)p + off, &f, sizeof(float));\n"
+    buf = buf + "    return hexa_void();\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_ptr_write_i32(HexaVal ptr, HexaVal offset, HexaVal val) {\n"
+    buf = buf + "    int64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;\n"
+    buf = buf + "    int64_t off = HX_IS_INT(offset) ? HX_INT_U(offset) : 0;\n"
+    buf = buf + "    if (p == 0) return hexa_void();\n"
+    buf = buf + "    int32_t v = (int32_t)HX_INT(val);\n"
+    buf = buf + "    memcpy((uint8_t*)(uintptr_t)p + off, &v, sizeof(int32_t));\n"
+    buf = buf + "    return hexa_void();\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_ptr_read_f64(HexaVal ptr, HexaVal offset) {\n"
+    buf = buf + "    int64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;\n"
+    buf = buf + "    int64_t off = HX_IS_INT(offset) ? HX_INT_U(offset) : 0;\n"
+    buf = buf + "    if (p == 0) return hexa_float(0.0);\n"
+    buf = buf + "    double d;\n"
+    buf = buf + "    memcpy(&d, (uint8_t*)(uintptr_t)p + off, sizeof(double));\n"
+    buf = buf + "    return hexa_float(d);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_ptr_read_f32(HexaVal ptr, HexaVal offset) {\n"
+    buf = buf + "    int64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;\n"
+    buf = buf + "    int64_t off = HX_IS_INT(offset) ? HX_INT_U(offset) : 0;\n"
+    buf = buf + "    if (p == 0) return hexa_float(0.0);\n"
+    buf = buf + "    float f;\n"
+    buf = buf + "    memcpy(&f, (uint8_t*)(uintptr_t)p + off, sizeof(float));\n"
+    buf = buf + "    return hexa_float((double)f);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_ptr_read_i32(HexaVal ptr, HexaVal offset) {\n"
+    buf = buf + "    int64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;\n"
+    buf = buf + "    int64_t off = HX_IS_INT(offset) ? HX_INT_U(offset) : 0;\n"
+    buf = buf + "    if (p == 0) return hexa_int(0);\n"
+    buf = buf + "    int32_t v;\n"
+    buf = buf + "    memcpy(&v, (uint8_t*)(uintptr_t)p + off, sizeof(int32_t));\n"
+    buf = buf + "    return hexa_int((int64_t)v);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_bytes_to_f32_le(HexaVal arr, HexaVal offset) {\n"
+    buf = buf + "    int64_t off = HX_IS_INT(offset) ? HX_INT(offset) : 0;\n"
+    buf = buf + "    if (!HX_IS_ARRAY(arr)) return hexa_float(0.0);\n"
+    buf = buf + "    int len = HX_ARR_LEN(arr);\n"
+    buf = buf + "    if (off < 0 || off + 4 > len) return hexa_float(0.0);\n"
+    buf = buf + "    HexaVal* items = HX_ARR_ITEMS(arr);\n"
+    buf = buf + "    uint8_t buf[4];\n"
+    buf = buf + "    for (int i = 0; i < 4; i++) {\n"
+    buf = buf + "        HexaVal el = items[off + i];\n"
+    buf = buf + "        int64_t v = 0;\n"
+    buf = buf + "        if (HX_IS_INT(el)) v = HX_INT(el);\n"
+    buf = buf + "        else if (HX_IS_FLOAT(el)) v = (int64_t)HX_FLOAT(el);\n"
+    buf = buf + "        buf[i] = (uint8_t)(v & 0xFF);\n"
+    buf = buf + "    }\n"
+    buf = buf + "    float f;\n"
+    buf = buf + "    memcpy(&f, buf, 4);\n"
+    buf = buf + "    return hexa_float((double)f);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_bytes_to_f32_le_v(HexaVal arr, HexaVal offset) {\n"
+    buf = buf + "    int64_t off = HX_IS_INT(offset) ? HX_INT(offset) : 0;\n"
+    buf = buf + "    if (!HX_IS_ARRAY(arr)) return hexa_float(0.0);\n"
+    buf = buf + "    int len = HX_ARR_LEN(arr);\n"
+    buf = buf + "    if (off < 0 || off + 4 > len) return hexa_float(0.0);\n"
+    buf = buf + "    HexaVal* items = HX_ARR_ITEMS(arr);\n"
+    buf = buf + "    uint8_t buf[4];\n"
+    buf = buf + "    for (int i = 0; i < 4; i++) {\n"
+    buf = buf + "        HexaVal el = items[off + i];\n"
+    buf = buf + "        int64_t v = 0;\n"
+    buf = buf + "        if (HX_IS_INT(el)) v = HX_INT(el);\n"
+    buf = buf + "        else if (HX_IS_FLOAT(el)) v = (int64_t)HX_FLOAT(el);\n"
+    buf = buf + "        else if (HX_TAG(el) == TAG_VALSTRUCT) {\n"
+    buf = buf + "            HexaVal iv = hexa_valstruct_int(el);\n"
+    buf = buf + "            if (HX_IS_INT(iv)) v = HX_INT(iv);\n"
+    buf = buf + "            else if (HX_IS_FLOAT(iv)) v = (int64_t)HX_FLOAT(iv);\n"
+    buf = buf + "        }\n"
+    buf = buf + "        buf[i] = (uint8_t)(v & 0xFF);\n"
+    buf = buf + "    }\n"
+    buf = buf + "    float f;\n"
+    buf = buf + "    memcpy(&f, buf, 4);\n"
+    buf = buf + "    return hexa_float((double)f);\n"
+    buf = buf + "}\n"
+
+    // ── batch (ING #29 r33) — term FD/IO wrappers + thin rt_str delegates ──
+    //  CENSUS-FIRST carrier-reachable cluster. The remaining-pool census (r33)
+    //  classified the 289 residual into 3 buckets; this batch harvests the
+    //  CARRIER-REACHABLE-NOW subset whose every callee is supplied OUTSIDE the
+    //  residual. Two clean sub-clusters:
+    //   (A) term FD/IO wrappers (8) — VERBATIM from frozen runtime.c. Their only
+    //       callees are the term_* C FFI prims (term_get_winsize / term_poll_stdin
+    //       / term_write / term_fd_read / term_fd_write / term_fd_close /
+    //       term_fd_poll), which are DEFINED by native/term_ffi.c and SUPPLIED by
+    //       the term native seed (nm prov=Y, NOT in the residual), + __hx_to_double
+    //       (prologue static-inline) + hxlcl_strlen / hxlcl_memcpy (zeroc hxlcl
+    //       delegate seed, prov=Y) + HX_IS_STR / HX_STR / hexa_int / hexa_str
+    //       (prologue macros / inline). NO malloc / hexa_array_new / hxlcl_syscall
+    //       / _hx_farr_table / file-static carrier — PURE wrappers over provided
+    //       externs (stack buf[] only). The term_* externs resolve at the FINAL
+    //       link, exactly like the r32 ptr/bytes leaves resolved memcpy from libc.
+    //   (B) thin rt_str delegates (2) — under HEXA_HAS_HEXA_RT_STDLIB (the seed-TU
+    //       compile flag) hexa_str_slice / hexa_str_parse_int take their #else
+    //       branch = a 2-line HX_IS_STR guard + tail-call to rt_str_slice /
+    //       rt_str_parse_int (ctype.hexa native seed, prov=Y). The #ifndef branch
+    //       (strndup / hxlcl_strtoll path) is NOT compiled here, so no alloc wall.
+    //  fwd protos: the term_* prims have NO extern decl in runtime.c (it sees them
+    //  via the #include "native/term_ffi.c"); the seed TU does not include that
+    //  fragment, so it needs explicit extern protos here. rt_str_* likewise.
+    buf = buf + "// ── batch (ING #29 r33) — term FD/IO wrappers + thin rt_str delegates ──\n"
+    buf = buf + "//  carrier-reachable-now: every callee supplied OUTSIDE the 289 residual\n"
+    buf = buf + "//  (term_* native seed · hxlcl delegate seed · rt_str ctype seed · prologue).\n"
+    buf = buf + "// fwd protos for term_* C-FFI prims (defined in native/term_ffi.c, supplied\n"
+    buf = buf + "// by the term native seed; the seed TU does not #include that fragment) +\n"
+    buf = buf + "// rt_str_* (ctype.hexa native seed).\n"
+    buf = buf + "extern int term_get_winsize(int *rows, int *cols);\n"
+    buf = buf + "extern int term_poll_stdin(int timeout_ms);\n"
+    buf = buf + "extern int term_write(const char *buf, int n);\n"
+    buf = buf + "extern int term_fd_read(int fd, unsigned char *buf, int max_bytes);\n"
+    buf = buf + "extern int term_fd_write(int fd, const unsigned char *buf, int n);\n"
+    buf = buf + "extern int term_fd_close(int fd);\n"
+    buf = buf + "extern int term_fd_poll(int fd, int timeout_ms);\n"
+    buf = buf + "extern HexaVal rt_str_slice(HexaVal s, HexaVal start, HexaVal end);\n"
+    buf = buf + "extern HexaVal rt_str_parse_int(HexaVal s);\n"
+    buf = buf + "HexaVal hexa_term_winsize_rows(void) {\n"
+    buf = buf + "    int r = -1, c = -1;\n"
+    buf = buf + "    if (term_get_winsize(&r, &c) != 0) return hexa_int(-1);\n"
+    buf = buf + "    return hexa_int((int64_t)r);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_term_winsize_cols(void) {\n"
+    buf = buf + "    int r = -1, c = -1;\n"
+    buf = buf + "    if (term_get_winsize(&r, &c) != 0) return hexa_int(-1);\n"
+    buf = buf + "    return hexa_int((int64_t)c);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_term_poll_stdin(HexaVal ms) {\n"
+    buf = buf + "    int t = (int)__hx_to_double(ms);\n"
+    buf = buf + "    return hexa_int((int64_t)term_poll_stdin(t));\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_term_write_str(HexaVal s) {\n"
+    buf = buf + "    if (!HX_IS_STR(s) || HX_STR(s) == NULL) {\n"
+    buf = buf + "        return hexa_int(-1);\n"
+    buf = buf + "    }\n"
+    buf = buf + "    const char *buf = HX_STR(s);\n"
+    buf = buf + "    int n = (int)hxlcl_strlen(buf);\n"
+    buf = buf + "    return hexa_int((int64_t)term_write(buf, n));\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_term_fd_read(HexaVal fd, HexaVal max_bytes) {\n"
+    buf = buf + "    int f = (int)__hx_to_double(fd);\n"
+    buf = buf + "    int m = (int)__hx_to_double(max_bytes);\n"
+    buf = buf + "    if (m <= 0 || m > 65536) m = 4096;\n"
+    buf = buf + "    unsigned char buf[65536];\n"
+    buf = buf + "    if (m > 65536) m = 65536;\n"
+    buf = buf + "    int n = term_fd_read(f, buf, m);\n"
+    buf = buf + "    if (n <= 0) return hexa_str(\"\");\n"
+    buf = buf + "    char tmp[65537];\n"
+    buf = buf + "    hxlcl_memcpy(tmp, buf, (size_t)n);\n"
+    buf = buf + "    tmp[n] = '\\0';\n"
+    buf = buf + "    return hexa_str(tmp);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_term_fd_write(HexaVal fd, HexaVal data) {\n"
+    buf = buf + "    int f = (int)__hx_to_double(fd);\n"
+    buf = buf + "    if (!HX_IS_STR(data) || HX_STR(data) == NULL) return hexa_int(-1);\n"
+    buf = buf + "    const char *s = HX_STR(data);\n"
+    buf = buf + "    int n = (int)hxlcl_strlen(s);\n"
+    buf = buf + "    int w = term_fd_write(f, (const unsigned char *)s, n);\n"
+    buf = buf + "    return hexa_int((int64_t)w);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_term_fd_close(HexaVal fd) {\n"
+    buf = buf + "    int f = (int)__hx_to_double(fd);\n"
+    buf = buf + "    return hexa_int((int64_t)term_fd_close(f));\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_term_fd_poll(HexaVal fd, HexaVal timeout_ms) {\n"
+    buf = buf + "    int f = (int)__hx_to_double(fd);\n"
+    buf = buf + "    int t = (int)__hx_to_double(timeout_ms);\n"
+    buf = buf + "    return hexa_int((int64_t)term_fd_poll(f, t));\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_str_slice(HexaVal s, HexaVal start, HexaVal end) {\n"
+    buf = buf + "    if (!HX_IS_STR(s)) return hexa_str(\"\");\n"
+    buf = buf + "    return rt_str_slice(s, start, end);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_str_parse_int(HexaVal s) {\n"
+    buf = buf + "    if (!HX_IS_STR(s)) return hexa_int(0);\n"
+    buf = buf + "    return rt_str_parse_int(s);\n"
+    buf = buf + "}\n"
+
+    // batch 15 (ING #29 r34) — TABLE-CARRIER census + no-free unlock
+    //  r33 3-bucket census flagged 53 "carrier-blocked" bodies whose only blocker
+    //  is an UPSTREAM file-static table not yet seeded. r34 censused each table:
+    //  the GROWABLE DATA TABLES (_hx_farr_table 61 . _hx_mmap_table 8 . _hx_ham_
+    //  table 3 . _hx_ans_table 4 . _hexa_stream_slots 7) are shared mutable state
+    //  whose WRITER (alloc_slot / hexa_farr_zeros) realloc-grows the table + mints
+    //  the id handles. The "no-free" accessors (farr_get/set . mmap_size . ...) are
+    //  individually free-less BUT functionally USELESS without the realloc-writer,
+    //  and emitting a FRESH seed-local table carrier yields a SEPARATE EMPTY table
+    //  (split-brain . the frozen amalgam's 337 _hx_farr_table referencers bind the
+    //  frozen copy). So the r26 _hx_stats COUNTER-carrier mechanism (side-channel
+    //  telemetry — a fresh diverging copy is harmless) does NOT transfer to growable
+    //  DATA tables, those stay WALL-2/genuinely-frozen (honest, NOT force-ported).
+    //  What DOES unlock = carrier-blocked bodies backed by static-INLINE WRAPPER
+    //  STUBS (no-op delegates to rt_posix_ok, not a data table) or no carrier:
+    //   (a) hexa_setenv — file-static hxlcl_setenv stub carrier (alloc-free).
+    //   (b) hexa_utc_iso_now / hexa_utc_compact_now — reuse r25 hexa_pinned_epoch +
+    //       a fresh seed-local hxlcl_time stub carrier (static no-op delegate to
+    //       rt_posix_ok in frozen runtime.c = byte-faithful t=0; r26 carrier
+    //       precedent, no exported-symbol collision) + the ALREADY-extern'd
+    //       hxlcl_strftime (r23 hxlcl-delegate seed link-resolved) + gmtime_r (libc).
+    //   (c) rt_fs_stat / rt_fs_append_atomic / rt_fs_rotate_if_over — trivial stub
+    //       leaves (return void/-1/0, zero deps, zero carrier).
+    //  net r34: +6 bodies (2 fresh static-stub carriers + 1 carrier-reuse + 3 stub).
+    buf = buf + "#ifndef HEXA_R34_CARRIERS\n"
+    buf = buf + "#define HEXA_R34_CARRIERS 1\n"
+    buf = buf + "static int hxlcl_setenv(const char *name, const char *val, int overwrite) {\n"
+    buf = buf + "    (void)name; (void)val; (void)overwrite; return (int)HX_INT(rt_posix_ok());\n"
+    buf = buf + "}\n"
+    buf = buf + "static int hxlcl_time(int *t) {\n"
+    buf = buf + "    if (t) *t = 0; return (int)HX_INT(rt_posix_ok());\n"
+    buf = buf + "}\n"
+    buf = buf + "#endif\n"
+    buf = buf + "HexaVal hexa_setenv(HexaVal name, HexaVal value) {\n"
+    buf = buf + "    if (!HX_IS_STR(name) || !HX_STR(name) || HX_STR(name)[0] == '\\0') return hexa_str(\"\");\n"
+    buf = buf + "    const char* v = (HX_IS_STR(value) && HX_STR(value)) ? HX_STR(value) : \"\";\n"
+    buf = buf + "    if (hxlcl_setenv(HX_STR(name), v, 1) != 0) return hexa_str(\"\");\n"
+    buf = buf + "    return hexa_str(v);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_utc_iso_now(void) {\n"
+    buf = buf + "    int64_t pin = hexa_pinned_epoch();\n"
+    buf = buf + "    time_t t = (pin >= 0) ? (time_t)pin : hxlcl_time(NULL);\n"
+    buf = buf + "    struct tm g;\n"
+    buf = buf + "    gmtime_r(&t, &g);\n"
+    buf = buf + "    char buf[32];\n"
+    buf = buf + "    hxlcl_strftime(buf, sizeof(buf), \"%Y-%m-%dT%H:%M:%SZ\", &g);\n"
+    buf = buf + "    return hexa_str(buf);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_utc_compact_now(void) {\n"
+    buf = buf + "    int64_t pin = hexa_pinned_epoch();\n"
+    buf = buf + "    time_t t = (pin >= 0) ? (time_t)pin : hxlcl_time(NULL);\n"
+    buf = buf + "    struct tm g;\n"
+    buf = buf + "    gmtime_r(&t, &g);\n"
+    buf = buf + "    char buf[32];\n"
+    buf = buf + "    hxlcl_strftime(buf, sizeof(buf), \"%Y%m%d%H%M%S\", &g);\n"
+    buf = buf + "    return hexa_str(buf);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal rt_fs_stat(HexaVal path) { (void)path; return hexa_void(); }\n"
+    buf = buf + "HexaVal rt_fs_append_atomic(HexaVal path, HexaVal data) { (void)path; (void)data; return hexa_int(-1); }\n"
+    buf = buf + "HexaVal rt_fs_rotate_if_over(HexaVal path, HexaVal max_bytes, HexaVal keep) { (void)path; (void)max_bytes; (void)keep; return hexa_int(0); }\n"
+
+    // batch 16 (ING #29 r35b) — SYSCALL-STUB + ISOLATED-PURE-LEAF sweep
+    //  r35b censused the r34 91-body not-yet-emitted frontier for the
+    //  SYSCALL-STUB-LEAF + ISOLATED-PURE-LEAF subset (DISJOINT from the
+    //  array/buffer-allocating + growable-table bodies that stay WALL-2 /
+    //  belong to the sibling probe). The census reproduced r34's "near the
+    //  floor" finding: nearly the whole frontier is GROWABLE-TABLE / GPU-farr
+    //  / regex / safetensors-mmap / *_free (split-brain WALL-2) or GATED-OUT
+    //  (rt_str_trim_start/end + __hexa_range_array sit behind #ifndef
+    //  HEXA_HAS_HEXA_RT_STDLIB → the drop config SETS that macro, so runtime.c
+    //  PROPER never defines them = NOT in the residual, false positives).
+    //  What DID unlock = 2 UNGATED leaves with every callee supplied-outside:
+    //   (a) _hx_bit_or — `bit_or(x,y)` shim (parser can't take `|` as a binary
+    //       op, it delimits lambda params). PURE leaf: HX_IS_INT / HX_INT /
+    //       HX_FLOAT macros + hexa_int only, ZERO deps, ZERO alloc, ZERO carrier.
+    //   (b) __fd_write_bytes — cycle-70 fd-write that routes through the ALREADY
+    //       link-resolved hxlcl_write delegate (r25 syscall-static, extern'd at
+    //       batch 14 above) rather than a bare libc write(). Callees =
+    //       hxlcl_write (delegate) + HX_INT / HX_STR / HX_STRLEN / hexa_int.
+    //  net r35b: +2 bodies (both VERBATIM ports of the frozen ACTIVE branch).
+    buf = buf + "HexaVal _hx_bit_or(HexaVal a, HexaVal b) {\n"
+    buf = buf + "    int64_t x = HX_IS_INT(a) ? HX_INT(a) : (int64_t)HX_FLOAT(a);\n"
+    buf = buf + "    int64_t y = HX_IS_INT(b) ? HX_INT(b) : (int64_t)HX_FLOAT(b);\n"
+    buf = buf + "    return hexa_int(x | y);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal __fd_write_bytes(HexaVal fd, HexaVal s) {\n"
+    buf = buf + "    return hexa_int((int64_t)hxlcl_write((int)HX_INT(fd), HX_STR(s), (size_t)HX_STRLEN(s)));\n"
+    buf = buf + "}\n"
+
     if buf.len() > 0 { _flush_runtime_hi(out_path, buf) }
 }
 
