@@ -10,6 +10,11 @@ set -uo pipefail
 ROOT="$PWD"
 SEED="$ROOT/self/native/zeroc_hxlcl_delegate.c"
 OUT="${1:-$ROOT/build/zeroc_hxlcl_delegate.o}"
+# ZERO-C recursive (ING #29): the .c SSOT is now a GENERATED artifact —
+# regenerate it byte-deterministically from its emitter SSOT
+# (self/native/zeroc_hxlcl_delegate_emit.hexa) before compiling. NO-OP-SAFE
+# (emitter absent / already-fresh tree → in-tree .c kept, SHA-identical).
+bash "$ROOT/tool/regen_zeroc_hxlcl_delegate_c.sh" "$ROOT" >&2 || true
 [ -f "$SEED" ] || { echo "regen_zeroc_hxlcl_delegate: missing $SEED" >&2; exit 1; }
 mkdir -p "$(dirname "$OUT")"
 TU="$(mktemp /tmp/zeroc_hxlcl_tu.XXXXXX.c)"; trap 'rm -f "$TU"' EXIT

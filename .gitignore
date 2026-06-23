@@ -308,3 +308,4 @@ test/native_build/classd_behavioral_harness.c
 .harness/logs/
 .harness/handoff/
 drafts/
+self/native/zeroc_hxlcl_delegate.c
