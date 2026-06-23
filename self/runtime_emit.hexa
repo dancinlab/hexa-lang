@@ -3824,6 +3824,34 @@ fn emit_runtime_hi_seed_to(out_path: str) {
     buf = buf + "HexaVal rt_fs_append_atomic(HexaVal path, HexaVal data) { (void)path; (void)data; return hexa_int(-1); }\n"
     buf = buf + "HexaVal rt_fs_rotate_if_over(HexaVal path, HexaVal max_bytes, HexaVal keep) { (void)path; (void)max_bytes; (void)keep; return hexa_int(0); }\n"
 
+    // batch 16 (ING #29 r35b) — SYSCALL-STUB + ISOLATED-PURE-LEAF sweep
+    //  r35b censused the r34 91-body not-yet-emitted frontier for the
+    //  SYSCALL-STUB-LEAF + ISOLATED-PURE-LEAF subset (DISJOINT from the
+    //  array/buffer-allocating + growable-table bodies that stay WALL-2 /
+    //  belong to the sibling probe). The census reproduced r34's "near the
+    //  floor" finding: nearly the whole frontier is GROWABLE-TABLE / GPU-farr
+    //  / regex / safetensors-mmap / *_free (split-brain WALL-2) or GATED-OUT
+    //  (rt_str_trim_start/end + __hexa_range_array sit behind #ifndef
+    //  HEXA_HAS_HEXA_RT_STDLIB → the drop config SETS that macro, so runtime.c
+    //  PROPER never defines them = NOT in the residual, false positives).
+    //  What DID unlock = 2 UNGATED leaves with every callee supplied-outside:
+    //   (a) _hx_bit_or — `bit_or(x,y)` shim (parser can't take `|` as a binary
+    //       op, it delimits lambda params). PURE leaf: HX_IS_INT / HX_INT /
+    //       HX_FLOAT macros + hexa_int only, ZERO deps, ZERO alloc, ZERO carrier.
+    //   (b) __fd_write_bytes — cycle-70 fd-write that routes through the ALREADY
+    //       link-resolved hxlcl_write delegate (r25 syscall-static, extern'd at
+    //       batch 14 above) rather than a bare libc write(). Callees =
+    //       hxlcl_write (delegate) + HX_INT / HX_STR / HX_STRLEN / hexa_int.
+    //  net r35b: +2 bodies (both VERBATIM ports of the frozen ACTIVE branch).
+    buf = buf + "HexaVal _hx_bit_or(HexaVal a, HexaVal b) {\n"
+    buf = buf + "    int64_t x = HX_IS_INT(a) ? HX_INT(a) : (int64_t)HX_FLOAT(a);\n"
+    buf = buf + "    int64_t y = HX_IS_INT(b) ? HX_INT(b) : (int64_t)HX_FLOAT(b);\n"
+    buf = buf + "    return hexa_int(x | y);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal __fd_write_bytes(HexaVal fd, HexaVal s) {\n"
+    buf = buf + "    return hexa_int((int64_t)hxlcl_write((int)HX_INT(fd), HX_STR(s), (size_t)HX_STRLEN(s)));\n"
+    buf = buf + "}\n"
+
     if buf.len() > 0 { _flush_runtime_hi(out_path, buf) }
 }
 
