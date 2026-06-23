@@ -1558,6 +1558,13 @@ fn vast_wait_ssh_status(iid: str, max_tries: int, sleep_each_sec: int, identity:
     let mut i = 0
     let sleep_cmd = "sleep " + to_string(sleep_each_sec)
     let mut last_status = "unknown"
+    // Debounce: a just-created contract can take a few seconds to PROPAGATE
+    // into `show instances`, so a single "gone" on the very first tick is NOT
+    // authoritative (eventual consistency). Require TWO consecutive gone reads
+    // before declaring GONE — UNLESS we already saw the instance present (a
+    // present→absent transition IS authoritative and breaks immediately).
+    let mut gone_streak = 0
+    let mut ever_seen = false
     while i < max_tries {
         // (a) provider liveness cross-check FIRST — a GONE contract means the
         //     ssh endpoint can NEVER appear, so stop waiting immediately.
@@ -1566,10 +1573,24 @@ fn vast_wait_ssh_status(iid: str, max_tries: int, sleep_each_sec: int, identity:
             last_status = st
         }
         if vast_status_is_gone(st) == 1 {
-            return VastReady { ok: 0, gone: 1, host: "", port: "",
-                status: st,
-                message: "instance " + iid + " is " + st
-                    + " — the host never brought it up (created ≠ live)" }
+            gone_streak = gone_streak + 1
+            // Authoritative GONE: either we watched it leave (present→absent),
+            // or it has been absent for 2+ consecutive ticks (not just slow to
+            // propagate). A first-tick blip alone is not enough.
+            if ever_seen || gone_streak >= 2 {
+                return VastReady { ok: 0, gone: 1, host: "", port: "",
+                    status: st,
+                    message: "instance " + iid + " is " + st
+                        + " — the host never brought it up (created ≠ live)" }
+            }
+        } else {
+            gone_streak = 0
+            // A non-gone, non-"unknown" status means the contract is really in
+            // the list (running/loading/starting/created) — mark it seen so a
+            // LATER disappearance is treated as authoritative.
+            if st != "unknown" && len(st) > 0 {
+                ever_seen = true
+            }
         }
         // (b) ssh-ready probe (the success path).
         let e = vast_ssh_endpoint(iid)
