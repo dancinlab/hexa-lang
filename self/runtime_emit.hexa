@@ -3763,6 +3763,67 @@ fn emit_runtime_hi_seed_to(out_path: str) {
     buf = buf + "    return rt_str_parse_int(s);\n"
     buf = buf + "}\n"
 
+    // batch 15 (ING #29 r34) — TABLE-CARRIER census + no-free unlock
+    //  r33 3-bucket census flagged 53 "carrier-blocked" bodies whose only blocker
+    //  is an UPSTREAM file-static table not yet seeded. r34 censused each table:
+    //  the GROWABLE DATA TABLES (_hx_farr_table 61 . _hx_mmap_table 8 . _hx_ham_
+    //  table 3 . _hx_ans_table 4 . _hexa_stream_slots 7) are shared mutable state
+    //  whose WRITER (alloc_slot / hexa_farr_zeros) realloc-grows the table + mints
+    //  the id handles. The "no-free" accessors (farr_get/set . mmap_size . ...) are
+    //  individually free-less BUT functionally USELESS without the realloc-writer,
+    //  and emitting a FRESH seed-local table carrier yields a SEPARATE EMPTY table
+    //  (split-brain . the frozen amalgam's 337 _hx_farr_table referencers bind the
+    //  frozen copy). So the r26 _hx_stats COUNTER-carrier mechanism (side-channel
+    //  telemetry — a fresh diverging copy is harmless) does NOT transfer to growable
+    //  DATA tables, those stay WALL-2/genuinely-frozen (honest, NOT force-ported).
+    //  What DOES unlock = carrier-blocked bodies backed by static-INLINE WRAPPER
+    //  STUBS (no-op delegates to rt_posix_ok, not a data table) or no carrier:
+    //   (a) hexa_setenv — file-static hxlcl_setenv stub carrier (alloc-free).
+    //   (b) hexa_utc_iso_now / hexa_utc_compact_now — reuse r25 hexa_pinned_epoch +
+    //       a fresh seed-local hxlcl_time stub carrier (static no-op delegate to
+    //       rt_posix_ok in frozen runtime.c = byte-faithful t=0; r26 carrier
+    //       precedent, no exported-symbol collision) + the ALREADY-extern'd
+    //       hxlcl_strftime (r23 hxlcl-delegate seed link-resolved) + gmtime_r (libc).
+    //   (c) rt_fs_stat / rt_fs_append_atomic / rt_fs_rotate_if_over — trivial stub
+    //       leaves (return void/-1/0, zero deps, zero carrier).
+    //  net r34: +6 bodies (2 fresh static-stub carriers + 1 carrier-reuse + 3 stub).
+    buf = buf + "#ifndef HEXA_R34_CARRIERS\n"
+    buf = buf + "#define HEXA_R34_CARRIERS 1\n"
+    buf = buf + "static int hxlcl_setenv(const char *name, const char *val, int overwrite) {\n"
+    buf = buf + "    (void)name; (void)val; (void)overwrite; return (int)HX_INT(rt_posix_ok());\n"
+    buf = buf + "}\n"
+    buf = buf + "static int hxlcl_time(int *t) {\n"
+    buf = buf + "    if (t) *t = 0; return (int)HX_INT(rt_posix_ok());\n"
+    buf = buf + "}\n"
+    buf = buf + "#endif\n"
+    buf = buf + "HexaVal hexa_setenv(HexaVal name, HexaVal value) {\n"
+    buf = buf + "    if (!HX_IS_STR(name) || !HX_STR(name) || HX_STR(name)[0] == '\\0') return hexa_str(\"\");\n"
+    buf = buf + "    const char* v = (HX_IS_STR(value) && HX_STR(value)) ? HX_STR(value) : \"\";\n"
+    buf = buf + "    if (hxlcl_setenv(HX_STR(name), v, 1) != 0) return hexa_str(\"\");\n"
+    buf = buf + "    return hexa_str(v);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_utc_iso_now(void) {\n"
+    buf = buf + "    int64_t pin = hexa_pinned_epoch();\n"
+    buf = buf + "    time_t t = (pin >= 0) ? (time_t)pin : hxlcl_time(NULL);\n"
+    buf = buf + "    struct tm g;\n"
+    buf = buf + "    gmtime_r(&t, &g);\n"
+    buf = buf + "    char buf[32];\n"
+    buf = buf + "    hxlcl_strftime(buf, sizeof(buf), \"%Y-%m-%dT%H:%M:%SZ\", &g);\n"
+    buf = buf + "    return hexa_str(buf);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_utc_compact_now(void) {\n"
+    buf = buf + "    int64_t pin = hexa_pinned_epoch();\n"
+    buf = buf + "    time_t t = (pin >= 0) ? (time_t)pin : hxlcl_time(NULL);\n"
+    buf = buf + "    struct tm g;\n"
+    buf = buf + "    gmtime_r(&t, &g);\n"
+    buf = buf + "    char buf[32];\n"
+    buf = buf + "    hxlcl_strftime(buf, sizeof(buf), \"%Y%m%d%H%M%S\", &g);\n"
+    buf = buf + "    return hexa_str(buf);\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal rt_fs_stat(HexaVal path) { (void)path; return hexa_void(); }\n"
+    buf = buf + "HexaVal rt_fs_append_atomic(HexaVal path, HexaVal data) { (void)path; (void)data; return hexa_int(-1); }\n"
+    buf = buf + "HexaVal rt_fs_rotate_if_over(HexaVal path, HexaVal max_bytes, HexaVal keep) { (void)path; (void)max_bytes; (void)keep; return hexa_int(0); }\n"
+
     if buf.len() > 0 { _flush_runtime_hi(out_path, buf) }
 }
 
