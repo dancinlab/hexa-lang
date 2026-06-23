@@ -1476,7 +1476,7 @@ pub fn _builtin_runtime_sym(name: string) -> string {
     //     entries are inert on arm64 (zero behaviour change) and only activate
     //     on the x86_64 path (which has no special branch).
     if name == "exec_with_status"  { return "hexa_exec_with_status" }
-    if name == "exec_stream"       { return "hexa_exec_stream" }
+    if name == "exec_stream"       { return "hexa_exec_stream_v" }  // hexa_exec_stream is a C _Generic MACRO; _v leaf delegates to hexa_exec_stream_impl
     if name == "exec_replace"      { return "hexa_exec_replace" }
     if name == "eprint"            { return "hexa_eprint_val" }
     if name == "has_key"           { return "hexa_has_key_v" }
