@@ -27,6 +27,13 @@ set -uo pipefail
 ROOT="$PWD"
 SEED="$ROOT/self/native/rtcore_math.c"
 OUT="${1:-$ROOT/build/rtcore_math_native.o}"
+# The C seed is now a GENERATED artifact (.gitignore'd): regenerate it from its
+# emitter SSOT self/native/rtcore_math_emit.hexa BEFORE compiling, exactly like
+# the runtime trio (runtime_core.c ← runtime_core_emit.hexa). The regen is
+# byte-DETERMINISTIC (awk un-escape reproduces the .c verbatim, no hexat), so a
+# fresh tree is a no-op and the build stays byte-neutral. NO-OP-SAFE if the
+# emitter is absent (the regen keeps any in-tree .c).
+bash "$ROOT/tool/regen_rtcore_math_c.sh" "$ROOT" || true
 [ -f "$SEED" ] || { echo "regen_rtcore_math: missing $SEED" >&2; exit 1; }
 mkdir -p "$(dirname "$OUT")"
 TU="$(mktemp /tmp/rtcore_math_tu.XXXXXX.c)"; trap 'rm -f "$TU"' EXIT

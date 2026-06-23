@@ -28,6 +28,14 @@
 set -uo pipefail
 ROOT="$PWD"
 SEED="$ROOT/self/native/rtcore_array-typed-leaf.c"
+# zero-c leg-B (ING #29): the .c is a GENERATED artifact of the .hexa text-emitter
+# SSOT self/native/rtcore_array-typed-leaf_emit.hexa. Regenerate it from the
+# emitter (byte-deterministic awk un-escape) BEFORE compiling, so the tracked
+# surface is the emitter and the .c may be .gitignore'd. No-op-safe: if the
+# emitter is absent (older tree) the in-tree .c is kept untouched.
+if [ -f "$ROOT/self/native/rtcore_array-typed-leaf_emit.hexa" ]; then
+    bash "$ROOT/tool/regen_rtcore_array-typed-leaf_c.sh" "$ROOT" || true
+fi
 OUT="${1:-$ROOT/build/rtcore_array_typed_leaf_native.o}"
 [ -f "$SEED" ] || { echo "regen_rtcore_array_typed_leaf: missing $SEED" >&2; exit 1; }
 mkdir -p "$(dirname "$OUT")"
