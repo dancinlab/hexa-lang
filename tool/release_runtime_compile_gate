@@ -97,6 +97,77 @@ if [ "$rc" != 0 ]; then
 fi
 
 [ -s "$OBJ" ] || { rm -f "$OBJ" "$CLOG"; fail "compile reported success but produced no object"; }
-echo "[release_runtime_compile_gate] PASS — self/runtime.c compiled clean on $CC_BIN ($(wc -c < "$OBJ") bytes, no redefinition)"
-rm -f "$OBJ" "$CLOG"
+echo "[release_runtime_compile_gate] OK — self/runtime.c compiled clean on $CC_BIN ($(wc -c < "$OBJ") bytes, no redefinition)"
+
+# ── 3) CUDA-variant host forge-symbol presence (anima ING #33 recurrence) ────
+#    The CUDA build compiles the SAME self/runtime.c with -DHEXA_CUDA into the
+#    host object (runtime_cuda_host.o; nvcc/GPU NOT needed — the host TU only
+#    flips the `#ifdef HEXA_CUDA` dispatch guards, it includes no <cuda_*.h>).
+#    Before #3806 the forge_dispatch_* host fallbacks were `#ifndef HEXA_CUDA`-
+#    guarded, so they vanished from the -DHEXA_CUDA object → a -DHEXA_CUDA link
+#    of any caller (anima nn_gn_gelu_fused_off → forge_dispatch_groupnorm_gelu)
+#    failed with "undefined reference". Release/byteeq CI never caught it because
+#    the GPU smoke (tool/build_no_cublas_smoke) needs nvcc and runs nowhere in
+#    the 0-GPU pipeline. This pass closes that blind spot GPU-free: it asserts
+#    every forge_dispatch_* host body DEFINED in the CPU object is ALSO DEFINED
+#    in the -DHEXA_CUDA object (exactly "symbol in CPU obj but missing in CUDA
+#    obj" — the reported failure shape). Strong OR weak counts as present; only
+#    undefined-only / absent is the regression.
+nm_defined_forge() {
+  # $1 = object file → list of forge_dispatch_* symbols DEFINED in it (one/line,
+  # leading-underscore stripped so darwin Mach-O `_sym` == ELF `sym`).
+  nm -g "$1" 2>/dev/null \
+    | awk '$2 != "U" && $2 != "u" && NF >= 3 { print $3 }' \
+    | sed 's/^_//' \
+    | grep -E '^(forge_dispatch_|hexa_forge_dispatch_)' \
+    | sort -u
+}
+if ! command -v nm >/dev/null 2>&1; then
+  rm -f "$OBJ" "$CLOG"
+  infra "nm not on PATH — cannot run the CUDA-variant forge-symbol presence check"
+fi
+COBJ="$(mktemp -t hexa_rt_cuda_gate.XXXXXX).o"
+CCLOG="$(mktemp -t hexa_rt_cuda_gate_log.XXXXXX)"
+echo "[release_runtime_compile_gate] compiling self/runtime.c WITH -DHEXA_CUDA (host object, no nvcc)…"
+"$CC_BIN" -O2 -D_GNU_SOURCE -DHEXA_CUDA -Wno-trigraphs -fbracket-depth=4096 \
+  -I self -c self/runtime.c -o "$COBJ" >"$CCLOG" 2>&1
+crc=$?
+if [ "$crc" != 0 ]; then
+  if grep -qiE "fatal error: .*\.h.* file not found|No such file or directory" "$CCLOG"; then
+    echo "── -DHEXA_CUDA diagnostics (header/infra) ───────────────────" >&2
+    grep -iE "file not found|No such file" "$CCLOG" | head -10 >&2
+    rm -f "$OBJ" "$CLOG" "$COBJ" "$CCLOG"
+    infra "self/runtime.c -DHEXA_CUDA needs a header absent on this runner"
+  fi
+  echo "── -DHEXA_CUDA diagnostics ──────────────────────────────────" >&2
+  grep -iE "error:" "$CCLOG" | head -30 >&2
+  rm -f "$OBJ" "$CLOG" "$COBJ" "$CCLOG"
+  fail "self/runtime.c failed to compile under -DHEXA_CUDA (RC=$crc) on $CC_BIN"
+fi
+
+CPU_FORGE="$(nm_defined_forge "$OBJ")"
+CUDA_FORGE="$(nm_defined_forge "$COBJ")"
+if [ -z "$CPU_FORGE" ]; then
+  rm -f "$OBJ" "$CLOG" "$COBJ" "$CCLOG"
+  infra "no forge_dispatch_* symbols found in the CPU object (nm format unexpected?) — cannot compare"
+fi
+# Symbols DEFINED in the CPU object but NOT defined in the -DHEXA_CUDA object.
+# Use temp files (not bash process-substitution) so the comparison is correct
+# under POSIX sh too — `comm <(...) <(...)` syntax-errors under sh, which would
+# leave MISSING empty and silently FALSE-PASS the regression check.
+CPUF="$(mktemp -t hexa_rt_gate_cpuforge.XXXXXX)"
+CUDAF="$(mktemp -t hexa_rt_gate_cudaforge.XXXXXX)"
+printf '%s\n' "$CPU_FORGE"  > "$CPUF"
+printf '%s\n' "$CUDA_FORGE" > "$CUDAF"
+MISSING="$(comm -23 "$CPUF" "$CUDAF")"
+rm -f "$CPUF" "$CUDAF"
+if [ -n "$MISSING" ]; then
+  echo "── forge_dispatch_* defined for CPU but MISSING under -DHEXA_CUDA ─" >&2
+  printf '  %s\n' $MISSING >&2
+  rm -f "$OBJ" "$CLOG" "$COBJ" "$CCLOG"
+  fail "forge_dispatch host bodies vanish under -DHEXA_CUDA (the anima ING #33 link-fail class — guard them with #if 1, not #ifndef HEXA_CUDA)"
+fi
+NCPU="$(printf '%s\n' "$CPU_FORGE" | grep -c .)"
+echo "[release_runtime_compile_gate] PASS — runtime.c clean (CPU) + all $NCPU forge_dispatch_* host bodies present under -DHEXA_CUDA"
+rm -f "$OBJ" "$CLOG" "$COBJ" "$CCLOG"
 exit 0
