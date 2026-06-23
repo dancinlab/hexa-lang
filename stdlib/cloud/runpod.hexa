@@ -40,6 +40,86 @@ fn _runpod_fail_pod(msg: str) -> RunPodPod {
     return RunPodPod { ok: 0, pod_id: "", cost_per_hr: "", message: msg }
 }
 
+// ── create-path watchdog + cloud-type (silent-fail / SECURE-pin fix) ───
+// Mirrors the vast.hexa rent watchdog. The runpodctl `pod create` shellout
+// runs via a bare exec() with no walltime bound; a stalled RunPod API would
+// hang the whole rent. _runpod_timeout_prefix gives it a `timeout <sec>`
+// bound (default 120s via HEXA_RUNPOD_EXEC_TIMEOUT; 0/absent = unbounded;
+// "" when timeout(1) is absent so a working host is never broken).
+fn _runpod_exec_timeout_sec() -> int {
+    let env_t = env_var("HEXA_RUNPOD_EXEC_TIMEOUT")
+    if len(env_t) == 0 {
+        return 120
+    }
+    let t = to_int(env_t.trim())
+    if t < 0 {
+        return 0
+    }
+    return t
+}
+
+fn _runpod_timeout_prefix() -> str {
+    let sec = _runpod_exec_timeout_sec()
+    if sec <= 0 {
+        return ""
+    }
+    if len(exec("command -v timeout 2>/dev/null").trim()) > 0 {
+        return "timeout " + to_string(sec) + " "
+    }
+    if len(exec("command -v gtimeout 2>/dev/null").trim()) > 0 {
+        return "gtimeout " + to_string(sec) + " "
+    }
+    return ""
+}
+
+// _runpod_exec_diag — render a runpodctl shellout's output for a fail-loud
+// message: surface the reply VERBATIM (full, not 200-char truncated) so a
+// "no longer any instances" / bad-flag / non-2xx reason is visible; empty
+// output names the watchdog (former silent hang → explicit timeout line).
+fn _runpod_exec_diag(out: str) -> str {
+    let trimmed = out.trim()
+    if len(trimmed) == 0 {
+        let sec = _runpod_exec_timeout_sec()
+        if sec > 0 {
+            return "(no output — the " + to_string(sec) + "s watchdog likely fired: the runpodctl call stalled/timed out. Raise HEXA_RUNPOD_EXEC_TIMEOUT or retry.)"
+        }
+        return "(no output from runpodctl)"
+    }
+    return trimmed
+}
+
+// runpod_norm_cloud_type — normalize a `--cloud-type` value to a runpodctl
+// cloud-type token. RunPod accepts SECURE | COMMUNITY | ALL. ALL is the
+// DEFAULT (was hardcoded SECURE — which silently excluded the COMMUNITY
+// datacenters that hold most RTX4090 / A40 stock, so a create returned
+// "no longer any instances available" even when capacity was plentiful).
+// ALL lets RunPod search both clouds and pick whatever is available.
+// An unrecognized value falls back to ALL (never a hard fail — availability
+// first), with the caller free to warn.
+fn runpod_norm_cloud_type(raw: str) -> str {
+    let c = raw.trim().to_upper()
+    if c == "SECURE" {
+        return "SECURE"
+    }
+    if c == "COMMUNITY" {
+        return "COMMUNITY"
+    }
+    if c == "ALL" {
+        return "ALL"
+    }
+    return "ALL"
+}
+
+// runpod_cloud_type_valid — 1 iff raw names a recognized cloud-type (after
+// trim/upper), so the CLI can warn-and-default on a typo rather than silently.
+fn runpod_cloud_type_valid(raw: str) -> int {
+    let c = raw.trim().to_upper()
+    if c == "SECURE" || c == "COMMUNITY" || c == "ALL" {
+        return 1
+    }
+    return 0
+}
+
 // _runpod_cost_str — coerce a parsed JSON value to a plain $/hr string.
 // RunPod reports `costPerHr` as a float (e.g. 1.89); accept int too. Any
 // other shape (null / missing / string-typed) returns "" (cost-cap inert).
@@ -245,7 +325,7 @@ fn _runpod_digit(c: str) -> int {
     return 0
 }
 
-fn _runpod_create_cli(rpc: str, gpu_type: str, image: str, pubkey: str, name: str, volume_gb: int, disk_gb: int) -> RunPodPod {
+fn _runpod_create_cli(rpc: str, gpu_type: str, image: str, pubkey: str, name: str, volume_gb: int, disk_gb: int, cloud_type: str) -> RunPodPod {
     // runpodctl 2.x: `pod create` (new form). Deprecated `create pod` emits
     // a warning line that breaks json_parse. Flags renamed: --gpu-id /
     // --image / --container-disk-in-gb / --cloud-type. --env now takes a
@@ -264,7 +344,15 @@ fn _runpod_create_cli(rpc: str, gpu_type: str, image: str, pubkey: str, name: st
     }
     let mut cdisk = disk_gb
     if cdisk <= 0 { cdisk = 80 }
-    let cmd = _shq_local(rpc) + " pod create"
+    // cloud-type: ALL by default (was hardcoded SECURE). SECURE-only excludes
+    // the COMMUNITY datacenters that hold most RTX4090/A40 stock, so a create
+    // returned "no longer any instances available" even at high capacity. ALL
+    // lets RunPod search both clouds; an explicit --cloud-type still pins one.
+    let ct = runpod_norm_cloud_type(cloud_type)
+    // Watchdog prefix: a stalled `runpodctl pod create` (RunPod API hang) must
+    // NOT block forever — `timeout` SIGTERMs at the bound and we fall through
+    // to the fail-loud path below (silent-hang fix, mirrors vast.hexa).
+    let cmd = _runpod_timeout_prefix() + _shq_local(rpc) + " pod create"
         + " --gpu-id " + _shq_local(gpu_type)
         + " --image " + _shq_local(image)
         + " --name " + _shq_local(name)
@@ -273,7 +361,7 @@ fn _runpod_create_cli(rpc: str, gpu_type: str, image: str, pubkey: str, name: st
         + " --container-disk-in-gb " + str(cdisk)
         + vol_flag
         + " --volume-mount-path /workspace"
-        + " --cloud-type SECURE"
+        + " --cloud-type " + _shq_local(ct)
         + " -o json 2>&1"
     let out = exec(cmd)
     let parsed = json_parse(out)
@@ -284,11 +372,19 @@ fn _runpod_create_cli(rpc: str, gpu_type: str, image: str, pubkey: str, name: st
             // `costPerHr` (float $/hr) when runpodctl surfaces it; "" otherwise
             // (M3 cost-cap rate source — inert when absent, TTL unaffected).
             let cph = _runpod_cost_str(json_object_get(parsed, "costPerHr"))
-            return RunPodPod { ok: 1, pod_id: pid, cost_per_hr: cph, message: "created (cli) on " + gpu_type }
+            return RunPodPod { ok: 1, pod_id: pid, cost_per_hr: cph, message: "created (cli) on " + gpu_type + " (cloud-type " + ct + ")" }
         }
     }
-    let snippet = out.substring(0, 200)
-    return _runpod_fail_pod("create (cli) failed: " + snippet + cloud_runpod_401_hint(snippet))
+    // No id → create did NOT succeed. Surface runpodctl's reply VERBATIM (not a
+    // 200-char truncation) so the real reason ("no longer any instances",
+    // bad flag, non-2xx, timeout) is visible immediately. On a "no instances"
+    // reply with a pinned cloud-type, hint at widening to ALL.
+    let diag = _runpod_exec_diag(out)
+    let mut hint = ""
+    if ct != "ALL" && diag.index_of("no longer any instances") >= 0 {
+        hint = " — note: cloud-type is pinned to " + ct + "; retry without --cloud-type (defaults to ALL) to also search the other cloud (most RTX4090/A40 stock is COMMUNITY)."
+    }
+    return _runpod_fail_pod("create (cli) FAILED on " + gpu_type + " (cloud-type " + ct + "): " + diag + hint + cloud_runpod_401_hint(diag))
 }
 
 // _runpod_gpu_gql_body — PURE GraphQL podFindAndDeployOnDemand request body
@@ -459,6 +555,13 @@ fn _runpod_create_cpu_rest(api_key: str, image: str, pubkey: str, name: str, vol
 // (`--disk GiB`, ING #30; <= 0 → 80). When gpu_type names the CPU path
 // (cpu/none/empty) the REST v1 CPU API is used; otherwise CLI then GraphQL.
 fn runpod_create_vol(api_key: str, gpu_type: str, image: str, pubkey: str, name: str, volume_gb: int, disk_gb: int) -> RunPodPod {
+    return runpod_create_vol_ct(api_key, gpu_type, image, pubkey, name, volume_gb, disk_gb, "ALL")
+}
+
+// runpod_create_vol_ct — runpod_create_vol with an explicit cloud-type
+// (SECURE | COMMUNITY | ALL). ALL is the availability-first default; a pin
+// only narrows the search. Backward-compatible: runpod_create_vol passes ALL.
+fn runpod_create_vol_ct(api_key: str, gpu_type: str, image: str, pubkey: str, name: str, volume_gb: int, disk_gb: int, cloud_type: str) -> RunPodPod {
     // CPU-pod path (ING #30) — REST v1 is the only working CPU deploy route;
     // runpodctl `pod create` requires --gpu-id and cannot launch a CPU pod.
     if runpod_is_cpu_selector(gpu_type) == 1 {
@@ -474,7 +577,7 @@ fn runpod_create_vol(api_key: str, gpu_type: str, image: str, pubkey: str, name:
         // "no id (no capacity / bad input)". When runpodctl is present it is
         // authoritative: surface ITS result — success OR the actual error — so
         // the caller can react (switch GPU / cloud-type) instead of guessing.
-        return _runpod_create_cli(rpc, gpu_type, image, pubkey, name, volume_gb, disk_gb)
+        return _runpod_create_cli(rpc, gpu_type, image, pubkey, name, volume_gb, disk_gb, cloud_type)
     }
     // No runpodctl on this host — last-resort legacy GraphQL (likely dead;
     // returns a clear failure that points at installing runpodctl).
@@ -1243,4 +1346,20 @@ fn cloud_validate_env_passthrough(
         "env-var passthrough audit FAIL — " + to_string(len(missing_pt)) + " missing passthrough, " + to_string(len(missing_co)) + " missing consumption"
     }
     return EnvPassthroughResult { ok: ok_flag, missing_passthrough: missing_pt, missing_consumption: missing_co, message: msg }
+}
+
+// ── test aliases (cloud-type / silent-fail fix) ──────────────────────
+// Public wrappers over the file-local create-path helpers so the
+// fail-loud-surface + cloud-type-default fix is unit-testable without a
+// live runpodctl. Suffix _TEST keeps them out of the normal API.
+
+// runpod_exec_diag_TEST — alias for the fail-loud create diagnostic
+// (empty output ⇒ name the watchdog; non-empty ⇒ surface the reply verbatim).
+fn runpod_exec_diag_TEST(out: str) -> str {
+    return _runpod_exec_diag(out)
+}
+
+// runpod_timeout_prefix_TEST — alias for the create-path watchdog prefix.
+fn runpod_timeout_prefix_TEST() -> str {
+    return _runpod_timeout_prefix()
 }

@@ -1815,7 +1815,17 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
         println("[cloud] rent runpod: CPU pod (computeType=CPU, " + str(vcpu) + " vCPU, /workspace volume " + str(cpu_vol) + " GiB, container disk ≤20, cloudType=COMMUNITY) via REST v1 API")
         pod = runpod_create_cpu(api_key, cpu_image, pubkey, prov_label, cpu_vol, disk_gb, vcpu, flavors)
     } else {
-        pod = runpod_create_vol(api_key, gpu, image, pubkey, prov_label, volume_gb, disk_gb)
+        // --cloud-type SECURE|COMMUNITY|ALL — defaults to ALL (was an implicit
+        // hardcoded SECURE that silently excluded the COMMUNITY datacenters
+        // holding most RTX4090/A40 stock → "no longer any instances available"
+        // even at high capacity). A typo warns and falls back to ALL.
+        let ct_raw = _flag_val(av, start, "--cloud-type", "ALL")
+        if runpod_cloud_type_valid(ct_raw) == 0 {
+            println("[cloud] rent runpod: ⚠ --cloud-type '" + ct_raw + "' not recognized (expected SECURE|COMMUNITY|ALL) — defaulting to ALL")
+        }
+        let cloud_type = runpod_norm_cloud_type(ct_raw)
+        println("[cloud] rent runpod: cloud-type " + cloud_type + " (SECURE+COMMUNITY search when ALL; --cloud-type to pin)")
+        pod = runpod_create_vol_ct(api_key, gpu, image, pubkey, prov_label, volume_gb, disk_gb, cloud_type)
     }
     if pod.ok == 0 {
         println("[cloud] rent runpod: " + pod.message)
@@ -2894,7 +2904,8 @@ fn main() {
         // RENTED a real pod because -h/--help was just an unparsed trailing
         // token. Print usage and exit 0 — creating NOTHING.
         if _has_flag(av, si + 1, "--help") == 1 || _has_flag(av, si + 1, "-h") == 1 {
-            println("usage: cloud rent <vast|runpod> [--gpu FAMILY|N|cpu] [--image IMG] [--disk GiB] [--vcpu N] [--cpu-flavor IDS] [--owner TAG] [--query Q] [--offer ID] [--max-dph USD] [--max-wait-sec N] [--no-register] [--force-new]")
+            println("usage: cloud rent <vast|runpod> [--gpu FAMILY|N|cpu] [--image IMG] [--disk GiB] [--vcpu N] [--cpu-flavor IDS] [--cloud-type SECURE|COMMUNITY|ALL] [--owner TAG] [--query Q] [--offer ID] [--max-dph USD] [--max-wait-sec N] [--no-register] [--force-new]")
+            println("  --cloud-type (runpod) SECURE|COMMUNITY|ALL — default ALL (searches BOTH clouds; was an implicit SECURE-only that excluded the COMMUNITY datacenters holding most RTX4090/A40 stock → 'no longer any instances available' even at high capacity). Pin SECURE/COMMUNITY only when required.")
             println("  --gpu cpu    launch a CPU-only pod. runpod: REST v1 computeType=CPU (runpodctl can't) — --vcpu N (default 4) + --cpu-flavor cpu5c,cpu5g. vast: searches the CPU pool (num_gpus=0; vast's search returns GPU boxes by default — `--gpu cpu` used to find 0). --disk GiB now sizes the runpod container disk too (vast already wired it).")
             println("  --offer ID   (vast) PIN a specific offer id — skips the query search and binds THAT box, confirming it is still listed + capturing its dph before create (offers rotate; --query can silently bind a different box). --max-dph USD refuses any offer over USD/hr BEFORE billing.")
             println("  CPU pods default to a sshd-bearing image (a bare ubuntu:22.04 has NO sshd → ssh-ready would loop until the gate destroys the pod). Override with --image or HEXA_CLOUD_CPU_IMAGE; --docker-args is IGNORED on CPU pods (warns).")
