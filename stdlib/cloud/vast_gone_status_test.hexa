@@ -38,6 +38,9 @@
 // Run:   hexa run stdlib/cloud/vast_gone_status_test.hexa
 // PASS:  exits 0, prints "vast_gone_status_test PASS".
 
+// json_object_get / json_object_get_str (json_parse is a runtime builtin).
+use "stdlib/alloc/json_object"
+
 // ── mirrors of vast.hexa (KEEP IN SYNC) ───────────────────────────────
 
 struct VastSsh {
