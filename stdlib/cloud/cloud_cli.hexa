@@ -1959,9 +1959,13 @@ fn _provider_for_id(id: str) -> str {
 // pods behave as before. NO env-var opt-out (sidecar s11). Returns 1 = refuse
 // (caller exits non-zero), 0 = allow.
 fn _down_guard_refuses(id: str, force: int) -> int {
-    if force == 1 {
-        return 0
-    }
+    // @convergence state=in_flight id=CLOUD-CROSSPROJECT-FORCE value="--force is a CONFIRM-skip, NOT a cross-project license: a rent-session trap auto-passing --force (with a mis-parsed id) destroyed another project's pod (an anima session killed a runpod pod tagged to a different project)" threshold="cross-project REAL-mismatch refuses even under --force; teardown requires re-running from the owner repo (same-project/orphan/untracked unaffected)"
+    // --force NO LONGER bypasses the cross-project guard. It skips the [y/N]
+    // confirm, but a REAL cross-project mismatch is refused REGARDLESS, so an
+    // automated `--force` teardown (e.g. a rent-session trap that mis-parsed
+    // the pod id) can never reach another project's pods. Same-project, orphan,
+    // and unattributed pods are unaffected (fall through to return 0).
+    let _ = force
     let records = pod_registry_load()
     let idx = _m5_find(records, id)
     if idx < 0 {
@@ -1977,7 +1981,7 @@ fn _down_guard_refuses(id: str, force: int) -> int {
         return 0
     }
     println("[cloud] REFUSE: pod " + id + " belongs to project '" + owner
-        + "' (cwd='" + cur + "'). Re-run from that repo or pass --force.")
+        + "' (cwd='" + cur + "'). --force does NOT override a cross-project teardown — re-run from that repo.")
     return 1
 }
 
@@ -2190,6 +2194,16 @@ fn _cloud_rm(id: str, provider_in: str, force: int) -> int {
         println("[cloud] rm: " + id + " — provider unknown, pass --provider <vast|runpod>")
         return 2
     }
+    // (2.5) cross-project kill-guard + attribution surface — rm is the M4
+    // CANONICAL teardown ("unifies down/destroy/forget") yet historically
+    // skipped the _down_guard_refuses + _down_attribution_surface that `down`
+    // runs, leaving an UNGUARDED back-door: an auto-trap `rm --force` (with a
+    // mis-parsed id) destroyed another project's pod. Mirror down's pre-
+    // teardown safety here so rm is no longer the unguarded path.
+    if _down_guard_refuses(id, force) == 1 {
+        return 2
+    }
+    let _ = _down_attribution_surface(id)
     // (3) confirm gate (skipped on --force)
     if force == 0 {
         println("[cloud] rm " + id + " (provider=" + provider + "): destroy this pod? [y/N]")
@@ -2935,7 +2949,8 @@ fn main() {
             provider = _provider_for_id(id)
         }
         // Cross-project kill-guard — refuse a teardown of a pod owned by a
-        // different project unless --force. (The anima RTSC near-miss fix.)
+        // different project (--force does NOT override a cross-project kill;
+        // re-run from the owner repo). (The anima RTSC near-miss fix.)
         let mut force = _has_flag(av, si + 2, "--force")
         if _has_flag(av, si + 2, "--yes") == 1 {
             force = 1
