@@ -1179,6 +1179,21 @@ HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_groupnorm_gelu(HexaVal x_v, HexaVal 
         _hx_farr_table[gm].len < C || _hx_farr_table[bt].len < C ||
         _hx_farr_table[mn].len < G || _hx_farr_table[iv].len < G)
         return hexa_int(-1);
+#ifdef HEXA_CUDA
+    /* ING#34: device-resident fused groupnorm+gelu (LEVER-a). The GPU kernel
+     * runs the per-group reduction single-thread in the EXACT host accumulation
+     * order + the same Newton-Raphson sqrt + dt_erf GELU → byte-eq. Fall
+     * through to the CPU oracle on any GPU failure (rc<0). */
+    {
+        extern int _hx_cuda_farr_groupnorm_gelu_gpu(int64_t, int64_t, int64_t,
+                                                    int64_t, int64_t, int64_t,
+                                                    int64_t, int64_t,
+                                                    int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_groupnorm_gelu_gpu(x, gm, bt, y, a, mn, iv, xh,
+                                                   T, C, G);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* X  = _hx_farr_table[x].buf;
     double* GM = _hx_farr_table[gm].buf;
     double* BT = _hx_farr_table[bt].buf;
@@ -1835,6 +1850,17 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_im2col(HexaVal x_v, HexaVal xco
     if (T <= 0 || Cin <= 0 || K <= 0 || dil <= 0)            return hexa_int(-1);
     int64_t Kdim = Cin * K;
     if (!_OP37_FA(x, T * Cin) || !_OP37_FA(xc, T * Kdim))    return hexa_int(-1);
+#ifdef HEXA_CUDA
+    /* ING#34: device-resident im2col (LEVER-a). The GPU kernel writes XC in
+     * EXACTLY the host gather order (pure scatter, no FP reduction) → byte-eq.
+     * Fall through to the CPU oracle on any GPU failure (rc<0). */
+    {
+        extern int _hx_cuda_farr_im2col_gpu(int64_t, int64_t,
+                                            int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_im2col_gpu(x, xc, T, Cin, K, dil);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* X = _hx_farr_table[x].buf;
     double* XC = _hx_farr_table[xc].buf;
     for (int64_t i = 0; i < T * Kdim; i++) XC[i] = 0.0;
@@ -1862,6 +1888,15 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_im2col_t(HexaVal x_v, HexaVal x
     if (T <= 0 || Cin <= 0 || K <= 0 || dil <= 0)            return hexa_int(-1);
     int64_t Kdim = Cin * K;
     if (!_OP37_FA(x, T * Cin) || !_OP37_FA(xct, Kdim * T))   return hexa_int(-1);
+#ifdef HEXA_CUDA
+    /* ING#34: device-resident transpose-im2col (LEVER-a). byte-eq gather. */
+    {
+        extern int _hx_cuda_farr_im2col_t_gpu(int64_t, int64_t,
+                                              int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_im2col_t_gpu(x, xct, T, Cin, K, dil);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* X = _hx_farr_table[x].buf;
     double* XCT = _hx_farr_table[xct].buf;
     for (int64_t i = 0; i < Kdim * T; i++) XCT[i] = 0.0;
@@ -1890,6 +1925,17 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_col2im(HexaVal dxc_v, HexaVal d
     if (T <= 0 || Cin <= 0 || K <= 0 || dil <= 0)            return hexa_int(-1);
     int64_t Kdim = Cin * K;
     if (!_OP37_FA(dxc, T * Kdim) || !_OP37_FA(dx, T * Cin))  return hexa_int(-1);
+#ifdef HEXA_CUDA
+    /* ING#34: device-resident col2im (LEVER-a). The GPU kernel sums the K taps
+     * in k-ascending order (one thread per dX cell, no atomics) = host order
+     * → byte-eq. Fall through to CPU oracle on GPU failure. */
+    {
+        extern int _hx_cuda_farr_col2im_gpu(int64_t, int64_t,
+                                            int64_t, int64_t, int64_t, int64_t);
+        int grc = _hx_cuda_farr_col2im_gpu(dxc, dx, T, Cin, K, dil);
+        if (grc == 0) return hexa_int(0);
+    }
+#endif
     double* DXC = _hx_farr_table[dxc].buf;
     double* DX = _hx_farr_table[dx].buf;
     for (int64_t i = 0; i < T * Cin; i++) DX[i] = 0.0;
@@ -2634,8 +2680,30 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_adamw(HexaVal w_v, HexaVal g_v,
                                   HexaVal v_v, HexaVal n_v, HexaVal lr_v,
                                   HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
                                   HexaVal wd_v, HexaVal t_v) {
+#ifdef HEXA_CUDA
+    /* ING#34: device-resident AdamW step (LEVER-a). The GPU kernel does the
+     * in-place w/m/v update element-wise (no cross-element reduction) in the
+     * EXACT host arithmetic order → byte-eq vs opt_adamw_step. Returns 0 on
+     * success; rc<0 keeps the existing contract (caller runs opt_adamw_step). */
+    {
+        extern int _hx_cuda_farr_adamw_step_inplace_keepmv_gpu(
+            int64_t, int64_t, int64_t, int64_t, int64_t,
+            double, double, double, double, double, int64_t);
+        int64_t w = hexa_as_num(w_v), g = hexa_as_num(g_v);
+        int64_t m = hexa_as_num(m_v), v = hexa_as_num(v_v);
+        int64_t n = hexa_as_num(n_v), st = hexa_as_num(t_v);
+        double lr = __hx_to_double(lr_v), b1 = __hx_to_double(b1_v);
+        double b2 = __hx_to_double(b2_v), eps = __hx_to_double(eps_v);
+        double wd = __hx_to_double(wd_v);
+        /* kernel arg order: (w, m, v, g, n, lr, b1, b2, eps, wd, step_t) */
+        int grc = _hx_cuda_farr_adamw_step_inplace_keepmv_gpu(
+            w, m, v, g, n, lr, b1, b2, eps, wd, st);
+        if (grc == 0) return hexa_int(0);
+    }
+#else
     (void)w_v; (void)g_v; (void)m_v; (void)v_v; (void)n_v; (void)lr_v;
     (void)b1_v; (void)b2_v; (void)eps_v; (void)wd_v; (void)t_v;
+#endif
     return hexa_int(-1);
 }
 HEXA_FORGE_HOST_WEAK HexaVal forge_dispatch_adamw(HexaVal w_v, HexaVal g_v, HexaVal m_v,
