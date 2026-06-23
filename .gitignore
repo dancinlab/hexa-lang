@@ -321,3 +321,7 @@ self/native/rtcore_math2.c
 # rtcore no-final-newline residuals (gen_c_text_emitter EOF-state root-cause fix)
 self/native/rtcore_collection-mutate.c
 self/native/rtcore_runtime-misc.c
+self/native/zeroc_hxlcl_delegate.c
+self/native/zeroc_rt_core_prims.c
+self/native/hxqwen14b_p1d_cmp.c
+self/native/hxqwen14b_p1d_hxlcl.c

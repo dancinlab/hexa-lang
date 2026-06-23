@@ -7,6 +7,11 @@
 set -uo pipefail
 ROOT="$PWD"
 SEED="$ROOT/self/native/zeroc_rt_core_prims.c"
+# ZERO-C recursive (ING #29): the seed .c is a GENERATED, .gitignore'd
+# artifact — regenerate it byte-deterministically from its emitter SSOT
+# self/native/zeroc_rt_core_prims_emit.hexa before compiling (NO-OP-SAFE:
+# emitter absent -> in-tree .c kept). hexa-emitter is the source of truth.
+bash "$ROOT/tool/regen_zeroc_rt_core_prims_c.sh" "$ROOT" >/dev/null 2>&1 || true
 OUT="${1:-$ROOT/build/zeroc_rt_core_prims.o}"
 [ -f "$SEED" ] || { echo "regen_zeroc_rt_core_prims: missing $SEED" >&2; exit 1; }
 mkdir -p "$(dirname "$OUT")"
