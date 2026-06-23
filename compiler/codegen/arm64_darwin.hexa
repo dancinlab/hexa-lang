@@ -1460,6 +1460,28 @@ pub fn _builtin_runtime_sym(name: string) -> string {
     if name == "ends_with"     { return "rt_str_ends_with" }    // → int (box bool)
     if name == "is_alpha"          { return "hexa_is_alpha" }          // shim → HexaVal
     if name == "is_alphanumeric"   { return "hexa_is_alphanumeric" }   // shim → HexaVal
+    // none-hexa_cc native-seed (PR #3865 follow-on): the 7 builtins that left
+    // the flag-ON native-emit object with undefined refs (the C-transpile path
+    // emits them inline in self/codegen.hexa; the native path lowered bare
+    // names with no linkable def). Each maps to an existing runtime symbol:
+    //   exec_with_status/exec_stream/exec_replace/eprint — HexaVal-in/-out (or
+    //     void for eprint) C runtime fns, so the generic STMT_CALL emit lowers
+    //     them verbatim (cf. self/codegen.hexa:6720/6736/7575/6672 → hexa_*).
+    //   has_key/index_of/ord — wrapped by NEW HexaVal-shaped runtime leaves
+    //     (hexa_has_key_v/hexa_index_of_v/hexa_ord_v in runtime_core_emit.hexa),
+    //     byte-eq IDENTICAL to the C-path inline AND the arm64 special branches
+    //     below (same prims: map_contains_key+cstring / str_index_of+int-box /
+    //     char_code(s,0)). On arm64 the dedicated has_key/index_of/ord STMT_CALL
+    //     branches (≈line 2399/2425/2444) run BEFORE this map, so these three
+    //     entries are inert on arm64 (zero behaviour change) and only activate
+    //     on the x86_64 path (which has no special branch).
+    if name == "exec_with_status"  { return "hexa_exec_with_status" }
+    if name == "exec_stream"       { return "hexa_exec_stream_v" }  // hexa_exec_stream is a C _Generic MACRO; _v leaf delegates to hexa_exec_stream_impl
+    if name == "exec_replace"      { return "hexa_exec_replace" }
+    if name == "eprint"            { return "hexa_eprint_val" }
+    if name == "has_key"           { return "hexa_has_key_v" }
+    if name == "index_of"          { return "hexa_index_of_v" }
+    if name == "ord"               { return "hexa_ord_v" }
     return name
 }
 
