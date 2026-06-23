@@ -762,6 +762,47 @@ fn emit_runtime_cuda_c() -> str {
             "    C[m * N + n] = acc;\n" +
             "}\n" +
             "\n" +
+            "/* ===== decode GEMV fast-path (M==1) ==================================\n" +
+            " * kernel-quality-reffirst lane (profiler-driven, c1 root-cause). The 16x16\n" +
+            " * _hx_k_gemm tile WASTES 15/16 threads at M==1 (only threadIdx.y==0 live)\n" +
+            " * and launches grid.y==1 — MEASURED aiden RTX 5070 sm_120: 341 GB/s =\n" +
+            " * 0.54x cuBLAS Dgemv (629), DRAM 45% peak, 16-block grid underfills 48 SMs.\n" +
+            " * _hx_k_gemv_1d : one thread per output column, full sequential K-loop.\n" +
+            " * BIT-IDENTICAL reduction order to _hx_k_gemm -> BYTE-NEUTRAL default swap.\n" +
+            " * MEASURED 459 GB/s @4096 (1.34x), 634 @8192 (1.86x, BEATS cuBLAS 618).\n" +
+            " * _hx_k_gemv_splitk : split K across grid.y, atomicAdd partials. CHANGES\n" +
+            " * reduction order (NOT bit-identical) -> OPT-IN (HEXA_GEMV_SPLITK). Fills\n" +
+            " * the SMs when N is too small for the 1D path: MEASURED @2048 = 1167 GB/s\n" +
+            " * = 3.49x naive, parity/beats cuBLAS (1163); DRAM 45%->95.2% (ncu),\n" +
+            " * grid 16->128 blocks; relRMS vs cuBLAS 5.5e-15 (fp round-off). */\n" +
+            "__global__ void _hx_k_gemv_1d(const double* __restrict__ A,\n" +
+            "                              const double* __restrict__ B,\n" +
+            "                              double* __restrict__ C,\n" +
+            "                              int64_t K, int64_t N) {\n" +
+            "    int64_t n = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "    if (n >= N) return;\n" +
+            "    double acc = 0.0;\n" +
+            "    for (int64_t k = 0; k < K; k++) acc += A[k] * B[k * N + n];\n" +
+            "    C[n] = acc;\n" +
+            "}\n" +
+            "__global__ void _hx_k_gemv_splitk(const double* __restrict__ A,\n" +
+            "                                  const double* __restrict__ B,\n" +
+            "                                  double* __restrict__ C,\n" +
+            "                                  int64_t K, int64_t N, int KS) {\n" +
+            "    int64_t n = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "    if (n >= N) return;\n" +
+            "    int64_t kc = (K + KS - 1) / KS;\n" +
+            "    int64_t k0 = (int64_t)blockIdx.y * kc;\n" +
+            "    int64_t k1 = k0 + kc; if (k1 > K) k1 = K;\n" +
+            "    double acc = 0.0;\n" +
+            "    for (int64_t k = k0; k < k1; k++) acc += A[k] * B[k * N + n];\n" +
+            "    atomicAdd(&C[n], acc);\n" +
+            "}\n" +
+            "static int _forge_gemv_splitk_on(void) {\n" +
+            "    const char* v = getenv(\"HEXA_GEMV_SPLITK\");\n" +
+            "    return (v && v[0] && v[0] != '0') ? 1 : 0;\n" +
+            "}\n" +
+            "\n" +
             "/* HEXA-0POD OP-24 (TF32 LIVE-WIRE) — deterministic TF32 fast-mode for the live\n" +
             " * forge GEMM dispatch. OP-20 PROVED (aiden RTX 5070): a TF32 tensor-op step is\n" +
             " * self-byte-eq run-to-run (max|delta|=0) AND W14-tol vs FP64 (rel-RMS ~1e-6) AND\n" +
@@ -909,7 +950,15 @@ fn emit_runtime_cuda_c() -> str {
             "#define HX_OWNTF_WM_FRAG 2\n" +
             "#define HX_OWNTF_WN_FRAG 4\n" +
             "#define HX_OWNTF_ASPAD 4\n" +
-            "#define HX_OWNTF_BSPAD 4\n" +
+            "/* BSPAD=8 (not 4): the m16n8k8 B-fragment read Bs[ks+tig][ncol+gid] strides\n" +
+            " * rows by (BN+BSPAD). BSPAD=4 -> stride 68, 68%32==4, so the 32 warp lanes\n" +
+            " * (tig 0-3 rows x gid 0-7 cols) collide on banks {tig*4+gid} (~245x conflicts).\n" +
+            " * BSPAD=8 -> stride 72, 72%32==8, lanes hit {tig*8+gid} = all 32 banks distinct.\n" +
+            " * MEASURED aiden sm_120: smem ld-conflicts 67.36M->274.7k (245x drop), TF32\n" +
+            " * square +3.8% (S4096 26.8->27.85 TFLOP/s); rel-RMS unchanged (pad-only). The\n" +
+            " * residual gap to cuBLAS is latency-bound (issue 36%, shallow 2-stage), not\n" +
+            " * bank conflicts. */\n" +
+            "#define HX_OWNTF_BSPAD 8\n" +
             "__device__ __forceinline__ unsigned _hx_f2tf32(float x){\n" +
             "    unsigned u; memcpy(&u,&x,4); u=(u+0x1000u)&0xFFFFE000u; return u;\n" +
             "}\n" +
@@ -1132,10 +1181,30 @@ fn emit_runtime_cuda_c() -> str {
             "        static int _own_gemm_fired = 0;\n" +
             "        if (!_own_gemm_fired) { _own_gemm_fired = 1;\n" +
             "            fprintf(stderr, \"[OWN-GEMM-FIRED] _hx_k_gemm DEVICE path (no cuBLAS)\\n\"); }\n" +
+            "        if (M == 1) {\n" +
+            "            /* decode GEMV fast-path (kernel-quality-reffirst lane). The 16x16\n" +
+            "             * tile wastes 15/16 threads at M==1. _hx_k_gemv_1d is BYTE-IDENTICAL\n" +
+            "             * (same sequential K-loop reduction as _hx_k_gemm) -> default path.\n" +
+            "             * HEXA_GEMV_SPLITK opt-in adds K-splitting (atomicAdd, NOT bit-id)\n" +
+            "             * to fill the SMs at small N. */\n" +
+            "            if (_forge_gemv_splitk_on()) {\n" +
+            "                int _ks = 8; /* knee measured @sm_120: 128 blocks saturates DRAM 95% */\n" +
+            "                cudaMemsetAsync(C_dev, 0, (size_t)N * sizeof(double), _forge_stream());\n" +
+            "                dim3 _vblk(256);\n" +
+            "                dim3 _vgrd((unsigned)((N + 255) / 256), (unsigned)_ks);\n" +
+            "                _hx_k_gemv_splitk<<<_vgrd, _vblk, 0, _forge_stream()>>>(A_dev, B_dev, C_dev, K, N, _ks);\n" +
+            "            } else {\n" +
+            "                dim3 _vblk(256);\n" +
+            "                dim3 _vgrd((unsigned)((N + 255) / 256));\n" +
+            "                _hx_k_gemv_1d<<<_vgrd, _vblk, 0, _forge_stream()>>>(A_dev, B_dev, C_dev, K, N);\n" +
+            "            }\n" +
+            "            if (_forge_launch_check(\"own_gemv\") != 0) return -1;\n" +
+            "        } else {\n" +
             "        dim3 _gblk(16, 16);\n" +
             "        dim3 _ggrd((unsigned)((N + 15) / 16), (unsigned)((M + 15) / 16));\n" +
             "        _hx_k_gemm<<<_ggrd, _gblk, 0, _forge_stream()>>>(A_dev, B_dev, C_dev, M, K, N);\n" +
             "        if (_forge_launch_check(\"own_gemm\") != 0) return -1;\n" +
+            "        }\n" +
             "#ifdef HEXA_USE_CUBLAS\n" +
             "    } else if (_forge_tf32_fastmode()) {\n" +
             "        /* HEXA-0POD OP-24: TF32 fast-mode (opt-in). FP64 default is UNTOUCHED above;\n" +
