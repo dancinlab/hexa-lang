@@ -30,6 +30,13 @@ set -uo pipefail
 ROOT="$PWD"
 SEED="$ROOT/self/native/rtcore_collection-mutate.c"
 OUT="${1:-$ROOT/build/rtcore_collection-mutate_native.o}"
+# The .c is a GENERATED, .gitignore'd artifact regenerated from its emitter SSOT
+# self/native/rtcore_collection-mutate_emit.hexa (byte-identical, hexat-free awk
+# un-escape). Regen it FIRST so a clean checkout (no tracked .c) builds, and a
+# warm tree stays guard-consistent. NO-OP-SAFE: emitter absent -> keep in-tree .c.
+if [ -f "$ROOT/tool/regen_rtcore_collection-mutate_c.sh" ]; then
+    bash "$ROOT/tool/regen_rtcore_collection-mutate_c.sh" "$ROOT" || true
+fi
 [ -f "$SEED" ] || { echo "regen_rtcore_collection-mutate: missing $SEED" >&2; exit 1; }
 mkdir -p "$(dirname "$OUT")"
 TU="$(mktemp /tmp/rtcore_collection_mutate_tu.XXXXXX.c)"; trap 'rm -f "$TU"' EXIT
