@@ -308,3 +308,10 @@ test/native_build/classd_behavioral_harness.c
 .harness/logs/
 .harness/handoff/
 drafts/
+
+# ZERO-C recursive (ING #29) — last emitter-less self-tree .c gains a .hexa SSOT.
+# self/native/zeroc_rt_core_prims.c is now a BUILD ARTIFACT regenerated
+# byte-identical from self/native/zeroc_rt_core_prims_emit.hexa by
+# tool/regen_zeroc_rt_core_prims_c.sh (wired into regen_zeroc_rt_core_prims_o.sh
+# before compile). hexa-emitter is the source of truth; build regenerates.
+self/native/zeroc_rt_core_prims.c
