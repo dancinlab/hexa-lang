@@ -35,6 +35,11 @@ set -uo pipefail
 ROOT="$PWD"
 SEED="$ROOT/self/native/rtcore_runtime-misc.c"
 OUT="${1:-$ROOT/build/rtcore_runtime-misc_native.o}"
+# The .c SEED is a GENERATED artifact (gitignored): regenerate it byte-identically
+# from its emitter SSOT self/native/rtcore_runtime-misc_emit.hexa BEFORE compiling, so a
+# clean checkout (where only the emitter is tracked) materializes the .c. The awk
+# un-escape is byte-deterministic (proven cmp exit 0) -- a warm tree is a true no-op.
+bash "$ROOT/tool/regen_rtcore_runtime-misc_c.sh" "$ROOT" >&2 || true
 [ -f "$SEED" ] || { echo "regen_rtcore_runtime-misc: missing $SEED" >&2; exit 1; }
 mkdir -p "$(dirname "$OUT")"
 TU="$(mktemp /tmp/rtcore_runtime_misc_tu.XXXXXX.c)"; trap 'rm -f "$TU"' EXIT

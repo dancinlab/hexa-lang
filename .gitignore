@@ -318,3 +318,6 @@ self/native/rtcore_leaf.c
 self/native/rtcore_map-query-fold.c
 self/native/rtcore_math.c
 self/native/rtcore_math2.c
+# rtcore no-final-newline residuals (gen_c_text_emitter EOF-state root-cause fix)
+self/native/rtcore_collection-mutate.c
+self/native/rtcore_runtime-misc.c
