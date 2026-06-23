@@ -72,6 +72,22 @@
 // hexa_chr_byte (hexa_strbuf_alloc), hexa_callback_slot_id (static __hexa_cb_
 // slots pool). Total emitter bodies now 28 → 34.
 //
+// PORTED BODIES — batch 4 (HexaVal-tail accessor leaves, ING #35 r17):
+//   hexa_struct_pack hexa_struct_unpack hexa_struct_rect hexa_struct_point
+//   hexa_struct_size_pack hexa_random hexa_char_code   (7 self-contained leaves)
+// The struct_* packers use libc calloc — a LINK-TIME dep, identical in kind to
+// the free/strtod r16 already ships (struct_free/str_parse_float) — NOT the
+// alloc WALL-2 (hexa_array_new/push). struct_unpack is a pure int-encoded-
+// pointer f64 deref; random is rand()/RAND_MAX (libc); char_code is the
+// #ifndef HEXA_HAS_HEXA_RT_STDLIB branch (the live one in the drop-measure TU) —
+// pure HX_IS_STR / HX_INT / HX_STRLEN / HX_STR struct-deref. All referenced
+// helpers (hexa_int/float/void, HX_* macros, libc calloc/free/rand) are supplied
+// OUTSIDE the residual → true emittable leaves, no in-body wall.
+// EXCLUDED from batch 4 (HexaVal-tail but deep-coupled, honest residual):
+// hexa_clock (hxlcl_clock_gettime static), hexa_from_char_code (hxlcl_strdup),
+// hexa_chr_byte / hexa_bytes_to_str_raw (hexa_strbuf_alloc = strbuf alloc).
+// Total emitter bodies now 34 → 41.
+//
 // Invocation:  hexa-run runtime_emit.hexa <output-path>
 // Default output path (if argv missing): "runtime_hi_seed.c" in cwd.
 
@@ -269,6 +285,70 @@ fn emit_runtime_hi_seed_to(out_path: str) {
     buf = buf + "HexaVal hexa_str_parse_float(HexaVal s) {\n"
     buf = buf + "    if (!HX_IS_STR(s)) return hexa_float(0.0);\n"
     buf = buf + "    return hexa_float(strtod(HX_STR(s), NULL));\n"
+    buf = buf + "}\n"
+    buf = buf + "\n"
+    buf = buf + "// ── HexaVal-tail accessor leaves (frozen runtime.c PROPER) — ING #35 r17 ──\n"
+    buf = buf + "// Batch 4: 7 more self-contained accessor bodies ported VERBATIM from the\n"
+    buf = buf + "// frozen runtime.c. The struct_* packers use libc calloc (a LINK-TIME dep,\n"
+    buf = buf + "// exactly like the free/strtod already used by r16's struct_free/\n"
+    buf = buf + "// str_parse_float) — NOT the alloc WALL-2 (hexa_array_new/push). struct_\n"
+    buf = buf + "// unpack is a pure int-encoded-pointer deref; random is rand()/RAND_MAX\n"
+    buf = buf + "// (libc); char_code is the #ifndef HEXA_HAS_HEXA_RT_STDLIB branch (the live\n"
+    buf = buf + "// one in the drop-measure TU) — pure HX_IS_STR / HX_INT / HX_STRLEN /\n"
+    buf = buf + "// HX_STR struct-deref. Every referenced helper (hexa_int/float/void,\n"
+    buf = buf + "// HX_* macros, libc calloc/free/rand) is supplied OUTSIDE the residual, so\n"
+    buf = buf + "// these are true emittable leaves — no hxlcl_* static / strbuf / GPU /\n"
+    buf = buf + "// syscall. (hexa_clock EXCLUDED — hxlcl_clock_gettime static; from_char_\n"
+    buf = buf + "// code / chr_byte / bytes_to_str_raw EXCLUDED — hxlcl_strdup / strbuf alloc.)\n"
+    buf = buf + "// struct_pack(args,nargs): pack a row of f64 into a heap blob (int-encoded).\n"
+    buf = buf + "HexaVal hexa_struct_pack(HexaVal* args, int nargs) {\n"
+    buf = buf + "    if (nargs <= 0) return hexa_int(0);\n"
+    buf = buf + "    size_t total = (size_t)nargs * sizeof(double);\n"
+    buf = buf + "    double* buf = (double*)calloc(1, total);\n"
+    buf = buf + "    for (int i = 0; i < nargs; i++) {\n"
+    buf = buf + "        buf[i] = HX_IS_FLOAT(args[i]) ? HX_FLOAT(args[i]) : (double)HX_INT(args[i]);\n"
+    buf = buf + "    }\n"
+    buf = buf + "    return hexa_int((int64_t)(uintptr_t)buf);\n"
+    buf = buf + "}\n"
+    buf = buf + "// struct_unpack(ptr,index): read the Nth f64 from an int-encoded heap ptr.\n"
+    buf = buf + "HexaVal hexa_struct_unpack(HexaVal ptr, HexaVal index) {\n"
+    buf = buf + "    uint64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;\n"
+    buf = buf + "    int64_t idx = HX_IS_INT(index) ? HX_INT(index) : 0;\n"
+    buf = buf + "    if (p == 0) return hexa_float(0.0);\n"
+    buf = buf + "    double* buf = (double*)(uintptr_t)p;\n"
+    buf = buf + "    return hexa_float(buf[idx]);\n"
+    buf = buf + "}\n"
+    buf = buf + "// struct_rect(x,y,w,h): pack an NSRect (4x f64 = 32 bytes).\n"
+    buf = buf + "HexaVal hexa_struct_rect(HexaVal x, HexaVal y, HexaVal w, HexaVal h) {\n"
+    buf = buf + "    double* buf = (double*)calloc(1, 4 * sizeof(double));\n"
+    buf = buf + "    buf[0] = HX_IS_FLOAT(x) ? HX_FLOAT(x) : (double)HX_INT(x);\n"
+    buf = buf + "    buf[1] = HX_IS_FLOAT(y) ? HX_FLOAT(y) : (double)HX_INT(y);\n"
+    buf = buf + "    buf[2] = HX_IS_FLOAT(w) ? HX_FLOAT(w) : (double)HX_INT(w);\n"
+    buf = buf + "    buf[3] = HX_IS_FLOAT(h) ? HX_FLOAT(h) : (double)HX_INT(h);\n"
+    buf = buf + "    return hexa_int((int64_t)(uintptr_t)buf);\n"
+    buf = buf + "}\n"
+    buf = buf + "// struct_point(x,y): pack an NSPoint (2x f64 = 16 bytes).\n"
+    buf = buf + "HexaVal hexa_struct_point(HexaVal x, HexaVal y) {\n"
+    buf = buf + "    double* buf = (double*)calloc(1, 2 * sizeof(double));\n"
+    buf = buf + "    buf[0] = HX_IS_FLOAT(x) ? HX_FLOAT(x) : (double)HX_INT(x);\n"
+    buf = buf + "    buf[1] = HX_IS_FLOAT(y) ? HX_FLOAT(y) : (double)HX_INT(y);\n"
+    buf = buf + "    return hexa_int((int64_t)(uintptr_t)buf);\n"
+    buf = buf + "}\n"
+    buf = buf + "// struct_size_pack(w,h): pack an NSSize (2x f64 = 16 bytes).\n"
+    buf = buf + "HexaVal hexa_struct_size_pack(HexaVal w, HexaVal h) {\n"
+    buf = buf + "    double* buf = (double*)calloc(1, 2 * sizeof(double));\n"
+    buf = buf + "    buf[0] = HX_IS_FLOAT(w) ? HX_FLOAT(w) : (double)HX_INT(w);\n"
+    buf = buf + "    buf[1] = HX_IS_FLOAT(h) ? HX_FLOAT(h) : (double)HX_INT(h);\n"
+    buf = buf + "    return hexa_int((int64_t)(uintptr_t)buf);\n"
+    buf = buf + "}\n"
+    buf = buf + "// random(): PRNG in [0,1) via libc rand()/RAND_MAX.\n"
+    buf = buf + "HexaVal hexa_random(void) { return hexa_float(rand() / (double)RAND_MAX); }\n"
+    buf = buf + "// char_code(s,idx): byte at idx (0 on OOB) — #ifndef HEXA_HAS_HEXA_RT_STDLIB.\n"
+    buf = buf + "HexaVal hexa_char_code(HexaVal s, HexaVal idx) {\n"
+    buf = buf + "    if (!HX_IS_STR(s)) return hexa_int(0);\n"
+    buf = buf + "    int i = HX_INT(idx);\n"
+    buf = buf + "    if (i < 0 || i >= (int)HX_STRLEN(s)) return hexa_int(0);\n"
+    buf = buf + "    return hexa_int((unsigned char)HX_STR(s)[i]);\n"
     buf = buf + "}\n"
     if buf.len() > 0 { _flush_runtime_hi(out_path, buf) }
 }
