@@ -17,6 +17,12 @@ set -uo pipefail
 ROOT="$PWD"
 SEED="$ROOT/self/native/rtcore_leaf.c"
 OUT="${1:-$ROOT/build/rtcore_leaf_native.o}"
+# zero-c leg-B (ING #29): self/native/rtcore_leaf.c is now a GENERATED artifact
+# regenerated VERBATIM from its emitter SSOT self/native/rtcore_leaf_emit.hexa
+# (byte-deterministic awk un-escape, hexat-free). Regen FIRST so a gitignored /
+# absent .c is (re)synthesized before the existence check + compile below. A
+# fresh tree is a byte-identical no-op (byte-neutral, no byteeq drift).
+bash "$ROOT/tool/regen_rtcore_leaf_c.sh" "$ROOT" >&2 || true
 [ -f "$SEED" ] || { echo "regen_rtcore_leaf: missing $SEED" >&2; exit 1; }
 mkdir -p "$(dirname "$OUT")"
 TU="$(mktemp /tmp/rtcore_leaf_tu.XXXXXX.c)"; trap 'rm -f "$TU"' EXIT

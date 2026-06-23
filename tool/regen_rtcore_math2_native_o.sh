@@ -22,11 +22,20 @@
 #
 # Usage: bash tool/regen_rtcore_math2_native_o.sh [OUT_O]   (run at repo root)
 #   OUT_O defaults to build/rtcore_math2_native.o · CC/ARCH_FLAG honored.
+#
+# SSOT NOTE (zero-c leg-B recursive, ING #29): self/native/rtcore_math2.c is no
+# longer a tracked file — it is a .gitignore'd artifact regenerated here from its
+# .hexa text-emitter SSOT (self/native/rtcore_math2_emit.hexa) via
+# tool/regen_rtcore_math2_c.sh (deterministic awk un-escape, byte-identical to the
+# former tracked .c). We synthesize the .c FIRST, then compile it.
 set -uo pipefail
 ROOT="$PWD"
 SEED="$ROOT/self/native/rtcore_math2.c"
 OUT="${1:-$ROOT/build/rtcore_math2_native.o}"
-[ -f "$SEED" ] || { echo "regen_rtcore_math2: missing $SEED" >&2; exit 1; }
+# Regenerate the .c artifact from its emitter SSOT before compiling (so the .c can
+# be gitignored). NO-OP-SAFE: emitter absent → keeps any in-tree .c untouched.
+bash "$ROOT/tool/regen_rtcore_math2_c.sh" "$ROOT" >&2 || true
+[ -f "$SEED" ] || { echo "regen_rtcore_math2: missing $SEED (emitter regen produced no .c)" >&2; exit 1; }
 mkdir -p "$(dirname "$OUT")"
 TU="$(mktemp /tmp/rtcore_math2_tu.XXXXXX.c)"; trap 'rm -f "$TU"' EXIT
 printf '#include "runtime.h"\n#include "native/rtcore_math2.c"\n' > "$TU"

@@ -28,6 +28,11 @@ set -uo pipefail
 ROOT="$PWD"
 SEED="$ROOT/self/native/rtcore_arith-coerce-format.c"
 OUT="${1:-$ROOT/build/rtcore_arith-coerce-format_native.o}"
+# zero-c leg-B (ING #29): the seed .c is now a GENERATED, .gitignore'd artifact
+# regenerated from its tracked emitter SSOT
+# (self/native/rtcore_arith-coerce-format_emit.hexa). Regen it FIRST (hexat-free,
+# byte-deterministic) so the .c is always present + fresh before we compile it.
+bash "$ROOT/tool/regen_rtcore_arith-coerce-format_c.sh" "$ROOT" || true
 [ -f "$SEED" ] || { echo "regen_rtcore_arith-coerce-format: missing $SEED" >&2; exit 1; }
 mkdir -p "$(dirname "$OUT")"
 TU="$(mktemp /tmp/rtcore_acf_tu.XXXXXX.c)"; trap 'rm -f "$TU"' EXIT
