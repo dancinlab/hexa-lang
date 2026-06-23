@@ -145,3 +145,54 @@ long long hxlcl_strtoll(const char *nptr, char **endptr, int base) {
 }
 char *hxlcl_getenv(const char *name) { return getenv(name); }
 char *hxlcl_strdup(const char *s)    { return s ? strdup(s) : (char *)0; }
+
+// ── r25: 3 runtime.c-private syscall statics (seedprov 0 → 1) ──────────────
+// hxlcl_clock_gettime / hxlcl_read / hxlcl_nanosleep are `static
+// __attribute__((noinline))` in the FROZEN runtime.c (the `#elif
+// defined(__linux__)` libc-fallback branch at runtime.c:1996/2025 + the unified
+// nanosleep at runtime.c:2574). The arena-globals/drop seed TU sees the
+// file-static forward-decls but the linker has no exported symbol for them —
+// UNSUPPLIED (seedprov=0). r24 MEASURED they WALL the time/sleep/input family
+// (hexa_clock/timestamp/time_ms/now_monotonic_s + hexa_sleep/_s/_ms/_ns +
+// hexa_input/read_stdin + read_stdin_n_c). We re-supply each as an EXTERNAL
+// (non-static) definition here, BYTE-FAITHFUL to the frozen Linux-branch body:
+//   * hxlcl_read / hxlcl_clock_gettime — verbatim 1-line libc shims (the frozen
+//     `#elif defined(__linux__)` bodies are exactly `(long)read(...)` and
+//     `clock_gettime((clockid_t)clk, (struct timespec*)ts)`).
+//   * hxlcl_nanosleep — VERBATIM port of the frozen unified body (runtime.c:2574):
+//     a clock_gettime-anchored EINTR-resume loop whose Linux arm (HXLCL_SYS_SELECT
+//     undefined off-Apple) sleeps the remaining interval via libc nanosleep(2),
+//     recomputing `left` from CLOCK_MONOTONIC so the full duration always elapses.
+//     Routes its inner clock reads through THIS file's hxlcl_clock_gettime (same
+//     contract as the frozen body's call to the runtime.c-private static).
+// pipe/dup2/waitpid are NOT supplied here: the exec_* family they would unlock is
+// independently walled by runtime.c-private file-static state (the _hexa_stream_
+// slots pool + the _hxa_* argv/sha256 static helpers in native/exec_argv_sha256.c),
+// so supplying them would add dead seedprov with no body unlocked (measured r25).
+// This does NOT touch the immutable frozen blob; the DEFAULT build never compiles
+// this file (byte-identical OFF).
+#include <errno.h>
+
+long hxlcl_read(int fd, void *buf, unsigned long n) { return (long)read(fd, buf, (size_t)n); }
+int  hxlcl_clock_gettime(int clk, void *ts) { return clock_gettime((clockid_t)clk, (struct timespec *)ts); }
+int  hxlcl_nanosleep(const void *req_, void *rem_) {
+    const struct timespec *req = (const struct timespec *)req_;
+    long long total_ns = (long long)req->tv_sec * 1000000000LL + (long long)req->tv_nsec;
+    if (rem_) { ((struct timespec *)rem_)->tv_sec = 0; ((struct timespec *)rem_)->tv_nsec = 0; }
+    if (total_ns <= 0) return 0;
+    struct timespec start; hxlcl_clock_gettime(CLOCK_MONOTONIC, &start);
+    for (;;) {
+        struct timespec now; hxlcl_clock_gettime(CLOCK_MONOTONIC, &now);
+        long long elapsed = ((long long)now.tv_sec - start.tv_sec) * 1000000000LL
+                          + ((long long)now.tv_nsec - start.tv_nsec);
+        long long left = total_ns - elapsed;
+        if (left <= 0) return 0;
+        struct timespec ts;
+        ts.tv_sec  = (long)(left / 1000000000LL);
+        ts.tv_nsec = (long)(left % 1000000000LL);
+        int r = nanosleep(&ts, NULL);
+        if (r == 0) return 0;          // full sleep done
+        if (errno == EINTR) continue;   // signal: recompute remaining, retry
+        return -1;                      // genuine error
+    }
+}

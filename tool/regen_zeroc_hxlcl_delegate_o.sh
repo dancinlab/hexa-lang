@@ -23,6 +23,12 @@ N="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?hxlcl_(cos|sin|exp|log|fmod|atoll
 # delegates (memcpy/memset/strlen/strncmp/strtoll/getenv/strdup). These were
 # seedprov=0 (file-static, no exported symbol) and WALLED 8 HI-tier bodies.
 R23="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?hxlcl_(memcpy|memset|strlen|strncmp|strtoll|getenv|strdup)$')"
-echo "regen_zeroc_hxlcl_delegate: $OUT — $N/17 hxlcl_* delegates + $R23/7 r23 mem/str statics exported"
+# r25 — the 3 runtime.c-private syscall statics now re-supplied as EXTERNAL
+# delegates (clock_gettime/read/nanosleep), byte-faithful to the frozen
+# Linux-branch bodies. These were seedprov=0 (file-static, no exported symbol)
+# and WALLED the time/sleep/input HI-tier family.
+R25="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?hxlcl_(clock_gettime|read|nanosleep)$')"
+echo "regen_zeroc_hxlcl_delegate: $OUT — $N/17 hxlcl_* delegates + $R23/7 r23 mem/str statics + $R25/3 r25 syscall statics exported"
 [ "$N" = "17" ] || { echo "regen_zeroc_hxlcl_delegate: expected 17, got $N" >&2; exit 3; }
 [ "$R23" = "7" ] || { echo "regen_zeroc_hxlcl_delegate: expected 7 r23 mem/str statics, got $R23" >&2; exit 4; }
+[ "$R25" = "3" ] || { echo "regen_zeroc_hxlcl_delegate: expected 3 r25 syscall statics, got $R25" >&2; exit 5; }

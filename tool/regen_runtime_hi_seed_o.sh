@@ -62,7 +62,16 @@ S8="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(hexa_is_error|rt_read_lines|hex
 # hxlcl_exp/fmod or libc malloc/free). The rest route through measured walls
 # (farr_gpu/syscall-static/strbuf/file-static pools/#ifdef-amalgam). Hard assert.
 S9="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(hexa_silu|hexa_softmax|hexa_math_fmod|hexa_farr_set_out_disposition)$')"
-echo "regen_runtime_hi_seed: $OUT — $N/12 leaf rt_* + $M/16 libm-leaf hexa_math_* + $A/13 HexaVal-tail accessor + $S6/10 str/coerce/poly (r19) + $S7/9 fs/ffi/ml + $S7B/5 hxlcl-math (r21) + $S8/8 hxlcl mem/str-static (r23) + $S9/4 ml/math array (r24) bodies exported"
+# r25 (ING #35 batch 10) — time/sleep/input syscall-delegate leaves (11 bodies)
+# UNLOCKED by the r25 supply of the 3 runtime.c-private syscall statics
+# (clock_gettime/read/nanosleep) as EXTERNAL delegates in zeroc_hxlcl_delegate.o
+# (byte-faithful to the frozen Linux-branch bodies; seedprov 0 → 1). Each static
+# is now a link-dep, NOT a wall (r21/r23 lens). Hard assert. STILL-WALLED (honest):
+# the exec_* / pipe_spawn / sha* family (file-static _hexa_stream_slots pool +
+# native/exec_argv_sha256.c _hxa_* static helpers) + hexa_env_var (hxlcl_strcmp
+# has no delegate + hexa_val_arena_* coupling).
+S10="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(hexa_clock|hexa_timestamp|hexa_time_ms|hexa_now_monotonic_s|hexa_sleep|hexa_sleep_s|hexa_sleep_ms|hexa_sleep_ns|hexa_input|hexa_read_stdin|read_stdin_n_c)$')"
+echo "regen_runtime_hi_seed: $OUT — $N/12 leaf rt_* + $M/16 libm-leaf hexa_math_* + $A/13 HexaVal-tail accessor + $S6/10 str/coerce/poly (r19) + $S7/9 fs/ffi/ml + $S7B/5 hxlcl-math (r21) + $S8/8 hxlcl mem/str-static (r23) + $S9/4 ml/math array (r24) + $S10/11 time/sleep/input (r25) bodies exported"
 [ "$N" = "12" ] || { echo "regen_runtime_hi_seed: expected 12 rt_*, got $N" >&2; exit 3; }
 [ "$M" = "16" ] || { echo "regen_runtime_hi_seed: expected 16 hexa_math_*, got $M" >&2; exit 4; }
 [ "$A" = "13" ] || { echo "regen_runtime_hi_seed: expected 13 HexaVal-tail accessors, got $A" >&2; exit 5; }
@@ -71,3 +80,4 @@ echo "regen_runtime_hi_seed: $OUT — $N/12 leaf rt_* + $M/16 libm-leaf hexa_mat
 [ "$S7B" = "5" ] || { echo "regen_runtime_hi_seed: expected 5 hxlcl-math (r21), got $S7B" >&2; exit 8; }
 [ "$S8" = "8" ] || { echo "regen_runtime_hi_seed: expected 8 hxlcl mem/str-static (r23), got $S8" >&2; exit 9; }
 [ "$S9" = "4" ] || { echo "regen_runtime_hi_seed: expected 4 ml/math array (r24), got $S9" >&2; exit 10; }
+[ "$S10" = "11" ] || { echo "regen_runtime_hi_seed: expected 11 time/sleep/input (r25), got $S10" >&2; exit 11; }
