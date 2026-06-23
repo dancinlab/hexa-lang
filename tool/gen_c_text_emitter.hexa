@@ -62,26 +62,19 @@ fn main() {
     let parts = raw.split("\n")
     let n = parts.len()
 
-    let mut body = ""
-    let mut i = 0
-    let mut emitted = 0
-    while i < n {
-        // Skip the synthetic empty tail produced by the trailing newline.
-        if i == n - 1 && parts[i].len() == 0 {
-            i = i + 1
-            continue
-        }
-        let esc = esc_line(parts[i])
-        body = body + "    buf = buf + \"" + esc + "\\n\"\n"
-        emitted = emitted + 1
-        // Periodic size-bounded flush: a single exec command carrying the whole
-        // body overflows the interp's per-command limit on linux (macOS tolerates
-        // it). Flush when the buffer grows past ~64 KB; checked every 50 lines.
-        if emitted % 50 == 0 {
-            body = body + "    if buf.len() > 65536 { _flush_" + base + "(out_path, buf); buf = \"\" }\n"
-        }
-        i = i + 1
-    }
+    // STREAMING WRITE (root-cause fix for the emitter-FILE write scaling).
+    //
+    // The hexa interp's arena is bump-only (free() is never called), so every
+    // intermediate produced by `body = body + line` stays resident. Building the
+    // whole multi-MB emitter body in memory therefore grows RSS super-linearly
+    // (~28 GB measured for self/runtime.c, OOM-killing the host). FIX: never hold
+    // the full body. We emit the emitter file in three phases, keeping the live
+    // string bounded to <=~48 KB at all times, flushing each chunk to disk:
+    //   (a) truncate out_path + append the HEADER (small, fixed),
+    //   (b) stream the per-line BODY in <=48 KB chunks (the multi-MB part),
+    //   (c) append the FOOTER (small, fixed).
+    // Each flush is a quoted heredoc append (no shell expansion -> verbatim bytes),
+    // the same proven write mechanism the generated emitter uses for its own body.
 
     let eof_tag = "GEN_" + base.replace("-", "_").replace(".", "_") + "_EOF"
 
@@ -114,8 +107,9 @@ fn main() {
           + "    // size-bounded chunks (see generator note on the per-command exec limit).\n"
           + "    let _ = exec(\"printf '' > \\\"\" + out_path + \"\\\"\")\n"
           + "    let mut buf = \"\"\n"
-          + body
-          + "    if buf.len() > 0 { _flush_" + base + "(out_path, buf) }\n"
+
+    let footer =
+            "    if buf.len() > 0 { _flush_" + base + "(out_path, buf) }\n"
           + "}\n"
           + "\n"
           + "fn main() {\n"
@@ -131,10 +125,49 @@ fn main() {
           + "    exit(0)\n"
           + "}\n"
 
-    // Write the emitter via a quoted heredoc (no shell expansion).
+    // The write heredoc tag for the EMITTER FILE itself (distinct from eof_tag,
+    // which is the tag baked INTO the generated emitter for ITS runtime body).
     let wtag = "GEN_EMITTER_WRITE_EOF"
-    let wcmd = "cat > \"" + out_path + "\" <<'" + wtag + "'\n" + header + wtag
-    let _ = exec(wcmd)
+
+    // (a) truncate + write header (header is a few hundred bytes -> one safe exec).
+    let _ = exec("printf '' > \"" + out_path + "\"")
+    let _ = exec("cat >> \"" + out_path + "\" <<'" + wtag + "'\n" + header + wtag)
+
+    // (b) STREAM the body. wbuf holds the emitter lines for the CURRENT chunk only;
+    //     it is flushed and reset whenever it crosses ~48 KB, so the live string
+    //     never approaches the multi-MB full-body size that OOMs the arena.
+    let mut wbuf = ""
+    let mut i = 0
+    let mut emitted = 0
+    while i < n {
+        // Skip the synthetic empty tail produced by the trailing newline.
+        if i == n - 1 && parts[i].len() == 0 {
+            i = i + 1
+            continue
+        }
+        let esc = esc_line(parts[i])
+        wbuf = wbuf + "    buf = buf + \"" + esc + "\\n\"\n"
+        emitted = emitted + 1
+        // Periodic size-bounded flush of the GENERATED emitter's runtime body
+        // (this is the line the generated emitter executes at run time).
+        if emitted % 50 == 0 {
+            wbuf = wbuf + "    if buf.len() > 65536 { _flush_" + base + "(out_path, buf); buf = \"\" }\n"
+        }
+        // Bound the GENERATOR's own live string: flush this chunk to the emitter
+        // file and reset, so the arena working set stays small.
+        if wbuf.len() > 49152 {
+            let _ = exec("cat >> \"" + out_path + "\" <<'" + wtag + "'\n" + wbuf + wtag)
+            wbuf = ""
+        }
+        i = i + 1
+    }
+    if wbuf.len() > 0 {
+        let _ = exec("cat >> \"" + out_path + "\" <<'" + wtag + "'\n" + wbuf + wtag)
+    }
+
+    // (c) append the footer (small -> one safe exec).
+    let _ = exec("cat >> \"" + out_path + "\" <<'" + wtag + "'\n" + footer + wtag)
+
     let ok = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
     if ok != "y" {
         println("[gen] FATAL: failed to write emitter: " + out_path)
