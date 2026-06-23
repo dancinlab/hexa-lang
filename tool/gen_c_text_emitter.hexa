@@ -50,15 +50,28 @@ fn main() {
     let ctx      = argv[3]
 
     // Read the .c verbatim. exec("cat ...") preserves bytes; we then split
-    // on '\n'. The file ends with a trailing newline (verified), so the
-    // final split element is an empty string we must NOT re-emit as a line.
+    // on '\n'. ROOT-CAUSE: do NOT assume a trailing newline. We preserve the
+    // source's EXACT final-newline state -- a .c whose last byte is '\n' keeps
+    // its trailing newline; a .c whose last byte is NOT '\n' (e.g. ends in '}'
+    // 0x7d) must regenerate WITHOUT a synthetic trailing newline, else the
+    // reconstructed .c differs from source by exactly one trailing 0x0a byte.
     let raw = exec("cat \"" + src_path + "\"")
     if raw.len() == 0 {
         println("[gen] FATAL: empty/unreadable source: " + src_path)
         exit(1)
     }
 
-    // Split on newline. With a trailing '\n', parts = N lines + 1 empty tail.
+    // Does the source end with a newline? This drives whether the LAST real
+    // line gets a trailing "\n" re-appended during reconstruction.
+    let ends_with_nl = raw.substring(raw.len() - 1, raw.len()) == "\n"
+
+    // Split on newline.
+    //   - source ENDS with '\n':  parts = N real lines + 1 empty tail (index n-1);
+    //     each real line is re-emitted with a trailing "\n" and the empty tail is
+    //     skipped -> trailing newline preserved.
+    //   - source does NOT end with '\n': parts = N real lines, the last (index n-1)
+    //     is non-empty; every line EXCEPT the last gets a trailing "\n", and the
+    //     last is emitted WITHOUT one -> no synthetic trailing newline.
     let parts = raw.split("\n")
     let n = parts.len()
 
@@ -140,13 +153,22 @@ fn main() {
     let mut i = 0
     let mut emitted = 0
     while i < n {
-        // Skip the synthetic empty tail produced by the trailing newline.
+        // Skip the synthetic empty tail produced by a trailing newline (only
+        // present when the source ENDS with '\n').
         if i == n - 1 && parts[i].len() == 0 {
             i = i + 1
             continue
         }
         let esc = esc_line(parts[i])
-        wbuf = wbuf + "    buf = buf + \"" + esc + "\\n\"\n"
+        // Re-append "\n" to EVERY line except the final real line of a source
+        // that did NOT end with a newline -- preserving the source's exact EOF
+        // state (byte-identical round-trip for both 0x0a- and 0x7d-terminated .c).
+        let is_last_real = i == n - 1
+        if is_last_real && !ends_with_nl {
+            wbuf = wbuf + "    buf = buf + \"" + esc + "\"\n"
+        } else {
+            wbuf = wbuf + "    buf = buf + \"" + esc + "\\n\"\n"
+        }
         emitted = emitted + 1
         // Periodic size-bounded flush of the GENERATED emitter's runtime body
         // (this is the line the generated emitter executes at run time).
