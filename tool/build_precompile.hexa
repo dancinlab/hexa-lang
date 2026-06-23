@@ -239,7 +239,9 @@ fn main() {
             skipped = skipped + 1
         } else {
             let staging = target + ".tmp." + to_string(mono_ns())
-            let cmd = _shq(hexa_bin) + " build " + _shq(abs) + " -o " + _shq(staging) + " 2>&1; echo \"__BRC__=$?\""
+            // @convergence state=ossified id=build-precompile-exec-bigout-brokenpipe value="대형 entry(atlas_cli 등)의 2>&1 컴파일 출력(@phase 미구현 attr + redefined warn 수백줄)을 exec() 가 통째 메모리 캡처하다 파이프 버퍼 한계 → echo __BRC__ write-error Broken-pipe → rc 파싱 실패 → FAIL (faithful-nobaseline darwin release_package RED). mac 은 터미널 출력이라 무관(재현 NEGATIVE)." threshold="컴파일 출력을 로그파일로 리다이렉트하고 exec 는 __BRC__ rc 만 캡처 (거대 출력과 무관)"
+            let logf = staging + ".buildlog"
+            let cmd = _shq(hexa_bin) + " build " + _shq(abs) + " -o " + _shq(staging) + " > " + _shq(logf) + " 2>&1; echo \"__BRC__=$?\""
             let out = to_string(exec(cmd))
             let mark = "__BRC__="
             let ml = len(mark)
@@ -257,12 +259,15 @@ fn main() {
             }
             if rc == 0 && file_exists(staging) {
                 let _rn = exec("mv -f " + _shq(staging) + " " + _shq(target) + " 2>/dev/null")
+                let _rl = exec("rm -f " + _shq(logf) + " 2>/dev/null")
                 println("  OK   " + rel + " -> " + target)
                 built = built + 1
             } else {
                 let _cl = exec("rm -f " + _shq(staging) + " 2>/dev/null")
                 eprintln("  FAIL " + rel + " (rc=" + to_string(rc) + ")")
-                if mi > 0 { eprintln(out.substring(0, mi)) }
+                let errlog = to_string(exec("tail -40 " + _shq(logf) + " 2>/dev/null"))
+                if len(errlog) > 0 { eprintln(errlog) }
+                let _rl = exec("rm -f " + _shq(logf) + " 2>/dev/null")
                 failed = failed + 1
             }
         }
