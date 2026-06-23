@@ -1,0 +1,109 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/vast_gone_status_test.hexa — falsifier suite for the
+// "created ≠ live → cross-verify actual_status" rent hardening (ING #34).
+//
+// Two reproduced bugs (mini hexa v0.262.0):
+//   Bug 1 — `cloud rent vast` reported "created (registered)" + returned
+//           immediately while the instance was GONE; --max-wait-sec was not
+//           honored because the ssh-wait never cross-checked actual_status.
+//   Bug 2 — `cloud ssh-port <gone-id>` printed a raw python traceback (the
+//           singular `vastai show instance <id>` CLI crashes on a GONE /
+//           start_date=None contract).
+//
+// Root cause (both): the rent/resolve path read the SINGULAR
+// `vastai show instance <id> --raw` form, which the vast python CLI throws an
+// unhandled traceback on for a missing/just-created contract. The fix reads
+// the crash-immune PLURAL `show instances --raw` ARRAY and tells GONE (id
+// absent) apart from not-yet-ready (present, fields unmapped), so the rent
+// gate can FAIL LOUD + roll back the moment a contract leaves the list.
+//
+// These exercise the PURE parsers (no vastai, no network):
+//   vast_parse_instance_status / vast_status_is_gone / vast_parse_ssh_endpoint
+//
+// Falsifiers:
+//   F-VAST-GONE-ABSENT   — id absent from the list → "gone" (the Bug-1 case)
+//   F-VAST-GONE-CLASS    — gone/exited/stopped/error classify as gone; live not
+//   F-VAST-STATUS-LIVE   — running/loading/starting read straight through
+//   F-VAST-STATUS-NOGUESS— a transient/garbled non-array reply → "unknown"
+//                          (never "gone" — must NOT tear down a healthy pod)
+//   F-VAST-SSH-GONE      — ssh_endpoint parse on a GONE id → ok=0 + a clean
+//                          "not found (GONE...)" message, NEVER a traceback
+//   F-VAST-SSH-MAP       — present + mapped → ok=1 host:port; unmapped → ok=0
+//
+// Run:   hexa run stdlib/cloud/vast_gone_status_test.hexa
+// PASS:  exits 0, prints "vast_gone_status_test PASS".
+
+use "stdlib/cloud/vast"
+
+fn _ck_str(name: str, got: str, want: str) {
+    if got != want {
+        println("  FAIL: " + name + " got '" + got + "' want '" + want + "'")
+        exit(1)
+    }
+}
+
+fn _ck(name: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + name + " got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+}
+
+fn main() {
+    // A representative `show instances --raw` list with two live boxes.
+    let list = "[{\"id\":111,\"actual_status\":\"running\",\"ssh_host\":\"ssh5.vast.ai\",\"ssh_port\":12345},{\"id\":222,\"actual_status\":\"loading\"}]"
+
+    // F-VAST-GONE-ABSENT — the created-but-GONE id (e.g. 42245484) is NOT in
+    // the live list → "gone". THIS is what lets the rent gate fail loud
+    // instead of waiting out the whole --max-wait-sec budget (Bug 1).
+    _ck_str("absent id is gone", vast_parse_instance_status(list, "42245484"), "gone")
+    _ck_str("empty list is gone", vast_parse_instance_status("[]", "42245484"), "gone")
+
+    // F-VAST-STATUS-LIVE — a present id reads its actual_status straight.
+    _ck_str("running read", vast_parse_instance_status(list, "111"), "running")
+    _ck_str("loading read", vast_parse_instance_status(list, "222"), "loading")
+
+    // intended_status fallback when actual_status is absent.
+    let pending = "[{\"id\":333,\"intended_status\":\"running\"}]"
+    _ck_str("intended fallback", vast_parse_instance_status(pending, "333"), "running")
+    // present but totally statusless → "unknown" (never misread as gone).
+    let bare = "[{\"id\":444}]"
+    _ck_str("statusless unknown", vast_parse_instance_status(bare, "444"), "unknown")
+
+    // F-VAST-STATUS-NOGUESS — a transient / garbled / traceback (non-array)
+    // reply must NOT be read as GONE (that would destroy a healthy pod). A
+    // genuinely empty reply → "" (keep waiting); a non-empty one → "unknown".
+    _ck_str("empty reply keep-waiting", vast_parse_instance_status("", "111"), "")
+    _ck_str("traceback not gone", vast_parse_instance_status("Traceback (most recent call last):\n  File \"vastai\"", "111"), "unknown")
+    _ck_str("error body not gone", vast_parse_instance_status("{\"error\":\"rate limited\"}", "111"), "unknown")
+
+    // F-VAST-GONE-CLASS — the gone classifier.
+    _ck("gone is gone",     vast_status_is_gone("gone"), 1)
+    _ck("exited is gone",   vast_status_is_gone("exited"), 1)
+    _ck("stopped is gone",  vast_status_is_gone("stopped"), 1)
+    _ck("error is gone",    vast_status_is_gone("error"), 1)
+    _ck("running not gone", vast_status_is_gone("running"), 0)
+    _ck("loading not gone", vast_status_is_gone("loading"), 0)
+    _ck("starting not gone",vast_status_is_gone("starting"), 0)
+    _ck("unknown not gone", vast_status_is_gone("unknown"), 0)
+    _ck("empty not gone",   vast_status_is_gone(""), 0)
+
+    // F-VAST-SSH-GONE — ssh endpoint on a GONE id → ok=0 + a clean message,
+    // NEVER a leaked python traceback (Bug 2). The message names GONE so the
+    // user sees "instance not found" rather than a crash.
+    let g = vast_parse_ssh_endpoint(list, "42245484")
+    _ck("ssh gone not-ok", g.ok, 0)
+    _ck("ssh gone message", g.message.index_of("not found") >= 0, 1)
+
+    // F-VAST-SSH-MAP — present + mapped → ok=1 host:port; present + unmapped
+    // (still booting) → ok=0 "not yet mapped" (not GONE).
+    let ok = vast_parse_ssh_endpoint(list, "111")
+    _ck("ssh mapped ok", ok.ok, 1)
+    _ck_str("ssh host", ok.host, "ssh5.vast.ai")
+    _ck_str("ssh port", ok.port, "12345")
+    let unmapped = vast_parse_ssh_endpoint(list, "222")
+    _ck("ssh unmapped not-ok", unmapped.ok, 0)
+    _ck("ssh unmapped not-gone msg", unmapped.message.index_of("not yet mapped") >= 0, 1)
+
+    println("vast_gone_status_test PASS")
+}
