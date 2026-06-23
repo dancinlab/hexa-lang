@@ -536,6 +536,246 @@ if [ -f "$rt" ] && grep -q 'gemm-perf r4' "$rt" && ! grep -q 'gemm-perf r5' "$rt
   fi
 fi
 
+# ── gemm-perf r6 — BEYOND-PARITY: chained-GEMM (b2b) MLP FUSION (opt-in) ──────
+# r5 fused a memory-bound EPILOGUE into ONE GEMM. r6 fuses TWO CHAINED GEMMs:
+# Y = gelu(X@W1 + b1) @ W2. The hexa direct-emit lever a standalone BLAS/cuBLAS
+# STRUCTURALLY CANNOT do — each GEMM is a separate library call, so the
+# intermediate activation H = gelu(X@W1+b1) [M×N1] must round-trip through DRAM
+# (GEMM1 writes H, GEMM2 reads H). r6 keeps H NEVER MATERIALIZED to DRAM.
+# Reference (reference-first, c23): CUTLASS examples/13_two_tensor_op_fusion
+# (b2b-GEMM) — "thread_block_tile_N must equal problem_N: each threadblock loads
+# the entire weight matrix in addition to its own input activation tile" so the
+# 2nd GEMM's input depends only on the 1st GEMM's output from the SAME block →
+# block-resident, no global write. FlashAttention (Dao et al. 2022 §3.1) is the
+# same insight (tile over rows, keep the intermediate on-chip). CPU analogue:
+# tile over M-ROWS (panel MB rows of X); for each panel compute the FULL H-panel
+# = gelu(X_panel@W1+b1) [MB×N1] into an L2-resident scratch (constraint: the
+# ENTIRE intermediate dim N1 must be on-chip per tile — exactly CUTLASS's
+# tile_N==N1), then feed H_panel straight into H_panel@W2 → Y_panel [MB×N2]. The
+# scratch is allocated ONCE and reused across panels; H[M×N1] never hits DRAM.
+# DRAM saved vs two-call: the H round-trip = 2·M·N1·8 bytes (write + read-back).
+# L2-residency constraint: MB·N1·8 ≤ L2 (Zen5 ~1MB/core) ⇒ MB=30, N1=3072 ⇒
+# 30·3072·8 = 720KB (fits; MB=30=5·MR so A-panel packing is exact). The fused
+# gelu is INTERIOR (amortized across GEMM2's
+# reuse), a DIFFERENT regime from r5's closed-negative FINAL gelu (which had no
+# downstream reuse). SAME __FMA__ GATE as r4/r5: helpers + fused dispatch are
+# `#if defined(__FMA__)` (active only under -march=native via HEXA_OMP). The
+# default -O2 ship has no __FMA__ → the block vanishes in cpp; hexa_farr_mlp_fused
+# is ALWAYS defined (codegen builtin resolves on every target) and the default
+# build uses a byte-identical THREE-CALL fallback (matmul_bias → gelu → matmul)
+# = the exact unfused reference. Correctness gate is verdict-level (rel-rms vs the
+# three-call ref): the fused path uses the SAME erf-based gelu and SAME GEBP
+# k-order, so it is bit-exact to a three-call ref that uses the same erf; it is
+# NOT bit-exact to the dt_erf hexa eager path (different transcendental) — that is
+# documented honestly. SSOT = frozen blob → post-restore awk (r4/r5 precedent).
+# Idempotent: marker (gemm-perf r6). Runs AFTER r5 (reuses HX_R6_* tile shape).
+if [ -f "$rt" ] && grep -q 'gemm-perf r5' "$rt" && ! grep -q 'gemm-perf r6' "$rt"; then
+  # Inject the b2b-fused helpers + hexa_farr_mlp_fused right before the REAL
+  # hexa_farr_matmul definition (same anchor as r4/r5 — AFTER the _hx_farr_table/
+  # _hx_farr_count decls the wrapper needs; forward-decls in runtime.h cover the
+  # hexa_farr_matmul / _bias / gelu calls the fallback makes). Self-contained.
+  awk '
+    /^\/\/ \(see tmp_rfc032_smoke\.hexa\)\.$/ && !done {
+      print
+      print "// ═══════════════════════════════════════════════════════════════════"
+      print "#if defined(__FMA__)"
+      print "#include <math.h>"
+      print "// gemm-perf r6 — chained-GEMM (b2b) MLP fusion (opt-in, same __FMA__ gate as"
+      print "// r4/r5). Y = gelu(X@W1+b1)@W2 with H[M×N1] kept L2-resident per M-panel,"
+      print "// NEVER written to DRAM. Reference: CUTLASS examples/13_two_tensor_op_fusion"
+      print "// (thread_block_tile_N == N1) + FlashAttention row-tiling. Two private GEBP"
+      print "// drivers reuse the r4/r5 6x8 ukr shape but pack from a panel base pointer."
+      print "#define HX_R6_MR 6"
+      print "#define HX_R6_NR 8"
+      print "#define HX_R6_KC 256"
+      print "#define HX_R6_NC 4080"
+      print "#define HX_R6_MB 30      /* M-panel rows: MB*N1*8 must fit L2 (~1MB);"
+      print "                          /* MB multiple of MR=6 so A-packing is exact */"
+      print "// 6x8 ukr (own copy — r4/r5 #undef their HX_R*_MR). C += Apan·Bpan, last_k"
+      print "// optionally adds bias[j0+c] (the GEMM1 epilogue, fused into the hot tile)."
+      print "static void hx_r6_ukr_6x8(int64_t kc, const double* restrict Apan,"
+      print "                          const double* restrict Bpan, double* restrict C,"
+      print "                          int64_t ldc, int64_t mr, int64_t nr,"
+      print "                          int last_k, const double* restrict bias, int64_t j0) {"
+      print "    double ab[HX_R6_MR][HX_R6_NR];"
+      print "    for (int r = 0; r < HX_R6_MR; r++)"
+      print "        for (int c = 0; c < HX_R6_NR; c++) ab[r][c] = 0.0;"
+      print "    for (int64_t p = 0; p < kc; p++) {"
+      print "        const double* aa = Apan + p * HX_R6_MR;"
+      print "        const double* bb = Bpan + p * HX_R6_NR;"
+      print "        for (int r = 0; r < HX_R6_MR; r++) {"
+      print "            double arr = aa[r];"
+      print "            for (int c = 0; c < HX_R6_NR; c++) ab[r][c] += arr * bb[c];"
+      print "        }"
+      print "    }"
+      print "    if (!last_k) {"
+      print "        for (int64_t r = 0; r < mr; r++)"
+      print "            for (int64_t c = 0; c < nr; c++) C[r * ldc + c] += ab[r][c];"
+      print "    } else if (bias) {"
+      print "        for (int64_t r = 0; r < mr; r++)"
+      print "            for (int64_t c = 0; c < nr; c++)"
+      print "                C[r * ldc + c] = C[r * ldc + c] + ab[r][c] + bias[j0 + c];"
+      print "    } else {"
+      print "        for (int64_t r = 0; r < mr; r++)"
+      print "            for (int64_t c = 0; c < nr; c++)"
+      print "                C[r * ldc + c] = C[r * ldc + c] + ab[r][c];"
+      print "    }"
+      print "}"
+      print "// Panel GEBP: C[mp×N] (+= or =, see ukr last_k path) = A[mp×K]·B[K×N] (+bias)."
+      print "// A is a row-panel of a larger M×K matrix at row offset ar0 with leading dim"
+      print "// ldA (=K of the parent). C is a fresh mp×N buffer (row-major, ldc=N). NR-col"
+      print "// B panels packed once per (jc,pc); A repacked per ic. last-k applies bias."
+      print "static int hx_r6_gemm_panel(const double* restrict A, int64_t ldA,"
+      print "                            const double* restrict B, double* restrict C,"
+      print "                            int64_t mp, int64_t K, int64_t N,"
+      print "                            const double* restrict bias,"
+      print "                            double* restrict Ap, double* restrict Bp) {"
+      print "    for (int64_t jc = 0; jc < N; jc += HX_R6_NC) {"
+      print "        int64_t nc = (N-jc < HX_R6_NC) ? (N-jc) : HX_R6_NC;"
+      print "        for (int64_t pc = 0; pc < K; pc += HX_R6_KC) {"
+      print "            int64_t kc = (K-pc < HX_R6_KC) ? (K-pc) : HX_R6_KC;"
+      print "            int last_k = (pc + HX_R6_KC >= K);"
+      print "            { const double* Bpc = B + pc*N; int64_t off = 0;"
+      print "              for (int64_t j = 0; j < nc; j += HX_R6_NR) {"
+      print "                int64_t nr = (nc-j < HX_R6_NR) ? (nc-j) : HX_R6_NR;"
+      print "                for (int64_t p = 0; p < kc; p++)"
+      print "                  for (int64_t c = 0; c < HX_R6_NR; c++)"
+      print "                    Bp[off + p*HX_R6_NR + c] ="
+      print "                      (c < nr) ? Bpc[p*N + (jc+j+c)] : 0.0;"
+      print "                off += (int64_t)HX_R6_NR*kc; } }"
+      print "            { const double* Apc = A + pc; int64_t off = 0;"
+      print "              for (int64_t i = 0; i < mp; i += HX_R6_MR) {"
+      print "                int64_t mr = (mp-i < HX_R6_MR) ? (mp-i) : HX_R6_MR;"
+      print "                const double* Ablk = Apc + i*ldA;"
+      print "                for (int64_t p = 0; p < kc; p++)"
+      print "                  for (int64_t r = 0; r < HX_R6_MR; r++)"
+      print "                    Ap[off + p*HX_R6_MR + r] ="
+      print "                      (r < mr) ? Ablk[r*ldA + p] : 0.0;"
+      print "                off += (int64_t)HX_R6_MR*kc; } }"
+      print "            int64_t bp_off = 0;"
+      print "            for (int64_t j = 0; j < nc; j += HX_R6_NR) {"
+      print "                int64_t nr = (nc-j < HX_R6_NR) ? (nc-j) : HX_R6_NR;"
+      print "                int64_t ap_off = 0;"
+      print "                for (int64_t i = 0; i < mp; i += HX_R6_MR) {"
+      print "                    int64_t mr = (mp-i < HX_R6_MR) ? (mp-i) : HX_R6_MR;"
+      print "                    hx_r6_ukr_6x8(kc, Ap + ap_off, Bp + bp_off,"
+      print "                                  C + i*N + (jc+j), N, mr, nr,"
+      print "                                  last_k, bias, jc+j);"
+      print "                    ap_off += (int64_t)HX_R6_MR*kc;"
+      print "                }"
+      print "                bp_off += (int64_t)HX_R6_NR*kc;"
+      print "            }"
+      print "        }"
+      print "    }"
+      print "    return 0;"
+      print "}"
+      print "// Fused MLP: Y[M×N2] = gelu(X[M×K]·W1[K×N1] + b1) · W2[N1×N2]. H[MB×N1] is"
+      print "// L2-resident per M-panel and NEVER written to DRAM. Returns 0 ok, -1 alloc."
+      print "static int hx_r6_mlp(const double* restrict X, const double* restrict W1,"
+      print "                     const double* restrict b1, const double* restrict W2,"
+      print "                     double* restrict Y, int64_t M, int64_t K,"
+      print "                     int64_t N1, int64_t N2) {"
+      print "    double* Ap = NULL; double* Bp = NULL; double* H = NULL;"
+      print "    int64_t Ncap = (N1 > N2) ? N1 : N2;"
+      print "    if (posix_memalign((void**)&Ap, 64,"
+      print "            ((size_t)HX_R6_MB*HX_R6_KC + HX_R6_MR)*sizeof(double)) != 0 ||"
+      print "        posix_memalign((void**)&Bp, 64,"
+      print "            ((size_t)HX_R6_KC*HX_R6_NC + HX_R6_NR)*sizeof(double)) != 0 ||"
+      print "        posix_memalign((void**)&H, 64,"
+      print "            ((size_t)HX_R6_MB*Ncap)*sizeof(double)) != 0) {"
+      print "        free(Ap); free(Bp); free(H); return -1;"
+      print "    }"
+      print "    const double INV_SQRT2 = 0.70710678118654752440;"
+      print "    for (int64_t i0 = 0; i0 < M; i0 += HX_R6_MB) {"
+      print "        int64_t mp = (M-i0 < HX_R6_MB) ? (M-i0) : HX_R6_MB;"
+      print "        /* GEMM1: H[mp×N1] = X_panel·W1 + b1  (panel-resident, no DRAM write) */"
+      print "        for (int64_t t = 0; t < mp*N1; t++) H[t] = 0.0;"
+      print "        hx_r6_gemm_panel(X + i0*K, K, W1, H, mp, K, N1, b1, Ap, Bp);"
+      print "        /* interior gelu, in-place on the resident H tile (amortized) */"
+      print "        for (int64_t t = 0; t < mp*N1; t++) {"
+      print "            double x = H[t];"
+      print "            H[t] = 0.5 * x * (1.0 + erf(x * INV_SQRT2));"
+      print "        }"
+      print "        /* GEMM2: Y_panel[mp×N2] = H[mp×N1]·W2  (H read from L2, never DRAM) */"
+      print "        for (int64_t t = 0; t < mp*N2; t++) Y[i0*N2 + t] = 0.0;"
+      print "        hx_r6_gemm_panel(H, N1, W2, Y + i0*N2, mp, N1, N2, NULL, Ap, Bp);"
+      print "    }"
+      print "    free(Ap); free(Bp); free(H); return 0;"
+      print "}"
+      print "#undef HX_R6_MR"
+      print "#undef HX_R6_NR"
+      print "#undef HX_R6_KC"
+      print "#undef HX_R6_NC"
+      print "#undef HX_R6_MB"
+      print "#endif  /* __FMA__ — gemm-perf r6 b2b-MLP fused helpers */"
+      print ""
+      print "// hexa_farr_mlp_fused(X,Xr,Xc, W1,W1c, b1, W2,W2c) -> Y = gelu(X@W1+b1)@W2."
+      print "// ALWAYS defined. Fused path is opt-in (#if __FMA__ via HEXA_OMP); default"
+      print "// build uses a byte-identical THREE-CALL fallback (matmul_bias → gelu →"
+      print "// matmul) = the exact unfused two-GEMM reference."
+      print "HexaVal hexa_farr_mlp_fused(HexaVal x_v, HexaVal xr_v, HexaVal xc_v,"
+      print "                            HexaVal w1_v, HexaVal w1c_v, HexaVal b1_v,"
+      print "                            HexaVal w2_v, HexaVal w2c_v) {"
+      print "    int64_t M = hexa_as_num(xr_v), K = hexa_as_num(xc_v);"
+      print "    int64_t N1 = hexa_as_num(w1c_v), N2 = hexa_as_num(w2c_v);"
+      print "#if defined(__FMA__)"
+      print "    if (M > 0 && K > 0 && N1 > 0 && N2 > 0) {"
+      print "        int64_t x_id = hexa_as_num(x_v), w1_id = hexa_as_num(w1_v);"
+      print "        int64_t b1_id = hexa_as_num(b1_v), w2_id = hexa_as_num(w2_v);"
+      print "        if (x_id >= 0 && x_id < _hx_farr_count && w1_id >= 0 && w1_id < _hx_farr_count"
+      print "            && b1_id >= 0 && b1_id < _hx_farr_count && w2_id >= 0 && w2_id < _hx_farr_count) {"
+      print "            HexaFarrEntry* xe = &_hx_farr_table[x_id];"
+      print "            HexaFarrEntry* w1e = &_hx_farr_table[w1_id];"
+      print "            HexaFarrEntry* b1e = &_hx_farr_table[b1_id];"
+      print "            HexaFarrEntry* w2e = &_hx_farr_table[w2_id];"
+      print "            if (xe->buf && w1e->buf && b1e->buf && w2e->buf && xe->len >= M*K"
+      print "                && w1e->len >= K*N1 && b1e->len >= N1 && w2e->len >= N1*N2) {"
+      print "                HexaVal y_handle = hexa_farr_zeros(hexa_int(M * N2));"
+      print "                int64_t y_id = HX_INT(y_handle);"
+      print "                if (y_id >= 0 && y_id < _hx_farr_count) {"
+      print "                    /* re-fetch (zeros may have realloc'd the table) */"
+      print "                    HexaFarrEntry* x2 = &_hx_farr_table[x_id];"
+      print "                    HexaFarrEntry* w1_2 = &_hx_farr_table[w1_id];"
+      print "                    HexaFarrEntry* b1_2 = &_hx_farr_table[b1_id];"
+      print "                    HexaFarrEntry* w2_2 = &_hx_farr_table[w2_id];"
+      print "                    HexaFarrEntry* ye = &_hx_farr_table[y_id];"
+      print "                    if (x2->buf && w1_2->buf && b1_2->buf && w2_2->buf && ye->buf"
+      print "                        && ye->len >= M*N2) {"
+      print "                        if (hx_r6_mlp(x2->buf, w1_2->buf, b1_2->buf, w2_2->buf,"
+      print "                                      ye->buf, M, K, N1, N2) == 0) return y_handle;"
+      print "                    }"
+      print "                }"
+      print "            }"
+      print "        }"
+      print "    }"
+      print "#endif"
+      print "    // Byte-identical fallback (default build + any unsupported shape): the"
+      print "    // exact unfused two-GEMM path. H = gelu(X@W1+b1) is MATERIALIZED here"
+      print "    // (this is the reference whose DRAM round-trip the fused path elides)."
+      print "    HexaVal h_handle = hexa_farr_matmul_bias(x_v, xr_v, xc_v, w1_v, w1c_v, b1_v);"
+      print "    int64_t h_id = HX_INT(h_handle);"
+      print "    if (h_id >= 0 && h_id < _hx_farr_count) {"
+      print "        HexaFarrEntry* he = &_hx_farr_table[h_id];"
+      print "        if (he->buf && he->len >= M*N1) {"
+      print "            double* Hb = he->buf; const double INV_SQRT2 = 0.70710678118654752440;"
+      print "            for (int64_t t = 0; t < M*N1; t++) {"
+      print "                double x = Hb[t]; Hb[t] = 0.5 * x * (1.0 + erf(x * INV_SQRT2));"
+      print "            }"
+      print "        }"
+      print "    }"
+      print "    return hexa_farr_matmul(h_handle, xr_v, w1c_v, w2_v, w2c_v);"
+      print "}"
+      done=1
+    }
+    { print }
+  ' "$rt" > "$rt.gpr6" && mv "$rt.gpr6" "$rt"
+  if grep -q 'gemm-perf r6' "$rt" && grep -q 'hx_r6_mlp(' "$rt"; then
+    echo "[restore_frozen_seeds] gemm-perf r6: chained-GEMM (b2b) MLP fusion (hexa_farr_mlp_fused; #if __FMA__ opt-in, default byte-id three-call fallback) into $rt"
+  else
+    echo "[restore_frozen_seeds] gemm-perf r6: WARN — tmp_rfc032_smoke anchor not found, hexa_farr_mlp_fused NOT injected"
+  fi
+fi
+
 # ── gemm-perf r1 — register-blocked (i6 interleaved) hexa_farr_matmul (byteeq) ─
 # gemm-bench r1(aiden Ryzen 9600X, clang18, strict-FP -O2 -ffp-contract=off):
 # the shipped ikj+x4 kernel is ~9.5 GFLOP/s single-thread = ~10% of the AVX512

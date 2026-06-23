@@ -7947,6 +7947,18 @@ fn gen2_expr(node) {
                 }
             }
             if len(node.args) == 8 {
+                // gemm-perf r6 (BEYOND-PARITY, chained-GEMM/b2b fusion): farr_mlp_fused(
+                // X,Xr,Xc, W1,W1c, b1, W2,W2c) -> Y = gelu(X@W1+b1)@W2. The hexa
+                // direct-emit lever a standalone BLAS structurally CANNOT do: tile over
+                // M-rows; for each M-panel compute the FULL H-panel = gelu(X@W1+b1) into
+                // an L2-resident scratch and feed it straight into H@W2 — the intermediate
+                // activation H[M×N1] is NEVER materialized to DRAM (CUTLASS b2b-GEMM /
+                // FlashAttention insight on the MLP block; thread_block_tile_N == N1).
+                // HEXA_OMP build only (#if __FMA__); default = byte-id three-call
+                // (matmul_bias → gelu → matmul). 8 args: A=X B=W1 then W2.
+                if name == "farr_mlp_fused" {
+                    return "hexa_farr_mlp_fused(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ", " + arg_strs[7] + ")"
+                }
                 // HEXA-FUSION L3 (BWD glue half · ⑤-bwd2): forge_dispatch_moe_router_
                 // bwd(probs, ex_out, dy, dlogits, dex_out, T, E, C) -> int rc.
                 // Reproduces nn_moe_router_bwd (reads CACHED probs — NO _moe_exp
