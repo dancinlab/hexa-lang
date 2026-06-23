@@ -101,7 +101,18 @@ S12="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(ad_matmul|adamw_step|adamw_ste
 # hexa_farr_int_fill_from_array (interp-coupled: struct HexaValStruct +
 # HX_ARR_ITEMS/LEN + array_store interp-unwrap, a frozen interp-ABI dep).
 S13="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(hexa_farr32_zeros|hexa_farr32_get|hexa_farr32_set|hexa_farr32_len|hexa_farr32_free|hexa_farr32_matmul|hexa_farr32_matmul_NT_b|hexa_farr32_matmul_NT_a|hexa_farr_int_zeros|hexa_farr_int_get|hexa_farr_int_set|hexa_farr_int_len|hexa_farr_int_copy|hexa_farr_int_sum|hexa_farr_int_free)$')"
-echo "regen_runtime_hi_seed: $OUT — $N/12 leaf rt_* + $M/16 libm-leaf hexa_math_* + $A/13 HexaVal-tail accessor + $S6/10 str/coerce/poly (r19) + $S7/9 fs/ffi/ml + $S7B/5 hxlcl-math (r21) + $S8/8 hxlcl mem/str-static (r23) + $S9/4 ml/math array (r24) + $S10/11 time/sleep/input (r25) + $S11/2 carrier-emit array-ctor (r26) + $S12/52 carrier-emit bare-wrapper (r29) + $S13/15 carrier-emit real-impl farr32+farr_int (r30) bodies exported"
+# r31 (ING #29 batch 14) -- CARRIER-EMIT real-impl harvest: the term_ffi.c
+# TUI-PRIM L1 subsystem (21 lowercase term_* bodies), ported VERBATIM from the
+# frozen runtime.c #include "native/term_ffi.c" amalgam. ISOLATED-state cluster:
+# the file-static _term_saved/_sigwinch_flag/_sigint_flag carriers are co-emitted
+# FRESH seed-local (frozen copy in the DROPPED TU -> no collision; r26 lens). The
+# 7 hxlcl_* helper callees (close/ioctl/poll/waitpid -> libc; isatty/sigaction/
+# tcgetattr/tcsetattr/forkpty -> rt_posix_ok/rt_net_fail stubs, already seeded) are
+# emitted fresh seed-local as static helpers in the frozen LIBC/stub branch.
+# hxlcl_read/hxlcl_write/hxlcl_execvp stay link-deps (seedprov r25/r29);
+# cfmakeraw/getppid/memcpy/memset = libc link-deps. Hard assert.
+S14="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(term_raw_enter|term_raw_restore|term_get_winsize|term_poll_stdin|term_getppid|term_read_byte|term_read_bytes|term_write|term_install_sigwinch|term_sigwinch_pending|term_install_sigint|term_sigint_pending|term_isatty_stdin|term_isatty_stdout|term_pty_spawn|term_fd_read|term_fd_write|term_fd_close|term_fd_poll|term_pty_reap|term_pty_spawn_sh)$')"
+echo "regen_runtime_hi_seed: $OUT — $N/12 leaf rt_* + $M/16 libm-leaf hexa_math_* + $A/13 HexaVal-tail accessor + $S6/10 str/coerce/poly (r19) + $S7/9 fs/ffi/ml + $S7B/5 hxlcl-math (r21) + $S8/8 hxlcl mem/str-static (r23) + $S9/4 ml/math array (r24) + $S10/11 time/sleep/input (r25) + $S11/2 carrier-emit array-ctor (r26) + $S12/52 carrier-emit bare-wrapper (r29) + $S13/15 carrier-emit real-impl farr32+farr_int (r30) + $S14/21 carrier-emit real-impl term_ffi (r31) bodies exported"
 [ "$N" = "12" ] || { echo "regen_runtime_hi_seed: expected 12 rt_*, got $N" >&2; exit 3; }
 [ "$M" = "16" ] || { echo "regen_runtime_hi_seed: expected 16 hexa_math_*, got $M" >&2; exit 4; }
 [ "$A" = "13" ] || { echo "regen_runtime_hi_seed: expected 13 HexaVal-tail accessors, got $A" >&2; exit 5; }
@@ -114,3 +125,4 @@ echo "regen_runtime_hi_seed: $OUT — $N/12 leaf rt_* + $M/16 libm-leaf hexa_mat
 [ "$S11" = "2" ]  || { echo "regen_runtime_hi_seed: expected 2 carrier-emit array-ctor (r26), got $S11" >&2; exit 12; }
 [ "$S12" = "52" ] || { echo "regen_runtime_hi_seed: expected 52 carrier-emit bare-wrapper (r29), got $S12" >&2; exit 13; }
 [ "$S13" = "15" ] || { echo "regen_runtime_hi_seed: expected 15 carrier-emit real-impl farr32+farr_int (r30), got $S13" >&2; exit 14; }
+[ "$S14" = "21" ] || { echo "regen_runtime_hi_seed: expected 21 carrier-emit real-impl term_ffi (r31), got $S14" >&2; exit 15; }
