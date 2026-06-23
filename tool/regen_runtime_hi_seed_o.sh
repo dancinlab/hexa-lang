@@ -37,7 +37,13 @@ M="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(hexa_math_tanh|hexa_math_tan|hex
 # (struct_pack/unpack/rect/point/size_pack/random/char_code). Informational count
 # (the hard asserts stay on the rt_*/math_* clusters); these supply HI-tier bodies.
 A="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(hexa_clamp|hexa_is_empty|hexa_byte_len|hexa_from_cstring|hexa_struct_free|hexa_str_parse_float|hexa_struct_pack|hexa_struct_unpack|hexa_struct_rect|hexa_struct_point|hexa_struct_size_pack|hexa_random|hexa_char_code)$')"
-echo "regen_runtime_hi_seed: $OUT — $N/12 leaf rt_* + $M/16 libm-leaf hexa_math_* + $A/13 HexaVal-tail accessor bodies exported"
+# r19 (ING #35 batch 6) — str/coerce/poly leaves UNLOCKED by the r18
+# alloc-WALL-2 = portable-link-dep verdict (10 bodies whose every callee is
+# supplied OUTSIDE the residual). Informational count (the hard asserts stay on
+# the rt_*/math_*/accessor clusters); these supply HI-tier bodies, residual -10.
+S6="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(hexa_str_substr|hexa_str_bytes|hexa_to_bool|hexa_float_to_int|hexa_find_poly|hexa_bin|hexa_hex|hexa_one_hot|hexa_sum|hexa_dict_keys)$')"
+echo "regen_runtime_hi_seed: $OUT — $N/12 leaf rt_* + $M/16 libm-leaf hexa_math_* + $A/13 HexaVal-tail accessor + $S6/10 str/coerce/poly (r19) bodies exported"
 [ "$N" = "12" ] || { echo "regen_runtime_hi_seed: expected 12 rt_*, got $N" >&2; exit 3; }
 [ "$M" = "16" ] || { echo "regen_runtime_hi_seed: expected 16 hexa_math_*, got $M" >&2; exit 4; }
 [ "$A" = "13" ] || { echo "regen_runtime_hi_seed: expected 13 HexaVal-tail accessors, got $A" >&2; exit 5; }
+[ "$S6" = "10" ] || { echo "regen_runtime_hi_seed: expected 10 str/coerce/poly (r19), got $S6" >&2; exit 6; }
