@@ -1,0 +1,49 @@
+name: forge-dispatch-cuda-link-gate
+
+# ── ING #33: forge_dispatch CUDA-link regression gate (build-free, 0-GPU) ────
+#
+# Locks in the #3806 + #3807 fix. The bug: forge_dispatch_* host dispatchers in
+# tool/restore_frozen_seeds (the frozen-seed SSOT that produces self/runtime.c)
+# were wrapped in `#ifndef HEXA_CUDA`, on the false assumption a GPU-side
+# fusion_dispatch.c would supply them under -DHEXA_CUDA. That file was never
+# wired in, so a CUDA-variant runtime.a exported only the always-defined seam
+# and ANY -DHEXA_CUDA link of a TU calling a guarded dispatcher failed with
+# `undefined reference to forge_dispatch_<name>` (anima hit groupnorm_gelu).
+#
+# #3806/#3807 flipped every host heredoc to `#if 1` + HEXA_FORGE_HOST_WEAK and a
+# summer sweep proved 66/66 forge_dispatch symbols export under CUDA, 0
+# undefined — but that was a one-time manual check. This gate makes the
+# invariant MECHANICAL so the bug class cannot silently re-land:
+#   A. ZERO bare `#ifndef HEXA_CUDA` (nor `#if !defined(HEXA_CUDA)`) guards.
+#   B. EVERY forge_dispatch host definition carries HEXA_FORGE_HOST_WEAK.
+#
+# LOW BLAST RADIUS — purely lexical scan of ONE text file. No compiler, no CUDA
+# toolchain, no build; the script (tool/forge_dispatch_cuda_link_gate.sh) is the
+# SSOT (also runnable locally / in a pre-commit hook), this workflow a thin CI
+# wrapper. It passes on the current clean tree, so introduces no false-positive.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tool/restore_frozen_seeds'
+      - 'tool/forge_dispatch_cuda_link_gate.sh'
+      - '.github/workflows/forge-dispatch-cuda-link-gate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  forge-dispatch-cuda-link:
+    name: forge_dispatch CUDA-link safety (#if 1 + HEXA_FORGE_HOST_WEAK)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run forge_dispatch CUDA-link regression gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh tool/forge_dispatch_cuda_link_gate.sh
