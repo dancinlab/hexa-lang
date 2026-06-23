@@ -71,7 +71,16 @@ S9="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(hexa_silu|hexa_softmax|hexa_mat
 # native/exec_argv_sha256.c _hxa_* static helpers) + hexa_env_var (hxlcl_strcmp
 # has no delegate + hexa_val_arena_* coupling).
 S10="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(hexa_clock|hexa_timestamp|hexa_time_ms|hexa_now_monotonic_s|hexa_sleep|hexa_sleep_s|hexa_sleep_ms|hexa_sleep_ns|hexa_input|hexa_read_stdin|read_stdin_n_c)$')"
-echo "regen_runtime_hi_seed: $OUT — $N/12 leaf rt_* + $M/16 libm-leaf hexa_math_* + $A/13 HexaVal-tail accessor + $S6/10 str/coerce/poly (r19) + $S7/9 fs/ffi/ml + $S7B/5 hxlcl-math (r21) + $S8/8 hxlcl mem/str-static (r23) + $S9/4 ml/math array (r24) + $S10/11 time/sleep/input (r25) bodies exported"
+# r26 (ING #35 batch 11) — CARRIER-EMIT: 2 HI-tier array-ctor bodies
+# (hexa_array_alloc/hexa_array_zeros_float) UNLOCKED by emitting their file-static
+# _hx_stats counter carrier (_hx_r26_stats_array_new + _hx_stats_on guard) FRESH
+# IN THE SEED TU. The r24 census's '(C) forbidden-wall' (needs frozen-blob
+# de-static) is FALSIFIED: a file-static carrier exports no link symbol, the
+# frozen runtime_core.c copy is in the DROPPED TU → emitting a fresh co-located
+# copy collides with nothing. Hard assert. The body compiles the SHIPPING
+# (HEXA_HAS_HEXA_RT_STDLIB) branch → rt_array_alloc/zeros_float (stdlib) link-dep.
+S11="$(nm -g "$OUT" 2>/dev/null | grep -cE ' T _?(hexa_array_alloc|hexa_array_zeros_float)$')"
+echo "regen_runtime_hi_seed: $OUT — $N/12 leaf rt_* + $M/16 libm-leaf hexa_math_* + $A/13 HexaVal-tail accessor + $S6/10 str/coerce/poly (r19) + $S7/9 fs/ffi/ml + $S7B/5 hxlcl-math (r21) + $S8/8 hxlcl mem/str-static (r23) + $S9/4 ml/math array (r24) + $S10/11 time/sleep/input (r25) + $S11/2 carrier-emit array-ctor (r26) bodies exported"
 [ "$N" = "12" ] || { echo "regen_runtime_hi_seed: expected 12 rt_*, got $N" >&2; exit 3; }
 [ "$M" = "16" ] || { echo "regen_runtime_hi_seed: expected 16 hexa_math_*, got $M" >&2; exit 4; }
 [ "$A" = "13" ] || { echo "regen_runtime_hi_seed: expected 13 HexaVal-tail accessors, got $A" >&2; exit 5; }
@@ -81,3 +90,4 @@ echo "regen_runtime_hi_seed: $OUT — $N/12 leaf rt_* + $M/16 libm-leaf hexa_mat
 [ "$S8" = "8" ] || { echo "regen_runtime_hi_seed: expected 8 hxlcl mem/str-static (r23), got $S8" >&2; exit 9; }
 [ "$S9" = "4" ] || { echo "regen_runtime_hi_seed: expected 4 ml/math array (r24), got $S9" >&2; exit 10; }
 [ "$S10" = "11" ] || { echo "regen_runtime_hi_seed: expected 11 time/sleep/input (r25), got $S10" >&2; exit 11; }
+[ "$S11" = "2" ]  || { echo "regen_runtime_hi_seed: expected 2 carrier-emit array-ctor (r26), got $S11" >&2; exit 12; }
