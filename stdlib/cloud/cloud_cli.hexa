@@ -1626,8 +1626,25 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     // non-default key is never presented → `Permission denied (publickey)`
     // → the bounded gate declares a good pod "never ready" and DESTROYS it.
     let rent_identity = _flag_val(av, start, "--identity", _vast_default_identity())
-    let ssh = vast_wait_ssh_id(inst.instance_id, tries, wait_cadence, rent_identity)
-    if ssh.ok == 0 {
+    // GONE-aware readiness gate (Bug 1: created ≠ live). Cross-verifies the
+    // instance's actual_status every tick so a host that never brought the
+    // contract up (→ vast auto-removed it) is detected IMMEDIATELY and FAILS
+    // LOUD + rolls back, instead of silently registering a GHOST and burning
+    // the whole --max-wait-sec budget on an ssh endpoint that can't appear.
+    let ready = vast_wait_ssh_status(inst.instance_id, tries, wait_cadence, rent_identity)
+    if ready.gone == 1 {
+        // LOUD FAIL — the host never brought the pod up. Roll the rent back:
+        // best-effort destroy (idempotent — it may already be removed) + drop
+        // the GHOST registry row so `cloud alive`/`pods` never reports a pod
+        // that does not exist. No host:port is printed (there is none).
+        let v = vast_destroy(inst.instance_id)
+        let _ = pod_registry_forget(inst.instance_id)
+        println("[cloud] rent vast: ✗ FAILED — instance " + inst.instance_id + " is GONE (" + ready.status + "): " + ready.message)
+        println("[cloud] rent vast: the host failed to provision it (created ≠ live). Rolled back: registry row dropped" + _vast_rollback_destroy_note(v.ok, v.message))
+        println("[cloud] rent vast: no charge should accrue for an instance that never ran; verify with `cloud api vast GET instances`. Re-run `cloud rent` (a different offer often provisions).")
+        return 2
+    }
+    if ready.ok == 0 {
         if bounded {
             // Auto-teardown — the M1 contract. A billing pod whose ssh
             // never came up is a 100% loss; destroy it rather than leak.
@@ -1641,22 +1658,24 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
             }
             return 2
         }
-        println("[cloud] rent vast: " + ssh.message)
-        println("[cloud] instance " + inst.instance_id + " is created + tracked; ssh not yet ready — re-check with: cloud list / vastai show instance " + inst.instance_id)
+        println("[cloud] rent vast: " + ready.message)
+        println("[cloud] instance " + inst.instance_id + " is created + tracked; ssh not yet ready — re-check with: cloud list / cloud ssh-port " + inst.instance_id)
         return 1
     }
-    println("[cloud] rent vast: READY " + ssh.host + ":" + ssh.port + " (root@" + ssh.host + " -p " + ssh.port + ")")
-    let _ = pod_registry_add(inst.instance_id, "vast", project, purpose, ssh.host, ssh.port, "READY")
+    let ssh_host = ready.host
+    let ssh_port = ready.port
+    println("[cloud] rent vast: READY " + ssh_host + ":" + ssh_port + " (root@" + ssh_host + " -p " + ssh_port + ")")
+    let _ = pod_registry_add(inst.instance_id, "vast", project, purpose, ssh_host, ssh_port, "READY")
     // (ING #34-(1)) /workspace mount df-check: some images/regions bring
     // /workspace up on the container overlay instead of the requested disk,
     // so the capacity isn't there and writes silently land on ephemeral disk.
     // Overlay is the authoritative signal; the size floor uses --disk (the
     // vast instance-disk request). Only when --disk was sized (disk_gb > 0).
     if disk_gb > 0 {
-        let v_ws = cloud_check_workspace_mount("root@" + ssh.host, vast_ssh_opts_id(ssh.port, rent_identity), disk_gb)
+        let v_ws = cloud_check_workspace_mount("root@" + ssh_host, vast_ssh_opts_id(ssh_port, rent_identity), disk_gb)
         if v_ws.exit_code == 1 || v_ws.exit_code == 2 {
             println("[cloud] rent vast: ⚠ /workspace MOUNT SUSPECT — " + v_ws.message)
-            println("                   work under /workspace may be on EPHEMERAL overlay (not the " + str(disk_gb) + " GiB disk). Verify: cloud run root@" + ssh.host + " -p " + ssh.port + " -- df -h /workspace")
+            println("                   work under /workspace may be on EPHEMERAL overlay (not the " + str(disk_gb) + " GiB disk). Verify: cloud run root@" + ssh_host + " -p " + ssh_port + " -- df -h /workspace")
         }
     }
     // Always capture the vast offer's hourly rate (dph_total) into the registry
@@ -1686,13 +1705,24 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     // kind} attribution write (no-omission + fallback). `--no-register` is kept
     // as a contract-stable no-op so existing callers / hooks never break.
     if _has_flag(av, start, "--no-register") == 0 {
-        _emit_rent_result(inst.instance_id, ssh.host, "vast", "READY", project, "")
+        _emit_rent_result(inst.instance_id, ssh_host, "vast", "READY", project, "")
     }
     println("instance_id=" + inst.instance_id)
-    println("host=" + ssh.host)
-    println("port=" + ssh.port)
+    println("host=" + ssh_host)
+    println("port=" + ssh_port)
     println("owner=" + owner)
     return 0
+}
+
+// _vast_rollback_destroy_note — diag tail for the GONE LOUD-FAIL message:
+// names whether the rollback destroy confirmed (idempotent — the contract may
+// already be gone) or needs a manual check. Pure formatting helper; takes the
+// primitives (not the VastInstance struct) so it stays module-local.
+fn _vast_rollback_destroy_note(destroy_ok: int, destroy_msg: str) -> str {
+    if destroy_ok == 1 {
+        return " + destroy confirmed."
+    }
+    return " (destroy: " + destroy_msg + " — likely already removed; confirm with `cloud api vast GET instances`)."
 }
 
 // _cloud_rent_runpod — runpod provision path: create (single GPU type) →
