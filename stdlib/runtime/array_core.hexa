@@ -78,6 +78,31 @@ pub fn rt_array_arena_alloc_items_native(n: int) -> int {
     return hexa_arena_alloc(bytes)
 }
 
+// rt_array_arena_alloc_desc_native: allocate a single zeroed HexaArr descriptor
+// (sizeof(HexaArr)=24 bytes — {HexaVal* items; int64_t len; int64_t cap;}, three
+// 8-byte words @ runtime.h:74) from the NATIVE arena and return its raw pointer
+// (as int). This is the descriptor sibling of rt_array_arena_alloc_items_native:
+// the slice_fast / array_new descriptor was the last libc `calloc(1,
+// sizeof(HexaArr))` in the array fast path; routing it through the already-native
+// arena bump proves the descriptor calloc is NOT a libc wall either. UNLIKE the
+// items buffer (caller memcpy's over it, so it is left un-zeroed), the descriptor
+// MUST be zeroed — its items/len/cap fields are read before any full write (a
+// slice_fast empty-array early-return returns the descriptor with NULL items / 0
+// len / 0 cap), so we memset-zero the 3 words explicitly (the calloc(1,...)
+// contract). NO gates here: the C wrapper keeps hexa_array_arena_on +
+// __hexa_val_mark_top live-mark + the NULL→calloc fallback (returns 0 only on
+// arena OOM, which the wrapper treats as the calloc-fallback signal), exactly the
+// guard-C / body-native split of the #3687 items pattern. Un-nested leaves (one
+// op per temp), mirroring the C `hexa_arena_alloc(sizeof(HexaArr))` + memset.
+pub fn rt_array_arena_alloc_desc_native() -> int {
+    let desc = hexa_arena_alloc(24)         // sizeof(HexaArr) = 3 * 8
+    if desc == 0 { return 0 }               // arena OOM -> caller falls back to calloc
+    __hx_ptr_store64(desc, 0, 0)            // items <- NULL
+    __hx_ptr_store64(desc, 8, 0)            // len   <- 0
+    __hx_ptr_store64(desc, 16, 0)           // cap   <- 0
+    return desc
+}
+
 // rt_array_len_native: HexaArr.len @ offset 8 of the descriptor.
 pub fn rt_array_len_native(arr: HexaVal) -> int {
     let arr_ptr = __hx_payload_add(arr, 0)
