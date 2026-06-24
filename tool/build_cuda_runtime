@@ -90,6 +90,31 @@ nvcc -x cu -DHEXA_CUDA $CUBLAS_MACRO -rdc=true -gencode arch=compute_$SM,code=sm
 nvcc -dlink -gencode arch=compute_$SM,code=sm_$SM "$B/runtime_cuda.o" \
      -o "$B/runtime_cuda_dlink.o" -lcudadevrt
 
+# ── ING-33 — regenerate self/runtime.c from the SSOT before the CUDA host compile ──
+# ROOT-CAUSE (measured summer 2026-06-24): the CUDA host object below is compiled
+# from `self/runtime.c` as it sits in the WARM TREE. install.sh runs
+# tool/restore_frozen_seeds (which emits the current SSOT — incl. the weak
+# forge_dispatch host twins, ING-82 silu-gate decl, openssl wiring), but this script
+# is run SEPARATELY against whatever warm copy already exists. If that copy predates
+# the weak-host-twin landing, `runtime_cuda_host.o` carries only the 2 always-defined
+# forge seams (matmul/ffn) instead of all 33 → a -DHEXA_CUDA consumer link of an
+# app that calls e.g. forge_dispatch_groupnorm_gelu fails with `undefined reference`
+# (the anima cli/anima.hexa full-stack failure). MEASURED: stale shipped host obj =
+# 2 forge_dispatch syms / 765376 B; SSOT-regenerated = 33 / weak / openssl-wired.
+# FIX = re-seed self/runtime.c from the frozen SSOT here, so the host obj can never
+# be stale regardless of warm-tree state (mirrors build_aprime.sh / build_selfhost.sh
+# which restore_frozen_seeds before compiling). CPU-build byte-neutral: this script
+# only produces the CUDA-variant objects; the shipped CPU runtime.a is built by
+# install.sh's own restore path and is untouched. release_runtime_compile_gate
+# already proves the SSOT carries all 66 forge bodies under -DHEXA_CUDA.
+if [ -x tool/restore_frozen_seeds ]; then
+  echo "=== ING-33: re-seed self/runtime.c from frozen SSOT (restore_frozen_seeds) ==="
+  bash tool/restore_frozen_seeds >/dev/null 2>&1 \
+    || { echo "[build_cuda_runtime] restore_frozen_seeds failed — self/runtime.c may be stale"; exit 1; }
+else
+  echo "[build_cuda_runtime] WARN: tool/restore_frozen_seeds not executable — using warm-tree self/runtime.c as-is"
+fi
+
 # ── ING-35/ING-82 — silu_gate_gpu extern-before-use guard (warm-tree CUDA build) ──
 # The frozen self/runtime.c (151c52c8…) declares `extern int _hx_cuda_farr_silu_
 # gate_gpu(...)` ~581 lines AFTER its first CALL inside hexa_farr_silu_gate_gpu's
