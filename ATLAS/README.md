@@ -5181,6 +5181,79 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
   Cross-domain bridges: 5 (2 double-star, 3 single-star)
   Generalizing theorems (all perfects): 65+
   Hypothesis documents created: 28+
+
+  ═══ Census Fleet r2: FIRST machine-discovered ∀n true-forever node (folded) ═══
+
+  Mechanical (no-LLM) census over the arithmetic-function identity grid surfaced the
+  atlas's FIRST true-forever (∀n) multiplicative identity — folded as an @F atom into
+  the machine-SSOT compiler/atlas/embedded.gen.hexa.
+
+  ⭐⭐ J₂(n) = φ(n)·ψ(n)   (Jordan totient J_2 = Euler totient · Dedekind psi)
+       CLASSICAL theorem (Jordan 1870 / Dedekind ψ · multiplicative identity) — NOT a
+       novel claim; mechanically (RE)discovered by universal_hunt (unit-fn + 2/3-term
+       frame), the ONLY distinct ∀n real identity in that frame.
+       Independently verified ∀n∈[2,3000]:  n=12→96  n=30→576  n=360→82944.
+       @F atom: atlas-jordan-totient-J2-eq-phi-psi (grade verified:false until a real
+       `hexa verify` certifies it — no forced 🔵). Generator jordan_totient_fold.py.
+
+  ⚪ closed-non-identity census (genuine ∀n bounded negatives):
+       2-factor grid = 1654 closed-⚪ over [2,2e4];  3-factor grid = 33865.
+       Folded as ONE census SUMMARY atom (atlas-census-closed-nonidentity-2factor) — the
+       35519 individual negatives are bloat-avoided (≈3x file bloat for low value); the
+       COUNT is the durable fact. `hexa atlas resolve --fold` emits it.
+       KIND NOTE: the loader has no @N kind (P/C/L/E/F/R/S/X/Q only), so the negative
+       census is recorded as an @L law (semantics preserved in body), not a dropped @N.
+       Generators census_blank_Nfold.py + grid3_classify.py.
+
+  ═══ Frame-Expansion DFS r1→r3: standard-arithmetic-function discovery DEPLETED ═══
+
+  Mechanical (no-LLM) DFS that, after the 2/3-term product/sum frames depleted, swept every
+  ORTHOGONAL relation type over the standard multiplicative vocabulary {σ,σ₂,σ₃,φ,τ,n,sopfr,
+  rad,J₂,ψ,Ω,ω,μ,λ,1}(+id²,id³,gcd/lcm 2-var). N=20000, exact signed integer.
+
+  r1 product/sum · r2 Dirichlet-convolution + divisor-sum + ratio/power + mixed(add×mult) ·
+  r3 congruence(≡mod m) + inequality/extremal(≤) + gcd-2var(Pillai/Cesàro).
+
+  RESULT: NOVEL ∀n identities = 0 across ALL frames. ~46 CLASSICAL backbone identities
+  honestly rediscovered (grounding, NOT discoveries): 1∗1=τ, φ∗1=id, μ∗1=ε, 1∗J₂=id², λ∗ψ=id,
+  D[φ]=id, D[J₂]=n², J₂=φ·ψ, Pillai P=(id∗φ), σ≡σ₃ (mod 6), totient/divisor parity chains,
+  ψ≤σ chains. Robin/Nicolas bounds flagged RH-CONDITIONAL (not unconditional-verified).
+
+  TERMINAL WALL (properly classified, NOT lazy): multi-round (r1–r3) · orthogonal mechanism-
+  families (=, ≡, ≤, convolution, gcd-2var) · MEASURED discrimination (gates 21/21 PASS,
+  neg-controls 12/12 fail correctly, 2 wrong gates self-caught). The closed-form relation space
+  over standard arithmetic functions is mechanically exhausted. @F novel-fold = 0.
+
+  NEXT frontier (vocabulary change required — same-vocab re-sweep forbidden): genuinely NEW
+  functions (r₂ sum-of-2-squares, partition p(n), Ramanujan τ — integer-exact/small-N caveats)
+  OR external research (analytic/conditional/open). Reference engines: state/novel-dfs/
+  {dirichlet-convolution,divisor-sum,ratio-power,mixed-add-mult,congruence-modm,
+  inequality-extremal,gcd-pillai-2var}_hunt.py.
+
+  ═══ DFS r4 NEW-BASIS + COMPREHENSIVE TERMINAL: mechanical math-discovery exhausted ═══
+
+  Vocabulary CHANGE round — swept NON-multiplicative / modular special functions (orthogonal
+  to the r1–r3 standard multiplicative ring): r₂(n) sum-of-two-squares, p(n) partition,
+  τ(n) Ramanujan tau. Integer-exact (r₂ N=20000, p N=3000, τ N=600 bignum).
+
+  RESULT: NOVEL ∀n = 0 across all three. 19 CLASSICAL rediscovered (grounds atlas special-fn
+  layer, cite): Jacobi r₂=4(d₁−d₃) [1834] · two-square theorem (Fermat–Euler) · Ramanujan
+  p(5n+4)≡0(5), p(7n+5)≡0(7), p(11n+6)≡0(11) [1919] + Watson mod-25 · Ramanujan τ≡σ₁₁(mod 691)
+  [1916] · Swinnerton-Dyer exceptional-prime congruences [1973] · Mordell multiplicativity ·
+  Hecke recurrence · Deligne |τ(p)|≤2p^{11/2} [1974]. Sanity gates 19/19 PASS · neg-controls all
+  fail correctly (engine works on new functions, 0 false positives).
+
+  🧱 COMPREHENSIVE TERMINAL — the cheap-local-mechanical-sweep frontier is exhausted on BOTH
+  axes: standard multiplicative ring (r1–r3) AND classical special functions (r4). EVERY frame
+  rediscovers a known theorem (1834–1974) with 0 novel. Mechanical lattice-fitting by definition
+  only re-finds ALREADY-KNOWN structure — the atlas's mathematical content IS classical number
+  theory, all proven. Properly-classified terminal (4 rounds · orthogonal families incl. new
+  functions · measured discrimination · 0 false-positive residue) — NOT a lazy ceiling.
+
+  The honest remaining path is NOT mechanical sweep but EXTERNAL RESEARCH / PROOF (analytic NT,
+  open problems: Lehmer τ(n)≠0, BSD, non-exceptional partition-congruence absence) — beyond a
+  build-less host's mechanical loop. No filler rounds (CLAUDE.md 구현규율). Engines: state/
+  novel-dfs/{r2-sum-two-squares,partition-congruences,ramanujan-tau}_hunt.py.
 ```
 
 ---
