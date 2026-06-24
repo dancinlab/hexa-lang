@@ -96,22 +96,24 @@ def fold_into(path):
         print("SKIP: (kind=" + ATOM_KIND + ", id=" + ATOM_ID + ") already present in " + path)
         return
     lines = text.splitlines(keepends=True)
-    # Insert right after the @F section opener `ATLAS_P_NODES: [AtlasNode] = [` (the @F nodes live
-    # in the single ATLAS_P_NODES list in this embed). Find the opener line and splice after it.
+    # Insert right after the @F section opener `ATLAS_F_NODES: [AtlasNode] = [` — the canonical
+    # per-kind section for @F atoms. The loader (static_index::_bucket_by_kind) buckets each node
+    # by its `kind` field into the matching ATLAS_<kind>_NODES list; @F atoms belong in
+    # ATLAS_F_NODES (matching `register --from-verify`). Splice after the opener.
     opener_idx = None
     for i, ln in enumerate(lines):
-        if "ATLAS_P_NODES: [AtlasNode] = [" in ln:
+        if "ATLAS_F_NODES: [AtlasNode] = [" in ln:
             opener_idx = i
             break
     if opener_idx is None:
-        sys.exit("ERROR: could not find `ATLAS_P_NODES: [AtlasNode] = [` opener in " + path)
+        sys.exit("ERROR: could not find `ATLAS_F_NODES: [AtlasNode] = [` opener in " + path)
     insert = line + ("\n" if not line.endswith("\n") else "")
     # the existing first node line ends with `,` — our inserted line must too (it's not last).
     insert = insert.rstrip("\n") + ",\n"
     lines.insert(opener_idx + 1, insert)
     with open(path, "w") as fh:
         fh.write("".join(lines))
-    print("FOLDED @F " + ATOM_ID + " into " + path + " (after ATLAS_P_NODES opener, line " + str(opener_idx + 1) + ")")
+    print("FOLDED @F " + ATOM_ID + " into " + path + " (after ATLAS_F_NODES opener, line " + str(opener_idx + 1) + ")")
 
 
 if __name__ == "__main__":
@@ -125,7 +127,7 @@ if __name__ == "__main__":
             phi, psi, J2 = af(n)
             print("  n=%-4d  J2=%-7d  phi*psi=%-7d  %s" % (n, J2, phi * psi, "OK" if J2 == phi * psi else "MISMATCH"))
         print()
-        print("--- @F AtlasNode struct line (for embedded.gen.hexa ATLAS_P_NODES) ---")
+        print("--- @F AtlasNode struct line (for embedded.gen.hexa ATLAS_F_NODES) ---")
         print(struct_line())
         print()
         print("fold:  python3 ATLAS/state/novel-dfs/jordan_totient_fold.py --fold compiler/atlas/embedded.gen.hexa")

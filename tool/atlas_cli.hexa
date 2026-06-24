@@ -3745,8 +3745,8 @@ fn cmd_census(rest: array) {
 // ATLAS/state/novel-dfs/blue_harvest_12fn.py::af() (sig3 excluded — never in the
 // census vocabulary). Frozen oracle: N=20000 → 2145 = 64 + 1654 + 321 + 106.
 //
-// --fold is PHASE 2 (writing @N atoms into embedded.gen.hexa — machine-SSOT
-// governance: separate PR + verify). Phase 1 prints a stub only.
+// --fold is PHASE 2 (folds ONE census-SUMMARY atom into embedded.gen.hexa as
+// @L — the loader has no @N kind; machine-SSOT governance: separate PR + verify).
 //
 // 11 function indices (parallel-array layout, n in 0..N):
 //   0 sig  1 sig2  2 phi  3 tau  4 n  5 sopfr  6 rad  7 J2  8 psi  9 Om  10 om
@@ -3778,8 +3778,8 @@ fn cmd_resolve(rest: array) {
             println("  deterministically classify ALL 2145 @F grid cells (no LLM, idempotent):")
             println("    filled-🔵 (1-sol n>=4) · closed-⚪ (0-sol) · multi-⊞ (>=2-sol) · degenerate (1-sol n<4)")
             println("  --n N    sweep n in [2,N] (default 20000; oracle N=20000 → 64/1654/321/106)")
-            println("  --fold   fold a SINGLE @N census SUMMARY atom (closed-⚪ count) into embedded.gen.hexa")
-            println("           (idempotent; the 35519 individual negatives are bloat-avoided by design)")
+            println("  --fold   fold a SINGLE census-SUMMARY atom (closed-⚪ count) into embedded.gen.hexa")
+            println("           as @L (the loader has no @N kind); idempotent; 35519 individual negatives bloat-avoided")
             return
         }
         else { i = i + 1 }
@@ -3936,35 +3936,43 @@ fn cmd_resolve(rest: array) {
     println("  CHECK filled+closed+multi+degenerate = " + to_string(check) + " (== denominator " + to_string(denominator) + ")")
     println("")
     if want_fold {
-        // ── PHASE 2 — fold the closed-⚪ verdict as ONE @N-census SUMMARY atom. ──
+        // ── PHASE 2 — fold the closed-⚪ verdict as ONE census-SUMMARY atom. ──
         // Honest bloat decision (machine-SSOT governance): the 2-factor grid has
         // `closed` genuine non-identities (1654 over [2,2e4]); the 3-factor grid has
-        // 33865. Folding all ~35519 as individual `@N A*B != C*D` AtlasNode literals
+        // 33865. Folding all ~35519 as individual `A*B != C*D` AtlasNode literals
         // would add ~22 MB of struct text to the ~11 MB embedded.gen.hexa (≈3x bloat)
-        // for low-value bounded negatives. Instead we fold a SINGLE @N census atom
-        // that RECORDS the count + sweep window + generator — the COUNT is the
-        // durable fact, not 35519 negative atoms. Idempotent on (kind,id).
-        let nid = "atlas-census-closed-2factor-Nfold"
-        let raw = "@N " + nid + " = closed-non-identity census (2-factor A*B!=C*D grid) :: refuted [d=2026-06-25 active]\n" +
+        // for low-value bounded negatives. Instead we fold a SINGLE census atom that
+        // RECORDS the count + sweep window + generator — the COUNT is the durable
+        // fact, not 35519 negative atoms. Idempotent on (kind,id).
+        //
+        // KIND: the atlas loader (static_index::_bucket_by_kind / parser::_kind_of)
+        // recognizes ONLY P/C/L/E/F/R/S/X/Q — there is NO `@N` kind (an @N atom would
+        // parse with kind="" and be DROPPED from every bucket, unretrievable). So the
+        // census-negative summary is folded as an `@L` law (a recognized, loadable,
+        // retrievable kind) — "closed-non-identity census" is a legitimate negative
+        // law. The atom text itself records the @N-census semantics in its body.
+        let nid = "atlas-census-closed-nonidentity-2factor"
+        let raw = "@L " + nid + " = closed-non-identity census law (2-factor A*B!=C*D grid; @N-census summary) :: refuted-census [d=2026-06-25 active]\n" +
             "  verified-by = \"exact-int: " + to_string(closed) + " of " + to_string(denominator) +
             " 2-factor cells have ZERO solutions for n in [2," + to_string(N) +
             "] (genuine bounded non-identities); split filled=" + to_string(filled) +
             " closed=" + to_string(closed) + " multi=" + to_string(multi) + " degenerate=" + to_string(degenerate) + "\"\n" +
-            "  cite = \"@D ATLAS-DFS census · bounded-negative summary (forall-n UNPROVEN · c2); 3-factor grid closed=33865 (grid3_classify.py)\"\n" +
-            "  provenance = \"hexa atlas resolve --fold -> embedded.gen.hexa SUMMARY fold (NOT 35519 individual @N atoms — bloat-avoided; generators census_blank_Nfold.py + grid3_classify.py)\""
-        let err = _fold_into_embedded("N", raw, nid)
+            "  cite = \"@D ATLAS-DFS census · bounded-negative summary (forall-n UNPROVEN · c2); 3-factor grid closed=33865 (grid3_classify.py); @N kind unsupported by loader -> recorded as @L census law\"\n" +
+            "  provenance = \"hexa atlas resolve --fold -> embedded.gen.hexa SUMMARY fold (NOT 35519 individual negative atoms — bloat-avoided; generators census_blank_Nfold.py + grid3_classify.py)\""
+        let err = _fold_into_embedded("L", raw, nid)
         if len(err) == 0 {
-            println("fold: @N census summary folded into embedded.gen.hexa — id=" + nid)
+            println("fold: closed-⚪ census SUMMARY folded into embedded.gen.hexa as @L — id=" + nid)
             println("      (single SUMMARY atom recording closed=" + to_string(closed) + "; the 35519 individual negatives are bloat-avoided by design)")
+            println("      (NOTE: @N is not a loader kind -> recorded as an @L census law; semantics preserved in body)")
         } else if err.contains("SKIP") || err.contains("already") {
-            println("fold: @N census summary already present (idempotent no-op) — id=" + nid)
+            println("fold: census SUMMARY already present (idempotent no-op) — id=" + nid)
         } else {
             println("fold: ERROR — " + err)
         }
     } else {
         println("note: re-runnable + idempotent (pure exact-integer sweep, no external state).")
-        println("      --fold = PHASE 2 (fold the closed-⚪ verdicts as @N atoms into embedded.gen.hexa;")
-        println("      a single @N census SUMMARY atom; machine-SSOT governance: separate PR + hexa verify).")
+        println("      --fold = PHASE 2 (fold the closed-⚪ verdict as a SINGLE census-SUMMARY atom into")
+        println("      embedded.gen.hexa as @L; @N kind is loader-unsupported; machine-SSOT governance: PR + hexa verify).")
     }
 }
 
@@ -4044,7 +4052,7 @@ fn cmd_help() {
     println("                          cells by exact-integer solution count of A*B=C*D:")
     println("                          filled-🔵 (1-sol n>=4) · closed-⚪ (0) · multi-⊞ (>=2) · degenerate (1-sol n<4).")
     println("                          The mechanical self-completing loop (no LLM, no external evidence).")
-    println("                          --fold = fold ONE @N census SUMMARY atom (closed-⚪ count) into embedded.gen.hexa (bloat-avoided).")
+    println("                          --fold = fold ONE census SUMMARY atom (closed-⚪ count) into embedded.gen.hexa as @L (no @N kind; bloat-avoided).")
     println("")
     println("SSOT: compiler/atlas/embedded.gen.hexa (set $HEXA_ATLAS_EMBED=/abs/dir to override).")
 }

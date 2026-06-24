@@ -5198,9 +5198,11 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
 
   ⚪ closed-non-identity census (genuine ∀n bounded negatives):
        2-factor grid = 1654 closed-⚪ over [2,2e4];  3-factor grid = 33865.
-       Folded as ONE @N census SUMMARY atom (atlas-census-closed-2factor-Nfold) — the
+       Folded as ONE census SUMMARY atom (atlas-census-closed-nonidentity-2factor) — the
        35519 individual negatives are bloat-avoided (≈3x file bloat for low value); the
        COUNT is the durable fact. `hexa atlas resolve --fold` emits it.
+       KIND NOTE: the loader has no @N kind (P/C/L/E/F/R/S/X/Q only), so the negative
+       census is recorded as an @L law (semantics preserved in body), not a dropped @N.
        Generators census_blank_Nfold.py + grid3_classify.py.
 ```
 
