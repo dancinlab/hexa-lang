@@ -1037,6 +1037,31 @@ build_runtime_a_from_source() {
         echo "[stage_resolve_runtime_a] RT-NATIVE PRINT: HEXA_RT_PRINT_NATIVE=1; x86_64 raw-syscall hxlcl_write (libc write dropped on print leaf)"
     fi
     $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_valop_def $rt_alloc_def $rt_print_def -I self -c self/runtime.c -o build/runtime.o
+    # ── __isoc23_* scanf compat shim (LINUX/ELF only) — runtime.a glibc-portability ──
+    # The frozen self/runtime.c calls sscanf (hexa_utc_iso_parse). Under
+    # -D_GNU_SOURCE on a glibc>=2.38 BUILD host, glibc's <stdio.h> __REDIRECTs that
+    # to __isoc23_sscanf, an undefined-on-glibc<2.38 symbol. A runtime.a built on a
+    # new host then fails to LINK on a bare glibc-2.35 pod (Ubuntu 22.04 vast/runpod):
+    #   undefined reference to `__isoc23_sscanf'  — breaking BOTH the clang link AND
+    # the native --emit=obj+ld `hexa run` cold path (both link runtime.a). Compile
+    # self/native/isoc23_compat.c (WEAK __isoc23_* → __isoc99_v* @GLIBC_2.7) and ar
+    # it into runtime.a → the symbol resolves on old glibc; on new glibc our def is
+    # WEAK (never conflicts) and byte-identical for the integer-only callers here.
+    # ELF-only: Mach-O (darwin) has no __isoc23_* redirect and no __isoc99_v* libc
+    # symbols, so the shim is skipped there (runtime.a byte-unchanged on darwin).
+    case "$(uname -s 2>/dev/null)" in
+      Linux)
+        if [ -f self/native/isoc23_compat.c ]; then
+            if $CC $CFLAGS -I self -c self/native/isoc23_compat.c -o build/isoc23_compat.o 2>build/isoc23_compat.err; then
+                extra_obj="$extra_obj build/isoc23_compat.o"
+                echo "[stage_resolve_runtime_a] ISOC23-COMPAT: ar'ing build/isoc23_compat.o into runtime.a (weak __isoc23_* scanf → __isoc99_v* @GLIBC_2.7; glibc<2.38 run-host portability)"
+            else
+                echo "[stage_resolve_runtime_a] ISOC23-COMPAT: WARN compile of isoc23_compat.c failed ($(tail -1 build/isoc23_compat.err 2>/dev/null)) — runtime.a may carry an unresolved __isoc23_* dep on glibc<2.38 hosts" >&2
+            fi
+            rm -f build/isoc23_compat.err
+        fi
+        ;;
+    esac
     ar rcs "$RA" build/runtime.o $extra_obj
     ls -la "$RA"
     if [ "${HEXA_CUDA:-0}" = "1" ] && [ -f build/runtime_cuda.o ] && [ -f build/runtime_cuda_dlink.o ]; then
