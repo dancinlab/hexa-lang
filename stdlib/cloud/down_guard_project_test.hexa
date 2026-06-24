@@ -1,0 +1,76 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/down_guard_project_test.hexa — cross-project kill-guard
+// project-tag NORMALIZATION regression (the `@rtsc` != `rtsc` false-refuse bug).
+//
+// Root cause: pods are STAMPED via _resolve_project (always `@`-prefixed, e.g.
+// `@rtsc`), but the down-guard derived the cwd project via _cwd_project (the
+// BARE git basename, e.g. `rtsc`). A same-project teardown then string-compared
+// `@rtsc` != `rtsc` and the guard fired a FALSE cross-project REFUSE — and since
+// --force/--yes route through the guard, the pod could not be torn down at all.
+// Fix: normalize BOTH sides with _at_prefix before the equality check.
+//
+// MIRROR-TEST (the stdlib/cloud convention): the real _down_guard_refuses reads
+// the LIVE M5 registry, so the PURE decision logic is mirrored VERBATIM here over
+// synthetic (stored-project, cwd-project) pairs. Keep byte-identical to
+// cloud_cli.hexa: _at_prefix + the _down_guard_refuses comparison; a drift makes
+// this test meaningless, so review them together. NO live `down` is ever called.
+//
+// Run:   hexa run stdlib/cloud/down_guard_project_test.hexa
+// PASS:  exits 0, prints "down_guard_project_test PASS".
+
+// mirror of cloud_cli.hexa:_at_prefix — KEEP IN SYNC.
+fn _at_prefix(name: str) -> str {
+    if len(name) == 0 {
+        return ""
+    }
+    if name.substring(0, 1) == "@" {
+        return name
+    }
+    return "@" + name
+}
+
+// mirror of cloud_cli.hexa:_down_guard_refuses PURE decision. The real fn loads
+// the registry to find `owner` and calls _cwd_project() for `cur`; here both are
+// passed in. Returns 1 = REFUSE (cross-project), 0 = ALLOW. force is intentionally
+// NOT consulted (the @convergence CLOUD-CROSSPROJECT-FORCE invariant: --force is a
+// confirm-skip, NOT a cross-project license).
+fn _guard_refuses(stored_project: str, cwd_project: str) -> int {
+    let owner = _at_prefix(stored_project)
+    if len(owner) == 0 || owner == "@unattributed" {
+        return 0
+    }
+    let cur = _at_prefix(cwd_project)
+    if owner == cur {
+        return 0
+    }
+    return 1
+}
+
+fn _ck(name: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + name + " got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+    println("  ok: " + name)
+}
+
+fn main() {
+    // ── the regression: stored `@rtsc` vs cwd `rtsc` is the SAME project ──
+    _ck("@rtsc stored vs rtsc cwd → ALLOW", _guard_refuses("@rtsc", "rtsc"), 0)
+    // symmetric: a legacy bare-stored tag vs an `@`-cwd also matches.
+    _ck("rtsc stored vs @rtsc cwd → ALLOW", _guard_refuses("rtsc", "@rtsc"), 0)
+    _ck("both bare → ALLOW",                _guard_refuses("rtsc", "rtsc"), 0)
+    _ck("both @ → ALLOW",                   _guard_refuses("@rtsc", "@rtsc"), 0)
+
+    // ── genuine cross-project teardowns STILL refuse (safety preserved) ──
+    _ck("@rtsc vs demiurge → REFUSE",  _guard_refuses("@rtsc", "demiurge"), 1)
+    _ck("@rtsc vs @demiurge → REFUSE", _guard_refuses("@rtsc", "@demiurge"), 1)
+    _ck("rtsc vs demiurge → REFUSE",   _guard_refuses("rtsc", "demiurge"), 1)
+
+    // ── unattributed / empty stored project → ALLOW (no attribution to guard) ──
+    _ck("empty stored → ALLOW",            _guard_refuses("", "rtsc"), 0)
+    _ck("@unattributed stored → ALLOW",    _guard_refuses("@unattributed", "rtsc"), 0)
+    _ck("bare unattributed → ALLOW",       _guard_refuses("unattributed", "rtsc"), 0)
+
+    println("down_guard_project_test PASS")
+}
