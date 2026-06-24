@@ -52,7 +52,7 @@ fn _slice_args() -> array {
     let mut i = 1
     while i < n {
         let a = to_string(av[i])
-        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "register" || a == "export" || a == "diff" || a == "reverify" || a == "cascade" || a == "proof" || a == "infer-edges" || a == "--help" || a == "-h" || a == "help" {
+        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "census" || a == "register" || a == "export" || a == "diff" || a == "reverify" || a == "cascade" || a == "proof" || a == "infer-edges" || a == "--help" || a == "-h" || a == "help" {
             let mut out = []
             let mut j = i
             while j < n {
@@ -3555,6 +3555,173 @@ fn cmd_infer_edges(rest: array) {
     else { print(infer_proposals_to_text(id, props)) }
 }
 
+// _census_imin / _census_imax — tiny int helpers (avoid string/float compares;
+// integer-index-keyed census per the @F identity-grid census algorithm).
+fn _census_imin(a: int, b: int) -> int { if a < b { return a } return b }
+fn _census_imax(a: int, b: int) -> int { if a > b { return a } return b }
+
+// _census_find — linear index-of for a string in a string array (-1 = absent).
+fn _census_find(arr: array, name: string) -> int {
+    let mut i = 0
+    let n = len(arr)
+    while i < n {
+        if to_string(arr[i]) == name { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// _census_has_int — linear membership for an int in an int array.
+fn _census_has_int(arr: array, key: int) -> bool {
+    let mut i = 0
+    let n = len(arr)
+    while i < n {
+        if to_int(arr[i]) == key { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// cmd_census — READ-ONLY census of the @F arithmetic-function identity grid.
+//
+// Turns the @F cartography into a CENSUS: count the BLANK cells of the
+// product×product identity grid (A*B = C*D over the discovered function
+// vocabulary) → report denominator / filled / blank / coverage% + the
+// lowest-address blank cells as prediction targets.
+//
+// Integer-index keyed throughout (no string `<`, no float): each function maps
+// to its discovery-order index in `funcs`; a 2-factor product {a,b} maps to
+// productKey = min*100 + max (100 > nF so collision-free); an unordered pair of
+// product keys maps to identityKey = minP*10000 + maxP. Dedup is linear int
+// membership. The vocabulary set is exactly the 11 arithmetic functions and the
+// grid denominator is P*(P-1)/2 with P = nF*(nF+1)/2 = 66 → 2145.
+//
+// Only true identity cards (`A*B = C*D @ n=N`) participate — a node whose RHS
+// carries no ` @ ` tail is a closed-form theorem (e.g. sigma_k Euclid-Euler),
+// not a 2-product identity, and is skipped so its non-function tokens never
+// pollute the vocabulary.
+fn cmd_census(rest: array) {
+    let idx = static_atlas()
+    let fnodes = idx.f_nodes
+    let mut funcs = []
+    let mut filledKeys = []
+    let mut i = 0
+    let nN = len(fnodes)
+    while i < nN {
+        let nd = fnodes[i]
+        let raw = nd.raw
+        // head = substring before " :: " if present, else the whole raw.
+        let mut head = raw
+        let sep = head.find(" :: ")
+        if sep >= 0 { head = head.slice(0, sep) }
+        let parts = head.split(" = ")
+        // parts[0]=`@F <id>`, parts[1]=LHS product, parts[2]=RHS product + tail.
+        if len(parts) < 3 { i = i + 1 } else {
+        let lhs = to_string(parts[1])
+        let rhsFull = to_string(parts[2])
+        // Only `A*B = C*D @ n=N` identity cards participate (RHS has ` @ ` tail).
+        if !rhsFull.contains(" @ ") { i = i + 1 } else {
+        let rhs = to_string(rhsFull.split(" @ ")[0])
+        let lf = lhs.split("*")
+        let rf = rhs.split("*")
+        if len(lf) != 2 || len(rf) != 2 { i = i + 1 } else {
+        let a0 = to_string(lf[0])
+        let a1 = to_string(lf[1])
+        let b0 = to_string(rf[0])
+        let b1 = to_string(rf[1])
+        // Discover the vocabulary in first-seen order (linear set).
+        if _census_find(funcs, a0) < 0 { funcs.push(a0) }
+        if _census_find(funcs, a1) < 0 { funcs.push(a1) }
+        if _census_find(funcs, b0) < 0 { funcs.push(b0) }
+        if _census_find(funcs, b1) < 0 { funcs.push(b1) }
+        let ia = _census_find(funcs, a0)
+        let ib = _census_find(funcs, a1)
+        let ic = _census_find(funcs, b0)
+        let id2 = _census_find(funcs, b1)
+        let lKey = _census_imin(ia, ib) * 100 + _census_imax(ia, ib)
+        let rKey = _census_imin(ic, id2) * 100 + _census_imax(ic, id2)
+        if lKey == rKey { i = i + 1 } else {
+        let minP = _census_imin(lKey, rKey)
+        let maxP = _census_imax(lKey, rKey)
+        let identityKey = minP * 10000 + maxP
+        if !_census_has_int(filledKeys, identityKey) { filledKeys.push(identityKey) }
+        i = i + 1
+        } } } }
+    }
+    let nF = len(funcs)
+    let P = nF * (nF + 1) / 2
+    let denominator = P * (P - 1) / 2
+    let filled = len(filledKeys)
+    let blank = denominator - filled
+    // coverage as integer basis points → "<int>.<two-digit>%".
+    let pct = filled * 10000 / denominator
+    let whole = pct / 100
+    let frac = pct - whole * 100
+    let mut fracStr = to_string(frac)
+    if frac < 10 { fracStr = "0" + fracStr }
+
+    println("# hexa atlas census — @F arithmetic-function identity grid")
+    println("")
+    println("vocabulary (" + to_string(nF) + " functions, discovery order):")
+    let mut vline = "  "
+    let mut vi = 0
+    while vi < nF {
+        vline = vline + to_string(funcs[vi])
+        if vi < nF - 1 { vline = vline + " " }
+        vi = vi + 1
+    }
+    println(vline)
+    println("")
+    println("product slots P (= nF*(nF+1)/2)        = " + to_string(P))
+    println("denominator (= P*(P-1)/2 identity cells) = " + to_string(denominator))
+    println("filled  (distinct A*B=C*D identities)    = " + to_string(filled))
+    println("blank                                    = " + to_string(blank))
+    println("coverage                                 = " + to_string(whole) + "." + fracStr + "%")
+    println("")
+    println("blank cells (prediction targets, lowest-address first):")
+    // Enumerate all product keys in discovery order: for i<=j over the vocabulary.
+    let mut pkeys = []
+    let mut pi = 0
+    while pi < nF {
+        let mut pj = pi
+        while pj < nF {
+            pkeys.push(pi * 100 + pj)
+            pj = pj + 1
+        }
+        pi = pi + 1
+    }
+    let nPk = len(pkeys)
+    let mut shown = 0
+    let mut ai = 0
+    while ai < nPk {
+        let mut bi = ai + 1
+        while bi < nPk {
+            let ka = to_int(pkeys[ai])
+            let kb = to_int(pkeys[bi])
+            let mnP = _census_imin(ka, kb)
+            let mxP = _census_imax(ka, kb)
+            let ik = mnP * 10000 + mxP
+            if !_census_has_int(filledKeys, ik) {
+                if shown < 14 {
+                    let lo1 = ka / 100
+                    let hi1 = ka - lo1 * 100
+                    let lo2 = kb / 100
+                    let hi2 = kb - lo2 * 100
+                    println("  " + to_string(funcs[lo1]) + "*" + to_string(funcs[hi1]) + " = " + to_string(funcs[lo2]) + "*" + to_string(funcs[hi2]))
+                }
+                shown = shown + 1
+            }
+            bi = bi + 1
+        }
+        ai = ai + 1
+    }
+    println("  ... (" + to_string(blank) + " blank total)")
+    println("")
+    println("note: blank = untested OR tested-false; a refuted/⚪ @N atom kind would")
+    println("      split the two — that fold is a follow-on (needs build host +")
+    println("      hexa verify + PR).")
+}
+
 fn cmd_help() {
     println("hexa atlas — atlas SSOT surface (embedded.gen.hexa read + direct-fold write)")
     println("")
@@ -3567,6 +3734,7 @@ fn cmd_help() {
     println("                          ranked acquire-next frontier (Q / 🟡 cite-only / 🟠 insufficient)")
     println("  stats --numerology [--scope=rodata|overlay|merged] [--format=json]")
     println("                          quarantine tier: coincidence-claim nodes w/ no derivation/cite")
+    println("  census                  count BLANK cells of the @F identity grid (denominator/filled/coverage + predictions)")
     println("  lookup <id>             search all 9 kinds for matching id")
     println("  lookup <K> <id>         restrict to one kind (K ∈ {P|C|L|E|F|R|S|X|Q})")
     println("  lookup --prefix=<p>     list nodes whose id starts with <p>")
@@ -3641,6 +3809,7 @@ fn main() {
     }
     if sub == "hash" { cmd_hash() }
     else if sub == "stats" { cmd_stats(rest) }
+    else if sub == "census" { cmd_census(rest) }
     else if sub == "lookup" { cmd_lookup(rest) }
     else if sub == "dump" { cmd_dump(rest) }
     else if sub == "register" { cmd_register(rest) }
