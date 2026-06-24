@@ -2709,7 +2709,9 @@ HEXA_FORGE_HOST_WEAK HexaVal hexa_forge_dispatch_embedding_bwd_scatter(HexaVal d
     if (!_OP38_FA(dx, T * d) || !_OP38_FA(ids, T))          return hexa_int(-1);
     if (dt < 0 || dt >= _hx_farr_count || !_hx_farr_table[dt].buf)
         return hexa_int(-1);
-#ifdef HEXA_CUDA
+#if 0 /* ING#34 optA: embedding_bwd_scatter device-residency = byte-eq devfeed
+       * divergence suspect. Disabled → host sequential scatter-add (devfeed-OFF
+       * path). Re-enable only after byte-eq restoration is proven on A6000. */
     /* ING#34: device-resident embedding_bwd_scatter (LEVER-a). Sequential
      * scatter-add (single-thread, ascending i, NO atomics) → byte-eq. The dtable
      * is pre-zeroed by the caller (farr_zero_slice_gpu). rc<0 → CPU oracle. */
