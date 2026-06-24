@@ -502,7 +502,7 @@ fn parse_logical_or() -> Expr {
         let op = advance()
         let right = parse_logical_and()
         let mut kids = []
-        kids.push(left)
+        kids.push_nostat(left)
         kids.push(right)
         left = Expr {
             kind: ExprKind::BinOp,
@@ -522,7 +522,7 @@ fn parse_logical_and() -> Expr {
         let op = advance()
         let right = parse_bitwise()
         let mut kids = []
-        kids.push(left)
+        kids.push_nostat(left)
         kids.push(right)
         left = Expr {
             kind: ExprKind::BinOp,
@@ -544,7 +544,7 @@ fn parse_bitwise() -> Expr {
         let op = advance()
         let right = parse_equality()
         let mut kids = []
-        kids.push(left)
+        kids.push_nostat(left)
         kids.push(right)
         left = Expr {
             kind: ExprKind::BinOp,
@@ -564,7 +564,7 @@ fn parse_equality() -> Expr {
         let op = advance()
         let right = parse_comparison()
         let mut kids = []
-        kids.push(left)
+        kids.push_nostat(left)
         kids.push(right)
         left = Expr {
             kind: ExprKind::BinOp,
@@ -612,7 +612,7 @@ fn parse_comparison() -> Expr {
         let op = advance()
         let right = parse_range()
         let mut kids = []
-        kids.push(left)
+        kids.push_nostat(left)
         kids.push(right)
         left = Expr {
             kind: ExprKind::BinOp,
@@ -632,7 +632,7 @@ fn parse_additive() -> Expr {
         let op = advance()
         let right = parse_multiplicative()
         let mut kids = []
-        kids.push(left)
+        kids.push_nostat(left)
         kids.push(right)
         left = Expr {
             kind: ExprKind::BinOp,
@@ -652,7 +652,7 @@ fn parse_multiplicative() -> Expr {
         let op = advance()
         let right = parse_unary()
         let mut kids = []
-        kids.push(left)
+        kids.push_nostat(left)
         kids.push(right)
         left = Expr {
             kind: ExprKind::BinOp,
@@ -696,7 +696,7 @@ fn parse_postfix() -> Expr {
             advance()
             let name_tok = expect(TokenKind::Ident)
             let mut kids = []
-            kids.push(e)
+            kids.push_nostat(e)
             e = Expr {
                 kind: ExprKind::Field,
                 span: name_tok.span,
@@ -708,7 +708,7 @@ fn parse_postfix() -> Expr {
         } else if check_kind(TokenKind::LParen) {
             advance()
             let mut kids = []
-            kids.push(e)
+            kids.push_nostat(e)
             if !check_kind(TokenKind::RParen) {
                 kids.push(parse_expr())
                 while check_kind(TokenKind::Comma) {
@@ -733,7 +733,7 @@ fn parse_postfix() -> Expr {
             let close = peek()
             eat(TokenKind::RBracket)
             let mut kids = []
-            kids.push(e)
+            kids.push_nostat(e)
             kids.push(idx)
             e = Expr {
                 kind: ExprKind::Index,
@@ -750,7 +750,7 @@ fn parse_postfix() -> Expr {
             let as_tok = advance()
             let ty = expect(TokenKind::Ident)
             let mut as_kids = []
-            as_kids.push(e)
+            as_kids.push_nostat(e)
             as_kids.push(Expr {
                 kind: ExprKind::Ident,
                 span: ty.span,
