@@ -13502,7 +13502,15 @@ fn emit_runtime_to(out_path: str) {
     buf = buf + "static void _hexa_init_persistent_pipe_fn_shims(void); // fwd decl — body in native/persistent_pipe.c\n"
     buf = buf + "static void _hexa_init_thread_fn_shims(void); // fwd decl — body in native/thread.c (2026-05-13)\n"
     buf = buf + "static void _hexa_init_pty_fn_shims(void);    // fwd decl — body in native/pty.c    (2026-05-13)\n"
+    // RFC061 zero-c #29 (init-fn-shims externalize): under the whole-file
+    // include-DROP (HEXA_ZEROC_DROP_RTCORE_INCLUDE) the call site in
+    // runtime_core.c lands in a SEPARATE seed TU from this body, so the
+    // registrar must be EXTERNALLY LINKABLE for the cross-TU reloc to bind.
+    buf = buf + "#ifdef HEXA_ZEROC_DROP_RTCORE_INCLUDE\n"
+    buf = buf + "void _hexa_init_fn_shims(void) {\n"
+    buf = buf + "#else\n"
     buf = buf + "static void _hexa_init_fn_shims(void) {\n"
+    buf = buf + "#endif\n"
     buf = buf + "    if (_fn_shims_ready) return;\n"
     buf = buf + "    // bootstrap free-fn shims (join, char_code, chr, bit_or)\n"
     buf = buf + "    // (`split` was retired 2026-04-21 — codegen.hexa now emits hexa_str_split directly.)\n"

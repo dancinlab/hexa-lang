@@ -141,8 +141,12 @@ fn emit_zeroc_rt_core_prims_to(out_path: str) {
     buf = buf + "// char_code/chr/farr_*) are only consulted when hexa user-code uses those\n"
     buf = buf + "// builtins as VALUES; the substrate/exec path does not. We supply an external\n"
     buf = buf + "// no-op so the drop-ON binary LINKS; the real wiring is the non-drop runtime.\n"
-    buf = buf + "extern int _hexa_init_fn_shims_was_dropped;   /* marker only, unused */\n"
-    buf = buf + "void _hexa_init_fn_shims(void) { /* drop-link-fill: see header */ }\n"
+    // RFC061 zero-c #29 (init-fn-shims externalize): the no-op stub is RETIRED.
+    // The real registrar in runtime.c is now EXTERNALLY LINKABLE under the
+    // include-DROP (static->extern linkage-flip in runtime_emit_full.hexa),
+    // so the cross-TU call from runtime_core.c binds the REAL fn-shim wiring
+    // (join/char_code/chr/farr_*/safetensors_* TAG_FN slots) instead of an
+    // empty no-op. No stub emitted here = no multiply-defined external symbol.
     if buf.len() > 0 { _flush_zeroc_rt_core_prims(out_path, buf) }
 }
 
