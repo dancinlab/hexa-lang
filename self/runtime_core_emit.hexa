@@ -2092,7 +2092,14 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "static HexaVal _cached_str_enum;\n"
     buf = buf + "static int     _cached_strs_ready = 0;\n"
     buf = buf + "// S1-D2 Blocker C: forward decl — defined after bt73 wrappers near EOF.\n"
+    // RFC061 zero-c #29: under include-DROP this fwd-decl must name the
+    // EXTERNAL registrar def (runtime.c HI-tier) the separate seed TU links
+    // against; DEFAULT keeps `static` (same-TU concatenation) = byte-identical.
+    buf = buf + "#ifdef HEXA_ZEROC_DROP_RTCORE_INCLUDE\n"
+    buf = buf + "extern void _hexa_init_fn_shims(void);\n"
+    buf = buf + "#else\n"
     buf = buf + "static void _hexa_init_fn_shims(void);\n"
+    buf = buf + "#endif\n"
     buf = buf + "\n"
     buf = buf + "static void _hexa_init_cached_strs(void) {\n"
     buf = buf + "    if (_cached_strs_ready) return;\n"
