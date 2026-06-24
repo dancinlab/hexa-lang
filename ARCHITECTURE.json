@@ -1189,7 +1189,7 @@
             [
               "Atlas census (cartography→census)",
               "`hexa atlas census` (read-only, `cmd_census` in `tool/atlas_cli.hexa`)",
-              "Counts BLANK cells of the @F arithmetic-function identity grid (A*B=C*D over the 11-function vocabulary phi/J2/n/psi/sopfr/Om/rad/om/tau/sigma/sig2): denominator P*(P-1)/2 = 2145 (P=66), filled 64, blank 2081, coverage 2.98% — integer-index keyed (no string `<`/float); blank pools untested+tested-false until a refuted @N atom kind is folded"
+              "Counts BLANK cells of the @F arithmetic-function identity grid (A*B=C*D over the 11-function vocabulary phi/J2/n/psi/sopfr/Om/rad/om/tau/sigma/sig2): denominator P*(P-1)/2 = 2145 (P=66), filled 64, blank 2081, coverage 2.98% — integer-index keyed (no string `<`/float). Unlike rtsc material-candidate gaps (need external evidence), @F blanks are MECHANICALLY decidable: `ATLAS/state/novel-dfs/census_blank_classify.py` (reuses `blue_harvest_12fn.py` af()) resolves all 2081 blanks → closed-⚪ 1654 (0-sol genuine non-identity = @N refuted-atom candidates) + multi-⊞ 321 (≥2-sol looser identity) + degenerate 106 (1-sol n<4). Next: fold closed-⚪ as @N atoms into embedded.gen.hexa + extend census to the 4-way split (filled/closed/multi/degenerate)"
             ],
             [
               "hx package manager",
