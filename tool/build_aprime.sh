@@ -517,6 +517,35 @@ if [ "${HEXA_ZEROC_RT_CORE_MATH2:-0}" != "0" ]; then
     echo "  [3/5] ZERO-C RT-CORE-MATH2: HEXA_ZEROC_RT_CORE_MATH2=1 — 12 #else-armed math wrappers (sqrt/pow/floor/ceil/u_floor/abs/tan/log10/round/tanh/log2/to_float) linked from native seed .o"
 fi
 
+# -- HEXA_ZEROC_RT_CORE_VALOP_DISPATCH (leg-B r9 valop-dispatch link de-risk, OPT-IN OFF) --
+# When HEXA_ZEROC_RT_CORE_VALOP_DISPATCH=1, the 9 scalar arith/compare DISPATCHER
+# wrappers (hexa_add_slow/sub/mul/div/mod/cmp_lt/cmp_gt/cmp_le/cmp_ge) are LINKED
+# from a standalone object (build/rtcore_valop-dispatch_native.o, assembled from
+# self/native/rtcore_valop-dispatch.c) instead of compiled inline in runtime_core.c.
+# -DHEXA_RT_CORE_VALOP_DISPATCH_NATIVE externs them out of the inline runtime_core.c
+# (the narrow valop-dispatch guard, NOT the broad HEXA_RT_SELFEMIT). Each dispatcher
+# sits ABOVE the already-default-ON valop_core_*.s scalar leaves (rt_*_native) and the
+# hexa-source fallbacks (rt_* in numeric.hexa) — every callee is external-linkage or a
+# macro, no frozen-static. The new outer #if/#else in runtime_core_emit.hexa externs
+# the dispatcher out of the shipping arm while keeping the whole HEXA_HAS_HEXA_RT_STDLIB
+# +standalone block verbatim under #else. Default (unset): byte-IDENTICAL — the seed is
+# not built/linked and the inline shipping-arm bodies are compiled verbatim (cpp-proven).
+# Does NOT drop the .c file (all-or-nothing). Revert via env.
+RTCORE_VALOP_DISPATCH_OBJ=""
+RTCORE_VALOP_DISPATCH_DEF=""
+if [ "${HEXA_ZEROC_RT_CORE_VALOP_DISPATCH:-0}" != "0" ]; then
+    if [ ! -f "$REPO/build/rtcore_valop-dispatch_native.o" ]; then
+        CC="${CC:-clang}" ARCH_FLAG="$ARCH_FLAG" bash tool/regen_rtcore_valop-dispatch_native_o.sh "$REPO/build/rtcore_valop-dispatch_native.o" >&2 \
+            || { echo "build_aprime: HEXA_ZEROC_RT_CORE_VALOP_DISPATCH=1 but rtcore_valop-dispatch_native.o build failed" >&2; exit 1; }
+    fi
+    if [ ! -f "$REPO/build/rtcore_valop-dispatch_native.o" ]; then
+        echo "build_aprime: HEXA_ZEROC_RT_CORE_VALOP_DISPATCH=1 but build/rtcore_valop-dispatch_native.o missing" >&2; exit 1
+    fi
+    RTCORE_VALOP_DISPATCH_OBJ="$REPO/build/rtcore_valop-dispatch_native.o"
+    RTCORE_VALOP_DISPATCH_DEF="-DHEXA_RT_CORE_VALOP_DISPATCH_NATIVE=1"
+    echo "  [3/5] ZERO-C RT-CORE-VALOP-DISPATCH: HEXA_ZEROC_RT_CORE_VALOP_DISPATCH=1 — 9 scalar arith/compare dispatchers (add_slow/sub/mul/div/mod/cmp_lt/gt/le/ge) linked from native seed .o"
+fi
+
 # -- HEXA_ZEROC_RT_CORE_MAP_QUERY_FOLD (leg-B map-query link de-risk, OPT-IN OFF) --
 # When HEXA_ZEROC_RT_CORE_MAP_QUERY_FOLD=1, the 8 UNGUARDED map-query symbols
 # (__map_has_cstr_v/__map_get_cstr_v/__map_order_key_at/__map_order_val_at/
@@ -710,8 +739,8 @@ mkdir -p "$(dirname "$OUT")"
 CL_ERR="$(clang -Oz $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
     -ffunction-sections -fdata-sections $DEAD_STRIP \
     -fno-builtin-bzero -fno-builtin-memcpy -fno-builtin-strlen \
-    -D_FORTIFY_SOURCE=0 -fno-stack-protector $ALLOC_DEF $STR_DEF $PRINT_DEF $RTCORE_LEAF_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF $RTCORE_MATH2_DEF $RTCORE_MAP_QUERY_FOLD_DEF $RTCORE_COLLECTION_MUTATE_DEF $RTCORE_ATL_DEF $RTCORE_FS_RW_DEF $RTCORE_ACF_DEF $RTCORE_RUNTIME_MISC_DEF \
-    -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $STR_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MATH2_OBJ $RTCORE_MAP_QUERY_FOLD_OBJ $RTCORE_COLLECTION_MUTATE_OBJ $RTCORE_ATL_OBJ $RTCORE_FS_RW_OBJ $RTCORE_ACF_OBJ $RTCORE_RUNTIME_MISC_OBJ -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
+    -D_FORTIFY_SOURCE=0 -fno-stack-protector $ALLOC_DEF $STR_DEF $PRINT_DEF $RTCORE_LEAF_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF $RTCORE_MATH2_DEF $RTCORE_VALOP_DISPATCH_DEF $RTCORE_MAP_QUERY_FOLD_DEF $RTCORE_COLLECTION_MUTATE_DEF $RTCORE_ATL_DEF $RTCORE_FS_RW_DEF $RTCORE_ACF_DEF $RTCORE_RUNTIME_MISC_DEF \
+    -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $STR_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MATH2_OBJ $RTCORE_VALOP_DISPATCH_OBJ $RTCORE_MAP_QUERY_FOLD_OBJ $RTCORE_COLLECTION_MUTATE_OBJ $RTCORE_ATL_OBJ $RTCORE_FS_RW_OBJ $RTCORE_ACF_OBJ $RTCORE_RUNTIME_MISC_OBJ -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
 # ZERO-C Z2a: restore the warm runtime_core.c artifact ONLY when runtime_hi_gen.c
 # still exists (legacy gated test). When the file is permanently gone (default
 # Z2a path) keep the `#include` removed — restoring it would make the stage-5
@@ -737,10 +766,10 @@ EXTRA_DEFS=""
 if [ "$(uname -s)" = "Darwin" ]; then
     EXTRA_DEFS="-D_DARWIN_C_SOURCE"
 fi
-clang -c -O2 $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE $EXTRA_DEFS $ALLOC_DEF $RTCORE_LEAF_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF $RTCORE_MATH2_DEF $RTCORE_MAP_QUERY_FOLD_DEF $RTCORE_COLLECTION_MUTATE_DEF $RTCORE_ATL_DEF $RTCORE_FS_RW_DEF $RTCORE_ACF_DEF $RTCORE_RUNTIME_MISC_DEF -Wno-trigraphs -I self -I . \
+clang -c -O2 $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE $EXTRA_DEFS $ALLOC_DEF $RTCORE_LEAF_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF $RTCORE_MATH2_DEF $RTCORE_VALOP_DISPATCH_DEF $RTCORE_MAP_QUERY_FOLD_DEF $RTCORE_COLLECTION_MUTATE_DEF $RTCORE_ATL_DEF $RTCORE_FS_RW_DEF $RTCORE_ACF_DEF $RTCORE_RUNTIME_MISC_DEF -Wno-trigraphs -I self -I . \
     self/runtime.c -o "$RTO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
 clang $ARCH_FLAG "$SMS" -c -o "$SMO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
-clang $ARCH_FLAG "$SMO" "$RTO" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MATH2_OBJ $RTCORE_MAP_QUERY_FOLD_OBJ $RTCORE_COLLECTION_MUTATE_OBJ $RTCORE_ATL_OBJ $RTCORE_FS_RW_OBJ $RTCORE_ACF_OBJ $RTCORE_RUNTIME_MISC_OBJ -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:' | head -5
+clang $ARCH_FLAG "$SMO" "$RTO" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MATH2_OBJ $RTCORE_VALOP_DISPATCH_OBJ $RTCORE_MAP_QUERY_FOLD_OBJ $RTCORE_COLLECTION_MUTATE_OBJ $RTCORE_ATL_OBJ $RTCORE_FS_RW_OBJ $RTCORE_ACF_OBJ $RTCORE_RUNTIME_MISC_OBJ -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:' | head -5
 if [ ! -x "$SMB" ]; then
     echo "build_aprime: smoke link failed" >&2
     exit 2
