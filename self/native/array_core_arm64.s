@@ -14,7 +14,7 @@
 //   when the alloc seed is native) + ar this .o into runtime.a so hexa_array_get/set
 //   delegate to the native bodies + hexa_array_arena_alloc_items uses the native arena.
 ; hexa-lang emit pass — target=arm64-apple-darwin
-; source: /home/aiden/hexa-lang/stdlib/runtime/array_core.hexa
+; source: /home/aiden/wt-rfc061-strbuf-arena/stdlib/runtime/array_core.hexa
 .file 1 "stdlib/runtime/array_core.hexa"
 .section __TEXT,__text,regular,pure_instructions
 .globl _rt_array_arena_alloc_items_native
@@ -26,7 +26,7 @@ _rt_array_arena_alloc_items_native:
     mov x29, sp ; prologue: set fp
     sub sp, sp, #64 ; sp adj
     stp x0, x1, [sp, #0] ; ingress param 0
-__L01db_rt_array_arena_alloc_items_native_bb0:
+__Ld116_rt_array_arena_alloc_items_native_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #16 ; hv const_int val
@@ -41,16 +41,83 @@ __L01db_rt_array_arena_alloc_items_native_bb0:
     add sp, sp, #64 ; sp adj
     ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
     ret ; return
+.globl _rt_array_arena_alloc_desc_native
+.private_extern _rt_array_arena_alloc_desc_native
+    .p2align 2
+_rt_array_arena_alloc_desc_native:
+    .loc 1 97 0
+    stp x29, x30, [sp, #-16]! ; prologue: save fp/lr
+    mov x29, sp ; prologue: set fp
+    sub sp, sp, #112 ; sp adj
+__Ld116_rt_array_arena_alloc_desc_native_bb0:
+    movz x0, #0 ; hv const_int: TAG_INT
+    movz x1, #24 ; hv const_int val
+    bl _hexa_arena_alloc ; call hexa_arena_alloc
+    stp x0, x1, [sp, #0] ; hv store L0
+    ldp x0, x1, [sp, #0] ; hv load L0
+    stp x0, x1, [sp, #16] ; hv store L1
+    ldp x0, x1, [sp, #16] ; hv load L1
+    movz x2, #0 ; hv const_int: TAG_INT
+    movz x3, #0 ; hv const_int val
+    bl _hexa_eq ; binop ==
+    stp x0, x1, [sp, #32] ; hv store L2
+    ldp x0, x1, [sp, #32] ; hv load L2
+    cbz x1, __Ld116_rt_array_arena_alloc_desc_native_bb2 ; br_cond: !payload -> else
+    b __Ld116_rt_array_arena_alloc_desc_native_bb1 ; branch -> then
+__Ld116_rt_array_arena_alloc_desc_native_bb1:
+    movz x0, #0 ; hv const_int: TAG_INT
+    movz x1, #0 ; hv const_int val
+    add sp, sp, #112 ; sp adj
+    ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
+    ret ; return
+__Ld116_rt_array_arena_alloc_desc_native_bb2:
+    ldp x0, x1, [sp, #16] ; hv load L1
+    movz x2, #0 ; hv const_int: TAG_INT
+    movz x3, #0 ; hv const_int val
+    movz x4, #0 ; hv const_int: TAG_INT
+    movz x5, #0 ; hv const_int val
+    add x1, x1, x3 ; __hx_ptr_store64: addr = ptr + off
+    str x5, [x1] ; __hx_ptr_store64: *(addr) = val
+    movz x0, #0 ; __hx_ptr_store64: TAG_INT (ret ptr)
+    ldp x0, x1, [sp, #16] ; hv load L1
+    movz x0, #0 ; __hx_ptr_store64: TAG_INT
+    stp x0, x1, [sp, #64] ; hv store L4
+    ldp x0, x1, [sp, #16] ; hv load L1
+    movz x2, #0 ; hv const_int: TAG_INT
+    movz x3, #8 ; hv const_int val
+    movz x4, #0 ; hv const_int: TAG_INT
+    movz x5, #0 ; hv const_int val
+    add x1, x1, x3 ; __hx_ptr_store64: addr = ptr + off
+    str x5, [x1] ; __hx_ptr_store64: *(addr) = val
+    movz x0, #0 ; __hx_ptr_store64: TAG_INT (ret ptr)
+    ldp x0, x1, [sp, #16] ; hv load L1
+    movz x0, #0 ; __hx_ptr_store64: TAG_INT
+    stp x0, x1, [sp, #80] ; hv store L5
+    ldp x0, x1, [sp, #16] ; hv load L1
+    movz x2, #0 ; hv const_int: TAG_INT
+    movz x3, #16 ; hv const_int val
+    movz x4, #0 ; hv const_int: TAG_INT
+    movz x5, #0 ; hv const_int val
+    add x1, x1, x3 ; __hx_ptr_store64: addr = ptr + off
+    str x5, [x1] ; __hx_ptr_store64: *(addr) = val
+    movz x0, #0 ; __hx_ptr_store64: TAG_INT (ret ptr)
+    ldp x0, x1, [sp, #16] ; hv load L1
+    movz x0, #0 ; __hx_ptr_store64: TAG_INT
+    stp x0, x1, [sp, #96] ; hv store L6
+    ldp x0, x1, [sp, #16] ; hv load L1
+    add sp, sp, #112 ; sp adj
+    ldp x29, x30, [sp], #16 ; epilogue: restore fp/lr
+    ret ; return
 .globl _rt_array_len_native
 .private_extern _rt_array_len_native
     .p2align 2
 _rt_array_len_native:
-    .loc 1 82 0
+    .loc 1 107 0
     stp x29, x30, [sp, #-16]! ; prologue: save fp/lr
     mov x29, sp ; prologue: set fp
     sub sp, sp, #80 ; sp adj
     stp x0, x1, [sp, #0] ; ingress param 0
-__L01db_rt_array_len_native_bb0:
+__Ld116_rt_array_len_native_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -77,13 +144,13 @@ __L01db_rt_array_len_native_bb0:
 .private_extern _rt_array_get_native
     .p2align 2
 _rt_array_get_native:
-    .loc 1 91 0
+    .loc 1 116 0
     stp x29, x30, [sp, #-16]! ; prologue: save fp/lr
     mov x29, sp ; prologue: set fp
     sub sp, sp, #224 ; sp adj
     stp x0, x1, [sp, #0] ; ingress param 0
     stp x2, x3, [sp, #16] ; ingress param 1
-__L01db_rt_array_get_native_bb0:
+__Ld116_rt_array_get_native_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -144,14 +211,14 @@ __L01db_rt_array_get_native_bb0:
 .private_extern _rt_array_set_native
     .p2align 2
 _rt_array_set_native:
-    .loc 1 105 0
+    .loc 1 130 0
     stp x29, x30, [sp, #-16]! ; prologue: save fp/lr
     mov x29, sp ; prologue: set fp
     sub sp, sp, #256 ; sp adj
     stp x0, x1, [sp, #0] ; ingress param 0
     stp x2, x3, [sp, #16] ; ingress param 1
     stp x4, x5, [sp, #32] ; ingress param 2
-__L01db_rt_array_set_native_bb0:
+__Ld116_rt_array_set_native_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -223,12 +290,12 @@ __L01db_rt_array_set_native_bb0:
 .private_extern _rt_array_pop_native
     .p2align 2
 _rt_array_pop_native:
-    .loc 1 121 0
+    .loc 1 146 0
     stp x29, x30, [sp, #-16]! ; prologue: save fp/lr
     mov x29, sp ; prologue: set fp
     sub sp, sp, #160 ; sp adj
     stp x0, x1, [sp, #0] ; ingress param 0
-__L01db_rt_array_pop_native_bb0:
+__Ld116_rt_array_pop_native_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -278,12 +345,12 @@ __L01db_rt_array_pop_native_bb0:
 .private_extern _rt_array_shift_native
     .p2align 2
 _rt_array_shift_native:
-    .loc 1 138 0
+    .loc 1 163 0
     stp x29, x30, [sp, #-16]! ; prologue: save fp/lr
     mov x29, sp ; prologue: set fp
     sub sp, sp, #496 ; sp adj
     stp x0, x1, [sp, #0] ; ingress param 0
-__L01db_rt_array_shift_native_bb0:
+__Ld116_rt_array_shift_native_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -336,8 +403,8 @@ __L01db_rt_array_shift_native_bb0:
     movz x0, #0 ; hv const_int: TAG_INT
     movz x1, #0 ; hv const_int val
     stp x0, x1, [sp, #208] ; hv store L13
-    b __L01db_rt_array_shift_native_bb1 ; branch
-__L01db_rt_array_shift_native_bb1:
+    b __Ld116_rt_array_shift_native_bb1 ; branch
+__Ld116_rt_array_shift_native_bb1:
     ldp x0, x1, [sp, #208] ; hv load L13
     ldp x2, x3, [sp, #192] ; hv load L12
     cmp x1, x3 ; __hx_payload_lt: cmp payloads
@@ -345,11 +412,9 @@ __L01db_rt_array_shift_native_bb1:
     bl _hexa_bool ; __hx_payload_lt: box bool
     stp x0, x1, [sp, #224] ; hv store L14
     ldp x0, x1, [sp, #224] ; hv load L14
-    bl _hexa_truthy ; br_cond: truthy → w0
-    uxtw x0, w0 ; br_cond: zext w0
-    cbz x0, __L01db_rt_array_shift_native_bb3 ; br_cond: !truthy -> else
-    b __L01db_rt_array_shift_native_bb2 ; branch -> then
-__L01db_rt_array_shift_native_bb2:
+    cbz x1, __Ld116_rt_array_shift_native_bb3 ; br_cond: !payload -> else
+    b __Ld116_rt_array_shift_native_bb2 ; branch -> then
+__Ld116_rt_array_shift_native_bb2:
     ldp x0, x1, [sp, #208] ; hv load L13
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #16 ; hv const_int val
@@ -424,8 +489,8 @@ __L01db_rt_array_shift_native_bb2:
     stp x0, x1, [sp, #464] ; hv store L29
     ldp x0, x1, [sp, #464] ; hv load L29
     stp x0, x1, [sp, #208] ; hv store L13
-    b __L01db_rt_array_shift_native_bb1 ; branch
-__L01db_rt_array_shift_native_bb3:
+    b __Ld116_rt_array_shift_native_bb1 ; branch
+__Ld116_rt_array_shift_native_bb3:
     ldp x0, x1, [sp, #32] ; hv load L2
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #8 ; hv const_int val
@@ -444,13 +509,13 @@ __L01db_rt_array_shift_native_bb3:
 .private_extern _rt_array_truncate_native
     .p2align 2
 _rt_array_truncate_native:
-    .loc 1 169 0
+    .loc 1 194 0
     stp x29, x30, [sp, #-16]! ; prologue: save fp/lr
     mov x29, sp ; prologue: set fp
     sub sp, sp, #256 ; sp adj
     stp x0, x1, [sp, #0] ; ingress param 0
     stp x2, x3, [sp, #16] ; ingress param 1
-__L01db_rt_array_truncate_native_bb0:
+__Ld116_rt_array_truncate_native_bb0:
     ldp x0, x1, [sp, #0] ; hv load L0
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -492,15 +557,13 @@ __L01db_rt_array_truncate_native_bb0:
     bl _hexa_bool ; __hx_payload_lt: box bool
     stp x0, x1, [sp, #160] ; hv store L10
     ldp x0, x1, [sp, #160] ; hv load L10
-    bl _hexa_truthy ; br_cond: truthy → w0
-    uxtw x0, w0 ; br_cond: zext w0
-    cbz x0, __L01db_rt_array_truncate_native_bb2 ; br_cond: !truthy -> else
-    b __L01db_rt_array_truncate_native_bb1 ; branch -> then
-__L01db_rt_array_truncate_native_bb1:
+    cbz x1, __Ld116_rt_array_truncate_native_bb2 ; br_cond: !payload -> else
+    b __Ld116_rt_array_truncate_native_bb1 ; branch -> then
+__Ld116_rt_array_truncate_native_bb1:
     ldp x0, x1, [sp, #112] ; hv load L7
     stp x0, x1, [sp, #144] ; hv store L9
-    b __L01db_rt_array_truncate_native_bb2 ; branch
-__L01db_rt_array_truncate_native_bb2:
+    b __Ld116_rt_array_truncate_native_bb2 ; branch
+__Ld116_rt_array_truncate_native_bb2:
     ldp x0, x1, [sp, #80] ; hv load L5
     ldp x2, x3, [sp, #144] ; hv load L9
     cmp x1, x3 ; __hx_payload_lt: cmp payloads
@@ -508,11 +571,9 @@ __L01db_rt_array_truncate_native_bb2:
     bl _hexa_bool ; __hx_payload_lt: box bool
     stp x0, x1, [sp, #192] ; hv store L12
     ldp x0, x1, [sp, #192] ; hv load L12
-    bl _hexa_truthy ; br_cond: truthy → w0
-    uxtw x0, w0 ; br_cond: zext w0
-    cbz x0, __L01db_rt_array_truncate_native_bb4 ; br_cond: !truthy -> else
-    b __L01db_rt_array_truncate_native_bb3 ; branch -> then
-__L01db_rt_array_truncate_native_bb3:
+    cbz x1, __Ld116_rt_array_truncate_native_bb4 ; br_cond: !payload -> else
+    b __Ld116_rt_array_truncate_native_bb3 ; branch -> then
+__Ld116_rt_array_truncate_native_bb3:
     ldp x0, x1, [sp, #80] ; hv load L5
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #0 ; hv const_int val
@@ -521,8 +582,8 @@ __L01db_rt_array_truncate_native_bb3:
     stp x0, x1, [sp, #224] ; hv store L14
     ldp x0, x1, [sp, #224] ; hv load L14
     stp x0, x1, [sp, #144] ; hv store L9
-    b __L01db_rt_array_truncate_native_bb4 ; branch
-__L01db_rt_array_truncate_native_bb4:
+    b __Ld116_rt_array_truncate_native_bb4 ; branch
+__Ld116_rt_array_truncate_native_bb4:
     ldp x0, x1, [sp, #48] ; hv load L3
     movz x2, #0 ; hv const_int: TAG_INT
     movz x3, #8 ; hv const_int val
