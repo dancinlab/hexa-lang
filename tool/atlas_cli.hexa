@@ -52,7 +52,7 @@ fn _slice_args() -> array {
     let mut i = 1
     while i < n {
         let a = to_string(av[i])
-        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "census" || a == "register" || a == "export" || a == "diff" || a == "reverify" || a == "cascade" || a == "proof" || a == "infer-edges" || a == "--help" || a == "-h" || a == "help" {
+        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "census" || a == "resolve" || a == "register" || a == "export" || a == "diff" || a == "reverify" || a == "cascade" || a == "proof" || a == "infer-edges" || a == "--help" || a == "-h" || a == "help" {
             let mut out = []
             let mut j = i
             while j < n {
@@ -3722,6 +3722,227 @@ fn cmd_census(rest: array) {
     println("      hexa verify + PR).")
 }
 
+// cmd_resolve — the MECHANICAL (no-LLM, deterministic, idempotent) self-completing
+// loop over the @F arithmetic-identity grid.
+//
+// Where `census` reports the @F grid as 2145 cells / 64 filled / 2081 BLANK (a
+// POOLED blank that mixes untested vs tested-false), `resolve` DECIDES every cell
+// mechanically: sweep n in [2, N] and count solutions of the identity A*B = C*D
+// over the 11-function vocabulary {sig sig2 phi tau n sopfr rad J2 psi Om om}.
+// NO LLM, NO external evidence — each blank @F cell is a pure exact-integer
+// question, so the loop is fully deterministic and re-runnable.
+//
+// Per-cell verdict (solution count over n in [2,N], early-exit at 3):
+//   filled-🔵     1 solution, n>=4   (the bounded-unique novelty = the 64 @F atoms)
+//   degenerate    1 solution, n<4    (excluded by the harvest's MIN_N=4)
+//   multi-⊞       >=2 solutions      (a looser identity — holds for several n)
+//   closed-⚪      0 solutions        (genuinely NEVER an identity in range = real negative)
+//
+// REUSE: the arithmetic vocabulary is derived from the in-tree
+// `congruence_chain_engine::factorize(n)` (already a `use` import — the same
+// prime-factorization that euler_phi/sigma_k/`register --from-verify` rest on),
+// then af() is reconstructed via the exact multiplicative formulas of
+// ATLAS/state/novel-dfs/blue_harvest_12fn.py::af() (sig3 excluded — never in the
+// census vocabulary). Frozen oracle: N=20000 → 2145 = 64 + 1654 + 321 + 106.
+//
+// --fold is PHASE 2 (writing @N atoms into embedded.gen.hexa — machine-SSOT
+// governance: separate PR + verify). Phase 1 prints a stub only.
+//
+// 11 function indices (parallel-array layout, n in 0..N):
+//   0 sig  1 sig2  2 phi  3 tau  4 n  5 sopfr  6 rad  7 J2  8 psi  9 Om  10 om
+fn _resolve_label(i: int) -> string {
+    if i == 0 { return "sig" }
+    if i == 1 { return "sig2" }
+    if i == 2 { return "phi" }
+    if i == 3 { return "tau" }
+    if i == 4 { return "n" }
+    if i == 5 { return "sopfr" }
+    if i == 6 { return "rad" }
+    if i == 7 { return "J2" }
+    if i == 8 { return "psi" }
+    if i == 9 { return "Om" }
+    return "om"
+}
+
+fn cmd_resolve(rest: array) {
+    let mut N = 20000
+    let mut want_fold = false
+    let mut i = 0
+    let nr = len(rest)
+    while i < nr {
+        let a = to_string(rest[i])
+        if a == "--n" && i + 1 < nr { N = to_int(to_string(rest[i + 1])); i = i + 2 }
+        else if a == "--fold" { want_fold = true; i = i + 1 }
+        else if a == "--help" || a == "-h" {
+            println("usage: hexa atlas resolve [--n N] [--fold]")
+            println("  deterministically classify ALL 2145 @F grid cells (no LLM, idempotent):")
+            println("    filled-🔵 (1-sol n>=4) · closed-⚪ (0-sol) · multi-⊞ (>=2-sol) · degenerate (1-sol n<4)")
+            println("  --n N    sweep n in [2,N] (default 20000; oracle N=20000 → 64/1654/321/106)")
+            println("  --fold   PHASE 2 stub — would fold @N atoms into embedded.gen.hexa (not yet implemented)")
+            return
+        }
+        else { i = i + 1 }
+    }
+    if N < 4 { N = 4 }
+
+    // ── Build af() over n in [1, N] as 11 parallel arrays (index 0 unused). ──
+    // af() reconstructed from factorize(n) via the exact blue_harvest formulas.
+    let mut Fsig = []
+    let mut Fsig2 = []
+    let mut Fphi = []
+    let mut Ftau = []
+    let mut Fn = []
+    let mut Fsopfr = []
+    let mut Frad = []
+    let mut FJ2 = []
+    let mut Fpsi = []
+    let mut FOm = []
+    let mut Fom = []
+    // index 0 placeholder (af() is never queried for n=0; sweep starts at n=2).
+    Fsig.push(0); Fsig2.push(0); Fphi.push(0); Ftau.push(0); Fn.push(0)
+    Fsopfr.push(0); Frad.push(0); FJ2.push(0); Fpsi.push(0); FOm.push(0); Fom.push(0)
+    let mut nn = 1
+    while nn <= N {
+        let f = factorize(nn)
+        let np = len(f.primes)
+        let mut sig = 1
+        let mut sig2 = 1
+        let mut tau = 1
+        let mut phi = 1
+        let mut psi = 1
+        let mut J2 = 1
+        let mut sopfr = 0
+        let mut rad = 1
+        let mut Om = 0
+        let mut om = 0
+        let mut k = 0
+        while k < np {
+            let p = f.primes[k]
+            let e = f.exps[k]
+            // sig  *= (p^(e+1) - 1) / (p - 1)
+            let mut pe1 = 1
+            let mut t = 0
+            while t < e + 1 { pe1 = pe1 * p; t = t + 1 }
+            sig = sig * (pe1 - 1) / (p - 1)
+            // sig2 *= (p^(2(e+1)) - 1) / (p^2 - 1)
+            let mut p2e2 = 1
+            t = 0
+            while t < 2 * (e + 1) { p2e2 = p2e2 * p; t = t + 1 }
+            sig2 = sig2 * (p2e2 - 1) / (p * p - 1)
+            // tau *= (e + 1)
+            tau = tau * (e + 1)
+            // phi *= p^(e-1) * (p - 1)
+            let mut pe_1 = 1
+            t = 0
+            while t < e - 1 { pe_1 = pe_1 * p; t = t + 1 }
+            phi = phi * pe_1 * (p - 1)
+            // psi *= p^(e-1) * (p + 1)
+            psi = psi * pe_1 * (p + 1)
+            // J2 *= p^(2e) - p^(2(e-1))
+            let mut p2e = 1
+            t = 0
+            while t < 2 * e { p2e = p2e * p; t = t + 1 }
+            let mut p2e_2 = 1
+            t = 0
+            while t < 2 * (e - 1) { p2e_2 = p2e_2 * p; t = t + 1 }
+            J2 = J2 * (p2e - p2e_2)
+            sopfr = sopfr + p * e
+            rad = rad * p
+            Om = Om + e
+            om = om + 1
+            k = k + 1
+        }
+        if nn == 1 {
+            // af(1) — empty factorization → all multiplicative = 1, additive = 0.
+            sig = 1; sig2 = 1; tau = 1; phi = 1; psi = 1; J2 = 1
+            sopfr = 0; rad = 1; Om = 0; om = 0
+        }
+        Fsig.push(sig); Fsig2.push(sig2); Fphi.push(phi); Ftau.push(tau); Fn.push(nn)
+        Fsopfr.push(sopfr); Frad.push(rad); FJ2.push(J2); Fpsi.push(psi); FOm.push(Om); Fom.push(om)
+        nn = nn + 1
+    }
+
+    // ── Pack the 11 arrays into one indexable structure: vals[key][n]. ──
+    let vals = [Fsig, Fsig2, Fphi, Ftau, Fn, Fsopfr, Frad, FJ2, Fpsi, FOm, Fom]
+
+    // ── Enumerate the 66 unordered products {a,b} (a<=b) then C(66,2) cells. ──
+    let mut prodA = []
+    let mut prodB = []
+    let mut pa = 0
+    while pa < 11 {
+        let mut pb = pa
+        while pb < 11 {
+            prodA.push(pa)
+            prodB.push(pb)
+            pb = pb + 1
+        }
+        pa = pa + 1
+    }
+    let nProd = len(prodA)
+
+    let mut filled = 0
+    let mut degenerate = 0
+    let mut multi = 0
+    let mut closed = 0
+    let MIN_N = 4
+
+    let mut x = 0
+    while x < nProd {
+        let a = to_int(prodA[x])
+        let b = to_int(prodB[x])
+        let va = vals[a]
+        let vb = vals[b]
+        let mut y = x + 1
+        while y < nProd {
+            let c = to_int(prodA[y])
+            let d = to_int(prodB[y])
+            let vc = vals[c]
+            let vd = vals[d]
+            let mut solCount = 0
+            let mut firstSol = 0
+            let mut m = 2
+            while m <= N {
+                if va[m] * vb[m] == vc[m] * vd[m] {
+                    if solCount == 0 { firstSol = m }
+                    solCount = solCount + 1
+                    if solCount > 2 { m = N }
+                }
+                m = m + 1
+            }
+            if solCount == 0 { closed = closed + 1 }
+            else if solCount == 1 && firstSol >= MIN_N { filled = filled + 1 }
+            else if solCount == 1 { degenerate = degenerate + 1 }
+            else { multi = multi + 1 }
+            y = y + 1
+        }
+        x = x + 1
+    }
+
+    let denominator = nProd * (nProd - 1) / 2
+    let check = filled + closed + multi + degenerate
+
+    println("# hexa atlas resolve — MECHANICAL @F grid resolver (no LLM, deterministic, idempotent)")
+    println("")
+    println("vocabulary (11 functions): sig sig2 phi tau n sopfr rad J2 psi Om om")
+    println("sweep                      = n in [2, " + to_string(N) + "]   (exact integer A*B = C*D)")
+    println("")
+    println("  denominator (cells)        = " + to_string(denominator))
+    println("  filled-🔵 (1-sol, n>=4)     = " + to_string(filled) + "   <- the @F atoms")
+    println("  --- the " + to_string(denominator - filled) + " 'blank' cells split into: ---")
+    println("  closed-⚪ (0 solutions)     = " + to_string(closed) + "   genuine non-identity (a REAL negative, foldable as @N)")
+    println("  multi-⊞  (>=2 solutions)   = " + to_string(multi) + "   looser identity (holds for several n)")
+    println("  degenerate (1-sol, n<4)    = " + to_string(degenerate) + "   excluded by MIN_N=4")
+    println("  CHECK filled+closed+multi+degenerate = " + to_string(check) + " (== denominator " + to_string(denominator) + ")")
+    println("")
+    if want_fold {
+        println("fold: phase-2 (embedded.gen.hexa @N fold — not yet implemented; see census_blank_Nfold)")
+    } else {
+        println("note: re-runnable + idempotent (pure exact-integer sweep, no external state).")
+        println("      --fold = PHASE 2 (fold the closed-⚪ verdicts as @N atoms into embedded.gen.hexa;")
+        println("      machine-SSOT governance: separate PR + hexa verify).")
+    }
+}
+
 fn cmd_help() {
     println("hexa atlas — atlas SSOT surface (embedded.gen.hexa read + direct-fold write)")
     println("")
@@ -3735,6 +3956,7 @@ fn cmd_help() {
     println("  stats --numerology [--scope=rodata|overlay|merged] [--format=json]")
     println("                          quarantine tier: coincidence-claim nodes w/ no derivation/cite")
     println("  census                  count BLANK cells of the @F identity grid (denominator/filled/coverage + predictions)")
+    println("  resolve [--n N] [--fold] deterministically classify ALL grid cells (filled/closed-⚪/multi-⊞/degenerate) — the mechanical no-LLM loop")
     println("  lookup <id>             search all 9 kinds for matching id")
     println("  lookup <K> <id>         restrict to one kind (K ∈ {P|C|L|E|F|R|S|X|Q})")
     println("  lookup --prefix=<p>     list nodes whose id starts with <p>")
@@ -3791,6 +4013,14 @@ fn cmd_help() {
     println("                          edges (kind depends_on + evidence). maximal id-token match guards")
     println("                          substring noise. NEVER folds into embedded.gen. unknown id → exit 1.")
     println("")
+    println("resolve subcommand (MECHANICAL no-LLM grid resolver; deterministic · idempotent · read-only):")
+    println("  resolve [--n N] [--fold]")
+    println("                          sweep n in [2,N] (default 20000) and classify ALL 2145 @F grid")
+    println("                          cells by exact-integer solution count of A*B=C*D:")
+    println("                          filled-🔵 (1-sol n>=4) · closed-⚪ (0) · multi-⊞ (>=2) · degenerate (1-sol n<4).")
+    println("                          The mechanical self-completing loop (no LLM, no external evidence).")
+    println("                          --fold = PHASE 2 stub (would fold @N atoms into embedded.gen.hexa).")
+    println("")
     println("SSOT: compiler/atlas/embedded.gen.hexa (set $HEXA_ATLAS_EMBED=/abs/dir to override).")
 }
 
@@ -3810,6 +4040,7 @@ fn main() {
     if sub == "hash" { cmd_hash() }
     else if sub == "stats" { cmd_stats(rest) }
     else if sub == "census" { cmd_census(rest) }
+    else if sub == "resolve" { cmd_resolve(rest) }
     else if sub == "lookup" { cmd_lookup(rest) }
     else if sub == "dump" { cmd_dump(rest) }
     else if sub == "register" { cmd_register(rest) }

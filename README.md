@@ -371,6 +371,7 @@ hexa run <file>.hexa [<args>...]       # compile then execute a single file
 hexa explain HX8004                    # what does this diagnostic mean
 hexa atlas lookup <id> | --prefix=<p>   # read atlas node(s) — embedded.gen.hexa SSOT
 hexa atlas census                       # count BLANK cells of the @F identity grid (2145 cells/64 filled/2.98%; blanks mechanically resolvable — ATLAS/state/novel-dfs/census_blank_classify.py)
+hexa atlas resolve [--n N] [--fold]     # MECHANICAL no-LLM loop: deterministically classify ALL 2145 grid cells (filled 64/closed-⚪ 1654/multi-⊞ 321/degenerate 106 @ N=20000); --fold = phase-2 @N fold (stub)
 hexa atlas register --from-verify <fn> <args> <v>   # verify IN-PROCESS → fold node into embedded.gen.hexa
 hexa atlas export [--out PATH]          # export live atlas → portable .n6 (n6 = export-only)
 hexa drill --seed "<expr>"             # OUROBOROS smash → ... → absorb cycle
