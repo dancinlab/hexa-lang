@@ -694,6 +694,28 @@ if [ "${HEXA_ZEROC_RT_CORE_RUNTIME_MISC:-0}" != "0" ]; then
     echo "  [3/5] ZERO-C RT-CORE-RUNTIME-MISC: HEXA_ZEROC_RT_CORE_RUNTIME_MISC=1 — 11 runtime-misc symbols linked from native seed .o"
 fi
 
+# -- HEXA_ZEROC_RT_CORE_STRARR_READ (RFC061 M5 r11 str-byte-read link de-risk, OPT-IN OFF) --
+# When HEXA_ZEROC_RT_CORE_STRARR_READ=1, the 2 seed-portable str-byte-read
+# symbols (hexa_str_char_code_at / hexa_str_byte_at) are LINKED from a standalone
+# object (build/rtcore_strarr-read_native.o, assembled from
+# self/native/rtcore_strarr-read.c) instead of compiled inline in runtime_core.c.
+# -DHEXA_RT_CORE_STRARR_READ_NATIVE externs them out of the inline runtime_core.c
+# (#else bodies). Default (flag unset) is byte-IDENTICAL.
+RTCORE_STRARR_OBJ=""
+RTCORE_STRARR_DEF=""
+if [ "${HEXA_ZEROC_RT_CORE_STRARR_READ:-0}" != "0" ]; then
+    if [ ! -f "$REPO/build/rtcore_strarr-read_native.o" ]; then
+        CC="${CC:-clang}" ARCH_FLAG="$ARCH_FLAG" bash tool/regen_rtcore_strarr-read_native_o.sh "$REPO/build/rtcore_strarr-read_native.o" >&2 \
+            || { echo "build_aprime: HEXA_ZEROC_RT_CORE_STRARR_READ=1 but rtcore_strarr-read_native.o build failed" >&2; exit 1; }
+    fi
+    if [ ! -f "$REPO/build/rtcore_strarr-read_native.o" ]; then
+        echo "build_aprime: HEXA_ZEROC_RT_CORE_STRARR_READ=1 but build/rtcore_strarr-read_native.o missing" >&2; exit 1
+    fi
+    RTCORE_STRARR_OBJ="$REPO/build/rtcore_strarr-read_native.o"
+    RTCORE_STRARR_DEF="-DHEXA_RT_CORE_STRARR_READ_NATIVE=1"
+    echo "  [3/5] ZERO-C RT-CORE-STRARR-READ: HEXA_ZEROC_RT_CORE_STRARR_READ=1 — 2 str-byte-read symbols linked from native seed .o"
+fi
+
 # ── stage 4: clang ─────────────────────────────────────────────────
 mkdir -p "$(dirname "$OUT")"
 # Cycle 43: -dead_strip + -ffunction-sections + -Oz shrinks aprime_cc
@@ -710,8 +732,8 @@ mkdir -p "$(dirname "$OUT")"
 CL_ERR="$(clang -Oz $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
     -ffunction-sections -fdata-sections $DEAD_STRIP \
     -fno-builtin-bzero -fno-builtin-memcpy -fno-builtin-strlen \
-    -D_FORTIFY_SOURCE=0 -fno-stack-protector $ALLOC_DEF $STR_DEF $PRINT_DEF $RTCORE_LEAF_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF $RTCORE_MATH2_DEF $RTCORE_MAP_QUERY_FOLD_DEF $RTCORE_COLLECTION_MUTATE_DEF $RTCORE_ATL_DEF $RTCORE_FS_RW_DEF $RTCORE_ACF_DEF $RTCORE_RUNTIME_MISC_DEF \
-    -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $STR_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MATH2_OBJ $RTCORE_MAP_QUERY_FOLD_OBJ $RTCORE_COLLECTION_MUTATE_OBJ $RTCORE_ATL_OBJ $RTCORE_FS_RW_OBJ $RTCORE_ACF_OBJ $RTCORE_RUNTIME_MISC_OBJ -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
+    -D_FORTIFY_SOURCE=0 -fno-stack-protector $ALLOC_DEF $STR_DEF $PRINT_DEF $RTCORE_LEAF_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF $RTCORE_MATH2_DEF $RTCORE_MAP_QUERY_FOLD_DEF $RTCORE_COLLECTION_MUTATE_DEF $RTCORE_ATL_DEF $RTCORE_FS_RW_DEF $RTCORE_ACF_DEF $RTCORE_RUNTIME_MISC_DEF $RTCORE_STRARR_DEF \
+    -I self -I . "$APPOST" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $STR_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MATH2_OBJ $RTCORE_MAP_QUERY_FOLD_OBJ $RTCORE_COLLECTION_MUTATE_OBJ $RTCORE_ATL_OBJ $RTCORE_FS_RW_OBJ $RTCORE_ACF_OBJ $RTCORE_RUNTIME_MISC_OBJ $RTCORE_STRARR_OBJ -o "$OUT" -lm 2>&1 | grep -iE 'error:|undefined' | head -5)"
 # ZERO-C Z2a: restore the warm runtime_core.c artifact ONLY when runtime_hi_gen.c
 # still exists (legacy gated test). When the file is permanently gone (default
 # Z2a path) keep the `#include` removed — restoring it would make the stage-5
@@ -740,7 +762,7 @@ fi
 clang -c -O2 $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE $EXTRA_DEFS $ALLOC_DEF $RTCORE_LEAF_DEF $RTCORE_ARITH_DEF $RTCORE_MATH_DEF $RTCORE_MATH2_DEF $RTCORE_MAP_QUERY_FOLD_DEF $RTCORE_COLLECTION_MUTATE_DEF $RTCORE_ATL_DEF $RTCORE_FS_RW_DEF $RTCORE_ACF_DEF $RTCORE_RUNTIME_MISC_DEF -Wno-trigraphs -I self -I . \
     self/runtime.c -o "$RTO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
 clang $ARCH_FLAG "$SMS" -c -o "$SMO" 2>&1 | grep -iE 'error:|undefined|ld:|fatal|cannot find' | head -3
-clang $ARCH_FLAG "$SMO" "$RTO" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MATH2_OBJ $RTCORE_MAP_QUERY_FOLD_OBJ $RTCORE_COLLECTION_MUTATE_OBJ $RTCORE_ATL_OBJ $RTCORE_FS_RW_OBJ $RTCORE_ACF_OBJ $RTCORE_RUNTIME_MISC_OBJ -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:' | head -5
+clang $ARCH_FLAG "$SMO" "$RTO" $ZEROC_RT_HI_OBJ $ARRAY_CORE_OBJ $MAP_CORE_OBJ $ALLOC_CORE_OBJ $RTCORE_LEAF_OBJ $RTCORE_ARITH_OBJ $RTCORE_MATH_OBJ $RTCORE_MATH2_OBJ $RTCORE_MAP_QUERY_FOLD_OBJ $RTCORE_COLLECTION_MUTATE_OBJ $RTCORE_ATL_OBJ $RTCORE_FS_RW_OBJ $RTCORE_ACF_OBJ $RTCORE_RUNTIME_MISC_OBJ $RTCORE_STRARR_OBJ -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:' | head -5
 if [ ! -x "$SMB" ]; then
     echo "build_aprime: smoke link failed" >&2
     exit 2
