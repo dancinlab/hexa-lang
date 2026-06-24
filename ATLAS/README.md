@@ -5181,6 +5181,29 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
   Cross-domain bridges: 5 (2 double-star, 3 single-star)
   Generalizing theorems (all perfects): 65+
   Hypothesis documents created: 28+
+
+  ═══ Census Fleet r2: FIRST machine-discovered ∀n true-forever node (folded) ═══
+
+  Mechanical (no-LLM) census over the arithmetic-function identity grid surfaced the
+  atlas's FIRST true-forever (∀n) multiplicative identity — folded as an @F atom into
+  the machine-SSOT compiler/atlas/embedded.gen.hexa.
+
+  ⭐⭐ J₂(n) = φ(n)·ψ(n)   (Jordan totient J_2 = Euler totient · Dedekind psi)
+       CLASSICAL theorem (Jordan 1870 / Dedekind ψ · multiplicative identity) — NOT a
+       novel claim; mechanically (RE)discovered by universal_hunt (unit-fn + 2/3-term
+       frame), the ONLY distinct ∀n real identity in that frame.
+       Independently verified ∀n∈[2,3000]:  n=12→96  n=30→576  n=360→82944.
+       @F atom: atlas-jordan-totient-J2-eq-phi-psi (grade verified:false until a real
+       `hexa verify` certifies it — no forced 🔵). Generator jordan_totient_fold.py.
+
+  ⚪ closed-non-identity census (genuine ∀n bounded negatives):
+       2-factor grid = 1654 closed-⚪ over [2,2e4];  3-factor grid = 33865.
+       Folded as ONE census SUMMARY atom (atlas-census-closed-nonidentity-2factor) — the
+       35519 individual negatives are bloat-avoided (≈3x file bloat for low value); the
+       COUNT is the durable fact. `hexa atlas resolve --fold` emits it.
+       KIND NOTE: the loader has no @N kind (P/C/L/E/F/R/S/X/Q only), so the negative
+       census is recorded as an @L law (semantics preserved in body), not a dropped @N.
+       Generators census_blank_Nfold.py + grid3_classify.py.
 ```
 
 ---
