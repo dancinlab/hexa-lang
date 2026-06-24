@@ -172,6 +172,30 @@ void        hexa_val_arena_scope_pop(void);
 void        hexa_val_arena_scope_push(void);
 HexaVal     hexa_valstruct_int(HexaVal v);
 
+/* (6b) M2 cross-TU CORE-tier helpers the HI-tier program references across
+ *      the dropped boundary — measured by tool/probe_progtu_gap.sh as the
+ *      exact 8 prototypes runtime_core_decls.h omitted (4 __map_* map-field
+ *      accessors + 4 __raw_* arith/coerce escapes). All defined in
+ *      runtime_core.c; external under the drop via HX_RTCORE_LOCAL. */
+/* Gated behind the include-drop flag: these protos are ONLY needed by the
+ * trailing HI-tier program TU when the runtime_core.c #include is dropped.
+ * The seed-regen TUs (regen_rtcore_strarr-read / regen_zeroc_stdlib_runtime)
+ * also pull this header but do NOT set the drop flag. Measured: the seed .o
+ * .text section is byte-identical with or without these protos (pure
+ * declarations, no call-site change), but gating them on the drop flag is
+ * the conservative DEFAULT-byteeq choice — the protos are visible ONLY where
+ * the include-drop actually needs them (the trailing HI-tier program TU). */
+#ifdef HEXA_ZEROC_DROP_RTCORE_INCLUDE
+HexaVal     __map_has_cstr_v(HexaVal m, HexaVal key);
+HexaVal     __map_get_cstr_v(HexaVal m, HexaVal key);
+HexaVal     __map_order_key_at(HexaVal m, HexaVal i);
+HexaVal     __map_order_val_at(HexaVal m, HexaVal i);
+HexaVal     __raw_add_f(HexaVal a, HexaVal b);
+HexaVal     __raw_cmp3(HexaVal a, HexaVal b);
+HexaVal     __raw_code_is(HexaVal v, HexaVal k);
+HexaVal     __raw_d2i(HexaVal v);
+#endif /* HEXA_ZEROC_DROP_RTCORE_INCLUDE */
+
 /* (7) cross-tier file-scope statics promoted to external under the drop:
  *     _hx_stats_array_new (the array-ctor stats counter incremented by the
  *     body) and `join` (the str-join builtin fn-value the body seats at
