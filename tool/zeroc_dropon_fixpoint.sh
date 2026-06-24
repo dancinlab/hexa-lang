@@ -211,8 +211,12 @@ done
 # hexa-source stdlib/runtime/ closure) already defines rt_str_* — linking
 # rt_hi_native.o too would multiply-define them. runtime_core.o's external rt_str_*
 # refs resolve to the program object (the RFC061 HI-tier hexa-authored layer).
-SEEDS=$(ls build/*.o 2>/dev/null | grep -v 'rt_hi_native.o' | tr '\n' ' ')
-echo "  seed objects: $(ls build/*.o 2>/dev/null | wc -l)"
+# HARNESS-FIX (rfc061 r-next): EXCLUDE stale build/runtime.o (FULL non-drop runtime
+# amalgam ~883KB left by a prior default build) from the seed glob — sweeping it
+# multiply-defines the ENTIRE drop-ON runtime (~798 multidef) → corrupt aprime_cc
+# → the prior round's RC=139 self-emit "segfault" was THIS artifact, NOT a fault.
+SEEDS=$(ls build/*.o 2>/dev/null | grep -vE '(^|/)(runtime|runtime_dropON|runtime_core)\.o$|rt_hi_native\.o' | tr '\n' ' ')
+echo "  seed objects: $(echo $SEEDS | wc -w) (build/*.o total=$(ls build/*.o 2>/dev/null | wc -l); runtime.o present=$(ls build/runtime.o 2>/dev/null | wc -l) → excluded)"
 
 # ── stage 5: REAL DROP-ON LINK → runnable aprime_cc ─────────────────────────
 echo "[5] DROP-ON multi-object link → runnable aprime_cc…"

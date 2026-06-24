@@ -55,7 +55,9 @@ for n in array_core map_core alloc_syscall valop_core num_core num_float_core in
   out="build/${n}_native.o"; seed="self/native/${n}_${ARCH}.s"
   [ -f "$out" ] && continue; [ -f "$seed" ] && $CC -c "$seed" -o "$out" 2>/dev/null
 done
-SEEDS=$(ls build/*.o 2>/dev/null | tr '\n' ' ')
+# HARNESS-FIX (rfc061 r-next): exclude stale FULL non-drop runtime objects
+# (build/runtime.o = 883KB amalgam → ~798 multidef + corrupt link).
+SEEDS=$(ls build/*.o 2>/dev/null | grep -vE '(^|/)(runtime|runtime_dropON|runtime_core)\.o$' | tr '\n' ' ')
 echo "    seeds: $(ls build/*.o 2>/dev/null | wc -l)"
 
 echo "[3] compile SHIM TU (self/runtime_core_hxlcl_shim.c)…"

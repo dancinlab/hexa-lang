@@ -118,7 +118,9 @@ for n in array_core map_core alloc_syscall valop_core num_core num_float_core in
   out="build/${n}_native.o"; seed="self/native/${n}_${ARCH}.s"
   [ -f "$out" ] && continue; [ -f "$seed" ] && $CC -c "$seed" -o "$out" 2>/dev/null
 done
-SEEDS=$(ls build/*.o 2>/dev/null | tr '\n' ' ')
+# HARNESS-FIX (rfc061 r-next): exclude stale FULL non-drop runtime objects
+# (build/runtime.o = 883KB amalgam → ~798 multidef + corrupt link).
+SEEDS=$(ls build/*.o 2>/dev/null | grep -vE '(^|/)(runtime|runtime_dropON|runtime_core)\.o$' | tr '\n' ' ')
 
 echo "[6] M3-LINK drop-ON WITH real program object…"
 $CC -O2 "$OUT/runtime_dropON.o" "$OUT/runtime_core.o" "$OUT/hxlcl_shim.o" "$OUT/program.o" $SEEDS \
