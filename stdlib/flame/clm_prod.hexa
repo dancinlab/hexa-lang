@@ -1043,18 +1043,22 @@ fn _adam(W: int, gW: int, m: int, v: int, n: int, t: int) {
     // the proven host opt_adamw_step (byte-eq fallback). Engages only in the
     // self-host-rebuilt pod binary (env-gated so the prebuilt mac binary, which
     // lacks the builtin, never link-references it under `hexa run`).
-    // HEXA-FUSION L1: device-resident moment lifetime. Under CLM_PROD_DEVRESIDENT
-    // the moments m,v stay GPU-resident across the whole train loop (no per-step
-    // m/v host roundtrip) — the m_*/v_* tensors escape ONLY into this _adam, so
-    // nothing on the host reads them and the next step's H2D-skip reuses the
-    // device accumulator in place. W is still materialized on host (the forward
-    // re-quantizes the conv weights). byte-eq to the always-D2H forge_dispatch_
-    // adamw path (same kernel, only the m/v write-back elided). rc 0 = applied
-    // on-device; else fall through to forge_dispatch_adamw / host opt_adamw_step.
-    if _fuse_on("CLM_PROD_DEVRESIDENT") {
-        let rc = forge_dispatch_adamw_keepmv(W, gW, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
-        if rc == 0 { return }
-    }
+    // residency-fix (DEVRESIDENT frozen-train): the device adamw path does NOT
+    // propagate the W update when W is device-resident. Under CLM_PROD_DEVRESIDENT
+    // the forward int4 fake-quant (_fq -> forge_dispatch_int4_quant) leaves the conv
+    // weight W loc=FARR_DEVICE, dirty_host=0. The device adamw then updates W on the
+    // device in place, but the next step's forward re-quant H2D-SKIPs W (device-
+    // resident, dirty_host=0) and reads the SAME device buffer — so the optimizer
+    // step never reaches the weights the forward consumes -> weights frozen -> no
+    // learning (measured: step-1 fwd byte-eq REF, then flat ~4.80; the force-host-
+    // adam bisect descends to REF). The host opt_adamw_step writes W on the HOST
+    // (hexa_farr_set -> dirty_host=1), making W host-authoritative so the next
+    // forward re-uploads it and the update lands. Route DEVRESIDENT to the proven
+    // host optimizer (verified DEVRESIDENT epoch-3 mean CE 3.55084 == REF, vs the
+    // frozen 4.80056 before). NOTE: drops the device-resident optimizer micro-opt
+    // for DEVRESIDENT — re-enabling it is a perf follow-on needing the runtime to
+    // mark W dirty_host=1 (or D2H it) after the device adamw. CLM_PROD_DEVFEED
+    // (W host-resident) is unaffected and keeps its on-device adamw below.
     if _fuse_on("CLM_PROD_DEVFEED") {
         let rc = forge_dispatch_adamw(W, gW, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
         if rc == 0 { return }
