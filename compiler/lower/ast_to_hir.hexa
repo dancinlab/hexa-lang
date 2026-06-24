@@ -1713,28 +1713,65 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
     if _hir_is_binop_kind(k) && _hir_lower_binop_spine_deep(e) {
         // spine[0] OUTERMOST (== e); each next is its child[0] while that
         // child is also a binop. The deepest node's child[0] is the BASE.
+        //
+        // PERF (deep-spine O(n²) kill, r3): we DO NOT `spine.push(cur)` the
+        // whole node — `cur.children[0]` is the O(N)-deep left subtree, so
+        // pushing the node into `[Expr]` deep-`hexa_val_heapify`'d the entire
+        // remaining spine each iteration → O(N²) just to COLLECT the spine
+        // (measured: depth-2000 = 98s; >36% wall in hexa_val_heapify under
+        // spine.push). The unwind only ever reads each node's RIGHT operands
+        // (`children[1..]`, shallow leaves) + `kind`/`span`/`text`, and the
+        // BASE leaf (`children[0]` of the deepest node). We therefore collect
+        // a SHALLOW per-node carrier (right children only — child[0] dropped)
+        // so each push is O(right-arity)≈O(1); the carrier is field-identical
+        // to the original node for every field the unwind reads, and the
+        // deepest left leaf is captured once at loop exit → byte-eq NEUTRAL,
+        // collapses the spine collection from O(N²) to O(N).
         let mut spine: [Expr] = []
         let mut cur = e
-        spine.push(cur)
-        while len(cur.children) > 0 && _hir_is_binop_kind(cur.children[0].kind) {
-            cur = cur.children[0]
-            spine.push(cur)
+        let mut base_leaf = cur
+        while true {
+            let mut rkids: [Expr] = []
+            let mut rci = 1
+            while rci < len(cur.children) {
+                rkids.push(cur.children[rci])
+                rci = rci + 1
+            }
+            // Shallow carrier: same kind/span/text/annotations/atlas_ref, but
+            // children = RIGHT operands only (child[0] — the deep left — is
+            // intentionally dropped; the unwind never reads spine[si].child[0]).
+            spine.push(Expr {
+                kind: cur.kind,
+                span: cur.span,
+                text: cur.text,
+                annotations: cur.annotations,
+                children: rkids,
+                atlas_ref: cur.atlas_ref
+            })
+            if len(cur.children) > 0 && _hir_is_binop_kind(cur.children[0].kind) {
+                cur = cur.children[0]
+            } else {
+                // deepest node reached — its child[0] is the BASE leaf.
+                if len(cur.children) > 0 { base_leaf = cur.children[0] }
+                break
+            }
         }
         // Lower the base (deepest child[0]) first — matches the recursion,
         // which fully lowers the leftmost leaf before any enclosing binop.
         let mut new_sc = sc
-        let base_r = _lower_expr(spine[len(spine) - 1].children[0], atlas, new_sc)
+        let base_r = _lower_expr(base_leaf, atlas, new_sc)
         let mut acc = base_r.expr
         new_sc = base_r.sc
         // Unwind from the deepest spine node outward. For each node, child[0]
         // is the accumulated left HExpr (`acc`); lower the remaining children
-        // (child[1..], shallow — the right operands) in order, threading scope.
+        // (now stored as `node.children[0..]`, shallow — the right operands)
+        // in order, threading scope.
         let mut si = len(spine) - 1
         while si >= 0 {
             let node = spine[si]
             let mut kids: [HExpr] = []
             kids.push(acc)
-            let mut ci = 1
+            let mut ci = 0
             while ci < len(node.children) {
                 let r = _lower_expr(node.children[ci], atlas, new_sc)
                 kids.push(r.expr)
