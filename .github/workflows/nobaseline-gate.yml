@@ -191,8 +191,15 @@ jobs:
 
   faithful-nobaseline-linux-x86_64:
     name: faithful-nobaseline (linux-x86_64)
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # SELF-HOSTED (aiden/summer · linux-x64 · label hexa-build) — the faithful
+    # seeds-removed build is the heaviest x86_64 leg (~13–19 min on ubuntu);
+    # the shared x86_64 build pool serves it far faster (12c/30G hosts). Public
+    # repo: fork-PR runs require maintainer approval before any self-hosted
+    # runner picks them up (RCE-mitigated). If both runners are offline this
+    # job sits queued — see CLAUDE.md › CI for re-registration. arm64 + darwin
+    # legs stay on their cloud runners (no arm64 self-hosted host).
+    runs-on: [self-hosted, Linux, X64, hexa-build]
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
 
