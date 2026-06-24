@@ -53,12 +53,45 @@ void  *hxlcl_malloc(size_t n)                         { return malloc(n ? n : 1)
 void   hxlcl_free(void *p)                            { free(p); }
 void  *hxlcl_realloc(void *p, size_t n)               { return realloc(p, n); }
 void  *hxlcl_calloc(size_t nmemb, size_t size)        { return calloc(nmemb ? nmemb : 1, size ? size : 1); }
+#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+/* byte-identical to frozen runtime.c:553 (hand-rolled byte loop) */
+void *hxlcl_memcpy(void *dst, const void *src, size_t n) {
+    unsigned char *d = (unsigned char *)dst;
+    const unsigned char *s = (const unsigned char *)src;
+    for (size_t i = 0; i < n; i++) d[i] = s[i];
+    return dst;
+}
+#else
 void  *hxlcl_memcpy(void *d, const void *s, size_t n) { return memcpy(d, s, n); }
+#endif
 void  *hxlcl_memset(void *s, int c, size_t n)         { return memset(s, c, n); }
+#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+/* byte-identical to frozen runtime.c:310 (hand-rolled byte loop) */
+int hxlcl_memcmp(const void *a, const void *b, size_t n) {
+    const unsigned char *pa = (const unsigned char *)a;
+    const unsigned char *pb = (const unsigned char *)b;
+    for (size_t i = 0; i < n; i++) {
+        int d = (int)pa[i] - (int)pb[i];
+        if (d != 0) return d;
+    }
+    return 0;
+}
+#else
 int    hxlcl_memcmp(const void *a, const void *b, size_t n) { return memcmp(a, b, n); }
+#endif
 
 /* ── string ──────────────────────────────────────────────────────────────── */
+#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+/* byte-identical to frozen runtime.c:299 (hand-rolled volatile scan) */
+size_t hxlcl_strlen(const char *s) {
+    if (!s) return 0;
+    size_t n = 0;
+    while (((const volatile char *)s)[n]) n++;
+    return n;
+}
+#else
 size_t hxlcl_strlen(const char *s)                    { return s ? strlen(s) : 0; }
+#endif
 int    hxlcl_strcmp(const char *a, const char *b)     { return strcmp(a, b); }
 int    hxlcl_strncmp(const char *a, const char *b, size_t n) { return strncmp(a, b, n); }
 char  *hxlcl_strcpy(char *d, const char *s)           { return strcpy(d, s); }
