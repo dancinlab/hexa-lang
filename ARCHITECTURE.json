@@ -1184,7 +1184,12 @@
             [
               "Atlas CLI",
               "`tool/atlas_cli.hexa` → `bin/hexa-atlas`",
-              "`hexa atlas {register,verify,reverify,search,cascade,proof,diff,infer-edges,stats}`"
+              "`hexa atlas {register,verify,reverify,search,cascade,proof,diff,infer-edges,stats,census}`"
+            ],
+            [
+              "Atlas census (cartography→census)",
+              "`hexa atlas census` (read-only, `cmd_census` in `tool/atlas_cli.hexa`)",
+              "Counts BLANK cells of the @F arithmetic-function identity grid (A*B=C*D over the 11-function vocabulary phi/J2/n/psi/sopfr/Om/rad/om/tau/sigma/sig2): denominator P*(P-1)/2 = 2145 (P=66), filled 64, blank 2081, coverage 2.98% — integer-index keyed (no string `<`/float); blank pools untested+tested-false until a refuted @N atom kind is folded"
             ],
             [
               "hx package manager",

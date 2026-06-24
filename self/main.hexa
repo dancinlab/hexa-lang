@@ -135,6 +135,7 @@ fn cmd_help() {
     println("")
     println("ATLAS SSOT  (compiler/atlas/embedded.gen.hexa, text-parsed at load)")
     println("  atlas hash | stats                      Read meta")
+    println("  atlas census                            count BLANK cells of the @F identity grid (census vs cartography)")
     println("  atlas lookup <id> | <K> <id> | --prefix=<p>   Read node(s)")
     println("  atlas dump [K] [--json]                 Read full kind")
     println("  atlas register --from-verify <fn> <args> <v>  verify IN-PROCESS → fold into embedded.gen.hexa")
