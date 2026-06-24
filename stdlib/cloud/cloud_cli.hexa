@@ -126,6 +126,16 @@ fn _cloud_help() {
     println("`host` is an ssh destination or ~/.ssh/config alias.")
     println("")
     println("provisioning flags (rent):")
+    println("  --tier T        secure|community (alias --secure) — CANONICAL,")
+    println("                  provider-agnostic tier select; the sanctioned")
+    println("                  surface that replaces raw `runpodctl --secureCloud`.")
+    println("                  secure = on-demand (host does NOT reclaim mid-run →")
+    println("                  a build completes). runpod: → --cloud-type")
+    println("                  SECURE/COMMUNITY (explicit --cloud-type wins). vast:")
+    println("                  secure = the on-demand default; community unwired.")
+    println("                  Absent = default behavior UNCHANGED.")
+    println("  --cloud-type C  (runpod) SECURE|COMMUNITY|ALL low-level pin")
+    println("                  (default ALL). Prefer the canonical --tier.")
     println("  --query Q       (vast) raw offer predicate; picks the first match.")
     println("                  NB: cpu_ram is in GB (2TB RAM = `cpu_ram>=2000`,")
     println("                  NOT the MB value `cloud api /bundles` reports).")
@@ -1196,6 +1206,54 @@ fn _has_flag(av: [str], start: int, flag: str) -> int {
     return 0
 }
 
+// _tier_to_cloud_type — map the CANONICAL `--tier secure|community|on-demand|
+// interruptible` value (provider-agnostic words the operator thinks in) to a
+// runpod cloud-type token (SECURE | COMMUNITY | ALL). This is the canonical
+// surface that REPLACES reaching for the raw `runpodctl ... --secureCloud`
+// flag (canonical-cli governance): secure/on-demand = a tier the provider does
+// NOT reclaim mid-run (build completes), community/interruptible = the cheap
+// pre-emptible pool. "" / unknown → "" (no tier asked — caller keeps its
+// default). Pure; equality-only to match this file's style.
+fn _tier_to_cloud_type(tier: str) -> str {
+    let t = tier.trim().to_lower()
+    if len(t) == 0 {
+        return ""
+    }
+    if t == "secure" || t == "on-demand" || t == "ondemand" {
+        return "SECURE"
+    }
+    if t == "community" || t == "interruptible" || t == "spot" {
+        return "COMMUNITY"
+    }
+    if t == "all" || t == "any" {
+        return "ALL"
+    }
+    return ""
+}
+
+// _resolve_tier — read the canonical tier surface from av[start..] and return
+// the runpod cloud-type token it implies, or "" when the operator asked for no
+// tier. Surface (opt-in, default-OFF → behavior UNCHANGED when absent):
+//   --tier <secure|community|all>   canonical, provider-agnostic
+//   --secure                        convenience alias for `--tier secure`
+// An explicit low-level `--cloud-type` (runpod) still wins at the call site;
+// this only synthesizes a cloud-type from the higher-level tier word. A typo
+// in `--tier` returns "" with a warn — never a hard fail (availability first).
+fn _resolve_tier(av: [str], start: int) -> str {
+    if _has_flag(av, start, "--secure") == 1 {
+        return "SECURE"
+    }
+    let raw = _flag_val(av, start, "--tier", "")
+    if len(raw) == 0 {
+        return ""
+    }
+    let ct = _tier_to_cloud_type(raw)
+    if len(ct) == 0 {
+        println("[cloud] rent: ⚠ --tier '" + raw + "' not recognized (expected secure|community|all, or on-demand|interruptible) — ignoring (tier unset)")
+    }
+    return ct
+}
+
 // _copy_from_run — pick the download path: rsync resume (R3) when
 // `--resume` was given, else the plain scp+verify path. Branching here
 // (not at the call site) keeps a single network op — resume never first
@@ -1542,6 +1600,22 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     // the chosen offer's dollars-per-hour exceeds <usd>, on BOTH the pinned
     // and the query-search path — the direct guard against the rate surprise.
     let max_dph = _flag_val(av, start, "--max-dph", "")
+    // CANONICAL TIER (ING #34) on vast: `vastai create instance` with NO `--bid`
+    // is ALREADY an ON-DEMAND, NON-INTERRUPTIBLE rent — the host does not reclaim
+    // it mid-run (the reclaim-loss the optA byte-eq run hit was a vast COMMUNITY/
+    // interruptible pod). So `--tier secure` (alias `--secure`) is the DEFAULT
+    // path here — we confirm it loudly so the operator never has to reach for a
+    // raw provider flag. `--tier community`/`interruptible` (a cheap pre-emptible
+    // bid via `vastai --bid`) is NOT wired through the canonical surface yet;
+    // fail loud rather than silently renting a reclaimable pod. Default (no tier
+    // flag) is UNCHANGED (on-demand, no bid).
+    let v_tier_ct = _resolve_tier(av, start)
+    if v_tier_ct == "SECURE" {
+        println("[cloud] rent vast: tier=secure (on-demand, non-interruptible — vast create has no `--bid`, so the host does NOT reclaim it mid-run; this is the default vast path).")
+    } else if v_tier_ct == "COMMUNITY" {
+        println("[cloud] rent vast: ✗ --tier community/interruptible is NOT supported on vast via the canonical surface (interruptible-bid `vastai --bid` is unwired). vast's on-demand default (no flag, or `--tier secure`) is already non-reclaimable — re-run without the tier flag, or use runpod `--tier community`.")
+        return 2
+    }
     // --include-unverified — reach the cheap large-RAM / CPU-only boxes that the
     // default `verified=true` filter hides (ING #73). Appends `verified=false`,
     // which _vast_build_query now treats as a caller override (drops the default
@@ -1849,12 +1923,26 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
         // hardcoded SECURE that silently excluded the COMMUNITY datacenters
         // holding most RTX4090/A40 stock → "no longer any instances available"
         // even at high capacity). A typo warns and falls back to ALL.
-        let ct_raw = _flag_val(av, start, "--cloud-type", "ALL")
+        //
+        // CANONICAL TIER (ING #34): `--tier secure|community` (alias `--secure`)
+        // is the provider-agnostic surface — it REPLACES reaching for the raw
+        // `runpodctl ... --secureCloud` flag (canonical-cli governance).
+        // `--tier secure` rents the on-demand SECURE tier (no mid-run reclaim →
+        // a build completes), which is exactly the reclaim-loss fix the optA
+        // cuda byte-eq run needs. The low-level `--cloud-type` still WINS when
+        // explicitly given (it is the fine-grained pin); `--tier` only supplies
+        // the cloud-type when `--cloud-type` is absent. Default (neither flag) is
+        // UNCHANGED — ALL.
+        let tier_ct = _resolve_tier(av, start)
+        let mut ct_raw = _flag_val(av, start, "--cloud-type", "ALL")
+        if _has_flag(av, start, "--cloud-type") == 0 && len(tier_ct) > 0 {
+            ct_raw = tier_ct
+        }
         if runpod_cloud_type_valid(ct_raw) == 0 {
             println("[cloud] rent runpod: ⚠ --cloud-type '" + ct_raw + "' not recognized (expected SECURE|COMMUNITY|ALL) — defaulting to ALL")
         }
         let cloud_type = runpod_norm_cloud_type(ct_raw)
-        println("[cloud] rent runpod: cloud-type " + cloud_type + " (SECURE+COMMUNITY search when ALL; --cloud-type to pin)")
+        println("[cloud] rent runpod: cloud-type " + cloud_type + " (SECURE+COMMUNITY search when ALL; --cloud-type / --tier to pin)")
         pod = runpod_create_vol_ct(api_key, gpu, image, pubkey, prov_label, volume_gb, disk_gb, cloud_type)
     }
     if pod.ok == 0 {
@@ -2934,8 +3022,9 @@ fn main() {
         // RENTED a real pod because -h/--help was just an unparsed trailing
         // token. Print usage and exit 0 — creating NOTHING.
         if _has_flag(av, si + 1, "--help") == 1 || _has_flag(av, si + 1, "-h") == 1 {
-            println("usage: cloud rent <vast|runpod> [--gpu FAMILY|N|cpu] [--image IMG] [--disk GiB] [--vcpu N] [--cpu-flavor IDS] [--cloud-type SECURE|COMMUNITY|ALL] [--owner TAG] [--query Q] [--offer ID] [--max-dph USD] [--max-wait-sec N] [--no-register] [--force-new]")
-            println("  --cloud-type (runpod) SECURE|COMMUNITY|ALL — default ALL (searches BOTH clouds; was an implicit SECURE-only that excluded the COMMUNITY datacenters holding most RTX4090/A40 stock → 'no longer any instances available' even at high capacity). Pin SECURE/COMMUNITY only when required.")
+            println("usage: cloud rent <vast|runpod> [--gpu FAMILY|N|cpu] [--image IMG] [--disk GiB] [--vcpu N] [--cpu-flavor IDS] [--tier secure|community] [--secure] [--cloud-type SECURE|COMMUNITY|ALL] [--owner TAG] [--query Q] [--offer ID] [--max-dph USD] [--max-wait-sec N] [--no-register] [--force-new]")
+            println("  --tier secure|community (CANONICAL · alias --secure=`--tier secure`) — provider-agnostic tier select, the sanctioned surface that REPLACES raw `runpodctl --secureCloud`. secure = on-demand (host does NOT reclaim mid-run → a build completes; the reclaim-loss fix). runpod: maps to --cloud-type SECURE/COMMUNITY (explicit --cloud-type still wins). vast: secure = the on-demand default (no `--bid` → non-interruptible); community/interruptible is NOT wired (fails loud). Default (no tier flag) is UNCHANGED.")
+            println("  --cloud-type (runpod) SECURE|COMMUNITY|ALL — low-level pin; default ALL (searches BOTH clouds; was an implicit SECURE-only that excluded the COMMUNITY datacenters holding most RTX4090/A40 stock → 'no longer any instances available' even at high capacity). Pin SECURE/COMMUNITY only when required, or use the canonical --tier.")
             println("  --gpu cpu    launch a CPU-only pod. runpod: REST v1 computeType=CPU (runpodctl can't) — --vcpu N (default 4) + --cpu-flavor cpu5c,cpu5g. vast: searches the CPU pool (num_gpus=0; vast's search returns GPU boxes by default — `--gpu cpu` used to find 0). --disk GiB now sizes the runpod container disk too (vast already wired it).")
             println("  --offer ID   (vast) PIN a specific offer id — skips the query search and binds THAT box, confirming it is still listed + capturing its dph before create (offers rotate; --query can silently bind a different box). --max-dph USD refuses any offer over USD/hr BEFORE billing.")
             println("  CPU pods default to a sshd-bearing image (a bare ubuntu:22.04 has NO sshd → ssh-ready would loop until the gate destroys the pod). Override with --image or HEXA_CLOUD_CPU_IMAGE; --docker-args is IGNORED on CPU pods (warns).")
