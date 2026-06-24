@@ -5204,6 +5204,31 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
        KIND NOTE: the loader has no @N kind (P/C/L/E/F/R/S/X/Q only), so the negative
        census is recorded as an @L law (semantics preserved in body), not a dropped @N.
        Generators census_blank_Nfold.py + grid3_classify.py.
+
+  ═══ Frame-Expansion DFS r1→r3: standard-arithmetic-function discovery DEPLETED ═══
+
+  Mechanical (no-LLM) DFS that, after the 2/3-term product/sum frames depleted, swept every
+  ORTHOGONAL relation type over the standard multiplicative vocabulary {σ,σ₂,σ₃,φ,τ,n,sopfr,
+  rad,J₂,ψ,Ω,ω,μ,λ,1}(+id²,id³,gcd/lcm 2-var). N=20000, exact signed integer.
+
+  r1 product/sum · r2 Dirichlet-convolution + divisor-sum + ratio/power + mixed(add×mult) ·
+  r3 congruence(≡mod m) + inequality/extremal(≤) + gcd-2var(Pillai/Cesàro).
+
+  RESULT: NOVEL ∀n identities = 0 across ALL frames. ~46 CLASSICAL backbone identities
+  honestly rediscovered (grounding, NOT discoveries): 1∗1=τ, φ∗1=id, μ∗1=ε, 1∗J₂=id², λ∗ψ=id,
+  D[φ]=id, D[J₂]=n², J₂=φ·ψ, Pillai P=(id∗φ), σ≡σ₃ (mod 6), totient/divisor parity chains,
+  ψ≤σ chains. Robin/Nicolas bounds flagged RH-CONDITIONAL (not unconditional-verified).
+
+  TERMINAL WALL (properly classified, NOT lazy): multi-round (r1–r3) · orthogonal mechanism-
+  families (=, ≡, ≤, convolution, gcd-2var) · MEASURED discrimination (gates 21/21 PASS,
+  neg-controls 12/12 fail correctly, 2 wrong gates self-caught). The closed-form relation space
+  over standard arithmetic functions is mechanically exhausted. @F novel-fold = 0.
+
+  NEXT frontier (vocabulary change required — same-vocab re-sweep forbidden): genuinely NEW
+  functions (r₂ sum-of-2-squares, partition p(n), Ramanujan τ — integer-exact/small-N caveats)
+  OR external research (analytic/conditional/open). Reference engines: state/novel-dfs/
+  {dirichlet-convolution,divisor-sum,ratio-power,mixed-add-mult,congruence-modm,
+  inequality-extremal,gcd-pillai-2var}_hunt.py.
 ```
 
 ---
