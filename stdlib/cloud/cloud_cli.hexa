@@ -4174,12 +4174,27 @@ fn main() {
         // when the parent dir didn't exist. mkdir -p the remote parent FIRST
         // (idempotent; no-op when the dir already exists or the dest is
         // cwd-relative with no parent). `--no-mkparent` opts out.
-        let _rparent = _remote_dirname(remote_path)
-        if len(_rparent) > 0 && _has_flag(av, si + 2, "--no-mkparent") == 0 {
-            let _mk = cloud_exec_opts(host, ssh_opts, "mkdir -p " + _shq(_rparent))
+        //
+        // IDEMPOTENT-DIR (bug-fix 2026-06-24): for the RECURSIVE (`-r`) path
+        // mkdir -p the DEST dir ITSELF (not just its parent). cloud_copy_to_
+        // recursive_opts now copies the source's CONTENTS (`localdir/.`) INTO
+        // remote_path so a `copy-to dir dir` merges instead of nesting
+        // (destdir/localdir) — but `scp -r src/. dest` needs `dest` to already
+        // exist as a directory. Creating it here makes the merge target present
+        // on a first copy too (and is a no-op when it already exists). The
+        // single-file path keeps the parent-only mkdir (scp creates the file).
+        // (cloud_copy_to_recursive_opts ALSO mkdir-p's the dest defensively, so
+        // non-CLI callers like dft_dispatch's _dft_upload are correct too; the
+        // double mkdir -p is harmless / idempotent.)
+        let mut _mkdir_target = _remote_dirname(remote_path)
+        if want_recursive == 1 {
+            _mkdir_target = remote_path
+        }
+        if len(_mkdir_target) > 0 && _has_flag(av, si + 2, "--no-mkparent") == 0 {
+            let _mk = cloud_exec_opts(host, ssh_opts, "mkdir -p " + _shq(_mkdir_target))
             if _mk.ok == 0 {
-                println("[cloud] copy-to: ⚠ remote mkdir -p " + _rparent + " failed (rc "
-                    + to_string(_mk.exit_code) + ") — scp may fail if the parent is absent")
+                println("[cloud] copy-to: ⚠ remote mkdir -p " + _mkdir_target + " failed (rc "
+                    + to_string(_mk.exit_code) + ") — scp may fail if the dir is absent")
             }
         }
         let r = _copy_to_run(host, ssh_opts, local_path, remote_path, want_recursive)

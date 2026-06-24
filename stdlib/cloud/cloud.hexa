@@ -1088,6 +1088,17 @@ fn cloud_copy_from_resume(host: str, remote_path: str, local_path: str) -> Cloud
     return cloud_copy_from_resume_opts(host, [], remote_path, local_path)
 }
 
+// _strip_trailing_slash — drop ONE trailing '/' from a path so `dir` and
+// `dir/` normalize identically before the `/.` contents suffix is appended.
+// A bare "/" (root) is returned unchanged (stripping would empty it).
+fn _strip_trailing_slash(p: str) -> str {
+    let n = len(p)
+    if n > 1 && p.substring(n - 1, n) == "/" {
+        return p.substring(0, n - 1)
+    }
+    return p
+}
+
 // cloud_copy_to_recursive_opts — upload a local DIRECTORY tree to
 // host:remote_path with `scp -r`, then prepends "-r" to the scp opts so
 // the whole subtree copies. Single-file copy-to stays on cloud_copy_to_opts.
@@ -1099,6 +1110,18 @@ fn cloud_copy_from_resume(host: str, remote_path: str, local_path: str) -> Cloud
 // here), so we let `scp -r` surface a genuinely-missing source: it exits
 // non-zero with "No such file or directory", which `_scp_capture` captures
 // into the returned CloudResult.message — same clean failure, dir-correct.
+//
+// IDEMPOTENT-DIR (bug-fix 2026-06-24): copy the source's CONTENTS, not the
+// source DIRECTORY itself, by appending `/.` to the local path (so the scp
+// arg is `localdir/.`). Plain `scp -r localdir host:destdir` has the classic
+// trailing-component gotcha — when `destdir` ALREADY EXISTS on the remote,
+// scp nests the source INTO it as `destdir/localdir` (the reported core/core
+// bug); when it does not, scp creates `destdir` as a copy of `localdir`. The
+// `/.` form copies the directory's contents into `destdir` regardless, so a
+// `copy-to dir dir` MERGES into destdir (overwriting like-named members) and
+// never nests — matching the user's "copy dir to dir" intent and making a
+// re-run to an existing remote dir idempotent. The CLI mkdir-p's the dest dir
+// itself for the recursive case so the merge target always pre-exists.
 fn cloud_copy_to_recursive_opts(host: str, ssh_opts: [str], local_path: str, remote_path: str) -> CloudResult {
     let mut ropts = ["-r"]
     let scp_opts = _scp_opts(ssh_opts)
@@ -1107,7 +1130,16 @@ fn cloud_copy_to_recursive_opts(host: str, ssh_opts: [str], local_path: str, rem
         ropts.push(scp_opts[i])
         i = i + 1
     }
-    return _scp_capture(ropts, local_path, host + ":" + remote_path)
+    // Ensure the dest dir exists as the MERGE TARGET (the `/.` contents-copy
+    // below needs `remote_path` to be a present directory). Idempotent: a
+    // no-op when it already exists. This makes EVERY caller (the CLI handler
+    // AND non-CLI callers like dft_dispatch's _dft_upload, which has no
+    // pre-mkdir) idempotent w.r.t. an existing remote dir — no destdir/localdir
+    // nesting on re-run. mkdir failure is non-fatal here (scp surfaces a real
+    // permission/path error), so the return value is intentionally ignored.
+    let _mk = cloud_exec_opts(host, ssh_opts, "mkdir -p " + _shq(remote_path))
+    let src_contents = _strip_trailing_slash(local_path) + "/."
+    return _scp_capture(ropts, src_contents, host + ":" + remote_path)
 }
 
 // cloud_copy_to_recursive — cloud_copy_to_recursive_opts with no extra flags.
