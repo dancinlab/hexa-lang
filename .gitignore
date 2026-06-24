@@ -327,3 +327,4 @@ self/native/zeroc_hxlcl_delegate.c
 self/native/zeroc_rt_core_prims.c
 self/native/hxqwen14b_p1d_cmp.c
 self/native/hxqwen14b_p1d_hxlcl.c
+self/native/rtcore_strarr-read.c
