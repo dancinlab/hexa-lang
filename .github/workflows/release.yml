@@ -39,9 +39,16 @@ permissions:
 # Tag push (v*) keeps every run — distinct group per tag, no cancellation.
 # Main push only ever needs the latest commit's test build; cancel any
 # older in-flight test run when a newer main push lands.
+# autotag-dispatched stable releases arrive as workflow_dispatch on the `main`
+# ref (github.ref=refs/heads/main) — WITHOUT the input-tag key below they all
+# collapsed into the single `release-refs/heads/main` group AND were cancelled
+# by every newer main push / dispatch (cancel-in-progress=branch), so no stable
+# release ever finalized (Latest stuck). Key a workflow_dispatch by its target
+# TAG (per-tag group, never cancelled) and only cancel real main `push` test
+# builds — so each stable tag's 3-target build runs to finalize.
 concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref_type == 'branch' }}
+  group: release-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
 
 env:
   CFLAGS_COMMON: "-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs"
