@@ -1066,6 +1066,78 @@ build_runtime_a_from_source() {
     echo "$RA"
 }
 
+# ── INSTALLED-RUNTIME-SYNC (#3806/#3807/#3841/#3850 follow-up — stale-.a relink) ──
+# After $RA ($ROOT/build/runtime.a) is freshly finalized, mirror it into the
+# ACTIVE INSTALLED link target $HOME/.hx/bin/build/runtime.a IF that path is the
+# one a consumer `hexa build`/`run` + the smoke harnesses actually link.
+#
+# THE BUG THIS CLOSES (user-diagnosed): forge_dispatch_groupnorm_gelu (and the
+# rest of the L3 fused-dispatch family) is ALREADY root-fixed in the SSOT
+# (restore_frozen_seeds: `#if 1` + HEXA_FORGE_HOST_WEAK, two CI gates), so a
+# runtime.a built HERE carries the symbol. The `undefined reference` recurs ONLY
+# from a STALE pre-#3806 $HOME/.hx/bin/build/runtime.a: a standalone source
+# rebuild (dev / aiden pool) writes the fresh archive to $ROOT/build/runtime.a,
+# but the installed `hexa` shim (install.sh:276 — exports HEXA_PREBUILT_RUNTIME=
+# $HX_BIN/build/runtime.a) and the consumer smoke scripts (build_no_cublas_smoke
+# / build_bf16_own_smoke / build_cuda_runtime — PREBUILT_RT default
+# $HOME/.hx/bin/build/runtime.a) keep linking the OLD installed copy → undefined
+# ref. install.sh's own install_src path already cp's $HX_SRC→$HX_BIN; this makes
+# a DIRECT stage_resolve_runtime_a invocation self-consistent too.
+#
+# byteeq-NEUTRAL: the .a CONTENTS are unchanged (same canonical ar above); only
+# WHICH copy a consumer links changes. Does NOT touch the release bootstrap —
+# stage_build_hexa consumes HEXA_PREBUILT_RUNTIME=build/runtime.a (the $ROOT
+# copy), never this installed mirror.
+#
+# GUARDS (so it never clobbers an unrelated install or a CUDA asset, and never
+# fires inside the release/CI staging pipeline):
+#   · only when the installed target ALREADY EXISTS (never CREATE a new install —
+#     a real install is owned by install.sh / a release tarball), AND
+#   · only when $RA is a DIFFERENT file from the target (skip self-copy when
+#     $ROOT already IS $HX_BIN, e.g. a $HOME/.hx-rooted rebuild), AND
+#   · skip when TARGET is set (release/cross builds set it; they stage via
+#     stage_precompile_package, not this mirror) — unless explicitly forced, AND
+#   · skip when the install is a CUDA asset ($HX_HOME/.cuda-runtime marker) — its
+#     cuBLAS runtime.a must not be overwritten with a CPU rebuild (ING #82), AND
+#   · HEXA_NO_INSTALL_RT_SYNC=1 hard opt-out · HEXA_FORCE_INSTALL_RT_SYNC=1 forces
+#     past the TARGET guard for a deliberate cross-rebuild refresh.
+sync_runtime_a_to_installed_link() {
+    [ "${HEXA_NO_INSTALL_RT_SYNC:-0}" = "1" ] && return 0
+    local hx_home="${HX_HOME:-$HOME/.hx}"
+    local installed="$hx_home/bin/build/runtime.a"
+    # only mirror into an EXISTING active install target (never create one)
+    [ -f "$installed" ] || return 0
+    # release/cross builds set TARGET and stage separately — skip unless forced
+    if [ -n "${TARGET:-}" ] && [ "${HEXA_FORCE_INSTALL_RT_SYNC:-0}" != "1" ]; then
+        echo "[stage_resolve_runtime_a] installed-runtime-sync SKIP — TARGET=$TARGET set (release/cross build; staged via stage_precompile_package). HEXA_FORCE_INSTALL_RT_SYNC=1 to override."
+        return 0
+    fi
+    # never clobber a cuBLAS (CUDA-asset) installed runtime.a with a CPU rebuild
+    if [ -f "$hx_home/.cuda-runtime" ]; then
+        echo "[stage_resolve_runtime_a] installed-runtime-sync SKIP — cuda-asset install ($hx_home/.cuda-runtime); its cuBLAS runtime.a is preserved (ING #82)."
+        return 0
+    fi
+    # resolve both to canonical absolute paths so a self-copy (ROOT==HX_BIN) is a no-op
+    local ra_abs inst_abs
+    ra_abs="$(cd "$(dirname "$RA")" 2>/dev/null && pwd)/$(basename "$RA")" || ra_abs="$RA"
+    inst_abs="$(cd "$(dirname "$installed")" 2>/dev/null && pwd)/$(basename "$installed")" || inst_abs="$installed"
+    if [ "$ra_abs" = "$inst_abs" ]; then
+        echo "[stage_resolve_runtime_a] installed-runtime-sync NO-OP — \$RA IS the installed link target ($inst_abs)."
+        return 0
+    fi
+    # FRESHNESS ASSERTION (convergence marker): a stale installed .a can no longer
+    # silently relink — log the forge-dispatch symbol presence in BOTH the fresh
+    # source archive and (pre-sync) the installed copy, then cp, so a regression is
+    # visible in the build log instead of surfacing as a downstream undefined ref.
+    local sym="forge_dispatch_groupnorm_gelu"
+    local fresh_has stale_has
+    fresh_has="$( (ar t "$RA" >/dev/null 2>&1 && (nm "$RA" 2>/dev/null | grep -c " T _\{0,1\}$sym\$")) || echo "?" )"
+    stale_has="$( (nm "$installed" 2>/dev/null | grep -c " T _\{0,1\}$sym\$") || echo "?" )"
+    cp -f "$RA" "$installed" 2>/dev/null \
+        && echo "[stage_resolve_runtime_a] installed-runtime-sync: mirrored fresh $RA → $installed (forge_dispatch_groupnorm_gelu defs: fresh=$fresh_has, prev-installed=$stale_has) — consumer hexa build/run + smoke now link the fresh archive" \
+        || echo "[stage_resolve_runtime_a] installed-runtime-sync WARN: cp $RA → $installed failed (permission?) — consumer may still link a stale installed runtime.a" >&2
+}
+
 # Assemble the arch-matched native rt_hi seed (sets HEXA_ZEROC_RT_HI=1 on the
 # platforms that have one) BEFORE either branch — restore_frozen_seeds reads
 # HEXA_ZEROC_RT_HI to decide whether to synthesize runtime_hi_gen.c at all.
@@ -1111,6 +1183,7 @@ resolve_cuda_runtime_seed
 if [ -f self/runtime.c ]; then
     echo "stage_resolve_runtime_a: seeds present — building runtime.a from source"
     build_runtime_a_from_source
+    sync_runtime_a_to_installed_link
     exit 0
 fi
 
@@ -1137,6 +1210,7 @@ ASSET="${EDGE_ASSET:?EDGE_ASSET must be set when seeds are removed}"
 echo "stage_resolve_runtime_a: self/runtime.c ABSENT — restoring frozen seeds + regen runtime_core.c, then building from source"
 if bash tool/restore_frozen_seeds && [ -f self/runtime.c ]; then
     build_runtime_a_from_source
+    sync_runtime_a_to_installed_link
     exit 0
 fi
 
