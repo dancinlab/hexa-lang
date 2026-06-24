@@ -23,6 +23,42 @@
  * It is built + linked ONLY under the opt-in flag HEXA_ZEROC_RTCORE_SHIM_TU
  * (default OFF). The DEFAULT build never sees it; the frozen statics serve.
  *
+
+ * ── M6 BYTE-IDENTICAL EMIT (HEXA_ZEROC_SHIM_BYTEID_EMIT, default OFF) ──────
+ * Under this opt-in arm, 20 hxlcl_* carry the VERBATIM frozen runtime.c body
+ * (not a libc delegate) — the 0-libc-extern floor machine code. Measured on
+ * aiden x86_64-linux (clang 18.1.3), relocation-normalized objdump vs the
+ * isolated frozen body: 18/20 BYTE-IDENTICAL (strlen memcmp memcpy memset
+ * strcat strchr strcmp strcpy strncmp strncpy strstr strtoll free backtrace
+ * calloc getenv atoi backtrace_symbols_fd). 2 (strdup, realloc) are
+ * whole-module-context-sensitive: clang lowers their inner copy loop to a
+ * `call memcpy` in the full 57-fn TU but auto-vectorizes it (SSE movups) in
+ * an isolated TU — byte-identity to the real frozen body is determined by the
+ * 14663-line runtime.c TU context (darwin-arm64-only full compile); not a
+ * fixable source divergence (identical source, optimizer cost-model differs).
+ * All BYTEID arms carry __attribute__((noinline)) matching frozen so callers
+ * emit `call` (no cross-inline), matching the frozen co-located codegen.
+ *
+ * The remaining 37 hxlcl_* are NOT byte-id-emittable in this isolated TU:
+ *   • 12 raw-syscall (read/write/close/lseek/fcntl/dup2/mkdir/poll/stat/
+ *     waitpid/pipe/open_sys/clock_gettime): frozen body is arm64-Darwin
+ *     `svc #0x80` inline-asm (HXLCL_SYS_* Darwin numbers) — a different ISA
+ *     than x86_64; byte-id only on darwin-arm64, and only with the frozen
+ *     _hxlcl_syscall*_cf helpers (raw-floor, .s seed territory).
+ *   • 3 raw-asm (setjmp/longjmp = arm64 naked stp/ldp; fork = arm64 svc):
+ *     arch-specific naked asm; won't compile on x86_64.
+ *   • 14 rt_*-delegate (cos/sin/exp/log/fmod/atof/atoll/atexit/time/setenv/
+ *     signal/getrusage/strftime/task_info): frozen body delegates to the
+ *     HI-tier hexa-source stdlib via HX_FLOAT(rt_sin(hexa_float(x))) and friends —
+ *     byte-id-to-frozen = the SAME rt_ + HexaVal call (NOT a libc sin), which
+ *     needs the HexaVal ABI + rt_* (supplied only in the real drop-ON link,
+ *     not this libc-only shim TU). Delegate-by-design — faithful when linked
+ *     with the runtime, not as a standalone libc passthrough.
+ *   • 8 composite (malloc/fopen/fread/ftell/fseek/popen/pclose/execvp): frozen
+ *     body chains other frozen helpers (hxlcl_mmap bump-alloc, _hxlcl_fp_fd,
+ *     _hxlcl_popen_remember, hxlcl_execve, hxlcl_fdopen) NOT in the 57 — a
+ *     verbatim emit cascades into pulling those frozen statics too (M6 r2).
+ *
  * SSOT signatures mirror the frozen runtime.c hxlcl_* declarations (extracted
  * 2026-06-24, file:line cited in the SSOT memory project_hexa_rfc061_ladder).
  */
@@ -48,14 +84,66 @@
 
 extern char **environ;
 
+/* ── BYTEID-emit floor helpers (only when the byte-identical arm is active) ──
+ * The verbatim frozen hxlcl_* bodies (realloc header offset, backtrace_symbols_fd
+ * sink) reference the frozen blob's private macros/helpers. Re-declare them here
+ * so the BYTEID arm compiles to machine code byte-identical to the frozen body.
+ * (Runtime correctness of header-coupled realloc additionally requires the
+ * malloc BYTEID arm; the byte-id-EMIT question is per-function compilation.) */
+#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+#ifndef HXLCL_HDR_BYTES
+#define HXLCL_HDR_BYTES 16
+#endif
+long hxlcl_write(int fd, const void *buf, unsigned long n);
+#endif
+
 /* ── mem / alloc ─────────────────────────────────────────────────────────── */
-void  *hxlcl_malloc(size_t n)                         { return malloc(n ? n : 1); }
+void *__attribute__((noinline)) hxlcl_malloc(size_t n) { return malloc(n ? n : 1); }
+#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+/* byte-identical to frozen self/runtime.c hxlcl_free (verbatim 0-libc floor body) */
+void __attribute__((noinline)) hxlcl_free(void *p) {
+    (void)p;
+}
+#else
 void   hxlcl_free(void *p)                            { free(p); }
+#endif
+#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+/* byte-identical to frozen self/runtime.c hxlcl_realloc (verbatim 0-libc floor body) */
+void *__attribute__((noinline)) hxlcl_realloc(void *p, size_t n) {
+    if (!p) return hxlcl_malloc(n);
+    if (n == 0) return (void *)0;
+    void *np = hxlcl_malloc(n);
+    if (!np) return (void *)0;
+    // Header-tracked old size: clamp the memcpy so we never read past
+    // the original allocation's end (the pre-fix over-read crashed when
+    // n > old_n and old_n's chunk boundary fell inside [p .. p+n)).
+    size_t old_n = *(size_t *)((char *)p - HXLCL_HDR_BYTES);
+    size_t copy_n = (n < old_n) ? n : old_n;
+    unsigned char *d = (unsigned char *)np;
+    const unsigned char *s = (const unsigned char *)p;
+    for (size_t i = 0; i < copy_n; i++) d[i] = s[i];
+    return np;
+}
+#else
 void  *hxlcl_realloc(void *p, size_t n)               { return realloc(p, n); }
+#endif
+#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+/* byte-identical to frozen self/runtime.c hxlcl_calloc (verbatim 0-libc floor body) */
+void *__attribute__((noinline)) hxlcl_calloc(size_t nmemb, size_t size) {
+    size_t total = nmemb * size;
+    void *p = hxlcl_malloc(total);
+    if (p) {
+        unsigned char *q = (unsigned char *)p;
+        for (size_t i = 0; i < total; i++) q[i] = 0;
+    }
+    return p;
+}
+#else
 void  *hxlcl_calloc(size_t nmemb, size_t size)        { return calloc(nmemb ? nmemb : 1, size ? size : 1); }
+#endif
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen runtime.c:553 (hand-rolled byte loop) */
-void *hxlcl_memcpy(void *dst, const void *src, size_t n) {
+void *__attribute__((noinline)) hxlcl_memcpy(void *dst, const void *src, size_t n) {
     unsigned char *d = (unsigned char *)dst;
     const unsigned char *s = (const unsigned char *)src;
     for (size_t i = 0; i < n; i++) d[i] = s[i];
@@ -64,10 +152,20 @@ void *hxlcl_memcpy(void *dst, const void *src, size_t n) {
 #else
 void  *hxlcl_memcpy(void *d, const void *s, size_t n) { return memcpy(d, s, n); }
 #endif
+#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+/* byte-identical to frozen self/runtime.c hxlcl_memset (verbatim 0-libc floor body) */
+void *__attribute__((noinline)) hxlcl_memset(void *s, int c, size_t n) {
+    unsigned char *p = (unsigned char *)s;
+    unsigned char v = (unsigned char)c;
+    for (size_t i = 0; i < n; i++) p[i] = v;
+    return s;
+}
+#else
 void  *hxlcl_memset(void *s, int c, size_t n)         { return memset(s, c, n); }
+#endif
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen runtime.c:310 (hand-rolled byte loop) */
-int hxlcl_memcmp(const void *a, const void *b, size_t n) {
+int __attribute__((noinline)) hxlcl_memcmp(const void *a, const void *b, size_t n) {
     const unsigned char *pa = (const unsigned char *)a;
     const unsigned char *pb = (const unsigned char *)b;
     for (size_t i = 0; i < n; i++) {
@@ -83,29 +181,168 @@ int    hxlcl_memcmp(const void *a, const void *b, size_t n) { return memcmp(a, b
 /* ── string ──────────────────────────────────────────────────────────────── */
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen runtime.c:299 (hand-rolled volatile scan) */
-size_t hxlcl_strlen(const char *s) {
+size_t __attribute__((noinline)) hxlcl_strlen(const char *s) {
     if (!s) return 0;
     size_t n = 0;
     while (((const volatile char *)s)[n]) n++;
     return n;
 }
 #else
-size_t hxlcl_strlen(const char *s)                    { return s ? strlen(s) : 0; }
+size_t __attribute__((noinline)) hxlcl_strlen(const char *s) { return s ? strlen(s) : 0; }
 #endif
+#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+/* byte-identical to frozen self/runtime.c hxlcl_strcmp (verbatim 0-libc floor body) */
+int __attribute__((noinline)) hxlcl_strcmp(const char *a, const char *b) {
+    for (size_t i = 0; ; i++) {
+        unsigned char ca = (unsigned char)a[i];
+        unsigned char cb = (unsigned char)b[i];
+        if (ca != cb) return (int)ca - (int)cb;
+        if (ca == 0) return 0;
+    }
+}
+#else
 int    hxlcl_strcmp(const char *a, const char *b)     { return strcmp(a, b); }
+#endif
+#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+/* byte-identical to frozen self/runtime.c hxlcl_strncmp (verbatim 0-libc floor body) */
+int __attribute__((noinline)) hxlcl_strncmp(const char *a, const char *b, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        unsigned char ca = (unsigned char)a[i];
+        unsigned char cb = (unsigned char)b[i];
+        if (ca != cb) return (int)ca - (int)cb;
+        if (ca == 0) return 0;
+    }
+    return 0;
+}
+#else
 int    hxlcl_strncmp(const char *a, const char *b, size_t n) { return strncmp(a, b, n); }
+#endif
+#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+/* byte-identical to frozen self/runtime.c hxlcl_strcpy (verbatim 0-libc floor body) */
+char *__attribute__((noinline)) hxlcl_strcpy(char *dst, const char *src) {
+    size_t i = 0;
+    while (((const volatile char *)src)[i]) { dst[i] = src[i]; i++; }
+    dst[i] = '\0';
+    return dst;
+}
+#else
 char  *hxlcl_strcpy(char *d, const char *s)           { return strcpy(d, s); }
+#endif
+#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+/* byte-identical to frozen self/runtime.c hxlcl_strncpy (verbatim 0-libc floor body) */
+char *__attribute__((noinline)) hxlcl_strncpy(char *dst, const char *src, size_t n) {
+    size_t i = 0;
+    for (; i < n && src[i]; i++) dst[i] = src[i];
+    for (; i < n; i++) dst[i] = '\0';
+    return dst;
+}
+#else
 char  *hxlcl_strncpy(char *d, const char *s, size_t n){ return strncpy(d, s, n); }
+#endif
+#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+/* byte-identical to frozen self/runtime.c hxlcl_strcat (verbatim 0-libc floor body) */
+char *__attribute__((noinline)) hxlcl_strcat(char *dest, const char *src) {
+    char *p = dest;
+    while (((const volatile char *)p)[0]) p++;
+    size_t i = 0;
+    while (((const volatile char *)src)[i]) {
+        p[i] = src[i];
+        i++;
+    }
+    p[i] = '\0';
+    return dest;
+}
+#else
 char  *hxlcl_strcat(char *d, const char *s)           { return strcat(d, s); }
+#endif
+#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+/* byte-identical to frozen self/runtime.c hxlcl_strdup (verbatim 0-libc floor body) */
+char *__attribute__((noinline)) hxlcl_strdup(const char *s) {
+    if (!s) return NULL;
+    size_t n = 0;
+    while (((const volatile char *)s)[n]) n++;
+    char *out = (char *)hxlcl_malloc(n + 1);
+    if (!out) return NULL;
+    for (size_t i = 0; i < n; i++) out[i] = s[i];
+    out[n] = '\0';
+    return out;
+}
+#else
 char  *hxlcl_strdup(const char *s)                    { return s ? strdup(s) : NULL; }
+#endif
+#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+/* byte-identical to frozen self/runtime.c hxlcl_strchr (verbatim 0-libc floor body) */
+const char *__attribute__((noinline)) hxlcl_strchr(const char *s, int c) {
+    if (!s) return NULL;
+    unsigned char target = (unsigned char)c;
+    for (size_t i = 0; ; i++) {
+        unsigned char x = (unsigned char)((const volatile char *)s)[i];
+        if (x == target) return s + i;
+        if (x == 0) return (target == 0) ? (s + i) : NULL;
+    }
+}
+#else
 const char *hxlcl_strchr(const char *s, int c)        { return strchr(s, c); }
+#endif
+#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+/* byte-identical to frozen self/runtime.c hxlcl_strstr (verbatim 0-libc floor body) */
+const char *__attribute__((noinline)) hxlcl_strstr(const char *h, const char *n) {
+    if (!h || !n) return NULL;
+    if (n[0] == 0) return h;
+    for (size_t i = 0; ((const volatile char *)h)[i]; i++) {
+        size_t j = 0;
+        while (n[j] && h[i + j] == n[j]) j++;
+        if (n[j] == 0) return h + i;
+    }
+    return NULL;
+}
+#else
 const char *hxlcl_strstr(const char *h, const char *n){ return strstr(h, n); }
+#endif
 
 /* ── numeric parse ───────────────────────────────────────────────────────── */
-long long hxlcl_atoll(const char *s)                  { return s ? atoll(s) : 0; }
+long long __attribute__((noinline)) hxlcl_atoll(const char *s) { return s ? atoll(s) : 0; }
+#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+/* byte-identical to frozen self/runtime.c hxlcl_atoi (verbatim 0-libc floor body) */
+int __attribute__((noinline)) hxlcl_atoi(const char *s) { return (int)hxlcl_atoll(s); }
+#else
 int       hxlcl_atoi(const char *s)                   { return s ? atoi(s) : 0; }
+#endif
 double    hxlcl_atof(const char *s)                   { return s ? atof(s) : 0.0; }
+#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+/* byte-identical to frozen self/runtime.c hxlcl_strtoll (verbatim 0-libc floor body) */
+long long __attribute__((noinline)) hxlcl_strtoll(const char *nptr, char **endptr, int base) {
+    if (!nptr) { if (endptr) *endptr = (char *)nptr; return 0; }
+    const char *s = nptr;
+    while (*s == ' ' || *s == '\t' || *s == '\n') s++;
+    int sign = 1;
+    if (*s == '-') { sign = -1; s++; }
+    else if (*s == '+') s++;
+    if (base == 0) {
+        if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) { base = 16; s += 2; }
+        else if (s[0] == '0') { base = 8; s++; }
+        else base = 10;
+    } else if (base == 16 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        s += 2;
+    }
+    unsigned long long n = 0;
+    for (;;) {
+        char c = *s;
+        int d;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if (c >= 'a' && c <= 'z') d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'Z') d = c - 'A' + 10;
+        else break;
+        if (d >= base) break;
+        n = n * (unsigned long long)base + (unsigned long long)d;
+        s++;
+    }
+    if (endptr) *endptr = (char *)s;
+    return (long long)((sign < 0) ? -(long long)n : (long long)n);
+}
+#else
 long long hxlcl_strtoll(const char *p, char **e, int b){ return strtoll(p, e, b); }
+#endif
 
 /* ── math (libm) ─────────────────────────────────────────────────────────── */
 double hxlcl_sin(double x)                            { return sin(x); }
@@ -115,7 +352,25 @@ double hxlcl_log(double x)                            { return log(x); }
 double hxlcl_fmod(double x, double y)                 { return fmod(x, y); }
 
 /* ── env / process ───────────────────────────────────────────────────────── */
+#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+/* byte-identical to frozen self/runtime.c hxlcl_getenv (verbatim 0-libc floor body) */
+char *__attribute__((noinline)) hxlcl_getenv(const char *name) {
+    if (!name) return (char *)0;
+    char **e = environ;
+    if (!e) return (char *)0;
+    size_t nlen = hxlcl_strlen(name);
+    while (*e) {
+        const char *entry = *e;
+        size_t i = 0;
+        while (i < nlen && entry[i] && entry[i] == name[i]) i++;
+        if (i == nlen && entry[i] == '=') return (char *)(entry + nlen + 1);
+        e++;
+    }
+    return (char *)0;
+}
+#else
 char *hxlcl_getenv(const char *name)                  { return getenv(name); }
+#endif
 int   hxlcl_setenv(const char *n, const char *v, int o){ return setenv(n, v, o); }
 int   hxlcl_atexit(void (*fn)(void))                  { return atexit(fn); }
 int   hxlcl_fork(void)                                { return (int)fork(); }
@@ -153,8 +408,25 @@ void   hxlcl_longjmp(void *buf, int val)              { longjmp(*(jmp_buf *)buf,
 
 /* ── backtrace (best-effort; no-op where unavailable) ────────────────────── */
 #ifdef __linux__
+#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+/* byte-identical to frozen self/runtime.c hxlcl_backtrace (verbatim 0-libc floor body) */
+int __attribute__((noinline)) hxlcl_backtrace(void **buf, int sz) {
+    (void)buf; (void)sz;
+    return 0;  // 0 frames captured — hexa-native stub, no real unwinder
+}
+#else
 int  hxlcl_backtrace(void **buf, int sz)              { return backtrace(buf, sz); }
+#endif
+#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+/* byte-identical to frozen self/runtime.c hxlcl_backtrace_symbols_fd (verbatim 0-libc floor body) */
+void __attribute__((noinline)) hxlcl_backtrace_symbols_fd(void *const *buf, int sz, int fd) {
+    (void)buf; (void)sz;
+    static const char msg[] = "(backtrace unavailable — hexa-native stub)\n";
+    hxlcl_write(fd, msg, sizeof(msg) - 1);
+}
+#else
 void hxlcl_backtrace_symbols_fd(void *const *buf, int sz, int fd) { backtrace_symbols_fd(buf, sz, fd); }
+#endif
 #else
 int  hxlcl_backtrace(void **buf, int sz)              { (void)buf; (void)sz; return 0; }
 void hxlcl_backtrace_symbols_fd(void *const *buf, int sz, int fd) { (void)buf; (void)sz; (void)fd; }
