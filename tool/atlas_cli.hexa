@@ -3778,7 +3778,8 @@ fn cmd_resolve(rest: array) {
             println("  deterministically classify ALL 2145 @F grid cells (no LLM, idempotent):")
             println("    filled-🔵 (1-sol n>=4) · closed-⚪ (0-sol) · multi-⊞ (>=2-sol) · degenerate (1-sol n<4)")
             println("  --n N    sweep n in [2,N] (default 20000; oracle N=20000 → 64/1654/321/106)")
-            println("  --fold   PHASE 2 stub — would fold @N atoms into embedded.gen.hexa (not yet implemented)")
+            println("  --fold   fold a SINGLE @N census SUMMARY atom (closed-⚪ count) into embedded.gen.hexa")
+            println("           (idempotent; the 35519 individual negatives are bloat-avoided by design)")
             return
         }
         else { i = i + 1 }
@@ -3935,11 +3936,35 @@ fn cmd_resolve(rest: array) {
     println("  CHECK filled+closed+multi+degenerate = " + to_string(check) + " (== denominator " + to_string(denominator) + ")")
     println("")
     if want_fold {
-        println("fold: phase-2 (embedded.gen.hexa @N fold — not yet implemented; see census_blank_Nfold)")
+        // ── PHASE 2 — fold the closed-⚪ verdict as ONE @N-census SUMMARY atom. ──
+        // Honest bloat decision (machine-SSOT governance): the 2-factor grid has
+        // `closed` genuine non-identities (1654 over [2,2e4]); the 3-factor grid has
+        // 33865. Folding all ~35519 as individual `@N A*B != C*D` AtlasNode literals
+        // would add ~22 MB of struct text to the ~11 MB embedded.gen.hexa (≈3x bloat)
+        // for low-value bounded negatives. Instead we fold a SINGLE @N census atom
+        // that RECORDS the count + sweep window + generator — the COUNT is the
+        // durable fact, not 35519 negative atoms. Idempotent on (kind,id).
+        let nid = "atlas-census-closed-2factor-Nfold"
+        let raw = "@N " + nid + " = closed-non-identity census (2-factor A*B!=C*D grid) :: refuted [d=2026-06-25 active]\n" +
+            "  verified-by = \"exact-int: " + to_string(closed) + " of " + to_string(denominator) +
+            " 2-factor cells have ZERO solutions for n in [2," + to_string(N) +
+            "] (genuine bounded non-identities); split filled=" + to_string(filled) +
+            " closed=" + to_string(closed) + " multi=" + to_string(multi) + " degenerate=" + to_string(degenerate) + "\"\n" +
+            "  cite = \"@D ATLAS-DFS census · bounded-negative summary (forall-n UNPROVEN · c2); 3-factor grid closed=33865 (grid3_classify.py)\"\n" +
+            "  provenance = \"hexa atlas resolve --fold -> embedded.gen.hexa SUMMARY fold (NOT 35519 individual @N atoms — bloat-avoided; generators census_blank_Nfold.py + grid3_classify.py)\""
+        let err = _fold_into_embedded("N", raw, nid)
+        if len(err) == 0 {
+            println("fold: @N census summary folded into embedded.gen.hexa — id=" + nid)
+            println("      (single SUMMARY atom recording closed=" + to_string(closed) + "; the 35519 individual negatives are bloat-avoided by design)")
+        } else if err.contains("SKIP") || err.contains("already") {
+            println("fold: @N census summary already present (idempotent no-op) — id=" + nid)
+        } else {
+            println("fold: ERROR — " + err)
+        }
     } else {
         println("note: re-runnable + idempotent (pure exact-integer sweep, no external state).")
         println("      --fold = PHASE 2 (fold the closed-⚪ verdicts as @N atoms into embedded.gen.hexa;")
-        println("      machine-SSOT governance: separate PR + hexa verify).")
+        println("      a single @N census SUMMARY atom; machine-SSOT governance: separate PR + hexa verify).")
     }
 }
 
@@ -4019,7 +4044,7 @@ fn cmd_help() {
     println("                          cells by exact-integer solution count of A*B=C*D:")
     println("                          filled-🔵 (1-sol n>=4) · closed-⚪ (0) · multi-⊞ (>=2) · degenerate (1-sol n<4).")
     println("                          The mechanical self-completing loop (no LLM, no external evidence).")
-    println("                          --fold = PHASE 2 stub (would fold @N atoms into embedded.gen.hexa).")
+    println("                          --fold = fold ONE @N census SUMMARY atom (closed-⚪ count) into embedded.gen.hexa (bloat-avoided).")
     println("")
     println("SSOT: compiler/atlas/embedded.gen.hexa (set $HEXA_ATLAS_EMBED=/abs/dir to override).")
 }
