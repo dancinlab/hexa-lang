@@ -2599,6 +2599,18 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
                  blabel_names, blabel_offsets, blabel_reforder, f)
         i = i + 1
     }
+    // #3712 — `fn_names` membership map, precomputed ONCE here so the Pass-2
+    // and Pass-4 `_str_in(fn_names, …)` linear scans (O(fn) per pending call →
+    // O(calls·fn)) become O(1) `has_key`. Byte-NEUTRAL: `has_key` returns the
+    // same bool `_str_in` did. Uses the same `{}`+`has_key` primitive as
+    // `_build_merged_strtab`'s `seen` set. `fn_names` is fully populated above
+    // and never mutated after, so one precompute serves both passes.
+    let fn_names_set = {}
+    let mut fnsi = 0
+    while fnsi < len(fn_names) {
+        fn_names_set[fn_names[fnsi]] = true
+        fnsi = fnsi + 1
+    }
 
     let text_len = len(obj.text)
     let mut text_pad = 0
@@ -2649,13 +2661,13 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
         // `___raw_idiv` def) → every `__raw_*`/`__map_*` runtime ref UNDEFINED
         // at link (the N5-sym wall). Always ABI-prefix.
         let cand = _darwin_mangle(raw)
-        if _str_in(fn_names, cand) {
+        if has_key(fn_names_set, cand) {
             name = cand
         } else if len(raw) > 0 {
             name = _darwin_mangle(raw)
         }
         // Defined intra-module target? (one of this module's fns)
-        if _str_in(fn_names, name) {
+        if has_key(fn_names_set, name) {
             pi = pi + 1
             continue
         }
@@ -2833,6 +2845,19 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
     // Page targets that resolved to no symbol (PR-C scope: globals /
     // float pool). Reported (not silently dropped) after the walk.
     let pack_page_unresolved: [string] = []
+    // #3712 — name→symtab-index memo cache shared by the BL (BRANCH26) + page
+    // (PAGE21/PAGEOFF12/GOT) reloc walks, mirroring elf_x86_64/elf_arm64. The
+    // raw `_find_sym_by_name` is an O(symbols) scan run once PER pending site →
+    // O(sites·symbols). A name resolves DETERMINISTICALLY here (the symbol
+    // table is FROZEN by Pass 3 — no push-on-miss in this pass), so memoizing
+    // the first resolution per distinct name is byte-IDENTICAL: the same index
+    // `_find_sym_by_name` would return. Memoize on a MISS only; -1 is never
+    // cached (the BL pass always finds a defined/undef sym; the page pass's -1
+    // is the loud-fail path, rare, left to re-scan). The two passes key on
+    // disjoint name spaces (mangled `_…` idents vs `.LCstr*`/`_g*` labels), so
+    // one shared cache is collision-free.
+    let mut _symc_names: [string] = []
+    let mut _symc_idx:   [Int]    = []
     pi = 0
     while pi < np {
         let off = pending_offsets[pi]
@@ -2850,12 +2875,22 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
         // `___raw_idiv` def) → every `__raw_*`/`__map_*` runtime ref UNDEFINED
         // at link (the N5-sym wall). Always ABI-prefix.
         let cand = _darwin_mangle(raw)
-        if _str_in(fn_names, cand) {
+        if has_key(fn_names_set, cand) {
             name = cand
         } else if len(raw) > 0 {
             name = _darwin_mangle(raw)
         }
-        let idx = _find_sym_by_name(obj.symbols, obj.strtab, name)
+        // Cached resolution first; fall back to the symtab scan on a miss,
+        // then memoize on a MISS only (one entry per distinct name).
+        let mut idx = _symc_lookup(_symc_names, _symc_idx, name)
+        let was_cached = idx >= 0
+        if idx < 0 {
+            idx = _find_sym_by_name(obj.symbols, obj.strtab, name)
+            if idx >= 0 {
+                _symc_names.push(name)
+                _symc_idx.push(idx)
+            }
+        }
         let sym = obj.symbols[idx]
         if sym.section != 0 {
             // Intra-module defined callee: pre-patch imm26, no reloc.
@@ -2891,9 +2926,19 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
         // `.LCstr*` / `.LCflt*` local labels are stored verbatim in
         // symbols[]; `g<id>` data globals are defined as `_g<id>`. Try the
         // raw name first, then the ABI-mangled form.
-        let mut pidx = _find_sym_by_name(obj.symbols, obj.strtab, praw)
+        // Same #3712 memo cache as the BL pass, keyed on `praw` (the resolution
+        // — raw-then-mangled — is deterministic per `praw`). Memoize on a MISS
+        // only; the unresolved (-1) loud-fail path is never cached.
+        let mut pidx = _symc_lookup(_symc_names, _symc_idx, praw)
         if pidx < 0 {
-            pidx = _find_sym_by_name(obj.symbols, obj.strtab, _darwin_mangle(praw))
+            pidx = _find_sym_by_name(obj.symbols, obj.strtab, praw)
+            if pidx < 0 {
+                pidx = _find_sym_by_name(obj.symbols, obj.strtab, _darwin_mangle(praw))
+            }
+            if pidx >= 0 {
+                _symc_names.push(praw)
+                _symc_idx.push(pidx)
+            }
         }
         if pidx < 0 {
             // Unknown page target (not a `.LCstr*` literal, a block
