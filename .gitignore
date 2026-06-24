@@ -316,6 +316,7 @@ self/native/rtcore_array-typed-leaf.c
 self/native/rtcore_fs-read-write.c
 self/native/rtcore_leaf.c
 self/native/rtcore_map-query-fold.c
+self/native/rtcore_map-query-dispatch.c
 self/native/rtcore_math.c
 self/native/rtcore_math2.c
 self/native/rtcore_valop-dispatch.c

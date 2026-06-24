@@ -108,7 +108,7 @@ fi
 echo "[3/5] build all native seed objects (build/*.o)…"
 build_clusters() {
     local s out scr
-    for s in leaf arith math math2 valop-dispatch map-query-fold collection-mutate \
+    for s in leaf arith math math2 valop-dispatch map-query-dispatch map-query-fold collection-mutate \
              array-typed-leaf fs-read-write arith-coerce-format runtime-misc; do
         out="build/rtcore_${s//-/_}_native.o"
         scr="tool/regen_rtcore_${s}_native_o.sh"
@@ -143,6 +143,7 @@ CLUSTER_DEFS="\
 -DHEXA_RT_CORE_MATH_NATIVE=1 \
 -DHEXA_RT_CORE_MATH2_NATIVE=1 \
 -DHEXA_RT_CORE_VALOP_DISPATCH_NATIVE=1 \
+-DHEXA_RT_CORE_MAP_QUERY_DISPATCH_NATIVE=1 \
 -DHEXA_RT_CORE_MAP_QUERY_FOLD_NATIVE=1 \
 -DHEXA_RT_CORE_COLLECTION_MUTATE_NATIVE=1 \
 -DHEXA_RT_CORE_ARRAY_TYPED_LEAF_NATIVE=1 \
