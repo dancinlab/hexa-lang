@@ -140,6 +140,24 @@ only (no domain registry).
   신뢰하므로 stale 금지).
 - do: 모든 HuggingFace 업로드/Collections 는 `dancinlab` org 아래 둔다.
 
+### CI · self-hosted runners
+
+- do: 무거운 faithful/byteeq 빌드는 **self-hosted 러너**가 처리한다 — `ghost`(darwin-arm64 ·
+  label `selfhost-gen2fix` · darwin byteeq) + `aiden`/`summer`(linux-x64 · label `hexa-build` ·
+  12c/30G 공유 빌드 풀). 잡이 opt-in 하는 법: `runs-on: [self-hosted, Linux, X64, hexa-build]`
+  (linux-x86_64 전용 · 예 `nobaseline-gate.yml` faithful-nobaseline linux-x86_64). **linux-arm64 ·
+  darwin-arm64 · ephemeral 환경이 필요한 잡은 클라우드 러너 그대로 둔다** — arm64 self-hosted 호스트
+  없음(honest, arm64 커버리지 주장 금지).
+- do: public repo 라 **fork-PR 은 메인테이너 승인 후에만** self-hosted 러너가 집어간다(RCE 완화 ·
+  ghost 선례와 동일). 필수 게이트(`selfhost-gates-summary`)를 **검증 안 된/오프라인 러너에 의존시키지
+  말 것** — 러너에서 green 을 실측한 뒤에만 required 잡을 옮긴다.
+- do: 러너는 systemd **서비스**로 등록(`~/actions-runner-hexa` · `sudo ./svc.sh install` · 재부팅
+  생존 · 호스트당 단일 러너 — 풀 빌드 starve 금지 · 우리 빌드는 여전히 1-SSH 규율). 오프라인이면
+  재등록: `gh api -X POST repos/dancinlab/hexa-lang/actions/runners/registration-token -q .token`
+  →  호스트에서 `cd ~/actions-runner-hexa && ./config.sh --url … --token <tok> --labels
+  self-hosted,Linux,X64,<host>,hexa-build --unattended --replace && sudo ./svc.sh start`. 상태는
+  `gh api repos/dancinlab/hexa-lang/actions/runners`.
+
 ## Harness
 
 This repo is governed by the vendored [dancinlab/harness](https://github.com/dancinlab/harness)
