@@ -2100,11 +2100,17 @@ fn _down_guard_refuses(id: str, force: int) -> int {
         // Untracked pod (orphan / never-registered) — no attribution to guard.
         return 0
     }
-    let owner = records[idx].project
-    if len(owner) == 0 || owner == "unattributed" {
+    // Normalize BOTH sides to the canonical `@`-prefixed tag before comparing.
+    // Pods are STAMPED via _resolve_project (always `@`-prefixed, e.g. `@rtsc`),
+    // but _cwd_project derives the BARE git basename (e.g. `rtsc`). Without this
+    // normalization a same-project teardown string-compares `@rtsc` != `rtsc`
+    // and the guard fires a FALSE cross-project refusal. _at_prefix is
+    // idempotent, so a legacy bare-stored tag normalizes the same way.
+    let owner = _at_prefix(records[idx].project)
+    if len(owner) == 0 || owner == "@unattributed" {
         return 0
     }
-    let cur = _cwd_project()
+    let cur = _at_prefix(_cwd_project())
     if owner == cur {
         return 0
     }
