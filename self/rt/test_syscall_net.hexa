@@ -1,0 +1,76 @@
+// self/rt/test_syscall_net.hexa — zero-c r36 socket-family smoke test
+//
+// Loopback TCP round-trip over the leg-B native socket wrappers (no libc
+// socket()/bind()/…). LINUX-ONLY: see the DARWIN-ARM64 ERRNO WALL note in
+// self/rt/syscall.hexa — Darwin's carry-flag error convention is not
+// expressible through __hx_syscall6, so a failing socket call there returns
+// a positive value indistinguishable from a valid fd. This test asserts the
+// happy-path round-trip on Linux (both arches).
+//
+// Build & run (Linux x86_64):
+//   hexa compile --target=linux-x86_64 self/rt/test_syscall_net.hexa -o /tmp/hx_net
+//   /tmp/hx_net ; echo "exit=$?"   # expect: exit=0
+//
+// sockaddr_in layout (16 bytes):
+//   off 0  : sa_family (u16) = AF_INET (2)
+//   off 2  : sin_port  (u16, network byte order)
+//   off 4  : sin_addr  (u32, network byte order) = 127.0.0.1 = 0x0100007f
+//   off 8  : 8 zero bytes (sin_zero)
+
+use self::rt::syscall
+use self::rt::alloc
+use self::rt::io
+
+fn build_sockaddr_lo(port_net: int) -> int {
+    let sa = hexa_ptr_alloc(16)
+    // family + port packed into the low 32 bits of slot 0:
+    //   byte0 = AF_INET, byte1 = 0, byte2..3 = port (network order)
+    __mem_store16(sa, AF_INET())
+    __mem_store16(sa + 2, port_net)
+    // 127.0.0.1 in network byte order = 0x0100007f = 16777343
+    __mem_store32(sa + 4, 16777343)
+    __mem_store64(sa + 8, 0)
+    return sa
+}
+
+fn main() -> int {
+    // Port 0x1F90 = 8080; network order bytes = 0x90 0x1F -> stored as 0x1F90? No:
+    // network order is big-endian: port 8080 = 0x1F90 -> bytes [0x1F,0x90].
+    // __mem_store16 writes little-endian, so to land [0x1F,0x90] we store 0x901F.
+    let port_net = 36895   // 0x901F => on-wire 0x1F90 = 8080
+
+    let srv = sys_socket(AF_INET(), SOCK_STREAM(), 0)
+    if srv < 0 { sys_exit(11) }
+
+    let one = hexa_ptr_alloc(4)
+    __mem_store32(one, 1)
+    sys_setsockopt(srv, sol_socket(), so_reuseaddr(), one, 4)
+
+    let sa = build_sockaddr_lo(port_net)
+    if sys_bind(srv, sa, 16) < 0 { sys_exit(12) }
+    if sys_listen(srv, 4) < 0 { sys_exit(13) }
+
+    // Single-process self-connect via a child would need fork; for a pure
+    // smoke we just validate the listen socket exists and accept the API
+    // returns sane fds. Connect from the same process to our own listener.
+    let cli = sys_socket(AF_INET(), SOCK_STREAM(), 0)
+    if cli < 0 { sys_exit(14) }
+    if sys_connect(cli, sa, 16) < 0 { sys_exit(15) }
+
+    let conn = sys_accept(srv, 0, 0)
+    if conn < 0 { sys_exit(16) }
+
+    let msg = "ok\n"
+    let addr = hexa_ptr_addr(msg)
+    if sys_send(cli, addr, 3, 0) < 0 { sys_exit(17) }
+
+    let buf = hexa_ptr_alloc(16)
+    let n = sys_recv(conn, buf, 16, 0)
+    if n != 3 { sys_exit(18) }
+
+    sys_close(conn)
+    sys_close(cli)
+    sys_close(srv)
+    sys_exit(0)
+    return 0
+}
