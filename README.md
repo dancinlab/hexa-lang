@@ -370,6 +370,7 @@ hexa cc <file>.hexa -o build/X.o       # just lower → object (HIR → MIR → 
 hexa run <file>.hexa [<args>...]       # compile then execute a single file
 hexa explain HX8004                    # what does this diagnostic mean
 hexa atlas lookup <id> | --prefix=<p>   # read atlas node(s) — embedded.gen.hexa SSOT
+hexa atlas census                       # count BLANK cells of the @F identity grid (denominator/filled/coverage + predictions)
 hexa atlas register --from-verify <fn> <args> <v>   # verify IN-PROCESS → fold node into embedded.gen.hexa
 hexa atlas export [--out PATH]          # export live atlas → portable .n6 (n6 = export-only)
 hexa drill --seed "<expr>"             # OUROBOROS smash → ... → absorb cycle
