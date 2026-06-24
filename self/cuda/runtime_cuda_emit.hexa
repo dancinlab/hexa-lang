@@ -4251,7 +4251,18 @@ fn emit_runtime_cuda_c() -> str {
             "         * copied; the next op reads s->d_buf directly via H2D-skip. */\n" +
             "        e->d_buf      = (void*)s->d_buf;\n" +
             "        e->loc        = FARR_DEVICE;\n" +
-            "        e->dirty_host = 1;   /* host buf no longer current */\n" +
+            "        /* residency-fix: dirty_host MUST stay 0 here. The host buf is\n" +
+            "         * stale, but that is tracked by loc=FARR_DEVICE + dirty_dev=1 (a\n" +
+            "         * host-read materialises via hexa_farr_get loc==FARR_DEVICE D2H).\n" +
+            "         * dirty_host=1 means the USER mutated the host buf (hexa_farr_set)\n" +
+            "         * and forces a re-upload; setting it on a DEVICE_KEEP output wrongly\n" +
+            "         * BLOCKED the _h2d skip (which keys on !dirty_host) so the next GPU\n" +
+            "         * op re-uploaded the never-written host buffer, CLOBBERING this\n" +
+            "         * kernel device output with stale zeros -> device-resident fwd/grad\n" +
+            "         * garbage -> CLM_PROD_DEVRESIDENT/DEVFEED frozen-train (measured\n" +
+            "         * 4.7990 constant vs REF 3.5508 descend). Default = HOST_NOW so the\n" +
+            "         * shipped build stays byte-identical; only the opt-in path fixed. */\n" +
+            "        e->dirty_host = 0;\n" +
             "        e->dirty_dev  = 1;   /* device holds the freshest value */\n" +
             "        (void)copy_len;\n" +
             "        return 0;\n" +
@@ -5855,7 +5866,12 @@ fn emit_runtime_cuda_c() -> str {
             "    if (g_forge_out_disposition == FORGE_OUT_DEVICE_KEEP) {\n" +
             "        e->d_buf      = (void*)s->d_buf;\n" +
             "        e->loc        = FARR_DEVICE;\n" +
-            "        e->dirty_host = 1;\n" +
+            "        /* residency-fix (same bug as _d2h_out): device-keep output is\n" +
+            "         * NOT user-mutated. dirty_host=1 here blocked the _h2d skip\n" +
+            "         * (!dirty_host) so the next op re-uploaded the never-written host\n" +
+            "         * buffer, clobbering this device output with stale zeros. loc=\n" +
+            "         * FARR_DEVICE + dirty_dev=1 already track host-staleness. */\n" +
+            "        e->dirty_host = 0;\n" +
             "        e->dirty_dev  = 1;\n" +
             "        return 0;\n" +
             "    }\n" +
