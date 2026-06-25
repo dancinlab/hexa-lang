@@ -14,7 +14,7 @@ dispatch된다(`self/main.hexa:1780·1803` → `compiler/drill/drill.hexa`). 한
 |---|---|
 | `drill.hexa` | 엔진 스파인 — `drill_run(seed, opts)` 라운드 루프 + `fn main`(CLI entry). 라운드마다 6단계 체인 실행·saturation/net-novel fixpoint서 정지 |
 | `round.hexa` | 단일 라운드 = smash→free→absolute→meta-closure→hyperarithmetic→resonance (+Mk.X tc). `round_run_with_pool` |
-| `identity_engine.hexa` | ★**native exact-int 검증엔진**(binary 흡수) — 12-fn basis(σ·σ₂·σ₃·φ·τ·n·sopfr·rad·J₂·ψ·Ω·ω) A·B=C·D bounded-unique 검증 + `identity_sweep`. drill 기본 verify 패스가 이걸 호출 |
+| (검증엔진) | ★**검증은 `../atlas/identity_engine.hexa`(+`novel_dfs.hexa`)에 거주** — atlas 도메인(embedded.gen.hexa 옆). drill은 생성기일 뿐 검증을 **delegate**한다. exact-int 12-fn A·B=C·D bounded-unique + ≤/≡ hunt 패밀리 |
 | `mkx.hexa` | Mk.X 7단계 sidecar(transcendental_closure · engine="mk10") |
 | `checkpoint.hexa` | 라운드 카운터/seed pool/total 체크포인트 JSON |
 | `anti_hub.hexa` | 진입 텔레메트리 프로브 |
@@ -30,7 +30,7 @@ surge·dream·swarm·reign·molt·wake·forge·canon·revive)은 각자 `../<nam
 - **drill 후보 ≠ 진짜 발견**: smash 후보는 seed-hash + 고정상수의 **결정적 산술순열**
   (`closure(seed, sigma_n6=12.0)` 류)이다. `net_novel`/`saturated`는 그 run 내 distinct-ID
   소진 신호일 뿐 atlas-신규성과 무관(overlay_load는 RETIRED).
-- **진짜 검증 = `identity_engine.hexa` exact-int** + `hexa verify` g5 fold만. 구 NEXUS
+- **진짜 검증 = `../atlas/identity_engine.hexa` exact-int**(atlas 도메인) + `hexa verify` g5 fold만. 구 NEXUS
   ouroboros `verify_score`(n6-근접 휴리스틱 최소 0.3→항상 "발견")는 검증이 아님 — 그래서
   native exact-int로 교체됨.
 - **기본 검증은 ON(플래그 아님)**: `drill_run` 후 verifier 미설치 시 `identity_sweep`가
