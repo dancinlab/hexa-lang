@@ -1,4 +1,5 @@
 #!hexa strict
+// @canonical-ok intentional parallel format-version — grammar_v1..v5 are all registered in grammar_format/core (grammar_format_main) as distinct ACTIVE format versions, not history-in-filename (canonical-naming exempt; see module/README.ai.md).
 // hexa-lang/grammar_format/module/grammar_v3.hexa — Phase gamma (mk3) STUB-FROM-SPEC
 //
 // @tool(slug="grammar_v3", desc="Phase gamma L4 pub/public + L8 canonical visibility + L9 fail-loud Result (spec stub)")

@@ -1,4 +1,5 @@
 #!hexa strict
+// @canonical-ok intentional parallel format-version — attr_v1..v5 are all registered in attr_format/core/attr_format_main.hexa (+registry.hexa) as distinct ACTIVE format versions, not history-in-filename (canonical-naming exempt; see module/README.ai.md).
 // @tool(slug="attr_format_v1", desc="hexa-lang attr-format v1 module — comment-form `// @attr(...)` lint wrapper (current ai-native baseline)")
 // @sentinel(__ATTR_FORMAT_V1__ <PASS|FAIL> mode=<selftest>)
 // @usage(hexa hexa-lang/attr_format/module/attr_v1.hexa)
