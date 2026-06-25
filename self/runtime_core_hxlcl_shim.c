@@ -320,6 +320,14 @@ char *__attribute__((noinline)) hxlcl_strcat(char *dest, const char *src) {
 char  *hxlcl_strcat(char *d, const char *s)           { return strcat(d, s); }
 #endif
 #endif
+/* SELFEMIT (HEXA_RT_SELFEMIT_STRDUP, default OFF · RFC061 §M8 family r10): hxlcl_strdup is
+ * supplied by the hexa-NATIVE self-emitted .o (test/native_build/emit_hxlcl_strdup_o.hexa
+ * — verbatim rt_strdup 112-byte body: inline strlen loop + `bl _hxlcl_malloc` BRANCH26,
+ * byte-identical to self/codegen/runtime_arm64.hexa::rt_strdup). COMPOSITE: the native .o
+ * carries ONE undefined-external `_hxlcl_malloc` callee which the RETAINED shim global
+ * `hxlcl_malloc` (above; not swapped) resolves — NO errno, no new provider. DEFAULT (macro
+ * undefined) keeps this libc delegate → shim.o byte-identical. */
+#ifndef HEXA_RT_SELFEMIT_STRDUP
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_strdup (verbatim 0-libc floor body) */
 char *__attribute__((noinline)) hxlcl_strdup(const char *s) {
@@ -334,6 +342,7 @@ char *__attribute__((noinline)) hxlcl_strdup(const char *s) {
 }
 #else
 char  *hxlcl_strdup(const char *s)                    { return s ? strdup(s) : NULL; }
+#endif
 #endif
 /* SELFEMIT (HEXA_RT_SELFEMIT_STRCHR, default OFF · RFC061 §M8 family r4):
  * hxlcl_strchr is supplied by the hexa-NATIVE self-emitted .o
@@ -374,11 +383,20 @@ const char *hxlcl_strstr(const char *h, const char *n){ return strstr(h, n); }
 
 /* ── numeric parse ───────────────────────────────────────────────────────── */
 long long __attribute__((noinline)) hxlcl_atoll(const char *s) { return s ? atoll(s) : 0; }
+/* SELFEMIT (HEXA_RT_SELFEMIT_ATOI, default OFF · RFC061 §M8 family r10): hxlcl_atoi is
+ * supplied by the hexa-NATIVE self-emitted .o (test/native_build/emit_hxlcl_atoi_o.hexa
+ * — verbatim rt_atoi 20-byte body: frame + `bl _hxlcl_atoll` BRANCH26 + epilogue,
+ * byte-identical to self/codegen/runtime_arm64.hexa::rt_atoi). COMPOSITE: the native .o
+ * carries ONE undefined-external `_hxlcl_atoll` callee which the RETAINED shim global
+ * `hxlcl_atoll` (above; not swapped) resolves — NO errno, no new provider. DEFAULT (macro
+ * undefined) keeps this libc delegate → shim.o byte-identical. */
+#ifndef HEXA_RT_SELFEMIT_ATOI
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_atoi (verbatim 0-libc floor body) */
 int __attribute__((noinline)) hxlcl_atoi(const char *s) { return (int)hxlcl_atoll(s); }
 #else
 int       hxlcl_atoi(const char *s)                   { return s ? atoi(s) : 0; }
+#endif
 #endif
 double    hxlcl_atof(const char *s)                   { return s ? atof(s) : 0.0; }
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
@@ -500,7 +518,15 @@ int    hxlcl_close(int fd)                            { return close(fd); }
 #ifndef HEXA_RT_SELFEMIT_LSEEK
 long   hxlcl_lseek(int fd, long off, int whence)      { return (long)lseek(fd, (off_t)off, whence); }
 #endif
+/* SELFEMIT (HEXA_RT_SELFEMIT_FCNTL, default OFF · RFC061 §M8 family r10): hxlcl_fcntl is
+ * supplied by the hexa-NATIVE self-emitted .o (test/native_build/emit_hxlcl_fcntl_o.hexa
+ * — class-C SYS_fcntl `svc #0x80` via plain _hxlcl_syscall3, NON-_cf no-errno: dual-sxtw
+ * + svc + ret, NO reloc, byte-identical to self/codegen/runtime_arm64.hexa::rt_fcntl).
+ * Self-contained leaf — no external callee, no errno provider. DEFAULT (macro undefined)
+ * keeps this libc delegate → shim.o byte-identical. */
+#ifndef HEXA_RT_SELFEMIT_FCNTL
 int    hxlcl_fcntl(int fd, int cmd, long arg)         { return fcntl(fd, cmd, arg); }
+#endif
 /* SELFEMIT (HEXA_RT_SELFEMIT_STAT, default OFF · RFC061 §M8 family r9): hxlcl_stat is
  * supplied by the hexa-NATIVE self-emitted .o (test/native_build/emit_hxlcl_stat_o.hexa
  * — class-C `svc #0x80` SYS_stat trap + carry-flag errno store, byte-identical to
@@ -517,7 +543,16 @@ int    hxlcl_stat(const char *path, void *buf)        { return stat(path, (struc
 #ifndef HEXA_RT_SELFEMIT_MKDIR
 int    hxlcl_mkdir(const char *path, int mode)        { return mkdir(path, (mode_t)mode); }
 #endif
+/* SELFEMIT (HEXA_RT_SELFEMIT_POLL, default OFF · RFC061 §M8 family r10): hxlcl_poll is
+ * supplied by the hexa-NATIVE self-emitted .o (test/native_build/emit_hxlcl_poll_o.hexa
+ * — class-C SYS_poll `svc #0x80` via plain _hxlcl_syscall3, NON-_cf no-errno: uxtw nfds
+ * + sxtw timeout + svc + ret, NO reloc, byte-identical to
+ * self/codegen/runtime_arm64.hexa::rt_poll). Self-contained leaf — no external callee,
+ * no errno provider. DEFAULT (macro undefined) keeps this libc delegate → shim.o
+ * byte-identical. */
+#ifndef HEXA_RT_SELFEMIT_POLL
 int    hxlcl_poll(void *fds, unsigned int nfds, int timeout) { return poll((struct pollfd *)fds, (nfds_t)nfds, timeout); }
+#endif
 void  *hxlcl_popen(const char *cmd, const char *mode) { return (void *)popen(cmd, mode); }
 int    hxlcl_pclose(void *stream)                     { return pclose((FILE *)stream); }
 
