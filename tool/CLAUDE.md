@@ -49,7 +49,7 @@
   #3943..#3963 에서 고친 "malformed-input guard" 버그 클래스의 회귀 방지. 실행:
   `hexa run tool/stdlib_guard_lint.hexa --selftest | --mode=warn <files> | --changed`.
   `.githooks/pre-commit` 에 ADVISORY 로 배선(경고만, 커밋 차단 안 함). 일회성 전수 census 는
-  `../state/guard_class_census.py`.
+  `guard_class_census.py`(재실행 가능 · `state/` 는 gitignore 라 `tool/` 에 둠).
 - 위생/기타: `backup_file_lint`(working-tree backup 파일 금지) · `ext_lint`/`doc_lint`/`poc_lint` ·
   `spawn_lint`/`precommit_spawn_lint`/`swarm_lint`/`telegram_lint`/`runaway_pattern` ·
   `lb_state_lint` · `roadmap_lint`/`roadmap_schema_lint`(+ `test_roadmap_lint`).
