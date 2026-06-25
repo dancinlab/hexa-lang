@@ -28,7 +28,7 @@ if bash tool/release_build 2>&1 | tail -40; then
 else
   echo "[build] release_build FAILED"; exit 10
 fi
-ls -la ./hexa ./hxv2 ./hexa.real 2>/dev/null
+ls -la ./hexa ./hexad ./hxv2 ./hexa.real 2>/dev/null
 HEXA="$ROOT/hexa"
 [ -x "$HEXA" ] || { echo "[build] no ./hexa driver produced"; exit 11; }
 echo "[build] hexa driver: $HEXA"

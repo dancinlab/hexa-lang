@@ -252,8 +252,36 @@ install_hexa() {
     # When invoked through PATH, argv[0]="hexa" has no slash and resolution
     # falls back to cwd — wrong. Install the native binary under a private
     # name and place a thin shim at $HX_BIN/hexa that exec's it with an
-    # absolute argv[0]. Mirrors the source-tree `hexa` → `hexa.real` shim.
+    # absolute argv[0].
+    #
+    # Canonical on-disk name = `hexad` (AMFI burning-matcher treadmill
+    # terminal: hexadrv → hexa.real → hxv2 → hexad · cli_wrappers.hexa:38,
+    # tool/bin/build.hexa:119). The shim (cli_wrappers.hexa SSOT) resolves
+    # `hexad` FIRST and `exec -a hexa` it, so the on-disk name AMFI's burning
+    # matcher sees is the un-burnt `hexad`. install.sh previously diverged by
+    # writing the raw binary to `hexa.real` and never producing `hexad`, so a
+    # `~/.hx/bin/hexa` shim from cli_wrappers (which prefers hexad) would miss
+    # it. Converge: write the real binary to the canonical `hexad`.
+    #
+    # `hexad` MUST be a REAL FILE (not a symlink) for the AMFI escape — AMFI
+    # evaluates the resolved real-file name, so a symlink hexad→hexa.real
+    # would re-expose the burnt `hexa.real` name and defeat the rename.
+    #
+    # `hexa.real` ALSO stays a REAL FILE (a copy, not a symlink). The
+    # selfhost flip-detection in tool/promote_selfhost.sh keys on
+    # `[ -L hexa.real ]` — an unflipped install MUST have hexa.real be a
+    # plain file so `status`/`--revert` correctly report "NOT flipped" and
+    # the flip (which replaces hexa.real with a symlink → hx-selfhost-cli)
+    # remains the unique symlink state. Making hexa.real a symlink here would
+    # mis-trip that heuristic on a fresh install. The retired `hxv2` name
+    # (no such invariant) is a thin symlink → hexad. Every consumer of the
+    # `hexa.real` PATH (this script's shim, selfhost-flip below,
+    # promote_selfhost.sh, hx-selfhost-cli backup, selfhost_shim_integrity
+    # gate, glibc preflight, module_loader check) keeps resolving losslessly.
+    install -m 0755 "$src/hexa" "$HX_BIN/hexad"
     install -m 0755 "$src/hexa" "$HX_BIN/hexa.real"
+    # retired-name compat symlink (relative target — install dir relocatable).
+    ln -sf hexad "$HX_BIN/hxv2"
     # standalone-rtlink: the shim exports HEXA_PREBUILT_RUNTIME at the persisted
     # native-seed runtime.a ($HX_BIN/build/runtime.a, dropped by install_src's
     # stage_resolve_runtime_a step) so a consumer `hexa build`/`run` in a FRESH
@@ -331,14 +359,16 @@ EOF
     #       fallback (quarantine already stripped).
     # A Developer-ID-notarized release tarball makes both harmless no-ops.
     if [ "$(uname -s)" = "Darwin" ]; then
-        xattr -dr com.apple.quarantine "$HX_BIN/hexa.real" "$HX_BIN/build" 2>/dev/null || true
+        # Operate on the real file (hexad), not the hexa.real/hxv2 symlinks —
+        # codesign/xattr must sign the Mach-O, not a symlink.
+        xattr -dr com.apple.quarantine "$HX_BIN/hexad" "$HX_BIN/build" 2>/dev/null || true
         if command -v codesign >/dev/null 2>&1; then
             _sid="${HEXA_CODESIGN_IDENTITY:-}"
             if [ -z "$_sid" ] && command -v security >/dev/null 2>&1; then
                 _sid="$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/[0-9]+\)/{print $2; exit}')"
             fi
             [ -n "$_sid" ] || _sid="-"
-            codesign --force --sign "$_sid" --identifier hexad "$HX_BIN/hexa.real" 2>/dev/null || true
+            codesign --force --sign "$_sid" --identifier hexad "$HX_BIN/hexad" 2>/dev/null || true
             if [ "$_sid" = "-" ]; then
                 dim "  codesign: ad-hoc (set HEXA_CODESIGN_IDENTITY=<cert> for a stable identity)"
             else
@@ -347,13 +377,17 @@ EOF
         fi
     fi
 
-    # selfhost persistence — the `install … hexa.real` above overwrites hexa.real
-    # with the shipped C-transpile dispatch binary, silently reverting a tier2
-    # native default-flip (tool/promote_selfhost.sh install --default). If the
-    # native default was promoted (marker present) and the self-host slot + CLI
-    # shim survived this reinstall, re-apply the flip so the native compile
-    # surface stays the default. Reversible via `promote_selfhost.sh --revert`
-    # (clears the marker). codesign above already signed the real binary.
+    # selfhost persistence — the two `install …` lines above reset hexa.real
+    # to a fresh copy of the canonical (C-transpile) binary, silently
+    # reverting a tier2 native default-flip (tool/promote_selfhost.sh install
+    # --default). If the native default was promoted (marker present) and the
+    # self-host slot + CLI shim survived this reinstall, re-apply the flip so
+    # the native compile surface stays the default. The flip mv's the real
+    # hexa.real file to a backup and symlinks hexa.real → hx-selfhost-cli (the
+    # unique `[ -L hexa.real ]` state promote_selfhost.sh keys on). The
+    # canonical `hexad` real file stays untouched, so a `--revert` restores
+    # the backup file and the shipped surface returns. codesign above already
+    # signed the real hexad.
     if [ -f "$HX_HOME/.selfhost-default" ] && [ -x "$HX_BIN/hx-selfhost-cli" ] \
        && [ -x "$HX_HOME/self/native/selfhost/gen3" ]; then
         mv "$HX_BIN/hexa.real" "$HX_BIN/hexa.real.pre-selfhost.$(date +%Y%m%d-%H%M%S)"
