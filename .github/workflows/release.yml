@@ -26,7 +26,7 @@ name: release
 on:
   push:
     tags: ['v*']
-    branches: [main]      # → rolling `test` prerelease (install via HEXA_VERSION=test; `edge` is a back-compat alias)
+    branches: [main]      # → rolling `test` prerelease (install via HEXA_VERSION=test)
   workflow_dispatch:
     inputs:
       tag:
@@ -96,12 +96,6 @@ jobs:
           set -euo pipefail
           git tag -f test "${{ github.sha }}"
           git push origin -f test
-          # back-compat alias: keep legacy `edge` tag at same commit. Create the
-          # local `edge` tag first — the runner is a fetch-depth:1 checkout with no
-          # pre-existing `edge` ref, so a bare `push -f edge` fails with
-          # "src refspec edge does not match any" (broke every release 2026-06-22).
-          git tag -f edge "${{ github.sha }}"
-          git push origin -f edge   # legacy alias (HEXA_VERSION=edge); install.sh also redirects edge→test
   # ── macOS arm64 (Apple Silicon) ────────────────────────────
   release-macos-arm64:
     name: release (darwin-arm64)
@@ -678,7 +672,7 @@ jobs:
       # nvcc compile failed → resolve_cuda_runtime_seed non-fatally unset HEXA_CUDA
       # → build/runtime.cuda.a was never produced → the consumer runtime.a shipped
       # the CPU archive (no device objects) → the Verify step failed → the whole
-      # rolling test/edge prerelease had not published (the channel rotted at 2026-05-23). HEXA_PREBUILT_RUNTIME
+      # rolling test prerelease had not published (the channel rotted at 2026-05-23). HEXA_PREBUILT_RUNTIME
       # unset → runtime.a(s) built fresh.
       - name: Build — shared release_build (dual CPU+CUDA runtime.a, no cuBLAS on toolchain)
         shell: bash
@@ -772,8 +766,8 @@ jobs:
   # then is the release flipped from prerelease → stable + marked Latest. This
   # is the mechanical enforcement of the [릴리스 채널 규율] rule in CLAUDE.md:
   # stable ships only when x86_64 · arm64 · darwin are ALL green (3/3 assets).
-  # Edge (branch push, is_tag != true) stays a rolling prerelease — finalize is
-  # gated off — so `HEXA_VERSION=test` (and legacy `edge`) consumers keep getting every main push.
+  # Test (branch push, is_tag != true) stays a rolling prerelease — finalize is
+  # gated off — so `HEXA_VERSION=test` consumers keep getting every main push.
   finalize:
     name: finalize (all-3-green → stable Latest)
     # Depend on EVERY upload job (incl. the supplementary musl/cuda lanes) so
