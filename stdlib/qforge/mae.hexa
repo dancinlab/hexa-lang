@@ -115,6 +115,9 @@ pub fn qforge_mae(fs: FrozenScf, T_apply,
 //   Sweep θ ∈ [0,π/2] at fixed φ, return [theta_k, E(theta_k)] for nθ points.
 //   result[k*2] = θ_k, result[k*2+1] = E_band(θ_k) − E_band(0)  (E relative to ẑ).
 pub fn qforge_mae_curve(fs: FrozenScf, T_apply, phi: float, ntheta: int) -> [float] {
+    // need ≥2 points for the [0,π/2] sweep; ntheta==1 → to_float(ntheta-1)==0 →
+    // division-by-zero in the θ stride → inf/NaN θ feeds garbage to the K₁ fit.
+    if ntheta < 2 { return [] }
     let pi = 3.14159265358979323846
     let e0 = qforge_band_energy_dir(fs, T_apply, 0.0, phi)
     let mut out: [float] = []
