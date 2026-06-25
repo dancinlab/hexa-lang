@@ -164,11 +164,19 @@ fn _toml_str_field(toml: str, key: str) -> str {
     while i < len(lines) {
         let ln = lines[i].trim()
         if ln.index_of(key) == 0 {
-            let q0 = ln.index_of("\"")
-            if q0 >= 0 {
-                let rest = ln.substring(q0 + 1, len(ln))
-                let q1 = rest.index_of("\"")
-                if q1 >= 0 { return rest.substring(0, q1) }
+            // require a key boundary so requesting "api_key" doesn't match
+            // "api_key_backup": the char after the key must be '=' or whitespace
+            // (flat TOML is `key = "val"`). Prefix-only match returned the wrong line.
+            let after = ln.substring(len(key), len(ln))
+            let mut nb = ""
+            if len(after) > 0 { nb = after.substring(0, 1) }
+            if nb == "=" || nb == " " || nb == "\t" {
+                let q0 = ln.index_of("\"")
+                if q0 >= 0 {
+                    let rest = ln.substring(q0 + 1, len(ln))
+                    let q1 = rest.index_of("\"")
+                    if q1 >= 0 { return rest.substring(0, q1) }
+                }
             }
         }
         i = i + 1
