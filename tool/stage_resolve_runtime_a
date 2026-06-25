@@ -1070,13 +1070,14 @@ build_runtime_a_from_source() {
         # ── RFC061 §M8 SELFEMIT (HEXA_RT_SELFEMIT, default OFF · darwin-arm64-only) ──
         # Opt-in: replace the libc-delegate shim members with their hexa-NATIVE
         # self-emitted .o (test/native_build/emit_hxlcl_<sym>_o.hexa, bytes
-        # byte-identical to self/codegen/runtime_arm64.hexa::rt_<sym>). r6 FAMILY:
+        # byte-identical to self/codegen/runtime_arm64.hexa::rt_<sym>). r9 FAMILY:
         # close + read + strlen + memcpy + memset + memcmp + strcmp + strcpy +
-        # strncmp + strncpy + strcat + strchr. close/read are class-C `svc #0x80` traps whose .o
+        # strncmp + strncpy + strcat + strchr + lseek + dup2 + mkdir + waitpid + stat.
+        # close/read/lseek/dup2/mkdir/waitpid/stat are class-C `svc #0x80` traps whose .o
         # references an UNDEFINED-external `_hxlcl_errno` (carry-flag store); the
-        # other eight are pure leaves (no reloc, no errno — verbatim mem/str byte
+        # other ten are pure leaves (no reloc, no errno — verbatim mem/str byte
         # loops, "No relocation, no arena state, no HexaVal touch"). A single 1-cell
-        # `_hxlcl_errno` provider .o satisfies the close/read externs (runtime.o's own
+        # `_hxlcl_errno` provider .o satisfies the svc-wrapper externs (runtime.o's own
         # cell is `static`/file-local in the default build, so it cannot resolve the
         # cross-object reloc; the whole-family `-DHEXA_RT_SELFEMIT` flip that WOULD
         # externalize it leaves 37 shim-uncovered hxlcl_* undefined — the measured
@@ -1101,7 +1102,7 @@ build_runtime_a_from_source() {
                 local _se_sym _se_SYM _se_o _se_need_errno=0
                 # errno-bearing class-C svc wrappers vs pure leaves (declared so the
                 # provider is added iff at least one errno-bearing symbol is swapped).
-                for _se_sym in close read strlen memcpy memset memcmp strcmp strcpy strncmp strncpy strcat strchr; do
+                for _se_sym in close read strlen memcpy memset memcmp strcmp strcpy strncmp strncpy strcat strchr lseek dup2 mkdir waitpid stat; do
                     _se_SYM=$(printf '%s' "$_se_sym" | tr 'a-z' 'A-Z')
                     _se_o="build/hxlcl_${_se_sym}_native.o"
                     echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT: emitting native hxlcl_${_se_sym} .o via $_se_bin (replacing libc-shim member)…"
@@ -1110,7 +1111,7 @@ build_runtime_a_from_source() {
                     [ -f "$_se_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT FATAL: $_se_o not produced" >&2; return 1; }
                     _mo_shim_def="$_mo_shim_def -DHEXA_RT_SELFEMIT_${_se_SYM}"
                     _mo_hxlcl_members="$_mo_hxlcl_members $_se_o"
-                    case "$_se_sym" in close|read) _se_need_errno=1 ;; esac
+                    case "$_se_sym" in close|read|lseek|dup2|mkdir|waitpid|stat) _se_need_errno=1 ;; esac
                 done
                 if [ "$_se_need_errno" = "1" ]; then
                     # 1-cell errno provider — satisfies the close/read native .o's
@@ -1121,7 +1122,7 @@ build_runtime_a_from_source() {
                         || { echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT FATAL: errno provider compile failed" >&2; return 1; }
                     _mo_hxlcl_members="$_mo_hxlcl_members build/hxlcl_errno_provider.o"
                 fi
-                echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT: hxlcl_{close,read,strlen,memcpy,memset,memcmp,strcmp,strcpy,strncmp,strncpy,strcat,strchr} → native .o; shim.o built$_mo_shim_def (symbols dropped); errno provider added — ld -r multidef gate validates"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT: hxlcl_{close,read,strlen,memcpy,memset,memcmp,strcmp,strcpy,strncmp,strncpy,strcat,strchr,lseek,dup2,mkdir,waitpid,stat} → native .o; shim.o built$_mo_shim_def (symbols dropped); errno provider added — ld -r multidef gate validates"
             else
                 echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT: HEXA_RT_SELFEMIT=1 IGNORED — native-emit family is darwin-arm64-only (host=$(uname -sm)); retaining libc shim members" >&2
             fi
