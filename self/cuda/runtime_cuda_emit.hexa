@@ -1237,23 +1237,18 @@ fn emit_runtime_cuda_c() -> str {
             "#else\n" +
             "    }\n" +
             "#endif\n" +
-            "    /* L2-b: sync the forge stream before reading the GEMM result back (async-on);\n" +
-            "     * no-op when async-off (default stream). Keeps D2H race-free + byte-eq. */\n" +
-            "    if (_forge_sync() != 0) return -1;\n" +
-            "    /* Copy C device → host so the host-side caller sees the result. */\n" +
-            "    cudaError_t er = cudaMemcpy(ce->buf, C_dev,\n" +
-            "                                (size_t)(M * N) * sizeof(double),\n" +
-            "                                cudaMemcpyDeviceToHost);\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] cudaMemcpy C D2H failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
-            "    ce->d_buf      = (void*)C_dev;\n" +
-            "    ce->loc        = FARR_MIRRORED;\n" +
-            "    ce->dirty_host = 0;\n" +
-            "    ce->dirty_dev  = 0;\n" +
-            "    return 0;\n" +
+            "    /* RFC056 §6.4 — route the GEMM output through the disposition handler\n" +
+            "     * (_d2h_out) instead of a hardcoded D2H. FORGE_OUT_DEVICE_KEEP keeps C\n" +
+            "     * device-resident (loc=FARR_DEVICE, dirty_dev=1) so the next decode op's\n" +
+            "     * _h2d hits the §6.1 skip and the ~13k matmul/frag host round-trips that\n" +
+            "     * dominate single-token decode util collapse. _d2h_out syncs the forge\n" +
+            "     * stream itself in the HOST_NOW path (race-free, byte-eq); DEVICE_KEEP\n" +
+            "     * defers both sync and copy (stream-ordered with the next forge op).\n" +
+            "     * Default FORGE_OUT_HOST_NOW = the prior D2H, byte-identical — matmul\n" +
+            "     * (the most frequent decode op) was the lone forge holdout hardcoding\n" +
+            "     * the copy; every other forge op already routes output through _d2h_out.\n" +
+            "     * C's device buffer is g_slots[c_id].d_buf (= C_dev), already set above. */\n" +
+            "    return _d2h_out(c_id, M * N);\n" +
             "}\n" +
             "\n" +
             "/* HEXA-FUSION Phase 1c (CUDA-OWN) — our OWN strided-batched FP64 GEMM, NO\n" +
