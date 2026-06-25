@@ -39,22 +39,61 @@ if [ ! -x "$HEXA_V2" ]; then
 fi
 
 # ── Step 1/5: transpile 4 SSOT modules via direct shell ────────────────
-# Each invocation is independent (no in-process exec chain), so codegen.hexa
-# reliably produces ~940 KB output instead of a 259 B skeleton.
-echo "[1/5] transpiling 4 SSOT modules via direct shell"
-for spec in "lexer.hexa:/tmp/_lexer.c" "parser.hexa:/tmp/_parser.c" \
-            "type_checker.hexa:/tmp/_tc.c" "codegen.hexa:/tmp/_cg.c"; do
-    src="${spec%:*}"
-    out="${spec##*:}"
-    rm -f "$out"
-    HEXA_VAL_ARENA=0 "$HEXA_V2" "$SELF/$src" "$out" >/dev/null 2>&1
-    sz=$(wc -c < "$out")
-    echo "  $src -> $out ($sz bytes)"
-    if [ "$sz" -lt 1000 ]; then
-        echo "error: $out is too small ($sz bytes) — transpile likely failed" >&2
+# Each invocation is independent (no in-process exec chain): a distinct hexa_v2
+# process reads a distinct $SELF/<mod>.hexa and writes a distinct /tmp/_<mod>.c,
+# so codegen.hexa reliably produces ~940 KB output instead of a 259 B skeleton,
+# AND the four are order/concurrency-independent (disjoint I/O, no shared state).
+# OPT-IN HEXA_SEED_CONVERGE_PARALLEL=1 fans them out 4-way; default OFF keeps the
+# byte-identical sequential path. Each module's .c is deterministic regardless of
+# scheduling, so the parallel path is byte-identical to sequential (verified R5).
+SPECS='lexer.hexa:/tmp/_lexer.c parser.hexa:/tmp/_parser.c type_checker.hexa:/tmp/_tc.c codegen.hexa:/tmp/_cg.c'
+
+if [ "${HEXA_SEED_CONVERGE_PARALLEL:-0}" = "1" ]; then
+    echo "[1/5] transpiling 4 SSOT modules via direct shell (PARALLEL 4-way)"
+    pids=''
+    for spec in $SPECS; do
+        out="${spec##*:}"
+        rm -f "$out"
+    done
+    for spec in $SPECS; do
+        src="${spec%:*}"
+        out="${spec##*:}"
+        HEXA_VAL_ARENA=0 "$HEXA_V2" "$SELF/$src" "$out" >/dev/null 2>&1 &
+        pids="$pids $!"
+    done
+    fail=0
+    for p in $pids; do
+        wait "$p" || fail=1
+    done
+    for spec in $SPECS; do
+        src="${spec%:*}"
+        out="${spec##*:}"
+        sz=$(wc -c < "$out")
+        echo "  $src -> $out ($sz bytes)"
+        if [ "$sz" -lt 1000 ]; then
+            echo "error: $out is too small ($sz bytes) — transpile likely failed" >&2
+            exit 2
+        fi
+    done
+    if [ "$fail" -ne 0 ]; then
+        echo "error: a parallel transpile process exited non-zero" >&2
         exit 2
     fi
-done
+else
+    echo "[1/5] transpiling 4 SSOT modules via direct shell"
+    for spec in $SPECS; do
+        src="${spec%:*}"
+        out="${spec##*:}"
+        rm -f "$out"
+        HEXA_VAL_ARENA=0 "$HEXA_V2" "$SELF/$src" "$out" >/dev/null 2>&1
+        sz=$(wc -c < "$out")
+        echo "  $src -> $out ($sz bytes)"
+        if [ "$sz" -lt 1000 ]; then
+            echo "error: $out is too small ($sz bytes) — transpile likely failed" >&2
+            exit 2
+        fi
+    done
+fi
 
 # ── Step 2/5: pass 1 merge (rename main() -> _MOD_init) ────────────────
 echo "[2/5] merge pass 1 — main() rename per module"
