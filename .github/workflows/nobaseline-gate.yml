@@ -477,6 +477,12 @@ jobs:
       #    build+run is the undefined==0 + behavior proof for the 12 native members.
       - name: (5) exit42 + hello live-link smoke (SELFEMIT runtime.a alone)
         shell: bash
+        env:
+          # exit42/hello write under /tmp, which `hexa build` REFUSES on Darwin
+          # (kernel-panic-path guard, self/main.hexa:3004). HEXA_MAC_BUILD_OK=1 is
+          # the documented CI bypass for non-heavy dry-run builds — same as every
+          # tool/build_hexa_*.sh and release_package's darwin-arm64 export.
+          HEXA_MAC_BUILD_OK: "1"
         run: |
           set -euo pipefail
           export HEXA_PREBUILT_RUNTIME="$PWD/build/runtime.a"
