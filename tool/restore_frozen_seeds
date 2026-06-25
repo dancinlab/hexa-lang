@@ -303,6 +303,49 @@ if [ -f "$rt" ] && ! grep -q 'HXFARR_CALLOC' "$rt"; then
   echo "[restore_frozen_seeds] FARR-NOOP-FREE: routed farr buffers to libc (calloc=$_hxf_c free=$_hxf_n) in $rt"
 fi
 
+# ── DEVRESIDENT adamw dirty_host coherence (frozen-train fix, post-restore) ───
+# Root cause: under CLM_PROD_DEVRESIDENT the host opt_adamw_step -> hexa_adamw_step
+# builtin mutates the param's HOST buffer P[i] in place but never raises
+# dirty_host. The next forge op's _h2d then hits the RFC056 §6.1 skip
+# (!dirty_host && live d_buf && len-match) and re-uploads NOTHING, so the device
+# int4 fake-quant (_fq -> forge_dispatch_int4_quant) re-quants the STALE device W
+# and the forward never sees the optimizer update -> loss frozen at 4.79899
+# (measured CONSISTENT across aiden/summer/vast clean builds = machine/CUDA
+# invariant; #3905 dirty_host fix is unrelated; #3918's "host opt_adamw_step makes
+# W host-authoritative (hexa_farr_set -> dirty_host=1)" was FALSE — opt_adamw_step
+# never routes through hexa_farr_set, which is why it was ineffective on clean
+# builds). Fix: after the in-place AdamW update loop, mark dirty_host=1
+# (dirty_dev=0) when the param has a live device mirror — exactly the hexa_farr_set
+# contract already in this runtime. HEXA_CUDA-guarded => default/REF/CPU build
+# strips it (byte-identical, byteeq-safe); DEVFEED (host-resident W) is a harmless
+# no-op. SSOT intent also carried in self/runtime_emit_full.hexa hexa_adamw_step
+# emitter (for the zero-c emitter-synth path). Idempotent: marker guards re-apply.
+if [ -f "$rt" ] && ! grep -q 'DEVRESIDENT adamw dirty_host' "$rt"; then
+  # Inject right after the loop-closing brace that immediately follows the AdamW
+  # `P[i] -= ...` update (hits BOTH hexa_adamw_step (returns void) and
+  # hexa_adamw_step_mixed (returns int) — both write P in place; bounded to the
+  # next line so the marker can never leak to an unrelated `return`).
+  awk '
+    /P\[i\] -= lr \* \(mhat/ { print; _adw_seen=1; next }
+    _adw_seen {
+      print   # the loop-closing brace
+      print "#ifdef HEXA_CUDA"
+      print "    /* DEVRESIDENT adamw dirty_host (frozen-train fix): host wrote the"
+      print "     * updated param P in place; if it has a live device mirror, host is"
+      print "     * now authoritative — mark dirty_host=1 so the next forge _h2d"
+      print "     * re-uploads it (else the device int4 fake-quant re-quants the STALE"
+      print "     * device buffer and the forward never sees the update -> frozen). */"
+      print "    { HexaFarrEntry* _pe = \&_hx_farr_table[p_id]; if (_pe->d_buf) { _pe->dirty_host = 1; _pe->dirty_dev = 0; } }"
+      print "#endif"
+      _adw_seen=0
+      next
+    }
+    { print }
+  ' "$rt" > "$rt.adamwfix" && mv "$rt.adamwfix" "$rt"
+  _adw=$(grep -c 'DEVRESIDENT adamw dirty_host' "$rt")
+  echo "[restore_frozen_seeds] DEVRESIDENT adamw dirty_host coherence: injected (markers=$_adw) in $rt"
+fi
+
 # ── gemm-perf r4 — BLIS-packed DGEMM microkernel (reference-first, c23) ───────
 # Reference: BLIS (Van Zee & van de Geijn, ACM TOMS 2015) GEBP macrokernel +
 # mr×nr register microkernel + 3-level cache blocking. PROVEN constants read
