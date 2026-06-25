@@ -85,6 +85,24 @@ only (no domain registry).
   epilogue(gelu 등) 융합은 closed-neg(연산비용 > 왕복절감). byte-eq 결정성은 추월 레버 아님
   falsified(OpenBLAS 도 같은 빌드서 thread-무관 비트동일 · r5 측정).
 
+### QA (지속 검증 · verify-done 상시화)
+
+- do: 모든 fix·기능·측정은 **measure → root-cause → build-verify → 머지** 한 루프로 닫는다.
+  검증은 **캡처된 출력**으로 한다(LLM 자가판정 금지) — 코드젠/런타임 변경은 byteeq 3타깃 + 관련
+  config 전수(예: REF · DEVRESIDENT · DEVFEED) byte-eq 실측, 측정 주장은 reference-match
+  (roofline % · cuBLAS · nsys 커널 귀속)로 정답지에 대조해 증명한다.
+- do: QA 는 **세션 상시 루프** — 한 fix 가 닫히면 다음 QA 라운드(인접 op · 엣지케이스 · 회귀)를
+  명명하고 잇는다. 멈추는 건 🏁(목표 달성) 또는 측정된 벽(🧱)일 때뿐. falsified/음성도 결과로
+  보고하고 **자기수정 궤적을 정직히** 남긴다(예: "launch-bound" → nsys 귀속 → memory-bandwidth-bound
+  로 정정).
+- do: 측정 노이즈가 크면 **더 낮은 레벨의 안정 신호로 귀속**한다(하네스 wall-clock 노이즈 → nsys
+  커널 median). 절대수치 주장 전 metric 의미를 코드로 확인한다(층위 혼동 금지 — SM-util ≠ FLOP-효율).
+- dont: 미검증 "완료" · 한 config/한 타깃만 green 으로 머지 · per-op 단위테스트만 하고 "됐다"(전수
+  config QA · production 배선 누락) · 측정 아티팩트를 과학 천장으로 박제 · tune-to-green.
+- do: QA 산출(verdict · 측정 수치)은 memory/CHANGELOG/state 로 박제하고, cross-repo 측정은
+  `ing add --to <repo>` 로 relay 한다. 빌드/측정은 aiden/summer/vast pool(mini=git/gh only ·
+  akida 금지). 자세한 의무는 commons `verify-done` · `break-walls` · `reference-match` 와 lockstep.
+
 ### native-canonical-default (polarity)
 
 - do: 기본 경로는 **항상 hexa-native/own/canonical**. 외부 의존(cuBLAS · 외부 BLAS · 벤더
