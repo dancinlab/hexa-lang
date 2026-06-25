@@ -485,6 +485,7 @@ pub fn qforge_pair_repulsion_force(pos: [float], aamp: float, rho: float,
     let mut f: [float] = []
     let mut idx = 0
     while idx < 3 * natom { f.push(0.0) ; idx = idx + 1 }
+    if rho <= 0.0 { return f }   // repulsion length ρ≤0 → /ρ Inf
     let mut i = 0
     while i < natom {
         let mut j = i + 1
