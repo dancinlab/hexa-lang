@@ -348,3 +348,163 @@ jobs:
           LIBS: "-lm -ldl"
           GH_TOKEN: ${{ github.token }}
         run: bash tool/release_package
+
+  # ── SELFEMIT live-link smoke — RFC061 §M8 foundation verification (ADVISORY) ──
+  #
+  # NON-REQUIRED · independent job. It is NOT wired into any required status check
+  # (selfhost-gates-required / faithful-nobaseline-*), so a RED here NEVER blocks a
+  # merge and the release/gate semantics above are UNCHANGED — it only REPORTS
+  # whether the §M8 HEXA_RT_SELFEMIT native-emit runtime.a actually live-links a
+  # real consumer binary, end-to-end.
+  #
+  # WHY this job exists: the §M8 ladder (r2..r6) has landed 12/55 libc-substrate
+  # symbols as hexa-NATIVE self-emitted .o members of build/runtime.a —
+  # hxlcl_{close,read,strlen,memcpy,memset,memcmp,strcmp,strcpy,strncmp,strncpy,
+  # strcat,strchr}. Until now the only proof was the script's internal `ld -r`
+  # member merge (multidef==0). This job adds the missing surface: a FULL SELFEMIT
+  # runtime.a built + linked into exit42/hello and RUN — the undefined==0 +
+  # behavior proof — before more leaves are stacked on an unverified foundation.
+  #
+  # DARWIN-ONLY: the emit fixtures bake Mach-O arm64 syscall numbers + ld64
+  # PAGE21/PAGEOFF12 relocs, so HEXA_RT_SELFEMIT engages only on darwin-arm64
+  # (aiden/summer linux cannot exercise it). macos-latest cloud runner (no
+  # arm64 self-hosted host); mirrors the faithful-nobaseline-darwin-arm64 leg.
+  #
+  # CODE-NEUTRAL: this PR adds ONLY this CI job. HEXA_RT_SELFEMIT stays default-OFF
+  # everywhere (release_build never sets it), so shipping binaries + byteeq +
+  # tracked `.c`=0 are untouched.
+  selfemit-livelink-smoke-darwin-arm64:
+    name: SELFEMIT live-link smoke (darwin-arm64, advisory)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      # ── (1) Build ./hexa via the SHARED release path (DEFAULT runtime.a =
+      #    libc-shim members; HEXA_RT_SELFEMIT unset). This both produces the
+      #    ./hexa consumer compiler AND restores the gitignored self/runtime.c
+      #    seed (.c=0 checkout → restore_frozen_seeds), which the SELFEMIT rebuild
+      #    in step (2) needs present. A 2-pass shape is REQUIRED: stage_resolve_
+      #    runtime_a runs FIRST inside release_build (before ./hexa exists), and the
+      #    SELFEMIT pass needs ./hexa as HEXA_SELFEMIT_BIN to run the emit fixtures.
+      - name: (1) Build ./hexa — shared release_build (default runtime.a)
+        shell: bash
+        env:
+          TARGET: darwin-arm64
+          CC: clang
+          LIBS: ""
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bash tool/release_build
+          ./hexa --version
+          echo "(1) ./hexa built + seeds restored OK"
+
+      # ── (2) Rebuild build/runtime.a WITH the §M8 SELFEMIT native members.
+      #    SELFEMIT is nested INSIDE the HEXA_RT_MULTIOBJ packaging branch — BOTH
+      #    must be 1. With HEXA_SELFEMIT_BIN=./hexa it runs the 12
+      #    test/native_build/emit_hxlcl_*_o.hexa fixtures to emit native .o members,
+      #    drops the matching libc-shim defs (-DHEXA_RT_SELFEMIT_<SYM>), adds the
+      #    1-cell errno provider for close/read, and runs its OWN `ld -r` multidef
+      #    safety gate (FATAL on any duplicate def). Seeds present (restored in
+      #    step 1) → build_runtime_a_from_source path (no edge-pull / GH_TOKEN).
+      - name: (2) Rebuild runtime.a — HEXA_RT_SELFEMIT=1 (12 native members)
+        shell: bash
+        env:
+          TARGET: darwin-arm64
+          CC: clang
+          LIBS: ""
+          HEXA_RT_MULTIOBJ: "1"
+          HEXA_RT_SELFEMIT: "1"
+          HEXA_SELFEMIT_BIN: ./hexa
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          bash tool/stage_resolve_runtime_a 2>&1 | tee build/_selfemit_resolve.log
+          echo "── build/runtime.a members ──"
+          ar t build/runtime.a
+
+      # ── (3) Assert the 12 native members + errno provider landed, and the
+      #    self-emitted hxlcl_* symbols are DEFINED (T) — not the dropped shim.
+      - name: (3) Assert 12 SELFEMIT members present + symbols defined
+        shell: bash
+        run: |
+          set -euo pipefail
+          members="$(ar t build/runtime.a)"
+          syms="$(nm build/runtime.a 2>/dev/null || true)"
+          missing_member=0; undef_sym=0; ok_member=0; ok_sym=0
+          # NOTE: match via here-string (<<<), NOT `printf … | grep -q`. Under
+          # `set -o pipefail`, grep -q exits on the FIRST match and closes the
+          # pipe while printf is still writing the large $syms blob → SIGPIPE →
+          # printf exits 141 → pipefail makes the whole pipeline non-zero → the
+          # `if` flips to the else branch and a DEFINED symbol is mis-reported as
+          # "NOT DEFINED" (race on symbol position in the nm stream — same broken
+          # -pipe class as #3833). A here-string has no writer process to SIGPIPE.
+          for s in close read strlen memcpy memset memcmp strcmp strcpy strncmp strncpy strcat strchr; do
+            if grep -qx "hxlcl_${s}_native.o" <<<"$members"; then
+              ok_member=$((ok_member+1))
+            else
+              echo "  MISSING MEMBER: hxlcl_${s}_native.o"; missing_member=$((missing_member+1))
+            fi
+            # Mach-O external text def shows as ` T _hxlcl_<s>`.
+            if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
+              ok_sym=$((ok_sym+1))
+            else
+              echo "  SYMBOL NOT DEFINED (T): _hxlcl_${s}"; undef_sym=$((undef_sym+1))
+            fi
+          done
+          echo "(3) members ok=$ok_member/12 missing=$missing_member ; defined syms ok=$ok_sym/12 undef=$undef_sym"
+          if grep -qx "hxlcl_errno_provider.o" <<<"$members"; then
+            echo "(3) errno provider member present (close/read external _hxlcl_errno satisfied)"
+          else
+            echo "(3) FAIL: hxlcl_errno_provider.o missing (close/read would be undefined at consumer link)"; exit 1
+          fi
+          [ "$missing_member" -eq 0 ] && [ "$undef_sym" -eq 0 ] || { echo "(3) FAIL — SELFEMIT member/symbol shortfall"; exit 1; }
+
+      # ── (4) Surface the script's OWN ld -r multidef gate result (==0 expected;
+      #    a nonzero would already have FATAL-failed step 2 — this asserts it too).
+      - name: (4) Assert ld -r multidef == 0
+        shell: bash
+        run: |
+          set -euo pipefail
+          md="$(grep -oE 'multiple_definition=[0-9]+' build/_selfemit_resolve.log | tail -1 | cut -d= -f2)"
+          echo "(4) ld -r multiple_definition=${md:-<not-found>}"
+          [ "${md:-1}" = "0" ] || { echo "(4) FAIL — multidef != 0"; exit 1; }
+
+      # ── (5) CONSUMER LIVE-LINK SMOKE — the missing surface. Build exit42 + hello
+      #    with ./hexa linking the SELFEMIT runtime.a (HEXA_PREBUILT_RUNTIME), then
+      #    RUN. No --target → the prebuilt-runtime link path engages. A clean
+      #    build+run is the undefined==0 + behavior proof for the 12 native members.
+      - name: (5) exit42 + hello live-link smoke (SELFEMIT runtime.a alone)
+        shell: bash
+        env:
+          # exit42/hello write under /tmp, which `hexa build` REFUSES on Darwin
+          # (kernel-panic-path guard, self/main.hexa:3004). HEXA_MAC_BUILD_OK=1 is
+          # the documented CI bypass for non-heavy dry-run builds — same as every
+          # tool/build_hexa_*.sh and release_package's darwin-arm64 export.
+          HEXA_MAC_BUILD_OK: "1"
+        run: |
+          set -euo pipefail
+          export HEXA_PREBUILT_RUNTIME="$PWD/build/runtime.a"
+          echo "  HEXA_PREBUILT_RUNTIME=$HEXA_PREBUILT_RUNTIME"
+
+          # exit42 → rc 42
+          printf 'fn main() {\n  exit(6 * 7)\n}\n' > /tmp/exit42.hexa
+          ./hexa build /tmp/exit42.hexa -o /tmp/exit42 2>&1 | tee /tmp/exit42.build.log
+          if /tmp/exit42; then e42rc=0; else e42rc=$?; fi
+          echo "  exit42 rc=$e42rc (expect 42)"
+
+          # hello → "hello"
+          printf 'fn main() {\n  println("hello")\n}\n' > /tmp/hello.hexa
+          ./hexa build /tmp/hello.hexa -o /tmp/hello 2>&1 | tee /tmp/hello.build.log
+          hello_out="$(/tmp/hello || true)"
+          echo "  hello output: '$hello_out' (expect hello)"
+
+          # undefined==0 proof: scan the link logs for any unresolved hxlcl_*.
+          undef="$( (grep -iE 'undefined|Undefined symbols|symbol not found' /tmp/exit42.build.log /tmp/hello.build.log || true) | grep -c hxlcl || true)"
+          echo "── verdict ──"
+          echo "  exit42_rc=$e42rc hello_ok=$([ "$hello_out" = "hello" ] && echo true || echo false) hxlcl_undefined=$undef"
+          [ "$e42rc" = "42" ] || { echo "FAIL: exit42 rc != 42"; exit 1; }
+          [ "$hello_out" = "hello" ] || { echo "FAIL: hello output != hello"; exit 1; }
+          [ "$undef" = "0" ] || { echo "FAIL: $undef undefined hxlcl_* at consumer link"; exit 1; }
+          echo "SELFEMIT live-link smoke GREEN — 12/55 §M8 members link + run (darwin-arm64)"
