@@ -39,9 +39,6 @@ HX_BIN="$HX_HOME/bin"
 HX_SRC="$HX_HOME/src"
 HEXA_REPO="${HEXA_REPO:-dancinlab/hexa-lang}"
 HEXA_VERSION="${HEXA_VERSION:-latest}"
-# Channel rename (2026-06): the rolling prerelease is now `test` (was `edge`).
-# Accept HEXA_VERSION=edge as a back-compat alias → test.
-[ "$HEXA_VERSION" = "edge" ] && HEXA_VERSION="test"
 HEXA_BRANCH="${HEXA_BRANCH:-main}"
 
 bold()  { printf '\033[1m%s\033[0m\n' "$*"; }

@@ -40,7 +40,7 @@ only (no domain registry).
 - do: 릴리스 채널은 딱 둘 — **`stable`**(소비자 기본 · 검증된 `vX.Y.Z` Latest) 과 **`test`**(실험
   롤링 prerelease · `main` push 마다 갱신). 실험적 self-host 변경(byteeq · measure · RT-NATIVE ·
   zero-C · static-musl)은 `main` push → test prerelease 로 상시 흘린다(`HEXA_VERSION=test`). 구
-  채널명 `edge` 는 install.sh 가 `test` 로 리다이렉트하는 역호환 alias 로만 남는다.
+  `edge` 채널은 **완전 폐기**됨 (install.sh alias · release.yml `edge` 태그 push · 원격 `edge` 태그 모두 제거).
 - dont: **"x86 만 green" 으로 stable 승격 금지** (v0.241.0 arm64 asset 미발행 회귀 교훈 — 한 타깃
   그린은 전체 그린이 아니다). stable 승격은 3타깃 릴리스 잡 전부 GREEN + install.sh 소비자
   스모크(`hexa --version` + hello/exit42 run) GREEN 일 때만.
