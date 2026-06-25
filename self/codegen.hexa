@@ -7629,7 +7629,6 @@ fn gen2_expr(node) {
                 if name == "min"            { return cg_math_sym("min") + "(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "max"            { return cg_math_sym("max") + "(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "has_key"        { return "hexa_bool(hexa_map_contains_key(" + arg_strs[0] + ", hexa_to_cstring(" + arg_strs[1] + ")))" }
-                // @convergence state=ossified id=CONTAINS-KEY-FREEFN-EMIT value="free-fn contains_key(m,k) fell through to bare _contains_key (dyld not found) — only .contains_key method + has_key/map_contains_key were mapped" threshold="map free-fn contains_key to hexa_map_contains_key like has_key"
                 if name == "contains_key"   { return "hexa_bool(hexa_map_contains_key(" + arg_strs[0] + ", hexa_to_cstring(" + arg_strs[1] + ")))" }
                 // F10 retire (2026-04-28): bare-call 2-arg map_* builtins.
                 if name == "map_contains_key" { return "hexa_bool(hexa_map_contains_key(" + arg_strs[0] + ", hexa_to_cstring(" + arg_strs[1] + ")))" }

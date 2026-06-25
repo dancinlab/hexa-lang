@@ -1386,7 +1386,6 @@ fn os_clang_cflags() {
     // `-lsodium` → `cannot find -lssl` at link. Both binds are optional (the
     // native stubs return errors when the symbol is undefined), so a static build
     // simply ships without them. Mirrored in os_clang_ldflags.
-    // @convergence state=ossified id=MUSL-OPENSSL-STATIC-DEPS value="static-musl release pkg(build_precompile) linked -lssl/-lcrypto → musl toolchain has no glibc-shared OpenSSL/libsodium → ld cannot find -lssl; HEXA_STATIC_DEPS env did not propagate through the nested hexa-run AOT compile spawn" threshold="detect musl toolchain at flag-compute point (host_cc contains musl) → treat as static_deps, env-independent; non-musl CC (clang/gcc) unaffected so 3-target byteeq inert"
     let static_deps = env("HEXA_STATIC_DEPS") == "1" || host_cc().contains("musl")
     // 2026-05-14: libsodium optional bind for stdlib/crypto + SSH client.
     // Probe via pkg-config; on Mac without pkg-config, fall back to the
@@ -1416,7 +1415,7 @@ fn os_clang_ldflags() {
     // HEXA_STATIC_DEPS=1 — see os_clang_cflags: a `-static` musl link has no
     // glibc shared OpenSSL/libsodium to satisfy these, and the cflags side
     // already dropped the -DHEXA_HAS_* defines, so skip the link flags too.
-    if env("HEXA_STATIC_DEPS") == "1" || host_cc().contains("musl") { return base }   // @convergence id=MUSL-OPENSSL-STATIC-DEPS (musl CC → no glibc-shared OpenSSL/libsodium; env-independent twin of the cflags guard)
+    if env("HEXA_STATIC_DEPS") == "1" || host_cc().contains("musl") { return base }
     // ── HEXA_CUDA=1 (opt-in · `-cuda` release variant) — pull cuBLAS/cudart so a
     // consumer `hexa build`/`run` program links the CUDA-enabled runtime.a (which
     // ar's runtime_cuda.o + the nvcc -dlink device blob, folded in by
@@ -1435,7 +1434,6 @@ fn os_clang_ldflags() {
     // or runtime_cuda.o's cudaLaunchKernel/cublas symbols went undefined at link
     // (#3723 link wall). HEXA_CUDA=0 stays a hard opt-out. A CPU install / self-host
     // source build has no marker → cuda_on=false → byte-identical to before (NEUTRAL).
-    // @convergence state=in_flight id=CUDA-RUNTIME-MARKER value="cuda asset consumer needed HEXA_CUDA=1 on EVERY hexa build else cudaLaunchKernel/cublas undefined (-lcudart env-gated); install.sh auto-pulls cuda asset but build did not auto-link (#3723 v6b)" threshold="cuda asset hexa run/build links cudart WITHOUT env (marker-detected); CPU install byte-identical"
     let hx_home = if env("HX_HOME") != "" { env("HX_HOME") } else { env("HOME") + "/.hx" }
     let cuda_marked = exec("test -f '" + hx_home + "/.cuda-runtime' && printf 1 || printf 0").trim()
     let cuda_on = env("HEXA_CUDA") == "1" || (env("HEXA_CUDA") != "0" && cuda_marked == "1")
@@ -1455,7 +1453,6 @@ fn os_clang_ldflags() {
             // box). Without the stubs search path `-lcuda` fails the link with
             // "ld: cannot find -lcuda" — #3696 added stubs to release_package's
             // FINAL link but this self-compile (hexa run) cuda LIBS still omitted it.
-            // @convergence state=in_flight id=CUDA-STUBS-SELFCOMPILE value="hexa run self-compile cuda link omitted -L<lib>/stubs → ld cannot find -lcuda in -cuda release Package step" threshold="release -cuda job Package step green (libcuda resolved from stubs)"
             if cuda_probe != "" { cuda_l = " -L" + cuda_probe.trim() + " -L" + cuda_probe.trim() + "/stubs" }
         }
         // cudadevrt is a STATIC archive shipped by the toolkit (device-runtime for
@@ -4220,7 +4217,6 @@ fn _run_cache_base_key(file) {
     return sha256_file(file).substring(0, 16) + "_" + version_str()
 }
 
-// @convergence state=ossified id=CLI-RUNCACHE-STALE-ABI value="local run-cache key used only sha(source)+static version_str('0.1.0-dispatch') → toolchain upgrade reused a stale hexa_run.<key> .o built against an older runtime ABI → dyld 'Symbol not found: _regex_match/_json_stringify/_contains_key' on v0.241.x" threshold="fold running-binary size+mtime into the LOCAL cache key (precompile probe base-key unchanged so shipped precompile still hits)"
 fn _self_build_tag() {
     // build-identity of the running hexa binary (size + mtime_ns) so any
     // toolchain rebuild/upgrade invalidates the local run-cache. fs_stat →

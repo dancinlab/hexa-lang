@@ -1797,7 +1797,6 @@ fn _build_raw_fenced(id: string, claim_text: string, fence_kind: string, today: 
 // that static_index::static_atlas text-parses at load). $HEXA_ATLAS_EMBED (abs
 // dir containing embedded.gen.hexa) wins; else the stable repo path. MUST match
 // static_index::_resolve_embedded_path so register writes the file lookup reads.
-// @convergence state=ossified id=ATLAS-REGISTER-BAKED-PATH value="embedded.gen.hexa resolved ONLY to baked $HOME/core/hexa-lang → register read/write hit a nonexistent path in other checkouts" threshold="cwd-relative compiler/atlas/embedded.gen.hexa FIRST via fs_exists; baked $HOME path last-resort"
 fn _resolve_embedded_path() -> string {
     let override = env_var("HEXA_ATLAS_EMBED")
     if len(override) > 0 { return override + "/embedded.gen.hexa" }
@@ -2416,7 +2415,6 @@ fn _adapt_verify_compute(fn_name: string, args: array, id_override: string, sour
 // _discovery_tape_path — resolve `.discoveries/<slug>.tape`. $HEXA_DISCOVERIES
 // (abs dir) wins; else repo-local (cwd) `.discoveries/`, then $HEXA_LANG, then
 // the conventional $HOME/core/hexa-lang checkout (mirrors _resolve_embedded_path).
-// @convergence state=ossified id=ATLAS-REGISTER-BAKED-PATH value="register/.discoveries + embedded path resolved ONLY to baked $HOME/core/hexa-lang → silent no-op from any other checkout (e.g. ~/dancinlab/hexa-lang); cwd-relative repo-local was the documented-but-unimplemented intent" threshold="resolve cwd-relative FIRST via fs_exists; baked $HOME path is last-resort fallback"
 fn _discovery_tape_path(slug: string) -> string {
     let override = env_var("HEXA_DISCOVERIES")
     if len(override) > 0 { return override + "/" + slug + ".tape" }

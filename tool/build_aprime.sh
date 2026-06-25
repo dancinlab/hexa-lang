@@ -262,7 +262,6 @@ if [ "${HEXA_ZEROC_RT_HI:-0}" = "1" ]; then
         "Linux x86_64") RT_HI_SEED="$REPO/self/native/runtime_hi_x86_64.s" ;;
         *)              RT_HI_SEED="$REPO/self/native/runtime_hi_native.s"  ;;
     esac
-    # @convergence state=ossified id=build-aprime-stale-native-seed-o value="warm-tree 의 build/*_native.o 가 seed.s 갱신 후에도 [ ! -f .o ] 가드로 재생성 skip → 옛 심볼셋(예: leg-B Z2a 가 rt_str_trim C body RETIRE 했으나 stale rt_hi_native.o 는 trim 그룹 누락)으로 link → undefined _rt_str_trim. alloc-stale warm-tree 수렴이 rt_hi 에서 재발." threshold="seed.s -nt .o 면 재assemble (5 native-seed 가드 rt_hi/array/map/alloc/str 전부)"
     if { [ ! -f "$REPO/build/rt_hi_native.o" ] || [ "$RT_HI_SEED" -nt "$REPO/build/rt_hi_native.o" ]; } && [ -f "$RT_HI_SEED" ]; then
         grep -vE '^// ' "$RT_HI_SEED" > "$TMP/rt_hi_seed.s" 2>/dev/null || cp "$RT_HI_SEED" "$TMP/rt_hi_seed.s"
         ${CC:-clang} -c $ARCH_FLAG "$TMP/rt_hi_seed.s" -o "$REPO/build/rt_hi_native.o" 2>/dev/null \

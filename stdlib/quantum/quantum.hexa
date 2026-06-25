@@ -170,7 +170,6 @@ fn main() {
         if argv[i].ends_with(".hexa") { subcmd_idx = i + 1; break }
         i = i + 1
     }
-    // @convergence state=ossified id=CLI-ARGV-STANDALONE-PREFIX value="compiled bin standalone argv has no .hexa script slot; .hexa-scan fallback to 2 skipped the subcommand at index 1 → top-level status banner+exit4" threshold="fallback to 1 when argv[1] is not a .hexa script"
     if subcmd_idx < 0 {
         if n >= 2 && !argv[1].ends_with(".hexa") { subcmd_idx = 1 } else { subcmd_idx = 2 }
     }
