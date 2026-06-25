@@ -177,6 +177,12 @@ void *__attribute__((noinline)) hxlcl_memset(void *s, int c, size_t n) {
 void  *hxlcl_memset(void *s, int c, size_t n)         { return memset(s, c, n); }
 #endif
 #endif
+/* SELFEMIT (HEXA_RT_SELFEMIT_MEMCMP, default OFF · RFC061 §M8 family r6):
+ * hxlcl_memcmp is supplied by the hexa-NATIVE self-emitted .o
+ * (test/native_build/emit_hxlcl_memcmp_o.hexa — verbatim rt_memcmp byte loop, no
+ * reloc/errno). DEFAULT (macro undefined) keeps the body below → shim.o
+ * byte-identical. */
+#ifndef HEXA_RT_SELFEMIT_MEMCMP
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen runtime.c:310 (hand-rolled byte loop) */
 int __attribute__((noinline)) hxlcl_memcmp(const void *a, const void *b, size_t n) {
@@ -190,6 +196,7 @@ int __attribute__((noinline)) hxlcl_memcmp(const void *a, const void *b, size_t 
 }
 #else
 int    hxlcl_memcmp(const void *a, const void *b, size_t n) { return memcmp(a, b, n); }
+#endif
 #endif
 
 /* ── string ──────────────────────────────────────────────────────────────── */
@@ -254,6 +261,12 @@ int __attribute__((noinline)) hxlcl_strncmp(const char *a, const char *b, size_t
 int    hxlcl_strncmp(const char *a, const char *b, size_t n) { return strncmp(a, b, n); }
 #endif
 #endif
+/* SELFEMIT (HEXA_RT_SELFEMIT_STRCPY, default OFF · RFC061 §M8 family r6):
+ * hxlcl_strcpy is supplied by the hexa-NATIVE self-emitted .o
+ * (test/native_build/emit_hxlcl_strcpy_o.hexa — verbatim rt_strcpy copy, no
+ * reloc/errno). DEFAULT (macro undefined) keeps the body below → shim.o
+ * byte-identical. */
+#ifndef HEXA_RT_SELFEMIT_STRCPY
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_strcpy (verbatim 0-libc floor body) */
 char *__attribute__((noinline)) hxlcl_strcpy(char *dst, const char *src) {
@@ -264,6 +277,7 @@ char *__attribute__((noinline)) hxlcl_strcpy(char *dst, const char *src) {
 }
 #else
 char  *hxlcl_strcpy(char *d, const char *s)           { return strcpy(d, s); }
+#endif
 #endif
 /* SELFEMIT (HEXA_RT_SELFEMIT_STRNCPY, default OFF · RFC061 §M8 family r4):
  * hxlcl_strncpy is supplied by the hexa-NATIVE self-emitted .o
