@@ -275,39 +275,52 @@ echo "DROPON_RUNNABLE=YES  ($(ls -la "$OUT/aprime_cc_dropon" | awk '{print $5}')
 
 # ── stage 6: SMOKE — exit42 + hello via the drop-ON compiler ────────────────
 echo "[6] SHIPPING SMOKE (drop-ON compiler emits exit42 + hello)…"
-# need hexa_ld + rt.o (default single-TU runtime) to LINK emitted programs.
-# Build a default rt.o for the smoke link (the EMITTED program links against
-# the standard runtime, not the drop-ON one — drop-ON is about the COMPILER's
-# own runtime, the test program uses the normal runtime path).
-# NOTE (rfc061 dropon-coherence): this plain (no-cluster) standalone compile of
-# self/runtime.c hits a PRE-EXISTING emitter dual-definition — runtime.c defines
-# hexa_float_to_bits/bits_to_float weak (unconditional) AND runtime_core.c's
-# `#else` arm (taken only when HEXA_RT_CORE_LEAF_NATIVE is OFF) defines them
-# non-weak → same-TU redefinition. Verified present on a CLEAN regen with NO drop
-# flags (orthogonal to this round's eqtruthy fix). The shipping single-TU build
-# avoids it by always setting HEXA_RT_CORE_LEAF_NATIVE (extern arm); compiling
-# rt.o WITH the cluster flags instead trades the compile-collision for an
-# undefined-rt_* smoke-link (the leaf/rt_hi seed providers are not in $SEEDS here).
-# Either way the smoke RUN is unreachable until that emitter dual-def is resolved
-# — a SEPARATE harness item. The PRIMARY witnesses (drop-ON link clean + exit42
-# EMIT RC=0 + gen3==gen4 byte-id map-heavy) below do not depend on rt.o; leave the
-# plain compile (smoke RUN reported as LINK FAIL, non-fatal) and do not mask it.
-$CC -c -O2 $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -I self -I . self/runtime.c -o "$OUT/rt.o" 2>/dev/null
+# The EMITTED user program links against the STANDARD shipping runtime, NOT the
+# drop-ON compiler's own runtime (drop-ON is about the COMPILER's runtime; a
+# user program built by it uses the normal runtime path — exactly as a consumer
+# `hexa build`/`run` does). The consumer link target is the COHERENT native-seed
+# archive build/runtime.a (install.sh wires HEXA_PREBUILT_RUNTIME=…/runtime.a):
+# one self-consistent composition where the cluster `hexa_*` wrappers and the
+# rt_* CORE leaves they delegate to are BOTH present, built with the same flag
+# set. Use that archive here.
+#
+# WHY NOT `rt.o + $SEEDS` (the prior recipe): that mixed an INCOHERENT runtime —
+# a plain (no-flag) standalone compile of self/runtime.c (which hit the PRE-
+# EXISTING runtime.c-weak vs runtime_core.c-`#else`-nonweak float_to_bits dual-
+# def → rt.o never built → `no such file: rt.o`) PLUS the drop-ON cluster seeds
+# (rtcore_arith-coerce-format_native.o etc.) that EXTERN the CORE-tier rt_* leaves
+# (rt_concat_many_arr / rt_fma_int / rt_fma_float, and rt_cmp_*/rt_format/rt_map_*
+# …) WITHOUT their providers in the link → the reported "undefined reference to
+# rt_concat_many_arr/rt_fma_int/rt_fma_float" smoke LINK FAIL. Both failure modes
+# are the same root: composing the emitted-program runtime from mismatched object
+# arms. The coherent runtime.a (canonical shipping recipe, tool/stage_resolve_
+# runtime_a) has neither problem — exit42/hello LINK+RUN clean against it.
+#
+# MEASURE-ONLY / byte-NEUTRAL: build/runtime.a is the gitignored regen artifact
+# the DEFAULT build already produces; building it here changes no shipping/
+# default output and no frozen blob (frozen self/runtime.c untouched).
+echo "  building coherent shipping runtime.a (canonical recipe, emitted-program link target)…"
+CC="$CC" LIBS="$LIBS" CFLAGS_COMMON="-O2 $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs" \
+  bash tool/stage_resolve_runtime_a >"$OUT/runtime_a.log" 2>&1 || true
+RT_A="$ROOT/build/runtime.a"
+if [ -f "$RT_A" ]; then echo "  runtime.a=$(ls -la "$RT_A" | awk '{print $5}')B"; else echo "  runtime.a BUILD FAILED (see $OUT/runtime_a.log)"; tail -3 "$OUT/runtime_a.log" | sed 's/^/    /'; fi
 # exit42
 printf 'fn main() {\n  exit(6 * 7)\n}\n' > "$OUT/exit42.hexa"
 "$OUT/aprime_cc_dropon" _drv.hexa --emit=asm --target="$SMOKE_TARGET" --ignore-errors -o "$OUT/exit42.s" "$OUT/exit42.hexa" >"$OUT/e42.emit.log" 2>&1
 E42_EMIT_RC=$?
 echo "  exit42 emit RC=$E42_EMIT_RC  .s lines=$(wc -l < "$OUT/exit42.s" 2>/dev/null || echo 0)"
-if [ -s "$OUT/exit42.s" ]; then
-  $CC $ARCH_FLAG "$OUT/exit42.s" "$OUT/rt.o" $SEEDS -o "$OUT/exit42" $LIBS 2>"$OUT/e42.link.log"
+if [ -s "$OUT/exit42.s" ] && [ -f "$RT_A" ]; then
+  $CC $ARCH_FLAG "$OUT/exit42.s" "$RT_A" -o "$OUT/exit42" $LIBS 2>"$OUT/e42.link.log"
   if [ -x "$OUT/exit42" ]; then "$OUT/exit42"; E42_RC=$?; echo "  exit42 RUN rc=$E42_RC (expect 42)"; else echo "  exit42 LINK FAIL"; grep -iE 'undefined|error' "$OUT/e42.link.log" | head -3 | sed 's/^/    /'; E42_RC=LINKFAIL; fi
+elif [ ! -f "$RT_A" ]; then echo "  exit42 LINK SKIP (no runtime.a)"; E42_RC=NORTA
 else E42_RC=EMITFAIL; fi
 # hello
 printf 'fn main() {\n  println("hello")\n}\n' > "$OUT/hello.hexa"
 "$OUT/aprime_cc_dropon" _drv.hexa --emit=asm --target="$SMOKE_TARGET" --ignore-errors -o "$OUT/hello.s" "$OUT/hello.hexa" >"$OUT/hello.emit.log" 2>&1
-if [ -s "$OUT/hello.s" ]; then
-  $CC $ARCH_FLAG "$OUT/hello.s" "$OUT/rt.o" $SEEDS -o "$OUT/hello" $LIBS 2>"$OUT/hello.link.log"
-  if [ -x "$OUT/hello" ]; then HELLO_OUT="$("$OUT/hello" 2>&1)"; echo "  hello RUN output: '$HELLO_OUT' (expect hello)"; else echo "  hello LINK FAIL"; HELLO_OUT=LINKFAIL; fi
+if [ -s "$OUT/hello.s" ] && [ -f "$RT_A" ]; then
+  $CC $ARCH_FLAG "$OUT/hello.s" "$RT_A" -o "$OUT/hello" $LIBS 2>"$OUT/hello.link.log"
+  if [ -x "$OUT/hello" ]; then HELLO_OUT="$("$OUT/hello" 2>&1)"; echo "  hello RUN output: '$HELLO_OUT' (expect hello)"; else echo "  hello LINK FAIL"; grep -iE 'undefined|error' "$OUT/hello.link.log" | head -3 | sed 's/^/    /'; HELLO_OUT=LINKFAIL; fi
+elif [ ! -f "$RT_A" ]; then echo "  hello LINK SKIP (no runtime.a)"; HELLO_OUT=NORTA
 else HELLO_OUT=EMITFAIL; fi
 
 # version: aprime_cc is a transpiler driver, not the released `hexa` CLI; it has
