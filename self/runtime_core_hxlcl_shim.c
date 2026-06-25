@@ -387,7 +387,17 @@ long   hxlcl_ftell(void *fp)                          { return ftell((FILE *)fp)
 int    hxlcl_fseek(void *fp, long off, int whence)    { return fseek((FILE *)fp, off, whence); }
 int    hxlcl_open_sys(const char *path, int flags, ...) { return open(path, flags, 0644); }
 long   hxlcl_read(int fd, void *buf, unsigned long n) { return (long)read(fd, buf, (size_t)n); }
+/* SELFEMIT (HEXA_RT_SELFEMIT_CLOSE, default OFF · RFC061 §M8): hxlcl_close is
+ * supplied by the hexa-NATIVE self-emitted .o (test/native_build/emit_hxlcl_close_o.hexa
+ * — a raw `svc #0x80` close trap with carry-flag errno store, byte-identical to
+ * self/codegen/runtime_arm64.hexa::rt_close) instead of this libc delegate.
+ * stage_resolve_runtime_a's Case-B SELFEMIT arm builds shim.o with this macro
+ * (dropping the symbol here) and ar's the native .o + a 1-cell `hxlcl_errno`
+ * provider into the archive. DEFAULT (macro undefined) keeps the libc delegate
+ * → shim.o byte-identical; the single-TU ship build never compiles this file. */
+#ifndef HEXA_RT_SELFEMIT_CLOSE
 int    hxlcl_close(int fd)                            { return close(fd); }
+#endif
 long   hxlcl_lseek(int fd, long off, int whence)      { return (long)lseek(fd, (off_t)off, whence); }
 int    hxlcl_fcntl(int fd, int cmd, long arg)         { return fcntl(fd, cmd, arg); }
 int    hxlcl_stat(const char *path, void *buf)        { return stat(path, (struct stat *)buf); }
