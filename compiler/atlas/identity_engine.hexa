@@ -1,4 +1,8 @@
-// HEXA Native Compiler — drill identity-discovery engine (binary-absorbed)
+// HEXA Native Compiler — atlas exact-int identity verifier (binary-absorbed)
+//
+// Lives in compiler/atlas/ (the verification domain, next to embedded.gen.hexa)
+// — it CHECKS/folds @F identities. `drill`/`kick` (the candidate generator in
+// compiler/drill/) DELEGATES to this verifier; it is not drill's own code.
 //
 // @version 0.1.0
 // @capabilities [pure]
@@ -24,7 +28,7 @@
 // reproduces that terminal honestly; it does NOT fabricate new laws.
 
 // ── integer power (exact) ──
-fn ipow(base, e) -> int {
+pub fn ipow(base, e) -> int {
     let r = 1
     let i = 0
     while i < e {
@@ -35,7 +39,7 @@ fn ipow(base, e) -> int {
 }
 
 // ── smallest prime factor of m (trial division) ──
-fn spf(m) -> int {
+pub fn spf(m) -> int {
     if m % 2 == 0 { return 2 }
     let p = 3
     while p * p <= m {
@@ -47,7 +51,7 @@ fn spf(m) -> int {
 
 // ── 12-fn basis, each via exact factorization of n ──
 // key ids: 0=sigma 1=sigma2 2=sigma3 3=phi 4=tau 5=n 6=sopfr 7=rad 8=J2 9=psi 10=Om 11=om
-fn af(n, which) -> int {
+pub fn af(n, which) -> int {
     if n == 1 {
         if which == 6 { return 0 }   // sopfr(1)=0
         if which == 10 { return 0 }  // Omega(1)=0
@@ -103,7 +107,7 @@ fn af(n, which) -> int {
 //    over [2,N], plus a count cap. bounded-unique ⟺ exactly one solution ≥4. ──
 // Returns: first solution n (0 if none) when solution count==1 and n>=4,
 //          -1 if non-unique (count>1 or universal), -2 if no solution.
-fn verify_identity(a, b, c, d, N) -> int {
+pub fn verify_identity(a, b, c, d, N) -> int {
     let first = 0
     let count = 0
     let n = 2
