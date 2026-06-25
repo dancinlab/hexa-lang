@@ -879,178 +879,6 @@ resolve_cuda_runtime_seed() {
 
 build_runtime_a_from_source() {
     regen_runtime_core_from_emitter
-    # ── RFC061 Case-B MULTI-OBJECT runtime.a (gated opt-IN · default OFF) ──────
-    # HEXA_RT_MULTIOBJ=1 packages the shipping runtime.a as a DROP-ON multi-object
-    # archive (runtime.o WITHOUT the `#include "runtime_core.c"` amalgam + a
-    # SEPARATE runtime_core.o TU + hxlcl_shim.o + the cluster/native seed .o),
-    # transplanting tool/zeroc_dropon_fixpoint.sh's GREEN drop-ON recipe (stages
-    # S1-S8) into the ar-building stage instead of a final exe link. It is a
-    # BUILD-ROUTE / PACKAGING flag only — it does NOT change runtime.c CONTENT on
-    # the DEFAULT (flag-OFF) path (which is the single-TU `-c self/runtime.c`
-    # compile + `ar rcs $RA runtime.o $extra_obj` below, byte-for-byte unchanged,
-    # so the drop-guard patcher is never even invoked → preprocessed runtime.c is
-    # SHA-identical to the frozen blob 151c52c8). byteeq is link-form-agnostic
-    # (build_selfhost.sh builds its OWN rt.o via a flag-free clang and never
-    # consumes runtime.a), so splitting the amalgam into more .o members cannot
-    # move cc-genN.o bytes on any target — the default ship path is the
-    # byte-identical safety net. SCOPE: opt-in gate only; a default-flip to
-    # multi-object is a SEPARATE later PR gated on captured 3-target gate-ON
-    # GREEN + consumer smoke (release-integrity > self-host).
-    if [ "${HEXA_RT_MULTIOBJ:-0}" = "1" ]; then
-        echo "[stage_resolve_runtime_a] RFC061 Case-B: HEXA_RT_MULTIOBJ=1 — building DROP-ON multi-object runtime.a (opt-in; default ship path is single-TU)"
-        # Derive arch/os/libs/arch-flag (this script, unlike the measure harness,
-        # does not set them at top-level; the cluster regen scripts honor ARCH_FLAG).
-        local _mo_os _mo_arch _mo_archflag _mo_libs
-        _mo_os="$(uname -s)"
-        case "$(uname -m)" in
-            x86_64)        _mo_arch=x86_64 ;;
-            aarch64|arm64) _mo_arch=arm64  ;;
-            *)             _mo_arch="$(uname -m)" ;;
-        esac
-        _mo_archflag=""; [ "$_mo_os" = "Darwin" ] && _mo_archflag="-arch arm64"
-        if [ "$_mo_os" = "Darwin" ]; then _mo_libs="-lm"; else _mo_libs="-lm -lc -ldl -lpthread"; fi
-        # The compile CFLAGS mirror the harness (zeroc_dropon_fixpoint.sh:74): -c,
-        # -O2, arch flag, gnu11, _GNU_SOURCE, no-trigraphs, -I self -I .
-        local _mo_cflags="-c -O2 $_mo_archflag -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -I self -I ."
-
-        # (S1) drop-guard patch the RESTORED working-copy runtime.c's
-        #      `#include "runtime_core.c"` (idempotent; non-frozen working copy —
-        #      the frozen git blob is NEVER touched; self/runtime.c is gitignore'd regen).
-        bash tool/zeroc_drop_rtcore_include.sh "$ROOT" || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: drop-guard patch failed" >&2; return 1; }
-        # (S2) Z2a: strip runtime_hi_gen.c include from runtime_core.c so runtime_core.o
-        #      does NOT also define rt_str_* (else multidef with rt_hi_native.o). Mirror
-        #      of the existing Z2a sed (stage_resolve_runtime_a:889 / harness :56).
-        sed -i.zbak 's|#include "runtime_hi_gen.c"|/* RFC061 Case-B Z2a: rt_str_* from native build/rt_hi_native.o */|' self/runtime_core.c
-        rm -f self/runtime_core.c.zbak
-        # (S3) the GREEN drop-ON macro set (zeroc_dropon_fixpoint.sh:60-73 verbatim).
-        local _mo_cluster_defs="-DHEXA_RT_CORE_LEAF_NATIVE=1 -DHEXA_RT_CORE_ARITH_NATIVE=1 \
--DHEXA_RT_CORE_MATH_NATIVE=1 -DHEXA_RT_CORE_MATH2_NATIVE=1 \
--DHEXA_RT_CORE_MAP_QUERY_FOLD_NATIVE=1 -DHEXA_RT_CORE_COLLECTION_MUTATE_NATIVE=1 \
--DHEXA_RT_CORE_ARRAY_TYPED_LEAF_NATIVE=1 -DHEXA_RT_CORE_FS_READ_WRITE_NATIVE=1 \
--DHEXA_RT_CORE_ARITH_COERCE_FORMAT_NATIVE=1 -DHEXA_RT_CORE_RUNTIME_MISC_NATIVE=1 \
--DHEXA_RT_CORE_VALOP_DISPATCH_NATIVE=1 -DHEXA_RT_CORE_MAP_QUERY_DISPATCH_NATIVE=1 \
--DHEXA_RT_CORE_STRARR_READ_NATIVE=1 -DHEXA_ZEROC_RT_CORE_STRBUF_ARENA=1"
-        local _mo_drop_defs="-DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE $_mo_cluster_defs -DHEXA_RT_ALLOC_NATIVE=1"
-        # (S4) runtime.o — the frozen amalgam MINUS the dropped runtime_core.c
-        #      include (drop-ON pulls runtime_core_decls.h; the M2-gap protos are
-        #      ALREADY in the tracked decls.h:189-196, so NO harness python proto
-        #      injection is needed). Carries HEXA_HAS_HEXA_RT_STDLIB=1. The drop-ON
-        #      registrar emit makes runtime.o define `T _hexa_init_fn_shims`
-        #      (runtime_emit_full.hexa:13511) — the supplier for runtime_core.o's U-ref.
-        #      CRITICAL (measured aiden #b0kdx0k29): runtime.o is compiled WITHOUT
-        #      -DHEXA_HAS_HEXA_RT_STDLIB — exactly like the DEFAULT single-TU ship
-        #      runtime.o. That macro flips the HI-tier C bodies (rt_log/rt_exp/rt_cos/
-        #      rt_sin/rt_posix_ok/rt_pthread_noop/…) under `#ifndef HEXA_HAS_HEXA_RT_STDLIB`
-        #      to bare `extern` decls expecting a hexa-source provider. The harness's
-        #      program.o tolerates that flip because it ALSO carries the flattened
-        #      compiler hexa-source (which defines those rt_* in the SAME TU); the SHIP
-        #      runtime.o has NO such provider, so it MUST keep `HEXA_HAS_HEXA_RT_STDLIB`
-        #      UNSET → it then DEFINES rt_log/rt_posix_ok/rt_pthread_noop + the registrar
-        #      itself (T, identical to the default ship runtime.o). Setting the macro
-        #      here would flip them to extern → DOUBLE-define with the compiler program
-        #      at the consumer link (multidef) — the #b0kdx0k29 regression.
-        echo "[stage_resolve_runtime_a] RFC061 Case-B [S4]: compile build/runtime.o (drop-ON frozen amalgam, HI-tier bodies kept inline)…"
-        $CC $_mo_cflags $_mo_drop_defs self/runtime.c -o build/runtime.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime.o compile failed" >&2; return 1; }
-        # (S5) runtime_core.o — SEPARATE TU with the sibling-shim sysheaders prelude
-        #      (zeroc_dropon_fixpoint.sh:199 verbatim).
-        echo "[stage_resolve_runtime_a] RFC061 Case-B [S5]: compile build/runtime_core.o (standalone TU)…"
-        $CC $_mo_cflags -DHEXA_HAS_HEXA_RT_STDLIB=1 $_mo_drop_defs -include self/runtime_core_sysheaders.h self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
-        # (S6) hxlcl_shim.o — libc-delegate hxlcl_* sibling TU (harness :203).
-        echo "[stage_resolve_runtime_a] RFC061 Case-B [S6]: compile build/hxlcl_shim.o…"
-        $CC -c -O2 $_mo_archflag -std=gnu11 -D_GNU_SOURCE self/runtime_core_hxlcl_shim.c -o build/hxlcl_shim.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: hxlcl_shim.o compile failed" >&2; return 1; }
-        # (S7) cluster seed .o (13 regen_rtcore_*_native_o.sh) — the externalized
-        #      runtime_core bodies (harness :207-212). The .s native seeds
-        #      (array/map/alloc/rt_hi/…) were ALREADY built by the resolve_native_*_seed
-        #      calls that run before build_runtime_a_from_source (incl. rt_hi_native.o,
-        #      driven by HEXA_ZEROC_RT_HI=1 which we force ON for ship since there is
-        #      no program.o to supply rt_str_*).
-        export HEXA_ZEROC_RT_HI=1
-        echo "[stage_resolve_runtime_a] RFC061 Case-B [S7]: build cluster seed .o…"
-        local _mo_s
-        for _mo_s in leaf arith math math2 valop-dispatch map-query-dispatch map-query-fold collection-mutate \
-                     array-typed-leaf fs-read-write arith-coerce-format runtime-misc strarr-read; do
-            local _mo_scr="tool/regen_rtcore_${_mo_s}_native_o.sh"
-            [ -f "$_mo_scr" ] && CC="$CC" ARCH_FLAG="$_mo_archflag" bash "$_mo_scr" "build/rtcore_${_mo_s//-/_}_native.o" >/dev/null 2>&1
-        done
-        # ensure rt_hi_native.o exists for ship (the §4 divergence from the harness,
-        # which EXCLUDES it because its program.o defines rt_str_*; the ship archive
-        # has NO program.o, so runtime_core.o's rt_str_* MUST resolve here).
-        if [ ! -f build/rt_hi_native.o ]; then
-            echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: build/rt_hi_native.o absent — ship runtime_core.o rt_str_* would be undefined at consumer C link (HEXA_ZEROC_RT_HI seed missing for this target)" >&2
-            return 1
-        fi
-        # (S8a) seed set = all build/*.o EXCEPT the three explicitly-linked members
-        #       (runtime.o, runtime_core.o, hxlcl_shim.o) and stale runtime_dropON.o,
-        #       but INCLUDING rt_hi_native.o (the ship divergence). Mirror of the
-        #       harness glob (zeroc_dropon_fixpoint.sh:230) minus the rt_hi exclusion.
-        local _mo_seeds
-        _mo_seeds=$(ls build/*.o 2>/dev/null | grep -vE '(^|/)(runtime|runtime_dropON|runtime_core|hxlcl_shim)\.o$' | tr '\n' ' ')
-        echo "[stage_resolve_runtime_a] RFC061 Case-B: seed objects = $(echo $_mo_seeds | wc -w) (incl rt_hi_native.o for ship rt_str_*)"
-        # (S8b) MULTI-DEF SAFETY GATE — `ld -r` partial relocatable merge of every
-        #       runtime.a member. This is the CORRECT ship-topology gate (measured
-        #       aiden #b0kdx0k29): a runtime.a does NOT and CANNOT self-resolve every
-        #       symbol — a whole class of HI-tier rt_* (rt_abs_int / rt_cmp_gt /
-        #       rt_fma_float / rt_pow_float / rt_rms_norm_scalar) is authored in the
-        #       compiler's hexa-source rt/ modules and lands ONLY in the compiler
-        #       program object, which stage_build_hexa links LATER as a passive arg.
-        #       So undefined-against-the-program is EXPECTED (true of the default ship
-        #       archive too). The ship-KILLER is a DUPLICATE definition (multiple
-        #       definition) — that corrupts the consumer link. `ld -r` leaves
-        #       undefined externs unresolved (no false-fail) but DOES report duplicate
-        #       defs, so it is the precise multidef assert with the C #else fallbacks
-        #       intact. The undef0 proof is the REAL consumer link
-        #       (HEXA_PREBUILT_RUNTIME=runtime.a → stage_build_hexa → ./hexa smoke),
-        #       captured in the validation step — NOT a standalone runtime.a link
-        #       (the #b0kdx0k29 false-fail this corrects). Also assert the §4(a)
-        #       registrar topology: runtime.o=T (supplier) runtime_core.o=U (consumer).
-        echo "[stage_resolve_runtime_a] RFC061 Case-B [S8]: multidef safety gate (ld -r partial merge)…"
-        local _mo_merge="build/_caseB_merge.o"
-        ld -r build/runtime.o build/runtime_core.o build/hxlcl_shim.o $_mo_seeds -o "$_mo_merge" 2>build/_caseB_ldr.err
-        local _mo_ldrc=$? _mo_multidef
-        _mo_multidef=$(grep -ciE 'multiple definition|duplicate symbol' build/_caseB_ldr.err 2>/dev/null || echo 0)
-        local _mo_reg_t _mo_reg_u
-        _mo_reg_t=$(nm build/runtime.o 2>/dev/null | grep -cE ' T _?_hexa_init_fn_shims$')
-        _mo_reg_u=$(nm build/runtime_core.o 2>/dev/null | grep -cE ' U _?_hexa_init_fn_shims$')
-        echo "[stage_resolve_runtime_a] RFC061 Case-B: ld -r RC=$_mo_ldrc multiple_definition=$_mo_multidef"
-        echo "[stage_resolve_runtime_a] RFC061 Case-B: _hexa_init_fn_shims — runtime.o=${_mo_reg_t}T runtime_core.o=${_mo_reg_u}U (archive-internal resolution; §4a)"
-        if [ "${_mo_multidef:-1}" -ne 0 ]; then
-            echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: multi-object archive has DUPLICATE symbol definitions (multidef=$_mo_multidef) — refusing to ship (would corrupt the consumer C link). See build/_caseB_ldr.err:" >&2
-            grep -iE 'multiple definition|duplicate symbol' build/_caseB_ldr.err 2>/dev/null | sort -u | head -20 | sed 's/^/    /' >&2
-            rm -f "$_mo_merge"
-            return 1
-        fi
-        # nonzero ld -r RC is EXPECTED (unresolved program-supplied HI-tier externs) —
-        # NOT a ship-blocker; multidef==0 is the gate.
-        rm -f "$_mo_merge"
-        # (S8c) ar the multi-object archive into the SAME canonical build/runtime.a
-        #       (NO new archive name → install.sh:276 + main.hexa resolve_prebuilt_runtime
-        #       + release.yml stay untouched; the consumer's `nm -g` drop-list is
-        #       already multi-object aware).
-        ar rcs "$RA" build/runtime.o build/runtime_core.o build/hxlcl_shim.o $_mo_seeds
-        ls -la "$RA"
-        # CUDA dual-archive parity (mirror the single-TU path's ING-35 #2 discipline):
-        # build runtime.cuda.a from the IDENTICAL member set + the nvcc objects.
-        if [ "${HEXA_CUDA:-0}" = "1" ] && [ -f build/runtime_cuda.o ] && [ -f build/runtime_cuda_dlink.o ]; then
-            local _mo_cuda_home="${CUDA_HOME:-/usr/local/cuda}"
-            local _mo_cinc="$_mo_cuda_home/targets/x86_64-linux/include"
-            [ -d "$_mo_cinc" ] || _mo_cinc="$_mo_cuda_home/include"
-            echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA: building SEPARATE consumer archive build/runtime.cuda.a (drop-ON multi-object + cuda objects)"
-            $CC $_mo_cflags $_mo_drop_defs -DHEXA_CUDA -I "$_mo_cinc" self/runtime.c -o build/runtime_cuda_host.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: runtime_cuda_host.o compile failed" >&2; return 1; }
-            ar rcs build/runtime.cuda.a build/runtime_cuda_host.o build/runtime_core.o build/hxlcl_shim.o $_mo_seeds build/runtime_cuda.o build/runtime_cuda_dlink.o
-            ls -la build/runtime.cuda.a
-            local _mo_cseed _mo_cm
-            for _mo_cseed in build/runtime_core.o build/hxlcl_shim.o $_mo_seeds; do
-                _mo_cm="$(basename "$_mo_cseed")"
-                if ! ar t build/runtime.cuda.a | grep -qx "$_mo_cm"; then
-                    echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: build/runtime.cuda.a missing member '$_mo_cm' that build/runtime.a carries (ING-35 #2)" >&2
-                    return 1
-                fi
-            done
-            echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA: runtime.cuda.a member parity OK"
-        fi
-        echo "$RA"
-        return 0
-    fi
     # RT-NATIVE Z2a (gated): supply rt_str_* from a NATIVE-compiled object
     # (build/rt_hi_native.o, assembled from the self/native/runtime_hi_*.s
     # frozen seed by resolve_native_rt_hi_seed) instead of the hexat-transpiled
@@ -1207,6 +1035,104 @@ build_runtime_a_from_source() {
     if [ "${HEXA_RT_PRINT_NATIVE:-0}" != "0" ]; then
         rt_print_def="-DHEXA_RT_PRINT_NATIVE=1"
         echo "[stage_resolve_runtime_a] RT-NATIVE PRINT: HEXA_RT_PRINT_NATIVE=1; x86_64 raw-syscall hxlcl_write (libc write dropped on print leaf)"
+    fi
+    # ── RFC061 Case-B MULTI-OBJECT runtime.a (gated opt-IN · default OFF) ──────
+    # HEXA_RT_MULTIOBJ=1 packages the shipping runtime.a as an INCLUDE-DROP
+    # multi-object archive: instead of the single-TU `-c self/runtime.c` (which
+    # `#include`s runtime_core.c → runtime_hi_gen.c into ONE object), it compiles
+    # runtime.c (with the `#include "runtime_core.c"` line guarded OFF) and
+    # runtime_core.c (which still pulls runtime_hi_gen.c, keeping ALL HI-tier rt_*
+    # C bodies) as TWO separate objects + the hxlcl_shim.o sibling TU, then ar's
+    # them with the IDENTICAL $extra_obj seed set the single-TU path uses.
+    #
+    # SCOPE (measured aiden #b0kdx0k29/#bw9vqg0ro): this is the MINIMAL include-
+    # drop split — NOT the full cluster-externalize drop (the 14
+    # HEXA_RT_CORE_*_NATIVE macros). The cluster drop externalizes the
+    # runtime_core.c HI-tier bodies (rt_print/rt_eq_*/rt_to_string_*/rt_map_*/
+    # rt_fma_*/… — 58 syms) to seeds that DON'T exist for most of them, leaving
+    # them undefined at the real consumer link (the documented RFC061 all-or-
+    # nothing wall). The minimal split keeps those bodies INLINE in runtime_core.o
+    # (no cluster -D, no HEXA_HAS_HEXA_RT_STDLIB on either TU, runtime_hi_gen.c NOT
+    # stripped), so it is symbol-equivalent to the default single-TU object set —
+    # just relocated across a TU boundary. MEASURED: ld -r multidef=0, real
+    # consumer link (stage_build_hexa) GREEN, `hexa build` exit42 rc=42 + hello OK.
+    #
+    # It is a BUILD-ROUTE / PACKAGING flag only — gate-OFF (default) takes the
+    # single-TU path below verbatim (drop-guard patcher NEVER invoked → runtime.c
+    # SHA-identical to frozen 151c52c8). byteeq is link-form-agnostic
+    # (build_selfhost.sh builds its OWN rt.o via flag-free clang, never consumes
+    # runtime.a), so splitting into more .o members cannot move cc-genN.o bytes.
+    # A default-flip to multi-object is a SEPARATE later PR gated on captured
+    # 3-target gate-ON GREEN + consumer smoke (release-integrity > self-host).
+    if [ "${HEXA_RT_MULTIOBJ:-0}" = "1" ]; then
+        echo "[stage_resolve_runtime_a] RFC061 Case-B: HEXA_RT_MULTIOBJ=1 — INCLUDE-DROP multi-object runtime.a (opt-in; default ship path is single-TU)"
+        local _mo_archflag=""; [ "$(uname -s)" = "Darwin" ] && _mo_archflag="-arch arm64"
+        # (S1) guard the FROZEN `#include "runtime_core.c"` line in the RESTORED
+        #      working-copy runtime.c (idempotent; gitignore'd regen — frozen git
+        #      blob 151c52c8 NEVER touched). drop-ON then pulls runtime_core_decls.h.
+        bash tool/zeroc_drop_rtcore_include.sh "$ROOT" || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: drop-guard patch failed" >&2; return 1; }
+        # (S2) runtime.o — runtime.c with the include dropped (-DHEXA_ZEROC_DROP_RTCORE_INCLUDE),
+        #      keeping the SAME $rt_*_def seed -D set + HI-tier bodies inline (registrar
+        #      _hexa_init_fn_shims=T here under the drop gate; runtime_core.o=U → §4a
+        #      archive-internal resolution). NO HEXA_HAS_HEXA_RT_STDLIB (matches the
+        #      default single-TU object; setting it would extern rt_log/… → multidef).
+        echo "[stage_resolve_runtime_a] RFC061 Case-B [S2]: compile build/runtime.o (include-drop, HI-tier inline)…"
+        $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self -c self/runtime.c -o build/runtime.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime.o compile failed" >&2; return 1; }
+        # (S3) runtime_core.o — standalone TU (sysheaders prelude), runtime_hi_gen.c
+        #      KEPT (supplies the HI-tier rt_* C bodies). SAME seed -D set. NO
+        #      HEXA_HAS_HEXA_RT_STDLIB (keeps those bodies inline, not externed).
+        echo "[stage_resolve_runtime_a] RFC061 Case-B [S3]: compile build/runtime_core.o (standalone TU, runtime_hi_gen.c kept)…"
+        $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -I self -include self/runtime_core_sysheaders.h -c self/runtime_core.c -o build/runtime_core.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: runtime_core.o compile failed" >&2; return 1; }
+        # (S4) hxlcl_shim.o — libc-delegate hxlcl_* sibling TU.
+        echo "[stage_resolve_runtime_a] RFC061 Case-B [S4]: compile build/hxlcl_shim.o…"
+        $CC -c -O2 $_mo_archflag -std=gnu11 -D_GNU_SOURCE self/runtime_core_hxlcl_shim.c -o build/hxlcl_shim.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: hxlcl_shim.o compile failed" >&2; return 1; }
+        # (S5) MULTIDEF SAFETY GATE — `ld -r` partial relocatable merge of all
+        #      members. `ld -r` leaves undefined externs unresolved (the program-
+        #      supplied compiler-side symbols are EXPECTED to be absent here, same as
+        #      the default ship archive) but reports DUPLICATE defs — the real ship-
+        #      killer. multidef==0 is the gate; a shortfall → loud build FATAL (never
+        #      a silent member-overlapping archive). The undef0 proof is the REAL
+        #      consumer link (HEXA_PREBUILT_RUNTIME=runtime.a → stage_build_hexa →
+        #      hexa build exit42/hello), captured in the validation step.
+        echo "[stage_resolve_runtime_a] RFC061 Case-B [S5]: multidef safety gate (ld -r partial merge)…"
+        local _mo_merge="build/_caseB_merge.o" _mo_multidef _mo_reg_t _mo_reg_u
+        ld -r build/runtime.o build/runtime_core.o build/hxlcl_shim.o $extra_obj -o "$_mo_merge" 2>build/_caseB_ldr.err
+        _mo_multidef=$(grep -ciE 'multiple definition|duplicate symbol' build/_caseB_ldr.err 2>/dev/null || echo 0)
+        _mo_reg_t=$(nm build/runtime.o 2>/dev/null | grep -cE ' T _?_hexa_init_fn_shims$')
+        _mo_reg_u=$(nm build/runtime_core.o 2>/dev/null | grep -cE ' U _?_hexa_init_fn_shims$')
+        echo "[stage_resolve_runtime_a] RFC061 Case-B: ld -r multiple_definition=$_mo_multidef ; _hexa_init_fn_shims runtime.o=${_mo_reg_t}T runtime_core.o=${_mo_reg_u}U (§4a archive-internal)"
+        if [ "${_mo_multidef:-1}" -ne 0 ]; then
+            echo "[stage_resolve_runtime_a] RFC061 Case-B FATAL: multi-object archive has DUPLICATE symbol definitions (multidef=$_mo_multidef) — refusing to ship (would corrupt the consumer C link). See build/_caseB_ldr.err:" >&2
+            grep -iE 'multiple definition|duplicate symbol' build/_caseB_ldr.err 2>/dev/null | sort -u | head -20 | sed 's/^/    /' >&2
+            rm -f "$_mo_merge"; return 1
+        fi
+        rm -f "$_mo_merge"
+        # (S6) ar the multi-object archive into the SAME canonical build/runtime.a
+        #      (NO new name → install.sh + main.hexa resolve_prebuilt_runtime +
+        #      release.yml untouched; consumer `nm -g` drop-list already multi-obj aware).
+        ar rcs "$RA" build/runtime.o build/runtime_core.o build/hxlcl_shim.o $extra_obj
+        ls -la "$RA"
+        # CUDA dual-archive parity (mirror the single-TU ING-35 #2 discipline).
+        if [ "${HEXA_CUDA:-0}" = "1" ] && [ -f build/runtime_cuda.o ] && [ -f build/runtime_cuda_dlink.o ]; then
+            local _mo_cuda_home="${CUDA_HOME:-/usr/local/cuda}"
+            local _mo_cinc="$_mo_cuda_home/targets/x86_64-linux/include"
+            [ -d "$_mo_cinc" ] || _mo_cinc="$_mo_cuda_home/include"
+            echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA: build SEPARATE build/runtime.cuda.a (include-drop multi-object + cuda objects)"
+            $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_valop_def $rt_alloc_def $rt_print_def -DHEXA_ZEROC_DROP_RTCORE_INCLUDE -DHEXA_ZEROC_DROP_RTCORE -DHEXA_CUDA -I "$_mo_cinc" -I self -c self/runtime.c -o build/runtime_cuda_host.o || { echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: runtime_cuda_host.o compile failed" >&2; return 1; }
+            ar rcs build/runtime.cuda.a build/runtime_cuda_host.o build/runtime_core.o build/hxlcl_shim.o $extra_obj build/runtime_cuda.o build/runtime_cuda_dlink.o
+            ls -la build/runtime.cuda.a
+            local _mo_cseed _mo_cm
+            for _mo_cseed in build/runtime_core.o build/hxlcl_shim.o $extra_obj; do
+                _mo_cm="$(basename "$_mo_cseed")"
+                if ! ar t build/runtime.cuda.a | grep -qx "$_mo_cm"; then
+                    echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA FATAL: build/runtime.cuda.a missing member '$_mo_cm' (ING-35 #2)" >&2
+                    return 1
+                fi
+            done
+            echo "[stage_resolve_runtime_a] RFC061 Case-B CUDA: runtime.cuda.a member parity OK"
+        fi
+        echo "$RA"
+        return 0
     fi
     $CC $CFLAGS $rt_array_def $rt_array_arena_def $rt_map_def $rt_intern_def $rt_fs_def $rt_str_def $rt_num_def $rt_numf_def $rt_valop_def $rt_alloc_def $rt_print_def -I self -c self/runtime.c -o build/runtime.o
     ar rcs "$RA" build/runtime.o $extra_obj
