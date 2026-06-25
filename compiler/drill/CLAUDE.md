@@ -20,10 +20,16 @@ dispatch된다(`self/main.hexa:1780·1803` → `compiler/drill/drill.hexa`). 한
 | `anti_hub.hexa` | 진입 텔레메트리 프로브 |
 | `resonance.hexa` | 6단계 resonance 프록시(closed-form) |
 | `batch.hexa` | `--seeds csv` 배치 dispatch |
+| `ouroboros.hexa` | ★NEXUS **자기진화 엔진** native 포팅(#3977) — seed→mutate→`verify_score`→converge(4-state 수렴체커) + 재귀 absorber `f(f(f…))`(weighted-filter+adjacent-pair resonance→EMA α=1/6 흡수) + SR-adaptive σ-peak tracker(FIFO window=10) + MetaLoop(evolve→Saturated→forge→re-evolve). `fn main` 결정적 셀프테스트 |
+| `ouroboros_meta.hexa` | ★메타-우루보로스 native(#3980) — **전략 자체를 진화**: 파라미터 벡터 `meta_mutate_strategy` + tournament(stable bubble sort) + `breed_strategies` crossover + `check_meta_convergence` meta-fixed-point. `fn main` 셀프테스트 |
+| `ouroboros_quantum.hexa` | ★양자-우루보로스 native(#3980) — `QuantumStrategy` superposition: 6 mutation 연산자+`apply_mutation` dispatch + `quantum_crossover`/`propagate_entanglement` + `measure_superposition`/`renormalize_amplitudes` + decoherence 차폐(`guarded_mutate`). `fn main` 셀프테스트 |
 | `*_test.hexa` | drill/mkx/surface/accumulation/verifier-hook 셀프테스트 |
 
 생성기 9-phase smash는 형제 폴더 `../smash/`(phases.hexa)에, 12 drill 변종(omega·chain·
-surge·dream·swarm·reign·molt·wake·forge·canon·revive)은 각자 `../<name>/`에 있다.
+surge·dream·swarm·reign·molt·wake·forge·canon·revive)은 각자 `../<name>/`에 있다. NEXUS
+`cli/blowup/commands.hexa`(CLI 디스패처)는 hexa-lang `self/main.hexa` verb 라우팅이 대체 →
+포팅불요. ouroboros 3종은 **standalone leaf**(`self/`/`drill.hexa` 미import · `hexa run`으로만
+실행 · byteeq-neutral) — 미포팅=growth-bus 디스크 영속화(운영 글루)뿐, 수학핵 전부 live.
 
 ## 규칙 / gotcha (정직 — c2)
 

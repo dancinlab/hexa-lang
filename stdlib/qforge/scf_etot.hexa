@@ -115,6 +115,7 @@ pub fn qforge_ewald(a1: [float], a2: [float], a3: [float],
                     pos: [float], q: [float], omega: float,
                     eta: float, nshell: int) -> float {
     let nion = len(q)
+    if omega <= 0.0 { return 0.0 }   // cell volume Ω≤0 → π/Ω Inf
     let pi = 3.14159265358979323846
     let sqrtpi = pow(pi, 0.5)
 
