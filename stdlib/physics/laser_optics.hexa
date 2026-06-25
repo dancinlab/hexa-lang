@@ -46,6 +46,7 @@ pub fn fluence(power_w: float, area_cm2: float, t_time: float) -> float {
 // axial distance z 에서 Gaussian-mode beam radius (waist w0, Rayleigh range zR).
 // Source: Siegman 1986 (Lasers, §17.3).
 pub fn beam_waist(w0: float, z_axial: float, z_rayleigh: float) -> float {
+    if z_rayleigh <= 0.0 { return w0 }   // z_R≤0 → z/z_R = Inf; degenerate → waist w0
     let ratio = z_axial / z_rayleigh
     return w0 * sqrt(1.0 + ratio * ratio)
 }
@@ -54,6 +55,7 @@ pub fn beam_waist(w0: float, z_axial: float, z_rayleigh: float) -> float {
 // beam waist 에서 radius 가 sqrt(2)·w0 (= 면적 2배) 가 되는 거리.
 // Source: Siegman 1986 (Lasers, §17.2). `beam_waist` 와 짝.
 pub fn rayleigh_range(w0: float, lambda_wl: float) -> float {
+    if lambda_wl <= 0.0 { return 0.0 }   // λ≤0 → /λ = Inf
     return _OPT_PI * w0 * w0 / lambda_wl
 }
 

@@ -98,6 +98,7 @@ fn plasma_omega(n_e_m3: float) -> float {
 
 // Plasma wavelength λ_p = 2π c / ω_p  [m].
 fn plasma_wavelength(omega_p: float) -> float {
+    if omega_p <= 0.0 { return 0.0 }   // ω_p≤0 (no plasma) → c/ω_p = Inf
     return 2.0 * pi() * speed_of_light() / omega_p
 }
 
