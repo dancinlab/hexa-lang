@@ -101,6 +101,8 @@ fn _floor_f(x: float) -> int {
 // vina_pair_energy 자체에는 없지만 vina_score_complex 와 동일하게
 // per-pair distance > VINA_CUTOFF 면 0 으로 처리한다 (검색 중 빠른 컷오프).
 pub fn vina_grid_build(receptor: [VinaAtom], probe_atype: string, xmin: float, ymin: float, zmin: float, xmax: float, ymax: float, zmax: float, spacing: float) -> VinaGrid {
+    // spacing≤0 → (xmax-xmin)/spacing = Inf/garbage node counts → empty grid sentinel.
+    if spacing <= 0.0 { return VinaGrid { nx: 0, ny: 0, nz: 0, ox: xmin, oy: ymin, oz: zmin, spacing: spacing, atype: probe_atype, data: [] } }
     let nx = _floor_f((xmax - xmin) / spacing) + 1
     let ny = _floor_f((ymax - ymin) / spacing) + 1
     let nz = _floor_f((zmax - zmin) / spacing) + 1
