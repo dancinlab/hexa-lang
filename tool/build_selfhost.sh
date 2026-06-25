@@ -167,7 +167,13 @@ log "hexat: $(file -b build/hexat 2>/dev/null)"
 # self-emit aborts rc=134 -> no byte-eq fixpoint. Regenerate runtime_core.c from
 # the emitter SSOT (self/runtime_core_emit.hexa) so every stage links COMPLETE.
 log "runtime: regen runtime_core.c from emitter SSOT (stage_resolve_runtime_a)"
-CC="${CC:-clang}" bash tool/stage_resolve_runtime_a >/dev/null 2>&1 || fail seed runtime-regen
+# byteeq only needs the runtime_core.c REGEN side-effect here — it builds its OWN
+# rt.o below (flag-free clang) and never links the runtime.a stage_resolve_runtime_a
+# produces. Pin HEXA_RT_MULTIOBJ=0 so this regen-only call takes the single-TU
+# archive path even when invoked from an env where the release default-ON flip is
+# set (release_build exports HEXA_RT_MULTIOBJ=1) — the multi-object packaging is
+# pure wasted work for the self-host fixpoint and is link-form-agnostic to it.
+HEXA_RT_MULTIOBJ=0 CC="${CC:-clang}" bash tool/stage_resolve_runtime_a >/dev/null 2>&1 || fail seed runtime-regen
 
 # ── stage 0: aprime_cc (the proven canonical recipe) ─────────────────────────
 log "stage0: build_aprime.sh -> aprime_cc"
