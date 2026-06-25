@@ -35,6 +35,15 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/resource.h>
+#ifdef __APPLE__
+/* darwin standalone-TU: runtime_core.c's _hx_self_rss_bytes uses the Mach
+ * task_info RSS API (mach_task_self / MACH_TASK_BASIC_INFO /
+ * mach_task_basic_info_data_t / mach_msg_type_number_t / task_info_t /
+ * KERN_SUCCESS). The single-TU default pulls these via runtime.c's own system
+ * headers; the include-drop standalone runtime_core.o relies on this prelude, so
+ * supply them here (Apple-only, drop-ON-only → default build byte-identical). */
+#include <mach/mach.h>
+#endif
 
 
 /* ── hxlcl_* sibling-shim prototypes ─────────────────────────────────────────
