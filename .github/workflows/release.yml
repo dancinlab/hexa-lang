@@ -106,7 +106,14 @@ jobs:
   release-macos-arm64:
     name: release (darwin-arm64)
     needs: setup
-    runs-on: macos-latest
+    # Blacksmith fast native Apple-Silicon runner. Pinned to macos-15 (NOT -26):
+    # macos-latest was macOS 15 (Sequoia) with no MACOSX_DEPLOYMENT_TARGET set, so
+    # the shipped Mach-O min-OS baseline rides the builder SDK — staying on the 15
+    # SDK keeps that baseline unchanged (macos-26 = newer SDK = higher min-OS floor
+    # = compat regression, same hazard as bumping the x86_64 glibc floor). Mach-O
+    # emit is deterministic (gen3≡gen4), so faster bare-metal host is byte-neutral
+    # — verified on the test prerelease byteeq before trusting stable.
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
