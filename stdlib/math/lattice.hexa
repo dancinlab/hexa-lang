@@ -424,23 +424,26 @@ pub fn gram_E8() -> array {
 // Eisenstein-integer (ℤ[ω]) lattice; the integral Gram used here is the
 // standard even form with minimum 4.
 pub fn gram_K12() -> array {
-    // 12×12, row-major. Source: SPLAG K12 Gram (Coxeter–Todd), even, min 4.
+    // 12×12, row-major. Coxeter-Todd K12 — VERIFIED Gram from the Catalogue of
+    // Lattices (G. Nebe & N. Sloane, RWTH Aachen), the same matrix the test inlines.
+    // det = 3^6 = 729, min norm = 4, kissing = 756, positive-definite (min eig
+    // ≈ 0.268). The prior transcription drifted to a NON-lattice matrix (det 16384,
+    // min eig -1.32 → not positive-definite), silently corrupting every downstream
+    // lattice_det / short_vectors_count result.
     let g = []
-    // diagonal 4, the cyclic Eisenstein construction off-diagonals.
-    // (Transcribed; validated by invariants in the test, not trusted blind.)
     let rows = [
-        [4,-2,0,-2,2,0,-2,0,0,-2,2,0],
-        [-2,4,-2,2,-2,0,2,-2,0,2,-2,0],
-        [0,-2,4,0,2,-2,0,2,-2,0,2,-2],
-        [-2,2,0,4,-2,0,2,0,0,2,-2,0],
-        [2,-2,2,-2,4,-2,-2,2,0,-2,2,0],
-        [0,0,-2,0,-2,4,0,-2,2,0,-2,2],
-        [-2,2,0,2,-2,0,4,-2,0,2,-2,0],
-        [0,-2,2,0,2,-2,-2,4,-2,-2,2,0],
-        [0,0,-2,0,0,2,0,-2,4,0,0,-2],
-        [-2,2,0,2,-2,0,2,-2,0,4,-2,0],
-        [2,-2,2,-2,2,-2,-2,2,0,-2,4,-2],
-        [0,0,-2,0,0,2,0,0,-2,0,-2,4]
+        [4,0,0,-2,0,0,2,-1,-1,-1,2,-1],
+        [0,4,0,0,-2,0,2,-1,-1,-1,-1,2],
+        [0,0,4,0,0,-2,2,2,2,-1,-1,-1],
+        [-2,0,0,4,0,0,-1,-1,2,2,-1,-1],
+        [0,-2,0,0,4,0,-1,2,-1,2,-1,-1],
+        [0,0,-2,0,0,4,-1,-1,-1,2,2,2],
+        [2,2,2,-1,-1,-1,4,0,0,-2,0,0],
+        [-1,-1,2,-1,2,-1,0,4,0,0,-2,0],
+        [-1,-1,2,2,-1,-1,0,0,4,0,0,-2],
+        [-1,-1,-1,2,2,2,-2,0,0,4,0,0],
+        [2,-1,-1,-1,-1,2,0,-2,0,0,4,0],
+        [-1,2,-1,-1,-1,2,0,0,-2,0,0,4]
     ]
     let i = 0
     while i < 12 {
