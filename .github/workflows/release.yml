@@ -309,14 +309,16 @@ jobs:
   release-linux-arm64:
     name: release (linux-arm64)
     needs: setup
-    # arm64 runner = ubuntu-24.04-arm (glibc 2.39). NOTE: #3559 tried 22.04-arm
-    # (glibc 2.35 floor, mirroring x86_64) but the stage-0 self-hosted transpiler
-    # `hexa_v2` SIGSEGVs on the 22.04-arm toolchain while transpiling
-    # module_loader.hexa → arm64 asset failed to publish in v0.241.0. 24.04-arm is
-    # the GA-confirmed working runner (shipped through v0.240.0). The arm64 22.04
-    # floor is deferred to the static-musl single-binary release (glibc-independent).
-    # x86_64 keeps its 22.04 (2.35) floor — only arm64 reverts here.
-    runs-on: ubuntu-24.04-arm
+    # arm64 runner = blacksmith-4vcpu-ubuntu-2404-arm (Blacksmith fast native arm,
+    # glibc 2.39 — SAME 24.04 toolchain, just faster bare-metal hardware). The
+    # 24.04 (NOT 22.04) choice is load-bearing: #3559 tried 22.04-arm (glibc 2.35
+    # floor, mirroring x86_64) but the stage-0 self-hosted transpiler `hexa_v2`
+    # SIGSEGVs on the 22.04-arm toolchain while transpiling module_loader.hexa →
+    # arm64 asset failed to publish in v0.241.0. So we keep 24.04 on Blacksmith
+    # (do NOT switch to blacksmith-*-ubuntu-2204-arm — same SIGSEGV landmine). The
+    # arm64 22.04 floor is deferred to the static-musl single-binary release
+    # (glibc-independent). x86_64 keeps its 22.04 (2.35) floor on Blacksmith.
+    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -486,7 +488,7 @@ jobs:
   release-linux-arm64-musl:
     name: release (linux-arm64-musl · static · test)
     needs: setup
-    runs-on: ubuntu-24.04-arm
+    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
