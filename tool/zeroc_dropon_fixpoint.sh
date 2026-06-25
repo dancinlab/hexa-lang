@@ -287,38 +287,45 @@ echo "[6] SHIPPING SMOKE (drop-ON compiler emits exit42 + hello)…"
 # defines them NON-weak → same-TU redefinition (the weak attribute does NOT permit
 # a second body in one TU; it only resolves across TUs at link).
 #
-# RESOLVED (rfc061 default-on-flip, measure-harness LOCKSTEP): build the smoke rt.o
-# with the SAME $CLUSTER_DEFS the drop-ON SEEDS were built with — exactly how
-# aprime_cc_dropon itself was linked above. Two effects, both correct:
-#   (1) $CLUSTER_DEFS includes -DHEXA_RT_CORE_LEAF_NATIVE=1, so runtime_core.c takes
-#       its `extern` arm for the f64<->bits primitives → the runtime.c weak defs are
-#       the SOLE bodies → the same-TU dual-definition DISSOLVES (no redefinition).
-#   (2) the leaf/arith/map/… bodies runtime_core.c externs out under those macros are
-#       supplied by $SEEDS (rtcore_leaf_native.o etc.) — the SAME self-consistent
-#       rt.o+seeds object set the drop-ON compiler was built from, so the emitted
-#       test program links clean (no undefined-rt_* and no hexa_arena_* multidef).
-# byteeq-NEUTRAL: cc-genN.o link build_selfhost's OWN flag-free rt.o, never this
-# harness rt.o; this only un-blocks the smoke RUN witness below (frozen untouched —
-# self/runtime.c is a gitignored regen seed). The drop-ON-compiler-only
-# STRBUF_ARENA descriptor flag (#3882 arena-coherence boundary) is STRIPPED here —
-# the EMITTED test program links the STANDARD runtime, which uses heap descriptors.
-SMOKE_RT_DEFS="$(printf '%s' "$CLUSTER_DEFS" | sed 's/-DHEXA_ZEROC_RT_CORE_STRBUF_ARENA=1//')"
-$CC -c -O2 $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs $SMOKE_RT_DEFS -I self -I . self/runtime.c -o "$OUT/rt.o" 2>"$OUT/rt.o.err" || { echo "  [smoke] rt.o compile FAIL:"; grep -iE 'redefinition|multiple|error' "$OUT/rt.o.err" | head -3 | sed 's/^/    /'; }
+# RESOLVED (rfc061 default-on-flip, measure-harness LOCKSTEP): the prior ad-hoc
+# `clang self/runtime.c -o rt.o` could never be self-consistent — a plain compile
+# dual-def-collides (runtime.c weak + runtime_core.c #else non-weak in one TU), and
+# adding $CLUSTER_DEFS just trades that for an rt.o+SEEDS mismatch (the drop-ON SEEDS
+# omit the rt_* HI-tier bodies the drop-ON runtime_core.o carries → undefined rt_fma_*
+# / multidef hexa_arena_*). The CORRECT standard runtime for the EMITTED test program
+# is the SHIPPING single-TU runtime.a — build_runtime_a_from_source pairs runtime.o
+# with EXACTLY its matching native seeds AND runs reconcile_runtime_c_ssot_dups (drops
+# the migrated f64<->bits weak dups), so it is internally complete and collision-free.
+# Build it via stage_resolve_runtime_a with HEXA_RT_MULTIOBJ=0 into a SEPARATE archive
+# and link the smoke programs against THAT (NOT the drop-ON $SEEDS). byteeq-NEUTRAL:
+# cc-genN.o link build_selfhost's OWN flag-free rt.o, never this; frozen untouched
+# (self/runtime*.c are gitignored regen seeds). This is the same standard runtime a
+# real consumer `hexa build`/`run` links — so the smoke now exercises the true path.
+SMOKE_RA="$OUT/smoke_runtime.a"
+( cd "$ROOT" 2>/dev/null || cd .
+  HEXA_RT_MULTIOBJ=0 HEXA_NO_INSTALL_RT_SYNC=1 CC="$CC" \
+    bash tool/stage_resolve_runtime_a >"$OUT/smoke_ra.log" 2>&1
+  [ -f build/runtime.a ] && cp -f build/runtime.a "$SMOKE_RA" )
+if [ -f "$SMOKE_RA" ]; then
+  echo "  [smoke] standard runtime.a built ($(ar t "$SMOKE_RA" 2>/dev/null | wc -l) members) via stage_resolve_runtime_a (single-TU + reconcile)"
+else
+  echo "  [smoke] standard runtime.a build FAILED (see $OUT/smoke_ra.log) — smoke link will be skipped"
+fi
 # exit42
 printf 'fn main() {\n  exit(6 * 7)\n}\n' > "$OUT/exit42.hexa"
 "$OUT/aprime_cc_dropon" _drv.hexa --emit=asm --target="$SMOKE_TARGET" --ignore-errors -o "$OUT/exit42.s" "$OUT/exit42.hexa" >"$OUT/e42.emit.log" 2>&1
 E42_EMIT_RC=$?
 echo "  exit42 emit RC=$E42_EMIT_RC  .s lines=$(wc -l < "$OUT/exit42.s" 2>/dev/null || echo 0)"
-if [ -s "$OUT/exit42.s" ]; then
-  $CC $ARCH_FLAG "$OUT/exit42.s" "$OUT/rt.o" $SEEDS -o "$OUT/exit42" $LIBS 2>"$OUT/e42.link.log"
+if [ -s "$OUT/exit42.s" ] && [ -f "$SMOKE_RA" ]; then
+  $CC $ARCH_FLAG "$OUT/exit42.s" "$SMOKE_RA" -o "$OUT/exit42" $LIBS 2>"$OUT/e42.link.log"
   if [ -x "$OUT/exit42" ]; then "$OUT/exit42"; E42_RC=$?; echo "  exit42 RUN rc=$E42_RC (expect 42)"; else echo "  exit42 LINK FAIL"; grep -iE 'undefined|error' "$OUT/e42.link.log" | head -3 | sed 's/^/    /'; E42_RC=LINKFAIL; fi
 else E42_RC=EMITFAIL; fi
 # hello
 printf 'fn main() {\n  println("hello")\n}\n' > "$OUT/hello.hexa"
 "$OUT/aprime_cc_dropon" _drv.hexa --emit=asm --target="$SMOKE_TARGET" --ignore-errors -o "$OUT/hello.s" "$OUT/hello.hexa" >"$OUT/hello.emit.log" 2>&1
-if [ -s "$OUT/hello.s" ]; then
-  $CC $ARCH_FLAG "$OUT/hello.s" "$OUT/rt.o" $SEEDS -o "$OUT/hello" $LIBS 2>"$OUT/hello.link.log"
-  if [ -x "$OUT/hello" ]; then HELLO_OUT="$("$OUT/hello" 2>&1)"; echo "  hello RUN output: '$HELLO_OUT' (expect hello)"; else echo "  hello LINK FAIL"; HELLO_OUT=LINKFAIL; fi
+if [ -s "$OUT/hello.s" ] && [ -f "$SMOKE_RA" ]; then
+  $CC $ARCH_FLAG "$OUT/hello.s" "$SMOKE_RA" -o "$OUT/hello" $LIBS 2>"$OUT/hello.link.log"
+  if [ -x "$OUT/hello" ]; then HELLO_OUT="$("$OUT/hello" 2>&1)"; echo "  hello RUN output: '$HELLO_OUT' (expect hello)"; else echo "  hello LINK FAIL"; grep -iE 'undefined|error' "$OUT/hello.link.log" | head -3 | sed 's/^/    /'; HELLO_OUT=LINKFAIL; fi
 else HELLO_OUT=EMITFAIL; fi
 
 # version: aprime_cc is a transpiler driver, not the released `hexa` CLI; it has
