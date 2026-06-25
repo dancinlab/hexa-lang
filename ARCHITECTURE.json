@@ -1051,6 +1051,16 @@
               "text": "📦 DEFERRED — the on-path native-seed floor is EXHAUSTED (valop 7-prim + 6 seed families default-ON, byteeq gen3≡gen4 3-target GREEN; see Self-host status). The only remaining lever to fully drop the C substrate is zero-c leg B = io.hexa whole-runtime flip (rt.c substrate replacement, RUNTIME-PORT M3) — an architecture migration with shipped-runtime regression risk, gated on its own risk budget + explicit start decision (self-host≠release ABSOLUTE). Residual besides leg B = irreducible-J (raw svc/syscall emit · libm · HexaVal struct · _start/CRT) + off-path-K (~84%, free/realloc/spawn/popen/async). print-fmt/fd-write census = @syscall irreducible (lateral relocation, not floor reduction). SSOT: memory `project_hexa_selfhost_floor_census` + `project_hexa_zeroc_breakthrough`."
             }
           ]
+        },
+        {
+          "type": "subsection",
+          "title": "compile-speed — single-thread CI build O(n²) heapify floor",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "🧱 MEASURED WALL (2026-06-25 · ~20 agents · direct -O2 release_build profile · 5 orthogonal levers · break-walls). `hexa_val_heapify` (HexaVal arena-escape deep-copy) is the REAL single-thread CI build bottleneck = 85.64% of Stage-1 transpiler = 154.6s / 55% of the 282.7s `release_build` (-O2 faithful; agent a478c27). Inner hot loop = arena block-chain LINEAR walk (`__blk_data` 42% / `__blk_cap` 14% / `__blk_next` 12% / `BLOCK_HDR` 11% = 79%) = O(blocks × strings) genuine O(n²). ALL cheap levers FALSIFIED: frame-clean gate (#3939 → SIGSEGV, reverted #3941) · all-scalar gate (~0%, predicate IS the walk) · region-returns (darwin-stream only, batch unwired) · heapify-memo (frozen HexaArr/HexaVal ABI has no spare mark bit) · block-find accel (block accessors are frozen native seed `alloc_syscall_native.o`) · TU-split (Stage0/1/2 strict producer-consumer chain, -j gains 0) · SEED_CONVERGE 76s (load-bearing convergence fixpoint, not reducible) · gcc -O2 47s (lowering = shipped CLI runtime regression). No cheap byteeq-safe win remains = HexaVal-struct floor (cheap heapify wins already landed in prior PRs #3877/#3878/#3880/#3885). The cheap CI wall-clock win was delivered SEPARATELY via Blacksmith runners (#3925-27, ~30min → ~20min, measured). REMAINING REAL-WIN LEVER (UNSTARTED · needs explicit risk-budget): conservative escape-analysis (skip the deep-copy for provably-non-escaping returns) OR a frozen-seed arena block-index (O(1)/O(log) block-find) — both multi-day, byteeq-risky, uncertain payoff (the dirty-frame deep-copy cost may be partly irreducible). RESUME HERE — do NOT re-attempt the 5 falsified cheap levers. SSOT: `state/{heapify-gate,region-returns,real-ci-build-hotspot}-*verdict.md` + CHANGELOG (#3942)."
+            }
+          ]
         }
       ]
     },

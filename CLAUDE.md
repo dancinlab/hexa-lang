@@ -84,6 +84,16 @@ only (no domain registry).
 - dont: 아무거나 융합 ≠ 이득 — memory-bound epilogue(bias/residual)만 융합한다. compute-bound
   epilogue(gelu 등) 융합은 closed-neg(연산비용 > 왕복절감). byte-eq 결정성은 추월 레버 아님
   falsified(OpenBLAS 도 같은 빌드서 thread-무관 비트동일 · r5 측정).
+- do: **컴파일 속도(단일스레드 CI 빌드)는 측정-소진된 벽** — ARCHITECTURE `blocking-frontiers`
+  의 `compile-speed` 노드가 SSOT. cheap CI 단축은 **Blacksmith(#3925-27 ~30→20min) 측정 전달
+  완료**. 알고리즘 병목 `hexa_val_heapify`(arena-escape deep-copy = 진짜 55% · hot loop=arena
+  블록체인 O(B×S))의 **cheap 레버 5종은 전부 측정-falsified**(frame-clean 가드 SIGSEGV ·
+  all-scalar ~0% · region-returns darwin전용 · heapify-memo frozen-ABI · block-find
+  frozen-seed). **resume 지점 = real-win 유일레버 = escape-analysis OR frozen-seed 블록인덱스**
+  (다일·byteeq-위험·payoff 불확실 major 캠페인 · explicit risk-budget 필요). verdict =
+  `state/{heapify-gate,region-returns,real-ci-build-hotspot}-*verdict.md`.
+- dont: 컴파일 속도 작업 재개 시 **5종 cheap 레버 재시도 금지**(측정-소진됨) · self-emit -O1
+  경로 프로파일로 CI 병목 추정 금지(CI=`release_build` -O2 faithful · self-emit과 다른 경로).
 
 ### QA (지속 검증 · verify-done 상시화)
 
