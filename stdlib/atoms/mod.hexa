@@ -310,7 +310,7 @@ fn _atoms_cellpar_to_cell(a: float, b: float, c: float, al: float, be: float, ga
     let cx = c * cb
     let cy_num = ca - cb * cg
     let cy = c * cy_num / sg
-    let cyu = cy / c
+    let cyu = if c != 0.0 { cy / c } else { 0.0 }   // c=0 (malformed CIF) → 0/0 NaN; valid-c byte-identical
     let inside = 1.0 - cb * cb - cyu * cyu
     let czu = sqrt(inside)
     let cz = c * czu

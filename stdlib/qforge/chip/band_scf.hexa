@@ -70,6 +70,7 @@ fn _pi() -> float { return 3.14159265358979323846 }
 // (ky=kz=0) so it feeds qforge_kinetic_diag UNCHANGED (d19 — the same kinetic brick
 // the SCF assembler calls; here ky,kz are pinned 0 for the 1D chain).
 pub fn qforge_chip_pw_gset_1d(a: float, mmax: int) -> [float] {
+    if a <= 0.0 { return [] }   // lattice length a≤0 → 2π/a Inf
     let g0 = 2.0 * _pi() / a            // first reciprocal-lattice vector |g|
     let mut gv: [float] = []
     let mut m = -mmax

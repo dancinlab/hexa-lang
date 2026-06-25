@@ -62,6 +62,7 @@ fn _pi() -> float { return 3.14159265358979323846 }
 // (coords flat-laid kx,ky,kz). Fractional kx ∈ (−½,½] maps to crystal momentum
 // k = 2π·kx / a. Returns ε at each mesh point, in MP point order.
 pub fn qforge_chip_kmesh_band(eps0: float, t: float, a: float, n1: int, shift1: int) -> [float] {
+    if a <= 0.0 { return [] }   // lattice length a≤0 → /a Inf
     let grid = qforge_mp_grid(n1, 1, 1, shift1, 0, 0)
     let coords = grid.coords
     let np = grid.npoints
