@@ -51,6 +51,11 @@ pub fn lz_complexity(seq) -> float {
             } else {
                 j = j + 1
                 if j > n {
+                    // trailing incomplete phrase: the suffix seq[i..n] never formed
+                    // a NEW dictionary entry before running off the end, but LZ76
+                    // complexity still counts that final incomplete phrase. The
+                    // prior code dropped it → systematic undercount by 1.
+                    count = count + 1
                     done = true
                     i = n
                 }

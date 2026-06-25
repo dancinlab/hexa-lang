@@ -1311,5 +1311,123 @@
         }
       }
     }
-  ]
+  ],
+  "convergence": {
+    "note": "재발방지 학습 SSOT (인라인 마커 이관)",
+    "records": [
+      {
+        "id": "BENCH-CLM-TRAIN-SEGFAULT",
+        "state": "completed",
+        "value": "alloc_raw buffers allocated inline + filled via void helpers (no raw-pointer return across val-arena fn-scope); tiny+small+medium run SIGSEGV-free",
+        "threshold": "hexa run bench/clm_train_bench.hexa exits 0 with default HEXA_VAL_ARENA (on); all 3 scales print valid loss",
+        "source": "bench/clm_train_bench.hexa"
+      },
+      {
+        "id": "METACLOSURE-SEED-POSITIONAL",
+        "state": "ossified",
+        "value": "path defaulted to cli_positional(0) → `--seed \"expr\"` mis-bound expr as a filename (file-not-found) since the file-branch precedes the seed-branch; sister `absolute` works only because it has no --file path",
+        "threshold": "bare positional is a --file ONLY when --seed is absent",
+        "source": "compiler/meta_closure/check.hexa"
+      },
+      {
+        "id": "N6LATTICE-COMPOSE-INDEX-MISCOMPILE",
+        "state": "in_flight",
+        "value": "p[q[i]] read garbage index 0x8_0000_0006 (len4 OOB) = HexaVal tag/payload upper-32 corruption (cf #3551/#3544 array-element-as-index)",
+        "threshold": "split let idx=q[i] before p[idx]; real fix = codegen index-from-array-element lowering",
+        "source": "compiler/n6_lattice/verify.hexa"
+      },
+      {
+        "id": "CONTAINS-KEY-FREEFN-EMIT",
+        "state": "ossified",
+        "value": "free-fn contains_key(m,k) fell through to bare _contains_key (dyld not found) — only .contains_key method + has_key/map_contains_key were mapped",
+        "threshold": "map free-fn contains_key to hexa_map_contains_key like has_key",
+        "source": "self/codegen.hexa"
+      },
+      {
+        "id": "MUSL-OPENSSL-STATIC-DEPS",
+        "source": "self/main.hexa"
+      },
+      {
+        "id": "CUDA-RUNTIME-MARKER",
+        "state": "in_flight",
+        "value": "cuda asset consumer needed HEXA_CUDA=1 on EVERY hexa build else cudaLaunchKernel/cublas undefined (-lcudart env-gated); install.sh auto-pulls cuda asset but build did not auto-link (#3723 v6b)",
+        "threshold": "cuda asset hexa run/build links cudart WITHOUT env (marker-detected); CPU install byte-identical",
+        "source": "self/main.hexa"
+      },
+      {
+        "id": "CUDA-STUBS-SELFCOMPILE",
+        "state": "in_flight",
+        "value": "hexa run self-compile cuda link omitted -L<lib>/stubs → ld cannot find -lcuda in -cuda release Package step",
+        "threshold": "release -cuda job Package step green (libcuda resolved from stubs)",
+        "source": "self/main.hexa"
+      },
+      {
+        "id": "CLI-RUNCACHE-STALE-ABI",
+        "state": "ossified",
+        "value": "local run-cache key used only sha(source)+static version_str('0.1.0-dispatch') → toolchain upgrade reused a stale hexa_run.<key> .o built against an older runtime ABI → dyld 'Symbol not found: _regex_match/_json_stringify/_contains_key' on v0.241.x",
+        "threshold": "fold running-binary size+mtime into the LOCAL cache key (precompile probe base-key unchanged so shipped precompile still hits)",
+        "source": "self/main.hexa"
+      },
+      {
+        "id": "hxmetal-default-on-headless-device-check",
+        "state": "ossified",
+        "value": "default-ON polarity 가 NSString(objc) 만 보고 live 진입 → headless/no-GPU darwin(GitHub Actions macOS 러너)서 MTLCreateSystemDefaultDevice()=nil 인데 HXM_LIVE=1 → device_non_null assert fail → faithful-nobaseline darwin RED (#3830).",
+        "threshold": "default-ON 은 mac+Metal-device 둘 다일 때만 — MTLCreateSystemDefaultDevice()==0 이면 stub 폴백",
+        "source": "self/runtime/hxmetal_stub.hexa"
+      },
+      {
+        "id": "CLI-ARGV-STANDALONE-PREFIX",
+        "state": "ossified",
+        "value": "compiled bin standalone argv has no .hexa script slot; .hexa-scan fallback to 2 skipped the subcommand at index 1 → top-level status banner+exit4",
+        "threshold": "fallback to 1 when argv[1] is not a .hexa script",
+        "source": "stdlib/sim_universe/sim_universe.hexa"
+      },
+      {
+        "id": "CLOUD-CROSSPROJECT-FORCE",
+        "state": "in_flight",
+        "value": "--force is a CONFIRM-skip, NOT a cross-project license: a rent-session trap auto-passing --force (with a mis-parsed id) destroyed another project's pod (an anima session killed a runpod pod tagged to a different project)",
+        "threshold": "cross-project REAL-mismatch refuses even under --force; teardown requires re-running from the owner repo (same-project/orphan/untracked unaffected)",
+        "source": "stdlib/cloud/cloud_cli.hexa"
+      },
+      {
+        "id": "ATLAS-REGISTER-BAKED-PATH",
+        "state": "ossified",
+        "value": "register/.discoveries + embedded path resolved ONLY to baked $HOME/core/hexa-lang → silent no-op from any other checkout (e.g. ~/dancinlab/hexa-lang); cwd-relative repo-local was the documented-but-unimplemented intent",
+        "threshold": "resolve cwd-relative FIRST via fs_exists; baked $HOME path is last-resort fallback",
+        "source": "tool/atlas_cli.hexa"
+      },
+      {
+        "id": "build-aprime-stale-native-seed-o",
+        "state": "ossified",
+        "value": "warm-tree 의 build/*_native.o 가 seed.s 갱신 후에도 [ ! -f .o ] 가드로 재생성 skip → 옛 심볼셋(예: leg-B Z2a 가 rt_str_trim C body RETIRE 했으나 stale rt_hi_native.o 는 trim 그룹 누락)으로 link → undefined _rt_str_trim. alloc-stale warm-tree 수렴이 rt_hi 에서 재발.",
+        "threshold": "seed.s -nt .o 면 재assemble (5 native-seed 가드 rt_hi/array/map/alloc/str 전부)",
+        "source": "tool/build_aprime.sh"
+      },
+      {
+        "id": "x86-native-seed-link-wiring",
+        "state": "ossified",
+        "value": "Any build script that links self/runtime.c MUST assemble + link the CANONICAL native-seed object set AND pass its pairing -D macros, exactly as build_aprime.sh:272-406 does. runtime_core.c dropped the C bodies of rt_array_*_native / rt_map_*_native / rt_str_*_native (always extern) and gates the C arena behind #ifdef HEXA_RT_ALLOC_NATIVE (runtime_core.c:1450). So: (a) omitting array/map/alloc/rt_hi seed .o = `undefined reference to rt_map_get_native / hexa_arena_alloc`; (b) linking the alloc seed WITHOUT -DHEXA_RT_ALLOC_NATIVE=1 = `multiple definition of hexa_arena_*` (both the C arena and the seed define them). Recurrences: (1) build_native_linux_x86_64 gcc line, (2) shipped v0.262.0 runtime.a missing array_core_native.o (bricked hexa run/build of every x86_64 program), (3) THIS build_hexa_cli driver+module_loader link. Fix = the canonical set + the alloc macro, the build_aprime way.",
+        "source": "tool/build_hexa_cli.hexa"
+      },
+      {
+        "id": "build-precompile-exec-bigout-brokenpipe",
+        "state": "ossified",
+        "value": "대형 entry(atlas_cli 등)의 2>&1 컴파일 출력(@phase 미구현 attr + redefined warn 수백줄)을 exec() 가 통째 메모리 캡처하다 파이프 버퍼 한계 → echo __BRC__ write-error Broken-pipe → rc 파싱 실패 → FAIL (faithful-nobaseline darwin release_package RED). mac 은 터미널 출력이라 무관(재현 NEGATIVE).",
+        "threshold": "컴파일 출력을 로그파일로 리다이렉트하고 exec 는 __BRC__ rc 만 캡처 (거대 출력과 무관)",
+        "source": "tool/build_precompile.hexa"
+      },
+      {
+        "id": "RUNPOD_APT_DEPS_LIBBLIS",
+        "state": "ossified",
+        "value": "apt-get install build-essential clang lld git curl ca-certificates libblis-dev — libblis+clang required for hexa self-host build",
+        "source": "tool/deploy_h100.hexa"
+      },
+      {
+        "id": "RUNPOD_SSH_SEMICOLON_CHAIN",
+        "state": "ossified",
+        "value": "SSH with semicolon-chained commands exits 255. Use bash -c 'cmd1 && cmd2' or separate SSH calls",
+        "source": "tool/deploy_h100.hexa"
+      }
+    ]
+  }
 }
