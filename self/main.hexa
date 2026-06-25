@@ -5638,6 +5638,10 @@ fn cmd_gpu_status() {
         println("  cuda_device_count: " + str(ndev))
         println("    note: stock release `hexa` is CPU-only (subsystem wired, CUDA runtime")
         println("          not compiled in). cuda_available()==1 needs the `-cuda` asset.")
+        println("    ENABLE GPU: on a CUDA host run  HEXA_CUDA=1 sh install.sh")
+        println("          (auto-installs the -cuda asset; install.sh prefer_cuda() also")
+        println("           auto-detects nvidia-smi+libcudart → cuda when HEXA_CUDA unset,")
+        println("           pip-install-torch style). Verify: hexa run 'fn main(){print(cuda_available())}' → 1")
     }
     println("")
     println("OWN-KERNEL POLARITY  (native-canonical-default; cuBLAS = opt-in constraint)")
