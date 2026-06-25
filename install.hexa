@@ -121,20 +121,23 @@ fn install_hexa() {
     // resolves its sidecar interpreter via dirname(argv[0]); a bare
     // PATH-resolved "hexa" (argv[0] has no slash) would misresolve to cwd.
     // Canonical on-disk name = `hexad` (AMFI burning-matcher treadmill
-    // terminal; cli_wrappers.hexa:38, tool/bin/build.hexa:119). `hexad` and
-    // `hexa.real` are BOTH real files: hexad must be real for the AMFI escape
-    // (AMFI sees the resolved real-file name), and hexa.real must be real so
-    // tool/promote_selfhost.sh's `[ -L hexa.real ]` flip-detection reports a
-    // fresh install as NOT flipped. `hxv2` (no such invariant) is a compat
-    // symlink → hexad. Mirrors install.sh.
+    // terminal; cli_wrappers.hexa:38, tool/bin/build.hexa:119). `hexad` is the
+    // single canonical real file: the shim execs it DIRECTLY (matching the
+    // cli_wrappers.hexa SSOT), it must be real for the AMFI escape (AMFI sees
+    // the resolved real-file name), AND it is the flip sentinel — an unflipped
+    // install has hexad a plain file so tool/promote_selfhost.sh's
+    // `[ -L hexad ]` flip-detection reports NOT-flipped (a tier2 flip replaces
+    // hexad with a symlink → hx-selfhost-cli; backup hexad.pre-selfhost.<ts>).
+    // `hexa.real` and `hxv2` are retired-name compat symlinks → hexad (every
+    // legacy consumer resolves losslessly). Mirrors install.sh.
     exec("install -m 0755 '" + src + "/hexa' '" + hx_bin + "/hexad'")
-    exec("install -m 0755 '" + src + "/hexa' '" + hx_bin + "/hexa.real'")
+    exec("ln -sf hexad '" + hx_bin + "/hexa.real'")
     exec("ln -sf hexad '" + hx_bin + "/hxv2'")
     write_file(hx_bin + "/hexa",
-        "#!/bin/bash\nexec \"" + hx_bin + "/hexa.real\" \"$@\"\n")
+        "#!/bin/bash\nexec \"" + hx_bin + "/hexad\" \"$@\"\n")
     exec("chmod 0755 '" + hx_bin + "/hexa'")
     // Copy build/ verbatim so any sidecar the release ships
-    // (hexa_stage0 / hexa_interp / future) resolves next to hexa.real.
+    // (hexa_stage0 / hexa_interp / future) resolves next to hexad.
     if file_exists(src + "/build") {
         exec("mkdir -p '" + hx_bin + "/build'")
         exec("cp -R '" + src + "/build/.' '" + hx_bin + "/build/'")

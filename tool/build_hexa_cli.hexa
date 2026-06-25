@@ -239,24 +239,24 @@ fn _install_driver(repo_root: string, uname: string) {
     _install_runtime_o(repo_root, uname)
     // Canonical on-disk name = `hexad` (AMFI burning-matcher treadmill
     // terminal: hexadrv → hexa.real → hxv2 → hexad · cli_wrappers.hexa:38,
-    // tool/bin/build.hexa:119, install.sh). Deploy the REAL driver to both
-    // `hexad` (canonical; the name the shim execs and AMFI sees) and
-    // `hexa.real` (kept a real file so promote_selfhost.sh's
-    // `[ -L hexa.real ]` flip-detection reports NOT-flipped). The retired
-    // `hxv2` (no such invariant) is a compat symlink → hexad. Every consumer
-    // of those PATHS (cli_wrappers shim, promote_selfhost.sh, hx-selfhost-cli
-    // backup-convention, selfhost_shim_integrity gate) resolves losslessly.
-    // main-worktree: hexad + hexa.real (real) + hxv2 (symlink → hexad)
+    // tool/bin/build.hexa:119, install.sh). Deploy the REAL driver to the
+    // single canonical `hexad` (the name the shim execs, AMFI sees, AND the
+    // flip sentinel — promote_selfhost.sh keys on `[ -L hexad ]`). The retired
+    // `hexa.real`/`hxv2` are compat symlinks → hexad. Every consumer of those
+    // PATHS (cli_wrappers shim, promote_selfhost.sh, hx-selfhost-cli
+    // backup-convention, selfhost_shim_integrity gate, firmware fixtures)
+    // resolves losslessly through the symlink.
+    // main-worktree: hexad (real) + hexa.real,hxv2 (symlinks → hexad)
     _deploy_one(driver_out, repo_root + "/hexad",     uname)
-    _deploy_one(driver_out, repo_root + "/hexa.real", uname)
+    let _ = exec("ln -sf hexad " + _shq(repo_root + "/hexa.real"))
     let _ = exec("ln -sf hexad " + _shq(repo_root + "/hxv2"))
-    // ~/.hx/bin: hexad + hexa.real (real) + hxv2 (symlink → hexad)
+    // ~/.hx/bin: hexad (real) + hexa.real,hxv2 (symlinks → hexad)
     let home = _home()
     if home != "" {
         let hxbin = home + "/.hx/bin"
         let _ = exec("mkdir -p " + _shq(hxbin))
         _deploy_one(driver_out, hxbin + "/hexad",     uname)
-        _deploy_one(driver_out, hxbin + "/hexa.real", uname)
+        let _lr = exec("ln -sf hexad " + _shq(hxbin + "/hexa.real"))
         let _l1 = exec("ln -sf hexad " + _shq(hxbin + "/hxv2"))
     } else {
         eprintln("  warn: $HOME unresolved — skipped ~/.hx/bin targets")
