@@ -33,7 +33,10 @@ pub fn gcd(a, b) -> int {
 }
 
 pub fn lcm(a, b) -> int {
-    if a == 0 || b == 0 { 0 } else { abs(a * b) / gcd(a, b) }
+    // divide BEFORE multiply so the intermediate never exceeds the result:
+    // abs(a*b) overflows i64 when a*b > 2^63-1 even if the true lcm fits
+    // (e.g. lcm(6e9, 9e9) wrapped negative). abs(a)/gcd is exact (gcd | a).
+    if a == 0 || b == 0 { 0 } else { abs(a) / gcd(a, b) * abs(b) }
 }
 
 pub fn pow(base, exp) -> int {
