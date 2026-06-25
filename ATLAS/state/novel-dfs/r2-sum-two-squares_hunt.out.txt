@@ -1,0 +1,84 @@
+=== r₂ SUM-OF-TWO-SQUARES HUNT (r4 · NON-MULTIPLICATIVE) · N=20000 ===
+r₂(n)=#{(a,b)∈ℤ²:a²+b²=n} brute-force exact · ∀n∈[1,20000] integer-exact
+
+SANITY GATES (rediscover classical = proof engine works on new fn class):
+  [PASS] G1 Jacobi  r₂=4(d₁−d₃)                         
+  [PASS] G2 zero ⟺ p≡3(4)^odd                           
+  [PASS] G3a r₂ NON-multiplicative (witness exists)     
+  [PASS] G3b (r₂/4) multiplicative on coprime support   
+  [PASS] G4 r₂(n)≡0 (mod 4)                             
+
+  G3 non-mult witness: r₂(2·5)=r₂(10)=8 ≠ r₂(2)·r₂(5)=4·8=32
+
+S2 · r₂(n) = 4·Σ_{d|n} f(d) — which kernel f works? (χ₄ should; others fail)
+  χ₄ (≡1→+1,≡3→−1,even→0)        : UNIVERSAL-in-[1,N]
+  1 (constant) → 4τ              : FAILS@n=2
+  id → 4σ                        : FAILS@n=2
+  μ (Möbius)                     : FAILS@n=2
+  λ (Liouville)                  : FAILS@n=2
+  [d odd] (1 if odd)             : FAILS@n=3
+
+S1/C · direct comparisons & NEGATIVE CONTROLS (controls MUST fail):
+  C1  r₂=4·τ                 : FAILS@n=2
+  C3  r₂=4·d₁                : FAILS@n=3
+  C4  r₂=8·(d₁−d₃)           : FAILS@n=1
+      r₂=4·(d₁−d₃) [G1]      : UNIVERSAL-in-[1,N]
+      r₂=4·d₁−4·d₃           : UNIVERSAL-in-[1,N]
+
+  C2  r₂ multiplicative      : FAILS (non-mult, witness above)
+
+S3 · Gauss circle problem — Σ_{k=0}^{n} r₂(k) ~ π·n (average order, asymptotic):
+  M=   100  Σr₂(0..M)=      317  /M = 3.170000  (→ π≈3.141593)
+  M=  1000  Σr₂(0..M)=     3149  /M = 3.149000  (→ π≈3.141593)
+  M=  5000  Σr₂(0..M)=    15705  /M = 3.141000  (→ π≈3.141593)
+  M= 10000  Σr₂(0..M)=    31417  /M = 3.141700  (→ π≈3.141593)
+  M= 20000  Σr₂(0..M)=    62845  /M = 3.142250  (→ π≈3.141593)
+  [asymptotic average order — NOT folded as an exact ∀n identity]
+
+S6 · mod-m congruence search: r₂(n) ≡ const (mod m) on n≡r (mod M)?
+  total non-G4 'universal' congruence classes flagged: 54
+  → reduced to Mechanism A (Gauss zero-criterion, r₂≡0 identically): 45
+  → reduced to Mechanism B (classical mod-8 refinement, no sq/2·sq): 9
+  → GENUINELY NOVEL (unreduced): 0
+  [classical mod-8 refinement r₂≡4(mod8)⟺n=sq or 2·sq verified ∀n∈[1,N]: HOLDS]
+  trivial-from-G4 classes (r₂≡0 mod 2/4, expected): 154
+
+S5 · special-class local identities (local, NOT ∀n — recovering known forms):
+  r₂(2^a)=4 ∀a (2^a≤N)            : HOLDS
+  r₂(p)=8 for prime p≡1(4)        : HOLDS
+  r₂(p)=0 for prime p≡3(4)        : HOLDS
+  r₂(p^k)=4(k+1) for p≡1(4)       : HOLDS
+
+HAND-CHECKS (explicit r₂ enumeration vs Jacobi 4(d₁−d₃)):
+  n=  1: r₂= 4  pairs=[(-1, 0), (0, -1), (0, 1), (1, 0)]
+         divisors=[1]  d₁=1 d₃=0  4(d₁−d₃)=4  OK
+  n=  5: r₂= 8  pairs=[(-2, -1), (-2, 1), (-1, -2), (-1, 2), (1, -2), (1, 2), (2, -1), (2, 1)]
+         divisors=[1, 5]  d₁=2 d₃=0  4(d₁−d₃)=8  OK
+  n= 25: r₂=12  pairs=[(-5, 0), (-4, -3), (-4, 3), (-3, -4), (-3, 4), (0, -5), (0, 5), (3, -4), (3, 4), (4, -3), (4, 3), (5, 0)]
+         divisors=[1, 5, 25]  d₁=3 d₃=0  4(d₁−d₃)=12  OK
+  n= 65: r₂=16  pairs=[(-8, -1), (-8, 1), (-7, -4), (-7, 4), (-4, -7), (-4, 7), (-1, -8), (-1, 8), (1, -8), (1, 8), (4, -7), (4, 7), (7, -4), (7, 4), (8, -1), (8, 1)]
+         divisors=[1, 13, 5, 65]  d₁=4 d₃=0  4(d₁−d₃)=16  OK
+  n=  9: r₂= 4  pairs=[(-3, 0), (0, -3), (0, 3), (3, 0)]
+         divisors=[1, 3, 9]  d₁=2 d₃=1  4(d₁−d₃)=4  OK
+  n= 21: r₂= 0  pairs=[]
+         divisors=[1, 7, 3, 21]  d₁=2 d₃=2  4(d₁−d₃)=0  OK
+
+======================================================================
+VERDICT
+======================================================================
+sanity gates: ALL PASS
+  (G1 Jacobi, G2 zero-criterion, G3 non-mult+r₂/4-mult, G4 r₂≡0 mod4)
+
+REDISCOVERED-CLASSICAL (cite — grounding, NOT discovery):
+  · Jacobi (1834): r₂(n)=4·Σ_{d|n}χ₄(d)=4(d₁−d₃)  [G1; A004018]
+  · Gauss zero-criterion: r₂(n)>0 ⟺ no p≡3(4) to odd power  [G2]
+  · r₂/4 multiplicative (r₂ itself not)  [G3]
+  · r₂(p)=8 (p≡1·4), r₂(p)=0 (p≡3·4), r₂(2^a)=4, r₂(p^k)=4(k+1)  [S5]
+  · Gauss circle: Σr₂(k)~πn average order  [S3, asymptotic not ∀n]
+  · mod-8 refinement: r₂(n)≡4(mod8) ⟺ n=square or 2·square (else ≡0)  [S6 Jacobi cor.]
+
+NOVEL ∀n-identity candidates (beyond Jacobi/Gauss classical catalog): 0
+  (none — EXPECTED. r₂ is among the most-studied fns; Jacobi/Gauss closed it.)
+
+NOVEL_COUNT=0
+GATES_ALL_PASS=True
