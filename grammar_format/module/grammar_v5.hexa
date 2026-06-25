@@ -1,4 +1,5 @@
 #!hexa strict
+// @canonical-ok intentional parallel format-version — grammar_v1..v5 are all registered in grammar_format/core (grammar_format_main) as distinct ACTIVE format versions, not history-in-filename (canonical-naming exempt; see module/README.ai.md).
 // hexa-lang/grammar_format/module/grammar_v5.hexa — Phase epsilon (future) STUB-FUTURE
 //
 // @tool(slug="grammar_v5", desc="Future placeholder — phase epsilon TBD")
