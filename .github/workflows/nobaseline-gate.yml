@@ -433,21 +433,28 @@ jobs:
           members="$(ar t build/runtime.a)"
           syms="$(nm build/runtime.a 2>/dev/null || true)"
           missing_member=0; undef_sym=0; ok_member=0; ok_sym=0
+          # NOTE: match via here-string (<<<), NOT `printf … | grep -q`. Under
+          # `set -o pipefail`, grep -q exits on the FIRST match and closes the
+          # pipe while printf is still writing the large $syms blob → SIGPIPE →
+          # printf exits 141 → pipefail makes the whole pipeline non-zero → the
+          # `if` flips to the else branch and a DEFINED symbol is mis-reported as
+          # "NOT DEFINED" (race on symbol position in the nm stream — same broken
+          # -pipe class as #3833). A here-string has no writer process to SIGPIPE.
           for s in close read strlen memcpy memset memcmp strcmp strcpy strncmp strncpy strcat strchr; do
-            if printf '%s\n' "$members" | grep -qx "hxlcl_${s}_native.o"; then
+            if grep -qx "hxlcl_${s}_native.o" <<<"$members"; then
               ok_member=$((ok_member+1))
             else
               echo "  MISSING MEMBER: hxlcl_${s}_native.o"; missing_member=$((missing_member+1))
             fi
             # Mach-O external text def shows as ` T _hxlcl_<s>`.
-            if printf '%s\n' "$syms" | grep -qE " T _hxlcl_${s}\$"; then
+            if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
               ok_sym=$((ok_sym+1))
             else
               echo "  SYMBOL NOT DEFINED (T): _hxlcl_${s}"; undef_sym=$((undef_sym+1))
             fi
           done
           echo "(3) members ok=$ok_member/12 missing=$missing_member ; defined syms ok=$ok_sym/12 undef=$undef_sym"
-          if printf '%s\n' "$members" | grep -qx "hxlcl_errno_provider.o"; then
+          if grep -qx "hxlcl_errno_provider.o" <<<"$members"; then
             echo "(3) errno provider member present (close/read external _hxlcl_errno satisfied)"
           else
             echo "(3) FAIL: hxlcl_errno_provider.o missing (close/read would be undefined at consumer link)"; exit 1
