@@ -1355,20 +1355,12 @@ fn emit_runtime_cuda_c() -> str {
             "#else\n" +
             "    }\n" +
             "#endif\n" +
-            "    if (_forge_sync() != 0) return -1;\n" +
-            "    cudaError_t er = cudaMemcpy(ce->buf, C_dev,\n" +
-            "                                (size_t)(batch * M * N) * sizeof(double),\n" +
-            "                                cudaMemcpyDeviceToHost);\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] cudaMemcpy C_batched D2H failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
-            "    ce->d_buf      = (void*)C_dev;\n" +
-            "    ce->loc        = FARR_MIRRORED;\n" +
-            "    ce->dirty_host = 0;\n" +
-            "    ce->dirty_dev  = 0;\n" +
-            "    return 0;\n" +
+            "    /* RFC056 §6.4 — route the batched-GEMM output through the disposition\n" +
+            "     * handler instead of a hardcoded D2H. QA-found #3923 sibling holdout:\n" +
+            "     * matmul_gpu was fixed but the batched/transpose-N siblings still\n" +
+            "     * hardcoded the copy. DEVICE_KEEP keeps C device-resident; default\n" +
+            "     * FORGE_OUT_HOST_NOW = the prior D2H (byte-identical). */\n" +
+            "    return _d2h_out(c_id, batch * M * N);\n" +
             "}\n" +
             "\n" +
             "/* HEXA-0POD OP-2 (BENCH-10 transpose-elimination) — C[K,N] = A[M,K]^T @ B[M,N]\n" +
@@ -1471,20 +1463,14 @@ fn emit_runtime_cuda_c() -> str {
             "#else\n" +
             "    }  /* NO_CUBLAS: close the _forge_own_gemm_on() own-branch (cuBLAS else removed) */\n" +
             "#endif\n" +
-            "    if (_forge_sync() != 0) return -1;\n" +
-            "    cudaError_t er = cudaMemcpy(ce->buf, C_dev,\n" +
-            "                                (size_t)(K * N) * sizeof(double),\n" +
-            "                                cudaMemcpyDeviceToHost);\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] cudaMemcpy C_t D2H failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
-            "    ce->d_buf      = (void*)C_dev;\n" +
-            "    ce->loc        = FARR_MIRRORED;\n" +
-            "    ce->dirty_host = 0;\n" +
-            "    ce->dirty_dev  = 0;\n" +
-            "    return 0;\n" +
+            "    /* RFC056 §6.4 — route the transpose-N GEMM output through the\n" +
+            "     * disposition handler. QA-found #3923 sibling holdout, and the\n" +
+            "     * reachable one: forge_dispatch_matmul_t owns conv1d_bwd dW under\n" +
+            "     * HEXA_BWD_TRANSPOSE_ELIM, so under FORGE_OUT_DEVICE_KEEP the dW\n" +
+            "     * output must stay device-resident (loc=FARR_DEVICE, dirty_dev=1)\n" +
+            "     * rather than be flagged host-authoritative. Default HOST_NOW = the\n" +
+            "     * prior D2H (byte-identical). */\n" +
+            "    return _d2h_out(c_id, K * N);\n" +
             "}\n" +
             "\n" +
             "/* ════════════════════════════════════════════════════════════════════\n" +
