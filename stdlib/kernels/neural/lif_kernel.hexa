@@ -181,6 +181,8 @@ pub fn firing_rate(i_drive: float, v_thr: float, v_reset: float,
 /// spike-time resolution (same as brian2). Default brian2 dt = 1e-4 s.
 pub fn simulate(tau_s: float, v_thr: float, v_reset: float,
                 i_drive: float, sim_time_s: float, dt_s: float) -> [float] {
+    // dt_s<=0 → sim_time_s/dt_s = Inf/NaN → n_steps garbage (huge / INT_MIN loop).
+    if dt_s <= 0.0 { return [0.0, 0.0, 0.0, 0.0, v_reset] }
     let decay = decay_factor(dt_s, tau_s)
     let n_steps = to_int(sim_time_s / dt_s + 0.5)
 
