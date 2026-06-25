@@ -447,8 +447,22 @@ int   hxlcl_setenv(const char *n, const char *v, int o){ return setenv(n, v, o);
 int   hxlcl_atexit(void (*fn)(void))                  { return atexit(fn); }
 int   hxlcl_fork(void)                                { return (int)fork(); }
 int   hxlcl_execvp(const char *file, char *const argv[]) { return execvp(file, argv); }
+/* SELFEMIT (HEXA_RT_SELFEMIT_WAITPID, default OFF · RFC061 §M8 family r9): hxlcl_waitpid
+ * is supplied by the hexa-NATIVE self-emitted .o (test/native_build/emit_hxlcl_waitpid_o.hexa
+ * — class-C `svc #0x80` SYS_wait4 trap + carry-flag errno store, byte-identical to
+ * self/codegen/runtime_arm64.hexa::rt_waitpid, refs the shared `_hxlcl_errno`). DEFAULT
+ * (macro undefined) keeps this libc delegate → shim.o byte-identical. */
+#ifndef HEXA_RT_SELFEMIT_WAITPID
 int   hxlcl_waitpid(int pid, int *status, int options){ return (int)waitpid((pid_t)pid, status, options); }
+#endif
+/* SELFEMIT (HEXA_RT_SELFEMIT_DUP2, default OFF · RFC061 §M8 family r9): hxlcl_dup2 is
+ * supplied by the hexa-NATIVE self-emitted .o (test/native_build/emit_hxlcl_dup2_o.hexa
+ * — class-C `svc #0x80` SYS_dup2 trap + carry-flag errno store, byte-identical to
+ * self/codegen/runtime_arm64.hexa::rt_dup2, refs the shared `_hxlcl_errno`). DEFAULT
+ * (macro undefined) keeps this libc delegate → shim.o byte-identical. */
+#ifndef HEXA_RT_SELFEMIT_DUP2
 int   hxlcl_dup2(int o, int n)                        { return dup2(o, n); }
+#endif
 int   hxlcl_pipe(int fds[2])                          { return pipe(fds); }
 void *hxlcl_signal(int signum, void *handler)         { return (void *)signal(signum, (void (*)(int))handler); }
 
@@ -478,10 +492,31 @@ long   hxlcl_read(int fd, void *buf, unsigned long n) { return (long)read(fd, bu
 #ifndef HEXA_RT_SELFEMIT_CLOSE
 int    hxlcl_close(int fd)                            { return close(fd); }
 #endif
+/* SELFEMIT (HEXA_RT_SELFEMIT_LSEEK, default OFF · RFC061 §M8 family r9): hxlcl_lseek is
+ * supplied by the hexa-NATIVE self-emitted .o (test/native_build/emit_hxlcl_lseek_o.hexa
+ * — class-C `svc #0x80` SYS_lseek trap + carry-flag errno store, byte-identical to
+ * self/codegen/runtime_arm64.hexa::rt_lseek, refs the shared `_hxlcl_errno`). DEFAULT
+ * (macro undefined) keeps this libc delegate → shim.o byte-identical. */
+#ifndef HEXA_RT_SELFEMIT_LSEEK
 long   hxlcl_lseek(int fd, long off, int whence)      { return (long)lseek(fd, (off_t)off, whence); }
+#endif
 int    hxlcl_fcntl(int fd, int cmd, long arg)         { return fcntl(fd, cmd, arg); }
+/* SELFEMIT (HEXA_RT_SELFEMIT_STAT, default OFF · RFC061 §M8 family r9): hxlcl_stat is
+ * supplied by the hexa-NATIVE self-emitted .o (test/native_build/emit_hxlcl_stat_o.hexa
+ * — class-C `svc #0x80` SYS_stat trap + carry-flag errno store, byte-identical to
+ * self/codegen/runtime_arm64.hexa::rt_stat, refs the shared `_hxlcl_errno`). DEFAULT
+ * (macro undefined) keeps this libc delegate → shim.o byte-identical. */
+#ifndef HEXA_RT_SELFEMIT_STAT
 int    hxlcl_stat(const char *path, void *buf)        { return stat(path, (struct stat *)buf); }
+#endif
+/* SELFEMIT (HEXA_RT_SELFEMIT_MKDIR, default OFF · RFC061 §M8 family r9): hxlcl_mkdir is
+ * supplied by the hexa-NATIVE self-emitted .o (test/native_build/emit_hxlcl_mkdir_o.hexa
+ * — class-C `svc #0x80` SYS_mkdir trap + carry-flag errno store, byte-identical to
+ * self/codegen/runtime_arm64.hexa::rt_mkdir, refs the shared `_hxlcl_errno`). DEFAULT
+ * (macro undefined) keeps this libc delegate → shim.o byte-identical. */
+#ifndef HEXA_RT_SELFEMIT_MKDIR
 int    hxlcl_mkdir(const char *path, int mode)        { return mkdir(path, (mode_t)mode); }
+#endif
 int    hxlcl_poll(void *fds, unsigned int nfds, int timeout) { return poll((struct pollfd *)fds, (nfds_t)nfds, timeout); }
 void  *hxlcl_popen(const char *cmd, const char *mode) { return (void *)popen(cmd, mode); }
 int    hxlcl_pclose(void *stream)                     { return pclose((FILE *)stream); }

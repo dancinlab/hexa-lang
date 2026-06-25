@@ -357,7 +357,7 @@ jobs:
   # whether the §M8 HEXA_RT_SELFEMIT native-emit runtime.a actually live-links a
   # real consumer binary, end-to-end.
   #
-  # WHY this job exists: the §M8 ladder (r2..r6) has landed 12/55 libc-substrate
+  # WHY this job exists: the §M8 ladder (r2..r9) has landed 17/55 libc-substrate
   # symbols as hexa-NATIVE self-emitted .o members of build/runtime.a —
   # hxlcl_{close,read,strlen,memcpy,memset,memcmp,strcmp,strcpy,strncmp,strncpy,
   # strcat,strchr}. Until now the only proof was the script's internal `ld -r`
@@ -402,13 +402,13 @@ jobs:
 
       # ── (2) Rebuild build/runtime.a WITH the §M8 SELFEMIT native members.
       #    SELFEMIT is nested INSIDE the HEXA_RT_MULTIOBJ packaging branch — BOTH
-      #    must be 1. With HEXA_SELFEMIT_BIN=./hexa it runs the 12
+      #    must be 1. With HEXA_SELFEMIT_BIN=./hexa it runs the 17
       #    test/native_build/emit_hxlcl_*_o.hexa fixtures to emit native .o members,
       #    drops the matching libc-shim defs (-DHEXA_RT_SELFEMIT_<SYM>), adds the
       #    1-cell errno provider for close/read, and runs its OWN `ld -r` multidef
       #    safety gate (FATAL on any duplicate def). Seeds present (restored in
       #    step 1) → build_runtime_a_from_source path (no edge-pull / GH_TOKEN).
-      - name: (2) Rebuild runtime.a — HEXA_RT_SELFEMIT=1 (12 native members)
+      - name: (2) Rebuild runtime.a — HEXA_RT_SELFEMIT=1 (17 native members)
         shell: bash
         env:
           TARGET: darwin-arm64
@@ -424,9 +424,9 @@ jobs:
           echo "── build/runtime.a members ──"
           ar t build/runtime.a
 
-      # ── (3) Assert the 12 native members + errno provider landed, and the
+      # ── (3) Assert the 17 native members + errno provider landed, and the
       #    self-emitted hxlcl_* symbols are DEFINED (T) — not the dropped shim.
-      - name: (3) Assert 12 SELFEMIT members present + symbols defined
+      - name: (3) Assert 17 SELFEMIT members present + symbols defined
         shell: bash
         run: |
           set -euo pipefail
@@ -440,7 +440,7 @@ jobs:
           # `if` flips to the else branch and a DEFINED symbol is mis-reported as
           # "NOT DEFINED" (race on symbol position in the nm stream — same broken
           # -pipe class as #3833). A here-string has no writer process to SIGPIPE.
-          for s in close read strlen memcpy memset memcmp strcmp strcpy strncmp strncpy strcat strchr; do
+          for s in close read strlen memcpy memset memcmp strcmp strcpy strncmp strncpy strcat strchr lseek dup2 mkdir waitpid stat; do
             if grep -qx "hxlcl_${s}_native.o" <<<"$members"; then
               ok_member=$((ok_member+1))
             else
@@ -453,7 +453,7 @@ jobs:
               echo "  SYMBOL NOT DEFINED (T): _hxlcl_${s}"; undef_sym=$((undef_sym+1))
             fi
           done
-          echo "(3) members ok=$ok_member/12 missing=$missing_member ; defined syms ok=$ok_sym/12 undef=$undef_sym"
+          echo "(3) members ok=$ok_member/17 missing=$missing_member ; defined syms ok=$ok_sym/17 undef=$undef_sym"
           if grep -qx "hxlcl_errno_provider.o" <<<"$members"; then
             echo "(3) errno provider member present (close/read external _hxlcl_errno satisfied)"
           else
@@ -474,7 +474,7 @@ jobs:
       # ── (5) CONSUMER LIVE-LINK SMOKE — the missing surface. Build exit42 + hello
       #    with ./hexa linking the SELFEMIT runtime.a (HEXA_PREBUILT_RUNTIME), then
       #    RUN. No --target → the prebuilt-runtime link path engages. A clean
-      #    build+run is the undefined==0 + behavior proof for the 12 native members.
+      #    build+run is the undefined==0 + behavior proof for the 17 native members.
       - name: (5) exit42 + hello live-link smoke (SELFEMIT runtime.a alone)
         shell: bash
         env:
@@ -507,4 +507,4 @@ jobs:
           [ "$e42rc" = "42" ] || { echo "FAIL: exit42 rc != 42"; exit 1; }
           [ "$hello_out" = "hello" ] || { echo "FAIL: hello output != hello"; exit 1; }
           [ "$undef" = "0" ] || { echo "FAIL: $undef undefined hxlcl_* at consumer link"; exit 1; }
-          echo "SELFEMIT live-link smoke GREEN — 12/55 §M8 members link + run (darwin-arm64)"
+          echo "SELFEMIT live-link smoke GREEN — 17/55 §M8 members link + run (darwin-arm64)"
