@@ -280,19 +280,30 @@ echo "[6] SHIPPING SMOKE (drop-ON compiler emits exit42 + hello)…"
 # the standard runtime, not the drop-ON one — drop-ON is about the COMPILER's
 # own runtime, the test program uses the normal runtime path).
 # NOTE (rfc061 dropon-coherence): this plain (no-cluster) standalone compile of
-# self/runtime.c hits a PRE-EXISTING emitter dual-definition — runtime.c defines
-# hexa_float_to_bits/bits_to_float weak (unconditional) AND runtime_core.c's
-# `#else` arm (taken only when HEXA_RT_CORE_LEAF_NATIVE is OFF) defines them
-# non-weak → same-TU redefinition. Verified present on a CLEAN regen with NO drop
-# flags (orthogonal to this round's eqtruthy fix). The shipping single-TU build
-# avoids it by always setting HEXA_RT_CORE_LEAF_NATIVE (extern arm); compiling
-# rt.o WITH the cluster flags instead trades the compile-collision for an
-# undefined-rt_* smoke-link (the leaf/rt_hi seed providers are not in $SEEDS here).
-# Either way the smoke RUN is unreachable until that emitter dual-def is resolved
-# — a SEPARATE harness item. The PRIMARY witnesses (drop-ON link clean + exit42
-# EMIT RC=0 + gen3==gen4 byte-id map-heavy) below do not depend on rt.o; leave the
-# plain compile (smoke RUN reported as LINK FAIL, non-fatal) and do not mask it.
-$CC -c -O2 $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -I self -I . self/runtime.c -o "$OUT/rt.o" 2>/dev/null
+# self/runtime.c hits a PRE-EXISTING emitter dual-definition — the emitter-regen
+# runtime.c defines hexa_float_to_bits/bits_to_float/float_to_bits/bits_to_float
+# weak (unconditional, runtime_emit_full.hexa) AND the emitter-regen runtime_core.c's
+# `#else` arm (taken when HEXA_RT_CORE_LEAF_NATIVE is OFF, runtime_core_emit.hexa)
+# defines them NON-weak → same-TU redefinition (the weak attribute does NOT permit
+# a second body in one TU; it only resolves across TUs at link).
+#
+# RESOLVED (rfc061 default-on-flip, measure-harness LOCKSTEP): build the smoke rt.o
+# with the SAME $CLUSTER_DEFS the drop-ON SEEDS were built with — exactly how
+# aprime_cc_dropon itself was linked above. Two effects, both correct:
+#   (1) $CLUSTER_DEFS includes -DHEXA_RT_CORE_LEAF_NATIVE=1, so runtime_core.c takes
+#       its `extern` arm for the f64<->bits primitives → the runtime.c weak defs are
+#       the SOLE bodies → the same-TU dual-definition DISSOLVES (no redefinition).
+#   (2) the leaf/arith/map/… bodies runtime_core.c externs out under those macros are
+#       supplied by $SEEDS (rtcore_leaf_native.o etc.) — the SAME self-consistent
+#       rt.o+seeds object set the drop-ON compiler was built from, so the emitted
+#       test program links clean (no undefined-rt_* and no hexa_arena_* multidef).
+# byteeq-NEUTRAL: cc-genN.o link build_selfhost's OWN flag-free rt.o, never this
+# harness rt.o; this only un-blocks the smoke RUN witness below (frozen untouched —
+# self/runtime.c is a gitignored regen seed). The drop-ON-compiler-only
+# STRBUF_ARENA descriptor flag (#3882 arena-coherence boundary) is STRIPPED here —
+# the EMITTED test program links the STANDARD runtime, which uses heap descriptors.
+SMOKE_RT_DEFS="$(printf '%s' "$CLUSTER_DEFS" | sed 's/-DHEXA_ZEROC_RT_CORE_STRBUF_ARENA=1//')"
+$CC -c -O2 $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs $SMOKE_RT_DEFS -I self -I . self/runtime.c -o "$OUT/rt.o" 2>"$OUT/rt.o.err" || { echo "  [smoke] rt.o compile FAIL:"; grep -iE 'redefinition|multiple|error' "$OUT/rt.o.err" | head -3 | sed 's/^/    /'; }
 # exit42
 printf 'fn main() {\n  exit(6 * 7)\n}\n' > "$OUT/exit42.hexa"
 "$OUT/aprime_cc_dropon" _drv.hexa --emit=asm --target="$SMOKE_TARGET" --ignore-errors -o "$OUT/exit42.s" "$OUT/exit42.hexa" >"$OUT/e42.emit.log" 2>&1
