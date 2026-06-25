@@ -58,9 +58,14 @@ pub fn pearson_r(xs: int, ys: int, n: int) -> float {
         dy2 = dy2 + dy * dy
         j = j + 1
     }
-    let denom = sqrt(dx2 * dy2)
-    if denom <= 0.0 { return 0.0 }
-    return num / denom
+    // take each sqrt separately: the product dx2*dy2 overflows to +inf for large
+    // magnitudes (e.g. ±1e80 → dx2*dy2 ≈ 4e320 > DBL_MAX), and sqrt(inf)=inf is
+    // not <= 0 so the guard misses → a PERFECTLY correlated pair wrongly returns
+    // num/inf = 0. scipy normalizes by sqrt(dx2)·sqrt(dy2), which stays finite.
+    let sdx = sqrt(dx2)
+    let sdy = sqrt(dy2)
+    if sdx <= 0.0 || sdy <= 0.0 { return 0.0 }
+    return num / (sdx * sdy)
 }
 
 // ── average rank of vals[idx] within vals[0..n-1] (1-based, ties → mean) ───
