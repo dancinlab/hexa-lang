@@ -104,6 +104,7 @@ use "stdlib/core/math/float"
 /// `decay = exp(-dt/tau)`. Hoisted to a helper so callers that loop
 /// over a fixed (dt, tau) compute it once.
 pub fn decay_factor(dt_s: float, tau_s: float) -> float {
+    if tau_s <= 0.0 { return 0.0 }   // τ≤0 → -dt/τ = ±Inf → exp garbage
     return exp(-dt_s / tau_s)
 }
 
