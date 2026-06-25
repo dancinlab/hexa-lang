@@ -403,8 +403,25 @@ size_t hxlcl_strftime(char *buf, size_t cap, const char *fmt, void *tm) { return
 int    hxlcl_getrusage(int who, void *usage)          { return getrusage(who, (struct rusage *)usage); }
 
 /* ── exceptions (setjmp/longjmp) ─────────────────────────────────────────── */
+/* OWNER POLARITY (RFC061 #29 multi-object flip · darwin multidef fix):
+ * On darwin-arm64 the FROZEN runtime.c blob already DEFINES `_hxlcl_setjmp` /
+ * `_hxlcl_longjmp` with EXTERNAL linkage — the hand-written naked-asm pair
+ * (runtime.c tail, cycle 86) that compiled programs' try-blocks bind via
+ * `bl _hxlcl_setjmp` (codegen arm64_darwin.hexa). Under the include-drop
+ * multi-object archive that global pair lives in runtime.o, so the sibling
+ * shim must NOT re-define it (ld would see 2 duplicate global symbols and the
+ * Case-B multidef gate FATALs). On Linux runtime.c uses `#define hxlcl_setjmp`
+ * (a libc-setjmp call-site macro) + a `static` hxlcl_longjmp — neither is an
+ * externally-linkable symbol in runtime.o — so the shim is the SOLE provider
+ * of the global pair the standalone runtime_core.o references. Hence: define
+ * the libc-delegate pair here EXCEPT on Apple, where runtime.o owns it. This
+ * is the same owner-dedup discipline the gate already relies on for
+ * _hexa_init_fn_shims (runtime.o=1T, sibling=U). DEFAULT single-TU build never
+ * compiles this shim, so byteeq is unaffected. */
+#ifndef __APPLE__
 int    hxlcl_setjmp(void *buf)                        { return setjmp(*(jmp_buf *)buf); }
 void   hxlcl_longjmp(void *buf, int val)              { longjmp(*(jmp_buf *)buf, val ? val : 1); }
+#endif
 
 /* ── backtrace (best-effort; no-op where unavailable) ────────────────────── */
 #ifdef __linux__
