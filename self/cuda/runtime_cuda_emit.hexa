@@ -6116,13 +6116,8 @@ fn emit_runtime_cuda_c() -> str {
             "    double* B = g_slots[b_id].d_buf;\n" +
             "    double* C = g_slots[out_id].d_buf;\n" +
             "    int grid = _hx_cuda_elem_grid(n);\n" +
-            "    _hx_cuda_kern_add<<<grid, _HX_CUDA_ELEM_BLOCK>>>(A, B, C, n);\n" +
-            "    cudaError_t er = cudaGetLastError();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] add launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    _hx_cuda_kern_add<<<grid, _HX_CUDA_ELEM_BLOCK, 0, _forge_stream()>>>(A, B, C, n);\n" +
+            "    if (_forge_launch_check(\"add\") != 0) return -1;\n" +
             "    if (_d2h_out(out_id, n) != 0) return -1;\n" +
             "    return 0;\n" +
             "}\n" +
@@ -6151,13 +6146,8 @@ fn emit_runtime_cuda_c() -> str {
             "    double* X = g_slots[x_id].d_buf;\n" +
             "    double* Y = g_slots[out_id].d_buf;\n" +
             "    int grid = _hx_cuda_elem_grid(n);\n" +
-            "    _hx_cuda_kern_scale<<<grid, _HX_CUDA_ELEM_BLOCK>>>(X, alpha, Y, n);\n" +
-            "    cudaError_t er = cudaGetLastError();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] scale launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    _hx_cuda_kern_scale<<<grid, _HX_CUDA_ELEM_BLOCK, 0, _forge_stream()>>>(X, alpha, Y, n);\n" +
+            "    if (_forge_launch_check(\"scale\") != 0) return -1;\n" +
             "    if (_d2h_out(out_id, n) != 0) return -1;\n" +
             "    return 0;\n" +
             "}\n" +
@@ -6190,13 +6180,8 @@ fn emit_runtime_cuda_c() -> str {
             "    double* B = g_slots[b_id].d_buf;\n" +
             "    double* C = g_slots[out_id].d_buf;\n" +
             "    int grid = _hx_cuda_elem_grid(n);\n" +
-            "    _hx_cuda_kern_mul<<<grid, _HX_CUDA_ELEM_BLOCK>>>(A, B, C, n);\n" +
-            "    cudaError_t er = cudaGetLastError();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] mul launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    _hx_cuda_kern_mul<<<grid, _HX_CUDA_ELEM_BLOCK, 0, _forge_stream()>>>(A, B, C, n);\n" +
+            "    if (_forge_launch_check(\"mul\") != 0) return -1;\n" +
             "    if (_d2h_out(out_id, n) != 0) return -1;\n" +
             "    return 0;\n" +
             "}\n" +
@@ -6224,13 +6209,8 @@ fn emit_runtime_cuda_c() -> str {
             "    double* X = g_slots[x_id].d_buf;\n" +
             "    double* Y = g_slots[out_id].d_buf;\n" +
             "    int grid = _hx_cuda_elem_grid(n);\n" +
-            "    _hx_cuda_kern_silu<<<grid, _HX_CUDA_ELEM_BLOCK>>>(X, Y, n);\n" +
-            "    cudaError_t er = cudaGetLastError();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] silu launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    _hx_cuda_kern_silu<<<grid, _HX_CUDA_ELEM_BLOCK, 0, _forge_stream()>>>(X, Y, n);\n" +
+            "    if (_forge_launch_check(\"silu\") != 0) return -1;\n" +
             "    if (_d2h_out(out_id, n) != 0) return -1;\n" +
             "    return 0;\n" +
             "}\n" +
@@ -6258,13 +6238,8 @@ fn emit_runtime_cuda_c() -> str {
             "    double* X = g_slots[x_id].d_buf;\n" +
             "    double* Y = g_slots[out_id].d_buf;\n" +
             "    int grid = _hx_cuda_elem_grid(n);\n" +
-            "    _hx_cuda_kern_silu_grad<<<grid, _HX_CUDA_ELEM_BLOCK>>>(X, Y, n);\n" +
-            "    cudaError_t er = cudaGetLastError();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] silu_grad launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    _hx_cuda_kern_silu_grad<<<grid, _HX_CUDA_ELEM_BLOCK, 0, _forge_stream()>>>(X, Y, n);\n" +
+            "    if (_forge_launch_check(\"silu_grad\") != 0) return -1;\n" +
             "    if (_d2h_out(out_id, n) != 0) return -1;\n" +
             "    return 0;\n" +
             "}\n" +
@@ -6326,18 +6301,13 @@ fn emit_runtime_cuda_c() -> str {
             "    double*       Y   = g_slots[out_id].d_buf;\n" +
             "    int grid = _hx_cuda_elem_grid(total);\n" +
             "    if (is_bwd) {\n" +
-            "        _hx_cuda_kern_rope_bwd<<<grid, _HX_CUDA_ELEM_BLOCK>>>(\n" +
+            "        _hx_cuda_kern_rope_bwd<<<grid, _HX_CUDA_ELEM_BLOCK, 0, _forge_stream()>>>(\n" +
             "            X, COS, SIN, Y, T, nheads, hd);\n" +
             "    } else {\n" +
-            "        _hx_cuda_kern_rope_fwd<<<grid, _HX_CUDA_ELEM_BLOCK>>>(\n" +
+            "        _hx_cuda_kern_rope_fwd<<<grid, _HX_CUDA_ELEM_BLOCK, 0, _forge_stream()>>>(\n" +
             "            X, COS, SIN, Y, T, nheads, hd);\n" +
             "    }\n" +
-            "    cudaError_t er = cudaGetLastError();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] %s launch failed: %s\\n\",\n" +
-            "                tag, cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    if (_forge_launch_check(tag) != 0) return -1;\n" +
             "    if (_d2h_out(out_id, total) != 0) return -1;\n" +
             "    return 0;\n" +
             "}\n" +
@@ -6440,14 +6410,9 @@ fn emit_runtime_cuda_c() -> str {
             "        return -1;\n" +
             "    }\n" +
             "    int grid = _hx_cuda_elem_grid(total);\n" +
-            "    _hx_cuda_kern_transpose_scatter<<<grid, _HX_CUDA_ELEM_BLOCK>>>(\n" +
+            "    _hx_cuda_kern_transpose_scatter<<<grid, _HX_CUDA_ELEM_BLOCK, 0, _forge_stream()>>>(\n" +
             "        SRC, DST, rows, cols, dst_off);\n" +
-            "    cudaError_t er = cudaGetLastError();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] transpose_scatter launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    if (_forge_launch_check(\"transpose_scatter\") != 0) return -1;\n" +
             "    /* RFC 058 byte-eq fix — D2H the kernel result back to the host buffer.\n" +
             "     * Downstream A2-block consumers (RMSNorm/RoPE/attention/SwiGLU slabs)\n" +
             "     * read Bc via the RAW host pointer, NOT a farr API, so the lazy-D2H\n" +
@@ -6843,13 +6808,8 @@ fn emit_runtime_cuda_c() -> str {
             "    double* B = g_slots[b_id].d_buf;\n" +
             "    double* O = g_slots[out_id].d_buf;\n" +
             "    int grid = _hx_cuda_elem_grid(n);\n" +
-            "    _hx_cuda_kern_silu_gate<<<grid, _HX_CUDA_ELEM_BLOCK>>>(A, B, O, n);\n" +
-            "    cudaError_t er = cudaGetLastError();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] silu_gate launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    _hx_cuda_kern_silu_gate<<<grid, _HX_CUDA_ELEM_BLOCK, 0, _forge_stream()>>>(A, B, O, n);\n" +
+            "    if (_forge_launch_check(\"silu_gate\") != 0) return -1;\n" +
             "    if (_d2h_out(out_id, n) != 0) return -1;\n" +
             "    return 0;\n" +
             "}\n" +
@@ -6902,13 +6862,8 @@ fn emit_runtime_cuda_c() -> str {
             "    int block = 256;\n" +
             "    int64_t need = (T + block - 1) / block;\n" +
             "    int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));\n" +
-            "    _hx_cuda_kern_rmsnorm_mh<<<grid, block>>>(X, G, Y, XN, I, T, d);\n" +
-            "    cudaError_t er = cudaGetLastError();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] rmsnorm_mh launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    _hx_cuda_kern_rmsnorm_mh<<<grid, block, 0, _forge_stream()>>>(X, G, Y, XN, I, T, d);\n" +
+            "    if (_forge_launch_check(\"rmsnorm_mh\") != 0) return -1;\n" +
             "    if (_d2h_out(y_id,   n_xy) != 0) return -1;\n" +
             "    if (_d2h_out(xn_id,  n_xy) != 0) return -1;\n" +
             "    if (_d2h_out(inv_id, T)    != 0) return -1;\n" +
@@ -6962,8 +6917,8 @@ fn emit_runtime_cuda_c() -> str {
             "    /* Zero P first — only j < L positions are written, the upper\n" +
             "     * triangle (j ≥ L per row) must stay 0 to match the t_zeros init\n" +
             "     * on the host side. cudaMemset is fine (P is doubles; 0x00·8 == 0.0). */\n" +
-            "    cudaError_t ze = cudaMemset(g_slots[p_id].d_buf, 0,\n" +
-            "                                (size_t)np * sizeof(double));\n" +
+            "    cudaError_t ze = cudaMemsetAsync(g_slots[p_id].d_buf, 0,\n" +
+            "                                (size_t)np * sizeof(double), _forge_stream());\n" +
             "    if (ze != cudaSuccess) {\n" +
             "        fprintf(stderr, \"[cuda] attn_dt_fwd: cudaMemset P failed: %s\\n\",\n" +
             "                cudaGetErrorString(ze));\n" +
@@ -6979,13 +6934,8 @@ fn emit_runtime_cuda_c() -> str {
             "    int block = 64;\n" +
             "    int64_t need = (total + block - 1) / block;\n" +
             "    int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));\n" +
-            "    _hx_cuda_kern_attn_dt_fwd<<<grid, block>>>(Q, K, V, P, C, T, nh, nkv, hd);\n" +
-            "    cudaError_t er = cudaGetLastError();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] attn_dt_fwd launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    _hx_cuda_kern_attn_dt_fwd<<<grid, block, 0, _forge_stream()>>>(Q, K, V, P, C, T, nh, nkv, hd);\n" +
+            "    if (_forge_launch_check(\"attn_dt_fwd\") != 0) return -1;\n" +
             "    if (_d2h_out(p_id,   np) != 0) return -1;\n" +
             "    if (_d2h_out(ctx_id, nq) != 0) return -1;\n" +
             "    return 0;\n" +
@@ -7282,13 +7232,8 @@ fn emit_runtime_cuda_c() -> str {
             "    int block = 256;\n" +
             "    int64_t need = (n + block - 1) / block;\n" +
             "    int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));\n" +
-            "    _hx_cuda_kern_add_inplace<<<grid, block>>>(D, S, n);\n" +
-            "    cudaError_t er = cudaGetLastError();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] add_inplace launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    _hx_cuda_kern_add_inplace<<<grid, block, 0, _forge_stream()>>>(D, S, n);\n" +
+            "    if (_forge_launch_check(\"add_inplace\") != 0) return -1;\n" +
             "    if (_d2h_out(dst_id, de->len) != 0) return -1;\n" +
             "    return 0;\n" +
             "}\n" +
@@ -7353,13 +7298,8 @@ fn emit_runtime_cuda_c() -> str {
             "    int block = 256;\n" +
             "    int64_t need = (total + block - 1) / block;\n" +
             "    int grid = (int)(need < 1 ? 1 : (need > 65535 ? 65535 : need));\n" +
-            "    _hx_cuda_kern_transpose_2d<<<grid, block>>>(S, soff, D, doff, d_out, d_in);\n" +
-            "    cudaError_t er = cudaGetLastError();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] transpose_2d launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    _hx_cuda_kern_transpose_2d<<<grid, block, 0, _forge_stream()>>>(S, soff, D, doff, d_out, d_in);\n" +
+            "    if (_forge_launch_check(\"transpose_2d\") != 0) return -1;\n" +
             "    if (_d2h_out(dst_id, de->len) != 0) return -1;\n" +
             "    return 0;\n" +
             "}\n" +
