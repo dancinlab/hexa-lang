@@ -120,8 +120,16 @@ fn install_hexa() {
     // at $HX_BIN/hexa that exec's it with an absolute argv[0]. The dispatcher
     // resolves its sidecar interpreter via dirname(argv[0]); a bare
     // PATH-resolved "hexa" (argv[0] has no slash) would misresolve to cwd.
-    // Mirrors the source-tree `hexa` -> `hexa.real` shim and install.sh.
+    // Canonical on-disk name = `hexad` (AMFI burning-matcher treadmill
+    // terminal; cli_wrappers.hexa:38, tool/bin/build.hexa:119). `hexad` and
+    // `hexa.real` are BOTH real files: hexad must be real for the AMFI escape
+    // (AMFI sees the resolved real-file name), and hexa.real must be real so
+    // tool/promote_selfhost.sh's `[ -L hexa.real ]` flip-detection reports a
+    // fresh install as NOT flipped. `hxv2` (no such invariant) is a compat
+    // symlink → hexad. Mirrors install.sh.
+    exec("install -m 0755 '" + src + "/hexa' '" + hx_bin + "/hexad'")
     exec("install -m 0755 '" + src + "/hexa' '" + hx_bin + "/hexa.real'")
+    exec("ln -sf hexad '" + hx_bin + "/hxv2'")
     write_file(hx_bin + "/hexa",
         "#!/bin/bash\nexec \"" + hx_bin + "/hexa.real\" \"$@\"\n")
     exec("chmod 0755 '" + hx_bin + "/hexa'")
@@ -145,7 +153,7 @@ fn install_hexa() {
     //       already stripped). A notarized release tarball makes both no-ops.
     let uname_cs = exec("uname -s").trim()
     if uname_cs == "Darwin" {
-        exec("xattr -dr com.apple.quarantine '" + hx_bin + "/hexa.real' '" + hx_bin + "/build' 2>/dev/null || true")
+        exec("xattr -dr com.apple.quarantine '" + hx_bin + "/hexad' '" + hx_bin + "/build' 2>/dev/null || true")
         let has_cs = exec_with_status("command -v codesign >/dev/null 2>&1")
         if has_cs[1] == 0 {
             let mut sign_id = env("HEXA_CODESIGN_IDENTITY")
@@ -153,7 +161,7 @@ fn install_hexa() {
                 sign_id = exec("security find-identity -v -p codesigning 2>/dev/null | awk -F'\"' '/[0-9]+\\)/{print $2; exit}'").trim()
             }
             if sign_id == "" { sign_id = "-" }
-            exec("codesign --force --sign '" + sign_id + "' --identifier hexad '" + hx_bin + "/hexa.real' 2>/dev/null || true")
+            exec("codesign --force --sign '" + sign_id + "' --identifier hexad '" + hx_bin + "/hexad' 2>/dev/null || true")
         }
     }
 

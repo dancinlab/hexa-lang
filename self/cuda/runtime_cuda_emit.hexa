@@ -2364,14 +2364,17 @@ fn emit_runtime_cuda_c() -> str {
             "    int64_t want = (G + block_sz - 1) / block_sz;\n" +
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
-            "    _hx_k_groupnorm_gelu<<<grid_sz, block_sz>>>(X, GAMMA, BETA, Y, A, MEAN, INV, XHAT,\n" +
+            "    /* forge stream (NOT the default stream): the async device-resident\n" +
+            "     * chain queues producers (residual_add/conv) on _forge_stream(), a\n" +
+            "     * cudaStreamNonBlocking stream that does NOT implicit-sync with the\n" +
+            "     * legacy default stream. A default-stream launch here would be UNORDERED\n" +
+            "     * vs those producers -> read stale/partial input -> mu/var corruption.\n" +
+            "     * Same stream = stream-order enforces the data dependency. async-off:\n" +
+            "     * _forge_stream()=0 + _forge_launch_check=cudaDeviceSynchronize() =\n" +
+            "     * byte-identical to the legacy default-stream barrier. */\n" +
+            "    _hx_k_groupnorm_gelu<<<grid_sz, block_sz, 0, _forge_stream()>>>(X, GAMMA, BETA, Y, A, MEAN, INV, XHAT,\n" +
             "                                                T, C, G);\n" +
-            "    cudaError_t er = cudaDeviceSynchronize();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] groupnorm_gelu launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    if (_forge_launch_check(\"groupnorm_gelu\") != 0) return -1;\n" +
             "    /* Y/A/xhat/mean/inv stay DEVICE-RESIDENT so the follow-up residual_add /\n" +
             "     * conv GEMM H2D-skip them (same residence convention as groupnorm). */\n" +
             "    {\n" +
@@ -2486,14 +2489,16 @@ fn emit_runtime_cuda_c() -> str {
             "    int64_t want = (G + block_sz - 1) / block_sz;\n" +
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
-            "    _hx_k_groupnorm_gelu_residual<<<grid_sz, block_sz>>>(X, GAMMA, BETA, R, Y, A, OUT,\n" +
+            "    /* forge stream (NOT default stream) — see _hx_k_groupnorm_gelu above.\n" +
+            "     * This FUSED trunk kernel was the ONE decode glue op launched on the\n" +
+            "     * default stream while its producers (conv/residual_add) ran on the\n" +
+            "     * nonblocking forge stream -> unordered RACE -> stale h -> GN mu/var\n" +
+            "     * corruption -> per-layer trunk activation divergence (the root of the\n" +
+            "     * CLM_PROD_DEVRESIDENT decode byte-eq FAIL: ON diverges from OFF while\n" +
+            "     * OFF is deterministic). async-off: byte-identical to legacy barrier. */\n" +
+            "    _hx_k_groupnorm_gelu_residual<<<grid_sz, block_sz, 0, _forge_stream()>>>(X, GAMMA, BETA, R, Y, A, OUT,\n" +
             "                                                MEAN, INV, XHAT, T, C, G);\n" +
-            "    cudaError_t er = cudaDeviceSynchronize();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] groupnorm_gelu_residual launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    if (_forge_launch_check(\"groupnorm_gelu_residual\") != 0) return -1;\n" +
             "    /* Y/A/OUT/xhat/mean/inv stay DEVICE-RESIDENT so the follow-up conv GEMM\n" +
             "     * (over xt = OUT) H2D-skips them (same residence convention as L3-a). */\n" +
             "    {\n" +
