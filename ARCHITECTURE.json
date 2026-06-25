@@ -1252,7 +1252,7 @@
         },
         {
           "type": "prose",
-          "text": "**지속 QA (verify-done 상시화)** — g5 게이트 위에서 모든 fix·기능·측정을 measure → root-cause → build-verify → 머지 한 루프로 닫는 상시 검증 루프(거버넌스 SSOT = CLAUDE.md 작업규칙 `QA`). 코드젠/런타임 변경은 byteeq 3타깃 + config 전수(REF · DEVRESIDENT · DEVFEED) byte-eq 실측으로, 측정 주장은 reference-match(roofline % · cuBLAS · nsys 커널 귀속)로 정답지에 대조해 증명한다. QA 하네스: `tool/restore_frozen_seeds` + `tool/build_cuda_runtime`(GPU byte-eq 빌드) · `tool/decode_eager_baseline.cu`(nsys 시간 귀속) · `release.yml` finalize(byteeq 3타깃 all-green stable 게이트). 산출(verdict · 측정)은 memory/CHANGELOG/state 박제, cross-repo 측정은 `ing add --to <repo>` relay. 빌드/측정 = aiden/summer/vast pool(mini=git/gh only)."
+          "text": "**지속 QA (verify-done 상시화)** — g5 게이트 위에서 모든 fix·기능·측정을 measure → root-cause → build-verify → 머지 한 루프로 닫는 상시 검증 루프(거버넌스 SSOT = CLAUDE.md 작업규칙 `QA`). 코드젠/런타임 변경은 byteeq 3타깃 + config 전수(REF · DEVRESIDENT · DEVFEED) byte-eq 실측으로, 측정 주장은 reference-match(roofline % · cuBLAS · nsys 커널 귀속)로 정답지에 대조해 증명한다. QA 하네스: `tool/restore_frozen_seeds` + `tool/build_cuda_runtime`(GPU byte-eq 빌드) · `tool/decode_eager_baseline.cu`(nsys 시간 귀속) · `release.yml` finalize(byteeq 3타깃 all-green stable 게이트). 산출(verdict · 측정)은 memory/CHANGELOG/state 박제, cross-repo 측정은 `ing add --to <repo>` relay. 빌드/측정 = aiden/summer/vast pool(mini=git/gh only). 또한 **native-canonical-default polarity 위반**(native 를 플래그 뒤로 숨기고 외부의존을 기본으로 둠 · `HEXA_NO_<vendor>` 로 native opt-in · codegen-fragile 손짜기 대체)도 감사·교정한다 — 교정은 byteeq-safe(felt-default=native 유지), 플래그 명명은 켜는 게 외부의존 활성화(`HEXA_USE_<vendor>`)가 되도록 정렬."
         }
       ]
     },
