@@ -125,6 +125,26 @@ only (no domain registry).
   유지하되** 빠른 외부의존 경로를 opt-in 플래그로 남겨 선택 가능케 한다(felt-default = native ·
   빠른 길은 명시 opt-in). 느려지는 건 깨지는 게 아니며, 위 [릴리스 무결성]의 "사용자 경로를 깨지
   말라"와 양립한다.
+- do: **개발자경험(DX) 표면 전체가 native-canonical install 경로여야 한다 — 위 polarity(커널 default)
+  와 별개의 *툴체인/패키징 층* 정석성.** 적용 범위 = 패키지/라이브러리 관리(`hx install`·의존성 해결·
+  lockfile·버전 핀·registry) · 설치/갱신(`hx install`·`hexa self-update`) · 빌드변종(CPU/GPU·target)
+  · GPU 활성화 · 환경 부트스트랩. **각 표면은 기성 생태계의 정석을 그대로 따른다** — `pip`/`cargo`/`npm`/
+  `go mod`(install·add·lock·resolve) · `pip install torch`(호스트 맞춤 GPU wheel 자동) · `rustup`/
+  autotools(toolchain·feature·`nvcc` 감지). **hexa 제작자가 타 언어 native 관행에 익숙지 않을 수 있으므로,
+  에이전트가 native-canonical-first 판단으로 그 정석을 *알아서 강제·교정*한다**(creator 가 모르는 관행을
+  에이전트가 채움 — 묻어두지 말 것). 새 DX 표면은 "이게 cargo/pip/npm 이라면 어떻게 동작하나"를 먼저 묻고
+  그 관행으로 설계.
+- do: **GPU 활성화 = 위 원칙의 첫 구체 인스턴스.** canonical 설치/갱신 명령이 CUDA 호스트(nvcc+GPU 감지)에서
+  `cuda_available()=1` 런타임을 **자동 산출**해야 한다 — 감지→cuda 자산 빌드/페치→`~/.hx/bin/build/runtime.a`
+  배선까지 한 번에, 끝에 `hexa gpu` 가 cuda_available 1 을 보고(`pip install torch` 가 GPU wheel 자동 받듯).
+- dont: DX 표면을 **비정석으로 방치 금지** — 사용자가 손으로 빌드/swap/우회해야 쓸 수 있으면 그건
+  packaging 결함이다. GPU 실측 결함(2026-06-26 anima clm303 GPU 측정 중 발견):
+  ① `tool/build_cuda_runtime` 가 `ar x` 로 전체추출 후 링크는 `*_native.o` CORES 만 →
+  `undefined reference hexa_array_push/hexa_sub/hexa_str_join`(비-native 오브젝트 누락) ·
+  ② `stage_resolve_runtime_a` CUDA-R1 이 frozen seed 로 돌아도 링크된 runtime.a 는 cuda syms 3개뿐 →
+  `cuda_available()=0` 잔존 · ③ stock 릴리스에 `-cuda` 자산 미배포 + `hx install` 에 GPU 감지 경로 없음.
+  → GPU 박스(nvcc+GPU 확인됨)에서도 한 명령으로 GPU 가 안 켜지는 건 결함이지 사용자 잘못이 아니다.
+  같은 잣대로 다른 DX 표면(라이브러리 관리·의존성·설치)도 정석 대비 갭이 보이면 그 자리에서 교정.
 - do: stdlib signal/math 모듈은 **native libm trig**(`cos`/`sin`/…)를 쓴다.
 - dont: 손수 짠 Taylor series 금지 (codegen-fragile).
 
