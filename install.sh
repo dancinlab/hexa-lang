@@ -252,8 +252,33 @@ install_hexa() {
     # When invoked through PATH, argv[0]="hexa" has no slash and resolution
     # falls back to cwd — wrong. Install the native binary under a private
     # name and place a thin shim at $HX_BIN/hexa that exec's it with an
-    # absolute argv[0]. Mirrors the source-tree `hexa` → `hexa.real` shim.
-    install -m 0755 "$src/hexa" "$HX_BIN/hexa.real"
+    # absolute argv[0].
+    #
+    # Canonical on-disk name = `hexad` (AMFI burning-matcher treadmill
+    # terminal: hexadrv → hexa.real → hxv2 → hexad · cli_wrappers.hexa:38,
+    # tool/bin/build.hexa:119). The shim (cli_wrappers.hexa SSOT) resolves
+    # `hexad` FIRST and `exec -a hexa` it, so the on-disk name AMFI's burning
+    # matcher sees is the un-burnt `hexad`. The shim below execs `hexad`
+    # DIRECTLY (matching cli_wrappers.hexa SSOT + the dev-build path), so
+    # `hexad` is the single canonical surface every layer keys on.
+    #
+    # `hexad` is the FLIP SENTINEL too (tool/promote_selfhost.sh): an unflipped
+    # install has `hexad` as a plain REAL FILE — required BOTH for the AMFI
+    # escape (AMFI evaluates the resolved real-file name; a symlink would
+    # re-expose a burnt name) AND so `[ -L hexad ]` flip-detection reports a
+    # fresh install as "NOT flipped". A tier2 default-flip backs the real file
+    # up to `hexad.pre-selfhost.<ts>` and replaces `hexad` with a symlink →
+    # `hx-selfhost-cli`; AMFI escape survives the flip because the symlink
+    # RESOLVES to the un-burnt `hx-selfhost-cli` real-file name. `--revert`
+    # restores the backup real file, returning the shipped surface.
+    #
+    # `hexa.real` and `hxv2` are retired-name compat symlinks → `hexad`. Every
+    # legacy consumer of those PATHs (firmware fixtures, glibc preflight,
+    # module_loader check) keeps resolving losslessly through the symlink.
+    install -m 0755 "$src/hexa" "$HX_BIN/hexad"
+    # retired-name compat symlinks (relative target — install dir relocatable).
+    ln -sf hexad "$HX_BIN/hexa.real"
+    ln -sf hexad "$HX_BIN/hxv2"
     # standalone-rtlink: the shim exports HEXA_PREBUILT_RUNTIME at the persisted
     # native-seed runtime.a ($HX_BIN/build/runtime.a, dropped by install_src's
     # stage_resolve_runtime_a step) so a consumer `hexa build`/`run` in a FRESH
@@ -273,7 +298,7 @@ install_hexa() {
 if [ -z "\${HEXA_PREBUILT_RUNTIME:-}" ] && [ -f "$HX_BIN/build/runtime.a" ]; then
     export HEXA_PREBUILT_RUNTIME="$HX_BIN/build/runtime.a"
 fi
-exec "$HX_BIN/hexa.real" "\$@"
+exec "$HX_BIN/hexad" "\$@"
 EOF
     chmod 0755 "$HX_BIN/hexa"
     # Copy build/ verbatim so any sidecar binary the release ships
@@ -331,14 +356,16 @@ EOF
     #       fallback (quarantine already stripped).
     # A Developer-ID-notarized release tarball makes both harmless no-ops.
     if [ "$(uname -s)" = "Darwin" ]; then
-        xattr -dr com.apple.quarantine "$HX_BIN/hexa.real" "$HX_BIN/build" 2>/dev/null || true
+        # Operate on the real file (hexad), not the hexa.real/hxv2 symlinks —
+        # codesign/xattr must sign the Mach-O, not a symlink.
+        xattr -dr com.apple.quarantine "$HX_BIN/hexad" "$HX_BIN/build" 2>/dev/null || true
         if command -v codesign >/dev/null 2>&1; then
             _sid="${HEXA_CODESIGN_IDENTITY:-}"
             if [ -z "$_sid" ] && command -v security >/dev/null 2>&1; then
                 _sid="$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/[0-9]+\)/{print $2; exit}')"
             fi
             [ -n "$_sid" ] || _sid="-"
-            codesign --force --sign "$_sid" --identifier hexad "$HX_BIN/hexa.real" 2>/dev/null || true
+            codesign --force --sign "$_sid" --identifier hexad "$HX_BIN/hexad" 2>/dev/null || true
             if [ "$_sid" = "-" ]; then
                 dim "  codesign: ad-hoc (set HEXA_CODESIGN_IDENTITY=<cert> for a stable identity)"
             else
@@ -347,17 +374,21 @@ EOF
         fi
     fi
 
-    # selfhost persistence — the `install … hexa.real` above overwrites hexa.real
-    # with the shipped C-transpile dispatch binary, silently reverting a tier2
-    # native default-flip (tool/promote_selfhost.sh install --default). If the
-    # native default was promoted (marker present) and the self-host slot + CLI
-    # shim survived this reinstall, re-apply the flip so the native compile
-    # surface stays the default. Reversible via `promote_selfhost.sh --revert`
-    # (clears the marker). codesign above already signed the real binary.
+    # selfhost persistence — the `install …` line above resets hexad to a
+    # fresh copy of the canonical (C-transpile) binary, silently reverting a
+    # tier2 native default-flip (tool/promote_selfhost.sh install --default).
+    # If the native default was promoted (marker present) and the self-host
+    # slot + CLI shim survived this reinstall, re-apply the flip so the native
+    # compile surface stays the default. The flip mv's the real hexad file to a
+    # backup and symlinks hexad → hx-selfhost-cli (the unique `[ -L hexad ]`
+    # state promote_selfhost.sh keys on). codesign above already signed the
+    # real hexad before this flip; a `--revert` restores the backup file and
+    # the shipped surface returns. The hexa.real/hxv2 compat symlinks → hexad
+    # follow the flip transparently (they resolve to whatever hexad points at).
     if [ -f "$HX_HOME/.selfhost-default" ] && [ -x "$HX_BIN/hx-selfhost-cli" ] \
        && [ -x "$HX_HOME/self/native/selfhost/gen3" ]; then
-        mv "$HX_BIN/hexa.real" "$HX_BIN/hexa.real.pre-selfhost.$(date +%Y%m%d-%H%M%S)"
-        ln -sf "$HX_BIN/hx-selfhost-cli" "$HX_BIN/hexa.real"
+        mv "$HX_BIN/hexad" "$HX_BIN/hexad.pre-selfhost.$(date +%Y%m%d-%H%M%S)"
+        ln -sf "$HX_BIN/hx-selfhost-cli" "$HX_BIN/hexad"
         green "  ✓ selfhost-default marker → re-applied native tier2 flip"
     fi
     # glibc preflight (Linux only) — the prebuilt binary is built on ubuntu-22.04
@@ -366,7 +397,7 @@ EOF
     # "GLIBC_2.xx not found" dynamic-loader error — surface a clear, actionable
     # message instead so the failure is understandable (not a silent crash).
     if [ "$(uname -s)" = "Linux" ]; then
-        if ! "$HX_BIN/hexa.real" --version >/dev/null 2>"$tmp/glibc.err"; then
+        if ! "$HX_BIN/hexad" --version >/dev/null 2>"$tmp/glibc.err"; then
             if grep -q "GLIBC_" "$tmp/glibc.err" 2>/dev/null; then
                 red "  ✗ hexa cannot run on this host's glibc:"
                 red "    $(grep -m1 GLIBC_ "$tmp/glibc.err")"
@@ -378,7 +409,7 @@ EOF
                 return 1
             fi
             # non-glibc failure (e.g. missing lib) — show it but don't hard-fail the install
-            dim "  (note: hexa.real --version exited nonzero: $(head -1 "$tmp/glibc.err" 2>/dev/null))"
+            dim "  (note: hexad --version exited nonzero: $(head -1 "$tmp/glibc.err" 2>/dev/null))"
         fi
     fi
     green "  ✓ $HX_BIN/hexa"
@@ -393,12 +424,12 @@ install_src() {
     # fresh `hexa build` of any `use "stdlib/..."` program fails.
     #
     # Fix (works TODAY, no new release needed): shallow-clone the hexa-lang
-    # source into $HX_SRC, then symlink the support trees next to the hexa.real
+    # source into $HX_SRC, then symlink the support trees next to the hexad
     # binary so the compiler's install-relative discovery resolves them:
     #   $HX_BIN/stdlib -> $HX_SRC/stdlib   (ml_stdlib_install_candidates: <inst>/stdlib)
     #   $HX_BIN/self   -> $HX_SRC/self     (<inst>/self/stdlib  AND  hexa cc's
     #                                       <inst>/self/native/hexa_cc.c)
-    # install_dir_from_argv0() realpath-resolves hexa.real to $HX_BIN, so these
+    # install_dir_from_argv0() realpath-resolves hexad to $HX_BIN, so these
     # land exactly where the resolver looks.
     bold "▸ installing hexa source (stdlib/ + self/)"
     local repo_url
@@ -537,8 +568,8 @@ install_src() {
     # module_loader. Build it now from the fresh source so end-to-end
     # `hexa build` works on this install without a new release.
     bold "▸ building module_loader (hexa build flatten helper)"
-    if [ ! -x "$HX_BIN/hexa.real" ]; then
-        red "  ✗ hexa.real missing — cannot build module_loader"
+    if [ ! -x "$HX_BIN/hexad" ]; then
+        red "  ✗ hexad missing — cannot build module_loader"
         return 1
     fi
     mkdir -p "$HX_BIN/build"

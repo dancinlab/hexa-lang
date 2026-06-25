@@ -313,6 +313,7 @@ drafts/
 self/native/rtcore_arith.c
 self/native/rtcore_arith-coerce-format.c
 self/native/rtcore_array-typed-leaf.c
+self/native/rtcore_eqtruthy.c
 self/native/rtcore_fs-read-write.c
 self/native/rtcore_leaf.c
 self/native/rtcore_map-query-fold.c
