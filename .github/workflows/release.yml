@@ -47,7 +47,11 @@ permissions:
 # TAG (per-tag group, never cancelled) and only cancel real main `push` test
 # builds — so each stable tag's 3-target build runs to finalize.
 concurrency:
-  group: release-${{ github.event.inputs.tag || github.ref }}
+  # Normalize the key to the version (ref_name strips refs/tags/ & refs/heads/)
+  # so a tag-push (refs/tags/vX) and a workflow_dispatch (inputs.tag=vX) of the
+  # SAME release land in ONE group and dedup, instead of running in parallel and
+  # storming the runner pool (the v0.314.x cancel-storm). Branch push → main.
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
   cancel-in-progress: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
 
 env:
@@ -253,7 +257,7 @@ jobs:
     # binary linked against 2.35 runs on 2.35 (22.04) AND 2.39 (24.04) — the
     # 24.04-built binary failed on 22.04 cloud pods with "GLIBC_2.38 not found".
     # 22.04 is the portability floor that covers current cloud images.
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
@@ -377,7 +381,7 @@ jobs:
   release-linux-x86_64-musl:
     name: release (linux-x86_64-musl · static · test)
     needs: setup
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -597,7 +601,7 @@ jobs:
   release-linux-x86_64-cuda:
     name: release (linux-x86_64-cuda · cuBLAS · test)
     needs: setup
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
