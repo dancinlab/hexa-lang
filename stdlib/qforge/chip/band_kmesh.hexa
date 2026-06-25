@@ -89,6 +89,7 @@ pub fn qforge_chip_kmesh_band(eps0: float, t: float, a: float, n1: int, shift1: 
 pub fn qforge_chip_kmesh_edges(eps0: float, t: float, a: float, n1: int, shift1: int) -> [float] {
     let eps = qforge_chip_kmesh_band(eps0, t, a, n1, shift1)
     let np = len(eps)
+    if np == 0 { return [0.0, 0.0] }   // zero/negative mesh → empty eps → eps[0] OOB
     let mut lo = eps[0]
     let mut hi = eps[0]
     let mut i = 1

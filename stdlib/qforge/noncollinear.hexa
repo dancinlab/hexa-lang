@@ -350,6 +350,11 @@ pub fn qforge_scf_noncol(H_of_dens, n: int, nbands: int, nelec: int,
     let mut a = mix
     if a <= 0.0 { a = 0.1 }
     if a > 1.0 { a = 1.0 }
+    // n<=0 → nelec/n & init_mag/n divide-by-zero (NaN seed densities); short init_mag
+    // → OOB read. Reject the degenerate grid with an empty unconverged result.
+    if n <= 0 || init_mag.len() < 3 {
+        return ScfResultNoncol{ charge: [], mx: [], my: [], mz: [], evals: [], e_total: 0.0, mtot: [], iters: 0, converged: false }
+    }
     let d = 2 * n
 
     // init density: uniform charge ρ = nelec/n; magnetization seed init_mag spread

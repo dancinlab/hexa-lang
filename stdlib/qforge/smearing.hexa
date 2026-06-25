@@ -260,6 +260,7 @@ pub fn qforge_fermi_level_spin(evals_up: [float], evals_dn: [float], nelec: int,
     // initialise from the first available eigenvalue across both channels.
     let nu = len(evals_up)
     let nd = len(evals_dn)
+    if nu == 0 && nd == 0 { return 0.0 }   // both spin channels empty → evals_dn[0] OOB
     let mut lo = 0.0
     let mut hi = 0.0
     if nu > 0 { lo = evals_up[0] ; hi = evals_up[0] }
