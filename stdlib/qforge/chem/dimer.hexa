@@ -114,6 +114,7 @@ pub struct DimerResult {
 //   반환 = [C, |G|, G₀, G₁, ...] (평탄; G 는 인덱스 2.. 에).
 fn _dimer_curv_and_rotforce(pes_id: int, center: [float], axis: [float],
                             delta: float) -> [float] {
+    if delta == 0.0 { return [] }   // dimer separation Δ=0 → /Δ Inf
     let r1 = _dm_add(center, _dm_scale(axis, 0.5 * delta))
     let r2 = _dm_sub(center, _dm_scale(axis, 0.5 * delta))
     let f1 = _dimer_force(pes_id, r1)

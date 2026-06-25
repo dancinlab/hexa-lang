@@ -835,7 +835,7 @@ pub fn qforge_scf_pw_h_multi_smeared_fdg(kvec: [float], gvecs: [float], nspec: i
     PW_VH = empty_f ; PW_XCMODE = xc_mode
     PW_HGRID_ON = false                                    // bypass the (1,1,NPW) FFT path
     PW_FDG_ON = true                                       // enable basis-decoupled screening
-    PW_FDG_RHOBAR = to_float(nelec) / omega                // ρ̄ — NPW-independent
+    PW_FDG_RHOBAR = (if omega > 0.0 { to_float(nelec) / omega } else { 0.0 })                // ρ̄ — NPW-independent
     let n = len(gvecs) / 3
     return qforge_scf_smeared(qforge_h_of_rho_multi, qforge_rho_of_psi, n, nbands,
                               nelec, mix, tol, max_iter, sigma, spin_deg, and_depth)
@@ -871,7 +871,7 @@ pub fn qforge_scf_pw_h_multi_smeared_fdg_etot(kvec: [float], gvecs: [float], nsp
     PW_VH = empty_f ; PW_XCMODE = xc_mode
     PW_HGRID_ON = false                                    // bypass the (1,1,NPW) FFT path
     PW_FDG_ON = true                                       // enable basis-decoupled screening
-    let rhobar = to_float(nelec) / omega                   // ρ̄ — NPW-independent
+    let rhobar = (if omega > 0.0 { to_float(nelec) / omega } else { 0.0 })                   // ρ̄ — NPW-independent
     PW_FDG_RHOBAR = rhobar
     // the variational correction: xc double-count (closed-form in ρ̄) + Ewald.
     //   V_H double-count = 0 (neutral G=0 gauge); both terms NPW-independent.

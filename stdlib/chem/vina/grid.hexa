@@ -164,6 +164,7 @@ pub fn vina_grid_build(receptor: [VinaAtom], probe_atype: string, xmin: float, y
 // clamp 후 보간 — 박스 밖에서는 정확한 값을 약속하지 않지만 monotone
 // 한 fallback 이 보장된다 (MC 검색이 박스 안으로 다시 끌려오는 핸들).
 pub fn vina_grid_eval(g: VinaGrid, x: float, y: float, z: float) -> float {
+    if g.spacing <= 0.0 { return 0.0 }   // degenerate grid (spacing≤0) → /spacing Inf
     let fx = (x - g.ox) / g.spacing
     let fy = (y - g.oy) / g.spacing
     let fz = (z - g.oz) / g.spacing
