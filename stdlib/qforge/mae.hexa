@@ -173,6 +173,8 @@ pub fn qforge_fit_uniaxial(curve: [float], ntheta: int) -> [float] {
         ss = ss + (e - fit) * (e - fit)
         k = k + 1
     }
-    let rms = sqrt(ss / to_float(ntheta))
+    // empty/degenerate curve (ntheta==0) → ss/0 = NaN rms poisons the [K1,K2,rms]
+    // residual; emit a -1.0 sentinel rms (mirrors the module's malformed-input convention).
+    let rms = if ntheta > 0 { sqrt(ss / to_float(ntheta)) } else { 0.0 - 1.0 }
     return [K1, K2, rms]
 }
