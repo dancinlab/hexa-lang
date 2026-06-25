@@ -75,6 +75,7 @@ pub fn qforge_occ_sum(evals: [float], ef: float, sigma: float,
 pub fn qforge_fermi_level(evals: [float], nelec: int, sigma: float,
                           spin_deg: float) -> float {
     let n = len(evals)
+    if n == 0 { return 0.0 }   // empty spectrum → no Fermi level (avoid evals[0] OOB)
     let target = to_float(nelec)
     // bracket: lo below all states (sum→0), hi above all states (sum→N·spin).
     let mut lo = evals[0]
@@ -124,6 +125,7 @@ pub fn qforge_occ_sum_weighted(evals: [float], weights: [float], ef: float, sigm
 //   k-point's contribution to ρ in the density sum (caller).
 pub fn qforge_fermi_level_weighted(evals: [float], weights: [float], nelec: int, sigma: float) -> float {
     let n = len(evals)
+    if n == 0 { return 0.0 }   // empty spectrum → no Fermi level (avoid evals[0] OOB)
     let target = to_float(nelec)
     let mut lo = evals[0]
     let mut hi = evals[0]
