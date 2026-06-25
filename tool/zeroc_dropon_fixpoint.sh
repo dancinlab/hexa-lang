@@ -37,7 +37,16 @@ echo "════ zeroc_dropon_fixpoint — RFC061 DECISIVE default-flip gate (
 echo "HEAD: $(git log --oneline -1)"
 echo "[0] restore CANONICAL frozen runtime.c (151c52c8, 691808B) + fresh runtime_core.c + drop guard…"
 bash tool/restore_frozen_seeds         >/dev/null 2>&1 || true
-git cat-file blob 151c52c8:self/runtime.c > self/runtime.c    # deterministic frozen seed (NOT the regen variant)
+# RFC061 M7 real-registrar: KEEP the emitter-SYNTHESIZED runtime.c from
+# restore_frozen_seeds (gated #ifdef HEXA_ZEROC_DROP_RTCORE_INCLUDE registrar,
+# byte-neutral to frozen 151c52c8 on the shipping arm per #3894). The raw
+# frozen-blob cat-file (ungated static) is what forced the SIMULATE_M7 crutch;
+# sourcing the gated emitter-synth binds the REAL external registrar under drop.
+if [ "${ZEROC_M7_REAL:-1}" = "1" ]; then
+  [ -s self/runtime.c ] || git cat-file blob 151c52c8:self/runtime.c > self/runtime.c
+else
+  git cat-file blob 151c52c8:self/runtime.c > self/runtime.c    # legacy: ungated frozen (SIMULATE_M7 path)
+fi
 bash tool/regen_runtime_core_c.sh "$ROOT" >/dev/null 2>&1 || bash tool/stage_resolve_runtime_a >/dev/null 2>&1 || true
 bash tool/zeroc_drop_rtcore_include.sh >/dev/null 2>&1 || true
 echo "    runtime.c=$(wc -l < self/runtime.c)L (float_to_bits_defs=$(grep -c 'HexaVal hexa_float_to_bits' self/runtime.c))  USE_REAL_ATLAS=${USE_REAL_ATLAS:-0}"
@@ -238,8 +247,8 @@ echo "  init_fn_shims in residual: $(grep -c _hexa_init_fn_shims "$OUT/resid.txt
 #     external → NO stub (real fn-shim binding runs). Without it, supply a no-op
 #     stub (measure-only) — which we EXPECT to break emit (proves the registrar is
 #     load-bearing, i.e. M7 frozen edit is required for a FUNCTIONAL flip).
-if [ "${SIMULATE_M7:-0}" = "1" ]; then
-  echo "  [M7-SIM] linking WITHOUT stub (program TU supplies real external _hexa_init_fn_shims)"
+if [ "${SIMULATE_M7:-0}" = "1" ] || [ "${ZEROC_M7_REAL:-1}" = "1" ]; then
+  echo "  [M7-REAL] linking WITHOUT stub (program TU supplies real external _hexa_init_fn_shims)"
   $CC -O2 $ARCH_FLAG "$OUT/program.o" "$OUT/runtime_core.o" "$OUT/hxlcl_shim.o" $SEEDS \
       -o "$OUT/aprime_cc_dropon" $LIBS 2>"$OUT/link2.err"
   STUB_USED=0
