@@ -45,6 +45,9 @@ pub fn fick_steady_flux(p_perm: float, d_c: float) -> float {
 // drug-design 핵심 lipophilicity 지표 (Lipinski Rule-of-5 입력).
 // Source: Hansch & Fujita 1964 JACS 86:1616.
 pub fn partition_coeff(c_oct: float, c_water: float) -> float {
+    // logP defined only for positive concentrations: c_water=0 → div-by-zero;
+    // ratio<=0 → log domain error (NaN/-inf).
+    if c_oct <= 0.0 || c_water <= 0.0 { return 0.0 }
     let ln10 = log(10.0)
     return log(c_oct / c_water) / ln10
 }
@@ -60,6 +63,9 @@ pub fn permeability_skin(d_diff: float, k_part: float, h_thick: float) -> float 
 // IV-bolus single-compartment, mono-exponential elimination 의 area-under-curve.
 // Source: Gibaldi & Perrier 1982 (Pharmacokinetics 2nd ed).
 pub fn auc_first_order(c0: float, k_e: float) -> float {
+    // ke=0 (non-eliminated / infinite half-life) → C0/0 = inf; return an explicit
+    // large-AUC sentinel rather than an unguarded IEEE division.
+    if k_e <= 0.0 { return 1.0e30 }
     return c0 / k_e
 }
 
