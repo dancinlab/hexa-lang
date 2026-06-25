@@ -29,6 +29,7 @@ fn moments(nn: [float], mm: [float]) -> [float] {
         s3 = s3 + n * m * m * m
         i = i + 1
     }
+    if s0 <= 0.0 || s1 <= 0.0 || s2 <= 0.0 { return [0.0, 0.0, 0.0, 0.0] }   // empty/zero population → NaN averages
     let mn = s1 / s0
     let mw = s2 / s1
     let mz = s3 / s2
