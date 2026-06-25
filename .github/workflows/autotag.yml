@@ -54,6 +54,21 @@ jobs:
           fi
           msgs="$(git log --format='%s%x1f%b%x1e' "$range")"
 
+          # ── DEBOUNCE (release-worthy gate · stable 빌드 횟수↓) ────────
+          # 새 stable vX.Y.Z (+ 3-target 풀빌드) 는 last 태그 이후 범위에
+          # release-worthy 커밋(feat/fix/perf 또는 BREAKING)이 있을 때만 만든다.
+          # 순수 docs/chore/ci/style/test/refactor 머지는 출하 바이너리가
+          # byte-identical 이므로 풀 3타깃 재빌드 + tag-storm 만 유발 → skip
+          # (squash-merge 커밋 subject = PR 제목 = conventional type 으로 판정).
+          # `test` 롤링 prerelease (release.yml 의 main-push 트리거) 는 여전히
+          # 매 머지 발행되므로 실험 채널·`HEXA_VERSION=test` 소비자는 무영향.
+          subjects="$(git log --format='%s' "$range")"
+          if ! grep -qiE '^(feat|fix|perf)(\([^)]*\))?!?:' <<<"$subjects" \
+             && ! grep -q 'BREAKING CHANGE' <<<"$msgs"; then
+            echo "no release-worthy commit (feat/fix/perf/BREAKING) since ${last} — skip stable tag (docs/chore/ci-only). test prerelease still ships."
+            exit 0
+          fi
+
           # ── ATLAS-PATCH HOOK (hexa-lang) ─────────────────────────────
           # 기본 generic: 아래 줄은 no-op. hexa-lang 에서는 atlas builtin 추가가
           # 매우 잦으므로 minor 가 아니라 patch 로만 올린다 — feat(atlas)/atlas
