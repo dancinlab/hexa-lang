@@ -159,6 +159,12 @@ void *__attribute__((noinline)) hxlcl_memcpy(void *dst, const void *src, size_t 
 void  *hxlcl_memcpy(void *d, const void *s, size_t n) { return memcpy(d, s, n); }
 #endif
 #endif
+/* SELFEMIT (HEXA_RT_SELFEMIT_MEMSET, default OFF · RFC061 §M8 family r4):
+ * hxlcl_memset is supplied by the hexa-NATIVE self-emitted .o
+ * (test/native_build/emit_hxlcl_memset_o.hexa — verbatim rt_memset byte loop, no
+ * reloc/errno). DEFAULT (macro undefined) keeps the body below → shim.o
+ * byte-identical. */
+#ifndef HEXA_RT_SELFEMIT_MEMSET
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_memset (verbatim 0-libc floor body) */
 void *__attribute__((noinline)) hxlcl_memset(void *s, int c, size_t n) {
@@ -169,6 +175,7 @@ void *__attribute__((noinline)) hxlcl_memset(void *s, int c, size_t n) {
 }
 #else
 void  *hxlcl_memset(void *s, int c, size_t n)         { return memset(s, c, n); }
+#endif
 #endif
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen runtime.c:310 (hand-rolled byte loop) */
@@ -205,6 +212,13 @@ size_t __attribute__((noinline)) hxlcl_strlen(const char *s) {
 size_t __attribute__((noinline)) hxlcl_strlen(const char *s) { return s ? strlen(s) : 0; }
 #endif
 #endif
+/* SELFEMIT (HEXA_RT_SELFEMIT_STRCMP, default OFF · RFC061 §M8 family r4):
+ * hxlcl_strcmp is supplied by the hexa-NATIVE self-emitted .o
+ * (test/native_build/emit_hxlcl_strcmp_o.hexa — verbatim rt_strcmp scan, no
+ * reloc/errno). The shim's many internal callsites then resolve to the native
+ * symbol cross-object. DEFAULT (macro undefined) keeps the body below → shim.o
+ * byte-identical. */
+#ifndef HEXA_RT_SELFEMIT_STRCMP
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_strcmp (verbatim 0-libc floor body) */
 int __attribute__((noinline)) hxlcl_strcmp(const char *a, const char *b) {
@@ -218,6 +232,13 @@ int __attribute__((noinline)) hxlcl_strcmp(const char *a, const char *b) {
 #else
 int    hxlcl_strcmp(const char *a, const char *b)     { return strcmp(a, b); }
 #endif
+#endif
+/* SELFEMIT (HEXA_RT_SELFEMIT_STRNCMP, default OFF · RFC061 §M8 family r4):
+ * hxlcl_strncmp is supplied by the hexa-NATIVE self-emitted .o
+ * (test/native_build/emit_hxlcl_strncmp_o.hexa — verbatim rt_strncmp scan, no
+ * reloc/errno). DEFAULT (macro undefined) keeps the body below → shim.o
+ * byte-identical. */
+#ifndef HEXA_RT_SELFEMIT_STRNCMP
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_strncmp (verbatim 0-libc floor body) */
 int __attribute__((noinline)) hxlcl_strncmp(const char *a, const char *b, size_t n) {
@@ -232,6 +253,7 @@ int __attribute__((noinline)) hxlcl_strncmp(const char *a, const char *b, size_t
 #else
 int    hxlcl_strncmp(const char *a, const char *b, size_t n) { return strncmp(a, b, n); }
 #endif
+#endif
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_strcpy (verbatim 0-libc floor body) */
 char *__attribute__((noinline)) hxlcl_strcpy(char *dst, const char *src) {
@@ -243,6 +265,12 @@ char *__attribute__((noinline)) hxlcl_strcpy(char *dst, const char *src) {
 #else
 char  *hxlcl_strcpy(char *d, const char *s)           { return strcpy(d, s); }
 #endif
+/* SELFEMIT (HEXA_RT_SELFEMIT_STRNCPY, default OFF · RFC061 §M8 family r4):
+ * hxlcl_strncpy is supplied by the hexa-NATIVE self-emitted .o
+ * (test/native_build/emit_hxlcl_strncpy_o.hexa — verbatim rt_strncpy copy, no
+ * reloc/errno). DEFAULT (macro undefined) keeps the body below → shim.o
+ * byte-identical. */
+#ifndef HEXA_RT_SELFEMIT_STRNCPY
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_strncpy (verbatim 0-libc floor body) */
 char *__attribute__((noinline)) hxlcl_strncpy(char *dst, const char *src, size_t n) {
@@ -254,6 +282,13 @@ char *__attribute__((noinline)) hxlcl_strncpy(char *dst, const char *src, size_t
 #else
 char  *hxlcl_strncpy(char *d, const char *s, size_t n){ return strncpy(d, s, n); }
 #endif
+#endif
+/* SELFEMIT (HEXA_RT_SELFEMIT_STRCAT, default OFF · RFC061 §M8 family r4):
+ * hxlcl_strcat is supplied by the hexa-NATIVE self-emitted .o
+ * (test/native_build/emit_hxlcl_strcat_o.hexa — verbatim rt_strcat scan+copy, no
+ * reloc/errno). DEFAULT (macro undefined) keeps the body below → shim.o
+ * byte-identical. */
+#ifndef HEXA_RT_SELFEMIT_STRCAT
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_strcat (verbatim 0-libc floor body) */
 char *__attribute__((noinline)) hxlcl_strcat(char *dest, const char *src) {
@@ -270,6 +305,7 @@ char *__attribute__((noinline)) hxlcl_strcat(char *dest, const char *src) {
 #else
 char  *hxlcl_strcat(char *d, const char *s)           { return strcat(d, s); }
 #endif
+#endif
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_strdup (verbatim 0-libc floor body) */
 char *__attribute__((noinline)) hxlcl_strdup(const char *s) {
@@ -285,6 +321,12 @@ char *__attribute__((noinline)) hxlcl_strdup(const char *s) {
 #else
 char  *hxlcl_strdup(const char *s)                    { return s ? strdup(s) : NULL; }
 #endif
+/* SELFEMIT (HEXA_RT_SELFEMIT_STRCHR, default OFF · RFC061 §M8 family r4):
+ * hxlcl_strchr is supplied by the hexa-NATIVE self-emitted .o
+ * (test/native_build/emit_hxlcl_strchr_o.hexa — verbatim rt_strchr scan, no
+ * reloc/errno). DEFAULT (macro undefined) keeps the body below → shim.o
+ * byte-identical. */
+#ifndef HEXA_RT_SELFEMIT_STRCHR
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_strchr (verbatim 0-libc floor body) */
 const char *__attribute__((noinline)) hxlcl_strchr(const char *s, int c) {
@@ -298,6 +340,7 @@ const char *__attribute__((noinline)) hxlcl_strchr(const char *s, int c) {
 }
 #else
 const char *hxlcl_strchr(const char *s, int c)        { return strchr(s, c); }
+#endif
 #endif
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_strstr (verbatim 0-libc floor body) */
