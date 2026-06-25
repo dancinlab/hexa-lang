@@ -335,7 +335,7 @@ if [ -f "$rt" ] && ! grep -q 'DEVRESIDENT adamw dirty_host' "$rt"; then
       print "     * now authoritative — mark dirty_host=1 so the next forge _h2d"
       print "     * re-uploads it (else the device int4 fake-quant re-quants the STALE"
       print "     * device buffer and the forward never sees the update -> frozen). */"
-      print "    { HexaFarrEntry* _pe = \&_hx_farr_table[p_id]; if (_pe->d_buf) { _pe->dirty_host = 1; _pe->dirty_dev = 0; } }"
+      print "    { HexaFarrEntry* _pe = &_hx_farr_table[p_id]; if (_pe->d_buf) { _pe->dirty_host = 1; _pe->dirty_dev = 0; } }"
       print "#endif"
       _adw_seen=0
       next
