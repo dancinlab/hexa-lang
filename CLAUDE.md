@@ -102,6 +102,14 @@ only (no domain registry).
 - do: QA 산출(verdict · 측정 수치)은 memory/CHANGELOG/state 로 박제하고, cross-repo 측정은
   `ing add --to <repo>` 로 relay 한다. 빌드/측정은 aiden/summer/vast pool(mini=git/gh only ·
   akida 금지). 자세한 의무는 commons `verify-done` · `break-walls` · `reference-match` 와 lockstep.
+- do: QA 는 **native-canonical-default polarity 위반도 감사·교정**한다 — 기본 경로는 항상
+  hexa-native/own/canonical 이고 외부의존(cuBLAS · 외부 BLAS · 벤더 라이브러리 · legacy fallback)은
+  **opt-in 플래그로만** 존재해야 한다(아래 [native-canonical-default] 가드레일과 lockstep). QA 가
+  역전된 polarity(native 를 플래그 뒤로 숨기고 외부의존을 기본으로 둠 · `HEXA_NO_<vendor>` 로 native
+  를 opt-in · 손짜기 Taylor 등 codegen-fragile 대체)를 발견하면 **교정 PR 로 닫는다** — 플래그 명명이
+  켜는 것이 "제약/외부의존 활성화"가 되도록 정렬(`HEXA_USE_<vendor>` · `HEXA_<feature>_FALLBACK` ○ /
+  `HEXA_NO_<vendor>` ✗). 교정은 byteeq-safe(felt-default=native 유지)로, 빠른 외부의존 경로는 명시
+  opt-in 으로 남긴다.
 
 ### native-canonical-default (polarity)
 
