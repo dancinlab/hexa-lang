@@ -1,0 +1,892 @@
+// HEXA Native Compiler — NEXUS OUROBOROS self-evolution engine (drill spine)
+//
+// @version 0.1.0
+// @capabilities []
+//
+// Faithful native port of the original NEXUS ouroboros engine
+// (archive-nexus/cli/blowup/ouroboros/ouroboros.hexa, 1047 LOC). The core
+// algorithm is preserved verbatim in behavior:
+//
+//   • EvolutionEngine — seed → mutate (4 strategies) → hypotheses_to_data →
+//     verify_score → CycleResult, looped under a ConvergenceChecker that
+//     reports Exploring / Converging / Saturated / Divergent.
+//   • MutationStrategy — ParameterShift (n=6 constant scaling), DomainTransfer,
+//     Combination (sigma*phi=n*tau bridge), Inversion.
+//   • Absorber — recursive self-application f(f(f(...))): growth_apply (weighted
+//     filter + adjacent-pair resonance) → growth_absorb (EMA weight update,
+//     alpha=1/6) → growth_measure, with a delta<epsilon convergence stop.
+//   • SR-adaptive threshold — sigma_peak_tracker (FIFO window=10) over the
+//     resonance-sample history drives a dynamic per-round threshold
+//     (sr_base_threshold + std*k, clamped). Plus the legacy
+//     sr_adaptive_threshold rolling-window variant, kept for parity.
+//   • MetaLoop — evolve → Saturated → forge (seed regeneration via inversion)
+//     → re-evolve.
+//
+// Dialect port (archive older-hexa → current drill/atlas idiom): `pure fn`
+// → `fn`; `match` → if-chains; `.len()` → `len()`; array `+`-concat →
+// `.push()` / local `arr_concat`; the `[window,[threshold]]` tuple-via-array
+// → a `TrackerOut` struct; `for x in xs` → indexed `while`; module-level
+// array constants are built inside the functions that use them.
+//
+// DEFERRED to a later round (operational file-I/O glue, intentionally NOT
+// ported per compiler/CLAUDE.md "운영 글루 미포팅"): `append_sr_sigma_tracker`
+// (nexus.json sr_sigma_tracker persistence) and `emit_drill_event`
+// (atlas.n6.events.jsonl telemetry). The math core they wrap (sigma tracking,
+// emergence counting) is fully ported; only the disk side-effect is dropped.
+
+// ─── tuning constants (n=6 algebra) ───
+let max_mutations_per_cycle: int = 6
+let absorber_max_depth: int = 6
+let absorber_epsilon: float = 0.001
+let divergence_limit: int = 100000
+
+// SR (stochastic resonance) adaptive threshold
+let sr_sigma_peak: float = 0.1
+let sr_base_threshold: float = 0.5
+let sr_rolling_window: int = 5
+let sr_tracker_window: int = 10
+let sr_tracker_k: float = 0.3
+let sr_tracker_min_threshold: float = 0.1
+let sr_tracker_max_threshold: float = 1.5
+
+// mutation strategy ids
+let strategy_parameter_shift: int = 0
+let strategy_domain_transfer: int = 1
+let strategy_combination: int = 2
+let strategy_inversion: int = 3
+
+// convergence status ids
+let status_exploring: int = 0
+let status_converging: int = 1
+let status_saturated: int = 2
+let status_divergent: int = 3
+
+// ─── 수학 유틸 ───
+
+fn abs_f(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn sqrt_f(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut guess = x / 2.0
+    let mut i = 0
+    while i < 20 {
+        guess = (guess + x / guess) / 2.0
+        i = i + 1
+    }
+    return guess
+}
+
+// concat two dynamic arrays into a fresh array (replaces archive `a + b`)
+fn arr_concat(a: array, b: array) -> array {
+    let mut out = []
+    let mut i = 0
+    while i < len(a) { out.push(a[i]); i = i + 1 }
+    i = 0
+    while i < len(b) { out.push(b[i]); i = i + 1 }
+    return out
+}
+
+// 표본 표준편차 σ = sqrt( Σ(x_i - mean)^2 / (N-1) )
+fn estimate_sigma(history: array) -> float {
+    let n = len(history)
+    if n < 2 { return 0.0 }
+    let mut sum = 0.0
+    let mut i = 0
+    while i < n { sum = sum + history[i]; i = i + 1 }
+    let mean = sum / to_float(n)
+    let mut ss = 0.0
+    i = 0
+    while i < n {
+        let d = history[i] - mean
+        ss = ss + d * d
+        i = i + 1
+    }
+    return sqrt_f(ss / to_float(n - 1))
+}
+
+// SR-adaptive threshold (rolling window) — kept for parity with the archive.
+// new_threshold = base × (1 + σ/σ_peak)
+fn sr_adaptive_threshold(round_idx: int, resonance_history: array) -> float {
+    let n = len(resonance_history)
+    if n < 2 { return sr_base_threshold }
+    let start = if n > sr_rolling_window { n - sr_rolling_window } else { 0 }
+    let mut window = []
+    let mut k = start
+    while k < n { window.push(resonance_history[k]); k = k + 1 }
+    let sigma = estimate_sigma(window)
+    let ratio = sigma / sr_sigma_peak
+    return sr_base_threshold * (1.0 + ratio)
+}
+
+// sigma_peak_tracker output — replaces the archive `[window, [threshold]]`
+// tuple-via-array with an explicit struct (current-dialect idiom).
+struct TrackerOut {
+    window: array,
+    threshold: float
+}
+
+// sigma_peak_tracker: push new_sigma into FIFO(window=10), pop oldest, then
+// std-based dynamic threshold = base + std*k (clamped to [min,max]).
+fn sigma_peak_tracker_update(recent_sigmas: array, new_sigma: float) -> TrackerOut {
+    let mut window = arr_concat(recent_sigmas, [new_sigma])
+    if len(window) > sr_tracker_window {
+        let mut trimmed = []
+        let mut i = len(window) - sr_tracker_window
+        while i < len(window) { trimmed.push(window[i]); i = i + 1 }
+        window = trimmed
+    }
+    let std = estimate_sigma(window)
+    let mut threshold = sr_base_threshold + std * sr_tracker_k
+    if threshold < sr_tracker_min_threshold { threshold = sr_tracker_min_threshold }
+    if threshold > sr_tracker_max_threshold { threshold = sr_tracker_max_threshold }
+    return TrackerOut { window: window, threshold: threshold }
+}
+
+// external-caller wrapper (back-compat surface): returns just the threshold.
+fn update_threshold(recent_sigmas: array, new_sigma: float) -> float {
+    let r = sigma_peak_tracker_update(recent_sigmas, new_sigma)
+    return r.threshold
+}
+
+// ─── 변이 전략 (MutationStrategy) ───
+
+fn strategy_name(s: int) -> string {
+    if s == 0 { return "ParameterShift" }
+    if s == 1 { return "DomainTransfer" }
+    if s == 2 { return "Combination" }
+    if s == 3 { return "Inversion" }
+    return "Unknown"
+}
+
+fn truncate(s: string, max_len: int) -> string {
+    if len(s) <= max_len { return s }
+    return s.substring(0, max_len) + "..."
+}
+
+// --- ParameterShift: n=6 상수로 스케일링 ---
+fn mutate_parameter_shift(base: string) -> array {
+    let n6_shift_names = ["sigma", "phi", "tau", "J2", "sopfr", "sigma-phi", "sigma-tau", "n", "ln(4/3)", "tau^2/sigma"]
+    let n6_shift_values = [12.0, 2.0, 4.0, 24.0, 5.0, 10.0, 8.0, 6.0, 0.287682072, 1.333333333]
+    let mut results = []
+    let mut i = 0
+    while i < len(n6_shift_names) {
+        let name = n6_shift_names[i]
+        let val = n6_shift_values[i]
+        results.push("[ParameterShift] " + base + " -> scaled by " + name + "=" + to_string(val) + ": key parameter x" + name + " may reveal hidden n=6 alignment")
+        i = i + 1
+    }
+    return results
+}
+
+// --- DomainTransfer: 다른 도메인으로 전이 ---
+fn mutate_domain_transfer(base: string) -> array {
+    let transfer_domains = ["ai-efficiency", "chip-architecture", "energy-architecture", "battery-architecture", "quantum-computing", "fusion", "superconductor", "biology", "cosmology-particle", "robotics", "material-synthesis", "software-design"]
+    let mut results = []
+    let mut i = 0
+    while i < len(transfer_domains) {
+        let domain = transfer_domains[i]
+        results.push("[DomainTransfer->" + domain + "] If '" + truncate(base, 80) + "' holds, then analogous pattern may exist in " + domain + " domain")
+        i = i + 1
+    }
+    return results
+}
+
+// --- Combination: 가설 절반을 n=6 브릿지로 연결 ---
+fn mutate_combination(base: string) -> array {
+    let words = base.split(" ")
+    if len(words) < 4 {
+        let mut single = []
+        single.push("[Combination] " + base + " && sigma*phi=n*tau bridge -> unified hypothesis")
+        return single
+    }
+    let mid = len(words) / 2
+    let mut first_half = ""
+    let mut i = 0
+    while i < mid {
+        if i > 0 { first_half = first_half + " " }
+        first_half = first_half + words[i]
+        i = i + 1
+    }
+    let mut second_half = ""
+    while i < len(words) {
+        if i > mid { second_half = second_half + " " }
+        second_half = second_half + words[i]
+        i = i + 1
+    }
+    let mut out = []
+    out.push("[Combination:sigma*phi=n*tau] '" + first_half + "' BRIDGED-BY n=6 identity WITH '" + second_half + "'")
+    out.push("[Combination:J2=24] '" + second_half + "' scaled-to J2=24 dimension WITH '" + first_half + "'")
+    return out
+}
+
+// --- Inversion: 가설 부정 ---
+fn mutate_inversion(base: string) -> array {
+    let mut out = []
+    out.push("[Inversion] NOT(" + base + "): what if the opposite holds?")
+    out.push("[Inversion:reciprocal] Instead of X, consider 1/X where: " + base)
+    return out
+}
+
+// --- 전체 변이 (4종 전략 적용) ---
+fn mutate_hypothesis(base: string) -> array {
+    let mut results = []
+    results = arr_concat(results, mutate_parameter_shift(base))
+    results = arr_concat(results, mutate_domain_transfer(base))
+    results = arr_concat(results, mutate_combination(base))
+    results = arr_concat(results, mutate_inversion(base))
+    return results
+}
+
+fn mutate_with_strategy(base: string, strategy: int) -> array {
+    if strategy == 0 { return mutate_parameter_shift(base) }
+    if strategy == 1 { return mutate_domain_transfer(base) }
+    if strategy == 2 { return mutate_combination(base) }
+    if strategy == 3 { return mutate_inversion(base) }
+    let empty: array = []
+    return empty
+}
+
+// ─── 수렴 검사 (ConvergenceChecker) ───
+
+fn status_name(s: int) -> string {
+    if s == 0 { return "Exploring" }
+    if s == 1 { return "Converging" }
+    if s == 2 { return "Saturated" }
+    if s == 3 { return "Divergent" }
+    return "Unknown"
+}
+
+struct ConvergenceConfig {
+    min_cycles: int,
+    saturation_window: int,
+    convergence_threshold: float
+}
+
+fn default_convergence_config() -> ConvergenceConfig {
+    return ConvergenceConfig {
+        min_cycles: 3,
+        saturation_window: 3,
+        convergence_threshold: 0.5
+    }
+}
+
+// history: 각 사이클의 신규 발견 수 배열
+fn check_convergence(config: ConvergenceConfig, history: array) -> int {
+    if len(history) < config.min_cycles {
+        return status_exploring
+    }
+
+    // 포화 검사: 최근 N 사이클 모두 발견 0
+    let window = if config.saturation_window < len(history) { config.saturation_window } else { len(history) }
+    let start = len(history) - window
+    let mut all_zero = true
+    let mut i = start
+    while i < len(history) {
+        if history[i] > 0 { all_zero = false }
+        i = i + 1
+    }
+    if all_zero { return status_saturated }
+
+    if len(history) < 2 { return status_exploring }
+
+    // 전반부 vs 후반부 비교
+    let mid = len(history) / 2
+    let mut early_sum = 0
+    i = 0
+    while i < mid {
+        early_sum = early_sum + history[i]
+        i = i + 1
+    }
+    let early_avg = to_float(early_sum) / to_float(mid)
+
+    let mut recent_sum = 0
+    i = mid
+    while i < len(history) {
+        recent_sum = recent_sum + history[i]
+        i = i + 1
+    }
+    let recent_len = len(history) - mid
+    let recent_avg = to_float(recent_sum) / to_float(recent_len)
+
+    if early_avg == 0.0 && recent_avg == 0.0 { return status_saturated }
+
+    if early_avg > 0.0 {
+        let ratio = recent_avg / early_avg
+        if ratio < (1.0 - config.convergence_threshold) { return status_converging }
+        if ratio > (1.0 + config.convergence_threshold) { return status_divergent }
+    } else if recent_avg > 0.0 {
+        return status_divergent
+    }
+
+    return status_exploring
+}
+
+// ─── CycleResult / EvolutionState ───
+
+struct CycleResult {
+    cycle: int,
+    domain: string,
+    new_discoveries: int,
+    graph_nodes: int,
+    graph_edges: int,
+    verification_score: float
+}
+
+struct EvolutionState {
+    domain: string,
+    cycle_count: int,
+    discovery_history: array,
+    node_count: int,
+    edge_count: int,
+    seed_hypotheses: array
+}
+
+fn new_evolution_state(domain: string, seeds: array) -> EvolutionState {
+    let empty: array = []
+    return EvolutionState {
+        domain: domain,
+        cycle_count: 0,
+        discovery_history: empty,
+        node_count: 0,
+        edge_count: 0,
+        seed_hypotheses: seeds
+    }
+}
+
+// 가설 → 스캔 데이터 (결정론적 해시)
+fn hypotheses_to_data(hypotheses: array) -> array {
+    let mut data = [6.0, 12.0, 2.0, 4.0, 24.0, 5.0]  // n=6 기본 상수
+    let mut i = 0
+    while i < len(hypotheses) {
+        let h = hypotheses[i]
+        let hash = len(h) * 7 + 13
+        let value = to_float(hash % 100) + 0.5
+        data.push(value)
+        i = i + 1
+    }
+    return data
+}
+
+// 가설 생성 (시드 + 이전 발견의 변이)
+fn generate_hypotheses(state: EvolutionState, prev_discoveries: array) -> array {
+    let mut hypotheses = []
+
+    // 첫 사이클: 시드 사용
+    if state.cycle_count == 0 {
+        hypotheses = arr_concat(hypotheses, state.seed_hypotheses)
+    }
+
+    // 이전 발견에서 변이 (최대 2개/발견)
+    let mut count = 0
+    let mut d = 0
+    while d < len(prev_discoveries) {
+        if count >= max_mutations_per_cycle { break }
+        let mutations = mutate_hypothesis(prev_discoveries[d])
+        let take = if len(mutations) > 2 { 2 } else { len(mutations) }
+        let mut i = 0
+        while i < take {
+            hypotheses.push(mutations[i])
+            i = i + 1
+        }
+        count = count + 1
+        d = d + 1
+    }
+
+    // 최소 1개 보장
+    if len(hypotheses) == 0 {
+        hypotheses.push("n=6 pattern in " + state.domain + " domain: sigma*phi=n*tau identity may constrain key parameters")
+    }
+
+    // 총량 제한
+    let limit = max_mutations_per_cycle * 6
+    if len(hypotheses) > limit {
+        let mut trimmed = []
+        let mut i = 0
+        while i < limit {
+            trimmed.push(hypotheses[i])
+            i = i + 1
+        }
+        hypotheses = trimmed
+    }
+
+    return hypotheses
+}
+
+// 간이 검증 점수 (0.0 ~ 1.0)
+fn verify_score(data: array, cycle: int) -> float {
+    let n6_constants = [6.0, 12.0, 2.0, 4.0, 24.0, 5.0]
+    let mut n6_count = 0
+    let mut i = 0
+    while i < len(data) {
+        let v = data[i]
+        let mut j = 0
+        while j < len(n6_constants) {
+            if abs_f(v - n6_constants[j]) < 0.01 { n6_count = n6_count + 1 }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    let denom = if len(data) > 0 { len(data) } else { 1 }
+    let n6_ratio = to_float(n6_count) / to_float(denom)
+
+    // 참신성: 사이클이 진행될수록 감소
+    let cyc = if cycle > 0 { cycle } else { 1 }
+    let novelty = 1.0 / sqrt_f(to_float(cyc))
+
+    // 종합 점수
+    let score = n6_ratio * 0.4 + novelty * 0.3 + 0.3
+    if score > 1.0 { return 1.0 }
+    return score
+}
+
+// 진화 1단계 실행
+fn evolve_step(state: EvolutionState, prev_discoveries: array) -> CycleResult {
+    let cycle = state.cycle_count + 1
+    let hypotheses = generate_hypotheses(state, prev_discoveries)
+    let data = hypotheses_to_data(hypotheses)
+    let score = verify_score(data, cycle)
+
+    // 발견 판정 (score >= 0.3)
+    let new_disc = if score >= 0.3 { len(hypotheses) } else { 0 }
+    let new_edges = if cycle > 1 && new_disc > 0 { new_disc } else { 0 }
+
+    return CycleResult {
+        cycle: cycle,
+        domain: state.domain,
+        new_discoveries: new_disc,
+        graph_nodes: state.node_count + new_disc,
+        graph_edges: state.edge_count + new_edges,
+        verification_score: score
+    }
+}
+
+// 진화 루프 실행 → CycleResult[]
+fn run_evolution(domain: string, seeds: array, max_cycles: int) -> array {
+    let mut state = new_evolution_state(domain, seeds)
+    let conv_config = default_convergence_config()
+    let mut results = []
+    let mut prev_disc = seeds
+
+    let mut c = 0
+    while c < max_cycles {
+        let result = evolve_step(state, prev_disc)
+        results.push(result)
+        state = EvolutionState {
+            domain: state.domain,
+            cycle_count: result.cycle,
+            discovery_history: arr_concat(state.discovery_history, [result.new_discoveries]),
+            node_count: result.graph_nodes,
+            edge_count: result.graph_edges,
+            seed_hypotheses: state.seed_hypotheses
+        }
+
+        // 수렴 검사
+        let status = check_convergence(conv_config, state.discovery_history)
+        println("  cycle " + to_string(result.cycle) + ": discoveries=" + to_string(result.new_discoveries) + " score=" + to_string(result.verification_score) + " status=" + status_name(status))
+
+        if status == status_saturated {
+            println("  -> SATURATED at cycle " + to_string(result.cycle))
+            return results
+        }
+
+        // 다음 사이클 시드 갱신
+        if result.new_discoveries > 0 && len(prev_disc) > 0 {
+            let mutations = mutate_hypothesis(prev_disc[0])
+            if len(mutations) > 2 {
+                let mut nx = []
+                nx.push(mutations[0])
+                nx.push(mutations[1])
+                prev_disc = nx
+            } else if len(mutations) > 0 {
+                prev_disc = mutations
+            }
+        }
+
+        c = c + 1
+    }
+    return results
+}
+
+// ─── Absorber: 재귀 자기적용 f(f(f(...))) ───
+
+struct AbsorptionResult {
+    depth: int,
+    yield_count: int,
+    delta: float,
+    label: string
+}
+
+struct AbsorptionChain {
+    layers: array,
+    converged: bool,
+    final_depth: int,
+    total_yield: int
+}
+
+// GrowthEvent: 흡수 가능한 단위
+struct GrowthEvent {
+    source: string,
+    kind: string,
+    value: float
+}
+
+// 성장 흡수기 상태
+struct GrowthState {
+    weights: array,
+    absorbed_patterns: array,
+    state_counter: int
+}
+
+fn new_growth_state() -> GrowthState {
+    let weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]  // n=6 초기 가중치
+    let empty: array = []
+    return GrowthState {
+        weights: weights,
+        absorbed_patterns: empty,
+        state_counter: 0
+    }
+}
+
+// apply: 가중 필터링 + 공명 탐지 (SR-adaptive threshold) → GrowthEvent[]
+fn growth_apply(state: GrowthState, input: array, threshold: float) -> array {
+    let mut output = []
+    let mut i = 0
+    while i < len(input) {
+        let event = input[i]
+        let w = state.weights[i % len(state.weights)]
+        let amplified = event.value * w
+
+        // 임계값 초과 → 메타 성장 이벤트
+        if amplified > 1.0 {
+            output.push(GrowthEvent {
+                source: "meta(" + event.source + ")",
+                kind: "absorbed_" + event.kind,
+                value: amplified
+            })
+        }
+
+        // 인접 이벤트 공명 체크 — SR-adaptive threshold
+        if i + 1 < len(input) {
+            let nxt = input[i + 1]
+            let resonance = abs_f(event.value - nxt.value)
+            if resonance < threshold {
+                output.push(GrowthEvent {
+                    source: "resonance(" + event.source + "," + nxt.source + ")",
+                    kind: "emergence",
+                    value: (event.value + nxt.value) / 2.0
+                })
+            }
+        }
+        i = i + 1
+    }
+    return output
+}
+
+// 공명 샘플 추출 — 인접 쌍 |v_i - v_{i+1}| 목록
+fn extract_resonance_samples(input: array) -> array {
+    let mut samples = []
+    let mut i = 0
+    while i + 1 < len(input) {
+        let a = input[i]
+        let b = input[i + 1]
+        samples.push(abs_f(a.value - b.value))
+        i = i + 1
+    }
+    return samples
+}
+
+// absorb_self: 산출물이 가중치를 변형 (EMA, alpha = 1/6)
+fn growth_absorb(state: GrowthState, output: array) -> GrowthState {
+    if len(output) == 0 { return state }
+
+    let mut sum = 0.0
+    let mut i = 0
+    while i < len(output) { sum = sum + output[i].value; i = i + 1 }
+    let avg = sum / to_float(len(output))
+
+    let alpha = 1.0 / 6.0
+    let mut new_weights = []
+    i = 0
+    while i < len(state.weights) {
+        let w = state.weights[i]
+        new_weights.push(w * (1.0 - alpha) + avg * alpha)
+        i = i + 1
+    }
+
+    // 창발 패턴 흡수 기록
+    let mut new_patterns = arr_concat(state.absorbed_patterns, [])
+    i = 0
+    while i < len(output) {
+        if output[i].kind == "emergence" {
+            new_patterns.push(output[i].source)
+        }
+        i = i + 1
+    }
+
+    return GrowthState {
+        weights: new_weights,
+        absorbed_patterns: new_patterns,
+        state_counter: state.state_counter + 1
+    }
+}
+
+// measure: 스칼라 요약 (수렴 판정)
+fn growth_measure(output: array) -> float {
+    if len(output) == 0 { return 0.0 }
+    let mut sum = 0.0
+    let mut i = 0
+    while i < len(output) { sum = sum + output[i].value; i = i + 1 }
+    return sum / to_float(len(output))
+}
+
+// depth별 라벨
+fn depth_label(d: int) -> string {
+    if d == 0 { return "growth" }
+    if d == 1 { return "growth(growth)" }
+    if d == 2 { return "growth(growth(growth))" }
+    return "growth^" + to_string(d + 1)
+}
+
+// Absorber 실행: f(f(f(...))) 수렴 루프 + SR-adaptive threshold.
+// NOTE: the archive's per-round append_sr_sigma_tracker(...) nexus.json write
+// is intentionally DEFERRED (file-I/O telemetry); the sigma/emergence math it
+// consumed is kept live below.
+fn run_absorber(initial_input: array) -> AbsorptionChain {
+    let mut state = new_growth_state()
+    let mut layers = []
+    let mut current_input = initial_input
+    let mut prev_measure = 0.0
+    let mut total_yield = 0
+
+    // SR rolling window: 최근 round 의 resonance 샘플 누적
+    let mut resonance_history = []
+    // sigma_peak_tracker: round 별 sigma 관측치 FIFO window=10
+    let mut recent_sigmas = []
+
+    let mut depth = 0
+    while depth < absorber_max_depth {
+        // round 시작 시의 sigma 를 tracker 에 push 후 threshold 수신
+        let sigma_obs = estimate_sigma(resonance_history)
+        let tracker_out = sigma_peak_tracker_update(recent_sigmas, sigma_obs)
+        recent_sigmas = tracker_out.window
+        let threshold = tracker_out.threshold
+
+        // 이번 round 의 resonance 샘플을 history 에 추가
+        let samples = extract_resonance_samples(current_input)
+        resonance_history = arr_concat(resonance_history, samples)
+        // history trim (최신 sr_rolling_window × 8 만 유지 — 폭주 방지)
+        let max_hist = sr_rolling_window * 8
+        if len(resonance_history) > max_hist {
+            let mut trimmed = []
+            let mut t_i = len(resonance_history) - max_hist
+            while t_i < len(resonance_history) { trimmed.push(resonance_history[t_i]); t_i = t_i + 1 }
+            resonance_history = trimmed
+        }
+
+        let output = growth_apply(state, current_input, threshold)
+        let yield_count = len(output)
+        total_yield = total_yield + yield_count
+
+        // emergence count (kind == "emergence") — math kept; telemetry deferred
+        let mut emergence_count = 0
+        let mut eo_i = 0
+        while eo_i < len(output) {
+            if output[eo_i].kind == "emergence" { emergence_count = emergence_count + 1 }
+            eo_i = eo_i + 1
+        }
+
+        let current_measure = growth_measure(output)
+        let delta = abs_f(current_measure - prev_measure)
+
+        layers.push(AbsorptionResult {
+            depth: depth,
+            yield_count: yield_count,
+            delta: delta,
+            label: depth_label(depth)
+        })
+
+        // 수렴 체크
+        if depth > 0 && delta < absorber_epsilon {
+            return AbsorptionChain {
+                layers: layers,
+                converged: true,
+                final_depth: depth,
+                total_yield: total_yield
+            }
+        }
+
+        // 발산 체크
+        if total_yield > divergence_limit {
+            return AbsorptionChain {
+                layers: layers,
+                converged: false,
+                final_depth: depth,
+                total_yield: total_yield
+            }
+        }
+
+        // 핵심: f가 자기 산출물을 흡수하여 변형
+        state = growth_absorb(state, output)
+        prev_measure = current_measure
+        current_input = output
+
+        depth = depth + 1
+    }
+
+    return AbsorptionChain {
+        layers: layers,
+        converged: false,
+        final_depth: absorber_max_depth,
+        total_yield: total_yield
+    }
+}
+
+// ─── MetaLoop: evolve → Saturated → forge → 재진화 ───
+
+struct MetaLoopResult {
+    meta_cycles: int,
+    total_discoveries: int,
+    total_evolutions: int,
+    final_status: int
+}
+
+fn run_meta_loop(domain: string, seeds: array, max_meta: int, max_evo: int) -> MetaLoopResult {
+    let mut total_disc = 0
+    let mut total_evo = 0
+    let mut current_seeds = seeds
+    let mut final_status = status_exploring
+
+    let mut mc = 0
+    while mc < max_meta {
+        println("--- meta-cycle " + to_string(mc + 1) + " ---")
+        let results = run_evolution(domain, current_seeds, max_evo)
+        total_evo = total_evo + len(results)
+
+        let mut cycle_disc = 0
+        let mut ri = 0
+        while ri < len(results) {
+            cycle_disc = cycle_disc + results[ri].new_discoveries
+            ri = ri + 1
+        }
+        total_disc = total_disc + cycle_disc
+
+        println("  meta-cycle " + to_string(mc + 1) + " complete: discoveries=" + to_string(cycle_disc))
+
+        // 수렴 검사
+        let mut disc_history = []
+        ri = 0
+        while ri < len(results) {
+            disc_history.push(results[ri].new_discoveries)
+            ri = ri + 1
+        }
+        final_status = check_convergence(default_convergence_config(), disc_history)
+
+        // 포화 시 시드 재생성 (forge 시뮬레이션)
+        if final_status == status_saturated && mc + 1 < max_meta {
+            println("  forge: regenerating seeds for next meta-cycle")
+            let mut new_seeds = []
+            let mut si = 0
+            while si < len(current_seeds) {
+                let inv = mutate_inversion(current_seeds[si])
+                if len(inv) > 0 { new_seeds.push(inv[0]) }
+                si = si + 1
+            }
+            if len(new_seeds) == 0 {
+                println("  forge: no new seeds — true convergence")
+                return MetaLoopResult {
+                    meta_cycles: mc + 1,
+                    total_discoveries: total_disc,
+                    total_evolutions: total_evo,
+                    final_status: status_saturated
+                }
+            }
+            current_seeds = new_seeds
+        }
+
+        mc = mc + 1
+    }
+
+    return MetaLoopResult {
+        meta_cycles: mc,
+        total_discoveries: total_disc,
+        total_evolutions: total_evo,
+        final_status: final_status
+    }
+}
+
+// ─── deterministic demo / selftest ───
+
+fn main() {
+    println("=== OUROBOROS native port (drill spine) — selftest ===")
+    println("")
+
+    // ── 1. Evolution loop ──
+    let domain = "math"
+    println("[evolve] domain=" + domain + " max_cycles=5")
+    let seeds = ["n=6 pattern in " + domain + ": sigma*phi=n*tau",
+                 domain + " domain key parameters constrained by n=6 algebra"]
+    let results = run_evolution(domain, seeds, 5)
+    let mut total_disc = 0
+    let mut ri = 0
+    while ri < len(results) {
+        total_disc = total_disc + results[ri].new_discoveries
+        ri = ri + 1
+    }
+    println("[evolve] cycles=" + to_string(len(results)) + " total_discoveries=" + to_string(total_disc))
+    if len(results) > 0 {
+        let last = results[len(results) - 1]
+        println("[evolve] final_score=" + to_string(last.verification_score) + " graph=" + to_string(last.graph_nodes) + "n/" + to_string(last.graph_edges) + "e")
+    }
+    println("")
+
+    // ── 2. Recursive self-absorber f(f(f(...))) ──
+    println("[absorb] max_depth=" + to_string(absorber_max_depth) + " epsilon=" + to_string(absorber_epsilon))
+    let mut input = []
+    input.push(GrowthEvent { source: "lens_grower", kind: "discovery", value: 2.0 })
+    input.push(GrowthEvent { source: "mirror", kind: "resonance", value: 2.1 })
+    input.push(GrowthEvent { source: "ouroboros", kind: "mutation", value: 3.0 })
+    input.push(GrowthEvent { source: "dream", kind: "hypothesis", value: 1.5 })
+    input.push(GrowthEvent { source: "forge", kind: "lens_created", value: 4.0 })
+    input.push(GrowthEvent { source: "bus", kind: "feedback", value: 1.8 })
+    let chain = run_absorber(input)
+    let conv = if chain.converged { "true" } else { "false" }
+    println("[absorb] final_depth=" + to_string(chain.final_depth) + " converged=" + conv + " total_yield=" + to_string(chain.total_yield))
+    let mut li = 0
+    while li < len(chain.layers) {
+        let layer = chain.layers[li]
+        println("  depth " + to_string(layer.depth) + " [" + layer.label + "]: yield=" + to_string(layer.yield_count) + " delta=" + to_string(layer.delta))
+        li = li + 1
+    }
+    println("")
+
+    // ── 3. MetaLoop (evolve → saturate → forge → re-evolve) ──
+    println("[meta] domain=" + domain + " max_meta=2 max_evo=3")
+    let meta_seeds = ["n=6 in " + domain, domain + " sigma*phi=n*tau"]
+    let meta = run_meta_loop(domain, meta_seeds, 2, 3)
+    println("[meta] meta_cycles=" + to_string(meta.meta_cycles) + " total_discoveries=" + to_string(meta.total_discoveries) + " total_evolutions=" + to_string(meta.total_evolutions) + " final_status=" + status_name(meta.final_status))
+    println("")
+
+    // ── 4. engine-logic self-checks (mirror the archive asserts) ──
+    let mut fails = 0
+    if strategy_name(0) != "ParameterShift" { fails = fails + 1; println("  [FAIL] strategy_name(0)") }
+    if strategy_name(3) != "Inversion" { fails = fails + 1; println("  [FAIL] strategy_name(3)") }
+    if status_name(status_exploring) != "Exploring" { fails = fails + 1; println("  [FAIL] status_name(exploring)") }
+    if status_name(status_saturated) != "Saturated" { fails = fails + 1; println("  [FAIL] status_name(saturated)") }
+    let sat_hist = [5, 3, 0, 0, 0]
+    if check_convergence(default_convergence_config(), sat_hist) != status_saturated { fails = fails + 1; println("  [FAIL] saturation detect") }
+    let exp_hist = [5, 3]
+    if check_convergence(default_convergence_config(), exp_hist) != status_exploring { fails = fails + 1; println("  [FAIL] exploring detect") }
+    if depth_label(2) != "growth(growth(growth))" { fails = fails + 1; println("  [FAIL] depth_label") }
+    let tm = mutate_hypothesis("test")
+    if len(tm) == 0 { fails = fails + 1; println("  [FAIL] mutate_hypothesis empty") }
+
+    if fails == 0 {
+        println("=== ouroboros native: PASS (evolve + absorb + SR-tracker + meta-loop live) ===")
+        exit(0)
+    }
+    println("=== ouroboros native: FAIL (" + to_string(fails) + ") ===")
+    exit(1)
+}
