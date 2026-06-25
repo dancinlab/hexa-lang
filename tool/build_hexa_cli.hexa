@@ -515,19 +515,6 @@ fn _regen_vendor_native_c(repo_root: string) {
     }
 }
 
-// @convergence(state="ossified", id="x86-native-seed-link-wiring", recurrence=3,
-//   rule="Any build script that links self/runtime.c MUST assemble + link the
-//   CANONICAL native-seed object set AND pass its pairing -D macros, exactly as
-//   build_aprime.sh:272-406 does. runtime_core.c dropped the C bodies of
-//   rt_array_*_native / rt_map_*_native / rt_str_*_native (always extern) and gates
-//   the C arena behind #ifdef HEXA_RT_ALLOC_NATIVE (runtime_core.c:1450). So:
-//   (a) omitting array/map/alloc/rt_hi seed .o = `undefined reference to
-//   rt_map_get_native / hexa_arena_alloc`; (b) linking the alloc seed WITHOUT
-//   -DHEXA_RT_ALLOC_NATIVE=1 = `multiple definition of hexa_arena_*` (both the C
-//   arena and the seed define them). Recurrences: (1) build_native_linux_x86_64 gcc
-//   line, (2) shipped v0.262.0 runtime.a missing array_core_native.o (bricked hexa
-//   run/build of every x86_64 program), (3) THIS build_hexa_cli driver+module_loader
-//   link. Fix = the canonical set + the alloc macro, the build_aprime way.")
 //
 // _native_seed_suffix: arch token for self/native/<stem>_<sfx>.s (x86_64 /
 // arm64 [Mach-O darwin] / arm64-linux [ELF]).

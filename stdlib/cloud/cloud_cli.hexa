@@ -2087,7 +2087,6 @@ fn _provider_for_id(id: str) -> str {
 // pods behave as before. NO env-var opt-out (sidecar s11). Returns 1 = refuse
 // (caller exits non-zero), 0 = allow.
 fn _down_guard_refuses(id: str, force: int) -> int {
-    // @convergence state=in_flight id=CLOUD-CROSSPROJECT-FORCE value="--force is a CONFIRM-skip, NOT a cross-project license: a rent-session trap auto-passing --force (with a mis-parsed id) destroyed another project's pod (an anima session killed a runpod pod tagged to a different project)" threshold="cross-project REAL-mismatch refuses even under --force; teardown requires re-running from the owner repo (same-project/orphan/untracked unaffected)"
     // --force NO LONGER bypasses the cross-project guard. It skips the [y/N]
     // confirm, but a REAL cross-project mismatch is refused REGARDLESS, so an
     // automated `--force` teardown (e.g. a rent-session trap that mis-parsed

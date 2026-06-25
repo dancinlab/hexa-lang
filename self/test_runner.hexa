@@ -49,7 +49,6 @@ fn _extract_runner_argv(av) {
         out.push(av[i])
         i = i + 1
     }
-    // @convergence state=ossified id=CLI-ARGV-STANDALONE-PREFIX value="compiled bin/hexa-test forwards argv with file at index 1, but loop assumed hexa-run two-slot prefix (i=2) → empty args → usage+exit2" threshold="if av[2..] empty, fall back to av[1..] (standalone-binary shape)"
     if len(out) == 0 {
         let mut k = 1
         while k < len(av) { out.push(av[k]); k = k + 1 }
