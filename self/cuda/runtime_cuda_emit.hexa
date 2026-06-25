@@ -178,17 +178,23 @@ fn emit_runtime_cuda_c() -> str {
             " * ════════════════════════════════════════════════════════════════════ */\n" +
             "enum { FORGE_OUT_HOST_NOW = 0, FORGE_OUT_DEVICE_KEEP = 1 };\n" +
             "\n" +
-            "/* Process-wide output-disposition register. Default HOST_NOW =\n" +
+            "/* Process-wide output-disposition register. -1 = UNSET → follow the\n" +
+            " * device-resident gate (_forge_out_keep below): when CLM_PROD_DEVRESIDENT/\n" +
+            " * HEXA_FUSE_ALL turns the device-resident chain on, the output stays\n" +
+            " * device-resident (DEVICE_KEEP) so the next op's H2D §6.1-skips instead of\n" +
+            " * a per-op D2H->H2D ping-pong (the glue-bound floor). Explicit\n" +
+            " * _hx_cuda_set_out_disposition wins. UNSET + no gate = HOST_NOW =\n" +
             " * byte-identical to the verified pre-RFC-056 substrate. */\n" +
-            "static int g_forge_out_disposition = FORGE_OUT_HOST_NOW;\n" +
+            "static int g_forge_out_disposition = -1;\n" +
             "\n" +
             "/* Called by the host runtime.c shim immediately before a `_gpu` op to\n" +
             " * express §6.4's consumed-by-next-GPU-op hint. Returns the previous\n" +
             " * value (so callers can save/restore). */\n" +
             "int _hx_cuda_set_out_disposition(int d) {\n" +
             "    int prev = g_forge_out_disposition;\n" +
-            "    g_forge_out_disposition = (d == FORGE_OUT_DEVICE_KEEP)\n" +
-            "                              ? FORGE_OUT_DEVICE_KEEP : FORGE_OUT_HOST_NOW;\n" +
+            "    g_forge_out_disposition = (d == FORGE_OUT_DEVICE_KEEP) ? FORGE_OUT_DEVICE_KEEP\n" +
+            "                            : (d < 0) ? -1 /* unset -> follow device-resident gate */\n" +
+            "                            : FORGE_OUT_HOST_NOW;\n" +
             "    return prev;\n" +
             "}\n" +
             "\n" +
@@ -236,6 +242,21 @@ fn emit_runtime_cuda_c() -> str {
             "        }\n" +
             "    }\n" +
             "    return g_forge_async;\n" +
+            "}\n" +
+            "\n" +
+            "/* Resolve the EFFECTIVE output disposition. Explicit set wins; UNSET (-1)\n" +
+            " * follows the device-resident gate (_forge_async_on = CLM_PROD_DEVRESIDENT/\n" +
+            " * HEXA_FUSE_ALL) so turning device-residency ON actually keeps activations\n" +
+            " * on-device (DEVICE_KEEP) — the gate previously flipped only the stream,\n" +
+            " * leaving every glue op to D2H its output for the next op to re-H2D (the\n" +
+            " * per-op ping-pong = glue-bound floor). UNSET + gate off = HOST_NOW =\n" +
+            " * byte-identical to the verified substrate. (This perf coupling is safe\n" +
+            " * only ON TOP of the stream-ordering family fix — same-stream producers\n" +
+            " * make the device-resident H2D-skip hand-off race-free.) */\n" +
+            "static int _forge_out_keep(void) {\n" +
+            "    if (g_forge_out_disposition >= 0)\n" +
+            "        return g_forge_out_disposition == FORGE_OUT_DEVICE_KEEP;\n" +
+            "    return _forge_async_on();\n" +
             "}\n" +
             "\n" +
             "#ifdef __CUDACC__\n" +
@@ -4246,7 +4267,7 @@ fn emit_runtime_cuda_c() -> str {
             "static int _d2h_out(int64_t out_id, int64_t copy_len) {\n" +
             "    HexaFarrEntry* e = &_hx_farr_table[out_id];\n" +
             "    _CudaFarrSlot* s = &g_slots[out_id];\n" +
-            "    if (g_forge_out_disposition == FORGE_OUT_DEVICE_KEEP) {\n" +
+            "    if (_forge_out_keep()) {\n" +
             "        /* Defer D2H — device authoritative, host stale. No bytes\n" +
             "         * copied; the next op reads s->d_buf directly via H2D-skip. */\n" +
             "        e->d_buf      = (void*)s->d_buf;\n" +
@@ -5863,7 +5884,7 @@ fn emit_runtime_cuda_c() -> str {
             "    if (!e->buf || !s->d_buf || e->len < len || s->len < len) return -1;\n" +
             "    /* RFC 056 §6.1/§6.4 D2H-defer — same contract as _d2h_out. Default\n" +
             "     * FORGE_OUT_HOST_NOW = byte-identical to the verified substrate. */\n" +
-            "    if (g_forge_out_disposition == FORGE_OUT_DEVICE_KEEP) {\n" +
+            "    if (_forge_out_keep()) {\n" +
             "        e->d_buf      = (void*)s->d_buf;\n" +
             "        e->loc        = FARR_DEVICE;\n" +
             "        /* residency-fix (same bug as _d2h_out): device-keep output is\n" +
