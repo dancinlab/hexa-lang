@@ -141,6 +141,12 @@ void *__attribute__((noinline)) hxlcl_calloc(size_t nmemb, size_t size) {
 #else
 void  *hxlcl_calloc(size_t nmemb, size_t size)        { return calloc(nmemb ? nmemb : 1, size ? size : 1); }
 #endif
+/* SELFEMIT (HEXA_RT_SELFEMIT_MEMCPY, default OFF · RFC061 §M8 family r3):
+ * hxlcl_memcpy is supplied by the hexa-NATIVE self-emitted .o
+ * (test/native_build/emit_hxlcl_memcpy_o.hexa — verbatim rt_memcpy byte loop, no
+ * reloc/errno). DEFAULT (macro undefined) keeps the body below → shim.o
+ * byte-identical. */
+#ifndef HEXA_RT_SELFEMIT_MEMCPY
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen runtime.c:553 (hand-rolled byte loop) */
 void *__attribute__((noinline)) hxlcl_memcpy(void *dst, const void *src, size_t n) {
@@ -151,6 +157,7 @@ void *__attribute__((noinline)) hxlcl_memcpy(void *dst, const void *src, size_t 
 }
 #else
 void  *hxlcl_memcpy(void *d, const void *s, size_t n) { return memcpy(d, s, n); }
+#endif
 #endif
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_memset (verbatim 0-libc floor body) */
@@ -179,6 +186,13 @@ int    hxlcl_memcmp(const void *a, const void *b, size_t n) { return memcmp(a, b
 #endif
 
 /* ── string ──────────────────────────────────────────────────────────────── */
+/* SELFEMIT (HEXA_RT_SELFEMIT_STRLEN, default OFF · RFC061 §M8 family r3):
+ * hxlcl_strlen is supplied by the hexa-NATIVE self-emitted .o
+ * (test/native_build/emit_hxlcl_strlen_o.hexa — verbatim rt_str_len scan, no
+ * reloc/errno). The shim's own internal callsite (hxlcl_getenv) then resolves to
+ * the native symbol cross-object. DEFAULT (macro undefined) keeps the body below
+ * → shim.o byte-identical. */
+#ifndef HEXA_RT_SELFEMIT_STRLEN
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen runtime.c:299 (hand-rolled volatile scan) */
 size_t __attribute__((noinline)) hxlcl_strlen(const char *s) {
@@ -189,6 +203,7 @@ size_t __attribute__((noinline)) hxlcl_strlen(const char *s) {
 }
 #else
 size_t __attribute__((noinline)) hxlcl_strlen(const char *s) { return s ? strlen(s) : 0; }
+#endif
 #endif
 #ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
 /* byte-identical to frozen self/runtime.c hxlcl_strcmp (verbatim 0-libc floor body) */
@@ -386,7 +401,15 @@ size_t hxlcl_fread(void *b, size_t s, size_t n, void *fp) { return fread(b, s, n
 long   hxlcl_ftell(void *fp)                          { return ftell((FILE *)fp); }
 int    hxlcl_fseek(void *fp, long off, int whence)    { return fseek((FILE *)fp, off, whence); }
 int    hxlcl_open_sys(const char *path, int flags, ...) { return open(path, flags, 0644); }
+/* SELFEMIT (HEXA_RT_SELFEMIT_READ, default OFF · RFC061 §M8 family r3): like
+ * close below, hxlcl_read is supplied by the hexa-NATIVE self-emitted .o
+ * (test/native_build/emit_hxlcl_read_o.hexa — raw `svc #0x80` read trap +
+ * carry-flag errno store, byte-identical to runtime_arm64.hexa::rt_read, refs
+ * the shared `_hxlcl_errno`). DEFAULT (macro undefined) keeps this libc delegate
+ * → shim.o byte-identical. */
+#ifndef HEXA_RT_SELFEMIT_READ
 long   hxlcl_read(int fd, void *buf, unsigned long n) { return (long)read(fd, buf, (size_t)n); }
+#endif
 /* SELFEMIT (HEXA_RT_SELFEMIT_CLOSE, default OFF · RFC061 §M8): hxlcl_close is
  * supplied by the hexa-NATIVE self-emitted .o (test/native_build/emit_hxlcl_close_o.hexa
  * — a raw `svc #0x80` close trap with carry-flag errno store, byte-identical to
