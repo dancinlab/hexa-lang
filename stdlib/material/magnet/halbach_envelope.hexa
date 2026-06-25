@@ -99,6 +99,7 @@ fn halbach_envelope(n_seg: float, k: float) -> float {
 // (B_r, r_in, r_out, n_seg) → B  (same unit as B_r)
 fn halbach_field_ratio(b_r: float, r_in: float,
                        r_out: float, n_seg: float) -> float {
+    if r_out <= 0.0 || r_out <= r_in { return 0.0 }   // degenerate/ill-ordered bore → div-by-zero / unphysical
     let bore = b_r * (1.0 - r_in / r_out)
     return bore * halbach_envelope(n_seg, 1.0)
 }

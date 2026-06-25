@@ -54,10 +54,12 @@ let CF_TWO_PI = 6.28318530717958647692
 
 // ── biquad design intermediates (libm trig) ─────────────────────────────────
 fn _cf_biquad_omega(cutoff_hz: float, sample_rate: float) -> float {
+    if sample_rate <= 0.0 { return 0.0 }   // unset/invalid rate → inf/NaN omega
     return CF_TWO_PI * cutoff_hz / sample_rate
 }
 
 fn _cf_biquad_alpha(omega: float, Q: float) -> float {
+    if Q <= 0.0 { return 0.0 }   // Q=0 → 1/(2Q) div-by-zero
     return sin(omega) / (2.0 * Q)
 }
 

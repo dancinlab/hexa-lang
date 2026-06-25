@@ -68,6 +68,9 @@ pub fn mel_to_hz(mel: float) -> float {
 // mel-spaced anchor frequencies (left / center / right).
 
 pub fn mel_filterbank(n_mels: int, n_fft: int, sr: int) -> [float] {
+    // n_mels<=0 → n_points=1 → divide-by-(n_points-1)=0 NaN weights; n_fft/sr<=0 →
+    // inf bin indices. Reject malformed shape (matches spectral_density guard).
+    if n_mels <= 0 || n_fft <= 0 || sr <= 0 { return [] }
     let bins = n_fft / 2 + 1
     let fmax = sr / 2  // Nyquist
 
