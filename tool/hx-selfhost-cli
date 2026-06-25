@@ -20,10 +20,10 @@
 #            DELEGATE so the full CLI + every hook keeps working verbatim.
 #
 # Delegation target = the shipped dispatch binary backed up by tier2 to
-# hexa.real.pre-selfhost.<ts> (newest wins). If no backup exists yet (shim
-# run before tier2 ran its backup) we fall back to hexa.real itself UNLESS
-# hexa.real is this very shim (a symlink loop) — in which case we hard-fail
-# loudly rather than recurse.
+# hexad.pre-selfhost.<ts> (newest wins). If no backup exists yet (shim
+# run before tier2 ran its backup) we fall back to hexad itself UNLESS
+# hexad is a symlink (the flipped state points it at this very shim — a
+# symlink loop) — in which case we hard-fail loudly rather than recurse.
 #
 # Revert the whole flip with: tool/promote_selfhost.sh --revert
 set -u
@@ -41,10 +41,12 @@ RT_O="$SLOT/rt.o"
 # delegation target: newest backed-up shipped dispatch binary
 pick_delegate() {
     local bk
-    bk="$(ls -1t "$BIN_DIR"/hexa.real.pre-selfhost.* 2>/dev/null | head -1)"
+    bk="$(ls -1t "$BIN_DIR"/hexad.pre-selfhost.* 2>/dev/null | head -1)"
     if [ -n "$bk" ] && [ -x "$bk" ]; then printf '%s' "$bk"; return 0; fi
-    # fall back to hexa.real only if it is a REAL binary (not a symlink to us)
-    local real="$BIN_DIR/hexa.real"
+    # fall back to hexad only if it is a REAL binary (not a symlink to us).
+    # In the flipped layout hexad is a symlink -> this shim, so we must NOT
+    # follow it (infinite loop); the .pre-selfhost backup above is the target.
+    local real="$BIN_DIR/hexad"
     if [ -e "$real" ] && [ ! -L "$real" ]; then printf '%s' "$real"; return 0; fi
     return 1
 }
@@ -52,7 +54,7 @@ pick_delegate() {
 delegate() {
     local d; d="$(pick_delegate)" || {
         echo "hx-selfhost-cli: FATAL — no shipped dispatch binary to delegate to" >&2
-        echo "  (no hexa.real.pre-selfhost.* backup and hexa.real is a symlink)" >&2
+        echo "  (no hexad.pre-selfhost.* backup and hexad is a symlink)" >&2
         echo "  recover: tool/promote_selfhost.sh --revert" >&2
         exit 127
     }

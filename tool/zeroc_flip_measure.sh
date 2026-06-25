@@ -109,7 +109,8 @@ echo "[3/5] build all native seed objects (build/*.o)…"
 build_clusters() {
     local s out scr
     for s in leaf arith math math2 valop-dispatch map-query-dispatch map-query-fold collection-mutate \
-             array-typed-leaf fs-read-write arith-coerce-format runtime-misc; do
+             array-typed-leaf fs-read-write arith-coerce-format runtime-misc \
+             eqtruthy; do
         out="build/rtcore_${s//-/_}_native.o"
         scr="tool/regen_rtcore_${s}_native_o.sh"
         [ -f "$scr" ] || { echo "      NOSCR $scr"; continue; }
@@ -149,7 +150,8 @@ CLUSTER_DEFS="\
 -DHEXA_RT_CORE_ARRAY_TYPED_LEAF_NATIVE=1 \
 -DHEXA_RT_CORE_FS_READ_WRITE_NATIVE=1 \
 -DHEXA_RT_CORE_ARITH_COERCE_FORMAT_NATIVE=1 \
--DHEXA_RT_CORE_RUNTIME_MISC_NATIVE=1"
+-DHEXA_RT_CORE_RUNTIME_MISC_NATIVE=1 \
+-DHEXA_RT_CORE_EQTRUTHY_NATIVE=1"
 
 CFLAGS="-c -O2 $ARCH_FLAG -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -I self -I ."
 [ "$(uname -s)" = "Darwin" ] && CFLAGS="$CFLAGS -D_DARWIN_C_SOURCE"
