@@ -11,20 +11,30 @@
 // and positional arguments without duplicating ~25 LOC per module.
 //
 // Conventions.
-//   - `argv()` returns [interp_bin, script_path, ...user_args]
-//     (see interpreter.c host_args / hexa_main_argv). User args start
-//     at index 2 — cli_args() does that slice once.
+//   - `argv()` returns [binary_path, ...user_args] — argv[0] is the
+//     running executable (hexa_main_argv = process argv, C convention);
+//     user args start at index 1. This holds for BOTH dispatch paths an
+//     absorbed verb actually runs through: (a) the per-verb prebuilt
+//     `bin/hexa-absorbed-<verb>` standalone binary (argv=[abin, ...args])
+//     and (b) `cmd_run`, which COMPILES the module to a cache binary
+//     `~/.hexa-cache/hexa_run.<hash>` and execs it directly
+//     (argv=[cachebin, ...args]) — there is NO separate script_path slot.
+//     Measured on the shipping toolchain (2026-06-26 aiden v0.315.0):
+//     `hexa run mod.hexa SEED --rounds 2` → argv = [cachebin, "SEED",
+//     "--rounds", "2"]. The earlier 2-leading [interp_bin, script_path]
+//     assumption dropped the FIRST user arg (the positional seed), so
+//     `hexa drill "<seed>"` fell through to the usage banner (QA fix).
 //   - All parsers return strings. Numeric coercion is left to the
 //     caller via cli_parse_int(); empty input falls through to the
 //     supplied default so missing-arg paths are non-fatal.
 //   - English diagnostics, no logging, no I/O — keep this file pure.
 
-// cli_args — argv() minus [interp_bin, script_path]. The result is
-// what `hexa <verb> [args]` would expose to a shell script.
+// cli_args — argv() minus the leading binary path (argv[0]). The result
+// is what `hexa <verb> [args]` would expose to a shell script.
 pub fn cli_args() -> array {
     let av = argv()
     let mut out: array = []
-    let mut i: i64 = 2
+    let mut i: i64 = 1
     while i < len(av) {
         out.push(to_string(av[i]))
         i = i + 1
