@@ -1,0 +1,105 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  test_real_atomic.hexa — single-thread oracle for the real-atomic opt-in.
+//
+//  feat/real-concurrency-optin · RFC state/rfc_real_concurrency_optin.md.
+//
+//  This test is SELF-CONTAINED and DEFAULT-BUILD-SAFE: it never references the
+//  `-DHEXA_THREADS`-gated C runtime globals (`atomic_cell_*`), so it links and
+//  runs in the ordinary single-threaded build / byteeq CI. It encodes the
+//  invariant that the opt-in real `__atomic` path is REQUIRED to satisfy:
+//
+//      in a single-threaded run, real fetch_add / fetch_sub / CAS produce the
+//      SAME results as the by-value AtomicValue sim in self/atomic_ops.hexa.
+//
+//  The reference oracle below mirrors the sim arithmetic AND the documented
+//  C11/GCC __atomic semantics (seq-cst, strong CAS, fetch returns PRE-value).
+//  The threads-enabled build's own integration check (real OS threads racing a
+//  shared cell, sum == N) is the follow-on spawn slice and is NOT run here.
+// ═══════════════════════════════════════════════════════════════════════════
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, actual, expected) {
+    if to_string(actual) == to_string(expected) {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected: " + to_string(expected) + ", got: " + to_string(actual))
+        fail_count = fail_count + 1
+    }
+}
+
+// Reference oracle — a single int64 cell with the EXACT semantics the real
+// __atomic_* runtime must reproduce in a single-threaded context.
+let mut cell = 0
+
+fn cell_load() -> int { return cell }
+fn cell_store(v: int) { cell = v }
+
+// fetch-and-add: return PRE-add value, then mutate (matches __atomic_fetch_add
+// and AtomicValue.fetch_add's `self.int_val` pre-value semantics).
+fn cell_fetch_add(d: int) -> int {
+    let prev = cell
+    cell = cell + d
+    return prev
+}
+
+fn cell_fetch_sub(d: int) -> int {
+    let prev = cell
+    cell = cell - d
+    return prev
+}
+
+// strong CAS: swap iff current == expected; return 1 on swap else 0.
+fn cell_cas(expected: int, desired: int) -> int {
+    if cell == expected {
+        cell = desired
+        return 1
+    }
+    return 0
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  HEXA real-atomic single-thread oracle")
+println("═══════════════════════════════════════════════════════")
+
+// load / store
+cell_store(0)
+check("load initial", cell_load(), 0)
+cell_store(42)
+check("store/load", cell_load(), 42)
+
+// fetch_add returns PRE-value, leaves post-value in cell
+cell_store(10)
+check("fetch_add returns pre", cell_fetch_add(5), 10)
+check("fetch_add post-value", cell_load(), 15)
+
+// fetch_sub returns PRE-value
+check("fetch_sub returns pre", cell_fetch_sub(3), 15)
+check("fetch_sub post-value", cell_load(), 12)
+
+// CAS success path
+cell_store(7)
+check("cas swaps on match", cell_cas(7, 99), 1)
+check("cas post-value (swapped)", cell_load(), 99)
+
+// CAS failure path (no swap, value unchanged)
+check("cas no-swap on mismatch", cell_cas(7, 1), 0)
+check("cas post-value (unchanged)", cell_load(), 99)
+
+// monotonic counter loop — the canonical lock-free increment pattern. Under
+// real OS threads this is the contended path; single-threaded it is a plain
+// accumulate and must total N regardless of sim-vs-real backend.
+cell_store(0)
+let mut i = 0
+while i < 1000 {
+    let _ = cell_fetch_add(1)
+    i = i + 1
+}
+check("1000x fetch_add(1) == 1000", cell_load(), 1000)
+
+println("═══════════════════════════════════════════════════════")
+println("  passed: " + to_string(pass_count) + "  failed: " + to_string(fail_count))
+println("═══════════════════════════════════════════════════════")
+if fail_count > 0 { exit(1) }

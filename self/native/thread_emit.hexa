@@ -267,6 +267,108 @@ fn emit_thread_c() -> str {
             "    return hexa_int((int64_t)ms);\n" +
             "}\n" +
             "\n" +
+            "/* === Real hardware atomics (OPT-IN: -DHEXA_THREADS build only) ===\n" +
+            " *\n" +
+            " * feat/real-concurrency-optin slice (Tier-1 'Real mutex/atomic'). C11/GCC\n" +
+            " * __atomic builtins over a fixed slot table of `_Atomic int64_t` cells. An\n" +
+            " * atomic cell is an ADDRESSABLE shared location (unlike the by-value\n" +
+            " * AtomicValue sim in self/atomic_ops.hexa, which cannot carry real\n" +
+            " * hardware-atomic semantics) — this is the substrate opt-in code uses.\n" +
+            " *\n" +
+            " * Reference-match (memory order = seq-cst total order, the safe default):\n" +
+            " *   - C11 7.17.7 atomic_fetch_add / atomic_compare_exchange_strong\n" +
+            " *   - GCC/Clang __atomic_fetch_add / __atomic_compare_exchange_n with\n" +
+            " *     memory order __ATOMIC_SEQ_CST.\n" +
+            " *   - Go sync/atomic.AddInt64 / CompareAndSwapInt64 are seq-cst.\n" +
+            " *   - Rust core::sync::atomic::AtomicI64 with Ordering::SeqCst.\n" +
+            " * Invariant: CAS is the strong form (no spurious failure); a single-\n" +
+            " * threaded fetch_add(c,d) returns the SAME pre-value as the sim's\n" +
+            " * AtomicValue.int_val and CAS swaps iff load()==expected. So with no\n" +
+            " * contention the results are byte-for-byte equal to the sim (test oracle).\n" +
+            " *\n" +
+            " * The ENTIRE block is preprocessed OUT of the default build (HEXA_THREADS\n" +
+            " * undefined) so the runtime.c object bytes stay byte-identical to\n" +
+            " * origin/main and the byteeq gen3==gen4 fixpoint is unaffected.\n" +
+            " * Determinism isolation: the self-host / byteeq build NEVER passes\n" +
+            " * -DHEXA_THREADS, so the deterministic compiler can never observe a\n" +
+            " * non-deterministic thread schedule.\n" +
+            " */\n" +
+            "#if defined(HEXA_THREADS)\n" +
+            "#define HEXA_ATOMIC_MAX 4096\n" +
+            "static _Atomic int64_t g_atomic_cells[HEXA_ATOMIC_MAX];\n" +
+            "static int g_atomic_next = 0;\n" +
+            "static pthread_mutex_t g_atomic_alloc_lock = PTHREAD_MUTEX_INITIALIZER;\n" +
+            "\n" +
+            "/* atomic_cell_new(init) -> cell_id (>=0) or -errno */\n" +
+            "HexaVal hexa_atomic_new(HexaVal init_val) {\n" +
+            "    int64_t init = HX_IS_INT(init_val) ? (int64_t)HX_INT(init_val) : 0;\n" +
+            "    pthread_mutex_lock(&g_atomic_alloc_lock);\n" +
+            "    if (g_atomic_next >= HEXA_ATOMIC_MAX) {\n" +
+            "        pthread_mutex_unlock(&g_atomic_alloc_lock);\n" +
+            "        return hexa_int(-EAGAIN);\n" +
+            "    }\n" +
+            "    int idx = g_atomic_next++;\n" +
+            "    pthread_mutex_unlock(&g_atomic_alloc_lock);\n" +
+            "    __atomic_store_n(&g_atomic_cells[idx], init, __ATOMIC_SEQ_CST);\n" +
+            "    return hexa_int(idx);\n" +
+            "}\n" +
+            "\n" +
+            "/* atomic_cell_load(cell) -> current value (0 on bad id) */\n" +
+            "HexaVal hexa_atomic_load(HexaVal cell_val) {\n" +
+            "    if (!HX_IS_INT(cell_val)) return hexa_int(0);\n" +
+            "    int idx = (int)HX_INT(cell_val);\n" +
+            "    if (idx < 0 || idx >= HEXA_ATOMIC_MAX) return hexa_int(0);\n" +
+            "    return hexa_int(__atomic_load_n(&g_atomic_cells[idx], __ATOMIC_SEQ_CST));\n" +
+            "}\n" +
+            "\n" +
+            "/* atomic_cell_store(cell, v) -> 0 ok / -errno */\n" +
+            "HexaVal hexa_atomic_store(HexaVal cell_val, HexaVal v) {\n" +
+            "    if (!HX_IS_INT(cell_val)) return hexa_int(-EINVAL);\n" +
+            "    int idx = (int)HX_INT(cell_val);\n" +
+            "    if (idx < 0 || idx >= HEXA_ATOMIC_MAX) return hexa_int(-EINVAL);\n" +
+            "    int64_t nv = HX_IS_INT(v) ? (int64_t)HX_INT(v) : 0;\n" +
+            "    __atomic_store_n(&g_atomic_cells[idx], nv, __ATOMIC_SEQ_CST);\n" +
+            "    return hexa_int(0);\n" +
+            "}\n" +
+            "\n" +
+            "/* atomic_cell_add(cell, d) -> PRE-add value (fetch-and-add) */\n" +
+            "HexaVal hexa_atomic_fetch_add(HexaVal cell_val, HexaVal d) {\n" +
+            "    if (!HX_IS_INT(cell_val)) return hexa_int(0);\n" +
+            "    int idx = (int)HX_INT(cell_val);\n" +
+            "    if (idx < 0 || idx >= HEXA_ATOMIC_MAX) return hexa_int(0);\n" +
+            "    int64_t delta = HX_IS_INT(d) ? (int64_t)HX_INT(d) : 0;\n" +
+            "    return hexa_int(__atomic_fetch_add(&g_atomic_cells[idx], delta, __ATOMIC_SEQ_CST));\n" +
+            "}\n" +
+            "\n" +
+            "/* atomic_cell_sub(cell, d) -> PRE-sub value (fetch-and-sub) */\n" +
+            "HexaVal hexa_atomic_fetch_sub(HexaVal cell_val, HexaVal d) {\n" +
+            "    if (!HX_IS_INT(cell_val)) return hexa_int(0);\n" +
+            "    int idx = (int)HX_INT(cell_val);\n" +
+            "    if (idx < 0 || idx >= HEXA_ATOMIC_MAX) return hexa_int(0);\n" +
+            "    int64_t delta = HX_IS_INT(d) ? (int64_t)HX_INT(d) : 0;\n" +
+            "    return hexa_int(__atomic_fetch_sub(&g_atomic_cells[idx], delta, __ATOMIC_SEQ_CST));\n" +
+            "}\n" +
+            "\n" +
+            "/* atomic_cell_cas(cell, expected, desired) -> 1 if swapped else 0 (strong) */\n" +
+            "HexaVal hexa_atomic_cas(HexaVal cell_val, HexaVal exp_val, HexaVal des_val) {\n" +
+            "    if (!HX_IS_INT(cell_val)) return hexa_int(0);\n" +
+            "    int idx = (int)HX_INT(cell_val);\n" +
+            "    if (idx < 0 || idx >= HEXA_ATOMIC_MAX) return hexa_int(0);\n" +
+            "    int64_t expected = HX_IS_INT(exp_val) ? (int64_t)HX_INT(exp_val) : 0;\n" +
+            "    int64_t desired  = HX_IS_INT(des_val) ? (int64_t)HX_INT(des_val) : 0;\n" +
+            "    int ok = __atomic_compare_exchange_n(&g_atomic_cells[idx], &expected, desired,\n" +
+            "                                         0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);\n" +
+            "    return hexa_int(ok ? 1 : 0);\n" +
+            "}\n" +
+            "\n" +
+            "HexaVal atomic_cell_new;\n" +
+            "HexaVal atomic_cell_load;\n" +
+            "HexaVal atomic_cell_store;\n" +
+            "HexaVal atomic_cell_add;\n" +
+            "HexaVal atomic_cell_sub;\n" +
+            "HexaVal atomic_cell_cas;\n" +
+            "#endif /* HEXA_THREADS */\n" +
+            "\n" +
             "/* === TAG_FN shim globals ===\n" +
             " *\n" +
             " * 2026-05-13 PM: The pthread+condvar channel primitives use `thread_channel_*`\n" +
@@ -296,6 +398,14 @@ fn emit_thread_c() -> str {
             "    thread_channel_close = hexa_fn_new((void*)hexa_channel_close,        1);\n" +
             "    sleep_ms             = hexa_fn_new((void*)hexa_sleep_ms,             1);\n" +
             "    now_ms               = hexa_fn_new((void*)hexa_now_ms,               0);\n" +
+            "#if defined(HEXA_THREADS)\n" +
+            "    atomic_cell_new      = hexa_fn_new((void*)hexa_atomic_new,           1);\n" +
+            "    atomic_cell_load     = hexa_fn_new((void*)hexa_atomic_load,          1);\n" +
+            "    atomic_cell_store    = hexa_fn_new((void*)hexa_atomic_store,         2);\n" +
+            "    atomic_cell_add      = hexa_fn_new((void*)hexa_atomic_fetch_add,     2);\n" +
+            "    atomic_cell_sub      = hexa_fn_new((void*)hexa_atomic_fetch_sub,     2);\n" +
+            "    atomic_cell_cas      = hexa_fn_new((void*)hexa_atomic_cas,           3);\n" +
+            "#endif\n" +
             "}\n"
     return s
 }
