@@ -525,3 +525,59 @@ pub fn hxlcl_getegid() -> int {
     }
     return __hx_syscall0(nr)                    // egid → raw C-ABI result reg
 }
+
+// ── SYSCALL FAMILY (Route C errno-bearing · ② extern-data substrate via accessor) ──
+//
+// hxlcl_close is the FIRST errno-BEARING Route C syscall leaf. Unlike the
+// errno-free family above (getpid/getuid/…), a failed syscall must set the C
+// `errno` so the generated-C callers (self/native/net_emit.hexa:195
+// `if(hxlcl_close(fd)<0) return -errno`, signal_flock_emit.hexa:287) observe the
+// same libc-`close` contract (return -1 + errno SET).
+//
+// FROZEN-SAFE errno store via the canonical thread-local accessor (NO new
+// builtin/syntax — the substrate is built from existing constructs):
+//   - `__errno_location()` is the LSB/glibc/musl standard `int *(void)`
+//     returning the address of the calling thread's errno (errno is a macro
+//     `(*__errno_location())`). Declared here as an `extern fn` (no body →
+//     undefined-external resolved at link), mirroring hxlcl_atoll/hxlcl_malloc
+//     above; whitelisting it in `_is_cabi` makes the inner `bl __errno_location`
+//     lower single-register C-ABI (0 args; ptr ← rax/x0).
+//   - `__hx_ptr_store32(ptr, off, val)` writes the 32-bit `errno` (errno is an
+//     int) to that address. (store32, not store64 — errno is int-width.)
+//
+// Linux returns `-errno` directly (no carry flag), so the store is
+// `*errno_p = -r` and the fn returns -1, exactly like musl's __syscall_ret
+// (`if (r > -4096UL) { errno = -r; return -1; }`). The errno store is gated on
+// `target_is_linux()` — DARWIN signals errors via the carry flag with a POSITIVE
+// errno (not -r), so the Linux store would be wrong there; on darwin the gate is
+// a compile-time-false const → DCE drops the `__errno_location` call entirely
+// (darwin errno = a separate round via `__error()`, the darwin accessor). The
+// darwin smoke therefore asserts only close's return value (0 / -1), while the
+// LINUX routec-smoke asserts errno == EBADF (value-exact, the substrate's core
+// claim).
+//
+// PER-TARGET close NR (compile-time consts → DCE):
+//   Linux x86_64 = 3   (syscall_64.tbl)              · Linux arm64 = 57 (asm-generic)
+//   Darwin       = 6   (SYS_CLOSE; __hx_syscall6's BSD trap OR-bakes 0x2000000)
+// BYTE-FAITHFUL to the floor (self/codegen/runtime_arm64.hexa:2809):
+//   hxlcl_close(int fd) { return (int)_hxlcl_syscall1_cf(SYS_CLOSE, fd); }
+
+extern fn __errno_location() -> int
+
+pub fn hxlcl_close(fd: HexaVal) -> int {
+    let mut nr = 6                             // Darwin SYS_CLOSE (default)
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 3 }       // Linux x86_64 __NR_close
+        else { nr = 57 }                       // Linux arm64 __NR_close
+    }
+    let r = __hx_syscall6(nr, fd, 0, 0, 0, 0, 0)
+    if r < 0 {
+        if target_is_linux() {
+            let p = __errno_location()         // &errno (thread-local)
+            let e = 0 - r                      // -(-errno) = positive errno
+            __hx_ptr_store32(p, 0, e)          // *errno_p = e
+        }
+        return -1
+    }
+    return r                                    // fd close result (0)
+}

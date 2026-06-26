@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -97,6 +97,7 @@ cat > "$TMP/harness.c" <<'CEOF'
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>   /* libc getpid() — the reference oracle for hxlcl_getpid */
+#include <fcntl.h>    /* open() / O_RDONLY — for the close() behavior test */
 
 /* Route-C-emitted symbols under test (raw C-ABI prototypes). */
 extern size_t hxlcl_strlen(const char *s);
@@ -123,6 +124,12 @@ extern int    hxlcl_getgid(void);
 extern int    hxlcl_getppid(void);
 extern int    hxlcl_geteuid(void);
 extern int    hxlcl_getegid(void);
+
+/* errno-bearing syscall leaf — close. Returns 0 / -1 (errno SET on the Linux
+ * leg). On THIS darwin smoke the errno-store is DCE'd out (target_is_linux()
+ * const-false), so only the return value (0 / -1) is asserted here; the errno
+ * value-exact (==EBADF) is asserted by the LINUX sibling smoke. */
+extern int    hxlcl_close(int fd);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
@@ -222,6 +229,15 @@ int main(void) {
     CK(hxlcl_getppid() == (int)getppid(), "getppid == libc getppid (value-exact)");
     CK(hxlcl_geteuid() == (int)geteuid(), "geteuid == libc geteuid (value-exact)");
     CK(hxlcl_getegid() == (int)getegid(), "getegid == libc getegid (value-exact)");
+
+    /* errno-bearing close — RETURN-VALUE only on darwin (errno-store DCE'd here).
+     * A valid fd closes → 0; closing it again → -1. (The errno==EBADF value-exact
+     * is the LINUX sibling smoke's job; darwin's close syscall uses the BSD carry-
+     * flag convention, not the Linux -errno the errno-store leg encodes.) */
+    int cfd = open("/dev/null", O_RDONLY);
+    CK(cfd >= 0, "open /dev/null for close test");
+    CK(hxlcl_close(cfd) == 0, "close(valid fd) == 0");
+    CK(hxlcl_close(cfd) == -1, "close(already-closed fd) == -1");
 
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }
     printf("[routec-smoke] %d assert(s) FAILED\n", fails);
