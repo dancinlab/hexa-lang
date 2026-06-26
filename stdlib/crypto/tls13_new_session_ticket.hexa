@@ -46,6 +46,7 @@ pub fn tls13_nst_age_add(body: [int]) -> int {
 
 @pure
 pub fn tls13_nst_nonce(body: [int]) -> [int] {
+    if len(body) < 9 { return [] }   // truncated NewSessionTicket (<9 bytes) → body[8] OOB
     let nl = body[8] & 0xFF
     let mut n: [int] = []
     let mut i = 0

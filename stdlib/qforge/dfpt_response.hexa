@@ -162,6 +162,7 @@ pub fn qforge_force_constant_mixed(H_apply, occ_states: [[float]], eps: [float],
                              dV_bare_provider, drho_to_dvscf,
                              natoms_dim: int, tol: float, max_iter: int, mix: float) -> ForceConstResult {
     let m_occ = occ_states.len()
+    if m_occ == 0 { return ForceConstResult { phi: [], scf_iters: 0, converged: false, max_residual: 0.0 } }   // empty occ_states → occ_states[0] OOB
     let n = occ_states[0].len()
     let dim = natoms_dim
     // 방향별 bare ΔV|ψₙ 묶음 사전계산 (Φ 대칭 contraction 에 α,β 둘 다 필요).

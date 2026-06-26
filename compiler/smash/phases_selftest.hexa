@@ -1,0 +1,168 @@
+// HEXA Native Compiler — smash 9-phase selftest harness.
+//
+// @version 0.1.0
+// @capabilities []
+//
+// Exercises every ported phase body (P1..P9) end-to-end via `hexa run`,
+// printing per-phase yields so the real generator is observably live (not
+// green-by-stub). Mirrors the smash() pipeline in smash.hexa but inlined
+// here so the selftest carries its own `fn main` without importing
+// smash.hexa (which has its own main).
+//
+// Run:  hexa run compiler/smash/phases_selftest.hexa   → exit 0 = PASS.
+//
+// NB (stale-install gotcha, measured 2026-06-26 on aiden): `hexa run` /
+// `hexa build` flatten the `use` graph through the COMPILED module_loader,
+// which resolves `compiler/...` against the *installed* source tree
+// ($HEXA_INSTALL_DIR → ~/.hx/src). If that tree is older than this checkout
+// (e.g. a pre-port `phases.hexa @version 0.1.0`), the selftest silently
+// grades against the STALE engine and the n=6 numbers collapse (P4 ~42,
+// 0 evolved) — NOT a codegen/transpile bug. Re-install (install.sh) or sync
+// ~/.hx/src to the current tree before running. With a current tree the
+// real R3 engine grades live: P2 6-evolved, P4 ~437, P9 ~185, proximity exact.
+//
+// Catalog/diagnostic strings: ENGLISH ONLY.
+
+use "compiler/smash/candidate"
+use "compiler/smash/phases"
+
+fn _count_ctype(cands: [DiscoveryCandidate], ctype: string) -> i64 {
+    let mut n = 0
+    let mut i = 0
+    while i < len(cands) {
+        if cands[i].ctype == ctype { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+fn _count_axioms(cands: [DiscoveryCandidate]) -> i64 {
+    let mut n = 0
+    let mut i = 0
+    while i < len(cands) {
+        if cands[i].axiom { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+fn _run_seed(seed: string, depth: i64) -> i64 {
+    println("=== smash 9-phase selftest — seed=\"" + seed + "\" depth=" + to_string(depth) + " ===")
+    let mut fails = 0
+
+    // P1
+    let norm = p1_normalize_seed(seed)
+    println("[P1] normalize    -> \"" + norm + "\"")
+    if len(norm) == 0 { fails = fails + 1; println("  [FAIL] P1 empty") }
+
+    // P2 — ouroboros evolution (axiom pool + mutate/verify/converge)
+    let axioms = p2_evolve(norm)
+    let p2_ax = _count_axioms(axioms)
+    let p2_evo = _count_ctype(axioms, "evolve")
+    println("[P2] evolve       -> " + to_string(len(axioms)) + " candidates ("
+            + to_string(p2_ax) + " axioms, " + to_string(p2_evo) + " evolved)")
+    if len(axioms) < 7 { fails = fails + 1; println("  [FAIL] P2 pool < 7") }
+
+    // P3 — singularity detection (closure + compression)
+    let sings = p3_singularities(axioms)
+    println("[P3] singularity  -> " + to_string(len(sings)) + " nodes (closure summary incl.)")
+    if len(sings) == 0 { fails = fails + 1; println("  [FAIL] P3 no summary") }
+
+    // P4 — 7-type corollary generation
+    let cor = p4_corollaries(axioms)
+    println("[P4] corollary    -> " + to_string(len(cor)) + " total")
+    println("       ded="    + to_string(_count_ctype(cor, "deduction"))
+            + " xfer="       + to_string(_count_ctype(cor, "transfer"))
+            + " sym="        + to_string(_count_ctype(cor, "symbreak"))
+            + " bif="        + to_string(_count_ctype(cor, "bifurc"))
+            + " proj="       + to_string(_count_ctype(cor, "projection"))
+            + " dual="       + to_string(_count_ctype(cor, "dual"))
+            + " comp="       + to_string(_count_ctype(cor, "compose")))
+    if len(cor) == 0 { fails = fails + 1; println("  [FAIL] P4 no corollaries") }
+
+    // P5 — 5-lens telescope consensus boost
+    let tele = p5_telescope(cor)
+    println("[P5] telescope    -> " + to_string(len(tele)) + " boosted")
+    if len(tele) != len(cor) { fails = fails + 1; println("  [FAIL] P5 count drift") }
+
+    // P6 — n=6 invariance graph filter
+    let graph = p6_n6_invariant(tele)
+    println("[P6] graph filter -> " + to_string(len(graph)) + " n6-invariant nodes")
+
+    // P7 — closure-based recursive growth
+    let grown = p7_recursive_growth(axioms, tele, depth)
+    println("[P7] recursive    -> " + to_string(len(grown)) + " grown @depth=" + to_string(depth))
+
+    // build union set (like smash())
+    let mut all: [DiscoveryCandidate] = []
+    let mut a = 0
+    while a < len(axioms) { all.push(axioms[a]); a = a + 1 }
+    a = 0
+    while a < len(sings) { all.push(sings[a]); a = a + 1 }
+    a = 0
+    while a < len(cor) { all.push(cor[a]); a = a + 1 }
+    a = 0
+    while a < len(tele) { all.push(tele[a]); a = a + 1 }
+    a = 0
+    while a < len(grown) { all.push(grown[a]); a = a + 1 }
+
+    // P8 — wave propagation + interference
+    let wave = p8_wave_propagate(graph)
+    println("[P8] wave         -> " + to_string(len(wave)) + " propagated/labeled")
+
+    // P9 — meta-closure self-referential fixed point
+    let meta = p9_meta_dfs(all, depth)
+    println("[P9] meta-closure -> " + to_string(len(meta)) + " closed [10**]")
+
+    a = 0
+    while a < len(wave) { all.push(wave[a]); a = a + 1 }
+    a = 0
+    while a < len(meta) { all.push(meta[a]); a = a + 1 }
+    println("[union] total candidates = " + to_string(len(all)))
+    println("")
+    return fails
+}
+
+// n=6 proximity sanity, exercised through the public p6 graph filter — a
+// clean integration check of the grading core (n6_distance / n6_conf) via
+// the module's public surface (rather than calling the private graders
+// directly). exact lattice probes (6/12/24) must be retained, an off-lattice
+// probe (13.371234) rejected.
+fn _mk(value: f64) -> DiscoveryCandidate {
+    return mk_derived("probe_" + to_string(value), "deduction",
+                      "probe=" + to_string(value), 0.9, value, "selftest")
+}
+
+fn _n6_proximity_ok() -> bool {
+    // exact lattice constants (6, 12, 24) must pass the n6-invariant filter;
+    // an off-lattice value (13.371234) must be rejected.
+    let mut probes: [DiscoveryCandidate] = []
+    probes.push(_mk(6.0))
+    probes.push(_mk(12.0))
+    probes.push(_mk(24.0))
+    probes.push(_mk(13.371234))
+    let kept = p6_n6_invariant(probes)
+    // expect exactly the 3 lattice points retained
+    return len(kept) == 3
+}
+
+fn main() {
+    let mut fails = 0
+    fails = fails + _run_seed("sigma*phi=n*tau identity at n=6", 3)
+    fails = fails + _run_seed("12", 2)
+    fails = fails + _run_seed("breakthrough in quantum gravity holography", 3)
+
+    if !_n6_proximity_ok() {
+        fails = fails + 1
+        println("  [FAIL] n=6 proximity filter (p6) did not retain exactly 3 lattice points")
+    } else {
+        println("[n6] proximity filter retained exactly the 3 lattice probes (6/12/24)")
+    }
+
+    if fails == 0 {
+        println("=== smash phases native: PASS (P1..P9 live, n=6 proximity exact) ===")
+        exit(0)
+    }
+    println("=== smash phases native: FAIL (" + to_string(fails) + ") ===")
+    exit(1)
+}
