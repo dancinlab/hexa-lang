@@ -97,3 +97,26 @@ byte-for-byte the baseline. (Gate-1 verifies empirically: patched-OFF .o `cmp` b
 
 Merge gate = 1+4+5 (byteeq+parity+smoke) for default-OFF landing; default-flip needs 2+3 measured
 AND 3-target byteeq re-confirmed (separate later decision). Release-integrity is the TOP guardrail.
+
+## MEASURED VERDICT (summer, 2026-06-26 · commits 368992fa→dee8a726)
+
+- **G1 OFF-byteeq = PASS** — patched-OFF k1_sum .o == origin/main baseline .o, **sha 7d9066ea**
+  (same-cwd emit). The first run reported FAIL on 18 bytes; root-caused to the embedded DWARF
+  `DW_AT_comp_dir` source path (`.../src` vs `.../base`) in `.debug_str` — a HARNESS artifact, the
+  `.text` was byte-identical (objcopy --only-section=.text + all section sizes equal). So the
+  "struct-shape change shifts .o" hypothesis was FALSIFIED: the `local_type:[i64]` field does NOT
+  perturb emit. The codegen patch is byte-neutral on OFF exactly as designed. Harness fixed (r1c)
+  to emit both OFF builds from one cwd; codegen unchanged.
+- **G2 lever = PROVEN** — ON emits `imul r10,1009` / `add r10,r11` / `cmp r14,r13; setl` where OFF
+  emits `call hexa_mul` / `call hexa_add_slow` / `call hexa_cmp_lt`. hexa_add 2→0, mul 1→0, cmp
+  1→0; hexa_mod stays 1 (% kept boxed — correct, %-bound).
+- **G4 parity = OK** — OFF==ON output 840001701 (unbox preserves the result).
+- **G3 ratio = 1.000** — k1_sum is **%-bound** (the still-boxed `% M` dominates), so removing the
+  +/*/< calls yields no wall-clock change. Honest negative; real wins are r2 (arrays, 23×, not
+  %-bound) and r4 (% magic-reciprocal). See `state/runtime-gap-all-closure-roadmap.md`.
+- **G5 smoke = GREEN** (hexa v0.333.0 · hello · exit42).
+- **r1b refinement (kept):** the `local_type` builder is gated behind `_unbox_native_enabled()` so
+  it does not even run when OFF (cheaper; also byte-neutral). Harmless, retained.
+
+**Conclusion:** mechanism is correct + release-safe (OFF inert + ON parity). Merge-gate (G1+G4+G5)
+GREEN for the default-OFF landing. Open PR after 3-target gen3≡gen4 byteeq CI confirms.
