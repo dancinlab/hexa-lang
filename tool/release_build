@@ -53,6 +53,28 @@ export TARGET
 export EDGE_ASSET="hexa-${TARGET}.tar.gz"
 export HEXA_PREBUILT_RUNTIME="${HEXA_PREBUILT_RUNTIME:-$PWD/build/runtime.a}"
 export CFLAGS_COMMON="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
+# ── RFC061 #29 — INCLUDE-DROP multi-object runtime.a is now the DEFAULT ship
+# route (default-ON flip). HEXA_RT_MULTIOBJ=1 makes stage_resolve_runtime_a
+# package the shipping build/runtime.a as the include-drop split (runtime.o with
+# `#include "runtime_core.c"` guarded OFF + a standalone runtime_core.o[sysheaders
+# prelude, runtime_hi_gen.c kept → ALL HI-tier rt_* bodies INLINE] + the
+# hxlcl_shim.o sibling, ar'd with the IDENTICAL native-seed $extra_obj set). This
+# is the MINIMAL split (NOT the full 14-cluster externalize / all-or-nothing wall):
+# symbol-equivalent to the prior single-TU object, just relocated across a TU
+# boundary, so ls self/*.c is unchanged and the consumer C link is byte-for-byte
+# the same symbol graph.
+#
+# RELEASE-SAFE (measured, 2026-06-25, aiden/summer linux-x86_64, clean CPU link):
+#   · gate-ON runtime.a = {runtime.o, runtime_core.o, hxlcl_shim.o, + seeds}, 0 cuda
+#   · stage_prebuild_hexat + stage_build_hexa rc=0 (real consumer link GREEN)
+#   · `hexa build` exit42 → rc=42 · `hexa run` hello → "hello" · `hexa --version` OK
+#     — BYTE-for-byte the SAME smoke results as the single-TU control on the SAME box.
+#   · byteeq gen3≡gen4 is link-form-agnostic (build_selfhost.sh builds its OWN rt.o
+#     via flag-free clang and never consumes runtime.a) → the self-host fixpoint is
+#     untouched by the packaging change.
+#   · frozen 151c52c8: self/runtime*.c are gitignored regen artifacts; tracked diff ∅.
+# Override per build with HEXA_RT_MULTIOBJ=0 to revert to the single-TU archive.
+export HEXA_RT_MULTIOBJ="${HEXA_RT_MULTIOBJ:-1}"
 # GH_TOKEN flows to the sub-stages' `gh release download`. Required only in the
 # seeds-removed (edge-pull) branch; harmless no-op while seeds are present.
 export GH_TOKEN="${GH_TOKEN:-}"

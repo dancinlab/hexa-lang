@@ -89,6 +89,7 @@ let PI: float = 3.14159265358979323846
 // array: factor = sin(k·π/N) / (k·π/N).  k = 1 is the working fundamental.
 // (n_seg, k) → dimensionless attenuation factor
 fn halbach_envelope(n_seg: float, k: float) -> float {
+    if n_seg <= 0.0 { return 0.0 }   // n_seg≤0 → k·π/n_seg = Inf → sin(Inf)/Inf = NaN
     let x = k * PI / n_seg
     if abs_f(x) < 1.0e-30 { return 1.0 }     // sinc(0) = 1 (continuous limit)
     return sin_pure(x) / x

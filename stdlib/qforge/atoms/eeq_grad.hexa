@@ -97,6 +97,7 @@ fn _gexp(x: float) -> float {
 // ── d(erf(R/γ)/R)/dR closed form ──────────────────────────────────────────────
 //   f(R) = erf(R/γ)/R ,  f'(R) = [ (2/(γ√π)) e^{−(R/γ)²} R − erf(R/γ) ] / R²
 pub fn qforge_eeq_dAij_dR(r: float, gamma: float) -> float {
+    if gamma <= 0.0 { return 0.0 }   // charge-width γ≤0 → /γ Inf
     let two_over_sqrtpi = 1.1283791670955126   // 2/√π
     let u = r / gamma
     let gauss = two_over_sqrtpi / gamma * _gexp(0.0 - u * u)   // d/dR erf(R/γ) = (2/(γ√π))e^{-(R/γ)²}
