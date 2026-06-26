@@ -240,22 +240,30 @@ fn main() {
         } else {
             let staging = target + ".tmp." + to_string(mono_ns())
             let logf = staging + ".buildlog"
-            let cmd = _shq(hexa_bin) + " build " + _shq(abs) + " -o " + _shq(staging) + " > " + _shq(logf) + " 2>&1; echo \"__BRC__=$?\""
-            let out = to_string(exec(cmd))
-            let mark = "__BRC__="
-            let ml = len(mark)
-            let mut mi = -1
-            let mut sj = len(out) - ml
-            while sj >= 0 {
-                if out.substring(sj, sj + ml) == mark { mi = sj; sj = -1 } else { sj = sj - 1 }
-            }
+            let rcf = staging + ".rc"
+            // BROKEN-PIPE-IMMUNE result capture: write the build rc to a FILE
+            // (`echo "$?" > rcf`), NOT down the exec() pipe, then read it back from
+            // disk. A large `hexa build` here can run longer than the runtime
+            // exec-drain hard ceiling (HEXA_EXEC_DRAIN_MAX_MS, default 120 s); when
+            // it does, the drain closes the read end while /bin/sh is still
+            // building, so anything echoed to the pipe afterward is lost / SIGPIPEs.
+            // Routing the rc through a file decouples the result from the pipe
+            // entirely (hexa_exec's post-drain blocking waitpid still waits for the
+            // child to fully exit, so rcf is complete before we read it).
+            // @convergence id=build-precompile-exec-bigout-brokenpipe (full root
+            // cause in ARCHITECTURE.json convergence — #3833 logfile redirect kept).
+            let _rmrc = exec("rm -f " + _shq(rcf) + " 2>/dev/null")
+            let cmd = _shq(hexa_bin) + " build " + _shq(abs) + " -o " + _shq(staging) + " > " + _shq(logf) + " 2>&1; echo \"$?\" > " + _shq(rcf)
+            let _out = exec(cmd)
+            // rc is read from the on-disk file the child wrote — independent of the
+            // exec pipe (which may have been cut at the drain ceiling). Absent/empty
+            // rcf (child died before the redirect) conservatively stays rc=1.
             let mut rc = 1
-            if mi >= 0 {
-                let mut rs = out.substring(mi + ml, len(out))
-                let rsl = len(rs)
-                if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" { rs = rs.substring(0, rsl - 1) }
-                rc = rs.parse_int()
+            if file_exists(rcf) {
+                let rs = _trim(to_string(read_file(rcf)))
+                if len(rs) > 0 { rc = rs.parse_int() }
             }
+            let _rmrc2 = exec("rm -f " + _shq(rcf) + " 2>/dev/null")
             if rc == 0 && file_exists(staging) {
                 let _rn = exec("mv -f " + _shq(staging) + " " + _shq(target) + " 2>/dev/null")
                 let _rl = exec("rm -f " + _shq(logf) + " 2>/dev/null")
