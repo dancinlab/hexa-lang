@@ -148,6 +148,10 @@ use "stdlib/core/math/float"
 /// in row-major (0,0)(0,1)(1,0)(1,1). Mirrored 1:1 in the Python
 /// oracle so the IEEE-754 result is bit-identical.
 pub fn bar1d_element_stiffness(E: float, A: float, L: float) -> [[float]] {
+    // degenerate element (L<=0, e.g. two coincident nodes) → E·A/L = Inf
+    // stiffness; return a zero element matrix. The valid-L path (the bit-exact
+    // oracle) is byte-for-byte unchanged.
+    if L <= 0.0 { return [[0.0, 0.0], [0.0, 0.0]] }
     let c = E * A / L
     return [[c, 0.0 - c], [0.0 - c, c]]
 }
