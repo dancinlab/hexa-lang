@@ -42,6 +42,15 @@ env:
     self/native/hexa_cc.c self/forge/forge_tier_v1.c
     test/native_build/classd_behavioral_harness.c
 
+concurrency:
+  # Cancel a SUPERSEDED run only on PR re-push (a newer PR run replaces it and
+  # supplies the fresh required check); push/dispatch runs always complete so
+  # main's required-gate history stays intact. Frees runner minutes + shortens
+  # the PR queue on rapid re-pushes. Byteeq-inert (cancels stale work; never
+  # changes a build's inputs/outputs).
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # ── faithful-nobaseline — the authoritative seed-removed release-safety gate.
   #
@@ -76,6 +85,11 @@ jobs:
       # with the 23 seeds REMOVED. There is no separate gate copy of the stage
       # sequence to drift from release; this IS a dynamic seed-removed run of the
       # real release path. gate-green ≡ release-green by shared definition.
+      # Free CI accelerator: ccache the per-TU compiles (byteeq-safe — HEXA_CCACHE
+      # only reroutes the compile through the cache, never the link/emit bytes).
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+
       - name: Build — shared release_build (seeds removed, edge-pull)
         shell: bash
         env:
@@ -83,7 +97,13 @@ jobs:
           CC: clang
           LIBS: ""
           GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
         run: bash tool/release_build
+
+      - name: ccache stats
+        if: always()
+        shell: bash
+        run: ccache -s || true
 
       - name: Assert — ./hexa runs with seeds removed
         shell: bash
@@ -291,6 +311,11 @@ jobs:
 
       # ── SINGLE-JOB-FAITHFUL — same shared release_build + release_package the
       # real release runs, with seeds removed. See darwin job for full rationale.
+      # Free CI accelerator: ccache the per-TU compiles (byteeq-safe — HEXA_CCACHE
+      # only reroutes the compile through the cache, never the link/emit bytes).
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+
       - name: Build — shared release_build (seeds removed, edge-pull)
         shell: bash
         env:
@@ -298,7 +323,13 @@ jobs:
           CC: gcc
           LIBS: "-lm -ldl"
           GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
         run: bash tool/release_build
+
+      - name: ccache stats
+        if: always()
+        shell: bash
+        run: ccache -s || true
 
       - name: Assert — ./hexa runs with seeds removed
         shell: bash
@@ -383,6 +414,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Free CI accelerator: ccache the per-TU compiles (byteeq-safe — HEXA_CCACHE
+      # only reroutes the compile through the cache, never the link/emit bytes).
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+
       # ── (1) Build ./hexa via the SHARED release path (DEFAULT runtime.a =
       #    libc-shim members; HEXA_RT_SELFEMIT unset). This both produces the
       #    ./hexa consumer compiler AND restores the gitignored self/runtime.c
@@ -397,11 +433,17 @@ jobs:
           CC: clang
           LIBS: ""
           GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
         run: |
           set -euo pipefail
           bash tool/release_build
           ./hexa --version
           echo "(1) ./hexa built + seeds restored OK"
+
+      - name: ccache stats
+        if: always()
+        shell: bash
+        run: ccache -s || true
 
       # ── (2) Rebuild build/runtime.a WITH the §M8 SELFEMIT native members.
       #    SELFEMIT is nested INSIDE the HEXA_RT_MULTIOBJ packaging branch — BOTH
