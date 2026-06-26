@@ -1436,7 +1436,27 @@ fn os_clang_ldflags() {
     // source build has no marker → cuda_on=false → byte-identical to before (NEUTRAL).
     let hx_home = if env("HX_HOME") != "" { env("HX_HOME") } else { env("HOME") + "/.hx" }
     let cuda_marked = exec("test -f '" + hx_home + "/.cuda-runtime' && printf 1 || printf 0").trim()
-    let cuda_on = env("HEXA_CUDA") == "1" || (env("HEXA_CUDA") != "0" && cuda_marked == "1")
+    let mut cuda_on = env("HEXA_CUDA") == "1" || (env("HEXA_CUDA") != "0" && cuda_marked == "1")
+    // runtime.a auto-detect (marker-independent): a CUDA-built runtime.a ar's
+    // runtime_cuda*.o members whose cudaLaunchKernel/cudaMalloc/__cudaRegister*
+    // symbols go undefined at link unless the cuda libs are on the line. install.sh's
+    // prefer_cuda path drops the .cuda-runtime marker, but a manual build_cuda_runtime
+    // / pool sync (a GPU campaign) installs the cuda runtime.a WITHOUT the marker →
+    // cuda_marked=0 → the link omitted cudart and died "undefined reference cudaMalloc"
+    // (summer pool, 2026-06-27). Probe the RESOLVED runtime.a directly so the link
+    // follows the archive it links (native-canonical: the link adapts to the runtime,
+    // not a side-band marker). HEXA_CUDA=0 stays a hard opt-out; a CPU runtime.a has no
+    // runtime_cuda* members → cuda_on stays false → byte-identical to before (NEUTRAL).
+    if !cuda_on && env("HEXA_CUDA") != "0" {
+        let __rt_probe = resolve_prebuilt_runtime()
+        if len(__rt_probe) > 0 {
+            // grep -c always prints a count (0 on no-match / unreadable archive),
+            // so NO `|| printf 0` fallback — that would append a 2nd "0" → "00" and
+            // mis-trip cuda_on. Empty (exec failure) is treated as "no cuda".
+            let __nc = exec("ar t '" + __rt_probe + "' 2>/dev/null | grep -c '^runtime_cuda'").trim()
+            if __nc != "0" && __nc != "" { cuda_on = true }
+        }
+    }
     if cuda_on {
         // CUDA_HOME from env (release job sets it); else the standard toolkit root on
         // a consumer GPU host (libcudart resolves from /usr/local/cuda/lib64).
@@ -1685,11 +1705,20 @@ fn cmd_cc() {
     }
     let mut cmd = ""
     if uname == "Linux" {
-        cmd = host_cc() + " -O2 -D_GNU_SOURCE -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexat' -lm 2>&1"
+        // os_clang_ldflags() (not bare -lm): the transpiler-bootstrap link consumes
+        // the SAME prebuilt runtime.a (rt_o) as the user-binary link, so when that
+        // archive is the CUDA build its runtime_cuda*.o cuda symbols need -lcudart/
+        // -lcudadevrt here too — a bare -lm left them undefined and the hexat rebuild
+        // died (summer pool 2026-06-27). os_clang_ldflags()'s Linux base is "-lm
+        // -lpthread" so this is a strict superset on the CPU default (cuda_on=false →
+        // identical cuda-free link), plus the libsodium/openssl flags the runtime.a
+        // may reference — consistent with the user-binary link sites.
+        cmd = host_cc() + " -O2 -D_GNU_SOURCE -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexat'" + os_clang_ldflags() + " 2>&1"
     } else {
         // macOS (Darwin) — libSystem 이 libm 자동 포함, _GNU_SOURCE 무의미.
-        // 단, `-I self` 는 runtime.h 경로 해석에 반드시 필요.
-        cmd = host_cc() + " -O2 -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexat' 2>&1"
+        // 단, `-I self` 는 runtime.h 경로 해석에 반드시 필요. os_clang_ldflags() 로
+        // user-binary 링크와 동일 플래그(예: cuda runtime.a 시 cudart) 적용.
+        cmd = host_cc() + " -O2 -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexat'" + os_clang_ldflags() + " 2>&1"
     }
     println("  " + cmd)
     let r = exec(cmd)
