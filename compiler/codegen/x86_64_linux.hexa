@@ -1077,6 +1077,16 @@ pub fn _is_cabi(fname: string) -> bool {
     // + a NEGATIVE-offset `__hx_ptr_load64` header read (p - 16) + copy loop.
     // The neg-offset load is the new pattern; routec-smoke gains a realloc assert.
     if fname == "hxlcl_realloc" { return true }
+    // r11 syscall — hxlcl_getpid is the FIRST syscall-issuing Route C leaf: its
+    // body issues a `__hx_syscall0(<getpid_nr>)` (the codegen already emits the
+    // per-OS `syscall`/`svc` trap), with the per-target NR selected in source via
+    // the target_is_* compile-time consts. getpid is 0-arg + cannot-fail (no
+    // errno / carry-flag path — like getuid), so it needs NO extern-data errno
+    // store: the raw pid returns in the single C-ABI result register. This proves
+    // the Route C 3-boundary lowering composes with the syscall intrinsic on the
+    // ERRNO-FREE subset; errno-bearing syscalls (close/read/lseek/…) need a
+    // separate extern-data write substrate (measured wall, deferred).
+    if fname == "hxlcl_getpid" { return true }
     return false
 }
 

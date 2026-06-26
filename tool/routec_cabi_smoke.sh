@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -96,6 +96,7 @@ cat > "$TMP/harness.c" <<'CEOF'
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <unistd.h>   /* libc getpid() — the reference oracle for hxlcl_getpid */
 
 /* Route-C-emitted symbols under test (raw C-ABI prototypes). */
 extern size_t hxlcl_strlen(const char *s);
@@ -112,6 +113,9 @@ extern char  *hxlcl_strdup(const char *s);
 extern void  *hxlcl_calloc(size_t nmemb, size_t size);
 
 extern void  *hxlcl_realloc(void *p, size_t n);
+
+/* r11 syscall leaf — errno-free 0-arg. Returns the kernel pid raw (no errno). */
+extern int    hxlcl_getpid(void);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
@@ -191,6 +195,16 @@ int main(void) {
     char *rq = (char *)hxlcl_realloc(rp, 32);   /* grow 4 → 32, preserve 4 bytes */
     CK(rq != NULL && rq[0] == 'R' && rq[1] == 'e' && rq[2] == 'a' && rq[3] == 'l',
        "realloc preserves content (neg-offset header read)");
+
+    /* r11 syscall leaf — the FIRST Route C body that issues a syscall. getpid is
+     * errno-free + 0-arg, so a correct emit returns the SAME pid as libc getpid()
+     * (value-exact oracle, not just >0). A PAIR-MODEL ABI leak or a wrong NR would
+     * mis-return here. (On the darwin-arm64 smoke host the body uses SYS_GETPID=20
+     * via __hx_syscall0's BSD `svc #0x80` trap; the Linux NRs 39/172 are exercised
+     * by the byteeq build targets.) */
+    pid_t ref_pid = getpid();
+    CK(hxlcl_getpid() == (int)ref_pid, "getpid == libc getpid (value-exact)");
+    CK(hxlcl_getpid() > 0, "getpid > 0");
 
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }
     printf("[routec-smoke] %d assert(s) FAILED\n", fails);
