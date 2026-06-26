@@ -1318,7 +1318,7 @@
                 "① Static typing/generics absence — root of half the Tier-1 list; but a DESIGN CHOICE (dynamic dispatch intended), not strictly a defect.",
                 "② Real concurrency + synchronization — single-thread + simulated mutex = zero multicore. IN PROGRESS (opt-in default-OFF): real `__atomic` atomics landed behind `-DHEXA_THREADS` (slice-1 byteeq-neutral); real `spawn`=design-only follow-on. state/rfc_real_concurrency_optin.md.",
                 "③ hx dependency resolver — cargo/go-mod core, schema-only today; independent + low release-integrity risk + DX-canonical → best impact/effort.",
-                "④ regex (linear-time core LANDED — Thompson NFA `stdlib/regex/thompson.hexa` PR#PRNUM; remaining = capture extraction / R2) + match exhaustiveness — frequent in real use.",
+                "④ regex (linear-time core LANDED — Thompson NFA `stdlib/regex/thompson.hexa` PR#4046; remaining = capture extraction / R2) + match exhaustiveness — frequent in real use.",
                 "⑤ borrow/lifetime/HKT — Rust-only, Go also lacks → defer."
               ]
             }
