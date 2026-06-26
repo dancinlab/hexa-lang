@@ -945,6 +945,11 @@ pub fn _is_cabi(fname: string) -> bool {
     if fname == "hxlcl_memcmp" { return true }
     if fname == "hxlcl_strcmp" { return true }
     if fname == "hxlcl_strncmp" { return true }
+    // r6 copy family — pure byte-copy leaves; each returns the dst pointer raw
+    // in the single C-ABI result register (int carries the raw pointer word).
+    if fname == "hxlcl_strcpy" { return true }
+    if fname == "hxlcl_strncpy" { return true }
+    if fname == "hxlcl_strcat" { return true }
     return false
 }
 
