@@ -195,6 +195,8 @@ pub fn hxlcl_strncmp(a: HexaVal, b: HexaVal, n: HexaVal) -> int {
         i = __hx_payload_add(i, 1)
     }
     return 0
+}
+
 // ── COPY FAMILY (Route C r6 · pure byte-copy, returns the dst pointer raw) ──
 //
 // The copy leaves return the dst `char*` (shipped raw in rax/x0 under Route C —
