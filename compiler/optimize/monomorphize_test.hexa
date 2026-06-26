@@ -1,0 +1,189 @@
+// HEXA Native Compiler — monomorphization pass unit test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Exercises compiler/optimize/monomorphize.hexa on a hand-built MModule.
+// Models the minimal end-to-end slice from the RFC:
+//
+//   @specialize fn id<T>(x: T) -> T { return x }    // template  → name "id$$g"
+//   fn caller() { id(5); id("hi") }                 // 2 call sites: int, str
+//
+// After monomorphize():
+//   * two specialized instances exist: id$int, id$str
+//   * caller's two STMT_CALLs are retargeted from "id" to id$int / id$str
+//   * a non-generic control module is returned byte-identical (no $$g mark)
+//
+// Run:
+//   hexa run compiler/optimize/monomorphize_test.hexa
+
+import "../ir/mir.hexa"
+import "./monomorphize.hexa"
+
+// ── MIR construction helpers (mirror optimize_test.hexa) ─────
+
+fn _local(id: i64, name: string) -> Local {
+    return Local { id: id, arena_id: 1, type_id: 1, name_hint: name, precision: "", space: "" }
+}
+
+fn _miss_local() -> Local {
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "", space: "" }
+}
+
+fn _op_local(local_id: i64) -> Operand {
+    return Operand { kind: "local", local_id: local_id, int_val: 0, float_val: 0.0, str_val: "", global_id: -1 }
+}
+
+fn _op_int(v: i64) -> Operand {
+    return Operand { kind: "const_int", local_id: -1, int_val: v, float_val: 0.0, str_val: "", global_id: -1 }
+}
+
+fn _op_str(v: string) -> Operand {
+    return Operand { kind: "const_str", local_id: -1, int_val: 0, float_val: 0.0, str_val: v, global_id: -1 }
+}
+
+fn _stmt_return(src: Operand) -> Stmt {
+    let mut xs: [Operand] = []
+    xs.push(src)
+    return Stmt { kind: STMT_RETURN, dst: _miss_local(), op: "", args: xs, target_block: -1, target_block_else: -1 }
+}
+
+fn _stmt_call(dst: Local, callee: string, args: [Operand]) -> Stmt {
+    return Stmt { kind: STMT_CALL, dst: dst, op: callee, args: args, target_block: -1, target_block_else: -1 }
+}
+
+fn _block(id: i64, stmts: [Stmt]) -> Block {
+    return Block { id: id, stmts: stmts, preds: [], succs: [] }
+}
+
+fn _mfunc(name: string, params: [Local], locals: [Local], blocks: [Block]) -> MFunc {
+    return MFunc {
+        name: name, params: params, return_local: _miss_local(),
+        locals: locals, blocks: blocks, entry_block: 0, arena_root: 1,
+        def_line: 0, gpu_kind: GPU_KIND_CPU
+    }
+}
+
+// ── Inspection helpers ───────────────────────────────────────
+
+fn _find_func(m: MModule, name: string) -> i64 {
+    let mut i = 0
+    while i < len(m.funcs) {
+        if m.funcs[i].name == name { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn _call_op_at(mf: MFunc, idx: i64) -> string {
+    // returns the callee `op` of the idx-th STMT_CALL in the function
+    let mut n = 0
+    let mut bi = 0
+    while bi < len(mf.blocks) {
+        let b = mf.blocks[bi]
+        let mut si = 0
+        while si < len(b.stmts) {
+            if b.stmts[si].kind == STMT_CALL {
+                if n == idx { return b.stmts[si].op }
+                n = n + 1
+            }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    return "<none>"
+}
+
+// ── Build the generic-template fixture ───────────────────────
+
+fn _build_generic_module() -> MModule {
+    // template: fn id$$g(x) { return x }
+    let p0 = _local(0, "x")
+    let mut tpl_params: [Local] = []
+    tpl_params.push(p0)
+    let mut tpl_stmts: [Stmt] = []
+    tpl_stmts.push(_stmt_return(_op_local(p0.id)))
+    let mut tpl_blocks: [Block] = []
+    tpl_blocks.push(_block(0, tpl_stmts))
+    let tpl = _mfunc("id" + MONO_TEMPLATE_MARK, tpl_params, tpl_params, tpl_blocks)
+
+    // caller: id(5); id("hi")
+    let r0 = _local(1, "r0")
+    let r1 = _local(2, "r1")
+    let mut a_int: [Operand] = []
+    a_int.push(_op_int(5))
+    let mut a_str: [Operand] = []
+    a_str.push(_op_str("hi"))
+    let mut c_stmts: [Stmt] = []
+    c_stmts.push(_stmt_call(r0, "id", a_int))
+    c_stmts.push(_stmt_call(r1, "id", a_str))
+    c_stmts.push(_stmt_return(_op_local(r0.id)))
+    let mut c_blocks: [Block] = []
+    c_blocks.push(_block(0, c_stmts))
+    let mut c_locals: [Local] = []
+    c_locals.push(r0)
+    c_locals.push(r1)
+    let caller = _mfunc("caller", [], c_locals, c_blocks)
+
+    let mut funcs: [MFunc] = []
+    funcs.push(tpl)
+    funcs.push(caller)
+    return MModule { file: "mono_test.hexa", funcs: funcs, globals: [] }
+}
+
+fn _build_control_module() -> MModule {
+    // non-generic: fn plain() { return 0 } — no $$g mark anywhere
+    let mut stmts: [Stmt] = []
+    stmts.push(_stmt_return(_op_int(0)))
+    let mut blocks: [Block] = []
+    blocks.push(_block(0, stmts))
+    let plain = _mfunc("plain", [], [], blocks)
+    let mut funcs: [MFunc] = []
+    funcs.push(plain)
+    return MModule { file: "ctrl.hexa", funcs: funcs, globals: [] }
+}
+
+// ── Driver ───────────────────────────────────────────────────
+
+let mut _pass = 0
+let mut _fail = 0
+
+fn _check(label: string, cond: bool) {
+    if cond {
+        _pass = _pass + 1
+        println("  PASS  " + label)
+    } else {
+        _fail = _fail + 1
+        println("  FAIL  " + label)
+    }
+}
+
+fn main() {
+    println("=== monomorphize pass test ===")
+
+    // (1) generic module → instances emitted + calls rewritten
+    let gm = _build_generic_module()
+    let out = monomorphize(gm)
+
+    _check("id$int instance emitted", _find_func(out, "id$int") >= 0)
+    _check("id$str instance emitted", _find_func(out, "id$str") >= 0)
+    _check("template id$$g retained", _find_func(out, "id" + MONO_TEMPLATE_MARK) >= 0)
+
+    let ci = _find_func(out, "caller")
+    _check("caller present", ci >= 0)
+    if ci >= 0 {
+        let caller = out.funcs[ci]
+        _check("call 0 retargeted to id$int", _call_op_at(caller, 0) == "id$int")
+        _check("call 1 retargeted to id$str", _call_op_at(caller, 1) == "id$str")
+    }
+
+    // (2) control module (no $$g) → byte-shape preserved (same func count,
+    //     same single func name, no synthesized instances)
+    let cm = _build_control_module()
+    let cout = monomorphize(cm)
+    _check("control func count unchanged", len(cout.funcs) == len(cm.funcs))
+    _check("control func name unchanged", _find_func(cout, "plain") >= 0)
+
+    println("--- " + to_string(_pass) + " passed, " + to_string(_fail) + " failed ---")
+    if _fail > 0 { exit(1) }
+}
