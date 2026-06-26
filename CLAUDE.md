@@ -21,11 +21,38 @@ only (no domain registry).
 > [CHANGELOG.md](CHANGELOG.md) (append-only). This file = entry pointer only (구 `project.tape` ·
 > `ARCHITECTURE.md` · per-domain 트래킹 retired).
 
-## 작업 규칙 (do / dont)
+### 작업 규칙 개요 (do / dont)
 
-릴리스 무결성 · 셀프호스트 · 아틀라스 · 추월. 모든 규칙은 substantive — 빼지 말고 지킬 것.
+릴리스 무결성 · 셀프호스트 · 아틀라스 · 추월. 모든 규칙은 substantive — 빼지 말고 지킬 것. 아래
+`## ` 섹션들이 거버넌스 SSOT (각 섹션 = slug-keyed do/dont).
 
-### 릴리스 무결성 (절대 상위 가드레일)
+### Harness
+
+This repo is governed by the vendored [dancinlab/harness](https://github.com/dancinlab/harness)
+engine, pinned as the `.harness-engine` git submodule and wired through `.claude/settings.json`
+hooks (guarded: each hook is a no-op when the submodule binary is absent). Config lives in
+`harness.config.json` (profile `hardcore`, stack `hexa`). The harness enforces single-document
+discipline (architecture SSOT + append-only log + quickref pointers), L0 lockdown reminders,
+the changelog gate for `.hexa` changes, and protected branches (`main`, `master`).
+
+```sh
+git submodule update --init --recursive          # activate (hooks no-op until present)
+.harness-engine/bin/harness <cmd>                 # via wrapper
+```
+
+#### Quick reference
+
+| Command | Purpose |
+|---------|---------|
+| `harness docs check` | single-doc discipline: architecture SSOT + log + quickref pointers |
+| `harness lint` | staged-L0 + freshness + convergence gate |
+| `harness verify` | run configured verification (`hexa verify`) |
+| `harness audit` | 6-axis self-scorecard |
+| `harness gc` | broken markdown links in guides |
+| `hexa verify` | g5 gate: S6 equational + S8 citation + atlas reverify/auto-fold |
+| `hx commit` / `hx push` | SSOT-attested git wrappers (re-run lint gate) |
+
+## 릴리스 무결성 — 절대 상위 가드레일
 
 - do: self-host 작업(byteeq `gen3≡gen4` · measure · RT-NATIVE · zero-C)은 **실제 사용 릴리스를
   망가뜨리지 않는 선에서만** 진행한다. 회귀 위험이 있으면 릴리스 그린을 먼저 보장한 뒤 진행하고,
@@ -51,7 +78,7 @@ only (no domain registry).
   `install.sh` 로 동기화한다 — `harness pool on <host> 'curl -fsSL .../hexa-lang/<tag>/install.sh | sh'`
   (pool 의 빌드·byteeq·measure 가 stale 바이너리/시드를 물지 않도록).
 
-### 구현 규율 (implement-to-the-wall · reference-first)
+## 구현 규율 — implement-to-the-wall · reference-first
 
 - do: 모든 구현·개선·조사는 **벽(🧱)에 닿을 때까지** 민다. 한 라운드가 끝나면 honest next
   round(r2 · r3…)를 명명하고, 멈추는 건 오직 ⓐ 목표 달성(🏁) 또는 ⓑ **측정된** 닫힌-음성
@@ -85,7 +112,7 @@ only (no domain registry).
   epilogue(gelu 등) 융합은 closed-neg(연산비용 > 왕복절감). byte-eq 결정성은 추월 레버 아님
   falsified(OpenBLAS 도 같은 빌드서 thread-무관 비트동일 · r5 측정).
 
-### QA (지속 검증 · verify-done 상시화)
+## QA — 지속 검증 · verify-done 상시화
 
 - do: 모든 fix·기능·측정은 **measure → root-cause → build-verify → 머지** 한 루프로 닫는다.
   검증은 **캡처된 출력**으로 한다(LLM 자가판정 금지) — 코드젠/런타임 변경은 byteeq 3타깃 + 관련
@@ -111,7 +138,7 @@ only (no domain registry).
   `HEXA_NO_<vendor>` ✗). 교정은 byteeq-safe(felt-default=native 유지)로, 빠른 외부의존 경로는 명시
   opt-in 으로 남긴다.
 
-### native-canonical-default (polarity)
+## native-canonical-default — polarity
 
 - do: 기본 경로는 **항상 hexa-native/own/canonical**. 외부 의존(cuBLAS · 외부 BLAS · 벤더
   라이브러리) · 비결정 · 실험 · legacy fallback 은 **플래그(env/컴파일 매크로)로 opt-in 하는
@@ -162,7 +189,7 @@ only (no domain registry).
   새 `@<attr>` 키워드 도입 금지(frozen blob 151c52c8 파서 미지 → faithful build-break ·
   name-prefix/whitelist hook 으로만).
 
-### 아틀라스 · 검증
+## 아틀라스 · 검증
 
 - do: 발견 엔진(수론 · 물리 · 우주 · 생명)의 사람용 원장은 **`ATLAS/README.md` 단일 SSOT**(n=6 축0
   출발 · 거시↔양자 수학 지도 · 구 `TECS-L/` 에서 개명 2026-06-18). 지도는 README.md 에 **점진적으로
@@ -187,7 +214,7 @@ only (no domain registry).
 - do: domain audits 는 `hexa verify --<axis> <domain>` 서브커맨드로 land 한다(one CLI surface · 새
   top-level verb 금지).
 
-### git · L0 · lockstep
+## git · L0 · lockstep
 
 - do: 가드 파일 변경 전 subagent 가 diff 한다(`git diff <baseline>...HEAD` · `.githooks/pre-commit`).
 - dont: `stdlib`/`runtime`/`codegen`/`rt` 에서 >50줄 삭제를 scoped subject 나 `WIPE-OK:` trailer 없이
@@ -200,7 +227,7 @@ only (no domain registry).
   신뢰하므로 stale 금지).
 - do: 모든 HuggingFace 업로드/Collections 는 `dancinlab` org 아래 둔다.
 
-### CI · self-hosted runners
+## CI · self-hosted runners
 
 - do: **클라우드 CI = Blacksmith** — ephemeral·멀티타깃 잡(예 `release.yml`)은 **Blacksmith 호스티드
   러너**로 돈다: `blacksmith-6vcpu-macos-15`(darwin) · `blacksmith-4vcpu-ubuntu-2204`(linux-x64) ·
@@ -216,37 +243,12 @@ only (no domain registry).
   darwin-arm64 · ephemeral 환경이 필요한 잡은 클라우드 러너 그대로 둔다** — arm64 self-hosted 호스트
   없음(honest, arm64 커버리지 주장 금지).
 - do: public repo 라 **fork-PR 은 메인테이너 승인 후에만** self-hosted 러너가 집어간다(RCE 완화 ·
-  ghost 선례와 동일). 필수 게이트(`selfhost-gates-summary`)를 **검증 안 된/오프라인 러너에 의존시키지
-  말 것** — 러너에서 green 을 실측한 뒤에만 required 잡을 옮긴다.
+  ghost 선례와 동일). 러너에서 green 을 실측한 뒤에만 required 잡을 옮긴다.
+- dont: 필수 게이트(`selfhost-gates-summary`)를 **검증 안 된/오프라인 러너에 의존시키지 말 것** —
+  required 잡은 러너에서 green 을 실측한 뒤에만 옮긴다.
 - do: 러너는 systemd **서비스**로 등록(`~/actions-runner-hexa` · `sudo ./svc.sh install` · 재부팅
   생존 · 호스트당 단일 러너 — 풀 빌드 starve 금지 · 우리 빌드는 여전히 1-SSH 규율). 오프라인이면
   재등록: `gh api -X POST repos/dancinlab/hexa-lang/actions/runners/registration-token -q .token`
   →  호스트에서 `cd ~/actions-runner-hexa && ./config.sh --url … --token <tok> --labels
   self-hosted,Linux,X64,<host>,hexa-build --unattended --replace && sudo ./svc.sh start`. 상태는
   `gh api repos/dancinlab/hexa-lang/actions/runners`.
-
-## Harness
-
-This repo is governed by the vendored [dancinlab/harness](https://github.com/dancinlab/harness)
-engine, pinned as the `.harness-engine` git submodule and wired through `.claude/settings.json`
-hooks (guarded: each hook is a no-op when the submodule binary is absent). Config lives in
-`harness.config.json` (profile `hardcore`, stack `hexa`). The harness enforces single-document
-discipline (architecture SSOT + append-only log + quickref pointers), L0 lockdown reminders,
-the changelog gate for `.hexa` changes, and protected branches (`main`, `master`).
-
-```sh
-git submodule update --init --recursive          # activate (hooks no-op until present)
-.harness-engine/bin/harness <cmd>                 # via wrapper
-```
-
-### Quick reference
-
-| Command | Purpose |
-|---------|---------|
-| `harness docs check` | single-doc discipline: architecture SSOT + log + quickref pointers |
-| `harness lint` | staged-L0 + freshness + convergence gate |
-| `harness verify` | run configured verification (`hexa verify`) |
-| `harness audit` | 6-axis self-scorecard |
-| `harness gc` | broken markdown links in guides |
-| `hexa verify` | g5 gate: S6 equational + S8 citation + atlas reverify/auto-fold |
-| `hx commit` / `hx push` | SSOT-attested git wrappers (re-run lint gate) |
