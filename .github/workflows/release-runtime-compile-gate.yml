@@ -47,7 +47,7 @@ permissions:
 jobs:
   runtime-compile-gate:
     name: install.sh runtime compile (clang-18, ubuntu-24.04)
-    runs-on: blacksmith-4vcpu-ubuntu-2404      # Ubuntu 24.04 (the install floor)
+    runs-on: ubuntu-24.04      # Ubuntu 24.04 (the install floor)
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6

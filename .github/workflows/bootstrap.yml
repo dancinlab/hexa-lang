@@ -55,7 +55,7 @@ permissions:
 jobs:
   disabled:
     name: bootstrap (DISABLED — cold-seed removed by user decision)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 1
     steps:
       - name: Explain

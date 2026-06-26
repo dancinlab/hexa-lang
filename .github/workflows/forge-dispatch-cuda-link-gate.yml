@@ -37,7 +37,7 @@ permissions:
 jobs:
   forge-dispatch-cuda-link:
     name: forge_dispatch CUDA-link safety (#if 1 + HEXA_FORGE_HOST_WEAK)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
