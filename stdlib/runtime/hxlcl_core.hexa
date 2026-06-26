@@ -571,10 +571,18 @@ pub fn hxlcl_close(fd: HexaVal) -> int {
         else { nr = 57 }                       // Linux arm64 __NR_close
     }
     let r = __hx_syscall6(nr, fd, 0, 0, 0, 0, 0)
-    if r < 0 {
+    // IN-BODY OPERATOR DISCIPLINE (Route C): the 3-boundary C-ABI lowering does
+    // NOT touch in-body operators — a plain `r < 0` / `0 - r` would lower to the
+    // PAIR-MODEL helpers (hexa_cmp_lt / hexa_sub), which are undefined in the raw
+    // C-ABI link (the #4042-RED root cause). Use the raw-payload leaf intrinsics
+    // instead — the same rule the composite family follows (hxlcl_core.hexa:77
+    // `__hx_payload_lt`, :146 `__hx_payload_sub`). Each writes exactly one `let`
+    // (un-nested), so a codegen scratch clobber can't corrupt an outer op.
+    let neg = __hx_payload_lt(r, 0)            // r < 0 (raw signed payload compare)
+    if __hx_payload_ne(neg, 0) {
         if target_is_linux() {
             let p = __errno_location()         // &errno (thread-local)
-            let e = 0 - r                      // -(-errno) = positive errno
+            let e = __hx_payload_sub(0, r)     // -(-errno) = positive errno
             __hx_ptr_store32(p, 0, e)          // *errno_p = e
         }
         return -1

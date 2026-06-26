@@ -150,6 +150,18 @@ void     *hxlcl_malloc(size_t n) {
     return base + HXLCL_HDR;           /* user pointer (header is at p-16) */
 }
 
+/* hxlcl_close's errno-store leg references __errno_location, but it is inside a
+ * `if (target_is_linux())` branch that const-folds to FALSE on darwin — so the
+ * call is UNREACHABLE here, yet the codegen still emits the `bl ___errno_location`
+ * (DCE never drops a STMT_CALL, even an unreachable one). This stub satisfies the
+ * darwin linker for that dead reference; it is never executed (the branch is
+ * runtime-false). The LINUX sibling smoke links libc's real __errno_location and
+ * exercises the store for real (errno == EBADF value-exact). On glibc/musl errno
+ * is `(*__errno_location())`; macOS's analog is `__error()` — a darwin-native
+ * errno round is separate, so this stub stands in only as a link placeholder. */
+static int _smoke_errno_cell = 0;
+int *__errno_location(void) { return &_smoke_errno_cell; }
+
 static int fails = 0;
 #define CK(cond, msg) do { if (!(cond)) { printf("  FAIL: %s\n", msg); fails++; } } while (0)
 
