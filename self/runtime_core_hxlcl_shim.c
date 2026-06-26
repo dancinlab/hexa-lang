@@ -596,15 +596,18 @@ int __attribute__((noinline)) hxlcl_backtrace(void **buf, int sz) {
 #else
 int  hxlcl_backtrace(void **buf, int sz)              { return backtrace(buf, sz); }
 #endif
-#if defined(HEXA_ZEROC_SHIM_BYTEID_EMIT) || !defined(__GLIBC__)
+#if defined(HEXA_ZEROC_SHIM_BYTEID_EMIT)
 /* byte-identical to frozen self/runtime.c hxlcl_backtrace_symbols_fd (verbatim 0-libc floor body) */
 void __attribute__((noinline)) hxlcl_backtrace_symbols_fd(void *const *buf, int sz, int fd) {
     (void)buf; (void)sz;
     static const char msg[] = "(backtrace unavailable — hexa-native stub)\n";
     hxlcl_write(fd, msg, sizeof(msg) - 1);
 }
-#else
+#elif defined(__GLIBC__)
 void hxlcl_backtrace_symbols_fd(void *const *buf, int sz, int fd) { backtrace_symbols_fd(buf, sz, fd); }
+#else
+/* musl: pure no-op — the BYTEID stub's hxlcl_write isn't linked in non-BYTEID musl builds. */
+void hxlcl_backtrace_symbols_fd(void *const *buf, int sz, int fd) { (void)buf; (void)sz; (void)fd; }
 #endif
 #else
 int  hxlcl_backtrace(void **buf, int sz)              { (void)buf; (void)sz; return 0; }
