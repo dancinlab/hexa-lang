@@ -278,3 +278,39 @@ pub fn hxlcl_strcat(dst: HexaVal, src: HexaVal) -> int {
     __hx_ptr_store8(pd, endoff, 0)            // terminator
     return pd
 }
+
+// ── COMPOSITE FAMILY (Route C r7 · non-leaf — inner C-ABI bl to a sibling) ──
+//
+// COMPOSITE = the body is not a self-contained byte loop; it CALLS another
+// hxlcl_* symbol. The Route C call-boundary keys on the CALLEE name
+// (`_is_cabi(s.op)` · compiler/codegen/x86_64_linux.hexa:2482 · arm64_darwin.hexa
+// _is_cabi(s.op)), so whitelisting BOTH the outer fn AND its inner callee makes
+// the inner `bl` lower at the single-register C-ABI (arg payload → rdi/x0, raw
+// result ← rax/x0) and bind cross-object to the callee. This dissolves the
+// composite "wall" the earlier closure enumerated: that wall held ONLY for an
+// UN-whitelisted callee (PAIR-MODEL inner call vs raw-C-ABI shim = mismatch); a
+// whitelisted callee is C-ABI on both sides.
+//
+// PoC POLARITY (r7 = atoi only): hxlcl_atoi gets a Route C body whose sole op is
+// the inner `bl hxlcl_atoll`; hxlcl_atoll stays the RETAINED C shim
+// (runtime_core_hxlcl_shim.c:385 — `long long hxlcl_atoll(const char*)`), declared
+// here as an `extern fn` (no body → undefined-external symbol resolved at link by
+// the shim, mirroring the SELFEMIT seed test/native_build/emit_hxlcl_atoi_o.hexa's
+// undefined-external `_hxlcl_atoll` + ARM64_RELOC_BRANCH26). atoll is whitelisted
+// purely so the inner call lowers C-ABI — it is NOT self-emitted in this round.
+// The int truncation (`(int)hxlcl_atoll`) is implicit: the result register carries
+// the value and a C `int` caller reads only the low 32 bits.
+
+// hxlcl_atoll: raw-C-ABI long-long parse leaf — RETAINED C shim body (not self-
+// emitted this round). Declared so hxlcl_atoi's inner call binds at link.
+extern fn hxlcl_atoll(s: HexaVal) -> int
+
+// hxlcl_atoi: parse `s` as int by delegating to hxlcl_atoll. BYTE-FAITHFUL to
+// runtime_core_hxlcl_shim.c:396 (`int hxlcl_atoi(const char *s){return (int)hxlcl_atoll(s);}`).
+// Under the Route C gate the param arrives raw in rdi/x0, the inner `bl hxlcl_atoll`
+// is a C-ABI call (s → rdi/x0, result ← rax/x0), and the return ships that result
+// raw; under the default (gate OFF) it compiles as an ordinary HexaVal fn
+// (byteeq-neutral — never linked in that mode).
+pub fn hxlcl_atoi(s: HexaVal) -> int {
+    return hxlcl_atoll(s)
+}

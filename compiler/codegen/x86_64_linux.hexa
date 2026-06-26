@@ -950,6 +950,12 @@ pub fn _is_cabi(fname: string) -> bool {
     if fname == "hxlcl_strcpy" { return true }
     if fname == "hxlcl_strncpy" { return true }
     if fname == "hxlcl_strcat" { return true }
+    // r7 composite — hxlcl_atoi is a NON-LEAF whose body is one inner C-ABI call
+    // `bl hxlcl_atoll`. BOTH the outer fn and the inner callee are whitelisted so
+    // the inner call (keyed on the callee name s.op at the call boundary) lowers
+    // single-register C-ABI and binds cross-object to the retained shim atoll.
+    if fname == "hxlcl_atoi" { return true }
+    if fname == "hxlcl_atoll" { return true }
     return false
 }
 
