@@ -42,7 +42,7 @@ permissions:
 jobs:
   selfhost-native-build-gate:
     name: selfhost native build (gen3 --emit=obj + hexa_ld, darwin-arm64)
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6

@@ -38,7 +38,7 @@ permissions:
 jobs:
   forge-runtime-wcomment:
     name: forge/runtime -Wcomment hygiene (OP-5-clean files)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6

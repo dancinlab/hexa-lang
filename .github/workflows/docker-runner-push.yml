@@ -33,7 +33,7 @@ permissions:
 jobs:
   disabled:
     name: docker-runner-push (DISABLED — cold-seed removed by user decision)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 1
     steps:
       - name: Explain

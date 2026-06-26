@@ -57,7 +57,7 @@ permissions:
 jobs:
   hexat-emit-gate:
     name: hexat_linux large-emit gate (#1979)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Checkout

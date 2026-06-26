@@ -61,7 +61,7 @@ jobs:
   # ── Setup — decide release tag + force-move `test` on main push ────
   setup:
     name: setup
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
       release_tag: ${{ steps.c.outputs.release_tag }}
       is_tag: ${{ steps.c.outputs.is_tag }}
@@ -789,7 +789,7 @@ jobs:
       needs.release-macos-arm64.result == 'success' &&
       needs.release-linux-x86_64.result == 'success' &&
       needs.release-linux-arm64.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Promote release to stable Latest (3/3 assets confirmed)
         uses: softprops/action-gh-release@v2
