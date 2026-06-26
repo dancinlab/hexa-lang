@@ -938,6 +938,7 @@ fn _x86_64_arg_reg_seq(idx: i64) -> string {
 pub fn _is_cabi(fname: string) -> bool {
     if env("HEXA_CABI_HXLCL") != "1" { return false }
     if fname == "hxlcl_strlen" { return true }
+    if fname == "hxlcl_memcpy" { return true }
     return false
 }
 

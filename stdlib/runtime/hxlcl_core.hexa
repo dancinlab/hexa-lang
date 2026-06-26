@@ -1,9 +1,10 @@
 // stdlib/runtime/hxlcl_core.hexa — RFC061 §M8 Route C libc-floor C-ABI SSOT.
 //
-// The hexa-source raw-mem body for the libc-floor substrate symbol `hxlcl_strlen`
-// (`size_t hxlcl_strlen(const char*)`), emitted through the compiler's portable
-// `aprime_cc --emit=asm --target=` cross-target path under the Route C C-ABI
-// calling-convention gate (HEXA_CABI_HXLCL=1 · _is_cabi in
+// The hexa-source raw-mem bodies for the libc-floor substrate symbols
+// `hxlcl_strlen` (`size_t hxlcl_strlen(const char*)`) and `hxlcl_memcpy`
+// (`void *hxlcl_memcpy(void*,const void*,size_t)`), emitted through the
+// compiler's portable `aprime_cc --emit=asm --target=` cross-target path under
+// the Route C C-ABI calling-convention gate (HEXA_CABI_HXLCL=1 · _is_cabi in
 // compiler/codegen/x86_64_linux.hexa + arm64_darwin.hexa).
 //
 // WHY A SEPARATE FILE (not str_core.hexa): str_core's prims are HexaVal-ABI
@@ -44,4 +45,38 @@ pub fn hxlcl_strlen(s: HexaVal) -> int {
         c = __hx_ptr_load8(p, n)              // s[n]
     }
     return n
+}
+
+// BYTE-FAITHFUL to the C body it replaces (self/runtime.c:586, rt_memcpy 32 B):
+//   void *hxlcl_memcpy(void *dst, const void *src, size_t n){
+//       unsigned char *d=dst; const unsigned char *s=src;
+//       for(size_t i=0;i<n;i++) d[i]=s[i]; return dst; }
+// Three raw C-ABI args (dst,src,n) arrive in rdi/rsi/rdx (x0/x1/x2); the return
+// ships the dst pointer raw in rax/x0. (n==0 → the while never enters, exactly
+// like the C for-loop; the frozen runtime never calls memcpy with NULL/overlap —
+// same precondition as hxlcl_strlen and the SELFEMIT hand-assembled seed
+// test/native_build/emit_hxlcl_memcpy_o.hexa.) Forward byte copy only — overlap
+// is hxlcl_memmove's job, never aliased onto this symbol.
+//
+// RAW-MEM, un-nested (same str_core NESTING rule as hxlcl_strlen above): every
+// __hx_payload_* / __hx_ptr_* call writes EXACTLY ONE `let`/assignment with no
+// nested intrinsic args. __hx_payload_lt(i, n) tests the raw payload words (NOT
+// `<`, which lowers to a HexaVal helper that misreads the raw byte words);
+// __hx_ptr_load8 reads one byte ZERO-EXTENDED into a TAG_INT payload and
+// __hx_ptr_store8 writes the low byte of that payload back to dst[i].
+
+// hxlcl_memcpy: copy `n` bytes src→dst (forward), return dst. Under the Route C
+// C-ABI gate the params arrive raw in rdi,rsi,rdx / x0,x1,x2 and the return ships
+// the dst pointer raw in rax/x0; under the default (PAIR-MODEL, gate OFF) it
+// compiles as an ordinary HexaVal fn (byteeq-neutral — never linked in that mode).
+pub fn hxlcl_memcpy(dst: HexaVal, src: HexaVal, n: HexaVal) -> int {
+    let pd = __hx_payload_add(dst, 0)         // dst char* (payload word)
+    let ps = __hx_payload_add(src, 0)         // src char* (payload word)
+    let mut i = 0
+    while __hx_payload_lt(i, n) {
+        let b = __hx_ptr_load8(ps, i)         // src[i]
+        __hx_ptr_store8(pd, i, b)             // dst[i] = src[i]
+        i = __hx_payload_add(i, 1)
+    }
+    return pd
 }
