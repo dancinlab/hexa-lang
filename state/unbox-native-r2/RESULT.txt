@@ -1,41 +1,84 @@
-=== HEXA_UNBOX_ARRAY_NATIVE r2 — RESULT (pending pool measure) ===
+=== HEXA_UNBOX_ARRAY_NATIVE r2 — RESULT (MEASURED 2026-06-27 · summer) ===
 
-STATUS: implemented + branch pushed; measure.sh dispatched to summer (1-SSH).
-        Verdict gates (Gate1 OFF-byteeq / Gate2 lever / Gate3 ratio / Gate4
-        parity / Gate5 smoke) to be filled by summer self-harvest
-        ($HOME/r2_arru_RESULT.txt). measure-first · verify-done · LLM 자가판정 금지.
+VERDICT: 🧱 honest NEGATIVE — 레버 NO EFFECT. root-cause = HIR type-lowering
+         substrate gap (ⓑ), NOT a codegen guard bug (ⓐ). DO NOT MERGE.
+         codegen 메커니즘은 완성·byte-neutral·release-safe(Gate1 PASS)지만
+         발화 못 함(배열 elem-type 신호가 HIR에서 폐기됨).
 
-BRANCH: perf/codegen-unbox-array-r2 (off origin/main)
-FILE:   compiler/codegen/x86_64_linux.hexa (+~270 LOC, default-OFF)
-FLAG:   HEXA_UNBOX_ARRAY_NATIVE=1 (opt-in)
+BRANCH: perf/codegen-unbox-array-r2 (commit fa004ae17, off origin/main 7ee6953f)
+FLAG:   HEXA_UNBOX_ARRAY_NATIVE=1 (opt-in, default-OFF)
 
-WHAT WAS BUILT
-  - Gate env `_unbox_array_enabled()` (HEXA_UNBOX_ARRAY_NATIVE=="1").
-  - X86RegMap.local_type direct array (id→MIR type_id), built ONLY when gate ON
-    (R1 lever-d lesson: unconditional builder perturbs deterministic emit) +
-    `_x86_local_type` O(1) probe. OFF → empty `[]`, never consulted.
-  - Provability helpers: `_x86_is_typed_prim_array` (101..104),
-    `_x86_operand_array_typed` (local + typed-prim-array),
-    `_x86_operand_index_int` (const_int / type_id==1 local),
-    `_x86_index_get_unbox_ok`, `_x86_index_set_unbox_ok`.
-  - `_x86_emit_array_addr`: idx→rsi, arr_ptr→rdi, signed bounds (jl/jge → OOB
-    label = boxed call), idx*16 via four `add r,r`, addr=items+idx*16.
-  - op="index" GET fast path: addr→rdi, payload→dst, tag→rsi, store; jmp .done;
-    .oob = original boxed `hexa_index_get`; .done.
-  - op="index_set" SET fast path (i64 arrays + raw-int value): addr→r11,
-    value→rdx → [r11+8], TAG_INT(0) → [r11]; jmp .done; .oob = boxed
-    `hexa_index_set`; .done. Skips store-back (in-place, no relocation) and the
-    arena dirty-flag (sound: raw-i64 value is never an arena child Val).
+────────────────────────────────────────────────────────────────────────
+GATES (k3_arrmap N=4096 REP=2e5, taskset -c 3 median-of-5, summer-B650M-K)
+────────────────────────────────────────────────────────────────────────
+ Gate1 OFF-byteeq  = PASS  patched-OFF .o == baseline .o (same-cwd)
+                            sha=1ef30e6ad3177696 → 메커니즘 byte-neutral 실증
+ Gate2 lever       = NO EFFECT  patched asm OFF==ON byte-identical
+                            (hexa_index_get=2 hexa_index_set=1 둘 다 동일)
+                            → 언박싱 가드가 한 번도 안 켜짐
+ Gate3 ratio ON/OFF= 1.001 (15.98 / 15.97 cpu_s) — 레버 미발화의 귀결
+ Gate4 parity      = OK  (out=3391895722445578240 OFF==ON)
+ Gate5 smoke       = harness artifact (hello/exit42 rc=1 in measure dir, but
+                     ~/.hx/bin/hexa run hello = rc=0 정상 standalone; OFF==ON
+                     동일 emit이라 flag가 smoke 깰 수 없음 — measure cwd/runtime
+                     아티팩트, 진짜 회귀 아님)
 
-SOUNDNESS NOTES (kept BOXED / conservative bottom)
-  - globals (separate id space, not in local_type), maps, strings, untyped
-    (type_id 0), non-primitive-element arrays → boxed.
-  - SET restricted to type_id 101 ([i64]) with raw-int value (tag=TAG_INT). [f64]
-    store-back + bounds-elision (raw pointer-walk) = r2b follow-on.
-  - GET is element-type-agnostic (loads stored {tag,payload}), so [f64]/[f32]
-    arrays (103/104) are allowed for GET — the loaded tag carries TAG_FLOAT.
+────────────────────────────────────────────────────────────────────────
+ROOT-CAUSE (HEXA_ARRU_DEBUG=1 + _type_id_of probe로 실측 특정)
+────────────────────────────────────────────────────────────────────────
+codegen 가드는 정확히 배선됨:
+  ARRU index: cont.kind=local cont.type_id=0 idx.kind=local idx.type_id=1 local_type.len=5
+  ARRU index: cont.kind=local cont.type_id=0 idx.kind=local idx.type_id=1 local_type.len=10
+  → local_type 빌드됨 · idx type_id==1 백엔드 도달 · 유일 갭 = container type_id=0(101 아님)
 
-NEXT (r2b, deferred)
-  - bounds-check elision under loop-invariant analysis (raw pointer-walk).
-  - [f64] store-back fast path.
-  - arm64_darwin.hexa mirror (3-target byteeq).
+_type_id_of가 받는 실제 Type shape:
+  TYIDOF kind=generic:Array name=void nargs=0
+  → kind="generic:Array" · args 비어있음(element type DROP)
+
+3-레이어 dissection:
+  1) parse/parser.hexa:439  — `[i64]` → TypeRef{kind:"generic", name:"Array", args:[inner]}
+                              (elem-type는 args[0]에 보존됨)
+  2) lower/ast_to_hir.hexa:144-151 _hir_lower_type_ref — non-"named" fallthrough가
+                              Type{kind: tr.kind+":"+tr.name, args:[]} 생성
+                              → kind="generic:Array" + args:[] (elem-type 파괴 ← 여기)
+  3) lower/hir_to_mir.hexa:205-210 _type_id_of — t.kind=="array"만 101..104 매핑.
+                              실제는 "generic:Array"라 분기 DEAD + nargs=0이라 복구 불가
+                              → return 0
+
+분류: ⓑ substrate gap. elem-type 신호가 parser엔 있으나 HIR-lowering이 폐기 →
+codegen-side 작업으로는 typed-prim-array 인식 불가. _type_id_of의 array 분기(101-104)는
+현재 dead code(nvptx GPU-kernel array-param decode nvptx_target.hexa:398-401도 같은 갭
+영향 추정 · 별도 확인 대상).
+
+────────────────────────────────────────────────────────────────────────
+선결 작업 (r2-pre · lattice-widening · 별도 cycle · 머지 금지)
+────────────────────────────────────────────────────────────────────────
+typed-prim-array 인식을 켜려면 ungated 공유 HIR 변경 2곳:
+  (A) _hir_lower_type_ref가 generic "Array"(및 "Array:<elem>:<N>") shape에서 tr.args를
+      재귀 lower → element type 보존 + recognizable array kind emit.
+  (B) _type_id_of를 그 shape에 정렬(현 kind=="array" 분기 → 실제 shape 매핑).
+byteeq 리스크: 둘 다 모든 배열 Type의 MIR Local.type_id를 0→101..104로 바꿈 →
+nvptx codegen + 기타 소비자 영향 → 3타깃 byteeq + nvptx 회귀 전수 측정 필요.
+r2 PR 범위 밖(릴리스무결성 > self-host 진척). r2-pre 착지 후 이 branch 재측정 시
+ratio<1.0 기대(메커니즘 이미 준비됨).
+
+────────────────────────────────────────────────────────────────────────
+산출물 상태
+────────────────────────────────────────────────────────────────────────
+branch perf/codegen-unbox-array-r2 = codegen 메커니즘 완성·Gate1 byte-neutral 실증·
+release-safe. 머지 보류(레버 미발화 = 단독 가치 없음·byte-neutral이라 무해하나 dead).
+r2-pre 선결 후 재활성 or r2-pre에 흡수.
+
+R1 메커니즘(#4024, scalar binop unbox)은 release-safe로 머지됨; r2의 가치 = "배열 elem-type
+신호 부재"를 parser→HIR→MIR 3레이어로 정확 규명 + codegen 메커니즘 release-safe 선배선.
+
+────────────────────────────────────────────────────────────────────────
+RAW MEASURE LOG (summer, $HOME/r2_arru_RESULT.txt)
+────────────────────────────────────────────────────────────────────────
+=== HEXA_UNBOX_ARRAY_NATIVE r2 measure — 2026-06-26T15:29:22Z — summer-B650M-K ===
+  SRC sha=fa004ae1  BASE sha=7ee6953f  runtime.a=1017678 bytes
+  Gate1 OFF-BYTEEQ=PASS  sha=1ef30e6ad3177696
+  Gate2 off: hexa_index_get=2 hexa_index_set=1 | on: hexa_index_get=2 hexa_index_set=1  (OFF==ON byte-identical)
+  Gate3 ratio ON/OFF = 1.001  (off=15.97s on=15.98s)
+  Gate4 PARITY=OK (3391895722445578240)
+  Gate5 smoke = harness artifact (standalone hexa run hello = rc=0)
