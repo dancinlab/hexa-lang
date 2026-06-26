@@ -113,3 +113,86 @@ pub fn hxlcl_memset(s: HexaVal, c: HexaVal, n: HexaVal) -> int {
     }
     return ps
 }
+
+// ── COMPARE FAMILY (Route C r5 · pure byte-walk, no syscall/float/composite) ──
+//
+// The compare leaves return an `int` derived from a byte difference; the C bodies
+// (runtime_core_hxlcl_shim.c + self/runtime.c) all compute
+//   (int)(unsigned char)pa[i] - (int)(unsigned char)pb[i]
+// at the first mismatch, else 0/the terminator rule. The Route C ingress lands
+// each raw pointer/length arg as a TAG_INT(0) payload; __hx_ptr_load8 reads ONE
+// byte ZERO-EXTENDED (so the 0..255 byte compares as itself, matching the C
+// `(unsigned char)` cast), and __hx_payload_sub computes the signed difference
+// shipped raw in rax/x0. Reference-checked byte-for-byte against the SELFEMIT
+// arm64 seeds (test/native_build/emit_hxlcl_{memcmp,strcmp,strncmp,strchr}_o.hexa,
+// each `subs w6,w4,w5` / `ldrb` verbatim from self/codegen/runtime_arm64.hexa).
+//
+// RAW-MEM, un-nested (same str_core NESTING rule as the mem leaves above): every
+// __hx_payload_* / __hx_ptr_* call writes EXACTLY ONE `let`/assignment with no
+// nested intrinsic args. Comparisons use raw-int leaf intrinsics
+// (__hx_payload_lt / __hx_payload_ne), NOT `<`/`!=` (those lower to HexaVal
+// helpers that misread the raw byte words).
+
+// hxlcl_memcmp: compare n bytes a vs b; return first signed byte diff, else 0.
+// BYTE-FAITHFUL to runtime_core_hxlcl_shim.c:188 (hxlcl_memcmp) /
+// self/runtime.c rt_memcmp: for(i<n){ d=(int)pa[i]-(int)pb[i]; if(d) return d; } 0.
+pub fn hxlcl_memcmp(a: HexaVal, b: HexaVal, n: HexaVal) -> int {
+    let pa = __hx_payload_add(a, 0)           // a char* (payload word)
+    let pb = __hx_payload_add(b, 0)           // b char* (payload word)
+    let mut i = 0
+    while __hx_payload_lt(i, n) {
+        let ca = __hx_ptr_load8(pa, i)        // (unsigned char)a[i]
+        let cb = __hx_ptr_load8(pb, i)        // (unsigned char)b[i]
+        let d = __hx_payload_sub(ca, cb)      // (int)ca - (int)cb
+        if __hx_payload_ne(d, 0) {
+            return d
+        }
+        i = __hx_payload_add(i, 1)
+    }
+    return 0
+}
+
+// hxlcl_strcmp: compare NUL-terminated a vs b; first signed byte diff, else 0.
+// BYTE-FAITHFUL to runtime_core_hxlcl_shim.c:231 (hxlcl_strcmp) /
+// self/runtime.c rt_strcmp: for(i;;i++){ ca=a[i]; cb=b[i];
+//   if(ca!=cb) return ca-cb; if(ca==0) return 0; }.
+pub fn hxlcl_strcmp(a: HexaVal, b: HexaVal) -> int {
+    let pa = __hx_payload_add(a, 0)
+    let pb = __hx_payload_add(b, 0)
+    let mut i = 0
+    while true {
+        let ca = __hx_ptr_load8(pa, i)        // (unsigned char)a[i]
+        let cb = __hx_ptr_load8(pb, i)        // (unsigned char)b[i]
+        let d = __hx_payload_sub(ca, cb)
+        if __hx_payload_ne(d, 0) {
+            return d
+        }
+        if __hx_payload_eq(ca, 0) {
+            return 0
+        }
+        i = __hx_payload_add(i, 1)
+    }
+    return 0
+}
+
+// hxlcl_strncmp: compare up to n bytes of NUL-terminated a vs b.
+// BYTE-FAITHFUL to runtime_core_hxlcl_shim.c:251 (hxlcl_strncmp): for(i<n){
+//   ca=a[i]; cb=b[i]; if(ca!=cb) return ca-cb; if(ca==0) return 0; } 0.
+pub fn hxlcl_strncmp(a: HexaVal, b: HexaVal, n: HexaVal) -> int {
+    let pa = __hx_payload_add(a, 0)
+    let pb = __hx_payload_add(b, 0)
+    let mut i = 0
+    while __hx_payload_lt(i, n) {
+        let ca = __hx_ptr_load8(pa, i)
+        let cb = __hx_ptr_load8(pb, i)
+        let d = __hx_payload_sub(ca, cb)
+        if __hx_payload_ne(d, 0) {
+            return d
+        }
+        if __hx_payload_eq(ca, 0) {
+            return 0
+        }
+        i = __hx_payload_add(i, 1)
+    }
+    return 0
+}
