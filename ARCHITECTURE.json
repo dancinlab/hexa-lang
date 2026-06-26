@@ -1246,7 +1246,7 @@
             {
               "type": "list",
               "items": [
-                "Static generics / monomorphization — parsed only, codegen erases (`compiler/parse/parser.hexa:1811`). Limits codegen specialization.",
+                "Static generics / monomorphization — parsed only, codegen erases (`compiler/parse/parser.hexa:1811`). Limits codegen specialization. OPT-IN slice R1 landed (PR#NN, `state/rfc_static_generics_monomorphization.md`): native `parse_fn_item` now consumes `<T>` (parity w/ struct + self/parser, byte-neutral), and a default-OFF MIR pass `compiler/optimize/monomorphize.hexa` (gated `HEXA_MONOMORPHIZE=1`, no-op unless a `$$g`-marked template exists) clones+mangles a generic template per call-site concrete type (`id$int`/`id$str`) à la rustc/zig/swift specialization. DEFAULT path stays erased + byteeq-neutral. R2 threads the marker from `@specialize`+generic via `hir_to_mir::_lower_fn`.",
                 "Type alias / newtype — no lexer keyword.",
                 "Interface/trait dispatch — `impl T For X` PARSES (`self/parser.hexa:2603`) but no checking, no vtable. Method dispatch on structs works; trait-bounded polymorphism does not.",
                 "Operator overloading — fixed 21-operator set (`compiler/lex/tokens.hexa:58-73`), no magic methods.",

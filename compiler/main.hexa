@@ -45,6 +45,7 @@ import "./lower/hir_to_mir.hexa"
 import "./optimize/const_fold.hexa"
 import "./optimize/dce.hexa"
 import "./optimize/inline.hexa"
+import "./optimize/monomorphize.hexa"
 import "./codegen/arm64_darwin.hexa"
 import "./codegen/x86_64_linux.hexa"
 import "./codegen/thumbv7em_eabihf.hexa"
@@ -823,6 +824,19 @@ if stream_mode && target == "arm64-apple-darwin" {
         mmodule = const_fold(mmodule)
         mmodule = dce(mmodule)
     }
+
+    // Opt-in static-generic monomorphization (RFC
+    // state/rfc_static_generics_monomorphization.md). DEFAULT-OFF: the
+    // pass only runs when HEXA_MONOMORPHIZE=1, and even then it is a
+    // guaranteed no-op (returns the same MModule) unless the module
+    // carries a `$$g`-marked generic template — which no default lowering
+    // emits today. So the codegen byte-output is unchanged for every
+    // existing program (byteeq-neutral on the 3 release targets). The
+    // erased dynamic path stays the canonical default; monomorphization is
+    // an opt-in constraint per the native-canonical-default polarity rule.
+    let _mono_env = env("HEXA_MONOMORPHIZE")
+    if _mono_env == "1" { mmodule = monomorphize(mmodule) }
+
     // S1-step-1 — MIR-opt phase boundary (no-op at --opt=0, but the
     // _mmod_stmt_count walk above still runs; measure it regardless).
     cg_profile_mark("mir_opt")
