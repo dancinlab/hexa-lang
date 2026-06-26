@@ -33,9 +33,10 @@ surge·dream·swarm·reign·molt·wake·forge·canon·revive)은 각자 `../<nam
 
 ## 규칙 / gotcha (정직 — c2)
 
-- **drill 후보 ≠ 진짜 발견**: smash 후보는 seed-hash + 고정상수의 **결정적 산술순열**
-  (`closure(seed, sigma_n6=12.0)` 류)이다. `net_novel`/`saturated`는 그 run 내 distinct-ID
-  소진 신호일 뿐 atlas-신규성과 무관(overlay_load는 RETIRED).
+- **drill 후보 ≠ 진짜 발견**: smash 후보는 **시드-파생 결정적 산술순열**이다(자유탐색 —
+  `phases.hexa::seed_attractors`가 시드 토큰별 char-시그니처로 per-seed attractor 격자를 만들고
+  9-phase가 그 격자에 resonance하는 값을 surface; 구 n=6 고정상수 격자는 제거됨). `net_novel`/
+  `saturated`는 그 run 내 distinct-ID 소진 신호일 뿐 atlas-신규성과 무관(overlay_load는 RETIRED).
 - **진짜 검증 = `../atlas/identity_engine.hexa` exact-int**(atlas 도메인) + `hexa verify` g5 fold만. 구 NEXUS
   ouroboros `verify_score`(n6-근접 휴리스틱 최소 0.3→항상 "발견")는 검증이 아님 — 그래서
   native exact-int로 교체됨.
