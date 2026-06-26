@@ -1428,6 +1428,20 @@
         "state": "ossified",
         "value": "SSH with semicolon-chained commands exits 255. Use bash -c 'cmd1 && cmd2' or separate SSH calls",
         "source": "tool/deploy_h100.hexa"
+      },
+      {
+        "id": "ING-STALE-VERIFY-FIRST-BEFORE-REVIVE",
+        "state": "ossified",
+        "value": "aged ING 항목(수일 묵음)은 merged PR로 이미 처리/진행됐을 수 있는데 보드는 자동 scrub 안 됨 → git-verify 없이 작업 착수하면 머지된 일을 재작업(redo-waste). 이번 세션 #34=이미 #3805(rent 하드닝 4가드)·#33=이미 #3899(collision mangle)+summer 실측 링크성공 → 둘 다 거의 재작업할 뻔. 동형 재발: QA 캠페인 census가 fix마다 라인이동으로 stale→phantom FP, 누적 후 origin/main 재생성으로 해소. 일반 클래스=추적기(ING/census)가 산출물 머지와 비동기로 drift.",
+        "threshold": "aged ING/추적항목 작업 착수 前 verify-first 필수: (1) git log origin/main grep 키워드+ING번호 (2) 가능시 실측 재현(예 summer 빌드 exit=0=FIXED) → DONE이면 scrub, ACTIVE-by-others면 STOP관망, 진짜잔여만 작업. 추적기가 stale일 수 있다고 가정.",
+        "source": "ING.jsonl"
+      },
+      {
+        "id": "POOL-BUILD-AGENT-STRAND-SELFHARVEST",
+        "state": "ossified",
+        "value": "pool-build을 background agent로 돌리면 agent가 서버측 rate-limit(또는 호스트 재부팅)으로 죽어도 빌드는 호스트서 완료되는데, agent가 결과를 수확/verdict작성 못해 결과가 /tmp에 unharvested로 방치(R5 seed-converge=10시간 방치·R6 gcc-O1=2회 strand+재부팅 wipe). 메인세션이 의심하고 호스트 ground-truth(cat /tmp/*RESULT*)로 직접 수확해야 발견됨.",
+        "threshold": "재발조건=heavy pool 빌드+검증을 agent로 위임 시 매번. 해결=빌드 스크립트가 self-harvest(결과를 host:/tmp/<job>_RESULT.txt에 직접 기록)하게 만들어 agent 생존에 무관하게 결과 보존+메인세션 cat 수확. 호스트 재부팅 시 /tmp wiped 가능→코드는 branch에 보존+verify 재실행. 죽은/타임아웃 호스트 재두드림 금지(poll-min-30m).",
+        "source": "tool/stage_build_hexa"
       }
     ]
   }
