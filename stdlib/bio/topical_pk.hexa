@@ -56,6 +56,7 @@ pub fn partition_coeff(c_oct: float, c_water: float) -> float {
 // stratum corneum 확산계수 D · partition K · 장벽두께 h.
 // Source: Scheuplein & Blank 1971 Physiol Rev 51:702 (Potts-Guy model input).
 pub fn permeability_skin(d_diff: float, k_part: float, h_thick: float) -> float {
+    if h_thick <= 0.0 { return 0.0 }   // zero barrier thickness → D·K/0 = Inf
     return d_diff * k_part / h_thick
 }
 
@@ -73,5 +74,6 @@ pub fn auc_first_order(c0: float, k_e: float) -> float {
 // 투여량 - AUC 의 textbook PK 정의식. Source: Rowland & Tozer 1995
 // (Clinical Pharmacokinetics 3rd ed §6).
 pub fn clearance(dose: float, auc: float) -> float {
+    if auc <= 0.0 { return 0.0 }   // auc≤0 → dose/0 = Inf (clearance undefined)
     return dose / auc
 }
