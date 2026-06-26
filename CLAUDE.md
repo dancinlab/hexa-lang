@@ -147,6 +147,20 @@ only (no domain registry).
   같은 잣대로 다른 DX 표면(라이브러리 관리·의존성·설치)도 정석 대비 갭이 보이면 그 자리에서 교정.
 - do: stdlib signal/math 모듈은 **native libm trig**(`cos`/`sin`/…)를 쓴다.
 - dont: 손수 짠 Taylor series 금지 (codegen-fragile).
+- do: **cross-target libc-floor(`hxlcl_*`) native-emit 의 정석 = codegen per-fn C-ABI
+  calling-convention** (Route C). `_is_cabi(fname)`(`hxlcl_` 프리픽스/whitelist) hook 이 codegen
+  3 경계(param-ingress · return · call-boundary)×2 백엔드(x86_64·arm64)에서 PAIR-MODEL
+  HexaVal`{tag,payload}` 를 **single-register C-ABI**(SysV `rdi`/`rsi`/… · return `rax` /
+  AAPCS64 `x0`/… · return `x0`)로 lowering 한다(C-ABI 헬퍼 `_x86_64_arg_reg_seq` 기존 재사용).
+  reference-match: GCC `sysv_abi`/`regparm` · rustc `extern "C"` · zig `callconv(.C)` · Go
+  `ABI0` — 모든 주요 컴파일러의 정석. **한 codegen 기능이 전 `hxlcl_*` 심볼 × 3 타깃을 일괄
+  cross-target dissolve** (default-OFF whitelist · byteeq-neutral · DEFAULT shim.o sha 불변).
+  SSOT: 메모리 `project_hexa_rfc061_hxlcl_crosstarget_abi_wall`.
+- dont: 심볼당·타깃당 **hand-assembled machine-byte 배열**로 cross-target 확장 금지
+  (non-canonical · O(symbols×targets) 노동 · 유지보수 폭발 — `test/native_build/emit_hxlcl_*_o.hexa`
+  darwin Mach-O 손-assemble 은 codegen C-ABI 모드 부재 시의 임시 우회였고 Route C 로 승계).
+  새 `@<attr>` 키워드 도입 금지(frozen blob 151c52c8 파서 미지 → faithful build-break ·
+  name-prefix/whitelist hook 으로만).
 
 ### 아틀라스 · 검증
 
