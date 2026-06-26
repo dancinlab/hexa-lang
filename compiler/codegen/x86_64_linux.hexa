@@ -229,13 +229,14 @@ pub struct X86RegMap {
     // O(n²) on the 7000-binop runtime_cuda_emit). Built once from the final
     // `ids` order, so every lookup returns the identical slot — byte-eq NEUTRAL.
     id2idx: [i64],
-    // r5 HEXA_UNBOX_NATIVE — id → MIR type_id direct array (sized maxid+1,
-    // 0 = absent/unclassified). Populated once from `mf.locals` + `mf.params`
-    // (`Local.type_id`, _type_id_of: 1=i64 3=f64 5=bool). Lets the BINOP
-    // lowering prove an operand is monomorphic-int WITHOUT a `mf` plumb. This
-    // field is ALWAYS populated (cheap, mf-local), but is ONLY consulted when
-    // `_unbox_native_enabled()` is true → OFF-path emit reads it never →
-    // byte-eq NEUTRAL when the gate is OFF.
+    // HEXA_UNBOX_NATIVE (r5) + HEXA_UNBOX_ARRAY_NATIVE (r2) — id → MIR type_id
+    // direct array (sized maxid+1, 0 = absent/unclassified). Populated from
+    // `mf.locals` + `mf.params` (`Local.type_id`, _type_id_of: 1=i64 3=f64 5=bool
+    // … 101..104 = typed prim arrays). Lets the BINOP lowering prove an operand
+    // is monomorphic-int, and the index lowering prove a container is a typed
+    // array / an index is a raw int, WITHOUT an `mf` plumb. Consulted ONLY when
+    // `_unbox_native_enabled()` (BINOP) or `_unbox_array_enabled()` (index) is
+    // true → OFF-path emit reads it never → byte-eq NEUTRAL when both gates OFF.
     local_type: [i64]
 }
 
@@ -598,18 +599,18 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
         mk = mk + 1
     }
 
-    // r5 HEXA_UNBOX_NATIVE — id → type_id direct array, built ONLY when the gate
-    // is ON. r1b root-cause: the prior version built this UNCONDITIONALLY, which
-    // measurement-FALSIFIED the "inert by construction" claim — patched flag-OFF
-    // k1_sum .o (sha 840a4623) != baseline origin/main .o (sha bd54d525). The
-    // unconditional builder (extra allocations + per-id loops) perturbed the
-    // self-hosted emitter's deterministic output. FIX: gate the builder behind
-    // `_unbox_native_enabled()` — when OFF the loops never run, `rm_local_type`
-    // stays the empty literal `[]`, and `_x86_local_type` is never consulted (the
-    // binop guard short-circuits on the gate). Empty-`[]` field is the minimal
-    // residual struct-shape delta; Gate-1 re-measures patched-OFF .o == baseline.
+    // HEXA_UNBOX_NATIVE (r5) + HEXA_UNBOX_ARRAY_NATIVE (r2) — id → MIR type_id
+    // direct array, built ONLY when EITHER gate is ON. r1b lever-d root-cause:
+    // an UNCONDITIONAL builder measurement-FALSIFIED the "inert by construction"
+    // claim — the extra allocations + per-id loops perturbed the self-hosted
+    // emitter's deterministic output. FIX: gate the builder behind
+    // `_unbox_native_enabled() || _unbox_array_enabled()` — when BOTH OFF the
+    // loops never run, `rm_local_type` stays the empty literal `[]`, and
+    // `_x86_local_type` is never consulted (the unbox guards short-circuit on
+    // their gate). Empty-`[]` field is the minimal residual struct-shape delta;
+    // Gate-1 re-measures patched-OFF .o == baseline.
     let mut rm_local_type: [i64] = []
-    if _unbox_native_enabled() {
+    if _unbox_native_enabled() || _unbox_array_enabled() {
         let lt_maxid = _x86_max_local_id(mf)
         let mut lj = 0
         while lj <= lt_maxid { rm_local_type.push(0); lj = lj + 1 }
@@ -660,8 +661,11 @@ fn _x86_spill_offset(rm: X86RegMap, id: i64) -> i64 {
     return rm.slots[idx]
 }
 
-// r5 HEXA_UNBOX_NATIVE — O(1) id → MIR type_id probe (0 = absent/unclassified,
-// the conservative "not provably typed" bottom). Direct-indexed like _x86_rm_idx.
+// HEXA_UNBOX_NATIVE/HEXA_UNBOX_ARRAY_NATIVE — O(1) id → MIR type_id probe
+// (0 = absent/unclassified, the conservative "not provably typed" bottom).
+// Direct-indexed by local id like _x86_rm_idx. Only populated/consulted when a
+// gate is ON (see X86RegMap.local_type) → returns 0 always when both OFF →
+// unbox guards short-circuit.
 fn _x86_local_type(rm: X86RegMap, id: i64) -> i64 {
     if id < 0 || id >= len(rm.local_type) { return 0 }
     return rm.local_type[id]
@@ -701,6 +705,14 @@ fn _x86_tag_off(rm: X86RegMap, id: i64) -> i64 {
 // function's reset never dangles (same handle-vs-buffer discipline as
 // `_lr_ctx_clear`). Collapses per-function codegen from O(stmts²) to O(stmts).
 pub let mut _x86_buf: [LInstr] = []
+
+// r2 HEXA_UNBOX_ARRAY_NATIVE — monotonic per-emit counter for the unique
+// branch labels the native array-index fast path needs (in-bounds join +
+// OOB fallthrough). Bumped ONLY when the gate fires (the unbox path is the
+// sole reader/writer), so OFF-path emit never touches it → byte-eq NEUTRAL
+// when the flag is unset. Not reset per-function: labels only need module-
+// global uniqueness, which a monotone counter guarantees without per-fn state.
+pub let mut _x86_arru_lbl: i64 = 0
 
 // Fresh, independent instruction buffer for a new function-lowering scope.
 // A bare `[]` literal evaluated under a live fn-arena is arena-backed and
@@ -933,6 +945,72 @@ fn _x86_operand_provably_int(o: Operand, rm: X86RegMap) -> bool {
     return false
 }
 
+// ── r2 HEXA_UNBOX_ARRAY_NATIVE — provably-int array indexing (default-OFF) ────
+//
+// Baseline: every `arr[i]` / `arr[i]=v` (STMT_ASSIGN op="index"/"index_set")
+// routes through a boxed runtime call (`call hexa_index_get` / `hexa_index_set`)
+// that boxes BOTH the container and the (HexaVal) index, dispatches on the
+// container's runtime tag, unwraps a possible VALSTRUCT-wrapped index, runs a
+// bounds check, and returns/stores a boxed HexaVal element — the measured
+// ~23× gap (probe k3_arrmap) vs a gcc -O2 `mov [base+idx*8]`.
+//
+// This gate lets an index op whose CONTAINER is a provably-typed primitive
+// array (`[i64]`/`[i32]`/`[f64]`/`[f32]`, MIR type_id 101..104) and whose INDEX
+// is provably a raw i64 (literal or type_id==1 local) SKIP the boxed call and
+// emit a native bounds-checked element load/store directly against the HexaArr
+// descriptor. Soundness firewall (the miscompile hazard):
+//   - Gate is env-opt-in, default-OFF. When unset `_unbox_array_enabled()`
+//     returns false → every index op takes its UNCHANGED boxed branch → OFF-path
+//     emit is byte-identical by construction (the new code is never reached, the
+//     label counter never bumps).
+//   - The container must be a `local`/`global` whose MIR type_id ∈ 101..104
+//     (a primitive-element typed array, set by hir_to_mir `_type_id_of`). Maps
+//     (type_id != array), strings, untyped (type_id 0), and arrays of non-
+//     primitive elements are NOT proven → stay BOXED. Conservative is correct.
+//   - The index must be a `const_int` (raw payload) or a `local`/`param` whose
+//     type_id == 1 (i64). Any other index → BOXED (a float/VALSTRUCT/global-typed
+//     index could need the runtime's unwrap path).
+//   - The bounds check is PRESERVED: a native `cmp idx,len; jb .ok` precedes the
+//     load/store, and the OOB path FALLS THROUGH to the original boxed call —
+//     which formats the exact "index N out of bounds (len M)" message and throws,
+//     so out-of-range behaviour (incl. negative idx, py-style nothing) is
+//     byte-for-byte identical to today. Only the in-bounds case is fast.
+//   - Element ABI (self/runtime_hexaval_abi.h): HexaArr { HexaVal* items; i64
+//     len; i64 cap } → items at [arr_ptr+0], len at [arr_ptr+8]. sizeof(HexaVal)
+//     == 16 (tag at +0 padded to 8, payload at +8). So element addr = items +
+//     idx*16; tag = [addr+0], payload = [addr+8]. Bounds elision / raw
+//     pointer-walk is a deliberate follow-on (r2b) — kept SAFE here.
+fn _unbox_array_enabled() -> bool {
+    return env("HEXA_UNBOX_ARRAY_NATIVE") == "1"
+}
+
+// Is `tid` a primitive-element typed array (hir_to_mir _type_id_of range)?
+// 101=[i64] 102=[i32] 103=[f64] 104=[f32]. All have 16-byte HexaVal elements
+// (boxed), so the native load/store stride is the same; the element TAG loaded
+// from the slot carries the real per-element tag (TAG_INT/TAG_FLOAT), so a typed
+// float array round-trips its tag exactly like the boxed path.
+fn _x86_is_typed_prim_array(tid: i64) -> bool {
+    return tid == 101 || tid == 102 || tid == 103 || tid == 104
+}
+
+// Is operand `o` a provably-typed primitive ARRAY container (for index unbox)?
+// Only a `local` whose MIR type_id ∈ 101..104 qualifies — globals live in a
+// separate id space (their type_id is not in `local_type`, see the binop unbox
+// note), maps/strings/untyped do not. Conservative bottom → kept boxed.
+fn _x86_operand_array_typed(o: Operand, rm: X86RegMap) -> bool {
+    if o.kind == "local" { return _x86_is_typed_prim_array(_x86_local_type(rm, o.local_id)) }
+    return false
+}
+
+// Is operand `o` a provably raw-i64 INDEX (no VALSTRUCT/float unwrap needed)?
+// const_int literal, or a local/param typed i64 (type_id==1). const_bool is NOT
+// accepted as an index (semantically not an index even if payload 0/1).
+fn _x86_operand_index_int(o: Operand, rm: X86RegMap) -> bool {
+    if o.kind == "const_int" { return true }
+    if o.kind == "local"  { return _x86_local_type(rm, o.local_id) == 1 }
+    return false
+}
+
 // Should this binop take the unboxed native ALU path? Gate ON + op in the
 // int-closed unbox set + dst proven i64 + both operands proven raw-int.
 fn _x86_binop_unbox_ok(s: Stmt, rm: X86RegMap) -> bool {
@@ -949,6 +1027,37 @@ fn _x86_binop_unbox_ok(s: Stmt, rm: X86RegMap) -> bool {
     if !is_cmp && _x86_local_type(rm, s.dst.id) != 1 { return false }
     if !_x86_operand_provably_int(s.args[0], rm) { return false }
     if !_x86_operand_provably_int(s.args[1], rm) { return false }
+    return true
+}
+
+// Should `arr[i]` (op="index") take the unboxed native load path?
+//   gate ON + container provably typed-prim-array + index provably raw-int.
+fn _x86_index_get_unbox_ok(s: Stmt, rm: X86RegMap) -> bool {
+    if !_unbox_array_enabled() { return false }
+    if len(s.args) < 2 { return false }
+    if !_x86_operand_array_typed(s.args[0], rm) { return false }
+    if !_x86_operand_index_int(s.args[1], rm) { return false }
+    return true
+}
+
+// Should `arr[i] = v` (op="index_set") take the unboxed native store path?
+//   gate ON + container provably typed-prim-array + index provably raw-int +
+//   container is a storable `local` (store-back path) + value provably raw-int
+//   (so we can box it into a {tag,payload} slot natively without the runtime).
+//   A non-int value (string/array/struct element) → BOXED (its tag/payload need
+//   the runtime's general boxing). Typed-array element tag for an i64 store is
+//   TAG_INT=0; for [f64] the value local carries f64 (type_id 3) — handled by
+//   the float branch in the emitter, kept BOXED here for r2 (int-array first).
+fn _x86_index_set_unbox_ok(s: Stmt, rm: X86RegMap) -> bool {
+    if !_unbox_array_enabled() { return false }
+    if len(s.args) < 3 { return false }
+    if s.args[0].kind != "local" { return false }
+    if !_x86_operand_array_typed(s.args[0], rm) { return false }
+    if !_x86_operand_index_int(s.args[1], rm) { return false }
+    // r2 scope: i64-element arrays only (type_id 101) with raw-int values, so the
+    // stored tag is the compile-time TAG_INT=0. [f64] store-back is r2b.
+    if _x86_local_type(rm, s.args[0].local_id) != 101 { return false }
+    if !_x86_operand_index_int(s.args[2], rm) { return false }
     return true
 }
 
@@ -1445,6 +1554,63 @@ fn _x86_dst_reg(rm: X86RegMap, id: i64) -> string {
     return _x86_reg_lookup(rm, id)
 }
 
+// r2 HEXA_UNBOX_ARRAY_NATIVE — allocate a fresh module-unique label suffix for
+// one array-index fast-path site. Only called on the unbox path.
+fn _x86_arru_next() -> i64 {
+    let n = _x86_arru_lbl
+    _x86_arru_lbl = _x86_arru_lbl + 1
+    return n
+}
+
+// Emit the in-bounds native element address into scratch `addr_reg` for a
+// provably-typed array `arr_op` indexed by provably-int `idx_op`, branching to
+// `oob_lbl` when the index is out of range (idx<0 OR idx>=len). PRESERVES the
+// exact runtime bounds semantics: the OOB target is the original boxed call,
+// which throws the byte-identical "index N out of bounds" message.
+//
+// Register usage (all SAFE): rdi/rsi are NEVER local home regs (the rotation is
+// rax,rbx,rcx,rdx,r8..r15) so they are clobber-free scratch; rax is used as a
+// transient (len + items ptr) and is reloaded after. `addr_reg` ends holding
+// the element address = items + idx*16. Caller must not pass a `addr_reg` that
+// aliases a value it still needs.
+//
+// ABI (self/runtime_hexaval_abi.h): HexaArr { HexaVal* items@0; i64 len@8; i64
+// cap@16 }; sizeof(HexaVal)==16. idx*16 via four `add r,r` doublings — encodable
+// on every backend (no imul/shl/scaled-index needed).
+fn _x86_emit_array_addr(arr_op: Operand, idx_op: Operand, st: X86StrTab,
+                        rm: X86RegMap, addr_reg: string, oob_lbl: string,
+                        opts: CodegenOptions) {
+    // idx → rsi FIRST (its source may live in a reg we are about to overwrite),
+    // arr_ptr → rdi SECOND. Both targets are non-home scratch.
+    _x86_hv_payload(idx_op, st, rm, "rsi", opts)   // rsi = idx (raw i64)
+    _x86_hv_payload(arr_op, st, rm, "rdi", opts)   // rdi = HexaArr*
+    // bounds: idx < 0 → OOB ; idx >= len → OOB. Signed cmp (idx provably int,
+    // len ≥ 0) using jl/jge — both encodable on the native ELF backend too.
+    _x86_buf.push(_x86_instr2("cmp", _x86_op_reg("rsi"), _x86_op_imm(0),
+                     "arru: idx < 0 ? (OOB)"))
+    _x86_buf.push(_x86_instr1("jl", _x86_op_label(oob_lbl), "arru: idx<0 → boxed OOB throw"))
+    _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rax"), _x86_op_mem("rdi", 8),
+                     "arru: rax = arr->len"))
+    _x86_buf.push(_x86_instr2("cmp", _x86_op_reg("rsi"), _x86_op_reg("rax"),
+                     "arru: idx >= len ? (OOB)"))
+    _x86_buf.push(_x86_instr1("jge", _x86_op_label(oob_lbl), "arru: idx>=len → boxed OOB throw"))
+    // element offset = idx*16 → rsi (four doublings).
+    _x86_buf.push(_x86_instr2("add", _x86_op_reg("rsi"), _x86_op_reg("rsi"), "arru: idx*2"))
+    _x86_buf.push(_x86_instr2("add", _x86_op_reg("rsi"), _x86_op_reg("rsi"), "arru: idx*4"))
+    _x86_buf.push(_x86_instr2("add", _x86_op_reg("rsi"), _x86_op_reg("rsi"), "arru: idx*8"))
+    _x86_buf.push(_x86_instr2("add", _x86_op_reg("rsi"), _x86_op_reg("rsi"), "arru: idx*16"))
+    // items base → rax ; addr = items + idx*16 → addr_reg.
+    _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rax"), _x86_op_mem("rdi", 0),
+                     "arru: rax = arr->items"))
+    if addr_reg != "rsi" {
+        _x86_buf.push(_x86_instr2("mov", _x86_op_reg(addr_reg), _x86_op_reg("rsi"),
+                         "arru: addr = idx*16"))
+    }
+    _x86_buf.push(_x86_instr2("add", _x86_op_reg(addr_reg), _x86_op_reg("rax"),
+                     "arru: addr = items + idx*16"))
+    return
+}
+
 // r14 — count STMT_TRY_SETJMP in a fn; each gets a 256-byte jmp_buf slot
 // (glibc jmp_buf is 200 B; 256 = 16-aligned headroom) reserved at the BOTTOM
 // of the frame ([rsp + slot*256]). Mirrors
@@ -1647,6 +1813,36 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
         }
         if s.op == "index" && len(s.args) >= 2 {
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
+            // r2 HEXA_UNBOX_ARRAY_NATIVE — typed-prim-array + provably-int idx:
+            // native bounds-checked element load, OOB → the boxed call (which
+            // throws the exact OOB message). OFF (default) → _unbox false → the
+            // unchanged boxed sequence below runs verbatim → byte-eq NEUTRAL.
+            let _arru = _x86_index_get_unbox_ok(s, rm)
+            let mut _ag_done = ""
+            if _arru {
+                let _n = _x86_arru_next()
+                let _oob = ".Larru_oob_" + to_string(_n)
+                _ag_done = ".Larru_done_" + to_string(_n)
+                // addr (= items + idx*16) → rdi. rdi/rsi are NEVER local home
+                // regs, so they cannot alias `dst` (a rotation-pool reg) — keeping
+                // the element-address base (rdi) disjoint from dst is what makes
+                // the load order below correct for EVERY dst assignment.
+                _x86_emit_array_addr(s.args[0], s.args[1], st, rm, "rdi", _oob, opts)
+                // PAYLOAD → dst FIRST, then TAG → rsi (a non-home scratch, never
+                // dst), then store_tag. Doing tag in a reg that can never be dst
+                // (rsi) means `mov dst,[rdi+8]` can safely come first even when
+                // dst==rax — no clobber of the tag, no clobber of the addr base.
+                // The element carries its real per-element tag (TAG_INT/TAG_FLOAT)
+                // exactly as the boxed `hexa_index_get` would return it.
+                _x86_buf.push(_x86_instr2("mov", dst, _x86_op_mem("rdi", 8),
+                                 "arru get: payload = elem->payload"))
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), _x86_op_mem("rdi", 0),
+                                 "arru get: tag = elem->tag"))
+                _x86_store_tag_reg(rm, s.dst.id, "rsi")
+                _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+                _x86_buf.push(_x86_instr1("jmp", _x86_op_label(_ag_done), "arru get: skip boxed OOB path"))
+                _x86_buf.push(_x86_instr0("label", _oob))
+            }
             _x86_hv_box_arg(s.args[0], st, rm, "rdi", "rsi", opts)  // container
             _x86_hv_box_arg(s.args[1], st, rm, "rdx", "rcx", opts)  // key
             _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_index_get"),
@@ -1655,6 +1851,7 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                              "index: capture element payload"))
             _x86_store_tag_reg(rm, s.dst.id, "rax")
             _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+            if _arru { _x86_buf.push(_x86_instr0("label", _ag_done)) }
             return
         }
         // index-set: `arr[i] = v` / `map[k] = v`. hir_to_mir lowers an
@@ -1690,6 +1887,40 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             return
         }
         if s.op == "index_set" && len(s.args) >= 3 {
+            // r2 HEXA_UNBOX_ARRAY_NATIVE — typed-i64-array + provably-int idx +
+            // raw-int value: native bounds-checked in-place element store. The
+            // array descriptor is NOT relocated by an in-place write, so the
+            // boxed store-back (container payload/tag) is unnecessary on the fast
+            // path. OOB → boxed hexa_index_set (exact OOB throw). OFF → byte-eq.
+            //
+            // SOUNDNESS (arena dirty-flag): hexa_array_set sets
+            // __hexa_arena_slot_dirty=1 so the scope-pop heapify walk promotes
+            // arena-resident CHILD Vals out of a popping frame. The fast path
+            // skips that set — which is SOUND here because the value is gated
+            // provably-raw-i64 (_x86_index_set_unbox_ok): a raw i64 is never an
+            // arena-allocated Val, so no arena child is ever seated into the slot
+            // and the heapify walk has nothing to promote. (A non-int value stays
+            // BOXED and keeps the dirty-flag set — that is why value-int is gated.)
+            let _arrs = _x86_index_set_unbox_ok(s, rm)
+            let mut _as_done = ""
+            if _arrs {
+                let _n = _x86_arru_next()
+                let _oob = ".Larrs_oob_" + to_string(_n)
+                _as_done = ".Larrs_done_" + to_string(_n)
+                _x86_emit_array_addr(s.args[0], s.args[1], st, rm, "r11", _oob, opts)
+                // value payload → rdx (transient), store into elem->payload.
+                _x86_hv_payload(s.args[2], st, rm, "rdx", opts)
+                _x86_buf.push(_x86_instr2("mov", _x86_op_mem("r11", 8), _x86_op_reg("rdx"),
+                                 "arru set: elem->payload = val"))
+                // i64-array element tag is TAG_INT=0 (materialized via a reg —
+                // `mov [mem], imm` is ambiguous under GAS Intel syntax).
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rax"), _x86_op_imm(0),
+                                 "arru set: TAG_INT"))
+                _x86_buf.push(_x86_instr2("mov", _x86_op_mem("r11", 0), _x86_op_reg("rax"),
+                                 "arru set: elem->tag = TAG_INT"))
+                _x86_buf.push(_x86_instr1("jmp", _x86_op_label(_as_done), "arru set: skip boxed OOB path"))
+                _x86_buf.push(_x86_instr0("label", _oob))
+            }
             _x86_hv_box_arg(s.args[0], st, rm, "rdi", "rsi", opts)  // container
             _x86_hv_box_arg(s.args[1], st, rm, "rdx", "rcx", opts)  // key
             _x86_hv_box_arg(s.args[2], st, rm, "r8", "r9", opts)    // value
@@ -1703,6 +1934,7 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                 _x86_store_tag_reg(rm, cont.local_id, "rax")
                 _x86_emit_dst_writeback(rm, cont.local_id, 0)
             }
+            if _arrs { _x86_buf.push(_x86_instr0("label", _as_done)) }
             return
         }
         if len(s.args) >= 1 {
