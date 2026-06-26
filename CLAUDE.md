@@ -202,6 +202,13 @@ only (no domain registry).
 
 ### CI · self-hosted runners
 
+- do: **클라우드 CI = Blacksmith** — ephemeral·멀티타깃 잡(예 `release.yml`)은 **Blacksmith 호스티드
+  러너**로 돈다: `blacksmith-6vcpu-macos-15`(darwin) · `blacksmith-4vcpu-ubuntu-2204`(linux-x64) ·
+  `blacksmith-4vcpu-ubuntu-2404-arm`(linux-arm64). 즉 **self-hosted 풀(ghost/aiden/summer)이 다운이어도
+  PR 게이트(selfhost-byteeq·determinism·codegen-guard·miscompile-zero·nobaseline 등)는 Blacksmith에서
+  돈다** → 릴리스무결성 검증(byteeq 3타깃 + 출하 smoke)은 로컬 SSH 풀이 막히면 **PR 열어 Blacksmith CI**로
+  받는다(로컬 풀 SSH 불안정 시 정석 경로). self-hosted 러너는 아래처럼 일부 무거운 faithful/byteeq 잡만
+  opt-in으로 집어가는 보조 풀이다.
 - do: 무거운 faithful/byteeq 빌드는 **self-hosted 러너**가 처리한다 — `ghost`(darwin-arm64 ·
   label `selfhost-gen2fix` · darwin byteeq) + `aiden`/`summer`(linux-x64 · label `hexa-build` ·
   12c/30G 공유 빌드 풀). 잡이 opt-in 하는 법: `runs-on: [self-hosted, Linux, X64, hexa-build]`
