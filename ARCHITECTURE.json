@@ -1200,7 +1200,7 @@
             [
               "hx package manager",
               "`tool/hx.hexa`",
-              "Git-like CLI with SSOT attestation: `commit`/`push`/`edit`/`build`/`verify`/`install`/`search`"
+              "Git-like CLI with SSOT attestation: `commit`/`push`/`edit`/`build`/`verify`/`install`/`search`. **Dependency resolution (Go/Rust parity lane-1, 2026-06-27):** `hx resolve [dir]` runs **Minimal Version Selection (MVS)** over `hexa.toml [dependencies]` → deterministic `hexa.lock` — the cargo/`go mod` core that the lockfile/semver/ed25519 schema halves previously lacked. Algorithm SSOT = `stdlib/hx/resolve.hexa` (`mvs_resolve`, reference-matched to go.dev/ref/mod#minimal-version-selection + cmd/go/internal/mvs; reuses `stdlib/semver.hexa` `semver_satisfies`/`semver_compare` for the range gate and `stdlib/hx/lockfile.hexa` for serialization). Bare `X.Y.Z` requirements read as Go-style lower bounds (`>=X.Y.Z`); range upper bounds (`^`/`~`/`<`) are the only conflict source. Wired: `tool/hx_resolve.hexa` (reads the vendored `packages/<name>/hexa.toml` tree → registry; network fetch is a separate lane) ← `tool/hx.hexa::_cmd_resolve` + bash `tool/pkg/hx::cmd_resolve`. Selftest `self/test_hx_resolve.hexa` (linear/diamond/conflict/idempotent). Pure additive stdlib — 0 codegen/runtime/frozen-seed touch, byte-eq-neutral. (v2 candidate: cargo PubGrub backtracking.)"
             ],
             [
               "CLI front-ends",

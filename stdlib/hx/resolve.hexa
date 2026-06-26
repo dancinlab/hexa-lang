@@ -1,0 +1,388 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/hx/resolve.hexa — Minimal Version Selection (MVS) dependency resolver
+//
+//  @module(slug="hx/resolve", desc="Deterministic transitive dependency
+//                                   resolver for the hx package manager —
+//                                   Go-style Minimal Version Selection (MVS)
+//                                   over a semver-constrained require graph")
+//  @usage(use "stdlib/hx/resolve"; let r = mvs_resolve(root_requires, registry); ...)
+//
+//  ── module governance metadata ─────────────────────────────────────────────
+//  @version 0.1.0
+//  @capabilities [resolve_req, resolve_module, mvs_resolve]
+//  @stability preview
+//  @since 2026-06-27
+//  @maintainer hexa-core
+//  @priority P0
+//
+//  ── PROBLEM (language-surface parity gap — lane 1) ─────────────────────────
+//
+//  Before this module the hx package manager carried only the SCHEMA halves of
+//  a dependency system — `stdlib/hx/lockfile.hexa` (lockfile read/write),
+//  `stdlib/hx/bundle_sign.hexa` (ed25519 manifest), `stdlib/semver.hexa`
+//  (semver parse/compare/range-satisfaction) — but had NO transitive resolver:
+//  `hexa.toml [dependencies]` was inert and there was no `cargo`/`go mod`-class
+//  build-list computation. This module is that missing core: given the root
+//  manifest's direct requirements plus the require lists of each dependency
+//  version, it computes the deterministic *build list* (one selected version
+//  per module) and reports clear errors for unresolvable / conflicting graphs.
+//
+//  Pure: no shell, no fs, no network. The caller owns I/O — it feeds an
+//  in-memory require graph (built from parsed manifests or a registry) and
+//  serializes the result via `stdlib/hx/lockfile.hexa`. Network fetch of
+//  manifests is a SEPARATE lane (the resolver is agnostic to where the graph
+//  came from).
+//
+//  ── REFERENCE: Go Minimal Version Selection (MVS) ──────────────────────────
+//
+//  Algorithm + invariants mirror Go's MVS, the canonical deterministic,
+//  SAT-free resolver — chosen for parity with hexa's byte-eq determinism
+//  ethos (no backtracking, no solver; same input ⇒ byte-identical output).
+//
+//    · spec: https://go.dev/ref/mod#minimal-version-selection
+//    · impl: cmd/go/internal/mvs/mvs.go  (`BuildList`, `Graph.Require`,
+//            `Graph.BuildList`)
+//    · paper: Russ Cox, "Minimal Version Selection"
+//             https://research.swtch.com/vgo-mvs  (Algorithm 1)
+//
+//  MVS Algorithm 1 (Construct Build List), as implemented here:
+//
+//    1. The require graph is a DAG whose nodes are concrete (module, version)
+//       pairs; an edge M@v → N@w means "version v of M requires AT LEAST
+//       version w of N" (a go.mod `require` directive is a LOWER BOUND, not an
+//       equality — selecting a higher w still satisfies it).
+//    2. Do a graph traversal (BFS here) starting at the main module's direct
+//       requirements. Visit each distinct (module, version) node exactly once
+//       and expand THAT version's own requirements. (Both a lower and a higher
+//       version of the same module may be reached; both are expanded — the
+//       "rough build list" of every reachable node.)
+//    3. The build list selects, for each module path, the MAXIMUM version that
+//       appears anywhere in the reachable node set. This max is always itself
+//       a reached node, so its requirements were expanded (completeness).
+//
+//  Invariants (Go MVS):
+//    · Deterministic: result depends only on the graph, never on traversal
+//      order or wall-clock — re-running yields a byte-identical build list /
+//      lockfile (the §4 idempotence test below).
+//    · Minimal: a module's selected version is the max of the versions
+//      *required*, never the newest *available* — an available-but-unrequired
+//      higher version is ignored ("minimal" version selection).
+//    · No backtracking: the selection is a single forward pass; there is no
+//      SAT search (contrast cargo's PubGrub — noted as a v2 candidate only).
+//
+//  ── CONSTRAINT GENERALIZATION (semver ranges) ──────────────────────────────
+//
+//  Plain Go MVS require lines name an EXACT minimum version and carry no
+//  ranges. This resolver reuses `stdlib/semver.hexa` so a requirement may also
+//  be a semver RANGE (`^1.2.3`, `~1.2`, `>=1.0.0 <2.0.0`, `1.x`, …). The Go
+//  minimum-version reading is preserved by normalizing a BARE version `X.Y.Z`
+//  to the lower bound `>=X.Y.Z` (a `require` directive = "at least"). A range
+//  constraint contributes, as its MVS minimum, the LOWEST available version
+//  that satisfies it; the build still selects the per-module MAX of those
+//  minimums. After selection, a final satisfiability GATE re-checks that the
+//  selected max satisfies EVERY constraint placed on that module — this is
+//  where an unsatisfiable *upper* bound (e.g. one path caps `^1.0.0`, another
+//  demands `>=2.0.0`) is reported as a CONFLICT (pure exact-minimum Go MVS can
+//  never conflict; the range upper bounds are the only source of conflict).
+//
+//  Two distinct error kinds:
+//    · "unresolved" — a constraint has NO satisfying version in the available
+//      set (the required module@range was never published).
+//    · "conflict"   — the MVS-selected max version VIOLATES another path's
+//      constraint on the same module (empty constraint intersection).
+//
+//  ── PUBLIC API ─────────────────────────────────────────────────────────────
+//
+//   struct ResolveReq    { name: string, constraint: string }
+//       One requirement edge: depend on `name` at semver `constraint`
+//       (bare `X.Y.Z` = `>=X.Y.Z`; or any range from stdlib/semver.hexa).
+//
+//   struct ResolveModule { name: string, version: string, requires: [ResolveReq] }
+//       One concrete node of the require graph: version `version` of module
+//       `name` itself requires `requires`. The graph/registry is `[ResolveModule]`
+//       — the set of all published (name, version) nodes the resolver may use.
+//
+//   struct ResolveResult { ok: bool, error: string, build: [LockEntry] }
+//       On success: ok=true, build = the build list as `LockEntry` records
+//       (from stdlib/hx/lockfile.hexa) sorted ascending by name, version =
+//       selected version, hash = "" (content hashing is the fetch lane's job).
+//       On failure: ok=false, error = a human-readable "unresolved …" or
+//       "conflict …" message, build = [].
+//
+//   resolve_req(name, constraint) -> ResolveReq          constructor
+//   resolve_module(name, version, requires) -> ResolveModule   constructor
+//   mvs_resolve(root_requires: [ResolveReq], registry: [ResolveModule])
+//       -> ResolveResult                                 the resolver
+//
+//  ── See also ──────────────────────────────────────────────────────────────
+//   · stdlib/semver.hexa             — semver_satisfies / semver_compare (reused)
+//   · stdlib/hx/lockfile.hexa        — LockEntry + lockfile_render (reused)
+//   · tool/hx_resolve.hexa           — prod wiring: `hx resolve` CLI surface
+//   · self/test_hx_resolve.hexa      — selftest (linear / diamond / conflict /
+//                                       idempotent — expected lists hand-derived
+//                                       from the Go MVS definition above)
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/semver"
+use "stdlib/hx/lockfile"
+
+// ── public types ───────────────────────────────────────────────────────────
+
+pub struct ResolveReq {
+    name: string,
+    constraint: string
+}
+
+pub struct ResolveModule {
+    name: string,
+    version: string,
+    requires: [ResolveReq]
+}
+
+pub struct ResolveResult {
+    ok: bool,
+    error: string,
+    build: [LockEntry]
+}
+
+// ── constructors ────────────────────────────────────────────────────────────
+
+pub fn resolve_req(name: string, constraint: string) -> ResolveReq {
+    return ResolveReq{ name: name, constraint: constraint }
+}
+
+pub fn resolve_module(name: string, version: string, requires: [ResolveReq]) -> ResolveModule {
+    return ResolveModule{ name: name, version: version, requires: requires }
+}
+
+// ── tiny helpers ────────────────────────────────────────────────────────────
+
+// Index of `target` in `names`, or -1.
+fn _rv_find_idx(names: [string], target: string) -> int {
+    let mut i = 0
+    while i < len(names) {
+        if names[i] == target { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// True iff array `arr` contains `s`.
+fn _rv_contains(arr: [string], s: string) -> bool {
+    return _rv_find_idx(arr, s) > -1
+}
+
+// Lexical compare of two strings: -1 / 0 / 1 (ASCII, for deterministic sort).
+fn _rv_strcmp(a: string, b: string) -> int {
+    let la = len(a)
+    let lb = len(b)
+    let mut i = 0
+    while i < la && i < lb {
+        let ca = ord(a.substring(i, i + 1))
+        let cb = ord(b.substring(i, i + 1))
+        if ca < cb { return -1 }
+        if ca > cb { return 1 }
+        i = i + 1
+    }
+    if la < lb { return -1 }
+    if la > lb { return 1 }
+    return 0
+}
+
+// Normalize a requirement to a semver RANGE understood by semver_satisfies.
+// A BARE version "X.Y.Z" is a Go MVS minimum → ">=X.Y.Z". A constraint that
+// already carries an operator (^ ~ > < =) or is a wildcard (* x X / empty) is
+// passed through unchanged.
+fn _rv_norm(c: string) -> string {
+    let t = c.trim()
+    if len(t) == 0 { return "*" }
+    let h = t.substring(0, 1)
+    if h == "^" { return t }
+    if h == "~" { return t }
+    if h == ">" { return t }
+    if h == "<" { return t }
+    if h == "=" { return t }
+    if h == "*" { return t }
+    if h == "x" { return t }
+    if h == "X" { return t }
+    // bare version (digit, or leading v/V) → lower-bound minimum.
+    return ">=" + t
+}
+
+// MVS minimum a constraint imposes on `name`: the LOWEST available version in
+// `registry` (versions of `name`) that satisfies the constraint, or "" if none
+// (→ unresolved). Lowest, because a requirement asks for "at least"; selection
+// later takes the MAX across all requirements.
+fn _rv_lowest_satisfying(registry: [ResolveModule], name: string, constraint: string) -> string {
+    let nc = _rv_norm(constraint)
+    let mut best = ""
+    let mut i = 0
+    while i < len(registry) {
+        let m = registry[i]
+        i = i + 1
+        if m.name != name { continue }
+        if !semver_satisfies(m.version, nc) { continue }
+        if best == "" {
+            best = m.version
+        } else {
+            if semver_compare(m.version, best) < 0 { best = m.version }
+        }
+    }
+    return best
+}
+
+// Registry index of node (name, version), or -1.
+fn _rv_module_idx(registry: [ResolveModule], name: string, version: string) -> int {
+    let mut i = 0
+    while i < len(registry) {
+        let m = registry[i]
+        if m.name == name && m.version == version { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// ── public resolver ─────────────────────────────────────────────────────────
+
+pub fn mvs_resolve(root_requires: [ResolveReq], registry: [ResolveModule]) -> ResolveResult {
+    let empty: [LockEntry] = []
+    if type_of(root_requires) != "array" {
+        return ResolveResult{ ok: false, error: "internal: root_requires is not an array", build: empty }
+    }
+    if type_of(registry) != "array" {
+        return ResolveResult{ ok: false, error: "internal: registry is not an array", build: empty }
+    }
+
+    // selection (running per-module max of imposed minimums)
+    let mut sel_names: [string] = []
+    let mut sel_vers: [string] = []
+    // every constraint seen on a module (for the final satisfiability gate)
+    let mut con_names: [string] = []
+    let mut con_vals: [string] = []
+    // visited graph nodes "name@version" (expand-once)
+    let mut visited: [string] = []
+
+    // BFS over a single edge queue (requirement edges), seeded with the root's
+    // direct requirements. Processing an edge expands the selected node's own
+    // requirements onto the SAME queue (append-and-walk — all state is local to
+    // this function, so no reliance on cross-call array-mutation semantics).
+    let mut edge_names: [string] = []
+    let mut edge_cons: [string] = []
+    let mut ri = 0
+    while ri < len(root_requires) {
+        let e = root_requires[ri]
+        edge_names.push(e.name)
+        edge_cons.push(e.constraint)
+        ri = ri + 1
+    }
+
+    let mut head = 0
+    while head < len(edge_names) {
+        let name = edge_names[head]
+        let constraint = edge_cons[head]
+        head = head + 1
+
+        // record the constraint for the final satisfiability gate
+        con_names.push(name)
+        con_vals.push(constraint)
+
+        // MVS minimum this edge imposes (lowest available satisfying version)
+        let minv = _rv_lowest_satisfying(registry, name, constraint)
+        if minv == "" {
+            return ResolveResult{ ok: false,
+                error: "unresolved: no available version of '" + name +
+                       "' satisfies '" + constraint + "'",
+                build: empty }
+        }
+
+        // raise the running per-module max selection
+        let si = _rv_find_idx(sel_names, name)
+        if si < 0 {
+            sel_names.push(name)
+            sel_vers.push(minv)
+        } else {
+            if semver_compare(minv, sel_vers[si]) > 0 {
+                sel_vers[si] = minv
+            }
+        }
+
+        // expand the (name, minv) graph node exactly once — append its own
+        // requirements as new edges
+        let node = name + "@" + minv
+        if !_rv_contains(visited, node) {
+            visited.push(node)
+            let mi = _rv_module_idx(registry, name, minv)
+            if mi < 0 {
+                // minv came from the registry, so its node must exist; a miss
+                // means the graph is internally inconsistent.
+                return ResolveResult{ ok: false,
+                    error: "unresolved: required node '" + node + "' is missing from the graph",
+                    build: empty }
+            }
+            let reqs = registry[mi].requires
+            let mut qi = 0
+            while qi < len(reqs) {
+                edge_names.push(reqs[qi].name)
+                edge_cons.push(reqs[qi].constraint)
+                qi = qi + 1
+            }
+        }
+    }
+
+    // 3. satisfiability GATE — the selected max for each module must satisfy
+    //    EVERY constraint recorded on it (empty intersection ⇒ conflict).
+    let mut gi = 0
+    while gi < len(sel_names) {
+        let name = sel_names[gi]
+        let version = sel_vers[gi]
+        gi = gi + 1
+        let mut cj = 0
+        while cj < len(con_names) {
+            if con_names[cj] == name {
+                let nc = _rv_norm(con_vals[cj])
+                if !semver_satisfies(version, nc) {
+                    return ResolveResult{ ok: false,
+                        error: "conflict: '" + name + "@" + version +
+                               "' does not satisfy required '" + con_vals[cj] + "'",
+                        build: empty }
+                }
+            }
+            cj = cj + 1
+        }
+    }
+
+    // 4. build list = selection, sorted ascending by name (deterministic).
+    //    Selection sort over a copy of the index order.
+    let n = len(sel_names)
+    let mut order: [int] = []
+    let mut oi = 0
+    while oi < n {
+        order.push(oi)
+        oi = oi + 1
+    }
+    let mut a = 0
+    while a < n {
+        let mut best = a
+        let mut b = a + 1
+        while b < n {
+            if _rv_strcmp(sel_names[order[b]], sel_names[order[best]]) < 0 { best = b }
+            b = b + 1
+        }
+        if best != a {
+            let tmp = order[a]
+            order[a] = order[best]
+            order[best] = tmp
+        }
+        a = a + 1
+    }
+
+    let mut build: [LockEntry] = []
+    let mut k = 0
+    while k < n {
+        let idx = order[k]
+        build.push(LockEntry{ name: sel_names[idx], version: sel_vers[idx], hash: "" })
+        k = k + 1
+    }
+
+    return ResolveResult{ ok: true, error: "", build: build }
+}
