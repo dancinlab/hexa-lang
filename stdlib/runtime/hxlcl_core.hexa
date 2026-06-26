@@ -195,4 +195,86 @@ pub fn hxlcl_strncmp(a: HexaVal, b: HexaVal, n: HexaVal) -> int {
         i = __hx_payload_add(i, 1)
     }
     return 0
+// ── COPY FAMILY (Route C r6 · pure byte-copy, returns the dst pointer raw) ──
+//
+// The copy leaves return the dst `char*` (shipped raw in rax/x0 under Route C —
+// the `int` return type carries the raw pointer word, never boxed). Each writes
+// the NUL terminator the C body writes; __hx_ptr_load8 reads ZERO-EXTENDED and
+// __hx_ptr_store8 writes the low byte. Reference-matched against the SELFEMIT
+// arm64 seeds (test/native_build/emit_hxlcl_{strcpy,strncpy,strcat}_o.hexa,
+// verbatim from self/codegen/runtime_arm64.hexa). Same un-nested raw-mem rule.
+
+// hxlcl_strcpy: copy NUL-terminated src→dst (incl. terminator), return dst.
+// BYTE-FAITHFUL to runtime_core_hxlcl_shim.c:272 (hxlcl_strcpy):
+//   i=0; while(src[i]){ dst[i]=src[i]; i++; } dst[i]='\0'; return dst.
+pub fn hxlcl_strcpy(dst: HexaVal, src: HexaVal) -> int {
+    let pd = __hx_payload_add(dst, 0)
+    let ps = __hx_payload_add(src, 0)
+    let mut i = 0
+    let mut c = __hx_ptr_load8(ps, 0)         // src[0]
+    while __hx_payload_ne(c, 0) {
+        __hx_ptr_store8(pd, i, c)             // dst[i] = src[i]
+        i = __hx_payload_add(i, 1)
+        c = __hx_ptr_load8(ps, i)             // src[i]
+    }
+    __hx_ptr_store8(pd, i, 0)                 // dst[i] = '\0'
+    return pd
+}
+
+// hxlcl_strncpy: copy up to n bytes of src→dst, NUL-pad the remainder, return dst.
+// BYTE-FAITHFUL to runtime_core_hxlcl_shim.c:290 (hxlcl_strncpy):
+//   i=0; for(;i<n && src[i];i++) dst[i]=src[i]; for(;i<n;i++) dst[i]='\0'; ret dst.
+pub fn hxlcl_strncpy(dst: HexaVal, src: HexaVal, n: HexaVal) -> int {
+    let pd = __hx_payload_add(dst, 0)
+    let ps = __hx_payload_add(src, 0)
+    // Phase 1: copy src bytes while i<n and src[i]!=0. `stop` carries the C
+    // body's preserved `i` across the two for-loops (no rescan — untouched dst
+    // bytes are not yet zeroed, so re-deriving the boundary by reading dst is
+    // unsound).
+    let mut i = 0
+    let mut stop = n
+    let mut c = __hx_ptr_load8(ps, 0)         // src[0]
+    while __hx_payload_lt(i, n) {
+        if __hx_payload_eq(c, 0) {
+            stop = i                          // src exhausted at i
+            i = n                             // break the copy loop
+        }
+        if __hx_payload_lt(i, n) {
+            __hx_ptr_store8(pd, i, c)         // dst[i] = src[i]
+            i = __hx_payload_add(i, 1)
+            c = __hx_ptr_load8(ps, i)         // src[i]
+        }
+    }
+    // Phase 2: NUL-pad dst[stop..n).
+    let mut j = stop
+    while __hx_payload_lt(j, n) {
+        __hx_ptr_store8(pd, j, 0)             // dst[j] = '\0'
+        j = __hx_payload_add(j, 1)
+    }
+    return pd
+}
+
+// hxlcl_strcat: append NUL-terminated src to the end of dst, return dst.
+// BYTE-FAITHFUL to runtime_core_hxlcl_shim.c:308 (hxlcl_strcat):
+//   p=dst; while(*p) p++; i=0; while(src[i]){ p[i]=src[i]; i++; } p[i]='\0'; ret dst.
+pub fn hxlcl_strcat(dst: HexaVal, src: HexaVal) -> int {
+    let pd = __hx_payload_add(dst, 0)
+    let ps = __hx_payload_add(src, 0)
+    let mut e = 0
+    let mut ce = __hx_ptr_load8(pd, 0)        // dst[0] — scan to NUL
+    while __hx_payload_ne(ce, 0) {
+        e = __hx_payload_add(e, 1)
+        ce = __hx_ptr_load8(pd, e)            // dst[e]
+    }
+    let mut i = 0
+    let mut c = __hx_ptr_load8(ps, 0)         // src[0]
+    while __hx_payload_ne(c, 0) {
+        let off = __hx_payload_add(e, i)      // dst[e + i]
+        __hx_ptr_store8(pd, off, c)
+        i = __hx_payload_add(i, 1)
+        c = __hx_ptr_load8(ps, i)             // src[i]
+    }
+    let endoff = __hx_payload_add(e, i)
+    __hx_ptr_store8(pd, endoff, 0)            // terminator
+    return pd
 }
