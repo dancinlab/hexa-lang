@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -111,11 +111,26 @@ extern int    hxlcl_atoi(const char *s);
 extern char  *hxlcl_strdup(const char *s);
 extern void  *hxlcl_calloc(size_t nmemb, size_t size);
 
+extern void  *hxlcl_realloc(void *p, size_t n);
+
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
- * atoi, malloc for strdup + calloc. (Each composite PR adds its callee here.) */
+ * atoi, malloc for strdup + calloc + realloc. (Each composite PR adds its callee.)
+ *
+ * This hxlcl_malloc writes the SAME 16-byte size header the floor hxlcl_malloc
+ * does (store n at offset 0, hand back ptr+16) so hxlcl_realloc's negative-offset
+ * header read `*(size_t*)(p - 16)` recovers the real old size. The 16-byte
+ * payload prefix keeps the returned pointer 16-byte aligned. (Small leaks are
+ * fine — this is a short-lived smoke process; no hxlcl_free here.) */
+#define HXLCL_HDR 16
 long long hxlcl_atoll(const char *s) { return s ? atoll(s) : 0; }
-void     *hxlcl_malloc(size_t n) { return malloc(n ? n : 1); }
+void     *hxlcl_malloc(size_t n) {
+    size_t want = n ? n : 1;
+    unsigned char *base = (unsigned char *)malloc(want + HXLCL_HDR);
+    if (!base) return 0;
+    *(size_t *)base = want;            /* size header at [base .. base+8) */
+    return base + HXLCL_HDR;           /* user pointer (header is at p-16) */
+}
 
 static int fails = 0;
 #define CK(cond, msg) do { if (!(cond)) { printf("  FAIL: %s\n", msg); fails++; } } while (0)
@@ -154,18 +169,28 @@ int main(void) {
     hxlcl_strcat(cat, "cd");
     CK(strcmp(cat, "abcd") == 0, "strcat");
 
-    /* composites (inner bl to retained atoll / malloc) */
+    /* composites (inner bl to retained atoll / header-writing malloc).
+     * No free() here: the header-writing hxlcl_malloc returns ptr+16, so libc
+     * free(ptr) is wrong — and small leaks in a short smoke process are fine. */
     CK(hxlcl_atoi("42") == 42, "atoi 42");
     CK(hxlcl_atoi("-7") == -7, "atoi -7");
 
     char *dup = hxlcl_strdup("hi");
     CK(dup != NULL && strcmp(dup, "hi") == 0, "strdup content");
-    if (dup) free(dup);
 
     char *z = (char *)hxlcl_calloc(3, 4);  /* 12 bytes, all zero */
     int allzero = (z != NULL);
-    if (z) { for (int i = 0; i < 12; i++) if (z[i] != 0) allzero = 0; free(z); }
+    if (z) { for (int i = 0; i < 12; i++) if (z[i] != 0) allzero = 0; }
     CK(allzero, "calloc 12B zero-fill");
+
+    /* realloc: the NEGATIVE-offset header read. hxlcl_malloc wrote old_n=4 at
+     * p-16; realloc must recover it, alloc the new size, and preserve min(n,4)=4
+     * bytes of content. */
+    char *rp = (char *)hxlcl_malloc(4);
+    rp[0] = 'R'; rp[1] = 'e'; rp[2] = 'a'; rp[3] = 'l';
+    char *rq = (char *)hxlcl_realloc(rp, 32);   /* grow 4 → 32, preserve 4 bytes */
+    CK(rq != NULL && rq[0] == 'R' && rq[1] == 'e' && rq[2] == 'a' && rq[3] == 'l',
+       "realloc preserves content (neg-offset header read)");
 
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }
     printf("[routec-smoke] %d assert(s) FAILED\n", fails);
@@ -179,4 +204,4 @@ echo "[routec-smoke] (3) compile harness + link Route C .o + run …"
 "$TMP/routec_smoke"
 rc=$?
 [ "$rc" -eq 0 ] || { echo "[routec-smoke] FATAL: behaviour run rc=$rc" >&2; exit 1; }
-echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (12 symbols: 9 pure-arith + atoi + strdup + calloc, darwin-arm64)"
+echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (13 symbols: 9 pure-arith + atoi + strdup + calloc + realloc, darwin-arm64)"
