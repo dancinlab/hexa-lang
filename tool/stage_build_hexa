@@ -33,6 +33,31 @@ CFLAGS="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
 OUT_HEXA="${OUT_HEXA:-hexa}"
 ROOT="$PWD"
 
+# ── OPT-IN: bootstrap-only -O1 (release-safe, default OFF) ────────────────────
+# HEXA_BOOTSTRAP_O1=1 compiles ONLY the INTERMEDIATE bootstrap transpilers
+# (Stage-0 build/hexa_v2 + Stage-1 build/hexa_module_loader) at -O1 instead of
+# the shipped -O2. The FINAL driver ($OUT_HEXA, Stage 2) and the runtime archive
+# (runtime.a, built upstream by stage_resolve_runtime_a) STAY -O2 — what ships is
+# unchanged. Rationale (compile-speed R6): R4 measured the gcc -O2 compile of the
+# transpiler C (hexa_cc.c, module_loader.c) as the build's #1 cost; -O1 cuts that
+# without touching the SHIPPED binary's optimisation level.
+#
+# BYTEEQ-SAFE HYPOTHESIS: the C the transpiler EMITS (build/stage1/main.c,
+# module_loader.c) is a deterministic function of the .hexa SOURCE, INDEPENDENT
+# of the -O level its OWN binary was compiled at, so the emit sha is identical
+# OFF vs ON (the verification gate). The flag NAME enables the experimental
+# fast-bootstrap CONSTRAINT (polarity: opt-in; UNSET = byte-for-byte the
+# historical -O2-everywhere path).
+CFLAGS_BOOTSTRAP="$CFLAGS"
+if [ "${HEXA_BOOTSTRAP_O1:-0}" = "1" ]; then
+    case " $CFLAGS " in
+        *" -O2 "*|*"-O2 "*|*" -O2"*) CFLAGS_BOOTSTRAP="${CFLAGS//-O2/-O1}" ;;
+        *" -O3 "*|*"-O3 "*|*" -O3"*) CFLAGS_BOOTSTRAP="${CFLAGS//-O3/-O1}" ;;
+        *)                           CFLAGS_BOOTSTRAP="$CFLAGS -O1" ;;
+    esac
+    echo "stage_build_hexa: HEXA_BOOTSTRAP_O1=1 — intermediate transpilers (hexa_v2, module_loader) at -O1 [$CFLAGS_BOOTSTRAP]; final $OUT_HEXA stays -O2 [$CFLAGS]"
+fi
+
 mkdir -p self/native build/stage1
 
 # Resolve the runtime link argument once: prebuilt archive (seam) or source.
@@ -133,14 +158,14 @@ PYFLAT
     # the host C driver ($CC) is used ONLY as the LINKER here (crt0/libc glue) —
     # it does NOT compile any hexa/compiler C source. This keeps the link portable
     # across Mach-O/ELF without re-implementing hexa_ld inside this stage.
-    $CC $CFLAGS -I self "$NS_OBJ" "$RT_ARG" -o build/hexa_v2 $LIBS \
+    $CC $CFLAGS_BOOTSTRAP -I self "$NS_OBJ" "$RT_ARG" -o build/hexa_v2 $LIBS \
         || { echo "stage_build_hexa: native-seed link FAILED" >&2; exit 1; }
     file build/hexa_v2
     echo "stage_build_hexa: hexa_v2 built from a HEXA-EMITTED object — none-hexa_cc OK"
     echo "::endgroup::"
 else
     echo "::group::Stage 0 — compile self-hosted transpiler (hexa_v2)"
-    $CC $CFLAGS -I self self/native/hexa_cc.c "$RT_ARG" -o build/hexa_v2 $LIBS
+    $CC $CFLAGS_BOOTSTRAP -I self self/native/hexa_cc.c "$RT_ARG" -o build/hexa_v2 $LIBS
     file build/hexa_v2
     echo "::endgroup::"
 fi
@@ -148,7 +173,7 @@ fi
 echo "::group::Stage 1 — flatten + transpile self/main.hexa -> build/stage1/main.c"
 export HEXA_LANG="$ROOT"
 ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
-$CC $CFLAGS -I self build/stage1/module_loader.c "$RT_ARG" -o build/hexa_module_loader $LIBS
+$CC $CFLAGS_BOOTSTRAP -I self build/stage1/module_loader.c "$RT_ARG" -o build/hexa_module_loader $LIBS
 export HEXA_MODULE_LOADER="$ROOT/build/hexa_module_loader"
 ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
 # Transpiling the large flattened main_expanded.hexa (~11k lines) drives deep

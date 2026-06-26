@@ -45,6 +45,22 @@ CFLAGS="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
 # -fbracket-depth is clang-only (deeply-nested generated C); gcc rejects it.
 case "$CC" in *clang*) CFLAGS="$CFLAGS -fbracket-depth=4096";; esac
 
+# ── OPT-IN: bootstrap-only -O1 (release-safe, default OFF) — see stage_build_hexa.
+# build/hexat is an INTERMEDIATE bootstrap transpiler (drives `hexa cc --regen` /
+# seed-converge), NOT a shipped binary, so compiling it at -O1 cuts the gcc -O2
+# cost the compile-speed R6 round targets without touching the SHIPPED ./hexa or
+# runtime.a (both stay -O2). The C this transpiler EMITS is a deterministic
+# function of the .hexa source, independent of its own -O level → byteeq-safe.
+CFLAGS_BOOTSTRAP="$CFLAGS"
+if [ "${HEXA_BOOTSTRAP_O1:-0}" = "1" ]; then
+    case " $CFLAGS " in
+        *" -O2 "*|*"-O2 "*|*" -O2"*) CFLAGS_BOOTSTRAP="${CFLAGS//-O2/-O1}" ;;
+        *" -O3 "*|*"-O3 "*|*" -O3"*) CFLAGS_BOOTSTRAP="${CFLAGS//-O3/-O1}" ;;
+        *)                           CFLAGS_BOOTSTRAP="$CFLAGS -O1" ;;
+    esac
+    echo "[stage_prebuild_hexat] HEXA_BOOTSTRAP_O1=1 — build/hexat at -O1 [$CFLAGS_BOOTSTRAP]"
+fi
+
 ROOT="$PWD"
 RA="${HEXA_PREBUILT_RUNTIME:-$ROOT/build/runtime.a}"
 HEXAT="$ROOT/build/hexat"
@@ -99,7 +115,7 @@ if [ ! -f "$RA" ]; then
 fi
 
 echo "[stage_prebuild_hexat] building build/hexat from hexa_cc.c + runtime.a"
-$CC $CFLAGS -I "$ROOT" -I "$ROOT/self" "$CC_SRC" "$RA" -o "$HEXAT" $LIBS
+$CC $CFLAGS_BOOTSTRAP -I "$ROOT" -I "$ROOT/self" "$CC_SRC" "$RA" -o "$HEXAT" $LIBS
 test -x "$HEXAT"
 echo "[stage_prebuild_hexat] build/hexat = $(wc -c < "$HEXAT") bytes"
 
@@ -150,7 +166,7 @@ if [ "${HEXA_SEED_CONVERGE:-0}" = "1" ]; then
       break
     fi
     cp "$NEW" "$CC_SRC"
-    $CC $CFLAGS -I "$ROOT" -I "$ROOT/self" "$CC_SRC" "$RA" -o "$HEXAT" $LIBS
+    $CC $CFLAGS_BOOTSTRAP -I "$ROOT" -I "$ROOT/self" "$CC_SRC" "$RA" -o "$HEXAT" $LIBS
     test -x "$HEXAT"
     i=$((i+1))
     echo "[stage_prebuild_hexat] seed-converge: pass $i — seed=$(wc -c < "$CC_SRC")B hexat=$(wc -c < "$HEXAT")B"
