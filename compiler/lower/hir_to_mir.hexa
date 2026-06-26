@@ -2190,8 +2190,23 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
 
         let mut idx = 1
         while idx + 1 < len(e.children) {
-            let pat = e.children[idx]
+            let mut pat = e.children[idx]
             let body = e.children[idx + 1]
+
+            // RFC pattern guards — a guarded arm's pattern is a "match_guard"
+            // HExpr (children [inner_pattern, guard]). Unwrap to the inner
+            // pattern for the test + binding logic below; the guard HExpr is
+            // lowered AFTER the bindings (so it sees the bound payload vars)
+            // as a STMT_BR_COND that takes the body on truthy, else falls
+            // through to `next_id` (the next arm, or `join_id` for the last
+            // arm) — matching Rust's "guard fails → try next arm" semantics.
+            let mut has_guard = false
+            let mut guard_h = pat
+            if pat.kind == "match_guard" {
+                has_guard = true
+                guard_h = pat.children[1]
+                pat = pat.children[0]
+            }
 
             ctx2 = _new_block(ctx2)
             let arm_id = _lr_blocks[len(_lr_blocks) - 1].id
@@ -2539,6 +2554,34 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                     }
                     pi = pi + 1
                 }
+            }
+            // RFC pattern guards — bindings are now emitted in `arm_id`; lower
+            // the guard expr HERE so it can read the payload binders, then
+            // split: a fresh `body_block` holds the arm body, and the guard
+            // STMT_BR_COND branches to it on truthy or to `next_id` on falsy
+            // (guard fail → try next arm). For the last arm `next_id` is the
+            // join, so a failed guard yields no value — exactly the Rust
+            // semantics that the S3 exhaustiveness warning (HX3006) flags.
+            if has_guard {
+                let gr = _lower_hexpr(ctx2, guard_h)
+                ctx2 = gr.ctx
+                let guard_end = ctx2.cur_block
+                ctx2 = _new_block(ctx2)
+                let body_block_id = _lr_blocks[len(_lr_blocks) - 1].id
+                let mut gargs: [Operand] = []
+                gargs.push(gr.operand)
+                let gbr = Stmt {
+                    kind: STMT_BR_COND,
+                    dst: _miss_local(),
+                    op: "",
+                    args: gargs,
+                    target_block: body_block_id,
+                    target_block_else: next_id
+                }
+                ctx2 = _push_stmt_to(ctx2, guard_end, gbr)
+                ctx2 = _add_edge(ctx2, guard_end, body_block_id)
+                ctx2 = _add_edge(ctx2, guard_end, next_id)
+                ctx2 = _set_cur_block(ctx2, body_block_id)
             }
             let br_b = _lower_hexpr(ctx2, body)
             ctx2 = br_b.ctx

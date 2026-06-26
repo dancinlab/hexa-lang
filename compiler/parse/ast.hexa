@@ -157,6 +157,26 @@ pub struct Module {
     imports: [string]
 }
 
+// ── Match-arm pattern guards (RFC: pattern guards + exhaustiveness) ──
+//
+// A guarded arm `pattern if cond -> body` (Rust `match x { n if n>0 => … }`,
+// cite The Rust Reference §"Match guards") stores its pattern as an If-kind
+// Expr carrier with text "match_guard" and children [inner_pattern,
+// guard_expr]. Reusing an existing ExprKind + a `text` marker avoids a new
+// enum variant and the ~92-site exhaustive-`match ExprKind` churn — the same
+// no-new-variant idiom the range BinOp uses (parser.hexa:582). The carrier is
+// produced only by parse_match_expr and consumed only by the match-arm loops
+// in bind.hexa / types.hexa / ast_to_hir.hexa plus the HIR "match_guard"
+// lowering in hir_to_mir.hexa. Unguarded arms are byte-identical to before
+// (the wrapper never appears), so this is purely additive.
+pub fn ast_is_match_guard(e: Expr) -> bool {
+    if e.text != "match_guard" { return false }
+    return match e.kind {
+        ExprKind::If -> true,
+        _ -> false
+    }
+}
+
 // C11 helper.
 fn _ast_is_string_lit(k: ExprKind) -> bool {
     return match k {
