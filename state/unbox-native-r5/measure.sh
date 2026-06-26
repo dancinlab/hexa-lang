@@ -64,13 +64,19 @@ prep_seeds() { # $1=srcdir — copy gitignored seeds from CANON
 }
 
 # ── 1. isolated worktrees: patched branch + baseline ──
+# r1c hardening: a prior run's `rm -rf $WORK` leaves $WORK/src + $WORK/base
+# REGISTERED as worktrees (dirs gone) → `worktree add` fails "missing but already
+# registered" and the clone fallback fails too (FATAL clone BR). Prune first, and
+# force-update the remote-tracking refs (plain `fetch origin $BR` only moves
+# FETCH_HEAD, not refs/remotes/origin/$BR which `worktree add origin/$BR` reads).
 rm -rf "$WORK"; mkdir -p "$WORK"
 cd "$CANON" || { say "FATAL no canon $CANON"; exit 3; }
-git -C "$CANON" fetch origin "$BR" 2>>"$WORK/git.log" || say "  (fetch BR warn)"
-git -C "$CANON" fetch origin main 2>>"$WORK/git.log" || say "  (fetch main warn)"
-git -C "$CANON" worktree add --detach "$WORK/src"  "origin/$BR"  2>>"$WORK/git.log" \
+git -C "$CANON" worktree prune 2>>"$WORK/git.log" || true
+git -C "$CANON" fetch -f origin "$BR:refs/remotes/origin/$BR" 2>>"$WORK/git.log" || say "  (fetch BR warn)"
+git -C "$CANON" fetch -f origin "main:refs/remotes/origin/main" 2>>"$WORK/git.log" || say "  (fetch main warn)"
+git -C "$CANON" worktree add -f --detach "$WORK/src"  "origin/$BR"  2>>"$WORK/git.log" \
     || git clone -b "$BR" "$CANON" "$WORK/src" 2>>"$WORK/git.log" || { say "FATAL clone BR"; exit 3; }
-git -C "$CANON" worktree add --detach "$WORK/base" "$BASE"       2>>"$WORK/git.log" \
+git -C "$CANON" worktree add -f --detach "$WORK/base" "$BASE"       2>>"$WORK/git.log" \
     || git clone "$CANON" "$WORK/base" 2>>"$WORK/git.log" || say "  (base worktree warn — Gate1 may skip)"
 SRC="$WORK/src"; BSRC="$WORK/base"
 say "  SRC=$SRC  sha=$(git -C "$SRC" rev-parse --short HEAD 2>/dev/null)"
