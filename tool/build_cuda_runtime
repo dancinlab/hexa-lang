@@ -9,6 +9,35 @@
 #   [d=1024] CUDA 347 GFLOP/s vs CPU 22 GFLOP/s  → ~15x   rel_rms 4.3e-16
 #   [d=2048] CUDA 404 GFLOP/s vs CPU 18 GFLOP/s  → ~25x   rel_rms 5.1e-16
 #
+# ⚠️ KNOWN DEFECT — explicit-link multiple-definition (summer, nvcc 12.9; 2026-06-26).
+#   The link step below force-links the extracted RT-NATIVE cores ($CORES:
+#   rt_hi_native.o / alloc_syscall_native.o / …) AS EXPLICIT .o ALONGSIDE
+#   runtime_cuda_host.o (compiled from runtime.c). Both DEFINE the same bodies
+#   (rt_str_split/lines/pad/center/contains_b/from_int · hexa_arena_alloc/mark/
+#   reset/rewind) → 19× `multiple definition` → collect2 ld error → DONE_RC=1.
+#   Why the SHIPPING runtime.a does NOT hit this: it is an ARCHIVE, so the linker
+#   lazily pulls only the core members that resolve UNDEFINED symbols and skips
+#   the ones runtime.o already defines. Explicit-.o link has no lazy resolution
+#   → both force-pulled. Root = frozen runtime.c (restore_frozen_seeds re-seed)
+#   gates rt_str_* / hexa_arena_* INCONSISTENTLY vs the rt_hi_native.o seed's
+#   symbol set: adding -DHEXA_HAS_HEXA_RT_STDLIB=1 / -DHEXA_RT_ALLOC_NATIVE=1 did
+#   NOT extern them, and wrapping $CORES in an archive (cores.a) ALSO failed
+#   (rt_hi_native.o carries BOTH needed-extern + duplicate-defined symbols, so
+#   pulling it for the former drags the latter). FALSIFIED: stale-.o hypothesis
+#   (clean rm + rebuild reproduces identically).
+#   ROOT FIX (TODO · hexa-lang): align the frozen runtime.c rt_str_*/hexa_arena_*
+#   gating with the EXACT symbol set rt_hi_native.o provides (seed-provided ⇒
+#   always extern), OR link $CORES as a lazy archive with host.o compiled to
+#   extern that exact set. cf ARCHITECTURE convergence
+#   `CUDA-BUILD-CORES-EXPLICIT-LINK-MULTIDEF` + `x86-native-seed-link-wiring`.
+#   VERIFICATION-ONLY workaround (NOT for shipping — no-escape-hatch): the
+#   cuda_gemm_verify / custom probe HARNESSES may be relinked with
+#   `g++ -Wl,--allow-multiple-definition …` because the duplicate symbols are
+#   BYTE-IDENTICAL runtime bodies (linker picks host.o's; correct for a verify
+#   binary). 2026-06-26 summer run THIS way: cuda_available=1 · [d=2048] 451
+#   GFLOP/s · farr_packed_gemv_offset [V=151643×64] GPU out_id=2 (no illegal-D2H)
+#   · max|GPU−host_ref|=3.3e-16 — confirmed anima PR #2631 (decoder expert gemv).
+#
 # The default release build is CPU-only (no cuBLAS dep) — this is the OPT-IN
 # CUDA path (HEXA_CUDA). self-host ≠ release: additive, does not change the
 # default build or the byteeq fixpoint (the GPU path is runtime opt-in).
@@ -158,6 +187,11 @@ gcc -O2 -D_GNU_SOURCE -DHEXA_HAS_OPENSSL -w -I self -I . \
 #     ($CUBLAS_LDLIB = -lcublas only when HEXA_USE_CUBLAS=1; default = cuBLAS-free)
 gcc -O2 -D_GNU_SOURCE -DHEXA_HAS_OPENSSL -DHEXA_CUDA -w -I self -I . -I "$CINC" \
     -c tool/cuda_gemm_verify.c -o "$B/harness_cuda.o"
+# ⚠️ $CORES force-linked here ALONGSIDE runtime_cuda_host.o → 19× `multiple
+#    definition` on summer/nvcc-12.9 (see KNOWN DEFECT in header + convergence
+#    CUDA-BUILD-CORES-EXPLICIT-LINK-MULTIDEF). Until the root fix lands, a VERIFY
+#    binary can relink with `-Wl,--allow-multiple-definition` (byte-identical
+#    bodies). DO NOT add that flag to a shipping hexa link.
 g++ -O2 "$B/harness_cuda.o" "$B/runtime_cuda_host.o" "$B/runtime_cuda.o" \
     "$B/runtime_cuda_dlink.o" $CORES \
     -L"$CLIB" -lcudart $CUBLAS_LDLIB -lcuda -lcudadevrt -lm -lpthread -lssl -lcrypto -ldl \
