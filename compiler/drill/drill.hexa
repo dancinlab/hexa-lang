@@ -38,6 +38,7 @@ use "compiler/drill/checkpoint"
 use "compiler/drill/anti_hub"
 use "compiler/smash/candidate"
 use "compiler/honesty/check"
+use "compiler/atlas/identity_engine"
 
 pub struct DrillOpts {
     max_rounds: i64,
@@ -280,16 +281,137 @@ fn _verifier_parse_rationale(raw: string) -> string {
     return ""
 }
 
-// Invoke the pluggable verifier for one round. Empty `verifier_cmd`
-// short-circuits to a `skip` verdict (back-compat — no env work, no
-// shell exec). Otherwise dispatches via the host shell with the round
+// ── Native default verifier: exact-int identity_sweep ─────────────────
+//
+// When NO external verifier is installed (`verifier_cmd == ""`) the loop
+// USED to short-circuit to verdict="skip" — the candidates were surfaced
+// but never actually checked, contradicting the documented "default
+// verification is ON" contract. The canonical (native, in-binary,
+// exact-integer) verifier lives in `compiler/atlas/identity_engine.hexa`
+// (`verify_identity`, the 12-fn A·B=C·D bounded-unique checker). This
+// sweep wires it into the default path: every round's discovery candidates
+// are scanned, any whose `expr` is in the 12-fn product-identity syntax is
+// confirmed/refuted by exact-int evaluation over n∈[2,N], and the round
+// gets a REAL verdict + counts (n_identity / n_verified / n_noise) — never
+// "skip". The external python oracle stays opt-in via `--verifier <cmd>`
+// (native-canonical polarity); the only opt-OUT is the explicit
+// `HEXA_DRILL_NO_VERIFY=1` constraint.
+//
+// HONESTY (c2): the current generators (smash P2–P9) emit FLOAT-arithmetic
+// permutation exprs (`evolve(v=… <- base×…)`, `a · b = …`), NOT the 12-fn
+// `<fn>·<fn> = <fn>·<fn>` integer-identity syntax this engine consumes. So
+// for the standard math vocabulary the honest result is n_identity=0 /
+// n_verified=0 / n_noise=N → verdict "continue". That 0-verified report is
+// the CORRECT, non-fabricating signal (a generator that produces identity-
+// syntax candidates is the [B] generator-campaign scope); [A]'s job is only
+// that the verifier RUNS and emits a real verdict instead of skipping.
+
+// Map a 12-fn basis name to its `af()` index, or -1 if not a basis fn.
+// Index ids match identity_engine.hexa::af (0=sigma … 11=omega).
+fn _fn_index(name: string) -> i64 {
+    let s = name.trim()
+    if s == "sigma"  { return 0 }
+    if s == "sigma2" { return 1 }
+    if s == "sigma3" { return 2 }
+    if s == "phi"    { return 3 }
+    if s == "tau"    { return 4 }
+    if s == "n"      { return 5 }
+    if s == "sopfr"  { return 6 }
+    if s == "rad"    { return 7 }
+    if s == "J2"     { return 8 }
+    if s == "psi"    { return 9 }
+    if s == "Omega"  { return 10 }
+    if s == "omega"  { return 11 }
+    return -1
+}
+
+// Parse a candidate `expr` as a 12-fn product identity `A*B = C*D` (also
+// accepting the unicode `·` product / spaces). Returns the four basis
+// indices via an out-array [a,b,c,d] when the whole expr is exactly four
+// recognised basis fns joined by two products and one `=`, else [].
+// Deterministic, ASCII/structure-driven (no float parse).
+fn _parse_identity(expr: string) -> [i64] {
+    let mut e = expr
+    e = e.replace("·", "*")
+    e = e.replace(" ", "")
+    let sides = e.split("=")
+    let empty: [i64] = []
+    if len(sides) != 2 { return empty }
+    let lhs = to_string(sides[0]).split("*")
+    let rhs = to_string(sides[1]).split("*")
+    if len(lhs) != 2 || len(rhs) != 2 { return empty }
+    let a = _fn_index(to_string(lhs[0]))
+    let b = _fn_index(to_string(lhs[1]))
+    let c = _fn_index(to_string(rhs[0]))
+    let d = _fn_index(to_string(rhs[1]))
+    if a < 0 || b < 0 || c < 0 || d < 0 { return empty }
+    let mut out: [i64] = []
+    out.push(a); out.push(b); out.push(c); out.push(d)
+    return out
+}
+
+// Native exact-int identity sweep over one round's discovery candidates.
+// Counts: n_identity (candidates in 12-fn identity syntax), n_verified
+// (bounded-unique singleton n≥4 → a real confirmed identity), n_noise
+// (candidates NOT in identity syntax — the honest classification for the
+// float-permutation generators). Returns a VerifierVerdict whose verdict is
+//   "pass"     — at least one candidate verified bounded-unique (n≥4), AND
+//   "continue" — otherwise (nothing verified this round; keep exploring).
+// The rationale string carries the machine-readable counts so the audit
+// emit (`DRILL_VERIFIER` stderr line) shows the real numbers, never "skip".
+fn _native_identity_sweep(round: i64, cands: array) -> VerifierVerdict {
+    let N = 20000
+    let n = len(cands)
+    let mut n_identity = 0
+    let mut n_verified = 0
+    let mut n_noise = 0
+    let mut i = 0
+    while i < n {
+        let c = cands[i]
+        if len(c.id) > 0 {
+            let idx = _parse_identity(c.expr)
+            if len(idx) == 4 {
+                n_identity = n_identity + 1
+                let r = verify_identity(idx[0], idx[1], idx[2], idx[3], N)
+                if r >= 4 { n_verified = n_verified + 1 }
+            } else {
+                n_noise = n_noise + 1
+            }
+        }
+        i = i + 1
+    }
+    let mut verdict = "continue"
+    if n_verified > 0 { verdict = "pass" }
+    let rationale = "identity_sweep:identity=" + to_string(n_identity)
+        + ",verified=" + to_string(n_verified)
+        + ",noise=" + to_string(n_noise)
+    return VerifierVerdict { verdict: verdict, rationale: rationale, round: round }
+}
+
+// Invoke the verifier for one round.
+//
+// No external verifier installed (`verifier_cmd == ""`) → run the NATIVE
+// default verifier (`_native_identity_sweep`, exact-int in-binary) so the
+// round gets a real verdict ("pass"/"continue" + counts), honoring the
+// "default verification is ON" contract. The native sweep is the canonical
+// path; the only opt-OUT is the explicit `HEXA_DRILL_NO_VERIFY=1`
+// constraint, which restores the legacy "skip" (pure surfacing, no
+// verification). The pluggable external oracle stays opt-in via
+// `--verifier <cmd>` (native-canonical polarity — external = constraint).
+//
+// External verifier installed → dispatch via the host shell with the round
 // payload piped in on stdin; the verifier's first stdout line is the
 // verdict line. Verifier crash / timeout / malformed output → "error"
 // (NEVER halts — fail-open).
 fn _verifier_run(opts: DrillOpts, round: i64, seed: string,
                   y: RoundYields, sigma: string, cands: array) -> VerifierVerdict {
     if len(opts.verifier_cmd) == 0 {
-        return VerifierVerdict { verdict: "skip", rationale: "", round: round }
+        // Opt-OUT constraint: HEXA_DRILL_NO_VERIFY=1 restores legacy skip.
+        if env("HEXA_DRILL_NO_VERIFY") == "1" {
+            return VerifierVerdict { verdict: "skip", rationale: "", round: round }
+        }
+        // Native-canonical default: exact-int identity sweep.
+        return _native_identity_sweep(round, cands)
     }
     let payload = _verifier_payload(round, seed, y, sigma, cands, opts.verifier_cand_cap)
     // Wrap the verifier command with `timeout <N>s` when bounded — best
@@ -329,13 +451,38 @@ fn _verifier_run(opts: DrillOpts, round: i64, seed: string,
 //   • ranking REUSES `conf`; no new scorer is invented.
 // Returns the count of proposals actually emitted (≤ top_n, ≤ #cands).
 
-// Selection-rank the discovery candidates by descending `conf` and emit
-// the first `top_n`. We use a bounded selection pass (O(top_n · N)) rather
-// than a full sort — top_n is small (default 8) and N can be large (a
-// round can produce hundreds of candidates), so repeatedly extracting the
-// current max is cheaper than sorting the whole array and keeps the
-// emission order deterministic (highest conf first; axiom breaks a tie so
-// fresh axioms outrank derived corollaries of equal confidence).
+// Exploration tier of a discovery candidate (1 = search product, 0 =
+// trivial seed-echo / pool axiom). The pre-fix surfacing ranked purely by
+// `conf`, and `phases.hexa::p2_evolve` mints the literal-seed axiom
+// (`smash:P2:seed`) and the per-token signature axioms (`smash:P2:seedtok`)
+// at the MAXIMUM confidence (`mk_axiom` → conf=1.0). Every search PRODUCT
+// (the P2 evolve mutants, plus the P3–P9 derived corollaries) carries a
+// SMALLER spread-based conf, so the top-N was monopolised by the seed echo
+// and the per-token pool — the very candidates that just restate the input.
+// That hid the free-search mutants (the actual exploration output) and was
+// the surfacing-side mask for the n=6 hardwire bug fixed in #4008. We split
+// the rank into two tiers so a search product ALWAYS outranks a trivial seed
+// echo regardless of conf; within a tier the existing conf/axiom/index order
+// is preserved (fully deterministic).
+//   tier 0 — `smash:P2:seed` (whole-seed echo) and `smash:P2:seedtok`
+//            (per-token signature axioms): pure restatements of the seed.
+//   tier 1 — everything else: P2 evolve mutants + P3–P9 derived corollaries
+//            (the resonance/closure/transfer/dual/… search products).
+fn _explore_tier(c) -> i64 {
+    let s = c.src
+    if len(s) >= 13 && s.substring(0, 13) == "smash:P2:seed" { return 0 }
+    return 1
+}
+
+// Selection-rank the discovery candidates and emit the first `top_n`. The
+// primary key is the EXPLORATION TIER (search products over trivial seed
+// echoes — see `_explore_tier`); within a tier we rank by descending `conf`
+// (per-candidate heuristic confidence, compiler/smash/candidate.hexa) and
+// break ties axiom>derived, then by earlier insertion index. We use a
+// bounded selection pass (O(top_n · N)) rather than a full sort — top_n is
+// small (default 8) and N can be large (a round can produce hundreds of
+// candidates), so repeatedly extracting the current best is cheaper than
+// sorting the whole array and keeps the emission order deterministic.
 fn _surface_proposals(round: i64, cands: array, top_n: i64, quiet: bool) -> i64 {
     if top_n <= 0 { return 0 }
     let n = len(cands)
@@ -349,22 +496,28 @@ fn _surface_proposals(round: i64, cands: array, top_n: i64, quiet: bool) -> i64 
     if !quiet {
         println("  ⚪ proposals (round " + to_string(round)
             + ", top " + to_string(top_n) + " of " + to_string(n)
-            + " — ranked by conf · to-validate, NOT verified):")
+            + " — search-product-first · ranked by conf · to-validate, NOT verified):")
     }
     while emitted < top_n {
-        // Find the highest-conf not-yet-picked candidate. Tiebreak:
-        // axiom > derived, then earlier insertion index (deterministic).
+        // Find the best not-yet-picked candidate. Key: tier desc (search
+        // product > seed echo), then conf desc, then axiom>derived, then
+        // earlier insertion index (deterministic).
         let mut best: i64 = -1
+        let mut best_tier: i64 = -1
         let mut best_conf: f64 = -1.0
         let mut best_axiom = false
         let mut i = 0
         while i < n {
             if !picked[i] {
                 let c = cands[i]
-                let better_conf = c.conf > best_conf
-                let tie_axiom = c.conf == best_conf && c.axiom && !best_axiom
-                if best < 0 || better_conf || tie_axiom {
+                let t = _explore_tier(c)
+                let better_tier = t > best_tier
+                let same_tier = t == best_tier
+                let better_conf = same_tier && c.conf > best_conf
+                let tie_axiom = same_tier && c.conf == best_conf && c.axiom && !best_axiom
+                if best < 0 || better_tier || better_conf || tie_axiom {
                     best = i
+                    best_tier = t
                     best_conf = c.conf
                     best_axiom = c.axiom
                 }
@@ -592,12 +745,15 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
         _verifier_audit_emit(vv)
         verifier_last_verdict = vv.verdict
 
-        // ── surface-on-skip ──────────────────────────────────────────
-        // No verifier installed (verdict == "skip") → the round's
-        // discoveries would otherwise vanish into the overlay unseen.
-        // Emit the top-N ranked candidates as ⚪ proposals (to-validate
-        // hypotheses, NOT verdicts). Off when surface_top == 0 (legacy).
-        if vv.verdict == "skip" && opts.surface_top > 0 {
+        // ── surface proposals (no external oracle) ───────────────────
+        // No EXTERNAL verifier installed (verifier_cmd == "" → native sweep
+        // or opt-OUT skip) → the round's discoveries would otherwise vanish
+        // into the overlay unseen. Emit the top-N ranked candidates as ⚪
+        // proposals (to-validate hypotheses, NOT verdicts; the native sweep
+        // verdict is a separate DRILL_VERIFIER line). Off when surface_top
+        // == 0 (legacy). When an external oracle screens (verifier_cmd set)
+        // it owns the candidate stream, so surfacing stays suppressed.
+        if len(opts.verifier_cmd) == 0 && opts.surface_top > 0 {
             _surface_proposals(round, rr.discoveries, opts.surface_top, opts.quiet)
         }
 
