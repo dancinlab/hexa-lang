@@ -1,0 +1,41 @@
+=== HEXA_UNBOX_ARRAY_NATIVE r2 — RESULT (pending pool measure) ===
+
+STATUS: implemented + branch pushed; measure.sh dispatched to summer (1-SSH).
+        Verdict gates (Gate1 OFF-byteeq / Gate2 lever / Gate3 ratio / Gate4
+        parity / Gate5 smoke) to be filled by summer self-harvest
+        ($HOME/r2_arru_RESULT.txt). measure-first · verify-done · LLM 자가판정 금지.
+
+BRANCH: perf/codegen-unbox-array-r2 (off origin/main)
+FILE:   compiler/codegen/x86_64_linux.hexa (+~270 LOC, default-OFF)
+FLAG:   HEXA_UNBOX_ARRAY_NATIVE=1 (opt-in)
+
+WHAT WAS BUILT
+  - Gate env `_unbox_array_enabled()` (HEXA_UNBOX_ARRAY_NATIVE=="1").
+  - X86RegMap.local_type direct array (id→MIR type_id), built ONLY when gate ON
+    (R1 lever-d lesson: unconditional builder perturbs deterministic emit) +
+    `_x86_local_type` O(1) probe. OFF → empty `[]`, never consulted.
+  - Provability helpers: `_x86_is_typed_prim_array` (101..104),
+    `_x86_operand_array_typed` (local + typed-prim-array),
+    `_x86_operand_index_int` (const_int / type_id==1 local),
+    `_x86_index_get_unbox_ok`, `_x86_index_set_unbox_ok`.
+  - `_x86_emit_array_addr`: idx→rsi, arr_ptr→rdi, signed bounds (jl/jge → OOB
+    label = boxed call), idx*16 via four `add r,r`, addr=items+idx*16.
+  - op="index" GET fast path: addr→rdi, payload→dst, tag→rsi, store; jmp .done;
+    .oob = original boxed `hexa_index_get`; .done.
+  - op="index_set" SET fast path (i64 arrays + raw-int value): addr→r11,
+    value→rdx → [r11+8], TAG_INT(0) → [r11]; jmp .done; .oob = boxed
+    `hexa_index_set`; .done. Skips store-back (in-place, no relocation) and the
+    arena dirty-flag (sound: raw-i64 value is never an arena child Val).
+
+SOUNDNESS NOTES (kept BOXED / conservative bottom)
+  - globals (separate id space, not in local_type), maps, strings, untyped
+    (type_id 0), non-primitive-element arrays → boxed.
+  - SET restricted to type_id 101 ([i64]) with raw-int value (tag=TAG_INT). [f64]
+    store-back + bounds-elision (raw pointer-walk) = r2b follow-on.
+  - GET is element-type-agnostic (loads stored {tag,payload}), so [f64]/[f32]
+    arrays (103/104) are allowed for GET — the loaded tag carries TAG_FLOAT.
+
+NEXT (r2b, deferred)
+  - bounds-check elision under loop-invariant analysis (raw pointer-walk).
+  - [f64] store-back fast path.
+  - arm64_darwin.hexa mirror (3-target byteeq).
