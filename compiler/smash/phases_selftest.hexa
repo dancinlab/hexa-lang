@@ -25,6 +25,7 @@
 
 use "compiler/smash/candidate"
 use "compiler/smash/phases"
+use "compiler/atlas/n6_axes.gen"
 
 fn _count_ctype(cands: [DiscoveryCandidate], ctype: string) -> i64 {
     let mut n = 0
@@ -85,9 +86,17 @@ fn _run_seed(seed: string, depth: i64) -> i64 {
     println("[P5] telescope    -> " + to_string(len(tele)) + " boosted")
     if len(tele) != len(cor) { fails = fails + 1; println("  [FAIL] P5 count drift") }
 
-    // P6 — n=6 invariance graph filter
+    // P6 — n=6 invariance graph filter (invariant anchors read from the
+    // binary-embedded atlas: compiler/atlas/n6_axes.gen :: n6_axes())
     let graph = p6_n6_invariant(tele)
     println("[P6] graph filter -> " + to_string(len(graph)) + " n6-invariant nodes")
+
+    // atlas cross-check — runtime read of the binary-embedded atlas: classify
+    // each surviving graph node as known (already an atlas node) vs novel.
+    let xc = p6_atlas_crosscheck(graph)
+    println("[atlas] n6_axes=" + to_string(n6_axes_count()) + " (binary-embedded) "
+            + "· cross-checked " + to_string(len(graph)) + " candidates -> "
+            + to_string(xc[0]) + " known / " + to_string(xc[1]) + " novel")
 
     // P7 — closure-based recursive growth
     let grown = p7_recursive_growth(axioms, tele, depth)
