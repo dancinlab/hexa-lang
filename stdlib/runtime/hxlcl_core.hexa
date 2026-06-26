@@ -1,8 +1,9 @@
 // stdlib/runtime/hxlcl_core.hexa — RFC061 §M8 Route C libc-floor C-ABI SSOT.
 //
 // The hexa-source raw-mem bodies for the libc-floor substrate symbols
-// `hxlcl_strlen` (`size_t hxlcl_strlen(const char*)`) and `hxlcl_memcpy`
-// (`void *hxlcl_memcpy(void*,const void*,size_t)`), emitted through the
+// `hxlcl_strlen` (`size_t hxlcl_strlen(const char*)`), `hxlcl_memcpy`
+// (`void *hxlcl_memcpy(void*,const void*,size_t)`) and `hxlcl_memset`
+// (`void *hxlcl_memset(void*,int,size_t)`), emitted through the
 // compiler's portable `aprime_cc --emit=asm --target=` cross-target path under
 // the Route C C-ABI calling-convention gate (HEXA_CABI_HXLCL=1 · _is_cabi in
 // compiler/codegen/x86_64_linux.hexa + arm64_darwin.hexa).
@@ -79,4 +80,36 @@ pub fn hxlcl_memcpy(dst: HexaVal, src: HexaVal, n: HexaVal) -> int {
         i = __hx_payload_add(i, 1)
     }
     return pd
+}
+
+// BYTE-FAITHFUL to the C body it replaces (self/runtime.c:613, rt_memset 28 B):
+//   void *hxlcl_memset(void *s, int c, size_t n){
+//       unsigned char *p=s; unsigned char v=(unsigned char)c;
+//       for(size_t i=0;i<n;i++) p[i]=v; return s; }
+// Three raw C-ABI args (s,c,n) arrive in rdi/rsi/rdx (x0/x1/x2); the return ships
+// the dst pointer raw in rax/x0. (n==0 → the while never enters, exactly like the
+// C for-loop; the frozen runtime never calls memset with NULL — same precondition
+// as hxlcl_memcpy and the SELFEMIT hand-assembled seed
+// test/native_build/emit_hxlcl_memset_o.hexa, whose `strb w1,[x0,x3]` loop writes
+// only the LOW byte of the c register — identical to the C `(unsigned char)c`.)
+//
+// RAW-MEM, un-nested (same str_core NESTING rule): every __hx_payload_* /
+// __hx_ptr_* call writes EXACTLY ONE `let`/assignment with no nested intrinsic
+// args. __hx_payload_lt(i, n) tests the raw payload words (NOT `<`, which lowers
+// to a HexaVal helper that misreads the raw byte words); __hx_ptr_store8 writes
+// the LOW byte of the c payload to s[i] (the `(unsigned char)c` truncation).
+
+// hxlcl_memset: write the low byte of `c` into `n` bytes of `s`, return s. Under
+// the Route C C-ABI gate the params arrive raw in rdi,rsi,rdx / x0,x1,x2 and the
+// return ships the s pointer raw in rax/x0; under the default (PAIR-MODEL, gate
+// OFF) it compiles as an ordinary HexaVal fn (byteeq-neutral — never linked in
+// that mode).
+pub fn hxlcl_memset(s: HexaVal, c: HexaVal, n: HexaVal) -> int {
+    let ps = __hx_payload_add(s, 0)           // s char* (payload word)
+    let mut i = 0
+    while __hx_payload_lt(i, n) {
+        __hx_ptr_store8(ps, i, c)             // s[i] = (unsigned char)c
+        i = __hx_payload_add(i, 1)
+    }
+    return ps
 }

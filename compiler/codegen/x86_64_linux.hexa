@@ -939,6 +939,7 @@ pub fn _is_cabi(fname: string) -> bool {
     if env("HEXA_CABI_HXLCL") != "1" { return false }
     if fname == "hxlcl_strlen" { return true }
     if fname == "hxlcl_memcpy" { return true }
+    if fname == "hxlcl_memset" { return true }
     return false
 }
 
