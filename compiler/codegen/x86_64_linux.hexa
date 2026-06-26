@@ -907,6 +907,40 @@ fn _x86_64_arg_reg_seq(idx: i64) -> string {
     return "rdi" // overflow → stack (TODO)
 }
 
+// RFC061 §M8 Route C — per-fn C-ABI (single-register) calling-convention gate.
+//
+// The canonical hexa ABI passes/returns every value as a 16-byte HexaVal
+// {tag,payload} register PAIR (x86_64 rdi:rsi/rdx:rcx/r8:r9, return rax:rdx;
+// arm64 x0:x1/…, return x0:x1). The libc-floor `hxlcl_*` substrate symbols are
+// the OPPOSITE layer — raw C-ABI (`size_t hxlcl_strlen(const char*)`) called
+// with bare pointers throughout the frozen C runtime amalgam. A portable-emitted
+// PAIR-model strlen reads the caller's single rdi as the TAG and walks garbage,
+// so the str_core `--emit=asm --target=` cross-target path cannot supply them
+// (measured ABI wall — project_hexa_rfc061_hxlcl_crosstarget_abi_wall).
+//
+// Route C dissolves that wall the way every production compiler does — a per-fn
+// calling-convention attribute (gcc/clang `sysv_abi`, rust `extern "C"`, zig
+// `callconv(.C)`): a marked fn lowers its param/return at the platform C-ABI in
+// SINGLE registers (x86_64 rdi,rsi,rdx,rcx,r8,r9 / rax; arm64 x0..x7 / x0). The
+// backend already models every internal value as a RAW machine integer in ONE
+// register (see the PAIR-MODEL note below) — only the THREE boundaries
+// (ingress / return / call) box into pairs — so C-ABI = suppressing the pair-box
+// at those three sites for flagged fns; the body is untouched.
+//
+// SAFE GATE (no new @attr keyword — the frozen bootstrap blob's parser does not
+// know one, which would break the faithful build; see
+// project_hexa_deepfn_r4_parser_spine_frozen_method_wall). Name-whitelist only,
+// env-gated. DEFAULT OFF: HEXA_CABI_HXLCL unset → empty whitelist → `_is_cabi`
+// is false for EVERY fn → every boundary takes its unchanged PAIR-MODEL branch →
+// byte-identical emit (byteeq-neutral). HEXA_CABI_HXLCL=1 activates the single
+// PoC symbol `hxlcl_strlen`. Shared by both backends (flat post-flatten codegen
+// namespace).
+pub fn _is_cabi(fname: string) -> bool {
+    if env("HEXA_CABI_HXLCL") != "1" { return false }
+    if fname == "hxlcl_strlen" { return true }
+    return false
+}
+
 // ── SELFHOST-NEXT x86_64: HexaVal 16-byte SysV register-pair ABI ─────
 //
 // Runtime builtins (hexa_exit / hexa_print_val / hexa_len / …) take and
@@ -2433,6 +2467,35 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             return
         }
 
+        if _is_cabi(s.op) {
+            // Route C C-ABI call — the callee is a raw C-ABI symbol: it takes
+            // each arg in ONE SysV INTEGER arg register (rdi,rsi,rdx,rcx,r8,r9)
+            // and returns a single raw value in rax. Box only the PAYLOAD of each
+            // arg into its single arg reg; unbox rax (TAG_INT) into dst. (Not
+            // reached by the strlen 1-symbol PoC — C calls hxlcl_strlen and the
+            // leaf calls nothing — but completes the mechanism for the scale
+            // round; gated empty-whitelist-off so byteeq-neutral.)
+            let mut ci = 0
+            while ci < arg_n {
+                if ci < 6 {
+                    _x86_hv_payload(s.args[ci], st, rm, _x86_64_arg_reg_seq(ci), opts)
+                }
+                ci = ci + 1
+            }
+            _x86_buf.push(_x86_instr1("call", _x86_op_label(target), "cabi call " + target))
+            if s.dst.id >= 0 {
+                let dst_name = _x86_dst_reg(rm, s.dst.id)
+                let dst = _x86_op_reg(dst_name)
+                if dst.reg.name != "rax" {
+                    _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rax"),
+                        "cabi: unbox call result (rax)"))
+                }
+                _x86_store_tag_imm(rm, s.dst.id, 0)
+                _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+            }
+            return
+        }
+
         // ── User-function call: HexaVal 16-byte SysV register-pair ABI.
         // PAIR-MODEL — every user .hexa fn compiled by this backend takes and
         // returns HexaVal {tag,payload} pairs (params arrive as pairs in the
@@ -2578,13 +2641,22 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             _x86_emit_zero_ret_pair(fname == "main")
         }
         if len(s.args) >= 1 {
-            // PAIR-MODEL — a user .hexa fn returns a 16-byte HexaVal in the
-            // SysV INTEGER-class return pair rax:rdx (tag:payload). Box the
-            // return operand with lo=rax (tag), hi=rdx (payload) so a returned
-            // string/array carries its real tag back to the caller (and to a
-            // C caller reading {long tag; long u}). Must run BEFORE the frame
-            // teardown since it reads tag/spill slots off rbp.
-            _x86_hv_box_arg(s.args[0], st, rm, "rax", "rdx", opts)
+            if _is_cabi(fname) {
+                // Route C C-ABI return — a raw C-ABI fn returns its value in a
+                // SINGLE register (rax). Load just the payload eightbyte (the
+                // raw int/pointer); the HexaVal tag is dropped (the C caller
+                // reads only rax). Must run BEFORE frame teardown (reads spill
+                // slots off rbp).
+                _x86_hv_payload(s.args[0], st, rm, "rax", opts)
+            } else {
+                // PAIR-MODEL — a user .hexa fn returns a 16-byte HexaVal in the
+                // SysV INTEGER-class return pair rax:rdx (tag:payload). Box the
+                // return operand with lo=rax (tag), hi=rdx (payload) so a returned
+                // string/array carries its real tag back to the caller (and to a
+                // C caller reading {long tag; long u}). Must run BEFORE the frame
+                // teardown since it reads tag/spill slots off rbp.
+                _x86_hv_box_arg(s.args[0], st, rm, "rax", "rdx", opts)
+            }
         }
         _x86_emit_epilogue(spill_frame)
         return
@@ -2748,9 +2820,28 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
     // TAG goes into the param's parallel tag-slot so it survives into any
     // downstream tag-dispatching runtime call.
     let mut p = 0
+    let _x86_cabi = _is_cabi(mf.name)
     while p < len(mf.params) {
         let pid = mf.params[p].id
-        if p < 3 {
+        if _x86_cabi && p < 6 {
+            // Route C C-ABI ingress — param p arrives RAW in ONE SysV INTEGER
+            // arg register (rdi,rsi,rdx,rcx,r8,r9), not a {tag,payload} pair.
+            // Store TAG_INT(0) into the tag-slot (imm via r11 — disjoint from
+            // every arg reg) and the raw word as the payload home, mirroring the
+            // pair path's payload handling. (libc-floor leaves have ≤6 params, so
+            // the >6 stack case never arises under the whitelist.)
+            let pay_reg = _x86_64_arg_reg_seq(p)
+            _x86_store_tag_imm(rm, pid, 0)
+            if _x86_is_spilled(rm, pid) {
+                _x86_store_spill(rm, pid, pay_reg)
+            } else {
+                let dst_name = _x86_reg_lookup(rm, pid)
+                if dst_name != pay_reg {
+                    _x86_buf.push(_x86_instr2("mov", _x86_op_reg(dst_name),
+                                        _x86_op_reg(pay_reg), "cabi ingress param payload"))
+                }
+            }
+        } else if p < 3 {
             let tag_reg = _x86_hv_pair_lo(p)     // tag eightbyte
             let pay_reg = _x86_hv_pair_hi(p)     // payload eightbyte
             // Stash the tag first (it reads a fresh arg reg; storing it into a
