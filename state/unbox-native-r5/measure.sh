@@ -122,35 +122,45 @@ emit_native() { # $1=compiler $2=flag $3=outbase $4=srcdir
 }
 
 # ── Gate 1 — OFF-path byteeq (BLOCKING) ──
-say "--- Gate1 OFF byteeq (patched flag-OFF .o == baseline .o) ---"
+# r1c METHODOLOGY FIX: the prior FAIL (18 differing bytes) was the embedded DWARF
+# DW_AT_comp_dir source path — patched emitted from $SRC (.../src), baseline from
+# $BSRC (.../base) → ".debug_str" carried "src" vs "base", a HARNESS artifact, NOT
+# a codegen delta (.text was byte-identical, proven by objcopy --only-section=.text).
+# FIX: emit BOTH OFF builds from the SAME neutral cwd with the SAME kernel path, so
+# the compilation-dir / source-path strings are identical and the only possible
+# delta is real codegen. This is the apples-to-apples OFF-byteeq the gate intends.
+say "--- Gate1 OFF byteeq (same-cwd: patched flag-OFF .o == baseline .o) ---"
+CMPDIR="$WORK/cmp"; rm -rf "$CMPDIR"; mkdir -p "$CMPDIR"
+cp "$KERN" "$CMPDIR/k.hexa"
+( cd "$CMPDIR"; unset HEXA_UNBOX_NATIVE
+  "$AP"  _drv.hexa --emit=obj --target=x86_64-linux-gnu -o "$CMPDIR/p_off.o" "$CMPDIR/k.hexa" >"$CMPDIR/p.o.log" 2>&1 || echo "p emit rc=$?" )
+( cd "$CMPDIR"; unset HEXA_UNBOX_NATIVE
+  "$AP"  _drv.hexa --emit=asm --target=x86_64-linux-gnu -o "$CMPDIR/p_off.s" "$CMPDIR/k.hexa" >"$CMPDIR/p.s.log" 2>&1 || true )
+if [ -x "$APB" ]; then
+  ( cd "$CMPDIR"; unset HEXA_UNBOX_NATIVE
+    "$APB" _drv.hexa --emit=obj --target=x86_64-linux-gnu -o "$CMPDIR/b_off.o" "$CMPDIR/k.hexa" >"$CMPDIR/b.o.log" 2>&1 || echo "b emit rc=$?" )
+fi
+# keep the legacy per-src emits too (used by Gate2/3/4 from $SRC)
 emit_native "$AP" 0 "$WORK/p_off" "$SRC"
-[ -x "$APB" ] && emit_native "$APB" 0 "$WORK/b_off" "$BSRC"
-if [ -f "$WORK/p_off.o" ] && [ -f "$WORK/b_off.o" ]; then
-    if cmp -s "$WORK/p_off.o" "$WORK/b_off.o"; then
-        say "  Gate1 OFF-BYTEEQ=PASS  patched-OFF .o == baseline .o  sha=$(sha256sum "$WORK/p_off.o" | cut -c1-16)"
+if [ -f "$CMPDIR/p_off.o" ] && [ -f "$CMPDIR/b_off.o" ]; then
+    PSHA=$(sha256sum "$CMPDIR/p_off.o" | cut -c1-16); BSHA=$(sha256sum "$CMPDIR/b_off.o" | cut -c1-16)
+    if cmp -s "$CMPDIR/p_off.o" "$CMPDIR/b_off.o"; then
+        say "  Gate1 OFF-BYTEEQ=PASS  patched-OFF .o == baseline .o  sha=$PSHA (same-cwd, OFF-path inert CONFIRMED)"
     else
-        say "  Gate1 OFF-BYTEEQ=FAIL  patched-OFF .o != baseline .o (OFF-path NOT byte-identical — SHIP-BLOCK)"
-        say "    patched sha=$(sha256sum "$WORK/p_off.o" | cut -c1-16) baseline sha=$(sha256sum "$WORK/b_off.o" | cut -c1-16)"
-        # r1b root-cause: dump the .s diff (patched-OFF vs baseline-OFF) so the
-        # EXACT instruction delta is captured — proves whether it is k1_sum LIR
-        # (my patch leaks) or a benign emitter-determinism factor (label/order).
-        if [ -f "$WORK/p_off.s" ] && [ -f "$WORK/b_off.s" ]; then
-            if cmp -s "$WORK/p_off.s" "$WORK/b_off.s"; then
-                say "    NOTE: .s IDENTICAL but .o differs → non-text delta (reloc/symtab/timestamp/order), NOT k1_sum codegen"
-            else
-                say "    .s DIFFERS (k1_sum codegen changed when OFF) — diff head:"
-                diff "$WORK/b_off.s" "$WORK/p_off.s" | head -40 | sed 's/^/      /' | tee -a "$RESULT"
-            fi
+        say "  Gate1 OFF-BYTEEQ=FAIL  patched-OFF .o != baseline .o (SHIP-BLOCK)  patched=$PSHA baseline=$BSHA"
+        # localize: is it .text (real codegen) or still non-text?
+        objcopy -O binary --only-section=.text "$CMPDIR/p_off.o" "$CMPDIR/pt.bin" 2>/dev/null
+        objcopy -O binary --only-section=.text "$CMPDIR/b_off.o" "$CMPDIR/bt.bin" 2>/dev/null
+        if cmp -s "$CMPDIR/pt.bin" "$CMPDIR/bt.bin"; then
+            say "    .text IDENTICAL — residual is non-code ELF metadata; cmp -l offsets:"
+            cmp -l "$CMPDIR/p_off.o" "$CMPDIR/b_off.o" 2>/dev/null | head -20 | sed 's/^/      /' | tee -a "$RESULT"
+        else
+            say "    .text DIFFERS — real codegen leak when OFF; .s diff head:"
+            diff "$CMPDIR/b_off.s" "$CMPDIR/p_off.s" 2>/dev/null | head -40 | sed 's/^/      /' | tee -a "$RESULT"
         fi
-        # also: does baseline emit a .o at all (sanity) + objdump section sizes
-        say "    objdump -h sizes (baseline | patched-OFF):"
-        objdump -h "$WORK/b_off.o" 2>/dev/null | awk '/\.text|\.data|\.rodata|\.rela/{print "      base "$2" "$3}' | tee -a "$RESULT"
-        objdump -h "$WORK/p_off.o" 2>/dev/null | awk '/\.text|\.data|\.rodata|\.rela/{print "      patc "$2" "$3}' | tee -a "$RESULT"
     fi
 else
-    # fallback: patched OFF asm vs patched ON asm SHOULD differ (proves flag live);
-    # and patched-OFF asm self-consistency. Baseline .o missing → degraded gate.
-    say "  Gate1 baseline .o missing — degraded (cannot prove OFF==baseline). See logs."
+    say "  Gate1 same-cwd .o missing — see $CMPDIR/*.log (degraded)"
 fi
 
 # ── Gate 2 — lever: native call-count OFF vs ON ──
