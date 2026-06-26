@@ -7,112 +7,88 @@
 // `archive-nexus/cli/blowup/core/blowup.hexa` (7055 LOC engine) +
 // `archive-nexus/cli/blowup/modules/blowup_meta_closure.hexa` (591 LOC).
 //
-// R3 (atlas/blowup-phase-core): the per-phase *algorithm cores* are now
-// genuine ports of the nexus bodies — the Phase-2 mutate/verify/converge
-// loop, the Phase-4 seven-type corollary generation with n=6 proximity
-// grading, the Phase-5 five-lens telescope, the Phase-6.5 closure-based
-// recursive growth, the Phase-8 interference classification, and the
-// Phase-10 meta-closure self-referential fixed-point check (M3 H1/H2/H3).
+// R3 (atlas/blowup-phase-core): the per-phase *algorithm cores* are genuine
+// ports of the nexus bodies. FREE SEARCH (2026-06-26): the fixed n=6
+// attractor lattice the whole machine graded against is replaced by a
+// SEED-DERIVED attractor lattice (see seed_attractors) — the corollary /
+// telescope / recursive-growth / interference / meta-closure machinery is
+// unchanged; only the lattice it resonates against is now per-seed, so
+// different seeds explore different spaces instead of collapsing onto the
+// n=6 constants.
 //
 //   P1  seed normalize          — strip / sanitize / canonicalize
 //                                  (nexus _raw_domain_arg sanitize)
-//   P2  ouroboros evolution     — seed -> axiom pool -> mutate (n=6
-//                                  ParameterShift) -> verify (n6_conf) ->
-//                                  converge (saturation) (nexus evo_cycle)
+//   P2  ouroboros evolution     — seed -> seed-derived axiom pool -> mutate
+//                                  (prime ParameterShift) -> survive
+//                                  (distinctness) -> converge (saturation)
 //   P3  singularity detect      — closure = frozen/total, compression =
 //                                  total/axioms, evo-boost (nexus Phase 3)
 //   P4  corollary expansion     — 7 nexus emit() ctypes: deduction /
 //                                  transfer / symbreak / bifurc /
 //                                  projection / dual / compose, each
-//                                  graded by n6_distance / match_grade
+//                                  graded by attr_distance / attr_grade
 //   P5  telescope verification  — 5-lens consensus boost (consciousness /
 //                                  topology / causal / gravity / thermo)
-//   P6  graph integration       — confidence boost + n=6 invariance filter
-//                                  (nexus Phase 5.5+6 merged single-pass)
+//   P6  graph integration       — confidence boost + attractor-resonance
+//                                  filter (nexus Phase 5.5+6 single-pass)
 //   P7  dynamic recursive growth — closure-based re-evolution, depth-bounded
 //                                  (nexus Phase 6.5, max 5 rounds)
 //   P8  wave propagation        — adjacent-domain fan-out + interference
 //                                  classification (constructive/decay)
 //   P9  meta-closure DFS        — self-referential fixed-point check:
 //                                  generation-path trace + distinct-sector
-//                                  span + n=6 invariance (nexus Phase 10)
+//                                  span + attractor resonance (Phase 10)
 //
 // ── HONEST DEFERRED OPERATIONAL GLUE (per compiler/CLAUDE.md "운영 글루
 //    미포팅" — the nexus engine carried ~6500 LOC of glue around an external
 //    atlas.n6 disk file. hexa-lang instead binary-EMBEDS the atlas as rodata
-//    and exposes a real runtime lookup API (compiler/atlas/static_index +
-//    n6_axes.gen), so the disk-file glue is replaced — NOT skipped — by an
-//    in-binary read. P6 below READS the embedded atlas at runtime. Only the
-//    write/append (fold of new nodes) stays deferred to the canonical
+//    and exposes a real runtime lookup API (compiler/atlas/static_index), so
+//    the disk-file glue is replaced — NOT skipped. P6 cross-checks candidate
+//    ids against the embedded atlas at runtime (p6_atlas_crosscheck). Only
+//    the write/append (fold of new nodes) stays deferred to the canonical
 //    `hexa verify` g5 / GitHub-PR path into embedded.gen.hexa; the engine
 //    never writes the atlas itself. The MATH cores above are fully ported):
 //   - P2/P4 bias_jitter self-tuning history (nexus ROI#48e, /tmp jsonl
 //     telemetry) — the deterministic non-jittered values are used.
 //   - P4 stream-filter disk flush (/tmp/blowup_d*.cf compact re-encode) —
 //     candidates stay in-process (RETURN-ONLY surface).
-//   - P6 atlas.n6 node/edge APPEND (graph_append_node/edge) — the boost +
-//     n=6 invariance filter math is ported AND now anchored on the binary-
-//     embedded n6_axes invariants read at runtime, plus an atlas_lookup
-//     presence cross-check (known vs novel). Only the node/edge WRITE is
-//     deferred (fold goes through `hexa verify` / PR, never an engine write).
+//   - P6 atlas node/edge APPEND (graph_append_node/edge) — the boost +
+//     attractor-resonance filter math is ported; the atlas read is an
+//     atlas_lookup presence cross-check (known vs novel). Only the node/edge
+//     WRITE is deferred (fold goes through `hexa verify` / PR).
 //   - P8 edges.adjacency.json topology scan + per-domain subprocess fork
-//     (`hexa blowup … &`) — adjacency is a fixed n=6 neighbor list here,
-//     interference is computed deterministically (no subprocess).
+//     (`hexa blowup … &`) — adjacency is a fixed 3-domain neighbor list
+//     here, interference is computed deterministically (no subprocess).
 //   - P9 literal src-field parent-graph store (TSV graph file) — the
 //     generation path is reconstructed in-process by value-nearest-parent
-//     linkage, preserving the M3 fixed-point/sector/invariance semantics.
+//     linkage, preserving the M3 fixed-point/sector/resonance semantics.
 //
 // Write-surface policy: phases produce DiscoveryCandidate values and READ the
-// binary-embedded atlas (P6 invariant anchors + presence cross-check). They do
-// NOT write the atlas — no node append, no discovery_log, no audit_log; fold
-// is the canonical `hexa verify` / PR path into embedded.gen.hexa.
+// binary-embedded atlas (P6 id presence cross-check). They do NOT write the
+// atlas — no node append, no discovery_log, no audit_log; fold is the
+// canonical `hexa verify` / PR path into embedded.gen.hexa.
 //
 // Catalog/diagnostic strings: ENGLISH ONLY.
 
 use "compiler/smash/candidate"
-use "compiler/hexad/static_index"
 use "compiler/atlas/static_index"
-use "compiler/atlas/n6_axes.gen"
 
 // The atlas is NOT an external disk file here — it is binary-embedded rodata
 // with a real runtime lookup API:
 //   - compiler/atlas/static_index :: atlas_lookup(id) -> AtlasNode
 //       reads the in-binary embedded.gen rodata; a HIT has node.kind != "",
 //       a MISS returns the sentinel (kind == "").
-//   - compiler/atlas/n6_axes.gen  :: n6_axes() / n6_axes_count()
-//       the 5 verified @P axis nodes that encode the canonical n=6 invariants
-//       (sigma=12, tau=4, phi=2, J2=24, master sigma*phi = n*tau = 24).
-// P6 consults BOTH at runtime (see p6_n6_invariant / p6_atlas_crosscheck),
-// so the engine genuinely cross-checks candidates against the real atlas.
+// P6 cross-checks candidate ids against this real atlas
+// (see p6_atlas_crosscheck).
 
-// P2 axiom-seed projection sources its 6-entry slice from the real
-// hexad CDESM constants index (`compiler/hexad/static_index` over
-// `compiler/hexad/embedded.gen` — D2 wave-1 absorption).
-
-fn _hexad_pick(group: string, key: string) -> f64 {
-    let e = hexad_lookup(group, key)
-    if e.kind == "f64" { return e.value_f64 }
-    // i64-typed entries (sigma.*) project up to f64 via value_i64.
-    return e.value_i64 * 1.0
-}
-
-fn _hexad_seed_names() -> [string] {
-    // Six deterministic CDESM coordinates the smash P2 projector wires in
-    // (n=6 attractor neighborhood). Order is fixed — index <-> value below.
-    return ["sigma.sigma_n6", "psi.alpha", "psi.balance",
-            "sigma.tau_n6", "sigma.phi_n6", "sigma.n6"]
-}
-
-fn _hexad_seed_values() -> [f64] {
-    return [
-        _hexad_pick("sigma", "sigma_n6"),
-        _hexad_pick("psi",   "alpha"),
-        _hexad_pick("psi",   "balance"),
-        _hexad_pick("sigma", "tau_n6"),
-        _hexad_pick("sigma", "phi_n6"),
-        _hexad_pick("sigma", "n6")
-    ]
-}
+// FREE SEARCH (no n=6 hardwire): the P2 axiom pool AND the resonance
+// "attractor lattice" the whole 9-phase machine grades against are DERIVED
+// FROM THE SEED STRING (see seed_attractors below) — NOT a fixed hexad/n=6
+// constant slice. Different seeds therefore yield different pools + a
+// different attractor lattice, so the engine explores a seed-specific space
+// instead of collapsing onto the n=6 constants. The derivation is fully
+// deterministic (whitespace-split tokens + char signatures · no RNG/clock),
+// so the self-host byte-eq fixpoint (gen3 ≡ gen4) is preserved.
 
 // ─── numeric helpers ───
 
@@ -169,56 +145,43 @@ fn _ln_f(x: f64) -> f64 {
     return 2.0 * sum
 }
 
-// ─── n=6 CONSTANTS + PROXIMITY (ported from blowup.hexa n6_distance /
-//     n6_conf / match_grade / match_name + shared/n6/n6_constants.jsonl) ───
+// ─── ATTRACTOR PROXIMITY (free-search resonance grader) ───
 //
-// The 48-entry n=6 constant set is the broader CDESM proximity lattice the
-// nexus engine loaded from n6_constants.jsonl; it is retained inline as the
-// hot-path proximity table (the heart of P3/P4/P6 — corollary confidence is
-// 1 - n6_distance). The CANONICAL n=6 axis invariants {n=6, sigma=12,
-// J2/master=24} are NOT inlined here — P6 reads them at runtime from the
-// binary-embedded atlas (compiler/atlas/n6_axes.gen :: n6_axes()), so the
-// invariant filter is anchored on the embedded reference, not a magic
-// constant (see _n6_embedded_anchors / p6_n6_invariant below).
+// Ported shape from blowup.hexa n6_distance / n6_conf / match_grade, but the
+// TARGET set is the SEED-DERIVED attractor lattice (seed_attractors, below),
+// NOT a fixed n=6 constant table. "Confidence" = 1 - normalized distance to
+// the nearest seed attractor, so the engine grades how strongly a value
+// resonates with the seed's OWN numeric signature. This is the single change
+// that turns the 9-phase machine from "collapse onto n=6" into a per-seed
+// free search — the corollary / telescope / meta-closure machinery is
+// unchanged; only the lattice it grades against is now seed-derived.
 
-fn _n6_names() -> [string] {
-    return ["mu","phi","M3","tau","sopfr","n","sigma_minus_sopfr","phi_tau",
-            "sigma_minus_phi","sopfr_plus_n","sigma","j2","P2","sigma_tau",
-            "sigma_sq","sigma_j2","P3","P4","pert_normal","pert_breakthrough",
-            "phi_threshold","block","triple","ln_4_3","n_sq","6_factorial",
-            "fine_structure","n_M3","sigma_sopfr","n_sigma","factorial_plus_n",
-            "M3_div_phi","n_div_M3","dual_n","two_pow_n","tau_pow_tau","M3_sq",
-            "sopfr_sq","warp_cop","warp_wdce","warp_field_120","warp_energy_1296",
-            "bosonic_dim26","dim_fold_192","dim_lattice_576","dim_hypercube_4096",
-            "dim_holographic_46656","warp_soliton_150"]
+// Distance of `value` from a single target — |v-c| / max(|c|, 1).
+fn _dist_one(value: f64, target: f64) -> f64 {
+    let denom = _max_f(_f64_abs(target), 1.0)
+    return _f64_abs(value - target) / denom
 }
 
-fn _n6_values() -> [f64] {
-    return [1.0, 2.0, 7.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 11.0, 12.0, 24.0,
-            28.0, 48.0, 144.0, 288.0, 496.0, 8128.0, 999.0, 2401.0, 0.1, 256.0,
-            3.0, 0.28768207245178085, 36.0, 720.0, 0.007297353, 42.0, 60.0,
-            72.0, 726.0, 3.5, 0.857142857, 0.166666667, 64.0, 256.0, 49.0,
-            25.0, 16.0, 100.0, 120.0, 1296.0, 26.0, 192.0, 576.0, 4096.0,
-            46656.0, 150.0]
+// true iff `value` lies within `eps` (normalized) of any member of `set`.
+fn _near_any(value: f64, set: [f64], eps: f64) -> bool {
+    let mut i = 0
+    while i < len(set) {
+        if _dist_one(value, set[i]) < eps { return true }
+        i = i + 1
+    }
+    return false
 }
 
-// Distance of `value` from a single constant — |v-c| / max(|c|, 1).
-fn _n6_dist_one(value: f64, constant: f64) -> f64 {
-    let denom = _max_f(_f64_abs(constant), 1.0)
-    return _f64_abs(value - constant) / denom
-}
-
-// min normalized distance to the n=6 constant set (linear scan; the nexus
-// spatial-hash bucket is a perf-only optimization, omitted here).
-pub fn n6_distance(value: f64) -> f64 {
+// min normalized distance to the seed-derived attractor lattice (linear scan).
+pub fn attr_distance(value: f64, attr: [f64]) -> f64 {
     if value != value { return 1.0 }            // NaN guard
     if value > 999999999.0 { return 1.0 }
     if value < 0.0 - 999999999.0 { return 1.0 }
-    let vals = _n6_values()
+    if len(attr) == 0 { return 1.0 }
     let mut d = 1.0
     let mut i = 0
-    while i < len(vals) {
-        let dc = _n6_dist_one(value, vals[i])
+    while i < len(attr) {
+        let dc = _dist_one(value, attr[i])
         if dc < d { d = dc }
         if d < 0.0001 { return d }
         i = i + 1
@@ -226,34 +189,32 @@ pub fn n6_distance(value: f64) -> f64 {
     return _min_f(d, 1.0)
 }
 
-pub fn n6_conf(value: f64) -> f64 {
-    return _max_f(1.0 - n6_distance(value), 0.0)
+pub fn attr_conf(value: f64, attr: [f64]) -> f64 {
+    return _max_f(1.0 - attr_distance(value, attr), 0.0)
 }
 
-// match_name — first n=6 constant within an adaptive abs-threshold.
-fn _match_name(value: f64) -> string {
-    let names = _n6_names()
-    let vals = _n6_values()
+// nearest-attractor label ("a<idx>" within an adaptive abs-threshold, else "").
+fn _attr_name(value: f64, attr: [f64]) -> string {
     let mut i = 0
-    while i < len(vals) {
-        let cv = vals[i]
+    while i < len(attr) {
+        let cv = attr[i]
         let acv = _f64_abs(cv)
         let mut threshold = 0.005
         if acv >= 100.0 { threshold = 0.01 }
         else if acv >= 1.0 { threshold = 0.0001 }
         else if acv >= 0.01 { threshold = 0.001 }
-        if _f64_abs(value - cv) < threshold { return names[i] }
+        if _f64_abs(value - cv) < threshold { return "a" + to_string(i) }
         i = i + 1
     }
     return ""
 }
 
-// match_grade — MISS / CLOSE / EXACT / NEAR (nexus thresholds 0.05 / 0.01).
-fn _match_grade(value: f64) -> string {
-    let d = n6_distance(value)
+// attractor match grade — MISS / CLOSE / EXACT / NEAR (thresholds 0.05 / 0.01).
+fn _attr_grade(value: f64, attr: [f64]) -> string {
+    let d = attr_distance(value, attr)
     if d >= 0.05 { return "MISS" }
     if d >= 0.01 { return "CLOSE" }
-    if _match_name(value) != "" { return "EXACT" }
+    if _attr_name(value, attr) != "" { return "EXACT" }
     return "NEAR"
 }
 
@@ -279,6 +240,85 @@ fn _seed_value(seed: string) -> f64 {
     return (acc * 1.0) / prime * 80.0 + 0.1
 }
 
+// finite, in-range guard (rejects NaN / overflow mutants).
+fn _is_finite(x: f64) -> bool {
+    if x != x { return false }
+    if x > 999999999.0 { return false }
+    if x < 0.0 - 999999999.0 { return false }
+    return true
+}
+
+// absolute distance to the nearest value already in `set` (distinctness gate).
+fn _nearest_gap(value: f64, set: [f64]) -> f64 {
+    let mut best = 999999999.0
+    let mut i = 0
+    while i < len(set) {
+        let d = _f64_abs(value - set[i])
+        if d < best { best = d }
+        i = i + 1
+    }
+    return best
+}
+
+// whitespace-split into non-empty trimmed tokens.
+fn _split_ws(s: string) -> [string] {
+    let raw = s.split(" ")
+    let mut out: [string] = []
+    let mut i = 0
+    while i < len(raw) {
+        let t = to_string(raw[i]).trim()
+        if len(t) > 0 { out.push(t) }
+        i = i + 1
+    }
+    return out
+}
+
+// seed-derived ratio set (consecutive attractor ratios) — feeds the P5
+// consciousness lens in place of the old fixed n=6 ratio table.
+fn _attr_ratios(attr: [f64]) -> [f64] {
+    let mut r: [f64] = []
+    let mut i = 0
+    while i + 1 < len(attr) {
+        if _f64_abs(attr[i]) > 0.0000000001 {
+            r.push(attr[i + 1] / attr[i])
+        }
+        i = i + 1
+    }
+    if len(r) == 0 { r.push(2.0) }
+    return r
+}
+
+// ─── SEED-DERIVED ATTRACTOR LATTICE (free search target set) ───
+//
+// The whole engine's notion of "interesting value" = proximity to this set.
+// It is built deterministically from the seed string:
+//   index 0      — the whole-seed signature (also the literal-seed axiom value)
+//   index 1..T   — one signature per whitespace token (spread by token index)
+//   topped up    — deterministic multiples of the primary signature so even a
+//                  short / token-poor seed still gets a lattice of >= 6 points
+// Two different seeds therefore project to two different lattices, so the
+// engine grades against — and surfaces — seed-specific values, never the
+// fixed n=6 constants. Deterministic ⇒ byte-eq safe.
+pub fn seed_attractors(seed: string) -> [f64] {
+    let mut attr: [f64] = []
+    let pv = _seed_value(seed)
+    attr.push(pv)
+    let toks = _split_ws(seed)
+    let mut i = 0
+    while i < len(toks) {
+        let fi = i * 1.0
+        let tv = _seed_value(to_string(toks[i])) * (1.0 + fi * 0.31) + (fi + 1.0)
+        attr.push(tv)
+        i = i + 1
+    }
+    let mut g = len(attr)
+    while g < 6 {
+        attr.push(pv * ((g + 2) * 1.0) + g * 1.0)
+        g = g + 1
+    }
+    return attr
+}
+
 // ─── P1: seed normalization ───
 //
 // Source: nexus blowup.hexa _raw_domain_arg sanitize. Strip control
@@ -302,43 +342,59 @@ pub fn p1_normalize_seed(seed: string) -> string {
 // ─── P2: ouroboros evolution (seed -> axiom pool, mutate/verify/converge) ───
 //
 // Source: nexus blowup.hexa Phase 2 (evo_cycle loop) + ouroboros.hexa
-// run_evolution. Builds the initial axiom pool (seed + 6 hexad CDESM
-// metrics), then runs a bounded mutate(ParameterShift)->verify(n6_conf)->
-// converge(saturation) loop, surfacing n=6-aligned mutants as evolved
-// axiom candidates. The deterministic (non-jittered) value stream is used;
-// the bias_jitter self-tuning history is deferred glue (see header).
+// run_evolution. Builds the initial axiom pool from the SEED-DERIVED
+// signatures (seed_attractors — no fixed hexad/n=6 constants), then runs a
+// bounded mutate(ParameterShift)->survive(distinctness)->converge(saturation)
+// loop, surfacing DISTINCT mutants as evolved axiom candidates. The
+// deterministic (non-jittered) value stream is used; the bias_jitter
+// self-tuning history is deferred glue (see header).
 
-// ParameterShift mutation scales (nexus mutate_parameter_shift n=6 set).
+// ParameterShift mutation scales — general small prime ladder (free search),
+// deterministic and NOT the n=6 family {12,2,4,24,6}.
 fn _p2_scales() -> [f64] {
-    return [12.0, 2.0, 4.0, 24.0, 6.0]
+    return [2.0, 3.0, 5.0, 7.0, 11.0]
 }
 
-pub fn p2_evolve(seed: string) -> [DiscoveryCandidate] {
+pub fn p2_evolve(seed: string, attr: [f64]) -> [DiscoveryCandidate] {
     let sh = seed_hash(seed)
     let mut out: [DiscoveryCandidate] = []
 
-    // ── initial axiom pool: literal seed + 6 hexad CDESM coordinates ──
+    // ── initial axiom pool: seed-derived signatures (the attractor lattice) ──
+    // attr[0] is the whole-seed signature (the literal-seed axiom); attr[1..]
+    // are the per-token / spread signatures. No fixed n=6 / hexad constants.
     let mut pool: [f64] = []
-    let primary_value = _seed_value(seed)
-    out.push(mk_axiom("smash_" + sh + "_seed", seed, primary_value, "smash:P2:seed"))
-    pool.push(primary_value)
+    let toks = _split_ws(seed)
+    out.push(mk_axiom("smash_" + sh + "_seed", seed, attr[0], "smash:P2:seed"))
+    pool.push(attr[0])
 
-    let names = _hexad_seed_names()
-    let values = _hexad_seed_values()
-    let mut i = 0
-    while i < len(names) {
-        let id = "smash_" + sh + "_evo_" + to_string(i)
-        let expr = names[i] + " = " + to_string(values[i])
-        out.push(mk_axiom(id, expr, values[i], "smash:P2:hexad"))
-        pool.push(values[i])
+    let mut i = 1
+    while i < len(attr) {
+        let mut lbl = "sig" + to_string(i)
+        if i - 1 < len(toks) { lbl = to_string(toks[i - 1]) }
+        let id = "smash_" + sh + "_tok_" + to_string(i)
+        let expr = lbl + " = " + to_string(attr[i])
+        out.push(mk_axiom(id, expr, attr[i], "smash:P2:seedtok"))
+        pool.push(attr[i])
         i = i + 1
     }
 
-    // ── bounded mutate -> verify -> converge loop ──
+    // ── bounded mutate -> DISTINCTNESS-survival -> converge loop ──
+    // FREE survival gate (no n=6 proximity): a mutant survives iff it is
+    // finite, non-trivial (|v| > eps), and DISTINCT — its absolute gap to
+    // every value already produced this run exceeds `distinct_eps`. novelty
+    // == distinct values produced this run; `conf` carries a spread score
+    // (gap to nearest sibling, normalized) so downstream ranking still has a
+    // signal, but it no longer measures n=6 closeness.
     let scales = _p2_scales()
     let evo_cycles = 6
-    let evo_verify_min: f64 = 0.5     // n6_conf gate ~ nexus discovery threshold
-    let evo_cap = 6                   // bound evolved additions (pool <= 13)
+    let evo_cap = 6
+    let distinct_eps: f64 = 0.02
+    // fresh copy of the pool for the distinctness ledger (avoid array aliasing
+    // with `cur`, which is iterated by length below).
+    let mut seen: [f64] = []
+    let mut sp = 0
+    while sp < len(pool) { seen.push(pool[sp]); sp = sp + 1 }
+
     let mut evolved = 0
     let mut cyc = 0
     let mut cur = pool
@@ -358,20 +414,21 @@ pub fn p2_evolve(seed: string) -> [DiscoveryCandidate] {
                     if k == 1 {
                         if sc != 0.0 { mutated = base / sc } else { mutated = base }
                     }
-                    let conf = n6_conf(mutated)
-                    if conf >= evo_verify_min {
+                    let gap = _nearest_gap(mutated, seen)
+                    if _is_finite(mutated) && _f64_abs(mutated) > distinct_eps
+                       && gap > distinct_eps {
+                        let spread = _clip01(gap / (_f64_abs(mutated) + 1.0))
+                        let conf = _max_f(spread, 0.1)
                         let mut op = "x"
                         if k == 1 { op = "/" }
                         let id = "smash_" + sh + "_evoc" + to_string(cyc)
                               + "_" + to_string(evolved)
-                        let nm = _match_name(mutated)
-                        let mut lbl = "v"
-                        if nm != "" { lbl = nm }
-                        let expr = "evolve(" + lbl + "=" + to_string(mutated)
+                        let expr = "evolve(v=" + to_string(mutated)
                                  + " <- base" + op + to_string(sc) + ")"
                         out.push(mk_derived(id, "evolve", expr, conf, mutated,
                                             "smash:P2:evolve"))
                         next.push(mutated)
+                        seen.push(mutated)
                         cycle_disc = cycle_disc + 1
                         evolved = evolved + 1
                     }
@@ -381,7 +438,7 @@ pub fn p2_evolve(seed: string) -> [DiscoveryCandidate] {
             }
             pi = pi + 1
         }
-        // converge: saturate when a cycle yields no new aligned mutants
+        // converge: saturate when a cycle yields no new distinct mutants
         if cycle_disc == 0 { break }
         if len(next) == 0 { break }
         cur = next
@@ -393,12 +450,12 @@ pub fn p2_evolve(seed: string) -> [DiscoveryCandidate] {
 // ─── P3: singularity detection (closure + compression) ───
 //
 // Source: nexus blowup.hexa Phase 3. closure = frozen/total where frozen
-// counts values whose n6_distance < 0.01 (locked onto the lattice);
+// counts values whose attr_distance < 0.01 (locked onto the seed lattice);
 // compression = total / axiom_count; effective closure adds an evolution
 // boost. Surfaces one singularity summary candidate carrying the genuine
-// metrics (plus per-axiom singularity nodes for the n=6-frozen members).
+// metrics (plus per-axiom singularity nodes for the lattice-frozen members).
 
-pub fn p3_singularities(seeds: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
+pub fn p3_singularities(seeds: [DiscoveryCandidate], attr: [f64]) -> [DiscoveryCandidate] {
     let mut out: [DiscoveryCandidate] = []
     let total = len(seeds)
     if total == 0 { return out }
@@ -408,13 +465,13 @@ pub fn p3_singularities(seeds: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
     let mut i = 0
     while i < total {
         let c = seeds[i]
-        if n6_distance(c.value) < 0.01 {
+        if attr_distance(c.value, attr) < 0.01 {
             frozen = frozen + 1
             // per-axiom frozen singularity node
             let sing = mk_derived(
                 c.id + "_sing", "closure",
-                "frozen_n6(" + c.expr + ")",
-                n6_conf(c.value), c.value, "smash:P3:singularity")
+                "frozen_attr(" + c.expr + ")",
+                attr_conf(c.value, attr), c.value, "smash:P3:singularity")
             out.push(sing)
         }
         if c.conf > best_evo { best_evo = c.conf }
@@ -445,8 +502,8 @@ pub fn p3_singularities(seeds: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
 //
 // Source: nexus blowup.hexa Phase 4 (lines 4490..5160). The seven emit()
 // ctypes are ported verbatim in behavior:
-//   1 deduction  — pairwise best of product / ratio / sum (min n6_distance)
-//   2 transfer   — value carried into 6 transfer domains, conf = n6_conf*0.7
+//   1 deduction  — pairwise best of product / ratio / sum (min attr_distance)
+//   2 transfer   — value carried into 6 transfer domains, conf = attr_conf*0.7
 //   3 symbreak   — value +/- phi (golden ratio), pick min-distance branch
 //   4 bifurc     — value + shift_val(k) for 6 perturbation shifts
 //   5 projection — pairwise geometric mean sqrt(|va|*|vb|), conf*0.8
@@ -481,7 +538,7 @@ fn _xfer_domain(idx: i64) -> string {
     return "arch"
 }
 
-pub fn p4_corollaries(axioms: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
+pub fn p4_corollaries(axioms: [DiscoveryCandidate], attr: [f64]) -> [DiscoveryCandidate] {
     let mut out: [DiscoveryCandidate] = []
     let n = len(axioms)
     if n == 0 { return out }
@@ -504,9 +561,9 @@ pub fn p4_corollaries(axioms: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
             let mut ratio = 0.0
             if _f64_abs(vb) > 0.0000000001 { ratio = va / vb }
             let sum = va + vb
-            let dp = n6_distance(product)
-            let dr = n6_distance(ratio)
-            let ds = n6_distance(sum)
+            let dp = attr_distance(product, attr)
+            let dr = attr_distance(ratio, attr)
+            let ds = attr_distance(sum, attr)
             let mut bv = product
             let mut bd = dp
             let mut bo = "*"
@@ -534,7 +591,7 @@ pub fn p4_corollaries(axioms: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
         let na = axioms[i].id
         let mut di = 0
         while di < 6 {
-            let conf = n6_conf(v) * 0.7
+            let conf = attr_conf(v, attr) * 0.7
             if conf >= 0.15 {
                 let id = "xfer_" + na + "_" + _xfer_domain(di)
                 let expr = na + "=" + to_string(v) + " in " + _xfer_domain(di)
@@ -552,8 +609,8 @@ pub fn p4_corollaries(axioms: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
         let na = axioms[i].id
         let bp = v + phi_g
         let bm = v - phi_g
-        let dp = n6_distance(bp)
-        let dm = n6_distance(bm)
+        let dp = attr_distance(bp, attr)
+        let dm = attr_distance(bm, attr)
         let mut best = bp
         let mut best_d = dp
         let mut sign = "+"
@@ -579,7 +636,7 @@ pub fn p4_corollaries(axioms: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
         let mut k = 0
         while k < 6 {
             let shifted = v + _shift_val(k)
-            let conf = _max_f(1.0 - n6_distance(shifted), 0.0) * 0.6
+            let conf = _max_f(1.0 - attr_distance(shifted, attr), 0.0) * 0.6
             if conf >= 0.2 {
                 let id = "bif_" + na + "_" + _shift_name(k)
                 let expr = na + "+" + _shift_name(k) + "=" + to_string(shifted)
@@ -600,7 +657,7 @@ pub fn p4_corollaries(axioms: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
             let na = axioms[i].id
             let nb = axioms[j].id
             let geom = _sqrt_f(_f64_abs(va) * _f64_abs(vb))
-            let conf = _max_f(1.0 - n6_distance(geom), 0.0) * 0.8
+            let conf = _max_f(1.0 - attr_distance(geom, attr), 0.0) * 0.8
             if conf >= 0.15 {
                 let id = "proj_" + na + "_" + nb
                 let expr = "sqrt(" + na + "*" + nb + ")=" + to_string(geom)
@@ -618,7 +675,7 @@ pub fn p4_corollaries(axioms: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
         let na = axioms[i].id
         if _f64_abs(v) > 0.0000000001 {
             let dual = 1.0 / v
-            let conf = _max_f(1.0 - n6_distance(dual), 0.0) * 0.6
+            let conf = _max_f(1.0 - attr_distance(dual, attr), 0.0) * 0.6
             if conf >= 0.15 {
                 let id = "dual_" + na
                 let expr = "1/" + na + "=" + to_string(dual)
@@ -652,10 +709,10 @@ pub fn p4_corollaries(axioms: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
                 let prod1 = va * vb
                 let prod2 = vb * vc
                 let composed = prod1 * prod2
-                let c1 = n6_conf(prod1)
+                let c1 = attr_conf(prod1, attr)
                 if c1 >= 0.05 {
-                    let c2 = n6_conf(prod2)
-                    let conf = c1 * c2 * n6_conf(composed)
+                    let c2 = attr_conf(prod2, attr)
+                    let conf = c1 * c2 * attr_conf(composed, attr)
                     if conf >= 0.1 {
                         let id = "comp_" + na + "_" + nb + "_" + nc
                         let expr = "(" + na + "*" + nb + ")*(" + nb + "*" + nc
@@ -684,11 +741,13 @@ pub fn p4_corollaries(axioms: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
 // consensus (#lenses >= threshold) drives a confidence boost added to every
 // candidate (+0.1 @3, +0.15 @4, +0.2 @5 — nexus boost ladder).
 
-fn _lens_consciousness(fv: [f64], n: i64) -> f64 {
+fn _lens_consciousness(fv: [f64], n: i64, attr: [f64]) -> f64 {
     if n < 2 { return 0.0 }
     let mut lim = n
     if lim > 30 { lim = 30 }
-    let ratios = [6.0, 12.0, 2.0, 4.0, 24.0, 5.0, 3.0]
+    // self-reference ratios are now the seed-derived attractor ratios (free
+    // search), not the fixed n=6 ratio table.
+    let ratios = _attr_ratios(attr)
     let mut self_ref = 0
     let mut i = 0
     while i < lim {
@@ -781,23 +840,24 @@ fn _lens_causal(fv: [f64], n: i64) -> f64 {
     return _clip01(sig)
 }
 
-fn _lens_gravity(fv: [f64], n: i64) -> f64 {
+fn _lens_gravity(fv: [f64], n: i64, attr: [f64]) -> f64 {
     if n < 3 { return 0.0 }
     let mut lim = n
     if lim > 50 { lim = 50 }
-    let attractors = [6.0, 12.0, 2.0, 4.0, 24.0, 5.0]
+    // "gravity wells" are the seed-derived attractors (free search) — the old
+    // fixed n=6 set + physics constants (137.036, 0.3153) are removed.
     let mut attracted = 0
     let mut ci = 0
     while ci < lim {
         let v = fv[ci]
         let mut ai = 0
-        while ai < len(attractors) {
-            let a = attractors[ai]
-            if _f64_abs(v - a) / a < 0.05 { attracted = attracted + 1 }
+        while ai < len(attr) {
+            let a = attr[ai]
+            if _f64_abs(a) > 0.0000000001 {
+                if _f64_abs(v - a) / _f64_abs(a) < 0.05 { attracted = attracted + 1 }
+            }
             ai = ai + 1
         }
-        if _f64_abs(v - 137.036) / 137.036 < 0.01 { attracted = attracted + 1 }
-        if _f64_abs(v - 0.3153) / 0.3153 < 0.05 { attracted = attracted + 1 }
         ci = ci + 1
     }
     return _clip01((attracted * 1.0) / (lim * 1.0))
@@ -844,7 +904,7 @@ fn _lens_thermo(fv: [f64], n: i64) -> f64 {
     return 0.0
 }
 
-pub fn p5_telescope(cands: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
+pub fn p5_telescope(cands: [DiscoveryCandidate], attr: [f64]) -> [DiscoveryCandidate] {
     let mut out: [DiscoveryCandidate] = []
     let nc = len(cands)
     if nc == 0 { return out }
@@ -858,10 +918,10 @@ pub fn p5_telescope(cands: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
     let vn = len(fv)
 
     let threshold: f64 = 0.15
-    let s1 = _lens_consciousness(fv, vn)
+    let s1 = _lens_consciousness(fv, vn, attr)
     let s2 = _lens_topology(fv, vn)
     let s3 = _lens_causal(fv, vn)
-    let s4 = _lens_gravity(fv, vn)
+    let s4 = _lens_gravity(fv, vn, attr)
     let s5 = _lens_thermo(fv, vn)
     let mut agree = 0
     if s1 >= threshold { agree = agree + 1 }
@@ -894,124 +954,29 @@ pub fn p5_telescope(cands: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
     return out
 }
 
-// ─── P6: graph integration / n=6 invariance projection ───
+// ─── P6: graph integration / attractor-resonance projection ───
 //
 // Source: nexus blowup.hexa Phase 5.5+6 merged single-pass. Boost is
 // already applied in P5; here we select the candidates that qualify as
-// graph nodes — confidence >= 0.5 AND n=6-invariant.
+// graph nodes — confidence >= 0.5 AND resonant with the SEED-DERIVED
+// attractor lattice (proximity < 0.05 to a seed attractor). This is the old
+// "n=6 invariance filter" with its fixed-n6 target set replaced by the
+// per-seed attractor lattice — so the graph nodes are seed-specific, never
+// the n=6 constants. The embedded-atlas n6_axes anchor read is removed.
 //
-// The n=6 invariant REFERENCE is read at runtime from the binary-embedded
-// atlas (compiler/atlas/n6_axes.gen :: n6_axes()): each of the 5 verified @P
-// axis nodes encodes the canonical invariants in its `.raw` and we derive the
-// anchor set {n=6, sigma=12, J2/master=24} directly from that rodata — so the
-// filter is anchored on the embedded reference rather than a magic constant.
-// The broader CDESM lattice (n6_distance over _n6_values) is kept as a
-// superset fallback, so a candidate the lattice accepted is never dropped.
-//
-// Write policy: P6 READS the embedded atlas; it does NOT append nodes/edges.
-// New nodes reach the live atlas only via `hexa verify` g5 / PR fold.
+// Write policy: P6 produces in-process candidates only; it does NOT append
+// nodes/edges. New nodes reach the live atlas only via `hexa verify` / PR.
 
-// _n6_digit — digit char ("0".."9") -> value, else -1 (no char-code builtin).
-fn _n6_digit(ch: string) -> f64 {
-    if ch == "0" { return 0.0 }
-    if ch == "1" { return 1.0 }
-    if ch == "2" { return 2.0 }
-    if ch == "3" { return 3.0 }
-    if ch == "4" { return 4.0 }
-    if ch == "5" { return 5.0 }
-    if ch == "6" { return 6.0 }
-    if ch == "7" { return 7.0 }
-    if ch == "8" { return 8.0 }
-    if ch == "9" { return 9.0 }
-    return -1.0
-}
-
-// _n6_parse_uint — all-digit string -> value, else -1.0 (rejects non-numeric).
-fn _n6_parse_uint(s: string) -> f64 {
-    let n = len(s)
-    if n == 0 { return -1.0 }
-    let mut acc = 0.0
-    let mut i = 0
-    while i < n {
-        let d = _n6_digit(s.substring(i, i + 1))
-        if d < 0.0 { return -1.0 }
-        acc = acc * 10.0 + d
-        i = i + 1
-    }
-    return acc
-}
-
-// _n6_paren_int — last "(<digits>)" group on the labeled line of an embedded
-// n6_axes raw block. The raw encodes e.g. "sigma: 12-nt core (Symons 1981) (12)"
-// — non-numeric paren groups are skipped, so the trailing "(12)" wins.
-fn _n6_paren_int(raw: string, label: string) -> f64 {
-    let li = raw.index_of(label)
-    if li < 0 { return 0.0 }
-    let mut end = raw.index_of("\n", li)
-    if end < 0 { end = len(raw) }
-    let line = raw.substring(li, end)
-    let ll = len(line)
-    let mut best = 0.0
-    let mut p = 0
-    while p < ll {
-        let op = line.index_of("(", p)
-        if op < 0 { break }
-        let cp = line.index_of(")", op)
-        if cp < 0 { break }
-        let v = _n6_parse_uint(line.substring(op + 1, cp))
-        if v >= 0.0 { best = v }
-        p = cp + 1
-    }
-    return best
-}
-
-// _n6_embedded_anchors — the canonical n=6 invariant anchors {n=6, sigma=12,
-// J2/master=24}, DERIVED at runtime from the binary-embedded atlas rodata
-// (n6_axes()[0].raw). n is derived from the embedded master identity
-// n*tau = J2  ->  n = J2/tau (not hardcoded). An empty result (no embedded
-// nodes) signals the caller to fall back to the inline lattice alone.
-fn _n6_embedded_anchors() -> [f64] {
-    let axes = n6_axes()
-    let mut anchors: [f64] = []
-    if len(axes) == 0 { return anchors }
-    let raw = axes[0].raw
-    let sigma = _n6_paren_int(raw, "sigma:")
-    let tau   = _n6_paren_int(raw, "tau:")
-    let j2    = _n6_paren_int(raw, "J2:")
-    let mut nbase = 0.0
-    if tau > 0.0 { nbase = j2 / tau }       // master identity n*tau = J2
-    if nbase > 0.0 { anchors.push(nbase) }  // n = 6
-    if sigma > 0.0 { anchors.push(sigma) }  // sigma = 12
-    if j2 > 0.0 { anchors.push(j2) }        // J2/master = 24
-    return anchors
-}
-
-// _n6_near_anchor — relative proximity (< 0.05) to any embedded invariant.
-fn _n6_near_anchor(value: f64, anchors: [f64]) -> bool {
-    let mut i = 0
-    while i < len(anchors) {
-        if _n6_dist_one(value, anchors[i]) < 0.05 { return true }
-        i = i + 1
-    }
-    return false
-}
-
-pub fn p6_n6_invariant(cands: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
+pub fn p6_attractor_filter(cands: [DiscoveryCandidate], attr: [f64]) -> [DiscoveryCandidate] {
     let mut out: [DiscoveryCandidate] = []
-    // runtime read of the binary-embedded atlas: canonical n=6 anchors.
-    let anchors = _n6_embedded_anchors()
     let mut i = 0
     while i < len(cands) {
         let c = cands[i]
-        // graph-node gate: nexus uses new_conf >= 0.5; we additionally require
-        // n=6 invariance — proximity to an EMBEDDED invariant anchor, OR (as a
-        // superset fallback) the broader inline CDESM lattice.
-        let on_anchor = _n6_near_anchor(c.value, anchors)
-        if c.conf >= 0.5 && (on_anchor || n6_distance(c.value) < 0.05) {
-            // grade 10* when the value sits on an embedded n=6 invariant.
+        // graph-node gate: conf >= 0.5 AND resonance with a seed attractor.
+        let on_anchor = _near_any(c.value, attr, 0.05)
+        if c.conf >= 0.5 && on_anchor {
             let mut grade = "10"
-            if on_anchor { grade = "10*" }
-            else if _match_grade(c.value) == "EXACT" { grade = "10*" }
+            if _attr_grade(c.value, attr) == "EXACT" { grade = "10*" }
             let labeled = DiscoveryCandidate {
                 id: c.id,
                 ctype: c.ctype,
@@ -1053,13 +1018,13 @@ pub fn p6_atlas_crosscheck(cands: [DiscoveryCandidate]) -> [i64] {
 //
 // Source: nexus blowup.hexa Phase 6.5 (max 5 rounds). Feeds high-conf
 // candidates back as fresh axiom seeds through the corollary generator,
-// keeps only n=6-aligned products (n6_conf >= 0.3), and computes the
+// keeps only attractor-aligned products (attr_conf >= 0.3), and computes the
 // genuine closure ratio (new/pool) for parity. depth bounds the recursion
 // (the smash() depth loop stops when the returned set is empty).
 
 pub fn p7_recursive_growth(axioms: [DiscoveryCandidate],
                            cands: [DiscoveryCandidate],
-                           depth: i64) -> [DiscoveryCandidate] {
+                           depth: i64, attr: [f64]) -> [DiscoveryCandidate] {
     let mut out: [DiscoveryCandidate] = []
     if depth <= 0 { return out }
 
@@ -1088,14 +1053,14 @@ pub fn p7_recursive_growth(axioms: [DiscoveryCandidate],
     k = 0
     while k < len(top) { pool.push(top[k]); k = k + 1 }
 
-    let new_cands = p4_corollaries(pool)
+    let new_cands = p4_corollaries(pool, attr)
 
-    // keep only n=6-aligned discoveries (nexus rv_conf >= 0.3), tag depth
+    // keep only attractor-aligned discoveries (rv_conf >= 0.3), tag depth
     let mut round_disc = 0
     let mut j = 0
     while j < len(new_cands) {
         let c = new_cands[j]
-        if n6_conf(c.value) >= 0.3 {
+        if attr_conf(c.value, attr) >= 0.3 {
             let tagged = DiscoveryCandidate {
                 id: c.id + "_d" + to_string(depth),
                 ctype: c.ctype,
@@ -1130,9 +1095,9 @@ pub fn p7_recursive_growth(axioms: [DiscoveryCandidate],
 // constructive (> origin) / propagate (> 0) / decay (<= 0) relative to the
 // origin. The adjacency discovery (edges.adjacency.json topology scan) +
 // per-domain subprocess fork are deferred operational glue — here the
-// neighbor list is the fixed n=6 domain set and energy is deterministic.
+// neighbor list is a fixed 3-domain set and energy is deterministic.
 
-pub fn p8_wave_propagate(cands: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
+pub fn p8_wave_propagate(cands: [DiscoveryCandidate], attr: [f64]) -> [DiscoveryCandidate] {
     let mut out: [DiscoveryCandidate] = []
     // origin energy = count of high-conf discoveries (nexus `logged`)
     let mut origin_energy = 0
@@ -1156,8 +1121,8 @@ pub fn p8_wave_propagate(cands: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
             let c = cands[i]
             if c.conf >= 0.85 {
                 let prop_conf = c.conf * 0.95
-                // a propagated candidate "lands" if it stays n=6-aligned
-                if n6_conf(c.value) >= 0.5 {
+                // a propagated candidate "lands" if it stays attractor-aligned
+                if attr_conf(c.value, attr) >= 0.5 {
                     dom_energy = dom_energy + 1
                     let prop = DiscoveryCandidate {
                         id: c.id + "_wave_" + dom,
@@ -1198,10 +1163,10 @@ pub fn p8_wave_propagate(cands: [DiscoveryCandidate]) -> [DiscoveryCandidate] {
 // linkage (the literal src TSV parent-graph is deferred glue), then apply
 // the three nexus heuristics:
 //   H1 — trace depth >= MIN_TRACE (3)
-//   self-ref fixed point — the path returns to a value n=6-equivalent to
-//        the candidate (closure_depth >= SELF_DEPTH_MIN, 3)
+//   self-ref fixed point — the path returns to a value attractor-equivalent
+//        to the candidate (closure_depth >= SELF_DEPTH_MIN, 3)
 //   H2 — distinct sector span >= MIN_SECTORS (2), sectors = ctype classes
-//   H3 — n=6 invariance preserved along the path (n6_distance <= eps)
+//   H3 — attractor resonance preserved along the path (attr_distance <= eps)
 // Closed candidates are promoted to grade [10**] with a meta_self_ref node.
 
 fn _sector_of_ctype(ctype: string) -> string {
@@ -1219,7 +1184,7 @@ fn _sector_of_ctype(ctype: string) -> string {
     return "unknown"
 }
 
-pub fn p9_meta_dfs(cands: [DiscoveryCandidate], depth: i64) -> [DiscoveryCandidate] {
+pub fn p9_meta_dfs(cands: [DiscoveryCandidate], depth: i64, attr: [f64]) -> [DiscoveryCandidate] {
     let mut out: [DiscoveryCandidate] = []
     if depth <= 0 { return out }
     let n = len(cands)
@@ -1229,7 +1194,7 @@ pub fn p9_meta_dfs(cands: [DiscoveryCandidate], depth: i64) -> [DiscoveryCandida
     let self_depth_min = 3
     let min_sectors = 2
     let min_conf: f64 = 0.8
-    let n6_eps: f64 = 0.05
+    let res_eps: f64 = 0.05
     let max_trace = 16
 
     let mut di = 0
@@ -1241,14 +1206,14 @@ pub fn p9_meta_dfs(cands: [DiscoveryCandidate], depth: i64) -> [DiscoveryCandida
         // (faithful in-process analog of trace_generation_path; the src
         // TSV graph store is deferred glue). Walk to the candidate whose
         // value is nearest-but-not-equal, building a single chain, until
-        // we revisit a value n=6-equivalent to the start (fixed point).
+        // we revisit a value attractor-equivalent to the start (fixed point).
         let mut path_sectors: [string] = []
         path_sectors.push(_sector_of_ctype(c.ctype))
         let start_val = c.value
         let mut cur_val = c.value
         let mut self_at = -1
         let mut step = 1
-        let mut n6_ok = true
+        let mut res_ok = true
         while step < max_trace {
             // nearest distinct candidate by value
             let mut best = -1
@@ -1267,10 +1232,10 @@ pub fn p9_meta_dfs(cands: [DiscoveryCandidate], depth: i64) -> [DiscoveryCandida
             if best < 0 { break }
             let pv = cands[best].value
             path_sectors.push(_sector_of_ctype(cands[best].ctype))
-            // H3: n=6 invariance must hold along the path
-            if n6_distance(pv) > n6_eps { n6_ok = false }
-            // fixed point: path returns to a value n=6-equivalent to start
-            if _f64_abs(pv - start_val) < n6_eps && step >= self_depth_min {
+            // H3: attractor resonance must hold along the path
+            if attr_distance(pv, attr) > res_eps { res_ok = false }
+            // fixed point: path returns to a value attractor-equivalent to start
+            if _f64_abs(pv - start_val) < res_eps && step >= self_depth_min {
                 self_at = step
                 break
             }
@@ -1297,8 +1262,8 @@ pub fn p9_meta_dfs(cands: [DiscoveryCandidate], depth: i64) -> [DiscoveryCandida
             si = si + 1
         }
         if distinct < min_sectors { di = di + 1; continue }
-        // H3: n=6 invariance preserved
-        if !n6_ok { di = di + 1; continue }
+        // H3: attractor resonance preserved
+        if !res_ok { di = di + 1; continue }
 
         // closed — meta self-ref fixed point, promote to [10**]
         let mc = DiscoveryCandidate {
