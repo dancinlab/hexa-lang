@@ -42,7 +42,38 @@ env:
     self/native/hexa_cc.c self/forge/forge_tier_v1.c
     test/native_build/classd_behavioral_harness.c
 
+concurrency:
+  # Cancel a SUPERSEDED run only on PR re-push (a newer PR run replaces it and
+  # supplies the fresh required check); push/dispatch runs always complete so
+  # main's required-gate history stays intact. Frees runner minutes + shortens
+  # the PR queue on rapid re-pushes. Byteeq-inert (cancels stale work; never
+  # changes a build's inputs/outputs).
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # ── dispatch — fallback-dispatch runner picker (free · always available) ─────
+  # Probes whether a matching self-hosted runner is ONLINE and emits the heavy
+  # linux job's `runs-on` at runtime: self-hosted pool (aiden/summer · 12c/30G,
+  # far faster) when online + same-repo, else the free GitHub-hosted fallback.
+  # Pool-offline therefore NEVER wedges this gate — it just falls back. Fork PRs
+  # are forced to GitHub-hosted (no self-hosted RCE). See tool/ci_pick_runner.sh.
+  dispatch:
+    name: dispatch (pick runner)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      linux_label: ${{ steps.linux.outputs.label }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: linux
+        uses: ./.github/actions/pick-runner
+        with:
+          kind: linux
+          # self-hosted only for same-repo events; fork PRs → GitHub-hosted.
+          eligible: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
+          token: ${{ github.token }}
+
   # ── faithful-nobaseline — the authoritative seed-removed release-safety gate.
   #
   # These faithful-* jobs model a `.c=0` checkout FAITHFULLY: remove ALL seeds
@@ -76,6 +107,11 @@ jobs:
       # with the 23 seeds REMOVED. There is no separate gate copy of the stage
       # sequence to drift from release; this IS a dynamic seed-removed run of the
       # real release path. gate-green ≡ release-green by shared definition.
+      # Free CI accelerator: ccache the per-TU compiles (byteeq-safe — HEXA_CCACHE
+      # only reroutes the compile through the cache, never the link/emit bytes).
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+
       - name: Build — shared release_build (seeds removed, edge-pull)
         shell: bash
         env:
@@ -83,7 +119,13 @@ jobs:
           CC: clang
           LIBS: ""
           GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
         run: bash tool/release_build
+
+      - name: ccache stats
+        if: always()
+        shell: bash
+        run: ccache -s || true
 
       - name: Assert — ./hexa runs with seeds removed
         shell: bash
@@ -191,14 +233,16 @@ jobs:
 
   faithful-nobaseline-linux-x86_64:
     name: faithful-nobaseline (linux-x86_64)
-    # SELF-HOSTED (aiden/summer · linux-x64 · label hexa-build) — the faithful
-    # seeds-removed build is the heaviest x86_64 leg (~13–19 min on ubuntu);
-    # the shared x86_64 build pool serves it far faster (12c/30G hosts). Public
-    # repo: fork-PR runs require maintainer approval before any self-hosted
-    # runner picks them up (RCE-mitigated). If both runners are offline this
-    # job sits queued — see CLAUDE.md › CI for re-registration. arm64 + darwin
+    needs: dispatch
+    # FALLBACK-DISPATCH (tool/ci_pick_runner.sh via `dispatch` job): runs on the
+    # self-hosted x86_64 pool (aiden/summer · 12c/30G, far faster than the 2-core
+    # GitHub-hosted runner) WHEN a `hexa-build` runner is online + the event is
+    # same-repo; otherwise falls back to the free GitHub-hosted ubuntu-latest.
+    # This is the heaviest x86_64 leg (~13–19 min on cloud). Pool-offline no
+    # longer sits this job pending — it falls back, so the gate never wedges.
+    # Fork PRs are forced to GitHub-hosted (no self-hosted RCE). arm64 + darwin
     # legs stay on their cloud runners (no arm64 self-hosted host).
-    runs-on: [self-hosted, Linux, X64, hexa-build]
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.linux_label) }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -291,6 +335,11 @@ jobs:
 
       # ── SINGLE-JOB-FAITHFUL — same shared release_build + release_package the
       # real release runs, with seeds removed. See darwin job for full rationale.
+      # Free CI accelerator: ccache the per-TU compiles (byteeq-safe — HEXA_CCACHE
+      # only reroutes the compile through the cache, never the link/emit bytes).
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+
       - name: Build — shared release_build (seeds removed, edge-pull)
         shell: bash
         env:
@@ -298,7 +347,13 @@ jobs:
           CC: gcc
           LIBS: "-lm -ldl"
           GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
         run: bash tool/release_build
+
+      - name: ccache stats
+        if: always()
+        shell: bash
+        run: ccache -s || true
 
       - name: Assert — ./hexa runs with seeds removed
         shell: bash
@@ -383,6 +438,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Free CI accelerator: ccache the per-TU compiles (byteeq-safe — HEXA_CCACHE
+      # only reroutes the compile through the cache, never the link/emit bytes).
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+
       # ── (1) Build ./hexa via the SHARED release path (DEFAULT runtime.a =
       #    libc-shim members; HEXA_RT_SELFEMIT unset). This both produces the
       #    ./hexa consumer compiler AND restores the gitignored self/runtime.c
@@ -397,11 +457,17 @@ jobs:
           CC: clang
           LIBS: ""
           GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
         run: |
           set -euo pipefail
           bash tool/release_build
           ./hexa --version
           echo "(1) ./hexa built + seeds restored OK"
+
+      - name: ccache stats
+        if: always()
+        shell: bash
+        run: ccache -s || true
 
       # ── (2) Rebuild build/runtime.a WITH the §M8 SELFEMIT native members.
       #    SELFEMIT is nested INSIDE the HEXA_RT_MULTIOBJ packaging branch — BOTH

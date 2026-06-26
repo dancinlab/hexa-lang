@@ -53,6 +53,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Cancel a SUPERSEDED run only on PR re-push (a newer PR run replaces it and
+  # supplies the fresh required check); push/dispatch runs always complete so
+  # main's required-gate history stays intact. Frees runner minutes + shortens
+  # the PR queue on rapid re-pushes. Byteeq-inert (cancels stale work; never
+  # changes a build's inputs/outputs).
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   selfhost-byteeq-gate:
     name: selfhost byte-eq (re-emit gen3→gen4, darwin-arm64)
@@ -61,6 +70,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Free CI accelerator: ccache the per-TU compiles (byteeq-safe — HEXA_CCACHE
+      # only reroutes the compile through the cache, never the link/emit bytes).
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+
       - name: Build — shared release_build (native ./hexa driver)
         shell: bash
         env:
@@ -68,7 +82,13 @@ jobs:
           CC: clang
           LIBS: ""
           GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
         run: bash tool/release_build
+
+      - name: ccache stats
+        if: always()
+        shell: bash
+        run: ccache -s || true
 
       - name: Sanity — ./hexa runs
         shell: bash

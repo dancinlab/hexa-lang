@@ -940,6 +940,11 @@ pub fn _is_cabi(fname: string) -> bool {
     if fname == "hxlcl_strlen" { return true }
     if fname == "hxlcl_memcpy" { return true }
     if fname == "hxlcl_memset" { return true }
+    // r5 compare family — pure byte-walk leaves (no syscall/float/composite);
+    // each returns a signed byte diff (int) in the single C-ABI result register.
+    if fname == "hxlcl_memcmp" { return true }
+    if fname == "hxlcl_strcmp" { return true }
+    if fname == "hxlcl_strncmp" { return true }
     return false
 }
 
