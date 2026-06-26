@@ -1,0 +1,99 @@
+name: ccache-setup
+description: >-
+  Install ccache (apt/brew, skipped if already present), restore the per-OS
+  ccache directory via actions/cache@v4, and export DETERMINISM-PRESERVING
+  ccache env so the cache NEVER perturbs the emitted/linked bytes. Pair with
+  `HEXA_CCACHE: "1"` on the build step (R7 split compile+link in
+  tool/stage_build_hexa) — see byteeq-safe rationale in that script's header.
+
+# ── BYTEEQ-SAFETY (why ccache cannot move the shipped bytes) ──────────────────
+# ccache is a COMPILE accelerator: `gcc -c x.c -o x.o` cached on (preprocessed
+# source + compiler + flags). tool/stage_build_hexa's R7 path splits each
+# combined compile+link into a cacheable `-c` + a plain link, and the linker is
+# NOT cached — so the produced .o (and thus the linked binary) is byte-identical
+# whether the .o came fresh or from the cache (ccache's same-input => same-output
+# guarantee). The C the transpilers EMIT is a function of the .hexa source, not
+# of the -O level / cache state of the transpiler's own binary, so the emit-sha
+# is invariant too (same argument as the R6 bootstrap-O1 round). The env below
+# removes the only ways ccache could legitimately differ from a clean compile:
+#   CCACHE_NOHASHDIR       — drop the absolute build dir from the hash so a
+#                            checkout at a different path is still a hit, AND so
+#                            __FILE__/debug-path bytes don't leak the runner's
+#                            workspace into the .o (paths here are -g0 release
+#                            -O2 anyway, but this is belt-and-suspenders).
+#   CCACHE_BASEDIR=$PWD    — rewrite absolute paths under the workspace to
+#                            relative before hashing (location-independent hits).
+#   CCACHE_COMPILERCHECK=content — re-hash the actual compiler BYTES (not mtime),
+#                            so a toolchain bump correctly misses instead of
+#                            serving a stale .o.
+#   CCACHE_SLOPPINESS=     — left at the strict default (no time_macros etc.):
+#                            we do NOT want __DATE__/__TIME__ leniency; the build
+#                            uses neither, and strictness keeps determinism.
+
+inputs:
+  key-prefix:
+    description: Cache key namespace (lets a job opt into its own cache lane).
+    required: false
+    default: ccache
+
+runs:
+  using: composite
+  steps:
+    - name: ccache dir + install (skip if present)
+      id: cc
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Per-OS ccache directory (the canonical default location on each OS).
+        case "${RUNNER_OS}" in
+          macOS) CCDIR="${HOME}/Library/Caches/ccache" ;;
+          *)     CCDIR="${HOME}/.ccache" ;;
+        esac
+        mkdir -p "$CCDIR"
+        echo "ccdir=$CCDIR" >> "$GITHUB_OUTPUT"
+
+        if command -v ccache >/dev/null 2>&1; then
+          echo "ccache already present: $(ccache --version | head -1)"
+        else
+          case "${RUNNER_OS}" in
+            macOS)
+              brew install ccache ;;
+            Linux)
+              if command -v apt-get >/dev/null 2>&1; then
+                sudo apt-get update -qq && sudo apt-get install -y -qq ccache
+              else
+                echo "::warning::no apt-get and ccache absent — build runs uncached (HEXA_CCACHE no-op)"
+              fi ;;
+            *)
+              echo "::warning::unknown RUNNER_OS=${RUNNER_OS}; ccache not installed" ;;
+          esac
+        fi
+        command -v ccache >/dev/null 2>&1 && ccache --version | head -1 || true
+
+    - name: Restore ccache
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.cc.outputs.ccdir }}
+        # Cascade: exact source-set match first, then ANY prior cache for this
+        # OS+prefix (restore-keys) so a source edit still warms from the last
+        # build instead of starting cold.
+        key: ${{ inputs.key-prefix }}-${{ runner.os }}-${{ hashFiles('self/**', 'compiler/**', 'stdlib/**') }}
+        restore-keys: |
+          ${{ inputs.key-prefix }}-${{ runner.os }}-
+
+    - name: Export determinism-preserving ccache env
+      shell: bash
+      run: |
+        set -euo pipefail
+        {
+          echo "CCACHE_DIR=${{ steps.cc.outputs.ccdir }}"
+          echo "CCACHE_NOHASHDIR=1"
+          echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}"
+          echo "CCACHE_COMPILERCHECK=content"
+        } >> "$GITHUB_ENV"
+        # Zero the per-run hit/miss counters so the post-build `ccache -s`
+        # reports THIS run's hit-rate (cache size carries over; stats reset).
+        if command -v ccache >/dev/null 2>&1; then
+          ccache --zero-stats >/dev/null 2>&1 || true
+          ccache -s 2>/dev/null | sed 's/^/ccache(pre): /' || true
+        fi

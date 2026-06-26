@@ -25,6 +25,15 @@ on:
       - "rt-native/measure8-r1-arena-default"
   workflow_dispatch:
 
+concurrency:
+  # Cancel a SUPERSEDED run only on PR re-push (a newer PR run replaces it and
+  # supplies the fresh required check); push/dispatch runs always complete so
+  # main's required-gate history stays intact. Frees runner minutes + shortens
+  # the PR queue on rapid re-pushes. Byteeq-inert (cancels stale work; never
+  # changes a build's inputs/outputs).
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   release-build-native-arena:
     name: full release_build on aarch64 with native arm64 arena (HEXA_RT_ALLOC_NATIVE_ARM64=1)
@@ -40,6 +49,11 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y clang gcc binutils gdb python3 || true
           uname -m; cc --version || true
+
+      # Free CI accelerator: ccache the per-TU compiles (byteeq-safe — HEXA_CCACHE
+      # only reroutes the compile through the cache, never the link/emit bytes).
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
 
       # Gate the committed arm64-linux seed = Linux ABI (defence-in-depth: the
       # full build would mis-syscall on a stale XNU seed, so fail fast + loud here).
@@ -72,6 +86,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEXA_SEED_CONVERGE: "1"
           HEXA_RT_ALLOC_NATIVE_ARM64: "1"
+          HEXA_CCACHE: "1"
         run: |
           set -x
           set +e
@@ -92,6 +107,11 @@ jobs:
             exit 1
           fi
           echo "RELEASE-BUILD PASS — ./hexa built on aarch64 with native arm64 arena (no #3597 SIGSEGV)"
+
+      - name: ccache stats
+        if: always()
+        shell: bash
+        run: ccache -s || true
 
       # ./hexa --version (built binary executes — proves link-clean + boots).
       - name: ./hexa --version (built binary boots under native arm64 arena)

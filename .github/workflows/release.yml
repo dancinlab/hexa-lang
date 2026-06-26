@@ -112,6 +112,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Free CI accelerator: ccache the per-TU compiles (byteeq-safe — HEXA_CCACHE
+      # only reroutes the compile through the cache, never the link/emit bytes; the
+      # shipped binary sha is invariant, proven by the determinism+byteeq gates).
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+
       # ── .c=0 SINGLE-JOB-FAITHFUL refactor — the whole 0b→build sequence is now
       # ONE shared entry point (tool/release_build) that the faithful nobaseline
       # gate calls VERBATIM. Caller passes only TARGET/CC/LIBS/GH_TOKEN; every
@@ -142,7 +148,13 @@ jobs:
           # NEXT roll after this merges.
           HEXA_SEED_CONVERGE: "1"
           HEXA_BUILD_VERSION: ${{ needs.setup.outputs.release_tag }}
+          HEXA_CCACHE: "1"
         run: bash tool/release_build
+
+      - name: ccache stats
+        if: always()
+        shell: bash
+        run: ccache -s || true
 
       # ── macOS Developer ID signing (GATED · skips cleanly when secrets
       # absent → release ships ad-hoc and install.sh strips quarantine +
@@ -263,6 +275,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Free CI accelerator: ccache the per-TU compiles (byteeq-safe — HEXA_CCACHE
+      # only reroutes the compile through the cache, never the link/emit bytes).
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+
       # ── .c=0 SINGLE-JOB-FAITHFUL refactor — see darwin-arm64 job. Linux calls
       # release_build then release_package back-to-back (no sign/notarize). Both
       # are the SAME shared entry points the faithful nobaseline gate runs.
@@ -278,7 +295,13 @@ jobs:
           # test-build; the shared release_build + faithful gate stay default-OFF.
           HEXA_SEED_CONVERGE: "1"
           HEXA_BUILD_VERSION: ${{ needs.setup.outputs.release_tag }}
+          HEXA_CCACHE: "1"
         run: bash tool/release_build
+
+      - name: ccache stats
+        if: always()
+        shell: bash
+        run: ccache -s || true
 
       - name: Package — shared release_package (Stage 3 + tarball)
         shell: bash
@@ -324,6 +347,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Free CI accelerator: ccache the per-TU compiles (byteeq-safe — HEXA_CCACHE
+      # only reroutes the compile through the cache, never the link/emit bytes).
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+
       # ── .c=0 SINGLE-JOB-FAITHFUL refactor — see darwin-arm64 job. Linux calls
       # release_build then release_package back-to-back. Same shared entry points
       # the faithful nobaseline gate runs verbatim.
@@ -339,7 +367,13 @@ jobs:
           # test-build; the shared release_build + faithful gate stay default-OFF.
           HEXA_SEED_CONVERGE: "1"
           HEXA_BUILD_VERSION: ${{ needs.setup.outputs.release_tag }}
+          HEXA_CCACHE: "1"
         run: bash tool/release_build
+
+      - name: ccache stats
+        if: always()
+        shell: bash
+        run: ccache -s || true
 
       - name: Package — shared release_package (Stage 3 + tarball)
         shell: bash
@@ -401,6 +435,14 @@ jobs:
           fi
           x86_64-linux-musl-gcc --version | head -1
 
+      # Free CI accelerator: ccache the per-TU compiles (byteeq-safe — HEXA_CCACHE
+      # only reroutes the compile through the cache, never the link/emit bytes).
+      # CCACHE_COMPILERCHECK=content keys on the musl-gcc bytes so cross-compiler.
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+        with:
+          key-prefix: ccache-musl
+
       # Static-musl link from SOURCE runtime — HEXA_PREBUILT_RUNTIME is left UNSET
       # so every stage compiles self/runtime.c (musl-portable via ING #2 patch)
       # rather than a glibc-compiled runtime.a. LIBS carries `-static` so the final
@@ -418,9 +460,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEXA_SEED_CONVERGE: "1"
           HEXA_BUILD_VERSION: ${{ needs.setup.outputs.release_tag }}
+          HEXA_CCACHE: "1"
         run: |
           unset HEXA_PREBUILT_RUNTIME
           bash tool/release_build
+
+      - name: ccache stats
+        if: always()
+        shell: bash
+        run: ccache -s || true
 
       - name: Package — shared release_package (static musl tarball)
         shell: bash
@@ -507,6 +555,13 @@ jobs:
           fi
           aarch64-linux-musl-gcc --version | head -1
 
+      # Free CI accelerator: ccache the per-TU compiles (byteeq-safe — HEXA_CCACHE
+      # only reroutes the compile through the cache, never the link/emit bytes).
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+        with:
+          key-prefix: ccache-musl
+
       # Static-musl link from SOURCE runtime — HEXA_PREBUILT_RUNTIME left UNSET so
       # every stage compiles self/runtime.c (musl-portable via ING #2 patch). LIBS
       # carries `-static` so the final ./hexa + every intermediate links statically.
@@ -522,9 +577,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEXA_SEED_CONVERGE: "1"
           HEXA_BUILD_VERSION: ${{ needs.setup.outputs.release_tag }}
+          HEXA_CCACHE: "1"
         run: |
           unset HEXA_PREBUILT_RUNTIME
           bash tool/release_build
+
+      - name: ccache stats
+        if: always()
+        shell: bash
+        run: ccache -s || true
 
       - name: Package — shared release_package (static musl tarball)
         shell: bash
@@ -674,6 +735,14 @@ jobs:
       # the CPU archive (no device objects) → the Verify step failed → the whole
       # rolling test prerelease had not published (the channel rotted at 2026-05-23). HEXA_PREBUILT_RUNTIME
       # unset → runtime.a(s) built fresh.
+      # Free CI accelerator: ccache the per-TU gcc compiles (byteeq-safe —
+      # HEXA_CCACHE only reroutes the compile through the cache, never the
+      # link/emit bytes; the nvcc device compiles are NOT cached, only the C TUs).
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+        with:
+          key-prefix: ccache-cuda
+
       - name: Build — shared release_build (dual CPU+CUDA runtime.a, no cuBLAS on toolchain)
         shell: bash
         env:
@@ -685,6 +754,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEXA_SEED_CONVERGE: "1"
           HEXA_BUILD_VERSION: ${{ needs.setup.outputs.release_tag }}
+          HEXA_CCACHE: "1"
         run: |
           set -euo pipefail
           # CUDA_HOME → the toolkit the action installed; the consumer-archive
@@ -693,6 +763,11 @@ jobs:
           export CUDA_HOME="${CUDA_PATH:-/usr/local/cuda}"
           unset HEXA_PREBUILT_RUNTIME
           bash tool/release_build
+
+      - name: ccache stats
+        if: always()
+        shell: bash
+        run: ccache -s || true
 
       # NOTE: HEXA_CUDA is intentionally NOT set in the Package step. release_package
       # → stage_precompile_package precompiles the shipped scripts via `./hexa run`
