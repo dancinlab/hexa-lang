@@ -1134,6 +1134,44 @@ build_runtime_a_from_source() {
                 echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT: HEXA_RT_SELFEMIT=1 IGNORED — native-emit family is darwin-arm64-only (host=$(uname -sm)); retaining libc shim members" >&2
             fi
         fi
+        # ── RFC061 §M8 SELFEMIT-STRLEN (LINUX cross-target ELF · HEXA_RT_SELFEMIT_STRLEN, default OFF) ──
+        # Route B′ proof-first extension: the darwin family above is Mach-O-only
+        # (ld64 PAGE21/PAGEOFF12 relocs, `_`-prefixed syms). This branch swaps the
+        # SINGLE pure-leaf `hxlcl_strlen` on LINUX targets by hand-assembling an
+        # ELF64 ET_REL object (test/native_build/emit_hxlcl_strlen_elf_o.hexa,
+        # arch-selected by HEXA_SELFEMIT_ELF_ARCH) — x86_64 (EM_X86_64, 14-byte
+        # System V byte-loop) and arm64-linux (EM_AARCH64, 44 bytes VERBATIM
+        # rt_str_len, same ISA as the darwin seed). strlen is a PURE leaf: no
+        # reloc, no errno, no external callee — so no provider/.o-glue is needed
+        # (the simplest possible cross-target proof). The shim drops its strlen
+        # via the SAME `-DHEXA_RT_SELFEMIT_STRLEN` macro the darwin path uses
+        # (self/runtime_core_hxlcl_shim.c:209 `#ifndef HEXA_RT_SELFEMIT_STRLEN`).
+        # DEFAULT (flag OFF) adds NO -D and NO member → shim.o + archive
+        # byte-identical (release-integrity > self-host: sha f2d507e1 invariant).
+        # The .o bytes are pure DATA (host-independent emit): an x86_64 host can
+        # emit the arm64-linux object too; only link+RUN of the arm64 object needs
+        # an arm64 env (qemu-aarch64). Distinct env gate from the darwin family
+        # (HEXA_RT_SELFEMIT) so the two never interleave on one host.
+        if [ "${HEXA_RT_SELFEMIT_STRLEN:-0}" = "1" ] && [ "$(uname -s)" = "Linux" ]; then
+            local _ses_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
+            if [ -z "$_ses_bin" ]; then
+                echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-STRLEN FATAL: HEXA_RT_SELFEMIT_STRLEN=1 but no hexa/hexat binary found (set HEXA_SELFEMIT_BIN)" >&2; return 1
+            fi
+            local _ses_arch=""
+            case "$(uname -m)" in
+                x86_64|amd64) _ses_arch="x86_64" ;;
+                aarch64|arm64) _ses_arch="arm64" ;;
+                *) echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-STRLEN FATAL: unsupported linux arch '$(uname -m)' (want x86_64|aarch64)" >&2; return 1 ;;
+            esac
+            local _ses_o="build/hxlcl_strlen_native.o"
+            echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-STRLEN: emitting native ELF hxlcl_strlen .o (arch=$_ses_arch) via $_ses_bin (replacing libc-shim member)…"
+            env "HEXA_SELFEMIT_ELF_ARCH=$_ses_arch" "HEXA_HXLCL_STRLEN_O=$_ses_o" "$_ses_bin" "test/native_build/emit_hxlcl_strlen_elf_o.hexa" >"build/_selfemit_strlen_elf.log" 2>&1 \
+                || { echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-STRLEN FATAL: strlen ELF emit failed — see build/_selfemit_strlen_elf.log" >&2; cat "build/_selfemit_strlen_elf.log" >&2; return 1; }
+            [ -f "$_ses_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-STRLEN FATAL: $_ses_o not produced" >&2; return 1; }
+            _mo_shim_def="$_mo_shim_def -DHEXA_RT_SELFEMIT_STRLEN"
+            _mo_hxlcl_members="$_mo_hxlcl_members $_ses_o"
+            echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-STRLEN: hxlcl_strlen → native ELF .o; shim.o built with -DHEXA_RT_SELFEMIT_STRLEN (strlen dropped) — ld -r multidef gate validates"
+        fi
         # (S1) guard the FROZEN `#include "runtime_core.c"` line in the RESTORED
         #      working-copy runtime.c (idempotent; gitignore'd regen — frozen git
         #      blob 151c52c8 NEVER touched). drop-ON then pulls runtime_core_decls.h.
