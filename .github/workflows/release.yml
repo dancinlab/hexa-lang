@@ -68,6 +68,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # NOTE: the heavy linux-x64 release builds are deliberately NOT routed to
+      # the self-hosted pool / fallback-dispatch. They MUST build on ubuntu-22.04
+      # (glibc 2.35 portability floor); the self-hosted pool (aiden/summer) runs
+      # Ubuntu 24.04 / glibc 2.39, which would raise the binary's GLIBC_* floor
+      # and break older pods ("GLIBC_2.38 not found"). Release integrity > CI
+      # speed (CLAUDE.md › 릴리스 무결성) — release builds stay pinned to 22.04.
+
       - id: c
         name: Compute release_tag + is_tag
         shell: bash

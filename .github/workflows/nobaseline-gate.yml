@@ -43,6 +43,28 @@ env:
     test/native_build/classd_behavioral_harness.c
 
 jobs:
+  # ── dispatch — fallback-dispatch runner picker (free · always available) ─────
+  # Probes whether a matching self-hosted runner is ONLINE and emits the heavy
+  # linux job's `runs-on` at runtime: self-hosted pool (aiden/summer · 12c/30G,
+  # far faster) when online + same-repo, else the free GitHub-hosted fallback.
+  # Pool-offline therefore NEVER wedges this gate — it just falls back. Fork PRs
+  # are forced to GitHub-hosted (no self-hosted RCE). See tool/ci_pick_runner.sh.
+  dispatch:
+    name: dispatch (pick runner)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      linux_label: ${{ steps.linux.outputs.label }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: linux
+        uses: ./.github/actions/pick-runner
+        with:
+          kind: linux
+          # self-hosted only for same-repo events; fork PRs → GitHub-hosted.
+          eligible: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '1' || '0' }}
+          token: ${{ github.token }}
+
   # ── faithful-nobaseline — the authoritative seed-removed release-safety gate.
   #
   # These faithful-* jobs model a `.c=0` checkout FAITHFULLY: remove ALL seeds
@@ -191,14 +213,16 @@ jobs:
 
   faithful-nobaseline-linux-x86_64:
     name: faithful-nobaseline (linux-x86_64)
-    # SELF-HOSTED (aiden/summer · linux-x64 · label hexa-build) — the faithful
-    # seeds-removed build is the heaviest x86_64 leg (~13–19 min on ubuntu);
-    # the shared x86_64 build pool serves it far faster (12c/30G hosts). Public
-    # repo: fork-PR runs require maintainer approval before any self-hosted
-    # runner picks them up (RCE-mitigated). If both runners are offline this
-    # job sits queued — see CLAUDE.md › CI for re-registration. arm64 + darwin
+    needs: dispatch
+    # FALLBACK-DISPATCH (tool/ci_pick_runner.sh via `dispatch` job): runs on the
+    # self-hosted x86_64 pool (aiden/summer · 12c/30G, far faster than the 2-core
+    # GitHub-hosted runner) WHEN a `hexa-build` runner is online + the event is
+    # same-repo; otherwise falls back to the free GitHub-hosted ubuntu-latest.
+    # This is the heaviest x86_64 leg (~13–19 min on cloud). Pool-offline no
+    # longer sits this job pending — it falls back, so the gate never wedges.
+    # Fork PRs are forced to GitHub-hosted (no self-hosted RCE). arm64 + darwin
     # legs stay on their cloud runners (no arm64 self-hosted host).
-    runs-on: [self-hosted, Linux, X64, hexa-build]
+    runs-on: ${{ fromJSON(needs.dispatch.outputs.linux_label) }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
