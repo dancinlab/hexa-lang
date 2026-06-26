@@ -67,6 +67,35 @@ HEXAT="$ROOT/build/hexat"
 CC_SRC="$ROOT/self/native/hexa_cc.c"
 mkdir -p build
 
+# ── OPT-IN: ccache the INTERMEDIATE amalgam compile (release-safe, default OFF) ─
+# HEXA_CCACHE=1 SPLITS the big `hexa_cc.c` compile (compile `-c` -> .o, then link)
+# so the object compile is ccache-cacheable. The historical single-step
+# `$CC ... hexa_cc.c runtime.a -o hexat` is a COMBINED compile+link, which ccache
+# treats as UNCACHEABLE (0% cacheable, measured) — so the naive `CC="ccache gcc"`
+# wrapper does nothing here; the split is what makes the cache hit. WHY byteeq-safe:
+# `gcc -c x.c -o x.o` + `gcc x.o lib -o bin` produces the byte-identical binary as
+# the combined command, and ccache's same-input=>same-.o guarantee keeps it so —
+# the transpiler this produces is unchanged, so the C it EMITS is unchanged
+# (emit-sha invariant, same argument as the R6 bootstrap-O1 round). ONLY the
+# intermediate bootstrap transpiler (build/hexat) is split here; the SHIPPED
+# ./hexa + runtime.a are left byte-for-byte on their original combined path. When
+# UNSET, behaviour is byte-for-byte identical to the historical single step.
+# Measured (summer linux-x86_64, HEXA_SEED_CONVERGE=1): the amalgam is compiled 4×
+# (hexat + 2 converge rebuilds + hexa_v2) = ~98s = 36% of build wall; with the
+# split, hexa_v2 reuses the converged seed's object (~25s saved cold) and a warm
+# rebuild hits all 4 (~98s saved).
+_r7_cc_compile_link() { # <incs> <cflags> <src.c> <out> [link inputs...]
+    local incs="$1" cflags="$2" src="$3" out="$4"; shift 4
+    if [ "${HEXA_CCACHE:-0}" = "1" ] && command -v ccache >/dev/null 2>&1; then
+        local obj="${out}.r7cc.o"
+        ccache $CC $cflags $incs -c "$src" -o "$obj"
+        $CC $cflags "$obj" "$@" -o "$out" $LIBS
+        rm -f "$obj"
+    else
+        $CC $cflags $incs "$src" "$@" -o "$out" $LIBS
+    fi
+}
+
 if [ -x "$HEXAT" ]; then
   echo "[stage_prebuild_hexat] build/hexat already present — no-op"
   exit 0
@@ -115,7 +144,7 @@ if [ ! -f "$RA" ]; then
 fi
 
 echo "[stage_prebuild_hexat] building build/hexat from hexa_cc.c + runtime.a"
-$CC $CFLAGS_BOOTSTRAP -I "$ROOT" -I "$ROOT/self" "$CC_SRC" "$RA" -o "$HEXAT" $LIBS
+_r7_cc_compile_link "-I $ROOT -I $ROOT/self" "$CFLAGS_BOOTSTRAP" "$CC_SRC" "$HEXAT" "$RA"
 test -x "$HEXAT"
 echo "[stage_prebuild_hexat] build/hexat = $(wc -c < "$HEXAT") bytes"
 
@@ -166,7 +195,7 @@ if [ "${HEXA_SEED_CONVERGE:-0}" = "1" ]; then
       break
     fi
     cp "$NEW" "$CC_SRC"
-    $CC $CFLAGS_BOOTSTRAP -I "$ROOT" -I "$ROOT/self" "$CC_SRC" "$RA" -o "$HEXAT" $LIBS
+    _r7_cc_compile_link "-I $ROOT -I $ROOT/self" "$CFLAGS_BOOTSTRAP" "$CC_SRC" "$HEXAT" "$RA"
     test -x "$HEXAT"
     i=$((i+1))
     echo "[stage_prebuild_hexat] seed-converge: pass $i — seed=$(wc -c < "$CC_SRC")B hexat=$(wc -c < "$HEXAT")B"
