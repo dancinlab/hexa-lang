@@ -28,7 +28,7 @@ on:
 jobs:
   release-build-native-arena:
     name: full release_build on aarch64 with native arm64 arena (HEXA_RT_ALLOC_NATIVE_ARM64=1)
-    runs-on: ubuntu-24.04-arm
+    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
     timeout-minutes: 50
     steps:
       - uses: actions/checkout@v6

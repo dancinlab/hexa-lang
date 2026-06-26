@@ -55,7 +55,7 @@ jobs:
   # shared definition.
   faithful-nobaseline-darwin-arm64:
     name: faithful-nobaseline (darwin-arm64)
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
@@ -276,7 +276,7 @@ jobs:
 
   faithful-nobaseline-linux-arm64:
     name: faithful-nobaseline (linux-arm64)
-    runs-on: ubuntu-24.04-arm
+    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -378,7 +378,7 @@ jobs:
   # tracked `.c`=0 are untouched.
   selfemit-livelink-smoke-darwin-arm64:
     name: SELFEMIT live-link smoke (darwin-arm64, advisory)
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6

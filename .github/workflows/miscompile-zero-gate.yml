@@ -52,7 +52,7 @@ permissions:
 jobs:
   miscompile-zero-gate:
     name: miscompile-zero (native emit, darwin-arm64)
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6

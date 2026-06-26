@@ -28,7 +28,7 @@ permissions:
 jobs:
   disabled:
     name: atlas consistency (DISABLED — cold-seed removed by user decision)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 1
     steps:
       - name: Explain
