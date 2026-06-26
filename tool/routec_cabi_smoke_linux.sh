@@ -73,10 +73,28 @@ cat > "$TMP/harness.c" <<'CEOF'
 #include <fcntl.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 /* Route-C-emitted symbol under test (raw C-ABI prototype). */
 extern int hxlcl_close(int fd);
+
+/* The emit covers ALL whitelisted Route C symbols (the script emits the whole
+ * hxlcl_core.hexa), so the routec.o carries the composites' undefined-external
+ * inner callees `bl hxlcl_atoll` / `bl hxlcl_malloc`. This Linux harness only
+ * EXERCISES hxlcl_close, but the link still needs those leaves resolved — supply
+ * them here (sole provider, no shim → no multidef), mirroring the darwin harness.
+ * hxlcl_malloc writes the same 16-byte size header the floor does (so a realloc
+ * neg-offset header read would be meaningful), keeping the returned ptr aligned. */
+#define HXLCL_HDR 16
+long long hxlcl_atoll(const char *s) { return s ? atoll(s) : 0; }
+void     *hxlcl_malloc(size_t n) {
+    size_t want = n ? n : 1;
+    unsigned char *base = (unsigned char *)malloc(want + HXLCL_HDR);
+    if (!base) return 0;
+    *(size_t *)base = want;
+    return base + HXLCL_HDR;
+}
 
 static int fails = 0;
 #define CK(cond, msg) do { if (!(cond)) { printf("  FAIL: %s\n", msg); fails++; } } while (0)
