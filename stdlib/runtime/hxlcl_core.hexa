@@ -1,0 +1,47 @@
+// stdlib/runtime/hxlcl_core.hexa — RFC061 §M8 Route C libc-floor C-ABI SSOT.
+//
+// The hexa-source raw-mem body for the libc-floor substrate symbol `hxlcl_strlen`
+// (`size_t hxlcl_strlen(const char*)`), emitted through the compiler's portable
+// `aprime_cc --emit=asm --target=` cross-target path under the Route C C-ABI
+// calling-convention gate (HEXA_CABI_HXLCL=1 · _is_cabi in
+// compiler/codegen/x86_64_linux.hexa + arm64_darwin.hexa).
+//
+// WHY A SEPARATE FILE (not str_core.hexa): str_core's prims are HexaVal-ABI
+// (their C wrappers pass real TAG_STR HexaVals). hxlcl_* are the OPPOSITE layer —
+// raw C-ABI, called with a bare `char*` register throughout the frozen C runtime
+// amalgam (self/runtime_core.c, runtime_core_hxlcl_shim.c). The Route C ingress
+// lands that single arg register as this fn's param PAYLOAD with TAG_INT(0), and
+// the Route C return ships the count back in a SINGLE result register — so the
+// body below is byte-walk-identical to str_core, only the ABI boundary differs.
+//
+// RAW-MEM, un-nested (str_core NESTING finding): every __hx_payload_* /
+// __hx_ptr_* call writes EXACTLY ONE `let` — no nested intrinsic args (a native
+// codegen scratch clobber corrupts the outer op otherwise). Comparison uses the
+// raw-int leaf intrinsics (__hx_payload_ne), NOT plain `==`/`!=` (those lower to
+// HexaVal runtime helpers that misread the raw byte words). __hx_ptr_load8 reads
+// one byte ZERO-EXTENDED into a TAG_INT payload, so the 0x00 NUL compares as 0.
+//
+// BYTE-FAITHFUL to the C body it replaces (runtime_core_hxlcl_shim.c:212):
+//   size_t hxlcl_strlen(const char *s){ if(!s) return 0; size_t n=0;
+//                                       while(s[n]) n++; return n; }
+// (the NULL guard is the caller's responsibility on this PoC path — the frozen
+// runtime never calls hxlcl_strlen with NULL; same precondition the SELFEMIT
+// hand-assembled seeds in test/native_build/emit_hxlcl_strlen_*.hexa carry.)
+//
+// NOT @pure: the body touches external buffer memory through __hx_ptr_load8.
+
+// hxlcl_strlen: count bytes up to (not including) the NUL terminator. Under the
+// Route C C-ABI gate the param arrives raw in rdi/x0 and the return ships the
+// count raw in rax/x0; under the default (PAIR-MODEL, gate OFF) it compiles as an
+// ordinary HexaVal fn (byteeq-neutral — never linked into the runtime in that
+// mode).
+pub fn hxlcl_strlen(s: HexaVal) -> int {
+    let p = __hx_payload_add(s, 0)            // char* (payload word)
+    let mut n = 0
+    let mut c = __hx_ptr_load8(p, 0)          // s[0]
+    while __hx_payload_ne(c, 0) {
+        n = __hx_payload_add(n, 1)
+        c = __hx_ptr_load8(p, n)              // s[n]
+    }
+    return n
+}
