@@ -1442,6 +1442,13 @@
         "value": "pool-build을 background agent로 돌리면 agent가 서버측 rate-limit(또는 호스트 재부팅)으로 죽어도 빌드는 호스트서 완료되는데, agent가 결과를 수확/verdict작성 못해 결과가 /tmp에 unharvested로 방치(R5 seed-converge=10시간 방치·R6 gcc-O1=2회 strand+재부팅 wipe). 메인세션이 의심하고 호스트 ground-truth(cat /tmp/*RESULT*)로 직접 수확해야 발견됨.",
         "threshold": "재발조건=heavy pool 빌드+검증을 agent로 위임 시 매번. 해결=빌드 스크립트가 self-harvest(결과를 host:/tmp/<job>_RESULT.txt에 직접 기록)하게 만들어 agent 생존에 무관하게 결과 보존+메인세션 cat 수확. 호스트 재부팅 시 /tmp wiped 가능→코드는 branch에 보존+verify 재실행. 죽은/타임아웃 호스트 재두드림 금지(poll-min-30m).",
         "source": "tool/stage_build_hexa"
+      },
+      {
+        "id": "CODEGEN-BOXED-SCALAR-SLOWPATH",
+        "state": "in_flight",
+        "value": "hexa native-emit(aprime_cc --emit=obj)의 일반 동적타입 scalar/array 경로가 gcc-O2 대비 measured 2.9~23× 느림(geomean 8.6×·aiden·reference-match·state/codegen-quality-probe-verdict.md). 커널별 ratio: k1_sum(scalar reduce) 2.86× · k5_fncall 4.41× · k2_collatz(branchy int) 12.53× · k4_branch(modulo) 12.73× · k3_arrmap(배열 map) 23.23×(최대). 어셈 root-cause=박싱 HexaVal 태그-디스패치 모델: scalar op마다 런타임 함수호출(hexa_add_slow/hexa_mul/hexa_mod, 타입태그 스택슬롯)·레지스터할당無·unboxed i64無·strength-reduction無. k3=원소당 7call(hexa_index_get/set bounds-check+box) vs gcc 0call(register pointer-walk+lea+magic-multiply). HEXA_INLINE_INT_BOX=1도 unbox 안됨(5-7 call/iter 잔존). 손튜닝 farr/GEMM은 별도 unboxed 경로=BLIS/cuBLAS parity(일반 유저코드는 거기로 안 내려감).",
+        "threshold": "돌파레버=static-type-inference 기반 int/float scalar unboxing + native-array element access(farr unboxed 기계를 일반 scalar loop로 확장). 진행=codegen-unbox-breakthrough workflow(Map→Design→Plan→state/codegen-unboxing-campaign-plan.md)→최소프로토타입 opt-in HEXA_UNBOX_* default-OFF→런타임 ratio측정+byteeq3타깃 gen3≡gen4+출하smoke→pr-cycle. ⚠️고위험 substrate(codegen)·릴리스무결성 최상위·multi-session·OFF경로 byte-identical 필수. 종착=커널 ratio≈1(parity 도달) 또는 measured 천장.",
+        "source": "self/codegen.hexa"
       }
     ]
   }
