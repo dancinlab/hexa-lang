@@ -1064,6 +1064,11 @@ pub fn _is_cabi(fname: string) -> bool {
     // single-register C-ABI and binds cross-object to the retained shim atoll.
     if fname == "hxlcl_atoi" { return true }
     if fname == "hxlcl_atoll" { return true }
+    // r8 composite — hxlcl_strdup is a NON-LEAF: inline strlen+copy byte loops
+    // plus one inner C-ABI call `bl hxlcl_malloc`. Whitelisting both binds the
+    // inner alloc call C-ABI (size→rdi/x0, ptr←rax/x0) to the retained shim malloc.
+    if fname == "hxlcl_strdup" { return true }
+    if fname == "hxlcl_malloc" { return true }
     return false
 }
 

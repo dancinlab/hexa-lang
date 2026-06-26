@@ -316,3 +316,49 @@ extern fn hxlcl_atoll(s: HexaVal) -> int
 pub fn hxlcl_atoi(s: HexaVal) -> int {
     return hxlcl_atoll(s)
 }
+
+// ── COMPOSITE FAMILY r8 (strdup → inner C-ABI bl hxlcl_malloc + byte loops) ──
+//
+// strdup is the r8 composite: a NON-LEAF that mixes inline byte loops (strlen
+// scan + copy) with ONE inner C-ABI call `bl hxlcl_malloc`. Same dissolve as
+// atoi — whitelisting BOTH hxlcl_strdup AND its inner callee hxlcl_malloc makes
+// the inner `bl` lower single-register C-ABI (size → rdi/x0, raw ptr ← rax/x0)
+// and bind cross-object. hxlcl_malloc stays the RETAINED C shim
+// (runtime_core_hxlcl_shim.c:101 — `void *hxlcl_malloc(size_t)` = malloc delegate;
+// NOT self-emitted this round), declared as an `extern fn` (undefined-external,
+// resolved at link) mirroring the SELFEMIT seed
+// test/native_build/emit_hxlcl_strdup_o.hexa (112 B: frame + strlen loop +
+// `bl _hxlcl_malloc` BRANCH26 @0x30 + copy loop + NULL/return epilogue).
+
+// hxlcl_malloc: raw-C-ABI allocator — RETAINED C shim (not self-emitted this
+// round). Declared so hxlcl_strdup's inner call binds C-ABI at link.
+extern fn hxlcl_malloc(n: HexaVal) -> int
+
+// hxlcl_strdup: duplicate NUL-terminated `s` into a fresh malloc'd buffer,
+// return it. BYTE-FAITHFUL to runtime_core_hxlcl_shim.c:333 (hxlcl_strdup):
+//   n=0; while(s[n]) n++; out=hxlcl_malloc(n+1); for(i<n) out[i]=s[i];
+//   out[n]='\0'; return out.
+// (the NULL guard is the caller's responsibility on this PoC path — the frozen
+// runtime never calls strdup with NULL, same precondition as the SELFEMIT seed.)
+// Under the Route C gate the param arrives raw in rdi/x0; the inner
+// `bl hxlcl_malloc` is C-ABI (size → rdi/x0, ptr ← rax/x0); the return ships the
+// out pointer raw. Default (gate OFF) compiles as a HexaVal fn (byteeq-neutral).
+pub fn hxlcl_strdup(s: HexaVal) -> int {
+    let ps = __hx_payload_add(s, 0)           // src char* (payload word)
+    let mut n = 0
+    let mut c = __hx_ptr_load8(ps, 0)         // s[0]
+    while __hx_payload_ne(c, 0) {
+        n = __hx_payload_add(n, 1)
+        c = __hx_ptr_load8(ps, n)             // s[n]
+    }
+    let cap = __hx_payload_add(n, 1)          // n + 1 (incl. terminator)
+    let out = hxlcl_malloc(cap)               // C-ABI bl → raw ptr
+    let mut i = 0
+    while __hx_payload_lt(i, n) {
+        let b = __hx_ptr_load8(ps, i)         // s[i]
+        __hx_ptr_store8(out, i, b)            // out[i] = s[i]
+        i = __hx_payload_add(i, 1)
+    }
+    __hx_ptr_store8(out, n, 0)                // out[n] = '\0'
+    return out
+}
