@@ -687,13 +687,61 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
 
 use "compiler/_cli_args/parse"
 
+// Serialize one DrillResult to the canonical single-line JSON summary.
+fn _drill_json(seed: string, r: DrillResult) -> string {
+    let mut out = "{"
+    out = out + "\"seed\":\"" + seed + "\""
+    out = out + ",\"rounds\":" + to_string(r.rounds)
+    out = out + ",\"total\":" + to_string(r.total)
+    out = out + ",\"saturated\":" + (if r.saturated { "true" } else { "false" })
+    out = out + ",\"engine\":\"" + r.engine + "\""
+    out = out + ",\"overlay_lines\":" + to_string(r.overlay_lines)
+    out = out + ",\"verifier_stopped\":" + (if r.verifier_stopped { "true" } else { "false" })
+    out = out + ",\"verifier_verdict\":\"" + r.verifier_verdict + "\""
+    out = out + "}"
+    return out
+}
+
+// Parse a comma-separated seed list — inline twin of
+// batch.hexa::parse_seeds_csv (inlined here to avoid a drill<->batch
+// circular `use`, since batch.hexa already `use`s this module). Trims
+// each entry, drops empties.
+fn _drill_parse_seeds_csv(csv: string) -> array {
+    let raw = csv.split(",")
+    let mut out: array = []
+    let mut i = 0
+    while i < len(raw) {
+        let t = to_string(raw[i]).trim()
+        if len(t) > 0 { out.push(t) }
+        i = i + 1
+    }
+    return out
+}
+
+// Read a newline-delimited seeds file; blank lines and `#` comments are
+// ignored (mirrors batch.hexa::read_seeds_file).
+fn _drill_read_seeds_file(path: string) -> array {
+    let mut out: array = []
+    if !file_exists(path) {
+        eprintln("drill: --seeds-file not found: " + path)
+        return out
+    }
+    let raw = read_file(path)
+    if len(raw) == 0 { return out }
+    let lines = raw.split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        let t = to_string(lines[i]).trim()
+        if len(t) == 0 { i = i + 1; continue }
+        if t.substring(0, 1) == "#" { i = i + 1; continue }
+        out.push(t)
+        i = i + 1
+    }
+    return out
+}
+
 fn main() {
     let args = cli_args()
-    let seed = cli_find_flag(args, "--seed", cli_positional(args, 0, ""))
-    if len(seed) == 0 {
-        println("usage: hexa drill --seed \"<expr>\" [--rounds N] [--engine mk9|mk10] [--top N]")
-        return
-    }
     let mut opts = drill_default_opts()
     opts.max_rounds  = cli_parse_int(cli_find_flag(args, "--rounds", ""), opts.max_rounds)
     opts.depth_smash = cli_parse_int(cli_find_flag(args, "--depth-smash", ""), opts.depth_smash)
@@ -730,16 +778,44 @@ fn main() {
     opts.verifier_cand_cap = cli_parse_int(cli_find_flag(args, "--verifier-cand-cap", ""), opts.verifier_cand_cap)
     if cli_has_flag(args, "--verifier-strict") { opts.verifier_authoritative = true }
 
+    // ── Batch mode (`--seeds csv` / `--seeds-file PATH`) ───────────────
+    // The CLI help (self/main.hexa) advertises `hexa drill --seeds
+    // "s1,s2,s3"` (batch dispatch), but this entry point previously only
+    // read `--seed` — the batch loop lived solely in batch.hexa and was
+    // never reachable from `hexa drill`. Wire it: dispatch each seed
+    // through drill_run (same engine, same opts) and emit one JSON
+    // summary line per seed + a final `{"batch":true,...}` aggregate.
+    // `--seeds-file` wins over `--seeds` when both are given.
+    let seeds_file = cli_find_flag(args, "--seeds-file", "")
+    let seeds_csv  = cli_find_flag(args, "--seeds", "")
+    if len(seeds_file) > 0 || len(seeds_csv) > 0 {
+        let mut seeds: array = []
+        if len(seeds_file) > 0 { seeds = _drill_read_seeds_file(seeds_file) }
+        else { seeds = _drill_parse_seeds_csv(seeds_csv) }
+        let n = len(seeds)
+        if n == 0 {
+            println("usage: hexa drill --seeds \"s1,s2,s3\" | --seeds-file PATH   (no seeds parsed)")
+            return
+        }
+        let mut grand: i64 = 0
+        let mut bi = 0
+        while bi < n {
+            let s = to_string(seeds[bi])
+            let br = drill_run(s, opts)
+            println(_drill_json(s, br))
+            grand = grand + br.total
+            bi = bi + 1
+        }
+        println("{\"batch\":true,\"seed_count\":" + to_string(n) + ",\"grand_total\":" + to_string(grand) + "}")
+        return
+    }
+
+    // ── Single-seed mode ───────────────────────────────────────────────
+    let seed = cli_find_flag(args, "--seed", cli_positional(args, 0, ""))
+    if len(seed) == 0 {
+        println("usage: hexa drill --seed \"<expr>\" [--rounds N] [--engine mk9|mk10] [--top N]")
+        return
+    }
     let r = drill_run(seed, opts)
-    let mut out = "{"
-    out = out + "\"seed\":\"" + seed + "\""
-    out = out + ",\"rounds\":" + to_string(r.rounds)
-    out = out + ",\"total\":" + to_string(r.total)
-    out = out + ",\"saturated\":" + (if r.saturated { "true" } else { "false" })
-    out = out + ",\"engine\":\"" + r.engine + "\""
-    out = out + ",\"overlay_lines\":" + to_string(r.overlay_lines)
-    out = out + ",\"verifier_stopped\":" + (if r.verifier_stopped { "true" } else { "false" })
-    out = out + ",\"verifier_verdict\":\"" + r.verifier_verdict + "\""
-    out = out + "}"
-    println(out)
+    println(_drill_json(seed, r))
 }
