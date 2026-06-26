@@ -330,7 +330,7 @@ fn _fn_index(name: string) -> i64 {
 // indices via an out-array [a,b,c,d] when the whole expr is exactly four
 // recognised basis fns joined by two products and one `=`, else [].
 // Deterministic, ASCII/structure-driven (no float parse).
-pub fn _parse_identity(expr: string) -> [i64] {
+fn _parse_identity(expr: string) -> [i64] {
     let mut e = expr
     e = e.replace("·", "*")
     e = e.replace(" ", "")
@@ -374,7 +374,7 @@ fn _fn_name(idx: i64) -> string {
 // then the two sides sorted) so commutative restatements collapse to one
 // canonical key — this is what the absorb pool dedups on and what the
 // known/novel cross-check compares.
-pub fn _canon_identity(a: i64, b: i64, c: i64, d: i64) -> string {
+fn _canon_identity(a: i64, b: i64, c: i64, d: i64) -> string {
     // sort factors within each side
     let mut l0 = a
     let mut l1 = b
@@ -400,7 +400,7 @@ pub fn _canon_identity(a: i64, b: i64, c: i64, d: i64) -> string {
 // _canon_identity). A verified candidate matching one of these is labelled
 // `known`; anything else is `novel` (surfaced honestly, NEVER auto-folded —
 // fold stays the `hexa verify` g5 / PR path). We compare on the canonical key.
-pub fn _is_known_identity(canon: string) -> bool {
+fn _is_known_identity(canon: string) -> bool {
     // G1 phi*J2 = n*psi   (3,8 = 5,9)
     if canon == _canon_identity(3, 8, 5, 9) { return true }
     // G2 phi*J2 = sopfr*psi  (3,8 = 6,9)
@@ -424,7 +424,7 @@ pub struct AbsorbSweep {
     n_novel: i64
 }
 
-pub fn _native_identity_sweep_absorb(round: i64, cands: array) -> AbsorbSweep {
+fn _native_identity_sweep_absorb(round: i64, cands: array) -> AbsorbSweep {
     let N = 20000
     let n = len(cands)
     let mut n_identity = 0
@@ -590,7 +590,7 @@ pub struct AbsorbMerge {
     net_absorbed: i64
 }
 
-pub fn _absorb_merge(pool: array, verified_exprs: array) -> AbsorbMerge {
+fn _absorb_merge(pool: array, verified_exprs: array) -> AbsorbMerge {
     let mut out = pool
     let mut net = 0
     let mut i = 0
