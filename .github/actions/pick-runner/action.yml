@@ -1,10 +1,10 @@
 name: pick-runner
 description: >-
-  Fallback-dispatch runner picker — emits a `label` output that is the
-  self-hosted pool label-array when a matching runner is ONLINE (and the event
-  is same-repo / not a fork PR), else the free GitHub-hosted fallback. Consume
-  downstream via `runs-on: ${{ fromJSON(needs.dispatch.outputs.<x>) }}`.
-  Pool-offline never wedges a (possibly required) gate — it just falls back.
+  Fallback-dispatch runner picker — emits a label output that is the self-hosted
+  pool label-array when a matching runner is ONLINE (and the event is same-repo /
+  not a fork PR), else the free GitHub-hosted fallback. Consume downstream by
+  passing the output through fromJSON into a job runs-on. Pool-offline never
+  wedges a (possibly required) gate — it just falls back.
 
 inputs:
   kind:
@@ -12,12 +12,9 @@ inputs:
     required: true
   eligible:
     description: >-
-      '1' if self-hosted is allowed for this event (same-repo push / dispatch /
-      non-fork PR), '0' to force the GitHub-hosted fallback (fork-PR RCE guard).
-      Callers typically pass:
-        ${{ (github.event_name != 'pull_request' ||
-             github.event.pull_request.head.repo.full_name == github.repository)
-            && '1' || '0' }}
+      "1" if self-hosted is allowed for this event (same-repo push / dispatch /
+      non-fork PR), "0" to force the GitHub-hosted fallback (fork-PR RCE guard).
+      Callers pass the same-repo guard expression evaluating to "1" or "0".
     required: true
   token:
     description: 'GitHub token for the runners API probe (github.token is enough)'
