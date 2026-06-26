@@ -58,6 +58,36 @@ if [ "${HEXA_BOOTSTRAP_O1:-0}" = "1" ]; then
     echo "stage_build_hexa: HEXA_BOOTSTRAP_O1=1 — intermediate transpilers (hexa_v2, module_loader) at -O1 [$CFLAGS_BOOTSTRAP]; final $OUT_HEXA stays -O2 [$CFLAGS]"
 fi
 
+# ── OPT-IN: ccache the per-TU compiles (release-safe, default OFF) ─────────────
+# HEXA_CCACHE=1 SPLITS each combined compile+link in this stage into a
+# ccache-cacheable `-c` compile + a plain link: the intermediate transpilers
+# (hexa_v2 from the hexa_cc.c amalgam, hexa_module_loader from module_loader.c)
+# AND the SHIPPED CLI driver ($OUT_HEXA from the emitted build/stage1/main.c).
+# A combined compile+link is UNCACHEABLE by ccache (measured 0% cacheable), so
+# the naive `CC="ccache gcc"` never hits — the split is what enables the cache.
+# The final main.c (the biggest emitted compile, ~19s of the build) is the main
+# warm-rebuild lever, so it IS split here too (PHASE-2 measures the final ./hexa
+# binary sha OFF==ON-cold==ON-warm to PROVE the shipped binary is byte-identical,
+# not just the emit-sha of the C). byteeq-safe: `gcc -c x.c -o x.o` + `gcc x.o
+# lib -o bin` produces the byte-identical binary as the combined `gcc x.c lib -o
+# bin`, and ccache's same-input=>same-.o guarantee keeps each produced binary
+# byte-identical (so the C the transpilers EMIT is unchanged too — emit-sha
+# invariant, same argument as the R6 bootstrap-O1 round). The final $OUT_HEXA
+# keeps its -O2 $CFLAGS (only the compile is rerouted through the cache; the -O
+# level is unchanged). UNSET => byte-for-byte the historical single-step
+# compile+link on every site.
+_r7_cc_compile_link() { # <incs> <cflags> <src.c> <out> [link inputs...]
+    local incs="$1" cflags="$2" src="$3" out="$4"; shift 4
+    if [ "${HEXA_CCACHE:-0}" = "1" ] && command -v ccache >/dev/null 2>&1; then
+        local obj="${out}.r7cc.o"
+        ccache $CC $cflags $incs -c "$src" -o "$obj"
+        $CC $cflags "$obj" "$@" -o "$out" $LIBS
+        rm -f "$obj"
+    else
+        $CC $cflags $incs "$src" "$@" -o "$out" $LIBS
+    fi
+}
+
 mkdir -p self/native build/stage1
 
 # Resolve the runtime link argument once: prebuilt archive (seam) or source.
@@ -165,7 +195,7 @@ PYFLAT
     echo "::endgroup::"
 else
     echo "::group::Stage 0 — compile self-hosted transpiler (hexa_v2)"
-    $CC $CFLAGS_BOOTSTRAP -I self self/native/hexa_cc.c "$RT_ARG" -o build/hexa_v2 $LIBS
+    _r7_cc_compile_link "-I self" "$CFLAGS_BOOTSTRAP" self/native/hexa_cc.c build/hexa_v2 "$RT_ARG"
     file build/hexa_v2
     echo "::endgroup::"
 fi
@@ -173,7 +203,7 @@ fi
 echo "::group::Stage 1 — flatten + transpile self/main.hexa -> build/stage1/main.c"
 export HEXA_LANG="$ROOT"
 ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
-$CC $CFLAGS_BOOTSTRAP -I self build/stage1/module_loader.c "$RT_ARG" -o build/hexa_module_loader $LIBS
+_r7_cc_compile_link "-I self" "$CFLAGS_BOOTSTRAP" build/stage1/module_loader.c build/hexa_module_loader "$RT_ARG"
 export HEXA_MODULE_LOADER="$ROOT/build/hexa_module_loader"
 ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
 # Transpiling the large flattened main_expanded.hexa (~11k lines) drives deep
@@ -187,6 +217,6 @@ export HEXA_MODULE_LOADER="$ROOT/build/hexa_module_loader"
 echo "::endgroup::"
 
 echo "::group::Stage 2 — compile CLI driver ($OUT_HEXA)"
-$CC $CFLAGS -I self build/stage1/main.c "$RT_ARG" -o "$OUT_HEXA" $LIBS
+_r7_cc_compile_link "-I self" "$CFLAGS" build/stage1/main.c "$OUT_HEXA" "$RT_ARG"
 file "$OUT_HEXA"
 echo "::endgroup::"
