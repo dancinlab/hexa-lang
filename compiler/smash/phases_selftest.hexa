@@ -178,6 +178,74 @@ fn _f64_eqish(x: f64, y: f64) -> bool {
     return d < 0.000001
 }
 
+// [B] proof: p_identity_candidates emits VALID identity grammar `A*B = C*D`
+// over the 12-fn basis names the verifier recognises, AND always includes the
+// classical backbone (so the downstream native verifier rediscovers verified>0
+// regardless of seed). We re-validate the grammar shape here (the selftest does
+// not import drill.hexa) by structural inspection: each expr splits on "=" into
+// two sides, each side splits on "*" into two recognised basis names.
+fn _is_basis_name(s: string) -> bool {
+    let t = s.trim()
+    if t == "sigma" { return true }
+    if t == "sigma2" { return true }
+    if t == "sigma3" { return true }
+    if t == "phi" { return true }
+    if t == "tau" { return true }
+    if t == "n" { return true }
+    if t == "sopfr" { return true }
+    if t == "rad" { return true }
+    if t == "J2" { return true }
+    if t == "psi" { return true }
+    if t == "Omega" { return true }
+    if t == "omega" { return true }
+    return false
+}
+
+fn _is_identity_grammar(expr: string) -> bool {
+    let sides = expr.split("=")
+    if len(sides) != 2 { return false }
+    let lhs = to_string(sides[0]).split("*")
+    let rhs = to_string(sides[1]).split("*")
+    if len(lhs) != 2 || len(rhs) != 2 { return false }
+    if !_is_basis_name(to_string(lhs[0])) { return false }
+    if !_is_basis_name(to_string(lhs[1])) { return false }
+    if !_is_basis_name(to_string(rhs[0])) { return false }
+    if !_is_basis_name(to_string(rhs[1])) { return false }
+    return true
+}
+
+fn _expr_eq_norm(expr: string, want: string) -> bool {
+    let mut a = expr
+    a = a.replace(" ", "")
+    let mut b = want
+    b = b.replace(" ", "")
+    return a == b
+}
+
+fn _identity_gen_ok() -> bool {
+    let cands = p_identity_candidates("rhythm and harmony in jazz", 24)
+    if len(cands) < 4 { return false }
+    // every emitted candidate must be valid identity grammar
+    let mut i = 0
+    while i < len(cands) {
+        if !_is_identity_grammar(cands[i].expr) { return false }
+        i = i + 1
+    }
+    // the three classical-backbone identities must be present (always-emit)
+    let mut has_g1 = false
+    let mut has_g2 = false
+    let mut has_g3 = false
+    i = 0
+    while i < len(cands) {
+        let e = cands[i].expr
+        if _expr_eq_norm(e, "phi*J2=n*psi") { has_g1 = true }
+        if _expr_eq_norm(e, "phi*J2=sopfr*psi") { has_g2 = true }
+        if _expr_eq_norm(e, "sigma*psi=sigma2*phi") { has_g3 = true }
+        i = i + 1
+    }
+    return has_g1 && has_g2 && has_g3
+}
+
 fn main() {
     let mut fails = 0
     fails = fails + _run_seed("rhythm and harmony in jazz", 3)
@@ -196,6 +264,13 @@ fn main() {
         println("  [FAIL] free-search: two seeds did not project to distinct non-n6 lattices")
     } else {
         println("[free] two distinct seeds -> distinct, non-n6 attractor signatures")
+    }
+
+    if !_identity_gen_ok() {
+        fails = fails + 1
+        println("  [FAIL] [B] p_identity_candidates: invalid grammar or missing classical backbone")
+    } else {
+        println("[B] identity-grammar generator -> all candidates valid A*B=C*D + classical backbone present")
     }
 
     if fails == 0 {

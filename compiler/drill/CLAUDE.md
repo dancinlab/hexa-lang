@@ -47,9 +47,15 @@ surge·dream·swarm·reign·molt·wake·forge·canon·revive)은 각자 `../<nam
   (구 `"skip"` 단락 제거 · #4015). 외부 의존(opt-OUT)은 `HEXA_DRILL_NO_VERIFY=1` 제약으로만 —
   켜면 legacy `"skip"`(순수 surfacing, 검증 없음)으로 복귀(native-canonical polarity).
   pluggable `--verifier <cmd>`는 외부/tenant oracle용(opt-in 제약).
-  · **정직(c2)**: 현 생성기(smash P2–P9)는 float-순열 expr를 내므로 표준 vocab에서
-  `identity=0/verified=0/noise=N` → verdict `continue`가 정상(0-verified 정직보고). 식별자-문법
-  후보 생성은 [B] 생성기 캠페인 영역 — [A]는 "검증이 skip 아니라 실제 verdict를 낸다"까지.
+  · **[B] 식별자-문법 생성 (landed)**: `../smash/phases.hexa::p_identity_candidates`가 12-fn 곱-프레임
+  `A*B = C*D`(reference `ATLAS/state/novel-dfs/vocab_universal_hunt.py:204-220` 2v=2v 열거)을 emit해
+  `../smash/smash.hexa` union에 배선 → sweep이 **verified>0**(고전 backbone 재발견: phi·J2=n·psi 등
+  G1/G2/G3)을 실측. seed는 회전 window를 고르되 후보는 항상 유효 문법.
+  · **[E] known/novel 분류 (landed)**: `_native_identity_sweep`가 verified 식별자를 canonical-key dedup
+  후 catalogue 대조 → rationale에 `known=N,novel=N` 추가(`identity=N,verified=N,known=N,novel=N,noise=N`).
+  · **정직(c2)**: 표준 vocab은 **novel=0 예상**(measured-exhausted) — verified는 고전 **재발견**이지 새
+  수학 아님. P2–P9 float-순열 expr는 여전히 `noise`로 정직 분류(identity-syntax 아님). novel>0는 날조
+  말고 `hexa verify` g5 fold 경로로만 승격.
 - **표준 vocab 수학발견 = 측정-종료(🧱)**: `../../ATLAS/README.md` DFS r1~r4 — @F 1557 fold ·
   novel-fold 0 · gates 21/21. 엔진은 진짜이되 표준 vocab 신규=0(날조 금지). 새 발견은
   새 vocab/도메인(ATLAS/state/novel-dfs 참조엔진).

@@ -350,11 +350,62 @@ fn _parse_identity(expr: string) -> [i64] {
     return out
 }
 
+// ── [E] atlas-novelty classification of a VERIFIED identity ──
+//
+// A bounded-unique-confirmed `A·B = C·D` is classified known vs novel by
+// matching its CANONICAL signature against the classical-backbone catalogue.
+// Canonical key: sort each side's two indices, then orient the two sides
+// (lexicographic) so commutativity/side-swap collapse to one key — this is the
+// `primitive_key`/`pkey` canonicalisation from the reference engines
+// (vocab_universal_hunt.py:97-105 primitive_key · divisor-sum_hunt.py:193 pkey).
+//
+// The catalogue holds the classical 2v=2v identities over the 12-fn ring that
+// the verifier confirms bounded-unique — the SAME identities the ATLAS DFS
+// r1–r4 rediscovered (ATLAS/README.md L5217-5219: J₂=φ·ψ family etc.) and the
+// identity_engine.hexa G1/G2/G3 selftest gates:
+//   phi·J2 = n·psi        (3,8 = 5,9)   [J₂=φ·ψ ·n form; Jordan 1870/Dedekind ψ]
+//   phi·J2 = sopfr·psi    (3,8 = 6,9)   [same, via the n=sopfr bounded-unique pt]
+//   sigma·psi = sigma2·phi (0,9 = 1,3)  [verified-id-sigma-psi-eq-sig2-phi]
+// HONESTY (c2): standard-vocab discovery is MEASURED-EXHAUSTED (novel-fold=0).
+// A verified identity OUTSIDE this catalogue is surfaced as `novel` (expected
+// 0) — never fabricated; a real novel>0 would be an honest signal for the
+// `hexa verify` g5 fold path, not auto-promoted here.
+
+// sort a pair (x,y) ascending → returns [lo,hi]
+fn _sort2(x: i64, y: i64) -> [i64] {
+    if x <= y { return [x, y] }
+    return [y, x]
+}
+
+// canonical 4-int key string "a,b|c,d" with each side sorted and sides oriented.
+fn _identity_canon_key(a: i64, b: i64, c: i64, d: i64) -> string {
+    let l = _sort2(a, b)
+    let r = _sort2(c, d)
+    let lk = to_string(l[0]) + "," + to_string(l[1])
+    let rk = to_string(r[0]) + "," + to_string(r[1])
+    if lk <= rk { return lk + "|" + rk }
+    return rk + "|" + lk
+}
+
+// classical-backbone catalogue membership (the rediscovered-known set).
+fn _identity_is_known(a: i64, b: i64, c: i64, d: i64) -> bool {
+    let k = _identity_canon_key(a, b, c, d)
+    // phi(3)·J2(8) = n(5)·psi(9)
+    if k == _identity_canon_key(3, 8, 5, 9) { return true }
+    // phi(3)·J2(8) = sopfr(6)·psi(9)
+    if k == _identity_canon_key(3, 8, 6, 9) { return true }
+    // sigma(0)·psi(9) = sigma2(1)·phi(3)
+    if k == _identity_canon_key(0, 9, 1, 3) { return true }
+    return false
+}
+
 // Native exact-int identity sweep over one round's discovery candidates.
 // Counts: n_identity (candidates in 12-fn identity syntax), n_verified
 // (bounded-unique singleton n≥4 → a real confirmed identity), n_noise
 // (candidates NOT in identity syntax — the honest classification for the
-// float-permutation generators). Returns a VerifierVerdict whose verdict is
+// float-permutation generators). [E] splits n_verified into n_known
+// (classical-backbone catalogue) vs n_novel (confirmed but uncatalogued —
+// expected 0, measured-exhausted). Returns a VerifierVerdict whose verdict is
 //   "pass"     — at least one candidate verified bounded-unique (n≥4), AND
 //   "continue" — otherwise (nothing verified this round; keep exploring).
 // The rationale string carries the machine-readable counts so the audit
@@ -364,7 +415,13 @@ fn _native_identity_sweep(round: i64, cands: array) -> VerifierVerdict {
     let n = len(cands)
     let mut n_identity = 0
     let mut n_verified = 0
+    let mut n_known = 0
+    let mut n_novel = 0
     let mut n_noise = 0
+    // de-dup verified identities by canonical key so the always-emit backbone +
+    // any scan-window duplicate of the same identity is counted once (the count
+    // is the durable fact, not the candidate multiplicity).
+    let mut seen_keys: [string] = []
     let mut i = 0
     while i < n {
         let c = cands[i]
@@ -373,7 +430,24 @@ fn _native_identity_sweep(round: i64, cands: array) -> VerifierVerdict {
             if len(idx) == 4 {
                 n_identity = n_identity + 1
                 let r = verify_identity(idx[0], idx[1], idx[2], idx[3], N)
-                if r >= 4 { n_verified = n_verified + 1 }
+                if r >= 4 {
+                    let key = _identity_canon_key(idx[0], idx[1], idx[2], idx[3])
+                    let mut dup = false
+                    let mut sk = 0
+                    while sk < len(seen_keys) {
+                        if seen_keys[sk] == key { dup = true }
+                        sk = sk + 1
+                    }
+                    if !dup {
+                        seen_keys.push(key)
+                        n_verified = n_verified + 1
+                        if _identity_is_known(idx[0], idx[1], idx[2], idx[3]) {
+                            n_known = n_known + 1
+                        } else {
+                            n_novel = n_novel + 1
+                        }
+                    }
+                }
             } else {
                 n_noise = n_noise + 1
             }
@@ -384,6 +458,8 @@ fn _native_identity_sweep(round: i64, cands: array) -> VerifierVerdict {
     if n_verified > 0 { verdict = "pass" }
     let rationale = "identity_sweep:identity=" + to_string(n_identity)
         + ",verified=" + to_string(n_verified)
+        + ",known=" + to_string(n_known)
+        + ",novel=" + to_string(n_novel)
         + ",noise=" + to_string(n_noise)
     return VerifierVerdict { verdict: verdict, rationale: rationale, round: round }
 }

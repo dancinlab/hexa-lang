@@ -54,6 +54,21 @@ pub fn smash(seed: string, depth: i64) -> [DiscoveryCandidate] {
         a = a + 1
     }
 
+    // ─── [B] identity-grammar candidates (verifiable A·B = C·D frame) ───
+    // Reference-matched 12-fn product-frame identities (vocab_universal_hunt.py
+    // 2v=2v) in the EXACT syntax the native verifier consumes
+    // (drill.hexa::_native_identity_sweep → identity_engine.hexa::verify_identity).
+    // Seed-rotated window + always-emit classical backbone so the verifier
+    // REDISCOVERS the bounded-unique classical identities (verified>0) instead
+    // of reporting identity=0/noise=N for float-permutation exprs. Bounded
+    // `cap` keeps the per-round N=20000 exact-int verify cost bounded.
+    let ident_cands = p_identity_candidates(norm, 24)
+    let mut ic = 0
+    while ic < len(ident_cands) {
+        all.push(ident_cands[ic])
+        ic = ic + 1
+    }
+
     // ─── P3: singularity detection ───
     let singularities = p3_singularities(axioms, attr)
     let mut s = 0

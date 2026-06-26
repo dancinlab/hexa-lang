@@ -1156,6 +1156,155 @@ pub fn p8_wave_propagate(cands: [DiscoveryCandidate], attr: [f64]) -> [Discovery
     return out
 }
 
+// ─── [B] identity-grammar candidate generator (verifiable A·B = C·D frame) ───
+//
+// reference-match: ATLAS/state/novel-dfs/vocab_universal_hunt.py:71-72 (vocab)
+// + :204-220 (2v=2v frame `AB = CD` enumeration via
+// combinations_with_replacement(keys, 2) for the LHS and RHS pairs, skipping
+// L==R). That hunt's "AB = CD" product-frame is exactly the syntax the native
+// verifier consumes — compiler/atlas/identity_engine.hexa::verify_identity
+// (af(a)·af(b) == af(c)·af(d) over n∈[2,N], bounded-unique singleton n≥4) and
+// compiler/drill/drill.hexa::_parse_identity (`A*B = C*D`, basis names joined
+// by `*`/`·`). The other reference frames are orthogonal restatements of the
+// same product algebra over the same 12-fn ring:
+//   divisor-sum_hunt.py:230-244  D[f]=g·h  (D[f]=f∗1 is a fixed convolution)
+//   dirichlet-convolution_hunt.py:180-227  (f∗g)=h, same af() ring.
+// We reproduce the PRODUCT frame because it is what the in-binary verifier can
+// confirm exact-int; the seed selects WHICH pairs are scanned (a deterministic
+// rotation window over the full enumeration), but every emitted candidate is
+// valid identity grammar so the verifier can refute/confirm it. Deterministic
+// (no RNG/clock) ⇒ byte-eq safe.
+//
+// HONESTY (c2): the standard-vocabulary relation space is MEASURED-EXHAUSTED
+// (ATLAS/README.md DFS r1–r4: 1557 @F folded, novel-fold=0, gates 21/21). The
+// honest, NON-fabricating expectation is therefore that this generator makes
+// the verifier REDISCOVER the classical backbone identities (verified>0) with
+// novel=0 — it does NOT invent new mathematics. [E] classification (in
+// compiler/drill/drill.hexa::_native_identity_sweep) reports the rediscovered
+// ones as `known` and would surface any non-catalogue confirmed identity as
+// `novel` (expected 0), never fabricated.
+
+// The 12-fn basis names, in _fn_index order (0=sigma … 11=omega). These are
+// EXACTLY the names compiler/drill/drill.hexa::_fn_index recognises, so every
+// emitted `A*B = C*D` string round-trips through _parse_identity.
+fn _identity_vocab() -> [string] {
+    return ["sigma", "sigma2", "sigma3", "phi", "tau", "n",
+            "sopfr", "rad", "J2", "psi", "Omega", "omega"]
+}
+
+// Deterministic seed→offset (rotation start into the pair enumeration), so
+// different seeds scan different windows of the same frame (free search) while
+// each candidate stays valid identity grammar. Mirrors _seed_value's char
+// accumulation but returns an integer offset.
+fn _identity_seed_offset(seed: string, modulus: i64) -> i64 {
+    if modulus <= 0 { return 0 }
+    let n = len(seed)
+    let mut i = 0
+    let mut acc: i64 = 0
+    while i < n {
+        let c = seed.substring(i, i + 1)
+        let mut cv: i64 = 0
+        if c >= "0" && c <= "9" { cv = 48 + (i % 10) }
+        else if c >= "a" && c <= "z" { cv = 97 + (i % 26) }
+        else if c >= "A" && c <= "Z" { cv = 65 + (i % 26) }
+        else { cv = 32 + (i % 64) }
+        acc = (acc + cv * (i + 1)) % 1000003
+        i = i + 1
+    }
+    let mut r = acc % modulus
+    if r < 0 { r = r + modulus }
+    return r
+}
+
+// Build the unordered pair list combinations_with_replacement(vocab, 2)
+// (reference vocab_universal_hunt.py:205 `msets(2)`). Each entry is the index
+// pair (i,j) with i<=j, materialised as a flat [i,j,...] index array.
+fn _identity_pairs(vlen: i64) -> [i64] {
+    let mut out: [i64] = []
+    let mut i = 0
+    while i < vlen {
+        let mut j = i
+        while j < vlen {
+            out.push(i)
+            out.push(j)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Emit identity-grammar candidates `A*B = C*D` over the 12-fn product frame.
+//
+// Enumeration faithful to vocab_universal_hunt.py:208-220 (2v=2v):
+//   for li in pairs:  for ri in pairs[li:]:  if L != R: emit(L = R)
+// The seed picks a rotation OFFSET into the LHS-pair list so the scanned window
+// is seed-specific; `cap` bounds the emitted count (each candidate costs one
+// N=20000 exact-int verify downstream, so the round stays bounded). The three
+// classical backbone identities the native verifier confirms bounded-unique
+// (phi·J2=n·psi, phi·J2=sopfr·psi, sigma·psi=sigma2·phi — the
+// identity_engine.hexa G1/G2/G3 gates) are ALWAYS emitted first so the
+// rediscovery (verified>0) is reproducible regardless of seed.
+pub fn p_identity_candidates(seed: string, cap: i64) -> [DiscoveryCandidate] {
+    let mut out: [DiscoveryCandidate] = []
+    let vocab = _identity_vocab()
+    let vlen = len(vocab)
+    let sh = seed_hash(seed)
+
+    // ── always-emit classical backbone (reproducible rediscovery) ──
+    // expr uses the literal basis names so _parse_identity/_fn_index accept it.
+    let mut core_lhs0: [string] = []
+    let mut core_lhs1: [string] = []
+    let mut core_rhs0: [string] = []
+    let mut core_rhs1: [string] = []
+    // phi*J2 = n*psi
+    core_lhs0.push("phi"); core_lhs1.push("J2"); core_rhs0.push("n"); core_rhs1.push("psi")
+    // phi*J2 = sopfr*psi
+    core_lhs0.push("phi"); core_lhs1.push("J2"); core_rhs0.push("sopfr"); core_rhs1.push("psi")
+    // sigma*psi = sigma2*phi
+    core_lhs0.push("sigma"); core_lhs1.push("psi"); core_rhs0.push("sigma2"); core_rhs1.push("phi")
+    let mut ci = 0
+    while ci < len(core_lhs0) {
+        let expr = core_lhs0[ci] + " * " + core_lhs1[ci] + " = "
+                 + core_rhs0[ci] + " * " + core_rhs1[ci]
+        let id = "ident_" + sh + "_core" + to_string(ci)
+        out.push(mk_derived(id, "identity", expr, 0.5, 0.0, "smash:Pi:core"))
+        ci = ci + 1
+    }
+
+    // ── seed-rotated window over the full 2v=2v frame ──
+    let pairs = _identity_pairs(vlen)        // flat [i,j,i,j,...]
+    let npairs = len(pairs) / 2
+    if npairs == 0 || cap <= 0 { return out }
+    let off = _identity_seed_offset(seed, npairs)
+    let mut emitted = 0
+    let mut step = 0
+    // iterate LHS pairs starting at the seed offset (wrap-around), and for each
+    // pair all RHS pairs at >= that LHS index (combinations_with_replacement on
+    // the pair list — orderless, no L==R). Bounded by `cap`.
+    while step < npairs && emitted < cap {
+        let li = (off + step) % npairs
+        let la = pairs[li * 2]
+        let lb = pairs[li * 2 + 1]
+        let mut ri = li
+        while ri < npairs && emitted < cap {
+            // skip identical pair (L == R is trivially A·B=A·B)
+            if ri != li {
+                let ra = pairs[ri * 2]
+                let rb = pairs[ri * 2 + 1]
+                let expr = vocab[la] + " * " + vocab[lb] + " = "
+                         + vocab[ra] + " * " + vocab[rb]
+                let id = "ident_" + sh + "_" + to_string(li) + "_" + to_string(ri)
+                out.push(mk_derived(id, "identity", expr, 0.3, 0.0, "smash:Pi:scan"))
+                emitted = emitted + 1
+            }
+            ri = ri + 1
+        }
+        step = step + 1
+    }
+    return out
+}
+
 // ─── P9: meta-closure check (self-referential fixed point) ───
 //
 // Source: nexus blowup_meta_closure.hexa M3 (H1/H2/H3). For each high-conf
