@@ -78,8 +78,8 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/resource.h>
-#ifdef __linux__
-#include <execinfo.h>
+#if defined(__linux__) && defined(__GLIBC__)
+#include <execinfo.h>  /* glibc-only extension; musl lacks it (backtrace stubs below) */
 #endif
 
 extern char **environ;
@@ -585,7 +585,9 @@ void   hxlcl_longjmp(void *buf, int val)              { longjmp(*(jmp_buf *)buf,
 
 /* ── backtrace (best-effort; no-op where unavailable) ────────────────────── */
 #ifdef __linux__
-#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+/* real backtrace()/backtrace_symbols_fd() are glibc-only — gate on __GLIBC__ so
+ * musl-linux (static release) takes the stub arm instead of an undefined symbol. */
+#if defined(HEXA_ZEROC_SHIM_BYTEID_EMIT) || !defined(__GLIBC__)
 /* byte-identical to frozen self/runtime.c hxlcl_backtrace (verbatim 0-libc floor body) */
 int __attribute__((noinline)) hxlcl_backtrace(void **buf, int sz) {
     (void)buf; (void)sz;
@@ -594,15 +596,18 @@ int __attribute__((noinline)) hxlcl_backtrace(void **buf, int sz) {
 #else
 int  hxlcl_backtrace(void **buf, int sz)              { return backtrace(buf, sz); }
 #endif
-#ifdef HEXA_ZEROC_SHIM_BYTEID_EMIT
+#if defined(HEXA_ZEROC_SHIM_BYTEID_EMIT)
 /* byte-identical to frozen self/runtime.c hxlcl_backtrace_symbols_fd (verbatim 0-libc floor body) */
 void __attribute__((noinline)) hxlcl_backtrace_symbols_fd(void *const *buf, int sz, int fd) {
     (void)buf; (void)sz;
     static const char msg[] = "(backtrace unavailable — hexa-native stub)\n";
     hxlcl_write(fd, msg, sizeof(msg) - 1);
 }
-#else
+#elif defined(__GLIBC__)
 void hxlcl_backtrace_symbols_fd(void *const *buf, int sz, int fd) { backtrace_symbols_fd(buf, sz, fd); }
+#else
+/* musl: pure no-op — the BYTEID stub's hxlcl_write isn't linked in non-BYTEID musl builds. */
+void hxlcl_backtrace_symbols_fd(void *const *buf, int sz, int fd) { (void)buf; (void)sz; (void)fd; }
 #endif
 #else
 int  hxlcl_backtrace(void **buf, int sz)              { (void)buf; (void)sz; return 0; }

@@ -1413,8 +1413,8 @@
       {
         "id": "build-precompile-exec-bigout-brokenpipe",
         "state": "ossified",
-        "value": "대형 entry(atlas_cli 등)의 2>&1 컴파일 출력(@phase 미구현 attr + redefined warn 수백줄)을 exec() 가 통째 메모리 캡처하다 파이프 버퍼 한계 → echo __BRC__ write-error Broken-pipe → rc 파싱 실패 → FAIL (faithful-nobaseline darwin release_package RED). mac 은 터미널 출력이라 무관(재현 NEGATIVE).",
-        "threshold": "컴파일 출력을 로그파일로 리다이렉트하고 exec 는 __BRC__ rc 만 캡처 (거대 출력과 무관)",
+        "value": "REAL root cause (#3833 misdiagnosed as pipe-buffer overflow): the runtime exec-drain (hexa_drain_bounded) has a HARD ceiling HEXA_EXEC_DRAIN_MAX_MS (default 120 s). #3833 redirected build output to a logfile so the pipe went SILENT — leaving the trailing `echo __BRC__` as the ONLY captured byte. A large `hexa build` entry running >120 s on a loaded host (aiden shared pool: install_firmware_hook ~156 s, build_precompile ~157 s — both >120 s) makes the drain hit its ceiling and fclose() the read end while /bin/sh is STILL building; the trailing echo then writes to a dead pipe -> SIGPIPE/EPIPE (`echo: write error: Broken pipe` on bash / `echo: I/O error` on dash) AND the captured output lacks `__BRC__=` -> rc defaults to 1 -> a SUCCESSFUL build is reported FAIL. Looks 'random' because which entries cross 120 s depends on host load; darwin/arm64 hosts are faster so stay under -> GREEN. hexa_exec's post-drain hexa_spawn_reap does a BLOCKING waitpid, so the child always fully completes regardless of the drain cutoff.",
+        "threshold": "write the build rc to a FILE (`echo \"$?\" > rcf`), NOT down the exec pipe, then read rcf from disk — the result path no longer touches the pipe, so a drain-ceiling cutoff cannot corrupt it (host-load / dash-vs-bash / linux-vs-darwin robust). #3833 logfile-redirect kept; only rc-capture moved off the pipe.",
         "source": "tool/build_precompile.hexa"
       },
       {

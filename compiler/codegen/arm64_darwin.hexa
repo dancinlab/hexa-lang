@@ -2494,6 +2494,29 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // arg0→x0:x1, arg1→x2:x3, arg2→x4:x5, arg3→x6:x7 (4 pair-args
         // in the 8 GPRs); args ≥4 go to 16B stack slots [sp,#(i-4)*16].
         // Return is x0:x1 → dst slot.
+        if _is_cabi(s.op) {
+            // Route C C-ABI call — callee takes each arg in ONE AAPCS64 arg reg
+            // (x0..x7) and returns a single raw value in x0. Box only each arg's
+            // PAYLOAD into its single reg (x9 = throwaway tag half); result x0 →
+            // dst as {TAG_INT(0), x0}. (Not reached by the strlen PoC — present
+            // for the scale round; gated empty-whitelist-off so byteeq-neutral.)
+            let cn = len(s.args)
+            let mut ci = 0
+            while ci < cn {
+                if ci < 8 {
+                    buf = _hv_load(buf, s.args[ci], st, rm, "x9", _arm64_arg_reg(ci))
+                }
+                ci = ci + 1
+            }
+            let ctarget = _builtin_runtime_sym(s.op)
+            buf.push(_arm64_instr1("bl", _arm64_op_label(ctarget), "cabi call " + ctarget))
+            if s.dst.id >= 0 {
+                buf.push(_arm64_instr2("movz", _arm64_op_reg("x9"),
+                                 _arm64_op_label("#0"), "cabi ret tag = TAG_INT"))
+                buf = _hv_store_dst(buf, rm, s.dst, "x9", "x0")
+            }
+            return buf
+        }
         let arg_n = len(s.args)
         let mut i = 0
         while i < arg_n {
@@ -2604,7 +2627,14 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
     }
     if s.kind == _STMT_RETURN {
         if len(s.args) >= 1 {
-            buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // AAPCS64 16B return = x0:x1
+            if _is_cabi(fname) {
+                // Route C C-ABI return — a raw C-ABI fn returns a single value
+                // in x0. Load just the payload eightbyte into x0 (x9 = throwaway
+                // tag half); the HexaVal tag is dropped (C caller reads only x0).
+                buf = _hv_load(buf, s.args[0], st, rm, "x9", "x0")
+            } else {
+                buf = _hv_load(buf, s.args[0], st, rm, "x0", "x1")  // AAPCS64 16B return = x0:x1
+            }
         } else {
             // #40 — value-less return must hand back a real TAG_VOID
             // HexaVal (x0:x1), not stale call-clobbered registers.
@@ -2928,10 +2958,24 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: strin
     // (all params are force-spilled). x29 set to old sp before the
     // frame `sub`, so [x29,#16+…] reaches the caller's outgoing area.
     let mut p = 0
+    let _arm_cabi = _is_cabi(fn_name)
     while p < len(mf.params) {
         let pid = mf.params[p].id
         let poff = _arm_spill_offset(rm, pid)
-        if p < 4 {
+        if _arm_cabi && p < 8 {
+            // Route C C-ABI ingress — param p arrives RAW in ONE AAPCS64 arg
+            // register (x0..x7), not an x_2p:x_2p+1 {tag,payload} pair. Store
+            // {TAG_INT(0), raw word} into the param's 16B frame slot (x9 = 0 tag
+            // scratch; x9 is not an arg reg, so the incoming x0..x7 are intact).
+            // libc-floor leaves have ≤8 params → no caller-stack case.
+            let preg = _arm64_arg_reg(p)
+            instrs.push(_arm64_instr2("movz", _arm64_op_reg("x9"),
+                             _arm64_op_label("#0"), "cabi ingress tag = TAG_INT"))
+            instrs = _hv_at(instrs, poff, "x15")
+            instrs.push(_arm64_instr3("stp", _arm64_op_reg("x9"),
+                             _arm64_op_reg(preg), _hv_memb(poff, "x15"),
+                             "cabi ingress param " + to_string(p)))
+        } else if p < 4 {
             let lo = "x" + to_string(p * 2)
             let hi = "x" + to_string(p * 2 + 1)
             instrs = _hv_at(instrs, poff, "x15")

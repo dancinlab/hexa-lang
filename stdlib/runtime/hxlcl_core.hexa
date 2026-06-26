@@ -1,0 +1,115 @@
+// stdlib/runtime/hxlcl_core.hexa — RFC061 §M8 Route C libc-floor C-ABI SSOT.
+//
+// The hexa-source raw-mem bodies for the libc-floor substrate symbols
+// `hxlcl_strlen` (`size_t hxlcl_strlen(const char*)`), `hxlcl_memcpy`
+// (`void *hxlcl_memcpy(void*,const void*,size_t)`) and `hxlcl_memset`
+// (`void *hxlcl_memset(void*,int,size_t)`), emitted through the
+// compiler's portable `aprime_cc --emit=asm --target=` cross-target path under
+// the Route C C-ABI calling-convention gate (HEXA_CABI_HXLCL=1 · _is_cabi in
+// compiler/codegen/x86_64_linux.hexa + arm64_darwin.hexa).
+//
+// WHY A SEPARATE FILE (not str_core.hexa): str_core's prims are HexaVal-ABI
+// (their C wrappers pass real TAG_STR HexaVals). hxlcl_* are the OPPOSITE layer —
+// raw C-ABI, called with a bare `char*` register throughout the frozen C runtime
+// amalgam (self/runtime_core.c, runtime_core_hxlcl_shim.c). The Route C ingress
+// lands that single arg register as this fn's param PAYLOAD with TAG_INT(0), and
+// the Route C return ships the count back in a SINGLE result register — so the
+// body below is byte-walk-identical to str_core, only the ABI boundary differs.
+//
+// RAW-MEM, un-nested (str_core NESTING finding): every __hx_payload_* /
+// __hx_ptr_* call writes EXACTLY ONE `let` — no nested intrinsic args (a native
+// codegen scratch clobber corrupts the outer op otherwise). Comparison uses the
+// raw-int leaf intrinsics (__hx_payload_ne), NOT plain `==`/`!=` (those lower to
+// HexaVal runtime helpers that misread the raw byte words). __hx_ptr_load8 reads
+// one byte ZERO-EXTENDED into a TAG_INT payload, so the 0x00 NUL compares as 0.
+//
+// BYTE-FAITHFUL to the C body it replaces (runtime_core_hxlcl_shim.c:212):
+//   size_t hxlcl_strlen(const char *s){ if(!s) return 0; size_t n=0;
+//                                       while(s[n]) n++; return n; }
+// (the NULL guard is the caller's responsibility on this PoC path — the frozen
+// runtime never calls hxlcl_strlen with NULL; same precondition the SELFEMIT
+// hand-assembled seeds in test/native_build/emit_hxlcl_strlen_*.hexa carry.)
+//
+// NOT @pure: the body touches external buffer memory through __hx_ptr_load8.
+
+// hxlcl_strlen: count bytes up to (not including) the NUL terminator. Under the
+// Route C C-ABI gate the param arrives raw in rdi/x0 and the return ships the
+// count raw in rax/x0; under the default (PAIR-MODEL, gate OFF) it compiles as an
+// ordinary HexaVal fn (byteeq-neutral — never linked into the runtime in that
+// mode).
+pub fn hxlcl_strlen(s: HexaVal) -> int {
+    let p = __hx_payload_add(s, 0)            // char* (payload word)
+    let mut n = 0
+    let mut c = __hx_ptr_load8(p, 0)          // s[0]
+    while __hx_payload_ne(c, 0) {
+        n = __hx_payload_add(n, 1)
+        c = __hx_ptr_load8(p, n)              // s[n]
+    }
+    return n
+}
+
+// BYTE-FAITHFUL to the C body it replaces (self/runtime.c:586, rt_memcpy 32 B):
+//   void *hxlcl_memcpy(void *dst, const void *src, size_t n){
+//       unsigned char *d=dst; const unsigned char *s=src;
+//       for(size_t i=0;i<n;i++) d[i]=s[i]; return dst; }
+// Three raw C-ABI args (dst,src,n) arrive in rdi/rsi/rdx (x0/x1/x2); the return
+// ships the dst pointer raw in rax/x0. (n==0 → the while never enters, exactly
+// like the C for-loop; the frozen runtime never calls memcpy with NULL/overlap —
+// same precondition as hxlcl_strlen and the SELFEMIT hand-assembled seed
+// test/native_build/emit_hxlcl_memcpy_o.hexa.) Forward byte copy only — overlap
+// is hxlcl_memmove's job, never aliased onto this symbol.
+//
+// RAW-MEM, un-nested (same str_core NESTING rule as hxlcl_strlen above): every
+// __hx_payload_* / __hx_ptr_* call writes EXACTLY ONE `let`/assignment with no
+// nested intrinsic args. __hx_payload_lt(i, n) tests the raw payload words (NOT
+// `<`, which lowers to a HexaVal helper that misreads the raw byte words);
+// __hx_ptr_load8 reads one byte ZERO-EXTENDED into a TAG_INT payload and
+// __hx_ptr_store8 writes the low byte of that payload back to dst[i].
+
+// hxlcl_memcpy: copy `n` bytes src→dst (forward), return dst. Under the Route C
+// C-ABI gate the params arrive raw in rdi,rsi,rdx / x0,x1,x2 and the return ships
+// the dst pointer raw in rax/x0; under the default (PAIR-MODEL, gate OFF) it
+// compiles as an ordinary HexaVal fn (byteeq-neutral — never linked in that mode).
+pub fn hxlcl_memcpy(dst: HexaVal, src: HexaVal, n: HexaVal) -> int {
+    let pd = __hx_payload_add(dst, 0)         // dst char* (payload word)
+    let ps = __hx_payload_add(src, 0)         // src char* (payload word)
+    let mut i = 0
+    while __hx_payload_lt(i, n) {
+        let b = __hx_ptr_load8(ps, i)         // src[i]
+        __hx_ptr_store8(pd, i, b)             // dst[i] = src[i]
+        i = __hx_payload_add(i, 1)
+    }
+    return pd
+}
+
+// BYTE-FAITHFUL to the C body it replaces (self/runtime.c:613, rt_memset 28 B):
+//   void *hxlcl_memset(void *s, int c, size_t n){
+//       unsigned char *p=s; unsigned char v=(unsigned char)c;
+//       for(size_t i=0;i<n;i++) p[i]=v; return s; }
+// Three raw C-ABI args (s,c,n) arrive in rdi/rsi/rdx (x0/x1/x2); the return ships
+// the dst pointer raw in rax/x0. (n==0 → the while never enters, exactly like the
+// C for-loop; the frozen runtime never calls memset with NULL — same precondition
+// as hxlcl_memcpy and the SELFEMIT hand-assembled seed
+// test/native_build/emit_hxlcl_memset_o.hexa, whose `strb w1,[x0,x3]` loop writes
+// only the LOW byte of the c register — identical to the C `(unsigned char)c`.)
+//
+// RAW-MEM, un-nested (same str_core NESTING rule): every __hx_payload_* /
+// __hx_ptr_* call writes EXACTLY ONE `let`/assignment with no nested intrinsic
+// args. __hx_payload_lt(i, n) tests the raw payload words (NOT `<`, which lowers
+// to a HexaVal helper that misreads the raw byte words); __hx_ptr_store8 writes
+// the LOW byte of the c payload to s[i] (the `(unsigned char)c` truncation).
+
+// hxlcl_memset: write the low byte of `c` into `n` bytes of `s`, return s. Under
+// the Route C C-ABI gate the params arrive raw in rdi,rsi,rdx / x0,x1,x2 and the
+// return ships the s pointer raw in rax/x0; under the default (PAIR-MODEL, gate
+// OFF) it compiles as an ordinary HexaVal fn (byteeq-neutral — never linked in
+// that mode).
+pub fn hxlcl_memset(s: HexaVal, c: HexaVal, n: HexaVal) -> int {
+    let ps = __hx_payload_add(s, 0)           // s char* (payload word)
+    let mut i = 0
+    while __hx_payload_lt(i, n) {
+        __hx_ptr_store8(ps, i, c)             // s[i] = (unsigned char)c
+        i = __hx_payload_add(i, 1)
+    }
+    return ps
+}
