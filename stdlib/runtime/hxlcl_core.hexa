@@ -390,3 +390,43 @@ pub fn hxlcl_calloc(nmemb: HexaVal, size: HexaVal) -> int {
     }
     return p
 }
+
+// ── COMPOSITE FAMILY r10 (realloc → inner bl malloc + NEGATIVE-OFFSET header read) ──
+//
+// realloc is the LAST composite. Its load-bearing NEW codegen pattern is the
+// header read `*(size_t *)((char *)p - HXLCL_HDR_BYTES)` — a `__hx_ptr_load64`
+// at a NEGATIVE offset (p - 16). No prior Route C symbol exercised a negative
+// ptr-load, so the routec-smoke job gains a dedicated realloc behaviour assert
+// (the first ON-path verification of this pattern). The negative offset is
+// expressible because both backends lower `__hx_ptr_load64(ptr, off)` as a plain
+// 64-bit register add `addr = ptr + off` (x86_64_linux.hexa:2453 `add r10,r11` /
+// arm64_darwin.hexa:2295 `add x1,x1,x3`) — a negative `off` payload (here via
+// `__hx_payload_sub(0, 16)`) yields `ptr - 16` with no special handling.
+//
+// BYTE-FAITHFUL to runtime_core_hxlcl_shim.c:112 (the BYTEID 0-libc floor body):
+//   if(!p) return malloc(n); if(n==0) return 0; np=malloc(n); if(!np) return 0;
+//   old_n=*(size_t*)(p-16); copy_n=min(n,old_n); memcpy(np,p,copy_n); return np.
+// PoC precondition (same as the other composites): the frozen runtime calls
+// hxlcl_realloc only with a non-NULL p that carries the 16-byte size header the
+// floor hxlcl_malloc writes, and n>0 — so the NULL/n==0 guards are the caller's
+// responsibility on this path. The smoke harness's hxlcl_malloc writes the same
+// 16-byte header so the header read is meaningful (see tool/routec_cabi_smoke.sh).
+
+// hxlcl_realloc: grow/shrink `p` to `n` bytes, preserving min(n, old_n) content.
+pub fn hxlcl_realloc(p: HexaVal, n: HexaVal) -> int {
+    let pp = __hx_payload_add(p, 0)            // old buffer (payload word)
+    let np = hxlcl_malloc(n)                   // C-ABI bl → new raw ptr
+    let neg_hdr = __hx_payload_sub(0, 16)      // -HXLCL_HDR_BYTES
+    let old_n = __hx_ptr_load64(pp, neg_hdr)   // *(size_t*)(p - 16)
+    let mut copy_n = n
+    if __hx_payload_lt(old_n, n) {
+        copy_n = old_n                         // copy_n = min(n, old_n)
+    }
+    let mut i = 0
+    while __hx_payload_lt(i, copy_n) {
+        let b = __hx_ptr_load8(pp, i)          // p[i]
+        __hx_ptr_store8(np, i, b)              // np[i] = p[i]
+        i = __hx_payload_add(i, 1)
+    }
+    return np
+}

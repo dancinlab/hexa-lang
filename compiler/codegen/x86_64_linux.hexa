@@ -1073,6 +1073,10 @@ pub fn _is_cabi(fname: string) -> bool {
     // (confirmed by memset). Whitelisting both binds the inner alloc call C-ABI.
     if fname == "hxlcl_calloc" { return true }
     if fname == "hxlcl_malloc" { return true }
+    // r10 composite — hxlcl_realloc is a NON-LEAF: inner C-ABI `bl hxlcl_malloc`
+    // + a NEGATIVE-offset `__hx_ptr_load64` header read (p - 16) + copy loop.
+    // The neg-offset load is the new pattern; routec-smoke gains a realloc assert.
+    if fname == "hxlcl_realloc" { return true }
     return false
 }
 
