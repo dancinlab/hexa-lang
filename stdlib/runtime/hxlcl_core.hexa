@@ -362,3 +362,31 @@ pub fn hxlcl_strdup(s: HexaVal) -> int {
     __hx_ptr_store8(out, n, 0)                // out[n] = '\0'
     return out
 }
+
+// ── COMPOSITE FAMILY r9 (calloc → inner C-ABI bl hxlcl_malloc + zero loop) ──
+//
+// calloc = composite with ZERO new codegen patterns vs already-merged symbols:
+//   • inner `bl hxlcl_malloc` — ON-path confirmed by hxlcl_strdup's routec-smoke.
+//   • zero-loop `__hx_ptr_store8` — ON-path confirmed by hxlcl_memset.
+// Its inner callee hxlcl_malloc is the SAME extern declared above (shared with
+// hxlcl_strdup — not re-declared). Self-covering: this round adds the calloc
+// behaviour assert to tool/routec_cabi_smoke.sh, so the routec-smoke job emits +
+// links + runs calloc directly (not seed shape-match inference).
+
+// hxlcl_calloc: allocate nmemb*size zeroed bytes, return the buffer. BYTE-FAITHFUL
+// to runtime_core_hxlcl_shim.c:132 (the BYTEID 0-libc floor body):
+//   total = nmemb*size; p = hxlcl_malloc(total); if(p) for(i<total) p[i]=0; ret p.
+// (the frozen runtime never calls calloc with a 0×0 → malloc(0); same precondition
+// as the other composites.) Under the Route C gate the two size args arrive raw in
+// rdi,rsi / x0,x1, the inner `bl hxlcl_malloc` is C-ABI, and the return ships the
+// buffer pointer raw. Default (gate OFF) compiles as a HexaVal fn (byteeq-neutral).
+pub fn hxlcl_calloc(nmemb: HexaVal, size: HexaVal) -> int {
+    let total = __hx_payload_mul(nmemb, size)  // nmemb * size
+    let p = hxlcl_malloc(total)                // C-ABI bl → raw ptr
+    let mut i = 0
+    while __hx_payload_lt(i, total) {
+        __hx_ptr_store8(p, i, 0)               // p[i] = 0
+        i = __hx_payload_add(i, 1)
+    }
+    return p
+}
