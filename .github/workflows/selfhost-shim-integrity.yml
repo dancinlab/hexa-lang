@@ -55,7 +55,7 @@ permissions:
 jobs:
   selfhost-shim-integrity:
     name: selfhost shim integrity (compile→gen3 · subcmd→shipped · loop-guard)
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
