@@ -1087,6 +1087,14 @@ pub fn _is_cabi(fname: string) -> bool {
     // ERRNO-FREE subset; errno-bearing syscalls (close/read/lseek/…) need a
     // separate extern-data write substrate (measured wall, deferred).
     if fname == "hxlcl_getpid" { return true }
+    // r2 — errno-free 0-arg family (getpid mirror): getuid/getgid/getppid/
+    // geteuid/getegid. All 0-arg cannot-fail syscalls (no errno store), same
+    // __hx_syscall0 shape as getpid; whitelisting binds each to its C-ABI emit.
+    if fname == "hxlcl_getuid" { return true }
+    if fname == "hxlcl_getgid" { return true }
+    if fname == "hxlcl_getppid" { return true }
+    if fname == "hxlcl_geteuid" { return true }
+    if fname == "hxlcl_getegid" { return true }
     return false
 }
 
