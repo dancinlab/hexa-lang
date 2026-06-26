@@ -88,17 +88,24 @@ if [ -d "$BSRC" ]; then
 fi
 APB="$WORK/aprime_base"; [ -x "$APB" ] || say "  (baseline aprime missing — Gate1 baseline cmp will skip)"
 
-# ── CPU-only runtime.a (default may be CUDA-linked → bare ld fails) ──
+# ── CPU runtime.a (r1b fix: the PATCHED build emits a CPU runtime.a at
+# $SRC/build/runtime.a (~1MB) — prefer it. The default ~/.hx/bin runtime.a may be
+# CUDA-linked (cudaMalloc/__popcountdi2 undef under bare ld), so CUDA-tagged
+# archives are de-prioritized but NOT outright rejected when they are the only
+# candidate (a real undef shows loudly at the gcc-as-linker step, not silently). ──
 say "--- locating CPU runtime.a ---"
-RT=""
-for cand in "$CANON/runtime.a.cpubak" "$SRC/runtime.a.cpubak" \
+RT=""; RT_FALLBACK=""
+for cand in "$SRC/build/runtime.a" "$CANON/runtime.a.cpubak" "$SRC/runtime.a.cpubak" \
             "$CANON/build/selfhost/runtime.a" "$SRC/build/selfhost/runtime.a" \
-            "$HOME/.hx/bin/build/runtime.a"; do
+            "$SRC/build/runtime.a.cpubak" "$HOME/.hx/bin/build/runtime.a"; do
     [ -f "$cand" ] || continue
-    if ar t "$cand" 2>/dev/null | grep -qi cuda; then say "  skip CUDA rt: $cand"; continue; fi
+    if ar t "$cand" 2>/dev/null | grep -qi cuda; then
+        say "  (de-prio CUDA-tagged rt: $cand)"; [ -z "$RT_FALLBACK" ] && RT_FALLBACK="$cand"; continue
+    fi
     RT="$cand"; break
 done
-say "  runtime.a = ${RT:-NONE}"
+[ -z "$RT" ] && [ -n "$RT_FALLBACK" ] && { RT="$RT_FALLBACK"; say "  (no CPU-only rt; falling back to CUDA-tagged $RT — undef will show at link)"; }
+say "  runtime.a = ${RT:-NONE} ($( [ -n "$RT" ] && stat -c%s "$RT" 2>/dev/null || echo 0) bytes)"
 
 # ── kernel: k1_sum (the 2.86× scalar slice) ──
 KERN="$WORK/k1_sum.hexa"
@@ -124,6 +131,21 @@ if [ -f "$WORK/p_off.o" ] && [ -f "$WORK/b_off.o" ]; then
     else
         say "  Gate1 OFF-BYTEEQ=FAIL  patched-OFF .o != baseline .o (OFF-path NOT byte-identical — SHIP-BLOCK)"
         say "    patched sha=$(sha256sum "$WORK/p_off.o" | cut -c1-16) baseline sha=$(sha256sum "$WORK/b_off.o" | cut -c1-16)"
+        # r1b root-cause: dump the .s diff (patched-OFF vs baseline-OFF) so the
+        # EXACT instruction delta is captured — proves whether it is k1_sum LIR
+        # (my patch leaks) or a benign emitter-determinism factor (label/order).
+        if [ -f "$WORK/p_off.s" ] && [ -f "$WORK/b_off.s" ]; then
+            if cmp -s "$WORK/p_off.s" "$WORK/b_off.s"; then
+                say "    NOTE: .s IDENTICAL but .o differs → non-text delta (reloc/symtab/timestamp/order), NOT k1_sum codegen"
+            else
+                say "    .s DIFFERS (k1_sum codegen changed when OFF) — diff head:"
+                diff "$WORK/b_off.s" "$WORK/p_off.s" | head -40 | sed 's/^/      /' | tee -a "$RESULT"
+            fi
+        fi
+        # also: does baseline emit a .o at all (sanity) + objdump section sizes
+        say "    objdump -h sizes (baseline | patched-OFF):"
+        objdump -h "$WORK/b_off.o" 2>/dev/null | awk '/\.text|\.data|\.rodata|\.rela/{print "      base "$2" "$3}' | tee -a "$RESULT"
+        objdump -h "$WORK/p_off.o" 2>/dev/null | awk '/\.text|\.data|\.rodata|\.rela/{print "      patc "$2" "$3}' | tee -a "$RESULT"
     fi
 else
     # fallback: patched OFF asm vs patched ON asm SHOULD differ (proves flag live);
