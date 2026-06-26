@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -116,6 +116,13 @@ extern void  *hxlcl_realloc(void *p, size_t n);
 
 /* r11 syscall leaf — errno-free 0-arg. Returns the kernel pid raw (no errno). */
 extern int    hxlcl_getpid(void);
+
+/* r2 errno-free 0-arg family (getpid mirror) — each returns the raw kernel id. */
+extern int    hxlcl_getuid(void);
+extern int    hxlcl_getgid(void);
+extern int    hxlcl_getppid(void);
+extern int    hxlcl_geteuid(void);
+extern int    hxlcl_getegid(void);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
@@ -205,6 +212,16 @@ int main(void) {
     pid_t ref_pid = getpid();
     CK(hxlcl_getpid() == (int)ref_pid, "getpid == libc getpid (value-exact)");
     CK(hxlcl_getpid() > 0, "getpid > 0");
+
+    /* r2 errno-free 0-arg family — each value-exact vs its libc oracle (all from
+     * <unistd.h>). Same getpid mechanism; confirms the per-symbol NR + C-ABI emit
+     * for the whole family. (getppid > 0 always; uid/gid may be 0 for root, so the
+     * value-exact equality — not >0 — is the load-bearing check for those.) */
+    CK(hxlcl_getuid()  == (int)getuid(),  "getuid == libc getuid (value-exact)");
+    CK(hxlcl_getgid()  == (int)getgid(),  "getgid == libc getgid (value-exact)");
+    CK(hxlcl_getppid() == (int)getppid(), "getppid == libc getppid (value-exact)");
+    CK(hxlcl_geteuid() == (int)geteuid(), "geteuid == libc geteuid (value-exact)");
+    CK(hxlcl_getegid() == (int)getegid(), "getegid == libc getegid (value-exact)");
 
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }
     printf("[routec-smoke] %d assert(s) FAILED\n", fails);

@@ -465,3 +465,63 @@ pub fn hxlcl_getpid() -> int {
     }
     return __hx_syscall0(nr)                    // kernel pid → raw C-ABI result reg
 }
+
+// r2 — errno-free 0-arg family chain (getpid mirror). Each is class-C
+// cannot-fail (no errno / carry-flag path), so the body returns the raw kernel
+// value in the single C-ABI result register with NO errno store, exactly like
+// getpid. Per-target NR via compile-time target_is_* consts (DCE drops the dead
+// branch). NR ref-match (no black-box):
+//   getuid : x86_64 102 · arm64 174 · darwin 24   (syscall_64.tbl / asm-generic
+//            unistd.h __NR_getuid 174 / runtime.c HXLCL_SYS_GETUID 24)
+//   getgid : x86_64 104 · arm64 176 · darwin 47
+//   getppid: x86_64 110 · arm64 173 · darwin 39
+//   geteuid: x86_64 107 · arm64 175 · darwin 25
+//   getegid: x86_64 108 · arm64 177 · darwin 43
+// (Linux x86_64 = syscall_64.tbl · Linux arm64 = include/uapi/asm-generic/
+// unistd.h · darwin = runtime.c HXLCL_SYS_* table, matching the floor bodies
+// self/runtime.c:1690-1719 `_hxlcl_syscall1(HXLCL_SYS_GET*, 0)`.)
+
+pub fn hxlcl_getuid() -> int {
+    let mut nr = 24                            // Darwin SYS_GETUID (default)
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 102 }     // Linux x86_64 __NR_getuid
+        else { nr = 174 }                      // Linux arm64 __NR_getuid
+    }
+    return __hx_syscall0(nr)                    // uid → raw C-ABI result reg
+}
+
+pub fn hxlcl_getgid() -> int {
+    let mut nr = 47                            // Darwin SYS_GETGID (default)
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 104 }     // Linux x86_64 __NR_getgid
+        else { nr = 176 }                      // Linux arm64 __NR_getgid
+    }
+    return __hx_syscall0(nr)                    // gid → raw C-ABI result reg
+}
+
+pub fn hxlcl_getppid() -> int {
+    let mut nr = 39                            // Darwin SYS_GETPPID (default)
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 110 }     // Linux x86_64 __NR_getppid
+        else { nr = 173 }                      // Linux arm64 __NR_getppid
+    }
+    return __hx_syscall0(nr)                    // ppid → raw C-ABI result reg
+}
+
+pub fn hxlcl_geteuid() -> int {
+    let mut nr = 25                            // Darwin SYS_GETEUID (default)
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 107 }     // Linux x86_64 __NR_geteuid
+        else { nr = 175 }                      // Linux arm64 __NR_geteuid
+    }
+    return __hx_syscall0(nr)                    // euid → raw C-ABI result reg
+}
+
+pub fn hxlcl_getegid() -> int {
+    let mut nr = 43                            // Darwin SYS_GETEGID (default)
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 108 }     // Linux x86_64 __NR_getegid
+        else { nr = 177 }                      // Linux arm64 __NR_getegid
+    }
+    return __hx_syscall0(nr)                    // egid → raw C-ABI result reg
+}
