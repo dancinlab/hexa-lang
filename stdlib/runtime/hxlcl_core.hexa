@@ -430,3 +430,38 @@ pub fn hxlcl_realloc(p: HexaVal, n: HexaVal) -> int {
     }
     return np
 }
+
+// ── SYSCALL FAMILY (Route C r11 · errno-free 0-arg leaf — first syscall body) ──
+//
+// hxlcl_getpid is the FIRST Route C leaf whose body ISSUES A SYSCALL (not a raw
+// memory walk). It proves the Route C C-ABI lowering composes with the syscall
+// intrinsic on the ERRNO-FREE subset:
+//   - 0 args + cannot-fail: getpid never errors (no errno / carry-flag path —
+//     identical to getuid), so the body returns the kernel pid RAW in the single
+//     C-ABI result register with NO errno store. (errno-bearing syscalls —
+//     close/read/lseek/stat/dup2/mkdir/waitpid — additionally need to write the
+//     C global `errno`, which hexa source has no extern-data-write intrinsic for:
+//     a measured wall deferred to a separate extern-data substrate round.)
+//   - the per-OS trap is already emitted by the backend's `__hx_syscall0`
+//     (x86_64 `syscall` / arm64 `svc #0x80`|`svc #0`, x86_64_linux.hexa:2392 /
+//     arm64_darwin.hexa:2190), so the body only selects the per-target NUMBER.
+//
+// PER-TARGET getpid NR (compile-time consts → DCE drops the dead branch):
+//   Linux x86_64 = 39   (stdlib/posix/linux_syscalls.hexa:124, syscall_64.tbl)
+//   Linux arm64  = 172  (stdlib/posix/linux_syscalls.hexa:96, asm-generic)
+//   Darwin arm64 = 20   (SYS_GETPID | 0x2000000 baked by __hx_syscall0's BSD trap
+//                        path; the bare 20 here matches the seed
+//                        test/native_build/emit_hxlcl_getpid_o.hexa `mov w16,#20`).
+//
+// BYTE-FAITHFUL to the C floor (self/runtime_emit_full.hexa:1662):
+//   hxlcl_getpid(void) { return (int)_hxlcl_syscall1(HXLCL_SYS_GETPID, 0); }
+// (0-arg under the unified syscall0; the floor passes a dummy 0 to its syscall1
+// helper, but the kernel ignores args for getpid).
+pub fn hxlcl_getpid() -> int {
+    let mut nr = 20                            // Darwin SYS_GETPID (default)
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 39 }      // Linux x86_64 __NR_getpid
+        else { nr = 172 }                      // Linux arm64 __NR_getpid
+    }
+    return __hx_syscall0(nr)                    // kernel pid → raw C-ABI result reg
+}
