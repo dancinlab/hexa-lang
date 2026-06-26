@@ -142,6 +142,32 @@ fn _hir_lower_type_ref(tr: TypeRef) -> Type {
             unit: ""
         }
     }
+    // Array element-type preservation (runtime-gap r2-pre). The parser
+    // (compiler/parse/parser.hexa `[T]`/`[T; N]`) emits arrays as
+    //   TypeRef{kind:"generic", name:"Array" | "Array:<N>" | "Array:<elem>:<N>",
+    //           args:[<element TypeRef>]}
+    // Previously the generic fallback below collapsed this to
+    // Type{kind:"generic:Array", args:[]} — DROPPING the element type — so
+    // hir_to_mir::_type_id_of (which keys on kind=="array" + args[0].kind to
+    // emit the 101-104 typed-array ids) hit a dead branch and every array
+    // local fell through to type_id=0 (unclassified). Lower the Array shape
+    // to kind:"array" and RECURSE on the element TypeRef so args[0].kind is a
+    // real scalar (i64/i32/f64/f32). No consumer reads the old "generic:Array"
+    // kind (grep-verified), so this only activates the intended typed-array
+    // path. Arrays of non-primitive elements still produce a non-{i64..f32}
+    // args[0].kind, so _type_id_of returns 0 for them — unchanged.
+    if tr.kind == "generic" && _hir_is_array_name(tr.name) && len(tr.args) >= 1 {
+        let mut elem_args: [Type] = []
+        elem_args.push(_hir_lower_type_ref(tr.args[0]))
+        return Type {
+            kind: "array",
+            def: _hir_miss_def_id(),
+            args: elem_args,
+            ret: [],
+            domain: "",
+            unit: ""
+        }
+    }
     return Type {
         kind: tr.kind + ":" + tr.name,
         def: _hir_miss_def_id(),
@@ -150,6 +176,17 @@ fn _hir_lower_type_ref(tr: TypeRef) -> Type {
         domain: "",
         unit: ""
     }
+}
+
+// True when a generic TypeRef `name` denotes an array — bare "Array" or the
+// sized/typed encodings "Array:<N>" / "Array:<elem>:<N>" (parser RFC 085).
+fn _hir_is_array_name(n: string) -> bool {
+    if n == "Array" { return true }
+    let pfx = "Array:"
+    if len(n) > len(pfx) {
+        if n.substring(0, len(pfx)) == pfx { return true }
+    }
+    return false
 }
 
 // ── ItemKind dispatch (enum match) ───────────────────────────
