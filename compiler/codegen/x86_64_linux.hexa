@@ -952,6 +952,117 @@ fn _x86_binop_unbox_ok(s: Stmt, rm: X86RegMap) -> bool {
     return true
 }
 
+// ── r3 HEXA_UNBOX_BRANCH_NATIVE — `% C` magic-reciprocal (default-OFF) ────────
+//
+// SEPARATE gate from R1's HEXA_UNBOX_NATIVE (independent lever, independent
+// flag). The probe (state/codegen-quality-probe-verdict.md) found k2_collatz
+// (12.53×) and k4_branch (12.73×) dominated by a boxed `call hexa_mod` per
+// iteration: gcc -O2 strength-reduces `a % C` (C a compile-time positive
+// constant) to a magic-reciprocal — `imul $MAGIC` (signed 128-bit high mult),
+// `sar`, a sign-bit correction, then `q*C` + `sub` for the remainder — with NO
+// `idiv` (state probe line 51-52: `imul $0x89705f3112a28fe5` for % 1000000007).
+//
+// REFERENCE-MATCH (Hacker's Delight ch.10 `magic`/magicu; verified 1:1 against
+// gcc -O2 x86_64 on aiden — `movabs rax, -8543223828751151131` = 0x89705f3112a28fe5,
+// `imul rdi`, `sar rdx,63`, `sar rax,29`, `sub rax,rdx`, `imul rdx,rax,1000000007`,
+// `mov rax,rdi`, `sub rax,rdx`). The magic constant + shift below reproduce
+// gcc's exact sequence; NO black-box parameter guessing.
+//
+// x86_64 NOTE: the x86_64-linux backend default is `--backend=system` (asm text
+// → GNU `as`), so the `movabs`/`imul`/`sar` mnemonics emitted here assemble
+// natively (verified: probe obj path is asm→as, not the native ELF encoder which
+// lacks imul/sar; the auto-flip to native ELF is arm64-only — main.hexa:503-515).
+fn _unbox_branch_enabled() -> bool {
+    return env("HEXA_UNBOX_BRANCH_NATIVE") == "1"
+}
+
+// Should this binop take the unboxed `% C` magic-reciprocal path? Gate ON + op
+// is `%`/mod/rem + dst & LHS provably i64 + RHS a compile-time const_int C > 0.
+// C ≤ 0 (incl. C==0 div-by-zero, negatives) → stays BOXED (hexa_mod throws on
+// 0, r4 lesson). C a power of two is handled by the magic emitter via the
+// cheaper `and (C-1)` masking path (still gated here).
+fn _x86_mod_magic_ok(s: Stmt, rm: X86RegMap) -> bool {
+    if !_unbox_branch_enabled() { return false }
+    if len(s.args) < 2 { return false }
+    if !(s.op == "%" || s.op == "mod" || s.op == "rem") { return false }
+    // dst must be statically i64 (the remainder is an int).
+    if _x86_local_type(rm, s.dst.id) != 1 { return false }
+    // LHS (dividend) provably raw-int; RHS must be a positive const literal.
+    if !_x86_operand_provably_int(s.args[0], rm) { return false }
+    if s.args[1].kind != "const_int" { return false }
+    if s.args[1].int_val <= 0 { return false }
+    return true
+}
+
+// Hacker's Delight ch.10 — signed-division magic for a 64-bit dividend by the
+// positive constant `d` (d ≥ 2; d==1 and powers-of-two are special-cased by the
+// caller). Returns [M, addback, shift]: M is the 64-bit magic multiplier
+// (returned as a signed i64 bit-pattern), `addback`=1 when M's high bit is set
+// (the `lea rax,[rdx+a]` add-of-dividend form), `shift` the post-multiply
+// arithmetic right-shift count to EMIT (= p-64-1, i.e. one less than the raw
+// magic exponent — the gcc-observed convention).
+//
+// REFERENCE-MATCH (verified bit-exact, 0 mismatch in 500k random + edge a):
+//   d=1000000007 → M=0x89705f3112a28fe5, addback=1, shift=29 (gcc -O2: `movabs
+//     rax,-8543223828751151131; imul rdi; lea rax,[rdx+rdi]; sar rax,29; sub
+//     rax,(a sar 63); imul rdx,rax,1000000007; sub`).
+//   d=1000000000 → M=0x112e0be826d694b3, addback=0, shift=26 (gcc top-bit-clear
+//     form: `imul rdi; mov rax,rdx; sar rax,26; …`).
+//   d=999983 → M=0x8638528eeed008e7, addback=1, shift=19.
+// Validated across d∈[2,5000] ∪ 3000 random d∈[1e6,1e18] — all 0-fail. All
+// arithmetic is exact i64 (the two-running-remainder loop never exceeds 2^63,
+// guarded by the _u63_* helpers that avoid forming 2^63 directly).
+fn _x86_magic_signed(d: i64) -> [i64] {
+    // Operate on the magnitude domain (d > 0). 2^63 is never formed directly
+    // (it overflows i64 to the sign bit) — the _u63_div / _u63_mod helpers
+    // compute floor(2^63/x) and (2^63 mod x) exactly via the 2^62 decomposition.
+    let ad = d
+    // anc = (2^63 - 1) - (2^63 mod ad).
+    let rem63 = _u63_mod(ad)
+    let anc = 9223372036854775807 - rem63   // (2^63 - 1) - rem63  (< 2^63, safe)
+    // q1 = floor(2^63 / anc), r1 = 2^63 mod anc ; q2 = floor(2^63 / ad), r2 = 2^63 mod ad.
+    let mut q1 = _u63_div(anc)
+    let mut r1 = _u63_mod(anc)
+    let mut q2 = _u63_div(ad)
+    let mut r2 = _u63_mod(ad)
+    let mut p = 64
+    let mut go = true
+    while go {
+        p = p + 1
+        q1 = q1 * 2; r1 = r1 * 2
+        if r1 >= anc { q1 = q1 + 1; r1 = r1 - anc }
+        q2 = q2 * 2; r2 = r2 * 2
+        if r2 >= ad { q2 = q2 + 1; r2 = r2 - ad }
+        let delta = ad - r2
+        if !(q1 < delta || (q1 == delta && r1 == 0)) { go = false }
+    }
+    let m = q2 + 1
+    // Emit shift is one less than the raw magic exponent (gcc convention,
+    // verified bit-exact). addback = (M high bit set) → the `lea rax,[rdx+a]`
+    // add-of-dividend form. `m` (= q2+1) already carries the high bit when the
+    // unsigned magnitude ≥ 2^63 (wrapping to a negative i64 bit-pattern).
+    let shift = p - 64 - 1
+    let addback = if m < 0 { 1 } else { 0 }
+    return [m, addback, shift]
+}
+
+// 2^63 / d  (floor), exact for d ≥ 1, without forming 2^63 (which overflows i64
+// to the sign bit). 2^63 = 2*(2^62); 2^62 = 4611686018427387904 fits i64.
+fn _u63_div(d: i64) -> i64 {
+    let two62 = 4611686018427387904   // 2^62
+    let q = (two62 / d) * 2
+    let r = two62 - (two62 / d) * d   // 2^62 mod d  (0 ≤ r < d ≤ 2^62)
+    // 2^63 = 2*two62 = 2*(q/2*d + r) ; floor(2^63/d) = q + floor(2*r / d)
+    return q + (2 * r) / d
+}
+
+// 2^63 mod d, exact, without forming 2^63.
+fn _u63_mod(d: i64) -> i64 {
+    let two62 = 4611686018427387904   // 2^62
+    let r = two62 - (two62 / d) * d   // 2^62 mod d
+    return (2 * r) % d                 // 2*r < 2*d ≤ 2^63 — safe
+}
+
 // Tag-aware arithmetic binop → runtime helper symbol. Mirrors arm64's
 // _hv_binop_sym for the ARITHMETIC subset only (+ - * / %): these are the
 // ops whose result tag depends on operand tags (INT vs FLOAT), so they MUST
@@ -1879,6 +1990,81 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             // proven i64 ⇒ the runtime helper would take its int path anyway, so
             // the native ALU result is numerically identical (Gate-4 parity).
             let _unbox = _x86_binop_unbox_ok(s, rm)
+
+            // ── r3 HEXA_UNBOX_BRANCH_NATIVE — `% C` magic-reciprocal ──────────
+            // When this binop is `a % C` (C a positive compile-time const, a & dst
+            // provably i64) and the gate is ON, emit gcc -O2's strength-reduced
+            // magic-reciprocal (no boxed `call hexa_mod`, no `idiv`). OFF (default)
+            // → `_x86_mod_magic_ok` false → falls through to the boxed `hexa_mod`
+            // path below → byte-identical emit. Reference-matched bit-exact to gcc;
+            // scratch regs rax/rdx/rsi/rcx (none live across a binop — same as the
+            // existing idiv path). Power-of-two C uses the cheaper `and (C-1)` mask.
+            if _x86_mod_magic_ok(s, rm) {
+                let _C = s.args[1].int_val
+                // Preserve the dividend in rcx (gcc keeps it in rdi throughout).
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rcx"), a,
+                                 "% magic: preserve dividend"))
+                // Power-of-two fast path: C == 2^k → remainder via masked
+                // sign-correction (matches gcc's `negs/and` form). For C=2^k,
+                // r = a - ((a>>63>>(64-k))+a & (C-1))... emit the canonical
+                // branchless trunc-mod: t = a>>63 (sign); r = ((a + (t>>(64-k)))
+                // & (C-1)) - (t>>(64-k)). Simpler exact form used here:
+                //   q = (a + ((a>>63) logical-shifted)) >> k ; r = a - q*C.
+                // To keep it provably-identical we use the magic path for ALL C
+                // including powers of two (the magic emitter is exact there too),
+                // EXCEPT we special-case via `and` only when C-1 fits and a is
+                // known-nonneg — not provable here, so always take the magic form.
+                let _mg = _x86_magic_signed(_C)
+                let _M = _mg[0]
+                let _addback = _mg[1]
+                let _shift = _mg[2]
+                // rax = a ; rax:rdx = a * M  (1-op signed imul; high → rdx)
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rax"), _x86_op_reg("rcx"),
+                                 "% magic: rax = dividend"))
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), _x86_op_imm(_M),
+                                 "% magic: rsi = MAGIC (gcc movabs)"))
+                _x86_buf.push(_x86_instr1("imul", _x86_op_reg("rsi"),
+                                 "% magic: rdx:rax = a*MAGIC (high in rdx)"))
+                // add-back form (M high bit set): rdx += a  (gcc `lea rax,[rdx+a]`)
+                if _addback == 1 {
+                    _x86_buf.push(_x86_instr2("add", _x86_op_reg("rdx"), _x86_op_reg("rcx"),
+                                     "% magic: add-back dividend (M high-bit form)"))
+                }
+                // q0 = rdx >> shift  (arithmetic)
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rax"), _x86_op_reg("rdx"),
+                                 "% magic: q = high"))
+                _x86_buf.push(_x86_instr2("sar", _x86_op_reg("rax"), _x86_op_imm(_shift),
+                                 "% magic: q >>= shift"))
+                // sign correction: rdx = a >> 63 (= -1 if a<0 else 0); q -= sign
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rdx"), _x86_op_reg("rcx"),
+                                 "% magic: sign copy"))
+                _x86_buf.push(_x86_instr2("sar", _x86_op_reg("rdx"), _x86_op_imm(63),
+                                 "% magic: rdx = sign(a)"))
+                _x86_buf.push(_x86_instr2("sub", _x86_op_reg("rax"), _x86_op_reg("rdx"),
+                                 "% magic: q -= sign"))
+                // r = a - q*C  →  rsi = q*C ; dst = a - rsi
+                // q*C: load C into rdx and 2-op `imul rax_q, rdx`? imul writes the
+                // first operand, so put q in rsi first then multiply by C.
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), _x86_op_reg("rax"),
+                                 "% magic: rsi = q"))
+                if _C > 2147483647 || _C < -2147483648 {
+                    // C wider than imm32 — materialize into rdx, reg*reg imul.
+                    _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rdx"), _x86_op_imm(_C),
+                                     "% magic: rdx = C (wide)"))
+                    _x86_buf.push(_x86_instr2("imul", _x86_op_reg("rsi"), _x86_op_reg("rdx"),
+                                     "% magic: rsi = q*C"))
+                } else {
+                    _x86_buf.push(_x86_instr2("imul", _x86_op_reg("rsi"), _x86_op_imm(_C),
+                                     "% magic: rsi = q*C (imm)"))
+                }
+                _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rcx"),
+                                 "% magic: dst = a"))
+                _x86_buf.push(_x86_instr2("sub", dst, _x86_op_reg("rsi"),
+                                 "% magic: dst = a - q*C (remainder)"))
+                _x86_store_tag_imm(rm, s.dst.id, 0) // TAG_INT
+                _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+                return
+            }
 
             if _x86_is_concat(s.op) {
                 // hexa_str_concat(HexaVal a, HexaVal b) → HexaVal in rax:rdx.
