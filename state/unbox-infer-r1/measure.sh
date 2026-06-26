@@ -23,7 +23,7 @@
 set -u
 RESULT="$HOME/unbox_r1_RESULT.txt"
 REPO="${REPO:-$HOME/dancinlab/hexa-lang}"   # adjust to the pool checkout path
-WORK="$(mktemp -d /tmp/unbox_r1.XXXXXX)"
+WORK="$(mktemp -d "${UNBOX_WORK_BASE:-$HOME/unbox_work}/unbox_r1.XXXXXX")"
 KERN="$REPO/state/unbox-infer-r1/k1_sum.hexa"
 say() { echo "$@" | tee -a "$RESULT"; }
 
