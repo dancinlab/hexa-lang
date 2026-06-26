@@ -1068,6 +1068,10 @@ pub fn _is_cabi(fname: string) -> bool {
     // plus one inner C-ABI call `bl hxlcl_malloc`. Whitelisting both binds the
     // inner alloc call C-ABI (size→rdi/x0, ptr←rax/x0) to the retained shim malloc.
     if fname == "hxlcl_strdup" { return true }
+    // r9 composite — hxlcl_calloc is a NON-LEAF: inner C-ABI `bl hxlcl_malloc`
+    // (pattern ON-path-confirmed by strdup) + a `__hx_ptr_store8` zero loop
+    // (confirmed by memset). Whitelisting both binds the inner alloc call C-ABI.
+    if fname == "hxlcl_calloc" { return true }
     if fname == "hxlcl_malloc" { return true }
     return false
 }

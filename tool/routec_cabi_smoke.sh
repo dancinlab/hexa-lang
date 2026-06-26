@@ -75,10 +75,10 @@ HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
 echo "[routec-smoke] (2) assert Route C symbols defined in routec.o …"
 syms="$(nm "$TMP/routec.o" 2>/dev/null || true)"
 miss=0
-# Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composite atoi).
-# strdup/calloc asserts are added here when those symbols merge — the standing
-# ON-path gate grows with the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup; do
+# Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
+# Each composite PR adds its symbol here — the standing ON-path gate grows with
+# the _is_cabi whitelist.
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -109,10 +109,11 @@ extern char  *hxlcl_strncpy(char *d, const char *s, size_t n);
 extern char  *hxlcl_strcat(char *d, const char *s);
 extern int    hxlcl_atoi(const char *s);
 extern char  *hxlcl_strdup(const char *s);
+extern void  *hxlcl_calloc(size_t nmemb, size_t size);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
- * atoi, malloc for strdup. (Each composite PR adds its callee here.) */
+ * atoi, malloc for strdup + calloc. (Each composite PR adds its callee here.) */
 long long hxlcl_atoll(const char *s) { return s ? atoll(s) : 0; }
 void     *hxlcl_malloc(size_t n) { return malloc(n ? n : 1); }
 
@@ -161,6 +162,11 @@ int main(void) {
     CK(dup != NULL && strcmp(dup, "hi") == 0, "strdup content");
     if (dup) free(dup);
 
+    char *z = (char *)hxlcl_calloc(3, 4);  /* 12 bytes, all zero */
+    int allzero = (z != NULL);
+    if (z) { for (int i = 0; i < 12; i++) if (z[i] != 0) allzero = 0; free(z); }
+    CK(allzero, "calloc 12B zero-fill");
+
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }
     printf("[routec-smoke] %d assert(s) FAILED\n", fails);
     return 1;
@@ -173,4 +179,4 @@ echo "[routec-smoke] (3) compile harness + link Route C .o + run …"
 "$TMP/routec_smoke"
 rc=$?
 [ "$rc" -eq 0 ] || { echo "[routec-smoke] FATAL: behaviour run rc=$rc" >&2; exit 1; }
-echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (11 symbols: 9 pure-arith + atoi + strdup, darwin-arm64)"
+echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (12 symbols: 9 pure-arith + atoi + strdup + calloc, darwin-arm64)"
