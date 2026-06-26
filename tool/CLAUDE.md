@@ -76,6 +76,19 @@ verdict atom fold 는 항상 `hexa verify` g5 PASS 경로로만.
   softmax …). reference-match 측정용.
 - `gpu_*` · `cuda_*` · `*_driver.cu` · `dispatch_*` · `fusion_*` · `decode_*` · `wgmma/` ·
   `hexa-fusion/` — GPU 마이크로벤치 · cuBLAS 대조 · fused 커널 · 원격 dispatch 스크립트.
+- **`build_cuda_runtime`** — `cuda_available 0→1` CUDA 런타임 빌드 + `cuda_gemm_verify` verdict.
+  `CUDA_HOME=/usr/local/cuda-X.Y SM=120 bash tool/build_cuda_runtime` (sm_120 = RTX 50계열 ·
+  nvcc ≥12.8 필요). ⚠️ **알려진 결함 (summer nvcc 12.9, 2026-06-26)**: 추출한 RT-NATIVE
+  cores($CORES: `rt_hi_native.o`·`alloc_syscall_native.o` …)를 `runtime_cuda_host.o`와 **명시 .o로
+  강제링크** → `rt_str_*`·`hexa_arena_*` 19× `multiple definition` collect2 fail(DONE_RC=1).
+  출하 runtime.a는 archive lazy 해소로 무충돌이나 explicit-.o-link는 둘 다 force-pull. 매크로
+  (`HEXA_HAS_HEXA_RT_STDLIB`/`HEXA_RT_ALLOC_NATIVE`) 추가·archive화 모두 무효(frozen runtime.c의
+  게이팅 ↔ seed 심볼셋 불일치가 근본). **root fix(TODO)** = 게이팅을 seed 제공 심볼셋과 정렬.
+  **검증-only 우회**(출하 금지·no-escape-hatch): verify 하니스는 `-Wl,--allow-multiple-definition`
+  로 재링크 가능(중복=byte-identical runtime 본문). 헤더 주석 + convergence
+  `CUDA-BUILD-CORES-EXPLICIT-LINK-MULTIDEF` 가 SSOT. 2026-06-26 summer 실측(이 우회로): cuda=1 ·
+  d2048 451 GFLOP/s · `farr_packed_gemv_offset [V=151643×64]` GPU out_id=2(illegal-D2H 회피) ·
+  max|GPU−ref|=3.3e-16 → anima PR #2631 디코더 expert gemv 검증.
 - `unshadow_*_bench.hexa` · `bench_*` · `train_floor_bench.hexa` — codegen/런타임 perf 벤치.
 
 ### 서브폴더
