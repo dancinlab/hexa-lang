@@ -1,0 +1,138 @@
+// HEXA Native Compiler — Phase 3 drill: cross-round absorb-loop selftest
+//
+// @version 0.1.0
+// @capabilities [stdout]
+//
+// Covers the ouroboros absorb loop (feat/drill-ouroboros-absorb-loop): a
+// round's exact-int VERIFIED primitives are collected and fed FORWARD into
+// the next round's smash axiom pool (the defining NEXUS well-widening loop).
+// This test exercises the absorb mechanism DIRECTLY with synthetic discovery
+// candidates whose `expr` IS in the 12-fn product-identity syntax — so we can
+// prove the loop collects + dedups + labels known/novel + accumulates, WITHOUT
+// depending on the standard generators (whose float-permutation exprs verify
+// 0 — the measured-exhausted honest ceiling).
+//
+// Asserts:
+//   1. _parse_identity recognizes 12-fn product-identity exprs.
+//   2. _native_identity_sweep_absorb VERIFIES a known identity (n≥4) and
+//      collects its canonical expr; rejects a non-solution control.
+//   3. _canon_identity collapses commutative restatements to ONE key.
+//   4. _is_known_identity labels the documented known set `known` (novel=0 for
+//      standard vocab — the honest ceiling).
+//   5. _absorb_merge ACCUMULATES across rounds (dedup by canonical key) — the
+//      before/after of the closed loop: round-independent (net=0) vs absorbed
+//      (cumulative pool grows).
+//
+// Run:
+//   hexa run compiler/drill/absorb_test.hexa
+
+use "compiler/drill/drill"
+use "compiler/smash/candidate"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+// Build a synthetic discovery candidate carrying a 12-fn identity expr.
+fn _mk(id: string, expr: string) -> DiscoveryCandidate {
+    return mk_axiom(id, expr, 0.0, "test:synthetic")
+}
+
+fn main() {
+    println("phase-3 drill cross-round absorb-loop selftest")
+    let fails = []
+
+    // ─── 1: identity-syntax recognition ───
+    println("")
+    println("scenario 1: _parse_identity recognizes 12-fn product-identity syntax")
+    // G1 phi*J2 = n*psi  (indices 3,8 = 5,9) — a documented ATLAS @F identity.
+    let idx = _parse_identity("phi*J2 = n*psi")
+    _check("scenario 1: 'phi*J2 = n*psi' parses to 4 basis indices", len(idx) == 4, fails)
+    // a float-permutation expr (the standard generator output) is NOT identity syntax.
+    let idx_noise = _parse_identity("evolve(v=1.5 <- base*2.0)")
+    _check("scenario 1: float-permutation expr is NOT identity syntax (honest noise)",
+           len(idx_noise) != 4, fails)
+
+    // ─── 2: exact-int VERIFY + collect ───
+    println("")
+    println("scenario 2: _native_identity_sweep_absorb VERIFIES + collects verified exprs")
+    let mut cands: array = []
+    cands.push(_mk("v1", "phi*J2 = n*psi"))        // G1: verifies bounded-unique @ n=4
+    cands.push(_mk("v2", "phi*J2 = sopfr*psi"))    // G2: verifies bounded-unique @ n=4
+    cands.push(_mk("n1", "phi*phi = sigma*sigma")) // control: no solution → NOT verified
+    cands.push(_mk("n2", "evolve(v=2.0 <- 3.0)"))  // noise: not identity syntax
+    let sweep = _native_identity_sweep_absorb(1, cands)
+    _check("scenario 2: verdict is 'pass' (>=1 verified)", sweep.verdict.verdict == "pass", fails)
+    _check("scenario 2: collected exactly the 2 verified exprs", len(sweep.verified_exprs) == 2, fails)
+    println("    rationale: " + sweep.verdict.rationale)
+
+    // ─── 3: canonical collapse of commutative restatements ───
+    println("")
+    println("scenario 3: _canon_identity collapses commutative restatements")
+    // phi*J2 = n*psi  vs  J2*phi = psi*n  vs  n*psi = phi*J2 → ONE canonical key.
+    let c1 = _canon_identity(3, 8, 5, 9)
+    let c2 = _canon_identity(8, 3, 9, 5)   // factors swapped within sides
+    let c3 = _canon_identity(5, 9, 3, 8)   // sides swapped
+    _check("scenario 3: factor-swap collapses to same key", c1 == c2, fails)
+    _check("scenario 3: side-swap collapses to same key", c1 == c3, fails)
+    println("    canonical key: " + c1)
+
+    // ─── 4: known/novel honesty label ───
+    println("")
+    println("scenario 4: known/novel cross-check (honest novel=0 for standard vocab)")
+    _check("scenario 4: G1 labelled known (already an ATLAS @F node)",
+           _is_known_identity(_canon_identity(3, 8, 5, 9)), fails)
+    _check("scenario 4: G3 labelled known", _is_known_identity(_canon_identity(0, 9, 1, 3)), fails)
+    // Both verified exprs in scenario 2 are documented known → novel must be 0.
+    _check("scenario 4: standard-vocab verified set reports novel=0 (no fabrication)",
+           sweep.n_novel == 0 && sweep.n_known == 2, fails)
+
+    // ─── 5: cross-round accumulation (the closed loop) ───
+    println("")
+    println("scenario 5: _absorb_merge ACCUMULATES across rounds (closed loop)")
+    // Round 1 absorbs the 2 verified exprs into an empty pool.
+    let empty: array = []
+    let m1 = _absorb_merge(empty, sweep.verified_exprs)
+    _check("scenario 5: round-1 net_absorbed == 2 (pool grows from 0)", m1.net_absorbed == 2, fails)
+    _check("scenario 5: round-1 cumulative pool size == 2", len(m1.pool) == 2, fails)
+    // Round 2 re-verifies the SAME identities (deterministic) — net must be 0
+    // (dedup by canonical key), proving the pool is a STABLE cumulative set,
+    // not a per-round reset. This is the before(net=0 reset)/after(cumulative)
+    // distinction: the pool PERSISTS and feeds forward, it does not vanish.
+    let m2 = _absorb_merge(m1.pool, sweep.verified_exprs)
+    _check("scenario 5: round-2 same-exprs net_absorbed == 0 (dedup) — pool persists",
+           m2.net_absorbed == 0, fails)
+    _check("scenario 5: round-2 pool still size 2 (cumulative, not reset)", len(m2.pool) == 2, fails)
+    // A NEW verified expr in round 2 grows the pool (well-widening).
+    let mut more: array = []
+    more.push(_canon_identity(0, 9, 1, 3))   // G3 — a different verified identity
+    let m3 = _absorb_merge(m2.pool, more)
+    _check("scenario 5: a NEW verified expr widens the pool (net=1, size 3)",
+           m3.net_absorbed == 1 && len(m3.pool) == 3, fails)
+
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: PASS — absorb loop wired (verify-gated cross-round feed-forward live)")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut k = 0
+        while k < len(fails) {
+            println("  - " + to_string(fails[k]))
+            k = k + 1
+        }
+        exit(1)
+    }
+}
+
+// is_main guard (mirrors verifier_hook_test.hexa)
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/absorb_test.hexa") { return true }
+    if s == "absorb_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

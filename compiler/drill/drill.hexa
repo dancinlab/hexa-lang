@@ -330,7 +330,7 @@ fn _fn_index(name: string) -> i64 {
 // indices via an out-array [a,b,c,d] when the whole expr is exactly four
 // recognised basis fns joined by two products and one `=`, else [].
 // Deterministic, ASCII/structure-driven (no float parse).
-fn _parse_identity(expr: string) -> [i64] {
+pub fn _parse_identity(expr: string) -> [i64] {
     let mut e = expr
     e = e.replace("·", "*")
     e = e.replace(" ", "")
@@ -350,21 +350,89 @@ fn _parse_identity(expr: string) -> [i64] {
     return out
 }
 
-// Native exact-int identity sweep over one round's discovery candidates.
-// Counts: n_identity (candidates in 12-fn identity syntax), n_verified
-// (bounded-unique singleton n≥4 → a real confirmed identity), n_noise
-// (candidates NOT in identity syntax — the honest classification for the
-// float-permutation generators). Returns a VerifierVerdict whose verdict is
-//   "pass"     — at least one candidate verified bounded-unique (n≥4), AND
-//   "continue" — otherwise (nothing verified this round; keep exploring).
-// The rationale string carries the machine-readable counts so the audit
-// emit (`DRILL_VERIFIER` stderr line) shows the real numbers, never "skip".
-fn _native_identity_sweep(round: i64, cands: array) -> VerifierVerdict {
+// Map a 12-fn `af()` index back to its basis name (inverse of _fn_index).
+// Used to render a verified candidate's canonical identity expr for the
+// cross-round absorb pool + the known/novel cross-check. "" if out of range.
+fn _fn_name(idx: i64) -> string {
+    if idx == 0  { return "sigma" }
+    if idx == 1  { return "sigma2" }
+    if idx == 2  { return "sigma3" }
+    if idx == 3  { return "phi" }
+    if idx == 4  { return "tau" }
+    if idx == 5  { return "n" }
+    if idx == 6  { return "sopfr" }
+    if idx == 7  { return "rad" }
+    if idx == 8  { return "J2" }
+    if idx == 9  { return "psi" }
+    if idx == 10 { return "Omega" }
+    if idx == 11 { return "omega" }
+    return ""
+}
+
+// Canonical product-identity string for four basis indices: "A*B = C*D".
+// Side/factor order is normalized (each side's two factors sorted by index,
+// then the two sides sorted) so commutative restatements collapse to one
+// canonical key — this is what the absorb pool dedups on and what the
+// known/novel cross-check compares.
+pub fn _canon_identity(a: i64, b: i64, c: i64, d: i64) -> string {
+    // sort factors within each side
+    let mut l0 = a
+    let mut l1 = b
+    if l1 < l0 { let t = l0; l0 = l1; l1 = t }
+    let mut r0 = c
+    let mut r1 = d
+    if r1 < r0 { let t = r0; r0 = r1; r1 = t }
+    // order the two sides (lhs <= rhs by (first,second))
+    let lhs_first = l0 < r0 || (l0 == r0 && l1 <= r1)
+    let mut s = ""
+    if lhs_first {
+        s = _fn_name(l0) + "*" + _fn_name(l1) + " = " + _fn_name(r0) + "*" + _fn_name(r1)
+    } else {
+        s = _fn_name(r0) + "*" + _fn_name(r1) + " = " + _fn_name(l0) + "*" + _fn_name(l1)
+    }
+    return s
+}
+
+// Known-identity cross-check (honesty c2: standard 12-fn vocab is
+// MEASURED-EXHAUSTED — every bounded-unique product identity over this basis
+// is already an ATLAS @F node). The documented known set is the identity_engine
+// selftest sanity-gate family (G1–G3 + their commutative twins, collapsed by
+// _canon_identity). A verified candidate matching one of these is labelled
+// `known`; anything else is `novel` (surfaced honestly, NEVER auto-folded —
+// fold stays the `hexa verify` g5 / PR path). We compare on the canonical key.
+pub fn _is_known_identity(canon: string) -> bool {
+    // G1 phi*J2 = n*psi   (3,8 = 5,9)
+    if canon == _canon_identity(3, 8, 5, 9) { return true }
+    // G2 phi*J2 = sopfr*psi  (3,8 = 6,9)
+    if canon == _canon_identity(3, 8, 6, 9) { return true }
+    // G3 sigma*psi = sig2*phi  (0,9 = 1,3)
+    if canon == _canon_identity(0, 9, 1, 3) { return true }
+    return false
+}
+
+// One round's exact-int identity sweep, the cross-round-absorb form. In
+// addition to the VerifierVerdict counts it COLLECTS the canonical exprs of
+// every candidate that verified bounded-unique (n≥4) so the drill loop can
+// feed them forward into the next round's smash axiom pool (the ouroboros
+// "well-widening" mechanism — verified primitives expand the search space).
+// `verified_exprs` is the out-array of canonical identity strings (deduped);
+// `n_known` / `n_novel` split them against the documented known set.
+pub struct AbsorbSweep {
+    verdict: VerifierVerdict,
+    verified_exprs: array,   // canonical "A*B = C*D" strings, deduped
+    n_known: i64,
+    n_novel: i64
+}
+
+pub fn _native_identity_sweep_absorb(round: i64, cands: array) -> AbsorbSweep {
     let N = 20000
     let n = len(cands)
     let mut n_identity = 0
     let mut n_verified = 0
     let mut n_noise = 0
+    let mut n_known = 0
+    let mut n_novel = 0
+    let mut verified_exprs: array = []
     let mut i = 0
     while i < n {
         let c = cands[i]
@@ -373,7 +441,22 @@ fn _native_identity_sweep(round: i64, cands: array) -> VerifierVerdict {
             if len(idx) == 4 {
                 n_identity = n_identity + 1
                 let r = verify_identity(idx[0], idx[1], idx[2], idx[3], N)
-                if r >= 4 { n_verified = n_verified + 1 }
+                if r >= 4 {
+                    n_verified = n_verified + 1
+                    let canon = _canon_identity(idx[0], idx[1], idx[2], idx[3])
+                    // dedup the verified-expr collection by canonical key
+                    let mut dup = false
+                    let mut k = 0
+                    while k < len(verified_exprs) {
+                        if to_string(verified_exprs[k]) == canon { dup = true; break }
+                        k = k + 1
+                    }
+                    if !dup {
+                        verified_exprs.push(canon)
+                        if _is_known_identity(canon) { n_known = n_known + 1 }
+                        else { n_novel = n_novel + 1 }
+                    }
+                }
             } else {
                 n_noise = n_noise + 1
             }
@@ -385,7 +468,30 @@ fn _native_identity_sweep(round: i64, cands: array) -> VerifierVerdict {
     let rationale = "identity_sweep:identity=" + to_string(n_identity)
         + ",verified=" + to_string(n_verified)
         + ",noise=" + to_string(n_noise)
-    return VerifierVerdict { verdict: verdict, rationale: rationale, round: round }
+        + ",known=" + to_string(n_known)
+        + ",novel=" + to_string(n_novel)
+    let vv = VerifierVerdict { verdict: verdict, rationale: rationale, round: round }
+    return AbsorbSweep {
+        verdict: vv,
+        verified_exprs: verified_exprs,
+        n_known: n_known,
+        n_novel: n_novel
+    }
+}
+
+// Native exact-int identity sweep over one round's discovery candidates.
+// Counts: n_identity (candidates in 12-fn identity syntax), n_verified
+// (bounded-unique singleton n≥4 → a real confirmed identity), n_noise
+// (candidates NOT in identity syntax — the honest classification for the
+// float-permutation generators). Returns a VerifierVerdict whose verdict is
+//   "pass"     — at least one candidate verified bounded-unique (n≥4), AND
+//   "continue" — otherwise (nothing verified this round; keep exploring).
+// The rationale string carries the machine-readable counts so the audit
+// emit (`DRILL_VERIFIER` stderr line) shows the real numbers, never "skip".
+// Thin wrapper over the absorb form (verdict-only callers ignore the
+// verified-expr collection).
+fn _native_identity_sweep(round: i64, cands: array) -> VerifierVerdict {
+    return _native_identity_sweep_absorb(round, cands).verdict
 }
 
 // Invoke the verifier for one round.
@@ -433,6 +539,89 @@ fn _verifier_run(opts: DrillOpts, round: i64, seed: string,
     let v = _verifier_parse_verdict(out)
     let r = _verifier_parse_rationale(out)
     return VerifierVerdict { verdict: v, rationale: r, round: round }
+}
+
+// ── Cross-round absorb (ouroboros well-widening) ──────────────────────
+//
+// The defining NEXUS-blowup mechanism (atlas/README.md ouroboros): a round's
+// VERIFIED primitives are fed forward as additional axiom seeds into the NEXT
+// round's blowup, widening the well so the next tick can surface what the
+// prior could not. This is the cross-cycle loop that the engine measured-OPEN
+// at 2026-06-27 (single-tick blowup was genuine; the absorb feed-forward was
+// not live — rounds were independent → zero accumulation across cycles).
+//
+// `_verifier_run_absorb` is the absorb-aware verifier dispatch. It returns the
+// full `AbsorbSweep` (verdict + the canonical exprs that verified bounded-
+// unique this round + known/novel split). It runs ONLY on the native path
+// (`verifier_cmd == ""` and not the HEXA_DRILL_NO_VERIFY opt-OUT): the absorb
+// loop feeds forward exact-int VERIFIED primitives, which only the native
+// `verify_identity` sweep produces. The external-oracle and opt-OUT-skip paths
+// return an EMPTY absorb (no verified exprs to feed forward — the external
+// oracle owns its own screen, and skip does no verification at all), so the
+// loop degrades to the legacy seed-derived pool only.
+//
+// SAFE invariants (task guardrails):
+//   ⓐ only VERIFIED (exact-int true, bounded-unique n≥4) exprs are absorbed —
+//      noise is never fed forward (zero fabrication).
+//   ⓑ in-memory ONLY — the absorbed pool lives in the drill_run call frame;
+//      the embedded atlas is NEVER written (fold stays `hexa verify` g5 / PR).
+//   ⓒ known/novel cross-check labels each verified expr against the documented
+//      known set (honest novel reporting; 0 is reported as 0).
+fn _verifier_run_absorb(opts: DrillOpts, round: i64, seed: string,
+                         y: RoundYields, sigma: string, cands: array) -> AbsorbSweep {
+    let empty: array = []
+    if len(opts.verifier_cmd) == 0 && env("HEXA_DRILL_NO_VERIFY") != "1" {
+        // Native-canonical default — the only path that produces verified
+        // exprs to feed forward.
+        return _native_identity_sweep_absorb(round, cands)
+    }
+    // External oracle OR opt-OUT skip — reuse the verdict-only dispatch and
+    // wrap it in an empty absorb (nothing feeds forward).
+    let vv = _verifier_run(opts, round, seed, y, sigma, cands)
+    return AbsorbSweep { verdict: vv, verified_exprs: empty, n_known: 0, n_novel: 0 }
+}
+
+// Merge this round's verified exprs into the cumulative absorbed pool,
+// deduping by canonical key. Returns the grown pool (returned, not mutated in
+// place — same struct_pack shallow-clone aliasing caveat as the round loop's
+// cum_seen_ids). `net_absorbed` is the count NEW this round.
+pub struct AbsorbMerge {
+    pool: array,
+    net_absorbed: i64
+}
+
+pub fn _absorb_merge(pool: array, verified_exprs: array) -> AbsorbMerge {
+    let mut out = pool
+    let mut net = 0
+    let mut i = 0
+    while i < len(verified_exprs) {
+        let e = to_string(verified_exprs[i])
+        let mut dup = false
+        let mut k = 0
+        while k < len(out) {
+            if to_string(out[k]) == e { dup = true; break }
+            k = k + 1
+        }
+        if !dup { out.push(e); net = net + 1 }
+        i = i + 1
+    }
+    return AbsorbMerge { pool: out, net_absorbed: net }
+}
+
+// Emit the cross-round absorb audit row (stderr DRILL_ABSORB). `verified` =
+// verified exprs THIS round, `net` = newly absorbed into the cumulative pool,
+// `cum` = cumulative pool size carried into the NEXT round, known/novel split.
+fn _absorb_audit_emit(round: i64, verified: i64, net: i64, cum: i64,
+                      known: i64, novel: i64) -> void {
+    let mut msg = "DRILL_ABSORB {"
+    msg = msg + "\"round\":" + to_string(round)
+    msg = msg + ",\"verified\":" + to_string(verified)
+    msg = msg + ",\"net_absorbed\":" + to_string(net)
+    msg = msg + ",\"cum_pool\":" + to_string(cum)
+    msg = msg + ",\"known\":" + to_string(known)
+    msg = msg + ",\"novel\":" + to_string(novel)
+    msg = msg + "}"
+    eprintln(msg)
 }
 
 // ── Surface-on-skip: emit top-N ⚪ proposals ──────────────────────────
@@ -693,6 +882,18 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
     // round_run_with_pool by K_POOL.
     let mut seed_pool: array = []
 
+    // ── Cross-round absorb pool (ouroboros well-widening) ──────────────
+    // The cumulative set of canonical exprs that VERIFIED bounded-unique in
+    // any prior round (exact-int identity_engine verdict). Each round's
+    // verified primitives are merged here and fed FORWARD as additional
+    // axiom seeds into the NEXT round's smash blowup — the defining NEXUS
+    // ouroboros loop. In-memory ONLY (never written to the embedded atlas;
+    // fold stays `hexa verify` g5 / PR). Empty until a round verifies
+    // something — for the standard 12-fn vocab this stays [] (measured-
+    // exhausted; the honest novel=0 report), but the MECHANISM is now live:
+    // any round that verifies an identity widens round N+1's well.
+    let mut absorbed_pool: array = []
+
     // C5 novelty-fixpoint state. The cumulative distinct-id set spans the
     // whole invocation; _flush_discoveries_cum dedups against it and reports
     // `net_novel` (ids new THIS round). A round adding zero net-novel
@@ -741,9 +942,35 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
         // The verdict is always logged (DRILL_VERIFIER stderr line) and,
         // for pass/fail, emitted as a __BT_AI2__ sentinel so a subsequent
         // bt_ai2_audit observes it alongside the existing BT-AI2 row.
-        let vv = _verifier_run(opts, round, seed, rr.yields, rr.sigma_best, rr.discoveries)
+        let sweep = _verifier_run_absorb(opts, round, seed, rr.yields, rr.sigma_best, rr.discoveries)
+        let vv = sweep.verdict
         _verifier_audit_emit(vv)
         verifier_last_verdict = vv.verdict
+
+        // ── cross-round absorb feed-forward (ouroboros well-widening) ──
+        // Merge THIS round's exact-int VERIFIED primitives into the
+        // cumulative absorbed pool, then feed that pool FORWARD into the
+        // next round's smash axiom seeds (in addition to the seed-derived
+        // pool refreshed just above). Round N+1's blowup therefore explores
+        // the space *widened* by round N's verified discoveries — the loop
+        // is now closed. SAFE: only verified (exact-int true) exprs are
+        // absorbed (zero fabrication); in-memory only (no atlas write).
+        let am = _absorb_merge(absorbed_pool, sweep.verified_exprs)
+        absorbed_pool = am.pool
+        _absorb_audit_emit(round, len(sweep.verified_exprs), am.net_absorbed,
+                           len(absorbed_pool), sweep.n_known, sweep.n_novel)
+        // Append the cumulative verified-primitive pool to the next round's
+        // seeds. extract_axiom_exprs already populated `seed_pool` with this
+        // round's axiom exprs; we add the absorbed verified exprs on top
+        // (dedup not required — the round's K_POOL bound + smash dedup absorb
+        // repeats harmlessly, and the two streams are disjoint by construction:
+        // seed_pool = float-permutation axioms, absorbed_pool = canonical
+        // identity exprs).
+        let mut ap = 0
+        while ap < len(absorbed_pool) {
+            seed_pool.push(to_string(absorbed_pool[ap]))
+            ap = ap + 1
+        }
 
         // ── surface proposals (no external oracle) ───────────────────
         // No EXTERNAL verifier installed (verifier_cmd == "" → native sweep
