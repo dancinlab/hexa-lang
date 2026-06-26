@@ -128,13 +128,19 @@ fn push_sym_name(buf: [int]) -> [int] {
 }
 
 // Push the section-header string table:
-//   \0 ".text" \0 ".symtab" \0 ".strtab" \0 ".shstrtab" \0   (33 bytes)
-// Names land at offsets 1 / 7 / 15 / 23.
+//   \0 ".text" \0 ".note.GNU-stack" \0 ".symtab" \0 ".strtab" \0 ".shstrtab" \0  (49 bytes)
+// Names land at offsets 1 / 7 / 23 / 31 / 39.
 fn push_shstrtab(buf: [int]) -> [int] {
     let mut b = buf
     b.push(0)
     // .text
     b.push(46); b.push(116); b.push(101); b.push(120); b.push(116); b.push(0)
+    // .note.GNU-stack   (marks the stack NON-executable; without it GNU ld
+    // marks the whole consumer binary's stack executable — a security regression)
+    b.push(46); b.push(110); b.push(111); b.push(116); b.push(101) // .note
+    b.push(46); b.push(71); b.push(78); b.push(85)                 // .GNU
+    b.push(45); b.push(115); b.push(116); b.push(97); b.push(99); b.push(107) // -stack
+    b.push(0)
     // .symtab
     b.push(46); b.push(115); b.push(121); b.push(109); b.push(116); b.push(97); b.push(98); b.push(0)
     // .strtab
@@ -166,9 +172,10 @@ fn push_shdr(buf: [int], name: int, typ: int, flags: int, off: int, size: int, l
 //   [64]  .text (code)
 //   ...   .symtab (2 * Elf64_Sym = 48)   — 8-aligned
 //   ...   .strtab ("\0hxlcl_strlen\0" = 14)
-//   ...   .shstrtab (33)
-//   ...   section header table (5 * Elf64_Shdr = 320)  — 8-aligned
-// Section indices: 0 NULL, 1 .text, 2 .symtab, 3 .strtab, 4 .shstrtab.
+//   ...   .shstrtab (49)
+//   ...   section header table (6 * Elf64_Shdr = 384)  — 8-aligned
+// Section indices: 0 NULL, 1 .text, 2 .note.GNU-stack, 3 .symtab,
+//                  4 .strtab, 5 .shstrtab.
 // ═══════════════════════════════════════════════════════════════════
 fn elf_obj_wrap(code: [int], e_machine: int) -> [int] {
     let code_size = len(code)
@@ -179,7 +186,7 @@ fn elf_obj_wrap(code: [int], e_machine: int) -> [int] {
     let strtab_off = symtab_off + symtab_size
     let strtab_size = 1 + 12 + 1            // \0 hxlcl_strlen \0
     let shstrtab_off = strtab_off + strtab_size
-    let shstrtab_size = 33
+    let shstrtab_size = 49
     let shoff = align_to_v(shstrtab_off + shstrtab_size, 8)
 
     let mut out = []
@@ -201,8 +208,8 @@ fn elf_obj_wrap(code: [int], e_machine: int) -> [int] {
     out = push_u16_le_v(out, 0)            // e_phentsize
     out = push_u16_le_v(out, 0)            // e_phnum
     out = push_u16_le_v(out, 64)           // e_shentsize
-    out = push_u16_le_v(out, 5)            // e_shnum
-    out = push_u16_le_v(out, 4)            // e_shstrndx
+    out = push_u16_le_v(out, 6)            // e_shnum
+    out = push_u16_le_v(out, 5)            // e_shstrndx
 
     // ── .text ──
     let mut k = 0
@@ -233,12 +240,13 @@ fn elf_obj_wrap(code: [int], e_machine: int) -> [int] {
     // pad to section header table
     while len(out) < shoff { out.push(0) }
 
-    // ── section header table (5 entries) ──
+    // ── section header table (6 entries) ──
     out = push_shdr(out, 0, 0, 0, 0, 0, 0, 0, 0, 0)                          // [0] NULL
     out = push_shdr(out, 1, 1, 6, text_off, code_size, 0, 0, 16, 0)          // [1] .text PROGBITS, ALLOC|EXEC
-    out = push_shdr(out, 7, 2, 0, symtab_off, symtab_size, 3, 1, 8, 24)      // [2] .symtab, link=.strtab(3), info=1(first global)
-    out = push_shdr(out, 15, 3, 0, strtab_off, strtab_size, 0, 0, 1, 0)      // [3] .strtab
-    out = push_shdr(out, 23, 3, 0, shstrtab_off, shstrtab_size, 0, 0, 1, 0)  // [4] .shstrtab
+    out = push_shdr(out, 7, 1, 0, 0, 0, 0, 0, 1, 0)                          // [2] .note.GNU-stack PROGBITS, size 0, flags 0 (non-exec stack)
+    out = push_shdr(out, 23, 2, 0, symtab_off, symtab_size, 4, 1, 8, 24)     // [3] .symtab, link=.strtab(4), info=1(first global)
+    out = push_shdr(out, 31, 3, 0, strtab_off, strtab_size, 0, 0, 1, 0)      // [4] .strtab
+    out = push_shdr(out, 39, 3, 0, shstrtab_off, shstrtab_size, 0, 0, 1, 0)  // [5] .shstrtab
 
     return out
 }
