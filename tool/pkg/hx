@@ -34,6 +34,7 @@ usage() {
   echo "                               https://...       full git URL"
   echo "                               git@host:...      ssh git URL"
   echo "                               ./path | /path    local directory"
+  echo "  hx resolve [<dir>]       MVS-resolve hexa.toml [dependencies] → hexa.lock"
   echo "  hx update [<pkg>]        Refresh shims (git pull for cloned pkgs)"
   echo "  hx run <pkg> [args...]   Run installed package"
   echo "  hx list                  List installed packages"
@@ -563,6 +564,28 @@ cmd_orgs() {
   fi
 }
 
+# MVS dependency resolver — delegate to the hexa resolver tool. The resolver
+# (tool/hx_resolve.hexa) sits at the repo-root tool/ dir, one level above this
+# script's tool/pkg/ home. Requires a hexa interpreter on PATH (or ~/.hx/bin).
+cmd_resolve() {
+  local dir="${1:-.}"
+  local resolver="${HX_DIR}/../hx_resolve.hexa"
+  if [ ! -f "$resolver" ]; then
+    red "hx resolve: resolver tool not found ($resolver)"
+    dim "  available only from a hexa-lang checkout (tool/hx_resolve.hexa)"
+    exit 1
+  fi
+  local hexa=""
+  for c in "$(command -v hexa 2>/dev/null)" "$HX_BIN/hexa" "./build/hexa_interp"; do
+    if [ -n "$c" ] && [ -x "$c" ]; then hexa="$c"; break; fi
+  done
+  if [ -z "$hexa" ]; then
+    red "hx resolve: hexa interpreter not found (PATH / $HX_BIN/hexa / ./build/hexa_interp)"
+    exit 1
+  fi
+  exec "$hexa" "$resolver" "$dir"
+}
+
 cmd_search() {
   green "⬡ available packages:"
   local reg
@@ -576,6 +599,7 @@ cmd_search() {
 
 case "${1:-}" in
   install) shift; cmd_install "$@" ;;
+  resolve) cmd_resolve "$2" ;;
   update)  cmd_update "$2" ;;
   run)     shift; cmd_run "$@" ;;
   list)    cmd_list ;;
