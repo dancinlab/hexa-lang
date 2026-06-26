@@ -577,3 +577,70 @@ jobs:
           [ "$hello_out" = "hello" ] || { echo "FAIL: hello output != hello"; exit 1; }
           [ "$undef" = "0" ] || { echo "FAIL: $undef undefined hxlcl_* at consumer link"; exit 1; }
           echo "SELFEMIT live-link smoke GREEN — 21/55 §M8 members link + run (darwin-arm64)"
+
+  # ── ROUTE C ON-PATH emit smoke — RFC061 §M8 verify-done gap closure (ADVISORY) ──
+  #
+  # SIBLING to the SELFEMIT smoke above, but exercises the OTHER §M8 path: the
+  # Route C per-fn C-ABI codegen (`HEXA_CABI_HXLCL`). The SELFEMIT job runs the
+  # hand-assembled SEED objects; this job runs the actual Route C EMIT of
+  # stdlib/runtime/hxlcl_core.hexa — emit with HEXA_CABI_HXLCL=1, link the
+  # emitted .o against a self-contained C harness (which supplies the composite
+  # inner-callee leaves hxlcl_malloc/hxlcl_atoll and CALLS every Route-C-emitted
+  # symbol with raw C-ABI prototypes + behaviour asserts), then RUN. A clean
+  # build + all-asserts-pass is the direct ON-path proof the Route C emit produces
+  # correct, linkable, behaviourally-faithful raw-C-ABI objects — the coverage the
+  # SELFEMIT (seed) smoke does NOT provide (seed shape-match was the prior, weaker,
+  # inferential evidence). Advisory first; promote to required after measured green.
+  #
+  # DARWIN-ONLY: aprime_cc builds Mach-O arm64 (clang -arch arm64) — the single
+  # host where the patched compiler builds. macos-15 cloud runner (github-hosted;
+  # no blacksmith). CODE-NEUTRAL: adds ONLY this job + tool/routec_cabi_smoke.sh;
+  # HEXA_CABI_HXLCL stays default-OFF everywhere (release_build never sets it), so
+  # shipping binaries + byteeq + tracked `.c`=0 are untouched.
+  routec-cabi-smoke-darwin-arm64:
+    name: Route C ON-path emit smoke (darwin-arm64, advisory)
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: ccache setup
+        uses: ./.github/actions/ccache-setup
+
+      # (1) Build ./hexa via the shared release path — also restores the gitignored
+      #     self/native/hexat transpiler + self/runtime.c seeds that build_aprime
+      #     needs present.
+      - name: (1) Build ./hexa — shared release_build (restores hexat + seeds)
+        shell: bash
+        env:
+          TARGET: darwin-arm64
+          CC: clang
+          LIBS: ""
+          GH_TOKEN: ${{ github.token }}
+          HEXA_CCACHE: "1"
+        run: |
+          set -euo pipefail
+          bash tool/release_build
+          ./hexa --version
+          echo "(1) ./hexa built + hexat/seeds restored OK"
+
+      # (2) Build aprime_cc (the native arm64-asm compiler) — the binary that emits
+      #     the Route C .s under HEXA_CABI_HXLCL=1.
+      - name: (2) Build aprime_cc
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tool/build_aprime.sh -o build/aprime_cc
+          [ -x build/aprime_cc ] && echo "(2) aprime_cc built OK"
+
+      # (3) Emit hxlcl_core.hexa with HEXA_CABI_HXLCL=1, link the Route C .o against
+      #     the behaviour harness, run + assert. The script is a loud no-op off
+      #     darwin-arm64 (it is the only host here, so it runs).
+      - name: (3) Route C emit + link + behaviour run
+        shell: bash
+        env:
+          APRIME: build/aprime_cc
+          CC: clang
+        run: |
+          set -euo pipefail
+          bash tool/routec_cabi_smoke.sh
