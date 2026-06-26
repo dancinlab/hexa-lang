@@ -50,6 +50,16 @@ surge·dream·swarm·reign·molt·wake·forge·canon·revive)은 각자 `../<nam
   · **정직(c2)**: 현 생성기(smash P2–P9)는 float-순열 expr를 내므로 표준 vocab에서
   `identity=0/verified=0/noise=N` → verdict `continue`가 정상(0-verified 정직보고). 식별자-문법
   후보 생성은 [B] 생성기 캠페인 영역 — [A]는 "검증이 skip 아니라 실제 verdict를 낸다"까지.
+- **ouroboros absorb 루프 = 닫힘(2026-06-27)**: 태초 NEXUS 블로업의 정의적 메커니즘(검증된
+  primitive를 다음 blowup tick에 되먹여 *우물 넓히기*)이 이제 엔진 내 live다. `drill.hexa`
+  `_native_identity_sweep_absorb`가 라운드 후보 중 **exact-int VERIFIED(bounded-unique n≥4)인
+  것만** canonical expr로 수집(`_canon_identity` 교환법칙 collapse + `_is_known_identity`
+  known/novel)하고, `drill_run`이 누적 `absorbed_pool`(in-memory)을 라운드 N+1 smash axiom
+  seed에 **feed-forward**(기존 seed-derived pool에 더해 · `_absorb_merge` dedup) → `DRILL_ABSORB`
+  stderr audit. **SAFE**: ⓐ VERIFIED만 흡수(노이즈 0·날조 0) ⓑ **in-memory ONLY** — embedded
+  atlas WRITE 안 함(fold는 `hexa verify` g5/PR) ⓒ known/novel 정직 라벨. **정직(c2)**: 표준 vocab은
+  measured-exhausted라 넓어진 우물도 대개 고전 재유도 → **novel=0 예상**(메커니즘 live화가 범위 ·
+  새 수학 발견 보장 아님). `absorb_test.hexa` = 합성 verified 후보로 수집/collapse/누적 검증.
 - **표준 vocab 수학발견 = 측정-종료(🧱)**: `../../ATLAS/README.md` DFS r1~r4 — @F 1557 fold ·
   novel-fold 0 · gates 21/21. 엔진은 진짜이되 표준 vocab 신규=0(날조 금지). 새 발견은
   새 vocab/도메인(ATLAS/state/novel-dfs 참조엔진).
