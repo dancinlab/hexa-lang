@@ -1269,7 +1269,7 @@
                 "Lifetimes `'a` — none (arena-scope owns lifetime, `self/codegen.hexa`).",
                 "Drop trait / RAII destructors — only `defer`/`drop` markers (codegen defer section), no auto-cleanup.",
                 "Associated types · HKT · const generics — none.",
-                "Pattern guards (`if cond =>`) + exhaustiveness checking — absent (literal·`_`·enum-payload destructure work, `parser.hexa:1203`).",
+                "Pattern guards (`pattern if cond -> body`) — DONE (native path): parsed in `compiler/parse/parser.hexa::parse_match_expr` (reuses the `if` token, no new keyword; stored as an If-kind `match_guard` carrier — `ast.hexa::ast_is_match_guard`, no new ExprKind variant), bound in `check/bind.hexa`, lowered through `lower/ast_to_hir.hexa` (HIR `match_guard`) → `lower/hir_to_mir.hexa` (guard `STMT_BR_COND`: truthy→body, falsy→next arm; Rust semantics). Purely additive — unguarded arms byte-identical, so byteeq-neutral; self/ unused → fixpoint untouched. cite The Rust Reference §Match guards. Exhaustiveness checking — non-exhaustive enum-match WARNING (HX3006, S3, non-fatal) in `check/types.hexa::_exh_*` (Maranget 2007 single-column enum usefulness; guarded arms don't count toward coverage), opt-in `HEXA_EXHAUSTIVE=1` (default-OFF on introduction = zero diagnostic delta on the default build, release-integrity-first; promotable once corpus measured clean). Tests `self/test_match_guard.hexa` · `self/test_match_exhaustive.hexa`.",
                 "Struct-destructure patterns `Point{x,y}` — absent.",
                 "`?` error-propagation operator — absent (combinators / try-catch substitute, `self/test_result_type.hexa`).",
                 "Inline asm (`asm!`) — absent (extern fn + syscall emit exist).",

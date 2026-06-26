@@ -2052,6 +2052,39 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
             let body = e.children[idx + 1]
             // arm scope
             let mut arm_sc = _push_frame(new_sc)
+            // RFC pattern guards — a guarded arm wraps its pattern as a
+            // "match_guard" carrier (children [inner_pattern, guard]). Lower
+            // the inner pattern + guard in the arm scope and re-emit them as a
+            // HIR "match_guard" HExpr (children [inner, guard]); hir_to_mir's
+            // match loop unwraps it and inserts the guard branch. Unguarded
+            // arms take the legacy path unchanged (byte-identical HIR).
+            if ast_is_match_guard(pat) {
+                let inner = pat.children[0]
+                let guard = pat.children[1]
+                if _hir_is_ident_kind(inner.kind) && len(inner.text) > 0 && inner.text != "_" {
+                    arm_sc = _define_in_scope(arm_sc, inner.text, _hir_empty_type())
+                }
+                let ipr = _lower_expr(inner, atlas, arm_sc)
+                arm_sc = ipr.sc
+                let gpr = _lower_expr(guard, atlas, arm_sc)
+                arm_sc = gpr.sc
+                let mut gkids: [HExpr] = []
+                gkids.push(ipr.expr)
+                gkids.push(gpr.expr)
+                let gh = _mk_hexpr("match_guard", pat.span, ipr.expr.typ, "match_guard",
+                                   gkids, _empty_atlas_binding(), _hir_miss_def_id())
+                let br = _lower_expr(body, atlas, arm_sc)
+                kids.push(gh)
+                kids.push(br.expr)
+                arm_sc = br.sc
+                new_sc = _pop_frame(arm_sc)
+                if !have_first {
+                    first_body_t = br.expr.typ
+                    have_first = true
+                }
+                idx = idx + 2
+                continue
+            }
             // bind ident-pattern names so body lookups can see them
             if _hir_is_ident_kind(pat.kind) && len(pat.text) > 0 && pat.text != "_" {
                 arm_sc = _define_in_scope(arm_sc, pat.text, _hir_empty_type())

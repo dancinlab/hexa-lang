@@ -1029,7 +1029,18 @@ fn _bind_walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> B
             let pat = e.children[i]
             let body = e.children[i + 1]
             sc = _push_scope(sc)
-            sc = _bind_pattern(pat, sc, mod_file, out)
+            // RFC pattern guards — a guarded arm wraps its pattern as a
+            // "match_guard" carrier (children [inner_pattern, guard]). Bind
+            // the inner pattern's payload binders FIRST, then walk the guard
+            // in the same arm scope so `Some(n) if n > 0` resolves `n`
+            // (no spurious HX2001). The guard sees binders; the body sees
+            // both. Unguarded arms take the legacy path unchanged.
+            if ast_is_match_guard(pat) {
+                sc = _bind_pattern(pat.children[0], sc, mod_file, out)
+                sc = _bind_walk_expr(pat.children[1], sc, mod_file, out)
+            } else {
+                sc = _bind_pattern(pat, sc, mod_file, out)
+            }
             sc = _bind_walk_expr(body, sc, mod_file, out)
             sc = _pop_scope(sc)
             i = i + 2

@@ -327,6 +327,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3006",
+        title: "non-exhaustive match",
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "non-exhaustive match on enum `{enum}`: missing variant(s) {missing}; add the arm(s) or a `_` wildcard",
+        explain: "A `match` over an enum should cover every variant. This warning implements the single-column case of Maranget's usefulness algorithm (Luc Maranget, \"Warnings for pattern matching\", JFP 2007): the set of head constructors covered by the (unguarded) arms is compared against the enum's full variant signature; any variant not covered AND not subsumed by a `_` wildcard or an irrefutable ident catch-all makes the wildcard row useful, i.e. the match is non-exhaustive. Guarded arms (`Variant if cond`) do NOT count toward coverage because the guard may fail at runtime. This is a non-fatal warning (S3) — codegen still emits a no-value fall-through for an unmatched scrutinee, so existing builds are unaffected. Fix: add the missing variant arms, or a final `_ -> …` wildcard if the omission is intentional.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,

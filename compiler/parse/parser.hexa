@@ -1211,7 +1211,33 @@ fn parse_match_expr() -> Expr {
     let mut kids = []
     kids.push(scrut)
     while !check_kind(TokenKind::RBrace) && !at_eof() {
-        let pat = parse_match_pattern()
+        let mut pat = parse_match_pattern()
+        // RFC pattern guards — optional `if <cond>` between pattern and `->`
+        // (Rust `n if n > 0 => …`). Purely additive: existing arms have `->`
+        // immediately after the pattern, so `check_kind(KwIf)` is false and
+        // the pre-guard parse result is byte-identical. When present, the
+        // arm is taken iff the pattern matches AND the guard is truthy; a
+        // failed guard falls through to the next arm (codegen in hir_to_mir).
+        // The guard is stored by wrapping the pattern in a "match_guard"
+        // carrier (ast_is_match_guard) — children [inner_pattern, guard].
+        if check_kind(TokenKind::KwIf) {
+            advance()
+            let prev_g = p_suppress_struct_lit
+            p_suppress_struct_lit = true
+            let guard = parse_expr()
+            p_suppress_struct_lit = prev_g
+            let mut gkids = []
+            gkids.push(pat)
+            gkids.push(guard)
+            pat = Expr {
+                kind: ExprKind::If,
+                span: pat.span,
+                text: "match_guard",
+                annotations: [],
+                children: gkids,
+                atlas_ref: empty_atlas()
+            }
+        }
         eat(TokenKind::Arrow)
         let body = parse_expr()
         kids.push(pat)

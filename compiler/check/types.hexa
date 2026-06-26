@@ -2071,7 +2071,20 @@ fn _check_match(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         // Pattern children may include ident binders (S2 handles binding) —
         // walk them so any type-bearing pattern still gets inspected, but
         // discard the inferred pattern type (no equality check at v1).
-        let _pt = _infer_expr(e.children[i], env, ctx, out)
+        //
+        // RFC pattern guards — a guarded arm's pattern is a "match_guard"
+        // carrier (If-kind, children [inner_pattern, guard]). Infer the inner
+        // pattern + guard separately rather than letting the generic If
+        // handler mis-type the 2-child carrier. The guard type is best-effort
+        // at v1 (not forced to bool); binder vars are not in this env, so
+        // unknown idents infer empty (no spurious diagnostic).
+        let pat_i = e.children[i]
+        if ast_is_match_guard(pat_i) {
+            let _ip = _infer_expr(pat_i.children[0], env, ctx, out)
+            let _gd = _infer_expr(pat_i.children[1], env, ctx, out)
+        } else {
+            let _pt = _infer_expr(pat_i, env, ctx, out)
+        }
         let bt = _infer_expr(e.children[i + 1], env, ctx, out)
         if !have_first {
             first_t = bt
@@ -2085,6 +2098,218 @@ fn _check_match(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         i = i + 2
     }
     return first_t
+}
+
+// ── Exhaustiveness check (Maranget 2007, single-column enum case) ─────
+//
+// Cite: Luc Maranget, "Warnings for pattern matching", JFP 17(3), 2007 —
+// the `U(P, q)` usefulness predicate. We implement the practical special
+// case the language needs today: a one-column matrix whose head
+// constructors are enum variants. For a `match` over an enum we collect the
+// set Σ of head constructors covered by the UNGUARDED arms; the wildcard
+// row `_` is useful (⇒ the match is non-exhaustive) exactly when Σ is a
+// proper subset of the enum's full variant signature AND no arm is an
+// irrefutable catch-all (`_` or a bare ident binding). Guarded arms
+// (`Variant if cond`) never contribute to Σ — the guard may fail at runtime,
+// so the variant is not provably covered (same rule as Rust).
+//
+// Default-OFF behind `HEXA_EXHAUSTIVE=1`: this introduces a brand-new
+// diagnostic, so it ships opt-in to guarantee zero change to the default
+// build's diagnostic stream (release integrity). It is a warning (HX3006),
+// never fatal, and never affects emitted bytes — promotable to default once
+// the in-tree corpus is measured clean.
+
+struct ExhEnumReg {
+    names: [string],
+    joined: [string]
+}
+
+fn _exh_build_registry(module: Module) -> ExhEnumReg {
+    let mut names: [string] = []
+    let mut joined: [string] = []
+    let mut i = 0
+    while i < len(module.items) {
+        let it = module.items[i]
+        if _types_is_enum_item(it.kind) {
+            names.push(it.name)
+            let mut s = ""
+            let mut j = 0
+            while j < len(it.params) {
+                if j > 0 { s = s + "|" }
+                s = s + it.params[j].name
+                j = j + 1
+            }
+            joined.push(s)
+        }
+        i = i + 1
+    }
+    return ExhEnumReg { names: names, joined: joined }
+}
+
+fn _exh_reg_lookup(reg: ExhEnumReg, name: string) -> string {
+    let mut i = 0
+    while i < len(reg.names) {
+        if reg.names[i] == name { return reg.joined[i] }
+        i = i + 1
+    }
+    return ""
+}
+
+fn _exh_is_wildcard(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Wildcard -> true,
+        _ -> false
+    }
+}
+
+fn _exh_split(s: string) -> [string] {
+    let chars = s.chars()
+    let n = len(chars)
+    let mut out: [string] = []
+    let mut cur = ""
+    let mut i = 0
+    while i < n {
+        if chars[i] == '|' {
+            out.push(cur)
+            cur = ""
+        } else {
+            cur = cur + to_string(chars[i])
+        }
+        i = i + 1
+    }
+    if len(cur) > 0 { out.push(cur) }
+    return out
+}
+
+fn _exh_contains(arr: [string], s: string) -> bool {
+    let mut i = 0
+    while i < len(arr) {
+        if arr[i] == s { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Local "Enum::Variant" splitters (private siblings of bind.hexa's
+// _enum_head / _enum_variant_tail; kept file-local because non-pub fns are
+// file-scoped under the module-flatten model).
+fn _exh_path_head(t: string) -> string {
+    let chars = t.chars()
+    let n = len(chars)
+    let mut i = 0
+    let mut out = ""
+    while i < n - 1 {
+        if chars[i] == ':' && chars[i + 1] == ':' {
+            return out
+        }
+        out = out + to_string(chars[i])
+        i = i + 1
+    }
+    if i < n {
+        out = out + to_string(chars[i])
+    }
+    return out
+}
+
+fn _exh_path_tail(t: string) -> string {
+    let chars = t.chars()
+    let n = len(chars)
+    let mut i = 0
+    while i < n - 1 {
+        if chars[i] == ':' && chars[i + 1] == ':' {
+            let mut out = ""
+            let mut j = i + 2
+            while j < n {
+                out = out + to_string(chars[j])
+                j = j + 1
+            }
+            return out
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn _exh_analyze_match(e: Expr, reg: ExhEnumReg, out: array) {
+    // children: [scrut, pat0, body0, pat1, body1, ...]
+    let mut has_catchall = false
+    let mut saw_enum = false
+    let mut enum_head = ""
+    let mut covered: [string] = []
+    let mut i = 1
+    while i + 1 < len(e.children) {
+        let mut p = e.children[i]
+        let mut guarded = false
+        if ast_is_match_guard(p) {
+            guarded = true
+            p = p.children[0]
+        }
+        if _exh_is_wildcard(p.kind) {
+            if !guarded { has_catchall = true }
+        } else if _types_is_ident(p.kind) {
+            // a bare ident binding (not `_`) is an irrefutable catch-all
+            if !guarded && p.text != "_" { has_catchall = true }
+        } else if _types_is_enum_path_kind(p.kind) {
+            saw_enum = true
+            let h = _exh_path_head(p.text)
+            let tl = _exh_path_tail(p.text)
+            if len(enum_head) == 0 { enum_head = h }
+            if !guarded && len(tl) > 0 { covered.push(tl) }
+        }
+        i = i + 2
+    }
+    if has_catchall { return }
+    if !saw_enum { return }
+    if len(enum_head) == 0 { return }
+    let joined = _exh_reg_lookup(reg, enum_head)
+    if len(joined) == 0 { return }
+    let decl = _exh_split(joined)
+    let mut missing = ""
+    let mut n_missing = 0
+    let mut j = 0
+    while j < len(decl) {
+        if !_exh_contains(covered, decl[j]) {
+            if n_missing > 0 { missing = missing + ", " }
+            missing = missing + enum_head + "::" + decl[j]
+            n_missing = n_missing + 1
+        }
+        j = j + 1
+    }
+    if n_missing > 0 {
+        let mut b = diag_new("HX3006")
+        b = diag_span(b, e.span)
+        b = diag_arg(b, "enum", enum_head)
+        b = diag_arg(b, "missing", missing)
+        out.push(diag_emit(b))
+    }
+}
+
+fn _exh_walk(e: Expr, reg: ExhEnumReg, out: array) {
+    if _is_match_expr(e.kind) {
+        _exh_analyze_match(e, reg, out)
+    }
+    let mut i = 0
+    while i < len(e.children) {
+        _exh_walk(e.children[i], reg, out)
+        i = i + 1
+    }
+}
+
+fn _exh_check_module(module: Module, out: array) {
+    if env("HEXA_EXHAUSTIVE") != "1" { return }
+    let reg = _exh_build_registry(module)
+    let mut i = 0
+    while i < len(module.items) {
+        let it = module.items[i]
+        if item_is_parse_only(it) {
+            i = i + 1
+            continue
+        }
+        if _types_is_fn_item(it.kind) || _types_is_let_item(it.kind) {
+            _exh_walk(it.body, reg, out)
+        }
+        i = i + 1
+    }
 }
 
 // ── Pre-pass: collect Item types into TypeEnv ────────────────
@@ -2383,6 +2608,10 @@ pub fn type_check(module: Module) -> array {
         }
         li = li + 1
     }
+
+    // RFC exhaustiveness — non-exhaustive enum-match warnings (HX3006).
+    // Opt-in (HEXA_EXHAUSTIVE=1); no-op on the default build.
+    _exh_check_module(module, out)
 
     return out
 }
