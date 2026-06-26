@@ -1,0 +1,277 @@
+// HEXA Native Compiler — Static-generic monomorphization (opt-in, default-OFF)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// RFC: state/rfc_static_generics_monomorphization.md
+//
+// ── What this is ──────────────────────────────────────────────
+// A whole-module MIR→MIR pass that turns a *generic template* function
+// into one concrete *instance* per call-site argument type, mirroring the
+// monomorphization strategy of rustc (collector → MonoItem instances),
+// zig (comptime-type instantiation) and swift (generic specialization):
+//   reference: a generic fn body is CLONED once per distinct concrete
+//   type it is instantiated with, the clone is renamed (mangled) with a
+//   per-type suffix, and each call site is rewritten to target its clone.
+//
+// ── Polarity / release integrity ──────────────────────────────
+// Default behavior is the existing *type-erased* path (every `T` shares
+// one dynamic MIR shape). Monomorphization is an OPT-IN constraint, gated
+// in compiler/main.hexa behind `env("HEXA_MONOMORPHIZE") == "1"`. Even
+// when the env flag is ON this pass is a guaranteed NO-OP unless the
+// module already carries a `$$g`-marked generic template (see TEMPLATE
+// MARKER below) — and no default lowering emits that marker today, so the
+// codegen byte-output is unchanged for every existing program. The pass
+// early-returns the *same* MModule reference when no template is present,
+// so it cannot perturb a non-generic module even with the flag set.
+//
+// ── Template marker (R1 contract) ─────────────────────────────
+// A generic template is recognized purely from the MModule by an MFunc
+// whose `name` ends with the sentinel suffix MONO_TEMPLATE_MARK ("$$g").
+// The template's *base name* (callee symbol used at call sites) is the
+// name with the marker stripped. R2 wires HIR→MIR (`_lower_fn`) to set
+// this marker for an `@specialize`-annotated generic fn (gated by the
+// same env flag, so the default name is unchanged). Until R2 lands the
+// marker, this pass is exercised only by its unit test
+// (compiler/optimize/monomorphize_test.hexa), which hand-builds a marked
+// module — keeping the transform real and verified rather than dead.
+//
+// ── Algorithm ─────────────────────────────────────────────────
+//   1. Collect templates  : MFuncs whose name ends with "$$g".
+//   2. Collect call sites  : STMT_CALL whose `op` == a template base name.
+//      For each, infer the concrete type tag of arg[0] (the leading typed
+//      param) from its Operand kind (const_int→"int", const_str→"str",
+//      const_float→"f64"; otherwise "dyn" → left on the erased path).
+//   3. Instantiate         : for each distinct (base, tag) pair emit a
+//      cloned MFunc named `base + "$" + tag` (deterministic order).
+//   4. Rewrite             : retarget each matching call's `op` to the
+//      mangled instance name. Calls whose tag is "dyn" are left alone.
+// The template itself is kept (unreferenced) so any indirect/unresolved
+// reference still links; DCE can drop it later.
+
+import "../ir/mir.hexa"
+
+pub let MONO_TEMPLATE_MARK: string = "$$g"
+
+// ── Name helpers ──────────────────────────────────────────────
+
+fn _mono_is_template(name: string) -> bool {
+    let n = len(name)
+    let m = len(MONO_TEMPLATE_MARK)
+    if n < m { return false }
+    return name.substring(n - m, n) == MONO_TEMPLATE_MARK
+}
+
+fn _mono_base_name(name: string) -> string {
+    let n = len(name)
+    let m = len(MONO_TEMPLATE_MARK)
+    if n < m { return name }
+    if name.substring(n - m, n) != MONO_TEMPLATE_MARK { return name }
+    return name.substring(0, n - m)
+}
+
+fn _mono_mangle(base: string, tag: string) -> string {
+    return base + "$" + tag
+}
+
+// Concrete type tag inferred from a call argument operand. Mirrors the
+// erased→concrete decision a monomorphizing collector makes at the call
+// site. Unknown shapes stay "dyn" (the erased path is preserved).
+fn _mono_tag_of(arg: Operand) -> string {
+    if arg.kind == "const_int" { return "int" }
+    if arg.kind == "const_str" { return "str" }
+    if arg.kind == "const_float" { return "f64" }
+    return "dyn"
+}
+
+// ── Template + instance bookkeeping ───────────────────────────
+
+fn _mono_collect_templates(funcs: [MFunc]) -> [string] {
+    // returns the list of template BASE names (deterministic source order)
+    let mut bases: [string] = []
+    let mut i = 0
+    while i < len(funcs) {
+        if _mono_is_template(funcs[i].name) {
+            bases.push(_mono_base_name(funcs[i].name))
+        }
+        i = i + 1
+    }
+    return bases
+}
+
+fn _mono_str_in(xs: [string], v: string) -> bool {
+    let mut i = 0
+    while i < len(xs) {
+        if xs[i] == v { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _mono_find_template(funcs: [MFunc], base: string) -> i64 {
+    let marked = base + MONO_TEMPLATE_MARK
+    let mut i = 0
+    while i < len(funcs) {
+        if funcs[i].name == marked { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// ── Clone an MFunc, renaming it ───────────────────────────────
+// Blocks/locals/params are value-copied (the pass is pure: a fresh MFunc
+// shares no mutated sub-structure with the template). Hexa arrays/structs
+// copy by value on assignment, so a shallow field copy suffices here — no
+// Local id remap is needed because each instance is an independent MFunc
+// with its own (cloned) local-id space identical to the template's.
+fn _mono_clone_renamed(tpl: MFunc, new_name: string) -> MFunc {
+    return MFunc {
+        name: new_name,
+        params: tpl.params,
+        return_local: tpl.return_local,
+        locals: tpl.locals,
+        blocks: tpl.blocks,
+        entry_block: tpl.entry_block,
+        arena_root: tpl.arena_root,
+        def_line: tpl.def_line,
+        gpu_kind: tpl.gpu_kind
+    }
+}
+
+// Concrete instance name a STMT_CALL resolves to, or "" if the call is not
+// a template call or its argument type is not statically recoverable (left
+// on the erased path). Pure — no shared-state mutation, so the scan and the
+// rewrite below make identical decisions.
+fn _mono_call_instance(s: Stmt, bases: [string]) -> string {
+    if s.kind != STMT_CALL { return "" }
+    if !_mono_str_in(bases, s.op) { return "" }
+    if len(s.args) == 0 { return "" }
+    let tag = _mono_tag_of(s.args[0])
+    if tag == "dyn" { return "" }
+    return _mono_mangle(s.op, tag)
+}
+
+// Scan every function body and return the deterministic, deduped list of
+// instance names the module needs (first-request order). Returns a FRESH
+// array — avoids any reliance on by-reference parameter mutation.
+fn _mono_scan_wanted(funcs: [MFunc], bases: [string]) -> [string] {
+    let mut wanted: [string] = []
+    let mut fi = 0
+    while fi < len(funcs) {
+        let mf = funcs[fi]
+        let mut bi = 0
+        while bi < len(mf.blocks) {
+            let b = mf.blocks[bi]
+            let mut si = 0
+            while si < len(b.stmts) {
+                let inst = _mono_call_instance(b.stmts[si], bases)
+                if inst != "" {
+                    if !_mono_str_in(wanted, inst) { wanted.push(inst) }
+                }
+                si = si + 1
+            }
+            bi = bi + 1
+        }
+        fi = fi + 1
+    }
+    return wanted
+}
+
+// ── Call-site rewrite within one function body ────────────────
+// Returns a fresh MFunc whose STMT_CALLs to a template base are retargeted
+// to the per-arg-type instance. Pure: decisions match _mono_scan_wanted.
+fn _mono_rewrite_calls(mf: MFunc, bases: [string]) -> MFunc {
+    let mut new_blocks: [Block] = []
+    let mut bi = 0
+    while bi < len(mf.blocks) {
+        let b = mf.blocks[bi]
+        let mut new_stmts: [Stmt] = []
+        let mut si = 0
+        while si < len(b.stmts) {
+            let s = b.stmts[si]
+            let mut out = s
+            let inst = _mono_call_instance(s, bases)
+            if inst != "" {
+                out = Stmt {
+                    kind: s.kind,
+                    dst: s.dst,
+                    op: inst,
+                    args: s.args,
+                    target_block: s.target_block,
+                    target_block_else: s.target_block_else
+                }
+            }
+            new_stmts.push(out)
+            si = si + 1
+        }
+        new_blocks.push(Block { id: b.id, stmts: new_stmts, preds: b.preds, succs: b.succs })
+        bi = bi + 1
+    }
+    return MFunc {
+        name: mf.name,
+        params: mf.params,
+        return_local: mf.return_local,
+        locals: mf.locals,
+        blocks: new_blocks,
+        entry_block: mf.entry_block,
+        arena_root: mf.arena_root,
+        def_line: mf.def_line,
+        gpu_kind: mf.gpu_kind
+    }
+}
+
+// ── Entry point ───────────────────────────────────────────────
+pub fn monomorphize(module: MModule) -> MModule {
+    let bases = _mono_collect_templates(module.funcs)
+    // Fast byte-safe exit: no generic templates → return the module
+    // untouched (identical reference) so non-generic programs are never
+    // perturbed, even with HEXA_MONOMORPHIZE=1.
+    if len(bases) == 0 { return module }
+
+    // Pass 0: collect the deduped set of wanted instances (pure scan).
+    let wanted = _mono_scan_wanted(module.funcs, bases)
+
+    // Pass 1: rewrite every function's call sites to the instance names.
+    let mut rewritten: [MFunc] = []
+    let mut i = 0
+    while i < len(module.funcs) {
+        rewritten.push(_mono_rewrite_calls(module.funcs[i], bases))
+        i = i + 1
+    }
+
+    // Pass 2: emit one clone per distinct wanted instance (dedup, in the
+    // deterministic order instances were first requested).
+    let mut emitted: [string] = []
+    let mut wi = 0
+    while wi < len(wanted) {
+        let inst = wanted[wi]
+        if !_mono_str_in(emitted, inst) {
+            // instance name = base + "$" + tag → recover base via the
+            // template lookup. Scan known bases for the longest prefix
+            // match ending in "$<tag>".
+            let mut bj = 0
+            let mut matched_base = ""
+            while bj < len(bases) {
+                let cand = bases[bj]
+                let pfx = cand + "$"
+                let pl = len(pfx)
+                if len(inst) > pl {
+                    if inst.substring(0, pl) == pfx {
+                        if len(cand) > len(matched_base) { matched_base = cand }
+                    }
+                }
+                bj = bj + 1
+            }
+            if matched_base != "" {
+                let ti = _mono_find_template(module.funcs, matched_base)
+                if ti >= 0 {
+                    rewritten.push(_mono_clone_renamed(module.funcs[ti], inst))
+                    emitted.push(inst)
+                }
+            }
+        }
+        wi = wi + 1
+    }
+
+    return MModule { file: module.file, funcs: rewritten, globals: module.globals }
+}

@@ -1764,6 +1764,29 @@ fn parse_fn_item(is_pub: bool, anns: [Annotation]) -> Item {
     let kw = peek()
     eat(TokenKind::KwFn)
     let name_tok = expect(TokenKind::Ident)
+    // Optional generic type params: `fn id<T>(x: T) -> T { … }`. Mirrors
+    // the `parse_struct_item` discard loop (and self/parser.hexa's
+    // `parse_type_params`) — the native pipeline currently ERASES generics
+    // (every `T` shares one dynamic MIR shape), so we consume + discard the
+    // `<…>` token sequence so the cursor lands on `(`. Without this the
+    // `eat(LParen)` below no-ops on the `<` mismatch and `parse_param`'s
+    // `expect(Ident)` doesn't advance either — the same ~hang the struct
+    // parser already guards against (see parse_struct_item below).
+    // Byte-neutral: no .hexa source routed a `fn name<T>` through this
+    // parser before (it hung), so discarding is purely additive. Opt-in
+    // monomorphization (state/rfc_static_generics_monomorphization.md)
+    // consumes these params in a later round; today they stay erased.
+    if check_kind(TokenKind::Lt) {
+        advance()
+        let mut depth = 1
+        while depth > 0 && !at_eof() {
+            let tk = peek().kind
+            if same_kind(tk, TokenKind::Lt) { depth = depth + 1 }
+            else if same_kind(tk, TokenKind::Gt) { depth = depth - 1 }
+            advance()
+            if depth == 0 { break }
+        }
+    }
     eat(TokenKind::LParen)
     let mut params = []
     if !check_kind(TokenKind::RParen) {

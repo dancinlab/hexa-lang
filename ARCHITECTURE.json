@@ -1200,7 +1200,7 @@
             [
               "hx package manager",
               "`tool/hx.hexa`",
-              "Git-like CLI with SSOT attestation: `commit`/`push`/`edit`/`build`/`verify`/`install`/`search`"
+              "Git-like CLI with SSOT attestation: `commit`/`push`/`edit`/`build`/`verify`/`install`/`search`. **Dependency resolution (Go/Rust parity lane-1, 2026-06-27):** `hx resolve [dir]` runs **Minimal Version Selection (MVS)** over `hexa.toml [dependencies]` → deterministic `hexa.lock` — the cargo/`go mod` core that the lockfile/semver/ed25519 schema halves previously lacked. Algorithm SSOT = `stdlib/hx/resolve.hexa` (`mvs_resolve`, reference-matched to go.dev/ref/mod#minimal-version-selection + cmd/go/internal/mvs; reuses `stdlib/semver.hexa` `semver_satisfies`/`semver_compare` for the range gate and `stdlib/hx/lockfile.hexa` for serialization). Bare `X.Y.Z` requirements read as Go-style lower bounds (`>=X.Y.Z`); range upper bounds (`^`/`~`/`<`) are the only conflict source. Wired: `tool/hx_resolve.hexa` (reads the vendored `packages/<name>/hexa.toml` tree → registry; network fetch is a separate lane) ← `tool/hx.hexa::_cmd_resolve` + bash `tool/pkg/hx::cmd_resolve`. Selftest `self/test_hx_resolve.hexa` (linear/diamond/conflict/idempotent). Pure additive stdlib — 0 codegen/runtime/frozen-seed touch, byte-eq-neutral. (v2 candidate: cargo PubGrub backtracking.)"
             ],
             [
               "CLI front-ends",
@@ -1246,12 +1246,12 @@
             {
               "type": "list",
               "items": [
-                "Static generics / monomorphization — parsed only, codegen erases (`compiler/parse/parser.hexa:1811`). Limits codegen specialization.",
+                "Static generics / monomorphization — parsed only, codegen erases (`compiler/parse/parser.hexa:1811`). Limits codegen specialization. OPT-IN slice R1 landed (PR#NN, `state/rfc_static_generics_monomorphization.md`): native `parse_fn_item` now consumes `<T>` (parity w/ struct + self/parser, byte-neutral), and a default-OFF MIR pass `compiler/optimize/monomorphize.hexa` (gated `HEXA_MONOMORPHIZE=1`, no-op unless a `$$g`-marked template exists) clones+mangles a generic template per call-site concrete type (`id$int`/`id$str`) à la rustc/zig/swift specialization. DEFAULT path stays erased + byteeq-neutral. R2 threads the marker from `@specialize`+generic via `hir_to_mir::_lower_fn`.",
                 "Type alias / newtype — no lexer keyword.",
                 "Interface/trait dispatch — `impl T For X` PARSES (`self/parser.hexa:2603`) but no checking, no vtable. Method dispatch on structs works; trait-bounded polymorphism does not.",
                 "Operator overloading — fixed 21-operator set (`compiler/lex/tokens.hexa:58-73`), no magic methods.",
-                "OS threads / goroutines — single-threaded only (`stdlib/cancel.hexa:54`). async/await PARSE but run synchronously (RFC-022).",
-                "Real mutex/atomic — SIMULATED only, no actual synchronization (`self/atomic_ops.hexa:1-3`); pthread_mutex_* are compat-only stubs (`self/runtime.c:1312-1315`).",
+                "OS threads / goroutines — single-threaded by DEFAULT (`stdlib/cancel.hexa:54`); async/await PARSE but run synchronously (RFC-022). A real pthread spawn/join+condvar-channel runtime exists (`self/native/thread.c`) but routes through noop `hxlcl_pthread_*` shims. OPT-IN real threads = gate shims under `-DHEXA_THREADS` — design-only follow-on (rfc_real_concurrency_optin.md §c).",
+                "Real mutex/atomic — by-value sim is the byte-deterministic DEFAULT (`self/atomic_ops.hexa:1-3`). OPT-IN real hardware atomics LANDED: C11/GCC `__atomic_*` seq-cst cells behind `#if defined(HEXA_THREADS)` (`self/native/thread_emit.hexa`→thread.c), hexa wrappers in `stdlib/atomic_real.hexa`. Default preprocesses out → byteeq unaffected. SSOT: state/rfc_real_concurrency_optin.md.",
                 "Regex — no built-in regex anywhere in stdlib.",
                 "Package-manager dependency RESOLVER + registry — hx has lockfile/semver/ed25519 SCHEMA only (`stdlib/hx/lockfile.hexa`, `semver.hexa`); `hexa.toml [dependencies]` is empty, no transitive resolve, no central registry. The largest DX-canonical gap vs cargo/go-mod."
               ]
@@ -1316,7 +1316,7 @@
               "type": "list",
               "items": [
                 "① Static typing/generics absence — root of half the Tier-1 list; but a DESIGN CHOICE (dynamic dispatch intended), not strictly a defect.",
-                "② Real concurrency + synchronization — single-thread + simulated mutex = zero multicore.",
+                "② Real concurrency + synchronization — single-thread + simulated mutex = zero multicore. IN PROGRESS (opt-in default-OFF): real `__atomic` atomics landed behind `-DHEXA_THREADS` (slice-1 byteeq-neutral); real `spawn`=design-only follow-on. state/rfc_real_concurrency_optin.md.",
                 "③ hx dependency resolver — cargo/go-mod core, schema-only today; independent + low release-integrity risk + DX-canonical → best impact/effort.",
                 "④ regex + match exhaustiveness — frequent in real use.",
                 "⑤ borrow/lifetime/HKT — Rust-only, Go also lacks → defer."
