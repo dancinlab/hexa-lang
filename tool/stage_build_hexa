@@ -58,17 +58,24 @@ if [ "${HEXA_BOOTSTRAP_O1:-0}" = "1" ]; then
     echo "stage_build_hexa: HEXA_BOOTSTRAP_O1=1 — intermediate transpilers (hexa_v2, module_loader) at -O1 [$CFLAGS_BOOTSTRAP]; final $OUT_HEXA stays -O2 [$CFLAGS]"
 fi
 
-# ── OPT-IN: ccache the INTERMEDIATE compiles (release-safe, default OFF) ───────
-# HEXA_CCACHE=1 SPLITS the combined compile+link of the intermediate transpilers
+# ── OPT-IN: ccache the per-TU compiles (release-safe, default OFF) ─────────────
+# HEXA_CCACHE=1 SPLITS each combined compile+link in this stage into a
+# ccache-cacheable `-c` compile + a plain link: the intermediate transpilers
 # (hexa_v2 from the hexa_cc.c amalgam, hexa_module_loader from module_loader.c)
-# into a ccache-cacheable `-c` compile + a plain link. A combined compile+link is
-# UNCACHEABLE by ccache (measured 0% cacheable), so the naive `CC="ccache gcc"`
-# never hits — the split is what enables the cache. ONLY intermediates are split;
-# the SHIPPED $OUT_HEXA (final main.c, -O2) stays on its original combined path,
-# byte-for-byte unchanged. byteeq-safe: ccache's same-input=>same-.o guarantee
-# keeps each produced binary byte-identical, so the C these transpilers EMIT is
-# unchanged (emit-sha invariant, same argument as the R6 bootstrap-O1 round).
-# UNSET => byte-for-byte the historical single-step compile+link.
+# AND the SHIPPED CLI driver ($OUT_HEXA from the emitted build/stage1/main.c).
+# A combined compile+link is UNCACHEABLE by ccache (measured 0% cacheable), so
+# the naive `CC="ccache gcc"` never hits — the split is what enables the cache.
+# The final main.c (the biggest emitted compile, ~19s of the build) is the main
+# warm-rebuild lever, so it IS split here too (PHASE-2 measures the final ./hexa
+# binary sha OFF==ON-cold==ON-warm to PROVE the shipped binary is byte-identical,
+# not just the emit-sha of the C). byteeq-safe: `gcc -c x.c -o x.o` + `gcc x.o
+# lib -o bin` produces the byte-identical binary as the combined `gcc x.c lib -o
+# bin`, and ccache's same-input=>same-.o guarantee keeps each produced binary
+# byte-identical (so the C the transpilers EMIT is unchanged too — emit-sha
+# invariant, same argument as the R6 bootstrap-O1 round). The final $OUT_HEXA
+# keeps its -O2 $CFLAGS (only the compile is rerouted through the cache; the -O
+# level is unchanged). UNSET => byte-for-byte the historical single-step
+# compile+link on every site.
 _r7_cc_compile_link() { # <incs> <cflags> <src.c> <out> [link inputs...]
     local incs="$1" cflags="$2" src="$3" out="$4"; shift 4
     if [ "${HEXA_CCACHE:-0}" = "1" ] && command -v ccache >/dev/null 2>&1; then
@@ -210,6 +217,6 @@ export HEXA_MODULE_LOADER="$ROOT/build/hexa_module_loader"
 echo "::endgroup::"
 
 echo "::group::Stage 2 — compile CLI driver ($OUT_HEXA)"
-$CC $CFLAGS -I self build/stage1/main.c "$RT_ARG" -o "$OUT_HEXA" $LIBS
+_r7_cc_compile_link "-I self" "$CFLAGS" build/stage1/main.c "$OUT_HEXA" "$RT_ARG"
 file "$OUT_HEXA"
 echo "::endgroup::"
