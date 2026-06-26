@@ -16,3 +16,4 @@ stdlib/corpora/**/*.dat   filter=lfs diff=lfs merge=lfs -text
 stdlib/corpora/**/*.bin   filter=lfs diff=lfs merge=lfs -text
 stdlib/corpora/**/*.endf  filter=lfs diff=lfs merge=lfs -text
 stdlib/corpora/**/*.ace   filter=lfs diff=lfs merge=lfs -text
+CHANGELOG.md merge=union
