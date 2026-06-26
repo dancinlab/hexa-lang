@@ -61,7 +61,7 @@ jobs:
   # ── Setup — decide release tag + force-move `test` on main push ────
   setup:
     name: setup
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       release_tag: ${{ steps.c.outputs.release_tag }}
       is_tag: ${{ steps.c.outputs.is_tag }}
@@ -107,7 +107,7 @@ jobs:
     # = compat regression, same hazard as bumping the x86_64 glibc floor). Mach-O
     # emit is deterministic (gen3≡gen4), so faster bare-metal host is byte-neutral
     # — verified on the test prerelease byteeq before trusting stable.
-    runs-on: blacksmith-6vcpu-macos-15
+    runs-on: macos-15
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
@@ -258,7 +258,7 @@ jobs:
     # binary linked against 2.35 runs on 2.35 (22.04) AND 2.39 (24.04) — the
     # 24.04-built binary failed on 22.04 cloud pods with "GLIBC_2.38 not found".
     # 22.04 is the portability floor that covers current cloud images.
-    runs-on: blacksmith-4vcpu-ubuntu-2204
+    runs-on: ubuntu-22.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
@@ -310,7 +310,7 @@ jobs:
   release-linux-arm64:
     name: release (linux-arm64)
     needs: setup
-    # arm64 runner = blacksmith-4vcpu-ubuntu-2404-arm (Blacksmith fast native arm,
+    # arm64 runner = ubuntu-24.04-arm (Blacksmith fast native arm,
     # glibc 2.39 — SAME 24.04 toolchain, just faster bare-metal hardware). The
     # 24.04 (NOT 22.04) choice is load-bearing: #3559 tried 22.04-arm (glibc 2.35
     # floor, mirroring x86_64) but the stage-0 self-hosted transpiler `hexa_v2`
@@ -319,7 +319,7 @@ jobs:
     # (do NOT switch to blacksmith-*-ubuntu-2204-arm — same SIGSEGV landmine). The
     # arm64 22.04 floor is deferred to the static-musl single-binary release
     # (glibc-independent). x86_64 keeps its 22.04 (2.35) floor on Blacksmith.
-    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -384,7 +384,7 @@ jobs:
   release-linux-x86_64-musl:
     name: release (linux-x86_64-musl · static · test)
     needs: setup
-    runs-on: blacksmith-4vcpu-ubuntu-2204
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -489,7 +489,7 @@ jobs:
   release-linux-arm64-musl:
     name: release (linux-arm64-musl · static · test)
     needs: setup
-    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -604,7 +604,7 @@ jobs:
   release-linux-x86_64-cuda:
     name: release (linux-x86_64-cuda · cuBLAS · test)
     needs: setup
-    runs-on: blacksmith-4vcpu-ubuntu-2204
+    runs-on: ubuntu-22.04
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
@@ -789,7 +789,7 @@ jobs:
       needs.release-macos-arm64.result == 'success' &&
       needs.release-linux-x86_64.result == 'success' &&
       needs.release-linux-arm64.result == 'success'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - name: Promote release to stable Latest (3/3 assets confirmed)
         uses: softprops/action-gh-release@v2
