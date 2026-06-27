@@ -2739,6 +2739,31 @@ let mut _gen2_tu_has_strict_fp = 0
 let mut _gen2_defer_bodies = []
 let mut _gen2_defer_flag_count = 0
 
+// Drop/RAII auto-scope-exit (opt-in, default-OFF HEXA_DROP_RAII).
+//   `_drop_typed_structs`: list of struct TYPE NAMES that declare an
+//   `impl … { fn drop(self) }` (the Drop convention). Populated ONCE per
+//   transpile in codegen_full by scanning the AST for ImplBlock nodes whose
+//   `methods` contains a method named `drop`. Read (never written) on the
+//   gated auto-drop path only; left empty on the default build + every byteeq
+//   target (codegen_full skips the population when the env var is unset), so
+//   the generated C is byte-identical. Kept SEPARATE from `_method_registry`
+//   (which is source-order-sensitive and byteeq-load-bearing) so the auto-drop
+//   membership test is source-order-independent and never perturbs the registry.
+let mut _drop_typed_structs = []
+
+// _drop_typed_struct_has — membership test for `_drop_typed_structs`. Always
+// false on the default path (the list is empty unless HEXA_DROP_RAII is set
+// AND codegen_full populated it), so callers behind the env gate are no-ops
+// by construction when the feature is off.
+fn _drop_typed_struct_has(name) {
+    let mut i = 0
+    while i < len(_drop_typed_structs) {
+        if _drop_typed_structs[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
 // _gen2_count_defers — pre-scan the fn body to count DeferStmt nodes
 // so gen2_fn_decl can emit the right number of `__defer_N_active`
 // declarations at the top BEFORE body codegen assigns flag ids. The
@@ -2761,6 +2786,24 @@ fn _gen2_count_defers(stmts) {
         // Nested fn decls carry their own defer scope — skip.
         if k == "FnDecl" || k == "PureFnDecl" || k == "ExternFnDecl" { continue }
         if k == "DeferStmt" { n = n + 1 }
+        // Drop/RAII auto-scope-exit (opt-in, default-OFF HEXA_DROP_RAII):
+        // a `let r = T{…}` binding whose type T declares `fn drop(self)`
+        // registers a SYNTHETIC function-scope defer in the LetStmt arm
+        // (gen2_stmt) so the LIFO `__fn_exit` drain calls `T__drop(r)` at
+        // function exit in reverse declaration order (Rust §Destructors).
+        // The synthetic registration consumes one `__defer_N_active` flag id,
+        // so the count must include these lets — else gen2_fn_decl would
+        // emit too few `__defer_N_active` declarations and the registration's
+        // `__defer_N_active = 1;` would reference an undeclared C var.
+        // GATED: when HEXA_DROP_RAII is unset (default + all 3 byteeq targets
+        // + the gen3≡gen4 fixpoint) the count is unchanged → identical defer
+        // scaffold → byte-identical emit. `_drop_typed_structs` is also empty
+        // on that path so the membership test never matches.
+        if k == "LetStmt" && env("HEXA_DROP_RAII") != "" {
+            if type_of(s.left) != "string" && s.left.kind == "StructInit" {
+                if _drop_typed_struct_has(s.left.name) { n = n + 1 }
+            }
+        }
         // Recurse into every statement-array-shaped field. Not all
         // nodes carry these; type_of guards the no-op case.
         if type_of(s.body) == "array" { n = n + _gen2_count_defers(s.body) }
@@ -3268,7 +3311,47 @@ fn _gen2_stmt_inner(node, depth) {
             let _tmp = "__hexa_letinit_" + node.name
             return pad + "HexaVal " + _tmp + " = " + init + "; HexaVal " + _local_name + " = " + _tmp + ";\n"
         }
-        return pad + "HexaVal " + _local_name + " = " + init + ";\n"
+        // Drop/RAII auto-scope-exit (opt-in, default-OFF HEXA_DROP_RAII).
+        // reference-match: Rust `Drop` (The Rust Reference §Destructors) —
+        // a value whose type implements Drop is dropped at scope exit in
+        // REVERSE declaration order, automatically (R1+R2). Here, a fresh
+        // `let r = T{…}` whose type T declares `fn drop(self)` registers a
+        // SYNTHETIC function-scope defer carrying the STATICALLY-known type T;
+        // the existing LIFO `__fn_exit` drain (gen2_fn_decl) then routes that
+        // synthetic DropStmt back through gen2_stmt, whose gated DropStmt
+        // branch emits a direct `T__drop(r)` call (order-independent of the
+        // source-order-sensitive `_method_registry`). Granularity is FUNCTION
+        // scope (coarser than Rust block scope — documented wall) and there is
+        // no move/use-after-drop tracking (an explicit `drop r` on the same
+        // binding double-drops — documented). GATED: when HEXA_DROP_RAII is
+        // unset (default + every byteeq target + gen3≡gen4) `_drop_typed_structs`
+        // is empty so the membership test never matches, no synthetic defer is
+        // registered, and the emitted let is byte-identical.
+        let mut _drop_suffix = ""
+        if env("HEXA_DROP_RAII") != "" {
+            if type_of(node.left) != "string" && node.left.kind == "StructInit" {
+                if _drop_typed_struct_has(node.left.name) {
+                    let _drop_flag = _gen2_defer_flag_count
+                    _gen2_defer_flag_count = _gen2_defer_flag_count + 1
+                    // Full-shaped synthetic DropStmt: `name` = the bound var,
+                    // `target` = the static struct type (the discriminator the
+                    // DropStmt branch uses to take the direct-emit auto path;
+                    // a user-written `drop x` carries target=="" → runtime
+                    // dispatch). Mirror the parser's DropStmt field set so any
+                    // downstream field access is total.
+                    let _syn_drop = #{
+                        "kind": "DropStmt", "name": node.name, "value": "", "op": "",
+                        "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
+                        "params": "", "body": "", "args": "", "fields": "", "items": "",
+                        "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+                        "target": node.left.name, "trait_name": "", "methods": ""
+                    }
+                    _gen2_defer_bodies.push([_drop_flag, [_syn_drop]])
+                    _drop_suffix = pad + "__defer_" + to_string(_drop_flag) + "_active = 1;\n"
+                }
+            }
+        }
+        return pad + "HexaVal " + _local_name + " = " + init + ";\n" + _drop_suffix
     }
 
     if k == "ConstStmt" {
@@ -4083,6 +4166,24 @@ fn _gen2_stmt_inner(node, depth) {
     //    through) when no type defines a `drop` method.
     if k == "DropStmt" {
         if env("HEXA_DROP_RAII") != "" {
+            // AUTO scope-exit drop (statically typed). A SYNTHETIC DropStmt
+            // registered by the LetStmt arm carries `target` = the known
+            // struct type (a user-written `drop x` always has target=="").
+            // Emit a direct `T__drop(__dropv)` call — no runtime type test,
+            // and ORDER-INDEPENDENT of `_method_registry` population (which is
+            // source-order-sensitive and byteeq-load-bearing). The receiver is
+            // referenced through gen2_expr on a full-shaped Ident node so name
+            // mangling / comptime folding match every other use site exactly.
+            if node.target != "" {
+                let _auto_recv = gen2_expr(#{
+                    "kind": "Ident", "name": node.name, "value": "", "op": "",
+                    "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
+                    "params": "", "body": "", "args": "", "fields": "", "items": "",
+                    "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+                    "target": "", "trait_name": "", "methods": ""
+                })
+                return pad + "{ HexaVal __dropv = " + _auto_recv + "; " + node.target + "__drop(__dropv); }\n"
+            }
             let _drop_types = _method_registry_lookup("drop")
             if len(_drop_types) > 0 {
                 // Reference the dropped variable through gen2_expr on a full-
@@ -13484,6 +13585,34 @@ fn codegen_full(ast) {
     _lambda_def_parts = []
     _lambda_fwd_sigs = []
     _method_registry = []
+    // Drop/RAII auto-scope-exit (opt-in, default-OFF HEXA_DROP_RAII): record
+    // which struct types declare an `impl … { fn drop(self) }` so the LetStmt
+    // arm can register a synthetic scope-exit drop for `let r = T{…}` bindings.
+    // Scanning a SEPARATE set (not `_method_registry`) keeps this source-order-
+    // INDEPENDENT and never perturbs the byteeq-load-bearing registry. GATED:
+    // left empty on the default build + every byteeq target + the gen3≡gen4
+    // fixpoint (the env var is never exported there), so every gated reader is
+    // a no-op and the emitted C is byte-identical to the post-#4065 output.
+    _drop_typed_structs = []
+    if env("HEXA_DROP_RAII") != "" {
+        let mut _dti = 0
+        while _dti < len(ast) {
+            let _dtn = ast[_dti]
+            if type_of(_dtn) != "string" && _dtn.kind == "ImplBlock" && type_of(_dtn.methods) == "array" {
+                let mut _dmi = 0
+                while _dmi < len(_dtn.methods) {
+                    let _dm = _dtn.methods[_dmi]
+                    if type_of(_dm) != "string" && _dm.name == "drop" {
+                        if !_drop_typed_struct_has(_dtn.target) {
+                            _drop_typed_structs.push(_dtn.target)
+                        }
+                    }
+                    _dmi = _dmi + 1
+                }
+            }
+            _dti = _dti + 1
+        }
+    }
     _known_fn_globals = []
     _known_nonlocal_names = []
     _known_set_init()
