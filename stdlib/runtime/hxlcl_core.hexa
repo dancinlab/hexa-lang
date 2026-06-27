@@ -1244,16 +1244,15 @@ pub fn hxlcl_getrusage(who: HexaVal, usage: HexaVal) -> int {
 //          flags=0 trails, so one shape serves both arches, only the NR varies).
 //          errno-bearing: a bad fds ptr / EMFILE → -1 + errno on the Linux leg.
 //   darwin → SYS_pipe (42) returns the two fds in x0/x1 (2nd return register);
-//          the single-result __hx_syscall6 exposes only x0, so it CANNOT write
-//          fds[1]. This is a genuine WALL for the Route C path — the real darwin
-//          pipe stays the floor's _hxlcl_pipe_cf dual-register asm shim
-//          (self/runtime_emit_full.hexa:1542). The Route C darwin leg returns -1
-//          (documented incomplete — mirrors the reference self/rt/syscall.hexa:233
-//          sys_pipe, which also returns -1 on darwin "for now").
+//          the single-result __hx_syscall6 exposes only x0. This DISSOLVES via the
+//          __hx_syscall6_out2 intrinsic (the dual-return sibling that writes x0/x1
+//          + the carry flag into a heap scratch — mirrors the floor _hxlcl_pipe_cf
+//          dual-register asm shim, self/runtime_emit_full.hexa:1794). The darwin
+//          carry-flag error → errno store is deferred (discipline ④).
 //   NR ref-match (no black-box; WebFetch-confirmed 2026-06-27):
 //     x86_64 __NR_pipe2 = 293  (arch/x86 syscall_64.tbl)
 //     arm64  __NR_pipe2 = 59   (asm-generic unistd.h — no plain pipe/poll on arm64)
-//     darwin SYS_pipe   = 42   (xnu; 2nd-return-reg, used only by the _cf shim)
+//     darwin SYS_pipe   = 42   (xnu; 2nd-return-reg, via __hx_syscall6_out2)
 //
 // time / poll: LANDED in batch H below (the scratch-buffer substrate the batch E
 // census flagged turned out NOT to need a new intrinsic — see the batch H header).
@@ -1274,9 +1273,26 @@ pub fn hxlcl_pipe(fds: HexaVal) -> int {
         }
         return r                                // 0 on success (kernel wrote fds[0],fds[1])
     }
-    // darwin: 2nd-return-register BSD pipe — unreachable by the single-result
-    // __hx_syscall6. Documented incomplete (real darwin pipe = floor _cf shim).
-    return -1
+    // darwin: BSD pipe(42) is a 2nd-return-register syscall — the kernel returns
+    // the two fds in x0/x1 (NOT the user buffer). __hx_syscall6_out2 issues the
+    // single trap and captures BOTH return regs + the carry/error flag into a
+    // 24-byte heap scratch (3 slots: x0, x1, carry); we then copy the fds into the
+    // caller's int[2]. (The scratch leaks 24B on the bump arena — pipe is not
+    // hot-looped; same heap-scratch caveat as the batch-H time/poll legs.) The
+    // darwin carry-flag error → errno store is DEFERRED (darwin __error() round,
+    // discipline ④); on error we return -1 without setting errno.
+    let szp = __hx_payload_add(0, 24)           // HexaVal-box the scratch size
+    let scr = hxlcl_malloc(szp)
+    __hx_syscall6_out2(42, 0, 0, 0, 0, 0, 0, scr)   // BSD pipe — no args; fds in x0/x1
+    let cf = __hx_ptr_load64(scr, 16)
+    if __hx_payload_ne(cf, 0) {
+        return -1                               // darwin error (carry set); errno deferred
+    }
+    let fd0 = __hx_ptr_load64(scr, 0)           // x0 = fds[0]
+    let fd1 = __hx_ptr_load64(scr, 8)           // x1 = fds[1]
+    __hx_ptr_store32(fds, 0, fd0)               // fds[0]
+    __hx_ptr_store32(fds, 4, fd1)               // fds[1] (int = 4 bytes)
+    return 0
 }
 
 // ── batch H: time + poll (the SCRATCH-BUFFER substrate — NO new intrinsic) ──────
@@ -1543,8 +1559,9 @@ pub fn hxlcl_execve(path: HexaVal, argv: HexaVal, envp: HexaVal) -> int {
 // closing the Route C syscall family. Continues the close-mirror discipline (raw-
 // payload `__hx_payload_lt`/`_ne`/`_sub`, never bare `<`/`-`, + the target_is_linux()
 // -gated errno store via the already-whitelisted __errno_location). It is the EXACT
-// pipe (#4076) pattern: the LINUX legs DISSOLVE while the darwin leg is a measured
-// 2nd-return-register wall returning -1 (documented incomplete).
+// pipe (#4076) pattern: the LINUX legs DISSOLVE via the single-result __hx_syscall6,
+// and the darwin 2nd-return-register leg DISSOLVES via __hx_syscall6_out2 (the
+// dual-return intrinsic capturing x0/x1 + carry).
 //
 //   LINUX dissolve — fork returns the child pid to the parent and 0 to the child in
 //        a SINGLE result register (rax/x0), uniform -errno on failure, so the close
@@ -1559,15 +1576,15 @@ pub fn hxlcl_execve(path: HexaVal, argv: HexaVal, envp: HexaVal) -> int {
 //                   clone behave as a fork (parent gets SIGCHLD on child exit). This
 //                   is the dup2→dup3 "extra-flag-arg" divergence class (batch's
 //                   established pattern), not a new arg-shape.
-//   DARWIN wall — fork(2) is a 2nd-RETURN-REGISTER syscall: the BSD trap returns the
-//        child pid in x0 for BOTH processes and disambiguates the child by x1==1
-//        (parent has x1==0; carry-set → failure). The single-result __hx_syscall6
-//        exposes ONLY x0, so the Route C darwin leg CANNOT distinguish parent from
-//        child — a GENUINE wall identical to darwin pipe (#4076). The darwin leg
-//        returns -1 (documented incomplete); the real darwin fork stays the floor's
-//        raw-asm dual-register shim (self/runtime_emit_full.hexa:1801-1808, the
-//        `cset cf,cs / mov x0 / mov x1` explicit-asm dual capture). default-OFF so
-//        the floor shim is the live darwin fork — Route C darwin is research-only.
+//   DARWIN dissolve — fork(2) is a 2nd-RETURN-REGISTER syscall: the BSD trap returns
+//        the child pid in x0 for BOTH processes and disambiguates the child by x1==1
+//        (parent has x1==0; carry-set → failure). This DISSOLVES via the
+//        __hx_syscall6_out2 intrinsic, which captures x0/x1 + the carry flag into a
+//        heap scratch — mirroring the floor's raw-asm dual-register shim
+//        (self/runtime_emit_full.hexa:1801-1808, the `cset cf,cs / mov x0 / mov x1`
+//        explicit-asm dual capture). The darwin carry-flag error → errno store is
+//        deferred (discipline ④). default-OFF so the floor shim is the live darwin
+//        fork — Route C darwin is research-only.
 //
 // NR ref-match (no black-box; in-repo tables + WebFetch-confirmed asm-generic):
 //   fork  x86_64 = 57   (arch/x86 syscall_64.tbl; self/rt/syscall.hexa:74
@@ -1577,14 +1594,16 @@ pub fn hxlcl_execve(path: HexaVal, argv: HexaVal, envp: HexaVal) -> int {
 //         darwin = 2    (BSD SYS_fork; self/rt/syscall.hexa:103 SYS_DARWIN_FORK ->
 //                        0x2000002 — 2nd-return-reg wall, floor dual-reg shim only)
 //
-// _is_cabi += hxlcl_fork. No new intrinsic/builtin/@attr; reuses __hx_syscall6 +
-// __hx_payload_lt/_ne/_sub + __hx_ptr_store32 + __errno_location. frozen 151c52c8
-// immutable. default-OFF byteeq-neutral (HEXA_CABI_HXLCL unset → empty whitelist →
-// PAIR-MODEL emit byte-identical).
+// _is_cabi has hxlcl_fork (#4087). The darwin leg adds ONE new ADD-only intrinsic
+// __hx_syscall6_out2 (the dual-return sibling — bind.hexa whitelist + arm64/x86_64
+// STMT_CALL special-case; NO new parser keyword/@attr, so frozen 151c52c8 immutable).
+// Otherwise reuses __hx_payload_eq/_ne/_add + __hx_ptr_load64/store32 + hxlcl_malloc.
+// default-OFF byteeq-neutral (HEXA_CABI_HXLCL unset → empty whitelist → PAIR-MODEL
+// emit byte-identical; the new intrinsic only emits when a whitelisted body calls it).
 //
-// This is the LAST clean syscall-family leaf — its merge dries the Route C syscall
-// track (remaining walls: stdio FILE* struct, getenv frozen-export, 2nd-return-reg
-// [darwin pipe/fork], TERMINAL [float XMM-ABI / setjmp]).
+// With the darwin 2nd-return-register dissolve, the Route C syscall family is dry
+// (remaining walls: stdio FILE* struct, getenv frozen-export, TERMINAL [float
+// XMM-ABI / setjmp]).
 pub fn hxlcl_fork() -> int {
     if target_is_linux() {
         let mut nr = 220                       // Linux arm64 __NR_clone (no plain fork)
@@ -1603,10 +1622,25 @@ pub fn hxlcl_fork() -> int {
         }
         return r                                // parent: child pid · child: 0
     }
-    // darwin: fork(2) is a 2nd-return-register syscall (child pid in x0 for BOTH
-    // processes, disambiguated by x1==1) — the single-result __hx_syscall6 exposes
-    // only x0, so the Route C leg cannot tell parent from child. Returns -1
-    // (documented incomplete); the real darwin fork stays the floor's raw-asm dual-
-    // register shim (self/runtime_emit_full.hexa:1801-1808), identical to darwin pipe.
-    return -1
+    // darwin: fork(2) is a 2nd-return-register syscall — both processes get the
+    // child pid in x0; the CHILD is disambiguated by x1==1 (parent has x1==0).
+    // __hx_syscall6_out2 captures x0/x1/carry into a 24-byte heap scratch (leaks
+    // 24B — fork is not hot-looped). This mirrors the floor's raw-asm dual-register
+    // shim (self/runtime_emit_full.hexa:1801-1808: `svc; cset cf,cs; mov x0; mov
+    // x1; if cf errno; if x1==1 child`). The darwin carry-flag error → errno store
+    // is DEFERRED (darwin __error() round, discipline ④); on error we return -1.
+    let szf = __hx_payload_add(0, 24)           // HexaVal-box the scratch size
+    let scr = hxlcl_malloc(szf)
+    __hx_syscall6_out2(2, 0, 0, 0, 0, 0, 0, scr)    // BSD fork — no args; x0=pid, x1==1 ⇒ child
+    let cf = __hx_ptr_load64(scr, 16)
+    if __hx_payload_ne(cf, 0) {
+        return -1                               // darwin error (carry set); errno deferred
+    }
+    let x1v = __hx_ptr_load64(scr, 8)           // x1: ==1 in child, 0 in parent
+    let ischild = __hx_payload_eq(x1v, 1)
+    if __hx_payload_ne(ischild, 0) {
+        return 0                                // child
+    }
+    let x0v = __hx_ptr_load64(scr, 0)           // x0 = child pid
+    return x0v                                   // parent: child pid
 }

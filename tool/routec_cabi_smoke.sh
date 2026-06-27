@@ -102,6 +102,7 @@ cat > "$TMP/harness.c" <<'CEOF'
 #include <sys/resource.h> /* struct rusage / RUSAGE_SELF — for the getrusage composition test */
 #include <poll.h>     /* struct pollfd / POLLIN — for the poll composition test */
 #include <time.h>     /* libc time() — the reference oracle for hxlcl_time */
+#include <sys/wait.h> /* waitpid / WIFEXITED / WEXITSTATUS — for the fork roundtrip test */
 
 /* Route-C-emitted symbols under test (raw C-ABI prototypes). */
 extern size_t hxlcl_strlen(const char *s);
@@ -170,9 +171,10 @@ extern long   hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int
  * getrusage = plain uniform 2-arg (out-ptr usage*). */
 extern int    hxlcl_open_sys(const char *path, int flags, int mode);
 extern int    hxlcl_getrusage(int who, void *usage);
-/* batch E — pipe. On darwin the Route C leg is a documented -1 stub (BSD pipe is
- * 2nd-return-register, unreachable by single-result __hx_syscall6); the Linux
- * sibling (pipe2 out-ptr) carries the success/roundtrip claim. */
+/* batch E — pipe. On darwin BSD pipe is 2nd-return-register (fds in x0/x1); the
+ * Route C leg DISSOLVES via __hx_syscall6_out2 (dual-return capture) and runs the
+ * full success + write/read roundtrip here, the same claim the Linux pipe2 sibling
+ * carries. */
 extern int    hxlcl_pipe(int fds[2]);
 
 /* batch F search family — strchr / strstr. Pure byte-scan leaves (no syscall, no
@@ -203,11 +205,10 @@ extern int  hxlcl_poll(void *fds, unsigned int nfds, int timeout);
 extern int  hxlcl_clock_gettime(int clk, void *ts);
 extern int  hxlcl_execve(const char *path, char *const argv[], char *const envp[]);
 
-/* batch J — fork. On darwin the Route C leg is a documented -1 stub (BSD fork(2) is
- * 2nd-return-register: child pid in x0 for BOTH processes, child disambiguated by
- * x1==1; single-result __hx_syscall6 exposes only x0, identical to darwin pipe).
- * The real darwin fork stays the floor raw-asm dual-reg shim; the Linux sibling
- * carries the live fork+_exit+waitpid behavioral claim. */
+/* batch J — fork. On darwin BSD fork(2) is 2nd-return-register: child pid in x0 for
+ * BOTH processes, child disambiguated by x1==1. The Route C leg DISSOLVES via
+ * __hx_syscall6_out2 (dual-return capture) and runs the live fork+_exit+waitpid
+ * roundtrip here, the same claim the Linux sibling carries. */
 extern int  hxlcl_fork(void);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
@@ -439,16 +440,23 @@ int main(void) {
         CK(hxlcl_getrusage(RUSAGE_SELF, &ru) == 0, "getrusage(RUSAGE_SELF) == 0 (composition, out-ptr)");
     }
 
-    /* batch E: pipe — DARWIN is the genuine 2nd-return-register wall. BSD pipe(42)
-     * returns the two fds in x0/x1; the single-result __hx_syscall6 exposes only
-     * x0, so the Route C darwin leg CANNOT write fds[1] and returns -1 (documented
-     * incomplete — the real darwin pipe stays the floor _hxlcl_pipe_cf asm shim).
-     * Asserting == -1 locks in that documented gap (a future dual-reg fix would
-     * flip this and force a smoke update). The Linux sibling carries the success +
-     * write/read roundtrip claim (pipe2 out-ptr). */
+    /* batch E: pipe — DARWIN 2nd-return-register DISSOLVE (via __hx_syscall6_out2).
+     * BSD pipe(42) returns the two fds in x0/x1; the dual-return intrinsic captures
+     * both regs into a heap scratch and the darwin leg copies them into the int[2].
+     * Full success + write→read roundtrip (the same claim the Linux pipe2 sibling
+     * carries) — proving both fds are valid and usable, i.e. fds[1] is no longer
+     * lost. */
     {
         int pfd[2] = { -1, -1 };
-        CK(hxlcl_pipe(pfd) == -1, "pipe() == -1 on darwin (documented 2nd-return-reg wall)");
+        CK(hxlcl_pipe(pfd) == 0, "pipe() == 0 on darwin (2nd-return-reg dual capture)");
+        CK(pfd[0] >= 0 && pfd[1] >= 0, "pipe() fills fds[0],fds[1] from x0/x1 (value-exact)");
+        if (pfd[0] >= 0 && pfd[1] >= 0) {
+            char wb = 'Z', rb = 0;
+            CK(write(pfd[1], &wb, 1) == 1, "darwin pipe write end usable");
+            CK(read(pfd[0], &rb, 1) == 1 && rb == 'Z', "darwin pipe read end roundtrip == 'Z'");
+            hxlcl_close(pfd[0]);
+            hxlcl_close(pfd[1]);
+        }
     }
 
     /* batch F: strchr / strstr — pure byte-scan leaves (cross-target-identical,
@@ -556,16 +564,22 @@ int main(void) {
         CK(hxlcl_execve("/nonexistent_xyz_exec_zzz", eargv, eenvp) > 0, "execve(bad path) > 0 (darwin raw +errno, carry deferred; process intact)");
     }
 
-    /* batch J — fork. DARWIN is the genuine 2nd-return-register wall. BSD fork(2)
-     * returns the child pid in x0 for BOTH parent and child and disambiguates the
-     * child by x1==1; the single-result __hx_syscall6 exposes only x0, so the Route C
-     * darwin leg CANNOT tell parent from child and returns -1 (documented incomplete
-     * — the real darwin fork stays the floor raw-asm dual-reg shim, identical to
-     * darwin pipe == -1). Asserting == -1 locks in that documented gap; a future
-     * dual-reg fix would flip it and force a smoke update. The Linux sibling carries
-     * the live fork+_exit+waitpid behavioral claim. */
+    /* batch J — fork. DARWIN 2nd-return-register DISSOLVE (via __hx_syscall6_out2).
+     * BSD fork(2) returns the child pid in x0 for BOTH parent and child and
+     * disambiguates the child by x1==1; the dual-return intrinsic captures x0/x1 so
+     * the darwin leg returns 0 in the child and the child pid in the parent (mirror
+     * of the floor raw-asm dual-reg shim). Live fork+_exit+waitpid roundtrip — the
+     * same behavioral claim the Linux sibling carries. */
     {
-        CK(hxlcl_fork() == -1, "fork() == -1 on darwin (documented 2nd-return-reg wall)");
+        int pid = hxlcl_fork();
+        if (pid == 0) { _exit(42); }   /* child: distinguish via the 2nd return reg */
+        CK(pid > 0, "fork() > 0 in parent (child pid via x0; child took x1==1 path)");
+        if (pid > 0) {
+            int st = 0;
+            int w = (int)waitpid(pid, &st, 0);
+            CK(w == pid && WIFEXITED(st) && WEXITSTATUS(st) == 42,
+               "darwin fork+_exit(42)+waitpid roundtrip (dual-return disambiguation)");
+        }
     }
 
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }
