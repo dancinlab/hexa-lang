@@ -473,6 +473,46 @@ fn _build_case_static_types() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// Wall A r2 — non-literal known-type RHS (ident / call) under the same
+// opt-in flag. Two REJECT shapes whose inferred scalar type provably
+// disagrees with the annotation (Rust E0308):
+//   fn g() -> i32 { return 0 }
+//   fn h(p: i32) { let b_ident: string = p }    // ident p : i32 ≠ string
+//   fn main() {
+//       let b_call: string = g()                // call g() : i32 ≠ string
+//       let ok:     i32    = g()                 // matches → stays clean
+//   }
+// Under the flag exactly 2 HX3011 (one ident-RHS + one call-RHS); the
+// matching `i32 = g()` and the default build (flag-off) emit zero — the
+// byteeq-neutral proof. Skips for unknown idents/unmodeled calls are
+// covered by the soundness gates and need no positive case here.
+fn _build_case_static_types_r2() -> Module {
+    let f = "case_static_r2.hexa"
+    // fn g() -> i32 { return 0 }
+    let mut g_kids = []
+    g_kids.push(_return_expr(_int_expr("0", f, 1, 20), f, 1, 13))
+    let g_body = _block(g_kids, f, 1, 11)
+    let item_g = _fn_item("g", [], _named_type_ref("i32"), g_body, f, 1)
+    // fn h(p: i32) { let b_ident: string = p }   — ident-RHS mismatch
+    let mut h_kids = []
+    h_kids.push(_let_expr("b_ident|string", _ident_expr("p", f, 2, 30), f, 2, 5))
+    let h_body = _block(h_kids, f, 2, 1)
+    let item_h = _fn_item("h", [_param("p", "i32", f, 2, 6)], _empty_type_ref(), h_body, f, 2)
+    // fn main() { let b_call: string = g();  let ok: i32 = g() }
+    let bad_call  = _call_expr(_ident_expr("g", f, 3, 25), [], f, 3, 25)
+    let good_call = _call_expr(_ident_expr("g", f, 4, 20), [], f, 4, 20)
+    let mut m_kids = []
+    m_kids.push(_let_expr("b_call|string", bad_call, f, 3, 5))
+    m_kids.push(_let_expr("ok|i32", good_call, f, 4, 5))
+    let m_body = _block(m_kids, f, 3, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), m_body, f, 3)
+    let mut items = []
+    items.push(item_g)
+    items.push(item_h)
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // ── Driver ───────────────────────────────────────────────────
 
 fn _run_case(label: string, m: Module) -> array {
@@ -602,6 +642,30 @@ fn main() {
     } else {
         if nh != 0 {
             println("  FAIL: case (h) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nh) + " (total=" + to_string(len(diags_h)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (i) Wall A r2 — non-literal known-type RHS (ident / call). Under the
+    // flag, `let b_ident:string = p` (p:i32 param) AND `let b_call:string =
+    // g()` (g()->i32) each REJECT with HX3011 (2 total), while the matching
+    // `let ok:i32 = g()` stays clean. On the default build → 0 (byteeq-
+    // neutral). Same self-adapting contract as case (h), extended to the
+    // ident/call rung.
+    let diags_i = _run_case("(i) static-types r2 — ident/call known-type RHS mismatch (HEXA_STATIC_TYPES)", _build_case_static_types_r2())
+    let ni = _count_code(diags_i, "HX3011")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if ni != 2 {
+            println("  FAIL: case (i) HEXA_STATIC_TYPES=1 expected 2 HX3011 (ident+call), got " + to_string(ni) + " (total=" + to_string(len(diags_i)) + ")")
+            ok = false
+        } else {
+            println("  ok: 2 HX3011 emitted (ident p:i32 + call g()->i32 vs string; matching i32=g() stays clean)")
+        }
+    } else {
+        if ni != 0 {
+            println("  FAIL: case (i) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(ni) + " (total=" + to_string(len(diags_i)) + ")")
             ok = false
         } else {
             println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")

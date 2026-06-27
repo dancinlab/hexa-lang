@@ -1814,10 +1814,11 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             let tt = _types_let_type_text(e.text)
             if len(tt) > 0 && len(e.children) > 0 {
                 let rhs = e.children[0]
-                // r1 SCOPE GUARD — scalar-literal RHS only (int/float/string/
-                // bool/char). Broader inference (ident/call/range/array) is
-                // a later rung. A literal re-infer is side-effect-free (a
-                // literal pushes no diagnostics), so no double-report.
+                // r1 arm — scalar-literal RHS (int/float/string/bool/char).
+                // r2 (the `else if` below) extends to ident/call RHS; range/
+                // array/struct-literal RHS remain a later rung. A literal
+                // re-infer is side-effect-free (a literal pushes no
+                // diagnostics), so no double-report.
                 if _types_is_lit_int(rhs.kind) || _types_is_lit_float(rhs.kind) || _types_is_lit_string(rhs.kind) || _is_lit_bool(rhs.kind) || _is_lit_char(rhs.kind) {
                     let tr = TypeRef { kind: "named", name: tt, args: [], span: e.span }
                     let declared = _types_lower_type_ref(tr)
@@ -1827,6 +1828,40 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                         let rhs_t = _infer_expr(rhs, env, ctx, out)
                         if !_types_assignable(declared, rhs_t, rhs) {
                             _emit_hx3011(declared, rhs_t, e.span, out)
+                        }
+                    }
+                } else if _types_is_ident(rhs.kind) || _types_is_call(rhs.kind) {
+                    // Wall A r2 — non-literal known-type RHS (ident / call).
+                    // Rust E0308 'mismatched types' fires on a typed `let`
+                    // whose RHS is an inferred-scalar ident/call that provably
+                    // disagrees with the annotation — e.g.
+                    //   `let a: i32 = 5; let b: string = a;`   // a   : i32
+                    //   `fn g() -> i32 {…} let b: string = g();` // g() : i32
+                    // (rustc_hir_typeck/src/expr.rs `check_expr_kind` →
+                    //  `demand_coerce` → `FnCtxt::report_mismatched_types`,
+                    //  the SAME E0308 path the literal arm already mirrors).
+                    let tr = TypeRef { kind: "named", name: tt, args: [], span: e.span }
+                    let declared = _types_lower_type_ref(tr)
+                    // r2 soundness gate ① — declared side must be a KNOWN
+                    // scalar primitive (named:/struct/enum stay r5+).
+                    if _types_kind_is_scalar(declared.kind) {
+                        // The children-walk above already inferred `rhs` once
+                        // (any inner errors surfaced into `out`). Re-infer into
+                        // a SCRATCH sink so this check appends NOTHING extra —
+                        // no double-report of a call's inner HX2001/HX3003.
+                        let mut scratch: array = []
+                        let rhs_t = _infer_expr(rhs, env, ctx, scratch)
+                        // r2 soundness gate ② — only flag when the INFERRED
+                        // RHS is itself a KNOWN scalar primitive. The
+                        // inferencer's fallbacks for un-resolved idents (empty
+                        // kind), un-annotated fn returns / un-modeled callees
+                        // (`unit`), HexaVal dynamics, and aggregate types are
+                        // all NON-scalar here → conservatively skipped (r5+),
+                        // so no false REJECT on anything unknown.
+                        if _types_kind_is_scalar(rhs_t.kind) {
+                            if !_types_assignable(declared, rhs_t, rhs) {
+                                _emit_hx3011(declared, rhs_t, e.span, out)
+                            }
                         }
                     }
                 }
