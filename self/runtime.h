@@ -725,6 +725,29 @@ HexaVal hexa_channel_recv(HexaVal ch_val, HexaVal timeout_ms_val);     /* native
 HexaVal hexa_channel_close(HexaVal ch_val);     /* native/thread.c:219 */
 HexaVal hexa_now_ms(void);     /* native/thread.c:236 */
 HexaVal hexa_thread_spawn(HexaVal fn_val, HexaVal arg_val);     /* native/thread.c:81 */
+/* TAG_FN shim carrier globals (native/thread.c — _hexa_init_thread_fn_shims).
+ * These are the bare-ident bridges hexa source calls (`thread_spawn(fn,arg)`,
+ * `thread_join(t)`, …); user.c references them as extern HexaVal carriers, same
+ * pattern as the hx_pipe_* / hx_setenv fn-pointer carriers above. Unconditional
+ * (the thread.c definitions are outside the HEXA_THREADS guard). */
+extern HexaVal thread_spawn;                                                       /* native/thread.c:383 (fn-pointer carrier) */
+extern HexaVal thread_join;                                                        /* native/thread.c:384 */
+extern HexaVal thread_channel_new;                                                 /* native/thread.c:385 */
+extern HexaVal thread_channel_send;                                                /* native/thread.c:386 */
+extern HexaVal thread_channel_recv;                                                /* native/thread.c:387 */
+extern HexaVal thread_channel_close;                                               /* native/thread.c:388 */
+extern HexaVal sleep_ms;                                                           /* native/thread.c:389 */
+extern HexaVal now_ms;                                                             /* native/thread.c:390 */
+#if defined(HEXA_THREADS)
+/* Real-atomic carrier globals — defined only in the -DHEXA_THREADS build
+ * (thread.c globals live inside the same HEXA_THREADS guard). */
+extern HexaVal atomic_cell_new;                                                    /* native/thread.c:364 (fn-pointer carrier) */
+extern HexaVal atomic_cell_load;                                                   /* native/thread.c:365 */
+extern HexaVal atomic_cell_store;                                                  /* native/thread.c:366 */
+extern HexaVal atomic_cell_add;                                                    /* native/thread.c:367 */
+extern HexaVal atomic_cell_sub;                                                    /* native/thread.c:368 */
+extern HexaVal atomic_cell_cas;                                                    /* native/thread.c:369 */
+#endif /* HEXA_THREADS */
 
 /* native/wait.c */
 HexaVal hexa_proc_wait(HexaVal pid_v, HexaVal flags_v);     /* native/wait.c:21 */
