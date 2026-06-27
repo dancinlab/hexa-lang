@@ -68,8 +68,23 @@ existing `HEXA_UNBOX_NATIVE=1` (r1/r5b reuse, default-OFF).
    reassigned divisor) MUST stay boxed (hexa_mod>0, no magic) AND parity-correct.
 5. Smoke: hexa --version + hello + exit42 under the flag.
 
-## Verdict
+## Verdict — GO (measured, summer, x86_64-linux; full RESULT in ./RESULT.txt)
 
-go (PR merge candidate) iff: const-prop fires (k1 ON hexa_mod 1→0, magic == gcc) +
-ratio < r5b 0.426 + Gate1 OFF byteeq PASS + parity OK + k5 soundness (reassigned
-divisor stays boxed). Otherwise: honest residual on where const-prop broke.
+SRC=c55cf81d BASE=622d1b6f. Patched aprime_cc build 1:03.74 (compiles clean).
+
+- Gate1 OFF byteeq (BLOCKING) = PASS — k1/k4/k5 patched-flag-OFF .o == origin/main
+  baseline .o, same cwd (k1 sha e48ff9cb, k4 daef1550, k5 bd07b31a). OFF byte-eq NEUTRAL.
+- Gate2 lever — k1 ON hexa_mod 1->0 (was 1 in r5b) + magic_const 0->1. const-prop FIRED.
+- Gate6 magic ref-match — ON k1 carries movabs 0x89705f3112a28fe5 (-8543223828751151131)
+  + sar 29 (0x1d) + imul ...,1000000007 — byte-identical to gcc/clang -O2 for % 1000000007
+  (M = let M=1000000007 = L0, const-prop'd into the magicdiv).
+- Gate3 ratio = k1 ON/OFF 0.338 (1.30->0.44 s, ~2.95x) — BELOW the r5b 0.426 baseline
+  (residual call hexa_mod gone). k4 0.241; k5 0.436.
+- Gate4 parity (BLOCKING) = OK — k1 840001701 OFF==ON; k4 -66666664; k5 1.
+- SOUNDNESS (k5 = let mut D reassigned divisor) = correctly EXCLUDED — k5 ON hexa_mod=1
+  (stays BOXED), magic_const=0, parity OK. dst-count>1 firewall drops reassigned divisors.
+- Gate5 smoke = hello rc=0, exit42 rc=42 (HEXA_UNBOX_NATIVE=1).
+
+-> GO (PR merge candidate). x86_64-only change (compiler/codegen/x86_64_linux.hexa);
+arm64/darwin codegen untouched -> byte-eq by construction. Coordinator merge gate =
+full 3-target byteeq + ship smoke. Default-OFF (HEXA_UNBOX_NATIVE), release-safe.
