@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -168,6 +168,10 @@ extern long   hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int
  * getrusage = plain uniform 2-arg (out-ptr usage*). */
 extern int    hxlcl_open_sys(const char *path, int flags, int mode);
 extern int    hxlcl_getrusage(int who, void *usage);
+/* batch E — pipe. On darwin the Route C leg is a documented -1 stub (BSD pipe is
+ * 2nd-return-register, unreachable by single-result __hx_syscall6); the Linux
+ * sibling (pipe2 out-ptr) carries the success/roundtrip claim. */
+extern int    hxlcl_pipe(int fds[2]);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
@@ -396,6 +400,18 @@ int main(void) {
     {
         struct rusage ru;
         CK(hxlcl_getrusage(RUSAGE_SELF, &ru) == 0, "getrusage(RUSAGE_SELF) == 0 (composition, out-ptr)");
+    }
+
+    /* batch E: pipe — DARWIN is the genuine 2nd-return-register wall. BSD pipe(42)
+     * returns the two fds in x0/x1; the single-result __hx_syscall6 exposes only
+     * x0, so the Route C darwin leg CANNOT write fds[1] and returns -1 (documented
+     * incomplete — the real darwin pipe stays the floor _hxlcl_pipe_cf asm shim).
+     * Asserting == -1 locks in that documented gap (a future dual-reg fix would
+     * flip this and force a smoke update). The Linux sibling carries the success +
+     * write/read roundtrip claim (pipe2 out-ptr). */
+    {
+        int pfd[2] = { -1, -1 };
+        CK(hxlcl_pipe(pfd) == -1, "pipe() == -1 on darwin (documented 2nd-return-reg wall)");
     }
 
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }

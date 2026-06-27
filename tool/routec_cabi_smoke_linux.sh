@@ -62,7 +62,7 @@ HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
 echo "[routec-smoke-linux] (2) assert errno-bearing syscall symbols defined in routec.o …"
 syms="$(nm "$TMP/routec.o" 2>/dev/null || true)"
 miss=0
-for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage; do
+for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe; do
     if ! grep -qE " T hxlcl_${s}\$" <<<"$syms"; then
         echo "[routec-smoke-linux] NOT DEFINED (T): hxlcl_${s}" >&2; miss=$((miss+1))
     fi
@@ -102,6 +102,8 @@ extern long hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int f
  * getrusage (plain uniform 2-arg, out-ptr usage*). */
 extern int  hxlcl_open_sys(const char *path, int flags, int mode); /* arm64 → openat(AT_FDCWD,…) */
 extern int  hxlcl_getrusage(int who, void *usage);
+/* batch E — pipe: out-ptr int[2] (Linux pipe2, flags=0). Kernel writes both fds. */
+extern int  hxlcl_pipe(int fds[2]);
 
 /* The emit covers ALL whitelisted Route C symbols (the script emits the whole
  * hxlcl_core.hexa), so the routec.o carries the composites' undefined-external
@@ -283,6 +285,23 @@ int main(void) {
     errno = 0;
     CK(hxlcl_getrusage(424242, &ru) == -1, "getrusage(invalid who) == -1");
     CK(errno == EINVAL, "getrusage(invalid who) sets errno == EINVAL (value-exact)");
+
+    /* batch E — pipe: out-ptr int[2] (Linux pipe2, flags=0). The kernel WRITES
+     * both fds into the caller's buffer and returns 0 — proving pipe is an
+     * out-ptr (getrusage/stat shape), NOT a 2nd-return-register on Linux (that
+     * is darwin-only). A write→read roundtrip through the pair confirms the
+     * out-ptr reached the kernel and both fds are valid + usable. */
+    int pfd[2] = { -1, -1 };
+    errno = 0;
+    CK(hxlcl_pipe(pfd) == 0, "pipe() == 0 (success, out-ptr writes both fds)");
+    CK(pfd[0] >= 0 && pfd[1] >= 0, "pipe() fills fds[0],fds[1] (out-ptr, value-exact)");
+    if (pfd[0] >= 0 && pfd[1] >= 0) {
+        char wb = 'Z', rb = 0;
+        CK(write(pfd[1], &wb, 1) == 1, "pipe write end usable");
+        CK(read(pfd[0], &rb, 1) == 1 && rb == 'Z', "pipe read end roundtrip == 'Z'");
+        hxlcl_close(pfd[0]);
+        hxlcl_close(pfd[1]);
+    }
 
     if (fails == 0) { printf("[routec-smoke-linux] all Route C errno asserts PASS\n"); return 0; }
     printf("[routec-smoke-linux] %d assert(s) FAILED\n", fails);

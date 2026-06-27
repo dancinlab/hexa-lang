@@ -977,3 +977,59 @@ pub fn hxlcl_getrusage(who: HexaVal, usage: HexaVal) -> int {
     }
     return r                                    // 0 on success
 }
+
+// ── batch E: pipe (out-ptr int[2] — Linux DISSOLVES, darwin is the genuine wall) ─
+//
+// CENSUS CORRECTION (batch D deferred "pipe = 2nd-return-register"): that label
+// conflated Linux and darwin. The Linux pipe ABI is an OUT-POINTER — the kernel
+// WRITES both fds into the caller's int[2] buffer and returns 0/-errno (the same
+// out-ptr shape as getrusage's usage* and stat's statbuf). The 2nd-return-register
+// (r0/r1 dual-fd) divergence is DARWIN-ONLY (BSD pipe). So the Linux legs dissolve
+// cleanly with the established close errno epilogue; only darwin is a real wall.
+//
+//   x86_64 / arm64-linux → pipe2(fds, flags=0). Using pipe2 (not the legacy
+//          x86_64 pipe=22) gives a UNIFORM 2-arg shape on BOTH arches — arm64 has
+//          NO plain pipe, only pipe2; x86_64 pipe2 takes the same (fds, flags).
+//          This is the "flags-trailing uniform" pattern (exactly like dup2→dup3:
+//          flags=0 trails, so one shape serves both arches, only the NR varies).
+//          errno-bearing: a bad fds ptr / EMFILE → -1 + errno on the Linux leg.
+//   darwin → SYS_pipe (42) returns the two fds in x0/x1 (2nd return register);
+//          the single-result __hx_syscall6 exposes only x0, so it CANNOT write
+//          fds[1]. This is a genuine WALL for the Route C path — the real darwin
+//          pipe stays the floor's _hxlcl_pipe_cf dual-register asm shim
+//          (self/runtime_emit_full.hexa:1542). The Route C darwin leg returns -1
+//          (documented incomplete — mirrors the reference self/rt/syscall.hexa:233
+//          sys_pipe, which also returns -1 on darwin "for now").
+//   NR ref-match (no black-box; WebFetch-confirmed 2026-06-27):
+//     x86_64 __NR_pipe2 = 293  (arch/x86 syscall_64.tbl)
+//     arm64  __NR_pipe2 = 59   (asm-generic unistd.h — no plain pipe/poll on arm64)
+//     darwin SYS_pipe   = 42   (xnu; 2nd-return-reg, used only by the _cf shim)
+//
+// time / poll are DEFERRED (census verdicts recorded in the campaign SSOT): both
+// have register-clean legs (x86_64 time=201 returns epoch sec in rax; x86_64
+// poll=7 + darwin poll=230 are plain 3-arg) but their DIVERGENT targets need a new
+// in-body SCRATCH-BUFFER substrate — arm64/darwin time via gettimeofday writes a
+// timeval STRUCT (must read tv_sec back), and arm64 poll via ppoll(73) needs a
+// synthesized timespec (ms → {tv_sec,tv_nsec} + NULL-for-infinite). Tractable next
+// round once that buffer substrate is accepted; not attempted here (c2).
+pub fn hxlcl_pipe(fds: HexaVal) -> int {
+    if target_is_linux() {
+        let mut r = 0
+        if target_is_x86_64() {
+            r = __hx_syscall6(293, fds, 0, 0, 0, 0, 0)     // x86_64 pipe2(fds, flags=0)
+        } else {
+            r = __hx_syscall6(59, fds, 0, 0, 0, 0, 0)      // arm64 pipe2(fds, flags=0)
+        }
+        let neg = __hx_payload_lt(r, 0)
+        if __hx_payload_ne(neg, 0) {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+            return -1
+        }
+        return r                                // 0 on success (kernel wrote fds[0],fds[1])
+    }
+    // darwin: 2nd-return-register BSD pipe — unreachable by the single-result
+    // __hx_syscall6. Documented incomplete (real darwin pipe = floor _cf shim).
+    return -1
+}
