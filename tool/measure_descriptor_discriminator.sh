@@ -64,7 +64,7 @@ mkdir -p /tmp/base_rc/self && cp /tmp/base_rcemit.hexa /tmp/base_rc/self/runtime
 bash tool/regen_runtime_core_c.sh /tmp/base_rc 2>&1 | tail -1
 CFLAGS_RC="-O2 -DHEXA_RT_ALLOC_NATIVE=0 -include self/runtime_core_sysheaders.h -I self"
 gcc $CFLAGS_RC -c self/runtime_core.c -o /tmp/rc_mine.o 2>/tmp/rcm.err
-gcc $CFLAGS_RC -include self/runtime_core_sysheaders.h -c /tmp/base_rc/self/runtime_core.c -o /tmp/rc_base.o 2>/tmp/rcb.err
+gcc $CFLAGS_RC -c /tmp/base_rc/self/runtime_core.c -o /tmp/rc_base.o 2>/tmp/rcb.err
 if [ -f /tmp/rc_mine.o ] && [ -f /tmp/rc_base.o ]; then
   if cmp -s /tmp/rc_mine.o /tmp/rc_base.o; then
     echo "BYTEEQ OK: runtime_core.o (flag-OFF) BYTE-IDENTICAL to origin/main (x86_64-linux)"
