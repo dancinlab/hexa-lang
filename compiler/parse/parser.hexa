@@ -409,7 +409,21 @@ fn parse_type() -> TypeRef {
         // `Array:256` for `[f64; 256]` matches the existing 2048 B default
         // exactly (256 × 8), so this parser change is byte-eq with PR #1323
         // sweep_pred.hexa today and unlocks non-256 sizes for future PRs.
+        // runtime-gap r2c PRODUCER — carry the element type name on the bare
+        // unsized `[T]` encoding too (`Array:<elem>`), mirroring the sized
+        // `Array:<elem>:<N>` format. Previously bare `[T]` collapsed to just
+        // "Array", DROPPING the element so the let-decl's MIR type_id fell to 0
+        // (unclassified) and the native array-unbox guard (HEXA_UNBOX_ARRAY_
+        // NATIVE) never saw a provably-typed-prim-array container at the index
+        // callsite (probe `cont.type_id=0`). The element survives in `args[0]`
+        // (TypeRef.args, used by ast_to_hir::_hir_lower_type_ref); this only
+        // enriches the `name` text that `_hir_let_type_text` threads to MIR. The
+        // `@shared` count decoder (hir_to_mir) already tolerates the elem-
+        // prefixed `Array:<elem>:<N>` shape, and unsized `[T]` is never a valid
+        // shared-bank decl, so this is format-consistent. Gate-1 re-verifies the
+        // OFF-path .o stays byte-identical on aiden.
         let mut array_name = "Array"
+        if len(inner.name) > 0 { array_name = "Array:" + inner.name }
         if check_kind(TokenKind::Semicolon) {
             advance()
             // Expect integer literal — the type-level size. We accept any
