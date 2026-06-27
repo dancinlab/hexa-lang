@@ -2635,6 +2635,13 @@ fn emit_runtime_core_to(out_path: str) {
     // escape-scan relax (an escaping packed array no longer corrupts a boxed-ABI
     // worker read). Refs: V8 elements-kind dispatch / Julia arrayelem_isboxed.
     buf = buf + "#ifdef HEXA_PACK_ESCAPING\n"
+    // Forward decls — the boxed delegates are DEFINED later in this CORE file
+    // (hexa_array_push ~L2703, hexa_array_get ~L2896, hexa_len ~L3066). The poly
+    // readers below call them, so without these protos the implicit-int default
+    // would conflict with the real HexaVal-returning definitions.
+    buf = buf + "HexaVal hexa_array_push(HexaVal arr, HexaVal item);\n"
+    buf = buf + "HexaVal hexa_array_get(HexaVal arr, int64_t idx);\n"
+    buf = buf + "int64_t hexa_len(HexaVal v);\n"
     buf = buf + "// Mint an escaping packed array: identical storage to hexa_arr_i64_new but\n"
     buf = buf + "// carries the TAG_ARRAY_I64 discriminator so a polymorphic reader can detect\n"
     buf = buf + "// the stride-8 layout at runtime.\n"
