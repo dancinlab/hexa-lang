@@ -2451,12 +2451,15 @@ fn parse_struct_decl() {
     p_skip_newlines()
     let mut fields = []
     while p_peek_kind() != "RBrace" && p_peek_kind() != "Eof" {
-        // Optional `pub` (or `pub(scope)`) on the field — absorbed; the
-        // value is discarded until the AST gains a `vis` slot (see
-        // archive/patches/canonical-audit-round-4-design-level.md
-        // § visibility).  Without this the canonical Rust `pub struct
-        // P { pub x: i64 }` failed at `parse_struct_fields`.
-        parse_visibility()
+        // Optional `pub` (or `pub(scope)`) on the field. The visibility
+        // string ("pub" / "private" / a `pub(scope)` scope name) is now
+        // captured onto the `vis` slot of the StructField node so the
+        // typechecker can enforce field-level visibility (lane
+        // field-visibility · reference: rustc field privacy / Go exported
+        // identifiers). Codegen ignores `vis` → byte-eq neutral; the slot
+        // used to be discarded (the canonical Rust `pub struct P { pub x:
+        // i64 }` parsed either way).
+        let fvis = parse_visibility()
         let fname = p_expect_ident()
         // Type annotation is optional: `value` and `value: int` both parse.
         let mut ftype = ""
@@ -2480,7 +2483,7 @@ fn parse_struct_decl() {
             "params": "", "body": "", "args": "", "fields": "", "items": "",
             "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
             "target": "", "trait_name": "", "methods": "",
-            "default_expr": fdefault
+            "default_expr": fdefault, "vis": fvis
         })
         if p_peek_kind() == "Comma" {
             p_advance()

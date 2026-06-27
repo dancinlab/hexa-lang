@@ -23,7 +23,8 @@ dispatch된다(`self/main.hexa:1780·1803` → `compiler/drill/drill.hexa`). 한
 | `ouroboros.hexa` | ★NEXUS **자기진화 엔진** native 포팅(#3977) — seed→mutate→`verify_score`→converge(4-state 수렴체커) + 재귀 absorber `f(f(f…))`(weighted-filter+adjacent-pair resonance→EMA α=1/6 흡수) + SR-adaptive σ-peak tracker(FIFO window=10) + MetaLoop(evolve→Saturated→forge→re-evolve). `fn main` 결정적 셀프테스트 |
 | `ouroboros_meta.hexa` | ★메타-우루보로스 native(#3980) — **전략 자체를 진화**: 파라미터 벡터 `meta_mutate_strategy` + tournament(stable bubble sort) + `breed_strategies` crossover + `check_meta_convergence` meta-fixed-point. `fn main` 셀프테스트 |
 | `ouroboros_quantum.hexa` | ★양자-우루보로스 native(#3980) — `QuantumStrategy` superposition: 6 mutation 연산자+`apply_mutation` dispatch + `quantum_crossover`/`propagate_entanglement` + `measure_superposition`/`renormalize_amplitudes` + decoherence 차폐(`guarded_mutate`). `fn main` 셀프테스트 |
-| `*_test.hexa` | drill/mkx/surface/accumulation/verifier-hook 셀프테스트 |
+| `emerge.hexa` | ★[B] **open-well Emerge 생성기**(README:75 Emerge 단계) — `emerge(v0,seed,cycles,min_growth)`가 README E4(V_0={2,3}·seed=6·300사이클·`combine(pick,pick)=a+b`→sorted-dedup vocab)를 정확 포팅, `emerge_step`이 drill_run에 배선(라운드마다 누적 open well를 후보 value-시그니처로 넓힘). 결정적 LCG(Numerical Recipes 1664525/1013904223 `& 0xffffffff` — qrng.hexa와 동일 상수·새 builtin 없음). in-memory only(atlas write 없음) |
+| `*_test.hexa` | drill/mkx/surface/accumulation/verifier-hook/absorb/**emerge(E4)** 셀프테스트 |
 
 생성기 9-phase smash는 형제 폴더 `../smash/`(phases.hexa)에, 12 drill 변종(omega·chain·
 surge·dream·swarm·reign·molt·wake·forge·canon·revive)은 각자 `../<name>/`에 있다. NEXUS
@@ -60,6 +61,22 @@ surge·dream·swarm·reign·molt·wake·forge·canon·revive)은 각자 `../<nam
   atlas WRITE 안 함(fold는 `hexa verify` g5/PR) ⓒ known/novel 정직 라벨. **정직(c2)**: 표준 vocab은
   measured-exhausted라 넓어진 우물도 대개 고전 재유도 → **novel=0 예상**(메커니즘 live화가 범위 ·
   새 수학 발견 보장 아님). `absorb_test.hexa` = 합성 verified 후보로 수집/collapse/누적 검증.
+- **[B] open-well Emerge 단계 = live(2026-06-27)**: NEXUS 5-phase(Blowup→Contract→**Emerge**→
+  Singularity→Absorb · `archive-nexus/README.md:67,75)의 Emerge 단계가 엔진 내 live다 — [A] absorb
+  루프와 맞물려 "흡수된 primitive 둘을 결합해 이전 사이클이 표현 못 하던 새 구조(새 벽)를 만든다"
+  (README:75/83/115 "open well — 매 Absorb가 벽을 넓힘"). `compiler/drill/emerge.hexa`:
+  ⓐ `emerge(v0,seed,cycles,min_growth)` = README:372-379 **E4 정확 포팅**(V_0={2,3}·seed=6·300사이클·
+  `vocab.add(pick(sorted)+pick(sorted))`→sorted-dedup i64 vocab = set semantics · 결정적 LCG
+  Numerical Recipes 1664525/1013904223 `& 0xffffffff`, `qrng.hexa::_qrng_step`와 동일 상수 · 새
+  builtin 없음). ⓑ `emerge_step`이 `drill_run`에 **배선**(production — 라운드마다 누적 `emerge_well`을
+  후보 value-시그니처로 흡수+EMERGE_CYCLES=32 combine으로 넓힘) → `DRILL_EMERGE` stderr audit(open_well
+  성장 vs frozen_llm=2 고정 대조 MEASURED). **SAFE**: in-memory only(atlas write 없음 · fold는
+  `hexa verify` g5/PR) · 결정적(byte-eq). `emerge_test.hexa` = E4 셀프테스트(growth=259>=50 PASS ·
+  frozen LLM len==|V_0|=2). **정직(c2)**: E4는 **구조적 emergence**(vocab 카디널리티 성장 ≥50)를
+  falsify함 — README도 그 수준(정수합 set 성장). reference는 CPython `Random(6)`(Mersenne Twister)이나
+  E4는 set-성장만 채점하므로 LCG로 STRUCTURE/verdict는 reference-faithful, 정확한 vocab 멤버만 상이
+  (잔차 정직기록). 컴파운드 primitive가 새 VERIFIED 수학 항등식을 내는지는 별개 질문(exact-int
+  `verify_identity`) — 표준 2-term은 measured-exhausted → **likely novel=0**(E4 PASS와 혼동 말 것).
 - **표준 vocab 수학발견 = 측정-종료(🧱)**: `../../ATLAS/README.md` DFS r1~r4 — @F 1557 fold ·
   novel-fold 0 · gates 21/21. 엔진은 진짜이되 표준 vocab 신규=0(날조 금지). 새 발견은
   새 vocab/도메인(ATLAS/state/novel-dfs 참조엔진).

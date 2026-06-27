@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -97,7 +97,8 @@ cat > "$TMP/harness.c" <<'CEOF'
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>   /* libc getpid() — the reference oracle for hxlcl_getpid */
-#include <fcntl.h>    /* open() / O_RDONLY — for the close() behavior test */
+#include <fcntl.h>    /* open() / O_RDONLY / F_GETFL — close/fcntl behavior tests */
+#include <sys/mman.h> /* PROT_/MAP_ flags / MAP_FAILED — for the mmap composition test */
 
 /* Route-C-emitted symbols under test (raw C-ABI prototypes). */
 extern size_t hxlcl_strlen(const char *s);
@@ -142,6 +143,23 @@ extern long   hxlcl_lseek(int fd, long off, int whence);
  * claim). On darwin both use the plain 2-arg BSD syscall (SYS_DUP2/SYS_MKDIR). */
 extern int    hxlcl_dup2(int oldfd, int newfd);
 extern int    hxlcl_mkdir(const char *path, int mode);
+
+/* errno-bearing chain r3 (FINAL batch) — stat / waitpid, composition only on
+ * darwin (errno-store DCE'd; the errno value-exact is the Linux sibling's claim).
+ * On darwin stat uses the plain 2-arg SYS_STAT; waitpid routes to wait4(4-arg,
+ * rusage NULL). statbuf is opaque here (we never read it) — a sufficiently large
+ * buffer covers any struct stat layout. */
+extern int    hxlcl_stat(const char *path, void *statbuf);
+extern int    hxlcl_waitpid(int pid, int *status, int opts);
+
+/* errno-bearing chain batch C — write / fcntl / mmap, composition only on
+ * darwin (success case; errno-store DCE'd). All uniform across targets (plain
+ * syscall, no at-variant). write = read mirror; fcntl = plain 3-arg; mmap = raw
+ * 6-arg syscall returning the mapped ADDRESS (not the libc MAP_FAILED-converted
+ * value) — success is a positive address word. */
+extern long   hxlcl_write(int fd, const void *buf, unsigned long n);
+extern int    hxlcl_fcntl(int fd, int cmd, long arg);
+extern long   hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
@@ -296,6 +314,64 @@ int main(void) {
         rmdir(dir);                       /* remove so hxlcl_mkdir re-creates it */
         CK(hxlcl_mkdir(dir, 0755) == 0, "mkdir(fresh dir) == 0 (composition)");
         rmdir(dir);
+    }
+
+    /* stat / waitpid — COMPOSITION on darwin (errno-store DCE'd). The errno
+     * value-exact (stat nonexistent → ENOENT, waitpid no-child → ECHILD) is the
+     * Linux sibling smoke's claim. The statbuf is an opaque byte buffer large
+     * enough for any struct stat.
+     *
+     * stat("/") → 0 is asserted: success is carry-clear on darwin too (the root
+     * always exists), so the return value is exact regardless of the deferred
+     * carry-flag errno path.
+     *
+     * waitpid's ERROR case is NOT asserted on darwin (5th-discipline ④,
+     * darwin carry-flag deferred): darwin signals waitpid(no-child)'s ECHILD via
+     * the CARRY flag + a POSITIVE errno in x0 (not Linux's -errno), so the body's
+     * `__hx_payload_lt(r, 0)` Linux-neg-return check cannot see it as an error
+     * and the return value is NOT -1. The error-case -1/ECHILD contract is the
+     * Linux sibling's value-exact claim (waitpid(-1)→-1 ∧ ECHILD, already GREEN);
+     * darwin's success case needs a fork+child and isn't exercised here. We only
+     * assert it LINKS + EMITS + RUNS without crashing (composition-only) — the
+     * same treatment close gives its darwin error case. The carry-flag-correct
+     * darwin path is a separate __error()/csneg round. */
+    char sbuf[256];
+    CK(hxlcl_stat("/", sbuf) == 0, "stat(\"/\") == 0 (composition)");
+
+    int wst = 0;
+    (void)hxlcl_waitpid(-1, &wst, 0);   /* composition only — darwin carry-flag deferred */
+
+    /* batch C: write / fcntl / mmap — COMPOSITION on darwin (success case;
+     * errno-store DCE'd). The errno value-exact (bad-fd → EBADF) is the Linux
+     * sibling smoke's claim. write(1, "x", 1) → 1 byte; fcntl(0, F_GETFL) → the
+     * stdin flags (>= 0); mmap of one page → a valid address (NOT MAP_FAILED). */
+    CK(hxlcl_write(1, "", 0) == 0, "write(1, \"\", 0) == 0 (composition, no output)");
+    {
+        int wfd = open("/dev/null", O_WRONLY);
+        CK(wfd >= 0, "open /dev/null for write test");
+        CK(hxlcl_write(wfd, "x", 1) == 1, "write(/dev/null, \"x\", 1) == 1 (composition)");
+        hxlcl_close(wfd);
+    }
+
+    /* fcntl(0, F_GETFL) returns the current stdin flags — always >= 0 for a
+     * valid fd. Confirms the plain 3-arg trap composes (NO at-variant). */
+    CK(hxlcl_fcntl(0, F_GETFL, 0) >= 0, "fcntl(0, F_GETFL) >= 0 (composition)");
+
+    /* mmap one anonymous page → a valid mapped ADDRESS (the raw syscall returns
+     * the address, NOT MAP_FAILED). MAP_FAILED == (void*)-1, so the body's
+     * `__hx_payload_lt(r, 0)` success path returns the positive address word. */
+    {
+        long pg = (long)sysconf(_SC_PAGESIZE);
+        if (pg <= 0) pg = 4096;
+        long m = hxlcl_mmap(0, (unsigned long)pg, PROT_READ | PROT_WRITE,
+                            MAP_ANON | MAP_PRIVATE, -1, 0);
+        CK(m != (long)MAP_FAILED && m != -1 && m != 0,
+           "mmap(anon page) → valid address (not MAP_FAILED, composition)");
+        if (m != (long)MAP_FAILED && m != -1 && m != 0) {
+            ((char *)m)[0] = 'q';                /* page is writable */
+            CK(((char *)m)[0] == 'q', "mmap'd page is writable (composition)");
+            munmap((void *)m, (size_t)pg);
+        }
     }
 
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }

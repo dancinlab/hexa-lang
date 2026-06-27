@@ -180,3 +180,42 @@ lowers `%`/`/` to a native `idiv` in the first place.
   only after `mod`/`div` are native; needed for the still-`%`-bound k1/k2/k4 tails. A dedicated
   linear-scan reg-alloc is a **distant 4th** — it addresses only the coupled spill fraction that
   unboxing already removes for free.
+
+---
+
+## R5b MEASURED VERDICT — `%`/`/` magic-reciprocal scalar unbox (aiden, 2026-06-27)
+
+Branch `perf/codegen-unbox-scalar-full-r5b-measure` sha `111425846` (+200 LOC `_x86_magic_*`
+in `compiler/codegen/x86_64_linux.hexa`, behind `HEXA_UNBOX_NATIVE=1`, default-OFF). Built
+patched + baseline `aprime_cc` on aiden; baseline = `origin/main`/`e1286497b`. Full log:
+`state/unbox-native-r5/r5b_RESULT.txt` + aiden `~/r5b_measure_RESULT.txt` (reboot-proof).
+
+**Verdict: GO** (merge candidate, default-OFF). All 6 gates pass; one honest residual recorded.
+
+| Gate | Result |
+|------|--------|
+| **1 OFF-byteeq** (BLOCKING) | **PASS** — patched flag-OFF .o == baseline .o, **same-cwd**, byte-identical: k1 sha `230d63f80daf09ad`, k4 sha `9565f894130aa847`. The +200-LOC magic codegen is OFF-path inert exactly as designed. |
+| **2 lever** | **FIRED** — k1: hexa_add 2→0, hexa_mul 1→0, hexa_cmp 1→0; spill(tagslot/rbp-mov) 36→29. k4: **hexa_mod 3→0**, hexa_add 2→0, hexa_cmp 1→0; spill 47→34. Call+spill drop together (coupled, as the census predicted). |
+| **3 ratio** (median-of-5, `taskset -c 3`) | **k1 = 0.426** (2.35× faster) · **k4 = 0.223** (4.48× faster). Both <1.0. k1 off=1.55s on=0.66s; k4 off=0.94s on=0.21s. |
+| **4 parity** (BLOCKING) | **OK** — bit-identical: k1 840001701 (OFF==ON), k4 −66666664 (OFF==ON). |
+| **5 smoke** | **GREEN** — hexa v0.334.0 · hello rc=0 · exit42 rc=42 under `HEXA_UNBOX_NATIVE=1`. |
+| **6 magic ref-match** | **PASS (k4)** — k4 ON asm carries the EXACT gcc -O2 magic constants: `% 3` → `movabs $0x5555555555555556` (=6148914691236517206, s=0), `% 5` → `movabs $0x6666666666666667` (=7378697629483820647, `sar $1`/s=1). Sequence = `movabs M · imul · shr 63 · sar s · add · imul rax,rdx,d · sub` = gcc signed magic-reciprocal idiom byte-for-byte. `magic_reference.py` validates M,s for all divisors (REF: ALL_REF_OK · FUNCTIONAL 39000/0 mismatch). |
+
+### Honest residual — the k1 `% M` magic did NOT engage (correctly)
+Gate6 first flagged "magic constant NOT found in k1 ON asm" — investigated, **not a bug**. In
+k1, the divisor is `let M = 1000000007` (a **named local**), and the `%` RHS is the *variable*
+`M`, not a compile-time literal at the binop. The magic path requires a recognizable
+compile-time positive-constant divisor *on the `%`/`/` operand*; a variable divisor stays boxed
+(`call hexa_mod` remains, k1 hexa_mod=1 in BOTH OFF and ON). So **k1's 0.426 speedup came from
+the r5 scalar unbox** (removing add/mul/cmp calls + their spill), **not** from magic-div.
+**k4's 0.223 came from the magic-div** (`% 3`,`% 5` are direct literals → hexa_mod 3→0). This is
+the correct, conservative behavior (variable divisor = div-by-zero hazard → stays boxed), and it
+means the r5b mechanism is proven on the literal-divisor case (k4) while k1 demonstrates the r5
+base lever independently. The earlier r5 verdict's "k1 is %-bound, ratio=1.000" is now closed by
+r5b only where the divisor is a literal; k1's named-constant `M` would need const-propagation
+(let-bound literal → fold to imm at the binop) as an honest r6 follow-on (orthogonal, not blocking).
+
+### Merge posture
+Release-safe (Gate1 OFF byte-identical + Gate4 parity + Gate5 smoke). Merge gate for default-OFF
+landing = G1+G4+G5 = GREEN. Default-flip would additionally need 3-target gen3≡gen4 byteeq CI
+(separate decision). Coordinator owns the merge; not merged here.
