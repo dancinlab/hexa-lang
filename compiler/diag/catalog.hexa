@@ -336,6 +336,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3011",
+        title: "mismatched types",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "mismatched types: expected `{expected}`, found `{actual}`",
+        explain: "Opt-in static type check (`HEXA_STATIC_TYPES=1`). A `let <name>: T = <literal>` local binding declared an explicit annotation `T` whose primitive type provably differs from the literal initialiser's type — e.g. `let x: i32 = \"s\"` or `let ok: bool = 1`. This is the Rust E0308 'mismatched types' rule brought to LOCAL (in-fn-body) lets: a string/bool/char literal never coerces to a numeric annotation, and an integer literal never coerces to `bool`. The default build does NOT emit this (the flag is off → diagnostic stream byte-identical to today); under the flag it is a FATAL error (REJECT, not advisory warning), so the build aborts before codegen. Scope r1 = scalar-literal RHS vs scalar-primitive annotation only; broader inference (idents, calls, ranges, struct/enum types) is deferred to later rungs. Fix: change the literal to match the annotation, or the annotation to match the value. The integer-literal/float-literal coercions Rust allows (`let x: i32 = 5`, `let y: f64 = 1.5`) still type-check.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
