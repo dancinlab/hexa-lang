@@ -207,6 +207,51 @@ fn _type_id_of(t: Type) -> i64 {
     return 0
 }
 
+// runtime-gap r2c PRODUCER (HEXA_UNBOX_ARRAY_NATIVE) — gate check, mirrors the
+// codegen consumer `_unbox_array_enabled` exactly. When OFF the let-decl type_id
+// override below is skipped, so every Local's type_id is byte-identical to the
+// pre-r2c lowering (Gate-1 OFF-byteeq). Default-OFF, opt-in → release-safe.
+fn _arru_native_enabled() -> bool {
+    return env("HEXA_UNBOX_ARRAY_NATIVE") == "1"
+}
+
+// runtime-gap r2c PRODUCER — recover the typed-prim array type_id (101..104)
+// from a `let`'s declared array annotation text. The let text encodes the type
+// as `<name>|<type-text>` where the type-text for an array is `Array:<elem>` or
+// the sized `Array:<elem>:<N>` (parser r2c carry + RFC 085). We read the elem
+// segment (between the first and the optional second `:`) and map it to the same
+// id space `_type_id_of` produces for a `kind:"array"` Type. Returns 0 when the
+// text is not a typed-prim array annotation (untyped / non-prim elem / no `:`),
+// leaving the local's RHS-derived type_id untouched.
+//
+// WHY this is the missing producer: for `let mut xs: [i64] = []` the RHS is an
+// EMPTY array literal whose inferred `.typ` carries no element, so `_type_id_of`
+// over the RHS type returns 0. The declared `[i64]` annotation is the only place
+// the element survives; without this recovery the container Local reaches the
+// codegen index callsite with type_id 0 and the native-unbox guard never fires
+// (r2b probe `cont.type_id=0`). This stamps the proven element type onto the
+// container Local so `_x86_local_type` reports 101..104 at the index site.
+fn _arru_array_type_id_from_text(type_text: string) -> i64 {
+    let pfx = "Array:"
+    if len(type_text) <= len(pfx) { return 0 }
+    if type_text.substring(0, len(pfx)) != pfx { return 0 }
+    // elem = substring after `Array:` up to the next `:` (sized) or end.
+    let rest = type_text.substring(len(pfx), len(type_text))
+    let rchars = rest.chars()
+    let mut elem = ""
+    let mut ci = 0
+    while ci < len(rchars) {
+        if rchars[ci] == ':' { break }
+        elem = elem + to_string(rchars[ci])
+        ci = ci + 1
+    }
+    if elem == "i64" { return 101 }
+    if elem == "i32" { return 102 }
+    if elem == "f64" { return 103 }
+    if elem == "f32" { return 104 }
+    return 0
+}
+
 // ── Local-name binding (HIR ident → MIR Local) ──────────────
 
 pub struct LocalBinding {
@@ -1602,7 +1647,29 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             }
         }
         ctx2 = _fresh_local_with_space(ctx2, rhs_t, hint, space)
-        let dst = _lr_locals[len(_lr_locals) - 1]
+        let mut dst = _lr_locals[len(_lr_locals) - 1]
+        // runtime-gap r2c PRODUCER — when the RHS type was unclassified
+        // (type_id 0, e.g. an empty `[]` array literal) but the declared
+        // annotation names a typed-prim array (`let xs: [i64]`), stamp the
+        // proven element type_id (101..104) onto the container Local. Gated on
+        // HEXA_UNBOX_ARRAY_NATIVE so the OFF path leaves type_id byte-identical.
+        // Only overrides when the RHS contributed nothing (0) — an already-typed
+        // RHS (e.g. a typed array-returning call) is authoritative and kept.
+        if _arru_native_enabled() && dst.type_id == 0 {
+            let _arr_tid = _arru_array_type_id_from_text(_hir_let_type_text(e.text))
+            if _arr_tid != 0 {
+                let _li = len(_lr_locals) - 1
+                _lr_locals[_li] = Local {
+                    id: dst.id,
+                    arena_id: dst.arena_id,
+                    type_id: _arr_tid,
+                    name_hint: dst.name_hint,
+                    precision: dst.precision,
+                    space: dst.space
+                }
+                dst = _lr_locals[_li]
+            }
+        }
         let mut args: [Operand] = []
         args.push(rhs_op)
         let s = Stmt {
