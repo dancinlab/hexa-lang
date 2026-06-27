@@ -1,0 +1,13 @@
+// Kd — GLOBAL escape. A top-level (global) array lives in a separate id space;
+// the lattice operates on function locals and conservatively does NOT prove
+// globals (see _x86_operand_provably_int note) -> g stays BOXED. OFF==ON.
+let mut g: [i64] = []
+fn main() {
+    let mut i = 0
+    while i < 64 {
+        g.push(i * 5)
+        i = i + 1
+    }
+    g[0] = g[0] + g[63]
+    println(g[0])
+}
