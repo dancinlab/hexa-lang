@@ -1223,7 +1223,17 @@ fn emit_runtime_core_to(out_path: str) {
     // never packs an escaping array (HEXA_PACK_ESCAPING off) so no TAG_ARRAY_I64
     // value is ever minted, no default reader/switch observes it. Only the flag-ON
     // poly-readers (#ifdef HEXA_PACK_ESCAPING below) discriminate on it.
-    buf = buf + "    TAG_ARRAY_I64\n"
+    buf = buf + "    TAG_ARRAY_I64,\n"
+    // ── FLEET lane (F64 mirror): escaping packed [f64] discriminator ──────────
+    // TAG_ARRAY_F64 = the f64 analogue of TAG_ARRAY_I64. Appended as the TRUE LAST
+    // value (after TAG_ARRAY_I64) so NO existing tag's integer value shifts (#4151
+    // lesson: append-only, never mid-insert). Identical INERT property: the DEFAULT
+    // build never mints it (HEXA_PACK_ESCAPING off) → no reader observes it → the
+    // default runtime.a is byte-identical. Only the flag-ON poly-readers branch on
+    // it (HexaArrF64* contiguous double[] storage; double 8B == int64 8B stride so
+    // the layout-match invariant with HexaArr/HexaArrI64 holds — only the carried
+    // tag + the element reinterpret (bits↔double) differ from the i64 path).
+    buf = buf + "    TAG_ARRAY_F64\n"
     buf = buf + "} HexaTag;\n"
     buf = buf + "\n"
     buf = buf + "// ── Optimization #10: Hash-map backing store ─────────────\n"
@@ -2643,6 +2653,10 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "HexaVal hexa_array_get(HexaVal arr, int64_t idx);\n"
     buf = buf + "int64_t hexa_len(HexaVal v);\n"
     buf = buf + "HexaVal hexa_index_set(HexaVal container, HexaVal key, HexaVal val);\n"
+    // F64 mirror — hexa_arr_f64_push (native-double grow) is DEFINED later in this
+    // CORE file (the typed-leaf section ~L2738). The poly-push f64 branch +
+    // hexa_arr_f64_push_bits call it, so forward-declare to avoid implicit-int.
+    buf = buf + "HexaVal hexa_arr_f64_push(HexaVal v, double x);\n"
     buf = buf + "// Mint an escaping packed array: identical storage to hexa_arr_i64_new but\n"
     buf = buf + "// carries the TAG_ARRAY_I64 discriminator so a polymorphic reader can detect\n"
     buf = buf + "// the stride-8 layout at runtime.\n"
@@ -2657,11 +2671,36 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "    HX_SET_ARR_PTR(v, (HexaArr*)a);\n"
     buf = buf + "    return v;\n"
     buf = buf + "}\n"
+    buf = buf + "// F64 mirror — mint an escaping packed [f64] array (TAG_ARRAY_F64). Same\n"
+    buf = buf + "// storage shape as hexa_arr_f64_new but carries the TAG_ARRAY_F64 discriminator\n"
+    buf = buf + "// so a polymorphic reader detects the stride-8 double layout at runtime.\n"
+    buf = buf + "HexaVal hexa_arr_f64_new_esc(int cap) {\n"
+    buf = buf + "    HexaArrF64* a = (HexaArrF64*)malloc(sizeof(HexaArrF64));\n"
+    buf = buf + "    if (!a) { fprintf(stderr, \"OOM in arr_f64_new_esc\\n\"); exit(1); }\n"
+    buf = buf + "    if (cap < 1) cap = 1;\n"
+    buf = buf + "    a->data = (double*)malloc(sizeof(double) * (size_t)cap);\n"
+    buf = buf + "    if (!a->data) { fprintf(stderr, \"OOM in arr_f64_new_esc data\\n\"); exit(1); }\n"
+    buf = buf + "    a->len = 0; a->cap = cap;\n"
+    buf = buf + "    HexaVal v = {.tag=TAG_ARRAY_F64};\n"
+    buf = buf + "    HX_SET_ARR_PTR(v, (HexaArr*)a);\n"
+    buf = buf + "    return v;\n"
+    buf = buf + "}\n"
+    buf = buf + "// F64 mirror — RAW mint-site push that takes the element as int64 BITS (not a\n"
+    buf = buf + "// native double). The codegen mint site has the f64 payload already in a GPR\n"
+    buf = buf + "// (the IEEE-754 bits from _x86_hv_payload), so an int-ABI helper keeps the mint\n"
+    buf = buf + "// call all-GPR (rdi:rsi=descriptor, rdx=bits) — the EXACT ABI shape of\n"
+    buf = buf + "// hexa_arr_i64_push, no xmm-arg lowering needed at the literal site. The bits\n"
+    buf = buf + "// are reinterpreted to double here via a union pun (same as hexa_bits_to_float).\n"
+    buf = buf + "HexaVal hexa_arr_f64_push_bits(HexaVal v, int64_t bits) {\n"
+    buf = buf + "    union { int64_t i; double d; } u; u.i = bits;\n"
+    buf = buf + "    return hexa_arr_f64_push(v, u.d);\n"
+    buf = buf + "}\n"
     buf = buf + "// Polymorphic length: branch on the discriminator. Layout-match invariant\n"
     buf = buf + "// (len@8 for both HexaArr and HexaArrI64) means HX_ARR_LEN is actually\n"
     buf = buf + "// correct for either, but we keep the explicit branch for clarity/symmetry.\n"
     buf = buf + "int64_t hexa_arr_poly_len(HexaVal v) {\n"
     buf = buf + "    if (HX_TAG(v) == TAG_ARRAY_I64) return ((HexaArrI64*)v.arr_ptr)->len;\n"
+    buf = buf + "    if (HX_TAG(v) == TAG_ARRAY_F64) return ((HexaArrF64*)v.arr_ptr)->len;\n"
     buf = buf + "    return hexa_len(v);\n"
     buf = buf + "}\n"
     buf = buf + "// Polymorphic index get: TAG_ARRAY_I64 → raw stride-8 i64 (boxed as TAG_INT);\n"
@@ -2672,6 +2711,11 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "        if (idx < 0 || idx >= a->len) { hexa_throw(hexa_str(\"index out of bounds\")); return hexa_void(); }\n"
     buf = buf + "        return hexa_int(a->data[idx]);\n"
     buf = buf + "    }\n"
+    buf = buf + "    if (HX_TAG(v) == TAG_ARRAY_F64) {\n"
+    buf = buf + "        HexaArrF64* a = (HexaArrF64*)v.arr_ptr;\n"
+    buf = buf + "        if (idx < 0 || idx >= a->len) { hexa_throw(hexa_str(\"index out of bounds\")); return hexa_void(); }\n"
+    buf = buf + "        return hexa_float(a->data[idx]);\n"
+    buf = buf + "    }\n"
     buf = buf + "    return hexa_array_get(v, idx);\n"
     buf = buf + "}\n"
     buf = buf + "// Polymorphic push: TAG_ARRAY_I64 → raw stride-8 grow (in-place, returns the\n"
@@ -2679,6 +2723,10 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "HexaVal hexa_arr_poly_push(HexaVal v, HexaVal item) {\n"
     buf = buf + "    if (HX_TAG(v) == TAG_ARRAY_I64) {\n"
     buf = buf + "        return hexa_arr_i64_push(v, HX_IS_INT(item) ? HX_INT(item) : 0);\n"
+    buf = buf + "    }\n"
+    buf = buf + "    if (HX_TAG(v) == TAG_ARRAY_F64) {\n"
+    buf = buf + "        double x = HX_IS_FLOAT(item) ? HX_FLOAT(item) : (HX_IS_INT(item) ? (double)HX_INT(item) : 0.0);\n"
+    buf = buf + "        return hexa_arr_f64_push(v, x);\n"
     buf = buf + "    }\n"
     buf = buf + "    return hexa_array_push(v, item);\n"
     buf = buf + "}\n"
@@ -2694,6 +2742,12 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "        HexaArrI64* a = (HexaArrI64*)v.arr_ptr;\n"
     buf = buf + "        if (idx < 0 || idx >= a->len) { hexa_throw(hexa_str(\"index out of bounds\")); return v; }\n"
     buf = buf + "        a->data[idx] = HX_IS_INT(item) ? HX_INT(item) : 0;\n"
+    buf = buf + "        return v;\n"
+    buf = buf + "    }\n"
+    buf = buf + "    if (HX_TAG(v) == TAG_ARRAY_F64) {\n"
+    buf = buf + "        HexaArrF64* a = (HexaArrF64*)v.arr_ptr;\n"
+    buf = buf + "        if (idx < 0 || idx >= a->len) { hexa_throw(hexa_str(\"index out of bounds\")); return v; }\n"
+    buf = buf + "        a->data[idx] = HX_IS_FLOAT(item) ? HX_FLOAT(item) : (HX_IS_INT(item) ? (double)HX_INT(item) : 0.0);\n"
     buf = buf + "        return v;\n"
     buf = buf + "    }\n"
     buf = buf + "    return hexa_index_set(v, hexa_int(idx), item);\n"
