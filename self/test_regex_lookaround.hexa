@@ -1,0 +1,145 @@
+// self/test_regex_lookaround.hexa -- backtracking-engine regex self-test (R2)
+// @ci_gate
+//
+// Exercises stdlib/regex/backtrack.hexa through the engine-agnostic
+// stdlib/regex/thompson.hexa API (regex_compile auto-dispatch). Covers the
+// constructs a Thompson NFA cannot do -- lookahead, lookbehind, backreferences
+// -- the step-cap catastrophic-backtracking guard, and a regression check that
+// plain ERE patterns still take the fast Thompson path.
+// Every expected value is hand-computed in the comment beside the case.
+// Run locally:  hexa run self/test_regex_lookaround.hexa   (from repo root)
+//
+// DEV NOTE: `hexa run` precompiles a cached .o keyed on sha(ENTRY source) only
+// (~/.hx/bin/release/precompile/hexa_run.<sha>_…) -- it does NOT rehash imported
+// modules. So while iterating on stdlib/regex/backtrack.hexa, edits to that
+// module are NOT picked up for an UNCHANGED test source (stale cache → stale
+// result). Touch this file (or clear the precompile dir) to force a rebuild.
+// CI builds fresh, so this only bites local edit loops.
+
+use "stdlib/regex/thompson"
+
+let mut pass_count = 0
+let mut total_count = 0
+let mut first_fail = ""
+
+fn ok(name: string, cond: bool) {
+    total_count = total_count + 1
+    if cond {
+        pass_count = pass_count + 1
+    } else {
+        if first_fail == "" { first_fail = name }
+        println("FAIL " + name)
+    }
+}
+
+fn eq(name: string, got: string, want: string) {
+    total_count = total_count + 1
+    if got == want {
+        pass_count = pass_count + 1
+    } else {
+        if first_fail == "" { first_fail = name }
+        println("FAIL " + name + " got=[" + got + "] want=[" + want + "]")
+    }
+}
+
+// Compile then full-match.
+fn m(pat: string, s: string) -> bool {
+    let re = regex_compile(pat)
+    return regex_match(re, s)
+}
+
+// Compile then search to "start,end" or "" when no match.
+fn srch(pat: string, s: string) -> string {
+    let re = regex_compile(pat)
+    let sp = regex_search(re, s)
+    if len(sp) == 0 { return "" }
+    return to_string(sp[0]) + "," + to_string(sp[1])
+}
+
+// Search on an already-compiled Regex to "start,end" / "".
+fn srch_re(re: Regex, s: string) -> string {
+    let sp = regex_search(re, s)
+    if len(sp) == 0 { return "" }
+    return to_string(sp[0]) + "," + to_string(sp[1])
+}
+
+// Compile then find_all to "s0,e0|s1,e1|..." ("" when none).
+fn fall(pat: string, s: string) -> string {
+    let re = regex_compile(pat)
+    let all = regex_find_all(re, s)
+    let mut out = ""
+    let mut i = 0
+    while i < len(all) {
+        if i > 0 { out = out + "|" }
+        out = out + to_string(all[i][0]) + "," + to_string(all[i][1])
+        i = i + 1
+    }
+    return out
+}
+
+fn main() {
+    // positive lookahead  foo(?=bar)  (zero-width; consumes only "foo")
+    eq("la pos hit",   srch("foo(?=bar)", "foobar"), "0,3")   // foo then 'bar' ahead
+    eq("la pos miss",  srch("foo(?=bar)", "foobaz"), "")      // ahead is 'baz' not bar
+    ok("la zero-width", m("foo(?=bar)", "foobar") == false)   // full-match: 3 consumed != 6
+
+    // negative lookahead  foo(?!bar)
+    eq("la neg hit",   srch("foo(?!bar)", "foobaz"), "0,3")   // ahead NOT bar -> ok
+    eq("la neg block", srch("foo(?!bar)", "foobar"), "")      // ahead IS bar -> blocked
+    eq("la neg eos",   srch("foo(?!bar)", "foo"),    "0,3")   // nothing ahead -> ok
+
+    // lookahead inside find_all  \w+(?=,)  -- words immediately before a comma
+    // "a,b,c": a@0(,@1) b@2(,@3) c@4 -- 'c' has no trailing comma.
+    eq("la findall",   fall("\\w+(?=,)", "a,b,c"), "0,1|2,3")
+
+    // positive lookbehind  (?<=@)\w+  (fixed-width '@')
+    // "hi @user": '@'@3, "user"@4..8 ; only pos4 has '@' just behind.
+    eq("lb pos",       srch("(?<=@)\\w+", "hi @user"), "4,8")
+    eq("lb pos none",  srch("(?<=@)\\w+", "plain text"), "")  // no '@' anywhere
+
+    // negative lookbehind  (?<!@)\w+  (succeeds at start-of-string)
+    // "hi @user": leftmost \w+ NOT preceded by '@' is "hi"@0..2 (pos0 has no
+    // char behind, so "@ behind" is false -> negative assertion passes).
+    eq("lb neg start", srch("(?<!@)\\w+", "hi @user"), "0,2")
+
+    // backreference  (\w+)\s\1  -- duplicated word
+    ok("br dup full",  m("(\\w+)\\s\\1", "hello hello"))      // group=hello, repeat
+    ok("br no dup",    m("(\\w+)\\s\\1", "hello world") == false)
+    eq("br dup search", srch("(\\w+)\\s\\1", "go go stop"), "0,5")  // "go go"
+    eq("br no match",  srch("(\\w+)\\s\\1", "one two three"), "")
+    ok("br digits",    m("(\\d+)-\\1", "42-42"))             // (\d+) then -\1
+    ok("br digits no", m("(\\d+)-\\1", "42-43") == false)
+
+    // compile-time validity (fixed-width lookbehind restriction)
+    ok("lb fixed ok",  regex_valid(regex_compile("(?<=ab)c")))          // fixed width 2
+    ok("lb var fail",  regex_valid(regex_compile("(?<=a+)b")) == false) // a+ variable -> reject
+    ok("br compiles",  regex_valid(regex_compile("(\\w+)\\s\\1")))
+    ok("la compiles",  regex_valid(regex_compile("x(?=y)")))
+
+    // step-cap catastrophic-backtracking guard.
+    // Evil pattern (?=(a+)+b) over 40 a's with NO 'b' makes the lookahead's
+    // nested quantifier explore ~2^n partitions. With a small step budget it
+    // must ABORT SAFELY: regex_search -> []  AND  regex_last_error == 1.
+    let evil = regex_compile_capped("(?=(a+)+b)", 20000)
+    let bad_input = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"   // 40 'a'
+    let r = regex_search(evil, bad_input)
+    ok("stepcap empty", len(r) == 0)
+    ok("stepcap flagged", regex_last_error(evil) == 1)
+    // A benign backtrack pattern under the SAME small cap must NOT false-trip.
+    let benign = regex_compile_capped("foo(?=bar)", 20000)
+    eq("stepcap benign ok", srch_re(benign, "foobar"), "0,3")
+    ok("stepcap benign clean", regex_last_error(benign) == 0)
+
+    // regression: plain ERE still routes to the linear Thompson engine.
+    ok("ere lit",      m("hexa", "hexa"))
+    ok("ere class",    m("[a-z]+", "hello"))
+    eq("ere search",   srch("[0-9]+", "abc 123 def"), "4,7")
+    eq("ere findall",  fall("[0-9]+", "12 ab 34"), "0,2|6,8")
+    ok("ere no overflow", regex_last_error(regex_compile("[a-z]+")) == 0)  // thompson -> 0
+
+    println("PASS " + to_string(pass_count) + "/" + to_string(total_count))
+    if first_fail != "" {
+        println("first fail: " + first_fail)
+        exit(1)
+    }
+}
