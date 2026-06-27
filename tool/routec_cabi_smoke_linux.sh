@@ -62,7 +62,7 @@ HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
 echo "[routec-smoke-linux] (2) assert errno-bearing syscall symbols defined in routec.o …"
 syms="$(nm "$TMP/routec.o" 2>/dev/null || true)"
 miss=0
-for s in close read lseek; do
+for s in close read lseek dup2 mkdir; do
     if ! grep -qE " T hxlcl_${s}\$" <<<"$syms"; then
         echo "[routec-smoke-linux] NOT DEFINED (T): hxlcl_${s}" >&2; miss=$((miss+1))
     fi
@@ -83,6 +83,8 @@ cat > "$TMP/harness.c" <<'CEOF'
 extern int  hxlcl_close(int fd);
 extern long hxlcl_read(int fd, void *buf, unsigned long n);
 extern long hxlcl_lseek(int fd, long off, int whence);
+extern int  hxlcl_dup2(int oldfd, int newfd);   /* arm64 → dup3(old,new,0) */
+extern int  hxlcl_mkdir(const char *path, int mode); /* arm64 → mkdirat(AT_FDCWD,…) */
 
 /* The emit covers ALL whitelisted Route C symbols (the script emits the whole
  * hxlcl_core.hexa), so the routec.o carries the composites' undefined-external
@@ -140,6 +142,30 @@ int main(void) {
     char zb[4] = {1, 1, 1, 1};
     CK(zfd >= 0 && hxlcl_read(zfd, zb, 4) == 4, "read(/dev/zero, 4) == 4 (success)");
     if (zfd >= 0) hxlcl_close(zfd);
+
+    /* dup2 — arm64 dup3(old,new,0) / x86_64 dup2. bad-fd → -1 + EBADF (errno-store
+     * value-exact); success: dup2(valid, target) returns the target fd. */
+    errno = 0;
+    CK(hxlcl_dup2(999999, 30) == -1, "dup2(bad fd) == -1");
+    CK(errno == EBADF, "dup2(bad fd) sets errno == EBADF (value-exact)");
+    int dvfd = open("/dev/null", O_RDONLY);
+    CK(dvfd >= 0 && hxlcl_dup2(dvfd, 30) == 30, "dup2(valid, 30) == 30 (success)");
+    if (dvfd >= 0) { hxlcl_close(30); hxlcl_close(dvfd); }
+
+    /* mkdir — arm64 mkdirat(AT_FDCWD,path,mode) / x86_64 mkdir. mkdir of an EXISTING
+     * dir → -1 + EEXIST (the per-arch arg-shape errno path; AT_FDCWD prepend on
+     * arm64 must land path/mode in the right slots or this would mis-route). */
+    errno = 0;
+    CK(hxlcl_mkdir("/", 0755) == -1, "mkdir(existing /) == -1");
+    CK(errno == EEXIST, "mkdir(existing /) sets errno == EEXIST (value-exact)");
+    /* mkdir success: a fresh temp dir → 0. */
+    char md[] = "/tmp/routec_lmkdir_XXXXXX";
+    if (mkdtemp(md) != NULL) {
+        rmdir(md);
+        errno = 0;
+        CK(hxlcl_mkdir(md, 0755) == 0, "mkdir(fresh dir) == 0 (success, AT_FDCWD path slot)");
+        rmdir(md);
+    }
 
     if (fails == 0) { printf("[routec-smoke-linux] all Route C errno asserts PASS\n"); return 0; }
     printf("[routec-smoke-linux] %d assert(s) FAILED\n", fails);

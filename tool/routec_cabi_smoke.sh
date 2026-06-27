@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -136,6 +136,12 @@ extern int    hxlcl_close(int fd);
  * is the LINUX sibling smoke's job. */
 extern long   hxlcl_read(int fd, void *buf, unsigned long n);
 extern long   hxlcl_lseek(int fd, long off, int whence);
+
+/* errno-bearing chain r2 (arm64 dup3/mkdirat shape) — dup2 / mkdir, composition
+ * only on darwin (errno-store DCE'd; the errno value-exact is the Linux sibling's
+ * claim). On darwin both use the plain 2-arg BSD syscall (SYS_DUP2/SYS_MKDIR). */
+extern int    hxlcl_dup2(int oldfd, int newfd);
+extern int    hxlcl_mkdir(const char *path, int mode);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
@@ -274,6 +280,23 @@ int main(void) {
     CK(lfd >= 0, "open /dev/zero for lseek test");
     CK(hxlcl_lseek(lfd, 0, SEEK_SET) == 0, "lseek(SEEK_SET, 0) == 0 (composition)");
     hxlcl_close(lfd);
+
+    /* dup2 / mkdir — COMPOSITION on darwin (success case; errno-store DCE'd). The
+     * errno value-exact (bad-fd → EBADF, existing-dir → EEXIST) is the Linux
+     * sibling smoke's claim. dup2(valid fd) → newfd; mkdir of a fresh temp → 0. */
+    int dsrc = open("/dev/null", O_RDONLY);
+    CK(dsrc >= 0, "open /dev/null for dup2 test");
+    CK(hxlcl_dup2(dsrc, 31) == 31, "dup2(valid, 31) == 31 (composition)");
+    hxlcl_close(31);
+    hxlcl_close(dsrc);
+
+    char dir[] = "/tmp/routec_mkdir_XXXXXX";
+    CK(mkdtemp(dir) != NULL, "mkdtemp for mkdir test");
+    if (dir[0]) {
+        rmdir(dir);                       /* remove so hxlcl_mkdir re-creates it */
+        CK(hxlcl_mkdir(dir, 0755) == 0, "mkdir(fresh dir) == 0 (composition)");
+        rmdir(dir);
+    }
 
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }
     printf("[routec-smoke] %d assert(s) FAILED\n", fails);

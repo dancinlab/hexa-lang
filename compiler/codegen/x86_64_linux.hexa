@@ -1110,6 +1110,11 @@ pub fn _is_cabi(fname: string) -> bool {
     // (read/lseek are plain on every target).
     if fname == "hxlcl_read" { return true }
     if fname == "hxlcl_lseek" { return true }
+    // errno-bearing chain r2 — arm64 call-shape divergence (dup2→dup3 flags=0,
+    // mkdir→mkdirat AT_FDCWD). Per-arch arg tuple selected in the body via
+    // compile-time target_is_* consts; same errno-store discipline.
+    if fname == "hxlcl_dup2" { return true }
+    if fname == "hxlcl_mkdir" { return true }
     return false
 }
 
