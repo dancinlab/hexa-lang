@@ -171,6 +171,7 @@ state/*
 # Tracked SSOT docs that live under state/ (negate the blanket above)
 !state/merge_order.md
 !state/rfc_advanced_typesystem.md
+!state/rfc_value_unbox_layout.md
 # Per-test regression state (markers/ holds timestamp-suffixed runtime artifacts)
 test/regression/*/state/
 
