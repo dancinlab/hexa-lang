@@ -281,6 +281,62 @@ fn _rodata_section_directive(target: string) -> string {
     return ".section .rodata"
 }
 
+// RFC061 Route C Wall 3-c helpers — decode the `slot_<id>__sz<N>` self-static
+// label encoding (codegen_x86_64_linux / codegen_arm64_darwin push these onto
+// LModule.globals). `_hxss_sz_pos` returns the char index of the LAST `__sz`
+// marker (or -1 if absent — an ordinary `g<id>` global). `_hxss_sym` rebuilds the
+// symbol head (chars [0, pos)); `_hxss_size` parses the decimal tail (chars after
+// pos+4). All char-walk (no .substr — keeps the emitter stage0-portable & avoids
+// any method-availability surprise). Byte-eq NEUTRAL: only fires for `slot_…__sz…`
+// labels, never present on the byteeq path.
+fn _hxss_sz_pos(s: string) -> i64 {
+    let cs = s.chars()
+    let n = len(cs)
+    let mut found = -1
+    let mut i = 0
+    while i + 3 < n {
+        if cs[i] == "_" && cs[i + 1] == "_" && cs[i + 2] == "s" && cs[i + 3] == "z" {
+            found = i
+        }
+        i = i + 1
+    }
+    return found
+}
+
+fn _hxss_sym(s: string, pos: i64) -> string {
+    let cs = s.chars()
+    let mut out = ""
+    let mut i = 0
+    while i < pos {
+        out = out + cs[i]
+        i = i + 1
+    }
+    return out
+}
+
+fn _hxss_size(s: string, pos: i64) -> i64 {
+    let cs = s.chars()
+    let n = len(cs)
+    let mut v = 0
+    let mut i = pos + 4                            // skip the `__sz` marker
+    while i < n {
+        let c = cs[i]
+        if c == "0" { v = v * 10 + 0 }
+        else { if c == "1" { v = v * 10 + 1 }
+        else { if c == "2" { v = v * 10 + 2 }
+        else { if c == "3" { v = v * 10 + 3 }
+        else { if c == "4" { v = v * 10 + 4 }
+        else { if c == "5" { v = v * 10 + 5 }
+        else { if c == "6" { v = v * 10 + 6 }
+        else { if c == "7" { v = v * 10 + 7 }
+        else { if c == "8" { v = v * 10 + 8 }
+        else { if c == "9" { v = v * 10 + 9 }
+        }}}}}}}}}
+        i = i + 1
+    }
+    return v
+}
+
 fn _bss_section_directive(target: string) -> string {
     if _is_darwin(target) {
         return ".section __DATA,__bss"
@@ -661,13 +717,27 @@ pub fn emit_asm(module: LModule) -> string {
         }
     }
 
-    // ---- .data (module-level mutable globals) ----
+    // ---- .data (module-level mutable globals + Route C self-static slots) ----
     if len(module.globals) > 0 {
         parts.push(_data_section_directive(target) + "\n")
         let mut gi = 0
         while gi < len(module.globals) {
             let nm = module.globals[gi]
-            parts.push("    .p2align 3\n" + nm + ":\n    .quad 0\n    .quad 0\n")
+            // RFC061 Route C Wall 3-c: a `slot_<id>__sz<N>` entry is a self-static
+            // BSS slot DEFINED by codegen's __hx_static_slot special-case (NOT a
+            // module global). Emit a zero-filled buffer of N bytes named `slot_<id>`
+            // via `.zero N` (the system assembler — under Route C's asm-text path —
+            // materializes it as a real .data symbol the `lea [rip+slot_<id>]`
+            // pc-rel ref resolves to). Regular `g<id>` globals keep the fixed
+            // 16-byte two-quad slot, so this branch is byte-eq NEUTRAL for them.
+            let szpos = _hxss_sz_pos(nm)
+            if szpos >= 0 {
+                let sym = _hxss_sym(nm, szpos)
+                let nbytes = _hxss_size(nm, szpos)
+                parts.push("    .p2align 3\n" + sym + ":\n    .zero " + to_string(nbytes) + "\n")
+            } else {
+                parts.push("    .p2align 3\n" + nm + ":\n    .quad 0\n    .quad 0\n")
+            }
             gi = gi + 1
         }
     }

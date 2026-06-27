@@ -62,7 +62,7 @@ HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
 echo "[routec-smoke-linux] (2) assert errno-bearing syscall symbols defined in routec.o …"
 syms="$(nm "$TMP/routec.o" 2>/dev/null || true)"
 miss=0
-for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen fputs fputc fflush; do
+for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen fputs fputc fflush popen pclose; do
     if ! grep -qE " T hxlcl_${s}\$" <<<"$syms"; then
         echo "[routec-smoke-linux] NOT DEFINED (T): hxlcl_${s}" >&2; miss=$((miss+1))
     fi
@@ -164,6 +164,18 @@ extern void  *hxlcl_fdopen(int fd, const char *mode);
 extern int    hxlcl_fputs(const char *s, void *fp);
 extern int    hxlcl_fputc(int c, void *fp);
 extern int    hxlcl_fflush(void *fp);
+
+/* Wall 3-c POPEN family — popen/pclose. popen("cmd","r") = pipe()+fork()+execve(
+ * "/bin/sh","-c",cmd), returning the CORE-family (read_fd+1) fake FILE*; pclose
+ * decodes the fd, looks the child pid up in the __hx_static_slot fd→pid table, and
+ * close()+waitpid()'s the child → status. THE NEW SUBSTRATE under test is
+ * __hx_static_slot: a self-defined zero-init .data buffer (the popen table) addressed
+ * by `lea [rip+slot_900]` — this Linux run is the self-static-symbol emit+assemble+
+ * link+reloc proof (the named-data sibling of __hx_environ_ptr, DEFINED not extern).
+ * popen returns the (fd+1) fake FILE*; pclose returns the raw wait status (0 for a
+ * clean child exit(0)). Live roundtrip below: popen("echo hi","r") → read "hi\n". */
+extern void  *hxlcl_popen(const char *cmd, const char *mode);
+extern int    hxlcl_pclose(void *stream);
 
 /* The emit covers ALL whitelisted Route C symbols (the script emits the whole
  * hxlcl_core.hexa), so the routec.o carries the composites' undefined-external
@@ -602,6 +614,27 @@ int main(void) {
             CK(strcmp(b2, "ERR") == 0, "stderr pipe got \"ERR\" (fp==stderr -> fd=2, routing-exact)");
         } else {
             CK(0, "pipe() setup for std-stream routing test");
+        }
+    }
+
+    /* Wall 3-c — popen/pclose roundtrip over the __hx_static_slot fd→pid table.
+     * popen("echo hi","r") forks /bin/sh -c "echo hi"; its stdout (the pipe) yields
+     * "hi\n"; pclose waitpid's the child → 0 (clean exit). Value-exact: read content
+     * == "hi\n" AND pclose status == 0. This live run is the self-static-symbol proof
+     * (the popen table is the new __hx_static_slot BSS). Locals named to AVOID any
+     * libc shadow (no `popen`/`read`/`status` overriding a libc name). */
+    {
+        void *phandle = hxlcl_popen("echo hi", "r");
+        CK(phandle != (void *)0, "popen(\"echo hi\",\"r\") != NULL");
+        if (phandle != (void *)0) {
+            char rdbuf[32];
+            memset(rdbuf, 0, sizeof(rdbuf));
+            /* read via the CORE-family fread over the fake FILE* (fd+1). */
+            size_t got = hxlcl_fread(rdbuf, 1, sizeof(rdbuf) - 1, phandle);
+            rdbuf[got] = 0;
+            CK(strcmp(rdbuf, "hi\n") == 0, "popen child stdout == \"hi\\n\" (byte-exact)");
+            int pcst = hxlcl_pclose(phandle);
+            CK(pcst == 0, "pclose(child exit 0) == 0 (status-exact)");
         }
     }
 

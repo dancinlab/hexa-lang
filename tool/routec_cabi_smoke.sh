@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen fputs fputc fflush; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen fputs fputc fflush popen pclose; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -252,6 +252,19 @@ extern void  *hxlcl_fdopen(int fd, const char *mode);
 extern int    hxlcl_fputs(const char *s, void *fp);
 extern int    hxlcl_fputc(int c, void *fp);
 extern int    hxlcl_fflush(void *fp);
+
+/* Wall 3-c POPEN family — popen/pclose. popen("cmd","r") = pipe()+fork()+execve(
+ * "/bin/sh","-c",cmd), returning the CORE-family (read_fd+1) fake FILE*; pclose
+ * decodes the fd, looks the child pid up in the __hx_static_slot fd→pid table, and
+ * close()+waitpid()'s the child → status. THE NEW SUBSTRATE under test is
+ * __hx_static_slot: a self-defined zero-init data buffer (the popen table) addressed
+ * by a LOCAL `adrp _slot_900@PAGE / add @PAGEOFF` pair (DEFINED here, NOT an extern
+ * GOT load — the def-side sibling of __hx_environ_ptr). This darwin run is the
+ * self-static Mach-O `.zerofill`/`.zero` symbol emit+assemble+link proof. popen forks
+ * /bin/sh via the darwin 2nd-return-register fork (out2); the child execve's; the
+ * parent reads the pipe → "hi\n" and pclose waitpid's → 0. */
+extern void  *hxlcl_popen(const char *cmd, const char *mode);
+extern int    hxlcl_pclose(void *stream);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
@@ -771,6 +784,27 @@ int main(void) {
             CK(strcmp(b2, "ERR") == 0, "stderr pipe got \"ERR\" (fp==stderr → fd=2, routing-exact)");
         } else {
             CK(0, "pipe() setup for std-stream routing test");
+        }
+    }
+
+    /* Wall 3-c — popen/pclose roundtrip over the __hx_static_slot fd→pid table.
+     * popen("echo hi","r") forks /bin/sh -c "echo hi" (darwin 2nd-return-reg fork via
+     * out2); its stdout (the pipe) yields "hi\n"; pclose waitpid's the child → 0. The
+     * self-static popen table is the new __hx_static_slot Mach-O .data buffer — this
+     * is its emit+assemble+link+address proof. Locals named to AVOID any libc shadow
+     * (no `popen`/`read`/`status` local overriding a libc name — the dup()-shadow
+     * lesson). Value-exact: content == "hi\n" AND pclose status == 0. */
+    {
+        void *phandle = hxlcl_popen("echo hi", "r");
+        CK(phandle != (void *)0, "popen(\"echo hi\",\"r\") != NULL");
+        if (phandle != (void *)0) {
+            char rdbuf[32];
+            memset(rdbuf, 0, sizeof(rdbuf));
+            size_t got = hxlcl_fread(rdbuf, 1, sizeof(rdbuf) - 1, phandle);
+            rdbuf[got] = 0;
+            CK(strcmp(rdbuf, "hi\n") == 0, "popen child stdout == \"hi\\n\" (byte-exact)");
+            int pcst = hxlcl_pclose(phandle);
+            CK(pcst == 0, "pclose(child exit 0) == 0 (status-exact)");
         }
     }
 
