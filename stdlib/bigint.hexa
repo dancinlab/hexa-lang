@@ -1,0 +1,422 @@
+// HEXA stdlib — BigInt: native arbitrary-precision signed integer (limb-array)
+//
+// @version 0.1.0
+// @capabilities [stdout]
+//
+// SUBSTRATE FIX (measured 2026-06-28): hexa `int`/`i64` is 64-bit — NOT arbitrary
+// precision (10^40 overflows to a 19-digit garbage value; 2^100 wraps to 0). The
+// discovery engine's PCF-constant detection (and any large-int math: factorials,
+// combinatorics, exact rationals, crypto) needs hundreds-of-digit integers. This module
+// implements BigInt in pure hexa over the existing i64 + array primitives — no new
+// builtin, byte-deterministic, no float path.
+//
+// REPRESENTATION: a BigInt is an array `b` with
+//   b[0] = sign  (-1, 0, or 1 ; 0 only for the value zero)
+//   b[1..] = magnitude limbs, base BASE=10000, LITTLE-ENDIAN (b[1] = least significant).
+// Zero is [0] (sign 0, no limbs). The magnitude is normalized (no leading zero limbs).
+//
+// LIMB BASE 10000: limb*limb <= 9999^2 ~= 1e8, and schoolbook column sums over ~N limbs
+// stay < ~4e9 << i64 max (9.2e18) — overflow-safe carry propagation.
+//
+// Ops: bi_from(i64) · bi_cmp · bi_add · bi_sub · bi_neg · bi_mul · bi_to_string · bi_ndigits.
+
+// ── BASE constant (returned by a fn since hexa has no const literal sharing here) ──
+fn _BASE() -> int { 10000 }
+
+// ── number of magnitude limbs ──
+fn _nlimb(a) -> int { a.len() - 1 }
+
+// ── strip leading-zero limbs and fix sign if the value is zero ──
+fn _norm(a) -> array {
+    let n = a.len()
+    // find highest non-zero limb index
+    let hi = n - 1
+    while hi >= 1 {
+        if a[hi] != 0 { break }
+        hi = hi - 1
+    }
+    if hi == 0 {
+        let z = []
+        z.push(0)
+        return z
+    }
+    let out = []
+    out.push(a[0])
+    let i = 1
+    while i <= hi {
+        out.push(a[i])
+        i = i + 1
+    }
+    out
+}
+
+// ── construct BigInt from an i64 (|x| must fit i64; full range ok) ──
+fn bi_from(x) -> array {
+    let out = []
+    if x == 0 {
+        out.push(0)
+        return out
+    }
+    let sign = 1
+    let v = x
+    if v < 0 {
+        sign = 0 - 1
+        v = 0 - v
+    }
+    out.push(sign)
+    let base = _BASE()
+    while v > 0 {
+        out.push(v % base)
+        v = v / base
+    }
+    out
+}
+
+// ── compare magnitudes only: -1 if |a|<|b|, 0 if equal, 1 if |a|>|b| ──
+fn _cmp_mag(a, b) -> int {
+    let na = _nlimb(a)
+    let nb = _nlimb(b)
+    if na < nb { return 0 - 1 }
+    if na > nb { return 1 }
+    let i = na
+    while i >= 1 {
+        if a[i] < b[i] { return 0 - 1 }
+        if a[i] > b[i] { return 1 }
+        i = i - 1
+    }
+    0
+}
+
+// ── signed compare: -1 / 0 / 1 ──
+fn bi_cmp(a, b) -> int {
+    let sa = a[0]
+    let sb = b[0]
+    if sa < sb { return 0 - 1 }
+    if sa > sb { return 1 }
+    // same sign
+    if sa == 0 { return 0 }
+    let m = _cmp_mag(a, b)
+    if sa > 0 { return m }
+    0 - m
+}
+
+// ── magnitude addition |a|+|b| -> normalized positive-magnitude limb array (sign set to 1) ──
+fn _add_mag(a, b) -> array {
+    let base = _BASE()
+    let na = _nlimb(a)
+    let nb = _nlimb(b)
+    let n = na
+    if nb > n { n = nb }
+    let out = []
+    out.push(1)
+    let carry = 0
+    let i = 1
+    while i <= n {
+        let da = 0
+        if i <= na { da = a[i] }
+        let db = 0
+        if i <= nb { db = b[i] }
+        let s = da + db + carry
+        out.push(s % base)
+        carry = s / base
+        i = i + 1
+    }
+    if carry > 0 { out.push(carry) }
+    _norm(out)
+}
+
+// ── magnitude subtraction |a|-|b|, REQUIRES |a| >= |b| -> sign 1 (or 0 if zero) ──
+fn _sub_mag(a, b) -> array {
+    let base = _BASE()
+    let na = _nlimb(a)
+    let nb = _nlimb(b)
+    let out = []
+    out.push(1)
+    let br = 0
+    let i = 1
+    while i <= na {
+        let da = a[i]
+        let db = 0
+        if i <= nb { db = b[i] }
+        let s = da - db - br
+        if s < 0 {
+            s = s + base
+            br = 1
+        } else {
+            br = 0
+        }
+        out.push(s)
+        i = i + 1
+    }
+    _norm(out)
+}
+
+// ── signed negate ──
+fn bi_neg(a) -> array {
+    let out = []
+    out.push(0 - a[0])
+    let i = 1
+    while i < a.len() {
+        out.push(a[i])
+        i = i + 1
+    }
+    out
+}
+
+// ── signed add ──
+fn bi_add(a, b) -> array {
+    let sa = a[0]
+    let sb = b[0]
+    if sa == 0 { return b }
+    if sb == 0 { return a }
+    if sa == sb {
+        let m = _add_mag(a, b)
+        m[0] = sa
+        return _norm(m)
+    }
+    // opposite signs: subtract smaller magnitude from larger
+    let c = _cmp_mag(a, b)
+    if c == 0 {
+        let z = []
+        z.push(0)
+        return z
+    }
+    if c > 0 {
+        let m = _sub_mag(a, b)
+        m[0] = sa
+        return _norm(m)
+    }
+    let m2 = _sub_mag(b, a)
+    m2[0] = sb
+    _norm(m2)
+}
+
+// ── signed subtract a - b ──
+fn bi_sub(a, b) -> array {
+    bi_add(a, bi_neg(b))
+}
+
+// ── signed multiply (schoolbook) ──
+fn bi_mul(a, b) -> array {
+    let sa = a[0]
+    let sb = b[0]
+    if sa == 0 { return a }
+    if sb == 0 { return b }
+    let base = _BASE()
+    let na = _nlimb(a)
+    let nb = _nlimb(b)
+    // result magnitude has up to na+nb limbs
+    let res = []
+    let k = 0
+    while k < na + nb {
+        res.push(0)
+        k = k + 1
+    }
+    let i = 1
+    while i <= na {
+        let carry = 0
+        let j = 1
+        while j <= nb {
+            let idx = i + j - 2          // 0-based position in res
+            let cur = res[idx] + a[i] * b[j] + carry
+            res[idx] = cur % base
+            carry = cur / base
+            j = j + 1
+        }
+        // propagate remaining carry
+        let idx2 = i + nb - 1
+        while carry > 0 {
+            let cur2 = res[idx2] + carry
+            res[idx2] = cur2 % base
+            carry = cur2 / base
+            idx2 = idx2 + 1
+        }
+        i = i + 1
+    }
+    // assemble: out[0]=sign, out[1..]=res limbs
+    let out = []
+    out.push(sa * sb)
+    let m = 0
+    while m < res.len() {
+        out.push(res[m])
+        m = m + 1
+    }
+    _norm(out)
+}
+
+// ── decimal string (sign + digits) ──
+fn _pad4(x) {
+    // 4-char zero-padded decimal of a limb in [0,9999] — no string.len() (range-based)
+    let s = to_string(x)
+    if x < 10 { return "000" + s }
+    if x < 100 { return "00" + s }
+    if x < 1000 { return "0" + s }
+    s
+}
+
+fn bi_to_string(a) {
+    if a[0] == 0 { return "0" }
+    let na = _nlimb(a)
+    let s = to_string(a[na])      // most significant limb, no pad
+    let i = na - 1
+    while i >= 1 {
+        s = s + _pad4(a[i])
+        i = i - 1
+    }
+    if a[0] < 0 { s = "-" + s }
+    s
+}
+
+// ── number of decimal digits of |a| ──
+fn bi_ndigits(a) -> int {
+    if a[0] == 0 { return 1 }
+    let na = _nlimb(a)
+    let top = a[na]
+    let topd = 0
+    let v = top
+    while v > 0 { v = v / 10; topd = topd + 1 }
+    topd + 4 * (na - 1)
+}
+
+// ── small-divisor division: |a| / d where d is a positive i64 fitting d*BASE < i64 max.
+//    Returns [quotient BigInt (sign = sign of a), remainder i64 (>=0)]. Schoolbook long
+//    division over base-BASE limbs, most-significant first. For full BigInt/BigInt division
+//    use a separate routine; this covers high-precision series (arctan, zeta) where every
+//    divisor (x^2, 2k+1) is a small integer. ──
+fn bi_divmod_small(a, d) -> array {
+    if a[0] == 0 {
+        let z = []
+        z.push(0)
+        let r0 = []
+        r0.push(z)
+        r0.push(0)
+        return r0
+    }
+    let na = _nlimb(a)
+    // big-endian quotient limbs
+    let qbig = []
+    let rem = 0
+    let i = na
+    while i >= 1 {
+        let cur = rem * 10000 + a[i]
+        qbig.push(cur / d)
+        rem = cur % d
+        i = i - 1
+    }
+    // assemble little-endian: out[0]=sign, then reverse qbig
+    let out = []
+    out.push(a[0])
+    let j = qbig.len() - 1
+    while j >= 0 {
+        out.push(qbig[j])
+        j = j - 1
+    }
+    let res = []
+    res.push(_norm(out))
+    res.push(rem)
+    res
+}
+
+// quotient-only convenience (|a| / d, d positive i64) ──
+fn bi_div_small(a, d) -> array {
+    let qr = bi_divmod_small(a, d)
+    qr[0]
+}
+
+// ── decimal right-shift: floor(|a| / 10^e) (sign preserved). Drops the lowest e decimal
+//    digits. e = 4q + r over base-10000 limbs: drop q whole limbs (little-endian low end),
+//    then divide the remainder by 10^r (small divisor). Exact floor. ──
+fn bi_shift10_down(a, e) -> array {
+    if a[0] == 0 { let z = []; z.push(0); return z }
+    let q = e / 4
+    let r = e % 4
+    let na = _nlimb(a)
+    if na <= q {
+        // all magnitude limbs dropped → remainder may still leave <10^r; result 0 unless r
+        // leaves a partial top limb. Conservative: if na <= q the value < 10^(4q) <= 10^e → 0.
+        if na < q { let z = []; z.push(0); return z }
+        // na == q: value < 10^(4q) ; dividing by 10^e=10^(4q+r) → 0
+        let z = []; z.push(0); return z
+    }
+    // drop lowest q limbs
+    let out = []
+    out.push(a[0])
+    let i = q + 1
+    while i <= na { out.push(a[i]); i = i + 1 }
+    let shifted = _norm(out)
+    if r == 0 { return shifted }
+    let dv = 1
+    let t = 0
+    while t < r { dv = dv * 10; t = t + 1 }
+    bi_div_small(shifted, dv)
+}
+
+// ── selftest ──
+fn _gate(label, got, want) -> int {
+    if got == want {
+        println("  [PASS] " + label)
+        return 0
+    }
+    println("  [FAIL] " + label + "  got=" + got + " want=" + want)
+    1
+}
+
+fn main() {
+    println("=== bigint SELFTEST (native arbitrary-precision over i64+arrays) ===")
+    let fails = 0
+
+    // 2^100 = 1267650600228229401496703205376
+    let two = bi_from(2)
+    let p = bi_from(1)
+    let i = 0
+    while i < 100 {
+        p = bi_mul(p, two)
+        i = i + 1
+    }
+    fails = fails + _gate("2^100 = 1267650600228229401496703205376", bi_to_string(p), "1267650600228229401496703205376")
+
+    // 10^40
+    let ten = bi_from(10)
+    let q = bi_from(1)
+    let j = 0
+    while j < 40 {
+        q = bi_mul(q, ten)
+        j = j + 1
+    }
+    fails = fails + _gate("10^40 = 1e40 (41 digits)", bi_to_string(q), "10000000000000000000000000000000000000000")
+    fails = fails + _gate("10^40 ndigits = 41", to_string(bi_ndigits(q)), "41")
+
+    // 25! = 15511210043330985984000000
+    let f = bi_from(1)
+    let k = 1
+    while k <= 25 {
+        f = bi_mul(f, bi_from(k))
+        k = k + 1
+    }
+    fails = fails + _gate("25! = 15511210043330985984000000", bi_to_string(f), "15511210043330985984000000")
+
+    // signed add/sub: (10^40) - (10^40 - 1) = 1 ; (-2^100) + 2^100 = 0
+    let qm1 = bi_sub(q, bi_from(1))
+    fails = fails + _gate("10^40 - (10^40 - 1) = 1", bi_to_string(bi_sub(q, qm1)), "1")
+    fails = fails + _gate("(-2^100) + 2^100 = 0", bi_to_string(bi_add(bi_neg(p), p)), "0")
+
+    // cmp: 2^100 vs 10^40 (10^40 ~ 1e40 > 2^100 ~ 1.27e30)
+    fails = fails + _gate("cmp(2^100, 10^40) = -1", to_string(bi_cmp(p, q)), "-1")
+    // negative cmp
+    fails = fails + _gate("cmp(-2^100, 2^100) = -1", to_string(bi_cmp(bi_neg(p), p)), "-1")
+
+    // divmod_small: 25! / 7 = 2215887149047283712000000 r 0 ; 10^40 / 7 = ... r 1
+    let dm1 = bi_divmod_small(f, 7)
+    fails = fails + _gate("25!/7 quotient", bi_to_string(dm1[0]), "2215887149047283712000000")
+    fails = fails + _gate("25!/7 remainder = 0", to_string(dm1[1]), "0")
+    let dm2 = bi_divmod_small(q, 7)
+    fails = fails + _gate("10^40 / 7 remainder = 4", to_string(dm2[1]), "4")
+    fails = fails + _gate("10^40 / 7 quotient", bi_to_string(dm2[0]), "1428571428571428571428571428571428571428")
+
+    println("")
+    if fails == 0 {
+        println("=== ALL GATES PASS — native BigInt validated (substrate unlocked) ===")
+    } else {
+        println("=== " + to_string(fails) + " GATE(S) FAILED ===")
+    }
+}

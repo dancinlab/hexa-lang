@@ -24,7 +24,8 @@ dispatch된다(`self/main.hexa:1780·1803` → `compiler/drill/drill.hexa`). 한
 | `ouroboros_meta.hexa` | ★메타-우루보로스 native(#3980) — **전략 자체를 진화**: 파라미터 벡터 `meta_mutate_strategy` + tournament(stable bubble sort) + `breed_strategies` crossover + `check_meta_convergence` meta-fixed-point. `fn main` 셀프테스트 |
 | `ouroboros_quantum.hexa` | ★양자-우루보로스 native(#3980) — `QuantumStrategy` superposition: 6 mutation 연산자+`apply_mutation` dispatch + `quantum_crossover`/`propagate_entanglement` + `measure_superposition`/`renormalize_amplitudes` + decoherence 차폐(`guarded_mutate`). `fn main` 셀프테스트 |
 | `emerge.hexa` | ★[B] **open-well Emerge 생성기**(README:75 Emerge 단계) — `emerge(v0,seed,cycles,min_growth)`가 README E4(V_0={2,3}·seed=6·300사이클·`combine(pick,pick)=a+b`→sorted-dedup vocab)를 정확 포팅, `emerge_step`이 drill_run에 배선(라운드마다 누적 open well를 후보 value-시그니처로 넓힘). 결정적 LCG(Numerical Recipes 1664525/1013904223 `& 0xffffffff` — qrng.hexa와 동일 상수·새 builtin 없음). in-memory only(atlas write 없음) |
-| `*_test.hexa` | drill/mkx/surface/accumulation/verifier-hook/absorb/**emerge(E4)** 셀프테스트 |
+| `additive_test.hexa` | ★[직교 pivot] **가법/조합 합동** 셀프테스트(self-contained kernel) — Euler 점화식 p(10)=42 + Ramanujan p(5n+4)≡0 mod5 G-gate + neg-control. 비-곱셈 수열(분할/Catalan/Bell/Fib/Lucas)·합동 FORM(Ralph 377) |
+| `*_test.hexa` | drill/mkx/surface/accumulation/verifier-hook/absorb/**emerge(E4)**/**additive** 셀프테스트 |
 
 생성기 9-phase smash는 형제 폴더 `../smash/`(phases.hexa)에, 12 drill 변종(omega·chain·
 surge·dream·swarm·reign·molt·wake·forge·canon·revive)은 각자 `../<name>/`에 있다. NEXUS
@@ -41,6 +42,42 @@ surge·dream·swarm·reign·molt·wake·forge·canon·revive)은 각자 `../<nam
 - **진짜 검증 = `../atlas/identity_engine.hexa` exact-int**(atlas 도메인) + `hexa verify` g5 fold만. 구 NEXUS
   ouroboros `verify_score`(n6-근접 휴리스틱 최소 0.3→항상 "발견")는 검증이 아님 — 그래서
   native exact-int로 교체됨.
+- **검증기 업그레이드(Ralph 375 · 2026-06-27)**: 고갈된 12-fn 2-term 박스 밖으로 확장 —
+  ① **확장 vocab 6종**(μ·λ·μ²·J₃·2^ω·core idx 12–17 · 부호 정확) `af()`에 추가 ·
+  ② **arity-3**(`verify_identity3` `A·B·C=D·E·F` bounded-unique) + **universal 프레임**
+  (`is_universal2/3` forall-n-in-[2,N]). drill `_fn_index`/`_fn_name`도 18-fn으로 확장(확장 vocab
+  expr가 파싱됨). **측정**(state/novel-dfs 참조엔진 재실행 · 18-fn selftest 18 게이트 PASS):
+  확장 vocab universal **2 generator 전부 고전**(J₂=φ·ψ · core·rad=n) · arity-3 bounded-unique
+  1431개 전부 2-term core 환원(Ralph 371 재확인) → **novel=0**(정직 DRY). 박스-스코프 주장이 옳았음
+  (고갈=12-fn/2-term이지 전체 공간 아님)이나 그 차원도 고전/환원뿐. 생산적 벤은 composed/iterated
+  함수(Ralph 372). 업그레이드 자체가 산출물 — 미래 생성기가 확장-vocab/arity-3 후보를 내면 parse-reject
+  대신 **실제 exact-int verdict**를 받는다. atlas write 없음(fold=hexa verify g5/PR).
+- **함수합성 프레임(Ralph 376 · 2026-06-27)**: Ralph 372/375 가 지목한 생산적 벤(함수 COMPOSITION
+  `f(g(n))` — 값-곱 `A·B=C·D` 프레임이 **구조적으로 표현 못 하는** 다른 대수 · σ(σ(n))=2n 은 곱-프레임
+  재기술 불가)을 **구현+sweep**. native exact-int 평가기 `../atlas/identity_engine.hexa::af_compose`
+  `comp_holds`/`comp_count`/`verify_composition`(18×18 합성표 × 비교형 k·n/h+n/h/comp). drill
+  `_native_identity_sweep`에 **합성 검증 옵션 배선**(`_parse_composition`/`_canon_composition` →
+  composition-syntax 후보가 product-noise 대신 실제 `verify_composition` verdict → rationale
+  `comp_id`/`comp_verified` audit). **측정**(state/novel-dfs/composition_hunt.py · N=2·10⁴):
+  superperfect σ∘σ=2n {2,4,16,64,4096}(Suryanarayana 1969 / A019279) + Mersenne σ∘σ=σ+n
+  {3,7,31,127,8191} 정확 재발견(sanity PASS) · **novel PROMOTABLE 합성 법칙 = 0(DRY)** — bounded-unique
+  singleton 은 단일점 우연, |sol|≥3 구조 집합은 thin 제한역 우연(p² 등 · forall UNPROVEN), universal 은
+  구조 재기술뿐. 곱-프레임과 **동일 종착(novel=0)을 다른 대수에서 정직히** 도달. selftest=
+  `composition_test.hexa`(superperfect/Mersenne G-gate) + identity_engine main CMP1–5. atlas write
+  없음(fold=hexa verify g5/PR). frozen blob 151c52c8 신규 builtin/method 0(기존 정수연산·중첩호출만).
+- **LLM-conjecture verify-gate(Ralph 378 · 2026-06-27)**: drill은 *생성기*(float-순열)라 식별자-문법
+  후보를 거의 안 내므로(`identity=0`), 진짜 추월 레버 = **LLM이 새 명제를 추측 → exact-int 검증**.
+  그 정석 surface(`hexa loop --dfs --llm-cmd` · RFC 080 · `stdlib/loop/cycle.hexa`+`dfs.hexa`)의
+  child 게이트가 cite/영어/non-trivial 휴리스틱만 보고 exact-int 미연결이던 갭을 **여기 검증엔진에
+  배선**: 신 모듈 `stdlib/loop/conjecture.hexa::cj_verdict`가 child 본문의 `CONJECTURE:` 줄을 추출해
+  `../atlas/identity_engine.hexa`로 라우팅(identity→`verify_identity`/`is_universal2` · composition→
+  `verify_composition` · congruence→`verify_congruence`) → `""`(prose)/unparseable/unverified/
+  verified-known/verified-novel. `dfs_verify_child`가 **unverified/unparseable child를 DROP**(거짓 추측
+  자동 기각), 생존 child는 `exact_verify:` 라벨 + `dfs_run`이 `[dfs] exact-verify: novel/known/prose`
+  카운트. 프롬프트(`dfs_build_prompt`)는 LLM에게 검증가능 문법(18-fn vocab)으로 **NOVEL** 추측을
+  요청(검증기가 심판). 파서는 drill `_parse_identity`/`_parse_composition` 이식. selftest=
+  `stdlib/loop/conjecture_test.hexa`. **byteeq-neutral**(loop=cmd_run 디스패치 · self/ 클로저 밖) ·
+  atlas write 없음(fold=hexa verify g5/PR) · frozen 151c52c8 신규 builtin 0.
 - **기본 검증은 ON(플래그 아님)**: 외부 verifier 미설치 시 `drill.hexa::_native_identity_sweep`가
   매 라운드 기본 실행된다 — `../atlas/identity_engine.hexa::verify_identity`(exact-int 12-fn
   A·B=C·D bounded-unique)를 직접 호출하고, 라운드 verdict를 `DRILL_VERIFIER` stderr 줄로
@@ -77,6 +114,17 @@ surge·dream·swarm·reign·molt·wake·forge·canon·revive)은 각자 `../<nam
   E4는 set-성장만 채점하므로 LCG로 STRUCTURE/verdict는 reference-faithful, 정확한 vocab 멤버만 상이
   (잔차 정직기록). 컴파운드 primitive가 새 VERIFIED 수학 항등식을 내는지는 별개 질문(exact-int
   `verify_identity`) — 표준 2-term은 measured-exhausted → **likely novel=0**(E4 PASS와 혼동 말 것).
+- **직교 pivot — 가법/조합 수론(Ralph 377 · 2026-06-27)**: 곱셈 vocab(σ,φ,…)이 measured-exhausted
+  라 **비-곱셈 생성함수/점화식 수열**(분할 p(n)·Catalan·Bell·Fibonacci·Lucas)로 전환. 새 identity
+  FORM = 산술급수 합동 `a(αn+β)≡0 (mod m)`(Ramanujan p(5n+4)≡0 mod5 = 곱셈 무유사 canonical).
+  native exact-int은 `../atlas/identity_engine.hexa`에 거주(`partition_p`/`catalan`/`bell`/`fib`/
+  `lucas`/`tri`/`pent`/`sq` + mod-m table + `verify_congruence`). drill 배선=`_native_additive_screen`
+  (라운드마다 Ramanujan 3합동 재발견 sanity + novel 카운트 → `DRILL_ADDITIVE` stderr audit ·
+  in-memory·byteeq-neutral). 셀프테스트=`additive_test.hexa`(self-contained). **측정**(참조엔진
+  `../../ATLAS/state/novel-dfs/additive_partition_hunt.py` N=4000): sanity 8/8 PASS·합동 sweep
+  RAMANUJAN=3·KNOWN=752·**NOVEL=0**·cross-seq bounded-unique=0 → 직교이되 동일 DRY(전부 고전
+  Touchard/Lucas/Deutsch–Sagan). 정직 0(날조 금지)·합동 [0,N] bounded·∀n UNPROVEN(c2). atlas write
+  없음(fold=hexa verify g5/PR). 다음 미탐=composed/iterated 함수(Ralph 372).
 - **표준 vocab 수학발견 = 측정-종료(🧱)**: `../../ATLAS/README.md` DFS r1~r4 — @F 1557 fold ·
   novel-fold 0 · gates 21/21. 엔진은 진짜이되 표준 vocab 신규=0(날조 금지). 새 발견은
   새 vocab/도메인(ATLAS/state/novel-dfs 참조엔진).

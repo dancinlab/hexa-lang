@@ -560,7 +560,14 @@ int    hxlcl_pclose(void *stream)                     { return pclose((FILE *)st
 int    hxlcl_time(int *t)                             { time_t r = time(NULL); if (t) *t = (int)r; return (int)r; }
 int    hxlcl_clock_gettime(int clk, void *ts)         { return clock_gettime((clockid_t)clk, (struct timespec *)ts); }
 size_t hxlcl_strftime(char *buf, size_t cap, const char *fmt, void *tm) { return strftime(buf, cap, fmt, (struct tm *)tm); }
+/* SELFEMIT (HEXA_RT_SELFEMIT_GETRUSAGE, default OFF · RFC061 §M8 family #29): hxlcl_getrusage
+ * is supplied by the hexa-NATIVE self-emitted .o (test/native_build/emit_hxlcl_getrusage_o.hexa
+ * — class-C `svc #0x80` SYS_getrusage trap + carry-flag errno store, byte-identical to
+ * self/codegen/runtime_arm64.hexa::rt_getrusage, refs the shared `_hxlcl_errno`). DEFAULT
+ * (macro undefined) keeps this libc delegate → shim.o byte-identical. */
+#ifndef HEXA_RT_SELFEMIT_GETRUSAGE
 int    hxlcl_getrusage(int who, void *usage)          { return getrusage(who, (struct rusage *)usage); }
+#endif
 
 /* ── exceptions (setjmp/longjmp) ─────────────────────────────────────────── */
 /* OWNER POLARITY (RFC061 #29 multi-object flip · darwin multidef fix):

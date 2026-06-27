@@ -112,6 +112,13 @@ git submodule update --init --recursive          # activate (hooks no-op until p
   epilogue(gelu 등) 융합은 closed-neg(연산비용 > 왕복절감). byte-eq 결정성은 추월 레버 아님
   falsified(OpenBLAS 도 같은 빌드서 thread-무관 비트동일 · r5 측정).
 
+## HEXA-UNBOX — "박스 벗기기" (런타임 속도 캠페인 · 호출 트리거)
+
+- do: 사용자가 **"박스 벗기기"**(`HEXA-UNBOX`)라 하면 이 캠페인을 잇는다 — native boxed-HexaVal 16B 세금을 커널마다 벗겨 raw native 직결 → **실제 런타임 가속**(k1 2.95×·k2/k4 4.48×·k3 9.78×). SSOT=memory `project_hexa_runtime_gap_allclosure`.
+- do: 측정-우선 — `tool/measure_codegen_perf.sh`(isolated 교대 median-7); in-harness back-to-back ratio=오염(9.78×→1.000 가린 전례 3회)→isolated reversed-order 재측정; reference-match=gcc magic-reciprocal·V8 PACKED_SMI.
+- do: 머지 레버=default-OFF env opt-in(`HEXA_PACK_ARRAY` 등·byte-neutral); escape-lattice=alias-set 전이 void(escape-stress 9커널 OFF==ON #4121); honest-next=default-ON·타커널·array wire-to-prod·f64/f32 packed.
+- dont: tune-to-green · 오염 ratio 천장박제 · escape per-local void(aliasing miscompile) · 측정못한 inert 레버 머지 · default-ON 을 정규 CI byteeq 3타깃+nvptx GREEN 전 flip(Blacksmith 아님·#4016 revert).
+
 ## QA — 지속 검증 · verify-done 상시화
 
 - do: 모든 fix·기능·측정은 **measure → root-cause → build-verify → 머지** 한 루프로 닫는다.
@@ -183,6 +190,14 @@ git submodule update --init --recursive          # activate (hooks no-op until p
   `ABI0` — 모든 주요 컴파일러의 정석. **한 codegen 기능이 전 `hxlcl_*` 심볼 × 3 타깃을 일괄
   cross-target dissolve** (default-OFF whitelist · byteeq-neutral · DEFAULT shim.o sha 불변).
   SSOT: 메모리 `project_hexa_rfc061_hxlcl_crosstarget_abi_wall`.
+- 상태(RFC061 #29 Route C 캠페인 · 측정종착): syscall/2nd-return-reg/named-data/environ/FILE*/
+  file-local-static family + ELF cross-target member-swap mem/str pure-leaf 10/10(strlen·memcpy·
+  memset·memcmp·strcmp·strncmp·strcpy·strncpy·strcat·strchr) + pipe/fork/getenv/setenv/popen 등
+  dissolve(전부 default-OFF·byteeq-neutral·admin-merge). 잔여 = 측정벽 2개뿐 — varargs-ABI
+  (`hxlcl_fprintf` · va_list 가 frozen runtime.c 거주 → frozen blob 편집 불가 = release-integrity
+  하드라인 🧱) · svc-remainder(getrusage/time/signal = frozen floor inert stub이라 native-emit 해도
+  floor-reduction 0 = investment-poor 🧱). reopen 조건: hexa IR opaque va_list 추상 OR frozen
+  re-baseline OR floor-meaningful syscall leaf 출현.
 - dont: 심볼당·타깃당 **hand-assembled machine-byte 배열**로 cross-target 확장 금지
   (non-canonical · O(symbols×targets) 노동 · 유지보수 폭발 — `test/native_build/emit_hxlcl_*_o.hexa`
   darwin Mach-O 손-assemble 은 codegen C-ABI 모드 부재 시의 임시 우회였고 Route C 로 승계).

@@ -1126,6 +1126,114 @@ fn _types_lookup_variant_payload_types(enum_name: string, variant_name: string) 
     return _types_miss_variant_lookup()
 }
 
+// Wall A r5 — struct field-type registry (parallel-array side index).
+//
+// The env's struct binding (`Type{kind="struct", args=[field types]}`) keeps
+// the field types in declaration ORDER but DROPS the field NAMES — and the
+// Module (the only carrier of `struct.params[i].name`) is NOT in `_infer_expr`
+// scope (CheckCtx holds only fn_name/fn_return/module). So a `s.field = expr`
+// field-assign cannot recover the declared field type from the env alone.
+// Mirror the enum payload registry exactly: at `_collect_item_types` time
+// (where the struct Item IS in scope) record, per struct, its field NAMES and
+// the NAMED-type SPELLING of each field, into module-global parallel arrays a
+// later `_infer_expr` site can query by (struct_name, field_name) without a
+// second pass over module.items. Lifetime == one `type_check()` call (reset on
+// entry, alongside the enum registry). Populated UNCONDITIONALLY (byte-neutral
+// — pure data, no diagnostic) but READ only under the opt-in flag, so the
+// default build is byte-identical (byteeq / gen3≡gen4 preserved). Only the
+// `kind == "named"` spelling is stored (the common scalar/nominal field case —
+// `x: i32`, `inner: Widget`); non-named fields store "" → the r5 fit check
+// conservatively skips them (r6+ scope).
+let mut _types_struct_names: [string] = []
+let mut _types_struct_field_offsets: [i64] = []
+let mut _types_struct_field_counts: [i64] = []
+let mut _types_struct_field_names: [string] = []
+let mut _types_struct_field_typenames: [string] = []
+
+fn _types_struct_registry_reset() {
+    _types_struct_names = []
+    _types_struct_field_offsets = []
+    _types_struct_field_counts = []
+    _types_struct_field_names = []
+    _types_struct_field_typenames = []
+}
+
+// Populate the registry for one struct Item. No-op for non-struct items.
+// Called from `_collect_item_types` per-item AFTER the cross-file collision
+// `continue` (so only the first, surviving struct of a duplicated name is
+// recorded) — same structural slot as `_types_register_enum_item_payloads`.
+fn _types_register_struct_item_fields(it: Item) {
+    if !_types_is_struct_item(it.kind) { return }
+    _types_struct_names.push(it.name)
+    _types_struct_field_offsets.push(len(_types_struct_field_names))
+    _types_struct_field_counts.push(len(it.params))
+    let mut fi = 0
+    while fi < len(it.params) {
+        let p = it.params[fi]
+        _types_struct_field_names.push(p.name)
+        let mut spell = ""
+        if p.typ.kind == "named" { spell = p.typ.name }
+        _types_struct_field_typenames.push(spell)
+        fi = fi + 1
+    }
+}
+
+// Result of a struct field lookup. `found=false` is the "skip" signal (the
+// receiver is not a known struct, or has no such field → the r5 fit check
+// stays silent — field-existence / HX2005-style diagnostics are r6+ scope).
+// `field_typename` is the declared field type's NAMED spelling, "" when the
+// field's type was non-named (r6+).
+pub struct StructFieldLookup {
+    found: bool,
+    field_typename: string
+}
+
+fn _types_lookup_struct_field_typename(struct_name: string, field_name: string) -> StructFieldLookup {
+    let mut si = 0
+    while si < len(_types_struct_names) {
+        if _types_struct_names[si] == struct_name {
+            let off = _types_struct_field_offsets[si]
+            let cnt = _types_struct_field_counts[si]
+            let mut fi = 0
+            while fi < cnt {
+                if _types_struct_field_names[off + fi] == field_name {
+                    return StructFieldLookup { found: true, field_typename: _types_struct_field_typenames[off + fi] }
+                }
+                fi = fi + 1
+            }
+            return StructFieldLookup { found: false, field_typename: "" }
+        }
+        si = si + 1
+    }
+    return StructFieldLookup { found: false, field_typename: "" }
+}
+
+// Wall A r5 — strip the `named:` prefix a struct-typed receiver's inferred /
+// recorded Type carries (`_types_lower_type_ref` lowers any non-primitive
+// named annotation `Point` to kind `named:Point`). Returns the bare struct
+// name, or "" when `k` is not a `named:` kind. `.chars()`-based mirror of
+// `_types_array_elem_kind` — no new builtin, frozen-seed-safe.
+fn _types_struct_name_of(k: string) -> string {
+    let pfx = "named:"
+    let chars = k.chars()
+    let n = len(chars)
+    let pch = pfx.chars()
+    let plen = len(pch)
+    if n <= plen { return "" }
+    let mut pi = 0
+    while pi < plen {
+        if chars[pi] != pch[pi] { return "" }
+        pi = pi + 1
+    }
+    let mut out = ""
+    let mut i = plen
+    while i < n {
+        out = out + to_string(chars[i])
+        i = i + 1
+    }
+    return out
+}
+
 // EnumPath text encodes "Enum::Variant" — mirror of bind.hexa's
 // `_enum_head` / `_enum_variant_tail` (kept module-local here to avoid
 // cross-module dependency between check/types.hexa and check/bind.hexa).
@@ -1385,6 +1493,20 @@ fn _emit_hx3001(expected: Type, actual: Type, sp: Span, out: array) {
     out.push(diag_emit(b))
 }
 
+// HX3011 — opt-in static-type let-mismatch (HEXA_STATIC_TYPES=1).
+// Rust E0308-faithful "mismatched types": a `let x: T = <literal>` whose
+// scalar-literal RHS provably disagrees with the declared scalar T. Error
+// severity (catalog.hexa) → main.hexa `_has_errors` aborts before codegen
+// (REJECT, not advisory warning). Only emitted under the flag, so the
+// default diagnostic stream is byte-identical (byteeq-neutral).
+fn _emit_hx3011(expected: Type, actual: Type, sp: Span, out: array) {
+    let mut b = diag_new("HX3011")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "expected", _type_display(expected))
+    b = diag_arg(b, "actual", _type_display(actual))
+    out.push(diag_emit(b))
+}
+
 fn _emit_hx3002(name: string, expected: i64, actual: i64, sp: Span, out: array) {
     let mut b = diag_new("HX3002")
     b = diag_span(b, sp)
@@ -1568,6 +1690,181 @@ fn _ctx_with_fn(ctx: CheckCtx, name: string, ret: Type) -> CheckCtx {
     return CheckCtx { fn_name: name, fn_return: ret, module: ctx.module }
 }
 
+// ── Opt-in static-type let-check helpers (HEXA_STATIC_TYPES) ──
+// Module-local mirror of ast_to_hir.hexa:_hir_let_type_text — the local-let
+// Expr.text encodes `<name>|<typename>` (or `mut:<name>|<typename>`); the
+// annotation is the substring after `|`, or "" for a bare `let x = …`. Kept
+// self-contained in types.hexa (no cross-module import; bind.hexa:_hir_let_name
+// mirror precedent). Frozen-seed-safe — reuses the existing parse encoding,
+// no new keyword.
+fn _types_let_type_text(t: string) -> string {
+    let chars = t.chars()
+    let n = len(chars)
+    let mut i = 0
+    while i < n {
+        if chars[i] == '|' {
+            let mut out = ""
+            let mut j = i + 1
+            while j < n {
+                out = out + to_string(chars[j])
+                j = j + 1
+            }
+            return out
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Wall A r3 — module-local mirror of bind.hexa:_bind_let_name. The local-let
+// Expr.text encodes `<name>|<typename>` (or `mut:<name>|<typename>`); strip
+// the optional `mut:` prefix and the `|<type>` suffix to recover the bare
+// binding NAME. Needed so a `let x: T` decl can record its declared type into
+// the block-scoped env under the variable's name, for a later split-init
+// `x = <expr>` assign to look up. Self-contained (no cross-module import,
+// same precedent as _types_let_type_text); frozen-seed-safe (no new keyword).
+fn _types_let_name(t: string) -> string {
+    let chars = t.chars()
+    let n = len(chars)
+    let mut start = 0
+    if n >= 4 && chars[0] == 'm' && chars[1] == 'u' && chars[2] == 't' && chars[3] == ':' {
+        start = 4
+    }
+    let mut out = ""
+    let mut i = start
+    while i < n {
+        if chars[i] == '|' { return out }
+        out = out + to_string(chars[i])
+        i = i + 1
+    }
+    return out
+}
+
+// r1 soundness gate: only KNOWN scalar primitives are sound comparison
+// targets for a scalar-literal RHS. `_types_lower_type_ref` maps user/unknown
+// names to a `named:<n>` sentinel (and struct/enum/generic to `<kind>:<name>`)
+// — those are r5+ scope and must NOT be flagged here. Mirrors the primitive
+// set that `_types_lower_type_ref` recognises (i8…i64 · f16…f64 · bool ·
+// string · char); `unit` is intentionally excluded.
+fn _types_kind_is_scalar(k: string) -> bool {
+    let t = _prim(k, "")
+    if _is_integer_kind(t) { return true }
+    if _is_float_kind(t)   { return true }
+    if k == "bool"   { return true }
+    if k == "string" { return true }
+    if k == "char"   { return true }
+    return false
+}
+
+// Wall A r4 — Index-expr probe (stage0 has no derived Eq). Mirrors the
+// per-ExprKind match shape of `_types_is_assign`; only `ExprKind::Index`
+// (a postfix `a[i]` subscript, parser.hexa:753) is true. Used so the assign
+// arm can distinguish an `a[i] = …` element-place LHS from a plain ident LHS.
+fn _types_is_index(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Index -> true,
+        ExprKind::Assign -> false,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Field -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+// Wall A r5 — Field-expr probe (stage0 has no derived Eq). Mirrors the
+// per-ExprKind match shape of `_types_is_index`; only `ExprKind::Field`
+// (a postfix `a.field` access, parser.hexa:715 — `text`=field name,
+// `children[0]`=receiver) is true. Used so the assign arm can distinguish a
+// `s.field = …` field-place LHS from a plain ident / index LHS.
+fn _types_is_field(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Field -> true,
+        ExprKind::Index -> false,
+        ExprKind::Assign -> false,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+// Wall A r4 — parse the element-type spelling out of a sized/unsized array
+// annotation. The parser (parser.hexa:parse_type, RFC 085) encodes `[T; N]`
+// as the type-name `Array:<elem>:<N>` and bare `[T]` as `Array:<elem>`;
+// mirror hir_to_mir.hexa:_arru_array_type_id_from_text's split — `elem` is
+// the substring after the `Array:` prefix up to the next `:` (sized) or the
+// end (unsized). Returns "" for a non-array annotation (the backward-compat
+// `Array:<N>` count-only form yields a non-scalar digit string the caller
+// rejects), so callers conservatively skip. Self-contained (no cross-module
+// import; same module-local-mirror precedent as `_types_let_type_text`),
+// `.chars()`-based (no new builtin), frozen-seed-safe.
+fn _types_array_elem_kind(tt: string) -> string {
+    let pfx = "Array:"
+    let chars = tt.chars()
+    let n = len(chars)
+    let pch = pfx.chars()
+    let plen = len(pch)
+    if n <= plen { return "" }
+    let mut pi = 0
+    while pi < plen {
+        if chars[pi] != pch[pi] { return "" }
+        pi = pi + 1
+    }
+    let mut elem = ""
+    let mut i = plen
+    while i < n {
+        if chars[i] == ':' { return elem }
+        elem = elem + to_string(chars[i])
+        i = i + 1
+    }
+    return elem
+}
+
 // ── Expression type inference + checks ───────────────────────
 // Returns the inferred Type of `e`. Diagnostics for sub-expressions push
 // into `out` along the way (multi-error policy).
@@ -1628,9 +1925,75 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
 
     if _types_is_block(e.kind) {
         let mut last = _types_t_unit()
+        // Wall A r3 — block-scoped env that, under the opt-in flag, threads
+        // forward the declared scalar type of each annotated `let x: T` (with
+        // OR without an initializer) so a LATER `x = <expr>` assign in the
+        // same block can look it up (decl/init split). `benv` starts as `env`
+        // and is only ever re-bound inside the flag guard, so the default
+        // build passes the identical `env` to every child — diagnostic stream
+        // byte-identical → byteeq (gen3≡gen4) preserved. Same env-gate idiom
+        // as the r1/r2 let-case slices.
+        let mut benv = env
         let mut i = 0
         while i < len(e.children) {
-            last = _infer_expr(e.children[i], env, ctx, out)
+            last = _infer_expr(e.children[i], benv, ctx, out)
+            if env("HEXA_STATIC_TYPES") == "1" {
+                let ch = e.children[i]
+                if _types_is_let(ch.kind) {
+                    let nm = _types_let_name(ch.text)
+                    let tt = _types_let_type_text(ch.text)
+                    if len(nm) > 0 && len(tt) > 0 {
+                        let tr = TypeRef { kind: "named", name: tt, args: [], span: ch.span }
+                        let declared = _types_lower_type_ref(tr)
+                        // Only record KNOWN scalar primitives (i8…f64 · bool ·
+                        // string · char). named:/struct/enum annotations are
+                        // r5+ scope — leaving them unrecorded keeps a later
+                        // `x = …` assign on those types conservatively silent.
+                        if _types_kind_is_scalar(declared.kind) {
+                            benv = _types_env_define(benv, nm, _types_miss_def_id(), declared)
+                        } else {
+                            // Wall A r4 — array element-fit tracking. A
+                            // `let a: [i32; N]` (or `[i32]`) is encoded by the
+                            // parser as the type-name `Array:<elem>[:<N>]`
+                            // (parser.hexa:parse_type). Record its KNOWN-scalar
+                            // element type under a COLLISION-FREE key, `[]<name>`
+                            // — an identifier can never start with `[`, so this
+                            // never shadows a real ident lookup of `a` (the
+                            // whole-array binding stays unrecorded, exactly as
+                            // before) — so a LATER `a[i] = <expr>` index-assign
+                            // (Assign arm) can recover the element type for the
+                            // fit check. Only KNOWN scalar elements are kept;
+                            // unknown / nested-array / struct / count-only
+                            // (`Array:<N>`) elements stay r5+ → conservatively
+                            // silent. Mirrors the r3 scalar-decl recording.
+                            let elem = _types_array_elem_kind(tt)
+                            if len(elem) > 0 && _types_kind_is_scalar(elem) {
+                                benv = _types_env_define(benv, "[]" + nm, _types_miss_def_id(), _prim(elem, ""))
+                            }
+                            // Wall A r5 — block-local struct-var tracking. A
+                            // `let s: Point` lowers to kind `named:Point`
+                            // (parser.hexa annotation → _types_lower_type_ref).
+                            // Record it under a COLLISION-FREE key, `{}<name>`
+                            // — an identifier can never start with `{`, so this
+                            // never shadows a plain ident lookup of `s` (the
+                            // whole-struct binding stays unrecorded, exactly as
+                            // before, mirroring r4's `[]name` discipline) — so a
+                            // LATER `s.field = <expr>` field-assign (Assign arm)
+                            // can recover the receiver's struct name. Params and
+                            // module-level struct `let`s already carry their
+                            // `named:` type in the env (bound by
+                            // `_types_bind_params` / `_collect_item_types`), so
+                            // the assign arm resolves those by re-inferring the
+                            // receiver — this block branch only adds coverage for
+                            // block-local decls. Whether it names a REAL struct
+                            // is gated downstream by the field registry lookup.
+                            if len(_types_struct_name_of(declared.kind)) > 0 {
+                                benv = _types_env_define(benv, "{}" + nm, _types_miss_def_id(), declared)
+                            }
+                        }
+                    }
+                }
+            }
             i = i + 1
         }
         return last
@@ -1746,6 +2109,71 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             let _t = _infer_expr(e.children[i], env, ctx, out)
             i = i + 1
         }
+        // Wall A r1 — opt-in SOUND static type slice (HEXA_STATIC_TYPES=1).
+        // Bring the Rust E0308 'mismatched types' rule that already guards
+        // top-level let-ITEMS (see the per-let-item RHS check in type_check)
+        // to LOCAL (in-fn-body) lets. The ENTIRE branch is env-gated, so the
+        // default build skips it → diagnostic stream byte-identical → byteeq
+        // (gen3≡gen4) preserved. Same structural slot + env-gate idiom as the
+        // already-shipped `_exh_check_module`/`_cg_check_module` opt-in passes.
+        if env("HEXA_STATIC_TYPES") == "1" {
+            // text encodes `<name>|<typename>`; require an annotation + RHS.
+            let tt = _types_let_type_text(e.text)
+            if len(tt) > 0 && len(e.children) > 0 {
+                let rhs = e.children[0]
+                // r1 arm — scalar-literal RHS (int/float/string/bool/char).
+                // r2 (the `else if` below) extends to ident/call RHS; range/
+                // array/struct-literal RHS remain a later rung. A literal
+                // re-infer is side-effect-free (a literal pushes no
+                // diagnostics), so no double-report.
+                if _types_is_lit_int(rhs.kind) || _types_is_lit_float(rhs.kind) || _types_is_lit_string(rhs.kind) || _is_lit_bool(rhs.kind) || _is_lit_char(rhs.kind) {
+                    let tr = TypeRef { kind: "named", name: tt, args: [], span: e.span }
+                    let declared = _types_lower_type_ref(tr)
+                    // Only KNOWN scalar primitives are sound comparison
+                    // targets — skip `named:`/struct/enum annotations (r5+).
+                    if _types_kind_is_scalar(declared.kind) {
+                        let rhs_t = _infer_expr(rhs, env, ctx, out)
+                        if !_types_assignable(declared, rhs_t, rhs) {
+                            _emit_hx3011(declared, rhs_t, e.span, out)
+                        }
+                    }
+                } else if _types_is_ident(rhs.kind) || _types_is_call(rhs.kind) {
+                    // Wall A r2 — non-literal known-type RHS (ident / call).
+                    // Rust E0308 'mismatched types' fires on a typed `let`
+                    // whose RHS is an inferred-scalar ident/call that provably
+                    // disagrees with the annotation — e.g.
+                    //   `let a: i32 = 5; let b: string = a;`   // a   : i32
+                    //   `fn g() -> i32 {…} let b: string = g();` // g() : i32
+                    // (rustc_hir_typeck/src/expr.rs `check_expr_kind` →
+                    //  `demand_coerce` → `FnCtxt::report_mismatched_types`,
+                    //  the SAME E0308 path the literal arm already mirrors).
+                    let tr = TypeRef { kind: "named", name: tt, args: [], span: e.span }
+                    let declared = _types_lower_type_ref(tr)
+                    // r2 soundness gate ① — declared side must be a KNOWN
+                    // scalar primitive (named:/struct/enum stay r5+).
+                    if _types_kind_is_scalar(declared.kind) {
+                        // The children-walk above already inferred `rhs` once
+                        // (any inner errors surfaced into `out`). Re-infer into
+                        // a SCRATCH sink so this check appends NOTHING extra —
+                        // no double-report of a call's inner HX2001/HX3003.
+                        let mut scratch: array = []
+                        let rhs_t = _infer_expr(rhs, env, ctx, scratch)
+                        // r2 soundness gate ② — only flag when the INFERRED
+                        // RHS is itself a KNOWN scalar primitive. The
+                        // inferencer's fallbacks for un-resolved idents (empty
+                        // kind), un-annotated fn returns / un-modeled callees
+                        // (`unit`), HexaVal dynamics, and aggregate types are
+                        // all NON-scalar here → conservatively skipped (r5+),
+                        // so no false REJECT on anything unknown.
+                        if _types_kind_is_scalar(rhs_t.kind) {
+                            if !_types_assignable(declared, rhs_t, rhs) {
+                                _emit_hx3011(declared, rhs_t, e.span, out)
+                            }
+                        }
+                    }
+                }
+            }
+        }
         return _types_t_unit()
     }
 
@@ -1753,11 +2181,110 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         if len(e.children) >= 2 {
             let lhs_t = _infer_expr(e.children[0], env, ctx, out)
             let rhs_t = _infer_expr(e.children[1], env, ctx, out)
+            // Wall A r3 — opt-in decl/init-split REJECT (HEXA_STATIC_TYPES=1).
+            // A `let x: T` (no initializer) recorded its declared scalar T into
+            // the block-scoped env (see the Block case); a later `x = <expr>`
+            // whose inferred scalar RHS provably disagrees with T REJECTs with
+            // HX3011 — the Rust E0308 'mismatched types' path for assignment:
+            // rustc_hir_typeck/src/expr.rs `check_expr_assign` →
+            // `demand_coerce_diag` → `FnCtxt::report_mismatched_types` (the
+            // SAME E0308 emitter the r1/r2 let-arms mirror). Soundness gates,
+            // identical to r1/r2: fire only when BOTH the declared LHS and the
+            // inferred RHS are KNOWN scalar primitives; unknown idents (empty
+            // kind), unit, HexaVal, and aggregates are conservatively skipped
+            // (r5+). The whole arm is env-gated → the default build is byte-
+            // identical (byteeq-neutral). When it fires it SUPPRESSES the
+            // generic HX3001 below (`r3_rejected`) so one mistake = one error.
+            let mut r3_rejected = false
+            if env("HEXA_STATIC_TYPES") == "1" {
+                if _types_is_ident(e.children[0].kind) && _types_kind_is_scalar(lhs_t.kind) && _types_kind_is_scalar(rhs_t.kind) {
+                    if !_types_assignable(lhs_t, rhs_t, e.children[1]) {
+                        _emit_hx3011(lhs_t, rhs_t, e.span, out)
+                        r3_rejected = true
+                    }
+                } else if _types_is_index(e.children[0].kind) && len(e.children[0].children) > 0 {
+                    // Wall A r4 — array element-fit assign REJECT. The LHS is an
+                    // `a[i]` subscript (Index: children[0]=base, children[1]=
+                    // index, parser.hexa:753). When the base is a plain ident
+                    // whose declared array element type was recorded by the
+                    // Block case (key `[]<name>`), and BOTH that element type
+                    // and the inferred RHS are KNOWN scalars that provably
+                    // disagree, REJECT with HX3011 — the Rust E0308 index-place
+                    // coercion path: rustc_hir_typeck/src/expr.rs
+                    // `check_expr_index` (place expr) → assignment
+                    // `demand_coerce` → `FnCtxt::report_mismatched_types` (the
+                    // SAME E0308 emitter the r1/r2/r3 arms mirror). Note `lhs_t`
+                    // from `_infer_expr` on an Index is the Field/Index STUB-v1
+                    // unknown (`_types_empty_type()`), so the element type comes
+                    // from the recorded `[]<name>` env entry — NOT lhs_t.
+                    // int/float-literal RHS still coerces (`_types_assignable`
+                    // sees `e.children[1]`), matching the r1/r3 ergonomics; an
+                    // unrecorded base (unknown/aggregate element) stays r5+
+                    // silent. Suppresses the generic HX3001 (`r3_rejected`).
+                    let base = e.children[0].children[0]
+                    if _types_is_ident(base.kind) && len(base.text) > 0 {
+                        let elem_t = _types_env_lookup(env, "[]" + base.text)
+                        if _types_kind_is_scalar(elem_t.kind) && _types_kind_is_scalar(rhs_t.kind) {
+                            if !_types_assignable(elem_t, rhs_t, e.children[1]) {
+                                _emit_hx3011(elem_t, rhs_t, e.span, out)
+                                r3_rejected = true
+                            }
+                        }
+                    }
+                } else if _types_is_field(e.children[0].kind) && len(e.children[0].children) > 0 {
+                    // Wall A r5 — struct field-type assign REJECT. The LHS is a
+                    // `s.field` access (Field: text=field name, children[0]=
+                    // receiver, parser.hexa:715). When the receiver is a plain
+                    // ident of a KNOWN struct type, the registered declared type
+                    // of `field` (side registry, since the env's struct Type
+                    // drops field names) and the inferred RHS are BOTH known
+                    // scalars that provably disagree, REJECT with HX3011 — the
+                    // Rust E0308 field-place coercion path:
+                    // rustc_hir_typeck/src/expr.rs `check_field` /
+                    // `check_expr_assign` → `demand_coerce` →
+                    // `FnCtxt::report_mismatched_types` (the SAME E0308 emitter
+                    // the r1/r2/r3/r4 arms mirror). `lhs_t` from `_infer_expr`
+                    // on a Field is the STUB-v1 unknown, so the field type comes
+                    // from the registry — NOT lhs_t. The receiver's struct name
+                    // is recovered two ways: a block-local `let s: Point` is in
+                    // the `{}name` env slot; a param / module-let struct var
+                    // carries its `named:Point` type directly, recovered by
+                    // re-inferring the receiver into a SCRATCH sink (no double-
+                    // report). int/float-literal RHS still coerces; an unknown
+                    // receiver, non-struct field, or non-scalar field stays r6+
+                    // silent. Suppresses the generic HX3001 (`r3_rejected`).
+                    let fnode = e.children[0]
+                    let recv = fnode.children[0]
+                    if _types_is_ident(recv.kind) && len(recv.text) > 0 && len(fnode.text) > 0 {
+                        let mut sname = ""
+                        let blk = _types_env_lookup(env, "{}" + recv.text)
+                        sname = _types_struct_name_of(blk.kind)
+                        if len(sname) == 0 {
+                            let mut rscratch: array = []
+                            let recv_t = _infer_expr(recv, env, ctx, rscratch)
+                            sname = _types_struct_name_of(recv_t.kind)
+                        }
+                        if len(sname) > 0 {
+                            let lk = _types_lookup_struct_field_typename(sname, fnode.text)
+                            if lk.found && len(lk.field_typename) > 0 {
+                                let ftr = TypeRef { kind: "named", name: lk.field_typename, args: [], span: fnode.span }
+                                let field_t = _types_lower_type_ref(ftr)
+                                if _types_kind_is_scalar(field_t.kind) && _types_kind_is_scalar(rhs_t.kind) {
+                                    if !_types_assignable(field_t, rhs_t, e.children[1]) {
+                                        _emit_hx3011(field_t, rhs_t, e.span, out)
+                                        r3_rejected = true
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             // _types_assignable (not bare _types_equal) — parity with
             // the return-type site: `x: i32 = 0` (rhs lit i64) and
             // unknown-side cases stop false-flagging HX3001; genuine
             // kind≠kind non-literal mismatches still report (g3 intact).
-            if !_types_assignable(lhs_t, rhs_t, e.children[1]) {
+            if !r3_rejected && !_types_assignable(lhs_t, rhs_t, e.children[1]) {
                 _emit_hx3001(lhs_t, rhs_t, e.span, out)
             }
         }
@@ -2379,6 +2906,369 @@ fn _exh_check_module(module: Module, out: array) {
     }
 }
 
+// ── Const generics + where-clause / trait-bound ENFORCEMENT ──
+//
+// Opt-in (`HEXA_CONST_GENERICS=1`), check-only, byteeq-neutral pass — the
+// production port of the standalone reference typechecker
+// `self/test_generics_typecheck.hexa` (lane ① const-generics, T35–T46).
+// It mirrors the proven `_exh_*` exhaustiveness shape exactly:
+//   * env-gated at the top of `_cg_check_module` → no-op on the default build
+//     (the `out` diagnostic stream is byte-identical when the flag is unset);
+//   * it only appends diagnostics, never touches MIR/codegen, so even ON it
+//     cannot change emitted bytes;
+//   * it decodes a synthetic `__cg` annotation (no new AST field, no new
+//     keyword) that the opt-in parser capture attaches at the declaration site
+//     (param kinds/bounds + desugared where-clauses) and the instantiation
+//     site (StructLit type/const arguments).
+//
+// reference (faithful-match cites):
+//   • Rust RFC 2000 (min_const_generics) — a `const N` parameter is
+//     instantiated with a *value*, a type parameter with a *type*; the slots
+//     are not interchangeable (`Buf<int>` / `Box<5>` both rejected).
+//   • The Rust Reference §"Where clauses" — `<T, U> where T: Ord` desugars to
+//     `<T: Ord, U>`; the bound is proven at every instantiation.
+//   • rustc trait selection — f64 implements PartialOrd but NOT Ord (the NaN
+//     total-order hole), reproduced in `_cg_type_implements`.
+//
+// Polarity / release integrity: a violated bound is a non-fatal WARNING
+// (HX3008) by default; the opt-in `HEXA_STRICT_BOUNDS=1` promotes the same
+// site to a fatal Error (HX3009). The const-slot mismatch is HX3007.
+
+struct CgGenericReg {
+    names: [string],
+    counts: [i64],
+    offsets: [i64],
+    all_param_names: [string],
+    all_param_bounds: [string]
+}
+
+// Generic char splitter (sibling of `_exh_split`, which is hard-wired to '|').
+fn _cg_split_ch(s: string, ch: char) -> [string] {
+    let chars = s.chars()
+    let n = len(chars)
+    let mut out: [string] = []
+    let mut cur = ""
+    let mut i = 0
+    while i < n {
+        if chars[i] == ch {
+            out.push(cur)
+            cur = ""
+        } else {
+            cur = cur + to_string(chars[i])
+        }
+        i = i + 1
+    }
+    if len(cur) > 0 { out.push(cur) }
+    return out
+}
+
+// rustc-faithful builtin trait-impl table. The int family is totally ordered
+// (Ord/Eq), the float family is only PartialOrd/PartialEq (NaN hole). String
+// is Ord/Eq/Clone/Display but not Num/Copy.
+fn _cg_int_family(t: string) -> bool {
+    return t == "int" || t == "i8" || t == "i16" || t == "i32" || t == "i64"
+        || t == "isize" || t == "u8" || t == "u16" || t == "u32" || t == "u64"
+        || t == "usize"
+}
+
+fn _cg_float_family(t: string) -> bool {
+    return t == "float" || t == "f32" || t == "f64"
+}
+
+fn _cg_is_enforceable_type(t: string) -> bool {
+    // Only enforce a bound against a *known primitive* concrete type. A
+    // user-declared struct/enum could carry a trait impl we have not parsed
+    // (no impl-block registry yet), so we stay silent there rather than emit a
+    // false violation — conservative polarity (warn only when provably unmet).
+    return _cg_int_family(t) || _cg_float_family(t) || t == "string"
+        || t == "str" || t == "bool" || t == "char"
+}
+
+fn _cg_type_implements(t: string, tr: string) -> bool {
+    if _cg_int_family(t) {
+        return tr == "Ord" || tr == "Eq" || tr == "PartialOrd" || tr == "PartialEq"
+            || tr == "Num" || tr == "Clone" || tr == "Copy" || tr == "Display"
+    }
+    if _cg_float_family(t) {
+        return tr == "PartialOrd" || tr == "PartialEq" || tr == "Num"
+            || tr == "Clone" || tr == "Copy" || tr == "Display"
+    }
+    if t == "string" || t == "str" {
+        return tr == "Ord" || tr == "Eq" || tr == "PartialOrd" || tr == "PartialEq"
+            || tr == "Clone" || tr == "Display"
+    }
+    if t == "bool" {
+        return tr == "Ord" || tr == "Eq" || tr == "PartialOrd" || tr == "PartialEq"
+            || tr == "Clone" || tr == "Copy"
+    }
+    if t == "char" {
+        return tr == "Ord" || tr == "Eq" || tr == "PartialOrd" || tr == "PartialEq"
+            || tr == "Clone" || tr == "Copy" || tr == "Display"
+    }
+    return false
+}
+
+fn _cg_has_cg_ann(anns: [Annotation]) -> bool {
+    let mut i = 0
+    while i < len(anns) {
+        if anns[i].name == "__cg" { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _cg_get_cg_args(anns: [Annotation]) -> [Expr] {
+    let mut i = 0
+    while i < len(anns) {
+        if anns[i].name == "__cg" { return anns[i].args }
+        i = i + 1
+    }
+    let mut empty: [Expr] = []
+    return empty
+}
+
+fn _cg_is_struct_lit(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::StructLit -> true,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+// Build the generic-param registry from every Item carrying a `__cg`
+// annotation. The annotation args are LiteralString carriers encoded as
+// "P:<name>:<bound>" (declaration param; bound "" / "const" / "Ord+Num") and
+// "W:<param>:<trait>" (where-clause atom). Where-clauses are desugared inline
+// onto the matching param's bound (rustc `<T,U> where T: Ord` ≡ `<T: Ord, U>`,
+// multi-clause accumulation joined with '+').
+fn _cg_build_registry(module: Module) -> CgGenericReg {
+    let mut names: [string] = []
+    let mut counts: [i64] = []
+    let mut offsets: [i64] = []
+    let mut all_names: [string] = []
+    let mut all_bounds: [string] = []
+    let mut i = 0
+    while i < len(module.items) {
+        let it = module.items[i]
+        if _cg_has_cg_ann(it.annotations) {
+            let args = _cg_get_cg_args(it.annotations)
+            let mut pnames: [string] = []
+            let mut pbounds: [string] = []
+            let mut wparams: [string] = []
+            let mut wtraits: [string] = []
+            let mut j = 0
+            while j < len(args) {
+                let parts = _cg_split_ch(args[j].text, ':')
+                if len(parts) >= 2 {
+                    let tag = parts[0]
+                    if tag == "P" {
+                        pnames.push(parts[1])
+                        if len(parts) >= 3 { pbounds.push(parts[2]) } else { pbounds.push("") }
+                    } else if tag == "W" {
+                        wparams.push(parts[1])
+                        if len(parts) >= 3 { wtraits.push(parts[2]) } else { wtraits.push("") }
+                    }
+                }
+                j = j + 1
+            }
+            let count = len(pnames)
+            if count > 0 {
+                names.push(it.name)
+                counts.push(count)
+                offsets.push(len(all_names))
+                let mut k = 0
+                while k < count {
+                    all_names.push(pnames[k])
+                    let mut b = pbounds[k]
+                    // where-clause desugar: accumulate matching W traits.
+                    let mut m = 0
+                    while m < len(wparams) {
+                        if wparams[m] == pnames[k] {
+                            let wt = wtraits[m]
+                            if len(wt) > 0 && b != "const" {
+                                if len(b) == 0 {
+                                    b = wt
+                                } else {
+                                    b = b + "+" + wt
+                                }
+                            }
+                        }
+                        m = m + 1
+                    }
+                    all_bounds.push(b)
+                    k = k + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return CgGenericReg {
+        names: names,
+        counts: counts,
+        offsets: offsets,
+        all_param_names: all_names,
+        all_param_bounds: all_bounds
+    }
+}
+
+fn _cg_reg_count(reg: CgGenericReg, name: string) -> i64 {
+    let mut i = 0
+    while i < len(reg.names) {
+        if reg.names[i] == name { return reg.counts[i] }
+        i = i + 1
+    }
+    return 0
+}
+
+fn _cg_reg_bounds(reg: CgGenericReg, name: string) -> [string] {
+    let mut out: [string] = []
+    let mut i = 0
+    while i < len(reg.names) {
+        if reg.names[i] == name {
+            let off = reg.offsets[i]
+            let cnt = reg.counts[i]
+            let mut j = 0
+            while j < cnt {
+                out.push(reg.all_param_bounds[off + j])
+                j = j + 1
+            }
+            return out
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Validate one StructLit instantiation site against the registered generic
+// params. The instantiation `__cg` annotation encodes each argument as
+// "T:<typename>" (a type) or "C:<value>" (a const value).
+fn _cg_check_struct_lit(e: Expr, reg: CgGenericReg, out: array) {
+    if !_cg_has_cg_ann(e.annotations) { return }
+    let name = e.text
+    let cnt = _cg_reg_count(reg, name)
+    if cnt == 0 { return }
+    let bounds = _cg_reg_bounds(reg, name)
+    let args = _cg_get_cg_args(e.annotations)
+    let mut akinds: [string] = []
+    let mut atexts: [string] = []
+    let mut j = 0
+    while j < len(args) {
+        let parts = _cg_split_ch(args[j].text, ':')
+        if len(parts) >= 1 {
+            let tag = parts[0]
+            if tag == "T" || tag == "C" {
+                akinds.push(tag)
+                if len(parts) >= 2 { atexts.push(parts[1]) } else { atexts.push("") }
+            }
+        }
+        j = j + 1
+    }
+    let strict = env("HEXA_STRICT_BOUNDS") == "1"
+    let nactual = len(akinds)
+    let mut i = 0
+    while i < nactual {
+        if i >= len(bounds) {
+            i = i + 1
+            continue
+        }
+        let bound = bounds[i]
+        let kind = akinds[i]
+        let argtext = atexts[i]
+        if bound == "const" {
+            if kind != "C" {
+                // const generic param wants a *value*, not a type (RFC 2000).
+                let mut b = diag_new("HX3007")
+                b = diag_span(b, e.span)
+                b = diag_arg(b, "owner", name)
+                b = diag_arg(b, "detail", "const parameter #" + to_string(i) + " expects a value, but type `" + argtext + "` was given")
+                out.push(diag_emit(b))
+            }
+        } else if kind == "C" {
+            // type param must NOT be given a const value.
+            let mut b = diag_new("HX3007")
+            b = diag_span(b, e.span)
+            b = diag_arg(b, "owner", name)
+            b = diag_arg(b, "detail", "type parameter #" + to_string(i) + " expects a type, but const value `" + argtext + "` was given")
+            out.push(diag_emit(b))
+        } else if len(bound) > 0 {
+            // prove each trait of the bound against the concrete instantiation.
+            if _cg_is_enforceable_type(argtext) {
+                let traits = _cg_split_ch(bound, '+')
+                let mut t = 0
+                while t < len(traits) {
+                    let tr = traits[t]
+                    if len(tr) > 0 && !_cg_type_implements(argtext, tr) {
+                        let mut code = "HX3008"
+                        if strict { code = "HX3009" }
+                        let mut d = diag_new(code)
+                        d = diag_span(d, e.span)
+                        d = diag_arg(d, "trait", tr)
+                        d = diag_arg(d, "type", argtext)
+                        d = diag_arg(d, "owner", name)
+                        out.push(diag_emit(d))
+                    }
+                    t = t + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+}
+
+fn _cg_walk(e: Expr, reg: CgGenericReg, out: array) {
+    if _cg_is_struct_lit(e.kind) {
+        _cg_check_struct_lit(e, reg, out)
+    }
+    let mut i = 0
+    while i < len(e.children) {
+        _cg_walk(e.children[i], reg, out)
+        i = i + 1
+    }
+}
+
+fn _cg_check_module(module: Module, out: array) {
+    if env("HEXA_CONST_GENERICS") != "1" { return }
+    let reg = _cg_build_registry(module)
+    let mut i = 0
+    while i < len(module.items) {
+        let it = module.items[i]
+        if item_is_parse_only(it) {
+            i = i + 1
+            continue
+        }
+        if _types_is_fn_item(it.kind) || _types_is_let_item(it.kind) {
+            _cg_walk(it.body, reg, out)
+        }
+        i = i + 1
+    }
+}
+
 // ── Pre-pass: collect Item types into TypeEnv ────────────────
 
 fn _types_signature_type(it: Item) -> Type {
@@ -2541,6 +3431,12 @@ fn _collect_item_types(module: Module, out: array) -> TypeEnv {
         } else if _types_is_struct_item(it.kind) {
             env = _types_env_define_attr(env, it.name, def,
                 _types_struct_type(it, def), it.is_pub, owning)
+            // Wall A r5 — record this struct's field NAMES + named-type
+            // spellings into the side registry (the env's struct Type keeps
+            // field types but drops names) so a later `s.field = …` assign can
+            // recover the declared field type. Mirrors the enum branch's
+            // `_types_register_enum_item_payloads` call below.
+            _types_register_struct_item_fields(it)
         } else if _types_is_enum_item(it.kind) {
             env = _types_env_define_attr(env, it.name, def,
                 _types_enum_type(def), it.is_pub, owning)
@@ -2592,6 +3488,11 @@ pub fn type_check(module: Module) -> array {
     // `type_check()` is called once per module pass; registry lifetime ==
     // this call (parallel to bind.hexa's arity registry reset shape).
     _types_enum_registry_reset()
+    // Wall A r5 — reset the per-module struct field-type registry alongside
+    // the enum one (same lifetime = this `type_check()` call). Populated by
+    // `_collect_item_types`; read only under HEXA_STATIC_TYPES at the field-
+    // assign site → byte-neutral for the default build.
+    _types_struct_registry_reset()
     // Type-alias substitution table — registered up front (before any TypeRef
     // is lowered) so `type Name = T` carriers resolve `Name` → `T` everywhere,
     // including forward references (`struct S { x: Name }` declared above the
@@ -2694,6 +3595,11 @@ pub fn type_check(module: Module) -> array {
     // RFC exhaustiveness — non-exhaustive enum-match warnings (HX3006).
     // Opt-in (HEXA_EXHAUSTIVE=1); no-op on the default build.
     _exh_check_module(module, out)
+
+    // Const generics + where-clause / trait-bound enforcement (HX3007/8/9).
+    // Opt-in (HEXA_CONST_GENERICS=1); no-op on the default build. Identical
+    // structural slot to the exhaustiveness pass above.
+    _cg_check_module(module, out)
 
     return out
 }

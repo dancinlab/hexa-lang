@@ -336,6 +336,15 @@ pub let CATALOG: [DiagSpec] = [
         fix_it_kind: FixItKind::None
     },
     DiagSpec {
+        code: "HX3011",
+        title: "mismatched types",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "mismatched types: expected `{expected}`, found `{actual}`",
+        explain: "Opt-in static type check (`HEXA_STATIC_TYPES=1`). A `let <name>: T = <literal>` local binding declared an explicit annotation `T` whose primitive type provably differs from the literal initialiser's type — e.g. `let x: i32 = \"s\"` or `let ok: bool = 1`. This is the Rust E0308 'mismatched types' rule brought to LOCAL (in-fn-body) lets: a string/bool/char literal never coerces to a numeric annotation, and an integer literal never coerces to `bool`. The default build does NOT emit this (the flag is off → diagnostic stream byte-identical to today); under the flag it is a FATAL error (REJECT, not advisory warning), so the build aborts before codegen. Scope r1 = scalar-literal RHS vs scalar-primitive annotation only; broader inference (idents, calls, ranges, struct/enum types) is deferred to later rungs. Fix: change the literal to match the annotation, or the annotation to match the value. The integer-literal/float-literal coercions Rust allows (`let x: i32 = 5`, `let y: f64 = 1.5`) still type-check.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
         code: "HX4001",
         title: "integer division domain narrow",
         severity: Severity::Warning,
@@ -548,6 +557,37 @@ pub let CATALOG: [DiagSpec] = [
         stage: "codegen",
         template: "@shared on `{local_name}` is illegal here; @shared is only legal on a fixed-extent local array inside a @gpu_kernel body",
         explain: "Shared memory is block-scoped and exists only inside a kernel launch. `@shared` must annotate a local of fixed-extent array type (`[T; N]`) of an allowlisted scalar, declared inside a `@gpu_kernel` (not a `@gpu_device`). gpu/SPEC.md §6 / §9.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3007",
+        title: "const generic argument kind mismatch",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "const generic mismatch on `{owner}`: {detail}",
+        explain: "A const generic parameter (`struct Buf<const N> { … }`) is instantiated with a *value* and a type parameter (`struct Box<T> { … }`) with a *type*; the two slots are not interchangeable (Rust RFC 2000 min_const_generics — `Buf<int>` is rejected with \"expected a const but found a type\", and `Box<5>` with the inverse). The check decodes the synthetic `__cg` annotation that the const-generics parser capture (opt-in `HEXA_CONST_GENERICS=1`) attaches at the declaration site (param kinds) and the instantiation site (argument kinds), then matches each positional slot. This diagnostic is emitted only when the opt-in const-generics pass is enabled; the default build is byte-identical.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3008",
+        title: "trait bound not satisfied",
+        // Warning by default (release integrity): introducing a new
+        // diagnostic ships opt-in, so a violated bound surfaces as a
+        // non-fatal warning. The opt-in `HEXA_STRICT_BOUNDS=1` flag
+        // promotes the SAME site to a fatal error (emitted as HX3009).
+        severity: Severity::Warning,
+        stage: "S3",
+        template: "the trait `{trait}` is not implemented for `{type}` (required by `{owner}`)",
+        explain: "A generic parameter with a trait bound (`fn max_of<T: Ord>(…)` or the equivalent where-clause desugaring `fn f<T>(…) where T: Ord`, The Rust Reference §\"Where clauses\") must be instantiated with a type that satisfies the bound. The const-generics pass (opt-in `HEXA_CONST_GENERICS=1`) proves each `T: Bound` against a rustc-faithful builtin trait-impl table: the int family is `Ord`/`Eq`/`Num`/`Copy`/…, but the float family is `PartialOrd`/`PartialEq`/`Num`/… and NOT `Ord`/`Eq` (the NaN total-order hole — `f64: Ord` does not hold in Rust either). A bound joined with `+` (e.g. `T: Ord+Num`) emits one diagnostic per unsatisfied trait. Default severity is a warning; `HEXA_STRICT_BOUNDS=1` re-emits the same violation as the fatal HX3009.",
+        fix_it_kind: FixItKind::None
+    },
+    DiagSpec {
+        code: "HX3009",
+        title: "trait bound not satisfied (strict)",
+        severity: Severity::Error,
+        stage: "S3",
+        template: "the trait `{trait}` is not implemented for `{type}` (required by `{owner}`)",
+        explain: "The strict-mode (`HEXA_STRICT_BOUNDS=1`) escalation of HX3008: a generic trait bound is provably unsatisfied at an instantiation site and the user has opted into fatal bound checking. See HX3008 for the bound-satisfaction model (rustc-faithful builtin impls; The Rust Reference §\"Where clauses\"). Emitted only under the opt-in const-generics pass; the default build is byte-identical.",
         fix_it_kind: FixItKind::None
     }
 ]
