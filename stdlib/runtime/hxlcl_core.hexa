@@ -1957,7 +1957,7 @@ pub fn hxlcl_fopen(path: HexaVal, mode: HexaVal) -> int {
     }
     let badmode = __hx_payload_eq(ok, 0)         // mode[0] not r/w/a
     if __hx_payload_ne(badmode, 0) { return 0 }
-    let fd = hxlcl_open_sys(path, flags, 420)    // 0644
+    let fd = hxlcl_open_sys(path, flags, __hx_payload_add(0, 420))    // 0644 (HexaVal-boxed mode)
     let bad = __hx_payload_lt(fd, 0)
     if __hx_payload_ne(bad, 0) { return 0 }      // open failed → NULL
     // leak guard (frozen :1175): a fresh file fd can only be 0/1/2 if a
@@ -2057,7 +2057,7 @@ pub fn hxlcl_ftell(fp: HexaVal) -> int {
     let fhigh = __hx_payload_ge(fp, 4096)
     if __hx_payload_ne(fhigh, 0) { return -1 }   // libc FILE* unsupported here
     let fd = __hx_payload_sub(fp, 1)
-    return hxlcl_lseek(fd, 0, 1)                 // SEEK_CUR = 1 (uniform all targets)
+    return hxlcl_lseek(fd, __hx_payload_add(0, 0), __hx_payload_add(0, 1))   // off=0, SEEK_CUR=1 (HexaVal-boxed)
 }
 
 // hxlcl_fseek: lseek(fd, offset, whence) → 0 on success, -1 on failure.
