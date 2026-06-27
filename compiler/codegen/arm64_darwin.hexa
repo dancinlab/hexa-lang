@@ -1794,7 +1794,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             buf.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
                              _arm64_op_label("#" + to_string(fn_arity)),
                              "fn_ref: arity"))
-            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_fn_new"),
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_fn_new_native"),
                              "fn_ref: build TAG_FN"))
             buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
             return buf

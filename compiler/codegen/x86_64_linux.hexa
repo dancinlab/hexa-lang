@@ -2777,7 +2777,7 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             // esi = arity (C int).
             _x86_buf.push(_x86_instr2("mov", _x86_op_reg("esi"),
                              _x86_op_imm(fn_arity), "fn_ref: arity"))
-            _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_fn_new"),
+            _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_fn_new_native"),
                              "fn_ref: build TAG_FN"))
             _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
                              "fn_ref: capture fn payload"))
