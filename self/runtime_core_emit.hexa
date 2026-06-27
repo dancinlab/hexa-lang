@@ -2616,6 +2616,60 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "    HX_SET_ARR_PTR(v, (HexaArr*)a);\n"
     buf = buf + "    return v;\n"
     buf = buf + "}\n"
+    // ── FLEET #6: thread-safe growable buffer (OPT-IN -DHEXA_THREADS only) ──────
+    // ≥2 threads concurrently growing the SAME shared HexaArrI64 hit a realloc
+    // race: two `a->cap *= 2; a->data = realloc(...)` interleave → one realloc's
+    // result is overwritten + the freed-by-the-other block dangles → SIGSEGV/heap
+    // corruption (lane-A #4140 deferred this orthogonal grow race). The
+    // per-worker-PRIVATE shape (4P+4C game common case) was already proven safe;
+    // this closes the SHARED-buffer concurrent-grow case.
+    //
+    // Reference-match (the canonical "shared growable" answers):
+    //   · Rust `Mutex<Vec<i64>>` — std::sync::Mutex guards the whole push (grow +
+    //     len-bump are ONE critical section): https://doc.rust-lang.org/std/sync/struct.Mutex.html
+    //   · jemalloc arena bin locks / Java ConcurrentHashMap segment striping —
+    //     a FIXED table of locks keyed by a pointer hash so independent buffers
+    //     map to different stripes and almost never contend (vs one global lock).
+    // We use lock STRIPING (not an embedded lock field) because HexaArrI64 has a
+    // strict (ptr,len,cap) layout-match invariant with HexaArr/HexaArrF64 that
+    // codegen raw-reads through — adding a field would break those offset reads.
+    // The stripe is chosen by hashing the descriptor pointer. The lock covers
+    // BOTH the grow (realloc) AND the `a->data[a->len++]` append so len-bump and
+    // the slot store are atomic w.r.t. siblings on the same buffer.
+    //
+    // DEFAULT BUILD (HEXA_THREADS undefined): the entire #if arm is preprocessed
+    // out → hexa_arr_i64_push body is byte-identical to origin/main (byteeq-safe).
+    buf = buf + "#if defined(HEXA_THREADS)\n"
+    buf = buf + "#include <pthread.h>\n"
+    buf = buf + "#include <stdint.h>\n"
+    buf = buf + "#define HEXA_ARR_GROW_STRIPES 64\n"
+    buf = buf + "static pthread_mutex_t g_arr_grow_locks[HEXA_ARR_GROW_STRIPES] = {\n"
+    buf = buf + "#define HX_AGL_1  PTHREAD_MUTEX_INITIALIZER,\n"
+    buf = buf + "#define HX_AGL_8  HX_AGL_1 HX_AGL_1 HX_AGL_1 HX_AGL_1 HX_AGL_1 HX_AGL_1 HX_AGL_1 HX_AGL_1\n"
+    buf = buf + "    HX_AGL_8 HX_AGL_8 HX_AGL_8 HX_AGL_8 HX_AGL_8 HX_AGL_8 HX_AGL_8 HX_AGL_8\n"
+    buf = buf + "#undef HX_AGL_8\n"
+    buf = buf + "#undef HX_AGL_1\n"
+    buf = buf + "};\n"
+    buf = buf + "static inline pthread_mutex_t* hx_arr_grow_lock_for(void* p) {\n"
+    buf = buf + "    /* mix the pointer (drop low alignment bits) -> stripe index */\n"
+    buf = buf + "    uintptr_t h = (uintptr_t)p >> 4;\n"
+    buf = buf + "    h ^= h >> 7; h ^= h >> 13;\n"
+    buf = buf + "    return &g_arr_grow_locks[h & (HEXA_ARR_GROW_STRIPES - 1)];\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_arr_i64_push(HexaVal v, int64_t x) {\n"
+    buf = buf + "    HexaArrI64* a = (HexaArrI64*)v.arr_ptr;\n"
+    buf = buf + "    pthread_mutex_t* lk = hx_arr_grow_lock_for(a);\n"
+    buf = buf + "    pthread_mutex_lock(lk);\n"
+    buf = buf + "    if (a->len >= a->cap) {\n"
+    buf = buf + "        a->cap *= 2;\n"
+    buf = buf + "        a->data = (int64_t*)realloc(a->data, sizeof(int64_t) * (size_t)a->cap);\n"
+    buf = buf + "        if (!a->data) { pthread_mutex_unlock(lk); fprintf(stderr, \"OOM in arr_i64_push\\n\"); exit(1); }\n"
+    buf = buf + "    }\n"
+    buf = buf + "    a->data[a->len++] = x;\n"
+    buf = buf + "    pthread_mutex_unlock(lk);\n"
+    buf = buf + "    return v;\n"
+    buf = buf + "}\n"
+    buf = buf + "#else\n"
     buf = buf + "HexaVal hexa_arr_i64_push(HexaVal v, int64_t x) {\n"
     buf = buf + "    HexaArrI64* a = (HexaArrI64*)v.arr_ptr;\n"
     buf = buf + "    if (a->len >= a->cap) {\n"
@@ -2626,6 +2680,7 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "    a->data[a->len++] = x;\n"
     buf = buf + "    return v;\n"
     buf = buf + "}\n"
+    buf = buf + "#endif\n"
     buf = buf + "int hexa_arr_i64_len(HexaVal v) { return ((HexaArrI64*)v.arr_ptr)->len; }\n"
     buf = buf + "HexaVal hexa_arr_i64_box(HexaVal v, int64_t i) {\n"
     buf = buf + "    HexaArrI64* a = (HexaArrI64*)v.arr_ptr;\n"
