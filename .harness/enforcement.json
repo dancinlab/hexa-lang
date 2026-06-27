@@ -181,7 +181,8 @@
         "reserved\\s*word",
         "i64\\s*(오버플로|overflow|한계)",
         "우회\\s*경로",
-        "대신\\s*(다른|타)\\s*언어"
+        "대신\\s*(다른|타)\\s*언어",
+        "대체(?!로)"
       ],
       "hint": "억제/우회 금지(차단됨). 근본원인 수정. @ts-ignore/eslint-disable/# type:ignore/#[allow]/빈 catch/bare TODO 전부 block. **언어/도구 벽(예약어·파서 갭·i64 한계·stdlib 부재·codegen·링크)도 우회 말고 그 도구(hexa-lang 등 dancinlab repo)를 직접 upstream-fix** — 타-언어 scratch 재구현·캐시바이너리·심볼회피·\"측정종착\" 조기선언은 commons fix-the-tool 위반(=dead). 정당하면 `@root-cause-ok <사유>`+사용자 opt-in."
     },
