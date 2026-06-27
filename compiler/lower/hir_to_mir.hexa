@@ -405,6 +405,31 @@ fn _lr_fn_ref_arity(name: string) -> i64 {
     return -1
 }
 
+// ── runtime TAG_FN/TAG_CLOSURE carrier names ─────────────────
+// The `_hexa_init_thread_fn_shims` family (self/native/thread_emit.hexa) — each
+// is a `HexaVal <name>;` DATA carrier global registered at runtime, NOT a C
+// function. A call `thread_spawn(worker, 1)` must dispatch through the runtime
+// hexa_callN dispatcher (which reads the TAG_FN payload + invokes the fn-ptr),
+// NOT a direct `call thread_spawn` (which jumps into BSS data → SIGSEGV). These
+// names mirror the bind allowlist additions (compiler/check/bind.hexa) — same
+// carrier set. Mirrors the C-transpile hexa_callN fallback (codegen.hexa:8251).
+fn _lr_is_carrier_call(name: string) -> bool {
+    if name == "thread_spawn" { return true }
+    if name == "thread_join" { return true }
+    if name == "thread_channel_new" { return true }
+    if name == "thread_channel_send" { return true }
+    if name == "thread_channel_recv" { return true }
+    if name == "thread_channel_close" { return true }
+    if name == "now_ms" { return true }
+    if name == "atomic_cell_new" { return true }
+    if name == "atomic_cell_load" { return true }
+    if name == "atomic_cell_store" { return true }
+    if name == "atomic_cell_add" { return true }
+    if name == "atomic_cell_sub" { return true }
+    if name == "atomic_cell_cas" { return true }
+    return false
+}
+
 pub struct LowerCtx {
     next_local: i64,
     next_block: i64,
@@ -1482,6 +1507,44 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
 
     // ── call → STMT_CALL ───────────────────────────────────
     if k == "call" {
+        // carrier call: `thread_spawn(worker, 1)` etc — the callee is a runtime
+        // TAG_FN/TAG_CLOSURE carrier DATA global, not a C fn. Emit op="carrier_call"
+        // with args = [carrier_name_str, arg1, …]; codegen loads the carrier
+        // HexaVal from the global and dispatches via hexa_callN_native. Must run
+        // BEFORE the named-call path, which would emit a fatal direct `call <name>`
+        // into BSS data. Skipped if the name is shadowed by a local/global binding.
+        if len(e.children) > 0 {
+            let cc0 = e.children[0]
+            if cc0.kind == "ident" {
+                let ccn = _strip_mut_prefix(cc0.text)
+                if _lr_is_carrier_call(ccn)
+                    && _mir_lookup(ctx, ccn) < 0
+                    && _mir_lookup_global(ctx, ccn) < 0 {
+                    let mut cctx = ctx
+                    let mut cc_args: [Operand] = []
+                    cc_args.push(_const_str_op(ccn))   // args[0] = carrier symbol
+                    let mut cai = 1
+                    while cai < len(e.children) {
+                        let cr = _lower_hexpr(cctx, e.children[cai])
+                        cctx = cr.ctx
+                        cc_args.push(cr.operand)
+                        cai = cai + 1
+                    }
+                    cctx = _fresh_local(cctx, e.typ, "carrier_ret")
+                    let cdst = _lr_locals[len(_lr_locals) - 1]
+                    let cs = Stmt {
+                        kind: STMT_ASSIGN,
+                        dst: cdst,
+                        op: "carrier_call",
+                        args: cc_args,
+                        target_block: -1,
+                        target_block_else: -1
+                    }
+                    cctx = _push_stmt(cctx, cs)
+                    return _value(cctx, _local_op(cdst.id))
+                }
+            }
+        }
         let mut ctx_r = ctx
         let mut callee_text = ""
         let mut arg_ops: [Operand] = []
