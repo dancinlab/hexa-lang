@@ -948,6 +948,121 @@ fn _unbox_native_enabled() -> bool {
     return env("HEXA_UNBOX_NATIVE") == "1"
 }
 
+// ── r-k5 HEXA_UNBOX_FNCALL — cross-fn boxed-ABI unbox (default-OFF) ───────────
+// k5_fncall residual: a hexa→hexa DIRECT call passes/returns every value as a
+// boxed 16-byte HexaVal {tag,payload} register PAIR (arg → rdi:rsi/rdx:rcx/r8:r9,
+// return → rax:rdx). For a MONOMORPHIC-INT fn (all params i64 AND every value
+// return i64) that pair-box is pure overhead — the payload IS the value and the
+// tag is always TAG_INT(0). This gate lowers such a fn's THREE boundaries to the
+// SAME single-register convention Route C already proved for hxlcl_ C-ABI leaves
+// (param-ingress · return · every direct call site): arg payload in ONE reg,
+// return raw in rax, no tag move. Caller+callee MUST move in LOCKSTEP (a
+// half-applied ABI crashes), so eligibility is computed ONCE over the whole
+// module and BOTH the callee's prologue/return AND every matching call site key
+// off the same `_x86_rawint_fns` set.
+//
+// SOUNDNESS firewall:
+//   - There is NO func-ref Operand kind (Operand.kind ∈ local|const_*|global),
+//     so a named user fn is reachable ONLY via STMT_CALL op==name — never held
+//     by value, never via call_indirect (closures are __hexa_lambda_N, excluded).
+//     Rewriting the set's prologue+return+ALL its call sites therefore covers
+//     every in-module ABI path to the fn.
+//   - `main` (C-entry pair) and `_is_cabi` fns (already single-register) excluded.
+//   - HONEST RESIDUAL: cross-MODULE calls are NOT covered — a separate codegen
+//     invocation builds its set from its own module.funcs, so a pair-boxed call
+//     to an eligible fn DEFINED elsewhere would mismatch. Safe for single-module
+//     emit (the k5 probe) and post-flatten single-module `hexa run`; broader
+//     separate-compilation stays gated OFF until a cross-module signature
+//     channel exists. Default-OFF isolates this risk (Gate-1 OFF byteeq).
+fn _unbox_fncall_enabled() -> bool {
+    return env("HEXA_UNBOX_FNCALL") == "1"
+}
+
+// Module-scope eligible-fn name set, populated ONCE per codegen_x86_64_linux when
+// the gate is ON (else stays [] → every predicate below is false → the pair-model
+// branches run unchanged → byte-identical OFF emit).
+pub let mut _x86_rawint_fns: [string] = []
+
+// Membership probe over the eligible set (few fns; linear is fine).
+fn _x86_is_rawint_fn(name: string) -> bool {
+    let mut i = 0
+    while i < len(_x86_rawint_fns) {
+        if _x86_rawint_fns[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// MFunc-local type_id probe (params then locals; 0 = unknown). Used at set-build
+// time, before the per-fn X86RegMap exists. (1 = i64, 3 = f64, 5 = bool.)
+fn _x86_fn_local_type(mf: MFunc, id: i64) -> i64 {
+    let mut i = 0
+    while i < len(mf.params) {
+        if mf.params[i].id == id { return mf.params[i].type_id }
+        i = i + 1
+    }
+    i = 0
+    while i < len(mf.locals) {
+        if mf.locals[i].id == id { return mf.locals[i].type_id }
+        i = i + 1
+    }
+    return 0
+}
+
+// A return operand is provably raw-i64 within mf: a const_int literal, or a
+// local/param with MIR type_id==1. float/str/global/untyped → NOT proven.
+fn _x86_operand_int_in_fn(o: Operand, mf: MFunc) -> bool {
+    if o.kind == "const_int" { return true }
+    if o.kind == "local" { return _x86_fn_local_type(mf, o.local_id) == 1 }
+    return false
+}
+
+// Is `mf` a monomorphic-int fn eligible for the single-register raw-int ABI?
+// (≤6 params all i64, AND it has ≥1 value-return, AND EVERY value-return is
+// provably-int). Excludes main / cabi / lambda-lifted closures.
+fn _x86_rawint_fn_ok(mf: MFunc) -> bool {
+    if mf.name == "main" { return false }
+    if _is_cabi(mf.name) { return false }
+    if len(mf.name) >= 13 && mf.name.substring(0, 13) == "__hexa_lambda" { return false }
+    if len(mf.params) > 6 { return false }
+    let mut i = 0
+    while i < len(mf.params) {
+        if mf.params[i].type_id != 1 { return false }   // non-i64 param → stays boxed
+        i = i + 1
+    }
+    let mut saw_ret = false
+    let mut bi = 0
+    while bi < len(mf.blocks) {
+        let blk = mf.blocks[bi]
+        let mut si = 0
+        while si < len(blk.stmts) {
+            let s = blk.stmts[si]
+            if s.kind == _STMT_RETURN {
+                if len(s.args) < 1 { return false }                       // bare return → void
+                if !_x86_operand_int_in_fn(s.args[0], mf) { return false } // non-int return
+                saw_ret = true
+            }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    return saw_ret
+}
+
+// Build the eligible-fn set from the whole module (gate ON only → byteeq-neutral
+// when OFF).
+fn _x86_build_rawint_fns(module: MModule) {
+    _x86_rawint_fns = []
+    if !_unbox_fncall_enabled() { return }
+    let mut i = 0
+    while i < len(module.funcs) {
+        if _x86_rawint_fn_ok(module.funcs[i]) {
+            _x86_rawint_fns.push(module.funcs[i].name)
+        }
+        i = i + 1
+    }
+}
+
 // Is operand `o` provably a raw i64 payload (no boxing/tag-dispatch needed)?
 // SOUNDNESS: `local_type` is keyed by the LOCAL id space (_x86_max_local_id over
 // locals+params+stmt operands). GLOBALS live in a SEPARATE id space (module
@@ -3149,8 +3264,11 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             return
         }
 
-        if _is_cabi(s.op) {
-            // Route C C-ABI call — the callee is a raw C-ABI symbol: it takes
+        if _is_cabi(s.op) || _x86_is_rawint_fn(s.op) {
+            // Route C C-ABI call (hxlcl_ leaf) OR r-k5 raw-int internal call: the
+            // callee takes each arg in ONE SysV INTEGER arg register and returns a
+            // single raw value in rax. (Identical single-register lowering; the
+            // r-k5 set is built lockstep with the callee prologue/return below.)
             // each arg in ONE SysV INTEGER arg register (rdi,rsi,rdx,rcx,r8,r9)
             // and returns a single raw value in rax. Box only the PAYLOAD of each
             // arg into its single arg reg; unbox rax (TAG_INT) into dst. (Not
@@ -3323,9 +3441,10 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             _x86_emit_zero_ret_pair(fname == "main")
         }
         if len(s.args) >= 1 {
-            if _is_cabi(fname) {
-                // Route C C-ABI return — a raw C-ABI fn returns its value in a
-                // SINGLE register (rax). Load just the payload eightbyte (the
+            if _is_cabi(fname) || _x86_is_rawint_fn(fname) {
+                // Route C C-ABI return OR r-k5 raw-int internal return — a
+                // single-register fn returns its value in rax. Load just the
+                // payload eightbyte (the
                 // raw int/pointer); the HexaVal tag is dropped (the C caller
                 // reads only rax). Must run BEFORE frame teardown (reads spill
                 // slots off rbp).
@@ -3502,7 +3621,7 @@ fn _x86_64_lower_func(mf: MFunc, st: X86StrTab, modhash: string,
     // TAG goes into the param's parallel tag-slot so it survives into any
     // downstream tag-dispatching runtime call.
     let mut p = 0
-    let _x86_cabi = _is_cabi(mf.name)
+    let _x86_cabi = _is_cabi(mf.name) || _x86_is_rawint_fn(mf.name)
     while p < len(mf.params) {
         let pid = mf.params[p].id
         if _x86_cabi && p < 6 {
@@ -3829,6 +3948,10 @@ fn _x86_strtab_to_rodata(st: X86StrTab) -> [LSection] {
 // `opts.shared` somewhere in the body).
 pub fn codegen_x86_64_linux(module: MModule, opts: CodegenOptions) -> LModule {
     let st = _build_x86_strtab(module)
+    // r-k5 — build the cross-fn raw-int ABI eligible-set ONCE before lowering
+    // any fn, so callee prologue/return AND every call site key off the same set
+    // (lockstep). Empty (no-op) unless HEXA_UNBOX_FNCALL=1 → OFF byteeq-neutral.
+    _x86_build_rawint_fns(module)
     // Stage1 C8 — modhash from MModule.file disambiguates spliced
     // modules so block labels never collide across re-imported libs.
     let modhash = _x86_64_modhash(module.file)

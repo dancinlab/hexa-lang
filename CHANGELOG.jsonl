@@ -48,3 +48,4 @@
 {"ts":null,"title":"2026-05-21","body":"- **RFC 067 / 071 / 075** — TMA + GPU kernel rounds (wgmma + TMA + warp-spec probes)."}
 {"ts":null,"title":"2026-05-20","body":"- **RFC 065 / 067 / 070** — heaviest ship day (463 commits); RFC 055 continuation."}
 {"ts":null,"title":"2026-05-19","body":"- **RFC 049 / 050 / 055 / 060 / 062** — multi-RFC build-out."}
+{"ts":null,"title":"runtime-gap k5: cross-fn boxed-ABI unbox (HEXA_UNBOX_FNCALL, default-OFF)","body":"- x86_64 codegen: monomorphic-int internal fns (all params i64, every value-return i64) lower their three call boundaries (call-site arg / callee prologue / return) to the proven Route-C single-register convention instead of the boxed HexaVal {tag,payload} pair-model. Eligible-set built once per module (caller+callee lockstep). Default-OFF (byteeq-neutral); honest residual = cross-module calls uncovered. Closes the k5_fncall residual (boxed cross-fn ABI) measured in state/codegen-quality-probe-verdict.md."}
