@@ -1,10 +1,1574 @@
 {
+<<<<<<< HEAD
+  "meta": {
+    "project": "hexa-lang",
+    "title": "hexa-lang — Architecture (SSOT)",
+    "role": "Single source of truth for the final architecture",
+    "format": "json-tree",
+    "viewer": "architecture.html",
+    "serve": "python3 serve.py",
+    "update_policy": "in-place (not append-only)",
+    "history_ref": "CHANGELOG.jsonl",
+    "governance_ref": "CLAUDE.md",
+    "retired_md": "ARCHITECTURE.md is retired to a 1-line SSOT pointer stub (2026-06-16); this JSON is the SSOT, humans read architecture.html",
+    "tree_convention": "commons c4: hierarchy via nested `subsection` nodes (each section→node, subsection.blocks=children). A node's title holds only its short attribute; deeper detail decomposes into child subsections. Do NOT pile many claims into one prose/title field — split piled-up cells into one child per logical item. Rendered by architecture.html (renderBlocks recurses on subsection.blocks).",
+    "tree_ssot": "This JSON is the SOLE source of the directory/module tree (Component map + Data flow). CLAUDE.md is a thin entry pointer and no longer duplicates the tree (refactor 2026-06-23)."
+  },
+  "sections": [
+    {
+      "id": "overview",
+      "title": "Overview",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "`hexa-lang` is a self-hosted native compiler for the `.hexa` language, shipped with the `hx` package manager. There is **no LLVM anywhere in the toolchain**. The self-host backend lowers source directly through its own IR to native objects (ELF64 / Mach-O arm64) and links them with its own linker (`hexa_ld`); this native-emit path is a proven byte-identical fixpoint (`gen3 ≡ gen4`) and is the default for `--emit`. Two pieces of C still remain — see Self-host status for the honest accounting: a C-transpile **fallback delegate** still serves some full `hexa build`/`run` flows until the native end-to-end path lands, and a ~5.5k-LOC **C runtime substrate** (the libc/syscall bootstrap floor, generated from `.hexa` emitter SSOTs) is compiled and linked into every binary. This substrate is **reducible**: a 2026-06-16 falsification (`.verdicts/zeroc-breakthrough/`) showed ~50% of `runtime_core.c` is pure-algorithm code portable to `.hexa` today (a `.hexa` `hexa_fnv1a` is byte-identical to the C one), the syscall layer is `@asm`-svc eliminable, and the genuine residual is only libm transcendentals + GPU FFI — so zero-`.c` is an **open, attackable campaign**, not a policy that accepts C permanently."
+        },
+        {
+          "type": "prose",
+          "text": "Its defining feature is an embedded **atlas** — a ~4.2 MB theorem dictionary (P primitives / C constants / L laws / E errors) baked statically into the binary. Every formula-bearing function must either cite an atlas law (`@cite(L[id])`), carry an active `@verify`, or declare an explicit `@grace`; otherwise the build refuses to produce a binary (stage S8, fatal `HX8004`). Enforcement happens at the **build gate**, not at runtime — the atlas adds 0 ms of runtime cost."
+        },
+        {
+          "type": "prose",
+          "text": "The compiler runs eight ordered strict-lint stages (S0 parse → S1 resolve → S2 bind → S3 type → S4 domain → S5 units → S6 equational `@verify` → S7 proof `@prove` → S8 citation). A binary appears only when every fatal stage passes. After the gate, source is lowered HIR → MIR (SSA) → LIR and emitted per target. The compiler is self-hosting: the compiler that builds `.hexa` is itself written in `.hexa` (`self/`)."
+        }
+      ]
+    },
+    {
+      "id": "self-host-status",
+      "title": "Self-host status",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Honest accounting of where self-hosting actually stands (no overclaim — `git log` + the `.verdicts/` tree are the evidence):"
+        },
+        {
+          "type": "table",
+          "columns": [
+            "Layer",
+            "State",
+            "Evidence"
+          ],
+          "rows": [
+            [
+              "Native-emit backend (own IR → Mach-O / ELF, no LLVM)",
+              "✅ byte-identical fixpoint `gen3 ≡ gen4`",
+              "`.verdicts/.../N5-FIXPOINT-ACHIEVED`, `tool/selfhost_byteeq_gate.sh`"
+            ],
+            [
+              "Default toolchain promotion (`--emit` → native gen3)",
+              "✅ flipped + persisted across `hx install`",
+              "`tool/promote_selfhost.sh`, marker `~/.hx/.selfhost-default`"
+            ],
+            [
+              "Multi-target bootstrap",
+              "✅ arm64-darwin · linux-arm64 (real-HW byte-eq) · x86_64 (RUNG 1+2+3)",
+              "SELFHOST-NEXT domain ledger"
+            ],
+            [
+              "`hexa run` routing",
+              "✅ `HEXA_RUN_NATIVE` default-ON for ALL hosts — clang-free native cold path (`aprime_cc --emit=obj` → system `ld` → cache+exec, no C compiler); C-transpile delegate-fallback only for the native-emit gaps (closures emit-fail · `@lazy` niche). Consumer-live: `install.sh` ships `build/aprime_cc`, and a clang-less host auto-engages native (no host-cc probe is non-fatal).",
+              "leg-B r26 default-ON (#3782) · r27 ship aprime_cc (#3783) · r7 no-cc auto-engage (#3766); ROOT-A flatten (#3767) + ROOT-B native-codegen gaps r10–r25 (struct/field · println · shift · range/slice · try/catch · unary · UTF-8 rodata · void-tag · …); broad-corpus silent-differ audit drove (c) → ≈0 before flip"
+            ]
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "Remaining residuals (tracked, not silent)",
+          "blocks": [
+            {
+              "type": "list",
+              "items": [
+                "✅ **x86_64 RUNG 2** (done 2026-06-15) — `print(\"hi\")` now prints `hi` via the native x86_64 emitter. The HexaVal 16-byte SysV reg-pair ABI landed in #3340; the string-payload `lea` was then dropped in the native-emit data-address matcher (it only saw bare `.LCstrN` labels, not the `[rip+<label>]`-wrapped payload) — fixed by `_ex86_data_label_of` (`compiler/emit/elf_x86_64.hexa`). verdict `F-X86-RUNG2-STRING-PRINT-PASS`.",
+                "✅ **Full native `hexa build` end-to-end** (done 2026-06-15) — `hexa build <src> -o OUT` now produces a native executable with **zero clang / zero system ld**: the `hx-selfhost-cli` launcher's new `build` route (native-first + delegate-fallback, mirroring the `run` route #3325) runs `gen3 --emit=obj` → `hexa_ld <obj> rt.o -o OUT`. Corpus-verified (arith/string/loop/fn/cond/array 6/6) + standing gate `tool/selfhost_native_build_gate` (`.github/workflows/selfhost-native-build-gate.yml`). Safety: any program gen3/hexa_ld can't build, `HEXA_NATIVE_BUILD=0`, or an unknown flag → falls through to the shipped build (builds never break); reversible via `promote_selfhost.sh --revert`. verdict `F-SELFHOST-NATIVE-BUILD-FLIP`. (The deeper `self/main.hexa cmd_build` `--emit=asm`→clang block is left intact as the fallback — the launcher route already delivers clang-free builds without a gen3 rebuild / shipped-toolchain blast risk.)",
+                "✅ **on-path native-seed floor 종결** (2026-06-20) — 컴파일러 self-compile이 거치는 on-path runtime prim이 전부 native seed default-ON: valop 7-prim(truthy/sub/mul/add/cmp/div/mod; div/mod은 `__hx_payload_div/mod` int-div codegen-leaf #3733) + alloc/array-read/map/intern/fs-write/rt_str. byteeq `gen3≡gen4` 전 머지 3타깃 GREEN(value-op keystone #3704 + add #3729 + cmp #3731 + int-div #3733 + gen3 obj-emit crash-fix #3711/#3712). print-fmt·fd-write census가 @syscall = raw `svc`/`syscall` instruction은 **irreducible-J**임을 측정 확정(C `hxlcl_write`와 hexa `sys_write`가 같은 명령에 bottom-out → native화는 lateral relocation이지 floor reduction 아님). on-path portable floor 소진. verdict `project_hexa_selfhost_floor_census` 종결.",
+                "🟢 **zero-c leg B = RFC061 #include-drop = FUNCTIONAL WITNESS reached, 측정 종착** (2026-06-24) — `ls self/*.c == ∅`의 standalone-ABI 재설계를 자율 사다리로 몰아 **drop-ON 컴파일러가 `gen3 ≡ gen4` byte-identical(self-host fixpoint 성립) + exit42 rc=42 + hello를 witness**(SIMULATE_M7=1 + STRBUF_ARENA OFF config, aiden, tool/zeroc_dropon_fixpoint.sh). 사다리: M5 clean-port(5 PR) → format_n two-pass + hxlcl_strcmp delegate(r6 'frozen-static 영구 벽' 잠복 self-emit 슬롯으로 반증) → **sibling-shim**(non-frozen `runtime_core_sysheaders.h`+`runtime_core_hxlcl_shim.c`로 runtime_core.c를 frozen-immutably standalone-compilable화, m3flip의 'M6/M7 frozen-reshape 필요' 판정 반증) → 실빌드 link residual = **정확히 1**(`_hexa_init_fn_shims` frozen-static) → M6 측정(hxlcl byte-id-to-frozen은 **flip에 NOT required** 확정) → drop-ON run-wall = native-alloc-seed↔val-arena cross-TU scope desync(array-path FIXED·gated) → **(#3886) `_hexa_init_fn_shims` 1-frozen-static 잔여를 자율 emitter linkage-flip으로 외부화** — fleet-lab research가 'frozen-blob edit' 판정을 반증(runtime.c는 #3859 이후 `restore_frozen_seeds`가 `runtime_emit_full.hexa`에서 awk 합성하는 gitignore artifact라 emitter 편집=frozen 0편집), implement가 build로 확증(HEXA_RT_SELFEMIT 패턴 static→extern, drop-ON link residual **1→0** SIMULATE_M7 없이, nm program.o=T·runtime_core.o=U, gate-OFF SHA byte-identical). PR 스택 #3866~3886 전부 **opt-in default-OFF · byteeq-gated · 미머지 · frozen blob 151c52c8 불변**(`git diff 151c52c8 -- self/runtime.c`==∅) · DEFAULT_BYTE_IDENTICAL=YES. **`ls self/*.c == ∅`까지 남은 잔여 = release-gated default-flip 결정 하나뿐** — 자율 코드 벽은 전부 돌파(link residual=0 + functional witness 확보). 단 full-opt(STRBUF_ARENA ON)는 별개 off-path arena-descriptor escape-hazard로 gen3≡gen4 segfault(targeted heapify-at-insert 레버 문서화·deferred-not-worth·OFF로 functional). byte-id-to-frozen=flip에 NOT required 확정. SSOT 연대기: 메모리 `project_hexa_rfc061_ladder`.",
+                "🔬 **cross-target libc-floor ABI 벽 = Route C codegen C-ABI callconv (정석 escape · 박제)** (2026-06-26) — SELFEMIT 가 `hxlcl_*` libc-floor(`size_t hxlcl_strlen(const char*)` 등 **raw-C-ABI**)를 darwin-arm64-only 손-assembled Mach-O byte-array(`test/native_build/emit_hxlcl_*_o.hexa`)로만 emit하던 제약의 root-cause = codegen 의 **uniform PAIR-MODEL HexaVal`{tag,payload}` ABI**(`compiler/codegen/x86_64_linux.hexa:926-928` = single-reg raw-int substrate 위 param-ingress(2744)·return(2587)·call-boundary(2346) 3 경계만 pair-box). 그래서 compiler-driven `--emit=asm --target=` cross-target 경로(`regen_str_core_native_s.sh` darwin+x86_64-linux+arm64-linux 3타깃 green)는 **PAIR-ABI 라 raw-C-ABI hxlcl_* 에 구조적 불가**(measured ABI wall: portable-emit strlen 이 rdi(char*)를 tag로 읽어 SIGSEGV + rax=tag=0 리턴). **정석 escape = per-fn C-ABI calling-convention** — codegen 3 경계×2 백엔드(x86_64·arm64)에 `_is_cabi(fname)`(`hxlcl_` whitelist) single-register lowering 분기(C-ABI 헬퍼 `_x86_64_arg_reg_seq:900`/`_arm64_arg_reg:803` 기존 재사용 · 새 `@attr` 키워드 금지=frozen parser break 회피). reference-match: GCC `sysv_abi` · rustc `extern \"C\"` · zig `callconv(.C)` · Go `ABI0` — 모든 주요 컴파일러의 정석. **한 codegen 기능 → 전 `hxlcl_*` 심볼 × 3 타깃 일괄 dissolve**(손-assemble O(symbols×targets) 노동 승계). proof: #4000 strlen 3타깃 ELF live-run ABI-correct(rc42·hand-assemble fallback + `.note.GNU-stack` 보안수정) → Route C codegen PoC. default-OFF whitelist=byteeq-neutral · DEFAULT shim.o sha 불변 · frozen blob 151c52c8 ∅. **value 정직**: SELFEMIT 패밀리는 default-OFF 미출하 research 프론티어(연구완결 가치 · 출하 0임팩트) — release-integrity > self-host. **🏁 CAMPAIGN CLOSURE — amenable 프론티어 EXHAUSTED (13심볼 wired·self-covering ON-path)**: `_is_cabi` whitelist에 **pure-arith 9 + composite 4 = 13심볼** 전부 single-reg C-ABI lowering 배선·전부 default-OFF byteeq-neutral(빈 whitelist→PAIR emit 1바이트 불변)·이중게이트 standing(`selfhost-byteeq-real` ghost gen3≡gen4=release-safe + **`routec-smoke`**=ON-path 직접확증)·frozen 151c52c8 ∅. ⓐ **pure-arith 9**: mem(strlen/memcpy/memset·#4002/4012/4013) + compare(memcmp/strcmp/strncmp·#4021) + copy(strcpy/strncpy/strcat·#4022). ⓑ **composite 4**(연쇄 dissolve 完): atoi(#4027 inner `bl hxlcl_atoll`)·strdup(#4030 inner `bl hxlcl_malloc`)·calloc(#4031 malloc+store8)·realloc(#4035 inner malloc + **negative-offset `__hx_ptr_load64` header read** p-16). call-boundary가 callee-이름 키잉(`_is_cabi(s.op)`)이라 inner callee도 whitelist하면 inner `bl`이 cross-object C-ABI bind(구 'composite wall'은 un-whitelisted-callee 한정·dissolved). **ON-path 게이트 신설(verify-done 갭 메움)**: `tool/routec_cabi_smoke.sh` + nobaseline-gate.yml `routec-smoke` 잡이 `HEXA_CABI_HXLCL=1`로 13심볼 emit→링크→behavior-run+assert (씨드 shape-match 간접이 아닌 **Route C emit 직접 ON-path run**·각 composite PR이 자기 assert 추가=게이트가 whitelist와 함께 성장). 이 게이트가 #4021 잠복 `}`-누락(byteeq-neutral 파일이라 다른 게이트 미파싱)을 첫 run서 캐치. **measured-wall enumerate(추측 sweep 아님·codegen 인용)**: ⓐ **getenv** = extern C-data-symbol 접근 갭(`environ` char** 워크·hexa에 extern-data 선언 구문 0[`extern`은 `parse_extern_fn`만·parser.hexa:4609]·codegen `o.kind==global`은 internal `g<id>` 전용[x86_64_linux.hexa:1338]·crt0 데이터라 syscall 불가·inner-callee 우회=새 shim심볼) ⓑ **float족**(sin/cos/exp/log/fmod/atof)=XMM/SSE C-ABI·Route C 3경계 integer-reg 전용(`_x86_64_arg_reg_seq`)·XMM은 `__hx_payload_f*` 내부산술만(2092-2170)·경계 부재 ⓒ **setjmp/longjmp**=control-flow ABI(새 MIR kind) ⓓ **varargs** 자체. **syscall족 = codegen-driven MEASURED WIN at errno-free (2026-06-27)**: Route C(`_is_cabi` whitelist + `__hx_syscall0` source body)가 **syscall까지 삼킴** — errno-free 0-arg 6심볼 `getpid`(#4037)+`getuid`/`getgid`/`getppid`/`geteuid`/`getegid`(#4038) 전부 codegen-driven C-ABI leaf(per-target nr=`target_is_x86_64()?<x86>:<arm64>` compile-time const→DCE·default-OFF research-proof·routec-smoke **value-exact**(`==libc get<X>()`)+byteeq 3타깃 GREEN·손-assemble 0). 프론티어 research 질문(\"syscall codegen-driveable?\")=**YES(errno-free subset)**. **errno-bearing measured-boundary**(close/read/lseek/stat/dup2/mkdir/waitpid): errno SET 모델 census(reference-match) = (a) extern C-data WRITE(musl `__syscall_ret` `errno=-r` TLS·glibc) 또는 (b) neg-return-caller(zig `E.errno`·Go `Errno` — errno global 안 씀)인데 — hexa는 (a) extern-data WRITE 구문 부재(GOTPCREL=자기 `g<id>` 모듈전용·x86_64_linux.hexa:1360·임의 extern C심볼 store 불가)→새 heavy intrinsic 필요=**② substrate go-gated**(getenv 단독 정당·errno-bearing은 over-engineering) · (b) neg-return은 97 generated-C 호출자(self/native/*_emit.hexa)+~25 EINTR-retry C-semantics 재작성 위험. **③ SELFEMIT hand-assemble은 governance-forbidden**(CLAUDE.md:186 — Route C가 승계한 retired 경로). ⟹ errno-bearing canonical = ② heavy substrate only(go-gated)·SELFEMIT-graduation은 zero-c #29 m8-wiring 트랙 소관(codegen-driven 프론티어 아님). float/setjmp=TERMINAL. **measurement mechanics**: 패치 컴파일러=darwin-arm64-only → leaf별 증거=default-OFF byteeq-neutral(CI)+routec-smoke 직접 ON-path run(darwin). SSOT: 메모리 `project_hexa_rfc061_hxlcl_crosstarget_abi_wall` §SYSCALL TRACK."
+              ]
+            },
+            {
+              "type": "subsection",
+              "title": "Runtime C floor (reducible — zero-C campaign OPEN, not \"irreducible\")",
+              "blocks": [
+                {
+                  "type": "prose",
+                  "text": "`self/runtime*.c` (~23.6k LOC across `runtime.c` + `runtime_core.c` + `runtime_hi_gen.c`; the doc's older \"~5.5k tier-A\" figure undercounted) is generated from `*_emit.hexa` SSOTs, not authored by hand. **CORRECTION (2026-06-16):** the prior M3 verdict's claim that this floor is *irreducible* with *zero portable surface* was **FALSIFIED**. M3 reached \"irreducible\" by tallying M1 reason-columns on paper — it never tested whether a pure leaf actually ports, nor the `@asm`-svc syscall path the compiler's own `PLAN.md` flags as eliminable. Falsification (verdict `.verdicts/zeroc-breakthrough/F-ZEROC-M3-OVERCLAIM-FALSIFIED.txt`):"
+                },
+                {
+                  "type": "list",
+                  "items": [
+                    "**Proven port** — `hexa_fnv1a` (pure uint32 XOR/mul loop) reimplemented in pure `.hexa` is **byte-identical** to the C function over 6 cases (incl. the string \"no .c 완전돌파\"). So \"zero portable hexa leaves\" is false.",
+                    "**Portable surface is large** — a per-function body audit of `runtime_core.c` finds **155 of 308 top-level fns (50%) call no libc/libm/syscall** → portable to `.hexa` today, zero toolchain change. (`libc-dep:140` is mostly `malloc`/`memcpy` convenience that itself ports once a `.hexa` arena + `memcpy`-loop exist; `syscall-dep:3`; `libm/FFI-dep:10`.)",
+                    "**Roadmap agrees** — `PLAN.md` L7589/L8183/L8341 mark kernel syscalls as eliminable; the compiler already emits byte-correct `svc #0x80` / x86 `syscall` (as the program's exit), and a `__fd_write_bytes` builtin exists. ⚠️ *Honest caveat:* the existing `@asm` block (`stdlib/firmware/asm.hexa`) emits a GCC `__asm__` **C** fragment for **cortex-M only** — it is a C-transpile firmware feature, NOT a native-emit syscall surface. Native zero-C therefore needs a **new** general syscall intrinsic (`@syscall(num, args…)` → `svc`/`syscall` with register marshalling); that's buildable codegen work, not a wall (Z2 in the campaign)."
+                  ]
+                },
+                {
+                  "type": "prose",
+                  "text": "The **honest** floor is therefore NOT \"all ~5.5k LOC\". It reduces to (a) **libm transcendentals** (~10 fns — a policy choice for FP-codegen fragility, not a hard wall), (b) **raw syscall instruction emission** (proven; needs the `@asm`-svc general lowering wired for the runtime — designed, partial), and (c) **GPU/device FFI** (tier-C, outside the compiler's self-host scope). `ls self/*.c` empty is thus an **attackable codegen campaign**, not \"unreachable by porting\"."
+                },
+                {
+                  "type": "subsection",
+                  "title": "RT-NATIVE Z2a DONE (2026-06-16):",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " `runtime_hi_gen.c` is eliminated on the default arm64-darwin build (`ls self/*.c` 3→2) — `rt_str_*` come from a native-compiled object (the frozen `self/native/runtime_hi_native.s` seed), byte-identical + runtime-verified, self-host fixpoint preserved. x86_64-linux keeps the C path pending its codegen value-model rework. Full zero-`.c` remains multi-step (port batches + `@asm`-syscall wiring + a libm decision), much of it pod-gated — but the wall (\"can't be done\") is broken. Tracked: "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "RT-NATIVE domain",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (`RT-NATIVE.md`, 8 milestones Z0–Z5; supersedes the HEXA-BUILDFLOOR zero-C tracking). "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "awk-synth regen (2026-06-17, #3455/#3457):",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " the linux gen.c path's flaky hexat-regen is replaced by a deterministic awk un-escape of the `*_emit.hexa` SSOT (casefold/trim + trim-ends groups, CI faithful 3-job green) — a BUILD-STABILITY fix, not an `ls` reduction (gen.c stays a C build-artifact on linux). "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "Honest leg-B accounting:",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " `self/*.c` are all gitignored build artifacts (clean checkout = `ls self/*.c == ∅`); the real ls-reduction lever for linux is a **native `.s` seed** (Darwin already has `runtime_hi_native.s`; x86_64/linux lacks one). With x86_64 codegen graduated (#3431/#3432), `aprime --emit=asm --target=x86_64-linux` can bake `self/runtime_hi.hexa` into an x86_64 `.s` seed, letting `stage_resolve_runtime_a`'s `HEXA_ZEROC_RT_HI` path drop the linux gen.c too — the next leg-B unit. "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "x86_64 native seed BLOCKED (2026-06-17, root cause confirmed on aiden):",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " the linux x86_64 `runtime_hi` native seed (PR #3460) fails at runtime — the x86_64 codegen's documented \"raw-int model\" (x86_64_linux.hexa:636-640) carries only the payload register and derives the HexaVal tag from the operand kind, so a string stored in a local is tagged TAG_INT(0); a tag-dispatching helper (hexa_len `if HX_IS_STR`) then sees tag=0 and returns 0, and every native function taking a HexaVal string argument returns empty/null (C-harness: 9/9). arm64 carries the full {tag,payload} 16-byte pair via stp/ldp, preserving the tag — which is why the arm64 darwin seed works and x86_64 does not. self-emit byte-eq (#3432) and int-only RUNG tests pass because they are tag-independent, so they never caught the runtime-ABI defect. The x86_64 native seed is therefore blocked until the x86_64 backend value-model is reworked to carry full HexaVal pairs (verdict F-LEGB-X86-SEED-TAGLOSS-ROOTCAUSE). "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "FIXED + LANDED (2026-06-17, #3462):",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " the x86_64 backend value-model was reworked to carry the full HexaVal {tag,payload} pair like arm64 (x86_64_linux.hexa +499L: pair ingress, per-value tag-slot, call box/unbox, rax:rdx pair return; plus two regalloc bugs the pair model exposed — rax removed from the caller-saved alloc pool, and loop-back-edge liveness extended to [0,pos]). Verified by full CI (12/12 green, not self-report): C-differential harness 9/9 (was 9/9 null), faithful-nobaseline linux-x86_64 (the previously-RED job) PASS, linux-arm64 + darwin-arm64 PASS (untouched), and selfhost-byteeq-real (whole-compiler gen3≡gen4) PASS at a new SHA. The new x86_64 ELF seed self/native/runtime_hi_x86_64.s ships with HEXA_ZEROC_RT_HI=1 default, so runtime_hi_gen.c is now eliminated on x86_64-linux too (parity with darwin). "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "rt_str hexa-source-complete (2026-06-17, F-LEGB-RTSTR-HEXASOURCE-COMPLETE):",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " a grep audit falsified the \"next rt_str group\" premise — every rt_str function (index_of/substr/slice/parse_int/parse_float/…) already has a hexa-source definition in self/rt/string.hexa · stdlib/runtime/ctype.hexa · self/runtime_pure.hexa (the runtime_core.c `extern`s just reference them), so genuine C-only rt_str = 0. The real remaining ls-reduction is NOT porting more rt_str groups but **standalone #else removal**: the runtime.c/runtime_core.c `#else` (standalone) C-body fallbacks duplicate the now-native hexa-source and hold the file; making the standalone build always link the hexa-source rt_*.o lets those #else blocks be deleted (a build redesign, not a research wall). "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "Standalone-#else liveness — LIVE, honest NO-GO (2026-06-17, verdict `F-LEGB-STANDALONE-ELSE-NOGO`):",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " a captured-output liveness probe (c2) settled whether the standalone (non-`HEXA_HAS_HEXA_RT_STDLIB`) `#else` C-bodies are dead code. "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "They are LIVE and PRIMARY",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " — `tool/release_build` → `tool/stage_resolve_runtime_a:271` compiles `self/runtime.c` with `CFLAGS=-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs` (NO `-DHEXA_HAS_HEXA_RT_STDLIB`) into `build/runtime.a`, which every CI gate funneling through `release_build` consumes (selfhost-byteeq-gate, release.yml, miscompile-zero-gate, determinism-gate). aiden measurement: the actual CI builder `CC=gcc bash tool/stage_resolve_runtime_a` produces a 551566B `runtime.a` with **33 `rt_*` DEFINED (T)** = the `#else` C-bodies (vs gate-ON: 21 DEFINED, 155 UNDEFINED/delegated). So the `#else` bodies are NOT removable dead code — deleting them would leave `build/runtime.a` with undefined `rt_*` and break the live `./hexa` link. This "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "corrects the earlier `F-LEG-B-DEADCODE-PATH` claim",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (\"standalone = dead code, 0 real builds use it\"), which surveyed only the `build_aprime`/`build_native_*` (HEXA_HAS=1) family and missed `stage_resolve_runtime_a`. Two build families coexist: aprime (HEXA_HAS=1, hexa-source delegation) and release/standalone (#else C-body, PRIMARY shipping). The `#else` is a Go/Rust-equivalent freestanding substrate (honest-keep, c9). leg-B `ls self/*.c == ∅` therefore needs ①porting the ~1190 common core fns to hexa-native (multi-session) + ②a standalone-build ABI redesign so it links hexa-source rt_*.o (HexaVal↔float wrappers per `F-LEG-B-STANDALONE-SCOPE`) — NOT a simple `#else` deletion. "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "x86_64 generic index + arithmetic-binop tag-dispatch FIXED (2026-06-17, fn-param numeric-array indexing tag-corruption, c1):",
+                  "blocks": [
+                    {
+                      "type": "list",
+                      "items": [
+                        " the #3462 pair-model reworked the runtime-SEED value model, but the x86_64 backend (`compiler/codegen/x86_64_linux.hexa`) was still missing two GENERIC source-level lowerings that arm64_darwin.hexa already had. (1) The `_STMT_ASSIGN` dispatch had NO `op=\"index\"`/`op=\"index_set\"` branch, so `a[i]` fell through to the default-assign that copies the BASE container payload (carrying TAG_ARRAY) — the index was silently dropped, so a numeric fn-param array element came back as the array pointer tagged 24/garbage (`tag 24` corruption, segfault on int-add of two pointers)",
+                        "added handlers routing through `hexa_index_get`/`hexa_index_set` (landed #3481 f25be1e0a). (2) The `_STMT_BINOP` arithmetic path emitted a raw integer `add`/`sub`/`imul` and hardcoded the result tag to TAG_INT, so float arithmetic returned IEEE-754 BITS tagged INT (`1.0-0.0` printed as `4607182418800017408`)",
+                        "fixed by `_x86_hv_arith_sym` routing `+ - * / %` through the tag-dispatching runtime helpers (`hexa_add_slow`/`hexa_sub`/`hexa_mul`/`hexa_div`/`hexa_mod`, arm64 `_hv_binop_sym` parity",
+                        "bitwise/comparison/concat keep their fast paths). Verified on real x86_64 (aiden, emit→as→link→RUN): the 3 captured repros pass (l2 param-float-array=1.0, f param-int-array=7, let-float-array=5.0) + int/float arithmetic + param-array distance + loop array-index regression corpus all correct + M1 x86 leaf gate PASS. x86_64-ONLY change → the arm64 byte-eq fixpoint (all CI gates run on arm64-apple-darwin) is structurally unaffected."
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "leg A byte-eq fixpoint re-established BOTH targets (2026-06-16):",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " arm64 native obj `gen3 ≡ gen4` (#3412) + x86_64-linux `gen3 ≡ gen4` asm byte-identical (261,888L sha 94df25cb) + as-clean (#3431/#3432). The memory's \"x86_64 RUNG2/codegen immature\" claim was FALSIFIED and 7 codegen bugs were fixed (global operand · idiv · wide-imm · test · push · negative-const). verdict `F-X86-GEN3-GEN4-BYTEEQ`."
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "leg B boundary-sized + mechanism PROVEN (2026-06-16, verdict `F-LEGB-FLOOR-SIZED-MECHANISM-CONFIRMED`):",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " `ls self/*.c == ∅` is not a research wall but the VOLUME of a verified mechanism. (a) irreducible floor is **small** — syscall/asm 8 (→ `__hx_syscall0/6` intrinsic built) · libm extern 10 (CLAUDE.md \"trig=libm\" FFI allowed) · HexaVal struct def 15 (`self/runtime.h` git-tracked, expressible). (b) remaining ~580 fns = dispatch/value-op volume. (c) the C→native-obj swap mechanism is PROVEN — `stage_resolve_runtime_a`'s `HEXA_ZEROC_RT_HI=1` path already `ar`s `build/rt_hi_native.o` into runtime.a and removes the C `#include` (Z2a-done). Core native accumulation 18/591 via leaf intrinsics this session."
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "UNLOCK-2 nanbox-constructor intrinsic — GO, already executed; no circularity (2026-06-17, verdict `F-LEGB-UNLOCK2-NANBOX-FEASIBILITY`):",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " the census category-(1) functions (`hexa_int/float/bool/void`, `hexa_bits_to_float`) are 16-byte tagged-union constructors (`{.tag=TAG_*, .payload}`). A bounded feasibility probe asked whether expressing them in `.hexa` via an `@tag`-style intrinsic creates a bootstrap circularity (the intrinsic needing the constructor it defines). "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "Answer: NO",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " — the landed `__hx_tag`/`__hx_payload_*` intrinsics (CHANGELOG \"UNLOCK-2 DONE\") lower **directly to register `movz`/`mov`/`ldp` writes with zero `bl` (no runtime call)**; `arm64_darwin.hexa::_hv_load` (1090) already inlines every constructor (`const_int → movz lo,#0(TAG_INT)+hi`, `const_bool → movz #2`, `const_void → #4`, `const_float → #1`). The intrinsic IS the constructor body inlined; it bottoms out in the register file + immediate-move opcode, not a HexaVal call — so the recursion never closes. Verified by 3/3 aprime byte-identical fixpoint preservation. This is GO-class (the nanbox constructor is NOT part of the irreducible floor), and unblocks the Z2c dispatch core (`hexa_type_of` = `switch on __hx_tag`). Scope: 6 runtime_core.c fns + ~6 STMT_CALL codegen cases, all arm64-DONE; the only parity gap is the x86_64 backend, which carries the full {tag,payload} pair model (#3462) but has **zero `__hx_*` leaf intrinsics** (measured `grep -c __hx_ x86_64_linux.hexa` = 0) — a bounded single-file mirror. Honest caveat (c9): porting these constructors does NOT reduce `ls self/*.c`; the file count is held by the standalone `#else` blocks (a build redesign, ING #14–16), orthogonal to this intrinsic."
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "RT-NATIVE-ZEROC M1 — x86_64 `__hx_*` leaf-intrinsic parity DONE (2026-06-17, verdict `F-M1-X86-LEAF-PARITY`):",
+                  "blocks": [
+                    {
+                      "type": "list",
+                      "items": [
+                        " the x86_64-linux backend was brought to leaf-intrinsic parity with arm64_darwin.hexa. Gap inventory (c2): `grep __hx_ x86_64_linux.hexa` returned ZERO — all 25 whitelisted `__hx_*` leaves (the arm64 UNLOCK-2..11 STMT_CALL special-cases) were missing. All 25 ported ADD-ONLY (+~330 lines",
+                        "runtime.c/#else untouched, zero bootstrap risk): tag-read, int compares (cmp+setcc+movzx), int arith (add/sub/imul), FP arith (movq GPR↔xmm + addsd/subsd/mulsd/divsd), FP compares (comisd + seta/setae, **NaN-correct** per the GCC -O1 ordered idiom — `<`→comisd b,a;seta, `<=`→comisd b,a;setae, false-on-unordered, mirroring arm64 MI/LS), to_double (cvtsi2sd + cmove branchless tag-select), str_byte (movzx byte ptr), arr_len (mov r10d, dword ptr [r10+8]), syscall0/6 (Linux ABI rdi/rsi/rdx/r10/r8/r9, num→rax), and ptr_store/load 64/32. **Enabling root-fix (c1, not a shim):** the x86_64 backend had NO const_float payload path at all (the #3462 pair model carried int/str/bool only), so a float literal resolved to the `imm 0` fallback and every float leaf computed against 0.0",
+                        "`_x86_op_resolve` + `_x86_64_op_for_operand_st` now materialize a const_float payload as `mov reg, float_to_bits(v)` (the compile-time runtime builtin, GNU as encodes the imm64 mov as `movabs`), matching arm64's `.LCfltN: .double` pool value without a float-pool subsystem. Two scratch-discipline bugs were caught by RUNNING (not self-judged) and fixed: `__hx_to_double` used a hardcoded `r12` tag-scratch (an allocatable-pool reg → clobbered a live value, corrupting chained float compares) → moved to `rax`",
+                        "`__hx_syscall6` staged args into pool regs r12-r15/rbx → loads directly into the caller-saved syscall ABI regs. Verified two ways: encoding ground-truth (GNU `as` ↔ objdump byte-match, `scripts/scratch/rt_native/x86_leaf_gate.sh §A`, 31/31) and semantic ground-truth (emit→as→link-C-runtime→RUN on real x86_64: core=16, str=3, arena=5 — mmap(9)/munmap(11) + ptr round-trip). Self-host fixpoint (x86_64 gen3≡gen4) preserved by construction (ADD-ONLY cases). Honest residuals (c9, PRE-EXISTING x86 gaps orthogonal to the leaves, out of M1 scope): const_str→local-assign still materializes a bare-label absolute address (the leaf itself is correct on a direct literal via lea[rip]), and the x86_64 backend has no `unop`/`!` (logical-not) lowering (emits `nop`) — both are M2 follow-ups. This is the M4 (native runtime-core port) foundation on x86_64."
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "RT-NATIVE-ZEROC M4 B1 (nanbox-ctor) — mechanism DONE, file-drop BLOCKED-on-M5, `stdlib/runtime/nanbox.hexa` NOT viable (2026-06-17, verdict `F-M4-B1-NANBOX`):",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " M4 batch B1 set out to port the census category-(1) constructors (`hexa_int/float/bool/void/bits_to_float/enum_str/enum_str_v`) to a new aprime-compiled `stdlib/runtime/nanbox.hexa`; the premise was corrected by verification. The constructors are already native **three ways**: (a) codegen `_hv_load` (arm64_darwin.hexa:1090) inlines every int/float/bool/void literal to `movz tag` + payload register writes with zero runtime call; (b) a `HEXA_RT_SELFEMIT` byte-emitter (`self/codegen/runtime_arm64.hexa` `rt_hexa_*`, six 12-byte = 3-aarch64-instruction sequences bundled by `test/native_build/emit_hexa_val_ctors_o.hexa`, byte-confirmed vs `as -arch arm64` + JIT-exec-correct); (c) the `__hx_*` read-side intrinsics. A fresh C-differential gate (`scripts/scratch/rt_native/b1_nanbox_gate.c`) links the STANDALONE `runtime.c` (the PRIMARY CI config) and asserts the 16-byte {tag,payload} image of every constructor over negatives, INT64_MIN/MAX, NaN/±inf/±0/DBL_MAX/MIN, true/false, void, and enum pointers, plus decodes the arm64 `rt_hexa_*` byte sequences to their exact encodings + TAG_* immediates — "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "GATE PASS 35/35, 0 fails on real x86_64 (aiden)",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": ", not self-judged. "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "`stdlib/runtime/nanbox.hexa` is NOT viable (c9, empirical):",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " transpiling `fn f(n:int)->HexaVal { HexaVal{tag:0,payload:n} }` via `./build/hexat` emits `HexaVal(hexa_int(0), n)` — a HexaVal struct-literal in hexa source CALLS `hexa_int`, the very constructor (self-recursive). As `numeric.hexa` notes, \"hexa typing doesn't model the HexaVal union directly\"; the constructors live below the type system (raw register pair), so only a byte-emitter or codegen intrinsic can express them (the twin of the `F-LEGB-RTSTR` already-native finding). No redundant/circular file was authored (c10). "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "`#else` drop-verdict = NO, keep until M5 (c9):",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " the authoritative byteeq/release path (`release_build` → `stage_resolve_runtime_a:271`) links the standalone `runtime.c`, whose `nm` shows `hexa_int/float/bool/void/bits_to_float/enum_str` all DEFINED (strong T); deleting the `#else` bodies leaves them undefined and breaks the live `./hexa` link. They stay until M5 (`build_runtime_a_from_source` links native `rt_*.o` into the standalone `runtime.a` + excises the `#else` + a frozen-seed bump). Runtime/emitter unchanged (ADD-only gate + verdict), so the self-host fixpoint is structurally preserved on both targets."
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "RT-NATIVE-ZEROC M4 B4 (array-core) — mechanism-BLOCKED (construct WALL-1 + alloc WALL-2), file-drop BLOCKED-on-M5, `stdlib/runtime/array_core.hexa` NOT viable; unblocking lever NAMED = `__hx_make_val` (2026-06-17, verdict `F-M4-B4-ARRAY`):",
+                  "blocks": [
+                    {
+                      "type": "list",
+                      "items": [
+                        " M4 batch B4 set out to port the array-core family (`hexa_array_new/get/set/push/pop/reserve/snapshot_array`) to a new aprime-compiled `stdlib/runtime/array_core.hexa` using the M1 raw-mem intrinsics",
+                        "the premise was corrected by verification — B4 is the twin of B1 plus an additional allocation wall. The exact layout was measured (c2): `HexaArr{items@0, len@8, cap@16}` sizeof 24, `HexaVal{tag@0, payload@8}` sizeof 16, element stride 16, negative `cap` = arena sentinel, capacity-doubling ladder 8/16/32/64. **WALL-1 (CONSTRUCT, the B1 twin):** `hexa_array_get/pop/new` return a 16-byte HexaVal ELEMENT, but there is no `(tag,payload)→HexaVal` constructor intrinsic — every `__hx_*` leaf BOXES its result as TAG_INT/BOOL/FLOAT (grep-confirmed in both backends + `self/codegen.hexa`), so a raw payload-word load returns `hexa_int(word)` and the element's real tag is lost and cannot be re-stamped",
+                        "and `arr[idx]` in hexa source lowers to `hexa_index_get(arr,idx)` (RAN `build/hexat` probe) — a call back into the C runtime = self-recursive/circular. **WALL-2 (ALLOC):** `hexa_array_new` = `calloc`, `push`/`reserve` = `realloc` + the arena subsystem (`__hexa_val_mark_top`, `hexa_array_arena_alloc_items`, negative-cap sentinel) + `hexa_val_heapify` (push-escape analysis) + `_hx_stats_*`, `snapshot_array` = arena→heap promote — none of malloc/calloc/realloc/arena/heapify is intrinsic-expressible (genuine substrate). A fresh C-differential gate (`scripts/scratch/rt_native/b4_array_gate.c`) links the STANDALONE `runtime.c` (the PRIMARY CI config) and drives the live array fns through empty/single/capacity-doubling (40 pushes → cap 64)/set+get/mixed-tag (str+float)/pop/reserve(128)/heap-backed snapshot-identity, asserting the struct layout and the raw 16-byte {tag,payload} image of every stored element — **GATE PASS 32/32, 0 fails on real x86_64 (summer)**, not self-judged",
+                        "this locks the byte-eq + layout oracle a native object must reproduce. **`stdlib/runtime/array_core.hexa` is NOT viable (c9):** authoring it would be circular/redundant, so none was written (c10). **`#else` drop-verdict = NO, keep until M5 (c9):** the gate LINKED that standalone `runtime.c` successfully, proving the C array bodies are LIVE — deleting them breaks the `release_build` `./hexa` link. **Unblocking lever (NAMED):** `__hx_make_val(tag,payload)→HexaVal` — the symmetric write-half of `__hx_tag`",
+                        "ADD-only on both backends + C-mirror + bind whitelist, fixpoint structurally preserved, and the single lever that turns the B4/B5 element returns AND the B1 `nanbox.hexa` file-reduction (`hexa_int = __hx_make_val(0,n)`) from blocked to viable (WALL-2 alloc remains separate — needs B2 arena + a malloc-floor decision). Runtime/emitter unchanged (ADD: gate.c + verdict), self-host fixpoint structurally preserved on both targets. **NEXT (array lane r2)** = the `__hx_make_val` constructor-intrinsic micro-PR."
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "RT-NATIVE-ZEROC M4 ARRAY-R3 — array-core READ-half (get/set/len/pop) PORTED to native raw-mem hexa-source; PROVEN-correct in isolation; ship-integration = native `.s` seed (r4); zero regression (2026-06-17, verdict `F-M4-B4-ARRAY-R3-READHALF`):",
+                  "blocks": [
+                    {
+                      "type": "list",
+                      "items": [
+                        " with `__hx_make_val` (r2) down, the four low-level array element primitives are now expressible as raw-mem bodies in `stdlib/runtime/array_core.hexa`: `rt_array_get_native` (`arr_ptr=__hx_payload_add(arr,0)`=HexaArr*",
+                        "`items=__hx_ptr_load64(arr_ptr,0)`",
+                        "element tag/payload at `items+idx*16+{0,8}`",
+                        "`__hx_make_val(tag,pay)` re-stamps the REAL element tag — WALL-1 down), `rt_array_set_native` (in-place `__hx_tag(v)`/`__hx_payload_add(v,0)` writes, alloc-free), `rt_array_len_native` (`__hx_ptr_load64(arr_ptr,8)`), `rt_array_pop_native` (get(len-1) + length decrement, no realloc). NO `arr[idx]` (r1 trap — circular). new/push/reserve stay C (WALL-2). **DECISIVE PROOF (c2, RAN on real x86_64 aiden, native compiler `build_aprime.sh`):** the native gen2 compiler emits `array_core.hexa` → `array_core.o` with `nm` = `rt_array_{get,set,len,pop}_native` **T** and **ZERO undefined `__hx_*`** (every leaf inlined to machine code — the frozen-`.s`-seed route is FEASIBLE",
+                        "cross-emit arm64-darwin + arm64-linux rc=0). A direct-call gate (linked native `array_core.o` + standard `runtime.a`) = **exit 12 PASS**: int get/set round-trip + len + **MIXED-TAG** set `\"hi\"`(STR)+`true`(BOOL) read back EXACT (tag NOT flattened to INT = the `__hx_make_val` faithfulness) + int neighbour intact + pop last + len shrink + survivor intact. C oracle `b4_array_gate.c` (C `#else` path) = GATE PASS 32/32 (no-regression). **🧱 WALL-3 (bootstrap-transpile gap, c16 ≥2 lenses) — why it cannot ship-integrate this round:** the aprime/release build flattens `compiler/main.hexa` → **hexat** (C-transpile bootstrap) which does NOT lower the raw-mem intrinsics (only `self/codegen.hexa` gen2 does) — importing `array_core.hexa` into the compiler closure BROKE the build (`__hx_payload_add`/`__hx_ptr_load64`/`__hx_make_val` undeclared, RAN",
+                        "import REMOVED). The bodies enter the runtime ONLY via a native-emitted frozen `.s` seed (the `rt_hi` mechanism, `build_aprime.sh:241-263`), since `runtime_hi.hexa` (the rt_str seed SSOT) uses ZERO `__hx_` by design and the build scripts deliberately exclude the array stdlib from the compiler closure (C-link-fill `rt_array_pop/shift`). **Zero-regression gating:** `build_aprime`/release define `HEXA_HAS_HEXA_RT_STDLIB`",
+                        "gating under THAT macro broke the link (`undefined reference to rt_array_get_native`, RAN), so the `self/runtime_core_emit.hexa` `hexa_array_get/set` delegation is gated behind a dedicated **DEFAULT-OFF `HEXA_RT_ARRAY_NATIVE`** (28 emitted-C lines, all inside the inert `#ifdef` or comments) → the default-compiled `runtime_core.c` keeps the unchanged `HX_ARR_ITEMS(arr)[idx]` active arm",
+                        "`build_aprime.sh` smoke exit42 PASS, fixpoint structurally preserved. **Byte delta (honest):** `runtime_core.c` emitter +~1KB inert text (an INCREASE), compiled active bytes UNCHANGED — the genuine `ls`-reduction (drop the `#else`) is r4. **r4** = freeze `array_core_{x86_64,arm64}.s` seeds + `ar` into `runtime.a` + define `HEXA_RT_ARRAY_NATIVE` + DROP the get/set `#else` (the FIRST genuine non-string runtime-substrate `ls` byte-DECREASE) — the array twin of the alloc lane's M5 relink brick, to land together."
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "RT-NATIVE-ZEROC M4 PTR8 — `__hx_ptr_store8`/`__hx_ptr_load8` byte raw-mem leaves DONE (2026-06-17, verdict `F-M4-PTR8`):",
+                  "blocks": [
+                    {
+                      "type": "list",
+                      "items": [
+                        " M1 landed ptr_load/store 64/32 (#3478)",
+                        "the 8-bit byte pair was the one gap in M2's raw-mem set, needed for `hexa_strbuf_dup_n`'s byte-write (batch B3). `__hx_ptr_store8(addr,off,val)` writes the LOW BYTE of val to [addr+off] (returns addr, chainable)",
+                        "`__hx_ptr_load8(addr,off)` reads the byte ZERO-EXTENDED. Surgical (c10): bind whitelist +2",
+                        "arm64 codegen `strb w5,[x1]`/`ldrb w1,[x1]` (ldrb = the byte-load encoding proven by `__hx_str_byte`, W-write zero-extends)",
+                        "x86 codegen `mov byte ptr [r10], sil`/`movzx r10, byte ptr [r10]` (movzx byte = proven by str_byte)",
+                        "a new **STRB native object encoder in macho_arm64.hexa** (base `0x39000000 | imm<<10 | rn<<5 | rt`, mirroring the pre-existing LDRB `0x39400000`)",
+                        "self/codegen.hexa C-mirror (`*(uint8_t*)` store / `(int64_t)*(uint8_t*)` load — uint8 cast = no sign-ext). Verified two ways (c2): encoding ground-truth GNU `as`↔objdump — x86 store `41 88 32`, x86 load `4d 0f b6 12`, arm64 `strb=39000025`/`ldrb=39400021`, 4/4 byte-match",
+                        "semantic ground-truth emit→as→link→RUN on real x86_64 (summer) exit=7 — stores 0x00/0x7F/0xFF/0x80, reads back **0xFF→255 (NOT -1), 0x80→128 (NOT -128) = ZERO-EXTEND confirmed**, + low-byte-only write (511→255) + adjacent-byte isolation + chainable return. Self-host fixpoint (gen3≡gen4) preserved by construction (ADD-ONLY",
+                        "the compiler never calls `__hx_ptr_*`)",
+                        "CI selfhost-byteeq-real authoritative. Honest residual (c9, PRE-EXISTING M1-wide, not introduced by ptr8): the native x86_64 ELF object emitter does NOT parse the `byte`/`dword`/`qword ptr` size-prefix mem-operand, so `--emit=obj` of any raw-mem leaf (str_byte/ptr32/ptr64/ptr8) ENCODE-MISSes — M1 validated only via `--emit=asm`→GNU as",
+                        "the asm-text codegen, C-transpile, and fixpoint are unaffected, and arm64 (bracket-only operands) emits to native object fine. Extending the ELF size-prefix parser is a separate M1-wide unit. M2 raw-mem set now complete (64/32/8 store+load)."
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "RT-NATIVE-ZEROC M5 PILOT (rt_str) — drop-mechanism ALREADY PROVEN+SHIPPED, honest ALREADY-DONE (2026-06-17, verdict `F-M5-PILOT-RTSTR`):",
+                  "blocks": [
+                    {
+                      "type": "list",
+                      "items": [
+                        " the M5 pilot set out to prove the `.c`-content-drop end-to-end on one already-native family (`rt_str`): make the STANDALONE build link the native `rt_str_*.o` + excise the matching `#else` C bodies + keep byteeq-real green. **Measurement on aiden (real x86_64, the EXACT CI/release builder `CC=gcc bash tool/stage_resolve_runtime_a`) falsifies the task premise that the rt_str `#else` bodies are still LIVE.** The cumulative Z2a campaign (#3455 casefold/trim",
+                        "#3457 trim-ends",
+                        "#3465 search-predicates `_b`) ALREADY did exactly this: (1) `resolve_native_rt_hi_seed` runs UNCONDITIONALLY and auto-enables `HEXA_ZEROC_RT_HI=1` whenever a target native `.s` seed exists (it does for darwin-arm64 + linux-x86_64), so the native path is the live default in the STANDALONE config (not an opt-in); (2) the emitter (`self/runtime_core_emit.hexa`) has the rt_str casefold/trim/contains/search-predicate `#else` C bodies RETIRED — the body count for the 8 named fns is **0** on main vs **3** at `d99ecc321^` (pre-#3455); (3) `build_runtime_a_from_source` sed-removes the `runtime_hi_gen.c` `#include` and `ar`s the native `build/rt_hi_native.o` (14 `rt_str_*` syms) into `runtime.a`. Captured (c2): `nm build/runtime.o` shows only the 2 int-return BRIDGE wrappers (`rt_str_starts_with`/`rt_str_ends_with`) as `T`; the 8 task-named fns (to_upper/to_lower/trim/trim_start/trim_end/starts_with_b/ends_with_b/contains_b + casefold) are EXTERN-only (bodies in the `.o`); `runtime_core.c`=411120B; the standalone link resolves all `rt_str_*` with NO undefined symbol; "
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "byteeq-real CI is GREEN on current main",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (selfhost-byteeq-gate.yml = the STANDALONE config). So M5-for-rt_str is DONE and the drop-mechanism the pilot was meant to demonstrate is the live default — it is NOT a fake or blocked milestone for this family. "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "Lone residual (c16, deferred not faked):",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " the 2 int-return bridges' standalone `#ifndef` branch is genuine self-contained C (`hxlcl_strncmp`/`strcmp`) that the codegen emits (`self/codegen.hexa:442/445`, `arm64_darwin.hexa:1456/1457` \"→ int (box bool)\"); the native seed exports only the HexaVal-return `_b` form, so the bridge has NO native body to migrate — it is an ABI adapter below the type system (twin of the F-M4-B1 nanbox-ctor finding). Dropping it needs either 2 new hand-assembled int-return seed functions across BOTH ABIs (ELF `runtime_hi_x86_64.s` + Mach-O `runtime_hi_native.s`) OR a codegen call-site change to emit `rt_str_*_b` + inline bool-box — both leave the proven \"excise `#else` + `ar` native `.o`\" template and risk byteeq divergence, so per c10/c9 they are a separate codegen/seed micro-unit, not this pilot (no fake drop authored). This RE-CONFIRMS `F-LEGB-RTSTR-HEXASOURCE-COMPLETE` + `F-LEGB-RTCORE-PURE-CANDIDATES-ZERO` (#3468, \"Z2a 누적 EXHAUSTED\"). No emitter/build-script/seed change → the self-host fixpoint is structurally untouched. The genuine `ls self/*.c == ∅` lever stays M4 (the ~1190 common-core port, on families that HAVE a migratable native body) + a `runtime.c`/`runtime_core.c` substrate redesign — not a per-family pilot; rt_str's drop reduced those two amalgam files' rt_str CONTENT (8 bodies → 0) without removing the container files."
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "RT-NATIVE-ZEROC m5 r2 — runtime_core.c standalone-`#else` census 🧱 TERMINAL (per-family-drop lane EXHAUSTED, 2026-06-17, verdict `F-M5-R2-RTCORE-CENSUS`):",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " the m5 lane asked whether any `runtime_core.c` family still carries a LIVE standalone `#else` C body that is PURE-PORTABLE (migratable native body, no `{tag,payload}` construct wall, no malloc/arena wall) — the would-be first non-string `ls`-reduction via the proven Z2a native-seed drop template. A full static census (c2, RAN parser over the freshly-built generated `self/runtime_core.c`, 8734 L) re-ran r1's marker-filter census (`F-LEGB-RTCORE-PURE-CANDIDATES-ZERO`) under the precise standalone-`#else` framing and **converged**: 37 `#ifdef HEXA_HAS_HEXA_RT_STDLIB` guarded blocks (35 with an `#else` arm, 2 native-only), 43 delegate-externs, ~40 guarded fns. "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "Decisive verification:",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " all 43 native-arm `rt_*` externs (`rt_null_coal`/`rt_len`/`rt_map_*`/`rt_print*`/`rt_cmp_*`/`rt_eq_*`/`rt_add_slow`/`rt_sub`/`rt_mul`/`rt_div`/`rt_mod`/…) already have a hexa-source body (`self/rt/core.hexa` · `stdlib/runtime/numeric.hexa`) = ALREADY-NATIVE. The auto-classifier flagged 6 `PURE?` candidates; reading each body settled them — `hexa_map_set`/`hexa_map_remove`→`_impl` raw-hashtable (ALLOC-WALLED), `hexa_println`→`printf`/`fflush`/`getenv` (stdio substrate), `hexa_to_string`→recursive buffer (ALLOC-WALLED), and the only two genuinely-pure ones (`hexa_null_coal`, `hexa_len`) delegate to `rt_null_coal`/`rt_len` which are ALREADY hexa-source (`self/rt/core.hexa:32,45`), so porting them = re-porting already-native work (the `index_of` trap r1 warned of). "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "PURE-PORTABLE (needs-a-port) bucket = 0.",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " The `#else` bodies (reached only when `HEXA_HAS_HEXA_RT_STDLIB` is undefined — the standalone smoke/release link, `runtime_core.c:3173`) are thus standalone-link duplicates of already-native code, not unportable bodies. "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "Conclusion:",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " the per-family native-seed-drop lever is EXHAUSTED (c16 TRUE-CEILING — no migratable body remains; what's left is already-native duplication or substrate). The only two remaining `ls`-reduction levers are both outside the per-family-drop scope: (i) `__hx_make_val` construct-unlock (array-r2 lane — releases the CONSTRUCT-WALLED arith/cmp/eq/to_string ~13 families) and (ii) standalone-`#else` dedup / `runtime.c` substrate redesign (the M5 standalone-redesign lane — a build redesign, not a port). No port was forced (c9); `runtime_core.c` byte delta = 0. m5 per-family-drop lane DEPLETED."
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "RT-NATIVE-ZEROC alloc r2 (x86 arena) — briefed `#else`-excise byte-reduction = 🧱 NO-GO, DUPLICATE of the standing `F-LEGB-STANDALONE-ELSE-NOGO` (2026-06-17, verdict `F-ALLOC-R2-X86-ARENA`):",
+                  "blocks": [
+                    {
+                      "type": "list",
+                      "items": [
+                        " the alloc r2 brief asked to mirror the arm64 hexa-source `rt_arena_*` bump arena into the x86_64 native runtime + standalone path, EXCISE the C `#else` arena body, and DECREASE `runtime_core.c` byte-count. Reading the real sources falsifies the premise on three counts. **(1)** the arm64 `rt_arena_*` (`self/codegen/runtime_arm64.hexa:2237-2543`) is a hexa-source fn that returns a `[int]` of RAW ARM64 MACHINE-CODE BYTES (`svc #0x80` mmap=197/munmap=73, `_arena_state` via ADRP+ADD PAGE21/PAGEOFF12) — darwin-arm64-SPECIFIC, NOT portable hexa logic",
+                        "the `#else` arena (`self/runtime_core_emit.hexa:3882-4049` `hexa_arena_alloc/mark/rewind/reset`) is a SEPARATE portable-C linked-block bump allocator. \"Mirroring\" means WRITING an x86_64 machine-code emitter, not translating a portable body — there is none",
+                        "no x86_64 analog exists (`grep '^fn rt_arena' self/codegen/*.hexa` = ARM64 only). **(2) DECISIVE:** the arm64 `rt_arena_*` machine-code emitter is PROVEN-BUT-DORMANT — consumed ONLY by PoC/test `.o` emitters (`test/native_build/poc_arena_bundle_emit.hexa`, `tool/emit_runtime_obj.hexa`), NEVER by `tool/release_build`/`stage_resolve_runtime_a`. The runtime that BOTH arm64-darwin AND x86_64-linux actually link in CI/release is the C standalone path (`stage_resolve_runtime_a:271` `$CC … -c self/runtime.c`, no `-DHEXA_HAS_HEXA_RT_STDLIB`, `#includes` `runtime_core.c` = the `#else` arena). So x86_64's shipped arena is C for the SAME reason arm64's is — both ship C, the native arena emitter is dormant on its own target too — there is NO arm64-vs-x86_64 parity gap to close by mirroring, correcting r1's \"x86_64 = bounded mirror\" framing. **(3) c16:** the briefed bar (\"excise `#else`, bytes DECREASE\") IS the `F-LEGB-STANDALONE-ELSE-NOGO` pattern the brief itself warned against — that verdict (same day) already RAN the proof that deleting a live `#else` body breaks `tool/release_build` (the authoritative CI judge), and `F-M5-R2-RTCORE-CENSUS` (#3487, same day) already classified the per-family `#else`-drop lane TERMINAL. The briefed reduction is reachable ONLY via the forbidden delete = NO-GO",
+                        "no aiden build was burned to \"achieve\" a reduction twice-proven impossible (no source change ⇒ no CI run",
+                        "byteeq-real on main stays GREEN, untouched). **Real GO sub-unit (deferred, NOT this round's reduction):** an x86_64 `rt_arena_*` ELF machine-code emitter twin IS buildable — `compiler/emit/elf_x86_64.hexa` (1693 L) has `.data`/`.bss`, `R_X86_64_64`/`PC32` relocs + resolution (S+A−P), and a multi-symbol object wrap = the ELF analog of macho's v3 + PAGE21/PAGEOFF12 — but it would be DORMANT-parity (links into nothing the shipped C runtime uses), yielding ZERO `runtime_core.c` byte-delta",
+                        "it is a prerequisite brick for the M5 standalone-redesign (relink native `rt_*.o`), to be picked up WITH that relink so it lands non-dormant, not as a fake reduction now. No emitter/runtime/build-script edit (ADD: verdict + docs only) → self-host fixpoint structurally untouched. The two live `ls`-reduction levers remain (per `F-M5-R2-RTCORE-CENSUS`): `__hx_make_val` construct-unlock (now landed #3488) feeding the map/array element ports, and the M5 standalone-redesign. NEXT (alloc r3) = `map_*` allocator (arena over `__hx_syscall6` mmap + `__hx_ptr_*`) + construct (`__hx_make_val`) half, with a `map_core_gate.c` C-differential depletion test",
+                        "coordinates with the array lane (array owns `array_core.hexa`, alloc takes `map_*`)."
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "RT-NATIVE-ZEROC ALLOC-floor FEASIBILITY (alloc r1) — REDUCIBLE: hexa-source bump arena over raw mmap is FEASIBLE + NON-CIRCULAR (2026-06-17, verdict `F-ALLOC-R1-FEASIBILITY`); the r1 \"x86_64 = bounded codegen mirror\" framing was subsequently CORRECTED by `F-ALLOC-R2-X86-ARENA` above (the arm64 `rt_arena_*` is a dormant machine-code emitter, not portable hexa logic; no shipped-runtime parity gap to mirror):",
+                  "blocks": [
+                    {
+                      "type": "list",
+                      "items": [
+                        [
+                          " the m5 census left the ALLOC-WALLED bucket (the `map_*` `_impl` hashtable, `to_string_*`, the array `push/reserve/snapshot` alloc-half, and the bump-arena substrate `arena_alloc_items`/`__hexa_val_mark_top`/`hexa_val_heapify`) as a named `ls`-reduction lever. This round establishes — with RAN evidence, not a forced port — that the allocation substrate can be expressed in `.hexa` over the EXISTING raw-mem + syscall intrinsics, the Go/Rust precedent (allocator written in the language itself over an `mmap` syscall; the genuine irreducible floor is the syscall instruction + libm, NOT the allocator logic above it). **(1) Intrinsic coverage = 100%, MISSING = 0:** `mmap`/`munmap` = `__hx_syscall6` (9/197",
+                          "11/73 — the 6-arg mmap ABI fits, x86_64 stages `rdi,rsi,rdx,r10,r8,r9`+`rax`, arm64 `x0..x5`+`x16`/`svc #0x80`); raw 64/32/8 load+store = `__hx_ptr_load/store{64,32,8}`; bump arithmetic = int payload add/mul/shift; bound check = `__hx_payload_lt/ge`; HexaVal construct = `__hx_make_val` (array-r2 #3488). **(2) Circularity = NON-CIRCULAR** (decisive, the B1-nanbox-class result): a bump arena over a pre-`mmap`'d region keeps its entire state (base ptr, cursor, raw addresses) in int64/pointer space — the arena BODY creates NO HexaVal box, string literal, or array temp ⇒ no recursion into `hexa_array`/`hexa_map`. **(3) PoC RAN** (aiden real x86_64, `build/aprime_m4`): `scripts/scratch/rt_native/bump_arena_linux_poc.hexa` — `arena_new`=`__hx_syscall6(9,0,8192,3,34,-1,0)` raw `mmap` slab → bump 200 cells, store `cell[i]=i²` via `__hx_ptr_store64`, read back+sum via `__hx_ptr_load64`, `arena_free`=`__hx_syscall6(11,…)` `munmap` → `exit(sum==2646700?0:1)`. emit rc=0 (404 L asm)",
+                          "`as --64` rc=0",
+                          "`gcc -no-pie`+`runtime.o` link rc=0"
+                        ],
+                        [
+                          "**RUN exit=0** (arena fidelity EXACT). Non-circularity witness (`nm`/`objdump` on `poc.o`): `arena_*`=`T` (in-object) symbols",
+                          "ZERO `malloc`/`calloc`/`realloc`/`free`/`mmap` symbol references",
+                          "exactly **2** `syscall` instructions (mmap+munmap = the floor)",
+                          "only undefined symbols = `hexa_add_slow`/`hexa_mul`/`hexa_exit` (int bodies return `hexa_int(..)` = stack value, no alloc). **Classification (c16):** the ARENA floor (bump alloc/reset/release over mmap) = **GO**, intrinsics 100% covered, non-circular — arm64 ALREADY emits `rt_arena_*` in hexa-source (`self/codegen/runtime_arm64.hexa:2221+`, raw `svc #0x80` mmap into a shared `_arena_state`), so the x86_64 equivalent is a bounded codegen mirror, NOT a missing intrinsic",
+                          "`calloc` = fresh-anon-page bump (the kernel zero-fills fresh anon `mmap` pages), `realloc` of an order array = alloc-new + ptr-copy = GO",
+                          "the HexaVal-RETURNING families (`map_*`, array `push`) = **GATED-on-`__hx_make_val`** (their alloc-half is feasible over the arena but they construct a HexaVal result — sequence after array-lane #3488 lands on main). **Honest residual (c9):** arbitrary-block `free` + the general `hxlcl_malloc` are NOT claimed reducible (bump arenas do bulk reset, not per-object free — the same trade-off Go/Rust make above the syscall) = an accounting floor, re-assessable, not a hard ceiling. r1 = GO + non-circular",
+                          "no compiler edit landed (docs + PoC only, reusing the already-shipped `__hx_syscall6`/`__hx_ptr_*` intrinsics) ⇒ no CI gate trip. NEXT (r2, after #3488 merge) = port `hexa_arena_alloc` / the bump-from-arena `calloc` to a hexa-source body over `__hx_syscall6` mmap + `__hx_ptr_*` (mirror `runtime_arm64.hexa`'s `rt_arena_*` into the x86_64 native runtime + the standalone path), proving the first ALLOC-WALLED family's allocator-half is C-free",
+                          "`map_*` chains behind `__hx_make_val`."
+                        ]
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "Zero-C scope (Go/Rust-equivalent, clarified 2026-06-16):",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " \"no `.c`\" means the *user-visible* runtime (arena · tag · string/array · syscall · exception-dispatch) is native; the OS/ABI bootstrap floor — libm transcendentals and the Linux libc `setjmp`/`longjmp` — is the freestanding substrate every self-hosting runtime rests on (as do Go/Rust). "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "Exception model (RT-NATIVE Z4, closed):",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " `try`/`catch` lowers to a `setjmp`/`longjmp` try-stack; on **arm64-darwin** `hxlcl_setjmp`/`hxlcl_longjmp` are already **naked asm** (zero C, runtime.c cycle 86) — extractable to a `.s` file, so it does NOT block `ls self/*.c == ∅` on the primary target; on **x86_64-linux** it is a libc wrapper, kept as a platform floor (honest-keep, like libm). verdict `.verdicts/zeroc-breakthrough/F-RT-NATIVE-Z4-SETJMP-DECISION.txt`."
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "RT-NATIVE-ZEROC M4 read-half lane COMPLETE — array+map alloc-free accessors SHIPPED native, 13 PRs (#3494–#3506, 2026-06-17):",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " the per-function read-half (alloc-free accessor) lane is now EXHAUSTED — every collection accessor that does not allocate is native in the shipping runtime, each via the frozen `.s` seed ar'd into `runtime.a` (the array-r4 / rt_hi mechanism) + the standalone `#else` C body DROPPED. "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "array",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (`array_core.hexa`, 5-globl seed): `get`/`set` (#3494, byte-DECREASE −1264B — first non-string runtime-substrate ls reduction), `pop` (#3505, unconditional `rt_array_pop_native`), `shift` (#3506, `rt_array_shift_native` 16-byte raw-mem slide); `len`=`HX_ARR_LEN` macro (no fn). "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "map",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (`map_core.hexa`, 4-globl seed): `get` (#3501 map-r2 PROVEN gate exit21 + #3502 shipped — first CONTROL-FLOW runtime fn ported: fnv1a + open-addressing probe + strcmp, all raw-int), `contains` (#3504, probe→bool, value-independent like C `hmap_find>=0`). "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "intrinsic set completed",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": ": `__hx_payload_and/xor` (#3499) + `__hx_payload_eq/ne` (#3501) → raw-int leaves now cover arith·bitwise·compare; "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "codegen nested-intrinsic clobber root-fixed",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (#3503, x86 arg-load order swap — r10/r11 are both value-home AND scratch; nested `__hx_payload_*` clobbered). All 13 PRs preserved the `gen3≡gen4` fixpoint (`selfhost-byteeq-real` green) — ADD-only intrinsics + seed-only runtime entry keep the compiler's self-emit unchanged; `faithful-nobaseline` 3-target verified each seed's cross-arch assembly (it caught a global-sed resolver-count collateral on #3506, fixed before merge — c2 in action). "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "Next frontier = alloc/write lane — REFRAMED 2026-06-18.",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " The naive alloc-r2 (port `hexa_array_push`'s grow strategy + mirror the arm64 arena to x86_64 + drop the write `#else`) was RAN-NO-GO'd by `F-ALLOC-R2-X86-ARENA`: the arena ships as C `#else` on BOTH targets (no native seed exists — the arm64 `rt_arena_*` machine-code emitter is dormant, linked nowhere), so dropping the write `#else` = a REAL link regression (= `F-LEGB-STANDALONE-ELSE-NOGO` duplicate, the forbidden delete). The two LIVE levers are: "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "(1) M5 standalone-redesign",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " — native-compile the `self/rt/` tree (`alloc.hexa`·`map_ops.hexa`·… P7-7 skeletons indexed by `mod.hexa`) into `rt_*.o`, link into the standalone build, THEN the write `#else` can drop (the same native-seed mechanism the read-half used). Its first blocker is now LOCATED (`F-M5-ALLOC-CIRCULAR-DEP`): `self/rt/alloc.hexa` represents the arena pool list as a hexa `[ArenaPool]` array + `.push()` (lines 55/77/80), so arena-alloc recurses into array-push-grow into arena-alloc — circular (the P7-7 draft used the wrong data shape; `array_ops.hexa`/`map_ops.hexa` are wrappers, the real alloc body is `runtime_core_emit.hexa`'s `hexa_array_push` over this arena). "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "M5-alloc-b1 DONE",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (`F-M5-ALLOC-B1-MULTIPOOL-RAN`, 2026-06-18, aiden RAN): the de-circularized multi-pool raw-mem arena (pool table over `__hx_ptr_load64/store64`, grow/mark/rewind/reset) native-emits through the shipping x86_64 backend + RUNs **exit 0** on real hardware — cross-pool grow, mark/rewind address-reuse, reset all byte-exact, non-circular (nm: ZERO push/malloc/calloc; 5 syscalls = the mmap/munmap floor). Codegen gap found honestly: a module-global `let mut` int emits as an undefined `g<id>` slot in a standalone single-module emit (read-half never hit this — it has no global state); sidestepped by holding ALL arena state in the table region itself (global-free, threaded by one `tbl` int the runtime glue keeps C-side). "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "b2 DONE",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (`F-M5-ALLOC-B2-SYSCALL-WALL`, 2026-06-18): `self/rt/alloc.hexa` re-authored over the b1-proven body — `[ArenaPool]` array + `.push()` → raw-mem pool table (`__hx_ptr_*`), stale `__mem_*` → `__hx_ptr_*`, ArenaMark struct → int, runtime.c-compat surface (11 `hexa_ptr_alloc` consumers) preserved; the circular dep is GONE (byteeq-inert, dormant skeleton). Integration emit then RAN-located the NEXT wall: `self/rt/syscall.hexa` is a P7-7 abstraction over a `syscall(num,…)` builtin (lowered only by `self/codegen`, not the shipping `compiler/codegen`) + a codegen-injected `__TARGET_OS__` const — neither exists in the shipping backend (which has the M1 leaf `__hx_syscall6`). So the M5 pattern is now explicit: **port the whole `self/rt/` P7-7 tree from the P7-7 intrinsic surface (`syscall()`/`__mem_*`/`__TARGET_OS__`) to the shipping leaf surface (`__hx_syscall6`/`__hx_ptr_*`)"
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "the read-half seeds already use, module by module.",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": "M5-syscall-a DONE** (`F-M5-SYSCALL-A-TARGETOS-RAN`, 2026-06-18, aiden RAN): the `__TARGET_OS__` half is resolved — a new ADD-only leaf intrinsic `__hx_target_os()` emits a per-target int HexaVal const (x86_64_linux→0, arm64_darwin→1, matching syscall.hexa's convention), bind-whitelisted + `__hx_tag`/`__hx_syscall0`-pattern special-cased in both shipping codegens. Rebuilt aprime smoke exit42 PASS (no regression); probe `exit(__hx_target_os())` RUNs **exit 0** on x86_64-linux + arm64-darwin cross-emit shows `movz x1,#1`. ADD-only ⇒ gen3≡gen4 (compiler never calls it). "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "M5-syscall-b DONE",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (`F-M5-SYSCALL-B-PORTED`, 2026-06-18): `syscall.hexa`'s 25 `syscall(N,…)` call sites all rewritten → `_scK` @inline shims → `__hx_syscall6(N,…,0-fill)` / `__hx_syscall0`, and `__TARGET_OS__` → `__hx_target_os()`. 0 raw call sites left; syscall.hexa is OFF the P7-7 surface (dormant → byteeq-inert). Integration emit then RAN-located TWO remaining bounded leaf gaps before the b2 gate goes green: "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "GAP1 `hexa_ptr_addr`",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (string→cstring-ptr, another P7-7 intrinsic absent from the shipping backend, used at EXACTLY ONE site — sys_getrandom's darwin /dev/urandom fallback) blocks emit; "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "GAP2 `g<id>` global slot",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (alloc.hexa's `__arena_tbl` module-global `let mut` emits an undefined `g<id>` in standalone single-module emit — b1's deferred gap) blocks link. The M5 P7-7-surface port is thus a SEQUENCE of bounded ADD-only codegen leaves: `__hx_target_os` ✓ (a) → `syscall()` rewrite ✓ (b) → "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "M5-syscall-c DONE",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (`F-M5-SYSCALL-C-PTRADDR`, 2026-06-18, aiden RAN): GAP1 resolved — a new ADD-only `__hx_str_ptr(s)` leaf returns a string's char* base (its payload word; `__hx_str_byte` pattern minus the byte deref), bind-whitelisted + special-cased in both codegens, and syscall.hexa's `hexa_ptr_addr(` → `__hx_str_ptr(`. aprime_m5c rebuild smoke exit42 PASS; the b2 gate now **emit rc=0 + as rc=0** (GAP1 gone), with `link rc=1` isolating GAP2 (`g0` undefined at the __arena_tbl reads) as the SOLE remaining blocker. → "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "M5-gslot DONE (link half)",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (`F-M5-GSLOT-DATA-SLOT`, 2026-06-18, aiden RAN): x86_64_linux.hexa returned `globals: []` while REFERENCING module-globals as `g<id>` (arm64 already built `gnames`) — a parity bug; fixed by mirroring arm64 (build `gnames`, ELF bare `g<id>`). emit_asm now emits `.data` + `g0: .quad 0 .quad 0`; the b2 gate **emit+as+link all rc=0** (the 3 dup `hexa_arena_*` weakened in runtime.o = native-overrides-C, the b3-relink semantics). But **RUN segfaults (exit 139)** — isolated to a SEPARATE x86_64 global-HexaVal value-model bug: b1 (global-free) RAN exit 0, b2 differs ONLY by the `__arena_tbl` module-global, and "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "M5-gslot-val DIAGNOSIS DONE",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (`F-M5-GSLOT-VAL-GLOBALWRITE`, 2026-06-18, aiden asm read): root cause RAN-confirmed — the x86_64 backend has NO module-global WRITE path (asm shows 17 `g0` loads, 0 stores). `rt_init`'s `__arena_tbl = mmap(…)` never stores to `[rip+g0]`, so g0 stays `.data`-zero → arena ptr 0 → near-null deref. Mechanism pinned: `Stmt.dst` is a `Local`, global iff `arena_id == 0` (mir.hexa:30); the READ side resolves `g<id>` (_x86_op_resolve:732) but the WRITE side `_x86_emit_dst_writeback` (:1120) is spill-only — never checks `arena_id`. "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "M5-gslot-val DONE",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (`F-M5-GSLOT-VAL-DONE`, 2026-06-18, aiden RAN): the x86_64 module-global WRITE path is implemented — the lower marks a global write with sentinel `arena_id == -999` (id=global_id, hir_to_mir.hexa:1534); `_x86_emit_dst_writeback` now takes arena_id and, on -999, emits `mov [rip+g<id>], <payload>` (mirrors READ), threaded through `_x86_hv_store_leaf`/_tagreg + ~35 call sites. aprime_gv rebuild smoke exit42 PASS; the b2 gate **emit+as+link+RUN all green, RUN exit 0** (asm now has `mov [rip+g0], rbx # global write` ×2) = "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "alloc+syscall C-free integration PROVEN end-to-end",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (3 cross-pool allocs + mark/rewind reuse + reset, byte-exact, over fully-native syscall.hexa+alloc.hexa). The M5 leaf sequence is RUN-green: target_os → syscall() → str_ptr → gslot-link → gslot-val → **b2 RUN exit 0**. → next **b3** = M5 standalone-relink (larm64_flatten path, M5a #3497): wire the native alloc+syscall rt_*.o into the standalone build (tool/stage_resolve_runtime_a, the read-half array_core seed pattern) so the C `#else` arena/syscall bodies are REPLACED (real link, no objcopy weaken) and DROPPED = the first alloc-lane `ls`/byte reduction. arm64 PARITY follow: arm64_darwin `_arm64_emit_dst_writeback` has the same spill-only gap (adrp+str mirror); b2 RUN exercises x86_64 only. "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "b3 seed feasibility RAN",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (`F-M5-B3-SEED-FEASIBILITY`, 2026-06-18, aiden): a flattened `self/rt/alloc.hexa` (alloc+syscall) native-emits as a self-contained library `.s` — emit rc=0, **116 defined-globals** (sys_*/hexa_arena_*/hexa_ptr_*/rt_init), exactly the read-half array_core seed shape over the M5-completed leaf surface. So b3 is the read-half seed→drop mechanism at one-larger scale, two deltas: Δ1 flatten (alloc `use`s syscall), Δ2 the `__arena_tbl` `.data g0` global slot. Steps: "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "b3a DONE",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (2026-06-18, aiden aprime_gv): `tool/regen_alloc_syscall_native_s.sh` (regen_array_core template + larm64_flatten) froze `self/native/alloc_syscall_{x86_64,arm64,arm64-linux}.s` — 3-target, **116 defined-globals each** (sys_*/hexa_arena_*/hexa_ptr_*/rt_init), `.file`-normalized + frozen header; byteeq-inert (not yet ar'd). arm64 write-parity confirmed already-present (`_hv_store_dst` stp [x15], cross-emit RAN — x86 #3517 caught up to it). → **b3b SCOPE CORRECTED** (`F-M5-B3B-ARENA-FEATURE-GAP`, 2026-06-18, source read): the b3a seed (simple P7-7 bump arena) is NOT feature-equivalent to the rich C arena (env-probe `hexa_arena_on`:3972 / `frame_clean`:4202 / `slot_dirty`:4233 / heap-promote, runtime_core_emit.hexa) — b2 RUN exit 0 proved the native arena RUNS, not that it replaces the C arena wholesale. So the `#else` drop is a MEASURED per-function pass, not a blind drop: "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "Route A",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (subset — `#ifdef HEXA_RT_ALLOC_NATIVE`-guard ONLY the seed-equivalent pure alloc/syscall leaves, KEEP the C `#else` for the RSS-hygiene/env-probe fns = the low-risk first `ls` cut) or "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "Route B",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (extend self/rt/alloc.hexa to full-feature = the eventual zero-C endpoint). Gate (both): seed-built runtime.a passes byteeq-real + faithful 3-target + miscompile-zero. → "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "Route A NO-GO",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (`F-M5-B3B-ROUTE-A-NOGO`, 2026-06-18, grep+source confirmed): the low-risk subset drop yields ZERO `ls` reduction — the seed's data-structure-INDEPENDENT pure leaves (sys_*/hexa_ptr_*) have NO C body in the shipping runtime emit (it uses libc — 9 write/mmap call sites; the seed's syscall layer is a self-host module, DEAD in the shipped runtime → nothing to drop), and the ONLY droppable C body is the arena (`hexa_arena_alloc`:4005 linked-block + mark:4055/rewind:4066/reset:4081 + RSS-hygiene), which is a DIFFERENT data structure (linked-block C vs raw-mem-pool-table seed) + ABI (HexaArenaMark) → cannot be partially replaced = all-or-nothing = Route B. "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "So the first alloc-lane `ls` reduction requires Route B",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (re-author self/rt/alloc.hexa to FULL feature-equivalence: linked-block alloc + HexaArenaMark ABI + frame_clean/slot_dirty/env-probe/heap-promote, then drop the whole C arena `#else`) — a genuine multi-session lift; b2 RUN exit 0 (simple arena) is necessary but NOT sufficient (lacks RSS-hygiene). → **ORDER RE-CORRECTED** (`F-M5-R3-MAPSET-ORCHESTRATION`, 2026-06-18, C body read): r3 map_set is NOT a read-half-style pure-algorithm port — `hexa_map_set_impl` (runtime_core_emit.hexa:2967-3031) is a C MEMORY-MANAGEMENT ORCHESTRATION (hmap_alloc lazy-table + hmap_grow load-factor rehash + hxlcl_strdup key-intern + malloc/realloc order-arrays + arena-promote + valstruct), so a native rt_map_set_native just re-wraps those C calls (the read-half rt_map_get_native had ZERO extern calls — a pure raw-mem probe). Its `ls` drop = the ~50-line orchestration only; the heavy alloc/grow/strdup STAY C and it DEPENDS on the arena. "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "So Route B (arena → .hexa) is the REAL first substrate `ls` reduction and must LEAD",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": ", then map_set/keys become genuine (they can drop the now-native alloc/grow). "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "CAMPAIGN SHAPE (honest)",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": ": the EASY pure-algorithm `ls` reductions are EXHAUSTED (read-half #3494-3506 — probe/strcmp/fnv1a/slide, no alloc, no extern). What remains is the MEMORY SUBSTRATE FLOOR (arena/libc): Route B (the C linked-block arena + RSS-hygiene → .hexa) is the hardest single body and THE lever; `ls self/*.c == ∅` is now a substrate-floor problem, not a port-more-leaves one. → "
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "Route B STARTED — envelope half",
+                  "blocks": [
+                    {
+                      "type": "list",
+                      "items": [
+                        " (2026-06-18, native-emit verified): of Route B's two byteeq-critical gaps (C-ABI + address-envelope), the ENVELOPE half is now real code in self/rt/alloc.hexa — module-globals `__arena_env_lo/hi` + `__env_extend(base,size)` called from `__arena_grow`/`page_alloc` on every mmap + accessors `hexa_arena_env_lo/hi` (mirroring the C `__hx_arena_lo/hi` that hexa_val_heapify's O(1) range-reject reads",
+                        "without it self-compile RSS → 10-16GB OOM). aiden: alloc.hexa flatten → aprime --emit=asm x86_64 emit rc=0, defined-globals `__env_extend`/`hexa_arena_env_lo`/`hexa_arena_env_hi` present. DORMANT (byteeq-inert — alloc.hexa enters the build only via a regenerated seed, not yet ar'd → gen3≡gen4 preserved, not a broken-half). → **C-ABI half = LINKED-BLOCK REWRITE — DONE (2026-06-18): alloc.hexa fully re-authored to a HexaArenaBlock chain (HexaArenaMark `{block,used}` reuses the 16-byte HexaVal layout so `hexa_arena_mark()`=`__hx_make_val(cur,used)` is a byte-identical struct return",
+                        "alloc bump+walk-forward reuse",
+                        "rewind/reset keep blocks",
+                        "envelope #3524 carried forward) + seed regenerated (self/native/alloc_syscall_*.s, 119 globl), native-emit verified, byteeq-inert/dormant",
+                        "build-wiring DONE (resolve_native_alloc_syscall_seed + build_runtime_a rt_alloc_def + main, opt-in HEXA_RT_ALLOC_NATIVE=1 → byteeq-inert",
+                        "bash -n OK)",
+                        "arena `#ifndef HEXA_RT_ALLOC_NATIVE` guard DONE (runtime_core_emit.hexa: C arena under #ifndef, native seed extern under #else",
+                        "OFF=byteeq-inert) — measure-heavy's last byteeq-inert code step",
+                        "measure-1 RAN (c2): the #3527 seed was b2 pool-table STALE (ARENA_MAX_POOLS leftover + hexa_arena_alloc missing — regen had not picked up the linked-block alloc.hexa) → regenerated 3-target (116 globl, linked-block)",
+                        "ALSO the seed carries a `main` symbol (aprime --emit=asm entry artifact) that will multiple-definition-clash at runtime.a ar (ON) → regen main-strip needed. measure-2 RAN (c2): ABI standalone measurement is unsuitable — alloc.hexa uses plain ==/</!= → hexa_eq/lt/ne (HexaVal runtime helpers",
+                        "fine in whole-runtime where runtime.o has them, undefined only standalone)",
+                        "and the regen main-strip awk hit aiden mawk's missing the word-boundary (main not stripped). CONCLUSION: skip ABI-standalone, go straight to whole-runtime byteeq. regen main-strip (mawk-safe) DONE (regen awk fixed to exact patterns",
+                        "aiden regen 3-target all main-stripped, 0 main symbols, 116 globl)",
+                        "REMAINING = build_aprime ALLOC_OBJ wiring + HEXA_RT_ALLOC_NATIVE=1 aiden whole-runtime byteeq-real + faithful 3-target + miscompile-zero + RSS-OOM (heapify↔seed envelope wiring) (heapify reads __hx_arena_lo/hi, empty under native unless wired to seed hexa_arena_env_lo/hi → RSS-OOM is the measured signal) + aiden whole-runtime byteeq/faithful/RSS-OOM measurement** (`F-M5-ROUTEB-LINKEDBLOCK`, 2026-06-18, struct def read): `HexaArenaMark` is a 16-byte `{HexaArenaBlock* block",
+                        "size_t used}` struct (runtime_core_emit.hexa:3950-3953) that C callers pass by value",
+                        "the b2 seed is a raw-mem POOL TABLE with a single-int mark — ABI- AND model-incompatible (the `block*` field has no meaning in the pool-table model). So the seed must adopt the C DATA STRUCTURE: Route B's C-ABI half is a LINKED-BLOCK REWRITE of self/rt/alloc.hexa (a `HexaArenaBlock {next,cap,used,data[]}` chain + `HexaArenaMark {block*,used}` 16-byte struct return — open question: native 2-register struct return rax:rdx, else 2 int accessors + a C shim), NOT an extension of the b2 pool table. CARRY-FORWARD: the envelope half (#3524) + the syscall/mmap floor survive (they're structure-agnostic)",
+                        "REWRITE: alloc/mark/rewind/reset onto the block chain. Then seed regen + arena C `#else` drop + aiden byteeq/faithful/RSS-OOM measurement. → "
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "LINKED-BLOCK REWRITE DONE — native-emit verified",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": " (2026-06-18): self/rt/alloc.hexa is now fully re-authored from the b2 pool table to a HexaArenaBlock chain — `{next@0,cap@8,used@16,data@24}` raw-mem layout (__blk_* accessors), __arena_head/cur chain, `hexa_arena_alloc` = bump-on-cur + overflow walk-forward reuse-of-rewound-tail + append new_block (large = its own big block, C-style, page_alloc dropped), `hexa_arena_mark()` = `__hx_make_val(cur, used)` (the HexaArenaMark `{block,used}` == HexaVal `{tag,payload}` layout → 16-byte struct return byte-identical to C), `hexa_arena_rewind(m)` unpacks block=`__hx_tag(m)`/used=payload and empties later blocks (kept for reuse, no munmap — matches C), `reset` empties all, envelope (#3524) carried forward. aiden: flatten → aprime --emit=asm x86_64 emit rc=0, arena globls (new_block/alloc/mark/rewind/reset/ptr_alloc) present. DORMANT (byteeq-inert — not yet seed-regenerated/ar'd → gen3≡gen4 preserved). REMAINING (next): seed regen (regen_alloc_syscall) → resolve_native_alloc_syscall_seed wiring → arena C `#else` drop → **aiden whole-runtime byteeq/faithful 3-target + miscompile-zero + RSS-OOM measurement** (the mark 16-byte struct-return ABI vs C, and the envelope→heapify wiring, are the key UNMEASURED items the gate decides). Genuinely the hardest single substrate body; multi-session. "
+                    },
+                    {
+                      "type": "subsection",
+                      "title": "MEASURE-4 RAN",
+                      "blocks": [
+                        {
+                          "type": "list",
+                          "items": [
+                            "MEASURE-4 RAN — wiring DONE, link+ABI+RSS PASS, but heapify slow-path<->native-block-chain UNWIRED = native arena miscompile (`F-M5-ROUTEB-MEASURE4-HEAPIFY-SLOWPATH`, 2026-06-18, aiden Linux x86_64 RAN): the atomic whole-runtime measurement landed three byteeq-inert pieces — (i) `tool/build_aprime.sh` ALLOC_OBJ wiring (opt-in `HEXA_RT_ALLOC_NATIVE=1` assembles the arch-matched `alloc_syscall_*.s` -> `build/alloc_syscall_native.o`, adds it to BOTH clang link lines + `-DHEXA_RT_ALLOC_NATIVE` on the runtime.c compile)",
+                            "(ii) `runtime_core_emit.hexa` `#ifdef HEXA_RT_ALLOC_NATIVE` macro `__hx_arena_lo/hi`->native `hexa_arena_env_lo/hi` accessors (`#else` keeps the static)",
+                            "(iii) a real seed BUG FIX — the x86_64 seed referenced `.LCstr0` (sys_getrandom /dev/urandom path) via `lea rip+.LCstr0` but never emitted the matching rodata (arm64 emits it in `__TEXT,__const`), so it failed assembly with `Undefined temporary symbol .LCstr0`",
+                            "added the ELF `.rodata .LCstr0` block. Measurement: baseline (OFF) `build_aprime: OK` smoke exit(42)==42 PASS = wiring is byteeq-inert. ON: (a) LINK PASS — alloc_syscall_native.o -> runtime.a -> hexat links clean = the mark 16-byte struct-return ABI IS compatible (`__hx_make_val` writes full 8-byte words via stp/mov: lo=block-ptr, hi=used, matching `HexaArenaMark{block@0,used@8}` — the ABI-mismatch hypothesis is REFUTED by measurement)",
+                            "(b) RSS BOUNDED — direct large-input transpile = 1.38 GB (hexa_full = 3.2 MB), NOT the 10-16 GB OOM = the envelope O(1) fast-reject wiring WORKS",
+                            "(c) but the whole-compiler (45817-line flat) transpile DETERMINISTICALLY miscompiles with `cannot subtract non-numeric operand (tag 3 - tag 0)` (TAG_STR-TAG_INT) — tiny/medium inputs OK, only the large input. ROOT CAUSE (source read): heapify's FAST envelope-reject was wired, but its SLOW-path (the loop that actually COPIES an arena string out to the heap, `for(b=__hexa_arena.head",
+                            "b",
+                            "b=b->next){ b->data, b->cap }`, runtime_core_emit.hexa:4468) still walks the C `__hexa_arena` struct — which the native seed NEVER populates (it owns a separate `__arena_head` chain and exports only `hexa_arena_env_lo/hi`, NO head/next/block-data/cap iteration surface). So under native, `__hexa_arena.head==NULL` -> an arena string inside the envelope is FLAGGED for heapify but the copy-out loop body never runs -> the string stays a dangling arena pointer -> on rewind/block-reuse the memory is overwritten -> tag corruption. BLOCKER = heapify slow-path<->native block-chain integration gap (NOT ABI, NOT envelope-reject — a deeper unwired path than measure-3 anticipated). "
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "subsection",
+                      "title": "MEASURE-5 RAN",
+                      "blocks": [
+                        {
+                          "type": "list",
+                          "items": [
+                            "MEASURE-5 RAN — heapify block-walk WIRED (str-arena native CLEAN), but val-arena residual corruption keeps the whole-compiler miscompiling = WALL RE-CLASSIFIED to 'heapify .hexa full port' (`F-M5-ROUTEB-MEASURE5-HEAPIFY-VALARENA`, 2026-06-18, aiden Linux x86_64 RAN): the measure-4 heapify-slow-path gap was actually wired — (i) `self/rt/alloc.hexa` exports the block-chain iteration surface `hexa_arena_head()`/`hexa_arena_cur()`/`__blk_data(b)=b+24` (next/cap/used already via `__blk_next/cap/used`)",
+                            "(ii) `runtime_core_emit.hexa` redirects THREE native-mode paths under `#ifdef HEXA_RT_ALLOC_NATIVE` — the heapify TAG_STR copy-out walk (`for(b=__hexa_arena.head;…)` → seed `hexa_arena_head()`/`__blk_*`), `scope_push`+`hexa_arena_frame_clean` (the C `__hexa_arena.cur`=NULL made frame_clean ALWAYS report clean → the TAG_VALSTRUCT/ARRAY/MAP slot walks were being skipped wholesale → fixed to read seed `hexa_arena_cur()`/`__blk_used`), and `hexa_val_arena_scope_pop` (→ seed `hexa_arena_rewind()`, the NULL C cur would leave the seed un-rewound → unbounded RSS)",
+                            "(iii) `tool/regen_alloc_syscall_native_s.sh` re-applies the x86_64 `.LCstr0` rodata reproducibly (was a measure-4 hand-patch)",
+                            "seeds 3-target regenerated (119 globl + 3 new accessors, x86_64 assembles). KEY MEASUREMENT CORRECTION: measure-4's 'ON miscompile' was performed by a STALE `build/hexat` that itself carried the OLD (pre-measure-5) native arena — `build/hexat` is the C-transpiler binary linked against runtime.a, so its OWN arena is whatever runtime.a was built with. Forcing a clean `build/hexat` rebuild isolated the real picture: C-arena baseline (`hexat_linux` / `HEXA_VAL_ARENA=0`) transpiles the 45816-line flat CLEAN (RC=0, 0 tag-errors)",
+                            "OFF build with measure-5 edits = whole-flat RC=0, 0 tag-errors = byteeq-inert CONFIRMED",
+                            "native-arena hexat WITH the fix = STILL `cannot subtract non-numeric operand (tag 3 - tag 0)` RC=1. DECISIVE ISOLATION: `HEXA_VAL_ARENA=0` + native str-arena ON = CLEAN, but `HEXA_STR_ARENA=0` + val-arena on = still errors ⇒ the measure-5 fix CLOSED the str-arena native path (necessary), but the SOLE remaining corruption is the VAL-arena heapify path. gdb: the error fires at `_parser_init` (a module-global initializer) subtracting a tag-3 (str) value that should be numeric = a val-arena fn-boundary heapify (`__hexa_fn_arena_return`→`hexa_val_heapify`→scope_pop rewind) is failing to heapify an escaping value, which block-reuse then overwrites. WALL RE-CLASSIFIED: block-walk/frame_clean/scope_pop redirect is necessary-but-insufficient",
+                            "the val-arena heapify (TAG_VALSTRUCT/ARRAY/MAP slot walks + `hexa_val_copy_into_arena`/region-promote) is more deeply entangled with the C `__hexa_arena` data-structure assumption scattered across heapify. "
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "subsection",
+                      "title": "MEASURE-6 (next)",
+                      "blocks": [
+                        {
+                          "type": "prose",
+                          "text": "MEASURE-6 (next): either port the val-arena heapify path wholesale to .hexa, OR expose native seed SETTERS so the native arena keeps the C `__hexa_arena` struct populated (the 'mirror the C data structure' alternative). DEPLETION: the str-arena gap is CLOSED; the val-arena heapify gap is the single remaining wall before the arena C `#else` can drop. (All measure-5 edits LANDED byteeq-inert — OFF default unaffected, opt-in HEXA_RT_ALLOC_NATIVE only.) "
+                        }
+                      ]
+                    },
+                    {
+                      "type": "subsection",
+                      "title": "MEASURE-6 RAN",
+                      "blocks": [
+                        {
+                          "type": "list",
+                          "items": [
+                            [
+                              "MEASURE-6 RAN",
+                              "val-arena C-ABI half SOLVED (`tag 3 - tag 0` miscompile + self-recursion GONE), measure-5's heapify-port wall FALSIFIED, wall re-classified to a seed-codegen global-tag defect (`F-M6-ROUTEB-CABI-BRIDGE`, 2026-06-18, aiden Linux x86_64 RAN, clean-rebuild isolated): clean-rebuild isolation (measure-5's measurements were taken against a STALE `build/hexat`",
+                              [
+                                "`stage_prebuild_hexat` no-ops when build/hexat exists, so the supposed native/OFF tests reused a binary linked against a different arena → measure-5's 'str-arena CLEAN' + 'val-arena heapify port' both FALSIFIED) revealed the REAL root cause via objdump+gdb:",
+                                "the native arena seed (`self/native/alloc_syscall_x86_64.s`, aprime_cc-compiled) uses the HexaVal TWO-REGISTER ABI (int arg `{rdi=tag, rsi=payload}`, return `{rax=tag, rdx=payload}`), but `runtime_core_emit.hexa` declared the seed entries as PLAIN C scalars (`extern long hexa_arena_head(void)` / `extern long __blk_used(long)` / `extern void* hexa_arena_alloc(size_t)`), so a plain-C caller reads the return from rax (=TAG, always 0) and passes the arg in rdi (the seed's TAG slot, leaving the payload it reads from rsi uninitialised) → `hexa_arena_on()`→0 (arena reported OFF → str_concat used malloc, so the arena path was never even taken), `hexa_arena_alloc`→bogus ptr, head/cur/env_lo/hi/blk_*→0/garbage = the val-arena `tag 3 - tag 0` miscompile.",
+                                "THE FIX (Route B C-ABI bridge, all under `#ifdef HEXA_RT_ALLOC_NATIVE`, byteeq-inert/opt-in): alias each scalar seed symbol to its TRUE HexaVal signature via `extern HexaVal __hxseed_X(...) __asm__(\"X\")` (HexaVal `{tag@0,payload@8}` ⇒ the SysV 16-byte struct ABI passes/returns in exactly the seed's rdi:rsi / rax:rdx pairs), wrap each in a `static inline __hxw_*` that extracts HX_INT, and a function-like `#define` redirects the plain call-site spelling to the `__hxw_` wrapper so the 36 runtime.c call sites stay textually unchanged (the seed token inside `__asm__(\"...\")` is a string literal → never macro-expanded → the alias still binds the real seed symbol)"
+                              ]
+                            ],
+                            "mark/rewind/reset already match the C ABI (HexaArenaMark `{block,used}` == HexaVal layout",
+                            "reset is void) → declared plainly. fix1 (wrappers carrying the seed's OWN plain names as static-inline) made clang emit symbols that SHADOWED the seed → the `__asm__`-aliased extern resolved back to the wrapper → INFINITE SELF-RECURSION SIGSEGV (RC=139)",
+                            "fix1 ALREADY removed the `tag 3 - tag 0` error (confirming the 2-reg ABI diagnosis) → fix2 (distinct `__hxw_` names + `#define`) cured the recursion. MEASUREMENT (aiden x86_64, clean isolated worktree): native build runtime.c synth/compile/hexat link ALL RC=0 (gen runtime_core.c has 23 `__hxw_`)",
+                            "TINY repro tag-errors=0 (the `tag 3 - tag 0` is GONE) but RC=139 SIGSEGV with backtrace `__env_extend ← hexa_arena_new_block ← hexa_arena_alloc ← hexa_str_concat` = the arena path is now EXECUTED (proof the bridge fixed hexa_arena_on→1 + hexa_arena_alloc)",
+                            "OFF (default C arena, no seed, ALLOC-RB=0) tiny RC=0, 0 tag-errors = byteeq-inert CONFIRMED (the fix is entirely `#ifdef HEXA_RT_ALLOC_NATIVE`). NEW WALL (precisely localized, seed-codegen): `__env_extend(base,size)` (seed, updates the `__arena_env_lo/hi` globals g2/g3) WRITES the global PAYLOAD to `[rip+gN]` but reads the global TAG from a per-function stack slot (`[rbp-NN] # tag gN from tag-slot`) — and there are ZERO writes to `[rip+gN+8]` (the global TAG slot) anywhere in the seed, so a global's tag half is never persisted to .data → each call reads a garbage tag → the int comparisons tag-dispatch through hexa_eq/hexa_cmp_lt/hexa_cmp_gt/hexa_add_slow on a corrupt tag → fault. This is a pre-existing aprime_cc MODULE-GLOBAL tagged-value codegen defect (F-M5-GSLOT-DATA-SLOT area — the global-write path emits the payload but not the tag), MASKED until now because the broken C-ABI made hexa_arena_on()→0 so the arena path (and __env_extend) was never reached",
+                            "the C-ABI bridge is what exposed it. CLASSIFICATION: Route B C-ABI half = SOLVED·LANDED (the miscompile + recursion are gone, the arena path executes, OFF stays byteeq-inert)",
+                            "measure-5's 'val-arena heapify .hexa full port' wall is FALSIFIED (the C heapify logic is fine — no port needed). "
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "subsection",
+                      "title": "MEASURE-7 (next)",
+                      "blocks": [
+                        {
+                          "type": "prose",
+                          "text": "MEASURE-7 (next): fix aprime_cc's global-write codegen to persist the global TAG to `[rip+gN+8]` on write (+ read it from there, not a stack slot), regen the 3 seeds, re-measure → expected to then pass the tiny + whole-flat native transpile → arena C `#else` drop → first runtime_core.c wc / `ls` reduction. The wall is now narrow + codegen-localized (NOT an ABI mismatch, NOT a heapify port). "
+                        }
+                      ]
+                    },
+                    {
+                      "type": "subsection",
+                      "title": "MEASURE-7 RAN",
+                      "blocks": [
+                        {
+                          "type": "list",
+                          "items": [
+                            "MEASURE-7 RAN — the measure-6 RC=139 wall is CLEARED",
+                            "the native linked-block arena runs the WHOLE compiler C-free on x86_64 (`F-M7-ROUTEB-GLOBAL-TAG-SECTION`, 2026-06-18, aiden Linux x86_64 RAN, isolated worktree): the measure-6 single residual (`__env_extend ← hexa_arena_new_block ← hexa_arena_alloc ← hexa_str_concat` SIGSEGV) was a COMPOUND x86_64-vs-arm64 asymmetry, isolated via gdb+objdump (NOT a guess): (1) module-global TAG never persisted — the x86_64 global WRITE stored only the payload to word0 `[rip+g<id>]` and put the tag in a per-FUNCTION frame tag-slot, while the global READ recovered the tag from the READING fn's OWN frame tag-slot → a global written in fn A and read in fn B came back TAG_INT=0 (arm64 has no gap: `ldp`/`stp` move BOTH 16-byte words of the `g<id>` .data slot, the cross-fn SSOT)",
+                            "(2) THE ACTUAL RC=139 — gdb's faulting instruction was `mov %r13, ..(%rip) # <g2>` (a global PAYLOAD write) and `objdump -t` showed `g0..g3` in `.text` (READ-ONLY). Mechanism: the x86_64 emit places `main:` BEFORE the `.section .data` + `g<id>: .quad 0 .quad 0` slots, and the regen script's main-strip awk set `inmain=1` at `main:` and skipped lines until a `symbol:`/`.globl` — `.section .data` is NEITHER, so the directive was SWALLOWED and `g0:` inherited `.text` → `__env_extend`'s `__arena_env_lo = base` write hit a read-only page → SIGSEGV (compounded: aiden's awk is mawk 1.3.4 which does NOT support `\\b`, so a first section-stop patch silently never matched). THE FIX (3 commits, ADD-only / byteeq-inert): (a) `compiler/codegen/x86_64_linux.hexa` — `_x86_emit_dst_writeback` global path (`arena_id==-999`) now ALSO persists the tag to `[rip+g<id>+8]` (mirrors arm64 `stp lo,hi`), and `_x86_tag_resolve` global case reads the tag from `[rip+g<id>+8]` (cross-fn SSOT) not the per-fn frame tag-slot",
+                            "(b) `tool/regen_alloc_syscall_native_s.sh` — the main-body skip also terminates on a section directive (mawk-safe `\\.(section|data|text|bss|rodata)([[:space:]]|$)`, NOT `\\b`) so `.section .data` survives → slots land WRITABLE",
+                            "(c) `self/native/alloc_syscall_x86_64.s` regenerated (32 `[rip+g<id>+8]` tag writes was 0, g0..g3 under `.section .data`, inline `.LCstr0`). MEASUREMENT (aiden, clean-isolation whole-runtime ON build, stale build/hexat force-regenerated — the measure-5 trap avoided): regen seed `g0..g3` in `.data` (objdump -t) + 32 g+8 tag writes",
+                            "`build/alloc_syscall_native.o` g-slots `.data`, `mov %r11,..# <g2+0x8>` present",
+                            "`HEXA_RT_ALLOC_NATIVE=1` hexat (the heaviest real hexa program) transpiles `compiler/main.hexa` **RC=0** (was RC=139) + a 7-module sweep (lexer/parser/types/hir_to_mir/x86_64_linux/asm/catalog) 7/7 OK + lexer.hexa 8/8 stable",
+                            "OFF (C arena) differential baseline 7/7 OK (byteeq-inert)",
+                            "determinism — alloc-flat (exercises the global write+tag paths) emitted twice = byte-identical (30968B). CLASSIFICATION: WALL CLEARED — the native linked-block arena (self/rt/alloc.hexa) runs the whole compiler C-free end-to-end on x86_64",
+                            "measure-6's seed-codegen global-tag defect is fixed AND the deeper `.text`-slot defect it masked is fixed. Honest residual (c9): the full gen3≡gen4 whole-compiler fixpoint is gated by PR CI (selfhost-byteeq-real, the authoritative gate for this shipping codegen change) — the on-aiden whole-compiler 2-emit determinism was substituted by the alloc-flat byte-identical oracle (dup-process contention + pool flake on the long whole-compiler emit). `ls self/*.c` (tracked) is unchanged — the reducible artifact is the arena C `#ifndef HEXA_RT_ALLOC_NATIVE..#else` body (115 emitter lines, runtime_core_emit.hexa:3972-4086), now PROVABLY replaceable. "
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "list",
+                      "items": [
+                        "MEASURE-8 — the flip is DONE + SHIPPED, the byte-reduction DROP is correctly SOAK-GATED (`F-M8-ROUTEB-SOAK-DUALCONFIG`, 2026-06-19, aiden x86_64 RAN): `HEXA_RT_ALLOC_NATIVE` is now DEFAULT-ON on all 3 targets (`tool/stage_resolve_runtime_a:375` `${HEXA_RT_ALLOC_NATIVE:-1}`",
+                        "x86_64 measure-6/7, darwin-arm64, linux-arm64 #3624) and SHIPS in v0.241.9 stable (`merge-base --is-ancestor #3624 v0.241.9` = TRUE)",
+                        "CI `selfhost-byteeq-real` + `arm64-native-arena-release-build` (RAN the exact #3597 SIGSEGV site) GREEN. The genuine `ls`/wc reduction — DROP the ~115L C arena `#else` body (runtime_core_emit.hexa ~4027-4859) — is NOT release-safe yet, gated on TWO real conditions: **GATE 1** the `=0` consumer/revert fallback path still NEEDS the C body (stage_resolve silently lands `=0` when the seed object is absent",
+                        "#3553/#3568 dropped it once and #3583 had to RESTORE it — `hexa_arena_on`/`hexa_arena_alloc` undeclared at runtime_core.c:4859 broke the byteeq gate)",
+                        "**GATE 2** the linux-arm64 soak invariant (stage_resolve comment: drop deferred until arm64 native arena has soaked on edge with no #3597 regression — #3624 merged 2026-06-19, hours old",
+                        "#3597 was a real recent arm64-default-ON SIGSEGV). Release-safe increment THIS round = captured dual-config soak evidence (aiden x86_64, origin/main @49b8da7a1): native default-ON config build RC=0 + smoke exit42 (hexat md5 e5141ca5…, aprime_cc 2,387,768 B) AND the `HEXA_RT_ALLOC_NATIVE=0` revert path build RC=0 + smoke exit42 (hexat md5 581f5ae7…, aprime_cc 2,366,400 B) — both GREEN ⇒ the GATE-1 `=0` re-break class is ABSENT on main + the revert net is verified-live",
+                        "native seed adds +21,368 B (INCREASE, as expected while `#else` retained), substrate `ls` byte-Δ = 0 this round. Forcing the drop now = remove the live revert net mid-soak on a path that regressed within a day = the self-host≠release / DO-NOT-MERGE #3553 trap, so NO drop authored (docs+verdict only, byteeq structurally untouched). **NEXT (measure-8 drop r2, when both gates clear):** DROP the ~115L arena C `#else` + keep default-ON = first alloc-substrate `ls`/wc DECREASE (3-target byteeq + shipping smoke GREEN before merge)",
+                        "then r3 = map_set/keys + io/fmt/proc/fs/intern/math construct-half ports (they gate behind the now-native alloc/grow). "
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "subsection",
+                  "title": "(2) r3 = map_",
+                  "blocks": [
+                    {
+                      "type": "prose",
+                      "text": "* — the make_val-unlocked (`#3488`) construct-half family (`hexa_map_set`/`keys`), feasibility-gated like the read-half, parallel + non-colliding with the arena floor. Both feed the M5 relink endpoint. `ls self/*.c == ∅` remains a multi-session horizon; the read-half lane proves the seed→drop mechanism end-to-end (straight-line + control-flow + slide all byte-exact) and removes the nested-intrinsic friction for all future ports."
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "blocking-frontiers",
+      "title": "Blocking frontiers (measured walls + research state)",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Every architectural wall that currently blocks a stated goal is recorded here with its MEASURED root-cause and its RESEARCH STATE — so a future research-first round (c23) can target it instead of re-deriving. A wall is 🔬OPEN (untried reference-backed levers remain), 🧱MEASURED-CLOSED (levers tried + falsified with captured numbers), or 📦DEFERRED (feasible but gated on a policy/risk-budget decision). Status + history live in CHANGELOG+git; this node is the current-state index only (update-in-place)."
+        },
+        {
+          "type": "subsection",
+          "title": "forge GPU GEMM → cuBLAS independence (`-lcublas` removal)",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "Goal: ship the forge cuda runtime with NO `-lcublas` link (full GPU GEMM self-sufficiency). Production GEMM cuBLAS calls were taken 7→0 by own-kernel default-ON (#3718 FP64 · #3727/#3734 TF32, `self/cuda/runtime_cuda_emit.hexa`), but the link flag + opt-out fallbacks remain. Census (r1, read-only): 12 cuBLAS touchpoints."
+            },
+            {
+              "type": "list",
+              "items": [
+                "✅ FP64 GEMM (single/batched/tn/outer) — own `_hx_k_gemm` default-ON, bit-identical to cublasDgemm (sm_120 has no FP64 tensorcore → cuBLAS also SIMT), 1.1~3.1× faster. cuBLAS-free on default path.",
+                "🔬 TF32 GEMM — own `mma.sync` opt-in default within HEXA_TF32_FASTMODE; perf parity is its own OPEN frontier (see next subsection). Blocks `-lcublas` removal because the HEXA_TF32_OWN=0 escape-hatch still references cublasGemmEx.",
+                "🔬 BF16 GEMM — own kernel `owngemm_sm120_bf16.cu` (mma.sync.m16n8k16) WIRED to production (r2, `HEXA_BF16_OWN` gate), own==cuBLAS rel-RMS 0 but 3.1-7.1× slower (per-call 3×cudaMalloc + 3 cast kernels = dispatch overhead). Research (cited: PTX f32-accum · ggml · CUTLASS · WingEdge) confirms ≥0.85× ACHIEVABLE (WingEdge mma.sync HGEMM reaches sm_120 cuBLAS parity; cuBLAS uses same mma.sync HMMA, no exclusive instr). BF16 r3 GPU IN PROGRESS: L1 direct-bf16-mma + L2 epilogue-fused downcast + L3 process-lifetime scratch (kill the 3×malloc/3 cast overhead) → if ≥0.85× → default-able → cuBLAS-call 2→0. Split-K NOT used (breaks byte-determinism).",
+                "🧱 packed_gemv FP32 — no own kernel (cublasDgemv fallback for fp32/bf16 dtype slices). FP64 packed_gemv own-kernel ships.",
+                "📦 `-lcublas` removal — blocked by: (a) BF16 production wiring, (b) own FP32 packed-gemv, (c) policy: HEXA_OWN_GEMM=0/HEXA_TF32_OWN=0 escape-hatches double as the cuBLAS correctness ORACLE; dropping them (must `#ifdef` out the call-sites, not just default away — linker needs the symbols) loses the validation oracle. Decision-gated, not a measured wall."
+              ]
+            },
+            {
+              "type": "prose",
+              "text": "Next research target: wire BF16 own (in-tree) + write FP32 packed-gemv own → then `-lcublas` removal needs only the escape-hatch policy call. Build/measure on aiden/summer free pool (NOT paid vast); byteeq 3-target + cuda smoke gate; opt-in fastmode lanes are byteeq-neutral on the default FP64 path. SSOT detail: memory `project_hexa_forge_cublas_independence`."
+            }
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "TF32 own-GEMM sm_120 parity vs cuBLAS",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "Goal: own TF32 GEMM (`owngemm_sm120.cu`, 64×64 + cp.async 2-stage + mma.sync.m16n8k8) reaches cuBLAS-TF32 perf parity (≥0.97×) so TF32 own can be the perf default (today it is opt-in; cuBLAS is faster at most sizes). Accuracy already PASS (rel-RMS ~1e-5, gate ≤1e-2). HW: consumer RTX 5070 sm_120 (NO tcgen05/TMEM/wgmma — mma.sync.m16n8k8 is the instruction ceiling, confirmed)."
+            },
+            {
+              "type": "table",
+              "columns": [
+                "size",
+                "own/cuBLAS off-ratio (>1=cuBLAS faster)"
+              ],
+              "rows": [
+                [
+                  "256",
+                  "1.24×"
+                ],
+                [
+                  "512",
+                  "1.10×"
+                ],
+                [
+                  "768",
+                  "0.96× (own wins)"
+                ],
+                [
+                  "1024",
+                  "1.13×"
+                ],
+                [
+                  "1536",
+                  "1.13×"
+                ],
+                [
+                  "2048",
+                  "1.01× (parity)"
+                ],
+                [
+                  "3072",
+                  "1.14×"
+                ],
+                [
+                  "4096",
+                  "1.25×"
+                ]
+              ]
+            },
+            {
+              "type": "list",
+              "items": [
+                "🧱 r2 levers MEASURED-FALSIFIED (aiden sm_120, captured): multi-config tiling 128×128/128×64 (helps only 4096, wrecks 768/1024 sweet-spot) · deeper cp.async 3/4-stage (smem-occupancy cliff, 1.4-1.8× regress) · smem XOR swizzle (de-vectorizes 128-bit store, 2-4.7× regress). Root cause: 48-SM 5070 is occupancy-bound, NOT reuse-bound — datacenter (sm_90/100, 100+ SM, wgmma) levers don't transfer.",
+                "🔬 r3 research REOPENED the wall: cuBLAS's actual sm_120 TF32 kernel name = `nvjet_sm120_..._tmaAB_..._splitK_TNNN` = split-K + TMA — two PUBLIC techniques our kernel uses NEITHER. A public sm_120 mma.sync kernel (WingEdge) already reaches cuBLAS parity via TMA. So the gap is named work-decomposition, not unmatchable in-house tuning.",
+                "✅ r4 Split-K PARTIAL WIN (measured aiden sm_120): work-decomposition (CUTLASS ex47 mma.sync Split-K, arxiv:2301.03598) CLOSED 256 to 0.92-0.94× (own BEATS cuBLAS, was 1.26×) — the wave-quantization fix the cuBLAS `splitK` kernel-name predicted; 1024/4096 marginal (1.13→1.10, 1.25→1.17). TMA-alone = 🧱 (slower). Winning config = Split-K workspace-reduce @≤256 splits=4 (opt-in fastmode; Split-K breaks byte-determinism so NOT for a deterministic default). Branch worktree-agent-ae902bfb0c73784ce.",
+                "🧱 512-3072 plateau (~13%) = HARDWARE ceiling, research-confirmed (DEFER, not a software gap): consumer GeForce Blackwell HALVES FP32-accumulate tensor throughput (market-segmentation cap from Ada/4090, inherited by sm_120) — TF32 GEMM accumulates FP32, so the dense ceiling ≈ own's measured ~30 TFLOP/s. cuBLAS ~34 is within-roofline scheduling micro-overlap (boost-clock + Math-Pipe-Throttle avoidance), NOT an exclusive technique. WingEdge sm_120 reached parity via smem-swizzle (load-bearing) but hit the same compute throttle — and WITHOUT warp-spec, so the multi-week rewrite is unjustified. ldmatrix is .b16-only (no TF32 traffic edge). r5 GPU round DEFERRED; TF32-own value = byte-eq determinism, perf beats cuBLAS only at 256."
+              ]
+            },
+            {
+              "type": "prose",
+              "text": "Next research target: if Stream-K+TMA (r4) reach parity → PR (byteeq+smoke) + TF32 own perf-default. If they also miss → final honest 🧱 (would contradict the WingEdge parity claim; capture why). Lesson: shallow 1-pass research (r1) mis-concluded 'same instruction = wall'; deep research (r3 kernel-name decode) found the real untried levers — research-first must go deep before declaring a wall."
+            },
+            {
+              "type": "prose",
+              "text": "✅ MEASURED TERMINAL + BEYOND-PARITY (2026-06-21, aiden RTX 5070 sm_120, ncu · SUPERSEDES all rows above). The TF32 own-GEMM ladder was climbed to exhaustion and is now reference-confirmed terminal at PARITY: BSPAD=8 (m16n8k8 Bs bank-conflict 67.36M→274.7k) brought 64×64 own to cuBLAS PARITY (off-ratio 0.94~1.23×, median ~1.11×, S=768 win 0.94×, S=2048 1.02×, rel-RMS ~1e-5). GEMV decode M=1 is BEYOND cuBLAS (1.04~2.00×, ~1.36 TB/s near DRAM roofline, FP64 bit-exact ~3e-16) — ggml mmvf recipe replicated. Every further rung measured-falsified: cp.async multistage (occupancy-collapse, ncu DRAM 7% / math_pipe_throttle 5.27 = issue-bound not latency-bound), ldmatrix.x4 alone (NOT ISA-blocked — refuted: cuBLAS SASS uses LDSM.16, micro-test compiles+correct rel-RMS 1.3e-5; it removed MIO throttle 1.41→0.50 but own got slower because binding stall is `wait`=MMA latency, +reg 71→92 occ-drop), 128×128 reg-tile @ 8/16/32-warp (reg-bloat→occ-collapse; warp-count lever falsified, root = MIO instruction-queue saturation on scalar f2tf32 LDS path). True ceiling = sm_120 HMMA-s1688 issue-cadence floor (tensor util pinned ~44%); cuBLAS uses the IDENTICAL s1688 + ldmatrix — REACHABLE for own (refuted the ISA-block). cuBLAS's FULL recipe (256×64+4-stage+ldmatrix) was replicated & MEASURED CLOSED-NEG (2.5× regress): 256×64 needs 192 reg+100KB smem → 1 block/SM on consumer 5070 → occ 8.3%, tensor util collapsed 44%→18.6%. cuBLAS picks 256×64 for DATACENTER (big smem/reg); its kernel CHOICE is HW-conditioned — 64×64 is the sm_120 sweet spot (71 reg, 41% occ) and ALREADY parity. REFINED LESSON: replicate the reference ALGORITHM but pick the tile shape that fits the card's occupancy (not the datacenter shape). PARITY BASE = 64×64. REAL NEXT = beyond-parity 조합 on the 64×64 base: epilogue fusion (GPU 1.49~1.57×) + chained-GEMM fusion (intermediate DRAM non-materialization, FlashAttention spirit, cuBLAS call-boundary forbids) = OUTPACE. in-flight: CUTLASS-exact TF32 ldmatrix replication (verify the ISA-block via the answer-key form cuBLAS itself uses on sm_120). STRATEGY (standing, user 2026-06-21): 지는 지점 = 동일 베껴쓰기 (reference-exact replication: CUTLASS/OpenBLAS/ggml/QE source, cite file:line, no black-box tune); then 베껴쓰기 × 돌파분 = beyond-parity — graft hexa moats (epilogue fusion #3656, chained-GEMM/FlashAttention-style intermediate non-materialization, no-LLVM direct-emit, byte-eq determinism) onto the cuBLAS-quality base tile to OUTPACE cuBLAS where its library call-boundary forbids fusion. Repo-wide own-vs-reference census (2026-06-21): NO remaining algorithmic gaps — CPU GEMM parity+beyond (BLIS GEBP #3652 + epilogue fusion #3656), GEMV beyond, string/math/lattice/QFORGE reference-first applied; remaining GPU gaps are ISA/HW-bound (BF16 2× ldmatrix-blocked, flag-gated acceptable), not algorithm design. Ship-ready wins on branch fleet/kernel-quality-gemv-decode (BSPAD + GEMV). SSOT: memory project_hexa_m3_runtime_emitter_graduation."
+            }
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "self-host zero-c (`ls self/*.c == ∅`)",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "📦 DEFERRED — the on-path native-seed floor is EXHAUSTED (valop 7-prim + 6 seed families default-ON, byteeq gen3≡gen4 3-target GREEN; see Self-host status). The only remaining lever to fully drop the C substrate is zero-c leg B = io.hexa whole-runtime flip (rt.c substrate replacement, RUNTIME-PORT M3) — an architecture migration with shipped-runtime regression risk, gated on its own risk budget + explicit start decision (self-host≠release ABSOLUTE). Residual besides leg B = irreducible-J (raw svc/syscall emit · libm · HexaVal struct · _start/CRT) + off-path-K (~84%, free/realloc/spawn/popen/async). print-fmt/fd-write census = @syscall irreducible (lateral relocation, not floor reduction). SSOT: memory `project_hexa_selfhost_floor_census` + `project_hexa_zeroc_breakthrough`."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "component-map",
+      "title": "Component map",
+      "blocks": [
+        {
+          "type": "table",
+          "columns": [
+            "Component",
+            "Path",
+            "Role"
+          ],
+          "rows": [
+            [
+              "Compiler driver",
+              "`compiler/main.hexa`",
+              "Entry point: arg parse, atlas load, S0–S8 dispatch, codegen routing, emit/link orchestration"
+            ],
+            [
+              "Lex (S0)",
+              "`compiler/lex/lexer.hexa`",
+              "Tokenize `.hexa` source → token stream"
+            ],
+            [
+              "Parse (S0)",
+              "`compiler/parse/parser.hexa`",
+              "Token stream → module AST"
+            ],
+            [
+              "Resolve (S1)",
+              "`compiler/check/resolve.hexa`",
+              "Symbol resolution, import binding, scope graph"
+            ],
+            [
+              "Bind (S2)",
+              "`compiler/check/bind.hexa`",
+              "Identifier binding, declaration ordering, duplicate detection"
+            ],
+            [
+              "Types (S3)",
+              "`compiler/check/types.hexa`",
+              "Type inference, typecheck, arity, generic constraints"
+            ],
+            [
+              "Domain (S4)",
+              "`compiler/check/`",
+              "Domain / value-range validation"
+            ],
+            [
+              "Units (S5)",
+              "`compiler/check/units.hexa`",
+              "Dimensional analysis (SI units, conversion validation)"
+            ],
+            [
+              "Equational verify (S6)",
+              "`compiler/check/equational.hexa`",
+              "`@verify` gate: normalization + sample-eval counter-example search (`HX6001`/`HX6002`)"
+            ],
+            [
+              "Proof (S7)",
+              "`compiler/check/`",
+              "`@prove` proof-obligation checking"
+            ],
+            [
+              "Citation (S8)",
+              "`compiler/check/citation.hexa`",
+              "Atlas binding check (`@cite`/`@implements`/`@discover`) → fatal `HX8001`/`HX8002`/`HX8004`/`HX1099`"
+            ],
+            [
+              "Atlas (embedded)",
+              "`compiler/atlas/embedded.gen.hexa`",
+              "~4.2 MB rodata: the baked-in atlas nodes (P/C/L/E)"
+            ],
+            [
+              "Atlas index",
+              "`compiler/atlas/static_index.hexa`",
+              "In-memory parsed atlas served to S8 (`static_atlas()`)"
+            ],
+            [
+              "Atlas merger / fold",
+              "`compiler/atlas/merger.hexa`, `compiler/atlas/embed.hexa`",
+              "Merge rodata + `.n6` overlay; fold new nodes into `embedded.gen.hexa`"
+            ],
+            [
+              "Lower → HIR",
+              "`compiler/lower/ast_to_hir.hexa`",
+              "AST → high-level IR (desugaring, let-flattening)"
+            ],
+            [
+              "Lower → MIR",
+              "`compiler/lower/hir_to_mir.hexa`",
+              "HIR → middle IR (SSA, control-flow graph)"
+            ],
+            [
+              "Optimize",
+              "`compiler/optimize/`",
+              "Const-fold, DCE, inline (opt-level 0–3)"
+            ],
+            [
+              "Codegen (LIR)",
+              "`compiler/codegen/{arm64_darwin,x86_64_linux,thumbv7em_eabihf,nvptx_target}.hexa`",
+              "MIR → LIR, target-specific regalloc + instruction selection"
+            ],
+            [
+              "Emit (asm/object)",
+              "`compiler/emit/{asm,macho_arm64,elf_x86_64,elf_arm64}.hexa`",
+              "LIR → assembly text or direct native object serialization"
+            ],
+            [
+              "Linker",
+              "`tool/hexa_ld.hexa`",
+              "Native static linker (`hexa_ld`) → ELF64 / Mach-O arm64 binary"
+            ],
+            [
+              "Diagnostics",
+              "`compiler/diag/{catalog,builder,render}.hexa`",
+              "Error catalog `HX0001`–`HX8004`, pretty/json/github rendering"
+            ],
+            [
+              "Self-host bootstrap",
+              "`self/bootstrap.hexa`, `self/main.hexa`",
+              "Compiler written in `.hexa` that builds itself"
+            ],
+            [
+              "stdlib",
+              "`stdlib/` (STDLIB.md)",
+              "Runtime + domain modules: io/math/thread/posix, collections, crypto, codec, bio, chem, cloud, `flame` (NN training), `forge` (GPU substrate)"
+            ],
+            [
+              "Atlas CLI",
+              "`tool/atlas_cli.hexa` → `bin/hexa-atlas`",
+              "`hexa atlas {register,verify,reverify,search,cascade,proof,diff,infer-edges,stats,census,resolve}`"
+            ],
+            [
+              "Atlas resolve (mechanical no-LLM loop)",
+              "`hexa atlas resolve [--n N] [--fold]` (read-only phase-1, `cmd_resolve` in `tool/atlas_cli.hexa`)",
+              "The MECHANICAL (no-LLM, deterministic, idempotent) self-completing loop over the @F identity grid: where `census` reports 2081 POOLED blanks, `resolve` DECIDES every cell by sweeping n in [2,N] (default 20000) and counting exact-integer solutions of A*B=C*D over the 11-function vocabulary {sig sig2 phi tau n sopfr rad J2 psi Om om}. 4-way split @ N=20000: filled-🔵 64 (1-sol n≥4 = the @F atoms) + closed-⚪ 1654 (0-sol genuine non-identity = @N candidates) + multi-⊞ 321 (≥2-sol looser identity) + degenerate 106 (1-sol n<4); CHECK 64+1654+321+106 = 2145 (frozen oracle `ATLAS/state/novel-dfs/census_blank_classify.py`). REUSE: the arithmetic vocabulary is derived from the in-tree `congruence_chain_engine::factorize(n)` (already imported — the same prime-factorization euler_phi/sigma_k/`register --from-verify` rest on), then af() reconstructed via the exact multiplicative formulas of `blue_harvest_12fn.py::af()` (sig3 excluded). PHASE 1 = sweep+classify+report only (no machine-SSOT mutation). `--fold` = PHASE 2 IMPLEMENTED — folds the closed-⚪ verdict as a SINGLE census-SUMMARY atom (`atlas-census-closed-nonidentity-2factor`) into embedded.gen.hexa via `_fold_into_embedded` (idempotent on (kind,id); governed: PR + hexa verify). KIND HONESTY: the atlas loader (static_index::_bucket_by_kind / parser::_kind_of) recognizes ONLY P/C/L/E/F/R/S/X/Q — there is NO `@N` kind (an @N atom parses with kind=empty and is DROPPED from every bucket, unretrievable). So rather than add a schema kind for one negative-summary atom, the census-negative is folded as an `@L` law (a recognized, loadable, retrievable kind; the @N-census semantics are preserved in the atom body). HONEST BLOAT DECISION: the 35519 individual closed-⚪ negatives (1654 2-factor + 33865 3-factor) are NOT mass-folded — that would add ~22 MB of struct text to the ~11 MB embed (≈3x bloat) for low-value bounded negatives; the durable fact is the COUNT, recorded by the one summary atom (generators census_blank_Nfold.py + grid3_classify.py). Fleet r1 sweeps (ATLAS/state/novel-dfs/): @N atoms 1654 emitted (census_blank_Nfold); grid-expansion (grid_expand_sweep) found 3-factor `A·B·C=D·E·F` over the 11 funcs has **1431 bounded-unique identities** (40755 cells — a ~22× expansion frontier; sig3 adds 0, confirming the 11-func vocabulary); multi-⊞ characterization (multi_universal_sweep) split the 321 multi-sol cells into **universal(∀n)=0 + partial=321** = all finite coincidences, NOT theorems (the same-n 2×2 product frame cannot express a for-all-n multiplicative identity like φ·ψ=J₂ — that needs a unit-function factor or a 3-term frame). Fleet r2: the 3-factor grid is now fully 4-way censused (grid3_classify) — 40755 cells = 1431 filled + 33865 closed-⚪ + 3811 multi + 1648 degenerate; and the universal-hunt (universal_hunt, unit-fn + 2/3-term frame) MECHANICALLY DISCOVERED the atlas's first ∀n true-forever identity: **`J₂ = φ·ψ`** (Jordan-totient identity J₂(n)=φ(n)·ψ(n) ∀n — the only distinct real one in this frame; independently verified ∀n∈[2,3000]), a classical-cite @F/@L promotion candidate. Additive functions (Ω/ω/sopfr) yield no ∀n product-identity (separate sum-frame lane). FOLDED (#atlas-j2-fold): `J₂ = φ·ψ` is now an `@F atlas-jordan-totient-J2-eq-phi-psi` atom in embedded.gen.hexa's `ATLAS_F_NODES` section (classical cite — Jordan 1870 / Dedekind ψ, NOT novel; grade verified:false like every other @F until a real `hexa verify` certifies it; generator ATLAS/state/novel-dfs/jordan_totient_fold.py) — the atlas's FIRST machine-discovered ∀n true-forever node. `hexa atlas lookup` retrieves it; `stats` F-count incremented."
+            ],
+            [
+              "Atlas census (cartography→census)",
+              "`hexa atlas census` (read-only, `cmd_census` in `tool/atlas_cli.hexa`)",
+              "Counts BLANK cells of the @F arithmetic-function identity grid (A*B=C*D over the 11-function vocabulary phi/J2/n/psi/sopfr/Om/rad/om/tau/sigma/sig2): denominator P*(P-1)/2 = 2145 (P=66), filled 64, blank 2081, coverage 2.98% — integer-index keyed (no string `<`/float). Unlike rtsc material-candidate gaps (need external evidence), @F blanks are MECHANICALLY decidable: `ATLAS/state/novel-dfs/census_blank_classify.py` (reuses `blue_harvest_12fn.py` af()) resolves all 2081 blanks → closed-⚪ 1654 (0-sol genuine non-identity = @N refuted-atom candidates) + multi-⊞ 321 (≥2-sol looser identity) + degenerate 106 (1-sol n<4). Next: fold closed-⚪ as @N atoms into embedded.gen.hexa + extend census to the 4-way split (filled/closed/multi/degenerate)"
+            ],
+            [
+              "hx package manager",
+              "`tool/hx.hexa`",
+              "Git-like CLI with SSOT attestation: `commit`/`push`/`edit`/`build`/`verify`/`install`/`search`. **Dependency resolution (Go/Rust parity lane-1, 2026-06-27):** `hx resolve [dir]` runs **Minimal Version Selection (MVS)** over `hexa.toml [dependencies]` → deterministic `hexa.lock` — the cargo/`go mod` core that the lockfile/semver/ed25519 schema halves previously lacked. Algorithm SSOT = `stdlib/hx/resolve.hexa` (`mvs_resolve`, reference-matched to go.dev/ref/mod#minimal-version-selection + cmd/go/internal/mvs; reuses `stdlib/semver.hexa` `semver_satisfies`/`semver_compare` for the range gate and `stdlib/hx/lockfile.hexa` for serialization). Bare `X.Y.Z` requirements read as Go-style lower bounds (`>=X.Y.Z`); range upper bounds (`^`/`~`/`<`) are the only conflict source. Wired: `tool/hx_resolve.hexa` (reads the vendored `packages/<name>/hexa.toml` tree → registry; network fetch is a separate lane) ← `tool/hx.hexa::_cmd_resolve` + bash `tool/pkg/hx::cmd_resolve`. Selftest `self/test_hx_resolve.hexa` (linear/diamond/conflict/idempotent). Pure additive stdlib — 0 codegen/runtime/frozen-seed touch, byte-eq-neutral. (v2 candidate: cargo PubGrub backtracking.)"
+            ],
+            [
+              "CLI front-ends",
+              "`bin/hexa-*`",
+              "`hexa-run`, `hexa-fast`, `hexa-commit`, `hexa-push` driver shims"
+            ],
+            [
+              "STDLIB CLI verbs",
+              "`self/stdlib_commands.hexa` → `self/main.hexa` dispatch",
+              "Roster SSOT for the stdlib-CLI verbs (verify/atlas/qrng/cloud/loop/…) + the `gen` 빵틀 family `hexa {deck,dojo,easy,hf}` — each routes via `cmd_run` to `stdlib/<verb>/cli.hexa`; command↔dispatch drift is gated by `self/stdlib_help_drift_test.hexa`"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "data-flow",
+      "title": "Data flow",
+      "blocks": [
+        {
+          "type": "codeblock",
+          "lang": "text",
+          "text": "source (.hexa)\n     │\n     ▼  S0–S8 strict-lint gate (fatal on error → NO binary)\n  lex → parse → resolve → bind → types → domain → units → @verify → citation\n                                                              │\n                                          static_atlas() ─────┘   (embedded.gen.hexa)\n     │\n     ▼  lowering (target-agnostic)\n  AST → HIR → MIR (SSA) → optimize\n     │\n     ▼  backend (target-specific)\n  codegen (LIR) → emit (.s / .o)\n     │\n     ▼  link\n  hexa_ld → ELF64 / Mach-O arm64 static\n     │\n     ▼\n  native binary"
+        },
+        {
+          "type": "prose",
+          "text": "The atlas is consulted only at the S8 citation gate; once the gate passes, lowering and codegen run with no atlas dependency, so the produced binary carries zero verification overhead."
+        }
+      ]
+    },
+    {
+      "id": "language-surface",
+      "title": "Language feature surface — parity census vs Go/Rust",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Current-state census of what the .hexa language supports vs frontier languages (Go·Rust), captured 2026-06-27 by a 4-agent read-only sweep of compiler/ + self/ + stdlib/. This node is the SSOT index of language-level gaps (NOT a roadmap — actionable items live on the ING board; history in CHANGELOG+git). The framing premise reshapes the whole table: hexa is DYNAMICALLY TYPED — types resolve at runtime via a {tag,payload} value, every fn is auto-polymorphic, and `compiler/parse/parser.hexa:1811-1818` confirms typecheck/codegen ERASE generics (Box<Int>·Box<Str> share one MIR shape) with `compiler/check/types.hexa:1-40` a typecheck stub. Roughly half the 'missing' Rust/Go features flow from that single design choice, not from incompleteness."
+        },
+        {
+          "type": "subsection",
+          "title": "Tier-1 — true gaps (BOTH Go and Rust have it, hexa does not)",
+          "blocks": [
+            {
+              "type": "list",
+              "items": [
+                "Static generics / monomorphization — parsed only, codegen erases (`compiler/parse/parser.hexa:1811`). Limits codegen specialization. OPT-IN slice R1 landed (PR#NN, `state/rfc_static_generics_monomorphization.md`): native `parse_fn_item` now consumes `<T>` (parity w/ struct + self/parser, byte-neutral), and a default-OFF MIR pass `compiler/optimize/monomorphize.hexa` (gated `HEXA_MONOMORPHIZE=1`, no-op unless a `$$g`-marked template exists) clones+mangles a generic template per call-site concrete type (`id$int`/`id$str`) à la rustc/zig/swift specialization. DEFAULT path stays erased + byteeq-neutral. R2 COMPLETED end-to-end emit (PR#NN): `hir_to_mir::_lower_fn` now suffixes an `@specialize` fn's MFunc name with the `$$g` template marker under `HEXA_MONOMORPHIZE=1` (mirroring the `@gpu_*`→`gpu_kind` annotation precedent), so the pass actually emits `id$int`/`id$str` instances; call-site concrete tag is captured from the const operand kind (no extra threading needed). The kept template is RENAMED to its base name as the erased fallback for `dyn` call sites (`$$g` never reaches codegen). Asserted by `tool/test_monomorphize_emit.sh` (asm grep) + `self/test_monomorphize_emit.hexa` (runtime-neutral). DEFAULT (flag-unset) asm stays byte-identical on the 3 byteeq targets.",
+                "Type alias / newtype — LANDED (native path, `state/rfc_type_alias.md`): `type Name = Underlying` (+ `pub type`, generic `type Box<T> = …`, alias chains `type Temp = Celsius`) now parses. No new keyword/token (frozen-parser safe) — `type` is detected as an `Ident` leader at item position via `compiler/parse/parser.hexa::_peek_is_type_kw`, mirroring the `extern fn` (`_peek_is_extern_kw`) idiom. The alias is carried as an `ItemKind::Let` tagged `@phase(\"parse_only\")` + a bare `__type_alias` marker (`compiler/parse/ast.hexa::item_is_type_alias`), so NO new `ItemKind` variant → every exhaustive `match ItemKind` site is untouched. The types pass (`compiler/check/types.hexa::_types_register_aliases` → `_types_lower_type_ref`) builds an alias→underlying substitution table up front so `Celsius` lowers to `f64` everywhere a TypeRef is resolved (Rust `type Kilometers = i32` / Go alias semantics, bounded 16-hop chain resolution defuses `type A = A` cycles); `lower/ast_to_hir.hexa` drops the carrier so it emits nothing. Purely additive — alias-free programs are byte-identical on the 3 byteeq targets (the substitution table is empty → `_types_resolve_alias_name` returns its input unchanged). Tests `compiler/parse/parser_test.hexa::case_type_alias` (alias_count=4, 0 diags, fn-signature use type-checks clean). R2 gap: true `newtype` nominal distinction (a distinct type that is NOT interchangeable with its base, e.g. Rust tuple-struct `struct Meters(f64)`) — the current `type` is a transparent alias only.",
+                "Interface/trait dispatch — `impl T For X` PARSES (`self/parser.hexa:2603`) but no checking, no vtable. Method dispatch on structs works; trait-bounded polymorphism does not.",
+                "Operator overloading — fixed 21-operator set (`compiler/lex/tokens.hexa:58-73`), no magic methods.",
+                "OS threads / goroutines — single-threaded by DEFAULT (`stdlib/cancel.hexa:54`); async/await PARSE but run synchronously (RFC-022). The pthread spawn/join+condvar-channel runtime (`self/native/thread.c`) routes through `hxlcl_pthread_*` shims. OPT-IN real OS threads LANDED: the shims are gated in `self/runtime_emit_full.hexa` — `#if defined(HEXA_THREADS)` maps them 1:1 onto POSIX `pthread_create`/`pthread_join`/mutex/cond; the `#else` branch is the byte-identical synchronous fallback (default). `thread_spawn`/`thread_join` fn-globals become real OS threads under `-DHEXA_THREADS`; default preprocesses out → byteeq unaffected. hexa wrappers in `stdlib/thread_real.hexa`, oracle `self/test_real_spawn.hexa`. SSOT: state/rfc_real_concurrency_optin.md §c.",
+                "Real mutex/atomic — by-value sim is the byte-deterministic DEFAULT (`self/atomic_ops.hexa:1-3`). OPT-IN real hardware atomics LANDED: C11/GCC `__atomic_*` seq-cst cells behind `#if defined(HEXA_THREADS)` (`self/native/thread_emit.hexa`→thread.c), hexa wrappers in `stdlib/atomic_real.hexa`. Default preprocesses out → byteeq unaffected. SSOT: state/rfc_real_concurrency_optin.md.",
+                "Regex — core + lookaround/backref LANDED (HYBRID engine). `stdlib/regex/thompson.hexa` = linear-time Thompson NFA (RE2-style, PR#4046, compile/match/search/find_all); `stdlib/regex/backtrack.hexa` (R2) = bounded BACKTRACKING VM (Russ Cox regexp2) adding lookahead `(?=…)(?!…)`, lookbehind `(?<=…)(?<!…)`, and backreferences `\\1..\\9` — the constructs an NFA cannot express. `regex_compile` auto-dispatches per pattern (Rust regex-style automata+backtrack hybrid; API unchanged); the backtrack path carries a step-cap (default 1e6, `regex_compile_capped`) that aborts catastrophic patterns SAFELY (`regex_last_error==1`). **R4 (capture-span + variable-width lookbehind LANDED): `regex_compile_captures`/`regex_captures`/`regex_cap_count`/`regex_cap_span`/`regex_cap_text` extract per-group spans+text from the backtracker's `save` slots (group 0 = whole match; PCRE `pcre_exec` ovector / Rust `regex::Captures` model — the capturing backtrack engine reports sub-groups, the linear Thompson engine reports group 0 only). Lookbehind upgraded from FIXED-WIDTH-only to BOUNDED-WIDTH (PCRE2/.NET/Python-`regex`): a bounded-variable inner `(?<=ab?)`/`(?<=a{1,3})`/`(?<=foo|ba)` now compiles (scanned via a POS-EQ end-anchor over `[si-maxw, si-minw]`); only UNBOUNDED `* + {n,}` still rejected.** Both engines byteeq-neutral (self/ does not import).",
+                "Package-manager dependency RESOLVER + registry — hx has lockfile/semver/ed25519 SCHEMA only (`stdlib/hx/lockfile.hexa`, `semver.hexa`); `hexa.toml [dependencies]` is empty, no transitive resolve, no central registry. The largest DX-canonical gap vs cargo/go-mod."
+              ]
+            }
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "Tier-2 — Rust-only gaps (Go also lacks → lower priority)",
+          "blocks": [
+            {
+              "type": "list",
+              "items": [
+                "Ownership / borrow checker — `own`/`borrow` tokens recognized (bootstrap.hexa) but NO checking; arena scope is the actual lifetime model. RESEARCH RFC `state/rfc_advanced_typesystem.md` §4.1: borrow ENFORCEMENT is vacuous under the bump-arena (nothing frees mid-scope), but an advisory-only MIR dataflow lint (default-OFF `HEXA_BORROWCK=1`, warning `HX46xx`, reusing the already-recognized `move`/`borrow` tokens) is the byteeq-safe on-ramp — reference: rustc MIR borrowck / NLL RFC 2094 / Polonius. Strict enforcement is blocked on a non-arena allocator (`HEXA_STREAM_RECLAIM` free-tree).",
+                "Lifetimes `'a` — none (arena-scope owns lifetime, `self/codegen.hexa`). RESEARCH RFC `state/rfc_advanced_typesystem.md` §4.2: lifetimes are erased before codegen in rustc ⇒ byteeq-neutral by construction; the ONLY wall is the frozen lexer (`151c52c8`) cannot read `'a` syntax. Honest ceiling = encode `outlives` relations inside annotation-arg strings (no new token/`@attr`), advisory-only.",
+                "Drop trait / RAII destructors — only `defer`/`drop` markers (codegen defer section), no auto-cleanup.",
+                "Associated types · HKT — none. RESEARCH RFC `state/rfc_advanced_typesystem.md` §4.3-4.4: associated types are gated behind trait resolution (Tier-1 gap, no slice) — RFC 0195 type-projection has nothing to resolve against; HKT is the deepest wall, needing a type system AND a kind system above it (GHC kinds; Rust itself omits HKT, approximating via GATs RFC 1598/2289). Both are measured DESIGN-SCALE ceilings under the dynamic-erasure value model, not actionable slices. Const generics + where-clause/trait-bound ENFORCEMENT — check-only OPT-IN reference slice landed (PR#NN, `state/rfc_const_generics_where_bounds.md`): the standalone generics typechecker prototype `self/test_generics_typecheck.hexa` models `struct Buf<const N>` (const param sentinel in the bound slot — value-vs-type instantiation validation à la rustc min_const_generics) and where-clause desugaring (`<T,U> where T: Ord` ≡ `<T: Ord, U>`, multi-clause accumulation `T: Ord+Num`) with a rustc-faithful trait-impl registry (f64 is PartialOrd but NOT Ord — reproduced). The check algorithm is now PORTED into `compiler/check/types.hexa` as the opt-in `_cg_*` pass (env `HEXA_CONST_GENERICS=1`, default-OFF, mirrors the proven `_exh_*` exhaustiveness gate): it decodes a synthetic `__cg` annotation off `Item.annotations`, validates const value-vs-type slots (HX3007) and trait bounds (HX3008), and promotes bound violations from WARNING to fatal Error under `HEXA_STRICT_BOUNDS=1`. Parser generic-param CAPTURE at `parser.hexa:1779/1868` serializes `<…>`+`where` into the `__cg` annotation only when the env is set (erase path verbatim otherwise → byte-identical AST). DEFAULT compile path untouched → byteeq-neutral; gen3≡gen4 fixpoint intact.",
+                "Pattern guards (`pattern if cond -> body`) — DONE (native path): parsed in `compiler/parse/parser.hexa::parse_match_expr` (reuses the `if` token, no new keyword; stored as an If-kind `match_guard` carrier — `ast.hexa::ast_is_match_guard`, no new ExprKind variant), bound in `check/bind.hexa`, lowered through `lower/ast_to_hir.hexa` (HIR `match_guard`) → `lower/hir_to_mir.hexa` (guard `STMT_BR_COND`: truthy→body, falsy→next arm; Rust semantics). Purely additive — unguarded arms byte-identical, so byteeq-neutral; self/ unused → fixpoint untouched. cite The Rust Reference §Match guards. Exhaustiveness checking — non-exhaustive enum-match WARNING (HX3006, S3, non-fatal) in `check/types.hexa::_exh_*` (Maranget 2007 single-column enum usefulness; guarded arms don't count toward coverage), opt-in `HEXA_EXHAUSTIVE=1` (default-OFF on introduction = zero diagnostic delta on the default build, release-integrity-first; promotable once corpus measured clean). Tests `self/test_match_guard.hexa` · `self/test_match_exhaustive.hexa`.",
+                "Struct-destructure patterns `Point{x,y}` — absent.",
+                "`?` error-propagation operator — absent (combinators / try-catch substitute, `self/test_result_type.hexa`).",
+                "Inline asm (`asm!`) — absent (extern fn + syscall emit exist).",
+                "Function overloading — absent ('later def ignored', codegen comment).",
+                "Per-field struct visibility — parse + checker enforcement LANDED (was struct-level `pub` only). `self/parser.hexa::parse_struct_decl` already accepted an optional `pub`/`pub(scope)` on each field but DISCARDED it; it now captures the visibility string onto a new `vis` AST slot (sibling of the proven `default_expr` slot — no new keyword/token, codegen ignores it → byteeq-neutral). `self/type_checker.hexa` records per-field visibility in a `struct_all_field_vis[]` array parallel to the existing name/type registry and, in the `Field`-access arm, flags a `private` field reached from a non-`self` receiver. OPT-IN via `HEXA_CHECK_FIELD_VIS` (default-OFF = zero diagnostic delta on every build path; `warn`/`1` → soft `[warn]`, `fatal`/`error` → hard type error), mirroring the `HEXA_EXHAUSTIVE` release-integrity-first precedent. WALL (documented follow-up `state/rfc_field_visibility.md`): the module loader flattens all module sources before parse, so no per-decl module id survives to the AST — the enforced granularity is therefore the type's own methods (`self`-access), STRICTER than Rust module / Go package privacy; true cross-module scoping needs module-provenance threaded flatten→parse→check (design-scale). Reference: rustc privacy pass · Go unexported (lowercase) fields. Tests `self/test_field_visibility.hexa` (23/23 interpreter)."
+              ]
+            }
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "Present (anti-myth — these DO exist)",
+          "blocks": [
+            {
+              "type": "list",
+              "items": [
+                "async/await syntax (synchronous exec), channels (POSIX FIFO + select), closures+capture, comptime blocks + const-fold, derive·macro parsing, `where`-clause parsing, variadic + default args, extern FFI, semver/lockfile/ed25519 signing.",
+                "Self-hosted toolchain entirely in .hexa: LSP (`self/lsp.hexa`), formatter (`self/formatter.hexa`), linter (`self/linter.hexa`), test runner — where Go/Rust ship these as external tools.",
+                "65 semantic attributes (`self/attrs/_registry.hexa`): @pure·@autograd·@quantize·@dispatch·@memoize·@watchdog·… richer than Go (comments) / on par with Rust attrs."
+              ]
+            }
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "hexa-only (Go/Rust lack these — overtaking levers)",
+          "blocks": [
+            {
+              "type": "list",
+              "items": [
+                "ATLAS theorem verification embedded in the compiler — `@cite(L[id])`/@verify gate, S8 fatal HX8004 refuses to emit a binary for an uncited formula-bearing fn.",
+                "Byte-identical self-host fixpoint (gen3≡gen4), default for --emit.",
+                "No-LLVM direct native emit (AST→IR→ELF64/Mach-O, linked by hexa_ld).",
+                "Arena deterministic memory (bump allocator, free=noop, GC-free)."
+              ]
+            }
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "Impact ranking (largest→smallest gap)",
+          "blocks": [
+            {
+              "type": "list",
+              "items": [
+                "① Static typing/generics absence — root of half the Tier-1 list; but a DESIGN CHOICE (dynamic dispatch intended), not strictly a defect.",
+                "② Real concurrency + synchronization — single-thread + simulated mutex = zero multicore. IN PROGRESS (opt-in default-OFF, byteeq-neutral): real `__atomic` atomics (slice-1) AND real OS-thread `spawn`/`join` now both landed behind `-DHEXA_THREADS` — `hxlcl_pthread_*` shims gated 1:1 onto POSIX pthread in `self/runtime_emit_full.hexa`, `#else` = byte-identical synchronous fallback. Default build never passes `-DHEXA_THREADS` (determinism isolation). state/rfc_real_concurrency_optin.md §c.",
+                "③ hx dependency resolver — cargo/go-mod core, schema-only today; independent + low release-integrity risk + DX-canonical → best impact/effort.",
+                "④ regex (linear-time Thompson NFA core PR#4046 + R2 lookahead/lookbehind/backref via bounded backtracking VM `stdlib/regex/backtrack.hexa`, auto-dispatched, step-cap guarded; R4 capture-span extraction `regex_captures`/`regex_cap_span`/`regex_cap_text` + bounded variable-width lookbehind LANDED) + match exhaustiveness — frequent in real use.",
+                "⑤ borrow/lifetime/HKT — Rust-only, Go also lacks → defer."
+              ]
+            }
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "Design walls — measured ceilings (intentional · identity trade)",
+          "blocks": [
+            {
+              "type": "list",
+              "items": [
+                "Wall A — Dynamic {tag,payload} value model (no compile-time types). The runtime dispatches on a value tag, so there is no compile-time type to prove against. This is the root of most frontier-language gaps; for each, the CHECK layer lands opt-in but the static-dispatch / type-parameterization depth is a ceiling: (1) full static type inference (HM/Rust-style) — no compile-time type exists to infer; (2) `dyn Trait` fat-pointer vtable — only runtime-tag dispatch is expressible (PR#4086, HEXA_TRAIT_DISPATCH); (3) higher-kinded-type (HKT) type-constructor dispatch — only kind-arity CHECK lands (PR#4084, HEXA_HKT, HX3011), true HKT dispatch ceiling-documented inside the HX3011 explain itself; (4) type-based function overloading — types unknown at compile time → arity-mangle / runtime-tag dispatch only (PR#4066); (5) value-dependent const generics — check-only validation (PR#4063, HEXA_CONST_GENERICS); (6) full ownership-typed borrow checker — advisory heuristic on move-semantics + mut-capture proxy only (PR#4088, HEXA_BORROW_CHECK, HX2007/HX2008); (7) lifetime-parameterized types — scope-outlives advisory only (PR#4089, HEXA_LIFETIME_CHECK). Each (2)-(7) ships its CHECK layer; only the static-dispatch / type-parameterization depth is the wall.",
+                "Wall B — Frozen seed 151c52c8 parser (no new keyword / token / @attr). The bootstrap seed compiler must keep parsing the compiler source byte-faithfully, so a genuinely new lexer keyword or token would break the faithful build. Consequence: real `own`/`borrow`/`&mut` tokens are unavailable (`&` lexes only as bitwise-and, measured in PR#4088); `dyn`/`impl Trait` have no `KwTrait`/`KwImpl` (PR#4086 routes via contextual bare-Ident detection); new `@<attr>` attribute keywords faithful-build-break. Every new language surface must route through contextual-identifier detection + an env-gate (the `_peek_is_*_kw` idiom) — no genuinely new syntax token may be introduced.",
+                "Wall C — Single-thread + byteeq determinism (COMPILER self-host scope ONLY). The compiler itself cannot use real parallelism without breaking the gen3≡gen4 byte-identical self-host fixpoint; multi-thread atomic is a no-op under the single-thread default. NOTE: user programs ESCAPE this wall — stdlib `thread_real` (pthread 1:1, PR#4050) + `atomic_real` (C11 seq-cst, PR#4043) under `-DHEXA_THREADS` give real OS threads + hardware atomics; the default `#else` branch is the byte-deterministic synchronous fallback. The wall is compiler-self-host-scoped, NOT a language-level ban on user concurrency.",
+                "Wall D — No-LLVM (chosen tradeoff, NOT a capability ceiling). No LLVM-ecosystem passes / tooling are available. But hexa's own codegen reaches kernel parity~beyond (forge own-GEMM = cuBLAS parity~win, CPU BLIS GEBP 62-79% roofline + epilogue fusion), so this is a deliberate architecture choice with measured parity, not a forced ceiling.",
+                "Honest classification — genuinely-blocked-tech with code-0 = 0. Every wall-A/B item ships its CHECK layer as an opt-in default-OFF byteeq-neutral slice; only the deep static-dispatch / type-parameterization remains, with the reason embedded in the diagnostic itself (e.g. HX3011 kind-system explain). Wall C is escapable by user programs (thread_real/atomic_real); Wall D is a chosen tradeoff at measured parity. The walls are the identity trade hexa pays for being dynamic + bit-deterministic + frozen-self-host — and frontier-language determinism/verify/domain-fusion levers are what it buys in return.",
+                "ROADMAP (decision 2026-06-27 · narrow A+B toward Rust standard, both AUTHORIZED): Wall A — build a gradual SOUND static-type layer targeting RUST-level guarantees (NOT Go's minimal bar): opt-in HEXA_STATIC_TYPES default-OFF, byteeq-neutral, runtime stays dynamic ({tag,payload} value model kept for self-host simplicity), but ANNOTATED code is compile-REJECTED (not advisory-warned) à la rustc. Ladder: r1 `let x: T = mismatch` → fatal HX error; r2 fn-signature arg/return check; r3 Option/null-safety; r4 sum-type exhaustiveness; r5 trait-bound. This is the REAL fill for the type-safety axis — orthogonal to @verify (math-law axis) and byteeq (reproducibility axis), which do NOT compensate for type safety (measured: citation.hexa checks atlas-law citation only; default type-check ships opt-in). ING-tracked. Wall B — re-bootstrap a NEW frozen seed to allow canonical keywords (retire the contextual-ident workarounds: real `type`/`trait`/`impl`/`dyn` tokens): self-imposed + removable discipline whose trust is ALREADY provided by byteeq (Wall C), so B is a duplicate insurance worth retiring. HIGHEST-RISK substrate (re-seed affects the whole faithful build) → RFC + de-risk ladder FIRST (plan-only), new-seed build validated on aiden/summer pool with byteeq 3-target GREEN before any flip, release-integrity > self-host kept absolute. Wall C stays KEEP (determinism = byteeq's everything, near-zero cost).",
+                "Wall B r2 collision census (MEASURED 2026-06-27, PR Wall-B-r2 · doc-only, state/rfc_reseed_canonical_keywords.md §9): across 6321 corpus .hexa files the ~457 identifier-position uses of type/trait/impl/dyn/extern (field-access `.kw` + param/field/arg `kw[:,)]`) yield COLLISION COUNT = 0 — the native hooks (`_peek_is_extern_kw`/`_peek_is_type_kw`) fire only at item-dispatch position behind a peek_at(1) lookahead (extern→KwFn, type→Ident), so identifier uses are structurally invisible; every col-0 `extern` (329/329) is the intended `extern fn`, the 1 col-0 `type` is the intended alias, and trait/impl/dyn have no native hook. VERDICT = Wall B NON-WALL for the contextual approach (lookahead-gated detection permanently sound) → DEFER reseed; re-freeze would INVERT to ~457 collisions + a global seed flip (costlier path). Re-open only for a token the contextual idiom cannot carry (new @attr / new ItemKind)."
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "verify-gate",
+      "title": "Verify gate (g5)",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "`hexa verify` is the single canonical verification surface and the project's g5 gate:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "**S6 equational `@verify`** (in-compiler): canonicalizes LHS/RHS (const-fold, associativity, commutativity), checks equality, then does a deterministic sample-eval counter-example search. Failures surface as `HX6001` (normalization mismatch) or `HX6002` (witness found).",
+            "**S8 citation** (in-compiler): every formula-bearing function must resolve its cited `L[id]` in `static_atlas()`, with kind match and tombstone check, else fatal `HX8004`/`HX1099`.",
+            "**`hexa atlas verify` / `reverify`** (tool-level): recomputes atlas F/P nodes and reports `MATCH`/`DRIFT`/`UNVERIFIABLE` against the recorded claim (ε tolerance); a successful verify **auto-folds** the verified atom into the atlas (`embedded.gen.hexa`) — verify is ambient, not a separate `atlas register` ceremony."
+          ]
+        },
+        {
+          "type": "prose",
+          "text": "CI runs the same gate (`.github/workflows/lint.yml`); `hx commit`/`hx push` re-run the lint gate and stamp a `raw-all-attest` trailer so every commit is attested against the SSOT."
+        },
+        {
+          "type": "prose",
+          "text": "**지속 QA (verify-done 상시화)** — g5 게이트 위에서 모든 fix·기능·측정을 measure → root-cause → build-verify → 머지 한 루프로 닫는 상시 검증 루프(거버넌스 SSOT = CLAUDE.md 작업규칙 `QA`). 코드젠/런타임 변경은 byteeq 3타깃 + config 전수(REF · DEVRESIDENT · DEVFEED) byte-eq 실측으로, 측정 주장은 reference-match(roofline % · cuBLAS · nsys 커널 귀속)로 정답지에 대조해 증명한다. QA 하네스: `tool/restore_frozen_seeds` + `tool/build_cuda_runtime`(GPU byte-eq 빌드) · `tool/decode_eager_baseline.cu`(nsys 시간 귀속) · `release.yml` finalize(byteeq 3타깃 all-green stable 게이트). 산출(verdict · 측정)은 memory/CHANGELOG/state 박제, cross-repo 측정은 `ing add --to <repo>` relay. 빌드/측정 = aiden/summer/vast pool(mini=git/gh only). 또한 **native-canonical-default polarity 위반**(native 를 플래그 뒤로 숨기고 외부의존을 기본으로 둠 · `HEXA_NO_<vendor>` 로 native opt-in · codegen-fragile 손짜기 대체)도 감사·교정한다 — 교정은 byteeq-safe(felt-default=native 유지), 플래그 명명은 켜는 게 외부의존 활성화(`HEXA_USE_<vendor>`)가 되도록 정렬."
+        }
+      ]
+    },
+    {
+      "id": "atlas",
+      "title": "Atlas — math-map + novelhunt campaign",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "거시(정수론) ↔ 양자(격자·모듈러형식·CFT·QEC) 수학 지도. 사람층 원장=atlas/README.md + atlas/hypotheses/H-*.md, 기계 SSOT=compiler/atlas/embedded.gen.hexa(@F verdict atom). 적재는 항상 양층(verify is ambient · CLAUDE.md)."
+        }
+      ],
+      "novelhunt": {
+        "goal": "거시↔양자 결정적 novel(Fields/필즈급) 후보를 정직 verify-gate로 발굴. 날조 금지(c2). LLM은 'breakthrough/필즈급' 선언 불가 — 🟧+ 후보는 형식증명(Lean)/전문가 검토로 에스컬레이션.",
+        "tiers": {
+          "🔵": "hexa verify PASS + closed-form (기계 검증)",
+          "🟢": "exact/머신정밀 classical (novel 아님)",
+          "🟡": "proven theorem · hexa verifier 미작성",
+          "🟧": "미기록·UNPROVEN coincidence (형식검토 대기)",
+          "❌": "falsified / 거짓"
+        },
+        "fold_policy": "verify is ambient: 🔵/🟢 hexa verify auto-fold; 빌드불가(mini)는 state/novel-dfs/fleet_fold.py로 @F atom PR-fold. 사람층 README + 기계층 embedded.gen.hexa 둘 다 적재.",
+        "fleet_lanes": {
+          "theta": "🧱 closed-classical (E8·Leech·isospectral·Niemeier; rank≥32 research-open)",
+          "modular": "🏁 DRAINED (1-dim weights {4,6,8,10,14}; k=12 cusp closes)",
+          "spectral": "🏁 DRAINED (Poisson→θ→ζ-FE·heat-kernel·von Mangoldt·func-det; 잔여 Hilbert–Pólya conjecture)",
+          "codes": "🏁 DRAINED (MacWilliams·Broué–Enguehard·Gleason 환동형 — codes↔modular 환수준 완성)",
+          "novelhunt-q": "🏁 DRAINED (SU(2)_k; (A′) folklore FALSIFIED)",
+          "partitions": "🏁 DRAINED (Euler·Ramanujan·Rogers–Ramanujan; 잔여 rank/crank·mock theta)",
+          "novelhunt-mod": "🏁 DRAINED r1 (weight-24 dim2·level-3: novel 0, 기존 Eisenstein 합동 환원·CM 반증; K₁₂ shell=검증Gram 부재 미산출)"
+        },
+        "candidates": [
+          {
+            "id": "H-NOVEL-1",
+            "tier": "🟢-negative",
+            "note": "level-1 weight≤12: novel 0 (차원적 닫힘)"
+          },
+          {
+            "id": "H-NOVEL-2",
+            "tier": "🟢-negative",
+            "note": "weight-24 dim2·level-3 dim≥2: novel 0 (기존 Eisenstein 합동 환원·CM 반증)"
+          },
+          {
+            "id": "H-NOVEL-3",
+            "tier": "🟢-folklore",
+            "note": "양자차원 Galois-trace=사면체수 FALSIFIED as novel (full-sum 오인)"
+          }
+        ],
+        "scoreboard": {
+          "novel_blue": 0,
+          "novel_orange_pending": 0,
+          "classical_atoms": 18,
+          "falsified": 1,
+          "status": "CAMPAIGN DRAINED (7/7 lanes) — 거시↔양자 novel 0건. 검증으로 입증된 정직 결론: weight≤24·level≤3 모듈러 영역 + 격자-theta·부호·분할·스펙트럼 vein 전부 차원적/구조적으로 닫힘(고전 강제). 남은 진짜 여지=검증된 외부 격자 Gram(K₁₂/BW₁₆/Λ₂₄, Sage/LMFDB) shell 산술 — LLM 단독 아닌 외부 데이터 모드.",
+          "honesty": "날조 0 · LLM breakthrough 선언 없음 · 음성도 검증으로 박제(c2)."
+        }
+      }
+    },
+    {
+      "id": "discovery-engine",
+      "title": "Discovery engine — NEXUS (drill / kick)",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "compiler/ 임베디드 발견엔진 (NEXUS 흡수형). 중앙 drill(라운드 루프) + smash(blowup 생성기) + 12 변종. CLI = `hexa drill` / `kick` (`drill/drill.hexa::drill_run(seed, opts)`), in-binary(서브프로세스 없음). 핵심 원칙: 발견 후보 ≠ 진짜 발견 — smash/drill candidate 는 결정적 seed-hash permutation/proxy 일 뿐이고, 진짜 검증은 exact-int `identity_engine` + `hexa verify` g5 게이트뿐이다 (c2 honesty: 확인된 식별자도 BOUNDED-UNIQUE 🟩 [2,N] exact 이며 ∀n 은 증명 전까지 UNPROVEN)."
+        },
+        {
+          "type": "subsection",
+          "title": "drill 코어 — round 루프 + exact-int 검증",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "drill.hexa = 라운드 루프 (smash→free→absolute→meta-closure→hyperarithmetic→resonance · Mk.X=stage7 transcendental). 단일 라운드는 6-stage 체인."
+            },
+            {
+              "type": "table",
+              "columns": [
+                "파일",
+                "역할"
+              ],
+              "rows": [
+                [
+                  "drill.hexa",
+                  "라운드 루프 오케스트레이션 (drill_run · _native_identity_sweep · _native_additive_screen)"
+                ],
+                [
+                  "round.hexa",
+                  "단일 라운드 6-stage 체인 (in-binary · 서브프로세스 없음)"
+                ],
+                [
+                  "resonance.hexa",
+                  "stage5 resonance 닫힌형 proxy"
+                ],
+                [
+                  "mkx.hexa",
+                  "Mk.X stage7 transcendental_closure 사이드카"
+                ],
+                [
+                  "identity_engine.hexa",
+                  "★ 네이티브 exact-int 검증기 (18-fn vocab · verify_identity A·B=C·D · verify_composition f∘g · verify_congruence a(αn+β)≡0 mod m · partition_p 등 가법수열)"
+                ],
+                [
+                  "checkpoint.hexa",
+                  "resume/save (drill_checkpoint.json · 발견스트림과 분리)"
+                ],
+                [
+                  "anti_hub.hexa",
+                  "env probe + telemetry"
+                ],
+                [
+                  "batch.hexa",
+                  "--seeds csv / --seeds-file 배치"
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "smash — 9-phase blowup 생성기",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "smash/ = 9-phase blowup 후보 생성기 (P1 normalize … P9 meta-closure DFS). phases.hexa = 알고리즘 골격 · candidate.hexa = DiscoveryCandidate. 생성물은 후보(proposal)일 뿐 — 검증 게이트 전까지 발견 아님."
+            }
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "변종 12종 (Phase3) + Wave1 흡수 레지스트리",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "omega(A10) · surge(A11) · dream(A12) · swarm(A13) · chain(A19 cross-engine) · reign(L6 autonomous) · wake(L8 reality-loop) · molt(L9 self-rewrite) · forge(L10 bootstrap) · canon_engine(L11 transfinite seal) · revive(engine+map v2) · debate(L3 N-variant adversarial). engine_registry/ · lens_taxonomy/ · lenses/ · n6_lattice/(n=6 5축 rodata · 외부영역 anchor 금지) · drill_dod/ 는 Wave1 흡수 rodata 인덱스(read-only). NEXUS 원본 운영 글루(bloom filter · hot-shard · jitter)는 의도적 미포팅 (atlas 가 rodata 라 불요)."
+            }
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "검증 게이트 — 후보 → 발견",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "유일한 진짜 검증 경로: ⓐ identity_engine.hexa exact-int 판정 (후보 A·B=C·D 가 n∈[2,N] exact-int 평가에서 bounded-unique singleton, n≥4) + ⓑ compiler/check/ S6 equational(@verify) · S8 citation(@cite · fatal HX8004) + ⓒ `hexa verify` g5 게이트. 🔵/🟢 verify PASS 시 atom 이 compiler/atlas/embedded.gen.hexa 로 자동 fold (별도 register ceremony 없음). 빌드불가(mini) 노드는 state/novel-dfs/*_fold.py 로 @F atom PR-fold. 사람층(atlas/README.md) + 기계층(embedded.gen.hexa) 항상 양층. numerology/lattice-fit/미증명 conjecture 의 🔵 승격 금지."
+            },
+            {
+              "type": "prose",
+              "text": "LLM-conjecture 경로(stdlib/loop/conjecture.hexa cj_verdict · hexa loop --dfs --allow-llm): LLM이 CONJECTURE: 줄로 추측 → exact-int 검증 통과 후 **6-class NOVEL-CLOSURE 게이트** 생존해야 verified-novel(아니면 verified-known demote) — C1 ASSOC-CHAIN+WATSON-TOWER({5,7,11}-smooth 분할합동·Watson1938) · C2 ε-degenerate · C3 square-witness · C4 bounded-coincidence · C5 recurrence-periodic(Pisano/Touchard). LLM proposes, closure+exact-int disposes = trustworthy novel-discriminator. 라이브 claude -p 측정(4런 자가교정): genuine novel survivor=0(표준+확장 vocab closed). byteeq-neutral(loop=cmd_run·self/ 밖)."
+            }
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "측정 종착 — MEASURED-EXHAUSTED (표준-어휘 수학)",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "표준 산술함수 vocab 발견공간은 측정-고갈. 엔진은 이 종착을 정직히 재현할 뿐 새 법칙을 날조하지 않는다 (c2)."
+            },
+            {
+              "type": "table",
+              "columns": [
+                "발견 경로",
+                "측정 결과"
+              ],
+              "rows": [
+                [
+                  "enumeration 5-family",
+                  "novel=0 — 곱셈 2-term(A·B=C·D) · 18-fn 확장 vocab · arity-3 · 함수합성 σ∘σ · 가법/조합(분할 p(n)·Catalan·Bell·Fib·Lucas) 전부 classical/reducible DRY"
+                ],
+                [
+                  "LLM-conjecture (라이브)",
+                  "anchor-only — hexa loop --dfs 정석 surface 로 실 LLM 추측→exact-int 게이트(23/24 반증·기각). 유일 생존 φ(J₂(n))=φ(n)+n 은 n=6(anchor)에서만 성립하는 우연 · ∀n 보편법칙 아님"
+                ],
+                [
+                  "부등식/극값 (family C)",
+                  "classical — Robin σ(n)<e^γ·n·ln ln n (리만가설 동치) · Lagarias · superabundant(A004394) 전부 고전 명명 객체 · novel=0"
+                ],
+                [
+                  "반복 동역학 (family D)",
+                  "classical — aliquot 궤도(perfect A000396 · amicable · sociable) · σ∘σ=2n superperfect 전부 고전 · novel=0 · 잔여 Catalan–Dickson 은 궤도 종료(exact-finite-witness 아님)"
+                ]
+              ]
+            },
+            {
+              "type": "prose",
+              "text": "4-축 분해 측정완료: vocab=표준 산술함수 · arity=1변수 · form={등식·부등식·궤도} · gate={bounded-unique·extremal-record·고정점/cycle}. exact-integer 수론 발견표면 = measured-exhausted. 잔여 미해결(RH · Catalan–Dickson)은 exact-finite-witness 관계가 아니라 bounded fold-engine 이 인증할 수 없는 영역 (연속/해석적 · 증명탐색 regime)."
+            }
+          ]
+        }
+      ]
+    }
+  ],
+=======
   "schemaVersion": "2.0",
   "kind": "architecture-tree",
   "title": "hexa-lang — Architecture (SSOT)",
   "summary": "Single source of truth for the final architecture",
   "viewer": "architecture.html",
   "serve": "python3 serve.py  (로컬 서버 + 브라우저 자동 오픈; file:// fetch 차단 우회)",
+>>>>>>> origin/main
   "convergence": {
     "note": "재발방지 학습 SSOT (인라인 마커 이관)",
     "records": [
