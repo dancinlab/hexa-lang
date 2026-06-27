@@ -3710,17 +3710,47 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
     // the field (F-RFC055-CPU-CODEGEN-UNTOUCHED holds; the CPU emit
     // path is byte-identical when no @gpu_* function is present).
     let mut __gpu_kind = GPU_KIND_CPU
+    // RFC static-generics ①·R2 — opt-in monomorphization template marker.
+    // Mirror the @gpu_* → gpu_kind precedent above: read the HIR FnDecl's
+    // annotations and detect `@specialize`, which marks the fn as a
+    // monomorphization candidate (the same single-surface attribute R1
+    // already parses + the surface test exercises).
+    let mut __is_specialize = false
     let mut __ai = 0
     while __ai < len(it.annotations) {
         let __an = it.annotations[__ai].name
         if __an == "gpu_kernel" { __gpu_kind = GPU_KIND_KERNEL }
         if __an == "gpu_device" { __gpu_kind = GPU_KIND_DEVICE }
+        if __an == "specialize" { __is_specialize = true }
         __ai = __ai + 1
     }
+    // F6 P0c-2 — forced copy: it.name is the HItem's name handle
+    // (hmodule outlives the streaming loop). PLAN-stage3-footprint-F6.md.
+    let mut __fn_name = it.name.substring(0, len(it.name))
+    // RFC static-generics ①·R2 — when an `@specialize` fn is lowered under
+    // HEXA_MONOMORPHIZE=1, suffix its MFunc name with the template sentinel
+    // MONO_TEMPLATE_MARK ("$$g") so compiler/optimize/monomorphize.hexa
+    // recognises it as a generic template (collect → infer per-call-site
+    // concrete tag from arg[0] operand kind → clone+mangle `base$tag` →
+    // retarget calls). This is the R1 pass's missing input: until now no
+    // default lowering emitted the marker, so the pass was a guaranteed
+    // no-op. Reference-match: rustc keys MonoItem::Fn(Instance) off the
+    // (template, concrete-type) pair; zig instantiates per comptime-T.
+    //
+    // DEFAULT byte-identity: the env flag is UNSET in every build (incl.
+    // self-host gen2/3/4 — they never set HEXA_MONOMORPHIZE), so the name
+    // stays byte-identical and no `$$g` symbol is ever emitted. The env()
+    // lookup is gated behind the (rare) `@specialize` annotation so the
+    // common path adds no syscall. Polarity: the type-erased dynamic shape
+    // remains the canonical default; monomorphization is an opt-in
+    // constraint (native-canonical-default rule).
+    if __is_specialize {
+        if env("HEXA_MONOMORPHIZE") == "1" {
+            __fn_name = __fn_name + "$$g"
+        }
+    }
     return MFunc {
-        // F6 P0c-2 — forced copy: it.name is the HItem's name handle
-        // (hmodule outlives the streaming loop). PLAN-stage3-footprint-F6.md.
-        name: it.name.substring(0, len(it.name)),
+        name: __fn_name,
         params: params,
         return_local: ret_local,
         locals: _lr_locals,
