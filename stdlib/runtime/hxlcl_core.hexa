@@ -702,3 +702,76 @@ pub fn hxlcl_mkdir(path: HexaVal, mode: HexaVal) -> int {
     }
     return r                                    // 0 on success
 }
+
+// ── ERRNO-BEARING CHAIN r3 — FINAL batch: stat (struct-out buf) + waitpid ──
+//
+// The last two errno-bearing leaves. Both share the close errno epilogue
+// (raw-payload `__hx_payload_lt`/`_ne`/`_sub` + target_is_linux()-gated store via
+// __errno_location); they differ only in argument shape.
+//
+//   stat → arm64 has NO plain stat; it uses fstatat(AT_FDCWD=-100, path, buf,
+//          flags=0) — a 4-arg PREPEND divergence exactly like mkdir→mkdirat. So
+//          the syscall is issued in per-arch branches (per-arch arg tuple), then
+//          the shared epilogue runs on the result.
+//          NR ref-match (no black-box): x86_64 __NR_stat = 4 (2-arg path,buf) ·
+//          arm64 __NR_fstatat = 79 (4-arg AT_FDCWD,path,buf,flags) — plain stat
+//          dropped on asm-generic · darwin SYS_STAT = 338 (2-arg path,buf).
+//          (stdlib/posix/linux_syscalls.hexa:129/102 · self/codegen/
+//          runtime_arm64.hexa:4198-4199 darwin 338 · AT_FDCWD=-100 = the same
+//          literal mkdir uses above.)
+//
+//   waitpid → routed to wait4(pid, status, options, rusage=NULL) on every target
+//          — a UNIFORM 4-arg shape (no at-variant / no prepend), so only the NR
+//          differs, exactly like read/lseek. NR ref-match: x86_64 __NR_wait4 = 61
+//          · arm64 __NR_wait4 = 260 · darwin SYS_WAIT4 = 7 (rusage NULL ⇒ 0).
+//          (linux_syscalls.hexa:123/95 · self/codegen/runtime_arm64.hexa:5218
+//          darwin 7. The floor routes waitpid → wait4 with a NULL 4th arg:
+//          runtime.c hxlcl_waitpid(pid,status,opts){ wait4(pid,status,opts,0) }.)
+
+// stat: per-arch arg tuple (arm64 fstatat prepends AT_FDCWD, shifting path/buf
+// right by one — a genuine divergence, mirrors mkdir). The result flows into the
+// shared close-pattern errno epilogue.
+pub fn hxlcl_stat(path: HexaVal, statbuf: HexaVal) -> int {
+    let mut r = 0
+    if target_is_linux() {
+        if target_is_x86_64() {
+            r = __hx_syscall6(4, path, statbuf, 0, 0, 0, 0)          // x86_64 stat(path, buf)
+        } else {
+            r = __hx_syscall6(79, -100, path, statbuf, 0, 0, 0)      // arm64 fstatat(AT_FDCWD, path, buf, flags=0)
+        }
+    } else {
+        r = __hx_syscall6(338, path, statbuf, 0, 0, 0, 0)            // darwin SYS_STAT(path, buf)
+    }
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // 0 on success
+}
+
+// waitpid: uniform wait4(pid, status, options, rusage=NULL) — only the NR varies,
+// so a single trap with the same arg tuple is correct on every target (like
+// read/lseek). The 4th arg (rusage) is 0 = NULL.
+pub fn hxlcl_waitpid(pid: HexaVal, status: HexaVal, opts: HexaVal) -> int {
+    let mut nr = 7                             // Darwin SYS_WAIT4 (default)
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 61 }      // Linux x86_64 __NR_wait4
+        else { nr = 260 }                      // Linux arm64 __NR_wait4
+    }
+    let r = __hx_syscall6(nr, pid, status, opts, 0, 0, 0)
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // reaped pid (> 0)
+}

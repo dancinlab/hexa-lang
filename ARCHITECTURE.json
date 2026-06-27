@@ -7,7 +7,7 @@
     "viewer": "architecture.html",
     "serve": "python3 serve.py",
     "update_policy": "in-place (not append-only)",
-    "history_ref": "CHANGELOG.md",
+    "history_ref": "CHANGELOG.jsonl",
     "governance_ref": "CLAUDE.md",
     "retired_md": "ARCHITECTURE.md is retired to a 1-line SSOT pointer stub (2026-06-16); this JSON is the SSOT, humans read architecture.html",
     "tree_convention": "commons c4: hierarchy via nested `subsection` nodes (each section→node, subsection.blocks=children). A node's title holds only its short attribute; deeper detail decomposes into child subsections. Do NOT pile many claims into one prose/title field — split piled-up cells into one child per logical item. Rendered by architecture.html (renderBlocks recurses on subsection.blocks).",

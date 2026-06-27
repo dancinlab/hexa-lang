@@ -62,7 +62,7 @@ HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
 echo "[routec-smoke-linux] (2) assert errno-bearing syscall symbols defined in routec.o …"
 syms="$(nm "$TMP/routec.o" 2>/dev/null || true)"
 miss=0
-for s in close read lseek dup2 mkdir; do
+for s in close read lseek dup2 mkdir stat waitpid; do
     if ! grep -qE " T hxlcl_${s}\$" <<<"$syms"; then
         echo "[routec-smoke-linux] NOT DEFINED (T): hxlcl_${s}" >&2; miss=$((miss+1))
     fi
@@ -78,6 +78,8 @@ cat > "$TMP/harness.c" <<'CEOF'
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/stat.h>   /* struct stat — sized buffer for hxlcl_stat */
+#include <sys/wait.h>   /* waitpid options — for hxlcl_waitpid */
 
 /* Route-C-emitted symbols under test (raw C-ABI prototypes). */
 extern int  hxlcl_close(int fd);
@@ -85,6 +87,8 @@ extern long hxlcl_read(int fd, void *buf, unsigned long n);
 extern long hxlcl_lseek(int fd, long off, int whence);
 extern int  hxlcl_dup2(int oldfd, int newfd);   /* arm64 → dup3(old,new,0) */
 extern int  hxlcl_mkdir(const char *path, int mode); /* arm64 → mkdirat(AT_FDCWD,…) */
+extern int  hxlcl_stat(const char *path, void *statbuf); /* arm64 → fstatat(AT_FDCWD,…) */
+extern int  hxlcl_waitpid(int pid, int *status, int opts); /* → wait4(…, rusage=NULL) */
 
 /* The emit covers ALL whitelisted Route C symbols (the script emits the whole
  * hxlcl_core.hexa), so the routec.o carries the composites' undefined-external
@@ -166,6 +170,26 @@ int main(void) {
         CK(hxlcl_mkdir(md, 0755) == 0, "mkdir(fresh dir) == 0 (success, AT_FDCWD path slot)");
         rmdir(md);
     }
+
+    /* stat — arm64 fstatat(AT_FDCWD,path,buf,0) / x86_64 stat(path,buf). A
+     * NONEXISTENT path → -1 + ENOENT (errno-store value-exact; on arm64 this also
+     * proves the AT_FDCWD prepend lands path/buf in the right slots — a botched
+     * arg shape would fault or mis-route rather than return ENOENT). Then a stat
+     * of "/" → 0 (success path; the root always exists). */
+    char sbuf[256];
+    errno = 0;
+    CK(hxlcl_stat("/nonexistent_xyz", sbuf) == -1, "stat(nonexistent) == -1");
+    CK(errno == ENOENT, "stat(nonexistent) sets errno == ENOENT (value-exact)");
+    errno = 0;
+    CK(hxlcl_stat("/", sbuf) == 0, "stat(\"/\") == 0 (success)");
+
+    /* waitpid — wait4(pid,status,opts,rusage=NULL), uniform 4-arg on every target.
+     * With NO child process, waitpid(-1, …, 0) → -1 + ECHILD (errno-store
+     * value-exact; confirms the 4-arg trap + negative-return → errno-store path). */
+    int wst = 0;
+    errno = 0;
+    CK(hxlcl_waitpid(-1, &wst, 0) == -1, "waitpid(no child) == -1");
+    CK(errno == ECHILD, "waitpid(no child) sets errno == ECHILD (value-exact)");
 
     if (fails == 0) { printf("[routec-smoke-linux] all Route C errno asserts PASS\n"); return 0; }
     printf("[routec-smoke-linux] %d assert(s) FAILED\n", fails);
