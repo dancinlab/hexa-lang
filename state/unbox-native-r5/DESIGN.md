@@ -120,3 +120,27 @@ AND 3-target byteeq re-confirmed (separate later decision). Release-integrity is
 
 **Conclusion:** mechanism is correct + release-safe (OFF inert + ON parity). Merge-gate (G1+G4+G5)
 GREEN for the default-OFF landing. Open PR after 3-target gen3≡gen4 byteeq CI confirms.
+
+## R5b MEASURED VERDICT (aiden, 2026-06-27 · sha 111425846 · `%`/`/` magic-reciprocal)
+
+Extends r5 (scalar +/-/*/cmp unbox) with `%`/`/` by a COMPILE-TIME positive constant → gcc
+signed magic-reciprocal (`_x86_magic_M`/`_x86_magic_shift`, Hacker's Delight Fig 10-1). Baseline
+`origin/main` e1286497b. Full result: `r5b_RESULT.txt` (+ aiden `~/r5b_measure_RESULT.txt`).
+
+- **G1 OFF-byteeq = PASS** — patched-OFF .o == baseline .o, same-cwd, byte-identical
+  (k1 sha 230d63f80daf09ad · k4 sha 9565f894130aa847). +200-LOC magic codegen OFF-inert.
+- **G2 lever = FIRED** — k4 hexa_mod **3→0** (the magic closer); k1/k4 add/mul/cmp →0; spill
+  k1 36→29, k4 47→34 (call+spill coupled-drop).
+- **G3 ratio** — **k1=0.426 (2.35×)**, **k4=0.223 (4.48×)**. Closes the r5 "k1 ratio=1.000
+  %-bound" wall (for k4's literal divisors; k1's named-const `M` via r5 base lever).
+- **G4 parity = OK** — k1 840001701, k4 −66666664, OFF==ON bit-identical.
+- **G5 smoke = GREEN** — hexa v0.334.0 · hello · exit42.
+- **G6 magic ref-match = PASS** — k4 ON asm = gcc -O2 EXACT: `%3`→movabs 0x5555555555555556
+  (M=6148914691236517206,s=0), `%5`→movabs 0x6666666666666667 (M=7378697629483820647,s=1);
+  full `movabs·imul·shr63·sar·add·imul d·sub` idiom. magic_reference.py REF ALL_OK + 39000/0.
+
+**Honest residual:** k1 `% M` divisor is a **named local** (`let M=...`), not a literal at the
+binop → magic correctly does NOT engage (stays `call hexa_mod`); k1's win is the r5 unbox alone.
+Magic proven on literal-divisor (k4). r6 follow-on (orthogonal): let-bound-literal const-prop so
+named constants also fold. **Verdict: GO** (default-OFF merge candidate; default-flip needs
+3-target byteeq CI). Coordinator owns merge.
