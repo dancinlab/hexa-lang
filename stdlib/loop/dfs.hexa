@@ -278,6 +278,25 @@ pub fn dfs_build_prompt(parent: Candidate, view: AtlasView, beam: int) -> string
           + "- The CONJECTURE must use ONLY the vocab above; aim for a NOVEL relation\n"
           + "  (NOT a known classical one like Mersenne, superperfect, Ramanujan, or\n"
           + "  phi*psi=J2) — but never fabricate: the verifier is the judge.\n"
+          + "NOVELTY CONTEXT (measured · read before proposing):\n"
+          + "- The MULTIPLICATIVE product/composition ring (identity A*B=C*D and\n"
+          + "  composition f∘g) is a CLOSED RING and is MEASURED-EXHAUSTED — every\n"
+          + "  relation it can express is classical or a bounded coincidence, so the\n"
+          + "  novelty gate auto-demotes it to 'known'. Do NOT spend a child there.\n"
+          + "- fib/lucas/bell are FINITE-STATE recurrences: periodic mod m\n"
+          + "  (Pisano/Touchard), so EVERY congruence fib/lucas/bell(a*n+b)=0 mod m is\n"
+          + "  a classical rank-of-apparition / period fact — the gate demotes them to\n"
+          + "  known. Do NOT propose fib/lucas/bell congruences (measured dry).\n"
+          + "- Partition p(n) has no finite-state mod-m recurrence, BUT its simple\n"
+          + "  linear congruences p(m*n+d)=0 mod m (24d=1 mod m) are the classical\n"
+          + "  Ramanujan-Watson tower for m built from {5,7,11} (5/25/125, 7/49, 11/121,\n"
+          + "  and {5,7,11}-products) — the gate demotes ALL of these to known. It is\n"
+          + "  PROVEN that no simple p(m*n+d)=0 mod m holds for any m with a prime\n"
+          + "  factor outside {5,7,11}; so the simple-congruence grammar is EXHAUSTED.\n"
+          + "- A genuine SURVIVOR needs a holding relation the grammar cannot express\n"
+          + "  (e.g. an Ono-style p(A*n+B)=0 mod L, large composite A, prime L>11). If\n"
+          + "  you cannot state one IN the grammar, output NO child rather than a known\n"
+          + "  tower congruence — honesty over volume (the verifier disposes either way).\n"
           + "- Output nothing except the child blocks.\n"
     return p
 }
@@ -897,7 +916,14 @@ pub fn dfs_run(seeds: array, view: AtlasView, cycle_no: int,
                 if cv == "verified-novel" { n_verified_novel = n_verified_novel + 1 }
                 else if cv == "verified-known" { n_verified_known = n_verified_known + 1 }
                 else { n_prose = n_prose + 1 }
-                _dfs_emit_child(parent.slug, child, depth + 1, cv)
+                // NOVEL-CLOSURE provenance (PR #4120) — append the closure class
+                // tag (SURVIVOR = genuine novel candidate · C1-C4 = demoted false-
+                // positive class) so the PR reviewer sees WHY a relation is/ isn't
+                // novel. Empty for prose / classical-known (nothing to classify).
+                let mut vlabel = cv
+                let cls = cj_closure_class(child.proposed)
+                if len(cls) > 0 { vlabel = cv + " [closure:" + cls + "]" }
+                _dfs_emit_child(parent.slug, child, depth + 1, vlabel)
                 _dfs_chain_append(cycle_no, parent.slug, child.slug, child.family, depth + 1, call_cost)
                 absorbed.push(child)   // Phase L — batch for end-of-run absorption PR (replaces Phase K overlay write)
                 _g_dfs_session_absorbed.push(child)   // Phase M — also accumulate session-wide for --target-absorb batched PR
