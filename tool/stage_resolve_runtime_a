@@ -1194,7 +1194,7 @@ build_runtime_a_from_source() {
                 aarch64|arm64) _seml_arch="arm64" ;;
             esac
             local _seml_sym _seml_SYM _seml_gate _seml_o _seml_bin
-            for _seml_sym in memcpy memset memcmp strcmp strncmp; do
+            for _seml_sym in memcpy memset memcmp strcmp strncmp strcpy strncpy strcat strchr; do
                 _seml_SYM=$(printf '%s' "$_seml_sym" | tr 'a-z' 'A-Z')
                 eval "_seml_gate=\${HEXA_RT_SELFEMIT_${_seml_SYM}:-0}"
                 [ "$_seml_gate" = "1" ] || continue
