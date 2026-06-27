@@ -3094,6 +3094,49 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r11", 0) }
             return
         }
+        // RFC061 Route C 2nd-return-register: `__hx_syscall6_out2(num, a0..a5,
+        // outptr)` — the dual-return sibling of __hx_syscall6. The 2nd-return-
+        // register convention (rdx) belongs to the darwin/BSD syscall ABI, and
+        // darwin is arm64-only in this toolchain, so on x86_64 (which targets ONLY
+        // x86_64-linux) this op is reached ONLY through the runtime-false
+        // `target_is_darwin()` branch of hxlcl_pipe/hxlcl_fork — emitted for link
+        // completeness (DCE never drops a STMT_CALL), never executed. It mirrors
+        // __hx_syscall6's arg-fill/trap then writes rax→outptr[0], rdx→outptr[8],
+        // and 0→outptr[16] (Linux has no carry-flag errno, so the carry slot is a
+        // constant 0 here). Addresses are computed via `add` to reuse only the
+        // proven store64 forms.
+        if s.op == "__hx_syscall6_out2" && len(s.args) >= 8 {
+            let argregs = ["rdi", "rsi", "rdx", "r10", "r8", "r9"]
+            let mut ai = 1
+            while ai <= 6 {
+                _x86_hv_payload(s.args[ai], st, rm, argregs[ai - 1], opts)
+                ai = ai + 1
+            }
+            _x86_hv_payload(s.args[0], st, rm, "rax", opts)  // num → rax
+            _x86_buf.push(_x86_instr0("syscall", "__hx_syscall6_out2: Linux syscall"))
+            // rax = 1st return, rdx = 2nd return. Save both before reloading outptr.
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_reg("rax"),
+                             "__hx_syscall6_out2: r11 = ret1"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r8"), _x86_op_reg("rdx"),
+                             "__hx_syscall6_out2: r8 = ret2"))
+            _x86_hv_payload(s.args[7], st, rm, "r10", opts)  // r10 = outptr
+            _x86_buf.push(_x86_instr2("mov", _x86_op_label("qword ptr [r10]"),
+                             _x86_op_reg("r11"), "__hx_syscall6_out2: outptr[0] = ret1"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r9"), _x86_op_imm(8),
+                             "__hx_syscall6_out2: off 8"))
+            _x86_buf.push(_x86_instr2("add", _x86_op_reg("r10"), _x86_op_reg("r9"),
+                             "__hx_syscall6_out2: &outptr[8]"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_label("qword ptr [r10]"),
+                             _x86_op_reg("r8"), "__hx_syscall6_out2: outptr[8] = ret2"))
+            _x86_buf.push(_x86_instr2("add", _x86_op_reg("r10"), _x86_op_reg("r9"),
+                             "__hx_syscall6_out2: &outptr[16]"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), _x86_op_imm(0),
+                             "__hx_syscall6_out2: carry slot = 0 (no carry errno on Linux)"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_label("qword ptr [r10]"),
+                             _x86_op_reg("rsi"), "__hx_syscall6_out2: outptr[16] = 0"))
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r11", 0) }
+            return
+        }
         // UNLOCK-10: `__hx_ptr_store64(ptr, off, val)` — write 64-bit `val` to
         // raw address ptr+off. Returns ptr (chainable). r10=ptr, r11=off,
         // rsi=val; add; mov qword ptr [addr], val; result = original ptr.
