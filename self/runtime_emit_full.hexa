@@ -2454,6 +2454,36 @@ fn emit_runtime_to(out_path: str) {
     buf = buf + "extern HexaVal rt_pthread_noop(void);\n"
     buf = buf + "extern HexaVal rt_pthread_create_policy(void);\n"
     buf = buf + "#endif\n"
+    // ── ② OPT-IN real OS-thread spawn (-DHEXA_THREADS) ────────────────────────
+    // Map the hxlcl_pthread_* libc-floor shims 1:1 onto POSIX pthread. The
+    // DEFAULT build (HEXA_THREADS undefined) takes the #else branch = the EXACT
+    // pre-existing synchronous stubs, so the runtime.c object stays byte-identical
+    // to origin/main and the byteeq gen3≡gen4 fixpoint is unaffected. self-host /
+    // byteeq / faithful builds NEVER pass -DHEXA_THREADS, so the deterministic
+    // compiler can never observe a non-deterministic thread schedule (determinism
+    // isolation). hexa_thread_spawn/_join in native/thread.c already route through
+    // these shims — under HEXA_THREADS they become real OS threads with no change
+    // to thread.c. Reference-match: POSIX.1-2017 pthread_create / pthread_join
+    // (1:1 OS thread, void*(*)(void*) entry, joined by handle); Go runtime v1 and
+    // Rust std::thread::spawn are the same 1:1-to-OS-thread model. The
+    // (pthread_t)(uintptr_t) join cast bridges the platform pthread_t divergence
+    // (Linux glibc unsigned long vs macOS arm64 pointer) — hexa_thread_join boxes
+    // the handle as (void*)(uintptr_t)tid, so it round-trips on both.
+    buf = buf + "#if defined(HEXA_THREADS)\n"
+    buf = buf + "#include <pthread.h>\n"
+    buf = buf + "static int hxlcl_pthread_mutex_init(void *m, const void *a) { return pthread_mutex_init((pthread_mutex_t *)m, (const pthread_mutexattr_t *)a); }\n"
+    buf = buf + "static int hxlcl_pthread_mutex_destroy(void *m) { return pthread_mutex_destroy((pthread_mutex_t *)m); }\n"
+    buf = buf + "static int hxlcl_pthread_mutex_lock(void *m) { return pthread_mutex_lock((pthread_mutex_t *)m); }\n"
+    buf = buf + "static int hxlcl_pthread_mutex_unlock(void *m) { return pthread_mutex_unlock((pthread_mutex_t *)m); }\n"
+    buf = buf + "static int hxlcl_pthread_cond_init(void *c, const void *a) { return pthread_cond_init((pthread_cond_t *)c, (const pthread_condattr_t *)a); }\n"
+    buf = buf + "static int hxlcl_pthread_cond_destroy(void *c) { return pthread_cond_destroy((pthread_cond_t *)c); }\n"
+    buf = buf + "static int hxlcl_pthread_cond_signal(void *c) { return pthread_cond_signal((pthread_cond_t *)c); }\n"
+    buf = buf + "static int hxlcl_pthread_cond_broadcast(void *c) { return pthread_cond_broadcast((pthread_cond_t *)c); }\n"
+    buf = buf + "static int hxlcl_pthread_cond_wait(void *c, void *m) { return pthread_cond_wait((pthread_cond_t *)c, (pthread_mutex_t *)m); }\n"
+    buf = buf + "static int hxlcl_pthread_cond_timedwait(void *c, void *m, const void *ts) { return pthread_cond_timedwait((pthread_cond_t *)c, (pthread_mutex_t *)m, (const struct timespec *)ts); }\n"
+    buf = buf + "static int hxlcl_pthread_create(void *thread, const void *attr, void *(*start)(void *), void *arg) { return pthread_create((pthread_t *)thread, (const pthread_attr_t *)attr, start, arg); }\n"
+    buf = buf + "static int hxlcl_pthread_join(void *thread, void **retval) { return pthread_join((pthread_t)(uintptr_t)thread, retval); }\n"
+    buf = buf + "#else\n"
     buf = buf + "static int hxlcl_pthread_mutex_init(void *m, const void *a) {\n"
     buf = buf + "    (void)m; (void)a; return (int)HX_INT(rt_pthread_noop());\n"
     buf = buf + "}\n"
@@ -2497,6 +2527,7 @@ fn emit_runtime_to(out_path: str) {
     buf = buf + "    if (retval) *retval = (void *)0;\n"
     buf = buf + "    return (int)HX_INT(rt_pthread_noop());\n"
     buf = buf + "}\n"
+    buf = buf + "#endif /* HEXA_THREADS — real-pthread vs synchronous shims */\n"
     buf = buf + "\n"
     buf = buf + "// RUNTIME.md step-2 cycle 4 — net/exec/pty delegation via single\n"
     buf = buf + "// rt_net_fail (-1) + rt_net_zero (0 for inet_pton invalid).\n"
