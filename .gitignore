@@ -173,6 +173,7 @@ state/*
 !state/rfc_advanced_typesystem.md
 !state/rfc_value_unbox_layout.md
 !state/rfc_thread_fnglobal_fwddecl.md
+!state/x86_codegen_anima_eval/
 # Per-test regression state (markers/ holds timestamp-suffixed runtime artifacts)
 test/regression/*/state/
 
