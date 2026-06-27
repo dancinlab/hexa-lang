@@ -1611,6 +1611,14 @@ pub fn _is_cabi(fname: string) -> bool {
     // __hx_syscall6 exposes only x0) identical to darwin pipe — the real darwin fork
     // stays the floor raw-asm dual-reg shim. Reuses __errno_location (no new entry).
     if fname == "hxlcl_fork" { return true }
+    // Wall 2-b ENV — hxlcl_getenv: environment lookup via the new __hx_environ_ptr
+    // named-data GOT intrinsic + a pure byte-walk (no syscall, no errno, no inner
+    // bl). The ONLY extern reference is the libc `environ` data symbol the intrinsic
+    // resolves through the GOT; everything else is the proven copy/compare-family
+    // payload arithmetic. Cross-target-identical body (the per-target GOT form lives
+    // inside __hx_environ_ptr's STMT_CALL special-case). getenv-ONLY this round —
+    // setenv (environ-array mutation: realloc/putenv rebuild) is the deferred sibling.
+    if fname == "hxlcl_getenv" { return true }
     return false
 }
 
@@ -3135,6 +3143,24 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             _x86_buf.push(_x86_instr2("mov", _x86_op_label("qword ptr [r10]"),
                              _x86_op_reg("rsi"), "__hx_syscall6_out2: outptr[16] = 0"))
             if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r11", 0) }
+            return
+        }
+        // RFC061 Route C Wall 2-b: `__hx_environ_ptr()` (0-arg) → the ADDRESS of the
+        // libc `extern char **environ` global, loaded through the GOT and boxed as a
+        // TAG_INT payload. `mov rax, [rip+environ@GOTPCREL]` reads the GOT slot (which
+        // the linker fills with &environ), so rax = &environ (char***) — exactly one
+        // __hx_ptr_load64 away from the char** array base. This is the named-DATA
+        // sibling of the named-TEXT `call <sym>` reloc the call paths already emit
+        // (R_X86_64_GOTPCREL on the data symbol vs R_X86_64_PLT32 on a text symbol);
+        // the `--shared` global path already emits this exact `[rip+…@GOTPCREL]` form
+        // for module globals, here keyed to the named libc symbol `environ`. The asm-
+        // text → system-assembler Route C path materialises the reloc canonically
+        // (R_X86_64_REX_GOTPCRELX environ). No arg-fill (0 args); just the load + box.
+        if s.op == "__hx_environ_ptr" {
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rax"),
+                             _x86_op_label("[rip+environ@GOTPCREL]"),
+                             "__hx_environ_ptr: rax = &environ (GOT) [reloc=" + RELOC_X86_64_GOTPCREL + "]"))
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "rax", 0) }
             return
         }
         // UNLOCK-10: `__hx_ptr_store64(ptr, off, val)` — write 64-bit `val` to

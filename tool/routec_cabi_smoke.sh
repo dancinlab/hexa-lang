@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll clock_gettime execve fork; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll clock_gettime execve fork getenv; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -210,6 +210,14 @@ extern int  hxlcl_execve(const char *path, char *const argv[], char *const envp[
  * __hx_syscall6_out2 (dual-return capture) and runs the live fork+_exit+waitpid
  * roundtrip here, the same claim the Linux sibling carries. */
 extern int  hxlcl_fork(void);
+
+/* Wall 2-b ENV — getenv. The FIRST Route C body to reference an extern DATA symbol:
+ * it resolves the libc `environ` global through the GOT (the new __hx_environ_ptr
+ * intrinsic) and byte-walks the NUL-terminated char** array. Pure compute after the
+ * GOT load (no syscall, no errno, no inner bl). Returns a raw char* INTO the live
+ * environ block (or NULL). `environ` itself comes from the C runtime (no harness
+ * definition needed — the routec.o's GOT ref to _environ resolves against libSystem). */
+extern char *hxlcl_getenv(const char *name);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
@@ -580,6 +588,30 @@ int main(void) {
             CK(w == pid && WIFEXITED(st) && WEXITSTATUS(st) == 42,
                "darwin fork+_exit(42)+waitpid roundtrip (dual-return disambiguation)");
         }
+    }
+
+    /* Wall 2-b — getenv via the __hx_environ_ptr named-data GOT intrinsic + byte-walk.
+     * FULLY exercised here (the GOT load + array walk is host-runnable on darwin).
+     * Value-exact vs libc getenv() AND content-exact for a set var; an absent key →
+     * NULL; a prefix of a real key → NULL (the break-free early-stop must not match a
+     * longer entry, nor over-read a shorter one). The returned pointer is INTO the same
+     * live environ block libc walks, so identity (== libc getenv) holds — a wrong GOT
+     * deref depth, a PAIR-MODEL ABI leak, or an over-read would crash/mis-return. */
+    {
+        CK(hxlcl_getenv("__HX_NONEXISTENT_KEY_ZZZ__") == NULL, "getenv(absent key) → NULL");
+        char *hp = hxlcl_getenv("PATH");
+        char *lp = getenv("PATH");
+        CK(hp != NULL, "getenv(\"PATH\") != NULL");
+        CK(hp != NULL && hp[0] != 0, "getenv(\"PATH\") non-empty");
+        CK(hp == lp, "getenv(\"PATH\") == libc getenv (same environ-block pointer, value-exact)");
+        setenv("HX_SMOKE_ENVVAR", "route-c-wall2b", 1);
+        char *sv = hxlcl_getenv("HX_SMOKE_ENVVAR");
+        CK(sv != NULL && strcmp(sv, "route-c-wall2b") == 0, "getenv(set var) == value (content-exact)");
+        setenv("HX_SMOKE_LONGKEY", "L", 1);
+        CK(hxlcl_getenv("HX_SMOKE_LONG") == NULL, "getenv(prefix of a real key) → NULL (early-stop, no over-read)");
+        /* A longer query than any matching entry must also miss (entry NUL before
+         * nlen → the `entry[i]==0` early-stop fires, no over-read past the entry). */
+        CK(hxlcl_getenv("HX_SMOKE_ENVVAR_EXTRA") == NULL, "getenv(query longer than a real key) → NULL (short-entry stop)");
     }
 
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }
