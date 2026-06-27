@@ -51,6 +51,19 @@ surge·dream·swarm·reign·molt·wake·forge·canon·revive)은 각자 `../<nam
   (고갈=12-fn/2-term이지 전체 공간 아님)이나 그 차원도 고전/환원뿐. 생산적 벤은 composed/iterated
   함수(Ralph 372). 업그레이드 자체가 산출물 — 미래 생성기가 확장-vocab/arity-3 후보를 내면 parse-reject
   대신 **실제 exact-int verdict**를 받는다. atlas write 없음(fold=hexa verify g5/PR).
+- **함수합성 프레임(Ralph 376 · 2026-06-27)**: Ralph 372/375 가 지목한 생산적 벤(함수 COMPOSITION
+  `f(g(n))` — 값-곱 `A·B=C·D` 프레임이 **구조적으로 표현 못 하는** 다른 대수 · σ(σ(n))=2n 은 곱-프레임
+  재기술 불가)을 **구현+sweep**. native exact-int 평가기 `../atlas/identity_engine.hexa::af_compose`
+  `comp_holds`/`comp_count`/`verify_composition`(18×18 합성표 × 비교형 k·n/h+n/h/comp). drill
+  `_native_identity_sweep`에 **합성 검증 옵션 배선**(`_parse_composition`/`_canon_composition` →
+  composition-syntax 후보가 product-noise 대신 실제 `verify_composition` verdict → rationale
+  `comp_id`/`comp_verified` audit). **측정**(state/novel-dfs/composition_hunt.py · N=2·10⁴):
+  superperfect σ∘σ=2n {2,4,16,64,4096}(Suryanarayana 1969 / A019279) + Mersenne σ∘σ=σ+n
+  {3,7,31,127,8191} 정확 재발견(sanity PASS) · **novel PROMOTABLE 합성 법칙 = 0(DRY)** — bounded-unique
+  singleton 은 단일점 우연, |sol|≥3 구조 집합은 thin 제한역 우연(p² 등 · forall UNPROVEN), universal 은
+  구조 재기술뿐. 곱-프레임과 **동일 종착(novel=0)을 다른 대수에서 정직히** 도달. selftest=
+  `composition_test.hexa`(superperfect/Mersenne G-gate) + identity_engine main CMP1–5. atlas write
+  없음(fold=hexa verify g5/PR). frozen blob 151c52c8 신규 builtin/method 0(기존 정수연산·중첩호출만).
 - **기본 검증은 ON(플래그 아님)**: 외부 verifier 미설치 시 `drill.hexa::_native_identity_sweep`가
   매 라운드 기본 실행된다 — `../atlas/identity_engine.hexa::verify_identity`(exact-int 12-fn
   A·B=C·D bounded-unique)를 직접 호출하고, 라운드 verdict를 `DRILL_VERIFIER` stderr 줄로
