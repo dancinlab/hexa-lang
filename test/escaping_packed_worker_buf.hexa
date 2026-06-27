@@ -1,0 +1,169 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  test/escaping_packed_worker_buf.hexa — FLEET lane A2 productionization probe.
+//
+//  THE escape boundary lane-s #4133 declared an ABI wall: an ESCAPING typed-prim
+//  [i64] worker buffer that is PASSED to a worker fn as a param of unknown
+//  packed-ness. Under the boxed ABI a packed (stride-8, tagless) buffer reaching
+//  a worker that reads it via the generic boxed reader (stride-16) is corrupted.
+//
+//  The A-half (PR #4140, runtime descriptor discriminator TAG_ARRAY_I64 +
+//  hexa_arr_poly_*) proved the RUNTIME can read an escaping packed buffer
+//  soundly (4P+4C PASS=20 via the C harness). This test is the CODEGEN half:
+//  the buffer is built + PASSED across the worker-fn boundary in *.hexa source,
+//  compiled by the native backend with escape-relax (HEXA_PACK_ESCAPING) ON.
+//
+//  Unlike test/game_typed_prim_shared_buf.hexa (thread-PRIVATE buf, packs today
+//  with HEXA_PACK_ARRAY, no escape), here the buffer ESCAPES:
+//    · producer builds `let buf:[i64]=[]`, pushes, then RETURNS it (escapes via
+//      return) and PASSES it to consumer fns (escapes via call-arg).
+//    · consumer fns receive the [i64] as a PARAM (unknown packed-ness) and read
+//      it via index / len → under HEXA_PACK_ESCAPING these route to
+//      hexa_arr_poly_get / hexa_arr_poly_len (runtime discriminates).
+//
+//  EXPECT (native backend, aiden):
+//    HEXA_PACK_ESCAPING unset → escape-scan voids the pack → BOXED 16B buffer
+//                               (current behaviour; correct, the boxed reader
+//                               matches the boxed mint). PASS.
+//    HEXA_PACK_ESCAPING=1     → producer esc-mints (TAG_ARRAY_I64), consumer
+//                               poly-reads → SOUND packed escaping buffer. PASS,
+//                               same checksum (value parity: stride-8 == boxed).
+//  A miscompile (poly-route missing somewhere) would show as a checksum
+//  divergence or crash → release-integrity wall.
+//
+//  Run on aiden (mini cannot build):
+//    HEXA_PACK_ESCAPING=1 hexa run test/escaping_packed_worker_buf.hexa
+//    HEXA_PACK_ESCAPING=  hexa run test/escaping_packed_worker_buf.hexa   # control
+//  Threaded 4P+4C (escaping packed buffer across the spawn boundary):
+//    HEXA_RT_ALLOC_NATIVE=0 -DHEXA_THREADS -DHEXA_PACK_ESCAPING build, then
+//    HEXA_PACK_ESCAPING=1 HEXA_THREADS=1 ./a.out
+//  BYTEEQ-NEUTRAL: NEW test file only; the codegen relax is default-OFF.
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn thread_start(f, arg) -> int { return thread_spawn(f, arg) }
+fn thread_wait(tid) { return thread_join(tid) }
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, actual, expected) {
+    if to_string(actual) == to_string(expected) {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected: " + to_string(expected) + ", got: " + to_string(actual))
+        fail_count = fail_count + 1
+    }
+}
+
+// ── CONSUMER: reads an ESCAPING [i64] received as a PARAM. The param's
+// packed-ness is unknown at the consumer → index/len route through
+// hexa_arr_poly_get/_len under HEXA_PACK_ESCAPING (runtime discriminates).
+fn consume_sum(xs: [i64]) -> i64 {
+    let mut acc = 0
+    let mut i = 0
+    let n = len(xs)
+    while i < n {
+        acc = acc + xs[i]
+        i = i + 1
+    }
+    return acc
+}
+
+// ── CONSUMER 2: index-set then re-read (exercises hexa_arr_poly_set + _get).
+fn consume_doubled(xs: [i64]) -> i64 {
+    let mut i = 0
+    let n = len(xs)
+    while i < n {
+        xs[i] = xs[i] * 2
+        i = i + 1
+    }
+    let mut acc = 0
+    let mut j = 0
+    while j < n {
+        acc = acc + xs[j]
+        j = j + 1
+    }
+    return acc
+}
+
+// ── PRODUCER: builds a typed-prim [i64] and RETURNS it (escapes via return).
+// Under HEXA_PACK_ESCAPING this esc-mints (hexa_arr_i64_new_esc, TAG_ARRAY_I64).
+fn produce_buf(base: i64) -> [i64] {
+    let mut buf: [i64] = []
+    let mut i = 0
+    while i < 400 {
+        buf.push(base + i)
+        i = i + 1
+    }
+    return buf
+}
+
+// ── WORKER (4P+4C): produce an ESCAPING buffer then consume it across calls.
+// The buffer escapes BOTH via produce_buf's return AND consume_*'s param.
+fn worker(base) {
+    let buf = produce_buf(base)
+    let s1 = consume_sum(buf)        // escaping param read (poly_get/_len)
+    let s2 = consume_doubled(buf)    // escaping param read+write (poly_set/_get)
+    return s1 + s2 + len(buf)
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  HEXA escaping packed worker buffer — A2 codegen escape-relax")
+println("═══════════════════════════════════════════════════════")
+if env("HEXA_PACK_ESCAPING") == "1" {
+    println("  HEXA_PACK_ESCAPING=1 — TREATMENT: escaping buffer esc-minted + poly-read")
+} else {
+    println("  HEXA_PACK_ESCAPING unset — CONTROL: boxed escaping buffer")
+}
+
+let bases = [0, 1, 2, 3, 100, 101, 102, 103]
+
+// ── ORACLE (single-threaded reference): lock in per-worker checksums. This
+// path itself exercises the escape-relax (produce→consume across fn calls).
+let mut oracle: [i64] = []
+let mut total = 0
+let mut k = 0
+while k < len(bases) {
+    let w = worker(bases[k])
+    oracle.push(w)
+    total = total + w
+    k = k + 1
+}
+println("  single-thread escaping produce→consume total = " + to_string(total))
+check("oracle: 8 escaping workers produced a value", len(oracle), 8)
+
+// Independent hand-computed expectation for base=0:
+//   buf = [0..399]; sum = 79800; doubled-sum = 159600; len = 400
+//   worker(0) = 79800 + 159600 + 400 = 239800
+check("worker(0) escaping checksum == hand value 239800", oracle[0], 239800)
+
+if env("HEXA_THREADS") == "" {
+    println("")
+    println("NOTE: HEXA_THREADS unset — single-thread escape-relax path measured above.")
+    println("      For 4P+4C: build -DHEXA_THREADS -DHEXA_PACK_ESCAPING then HEXA_THREADS=1.")
+} else {
+    println("  spawning 8 real OS threads on worker (4P+4C escaping buffer) …")
+    let mut h = []
+    let mut s = 0
+    while s < len(bases) { h = h + [thread_start(worker, bases[s])]; s = s + 1 }
+    let mut got = 0
+    let mut wmatch = 1
+    let mut j = 0
+    while j < len(h) {
+        let r = to_int(thread_wait(h[j]))
+        got = got + r
+        if r != to_int(oracle[j]) { wmatch = 0 }
+        j = j + 1
+    }
+    check("4P+4C escaping: 8 workers joined crash-free", len(h), 8)
+    check("4P+4C escaping: per-worker checksums match oracle", wmatch, 1)
+    check("4P+4C escaping: order-insensitive total == oracle", got, total)
+}
+
+println("")
+println("═══════════════════════════════════════════════════════")
+println("  RESULT: " + to_string(pass_count) + " passed, " + to_string(fail_count) + " failed")
+println("═══════════════════════════════════════════════════════")
+if fail_count > 0 {
+    exit(1)
+}
