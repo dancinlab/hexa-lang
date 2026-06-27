@@ -1,0 +1,201 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  test/game_typed_prim_shared_buf.hexa — FLEET lane s r2 microbench.
+//
+//  a↔c CONVERGENCE PROBE: does a TYPED-PRIM (tagless-8B, HEXA_PACK_ARRAY) worker
+//  buffer survive 4P+4C on the lane-a TLS arena where the BOXED-element buffer
+//  (lane-a test/game_arena_threadsafe.hexa::arena_churn) STILL SIGSEGVs (10/10)?
+//
+//  MEASURED root cause being isolated (state/rfc_static_unbox_thread.md #4129 +
+//  state/rfc_arena_threadsafe_tls.md r2 on feat/arena-threadsafe-tls):
+//    The lane-a TLS arena made the BUMP block-chain + 13 arena globals __thread,
+//    yet 4P+4C still crashes. The gdb backtrace is a TORN HexaVal {tag,payload}
+//    read at the BOXED array element store:
+//        hexa_add_slow+368  mov (%rcx),%edx  ; %rcx = torn HexaVal base
+//        hexa_array_push  <-  arena_churn(arr = arr + [i] ; acc = acc + …)
+//    i.e. the 16B boxed element store/grow is the next race site — NOT the bump
+//    pointer alone. The convergence claim (task): a TAGLESS-8B element (c) on the
+//    TLS arena (a) removes that torn-tag store.
+//
+//  REFERENCE (typed-prim contiguous, no per-element header):
+//    · Go   []int64        — runtime/slice.go: a slice is {ptr,len,cap} over a
+//                            CONTIGUOUS int64 backing array, NO per-elem header
+//                            (8B stride). Concurrent grow on a SHARED slice is a
+//                            data race the user must sync (sync.Mutex/atomic).
+//    · Rust Vec<i64>       — alloc/src/vec/mod.rs: RawVec<i64> = one heap block of
+//                            8B elements, no tag. Shared mutation needs
+//                            Arc<Mutex<Vec>> / crossbeam (the type is !Sync alone).
+//    · C    int64_t buf[]  — raw 8B words; no allocator help for shared grow.
+//  The lesson the references encode: tagless-8B kills the per-element torn-TAG
+//  failure (c), but a SHARED growable buffer's REALLOC is still a data race the
+//  allocator/user must serialize (a). This test separates the two: THREAD-PRIVATE
+//  packed buffers isolate (c) from the shared-grow concern.
+//
+//  THREE worker variants, same independent checksum, same fan-out (4P+4C):
+//    boxed_churn      — reassign `arr = arr + [i]` → element-pack proof VOIDED
+//                       (reassign is not in the index/index_set/push/len/let
+//                       whitelist) → BOXED 16B elements. == lane-a arena_churn.
+//    packed_churn     — `let mut buf:[i64]=[]; buf.push(i)` push-only, NO escape
+//                       → HEXA_PACK_ARRAY (env-opt-in) proves tagless-8B
+//                       (x86_64_linux.hexa:728-836). THREAD-PRIVATE (does not
+//                       cross the worker boundary) → packs today, no r3 needed.
+//    str_churn        — string concat only (no array) → isolates the strbuf/arena
+//                       path from the element store.
+//
+//  Run on aiden (mini cannot build):
+//    # lane-a TLS-arena runtime + real pthread + element-pack ON:
+//    HEXA_RT_ALLOC_NATIVE=0 CFLAGS=-DHEXA_THREADS hexa build ...
+//    HEXA_PACK_ARRAY=1 HEXA_THREADS=1 ./a.out   # treatment (typed-prim packed)
+//    HEXA_PACK_ARRAY=0 HEXA_THREADS=1 ./a.out   # control  (boxed)
+//  BYTEEQ-NEUTRAL: this is a NEW test file only; no runtime/codegen edit. The
+//  element-pack lattice is already gated default-OFF (HEXA_PACK_ARRAY unset).
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/thread_real"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, actual, expected) {
+    if to_string(actual) == to_string(expected) {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected: " + to_string(expected) + ", got: " + to_string(actual))
+        fail_count = fail_count + 1
+    }
+}
+
+// ── BOXED worker (control = lane-a arena_churn shape) ───────────────────────
+// `arr = arr + [i]` reassigns → element-pack proof VOIDED → 16B boxed elements
+// stored/grown via hexa_array_push (the r2 SIGSEGV site under 4P+4C).
+fn boxed_churn(base) {
+    let mut acc = 0
+    let mut arr = []
+    let mut i = 0
+    while i < 400 {
+        arr = arr + [i]
+        acc = acc + (base + i)
+        i = i + 1
+    }
+    acc = acc + len(arr)
+    return acc
+}
+
+// ── TYPED-PRIM worker (treatment) ──────────────────────────────────────────
+// `let mut buf:[i64]=[]` + push-only → HEXA_PACK_ARRAY proves TAGLESS-8B.
+// THREAD-PRIVATE (never returned/passed) → packs today (no escape-relax / r3).
+// Same checksum as boxed_churn → order-insensitive total identical.
+fn packed_churn(base) {
+    let mut acc = 0
+    let mut buf: [i64] = []
+    let mut i = 0
+    while i < 400 {
+        buf.push(i)
+        acc = acc + (base + i)
+        i = i + 1
+    }
+    acc = acc + len(buf)
+    return acc
+}
+
+// ── STRING-only worker (strbuf/arena isolation, no array element store) ─────
+fn str_churn(base) {
+    let mut acc = 0
+    let mut i = 0
+    while i < 400 {
+        let s = "w" + to_string(base) + "-" + to_string(i)
+        acc = acc + (base + i) + len(s)
+        i = i + 1
+    }
+    return acc
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  HEXA typed-prim shared-buffer — a↔c convergence probe")
+println("  HEXA_PACK_ARRAY (tagless-8B) × HEXA_THREADS (4P+4C) on TLS arena")
+println("═══════════════════════════════════════════════════════")
+
+let bases = [0, 1, 2, 3, 100, 101, 102, 103]
+
+// ── ORACLE: lock in independent per-worker reference checksums (inline) ─────
+let mut oracle_boxed: [i64] = []
+let mut oracle_packed: [i64] = []
+let mut oracle_str: [i64] = []
+let mut ob_total = 0
+let mut op_total = 0
+let mut os_total = 0
+let mut k = 0
+while k < len(bases) {
+    let bb = boxed_churn(bases[k])
+    let pp = packed_churn(bases[k])
+    let ss = str_churn(bases[k])
+    oracle_boxed.push(bb)
+    oracle_packed.push(pp)
+    oracle_str.push(ss)
+    ob_total = ob_total + bb
+    op_total = op_total + pp
+    os_total = os_total + ss
+    k = k + 1
+}
+// boxed and packed compute the SAME checksum → totals must match (pack==boxed value)
+check("oracle: boxed total == packed total (value parity)", ob_total, op_total)
+println("  boxed/packed total = " + to_string(ob_total) + "   str total = " + to_string(os_total))
+
+if env("HEXA_THREADS") == "" {
+    println("")
+    println("NOTE: HEXA_THREADS unset — skipping real 4P+4C spawn. Build with")
+    println("      HEXA_RT_ALLOC_NATIVE=0 -DHEXA_THREADS and run HEXA_THREADS=1")
+    println("      (HEXA_PACK_ARRAY=1 = typed-prim treatment, =0 = boxed control).")
+} else {
+    let pack_on = env("HEXA_PACK_ARRAY") == "1"
+    if pack_on {
+        println("")
+        println("  HEXA_PACK_ARRAY=1 — TREATMENT: typed-prim tagless-8B worker buffer")
+    } else {
+        println("")
+        println("  HEXA_PACK_ARRAY unset — CONTROL: boxed 16B worker buffer")
+    }
+
+    // 4P+4C the PACKED worker — the convergence treatment.
+    println("  spawning 8 real OS threads on packed_churn (4P+4C) …")
+    let mut ph = []
+    let mut s = 0
+    while s < len(bases) { ph = ph + [thread_start(packed_churn, bases[s])]; s = s + 1 }
+    let mut pgot = 0
+    let mut pmatch = 1
+    let mut j = 0
+    while j < len(ph) {
+        let r = to_int(thread_wait(ph[j]))
+        pgot = pgot + r
+        if r != to_int(oracle_packed[j]) { pmatch = 0 }
+        j = j + 1
+    }
+    check("4P+4C PACKED: 8 workers joined crash-free", len(ph), 8)
+    check("4P+4C PACKED: per-worker checksums match oracle", pmatch, 1)
+    check("4P+4C PACKED: order-insensitive total == oracle", pgot, op_total)
+
+    // 4P+4C the BOXED worker — the control (lane-a r2 crashed HERE).
+    println("  spawning 8 real OS threads on boxed_churn (4P+4C) …")
+    let mut bh = []
+    let mut s2 = 0
+    while s2 < len(bases) { bh = bh + [thread_start(boxed_churn, bases[s2])]; s2 = s2 + 1 }
+    let mut bgot = 0
+    let mut bmatch = 1
+    let mut j2 = 0
+    while j2 < len(bh) {
+        let r = to_int(thread_wait(bh[j2]))
+        bgot = bgot + r
+        if r != to_int(oracle_boxed[j2]) { bmatch = 0 }
+        j2 = j2 + 1
+    }
+    check("4P+4C BOXED: 8 workers joined crash-free", len(bh), 8)
+    check("4P+4C BOXED: order-insensitive total == oracle", bgot, ob_total)
+}
+
+println("")
+println("═══════════════════════════════════════════════════════")
+println("  RESULT: " + to_string(pass_count) + " passed, " + to_string(fail_count) + " failed")
+println("═══════════════════════════════════════════════════════")
+if fail_count > 0 {
+    exit(1)
+}
