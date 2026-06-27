@@ -59,6 +59,36 @@ fn main() {
     // A false congruence p(5n+3)≡0 mod5 -> unverified.
     f = f + gate("CONG partition(5n+3)=0 mod5 (false)", cj_verdict(body("partition(5*n+3) = 0 mod 5")), "unverified")
 
+    // ── NOVEL-CLOSURE gate (PR #4120 port) — false-positive demotion ──
+    // The closure is what makes the engine's NOVEL verdict TRUSTWORTHY: an
+    // exact-int-confirmed relation that is one of the four measured false-positive
+    // classes (C1-C4) is DEMOTED from verified-novel to verified-known (true, but
+    // not genuinely novel). Without the closure these would surface as "?NOVEL?".
+    //
+    // C4 BOUNDED-COINCIDENCE — a 2-vs-2 multiplicative bounded-unique singleton is
+    // a coincidence, not a forall-n law. sigma*phi=tau*n holds at exactly n=6 over
+    // [2,20000] (reference: ATLAS/state/novel-dfs singleton sweep) — exact-int
+    // confirmed, NOT classical, but demoted by C4 -> verified-known (NOT novel).
+    f = f + gate("CLO C4 sigma*phi=tau*n (n=6 coinc)", cj_verdict(body("sigma*phi = tau*n")), "verified-known")
+    f = f + gate("CLO C4 sigma*tau=phi*J2 (n=6 coinc)", cj_verdict(body("sigma*tau = phi*J2")), "verified-known")
+    // C3 SQUARE-SUPPORT — the singleton witness is a perfect square (lambda(square)
+    // = +1 coincidence). phi*phi=sopfr*core holds at exactly n=16 -> demoted by C3.
+    f = f + gate("CLO C3 phi*phi=sopfr*core (n=16 sq)", cj_verdict(body("phi*phi = sopfr*core")), "verified-known")
+    // C1 ASSOC-CHAIN (congruence) — p(10n+9) = 0 mod5 is a sub-progression of the
+    // base Ramanujan p(5n+4) = 0 mod5 (10n+9 = 5(2n+1)+4) -> a re-statement, demoted.
+    f = f + gate("CLO C1 p(10n+9)=0 mod5 (subprog)", cj_verdict(body("partition(10*n+9) = 0 mod 5")), "verified-known")
+
+    // closure CLASS tags (honest provenance for the PR reviewer) ──
+    f = f + gate("CLOcls sigma*phi=tau*n -> C4", cj_closure_class(body("sigma*phi = tau*n")), "C4-COINCIDENCE")
+    f = f + gate("CLOcls phi*phi=sopfr*core -> C3", cj_closure_class(body("phi*phi = sopfr*core")), "C3-SQUARE")
+    f = f + gate("CLOcls p(10n+9)=0 mod5 -> C1", cj_closure_class(body("partition(10*n+9) = 0 mod 5")), "C1-ASSOC-CHAIN")
+    // p(25n+24) = 0 mod25 is a genuinely new modulus (NOT a sub-progression of any
+    // base) -> SURVIVOR -> the ONE verdict that stays verified-novel (honest triage;
+    // final novelty decided by hexa verify g5 / PR — classically it is Watson's).
+    f = f + gate("CLOcls p(25n+24)=0 mod25 -> SURVIVOR", cj_closure_class(body("partition(25*n+24) = 0 mod 25")), "SURVIVOR")
+    // a classical-known relation is NOT closure-classified (returns "").
+    f = f + gate("CLOcls phi*J2=n*psi (classical) -> empty", cj_closure_class(body("phi*J2 = n*psi")), "")
+
     // ── prose / unparseable ──
     // No CONJECTURE line -> "" (prose hypothesis, falls through the gate).
     f = f + gate("PROSE no claim", cj_verdict("Just a prose hypothesis about sigma growth, no formal relation."), "")
