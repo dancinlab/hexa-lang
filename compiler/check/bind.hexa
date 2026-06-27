@@ -1267,6 +1267,23 @@ fn _bind_builtin_names() -> [string] {
         // syscall intrinsics + __hx_syscall6_out2) and DCE-never-drops the STMT_CALL.
         // arm64 + x86_64 STMT_CALL special-case. ADD-only: the compiler never calls it.
         "__hx_environ_ptr",
+        // RFC061 Route C Wall 3-b — std-stream extern-data reloc (2026-06-27):
+        // `__hx_stderr_ptr()` / `__hx_stdout_ptr()` are 0-arg intrinsics that load
+        // the ADDRESS of the libc standard-stream FILE* globals (`extern FILE *stderr`
+        // / `*stdout`) THROUGH THE GOT — the named-data sibling of __hx_environ_ptr,
+        // keyed to the per-target libc symbols (x86_64-linux glibc `stderr`/`stdout`
+        // direct; darwin `__stderrp`/`__stdoutp`, the `#define stderr __stderrp`
+        // macro target). Each returns `&stderr` (FILE**), so ONE __hx_ptr_load64
+        // yields the `stderr` FILE* value itself — letting hxlcl_fputs/hxlcl_fputc
+        // replicate the frozen body's `if (fp == (void*)stderr) fd = 2;` standard-
+        // stream detection (self/runtime_emit_full.hexa:1014-1024) with a pure
+        // pointer-load + compare, instead of the libc-`stderr`-global shim body.
+        // These are the FIRST per-TARGET-NAMED named-data GOT relocs (the symbol
+        // STRING differs by platform, unlike `environ`); frozen-SAFE (parse as
+        // ordinary identifier-calls, like the 24 syscall intrinsics + __hx_environ_ptr)
+        // and DCE-never-drops the STMT_CALL. arm64 + x86_64 STMT_CALL special-case.
+        // ADD-only: the compiler never calls them.
+        "__hx_stderr_ptr", "__hx_stdout_ptr",
         // RT-NATIVE M4 ARRAY-R2 (2026-06-17): `__hx_make_val(tag, payload)` — the
         // symmetric write-half of `__hx_tag`. Builds a {tag, payload} 16-byte HexaVal
         // from two raw int64 words WITHOUT boxing-tag-loss, so a payload word loaded

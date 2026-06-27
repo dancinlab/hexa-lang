@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen fputs fputc fflush; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -241,6 +241,17 @@ extern size_t hxlcl_fwrite(const void *buf, size_t sz, size_t n, void *fp);
 extern long   hxlcl_ftell(void *fp);
 extern int    hxlcl_fseek(void *fp, long offset, int whence);
 extern void  *hxlcl_fdopen(int fd, const char *mode);
+
+/* Wall 3-b STD-STREAM family — fputs/fputc/fflush. Unlike the CORE FILE* family
+ * (fd+1 fake pointers), these take the LIBC GLOBALS stdout/stderr and detect the
+ * target fd via __hx_stderr_ptr() (the new named-data GOT intrinsic): default fd=1,
+ * fd=2 iff fp==stderr — byte-faithful to the frozen body. Exercised here by writing
+ * a known string to a PIPE'd fd (dup2 stdout→pipe), reading it back byte-exact, and
+ * asserting stderr-routing via a second pipe (dup2 stderr→pipe). fflush is the
+ * trivial no-op (return 0). */
+extern int    hxlcl_fputs(const char *s, void *fp);
+extern int    hxlcl_fputc(int c, void *fp);
+extern int    hxlcl_fflush(void *fp);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
@@ -719,6 +730,50 @@ int main(void) {
         unlink(tmpl);
     }
 
+    /* Wall 3-b — STD-STREAM family fputs/fputc/fflush. fflush is a definitional
+     * no-op; fputs/fputc detect the target fd from the libc stdout/stderr globals
+     * (default fd=1, fd=2 iff fp==stderr — via __hx_stderr_ptr). Exercised by
+     * redirecting fd 1 and fd 2 to pipes (dup2), writing through hxlcl_fputs/fputc
+     * with the REAL libc stdout/stderr pointers, then reading each pipe back byte-
+     * exact — proving the stderr-vs-default routing is value-correct (a wrong
+     * __hx_stderr_ptr GOT load, or a missing pointer-compare, would misroute the
+     * stderr write to fd 1 and the stdout pipe would carry the wrong bytes). */
+    {
+        CK(hxlcl_fflush(stdout) == 0, "fflush(stdout) == 0 (no-op leaf)");
+        CK(hxlcl_fflush(stderr) == 0, "fflush(stderr) == 0 (no-op leaf)");
+        CK(hxlcl_fflush(NULL)   == 0, "fflush(NULL) == 0 (no-op leaf)");
+
+        int op1[2], op2[2];
+        if (pipe(op1) == 0 && pipe(op2) == 0) {
+            int save1 = dup(1), save2 = dup(2);
+            /* route fd 1 → op1 write-end, fd 2 → op2 write-end */
+            dup2(op1[1], 1);
+            dup2(op2[1], 2);
+            /* stdout path: default fd=1 (fp != stderr) */
+            int wo = hxlcl_fputs("OUT", stdout);
+            int wc = hxlcl_fputc('!', stdout);
+            /* stderr path: fp == stderr → fd=2 */
+            int we = hxlcl_fputs("ERR", stderr);
+            /* restore real stdout/stderr BEFORE any printf in CK */
+            dup2(save1, 1); dup2(save2, 2);
+            close(save1); close(save2);
+            close(op1[1]); close(op2[1]);
+
+            char b1[16]; char b2[16];
+            ssize_t r1 = read(op1[0], b1, sizeof(b1)); if (r1 < 0) r1 = 0; b1[r1] = 0;
+            ssize_t r2 = read(op2[0], b2, sizeof(b2)); if (r2 < 0) r2 = 0; b2[r2] = 0;
+            close(op1[0]); close(op2[0]);
+
+            CK(wo == 3, "fputs(\"OUT\", stdout) → 3 bytes");
+            CK(wc == '!', "fputc('!', stdout) → '!' (success returns the char)");
+            CK(we == 3, "fputs(\"ERR\", stderr) → 3 bytes");
+            CK(strcmp(b1, "OUT!") == 0, "stdout pipe got \"OUT!\" (default fd=1, byte-exact)");
+            CK(strcmp(b2, "ERR") == 0, "stderr pipe got \"ERR\" (fp==stderr → fd=2, routing-exact)");
+        } else {
+            CK(0, "pipe() setup for std-stream routing test");
+        }
+    }
+
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }
     printf("[routec-smoke] %d assert(s) FAILED\n", fails);
     return 1;
@@ -731,4 +786,4 @@ echo "[routec-smoke] (3) compile harness + link Route C .o + run …"
 "$TMP/routec_smoke"
 rc=$?
 [ "$rc" -eq 0 ] || { echo "[routec-smoke] FATAL: behaviour run rc=$rc" >&2; exit 1; }
-echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (pure-arith + composite + syscall families + batch F search strchr/strstr + Wall 3-a CORE FILE* fopen/fread/fwrite/fseek/ftell/fclose/fdopen, darwin-arm64)"
+echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (pure-arith + composite + syscall families + batch F search strchr/strstr + Wall 3-a CORE FILE* fopen/fread/fwrite/fseek/ftell/fclose/fdopen + Wall 3-b STD-STREAM fputs/fputc/fflush, darwin-arm64)"
