@@ -1,16 +1,27 @@
-// test_fn_overload — arity-based function overloading (opt-in slice).
+// test_fn_overload — function overloading (opt-in slice).
+//   §1: ARITY-based  (add/2 vs add/3).
+//   §2: same-arity TYPE(tag)-based runtime dispatch (show(int) vs show(str)).
 //
 // REQUIRES the self-host transpile/native build with HEXA_FN_OVERLOAD=1.
-// Under the DEFAULT build (flag unset) the second `add` is the historical
-// first-wins drop, so this file is GATED to the overload-enabled lane and is
-// NOT part of the default byteeq corpus (the flag changes no DEFAULT bytes —
-// see state/rfc_function_overloading.md "byteeq-safe by construction").
+// Under the DEFAULT build (flag unset) the second `add`/`show` is the
+// historical first-wins drop, so this file is GATED to the overload-enabled
+// lane and is NOT part of the default byteeq corpus (the flag changes no
+// DEFAULT bytes — see state/rfc_function_overloading.md "byteeq-safe by
+// construction").
+//
+// TAG-GRANULARITY LIMITATION (§2): discrimination is on the runtime HexaVal
+// tag (int/float/str/bool/array/map), NOT on declared nominal types — two
+// overloads that box to the SAME tag (e.g. two distinct struct types) are
+// indistinguishable at call time and collapse to first-wins. Untyped params
+// are wildcards. The native `--emit` backend tag-dispatch is a later slice.
 //
 // Build: HEXA_FN_OVERLOAD=1 hexa build self/test_fn_overload.hexa && ./a.out
 // Expected stdout:
 //   add2=7
 //   add3=12
 //   greet=hi:ada
+//   show-int=int:42
+//   show-str=str:hello
 //   PASS
 
 fn add(a, b) {
@@ -25,13 +36,28 @@ fn greet(name) {
     return "hi:" + name
 }
 
+// §2 same-arity tag-dispatch: same name, same arity (1), distinct param tags.
+// Calls route through the emitted dispatcher `show_hxov1`, which tests the
+// runtime tag of the single arg and forwards to `show_hxov1_i` / `show_hxov1_s`.
+fn show(x: int) {
+    return "int:" + str(x)
+}
+
+fn show(x: str) {
+    return "str:" + x
+}
+
 fn main() {
     let r2 = add(3, 4)        // -> add_hxov2
     let r3 = add(3, 4, 5)     // -> add_hxov3
     println("add2=" + str(r2))
     println("add3=" + str(r3))
     println("greet=" + greet("ada"))   // single decl -> bare `greet`
-    if r2 == 7 && r3 == 12 {
+    let si = show(42)         // -> show_hxov1 -> show_hxov1_i (tag INT)
+    let ss = show("hello")    // -> show_hxov1 -> show_hxov1_s (tag STR)
+    println("show-int=" + si)
+    println("show-str=" + ss)
+    if r2 == 7 && r3 == 12 && si == "int:42" && ss == "str:hello" {
         println("PASS")
     } else {
         println("FAIL")

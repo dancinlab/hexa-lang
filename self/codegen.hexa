@@ -1415,6 +1415,11 @@ fn codegen(ast) {
         i = i + 1
     }
 
+    // fn-overload §2: emit runtime tag-dispatch trampolines for same-arity
+    // distinct-tag overload sets. No-op (empty key set) on the default path →
+    // byte-identical. Forwards land in fwd_parts and bodies in fn_parts, both
+    // BEFORE their respective .join("") below.
+    _gen2_emit_overload_dispatchers(fwd_parts, fn_parts)
     // Join all sections (single pass)
     parts.push(fwd_parts.join(""))
     parts.push("\n")
@@ -2779,6 +2784,36 @@ let mut _gen2_defer_flag_count = 0
 // RFC slices (see the RFC's Roadmap section).
 let mut _gen2_overload_names = []
 
+// ── §2 same-arity TYPE(tag)-based overloads (opt-in · default-OFF) ─────────
+// Extends the §1 arity slice with runtime MULTIPLE-DISPATCH (Julia-style):
+// when HEXA_FN_OVERLOAD is set AND a name is declared >=2× at the SAME arity
+// with >=2 DISTINCT param-tag signatures (`fn show(x:int)`/`fn show(x:str)`),
+// each member is emitted under a tag-suffixed C symbol (`show_hxov1_i`,
+// `show_hxov1_s`) and a runtime dispatcher `show_hxov1(HexaVal)` tests each
+// annotated param via the frozen runtime tag inspectors (HX_IS_INT/…) and
+// forwards to the first matching member (first-declared member is the
+// fallthrough default). Static type inference is absent (the value model is
+// dynamic), so discrimination happens at call time on the boxed HexaVal tag —
+// granularity int/float/str/bool/array/map; untyped params are wildcards.
+//
+// BYTEEQ-SAFE: every tag global is populated ONLY after the env-flag early
+// return in _gen2_build_overload_set, so on the default build all four stay
+// empty → _gen2_is_tag_overloaded() is false, _gen2_fn_cname/_gen2_dedup_key
+// keep their §1 behavior, and _gen2_emit_overload_dispatchers() pushes nothing
+// before the .join("") sites. runtime.a/shim.o are untouched (the dispatcher
+// is string-concatenated C over already-frozen runtime.h macros). Reference:
+// Julia method tables (multiple dispatch on argument types) + C++ overload
+// resolution by parameter signature.
+//
+// Parallel arrays, indexed together: _gen2_tagov_keys[k] = "name@@arity",
+// _gen2_tagov_names[k] = bare name, _gen2_tagov_arity[k] = arity (int),
+// _gen2_tagov_sigs[k] = "sig1|sig2|…" distinct member sigs in declaration
+// order (sig1 = first-declared = dispatcher default).
+let mut _gen2_tagov_keys = []
+let mut _gen2_tagov_names = []
+let mut _gen2_tagov_arity = []
+let mut _gen2_tagov_sigs = []
+
 fn _gen2_str_in(arr, x) {
     let mut i = 0
     while i < len(arr) {
@@ -2788,11 +2823,90 @@ fn _gen2_str_in(arr, x) {
     return false
 }
 
+// Map a hexa param-type annotation string to a single tag-letter that names
+// the runtime TAG family the dispatcher tests. Mirrors the FFI type→tag map
+// (gen2_ffi_c_type / gen2_ffi_marshal_arg). Untyped/unrecognized → "x"
+// wildcard (no runtime test emitted — matches anything). Frozen-safe:
+// only +, ==, .starts_with.
+fn _gen2_tag_letter(typ) {
+    if type_of(typ) != "string" { return "x" }
+    if typ == "" { return "x" }
+    if typ == "Float" || typ == "float" || typ == "f64" || typ == "f32" { return "f" }
+    if typ == "Int" || typ == "int" || typ == "i64" || typ == "i32" { return "i" }
+    if typ == "Str" || typ == "str" || typ == "String" { return "s" }
+    if typ == "Bool" || typ == "bool" { return "b" }
+    if typ.starts_with("[") { return "a" }
+    if typ.starts_with("{") || typ.starts_with("Map") { return "m" }
+    return "x"
+}
+
+// Per-fn param-tag signature: concatenated tag-letters, one per param
+// (e.g. `fn f(x:int, y:str)` → "is"). All-wildcard sigs ("xx") can't be
+// discriminated and so never count as DISTINCT (see _gen2_build_overload_set).
+fn _gen2_param_tag_sig(node) {
+    let mut sig = ""
+    let mut i = 0
+    while i < len(node.params) {
+        sig = sig + _gen2_tag_letter(node.params[i].value)
+        i = i + 1
+    }
+    return sig
+}
+
+// Membership / count over a "|"-joined distinct-sig string.
+fn _gen2_sig_joined_has(joined, sig) {
+    return _gen2_str_in(joined.split("|"), sig)
+}
+fn _gen2_pipe_count(joined) {
+    if joined == "" { return 0 }
+    return len(joined.split("|"))
+}
+
+// True iff `name`@`arity` is a same-arity tag-overloaded set (>=2 distinct
+// tag sigs). Drives _gen2_fn_cname's tag-suffix and _gen2_dedup_key's sig
+// fold. Empty (false) on the default path.
+fn _gen2_is_tag_overloaded(name, arity) {
+    if len(_gen2_tagov_keys) == 0 { return false }
+    return _gen2_str_in(_gen2_tagov_keys, name + "@@" + to_string(arity))
+}
+
+// Runtime tag test for one tag-letter at positional arg `aN`. Wildcard "x"
+// emits "" (no test). bool has no HX_IS_BOOL macro → tag compare (parenthesized
+// so it composes safely under && joins). Uses only frozen runtime.h inspectors.
+fn _gen2_tag_test_expr(c, pos) {
+    let a = "a" + to_string(pos)
+    if c == "i" { return "HX_IS_INT(" + a + ")" }
+    if c == "f" { return "HX_IS_FLOAT(" + a + ")" }
+    if c == "s" { return "HX_IS_STR(" + a + ")" }
+    if c == "b" { return "((" + a + ").tag == TAG_BOOL)" }
+    if c == "a" { return "HX_IS_ARRAY(" + a + ")" }
+    if c == "m" { return "HX_IS_MAP(" + a + ")" }
+    return ""
+}
+
+// Build the && -joined runtime test for a whole member sig. Wildcard positions
+// contribute nothing; an all-wildcard sig yields "" (caller treats as default).
+fn _gen2_sig_test(sig) {
+    let cs = sig.chars()
+    let mut tests = []
+    let mut i = 0
+    while i < len(cs) {
+        let t = _gen2_tag_test_expr(to_string(cs[i]), i)
+        if t != "" { tests.push(t) }
+        i = i + 1
+    }
+    return tests.join(" && ")
+}
+
 // Scan the (already-flattened) top-level ast and populate
 // _gen2_overload_names with every fn name declared under >=2 distinct
 // arities. No-op (empty set) when HEXA_FN_OVERLOAD is unset.
 fn _gen2_build_overload_set(ast) {
     _gen2_overload_names = []
+    _gen2_tagov_keys = []
+    _gen2_tagov_names = []
+    _gen2_tagov_arity = []
+    _gen2_tagov_sigs = []
     if env("HEXA_FN_OVERLOAD") == "" { return }
     // Collect DISTINCT (name @@ arity) pairs across top-level fn decls.
     let mut pairs = []
@@ -2827,6 +2941,60 @@ fn _gen2_build_overload_set(ast) {
         if cnt >= 2 { _gen2_overload_names.push(nm) }
         ni = ni + 1
     }
+    // ── §2 same-arity TYPE(tag)-based overloads ──────────────────────────
+    // Second pass: group same-name/same-arity decls and keep those with >=2
+    // DISTINCT param-tag signatures. Same-name/same-arity/SAME-sig redefinition
+    // is NOT a tag overload (stays first-wins). distinct sigs accumulate in
+    // declaration order so sig1 (first-declared) is the dispatcher default.
+    let mut tkeys = []   // "name@@arity" seen this pass
+    let mut tnames = []  // parallel bare name
+    let mut tar = []     // parallel arity (int)
+    let mut tsigs = []   // parallel "sig1|sig2|…" distinct, decl order
+    let mut ti = 0
+    while ti < len(ast) {
+        let tk = ast[ti].kind
+        if tk == "FnDecl" || tk == "PureFnDecl" || tk == "AsyncFnDecl" {
+            let tnm = ast[ti].name
+            if type_of(tnm) == "string" {
+                let tarity = len(ast[ti].params)
+                let tkey = tnm + "@@" + to_string(tarity)
+                let tsig = _gen2_param_tag_sig(ast[ti])
+                let mut tidx = -1
+                let mut ts = 0
+                while ts < len(tkeys) {
+                    if tkeys[ts] == tkey { tidx = ts }
+                    ts = ts + 1
+                }
+                if tidx < 0 {
+                    tkeys.push(tkey)
+                    tnames.push(tnm)
+                    tar.push(tarity)
+                    tsigs.push(tsig)
+                } else {
+                    if !_gen2_sig_joined_has(tsigs[tidx], tsig) {
+                        tsigs[tidx] = tsigs[tidx] + "|" + tsig
+                    }
+                }
+            }
+        }
+        ti = ti + 1
+    }
+    // Promote keys with >=2 distinct sigs; mark the name overloaded so the
+    // call site (_gen2_overload_name) routes through the dispatcher symbol and
+    // the single-arity registry guard (`&& !_gen2_is_overloaded`) is skipped.
+    let mut fi = 0
+    while fi < len(tkeys) {
+        if _gen2_pipe_count(tsigs[fi]) >= 2 {
+            _gen2_tagov_keys.push(tkeys[fi])
+            _gen2_tagov_names.push(tnames[fi])
+            _gen2_tagov_arity.push(tar[fi])
+            _gen2_tagov_sigs.push(tsigs[fi])
+            if !_gen2_str_in(_gen2_overload_names, tnames[fi]) {
+                _gen2_overload_names.push(tnames[fi])
+            }
+        }
+        fi = fi + 1
+    }
 }
 
 fn _gen2_is_overloaded(name) {
@@ -2844,7 +3012,14 @@ fn _gen2_overload_name(name, arity) {
 }
 
 // Overload-aware C symbol for a fn DECLARATION node (arity = param count).
+// §2: a same-arity tag-overloaded MEMBER is mangled with its tag-sig suffix
+// (`show_hxov1_i`) so distinct-tag members get distinct symbols; the bare
+// `show_hxov1` is reserved for the emitted runtime dispatcher. Falls through
+// to the §1 arity-only / mangle behavior otherwise (byteeq-safe).
 fn _gen2_fn_cname(node) {
+    if _gen2_is_tag_overloaded(node.name, len(node.params)) {
+        return _hexa_mangle_ident(node.name) + "_hxov" + to_string(len(node.params)) + "_" + _gen2_param_tag_sig(node)
+    }
     return _gen2_overload_name(node.name, len(node.params))
 }
 
@@ -2855,7 +3030,64 @@ fn _gen2_fn_cname(node) {
 // redefinition still collapses to first-wins.
 fn _gen2_dedup_key(node) {
     if !_gen2_is_overloaded(node.name) { return node.name }
-    return node.name + "@@" + to_string(len(node.params))
+    let base = node.name + "@@" + to_string(len(node.params))
+    // §2: fold the tag-sig in so same-arity distinct-tag members each survive
+    // the first-wins emit loops, while a true same-arity SAME-sig redefinition
+    // still collapses to first-wins.
+    if _gen2_is_tag_overloaded(node.name, len(node.params)) {
+        return base + "@@" + _gen2_param_tag_sig(node)
+    }
+    return base
+}
+
+// §2: emit a runtime tag-dispatch trampoline for every same-arity tag-overload
+// set. For `name`@`arity` with distinct member sigs [s0,s1,…]: a forward decl
+// for the dispatcher `name_hxovN`, and a body that tests each non-default
+// member's annotated params (HX_IS_<TAG>(aK), &&-joined) and forwards to the
+// first match, defaulting to the first-declared member (s0). Members are
+// emitted (and forward-declared) by the normal decl loop under their tag-sig
+// symbols `name_hxovN_<sig>`. Pushes a forward to fwd_parts and a body to
+// fn_parts. No-op (no pushes) when _gen2_tagov_keys is empty → default path
+// byte-identical.
+fn _gen2_emit_overload_dispatchers(fwd_parts, fn_parts) {
+    if len(_gen2_tagov_keys) == 0 { return }
+    let mut ki = 0
+    while ki < len(_gen2_tagov_keys) {
+        let nm = _gen2_tagov_names[ki]
+        let ar = _gen2_tagov_arity[ki]
+        let sigs = _gen2_tagov_sigs[ki].split("|")
+        let cbase = _hexa_mangle_ident(nm) + "_hxov" + to_string(ar)
+        // C param list `HexaVal a0, HexaVal a1, …` and call-arg list `a0, a1, …`.
+        let mut plist = []
+        let mut alist = []
+        let mut pi = 0
+        while pi < ar {
+            plist.push("HexaVal a" + to_string(pi))
+            alist.push("a" + to_string(pi))
+            pi = pi + 1
+        }
+        let mut psig = plist.join(", ")
+        if psig == "" { psig = "void" }
+        let argstr = alist.join(", ")
+        // Forward-declare the dispatcher only — each member is already
+        // forward-declared by gen2_fn_forward in the decl loop (re-declaring a
+        // @inline member here would clash with its `static inline` storage).
+        fwd_parts.push("HexaVal " + cbase + "(" + psig + ");\n")
+        // Body: test members 1..n-1 (declaration order), default to member 0.
+        let mut body = "HexaVal " + cbase + "(" + psig + ") {\n"
+        let mut j = 1
+        while j < len(sigs) {
+            let test = _gen2_sig_test(sigs[j])
+            if test != "" {
+                body = body + "    if (" + test + ") return " + cbase + "_" + sigs[j] + "(" + argstr + ");\n"
+            }
+            j = j + 1
+        }
+        body = body + "    return " + cbase + "_" + sigs[0] + "(" + argstr + ");\n"
+        body = body + "}\n"
+        fn_parts.push(body)
+        ki = ki + 1
+    }
 }
 
 // _gen2_count_defers — pre-scan the fn body to count DeferStmt nodes
@@ -13983,6 +14215,10 @@ fn codegen_full(ast) {
     out_parts.push("#elif !defined(hxlcl_setjmp)\n")
     out_parts.push("#define hxlcl_setjmp(buf) setjmp(*(jmp_buf *)(buf))\n")
     out_parts.push("#endif\n\n")
+    // fn-overload §2: emit runtime tag-dispatch trampolines (twin of codegen()).
+    // No-op (empty key set) on the default path → byte-identical. Forwards into
+    // fwd_parts, bodies into fn_parts, both BEFORE their .join("") below.
+    _gen2_emit_overload_dispatchers(fwd_parts, fn_parts)
     out_parts.push(fwd_parts.join(""))
     out_parts.push("\n")
     out_parts.push(global_parts.join(""))
