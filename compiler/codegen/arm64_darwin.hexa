@@ -101,6 +101,41 @@ let _STMT_RETURN   = "return"
 let _STMT_BR       = "br"
 let _STMT_BR_COND  = "br_cond"
 
+// RFC061 Route C Wall 3-c — __hx_static_slot self-defined BSS accumulator (arm64
+// sibling of x86_64's _x86_static_slots). Each distinct `slot_id` literal addressed
+// by a whitelisted Route C `__hx_static_slot(slot_id, size_bytes)` records its
+// encoded label here ONCE; `codegen_arm64_darwin` appends them to LModule.globals so
+// emit/asm defines a `.zero N` data symbol. ONLY appended-to inside the
+// __hx_static_slot STMT_CALL special-case → empty on the byteeq path → byte-eq
+// NEUTRAL. (Darwin user-symbols carry the `_` prefix; the label is encoded WITH the
+// platform prefix already applied so it matches the codegen `adrp _slot_<id>@PAGE`
+// reference after _fmt_label.)
+pub let mut _arm64_static_slots: [string] = []
+
+// True iff `s` begins with `pfx` (char-walk; no .substr — keeps stage0-portable).
+fn _arm64_str_starts_with(s: string, pfx: string) -> bool {
+    let cs = s.chars()
+    let cp = pfx.chars()
+    let np = len(cp)
+    if len(cs) < np { return false }
+    let mut i = 0
+    while i < np {
+        if cs[i] != cp[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn _arm64_record_static_slot(label_no_sz: string, size_bytes: i64) {
+    let enc = label_no_sz + "__sz"
+    let mut i = 0
+    while i < len(_arm64_static_slots) {
+        if _arm64_str_starts_with(_arm64_static_slots[i], enc) { return }
+        i = i + 1
+    }
+    _arm64_static_slots.push(enc + to_string(size_bytes))
+}
+
 // ── PReg / LOperand helpers ──────────────────────────────────
 
 fn _arm64_preg_gpr(name: string) -> PReg {
@@ -2367,6 +2402,79 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // RFC061 Route C Wall 3-b: `__hx_stderr_ptr()` / `__hx_stdout_ptr()` (0-arg)
+        // → the ADDRESS of the libc standard-stream FILE* global, loaded through the
+        // GOT and boxed as a TAG_INT payload. Named-DATA sibling of __hx_environ_ptr.
+        // On darwin the `stderr`/`stdout` user names are `#define`s onto the real
+        // exported globals `__stderrp`/`__stdoutp`, so the GOT symbol STRING is
+        // `__stderrp` (→ `___stderrp` after emit/asm _fmt_label's unconditional `_`
+        // mangle), differing per-target from glibc's bare `stderr`. x1 = &stderr
+        // (FILE**), x0 = TAG_INT; one __hx_ptr_load64 in the caller yields the
+        // `stderr` FILE* value to compare against `fp`. No args; load + box.
+        if s.op == "__hx_stderr_ptr" {
+            buf.push(_arm64_instr2("adrp", _arm64_op_reg("x1"),
+                             _arm64_op_label("__stderrp@GOTPAGE"),
+                             "__hx_stderr_ptr: &__stderrp GOT page [reloc=" + RELOC_AARCH64_ADR_GOT_PAGE + "]"))
+            buf.push(_arm64_instr2("ldr", _arm64_op_reg("x1"),
+                             _arm64_op_mem_label("x1", "__stderrp@GOTPAGEOFF"),
+                             "__hx_stderr_ptr: x1 = &__stderrp [reloc=" + RELOC_AARCH64_LD64_GOT_LO12_NC + "]"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_stderr_ptr: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        if s.op == "__hx_stdout_ptr" {
+            buf.push(_arm64_instr2("adrp", _arm64_op_reg("x1"),
+                             _arm64_op_label("__stdoutp@GOTPAGE"),
+                             "__hx_stdout_ptr: &__stdoutp GOT page [reloc=" + RELOC_AARCH64_ADR_GOT_PAGE + "]"))
+            buf.push(_arm64_instr2("ldr", _arm64_op_reg("x1"),
+                             _arm64_op_mem_label("x1", "__stdoutp@GOTPAGEOFF"),
+                             "__hx_stdout_ptr: x1 = &__stdoutp [reloc=" + RELOC_AARCH64_LD64_GOT_LO12_NC + "]"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_stdout_ptr: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // RFC061 Route C Wall 3-c: `__hx_static_slot(slot_id, size_bytes)` — DEFINE a
+        // self-static zero-initialized data buffer of `size_bytes` and RETURN its
+        // address (boxed TAG_INT, payload in x1). UNLIKE __hx_environ_ptr (extern libc
+        // global via GOT), the symbol `slot_<id>` is DEFINED-here, so its address is
+        // built with the LOCAL `adrp x1, slot_<id>@PAGE` + `add x1, x1, slot_<id>@PAGEOFF`
+        // pair (NOT @GOTPAGE) — the exact PIE local-symbol form _arm64_op_resolve emits
+        // for module globals `g<id>` and cstrings. Both args MUST be compile-time
+        // `const_int` literals (deterministic symbol name + fixed BSS size); the slot is
+        // recorded ONCE per distinct slot_id into _arm64_static_slots, which
+        // codegen_arm64_darwin appends to LModule.globals → emit/asm defines a
+        // `.zero size_bytes` buffer. Frozen-safe (151c52c8) — an ordinary identifier-call,
+        // no new parser keyword/@attr. The reference label is `slot_<id>` (darwin
+        // _fmt_label rewrites to `_slot_<id>`; the data symbol is recorded WITH that
+        // platform prefix so def==ref).
+        if s.op == "__hx_static_slot" && len(s.args) >= 2 {
+            if s.args[0].kind == "const_int" && s.args[1].kind == "const_int" {
+                let sid = s.args[0].int_val
+                let ssz = s.args[1].int_val
+                // Mach-O user symbols carry the leading `_` (matching the `_g<id>`
+                // module-global convention); ELF symbols are bare. The DEFINED data
+                // label must match the reference spelling _fmt_label produces (`adrp
+                // slot_<id>@PAGE` → `_slot_<id>@PAGE` on darwin).
+                let elf = opts.target_triple == "arm64-linux-gnu"
+                let mut deflabel = "_slot_" + to_string(sid)   // darwin: _fmt_label-spelled
+                if elf { deflabel = "slot_" + to_string(sid) } // ELF: bare
+                _arm64_record_static_slot(deflabel, ssz)
+                let refsym = "slot_" + to_string(sid)          // _fmt_label adds `_` on darwin
+                buf.push(_arm64_instr2("adrp", _arm64_op_reg("x1"),
+                                 _arm64_op_label(refsym + "@PAGE"),
+                                 "__hx_static_slot: &" + refsym + " page (self-static)"))
+                buf.push(_arm64_instr3("add", _arm64_op_reg("x1"),
+                                 _arm64_op_reg("x1"),
+                                 _arm64_op_label(refsym + "@PAGEOFF"),
+                                 "__hx_static_slot: x1 = &" + refsym))
+                buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                                 _arm64_op_label("#0"), "__hx_static_slot: TAG_INT"))
+                if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+                return buf
+            }
+        }
         // RT-NATIVE UNLOCK-10: `__hx_ptr_store64(ptr, off, val)` — write the
         // 64-bit int `val` to raw address `ptr + off`. The arena bump path
         // (a native allocator writes object headers/fields into an mmap slab)
@@ -3459,6 +3567,9 @@ pub fn codegen_arm64_darwin(module: MModule, opts: CodegenOptions) -> LModule {
     }
     let elf = cg_target == "arm64-linux-gnu"
     let st = _build_arm_strtab(module)
+    // Wall 3-c: reset the __hx_static_slot accumulator for THIS module (module-scope
+    // mutable; a prior module's slots must not leak). Empty on the byteeq path.
+    _arm64_static_slots = []
     let mut funcs = []
     let mut i = 0
     while i < len(module.funcs) {
@@ -3488,6 +3599,14 @@ pub fn codegen_arm64_darwin(module: MModule, opts: CodegenOptions) -> LModule {
             gnames.push("_g" + to_string(module.globals[gi].id))
         }
         gi = gi + 1
+    }
+    // Wall 3-c: append the self-static-slot labels (already platform-prefixed:
+    // `_slot_<id>__sz<N>` on darwin, `slot_<id>__sz<N>` on ELF) so emit/asm defines
+    // a `.zero N`-sized data symbol for each. Empty on the byteeq path.
+    let mut si = 0
+    while si < len(_arm64_static_slots) {
+        gnames.push(_arm64_static_slots[si])
+        si = si + 1
     }
     // Float-pool entries from the strtab → LFloat list. `.LC*` is a
     // local label (no `_` prefix needed) per the existing strtab

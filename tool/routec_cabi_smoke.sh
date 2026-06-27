@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen fputs fputc fflush popen pclose; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -242,6 +242,30 @@ extern long   hxlcl_ftell(void *fp);
 extern int    hxlcl_fseek(void *fp, long offset, int whence);
 extern void  *hxlcl_fdopen(int fd, const char *mode);
 
+/* Wall 3-b STD-STREAM family — fputs/fputc/fflush. Unlike the CORE FILE* family
+ * (fd+1 fake pointers), these take the LIBC GLOBALS stdout/stderr and detect the
+ * target fd via __hx_stderr_ptr() (the new named-data GOT intrinsic): default fd=1,
+ * fd=2 iff fp==stderr — byte-faithful to the frozen body. Exercised here by writing
+ * a known string to a PIPE'd fd (dup2 stdout→pipe), reading it back byte-exact, and
+ * asserting stderr-routing via a second pipe (dup2 stderr→pipe). fflush is the
+ * trivial no-op (return 0). */
+extern int    hxlcl_fputs(const char *s, void *fp);
+extern int    hxlcl_fputc(int c, void *fp);
+extern int    hxlcl_fflush(void *fp);
+
+/* Wall 3-c POPEN family — popen/pclose. popen("cmd","r") = pipe()+fork()+execve(
+ * "/bin/sh","-c",cmd), returning the CORE-family (read_fd+1) fake FILE*; pclose
+ * decodes the fd, looks the child pid up in the __hx_static_slot fd→pid table, and
+ * close()+waitpid()'s the child → status. THE NEW SUBSTRATE under test is
+ * __hx_static_slot: a self-defined zero-init data buffer (the popen table) addressed
+ * by a LOCAL `adrp _slot_900@PAGE / add @PAGEOFF` pair (DEFINED here, NOT an extern
+ * GOT load — the def-side sibling of __hx_environ_ptr). This darwin run is the
+ * self-static Mach-O `.zerofill`/`.zero` symbol emit+assemble+link proof. popen forks
+ * /bin/sh via the darwin 2nd-return-register fork (out2); the child execve's; the
+ * parent reads the pipe → "hi\n" and pclose waitpid's → 0. */
+extern void  *hxlcl_popen(const char *cmd, const char *mode);
+extern int    hxlcl_pclose(void *stream);
+
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
  * atoi, malloc for strdup + calloc + realloc. (Each composite PR adds its callee.)
@@ -316,8 +340,8 @@ int main(void) {
     CK(hxlcl_atoi("42") == 42, "atoi 42");
     CK(hxlcl_atoi("-7") == -7, "atoi -7");
 
-    char *dup = hxlcl_strdup("hi");
-    CK(dup != NULL && strcmp(dup, "hi") == 0, "strdup content");
+    char *sdup = hxlcl_strdup("hi");
+    CK(sdup != NULL && strcmp(sdup, "hi") == 0, "strdup content");
 
     char *z = (char *)hxlcl_calloc(3, 4);  /* 12 bytes, all zero */
     int allzero = (z != NULL);
@@ -719,6 +743,71 @@ int main(void) {
         unlink(tmpl);
     }
 
+    /* Wall 3-b — STD-STREAM family fputs/fputc/fflush. fflush is a definitional
+     * no-op; fputs/fputc detect the target fd from the libc stdout/stderr globals
+     * (default fd=1, fd=2 iff fp==stderr — via __hx_stderr_ptr). Exercised by
+     * redirecting fd 1 and fd 2 to pipes (dup2), writing through hxlcl_fputs/fputc
+     * with the REAL libc stdout/stderr pointers, then reading each pipe back byte-
+     * exact — proving the stderr-vs-default routing is value-correct (a wrong
+     * __hx_stderr_ptr GOT load, or a missing pointer-compare, would misroute the
+     * stderr write to fd 1 and the stdout pipe would carry the wrong bytes). */
+    {
+        CK(hxlcl_fflush(stdout) == 0, "fflush(stdout) == 0 (no-op leaf)");
+        CK(hxlcl_fflush(stderr) == 0, "fflush(stderr) == 0 (no-op leaf)");
+        CK(hxlcl_fflush(NULL)   == 0, "fflush(NULL) == 0 (no-op leaf)");
+
+        int op1[2], op2[2];
+        if (pipe(op1) == 0 && pipe(op2) == 0) {
+            int save1 = dup(1), save2 = dup(2);
+            /* route fd 1 → op1 write-end, fd 2 → op2 write-end */
+            dup2(op1[1], 1);
+            dup2(op2[1], 2);
+            /* stdout path: default fd=1 (fp != stderr) */
+            int wo = hxlcl_fputs("OUT", stdout);
+            int wc = hxlcl_fputc('!', stdout);
+            /* stderr path: fp == stderr → fd=2 */
+            int we = hxlcl_fputs("ERR", stderr);
+            /* restore real stdout/stderr BEFORE any printf in CK */
+            dup2(save1, 1); dup2(save2, 2);
+            close(save1); close(save2);
+            close(op1[1]); close(op2[1]);
+
+            char b1[16]; char b2[16];
+            ssize_t r1 = read(op1[0], b1, sizeof(b1)); if (r1 < 0) r1 = 0; b1[r1] = 0;
+            ssize_t r2 = read(op2[0], b2, sizeof(b2)); if (r2 < 0) r2 = 0; b2[r2] = 0;
+            close(op1[0]); close(op2[0]);
+
+            CK(wo == 3, "fputs(\"OUT\", stdout) → 3 bytes");
+            CK(wc == '!', "fputc('!', stdout) → '!' (success returns the char)");
+            CK(we == 3, "fputs(\"ERR\", stderr) → 3 bytes");
+            CK(strcmp(b1, "OUT!") == 0, "stdout pipe got \"OUT!\" (default fd=1, byte-exact)");
+            CK(strcmp(b2, "ERR") == 0, "stderr pipe got \"ERR\" (fp==stderr → fd=2, routing-exact)");
+        } else {
+            CK(0, "pipe() setup for std-stream routing test");
+        }
+    }
+
+    /* Wall 3-c — popen/pclose roundtrip over the __hx_static_slot fd→pid table.
+     * popen("echo hi","r") forks /bin/sh -c "echo hi" (darwin 2nd-return-reg fork via
+     * out2); its stdout (the pipe) yields "hi\n"; pclose waitpid's the child → 0. The
+     * self-static popen table is the new __hx_static_slot Mach-O .data buffer — this
+     * is its emit+assemble+link+address proof. Locals named to AVOID any libc shadow
+     * (no `popen`/`read`/`status` local overriding a libc name — the dup()-shadow
+     * lesson). Value-exact: content == "hi\n" AND pclose status == 0. */
+    {
+        void *phandle = hxlcl_popen("echo hi", "r");
+        CK(phandle != (void *)0, "popen(\"echo hi\",\"r\") != NULL");
+        if (phandle != (void *)0) {
+            char rdbuf[32];
+            memset(rdbuf, 0, sizeof(rdbuf));
+            size_t got = hxlcl_fread(rdbuf, 1, sizeof(rdbuf) - 1, phandle);
+            rdbuf[got] = 0;
+            CK(strcmp(rdbuf, "hi\n") == 0, "popen child stdout == \"hi\\n\" (byte-exact)");
+            int pcst = hxlcl_pclose(phandle);
+            CK(pcst == 0, "pclose(child exit 0) == 0 (status-exact)");
+        }
+    }
+
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }
     printf("[routec-smoke] %d assert(s) FAILED\n", fails);
     return 1;
@@ -731,4 +820,4 @@ echo "[routec-smoke] (3) compile harness + link Route C .o + run …"
 "$TMP/routec_smoke"
 rc=$?
 [ "$rc" -eq 0 ] || { echo "[routec-smoke] FATAL: behaviour run rc=$rc" >&2; exit 1; }
-echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (pure-arith + composite + syscall families + batch F search strchr/strstr + Wall 3-a CORE FILE* fopen/fread/fwrite/fseek/ftell/fclose/fdopen, darwin-arm64)"
+echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (pure-arith + composite + syscall families + batch F search strchr/strstr + Wall 3-a CORE FILE* fopen/fread/fwrite/fseek/ftell/fclose/fdopen + Wall 3-b STD-STREAM fputs/fputc/fflush, darwin-arm64)"

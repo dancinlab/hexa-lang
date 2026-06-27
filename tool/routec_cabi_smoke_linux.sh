@@ -62,7 +62,7 @@ HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
 echo "[routec-smoke-linux] (2) assert errno-bearing syscall symbols defined in routec.o …"
 syms="$(nm "$TMP/routec.o" 2>/dev/null || true)"
 miss=0
-for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen; do
+for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen fputs fputc fflush popen pclose; do
     if ! grep -qE " T hxlcl_${s}\$" <<<"$syms"; then
         echo "[routec-smoke-linux] NOT DEFINED (T): hxlcl_${s}" >&2; miss=$((miss+1))
     fi
@@ -155,6 +155,27 @@ extern size_t hxlcl_fwrite(const void *buf, size_t sz, size_t n, void *fp);
 extern long   hxlcl_ftell(void *fp);
 extern int    hxlcl_fseek(void *fp, long offset, int whence);
 extern void  *hxlcl_fdopen(int fd, const char *mode);
+
+/* Wall 3-b STD-STREAM family — fputs/fputc/fflush. Take the LIBC GLOBALS
+ * stdout/stderr and detect the target fd via __hx_stderr_ptr() (the new named-data
+ * GOT intrinsic, glibc `stderr@GOTPCREL` on x86_64-linux): default fd=1, fd=2 iff
+ * fp==stderr — byte-faithful to the frozen body. Pipe-redirect roundtrip below
+ * proves the stderr-vs-default routing is value-correct on linux glibc. */
+extern int    hxlcl_fputs(const char *s, void *fp);
+extern int    hxlcl_fputc(int c, void *fp);
+extern int    hxlcl_fflush(void *fp);
+
+/* Wall 3-c POPEN family — popen/pclose. popen("cmd","r") = pipe()+fork()+execve(
+ * "/bin/sh","-c",cmd), returning the CORE-family (read_fd+1) fake FILE*; pclose
+ * decodes the fd, looks the child pid up in the __hx_static_slot fd→pid table, and
+ * close()+waitpid()'s the child → status. THE NEW SUBSTRATE under test is
+ * __hx_static_slot: a self-defined zero-init .data buffer (the popen table) addressed
+ * by `lea [rip+slot_900]` — this Linux run is the self-static-symbol emit+assemble+
+ * link+reloc proof (the named-data sibling of __hx_environ_ptr, DEFINED not extern).
+ * popen returns the (fd+1) fake FILE*; pclose returns the raw wait status (0 for a
+ * clean child exit(0)). Live roundtrip below: popen("echo hi","r") → read "hi\n". */
+extern void  *hxlcl_popen(const char *cmd, const char *mode);
+extern int    hxlcl_pclose(void *stream);
 
 /* The emit covers ALL whitelisted Route C symbols (the script emits the whole
  * hxlcl_core.hexa), so the routec.o carries the composites' undefined-external
@@ -555,6 +576,66 @@ int main(void) {
         CK(hxlcl_fclose(fd_fp) == 0, "fclose(fdopen) == 0");
 
         unlink(tmpl);
+    }
+
+    /* Wall 3-b — STD-STREAM family fputs/fputc/fflush (linux glibc stderr@GOTPCREL).
+     * fflush is a definitional no-op; fputs/fputc detect the target fd from the libc
+     * stdout/stderr globals (default fd=1, fd=2 iff fp==stderr — via __hx_stderr_ptr).
+     * Pipe-redirect roundtrip: dup2 fd1→op1, fd2→op2, write through the REAL libc
+     * stdout/stderr pointers, read each pipe back byte-exact — proving routing is
+     * value-correct (a wrong glibc-`stderr` GOT load would misroute the stderr write
+     * to fd 1). */
+    {
+        CK(hxlcl_fflush(stdout) == 0, "fflush(stdout) == 0 (no-op leaf)");
+        CK(hxlcl_fflush(stderr) == 0, "fflush(stderr) == 0 (no-op leaf)");
+        CK(hxlcl_fflush(NULL)   == 0, "fflush(NULL) == 0 (no-op leaf)");
+
+        int op1[2], op2[2];
+        if (pipe(op1) == 0 && pipe(op2) == 0) {
+            int save1 = dup(1), save2 = dup(2);
+            dup2(op1[1], 1);
+            dup2(op2[1], 2);
+            int wo = hxlcl_fputs("OUT", stdout);
+            int wc = hxlcl_fputc('!', stdout);
+            int we = hxlcl_fputs("ERR", stderr);
+            dup2(save1, 1); dup2(save2, 2);
+            close(save1); close(save2);
+            close(op1[1]); close(op2[1]);
+
+            char b1[16]; char b2[16];
+            ssize_t r1 = read(op1[0], b1, sizeof(b1)); if (r1 < 0) r1 = 0; b1[r1] = 0;
+            ssize_t r2 = read(op2[0], b2, sizeof(b2)); if (r2 < 0) r2 = 0; b2[r2] = 0;
+            close(op1[0]); close(op2[0]);
+
+            CK(wo == 3, "fputs(\"OUT\", stdout) -> 3 bytes");
+            CK(wc == '!', "fputc('!', stdout) -> '!' (success returns the char)");
+            CK(we == 3, "fputs(\"ERR\", stderr) -> 3 bytes");
+            CK(strcmp(b1, "OUT!") == 0, "stdout pipe got \"OUT!\" (default fd=1, byte-exact)");
+            CK(strcmp(b2, "ERR") == 0, "stderr pipe got \"ERR\" (fp==stderr -> fd=2, routing-exact)");
+        } else {
+            CK(0, "pipe() setup for std-stream routing test");
+        }
+    }
+
+    /* Wall 3-c — popen/pclose roundtrip over the __hx_static_slot fd→pid table.
+     * popen("echo hi","r") forks /bin/sh -c "echo hi"; its stdout (the pipe) yields
+     * "hi\n"; pclose waitpid's the child → 0 (clean exit). Value-exact: read content
+     * == "hi\n" AND pclose status == 0. This live run is the self-static-symbol proof
+     * (the popen table is the new __hx_static_slot BSS). Locals named to AVOID any
+     * libc shadow (no `popen`/`read`/`status` overriding a libc name). */
+    {
+        void *phandle = hxlcl_popen("echo hi", "r");
+        CK(phandle != (void *)0, "popen(\"echo hi\",\"r\") != NULL");
+        if (phandle != (void *)0) {
+            char rdbuf[32];
+            memset(rdbuf, 0, sizeof(rdbuf));
+            /* read via the CORE-family fread over the fake FILE* (fd+1). */
+            size_t got = hxlcl_fread(rdbuf, 1, sizeof(rdbuf) - 1, phandle);
+            rdbuf[got] = 0;
+            CK(strcmp(rdbuf, "hi\n") == 0, "popen child stdout == \"hi\\n\" (byte-exact)");
+            int pcst = hxlcl_pclose(phandle);
+            CK(pcst == 0, "pclose(child exit 0) == 0 (status-exact)");
+        }
     }
 
     if (fails == 0) { printf("[routec-smoke-linux] all Route C errno asserts PASS\n"); return 0; }
