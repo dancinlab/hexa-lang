@@ -4550,6 +4550,13 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
        example reduces to the 2-term core × trivial structural equalities (σ·σ·σ=σ·n·J₂ ⟺ n=6,
        etc.) — confirms Ralph 371: NO new INDEPENDENT structure. **independent-NOVEL = 0**.
      · σ₃-extension of the 2-factor grid adds 0 new bounded-unique (idx already in box).
+     · EXTENDED-18fn 2-TERM BOUNDED-UNIQUE (the native engine's own frame, N=6·10³):
+       339 singletons (n≥4), 269 touching the new μ/λ/μ²/J₃/2^ω/core vocab — BUT these
+       are the "unbounded-by-construction" SUBSTITUTION class Ralph 370 already flagged
+       (each added fn mints more substitution-restatements of the core, many μ/λ-products
+       hitting 0 = degenerate-collapse like Ralph 373's n=2). bounded-unique-SINGLETON ≠
+       independent-NOVEL: the rigorous independence test is the universal sweep above
+       (2 classical generators). So the 269 are NOT 269 new laws — **independent-novel = 0**.
   🧱 HONEST VERDICT (c2): the un-swept dimensions are now SWEPT and the measured novel count is
      **0** — the extended vocab/arity OPENED the dimensions (the box-scope claim was correct: the
      exhaustion was 12-fn/2-term, not the whole space) but the only identities living there are
