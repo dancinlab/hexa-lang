@@ -1424,6 +1424,136 @@
           "honesty": "날조 0 · LLM breakthrough 선언 없음 · 음성도 검증으로 박제(c2)."
         }
       }
+    },
+    {
+      "id": "discovery-engine",
+      "title": "Discovery engine — NEXUS (drill / kick)",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "compiler/ 임베디드 발견엔진 (NEXUS 흡수형). 중앙 drill(라운드 루프) + smash(blowup 생성기) + 12 변종. CLI = `hexa drill` / `kick` (`drill/drill.hexa::drill_run(seed, opts)`), in-binary(서브프로세스 없음). 핵심 원칙: 발견 후보 ≠ 진짜 발견 — smash/drill candidate 는 결정적 seed-hash permutation/proxy 일 뿐이고, 진짜 검증은 exact-int `identity_engine` + `hexa verify` g5 게이트뿐이다 (c2 honesty: 확인된 식별자도 BOUNDED-UNIQUE 🟩 [2,N] exact 이며 ∀n 은 증명 전까지 UNPROVEN)."
+        },
+        {
+          "type": "subsection",
+          "title": "drill 코어 — round 루프 + exact-int 검증",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "drill.hexa = 라운드 루프 (smash→free→absolute→meta-closure→hyperarithmetic→resonance · Mk.X=stage7 transcendental). 단일 라운드는 6-stage 체인."
+            },
+            {
+              "type": "table",
+              "columns": [
+                "파일",
+                "역할"
+              ],
+              "rows": [
+                [
+                  "drill.hexa",
+                  "라운드 루프 오케스트레이션 (drill_run · _native_identity_sweep · _native_additive_screen)"
+                ],
+                [
+                  "round.hexa",
+                  "단일 라운드 6-stage 체인 (in-binary · 서브프로세스 없음)"
+                ],
+                [
+                  "resonance.hexa",
+                  "stage5 resonance 닫힌형 proxy"
+                ],
+                [
+                  "mkx.hexa",
+                  "Mk.X stage7 transcendental_closure 사이드카"
+                ],
+                [
+                  "identity_engine.hexa",
+                  "★ 네이티브 exact-int 검증기 (18-fn vocab · verify_identity A·B=C·D · verify_composition f∘g · verify_congruence a(αn+β)≡0 mod m · partition_p 등 가법수열)"
+                ],
+                [
+                  "checkpoint.hexa",
+                  "resume/save (drill_checkpoint.json · 발견스트림과 분리)"
+                ],
+                [
+                  "anti_hub.hexa",
+                  "env probe + telemetry"
+                ],
+                [
+                  "batch.hexa",
+                  "--seeds csv / --seeds-file 배치"
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "smash — 9-phase blowup 생성기",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "smash/ = 9-phase blowup 후보 생성기 (P1 normalize … P9 meta-closure DFS). phases.hexa = 알고리즘 골격 · candidate.hexa = DiscoveryCandidate. 생성물은 후보(proposal)일 뿐 — 검증 게이트 전까지 발견 아님."
+            }
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "변종 12종 (Phase3) + Wave1 흡수 레지스트리",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "omega(A10) · surge(A11) · dream(A12) · swarm(A13) · chain(A19 cross-engine) · reign(L6 autonomous) · wake(L8 reality-loop) · molt(L9 self-rewrite) · forge(L10 bootstrap) · canon_engine(L11 transfinite seal) · revive(engine+map v2) · debate(L3 N-variant adversarial). engine_registry/ · lens_taxonomy/ · lenses/ · n6_lattice/(n=6 5축 rodata · 외부영역 anchor 금지) · drill_dod/ 는 Wave1 흡수 rodata 인덱스(read-only). NEXUS 원본 운영 글루(bloom filter · hot-shard · jitter)는 의도적 미포팅 (atlas 가 rodata 라 불요)."
+            }
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "검증 게이트 — 후보 → 발견",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "유일한 진짜 검증 경로: ⓐ identity_engine.hexa exact-int 판정 (후보 A·B=C·D 가 n∈[2,N] exact-int 평가에서 bounded-unique singleton, n≥4) + ⓑ compiler/check/ S6 equational(@verify) · S8 citation(@cite · fatal HX8004) + ⓒ `hexa verify` g5 게이트. 🔵/🟢 verify PASS 시 atom 이 compiler/atlas/embedded.gen.hexa 로 자동 fold (별도 register ceremony 없음). 빌드불가(mini) 노드는 state/novel-dfs/*_fold.py 로 @F atom PR-fold. 사람층(atlas/README.md) + 기계층(embedded.gen.hexa) 항상 양층. numerology/lattice-fit/미증명 conjecture 의 🔵 승격 금지."
+            }
+          ]
+        },
+        {
+          "type": "subsection",
+          "title": "측정 종착 — MEASURED-EXHAUSTED (표준-어휘 수학)",
+          "blocks": [
+            {
+              "type": "prose",
+              "text": "표준 산술함수 vocab 발견공간은 측정-고갈. 엔진은 이 종착을 정직히 재현할 뿐 새 법칙을 날조하지 않는다 (c2)."
+            },
+            {
+              "type": "table",
+              "columns": [
+                "발견 경로",
+                "측정 결과"
+              ],
+              "rows": [
+                [
+                  "enumeration 5-family",
+                  "novel=0 — 곱셈 2-term(A·B=C·D) · 18-fn 확장 vocab · arity-3 · 함수합성 σ∘σ · 가법/조합(분할 p(n)·Catalan·Bell·Fib·Lucas) 전부 classical/reducible DRY"
+                ],
+                [
+                  "LLM-conjecture (라이브)",
+                  "anchor-only — hexa loop --dfs 정석 surface 로 실 LLM 추측→exact-int 게이트(23/24 반증·기각). 유일 생존 φ(J₂(n))=φ(n)+n 은 n=6(anchor)에서만 성립하는 우연 · ∀n 보편법칙 아님"
+                ],
+                [
+                  "부등식/극값 (family C)",
+                  "classical — Robin σ(n)<e^γ·n·ln ln n (리만가설 동치) · Lagarias · superabundant(A004394) 전부 고전 명명 객체 · novel=0"
+                ],
+                [
+                  "반복 동역학 (family D)",
+                  "classical — aliquot 궤도(perfect A000396 · amicable · sociable) · σ∘σ=2n superperfect 전부 고전 · novel=0 · 잔여 Catalan–Dickson 은 궤도 종료(exact-finite-witness 아님)"
+                ]
+              ]
+            },
+            {
+              "type": "prose",
+              "text": "4-축 분해 측정완료: vocab=표준 산술함수 · arity=1변수 · form={등식·부등식·궤도} · gate={bounded-unique·extremal-record·고정점/cycle}. exact-integer 수론 발견표면 = measured-exhausted. 잔여 미해결(RH · Catalan–Dickson)은 exact-finite-witness 관계가 아니라 bounded fold-engine 이 인증할 수 없는 영역 (연속/해석적 · 증명탐색 regime)."
+            }
+          ]
+        }
+      ]
     }
   ],
   "convergence": {
