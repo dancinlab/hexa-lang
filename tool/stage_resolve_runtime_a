@@ -1172,6 +1172,49 @@ build_runtime_a_from_source() {
             _mo_hxlcl_members="$_mo_hxlcl_members $_ses_o"
             echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-STRLEN: hxlcl_strlen → native ELF .o; shim.o built with -DHEXA_RT_SELFEMIT_STRLEN (strlen dropped) — ld -r multidef gate validates"
         fi
+        # ── RFC061 §M8 SELFEMIT-MEMLEAF (LINUX cross-target ELF · per-symbol gates, default OFF) ──
+        # r2 scale-out of the strlen ELF precedent to the PURE mem-leaf family.
+        # Each symbol has its OWN independent env gate HEXA_RT_SELFEMIT_<SYM>=1 (so
+        # they compose freely and a single member can be swapped in isolation), and
+        # its own self-contained ELF emitter (test/native_build/emit_hxlcl_<sym>_elf_o.hexa,
+        # arch-selected by HEXA_SELFEMIT_ELF_ARCH). All listed symbols are PURE leaves
+        # — no reloc, no errno, no external callee — exactly like strlen, so no
+        # provider/.o-glue is needed. x86_64 bytes = clang-cross-checked SysV byte
+        # loops; arm64 bytes = VERBATIM self/codegen/runtime_arm64.hexa::rt_<sym>. The
+        # shim drops each via the SAME `-DHEXA_RT_SELFEMIT_<SYM>` macro the darwin path
+        # uses (self/runtime_core_hxlcl_shim.c `#ifndef HEXA_RT_SELFEMIT_<SYM>`).
+        # DEFAULT (all flags OFF) adds NO -D and NO member → shim.o + archive
+        # byte-identical (release-integrity > self-host: sha f2d507e1 invariant).
+        # The .o bytes are pure DATA (host-independent emit); only link+RUN of the
+        # arm64 object needs an arm64 env (qemu-aarch64).
+        if [ "$(uname -s)" = "Linux" ]; then
+            local _seml_arch=""
+            case "$(uname -m)" in
+                x86_64|amd64) _seml_arch="x86_64" ;;
+                aarch64|arm64) _seml_arch="arm64" ;;
+            esac
+            local _seml_sym _seml_SYM _seml_gate _seml_o _seml_bin
+            for _seml_sym in memcpy memset memcmp strcmp strncmp strcpy strncpy strcat strchr; do
+                _seml_SYM=$(printf '%s' "$_seml_sym" | tr 'a-z' 'A-Z')
+                eval "_seml_gate=\${HEXA_RT_SELFEMIT_${_seml_SYM}:-0}"
+                [ "$_seml_gate" = "1" ] || continue
+                if [ -z "$_seml_arch" ]; then
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-MEMLEAF FATAL: HEXA_RT_SELFEMIT_${_seml_SYM}=1 but unsupported linux arch '$(uname -m)' (want x86_64|aarch64)" >&2; return 1
+                fi
+                _seml_bin="${HEXA_SELFEMIT_BIN:-$(command -v hexat || command -v hexa || true)}"
+                if [ -z "$_seml_bin" ]; then
+                    echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-MEMLEAF FATAL: HEXA_RT_SELFEMIT_${_seml_SYM}=1 but no hexa/hexat binary found (set HEXA_SELFEMIT_BIN)" >&2; return 1
+                fi
+                _seml_o="build/hxlcl_${_seml_sym}_native.o"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-MEMLEAF: emitting native ELF hxlcl_${_seml_sym} .o (arch=$_seml_arch) via $_seml_bin (replacing libc-shim member)…"
+                env "HEXA_SELFEMIT_ELF_ARCH=$_seml_arch" "HEXA_HXLCL_${_seml_SYM}_O=$_seml_o" "$_seml_bin" "test/native_build/emit_hxlcl_${_seml_sym}_elf_o.hexa" >"build/_selfemit_${_seml_sym}_elf.log" 2>&1 \
+                    || { echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-MEMLEAF FATAL: ${_seml_sym} ELF emit failed — see build/_selfemit_${_seml_sym}_elf.log" >&2; cat "build/_selfemit_${_seml_sym}_elf.log" >&2; return 1; }
+                [ -f "$_seml_o" ] || { echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-MEMLEAF FATAL: $_seml_o not produced" >&2; return 1; }
+                _mo_shim_def="$_mo_shim_def -DHEXA_RT_SELFEMIT_${_seml_SYM}"
+                _mo_hxlcl_members="$_mo_hxlcl_members $_seml_o"
+                echo "[stage_resolve_runtime_a] RFC061 §M8 SELFEMIT-MEMLEAF: hxlcl_${_seml_sym} → native ELF .o; shim.o built with -DHEXA_RT_SELFEMIT_${_seml_SYM} (${_seml_sym} dropped) — ld -r multidef gate validates"
+            done
+        fi
         # (S1) guard the FROZEN `#include "runtime_core.c"` line in the RESTORED
         #      working-copy runtime.c (idempotent; gitignore'd regen — frozen git
         #      blob 151c52c8 NEVER touched). drop-ON then pulls runtime_core_decls.h.
