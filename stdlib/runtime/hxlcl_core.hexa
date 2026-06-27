@@ -2187,7 +2187,7 @@ pub fn hxlcl_fputc(c: HexaVal, fp: HexaVal) -> int {
     __hx_ptr_store8(scratch, 0, lowc)             // ch
     let w = hxlcl_write(fd, scratch, one)         // C-ABI bl → bytes written
     if __hx_payload_eq(w, 1) {
-        return __hx_payload_and(c, 255)           // success → c (low byte, matching the floor's (int)c read)
+        return __hx_payload_add(c, 0)             // success → c (the ORIGINAL int, byte-faithful to the frozen `return c`)
     }
     return __hx_payload_sub(0, 1)                 // write failed → -1
 }
