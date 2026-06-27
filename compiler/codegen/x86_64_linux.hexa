@@ -1278,6 +1278,15 @@ pub fn _is_cabi(fname: string) -> bool {
     // DEFERRED (return-semantics / arg-count / 2nd-return-reg divergence, trickier).
     if fname == "hxlcl_open_sys" { return true }
     if fname == "hxlcl_getrusage" { return true }
+    // errno-bearing chain batch E — pipe. CENSUS CORRECTION: batch D deferred pipe
+    // as "2nd-return-register", but that is DARWIN-only (BSD pipe r0/r1). The Linux
+    // pipe ABI is an OUT-POINTER (kernel writes the caller's int[2], returns 0) —
+    // the same getrusage/stat out-ptr shape, so the Linux legs DISSOLVE with the
+    // close errno epilogue. Uniform pipe2(fds, flags=0) on both arches (x86_64=293,
+    // arm64=59; no plain pipe on arm64) — the "flags-trailing uniform" dup3 pattern.
+    // The darwin leg returns -1 (genuine 2nd-return-reg wall; real darwin pipe stays
+    // the floor _cf shim). time/poll stay DEFERRED (need a scratch-buffer substrate).
+    if fname == "hxlcl_pipe" { return true }
     return false
 }
 
