@@ -281,6 +281,256 @@ pub fn hxlcl_strcat(dst: HexaVal, src: HexaVal) -> int {
     return pd
 }
 
+// ── SEARCH FAMILY (Route C batch F · pure byte-scan leaves, return raw pointer) ──
+//
+// SEARCH = a self-contained byte walk that returns a raw char* INTO the input
+// (the match position) or NULL(0). Same leaf class as the compare/copy family:
+// no syscall, no float, no inner call, no errno — every op is a raw-payload
+// intrinsic over ZERO-EXTENDED byte loads (__hx_ptr_load8). The `int` return
+// type carries the raw pointer word (never boxed), exactly like the
+// strcpy/strncpy/strcat leaves return the dst pointer raw. Reference-matched to
+// the frozen 0-libc floor bodies self/runtime.c rt_strchr:407 / rt_strstr:433 —
+// the same non-NULL-guarded source the compare leaves cite (C strchr/strstr with
+// a NULL arg is UB; every non-NULL caller is byte-identical). No arm64 call-shape
+// divergence (pure compute · NR-irrelevant · identical x86_64/arm64 codegen).
+
+// hxlcl_strchr: return a pointer to the first `c` byte of NUL-terminated `s`,
+// or NULL. BYTE-FAITHFUL to self/runtime.c:407 (rt_strchr):
+//   target=(unsigned char)c; for(i;;i++){ x=(unsigned char)s[i];
+//     if(x==target) return s+i; if(x==0) return (target==0)?s+i:NULL; }.
+// The (target==0) special case folds away by testing the target match BEFORE the
+// NUL check: for c==0 the terminator is the first byte equal to target, so the
+// match branch returns s+i there — musl's strchr.c relies on the same ordering.
+pub fn hxlcl_strchr(s: HexaVal, c: HexaVal) -> int {
+    let ps = __hx_payload_add(s, 0)
+    let target = __hx_payload_and(c, 255)     // (unsigned char)c
+    let mut i = 0
+    while true {
+        let x = __hx_ptr_load8(ps, i)         // (unsigned char)s[i]
+        if __hx_payload_eq(x, target) {
+            return __hx_payload_add(ps, i)    // s + i (match; also the NUL when target==0)
+        }
+        if __hx_payload_eq(x, 0) {
+            return 0                          // end of string, no match → NULL
+        }
+        i = __hx_payload_add(i, 1)
+    }
+    return 0
+}
+
+// hxlcl_strstr: return a pointer to the first occurrence of NUL-terminated needle
+// `n` in haystack `h`, or NULL. BYTE-FAITHFUL to self/runtime.c:433 (rt_strstr ·
+// naive O(|h|·|n|) byte compare — correctness, not two-way speed):
+//   if(n[0]==0) return h;
+//   for(i=0; h[i]; i++){ j=0; while(n[j] && h[i+j]==n[j]) j++;
+//                        if(n[j]==0) return h+i; }  return NULL.
+// `break`-free in the frozen-parser style of hxlcl_strncpy: the inner scan stops
+// by clearing a `cont` flag (needle exhausted OR mismatch), and after the inner
+// loop `nj` still holds n[j] — nj==0 means the needle was fully matched.
+pub fn hxlcl_strstr(h: HexaVal, n: HexaVal) -> int {
+    let ph = __hx_payload_add(h, 0)
+    let pn = __hx_payload_add(n, 0)
+    let n0 = __hx_ptr_load8(pn, 0)            // n[0]
+    if __hx_payload_eq(n0, 0) {
+        return ph                             // empty needle → match at h[0]
+    }
+    let mut i = 0
+    let mut hi = __hx_ptr_load8(ph, 0)        // h[i]
+    while __hx_payload_ne(hi, 0) {            // for(; h[i]; )
+        let mut j = 0
+        let mut nj = __hx_ptr_load8(pn, 0)    // n[j] (n[0] at j=0)
+        let mut cont = 1
+        while __hx_payload_ne(cont, 0) {      // while(n[j] && h[i+j]==n[j])
+            if __hx_payload_eq(nj, 0) {
+                cont = 0                      // needle exhausted → full match
+            }
+            if __hx_payload_ne(cont, 0) {
+                let off = __hx_payload_add(i, j)
+                let hij = __hx_ptr_load8(ph, off)   // h[i+j]
+                if __hx_payload_ne(hij, nj) {
+                    cont = 0                  // mismatch → stop inner scan
+                } else {
+                    j = __hx_payload_add(j, 1)
+                    nj = __hx_ptr_load8(pn, j)      // n[j]
+                }
+            }
+        }
+        if __hx_payload_eq(nj, 0) {           // n[j]==0 → needle fully matched
+            return __hx_payload_add(ph, i)    // h + i
+        }
+        i = __hx_payload_add(i, 1)
+        hi = __hx_ptr_load8(ph, i)            // h[i]
+    }
+    return 0                                  // not found → NULL
+}
+
+// ── PARSE FAMILY (Route C batch G · pure-compute leaf with an OUT-PARAM write) ──
+//
+// hxlcl_strtoll is the string family's last leaf: a from-scratch string→long long
+// parse (whitespace skip · sign · base-0/16 prefix · digit accumulation) that, on
+// success, also writes the parse-end position back through the caller's `char**
+// endptr` out-param. That endptr write is the FIRST raw-pointer store64 a Route C
+// body issues to a CALLER-PROVIDED out-pointer — but it is the SAME class as the
+// copy family's caller-`dst` writes (strcpy/strncpy/strcat → __hx_ptr_store8 into
+// the caller's buffer, all merged byteeq-green), here widened to __hx_ptr_store64
+// for the pointer word and NULL-gated (endptr may be NULL — both callers below
+// sometimes pass NULL). It is NOT the errno-store extern-data class (#4042): no
+// __errno_location call, no syscall, no target-gating, no darwin carry-flag — a
+// plain store to a param pointer. Pure compute otherwise → cross-target-identical
+// (no NR, no arm64 call-shape divergence), like the strchr/strstr search leaves.
+//
+// IN-BODY OPERATOR DISCIPLINE (Route C, the #4042 rule): every arithmetic /
+// comparison op is a raw-payload intrinsic (__hx_payload_{add,sub,mul,and,eq,ne,
+// lt,le,ge}) — never a bare `<`/`-`/`*`, which would lower to the PAIR-MODEL
+// helpers (hexa_cmp_lt / hexa_sub / …) undefined in the raw-C-ABI link. Each
+// intrinsic result lands in its own `let` (un-nested) so a codegen scratch
+// clobber cannot corrupt an outer op (the close/compare-family rule). The moving
+// `const char *s` of the C body is modelled as a base pointer `p` (the raw nptr
+// payload) + an index `i`; loads are __hx_ptr_load8(p, i) (ZERO-EXTENDED, exactly
+// matching the digit-range behaviour of the C `char c = *s` — bytes ≥ 0x80 fall
+// out of every ['0'..'9'],['a'..'z'],['A'..'Z'] range and stop the scan, the same
+// as the C body's signed-or-unsigned-char break). `break` is avoided in the
+// frozen-parser style (hxlcl_strncpy / hxlcl_strstr): each loop stops by clearing
+// a `cont` flag. The endptr (s = p + i) is written via __hx_ptr_store64.
+//
+// endptr IS live (not dead): self/runtime.c routes `strtoll(p,&endptr,base)` →
+// hxlcl_strtoll in hexa_str_parse_int (:4347, `if (endptr == p) throw`) and
+// hexa_pinned_epoch (:12015, `if (endp != sde)`), so a wrong/absent endptr write
+// would break those — the smoke asserts the endptr value-exact (== nptr + len).
+//
+// BYTE-FAITHFUL to the frozen 0-libc floor self/runtime.c:513 (hxlcl_strtoll) /
+// the byte-identical shim runtime_core_hxlcl_shim.c:404. Char codes: ' '=32
+// '\t'=9 '\n'=10 '-'=45 '+'=43 '0'=48 '9'=57 'x'=120 'X'=88 'a'=97 'z'=122
+// 'A'=65 'Z'=90. The unsigned-accumulation `n = n*base + d` uses signed
+// __hx_payload_mul/_add: bit-identical to the C body for any non-overflowing
+// value (the real callers parse small env/limit strings), overflow is the same
+// wrap-UB-adjacent territory as the C body and unobserved here.
+pub fn hxlcl_strtoll(nptr: HexaVal, endptr: HexaVal, base: HexaVal) -> int {
+    let p = __hx_payload_add(nptr, 0)          // const char* s = nptr (raw)
+    let pe = __hx_payload_add(endptr, 0)       // char** endptr (raw, may be NULL)
+    // NULL nptr: if (!nptr) { if (endptr) *endptr = nptr; return 0; }
+    if __hx_payload_eq(p, 0) {
+        if __hx_payload_ne(pe, 0) {
+            __hx_ptr_store64(pe, 0, p)         // *endptr = (char*)nptr (NULL)
+        }
+        return 0
+    }
+    let mut b = __hx_payload_add(base, 0)      // int base (raw)
+    let mut i = 0
+    // whitespace skip: while(*s==' '||*s=='\t'||*s=='\n') s++;
+    let mut ws = __hx_ptr_load8(p, i)
+    let mut wcont = 1
+    while __hx_payload_ne(wcont, 0) {
+        let is_sp = __hx_payload_eq(ws, 32)
+        let is_tab = __hx_payload_eq(ws, 9)
+        let is_nl = __hx_payload_eq(ws, 10)
+        let a1 = __hx_payload_add(is_sp, is_tab)
+        let a2 = __hx_payload_add(a1, is_nl)
+        if __hx_payload_ne(a2, 0) {
+            i = __hx_payload_add(i, 1)
+            ws = __hx_ptr_load8(p, i)
+        } else {
+            wcont = 0
+        }
+    }
+    // sign: if(*s=='-'){sign=-1;s++;} else if(*s=='+')s++;
+    let cs = __hx_ptr_load8(p, i)
+    let mut neg = 0
+    if __hx_payload_eq(cs, 45) {                // '-'
+        neg = 1
+        i = __hx_payload_add(i, 1)
+    } else {
+        if __hx_payload_eq(cs, 43) {            // '+'
+            i = __hx_payload_add(i, 1)
+        }
+    }
+    // base prefix: base-0 auto-detect (0x→16, 0→8, else 10); base-16 0x-skip.
+    let i1 = __hx_payload_add(i, 1)
+    let c0 = __hx_ptr_load8(p, i)
+    let c1 = __hx_ptr_load8(p, i1)
+    let is0 = __hx_payload_eq(c0, 48)           // s[0]=='0'
+    let isx = __hx_payload_eq(c1, 120)          // s[1]=='x'
+    let isX = __hx_payload_eq(c1, 88)           // s[1]=='X'
+    let isxX = __hx_payload_add(isx, isX)       // 1 iff s[1] in {x,X} (exclusive)
+    if __hx_payload_eq(b, 0) {
+        if __hx_payload_ne(is0, 0) {
+            if __hx_payload_ne(isxX, 0) {
+                b = 16
+                i = __hx_payload_add(i, 2)
+            } else {
+                b = 8
+                i = __hx_payload_add(i, 1)
+            }
+        } else {
+            b = 10
+        }
+    } else {
+        if __hx_payload_eq(b, 16) {
+            if __hx_payload_ne(is0, 0) {
+                if __hx_payload_ne(isxX, 0) {
+                    i = __hx_payload_add(i, 2)
+                }
+            }
+        }
+    }
+    // digit accumulation: for(;;){ d=digit(c); if(none||d>=base) break;
+    //                              n = n*base + d; s++; }
+    let mut n = 0
+    let mut cont = 1
+    while __hx_payload_ne(cont, 0) {
+        let c = __hx_ptr_load8(p, i)
+        let mut isdig = 0
+        let mut d = 0
+        let ge0 = __hx_payload_ge(c, 48)        // c>='0'
+        let le9 = __hx_payload_le(c, 57)        // c<='9'
+        let is09 = __hx_payload_and(ge0, le9)
+        if __hx_payload_ne(is09, 0) {
+            isdig = 1
+            d = __hx_payload_sub(c, 48)         // c-'0'
+        } else {
+            let gea = __hx_payload_ge(c, 97)    // c>='a'
+            let lez = __hx_payload_le(c, 122)   // c<='z'
+            let isaz = __hx_payload_and(gea, lez)
+            if __hx_payload_ne(isaz, 0) {
+                isdig = 1
+                let da = __hx_payload_sub(c, 97)
+                d = __hx_payload_add(da, 10)    // c-'a'+10
+            } else {
+                let geA = __hx_payload_ge(c, 65)  // c>='A'
+                let leZ = __hx_payload_le(c, 90)  // c<='Z'
+                let isAZ = __hx_payload_and(geA, leZ)
+                if __hx_payload_ne(isAZ, 0) {
+                    isdig = 1
+                    let dA = __hx_payload_sub(c, 65)
+                    d = __hx_payload_add(dA, 10)  // c-'A'+10
+                }
+            }
+        }
+        if __hx_payload_eq(isdig, 0) {
+            cont = 0                            // non-digit → stop
+        } else {
+            if __hx_payload_ge(d, b) {
+                cont = 0                        // digit out of base → stop
+            } else {
+                let nb = __hx_payload_mul(n, b)
+                n = __hx_payload_add(nb, d)     // n = n*base + d
+                i = __hx_payload_add(i, 1)
+            }
+        }
+    }
+    // if (endptr) *endptr = (char *)s;   (s = nptr + i)
+    let endp = __hx_payload_add(p, i)
+    if __hx_payload_ne(pe, 0) {
+        __hx_ptr_store64(pe, 0, endp)
+    }
+    // return (sign < 0) ? -n : n;
+    if __hx_payload_ne(neg, 0) {
+        let r = __hx_payload_sub(0, n)
+        return r
+    }
+    return n
+}
+
 // ── COMPOSITE FAMILY (Route C r7 · non-leaf — inner C-ABI bl to a sibling) ──
 //
 // COMPOSITE = the body is not a self-contained byte loop; it CALLS another
@@ -701,4 +951,481 @@ pub fn hxlcl_mkdir(path: HexaVal, mode: HexaVal) -> int {
         return -1
     }
     return r                                    // 0 on success
+}
+
+// ── ERRNO-BEARING CHAIN r3 — FINAL batch: stat (struct-out buf) + waitpid ──
+//
+// The last two errno-bearing leaves. Both share the close errno epilogue
+// (raw-payload `__hx_payload_lt`/`_ne`/`_sub` + target_is_linux()-gated store via
+// __errno_location); they differ only in argument shape.
+//
+//   stat → arm64 has NO plain stat; it uses fstatat(AT_FDCWD=-100, path, buf,
+//          flags=0) — a 4-arg PREPEND divergence exactly like mkdir→mkdirat. So
+//          the syscall is issued in per-arch branches (per-arch arg tuple), then
+//          the shared epilogue runs on the result.
+//          NR ref-match (no black-box): x86_64 __NR_stat = 4 (2-arg path,buf) ·
+//          arm64 __NR_fstatat = 79 (4-arg AT_FDCWD,path,buf,flags) — plain stat
+//          dropped on asm-generic · darwin SYS_STAT = 338 (2-arg path,buf).
+//          (stdlib/posix/linux_syscalls.hexa:129/102 · self/codegen/
+//          runtime_arm64.hexa:4198-4199 darwin 338 · AT_FDCWD=-100 = the same
+//          literal mkdir uses above.)
+//
+//   waitpid → routed to wait4(pid, status, options, rusage=NULL) on every target
+//          — a UNIFORM 4-arg shape (no at-variant / no prepend), so only the NR
+//          differs, exactly like read/lseek. NR ref-match: x86_64 __NR_wait4 = 61
+//          · arm64 __NR_wait4 = 260 · darwin SYS_WAIT4 = 7 (rusage NULL ⇒ 0).
+//          (linux_syscalls.hexa:123/95 · self/codegen/runtime_arm64.hexa:5218
+//          darwin 7. The floor routes waitpid → wait4 with a NULL 4th arg:
+//          runtime.c hxlcl_waitpid(pid,status,opts){ wait4(pid,status,opts,0) }.)
+
+// stat: per-arch arg tuple (arm64 fstatat prepends AT_FDCWD, shifting path/buf
+// right by one — a genuine divergence, mirrors mkdir). The result flows into the
+// shared close-pattern errno epilogue.
+pub fn hxlcl_stat(path: HexaVal, statbuf: HexaVal) -> int {
+    let mut r = 0
+    if target_is_linux() {
+        if target_is_x86_64() {
+            r = __hx_syscall6(4, path, statbuf, 0, 0, 0, 0)          // x86_64 stat(path, buf)
+        } else {
+            r = __hx_syscall6(79, -100, path, statbuf, 0, 0, 0)      // arm64 fstatat(AT_FDCWD, path, buf, flags=0)
+        }
+    } else {
+        r = __hx_syscall6(338, path, statbuf, 0, 0, 0, 0)            // darwin SYS_STAT(path, buf)
+    }
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // 0 on success
+}
+
+// waitpid: uniform wait4(pid, status, options, rusage=NULL) — only the NR varies,
+// so a single trap with the same arg tuple is correct on every target (like
+// read/lseek). The 4th arg (rusage) is 0 = NULL.
+pub fn hxlcl_waitpid(pid: HexaVal, status: HexaVal, opts: HexaVal) -> int {
+    let mut nr = 7                             // Darwin SYS_WAIT4 (default)
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 61 }      // Linux x86_64 __NR_wait4
+        else { nr = 260 }                      // Linux arm64 __NR_wait4
+    }
+    let r = __hx_syscall6(nr, pid, status, opts, 0, 0, 0)
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // reaped pid (> 0)
+}
+
+// ── ERRNO-BEARING CHAIN — batch C: write + fcntl + mmap (plain syscalls) ──
+//
+// Three more errno-bearing leaves, all uniform across targets (no arm64
+// dup3/mkdirat/fstatat call-shape divergence — each has a plain syscall on
+// arm64-linux, so only the NR varies, exactly like read/lseek/waitpid). All
+// three follow the close errno epilogue verbatim: a __hx_syscall6 trap, then
+// the Route C in-body discipline (raw-payload `__hx_payload_lt`/`_ne`/`_sub`,
+// never bare `<`/`-`) + the target_is_linux()-gated errno store via the already
+// whitelisted __errno_location.
+//
+//   write : x86_64 1 · arm64 64 · darwin 4   (syscall_64.tbl write=1 /
+//           asm-generic unistd.h __NR_write 64 / runtime.c HXLCL_SYS_WRITE 4,
+//           darwin BSD trap OR-bakes 0x2000000). The exact 3-arg mirror of read
+//           (floor: hxlcl_write = _hxlcl_syscall3_cf, errno-bearing like read).
+//   fcntl : x86_64 72 · arm64 25 · darwin 92  (syscall_64.tbl fcntl=72 /
+//           asm-generic __NR_fcntl 25 / runtime.c HXLCL_SYS_FCNTL 92). A plain
+//           3-arg (fd, cmd, arg). On Linux a failing fcntl returns -errno (the
+//           uniform raw-syscall convention), so the same errno-store leg is
+//           correct; the floor uses the NON-_cf path (no darwin errno), which
+//           matches our discipline ④ (darwin carry deferred → store DCE'd).
+//   mmap  : x86_64 9 · arm64 222 · darwin 197 (syscall_64.tbl mmap=9 /
+//           asm-generic __NR_mmap 222 / runtime.c HXLCL_SYS_MMAP 197). 6-arg
+//           (addr, len, prot, flags, fd, off).
+//
+// ⚠️ mmap ERROR-DETECTION root-cause (NOT the libc MAP_FAILED sentinel):
+// at the RAW Linux syscall level — which this Route C body issues directly —
+// mmap returns the mapped address on success (a positive user-space address,
+// well below 2^63 ⇒ signed-positive) or `-errno` in [-4095, -1] on error,
+// EXACTLY like every other syscall. The `MAP_FAILED == (void*)-1` sentinel is a
+// LIBC-WRAPPER artifact: glibc's mmap wrapper converts the raw `-errno` range to
+// MAP_FAILED via the `> -4096UL` threshold (musl src/internal/syscall_ret.c:
+// `if(r > -4096UL){ errno=-r; return -1; }`), and the darwin `_cf` floor
+// (runtime_arm64.hexa:5309 `mov x0,#-1` on carry) does the same. Our body is the
+// raw layer BELOW that wrapper, so the correct error check is the uniform
+// `__hx_payload_lt(r, 0)` (raw `-errno` is negative) — NOT a `payload_eq -1`
+// MAP_FAILED check, which would only fire on the already-converted libc value
+// and would mis-treat a valid high address or a different -errno. So mmap is a
+// uniform `-errno` mirror like read/write; the errno-store leg then writes -r
+// and returns -1 (which the C caller reads as MAP_FAILED on Linux, since
+// (void*)-1 == the -1 we return).
+
+pub fn hxlcl_write(fd: HexaVal, buf: HexaVal, n: HexaVal) -> int {
+    let mut nr = 4                             // Darwin SYS_WRITE (default)
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 1 }       // Linux x86_64 __NR_write
+        else { nr = 64 }                       // Linux arm64 __NR_write
+    }
+    let r = __hx_syscall6(nr, fd, buf, n, 0, 0, 0)
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // bytes written (>= 0)
+}
+
+pub fn hxlcl_fcntl(fd: HexaVal, cmd: HexaVal, arg: HexaVal) -> int {
+    let mut nr = 92                            // Darwin SYS_FCNTL (default)
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 72 }      // Linux x86_64 __NR_fcntl
+        else { nr = 25 }                       // Linux arm64 __NR_fcntl
+    }
+    let r = __hx_syscall6(nr, fd, cmd, arg, 0, 0, 0)
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // cmd-dependent result (>= 0)
+}
+
+// mmap: 6-arg uniform trap (see the error-detection root-cause above — the raw
+// syscall returns the address on success or -errno on failure, so the close
+// `__hx_payload_lt(r, 0)` check is correct, NOT a MAP_FAILED `== -1` check).
+pub fn hxlcl_mmap(addr: HexaVal, len: HexaVal, prot: HexaVal, flags: HexaVal, fd: HexaVal, off: HexaVal) -> int {
+    let mut nr = 197                           // Darwin SYS_MMAP (default)
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 9 }       // Linux x86_64 __NR_mmap
+        else { nr = 222 }                      // Linux arm64 __NR_mmap
+    }
+    let r = __hx_syscall6(nr, addr, len, prot, flags, fd, off)
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // mapped address (raw pointer word)
+}
+
+// ── ERRNO-BEARING CHAIN batch D — DIVERGENCE syscalls: open_sys + getrusage ──
+//
+// Two more errno-bearing leaves. Both share the close errno epilogue verbatim
+// (raw-payload `__hx_payload_lt`/`_ne`/`_sub`, never bare `<`/`-`, +
+// target_is_linux()-gated store via the already-whitelisted __errno_location).
+// They differ only in CALL SHAPE — open_sys is the arm64 AT_FDCWD-prepend kind
+// (a genuine per-arch arg-tuple divergence, exactly mirroring mkdir→mkdirat and
+// stat→fstatat), getrusage is a plain uniform 2-arg (only the NR varies, like
+// read/lseek/waitpid).
+//
+//   open_sys → arm64 has NO plain open; it uses openat(AT_FDCWD=-100, path,
+//          flags, mode) — a 4-arg PREPEND divergence exactly like mkdir→mkdirat
+//          and stat→fstatat. So the syscall is issued in per-arch branches (the
+//          arm64 branch prepends AT_FDCWD, shifting path/flags/mode right by one),
+//          then the shared epilogue runs on the result. x86_64 + darwin keep the
+//          plain 3-arg open(path, flags, mode).
+//          NR + AT_FDCWD ref-match (no black-box):
+//            x86_64 __NR_open    = 2   (arch/x86 syscall_64.tbl;
+//                                       stdlib/posix/linux_syscalls.hexa:116)
+//            arm64  __NR_openat  = 56  (asm-generic unistd.h — plain "open"
+//                                       dropped; linux_syscalls.hexa:83)
+//            darwin SYS_OPEN     = 5   (xnu bsd/kern/syscalls.master; the BSD
+//                                       trap OR-bakes 0x2000000 in __hx_syscall6)
+//            AT_FDCWD = -100           (the same literal mkdir/stat use above;
+//                                       self/rt/syscall.hexa:153,161)
+//          open is errno-bearing (a bad path → -1 + ENOENT on the raw Linux
+//          syscall, the uniform `-errno` convention). Named `hxlcl_open_sys`
+//          rather than `hxlcl_open` to match the floor's open routing symbol and
+//          avoid shadowing the higher-level open wrapper.
+//
+//   getrusage → a plain UNIFORM 2-arg (who, usage*) on every target — no
+//          at-variant / no prepend, so only the NR differs, exactly like
+//          read/lseek/waitpid. The 2nd arg is an OUT-pointer (the struct rusage*
+//          the kernel fills), the same out-ptr shape as stat's statbuf.
+//          NR ref-match (no black-box):
+//            x86_64 __NR_getrusage = 98   (arch/x86 syscall_64.tbl)
+//            arm64  __NR_getrusage = 165  (asm-generic unistd.h)
+//            darwin SYS_GETRUSAGE  = 117  (xnu bsd/kern/syscalls.master)
+//          errno-bearing: a bad `who` → -1 + EINVAL (getrusage(2): "EINVAL ...
+//          who is invalid").
+//
+// DEFERRED to a later batch (honest — trickier divergence, not attempted here):
+//   time    → arm64/darwin have NO plain time; they need gettimeofday(tv*,0) with
+//             a DIFFERENT return semantics (gettimeofday writes a struct + returns
+//             0, vs time returns the epoch seconds) — a return-value mismatch, not
+//             just a NR/arg swap. (x86_64 time=201, arm64 gettimeofday=169.)
+//   poll    → arm64 has NO plain poll; ppoll takes an EXTRA timespec* + sigmask +
+//             sigsetsize (arg-COUNT divergence, not just a prepend).
+//             (x86_64 poll=7, arm64 ppoll=73, darwin poll=230.)
+//   pipe    → a 2nd-RETURN-register / int[2] out-array shape (the kernel returns
+//             both fds), which the single-result __hx_syscall6 path doesn't expose
+//             — a genuinely different lowering. (x86_64 pipe=22/pipe2=293, arm64
+//             pipe2=59, darwin pipe=42.)
+
+// open_sys: per-arch arg tuple (arm64 openat prepends AT_FDCWD, shifting
+// path/flags/mode right by one — a genuine divergence, mirrors mkdir/stat). The
+// result flows into the shared close-pattern errno epilogue.
+pub fn hxlcl_open_sys(path: HexaVal, flags: HexaVal, mode: HexaVal) -> int {
+    let mut r = 0
+    if target_is_linux() {
+        if target_is_x86_64() {
+            r = __hx_syscall6(2, path, flags, mode, 0, 0, 0)        // x86_64 open(path, flags, mode)
+        } else {
+            r = __hx_syscall6(56, -100, path, flags, mode, 0, 0)    // arm64 openat(AT_FDCWD, path, flags, mode)
+        }
+    } else {
+        r = __hx_syscall6(5, path, flags, mode, 0, 0, 0)            // darwin SYS_OPEN(path, flags, mode)
+    }
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // fd (>= 0)
+}
+
+// getrusage: plain uniform 2-arg (who, usage*); only the NR varies (no at-variant),
+// like read/lseek. The 2nd arg is an out-ptr the kernel fills (stat-statbuf shape).
+pub fn hxlcl_getrusage(who: HexaVal, usage: HexaVal) -> int {
+    let mut nr = 117                           // Darwin SYS_GETRUSAGE (default)
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 98 }      // Linux x86_64 __NR_getrusage
+        else { nr = 165 }                      // Linux arm64 __NR_getrusage
+    }
+    let r = __hx_syscall6(nr, who, usage, 0, 0, 0, 0)
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // 0 on success
+}
+
+// ── batch E: pipe (out-ptr int[2] — Linux DISSOLVES, darwin is the genuine wall) ─
+//
+// CENSUS CORRECTION (batch D deferred "pipe = 2nd-return-register"): that label
+// conflated Linux and darwin. The Linux pipe ABI is an OUT-POINTER — the kernel
+// WRITES both fds into the caller's int[2] buffer and returns 0/-errno (the same
+// out-ptr shape as getrusage's usage* and stat's statbuf). The 2nd-return-register
+// (r0/r1 dual-fd) divergence is DARWIN-ONLY (BSD pipe). So the Linux legs dissolve
+// cleanly with the established close errno epilogue; only darwin is a real wall.
+//
+//   x86_64 / arm64-linux → pipe2(fds, flags=0). Using pipe2 (not the legacy
+//          x86_64 pipe=22) gives a UNIFORM 2-arg shape on BOTH arches — arm64 has
+//          NO plain pipe, only pipe2; x86_64 pipe2 takes the same (fds, flags).
+//          This is the "flags-trailing uniform" pattern (exactly like dup2→dup3:
+//          flags=0 trails, so one shape serves both arches, only the NR varies).
+//          errno-bearing: a bad fds ptr / EMFILE → -1 + errno on the Linux leg.
+//   darwin → SYS_pipe (42) returns the two fds in x0/x1 (2nd return register);
+//          the single-result __hx_syscall6 exposes only x0, so it CANNOT write
+//          fds[1]. This is a genuine WALL for the Route C path — the real darwin
+//          pipe stays the floor's _hxlcl_pipe_cf dual-register asm shim
+//          (self/runtime_emit_full.hexa:1542). The Route C darwin leg returns -1
+//          (documented incomplete — mirrors the reference self/rt/syscall.hexa:233
+//          sys_pipe, which also returns -1 on darwin "for now").
+//   NR ref-match (no black-box; WebFetch-confirmed 2026-06-27):
+//     x86_64 __NR_pipe2 = 293  (arch/x86 syscall_64.tbl)
+//     arm64  __NR_pipe2 = 59   (asm-generic unistd.h — no plain pipe/poll on arm64)
+//     darwin SYS_pipe   = 42   (xnu; 2nd-return-reg, used only by the _cf shim)
+//
+// time / poll: LANDED in batch H below (the scratch-buffer substrate the batch E
+// census flagged turned out NOT to need a new intrinsic — see the batch H header).
+pub fn hxlcl_pipe(fds: HexaVal) -> int {
+    if target_is_linux() {
+        let mut r = 0
+        if target_is_x86_64() {
+            r = __hx_syscall6(293, fds, 0, 0, 0, 0, 0)     // x86_64 pipe2(fds, flags=0)
+        } else {
+            r = __hx_syscall6(59, fds, 0, 0, 0, 0, 0)      // arm64 pipe2(fds, flags=0)
+        }
+        let neg = __hx_payload_lt(r, 0)
+        if __hx_payload_ne(neg, 0) {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+            return -1
+        }
+        return r                                // 0 on success (kernel wrote fds[0],fds[1])
+    }
+    // darwin: 2nd-return-register BSD pipe — unreachable by the single-result
+    // __hx_syscall6. Documented incomplete (real darwin pipe = floor _cf shim).
+    return -1
+}
+
+// ── batch H: time + poll (the SCRATCH-BUFFER substrate — NO new intrinsic) ──────
+//
+// SCRATCH-BUFFER CENSUS VERDICT (the batch-E deferral resolved): time and poll
+// each have register-clean legs and ONE divergent leg that needs a small in-body
+// struct buffer (timeval / timespec). The campaign has NO `__hx_stack_alloc`-class
+// intrinsic (grep-clean: no addr-of / alloca / stack-slot leaf), so a TRUE in-body
+// STACK scratch buffer is a substrate gap — it would need a new codegen builtin
+// (the frozen-151c52c8-unsafe path the campaign forbids). BUT the buffer NEED is
+// satisfiable with ZERO new intrinsics by reusing the already-whitelisted
+// hxlcl_malloc as a HEAP scratch + the proven raw-ptr ops:
+//   • hxlcl_malloc(16)        — inner C-ABI `bl` (ON-path-proven by strdup/calloc/
+//                               realloc), returns a 16-byte raw region.
+//   • __hx_ptr_store64(p,off,v) — write the synthesized struct fields (proven by
+//                               strtoll's endptr store64).
+//   • __hx_ptr_load64(p,off)   — read a struct field back (proven by realloc's
+//                               negative-offset header read).
+//   • __hx_payload_div/_mod/_mul — the ms→{sec,nsec} arithmetic (proven int-div
+//                               leaves — x86_64_linux.hexa:2741 / arm64_darwin:2088).
+// So the substrate is NOT a wall; the only thing genuinely missing (a true stack
+// scratch) is an OPTIMIZATION, not a blocker. HONEST CAVEAT (recorded for the
+// campaign SSOT): the heap-scratch leaks the 16-byte region per call on the
+// arm64-linux divergent legs (hxlcl_malloc's bump arena has free=noop). For time
+// that is negligible (every caller passes NULL and time() is never hot-looped),
+// but hxlcl_poll IS hot-looped on a finite timeout (self/native/term_ffi_emit.hexa
+// documents a "tight-looped hxlcl_poll → 36 GB RSS" history), so the arm64-linux
+// finite-timeout ppoll leg accrues that per-call 16-byte leak — the ONE spot a
+// true __hx_stack_alloc would be cleaner. Acceptable on this default-OFF research
+// path (HEXA_CABI_HXLCL=1, never shipped); flagged, not papered over.
+//
+// In-body operator discipline (the #4042 rule) + un-nested lets throughout, same
+// as the syscall family above. errno epilogue = the close discipline verbatim.
+
+// hxlcl_time: return the epoch seconds (a la `time(NULL)`); if `t` is non-NULL also
+// write `*t = (int)sec` (NULL-gated, like strtoll's endptr). BYTE-FAITHFUL to the
+// floor shim runtime_core_hxlcl_shim.c:560 (`int hxlcl_time(int *t){ time_t r =
+// time(NULL); if(t) *t=(int)r; return (int)r; }`) — every caller in the runtime
+// passes NULL (`hxlcl_time(NULL)`), so the out-param write is exercised only for
+// faithfulness. The `int` return carries the low 32 bits of the epoch (matching the
+// floor's `(int)r`; valid until 2038, the same window as the int-typed floor).
+//
+// PER-TARGET (compile-time target_is_* consts → DCE drops the dead legs):
+//   x86_64-linux : time(201) — REGISTER-CLEAN: the kernel returns the epoch in the
+//                  result reg; NO buffer. (Passing tloc=0/NULL to the syscall, then
+//                  doing the int-width *t store OURSELVES — the kernel would write 8
+//                  bytes (time_t) into a 4-byte int* t, so we never hand it `t`.)
+//   arm64-linux  : NO __NR_time (asm-generic dropped it); gettimeofday(169, &tv,
+//                  NULL) writes timeval{tv_sec,tv_usec}; read tv_sec at offset 0.
+//   darwin       : NO BSD `time` trap; gettimeofday(116, &tv, NULL) (the floor's
+//                  hxlcl_clock_gettime uses the same syscall, runtime_emit_full:1983);
+//                  read tv_sec. (__hx_syscall6 issues `svc #0x80` with the bare BSD
+//                  NR — no 0x2000000 OR on arm64, like getrusage=117.)
+// NR ref-match (no black-box): x86_64 time=201 (arch/x86 syscall_64.tbl) · arm64
+// gettimeofday=169 / darwin gettimeofday=116 (asm-generic unistd.h __NR_gettimeofday
+// 169 · runtime_emit_full.hexa:1943 HXLCL_SYS_GETTIMEOFDAY 116).
+pub fn hxlcl_time(t: HexaVal) -> int {
+    let pt = __hx_payload_add(t, 0)            // int* t (raw, may be NULL)
+    if target_is_linux() {
+        if target_is_x86_64() {
+            let r = __hx_syscall6(201, 0, 0, 0, 0, 0, 0)   // time(NULL) → epoch in result reg
+            if __hx_payload_ne(pt, 0) {
+                __hx_ptr_store32(pt, 0, r)     // *t = (int)epoch
+            }
+            return r
+        }
+        // arm64-linux: gettimeofday(&tv, NULL); tv_sec at offset 0.
+        // hxlcl_malloc's declared param is `HexaVal` (the C-ABI lowering is at the
+        // call boundary, but the TYPE-CHECK is on the signature), so a bare i64 `16`
+        // mismatches. Box it via __hx_payload_add(0,16) → HexaVal{TAG_INT,16} — the
+        // exact close/strtoll `__hx_payload_sub(0, x)` shape (the __hx_payload_*
+        // intrinsics accept i64 literals and return HexaVal, unlike a declared
+        // extern fn). strdup/calloc pass HexaVal the same way (cap=__hx_payload_add,
+        // total=__hx_payload_mul). The malloc result is `int` (raw ptr word), fed
+        // straight to the raw-ptr intrinsics like strdup/calloc do.
+        let szl = __hx_payload_add(0, 16)      // HexaVal-box the scratch size
+        let buf = hxlcl_malloc(szl)            // scratch timeval (heap — see header)
+        __hx_syscall6(169, buf, 0, 0, 0, 0, 0) // gettimeofday(&tv, NULL)
+        let sec = __hx_ptr_load64(buf, 0)      // tv.tv_sec
+        if __hx_payload_ne(pt, 0) {
+            __hx_ptr_store32(pt, 0, sec)
+        }
+        return sec
+    }
+    // darwin: gettimeofday(&tv, NULL); tv_sec at offset 0. Same HexaVal-box of the
+    // literal size as the arm64-linux leg above (hxlcl_malloc expects HexaVal).
+    let szd = __hx_payload_add(0, 16)
+    let buf = hxlcl_malloc(szd)
+    __hx_syscall6(116, buf, 0, 0, 0, 0, 0)
+    let sec = __hx_ptr_load64(buf, 0)
+    if __hx_payload_ne(pt, 0) {
+        __hx_ptr_store32(pt, 0, sec)
+    }
+    return sec
+}
+
+// hxlcl_poll: wait for events on `fds` (nfds pollfds) up to `timeout` ms; return
+// the ready count (0 on timeout) or -1 + errno. BYTE-FAITHFUL to the floor
+// (runtime_emit_full.hexa:2042 `poll((struct pollfd*)fds,(nfds_t)nfds,timeout)`).
+// `nfds` is an `unsigned int` passed raw — every C caller zero-extends it (a 32-bit
+// `mov` clears the upper word), exactly like read/write pass `unsigned long n` raw.
+//
+// PER-TARGET (compile-time target_is_* consts → DCE):
+//   x86_64-linux : poll(7)   — plain 3-arg (fds, nfds, timeout_ms). REGISTER-CLEAN.
+//   darwin       : poll(230) — plain 3-arg, same shape (bare BSD NR, `svc #0x80`).
+//   arm64-linux  : NO __NR_poll (asm-generic dropped it); ppoll(73, fds, nfds,
+//                  &ts | NULL, sigmask=NULL, sigsetsize=8). The C `int timeout` (ms)
+//                  is SYNTHESIZED into a timespec: timeout<0 → tmo=NULL (block
+//                  forever); else {tv_sec = ms/1000, tv_nsec = (ms%1000)*1e6}. This
+//                  is the divergent leg that needs the scratch buffer (see header).
+//                  (sigmask NULL ⇒ the kernel ignores sigsetsize, but 8 = _NSIG/8 is
+//                  the canonical value glibc passes.)
+// NR + arg-shape ref-match (no black-box): x86_64 poll=7 / darwin poll=230
+// (syscall_64.tbl · runtime_emit_full.hexa:1369 HXLCL_SYS_POLL 230) · arm64 ppoll=73
+// (asm-generic unistd.h __NR_ppoll — no plain poll on arm64) · ppoll signature
+// (fds,nfds,tmo_p,sigmask,sigsetsize) = man ppoll(2). The errno epilogue is the
+// close discipline verbatim (Linux returns -errno; darwin carry-flag deferred).
+pub fn hxlcl_poll(fds: HexaVal, nfds: HexaVal, timeout: HexaVal) -> int {
+    let mut r = 0
+    if target_is_linux() {
+        if target_is_x86_64() {
+            r = __hx_syscall6(7, fds, nfds, timeout, 0, 0, 0)    // poll(fds, nfds, timeout_ms)
+        } else {
+            // arm64-linux: ppoll(fds, nfds, &ts | NULL, sigmask=NULL, sigsetsize=8).
+            let neg = __hx_payload_lt(timeout, 0)
+            if __hx_payload_ne(neg, 0) {
+                r = __hx_syscall6(73, fds, nfds, 0, 0, 8, 0)     // timeout<0 → tmo=NULL (infinite)
+            } else {
+                let szp = __hx_payload_add(0, 16)                // HexaVal-box the scratch size (malloc expects HexaVal)
+                let ts = hxlcl_malloc(szp)                       // scratch timespec (heap — see header)
+                let sec = __hx_payload_div(timeout, 1000)        // ms / 1000  → tv_sec
+                let rem = __hx_payload_mod(timeout, 1000)        // ms % 1000
+                let nsec = __hx_payload_mul(rem, 1000000)        // → tv_nsec (nanoseconds)
+                __hx_ptr_store64(ts, 0, sec)                     // ts.tv_sec
+                __hx_ptr_store64(ts, 8, nsec)                    // ts.tv_nsec
+                r = __hx_syscall6(73, fds, nfds, ts, 0, 8, 0)
+            }
+        }
+    } else {
+        r = __hx_syscall6(230, fds, nfds, timeout, 0, 0, 0)      // darwin poll(fds, nfds, timeout_ms)
+    }
+    let neg2 = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg2, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // ready count (0 on timeout)
 }

@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -97,7 +97,11 @@ cat > "$TMP/harness.c" <<'CEOF'
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>   /* libc getpid() — the reference oracle for hxlcl_getpid */
-#include <fcntl.h>    /* open() / O_RDONLY — for the close() behavior test */
+#include <fcntl.h>    /* open() / O_RDONLY / F_GETFL — close/fcntl behavior tests */
+#include <sys/mman.h> /* PROT_/MAP_ flags / MAP_FAILED — for the mmap composition test */
+#include <sys/resource.h> /* struct rusage / RUSAGE_SELF — for the getrusage composition test */
+#include <poll.h>     /* struct pollfd / POLLIN — for the poll composition test */
+#include <time.h>     /* libc time() — the reference oracle for hxlcl_time */
 
 /* Route-C-emitted symbols under test (raw C-ABI prototypes). */
 extern size_t hxlcl_strlen(const char *s);
@@ -142,6 +146,54 @@ extern long   hxlcl_lseek(int fd, long off, int whence);
  * claim). On darwin both use the plain 2-arg BSD syscall (SYS_DUP2/SYS_MKDIR). */
 extern int    hxlcl_dup2(int oldfd, int newfd);
 extern int    hxlcl_mkdir(const char *path, int mode);
+
+/* errno-bearing chain r3 (FINAL batch) — stat / waitpid, composition only on
+ * darwin (errno-store DCE'd; the errno value-exact is the Linux sibling's claim).
+ * On darwin stat uses the plain 2-arg SYS_STAT; waitpid routes to wait4(4-arg,
+ * rusage NULL). statbuf is opaque here (we never read it) — a sufficiently large
+ * buffer covers any struct stat layout. */
+extern int    hxlcl_stat(const char *path, void *statbuf);
+extern int    hxlcl_waitpid(int pid, int *status, int opts);
+
+/* errno-bearing chain batch C — write / fcntl / mmap, composition only on
+ * darwin (success case; errno-store DCE'd). All uniform across targets (plain
+ * syscall, no at-variant). write = read mirror; fcntl = plain 3-arg; mmap = raw
+ * 6-arg syscall returning the mapped ADDRESS (not the libc MAP_FAILED-converted
+ * value) — success is a positive address word. */
+extern long   hxlcl_write(int fd, const void *buf, unsigned long n);
+extern int    hxlcl_fcntl(int fd, int cmd, long arg);
+extern long   hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off);
+
+/* errno-bearing chain batch D — open_sys / getrusage, composition only on darwin
+ * (success case; errno-store DCE'd; the errno value-exact is the Linux sibling's
+ * claim). open_sys = arm64 openat(AT_FDCWD,…) / darwin plain SYS_OPEN(3-arg);
+ * getrusage = plain uniform 2-arg (out-ptr usage*). */
+extern int    hxlcl_open_sys(const char *path, int flags, int mode);
+extern int    hxlcl_getrusage(int who, void *usage);
+/* batch E — pipe. On darwin the Route C leg is a documented -1 stub (BSD pipe is
+ * 2nd-return-register, unreachable by single-result __hx_syscall6); the Linux
+ * sibling (pipe2 out-ptr) carries the success/roundtrip claim. */
+extern int    hxlcl_pipe(int fds[2]);
+
+/* batch F search family — strchr / strstr. Pure byte-scan leaves (no syscall, no
+ * errno, no inner call); each returns a raw char* into the input or NULL. Fully
+ * exercised here (cross-target-identical compute — the byteeq build proves the
+ * emit is bit-equal on all 3 targets; this run proves the BEHAVIOUR). */
+extern char  *hxlcl_strchr(const char *s, int c);
+extern char  *hxlcl_strstr(const char *h, const char *n);
+
+/* batch G parse family — strtoll. Pure-compute leaf (no syscall, no errno, no
+ * inner call) with a NULL-gated `char** endptr` out-param write. Cross-target-
+ * identical compute; this run exercises both the value parse AND the endptr
+ * store64 (a non-NULL endptr → *endptr == nptr + consumed-length). */
+extern long long hxlcl_strtoll(const char *nptr, char **endptr, int base);
+
+/* batch H — time / poll. On darwin time uses gettimeofday(116) → reads tv_sec from
+ * a hxlcl_malloc'd 16-byte scratch buffer (the heap-scratch substrate); poll uses
+ * the plain 3-arg BSD poll(230). Both exercised fully here (the darwin smoke host
+ * actually runs these legs). */
+extern int  hxlcl_time(int *t);
+extern int  hxlcl_poll(void *fds, unsigned int nfds, int timeout);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
@@ -298,6 +350,174 @@ int main(void) {
         rmdir(dir);
     }
 
+    /* stat / waitpid — COMPOSITION on darwin (errno-store DCE'd). The errno
+     * value-exact (stat nonexistent → ENOENT, waitpid no-child → ECHILD) is the
+     * Linux sibling smoke's claim. The statbuf is an opaque byte buffer large
+     * enough for any struct stat.
+     *
+     * stat("/") → 0 is asserted: success is carry-clear on darwin too (the root
+     * always exists), so the return value is exact regardless of the deferred
+     * carry-flag errno path.
+     *
+     * waitpid's ERROR case is NOT asserted on darwin (5th-discipline ④,
+     * darwin carry-flag deferred): darwin signals waitpid(no-child)'s ECHILD via
+     * the CARRY flag + a POSITIVE errno in x0 (not Linux's -errno), so the body's
+     * `__hx_payload_lt(r, 0)` Linux-neg-return check cannot see it as an error
+     * and the return value is NOT -1. The error-case -1/ECHILD contract is the
+     * Linux sibling's value-exact claim (waitpid(-1)→-1 ∧ ECHILD, already GREEN);
+     * darwin's success case needs a fork+child and isn't exercised here. We only
+     * assert it LINKS + EMITS + RUNS without crashing (composition-only) — the
+     * same treatment close gives its darwin error case. The carry-flag-correct
+     * darwin path is a separate __error()/csneg round. */
+    char sbuf[256];
+    CK(hxlcl_stat("/", sbuf) == 0, "stat(\"/\") == 0 (composition)");
+
+    int wst = 0;
+    (void)hxlcl_waitpid(-1, &wst, 0);   /* composition only — darwin carry-flag deferred */
+
+    /* batch C: write / fcntl / mmap — COMPOSITION on darwin (success case;
+     * errno-store DCE'd). The errno value-exact (bad-fd → EBADF) is the Linux
+     * sibling smoke's claim. write(1, "x", 1) → 1 byte; fcntl(0, F_GETFL) → the
+     * stdin flags (>= 0); mmap of one page → a valid address (NOT MAP_FAILED). */
+    CK(hxlcl_write(1, "", 0) == 0, "write(1, \"\", 0) == 0 (composition, no output)");
+    {
+        int wfd = open("/dev/null", O_WRONLY);
+        CK(wfd >= 0, "open /dev/null for write test");
+        CK(hxlcl_write(wfd, "x", 1) == 1, "write(/dev/null, \"x\", 1) == 1 (composition)");
+        hxlcl_close(wfd);
+    }
+
+    /* fcntl(0, F_GETFL) returns the current stdin flags — always >= 0 for a
+     * valid fd. Confirms the plain 3-arg trap composes (NO at-variant). */
+    CK(hxlcl_fcntl(0, F_GETFL, 0) >= 0, "fcntl(0, F_GETFL) >= 0 (composition)");
+
+    /* mmap one anonymous page → a valid mapped ADDRESS (the raw syscall returns
+     * the address, NOT MAP_FAILED). MAP_FAILED == (void*)-1, so the body's
+     * `__hx_payload_lt(r, 0)` success path returns the positive address word. */
+    {
+        long pg = (long)sysconf(_SC_PAGESIZE);
+        if (pg <= 0) pg = 4096;
+        long m = hxlcl_mmap(0, (unsigned long)pg, PROT_READ | PROT_WRITE,
+                            MAP_ANON | MAP_PRIVATE, -1, 0);
+        CK(m != (long)MAP_FAILED && m != -1 && m != 0,
+           "mmap(anon page) → valid address (not MAP_FAILED, composition)");
+        if (m != (long)MAP_FAILED && m != -1 && m != 0) {
+            ((char *)m)[0] = 'q';                /* page is writable */
+            CK(((char *)m)[0] == 'q', "mmap'd page is writable (composition)");
+            munmap((void *)m, (size_t)pg);
+        }
+    }
+
+    /* batch D: open_sys / getrusage — COMPOSITION on darwin (success case;
+     * errno-store DCE'd; the errno value-exact is the Linux sibling's claim).
+     * open_sys(/dev/null, O_RDONLY) → a valid fd (>= 0); on darwin this uses the
+     * plain 3-arg SYS_OPEN (no AT_FDCWD), confirming the 3-arg trap composes.
+     * getrusage(RUSAGE_SELF, &ru) → 0 (success; the out-ptr usage* reaches the
+     * kernel and the plain 2-arg trap composes). */
+    {
+        int ofd = hxlcl_open_sys("/dev/null", O_RDONLY, 0);
+        CK(ofd >= 0, "open_sys(/dev/null, O_RDONLY) >= 0 (composition)");
+        if (ofd >= 0) hxlcl_close(ofd);
+    }
+    {
+        struct rusage ru;
+        CK(hxlcl_getrusage(RUSAGE_SELF, &ru) == 0, "getrusage(RUSAGE_SELF) == 0 (composition, out-ptr)");
+    }
+
+    /* batch E: pipe — DARWIN is the genuine 2nd-return-register wall. BSD pipe(42)
+     * returns the two fds in x0/x1; the single-result __hx_syscall6 exposes only
+     * x0, so the Route C darwin leg CANNOT write fds[1] and returns -1 (documented
+     * incomplete — the real darwin pipe stays the floor _hxlcl_pipe_cf asm shim).
+     * Asserting == -1 locks in that documented gap (a future dual-reg fix would
+     * flip this and force a smoke update). The Linux sibling carries the success +
+     * write/read roundtrip claim (pipe2 out-ptr). */
+    {
+        int pfd[2] = { -1, -1 };
+        CK(hxlcl_pipe(pfd) == -1, "pipe() == -1 on darwin (documented 2nd-return-reg wall)");
+    }
+
+    /* batch F: strchr / strstr — pure byte-scan leaves (cross-target-identical,
+     * fully exercised here). strchr returns a pointer INTO the input at the match
+     * (or NULL); the c==0 case must return the terminator pointer (folded match
+     * ordering). strstr returns a pointer to the first substring occurrence (or
+     * NULL); empty needle → haystack head. The returned pointers are checked by
+     * identity (== s + offset) AND by content, so a PAIR-MODEL ABI leak (boxed
+     * pointer) or an off-by-one would be caught. */
+    {
+        const char *abc = "abcXYZabc";
+        CK(hxlcl_strchr(abc, 'X') == abc + 3, "strchr finds first 'X' at &abc[3]");
+        CK(hxlcl_strchr(abc, 'a') == abc + 0, "strchr finds first 'a' at &abc[0]");
+        CK(hxlcl_strchr(abc, 'z') == NULL,    "strchr('z') → NULL (absent)");
+        CK(hxlcl_strchr(abc, 0) == abc + 9,   "strchr(0) → terminator pointer");
+    }
+    {
+        const char *hay = "hello world";
+        CK(hxlcl_strstr(hay, "ll")    == hay + 2, "strstr 'll' → &hay[2]");
+        CK(hxlcl_strstr(hay, "world") == hay + 6, "strstr 'world' → &hay[6]");
+        CK(hxlcl_strstr(hay, "hello") == hay + 0, "strstr 'hello' → &hay[0]");
+        CK(hxlcl_strstr(hay, "")      == hay + 0, "strstr empty needle → &hay[0]");
+        CK(hxlcl_strstr(hay, "xyz")   == NULL,    "strstr 'xyz' → NULL (absent)");
+        CK(hxlcl_strstr(hay, "worlds") == NULL,   "strstr needle past haystack end → NULL");
+        CK(hxlcl_strstr("aaa", "aab") == NULL,    "strstr partial-then-mismatch → NULL");
+    }
+
+    /* batch G: strtoll — value parse + endptr store64 (the OUT-PARAM write under
+     * test). endptr==NULL exercises the NULL-gate (no store); endptr!=NULL
+     * exercises the __hx_ptr_store64 → *endptr == nptr + consumed-length. */
+    {
+        CK(hxlcl_strtoll("42", NULL, 10) == 42, "strtoll(\"42\",NULL,10) == 42 (endptr NULL-gate)");
+        CK(hxlcl_strtoll("-7", NULL, 10) == -7, "strtoll(\"-7\",NULL,10) == -7 (sign)");
+        CK(hxlcl_strtoll("+99", NULL, 10) == 99, "strtoll(\"+99\",NULL,10) == 99 (plus sign)");
+        CK(hxlcl_strtoll("  123abc", NULL, 10) == 123, "strtoll leading-ws + trailing-garbage stop");
+        CK(hxlcl_strtoll("0", NULL, 10) == 0, "strtoll(\"0\") == 0");
+        CK(hxlcl_strtoll("ff", NULL, 16) == 255, "strtoll(\"ff\",16) == 255 (lowercase hex)");
+        CK(hxlcl_strtoll("0755", NULL, 0) == 493, "strtoll(\"0755\",0) == 0755 octal (493)");
+        CK(hxlcl_strtoll("10", NULL, 0) == 10, "strtoll(\"10\",0) == 10 (decimal auto)");
+        const char *hx = "0xFF";
+        char *endp = NULL;
+        long long v = hxlcl_strtoll(hx, &endp, 16);
+        CK(v == 255, "strtoll(\"0xFF\",&end,16) == 255 (0x prefix skip)");
+        CK(endp == hx + 4, "strtoll endptr == nptr+4 (store64 out-param write)");
+        const char *mix = "12x";
+        char *endp2 = NULL;
+        CK(hxlcl_strtoll(mix, &endp2, 10) == 12, "strtoll(\"12x\",&end,10) == 12");
+        CK(endp2 == mix + 2, "strtoll endptr stops at first non-digit (mix+2)");
+        /* NULL nptr → 0, endptr (if given) set to nptr(NULL). */
+        char *endp3 = (char *)0x1;
+        CK(hxlcl_strtoll(NULL, &endp3, 10) == 0, "strtoll(NULL,&end,10) == 0");
+        CK(endp3 == NULL, "strtoll(NULL) sets *endptr = NULL");
+    }
+
+    /* batch H — time / poll. FULLY EXERCISED on this darwin host (both legs run).
+     * time: darwin has no BSD `time` trap, so the body uses gettimeofday(116) into a
+     * hxlcl_malloc'd 16-byte scratch (the heap-scratch substrate) and reads tv_sec —
+     * assert it is post-2023 AND within ±2s of libc time(NULL), plus the NULL-gated
+     * out-param (*t == return). poll: plain 3-arg BSD poll(230) — assert poll(no fds,
+     * 0ms) == 0 and a real pollfd on a pipe (empty → 0, data-ready → 1). */
+    {
+        long ref = (long)time(NULL);
+        int t1 = hxlcl_time(NULL);
+        CK(t1 > 1700000000, "time(NULL) > 2023-11 epoch (darwin gettimeofday tv_sec via heap scratch)");
+        CK((long)t1 - ref <= 2 && ref - (long)t1 <= 2, "time(NULL) ~= libc time(NULL) (within 2s)");
+        int tt = -1;
+        int t2 = hxlcl_time(&tt);
+        CK(tt == t2, "time(&t) writes *t == return (NULL-gated out-param store32)");
+        CK(t2 > 1700000000, "time(&t) return > 2023-11 epoch");
+
+        CK(hxlcl_poll(NULL, 0, 0) == 0, "poll(NULL, 0, 0ms) == 0 (no fds, immediate)");
+        int ph[2];
+        if (pipe(ph) == 0) {
+            struct pollfd pf;
+            pf.fd = ph[0]; pf.events = POLLIN; pf.revents = 0;
+            CK(hxlcl_poll(&pf, 1, 0) == 0, "poll(pipe read end, empty, 0ms) == 0");
+            if (write(ph[1], "z", 1) == 1) {
+                pf.revents = 0;
+                CK(hxlcl_poll(&pf, 1, 100) == 1, "poll(pipe read end, data ready, 100ms) == 1 (POLLIN)");
+            }
+            close(ph[0]); close(ph[1]);
+        }
+    }
+
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }
     printf("[routec-smoke] %d assert(s) FAILED\n", fails);
     return 1;
@@ -310,4 +530,4 @@ echo "[routec-smoke] (3) compile harness + link Route C .o + run …"
 "$TMP/routec_smoke"
 rc=$?
 [ "$rc" -eq 0 ] || { echo "[routec-smoke] FATAL: behaviour run rc=$rc" >&2; exit 1; }
-echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (13 symbols: 9 pure-arith + atoi + strdup + calloc + realloc, darwin-arm64)"
+echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (pure-arith + composite + syscall families + batch F search strchr/strstr, darwin-arm64)"

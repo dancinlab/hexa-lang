@@ -307,8 +307,9 @@ fn _verifier_parse_rationale(raw: string) -> string {
 // syntax candidates is the [B] generator-campaign scope); [A]'s job is only
 // that the verifier RUNS and emits a real verdict instead of skipping.
 
-// Map a 12-fn basis name to its `af()` index, or -1 if not a basis fn.
-// Index ids match identity_engine.hexa::af (0=sigma … 11=omega).
+// Map an 18-fn basis name to its `af()` index, or -1 if not a basis fn.
+// Index ids match identity_engine.hexa::af (0=sigma … 11=omega · 12–17 = the
+// 2026-06-27 extended vocab: mu μ · lam λ · mu2 μ² · J3 · tw_om 2^ω · core).
 fn _fn_index(name: string) -> i64 {
     let s = name.trim()
     if s == "sigma"  { return 0 }
@@ -323,14 +324,24 @@ fn _fn_index(name: string) -> i64 {
     if s == "psi"    { return 9 }
     if s == "Omega"  { return 10 }
     if s == "omega"  { return 11 }
+    // ── extended vocab (idx 12–17 · 2026-06-27 upgrade) ──
+    if s == "mu"     { return 12 }
+    if s == "lam"    { return 13 }
+    if s == "mu2"    { return 14 }
+    if s == "J3"     { return 15 }
+    if s == "tw_om"  { return 16 }
+    if s == "core"   { return 17 }
     return -1
 }
 
-// Parse a candidate `expr` as a 12-fn product identity `A*B = C*D` (also
+// Parse a candidate `expr` as an 18-fn product identity `A*B = C*D` (also
 // accepting the unicode `·` product / spaces). Returns the four basis
 // indices via an out-array [a,b,c,d] when the whole expr is exactly four
-// recognised basis fns joined by two products and one `=`, else [].
-// Deterministic, ASCII/structure-driven (no float parse).
+// recognised basis fns (idx 0–17 incl. the 2026-06-27 extended vocab) joined
+// by two products and one `=`, else []. Deterministic, structure-driven (no
+// float parse). NOTE: arity-3 `A*B*C=D*E*F` candidates use a separate verify
+// path (identity_engine.hexa::verify_identity3) and are not parsed here yet —
+// this 2-term sweep stays the drill default screen.
 fn _parse_identity(expr: string) -> [i64] {
     let mut e = expr
     e = e.replace("·", "*")
@@ -351,7 +362,7 @@ fn _parse_identity(expr: string) -> [i64] {
     return out
 }
 
-// Map a 12-fn `af()` index back to its basis name (inverse of _fn_index).
+// Map an 18-fn `af()` index back to its basis name (inverse of _fn_index).
 // Used to render a verified candidate's canonical identity expr for the
 // cross-round absorb pool + the known/novel cross-check. "" if out of range.
 fn _fn_name(idx: i64) -> string {
@@ -367,6 +378,13 @@ fn _fn_name(idx: i64) -> string {
     if idx == 9  { return "psi" }
     if idx == 10 { return "Omega" }
     if idx == 11 { return "omega" }
+    // ── extended vocab (idx 12–17 · 2026-06-27 upgrade) ──
+    if idx == 12 { return "mu" }
+    if idx == 13 { return "lam" }
+    if idx == 14 { return "mu2" }
+    if idx == 15 { return "J3" }
+    if idx == 16 { return "tw_om" }
+    if idx == 17 { return "core" }
     return ""
 }
 
@@ -394,13 +412,17 @@ fn _canon_identity(a: i64, b: i64, c: i64, d: i64) -> string {
     return s
 }
 
-// Known-identity cross-check (honesty c2: standard 12-fn vocab is
-// MEASURED-EXHAUSTED — every bounded-unique product identity over this basis
-// is already an ATLAS @F node). The documented known set is the identity_engine
-// selftest sanity-gate family (G1–G3 + their commutative twins, collapsed by
-// _canon_identity). A verified candidate matching one of these is labelled
-// `known`; anything else is `novel` (surfaced honestly, NEVER auto-folded —
-// fold stays the `hexa verify` g5 / PR path). We compare on the canonical key.
+// Known-identity cross-check (honesty c2: the 12-fn 2-term `A·B=C·D` vein is
+// MEASURED-EXHAUSTED — every bounded-unique product identity over THAT box is
+// already an ATLAS @F node; the 2026-06-27 upgrade added extended vocab idx
+// 12–17 + arity-3, and the extended-vocab universal sweep measured exactly 2
+// clean generators, BOTH classical/definitional — see vocab_universal_hunt.py
+// CLEAN_GENERATORS=2). The documented known set is the identity_engine selftest
+// sanity-gate family (G1–G3 + their commutative twins) PLUS the classical
+// extended-vocab universal generators (J₂=φ·ψ Jordan · core·rad=n definitional),
+// all collapsed by _canon_identity. A verified candidate matching one of these
+// is labelled `known`; anything else is `novel` (surfaced honestly, NEVER
+// auto-folded — fold stays the `hexa verify` g5 / PR path). Compare on canon key.
 fn _is_known_identity(canon: string) -> bool {
     // G1 phi*J2 = n*psi   (3,8 = 5,9)
     if canon == _canon_identity(3, 8, 5, 9) { return true }
@@ -408,6 +430,15 @@ fn _is_known_identity(canon: string) -> bool {
     if canon == _canon_identity(3, 8, 6, 9) { return true }
     // G3 sigma*psi = sig2*phi  (0,9 = 1,3)
     if canon == _canon_identity(0, 9, 1, 3) { return true }
+    // NOTE (2026-06-27 upgrade): the extended-vocab universal generators
+    // (J₂=φ·ψ Jordan · core·rad=n definitional) are 1-vs-2 / definitional shapes,
+    // NOT 2-term bounded-unique singletons, so they never reach this 2-term
+    // known-set (a candidate in `<fn>·<fn>=<fn>·<fn>` syntax cannot encode them).
+    // The universal-frame screen lives in identity_engine.hexa::is_universal2/3,
+    // and that sweep measured novel=0 (every clean generator classical). Hence
+    // this 2-term known set stays G1–G3 — any extended-vocab 2-term bounded-
+    // unique a generator DOES emit is reported `novel` honestly (then hand-
+    // triaged · fold stays hexa verify g5 / PR · never engine-written).
     return false
 }
 
