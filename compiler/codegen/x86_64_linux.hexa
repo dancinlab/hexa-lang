@@ -1269,6 +1269,15 @@ pub fn _is_cabi(fname: string) -> bool {
     if fname == "hxlcl_write" { return true }
     if fname == "hxlcl_fcntl" { return true }
     if fname == "hxlcl_mmap" { return true }
+    // errno-bearing chain batch D — DIVERGENCE syscalls: open_sys + getrusage.
+    // open_sys = arm64 AT_FDCWD-prepend at-variant (openat, per-arch arg tuple,
+    // exactly like mkdir→mkdirat / stat→fstatat); getrusage = plain uniform 2-arg
+    // (out-ptr usage*, only the NR varies, like read/lseek/waitpid). Both reuse
+    // the close errno-store discipline (raw-payload intrinsics + the already-
+    // whitelisted __errno_location for the Linux errno leg). time/poll/pipe are
+    // DEFERRED (return-semantics / arg-count / 2nd-return-reg divergence, trickier).
+    if fname == "hxlcl_open_sys" { return true }
+    if fname == "hxlcl_getrusage" { return true }
     return false
 }
 

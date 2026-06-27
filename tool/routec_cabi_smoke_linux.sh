@@ -62,7 +62,7 @@ HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
 echo "[routec-smoke-linux] (2) assert errno-bearing syscall symbols defined in routec.o …"
 syms="$(nm "$TMP/routec.o" 2>/dev/null || true)"
 miss=0
-for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap; do
+for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage; do
     if ! grep -qE " T hxlcl_${s}\$" <<<"$syms"; then
         echo "[routec-smoke-linux] NOT DEFINED (T): hxlcl_${s}" >&2; miss=$((miss+1))
     fi
@@ -82,6 +82,7 @@ cat > "$TMP/harness.c" <<'CEOF'
 #include <sys/stat.h>   /* struct stat — sized buffer for hxlcl_stat */
 #include <sys/wait.h>   /* waitpid options — for hxlcl_waitpid */
 #include <sys/mman.h>   /* PROT_/MAP_ flags / MAP_FAILED — for hxlcl_mmap */
+#include <sys/resource.h> /* struct rusage / RUSAGE_SELF — for hxlcl_getrusage */
 
 /* Route-C-emitted symbols under test (raw C-ABI prototypes). */
 extern int  hxlcl_close(int fd);
@@ -97,6 +98,10 @@ extern int  hxlcl_waitpid(int pid, int *status, int opts); /* → wait4(…, rus
 extern long hxlcl_write(int fd, const void *buf, unsigned long n);
 extern int  hxlcl_fcntl(int fd, int cmd, long arg);
 extern long hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off);
+/* batch D — divergence syscalls: open_sys (arm64 → openat(AT_FDCWD,…)) +
+ * getrusage (plain uniform 2-arg, out-ptr usage*). */
+extern int  hxlcl_open_sys(const char *path, int flags, int mode); /* arm64 → openat(AT_FDCWD,…) */
+extern int  hxlcl_getrusage(int who, void *usage);
 
 /* The emit covers ALL whitelisted Route C symbols (the script emits the whole
  * hxlcl_core.hexa), so the routec.o carries the composites' undefined-external
@@ -253,6 +258,31 @@ int main(void) {
         CK(((char *)ok)[0] == 'q', "mmap'd page writable (success)");
         munmap((void *)ok, (size_t)pg);
     }
+
+    /* batch D — open_sys / getrusage. ─────────────────────────────────────────
+     * open_sys — arm64 openat(AT_FDCWD,path,flags,mode) / x86_64 open(path,flags,
+     * mode). A NONEXISTENT path with O_RDONLY → -1 + ENOENT (errno-store value-
+     * exact; on arm64 this proves the AT_FDCWD prepend lands path/flags/mode in
+     * the right slots — a botched arg shape would fault or mis-route). Then a
+     * successful open of /dev/null → a valid fd (>= 0). */
+    errno = 0;
+    CK(hxlcl_open_sys("/nonexistent_xyz_open", O_RDONLY, 0) == -1, "open_sys(nonexistent) == -1");
+    CK(errno == ENOENT, "open_sys(nonexistent) sets errno == ENOENT (value-exact)");
+    errno = 0;
+    int ofd = hxlcl_open_sys("/dev/null", O_RDONLY, 0);
+    CK(ofd >= 0, "open_sys(/dev/null, O_RDONLY) >= 0 (success, AT_FDCWD path slot)");
+    if (ofd >= 0) hxlcl_close(ofd);
+
+    /* getrusage — plain uniform 2-arg (who, usage*). A successful RUSAGE_SELF
+     * fills the out-ptr and returns 0; the success path confirms the out-ptr
+     * (usage*) reaches the kernel and the return value is 0. An invalid `who`
+     * (a bogus large value) → -1 + EINVAL (errno-store value-exact). */
+    struct rusage ru;
+    errno = 0;
+    CK(hxlcl_getrusage(RUSAGE_SELF, &ru) == 0, "getrusage(RUSAGE_SELF) == 0 (success, out-ptr)");
+    errno = 0;
+    CK(hxlcl_getrusage(424242, &ru) == -1, "getrusage(invalid who) == -1");
+    CK(errno == EINVAL, "getrusage(invalid who) sets errno == EINVAL (value-exact)");
 
     if (fails == 0) { printf("[routec-smoke-linux] all Route C errno asserts PASS\n"); return 0; }
     printf("[routec-smoke-linux] %d assert(s) FAILED\n", fails);
