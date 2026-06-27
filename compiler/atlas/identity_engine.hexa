@@ -43,6 +43,17 @@
 //   ③ universal-in-[2,N] frame — is_universal2 / is_universal3 (forall-n in
 //      range), the genuinely productive frame for the sign/indicator vocab
 //      (vocab_universal_hunt.py). bounded-unique ⟺ forall is NOT claimed (c2).
+//   ④ FUNCTION-COMPOSITION frame (σ∘σ vein · 2026-06-27) — af_compose /
+//      comp_holds / comp_count / verify_composition: NESTED composition
+//      f(g(n))=af(af(n,g),f), the algebra the PRODUCT frame structurally cannot
+//      express (σ(σ(n))=2n has no product restatement). Sanity-gated by
+//      rediscovering classical superperfect {2,4,16,64,4096} (Suryanarayana
+//      1969 / OEIS A019279) + Mersenne σ∘σ=σ+n {3,7,31,127,8191}. MEASURED novel
+//      PROMOTABLE = 0 (DRY) — ATLAS/state/novel-dfs/composition_hunt.py: the vein
+//      yields ONLY the classical Mersenne-linked family; bounded-unique
+//      singletons are single-point accidents, |sol|≥3 sets are thin restricted-
+//      domain coincidences (forall UNPROVEN · c2). Same terminal as the product
+//      frame, reached honestly across a genuinely different algebra.
 // idx 0–11 are byte-for-byte the prior basis (G1–G3 sanity gates unchanged).
 
 // ── integer power (exact) ──
@@ -216,6 +227,88 @@ pub fn is_universal3(a, b, c, d, e, f, N) -> int {
     return 1
 }
 
+// ── function COMPOSITION frame (σ∘σ vein · exact-int · 2026-06-27) ─────
+// The un-swept vein the first-order PRODUCT frame (A·B=C·D, measured-exhausted
+// in ATLAS/README.md DFS r1–r4 and re-confirmed for the extended 18-fn vocab in
+// #4060) structurally CANNOT express: NESTED composition f(g(n)) = af(af(n,g),f),
+// NOT the value-product af(n,f)·af(n,g). Composition is a different algebra —
+// the superperfect law σ(σ(n))=2n has NO product-frame restatement.
+//   Reference-match (classical = open answer-key): superperfect (Suryanarayana
+//   1969 / OEIS A019279) — even n with σ(σ(n))=2n ⟺ n=2^(p−1), 2^p−1 Mersenne
+//   prime → {2,4,16,64,4096,…}; and σ(σ(n))=σ(n)+n ⟺ σ(n) prime (Mersenne
+//   characterization) → {3,7,31,127,8191,…}.
+//   Reference engine: ATLAS/state/novel-dfs/composition_hunt.py (18×18 ordered
+//   composition table × comparison frames A/B/C/D, exact-int, deterministic).
+//
+// Feasibility guard (overflow · matches composition_hunt.py MAXARG): the inner
+// image af(n,g) must lie in [1, 2000000]; high-growth σ₂,σ₃,J₂,J₃ compose past
+// a tractable i64 range and are skipped honestly.
+pub fn af_compose_feasible(n, g) -> int {
+    let inner = af(n, g)
+    if inner < 1 { return 0 }
+    if inner > 2000000 { return 0 }
+    return 1
+}
+
+// f(g(n)) = af(af(n,g), f). Caller MUST gate on af_compose_feasible(n,g) first
+// (an infeasible inner image yields a meaningless/overflowing result).
+pub fn af_compose(f, g, n) -> int {
+    return af(af(n, g), f)
+}
+
+// Does the composition relation hold at a SPECIFIC n? `mode` selects the
+// comparison form (reference-match composition_hunt.py frames A/B/C):
+//   mode 0: af_compose(f,g,n) == p·n          (k·n form · superperfect f=g=σ p=2)
+//   mode 1: af_compose(f,g,n) == af(n,p) + n  (h+n form · Mersenne f=g=σ p=σ idx0)
+//   mode 2: af_compose(f,g,n) == af(n,p)      (single-fn form · σ∘φ=n p=n idx5)
+// Returns 1 if the relation holds (and is feasible) at n, else 0.
+pub fn comp_holds(f, g, mode, p, n) -> int {
+    if af_compose_feasible(n, g) == 0 { return 0 }
+    let lhs = af_compose(f, g, n)
+    let rhs = 0
+    if mode == 0 { rhs = p * n }
+    if mode == 1 { rhs = af(n, p) + n }
+    if mode == 2 { rhs = af(n, p) }
+    if lhs == rhs { return 1 }
+    return 0
+}
+
+// Count solutions n∈[2,N] of the composition relation. Sparse classical
+// families (superperfect {2,4,16,64,4096}, Mersenne {3,7,31,127,8191}) have
+// count>1 — they are SETS, NOT bounded-unique singletons.
+pub fn comp_count(f, g, mode, p, N) -> int {
+    let count = 0
+    let n = 2
+    while n <= N {
+        if comp_holds(f, g, mode, p, n) == 1 { count = count + 1 }
+        n = n + 1
+    }
+    return count
+}
+
+// Bounded-UNIQUE composition verify (same contract as verify_identity): first
+// solution n over [2,N] when the solution set is a SINGLETON with n≥4 (degenerate
+// n=2,3 excluded); -1 if non-unique (count>1 — a sparse FAMILY or universal),
+// -2 if none. HONESTY (c2): bounded-unique ⟺ forall-n is UNPROVEN. Sparse
+// classical families (superperfect) return -1 here (they are SETS) — use
+// comp_count for those. Reference: composition_hunt.py STRUCTURED screen.
+pub fn verify_composition(f, g, mode, p, N) -> int {
+    let first = 0
+    let count = 0
+    let n = 2
+    while n <= N {
+        if comp_holds(f, g, mode, p, n) == 1 {
+            count = count + 1
+            if count == 1 { first = n }
+            if count > 1 { return -1 }
+        }
+        n = n + 1
+    }
+    if count == 0 { return -2 }
+    if first >= 4 { return first }
+    return -1
+}
+
 // ── selftest: prove the absorbed engine is a REAL verifier (not rubber-stamp).
 //    G-gates rediscover known ATLAS @F identities (bounded-unique @ n=4);
 //    C-controls must be rejected (universal / no-solution). ──
@@ -288,6 +381,36 @@ fn main() {
     fails = fails + gate("T1 n·σ²=J₂·rad² ⟺n=6", verify_identity3(5, 0, 0, 8, 7, 7, N), 6)
     // Negative control: n·n·n = n·n·n is universal -> rejected (-1).
     fails = fails + gate("T2 n³=n³ (universal)", verify_identity3(5, 5, 5, 5, 5, 5, N), -1)
+
+    // ── COMPOSITION FRAME GATES (σ∘σ vein · 2026-06-27) ─────────────────
+    // The composition algebra the product frame cannot express. Sanity-gate
+    // by REDISCOVERING the classical superperfect set {2,4,16,64,4096} and the
+    // Mersenne characterization {3,7,31,127,8191} — proving af_compose is a
+    // correct exact-int evaluator (not a rubber-stamp). idx: σ=0, φ=3, n=5.
+    // Reference: ATLAS/state/novel-dfs/composition_hunt.py (measured novel=0 DRY).
+    println("COMPOSITION FRAME GATES (σ∘σ vein · classical rediscovery · Suryanarayana 1969):")
+    // CMP1 superperfect membership: σ(σ(n))=2n holds at every superperfect n…
+    fails = fails + gate("CMP1 σ∘σ=2n @ 2  (superperfect)",  comp_holds(0, 0, 0, 2, 2), 1)
+    fails = fails + gate("CMP1 σ∘σ=2n @ 4",                  comp_holds(0, 0, 0, 2, 4), 1)
+    fails = fails + gate("CMP1 σ∘σ=2n @ 16",                 comp_holds(0, 0, 0, 2, 16), 1)
+    fails = fails + gate("CMP1 σ∘σ=2n @ 64",                 comp_holds(0, 0, 0, 2, 64), 1)
+    fails = fails + gate("CMP1 σ∘σ=2n @ 4096",               comp_holds(0, 0, 0, 2, 4096), 1)
+    // …and is REJECTED at a non-superperfect n (8 = 2³ is NOT superperfect).
+    fails = fails + gate("CMP1n σ∘σ=2n NOT @ 8",             comp_holds(0, 0, 0, 2, 8), 0)
+    // CMP2 superperfect set SIZE in [2,N] = exactly 5 (sparse family, NOT unique).
+    fails = fails + gate("CMP2 |σ∘σ=2n in[2,N]| = 5",        comp_count(0, 0, 0, 2, N), 5)
+    // CMP3 Mersenne characterization σ(σ(n))=σ(n)+n at the Mersenne indices.
+    fails = fails + gate("CMP3 σ∘σ=σ+n @ 7  (Mersenne)",     comp_holds(0, 0, 1, 0, 7), 1)
+    fails = fails + gate("CMP3 σ∘σ=σ+n @ 8191",              comp_holds(0, 0, 1, 0, 8191), 1)
+    fails = fails + gate("CMP3 |σ∘σ=σ+n in[2,N]| = 5",       comp_count(0, 0, 1, 0, N), 5)
+    // CMP4 σ(φ(n))=n classical (φ-fixed-σ): holds at 3,15,28,255,744 (sparse).
+    fails = fails + gate("CMP4 σ∘φ=n @ 15  (classical)",     comp_holds(0, 3, 2, 5, 15), 1)
+    // CMP5 bounded-UNIQUE composition singleton: σ(φ(n))=2n ⟺ n=1209 only in
+    // [2,N] (composition_hunt.py · the lone bounded-unique singleton survivor).
+    fails = fails + gate("CMP5 σ∘φ=2n ⟺ n=1209 (bnd-uniq)", verify_composition(0, 3, 0, 2, N), 1209)
+    // CMP-neg: σ∘σ=2n is a SET (count 5), so the bounded-UNIQUE verify rejects
+    // it as non-unique (-1) — honest: superperfect is a family, not a singleton.
+    fails = fails + gate("CMP-neg σ∘σ=2n non-unique → -1",   verify_composition(0, 0, 0, 2, N), -1)
     println("")
     if fails == 0 {
         println("RESULT: PASS - native exact-int identity verifier absorbed into binary")
