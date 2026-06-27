@@ -1,145 +1,206 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="ko">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>hexa-lang — Architecture (SSOT)</title>
+<title>sidecar — 아키텍처</title>
+<!--
+  Self-contained viewer for ARCHITECTURE.json (the SSOT). Zero dependencies.
+  Renders the tree as a column grid: `columns[]` defines the columns; the column
+  flagged `tree:true` draws the tree branches, the rest align as separate columns.
+  Edit the JSON, reload — this file holds no data.
+  Local: `python3 -m http.server` then open http://localhost:8000/ARCHITECTURE.html
+         (file:// blocks fetch; a drag&drop fallback is offered.)
+-->
 <style>
   :root {
-    --bg: #0d1117; --fg: #c9d1d9; --muted: #8b949e; --accent: #58a6ff;
-    --border: #30363d; --code-bg: #161b22; --th-bg: #161b22; --row-alt: #11161d;
-    --green: #3fb950; --yellow: #d29922;
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --fg:#e6edf3;
+    --dim:#8b949e; --accent:#58a6ff; --leaf:#7ee787; --head:#1f2630;
   }
   @media (prefers-color-scheme: light) {
-    :root {
-      --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --accent: #0969da;
-      --border: #d1d9e0; --code-bg: #f6f8fa; --th-bg: #f6f8fa; --row-alt: #f6f8fa;
-      --green: #1a7f37; --yellow: #9a6700;
-    }
+    :root { --bg:#fff; --panel:#f6f8fa; --line:#d0d7de; --fg:#1f2328; --dim:#656d76; --accent:#0969da; --leaf:#1a7f37; --head:#eaeef2; }
   }
   * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--fg);
-    font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-  }
-  .wrap { max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem 6rem; }
-  header.top { border-bottom: 1px solid var(--border); padding-bottom: 1rem; margin-bottom: 1.5rem; }
-  header.top h1 { margin: 0 0 .25rem; font-size: 1.7rem; }
-  header.top .role { color: var(--muted); font-size: .92rem; }
-  header.top .meta { color: var(--muted); font-size: .82rem; margin-top: .6rem; }
-  header.top .meta code { font-size: .82rem; }
-  .toc {
-    background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
-    padding: .75rem 1rem; margin-bottom: 2rem;
-  }
-  .toc strong { display: block; font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: .4rem; }
-  .toc a { color: var(--accent); text-decoration: none; margin-right: 1rem; font-size: .9rem; }
-  .toc a:hover { text-decoration: underline; }
-  h2 { font-size: 1.35rem; margin: 2.5rem 0 1rem; padding-top: .5rem; border-bottom: 1px solid var(--border); padding-bottom: .35rem; }
-  h3 { font-size: 1.08rem; margin: 1.8rem 0 .8rem; color: var(--fg); }
-  h4 { font-size: .98rem; margin: 1.4rem 0 .6rem; color: var(--muted); }
-  p { margin: .8rem 0; }
-  ul { margin: .8rem 0; padding-left: 1.4rem; }
-  li { margin: .5rem 0; }
-  code {
-    background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px;
-    padding: .1em .35em; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: .85em;
-  }
-  pre {
-    background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
-    padding: 1rem; overflow-x: auto; line-height: 1.45;
-  }
-  pre code { background: none; border: none; padding: 0; font-size: .82rem; }
-  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .88rem; display: block; overflow-x: auto; }
-  th, td { border: 1px solid var(--border); padding: .5rem .7rem; text-align: left; vertical-align: top; }
-  th { background: var(--th-bg); font-weight: 600; }
-  tr:nth-child(even) td { background: var(--row-alt); }
-  strong { font-weight: 600; }
-  .ok { color: var(--green); } .warn { color: var(--yellow); }
-  footer { margin-top: 4rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--muted); font-size: .82rem; }
-  #err { color: #f85149; padding: 1rem; border: 1px solid #f85149; border-radius: 8px; background: rgba(248,81,73,.08); }
+  body { margin:0; background:var(--bg); color:var(--fg);
+    font:13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  header { position:sticky; top:0; z-index:5; background:var(--panel);
+    border-bottom:1px solid var(--line); padding:12px 18px; }
+  h1 { margin:0 0 3px; font-size:16px; }
+  .summary { color:var(--dim); font-size:12px; max-width:80ch; }
+  .bar { margin-top:9px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  input[type=search]{ flex:1 1 220px; min-width:160px; background:var(--bg); color:var(--fg);
+    border:1px solid var(--line); border-radius:6px; padding:6px 10px; font:inherit; }
+  button{ background:var(--bg); color:var(--fg); border:1px solid var(--line);
+    border-radius:6px; padding:6px 12px; font:inherit; cursor:pointer; }
+  button:hover{ border-color:var(--accent); color:var(--accent); }
+  main{ padding:0 18px 60px; }
+  .grid{ display:grid; width:max-content; min-width:100%; }
+  .cell{ padding:3px 14px 3px 0; border-bottom:1px solid var(--line); white-space:pre; }
+  .cell.wrap{ white-space:normal; max-width:60ch; }
+  .head{ position:sticky; top:84px; background:var(--head); font-weight:700;
+    border-bottom:2px solid var(--line); z-index:4; padding:6px 14px 6px 0; }
+  .tree{ white-space:pre; }
+  .branch{ color:var(--dim); }
+  .tw{ color:var(--dim); cursor:pointer; }
+  .nm{ font-weight:600; cursor:pointer; }
+  .nm.leaf{ color:var(--leaf); font-weight:500; }
+  .colrole{ color:var(--fg); }
+  .colsub{ color:var(--dim); }
+  .colmuted{ color:var(--dim); }
+  .rowhover:hover{ background:var(--panel); }
+  .hidden{ display:none; }
+  mark{ background:#bb800966; color:inherit; border-radius:2px; }
+  #err{ color:#f85149; padding:20px; max-width:72ch; }
+  #err code{ background:var(--panel); padding:1px 5px; border-radius:4px; }
+  #drop{ margin-top:10px; padding:14px; border:1px dashed var(--line); border-radius:8px; color:var(--dim); }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div id="err" style="display:none"></div>
-  <header class="top" id="head"></header>
-  <nav class="toc" id="toc"></nav>
-  <main id="body"></main>
-  <footer id="foot"></footer>
-</div>
+<header>
+  <h1 id="title">sidecar — 아키텍처</h1>
+  <div class="summary" id="summary"></div>
+  <div class="bar">
+    <input type="search" id="q" placeholder="검색 (모든 컬럼)…" autocomplete="off">
+    <button id="expand">전체 펼침</button>
+    <button id="collapse">전체 접기</button>
+    <span class="colmuted" id="meta"></span>
+  </div>
+</header>
+<main>
+  <div id="tree"></div>
+  <div id="err" class="hidden"></div>
+</main>
 <script>
-// Minimal inline-markdown renderer: `code`, **bold**, [text](url). HTML-escaped first.
-function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-function inline(s){
-  let t = esc(s);
-  t = t.replace(/`([^`]+)`/g, (_,c)=>'<code>'+c+'</code>');
-  t = t.replace(/\*\*([^*]+)\*\*/g, (_,c)=>'<strong>'+c+'</strong>');
-  t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_,txt,url)=>'<a href="'+url+'">'+txt+'</a>');
-  // light status coloring
-  t = t.replace(/✅/g,'<span class="ok">✅</span>').replace(/🟡/g,'<span class="warn">🟡</span>');
-  return t;
-}
-function slug(s){ return s.toLowerCase().replace(/[^\w]+/g,'-').replace(/^-|-$/g,''); }
+const SRC = "ARCHITECTURE.json";
+let DOC, COLS, TREEKEY, rows = [], collapsed = new Set();
 
-// A table cell may be a string OR a nested array of child items (c4: piled cells
-// split into one node per logical item). Render arrays as <ul> recursively so an
-// item that itself decomposes further nests to arbitrary depth.
-function cell(c){ return Array.isArray(c) ? '<ul>'+c.map(i=>'<li>'+cell(i)+'</li>').join('')+'</ul>' : inline(c); }
+function el(t, c, x){ const e=document.createElement(t); if(c)e.className=c; if(x!=null)e.textContent=x; return e; }
 
-function renderBlocks(blocks, depth){
-  let html = '';
-  for (const b of blocks){
-    if (b.type === 'prose'){ html += '<p>'+inline(b.text)+'</p>'; }
-    else if (b.type === 'list'){
-      html += '<ul>' + b.items.map(i=>'<li>'+cell(i)+'</li>').join('') + '</ul>';
-    }
-    else if (b.type === 'codeblock'){
-      html += '<pre><code>'+esc(b.text)+'</code></pre>';
-    }
-    else if (b.type === 'table'){
-      html += '<table><thead><tr>' + b.columns.map(c=>'<th>'+inline(c)+'</th>').join('') + '</tr></thead><tbody>';
-      html += b.rows.map(r=>'<tr>'+r.map(c=>'<td>'+cell(c)+'</td>').join('')+'</tr>').join('');
-      html += '</tbody></table>';
-    }
-    else if (b.type === 'subsection'){
-      const h = depth >= 1 ? 'h4' : 'h3';
-      html += '<'+h+'>'+inline(b.title)+'</'+h+'>';
-      html += renderBlocks(b.blocks, (depth||0)+1);
-    }
-  }
-  return html;
+// Flatten the tree into rows, computing each node's `tree` branch prefix.
+function flatten(node, prefix, isLast, depth, parentId, idRef){
+  const id = idRef.n++;
+  const connector = depth === 0 ? "" : (isLast ? "└─ " : "├─ ");
+  const kids = node.children || [];
+  rows.push({ id, depth, parentId, node, branch: prefix + connector, hasKids: kids.length>0 });
+  const childPrefix = depth === 0 ? "" : prefix + (isLast ? "   " : "│  ");
+  kids.forEach((c,i)=> flatten(c, childPrefix, i===kids.length-1, depth+1, id, idRef));
 }
 
-fetch('ARCHITECTURE.json', {cache:'no-store'})
-  .then(r => { if(!r.ok) throw new Error('HTTP '+r.status+' — serve via `python3 serve.py` (file:// blocks fetch)'); return r.json(); })
-  .then(doc => {
-    const m = doc.meta;
-    document.title = m.title;
-    document.getElementById('head').innerHTML =
-      '<h1>'+inline(m.title)+'</h1>' +
-      '<div class="role">'+inline(m.role)+'</div>' +
-      '<div class="meta">SSOT: <code>ARCHITECTURE.json</code> · viewer: <code>'+m.viewer+'</code> · serve: <code>'+m.serve+'</code><br>'+
-      'history → <a href="CHANGELOG.md">CHANGELOG.md</a> · governance → <a href="CLAUDE.md">CLAUDE.md</a> · update policy: '+inline(m.update_policy)+'</div>';
+function colClass(key){
+  if (key === COLS[1]?.key) return "colrole";
+  if (key === COLS[2]?.key) return "colsub";
+  return "colmuted";
+}
 
-    document.getElementById('toc').innerHTML =
-      '<strong>Sections</strong>' +
-      doc.sections.map(s=>'<a href="#'+s.id+'">'+inline(s.title)+'</a>').join('');
+function build(doc){
+  DOC = doc;
+  COLS = doc.columns || [{key:"name",tree:true},{key:"role"}];
+  TREEKEY = (COLS.find(c=>c.tree) || COLS[0]).key;
+  document.getElementById("title").textContent = doc.title || "아키텍처";
+  document.getElementById("summary").textContent = doc.summary || "";
+  document.getElementById("meta").textContent = "schema "+(doc.schemaVersion||"?")+" · SSOT "+SRC;
 
-    document.getElementById('body').innerHTML =
-      doc.sections.map(s =>
-        '<section id="'+s.id+'"><h2>'+inline(s.title)+'</h2>'+renderBlocks(s.blocks,0)+'</section>'
-      ).join('');
+  rows = [];
+  flatten(doc.tree || doc.node, "", true, 0, -1, {n:0});
 
-    document.getElementById('foot').innerHTML =
-      'Generated viewer for <code>'+m.project+'</code> architecture. This page renders the JSON SSOT — edit <code>ARCHITECTURE.json</code>, never this HTML.';
-  })
-  .catch(e => {
-    const el = document.getElementById('err');
-    el.style.display = 'block';
-    el.textContent = 'Failed to load ARCHITECTURE.json — ' + e.message;
+  const grid = el("div","grid");
+  grid.style.gridTemplateColumns = "max-content " + COLS.slice(1).map(()=>"max-content").join(" ");
+  // header row
+  COLS.forEach(c => grid.appendChild(el("div","cell head", c.label || c.key)));
+  // data rows
+  rows.forEach(r => {
+    // tree column
+    const left = el("div","cell tree rowhover");
+    left.dataset.id = r.id;
+    const br = el("span","branch", r.branch);
+    left.appendChild(br);
+    if (r.hasKids){
+      const tw = el("span","tw", collapsed.has(r.id) ? "▸ " : "▾ ");
+      tw.onclick = () => { collapsed.has(r.id) ? collapsed.delete(r.id) : collapsed.add(r.id); refresh(); };
+      left.appendChild(tw);
+    }
+    const nm = el("span","nm"+(r.hasKids?"":" leaf"), r.node[TREEKEY] || "");
+    left.appendChild(nm);
+    grid.appendChild(left);
+    // other columns
+    COLS.slice(1).forEach(c => {
+      const v = r.node[c.key] || "";
+      const cell = el("div","cell wrap "+colClass(c.key)+" rowhover", v);
+      cell.dataset.id = r.id;
+      grid.appendChild(cell);
+    });
   });
+
+  const tree = document.getElementById("tree");
+  tree.textContent = "";
+  tree.appendChild(grid);
+  refresh();
+}
+
+// A row is hidden if any ancestor is collapsed.
+function isVisible(r){
+  let p = r.parentId;
+  while (p !== -1){
+    if (collapsed.has(p)) return false;
+    p = rows[p].parentId;
+  }
+  return true;
+}
+
+function refresh(filterTerm){
+  const q = (filterTerm||"").trim().toLowerCase();
+  // recompute toggle glyphs
+  document.querySelectorAll(".grid .tree .tw").forEach(tw=>{
+    const id = +tw.parentElement.dataset.id;
+    tw.textContent = collapsed.has(id) ? "▸ " : "▾ ";
+  });
+  let matchIds = null;
+  if (q){
+    matchIds = new Set();
+    rows.forEach(r=>{
+      const hay = COLS.map(c=> (r.node[c.key]||"")).join(" ").toLowerCase();
+      if (hay.includes(q)){ let id=r.id; while(id!==-1){ matchIds.add(id); id=rows[id].parentId; } }
+    });
+  }
+  rows.forEach(r=>{
+    const show = (q ? matchIds.has(r.id) : isVisible(r));
+    document.querySelectorAll('.grid .cell[data-id="'+r.id+'"]').forEach(c=>{
+      c.classList.toggle("hidden", !show);
+    });
+  });
+}
+
+function setAll(collapse){
+  collapsed = new Set();
+  if (collapse) rows.forEach(r=>{ if(r.hasKids) collapsed.add(r.id); });
+  refresh();
+}
+
+function showError(msg, allowDrop){
+  const err = document.getElementById("err");
+  err.classList.remove("hidden"); err.innerHTML = msg;
+  if (allowDrop){
+    const drop = el("div"); drop.id="drop";
+    drop.textContent = "또는 여기로 ARCHITECTURE.json 파일을 드래그&드롭 하세요.";
+    err.appendChild(drop);
+    drop.ondragover = e=>{ e.preventDefault(); drop.style.borderColor="var(--accent)"; };
+    drop.ondragleave = ()=> drop.style.borderColor="var(--line)";
+    drop.ondrop = e=>{ e.preventDefault(); const f=e.dataTransfer.files[0]; if(!f)return;
+      const rd=new FileReader(); rd.onload=()=>{ try{ err.classList.add("hidden"); build(JSON.parse(rd.result)); }
+        catch(x){ showError("JSON 파싱 실패: "+x.message,false); } }; rd.readAsText(f); };
+  }
+}
+
+fetch(SRC).then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
+  .then(build)
+  .catch(e=> showError(
+    "<b>"+SRC+" 를 불러오지 못했습니다.</b> ("+e.message+")<br><br>"+
+    "<code>file://</code> 로 직접 열면 보안상 fetch가 막힙니다. 같은 폴더에서<br>"+
+    "<code>python3 -m http.server</code> 후 <code>http://localhost:8000/ARCHITECTURE.html</code> 로 여세요.", true));
+
+document.getElementById("q").addEventListener("input", e=> refresh(e.target.value));
+document.getElementById("expand").onclick = ()=> setAll(false);
+document.getElementById("collapse").onclick = ()=> setAll(true);
 </script>
 </body>
 </html>
