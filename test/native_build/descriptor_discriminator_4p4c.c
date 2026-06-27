@@ -25,15 +25,19 @@
  *       self/runtime_core.c -lm
  * Run: for i in $(seq 1 20); do /tmp/descdisc; echo "rc=$?"; done
  */
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <pthread.h>
-#include <stdint.h>
 
-/* runtime_core.c is a #include amalgam body — it expects to be compiled inside an
- * outer TU that has already pulled in the platform headers + forward decls. We
- * splice it directly; the harness provides main(). */
+/* Self-contained TU build (the designed standalone runtime_core path):
+ *   runtime_core_sysheaders.h — system header surface (stdio/stdlib/…)
+ *   runtime_core_hxlcl_shim.c — the 182-fn hxlcl_* libc floor (static)
+ *   runtime_core.c            — the CORE-tier runtime (HexaVal + array prims +
+ *                               my TAG_ARRAY_I64 discriminator + poly readers)
+ * runtime_core.c self-defines HexaVal/HexaArr/HexaArrI64/HX_* and the CORE fns
+ * the harness calls (hexa_int, hexa_arr_i64_new_esc, hexa_arr_poly_*). HI-tier
+ * fns live in runtime.c and are NOT referenced here. Built with
+ * -DHEXA_PACK_ESCAPING so the poly path + esc constructor are present. */
+#include "runtime_core_sysheaders.h"
+#include "runtime_core_hxlcl_shim.c"
 #include "runtime_core.c"
 
 #define NPROD 4
