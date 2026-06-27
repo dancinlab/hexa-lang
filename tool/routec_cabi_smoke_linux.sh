@@ -62,7 +62,7 @@ HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
 echo "[routec-smoke-linux] (2) assert errno-bearing syscall symbols defined in routec.o …"
 syms="$(nm "$TMP/routec.o" 2>/dev/null || true)"
 miss=0
-for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe time poll clock_gettime execve fork; do
+for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe time poll clock_gettime execve fork getenv; do
     if ! grep -qE " T hxlcl_${s}\$" <<<"$syms"; then
         echo "[routec-smoke-linux] NOT DEFINED (T): hxlcl_${s}" >&2; miss=$((miss+1))
     fi
@@ -126,6 +126,14 @@ extern int  hxlcl_execve(const char *path, char *const argv[], char *const envp[
  * fork → __NR_clone=220 with flags=SIGCHLD=17 (every clone arg past flags is 0 so
  * the CONFIG_CLONE_BACKWARDS order is moot). Live fork+_exit+waitpid roundtrip. */
 extern int  hxlcl_fork(void);
+/* Wall 2-b ENV — getenv: the FIRST Route C body to reference an extern DATA symbol.
+ * It resolves the libc `environ` global through the GOT (new __hx_environ_ptr
+ * intrinsic → x86_64 `mov rax,[rip+environ@GOTPCREL]`, R_X86_64_(REX_)GOTPCREL) and
+ * byte-walks the char** array. THIS Linux run is the named-DATA reloc's assemble +
+ * link + resolve proof on x86_64 (the darwin sibling proves the @GOTPAGE form).
+ * Not errno-bearing; returns a raw char* into the live environ block (or NULL).
+ * `environ` comes from libc/crt — the routec.o's GOT ref resolves at link, no stub. */
+extern char *hxlcl_getenv(const char *name);
 
 /* The emit covers ALL whitelisted Route C symbols (the script emits the whole
  * hxlcl_core.hexa), so the routec.o carries the composites' undefined-external
@@ -418,6 +426,27 @@ int main(void) {
             CK(got == cpid, "waitpid reaps the exact child pid (live fork)");
             CK(WIFEXITED(wst) && WEXITSTATUS(wst) == 0, "child _exit(0) reaped clean (fork roundtrip)");
         }
+    }
+
+    /* Wall 2-b — getenv via the __hx_environ_ptr named-data GOT intrinsic + byte-walk.
+     * This is the x86_64 R_X86_64_GOTPCREL-on-`environ` proof: a clean link means the
+     * named-data reloc assembled and the linker bound it to libc's environ. Value-exact
+     * vs libc getenv() AND content-exact for a set var; absent key → NULL; a prefix of a
+     * real key → NULL (break-free early-stop must not match a longer entry nor over-read
+     * a shorter one). The returned pointer is INTO the same live environ block libc walks
+     * → pointer identity holds (a wrong GOT deref depth or ABI leak would crash here). */
+    {
+        CK(hxlcl_getenv("__HX_NONEXISTENT_KEY_ZZZ__") == NULL, "getenv(absent key) → NULL");
+        char *hp = hxlcl_getenv("PATH");
+        char *lp = getenv("PATH");
+        CK(hp != NULL, "getenv(\"PATH\") != NULL");
+        CK(hp != NULL && hp[0] != 0, "getenv(\"PATH\") non-empty");
+        CK(hp == lp, "getenv(\"PATH\") == libc getenv (same environ-block pointer, value-exact)");
+        setenv("HX_SMOKE_ENVVAR", "route-c-wall2b", 1);
+        char *sv = hxlcl_getenv("HX_SMOKE_ENVVAR");
+        CK(sv != NULL && strcmp(sv, "route-c-wall2b") == 0, "getenv(set var) == value (content-exact)");
+        setenv("HX_SMOKE_LONGKEY", "L", 1);
+        CK(hxlcl_getenv("HX_SMOKE_LONG") == NULL, "getenv(prefix of a real key) → NULL (early-stop, no over-read)");
     }
 
     if (fails == 0) { printf("[routec-smoke-linux] all Route C errno asserts PASS\n"); return 0; }

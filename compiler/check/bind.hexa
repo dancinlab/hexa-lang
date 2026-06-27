@@ -1254,6 +1254,19 @@ fn _bind_builtin_names() -> [string] {
         // special-case (mirror of __hx_syscall6 + dual-store). ADD-only leaf:
         // the compiler never calls it.
         "__hx_syscall6_out2",
+        // RFC061 Route C Wall 2-b — extern-data named-data reloc (2026-06-27):
+        // `__hx_environ_ptr()` is a 0-arg intrinsic that loads the ADDRESS of the
+        // libc `extern char **environ` global THROUGH THE GOT (x86_64 `mov rax,
+        // [rip+environ@GOTPCREL]` → R_X86_64_(REX_)GOTPCREL; arm64 `adrp/ldr
+        // …@GOTPAGE/@GOTPAGEOFF` → ARM64_RELOC_GOT_LOAD_*), boxed as a TAG_INT
+        // payload. It returns `&environ` (char***), so ONE __hx_ptr_load64 yields
+        // the char** array base — letting hxlcl_getenv walk the environment with a
+        // pure byte-compare instead of the libc-`environ`-global shim body. This is
+        // the FIRST named-data (vs named-text/call) GOT reloc a Route C body needs;
+        // it is frozen-SAFE (parses as an ordinary identifier-call, like the 24
+        // syscall intrinsics + __hx_syscall6_out2) and DCE-never-drops the STMT_CALL.
+        // arm64 + x86_64 STMT_CALL special-case. ADD-only: the compiler never calls it.
+        "__hx_environ_ptr",
         // RT-NATIVE M4 ARRAY-R2 (2026-06-17): `__hx_make_val(tag, payload)` — the
         // symmetric write-half of `__hx_tag`. Builds a {tag, payload} 16-byte HexaVal
         // from two raw int64 words WITHOUT boxing-tag-loss, so a payload word loaded

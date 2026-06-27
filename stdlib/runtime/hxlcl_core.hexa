@@ -364,6 +364,87 @@ pub fn hxlcl_strstr(h: HexaVal, n: HexaVal) -> int {
     return 0                                  // not found → NULL
 }
 
+// ── ENV FAMILY (Route C Wall 2-b · extern-data named-data GOT reloc) ───────────
+//
+// hxlcl_getenv: look up `name` in the process environment, returning a pointer to
+// its value (the bytes after `=`), or NULL. BYTE-FAITHFUL to the frozen 0-libc
+// floor body self/runtime_core_hxlcl_shim.c (HEXA_ZEROC_SHIM_BYTEID_EMIT
+// hxlcl_getenv, lines 447-460):
+//   if(!name) return 0; e=environ; if(!e) return 0; nlen=strlen(name);
+//   while(*e){ entry=*e; i=0; while(i<nlen && entry[i] && entry[i]==name[i]) i++;
+//              if(i==nlen && entry[i]=='=') return entry+nlen+1; e++; }
+//   return 0;
+//
+// The ONE new substrate piece is `__hx_environ_ptr()` — a 0-arg intrinsic that
+// loads the ADDRESS of the libc `extern char **environ` global through the GOT
+// (x86_64 `mov rax,[rip+environ@GOTPCREL]` / arm64 `adrp+ldr …@GOTPAGE`), boxed as
+// a TAG_INT payload. It returns `&environ` (char***), so ONE __hx_ptr_load64
+// dereference yields `environ` itself (the char** array base). Everything after is
+// the proven byte-walk: __hx_ptr_load64 steps the char* slots (+8 each),
+// __hx_ptr_load8 compares key bytes. The inner key-compare uses the break-free
+// `cont`-flag form (mirror of hxlcl_strstr) so it NEVER reads past a short entry's
+// NUL — exactly the early-stop the C `while(i<nlen && entry[i] && …)` guarantees.
+// The `int` return carries the raw value pointer (entry+nlen+1) unboxed, the same
+// class as strchr/strstr returning a raw char* in rax/x0. '=' == 61.
+//
+// NOT @pure (touches external environ memory) · NO formula → no @cite/@grace (a
+// byte-walk, like strchr/strstr). getenv-ONLY this round; setenv is the deferred
+// sibling (it MUTATES environ — realloc/putenv array-rebuild semantics, a heavier
+// wall) and stays on the libc-`setenv` shim delegate for now.
+pub fn hxlcl_getenv(name: HexaVal) -> int {
+    let pname = __hx_payload_add(name, 0)        // char* name (payload word)
+    if __hx_payload_eq(pname, 0) {
+        return 0                                  // NULL name → NULL
+    }
+    // nlen = strlen(name)
+    let mut nlen = 0
+    let mut nc = __hx_ptr_load8(pname, 0)         // name[0]
+    while __hx_payload_ne(nc, 0) {
+        nlen = __hx_payload_add(nlen, 1)
+        nc = __hx_ptr_load8(pname, nlen)          // name[nlen]
+    }
+    let envpp = __hx_environ_ptr()                // &environ (char***)
+    let mut e = __hx_ptr_load64(envpp, 0)         // environ (char** array base)
+    if __hx_payload_eq(e, 0) {
+        return 0                                  // environ == NULL → NULL
+    }
+    let mut entry = __hx_ptr_load64(e, 0)         // *e (first char* entry)
+    while __hx_payload_ne(entry, 0) {             // while(*e)
+        // i = 0; while(i<nlen && entry[i] && entry[i]==name[i]) i++;  (break-free)
+        let mut i = 0
+        let mut cont = 1
+        while __hx_payload_ne(cont, 0) {
+            if __hx_payload_ge(i, nlen) {
+                cont = 0                          // i==nlen → full key prefix matched
+            }
+            if __hx_payload_ne(cont, 0) {
+                let ce = __hx_ptr_load8(entry, i) // entry[i]
+                if __hx_payload_eq(ce, 0) {
+                    cont = 0                      // entry shorter than name → stop
+                }
+                if __hx_payload_ne(cont, 0) {
+                    let cn = __hx_ptr_load8(pname, i)  // name[i]
+                    if __hx_payload_ne(ce, cn) {
+                        cont = 0                  // byte mismatch → stop
+                    } else {
+                        i = __hx_payload_add(i, 1)
+                    }
+                }
+            }
+        }
+        if __hx_payload_eq(i, nlen) {             // i==nlen (full key matched)
+            let eqc = __hx_ptr_load8(entry, nlen) // entry[nlen]
+            if __hx_payload_eq(eqc, 61) {         // '=' → this is our variable
+                let base = __hx_payload_add(entry, nlen)
+                return __hx_payload_add(base, 1)  // entry + nlen + 1 (value ptr)
+            }
+        }
+        e = __hx_payload_add(e, 8)                // e++ (next char* slot)
+        entry = __hx_ptr_load64(e, 0)             // *e
+    }
+    return 0                                       // not found → NULL
+}
+
 // ── PARSE FAMILY (Route C batch G · pure-compute leaf with an OUT-PARAM write) ──
 //
 // hxlcl_strtoll is the string family's last leaf: a from-scratch string→long long
