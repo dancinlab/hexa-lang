@@ -2435,6 +2435,19 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r10", 0) }
             return
         }
+        // RFC inline-asm rung 1: `__hx_asm_nop()` → int HexaVal 0. The first named-
+        // opcode inline-assembly intrinsic — emits a literal `nop` (0x90, encoded by
+        // elf_x86_64.hexa) inline, then returns int 0 so the call composes as an
+        // ordinary expression. 0-arg leaf, same emit shape as __hx_syscall0 minus
+        // the trap. ADD-only: the compiler never calls it → DEFAULT byte-identical.
+        // state/rfc_inline_asm.md. reference: Rust core::hint::spin_loop / Zig asm.
+        if s.op == "__hx_asm_nop" {
+            _x86_buf.push(_x86_instr0("nop", "__hx_asm_nop: inline asm nop"))
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r10"), _x86_op_imm(0),
+                             "__hx_asm_nop: result = int 0"))
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r10", 0) }
+            return
+        }
         // UNLOCK-9: `__hx_syscall6(num, a0..a5)` → int HexaVal. x86_64 Linux
         // syscall arg registers: rdi, rsi, rdx, r10, r8, r9; number in rax;
         // result in rax. (rcx/r11 are CLOBBERED by the `syscall` instruction

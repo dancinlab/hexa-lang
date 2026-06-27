@@ -74,6 +74,32 @@ fn asm_balloon_check(source_text: str, threshold: int) -> int {
     return 1
 }
 
+// ── RFC inline-asm: native-emit intrinsic registry ────────────────────────
+// The release-safe inline-asm surface (state/rfc_inline_asm.md) is the named-
+// opcode intrinsic family `__hx_asm_<mnemonic>`, dispatched in native codegen
+// exactly like `__hx_syscall0`. This registry is the SSOT contract mapping a
+// portable mnemonic to its codegen intrinsic name, and tracking which rung each
+// mnemonic is wired at. (Pure string production — no codegen-side glue, mirrors
+// the G-F4 firmware-asm discipline above.)
+
+// CLEAN-ROOM: portable mnemonic → the `__hx_asm_<m>` native-codegen intrinsic
+// name. "" = not a recognised inline-asm mnemonic.
+fn asm_native_intrinsic(mnemonic: str) -> str {
+    if mnemonic == "nop"   { return "__hx_asm_nop"   }
+    if mnemonic == "pause" { return "__hx_asm_pause" }  // rung 2 (x86 PAUSE / arm64 YIELD)
+    if mnemonic == "fence" { return "__hx_asm_fence" }  // rung 2 (x86 MFENCE / arm64 DMB)
+    if mnemonic == "rdtsc" { return "__hx_asm_rdtsc" }  // rung 3 (x86 RDTSC / arm64 MRS CNTVCT)
+    return ""
+}
+
+// CLEAN-ROOM: is this mnemonic WIRED in native codegen today? rung 1 ships only
+// `nop` (bind + x86 + arm64 + C-transpile + arm64 byte-encoding); the rest are
+// reserved names with a documented ladder but not yet emitted.
+fn asm_native_wired(mnemonic: str) -> int {
+    if mnemonic == "nop" { return 1 }
+    return 0
+}
+
 fn main() {
     let mut fails = 0
     let mut total = 0
@@ -119,6 +145,30 @@ fn main() {
     let w2 = asm_emit_block("wfi", ["memory"])
     let w3 = asm_emit_block("wfi", ["memory"])
     if w2 != w3 { println("FAIL T7 byte_stable"); fails = fails + 1 }
+
+    // RFC inline-asm rung 1: native-intrinsic registry contract.
+    total = total + 1
+    if asm_native_intrinsic("nop") != "__hx_asm_nop" {
+        println("FAIL T8 nop_intrinsic"); fails = fails + 1
+    }
+    if asm_native_intrinsic("pause") != "__hx_asm_pause" {
+        println("FAIL T8b pause_intrinsic"); fails = fails + 1
+    }
+    if asm_native_intrinsic("z80halt") != "" {
+        println("FAIL T8c unknown_intrinsic"); fails = fails + 1
+    }
+
+    total = total + 1
+    // rung 1 wires ONLY nop; pause/fence/rdtsc are reserved-but-not-yet-emitted.
+    if asm_native_wired("nop") != 1 { println("FAIL T9 nop_wired"); fails = fails + 1 }
+    if asm_native_wired("pause") != 0 { println("FAIL T9b pause_unwired"); fails = fails + 1 }
+    if asm_native_wired("fence") != 0 { println("FAIL T9c fence_unwired"); fails = fails + 1 }
+
+    total = total + 1
+    // every wired mnemonic must have a non-empty intrinsic name (contract closure).
+    if asm_native_wired("nop") == 1 && asm_native_intrinsic("nop") == "" {
+        println("FAIL T10 wired_implies_named"); fails = fails + 1
+    }
 
     if fails > 0 {
         println("asm selftest: " + str(total - fails) + "/" + str(total) + " — FAIL")

@@ -6313,6 +6313,14 @@ fn gen2_expr(node) {
             // the IDENTICAL libc text (byte-neutral). Off the compiler self-compile
             // byteeq path (the compiler closure has 0 __hx_syscall6 call-sites; the
             // .s seeds use the native backend, not this C-transpile lowering).
+            // RFC inline-asm rung 1: `__hx_asm_nop()` → int HexaVal 0, with a real
+            // `nop` emitted inline. C-transpile mirror of the native x86/arm64
+            // `__hx_asm_nop` leaf (state/rfc_inline_asm.md) so gen2 / `hexa run`
+            // honour the intrinsic identically. ADD-only: the compiler never calls
+            // it → DEFAULT C output byte-identical. reference: Zig asm volatile("nop").
+            if name == "__hx_asm_nop" {
+                return "hexa_int(({ __asm__ volatile(\"nop\"); (long)0; }))"
+            }
             if name == "__hx_syscall0" {
                 if env("HEXA_RT_SYSCALL_NATIVE") != "" {
                     return "hexa_int(({ long __hx_scr;\n#if defined(__x86_64__)\n long __hx_scn=(long)HX_INT(" + gen2_expr(node.args[0]) + "); register long __hx_r10 __asm__(\"r10\")=0; register long __hx_r8 __asm__(\"r8\")=0; register long __hx_r9 __asm__(\"r9\")=0; __asm__ volatile(\"syscall\":\"=a\"(__hx_scr):\"0\"(__hx_scn),\"r\"(__hx_r10),\"r\"(__hx_r8),\"r\"(__hx_r9):\"rcx\",\"r11\",\"memory\");\n#else\n __hx_scr=syscall((long)HX_INT(" + gen2_expr(node.args[0]) + "));\n#endif\n __hx_scr; }))"
