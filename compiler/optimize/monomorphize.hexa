@@ -57,6 +57,28 @@ import "../ir/mir.hexa"
 
 pub let MONO_TEMPLATE_MARK: string = "$$g"
 
+// ── Lane ① — generic *struct* template marker ─────────────────
+// Generic structs (`@specialize struct Box<T>`) constructed via the call
+// form `Box<Int>(5)` lower to a STMT_CALL whose `op` is the struct's base
+// name (parser.hexa parses `Foo<T>(…)` as an ExprKind::Call; the native
+// pipeline erases the `<T>` so Box<Int> and Box<Str> share one MIR shape).
+// A struct constructor template is recognised by the DISTINCT sentinel
+// suffix MONO_STRUCT_TEMPLATE_MARK ("$$gs") so the fn marker ("$$g") and
+// the struct marker never collide ("$$gs" does not end in "$$g": the last
+// three bytes are "$gs"). Once the struct's base name is in `bases`, the
+// per-call-site specialization reuses the SAME proven call-rewrite +
+// clone+mangle machinery as the function lane (a generic-struct
+// construction is, at the MIR call layer, indistinguishable from a generic
+// function call — one unified deterministic pass specializes both in a
+// single byteeq fixpoint, the hexa beyond-parity lever vs rustc's two
+// separate MonoItem::Fn / MonoItem::Struct collector arms).
+// Reference: rustc monomorphizes a generic struct by collecting each
+// distinct `Instance` of its type and giving each a mangled symbol
+// (rustc_monomorphize::collector → MonoItem); zig instantiates the struct
+// per comptime-type; swift emits a specialized metadata record per
+// concrete generic argument.
+pub let MONO_STRUCT_TEMPLATE_MARK: string = "$$gs"
+
 // ── Name helpers ──────────────────────────────────────────────
 
 fn _mono_is_template(name: string) -> bool {
@@ -71,6 +93,28 @@ fn _mono_base_name(name: string) -> string {
     let m = len(MONO_TEMPLATE_MARK)
     if n < m { return name }
     if name.substring(n - m, n) != MONO_TEMPLATE_MARK { return name }
+    return name.substring(0, n - m)
+}
+
+// Lane ① — struct-template predicate + base extractor. Disjoint from the
+// function predicate above: a "$$gs"-suffixed name is never matched by
+// `_mono_is_template` (its trailing three bytes are "$gs", not "$$g"), and
+// a "$$g"-suffixed function name is never matched here (its trailing four
+// bytes are e.g. "d$$g", not "$$gs"). So adding struct collection below is
+// inert on any module that carries only function templates — the function
+// lane stays byte-identical.
+fn _mono_is_struct_template(name: string) -> bool {
+    let n = len(name)
+    let m = len(MONO_STRUCT_TEMPLATE_MARK)
+    if n < m { return false }
+    return name.substring(n - m, n) == MONO_STRUCT_TEMPLATE_MARK
+}
+
+fn _mono_base_name_struct(name: string) -> string {
+    let n = len(name)
+    let m = len(MONO_STRUCT_TEMPLATE_MARK)
+    if n < m { return name }
+    if name.substring(n - m, n) != MONO_STRUCT_TEMPLATE_MARK { return name }
     return name.substring(0, n - m)
 }
 
@@ -98,6 +142,13 @@ fn _mono_collect_templates(funcs: [MFunc]) -> [string] {
         if _mono_is_template(funcs[i].name) {
             bases.push(_mono_base_name(funcs[i].name))
         }
+        // Lane ① — also collect generic-struct constructor templates. This
+        // branch fires only on a "$$gs"-marked name, which no default
+        // lowering emits today, so a function-only / non-generic module
+        // yields an identical `bases` list (function lane byte-identical).
+        if _mono_is_struct_template(funcs[i].name) {
+            bases.push(_mono_base_name_struct(funcs[i].name))
+        }
         i = i + 1
     }
     return bases
@@ -113,11 +164,23 @@ fn _mono_str_in(xs: [string], v: string) -> bool {
 }
 
 fn _mono_find_template(funcs: [MFunc], base: string) -> i64 {
+    // Function templates are looked up first under the "$$g" marker (so the
+    // function lane resolves to the exact same template index as before —
+    // byte-identical). A base that has no "$$g" template falls through to
+    // the lane-① "$$gs" struct-constructor marker. The two marker spaces are
+    // disjoint per base (a generic name is either a fn or a struct), so this
+    // ordering never mis-resolves.
     let marked = base + MONO_TEMPLATE_MARK
     let mut i = 0
     while i < len(funcs) {
         if funcs[i].name == marked { return i }
         i = i + 1
+    }
+    let marked_s = base + MONO_STRUCT_TEMPLATE_MARK
+    let mut j = 0
+    while j < len(funcs) {
+        if funcs[j].name == marked_s { return j }
+        j = j + 1
     }
     return -1
 }
@@ -224,6 +287,13 @@ fn _mono_rewrite_calls(mf: MFunc, bases: [string]) -> MFunc {
     // are unaffected by this rename.
     let mut out_name = mf.name
     if _mono_is_template(out_name) { out_name = _mono_base_name(out_name) }
+    // Lane ① — strip the struct-constructor marker the same way, so a
+    // generic struct's template survives under its BASE name as the
+    // type-erased constructor fallback for `dyn` construction sites and
+    // "$$gs" never reaches codegen. Mirrors rustc/swift, where the
+    // specialized struct instances coexist with the unspecialized generic
+    // definition. `else if` keeps the function branch byte-identical.
+    else { if _mono_is_struct_template(out_name) { out_name = _mono_base_name_struct(out_name) } }
     return MFunc {
         name: out_name,
         params: mf.params,
