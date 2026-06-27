@@ -1271,12 +1271,85 @@ fn parse_match_pattern() -> Expr {
             atlas_ref: empty_atlas()
         }
     }
+    // Struct-destructure pattern: `Name { field, field: binder, … }`.
+    // Reference: rustc parse_pat_struct (compiler/rustc_parse/src/parser/pat.rs
+    // — a path followed by `{` introduces a struct pattern whose fields bind
+    // sub-patterns; the shorthand `Point { x, y }` binds `x`/`y` directly).
+    // Detected by an Ident immediately followed by `{`. Purely additive new
+    // syntax: the shorthand `{x, y}` has no `field:` so the primary-expr
+    // struct-lit path (`is_struct_lit_lookahead`) never accepted it, and no
+    // in-tree `.hexa` match arm starts with `Name {` (verified) — so DEFAULT
+    // parsing is byte-identical. The node reuses ExprKind::StructLit (same
+    // field-child shape as a struct literal); ast_to_hir's match loop re-tags
+    // an arm-position StructLit as the HIR `struct_pattern` consumed by
+    // hir_to_mir (field-extract into each binder).
+    if _is_struct_pattern_lookahead() {
+        return parse_struct_pattern()
+    }
     // literal patterns / arbitrary expressions delegate to parse_expr below
     if check_kind(TokenKind::Number) || check_kind(TokenKind::String) || check_kind(TokenKind::Char) || check_kind(TokenKind::KwTrue) || check_kind(TokenKind::KwFalse) {
         return parse_expr()
     }
     // EnumName::Variant patterns are handled via parse_expr's EnumPath path.
     return parse_expr()
+}
+
+// Lookahead for a struct-destructure pattern head: current token is an Ident
+// immediately followed by `{`. Disjoint from `EnumName::Variant` (which has
+// `::` after the Ident) and from a bare-ident pattern (followed by `->`), so
+// this never reclassifies an existing arm shape.
+fn _is_struct_pattern_lookahead() -> bool {
+    if !check_kind(TokenKind::Ident) { return false }
+    let n1 = peek_at(1)
+    return same_kind(n1.kind, TokenKind::LBrace)
+}
+
+// Parse `Name { field, field: binder, … }` as a struct-destructure pattern.
+// Mirrors parse_struct_lit_after_name's container shape: each field is a child
+// Expr (kind=Ident, text=field_name, children=[binder-ident]). For the
+// shorthand `field`, the binder ident is the field name itself; for
+// `field: binder`, it is the renamed binder. ast_to_hir lifts each field into
+// a HIR `field_lit` (text=field name, child = binder ident).
+fn parse_struct_pattern() -> Expr {
+    let name_tok = peek()
+    advance()
+    eat(TokenKind::LBrace)
+    let mut kids = []
+    while !check_kind(TokenKind::RBrace) && !at_eof() {
+        let f_name = expect(TokenKind::Ident)
+        let mut bind_tok = f_name
+        if check_kind(TokenKind::Colon) {
+            advance()
+            bind_tok = expect(TokenKind::Ident)
+        }
+        let mut b_kids = []
+        b_kids.push(Expr {
+            kind: ExprKind::Ident,
+            span: bind_tok.span,
+            text: bind_tok.text,
+            annotations: [],
+            children: [],
+            atlas_ref: empty_atlas()
+        })
+        kids.push(Expr {
+            kind: ExprKind::Ident,
+            span: f_name.span,
+            text: f_name.text,
+            annotations: [],
+            children: b_kids,
+            atlas_ref: empty_atlas()
+        })
+        if check_kind(TokenKind::Comma) { advance() }
+    }
+    eat(TokenKind::RBrace)
+    return Expr {
+        kind: ExprKind::StructLit,
+        span: name_tok.span,
+        text: name_tok.text,
+        annotations: [],
+        children: kids,
+        atlas_ref: empty_atlas()
+    }
 }
 
 fn parse_block_expr() -> Expr {
