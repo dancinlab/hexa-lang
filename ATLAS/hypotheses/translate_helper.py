@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """Helper to check which files contain Korean text."""
+import argparse
 import os
 import re
 
-hypothesis_dir = "/Users/ghost/Dev/logout/docs/hypotheses"
+parser = argparse.ArgumentParser(description="Helper to check which files contain Korean text.")
+parser.add_argument("hypothesis_dir", help="Path to the hypotheses directory")
+args = parser.parse_args()
+
+hypothesis_dir = args.hypothesis_dir
 pattern = re.compile(r'[가-힣]')
 
 files = sorted(os.listdir(hypothesis_dir))
