@@ -1261,6 +1261,14 @@ pub fn _is_cabi(fname: string) -> bool {
     // the already-whitelisted __errno_location for the Linux errno leg.
     if fname == "hxlcl_stat" { return true }
     if fname == "hxlcl_waitpid" { return true }
+    // errno-bearing chain batch C — write / fcntl / mmap. All UNIFORM across
+    // targets (plain syscall on arm64-linux too, only the NR varies — like
+    // read/lseek/waitpid; no dup3/mkdirat/fstatat call-shape divergence). Same
+    // close errno-store discipline; mmap's raw-syscall error is -errno (negative
+    // `__hx_payload_lt`), NOT the libc MAP_FAILED `== -1` sentinel.
+    if fname == "hxlcl_write" { return true }
+    if fname == "hxlcl_fcntl" { return true }
+    if fname == "hxlcl_mmap" { return true }
     return false
 }
 
