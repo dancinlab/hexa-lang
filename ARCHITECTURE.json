@@ -1544,6 +1544,13 @@
         "value": "hexa native-emit(aprime_cc --emit=obj)의 일반 동적타입 scalar/array 경로가 gcc-O2 대비 measured 2.9~23× 느림(geomean 8.6×·aiden·reference-match·state/codegen-quality-probe-verdict.md). 커널별 ratio: k1_sum(scalar reduce) 2.86× · k5_fncall 4.41× · k2_collatz(branchy int) 12.53× · k4_branch(modulo) 12.73× · k3_arrmap(배열 map) 23.23×(최대). 어셈 root-cause=박싱 HexaVal 태그-디스패치 모델: scalar op마다 런타임 함수호출(hexa_add_slow/hexa_mul/hexa_mod, 타입태그 스택슬롯)·레지스터할당無·unboxed i64無·strength-reduction無. k3=원소당 7call(hexa_index_get/set bounds-check+box) vs gcc 0call(register pointer-walk+lea+magic-multiply). HEXA_INLINE_INT_BOX=1도 unbox 안됨(5-7 call/iter 잔존). 손튜닝 farr/GEMM은 별도 unboxed 경로=BLIS/cuBLAS parity(일반 유저코드는 거기로 안 내려감).",
         "threshold": "돌파레버=static-type-inference 기반 int/float scalar unboxing + native-array element access(farr unboxed 기계를 일반 scalar loop로 확장). 진행=codegen-unbox-breakthrough workflow(Map→Design→Plan→state/codegen-unboxing-campaign-plan.md)→최소프로토타입 opt-in HEXA_UNBOX_* default-OFF→런타임 ratio측정+byteeq3타깃 gen3≡gen4+출하smoke→pr-cycle. ⚠️고위험 substrate(codegen)·릴리스무결성 최상위·multi-session·OFF경로 byte-identical 필수. 종착=커널 ratio≈1(parity 도달) 또는 measured 천장.",
         "source": "self/codegen.hexa"
+      },
+      {
+        "id": "WALL-A-STATIC-TYPES-REJECT-LADDER",
+        "state": "in_flight",
+        "value": "정적타입 REJECT 사다리 r1~r6 land(literal→ident/call→decl-split→array→struct-field→struct-literal·전부 opt-in HEXA_STATIC_TYPES default-OFF·byteeq중립·HX3011 Rust E0308·삽입점 compiler/check/types.hexa _infer_expr)·r7+ generic/trait static-dispatch=measured 천장(dynamic 런타임 type-erasure 근본벽).",
+        "threshold": "r7+ 불가=_types_lower_type_ref:931-939 degraded sentinel(generic:/fn:/tuple: → args:[]/ret:[] 타입파라미터 소거)→concrete T 미보유→generic monomorphization·trait static-dispatch은 dynamic→static 런타임 재설계 필요(scope-local _infer_expr 鋼 아님). nested receiver(s.inner.x)도 同벽. SSOT=state/rfc_static_types_rust_ladder.md.",
+        "source": "compiler/check/types.hexa"
       }
     ]
   }
