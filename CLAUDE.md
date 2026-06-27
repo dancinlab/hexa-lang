@@ -190,6 +190,14 @@ git submodule update --init --recursive          # activate (hooks no-op until p
   `ABI0` — 모든 주요 컴파일러의 정석. **한 codegen 기능이 전 `hxlcl_*` 심볼 × 3 타깃을 일괄
   cross-target dissolve** (default-OFF whitelist · byteeq-neutral · DEFAULT shim.o sha 불변).
   SSOT: 메모리 `project_hexa_rfc061_hxlcl_crosstarget_abi_wall`.
+- 상태(RFC061 #29 Route C 캠페인 · 측정종착): syscall/2nd-return-reg/named-data/environ/FILE*/
+  file-local-static family + ELF cross-target member-swap mem/str pure-leaf 10/10(strlen·memcpy·
+  memset·memcmp·strcmp·strncmp·strcpy·strncpy·strcat·strchr) + pipe/fork/getenv/setenv/popen 등
+  dissolve(전부 default-OFF·byteeq-neutral·admin-merge). 잔여 = 측정벽 2개뿐 — varargs-ABI
+  (`hxlcl_fprintf` · va_list 가 frozen runtime.c 거주 → frozen blob 편집 불가 = release-integrity
+  하드라인 🧱) · svc-remainder(getrusage/time/signal = frozen floor inert stub이라 native-emit 해도
+  floor-reduction 0 = investment-poor 🧱). reopen 조건: hexa IR opaque va_list 추상 OR frozen
+  re-baseline OR floor-meaningful syscall leaf 출현.
 - dont: 심볼당·타깃당 **hand-assembled machine-byte 배열**로 cross-target 확장 금지
   (non-canonical · O(symbols×targets) 노동 · 유지보수 폭발 — `test/native_build/emit_hxlcl_*_o.hexa`
   darwin Mach-O 손-assemble 은 codegen C-ABI 모드 부재 시의 임시 우회였고 Route C 로 승계).
