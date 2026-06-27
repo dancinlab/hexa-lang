@@ -256,6 +256,72 @@ fn _arru_array_type_id_from_text(type_text: string) -> i64 {
     return 0
 }
 
+// element-pack FUSE (HEXA_PACK_ARRAY) — separate, NARROWER gate than
+// `_arru_native_enabled()` (which also fires for HEXA_UNBOX_ARRAY_NATIVE). The
+// element-type THREADING below (index-dst / let-copy / int-binop-result stamps)
+// is intentionally PACK-ONLY so the PROVEN r2c HEXA_UNBOX_ARRAY_NATIVE byteeq
+// (k3 2.7×) and the r5 HEXA_UNBOX_NATIVE path stay byte-identical to origin —
+// only the regressed PACK lane (standalone 1.147) changes. Default-OFF.
+fn _arrpk_fuse_enabled() -> bool {
+    return env("HEXA_PACK_ARRAY") == "1"
+}
+
+// element-pack FUSE — inverse of `_arru_array_type_id_from_text`'s container map:
+// a typed-prim ARRAY type_id (101..104) → its SCALAR ELEMENT type_id. This is the
+// V8 PACKED_SMI element-tag: an [i64] container's element is statically i64
+// (type_id 1), [i32]→2, [f64]→3, [f32]→4. Returns 0 for a non-array / untyped
+// container (no element provenance to thread). Pure compile-time.
+fn _arru_elem_scalar_tid(arr_tid: i64) -> i64 {
+    if arr_tid == 101 { return 1 }   // [i64] element = i64
+    if arr_tid == 102 { return 2 }   // [i32] element = i32
+    if arr_tid == 103 { return 3 }   // [f64] element = f64
+    if arr_tid == 104 { return 4 }   // [f32] element = f32
+    return 0
+}
+
+// element-pack FUSE — look up a `local` operand's CURRENT MIR type_id by scanning
+// the module-scope `_lr_locals` for op.local_id. Lets a lowering site read the
+// type_id another site already stamped (e.g. the index-get dst's stamped element
+// type) without adding a new IR field. Returns 0 when `op` is not a local or the
+// id is not found (conservative: no element provenance).
+fn _lr_type_of_op(op: Operand) -> i64 {
+    if op.kind != "local" { return 0 }
+    let mut i = 0
+    while i < len(_lr_locals) {
+        if _lr_locals[i].id == op.local_id { return _lr_locals[i].type_id }
+        i = i + 1
+    }
+    return 0
+}
+
+// element-pack FUSE — is `op` PROVABLY a raw i64 payload at lowering time? Mirrors
+// the codegen `_x86_operand_provably_int` EXACTLY (const_int/const_bool literal,
+// or a `local` whose stamped MIR type_id == 1 = i64). Used to decide whether an
+// int-arith binop's untyped result dst can be stamped i64 (so the codegen
+// binop-unbox dst-check passes). i32(2)/f64(3)/f32(4) are deliberately NOT
+// provably-i64 here — they fall through to the boxed path, same as codegen.
+fn _lr_operand_provably_i64(op: Operand) -> bool {
+    if op.kind == "const_int"  { return true }
+    if op.kind == "const_bool" { return true }
+    if op.kind == "local" { return _lr_type_of_op(op) == 1 }
+    return false
+}
+
+// element-pack FUSE — stamp Local at `_lr_locals[idx]` with `tid` (in-place,
+// preserving every other field). Used by the three element-type threading sites.
+fn _lr_stamp_local_type(idx: i64, tid: i64) {
+    let d = _lr_locals[idx]
+    _lr_locals[idx] = Local {
+        id: d.id,
+        arena_id: d.arena_id,
+        type_id: tid,
+        name_hint: d.name_hint,
+        precision: d.precision,
+        space: d.space
+    }
+    return
+}
+
 // ── Local-name binding (HIR ident → MIR Local) ──────────────
 
 pub struct LocalBinding {
@@ -1253,7 +1319,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         // so downstream walks see the precision tag too.
         let raw_dst = _lr_locals[len(_lr_locals) - 1]
         let dst_precision = _precision_from_typ_kind(e.typ.kind)
-        let dst = Local {
+        let mut dst = Local {
             id: raw_dst.id,
             arena_id: raw_dst.arena_id,
             type_id: raw_dst.type_id,
@@ -1262,6 +1328,23 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             space: ""
         }
         _lr_locals[len(_lr_locals) - 1] = dst
+        // element-pack FUSE — an int-arith binop (`+ - *`) whose result the
+        // typechecker left UNTYPED (type_id 0, e.g. `v + acc` when v came from an
+        // untyped index) but whose BOTH operands are provably raw i64 produces a
+        // raw i64 (two's-complement wraparound = native ALU semantics). Stamp the
+        // result i64 so the codegen `_x86_binop_unbox_ok` dst-check (== 1) passes
+        // and downstream readers of the result are also provably-int. Mirrors the
+        // codegen unbox gate (add/sub/mul only — NOT `/ %` which keep the boxed
+        // div-zero throw). Override-only-when-0, PACK-gated.
+        let _is_int_arith = (e.text == "add" || e.text == "+" ||
+                             e.text == "sub" || e.text == "-" ||
+                             e.text == "mul" || e.text == "*")
+        if _arrpk_fuse_enabled() && dst.type_id == 0 && _is_int_arith &&
+           _lr_operand_provably_i64(lr.operand) && _lr_operand_provably_i64(rr.operand) {
+            let _bi = len(_lr_locals) - 1
+            _lr_stamp_local_type(_bi, 1)
+            dst = _lr_locals[_bi]
+        }
         let op_name = _op_with_precision(e.text, dst_precision)
         let mut args: [Operand] = []
         args.push(lr.operand)
@@ -1672,6 +1755,21 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                     space: dst.space
                 }
                 dst = _lr_locals[_li]
+            }
+        }
+        // element-pack FUSE — a `let v = xs[j]` binding whose RHS is the
+        // (now-stamped) index-get temp is ITSELF left untyped by the typechecker
+        // (RHS index expr untyped → inferred let type 0). Without threading the
+        // element type onto `v`, a later `v + acc` sees v as type 0 → NOT
+        // provably-int → boxed. Copy the RHS local's stamped SCALAR type (1..4)
+        // onto v. Override-only-when-0, PACK-gated. Same first-divergence as the
+        // index-dst stamp, just at the let-copy site.
+        if _arrpk_fuse_enabled() && dst.type_id == 0 {
+            let _rtid = _lr_type_of_op(rhs_op)
+            if _rtid >= 1 && _rtid <= 4 {
+                let _li2 = len(_lr_locals) - 1
+                _lr_stamp_local_type(_li2, _rtid)
+                dst = _lr_locals[_li2]
             }
         }
         let mut args: [Operand] = []
@@ -2927,7 +3025,23 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         let lr = _lower_hexpr(ctx, e.children[0])
         let rr = _lower_hexpr(lr.ctx, e.children[1])
         let mut ctx2 = _fresh_local(rr.ctx, e.typ, "idx")
-        let dst = _lr_locals[len(_lr_locals) - 1]
+        let mut dst = _lr_locals[len(_lr_locals) - 1]
+        // element-pack FUSE (PRIMARY EDIT) — the typechecker leaves an index
+        // expression UNTYPED (type_id 0): the index-get dst reaches codegen with
+        // no element provenance, so `_x86_operand_provably_int` is false and a
+        // downstream `xs[i] * C` binop stays BOXED (RECON-2). Thread the proven
+        // element type from the CONTAINER (lr.operand, stamped 101..104 by the
+        // r2c/element-pack producer) onto this dst (101→1, …). Override ONLY when
+        // the dst was untyped (0) — mirrors the line-1662 PRODUCER firewall — and
+        // ONLY under the PACK fuse gate, so the r2c/r5 paths stay byte-identical.
+        if _arrpk_fuse_enabled() && dst.type_id == 0 {
+            let _etid = _arru_elem_scalar_tid(_lr_type_of_op(lr.operand))
+            if _etid != 0 {
+                let _li = len(_lr_locals) - 1
+                _lr_stamp_local_type(_li, _etid)
+                dst = _lr_locals[_li]
+            }
+        }
         let mut args: [Operand] = []
         args.push(lr.operand)
         args.push(rr.operand)

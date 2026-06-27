@@ -1003,6 +1003,16 @@ fn _x86_tag_resolve(o: Operand, rm: X86RegMap, scratch: string) {
         return
     }
     if o.kind == "local" {
+        // element-pack FUSE — a statically-i64 local (type_id==1) has the
+        // INVARIANT tag TAG_INT=0. Reading const-0 is identical to reading a
+        // correctly-stored slot, which makes ELIDING the producer-side tag store
+        // (the arrpk_get RECON-1 below) sound for ANY residual boxed reader.
+        // PACK-gated → byte-identical when the fuse gate is OFF.
+        if _pack_fuse_enabled() && _x86_local_type(rm, o.local_id) == 1 {
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg(scratch), _x86_op_imm(0),
+                             "tag L" + to_string(o.local_id) + " = TAG_INT (i64-local, fused)"))
+            return
+        }
         let off = _x86_tag_off(rm, o.local_id)
         if off >= 0 {
             _x86_buf.push(_x86_instr2("mov", _x86_op_reg(scratch),
@@ -1169,7 +1179,13 @@ fn _x86_operand_provably_int(o: Operand, rm: X86RegMap) -> bool {
 // Should this binop take the unboxed native ALU path? Gate ON + op in the
 // int-closed unbox set + dst proven i64 + both operands proven raw-int.
 fn _x86_binop_unbox_ok(s: Stmt, rm: X86RegMap) -> bool {
-    if !_unbox_native_enabled() { return false }
+    // element-pack FUSE — the SAME provably-int native-ALU path is reachable
+    // when the PACK fuse gate is live: a packed [i64] element threaded to
+    // type_id==1 (by the hir_to_mir element-type stamps) feeds `+ - * cmp`
+    // natively, eliminating the boxed `call hexa_mul/add/cmp` (RECON-2). The
+    // operand/dst proofs below are IDENTICAL; only the enabling gate widens.
+    // OFF-path (neither gate) → false → byte-identical boxed emit.
+    if !(_unbox_native_enabled() || _pack_fuse_enabled()) { return false }
     if len(s.args) < 2 { return false }
     // Only the int-closed ops whose existing native ALU/cmp path is correct for
     // raw i64. NOT `/` `%` (div-zero throw stays boxed). NOT concat/bitwise-mix.
@@ -1290,6 +1306,17 @@ fn _arru_debug_enabled() -> bool {
 //     f32 (103/104 → HexaArrF64) is a follow-on (needs the xmm push ABI).
 fn _pack_array_enabled() -> bool {
     return env("HEXA_PACK_ARRAY") == "1"
+}
+
+// element-pack FUSE gate — the precondition for the two RECON-1 (dead int
+// tag round-trip) elisions AND the binop-unbox extension that let a raw packed
+// element flow directly into a native `add/imul/cmp` (no HexaVal re-pair). It is
+// PACK-only (NOT also _unbox_array_enabled / _unbox_native_enabled) so the
+// PROVEN r2c (HEXA_UNBOX_ARRAY_NATIVE) and r5 (HEXA_UNBOX_NATIVE) byteeq stay
+// byte-identical — only the regressed PACK lane (standalone 1.147) is touched.
+// Default-OFF (env unset) → every fuse branch below is skipped → byte-identical.
+fn _pack_fuse_enabled() -> bool {
+    return _pack_array_enabled()
 }
 
 // id → is this local a PROVEN packed typed-prim array? O(1) probe of the lattice
@@ -1463,7 +1490,15 @@ fn _x86_emit_arrpk_get(s: Stmt, st: X86StrTab, rm: X86RegMap, opts: CodegenOptio
                      "arrpk get: &data[idx]"))
     _x86_buf.push(_x86_instr2("mov", dst, _x86_op_mem("r11", 0),
                      "arrpk get: raw packed element"))
-    _x86_store_tag_imm(rm, s.dst.id, etag)
+    // element-pack FUSE (RECON-1 elision) — skip the dead 2-instr int tag round-
+    // trip for a TAG_INT (etag==0) element landing in a statically-i64 dst
+    // (local_type==1): the `_x86_tag_resolve` const-0 shortcut makes ANY boxed
+    // reader read TAG_INT regardless, and the native-ALU unboxed reader ignores
+    // the tag entirely. Both preconditions (etag==0 ∧ dst i64) hold for every
+    // packed [i64]/[i32] element. Gated → kept verbatim when the fuse gate is OFF.
+    if !(_pack_fuse_enabled() && etag == 0 && _x86_local_type(rm, s.dst.id) == 1) {
+        _x86_store_tag_imm(rm, s.dst.id, etag)
+    }
     _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
     return n
 }
