@@ -1273,7 +1273,7 @@
                 "Struct-destructure patterns `Point{x,y}` — absent.",
                 "`?` error-propagation operator — absent (combinators / try-catch substitute, `self/test_result_type.hexa`).",
                 "Inline asm (`asm!`) — absent (extern fn + syscall emit exist).",
-                "Function overloading — absent ('later def ignored', codegen comment).",
+                "Function overloading — OPT-IN arity slice LANDED (PR#NN, `state/rfc_function_overloading.md`): historical policy was first-wins ('later def ignored' + `[warn] … overloading unsupported`). Under `HEXA_FN_OVERLOAD=1`, `self/codegen.hexa` mangles any top-level fn name declared with ≥2 DISTINCT arities into arity-suffixed C symbols (`add`→`add_hxov2`/`add_hxov3`) and routes each positional call to the suffix matching its `len(node.args)` — no type inference (à la Swift's arity-first discriminator + C++ Itanium parameter-shape mangling). `_gen2_build_overload_set`/`_gen2_overload_name`/`_gen2_dedup_key` fall through to `_hexa_mangle_ident` for non-overloaded names, so DEFAULT (flag-unset) + any collision-free program stays byte-identical on the 3 byteeq targets. No new keyword/builtin/@attr (frozen-parser-safe — `fn f(...)` twice is already grammatical). Gated oracle `self/test_fn_overload.hexa`. Remaining (RFC Roadmap): same-arity TYPE-based discrimination + native `--emit` backend + default-arg/variadic/fn-ref combinations.",
                 "Per-field struct visibility — struct-level `pub` only (`compiler/lex/tokens.hexa:90`)."
               ]
             }
