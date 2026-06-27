@@ -2367,6 +2367,39 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // RFC061 Route C Wall 3-b: `__hx_stderr_ptr()` / `__hx_stdout_ptr()` (0-arg)
+        // → the ADDRESS of the libc standard-stream FILE* global, loaded through the
+        // GOT and boxed as a TAG_INT payload. Named-DATA sibling of __hx_environ_ptr.
+        // On darwin the `stderr`/`stdout` user names are `#define`s onto the real
+        // exported globals `__stderrp`/`__stdoutp`, so the GOT symbol STRING is
+        // `__stderrp` (→ `___stderrp` after emit/asm _fmt_label's unconditional `_`
+        // mangle), differing per-target from glibc's bare `stderr`. x1 = &stderr
+        // (FILE**), x0 = TAG_INT; one __hx_ptr_load64 in the caller yields the
+        // `stderr` FILE* value to compare against `fp`. No args; load + box.
+        if s.op == "__hx_stderr_ptr" {
+            buf.push(_arm64_instr2("adrp", _arm64_op_reg("x1"),
+                             _arm64_op_label("__stderrp@GOTPAGE"),
+                             "__hx_stderr_ptr: &__stderrp GOT page [reloc=" + RELOC_AARCH64_ADR_GOT_PAGE + "]"))
+            buf.push(_arm64_instr2("ldr", _arm64_op_reg("x1"),
+                             _arm64_op_mem_label("x1", "__stderrp@GOTPAGEOFF"),
+                             "__hx_stderr_ptr: x1 = &__stderrp [reloc=" + RELOC_AARCH64_LD64_GOT_LO12_NC + "]"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_stderr_ptr: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        if s.op == "__hx_stdout_ptr" {
+            buf.push(_arm64_instr2("adrp", _arm64_op_reg("x1"),
+                             _arm64_op_label("__stdoutp@GOTPAGE"),
+                             "__hx_stdout_ptr: &__stdoutp GOT page [reloc=" + RELOC_AARCH64_ADR_GOT_PAGE + "]"))
+            buf.push(_arm64_instr2("ldr", _arm64_op_reg("x1"),
+                             _arm64_op_mem_label("x1", "__stdoutp@GOTPAGEOFF"),
+                             "__hx_stdout_ptr: x1 = &__stdoutp [reloc=" + RELOC_AARCH64_LD64_GOT_LO12_NC + "]"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_stdout_ptr: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // RT-NATIVE UNLOCK-10: `__hx_ptr_store64(ptr, off, val)` — write the
         // 64-bit int `val` to raw address `ptr + off`. The arena bump path
         // (a native allocator writes object headers/fields into an mmap slab)

@@ -2082,3 +2082,122 @@ pub fn hxlcl_fdopen(fd: HexaVal, mode: HexaVal) -> int {
     if __hx_payload_ne(bad, 0) { return 0 }
     return __hx_payload_add(fd, 1)              // (mode unused — unbuffered wrapper)
 }
+
+// ── WALL 3-b — STD-STREAM FAMILY (fputs/fputc/fflush · std-fd dissolve) ──────
+//
+// The frozen 0-libc floor keeps THREE stdio helpers on the libc-global path that
+// the CORE FILE* family (Wall 3-a) explicitly carved out: hxlcl_fputs / hxlcl_fputc
+// / hxlcl_fflush. Their real callers in the runtime (self/runtime_emit_full.hexa:
+// 6132 `fputs(prompt, stdout)` · 11788 `fputs(line, stderr)` · 11790 `fputc('\n',
+// stderr)` · the `fflush(NULL)`/`fflush(stdout)` sites) pass the LIBC GLOBALS
+// stdout/stderr — NOT the fd+1 fake FILE* of the CORE family — so the frozen body
+// detects the target fd by the pointer-compare `if (fp == (void*)stderr) fd = 2;`
+// (default fd=1), self/runtime_emit_full.hexa:1014-1027. That extern-global
+// pointer-compare is what kept these on the shim: a Route C body could not read the
+// ADDRESS of the libc `stderr`/`stdout` globals.
+//
+// The ONE new substrate piece (the named-data sibling of __hx_environ_ptr / #4098)
+// is `__hx_stderr_ptr()` — a 0-arg intrinsic loading `&stderr` (FILE**) through the
+// GOT (x86_64-linux glibc `stderr@GOTPCREL`; darwin `__stderrp@GOTPAGE`, the
+// `#define stderr __stderrp` macro target). ONE __hx_ptr_load64 deref yields the
+// `stderr` FILE* value itself, so `__hx_payload_eq(fp, stderrval)` replicates the
+// frozen `fp == (void*)stderr` BYTE-FAITHFULLY — no behavioural deviation, the
+// `fputs(line, stderr)` site still routes to fd 2. (A companion __hx_stdout_ptr is
+// whitelisted for symmetry but the faithful body needs only the stderr compare, to
+// match the frozen single `if(fp==stderr)`.) Once fd is known these compose the
+// already-dissolved Route C `bl hxlcl_write` syscall leaf (Wall 1) + a strlen scan.
+//
+// fprintf is the DEFERRED sibling (NOT in this wall): its frozen body
+// (self/runtime_emit_full.hexa:1006 `hxlcl_fprintf(void*,const char*,...)`) takes a
+// C `va_list ap` and forwards it to hxlcl_vfprintf_fd — hexa has NO va_list type,
+// no va_start/va_copy/va_end intrinsics, and no variadic-arg forwarding across the
+// C-ABI boundary, so it is a genuine architectural varargs-ABI wall (a whole new
+// ABI, not realistic this round). fprintf stays the retained shim; std-stream is
+// the fputs/fputc/fflush GO subset the census green-lit.
+//
+// IN-BODY OPERATOR DISCIPLINE (the #4042 rule) + un-nested lets throughout, same as
+// the CORE FILE* family above: every test is a raw-payload leaf intrinsic, never a
+// bare op (which would lower to the PAIR-MODEL HexaVal helpers undefined in the raw
+// C-ABI link); the inner `bl hxlcl_write` lowers single-register C-ABI on the
+// whitelisted callee name.
+
+// hxlcl_write: raw-C-ABI write(2) syscall leaf — the Wall 1 dissolved body (defined
+// above at the ERRNO-BEARING batch C). Declared so the std-stream bodies' inner
+// `bl hxlcl_write` binds C-ABI; it is the SAME symbol, not re-emitted here.
+//
+// (No `extern fn` needed — hxlcl_write is a `pub fn` already in this file; the inner
+// call resolves intra-object.)
+
+// hxlcl_fputs: write the NUL-terminated string `s` to the stream `fp`, returning the
+// byte count (>=0) or -1. BYTE-FAITHFUL to self/runtime_emit_full.hexa:1014-1019:
+//   int fd = 1; if (fp == (void *)stderr) fd = 2;
+//   if (!s) return -1; size_t n=0; while(s[n]) n++; return (int)hxlcl_write(fd,s,n);
+// The std-stream detection is the frozen single `if(fp==stderr)`: default fd=1
+// (stdout AND any other handle), fd=2 only when fp matches the libc stderr global —
+// read via __hx_stderr_ptr()+__hx_ptr_load64 (the GOT named-data deref) so the
+// compare is value-exact against the live `stderr` FILE*.
+pub fn hxlcl_fputs(s: HexaVal, fp: HexaVal) -> int {
+    let ps = __hx_payload_add(s, 0)               // const char* s (payload word)
+    let pfp = __hx_payload_add(fp, 0)             // void* fp (payload word)
+    let snull = __hx_payload_eq(ps, 0)
+    if __hx_payload_ne(snull, 0) {
+        return __hx_payload_sub(0, 1)             // !s → -1
+    }
+    // fd = 1; if (fp == stderr) fd = 2;
+    let mut fd = 1
+    let perr = __hx_stderr_ptr()                  // &stderr (FILE**)
+    let errval = __hx_ptr_load64(perr, 0)         // *(&stderr) == the stderr FILE*
+    let iserr = __hx_payload_eq(pfp, errval)
+    if __hx_payload_ne(iserr, 0) {
+        fd = 2
+    }
+    // n = strlen(s)
+    let mut n = 0
+    let mut c = __hx_ptr_load8(ps, 0)             // s[0]
+    while __hx_payload_ne(c, 0) {
+        n = __hx_payload_add(n, 1)
+        c = __hx_ptr_load8(ps, n)                 // s[n]
+    }
+    return hxlcl_write(fd, ps, n)                 // C-ABI bl → bytes written
+}
+
+// hxlcl_fputc: write the single byte `c` to the stream `fp`, returning `c` on
+// success or -1. BYTE-FAITHFUL to self/runtime_emit_full.hexa:1020-1024:
+//   int fd = 1; if (fp == (void *)stderr) fd = 2;
+//   unsigned char ch = (unsigned char)c; return hxlcl_write(fd,&ch,1)==1 ? c : -1;
+// Same stderr detection as fputs. The frozen `unsigned char ch` stack scratch is a
+// 1-byte HEAP scratch here (hxlcl_malloc(1) — no in-body stack-alloc intrinsic on
+// this campaign, the batch-H scratch-buffer precedent); the low byte of `c` is
+// stored and written. (Leaks 1 byte/call on the default-OFF HEXA_CABI_HXLCL=1
+// research path — never shipped; flagged, like the batch-H poll caveat.)
+pub fn hxlcl_fputc(c: HexaVal, fp: HexaVal) -> int {
+    let pfp = __hx_payload_add(fp, 0)             // void* fp (payload word)
+    // fd = 1; if (fp == stderr) fd = 2;
+    let mut fd = 1
+    let perr = __hx_stderr_ptr()                  // &stderr (FILE**)
+    let errval = __hx_ptr_load64(perr, 0)         // *(&stderr) == the stderr FILE*
+    let iserr = __hx_payload_eq(pfp, errval)
+    if __hx_payload_ne(iserr, 0) {
+        fd = 2
+    }
+    // ch = (unsigned char)c; write(fd, &ch, 1)
+    let lowc = __hx_payload_and(c, 255)           // (unsigned char)c
+    let one = __hx_payload_add(0, 1)              // HexaVal-box the literal 1 (#4082)
+    let scratch = hxlcl_malloc(one)               // 1-byte heap scratch
+    __hx_ptr_store8(scratch, 0, lowc)             // ch
+    let w = hxlcl_write(fd, scratch, one)         // C-ABI bl → bytes written
+    if __hx_payload_eq(w, 1) {
+        return __hx_payload_add(c, 0)             // success → c (the ORIGINAL int, byte-faithful to the frozen `return c`)
+    }
+    return __hx_payload_sub(0, 1)                 // write failed → -1
+}
+
+// hxlcl_fflush: flush the stream `fp`. BYTE-FAITHFUL to
+// self/runtime_emit_full.hexa:1025-1028 (`int hxlcl_fflush(void *fp){ (void)fp;
+// return 0; }`) — the floor is UNBUFFERED (every write is a direct syscall, no
+// stdio buffer), so flush is a definitional no-op returning success. No fd
+// detection, no syscall, no new intrinsic — the trivial GO leaf of this wall.
+pub fn hxlcl_fflush(fp: HexaVal) -> int {
+    let _pfp = __hx_payload_add(fp, 0)            // (void)fp
+    return 0
+}
