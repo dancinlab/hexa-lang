@@ -2417,6 +2417,188 @@ fn parse_type_alias_item(is_pub: bool, anns: [Annotation]) -> Item {
     }
 }
 
+// ── Associated types (opt-in HEXA_ASSOC_TYPES=1) ──────────────
+//
+// Rust associated items (The Rust Reference §"Associated Items" / §"Associated
+// types"): a trait may declare an output type slot — `trait Iterator { type
+// Item; }` — that every `impl` MUST bind — `impl Iterator for Counter { type
+// Item = u32; }`. `trait` / `impl` / `for` are NOT trait/impl keyword tokens in
+// this grammar (the bootstrap lexer maps `trait`/`impl` to `Ident`; `for` IS
+// KwFor), so we detect `trait`/`impl` at item position via `peek().text`,
+// mirroring the `extern`/`type` idiom (`_peek_is_extern_kw`/`_peek_is_type_kw`).
+//
+// Both forms parse into an `ItemKind::Let` carrier (no new ItemKind variant →
+// no exhaustive-match churn, frozen-parser safe — no new keyword/token) tagged
+// with `@phase("parse_only")` (so resolve/bind/type-check body passes skip it
+// and ast_to_hir drops it → zero codegen, runtime stays fully dynamic) plus a
+// bare `__assoc_trait` / `__assoc_impl` marker and a synthetic `__assoc`
+// annotation whose LiteralString args encode the declaration/binding atoms:
+//   trait decl  : header "T:<trait>"          then "A:<assoc>:<bound>" per slot
+//   impl block  : header "H:<trait>:<type>"   then "B:<assoc>:<concrete>" per bind
+// The check-only `_assoc_check_module` pass in compiler/check/types.hexa decodes
+// them (R1 missing-binding, R2 unknown-binding, R3 bound-violation). The whole
+// capture is gated on `env("HEXA_ASSOC_TYPES")=="1"`; when unset, `parse_item`
+// never dispatches here and `trait`/`impl` fall through verbatim to the current
+// unknown-leader behavior → byte-identical AST → byteeq-neutral.
+fn _peek_is_trait_kw() -> bool {
+    if !check_kind(TokenKind::Ident) { return false }
+    return peek().text == "trait"
+}
+
+fn _peek_is_impl_kw() -> bool {
+    if !check_kind(TokenKind::Ident) { return false }
+    return peek().text == "impl"
+}
+
+// Consume the balanced `{ … }` member block (cursor AT `{`), extracting ONLY
+// `type Ident (: Bound (+ Bound)*)? (= Type)? ;` declarations at the immediate
+// block depth and skipping every other member (fn/const/…), tracking brace
+// depth so nested fn-body braces never confuse the scanner. For a trait, each
+// slot serializes to "A:<assoc>:<bound>"; for an impl, "B:<assoc>:<concrete>".
+fn _assoc_capture_block(is_trait: bool, sp: Span) -> [Expr] {
+    advance() // consume `{`
+    let mut depth = 1
+    let mut out: [Expr] = []
+    while depth > 0 && !at_eof() {
+        if check_kind(TokenKind::LBrace) {
+            depth = depth + 1
+            advance()
+            continue
+        }
+        if check_kind(TokenKind::RBrace) {
+            depth = depth - 1
+            advance()
+            continue
+        }
+        if depth == 1 && _peek_is_type_kw() && same_kind(peek_at(1).kind, TokenKind::Ident) {
+            advance() // consume `type`
+            let assoc_name = peek().text
+            advance() // consume the associated-type name
+            // optional `: Bound (+ Bound)*`
+            let mut bound = ""
+            if check_kind(TokenKind::Colon) {
+                advance()
+                while check_kind(TokenKind::Ident) {
+                    let tr = peek().text
+                    advance()
+                    if bound == "" { bound = tr } else { bound = bound + "+" + tr }
+                    if check_kind(TokenKind::Plus) { advance() } else { break }
+                }
+            }
+            // optional `= Type` binding — capture a bare-Ident concrete type
+            // (primitive names like `int`/`f64`/`string` feed the bound check;
+            // composite types stay "" → conservative R3 silence).
+            let mut concrete = ""
+            if check_kind(TokenKind::Eq) {
+                advance()
+                if check_kind(TokenKind::Ident) {
+                    concrete = peek().text
+                    advance()
+                }
+            }
+            if is_trait {
+                out.push(_cg_str_expr("A:" + assoc_name + ":" + bound, sp))
+            } else {
+                out.push(_cg_str_expr("B:" + assoc_name + ":" + concrete, sp))
+            }
+            continue
+        }
+        advance()
+    }
+    return out
+}
+
+// Erase a leading balanced `< … >` generic-param run (cursor maybe AT `<`),
+// mirroring parse_type_alias_item's erase loop — generics are dynamic-shaped in
+// this backend, so only the assoc-type slots matter for the check-only pass.
+fn _assoc_erase_generics() {
+    if check_kind(TokenKind::Lt) {
+        advance()
+        let mut depth = 1
+        while depth > 0 && !at_eof() {
+            let tk = peek().kind
+            if same_kind(tk, TokenKind::Lt) { depth = depth + 1 }
+            else if same_kind(tk, TokenKind::Gt) { depth = depth - 1 }
+            advance()
+            if depth == 0 { break }
+        }
+    }
+}
+
+fn parse_assoc_trait_item(is_pub: bool, anns: [Annotation]) -> Item {
+    let kw = peek()
+    advance() // consume `trait` (Ident)
+    let name_tok = expect(TokenKind::Ident)
+    _assoc_erase_generics()
+    let mut carriers: [Expr] = []
+    carriers.push(_cg_str_expr("T:" + name_tok.text, kw.span))
+    if check_kind(TokenKind::LBrace) {
+        let members = _assoc_capture_block(true, kw.span)
+        let mut i = 0
+        while i < len(members) {
+            carriers.push(members[i])
+            i = i + 1
+        }
+    }
+    let pa_arg = _cg_str_expr("parse_only", kw.span)
+    let mut final_anns = anns
+    final_anns.push(Annotation { name: "phase", args: [pa_arg], span: kw.span })
+    final_anns.push(Annotation { name: "__assoc_trait", args: [], span: kw.span })
+    final_anns.push(Annotation { name: "__assoc", args: carriers, span: kw.span })
+    return Item {
+        kind: ItemKind::Let,
+        name: name_tok.text,
+        span: kw.span,
+        annotations: final_anns,
+        params: [],
+        return_type: empty_type(),
+        body: empty_expr(),
+        is_pub: is_pub
+    }
+}
+
+fn parse_assoc_impl_item(is_pub: bool, anns: [Annotation]) -> Item {
+    let kw = peek()
+    advance() // consume `impl` (Ident)
+    let trait_tok = expect(TokenKind::Ident)
+    _assoc_erase_generics()
+    // `impl Trait for Type` — `for` is KwFor. An inherent `impl Type { … }`
+    // (no `for`) is tolerated: trait_tok then names the type and there is no
+    // trait to validate against (the registry lookup misses → no diagnostics).
+    let mut type_name = ""
+    if check_kind(TokenKind::KwFor) {
+        advance()
+        let ty_tok = expect(TokenKind::Ident)
+        type_name = ty_tok.text
+        _assoc_erase_generics()
+    }
+    let mut carriers: [Expr] = []
+    carriers.push(_cg_str_expr("H:" + trait_tok.text + ":" + type_name, kw.span))
+    if check_kind(TokenKind::LBrace) {
+        let members = _assoc_capture_block(false, kw.span)
+        let mut i = 0
+        while i < len(members) {
+            carriers.push(members[i])
+            i = i + 1
+        }
+    }
+    let pa_arg = _cg_str_expr("parse_only", kw.span)
+    let mut final_anns = anns
+    final_anns.push(Annotation { name: "phase", args: [pa_arg], span: kw.span })
+    final_anns.push(Annotation { name: "__assoc_impl", args: [], span: kw.span })
+    final_anns.push(Annotation { name: "__assoc", args: carriers, span: kw.span })
+    return Item {
+        kind: ItemKind::Let,
+        name: trait_tok.text + "@" + type_name,
+        span: kw.span,
+        annotations: final_anns,
+        params: [],
+        return_type: empty_type(),
+        body: empty_expr(),
+        is_pub: is_pub
+    }
+}
+
 fn parse_item() -> Item {
     // accumulate annotations first
     let mut anns = []
@@ -2438,6 +2620,16 @@ fn parse_item() -> Item {
     // require an Ident name to disambiguate from any other Ident-led form.
     if _peek_is_type_kw() && same_kind(peek_at(1).kind, TokenKind::Ident) {
         return parse_type_alias_item(is_pub, anns)
+    }
+    // `trait Name { type X; … }` / `impl Trait for Type { type X = T; … }` —
+    // associated-type capture, opt-in `HEXA_ASSOC_TYPES=1`. `trait`/`impl` are
+    // Ident leaders (not keyword tokens). Flag-OFF this is skipped and the form
+    // falls through to the unknown-leader drop below, byte-for-byte unchanged.
+    if env("HEXA_ASSOC_TYPES") == "1" && _peek_is_trait_kw() && same_kind(peek_at(1).kind, TokenKind::Ident) {
+        return parse_assoc_trait_item(is_pub, anns)
+    }
+    if env("HEXA_ASSOC_TYPES") == "1" && _peek_is_impl_kw() && same_kind(peek_at(1).kind, TokenKind::Ident) {
+        return parse_assoc_impl_item(is_pub, anns)
     }
     if check_kind(TokenKind::KwFn) {
         return parse_fn_item(is_pub, anns)
@@ -2650,7 +2842,9 @@ fn _parse_module_one(tokens: [Token], file: string) -> Module {
            || check_kind(TokenKind::KwImport) || check_kind(TokenKind::KwPub)
            || check_kind(TokenKind::At)
            || (_peek_is_extern_kw() && same_kind(peek_at(1).kind, TokenKind::KwFn))
-           || (_peek_is_type_kw() && same_kind(peek_at(1).kind, TokenKind::Ident)) {
+           || (_peek_is_type_kw() && same_kind(peek_at(1).kind, TokenKind::Ident))
+           || (env("HEXA_ASSOC_TYPES") == "1" && _peek_is_trait_kw() && same_kind(peek_at(1).kind, TokenKind::Ident))
+           || (env("HEXA_ASSOC_TYPES") == "1" && _peek_is_impl_kw() && same_kind(peek_at(1).kind, TokenKind::Ident)) {
             let it = parse_item()
             items.push(it)
             if item_is_import(it.kind) {

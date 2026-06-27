@@ -2742,6 +2742,226 @@ fn _cg_check_module(module: Module, out: array) {
     }
 }
 
+// ── Associated types — trait/impl binding ENFORCEMENT ────────
+//
+// Opt-in (`HEXA_ASSOC_TYPES=1`), check-only, byteeq-neutral pass — the sibling
+// of `_cg_check_module`. It decodes the synthetic `__assoc` annotation the
+// opt-in parser capture attaches to `__assoc_trait` / `__assoc_impl` carriers
+// (parser.hexa `parse_assoc_trait_item` / `parse_assoc_impl_item`) and proves
+// the three Rust associated-type rules (The Rust Reference §"Associated types"):
+//   * R1 — every associated type declared by the trait MUST be bound in each
+//     impl (rustc E0046 "not all trait items implemented") → HX3011.
+//   * R2 — an impl may NOT bind an associated type the trait does not declare
+//     (rustc E0437 "type X is not a member of trait T") → HX3012.
+//   * R3 — an associated type may carry bounds (`type Item: Display;`) the bound
+//     concrete type must satisfy → HX3008 (warn) / HX3009 (strict), reusing the
+//     const-generics rustc-faithful `_cg_type_implements` table.
+// Out of scope (runtime stays dynamic): projection `<T as Trait>::Item`
+// substitution / assoc types in signatures — declaration+binding presence and
+// bound checks only. Like `_cg_check_module` it only appends diagnostics, never
+// touches MIR/codegen; env-unset it early-returns → emitted bytes unchanged.
+//
+// Encoding (one LiteralString carrier per atom, decoded with `_cg_split_ch`):
+//   trait carrier args : "T:<trait>"        then "A:<assoc>:<bound>" per slot
+//   impl  carrier args : "H:<trait>:<type>" then "B:<assoc>:<concrete>" per bind
+
+struct AssocTraitReg {
+    trait_names: [string],
+    assoc_offsets: [i64],
+    assoc_counts: [i64],
+    all_assoc_names: [string],
+    all_assoc_bounds: [string]
+}
+
+fn _assoc_has_marker(anns: [Annotation], marker: string) -> bool {
+    let mut i = 0
+    while i < len(anns) {
+        if anns[i].name == marker { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _assoc_get_args(anns: [Annotation]) -> [Expr] {
+    let mut i = 0
+    while i < len(anns) {
+        if anns[i].name == "__assoc" { return anns[i].args }
+        i = i + 1
+    }
+    let mut empty: [Expr] = []
+    return empty
+}
+
+// Walk every `__assoc_trait` carrier, decode its "T:" header + "A:" slots, and
+// flatten into the registry (offsets/counts index into the shared name/bound
+// arrays, mirroring CgGenericReg).
+fn _assoc_build_registry(module: Module) -> AssocTraitReg {
+    let mut trait_names: [string] = []
+    let mut assoc_offsets: [i64] = []
+    let mut assoc_counts: [i64] = []
+    let mut all_names: [string] = []
+    let mut all_bounds: [string] = []
+    let mut i = 0
+    while i < len(module.items) {
+        let it = module.items[i]
+        if _assoc_has_marker(it.annotations, "__assoc_trait") {
+            let args = _assoc_get_args(it.annotations)
+            let mut tname = ""
+            let mut anames: [string] = []
+            let mut abounds: [string] = []
+            let mut j = 0
+            while j < len(args) {
+                let parts = _cg_split_ch(args[j].text, ':')
+                if len(parts) >= 2 {
+                    let tag = parts[0]
+                    if tag == "T" {
+                        tname = parts[1]
+                    } else if tag == "A" {
+                        anames.push(parts[1])
+                        if len(parts) >= 3 { abounds.push(parts[2]) } else { abounds.push("") }
+                    }
+                }
+                j = j + 1
+            }
+            if len(tname) > 0 {
+                trait_names.push(tname)
+                assoc_offsets.push(len(all_names))
+                assoc_counts.push(len(anames))
+                let mut k = 0
+                while k < len(anames) {
+                    all_names.push(anames[k])
+                    all_bounds.push(abounds[k])
+                    k = k + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return AssocTraitReg {
+        trait_names: trait_names,
+        assoc_offsets: assoc_offsets,
+        assoc_counts: assoc_counts,
+        all_assoc_names: all_names,
+        all_assoc_bounds: all_bounds
+    }
+}
+
+fn _assoc_reg_index(reg: AssocTraitReg, tname: string) -> i64 {
+    let mut i = 0
+    while i < len(reg.trait_names) {
+        if reg.trait_names[i] == tname { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn _assoc_check_module(module: Module, out: array) {
+    if env("HEXA_ASSOC_TYPES") != "1" { return }
+    let reg = _assoc_build_registry(module)
+    let strict = env("HEXA_STRICT_BOUNDS") == "1"
+    let mut ii = 0
+    while ii < len(module.items) {
+        let it = module.items[ii]
+        if !_assoc_has_marker(it.annotations, "__assoc_impl") {
+            ii = ii + 1
+            continue
+        }
+        let args = _assoc_get_args(it.annotations)
+        let mut tname = ""
+        let mut itype = ""
+        let mut bnames: [string] = []
+        let mut btypes: [string] = []
+        let mut j = 0
+        while j < len(args) {
+            let parts = _cg_split_ch(args[j].text, ':')
+            if len(parts) >= 1 {
+                let tag = parts[0]
+                if tag == "H" {
+                    if len(parts) >= 2 { tname = parts[1] }
+                    if len(parts) >= 3 { itype = parts[2] }
+                } else if tag == "B" {
+                    if len(parts) >= 2 {
+                        bnames.push(parts[1])
+                        if len(parts) >= 3 { btypes.push(parts[2]) } else { btypes.push("") }
+                    }
+                }
+            }
+            j = j + 1
+        }
+        let ti = _assoc_reg_index(reg, tname)
+        // Unknown trait (inherent impl or trait not declared in this module):
+        // nothing to validate against — conservative silence (no false errors).
+        if ti < 0 {
+            ii = ii + 1
+            continue
+        }
+        let off = reg.assoc_offsets[ti]
+        let cnt = reg.assoc_counts[ti]
+        let owner = tname + "@" + itype
+        // R1 — every declared associated type must be bound in the impl.
+        let mut d = 0
+        while d < cnt {
+            let decl_name = reg.all_assoc_names[off + d]
+            let mut found = false
+            let mut b = 0
+            while b < len(bnames) {
+                if bnames[b] == decl_name { found = true }
+                b = b + 1
+            }
+            if !found {
+                let mut db = diag_new("HX3011")
+                db = diag_span(db, it.span)
+                db = diag_arg(db, "owner", owner)
+                db = diag_arg(db, "assoc", decl_name)
+                out.push(diag_emit(db))
+            }
+            d = d + 1
+        }
+        // R2 — every binding must name a trait-declared associated type.
+        // R3 — a declared binding's concrete type must satisfy the slot bound.
+        let mut b2 = 0
+        while b2 < len(bnames) {
+            let bn = bnames[b2]
+            let bt = btypes[b2]
+            let mut decl_idx = -1
+            let mut d2 = 0
+            while d2 < cnt {
+                if reg.all_assoc_names[off + d2] == bn { decl_idx = off + d2 }
+                d2 = d2 + 1
+            }
+            if decl_idx < 0 {
+                let mut ub = diag_new("HX3012")
+                ub = diag_span(ub, it.span)
+                ub = diag_arg(ub, "owner", owner)
+                ub = diag_arg(ub, "assoc", bn)
+                out.push(diag_emit(ub))
+            } else {
+                let bound = reg.all_assoc_bounds[decl_idx]
+                if len(bound) > 0 && _cg_is_enforceable_type(bt) {
+                    let traits = _cg_split_ch(bound, '+')
+                    let mut t = 0
+                    while t < len(traits) {
+                        let tr = traits[t]
+                        if len(tr) > 0 && !_cg_type_implements(bt, tr) {
+                            let mut code = "HX3008"
+                            if strict { code = "HX3009" }
+                            let mut rb = diag_new(code)
+                            rb = diag_span(rb, it.span)
+                            rb = diag_arg(rb, "trait", tr)
+                            rb = diag_arg(rb, "type", bt)
+                            rb = diag_arg(rb, "owner", owner)
+                            out.push(diag_emit(rb))
+                        }
+                        t = t + 1
+                    }
+                }
+            }
+            b2 = b2 + 1
+        }
+        ii = ii + 1
+    }
+}
+
 // ── Pre-pass: collect Item types into TypeEnv ────────────────
 
 fn _types_signature_type(it: Item) -> Type {
@@ -3062,6 +3282,11 @@ pub fn type_check(module: Module) -> array {
     // Opt-in (HEXA_CONST_GENERICS=1); no-op on the default build. Identical
     // structural slot to the exhaustiveness pass above.
     _cg_check_module(module, out)
+
+    // Associated types — trait/impl binding enforcement (HX3011/3012 + HX3008/9).
+    // Opt-in (HEXA_ASSOC_TYPES=1); no-op on the default build. Same check-only,
+    // diagnostics-only structural slot as the const-generics pass above.
+    _assoc_check_module(module, out)
 
     return out
 }
