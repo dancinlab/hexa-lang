@@ -640,3 +640,65 @@ pub fn hxlcl_lseek(fd: HexaVal, off: HexaVal, whence: HexaVal) -> int {
     }
     return r                                    // resulting file offset (>= 0)
 }
+
+// ── ERRNO-BEARING CHAIN r2 — arm64 CALL-SHAPE DIVERGENCE (5th discipline) ──
+//
+// dup2 and mkdir have NO plain syscall on arm64-linux (asm-generic dropped the
+// legacy numbers); they must use the *at-variant with an extra arg:
+//   dup2  → dup3(old, new, FLAGS=0)        (arm64 __NR_dup3 = 24, 3-arg)
+//   mkdir → mkdirat(AT_FDCWD=-100, path, mode) (arm64 __NR_mkdirat = 34, 3-arg)
+// x86_64-linux + darwin keep the plain 2-arg form (dup2 33/90, mkdir 83/136).
+// NR + AT_FDCWD ref-match (no black-box): x86_64 = syscall_64.tbl; arm64 dup3=24/
+// mkdirat=34 = include/uapi/asm-generic/unistd.h (NO plain dup2/mkdir there);
+// darwin = runtime.c HXLCL_SYS_DUP2 90 / HXLCL_SYS_MKDIR 136; AT_FDCWD=-100 =
+// self/rt/syscall.hexa:153,161. errno-store = the close discipline verbatim.
+
+// dup2: the arm64 dup3 call takes the SAME old/new args plus a trailing flags=0,
+// so passing `(nr, old, new, 0, …)` is correct on EVERY target — x86_64/darwin
+// dup2 ignore the unused arg slot, arm64 dup3 reads arg[2]=0 as flags=0. Hence
+// only the NR differs (uniform arg tuple), exactly like read/lseek.
+pub fn hxlcl_dup2(oldfd: HexaVal, newfd: HexaVal) -> int {
+    let mut nr = 90                            // Darwin SYS_DUP2 (default)
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 33 }      // Linux x86_64 __NR_dup2
+        else { nr = 24 }                       // Linux arm64 __NR_dup3 (flags=0)
+    }
+    let r = __hx_syscall6(nr, oldfd, newfd, 0, 0, 0, 0)
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // newfd (>= 0)
+}
+
+// mkdir: the arm64 mkdirat call PREPENDS AT_FDCWD, shifting path/mode right by
+// one — a genuine per-arch ARG-TUPLE divergence (not just a NR swap). So the
+// syscall is issued in per-arch branches with the correct argument shape; the
+// result `r` then flows into the shared close-pattern errno epilogue.
+pub fn hxlcl_mkdir(path: HexaVal, mode: HexaVal) -> int {
+    let mut r = 0
+    if target_is_linux() {
+        if target_is_x86_64() {
+            r = __hx_syscall6(83, path, mode, 0, 0, 0, 0)        // x86_64 mkdir(path, mode)
+        } else {
+            r = __hx_syscall6(34, -100, path, mode, 0, 0, 0)     // arm64 mkdirat(AT_FDCWD, path, mode)
+        }
+    } else {
+        r = __hx_syscall6(136, path, mode, 0, 0, 0, 0)           // darwin SYS_MKDIR(path, mode)
+    }
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // 0 on success
+}
