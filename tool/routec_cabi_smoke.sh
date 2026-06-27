@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll clock_gettime execve fork getenv; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll clock_gettime execve fork getenv setenv; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -218,6 +218,14 @@ extern int  hxlcl_fork(void);
  * environ block (or NULL). `environ` itself comes from the C runtime (no harness
  * definition needed — the routec.o's GOT ref to _environ resolves against libSystem). */
 extern char *hxlcl_getenv(const char *name);
+
+/* Wall 2-b ENV (sibling) — setenv. The FIRST Route C body to WRITE BACK to the
+ * `&environ` global: replace an existing slot in place (`*e = s`) or GROW a fresh
+ * (N+2)-slot char** array and store it into environ via __hx_ptr_store64. Returns 0
+ * on success, -1 (EINVAL) for NULL/empty name. The grow path mallocs via the same
+ * header-writing hxlcl_malloc below; the writeback to environ is proven by reading
+ * the new value back through BOTH hxlcl_getenv AND libc getenv (same live global). */
+extern int hxlcl_setenv(const char *name, const char *value, int overwrite);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
@@ -612,6 +620,39 @@ int main(void) {
         /* A longer query than any matching entry must also miss (entry NUL before
          * nlen → the `entry[i]==0` early-stop fires, no over-read past the entry). */
         CK(hxlcl_getenv("HX_SMOKE_ENVVAR_EXTRA") == NULL, "getenv(query longer than a real key) → NULL (short-entry stop)");
+    }
+
+    /* Wall 2-b (sibling) — setenv: the environ WRITE-BACK. Reference-match POSIX
+     * setenv(3): GROW for a fresh key (writeback must reach the live global so BOTH
+     * hxlcl_getenv AND libc getenv see it), in-place slot REPLACE on overwrite!=0,
+     * NO-OP preserve on overwrite==0, repeated GROW (second fresh key) keeping the
+     * first, and EINVAL (-1) for NULL/empty name. Value-exact throughout. A writeback
+     * that landed in a COPY instead of &environ would make libc getenv miss the new
+     * key — the strongest proof the store reached the global. */
+    {
+        /* (1) GROW — fresh key; writeback reaches the live global (libc getenv sees it). */
+        CK(hxlcl_setenv("HX_RC_NEW", "v1", 1) == 0, "setenv(fresh key) → 0");
+        char *g1 = hxlcl_getenv("HX_RC_NEW");
+        CK(g1 != NULL && strcmp(g1, "v1") == 0, "setenv(fresh): hxlcl_getenv == \"v1\" (content-exact)");
+        char *l1 = getenv("HX_RC_NEW");
+        CK(l1 != NULL && strcmp(l1, "v1") == 0, "setenv(fresh): libc getenv == \"v1\" (writeback reached &environ)");
+        /* (2) REPLACE — overwrite!=0 swaps the slot in place. */
+        CK(hxlcl_setenv("HX_RC_NEW", "v2", 1) == 0, "setenv(overwrite=1) → 0");
+        char *g2 = hxlcl_getenv("HX_RC_NEW");
+        CK(g2 != NULL && strcmp(g2, "v2") == 0, "setenv(overwrite): value replaced → \"v2\"");
+        /* (3) NO-OP — overwrite==0 must preserve the existing value. */
+        CK(hxlcl_setenv("HX_RC_NEW", "v3", 0) == 0, "setenv(overwrite=0, exists) → 0");
+        char *g3 = hxlcl_getenv("HX_RC_NEW");
+        CK(g3 != NULL && strcmp(g3, "v2") == 0, "setenv(overwrite=0): value preserved → \"v2\"");
+        /* (4) repeated GROW — a second fresh key; the prior key must survive the regrow. */
+        CK(hxlcl_setenv("HX_RC_NEW2", "w1", 1) == 0, "setenv(second fresh key) → 0");
+        char *g4 = hxlcl_getenv("HX_RC_NEW2");
+        CK(g4 != NULL && strcmp(g4, "w1") == 0, "setenv(regrow): new key == \"w1\"");
+        char *g5 = hxlcl_getenv("HX_RC_NEW");
+        CK(g5 != NULL && strcmp(g5, "v2") == 0, "setenv(regrow): prior key HX_RC_NEW survives == \"v2\"");
+        /* (5) EINVAL — NULL and empty name → -1. */
+        CK(hxlcl_setenv(NULL, "x", 1) == -1, "setenv(NULL name) → -1 (EINVAL)");
+        CK(hxlcl_setenv("", "x", 1) == -1, "setenv(empty name) → -1 (EINVAL)");
     }
 
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }

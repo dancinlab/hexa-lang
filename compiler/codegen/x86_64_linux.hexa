@@ -1616,9 +1616,18 @@ pub fn _is_cabi(fname: string) -> bool {
     // bl). The ONLY extern reference is the libc `environ` data symbol the intrinsic
     // resolves through the GOT; everything else is the proven copy/compare-family
     // payload arithmetic. Cross-target-identical body (the per-target GOT form lives
-    // inside __hx_environ_ptr's STMT_CALL special-case). getenv-ONLY this round —
-    // setenv (environ-array mutation: realloc/putenv rebuild) is the deferred sibling.
+    // inside __hx_environ_ptr's STMT_CALL special-case).
     if fname == "hxlcl_getenv" { return true }
+    // Wall 2-b ENV (sibling) — hxlcl_setenv: the FIRST environ WRITE-BACK body. It
+    // reuses __hx_environ_ptr (read &environ) + the already-whitelisted __hx_ptr_store64
+    // (the writable pointer-word store, proven by hxlcl_strtoll's endptr) + the inner
+    // C-ABI `bl hxlcl_malloc` (proven by strdup/calloc/realloc) — NO new intrinsic. The
+    // replace path stores the new "name=value" pointer into the matching slot in place
+    // (`*e = s`); the grow path mallocs a fresh (N+2)-slot char** array, copies, appends,
+    // and stores it back into `environ` via __hx_ptr_store64(&environ, 0, newarr).
+    // Reference-matched to musl src/env/setenv.c + putenv.c (fresh-array-on-grow floor
+    // simplification of musl's __env_map leak-tracking). Cross-target-identical body.
+    if fname == "hxlcl_setenv" { return true }
     return false
 }
 
