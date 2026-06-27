@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -179,6 +179,12 @@ extern int    hxlcl_pipe(int fds[2]);
  * emit is bit-equal on all 3 targets; this run proves the BEHAVIOUR). */
 extern char  *hxlcl_strchr(const char *s, int c);
 extern char  *hxlcl_strstr(const char *h, const char *n);
+
+/* batch G parse family — strtoll. Pure-compute leaf (no syscall, no errno, no
+ * inner call) with a NULL-gated `char** endptr` out-param write. Cross-target-
+ * identical compute; this run exercises both the value parse AND the endptr
+ * store64 (a non-NULL endptr → *endptr == nptr + consumed-length). */
+extern long long hxlcl_strtoll(const char *nptr, char **endptr, int base);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
@@ -444,6 +450,33 @@ int main(void) {
         CK(hxlcl_strstr(hay, "xyz")   == NULL,    "strstr 'xyz' → NULL (absent)");
         CK(hxlcl_strstr(hay, "worlds") == NULL,   "strstr needle past haystack end → NULL");
         CK(hxlcl_strstr("aaa", "aab") == NULL,    "strstr partial-then-mismatch → NULL");
+    }
+
+    /* batch G: strtoll — value parse + endptr store64 (the OUT-PARAM write under
+     * test). endptr==NULL exercises the NULL-gate (no store); endptr!=NULL
+     * exercises the __hx_ptr_store64 → *endptr == nptr + consumed-length. */
+    {
+        CK(hxlcl_strtoll("42", NULL, 10) == 42, "strtoll(\"42\",NULL,10) == 42 (endptr NULL-gate)");
+        CK(hxlcl_strtoll("-7", NULL, 10) == -7, "strtoll(\"-7\",NULL,10) == -7 (sign)");
+        CK(hxlcl_strtoll("+99", NULL, 10) == 99, "strtoll(\"+99\",NULL,10) == 99 (plus sign)");
+        CK(hxlcl_strtoll("  123abc", NULL, 10) == 123, "strtoll leading-ws + trailing-garbage stop");
+        CK(hxlcl_strtoll("0", NULL, 10) == 0, "strtoll(\"0\") == 0");
+        CK(hxlcl_strtoll("ff", NULL, 16) == 255, "strtoll(\"ff\",16) == 255 (lowercase hex)");
+        CK(hxlcl_strtoll("0755", NULL, 0) == 493, "strtoll(\"0755\",0) == 0755 octal (493)");
+        CK(hxlcl_strtoll("10", NULL, 0) == 10, "strtoll(\"10\",0) == 10 (decimal auto)");
+        const char *hx = "0xFF";
+        char *endp = NULL;
+        long long v = hxlcl_strtoll(hx, &endp, 16);
+        CK(v == 255, "strtoll(\"0xFF\",&end,16) == 255 (0x prefix skip)");
+        CK(endp == hx + 4, "strtoll endptr == nptr+4 (store64 out-param write)");
+        const char *mix = "12x";
+        char *endp2 = NULL;
+        CK(hxlcl_strtoll(mix, &endp2, 10) == 12, "strtoll(\"12x\",&end,10) == 12");
+        CK(endp2 == mix + 2, "strtoll endptr stops at first non-digit (mix+2)");
+        /* NULL nptr → 0, endptr (if given) set to nptr(NULL). */
+        char *endp3 = (char *)0x1;
+        CK(hxlcl_strtoll(NULL, &endp3, 10) == 0, "strtoll(NULL,&end,10) == 0");
+        CK(endp3 == NULL, "strtoll(NULL) sets *endptr = NULL");
     }
 
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }

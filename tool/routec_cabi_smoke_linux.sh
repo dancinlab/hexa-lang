@@ -104,6 +104,10 @@ extern int  hxlcl_open_sys(const char *path, int flags, int mode); /* arm64 → 
 extern int  hxlcl_getrusage(int who, void *usage);
 /* batch E — pipe: out-ptr int[2] (Linux pipe2, flags=0). Kernel writes both fds. */
 extern int  hxlcl_pipe(int fds[2]);
+/* batch G — strtoll: pure-compute parse with a NULL-gated `char** endptr` out-param.
+ * Exercised here too so the __hx_ptr_store64 endptr write gets x86_64 coverage
+ * (the store64 reg allocation differs per backend). Not errno-bearing. */
+extern long long hxlcl_strtoll(const char *nptr, char **endptr, int base);
 
 /* The emit covers ALL whitelisted Route C symbols (the script emits the whole
  * hxlcl_core.hexa), so the routec.o carries the composites' undefined-external
@@ -301,6 +305,23 @@ int main(void) {
         CK(read(pfd[0], &rb, 1) == 1 && rb == 'Z', "pipe read end roundtrip == 'Z'");
         hxlcl_close(pfd[0]);
         hxlcl_close(pfd[1]);
+    }
+
+    /* batch G — strtoll: x86_64 coverage of the value parse + endptr store64
+     * out-param write (not errno-bearing — pure compute). */
+    {
+        CK(hxlcl_strtoll("42", NULL, 10) == 42, "strtoll(\"42\",NULL,10) == 42 (endptr NULL-gate)");
+        CK(hxlcl_strtoll("-7", NULL, 10) == -7, "strtoll(\"-7\",NULL,10) == -7 (sign)");
+        CK(hxlcl_strtoll("ff", NULL, 16) == 255, "strtoll(\"ff\",16) == 255 (lowercase hex)");
+        CK(hxlcl_strtoll("0755", NULL, 0) == 493, "strtoll(\"0755\",0) == 493 (octal auto)");
+        const char *hx = "0xFF";
+        char *endp = NULL;
+        CK(hxlcl_strtoll(hx, &endp, 16) == 255, "strtoll(\"0xFF\",&end,16) == 255 (0x skip)");
+        CK(endp == hx + 4, "strtoll endptr == nptr+4 (store64 out-param write, x86_64)");
+        const char *mix = "12x";
+        char *endp2 = NULL;
+        CK(hxlcl_strtoll(mix, &endp2, 10) == 12, "strtoll(\"12x\",&end,10) == 12");
+        CK(endp2 == mix + 2, "strtoll endptr stops at first non-digit (mix+2)");
     }
 
     if (fails == 0) { printf("[routec-smoke-linux] all Route C errno asserts PASS\n"); return 0; }
