@@ -2542,7 +2542,13 @@ pub fn lower(module: Module, atlas: AtlasIndex) -> HModule {
         let it = module.items[i]
         let def = DefId { module: module.file, index: idx }
         item_defs.push(def)
-        if _is_import_item(it.kind) {
+        if item_is_type_alias(it) {
+            // Type-alias carrier (ItemKind::Let + `__type_alias`) is a pure
+            // parse/resolve substitution — it binds no runtime value, so it is
+            // NOT defined in module scope (and is dropped from lowering in the
+            // pass below). `def`/`idx` still advance to keep item_defs[]
+            // index-aligned with module.items for the lowering pass.
+        } else if _is_import_item(it.kind) {
             // Imports are not bound as defs in scope.
         } else if _hir_is_fn_item(it.kind) {
             module_sc = _define_with_def(module_sc, it.name, def, _hir_signature_type(it))
@@ -2562,6 +2568,11 @@ pub fn lower(module: Module, atlas: AtlasIndex) -> HModule {
     let mut k = 0
     while k < len(module.items) {
         let it = module.items[k]
+        // Type-alias carriers emit nothing (resolved away in the types pass).
+        if item_is_type_alias(it) {
+            k = k + 1
+            continue
+        }
         let def = item_defs[k]
         let h = _lower_item(it, def, atlas, module_sc)
         hitems.push(h)
