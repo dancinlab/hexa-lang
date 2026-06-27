@@ -890,7 +890,12 @@ fn _types_is_let_item(k: ItemKind) -> bool {
 fn _types_lower_type_ref(tr: TypeRef) -> Type {
     if len(tr.kind) == 0 { return _types_empty_type() }
     if tr.kind == "named" {
-        let n = tr.name
+        // Type-alias substitution (`type Celsius = f64`): resolve the spelling
+        // to its underlying named type BEFORE the primitive table so `Celsius`
+        // is interchangeable with `f64` for every typecheck site. No-op (same
+        // string) when `tr.name` is not a registered alias → byte-identical
+        // for alias-free programs.
+        let n = _types_resolve_alias_name(tr.name)
         // Gap 3 (stage1 punch list): kind="named" with empty `name` is a stale
         // TypeRef shape — degrade to the unknown sentinel so the let-RHS /
         // return checker tolerates instead of falsely mapping to `unit`.
@@ -976,6 +981,68 @@ fn _types_enum_registry_reset() {
     _types_enum_variant_payload_offsets = []
     _types_enum_variant_payload_arities = []
     _types_enum_variant_payload_typrefs = []
+}
+
+// ── Type-alias substitution table (`type Name = Underlying`) ──────
+//
+// Parallel arrays mapping an alias name to the *spelling* of its underlying
+// named type (e.g. "Celsius" → "f64"). Populated up front by
+// `_types_register_aliases` from the `__type_alias` carrier items so a later
+// `_types_lower_type_ref("Celsius")` resolves to the underlying primitive
+// Type everywhere a TypeRef is lowered (let/param/return annotations, struct
+// fields, `as`-casts). Lifetime == one `type_check()` call. Empty for any
+// program that declares no aliases → `_types_lower_type_ref` falls through
+// byte-identically (the registry lookup iterates 0 times).
+let mut _types_alias_names: [string] = []
+let mut _types_alias_underlying: [string] = []
+
+fn _types_alias_registry_reset() {
+    _types_alias_names = []
+    _types_alias_underlying = []
+}
+
+// Scan all module items and register each `type Name = Underlying` carrier.
+// Only `kind == "named"` underlyings are recorded (the common scalar/nominal
+// case — `type MyInt = i64`, `type Handle = Widget`); generic/fn/tuple
+// underlyings are left unregistered and fall through to the existing sentinel
+// lowering. A self/forward chain is bounded at resolve time, not here.
+fn _types_register_aliases(module: Module) {
+    let mut i = 0
+    while i < len(module.items) {
+        let it = module.items[i]
+        if item_is_type_alias(it) {
+            let u = it.return_type
+            if u.kind == "named" && len(u.name) > 0 {
+                _types_alias_names.push(it.name)
+                _types_alias_underlying.push(u.name)
+            }
+        }
+        i = i + 1
+    }
+}
+
+// Resolve an alias name to its underlying spelling, following chains
+// (`type A = i64; type B = A`) with a bounded hop count to defuse any cycle
+// (`type A = A`). Returns the input name unchanged when it is not a
+// registered alias.
+fn _types_resolve_alias_name(name: string) -> string {
+    let mut cur = name
+    let mut hops = 0
+    while hops < 16 {
+        let mut found = false
+        let mut j = 0
+        while j < len(_types_alias_names) {
+            if _types_alias_names[j] == cur {
+                cur = _types_alias_underlying[j]
+                found = true
+                break
+            }
+            j = j + 1
+        }
+        if !found { return cur }
+        hops = hops + 1
+    }
+    return cur
 }
 
 // Render a TypeRef into the same display string `_type_display` would
@@ -2431,6 +2498,15 @@ fn _collect_item_types(module: Module, out: array) -> TypeEnv {
         if len(owning) == 0 { owning = module.file }
         let def = DefId { module: owning, index: idx }
 
+        // Type-alias carriers bind no value — already registered in the alias
+        // substitution table by `_types_register_aliases`. Skip here so they
+        // never enter the value env. Like the `!is_def` skip below, `idx` (the
+        // per-definition counter) does NOT advance for a non-binding item.
+        if item_is_type_alias(it) {
+            i = i + 1
+            continue
+        }
+
         // Skip non-definition items up front.
         let is_def = _types_is_fn_item(it.kind)
             || _types_is_struct_item(it.kind)
@@ -2516,6 +2592,12 @@ pub fn type_check(module: Module) -> array {
     // `type_check()` is called once per module pass; registry lifetime ==
     // this call (parallel to bind.hexa's arity registry reset shape).
     _types_enum_registry_reset()
+    // Type-alias substitution table — registered up front (before any TypeRef
+    // is lowered) so `type Name = T` carriers resolve `Name` → `T` everywhere,
+    // including forward references (`struct S { x: Name }` declared above the
+    // alias). Empty for alias-free programs → fully byte-neutral.
+    _types_alias_registry_reset()
+    _types_register_aliases(module)
     // Pre-pass collects item types and emits HX3010 for duplicate pub
     // symbols across files (Stage1 punch list Gap 2).
     let env = _collect_item_types(module, out)
