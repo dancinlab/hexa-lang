@@ -2326,7 +2326,7 @@ pub fn hxlcl_popen(cmd: HexaVal, mode: HexaVal) -> int {
         __hx_ptr_store64(argv, 16, pcmd)          // argv[2] = cmd
         __hx_ptr_store64(argv, 24, 0)             // argv[3] = NULL
         let psh2 = __hx_payload_add("/bin/sh", 0) // path
-        let _e = hxlcl_execve(psh2, argv, 0)      // envp=NULL (inherit not needed here)
+        let _e = hxlcl_execve(psh2, argv, __hx_payload_add(0, 0))      // envp=NULL (HexaVal-boxed)
         // execve only returns on failure → terminate the child via exit syscall.
         // close everything we can and fall through to the parent-style cleanup is
         // unsafe (child must not return into the caller); issue exit(127) directly.
@@ -2372,7 +2372,7 @@ pub fn hxlcl_pclose(stream: HexaVal) -> int {
     let four = __hx_payload_add(0, 4)
     let stbuf = hxlcl_malloc(four)                // 4-byte int status slot
     __hx_ptr_store32(stbuf, 0, 0)                 // status = 0
-    let _w = hxlcl_waitpid(pid, stbuf, 0)
+    let _w = hxlcl_waitpid(pid, stbuf, __hx_payload_add(0, 0))   // options=0 (HexaVal-boxed)
     let status = __hx_ptr_load32(stbuf, 0)        // raw wait status (frozen returns it)
     return status
 }
