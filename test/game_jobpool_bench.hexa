@@ -1,0 +1,132 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  test/game_jobpool_bench.hexa — work-stealing job-system bench + oracle.
+//
+//  Exercises stdlib/thread_pool (the persistent work-stealing pool / rayon job
+//  system). TWO concerns in one file, the test_real_spawn pattern:
+//
+//    (1) CORRECTNESS ORACLE — always runs, DEFAULT-BUILD-SAFE. A job set whose
+//        results are COMBINED order-insensitively (sum of per-job partials)
+//        yields the SAME total whether jobs run inline (default synchronous
+//        backend) or on real OS worker threads (-DHEXA_THREADS + HEXA_THREADS).
+//        This is the byteeq-safe contract: the pool changes scheduling, never
+//        the reduced result. Includes an UNBALANCED workload (heavy + light
+//        jobs interleaved) — the case work-stealing exists to handle: idle
+//        workers steal the queued light jobs while heavies run, so throughput
+//        stays high instead of one worker stalling the join.
+//
+//    (2) THROUGHPUT BENCH — opt-in (HEXA_THREADS env set). Submits many jobs and
+//        reports jobs/s. Under the default build this is the inline rate (a pure
+//        dispatch-overhead floor); under -DHEXA_THREADS it is the real multicore
+//        job-system throughput. perf numbers are an aiden serial follow-up (mini
+//        cannot build); this file just wires the lane + locks the oracle.
+//
+//  byteeq-neutral: thread_pool is not in any self/ compile closure, and the
+//  default build runs every job inline & deterministically.
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/thread_pool"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, actual, expected) {
+    if to_string(actual) == to_string(expected) {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected: " + to_string(expected) + ", got: " + to_string(actual))
+        fail_count = fail_count + 1
+    }
+}
+
+// ── job kernels ──────────────────────────────────────────────────────────────
+
+// uniform job: returns its arg (so a sum of args 0..n-1 is the closed-form
+// reference n*(n-1)/2 — an order-insensitive reduce the pool must reproduce).
+fn job_identity(x) {
+    return x
+}
+
+// heavy job: an integer grind whose RESULT is still order-insensitive (a fixed
+// partial), but whose COST is large — the imbalance work-stealing smooths over.
+fn job_heavy(x) {
+    let mut s = 0
+    let mut i = 0
+    while i < 2000 {
+        s = s + ((x + i) % 7)
+        i = i + 1
+    }
+    // fold the grind to a fixed per-x partial so the total stays deterministic.
+    return x
+}
+
+// ── (1) CORRECTNESS ORACLE — always runs ──────────────────────────────────────
+
+println("═══════════════════════════════════════════════════════")
+println("  HEXA work-stealing job-system oracle")
+println("═══════════════════════════════════════════════════════")
+
+// closed-form reference: sum of identities 0..N-1 = N*(N-1)/2.
+let N = 64
+let ref_total = (N * (N - 1)) / 2
+check("ref sum 0..63 == 2016", ref_total, 2016)
+
+// uniform job set through the pool.
+let p1 = pool_new(0)            // rayon-default worker count
+check("pool resolves >=1 worker", pool_workers(p1) >= 1, true)
+let mut i = 0
+while i < N {
+    pool_submit(p1, job_identity, i)
+    i = i + 1
+}
+let total1 = pool_join(p1)
+check("uniform pool total == ref", total1, ref_total)
+
+// UNBALANCED job set: interleave heavy + light jobs. Result is still the
+// order-insensitive sum of args, so it equals the same closed-form reference —
+// the win work-stealing brings is in WALL TIME (idle workers steal the light
+// jobs), not in the value, which must stay identical on both backends.
+let p2 = pool_new(0)
+let mut j = 0
+let mut ref2 = 0
+while j < N {
+    if j % 4 == 0 {
+        pool_submit(p2, job_heavy, j)
+    } else {
+        pool_submit(p2, job_identity, j)
+    }
+    ref2 = ref2 + j
+    j = j + 1
+}
+let total2 = pool_join(p2)
+check("unbalanced pool total == sum 0..63", total2, ref2)
+check("unbalanced == uniform (same reduce)", total2, total1)
+
+// empty pool join is well-defined (no jobs → reduce identity 0).
+let p3 = pool_new(2)
+let total3 = pool_join(p3)
+check("empty pool join == 0", total3, 0)
+
+// ── (2) THROUGHPUT BENCH — opt-in ─────────────────────────────────────────────
+// Default run skips the timed sweep (keeps the byteeq CI pass deterministic);
+// the -DHEXA_THREADS lane sets HEXA_THREADS to exercise the real job system.
+if env("HEXA_THREADS") != "" {
+    println("--- throughput bench (HEXA_THREADS opt-in) ---")
+    let pb = pool_new(0)
+    let JOBS = 100000
+    let mut k = 0
+    while k < JOBS {
+        pool_submit(pb, job_identity, k % 97)
+        k = k + 1
+    }
+    let acc = pool_join(pb)
+    println("[bench] submitted=" + to_string(JOBS) + " workers=" + to_string(pool_workers(pb)) + " acc=" + to_string(acc))
+    println("[bench] (wall-time jobs/s = aiden serial follow-up; this lane verifies the path runs)")
+} else {
+    println("--- throughput bench SKIPPED (set HEXA_THREADS; needs -DHEXA_THREADS for real OS threads) ---")
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  passed: " + to_string(pass_count) + "  failed: " + to_string(fail_count))
+println("═══════════════════════════════════════════════════════")
+if fail_count > 0 { exit(1) }

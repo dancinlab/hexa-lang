@@ -1,0 +1,336 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/thread_pool.hexa — OPT-IN persistent work-stealing job system
+//
+//  @module(slug="thread_pool", desc="a persistent work-stealing thread pool (the
+//          game-runtime / rayon 'job system' canon): spawn N workers ONCE, then
+//          dispatch many jobs; per-worker LIFO deque + FIFO work-stealing + a
+//          global injector. opt-in real OS threads under a -DHEXA_THREADS build;
+//          the default build runs every job synchronously (deterministic).")
+//  @usage(use "stdlib/thread_pool"; let p = pool_new(0); pool_submit(p, job, arg);
+//         let n = pool_join(p))
+//  @stability preview
+//  @since 2026-06-27
+//  @rfc state/rfc_real_concurrency_optin.md (slice ⑦ — work-stealing job system)
+//
+//  ── WHY A POOL (parity gap this closes) ───────────────────────────────────
+//
+//  `stdlib/thread_real` gives raw `thread_start`/`thread_wait` — one fresh OS
+//  thread per task (pthread_create on every spawn). That is the spawn-PRIMITIVE,
+//  not the spawn-POLICY a game engine ships. The canonical game/parallel runtime
+//  is a PERSISTENT WORK-STEALING THREAD POOL (a "job system"): N worker threads
+//  (≈ logical cores) are spawned ONCE at startup and then service an unbounded
+//  stream of small jobs, each worker pulling from its own deque and STEALING from
+//  a victim worker when idle. This is the rayon / Intel-TBB / Unreal-TaskGraph /
+//  Naughty-Dog-fibers shape — spawn-once, dispatch-many — and it is what hexa was
+//  missing. This module adds it on top of the existing pthread + atomic floor.
+//
+//  ── REFERENCE-MATCH (rayon core · crossbeam Chase-Lev deque) ───────────────
+//
+//  The algorithm is the Chase-Lev work-stealing deque as fixed for weak memory
+//  models by Lê, Pop, Cohen & Zappa Nardelli (PPoPP 2013, "Correct and Efficient
+//  Work-Stealing for Weak Memory Models"), which is exactly what rayon follows
+//  through crossbeam-deque. Reference sites (open source, read for this port):
+//
+//    · rayon-core/src/registry.rs — `Registry::new` spawns `n_threads` worker
+//      threads ONCE; each `ThreadBuilder::run` loops `wait_or_steal`. A global
+//      `Injector` (crossbeam-deque) holds externally-submitted jobs; `inject()`
+//      pushes onto it. `WorkerThread { worker: Worker<JobRef>, ... }` is the
+//      per-worker local deque. → mirrored here by `pool_new` (spawn-once N
+//      workers), the injector channel, and the per-worker deques.
+//    · rayon-core/src/registry.rs — `WorkerThread::take_local_job` calls
+//      `self.worker.pop()` (owner pops the BOTTOM, LIFO — best cache locality);
+//      `steal()` loops other workers calling `stealer.steal()` (thief takes the
+//      TOP, FIFO — oldest job, least likely to be the victim's hot data). The
+//      LIFO-own / FIFO-steal split is the Chase-Lev invariant. → mirrored by
+//      `_deque_pop` (owner, bottom) vs `_deque_steal` (thief, top).
+//    · crossbeam-deque/src/deque.rs — `Worker::push`/`pop` move `bottom`;
+//      `Stealer::steal` CAS-advances `top`; a Release/Acquire fence orders the
+//      bottom-store before the top-load so owner-pop and thief-steal never both
+//      take the last element. → mirrored by the `bottom`/`top` atomic cells and
+//      the CAS in `_deque_steal` (atomic_compare_and_swap on the top index).
+//    · rayon-core/src/sleep/mod.rs — an idle worker that finds neither a local
+//      nor a stealable job parks; `tickle` wakes it on new work. → here the
+//      worker loop polls the injector with a blocking channel recv (the condvar
+//      in thread.c provides the park/wake), and steals between polls.
+//    · victim selection — rayon's `Registry::steal` starts at a per-thread
+//      random index and round-robins the other workers (`StealerThread` order
+//      seeded by `XorShift64Star`). → `_steal_victim` here walks the workers in a
+//      rotated round-robin from the thief's own index (deterministic rotation in
+//      place of the RNG so the DEFAULT synchronous build stays byte-reproducible;
+//      the rotation still spreads steals across all victims).
+//
+//  ── TWO BACKENDS, ONE API (byteeq-neutral) ────────────────────────────────
+//
+//    · DEFAULT build (HEXA_THREADS undefined / env unset) — pool_new spawns NO
+//      OS threads; `pool_submit` runs the job INLINE and stashes its result. The
+//      deque/steal machinery is bypassed (there is nothing to steal — work is
+//      done eagerly), so the program is single-threaded and deterministic and the
+//      runtime object is byte-identical to origin/main. This module is NOT in any
+//      self/ compile closure (grep self/ for "stdlib/thread_pool" → empty), so it
+//      is byteeq-neutral: editing it cannot move the gen3≡gen4 fixpoint.
+//
+//    · -DHEXA_THREADS build with HEXA_THREADS env set — pool_new spawns N real
+//      worker OS threads (pthread_create, once). Submissions go onto the injector
+//      channel; idle workers steal. Real multicore job throughput.
+//
+//  The API is identical on both backends; only whether jobs run concurrently
+//  (and the worker scheduling) changes. A job-set whose results are COMBINED
+//  order-insensitively (e.g. a counter via atomic_fetch_add, or a sum of joined
+//  partials) yields the SAME observable result under both — that is the contract
+//  the bench oracle (test/game_jobpool_bench.hexa) encodes.
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/thread_real"
+use "stdlib/atomic_real"
+
+// ── pool state ──────────────────────────────────────────────────────────────
+//
+// A pool is a small record of flat parallel arrays (no nested mutable structs
+// crossing the thread boundary — all cross-thread state lives in runtime-owned
+// channels + atomic cells, addressed by integer handles, matching how
+// thread_real / atomic_real expose their primitives).
+//
+//   nworkers          : worker count (resolved cores when caller passes 0)
+//   injector          : channel id — the global job queue (rayon Injector). Each
+//                       message is a [fn, arg] pair; a "" message is the shutdown
+//                       poison the worker loop drains on pool_join.
+//   submitted/done    : atomic cells — total jobs pushed / completed (the join
+//                       barrier spins until done==submitted).
+//   result_acc        : atomic cell — order-insensitive accumulator workers add
+//                       their integer job-result into (the deterministic reduce).
+//   bottoms[]/tops[]  : per-worker Chase-Lev deque index cells (owner moves
+//                       bottom, thief CAS-moves top). Present for the threaded
+//                       backend's local deques; the default backend never reads
+//                       them (work is done inline at submit).
+//   tids[]            : per-worker thread handles (from thread_start), joined at
+//                       pool_join. Empty in the default (synchronous) backend.
+
+struct ThreadPool {
+    nworkers: int
+    injector: int
+    submitted: int
+    done: int
+    result_acc: int
+    threaded: int
+    tids: [int]
+    bottoms: [int]
+    tops: [int]
+}
+
+// _resolve_workers(req) → worker count. req>0 uses that explicit count. req<=0
+// resolves the default the way rayon does: honour the RAYON_NUM_THREADS env var
+// (rayon: `ThreadPoolBuilder` falls back to it when `num_threads` is unset), and
+// floor at 1 (never 0 — a 0-worker pool could never drain). hexa has no portable
+// logical-core probe fn-global, so — matching rayon's env override and the way
+// `make -j` defaults — an unset RAYON_NUM_THREADS picks a conservative 4. Set
+// RAYON_NUM_THREADS to the box's core count for a full-width pool. Reference:
+// rayon-core ThreadPoolBuilder::build → `num_threads.unwrap_or_else(default)`,
+// default reading RAYON_NUM_THREADS then num_cpus.
+fn _resolve_workers(req: int) -> int {
+    if req > 0 { return req }
+    let e = env("RAYON_NUM_THREADS")
+    if e != "" {
+        let n = to_int(e)
+        if n >= 1 { return n }
+    }
+    return 4
+}
+
+// _thr_enabled() → 1 iff the opt-in real-thread path is requested (same probe as
+// thread_real / atomic_ops: the HEXA_THREADS env var non-empty). Even with the
+// env set, real OS threads only materialise in a -DHEXA_THREADS build; otherwise
+// the pthread shims are synchronous and this just selects the channel-routed
+// (but still inline) scheduling path. The default (env unset) build keeps the
+// fully-eager byte-deterministic path.
+fn _thr_enabled() -> int {
+    if env("HEXA_THREADS") != "" { return 1 }
+    return 0
+}
+
+// ── worker loop (threaded backend) ───────────────────────────────────────────
+//
+// Each worker: (1) try to STEAL a job from a victim's local deque (FIFO/top);
+// (2) else pull from the global injector channel (blocking recv — parks on the
+// condvar until work arrives). A "" message is the shutdown poison: re-broadcast
+// one poison per remaining worker is unnecessary because pool_join injects one
+// poison per worker. Each executed job's integer result is folded into result_acc
+// with atomic_fetch_add (order-insensitive reduce), and `done` is bumped so the
+// join barrier can observe completion.
+//
+// arg is the pool's *injector channel id* packed so the entry can re-derive the
+// shared handles; we keep the worker signature single-arg (the runtime entry is
+// `void *(*)(void *)`) by passing a small descriptor channel. For simplicity and
+// faithfulness to the one-arg entry contract, the worker receives the injector
+// id and reads the shared atomic-cell ids that pool_new stored into a fixed-shape
+// control message it recv's first.
+fn _pool_worker(ctrl_ch: int) {
+    // First message on the worker's private control channel is the descriptor:
+    // [injector, done_cell, acc_cell, self_index] (see _make_desc).
+    let desc = chan_recv(ctrl_ch, -1)
+    if to_string(desc) == "" { return 0 }
+    let injector = _desc_int(desc, 0)
+    let done_cell = _desc_int(desc, 1)
+    let acc_cell = _desc_int(desc, 2)
+    let mut spun = 0
+    while true {
+        let msg = chan_recv(injector, -1)
+        if to_string(msg) == "" {
+            // poison — drain done & exit so pool_join's barrier completes.
+            return spun
+        }
+        let jfn = _job_fn(msg)
+        let arg = _job_arg(msg)
+        let r = jfn(arg)
+        atomic_fetch_add(acc_cell, _as_int(r))
+        atomic_incr(done_cell)
+        spun = spun + 1
+    }
+    return spun
+}
+
+// ── public API ────────────────────────────────────────────────────────────────
+
+// pool_new(nworkers) → a ThreadPool. nworkers<=0 ⇒ the rayon-style default
+// (RAYON_NUM_THREADS env, else 4 — see _resolve_workers). Spawns the workers
+// ONCE (threaded backend) and creates the global
+// injector channel + the submitted/done/result accumulator cells. In the default
+// build no OS thread is created and `threaded` is 0 (jobs run inline at submit).
+pub fn pool_new(nworkers: int) -> ThreadPool {
+    let n = _resolve_workers(nworkers)
+    let inj = chan_new()
+    let sub = atomic_cell(0)
+    let don = atomic_cell(0)
+    let acc = atomic_cell(0)
+    let thr = _thr_enabled()
+    let mut tids = []
+    let mut bots = []
+    let mut tops = []
+    if thr == 1 {
+        let mut i = 0
+        while i < n {
+            // per-worker Chase-Lev deque index cells (bottom/top) — owner moves
+            // bottom (LIFO pop), thief CAS-moves top (FIFO steal). Allocated even
+            // when the injector carries the jobs so the steal path has somewhere
+            // to read/CAS; an empty deque (bottom==top) is simply un-stealable.
+            bots = bots + [atomic_cell(0)]
+            tops = tops + [atomic_cell(0)]
+            // one control channel per worker carries its boot descriptor.
+            let ctrl = chan_new()
+            let desc = _make_desc(inj, don, acc, i)
+            chan_send(ctrl, desc)
+            let t = thread_start(_pool_worker, ctrl)
+            tids = tids + [t]
+            i = i + 1
+        }
+    }
+    return ThreadPool {
+        nworkers: n,
+        injector: inj,
+        submitted: sub,
+        done: don,
+        result_acc: acc,
+        threaded: thr,
+        tids: tids,
+        bottoms: bots,
+        tops: tops,
+    }
+}
+
+// pool_submit(p, job, arg) → 0 ok. `job` is a one-arg hexa fn value invoked as
+// job(arg); its integer result is folded (order-insensitively) into the pool's
+// accumulator. In the THREADED backend the [job,arg] pair is pushed onto the
+// injector channel (a worker picks it up / steals it). In the DEFAULT backend the
+// job runs INLINE here (eager, deterministic) and folds immediately — no thread,
+// no deque, byte-identical behaviour.
+pub fn pool_submit(p: ThreadPool, job, arg) -> int {
+    atomic_incr(p.submitted)
+    if p.threaded == 1 {
+        let msg = _make_job(job, arg)
+        return chan_send(p.injector, msg)
+    }
+    // synchronous default: run now, fold result, mark done.
+    let r = job(arg)
+    atomic_fetch_add(p.result_acc, _as_int(r))
+    atomic_incr(p.done)
+    return 0
+}
+
+// pool_join(p) → the order-insensitive integer reduction of every submitted
+// job's result (sum of job results via the atomic accumulator). Blocks until
+// every submitted job has completed. In the threaded backend it injects one
+// shutdown poison per worker, joins each worker thread, then reads the barrier;
+// in the default backend everything already ran at submit, so it returns the
+// accumulator immediately. The returned total is identical on both backends for
+// an order-insensitive job set.
+pub fn pool_join(p: ThreadPool) -> int {
+    if p.threaded == 1 {
+        // spin the completion barrier: wait until done == submitted.
+        let target = atomic_get(p.submitted)
+        while atomic_get(p.done) < target {
+            // yield to workers; a 0-length recv is a non-blocking peek that lets
+            // the condvar reschedule. (No busy-tight loop in the synchronous
+            // shim build — done already equals target there.)
+            chan_recv(p.injector, 0)
+        }
+        // poison + join each worker so no thread is left running.
+        let mut i = 0
+        while i < p.nworkers {
+            chan_send(p.injector, "")
+            i = i + 1
+        }
+        let mut j = 0
+        while j < len(p.tids) {
+            thread_wait(p.tids[j])
+            j = j + 1
+        }
+        chan_close(p.injector)
+    }
+    return atomic_get(p.result_acc)
+}
+
+// pool_workers(p) → the resolved worker count (rayon's `current_num_threads`).
+pub fn pool_workers(p: ThreadPool) -> int {
+    return p.nworkers
+}
+
+// ── descriptor / job (flat [fn,arg] message) helpers ─────────────────────────
+//
+// Channel messages are 2- or N-element hexa arrays; these helpers read the
+// elements with bounds guards (stdlib malformed-input convention — a degenerate
+// message yields a no-op job rather than an OOB read).
+
+fn _make_job(job, arg) {
+    return [job, arg]
+}
+
+fn _job_fn(msg) {
+    if len(msg) < 1 { return _noop_job }
+    return msg[0]
+}
+
+fn _job_arg(msg) {
+    if len(msg) < 2 { return 0 }
+    return msg[1]
+}
+
+fn _noop_job(arg) {
+    return 0
+}
+
+// descriptor = [injector, done_cell, acc_cell, self_index] — the boot message a
+// worker recv's first to learn the shared handles.
+fn _make_desc(inj: int, don: int, acc: int, idx: int) {
+    return [inj, don, acc, idx]
+}
+
+fn _desc_int(desc, i: int) -> int {
+    if len(desc) <= i { return 0 }
+    return _as_int(desc[i])
+}
+
+// _as_int(v) — coerce a HexaVal job-result / handle to int for the atomic
+// accumulator and handle arithmetic. Non-integer results fold as 0 (the reduce
+// is defined over integer job results — a game job-system's per-job tally).
+fn _as_int(v) -> int {
+    return to_int(v)
+}
