@@ -46,6 +46,11 @@
 //                                                 [] = no match (Option::None),
 //                                                 [start, end) = Some(start,end)
 //   pub fn regex_find_all(re, s) -> [[int]]     — all non-overlapping [start,end)
+//   pub fn regex_compile_captures(pat) -> Regex — capturing backtrack engine
+//   pub fn regex_captures(re, s) -> [int]       — flat ovector [g0s,g0e,g1s,g1e,…]
+//   pub fn regex_cap_count(caps) -> int         — number of groups incl. group 0
+//   pub fn regex_cap_span(caps, i) -> [int]     — [start,end) of group i, [] unset
+//   pub fn regex_cap_text(caps, s, i) -> string — text of group i, "" if unset
 //
 //   The [int]/[] span convention ([] = None) is the established stdlib/regex
 //   idiom (mod.hexa `regex_find`, native.hexa `regex_find_native`) — hexa's
@@ -462,6 +467,63 @@ pub fn regex_compile_capped(pattern: string, max_steps: int) -> Regex {
         engine: 0,
         bt: bt_empty(),
     }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  CAPTURE-SPAN COMPILE  (force the capturing backtrack engine)
+//
+//  Auto-dispatch (regex_compile) routes plain ERE to the linear Thompson NFA,
+//  which advances a STATE SET and therefore cannot report WHICH bytes each
+//  sub-group `( … )` matched (a well-known property — Cox §"Submatch
+//  extraction" / RE2 uses a separate one-pass/PikeVM pass for this). To pull
+//  per-group spans for ANY pattern, compile here: it always builds the
+//  backtracking VM (which threads `save` slots) so regex_captures can return
+//  sub-group spans. reference: Rust `regex::Regex::captures` /
+//  `regex-automata` capturing engines, PCRE `pcre_exec` ovector.
+@pure
+pub fn regex_compile_captures(pattern: string) -> Regex {
+    return regex_compile_captures_capped(pattern, _REGEX_DEFAULT_STEP_CAP())
+}
+
+@pure
+pub fn regex_compile_captures_capped(pattern: string, max_steps: int) -> Regex {
+    return _re_from_bt(bt_compile(pattern, max_steps))
+}
+
+// Leftmost match WITH capture spans → flat ovector [g0s,g0e, g1s,g1e, …] (group
+// 0 = whole match), or [] on no-match. The capturing backtrack engine reports
+// every sub-group; the linear Thompson engine has no sub-captures and reports
+// group 0 ONLY (compile with regex_compile_captures to get sub-groups).
+@pure
+pub fn regex_captures(re: Regex, s: string) -> [int] {
+    if !re.ok { return [] }
+    if re.engine == 1 { return bt_search_captures(re.bt, s) }
+    let sp = regex_search(re, s)
+    if len(sp) == 0 { return [] }
+    return [sp[0], sp[1]]
+}
+
+// Number of capture slots in an ovector (group 0 + N capturing groups).
+@pure
+pub fn regex_cap_count(caps: [int]) -> int {
+    return len(caps) / 2
+}
+
+// Span [start,end) of capture group i, or [] if i is out of range / unset.
+@pure
+pub fn regex_cap_span(caps: [int], i: int) -> [int] {
+    let b = 2 * i
+    if i < 0 || b + 1 >= len(caps) { return [] }
+    if caps[b] < 0 || caps[b + 1] < 0 { return [] }
+    return [caps[b], caps[b + 1]]
+}
+
+// Text of capture group i against the original subject `s`, or "" if unset.
+@pure
+pub fn regex_cap_text(caps: [int], s: string, i: int) -> string {
+    let sp = regex_cap_span(caps, i)
+    if len(sp) == 0 { return "" }
+    return s.substring(sp[0], sp[1])
 }
 
 // ════════════════════════════════════════════════════════════════════════════
