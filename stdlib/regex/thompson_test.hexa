@@ -1,0 +1,173 @@
+// stdlib/regex/thompson_test.hexa — Thompson NFA regex engine self-test
+// @ci_gate
+//
+// Exercises stdlib/regex/thompson.hexa (linear-time, non-backtracking).
+// Every expected value is hand-computed in the comment beside the case.
+// Run locally:  hexa run stdlib/regex/thompson_test.hexa   (from repo root)
+
+use "stdlib/regex/thompson"
+
+let mut pass_count = 0
+let mut total_count = 0
+let mut first_fail = ""
+
+fn ok(name: string, cond: bool) {
+    total_count = total_count + 1
+    if cond {
+        pass_count = pass_count + 1
+    } else {
+        if first_fail == "" { first_fail = name }
+        println("FAIL " + name)
+    }
+}
+
+// Compile then full-match.
+fn m(pat: string, s: string) -> bool {
+    let re = regex_compile(pat)
+    return regex_match(re, s)
+}
+
+// Compile then search → "start,end" or "" when no match.
+fn srch(pat: string, s: string) -> string {
+    let re = regex_compile(pat)
+    let sp = regex_search(re, s)
+    if len(sp) == 0 { return "" }
+    return to_string(sp[0]) + "," + to_string(sp[1])
+}
+
+// Compile then find_all → "s0,e0|s1,e1|..." ("" when none).
+fn fall(pat: string, s: string) -> string {
+    let re = regex_compile(pat)
+    let all = regex_find_all(re, s)
+    let mut out = ""
+    let mut i = 0
+    while i < len(all) {
+        if i > 0 { out = out + "|" }
+        out = out + to_string(all[i][0]) + "," + to_string(all[i][1])
+        i = i + 1
+    }
+    return out
+}
+
+fn eq(name: string, got: string, want: string) {
+    total_count = total_count + 1
+    if got == want {
+        pass_count = pass_count + 1
+    } else {
+        if first_fail == "" { first_fail = name }
+        println("FAIL " + name + " got=[" + got + "] want=[" + want + "]")
+    }
+}
+
+fn main() {
+    // ── literals (full match) ───────────────────────────────────────────────
+    ok("lit exact",        m("hexa", "hexa"))            // whole string == pattern
+    ok("lit no extra",     m("hexa", "hexat") == false)  // full match rejects trailing
+    ok("lit no prefix",    m("hexa", "ahexa") == false)
+    ok("lit empty/empty",  m("", ""))                    // empty matches empty
+    ok("lit empty/x",      m("", "x") == false)
+
+    // ── '.' any ─────────────────────────────────────────────────────────────
+    ok("dot one",          m("h.xa", "hexa"))            // . = 'e'
+    ok("dot count",        m("...", "abc"))
+    ok("dot too few",      m("...", "ab") == false)
+    ok("dot too many",     m("...", "abcd") == false)
+
+    // ── '*' star (greedy, ≥0) ───────────────────────────────────────────────
+    ok("star zero",        m("ab*c", "ac"))              // zero b
+    ok("star many",        m("ab*c", "abbbbc"))
+    ok("star dot all",     m("a.*z", "a___z"))
+    ok("star dot empty",   m("a.*z", "az"))
+    ok("star only",        m("a*", "aaaa"))
+    ok("star only empty",  m("a*", ""))
+
+    // ── '+' plus (≥1) ───────────────────────────────────────────────────────
+    ok("plus one",         m("ab+c", "abc"))
+    ok("plus many",        m("ab+c", "abbbc"))
+    ok("plus zero fail",   m("ab+c", "ac") == false)     // needs ≥1 b
+
+    // ── '?' optional ────────────────────────────────────────────────────────
+    ok("opt present",      m("colou?r", "colour"))
+    ok("opt absent",       m("colou?r", "color"))
+    ok("opt extra fail",   m("colou?r", "colouur") == false)
+
+    // ── '|' alternation ─────────────────────────────────────────────────────
+    ok("alt left",         m("cat|dog", "cat"))
+    ok("alt right",        m("cat|dog", "dog"))
+    ok("alt none",         m("cat|dog", "cow") == false)
+    ok("alt three",        m("a|b|c", "b"))
+
+    // ── '()' groups (nesting + quantified groups) ───────────────────────────
+    ok("grp quant",        m("(ab)+", "ababab"))
+    ok("grp quant fail",   m("(ab)+", "aba") == false)
+    ok("grp alt",          m("(cat|dog)s", "dogs"))
+    ok("grp nested",       m("((a|b)c)+", "acbcac"))     // (a|b)c repeated
+    ok("grp nested fail",  m("((a|b)c)+", "acb") == false)
+    ok("grp opt",          m("a(bc)?d", "ad"))           // optional group absent
+    ok("grp opt present",  m("a(bc)?d", "abcd"))
+
+    // ── char class [...] with ranges ────────────────────────────────────────
+    ok("class az",         m("[a-z]+", "hello"))
+    ok("class az fail",    m("[a-z]+", "Hello") == false)  // 'H' not in a-z
+    ok("class set",        m("[aeiou]+", "aeiou"))
+    ok("class mixed",      m("[A-Za-z0-9_]+", "Hexa_99"))
+    ok("class digit rng",  m("[0-9][0-9]", "42"))
+    ok("class literal dash", m("[a-]", "-"))             // trailing '-' is literal
+
+    // ── negated class [^...] ────────────────────────────────────────────────
+    ok("neg class",        m("[^0-9]+", "abc"))
+    ok("neg class fail",   m("[^0-9]+", "ab9") == false)
+    ok("neg single",       m("a[^b]c", "axc"))
+    ok("neg single fail",  m("a[^b]c", "abc") == false)
+
+    // ── anchors ^ $ (within search context) ─────────────────────────────────
+    ok("bol anchor",       m("^abc", "abc"))
+    ok("eol anchor",       m("abc$", "abc"))
+    ok("both anchor",      m("^a.c$", "axc"))
+    eq("search ^ at 0",    srch("^[0-9]+", "123abc"), "0,3")
+    eq("search ^ no-mid",  srch("^[0-9]+", "x123"), "")    // ^ forbids mid-string
+    eq("search $ tail",    srch("[0-9]+$", "abc789"), "3,6")
+
+    // ── escapes \d \w \s and literal-metachar escapes ───────────────────────
+    ok("esc d",            m("\\d\\d\\d", "007"))
+    ok("esc d fail",       m("\\d\\d\\d", "0a7") == false)
+    ok("esc w",            m("\\w+", "hello_99"))
+    ok("esc w fail",       m("\\w+", "hi there") == false)  // space not \w
+    ok("esc s",            m("a\\sb", "a b"))
+    ok("esc s tab",        m("a\\sb", "a\tb"))
+    ok("esc D negated",    m("\\D+", "abc"))
+    ok("esc literal dot",  m("a\\.b", "a.b"))               // \. = literal '.'
+    ok("esc literal dot neg", m("a\\.b", "axb") == false)   // not 'any'
+    ok("esc literal star", m("a\\*", "a*"))
+
+    // ── search: leftmost-longest span ───────────────────────────────────────
+    eq("search digits",    srch("[0-9]+", "abc 123 def"), "4,7")
+    eq("search none",      srch("[0-9]+", "no digits"), "")
+    eq("search longest",   srch("a+", "baaab"), "1,4")      // greedy: 3 a's
+    eq("search leftmost",  srch("a", "xaxa"), "1,2")        // first 'a'
+    eq("search zero-width", srch("b*", "aaa"), "0,0")       // matches empty at 0
+
+    // ── find_all: multiple non-overlapping matches ──────────────────────────
+    eq("findall digits",   fall("[0-9]+", "12 ab 34 cd 56"), "0,2|6,8|12,14")
+    eq("findall words",    fall("\\w+", "go hexa go"), "0,2|3,7|8,10")
+    eq("findall single",   fall("a", "aaa"), "0,1|1,2|2,3")
+    eq("findall none",     fall("z+", "abcabc"), "")
+    eq("findall alt",      fall("cat|dog", "cat dog cat"), "0,3|4,7|8,11")
+
+    // ── compile error handling ──────────────────────────────────────────────
+    ok("bad unterminated class", regex_valid(regex_compile("[a-z")) == false)
+    ok("bad stray paren",        regex_valid(regex_compile("ab)c")) == false)
+    ok("good compiles",          regex_valid(regex_compile("[a-z]+(x|y)*")))
+
+    // ── pathological pattern: linear-time, NO exponential blow-up ────────────
+    // (a|a)*b against "aaaaaaaaaaaaaaaaaaaa" (no trailing b) — a backtracker
+    // would explore 2^20 paths; the Thompson set-sim returns at once.
+    ok("no catastrophic backtrack",
+       m("(a|a)*b", "aaaaaaaaaaaaaaaaaaaa") == false)
+
+    println("PASS " + to_string(pass_count) + "/" + to_string(total_count))
+    if first_fail != "" {
+        println("first fail: " + first_fail)
+        exit(1)
+    }
+}

@@ -1,0 +1,571 @@
+// HEXA Standard Library — regex/thompson
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Pure-hexa, LINEAR-TIME regex engine built on a Thompson NFA — the
+// non-backtracking, simultaneous-state-set construction from Russ Cox,
+// "Regular Expression Matching Can Be Simple And Fast"
+// (https://swtch.com/~rsc/regexp/regexp1.html), the algorithm behind RE2.
+//
+// WHY THOMPSON (not backtracking) — the sibling module stdlib/regex/native.hexa
+// is a recursive CONTINUATION-STACK BACKTRACKER (PCRE-style): correct but
+// worst-case EXPONENTIAL — a pathological pattern like  (a|a)*$  against
+// "aaaa…b" makes it explore 2^n paths. This module instead advances the WHOLE
+// set of NFA states one input byte at a time, so each byte costs O(states) and
+// the total is bounded — no catastrophic blow-up, no DoS-cap fudging, fully
+// deterministic (matching hexa's byte-eq determinism ethos). This is the
+// canonical, reference-matched core the gap census (ARCHITECTURE.json
+// language-surface, Tier-1 "Regex") asked for.
+//
+// PIPELINE  pattern → recursive-descent parse tree → Thompson NFA
+//           (ε-transitions via SPLIT states, dangling-arrow patch lists,
+//            the classic Cox "ptrlist" trick) → NFA set-simulation.
+//
+// SUPPORTED (R1 — the standard ERE core)
+//   literal byte · .  (any) · *  +  ?  (greedy repetition) · |  (alternation) ·
+//   (...)  (grouping) · [...] [^...] char classes with ranges a-z ·
+//   ^  $  (anchors) ·  escapes  \d \D \w \W \s \S  (classes)  \. \* \+ … \\
+//   (literal metachar)  \n \t \r  (controls).
+//
+// EXPLICITLY R2 / OUT OF SCOPE (honest record)
+//   • Backreferences (\1) and lookaround ((?=…) (?<=…)) are IMPOSSIBLE in a
+//     pure NFA — they make matching NP-hard / non-regular, which is exactly
+//     why a Thompson NFA cannot express them. They are NOT a follow-up of this
+//     module; they require a different (backtracking) engine — see native.hexa.
+//   • Capture-group EXTRACTION (submatch boundaries) — needs a Pike-VM with
+//     thread tags; R2. This module reports whole-match spans only.
+//   • {n,m} counted repetition — the libc bridge (mod.hexa) and native.hexa
+//     already cover it; kept out of the linear core for R1 clarity.
+//
+// API (canonical, compiled-Regex first arg)
+//   pub fn regex_compile(pattern) -> Regex      — Regex.ok=false on parse error
+//   pub fn regex_valid(re) -> bool              — re.ok accessor
+//   pub fn regex_match(re, s) -> bool           — FULL match (anchored whole s)
+//   pub fn regex_search(re, s) -> [int]         — leftmost-longest span:
+//                                                 [] = no match (Option::None),
+//                                                 [start, end) = Some(start,end)
+//   pub fn regex_find_all(re, s) -> [[int]]     — all non-overlapping [start,end)
+//
+//   The [int]/[] span convention ([] = None) is the established stdlib/regex
+//   idiom (mod.hexa `regex_find`, native.hexa `regex_find_native`) — hexa's
+//   canonical Option<(start,end)> encoding here.
+//
+// COMPLEXITY  regex_match: O(n·m).  regex_search / regex_find_all: O(n²·m)
+//   (n start offsets × the O(n·m) set-sim). Polynomial — NEVER exponential.
+//   An R2 single-pass Pike-VM (seed a thread at every offset, O(n·m) total) is
+//   the documented overtaking lever; correctness first here.
+//
+// ── AST tape (index-addressed [int] records, 4 ints each) ───────────────────
+//   [kind, a, b, c]
+//   kind: 0=CHAR(a=byte) 1=ANY 2=CLASS(a=class_id) 3=STAR(a=child)
+//         4=PLUS(a=child) 5=OPT(a=child) 6=CONCAT(a=left,b=right)
+//         7=ALT(a=left,b=right) 8=EMPTY 9=BOL(^) 10=EOL($)
+//   classes: parallel [[int]] — each entry [neg, lo0,hi0, lo1,hi1, …].
+//
+// ── NFA (parallel arrays) ───────────────────────────────────────────────────
+//   nkind: 0=CHAR(c=byte) 1=ANY 2=CLASS(c=class_id) 3=SPLIT(out,out1 = ε fork)
+//          4=MATCH 5=BOL 6=EOL
+//   Dangling arrows are encoded `state*2 + which` (which: 0=out, 1=out1) and
+//   patched in bulk — Cox's tagged-pointer ptrlist, integer-encoded.
+//
+// NOTE on state threading: parser/builder state lives in heap arrays and
+// single-cell [int] boxes (pos/ok), not scalar struct fields, so the engine is
+// equally correct under the tree-walking interpreter and the native backend.
+
+// ── compiled program ────────────────────────────────────────────────────────
+struct Regex {
+    ok: bool
+    start: int          // entry NFA state (-1/0 when !ok)
+    nstates: int
+    nkind: [int]
+    nc: [int]
+    nout: [int]
+    nout1: [int]
+    classes: [[int]]
+}
+
+// ── parser state (arrays + [int] cells = interpreter/native-safe) ───────────
+struct ReParse {
+    pat: string
+    plen: int
+    pos: [int]          // pos[0] = cursor
+    ok: [int]           // ok[0] = 1 ok / 0 parse-fail
+    nodes: [[int]]      // AST node records
+    classes: [[int]]    // class range tables
+}
+
+// ── NFA builder (arrays only — push + element-write are heap-persistent) ────
+struct NfaB {
+    nkind: [int]
+    nc: [int]
+    nout: [int]
+    nout1: [int]
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  PARSER  (recursive descent: alt → concat → repeat → atom)
+// ════════════════════════════════════════════════════════════════════════════
+
+@pure
+fn _re_peek(p: ReParse) -> int {
+    if p.pos[0] >= p.plen { return -1 }
+    return p.pat.byte_at(p.pos[0])
+}
+
+fn _re_adv(p: ReParse) {
+    p.pos[0] = p.pos[0] + 1
+}
+
+// Emit an AST node, return its index.
+fn _re_emit(p: ReParse, rec: [int]) -> int {
+    p.nodes.push(rec)
+    return len(p.nodes) - 1
+}
+
+// Class-shorthand ranges for \d \D \w \W \s \S — returns [neg, lo,hi, …] or [].
+@pure
+fn _re_class_for_escape(e: int) -> [int] {
+    if e == 100 { return [0, 48, 57] }                          // \d  digits
+    if e == 68  { return [1, 48, 57] }                          // \D
+    if e == 119 { return [0, 48, 57, 65, 90, 97, 122, 95, 95] } // \w  word
+    if e == 87  { return [1, 48, 57, 65, 90, 97, 122, 95, 95] } // \W
+    if e == 115 { return [0, 9, 13, 32, 32] }                   // \s  \t\n\v\f\r space
+    if e == 83  { return [1, 9, 13, 32, 32] }                   // \S
+    return []
+}
+
+// Control escapes \n \t \r \0 — returns the byte, or -1 if not a control escape.
+@pure
+fn _re_lit_for_escape(e: int) -> int {
+    if e == 110 { return 10 }   // \n
+    if e == 116 { return 9 }    // \t
+    if e == 114 { return 13 }   // \r
+    if e == 48  { return 0 }    // \0
+    return -1
+}
+
+// Finalize a class range list into a node; returns CLASS node index.
+fn _re_push_class(p: ReParse, ranges: [int], neg: int) -> int {
+    let mut tbl: [int] = [neg]
+    let mut i = 0
+    while i < len(ranges) { tbl.push(ranges[i]); i = i + 1 }
+    p.classes.push(tbl)
+    return _re_emit(p, [2, len(p.classes) - 1, 0, 0])
+}
+
+// Parse a bracket class — p.pos is just past '['. Returns CLASS node index.
+fn _re_parse_class(p: ReParse) -> int {
+    let mut ranges: [int] = []
+    let mut neg = 0
+    if _re_peek(p) == 94 {          // '^' negation
+        neg = 1
+        _re_adv(p)
+    }
+    let mut first = true
+    while p.pos[0] < p.plen {
+        let c = _re_peek(p)
+        if c == 93 && !first {       // ']' closes (literal if first)
+            _re_adv(p)
+            return _re_push_class(p, ranges, neg)
+        }
+        first = false
+        let mut lo = -1
+        let mut shorthand = false
+        if c == 92 {                 // '\' escape inside class
+            _re_adv(p)
+            let e = _re_peek(p)
+            _re_adv(p)
+            let cls = _re_class_for_escape(e)
+            if len(cls) > 0 {
+                // Splice the shorthand's ranges (drop its neg flag at [0]).
+                // Negated shorthands inside [] keep their positive ranges only
+                // (rare; documented limitation) — no dash-range follows.
+                let mut k = 1
+                while k + 1 < len(cls) { ranges.push(cls[k]); ranges.push(cls[k + 1]); k = k + 2 }
+                shorthand = true
+            } else {
+                let lit = _re_lit_for_escape(e)
+                if lit >= 0 { lo = lit } else { lo = e }
+            }
+        } else {
+            _re_adv(p)
+            lo = c
+        }
+        if !shorthand {
+            // range  lo-hi  when a '-' follows and it isn't the closing ']'
+            if _re_peek(p) == 45 && (p.pos[0] + 1) < p.plen && p.pat.byte_at(p.pos[0] + 1) != 93 {
+                _re_adv(p)               // skip '-'
+                let mut hi = _re_peek(p)
+                _re_adv(p)
+                if hi == 92 {            // escaped range high end
+                    let e2 = _re_peek(p)
+                    _re_adv(p)
+                    let lit2 = _re_lit_for_escape(e2)
+                    if lit2 >= 0 { hi = lit2 } else { hi = e2 }
+                }
+                ranges.push(lo)
+                ranges.push(hi)
+            } else {
+                ranges.push(lo)
+                ranges.push(lo)
+            }
+        }
+    }
+    // Unterminated class — fail the parse.
+    p.ok[0] = 0
+    return -1
+}
+
+// alt := concat ('|' concat)*
+fn _re_parse_alt(p: ReParse) -> int {
+    let mut left = _re_parse_concat(p)
+    while _re_peek(p) == 124 {   // '|'
+        _re_adv(p)
+        let right = _re_parse_concat(p)
+        left = _re_emit(p, [7, left, right, 0])
+    }
+    return left
+}
+
+// concat := repeat*
+fn _re_parse_concat(p: ReParse) -> int {
+    let c = _re_peek(p)
+    if c == -1 || c == 124 || c == 41 {   // end | '|' | ')'
+        return _re_emit(p, [8, 0, 0, 0])  // EMPTY
+    }
+    let mut left = _re_parse_repeat(p)
+    while true {
+        let nc = _re_peek(p)
+        if nc == -1 || nc == 124 || nc == 41 { break }
+        let right = _re_parse_repeat(p)
+        left = _re_emit(p, [6, left, right, 0])
+    }
+    return left
+}
+
+// repeat := atom ('*' | '+' | '?')*
+fn _re_parse_repeat(p: ReParse) -> int {
+    let mut node = _re_parse_atom(p)
+    while true {
+        let c = _re_peek(p)
+        if c == 42 { _re_adv(p); node = _re_emit(p, [3, node, 0, 0]) }       // '*'
+        else if c == 43 { _re_adv(p); node = _re_emit(p, [4, node, 0, 0]) }  // '+'
+        else if c == 63 { _re_adv(p); node = _re_emit(p, [5, node, 0, 0]) }  // '?'
+        else { break }
+    }
+    return node
+}
+
+// atom := '(' alt ')' | '[' class ']' | '.' | '^' | '$' | '\' esc | literal
+fn _re_parse_atom(p: ReParse) -> int {
+    let c = _re_peek(p)
+    if c == 40 {                 // '('
+        _re_adv(p)
+        let inner = _re_parse_alt(p)
+        if _re_peek(p) == 41 { _re_adv(p) } else { p.ok[0] = 0 }  // ')'
+        return inner
+    }
+    if c == 91 {                 // '['
+        _re_adv(p)
+        return _re_parse_class(p)
+    }
+    if c == 46 { _re_adv(p); return _re_emit(p, [1, 0, 0, 0]) }   // '.'  ANY
+    if c == 94 { _re_adv(p); return _re_emit(p, [9, 0, 0, 0]) }   // '^'  BOL
+    if c == 36 { _re_adv(p); return _re_emit(p, [10, 0, 0, 0]) }  // '$'  EOL
+    if c == 92 {                 // '\' escape
+        _re_adv(p)
+        let e = _re_peek(p)
+        _re_adv(p)
+        let cls = _re_class_for_escape(e)
+        if len(cls) > 0 {
+            p.classes.push(cls)
+            return _re_emit(p, [2, len(p.classes) - 1, 0, 0])
+        }
+        let lit = _re_lit_for_escape(e)
+        if lit >= 0 { return _re_emit(p, [0, lit, 0, 0]) }
+        return _re_emit(p, [0, e, 0, 0])   // literal escaped metachar
+    }
+    // literal byte
+    _re_adv(p)
+    return _re_emit(p, [0, c, 0, 0])
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  THOMPSON NFA CONSTRUCTION  (AST → NFA fragments, dangling-arrow patch lists)
+//
+//  A fragment is an [int]:  [start_state, dangle0, dangle1, …]  where each
+//  dangle = state*2 + which (0=out, 1=out1). Cox's "ptrlist", integer-encoded.
+// ════════════════════════════════════════════════════════════════════════════
+
+fn _nfa_new(nb: NfaB, k: int, cv: int) -> int {
+    nb.nkind.push(k)
+    nb.nc.push(cv)
+    nb.nout.push(-1)
+    nb.nout1.push(-1)
+    return len(nb.nkind) - 1
+}
+
+// Patch every dangling arrow in `dl` to point at `target`.
+fn _nfa_patch(nb: NfaB, dl: [int], target: int) {
+    let mut i = 0
+    while i < len(dl) {
+        let enc = dl[i]
+        let st = enc / 2
+        let w = enc % 2
+        if w == 0 { nb.nout[st] = target } else { nb.nout1[st] = target }
+        i = i + 1
+    }
+}
+
+@pure
+fn _frag_dangle(f: [int]) -> [int] {
+    let mut out: [int] = []
+    let mut i = 1
+    while i < len(f) { out.push(f[i]); i = i + 1 }
+    return out
+}
+
+@pure
+fn _concat_int(a: [int], b: [int]) -> [int] {
+    let mut out: [int] = []
+    let mut i = 0
+    while i < len(a) { out.push(a[i]); i = i + 1 }
+    let mut j = 0
+    while j < len(b) { out.push(b[j]); j = j + 1 }
+    return out
+}
+
+// Compile AST node `ni` into an NFA fragment.
+fn _re_compile_node(nb: NfaB, nodes: [[int]], ni: int) -> [int] {
+    let rec = nodes[ni]
+    let k = rec[0]
+    if k == 0 { let s = _nfa_new(nb, 0, rec[1]); return [s, s * 2 + 0] }   // CHAR
+    if k == 1 { let s = _nfa_new(nb, 1, 0);      return [s, s * 2 + 0] }   // ANY
+    if k == 2 { let s = _nfa_new(nb, 2, rec[1]); return [s, s * 2 + 0] }   // CLASS
+    if k == 9 { let s = _nfa_new(nb, 5, 0);      return [s, s * 2 + 0] }   // BOL
+    if k == 10 { let s = _nfa_new(nb, 6, 0);     return [s, s * 2 + 0] }   // EOL
+    if k == 8 {                                  // EMPTY → ε passthrough SPLIT
+        let s = _nfa_new(nb, 3, 0)
+        return [s, s * 2 + 0, s * 2 + 1]
+    }
+    if k == 6 {                                  // CONCAT  a · b
+        let f1 = _re_compile_node(nb, nodes, rec[1])
+        let f2 = _re_compile_node(nb, nodes, rec[2])
+        _nfa_patch(nb, _frag_dangle(f1), f2[0])
+        return _concat_int([f1[0]], _frag_dangle(f2))
+    }
+    if k == 7 {                                  // ALT  a | b
+        let f1 = _re_compile_node(nb, nodes, rec[1])
+        let f2 = _re_compile_node(nb, nodes, rec[2])
+        let s = _nfa_new(nb, 3, 0)
+        nb.nout[s] = f1[0]
+        nb.nout1[s] = f2[0]
+        return _concat_int([s], _concat_int(_frag_dangle(f1), _frag_dangle(f2)))
+    }
+    if k == 3 {                                  // STAR  a*  (≥0, greedy)
+        let f = _re_compile_node(nb, nodes, rec[1])
+        let s = _nfa_new(nb, 3, 0)
+        nb.nout[s] = f[0]                         // ε → run child
+        _nfa_patch(nb, _frag_dangle(f), s)        // child loops back to split
+        return [s, s * 2 + 1]                     // out1 = exit (dangling)
+    }
+    if k == 4 {                                  // PLUS  a+  (≥1, greedy)
+        let f = _re_compile_node(nb, nodes, rec[1])
+        let s = _nfa_new(nb, 3, 0)
+        nb.nout[s] = f[0]
+        _nfa_patch(nb, _frag_dangle(f), s)
+        return [f[0], s * 2 + 1]                  // enter child first (mandatory)
+    }
+    if k == 5 {                                  // OPT  a?  (0 or 1)
+        let f = _re_compile_node(nb, nodes, rec[1])
+        let s = _nfa_new(nb, 3, 0)
+        nb.nout[s] = f[0]
+        return _concat_int([s], _concat_int(_frag_dangle(f), [s * 2 + 1]))
+    }
+    // Unknown kind → ε passthrough (defensive).
+    let s = _nfa_new(nb, 3, 0)
+    return [s, s * 2 + 0, s * 2 + 1]
+}
+
+fn _re_bad() -> Regex {
+    return Regex { ok: false, start: -1, nstates: 0, nkind: [], nc: [], nout: [], nout1: [], classes: [] }
+}
+
+@pure
+pub fn regex_compile(pattern: string) -> Regex {
+    let p = ReParse {
+        pat: pattern,
+        plen: byte_len(pattern),
+        pos: [0],
+        ok: [1],
+        nodes: [],
+        classes: [],
+    }
+    let root = _re_parse_alt(p)
+    if p.ok[0] == 0 { return _re_bad() }
+    if p.pos[0] < p.plen { return _re_bad() }    // trailing junk (e.g. stray ')')
+
+    let nb = NfaB { nkind: [], nc: [], nout: [], nout1: [] }
+    let frag = _re_compile_node(nb, p.nodes, root)
+    let m = _nfa_new(nb, 4, 0)                    // MATCH
+    _nfa_patch(nb, _frag_dangle(frag), m)
+
+    return Regex {
+        ok: true,
+        start: frag[0],
+        nstates: len(nb.nkind),
+        nkind: nb.nkind,
+        nc: nb.nc,
+        nout: nb.nout,
+        nout1: nb.nout1,
+        classes: p.classes,
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  NFA SIMULATION  (Thompson: advance the WHOLE state set, one byte at a time)
+//
+//  INVARIANT 1 — every NFA state is added to a step's set AT MOST ONCE, via a
+//    per-step generation stamp (`seen[st] == gen`). This is THE property that
+//    bounds work to O(states) per byte and forbids the exponential blow-up a
+//    backtracker suffers (Cox §"Implementation").
+//  INVARIANT 2 — ε-transitions (SPLIT/BOL/EOL/MATCH) are fully closed during
+//    add; only consuming states (CHAR/ANY/CLASS) ever land in the work list.
+//  INVARIANT 3 — anchors are evaluated against the CURRENT position `pos`:
+//    BOL follows its ε-edge iff pos==0, EOL iff pos==n.
+// ════════════════════════════════════════════════════════════════════════════
+
+@pure
+fn _re_class_match(classes: [[int]], cid: int, ch: int) -> bool {
+    let tbl = classes[cid]
+    let neg = tbl[0]
+    let mut i = 1
+    let mut hit = false
+    while i + 1 < len(tbl) {
+        if ch >= tbl[i] && ch <= tbl[i + 1] { hit = true }
+        i = i + 2
+    }
+    if neg == 1 { return !hit }
+    return hit
+}
+
+@pure
+fn _re_zeros(n: int) -> [int] {
+    let mut out: [int] = []
+    let mut i = 0
+    while i < n { out.push(0); i = i + 1 }
+    return out
+}
+
+// ε-closure: add state `st` (and everything reachable by ε at `pos`) to `list`.
+// Consuming states are appended to `list`; reaching MATCH sets acc[0]=1.
+fn _re_add(re: Regex, list: [int], seen: [int], gen: int, acc: [int], st: int, pos: int, n: int) {
+    if st < 0 { return }
+    if seen[st] == gen { return }
+    seen[st] = gen
+    let k = re.nkind[st]
+    if k == 3 {                  // SPLIT — ε to both
+        _re_add(re, list, seen, gen, acc, re.nout[st], pos, n)
+        _re_add(re, list, seen, gen, acc, re.nout1[st], pos, n)
+        return
+    }
+    if k == 5 {                  // BOL ^
+        if pos == 0 { _re_add(re, list, seen, gen, acc, re.nout[st], pos, n) }
+        return
+    }
+    if k == 6 {                  // EOL $
+        if pos == n { _re_add(re, list, seen, gen, acc, re.nout[st], pos, n) }
+        return
+    }
+    if k == 4 {                  // MATCH
+        acc[0] = 1
+        return
+    }
+    list.push(st)                // CHAR / ANY / CLASS — consuming
+}
+
+// Longest end position ≥ `start` at which the whole NFA reaches MATCH having
+// consumed s[start..end), or -1 if no match begins at `start`.
+fn _re_longest_from(re: Regex, s: string, start: int, n: int) -> int {
+    let seen = _re_zeros(re.nstates)
+    let acc = [0]
+    let mut gen = 1
+    let mut list: [int] = []
+    _re_add(re, list, seen, gen, acc, re.start, start, n)
+    let mut longest = -1
+    if acc[0] == 1 { longest = start }           // zero-width match at start
+    let mut pos = start
+    while pos < n && len(list) > 0 {
+        let ch = s.byte_at(pos)
+        gen = gen + 1
+        acc[0] = 0
+        let mut nlist: [int] = []
+        let mut i = 0
+        while i < len(list) {
+            let st = list[i]
+            let k = re.nkind[st]
+            let mut m = false
+            if k == 0 { if re.nc[st] == ch { m = true } }       // CHAR
+            else if k == 1 { m = true }                          // ANY
+            else if k == 2 { if _re_class_match(re.classes, re.nc[st], ch) { m = true } }
+            if m { _re_add(re, nlist, seen, gen, acc, re.nout[st], pos + 1, n) }
+            i = i + 1
+        }
+        list = nlist
+        pos = pos + 1
+        if acc[0] == 1 { longest = pos }
+    }
+    return longest
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  PUBLIC API
+// ════════════════════════════════════════════════════════════════════════════
+
+@pure
+pub fn regex_valid(re: Regex) -> bool {
+    return re.ok
+}
+
+// FULL match — the pattern must consume the ENTIRE string (implicit ^…$).
+@pure
+pub fn regex_match(re: Regex, s: string) -> bool {
+    if !re.ok { return false }
+    let n = byte_len(s)
+    return _re_longest_from(re, s, 0, n) == n
+}
+
+// Leftmost-longest search. Returns [] (None) or [start, end) (Some).
+@pure
+pub fn regex_search(re: Regex, s: string) -> [int] {
+    if !re.ok { return [] }
+    let n = byte_len(s)
+    let mut start = 0
+    while start <= n {
+        let e = _re_longest_from(re, s, start, n)
+        if e >= 0 { return [start, e] }
+        start = start + 1
+    }
+    return []
+}
+
+// All non-overlapping leftmost-longest matches as [start, end) pairs.
+// A zero-width match advances the cursor by 1 to guarantee termination.
+@pure
+pub fn regex_find_all(re: Regex, s: string) -> [[int]] {
+    let mut out: [[int]] = []
+    if !re.ok { return out }
+    let n = byte_len(s)
+    let mut pos = 0
+    while pos <= n {
+        let e = _re_longest_from(re, s, pos, n)
+        if e >= 0 {
+            out.push([pos, e])
+            if e > pos { pos = e } else { pos = pos + 1 }
+        } else {
+            pos = pos + 1
+        }
+    }
+    return out
+}
