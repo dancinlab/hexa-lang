@@ -10,22 +10,40 @@
 // The REAL exact-integer discover→verify→absorb core, absorbed natively into
 // the compiler binary (NOT a python script in state/, NOT a flag-gated path).
 // This is what `hexa drill`/`kick` verifies WITH by default: a candidate
-// arithmetic-function identity A·B = C·D over the 12-fn basis is confirmed
-// only if exact-integer evaluation over n∈[2,N] yields a bounded-unique
-// solution set (singleton, n≥4 — degenerate n=2,3 excluded). This replaces
-// the seed-hash heuristic (and the original NEXUS ouroboros verify_score,
-// which was n6-proximity numerology that scored every candidate ≥0.3).
+// arithmetic-function identity A·B = C·D (or, post-upgrade, A·B·C = D·E·F) over
+// the basis is confirmed only if exact-integer evaluation over n∈[2,N] yields a
+// bounded-unique solution set (singleton, n≥4 — degenerate n=2,3 excluded), or
+// (universal frame) holds for every n in [2,N]. This replaces the seed-hash
+// heuristic (and the original NEXUS ouroboros verify_score, which was
+// n6-proximity numerology that scored every candidate ≥0.3).
 //
-// 12-fn basis — exact-int, reference-matched to the verified ATLAS harvest
-// (ATLAS/state/novel-dfs/blue_harvest_12fn.py:12-21, itself cite Hardy&Wright
-// §16.7 / Conway&Sloane). Per-n trial-division factorization (no float path),
-// so results are byte-deterministic across targets.
+// Basis — exact-int, reference-matched to the verified ATLAS harvest: idx 0–11
+// = the 12-fn core (ATLAS/state/novel-dfs/blue_harvest_12fn.py:12-21, cite
+// Hardy&Wright §16.7 / Conway&Sloane); idx 12–17 = the extended vocab
+// (vocab_universal_hunt.py:34-66 · see upgrade block below). Per-n trial-
+// division factorization (no float path), byte-deterministic across targets.
 //
 // Honesty (c2): a confirmed identity is BOUNDED-UNIQUE (🟩, exact over [2,N]) —
-// the forall-n statement stays UNPROVEN until a proof lands. The standard-
-// vocabulary relation space is MEASURED-EXHAUSTED (ATLAS/README.md DFS r1–r4:
-// 1557 @F already folded, novel-fold = 0, gates 21/21) — this engine
-// reproduces that terminal honestly; it does NOT fabricate new laws.
+// the forall-n statement stays UNPROVEN until a proof lands.
+//
+// ── frontier polarity (2026-06-27 upgrade) ────────────────────────────
+// The MEASURED-EXHAUSTED verdict (ATLAS/README.md DFS r1–r4 · Ralph 369–374:
+// ≈190 @F folded, novel-fold = 0) is scoped EXACTLY to the **12-fn 2-term
+// `A·B=C·D`** vein — that vein is closed at the structural level and this
+// engine reproduces that terminal honestly (it never fabricates new laws).
+// It is NOT a claim about the whole arithmetic-identity space. This file now
+// carries the UPGRADED verifier that explores the un-swept dimensions the
+// 12-fn/2-term box could not express:
+//   ① extended vocab — 6 new exact-int functions appended at idx 12–17
+//      (μ Möbius · λ Liouville · μ² squarefree-indicator · J₃ Jordan k=3 ·
+//      2^ω unitary-divisor-count · core=n/rad), signs handled EXACTLY.
+//      Reference-matched to ATLAS/state/novel-dfs/vocab_universal_hunt.py:34-66.
+//   ② higher arity — 3-term `A·B·C = D·E·F` bounded-unique verify
+//      (verify_identity3), reference-matched to grid_expand_sweep.py.
+//   ③ universal-in-[2,N] frame — is_universal2 / is_universal3 (forall-n in
+//      range), the genuinely productive frame for the sign/indicator vocab
+//      (vocab_universal_hunt.py). bounded-unique ⟺ forall is NOT claimed (c2).
+// idx 0–11 are byte-for-byte the prior basis (G1–G3 sanity gates unchanged).
 
 // ── integer power (exact) ──
 pub fn ipow(base, e) -> int {
@@ -49,14 +67,21 @@ pub fn spf(m) -> int {
     m
 }
 
-// ── 12-fn basis, each via exact factorization of n ──
-// key ids: 0=sigma 1=sigma2 2=sigma3 3=phi 4=tau 5=n 6=sopfr 7=rad 8=J2 9=psi 10=Om 11=om
+// ── extended 18-fn basis, each via exact factorization of n ──
+// key ids (idx 0–11 UNCHANGED · 12–17 NEW, 2026-06-27 upgrade):
+//   0=sigma 1=sigma2 2=sigma3 3=phi 4=tau 5=n 6=sopfr 7=rad 8=J2 9=psi 10=Om 11=om
+//   12=mu(μ Möbius, ±1/0) 13=lam(λ Liouville =(-1)^Ω, ±1) 14=mu2(μ² squarefree
+//   indicator, 0/1) 15=J3(Jordan totient k=3) 16=tw_om(2^ω, #unitary divisors)
+//   17=core(n/rad, powerful-core complement)
+// Signs are exact (μ, λ take negative values); products may be negative — no abs.
+// Reference: ATLAS/state/novel-dfs/vocab_universal_hunt.py:34-66 (af generator).
 pub fn af(n, which) -> int {
     if n == 1 {
         if which == 6 { return 0 }   // sopfr(1)=0
         if which == 10 { return 0 }  // Omega(1)=0
         if which == 11 { return 0 }  // omega(1)=0
-        return 1                     // sigma/sig2/sig3/phi/tau/n/rad/J2/psi at 1 = 1
+        // μ(1)=1 · λ(1)=1 · μ²(1)=1 · J3(1)=1 · 2^ω(1)=1 · core(1)=1
+        return 1                     // every other fn at 1 = 1
     }
     let m = n
     let sig = 1
@@ -66,10 +91,12 @@ pub fn af(n, which) -> int {
     let phi = 1
     let psi = 1
     let j2 = 1
+    let j3 = 1
     let sopfr = 0
     let rad = 1
     let om_big = 0
     let om_small = 0
+    let squarefree = 1   // μ² indicator: 1 until an exponent ≥2 is seen
     while m > 1 {
         let p = spf(m)
         let e = 0
@@ -84,10 +111,12 @@ pub fn af(n, which) -> int {
         phi = phi * (ipow(p, e - 1) * (p - 1))
         psi = psi * (ipow(p, e - 1) * (p + 1))
         j2 = j2 * (ipow(p, 2 * e) - ipow(p, 2 * (e - 1)))
+        j3 = j3 * (ipow(p, 3 * e) - ipow(p, 3 * (e - 1)))
         sopfr = sopfr + p * e
         rad = rad * p
         om_big = om_big + e
         om_small = om_small + 1
+        if e >= 2 { squarefree = 0 }
     }
     if which == 0 { return sig }
     if which == 1 { return sig2 }
@@ -100,7 +129,21 @@ pub fn af(n, which) -> int {
     if which == 8 { return j2 }
     if which == 9 { return psi }
     if which == 10 { return om_big }
-    return om_small
+    if which == 11 { return om_small }
+    // ── 12–17: extended vocab (signs exact) ──
+    if which == 14 { return squarefree }                 // μ²: 0/1 squarefree indicator
+    if which == 12 {                                     // μ Möbius: 0 if non-squarefree
+        if squarefree == 0 { return 0 }                 //   else (-1)^ω
+        if om_small % 2 == 0 { return 1 }
+        return 0 - 1
+    }
+    if which == 13 {                                     // λ Liouville = (-1)^Ω
+        if om_big % 2 == 0 { return 1 }
+        return 0 - 1
+    }
+    if which == 15 { return j3 }                          // J3 Jordan totient k=3
+    if which == 16 { return ipow(2, om_small) }           // 2^ω = #unitary divisors
+    return n / rad                                        // 17=core = n/rad
 }
 
 // ── exact-int identity verify: first solution n of af(a)·af(b)==af(c)·af(d)
@@ -122,6 +165,55 @@ pub fn verify_identity(a, b, c, d, N) -> int {
     if count == 0 { return -2 }
     if first >= 4 { return first }
     return -1
+}
+
+// ── arity-3 exact-int identity verify: first solution n of
+//    af(a)·af(b)·af(c) == af(d)·af(e)·af(f) over [2,N], plus a count cap.
+//    bounded-unique ⟺ exactly one solution ≥4 (degenerate n=2,3 excluded).
+//    Reference: ATLAS/state/novel-dfs/grid_expand_sweep.py (3-factor frame).
+//    Returns: first solution n (0-guarded: ≥4) when count==1, -1 if non-unique
+//    (count>1 or universal-in-range — see is_universal3), -2 if no solution. ──
+pub fn verify_identity3(a, b, c, d, e, f, N) -> int {
+    let first = 0
+    let count = 0
+    let n = 2
+    while n <= N {
+        if af(n, a) * af(n, b) * af(n, c) == af(n, d) * af(n, e) * af(n, f) {
+            count = count + 1
+            if count == 1 { first = n }
+            if count > 1 { return -1 }
+        }
+        n = n + 1
+    }
+    if count == 0 { return -2 }
+    if first >= 4 { return first }
+    return -1
+}
+
+// ── universal-in-[2,N] frame (the genuinely productive frame for the
+//    sign/indicator vocab μ,λ,μ²): is the 2-term product identity
+//    af(a)·af(b) == af(c)·af(d) true for EVERY n in [2,N]? This is EVIDENCE
+//    of a forall-n multiplicative relation, NOT a proof (bounded ⟺ forall is
+//    UNPROVEN · c2). Returns 1 if universal-in-[2,N], else 0 (first failing n
+//    refutes). Reference: vocab_universal_hunt.py::universal. ──
+pub fn is_universal2(a, b, c, d, N) -> int {
+    let n = 2
+    while n <= N {
+        if af(n, a) * af(n, b) != af(n, c) * af(n, d) { return 0 }
+        n = n + 1
+    }
+    return 1
+}
+
+// ── universal-in-[2,N] for the 3-term frame A·B·C == D·E·F (forall-n in
+//    range evidence; bounded ⟺ forall UNPROVEN · c2). 1 if universal, else 0. ──
+pub fn is_universal3(a, b, c, d, e, f, N) -> int {
+    let n = 2
+    while n <= N {
+        if af(n, a) * af(n, b) * af(n, c) != af(n, d) * af(n, e) * af(n, f) { return 0 }
+        n = n + 1
+    }
+    return 1
 }
 
 // ── selftest: prove the absorbed engine is a REAL verifier (not rubber-stamp).
@@ -158,6 +250,44 @@ fn main() {
         println("  [FAIL] C2 phi*phi = sigma*sigma should reject  -> n=" + to_string(c2))
         fails = fails + 1
     }
+
+    // ── EXTENDED-VOCAB GATES (idx 12–17 · 2026-06-27 upgrade) ──────────
+    // Exact-int per-n value spot-checks (anchor the new fns to known values):
+    //   n=12=2²·3:  μ(12)=0 (non-squarefree) · λ(12)=(-1)^3=-1 · μ²(12)=0 ·
+    //               2^ω(12)=4 · core(12)=12/6=2 · J₃(12)=J₃(4)·J₃(3)=56·26=1456
+    //   n=30=2·3·5: μ(30)=(-1)^3=-1 · λ(30)=-1 · μ²(30)=1 · 2^ω(30)=8 · core(30)=1
+    println("EXTENDED-VOCAB VALUE GATES (idx 12–17):")
+    fails = fails + gate("V-mu  μ(12)=0",      af(12, 12), 0)
+    fails = fails + gate("V-mu  μ(30)=-1",     af(30, 12), 0 - 1)
+    fails = fails + gate("V-lam λ(12)=-1",     af(12, 13), 0 - 1)
+    fails = fails + gate("V-mu2 μ²(12)=0",     af(12, 14), 0)
+    fails = fails + gate("V-mu2 μ²(30)=1",     af(30, 14), 1)
+    fails = fails + gate("V-J3  J₃(12)=1456",  af(12, 15), 1456)
+    fails = fails + gate("V-2om 2^ω(30)=8",    af(30, 16), 8)
+    fails = fails + gate("V-cor core(12)=2",   af(12, 17), 2)
+
+    // ── UNIVERSAL-IN-[2,N] FRAME GATE (forall-n evidence · c2 UNPROVEN) ─
+    // Sanity: J₂ = φ·ψ is a classical universal multiplicative identity
+    // (vocab_universal_hunt.py:308 sanity gate) — must hold ∀n in [2,N].
+    // These gates rediscover the ONLY clean universal identities the extended-
+    // vocab sweep produces (vocab_universal_hunt.py: CLEAN=3, generators=2) —
+    // every one CLASSICAL/definitional (novel=0 honestly):
+    //   J₂·core·rad = n·φ·ψ  (the combined primitive — J₂=φ·ψ ∧ core·rad=n),
+    //   3-term frame · idx J₂=8 core=17 rad=7 n=5 φ=3 ψ=9.
+    println("UNIVERSAL-IN-[2,N] FRAME GATES (the clean generators · all classical):")
+    fails = fails + gate("U1 J₂·core·rad=n·φ·ψ univ", is_universal3(8, 17, 7, 5, 3, 9, N), 1)
+    // Negative control: μ·μ == n·n must FAIL universality (μ takes 0/±1).
+    fails = fails + gate("U2 μ·μ=n·n NOT universal", is_universal2(12, 12, 5, 5, N), 0)
+    // Negative control (3-term): core·rad·τ = n·τ·τ FAILS (core·rad=n but ·τ vs ·τ² differ).
+    fails = fails + gate("U3 core·rad·τ=n·τ² NOT univ", is_universal3(17, 7, 4, 5, 4, 4, N), 0)
+
+    // ── ARITY-3 FRAME GATES (A·B·C = D·E·F bounded-unique · Ralph 371) ──
+    // n·σ² = J₂·rad²  ⟺ n=6 ONLY (squarefree perfect): n·σ·σ == J₂·rad·rad.
+    //   (idx: n=5, σ=0, J₂=8, rad=7) — bounded-unique singleton at n=6.
+    println("ARITY-3 FRAME GATES (3-term bounded-unique · Ralph 371):");
+    fails = fails + gate("T1 n·σ²=J₂·rad² ⟺n=6", verify_identity3(5, 0, 0, 8, 7, 7, N), 6)
+    // Negative control: n·n·n = n·n·n is universal -> rejected (-1).
+    fails = fails + gate("T2 n³=n³ (universal)", verify_identity3(5, 5, 5, 5, 5, 5, N), -1)
     println("")
     if fails == 0 {
         println("RESULT: PASS - native exact-int identity verifier absorbed into binary")
