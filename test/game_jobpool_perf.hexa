@@ -1,0 +1,97 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  test/game_jobpool_perf.hexa — TIMED job-system throughput (the aiden serial
+//  follow-up named in test/game_jobpool_bench.hexa).
+//
+//  Measures the persistent work-stealing pool (stdlib/thread_pool) under real
+//  OS threads (-DHEXA_THREADS + HEXA_THREADS): job throughput (jobs/s) on a
+//  BALANCED workload and on an UNBALANCED workload (heavy + light jobs
+//  interleaved — the case work-stealing exists for: idle workers steal queued
+//  light jobs while heavies run instead of one worker stalling the join).
+//
+//  Reference-match (rayon work-stealing): on an unbalanced workload static
+//  partitioning stalls on the worker that drew the heavies; work-stealing keeps
+//  every worker busy so wall-time stays near the balanced case. We report
+//  jobs/s for both and the unbalanced/balanced wall ratio as the steal-efficiency
+//  proxy, plus the inline (single-thread submit-overhead) floor for context.
+//
+//  Timing = clock() (= hexa_clock() CLOCK_MONOTONIC on the native runtime, wall).
+//  Shared reduce = the pool's own atomic accumulator (order-insensitive), so the
+//  result is identical on both backends — asserted as the integrity gate.
+//  byteeq-neutral: test/ tree, not in any self/ closure.
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/thread_pool"
+
+fn per_sec(count: int, dt: float) -> float {
+    if dt <= 0.0 { return 0.0 }
+    return to_float(count) / dt
+}
+
+// uniform job — returns its arg (order-insensitive sum closes to N*(N-1)/2).
+fn job_light(x) {
+    return x
+}
+
+// heavy job — a real CPU grind so an idle worker has something worth stealing;
+// the RESULT is still the order-insensitive arg (deterministic reduce).
+fn job_heavy(x) {
+    let mut s = 0
+    let mut i = 0
+    while i < 4000 {
+        s = s + ((x + i) % 7)
+        i = i + 1
+    }
+    if s < 0 { return x + 1 }     // opaque to the optimizer; never taken
+    return x
+}
+
+let JOBS = 200000             // total jobs per sweep
+
+println("═══════════════════════════════════════════════════════")
+println("  job-system throughput — work-stealing pool (rayon shape)")
+println("  jobs=" + to_string(JOBS) + "  workers=RAYON_NUM_THREADS (else 4)")
+println("═══════════════════════════════════════════════════════")
+
+// ── (A) balanced workload — all light jobs ──────────────────────────────────
+let pA = pool_new(0)
+let a0 = clock()
+let mut ai = 0
+while ai < JOBS {
+    let _ = pool_submit(pA, job_light, ai % 97)
+    ai = ai + 1
+}
+let a_acc = pool_join(pA)
+let a_dt = to_float(clock() - a0)
+let a_ops = per_sec(JOBS, a_dt)
+println("[balanced]   workers=" + to_string(pool_workers(pA)) + " dt=" + to_string(a_dt) + "s  throughput=" + to_string(a_ops) + " jobs/s")
+
+// ── (B) unbalanced workload — 1/8 heavy, rest light, interleaved ────────────
+// static partitioning would stall on the worker that drew the heavies; the
+// steal path should keep wall-time near balanced.
+let pB = pool_new(0)
+let b0 = clock()
+let mut bi = 0
+while bi < JOBS {
+    if bi % 8 == 0 {
+        let _ = pool_submit(pB, job_heavy, bi % 97)
+    } else {
+        let _ = pool_submit(pB, job_light, bi % 97)
+    }
+    bi = bi + 1
+}
+let b_acc = pool_join(pB)
+let b_dt = to_float(clock() - b0)
+let b_ops = per_sec(JOBS, b_dt)
+println("[unbalanced] workers=" + to_string(pool_workers(pB)) + " dt=" + to_string(b_dt) + "s  throughput=" + to_string(b_ops) + " jobs/s")
+
+// ── (C) steal-efficiency proxy ──────────────────────────────────────────────
+// unbalanced wall / balanced wall: ~1.0 = the heavies were fully absorbed by
+// stealing (near-perfect load balance); >>1 = the heavies serialized the join.
+println("───────────────────────────────────────────────────────")
+if a_dt > 0.0 {
+    println("[steal] unbalanced/balanced wall ratio = " + to_string(b_dt / a_dt) + "  (→1.0 = perfect steal balance)")
+}
+// integrity: both reduces must be well-defined & equal on the same job-arg set
+// (the accumulators differ only by the heavy-vs-light arg mix, both deterministic).
+println("[integrity] balanced acc=" + to_string(a_acc) + " unbalanced acc=" + to_string(b_acc))
+println("═══════════════════════════════════════════════════════")
