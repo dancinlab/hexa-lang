@@ -1601,6 +1601,16 @@ pub fn _is_cabi(fname: string) -> bool {
     // batch J (darwin 2nd-return-register wall like pipe + live process-fork harness).
     if fname == "hxlcl_clock_gettime" { return true }
     if fname == "hxlcl_execve" { return true }
+    // batch J — fork (clean syscall family LAST leaf). The LINUX legs DISSOLVE with
+    // the close errno epilogue: single result reg (child pid to parent / 0 to child,
+    // uniform -errno on failure), NR x86_64=57 (__NR_fork) / arm64=220 (no plain fork
+    // → __NR_clone(flags=SIGCHLD=17); every clone arg past flags is 0 so the
+    // CONFIG_CLONE_BACKWARDS arg-order divergence is MOOT — the dup2→dup3 extra-flag
+    // class). The darwin leg returns -1: fork(2) is a genuine 2nd-return-register wall
+    // (child pid in x0 for BOTH processes, disambiguated by x1==1; single-result
+    // __hx_syscall6 exposes only x0) identical to darwin pipe — the real darwin fork
+    // stays the floor raw-asm dual-reg shim. Reuses __errno_location (no new entry).
+    if fname == "hxlcl_fork" { return true }
     return false
 }
 
