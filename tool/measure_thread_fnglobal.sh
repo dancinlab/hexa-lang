@@ -49,7 +49,12 @@ prep_seeds() { local s="$1"
     for f in self/runtime.c self/native/hexat self/native/hexa_cc.c; do
         [ -e "$CANON/$f" ] && [ ! -e "$s/$f" ] && { mkdir -p "$s/$(dirname "$f")"; cp -a "$CANON/$f" "$s/$f" 2>/dev/null; }
     done
-    [ -d "$CANON/self/native" ] && cp -an "$CANON/self/native/." "$s/self/native/" 2>/dev/null || true
+    # generated/amalgam C subtrees runtime.c #includes (native/, forge/) — copy
+    # CANON's generated copies for any file MISSING in the worktree (don't clobber
+    # tracked .hexa). EXCEPT self/runtime.h — keep the worktree's (the fix lives there).
+    for d in native forge; do
+        [ -d "$CANON/self/$d" ] && { mkdir -p "$s/self/$d"; cp -an "$CANON/self/$d/." "$s/self/$d/" 2>/dev/null; }
+    done
     [ -d "$CANON/build" ] && mkdir -p "$s/build" && cp -an "$CANON/build/hexat" "$s/build/" 2>/dev/null || true; }
 prep_seeds "$SRC"
 
