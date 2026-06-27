@@ -50,6 +50,31 @@ fn pi_scaled(dd) -> array {
     bi_sub(bi_mul(bi_from(16), a5), bi_mul(bi_from(4), a239))
 }
 
+// Apéry's constant ζ(3) to D digits — no closed π form, so the accelerated Apéry series:
+//   ζ(3) = (5/2) Σ_{n≥1} (-1)^{n-1} / (n³·C(2n,n))   (van der Poorten 1979, geometric ~0.6 dig/term).
+// Term ratio is ALL small integers — no full BigInt division needed:
+//   T_n = T_{n-1} · (n-1)³ / (2 n² (2n-1)) ,  T_1 = 1/2.
+// Carry T_n·10^D as BigInt: multiply by (n-1)³ then small-divisor-divide by 2n²(2n-1). @cite ζ(3).
+fn zeta3_scaled(dd) -> array {
+    let p10 = _hp_pow10(dd)
+    let acc = bi_from(0)
+    let running = bi_div_small(p10, 2)    // T_1·10^D = 10^D / 2
+    let n = 1
+    let pos = 1                            // (-1)^{n-1}: n=1 → +
+    while running[0] != 0 {
+        if pos == 1 { acc = bi_add(acc, running) } else { acc = bi_sub(acc, running) }
+        // advance to T_{n+1}: × n³ (since (n+1-1)³=n³) ÷ (2 (n+1)² (2n+1))
+        let m = n * n * n
+        let np1 = n + 1
+        let d = 2 * np1 * np1 * (2 * np1 - 1)
+        running = bi_div_small(bi_mul(running, bi_from(m)), d)
+        if pos == 1 { pos = 0 } else { pos = 1 }
+        n = n + 1
+    }
+    // ζ(3)·10^D = (5/2)·acc
+    bi_div_small(bi_mul(bi_from(5), acc), 2)
+}
+
 // ── selftest ──
 fn _gate(label, got, want) -> int {
     if got == want {
@@ -71,8 +96,10 @@ fn main() {
     let pi40 = pis.substring(0, 41)
     fails = fails + _gate("pi 40-digit (Machin)", pi40, "31415926535897932384626433832795028841971")
 
-    // arctan(1/1) = π/4 sanity: 4·arctan(1/1)·... (x=1) → π/4. 4·result ≈ π.
-    // (x=1 수렴 느리지만 D 작게 동작 확인) — 생략, Machin이 충분.
+    // ζ(3) (Apéry) — 앞 20 소수자리 reference-match (dd=44 guard).
+    //   ζ(3) = 1.20205690315959428539973816151...
+    let z3 = bi_to_string(zeta3_scaled(44)).substring(0, 21)
+    fails = fails + _gate("zeta(3) = Apery const", z3, "120205690315959428539")
 
     println("")
     if fails == 0 {
