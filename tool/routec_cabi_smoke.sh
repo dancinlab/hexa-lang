@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -130,6 +130,12 @@ extern int    hxlcl_getegid(void);
  * const-false), so only the return value (0 / -1) is asserted here; the errno
  * value-exact (==EBADF) is asserted by the LINUX sibling smoke. */
 extern int    hxlcl_close(int fd);
+
+/* errno-bearing chain (close mirror) — read / lseek, uniform 3-arg. Same
+ * composition-only assertion on darwin (errno-store DCE'd); the errno value-exact
+ * is the LINUX sibling smoke's job. */
+extern long   hxlcl_read(int fd, void *buf, unsigned long n);
+extern long   hxlcl_lseek(int fd, long off, int whence);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
@@ -254,6 +260,20 @@ int main(void) {
     int cfd = open("/dev/null", O_RDONLY);
     CK(cfd >= 0, "open /dev/null for close test");
     CK(hxlcl_close(cfd) == 0, "close(valid fd) == 0 (composition)");
+
+    /* read / lseek — COMPOSITION on darwin (success case; errno-store DCE'd).
+     * read of /dev/null returns 0 (EOF); lseek on a regular file moves the offset.
+     * The errno value-exact (bad-fd → EBADF) is the Linux sibling smoke's claim. */
+    char rb[8];
+    int rfd = open("/dev/null", O_RDONLY);
+    CK(rfd >= 0, "open /dev/null for read test");
+    CK(hxlcl_read(rfd, rb, sizeof rb) == 0, "read(/dev/null) == 0 (EOF, composition)");
+    hxlcl_close(rfd);
+
+    int lfd = open("/dev/zero", O_RDONLY);
+    CK(lfd >= 0, "open /dev/zero for lseek test");
+    CK(hxlcl_lseek(lfd, 0, SEEK_SET) == 0, "lseek(SEEK_SET, 0) == 0 (composition)");
+    hxlcl_close(lfd);
 
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }
     printf("[routec-smoke] %d assert(s) FAILED\n", fails);

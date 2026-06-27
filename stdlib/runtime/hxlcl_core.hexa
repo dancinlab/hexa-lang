@@ -589,3 +589,54 @@ pub fn hxlcl_close(fd: HexaVal) -> int {
     }
     return r                                    // fd close result (0)
 }
+
+// ── ERRNO-BEARING CHAIN (close mirror) — uniform 3-arg syscalls read / lseek ──
+//
+// Both follow the EXACT close pattern: a __hx_syscall6 trap, then the Route C
+// in-body discipline (raw-payload `__hx_payload_lt`/`_ne`/`_sub`, never bare
+// `<`/`-`) + the target_is_linux()-gated errno store via __errno_location. They
+// are uniform 3-arg across all targets (no arm64 dup3/mkdirat-style call-shape
+// divergence), so the body is a verbatim mirror with only the NR + arg names
+// changed. NR ref-match (no black-box):
+//   read : x86_64 0 · arm64 63 · darwin 3   (syscall_64.tbl / asm-generic
+//          unistd.h __NR_read 63 / runtime.c HXLCL_SYS_READ 3)
+//   lseek: x86_64 8 · arm64 62 · darwin 199 (syscall_64.tbl / __NR_lseek 62 /
+//          runtime.c HXLCL_SYS_LSEEK 199; darwin 0x20000c7)
+
+pub fn hxlcl_read(fd: HexaVal, buf: HexaVal, n: HexaVal) -> int {
+    let mut nr = 3                             // Darwin SYS_READ (default)
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 0 }       // Linux x86_64 __NR_read
+        else { nr = 63 }                       // Linux arm64 __NR_read
+    }
+    let r = __hx_syscall6(nr, fd, buf, n, 0, 0, 0)
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // bytes read (>= 0)
+}
+
+pub fn hxlcl_lseek(fd: HexaVal, off: HexaVal, whence: HexaVal) -> int {
+    let mut nr = 199                           // Darwin SYS_LSEEK (default)
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 8 }       // Linux x86_64 __NR_lseek
+        else { nr = 62 }                       // Linux arm64 __NR_lseek
+    }
+    let r = __hx_syscall6(nr, fd, off, whence, 0, 0, 0)
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // resulting file offset (>= 0)
+}

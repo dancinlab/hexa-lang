@@ -1104,6 +1104,12 @@ pub fn _is_cabi(fname: string) -> bool {
     // not an hxlcl_ symbol — _is_cabi keys on the exact name, so this is fine.)
     if fname == "hxlcl_close" { return true }
     if fname == "__errno_location" { return true }
+    // errno-bearing chain (close mirror): uniform 3-arg syscalls. Same body shape
+    // as hxlcl_close (raw-payload intrinsics + target_is_linux()-gated errno store
+    // via the already-whitelisted __errno_location). No arm64 call-shape divergence
+    // (read/lseek are plain on every target).
+    if fname == "hxlcl_read" { return true }
+    if fname == "hxlcl_lseek" { return true }
     return false
 }
 

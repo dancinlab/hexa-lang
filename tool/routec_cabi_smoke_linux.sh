@@ -57,14 +57,17 @@ HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
 "$CC" -c "$TMP/routec.s" -o "$TMP/routec.o"
 [ -s "$TMP/routec.o" ] || { echo "[routec-smoke-linux] FATAL: empty routec.o" >&2; exit 1; }
 
-# ── (2) assert hxlcl_close is a DEFINED external text symbol (bare ELF name) ──
-echo "[routec-smoke-linux] (2) assert hxlcl_close defined in routec.o …"
+# ── (2) assert the errno-bearing syscall symbols are DEFINED external text
+#    (bare ELF names — no leading underscore). ──
+echo "[routec-smoke-linux] (2) assert errno-bearing syscall symbols defined in routec.o …"
 syms="$(nm "$TMP/routec.o" 2>/dev/null || true)"
-if ! grep -qE " T hxlcl_close$" <<<"$syms"; then
-    echo "[routec-smoke-linux] FATAL: hxlcl_close not emitted as defined text (T)" >&2
-    echo "$syms" | grep -i close >&2 || true
-    exit 1
-fi
+miss=0
+for s in close read lseek; do
+    if ! grep -qE " T hxlcl_${s}\$" <<<"$syms"; then
+        echo "[routec-smoke-linux] NOT DEFINED (T): hxlcl_${s}" >&2; miss=$((miss+1))
+    fi
+done
+[ "$miss" -eq 0 ] || { echo "[routec-smoke-linux] FATAL: $miss symbol(s) not emitted" >&2; exit 1; }
 
 # ── (3) C harness: the close errno VALUE-EXACT contract. `__errno_location` is
 #    provided by libc (the Route C body bl's into it as an undefined-external,
@@ -76,8 +79,10 @@ cat > "$TMP/harness.c" <<'CEOF'
 #include <stdlib.h>
 #include <unistd.h>
 
-/* Route-C-emitted symbol under test (raw C-ABI prototype). */
-extern int hxlcl_close(int fd);
+/* Route-C-emitted symbols under test (raw C-ABI prototypes). */
+extern int  hxlcl_close(int fd);
+extern long hxlcl_read(int fd, void *buf, unsigned long n);
+extern long hxlcl_lseek(int fd, long off, int whence);
 
 /* The emit covers ALL whitelisted Route C symbols (the script emits the whole
  * hxlcl_core.hexa), so the routec.o carries the composites' undefined-external
@@ -118,6 +123,23 @@ int main(void) {
     errno = 0;
     CK(hxlcl_close(999999) == -1, "close(999999) == -1");
     CK(errno == EBADF, "close(999999) sets errno == EBADF (value-exact)");
+
+    /* read on a bad fd → -1, errno == EBADF (errno-store value-exact). */
+    errno = 0;
+    CK(hxlcl_read(999999, (char[8]){0}, 8) == -1, "read(bad fd) == -1");
+    CK(errno == EBADF, "read(bad fd) sets errno == EBADF (value-exact)");
+
+    /* lseek on a bad fd → -1, errno == EBADF. (Also confirms the 3-arg trap +
+     * negative-return → errno-store path for a non-close errno-bearing syscall.) */
+    errno = 0;
+    CK(hxlcl_lseek(999999, 0, SEEK_SET) == -1, "lseek(bad fd) == -1");
+    CK(errno == EBADF, "lseek(bad fd) sets errno == EBADF (value-exact)");
+
+    /* read success path: read /dev/zero into a buffer → returns the byte count. */
+    int zfd = open("/dev/zero", O_RDONLY);
+    char zb[4] = {1, 1, 1, 1};
+    CK(zfd >= 0 && hxlcl_read(zfd, zb, 4) == 4, "read(/dev/zero, 4) == 4 (success)");
+    if (zfd >= 0) hxlcl_close(zfd);
 
     if (fails == 0) { printf("[routec-smoke-linux] all Route C errno asserts PASS\n"); return 0; }
     printf("[routec-smoke-linux] %d assert(s) FAILED\n", fails);
