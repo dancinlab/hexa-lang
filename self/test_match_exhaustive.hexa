@@ -12,9 +12,18 @@
 //  The check is OPT-IN: compile/run with `HEXA_EXHAUSTIVE=1` to surface the
 //  warnings. The default build emits nothing new (release integrity).
 //
+//  Severity escalation — `HEXA_EXHAUSTIVE_FATAL=1` upgrades the same finding
+//  to a FATAL error (HX3011, Severity::Error) instead of HX3006, mirroring
+//  Rust's E0004 "non-exhaustive patterns" hard error. Under that flag the
+//  build aborts before codegen. With BOTH flags unset the pass is a no-op
+//  (byte-identical default build). The fatal flag implies the check, so
+//  HEXA_EXHAUSTIVE need not also be set.
+//
 //  Expected, when built from this branch with HEXA_EXHAUSTIVE=1, stderr:
 //    HX3006 ... non-exhaustive match on enum `Color`: missing variant(s)
 //           Color::Blue; add the arm(s) or a `_` wildcard
+//  (with HEXA_EXHAUSTIVE_FATAL=1 the same text is emitted as HX3011 error
+//   and the build exits non-zero before codegen)
 //  and NO HX3006 for `full_cover` / `wild_cover` / `guarded_still_warns`
 //  is suppressed-incorrectly — note `guarded_still_warns` MUST still warn
 //  (Color::Green is only matched under a guard, so it is not covered).

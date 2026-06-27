@@ -244,6 +244,59 @@ fn _enum_path(enum_name: string, variant_name: string, args: [Expr], file: strin
     }
 }
 
+// Match expression: children = [scrut, pat0, body0, pat1, body1, ...].
+// Mirrors parser output so the exhaustiveness pass (_exh_analyze_match)
+// reaches the same code path it does for real source.
+fn _match_expr(scrut: Expr, arms: [Expr], file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(scrut)
+    let mut i = 0
+    while i < len(arms) {
+        kids.push(arms[i])
+        i = i + 1
+    }
+    return Expr {
+        kind: ExprKind::Match,
+        span: _span(file, line, col, 5),
+        text: "",
+        annotations: [],
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// (h) — non-exhaustive enum match: enum Color{Red,Green,Blue} with a
+// `match c { Color::Red -> 0, Color::Green -> 1 }` (Blue uncovered, no
+// wildcard). Drives the exhaustiveness pass: default build emits nothing;
+// HEXA_EXHAUSTIVE=1 → HX3006 (warn); HEXA_EXHAUSTIVE_FATAL=1 → HX3011 (error).
+fn _build_case_h() -> Module {
+    let f = "exh_test.hexa"
+    let mut variants = []
+    variants.push(_variant_unit("Red", f, 1, 13))
+    variants.push(_variant_unit("Green", f, 1, 18))
+    variants.push(_variant_unit("Blue", f, 1, 25))
+    let item_enum = _enum_item("Color", variants, f, 1)
+
+    let scrut = _ident_expr("c", f, 2, 18)
+    let mut arms = []
+    arms.push(_enum_path("Color", "Red", [], f, 3, 9))
+    arms.push(_int_expr("0", f, 3, 20))
+    arms.push(_enum_path("Color", "Green", [], f, 4, 9))
+    arms.push(_int_expr("1", f, 4, 22))
+    let m = _match_expr(scrut, arms, f, 2, 12)
+
+    let mut body_kids = []
+    body_kids.push(_return_expr(m, f, 2, 5))
+    let body = _block(body_kids, f, 2, 1)
+    let p = _param("c", "Color", f, 2, 13)
+    let item_fn = _fn_item("classify", [p], _named_type_ref("i64"), body, f, 2)
+
+    let mut items = []
+    items.push(item_enum)
+    items.push(item_fn)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // ── Pretty-print ─────────────────────────────────────────────
 
 fn _sev_str(s: Severity) -> string {
@@ -562,6 +615,38 @@ fn main() {
         ok = false
     } else {
         println("  ok: 2 HX2005 emitted (per-slot positional)")
+    }
+
+    // (h) Exhaustiveness severity gating — env-adaptive contract:
+    //   both unset           → 0 HX3006 + 0 HX3011 (default byte-identity)
+    //   HEXA_EXHAUSTIVE=1     → 1 HX3006 (warn), 0 HX3011
+    //   HEXA_EXHAUSTIVE_FATAL=1 → 1 HX3011 (fatal error), 0 HX3006
+    let fatal_on = env("HEXA_EXHAUSTIVE_FATAL") == "1"
+    let warn_on = env("HEXA_EXHAUSTIVE") == "1"
+    let diags_h = _run_case("(h) exhaustiveness severity gate (Color missing Blue)", _build_case_h())
+    let h3006 = _count_code(diags_h, "HX3006")
+    let h3011 = _count_code(diags_h, "HX3011")
+    if fatal_on {
+        if h3011 != 1 || h3006 != 0 {
+            println("  FAIL: case (h) HEXA_EXHAUSTIVE_FATAL=1 expected 1 HX3011 + 0 HX3006, got " + to_string(h3011) + " HX3011 / " + to_string(h3006) + " HX3006")
+            ok = false
+        } else {
+            println("  ok: 1 HX3011 (fatal) emitted under HEXA_EXHAUSTIVE_FATAL=1")
+        }
+    } else if warn_on {
+        if h3006 != 1 || h3011 != 0 {
+            println("  FAIL: case (h) HEXA_EXHAUSTIVE=1 expected 1 HX3006 + 0 HX3011, got " + to_string(h3006) + " HX3006 / " + to_string(h3011) + " HX3011")
+            ok = false
+        } else {
+            println("  ok: 1 HX3006 (warn) emitted under HEXA_EXHAUSTIVE=1")
+        }
+    } else {
+        if h3006 != 0 || h3011 != 0 {
+            println("  FAIL: case (h) default build expected 0 HX3006 + 0 HX3011 (byte-identity), got " + to_string(h3006) + " HX3006 / " + to_string(h3011) + " HX3011")
+            ok = false
+        } else {
+            println("  ok: 0 exhaustiveness diags on default build (byte-identity preserved)")
+        }
     }
 
     println("")
