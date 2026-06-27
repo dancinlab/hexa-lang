@@ -621,8 +621,17 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
     // stays the empty literal `[]`, and `_x86_local_type` is never consulted (the
     // binop guard short-circuits on the gate). Empty-`[]` field is the minimal
     // residual struct-shape delta; Gate-1 re-measures patched-OFF .o == baseline.
+    // r2c — the `local_type[]` builder must also run for the ARRAY-unbox gate.
+    // r2b localized the array consumer (index/index_set native emit) reading
+    // `_x86_local_type(rm,id)`, but the slot-builder here was gated ONLY on the
+    // r5 scalar flag `_unbox_native_enabled()`. With just HEXA_UNBOX_ARRAY_
+    // NATIVE=1 the loop never ran → `rm_local_type` stayed `[]` → every
+    // `_x86_local_type` returned 0 → the array guard saw `cont.type_id=0` and
+    // `idx.provint=0` (r2b/r2c PROBE) and never fired. This was the missing
+    // CONSUMER-side producer for the `local_type[]` regmap slot. Either gate ON
+    // now builds the slot; OFF path (neither flag) keeps `[]` → byte-identical.
     let mut rm_local_type: [i64] = []
-    if _unbox_native_enabled() {
+    if _unbox_native_enabled() || _unbox_array_enabled() {
         let lt_maxid = _x86_max_local_id(mf)
         let mut lj = 0
         while lj <= lt_maxid { rm_local_type.push(0); lj = lj + 1 }
