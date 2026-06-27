@@ -1255,13 +1255,8 @@ pub fn hxlcl_getrusage(who: HexaVal, usage: HexaVal) -> int {
 //     arm64  __NR_pipe2 = 59   (asm-generic unistd.h — no plain pipe/poll on arm64)
 //     darwin SYS_pipe   = 42   (xnu; 2nd-return-reg, used only by the _cf shim)
 //
-// time / poll are DEFERRED (census verdicts recorded in the campaign SSOT): both
-// have register-clean legs (x86_64 time=201 returns epoch sec in rax; x86_64
-// poll=7 + darwin poll=230 are plain 3-arg) but their DIVERGENT targets need a new
-// in-body SCRATCH-BUFFER substrate — arm64/darwin time via gettimeofday writes a
-// timeval STRUCT (must read tv_sec back), and arm64 poll via ppoll(73) needs a
-// synthesized timespec (ms → {tv_sec,tv_nsec} + NULL-for-infinite). Tractable next
-// round once that buffer substrate is accepted; not attempted here (c2).
+// time / poll: LANDED in batch H below (the scratch-buffer substrate the batch E
+// census flagged turned out NOT to need a new intrinsic — see the batch H header).
 pub fn hxlcl_pipe(fds: HexaVal) -> int {
     if target_is_linux() {
         let mut r = 0
@@ -1282,4 +1277,155 @@ pub fn hxlcl_pipe(fds: HexaVal) -> int {
     // darwin: 2nd-return-register BSD pipe — unreachable by the single-result
     // __hx_syscall6. Documented incomplete (real darwin pipe = floor _cf shim).
     return -1
+}
+
+// ── batch H: time + poll (the SCRATCH-BUFFER substrate — NO new intrinsic) ──────
+//
+// SCRATCH-BUFFER CENSUS VERDICT (the batch-E deferral resolved): time and poll
+// each have register-clean legs and ONE divergent leg that needs a small in-body
+// struct buffer (timeval / timespec). The campaign has NO `__hx_stack_alloc`-class
+// intrinsic (grep-clean: no addr-of / alloca / stack-slot leaf), so a TRUE in-body
+// STACK scratch buffer is a substrate gap — it would need a new codegen builtin
+// (the frozen-151c52c8-unsafe path the campaign forbids). BUT the buffer NEED is
+// satisfiable with ZERO new intrinsics by reusing the already-whitelisted
+// hxlcl_malloc as a HEAP scratch + the proven raw-ptr ops:
+//   • hxlcl_malloc(16)        — inner C-ABI `bl` (ON-path-proven by strdup/calloc/
+//                               realloc), returns a 16-byte raw region.
+//   • __hx_ptr_store64(p,off,v) — write the synthesized struct fields (proven by
+//                               strtoll's endptr store64).
+//   • __hx_ptr_load64(p,off)   — read a struct field back (proven by realloc's
+//                               negative-offset header read).
+//   • __hx_payload_div/_mod/_mul — the ms→{sec,nsec} arithmetic (proven int-div
+//                               leaves — x86_64_linux.hexa:2741 / arm64_darwin:2088).
+// So the substrate is NOT a wall; the only thing genuinely missing (a true stack
+// scratch) is an OPTIMIZATION, not a blocker. HONEST CAVEAT (recorded for the
+// campaign SSOT): the heap-scratch leaks the 16-byte region per call on the
+// arm64-linux divergent legs (hxlcl_malloc's bump arena has free=noop). For time
+// that is negligible (every caller passes NULL and time() is never hot-looped),
+// but hxlcl_poll IS hot-looped on a finite timeout (self/native/term_ffi_emit.hexa
+// documents a "tight-looped hxlcl_poll → 36 GB RSS" history), so the arm64-linux
+// finite-timeout ppoll leg accrues that per-call 16-byte leak — the ONE spot a
+// true __hx_stack_alloc would be cleaner. Acceptable on this default-OFF research
+// path (HEXA_CABI_HXLCL=1, never shipped); flagged, not papered over.
+//
+// In-body operator discipline (the #4042 rule) + un-nested lets throughout, same
+// as the syscall family above. errno epilogue = the close discipline verbatim.
+
+// hxlcl_time: return the epoch seconds (a la `time(NULL)`); if `t` is non-NULL also
+// write `*t = (int)sec` (NULL-gated, like strtoll's endptr). BYTE-FAITHFUL to the
+// floor shim runtime_core_hxlcl_shim.c:560 (`int hxlcl_time(int *t){ time_t r =
+// time(NULL); if(t) *t=(int)r; return (int)r; }`) — every caller in the runtime
+// passes NULL (`hxlcl_time(NULL)`), so the out-param write is exercised only for
+// faithfulness. The `int` return carries the low 32 bits of the epoch (matching the
+// floor's `(int)r`; valid until 2038, the same window as the int-typed floor).
+//
+// PER-TARGET (compile-time target_is_* consts → DCE drops the dead legs):
+//   x86_64-linux : time(201) — REGISTER-CLEAN: the kernel returns the epoch in the
+//                  result reg; NO buffer. (Passing tloc=0/NULL to the syscall, then
+//                  doing the int-width *t store OURSELVES — the kernel would write 8
+//                  bytes (time_t) into a 4-byte int* t, so we never hand it `t`.)
+//   arm64-linux  : NO __NR_time (asm-generic dropped it); gettimeofday(169, &tv,
+//                  NULL) writes timeval{tv_sec,tv_usec}; read tv_sec at offset 0.
+//   darwin       : NO BSD `time` trap; gettimeofday(116, &tv, NULL) (the floor's
+//                  hxlcl_clock_gettime uses the same syscall, runtime_emit_full:1983);
+//                  read tv_sec. (__hx_syscall6 issues `svc #0x80` with the bare BSD
+//                  NR — no 0x2000000 OR on arm64, like getrusage=117.)
+// NR ref-match (no black-box): x86_64 time=201 (arch/x86 syscall_64.tbl) · arm64
+// gettimeofday=169 / darwin gettimeofday=116 (asm-generic unistd.h __NR_gettimeofday
+// 169 · runtime_emit_full.hexa:1943 HXLCL_SYS_GETTIMEOFDAY 116).
+pub fn hxlcl_time(t: HexaVal) -> int {
+    let pt = __hx_payload_add(t, 0)            // int* t (raw, may be NULL)
+    if target_is_linux() {
+        if target_is_x86_64() {
+            let r = __hx_syscall6(201, 0, 0, 0, 0, 0, 0)   // time(NULL) → epoch in result reg
+            if __hx_payload_ne(pt, 0) {
+                __hx_ptr_store32(pt, 0, r)     // *t = (int)epoch
+            }
+            return r
+        }
+        // arm64-linux: gettimeofday(&tv, NULL); tv_sec at offset 0.
+        // hxlcl_malloc's declared param is `HexaVal` (the C-ABI lowering is at the
+        // call boundary, but the TYPE-CHECK is on the signature), so a bare i64 `16`
+        // mismatches. Box it via __hx_payload_add(0,16) → HexaVal{TAG_INT,16} — the
+        // exact close/strtoll `__hx_payload_sub(0, x)` shape (the __hx_payload_*
+        // intrinsics accept i64 literals and return HexaVal, unlike a declared
+        // extern fn). strdup/calloc pass HexaVal the same way (cap=__hx_payload_add,
+        // total=__hx_payload_mul). The malloc result is `int` (raw ptr word), fed
+        // straight to the raw-ptr intrinsics like strdup/calloc do.
+        let szl = __hx_payload_add(0, 16)      // HexaVal-box the scratch size
+        let buf = hxlcl_malloc(szl)            // scratch timeval (heap — see header)
+        __hx_syscall6(169, buf, 0, 0, 0, 0, 0) // gettimeofday(&tv, NULL)
+        let sec = __hx_ptr_load64(buf, 0)      // tv.tv_sec
+        if __hx_payload_ne(pt, 0) {
+            __hx_ptr_store32(pt, 0, sec)
+        }
+        return sec
+    }
+    // darwin: gettimeofday(&tv, NULL); tv_sec at offset 0. Same HexaVal-box of the
+    // literal size as the arm64-linux leg above (hxlcl_malloc expects HexaVal).
+    let szd = __hx_payload_add(0, 16)
+    let buf = hxlcl_malloc(szd)
+    __hx_syscall6(116, buf, 0, 0, 0, 0, 0)
+    let sec = __hx_ptr_load64(buf, 0)
+    if __hx_payload_ne(pt, 0) {
+        __hx_ptr_store32(pt, 0, sec)
+    }
+    return sec
+}
+
+// hxlcl_poll: wait for events on `fds` (nfds pollfds) up to `timeout` ms; return
+// the ready count (0 on timeout) or -1 + errno. BYTE-FAITHFUL to the floor
+// (runtime_emit_full.hexa:2042 `poll((struct pollfd*)fds,(nfds_t)nfds,timeout)`).
+// `nfds` is an `unsigned int` passed raw — every C caller zero-extends it (a 32-bit
+// `mov` clears the upper word), exactly like read/write pass `unsigned long n` raw.
+//
+// PER-TARGET (compile-time target_is_* consts → DCE):
+//   x86_64-linux : poll(7)   — plain 3-arg (fds, nfds, timeout_ms). REGISTER-CLEAN.
+//   darwin       : poll(230) — plain 3-arg, same shape (bare BSD NR, `svc #0x80`).
+//   arm64-linux  : NO __NR_poll (asm-generic dropped it); ppoll(73, fds, nfds,
+//                  &ts | NULL, sigmask=NULL, sigsetsize=8). The C `int timeout` (ms)
+//                  is SYNTHESIZED into a timespec: timeout<0 → tmo=NULL (block
+//                  forever); else {tv_sec = ms/1000, tv_nsec = (ms%1000)*1e6}. This
+//                  is the divergent leg that needs the scratch buffer (see header).
+//                  (sigmask NULL ⇒ the kernel ignores sigsetsize, but 8 = _NSIG/8 is
+//                  the canonical value glibc passes.)
+// NR + arg-shape ref-match (no black-box): x86_64 poll=7 / darwin poll=230
+// (syscall_64.tbl · runtime_emit_full.hexa:1369 HXLCL_SYS_POLL 230) · arm64 ppoll=73
+// (asm-generic unistd.h __NR_ppoll — no plain poll on arm64) · ppoll signature
+// (fds,nfds,tmo_p,sigmask,sigsetsize) = man ppoll(2). The errno epilogue is the
+// close discipline verbatim (Linux returns -errno; darwin carry-flag deferred).
+pub fn hxlcl_poll(fds: HexaVal, nfds: HexaVal, timeout: HexaVal) -> int {
+    let mut r = 0
+    if target_is_linux() {
+        if target_is_x86_64() {
+            r = __hx_syscall6(7, fds, nfds, timeout, 0, 0, 0)    // poll(fds, nfds, timeout_ms)
+        } else {
+            // arm64-linux: ppoll(fds, nfds, &ts | NULL, sigmask=NULL, sigsetsize=8).
+            let neg = __hx_payload_lt(timeout, 0)
+            if __hx_payload_ne(neg, 0) {
+                r = __hx_syscall6(73, fds, nfds, 0, 0, 8, 0)     // timeout<0 → tmo=NULL (infinite)
+            } else {
+                let szp = __hx_payload_add(0, 16)                // HexaVal-box the scratch size (malloc expects HexaVal)
+                let ts = hxlcl_malloc(szp)                       // scratch timespec (heap — see header)
+                let sec = __hx_payload_div(timeout, 1000)        // ms / 1000  → tv_sec
+                let rem = __hx_payload_mod(timeout, 1000)        // ms % 1000
+                let nsec = __hx_payload_mul(rem, 1000000)        // → tv_nsec (nanoseconds)
+                __hx_ptr_store64(ts, 0, sec)                     // ts.tv_sec
+                __hx_ptr_store64(ts, 8, nsec)                    // ts.tv_nsec
+                r = __hx_syscall6(73, fds, nfds, ts, 0, 8, 0)
+            }
+        }
+    } else {
+        r = __hx_syscall6(230, fds, nfds, timeout, 0, 0, 0)      // darwin poll(fds, nfds, timeout_ms)
+    }
+    let neg2 = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg2, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // ready count (0 on timeout)
 }
