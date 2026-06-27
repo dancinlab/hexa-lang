@@ -658,7 +658,7 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
     // CONSUMER-side producer for the `local_type[]` regmap slot. Either gate ON
     // now builds the slot; OFF path (neither flag) keeps `[]` → byte-identical.
     let mut rm_local_type: [i64] = []
-    if _unbox_native_enabled() || _unbox_array_enabled() {
+    if _unbox_native_enabled() || _unbox_array_enabled() || _pack_array_enabled() {
         let lt_maxid = _x86_max_local_id(mf)
         let mut lj = 0
         while lj <= lt_maxid { rm_local_type.push(0); lj = lj + 1 }
@@ -768,9 +768,9 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
                    pst0.args[0].kind == "local" {
                     let psrc = pst0.args[0].local_id
                     if psrc >= 0 && psrc <= pk_maxid { let_use[psrc] = let_use[psrc] + 1 }
-                    let pt0 = rm_local_type[pd0]
-                    if pd0 >= 0 && pd0 <= pk_maxid && (pt0 == 101 || pt0 == 102) {
-                        let_src[pd0] = psrc
+                    if pd0 >= 0 && pd0 <= pk_maxid {
+                        let pt0 = rm_local_type[pd0]
+                        if pt0 == 101 || pt0 == 102 { let_src[pd0] = psrc }
                     }
                 }
                 ps0 = ps0 + 1
