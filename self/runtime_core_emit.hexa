@@ -84,6 +84,37 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "#  define HX_RTCORE_LOCAL_INLINE static inline\n"
     buf = buf + "#endif\n"
     buf = buf + "\n"
+    // ── THREAD-SAFE ARENA (opt-in HEXA_THREADS) · per-thread allocator ──────────
+    // HX_TLS qualifies the bump-arena's process-global mutable state so that under
+    // a -DHEXA_THREADS build each OS thread gets its OWN arena (block chain + bump
+    // frontier + Val-mark stack + address envelope). This is the jemalloc / tcmalloc
+    // / Rust thread-local-allocator model: per-thread arenas eliminate cross-thread
+    // contention WITHOUT a lock on the single-thread hot path. Reference-match:
+    //   · jemalloc  — per-thread `arena_t` via tsd (jemalloc/src/tsd.c, `tsd_arena_get`);
+    //                 each thread binds to its own arena → no lock on tcache fills.
+    //   · tcmalloc  — `ThreadCache::GetCache()` returns a `__thread`-local cache
+    //                 (tcmalloc/thread_cache.cc — `tls_data_`); central heap touched
+    //                 only on cache refill, never per-alloc.
+    //   · Rust std  — `#[thread_local]` allocator state; the system allocator is the
+    //                 libc per-thread arena (glibc malloc arena-per-thread).
+    // WHY this is the right knob and not a global lock: a mutex around every
+    // hexa_arena_alloc would serialize ALL allocation and slow the (overwhelmingly
+    // common) single-thread path — the references above all chose per-thread state
+    // precisely to keep the uncontended path lock-free. A worker thread's arena is
+    // private; the main thread's arena is untouched.
+    //
+    // BYTEEQ-NEUTRAL: when HEXA_THREADS is undefined (every default / byteeq /
+    // faithful / self-host build) HX_TLS expands to EMPTY, so the arena globals keep
+    // their exact baseline storage class and the runtime object is byte-identical to
+    // origin/main → gen3≡gen4 fixpoint unaffected. Only a -DHEXA_THREADS consumer
+    // build (which also sets HEXA_RT_ALLOC_NATIVE=0 to compile this C arena body in
+    // place of the single-threaded native seed) sees the `__thread` qualifier.
+    buf = buf + "#if defined(HEXA_THREADS)\n"
+    buf = buf + "#  define HX_TLS __thread\n"
+    buf = buf + "#else\n"
+    buf = buf + "#  define HX_TLS\n"
+    buf = buf + "#endif\n"
+    buf = buf + "\n"
     buf = buf + "// ═══════════════════════════════════════════════════════════\n"
     buf = buf + "//  Branch hints + cold attribute + cacheline prefetch\n"
     buf = buf + "//  (A17 / A18 / Z20 — docs/hexa_speedup_brainstorm_2026_05_06.ai.md)\n"
@@ -782,6 +813,33 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "\n"
     buf = buf + "static HexaInternTable __hexa_intern = {NULL, NULL, 0, 0};\n"
     buf = buf + "\n"
+    // ── THREAD-SAFE INTERN TABLE (opt-in HEXA_THREADS) ─────────────────────────
+    // Unlike the bump arena, the string-intern table is a GLOBALLY SHARED dedup
+    // structure: pointer-equality string compares depend on every thread seeing the
+    // SAME canonical pointer for an equal string, so a per-thread table (which would
+    // hand out distinct pointers per thread) is incorrect. The canonical fix for a
+    // shared mutable dedup table is a lock guarding insert/grow. Reference-match:
+    //   · Go runtime  — the package-path / type intern maps are mutex-guarded
+    //     (runtime/string.go interning behind locks; sync.Map for shared dedup).
+    //   · JVM         — the StringTable is a lock-protected shared hashtable
+    //     (hotspot/share/classfile/stringTable.cpp — concurrent-hashtable bucket
+    //     locks).
+    //   · libc malloc — glibc's main_arena is mutex-guarded for cross-thread use;
+    //     only the per-thread arenas are lock-free (the same split applied here:
+    //     per-thread BUMP arena lock-free + shared INTERN table locked).
+    // HX_INTERN_LOCK/UNLOCK wrap the table mutation in a pthread mutex under
+    // -DHEXA_THREADS; on the DEFAULT build (HEXA_THREADS undefined) both expand to
+    // empty, so the runtime object is byte-identical → byteeq fixpoint unaffected.
+    buf = buf + "#if defined(HEXA_THREADS)\n"
+    buf = buf + "#include <pthread.h>\n"
+    buf = buf + "static pthread_mutex_t __hexa_intern_mtx = PTHREAD_MUTEX_INITIALIZER;\n"
+    buf = buf + "#  define HX_INTERN_LOCK()   pthread_mutex_lock(&__hexa_intern_mtx)\n"
+    buf = buf + "#  define HX_INTERN_UNLOCK() pthread_mutex_unlock(&__hexa_intern_mtx)\n"
+    buf = buf + "#else\n"
+    buf = buf + "#  define HX_INTERN_LOCK()   ((void)0)\n"
+    buf = buf + "#  define HX_INTERN_UNLOCK() ((void)0)\n"
+    buf = buf + "#endif\n"
+    buf = buf + "\n"
     buf = buf + "static void hexa_intern_init(void) {\n"
     buf = buf + "    __hexa_intern.cap = INTERN_INIT_CAP;\n"
     buf = buf + "    __hexa_intern.count = 0;\n"
@@ -935,6 +993,9 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "        return NULL;  // too long, skip interning\n"
     buf = buf + "    }\n"
     buf = buf + "\n"
+    buf = buf + "    // HEXA_THREADS: serialize all table access — find probe, grow, and insert\n"
+    buf = buf + "    // mutate shared state. No-op lock on the default (single-thread) build.\n"
+    buf = buf + "    HX_INTERN_LOCK();\n"
     buf = buf + "    // Lazy init — fires once per process; everything after is hot-path.\n"
     buf = buf + "    if (HX_UNLIKELY(!__hexa_intern.buckets)) hexa_intern_init();\n"
     buf = buf + "\n"
@@ -952,6 +1013,7 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "        if (canon) {\n"
     buf = buf + "            // H03 Q9: hit — table contained an equal canonical pointer.\n"
     buf = buf + "            if (_hx_stats_on()) _hx_stats_intern_hit++;\n"
+    buf = buf + "            HX_INTERN_UNLOCK();\n"
     buf = buf + "            return canon;  // already interned\n"
     buf = buf + "        }\n"
     buf = buf + "        // Miss: re-locate the empty insert slot (probe returned no idx).\n"
@@ -964,7 +1026,7 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "            // H03 Q9: hit — table contained an equal canonical pointer.\n"
     if buf.len() > 65536 { _flush_runtime_core(out_path, buf); buf = "" }
     buf = buf + "            if (_hx_stats_on()) _hx_stats_intern_hit++;\n"
-    buf = buf + "            return __hexa_intern.buckets[idx];  // already interned\n"
+    buf = buf + "            { const char* __hit = __hexa_intern.buckets[idx]; HX_INTERN_UNLOCK(); return __hit; }  // already interned\n"
     buf = buf + "        }\n"
     buf = buf + "        idx = (idx + 1) & mask;\n"
     buf = buf + "    }\n"
@@ -986,6 +1048,7 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "    __hexa_intern.hashes[idx]  = h;\n"
     buf = buf + "    __hexa_intern.count++;\n"
     buf = buf + "    if (_hx_stats_on()) _hx_stats_intern_miss++;\n"
+    buf = buf + "    HX_INTERN_UNLOCK();\n"
     buf = buf + "    return dup;\n"
     buf = buf + "}\n"
     buf = buf + "\n"
@@ -2478,7 +2541,7 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "void* hexa_arena_alloc(size_t n);  // rt 32-D bump allocator (shared block chain)\n"
     buf = buf + "#endif\n"
     buf = buf + "\n"
-    buf = buf + "static int __hexa_array_arena_enabled = -1;\n"
+    buf = buf + "static HX_TLS int __hexa_array_arena_enabled = -1;\n"
     buf = buf + "static int hexa_array_arena_on(void) {\n"
     buf = buf + "    if (__hexa_array_arena_enabled < 0) {\n"
     buf = buf + "        const char* e = hxlcl_getenv(\"HEXA_ARRAY_ARENA\");\n"
@@ -2714,7 +2777,7 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "// into the transpiler + interpreter source (self/hexa_full.hexa). Set\n"
     buf = buf + "// HEXA_ARRAY_PUSH_ARENA=1 to enable arena-alloc on first push (cap=0 → cap=-8)\n"
     buf = buf + "// after snapshot-promote is proven safe.\n"
-    buf = buf + "static int __hexa_array_push_arena_enabled = -1;\n"
+    buf = buf + "static HX_TLS int __hexa_array_push_arena_enabled = -1;\n"
     buf = buf + "static int hexa_array_push_arena_on(void) {\n"
     buf = buf + "    if (__hexa_array_push_arena_enabled < 0) {\n"
     buf = buf + "        const char* e = hxlcl_getenv(\"HEXA_ARRAY_PUSH_ARENA\");\n"
@@ -4684,11 +4747,14 @@ fn emit_runtime_core_to(out_path: str) {
     // symbol is external; the matching seed .o (regen_rtcore_arena_globals_native_o.sh)
     // also defines/exports it for the drop-ON link.
     buf = buf + "#ifdef HEXA_ZEROC_DROP_RTCORE_INCLUDE\n"
-    buf = buf + "HexaArena __hexa_arena = {NULL, NULL};\n"
+    buf = buf + "HX_TLS HexaArena __hexa_arena = {NULL, NULL};\n"
     buf = buf + "#else\n"
-    buf = buf + "static HexaArena __hexa_arena = {NULL, NULL};\n"
+    buf = buf + "static HX_TLS HexaArena __hexa_arena = {NULL, NULL};\n"
     buf = buf + "#endif\n"
-    buf = buf + "static int __hexa_arena_enabled = -1;     // lazy env probe\n"
+    // HEXA_THREADS: per-thread arena enable flag — each thread re-probes the env
+    // once on its first alloc (the probe is idempotent and reads the same env, so
+    // every thread converges to the same enabled value; -1 sentinel is per-thread).
+    buf = buf + "static HX_TLS int __hexa_arena_enabled = -1;     // lazy env probe\n"
     buf = buf + "\n"
     buf = buf + "// perf: arena address envelope — O(1) pointer-range reject for heapify.\n"
     buf = buf + "// Every bump-arena block's data[] lies within [__hx_arena_lo,__hx_arena_hi);\n"
@@ -4715,8 +4781,8 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "#define __hx_arena_lo ((uintptr_t)hexa_arena_env_lo())\n"
     buf = buf + "#define __hx_arena_hi ((uintptr_t)hexa_arena_env_hi())\n"
     buf = buf + "#else\n"
-    buf = buf + "static uintptr_t __hx_arena_lo = (uintptr_t)-1;\n"
-    buf = buf + "static uintptr_t __hx_arena_hi = 0;\n"
+    buf = buf + "static HX_TLS uintptr_t __hx_arena_lo = (uintptr_t)-1;\n"
+    buf = buf + "static HX_TLS uintptr_t __hx_arena_hi = 0;\n"
     buf = buf + "#endif\n"
     buf = buf + "\n"
     buf = buf + "// RT-NATIVE-ZEROC Route B (measure-8, 2026-06-18): the arena is ALWAYS the\n"
@@ -4889,10 +4955,15 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "    size_t used;\n"
     buf = buf + "} HexaValMark;\n"
     buf = buf + "\n"
-    buf = buf + "static HexaValMark __hexa_val_marks[HEXA_VAL_MARK_STACK_CAP];\n"
-    buf = buf + "int __hexa_val_mark_top = 0;            // count of pushed marks (extern-visible)\n"
-    buf = buf + "int __hexa_val_force_heap = 0;          // when set, valstruct_new_v uses heap (codegen refs this)\n"
-    buf = buf + "static int __hexa_val_arena_enabled = -1;  // -1 = lazy probe\n"
+    buf = buf + "static HX_TLS HexaValMark __hexa_val_marks[HEXA_VAL_MARK_STACK_CAP];\n"
+    // HEXA_THREADS: the Val-mark stack + force-heap flag share the bump arena's
+    // per-thread frontier, so they are HX_TLS too — each worker thread owns its own
+    // scope-mark stack. codegen references __hexa_val_force_heap by name; the symbol
+    // stays defined (thread-local under HEXA_THREADS, plain global on the default
+    // byte-identical build).
+    buf = buf + "HX_TLS int __hexa_val_mark_top = 0;            // count of pushed marks (extern-visible)\n"
+    buf = buf + "HX_TLS int __hexa_val_force_heap = 0;          // when set, valstruct_new_v uses heap (codegen refs this)\n"
+    buf = buf + "static HX_TLS int __hexa_val_arena_enabled = -1;  // -1 = lazy probe\n"
     buf = buf + "// F6 option A — A3 (PLAN-stage3-footprint-F6-optA.md). When non-zero,\n"
     buf = buf + "// __hexa_fn_arena_return routes its return through\n"
     buf = buf + "// hexa_val_arena_heapify_to_parent (region-promote into the caller's\n"
@@ -4905,9 +4976,9 @@ fn emit_runtime_core_to(out_path: str) {
     // under the include-drop so the cross-object reloc binds; `static` (byte-
     // identical) on the default. Seed .o supplies the symbol on the drop-ON link.
     buf = buf + "#ifdef HEXA_ZEROC_DROP_RTCORE_INCLUDE\n"
-    buf = buf + "int __hexa_val_region_returns_enabled = 0;\n"
+    buf = buf + "HX_TLS int __hexa_val_region_returns_enabled = 0;\n"
     buf = buf + "#else\n"
-    buf = buf + "static int __hexa_val_region_returns_enabled = 0;\n"
+    buf = buf + "static HX_TLS int __hexa_val_region_returns_enabled = 0;\n"
     buf = buf + "#endif\n"
     buf = buf + "\n"
     buf = buf + "HX_RTCORE_LOCAL int hexa_val_arena_on(void) {\n"
@@ -4944,8 +5015,8 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "// frame — otherwise every Val reachable from a slot is heap-resident and the\n"
     buf = buf + "// walk is wasted O(N) work. Snapshot at scope_push, compare at heapify.\n"
     buf = buf + "// Saturating: a single int \"active block changed since push\" + saved used.\n"
-    buf = buf + "static HexaArenaBlock* __hexa_arena_frame_block = NULL;\n"
-    buf = buf + "static size_t          __hexa_arena_frame_used  = 0;\n"
+    buf = buf + "static HX_TLS HexaArenaBlock* __hexa_arena_frame_block = NULL;\n"
+    buf = buf + "static HX_TLS size_t          __hexa_arena_frame_used  = 0;\n"
     buf = buf + "\n"
     buf = buf + "// Push current arena frontier as a scope mark. Called on env_push_scope via\n"
     buf = buf + "// the env(\"__HEXA_ARENA_PUSH__\") interception in hexa_env_var. Saturating: if\n"

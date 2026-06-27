@@ -1,0 +1,153 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  test/game_arena_threadsafe.hexa — thread-safe per-thread arena oracle + stress.
+//
+//  FLEET lane a · feat/arena-threadsafe-tls · the game-parity substrate wall.
+//
+//  ROOT CAUSE this test guards: the bump arena (hexa_arena_alloc / hexa_array_push
+//  / string concat) keeps process-global mutable state (__hexa_arena.cur/.head, the
+//  Val-mark stack, the per-arena enable flags) with ZERO cross-thread sync. When
+//  N OS threads each allocate concurrently (a -DHEXA_THREADS build), they race the
+//  same bump pointer → double-bump the same block range / follow a half-written
+//  `next` link → SIGSEGV / SIGBUS. Single-threaded is fine; multi-thread crashes.
+//  PR #4110 (lock-free 4P+4C) hit exactly this wall.
+//
+//  FIX (this lane): under -DHEXA_THREADS the C bump arena's globals are HX_TLS
+//  (__thread) → each OS thread owns a PRIVATE arena (jemalloc / tcmalloc / Rust
+//  per-thread allocator model). The shared string-intern table is mutex-guarded
+//  (the one structure that MUST stay shared for pointer-equality dedup). Default
+//  builds (HEXA_THREADS undefined) keep the exact baseline storage → byte-identical
+//  runtime object → byteeq gen3≡gen4 fixpoint unaffected.
+//
+//  TWO sections (same shape as self/test_real_spawn.hexa):
+//
+//   (1) PURE ORACLE — always runs, DEFAULT-BUILD-SAFE. Each "worker" computes its
+//       INDEPENDENT allocation-heavy checksum INLINE; locks in the per-worker and
+//       total reference values. No runtime thread globals referenced.
+//
+//   (2) REAL 4-producer + 4-consumer spawn+join — runs only when
+//       env("HEXA_THREADS") != "". Spawns 8 real OS threads (under -DHEXA_THREADS),
+//       each hammering the arena hot path (string concat + array push in a loop),
+//       returning its independent checksum. The joined per-worker checksums and the
+//       order-insensitive total MUST equal the oracle — AND the process must not
+//       crash. Pre-fix: SIGSEGV/SIGBUS under contention. Post-fix: crash-free.
+//
+//  Run on aiden (mini cannot build):
+//      # build runtime with real threads + the thread-safe C arena:
+//      HEXA_RT_ALLOC_NATIVE=0 CFLAGS=-DHEXA_THREADS hexa build ... (see RFC)
+//      HEXA_THREADS=1 ./a.out
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/thread_real"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, actual, expected) {
+    if to_string(actual) == to_string(expected) {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected: " + to_string(expected) + ", got: " + to_string(actual))
+        fail_count = fail_count + 1
+    }
+}
+
+// Allocation-heavy independent checksum for partition `base`. Exercises the arena
+// hot path the way a contended worker does: it builds strings (str concat → arena /
+// strbuf) and arrays (push → arena slot buf) in a loop, then folds them into one
+// integer. Pure + deterministic: same result inline or on an OS thread, because no
+// shared-mutable state is touched (each call's strings/arrays are thread-private).
+fn arena_churn(base) {
+    let mut acc = 0
+    let mut arr = []
+    let mut i = 0
+    while i < 400 {
+        // string build: concatenation allocates into the bump arena repeatedly.
+        let s = "w" + to_string(base) + "-" + to_string(i)
+        // array push: grows the arena-backed slot buffer.
+        arr = arr + [i]
+        // fold the string length + element back in (touches the allocated bytes).
+        acc = acc + (base + i) + len(s)
+        i = i + 1
+    }
+    // touch the array we built so it is not optimized away.
+    acc = acc + len(arr)
+    return acc
+}
+
+// Worker entry: one HexaVal arg (partition base), returns the independent churn
+// checksum. INDEPENDENT per worker → order-insensitive join → identical total
+// whether run inline (default) or on real OS threads (-DHEXA_THREADS).
+fn worker(base) {
+    return arena_churn(base)
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  HEXA thread-safe per-thread arena — 4P+4C stress oracle")
+println("  opt-in HEXA_THREADS · byteeq-neutral · jemalloc/tcmalloc per-thread ref")
+println("═══════════════════════════════════════════════════════")
+
+// ── (1) PURE ORACLE — always runs, default-build-safe ──────────────────────
+// 8 partitions (4 "producers" 0..3 + 4 "consumers" 100..103) — the same fan-out
+// shape as a 4P+4C contended run, but computed inline to lock in the reference.
+let bases = [0, 1, 2, 3, 100, 101, 102, 103]
+let mut oracle_total = 0
+let mut oracle_partials = []
+let mut k = 0
+while k < len(bases) {
+    let p = arena_churn(bases[k])
+    oracle_partials = oracle_partials + [p]
+    oracle_total = oracle_total + p
+    k = k + 1
+}
+check("oracle: 8 partitions computed", len(oracle_partials), 8)
+println("  oracle total = " + to_string(oracle_total))
+
+// ── (2) REAL 4P+4C spawn+join — gated on HEXA_THREADS ──────────────────────
+if env("HEXA_THREADS") == "" {
+    println("")
+    println("NOTE: HEXA_THREADS env not set — skipping the real 8-thread arena")
+    println("      stress. If this runtime was built WITHOUT -DHEXA_THREADS the")
+    println("      spawn shims run SYNCHRONOUSLY (no real contention); set")
+    println("      HEXA_THREADS=1 on a -DHEXA_THREADS + HEXA_RT_ALLOC_NATIVE=0")
+    println("      build to drive real concurrent allocation.")
+} else {
+    println("")
+    println("  HEXA_THREADS set — spawning 8 real OS threads (4P + 4C) …")
+    // spawn all 8, collect handles, then join: maximal overlap = real contention
+    // on the arena hot path (the SIGSEGV/SIGBUS trigger pre-fix).
+    let mut handles = []
+    let mut s = 0
+    while s < len(bases) {
+        let tid = thread_start(worker, bases[s])
+        handles = handles + [tid]
+        s = s + 1
+    }
+    let mut got_total = 0
+    let mut all_match = 1
+    let mut j = 0
+    while j < len(handles) {
+        let r = thread_wait(handles[j])
+        let ri = to_int(r)
+        got_total = got_total + ri
+        // each worker's checksum must equal its oracle partial (independent work).
+        if ri != to_int(oracle_partials[j]) {
+            all_match = 0
+            println("  [mismatch] worker " + to_string(j) + " base=" + to_string(bases[j]) +
+                    " got=" + to_string(ri) + " want=" + to_string(oracle_partials[j]))
+        }
+        j = j + 1
+    }
+    // crash-free reaching here at all is the primary win (pre-fix: SIGSEGV).
+    check("4P+4C: all 8 workers joined crash-free", len(handles), 8)
+    check("4P+4C: per-worker checksums match oracle", all_match, 1)
+    check("4P+4C: order-insensitive total == oracle", got_total, oracle_total)
+}
+
+println("")
+println("═══════════════════════════════════════════════════════")
+println("  RESULT: " + to_string(pass_count) + " passed, " + to_string(fail_count) + " failed")
+println("═══════════════════════════════════════════════════════")
+if fail_count > 0 {
+    exit(1)
+}
