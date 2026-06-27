@@ -69,6 +69,12 @@ typedef struct HexaMapTable {
     int          len;
     int          order_cap;
     int          from_arena;
+#ifdef HEXA_IC_STRUCTID
+    /* fleet-lab b r2 (opt-in, default-OFF → byteeq-neutral): per-table JSC
+     * StructureID. MUST stay last + identically gated in runtime_core.c so the
+     * flag-OFF layout is byte-identical across the .h / generated .c ABI. */
+    uint32_t     struct_id;
+#endif
 } HexaMapTable;
 
 typedef struct HexaArr { HexaVal* items; int64_t len; int64_t cap; }    HexaArr; /* 64-bit len/cap: a >=4GB read_file_bytes buffer must not wrap (MUST match runtime_core.c) */
@@ -140,6 +146,11 @@ typedef struct HexaIC {
     int      idx;
     uint64_t hits;
     uint64_t misses;
+#ifdef HEXA_IC_STRUCTID
+    /* fleet-lab b r2 (opt-in): cached JSC StructureID for the single-int IC
+     * fast path. MUST mirror runtime_core.c's HexaIC, identically gated. */
+    uint32_t struct_id;
+#endif
 } HexaIC;
 
 /* arithmetic / conversion
@@ -745,6 +756,23 @@ extern uint64_t g_hexa_ic_hits;
 extern int      g_hexa_ic_stats_enabled;
 HexaVal         hexa_map_get_ic_slow(HexaVal m, const char* key, HexaIC* ic);
 
+#ifdef HEXA_IC_STRUCTID
+/* fleet-lab b r2 (opt-in, default-OFF): JSC StructureID single-int IC fast
+ * path — mirrors runtime_core_emit.hexa. The 2-word (order_keys ptr + len)
+ * shape check collapses to a single uint32 struct_id compare (the JSC
+ * get_by_id idiom: cmp $id,(struct_id); jnz slow). MUST stay identical to the
+ * runtime_core.c macro so the precompiled-runtime.o ABI path matches. */
+#define hexa_map_get_ic(M, KEY, IC) \
+    ({ HexaVal __ic_m = (M); HexaIC* __ic = (IC); \
+       HexaMapTable* __ic_t = HX_MAP_TBL(__ic_m); \
+       (__ic_t \
+        && __ic_t->struct_id == __ic->struct_id \
+        && __ic->idx < __ic_t->len) \
+           ? (g_hexa_ic_stats_enabled > 0 \
+              ? (__ic->hits++, g_hexa_ic_hits++, __ic_t->order_vals[__ic->idx]) \
+              : __ic_t->order_vals[__ic->idx]) \
+           : hexa_map_get_ic_slow(__ic_m, (KEY), __ic); })
+#else
 #define hexa_map_get_ic(M, KEY, IC) \
     ({ HexaVal __ic_m = (M); HexaIC* __ic = (IC); \
        (HX_MAP_TBL(__ic_m) \
@@ -755,6 +783,7 @@ HexaVal         hexa_map_get_ic_slow(HexaVal m, const char* key, HexaIC* ic);
               ? (__ic->hits++, g_hexa_ic_hits++, HX_MAP_TBL(__ic_m)->order_vals[__ic->idx]) \
               : HX_MAP_TBL(__ic_m)->order_vals[__ic->idx]) \
            : hexa_map_get_ic_slow(__ic_m, (KEY), __ic); })
+#endif
 
 /* misc */
 HexaVal hexa_exit(HexaVal code);                        /* runtime.c:7518 */
