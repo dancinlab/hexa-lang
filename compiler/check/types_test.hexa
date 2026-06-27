@@ -153,6 +153,36 @@ fn _let_expr(name: string, rhs: Expr, file: string, line: i64, col: i64) -> Expr
     }
 }
 
+// Wall A r3 — annotated `let x: T` with NO initializer (decl/init split).
+// Mirrors parse_let_expr's text encoding (`<name>|<typename>`) but leaves
+// children empty, the shape a bare `let x: i32` (no `= …`) produces.
+fn _let_decl_expr(name: string, file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Let,
+        span: _span(file, line, col, 3),
+        text: name,
+        annotations: [],
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// Wall A r3 — `lhs = rhs` assignment. children = [lhs, rhs] per the Assign
+// arm in types.hexa:_infer_expr.
+fn _assign_expr(lhs: Expr, rhs: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(lhs)
+    kids.push(rhs)
+    return Expr {
+        kind: ExprKind::Assign,
+        span: _span(file, line, col, 1),
+        text: "",
+        annotations: [],
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
 fn _block(children: [Expr], file: string, line: i64, col: i64) -> Expr {
     return Expr {
         kind: ExprKind::Block,
@@ -513,6 +543,41 @@ fn _build_case_static_types_r2() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// Wall A r3 — decl/init split: a `let x: T` with NO initializer, then a
+// LATER `x = <expr>` assignment whose inferred scalar RHS provably disagrees
+// with the recorded declaration T (Rust E0308 check_expr_assign). Two REJECT
+// shapes + one matching control, all in one fn body so the block-scoped env
+// carries the declared types forward:
+//   fn main() {
+//       let x: i32                  // decl-only → record x : i32
+//       x = "s"                     // REJECT: string ≠ i32   → HX3011
+//       let y: string               // decl-only → record y : string
+//       y = 5                       // REJECT: i64 ≠ string    → HX3011
+//       let z: i32                  // decl-only → record z : i32
+//       z = 7                       // matches (int-lit coercion) → clean
+//   }
+// Under the flag exactly 2 HX3011; the matching `z = 7` and the default
+// build (flag-off) emit zero — the byteeq-neutral proof. Mirrors r1/r2's
+// self-adapting contract, extended to the assignment rung.
+fn _build_case_static_types_r3() -> Module {
+    let f = "case_static_r3.hexa"
+    let mut kids = []
+    // let x: i32   ;   x = "s"   → mismatch
+    kids.push(_let_decl_expr("x|i32", f, 2, 5))
+    kids.push(_assign_expr(_ident_expr("x", f, 3, 5), _string_expr("s", f, 3, 9), f, 3, 7))
+    // let y: string ;  y = 5     → mismatch
+    kids.push(_let_decl_expr("y|string", f, 4, 5))
+    kids.push(_assign_expr(_ident_expr("y", f, 5, 5), _int_expr("5", f, 5, 9), f, 5, 7))
+    // let z: i32   ;   z = 7     → matches (clean in both modes)
+    kids.push(_let_decl_expr("z|i32", f, 6, 5))
+    kids.push(_assign_expr(_ident_expr("z", f, 7, 5), _int_expr("7", f, 7, 9), f, 7, 7))
+    let body = _block(kids, f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // ── Driver ───────────────────────────────────────────────────
 
 fn _run_case(label: string, m: Module) -> array {
@@ -666,6 +731,30 @@ fn main() {
     } else {
         if ni != 0 {
             println("  FAIL: case (i) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(ni) + " (total=" + to_string(len(diags_i)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (j) Wall A r3 — decl/init split. Under the flag, a decl-only `let x:i32`
+    // followed by `x = "s"` AND a `let y:string` followed by `y = 5` each
+    // REJECT with HX3011 (2 total), while the matching `let z:i32; z = 7`
+    // stays clean (int-literal coercion). On the default build → 0 (byteeq-
+    // neutral). Same self-adapting contract as (h)/(i), extended to the
+    // split-init assignment rung.
+    let diags_j = _run_case("(j) static-types r3 — decl/init-split assign mismatch (HEXA_STATIC_TYPES)", _build_case_static_types_r3())
+    let nj = _count_code(diags_j, "HX3011")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if nj != 2 {
+            println("  FAIL: case (j) HEXA_STATIC_TYPES=1 expected 2 HX3011 (x=\"s\" + y=5), got " + to_string(nj) + " (total=" + to_string(len(diags_j)) + ")")
+            ok = false
+        } else {
+            println("  ok: 2 HX3011 emitted (x:i32=\"s\" + y:string=5; matching z:i32=7 stays clean)")
+        }
+    } else {
+        if nj != 0 {
+            println("  FAIL: case (j) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nj) + " (total=" + to_string(len(diags_j)) + ")")
             ok = false
         } else {
             println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
