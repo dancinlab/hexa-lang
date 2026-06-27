@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -100,6 +100,8 @@ cat > "$TMP/harness.c" <<'CEOF'
 #include <fcntl.h>    /* open() / O_RDONLY / F_GETFL — close/fcntl behavior tests */
 #include <sys/mman.h> /* PROT_/MAP_ flags / MAP_FAILED — for the mmap composition test */
 #include <sys/resource.h> /* struct rusage / RUSAGE_SELF — for the getrusage composition test */
+#include <poll.h>     /* struct pollfd / POLLIN — for the poll composition test */
+#include <time.h>     /* libc time() — the reference oracle for hxlcl_time */
 
 /* Route-C-emitted symbols under test (raw C-ABI prototypes). */
 extern size_t hxlcl_strlen(const char *s);
@@ -185,6 +187,13 @@ extern char  *hxlcl_strstr(const char *h, const char *n);
  * identical compute; this run exercises both the value parse AND the endptr
  * store64 (a non-NULL endptr → *endptr == nptr + consumed-length). */
 extern long long hxlcl_strtoll(const char *nptr, char **endptr, int base);
+
+/* batch H — time / poll. On darwin time uses gettimeofday(116) → reads tv_sec from
+ * a hxlcl_malloc'd 16-byte scratch buffer (the heap-scratch substrate); poll uses
+ * the plain 3-arg BSD poll(230). Both exercised fully here (the darwin smoke host
+ * actually runs these legs). */
+extern int  hxlcl_time(int *t);
+extern int  hxlcl_poll(void *fds, unsigned int nfds, int timeout);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
@@ -477,6 +486,36 @@ int main(void) {
         char *endp3 = (char *)0x1;
         CK(hxlcl_strtoll(NULL, &endp3, 10) == 0, "strtoll(NULL,&end,10) == 0");
         CK(endp3 == NULL, "strtoll(NULL) sets *endptr = NULL");
+    }
+
+    /* batch H — time / poll. FULLY EXERCISED on this darwin host (both legs run).
+     * time: darwin has no BSD `time` trap, so the body uses gettimeofday(116) into a
+     * hxlcl_malloc'd 16-byte scratch (the heap-scratch substrate) and reads tv_sec —
+     * assert it is post-2023 AND within ±2s of libc time(NULL), plus the NULL-gated
+     * out-param (*t == return). poll: plain 3-arg BSD poll(230) — assert poll(no fds,
+     * 0ms) == 0 and a real pollfd on a pipe (empty → 0, data-ready → 1). */
+    {
+        long ref = (long)time(NULL);
+        int t1 = hxlcl_time(NULL);
+        CK(t1 > 1700000000, "time(NULL) > 2023-11 epoch (darwin gettimeofday tv_sec via heap scratch)");
+        CK((long)t1 - ref <= 2 && ref - (long)t1 <= 2, "time(NULL) ~= libc time(NULL) (within 2s)");
+        int tt = -1;
+        int t2 = hxlcl_time(&tt);
+        CK(tt == t2, "time(&t) writes *t == return (NULL-gated out-param store32)");
+        CK(t2 > 1700000000, "time(&t) return > 2023-11 epoch");
+
+        CK(hxlcl_poll(NULL, 0, 0) == 0, "poll(NULL, 0, 0ms) == 0 (no fds, immediate)");
+        int ph[2];
+        if (pipe(ph) == 0) {
+            struct pollfd pf;
+            pf.fd = ph[0]; pf.events = POLLIN; pf.revents = 0;
+            CK(hxlcl_poll(&pf, 1, 0) == 0, "poll(pipe read end, empty, 0ms) == 0");
+            if (write(ph[1], "z", 1) == 1) {
+                pf.revents = 0;
+                CK(hxlcl_poll(&pf, 1, 100) == 1, "poll(pipe read end, data ready, 100ms) == 1 (POLLIN)");
+            }
+            close(ph[0]); close(ph[1]);
+        }
     }
 
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }

@@ -1470,6 +1470,19 @@ pub fn _is_cabi(fname: string) -> bool {
     // The darwin leg returns -1 (genuine 2nd-return-reg wall; real darwin pipe stays
     // the floor _cf shim). time/poll stay DEFERRED (need a scratch-buffer substrate).
     if fname == "hxlcl_pipe" { return true }
+    // batch H — time / poll (SCRATCH-BUFFER substrate, NO new intrinsic). Both have
+    // register-clean legs (x86_64 time=201 returns epoch in the result reg; x86_64
+    // poll=7 + darwin poll=230 are plain 3-arg) plus ONE divergent leg that needs a
+    // small in-body struct (timeval / timespec). The campaign has no __hx_stack_alloc
+    // intrinsic, so the buffer is a HEAP scratch via the already-whitelisted
+    // hxlcl_malloc (ON-path-proven by strdup/calloc/realloc) + __hx_ptr_store64/
+    // load64 (proven by strtoll/realloc) + __hx_payload_div/mod/mul (proven int-div
+    // leaves) — zero new builtins. time → arm64/darwin gettimeofday(169/116) reads
+    // tv_sec; poll → arm64 ppoll(73) synthesizes a timespec from timeout_ms. Both
+    // reuse hxlcl_malloc + the close errno epilogue's already-whitelisted
+    // __errno_location, so no new whitelist entry beyond the two fns themselves.
+    if fname == "hxlcl_time" { return true }
+    if fname == "hxlcl_poll" { return true }
     // batch F search family — strchr / strstr. Pure byte-scan LEAVES (no syscall,
     // no float, no inner call, no errno): each walks the input with __hx_ptr_load8
     // ZERO-EXTENDED reads and returns a raw char* (the match position) or NULL(0)
