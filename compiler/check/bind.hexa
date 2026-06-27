@@ -1394,6 +1394,349 @@ fn _bind_builtin_names() -> [string] {
     ]
 }
 
+// ── Borrow-check advisory (opt-in HEXA_BORROW_CHECK, default-OFF) ────────────
+//
+// A simplified, self-contained port of Rust's borrowck reframed onto the two
+// ownership-adjacent signals hexa's grammar actually exposes (there is no
+// `&`/`&mut`/`move` syntax — `&` lexes only as bitwise-and, and mutability is
+// carried as the `mut:` name prefix). Emits ONLY when the env gate is ON, so
+// the default compile path is byte-identical (no new diagnostic, no codegen or
+// runtime change). Two rules:
+//   HX2007 use-after-move  — a non-Copy aggregate moved out of `x` (into
+//                            `let y = x`, or passed by value into a call) then
+//                            read again.
+//   HX2008 simultaneous mutable borrow — PROXY: a `mut` local captured by ≥2
+//                            closures in the same function (no true `&mut`
+//                            aliasing exists to observe).
+// Reference: Rust Reference (move semantics + borrow rules), simplified.
+
+pub struct BorrowState {
+    names: [string],
+    moved: [bool],
+    aggr: [bool]
+}
+
+fn _borrow_check_enabled() -> bool {
+    return env("HEXA_BORROW_CHECK") == "1"
+}
+
+// Copy-type predicate over a primitive type NAME (the let/param annotation in
+// bind only carries a type-name string, not a full TypeRef). Mirrors the
+// canonical compiler/check/types.hexa::_type_is_copy primitive table.
+fn _borrow_name_is_copy(name: string) -> bool {
+    if name == "i8" || name == "i16" || name == "i32" || name == "i64" || name == "Int" || name == "int" { return true }
+    if name == "u8" || name == "u16" || name == "u32" || name == "u64" { return true }
+    if name == "f16" || name == "bf16" || name == "f32" || name == "f64" || name == "Float" || name == "float" || name == "Real" { return true }
+    if name == "bool" || name == "Bool" { return true }
+    if name == "char" || name == "Char" { return true }
+    if name == "unit" || name == "Unit" || name == "()" || name == "void" || name == "Void" { return true }
+    return false
+}
+
+// Aggregate (move-semantic) classification for a param/let TypeRef: every
+// non-`named` shape (array / tuple / generic / fn) is move-semantic, and a
+// `named` type is aggregate unless it is a Copy primitive. An empty TypeRef
+// (no annotation) is treated as non-aggregate (unknown — stay quiet).
+fn _borrow_typeref_is_aggr(tr: TypeRef) -> bool {
+    if len(tr.kind) == 0 { return false }
+    if tr.kind != "named" { return true }
+    return !_borrow_name_is_copy(tr.name)
+}
+
+fn _borrow_is_call_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Call -> true,
+        _ -> false
+    }
+}
+
+// Array-literal / struct-literal RHS = a freshly-constructed aggregate (move).
+fn _borrow_is_aggr_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::ArrayLit -> true,
+        ExprKind::StructLit -> true,
+        _ -> false
+    }
+}
+
+// Extract the `|<type-name>` suffix parse_let_expr stashes on a Let's text
+// (`[mut:]name[|TypeName]`). Returns "" when the let carries no annotation.
+fn _borrow_let_type_name(t: string) -> string {
+    let chars = t.chars()
+    let n = len(chars)
+    let mut i = 0
+    let mut found = false
+    let mut out = ""
+    while i < n {
+        if found {
+            out = out + to_string(chars[i])
+        }
+        if chars[i] == '|' { found = true }
+        i = i + 1
+    }
+    return out
+}
+
+// Innermost-first lookup (shadowing: latest declaration wins). -1 on miss.
+fn _borrow_find(st: BorrowState, name: string) -> i64 {
+    let mut i = len(st.names) - 1
+    while i >= 0 {
+        if st.names[i] == name { return i }
+        i = i - 1
+    }
+    return -1
+}
+
+fn _borrow_declare(st: BorrowState, name: string, aggr: bool) -> BorrowState {
+    let mut nm = st.names
+    let mut mv = st.moved
+    let mut ag = st.aggr
+    nm.push(name)
+    mv.push(false)
+    ag.push(aggr)
+    return BorrowState { names: nm, moved: mv, aggr: ag }
+}
+
+fn _borrow_mark_moved(st: BorrowState, idx: i64) -> BorrowState {
+    let mut mv = st.moved
+    mv[idx] = true
+    return BorrowState { names: st.names, moved: mv, aggr: st.aggr }
+}
+
+fn _emit_hx2007(name: string, span: Span, out: array) {
+    let mut b = diag_new("HX2007")
+    b = diag_span(b, span)
+    b = diag_arg(b, "name", name)
+    out.push(diag_emit(b))
+}
+
+fn _emit_hx2008(name: string, span: Span, out: array) {
+    let mut b = diag_new("HX2008")
+    b = diag_span(b, span)
+    b = diag_arg(b, "name", name)
+    out.push(diag_emit(b))
+}
+
+// Move-tracking walker (HX2007). Threads BorrowState by return value (stage0
+// has no by-ref structs), mirroring _bind_walk_expr's shape.
+fn _borrow_walk_expr(e: Expr, in_st: BorrowState, out: array) -> BorrowState {
+    let mut st = in_st
+
+    if _is_let_kind(e.kind) {
+        let nch = len(e.children)
+        let rhs_bare = nch == 1 && _bind_is_ident_kind(e.children[0].kind) && len(e.children[0].text) > 0 && e.children[0].text != "_"
+        let mut yaggr = false
+        if rhs_bare {
+            // `let y = x` — a bare-Ident RHS MOVES x (it is consumed, not read).
+            let src = e.children[0].text
+            let sidx = _borrow_find(st, src)
+            if sidx >= 0 && st.aggr[sidx] {
+                if st.moved[sidx] {
+                    _emit_hx2007(src, e.children[0].span, out)
+                } else {
+                    st = _borrow_mark_moved(st, sidx)
+                }
+                yaggr = true
+            }
+        } else {
+            let mut i = 0
+            while i < nch {
+                st = _borrow_walk_expr(e.children[i], st, out)
+                i = i + 1
+            }
+            let tn = _borrow_let_type_name(e.text)
+            if len(tn) > 0 {
+                yaggr = !_borrow_name_is_copy(tn)
+            } else if nch >= 1 && _borrow_is_aggr_kind(e.children[0].kind) {
+                yaggr = true
+            }
+        }
+        let nm = _bind_let_name(e.text)
+        if len(nm) > 0 {
+            st = _borrow_declare(st, nm, yaggr)
+        }
+        return st
+    }
+
+    if _borrow_is_call_kind(e.kind) {
+        // A bare-Ident argument is passed BY VALUE → it moves an aggregate
+        // source. The callee child (a top-level fn name) is never in scope as a
+        // local, so _borrow_find misses it and it is never treated as a move.
+        let mut i = 0
+        while i < len(e.children) {
+            let c = e.children[i]
+            if _bind_is_ident_kind(c.kind) && len(c.text) > 0 && c.text != "_" {
+                let idx = _borrow_find(st, c.text)
+                if idx >= 0 && st.aggr[idx] {
+                    if st.moved[idx] {
+                        _emit_hx2007(c.text, c.span, out)
+                    } else {
+                        st = _borrow_mark_moved(st, idx)
+                    }
+                }
+            } else {
+                st = _borrow_walk_expr(c, st, out)
+            }
+            i = i + 1
+        }
+        return st
+    }
+
+    if _bind_is_ident_kind(e.kind) {
+        if len(e.text) > 0 && e.text != "_" {
+            let idx = _borrow_find(st, e.text)
+            if idx >= 0 && st.aggr[idx] && st.moved[idx] {
+                _emit_hx2007(e.text, e.span, out)
+            }
+        }
+        return st
+    }
+
+    let mut i = 0
+    while i < len(e.children) {
+        st = _borrow_walk_expr(e.children[i], st, out)
+        i = i + 1
+    }
+    return st
+}
+
+// Collect every `let mut`-declared name in a subtree (HX2008 candidate set).
+fn _borrow_collect_mut_locals(e: Expr) -> [string] {
+    let mut out = []
+    if _is_let_kind(e.kind) && _bind_let_is_mut(e.text) {
+        let nm = _bind_let_name(e.text)
+        if len(nm) > 0 { out.push(nm) }
+    }
+    let mut i = 0
+    while i < len(e.children) {
+        let sub = _borrow_collect_mut_locals(e.children[i])
+        let mut j = 0
+        while j < len(sub) { out.push(sub[j]); j = j + 1 }
+        i = i + 1
+    }
+    return out
+}
+
+// Collect every Closure expression in a subtree.
+fn _borrow_collect_closures(e: Expr) -> [Expr] {
+    let mut out = []
+    if _bind_is_closure_kind(e.kind) { out.push(e) }
+    let mut i = 0
+    while i < len(e.children) {
+        let sub = _borrow_collect_closures(e.children[i])
+        let mut j = 0
+        while j < len(sub) { out.push(sub[j]); j = j + 1 }
+        i = i + 1
+    }
+    return out
+}
+
+// Collect every Ident name appearing in a subtree (closure free-var proxy).
+fn _borrow_idents_in(e: Expr) -> [string] {
+    let mut out = []
+    if _bind_is_ident_kind(e.kind) && len(e.text) > 0 && e.text != "_" {
+        out.push(e.text)
+    }
+    let mut i = 0
+    while i < len(e.children) {
+        let sub = _borrow_idents_in(e.children[i])
+        let mut j = 0
+        while j < len(sub) { out.push(sub[j]); j = j + 1 }
+        i = i + 1
+    }
+    return out
+}
+
+fn _borrow_list_contains(xs: [string], s: string) -> bool {
+    let mut i = 0
+    while i < len(xs) {
+        if xs[i] == s { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// HX2008 PROXY scan — a `mut` local captured by ≥2 closures in this function.
+// Function-wide closure count (not strictly per-sibling-scope) — an honest
+// over-approximation documented as advisory in the catalog explain text.
+fn _borrow_scan_double_mut_borrow(it: Item, out: array) {
+    let mut mutlocals = []
+    let mut p = 0
+    while p < len(it.params) {
+        let par = it.params[p]
+        if _bind_let_is_mut(par.name) {
+            let nm = _bind_let_name(par.name)
+            if len(nm) > 0 { mutlocals.push(nm) }
+        }
+        p = p + 1
+    }
+    let bodymut = _borrow_collect_mut_locals(it.body)
+    let mut bi = 0
+    while bi < len(bodymut) { mutlocals.push(bodymut[bi]); bi = bi + 1 }
+
+    let closures = _borrow_collect_closures(it.body)
+
+    let mut mi = 0
+    while mi < len(mutlocals) {
+        let nm = mutlocals[mi]
+        // dedupe — only process a name's first occurrence.
+        let mut seen = false
+        let mut s = 0
+        while s < mi {
+            if mutlocals[s] == nm { seen = true }
+            s = s + 1
+        }
+        if !seen {
+            let mut cnt = 0
+            let mut firstspan = it.span
+            let mut havefirst = false
+            let mut ci = 0
+            while ci < len(closures) {
+                let cl = closures[ci]
+                let nchild = len(cl.children)
+                if nchild >= 1 {
+                    let ids = _borrow_idents_in(cl.children[nchild - 1])
+                    if _borrow_list_contains(ids, nm) {
+                        cnt = cnt + 1
+                        if !havefirst {
+                            firstspan = cl.span
+                            havefirst = true
+                        }
+                    }
+                }
+                ci = ci + 1
+            }
+            if cnt >= 2 {
+                _emit_hx2008(nm, firstspan, out)
+            }
+        }
+        mi = mi + 1
+    }
+}
+
+// Per-function advisory entry — seeds a BorrowState with the function params
+// (aggregate-classified from their TypeRef), runs the move walker over the
+// body, then runs the closure-capture proxy scan. Called ONLY behind the env
+// gate from bind()'s fn branch, so it is inert on the default path.
+fn _borrow_walk_fn(it: Item, out: array) {
+    let mut st = BorrowState { names: [], moved: [], aggr: [] }
+    let mut p = 0
+    while p < len(it.params) {
+        let par = it.params[p]
+        let pnm = _bind_let_name(par.name)
+        if len(pnm) > 0 && pnm != "_" {
+            st = _borrow_declare(st, pnm, _borrow_typeref_is_aggr(par.typ))
+        }
+        p = p + 1
+    }
+    // Top-level walk — diagnostics are pushed into `out` in place; the threaded
+    // BorrowState return is consumed across siblings inside the recursion.
+    // Captured into `st` (codebase idiom — `sc = _bind_walk_expr(...)`).
+    st = _borrow_walk_expr(it.body, st, out)
+    // Closure-capture proxy scan is independent of move-state.
+    _borrow_scan_double_mut_borrow(it, out)
+}
+
 pub fn bind(module: Module) -> array {
     let mut out = []
     let mod_file = module.file
@@ -1469,6 +1812,12 @@ pub fn bind(module: Module) -> array {
                 p = p + 1
             }
             sc = _bind_walk_expr(it.body, sc, mod_file, out)
+            // Borrow-check advisory (opt-in HEXA_BORROW_CHECK, default-OFF).
+            // This is the ONLY behavioral hook; gated so that with the env unset
+            // `out` is byte-identical to today (no HX2007/HX2008 produced).
+            if _borrow_check_enabled() {
+                _borrow_walk_fn(it, out)
+            }
             sc = _pop_scope(sc)
         } else if _is_let_item_kind(it.kind) {
             // Top-level let: walk RHS in module scope. The name is already

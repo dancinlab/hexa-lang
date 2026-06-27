@@ -939,6 +939,29 @@ fn _types_lower_type_ref(tr: TypeRef) -> Type {
     }
 }
 
+// Borrow-check advisory (opt-in HEXA_BORROW_CHECK) — Rust `Copy`-type predicate.
+// A `Copy` type's value is duplicated on assignment / by-value passing, so it is
+// NEVER move-tracked and a use-after-move can never apply to it. Scalars
+// (integers — signed or unsigned, floats, bool, char, unit) are Copy; aggregates
+// (string, named structs, arrays, tuples, generics, fn types) carry move
+// semantics. Pure sibling of _types_lower_type_ref reusing the same primitive
+// name table (incl. the type-alias resolution so `type Celsius = f64` is Copy).
+// Byte-inert: the default compile path never calls it — only an HX2007/HX2008
+// borrow analysis under the env gate does.
+pub fn _type_is_copy(tr: TypeRef) -> bool {
+    if len(tr.kind) == 0 { return false }
+    if tr.kind != "named" { return false }
+    let n = _types_resolve_alias_name(tr.name)
+    if len(n) == 0 { return false }
+    if n == "i8" || n == "i16" || n == "i32" || n == "i64" || n == "Int" || n == "int" { return true }
+    if n == "u8" || n == "u16" || n == "u32" || n == "u64" { return true }
+    if n == "f16" || n == "bf16" || n == "f32" || n == "f64" || n == "Float" || n == "float" || n == "Real" { return true }
+    if n == "bool" || n == "Bool" { return true }
+    if n == "char" || n == "Char" { return true }
+    if n == "unit" || n == "Unit" || n == "()" || n == "void" || n == "Void" { return true }
+    return false
+}
+
 // ── RFC-074 Phase 2.1 — enum variant payload element-type registry ──
 //
 // Module-local lookup table built during `_collect_item_types` and consumed

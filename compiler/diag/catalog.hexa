@@ -264,6 +264,40 @@ pub let CATALOG: [DiagSpec] = [
         explain: "The assignment target is a function-local `let` binding (or parameter) declared without `mut`, so it should not be reassigned. Under hexa 0.1.0-dispatch such a write was silently dropped by codegen — the binding kept its initial value, so a loop counter advanced with a non-`mut` `let` never terminated (#2663, anima #1795). The bind pass now flags the write at compile time. Default severity is a warning (the in-tree corpus still carries ~1033 such writes pending migration); set HEXA_STRICT_LET=1 to escalate to a hard error. Fix: declare the binding `let mut <name> = …` if it is meant to change, or remove the reassignment. Shadowing with a fresh `let <name> = …` in an inner scope is still allowed; only reassigning the SAME binding is flagged.",
         fix_it_kind: FixItKind::Replace
     },
+    // Borrow-check advisory (opt-in HEXA_BORROW_CHECK, 2026-06-27). Stage S2
+    // (bind) emits these ONLY when env("HEXA_BORROW_CHECK")=="1" — the default
+    // path is byte-identical (no new diagnostic, no codegen/runtime change).
+    // The advisory is a simplified port of Rust's borrowck reframed onto the
+    // two ownership-adjacent signals hexa's grammar exposes: move-semantics
+    // (modeled as binding/passing a non-Copy aggregate) and `mut` capture.
+    //
+    // HX2007 — use after move. A non-Copy aggregate value (RHS = array/struct
+    // literal, or an annotated non-Copy type) moved out of binding `x` into
+    // another binding (`let y = x`) or passed by value into a call cannot be
+    // read again. Copy types (i8..i64 / f16..f64 / bool / char / unit) are
+    // NEVER flagged (Rust Copy semantics).
+    DiagSpec {
+        code: "HX2007",
+        title: "use after move (advisory)",
+        severity: Severity::Warning,
+        stage: "S2",
+        template: "use of `{name}` after its value was moved (advisory)",
+        explain: "ADVISORY diagnostic, opt-in under HEXA_BORROW_CHECK=1 (default OFF — the language has no `&`/`&mut`/`move` syntax, so this is a heuristic port of Rust's move-after-use / use-after-move rule, not a sound borrow checker). A non-Copy aggregate (an array/struct literal, or a binding annotated with a non-Copy type such as `string`, a named struct, an array or a tuple) was moved out of `{name}` — either into another binding via `let other = {name}` or passed by value into a call — and then read again. Under Rust's affine ownership the first move consumes the value, so the later read is a use-after-move. Copy types (integers, floats, bool, char, unit) are duplicated on assignment and are never flagged. Fix: clone/rebuild the value before the second use, reorder so the last use precedes the move, or restructure to keep a single owner. This is guidance only and never blocks codegen.",
+        fix_it_kind: FixItKind::None
+    },
+    // HX2008 — simultaneous mutable borrow (closure-capture PROXY). hexa has no
+    // `&mut` reference form, so true aliasing cannot be observed; this models
+    // the hazard as a `mut` local captured by ≥2 closures in the same function,
+    // approximating Rust's "no two `&mut` to the same place at once" rule.
+    DiagSpec {
+        code: "HX2008",
+        title: "simultaneous mutable borrow (advisory)",
+        severity: Severity::Warning,
+        stage: "S2",
+        template: "`{name}` is a `mut` binding captured by multiple closures simultaneously (advisory)",
+        explain: "ADVISORY diagnostic, opt-in under HEXA_BORROW_CHECK=1 (default OFF). hexa's grammar exposes no `&mut` reference form, so a literal simultaneous mutable borrow cannot exist; this rule is a PROXY — it fires when a `mut` local (or `mut` parameter) named `{name}` is captured by two or more closures within the same function body, the closest grammar-level analogue of aliasing `&mut` borrows. Under Rust's borrow rules at most one `&mut` to a place may be live at a time; two closures that both mutate the same captured `mut` binding reproduce that hazard. Fix: split the state so each closure owns its own binding, sequence the closures so their captures do not overlap, or pass the value explicitly. This is guidance only and never blocks codegen.",
+        fix_it_kind: FixItKind::None
+    },
     DiagSpec {
         code: "HX3001",
         title: "type mismatch",

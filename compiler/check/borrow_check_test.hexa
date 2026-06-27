@@ -1,0 +1,314 @@
+// HEXA Native Compiler — S2 borrow-check advisory smoke test
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Exercises the opt-in HEXA_BORROW_CHECK advisory pass (compiler/check/bind.hexa
+// _borrow_walk_fn). The advisory is DEFAULT-OFF: with the env unset every case
+// must yield ZERO HX2007/HX2008 (the byteeq-neutral default-path proof). With
+// HEXA_BORROW_CHECK=1 the move / double-`mut`-capture hazards fire. Both arms
+// are asserted, branching on the env gate, so the SAME binary passes whether the
+// gate is set or not — CI runs it twice (unset + `HEXA_BORROW_CHECK=1`).
+//
+// Cases (advisory is a simplified port of Rust borrowck):
+//   (1) use-after-move : let a = [1,2,3]; let b = a; consume(a)   -> 1 HX2007 (gate)
+//   (2) Copy control   : let a = 5;       let b = a; consume(a)   -> 0 HX2007
+//   (3) double mut borrow: mut counter captured by 2 closures      -> 1 HX2008 (gate)
+//   (4) single-closure control: mut counter captured by 1 closure  -> 0 HX2008
+//
+// Run:
+//   hexa run compiler/check/borrow_check_test.hexa                 (gate OFF)
+//   HEXA_BORROW_CHECK=1 hexa run compiler/check/borrow_check_test.hexa  (gate ON)
+
+import "../parse/ast.hexa"
+import "../diag/catalog.hexa"
+import "../lex/tokens.hexa"
+import "../ir/hir.hexa"
+import "./bind.hexa"
+
+// ── AST construction helpers (mirror bind_test.hexa) ─────────────
+
+fn _span(file: string, line: i64, col: i64, length: i64) -> Span {
+    return Span { file: file, line: line, col: col, len: length }
+}
+
+fn _empty_span() -> Span {
+    return _span("", 0, 0, 0)
+}
+
+fn _empty_atlas_ref() -> AtlasRef {
+    return AtlasRef { kind: "", id: "", span: _empty_span() }
+}
+
+fn _empty_type() -> TypeRef {
+    return TypeRef { kind: "", name: "", args: [], span: _empty_span() }
+}
+
+fn _named_type(name: string) -> TypeRef {
+    return TypeRef { kind: "named", name: name, args: [], span: _empty_span() }
+}
+
+fn _ident_expr(name: string, file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Ident,
+        span: _span(file, line, col, len(name)),
+        text: name,
+        annotations: [],
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _int_expr(text: string, file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::LiteralInt,
+        span: _span(file, line, col, len(text)),
+        text: text,
+        annotations: [],
+        children: [],
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// [e0, e1, ...] — ArrayLit, children = elements (a freshly-built aggregate).
+fn _array_lit(elems: [Expr], file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::ArrayLit,
+        span: _span(file, line, col, 1),
+        text: "",
+        annotations: [],
+        children: elems,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _call_expr(callee: Expr, args: [Expr], file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(callee)
+    let mut i = 0
+    while i < len(args) {
+        kids.push(args[i])
+        i = i + 1
+    }
+    return Expr {
+        kind: ExprKind::Call,
+        span: _span(file, line, col, 1),
+        text: "",
+        annotations: [],
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _block(children: [Expr], file: string, line: i64, col: i64) -> Expr {
+    return Expr {
+        kind: ExprKind::Block,
+        span: _span(file, line, col, 1),
+        text: "",
+        annotations: [],
+        children: children,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// `let <name> = <rhs>` (immutable) or `let mut <name> = <rhs>` when is_mut.
+fn _let_expr(name: string, is_mut: bool, rhs: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut t = name
+    if is_mut { t = "mut:" + name }
+    let mut kids = []
+    kids.push(rhs)
+    return Expr {
+        kind: ExprKind::Let,
+        span: _span(file, line, col, len(name)),
+        text: t,
+        annotations: [],
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// fn() { body } — zero-param closure, children = [body_block], text = "0".
+fn _closure0(body_block: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(body_block)
+    return Expr {
+        kind: ExprKind::Closure,
+        span: _span(file, line, col, 1),
+        text: "0",
+        annotations: [],
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+fn _fn_item(name: string, params: [Param], body: Expr, file: string, line: i64) -> Item {
+    return Item {
+        kind: ItemKind::Fn,
+        name: name,
+        span: _span(file, line, 1, len(name)),
+        annotations: [],
+        params: params,
+        return_type: _empty_type(),
+        body: body,
+        is_pub: false
+    }
+}
+
+fn _param(name: string, typ_name: string, file: string, line: i64, col: i64) -> Param {
+    let t = _named_type(typ_name)
+    return Param {
+        name: name,
+        typ: t,
+        typs: [t],
+        span: _span(file, line, col, len(name))
+    }
+}
+
+// `fn consume(v: Int) {}` — a sink so the call-argument move site has a defined
+// callee + binds cleanly (no HX2001 noise on the HX2007 cases).
+fn _consume_item(f: string) -> Item {
+    let mut params = []
+    params.push(_param("v", "Int", f, 1, 13))
+    return _fn_item("consume", params, _block([], f, 1, 18), f, 1)
+}
+
+// ── Module builders ──────────────────────────────────────────────
+
+// (1) use-after-move: let a=[1,2,3]; let b=a; consume(a)
+fn _build_use_after_move() -> Module {
+    let f = "move.hexa"
+    let mut elems = []
+    elems.push(_int_expr("1", f, 2, 14))
+    elems.push(_int_expr("2", f, 2, 16))
+    elems.push(_int_expr("3", f, 2, 18))
+    let let_a = _let_expr("a", false, _array_lit(elems, f, 2, 13), f, 2, 9)
+    let let_b = _let_expr("b", false, _ident_expr("a", f, 3, 13), f, 3, 9)
+    let call = _call_expr(_ident_expr("consume", f, 4, 9), [_ident_expr("a", f, 4, 17)], f, 4, 16)
+    let mut kids = []
+    kids.push(let_a)
+    kids.push(let_b)
+    kids.push(call)
+    let main_body = _block(kids, f, 1, 11)
+    let mut items = []
+    items.push(_consume_item(f))
+    items.push(_fn_item("main", [], main_body, f, 1))
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (2) Copy control: let a=5; let b=a; consume(a) — scalar, never flagged.
+fn _build_copy_control() -> Module {
+    let f = "copy.hexa"
+    let let_a = _let_expr("a", false, _int_expr("5", f, 2, 13), f, 2, 9)
+    let let_b = _let_expr("b", false, _ident_expr("a", f, 3, 13), f, 3, 9)
+    let call = _call_expr(_ident_expr("consume", f, 4, 9), [_ident_expr("a", f, 4, 17)], f, 4, 16)
+    let mut kids = []
+    kids.push(let_a)
+    kids.push(let_b)
+    kids.push(call)
+    let main_body = _block(kids, f, 1, 11)
+    let mut items = []
+    items.push(_consume_item(f))
+    items.push(_fn_item("main", [], main_body, f, 1))
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (3) double mut borrow: mut counter captured by two closures.
+fn _build_double_mut_borrow() -> Module {
+    let f = "borrow.hexa"
+    let let_c = _let_expr("counter", true, _int_expr("0", f, 2, 19), f, 2, 9)
+    let cl_f = _closure0(_block([_ident_expr("counter", f, 3, 18)], f, 3, 16), f, 3, 13)
+    let cl_g = _closure0(_block([_ident_expr("counter", f, 4, 18)], f, 4, 16), f, 4, 13)
+    let let_f = _let_expr("f", false, cl_f, f, 3, 9)
+    let let_g = _let_expr("g", false, cl_g, f, 4, 9)
+    let mut kids = []
+    kids.push(let_c)
+    kids.push(let_f)
+    kids.push(let_g)
+    let main_body = _block(kids, f, 1, 11)
+    let mut items = []
+    items.push(_fn_item("main", [], main_body, f, 1))
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (4) single-closure control: mut counter captured by one closure — no HX2008.
+fn _build_single_closure() -> Module {
+    let f = "single.hexa"
+    let let_c = _let_expr("counter", true, _int_expr("0", f, 2, 19), f, 2, 9)
+    let cl_f = _closure0(_block([_ident_expr("counter", f, 3, 18)], f, 3, 16), f, 3, 13)
+    let let_f = _let_expr("f", false, cl_f, f, 3, 9)
+    let mut kids = []
+    kids.push(let_c)
+    kids.push(let_f)
+    let main_body = _block(kids, f, 1, 11)
+    let mut items = []
+    items.push(_fn_item("main", [], main_body, f, 1))
+    return Module { file: f, items: items, imports: [] }
+}
+
+// ── Driver ───────────────────────────────────────────────────────
+
+fn _count_code(diags: array, code: string) -> i64 {
+    let mut n = 0
+    let mut i = 0
+    while i < len(diags) {
+        if diags[i].code == code { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  HEXA Compiler — Borrow-check advisory (S2)")
+    println("══════════════════════════════════════════════")
+
+    let gate = env("HEXA_BORROW_CHECK") == "1"
+    if gate {
+        println("  gate: HEXA_BORROW_CHECK=1 (advisory ON)")
+    } else {
+        println("  gate: unset (advisory OFF — byteeq-neutral default path)")
+    }
+    // Expected HX2007/HX2008 counts depend on the gate.
+    let mut exp_move = 0
+    let mut exp_borrow = 0
+    if gate {
+        exp_move = 1
+        exp_borrow = 1
+    }
+
+    let mut ok = true
+
+    // (1) use-after-move
+    let d1 = bind(_build_use_after_move())
+    let n1 = _count_code(d1, "HX2007")
+    println("  (1) use-after-move   HX2007=" + to_string(n1) + " (expect " + to_string(exp_move) + ")")
+    if n1 != exp_move { ok = false; println("      FAIL") }
+
+    // (2) Copy control — never flagged regardless of gate
+    let d2 = bind(_build_copy_control())
+    let n2 = _count_code(d2, "HX2007")
+    println("  (2) Copy control     HX2007=" + to_string(n2) + " (expect 0)")
+    if n2 != 0 { ok = false; println("      FAIL") }
+
+    // (3) double mut borrow
+    let d3 = bind(_build_double_mut_borrow())
+    let n3 = _count_code(d3, "HX2008")
+    println("  (3) double mut borrow HX2008=" + to_string(n3) + " (expect " + to_string(exp_borrow) + ")")
+    if n3 != exp_borrow { ok = false; println("      FAIL") }
+
+    // (4) single-closure control — never flagged regardless of gate
+    let d4 = bind(_build_single_closure())
+    let n4 = _count_code(d4, "HX2008")
+    println("  (4) single-closure   HX2008=" + to_string(n4) + " (expect 0)")
+    if n4 != 0 { ok = false; println("      FAIL") }
+
+    println("")
+    println("══════════════════════════════════════════════")
+    if ok {
+        println("PASS: borrow-check advisory matches contract.")
+    } else {
+        println("FAIL: borrow-check advisory contract not satisfied.")
+    }
+    println("══════════════════════════════════════════════")
+    if !ok { exit(1) }
+}
