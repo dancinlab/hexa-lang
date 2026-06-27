@@ -876,3 +876,104 @@ pub fn hxlcl_mmap(addr: HexaVal, len: HexaVal, prot: HexaVal, flags: HexaVal, fd
     }
     return r                                    // mapped address (raw pointer word)
 }
+
+// ── ERRNO-BEARING CHAIN batch D — DIVERGENCE syscalls: open_sys + getrusage ──
+//
+// Two more errno-bearing leaves. Both share the close errno epilogue verbatim
+// (raw-payload `__hx_payload_lt`/`_ne`/`_sub`, never bare `<`/`-`, +
+// target_is_linux()-gated store via the already-whitelisted __errno_location).
+// They differ only in CALL SHAPE — open_sys is the arm64 AT_FDCWD-prepend kind
+// (a genuine per-arch arg-tuple divergence, exactly mirroring mkdir→mkdirat and
+// stat→fstatat), getrusage is a plain uniform 2-arg (only the NR varies, like
+// read/lseek/waitpid).
+//
+//   open_sys → arm64 has NO plain open; it uses openat(AT_FDCWD=-100, path,
+//          flags, mode) — a 4-arg PREPEND divergence exactly like mkdir→mkdirat
+//          and stat→fstatat. So the syscall is issued in per-arch branches (the
+//          arm64 branch prepends AT_FDCWD, shifting path/flags/mode right by one),
+//          then the shared epilogue runs on the result. x86_64 + darwin keep the
+//          plain 3-arg open(path, flags, mode).
+//          NR + AT_FDCWD ref-match (no black-box):
+//            x86_64 __NR_open    = 2   (arch/x86 syscall_64.tbl;
+//                                       stdlib/posix/linux_syscalls.hexa:116)
+//            arm64  __NR_openat  = 56  (asm-generic unistd.h — plain "open"
+//                                       dropped; linux_syscalls.hexa:83)
+//            darwin SYS_OPEN     = 5   (xnu bsd/kern/syscalls.master; the BSD
+//                                       trap OR-bakes 0x2000000 in __hx_syscall6)
+//            AT_FDCWD = -100           (the same literal mkdir/stat use above;
+//                                       self/rt/syscall.hexa:153,161)
+//          open is errno-bearing (a bad path → -1 + ENOENT on the raw Linux
+//          syscall, the uniform `-errno` convention). Named `hxlcl_open_sys`
+//          rather than `hxlcl_open` to match the floor's open routing symbol and
+//          avoid shadowing the higher-level open wrapper.
+//
+//   getrusage → a plain UNIFORM 2-arg (who, usage*) on every target — no
+//          at-variant / no prepend, so only the NR differs, exactly like
+//          read/lseek/waitpid. The 2nd arg is an OUT-pointer (the struct rusage*
+//          the kernel fills), the same out-ptr shape as stat's statbuf.
+//          NR ref-match (no black-box):
+//            x86_64 __NR_getrusage = 98   (arch/x86 syscall_64.tbl)
+//            arm64  __NR_getrusage = 165  (asm-generic unistd.h)
+//            darwin SYS_GETRUSAGE  = 117  (xnu bsd/kern/syscalls.master)
+//          errno-bearing: a bad `who` → -1 + EINVAL (getrusage(2): "EINVAL ...
+//          who is invalid").
+//
+// DEFERRED to a later batch (honest — trickier divergence, not attempted here):
+//   time    → arm64/darwin have NO plain time; they need gettimeofday(tv*,0) with
+//             a DIFFERENT return semantics (gettimeofday writes a struct + returns
+//             0, vs time returns the epoch seconds) — a return-value mismatch, not
+//             just a NR/arg swap. (x86_64 time=201, arm64 gettimeofday=169.)
+//   poll    → arm64 has NO plain poll; ppoll takes an EXTRA timespec* + sigmask +
+//             sigsetsize (arg-COUNT divergence, not just a prepend).
+//             (x86_64 poll=7, arm64 ppoll=73, darwin poll=230.)
+//   pipe    → a 2nd-RETURN-register / int[2] out-array shape (the kernel returns
+//             both fds), which the single-result __hx_syscall6 path doesn't expose
+//             — a genuinely different lowering. (x86_64 pipe=22/pipe2=293, arm64
+//             pipe2=59, darwin pipe=42.)
+
+// open_sys: per-arch arg tuple (arm64 openat prepends AT_FDCWD, shifting
+// path/flags/mode right by one — a genuine divergence, mirrors mkdir/stat). The
+// result flows into the shared close-pattern errno epilogue.
+pub fn hxlcl_open_sys(path: HexaVal, flags: HexaVal, mode: HexaVal) -> int {
+    let mut r = 0
+    if target_is_linux() {
+        if target_is_x86_64() {
+            r = __hx_syscall6(2, path, flags, mode, 0, 0, 0)        // x86_64 open(path, flags, mode)
+        } else {
+            r = __hx_syscall6(56, -100, path, flags, mode, 0, 0)    // arm64 openat(AT_FDCWD, path, flags, mode)
+        }
+    } else {
+        r = __hx_syscall6(5, path, flags, mode, 0, 0, 0)            // darwin SYS_OPEN(path, flags, mode)
+    }
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // fd (>= 0)
+}
+
+// getrusage: plain uniform 2-arg (who, usage*); only the NR varies (no at-variant),
+// like read/lseek. The 2nd arg is an out-ptr the kernel fills (stat-statbuf shape).
+pub fn hxlcl_getrusage(who: HexaVal, usage: HexaVal) -> int {
+    let mut nr = 117                           // Darwin SYS_GETRUSAGE (default)
+    if target_is_linux() {
+        if target_is_x86_64() { nr = 98 }      // Linux x86_64 __NR_getrusage
+        else { nr = 165 }                      // Linux arm64 __NR_getrusage
+    }
+    let r = __hx_syscall6(nr, who, usage, 0, 0, 0, 0)
+    let neg = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(neg, 0) {
+        if target_is_linux() {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+        }
+        return -1
+    }
+    return r                                    // 0 on success
+}

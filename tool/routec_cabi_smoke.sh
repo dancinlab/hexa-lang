@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -99,6 +99,7 @@ cat > "$TMP/harness.c" <<'CEOF'
 #include <unistd.h>   /* libc getpid() — the reference oracle for hxlcl_getpid */
 #include <fcntl.h>    /* open() / O_RDONLY / F_GETFL — close/fcntl behavior tests */
 #include <sys/mman.h> /* PROT_/MAP_ flags / MAP_FAILED — for the mmap composition test */
+#include <sys/resource.h> /* struct rusage / RUSAGE_SELF — for the getrusage composition test */
 
 /* Route-C-emitted symbols under test (raw C-ABI prototypes). */
 extern size_t hxlcl_strlen(const char *s);
@@ -160,6 +161,13 @@ extern int    hxlcl_waitpid(int pid, int *status, int opts);
 extern long   hxlcl_write(int fd, const void *buf, unsigned long n);
 extern int    hxlcl_fcntl(int fd, int cmd, long arg);
 extern long   hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off);
+
+/* errno-bearing chain batch D — open_sys / getrusage, composition only on darwin
+ * (success case; errno-store DCE'd; the errno value-exact is the Linux sibling's
+ * claim). open_sys = arm64 openat(AT_FDCWD,…) / darwin plain SYS_OPEN(3-arg);
+ * getrusage = plain uniform 2-arg (out-ptr usage*). */
+extern int    hxlcl_open_sys(const char *path, int flags, int mode);
+extern int    hxlcl_getrusage(int who, void *usage);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
@@ -372,6 +380,22 @@ int main(void) {
             CK(((char *)m)[0] == 'q', "mmap'd page is writable (composition)");
             munmap((void *)m, (size_t)pg);
         }
+    }
+
+    /* batch D: open_sys / getrusage — COMPOSITION on darwin (success case;
+     * errno-store DCE'd; the errno value-exact is the Linux sibling's claim).
+     * open_sys(/dev/null, O_RDONLY) → a valid fd (>= 0); on darwin this uses the
+     * plain 3-arg SYS_OPEN (no AT_FDCWD), confirming the 3-arg trap composes.
+     * getrusage(RUSAGE_SELF, &ru) → 0 (success; the out-ptr usage* reaches the
+     * kernel and the plain 2-arg trap composes). */
+    {
+        int ofd = hxlcl_open_sys("/dev/null", O_RDONLY, 0);
+        CK(ofd >= 0, "open_sys(/dev/null, O_RDONLY) >= 0 (composition)");
+        if (ofd >= 0) hxlcl_close(ofd);
+    }
+    {
+        struct rusage ru;
+        CK(hxlcl_getrusage(RUSAGE_SELF, &ru) == 0, "getrusage(RUSAGE_SELF) == 0 (composition, out-ptr)");
     }
 
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }
