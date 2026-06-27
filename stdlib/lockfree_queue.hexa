@@ -1,0 +1,305 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/lockfree_queue.hexa — OPT-IN lock-free bounded MPMC queue (Vyukov)
+//
+//  @module(slug="lockfree_queue", desc="Dmitry Vyukov bounded MPMC queue —
+//          per-cell sequence-stamped CAS enqueue/dequeue, ABA-free, no mutex.
+//          The same algorithm crossbeam::queue::ArrayQueue implements. Opt-in:
+//          the cross-thread win is real only in a -DHEXA_THREADS build.")
+//  @usage(use "stdlib/lockfree_queue"; let q = lfq_new(1024);
+//          lfq_push(q, v) -> 1 ok / 0 full;  lfq_pop(q) -> [ok, value])
+//  @stability preview
+//  @since 2026-06-27
+//  @rfc state/rfc_real_concurrency_optin.md (slice ⑥ — real mutex/atomic),
+//       game-parity lane 2 (lock-free MPMC)
+//
+//  ── WHY (game-runtime threading parity) ───────────────────────────────────
+//
+//  Game/engine runtimes hand work between many producer and consumer threads
+//  WITHOUT taking a lock on the hot path — a bounded ring queue with atomic
+//  head/tail and per-cell sequence stamps. hexa already has a mutex+condvar
+//  channel (stdlib/thread_real.hexa::chan_new, an MPSC queue behind a pthread
+//  mutex). That works but every push/pop serializes on one lock — under N
+//  contending producers/consumers the lock is the wall. The canonical fix in
+//  every game/systems runtime is a LOCK-FREE bounded MPMC queue.
+//
+//  ── REFERENCE-MATCH (Dmitry Vyukov bounded MPMC, the crossbeam algorithm) ──
+//
+//  Algorithm: Dmitry Vyukov, "Bounded MPMC queue"
+//    https://www.1024cores.net/home/lock-free-algorithms/queues/bounded-mpmc-queue
+//  crossbeam's ArrayQueue is a direct port of it — file:line citations:
+//
+//    · crossbeam-queue/src/array_queue.rs (crossbeam-rs/crossbeam)
+//        struct Slot<T> { stamp: AtomicUsize, value: UnsafeCell<T> }
+//        ArrayQueue { head: CachePadded<AtomicUsize>,
+//                     tail: CachePadded<AtomicUsize>, buffer: Box<[Slot]>, ... }
+//      - push(): loop { read tail; slot = &buffer[tail & (cap-1)];
+//          if slot.stamp == tail  → CAS tail→tail+1, write value, stamp=tail+1
+//          else if slot.stamp <  tail → return Full
+//          else (stamp > tail)        → reload tail (another producer advanced) }
+//      - pop():  loop { read head; slot = &buffer[head & (cap-1)];
+//          if slot.stamp == head+1 → CAS head→head+1, read value, stamp=head+cap
+//          else if slot.stamp < head+1 → return Empty
+//          else                        → reload head }
+//      (crossbeam uses a one-bit lap flag in the high bits + a power-of-two
+//       index mask; the integer-monotone form below is the original Vyukov
+//       scheme and is observationally identical.)
+//
+//    · Vyukov original (mpmc_bounded_queue):
+//        cell_t { atomic<size_t> sequence; T data; };
+//        enqueue: dif = seq - pos;  ==0 → CAS pos; <0 → false(full); >0 → reload
+//        dequeue: dif = seq - (pos+1); ==0 → CAS pos; <0 → false(empty); >0 → reload
+//        on enqueue success: cell.sequence = pos + 1
+//        on dequeue success: cell.sequence = pos + capacity
+//
+//  This module reproduces the Vyukov scheme EXACTLY. The only adaptation is the
+//  storage layout: hexa's real-atomic substrate (stdlib/atomic_real.hexa) gives
+//  int64 atomic CELLS by handle, not an atomic field embedded in a struct. So a
+//  queue is three pieces of state, all addressed by small int handles:
+//    · seq[i]   — one atomic cell per ring slot (the per-cell `sequence` stamp)
+//    · enq, deq — two atomic cells (the producer/consumer positions, head/tail)
+//    · val[i]   — a plain hexa array holding the payloads (published under the
+//                 stamp protocol: a consumer only reads val[i] after observing
+//                 seq[i] == pos+1, which the producer sets AFTER writing val[i];
+//                 the seq-cst store/load pair on the cell is the release/acquire
+//                 fence, same ordering crossbeam's stamp store provides).
+//
+//  Capacity is rounded UP to a power of two so `pos & (cap-1)` indexes the ring
+//  (crossbeam masks identically). The queue state is itself packed into one
+//  atomic-cell table region + one value array, referenced by a single int
+//  "queue handle" so callers pass it around like a channel id.
+//
+//  ── OPT-IN / BYTEEQ-NEUTRALITY ────────────────────────────────────────────
+//
+//  This module imports stdlib/atomic_real (the -DHEXA_THREADS opt-in atomics).
+//  Those `atomic_cell_*` runtime globals only EXIST in a -DHEXA_THREADS build;
+//  in the default build the real-atomic C block preprocesses out, so the runtime
+//  object is byte-identical to origin/main and the byteeq gen3≡gen4 self-host
+//  fixpoint is unaffected. This module is NOT imported by any self/ compiler
+//  closure → byteeq-neutral. To USE it, build with real threads enabled and
+//  import this module; a default build never pulls an undefined symbol because
+//  nothing in the default closure references it.
+//
+//  Determinism: in the synchronous default build (or any single-threaded run)
+//  push/pop are a plain FIFO ring — the same in/out order as the mutex channel.
+//  The lock-free win is only observable under real OS threads with multiple
+//  producers/consumers contending (the spawn slice). See
+//  test/game_lockfree_bench.hexa for the single-thread oracle + the
+//  contended-MPMC bench shape (perf measure = aiden follow-up).
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/atomic_real"
+
+// ── Queue handle layout ───────────────────────────────────────────────────
+//
+// A queue is described by a small record. We keep the per-queue state in hexa
+// arrays/cells and hand the caller a struct value as the opaque handle. The
+// atomic cells (seq[i], enq, deq) live in the -DHEXA_THREADS atomic table and
+// are addressed by their int ids; val[] is a plain hexa array.
+
+// Field-style mirrors the canonical stdlib structs (cancel.hexa Token,
+// future.hexa Future, hashset.hexa HashSet): the STRUCT is `pub`, the fields
+// are not individually qualified. `vals` is typed `any` (not `array`) for the
+// same stage-1 reason hashset.hexa uses `items: any` — struct-field generics
+// are limited, and a hexa array bound into an `any` field is still a reference
+// type, so `q.vals[idx] = v` mutates the shared backing store visible to every
+// holder of the handle (verified pattern, hashset.hexa L49-53 / jsonl_pool L210).
+pub struct LfQueue {
+    cap: int          // ring capacity (power of two)
+    mask: int         // cap - 1, the index mask
+    enq: int          // atomic cell id — producer position (Vyukov `enqueue_pos`)
+    deq: int          // atomic cell id — consumer position (Vyukov `dequeue_pos`)
+    seq_base: int     // atomic cell id of seq[0]; seq[i] == seq_base + i
+                      // (atomic_cell ids are dense & monotonically issued,
+                      //  so a contiguous run is allocated in lfq_new)
+    vals: any         // payload slots (hexa array), length cap
+}
+
+// _next_pow2(n) — smallest power of two >= max(n, 1).
+fn _next_pow2(n: int) -> int {
+    if n < 1 { return 1 }
+    let mut p = 1
+    while p < n {
+        p = p * 2
+    }
+    return p
+}
+
+// lfq_new(capacity) -> LfQueue
+//
+// Build a bounded MPMC queue holding up to `capacity` items (rounded up to the
+// next power of two for the index mask). Each ring slot i gets its `sequence`
+// stamp initialized to i — the Vyukov invariant that makes slot i ready to
+// accept the (i)-th enqueue immediately and signals "empty" to a dequeuer
+// (seq[i] == i, i.e. < i+1).  enqueue_pos and dequeue_pos both start at 0.
+//
+// Returns a queue with cap<=0 (cap field 0) if the atomic substrate is
+// unavailable (atomic_cell returns negative → table full / non-threads build
+// table exhausted). Callers should check q.cap > 0.
+pub fn lfq_new(capacity: int) -> LfQueue {
+    let cap = _next_pow2(capacity)
+    // Allocate the per-slot sequence cells as a contiguous run. atomic_cell
+    // issues dense ascending ids, so the first id is seq_base and slot i is
+    // seq_base + i. We initialize seq[i] = i.
+    let seq_base = atomic_cell(0)
+    if seq_base < 0 {
+        return LfQueue { cap: 0, mask: 0, enq: -1, deq: -1, seq_base: -1, vals: [] }
+    }
+    // seq[0] already created with value 0 (== index 0). Create seq[1..cap-1].
+    let mut i = 1
+    while i < cap {
+        let id = atomic_cell(i)   // seq[i] initialized to i
+        if id < 0 {
+            return LfQueue { cap: 0, mask: 0, enq: -1, deq: -1, seq_base: -1, vals: [] }
+        }
+        i = i + 1
+    }
+    let enq = atomic_cell(0)      // enqueue_pos = 0
+    let deq = atomic_cell(0)      // dequeue_pos = 0
+    if enq < 0 || deq < 0 {
+        return LfQueue { cap: 0, mask: 0, enq: -1, deq: -1, seq_base: -1, vals: [] }
+    }
+    // Payload slots — pre-sized array, contents published under the stamp.
+    let mut vals = []
+    let mut j = 0
+    while j < cap {
+        vals.push(0)
+        j = j + 1
+    }
+    return LfQueue { cap: cap, mask: cap - 1, enq: enq, deq: deq, seq_base: seq_base, vals: vals }
+}
+
+// lfq_push(q, v) -> int   (1 = enqueued, 0 = full)
+//
+// Vyukov enqueue. Reference: array_queue.rs push() / mpmc_bounded enqueue().
+//
+//   pos = load(enqueue_pos)
+//   loop {
+//     cell = &seq[pos & mask]
+//     dif  = load(cell) - pos
+//     if dif == 0 {                 // slot is the one this pos owns and is free
+//        if CAS(enqueue_pos, pos, pos+1) { break }   // claimed; write below
+//     } else if dif < 0 {           // producer lapped the consumer → FULL
+//        return 0
+//     } else {                      // another producer already advanced pos
+//        pos = load(enqueue_pos)
+//     }
+//   }
+//   val[pos & mask] = v             // publish payload
+//   store(cell, pos + 1)            // stamp → release; signals consumer "ready"
+//   return 1
+//
+// NOTE on the mutable-handle: q is a value (struct copy), but the atomic cells
+// and the vals array it references are SHARED state — pushing through any copy
+// of the same handle drives the same ring. (vals is a hexa array = reference
+// to a shared backing store, matching the by-handle sharing of the atomic cells.)
+pub fn lfq_push(q: LfQueue, v) -> int {
+    if q.cap <= 0 { return 0 }
+    let mut pos = atomic_get(q.enq)
+    while true {
+        let idx = pos & q.mask
+        let cell = q.seq_base + idx
+        let seq = atomic_get(cell)
+        let dif = seq - pos
+        if dif == 0 {
+            // try to claim this position
+            if atomic_compare_and_swap(q.enq, pos, pos + 1) == 1 {
+                // claimed: publish payload then advance the stamp.
+                q.vals[idx] = v
+                atomic_set(cell, pos + 1)
+                return 1
+            }
+            // CAS lost to another producer; re-read and retry.
+            pos = atomic_get(q.enq)
+        } else if dif < 0 {
+            // seq < pos: the slot still holds an un-consumed item from a prior
+            // lap → the ring is full.
+            return 0
+        } else {
+            // seq > pos: another producer claimed this pos already; reload.
+            pos = atomic_get(q.enq)
+        }
+    }
+    return 0
+}
+
+// lfq_pop(q) -> array   ([1, value] on success, [0, 0] on empty)
+//
+// Vyukov dequeue. Reference: array_queue.rs pop() / mpmc_bounded dequeue().
+//
+//   pos = load(dequeue_pos)
+//   loop {
+//     cell = &seq[pos & mask]
+//     dif  = load(cell) - (pos + 1)
+//     if dif == 0 {                 // slot holds the item for this consumer pos
+//        if CAS(dequeue_pos, pos, pos+1) { break }   // claimed; read below
+//     } else if dif < 0 {           // stamp not yet advanced by a producer → EMPTY
+//        return [0, 0]
+//     } else {                      // another consumer already advanced pos
+//        pos = load(dequeue_pos)
+//     }
+//   }
+//   v = val[pos & mask]             // take payload
+//   store(cell, pos + cap)          // re-arm slot for the NEXT lap (Vyukov)
+//   return [1, v]
+//
+// Returns a 2-element array [ok, value]: ok==1 with the dequeued value, or
+// ok==0 (value 0 sentinel) when the queue is empty. (Tuple-style return so the
+// "empty" case is distinguishable from a legitimately-dequeued 0/false value.)
+pub fn lfq_pop(q: LfQueue) -> array {
+    if q.cap <= 0 { return [0, 0] }
+    let mut pos = atomic_get(q.deq)
+    while true {
+        let idx = pos & q.mask
+        let cell = q.seq_base + idx
+        let seq = atomic_get(cell)
+        let dif = seq - (pos + 1)
+        if dif == 0 {
+            if atomic_compare_and_swap(q.deq, pos, pos + 1) == 1 {
+                let v = q.vals[idx]
+                // re-arm the slot for the next lap: seq becomes pos + cap, so
+                // the producer at enqueue_pos == pos + cap finds dif == 0.
+                atomic_set(cell, pos + q.cap)
+                return [1, v]
+            }
+            pos = atomic_get(q.deq)
+        } else if dif < 0 {
+            // stamp == pos (not yet pos+1): producer hasn't published → EMPTY.
+            return [0, 0]
+        } else {
+            // another consumer claimed pos; reload.
+            pos = atomic_get(q.deq)
+        }
+    }
+    return [0, 0]
+}
+
+// lfq_len(q) -> int — approximate occupancy = enqueue_pos - dequeue_pos.
+//
+// MPMC-racy snapshot (head and tail are read non-atomically w.r.t. each other),
+// so the value is an estimate, exactly like crossbeam ArrayQueue::len() which
+// documents the same "may be momentarily inaccurate under concurrency" caveat.
+// Clamped to [0, cap].
+pub fn lfq_len(q: LfQueue) -> int {
+    if q.cap <= 0 { return 0 }
+    let e = atomic_get(q.enq)
+    let d = atomic_get(q.deq)
+    let n = e - d
+    if n < 0 { return 0 }
+    if n > q.cap { return q.cap }
+    return n
+}
+
+// lfq_is_empty(q) -> bool — snapshot emptiness (see lfq_len caveat).
+pub fn lfq_is_empty(q: LfQueue) -> bool {
+    return lfq_len(q) == 0
+}
+
+// lfq_is_full(q) -> bool — snapshot fullness (see lfq_len caveat).
+pub fn lfq_is_full(q: LfQueue) -> bool {
+    return lfq_len(q) >= q.cap
+}
+
+// lfq_capacity(q) -> int — the ring capacity (power-of-two rounded).
+pub fn lfq_capacity(q: LfQueue) -> int {
+    return q.cap
+}

@@ -1,0 +1,171 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  test/game_lockfree_bench.hexa — single-thread oracle + MPMC bench shape for
+//  the lock-free bounded MPMC queue (stdlib/lockfree_queue.hexa, Vyukov scheme).
+//
+//  game-parity lane 2 (lock-free MPMC). RFC state/rfc_real_concurrency_optin.md.
+//
+//  DEFAULT-BUILD-SAFE: this oracle never references the -DHEXA_THREADS-gated C
+//  runtime globals directly — it drives the queue through stdlib/lockfree_queue
+//  whose atomic substrate is the opt-in atomic table. In a default
+//  single-threaded build the queue is a plain FIFO ring, so this file links and
+//  runs in ordinary CI and pins the CORRECTNESS contract:
+//
+//      a single-threaded push/pop sequence on the Vyukov queue produces the
+//      EXACT same FIFO order, full-rejection, and empty-signal as a reference
+//      ring buffer — i.e. parity with the mutex channel's observable semantics.
+//
+//  The CONTENDED throughput bench (several producer + consumer OS threads racing
+//  the same queue, comparing against the r3 mutex channel's ~40M ops/s) is the
+//  follow-on -DHEXA_THREADS measurement and is described — but not run — at the
+//  bottom of this file. perf measure = aiden serial follow-up.
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/lockfree_queue"
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, actual, expected) {
+    if to_string(actual) == to_string(expected) {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected: " + to_string(expected) + ", got: " + to_string(actual))
+        fail_count = fail_count + 1
+    }
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  HEXA lock-free MPMC queue — single-thread oracle")
+println("═══════════════════════════════════════════════════════")
+
+// ── construction ──────────────────────────────────────────────────────────
+// capacity rounds up to the next power of two (Vyukov index mask requirement).
+let q5 = lfq_new(5)
+check("cap rounds 5 -> 8", lfq_capacity(q5), 8)
+let q8 = lfq_new(8)
+check("cap 8 stays 8", lfq_capacity(q8), 8)
+check("fresh queue empty", lfq_is_empty(q8), true)
+check("fresh queue len 0", lfq_len(q8), 0)
+
+// ── basic FIFO order (parity with the mutex channel's observable semantics) ─
+let q = lfq_new(4)   // cap 4
+check("push 10", lfq_push(q, 10), 1)
+check("push 20", lfq_push(q, 20), 1)
+check("push 30", lfq_push(q, 30), 1)
+check("len after 3 push", lfq_len(q), 3)
+
+let a = lfq_pop(q)
+check("pop1 ok", a[0], 1)
+check("pop1 value FIFO==10", a[1], 10)
+let b = lfq_pop(q)
+check("pop2 value FIFO==20", b[1], 20)
+let c = lfq_pop(q)
+check("pop3 value FIFO==30", c[1], 30)
+check("len drained to 0", lfq_len(q), 0)
+
+// ── empty signal — pop on empty returns [0,0], NOT a spurious value ─────────
+let e = lfq_pop(q)
+check("pop empty ok==0", e[0], 0)
+check("pop empty value==0", e[1], 0)
+
+// ── full rejection — cap-4 ring accepts exactly 4, rejects the 5th ──────────
+let qf = lfq_new(4)
+check("fill 1/4", lfq_push(qf, 1), 1)
+check("fill 2/4", lfq_push(qf, 2), 1)
+check("fill 3/4", lfq_push(qf, 3), 1)
+check("fill 4/4", lfq_push(qf, 4), 1)
+check("queue now full", lfq_is_full(qf), true)
+check("push to full rejected", lfq_push(qf, 5), 0)
+// drain one, the rejected push now fits (ring frees a slot)
+let f1 = lfq_pop(qf)
+check("drain head ==1", f1[1], 1)
+check("push after drain ok", lfq_push(qf, 5), 1)
+check("FIFO preserved: next pop ==2", (lfq_pop(qf))[1], 2)
+
+// ── wrap-around — push/pop past capacity laps the ring (Vyukov re-arm) ──────
+// Drive 3 full laps through a cap-4 ring, one item at a time, verifying every
+// value survives the seq[i] = pos+cap re-arming on each dequeue.
+let qw = lfq_new(4)
+let mut k = 0
+let mut wrap_ok = 1
+while k < 12 {
+    let pr = lfq_push(qw, 1000 + k)
+    if pr != 1 { wrap_ok = 0 }
+    let pp = lfq_pop(qw)
+    if pp[0] != 1 { wrap_ok = 0 }
+    if pp[1] != 1000 + k { wrap_ok = 0 }
+    k = k + 1
+}
+check("12-item wrap-around FIFO intact", wrap_ok, 1)
+check("queue empty after wrap", lfq_is_empty(qw), true)
+
+// ── batched fill/drain — fill to capacity, drain all, order preserved ───────
+let qb = lfq_new(8)
+let mut bi = 0
+while bi < 8 {
+    let _ = lfq_push(qb, bi * 7)
+    bi = bi + 1
+}
+check("8th push fills cap-8", lfq_is_full(qb), true)
+check("9th push rejected", lfq_push(qb, 999), 0)
+let mut bj = 0
+let mut drain_ok = 1
+while bj < 8 {
+    let r = lfq_pop(qb)
+    if r[0] != 1 { drain_ok = 0 }
+    if r[1] != bj * 7 { drain_ok = 0 }
+    bj = bj + 1
+}
+check("batched drain FIFO order intact", drain_ok, 1)
+check("drained queue empty", lfq_is_empty(qb), true)
+
+// ── single-thread throughput shape (not a perf claim — a correctness loop) ──
+// 100k push/pop pairs through a cap-1024 ring; total must conserve (every
+// pushed value pops back in order). This is the same loop the contended bench
+// runs across threads; here it pins the serial invariant.
+let qt = lfq_new(1024)
+let mut n = 0
+let mut sum_in = 0
+let mut sum_out = 0
+let mut conserve_ok = 1
+while n < 100000 {
+    let _ = lfq_push(qt, n)
+    sum_in = sum_in + n
+    let r = lfq_pop(qt)
+    if r[0] != 1 { conserve_ok = 0 }
+    sum_out = sum_out + r[1]
+    n = n + 1
+}
+check("100k push/pop conserved (sum_in==sum_out)", sum_in, sum_out)
+check("100k loop never starved", conserve_ok, 1)
+
+println("═══════════════════════════════════════════════════════")
+println("  passed: " + to_string(pass_count) + "  failed: " + to_string(fail_count))
+println("═══════════════════════════════════════════════════════")
+
+// ── CONTENDED MPMC THROUGHPUT BENCH (─DHEXA_THREADS follow-up, NOT run here) ─
+//
+// The lock-free win is invisible single-threaded. The measurement that proves
+// parity-or-beyond vs the r3 mutex channel (~40M ops/s uncontended) is:
+//
+//   build:  -DHEXA_THREADS, P producer threads + C consumer threads (e.g. 4+4)
+//   each producer:  loop M times { while lfq_push(q, tok) == 0 { /* spin */ } }
+//   each consumer:  loop until total-consumed == P*M
+//                       { let r = lfq_pop(q); if r[0]==1 { consumed++ } }
+//   metric:  (P*M) ops / wall_seconds, median of K runs (taskset-pinned),
+//            compared head-to-head against chan_new/chan_send/chan_recv
+//            (stdlib/thread_real) under the SAME P+C contention.
+//
+// Expected shape (reference-match, Vyukov vs mutex): the mutex channel
+// serializes all N threads on one lock, so its contended throughput collapses
+// well below the 40M/s uncontended figure as N grows; the Vyukov queue scales
+// with cores because producers/consumers only CAS-contend on the head/tail
+// counters and never block. crossbeam's own benches show ArrayQueue pulling
+// multiples ahead of a Mutex<VecDeque> at ≥4 threads.
+//
+// This bench is RUN on aiden (build/measure pool, mini = git/gh only), a serial
+// follow-up named in the PR. Correctness here (single-thread oracle) gates the
+// merge; throughput is the named next measurement.
+
+if fail_count > 0 { exit(1) }
