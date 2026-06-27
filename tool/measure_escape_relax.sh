@@ -132,17 +132,6 @@ OFF_TOT=$(grep -o 'total = [0-9-]*' "$WORK/off.out" 2>/dev/null | head -1)
 ON_TOT=$(grep -o 'total = [0-9-]*'  "$WORK/on.out"  2>/dev/null | head -1)
 say "  OFF $OFF_TOT  |  ON $ON_TOT  (must match — value parity)"
 
-# ── G-RUN threaded 4P+4C (escaping buffer across spawn boundary) ────────────
-say "--- G-RUN 4P+4C (real OS threads, escaping packed buffer) ---"
-emit_thr() { # build a -DHEXA_THREADS variant? threads use runtime thread.c already in runtime.a if seeded.
-    :; }
-run_one off_thr "HEXA_THREADS=1"                      ; OFF_THR_RC=$?  # reuse off.bin? no, same bin
-# threads need HEXA_THREADS=1 at RUN (the test gates on it); the binary is the same.
-( cd "$WORK"; env HEXA_THREADS=1 "$WORK/off.bin" ) >"$WORK/off_thr.out" 2>"$WORK/off_thr.err"; OFF_THR_RC=$?
-( cd "$WORK"; env HEXA_THREADS=1 HEXA_PACK_ESCAPING=1 "$WORK/on.bin" ) >"$WORK/on_thr.out" 2>"$WORK/on_thr.err"; ON_THR_RC=$?
-say "  OFF(threads) rc=$OFF_THR_RC:"; tail -6 "$WORK/off_thr.out" | sed 's/^/      /' | tee -a "$RESULT"
-say "  ON(threads)  rc=$ON_THR_RC:";  tail -6 "$WORK/on_thr.out"  | sed 's/^/      /' | tee -a "$RESULT"
-
 # ── G-BYTEEQ: flag-OFF emit == origin/main aprime emit ──────────────────────
 say "--- G-BYTEEQ (flag-OFF .o == origin/main aprime .o; codegen byte-identical) ---"
 git -C "$CANON" worktree add -f --detach "$WORK/base" origin/main 2>>"$WORK/git.log" \
@@ -171,5 +160,5 @@ if [ -d "$BASE" ]; then
     else say "  G-BYTEEQ: base aprime not built — byteeq delegated to CI 3-target"; fi
 else say "  G-BYTEEQ: no base worktree — delegated to CI"; fi
 
-say "=== RESULT branch=$BR  G-RUN(off=$OFF_RC on=$ON_RC thr_off=$OFF_THR_RC thr_on=$ON_THR_RC)  ==="
+say "=== RESULT branch=$BR  G-RUN(off=$OFF_RC on=$ON_RC)  ==="
 say "=== DONE — artifacts under $WORK ==="

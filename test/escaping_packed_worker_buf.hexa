@@ -33,14 +33,23 @@
 //  Run on aiden (mini cannot build):
 //    HEXA_PACK_ESCAPING=1 hexa run test/escaping_packed_worker_buf.hexa
 //    HEXA_PACK_ESCAPING=  hexa run test/escaping_packed_worker_buf.hexa   # control
-//  Threaded 4P+4C (escaping packed buffer across the spawn boundary):
-//    HEXA_RT_ALLOC_NATIVE=0 -DHEXA_THREADS -DHEXA_PACK_ESCAPING build, then
-//    HEXA_PACK_ESCAPING=1 HEXA_THREADS=1 ./a.out
+//  The escape boundary is exercised via FUNCTION CALLS (produce return-escape +
+//  consume param-escape + alias-escape) — the exact #4133 boundary — so it
+//  compiles under raw `aprime --emit` (no thread fn-globals, which aprime's S1
+//  name-resolution does not see). A real-thread 4P+4C variant is a follow-on.
 //  BYTEEQ-NEUTRAL: NEW test file only; the codegen relax is default-OFF.
 // ═══════════════════════════════════════════════════════════════════════════
 
-fn thread_start(f, arg) -> int { return thread_spawn(f, arg) }
-fn thread_wait(tid) { return thread_join(tid) }
+// NOTE: this r1 test exercises the escape boundary via FUNCTION CALLS
+// (produce_buf return-escape + consume_* param-escape) — the exact #4133
+// boundary — WITHOUT OS threads. The `thread_spawn`/`thread_join` runtime
+// fn-globals are registered at runtime by _hexa_init_thread_fn_shims but are
+// NOT visible to aprime's static S1 name resolution (HX2001), so the raw
+// `aprime --emit` path the measure harness uses cannot reference them. The
+// single-thread produce→consume path is the load-bearing escape proof; a
+// real-thread 4P+4C variant is a follow-on once aprime resolves the thread
+// fn-globals (orthogonal to escape-relax soundness — concurrency adds an OS
+// race dimension, not a new escape representation).
 
 let mut pass_count = 0
 let mut fail_count = 0
@@ -137,28 +146,27 @@ check("oracle: 8 escaping workers produced a value", len(oracle), 8)
 //   worker(0) = 79800 + 159600 + 400 = 239800
 check("worker(0) escaping checksum == hand value 239800", oracle[0], 239800)
 
-if env("HEXA_THREADS") == "" {
-    println("")
-    println("NOTE: HEXA_THREADS unset — single-thread escape-relax path measured above.")
-    println("      For 4P+4C: build -DHEXA_THREADS -DHEXA_PACK_ESCAPING then HEXA_THREADS=1.")
-} else {
-    println("  spawning 8 real OS threads on worker (4P+4C escaping buffer) …")
-    let mut h = []
-    let mut s = 0
-    while s < len(bases) { h = h + [thread_start(worker, bases[s])]; s = s + 1 }
-    let mut got = 0
-    let mut wmatch = 1
-    let mut j = 0
-    while j < len(h) {
-        let r = to_int(thread_wait(h[j]))
-        got = got + r
-        if r != to_int(oracle[j]) { wmatch = 0 }
-        j = j + 1
-    }
-    check("4P+4C escaping: 8 workers joined crash-free", len(h), 8)
-    check("4P+4C escaping: per-worker checksums match oracle", wmatch, 1)
-    check("4P+4C escaping: order-insensitive total == oracle", got, total)
+// ── ALIAS-ESCAPE stress: ONE buffer aliased + passed to MULTIPLE consumers ──
+// `let ys = buf` copies the descriptor (alias) — the #4133 straddle shape. Both
+// the handle AND the alias escape into consumer params. Under HEXA_PACK_ESCAPING
+// they are uniformly esc-tagged → both poly-read soundly (no boxed/packed straddle).
+fn alias_escape(base: i64) -> i64 {
+    let buf = produce_buf(base)
+    let ys = buf                     // alias (descriptor copy) — both escape
+    let a = consume_sum(buf)         // read via handle (param)
+    let b = consume_sum(ys)          // read via alias  (param) — must match a
+    return a + b
 }
+let mut amatch = 1
+let mut akk = 0
+while akk < len(bases) {
+    let av = alias_escape(bases[akk])
+    // a and b read the SAME buffer → av == 2 * consume_sum(buf). buf=[base..base+399]
+    let single = consume_sum(produce_buf(bases[akk]))
+    if av != single * 2 { amatch = 0 }
+    akk = akk + 1
+}
+check("alias-escape: handle and alias read identical (no straddle)", amatch, 1)
 
 println("")
 println("═══════════════════════════════════════════════════════")
