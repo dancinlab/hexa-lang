@@ -50,7 +50,14 @@
 //  element-pack lattice is already gated default-OFF (HEXA_PACK_ARRAY unset).
 // ═══════════════════════════════════════════════════════════════════════════
 
-use "stdlib/thread_real"
+// NOTE: we deliberately do NOT `use "stdlib/thread_real"` — that module's
+// chan_* wrappers transpile references to the `thread_channel_*` runtime
+// fn-globals which the installed runtime.h does not forward-declare (a stale
+// prebuilt-header gap, NOT a wall of this probe). We call the two thread
+// runtime fn-globals (thread_spawn / thread_join) directly; both ARE registered
+// by _hexa_init_thread_fn_shims and used by the lane-a test the same way.
+fn thread_start(fn, arg) -> int { return thread_spawn(fn, arg) }
+fn thread_wait(tid) { return thread_join(tid) }
 
 let mut pass_count = 0
 let mut fail_count = 0
