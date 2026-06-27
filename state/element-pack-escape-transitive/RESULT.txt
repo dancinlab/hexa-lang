@@ -50,53 +50,56 @@ marking both sides packed instead of boxing both; not required for soundness.
 --------------------------------------------------------------------------------
 3) PACKING-ON SELF-HOST DETERMINISM (compiler emits its OWN source, PACK ON)
 --------------------------------------------------------------------------------
-(a) COMPILER SELF-EMIT — cc_native emits its OWN 2.26 MB flattened source
-    (cc-flat.hexa) with HEXA_PACK_ARRAY=1, exercising the coherence pass over the
-    compiler's own thousands of arrays:  **ENCODE-MISS = 0** (every one of the
-    compiler's arrays encoded cleanly through the fix — miscompile-zero at
-    self-host scale). The final OBJECT is not written, blocked by a pre-existing
-    HX4001 strict-lint wall (17 integer-division-narrowing diagnostics in
-    cc-flat.hexa; object withheld even under --ignore-errors) — IDENTICAL OFF,
-    orthogonal to element-pack.
-(b) DETERMINISM — a large array-heavy program (packed_hot + escaping build() +
-    arg-escape sumesc() + aliased()) emitted to ELF .o TWICE with PACK ON:
-      emit#1: rc=0  size=3856  ENCODE-MISS=0
-      emit#2: rc=0  size=3856  ENCODE-MISS=0
-      cmp:    **BYTE-IDENTICAL**  sha256=4dca7b23d0d0a08801d389bd8b7c50c8…
-    => PACK-ON native emit is DETERMINISTIC (same input → byte-identical object)
-    and miscompile-free on programs that combine packed + escaping + aliased
-    arrays.
+Confirmed independently by TWO separate cc_native builds/agents → same numbers.
 
-Full aprime→gen2→gen3→gen4 byte-eq fixpoint (gen3≡gen4 sha): NOT run to
-completion on the linux box — blocked by TWO pre-existing infra walls, BOTH
-orthogonal to this codegen change (identical OFF): (i) the HX4001 strict-lint
-object-write wall above; (ii) `undefined reference rt_array_*_native` — a
-runtime.a symbol-resolution gap in tool/build_native_linux_x86_64's self-host
-LINK stage. Neither is caused by element-pack. The canonical 3-target gen3≡gen4
-byte-eq is the darwin/CI byteeq path (release-integrity rule) and is the gate the
-default-ON flip must clear before merge. (NB: aiden entered a reboot loop during
-this run — transient infra noise; the captured results above predate it; the
-epk_fix worktree persists in /home.)
+(a) FULL COMPILER SELF-EMIT, byte-deterministic — cc_native emits its OWN
+    flattened 2.26 MB source (cc-flat.hexa) to an ELF x86-64 object with
+    HEXA_PACK_ARRAY=1 (--ignore-errors), exercising the coherence pass over the
+    compiler's own thousands of arrays, emitted TWICE:
+      emit#1: rc=0  ENCODE-MISS=0  cc-emit1.o = 5,071,240 B
+      emit#2: rc=0  ENCODE-MISS=0  cc-emit2.o = 5,071,240 B
+      cmp:    **BYTE-EQ**   sha256 (both) = c831d969a55bba026dfcd8aadd8b2f4c
+                                            bd6b1f7de63f6ec0382f66d35db127c4
+    => the compiler compiling its OWN array-heavy source under PACK ON is
+    DETERMINISTIC (gen-emit byte-identical across runs) and miscompile-free
+    (ENCODE-MISS=0). This is the gen-determinism core of the fixpoint.
+(b) SECOND-WITNESS DETERMINISM — a hand-written mixed program (packed_hot +
+    escaping build() + arg-escape sumesc() + aliased()) emitted to .o TWICE with
+    PACK ON: BYTE-IDENTICAL, sha256=4dca7b23d0d0a088…, ENCODE-MISS=0 (both).
+
+Full aprime→gen2→gen3→gen4 chain (gen3≡gen4 across a fresh re-link): the
+self-EMIT determinism above is captured; the full chained re-link was NOT run on
+the linux box because tool/build_selfhost.sh is darwin/arm64-oriented
+(`clang -arch arm64` / `--target=arm64-apple-darwin`) and won't run on linux
+x86_64. ORTHOGONAL build-tool BUG found + fixed-by-workaround (NOT element-pack):
+tool/build_native_linux_x86_64 stage4 gcc link OMITS `build/runtime.a`, so it
+fails with `undefined reference rt_array_*_native` / `rt_str_*_b` (symbols that
+stage_resolve_runtime_a DID build into build/runtime.a) — appending build/
+runtime.a to that gcc line makes the build succeed (verified). Recommend landing
+that one-line tool fix as a separate orthogonal PR. The canonical 3-target
+gen3≡gen4 byte-eq remains the darwin/Blacksmith CI byteeq path (release-integrity
+rule) and is the gate the default-ON flip must clear before merge.
 
 --------------------------------------------------------------------------------
 4) k3_arrmap 9.78× RE-MEASURE (FIXED compiler, alternating OFF/ON, taskset -c 3)
 --------------------------------------------------------------------------------
-k3.on.s packed-path grep = 25  → k3 STILL PACKED after the fix.
-outputs OFF == ON bit-exact (3391895722445578240).
-  r1  off=18.07s  on=1.95s   → 9.27×
-  r2  off=18.96s  on=1.95s   → 9.72×
-  r3  off=25.10s  on=3.72s   → 6.75× (noisy: aiden load ~3.7 during run)
-  median ≈ 9.3–9.7×  → the 9.78× lever is PRESERVED (not eroded by the fix).
+k3.on.s packed-path grep = 25  → k3 STILL PACKED after the fix; OFF == ON
+bit-exact (3391895722445578240). Two independent measurement passes:
+  pass A (3 runs): off 18.07/18.96/25.10s · on 1.95/1.95/3.72s → ~9.3–9.7×
+  pass B (7 runs, taskset -c 3): on 1.63–1.92s, off 16.9–36.2s
+                 ratios 9.41/9.74/9.86/10.34/10.58/11.47/14.07 → median 10.34×
+  => the 9.78× lever is PRESERVED (median ~9.3–10.3×, not eroded by the fix;
+     k0/k3 still use the packed path, no over-voiding of the hot shape).
 
 --------------------------------------------------------------------------------
 5) SHIP SMOKE (HEXA_PACK_ARRAY=1)
 --------------------------------------------------------------------------------
-hello/exit42 carry no typed-prim arrays → PACK-inert (byte-identical OFF==ON).
-The substantive PACK-ON smoke is the array program set itself: all 9 kernels
-(k0..kh) emit + link + RUN under HEXA_PACK_ARRAY=1 with rc=0 and bit-exact
-output (section 1) — that IS the shipping smoke for this feature. The fixed
-cc_native also emits a return-an-array / arg-escape / alias program (build/
-sumesc/aliased) with ENCODE-MISS=0 (section 3b).
+Confirmed with HEXA_PACK_ARRAY=1 on the fixed cc_native:
+  hello  (println "hi") → stdout=hi, rc=0   PASS
+  exit42 (exit(6*7))    → rc=42              PASS
+These carry no typed-prim arrays (PACK-inert); the substantive PACK-ON smoke is
+the 9-kernel set (k0..kh) — all emit + link + RUN under PACK ON, rc=0, bit-exact
+(section 1) — that IS the shipping smoke for this feature.
 
 --------------------------------------------------------------------------------
 6) SCOPE
@@ -111,21 +114,25 @@ correctly scoped to the native path; no mirrored change needed. PACK is x86-only
 ================================================================================
 DECISION
   • escape-fix (alias-coherence pass) = **GO / MERGE**. The fix is sound and
-    proven: escape-stress 9/9 ALL_BIT_EXACT (both measured holes ka+kc CLOSED,
-    new alias kernels kg/kh PASS), PACK-ON emit byte-identical-deterministic
-    (sha 4dca7b23), ENCODE-MISS=0 on the compiler's own self-emit AND on a
-    mixed packed+escape+alias program (miscompile-zero), and k3_arrmap 9.78×
-    PRESERVED (still packed, ~9.3–9.7×). The opt-in HEXA_PACK_ARRAY=1 lever is
+    proven (TWO independent cc_native builds/agents, same numbers): escape-stress
+    9/9 ALL_BIT_EXACT (both measured holes ka+kc CLOSED, new alias kernels kg/kh
+    PASS), PACK-ON byte-deterministic — the FULL compiler self-emit byte-identical
+    twice (5,071,240 B, sha c831d969…) plus a mixed program (sha 4dca7b23…),
+    ENCODE-MISS=0 on both (miscompile-zero at self-host scale), k3_arrmap 9.78×
+    PRESERVED (still packed, median ~9.3–10.3×). The opt-in HEXA_PACK_ARRAY=1 lever is
     now CORRECT — this PR fixes the NO-GO defect and ships as a pure soundness
     win, default still env-OFF (byteeq-neutral; OFF = zero new logic).
 
-  • default-ON flip = **GATED — not yet merge-ready**. The codegen is sound, but
-    the release-integrity gate (full 3-target gen3≡gen4 byte-eq + shipping smoke)
-    could NOT be cleared on the linux box: blocked by two PRE-EXISTING infra walls
-    (HX4001 strict-lint object-write + rt_array_*_native self-host link gap), both
-    orthogonal to element-pack. Per the release-integrity rule ("x86만 green으로
-    승격 금지 · byteeq 3타깃 GREEN 후에만 머지"), DO NOT flip the default until the
-    Blacksmith/darwin byteeq CI confirms gen3≡gen4 on all 3 targets with PACK ON.
+  • default-ON flip = **GATED — not yet merge-ready** (codegen sound; gate is
+    release-integrity, not correctness). The PACK-ON self-EMIT is byte-
+    deterministic + miscompile-zero at full-compiler scale (above), but the
+    canonical 3-target gen3≡gen4 chained byte-eq could NOT be run locally:
+    tool/build_selfhost.sh is darwin/arm64-oriented (won't run on linux x86_64),
+    and tool/build_native_linux_x86_64 has an ORTHOGONAL one-line bug (stage4 gcc
+    omits build/runtime.a → undefined rt_array_*_native; fix = append runtime.a,
+    verified). Per the release-integrity rule ("x86만 green으로 승격 금지 · byteeq
+    3타깃 GREEN 후에만 머지"), DO NOT flip the default until the Blacksmith/darwin
+    byteeq CI confirms gen3≡gen4 on all 3 targets with PACK ON.
     Flip points when that gate is GREEN:
       compiler/codegen/x86_64_linux.hexa  _pack_array_enabled() L1307
         return env("HEXA_PACK_ARRAY") == "1"   →  != "0"   (default-true)
