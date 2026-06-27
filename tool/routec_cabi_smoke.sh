@@ -98,7 +98,7 @@ cat > "$TMP/harness.c" <<'CEOF'
 #include <stdio.h>
 #include <unistd.h>   /* libc getpid() — the reference oracle for hxlcl_getpid */
 #include <fcntl.h>    /* open() / O_RDONLY / F_GETFL — close/fcntl behavior tests */
-#include <sys/mman.h> /* PROT_*/MAP_* / MAP_FAILED — for the mmap composition test */
+#include <sys/mman.h> /* PROT_/MAP_ flags / MAP_FAILED — for the mmap composition test */
 
 /* Route-C-emitted symbols under test (raw C-ABI prototypes). */
 extern size_t hxlcl_strlen(const char *s);

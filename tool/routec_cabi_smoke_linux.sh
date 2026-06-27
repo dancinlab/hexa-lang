@@ -77,10 +77,11 @@ cat > "$TMP/harness.c" <<'CEOF'
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>     /* strerror — for the mmap diagnostic line */
 #include <unistd.h>
 #include <sys/stat.h>   /* struct stat — sized buffer for hxlcl_stat */
 #include <sys/wait.h>   /* waitpid options — for hxlcl_waitpid */
-#include <sys/mman.h>   /* PROT_*/MAP_* / MAP_FAILED — for hxlcl_mmap */
+#include <sys/mman.h>   /* PROT_/MAP_ flags / MAP_FAILED — for hxlcl_mmap */
 
 /* Route-C-emitted symbols under test (raw C-ABI prototypes). */
 extern int  hxlcl_close(int fd);
@@ -217,20 +218,31 @@ int main(void) {
     CK(ffd >= 0 && hxlcl_fcntl(ffd, F_GETFL, 0) >= 0, "fcntl(valid, F_GETFL) >= 0 (success)");
     if (ffd >= 0) hxlcl_close(ffd);
 
-    /* mmap — the ROOT-CAUSE assert. A bad request (an unsupported flag combo:
-     * MAP_PRIVATE|MAP_SHARED is EINVAL) returns -errno at the raw layer, which
-     * our body detects as `r < 0` and converts to -1 + errno (EINVAL) — NOT a
-     * MAP_FAILED-sentinel check. (long)MAP_FAILED == -1, so the C caller reading
-     * the return as a pointer sees MAP_FAILED, matching libc semantics.) Then a
-     * valid anonymous page → a POSITIVE address (not MAP_FAILED), proving the
-     * success path returns the raw address word, not -1. */
+    /* mmap — the ROOT-CAUSE assert. The error request uses length == 0, the
+     * man-page-verbatim, fd-INDEPENDENT EINVAL trigger (mmap(2): "EINVAL ...
+     * length was 0"). The earlier MAP_PRIVATE|MAP_SHARED combo was a HARNESS
+     * BUG: it also passed fd=-1 WITHOUT MAP_ANONYMOUS, so the kernel hit the
+     * EBADF fd-check ("fd is not a valid file descriptor (and MAP_ANONYMOUS was
+     * not set)") and returned EBADF, NOT EINVAL — the substrate was correct, the
+     * assert expected the wrong errno. length==0 is unconditional EINVAL with no
+     * fd dependency, so it isolates the errno-store value-exactness cleanly.
+     *
+     * This assert proves the 6-arg arg-passing AND the errno store: the raw
+     * syscall returns -EINVAL, our body's `__hx_payload_lt(r,0)` sees it negative
+     * → stores -r (=EINVAL) into *errno and returns -1. (long)MAP_FAILED == -1,
+     * so the C caller reading the return as a pointer sees MAP_FAILED. The valid
+     * anon-page assert below independently confirms args 4/5/6 (flags/fd/off)
+     * reach the kernel — a botched 6-arg lowering would fail the anon mmap. */
     long pg = sysconf(_SC_PAGESIZE);
     if (pg <= 0) pg = 4096;
     errno = 0;
-    long bad = hxlcl_mmap(0, (unsigned long)pg, PROT_READ,
-                          MAP_PRIVATE | MAP_SHARED, -1, 0);   /* EINVAL combo */
-    CK(bad == -1, "mmap(bad flags) == -1 (raw -errno → -1, == (long)MAP_FAILED)");
-    CK(errno == EINVAL, "mmap(bad flags) sets errno == EINVAL (value-exact)");
+    long bad = hxlcl_mmap(0, 0 /* length==0 → EINVAL */, PROT_READ,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    /* diagnostic (captured in the CI log regardless of pass/fail): the exact
+     * return word + errno, so any future arg-passing regression is legible. */
+    printf("  [diag] mmap(len=0) → ret=%ld errno=%d (%s)\n", bad, errno, strerror(errno));
+    CK(bad == -1, "mmap(len=0) == -1 (raw -errno → -1, == (long)MAP_FAILED)");
+    CK(errno == EINVAL, "mmap(len=0) sets errno == EINVAL (value-exact)");
     errno = 0;
     long ok = hxlcl_mmap(0, (unsigned long)pg, PROT_READ | PROT_WRITE,
                          MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
