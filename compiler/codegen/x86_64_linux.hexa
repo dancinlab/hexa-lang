@@ -827,6 +827,50 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
             }
             pb2 = pb2 + 1
         }
+        // ── alias-coherence fixpoint (SOUNDNESS — packed/boxed must not alias) ─
+        // INVARIANT: a packed array and a BOXED alias of the SAME underlying
+        // buffer must never coexist. A `let A = B` (B a local) copies B's
+        // HexaVal descriptor into A → A and B share one buffer. If the two sides
+        // disagree on packed-ness, the boxed side walks the raw-packed
+        // (stride-8/untagged) buffer with the boxed (stride-16/tagged) layout —
+        // a MEASURED miscompile (ka arg-escape 4096→4095 off-by-one when an
+        // escaping handle X is boxed but its storage T stays packed; kc alias
+        // 2126→tag-corruption when `let ys=xs` leaves xs packed but the boxed
+        // alias ys reads it). The per-local escape scan above clears T and X
+        // INDEPENDENTLY and counts `op=="let"` arg-0 as non-escaping, so it can
+        // straddle. Fix = make the V8 PACKED→HOLEY fallback TRANSITIVE over the
+        // alias set: iterate to fixpoint and the moment any `let`-copy straddles
+        // packed/boxed, void BOTH ends (which also propagates an escape void
+        // from a handle X back to its storage T along the canonical `let X=T`,
+        // and along T→X→Y chains). A non-aliased packed array (k3_arrmap: only
+        // push/index/index_set + its sole both-packed `let X=T`) never straddles
+        // → the 9.78× fast path is preserved.
+        let mut ac_changed = true
+        while ac_changed {
+            ac_changed = false
+            let mut acb = 0
+            while acb < len(mf.blocks) {
+                let acblk = mf.blocks[acb]
+                let mut acs = 0
+                while acs < len(acblk.stmts) {
+                    let acst = acblk.stmts[acs]
+                    if acst.kind == _STMT_ASSIGN && acst.op == "let" && len(acst.args) >= 1 &&
+                       acst.args[0].kind == "local" {
+                        let ac_a = acst.dst.id
+                        let ac_b = acst.args[0].local_id
+                        if ac_a >= 0 && ac_a <= pk_maxid && ac_b >= 0 && ac_b <= pk_maxid {
+                            if rm_packed_ok[ac_a] != rm_packed_ok[ac_b] {
+                                rm_packed_ok[ac_a] = 0
+                                rm_packed_ok[ac_b] = 0
+                                ac_changed = true
+                            }
+                        }
+                    }
+                    acs = acs + 1
+                }
+                acb = acb + 1
+            }
+        }
     }
 
     let map = X86RegMap { ids: map_ids, regs: map_regs, slots: map_slots, tag_base: tag_base, id2idx: rm_id2idx, local_type: rm_local_type, local_const_ok: rm_const_ok, local_const_val: rm_const_val, local_packed_ok: rm_packed_ok }
