@@ -1344,7 +1344,16 @@ pub fn hxlcl_time(t: HexaVal) -> int {
             return r
         }
         // arm64-linux: gettimeofday(&tv, NULL); tv_sec at offset 0.
-        let buf = hxlcl_malloc(16)             // scratch timeval (heap — see header)
+        // hxlcl_malloc's declared param is `HexaVal` (the C-ABI lowering is at the
+        // call boundary, but the TYPE-CHECK is on the signature), so a bare i64 `16`
+        // mismatches. Box it via __hx_payload_add(0,16) → HexaVal{TAG_INT,16} — the
+        // exact close/strtoll `__hx_payload_sub(0, x)` shape (the __hx_payload_*
+        // intrinsics accept i64 literals and return HexaVal, unlike a declared
+        // extern fn). strdup/calloc pass HexaVal the same way (cap=__hx_payload_add,
+        // total=__hx_payload_mul). The malloc result is `int` (raw ptr word), fed
+        // straight to the raw-ptr intrinsics like strdup/calloc do.
+        let szl = __hx_payload_add(0, 16)      // HexaVal-box the scratch size
+        let buf = hxlcl_malloc(szl)            // scratch timeval (heap — see header)
         __hx_syscall6(169, buf, 0, 0, 0, 0, 0) // gettimeofday(&tv, NULL)
         let sec = __hx_ptr_load64(buf, 0)      // tv.tv_sec
         if __hx_payload_ne(pt, 0) {
@@ -1352,8 +1361,10 @@ pub fn hxlcl_time(t: HexaVal) -> int {
         }
         return sec
     }
-    // darwin: gettimeofday(&tv, NULL); tv_sec at offset 0.
-    let buf = hxlcl_malloc(16)
+    // darwin: gettimeofday(&tv, NULL); tv_sec at offset 0. Same HexaVal-box of the
+    // literal size as the arm64-linux leg above (hxlcl_malloc expects HexaVal).
+    let szd = __hx_payload_add(0, 16)
+    let buf = hxlcl_malloc(szd)
     __hx_syscall6(116, buf, 0, 0, 0, 0, 0)
     let sec = __hx_ptr_load64(buf, 0)
     if __hx_payload_ne(pt, 0) {
@@ -1394,7 +1405,8 @@ pub fn hxlcl_poll(fds: HexaVal, nfds: HexaVal, timeout: HexaVal) -> int {
             if __hx_payload_ne(neg, 0) {
                 r = __hx_syscall6(73, fds, nfds, 0, 0, 8, 0)     // timeout<0 → tmo=NULL (infinite)
             } else {
-                let ts = hxlcl_malloc(16)                        // scratch timespec (heap — see header)
+                let szp = __hx_payload_add(0, 16)                // HexaVal-box the scratch size (malloc expects HexaVal)
+                let ts = hxlcl_malloc(szp)                       // scratch timespec (heap — see header)
                 let sec = __hx_payload_div(timeout, 1000)        // ms / 1000  → tv_sec
                 let rem = __hx_payload_mod(timeout, 1000)        // ms % 1000
                 let nsec = __hx_payload_mul(rem, 1000000)        // → tv_nsec (nanoseconds)
