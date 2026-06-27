@@ -1464,9 +1464,15 @@ fn _arru_debug_enabled() -> bool {
 // hexa_arr_i64_new/push/box, used today only by the gen2 C-transpile backend).
 //
 // Soundness firewall (mirrors r2c _unbox_array exactly, plus an ESCAPE proof):
-//   - env-opt-in, default-OFF. Unset → `_pack_array_enabled()` false → the
-//     local_packed_ok lattice stays `[]`, every packed branch is skipped, and
-//     the emit is byte-identical to origin (OFF-byteeq Gate-1).
+//   - DEFAULT-ON (native-canonical-default polarity), opt-OUT via
+//     `HEXA_PACK_ARRAY=0`. The 9.78× k3_arrmap fused lever (#4114) ships as the
+//     production default now that escape-soundness is closed (#4121 transitive
+//     alias-coherence fixpoint → escape-stress 9/9 OFF==ON bit-exact + PACK-ON
+//     full-compiler self-emit byte-identical determinism). `HEXA_PACK_ARRAY=0`
+//     restores the boxed 16B-stride r2c path (the legacy constraint), e.g. for a
+//     byte-eq diff against the pre-flip baseline. When OFF the local_packed_ok
+//     lattice stays `[]`, every packed branch is skipped, and the emit is
+//     byte-identical to the pre-flip origin.
 //   - the container must be a `local` PROVEN packed by the whole-function escape
 //     scan (built in the regmap builder): created by an `array_lit`, and used
 //     ONLY as the container of index / index_set / push / len. ANY other use
@@ -1475,7 +1481,9 @@ fn _arru_debug_enabled() -> bool {
 //   - currently i64/i32 element kinds only (type_id 101/102 → HexaArrI64). f64/
 //     f32 (103/104 → HexaArrF64) is a follow-on (needs the xmm push ABI).
 fn _pack_array_enabled() -> bool {
-    return env("HEXA_PACK_ARRAY") == "1"
+    // DEFAULT-ON: native-canonical-default polarity. Opt-OUT via HEXA_PACK_ARRAY=0
+    // (the legacy boxed 16B-stride path) — any other value (unset / "1") packs.
+    return env("HEXA_PACK_ARRAY") != "0"
 }
 
 // ── FLEET lane A2: escape-relax gate (HEXA_PACK_ESCAPING) ────────────────────

@@ -215,15 +215,14 @@ fn _arru_native_enabled() -> bool {
     // element-pack (HEXA_PACK_ARRAY) ALSO needs the typed-prim element-kind
     // (type_id 101..104) stamped on the container Local — it is the V8
     // PACKED_SMI element-kind signal the native backend reads to choose the
-    // raw 8B packed storage path. Default-OFF (both env unset) → byte-identical.
-    // FLEET lane A2 (HEXA_PACK_ESCAPING) — escape-relax ALSO needs the typed-prim
-    // element-kind (101..104) stamped on the container Local so the codegen
-    // esc-mint lattice + poly-route can identify a typed-prim array. Same firewall:
-    // unset → byte-identical (the stamping pass is skipped, every Local type_id
-    // matches origin). The codegen poly readers handle BOTH packed-esc & boxed,
-    // so stamping the type does not by itself change boxed emit when PACK_ESCAPING
-    // is set without the codegen relax — but the two ship together (one flag).
-    return env("HEXA_UNBOX_ARRAY_NATIVE") == "1" || env("HEXA_PACK_ARRAY") == "1" ||
+    // raw 8B packed storage path. element-pack is now DEFAULT-ON (opt-OUT via
+    // HEXA_PACK_ARRAY=0) — the stamping pass runs by default so the codegen
+    // _pack_array_enabled() consumer (also default-ON) sees the element-kind. The
+    // stamp alone is emit-neutral; the packing decision lives in the codegen gate.
+    // FLEET lane A2 (HEXA_PACK_ESCAPING, still opt-in) — escape-relax ALSO needs
+    // the typed-prim element-kind (101..104) stamped on the container Local so the
+    // codegen esc-mint lattice + poly-route can identify a typed-prim array.
+    return env("HEXA_UNBOX_ARRAY_NATIVE") == "1" || env("HEXA_PACK_ARRAY") != "0" ||
            env("HEXA_PACK_ESCAPING") == "1"
 }
 
@@ -271,10 +270,11 @@ fn _arru_array_type_id_from_text(type_text: string) -> i64 {
 // (k3 2.7×) and the r5 HEXA_UNBOX_NATIVE path stay byte-identical to origin —
 // only the regressed PACK lane (standalone 1.147) changes. Default-OFF.
 fn _arrpk_fuse_enabled() -> bool {
-    // FLEET lane A2 — escape-relax needs the same element-type THREADING (index-dst
-    // / let-copy / int-binop-result stamps) so a typed-prim array handle reaches
-    // the codegen esc lattice with type_id 101..104 (not 0). Unset → byte-identical.
-    return env("HEXA_PACK_ARRAY") == "1" || env("HEXA_PACK_ESCAPING") == "1"
+    // DEFAULT-ON with HEXA_PACK_ARRAY (opt-OUT via =0); escape-relax (FLEET lane A2)
+    // needs the same element-type THREADING (index-dst / let-copy / int-binop-result
+    // stamps) so a typed-prim array handle reaches the codegen esc lattice with
+    // type_id 101..104 (not 0). HEXA_PACK_ESCAPING stays opt-in.
+    return env("HEXA_PACK_ARRAY") != "0" || env("HEXA_PACK_ESCAPING") == "1"
 }
 
 // element-pack FUSE — inverse of `_arru_array_type_id_from_text`'s container map:
