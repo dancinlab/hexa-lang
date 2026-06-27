@@ -50,6 +50,33 @@ fn pi_scaled(dd) -> array {
     bi_sub(bi_mul(bi_from(16), a5), bi_mul(bi_from(4), a239))
 }
 
+// Riemann zeta at even integers via closed-form  ζ(2n) = |B_2n|·(2π)^2n / (2·(2n)!).
+// We use the elementary rational-of-π forms (Euler):  ζ(2)=π²/6, ζ(4)=π⁴/90, ζ(6)=π⁶/945.
+// Each returns floor(ζ(2n)·10^D). Compute π at extra guard precision (dd) then power & scale:
+//   π_s = floor(π·10^dd) ; π² has factor 10^(2·dd), etc. Divide by the rational denominator
+//   (small i64) then decimal-shift back to dd digits. @cite(L[MATH-basel]) for ζ(2).
+// @cite(L[MATH-basel])
+fn zeta2_scaled(dd) -> array {
+    let ps = pi_scaled(dd)
+    let p2 = bi_mul(ps, ps)            // π²·10^(2dd)
+    let num = bi_div_small(p2, 6)      // ζ(2)·10^(2dd)
+    bi_shift10_down(num, dd)           // ζ(2)·10^dd
+}
+fn zeta4_scaled(dd) -> array {
+    let ps = pi_scaled(dd)
+    let p2 = bi_mul(ps, ps)
+    let p4 = bi_mul(p2, p2)            // π⁴·10^(4dd)
+    let num = bi_div_small(p4, 90)     // ζ(4)·10^(4dd)
+    bi_shift10_down(num, 3 * dd)       // ζ(4)·10^dd
+}
+fn zeta6_scaled(dd) -> array {
+    let ps = pi_scaled(dd)
+    let p2 = bi_mul(ps, ps)
+    let p4 = bi_mul(p2, p2)
+    let p6 = bi_mul(p4, p2)            // π⁶·10^(6dd)
+    let num = bi_div_small(p6, 945)    // ζ(6)·10^(6dd)
+    bi_shift10_down(num, 5 * dd)       // ζ(6)·10^dd
+}
 // Apéry's constant ζ(3) to D digits — no closed π form, so the accelerated Apéry series:
 //   ζ(3) = (5/2) Σ_{n≥1} (-1)^{n-1} / (n³·C(2n,n))   (van der Poorten 1979, geometric ~0.6 dig/term).
 // Term ratio is ALL small integers — no full BigInt division needed:
@@ -96,6 +123,14 @@ fn main() {
     let pi40 = pis.substring(0, 41)
     fails = fails + _gate("pi 40-digit (Machin)", pi40, "31415926535897932384626433832795028841971")
 
+    // ζ(2n) via π-power (Euler closed form) — 앞 20 소수자리 reference-match (dd=40 guard).
+    //   ζ(2)=1.64493406684822643647... ζ(4)=1.08232323371113819151... ζ(6)=1.01734306198444913971...
+    let z2 = bi_to_string(zeta2_scaled(40)).substring(0, 21)
+    fails = fails + _gate("zeta(2) = pi^2/6", z2, "164493406684822643647")
+    let z4 = bi_to_string(zeta4_scaled(40)).substring(0, 21)
+    fails = fails + _gate("zeta(4) = pi^4/90", z4, "108232323371113819151")
+    let z6 = bi_to_string(zeta6_scaled(40)).substring(0, 21)
+    fails = fails + _gate("zeta(6) = pi^6/945", z6, "101734306198444913971")
     // ζ(3) (Apéry) — 앞 20 소수자리 reference-match (dd=44 guard).
     //   ζ(3) = 1.20205690315959428539973816151...
     let z3 = bi_to_string(zeta3_scaled(44)).substring(0, 21)
