@@ -57,7 +57,10 @@
 # ── Gates (all patched-only; OOM-safe single build) ─────────────────────────
 #   Gate1  SKIP  — OFF-byteeq → delegated to CI 3-target (needs baseline build).
 #   Gate2  lever — boxed-op `call hexa_*` counts + extra regex, OFF vs ON asm.
-#   Gate3  ratio — gcc -O2 link + median-5 `taskset -c 3` user+sys CPU, ON/OFF.
+#   Gate3  ratio — gcc -O2 link + ISOLATED ALTERNATING median-7 wall `taskset -c 3`,
+#                  off,on per round (root-cause ⓓ: block-sequential timing lets
+#                  transient contention skew the ratio — fused k3 read 1.000 in-harness
+#                  vs 0.103 isolated; alternation shares transient state equally).
 #   Gate4  parity— program output OFF == ON.
 #   Gate5  smoke — opt-in (--smoke).
 #
@@ -235,26 +238,41 @@ if [ -f "$WORK/off.s" ] && [ -f "$WORK/on.s" ]; then
     fi
 fi
 
-# ── Gate3+4 — runtime ratio + parity (gcc -O2 link, median-5 taskset -c 3) ──
-say "--- Gate3+4 runtime ratio + parity ---"
-link_run() { # $1=tag
+# ── Gate3+4 — runtime ratio + parity (gcc -O2 link, ISOLATED ALTERNATING median-7) ─
+# root-cause ⓓ (back-to-back contamination): timing OFF fully then ON fully in two
+# sequential BLOCKS lets transient core contention / warm-cache / thermal-turbo skew
+# the ratio. Observed 2026-06-27: the element-pack FUSED k3 kernel reported ratio=1.000
+# in-harness (OFF=ON≈1.8s) while the TRUE isolated ratio was 0.103 (9.7× faster) — a
+# back-to-back artifact that masked a real win and nearly produced a false-negative
+# (3rd recurrence; cf r2c in-harness 0.998 vs isolated 2.7×). FIX = ALTERNATE off,on
+# per round in separate isolated processes with a cooldown, so any transient system
+# state is shared equally between the two → the RATIO stays valid even if absolutes
+# drift. Wall-clock (%e) is the metric that gave the clean isolated number.
+say "--- Gate3+4 runtime ratio + parity (isolated alternating median-7) ---"
+build_bin() { # $1=tag → links $WORK/$tag.bin, echoes the parity output, rc=1 on fail
     local tag="$1" o="$WORK/$tag.o" b="$WORK/$tag.bin"
-    [ -f "$o" ] || { say "  $tag: no .o (emit failed)"; return; }
-    [ -n "$RT" ] || { say "  $tag: no runtime.a → cannot link"; return; }
-    gcc -O2 "$o" "$RT" -lm -o "$b" 2>"$b.ld.log" || { say "  $tag: gcc link FAIL"; tail -6 "$b.ld.log" | sed 's/^/      /' | tee -a "$RESULT"; return; }
-    local out vals=() t med; out=$("$b" 2>/dev/null)
-    for r in 1 2 3 4 5; do
-        t=$( { /usr/bin/time -v taskset -c 3 "$b" >/dev/null; } 2>&1 | awk '/User time|System time/{s+=$NF} END{print s+0}')
-        vals+=("$t")
+    [ -f "$o" ] || { say "  $tag: no .o (emit failed)"; return 1; }
+    [ -n "$RT" ] || { say "  $tag: no runtime.a → cannot link"; return 1; }
+    gcc -O2 "$o" "$RT" -lm -o "$b" 2>"$b.ld.log" || { say "  $tag: gcc link FAIL"; tail -6 "$b.ld.log" | sed 's/^/      /' | tee -a "$RESULT"; return 1; }
+    "$b" 2>/dev/null; }                                       # parity output → stdout
+time_one() { { /usr/bin/time -f '%e' taskset -c 3 "$1" >/dev/null; } 2>&1 | tail -1; } # wall s
+OUT_off=$(build_bin off); ok_off=$?
+OUT_on=$(build_bin on);   ok_on=$?
+off_vals=(); on_vals=()
+if [ "$ok_off" = 0 ] && [ "$ok_on" = 0 ]; then
+    for r in 1 2 3 4 5 6 7; do                                # alternate, NOT block-sequential
+        off_vals+=("$(time_one "$WORK/off.bin")"); sleep 0.4
+        on_vals+=("$(time_one "$WORK/on.bin")");   sleep 0.4
     done
-    med=$(printf '%s\n' "${vals[@]}" | sort -n | sed -n '3p')
-    say "  $tag: output=$out median_cpu_s=$med (samples: ${vals[*]})"
-    eval "OUT_$tag=\$out"; eval "MED_$tag=\$med"; }
-link_run off; link_run on
-if [ "${OUT_off:-x}" = "${OUT_on:-y}" ]; then say "  Gate4 PARITY=OK (${OUT_off:-?})"
+    MED_off=$(printf '%s\n' "${off_vals[@]}" | sort -n | sed -n '4p')  # median of 7
+    MED_on=$(printf '%s\n' "${on_vals[@]}"  | sort -n | sed -n '4p')
+    say "  off: median_wall_s=$MED_off (samples: ${off_vals[*]})"
+    say "  on:  median_wall_s=$MED_on (samples: ${on_vals[*]})"
+fi
+if [ -n "${OUT_off:-}" ] && [ "${OUT_off:-x}" = "${OUT_on:-y}" ]; then say "  Gate4 PARITY=OK (${OUT_off})"
 else say "  Gate4 PARITY=FAIL off=${OUT_off:-?} on=${OUT_on:-?} (SOUNDNESS BLOCK)"; fi
 RATIO=$(awk -v a="${MED_on:-0}" -v b="${MED_off:-0}" 'BEGIN{if(b>0)printf "%.3f",a/b; else print "NA"}')
-say "  Gate3 ratio ON/OFF (cpu) = $RATIO   (<1.0 = speedup)"
+say "  Gate3 ratio ON/OFF (wall, isolated alt) = $RATIO   (<1.0 = speedup)"
 
 # ── Gate5 — opt-in ship smoke ───────────────────────────────────────────────
 if [ "$DO_SMOKE" = 1 ]; then
