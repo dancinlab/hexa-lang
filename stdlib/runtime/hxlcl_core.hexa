@@ -364,6 +364,228 @@ pub fn hxlcl_strstr(h: HexaVal, n: HexaVal) -> int {
     return 0                                  // not found → NULL
 }
 
+// ── ENV FAMILY (Route C Wall 2-b · extern-data named-data GOT reloc) ───────────
+//
+// hxlcl_getenv: look up `name` in the process environment, returning a pointer to
+// its value (the bytes after `=`), or NULL. BYTE-FAITHFUL to the frozen 0-libc
+// floor body self/runtime_core_hxlcl_shim.c (HEXA_ZEROC_SHIM_BYTEID_EMIT
+// hxlcl_getenv, lines 447-460):
+//   if(!name) return 0; e=environ; if(!e) return 0; nlen=strlen(name);
+//   while(*e){ entry=*e; i=0; while(i<nlen && entry[i] && entry[i]==name[i]) i++;
+//              if(i==nlen && entry[i]=='=') return entry+nlen+1; e++; }
+//   return 0;
+//
+// The ONE new substrate piece is `__hx_environ_ptr()` — a 0-arg intrinsic that
+// loads the ADDRESS of the libc `extern char **environ` global through the GOT
+// (x86_64 `mov rax,[rip+environ@GOTPCREL]` / arm64 `adrp+ldr …@GOTPAGE`), boxed as
+// a TAG_INT payload. It returns `&environ` (char***), so ONE __hx_ptr_load64
+// dereference yields `environ` itself (the char** array base). Everything after is
+// the proven byte-walk: __hx_ptr_load64 steps the char* slots (+8 each),
+// __hx_ptr_load8 compares key bytes. The inner key-compare uses the break-free
+// `cont`-flag form (mirror of hxlcl_strstr) so it NEVER reads past a short entry's
+// NUL — exactly the early-stop the C `while(i<nlen && entry[i] && …)` guarantees.
+// The `int` return carries the raw value pointer (entry+nlen+1) unboxed, the same
+// class as strchr/strstr returning a raw char* in rax/x0. '=' == 61.
+//
+// NOT @pure (touches external environ memory) · NO formula → no @cite/@grace (a
+// byte-walk, like strchr/strstr). getenv-ONLY this round; setenv is the deferred
+// sibling (it MUTATES environ — realloc/putenv array-rebuild semantics, a heavier
+// wall) and stays on the libc-`setenv` shim delegate for now.
+pub fn hxlcl_getenv(name: HexaVal) -> int {
+    let pname = __hx_payload_add(name, 0)        // char* name (payload word)
+    if __hx_payload_eq(pname, 0) {
+        return 0                                  // NULL name → NULL
+    }
+    // nlen = strlen(name)
+    let mut nlen = 0
+    let mut nc = __hx_ptr_load8(pname, 0)         // name[0]
+    while __hx_payload_ne(nc, 0) {
+        nlen = __hx_payload_add(nlen, 1)
+        nc = __hx_ptr_load8(pname, nlen)          // name[nlen]
+    }
+    let envpp = __hx_environ_ptr()                // &environ (char***)
+    let mut e = __hx_ptr_load64(envpp, 0)         // environ (char** array base)
+    if __hx_payload_eq(e, 0) {
+        return 0                                  // environ == NULL → NULL
+    }
+    let mut entry = __hx_ptr_load64(e, 0)         // *e (first char* entry)
+    while __hx_payload_ne(entry, 0) {             // while(*e)
+        // i = 0; while(i<nlen && entry[i] && entry[i]==name[i]) i++;  (break-free)
+        let mut i = 0
+        let mut cont = 1
+        while __hx_payload_ne(cont, 0) {
+            if __hx_payload_ge(i, nlen) {
+                cont = 0                          // i==nlen → full key prefix matched
+            }
+            if __hx_payload_ne(cont, 0) {
+                let ce = __hx_ptr_load8(entry, i) // entry[i]
+                if __hx_payload_eq(ce, 0) {
+                    cont = 0                      // entry shorter than name → stop
+                }
+                if __hx_payload_ne(cont, 0) {
+                    let cn = __hx_ptr_load8(pname, i)  // name[i]
+                    if __hx_payload_ne(ce, cn) {
+                        cont = 0                  // byte mismatch → stop
+                    } else {
+                        i = __hx_payload_add(i, 1)
+                    }
+                }
+            }
+        }
+        if __hx_payload_eq(i, nlen) {             // i==nlen (full key matched)
+            let eqc = __hx_ptr_load8(entry, nlen) // entry[nlen]
+            if __hx_payload_eq(eqc, 61) {         // '=' → this is our variable
+                let base = __hx_payload_add(entry, nlen)
+                return __hx_payload_add(base, 1)  // entry + nlen + 1 (value ptr)
+            }
+        }
+        e = __hx_payload_add(e, 8)                // e++ (next char* slot)
+        entry = __hx_ptr_load64(e, 0)             // *e
+    }
+    return 0                                       // not found → NULL
+}
+
+// ── ENV MUTATE (Route C Wall 2-b sibling · environ WRITE-BACK via __hx_ptr_store64) ──
+//
+// hxlcl_setenv: set environment variable `name` to `value`. If it already exists and
+// `overwrite` is non-zero replace its slot; if it exists and overwrite==0 leave it; if
+// it is absent GROW the environ array. POSIX setenv(3). This is the FIRST Route C body
+// to WRITE BACK to the `&environ` global — getenv (Wall 2-b) only READ it. The new
+// capability is the final `__hx_ptr_store64(envpp, 0, newarr)`: storing a freshly-built
+// char** array pointer into the slot __hx_environ_ptr() addresses (offset 0 of &environ
+// == the `environ` pointer word itself). NO NEW INTRINSIC — it composes the already-
+// whitelisted __hx_environ_ptr (returns &environ, #4098) + __hx_ptr_store64 (the writable
+// pointer-word store, proven by hxlcl_strtoll's endptr write) + __hx_ptr_load64 (the
+// getenv walk) + the inner C-ABI `bl hxlcl_malloc` (proven by strdup/calloc/realloc).
+//
+// REFERENCE-MATCH musl src/env/setenv.c + src/env/putenv.c (the canonical algorithm):
+//   s = malloc(l1+l2+2); memcpy(s,name,l1); s[l1]='='; memcpy(s+l1+1,value,l2);
+//   s[l1+l2+1]=0;                                  // build "name=value\0"
+//   for(e=environ; *e; e++) if(!strncmp(*e,s,l1) && (*e)[l1]=='='){       // key match
+//        if(!overwrite) return 0; *e=s; return 0; }                       // replace slot
+//   N=count(environ); new=malloc((N+2)*8); copy N ptrs; new[N]=s; new[N+1]=0;
+//   environ=new; return 0;                         // grow (fresh array on every grow)
+// The faithful 0-libc floor SIMPLIFIES musl's __env_map leak-tracking: it allocates a
+// FRESH array on every grow (fully correct — each grow re-reads the current environ and
+// copies all live slots; it merely leaks the old array under the arena's no-free model,
+// where the floor hxlcl_malloc is a bump allocator). POSIX EINVAL is honoured for
+// name==NULL and empty name (→ -1). The embedded-'=' EINVAL case is NOT special-cased
+// (frozen-floor callers pass '='-free names — documented deviation, deterministic either
+// way: l1 = strlen up to the NUL). Slot-replace writes `*e = s` directly into the live
+// environ array exactly like musl __putenv (the array word is writable — argv/envp on
+// the stack, or a prior fresh malloc'd array).
+//
+// IN-BODY OPERATOR DISCIPLINE (Route C #4042 rule): every arithmetic/comparison is a raw
+// __hx_payload_* intrinsic (never a bare op → PAIR-MODEL helper undefined in the raw-C-ABI
+// link); each intrinsic result lands in its own un-nested `let`. '=' == 61.
+pub fn hxlcl_setenv(name: HexaVal, value: HexaVal, overwrite: HexaVal) -> int {
+    let pname = __hx_payload_add(name, 0)         // char* name (payload word)
+    let pvalue = __hx_payload_add(value, 0)       // char* value (payload word)
+    if __hx_payload_eq(pname, 0) {
+        return __hx_payload_sub(0, 1)             // NULL name → EINVAL (-1)
+    }
+    // l1 = strlen(name)
+    let mut l1 = 0
+    let mut nc = __hx_ptr_load8(pname, 0)         // name[0]
+    while __hx_payload_ne(nc, 0) {
+        l1 = __hx_payload_add(l1, 1)
+        nc = __hx_ptr_load8(pname, l1)            // name[l1]
+    }
+    if __hx_payload_eq(l1, 0) {
+        return __hx_payload_sub(0, 1)             // empty name → EINVAL (-1)
+    }
+    // l2 = strlen(value)
+    let mut l2 = 0
+    let mut vc = __hx_ptr_load8(pvalue, 0)        // value[0]
+    while __hx_payload_ne(vc, 0) {
+        l2 = __hx_payload_add(l2, 1)
+        vc = __hx_ptr_load8(pvalue, l2)           // value[l2]
+    }
+    // s = malloc(l1 + l2 + 2); build "name=value\0"
+    let l12 = __hx_payload_add(l1, l2)            // l1 + l2
+    let scap = __hx_payload_add(l12, 2)           // l1 + l2 + 2
+    let s = hxlcl_malloc(scap)                    // C-ABI bl → raw ptr
+    let mut i = 0
+    while __hx_payload_lt(i, l1) {
+        let b = __hx_ptr_load8(pname, i)          // name[i]
+        __hx_ptr_store8(s, i, b)                  // s[i] = name[i]
+        i = __hx_payload_add(i, 1)
+    }
+    __hx_ptr_store8(s, l1, 61)                    // s[l1] = '='
+    let voff = __hx_payload_add(l1, 1)            // l1 + 1
+    let mut j = 0
+    while __hx_payload_lt(j, l2) {
+        let b2 = __hx_ptr_load8(pvalue, j)        // value[j]
+        let dst = __hx_payload_add(voff, j)       // l1 + 1 + j
+        __hx_ptr_store8(s, dst, b2)               // s[l1+1+j] = value[j]
+        j = __hx_payload_add(j, 1)
+    }
+    let term = __hx_payload_add(l12, 1)           // l1 + l2 + 1
+    __hx_ptr_store8(s, term, 0)                   // s[l1+l2+1] = '\0'
+    // walk environ: replace-on-match (return), else count N (for the grow path)
+    let envpp = __hx_environ_ptr()                // &environ (char***)
+    let arr = __hx_ptr_load64(envpp, 0)           // environ (char** base) or NULL
+    let mut n = 0
+    if __hx_payload_ne(arr, 0) {
+        let mut e = __hx_payload_add(arr, 0)      // moving char** slot ptr
+        let mut entry = __hx_ptr_load64(e, 0)     // *e (first char* entry)
+        while __hx_payload_ne(entry, 0) {         // while(*e)
+            // strncmp(entry, name, l1)==0 && entry[l1]=='='  (break-free key compare)
+            let mut k = 0
+            let mut cont = 1
+            while __hx_payload_ne(cont, 0) {
+                if __hx_payload_ge(k, l1) {
+                    cont = 0                       // matched l1 bytes
+                }
+                if __hx_payload_ne(cont, 0) {
+                    let ce = __hx_ptr_load8(entry, k)   // entry[k]
+                    if __hx_payload_eq(ce, 0) {
+                        cont = 0                   // entry shorter than name → no match
+                    }
+                    if __hx_payload_ne(cont, 0) {
+                        let ck = __hx_ptr_load8(pname, k)  // name[k]
+                        if __hx_payload_ne(ce, ck) {
+                            cont = 0               // byte mismatch → no match
+                        } else {
+                            k = __hx_payload_add(k, 1)
+                        }
+                    }
+                }
+            }
+            if __hx_payload_eq(k, l1) {           // full key prefix matched
+                let eqc = __hx_ptr_load8(entry, l1)  // entry[l1]
+                if __hx_payload_eq(eqc, 61) {     // '=' → same variable
+                    if __hx_payload_eq(overwrite, 0) {
+                        return 0                  // exists + no overwrite → success no-op
+                    }
+                    __hx_ptr_store64(e, 0, s)     // *e = s (replace slot in place)
+                    return 0
+                }
+            }
+            n = __hx_payload_add(n, 1)            // count this entry
+            e = __hx_payload_add(e, 8)            // e++ (next char* slot)
+            entry = __hx_ptr_load64(e, 0)         // *e
+        }
+    }
+    // not found → GROW: new=malloc((n+2)*8); copy n ptrs; new[n]=s; new[n+1]=0; environ=new
+    let n2 = __hx_payload_add(n, 2)               // n + 2
+    let bytes = __hx_payload_mul(n2, 8)           // (n+2) * 8
+    let newarr = hxlcl_malloc(bytes)              // C-ABI bl → raw ptr
+    let mut c = 0
+    while __hx_payload_lt(c, n) {
+        let off = __hx_payload_mul(c, 8)          // c * 8
+        let oldp = __hx_ptr_load64(arr, off)      // environ[c]
+        __hx_ptr_store64(newarr, off, oldp)       // newarr[c] = environ[c]
+        c = __hx_payload_add(c, 1)
+    }
+    let noff = __hx_payload_mul(n, 8)             // n * 8
+    __hx_ptr_store64(newarr, noff, s)             // newarr[n] = s
+    let noff1 = __hx_payload_add(noff, 8)         // (n+1) * 8
+    __hx_ptr_store64(newarr, noff1, 0)            // newarr[n+1] = NULL
+    __hx_ptr_store64(envpp, 0, newarr)            // environ = newarr (WRITE-BACK)
+    return 0
+}
+
 // ── PARSE FAMILY (Route C batch G · pure-compute leaf with an OUT-PARAM write) ──
 //
 // hxlcl_strtoll is the string family's last leaf: a from-scratch string→long long
@@ -1244,16 +1466,15 @@ pub fn hxlcl_getrusage(who: HexaVal, usage: HexaVal) -> int {
 //          flags=0 trails, so one shape serves both arches, only the NR varies).
 //          errno-bearing: a bad fds ptr / EMFILE → -1 + errno on the Linux leg.
 //   darwin → SYS_pipe (42) returns the two fds in x0/x1 (2nd return register);
-//          the single-result __hx_syscall6 exposes only x0, so it CANNOT write
-//          fds[1]. This is a genuine WALL for the Route C path — the real darwin
-//          pipe stays the floor's _hxlcl_pipe_cf dual-register asm shim
-//          (self/runtime_emit_full.hexa:1542). The Route C darwin leg returns -1
-//          (documented incomplete — mirrors the reference self/rt/syscall.hexa:233
-//          sys_pipe, which also returns -1 on darwin "for now").
+//          the single-result __hx_syscall6 exposes only x0. This DISSOLVES via the
+//          __hx_syscall6_out2 intrinsic (the dual-return sibling that writes x0/x1
+//          + the carry flag into a heap scratch — mirrors the floor _hxlcl_pipe_cf
+//          dual-register asm shim, self/runtime_emit_full.hexa:1794). The darwin
+//          carry-flag error → errno store is deferred (discipline ④).
 //   NR ref-match (no black-box; WebFetch-confirmed 2026-06-27):
 //     x86_64 __NR_pipe2 = 293  (arch/x86 syscall_64.tbl)
 //     arm64  __NR_pipe2 = 59   (asm-generic unistd.h — no plain pipe/poll on arm64)
-//     darwin SYS_pipe   = 42   (xnu; 2nd-return-reg, used only by the _cf shim)
+//     darwin SYS_pipe   = 42   (xnu; 2nd-return-reg, via __hx_syscall6_out2)
 //
 // time / poll: LANDED in batch H below (the scratch-buffer substrate the batch E
 // census flagged turned out NOT to need a new intrinsic — see the batch H header).
@@ -1274,9 +1495,26 @@ pub fn hxlcl_pipe(fds: HexaVal) -> int {
         }
         return r                                // 0 on success (kernel wrote fds[0],fds[1])
     }
-    // darwin: 2nd-return-register BSD pipe — unreachable by the single-result
-    // __hx_syscall6. Documented incomplete (real darwin pipe = floor _cf shim).
-    return -1
+    // darwin: BSD pipe(42) is a 2nd-return-register syscall — the kernel returns
+    // the two fds in x0/x1 (NOT the user buffer). __hx_syscall6_out2 issues the
+    // single trap and captures BOTH return regs + the carry/error flag into a
+    // 24-byte heap scratch (3 slots: x0, x1, carry); we then copy the fds into the
+    // caller's int[2]. (The scratch leaks 24B on the bump arena — pipe is not
+    // hot-looped; same heap-scratch caveat as the batch-H time/poll legs.) The
+    // darwin carry-flag error → errno store is DEFERRED (darwin __error() round,
+    // discipline ④); on error we return -1 without setting errno.
+    let szp = __hx_payload_add(0, 24)           // HexaVal-box the scratch size
+    let scr = hxlcl_malloc(szp)
+    __hx_syscall6_out2(42, 0, 0, 0, 0, 0, 0, scr)   // BSD pipe — no args; fds in x0/x1
+    let cf = __hx_ptr_load64(scr, 16)
+    if __hx_payload_ne(cf, 0) {
+        return -1                               // darwin error (carry set); errno deferred
+    }
+    let fd0 = __hx_ptr_load64(scr, 0)           // x0 = fds[0]
+    let fd1 = __hx_ptr_load64(scr, 8)           // x1 = fds[1]
+    __hx_ptr_store32(fds, 0, fd0)               // fds[0]
+    __hx_ptr_store32(fds, 4, fd1)               // fds[1] (int = 4 bytes)
+    return 0
 }
 
 // ── batch H: time + poll (the SCRATCH-BUFFER substrate — NO new intrinsic) ──────
@@ -1543,8 +1781,9 @@ pub fn hxlcl_execve(path: HexaVal, argv: HexaVal, envp: HexaVal) -> int {
 // closing the Route C syscall family. Continues the close-mirror discipline (raw-
 // payload `__hx_payload_lt`/`_ne`/`_sub`, never bare `<`/`-`, + the target_is_linux()
 // -gated errno store via the already-whitelisted __errno_location). It is the EXACT
-// pipe (#4076) pattern: the LINUX legs DISSOLVE while the darwin leg is a measured
-// 2nd-return-register wall returning -1 (documented incomplete).
+// pipe (#4076) pattern: the LINUX legs DISSOLVE via the single-result __hx_syscall6,
+// and the darwin 2nd-return-register leg DISSOLVES via __hx_syscall6_out2 (the
+// dual-return intrinsic capturing x0/x1 + carry).
 //
 //   LINUX dissolve — fork returns the child pid to the parent and 0 to the child in
 //        a SINGLE result register (rax/x0), uniform -errno on failure, so the close
@@ -1559,15 +1798,15 @@ pub fn hxlcl_execve(path: HexaVal, argv: HexaVal, envp: HexaVal) -> int {
 //                   clone behave as a fork (parent gets SIGCHLD on child exit). This
 //                   is the dup2→dup3 "extra-flag-arg" divergence class (batch's
 //                   established pattern), not a new arg-shape.
-//   DARWIN wall — fork(2) is a 2nd-RETURN-REGISTER syscall: the BSD trap returns the
-//        child pid in x0 for BOTH processes and disambiguates the child by x1==1
-//        (parent has x1==0; carry-set → failure). The single-result __hx_syscall6
-//        exposes ONLY x0, so the Route C darwin leg CANNOT distinguish parent from
-//        child — a GENUINE wall identical to darwin pipe (#4076). The darwin leg
-//        returns -1 (documented incomplete); the real darwin fork stays the floor's
-//        raw-asm dual-register shim (self/runtime_emit_full.hexa:1801-1808, the
-//        `cset cf,cs / mov x0 / mov x1` explicit-asm dual capture). default-OFF so
-//        the floor shim is the live darwin fork — Route C darwin is research-only.
+//   DARWIN dissolve — fork(2) is a 2nd-RETURN-REGISTER syscall: the BSD trap returns
+//        the child pid in x0 for BOTH processes and disambiguates the child by x1==1
+//        (parent has x1==0; carry-set → failure). This DISSOLVES via the
+//        __hx_syscall6_out2 intrinsic, which captures x0/x1 + the carry flag into a
+//        heap scratch — mirroring the floor's raw-asm dual-register shim
+//        (self/runtime_emit_full.hexa:1801-1808, the `cset cf,cs / mov x0 / mov x1`
+//        explicit-asm dual capture). The darwin carry-flag error → errno store is
+//        deferred (discipline ④). default-OFF so the floor shim is the live darwin
+//        fork — Route C darwin is research-only.
 //
 // NR ref-match (no black-box; in-repo tables + WebFetch-confirmed asm-generic):
 //   fork  x86_64 = 57   (arch/x86 syscall_64.tbl; self/rt/syscall.hexa:74
@@ -1577,14 +1816,16 @@ pub fn hxlcl_execve(path: HexaVal, argv: HexaVal, envp: HexaVal) -> int {
 //         darwin = 2    (BSD SYS_fork; self/rt/syscall.hexa:103 SYS_DARWIN_FORK ->
 //                        0x2000002 — 2nd-return-reg wall, floor dual-reg shim only)
 //
-// _is_cabi += hxlcl_fork. No new intrinsic/builtin/@attr; reuses __hx_syscall6 +
-// __hx_payload_lt/_ne/_sub + __hx_ptr_store32 + __errno_location. frozen 151c52c8
-// immutable. default-OFF byteeq-neutral (HEXA_CABI_HXLCL unset → empty whitelist →
-// PAIR-MODEL emit byte-identical).
+// _is_cabi has hxlcl_fork (#4087). The darwin leg adds ONE new ADD-only intrinsic
+// __hx_syscall6_out2 (the dual-return sibling — bind.hexa whitelist + arm64/x86_64
+// STMT_CALL special-case; NO new parser keyword/@attr, so frozen 151c52c8 immutable).
+// Otherwise reuses __hx_payload_eq/_ne/_add + __hx_ptr_load64/store32 + hxlcl_malloc.
+// default-OFF byteeq-neutral (HEXA_CABI_HXLCL unset → empty whitelist → PAIR-MODEL
+// emit byte-identical; the new intrinsic only emits when a whitelisted body calls it).
 //
-// This is the LAST clean syscall-family leaf — its merge dries the Route C syscall
-// track (remaining walls: stdio FILE* struct, getenv frozen-export, 2nd-return-reg
-// [darwin pipe/fork], TERMINAL [float XMM-ABI / setjmp]).
+// With the darwin 2nd-return-register dissolve, the Route C syscall family is dry
+// (remaining walls: stdio FILE* struct, getenv frozen-export, TERMINAL [float
+// XMM-ABI / setjmp]).
 pub fn hxlcl_fork() -> int {
     if target_is_linux() {
         let mut nr = 220                       // Linux arm64 __NR_clone (no plain fork)
@@ -1603,10 +1844,25 @@ pub fn hxlcl_fork() -> int {
         }
         return r                                // parent: child pid · child: 0
     }
-    // darwin: fork(2) is a 2nd-return-register syscall (child pid in x0 for BOTH
-    // processes, disambiguated by x1==1) — the single-result __hx_syscall6 exposes
-    // only x0, so the Route C leg cannot tell parent from child. Returns -1
-    // (documented incomplete); the real darwin fork stays the floor's raw-asm dual-
-    // register shim (self/runtime_emit_full.hexa:1801-1808), identical to darwin pipe.
-    return -1
+    // darwin: fork(2) is a 2nd-return-register syscall — both processes get the
+    // child pid in x0; the CHILD is disambiguated by x1==1 (parent has x1==0).
+    // __hx_syscall6_out2 captures x0/x1/carry into a 24-byte heap scratch (leaks
+    // 24B — fork is not hot-looped). This mirrors the floor's raw-asm dual-register
+    // shim (self/runtime_emit_full.hexa:1801-1808: `svc; cset cf,cs; mov x0; mov
+    // x1; if cf errno; if x1==1 child`). The darwin carry-flag error → errno store
+    // is DEFERRED (darwin __error() round, discipline ④); on error we return -1.
+    let szf = __hx_payload_add(0, 24)           // HexaVal-box the scratch size
+    let scr = hxlcl_malloc(szf)
+    __hx_syscall6_out2(2, 0, 0, 0, 0, 0, 0, scr)    // BSD fork — no args; x0=pid, x1==1 ⇒ child
+    let cf = __hx_ptr_load64(scr, 16)
+    if __hx_payload_ne(cf, 0) {
+        return -1                               // darwin error (carry set); errno deferred
+    }
+    let x1v = __hx_ptr_load64(scr, 8)           // x1: ==1 in child, 0 in parent
+    let ischild = __hx_payload_eq(x1v, 1)
+    if __hx_payload_ne(ischild, 0) {
+        return 0                                // child
+    }
+    let x0v = __hx_ptr_load64(scr, 0)           // x0 = child pid
+    return x0v                                   // parent: child pid
 }
