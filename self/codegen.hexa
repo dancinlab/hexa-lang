@@ -4057,6 +4057,60 @@ fn _gen2_stmt_inner(node, depth) {
     // demoted to `@optimize` attribute. @-prefixed attrs ride the existing
     // annotation channel and don't produce dedicated AST nodes.)
 
+    // ── Drop/RAII first slice (opt-in, default-OFF) — `drop x` → Drop::drop ──
+    //    SSOT: state/rfc_drop_raii.md. reference-match: Rust `Drop::drop`
+    //    (The Rust Reference §Destructors) · C++ RAII destructor (cppreference
+    //    "RAII"). In hexa's arena memory model the arena bulk-frees every
+    //    value at scope/frame exit, so a memory-reclaiming Drop is a no-op
+    //    (this is why DropStmt has emitted "" since v1). What Drop DOES buy —
+    //    exactly as in Rust's `impl Drop for File`/`MutexGuard` and C++
+    //    `fstream`/`lock_guard` — is DETERMINISTIC release of NON-memory
+    //    resources (file/socket fds, locks, GPU device buffers) at a precise
+    //    program point, orthogonal to the arena.
+    //
+    //    This slice lowers the EXISTING `drop x` keyword (no parser change —
+    //    frozen blob 151c52c8 untouched) to a runtime-type-dispatched call to
+    //    a user-defined `drop(self)` impl method, reusing the proven P2-6
+    //    method-dispatch idiom (hexa_is_type + Type__method, see ~L8296). It
+    //    is the explicit-`drop(x)` analogue (Rust's `core::mem::drop`), NOT
+    //    yet the auto-at-scope-exit insertion — that needs a local type
+    //    environment the gen2 C-transpile codegen does not carry (RFC §Wall).
+    //
+    //    BYTEEQ-SAFE BY CONSTRUCTION: gated behind HEXA_DROP_RAII. When the
+    //    env var is unset (the default + every byteeq target) this block does
+    //    NOT return — control falls through to the unchanged no-op below, so
+    //    the emitted C is byte-identical. The dispatch also no-ops (falls
+    //    through) when no type defines a `drop` method.
+    if k == "DropStmt" {
+        if env("HEXA_DROP_RAII") != "" {
+            let _drop_types = _method_registry_lookup("drop")
+            if len(_drop_types) > 0 {
+                // Reference the dropped variable through gen2_expr on a full-
+                // shaped Ident node so name mangling / comptime folding match
+                // every other use site exactly.
+                let _drop_recv = gen2_expr(#{
+                    "kind": "Ident", "name": node.name, "value": "", "op": "",
+                    "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
+                    "params": "", "body": "", "args": "", "fields": "", "items": "",
+                    "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+                    "target": "", "trait_name": "", "methods": ""
+                })
+                // Runtime type-dispatch chain: first matching Drop-impl type
+                // wins (single-eval via a C temp). Mirrors the P2-6 ternary
+                // dispatch but as a statement-position if/else-if chain.
+                let mut _drop_chain = []
+                let mut _dti = 0
+                while _dti < len(_drop_types) {
+                    let _dtn = _drop_types[_dti]
+                    let _dkw = if _dti == 0 { "if" } else { " else if" }
+                    _drop_chain.push(_dkw + " (hexa_is_type(__dropv, \"" + _dtn + "\")) { " + _dtn + "__drop(__dropv); }")
+                    _dti = _dti + 1
+                }
+                return pad + "{ HexaVal __dropv = " + _drop_recv + "; " + _drop_chain.join("") + " }\n"
+            }
+        }
+    }
+
     // ── Ownership-group statements → no-op (SPEC §11 v1).
     //    DropStmt · OwnStmt · BorrowStmt · MoveStmt are
     //    declarations of intent in the v1 arena memory model;
