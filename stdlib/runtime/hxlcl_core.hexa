@@ -1866,3 +1866,219 @@ pub fn hxlcl_fork() -> int {
     let x0v = __hx_ptr_load64(scr, 0)           // x0 = child pid
     return x0v                                   // parent: child pid
 }
+
+// ── WALL 3-a — CORE FILE* FAMILY (fd-level fake-pointer stdio subset) ────────
+//
+// The FROZEN 0-libc floor (self/runtime_emit_full.hexa:1153-1242) encodes a FILE*
+// as `(void *)(uintptr_t)(fd + 1)` — NOT a libc stdio struct. So the whole
+// fopen/fread/fwrite/fseek/ftell/fclose/fdopen subset is a PURE COMPOSITION over
+// the already-dissolved Route C syscall leaves (open_sys / read / write / lseek /
+// close) + raw-payload pointer arithmetic — ZERO new intrinsic, ZERO libc-struct
+// coupling. The `(fd+1)` wrap/unwrap is literally `__hx_payload_add(fd,1)` /
+// `__hx_payload_sub(fp,1)`. Reference-matched body-for-body to the frozen emitter
+// bodies cited at each fn.
+//
+// IN-BODY OPERATOR DISCIPLINE (same as the syscall family above): every test uses
+// the raw-payload leaf intrinsics (__hx_payload_lt/le/ge/eq/ne/add/sub/mul/div),
+// NEVER bare `<`/`-`/`*` (which lower to the PAIR-MODEL HexaVal helpers undefined
+// in the raw C-ABI link), each writing exactly one un-nested `let`. Inner calls to
+// the sibling C-ABI leaves (hxlcl_open_sys/read/write/lseek/close) lower as
+// single-register `bl` (the call boundary keys on the whitelisted callee name).
+//
+// SCOPE (honest): the libc-global streams stderr/stdout/stdin (the frozen
+// _hxlcl_fp_fd `v >= 0x1000` branch) are OUT of this wall — a fake FILE* here is
+// always a freshly-fopen'd / fdopen'd fd+1 handle (the only kind the floor's file
+// helpers rt_read_file/rt_write_file ever pass). A high pointer (a libc stdio
+// global) is therefore failed-safe (fread/fwrite → 0 items, ftell/fseek → -1,
+// fclose → 0 no-op), the same fail-closed treatment the frozen `v >= 0x1000`
+// guard gives fclose; their real handling stays on the shim (addressed later via
+// @asm + fd constants, per the runtime_emit_full.hexa:1147-1152 note).
+
+// hxlcl_fopen: map the mode string to open(2) flags, issue the open_sys syscall,
+// and return the fd+1 fake FILE* (0/NULL on any error). BYTE-FAITHFUL to
+// self/runtime_emit_full.hexa:1153-1177. O_* flag VALUES differ per OS, so they
+// are compile-time consts selected by target_is_linux() (DCE drops the dead leg),
+// exactly like the per-target syscall NRs; the access/create/trunc/append bits are
+// DISJOINT, so `__hx_payload_add` composes them as bitwise-OR. mode 0644 == 420.
+pub fn hxlcl_fopen(path: HexaVal, mode: HexaVal) -> int {
+    let pnull = __hx_payload_eq(path, 0)
+    if __hx_payload_ne(pnull, 0) { return 0 }
+    let mnull = __hx_payload_eq(mode, 0)
+    if __hx_payload_ne(mnull, 0) { return 0 }
+    // per-target O_CREAT/O_TRUNC/O_APPEND (darwin defaults; Linux overrides).
+    let mut o_creat = 512                        // darwin O_CREAT (0x0200)
+    let mut o_trunc = 1024                       // darwin O_TRUNC (0x0400)
+    let mut o_append = 8                         // darwin O_APPEND (0x0008)
+    if target_is_linux() {
+        o_creat = 64                             // Linux O_CREAT (0100)
+        o_trunc = 512                            // Linux O_TRUNC (01000)
+        o_append = 1024                          // Linux O_APPEND (02000)
+    }
+    // detect the '+' update flag: mode[1]=='+' OR (mode[1]!=0 AND mode[2]=='+').
+    let c0 = __hx_ptr_load8(mode, 0)             // mode[0]
+    let c1 = __hx_ptr_load8(mode, 1)             // mode[1]
+    let mut plus = 0
+    let p1 = __hx_payload_eq(c1, 43)             // mode[1] == '+'
+    if __hx_payload_ne(p1, 0) {
+        plus = 1
+    } else {
+        let c1nz = __hx_payload_ne(c1, 0)        // mode[1] != 0
+        if __hx_payload_ne(c1nz, 0) {
+            let c2 = __hx_ptr_load8(mode, 2)     // mode[2]
+            let p2 = __hx_payload_eq(c2, 43)     // mode[2] == '+'
+            if __hx_payload_ne(p2, 0) { plus = 1 }
+        }
+    }
+    // access mode → flags. '+' upgrades the access bits to O_RDWR (2); the
+    // create/trunc/append extras are preserved (disjoint-bit ADD == OR).
+    let mut flags = 0
+    let mut ok = 0
+    let isr = __hx_payload_eq(c0, 114)           // 'r'
+    if __hx_payload_ne(isr, 0) {
+        flags = 0                                // O_RDONLY
+        if __hx_payload_ne(plus, 0) { flags = 2 }   // O_RDWR
+        ok = 1
+    }
+    let isw = __hx_payload_eq(c0, 119)           // 'w'
+    if __hx_payload_ne(isw, 0) {
+        let extras = __hx_payload_add(o_creat, o_trunc)
+        let mut acc = 1                          // O_WRONLY
+        if __hx_payload_ne(plus, 0) { acc = 2 }  // O_RDWR
+        flags = __hx_payload_add(acc, extras)
+        ok = 1
+    }
+    let isa = __hx_payload_eq(c0, 97)            // 'a'
+    if __hx_payload_ne(isa, 0) {
+        let extras = __hx_payload_add(o_creat, o_append)
+        let mut acc = 1                          // O_WRONLY
+        if __hx_payload_ne(plus, 0) { acc = 2 }  // O_RDWR
+        flags = __hx_payload_add(acc, extras)
+        ok = 1
+    }
+    let badmode = __hx_payload_eq(ok, 0)         // mode[0] not r/w/a
+    if __hx_payload_ne(badmode, 0) { return 0 }
+    let fd = hxlcl_open_sys(path, flags, 420)    // 0644
+    let bad = __hx_payload_lt(fd, 0)
+    if __hx_payload_ne(bad, 0) { return 0 }      // open failed → NULL
+    // leak guard (frozen :1175): a fresh file fd can only be 0/1/2 if a
+    // syscall-wrapper regression returned errno-as-fd; fail closed, never alias
+    // stdin/stdout/stderr and leak user content.
+    let le2 = __hx_payload_le(fd, 2)
+    if __hx_payload_ne(le2, 0) { return 0 }
+    return __hx_payload_add(fd, 1)               // fake FILE* = (fd + 1)
+}
+
+// hxlcl_fclose: unwrap fd+1 and close(2). BYTE-FAITHFUL to
+// self/runtime_emit_full.hexa:1178-1187. A NULL fp → -1; a libc-global FILE*
+// (>= 0x1000) → 0 (never close it); 0/1/2 → 0 (never close the std streams).
+pub fn hxlcl_fclose(fp: HexaVal) -> int {
+    let fnull = __hx_payload_eq(fp, 0)
+    if __hx_payload_ne(fnull, 0) { return -1 }
+    let fhigh = __hx_payload_ge(fp, 4096)        // 0x1000 — libc FILE* sentinel
+    if __hx_payload_ne(fhigh, 0) { return 0 }    // libc stdio global — don't close
+    let fd = __hx_payload_sub(fp, 1)
+    let lo = __hx_payload_lt(fd, 3)
+    if __hx_payload_ne(lo, 0) { return 0 }       // never close 0/1/2
+    return hxlcl_close(fd)
+}
+
+// hxlcl_fread: unwrap fd+1, read `size`-byte items, loop over partial reads, and
+// return the ITEM count (got / size — the libc contract, NOT a byte count).
+// BYTE-FAITHFUL to self/runtime_emit_full.hexa:1199-1213 (the _hxlcl_fp_fd fd+1
+// branch; the libc-global branch is out of scope → high pointers yield 0 items).
+// Unbuffered fd wrapper — no stdio buffering (matches the floor).
+pub fn hxlcl_fread(buf: HexaVal, sz: HexaVal, n: HexaVal, fp: HexaVal) -> int {
+    let bnull = __hx_payload_eq(buf, 0)
+    if __hx_payload_ne(bnull, 0) { return 0 }
+    let szz = __hx_payload_eq(sz, 0)
+    if __hx_payload_ne(szz, 0) { return 0 }
+    let nz = __hx_payload_eq(n, 0)
+    if __hx_payload_ne(nz, 0) { return 0 }
+    let fnull = __hx_payload_eq(fp, 0)
+    if __hx_payload_ne(fnull, 0) { return 0 }
+    let fhigh = __hx_payload_ge(fp, 4096)
+    if __hx_payload_ne(fhigh, 0) { return 0 }    // libc FILE* unsupported here
+    let fd = __hx_payload_sub(fp, 1)
+    let total = __hx_payload_mul(sz, n)
+    let mut got = 0
+    let mut cont = __hx_payload_lt(got, total)
+    while __hx_payload_ne(cont, 0) {
+        let remain = __hx_payload_sub(total, got)
+        let dstp = __hx_payload_add(buf, got)
+        let r = hxlcl_read(fd, dstp, remain)
+        let stop = __hx_payload_le(r, 0)         // EOF or error → stop
+        if __hx_payload_ne(stop, 0) {
+            cont = 0
+        } else {
+            got = __hx_payload_add(got, r)
+            cont = __hx_payload_lt(got, total)
+        }
+    }
+    return __hx_payload_div(got, sz)             // item count
+}
+
+// hxlcl_fwrite: write-side mirror of fread (calls hxlcl_write). BYTE-FAITHFUL to
+// self/runtime_emit_full.hexa:1214-1227. Returns the item count (put / size).
+pub fn hxlcl_fwrite(buf: HexaVal, sz: HexaVal, n: HexaVal, fp: HexaVal) -> int {
+    let bnull = __hx_payload_eq(buf, 0)
+    if __hx_payload_ne(bnull, 0) { return 0 }
+    let szz = __hx_payload_eq(sz, 0)
+    if __hx_payload_ne(szz, 0) { return 0 }
+    let nz = __hx_payload_eq(n, 0)
+    if __hx_payload_ne(nz, 0) { return 0 }
+    let fnull = __hx_payload_eq(fp, 0)
+    if __hx_payload_ne(fnull, 0) { return 0 }
+    let fhigh = __hx_payload_ge(fp, 4096)
+    if __hx_payload_ne(fhigh, 0) { return 0 }    // libc FILE* unsupported here
+    let fd = __hx_payload_sub(fp, 1)
+    let total = __hx_payload_mul(sz, n)
+    let mut put = 0
+    let mut cont = __hx_payload_lt(put, total)
+    while __hx_payload_ne(cont, 0) {
+        let remain = __hx_payload_sub(total, put)
+        let srcp = __hx_payload_add(buf, put)
+        let r = hxlcl_write(fd, srcp, remain)
+        let stop = __hx_payload_le(r, 0)         // error or zero-progress → stop
+        if __hx_payload_ne(stop, 0) {
+            cont = 0
+        } else {
+            put = __hx_payload_add(put, r)
+            cont = __hx_payload_lt(put, total)
+        }
+    }
+    return __hx_payload_div(put, sz)             // item count
+}
+
+// hxlcl_ftell: current offset via lseek(fd, 0, SEEK_CUR=1). BYTE-FAITHFUL to
+// self/runtime_emit_full.hexa:1228-1232. NULL / libc-global fp → -1.
+pub fn hxlcl_ftell(fp: HexaVal) -> int {
+    let fnull = __hx_payload_eq(fp, 0)
+    if __hx_payload_ne(fnull, 0) { return -1 }
+    let fhigh = __hx_payload_ge(fp, 4096)
+    if __hx_payload_ne(fhigh, 0) { return -1 }   // libc FILE* unsupported here
+    let fd = __hx_payload_sub(fp, 1)
+    return hxlcl_lseek(fd, 0, 1)                 // SEEK_CUR = 1 (uniform all targets)
+}
+
+// hxlcl_fseek: lseek(fd, offset, whence) → 0 on success, -1 on failure.
+// BYTE-FAITHFUL to self/runtime_emit_full.hexa:1233-1237. SEEK_* constants are
+// uniform across Linux/darwin so `whence` passes through unchanged.
+pub fn hxlcl_fseek(fp: HexaVal, offset: HexaVal, whence: HexaVal) -> int {
+    let fnull = __hx_payload_eq(fp, 0)
+    if __hx_payload_ne(fnull, 0) { return -1 }
+    let fhigh = __hx_payload_ge(fp, 4096)
+    if __hx_payload_ne(fhigh, 0) { return -1 }   // libc FILE* unsupported here
+    let fd = __hx_payload_sub(fp, 1)
+    let r = hxlcl_lseek(fd, offset, whence)
+    let bad = __hx_payload_lt(r, 0)
+    if __hx_payload_ne(bad, 0) { return -1 }
+    return 0
+}
+
+// hxlcl_fdopen: wrap a raw fd as the fd+1 fake FILE* (mode ignored — these are
+// unbuffered fd wrappers). BYTE-FAITHFUL to self/runtime_emit_full.hexa:1238-1242.
+pub fn hxlcl_fdopen(fd: HexaVal, mode: HexaVal) -> int {
+    let bad = __hx_payload_lt(fd, 0)
+    if __hx_payload_ne(bad, 0) { return 0 }
+    return __hx_payload_add(fd, 1)              // (mode unused — unbuffered wrapper)
+}
