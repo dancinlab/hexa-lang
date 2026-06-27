@@ -109,7 +109,18 @@ fn _fmt_mem(target: string, op: LOperand) -> string {
     // call passes `label=""`, so the integer-offset branch below
     // continues to render identically.
     if len(op.label) > 0 {
-        return "[" + op.mem_base.name + ", " + op.label + "]"
+        // The label-as-offset symbol (e.g. `environ@GOTPAGEOFF` /
+        // `g<id>@GOTPAGEOFF`) is a SYMBOL reference and must carry the SAME
+        // per-target mangling its sibling `adrp …@GOTPAGE` (a `kind="label"`
+        // operand) already gets via _fmt_label — otherwise on darwin the adrp
+        // references `_environ` while the ldr references the un-mangled
+        // `environ`, a symbol mismatch that fails to assemble/link. Routing the
+        // inner symbol through _fmt_label fixes both this Route C named-data GOT
+        // load and the latent (previously asm-text-unexercised) `--shared`
+        // module-global GOT path. _fmt_label's `[`/`{`/`#`/`.` carve-outs leave
+        // any non-symbol literal untouched; byteeq-neutral (the baseline
+        // shared==0 corpus never sets `op.label`, so this branch is dead there).
+        return "[" + op.mem_base.name + ", " + _fmt_label(target, op.label) + "]"
     }
     if _is_arm64(target) {
         // AArch64 memory: `[base, #offset]` — always emit the explicit

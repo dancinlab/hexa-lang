@@ -2265,6 +2265,108 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // RFC061 Route C 2nd-return-register: `__hx_syscall6_out2(num, a0..a5,
+        // outptr)` — the dual-return sibling of __hx_syscall6 for the darwin BSD
+        // 2nd-return-register syscalls pipe(2)/fork(2). It mirrors the __hx_syscall6
+        // arg-stage/fill/trap above EXACTLY, then captures BOTH return registers
+        // (x0=1st, x1=2nd) AND the carry flag (darwin's error signal: carry-set +
+        // a POSITIVE errno in x0) into a 3-word caller scratch:
+        //   outptr[0]  = x0  (1st return / +errno on darwin error)
+        //   outptr[8]  = x1  (2nd return — pipe's fds[1], fork's parent/child x1==1)
+        //   outptr[16] = 1 if the carry flag was set (error) else 0
+        // The caller (hxlcl_pipe / hxlcl_fork darwin leg) reads them back with
+        // __hx_ptr_load64. The carry capture (`cset x6,cs`) must come FIRST after
+        // the trap — before any flags-setting instruction. The outptr (args[7]) is
+        // staged into x17 BEFORE the trap (x17 ∉ {x0..x5,x8,x16}, preserved across
+        // svc since the kernel restores all non-result registers). x0/x1 hold the
+        // results post-trap; addresses are computed via `add` (not an offset
+        // addressing mode) to reuse only proven-encodable forms (movz/add/str).
+        if s.op == "__hx_syscall6_out2" && len(s.args) >= 8 {
+            let elf_abi = opts.target_triple == "arm64-linux-gnu"
+            let tmps = ["x9", "x10", "x11", "x12", "x13", "x14"]
+            let mut ai = 1
+            while ai <= 6 {
+                buf = _hv_load(buf, s.args[ai], st, rm, "x7", "x8")  // arg → x8=payload
+                buf.push(_arm64_instr2("mov", _arm64_op_reg(tmps[ai - 1]),
+                                 _arm64_op_reg("x8"), "__hx_syscall6_out2: stage arg"))
+                ai = ai + 1
+            }
+            buf = _hv_load(buf, s.args[7], st, rm, "x7", "x8")  // outptr → x8
+            buf.push(_arm64_instr2("mov", _arm64_op_reg("x17"),
+                             _arm64_op_reg("x8"), "__hx_syscall6_out2: x17 = outptr (survives svc)"))
+            buf = _hv_load(buf, s.args[0], st, rm, "x7", "x8")  // num → x8
+            if elf_abi {
+                buf.push(_arm64_instr2("mov", _arm64_op_reg("x15"),
+                                 _arm64_op_reg("x8"), "__hx_syscall6_out2: stage syscall num"))
+            } else {
+                buf.push(_arm64_instr2("mov", _arm64_op_reg("x16"),
+                                 _arm64_op_reg("x8"), "__hx_syscall6_out2: x16 = syscall num"))
+            }
+            let mut mi = 0
+            while mi <= 5 {
+                buf.push(_arm64_instr2("mov", _arm64_op_reg("x" + to_string(mi)),
+                                 _arm64_op_reg(tmps[mi]), "__hx_syscall6_out2: arg -> x" + to_string(mi)))
+                mi = mi + 1
+            }
+            if elf_abi {
+                buf.push(_arm64_instr2("mov", _arm64_op_reg("x8"),
+                                 _arm64_op_reg("x15"), "__hx_syscall6_out2: x8 = syscall num"))
+                buf.push(_arm64_instr1("svc", _arm64_op_label("#0"),
+                                 "__hx_syscall6_out2: Linux syscall trap"))
+            } else {
+                buf.push(_arm64_instr1("svc", _arm64_op_label("#0x80"),
+                                 "__hx_syscall6_out2: BSD syscall trap"))
+            }
+            // Capture the carry flag FIRST (darwin error = carry-set). cset reads
+            // the condition directly; "cs" = carry-set → x6 = 1 on error.
+            buf.push(_arm64_instr2("cset", _arm64_op_reg("x6"),
+                             _arm64_op_label("cs"), "__hx_syscall6_out2: x6 = carry (darwin error flag)"))
+            // outptr[0] = x0 (1st return).
+            buf.push(_arm64_instr2("str", _arm64_op_reg("x0"),
+                             _arm64_op_label("[x17]"), "__hx_syscall6_out2: outptr[0] = ret1"))
+            // outptr[8] = x1 (2nd return).
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x2"),
+                             _arm64_op_label("#8"), "__hx_syscall6_out2: off 8"))
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x3"), _arm64_op_reg("x17"),
+                             _arm64_op_reg("x2"), "__hx_syscall6_out2: &outptr[8]"))
+            buf.push(_arm64_instr2("str", _arm64_op_reg("x1"),
+                             _arm64_op_label("[x3]"), "__hx_syscall6_out2: outptr[8] = ret2"))
+            // outptr[16] = carry/error flag.
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x2"),
+                             _arm64_op_label("#16"), "__hx_syscall6_out2: off 16"))
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x3"), _arm64_op_reg("x17"),
+                             _arm64_op_reg("x2"), "__hx_syscall6_out2: &outptr[16]"))
+            buf.push(_arm64_instr2("str", _arm64_op_reg("x6"),
+                             _arm64_op_label("[x3]"), "__hx_syscall6_out2: outptr[16] = carry"))
+            // Return value = 1st return (x0), boxed TAG_INT (caller reads slots).
+            buf.push(_arm64_instr2("mov", _arm64_op_reg("x1"),
+                             _arm64_op_reg("x0"), "__hx_syscall6_out2: payload = ret1"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_syscall6_out2: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
+        // RFC061 Route C Wall 2-b: `__hx_environ_ptr()` (0-arg) → the ADDRESS of the
+        // libc `extern char **environ` global, loaded through the GOT and boxed as a
+        // TAG_INT payload. The arm64 named-data GOT load is the same `adrp …@GOTPAGE`
+        // + `ldr …@GOTPAGEOFF` pair the `--shared` global path emits (asm-text
+        // identical on Mach-O ARM64_RELOC_GOT_LOAD_* and ELF R_AARCH64_*_GOT_*), here
+        // keyed to the named libc symbol `environ` (→ `_environ` on darwin via the
+        // unconditional `_` mangle in emit/asm _fmt_label). x1 = &environ (char***),
+        // x0 = TAG_INT; one __hx_ptr_load64 in the caller yields the char** array
+        // base. No args; just load + box (mirror of __hx_syscall6's tail box).
+        if s.op == "__hx_environ_ptr" {
+            buf.push(_arm64_instr2("adrp", _arm64_op_reg("x1"),
+                             _arm64_op_label("environ@GOTPAGE"),
+                             "__hx_environ_ptr: &environ GOT page [reloc=" + RELOC_AARCH64_ADR_GOT_PAGE + "]"))
+            buf.push(_arm64_instr2("ldr", _arm64_op_reg("x1"),
+                             _arm64_op_mem_label("x1", "environ@GOTPAGEOFF"),
+                             "__hx_environ_ptr: x1 = &environ [reloc=" + RELOC_AARCH64_LD64_GOT_LO12_NC + "]"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_environ_ptr: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // RT-NATIVE UNLOCK-10: `__hx_ptr_store64(ptr, off, val)` — write the
         // 64-bit int `val` to raw address `ptr + off`. The arena bump path
         // (a native allocator writes object headers/fields into an mmap slab)
