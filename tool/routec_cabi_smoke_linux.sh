@@ -62,7 +62,7 @@ HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
 echo "[routec-smoke-linux] (2) assert errno-bearing syscall symbols defined in routec.o …"
 syms="$(nm "$TMP/routec.o" 2>/dev/null || true)"
 miss=0
-for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe; do
+for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe time poll; do
     if ! grep -qE " T hxlcl_${s}\$" <<<"$syms"; then
         echo "[routec-smoke-linux] NOT DEFINED (T): hxlcl_${s}" >&2; miss=$((miss+1))
     fi
@@ -83,6 +83,8 @@ cat > "$TMP/harness.c" <<'CEOF'
 #include <sys/wait.h>   /* waitpid options — for hxlcl_waitpid */
 #include <sys/mman.h>   /* PROT_/MAP_ flags / MAP_FAILED — for hxlcl_mmap */
 #include <sys/resource.h> /* struct rusage / RUSAGE_SELF — for hxlcl_getrusage */
+#include <poll.h>       /* struct pollfd / POLLIN — for hxlcl_poll */
+#include <time.h>       /* time() — the reference oracle for hxlcl_time */
 
 /* Route-C-emitted symbols under test (raw C-ABI prototypes). */
 extern int  hxlcl_close(int fd);
@@ -104,6 +106,15 @@ extern int  hxlcl_open_sys(const char *path, int flags, int mode); /* arm64 → 
 extern int  hxlcl_getrusage(int who, void *usage);
 /* batch E — pipe: out-ptr int[2] (Linux pipe2, flags=0). Kernel writes both fds. */
 extern int  hxlcl_pipe(int fds[2]);
+/* batch G — strtoll: pure-compute parse with a NULL-gated `char** endptr` out-param.
+ * Exercised here too so the __hx_ptr_store64 endptr write gets x86_64 coverage
+ * (the store64 reg allocation differs per backend). Not errno-bearing. */
+extern long long hxlcl_strtoll(const char *nptr, char **endptr, int base);
+/* batch H — time / poll. time: register-clean on x86_64 (time(201) returns the
+ * epoch in the result reg) with a NULL-gated `int* t` out-param. poll: plain 3-arg
+ * poll(7) on x86_64 (errno-bearing). */
+extern int  hxlcl_time(int *t);
+extern int  hxlcl_poll(void *fds, unsigned int nfds, int timeout);
 
 /* The emit covers ALL whitelisted Route C symbols (the script emits the whole
  * hxlcl_core.hexa), so the routec.o carries the composites' undefined-external
@@ -301,6 +312,53 @@ int main(void) {
         CK(read(pfd[0], &rb, 1) == 1 && rb == 'Z', "pipe read end roundtrip == 'Z'");
         hxlcl_close(pfd[0]);
         hxlcl_close(pfd[1]);
+    }
+
+    /* batch G — strtoll: x86_64 coverage of the value parse + endptr store64
+     * out-param write (not errno-bearing — pure compute). */
+    {
+        CK(hxlcl_strtoll("42", NULL, 10) == 42, "strtoll(\"42\",NULL,10) == 42 (endptr NULL-gate)");
+        CK(hxlcl_strtoll("-7", NULL, 10) == -7, "strtoll(\"-7\",NULL,10) == -7 (sign)");
+        CK(hxlcl_strtoll("ff", NULL, 16) == 255, "strtoll(\"ff\",16) == 255 (lowercase hex)");
+        CK(hxlcl_strtoll("0755", NULL, 0) == 493, "strtoll(\"0755\",0) == 493 (octal auto)");
+        const char *hx = "0xFF";
+        char *endp = NULL;
+        CK(hxlcl_strtoll(hx, &endp, 16) == 255, "strtoll(\"0xFF\",&end,16) == 255 (0x skip)");
+        CK(endp == hx + 4, "strtoll endptr == nptr+4 (store64 out-param write, x86_64)");
+        const char *mix = "12x";
+        char *endp2 = NULL;
+        CK(hxlcl_strtoll(mix, &endp2, 10) == 12, "strtoll(\"12x\",&end,10) == 12");
+        CK(endp2 == mix + 2, "strtoll endptr stops at first non-digit (mix+2)");
+    }
+
+    /* batch H — time / poll. ──────────────────────────────────────────────────
+     * time: x86_64 uses the register-clean time(201) syscall (no buffer) — the
+     * epoch returns in the result reg; assert it is post-2023 AND within ±2s of
+     * libc time(NULL), plus the NULL-gated out-param write (*t == return). poll:
+     * x86_64 uses the plain 3-arg poll(7); assert poll(no fds, 0ms) == 0 and a
+     * real pollfd on a pipe (empty → 0, data-ready → 1). */
+    {
+        long ref = (long)time(NULL);
+        int t1 = hxlcl_time(NULL);
+        CK(t1 > 1700000000, "time(NULL) > 2023-11 epoch (register-clean x86_64 time)");
+        CK((long)t1 - ref <= 2 && ref - (long)t1 <= 2, "time(NULL) ~= libc time(NULL) (within 2s)");
+        int tt = -1;
+        int t2 = hxlcl_time(&tt);
+        CK(tt == t2, "time(&t) writes *t == return (NULL-gated out-param store32)");
+        CK(t2 > 1700000000, "time(&t) return > 2023-11 epoch");
+
+        CK(hxlcl_poll(NULL, 0, 0) == 0, "poll(NULL, 0, 0ms) == 0 (no fds, immediate)");
+        int ph[2];
+        if (pipe(ph) == 0) {
+            struct pollfd pf;
+            pf.fd = ph[0]; pf.events = POLLIN; pf.revents = 0;
+            CK(hxlcl_poll(&pf, 1, 0) == 0, "poll(pipe read end, empty, 0ms) == 0");
+            if (write(ph[1], "z", 1) == 1) {
+                pf.revents = 0;
+                CK(hxlcl_poll(&pf, 1, 100) == 1, "poll(pipe read end, data ready, 100ms) == 1 (POLLIN)");
+            }
+            close(ph[0]); close(ph[1]);
+        }
     }
 
     if (fails == 0) { printf("[routec-smoke-linux] all Route C errno asserts PASS\n"); return 0; }
