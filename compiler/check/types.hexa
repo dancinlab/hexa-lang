@@ -1648,6 +1648,76 @@ fn _types_kind_is_scalar(k: string) -> bool {
     return false
 }
 
+// Wall A r4 — Index-expr probe (stage0 has no derived Eq). Mirrors the
+// per-ExprKind match shape of `_types_is_assign`; only `ExprKind::Index`
+// (a postfix `a[i]` subscript, parser.hexa:753) is true. Used so the assign
+// arm can distinguish an `a[i] = …` element-place LHS from a plain ident LHS.
+fn _types_is_index(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Index -> true,
+        ExprKind::Assign -> false,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::Field -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+// Wall A r4 — parse the element-type spelling out of a sized/unsized array
+// annotation. The parser (parser.hexa:parse_type, RFC 085) encodes `[T; N]`
+// as the type-name `Array:<elem>:<N>` and bare `[T]` as `Array:<elem>`;
+// mirror hir_to_mir.hexa:_arru_array_type_id_from_text's split — `elem` is
+// the substring after the `Array:` prefix up to the next `:` (sized) or the
+// end (unsized). Returns "" for a non-array annotation (the backward-compat
+// `Array:<N>` count-only form yields a non-scalar digit string the caller
+// rejects), so callers conservatively skip. Self-contained (no cross-module
+// import; same module-local-mirror precedent as `_types_let_type_text`),
+// `.chars()`-based (no new builtin), frozen-seed-safe.
+fn _types_array_elem_kind(tt: string) -> string {
+    let pfx = "Array:"
+    let chars = tt.chars()
+    let n = len(chars)
+    let pch = pfx.chars()
+    let plen = len(pch)
+    if n <= plen { return "" }
+    let mut pi = 0
+    while pi < plen {
+        if chars[pi] != pch[pi] { return "" }
+        pi = pi + 1
+    }
+    let mut elem = ""
+    let mut i = plen
+    while i < n {
+        if chars[i] == ':' { return elem }
+        elem = elem + to_string(chars[i])
+        i = i + 1
+    }
+    return elem
+}
+
 // ── Expression type inference + checks ───────────────────────
 // Returns the inferred Type of `e`. Diagnostics for sub-expressions push
 // into `out` along the way (multi-error policy).
@@ -1734,6 +1804,25 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                         // `x = …` assign on those types conservatively silent.
                         if _types_kind_is_scalar(declared.kind) {
                             benv = _types_env_define(benv, nm, _types_miss_def_id(), declared)
+                        } else {
+                            // Wall A r4 — array element-fit tracking. A
+                            // `let a: [i32; N]` (or `[i32]`) is encoded by the
+                            // parser as the type-name `Array:<elem>[:<N>]`
+                            // (parser.hexa:parse_type). Record its KNOWN-scalar
+                            // element type under a COLLISION-FREE key, `[]<name>`
+                            // — an identifier can never start with `[`, so this
+                            // never shadows a real ident lookup of `a` (the
+                            // whole-array binding stays unrecorded, exactly as
+                            // before) — so a LATER `a[i] = <expr>` index-assign
+                            // (Assign arm) can recover the element type for the
+                            // fit check. Only KNOWN scalar elements are kept;
+                            // unknown / nested-array / struct / count-only
+                            // (`Array:<N>`) elements stay r5+ → conservatively
+                            // silent. Mirrors the r3 scalar-decl recording.
+                            let elem = _types_array_elem_kind(tt)
+                            if len(elem) > 0 && _types_kind_is_scalar(elem) {
+                                benv = _types_env_define(benv, "[]" + nm, _types_miss_def_id(), _prim(elem, ""))
+                            }
                         }
                     }
                 }
@@ -1945,6 +2034,35 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                     if !_types_assignable(lhs_t, rhs_t, e.children[1]) {
                         _emit_hx3011(lhs_t, rhs_t, e.span, out)
                         r3_rejected = true
+                    }
+                } else if _types_is_index(e.children[0].kind) && len(e.children[0].children) > 0 {
+                    // Wall A r4 — array element-fit assign REJECT. The LHS is an
+                    // `a[i]` subscript (Index: children[0]=base, children[1]=
+                    // index, parser.hexa:753). When the base is a plain ident
+                    // whose declared array element type was recorded by the
+                    // Block case (key `[]<name>`), and BOTH that element type
+                    // and the inferred RHS are KNOWN scalars that provably
+                    // disagree, REJECT with HX3011 — the Rust E0308 index-place
+                    // coercion path: rustc_hir_typeck/src/expr.rs
+                    // `check_expr_index` (place expr) → assignment
+                    // `demand_coerce` → `FnCtxt::report_mismatched_types` (the
+                    // SAME E0308 emitter the r1/r2/r3 arms mirror). Note `lhs_t`
+                    // from `_infer_expr` on an Index is the Field/Index STUB-v1
+                    // unknown (`_types_empty_type()`), so the element type comes
+                    // from the recorded `[]<name>` env entry — NOT lhs_t.
+                    // int/float-literal RHS still coerces (`_types_assignable`
+                    // sees `e.children[1]`), matching the r1/r3 ergonomics; an
+                    // unrecorded base (unknown/aggregate element) stays r5+
+                    // silent. Suppresses the generic HX3001 (`r3_rejected`).
+                    let base = e.children[0].children[0]
+                    if _types_is_ident(base.kind) && len(base.text) > 0 {
+                        let elem_t = _types_env_lookup(env, "[]" + base.text)
+                        if _types_kind_is_scalar(elem_t.kind) && _types_kind_is_scalar(rhs_t.kind) {
+                            if !_types_assignable(elem_t, rhs_t, e.children[1]) {
+                                _emit_hx3011(elem_t, rhs_t, e.span, out)
+                                r3_rejected = true
+                            }
+                        }
                     }
                 }
             }

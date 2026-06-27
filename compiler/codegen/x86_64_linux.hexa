@@ -264,7 +264,19 @@ pub struct X86RegMap {
     // (same firewall as local_type) → stays empty `[]` + never consulted when OFF →
     // byte-eq NEUTRAL. local_const_ok[id]==1 ⇒ local_const_val[id] is the literal.
     local_const_ok: [i64],
-    local_const_val: [i64]
+    local_const_val: [i64],
+    // element-pack (HEXA_PACK_ARRAY) — id → 1 when this local is a typed-prim
+    // array (type_id 101..104) created by an `array_lit` AND PROVEN non-escaping
+    // across the whole function (the only uses are create / index get / index
+    // set / push / len). Such a binding is lowered to RAW PACKED storage
+    // (HexaArrI64/F64 — 8B/4B contiguous, no per-element tag) instead of the
+    // boxed 16B-stride HexaArr — V8 PACKED_SMI_ELEMENTS / PyPy storage-strategy.
+    // Built ONLY when `_pack_array_enabled()` (same firewall as local_type):
+    // OFF leaves `[]`, never consulted → byte-eq NEUTRAL. The escape proof is
+    // the soundness firewall — a missed escape (a boxed-surface use reading the
+    // packed buffer via the 16B-stride HexaArr layout) would be a miscompile, so
+    // the scan is a CONSERVATIVE whitelist: any unrecognised use voids the proof.
+    local_packed_ok: [i64]
 }
 
 pub struct X86AllocResult {
@@ -646,7 +658,7 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
     // CONSUMER-side producer for the `local_type[]` regmap slot. Either gate ON
     // now builds the slot; OFF path (neither flag) keeps `[]` → byte-identical.
     let mut rm_local_type: [i64] = []
-    if _unbox_native_enabled() || _unbox_array_enabled() {
+    if _unbox_native_enabled() || _unbox_array_enabled() || _pack_array_enabled() {
         let lt_maxid = _x86_max_local_id(mf)
         let mut lj = 0
         while lj <= lt_maxid { rm_local_type.push(0); lj = lj + 1 }
@@ -713,7 +725,111 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
         }
     }
 
-    let map = X86RegMap { ids: map_ids, regs: map_regs, slots: map_slots, tag_base: tag_base, id2idx: rm_id2idx, local_type: rm_local_type, local_const_ok: rm_const_ok, local_const_val: rm_const_val }
+    // ── element-pack lattice (HEXA_PACK_ARRAY) — whole-function escape proof.
+    // Built ONLY when `_pack_array_enabled()`; OFF leaves `[]` → byte-eq NEUTRAL.
+    //
+    // The k3 shape `let mut xs: [i64] = []` lowers to TWO locals:
+    //   T (storage) — `STMT_ASSIGN op="array_lit" dst=T args=[]`  (type_id 0,
+    //                 the empty-literal HexaArr buffer)
+    //   X (handle)  — `STMT_ASSIGN op="let"       dst=X args=[T]` (type_id 101/102,
+    //                 the typed binding; a HexaVal copy → shares T's descriptor)
+    // Subsequent `xs[i]` / `xs[i]=v` / `xs.push(v)` / `len(xs)` reference X.
+    // (A direct `let xs = [1,2,3]` with a typed literal collapses X==T.)
+    //
+    // We pack BOTH T and X iff the WHOLE-FUNCTION use of each is whitelisted:
+    //   X : dst of its `let`  +  args[0] (container) of index/index_set/push/len.
+    //   T : dst of its array_lit  +  args[0] of EXACTLY ONE `let` (the X link).
+    // Any other appearance (call-arg, return, value-position, a 2nd let-copy of
+    // T, a reassign) voids the proof → the binding stays BOXED (no regression,
+    // no miscompile). This is the V8 PACKED→HOLEY soundness fallback.
+    let mut rm_packed_ok: [i64] = []
+    if _pack_array_enabled() {
+        let pk_maxid = _x86_max_local_id(mf)
+        let mut pk0 = 0
+        while pk0 <= pk_maxid { rm_packed_ok.push(0); pk0 = pk0 + 1 }
+        // is_alit[id]=1 if id is the dst of an array_lit; let_src[id]=source
+        // local of a typed (101/102) `let X=<local>` (else -1); let_use[id]=
+        // number of times id appears as args[0] of a `let` (T-uniqueness guard).
+        let mut is_alit: [i64] = []
+        let mut let_src: [i64] = []
+        let mut let_use: [i64] = []
+        let mut pz = 0
+        while pz <= pk_maxid { is_alit.push(0); let_src.push(0 - 1); let_use.push(0); pz = pz + 1 }
+        let mut pb0 = 0
+        while pb0 < len(mf.blocks) {
+            let pblk0 = mf.blocks[pb0]
+            let mut ps0 = 0
+            while ps0 < len(pblk0.stmts) {
+                let pst0 = pblk0.stmts[ps0]
+                let pd0 = pst0.dst.id
+                if pst0.kind == _STMT_ASSIGN && pst0.op == "array_lit" &&
+                   pd0 >= 0 && pd0 <= pk_maxid { is_alit[pd0] = 1 }
+                if pst0.kind == _STMT_ASSIGN && pst0.op == "let" && len(pst0.args) >= 1 &&
+                   pst0.args[0].kind == "local" {
+                    let psrc = pst0.args[0].local_id
+                    if psrc >= 0 && psrc <= pk_maxid { let_use[psrc] = let_use[psrc] + 1 }
+                    if pd0 >= 0 && pd0 <= pk_maxid {
+                        let pt0 = rm_local_type[pd0]
+                        if pt0 == 101 || pt0 == 102 { let_src[pd0] = psrc }
+                    }
+                }
+                ps0 = ps0 + 1
+            }
+            pb0 = pb0 + 1
+        }
+        // Candidate marking: a handle X (type 101/102) that is a typed array_lit
+        // dst (X==T direct) OR a `let X=T` whose T is an array_lit dst flowing
+        // into exactly ONE let. Mark both X and its storage T.
+        let mut pc = 0
+        while pc <= pk_maxid {
+            let ptid = rm_local_type[pc]
+            if ptid == 101 || ptid == 102 {
+                if is_alit[pc] == 1 {
+                    rm_packed_ok[pc] = 1                       // direct X==T
+                } else if let_src[pc] >= 0 && let_src[pc] <= pk_maxid &&
+                          is_alit[let_src[pc]] == 1 && let_use[let_src[pc]] == 1 {
+                    rm_packed_ok[pc] = 1                       // handle X
+                    rm_packed_ok[let_src[pc]] = 1             // storage T
+                }
+            }
+            pc = pc + 1
+        }
+        // Escape scan: clear any packed id used outside its whitelist.
+        let mut pb2 = 0
+        while pb2 < len(mf.blocks) {
+            let pblk2 = mf.blocks[pb2]
+            let mut ps2 = 0
+            while ps2 < len(pblk2.stmts) {
+                let pst2 = pblk2.stmts[ps2]
+                let pdid = pst2.dst.id
+                if pdid >= 0 && pdid <= pk_maxid && rm_packed_ok[pdid] == 1 {
+                    let dst_ok = pst2.kind == _STMT_ASSIGN &&
+                                 (pst2.op == "array_lit" || pst2.op == "let")
+                    if !dst_ok { rm_packed_ok[pdid] = 0 }
+                }
+                let mut pai = 0
+                while pai < len(pst2.args) {
+                    let parg = pst2.args[pai]
+                    if parg.kind == "local" && parg.local_id >= 0 &&
+                       parg.local_id <= pk_maxid && rm_packed_ok[parg.local_id] == 1 {
+                        let mut safe = false
+                        if pai == 0 {
+                            if pst2.kind == _STMT_ASSIGN &&
+                               (pst2.op == "index" || pst2.op == "index_set" || pst2.op == "let") { safe = true }
+                            if pst2.kind == _STMT_CALL &&
+                               (pst2.op == "push" || pst2.op == "len") { safe = true }
+                        }
+                        if !safe { rm_packed_ok[parg.local_id] = 0 }
+                    }
+                    pai = pai + 1
+                }
+                ps2 = ps2 + 1
+            }
+            pb2 = pb2 + 1
+        }
+    }
+
+    let map = X86RegMap { ids: map_ids, regs: map_regs, slots: map_slots, tag_base: tag_base, id2idx: rm_id2idx, local_type: rm_local_type, local_const_ok: rm_const_ok, local_const_val: rm_const_val, local_packed_ok: rm_packed_ok }
     return X86AllocResult { map: map, frame_size: frame }
 }
 
@@ -887,6 +1003,16 @@ fn _x86_tag_resolve(o: Operand, rm: X86RegMap, scratch: string) {
         return
     }
     if o.kind == "local" {
+        // element-pack FUSE — a statically-i64 local (type_id==1) has the
+        // INVARIANT tag TAG_INT=0. Reading const-0 is identical to reading a
+        // correctly-stored slot, which makes ELIDING the producer-side tag store
+        // (the arrpk_get RECON-1 below) sound for ANY residual boxed reader.
+        // PACK-gated → byte-identical when the fuse gate is OFF.
+        if _pack_fuse_enabled() && _x86_local_type(rm, o.local_id) == 1 {
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg(scratch), _x86_op_imm(0),
+                             "tag L" + to_string(o.local_id) + " = TAG_INT (i64-local, fused)"))
+            return
+        }
         let off = _x86_tag_off(rm, o.local_id)
         if off >= 0 {
             _x86_buf.push(_x86_instr2("mov", _x86_op_reg(scratch),
@@ -1053,7 +1179,13 @@ fn _x86_operand_provably_int(o: Operand, rm: X86RegMap) -> bool {
 // Should this binop take the unboxed native ALU path? Gate ON + op in the
 // int-closed unbox set + dst proven i64 + both operands proven raw-int.
 fn _x86_binop_unbox_ok(s: Stmt, rm: X86RegMap) -> bool {
-    if !_unbox_native_enabled() { return false }
+    // element-pack FUSE — the SAME provably-int native-ALU path is reachable
+    // when the PACK fuse gate is live: a packed [i64] element threaded to
+    // type_id==1 (by the hir_to_mir element-type stamps) feeds `+ - * cmp`
+    // natively, eliminating the boxed `call hexa_mul/add/cmp` (RECON-2). The
+    // operand/dst proofs below are IDENTICAL; only the enabling gate widens.
+    // OFF-path (neither gate) → false → byte-identical boxed emit.
+    if !(_unbox_native_enabled() || _pack_fuse_enabled()) { return false }
     if len(s.args) < 2 { return false }
     // Only the int-closed ops whose existing native ALU/cmp path is correct for
     // raw i64. NOT `/` `%` (div-zero throw stays boxed). NOT concat/bitwise-mix.
@@ -1150,6 +1282,57 @@ fn _unbox_array_enabled() -> bool {
 // Pure diagnostic: gated, no LIR effect, byte-neutral when unset.
 fn _arru_debug_enabled() -> bool {
     return env("HEXA_ARRU_DEBUG") == "1"
+}
+
+// ── element-pack (HEXA_PACK_ARRAY) ──────────────────────────────────────────
+// Big array-layout lever: a PROVEN typed-prim non-escaping array binding is
+// stored RAW PACKED (HexaArrI64/HexaArrF64 — contiguous 8B/4B, NO per-element
+// tag) instead of the boxed 16B-stride HexaArr the r2c arru path walks. This
+// halves the element memory traffic (stride 16→8) and drops the per-element tag
+// store/load — closing the k3_arrmap stride-16 residual (V8 PACKED_SMI_ELEMENTS
+// / PyPy storage-strategy; the runtime already ships the packed descriptors +
+// hexa_arr_i64_new/push/box, used today only by the gen2 C-transpile backend).
+//
+// Soundness firewall (mirrors r2c _unbox_array exactly, plus an ESCAPE proof):
+//   - env-opt-in, default-OFF. Unset → `_pack_array_enabled()` false → the
+//     local_packed_ok lattice stays `[]`, every packed branch is skipped, and
+//     the emit is byte-identical to origin (OFF-byteeq Gate-1).
+//   - the container must be a `local` PROVEN packed by the whole-function escape
+//     scan (built in the regmap builder): created by an `array_lit`, and used
+//     ONLY as the container of index / index_set / push / len. ANY other use
+//     (call-arg, return, store, reassign, value-position) voids the proof — the
+//     binding then stays BOXED (current r2c/baseline behaviour, no regression).
+//   - currently i64/i32 element kinds only (type_id 101/102 → HexaArrI64). f64/
+//     f32 (103/104 → HexaArrF64) is a follow-on (needs the xmm push ABI).
+fn _pack_array_enabled() -> bool {
+    return env("HEXA_PACK_ARRAY") == "1"
+}
+
+// element-pack FUSE gate — the precondition for the two RECON-1 (dead int
+// tag round-trip) elisions AND the binop-unbox extension that let a raw packed
+// element flow directly into a native `add/imul/cmp` (no HexaVal re-pair). It is
+// PACK-only (NOT also _unbox_array_enabled / _unbox_native_enabled) so the
+// PROVEN r2c (HEXA_UNBOX_ARRAY_NATIVE) and r5 (HEXA_UNBOX_NATIVE) byteeq stay
+// byte-identical — only the regressed PACK lane (standalone 1.147) is touched.
+// Default-OFF (env unset) → every fuse branch below is skipped → byte-identical.
+fn _pack_fuse_enabled() -> bool {
+    return _pack_array_enabled()
+}
+
+// id → is this local a PROVEN packed typed-prim array? O(1) probe of the lattice
+// the regmap builder fills (empty/false when the gate is OFF or the proof failed).
+fn _x86_local_is_packed(rm: X86RegMap, id: i64) -> bool {
+    if id < 0 || id >= len(rm.local_packed_ok) { return false }
+    return rm.local_packed_ok[id] == 1
+}
+
+// Should `array_lit` / `push` / `index` / `index_set` on operand `o` take the
+// packed (raw 8B) path? Gate ON + `o` is a local PROVEN packed. (The type/idx
+// provenance was already checked when the lattice was built.)
+fn _x86_operand_is_packed(o: Operand, rm: X86RegMap) -> bool {
+    if !_pack_array_enabled() { return false }
+    if o.kind != "local" { return false }
+    return _x86_local_is_packed(rm, o.local_id)
 }
 
 // Is operand `o` a PROVABLY typed-prim-array container (MIR type_id 101..104)?
@@ -1275,6 +1458,79 @@ fn _x86_emit_arru_set(s: Stmt, st: X86StrTab, rm: X86RegMap, opts: CodegenOption
                      "arru set: element tag"))
     _x86_buf.push(_x86_instr2("mov", _x86_op_mem("r11", 8), _x86_op_reg("r8"),
                      "arru set: element payload"))
+    return n
+}
+
+// element-pack — native `arr[idx]` load from RAW PACKED storage (HexaArrI64,
+// HEXA_PACK_ARRAY). Layout HexaArrI64{ data*@0, len@8, cap@16 }; element stride
+// sizeof(int64_t)=8, NO per-element tag (the carried tag is synthesized = the
+// array's element-kind, TAG_INT for 101/102). vs the r2c arru_get this is the
+// stride-16→8 + tag-store-elision win. OOB falls to hexa_arr_i64_box (bounds
+// check + throw) — emitted by the SITE. Returns the unique suffix N.
+fn _x86_emit_arrpk_get(s: Stmt, st: X86StrTab, rm: X86RegMap, opts: CodegenOptions) -> i64 {
+    let n = _x86_arru_lbl
+    _x86_arru_lbl = _x86_arru_lbl + 1
+    let slow = ".Larrpk_slow" + to_string(n)
+    let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
+    let etag = _x86_arru_elem_tag(_x86_local_type(rm, s.args[0].local_id))
+    // r10 = HexaArrI64* (container payload), rax = idx payload.
+    _x86_hv_payload(s.args[0], st, rm, "r10", opts)
+    _x86_hv_payload(s.args[1], st, rm, "rax", opts)
+    _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r10", 8),
+                     "arrpk get: len"))
+    _x86_buf.push(_x86_instr2("cmp", _x86_op_reg("rax"), _x86_op_reg("r11"),
+                     "arrpk get: idx vs len"))
+    _x86_buf.push(_x86_instr1("jae", _x86_op_label(slow),
+                     "arrpk get: OOB -> hexa_arr_i64_box"))
+    _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r10", 0),
+                     "arrpk get: data*"))
+    _x86_buf.push(_x86_instr3("imul", _x86_op_reg("rax"), _x86_op_reg("rax"),
+                     _x86_op_imm(8), "arrpk get: idx * sizeof(int64_t)"))
+    _x86_buf.push(_x86_instr2("add", _x86_op_reg("r11"), _x86_op_reg("rax"),
+                     "arrpk get: &data[idx]"))
+    _x86_buf.push(_x86_instr2("mov", dst, _x86_op_mem("r11", 0),
+                     "arrpk get: raw packed element"))
+    // element-pack FUSE (RECON-1 elision) — skip the dead 2-instr int tag round-
+    // trip for a TAG_INT (etag==0) element landing in a statically-i64 dst
+    // (local_type==1): the `_x86_tag_resolve` const-0 shortcut makes ANY boxed
+    // reader read TAG_INT regardless, and the native-ALU unboxed reader ignores
+    // the tag entirely. Both preconditions (etag==0 ∧ dst i64) hold for every
+    // packed [i64]/[i32] element. Gated → kept verbatim when the fuse gate is OFF.
+    if !(_pack_fuse_enabled() && etag == 0 && _x86_local_type(rm, s.dst.id) == 1) {
+        _x86_store_tag_imm(rm, s.dst.id, etag)
+    }
+    _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+    return n
+}
+
+// element-pack — native `arr[idx] = val` store into RAW PACKED storage. Stride
+// 8, raw value payload (no tag slot). In-bounds writes never relocate (fixed
+// slot). OOB falls to hexa_arr_i64_box (bounds throw) — emitted by the SITE.
+// NOTE the boxed hexa_index_set AUTO-GROWS on OOB; the packed gate narrows that
+// to a bounds-throw (a documented opt-in semantic — k3 indexes in-bounds, so
+// parity holds; auto-grow on a packed array is a follow-on). Returns suffix N.
+fn _x86_emit_arrpk_set(s: Stmt, st: X86StrTab, rm: X86RegMap, opts: CodegenOptions) -> i64 {
+    let n = _x86_arru_lbl
+    _x86_arru_lbl = _x86_arru_lbl + 1
+    let slow = ".Larrpk_slow" + to_string(n)
+    // r10 = HexaArrI64* (container payload), rax = idx payload, r8 = value payload.
+    _x86_hv_payload(s.args[0], st, rm, "r10", opts)
+    _x86_hv_payload(s.args[1], st, rm, "rax", opts)
+    _x86_hv_payload(s.args[2], st, rm, "r8", opts)
+    _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r10", 8),
+                     "arrpk set: len"))
+    _x86_buf.push(_x86_instr2("cmp", _x86_op_reg("rax"), _x86_op_reg("r11"),
+                     "arrpk set: idx vs len"))
+    _x86_buf.push(_x86_instr1("jae", _x86_op_label(slow),
+                     "arrpk set: OOB -> hexa_arr_i64_box (bounds throw)"))
+    _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r10", 0),
+                     "arrpk set: data*"))
+    _x86_buf.push(_x86_instr3("imul", _x86_op_reg("rax"), _x86_op_reg("rax"),
+                     _x86_op_imm(8), "arrpk set: idx * sizeof(int64_t)"))
+    _x86_buf.push(_x86_instr2("add", _x86_op_reg("r11"), _x86_op_reg("rax"),
+                     "arrpk set: &data[idx]"))
+    _x86_buf.push(_x86_instr2("mov", _x86_op_mem("r11", 0), _x86_op_reg("r8"),
+                     "arrpk set: raw packed store"))
     return n
 }
 
@@ -2067,6 +2323,41 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
         // logic parity with the existing concat/idiv emits.
         if s.op == "array_lit" {
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
+            // element-pack — PROVEN packed typed-prim storage: build a RAW
+            // contiguous HexaArrI64 (hexa_arr_i64_new + raw hexa_arr_i64_push)
+            // instead of the boxed 16B-stride HexaArr. The descriptor rides the
+            // SAME TAG_ARRAY/arr_ptr slot (layout-match) so the downstream `let`
+            // copy + len() are unchanged. i64/i32 only (TAG_INT elements).
+            if _pack_array_enabled() && _x86_local_is_packed(rm, s.dst.id) {
+                let mut pcap = len(s.args)
+                if pcap < 1 { pcap = 1 }
+                // hexa_arr_i64_new(int cap): cap in rdi (single C-ABI int reg);
+                // returns HexaVal pair rax:rdx (tag:payload).
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rdi"), _x86_op_imm(pcap),
+                                 "arrpk new: cap"))
+                _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_arr_i64_new"),
+                                 "arrpk new: packed int64 storage"))
+                _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                                 "arrpk new: capture descriptor"))
+                _x86_store_tag_reg(rm, s.dst.id, "rax")
+                let mut pi = 0
+                while pi < len(s.args) {
+                    // hexa_arr_i64_push(HexaVal v, int64_t x): v → rdi:rsi,
+                    // x (RAW element payload) → rdx.
+                    _x86_hv_payload(s.args[pi], st, rm, "rdx", opts)
+                    _x86_tag_resolve_local(rm, s.dst.id, "rdi")
+                    _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rsi"), dst,
+                                     "arrpk push: descriptor"))
+                    _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_arr_i64_push"),
+                                     "arrpk push: raw elem " + to_string(pi)))
+                    _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                                     "arrpk push: recapture descriptor"))
+                    _x86_store_tag_reg(rm, s.dst.id, "rax")
+                    pi = pi + 1
+                }
+                _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+                return
+            }
             // hexa_array_new returns a HexaVal {tag=TAG_ARRAY, payload=ptr} in
             // rax:rdx. PAIR-MODEL: payload = rdx (the array ptr), tag = rax.
             _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_array_new"),
@@ -2243,6 +2534,25 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                          " gate_ok=" + to_string(if _x86_index_unbox_ok(s, rm) { 1 } else { 0 }))
             }
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
+            // element-pack — PROVEN packed container + provably-int idx → RAW
+            // stride-8 load (no tag slot). OOB → hexa_arr_i64_box (bounds throw +
+            // boxed return). Takes precedence over the r2c boxed-stride arru_get.
+            if _x86_operand_is_packed(s.args[0], rm) && _x86_operand_provably_int(s.args[1], rm) {
+                let _pn = _x86_emit_arrpk_get(s, st, rm, opts)
+                _x86_buf.push(_x86_instr1("jmp", _x86_op_label(".Larrpk_done" + to_string(_pn)),
+                                 "arrpk get: skip OOB slow path"))
+                _x86_arru_emit_label(".Larrpk_slow" + to_string(_pn))
+                _x86_hv_box_arg(s.args[0], st, rm, "rdi", "rsi", opts)  // container
+                _x86_hv_payload(s.args[1], st, rm, "rdx", opts)         // idx (raw int64)
+                _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_arr_i64_box"),
+                                 "index: hexa_arr_i64_box (packed OOB slow path)"))
+                _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                                 "index: capture packed element payload"))
+                _x86_store_tag_reg(rm, s.dst.id, "rax")
+                _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+                _x86_arru_emit_label(".Larrpk_done" + to_string(_pn))
+                return
+            }
             // r2b — typed-prim array + provably-int idx → native element load with
             // a KEPT bounds-check; OOB falls through to the runtime call below
             // (canonical bounds-error). Gate OFF → _x86_index_unbox_ok is false →
@@ -2315,6 +2625,20 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                          " idx.kind=" + s.args[1].kind +
                          " idx.provint=" + to_string(_ipi) +
                          " gate_ok=" + to_string(if _x86_index_unbox_ok(s, rm) { 1 } else { 0 }))
+            }
+            // element-pack — PROVEN packed container + provably-int idx → RAW
+            // stride-8 store (no tag slot). OOB → hexa_arr_i64_box (bounds throw).
+            if _x86_operand_is_packed(s.args[0], rm) && _x86_operand_provably_int(s.args[1], rm) {
+                let _pn = _x86_emit_arrpk_set(s, st, rm, opts)
+                _x86_buf.push(_x86_instr1("jmp", _x86_op_label(".Larrpk_done" + to_string(_pn)),
+                                 "arrpk set: skip OOB slow path"))
+                _x86_arru_emit_label(".Larrpk_slow" + to_string(_pn))
+                _x86_hv_box_arg(s.args[0], st, rm, "rdi", "rsi", opts)  // container
+                _x86_hv_payload(s.args[1], st, rm, "rdx", opts)         // idx (raw int64)
+                _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_arr_i64_box"),
+                                 "index_set: hexa_arr_i64_box (packed OOB bounds throw)"))
+                _x86_arru_emit_label(".Larrpk_done" + to_string(_pn))
+                return
             }
             // r2b — typed-prim array + provably-int idx → native in-place element
             // store with a KEPT bounds-check; OOB falls through to the runtime
@@ -3311,6 +3635,26 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
         // the x86_64 path emitted the bare hexa name (e.g. `print`) which has
         // no runtime symbol -> `undefined reference to print` at link. User
         // functions are not in the table and pass through unchanged.
+        // element-pack — `xs.push(v)` on a PROVEN packed array routes to the RAW
+        // packed grow (hexa_arr_i64_push: descriptor in rdi:rsi, RAW int64 value
+        // in rdx) instead of the boxed hexa_array_push (which writes a 16B HexaVal
+        // — would corrupt the contiguous int64 buffer). The descriptor is mutated
+        // in place (data realloc'd inside), so the discarded call-ret temp is fine;
+        // recapture anyway for an `let a = xs.push(v)` expression use.
+        if _pack_array_enabled() && s.op == "push" && len(s.args) >= 2 &&
+           _x86_operand_is_packed(s.args[0], rm) {
+            _x86_hv_box_arg(s.args[0], st, rm, "rdi", "rsi", opts) // descriptor pair
+            _x86_hv_payload(s.args[1], st, rm, "rdx", opts)        // RAW value → rdx
+            _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_arr_i64_push"),
+                             "push: packed raw int64 grow"))
+            if s.dst.id >= 0 {
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg(_x86_dst_reg(rm, s.dst.id)),
+                                 _x86_op_reg("rdx"), "push: recapture packed descriptor"))
+                _x86_store_tag_reg(rm, s.dst.id, "rax")
+                _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+            }
+            return
+        }
         let target = _builtin_runtime_sym(s.op)
         let is_builtin = target != s.op
 

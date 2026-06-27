@@ -183,6 +183,23 @@ fn _assign_expr(lhs: Expr, rhs: Expr, file: string, line: i64, col: i64) -> Expr
     }
 }
 
+// Wall A r4 — `base[idx]` subscript. children = [base, idx] per the Index
+// node the parser builds (parser.hexa:753) and the assign arm in
+// types.hexa:_infer_expr reads (children[0]=base, children[1]=index).
+fn _index_expr(base: Expr, idx: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(base)
+    kids.push(idx)
+    return Expr {
+        kind: ExprKind::Index,
+        span: _span(file, line, col, 1),
+        text: "",
+        annotations: [],
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
 fn _block(children: [Expr], file: string, line: i64, col: i64) -> Expr {
     return Expr {
         kind: ExprKind::Block,
@@ -578,6 +595,43 @@ fn _build_case_static_types_r3() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// Wall A r4 — array element-fit assign. A `let a: [i32; N]` (decl-only, the
+// parser encodes the annotation as `Array:i32:4`) records its KNOWN-scalar
+// element type into the block-scoped env (key `[]a`); a later `a[i] = <expr>`
+// whose inferred scalar RHS provably disagrees with the element type REJECTs
+// with HX3011 (Rust E0308 check_expr_index place-coercion). Two REJECT shapes
+// + one matching control, all in one fn body so the block env carries the
+// recorded element type forward:
+//   fn main() {
+//       let a: [i32; 4]            // decl-only → record []a : i32
+//       a[0] = "s"                 // REJECT: string ≠ i32 element → HX3011
+//       let b: [string]           // unsized → record []b : string
+//       b[1] = 9                   // REJECT: i64 ≠ string element  → HX3011
+//       let c: [i32; 4]           // decl-only → record []c : i32
+//       c[2] = 7                   // matches (int-lit coercion)    → clean
+//   }
+// Under the flag exactly 2 HX3011; the matching `c[2] = 7` and the default
+// build (flag-off) emit zero — the byteeq-neutral proof. Extends r3's
+// self-adapting contract from the plain-ident assign to the index place.
+fn _build_case_static_types_r4() -> Module {
+    let f = "case_static_r4.hexa"
+    let mut kids = []
+    // let a: [i32; 4]   ;   a[0] = "s"   → element mismatch
+    kids.push(_let_decl_expr("a|Array:i32:4", f, 2, 5))
+    kids.push(_assign_expr(_index_expr(_ident_expr("a", f, 3, 5), _int_expr("0", f, 3, 7), f, 3, 6), _string_expr("s", f, 3, 12), f, 3, 10))
+    // let b: [string]   ;   b[1] = 9     → element mismatch (unsized)
+    kids.push(_let_decl_expr("b|Array:string", f, 4, 5))
+    kids.push(_assign_expr(_index_expr(_ident_expr("b", f, 5, 5), _int_expr("1", f, 5, 7), f, 5, 6), _int_expr("9", f, 5, 12), f, 5, 10))
+    // let c: [i32; 4]   ;   c[2] = 7     → matches (clean in both modes)
+    kids.push(_let_decl_expr("c|Array:i32:4", f, 6, 5))
+    kids.push(_assign_expr(_index_expr(_ident_expr("c", f, 7, 5), _int_expr("2", f, 7, 7), f, 7, 6), _int_expr("7", f, 7, 12), f, 7, 10))
+    let body = _block(kids, f, 2, 1)
+    let item_main = _fn_item("main", [], _empty_type_ref(), body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // ── Driver ───────────────────────────────────────────────────
 
 fn _run_case(label: string, m: Module) -> array {
@@ -755,6 +809,30 @@ fn main() {
     } else {
         if nj != 0 {
             println("  FAIL: case (j) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nj) + " (total=" + to_string(len(diags_j)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (k) Wall A r4 — array element-fit assign. Under the flag, a decl-only
+    // `let a:[i32;4]` followed by `a[0] = "s"` AND a `let b:[string]` followed
+    // by `b[1] = 9` each REJECT with HX3011 (2 total), while the matching
+    // `let c:[i32;4]; c[2] = 7` stays clean (int-literal coercion). On the
+    // default build → 0 (byteeq-neutral). Extends (j)'s decl/init-split
+    // contract from the plain-ident assign to the array index place.
+    let diags_k = _run_case("(k) static-types r4 — array element-fit assign mismatch (HEXA_STATIC_TYPES)", _build_case_static_types_r4())
+    let nk = _count_code(diags_k, "HX3011")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if nk != 2 {
+            println("  FAIL: case (k) HEXA_STATIC_TYPES=1 expected 2 HX3011 (a[0]=\"s\" + b[1]=9), got " + to_string(nk) + " (total=" + to_string(len(diags_k)) + ")")
+            ok = false
+        } else {
+            println("  ok: 2 HX3011 emitted (a:[i32]=\"s\" + b:[string]=9; matching c:[i32][2]=7 stays clean)")
+        }
+    } else {
+        if nk != 0 {
+            println("  FAIL: case (k) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nk) + " (total=" + to_string(len(diags_k)) + ")")
             ok = false
         } else {
             println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
