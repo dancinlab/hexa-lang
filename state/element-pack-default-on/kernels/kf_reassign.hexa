@@ -1,0 +1,13 @@
+// Kf — REASSIGN. xs is re-bound to a fresh `[]` mid-function (a second array_lit
+// dst on the same handle). The escape scan allows array_lit as a dst, so this
+// probes whether re-binding correctly preserves OFF==ON semantics (no stale
+// packed buffer / no descriptor confusion across the reassign).
+fn main() {
+    let mut xs: [i64] = []
+    xs.push(10)
+    xs.push(20)
+    xs = []
+    xs.push(30)
+    xs.push(40)
+    println(xs[0] + xs[1])
+}
