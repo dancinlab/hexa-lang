@@ -1511,6 +1511,10 @@
             {
               "type": "prose",
               "text": "유일한 진짜 검증 경로: ⓐ identity_engine.hexa exact-int 판정 (후보 A·B=C·D 가 n∈[2,N] exact-int 평가에서 bounded-unique singleton, n≥4) + ⓑ compiler/check/ S6 equational(@verify) · S8 citation(@cite · fatal HX8004) + ⓒ `hexa verify` g5 게이트. 🔵/🟢 verify PASS 시 atom 이 compiler/atlas/embedded.gen.hexa 로 자동 fold (별도 register ceremony 없음). 빌드불가(mini) 노드는 state/novel-dfs/*_fold.py 로 @F atom PR-fold. 사람층(atlas/README.md) + 기계층(embedded.gen.hexa) 항상 양층. numerology/lattice-fit/미증명 conjecture 의 🔵 승격 금지."
+            },
+            {
+              "type": "prose",
+              "text": "LLM-conjecture 경로(stdlib/loop/conjecture.hexa cj_verdict · hexa loop --dfs --allow-llm): LLM이 CONJECTURE: 줄로 추측 → exact-int 검증 통과 후 **6-class NOVEL-CLOSURE 게이트** 생존해야 verified-novel(아니면 verified-known demote) — C1 ASSOC-CHAIN+WATSON-TOWER({5,7,11}-smooth 분할합동·Watson1938) · C2 ε-degenerate · C3 square-witness · C4 bounded-coincidence · C5 recurrence-periodic(Pisano/Touchard). LLM proposes, closure+exact-int disposes = trustworthy novel-discriminator. 라이브 claude -p 측정(4런 자가교정): genuine novel survivor=0(표준+확장 vocab closed). byteeq-neutral(loop=cmd_run·self/ 밖)."
             }
           ]
         },
