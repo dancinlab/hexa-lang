@@ -1,6 +1,6 @@
 # RFC — game-frame multithread perf (measure-first baseline)
 
-status: r1 baseline harness landed (numbers pending pool/CI run)
+status: r1 baseline MEASURED (aiden pool · real OS threads · numbers + bottleneck attribution in status section)
 owner: feat/game-thread-microbench
 since: 2026-06-27
 bench: `test/game_thread_microbench.hexa` (opt-in `HEXA_THREADS`, byteeq-neutral)
@@ -66,3 +66,56 @@ polarity 유지 (개선은 기본 native, 실험은 플래그 opt-in).
 ## 3. 산출
 - r1: 이 PR (harness only). 수치는 pool/CI 실행 결과로 본 doc 의 "status" 와 CHANGELOG 에 박제.
 - r2/r3: 별도 PR. **r1 수치가 병목을 가리키기 전에는 pool/job-system 을 짓지 않는다.**
+
+
+## status — r1 MEASURED (aiden · 2026-06-27)
+
+Build: native-emit (`hexa build` C-transpile → `hexa_clock()` = `CLOCK_MONOTONIC`, wall-clock) linked against a runtime
+compiled with `-DHEXA_THREADS` (`gcc -O2`, real `pthread_create`/`pthread_join` + C11 `_Atomic` cells + `-lpthread`).
+Host: aiden, 12-core x86_64, background pool load ~2.8 (affects the p=8 efficiency lane — honest caveat). 3 runs, medians below.
+
+> ⚠️ build note (reproducibility): the in-tree `self/runtime.c` + `self/native/thread.c` seeds were STALE — the
+> `#if defined(HEXA_THREADS)` real-pthread block and the `atomic_cell_*` block live in the emitter SSOTs
+> (`self/runtime_emit_full.hexa`, `self/native/thread_emit.hexa`) but had never been regenerated into the on-disk `.c`.
+> A first build linked the SYNCHRONOUS `#else` shims (`rt_pthread_noop`) and gave fake 25 ns/spawn + flat p-scaling.
+> Regenerating both `.c` from their emitters before compiling with `-DHEXA_THREADS` produced real threads (verified:
+> `nm` shows `U pthread_create@GLIBC`; lane (d) then scales 1.99x/3.41x/4.73x). Anyone reproducing MUST regen first.
+
+| lane | metric | median (3 runs) | reading |
+|------|--------|-----------------|---------|
+| (a) spawn/join | us / thread (real pthread create+join) | **7.60 us** (6.98-8.29) | glibc `pthread_create` (mmap stack + clone) bound |
+| (b) channel | msg/s, 1-thread send->recv ping-pong | **40.1 M msg/s** (~25 ns/msg) | uncontended mutex lock/unlock + condvar signal bound |
+| (c) atomic | ops/s on ONE shared `_Atomic` cell | K1 **174.9M** / K2 **113.7M** / K4 **120.0M** / K8 **100.2M** (all sum_ok=true) | aggregate CAPS / declines — cache-line (MESI) contention |
+| (d) N-thread scale | speedup / efficiency, fixed 40M ops | p2 **1.99x**/0.996 / p4 **3.41x**/0.85 / p8 **4.73x**/0.59 | real parallelism; p8 eff loss confounded by bg load |
+| (e) boxed vs raw | boxed/raw ratio, 2M accumulate | **4.61x** (4.34-4.77), chk-equal | `{tag,payload}` box + array push/index, alloc/mem-traffic bound |
+
+### bottleneck attribution (measure-first — from captured numbers, not self-judgement)
+
+- **(a) spawn/join — NOT a frame bottleneck at game scale.** 7.60 us/thread is real `pthread_create`+`join`. A 60 FPS frame
+  budget is 16,600 us; spawning ~10-50 workers/frame costs 76-380 us = 0.5-2.3 % of budget. A thread-POOL only pays off if a
+  design spawns hundreds-thousands of workers PER FRAME (>=~2000/frame would exhaust the budget). The numbers do NOT justify
+  a pool yet.
+- **(b) channel — NOT a bottleneck at game scale.** 40.1 M msg/s >> the 100s-1000s of task hand-offs a frame needs. Caveat: this
+  is the UNCONTENDED same-thread fast-path (lock/unlock + signal, 25 ns); a real cross-thread blocking hand-off (condvar wakeup
+  ~us) is slower and is NOT measured by this ping-pong — an honest follow-up lane.
+- **(c) atomic contention — MEASURED WALL (does not parallelize).** Aggregate throughput on one shared seq-cst cell goes
+  174.9M->113.7M->120.0M->100.2M ops/s as K=1->8: it CAPS/declines, never scales. Wall-time grows ~linearly with K. This is the
+  textbook cache-line-bounce signature (the line ping-pongs between cores under `__atomic_fetch_add` seq-cst). A single hot
+  shared counter is the lever for a sharded/striped counter — but ONLY if a real workload has one.
+- **(d) N-thread scale — real threads parallelize CPU work.** Near-ideal to p=4 (3.41x, 0.85 eff). The p=8 drop to 0.59 is
+  largely background-pool-load + memory-bandwidth/turbo confound on a busy 12-core box (spawn cost is 7.6us vs 24ms work/thread
+  = 0.03 %, so NOT spawn-amortization-bound). Clean signal: the spawn/join path itself does not serialize.
+- **(e) boxing — MEASURED, broadest tax.** 4.61x constant overhead, same result (pure overhead). Every `{tag,payload}` HexaVal
+  push/index pays it; thread args box every value too. This taxes EVERY path, not just one lane.
+
+### verdict + r4 next
+
+The current primitives are ADEQUATE for the spawn (a) and channel (b) paths at realistic game-frame worker/task counts — a
+thread-pool / job-system is **NOT warranted by these numbers** (would be blind-optimize). The two MEASURED walls are
+(e) boxing 4.61x (always-on, codegen-addressable, byteeq-safe native-unbox of job payloads) and (c) single-atomic
+non-scaling (sharded counter — only if a real workload exposes a hot shared cell).
+
+**r4 (separate PR) = native-unbox job-payload (codegen)** — the broadest measured win since boxing taxes every path; gate
+behind opt-in, prove with before/after on lane (e) + byteeq 3-target GREEN. (c) sharded-counter is deferred until a real
+game workload shows a hot shared atomic (the bench's synthetic one-cell hammer is a worst-case proxy, not a real frame system).
+Thread-pool is explicitly OFF the table at game scale per the (a)/(d) numbers.
