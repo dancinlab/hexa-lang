@@ -76,6 +76,15 @@ KERN="$SRC/$TEST_HEXA"
 # runtime.c `#include "native/thread.c"` (the hand-written channel logic), so a
 # single -DHEXA_THREADS TU yields real OS threads. (BYTEEQ-NEUTRAL: this regen is
 # for the THREADS measurement only; the DEFAULT byteeq check below uses the seed.)
+# runtime.c #includes the GENERATED self/runtime_core.c (line ~2149) + native/*
+# + forge/* fragments. native/forge are copied by prep_seeds; runtime_core.c is
+# generated → regen it from its emitter SSOT (canonical hexat-free tool).
+say "--- REGEN runtime_core.c (tool/regen_runtime_core_c.sh) ---"
+bash "$SRC/tool/regen_runtime_core_c.sh" "$SRC" >"$WORK/rtcore.log" 2>&1 \
+    && say "  runtime_core.c: $(wc -l < "$SRC/self/runtime_core.c" 2>/dev/null) lines" \
+    || { say "  ⚠ regen_runtime_core_c rc=$?"; tail -8 "$WORK/rtcore.log" | sed 's/^/    /' | tee -a "$RESULT"; }
+[ -f "$SRC/self/runtime_core.c" ] || { say "FATAL: runtime_core.c not generated"; exit 4; }
+
 say "--- REGEN runtime.c from runtime_emit_full.hexa (un-escaper) ---"
 EMIT="$SRC/self/runtime_emit_full.hexa"
 [ -f "$EMIT" ] || { say "FATAL: emitter missing $EMIT"; exit 4; }
@@ -173,6 +182,7 @@ regen_rt() { awk '
       out=out c;i+=1 }
     printf "%s",out }' "$1/self/runtime_emit_full.hexa" > "$1/self/runtime.c"; }
 regen_rt "$MSRC"; regen_rt "$SRC"  # both from their (identical) emitter SSOT
+bash "$MSRC/tool/regen_runtime_core_c.sh" "$MSRC" >/dev/null 2>&1  # runtime_core.c for MSRC
 byteeq_o() { ( cd "$1"; "$CC" -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -c self/runtime.c -I self -o "$2" ) 2>"$2.log"; }
 byteeq_o "$SRC"  "$WORK/branch.rt.o"
 byteeq_o "$MSRC" "$WORK/main.rt.o"
