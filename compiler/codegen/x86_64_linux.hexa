@@ -1201,7 +1201,11 @@ fn _x86_arru_emit_label(name: string) {
 //     cmp  rax, r11
 //     jae  .Larru_slowN                 ; unsigned >= len (also catches idx<0) → runtime
 //     mov  r11, [r10+0]                 ; items*
-//     imul rax, rax, 16                 ; idx * sizeof(HexaVal)
+//     shl  rax, 4                       ; idx * sizeof(HexaVal)=16 (r2d: power-of-2
+//                                       ;   strength-reduce, was `imul rax,16` —
+//                                       ;   gcc -O2 reference uses shl/lea, never imul
+//                                       ;   for a constant 2^k stride; 3c→1c latency
+//                                       ;   on the addr-gen dependency chain)
 //     add  r11, rax                     ; &items[idx]
 //     mov  <dst>, [r11+8]               ; element payload
 //     <store dst tag = elem prim tag>
@@ -1229,8 +1233,12 @@ fn _x86_emit_arru_get(s: Stmt, st: X86StrTab, rm: X86RegMap, opts: CodegenOption
     // &items[idx], load payload.
     _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r10", 0),
                      "arru get: items*"))
-    _x86_buf.push(_x86_instr3("imul", _x86_op_reg("rax"), _x86_op_reg("rax"),
-                     _x86_op_imm(16), "arru get: idx * sizeof(HexaVal)"))
+    // r2d strength-reduce: idx*16 via `shl rax,4` (power-of-2 stride) — 1c vs
+    // imul's 3c on the addr-gen dependency chain; gcc -O2 reference-matched
+    // (it scales 2^k strides with shl/lea, never imul). Bit-exact (×16 == <<4),
+    // byteeq-safe (this whole emit runs only under HEXA_UNBOX_ARRAY_NATIVE=1).
+    _x86_buf.push(_x86_instr2("shl", _x86_op_reg("rax"), _x86_op_imm(4),
+                     "arru get: idx * sizeof(HexaVal)=16 (r2d shl, was imul)"))
     _x86_buf.push(_x86_instr2("add", _x86_op_reg("r11"), _x86_op_reg("rax"),
                      "arru get: &items[idx]"))
     _x86_buf.push(_x86_instr2("mov", dst, _x86_op_mem("r11", 8),
@@ -1267,8 +1275,10 @@ fn _x86_emit_arru_set(s: Stmt, st: X86StrTab, rm: X86RegMap, opts: CodegenOption
     // &items[idx], store tag@+0 then payload@+8.
     _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r10", 0),
                      "arru set: items*"))
-    _x86_buf.push(_x86_instr3("imul", _x86_op_reg("rax"), _x86_op_reg("rax"),
-                     _x86_op_imm(16), "arru set: idx * sizeof(HexaVal)"))
+    // r2d strength-reduce: idx*16 via `shl rax,4` (see _x86_emit_arru_get) —
+    // gcc -O2 reference-matched, bit-exact, byteeq-safe (flag-gated path only).
+    _x86_buf.push(_x86_instr2("shl", _x86_op_reg("rax"), _x86_op_imm(4),
+                     "arru set: idx * sizeof(HexaVal)=16 (r2d shl, was imul)"))
     _x86_buf.push(_x86_instr2("add", _x86_op_reg("r11"), _x86_op_reg("rax"),
                      "arru set: &items[idx]"))
     _x86_buf.push(_x86_instr2("mov", _x86_op_mem("r11", 0), _x86_op_reg("r9"),
