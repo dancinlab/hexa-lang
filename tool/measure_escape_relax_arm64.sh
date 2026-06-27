@@ -29,7 +29,7 @@ RESULT="${RESULT:-$HOME/escape_relax_arm64_${SLUG}_RESULT.txt}"
 # aarch64 cross toolchain + emulator (Debian/Ubuntu: gcc-aarch64-linux-gnu
 # qemu-user). CC builds the runtime.a (cross), CCX links the arm64 objects.
 CCX="${CCX:-aarch64-linux-gnu-gcc}"
-QEMU="${QEMU:-qemu-aarch64}"
+QEMU="${QEMU:-qemu-aarch64-static}"
 QEMU_LD="${QEMU_LD:-/usr/aarch64-linux-gnu}"
 TGT="arm64-linux-gnu"
 CFLAGS_ESC="-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -DHEXA_PACK_ESCAPING"
