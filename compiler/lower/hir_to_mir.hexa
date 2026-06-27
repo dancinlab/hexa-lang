@@ -1655,9 +1655,6 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         // HEXA_UNBOX_ARRAY_NATIVE so the OFF path leaves type_id byte-identical.
         // Only overrides when the RHS contributed nothing (0) — an already-typed
         // RHS (e.g. a typed array-returning call) is authoritative and kept.
-        if _arru_native_enabled() {
-            eprintln("[ARRU-PROD] let text=" + e.text + " let_type_text=" + _hir_let_type_text(e.text) + " rhs_tid=" + to_string(dst.type_id) + " recovered=" + to_string(_arru_array_type_id_from_text(_hir_let_type_text(e.text))))
-        }
         if _arru_native_enabled() && dst.type_id == 0 {
             let _arr_tid = _arru_array_type_id_from_text(_hir_let_type_text(e.text))
             if _arr_tid != 0 {
