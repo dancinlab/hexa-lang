@@ -1536,3 +1536,77 @@ pub fn hxlcl_execve(path: HexaVal, argv: HexaVal, envp: HexaVal) -> int {
     }
     return r                                    // unreachable on success (image replaced)
 }
+
+// ── batch J: fork (clean syscall family LAST leaf) ─────────────────────────────
+//
+// fork() = the 0-arg process clone — the final clean errno-bearing syscall leaf
+// closing the Route C syscall family. Continues the close-mirror discipline (raw-
+// payload `__hx_payload_lt`/`_ne`/`_sub`, never bare `<`/`-`, + the target_is_linux()
+// -gated errno store via the already-whitelisted __errno_location). It is the EXACT
+// pipe (#4076) pattern: the LINUX legs DISSOLVE while the darwin leg is a measured
+// 2nd-return-register wall returning -1 (documented incomplete).
+//
+//   LINUX dissolve — fork returns the child pid to the parent and 0 to the child in
+//        a SINGLE result register (rax/x0), uniform -errno on failure, so the close
+//        errno epilogue is the whole story. The NR (and the arm64 arg-shape) diverge:
+//          x86_64 → __NR_fork = 57, plain 0-arg.
+//          arm64  → has NO plain fork; the asm-generic ABI provides only clone, so
+//                   fork is clone(220, flags = SIGCHLD = 17, 0,0,0,0). Because EVERY
+//                   clone arg past `flags` is 0, the CONFIG_CLONE_BACKWARDS arg-order
+//                   divergence (stack/parent_tid/child_tid/tls ordering) is MOOT —
+//                   only `flags` is non-zero, so the order of the trailing zeros is
+//                   irrelevant. SIGCHLD=17 = the child-exit signal that makes the
+//                   clone behave as a fork (parent gets SIGCHLD on child exit). This
+//                   is the dup2→dup3 "extra-flag-arg" divergence class (batch's
+//                   established pattern), not a new arg-shape.
+//   DARWIN wall — fork(2) is a 2nd-RETURN-REGISTER syscall: the BSD trap returns the
+//        child pid in x0 for BOTH processes and disambiguates the child by x1==1
+//        (parent has x1==0; carry-set → failure). The single-result __hx_syscall6
+//        exposes ONLY x0, so the Route C darwin leg CANNOT distinguish parent from
+//        child — a GENUINE wall identical to darwin pipe (#4076). The darwin leg
+//        returns -1 (documented incomplete); the real darwin fork stays the floor's
+//        raw-asm dual-register shim (self/runtime_emit_full.hexa:1801-1808, the
+//        `cset cf,cs / mov x0 / mov x1` explicit-asm dual capture). default-OFF so
+//        the floor shim is the live darwin fork — Route C darwin is research-only.
+//
+// NR ref-match (no black-box; in-repo tables + WebFetch-confirmed asm-generic):
+//   fork  x86_64 = 57   (arch/x86 syscall_64.tbl; self/rt/syscall.hexa:74
+//                        SYS_LINUX_FORK -> 57)
+//         arm64  = 220  (no plain fork → __NR_clone; uapi/asm-generic/unistd.h
+//                        `#define __NR_clone 220`, WebFetch-confirmed) flags=SIGCHLD=17
+//         darwin = 2    (BSD SYS_fork; self/rt/syscall.hexa:103 SYS_DARWIN_FORK ->
+//                        0x2000002 — 2nd-return-reg wall, floor dual-reg shim only)
+//
+// _is_cabi += hxlcl_fork. No new intrinsic/builtin/@attr; reuses __hx_syscall6 +
+// __hx_payload_lt/_ne/_sub + __hx_ptr_store32 + __errno_location. frozen 151c52c8
+// immutable. default-OFF byteeq-neutral (HEXA_CABI_HXLCL unset → empty whitelist →
+// PAIR-MODEL emit byte-identical).
+//
+// This is the LAST clean syscall-family leaf — its merge dries the Route C syscall
+// track (remaining walls: stdio FILE* struct, getenv frozen-export, 2nd-return-reg
+// [darwin pipe/fork], TERMINAL [float XMM-ABI / setjmp]).
+pub fn hxlcl_fork() -> int {
+    if target_is_linux() {
+        let mut nr = 220                       // Linux arm64 __NR_clone (no plain fork)
+        let mut a1 = 17                        //   clone flags = SIGCHLD (child-exit signal)
+        if target_is_x86_64() {
+            nr = 57                            // Linux x86_64 __NR_fork
+            a1 = 0                             //   plain fork: no clone arg
+        }
+        let r = __hx_syscall6(nr, a1, 0, 0, 0, 0, 0)
+        let neg = __hx_payload_lt(r, 0)
+        if __hx_payload_ne(neg, 0) {
+            let p = __errno_location()
+            let e = __hx_payload_sub(0, r)
+            __hx_ptr_store32(p, 0, e)
+            return -1
+        }
+        return r                                // parent: child pid · child: 0
+    }
+    // darwin: fork(2) is a 2nd-return-register syscall (child pid in x0 for BOTH
+    // processes, disambiguated by x1==1) — the single-result __hx_syscall6 exposes
+    // only x0, so the Route C leg cannot tell parent from child. Returns -1
+    // (documented incomplete); the real darwin fork stays the floor's raw-asm dual-
+    // register shim (self/runtime_emit_full.hexa:1801-1808), identical to darwin pipe.
+    return -1
+}

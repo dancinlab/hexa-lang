@@ -62,7 +62,7 @@ HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
 echo "[routec-smoke-linux] (2) assert errno-bearing syscall symbols defined in routec.o …"
 syms="$(nm "$TMP/routec.o" 2>/dev/null || true)"
 miss=0
-for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe time poll clock_gettime execve; do
+for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe time poll clock_gettime execve fork; do
     if ! grep -qE " T hxlcl_${s}\$" <<<"$syms"; then
         echo "[routec-smoke-linux] NOT DEFINED (T): hxlcl_${s}" >&2; miss=$((miss+1))
     fi
@@ -121,6 +121,11 @@ extern int  hxlcl_poll(void *fds, unsigned int nfds, int timeout);
  * -1 + ENOENT, errno-store value-exact). */
 extern int  hxlcl_clock_gettime(int clk, void *ts);
 extern int  hxlcl_execve(const char *path, char *const argv[], char *const envp[]);
+/* batch J — fork: 0-arg process clone. Single result reg: child pid to parent / 0
+ * to child, uniform -errno on failure. NR x86_64=57 (__NR_fork); arm64 has no plain
+ * fork → __NR_clone=220 with flags=SIGCHLD=17 (every clone arg past flags is 0 so
+ * the CONFIG_CLONE_BACKWARDS order is moot). Live fork+_exit+waitpid roundtrip. */
+extern int  hxlcl_fork(void);
 
 /* The emit covers ALL whitelisted Route C symbols (the script emits the whole
  * hxlcl_core.hexa), so the routec.o carries the composites' undefined-external
@@ -389,6 +394,30 @@ int main(void) {
         errno = 0;
         CK(hxlcl_execve("/nonexistent_xyz_exec_zzz", eargv, eenvp) == -1, "execve(nonexistent) == -1");
         CK(errno == ENOENT, "execve(nonexistent) sets errno == ENOENT (value-exact)");
+    }
+
+    /* batch J — fork. The LAST clean syscall-family leaf: a LIVE fork+_exit+waitpid
+     * roundtrip (vs the composition tests above). fork() returns the child pid (>0)
+     * to the parent and 0 to the child in a single result register (x86_64
+     * __NR_fork=57; arm64 __NR_clone=220 flags=SIGCHLD=17 — every clone arg past
+     * flags is 0 so the CONFIG_CLONE_BACKWARDS order is moot). The child branch is
+     * taken FIRST and _exit(0)s immediately — it must NEVER re-enter the harness/CK
+     * (a separate process: its `fails` is its own copy and it exits before any
+     * summary). The parent then waitpid()s the EXACT child pid and asserts a clean
+     * exit, proving fork produced a real live child and the single-reg pid split is
+     * correct. A fork failure (-1) skips the child branch and trips fork()>0. */
+    {
+        int cpid = hxlcl_fork();
+        if (cpid == 0) {
+            _exit(0);   /* child: exit cleanly, never touch harness state */
+        }
+        CK(cpid > 0, "fork() > 0 in parent (single-reg child pid; child got 0)");
+        if (cpid > 0) {
+            int wst = 0;
+            int got = (int)waitpid((pid_t)cpid, &wst, 0);
+            CK(got == cpid, "waitpid reaps the exact child pid (live fork)");
+            CK(WIFEXITED(wst) && WEXITSTATUS(wst) == 0, "child _exit(0) reaped clean (fork roundtrip)");
+        }
     }
 
     if (fails == 0) { printf("[routec-smoke-linux] all Route C errno asserts PASS\n"); return 0; }
