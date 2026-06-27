@@ -1,6 +1,6 @@
 # RFC — M:N green-thread scheduler + async integration (opt-in, default-OFF)
 
-Status: **design + oracle slice landed; real C substrate = build-gated next slice**
+Status: **design + oracle + cooperative N=1 executor landed; real parallel C substrate = build-gated next slice**
 Lane: `real-concurrency-mn` · continuation of `state/rfc_real_concurrency_optin.md` (slice ②).
 Date: 2026-06-27 · SSOT for the M:N runtime design. History → CHANGELOG + git.
 
@@ -88,6 +88,56 @@ only on the stale Jun-25 build's slow native compile, not on logic). Covers GMP
 mapping, round-robin runqput, LIFO local pop, global overflow, findrunnable
 order (local→global→steal), FIFO steal of the oldest, park-on-empty-recv,
 goready-direct-handoff on send, buffered send/recv, full drain-to-idle.
+
+## 3b. Cooperative N=1 green-thread executor — LANDED (opt-in `HEXA_COROUTINE`)
+
+The oracle in §3 is a **pure transition function** — it *models* the GMP state
+machine but does not actually **drive** a task forward through suspendable segments.
+This slice adds the smallest real, runnable executor on top: a **GOMAXPROCS=1
+cooperative scheduler** that genuinely spawns green threads, yields between explicit
+step segments, and joins to completion — a single OS thread with a fully
+deterministic round-robin yield order. It is gated behind the opt-in env
+`HEXA_COROUTINE` (mirroring `atomic_ops.hexa:atomic_real_enabled`'s `env("HEXA_THREADS")`
+precedent — an existing builtin, no new keyword, frozen-safe) and is **byteeq-neutral**
+(the file is not in the self-host compiler closure; the executor fns are inert pure
+definitions unless called, and they are called only inside the env-gated test block —
+so default `hexa run self/mn_scheduler.hexa` output is byte-identical to §3's oracle).
+
+**Reference-match (Go GMP @ GOMAXPROCS=1).** With N=1 there is exactly one P, so
+`proc.go findRunnable()`'s `stealWork` loop is a **no-op** (no victim P) and the pick
+order collapses to a single FIFO ready queue (`runqget`→`globrunqget`). The
+cooperative yield is `proc.go goschedImpl()`/`Gosched()`: the running G is set
+`_Grunnable` and **re-enqueued runnable**, then the scheduler picks the next G. Core
+rule reproduced: **a single P ⇒ fully deterministic round-robin at every explicit
+scheduling point** (here each step-segment boundary == one `Gosched`). Cited in the
+module header.
+
+**API** (`self/mn_scheduler.hexa`, all immutable/returns-fresh):
+
+- `MNCoroTask { id, steps:[string], resume_pc, state, result }` — a resumable green
+  thread = explicit step segments + a resume PC (honest non-preemptive model).
+- `MNCoop { ready:[int], tasks, trace:[string], n_yields, n_completed }` — a **single
+  FIFO ready queue** (= GOMAXPROCS=1, one P, no steal). `trace` is the deterministic
+  interleave record == the byte-eq signal a future C substrate must reproduce.
+- `mn_coop_new()` · `mn_coop_spawn(s, steps)` (enqueue runnable to BACK) ·
+  `mn_coop_step(s)` (dequeue FRONT, run `steps[resume_pc]`, append `"<id>:<pc>"` to
+  trace, advance pc; if more segments → **yield**: requeue to BACK + `n_yields++`,
+  else **done** + `n_completed++`) · `mn_coop_run(s)` (drive until ready drains) ·
+  `mn_coop_join(s, tid)` (drive until task `tid` is "done").
+
+**Tests** (run only under `HEXA_COROUTINE=1`): `test_coop_spawn_yield_join` (3 tasks ×
+2 segments → asserts the exact round-robin interleave `1:0, 2:0, 3:0, 1:1, 2:1, 3:1`,
+all done, `n_yields == 3`), `test_coop_join_returns_result` (join drives a 3-segment
+task to "done", result delivered), `test_coop_n1_deterministic` (two independent runs
+→ identical trace). Default run = unchanged 10 fns / 29 assertions; `HEXA_COROUTINE=1`
+= +3 coop tests.
+
+**Honest scope / wall.** Yield here is **cooperative-explicit** (step + resume-PC),
+**NOT** true preemptive mid-function suspension with register/stack save — that
+remains walled exactly as §5 (frozen 151c52c8 parser blocks stackless CPS; stackful
+`ucontext` is build+race-gated, pool-only). This slice delivers the requested
+deterministic N=1 cooperative **spawn / yield / join**, not register/stack-saving
+coroutines, and not real parallelism (N=1, single OS thread).
 
 ## 4. Real C substrate — the next slice (build-gated, NOT in this PR)
 

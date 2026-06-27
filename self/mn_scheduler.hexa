@@ -504,6 +504,185 @@ fn mn_drain(s: MNSched) -> MNSched {
     return cur
 }
 
+// ── Cooperative N=1 green-thread executor (opt-in HEXA_COROUTINE) ─────────────
+// The GMP oracle above models M:N (N≥1 processors, work-steal, park/unpark) as a
+// PURE transition function — it does not actually *drive* tasks forward through
+// suspendable segments. This layer adds the smallest real, runnable slice: a
+// GOMAXPROCS=1 cooperative scheduler that genuinely spawns green threads, yields
+// between explicit step segments, and joins to completion — a single OS thread
+// with a fully deterministic round-robin yield order. NOT true parallelism, NOT
+// preemptive mid-fn suspension (frozen 151c52c8 parser blocks stackless CPS /
+// register-save coroutines — that remains walled; see state/rfc_mn_scheduler.md).
+//
+// ── REFERENCE-MATCH (Go runtime, GMP scheduler @ GOMAXPROCS=1) ────────────────
+//   With N=1 there is exactly one P, so runtime/proc.go findRunnable()'s steal
+//   loop is a no-op (no victim P) and the order collapses to:
+//     local runqget → global globrunqget — a single FIFO ready queue.
+//   · runtime/proc.go schedule()      — pick the next runnable G, run it.
+//   · runtime/proc.go goschedImpl()/Gosched() — an explicit cooperative yield:
+//     the current G is set _Grunnable and re-enqueued runnable, then the
+//     scheduler picks the next G. Modelled by mn_coop_step requeueing the task to
+//     the BACK of `ready` when it has more segments (resume_pc < len(steps)).
+//   · runtime/runtime2.go p.runq[256] + runnext — the per-P ring (here: `ready`).
+//   · runtime/chan.go gopark/goready — park/resume at scheduling points.
+//   Core rule reproduced: a single P ⇒ fully deterministic round-robin at every
+//   explicit scheduling point (here, each step segment boundary == one Gosched).
+//   The `trace` array is exactly the byte-eq interleave signal a future C
+//   substrate (-DHEXA_MN_SCHED, GOMAXPROCS=1) must reproduce step-for-step.
+
+// mn_coroutine_enabled — opt-in gate (mirrors atomic_ops.hexa:atomic_real_enabled,
+// the existing env() builtin precedent; frozen-safe — no new keyword). Default OFF
+// keeps `hexa run self/mn_scheduler.hexa` output byte-identical to the M:N oracle.
+fn mn_coroutine_enabled() -> bool {
+    return env("HEXA_COROUTINE") != ""
+}
+
+// A resumable green thread: an ordered list of explicit step segments plus a
+// resume program counter (honest non-preemptive model — each `steps[resume_pc]`
+// runs to the next yield point, then control returns to the scheduler).
+struct MNCoroTask {
+    id: int,
+    steps: [string],      // explicit step segments (run one per scheduling turn)
+    resume_pc: int,       // next segment to run on resume
+    state: string,        // "runnable" | "done"
+    result: string
+}
+
+// Single FIFO ready queue == GOMAXPROCS=1 (one P, no steal needed). `trace` is the
+// deterministic interleave record; n_yields / n_completed are the byte-eq signals.
+struct MNCoop {
+    ready: [int],         // runnable task ids, FIFO (front=next, back=requeue)
+    tasks: [MNCoroTask],  // all coroutines, indexed by id-1
+    trace: [string],      // "<id>:<pc>" appended each step (interleave oracle)
+    n_yields: int,        // cooperative yields (Gosched: requeue with work left)
+    n_completed: int      // coroutines run to "done"
+}
+
+fn mn_coop_new() -> MNCoop {
+    return MNCoop { ready: [], tasks: [], trace: [], n_yields: 0, n_completed: 0 }
+}
+
+fn mn_coop_get(s: MNCoop, tid: int) -> MNCoroTask {
+    let idx = tid - 1
+    if idx >= 0 && idx < len(s.tasks) {
+        return s.tasks[idx]
+    }
+    return MNCoroTask { id: -1, steps: [], resume_pc: 0, state: "done", result: "" }
+}
+
+fn _mn_coop_set_task(ts: [MNCoroTask], idx: int, t: MNCoroTask) -> [MNCoroTask] {
+    let mut out: [MNCoroTask] = []
+    let i = 0
+    while i < len(ts) {
+        if i == idx { out = out + [t] } else { out = out + [ts[i]] }
+        i = i + 1
+    }
+    return out
+}
+
+// mn_coop_spawn — create a runnable coroutine from its step segments and push it
+// to the BACK of the ready queue (spawn == enqueue runnable; single P).
+fn mn_coop_spawn(s: MNCoop, steps: [string]) -> MNCoop {
+    let id = len(s.tasks) + 1
+    let t = MNCoroTask { id: id, steps: steps, resume_pc: 0, state: "runnable", result: "" }
+    return MNCoop {
+        ready: s.ready + [id],
+        tasks: s.tasks + [t],
+        trace: s.trace,
+        n_yields: s.n_yields,
+        n_completed: s.n_completed
+    }
+}
+
+// step result = (coop, ran, tid); ran == false when the ready queue is empty.
+struct MNCoopStep {
+    coop: MNCoop,
+    ran: bool,
+    tid: int
+}
+
+// mn_coop_step — one scheduling turn (schedule()): pop the FRONT of `ready`, run
+// its current segment, record "<id>:<pc>" to trace, advance resume_pc. If more
+// segments remain it cooperatively YIELDS (Gosched) — requeued to the BACK, hence
+// round-robin; otherwise it completes (state="done", n_completed++).
+fn mn_coop_step(s: MNCoop) -> MNCoopStep {
+    if len(s.ready) == 0 {
+        return MNCoopStep { coop: s, ran: false, tid: -1 }
+    }
+    // dequeue FRONT (FIFO local runqget — single P)
+    let tid = s.ready[0]
+    let mut rest: [int] = []
+    let i = 1
+    while i < len(s.ready) {
+        rest = rest + [s.ready[i]]
+        i = i + 1
+    }
+    let t = mn_coop_get(s, tid)
+    let pc = t.resume_pc
+    let mark = str(tid) + ":" + str(pc)   // the interleave point this turn
+    let next_pc = pc + 1
+    if next_pc < len(t.steps) {
+        // work remains → cooperative yield (Gosched): requeue runnable to BACK
+        let t2 = MNCoroTask { id: t.id, steps: t.steps, resume_pc: next_pc, state: "runnable", result: t.result }
+        return MNCoopStep {
+            coop: MNCoop {
+                ready: rest + [tid],
+                tasks: _mn_coop_set_task(s.tasks, tid - 1, t2),
+                trace: s.trace + [mark],
+                n_yields: s.n_yields + 1,
+                n_completed: s.n_completed
+            },
+            ran: true,
+            tid: tid
+        }
+    }
+    // last segment → coroutine finishes (_Gdead)
+    let result = str(tid) + ":done"
+    let tdone = MNCoroTask { id: t.id, steps: t.steps, resume_pc: next_pc, state: "done", result: result }
+    return MNCoopStep {
+        coop: MNCoop {
+            ready: rest,
+            tasks: _mn_coop_set_task(s.tasks, tid - 1, tdone),
+            trace: s.trace + [mark],
+            n_yields: s.n_yields,
+            n_completed: s.n_completed + 1
+        },
+        ran: true,
+        tid: tid
+    }
+}
+
+// mn_coop_run — drive scheduling turns until the ready queue drains (schedule()
+// loop reaching idle). Deterministic since there is a single P.
+fn mn_coop_run(s: MNCoop) -> MNCoop {
+    let mut cur = s
+    let mut more = true
+    while more {
+        let st = mn_coop_step(cur)
+        cur = st.coop
+        more = st.ran
+    }
+    return cur
+}
+
+// mn_coop_join(s, tid) — drive scheduling turns until coroutine `tid` reaches
+// "done" (or the queue stalls), returning the advanced scheduler. Deterministic:
+// single P ⇒ the same turns run in the same order every time.
+fn mn_coop_join(s: MNCoop, tid: int) -> MNCoop {
+    let mut cur = s
+    let mut running = true
+    while running {
+        if mn_coop_get(cur, tid).state == "done" {
+            running = false
+        } else {
+            let st = mn_coop_step(cur)
+            cur = st.coop
+            if !st.ran { running = false }   // no progress possible → stop
+        }
+    }
+    return cur
+}
+
 // ── Tests (interpreter-runnable; functional subset, no `assert` builtin) ───────
 
 let mut _MN_FAILS = 0
@@ -631,6 +810,56 @@ fn test_drain_completes_all() {
     mn_check(len(s.global_runq) == 0, "drain: global injector idle")
 }
 
+// ── Cooperative N=1 executor tests (run only under HEXA_COROUTINE) ─────────────
+
+fn test_coop_spawn_yield_join() {
+    let mut s = mn_coop_new()
+    s = mn_coop_spawn(s, ["a0", "a1"])   // id1, 2 segments
+    s = mn_coop_spawn(s, ["b0", "b1"])   // id2
+    s = mn_coop_spawn(s, ["c0", "c1"])   // id3
+    s = mn_coop_run(s)
+    mn_check(len(s.trace) == 6, "coop: 6 segment turns recorded")
+    // deterministic round-robin interleave (GOMAXPROCS=1, single P, FIFO):
+    //   1:0, 2:0, 3:0, 1:1, 2:1, 3:1
+    mn_check(s.trace[0] == "1:0", "coop: trace[0] == 1:0")
+    mn_check(s.trace[1] == "2:0", "coop: trace[1] == 2:0")
+    mn_check(s.trace[2] == "3:0", "coop: trace[2] == 3:0")
+    mn_check(s.trace[3] == "1:1", "coop: trace[3] == 1:1 (round-robin yield)")
+    mn_check(s.trace[4] == "2:1", "coop: trace[4] == 2:1")
+    mn_check(s.trace[5] == "3:1", "coop: trace[5] == 3:1")
+    mn_check(s.n_completed == 3, "coop: all 3 coroutines done")
+    mn_check(s.n_yields == 3, "coop: 3 cooperative yields (one per task)")
+    mn_check(mn_coop_get(s, 1).state == "done", "coop: G1 done after run")
+}
+
+fn test_coop_join_returns_result() {
+    let mut s = mn_coop_new()
+    s = mn_coop_spawn(s, ["x0", "x1", "x2"])   // id1, 3 segments
+    s = mn_coop_join(s, 1)
+    mn_check(mn_coop_get(s, 1).state == "done", "coop_join: task driven to done")
+    mn_check(mn_coop_get(s, 1).result == "1:done", "coop_join: result delivered")
+    mn_check(s.n_yields == 2, "coop_join: 2 yields before completion (3 segments)")
+}
+
+fn test_coop_n1_deterministic() {
+    let mut a = mn_coop_new()
+    a = mn_coop_spawn(a, ["p0", "p1"])
+    a = mn_coop_spawn(a, ["q0", "q1"])
+    a = mn_coop_run(a)
+    let mut b = mn_coop_new()
+    b = mn_coop_spawn(b, ["p0", "p1"])
+    b = mn_coop_spawn(b, ["q0", "q1"])
+    b = mn_coop_run(b)
+    mn_check(len(a.trace) == len(b.trace), "coop_det: same trace length both runs")
+    let mut same = true
+    let i = 0
+    while i < len(a.trace) {
+        if a.trace[i] != b.trace[i] { same = false }
+        i = i + 1
+    }
+    mn_check(same, "coop_det: identical interleave across re-runs (single P deterministic)")
+}
+
 print("=== mn_scheduler.hexa tests (M:N GMP oracle) ===\n")
 test_gmp_mapping()
 test_spawn_roundrobin()
@@ -642,6 +871,14 @@ test_park_on_recv_empty()
 test_goready_on_send()
 test_buffered_send_recv()
 test_drain_completes_all()
+// Opt-in cooperative N=1 executor tests — engaged only under HEXA_COROUTINE=1, so
+// the default run stays byte-identical to the M:N oracle output above.
+if mn_coroutine_enabled() {
+    print("--- cooperative N=1 green-thread executor (HEXA_COROUTINE) ---\n")
+    test_coop_spawn_yield_join()
+    test_coop_join_returns_result()
+    test_coop_n1_deterministic()
+}
 if _MN_FAILS == 0 {
     print("All mn_scheduler tests passed.\n")
 } else {
