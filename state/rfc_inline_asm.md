@@ -1,6 +1,6 @@
 # RFC — inline assembly for `.hexa` (native-emit)
 
-status: rfc + first byteeq-safe slice (`__hx_asm_nop`)
+status: rfc + rungs 1-2 (`__hx_asm_nop` per-opcode + `__hx_asm("<op>")` whitelisted passthrough)
 slug: inline-asm
 lane: inline-asm (design-first)
 reference: Rust `core::arch::asm!` / `core::hint::spin_loop`, Zig `asm volatile`, GCC `__asm__ volatile`
@@ -127,15 +127,52 @@ text-block form is recorded here as the long-horizon design; it is gated on a
 frozen-seed reflow and an in-tree assembler, neither of which may land behind
 release-integrity today.
 
+## 2b. generalized passthrough — `__hx_asm("<op>")` (rung 2)
+
+Rung 2 generalizes the per-opcode family into a **single intrinsic that takes the
+opcode as a compile-time string literal**:
+
+```hexa
+__hx_asm("nop")     // x86 nop        / arm64 nop
+__hx_asm("pause")   // x86 pause      / arm64 yield     — spin-loop hint
+__hx_asm("fence")   // x86 mfence     / arm64 dmb ish   — full memory barrier
+```
+
+**literal-template rule (reference-match).** The opcode argument MUST be a compile-time
+string literal — exactly the Rust `asm!`/`global_asm!` rule (the template is a string
+literal, not a runtime value), GCC `__asm__("…")`, and Zig `asm volatile ("…")`. In the
+backend the MIR operand is a `const_str` (`compiler/ir/mir.hexa:60`); a non-literal or
+unknown opcode lowers to a plain boxed `int 0` no-op (graceful — never a `bl __hx_asm`).
+
+**opt-in env-gate.** The raw instruction is emitted ONLY when `HEXA_INLINE_ASM=1`
+(same env-gate pattern as `HEXA_UNBOX_NATIVE`/`HEXA_CABI_HXLCL`). Default build (env
+unset) drops every `__hx_asm("…")` to the boxed `int 0` — a **second** byteeq floor on
+top of the dead-branch argument (the compiler closure never calls `__hx_asm`, and the
+self-host/byteeq/faithful scripts never set the env, so a deterministic compiler never
+observes the active branch).
+
+**whitelist → per-target lowering.** A small in-backend `if`-chain maps the portable
+opcode to the target mnemonic; emitter byte-encodings: x86 PAUSE=`F3 90`,
+MFENCE=`0F AE F0` (`compiler/emit/elf_x86_64.hexa`); arm64 YIELD=`0xd503203f`,
+DMB ish=`0xd5033bbf` (`compiler/emit/macho_arm64.hexa`, `fence`→`dmb #11` so
+`--emit=asm` stays valid + mangle-safe via the `#`-prefix carve-out). The C-transpile
+mirror (`self/codegen.hexa`) is target-conditional `#if defined(__x86_64__)` so the
+same source lowers to the right host mnemonic.
+
 ## 4. ladder
 
 - **rung 0 (shipped)**: `__hx_syscall0/6` — raw `syscall`/`svc`.
-- **rung 1 (this PR)**: `__hx_asm_nop` end-to-end (bind + x86 + arm64 + C-transpile +
+- **rung 1 (shipped)**: `__hx_asm_nop` end-to-end (bind + x86 + arm64 + C-transpile +
   arm64 NOP byte-encoding) + stdlib `asm.hexa` native-intrinsic-name registry
   (interpreter-tested) — the first byteeq-safe inline-asm intrinsic.
-- **rung 2**: `__hx_asm_pause` / `__hx_asm_fence` (+ emitter `pause`/`mfence`/`dmb`
-  encodings). spin-loop + barrier — the highest-value portable subset.
-- **rung 3**: `__hx_asm_rdtsc` / arm64 `mrs cntvct_el0` — cycle counter (one-output).
+- **rung 2 (this PR)**: generalized `__hx_asm("<op>")` passthrough, whitelist
+  {nop, pause, fence} → per-target lowering (x86 nop/pause/mfence · arm64
+  nop/yield/dmb), opt-in `HEXA_INLINE_ASM`, both byte-encoders extended (PAUSE/MFENCE
+  on x86, YIELD/DMB on arm64) + C-transpile mirror + stdlib registry
+  (`asm_passthrough_intrinsic`/`asm_native_wired`) — spin-loop + barrier, the
+  highest-value portable subset.
+- **rung 3**: `__hx_asm("rdtsc")` / arm64 `mrs cntvct_el0` — cycle counter (one-output;
+  the whitelist gains a result-bearing entry rather than a fixed int 0).
 - **rung 4 (wall)**: general `@asm` native lowering with operand binding; then the
   `asm!{"text"}` block — gated on frozen-seed reflow + in-tree assembler.
 
@@ -152,6 +189,9 @@ already exploits this; inline-asm intrinsics inherit it for free.
 
 - new builtin names are **ADD-only** to `_bind_builtin_names`; the compiler closure
   never calls them -> DEFAULT emit byte-identical, `gen3 ≡ gen4` preserved.
+- rung-2 adds a **second floor**: the raw opcode is emitted only under opt-in
+  `HEXA_INLINE_ASM=1`; the default build (env unset) drops `__hx_asm("…")` to a boxed
+  `int 0` no-op, so even an opt-in *program* emits no opcode bytes on the default path.
 - no new keyword / no new `@attr` (frozen parser `151c52c8` untouched).
 - emitter byte-table additions are zero-operand opcodes, dead unless a program opts in.
 - byteeq proof is **CI** (x86_64-linux · arm64-linux · darwin-arm64), not local (mini =

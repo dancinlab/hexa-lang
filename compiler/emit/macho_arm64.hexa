@@ -744,6 +744,14 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
     // the arm64-linux ELF backend (encode_arm64_insn is reused). Additive/dead by
     // default (no existing arm64 emit uses `nop`) → byteeq-safe.
     if op == "NOP" && len(ops) == 0 { return 0xd503201f }
+    // YIELD — hint #1 (RFC inline-asm rung 2 `__hx_asm("pause")`; the AArch64
+    // spin-loop hint, the arm64 analogue of x86 PAUSE). 0-operand; shared by the
+    // arm64-linux ELF backend. Additive/dead by default → byteeq-safe.
+    if op == "YIELD" && len(ops) == 0 { return 0xd503203f }
+    // DMB ish — data memory barrier, inner-shareable (RFC inline-asm rung 2
+    // `__hx_asm("fence")`; CRm=0b1011=11). Encodes `dmb ish` regardless of the
+    // (whitelisted `#11`) operand text. Additive/dead by default → byteeq-safe.
+    if op == "DMB" { return 0xd5033bbf }
     // SVC #imm16 — supervisor call (Linux AArch64 syscall trap). The
     // imm16 is bits [20:5]; Linux uses `svc #0`. SELFHOST-NEXT freestanding
     // `_start` exit(N) sequence: `mov x8,#93 ; mov x0,#N ; svc #0`.
@@ -1711,6 +1719,8 @@ fn _lir_op_uppercase(op: string) -> string {
     if op == "ret"   { return "RET"  }
     if op == "svc"   { return "SVC"  }
     if op == "nop"   { return "NOP"  }
+    if op == "yield" { return "YIELD" }  // RFC inline-asm rung 2 (__hx_asm pause)
+    if op == "dmb"   { return "DMB"  }   // RFC inline-asm rung 2 (__hx_asm fence)
     if op == "cbz"   { return "CBZ"  }
     if op == "cbnz"  { return "CBNZ" }
     if op == "uxtw"  { return "UXTW" }

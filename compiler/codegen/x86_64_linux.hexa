@@ -2671,6 +2671,34 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r10", 0) }
             return
         }
+        // RFC inline-asm rung 2: `__hx_asm("<op>")` → int HexaVal 0, generalizing
+        // `__hx_asm_nop` to a whitelisted named-opcode passthrough. The opcode is a
+        // COMPILE-TIME STRING LITERAL (const_str operand, mir.hexa:60) — the same
+        // literal-template discipline as Rust `asm!`/GCC `__asm__`/Zig `asm`: the
+        // instruction text is never a runtime value. The fixed whitelist {nop,
+        // pause, fence} maps to the x86 mnemonic {nop, pause, mfence} (encoded by
+        // elf_x86_64.hexa) and is gated behind opt-in HEXA_INLINE_ASM (same env
+        // pattern as HEXA_UNBOX_NATIVE / HEXA_CABI_HXLCL). DEFAULT (env unset) or an
+        // unknown/non-literal opcode → NO raw instruction, just the boxed int-0 no-op
+        // (so the expression still has a value). ADD-only + env-gated: the compiler
+        // never calls __hx_asm → DEFAULT emit byte-identical, gen3==gen4 preserved.
+        // state/rfc_inline_asm.md. reference: Rust core::arch::asm! literal template.
+        if s.op == "__hx_asm" {
+            let mut _amnem = ""
+            if len(s.args) >= 1 && s.args[0].kind == "const_str" && env("HEXA_INLINE_ASM") == "1" {
+                let _aop = s.args[0].str_val
+                if _aop == "nop"   { _amnem = "nop" }
+                if _aop == "pause" { _amnem = "pause" }
+                if _aop == "fence" { _amnem = "mfence" }
+            }
+            if _amnem != "" {
+                _x86_buf.push(_x86_instr0(_amnem, "__hx_asm: inline asm passthrough"))
+            }
+            _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r10"), _x86_op_imm(0),
+                             "__hx_asm: result = int 0"))
+            if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "r10", 0) }
+            return
+        }
         // UNLOCK-9: `__hx_syscall6(num, a0..a5)` → int HexaVal. x86_64 Linux
         // syscall arg registers: rdi, rsi, rdx, r10, r8, r9; number in rax;
         // result in rax. (rcx/r11 are CLOBBERED by the `syscall` instruction

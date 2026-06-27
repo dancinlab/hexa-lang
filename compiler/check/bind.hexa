@@ -1249,6 +1249,17 @@ fn _bind_builtin_names() -> [string] {
         // instruction-emit path (state/rfc_inline_asm.md). ADD-only: the compiler
         // never calls it -> DEFAULT emit byte-identical, gen3==gen4 preserved.
         "__hx_asm_nop",
+        // RFC inline-asm rung 2 (2026-06-27): `__hx_asm("<op>")` — the generalized
+        // named-opcode passthrough. ONE intrinsic accepts a STRING-LITERAL opcode
+        // and lowers it through a fixed whitelist {nop, pause, fence} to the per-
+        // target instruction (x86: nop/pause/mfence · arm64: nop/yield/dmb ish),
+        // returning int HexaVal 0 so it composes as an ordinary expression. The
+        // literal-template rule mirrors Rust `asm!`/GCC `__asm__`/Zig `asm` (the
+        // instruction text is a compile-time literal, never a runtime value).
+        // 1 string arg, opt-in HEXA_INLINE_ASM (default-OFF). ADD-only + env-gated:
+        // the compiler never calls it -> DEFAULT emit byte-identical, gen3==gen4
+        // preserved. Generalizes `__hx_asm_nop` (which stays for back-compat).
+        "__hx_asm",
         // RT-NATIVE M4 ARRAY-R2 (2026-06-17): `__hx_make_val(tag, payload)` — the
         // symmetric write-half of `__hx_tag`. Builds a {tag, payload} 16-byte HexaVal
         // from two raw int64 words WITHOUT boxing-tag-loss, so a payload word loaded

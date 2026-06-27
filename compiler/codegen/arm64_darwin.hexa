@@ -2222,6 +2222,38 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
+        // RFC inline-asm rung 2: `__hx_asm("<op>")` → int HexaVal 0, the generalized
+        // whitelisted named-opcode passthrough (mirror of the x86_64 branch). Opcode
+        // = COMPILE-TIME STRING LITERAL (const_str operand) — same literal-template
+        // rule as Rust `asm!`/GCC `__asm__`/Zig `asm`. The portable whitelist {nop,
+        // pause, fence} maps to the AArch64 hint/barrier {nop, yield, dmb ish}
+        // (encoded by macho_arm64.hexa, shared by the arm64-linux ELF backend),
+        // gated behind opt-in HEXA_INLINE_ASM. DEFAULT (env unset) or unknown/non-
+        // literal opcode → NO raw instruction, just the boxed int-0 no-op. ADD-only +
+        // env-gated: the compiler never calls __hx_asm → DEFAULT byte-identical.
+        // `fence`→`dmb #11` (CRm=ish=11; the numeric form keeps --emit=asm valid and
+        // is mangle-safe via the `#`-prefix carve-out in emit/asm.hexa _fmt_label).
+        if s.op == "__hx_asm" {
+            let mut _amnem = ""
+            if len(s.args) >= 1 && s.args[0].kind == "const_str" && env("HEXA_INLINE_ASM") == "1" {
+                let _aop = s.args[0].str_val
+                if _aop == "nop"   { _amnem = "nop" }
+                if _aop == "pause" { _amnem = "yield" }
+                if _aop == "fence" { _amnem = "dmb" }
+            }
+            if _amnem == "dmb" {
+                buf.push(_arm64_instr1("dmb", _arm64_op_label("#11"),
+                                 "__hx_asm fence: dmb ish (CRm=11)"))
+            } else if _amnem != "" {
+                buf.push(_arm64_instr0(_amnem, "__hx_asm: inline asm passthrough"))
+            }
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
+                             _arm64_op_label("#0"), "__hx_asm: payload = 0"))
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                             _arm64_op_label("#0"), "__hx_asm: TAG_INT"))
+            if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
+            return buf
+        }
         // RT-NATIVE UNLOCK-9: `__hx_syscall6(num, a0..a5)` → int HexaVal of a
         // 6-arg syscall result. The mmap/munmap path = native arena (Z3) with
         // NO C malloc shim. Args go in x0..x5 on BOTH aarch64 ABIs; only the
