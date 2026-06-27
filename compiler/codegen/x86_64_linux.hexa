@@ -178,6 +178,19 @@ fn _x86_instr2(op: string, a: LOperand, b: LOperand, comment: string) -> LInstr 
     return LInstr { op: op, args: xs, comment: comment }
 }
 
+// 3-operand form — needed for the GAS `imul dst, src, imm32` encoding used by
+// the r5b magic-reciprocal remainder step (`q*d` with d an imm32). The asm
+// emitter (`_fmt_instr`) renders args verbatim → GNU `as` encodes the
+// 3-operand `imul`. NOTE: this LIR form is only produced when HEXA_UNBOX_NATIVE
+// is ON (the magic path is gate-guarded), so OFF-path emit is unperturbed.
+fn _x86_instr3(op: string, a: LOperand, b: LOperand, c: LOperand, comment: string) -> LInstr {
+    let mut xs = []
+    xs.push(a)
+    xs.push(b)
+    xs.push(c)
+    return LInstr { op: op, args: xs, comment: comment }
+}
+
 // ── Register assignment (naive) ──────────────────────────────
 
 fn _x86_64_reg_for_local(local_id: i64) -> string {
@@ -608,8 +621,17 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
     // stays the empty literal `[]`, and `_x86_local_type` is never consulted (the
     // binop guard short-circuits on the gate). Empty-`[]` field is the minimal
     // residual struct-shape delta; Gate-1 re-measures patched-OFF .o == baseline.
+    // r2c — the `local_type[]` builder must also run for the ARRAY-unbox gate.
+    // r2b localized the array consumer (index/index_set native emit) reading
+    // `_x86_local_type(rm,id)`, but the slot-builder here was gated ONLY on the
+    // r5 scalar flag `_unbox_native_enabled()`. With just HEXA_UNBOX_ARRAY_
+    // NATIVE=1 the loop never ran → `rm_local_type` stayed `[]` → every
+    // `_x86_local_type` returned 0 → the array guard saw `cont.type_id=0` and
+    // `idx.provint=0` (r2b/r2c PROBE) and never fired. This was the missing
+    // CONSUMER-side producer for the `local_type[]` regmap slot. Either gate ON
+    // now builds the slot; OFF path (neither flag) keeps `[]` → byte-identical.
     let mut rm_local_type: [i64] = []
-    if _unbox_native_enabled() {
+    if _unbox_native_enabled() || _unbox_array_enabled() {
         let lt_maxid = _x86_max_local_id(mf)
         let mut lj = 0
         while lj <= lt_maxid { rm_local_type.push(0); lj = lj + 1 }
@@ -701,6 +723,12 @@ fn _x86_tag_off(rm: X86RegMap, id: i64) -> i64 {
 // function's reset never dangles (same handle-vs-buffer discipline as
 // `_lr_ctx_clear`). Collapses per-function codegen from O(stmts²) to O(stmts).
 pub let mut _x86_buf: [LInstr] = []
+
+// r2b HEXA_UNBOX_ARRAY_NATIVE — monotonic counter for the per-site bounds-check
+// labels (`.Larru<N>`). Only ADVANCED inside `_x86_emit_arru_*` which run ONLY
+// when `_unbox_array_enabled()` is true; on the OFF path this is never read or
+// mutated → the labels never appear → byte-eq NEUTRAL by construction.
+pub let mut _x86_arru_lbl: i64 = 0
 
 // Fresh, independent instruction buffer for a new function-lowering scope.
 // A bare `[]` literal evaluated under a live fn-arena is arena-backed and
@@ -881,6 +909,7 @@ fn _x86_is_arith_add(op: string) -> bool { return op == "add" || op == "+" }
 fn _x86_is_arith_sub(op: string) -> bool { return op == "sub" || op == "-" }
 fn _x86_is_arith_mul(op: string) -> bool { return op == "mul" || op == "*" }
 fn _x86_is_arith_div(op: string) -> bool { return op == "div" || op == "/" }
+fn _x86_is_arith_mod(op: string) -> bool { return op == "mod" || op == "%" || op == "rem" }
 fn _x86_is_bit_and(op: string) -> bool   { return op == "and" || op == "&" }
 fn _x86_is_bit_or(op: string) -> bool    { return op == "or"  || op == "|" }
 fn _x86_is_bit_xor(op: string) -> bool   { return op == "xor" || op == "^" }
@@ -950,6 +979,300 @@ fn _x86_binop_unbox_ok(s: Stmt, rm: X86RegMap) -> bool {
     if !_x86_operand_provably_int(s.args[0], rm) { return false }
     if !_x86_operand_provably_int(s.args[1], rm) { return false }
     return true
+}
+
+// ── r5b HEXA_UNBOX_NATIVE — `%`/`/` by a COMPILE-TIME positive constant ───────
+//
+// R1 (above) kept `/` `%` BOXED because the runtime `hexa_div`/`hexa_mod` carry
+// the div-by-zero throw and INT64_MIN/-1 overflow guard. For a divisor that is a
+// COMPILE-TIME positive `const_int` in [2, 2^31-1] those hazards are STATICALLY
+// IMPOSSIBLE (d != 0 ⇒ no #DE; d != -1 ⇒ no INT_MIN/-1 overflow). So such a
+// binop can lower to gcc's signed magic-reciprocal (multiply + shift, zero divide
+// latency) — the strength-reduction the probe disasm showed gcc -O2 emits
+// (`imul $0x89705f31...` for `% 1000000007`). This is the slice that closes
+// k1_sum's still-`%`-bound tail (R1 ratio stuck at 1.000 because `% M` stayed a
+// `call hexa_mod`). VARIABLE divisors stay BOXED (can't prove nonzero → keep the
+// runtime throw, exactly the r4-lesson firewall).
+//
+// reference-match: the magic constant M + shift s are computed by `_x86_magic_*`
+// below, byte-for-byte equal to gcc/clang -O2's `movabs` constant for every
+// divisor measured (1000000007→0x89705f31…, 3, 5, 7, powers of two, …;
+// state/unbox-native-r5/magic_reference.py validates M,s + the emitted sequence
+// against C truncated-division semantics, 0 mismatch / 8000 random signed inputs).
+//
+// Bound 2 ≤ d ≤ 2^31-1: the remainder step emits `imul dst, q, d` whose `d` must
+// fit an imm32; d ≥ 2 keeps the magic well-defined; d == 1 (`/1`=id, `%1`=0) and
+// negative/zero constants are NOT taken here (fall through to the existing boxed
+// path — rare, correctness over micro-opt).
+fn _x86_binop_div_const_ok(s: Stmt, rm: X86RegMap) -> bool {
+    if !_unbox_native_enabled() { return false }
+    if len(s.args) < 2 { return false }
+    if !(_x86_is_arith_div(s.op) || _x86_is_arith_mod(s.op)) { return false }
+    // dst must be statically i64 (the result of int `/`/`%` is i64).
+    if _x86_local_type(rm, s.dst.id) != 1 { return false }
+    // LHS (dividend) must be provably raw-int (literal or typed-i64 local).
+    if !_x86_operand_provably_int(s.args[0], rm) { return false }
+    // RHS (divisor) MUST be a compile-time positive constant in [2, 2^31-1].
+    if s.args[1].kind != "const_int" { return false }
+    let d = s.args[1].int_val
+    if d < 2 || d > 2147483647 { return false }
+    return true
+}
+
+// ── r2b HEXA_UNBOX_ARRAY_NATIVE — native array element load/store (default-OFF) ─
+//
+// Baseline (state/codegen-quality-probe-verdict.md re-baseline #4049): EVERY
+// `arr[i]` / `arr[i]=v` on the x86_64 native backend routes through a boxed
+// `call hexa_index_get` / `call hexa_index_set` (the index/index_set emit at the
+// _STMT_ASSIGN block below) — box both args as 16B HexaVal pairs, runtime tag-
+// dispatch, VALSTRUCT-unwrap, bounds-check, 16B return. probe k3_arrmap = 26.9×
+// gap vs gcc -O2's `mov [base+idx*8]`.
+//
+// THIS GATE lets an `arr[i]`/`arr[i]=v` whose container is a PROVABLY typed-prim
+// array (MIR type_id 101..104 = [i64]/[i32]/[f64]/[f32]) AND whose index is a
+// PROVABLY-int operand (const_int, or a local with type_id==1) SKIP the boxed
+// call and emit the native HexaArr descriptor walk (LAYOUT locked by
+// stdlib/runtime/array_core.hexa:17 — payload word = HexaArr*; HexaArr{ items*@0,
+// len@8, cap@16 }; element stride = sizeof(HexaVal)=16 → tag@+0 payload@+8).
+//
+// Soundness firewall (mirrors r5 _unbox_native exactly):
+//   - Gate is env-opt-in, default-OFF. When unset, `_unbox_array_enabled()`
+//     returns false → both index/index_set branches take their UNCHANGED boxed
+//     `call hexa_index_*` emit → OFF-path is byte-identical by construction.
+//   - container must be a `local` whose MIR type_id ∈ {101,102,103,104} (a
+//     PROVABLY typed-prim array). A map / untyped array / struct / fn-return /
+//     global stays BOXED (the runtime dispatch handles those polymorphically).
+//   - index must be a const_int (raw payload) OR a `local` with type_id==1 (i64).
+//     A non-int / unproven index stays BOXED (over-eager = silent miscompile).
+//   - bounds-check is KEPT (cmp idx,len + jae → out-of-bounds trap). The win is
+//     call-elimination + inline addressing, NOT bounds elision (that needs
+//     loop-invariant analysis, a separate round). element TAG is preserved
+//     (loaded from items[idx]+0) so a typed-prim load carries TAG_INT/TAG_FLOAT
+//     exactly as the runtime would return (Gate-4 output parity).
+fn _unbox_array_enabled() -> bool {
+    return env("HEXA_UNBOX_ARRAY_NATIVE") == "1"
+}
+
+// HEXA_ARRU_DEBUG — emit a stderr provenance trace at each index/index_set site
+// (container type_id + index proof) so a measure run can confirm WHERE the joint
+// signal (typed-prim-array ∧ int-idx) is/ isn't seen at the codegen callsite.
+// Pure diagnostic: gated, no LIR effect, byte-neutral when unset.
+fn _arru_debug_enabled() -> bool {
+    return env("HEXA_ARRU_DEBUG") == "1"
+}
+
+// Is operand `o` a PROVABLY typed-prim-array container (MIR type_id 101..104)?
+// Only a typed-prim array local qualifies — its element stride/tag is statically
+// known so the native descriptor walk is sound. Globals live in a separate id
+// space (see _x86_operand_provably_int) → conservatively NOT proven here.
+fn _x86_operand_typed_prim_array(o: Operand, rm: X86RegMap) -> bool {
+    if o.kind != "local" { return false }
+    let t = _x86_local_type(rm, o.local_id)
+    return t >= 101 && t <= 104
+}
+
+// Should this `arr[i]` / `arr[i]=v` take the native unboxed element path?
+// Gate ON + container provably typed-prim-array + index provably-int. (No `/0`
+// hazard, no div — the only firewall here is type provenance + the kept bounds
+// check.) idx-arg position: args[1] for both index and index_set.
+fn _x86_index_unbox_ok(s: Stmt, rm: X86RegMap) -> bool {
+    if !_unbox_array_enabled() { return false }
+    if len(s.args) < 2 { return false }
+    if !_x86_operand_typed_prim_array(s.args[0], rm) { return false }
+    if !_x86_operand_provably_int(s.args[1], rm) { return false }
+    return true
+}
+
+// Per-prim element byte-size (the `mov` width is still 64-bit payload here — the
+// items[] slot is a full HexaVal regardless of element prim, so the stride is
+// sizeof(HexaVal)=16 and the payload eightbyte is at +8; the prim kind only
+// drives the carried TAG). 101/102 = int (TAG_INT 0); 103/104 = float (TAG_FLOAT 1).
+fn _x86_arru_elem_tag(type_id: i64) -> i64 {
+    if type_id == 103 || type_id == 104 { return 1 }   // TAG_FLOAT
+    return 0                                            // TAG_INT (101/102)
+}
+
+// r2b — emit a bare `.Larru<N>` local-label pseudo-instruction (op="label", name
+// in comment; rendered `.Larru<N>:` verbatim by _fmt_label since it starts ".").
+fn _x86_arru_emit_label(name: string) {
+    _x86_buf.push(LInstr { op: "label", args: [], comment: name })
+}
+
+// r2b — native `arr[idx]` element load (HEXA_UNBOX_ARRAY_NATIVE fast path).
+// Precondition (caller-checked via _x86_index_unbox_ok): container is a typed-
+// prim array local (type_id 101..104), idx is provably-int. Emits, with the
+// HexaArr LAYOUT (array_core.hexa:17 — payload=HexaArr*; items*@0 len@8 cap@16;
+// element stride sizeof(HexaVal)=16, tag@+0 payload@+8):
+//
+//     mov  r10, <container payload>     ; HexaArr*
+//     mov  rax, <idx payload>           ; index (signed i64)
+//     mov  r11, [r10+8]                 ; len
+//     cmp  rax, r11
+//     jae  .Larru_slowN                 ; unsigned >= len (also catches idx<0) → runtime
+//     mov  r11, [r10+0]                 ; items*
+//     imul rax, rax, 16                 ; idx * sizeof(HexaVal)
+//     add  r11, rax                     ; &items[idx]
+//     mov  <dst>, [r11+8]               ; element payload
+//     <store dst tag = elem prim tag>
+//     <dst writeback>
+//     jmp  .Larru_doneN
+//   .Larru_slowN:  <existing boxed call hexa_index_get>  (emitted by the SITE)
+//   .Larru_doneN:  (emitted by the SITE after the slow body)
+// Returns the unique suffix N so the SITE can close the slow/done labels.
+fn _x86_emit_arru_get(s: Stmt, st: X86StrTab, rm: X86RegMap, opts: CodegenOptions) -> i64 {
+    let n = _x86_arru_lbl
+    _x86_arru_lbl = _x86_arru_lbl + 1
+    let slow = ".Larru_slow" + to_string(n)
+    let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
+    let etag = _x86_arru_elem_tag(_x86_local_type(rm, s.args[0].local_id))
+    // r10 = HexaArr* (container payload), rax = idx payload.
+    _x86_hv_payload(s.args[0], st, rm, "r10", opts)
+    _x86_hv_payload(s.args[1], st, rm, "rax", opts)
+    // bounds: cmp idx, len; jae slow (unsigned compare catches negative idx too).
+    _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r10", 8),
+                     "arru get: len"))
+    _x86_buf.push(_x86_instr2("cmp", _x86_op_reg("rax"), _x86_op_reg("r11"),
+                     "arru get: idx vs len"))
+    _x86_buf.push(_x86_instr1("jae", _x86_op_label(slow),
+                     "arru get: OOB -> runtime hexa_index_get"))
+    // &items[idx], load payload.
+    _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r10", 0),
+                     "arru get: items*"))
+    _x86_buf.push(_x86_instr3("imul", _x86_op_reg("rax"), _x86_op_reg("rax"),
+                     _x86_op_imm(16), "arru get: idx * sizeof(HexaVal)"))
+    _x86_buf.push(_x86_instr2("add", _x86_op_reg("r11"), _x86_op_reg("rax"),
+                     "arru get: &items[idx]"))
+    _x86_buf.push(_x86_instr2("mov", dst, _x86_op_mem("r11", 8),
+                     "arru get: element payload"))
+    _x86_store_tag_imm(rm, s.dst.id, etag)
+    _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+    return n
+}
+
+// r2b — native `arr[idx] = val` element store (HEXA_UNBOX_ARRAY_NATIVE fast path).
+// Same precondition + LAYOUT. The value's tag is carried (recovered from its
+// tag-slot) so a stored float/int keeps the right tag in items[idx]+0; the
+// payload goes to +8. In-bounds writes do NOT relocate the descriptor (the slot
+// already exists — no grow), so unlike the boxed hexa_index_set there is no
+// store-back of a relocated container. OOB falls to the runtime call which keeps
+// the canonical bounds-error / auto-grow semantics. Returns the unique suffix N.
+fn _x86_emit_arru_set(s: Stmt, st: X86StrTab, rm: X86RegMap, opts: CodegenOptions) -> i64 {
+    let n = _x86_arru_lbl
+    _x86_arru_lbl = _x86_arru_lbl + 1
+    let slow = ".Larru_slow" + to_string(n)
+    // r10 = HexaArr* (container payload), rax = idx payload, r8 = value payload,
+    // r9 = value tag.
+    _x86_hv_payload(s.args[0], st, rm, "r10", opts)
+    _x86_hv_payload(s.args[1], st, rm, "rax", opts)
+    _x86_hv_payload(s.args[2], st, rm, "r8", opts)
+    _x86_tag_resolve(s.args[2], rm, "r9")
+    // bounds: cmp idx, len; jae slow.
+    _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r10", 8),
+                     "arru set: len"))
+    _x86_buf.push(_x86_instr2("cmp", _x86_op_reg("rax"), _x86_op_reg("r11"),
+                     "arru set: idx vs len"))
+    _x86_buf.push(_x86_instr1("jae", _x86_op_label(slow),
+                     "arru set: OOB -> runtime hexa_index_set"))
+    // &items[idx], store tag@+0 then payload@+8.
+    _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_mem("r10", 0),
+                     "arru set: items*"))
+    _x86_buf.push(_x86_instr3("imul", _x86_op_reg("rax"), _x86_op_reg("rax"),
+                     _x86_op_imm(16), "arru set: idx * sizeof(HexaVal)"))
+    _x86_buf.push(_x86_instr2("add", _x86_op_reg("r11"), _x86_op_reg("rax"),
+                     "arru set: &items[idx]"))
+    _x86_buf.push(_x86_instr2("mov", _x86_op_mem("r11", 0), _x86_op_reg("r9"),
+                     "arru set: element tag"))
+    _x86_buf.push(_x86_instr2("mov", _x86_op_mem("r11", 8), _x86_op_reg("r8"),
+                     "arru set: element payload"))
+    return n
+}
+
+// UNSIGNED 64-bit `a < b` expressed with SIGNED i64 ops: flip both high bits
+// (`^ INT64_MIN`) then signed-compare. This is the standard u64-on-signed-ALU
+// idiom — REQUIRED because the magic iteration's q1/q2 doublings legitimately
+// exceed 2^63 (wrap to a negative i64 bit pattern), so a raw signed `<` would be
+// wrong. `INT64_MIN = 1 << 63` (the same idiom the float-pool sign-flip uses,
+// hir_to_mir.hexa:1249). All arithmetic below is two's-complement-wrapping i64
+// (native int ops wrap, no overflow trap), matching unsigned 64-bit semantics.
+fn _x86_u64_lt(a: i64, b: i64) -> bool {
+    let imin: i64 = 1 << 63
+    return (a ^ imin) < (b ^ imin)
+}
+
+// Hacker's Delight 2nd ed. Fig 10-1 magic helper: for 0 < x < 2^63 returns
+// floor(2^63 / x) (want_rem=false) or 2^63 mod x (want_rem=true), via one
+// doubling of the 2^62 (q,r) pair. `two62 / x` and `two62 - q*x` are SIGNED but
+// EXACT (two62 and x are both positive < 2^63, quotient < 2^62). The `r >= x`
+// reconciliation, however, MUST be UNSIGNED — x can be `anc` (≈ 2^63, whose i64
+// bit pattern is negative) and `2*r` can wrap past 2^63, so a signed `>=` would
+// be wrong (the bug that left M(anc)-seeds diverging). Use `_x86_u64_lt`.
+fn _x86_magic_div2p63(x: i64, want_rem: bool) -> i64 {
+    let two62 = 4611686018427387904   // 2^62 (fits i64 positive)
+    let q62 = two62 / x
+    let r62 = two62 - q62 * x
+    let mut q = 2 * q62
+    let mut r = 2 * r62
+    if !_x86_u64_lt(r, x) { q = q + 1; r = r - x }   // r >=u x
+    if want_rem { return r }
+    return q
+}
+
+// Signed magic multiplier M for divisor d (2 ≤ d ≤ 2^31-1), reference-matched to
+// gcc/clang -O2 (M byte-identical, validated state/unbox-native-r5/magic_reference.py).
+// Returns M as the i64 BIT PATTERN to `mov reg, <imm>` (movabs); the high bit may
+// be set (M then reads as a negative i64 — that is the signed multiplier gcc uses).
+// All q/r updates use unsigned-64 wraparound (`_x86_u64_lt` for every compare).
+fn _x86_magic_M(d: i64) -> i64 {
+    let two62 = 4611686018427387904   // 2^62
+    let mod63 = _x86_magic_div2p63(d, true)         // 2^63 mod d
+    // anc = 2^63 - 1 - mod63 (< 2^63, fits positive). 2^63-1 = (2^62-1) + 2^62.
+    let anc = (two62 - 1) + two62 - mod63
+    let mut q1 = _x86_magic_div2p63(anc, false)
+    let mut r1 = _x86_magic_div2p63(anc, true)
+    let mut q2 = _x86_magic_div2p63(d, false)
+    let mut r2 = _x86_magic_div2p63(d, true)
+    let mut done = false
+    while !done {
+        q1 = 2 * q1; r1 = 2 * r1
+        if !_x86_u64_lt(r1, anc) { q1 = q1 + 1; r1 = r1 - anc }  // r1 >=u anc
+        q2 = 2 * q2; r2 = 2 * r2
+        if !_x86_u64_lt(r2, d)   { q2 = q2 + 1; r2 = r2 - d }    // r2 >=u d
+        let delta = d - r2
+        // break when NOT (q1 <u delta or (q1 == delta and r1 == 0))
+        if !(_x86_u64_lt(q1, delta) || (q1 == delta && r1 == 0)) { done = true }
+    }
+    return q2 + 1   // wraps to the signed magic (high bit may be set)
+}
+
+// Shift amount s for divisor d (the `sar` count). Mirrors _x86_magic_M's loop
+// counting p from 63; s = p - 64. (Two probes — M and shift — keep each a pure
+// fn; recompute is negligible, compile-time only.)
+fn _x86_magic_shift(d: i64) -> i64 {
+    let two62 = 4611686018427387904
+    let mod63 = _x86_magic_div2p63(d, true)
+    let anc = (two62 - 1) + two62 - mod63
+    let mut q1 = _x86_magic_div2p63(anc, false)
+    let mut r1 = _x86_magic_div2p63(anc, true)
+    let mut q2 = _x86_magic_div2p63(d, false)
+    let mut r2 = _x86_magic_div2p63(d, true)
+    let mut p = 63
+    let mut done = false
+    while !done {
+        p = p + 1
+        q1 = 2 * q1; r1 = 2 * r1
+        if !_x86_u64_lt(r1, anc) { q1 = q1 + 1; r1 = r1 - anc }
+        q2 = 2 * q2; r2 = 2 * r2
+        if !_x86_u64_lt(r2, d)   { q2 = q2 + 1; r2 = r2 - d }
+        let delta = d - r2
+        if !(_x86_u64_lt(q1, delta) || (q1 == delta && r1 == 0)) { done = true }
+    }
+    return p - 64
+}
+
+// Does gcc insert the `add rdx, dividend` correction? Exactly when the signed
+// magic M is negative (high bit set) — HD's "if M<0 add the dividend back".
+fn _x86_magic_needs_add(d: i64) -> bool {
+    return _x86_magic_M(d) < 0
 }
 
 // Tag-aware arithmetic binop → runtime helper symbol. Mirrors arm64's
@@ -1115,6 +1438,67 @@ pub fn _is_cabi(fname: string) -> bool {
     // compile-time target_is_* consts; same errno-store discipline.
     if fname == "hxlcl_dup2" { return true }
     if fname == "hxlcl_mkdir" { return true }
+    // errno-bearing chain r3 — FINAL batch. stat = per-arch arg tuple (arm64
+    // fstatat AT_FDCWD prepend, like mkdir); waitpid = uniform wait4 4-arg (only
+    // NR varies, like read/lseek). Same close errno-store discipline; both reuse
+    // the already-whitelisted __errno_location for the Linux errno leg.
+    if fname == "hxlcl_stat" { return true }
+    if fname == "hxlcl_waitpid" { return true }
+    // errno-bearing chain batch C — write / fcntl / mmap. All UNIFORM across
+    // targets (plain syscall on arm64-linux too, only the NR varies — like
+    // read/lseek/waitpid; no dup3/mkdirat/fstatat call-shape divergence). Same
+    // close errno-store discipline; mmap's raw-syscall error is -errno (negative
+    // `__hx_payload_lt`), NOT the libc MAP_FAILED `== -1` sentinel.
+    if fname == "hxlcl_write" { return true }
+    if fname == "hxlcl_fcntl" { return true }
+    if fname == "hxlcl_mmap" { return true }
+    // errno-bearing chain batch D — DIVERGENCE syscalls: open_sys + getrusage.
+    // open_sys = arm64 AT_FDCWD-prepend at-variant (openat, per-arch arg tuple,
+    // exactly like mkdir→mkdirat / stat→fstatat); getrusage = plain uniform 2-arg
+    // (out-ptr usage*, only the NR varies, like read/lseek/waitpid). Both reuse
+    // the close errno-store discipline (raw-payload intrinsics + the already-
+    // whitelisted __errno_location for the Linux errno leg). time/poll/pipe are
+    // DEFERRED (return-semantics / arg-count / 2nd-return-reg divergence, trickier).
+    if fname == "hxlcl_open_sys" { return true }
+    if fname == "hxlcl_getrusage" { return true }
+    // errno-bearing chain batch E — pipe. CENSUS CORRECTION: batch D deferred pipe
+    // as "2nd-return-register", but that is DARWIN-only (BSD pipe r0/r1). The Linux
+    // pipe ABI is an OUT-POINTER (kernel writes the caller's int[2], returns 0) —
+    // the same getrusage/stat out-ptr shape, so the Linux legs DISSOLVE with the
+    // close errno epilogue. Uniform pipe2(fds, flags=0) on both arches (x86_64=293,
+    // arm64=59; no plain pipe on arm64) — the "flags-trailing uniform" dup3 pattern.
+    // The darwin leg returns -1 (genuine 2nd-return-reg wall; real darwin pipe stays
+    // the floor _cf shim). time/poll stay DEFERRED (need a scratch-buffer substrate).
+    if fname == "hxlcl_pipe" { return true }
+    // batch H — time / poll (SCRATCH-BUFFER substrate, NO new intrinsic). Both have
+    // register-clean legs (x86_64 time=201 returns epoch in the result reg; x86_64
+    // poll=7 + darwin poll=230 are plain 3-arg) plus ONE divergent leg that needs a
+    // small in-body struct (timeval / timespec). The campaign has no __hx_stack_alloc
+    // intrinsic, so the buffer is a HEAP scratch via the already-whitelisted
+    // hxlcl_malloc (ON-path-proven by strdup/calloc/realloc) + __hx_ptr_store64/
+    // load64 (proven by strtoll/realloc) + __hx_payload_div/mod/mul (proven int-div
+    // leaves) — zero new builtins. time → arm64/darwin gettimeofday(169/116) reads
+    // tv_sec; poll → arm64 ppoll(73) synthesizes a timespec from timeout_ms. Both
+    // reuse hxlcl_malloc + the close errno epilogue's already-whitelisted
+    // __errno_location, so no new whitelist entry beyond the two fns themselves.
+    if fname == "hxlcl_time" { return true }
+    if fname == "hxlcl_poll" { return true }
+    // batch F search family — strchr / strstr. Pure byte-scan LEAVES (no syscall,
+    // no float, no inner call, no errno): each walks the input with __hx_ptr_load8
+    // ZERO-EXTENDED reads and returns a raw char* (the match position) or NULL(0)
+    // in the single C-ABI result register — the SAME class as the compare/copy
+    // leaves (strcmp/strcpy …), only the return value is a pointer-into-input
+    // instead of a diff/dst. Byte-faithful to the frozen 0-libc floor bodies
+    // self/runtime.c rt_strchr / rt_strstr. No arm64 call-shape divergence.
+    if fname == "hxlcl_strchr" { return true }
+    if fname == "hxlcl_strstr" { return true }
+    // batch G PARSE: hxlcl_strtoll — string→long long parse leaf with a
+    // NULL-gated `char** endptr` out-param write (__hx_ptr_store64 to the
+    // caller's pointer, the copy-family caller-write class widened to 64-bit,
+    // NOT the errno-store extern-data class). Pure compute otherwise →
+    // cross-target-identical (no NR, no arm64 call-shape divergence). Byte-
+    // faithful to the frozen 0-libc floor self/runtime.c:513 (hxlcl_strtoll).
+    if fname == "hxlcl_strtoll" { return true }
     return false
 }
 
@@ -1692,7 +2076,37 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             return
         }
         if s.op == "index" && len(s.args) >= 2 {
+            // r2b HEXA_UNBOX_ARRAY_NATIVE — provenance probe (diagnostic only).
+            if _arru_debug_enabled() {
+                let _ct = if s.args[0].kind == "local" { _x86_local_type(rm, s.args[0].local_id) } else { -1 }
+                let _ipi = if _x86_operand_provably_int(s.args[1], rm) { 1 } else { 0 }
+                eprintln("[ARRU] index cont.kind=" + s.args[0].kind +
+                         " cont.type_id=" + to_string(_ct) +
+                         " idx.kind=" + s.args[1].kind +
+                         " idx.provint=" + to_string(_ipi) +
+                         " gate_ok=" + to_string(if _x86_index_unbox_ok(s, rm) { 1 } else { 0 }))
+            }
             let dst = _x86_op_reg(_x86_dst_reg(rm, s.dst.id))
+            // r2b — typed-prim array + provably-int idx → native element load with
+            // a KEPT bounds-check; OOB falls through to the runtime call below
+            // (canonical bounds-error). Gate OFF → _x86_index_unbox_ok is false →
+            // byte-identical boxed emit. arr (payload=HexaArr*) reaches r10 here.
+            if _x86_index_unbox_ok(s, rm) {
+                let _n = _x86_emit_arru_get(s, st, rm, opts)
+                _x86_buf.push(_x86_instr1("jmp", _x86_op_label(".Larru_done" + to_string(_n)),
+                                 "arru get: skip runtime slow path"))
+                _x86_arru_emit_label(".Larru_slow" + to_string(_n))
+                _x86_hv_box_arg(s.args[0], st, rm, "rdi", "rsi", opts)  // container
+                _x86_hv_box_arg(s.args[1], st, rm, "rdx", "rcx", opts)  // key
+                _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_index_get"),
+                                 "index: hexa_index_get (OOB slow path)"))
+                _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                                 "index: capture element payload"))
+                _x86_store_tag_reg(rm, s.dst.id, "rax")
+                _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+                _x86_arru_emit_label(".Larru_done" + to_string(_n))
+                return
+            }
             _x86_hv_box_arg(s.args[0], st, rm, "rdi", "rsi", opts)  // container
             _x86_hv_box_arg(s.args[1], st, rm, "rdx", "rcx", opts)  // key
             _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_index_get"),
@@ -1736,6 +2150,40 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             return
         }
         if s.op == "index_set" && len(s.args) >= 3 {
+            // r2b HEXA_UNBOX_ARRAY_NATIVE — provenance probe (diagnostic only).
+            if _arru_debug_enabled() {
+                let _ct = if s.args[0].kind == "local" { _x86_local_type(rm, s.args[0].local_id) } else { -1 }
+                let _ipi = if _x86_operand_provably_int(s.args[1], rm) { 1 } else { 0 }
+                eprintln("[ARRU] index_set cont.kind=" + s.args[0].kind +
+                         " cont.type_id=" + to_string(_ct) +
+                         " idx.kind=" + s.args[1].kind +
+                         " idx.provint=" + to_string(_ipi) +
+                         " gate_ok=" + to_string(if _x86_index_unbox_ok(s, rm) { 1 } else { 0 }))
+            }
+            // r2b — typed-prim array + provably-int idx → native in-place element
+            // store with a KEPT bounds-check; OOB falls through to the runtime
+            // call (canonical bounds-error / auto-grow). Gate OFF → byte-identical.
+            if _x86_index_unbox_ok(s, rm) {
+                let _n = _x86_emit_arru_set(s, st, rm, opts)
+                _x86_buf.push(_x86_instr1("jmp", _x86_op_label(".Larru_done" + to_string(_n)),
+                                 "arru set: skip runtime slow path"))
+                _x86_arru_emit_label(".Larru_slow" + to_string(_n))
+                _x86_hv_box_arg(s.args[0], st, rm, "rdi", "rsi", opts)  // container
+                _x86_hv_box_arg(s.args[1], st, rm, "rdx", "rcx", opts)  // key
+                _x86_hv_box_arg(s.args[2], st, rm, "r8", "r9", opts)    // value
+                _x86_buf.push(_x86_instr1("call", _x86_op_label("hexa_index_set"),
+                                 "index_set: hexa_index_set (OOB slow path)"))
+                let cont0 = s.args[0]
+                if cont0.kind == "local" {
+                    _x86_buf.push(_x86_instr2("mov", _x86_op_reg(_x86_dst_reg(rm, cont0.local_id)),
+                                     _x86_op_reg("rdx"),
+                                     "index_set: store-back container payload"))
+                    _x86_store_tag_reg(rm, cont0.local_id, "rax")
+                    _x86_emit_dst_writeback(rm, cont0.local_id, 0)
+                }
+                _x86_arru_emit_label(".Larru_done" + to_string(_n))
+                return
+            }
             _x86_hv_box_arg(s.args[0], st, rm, "rdi", "rsi", opts)  // container
             _x86_hv_box_arg(s.args[1], st, rm, "rdx", "rcx", opts)  // key
             _x86_hv_box_arg(s.args[2], st, rm, "r8", "r9", opts)    // value
@@ -1912,6 +2360,66 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
                     _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"), "capture concat result payload"))
                 }
                 _x86_store_tag_reg(rm, s.dst.id, "rax")
+                _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
+                return
+            }
+
+            // r5b HEXA_UNBOX_NATIVE — `%`/`/` by a COMPILE-TIME positive constant
+            // divisor d ∈ [2, 2^31-1] → gcc -O2 signed magic-reciprocal (multiply
+            // + shift, no boxed `call hexa_mod`/`hexa_div`, no idiv latency). This
+            // is the slice that closes k1_sum's `% M` tail (R1 left it boxed →
+            // ratio stuck at 1.000). Reference-matched: M + shift byte-identical to
+            // gcc/clang -O2 (state/unbox-native-r5/magic_reference.py). Gate-OFF →
+            // `_x86_binop_div_const_ok` is false → control falls to the boxed
+            // `_ar_sym` block below exactly as today (byte-identical OFF emit).
+            // VARIABLE divisor → NOT taken here (can't prove nonzero → stays boxed,
+            // the r4-lesson div-zero-throw firewall).
+            if _x86_binop_div_const_ok(s, rm) {
+                let d = s.args[1].int_val
+                let M = _x86_magic_M(d)
+                let sh = _x86_magic_shift(d)
+                let needs_add = _x86_magic_needs_add(d)
+                // r10 = dividend (stable copy; a may be reg or imm). All work uses
+                // rax/rdx (imul-implicit) + r10/r11 scratch; dst written last.
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r10"), a,
+                                 "magicdiv: r10 = dividend"))
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rax"), _x86_op_reg("r10"),
+                                 "magicdiv: rax = dividend"))
+                // 64-bit immediate `mov reg, <imm>` — GNU `as` encodes movabs
+                // (the codebase idiom for wide imms, e.g. float_to_bits load).
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("r11"), _x86_op_imm(M),
+                                 "magicdiv: r11 = signed magic M (movabs imm64)"))
+                _x86_buf.push(_x86_instr1("imul", _x86_op_reg("r11"),
+                                 "magicdiv: rdx:rax = dividend * M (hi → rdx)"))
+                if needs_add {
+                    _x86_buf.push(_x86_instr2("add", _x86_op_reg("rdx"), _x86_op_reg("r10"),
+                                     "magicdiv: M<0 correction (rdx += dividend)"))
+                }
+                // signbit BEFORE the arithmetic shift (gcc: shr <copy>, 63).
+                _x86_buf.push(_x86_instr2("mov", _x86_op_reg("rax"), _x86_op_reg("rdx"),
+                                 "magicdiv: rax = t0 (copy for signbit)"))
+                _x86_buf.push(_x86_instr2("shr", _x86_op_reg("rax"), _x86_op_imm(63),
+                                 "magicdiv: rax = signbit(t0)"))
+                if sh > 0 {
+                    _x86_buf.push(_x86_instr2("sar", _x86_op_reg("rdx"), _x86_op_imm(sh),
+                                     "magicdiv: rdx = t0 >> s (arithmetic)"))
+                }
+                _x86_buf.push(_x86_instr2("add", _x86_op_reg("rdx"), _x86_op_reg("rax"),
+                                 "magicdiv: rdx = quotient = (t0>>s) + signbit"))
+                if _x86_is_arith_div(s.op) {
+                    _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("rdx"),
+                                     "magicdiv: dst = quotient (/)"))
+                } else {
+                    // remainder = dividend - quotient*d. `imul rax, rdx, d` (d imm32).
+                    _x86_buf.push(_x86_instr3("imul", _x86_op_reg("rax"),
+                                     _x86_op_reg("rdx"), _x86_op_imm(d),
+                                     "magicdiv: rax = quotient * d"))
+                    _x86_buf.push(_x86_instr2("sub", _x86_op_reg("r10"), _x86_op_reg("rax"),
+                                     "magicdiv: r10 = dividend - quotient*d (remainder)"))
+                    _x86_buf.push(_x86_instr2("mov", dst, _x86_op_reg("r10"),
+                                     "magicdiv: dst = remainder (%)"))
+                }
+                _x86_store_tag_imm(rm, s.dst.id, 0) // TAG_INT
                 _x86_emit_dst_writeback(rm, s.dst.id, s.dst.arena_id)
                 return
             }

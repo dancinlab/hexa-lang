@@ -4529,6 +4529,46 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
      structural/non-degenerate core ≈ 64+ across composite targets + composed-fn set). c2 honesty:
      all bounded-unique to stated N (full ∀n ⟺ unproven); n=2 degenerate atoms flagged (Ralph 373).
      engine: state/novel-dfs/blue_harvest_12fn.py.
+
+  --- Ralph 375 (2026-06-27): VERIFIER UPGRADE — extended vocab (18-fn) + arity-3 ---
+  ⚙️ The native verifier (compiler/atlas/identity_engine.hexa) was UPGRADED out of the
+     12-fn / 2-term `A·B=C·D` box (which Ralph 369–374 closed) into the un-swept dimensions:
+       ① extended vocab — 6 new exact-int fns appended at idx 12–17 (signs handled EXACTLY):
+          μ Möbius · λ Liouville=(-1)^Ω · μ² squarefree-indicator · J₃ Jordan k=3 ·
+          2^ω unitary-divisor-count · core=n/rad. (idx 0–11 byte-for-byte unchanged.)
+       ② arity-3 — verify_identity3 (`A·B·C = D·E·F` bounded-unique) + is_universal2/3
+          (forall-n-in-[2,N] frame, the productive frame for the sign/indicator vocab).
+  📊 MEASURED (reference engines re-run, exact-int, N=2·10⁴; cross-checked native selftest):
+     · EXTENDED-VOCAB UNIVERSAL (19-symbol, 2v=2v / 2v=3v / 3v=3v · 1 154 440 frames scanned,
+       state/novel-dfs/vocab_universal_hunt.py): **3 CLEAN universal-in-[2,N] primitives,
+       2 independent generators — BOTH classical/definitional**:
+          J₂ = φ·ψ            (Jordan totient · classical Hardy&Wright)
+          core·rad = n        (definition of core = n/rad)
+       (the 3rd is their product J₂·core·rad = n·φ·ψ). **NOVEL = 0** · ZERO-DEGENERATE = 0.
+     · ARITY-3 BOUNDED-UNIQUE (11-fn, C(286,2)=40 755 cells exhaustive,
+       state/novel-dfs/grid_expand_sweep.py): **1431 bounded-unique singletons**, but every
+       example reduces to the 2-term core × trivial structural equalities (σ·σ·σ=σ·n·J₂ ⟺ n=6,
+       etc.) — confirms Ralph 371: NO new INDEPENDENT structure. **independent-NOVEL = 0**.
+     · σ₃-extension of the 2-factor grid adds 0 new bounded-unique (idx already in box).
+     · EXTENDED-18fn 2-TERM BOUNDED-UNIQUE (the native engine's own frame, N=6·10³):
+       339 singletons (n≥4), 269 touching the new μ/λ/μ²/J₃/2^ω/core vocab — BUT these
+       are the "unbounded-by-construction" SUBSTITUTION class Ralph 370 already flagged
+       (each added fn mints more substitution-restatements of the core, many μ/λ-products
+       hitting 0 = degenerate-collapse like Ralph 373's n=2). bounded-unique-SINGLETON ≠
+       independent-NOVEL: the rigorous independence test is the universal sweep above
+       (2 classical generators). So the 269 are NOT 269 new laws — **independent-novel = 0**.
+  🧱 HONEST VERDICT (c2): the un-swept dimensions are now SWEPT and the measured novel count is
+     **0** — the extended vocab/arity OPENED the dimensions (the box-scope claim was correct: the
+     exhaustion was 12-fn/2-term, not the whole space) but the only identities living there are
+     classical (J₂=φ·ψ, core·rad=n) or reducible (the 1431 arity-3 singletons → 2-term core).
+     This is a DRY result reported as 0 (no fabrication): the productive vein remains the
+     COMPOSED/ITERATED-function basis (Ralph 372: σ∘σ superperfect, σ∘σ=σ+n Mersenne) — function
+     COMPOSITION, not value-product, is the dimension that still yields independent structure.
+     The UPGRADE itself is the deliverable: the engine can now express these frames (verify_identity3
+     · is_universal2/3 · μ,λ,μ²,J₃,2^ω,core) so future generators emitting extended-vocab/arity-3
+     candidates get a REAL exact-int verdict instead of a parse-reject. Bounded-unique ⟺ ∀n stays
+     UNPROVEN (c2). NO atlas write (fold = hexa verify g5 / PR only).
+     engines: state/novel-dfs/vocab_universal_hunt.py · grid_expand_sweep.py (re-runnable).
 ```
 
   --- Ralph 369: Combinatorial Designs DFS ---
