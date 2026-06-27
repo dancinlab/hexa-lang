@@ -18,7 +18,7 @@ only (no domain registry).
 > 원장 (JSON; 사람용 뷰어 `architecture.html` · `python3 serve.py`) · 거버넌스/규칙 SSOT: 아래
 > 작업 규칙 (`harness.config.json` profile `hardcore` · stack `hexa` · vendored
 > [dancinlab/harness](https://github.com/dancinlab/harness) `.harness-engine` submodule) · 이력:
-> [CHANGELOG.md](CHANGELOG.md) (append-only). This file = entry pointer only (구 `project.tape` ·
+> [CHANGELOG.jsonl](CHANGELOG.jsonl) (append-only). This file = entry pointer only (구 `project.tape` ·
 > `ARCHITECTURE.md` · per-domain 트래킹 retired).
 
 ### 작업 규칙 개요 (do / dont)
@@ -220,7 +220,7 @@ git submodule update --init --recursive          # activate (hooks no-op until p
 - dont: `stdlib`/`runtime`/`codegen`/`rt` 에서 >50줄 삭제를 scoped subject 나 `WIPE-OK:` trailer 없이
   커밋하지 말 것.
 - do: L0 lockdown 파일(`harness.config.json` → `lockdown.files`) 편집 시 같은 변경에서
-  `CHANGELOG.md` 를 갱신한다.
+  `CHANGELOG.jsonl` 를 갱신한다.
 - do: `hexa`(릴리스/CLI) 업데이트 시 `hexa --help` · `hexa gpu` 출력을 **lockstep 갱신**한다 — 새
   GPU 능력 · 플래그 · 빌드변종 · dtype parity 변화가 나면 같은 변경에서 `cmd_help()`/
   `cmd_gpu_status()` 텍스트를 갱신한다(타 리포가 `hexa gpu` 를 GPU/flame/forge/cuda 상태 SSOT 로
