@@ -307,19 +307,24 @@ fn _lr_operand_provably_i64(op: Operand) -> bool {
     return false
 }
 
-// element-pack FUSE — stamp Local at `_lr_locals[idx]` with `tid` (in-place,
-// preserving every other field). Used by the three element-type threading sites.
-fn _lr_stamp_local_type(idx: i64, tid: i64) {
-    let d = _lr_locals[idx]
-    _lr_locals[idx] = Local {
-        id: d.id,
-        arena_id: d.arena_id,
+// element-pack FUSE — stamp the LAST `_lr_locals` Local with `tid`, rebuilt from
+// the supplied `base` copy's fields (NOT re-read from the module-global inside a
+// helper — that routing produced a cyclic Stmt → infinite hexa_val_heapify on the
+// self-hosted backend). Mirrors the proven inline line-1666 PRODUCER pattern.
+// PURE — rebuild `base` with type_id = `tid`, all other fields preserved. No
+// module-global mutation here (the `_lr_locals[_li] = …` assignment stays INLINE
+// at each call site, byte-for-byte mirroring the proven line-1666 PRODUCER; an
+// earlier void-helper that mutated `_lr_locals` itself produced a miscompiled
+// cyclic Stmt → infinite hexa_val_heapify on the self-hosted backend).
+fn _lr_rebuild_local_tid(base: Local, tid: i64) -> Local {
+    return Local {
+        id: base.id,
+        arena_id: base.arena_id,
         type_id: tid,
-        name_hint: d.name_hint,
-        precision: d.precision,
-        space: d.space
+        name_hint: base.name_hint,
+        precision: base.precision,
+        space: base.space
     }
-    return
 }
 
 // ── Local-name binding (HIR ident → MIR Local) ──────────────
@@ -1342,7 +1347,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         if _arrpk_fuse_enabled() && dst.type_id == 0 && _is_int_arith &&
            _lr_operand_provably_i64(lr.operand) && _lr_operand_provably_i64(rr.operand) {
             let _bi = len(_lr_locals) - 1
-            _lr_stamp_local_type(_bi, 1)
+            _lr_locals[_bi] = _lr_rebuild_local_tid(dst, 1)
             dst = _lr_locals[_bi]
         }
         let op_name = _op_with_precision(e.text, dst_precision)
@@ -1768,7 +1773,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             let _rtid = _lr_type_of_op(rhs_op)
             if _rtid >= 1 && _rtid <= 4 {
                 let _li2 = len(_lr_locals) - 1
-                _lr_stamp_local_type(_li2, _rtid)
+                _lr_locals[_li2] = _lr_rebuild_local_tid(dst, _rtid)
                 dst = _lr_locals[_li2]
             }
         }
@@ -3038,7 +3043,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             let _etid = _arru_elem_scalar_tid(_lr_type_of_op(lr.operand))
             if _etid != 0 {
                 let _li = len(_lr_locals) - 1
-                _lr_stamp_local_type(_li, _etid)
+                _lr_locals[_li] = _lr_rebuild_local_tid(dst, _etid)
                 dst = _lr_locals[_li]
             }
         }
