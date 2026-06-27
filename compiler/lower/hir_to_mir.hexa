@@ -212,7 +212,11 @@ fn _type_id_of(t: Type) -> i64 {
 // override below is skipped, so every Local's type_id is byte-identical to the
 // pre-r2c lowering (Gate-1 OFF-byteeq). Default-OFF, opt-in → release-safe.
 fn _arru_native_enabled() -> bool {
-    return env("HEXA_UNBOX_ARRAY_NATIVE") == "1"
+    // element-pack (HEXA_PACK_ARRAY) ALSO needs the typed-prim element-kind
+    // (type_id 101..104) stamped on the container Local — it is the V8
+    // PACKED_SMI element-kind signal the native backend reads to choose the
+    // raw 8B packed storage path. Default-OFF (both env unset) → byte-identical.
+    return env("HEXA_UNBOX_ARRAY_NATIVE") == "1" || env("HEXA_PACK_ARRAY") == "1"
 }
 
 // runtime-gap r2c PRODUCER — recover the typed-prim array type_id (101..104)
