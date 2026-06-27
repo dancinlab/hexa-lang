@@ -305,9 +305,16 @@ fn _cj_is_known_congruence(which: int, a: int, b: int, m: int) -> bool {
 //                       verify_composition frames emit ONLY bounded-unique
 //                       singletons, so the whole multiplicative ring closes here:
 //                       its measured-DRY exhaustion is baked into the gate).
+//   C5 RECURRENCE-PERIODIC : a fib/lucas/bell congruence — a finite-state linear
+//                       recurrence is eventually periodic mod m (Pisano/Touchard),
+//                       so its zero-set is structurally periodic and every holding
+//                       AP is classical (rank-of-apparition), never a deep
+//                       congruence. Only the partition p(n) (no finite-state mod-m
+//                       recurrence) can yield a SURVIVOR. (Added 2026-06-28 after a
+//                       live LLM run surfaced 15 such classical congruences.)
 //
 // HONESTY (c2): the closure NEVER claims a SURVIVOR is proven — it only certifies
-// that the candidate is not one of the four measured false-positive classes; the
+// that the candidate is not one of the five measured false-positive classes; the
 // ∀n statement stays UNPROVEN until `hexa verify` g5 / a proof lands.
 
 // integer-exact perfect-square test (no float path · byte-deterministic).
@@ -368,9 +375,23 @@ fn _cj_class_composition(first_n: int) -> string {
 }
 
 // ── closure class for an exact-int-confirmed CONGRUENCE (holds over the
-// progression · |sol|≥12 ⇒ passes C4). SURVIVOR unless it reduces (C1) to a base
-// Ramanujan congruence at the same modulus. A genuinely new modulus survives. ──
+// progression · |sol|≥12 ⇒ passes C4). ──
+// C5 RECURRENCE-PERIODIC (measured 2026-06-28 · live aiden run): fib/lucas/bell
+// (which 2/3/4) are FINITE-STATE linear recurrences — an order-k state space (m^k)
+// ⇒ eventually PERIODIC mod m (Pisano period for fib/lucas, Touchard period for
+// bell) ⇒ the zero-set {n : seq(n)≡0 mod m} is itself eventually periodic, so
+// EVERY holding arithmetic progression is a STRUCTURAL sub-progression of that
+// classical period (rank-of-apparition / Pisano / Touchard) — provable by one
+// period, NOT a deep congruence. The first live LLM run surfaced 15 such
+// "survivors" (fib(7n)≡0 mod13 = 13's apparition rank 7 · fib(6n)≡0 mod8 = F6=8 ·
+// bell(3n+2)≡0 mod2 = Bell mod2 period 3 · …) — all classical, genuine-novel = 0.
+// So finite-state-recurrence congruences are demoted here. ONLY the partition
+// function p(n) (which 0) has NO finite-state mod-m recurrence — its mod-m
+// behaviour is non-periodic, which is exactly why Ramanujan's congruences are
+// deep — so only a partition congruence can be a SURVIVOR (and then only at a NEW
+// modulus, not a C1 sub-progression of a base Ramanujan congruence). ──
 fn _cj_class_congruence(which: int, a: int, b: int, m: int) -> string {
+    if which != 0 { return "C5-RECURRENCE-PERIODIC" }
     if _cj_congruence_reduces_known(which, a, b, m) { return "C1-ASSOC-CHAIN" }
     return "SURVIVOR"
 }

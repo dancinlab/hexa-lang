@@ -89,6 +89,19 @@ fn main() {
     // a classical-known relation is NOT closure-classified (returns "").
     f = f + gate("CLOcls phi*J2=n*psi (classical) -> empty", cj_closure_class(body("phi*J2 = n*psi")), "")
 
+    // C5 RECURRENCE-PERIODIC — fib/lucas/bell are finite-state recurrences, so
+    // their mod-m zero-set is structurally periodic (Pisano/Touchard); EVERY
+    // holding congruence AP is classical (rank-of-apparition), never novel. These
+    // exact CONJECTUREs were surfaced as raw "survivors" by the first live LLM run
+    // (2026-06-28) and are now correctly demoted -> verified-known / C5.
+    f = f + gate("CLO C5 fib(7n)=0 mod13 (apparition)", cj_verdict(body("fib(7*n) = 0 mod 13")), "verified-known")
+    f = f + gate("CLO C5 fib(6n)=0 mod8 (F6=8)", cj_verdict(body("fib(6*n+0) = 0 mod 8")), "verified-known")
+    f = f + gate("CLO C5 bell(3n+2)=0 mod2 (period3)", cj_verdict(body("bell(3*n+2) = 0 mod 2")), "verified-known")
+    f = f + gate("CLO C5 lucas(4n+2)=0 mod3 (Pisano)", cj_verdict(body("lucas(4*n+2) = 0 mod 3")), "verified-known")
+    f = f + gate("CLOcls fib(7n)=0 mod13 -> C5", cj_closure_class(body("fib(7*n) = 0 mod 13")), "C5-RECURRENCE-PERIODIC")
+    // Partition (which 0) is NOT finite-state mod m -> a new-modulus partition
+    // congruence is STILL the only thing that can survive (p(25n+24) mod25 above).
+
     // ── prose / unparseable ──
     // No CONJECTURE line -> "" (prose hypothesis, falls through the gate).
     f = f + gate("PROSE no claim", cj_verdict("Just a prose hypothesis about sigma growth, no formal relation."), "")
