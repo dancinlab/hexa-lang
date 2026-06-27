@@ -1770,6 +1770,35 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // fn pointer is the address of the lifted lambda symbol (adrp/add);
         // mirrors self/codegen_c2.hexa::gen2_lambda_expr's
         // `hexa_closure_new((void*)&__hexa_lambda_N, arity, env)`.
+        // fn-ref-as-value: hir_to_mir lowers a bare top-level-fn ident used in
+        // value position to STMT_ASSIGN op="fn_ref" with args = [name_str,
+        // arity_int]. Runtime ABI: hexa_fn_new(void* fn_ptr, int arity) →
+        // fn_ptr in x0, arity (C int) in w1; returns the TAG_FN HexaVal in
+        // x0:x1. fn_ptr = address of the user fn symbol (adrp/add @PAGE/@PAGEOFF,
+        // same symbol the direct `bl <target>` uses). TAG_FN (not TAG_CLOSURE)
+        // so the runtime call dispatch does NOT prepend an env — a plain fn
+        // `worker(start)` takes its arg directly. Mirrors the C-transpile
+        // hexa_fn_new auto-wrap.
+        if s.op == "fn_ref" && len(s.args) >= 2 {
+            let fn_sym = s.args[0].str_val
+            let fn_arity = s.args[1].int_val
+            // x0 = &<fn_sym> (PC-relative; symbol mangled by _fmt_label)
+            buf.push(_arm64_instr2("adrp", _arm64_op_reg("x0"),
+                             _arm64_op_label(fn_sym + "@PAGE"),
+                             "fn_ref: fn-ptr page"))
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x0"),
+                             _arm64_op_reg("x0"),
+                             _arm64_op_label(fn_sym + "@PAGEOFF"),
+                             "fn_ref: fn-ptr off"))
+            // w1 = arity (C int)
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
+                             _arm64_op_label("#" + to_string(fn_arity)),
+                             "fn_ref: arity"))
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_fn_new"),
+                             "fn_ref: build TAG_FN"))
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+            return buf
+        }
         if s.op == "closure_new" && len(s.args) >= 3 {
             let lam_sym = s.args[1].str_val
             let arity = s.args[2].int_val
