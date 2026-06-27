@@ -41,6 +41,16 @@ surge·dream·swarm·reign·molt·wake·forge·canon·revive)은 각자 `../<nam
 - **진짜 검증 = `../atlas/identity_engine.hexa` exact-int**(atlas 도메인) + `hexa verify` g5 fold만. 구 NEXUS
   ouroboros `verify_score`(n6-근접 휴리스틱 최소 0.3→항상 "발견")는 검증이 아님 — 그래서
   native exact-int로 교체됨.
+- **검증기 업그레이드(Ralph 375 · 2026-06-27)**: 고갈된 12-fn 2-term 박스 밖으로 확장 —
+  ① **확장 vocab 6종**(μ·λ·μ²·J₃·2^ω·core idx 12–17 · 부호 정확) `af()`에 추가 ·
+  ② **arity-3**(`verify_identity3` `A·B·C=D·E·F` bounded-unique) + **universal 프레임**
+  (`is_universal2/3` forall-n-in-[2,N]). drill `_fn_index`/`_fn_name`도 18-fn으로 확장(확장 vocab
+  expr가 파싱됨). **측정**(state/novel-dfs 참조엔진 재실행 · 18-fn selftest 18 게이트 PASS):
+  확장 vocab universal **2 generator 전부 고전**(J₂=φ·ψ · core·rad=n) · arity-3 bounded-unique
+  1431개 전부 2-term core 환원(Ralph 371 재확인) → **novel=0**(정직 DRY). 박스-스코프 주장이 옳았음
+  (고갈=12-fn/2-term이지 전체 공간 아님)이나 그 차원도 고전/환원뿐. 생산적 벤은 composed/iterated
+  함수(Ralph 372). 업그레이드 자체가 산출물 — 미래 생성기가 확장-vocab/arity-3 후보를 내면 parse-reject
+  대신 **실제 exact-int verdict**를 받는다. atlas write 없음(fold=hexa verify g5/PR).
 - **기본 검증은 ON(플래그 아님)**: 외부 verifier 미설치 시 `drill.hexa::_native_identity_sweep`가
   매 라운드 기본 실행된다 — `../atlas/identity_engine.hexa::verify_identity`(exact-int 12-fn
   A·B=C·D bounded-unique)를 직접 호출하고, 라운드 verdict를 `DRILL_VERIFIER` stderr 줄로
