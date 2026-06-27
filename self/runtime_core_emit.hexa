@@ -1212,7 +1212,18 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "    // produces TAG_ENUM yet (gen2_enum_decl still emits `hexa_int(N)`).\n"
     buf = buf + "    // Slot kept LAST so existing TAG_VALSTRUCT integer value is preserved\n"
     buf = buf + "    // (no ABI shift on any pre-built object).\n"
-    buf = buf + "    TAG_ENUM\n"
+    buf = buf + "    TAG_ENUM,\n"
+    // ── FLEET lane A: array descriptor discriminator (opt-in HEXA_PACK_ESCAPING) ──
+    // TAG_ARRAY_I64 = the runtime packed-vs-boxed discriminator carried in the
+    // HexaVal.tag (hexa analogue of V8's Map / Julia's element-type layout: a type
+    // carrier external to the heap header — refs V8 elements-kind.h:149-202, Julia
+    // julia.h jl_datatype_layout_t arrayelem_isboxed). Appended as the TRUE LAST
+    // value so NO existing tag's integer value shifts (TAG_VALSTRUCT/TAG_ENUM keep
+    // their values → ABI/byteeq-stable). DEFAULT build: INERT — the escape-scan
+    // never packs an escaping array (HEXA_PACK_ESCAPING off) so no TAG_ARRAY_I64
+    // value is ever minted, no default reader/switch observes it. Only the flag-ON
+    // poly-readers (#ifdef HEXA_PACK_ESCAPING below) discriminate on it.
+    buf = buf + "    TAG_ARRAY_I64\n"
     buf = buf + "} HexaTag;\n"
     buf = buf + "\n"
     buf = buf + "// ── Optimization #10: Hash-map backing store ─────────────\n"
@@ -2610,6 +2621,82 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "    HexaArrI64* a = (HexaArrI64*)v.arr_ptr;\n"
     buf = buf + "    if (i < 0 || i >= a->len) { hexa_throw(hexa_str(\"index out of bounds\")); }\n"
     buf = buf + "    return hexa_int(a->data[i]);\n"
+    buf = buf + "}\n"
+    buf = buf + "#endif\n"
+    buf = buf + "\n"
+    // ── FLEET lane A: array descriptor discriminator — escaping packed path ──────
+    // The whole block is #ifdef HEXA_PACK_ESCAPING: ABSENT from the DEFAULT runtime
+    // (no -DHEXA_PACK_ESCAPING) → default runtime.a is byte-identical. The escaping
+    // packed array is minted with HexaVal.tag = TAG_ARRAY_I64 (the discriminator);
+    // a generic/polymorphic reader (a worker fn that received a [i64] of unknown
+    // packed-ness) routes through hexa_arr_poly_* which branches on the tag at
+    // RUNTIME: TAG_ARRAY_I64 → stride-8 raw HexaArrI64; else delegate to the boxed
+    // hexa_array_get/_len/_push. This is the runtime discriminator that lets the
+    // escape-scan relax (an escaping packed array no longer corrupts a boxed-ABI
+    // worker read). Refs: V8 elements-kind dispatch / Julia arrayelem_isboxed.
+    buf = buf + "#ifdef HEXA_PACK_ESCAPING\n"
+    // Forward decls — the boxed delegates are DEFINED later in this CORE file
+    // (hexa_array_push ~L2703, hexa_array_get ~L2896, hexa_len ~L3066). The poly
+    // readers below call them, so without these protos the implicit-int default
+    // would conflict with the real HexaVal-returning definitions.
+    buf = buf + "HexaVal hexa_array_push(HexaVal arr, HexaVal item);\n"
+    buf = buf + "HexaVal hexa_array_get(HexaVal arr, int64_t idx);\n"
+    buf = buf + "int64_t hexa_len(HexaVal v);\n"
+    buf = buf + "HexaVal hexa_index_set(HexaVal container, HexaVal key, HexaVal val);\n"
+    buf = buf + "// Mint an escaping packed array: identical storage to hexa_arr_i64_new but\n"
+    buf = buf + "// carries the TAG_ARRAY_I64 discriminator so a polymorphic reader can detect\n"
+    buf = buf + "// the stride-8 layout at runtime.\n"
+    buf = buf + "HexaVal hexa_arr_i64_new_esc(int cap) {\n"
+    buf = buf + "    HexaArrI64* a = (HexaArrI64*)malloc(sizeof(HexaArrI64));\n"
+    buf = buf + "    if (!a) { fprintf(stderr, \"OOM in arr_i64_new_esc\\n\"); exit(1); }\n"
+    buf = buf + "    if (cap < 1) cap = 1;\n"
+    buf = buf + "    a->data = (int64_t*)malloc(sizeof(int64_t) * (size_t)cap);\n"
+    buf = buf + "    if (!a->data) { fprintf(stderr, \"OOM in arr_i64_new_esc data\\n\"); exit(1); }\n"
+    buf = buf + "    a->len = 0; a->cap = cap;\n"
+    buf = buf + "    HexaVal v = {.tag=TAG_ARRAY_I64};\n"
+    buf = buf + "    HX_SET_ARR_PTR(v, (HexaArr*)a);\n"
+    buf = buf + "    return v;\n"
+    buf = buf + "}\n"
+    buf = buf + "// Polymorphic length: branch on the discriminator. Layout-match invariant\n"
+    buf = buf + "// (len@8 for both HexaArr and HexaArrI64) means HX_ARR_LEN is actually\n"
+    buf = buf + "// correct for either, but we keep the explicit branch for clarity/symmetry.\n"
+    buf = buf + "int64_t hexa_arr_poly_len(HexaVal v) {\n"
+    buf = buf + "    if (HX_TAG(v) == TAG_ARRAY_I64) return ((HexaArrI64*)v.arr_ptr)->len;\n"
+    buf = buf + "    return hexa_len(v);\n"
+    buf = buf + "}\n"
+    buf = buf + "// Polymorphic index get: TAG_ARRAY_I64 → raw stride-8 i64 (boxed as TAG_INT);\n"
+    buf = buf + "// else the canonical boxed reader.\n"
+    buf = buf + "HexaVal hexa_arr_poly_get(HexaVal v, int64_t idx) {\n"
+    buf = buf + "    if (HX_TAG(v) == TAG_ARRAY_I64) {\n"
+    buf = buf + "        HexaArrI64* a = (HexaArrI64*)v.arr_ptr;\n"
+    buf = buf + "        if (idx < 0 || idx >= a->len) { hexa_throw(hexa_str(\"index out of bounds\")); return hexa_void(); }\n"
+    buf = buf + "        return hexa_int(a->data[idx]);\n"
+    buf = buf + "    }\n"
+    buf = buf + "    return hexa_array_get(v, idx);\n"
+    buf = buf + "}\n"
+    buf = buf + "// Polymorphic push: TAG_ARRAY_I64 → raw stride-8 grow (in-place, returns the\n"
+    buf = buf + "// SAME descriptor so the handle aliases survive); else the boxed push.\n"
+    buf = buf + "HexaVal hexa_arr_poly_push(HexaVal v, HexaVal item) {\n"
+    buf = buf + "    if (HX_TAG(v) == TAG_ARRAY_I64) {\n"
+    buf = buf + "        return hexa_arr_i64_push(v, HX_IS_INT(item) ? HX_INT(item) : 0);\n"
+    buf = buf + "    }\n"
+    buf = buf + "    return hexa_array_push(v, item);\n"
+    buf = buf + "}\n"
+    buf = buf + "// Polymorphic index set: TAG_ARRAY_I64 → raw stride-8 in-place store (bounds-\n"
+    buf = buf + "// checked, NO auto-grow — a packed array indexes in-bounds); else the boxed\n"
+    buf = buf + "// hexa_index_set (which handles maps + auto-grow). The item is unboxed to a\n"
+    buf = buf + "// raw int64 for the packed buffer (TAG_ARRAY_I64 stores i64 elements). This is\n"
+    buf = buf + "// the WRITE counterpart of hexa_arr_poly_get — without it an escaping packed\n"
+    buf = buf + "// array reaching hexa_index_set would be walked as boxed stride-16 (the #4133\n"
+    buf = buf + "// corruption). Returns the descriptor (handle aliases survive).\n"
+    buf = buf + "HexaVal hexa_arr_poly_set(HexaVal v, int64_t idx, HexaVal item) {\n"
+    buf = buf + "    if (HX_TAG(v) == TAG_ARRAY_I64) {\n"
+    buf = buf + "        HexaArrI64* a = (HexaArrI64*)v.arr_ptr;\n"
+    buf = buf + "        if (idx < 0 || idx >= a->len) { hexa_throw(hexa_str(\"index out of bounds\")); return v; }\n"
+    buf = buf + "        a->data[idx] = HX_IS_INT(item) ? HX_INT(item) : 0;\n"
+    buf = buf + "        return v;\n"
+    buf = buf + "    }\n"
+    buf = buf + "    return hexa_index_set(v, hexa_int(idx), item);\n"
     buf = buf + "}\n"
     buf = buf + "#endif\n"
     buf = buf + "\n"
