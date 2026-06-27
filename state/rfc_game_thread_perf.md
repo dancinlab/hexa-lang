@@ -1,6 +1,6 @@
 # RFC — game-frame multithread perf (measure-first baseline)
 
-status: r1 baseline MEASURED (aiden pool · real OS threads · numbers + bottleneck attribution in status section)
+status: r1 MEASURED (aiden · numbers + attribution below) · r4 native-unbox-job-payload = MEASURED WALL 🧱 (memory-layout tax, NOT call-overhead — access-unbox codegen already exists, fires byteeq-safe, moves ratio 0; see "## r4")
 owner: feat/game-thread-microbench
 since: 2026-06-27
 bench: `test/game_thread_microbench.hexa` (opt-in `HEXA_THREADS`, byteeq-neutral)
@@ -119,3 +119,83 @@ non-scaling (sharded counter — only if a real workload exposes a hot shared ce
 behind opt-in, prove with before/after on lane (e) + byteeq 3-target GREEN. (c) sharded-counter is deferred until a real
 game workload shows a hot shared atomic (the bench's synthetic one-cell hammer is a worst-case proxy, not a real frame system).
 Thread-pool is explicitly OFF the table at game scale per the (a)/(d) numbers.
+
+## r4 — native-unbox job-payload: MEASURED WALL (memory-layout, NOT call-overhead) 🧱
+
+owner: feat/game-thread-bench-v2 · MEASURED aiden x86_64 2026-06-27 · build/aprime_cc_r4 (fresh
+gate-bearing native cc) + native --emit=obj run route (HEXA_RUN_NATIVE=1, default since #3782).
+
+### the lever r3 named, and what it assumed
+
+r3 attributed lane (e)'s **4.61×** boxed/raw tax to `{tag,payload}` HexaVal boxing on the array
+push/index path and named r4 = "native-unbox job payload (codegen, opt-in, byteeq-safe)". The
+implicit hypothesis: the tax is **call + tag-dispatch overhead** (every `buf[j]` → `call
+hexa_index_get`, every `buf.push(x)` → `call hexa_array_push`) that a native inlined element
+access would remove. **Measurement falsifies that hypothesis.**
+
+### finding 1 — the access-unbox codegen ALREADY EXISTS and ALREADY FIRES (byteeq-safe)
+
+`HEXA_UNBOX_ARRAY_NATIVE` (default-OFF, opt-in) in `compiler/codegen/x86_64_linux.hexa:1113-1290`
+already replaces `arr[i]`/`arr[i]=v` boxed `call hexa_index_get/set` with an inlined HexaArr
+descriptor walk, FOR a provably typed-prim array (MIR type_id 101..104 = `[i64]`/`[i32]`/`[f64]`/
+`[f32]`) with a provably-int index. ARRU-debug trace on `let buf: [i64] = []`:
+`[ARRU] index cont.type_id=101 idx.provint=1 gate_ok=1` — gate fires; ON asm emits 8 arru
+fast-path lines + keeps 1 `hexa_index_get` (OOB slow path) vs OFF's single boxed call. Soundness
+firewall = env-opt-in, container-must-be-typed-prim, OFF-path byte-identical (the existing
+gen3≡gen4-safe pattern). This is exactly the codegen r4 would have built; it is already landed.
+
+### finding 2 — it produces ZERO measurable speedup (the wall)
+
+N=2M `boxed_accumulate` (push-loop + index-loop), native run route, OFF vs gate-ON, 3 runs each:
+
+| form | OFF ratio (vs raw) | ARRAY-UNBOX ON ratio | Δ |
+|------|--------------------|-----------------------|---|
+| `let buf = []` (bench-as-written, untyped) | ~3.3× | ~3.4× | gate INERT (untyped → type_id 0 → can't fire) |
+| `let buf: [i64] = []` (annotated, gate fires) | ~3.3× | ~3.4× | **within noise — no win** |
+
+Pure index loop in isolation (N=5M, no push/alloc confound): OFF ~2.3× / ON ~2.3× — **no
+measurable delta even when the fast-path provably emits.**
+
+### finding 3 — ROOT (file:line): the tax is 16B-HexaVal memory traffic + realloc-grow, neither removable by access-unbox
+
+- Every array element slot is a **full 16-byte HexaVal {tag@+0, payload@+8}** (LAYOUT locked,
+  `stdlib/runtime/array_core.hexa:17`; element stride = sizeof(HexaVal) = 16). The native
+  fast-path STILL does `imul rax,rax,16` + `mov dst,[r11+8]` (confirmed in emitted asm,
+  `compiler/codegen/x86_64_linux.hexa:1232-1237`) — it eliminates the *call* + tag-dispatch but
+  keeps the **same 16B-strided memory traffic** = half the cache density of a packed 8B `i64`
+  array. The call was never the bottleneck; the per-element 16B traffic is. That is what the
+  ~2.3× pure-index tax over a register-only raw loop measures.
+- The **push half is the larger sub-cost** and is dominated by `hexa_array_push`'s **realloc
+  grow-branch**, which is an explicit libc wall: `array_core.hexa:23-25` — "calloc/realloc — libc
+  per-object heap, NO native seed exists (only the arena is native), so new()'s calloc descriptor
+  + push()'s realloc grow-branch stay C (🧱 the seed cannot express a persistent
+  individually-freeable heap)". A native fast-push could inline the in-bounds (len<cap) 16B store
+  like arru_set, but every capacity-grow still falls to the C realloc, and the stored element is
+  still a 16B HexaVal — so it cannot beat the memory-traffic floor either.
+
+### verdict 🧱 — closed-negative for THIS lever; the real escape is a different data structure (already landed elsewhere)
+
+"native-unbox the boxed-array access path" is a **measured closed-negative**: the codegen exists,
+is byteeq-safe, fires correctly, and moves the ratio by 0 because the tax is memory-LAYOUT
+(16B/elem + realloc), not call-overhead. This is NOT the Wall-A dynamic-type-erasure ceiling
+(`compiler/check/types.hexa:931-939` generic-erase) — type provenance is proven fine here; it is a
+distinct **memory-layout wall**.
+
+The genuine lever for "unboxed job payload" is a **packed unboxed array** (8B-per-element `farr64`/
+`farr32`, no per-element tag) — and that lever is **already closed** by the read-path boxing-unbox
+campaign: `read_f32_array_at` → native `farr32` (4 B/elem), #3641/#3643, shipped v0.241.9+
+([[project_hexa_boxing_unbox_campaign]], measured 522× RSS lever boxed int[] vs farr32). i.e. the
+correct guidance for a perf-critical game job payload is "**use `farr`, not `[]`**" (a stdlib/usage
+choice), not "codegen-unbox the boxed `[]`" (this round's null result).
+
+### honest residual / next
+
+- 🧱 No honest next round for *this* lever (access-unbox of boxed `[]`): measured ≈0 win, root is
+  16B layout + libc realloc. Building a native fast-push that yields 0 measured gain would be
+  filler — declined.
+- The two MEASURED game-thread walls from r1 remain: (e) boxing (now characterized as a
+  memory-LAYOUT tax → escape = packed `farr`, already landed) and (c) single-atomic non-scaling
+  (sharded counter — still deferred until a real game workload exposes a hot shared cell).
+- If a real game job-system materializes and its hot payload is a typed-prim array, the
+  recommendation is `farr64` storage + (optionally) `HEXA_UNBOX_ARRAY_NATIVE` for the access — but
+  the win comes from the 8B packing, not the access-unbox.
