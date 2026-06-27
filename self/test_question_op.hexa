@@ -13,6 +13,20 @@
 //    `Ok` and `Some` as success, so Result and Option lanes share one
 //    desugar (no compile-time lane split — RFC §3.1 / Q1).
 //  Spec: docs/rfc/rfc_drafts/r15-d2-question-operator.md §4.2
+//
+//  OPT-IN (default-OFF):  the `?` operator is gated behind HEXA_TRY_OP in BOTH
+//  pipelines — run this suite with the flag set:
+//      HEXA_TRY_OP=1 hexa run self/test_question_op.hexa
+//  With HEXA_TRY_OP unset the postfix `?` arm (self/parser.hexa
+//  p_try_op_enabled) is inert, so the self-host bootstrap and every shipped
+//  program are byte-identical (self/main.hexa uses no `?`). The NATIVE
+//  (compiler/*) pipeline mirrors the same gate end-to-end — Question token
+//  (compiler/lex/tokens.hexa), `?` lex (compiler/lex/lexer.hexa), parse_postfix
+//  UnOp("?") carrier (compiler/parse/parser.hexa), ast_to_hir re-tag to
+//  HExpr.kind "tryop" (compiler/lower/ast_to_hir.hexa), and the success-tag
+//  discriminant + Err/None early-return lowering (compiler/lower/hir_to_mir.hexa).
+//  Native-emit smoke: tool/test_question_op_emit.sh (asserts flag-off ≡
+//  byte-identical + the F-D2 acceptance cases under --emit, on a build host).
 // ═══════════════════════════════════════════════════════════
 
 let mut pass_count = 0
