@@ -834,6 +834,12 @@ if stream_mode && target == "arm64-apple-darwin" {
     // existing program (byteeq-neutral on the 3 release targets). The
     // erased dynamic path stays the canonical default; monomorphization is
     // an opt-in constraint per the native-canonical-default polarity rule.
+    //
+    // Lane ② (nested generic struct, e.g. `Box(Pair(5,6))`) is a SUB-GATE
+    // read INSIDE monomorphize() behind env("HEXA_MONO_GENERIC_STRUCT")=="1"
+    // — no signature change here, the pass-level gate below stays the single
+    // HEXA_MONOMORPHIZE entry. Default (sub-gate unset) keeps the #4058
+    // single-level $$g/$$gs output bit-identical.
     let _mono_env = env("HEXA_MONOMORPHIZE")
     if _mono_env == "1" { mmodule = monomorphize(mmodule) }
 

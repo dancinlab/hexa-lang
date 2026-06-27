@@ -203,6 +203,66 @@ fn _build_mixed_module() -> MModule {
     return MModule { file: "mixed.hexa", funcs: funcs, globals: [] }
 }
 
+fn _build_nested_module() -> MModule {
+    // Lane ② — NESTED generic struct: Box(Pair(5,6)).
+    //
+    //   @specialize struct Pair<A,B> { a: A, b: B }   // template "Pair$$gs"
+    //   @specialize struct Box<T>    { v: T }         // template "Box$$gs"
+    //   fn caller() { Box(Pair(5,6)) }
+    //
+    // lowers to two STMT_CALLs in SSA order:
+    //   r0 = Pair(5, 6)     // const_int arg[0] → Pair$int
+    //   r1 = Box(r0)        // local arg[0] → producer map → tag "Pair$int"
+    //                       //              → Box$Pair$int
+    // Body-agnostic, like the other fixtures (the pass clones templates
+    // verbatim + mangles names; struct LAYOUT specialization is the R2a/R2b
+    // wall documented in the RFC).
+    let pa = _local(0, "a")
+    let pb = _local(1, "b")
+    let mut pair_params: [Local] = []
+    pair_params.push(pa)
+    pair_params.push(pb)
+    let mut pair_stmts: [Stmt] = []
+    pair_stmts.push(_stmt_return(_op_local(pa.id)))
+    let mut pair_blocks: [Block] = []
+    pair_blocks.push(_block(0, pair_stmts))
+    let pair_tpl = _mfunc("Pair" + MONO_STRUCT_TEMPLATE_MARK, pair_params, pair_params, pair_blocks)
+
+    let bv = _local(0, "v")
+    let mut box_params: [Local] = []
+    box_params.push(bv)
+    let mut box_stmts: [Stmt] = []
+    box_stmts.push(_stmt_return(_op_local(bv.id)))
+    let mut box_blocks: [Block] = []
+    box_blocks.push(_block(0, box_stmts))
+    let box_tpl = _mfunc("Box" + MONO_STRUCT_TEMPLATE_MARK, box_params, box_params, box_blocks)
+
+    // caller: r0 = Pair(5,6); r1 = Box(r0); return r0
+    let r0 = _local(1, "r0")
+    let r1 = _local(2, "r1")
+    let mut a_pair: [Operand] = []
+    a_pair.push(_op_int(5))
+    a_pair.push(_op_int(6))
+    let mut a_box: [Operand] = []
+    a_box.push(_op_local(r0.id))
+    let mut c_stmts: [Stmt] = []
+    c_stmts.push(_stmt_call(r0, "Pair", a_pair))   // inner construction first (SSA order)
+    c_stmts.push(_stmt_call(r1, "Box", a_box))     // outer references r0
+    c_stmts.push(_stmt_return(_op_local(r0.id)))
+    let mut c_blocks: [Block] = []
+    c_blocks.push(_block(0, c_stmts))
+    let mut c_locals: [Local] = []
+    c_locals.push(r0)
+    c_locals.push(r1)
+    let caller = _mfunc("caller", [], c_locals, c_blocks)
+
+    let mut funcs: [MFunc] = []
+    funcs.push(pair_tpl)
+    funcs.push(box_tpl)
+    funcs.push(caller)
+    return MModule { file: "nested.hexa", funcs: funcs, globals: [] }
+}
+
 // ── Driver ───────────────────────────────────────────────────
 
 let mut _pass = 0
@@ -257,6 +317,44 @@ fn main() {
         _check("mixed: fn call retargeted id$int", _call_op_at(mcaller, 0) == "id$int")
         _check("mixed: struct call retargeted Box$str", _call_op_at(mcaller, 1) == "Box$str")
     }
+
+    // (4) NESTED module with the lane-② sub-gate UNSET → byteeq-neutral
+    //     layering: the inner Pair construction still specializes (its arg is
+    //     a const), but the OUTER Box(local) call stays on the erased path
+    //     (`Box`, NOT `Box$Pair$int`) exactly as the #4058 single-level pass
+    //     behaved — proving lane ② is inert by default.
+    setenv("HEXA_MONO_GENERIC_STRUCT", "0")
+    let nm0 = _build_nested_module()
+    let nout0 = monomorphize(nm0)
+    _check("nested OFF: inner Pair$int still emitted", _find_func(nout0, "Pair$int") >= 0)
+    _check("nested OFF: NO Box$Pair$int (erased outer)", _find_func(nout0, "Box$Pair$int") < 0)
+    let nci0 = _find_func(nout0, "caller")
+    if nci0 >= 0 {
+        let nc0 = nout0.funcs[nci0]
+        _check("nested OFF: inner call → Pair$int", _call_op_at(nc0, 0) == "Pair$int")
+        _check("nested OFF: outer call stays erased Box", _call_op_at(nc0, 1) == "Box")
+    }
+
+    // (5) NESTED module with the lane-② sub-gate SET → the outer construction
+    //     is retargeted Box → Box$Pair$int via the producer map, and both the
+    //     inner and the nested instance are emitted. No $$gs leak.
+    setenv("HEXA_MONO_GENERIC_STRUCT", "1")
+    let nm = _build_nested_module()
+    let nout = monomorphize(nm)
+    _check("nested ON: Pair$int instance emitted", _find_func(nout, "Pair$int") >= 0)
+    _check("nested ON: Box$Pair$int instance emitted", _find_func(nout, "Box$Pair$int") >= 0)
+    _check("nested ON: Pair fallback retained", _find_func(nout, "Pair") >= 0)
+    _check("nested ON: Box fallback retained", _find_func(nout, "Box") >= 0)
+    _check("nested ON: no Pair$$gs leak", _find_func(nout, "Pair" + MONO_STRUCT_TEMPLATE_MARK) < 0)
+    _check("nested ON: no Box$$gs leak", _find_func(nout, "Box" + MONO_STRUCT_TEMPLATE_MARK) < 0)
+    let nci = _find_func(nout, "caller")
+    if nci >= 0 {
+        let nc = nout.funcs[nci]
+        _check("nested ON: inner call → Pair$int", _call_op_at(nc, 0) == "Pair$int")
+        _check("nested ON: outer call → Box$Pair$int", _call_op_at(nc, 1) == "Box$Pair$int")
+    }
+    // restore default so the flag never leaks past this test process
+    setenv("HEXA_MONO_GENERIC_STRUCT", "0")
 
     println("--- " + to_string(_pass) + " passed, " + to_string(_fail) + " failed ---")
     if _fail > 0 { exit(1) }
