@@ -1608,6 +1608,30 @@ fn _types_let_type_text(t: string) -> string {
     return ""
 }
 
+// Wall A r3 — module-local mirror of bind.hexa:_bind_let_name. The local-let
+// Expr.text encodes `<name>|<typename>` (or `mut:<name>|<typename>`); strip
+// the optional `mut:` prefix and the `|<type>` suffix to recover the bare
+// binding NAME. Needed so a `let x: T` decl can record its declared type into
+// the block-scoped env under the variable's name, for a later split-init
+// `x = <expr>` assign to look up. Self-contained (no cross-module import,
+// same precedent as _types_let_type_text); frozen-seed-safe (no new keyword).
+fn _types_let_name(t: string) -> string {
+    let chars = t.chars()
+    let n = len(chars)
+    let mut start = 0
+    if n >= 4 && chars[0] == 'm' && chars[1] == 'u' && chars[2] == 't' && chars[3] == ':' {
+        start = 4
+    }
+    let mut out = ""
+    let mut i = start
+    while i < n {
+        if chars[i] == '|' { return out }
+        out = out + to_string(chars[i])
+        i = i + 1
+    }
+    return out
+}
+
 // r1 soundness gate: only KNOWN scalar primitives are sound comparison
 // targets for a scalar-literal RHS. `_types_lower_type_ref` maps user/unknown
 // names to a `named:<n>` sentinel (and struct/enum/generic to `<kind>:<name>`)
@@ -1684,9 +1708,36 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
 
     if _types_is_block(e.kind) {
         let mut last = _types_t_unit()
+        // Wall A r3 — block-scoped env that, under the opt-in flag, threads
+        // forward the declared scalar type of each annotated `let x: T` (with
+        // OR without an initializer) so a LATER `x = <expr>` assign in the
+        // same block can look it up (decl/init split). `benv` starts as `env`
+        // and is only ever re-bound inside the flag guard, so the default
+        // build passes the identical `env` to every child — diagnostic stream
+        // byte-identical → byteeq (gen3≡gen4) preserved. Same env-gate idiom
+        // as the r1/r2 let-case slices.
+        let mut benv = env
         let mut i = 0
         while i < len(e.children) {
-            last = _infer_expr(e.children[i], env, ctx, out)
+            last = _infer_expr(e.children[i], benv, ctx, out)
+            if env("HEXA_STATIC_TYPES") == "1" {
+                let ch = e.children[i]
+                if _types_is_let(ch.kind) {
+                    let nm = _types_let_name(ch.text)
+                    let tt = _types_let_type_text(ch.text)
+                    if len(nm) > 0 && len(tt) > 0 {
+                        let tr = TypeRef { kind: "named", name: tt, args: [], span: ch.span }
+                        let declared = _types_lower_type_ref(tr)
+                        // Only record KNOWN scalar primitives (i8…f64 · bool ·
+                        // string · char). named:/struct/enum annotations are
+                        // r5+ scope — leaving them unrecorded keeps a later
+                        // `x = …` assign on those types conservatively silent.
+                        if _types_kind_is_scalar(declared.kind) {
+                            benv = _types_env_define(benv, nm, _types_miss_def_id(), declared)
+                        }
+                    }
+                }
+            }
             i = i + 1
         }
         return last
@@ -1814,10 +1865,11 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             let tt = _types_let_type_text(e.text)
             if len(tt) > 0 && len(e.children) > 0 {
                 let rhs = e.children[0]
-                // r1 SCOPE GUARD — scalar-literal RHS only (int/float/string/
-                // bool/char). Broader inference (ident/call/range/array) is
-                // a later rung. A literal re-infer is side-effect-free (a
-                // literal pushes no diagnostics), so no double-report.
+                // r1 arm — scalar-literal RHS (int/float/string/bool/char).
+                // r2 (the `else if` below) extends to ident/call RHS; range/
+                // array/struct-literal RHS remain a later rung. A literal
+                // re-infer is side-effect-free (a literal pushes no
+                // diagnostics), so no double-report.
                 if _types_is_lit_int(rhs.kind) || _types_is_lit_float(rhs.kind) || _types_is_lit_string(rhs.kind) || _is_lit_bool(rhs.kind) || _is_lit_char(rhs.kind) {
                     let tr = TypeRef { kind: "named", name: tt, args: [], span: e.span }
                     let declared = _types_lower_type_ref(tr)
@@ -1827,6 +1879,40 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                         let rhs_t = _infer_expr(rhs, env, ctx, out)
                         if !_types_assignable(declared, rhs_t, rhs) {
                             _emit_hx3011(declared, rhs_t, e.span, out)
+                        }
+                    }
+                } else if _types_is_ident(rhs.kind) || _types_is_call(rhs.kind) {
+                    // Wall A r2 — non-literal known-type RHS (ident / call).
+                    // Rust E0308 'mismatched types' fires on a typed `let`
+                    // whose RHS is an inferred-scalar ident/call that provably
+                    // disagrees with the annotation — e.g.
+                    //   `let a: i32 = 5; let b: string = a;`   // a   : i32
+                    //   `fn g() -> i32 {…} let b: string = g();` // g() : i32
+                    // (rustc_hir_typeck/src/expr.rs `check_expr_kind` →
+                    //  `demand_coerce` → `FnCtxt::report_mismatched_types`,
+                    //  the SAME E0308 path the literal arm already mirrors).
+                    let tr = TypeRef { kind: "named", name: tt, args: [], span: e.span }
+                    let declared = _types_lower_type_ref(tr)
+                    // r2 soundness gate ① — declared side must be a KNOWN
+                    // scalar primitive (named:/struct/enum stay r5+).
+                    if _types_kind_is_scalar(declared.kind) {
+                        // The children-walk above already inferred `rhs` once
+                        // (any inner errors surfaced into `out`). Re-infer into
+                        // a SCRATCH sink so this check appends NOTHING extra —
+                        // no double-report of a call's inner HX2001/HX3003.
+                        let mut scratch: array = []
+                        let rhs_t = _infer_expr(rhs, env, ctx, scratch)
+                        // r2 soundness gate ② — only flag when the INFERRED
+                        // RHS is itself a KNOWN scalar primitive. The
+                        // inferencer's fallbacks for un-resolved idents (empty
+                        // kind), un-annotated fn returns / un-modeled callees
+                        // (`unit`), HexaVal dynamics, and aggregate types are
+                        // all NON-scalar here → conservatively skipped (r5+),
+                        // so no false REJECT on anything unknown.
+                        if _types_kind_is_scalar(rhs_t.kind) {
+                            if !_types_assignable(declared, rhs_t, rhs) {
+                                _emit_hx3011(declared, rhs_t, e.span, out)
+                            }
                         }
                     }
                 }
@@ -1839,11 +1925,34 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         if len(e.children) >= 2 {
             let lhs_t = _infer_expr(e.children[0], env, ctx, out)
             let rhs_t = _infer_expr(e.children[1], env, ctx, out)
+            // Wall A r3 — opt-in decl/init-split REJECT (HEXA_STATIC_TYPES=1).
+            // A `let x: T` (no initializer) recorded its declared scalar T into
+            // the block-scoped env (see the Block case); a later `x = <expr>`
+            // whose inferred scalar RHS provably disagrees with T REJECTs with
+            // HX3011 — the Rust E0308 'mismatched types' path for assignment:
+            // rustc_hir_typeck/src/expr.rs `check_expr_assign` →
+            // `demand_coerce_diag` → `FnCtxt::report_mismatched_types` (the
+            // SAME E0308 emitter the r1/r2 let-arms mirror). Soundness gates,
+            // identical to r1/r2: fire only when BOTH the declared LHS and the
+            // inferred RHS are KNOWN scalar primitives; unknown idents (empty
+            // kind), unit, HexaVal, and aggregates are conservatively skipped
+            // (r5+). The whole arm is env-gated → the default build is byte-
+            // identical (byteeq-neutral). When it fires it SUPPRESSES the
+            // generic HX3001 below (`r3_rejected`) so one mistake = one error.
+            let mut r3_rejected = false
+            if env("HEXA_STATIC_TYPES") == "1" {
+                if _types_is_ident(e.children[0].kind) && _types_kind_is_scalar(lhs_t.kind) && _types_kind_is_scalar(rhs_t.kind) {
+                    if !_types_assignable(lhs_t, rhs_t, e.children[1]) {
+                        _emit_hx3011(lhs_t, rhs_t, e.span, out)
+                        r3_rejected = true
+                    }
+                }
+            }
             // _types_assignable (not bare _types_equal) — parity with
             // the return-type site: `x: i32 = 0` (rhs lit i64) and
             // unknown-side cases stop false-flagging HX3001; genuine
             // kind≠kind non-literal mismatches still report (g3 intact).
-            if !_types_assignable(lhs_t, rhs_t, e.children[1]) {
+            if !r3_rejected && !_types_assignable(lhs_t, rhs_t, e.children[1]) {
                 _emit_hx3001(lhs_t, rhs_t, e.span, out)
             }
         }
