@@ -57,13 +57,31 @@ be built -DHEXA_THREADS — this harness does so.
 
 ## Harness (tool/measure_thread_channel_e2e.sh — aiden)
 
-  - runtime.a built -DHEXA_THREADS (real pthread + condvar).
+  CRITICAL (the #4100 game-thread recipe, rfc_game_thread_perf.md:77-82): the
+  on-disk/frozen self/runtime.c seed is STALE — the `#if defined(HEXA_THREADS)`
+  real-pthread block lives ONLY in the emitter self/runtime_emit_full.hexa:2472
+  and was never baked into the frozen .c blob (which stage_resolve_runtime_a does
+  NOT regenerate; only runtime_core.c is). Building the stale seed links the
+  SYNCHRONOUS `#else` shims (rt_pthread_noop) → blocking/timed recv spins forever
+  (cond_wait/cond_timedwait no-op). So real threads REQUIRE regenerating
+  runtime.c from the emitter first. (Measured on summer: stale-seed build → nm
+  shows only rt_pthread_create_policy, no `U pthread_create`; the timed-50ms recv
+  on empty hung rc=124. ORACLE half passed everywhere.)
+
+  - REGEN runtime.c verbatim from runtime_emit_full.hexa via the deterministic
+    hexat-FREE awk un-escaper (14683 pure `buf = buf + "..."` literals; same
+    primary path as stage_resolve_runtime_a / regen_runtime_core_c.sh). Validated
+    on mini: regen'd runtime.c has HEXA_THREADS=2 + real pthread_create branch
+    (line 2394) + `#include "native/thread.c"`.
+  - runtime.a = clang -DHEXA_THREADS -c runtime.c → ar (single TU; #includes the
+    hand-written channel logic in native/thread.c). Assert nm shows `U pthread_create`.
   - hexat transpiles test → user.c; clang -DHEXA_THREADS … -lpthread.
   - ORACLE run (no env) + 2P+2C run (HEXA_THREADS=1).
   - crash-free soak: CRASH_RUNS(20)× the 2P+2C binary, expect rc=0 + "0 failed"
     each (race-soak: order-insensitive total must be invariant).
-  - G-BYTEEQ: DEFAULT runtime.o byte-identical branch vs origin/main (no runtime
-    /codegen source touched → trivially neutral; verified by cmp).
+  - G-BYTEEQ: branch changes NO source under self/+compiler/ (git diff empty) →
+    DEFAULT (no -DHEXA_THREADS) runtime.o regen'd from each side's IDENTICAL
+    emitter SSOT + compiled is byte-identical (cmp branch vs origin/main).
 
 ## Verdict (filled after aiden run)
 

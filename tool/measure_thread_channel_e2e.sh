@@ -65,18 +65,54 @@ prep_seeds "$SRC"
 KERN="$SRC/$TEST_HEXA"
 [ -f "$KERN" ] || { say "FATAL: test missing $KERN"; exit 4; }
 
-# ── build runtime.a once WITH -DHEXA_THREADS (real pthread + condvar) ─────────
-say "--- building runtime.a (-DHEXA_THREADS) ---"
-( cd "$SRC"
-  env -u HEXA_CUDA CC="$CC" LIBS="${LIBS:--lm -lpthread}" \
-      CFLAGS_COMMON="-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -DHEXA_THREADS" \
-      bash tool/stage_resolve_runtime_a ) >"$WORK/rt.log" 2>&1 \
-    && say "  runtime.a EXIT=0" || { say "  runtime.a EXIT=$?"; tail -25 "$WORK/rt.log" | sed 's/^/    /' | tee -a "$RESULT"; }
-RT="$SRC/build/runtime.a"
+# ── REGEN runtime.c from its emitter SSOT (the #4100 game-thread recipe) ──────
+# The on-disk/frozen self/runtime.c seed is STALE: the `#if defined(HEXA_THREADS)`
+# real-pthread block lives ONLY in the emitter self/runtime_emit_full.hexa and was
+# never baked into the frozen .c (rfc_game_thread_perf.md:77-82). Building the
+# stale .c links the SYNCHRONOUS `#else` shims (rt_pthread_noop) → blocking recv
+# spins. Regen runtime.c VERBATIM from the emitter (deterministic hexat-FREE awk
+# un-escaper, same primary path as stage_resolve_runtime_a / regen_runtime_core_c.sh;
+# 14683 pure `buf = buf + "..."` literals) so the HEXA_THREADS branch is present.
+# runtime.c `#include "native/thread.c"` (the hand-written channel logic), so a
+# single -DHEXA_THREADS TU yields real OS threads. (BYTEEQ-NEUTRAL: this regen is
+# for the THREADS measurement only; the DEFAULT byteeq check below uses the seed.)
+say "--- REGEN runtime.c from runtime_emit_full.hexa (un-escaper) ---"
+EMIT="$SRC/self/runtime_emit_full.hexa"
+[ -f "$EMIT" ] || { say "FATAL: emitter missing $EMIT"; exit 4; }
+awk '
+  BEGIN { saw = 0 }
+  { line = $0; pfx = "    buf = buf + \""
+    if (substr(line, 1, length(pfx)) != pfx) next
+    body = substr(line, length(pfx) + 1)
+    if (substr(body, length(body), 1) != "\"") next
+    body = substr(body, 1, length(body) - 1)
+    saw = 1; out = ""; n = length(body); i = 1
+    while (i <= n) { c = substr(body, i, 1)
+      if (c == "\\" && i < n) { d = substr(body, i+1, 1)
+        if (d == "n") { out = out "\n"; i += 2; continue }
+        if (d == "t") { out = out "\t"; i += 2; continue }
+        if (d == "\"") { out = out "\""; i += 2; continue }
+        if (d == "\\") { out = out "\\"; i += 2; continue }
+        out = out "\\"; i += 1; continue }
+      out = out c; i += 1 }
+    printf "%s", out }
+  END { if (!saw) exit 3 }' "$EMIT" > "$SRC/self/runtime.c" || { say "FATAL: regen awk rc=$?"; exit 4; }
+TC=$(grep -c "HEXA_THREADS" "$SRC/self/runtime.c"); PC=$(grep -c "pthread_create((pthread_t" "$SRC/self/runtime.c")
+say "  regen'd runtime.c: $(wc -l < "$SRC/self/runtime.c") lines · HEXA_THREADS=$TC · real-pthread_create=$PC"
+[ "$PC" -ge 1 ] || { say "FATAL: regen'd runtime.c lacks real pthread_create branch"; exit 4; }
+
+# ── build runtime.a from the regen'd single TU WITH -DHEXA_THREADS ────────────
+say "--- building runtime.a (clang -DHEXA_THREADS -c runtime.c) ---"
+( cd "$SRC"; "$CC" -O2 -std=gnu11 -D_GNU_SOURCE -DHEXA_THREADS -Wno-trigraphs -c self/runtime.c -I self -o "$WORK/runtime.o" ) >"$WORK/rt.log" 2>&1 \
+    && { rm -f "$WORK/runtime.a"; ar rcs "$WORK/runtime.a" "$WORK/runtime.o"; say "  runtime.o compile EXIT=0"; } \
+    || { say "  runtime.o compile EXIT=$?"; tail -25 "$WORK/rt.log" | sed 's/^/    /' | tee -a "$RESULT"; exit 4; }
+RT="$WORK/runtime.a"
 [ -f "$RT" ] || { say "FATAL: runtime.a not built"; exit 4; }
 for sym in thread_channel_new thread_channel_send thread_channel_recv thread_channel_close; do
     if nm "$RT" 2>/dev/null | grep -qw "$sym"; then say "  runtime.a DEFINES $sym"; else say "  ⚠ runtime.a missing $sym"; fi
 done
+# CRITICAL: real pthreads must be linked (U pthread_create), not the no-op shim.
+if nm "$RT" 2>/dev/null | grep -qE "U pthread_create"; then say "  runtime.a links REAL pthread (U pthread_create) ✓"; else say "  ⚠ runtime.a has NO real pthread_create (synchronous shim!) — threaded result invalid"; fi
 
 HEXA="$SRC/build/hexat"
 
@@ -112,22 +148,42 @@ else
     say "  ⚠ no e2e.bin to soak"
 fi
 
-# ── G-BYTEEQ: DEFAULT runtime.o byte-identical to origin/main (no rt change) ──
-say "--- G-BYTEEQ (DEFAULT runtime.o byte-identical branch vs origin/main) ---"
+# ── G-BYTEEQ: branch changes NO runtime/codegen source → DEFAULT runtime.o is
+#    byte-identical to origin/main. Proof = (1) git diff self/+compiler/ empty;
+#    (2) DEFAULT (no -DHEXA_THREADS) runtime.o regen'd from each side's emitter
+#        + compiled is byte-identical (emitter SSOT unchanged → same .c → same .o).
+say "--- G-BYTEEQ (branch vs origin/main) ---"
+say "  source diff (self/ + compiler/) — expect EMPTY:"
+git -C "$SRC" diff --stat origin/main -- self/ compiler/ 2>/dev/null | sed 's/^/    /' | tee -a "$RESULT"
+DIFFN=$(git -C "$SRC" diff --name-only origin/main -- self/ compiler/ 2>/dev/null | wc -l)
+say "  → $DIFFN changed source files under self/+compiler/ (0 = byteeq trivially neutral)"
 git -C "$CANON" fetch -q origin main 2>>"$WORK/git.log" || true
 MSRC="$WORK/main"; git -C "$CANON" worktree add -f --detach "$MSRC" origin/main 2>>"$WORK/git.log" && prep_seeds "$MSRC"
+regen_rt() { awk '
+  { line=$0; pfx="    buf = buf + \""
+    if (substr(line,1,length(pfx))!=pfx) next
+    body=substr(line,length(pfx)+1)
+    if (substr(body,length(body),1)!="\"") next
+    body=substr(body,1,length(body)-1); out=""; n=length(body); i=1
+    while(i<=n){ c=substr(body,i,1)
+      if(c=="\\"&&i<n){ d=substr(body,i+1,1)
+        if(d=="n"){out=out "\n";i+=2;continue}; if(d=="t"){out=out "\t";i+=2;continue}
+        if(d=="\""){out=out "\"";i+=2;continue}; if(d=="\\"){out=out "\\";i+=2;continue}
+        out=out "\\";i+=1;continue }
+      out=out c;i+=1 }
+    printf "%s",out }' "$1/self/runtime_emit_full.hexa" > "$1/self/runtime.c"; }
+regen_rt "$MSRC"; regen_rt "$SRC"  # both from their (identical) emitter SSOT
 byteeq_o() { ( cd "$1"; "$CC" -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -c self/runtime.c -I self -o "$2" ) 2>"$2.log"; }
 byteeq_o "$SRC"  "$WORK/branch.rt.o"
 byteeq_o "$MSRC" "$WORK/main.rt.o"
 if [ -f "$WORK/branch.rt.o" ] && [ -f "$WORK/main.rt.o" ]; then
     if cmp -s "$WORK/branch.rt.o" "$WORK/main.rt.o"; then
-        say "  G-BYTEEQ OK: DEFAULT runtime.o BYTE-IDENTICAL branch vs origin/main (x86_64-linux)"
+        say "  G-BYTEEQ OK: DEFAULT runtime.o (emitter-regen'd) BYTE-IDENTICAL branch vs origin/main (x86_64-linux)"
     else
-        say "  ⚠ G-BYTEEQ DIFFER (unexpected — branch should not touch runtime source):"
-        git -C "$SRC" diff --stat origin/main -- self/ compiler/ | sed 's/^/    /' | tee -a "$RESULT"
+        say "  ⚠ G-BYTEEQ DIFFER (unexpected):"; cmp "$WORK/branch.rt.o" "$WORK/main.rt.o" | sed 's/^/    /' | tee -a "$RESULT"
     fi
 else
-    say "  G-BYTEEQ: missing .o"
+    say "  G-BYTEEQ: missing .o"; tail -5 "$WORK/branch.rt.o.log" 2>/dev/null | sed 's/^/    /' | tee -a "$RESULT"
 fi
 git -C "$CANON" worktree remove --force "$MSRC" 2>/dev/null || true
 
