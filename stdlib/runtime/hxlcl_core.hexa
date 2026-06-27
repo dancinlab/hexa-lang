@@ -2201,3 +2201,178 @@ pub fn hxlcl_fflush(fp: HexaVal) -> int {
     let _pfp = __hx_payload_add(fp, 0)            // (void)fp
     return 0
 }
+
+// ── WALL 3-c — POPEN FAMILY (pipe+fork+execve / close+waitpid · the LAST
+//                             frozen-floor static-array dependency) ──────────
+//
+// hxlcl_popen/hxlcl_pclose replicate libc popen/pclose with NO libc popen call.
+// popen("cmd","r") = pipe() + fork(); child dup2's the pipe write end onto fd 1 and
+// execve("/bin/sh","-c",cmd); parent stores (read_fd, child_pid) in a file-local
+// fd→pid table and returns the CORE-family `(fd+1)` fake FILE* (so hxlcl_fread reads
+// the child's stdout). pclose(fp) decodes fd = fp-1, looks the pid up in the table,
+// close()'s the fd and waitpid()'s the child → exit status. This is the EXACT frozen
+// floor body (self/runtime_emit_full.hexa:3051-3091), reference-matched, composed
+// purely over the ALREADY-dissolved Route C leaves — pipe (#4076), fork (#4087),
+// dup2/close/execve/waitpid (Route C syscall family), malloc, fdopen (Wall 3-a).
+//
+// THE ONE NEW SUBSTRATE — file-local STATIC MUTABLE state. The frozen floor keeps the
+// fd→pid map in three `static` C arrays (`_hxlcl_popen_fds[64]`, `_hxlcl_popen_pids[64]`,
+// `_hxlcl_popen_init_done`). hxlcl_core.hexa has ZERO static-decl syntax and bind.hexa
+// no static-alloc intrinsic, so this is the campaign's last frozen-safe lever:
+// __hx_static_slot(slot_id, size_bytes) — a 0-source-keyword codegen intrinsic that
+// DEFINES a self-static, zero-initialized .data buffer (`.zero N` via the system
+// assembler under Route C) and returns its address. We use ONE 1024-byte slot of 64
+// 16-byte entries: entry i = [fd_plus_1 : u64 @ +0][pid : u64 @ +8]. BSS is zero-init,
+// so we encode "empty" as fd_plus_1==0 (store fd+1, never -1) — this DISSOLVES the
+// frozen `_hxlcl_popen_init()` -1-fill entirely (no init pass needed). slot_id=900.
+//
+// IN-BODY OPERATOR DISCIPLINE (the #4042/#4082 rule): every test/arith is a raw-payload
+// intrinsic (__hx_payload_{eq,ne,lt,add,sub,mul}), never a bare `==`/`<`/`-`; every raw
+// integer literal crossing a HexaVal-param boundary is boxed via __hx_payload_add(0,N).
+// Each intrinsic result lands in its own un-nested `let` (scratch-clobber safety).
+//
+// _is_cabi has hxlcl_popen/hxlcl_pclose (Wall 3-c). default-OFF byteeq-neutral
+// (HEXA_CABI_HXLCL unset → empty whitelist → PAIR-MODEL emit byte-identical; the new
+// __hx_static_slot only emits when a whitelisted body addresses it).
+
+// Remember (read_fd, child_pid) in the next empty slot (fd_plus_1==0). No-op if full.
+pub fn hxlcl_popen_remember(fd: HexaVal, pid: HexaVal) -> int {
+    let tbl = __hx_static_slot(900, 1024)         // 64 × 16-byte entries, zero-init
+    let fdp1 = __hx_payload_add(fd, 1)            // store fd+1 (0 = empty sentinel)
+    let mut i = 0
+    let cap = __hx_payload_add(0, 64)             // box literal 64 (#4082)
+    while __hx_payload_lt(i, cap) {
+        let off = __hx_payload_mul(i, 16)         // entry i base
+        let cur = __hx_ptr_load64(tbl, off)       // current fd_plus_1
+        if __hx_payload_eq(cur, 0) {              // empty slot
+            __hx_ptr_store64(tbl, off, fdp1)      // entry.fd_plus_1 = fd+1
+            let poff = __hx_payload_add(off, 8)   // entry.pid offset
+            __hx_ptr_store64(tbl, poff, pid)      // entry.pid = pid
+            return 0
+        }
+        i = __hx_payload_add(i, 1)
+    }
+    return -1                                      // table full
+}
+
+// Find+clear the entry for `fd`, return its pid (or -1 if not found).
+pub fn hxlcl_popen_forget(fd: HexaVal) -> int {
+    let tbl = __hx_static_slot(900, 1024)
+    let fdp1 = __hx_payload_add(fd, 1)            // match on fd+1
+    let mut i = 0
+    let cap = __hx_payload_add(0, 64)
+    while __hx_payload_lt(i, cap) {
+        let off = __hx_payload_mul(i, 16)
+        let cur = __hx_ptr_load64(tbl, off)
+        if __hx_payload_eq(cur, fdp1) {           // match
+            let poff = __hx_payload_add(off, 8)
+            let pid = __hx_ptr_load64(tbl, poff)  // saved pid
+            __hx_ptr_store64(tbl, off, 0)         // clear fd_plus_1 (mark empty)
+            __hx_ptr_store64(tbl, poff, 0)        // clear pid
+            return pid
+        }
+        i = __hx_payload_add(i, 1)
+    }
+    return -1
+}
+
+// hxlcl_popen(cmd, mode) — "r"-mode only (the only mode hexa_exec uses).
+// Returns the CORE-family fake FILE* `(read_fd + 1)`, or 0 on failure.
+pub fn hxlcl_popen(cmd: HexaVal, mode: HexaVal) -> int {
+    let pcmd = __hx_payload_add(cmd, 0)           // char* cmd (payload word)
+    if __hx_payload_eq(pcmd, 0) {
+        return 0                                   // NULL cmd
+    }
+    let pmode = __hx_payload_add(mode, 0)         // char* mode
+    if __hx_payload_eq(pmode, 0) {
+        return 0
+    }
+    let m0 = __hx_ptr_load8(pmode, 0)             // mode[0]
+    if __hx_payload_ne(m0, 114) {                 // 'r' == 114; only "r" supported
+        return 0
+    }
+    // int pfd[2]; if (pipe(pfd) != 0) return 0;
+    let two = __hx_payload_add(0, 2)
+    let pfdsz = __hx_payload_mul(two, 4)          // 2 * sizeof(int)=8 bytes
+    let pfd = hxlcl_malloc(pfdsz)
+    let pr = hxlcl_pipe(pfd)
+    if __hx_payload_ne(pr, 0) {
+        return 0
+    }
+    let rfd = __hx_ptr_load32(pfd, 0)             // pfd[0] (read end)
+    let wfd = __hx_ptr_load32(pfd, 4)             // pfd[1] (write end)
+    let pid = hxlcl_fork()
+    let isneg = __hx_payload_lt(pid, 0)
+    if __hx_payload_ne(isneg, 0) {
+        let _c0 = hxlcl_close(rfd)
+        let _c1 = hxlcl_close(wfd)
+        return 0
+    }
+    let ischild = __hx_payload_eq(pid, 0)
+    if __hx_payload_ne(ischild, 0) {
+        // child: dup2(wfd, 1); close both pipe fds; execve("/bin/sh","-c",cmd)
+        let one = __hx_payload_add(0, 1)
+        let _d = hxlcl_dup2(wfd, one)             // stdout = pipe write end
+        let _cr = hxlcl_close(rfd)
+        let _cw = hxlcl_close(wfd)
+        // build argv = ["/bin/sh", "-c", cmd, NULL] as a char**[4]
+        let four = __hx_payload_add(0, 4)
+        let avsz = __hx_payload_mul(four, 8)      // 4 pointer slots
+        let argv = hxlcl_malloc(avsz)
+        let psh = __hx_payload_add("/bin/sh", 0)  // char* "/bin/sh"
+        let pdc = __hx_payload_add("-c", 0)       // char* "-c"
+        __hx_ptr_store64(argv, 0, psh)            // argv[0]
+        __hx_ptr_store64(argv, 8, pdc)            // argv[1]
+        __hx_ptr_store64(argv, 16, pcmd)          // argv[2] = cmd
+        __hx_ptr_store64(argv, 24, 0)             // argv[3] = NULL
+        let psh2 = __hx_payload_add("/bin/sh", 0) // path
+        let _e = hxlcl_execve(psh2, argv, 0)      // envp=NULL (inherit not needed here)
+        // execve only returns on failure → terminate the child via exit syscall.
+        // close everything we can and fall through to the parent-style cleanup is
+        // unsafe (child must not return into the caller); issue exit(127) directly.
+        let exnr = hxlcl_child_exit_nr()
+        let onetwoseven = __hx_payload_add(0, 127)
+        __hx_syscall6(exnr, onetwoseven, 0, 0, 0, 0, 0)  // _exit(127)
+        return 0                                   // unreachable
+    }
+    // parent: close write end; remember (rfd, pid); return fdopen(rfd,"r")
+    let _cw2 = hxlcl_close(wfd)
+    let _rm = hxlcl_popen_remember(rfd, pid)
+    return hxlcl_fdopen(rfd, mode)               // (rfd + 1) fake FILE*
+}
+
+// Per-target _exit syscall number (no errno path — the process is dying).
+// Linux x86_64 __NR_exit=60 / arm64 __NR_exit=93 / darwin SYS_exit=1.
+pub fn hxlcl_child_exit_nr() -> int {
+    if target_is_linux() {
+        if target_is_x86_64() { return 60 }
+        return 93
+    }
+    return 1
+}
+
+// hxlcl_pclose(stream) — decode fd, waitpid the child, return status.
+pub fn hxlcl_pclose(stream: HexaVal) -> int {
+    let pstream = __hx_payload_add(stream, 0)     // the (fd+1) fake FILE* payload
+    if __hx_payload_eq(pstream, 0) {
+        return -1                                  // NULL stream
+    }
+    let fd = __hx_payload_sub(pstream, 1)         // fd = stream - 1
+    let badfd = __hx_payload_lt(fd, 0)
+    if __hx_payload_ne(badfd, 0) {
+        return -1
+    }
+    let pid = hxlcl_popen_forget(fd)              // child pid (or -1)
+    let _c = hxlcl_close(fd)
+    let nopid = __hx_payload_lt(pid, 1)           // pid <= 0 → no child
+    if __hx_payload_ne(nopid, 0) {
+        return -1
+    }
+    // int status=0; waitpid(pid, &status, 0); return status;
+    let four = __hx_payload_add(0, 4)
+    let stbuf = hxlcl_malloc(four)                // 4-byte int status slot
+    __hx_ptr_store32(stbuf, 0, 0)                 // status = 0
+    let _w = hxlcl_waitpid(pid, stbuf, 0)
+    let status = __hx_ptr_load32(stbuf, 0)        // raw wait status (frozen returns it)
+    return status
+}

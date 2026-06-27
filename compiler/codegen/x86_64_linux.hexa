@@ -934,6 +934,47 @@ pub let mut _x86_buf: [LInstr] = []
 // mutated → the labels never appear → byte-eq NEUTRAL by construction.
 pub let mut _x86_arru_lbl: i64 = 0
 
+// RFC061 Route C Wall 3-c — __hx_static_slot self-defined BSS accumulator.
+// Each distinct `slot_id` literal that a whitelisted Route C body addresses via
+// `__hx_static_slot(slot_id, size_bytes)` records its encoded `slot_<id>__sz<N>`
+// label here ONCE (deduped on slot_id); `codegen_x86_64_linux` appends them to the
+// LModule.globals list so emit/asm defines a zero-filled `.data` symbol of N bytes
+// (the `.zero N` directive the system assembler materializes under Route C). The
+// accumulator is ONLY ever appended-to inside the `__hx_static_slot` STMT_CALL
+// special-case, which fires ONLY for that op (absent from every byteeq program, and
+// from all DEFAULT-OFF builds — hxlcl_core.hexa is never imported by self/), so on
+// the byteeq path this list stays `[]` → globals list unchanged → byte-eq NEUTRAL.
+pub let mut _x86_static_slots: [string] = []
+
+// Record a slot_<id> of N bytes (deduped on the slot_<id> prefix). The encoded
+// label is `slot_<id>__sz<N>`; emit/asm strips the `__sz<N>` suffix for the symbol
+// name and uses N for the `.zero` size.
+// True iff `s` begins with `pfx` (char-walk; no .substr — keeps stage0-portable).
+fn _x86_str_starts_with(s: string, pfx: string) -> bool {
+    let cs = s.chars()
+    let cp = pfx.chars()
+    let np = len(cp)
+    if len(cs) < np { return false }
+    let mut i = 0
+    while i < np {
+        if cs[i] != cp[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn _x86_record_static_slot(slot_id: i64, size_bytes: i64) {
+    let prefix = "slot_" + to_string(slot_id) + "__sz"
+    let mut i = 0
+    while i < len(_x86_static_slots) {
+        // Already recorded (same slot_id) → idempotent. Compare on the prefix so a
+        // re-emit of the same slot_id with the same size is a no-op.
+        if _x86_str_starts_with(_x86_static_slots[i], prefix) { return }
+        i = i + 1
+    }
+    _x86_static_slots.push(prefix + to_string(size_bytes))
+}
+
 // Fresh, independent instruction buffer for a new function-lowering scope.
 // A bare `[]` literal evaluated under a live fn-arena is arena-backed and
 // would be freed on the callee arena rewind (dangling module global); the
@@ -1911,6 +1952,24 @@ pub fn _is_cabi(fname: string) -> bool {
     if fname == "hxlcl_fputs" { return true }
     if fname == "hxlcl_fputc" { return true }
     if fname == "hxlcl_fflush" { return true }
+    // Wall 3-c POPEN family — hxlcl_popen/hxlcl_pclose. popen replicates libc popen
+    // as pipe()+fork()+execve("/bin/sh","-c",cmd) (ALL already-dissolved Route C
+    // leaves) returning the (fd+1) fake FILE* of the CORE FILE* family; pclose looks
+    // the child pid up in a file-local fd→pid table and close()+waitpid()s it. The
+    // ONE new substrate is __hx_static_slot — the self-defined BSS that backs that
+    // table (the frozen floor's `static int _hxlcl_popen_fds[64]/_pids[64]`,
+    // self/runtime_emit_full.hexa:3018-3050). Inner `bl hxlcl_<leaf>` lowers C-ABI by
+    // callee-name (pipe/fork/dup2/close/execve/waitpid/malloc/fdopen all whitelisted).
+    // Reference-matched body-for-body to the frozen emitter. "r"-mode only (the only
+    // mode hexa_exec uses). default-OFF byteeq-neutral.
+    if fname == "hxlcl_popen" { return true }
+    if fname == "hxlcl_pclose" { return true }
+    // Wall 3-c helpers — the fd→pid table accessors (over the __hx_static_slot BSS)
+    // and the per-target _exit NR selector. C-ABI so popen/pclose `bl` into them
+    // raw (the same callee-name keyed inner-call lowering as fopen→open_sys).
+    if fname == "hxlcl_popen_remember" { return true }
+    if fname == "hxlcl_popen_forget" { return true }
+    if fname == "hxlcl_child_exit_nr" { return true }
     return false
 }
 
@@ -3544,6 +3603,34 @@ fn _emit_x86_64_stmt(modhash: string, fname: string, s: Stmt,
             if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "rax", 0) }
             return
         }
+        // RFC061 Route C Wall 3-c: `__hx_static_slot(slot_id, size_bytes)` — DEFINE a
+        // self-static, zero-initialized file-local data buffer of `size_bytes` and
+        // RETURN its address (boxed TAG_INT). The named-data SIBLING of __hx_environ_ptr,
+        // but the symbol is DEFINED-here (`slot_<id>`), not an extern libc global — so
+        // the address materializes via a LOCAL `lea rax, [rip+slot_<id>]` (R_X86_64_PC32
+        // pc-relative reloc on the locally-defined data symbol), NOT a GOT load. This is
+        // the exact local-symbol form the module-globals path already emits for `g<id>`
+        // (proven self-defined `.data` slot + pc-rel ref). Both args MUST be compile-time
+        // `const_int` literals so the symbol name `slot_<id>` is deterministic and the
+        // BSS size is fixed at emit; the slot is recorded ONCE per distinct slot_id into
+        // _x86_static_slots, which codegen_x86_64_linux appends to LModule.globals →
+        // emit/asm defines a `.zero size_bytes` buffer. Gives Route C file-local static
+        // mutable state (the popen fd→pid table) with NO new parser keyword/@attr — a
+        // frozen-safe identifier-call (151c52c8 immutable). The slot is process-lifetime
+        // (never freed); callers use __hx_ptr_load64/store64 to read/write its cells.
+        if s.op == "__hx_static_slot" && len(s.args) >= 2 {
+            if s.args[0].kind == "const_int" && s.args[1].kind == "const_int" {
+                let sid = s.args[0].int_val
+                let ssz = s.args[1].int_val
+                _x86_record_static_slot(sid, ssz)
+                let sym = "slot_" + to_string(sid)
+                _x86_buf.push(_x86_instr2("lea", _x86_op_reg("rax"),
+                                 _x86_op_label("[rip+" + sym + "]"),
+                                 "__hx_static_slot: rax = &" + sym + " (self-static .data, pc-rel)"))
+                if s.dst.id >= 0 { _x86_hv_store_leaf(rm, s.dst.id, s.dst.arena_id, "rax", 0) }
+                return
+            }
+        }
         // UNLOCK-10: `__hx_ptr_store64(ptr, off, val)` — write 64-bit `val` to
         // raw address ptr+off. Returns ptr (chainable). r10=ptr, r11=off,
         // rsi=val; add; mov qword ptr [addr], val; result = original ptr.
@@ -4429,6 +4516,10 @@ pub fn codegen_x86_64_linux(module: MModule, opts: CodegenOptions) -> LModule {
     // Stage1 C8 — modhash from MModule.file disambiguates spliced
     // modules so block labels never collide across re-imported libs.
     let modhash = _x86_64_modhash(module.file)
+    // Wall 3-c: reset the __hx_static_slot accumulator for THIS module before
+    // lowering (it is module-scope mutable, so a prior module's slots must not
+    // leak). On the byteeq path no body calls __hx_static_slot → stays [].
+    _x86_static_slots = []
     let mut funcs = []
     let mut i = 0
     while i < len(module.funcs) {
@@ -4447,6 +4538,13 @@ pub fn codegen_x86_64_linux(module: MModule, opts: CodegenOptions) -> LModule {
     while gi < len(module.globals) {
         gnames.push("g" + to_string(module.globals[gi].id))
         gi = gi + 1
+    }
+    // Wall 3-c: append the self-static-slot labels (`slot_<id>__sz<N>`) so emit/asm
+    // defines a `.zero N`-sized `.data` symbol for each. Empty on the byteeq path.
+    let mut si = 0
+    while si < len(_x86_static_slots) {
+        gnames.push(_x86_static_slots[si])
+        si = si + 1
     }
     return LModule {
         file: module.file,

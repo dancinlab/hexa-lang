@@ -1284,6 +1284,19 @@ fn _bind_builtin_names() -> [string] {
         // and DCE-never-drops the STMT_CALL. arm64 + x86_64 STMT_CALL special-case.
         // ADD-only: the compiler never calls them.
         "__hx_stderr_ptr", "__hx_stdout_ptr",
+        // RFC061 Route C Wall 3-c (2026-06-27): `__hx_static_slot(slot_id, size_bytes)`
+        // — DEFINE a self-static, zero-initialized file-local data buffer of size_bytes
+        // and return its address (boxed TAG_INT). The named-data sibling of
+        // __hx_environ_ptr / __hx_stderr_ptr, but DEFINES a local symbol (`slot_<id>`)
+        // instead of referencing an extern — the address materializes via a LOCAL pc-rel
+        // ref (`lea [rip+slot_<id>]` x86 / `adrp+add @PAGE/@PAGEOFF` arm64), and the
+        // backend records the slot so emit/asm emits a `.zero size_bytes` data symbol.
+        // Both args MUST be compile-time const_int literals (deterministic name + fixed
+        // size). This gives Route C bodies file-local STATIC MUTABLE state (the popen
+        // fd→pid table) — the last frozen-floor static-array dep — with NO new parser
+        // keyword/@attr (frozen 151c52c8 immutable; an ordinary identifier-call). arm64 +
+        // x86_64 STMT_CALL special-case. ADD-only: the compiler never calls it.
+        "__hx_static_slot",
         // RT-NATIVE M4 ARRAY-R2 (2026-06-17): `__hx_make_val(tag, payload)` — the
         // symmetric write-half of `__hx_tag`. Builds a {tag, payload} 16-byte HexaVal
         // from two raw int64 words WITHOUT boxing-tag-loss, so a payload word loaded
