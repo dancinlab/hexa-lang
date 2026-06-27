@@ -327,8 +327,8 @@ int main(void) {
     CK(hxlcl_atoi("42") == 42, "atoi 42");
     CK(hxlcl_atoi("-7") == -7, "atoi -7");
 
-    char *dup = hxlcl_strdup("hi");
-    CK(dup != NULL && strcmp(dup, "hi") == 0, "strdup content");
+    char *sdup = hxlcl_strdup("hi");
+    CK(sdup != NULL && strcmp(sdup, "hi") == 0, "strdup content");
 
     char *z = (char *)hxlcl_calloc(3, 4);  /* 12 bytes, all zero */
     int allzero = (z != NULL);
