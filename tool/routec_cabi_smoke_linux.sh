@@ -62,7 +62,7 @@ HEXA_CABI_HXLCL=1 HEXA_INLINE_INT_BOX=1 HEXA_INLINE_BOOL_BOX=1 \
 echo "[routec-smoke-linux] (2) assert errno-bearing syscall symbols defined in routec.o …"
 syms="$(nm "$TMP/routec.o" 2>/dev/null || true)"
 miss=0
-for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe time poll clock_gettime execve fork getenv; do
+for s in close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe time poll clock_gettime execve fork getenv setenv; do
     if ! grep -qE " T hxlcl_${s}\$" <<<"$syms"; then
         echo "[routec-smoke-linux] NOT DEFINED (T): hxlcl_${s}" >&2; miss=$((miss+1))
     fi
@@ -134,6 +134,12 @@ extern int  hxlcl_fork(void);
  * Not errno-bearing; returns a raw char* into the live environ block (or NULL).
  * `environ` comes from libc/crt — the routec.o's GOT ref resolves at link, no stub. */
 extern char *hxlcl_getenv(const char *name);
+
+/* Wall 2-b ENV (sibling) — setenv: the FIRST environ WRITE-BACK. On x86_64 the grow
+ * path stores a fresh char** array back into `environ` via __hx_ptr_store64(&environ,
+ * 0, newarr); the named-DATA GOT reloc for `environ` must resolve to glibc's live
+ * global so libc getenv observes the new key (the writeback proof). Returns 0 / -1. */
+extern int hxlcl_setenv(const char *name, const char *value, int overwrite);
 
 /* The emit covers ALL whitelisted Route C symbols (the script emits the whole
  * hxlcl_core.hexa), so the routec.o carries the composites' undefined-external
@@ -447,6 +453,32 @@ int main(void) {
         CK(sv != NULL && strcmp(sv, "route-c-wall2b") == 0, "getenv(set var) == value (content-exact)");
         setenv("HX_SMOKE_LONGKEY", "L", 1);
         CK(hxlcl_getenv("HX_SMOKE_LONG") == NULL, "getenv(prefix of a real key) → NULL (early-stop, no over-read)");
+    }
+
+    /* Wall 2-b (sibling) — setenv WRITE-BACK, x86_64 named-DATA GOT store proof.
+     * POSIX setenv(3): GROW (fresh key reaches the live glibc global — both hxlcl_getenv
+     * AND libc getenv see it), in-place slot REPLACE (overwrite!=0), NO-OP preserve
+     * (overwrite==0), repeated GROW keeping the first key, EINVAL (-1) for NULL/empty.
+     * All libc setenv calls above ran FIRST, so glibc never re-manages our fresh array. */
+    {
+        CK(hxlcl_setenv("HX_RC_NEW", "v1", 1) == 0, "setenv(fresh key) → 0");
+        char *g1 = hxlcl_getenv("HX_RC_NEW");
+        CK(g1 != NULL && strcmp(g1, "v1") == 0, "setenv(fresh): hxlcl_getenv == \"v1\"");
+        char *l1 = getenv("HX_RC_NEW");
+        CK(l1 != NULL && strcmp(l1, "v1") == 0, "setenv(fresh): libc getenv == \"v1\" (writeback reached &environ)");
+        CK(hxlcl_setenv("HX_RC_NEW", "v2", 1) == 0, "setenv(overwrite=1) → 0");
+        char *g2 = hxlcl_getenv("HX_RC_NEW");
+        CK(g2 != NULL && strcmp(g2, "v2") == 0, "setenv(overwrite): value replaced → \"v2\"");
+        CK(hxlcl_setenv("HX_RC_NEW", "v3", 0) == 0, "setenv(overwrite=0, exists) → 0");
+        char *g3 = hxlcl_getenv("HX_RC_NEW");
+        CK(g3 != NULL && strcmp(g3, "v2") == 0, "setenv(overwrite=0): value preserved → \"v2\"");
+        CK(hxlcl_setenv("HX_RC_NEW2", "w1", 1) == 0, "setenv(second fresh key) → 0");
+        char *g4 = hxlcl_getenv("HX_RC_NEW2");
+        CK(g4 != NULL && strcmp(g4, "w1") == 0, "setenv(regrow): new key == \"w1\"");
+        char *g5 = hxlcl_getenv("HX_RC_NEW");
+        CK(g5 != NULL && strcmp(g5, "v2") == 0, "setenv(regrow): prior key survives == \"v2\"");
+        CK(hxlcl_setenv(NULL, "x", 1) == -1, "setenv(NULL name) → -1 (EINVAL)");
+        CK(hxlcl_setenv("", "x", 1) == -1, "setenv(empty name) → -1 (EINVAL)");
     }
 
     if (fails == 0) { printf("[routec-smoke-linux] all Route C errno asserts PASS\n"); return 0; }
