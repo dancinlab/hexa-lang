@@ -1,0 +1,205 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  test/game_lockfree_contended.hexa — CONTENDED MPMC throughput measurement
+//  (the -DHEXA_THREADS follow-up named in test/game_lockfree_bench.hexa).
+//
+//  Head-to-head: the Vyukov lock-free bounded MPMC queue (stdlib/lockfree_queue)
+//  vs the r3 mutex+condvar channel (stdlib/thread_real chan_*) under the SAME
+//  P-producer + C-consumer contention. Reference-match target: the r3 baseline
+//  (test/game_thread_microbench.hexa) measured the mutex channel at 40.1 M
+//  msg/s UNCONTENDED (1-thread ping-pong). The reference expectation
+//  (crossbeam ArrayQueue vs Mutex<VecDeque>) is that the mutex collapses under
+//  ≥4-thread contention (single lock serializes), while the Vyukov queue scales
+//  with cores (producers/consumers only CAS the head/tail counters).
+//
+//  Shared-state model mirrors the r3 microbench atomic-contention lane: the
+//  queue + counters are MODULE GLOBALS read by every worker (workers take only
+//  an integer index arg; cross-thread sharing rides the runtime atomic table by
+//  cell-id, exactly as SHARED_CELL does in the microbench). Conservation
+//  (consumed == P*M, sum_in == sum_out) is asserted post-run — if the shared
+//  payload backing were NOT visible across threads this check FAILS and the
+//  number is rejected (verdict-integrity gate, not silently believed).
+//
+//  Build (aiden pool, -DHEXA_THREADS):
+//    regen self/native/thread.c from thread_emit.hexa, transpile --c-only,
+//    gcc -O2 -DHEXA_THREADS, run HEXA_THREADS=1 taskset-pinned, 3-run median.
+//  byteeq-neutral: test/ tree, not in any self/ closure; default build runs
+//  the whole thing single-threaded & deterministically.
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/lockfree_queue"
+use "stdlib/thread_real"
+use "stdlib/atomic_real"
+
+fn per_sec(count: int, dt: float) -> float {
+    if dt <= 0.0 { return 0.0 }
+    return to_float(count) / dt
+}
+
+// ── workload constants ──────────────────────────────────────────────────────
+let P = 4                 // producer threads
+let C = 4                 // consumer threads
+let M = 250000            // tokens per producer  → total = P*M = 1,000,000
+let TOTAL = P * M
+let CAP = 1024            // ring / channel capacity (bounded, matches CHANNEL_CAP)
+
+// ── shared globals (read by every worker after spawn) ───────────────────────
+let mut LFQ = lfq_new(CAP)             // the Vyukov queue under test
+let mut CH = 0                         // the mutex channel id (set before its run)
+let mut PRODUCED = 0                   // atomic cell — tokens pushed (sum check)
+let mut CONSUMED = 0                   // atomic cell — tokens popped
+let mut SUM_IN = 0                     // atomic cell — Σ pushed values
+let mut SUM_OUT = 0                    // atomic cell — Σ popped values
+let mut STOP = 0                       // atomic cell — set 1 when all produced+drained
+
+// ── lock-free queue workers ──────────────────────────────────────────────────
+// producer p pushes M tokens (value = p*M + i, distinct per token so the sum is
+// a closed-form check). Spin on a full ring (backpressure) — the lock-free
+// contract is non-blocking progress, the spin just re-tries the CAS.
+fn lfq_producer(pidx) {
+    let mut i = 0
+    while i < M {
+        let tok = pidx * M + i
+        while lfq_push(LFQ, tok) == 0 {
+            // ring full — retry (some consumer will free a slot)
+        }
+        let _ = atomic_fetch_add(SUM_IN, tok)
+        let _ = atomic_incr(PRODUCED)
+        i = i + 1
+    }
+    return 0
+}
+
+// consumer pops until the global CONSUMED reaches TOTAL. A transient empty
+// ([0,0]) is retried; STOP guards the exit so a consumer that loses the last
+// item to a peer still terminates.
+fn lfq_consumer(cidx) {
+    while atomic_get(STOP) == 0 {
+        let r = lfq_pop(LFQ)
+        if r[0] == 1 {
+            let n = atomic_incr(CONSUMED)      // PRE-incr value
+            let _ = atomic_fetch_add(SUM_OUT, r[1])
+            if n + 1 >= TOTAL {
+                let _ = atomic_set(STOP, 1)
+            }
+        }
+    }
+    return 0
+}
+
+// ── mutex channel workers (same workload, the r3 baseline) ──────────────────
+fn ch_producer(pidx) {
+    let mut i = 0
+    while i < M {
+        let tok = pidx * M + i
+        let _ = chan_send(CH, tok)             // blocks while full (bounded)
+        let _ = atomic_fetch_add(SUM_IN, tok)
+        let _ = atomic_incr(PRODUCED)
+        i = i + 1
+    }
+    return 0
+}
+
+fn ch_consumer(cidx) {
+    while atomic_get(STOP) == 0 {
+        let v = chan_recv(CH, 0)               // non-blocking peek
+        if to_string(v) != "" {
+            let n = atomic_incr(CONSUMED)
+            let _ = atomic_fetch_add(SUM_OUT, to_int(v))
+            if n + 1 >= TOTAL {
+                let _ = atomic_set(STOP, 1)
+            }
+        }
+    }
+    return 0
+}
+
+fn reset_counters() {
+    let _ = atomic_set(PRODUCED, 0)
+    let _ = atomic_set(CONSUMED, 0)
+    let _ = atomic_set(SUM_IN, 0)
+    let _ = atomic_set(SUM_OUT, 0)
+    let _ = atomic_set(STOP, 0)
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  CONTENDED MPMC throughput — Vyukov lock-free vs mutex channel")
+println("  P=" + to_string(P) + " producers  C=" + to_string(C) + " consumers  M=" + to_string(M) + "/producer  total=" + to_string(TOTAL))
+println("═══════════════════════════════════════════════════════")
+
+PRODUCED = atomic_cell(0)
+CONSUMED = atomic_cell(0)
+SUM_IN = atomic_cell(0)
+SUM_OUT = atomic_cell(0)
+STOP = atomic_cell(0)
+
+// ── (A) lock-free Vyukov queue ──────────────────────────────────────────────
+reset_counters()
+LFQ = lfq_new(CAP)
+let lf0 = clock()
+let mut lf_h = []
+let mut pi = 0
+while pi < P {
+    lf_h.push(thread_start(lfq_producer, pi))
+    pi = pi + 1
+}
+let mut ci = 0
+while ci < C {
+    lf_h.push(thread_start(lfq_consumer, ci))
+    ci = ci + 1
+}
+let mut hj = 0
+while hj < len(lf_h) {
+    let _ = thread_wait(lf_h[hj])
+    hj = hj + 1
+}
+let lf_dt = to_float(clock() - lf0)
+let lf_consumed = atomic_get(CONSUMED)
+let lf_sin = atomic_get(SUM_IN)
+let lf_sout = atomic_get(SUM_OUT)
+let lf_ops = per_sec(TOTAL, lf_dt)
+println("[lockfree] consumed=" + to_string(lf_consumed) + " sum_in==sum_out=" + to_string(lf_sin == lf_sout) + " dt=" + to_string(lf_dt) + "s")
+println("[lockfree] throughput = " + to_string(lf_ops) + " ops/s")
+
+// ── (B) mutex+condvar channel (r3 baseline, same contention) ────────────────
+reset_counters()
+CH = chan_new()
+let ch0 = clock()
+let mut ch_h = []
+let mut cpi = 0
+while cpi < P {
+    ch_h.push(thread_start(ch_producer, cpi))
+    cpi = cpi + 1
+}
+let mut cci = 0
+while cci < C {
+    ch_h.push(thread_start(ch_consumer, cci))
+    cci = cci + 1
+}
+let mut chj = 0
+while chj < len(ch_h) {
+    let _ = thread_wait(ch_h[chj])
+    chj = chj + 1
+}
+let ch_dt = to_float(clock() - ch0)
+let ch_consumed = atomic_get(CONSUMED)
+let ch_sin = atomic_get(SUM_IN)
+let ch_sout = atomic_get(SUM_OUT)
+let _cc = chan_close(CH)
+let ch_ops = per_sec(TOTAL, ch_dt)
+println("[mutexchan] consumed=" + to_string(ch_consumed) + " sum_in==sum_out=" + to_string(ch_sin == ch_sout) + " dt=" + to_string(ch_dt) + "s")
+println("[mutexchan] throughput = " + to_string(ch_ops) + " ops/s")
+
+// ── verdict ──────────────────────────────────────────────────────────────────
+println("───────────────────────────────────────────────────────")
+if lf_ops > 0.0 {
+    if ch_ops > 0.0 {
+        println("[ratio] lockfree / mutexchan = " + to_string(lf_ops / ch_ops) + "x")
+    }
+}
+let lf_ok = lf_consumed == TOTAL
+let ch_ok = ch_consumed == TOTAL
+let cons_ok = (lf_sin == lf_sout) && (ch_sin == ch_sout)
+println("[integrity] lf_consumed_all=" + to_string(lf_ok) + " ch_consumed_all=" + to_string(ch_ok) + " conservation=" + to_string(cons_ok))
+println("═══════════════════════════════════════════════════════")
+if lf_ok == false { exit(1) }
+if cons_ok == false { exit(1) }

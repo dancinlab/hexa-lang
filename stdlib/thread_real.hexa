@@ -51,8 +51,8 @@
 // table-full / pthread_create failure. `fn` is a hexa function value taking one
 // argument; it is invoked as fn(arg) on the new thread (synchronously inline in
 // the default build). The returned id is a small dense integer handle.
-pub fn thread_start(fn, arg) -> int {
-    return thread_spawn(fn, arg)
+pub fn thread_start(worker_fn, arg) -> int {
+    return thread_spawn(worker_fn, arg)
 }
 
 // thread_wait(tid) → the value the worker fn returned (join). Blocks until the
