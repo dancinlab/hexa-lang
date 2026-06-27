@@ -1590,6 +1590,17 @@ pub fn _is_cabi(fname: string) -> bool {
     // cross-target-identical (no NR, no arm64 call-shape divergence). Byte-
     // faithful to the frozen 0-libc floor self/runtime.c:513 (hxlcl_strtoll).
     if fname == "hxlcl_strtoll" { return true }
+    // batch I — clock_gettime + execve (clean syscall leaves continuing the close
+    // errno-store discipline). clock_gettime = getrusage's out-ptr shape (caller's
+    // timespec*; uniform 2-arg on Linux, NR x86_64=228/arm64=113; darwin has NO trap
+    // → synthesize from gettimeofday(116) directly into the out-ptr, leak-free).
+    // execve = plain 3-arg (path,argv,envp), only the NR diverges on arm64 (x86_64=59
+    // /arm64=221/darwin=59) — returns ONLY on failure, so the errno epilogue is the
+    // whole body. Both reuse the already-whitelisted __errno_location for the Linux
+    // errno leg (no new whitelist entry beyond the two fns). fork is DEFERRED to
+    // batch J (darwin 2nd-return-register wall like pipe + live process-fork harness).
+    if fname == "hxlcl_clock_gettime" { return true }
+    if fname == "hxlcl_execve" { return true }
     return false
 }
 
