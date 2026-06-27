@@ -32,7 +32,7 @@
   "lint": {
     "freshnessFiles": [],
     "changelog": {
-      "file": "CHANGELOG.md",
+      "file": "CHANGELOG.jsonl",
       "triggerPattern": "\\.(hexa)$",
       "ignore": [
         "(^|/)(tests?|__tests__|spec)/",
@@ -52,7 +52,7 @@
   ],
   "docs": {
     "architecture": "ARCHITECTURE.json",
-    "log": "CHANGELOG.md",
+    "log": "CHANGELOG.jsonl",
     "scratchDir": "scripts/scratch",
     "scopeDirs": [
       ""
@@ -61,7 +61,7 @@
       "README.md",
       "README.en.md",
       "README.ko.md",
-      "CHANGELOG.md",
+      "CHANGELOG.jsonl",
       "ARCHITECTURE.json",
       "architecture.html",
       "serve.py",
