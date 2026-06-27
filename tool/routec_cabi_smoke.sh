@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll clock_gettime execve fork; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr strtoll time poll clock_gettime execve fork getenv setenv fopen fclose fread fwrite ftell fseek fdopen; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -210,6 +210,37 @@ extern int  hxlcl_execve(const char *path, char *const argv[], char *const envp[
  * __hx_syscall6_out2 (dual-return capture) and runs the live fork+_exit+waitpid
  * roundtrip here, the same claim the Linux sibling carries. */
 extern int  hxlcl_fork(void);
+
+/* Wall 2-b ENV — getenv. The FIRST Route C body to reference an extern DATA symbol:
+ * it resolves the libc `environ` global through the GOT (the new __hx_environ_ptr
+ * intrinsic) and byte-walks the NUL-terminated char** array. Pure compute after the
+ * GOT load (no syscall, no errno, no inner bl). Returns a raw char* INTO the live
+ * environ block (or NULL). `environ` itself comes from the C runtime (no harness
+ * definition needed — the routec.o's GOT ref to _environ resolves against libSystem). */
+extern char *hxlcl_getenv(const char *name);
+
+/* Wall 2-b ENV (sibling) — setenv. The FIRST Route C body to WRITE BACK to the
+ * `&environ` global: replace an existing slot in place (`*e = s`) or GROW a fresh
+ * (N+2)-slot char** array and store it into environ via __hx_ptr_store64. Returns 0
+ * on success, -1 (EINVAL) for NULL/empty name. The grow path mallocs via the same
+ * header-writing hxlcl_malloc below; the writeback to environ is proven by reading
+ * the new value back through BOTH hxlcl_getenv AND libc getenv (same live global). */
+extern int hxlcl_setenv(const char *name, const char *value, int overwrite);
+
+/* Wall 3-a CORE FILE* family — fopen/fclose/fread/fwrite/ftell/fseek/fdopen. The
+ * FILE* is the frozen-floor fake pointer `(void*)(uintptr_t)(fd+1)` (NOT a libc
+ * stdio struct), so these are a pure composition over the already-Route-C syscall
+ * leaves (open_sys/read/write/lseek/close, all from routec.o). fread/fwrite return
+ * the ITEM count (got/size), looping partial transfers; ftell/fseek wrap lseek.
+ * Exercised here by a full write→close→reopen→read roundtrip with byte-exact +
+ * position-exact asserts (the same behavioral claim the Linux sibling carries). */
+extern void  *hxlcl_fopen(const char *path, const char *mode);
+extern int    hxlcl_fclose(void *fp);
+extern size_t hxlcl_fread(void *buf, size_t sz, size_t n, void *fp);
+extern size_t hxlcl_fwrite(const void *buf, size_t sz, size_t n, void *fp);
+extern long   hxlcl_ftell(void *fp);
+extern int    hxlcl_fseek(void *fp, long offset, int whence);
+extern void  *hxlcl_fdopen(int fd, const char *mode);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
@@ -582,6 +613,112 @@ int main(void) {
         }
     }
 
+    /* Wall 2-b — getenv via the __hx_environ_ptr named-data GOT intrinsic + byte-walk.
+     * FULLY exercised here (the GOT load + array walk is host-runnable on darwin).
+     * Value-exact vs libc getenv() AND content-exact for a set var; an absent key →
+     * NULL; a prefix of a real key → NULL (the break-free early-stop must not match a
+     * longer entry, nor over-read a shorter one). The returned pointer is INTO the same
+     * live environ block libc walks, so identity (== libc getenv) holds — a wrong GOT
+     * deref depth, a PAIR-MODEL ABI leak, or an over-read would crash/mis-return. */
+    {
+        CK(hxlcl_getenv("__HX_NONEXISTENT_KEY_ZZZ__") == NULL, "getenv(absent key) → NULL");
+        char *hp = hxlcl_getenv("PATH");
+        char *lp = getenv("PATH");
+        CK(hp != NULL, "getenv(\"PATH\") != NULL");
+        CK(hp != NULL && hp[0] != 0, "getenv(\"PATH\") non-empty");
+        CK(hp == lp, "getenv(\"PATH\") == libc getenv (same environ-block pointer, value-exact)");
+        setenv("HX_SMOKE_ENVVAR", "route-c-wall2b", 1);
+        char *sv = hxlcl_getenv("HX_SMOKE_ENVVAR");
+        CK(sv != NULL && strcmp(sv, "route-c-wall2b") == 0, "getenv(set var) == value (content-exact)");
+        setenv("HX_SMOKE_LONGKEY", "L", 1);
+        CK(hxlcl_getenv("HX_SMOKE_LONG") == NULL, "getenv(prefix of a real key) → NULL (early-stop, no over-read)");
+        /* A longer query than any matching entry must also miss (entry NUL before
+         * nlen → the `entry[i]==0` early-stop fires, no over-read past the entry). */
+        CK(hxlcl_getenv("HX_SMOKE_ENVVAR_EXTRA") == NULL, "getenv(query longer than a real key) → NULL (short-entry stop)");
+    }
+
+    /* Wall 2-b (sibling) — setenv: the environ WRITE-BACK. Reference-match POSIX
+     * setenv(3): GROW for a fresh key (writeback must reach the live global so BOTH
+     * hxlcl_getenv AND libc getenv see it), in-place slot REPLACE on overwrite!=0,
+     * NO-OP preserve on overwrite==0, repeated GROW (second fresh key) keeping the
+     * first, and EINVAL (-1) for NULL/empty name. Value-exact throughout. A writeback
+     * that landed in a COPY instead of &environ would make libc getenv miss the new
+     * key — the strongest proof the store reached the global. */
+    {
+        /* (1) GROW — fresh key; writeback reaches the live global (libc getenv sees it). */
+        CK(hxlcl_setenv("HX_RC_NEW", "v1", 1) == 0, "setenv(fresh key) → 0");
+        char *g1 = hxlcl_getenv("HX_RC_NEW");
+        CK(g1 != NULL && strcmp(g1, "v1") == 0, "setenv(fresh): hxlcl_getenv == \"v1\" (content-exact)");
+        char *l1 = getenv("HX_RC_NEW");
+        CK(l1 != NULL && strcmp(l1, "v1") == 0, "setenv(fresh): libc getenv == \"v1\" (writeback reached &environ)");
+        /* (2) REPLACE — overwrite!=0 swaps the slot in place. */
+        CK(hxlcl_setenv("HX_RC_NEW", "v2", 1) == 0, "setenv(overwrite=1) → 0");
+        char *g2 = hxlcl_getenv("HX_RC_NEW");
+        CK(g2 != NULL && strcmp(g2, "v2") == 0, "setenv(overwrite): value replaced → \"v2\"");
+        /* (3) NO-OP — overwrite==0 must preserve the existing value. */
+        CK(hxlcl_setenv("HX_RC_NEW", "v3", 0) == 0, "setenv(overwrite=0, exists) → 0");
+        char *g3 = hxlcl_getenv("HX_RC_NEW");
+        CK(g3 != NULL && strcmp(g3, "v2") == 0, "setenv(overwrite=0): value preserved → \"v2\"");
+        /* (4) repeated GROW — a second fresh key; the prior key must survive the regrow. */
+        CK(hxlcl_setenv("HX_RC_NEW2", "w1", 1) == 0, "setenv(second fresh key) → 0");
+        char *g4 = hxlcl_getenv("HX_RC_NEW2");
+        CK(g4 != NULL && strcmp(g4, "w1") == 0, "setenv(regrow): new key == \"w1\"");
+        char *g5 = hxlcl_getenv("HX_RC_NEW");
+        CK(g5 != NULL && strcmp(g5, "v2") == 0, "setenv(regrow): prior key HX_RC_NEW survives == \"v2\"");
+        /* (5) EINVAL — NULL and empty name → -1. */
+        CK(hxlcl_setenv(NULL, "x", 1) == -1, "setenv(NULL name) → -1 (EINVAL)");
+        CK(hxlcl_setenv("", "x", 1) == -1, "setenv(empty name) → -1 (EINVAL)");
+    }
+
+    /* Wall 3-a — CORE FILE* family roundtrip. fopen("w") → fwrite known bytes →
+     * fclose → fopen("r") → fread → byte-exact match + ftell/fseek position-exact.
+     * The fake FILE* is fd+1 (the floor encoding), so this exercises the full
+     * compose-over-syscalls path (open_sys/write/close/read/lseek). FULLY run on
+     * darwin (real file I/O). */
+    {
+        char tmpl[] = "/tmp/routec_file_XXXXXX";
+        int tfd = mkstemp(tmpl);
+        CK(tfd >= 0, "mkstemp for FILE* roundtrip");
+        if (tfd >= 0) close(tfd);   /* close; reopen through hxlcl_fopen */
+
+        const char payload[] = "RouteC-FILE-roundtrip-0123456789";  /* 32 bytes */
+        size_t plen = sizeof(payload) - 1;
+
+        void *fw = hxlcl_fopen(tmpl, "w");
+        CK(fw != NULL, "fopen(w) != NULL (fd+1 fake FILE*)");
+        CK(hxlcl_fwrite(payload, 1, plen, fw) == plen, "fwrite(size=1) item count == 32");
+        CK(hxlcl_fclose(fw) == 0, "fclose(w) == 0");
+
+        void *fr = hxlcl_fopen(tmpl, "r");
+        CK(fr != NULL, "fopen(r) != NULL");
+        char rbuf[64]; memset(rbuf, 0, sizeof rbuf);
+        CK(hxlcl_fread(rbuf, 1, plen, fr) == plen, "fread(size=1) item count == 32");
+        CK(memcmp(rbuf, payload, plen) == 0, "fread bytes == fwrite bytes (value-exact)");
+        CK(hxlcl_ftell(fr) == (long)plen, "ftell after reading 32 == 32 (position-exact)");
+
+        CK(hxlcl_fseek(fr, 0, SEEK_SET) == 0, "fseek(SET, 0) == 0");
+        CK(hxlcl_ftell(fr) == 0, "ftell after rewind == 0");
+        char ib[8]; memset(ib, 0, sizeof ib);
+        CK(hxlcl_fread(ib, 4, 1, fr) == 1, "fread(size=4, n=1) → 1 item (item-count math)");
+        CK(memcmp(ib, payload, 4) == 0, "fread item content matches first 4 bytes");
+        CK(hxlcl_ftell(fr) == 4, "ftell after a 4-byte item == 4");
+        CK(hxlcl_fseek(fr, 10, SEEK_SET) == 0, "fseek(SET, 10) == 0");
+        CK(hxlcl_ftell(fr) == 10, "ftell after seek(10) == 10 (position-exact)");
+        CK(hxlcl_fclose(fr) == 0, "fclose(r) == 0");
+
+        /* fdopen: wrap a raw fd and read through the fake FILE*. */
+        int rawfd = open(tmpl, O_RDONLY);
+        CK(rawfd >= 0, "open raw fd for fdopen test");
+        void *fd_fp = hxlcl_fdopen(rawfd, "r");
+        CK(fd_fp != NULL, "fdopen(rawfd) != NULL (fd+1 wrap)");
+        char db[8]; memset(db, 0, sizeof db);
+        CK(hxlcl_fread(db, 1, 4, fd_fp) == 4, "fread via fdopen'd fd → 4");
+        CK(memcmp(db, payload, 4) == 0, "fdopen fread content matches");
+        CK(hxlcl_fclose(fd_fp) == 0, "fclose(fdopen) == 0");
+
+        unlink(tmpl);
+    }
+
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }
     printf("[routec-smoke] %d assert(s) FAILED\n", fails);
     return 1;
@@ -594,4 +731,4 @@ echo "[routec-smoke] (3) compile harness + link Route C .o + run …"
 "$TMP/routec_smoke"
 rc=$?
 [ "$rc" -eq 0 ] || { echo "[routec-smoke] FATAL: behaviour run rc=$rc" >&2; exit 1; }
-echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (pure-arith + composite + syscall families + batch F search strchr/strstr, darwin-arm64)"
+echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (pure-arith + composite + syscall families + batch F search strchr/strstr + Wall 3-a CORE FILE* fopen/fread/fwrite/fseek/ftell/fclose/fdopen, darwin-arm64)"

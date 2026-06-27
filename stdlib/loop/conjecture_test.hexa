@@ -1,0 +1,77 @@
+// stdlib/loop/conjecture_test.hexa — selftest for the exact-int verify-gate
+// (Ralph 378). Proves cj_verdict routes an LLM-style child body through the
+// REAL compiler exact-int verifier (compiler/atlas/identity_engine) and returns
+// the honest verdict: a false guess is "unverified", a true relation is
+// "verified-known"/"verified-novel", prose is "". Light closure (conjecture +
+// identity_engine) — runs via `hexa run stdlib/loop/conjecture_test.hexa`.
+
+use "stdlib/loop/conjecture"
+use "stdlib/io"
+
+fn body(claim: string) -> string {
+    // mimic the child markdown the LLM emits — a CONJECTURE line inside prose.
+    return "This child explores a sub-claim of the parent law.\n"
+         + "CONJECTURE: " + claim + "\n"
+         + "We expect the relation to hold for the multiplicative structure of n.\n"
+}
+
+fn gate(label: string, got: string, want: string) -> int {
+    if got == want {
+        println("  [PASS] " + label + "  -> " + got)
+        return 0
+    }
+    println("  [FAIL] " + label + "  -> got '" + got + "' want '" + want + "'")
+    return 1
+}
+
+fn main() {
+    println("=== conjecture verify-gate SELFTEST (Ralph 378) ===")
+    let mut f = 0
+
+    // ── IDENTITY frame ──
+    // G1 phi*J2 = n*psi — classical bounded-unique (identity_engine G1) -> known.
+    f = f + gate("ID G1 phi*J2=n*psi (classical)", cj_verdict(body("phi*J2 = n*psi")), "verified-known")
+    // G3 sigma*psi = sigma2*phi -> known.
+    f = f + gate("ID G3 sigma*psi=sigma2*phi", cj_verdict(body("sigma*psi = sigma2*phi")), "verified-known")
+    // A false product identity (no bounded-unique, not universal) -> unverified.
+    f = f + gate("ID false sigma*tau=phi*phi", cj_verdict(body("sigma*tau = phi*phi")), "unverified")
+    // 2-vs-1 form (phi*psi = J2) — the strict A*B=C*D grammar requires exactly two
+    // factors per side (same as drill::_parse_identity), so this is unparseable.
+    f = f + gate("ID 2-vs-1 phi*psi=J2 (grammar)", cj_verdict(body("phi*psi = J2")), "unparseable")
+    // Commutative restatement phi*J2 = J2*phi holds for ALL n (universal-in-[2,N],
+    // not a singleton) -> verified-known via is_universal2 (exercises that branch).
+    f = f + gate("ID universal phi*J2=J2*phi", cj_verdict(body("phi*J2 = J2*phi")), "verified-known")
+
+    // ── COMPOSITION frame (∘ = U+2218) ──
+    // σ∘φ=2n is bounded-unique ⟺ n=1209 (identity_engine CMP5) — classical -> known.
+    f = f + gate("COMP sigma o phi=2n (n=1209)", cj_verdict(body("sigma ∘ phi = 2*n")), "verified-known")
+    // σ∘σ=2n is the superperfect SET (count 5, not a singleton) -> unverified by
+    // the bounded-unique gate (honest: it is a family, not a singleton).
+    f = f + gate("COMP sigma o sigma=2n (set)", cj_verdict(body("sigma ∘ sigma = 2*n")), "unverified")
+
+    // ── CONGRUENCE frame ──
+    // Ramanujan p(5n+4)≡0 mod5 — in the documented known set -> known.
+    f = f + gate("CONG partition(5n+4)=0 mod5", cj_verdict(body("partition(5*n+4) = 0 mod 5")), "verified-known")
+    // Ramanujan's mod-25 extension p(25n+24)≡0 mod25 holds but is NOT in our
+    // 3-element known set -> verified-novel (exercises the 🟩 path; honest triage,
+    // final novelty decided by hexa verify g5 / PR).
+    f = f + gate("CONG partition(25n+24)=0 mod25", cj_verdict(body("partition(25*n+24) = 0 mod 25")), "verified-novel")
+    // A false congruence p(5n+3)≡0 mod5 -> unverified.
+    f = f + gate("CONG partition(5n+3)=0 mod5 (false)", cj_verdict(body("partition(5*n+3) = 0 mod 5")), "unverified")
+
+    // ── prose / unparseable ──
+    // No CONJECTURE line -> "" (prose hypothesis, falls through the gate).
+    f = f + gate("PROSE no claim", cj_verdict("Just a prose hypothesis about sigma growth, no formal relation."), "")
+    // Claim present but vocab not recognized -> unparseable (grammar enforced).
+    f = f + gate("UNPARSE foo*bar=baz*qux", cj_verdict(body("foo*bar = baz*qux")), "unparseable")
+    // Greek glyphs accepted (σ·J2 = n·ψ == G1) -> known.
+    f = f + gate("ID greek σ glyphs G1", cj_verdict(body("φ·J2 = n·ψ")), "verified-known")
+
+    println("")
+    if f == 0 {
+        println("RESULT: PASS — exact-int verify-gate wired (LLM proposes, exact-int disposes)")
+        exit(0)
+    }
+    println("RESULT: FAIL (" + to_string(f) + ")")
+    exit(1)
+}

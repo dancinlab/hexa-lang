@@ -1385,6 +1385,20 @@ fn _emit_hx3001(expected: Type, actual: Type, sp: Span, out: array) {
     out.push(diag_emit(b))
 }
 
+// HX3011 — opt-in static-type let-mismatch (HEXA_STATIC_TYPES=1).
+// Rust E0308-faithful "mismatched types": a `let x: T = <literal>` whose
+// scalar-literal RHS provably disagrees with the declared scalar T. Error
+// severity (catalog.hexa) → main.hexa `_has_errors` aborts before codegen
+// (REJECT, not advisory warning). Only emitted under the flag, so the
+// default diagnostic stream is byte-identical (byteeq-neutral).
+fn _emit_hx3011(expected: Type, actual: Type, sp: Span, out: array) {
+    let mut b = diag_new("HX3011")
+    b = diag_span(b, sp)
+    b = diag_arg(b, "expected", _type_display(expected))
+    b = diag_arg(b, "actual", _type_display(actual))
+    out.push(diag_emit(b))
+}
+
 fn _emit_hx3002(name: string, expected: i64, actual: i64, sp: Span, out: array) {
     let mut b = diag_new("HX3002")
     b = diag_span(b, sp)
@@ -1568,6 +1582,48 @@ fn _ctx_with_fn(ctx: CheckCtx, name: string, ret: Type) -> CheckCtx {
     return CheckCtx { fn_name: name, fn_return: ret, module: ctx.module }
 }
 
+// ── Opt-in static-type let-check helpers (HEXA_STATIC_TYPES) ──
+// Module-local mirror of ast_to_hir.hexa:_hir_let_type_text — the local-let
+// Expr.text encodes `<name>|<typename>` (or `mut:<name>|<typename>`); the
+// annotation is the substring after `|`, or "" for a bare `let x = …`. Kept
+// self-contained in types.hexa (no cross-module import; bind.hexa:_hir_let_name
+// mirror precedent). Frozen-seed-safe — reuses the existing parse encoding,
+// no new keyword.
+fn _types_let_type_text(t: string) -> string {
+    let chars = t.chars()
+    let n = len(chars)
+    let mut i = 0
+    while i < n {
+        if chars[i] == '|' {
+            let mut out = ""
+            let mut j = i + 1
+            while j < n {
+                out = out + to_string(chars[j])
+                j = j + 1
+            }
+            return out
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// r1 soundness gate: only KNOWN scalar primitives are sound comparison
+// targets for a scalar-literal RHS. `_types_lower_type_ref` maps user/unknown
+// names to a `named:<n>` sentinel (and struct/enum/generic to `<kind>:<name>`)
+// — those are r5+ scope and must NOT be flagged here. Mirrors the primitive
+// set that `_types_lower_type_ref` recognises (i8…i64 · f16…f64 · bool ·
+// string · char); `unit` is intentionally excluded.
+fn _types_kind_is_scalar(k: string) -> bool {
+    let t = _prim(k, "")
+    if _is_integer_kind(t) { return true }
+    if _is_float_kind(t)   { return true }
+    if k == "bool"   { return true }
+    if k == "string" { return true }
+    if k == "char"   { return true }
+    return false
+}
+
 // ── Expression type inference + checks ───────────────────────
 // Returns the inferred Type of `e`. Diagnostics for sub-expressions push
 // into `out` along the way (multi-error policy).
@@ -1745,6 +1801,36 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         while i < len(e.children) {
             let _t = _infer_expr(e.children[i], env, ctx, out)
             i = i + 1
+        }
+        // Wall A r1 — opt-in SOUND static type slice (HEXA_STATIC_TYPES=1).
+        // Bring the Rust E0308 'mismatched types' rule that already guards
+        // top-level let-ITEMS (see the per-let-item RHS check in type_check)
+        // to LOCAL (in-fn-body) lets. The ENTIRE branch is env-gated, so the
+        // default build skips it → diagnostic stream byte-identical → byteeq
+        // (gen3≡gen4) preserved. Same structural slot + env-gate idiom as the
+        // already-shipped `_exh_check_module`/`_cg_check_module` opt-in passes.
+        if env("HEXA_STATIC_TYPES") == "1" {
+            // text encodes `<name>|<typename>`; require an annotation + RHS.
+            let tt = _types_let_type_text(e.text)
+            if len(tt) > 0 && len(e.children) > 0 {
+                let rhs = e.children[0]
+                // r1 SCOPE GUARD — scalar-literal RHS only (int/float/string/
+                // bool/char). Broader inference (ident/call/range/array) is
+                // a later rung. A literal re-infer is side-effect-free (a
+                // literal pushes no diagnostics), so no double-report.
+                if _types_is_lit_int(rhs.kind) || _types_is_lit_float(rhs.kind) || _types_is_lit_string(rhs.kind) || _is_lit_bool(rhs.kind) || _is_lit_char(rhs.kind) {
+                    let tr = TypeRef { kind: "named", name: tt, args: [], span: e.span }
+                    let declared = _types_lower_type_ref(tr)
+                    // Only KNOWN scalar primitives are sound comparison
+                    // targets — skip `named:`/struct/enum annotations (r5+).
+                    if _types_kind_is_scalar(declared.kind) {
+                        let rhs_t = _infer_expr(rhs, env, ctx, out)
+                        if !_types_assignable(declared, rhs_t, rhs) {
+                            _emit_hx3011(declared, rhs_t, e.span, out)
+                        }
+                    }
+                }
+            }
         }
         return _types_t_unit()
     }
