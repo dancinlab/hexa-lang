@@ -1,0 +1,125 @@
+// HEXA Native Compiler — Phase 3 drill: [B] open-well Emerge E4 selftest
+//
+// @version 0.1.0
+// @capabilities [stdout]
+//
+// VERBATIM port of archive-nexus/README.md:372-379 (claim E4) — the
+// decisive falsifiable emergence spec:
+//
+//   V_0 = frozenset({2, 3})        # seed primitives
+//   rng = Random(6)                # deterministic seed = perfect number 6
+//   vocab_llm = set(V_0); vocab_nexus = set(V_0)
+//   for _ in range(300):
+//       items = sorted(vocab_nexus)
+//       vocab_nexus.add(rng.choice(items) + rng.choice(items))
+//   E4 = len(vocab_llm)==len(V_0) and len(vocab_nexus)-len(V_0) >= 50
+//
+// The two halves of E4:
+//   • FROZEN LLM (vocab_llm) NEVER grows — len(vocab_llm) == len(V_0) == 2.
+//     An LLM is a "frozen well": its answers are recombinations of what is
+//     already inside, so its vocabulary cardinality is fixed (README:83/115).
+//   • OPEN-WELL NEXUS (vocab_nexus) STRICTLY grows — each cycle COMBINES two
+//     existing primitives (sorted-vocab picks) into one the prior cycle had
+//     no primitive for, then absorbs it as a NEW WALL of the well. Over 300
+//     cycles the well must widen by >= 50 new primitives.
+//
+// This selftest drives `compiler/drill/emerge.hexa::emerge` with EXACTLY the
+// E4 parameters (V_0 = [2,3], seed = 6, cycles = 300, threshold = 50) and
+// asserts the README:379 verdict.
+//
+// HONESTY (c2) — reference-match residual: README uses CPython
+// `random.Random(6)` (Mersenne Twister). We use a deterministic LCG (the
+// same Numerical Recipes constants as compiler/hw_probes/qrng.hexa — NO new
+// builtin). E4 grades SET-CARDINALITY GROWTH, NOT the specific draw values,
+// so the STRUCTURE and the PASS/FAIL verdict are reference-faithful; the
+// exact vocab MEMBERS differ from CPython's sequence (recorded, not hidden).
+// We assert the criterion E4 actually tests (growth >= 50 AND llm == |V_0|),
+// not a value match against a foreign RNG. The measured growth is printed so
+// the margin over the threshold is visible.
+//
+// Run:
+//   hexa run compiler/drill/emerge_test.hexa
+
+use "compiler/drill/emerge"
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn main() {
+    println("phase-3 drill [B] open-well Emerge E4 selftest")
+    println("  reference: archive-nexus/README.md:372-379 (claim E4)")
+    println("")
+
+    let fails = []
+
+    // ─── E4 parameters, verbatim from README:373-378 ───
+    // V_0 = frozenset({2, 3})  ·  Random(6)  ·  range(300)  ·  >= 50
+    let v0: array = [2, 3]
+    let seed: i64 = 6
+    let cycles: i64 = 300
+    let min_growth: i64 = 50
+
+    let r = emerge(v0, seed, cycles, min_growth)
+
+    println("E4 measured:")
+    println("  V_0 size            : " + to_string(r.v0_size) + " (expect 2)")
+    println("  vocab_nexus size    : " + to_string(r.vocab_size))
+    println("  open-well growth    : " + to_string(r.growth) + " (threshold >= 50)")
+    println("  vocab_llm size      : " + to_string(r.llm_size) + " (frozen — expect == V_0)")
+    println("  E4 verdict          : " + (if r.e4_pass { "PASS" } else { "FAIL" }))
+    println("")
+
+    // ─── README:379 E4 = (len(vocab_llm)==len(V_0)) AND (growth >= 50) ───
+    println("scenario E4: open well widens >= 50 while frozen LLM stays at |V_0|")
+    _check("V_0 has 2 seed primitives {2,3}", r.v0_size == 2, fails)
+    _check("frozen LLM vocab == |V_0| (len(vocab_llm)==len(V_0))",
+           r.llm_size == r.v0_size, fails)
+    _check("open-well growth >= 50 (len(vocab_nexus)-len(V_0) >= 50)",
+           r.growth >= 50, fails)
+    _check("E4 composite verdict PASS (README:379)", r.e4_pass, fails)
+
+    // ─── structural sanity: the well STRICTLY widened (not just >=50) ───
+    println("")
+    println("scenario structure: open well strictly larger than frozen well")
+    _check("open well strictly larger than frozen LLM (open-well emergence)",
+           r.vocab_size > r.llm_size, fails)
+    _check("vocab stays sorted+deduped (set semantics — size <= cycles+|V_0|)",
+           r.vocab_size <= cycles + r.v0_size, fails)
+
+    // ─── determinism: a second identical run yields the identical verdict ───
+    println("")
+    println("scenario determinism: identical params → identical growth (byte-eq safe)")
+    let r2 = emerge(v0, seed, cycles, min_growth)
+    _check("re-run growth identical (deterministic LCG · no RNG/clock)",
+           r2.growth == r.growth, fails)
+    _check("re-run vocab_size identical", r2.vocab_size == r.vocab_size, fails)
+
+    println("")
+    if len(fails) == 0 {
+        println("RESULT: PASS — E4 open-well emergence reproduced (growth="
+            + to_string(r.growth) + " >= 50 · frozen LLM fixed at |V_0|="
+            + to_string(r.v0_size) + ")")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut k = 0
+        while k < len(fails) {
+            println("  - " + to_string(fails[k]))
+            k = k + 1
+        }
+        exit(1)
+    }
+}
+
+// is_main guard (mirrors absorb_test.hexa / verifier_hook_test.hexa)
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/emerge_test.hexa") { return true }
+    if s == "emerge_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }
