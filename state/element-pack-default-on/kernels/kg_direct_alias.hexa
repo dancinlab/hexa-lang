@@ -1,0 +1,9 @@
+// Kg — DIRECT-literal alias. `let xs = [..]` (X==T storage+handle) then
+// `let ys = xs`. Both xs and ys are read via index. The alias-coherence pass
+// must keep them COHERENT (both packed = fast, or both boxed = safe) — never
+// one packed + one boxed. OFF==ON expected. (= 10+20+30+40 = 100)
+fn main() {
+    let xs = [10, 20, 30, 40]
+    let ys = xs
+    println(xs[0] + ys[1] + xs[2] + ys[3])
+}
