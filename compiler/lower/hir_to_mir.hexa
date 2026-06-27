@@ -210,7 +210,9 @@ fn _type_id_of(t: Type) -> i64 {
 // runtime-gap r2c PRODUCER (HEXA_UNBOX_ARRAY_NATIVE) — gate check, mirrors the
 // codegen consumer `_unbox_array_enabled` exactly. When OFF the let-decl type_id
 // override below is skipped, so every Local's type_id is byte-identical to the
-// pre-r2c lowering (Gate-1 OFF-byteeq). Default-OFF, opt-in → release-safe.
+// pre-r2c lowering (Gate-1 OFF-byteeq). Default-ON (opt-OUT via
+// HEXA_UNBOX_ARRAY_NATIVE=0) — release-safe once the regular 3-target byteeq
+// gate proves gen3≡gen4 holds with the stamping pass live.
 fn _arru_native_enabled() -> bool {
     // element-pack (HEXA_PACK_ARRAY) ALSO needs the typed-prim element-kind
     // (type_id 101..104) stamped on the container Local — it is the V8
@@ -222,7 +224,7 @@ fn _arru_native_enabled() -> bool {
     // FLEET lane A2 (HEXA_PACK_ESCAPING, still opt-in) — escape-relax ALSO needs
     // the typed-prim element-kind (101..104) stamped on the container Local so the
     // codegen esc-mint lattice + poly-route can identify a typed-prim array.
-    return env("HEXA_UNBOX_ARRAY_NATIVE") == "1" || env("HEXA_PACK_ARRAY") != "0" ||
+    return env("HEXA_UNBOX_ARRAY_NATIVE") != "0" || env("HEXA_PACK_ARRAY") != "0" ||
            env("HEXA_PACK_ESCAPING") == "1"
 }
 
