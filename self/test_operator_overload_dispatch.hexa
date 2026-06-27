@@ -1,15 +1,22 @@
 // =====================================================================
 //  test_operator_overload_dispatch.hexa — RFC operator-overload (opt-in)
 //
-//  Surface: declare an ordinary impl method named `__add` (NO new keyword,
-//  NO new @attr). Under HEXA_OP_OVERLOAD=1 the C-transpile codegen lowers
-//  `a + b` to `Vec2____add(a, b)` when `a` is a runtime instance of a
-//  struct type whose impl declares `__add`; every non-struct operand falls
-//  through to the unchanged `hexa_add` runtime path. Default OFF → emit is
-//  byte-identical (the dispatch helper is never consulted).
+//  Surface: declare ordinary impl methods named `__add` / `__sub` / `__mul` /
+//  `__div` / `__rem` / `__eq` / `__lt` / `__index` (NO new keyword, NO new
+//  @attr). Under HEXA_OP_OVERLOAD=1 the C-transpile codegen lowers the
+//  matching operator to `Type__<method>(a, b)` when `a` is a runtime instance
+//  of a struct type whose impl declares that method; every non-struct operand
+//  falls through to the unchanged runtime helper (hexa_add / hexa_sub /
+//  hexa_eq / hexa_index_get / …). Default OFF → emit is byte-identical (the
+//  dispatch helper is never consulted).
 //
-//  Reference: Rust std::ops::Add::add (library/core/src/ops/arith.rs),
-//             Swift `static func + (lhs:Self, rhs:Self) -> Self`.
+//  Reference (op→method naming, exactly replicated):
+//    Rust std::ops::Add::add / Sub::sub / Mul::mul / Div::div / Rem::rem
+//         (library/core/src/ops/arith.rs)
+//    Rust std::cmp::PartialEq::eq / PartialOrd::lt
+//         (library/core/src/cmp.rs)
+//    Rust std::ops::Index::index   (library/core/src/ops/index.rs)
+//    Swift `static func + (lhs:Self, rhs:Self) -> Self`.
 //
 //  End-to-end build verification (transpile → clang → run) is a build-host
 //  job (aiden / summer) or PR CI — mini is git/gh only. Build + run:
@@ -20,11 +27,18 @@
 //  Expected stdout (flag ON):
 //      4
 //      6
+//      -2
+//      -2
+//      3
+//      8
+//      1
+//      0
+//      20
 //      30
 //
-//  The explicit-method form `a.__add(b)` below is an ordinary method call —
-//  it dispatches identically with the flag ON or OFF and is interpreter-
-//  runnable, so it doubles as a parser/AST sanity anchor for the surface.
+//  The explicit-method forms (`a.__add(b)` etc.) below are ordinary method
+//  calls — they dispatch identically with the flag ON or OFF and are
+//  interpreter-runnable, so they double as parser/AST sanity anchors.
 // =====================================================================
 
 struct Vec2 {
@@ -33,12 +47,34 @@ struct Vec2 {
 }
 
 impl Vec2 {
-    // Operator-overload method. `__add` is a plain identifier — accepted by
+    // Operator-overload methods. Each name is a plain identifier — accepted by
     // the frozen parser exactly like any other method name (cf. the many
     // `_`-prefixed identifiers throughout self/). Receiver = LHS operand,
     // second param = RHS, mirroring Rust's add(self, rhs).
     fn __add(self, other) {
         return Vec2 { x: self.x + other.x, y: self.y + other.y }
+    }
+    fn __sub(self, other) {
+        return Vec2 { x: self.x - other.x, y: self.y - other.y }
+    }
+    // Component-wise product (Hadamard) — demo only; the codegen rule is the
+    // same regardless of the operator's semantics inside the method body.
+    fn __mul(self, other) {
+        return Vec2 { x: self.x * other.x, y: self.y * other.y }
+    }
+    // Structural equality → returns a bool (PartialEq::eq parity).
+    fn __eq(self, other) {
+        return self.x == other.x && self.y == other.y
+    }
+    // Lexicographic less-than (PartialOrd::lt parity) — x first, then y.
+    fn __lt(self, other) {
+        if self.x != other.x { return self.x < other.x }
+        return self.y < other.y
+    }
+    // Index read — `v[i]` returns component i (Index::index parity).
+    fn __index(self, i) {
+        if i == 0 { return self.x }
+        return self.y
     }
 }
 
@@ -46,12 +82,33 @@ fn main() {
     let a = Vec2 { x: 1, y: 2 }
     let b = Vec2 { x: 3, y: 4 }
 
-    // Operator form — under HEXA_OP_OVERLOAD=1 lowers to Vec2____add(a, b).
+    // ── Arithmetic operator forms ───────────────────────────────────
+    // Under HEXA_OP_OVERLOAD=1 each lowers to Vec2__<method>(a, b).
     let c = a + b
     println(c.x)        // 4
     println(c.y)        // 6
 
-    // Non-struct `+` is byte-for-byte unchanged (still the hexa_add path).
+    let d = a - b
+    println(d.x)        // -2
+    println(d.y)        // -2
+
+    let m = a * b
+    println(m.x)        // 3
+    println(m.y)        // 8
+
+    // ── Comparison operator forms ───────────────────────────────────
+    // `==` → Vec2____eq, `<` → Vec2____lt. println of a bool prints 1/0.
+    println(a == a)     // 1
+    println(b < a)      // 0  (b.x=3 not < a.x=1)
+
+    // ── Index read operator form ────────────────────────────────────
+    // `a[i]` → Vec2____index(a, i) for the struct receiver. (Native int/
+    // float arrays keep their proven-read fast path — unaffected.)
+    let e = Vec2 { x: 20, y: 99 }
+    println(e[0])       // 20
+
+    // ── Non-struct operands are byte-for-byte unchanged ─────────────
+    // int `+` still emits the hexa_add path; this exercises the fall-through.
     let n = 1 + 2 + 27
     println(n)          // 30
 }

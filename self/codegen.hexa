@@ -5639,16 +5639,58 @@ fn gen2_expr(node) {
         // hexa_mul/hexa_div/hexa_mod) which inspect TAG_FLOAT and use .f
         // for float operands. The old .i-direct code produced garbage
         // arithmetic on floats (raw IEEE bit patterns as int64).
-        if op == "-" { return "hexa_sub(" + l + ", " + r + ")" }
-        if op == "*" { return "hexa_mul(" + l + ", " + r + ")" }
-        if op == "/" { return "hexa_div(" + l + ", " + r + ")" }
-        if op == "%" { return "hexa_mod(" + l + ", " + r + ")" }
+        // Operator overloading (opt-in HEXA_OP_OVERLOAD) — same guard the `+`
+        // arm above uses. Default OFF → each arm falls through to its verbatim
+        // runtime-helper return (byte-identical). Rust std::ops naming:
+        // Sub::sub/Mul::mul/Div::div/Rem::rem (library/core/src/ops/arith.rs).
+        if op == "-" {
+            if _op_overload_enabled() {
+                let _ov = _op_overload_emit(_op_overload_method("-"), l, r, "hexa_sub")
+                if _ov != "" { return _ov }
+            }
+            return "hexa_sub(" + l + ", " + r + ")"
+        }
+        if op == "*" {
+            if _op_overload_enabled() {
+                let _ov = _op_overload_emit(_op_overload_method("*"), l, r, "hexa_mul")
+                if _ov != "" { return _ov }
+            }
+            return "hexa_mul(" + l + ", " + r + ")"
+        }
+        if op == "/" {
+            if _op_overload_enabled() {
+                let _ov = _op_overload_emit(_op_overload_method("/"), l, r, "hexa_div")
+                if _ov != "" { return _ov }
+            }
+            return "hexa_div(" + l + ", " + r + ")"
+        }
+        if op == "%" {
+            if _op_overload_enabled() {
+                let _ov = _op_overload_emit(_op_overload_method("%"), l, r, "hexa_mod")
+                if _ov != "" { return _ov }
+            }
+            return "hexa_mod(" + l + ", " + r + ")"
+        }
         // Comparisons
-        if op == "==" { return "hexa_eq(" + l + ", " + r + ")" }
+        if op == "==" {
+            // PartialEq::eq → __eq (library/core/src/cmp.rs).
+            if _op_overload_enabled() {
+                let _ov = _op_overload_emit(_op_overload_method("=="), l, r, "hexa_eq")
+                if _ov != "" { return _ov }
+            }
+            return "hexa_eq(" + l + ", " + r + ")"
+        }
         if op == "!=" { return "hexa_bool(!hexa_truthy(hexa_eq(" + l + ", " + r + ")))" }
         // ROI-44: ordered comparisons via runtime helpers (replaces inline
         // GCC stmt-expr — ~15% generated C size reduction, better I-cache).
-        if op == "<" { return "hexa_cmp_lt(" + l + ", " + r + ")" }
+        if op == "<" {
+            // PartialOrd::lt → __lt (library/core/src/cmp.rs).
+            if _op_overload_enabled() {
+                let _ov = _op_overload_emit(_op_overload_method("<"), l, r, "hexa_cmp_lt")
+                if _ov != "" { return _ov }
+            }
+            return "hexa_cmp_lt(" + l + ", " + r + ")"
+        }
         if op == ">" { return "hexa_cmp_gt(" + l + ", " + r + ")" }
         if op == "<=" { return "hexa_cmp_le(" + l + ", " + r + ")" }
         if op == ">=" { return "hexa_cmp_ge(" + l + ", " + r + ")" }
@@ -8734,6 +8776,18 @@ fn gen2_expr(node) {
                 }
             }
         }
+        // Operator overloading (opt-in HEXA_OP_OVERLOAD) — Index read. Placed
+        // AFTER every native-array proven-read arm so struct receivers (which
+        // never match _is_known_intarr_name / _is_known_floatarr_name) fall
+        // through here. Rust std::ops::Index::index → __index
+        // (library/core/src/ops/index.rs). There is no binop `op` string at
+        // this site (the Index node is handled outside the BinaryOp block), so
+        // the method name is the literal "__index". Default OFF → byte-identical
+        // to the verbatim hexa_index_get return below.
+        if _op_overload_enabled() {
+            let _ov = _op_overload_emit("__index", gen2_expr(node.left), gen2_expr(node.right), "hexa_index_get")
+            if _ov != "" { return _ov }
+        }
         return "hexa_index_get(" + gen2_expr(node.left) + ", " + gen2_expr(node.right) + ")"
     }
 
@@ -9963,9 +10017,12 @@ fn _method_registry_lookup(name) {
 // inference and NO runtime.c edit (mirrors the P2-6 method-call dispatch at the
 // Call-on-Field site).
 //
-// Slice scope: `+` → `__add` only. The op→method table below already lists the
-// full Rust arithmetic set so follow-up rounds wire `-`/`*`/`/`/`%` by adding
-// one call site each; see state/rfc_operator_overload.md.
+// Wired set: arithmetic `+`/`-`/`*`/`/`/`%` → `__add`/`__sub`/`__mul`/`__div`/
+// `__rem` (Rust std::ops::{Add,Sub,Mul,Div,Rem}), comparison `==`/`<` →
+// `__eq`/`__lt` (Rust std::cmp::{PartialEq,PartialOrd}), and index read `a[i]`
+// → `__index` (Rust std::ops::Index). Deferred follow-ups: `!=`/`>`/`<=`/`>=`
+// (ordered-cmp), compound-assign (`+=`…), and Index *write* (`a[i] = v` →
+// IndexMut). See state/rfc_operator_overload.md.
 fn _op_overload_enabled() {
     return env("HEXA_OP_OVERLOAD") != ""
 }
@@ -9978,6 +10035,10 @@ fn _op_overload_method(op) {
     if op == "*" { return "__mul" }
     if op == "/" { return "__div" }
     if op == "%" { return "__rem" }
+    // Comparison overloads (Rust std::cmp): PartialEq::eq → __eq
+    // (library/core/src/cmp.rs), PartialOrd::lt → __lt (same file).
+    if op == "==" { return "__eq" }
+    if op == "<" { return "__lt" }
     return ""
 }
 
