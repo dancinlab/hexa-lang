@@ -216,7 +216,7 @@ fn _arru_native_enabled() -> bool {
     // (type_id 101..104) stamped on the container Local — it is the V8
     // PACKED_SMI element-kind signal the native backend reads to choose the
     // raw 8B packed storage path. Default-OFF (both env unset) → byte-identical.
-    return env("HEXA_UNBOX_ARRAY_NATIVE") == "1" || env("HEXA_PACK_ARRAY") == "1"
+    return env("HEXA_UNBOX_ARRAY_NATIVE") == "1" || env("HEXA_PACK_ARRAY") != "0"
 }
 
 // runtime-gap r2c PRODUCER — recover the typed-prim array type_id (101..104)
@@ -263,7 +263,10 @@ fn _arru_array_type_id_from_text(type_text: string) -> i64 {
 // (k3 2.7×) and the r5 HEXA_UNBOX_NATIVE path stay byte-identical to origin —
 // only the regressed PACK lane (standalone 1.147) changes. Default-OFF.
 fn _arrpk_fuse_enabled() -> bool {
-    return env("HEXA_PACK_ARRAY") == "1"
+    // DEFAULT-ON (HEXA-UNBOX): opt-OUT with HEXA_PACK_ARRAY=0. Flips in lockstep
+    // with the codegen `_pack_array_enabled()` so the producer (element-kind +
+    // fuse threading) and consumer (pack lattice) agree — escape-lattice soundness.
+    return env("HEXA_PACK_ARRAY") != "0"
 }
 
 // element-pack FUSE — inverse of `_arru_array_type_id_from_text`'s container map:

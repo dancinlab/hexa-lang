@@ -1390,7 +1390,11 @@ fn _arru_debug_enabled() -> bool {
 //   - currently i64/i32 element kinds only (type_id 101/102 → HexaArrI64). f64/
 //     f32 (103/104 → HexaArrF64) is a follow-on (needs the xmm push ABI).
 fn _pack_array_enabled() -> bool {
-    return env("HEXA_PACK_ARRAY") == "1"
+    // DEFAULT-ON (HEXA-UNBOX): packing is the native-canonical default — opt-OUT
+    // with HEXA_PACK_ARRAY=0 (mirrors HEXA_OWN_GEMM default-ON / opt-OUT polarity).
+    // Sound under the alias-coherence escape lattice (#4121); gated on byteeq
+    // 3-target + miscompile-zero + faithful CI (release-integrity) before merge.
+    return env("HEXA_PACK_ARRAY") != "0"
 }
 
 // element-pack FUSE gate — the precondition for the two RECON-1 (dead int
