@@ -2047,6 +2047,67 @@ fn parse_extern_fn_item(is_pub: bool, anns: [Annotation]) -> Item {
     }
 }
 
+// `type Name = Underlying` / `type Name<T> = …` — a type-alias declaration
+// (Rust `type Kilometers = i32;` / Go `type byte = uint8`). `type` is NOT a
+// keyword token in this grammar (the bootstrap lexer maps it to `Ident`); we
+// detect it at item position via `_peek_is_type_kw`, mirroring the `extern`
+// idiom (`_peek_is_extern_kw`). The alias is carried as an `ItemKind::Let`
+// (no new ItemKind variant → no exhaustive-match churn, frozen-parser safe)
+// tagged with `@phase("parse_only")` (so resolve/bind/type-check body passes
+// skip it) and a bare `__type_alias` marker (so the types pass registers the
+// alias→underlying mapping and ast_to_hir drops the carrier). The underlying
+// type lands in `return_type`; the alias name in `name`.
+fn _peek_is_type_kw() -> bool {
+    if !check_kind(TokenKind::Ident) { return false }
+    return peek().text == "type"
+}
+
+fn parse_type_alias_item(is_pub: bool, anns: [Annotation]) -> Item {
+    let kw = peek()
+    advance() // consume `type` (Ident)
+    let name_tok = expect(TokenKind::Ident)
+    // Optional generic params `type Box<T> = …` — generics are erased in this
+    // stage0 backend (the underlying shape is what codegen sees), so consume +
+    // discard the balanced `<…>` exactly like parse_struct_item does.
+    if check_kind(TokenKind::Lt) {
+        advance()
+        let mut depth = 1
+        while depth > 0 && !at_eof() {
+            let tk = peek().kind
+            if same_kind(tk, TokenKind::Lt) { depth = depth + 1 }
+            else if same_kind(tk, TokenKind::Gt) { depth = depth - 1 }
+            advance()
+            if depth == 0 { break }
+        }
+    }
+    eat(TokenKind::Eq)
+    let underlying = parse_type()
+    // `@phase("parse_only")` carrier marker — string-literal arg "parse_only"
+    // so `item_is_parse_only` returns true (resolve.hexa / bind.hexa /
+    // types.hexa body passes already gate on it).
+    let pa_arg = Expr {
+        kind: ExprKind::LiteralString,
+        span: kw.span,
+        text: "parse_only",
+        annotations: [],
+        children: [],
+        atlas_ref: empty_atlas()
+    }
+    let mut final_anns = anns
+    final_anns.push(Annotation { name: "phase", args: [pa_arg], span: kw.span })
+    final_anns.push(Annotation { name: "__type_alias", args: [], span: kw.span })
+    return Item {
+        kind: ItemKind::Let,
+        name: name_tok.text,
+        span: kw.span,
+        annotations: final_anns,
+        params: [],
+        return_type: underlying,
+        body: empty_expr(),
+        is_pub: is_pub
+    }
+}
+
 fn parse_item() -> Item {
     // accumulate annotations first
     let mut anns = []
@@ -2063,6 +2124,11 @@ fn parse_item() -> Item {
     // keyword token. Mirrors tier-2 self/hexa_full.hexa dispatch order.
     if _peek_is_extern_kw() && same_kind(peek_at(1).kind, TokenKind::KwFn) {
         return parse_extern_fn_item(is_pub, anns)
+    }
+    // `type Name = …` alias — `type` is an Ident leader (not a keyword token);
+    // require an Ident name to disambiguate from any other Ident-led form.
+    if _peek_is_type_kw() && same_kind(peek_at(1).kind, TokenKind::Ident) {
+        return parse_type_alias_item(is_pub, anns)
     }
     if check_kind(TokenKind::KwFn) {
         return parse_fn_item(is_pub, anns)
@@ -2274,7 +2340,8 @@ fn _parse_module_one(tokens: [Token], file: string) -> Module {
            || check_kind(TokenKind::KwStruct) || check_kind(TokenKind::KwEnum)
            || check_kind(TokenKind::KwImport) || check_kind(TokenKind::KwPub)
            || check_kind(TokenKind::At)
-           || (_peek_is_extern_kw() && same_kind(peek_at(1).kind, TokenKind::KwFn)) {
+           || (_peek_is_extern_kw() && same_kind(peek_at(1).kind, TokenKind::KwFn))
+           || (_peek_is_type_kw() && same_kind(peek_at(1).kind, TokenKind::Ident)) {
             let it = parse_item()
             items.push(it)
             if item_is_import(it.kind) {
