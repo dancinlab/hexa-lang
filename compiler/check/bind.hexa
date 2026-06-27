@@ -1445,7 +1445,36 @@ fn _bind_builtin_names() -> [string] {
         // nvptx_target.hexa `_nvptx_mfunc_is_matmul_shape` (N86) /
         // rocm_target.hexa `_rocm_mfunc_is_matmul_shape` /
         // metal_target.hexa `_metal_mfunc_is_matmul_shape`.
-        "gpu_matmul", "gpu_matmul_NT_a", "gpu_matmul_NT_b"
+        "gpu_matmul", "gpu_matmul_NT_a", "gpu_matmul_NT_b",
+        // FLEET A3 (#4154 follow-on) — thread/channel runtime fn-global carriers.
+        // These are NOT source-level `fn` decls: native/thread.c declares them as
+        // bare `HexaVal thread_spawn;` … carrier globals and registers them at
+        // runtime via `_hexa_init_thread_fn_shims` (thread_emit.hexa:383-398), the
+        // exact mirror of the `float_to_bits`/`bits_to_float` runtime-intrinsic
+        // pattern (see self/nanbox.hexa:223-230). #4154 fwd-declared them in
+        // runtime.h so the C-transpile / `hexa run` paths resolve `thread_spawn(f,
+        // arg)` → `hexa_call2(thread_spawn, …)` (codegen.hexa:8251 hexa_callN
+        // fallback) through the extern HexaVal carrier. The raw `aprime --emit`
+        // native path stalled BEFORE codegen: bind's S1 name-resolution saw the
+        // bare callee as unknown → HX2001 (cf. cf6fc2af8 which dropped the thread
+        // fn-globals from the escape-relax test for exactly this reason). Adding
+        // the names here ONLY registers them in the module scope (a name-resolution
+        // exemption); codegen is unaffected (they are absent from `_is_builtin_name`
+        // and `_is_known_fn_global`, so they still route through hexa_callN to the
+        // carrier). Byteeq-neutral: a name-only scope `_define` changes no emitted
+        // bytes for any program that does not reference these names, and any program
+        // that does reference them currently fails to compile (no prior byte output).
+        "thread_spawn", "thread_join",
+        "thread_channel_new", "thread_channel_send",
+        "thread_channel_recv", "thread_channel_close",
+        // …and the rest of the `_hexa_init_thread_fn_shims` carrier family that
+        // multithreaded `.hexa` references alongside spawn/join (the game thread
+        // microbench uses atomic_cell_*; now_ms is the spawn-family timer; sleep_ms
+        // is already registered above as a plain builtin). All 8 below are the same
+        // TAG_FN carrier globals (thread_emit.hexa:383-398) and resolve identically.
+        "now_ms",
+        "atomic_cell_new", "atomic_cell_load", "atomic_cell_store",
+        "atomic_cell_add", "atomic_cell_sub", "atomic_cell_cas"
     ]
 }
 

@@ -1969,6 +1969,80 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // fn pointer is the address of the lifted lambda symbol (adrp/add);
         // mirrors self/codegen_c2.hexa::gen2_lambda_expr's
         // `hexa_closure_new((void*)&__hexa_lambda_N, arity, env)`.
+        // fn-ref-as-value: hir_to_mir lowers a bare top-level-fn ident used in
+        // value position to STMT_ASSIGN op="fn_ref" with args = [name_str,
+        // arity_int]. Runtime ABI: hexa_fn_new(void* fn_ptr, int arity) →
+        // fn_ptr in x0, arity (C int) in w1; returns the TAG_FN HexaVal in
+        // x0:x1. fn_ptr = address of the user fn symbol (adrp/add @PAGE/@PAGEOFF,
+        // same symbol the direct `bl <target>` uses). TAG_FN (not TAG_CLOSURE)
+        // so the runtime call dispatch does NOT prepend an env — a plain fn
+        // `worker(start)` takes its arg directly. Mirrors the C-transpile
+        // hexa_fn_new auto-wrap.
+        if s.op == "fn_ref" && len(s.args) >= 2 {
+            let fn_sym = s.args[0].str_val
+            let fn_arity = s.args[1].int_val
+            // x0 = &<fn_sym> (PC-relative; symbol mangled by _fmt_label)
+            buf.push(_arm64_instr2("adrp", _arm64_op_reg("x0"),
+                             _arm64_op_label(fn_sym + "@PAGE"),
+                             "fn_ref: fn-ptr page"))
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x0"),
+                             _arm64_op_reg("x0"),
+                             _arm64_op_label(fn_sym + "@PAGEOFF"),
+                             "fn_ref: fn-ptr off"))
+            // w1 = arity (C int)
+            buf.push(_arm64_instr2("movz", _arm64_op_reg("x1"),
+                             _arm64_op_label("#" + to_string(fn_arity)),
+                             "fn_ref: arity"))
+            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_fn_new_native"),
+                             "fn_ref: build TAG_FN"))
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+            return buf
+        }
+        // carrier call: invoke a runtime TAG_FN/TAG_CLOSURE carrier DATA global
+        // (thread_spawn, …). hir_to_mir lowers `thread_spawn(worker, 1)` to
+        // STMT_ASSIGN op="carrier_call" args=[carrier_name_str, a1, …]. ABI:
+        // hexa_callN_native(HexaVal carrier, HexaVal a1, …) — carrier pair →
+        // x0:x1, a1 → x2:x3, a2 → x4:x5 (AAPCS64 16B HexaVal-by-value pairs).
+        // The carrier is loaded from its global: adrp/add → addr, ldp x0,x1,[addr]
+        // (lo=tag@0, hi=payload@8). Box the call args FIRST (they use x15 scratch
+        // + write x2:x3/x4:x5, never x0:x1), THEN load the carrier into x0:x1 so
+        // it survives. Returns the HexaVal in x0:x1.
+        if s.op == "carrier_call" && len(s.args) >= 1 {
+            let carrier = s.args[0].str_val
+            let ncall = len(s.args) - 1
+            // box call args into pairs 1.. (carrier is pair0=x0:x1; a1=x2:x3,
+            // a2=x4:x5, a3=x6:x7 — the carriers are all ≤2-arg so ≤x4:x5).
+            let mut ci = 1
+            while ci < len(s.args) {
+                let mut lo = "x2"
+                let mut hi = "x3"
+                if ci == 2 { lo = "x4"; hi = "x5" }
+                if ci == 3 { lo = "x6"; hi = "x7" }
+                if ci == 4 { lo = "x8"; hi = "x9" }
+                buf = _hv_load(buf, s.args[ci], st, rm, lo, hi)
+                ci = ci + 1
+            }
+            // carrier HexaVal → x0:x1 from the global symbol.
+            buf.push(_arm64_instr2("adrp", _arm64_op_reg("x9"),
+                             _arm64_op_label(carrier + "@PAGE"),
+                             "carrier_call: " + carrier + " page"))
+            buf.push(_arm64_instr3("add", _arm64_op_reg("x9"),
+                             _arm64_op_reg("x9"),
+                             _arm64_op_label(carrier + "@PAGEOFF"),
+                             "carrier_call: " + carrier + " off"))
+            buf.push(_arm64_instr3("ldp", _arm64_op_reg("x0"), _arm64_op_reg("x1"),
+                             _arm64_op_mem("x9", 0),
+                             "carrier_call: load carrier HexaVal"))
+            let mut dispatch = "hexa_call0_native"
+            if ncall == 1 { dispatch = "hexa_call1_native" }
+            if ncall == 2 { dispatch = "hexa_call2_native" }
+            if ncall == 3 { dispatch = "hexa_call3_native" }
+            if ncall == 4 { dispatch = "hexa_call4_native" }
+            buf.push(_arm64_instr1("bl", _arm64_op_label(dispatch),
+                             "carrier_call: dispatch " + carrier))
+            buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
+            return buf
+        }
         if s.op == "closure_new" && len(s.args) >= 3 {
             let lam_sym = s.args[1].str_val
             let arity = s.args[2].int_val

@@ -377,6 +377,59 @@ pub let mut _lr_frame_starts: [i64] = []
 // read-only for the rest of the pass (every fn / closure body shares).
 pub let mut _lr_globals: [Local] = []
 
+// ── fn-ref-as-value registry ─────────────────────────────────
+// Top-level `fn` names + their parameter arities, collected in a pre-pass
+// at lower_hir entry (BEFORE the body-lowering loop, so a fn referenced
+// before its own declaration still resolves). When a bare ident in VALUE
+// position (not a call callee, not a local, not a module `let` global)
+// matches a name here, it is lowered to a `closure_new` with an empty env
+// — exactly mirroring the C-transpile path's `hexa_fn_new((void*)<name>,
+// arity)` auto-wrap (self/codegen.hexa `_gen2_should_autowrap_fnref`,
+// e.g. line 4433/5411/7254). Without this, `thread_spawn(worker, 1)` (a fn
+// passed as a value across the spawn boundary) hit HX1101 "unbound
+// identifier in lower" because _mir_lookup/_mir_lookup_global only know
+// locals + ITEM_LET globals, never `fn` names. closure_new is the proven
+// indirect-callable carrier (both backends emit hexa_closure_new; the
+// runtime hexa_call1 the thread entry uses dispatches TAG_CLOSURE), so an
+// empty-env closure_new over the fn symbol is a callable fn value.
+pub let mut _lr_fn_ref_names: [string] = []
+pub let mut _lr_fn_ref_arities: [i64] = []
+
+// arity (param count) of a top-level fn name, or -1 if not a known fn.
+fn _lr_fn_ref_arity(name: string) -> i64 {
+    let mut i = 0
+    while i < len(_lr_fn_ref_names) {
+        if _lr_fn_ref_names[i] == name { return _lr_fn_ref_arities[i] }
+        i = i + 1
+    }
+    return -1
+}
+
+// ── runtime TAG_FN/TAG_CLOSURE carrier names ─────────────────
+// The `_hexa_init_thread_fn_shims` family (self/native/thread_emit.hexa) — each
+// is a `HexaVal <name>;` DATA carrier global registered at runtime, NOT a C
+// function. A call `thread_spawn(worker, 1)` must dispatch through the runtime
+// hexa_callN dispatcher (which reads the TAG_FN payload + invokes the fn-ptr),
+// NOT a direct `call thread_spawn` (which jumps into BSS data → SIGSEGV). These
+// names mirror the bind allowlist additions (compiler/check/bind.hexa) — same
+// carrier set. Mirrors the C-transpile hexa_callN fallback (codegen.hexa:8251).
+fn _lr_is_carrier_call(name: string) -> bool {
+    if name == "thread_spawn" { return true }
+    if name == "thread_join" { return true }
+    if name == "thread_channel_new" { return true }
+    if name == "thread_channel_send" { return true }
+    if name == "thread_channel_recv" { return true }
+    if name == "thread_channel_close" { return true }
+    if name == "now_ms" { return true }
+    if name == "atomic_cell_new" { return true }
+    if name == "atomic_cell_load" { return true }
+    if name == "atomic_cell_store" { return true }
+    if name == "atomic_cell_add" { return true }
+    if name == "atomic_cell_sub" { return true }
+    if name == "atomic_cell_cas" { return true }
+    return false
+}
+
 pub struct LowerCtx {
     next_local: i64,
     next_block: i64,
@@ -1065,6 +1118,41 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         if gid >= 0 {
             return _value(ctx, _global_op(gid, e.text))
         }
+        // fn-ref-as-value: a bare ident that is NOT a local/param and NOT a
+        // module `let` global, but IS a top-level `fn` name, used in value
+        // position (e.g. passed as `thread_spawn(worker, 1)`). Box it as a
+        // plain TAG_FN fn value — the native analogue of the C-transpile
+        // `hexa_fn_new((void*)worker, arity)` auto-wrap (self/codegen.hexa
+        // _gen2_should_autowrap_fnref, e.g. line 4433/5411/7254). Without this,
+        // fn-refs-as-value hit the HX1101 fatal below (native backend never
+        // supported them).
+        //
+        // MUST be TAG_FN (op="fn_ref"), NOT closure_new (TAG_CLOSURE): the
+        // runtime call dispatch (runtime.h hexa_call1_hv) PREPENDS the env for
+        // a TAG_CLOSURE — `fp(hexa_closure_env(f), a1)` — which is correct for
+        // a lifted lambda `__hexa_lambda_N(__env, …)` but WRONG for a plain fn
+        // `worker(start)` (it has no env param; the env would be read as
+        // `start`). TAG_FN dispatches `fp(a1)` with no env, matching the plain
+        // fn signature. codegen lowers op="fn_ref" → hexa_fn_new((void*)<sym>,
+        // arity). args = [name_str, arity_int].
+        let _farity = _lr_fn_ref_arity(e.text)
+        if _farity >= 0 {
+            let mut ectx = _fresh_local(ctx, e.typ, "fnref_val")
+            let fn_l = _lr_locals[len(_lr_locals) - 1]
+            let mut fn_args: [Operand] = []
+            fn_args.push(_const_str_op(e.text))
+            fn_args.push(_const_int_op(_farity))
+            let fn_s = Stmt {
+                kind: STMT_ASSIGN,
+                dst: fn_l,
+                op: "fn_ref",
+                args: fn_args,
+                target_block: -1,
+                target_block_else: -1
+            }
+            ectx = _push_stmt(ectx, fn_s)
+            return _value(ectx, _local_op(fn_l.id))
+        }
         // Stage1 punch list C5 — unbound ident in lower is fatal.
         // Previously returned `_const_int_op(0)`, masking cross-file
         // resolution failures introduced by the Gap 1 splice.
@@ -1419,6 +1507,44 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
 
     // ── call → STMT_CALL ───────────────────────────────────
     if k == "call" {
+        // carrier call: `thread_spawn(worker, 1)` etc — the callee is a runtime
+        // TAG_FN/TAG_CLOSURE carrier DATA global, not a C fn. Emit op="carrier_call"
+        // with args = [carrier_name_str, arg1, …]; codegen loads the carrier
+        // HexaVal from the global and dispatches via hexa_callN_native. Must run
+        // BEFORE the named-call path, which would emit a fatal direct `call <name>`
+        // into BSS data. Skipped if the name is shadowed by a local/global binding.
+        if len(e.children) > 0 {
+            let cc0 = e.children[0]
+            if cc0.kind == "ident" {
+                let ccn = _strip_mut_prefix(cc0.text)
+                if _lr_is_carrier_call(ccn)
+                    && _mir_lookup(ctx, ccn) < 0
+                    && _mir_lookup_global(ctx, ccn) < 0 {
+                    let mut cctx = ctx
+                    let mut cc_args: [Operand] = []
+                    cc_args.push(_const_str_op(ccn))   // args[0] = carrier symbol
+                    let mut cai = 1
+                    while cai < len(e.children) {
+                        let cr = _lower_hexpr(cctx, e.children[cai])
+                        cctx = cr.ctx
+                        cc_args.push(cr.operand)
+                        cai = cai + 1
+                    }
+                    cctx = _fresh_local(cctx, e.typ, "carrier_ret")
+                    let cdst = _lr_locals[len(_lr_locals) - 1]
+                    let cs = Stmt {
+                        kind: STMT_ASSIGN,
+                        dst: cdst,
+                        op: "carrier_call",
+                        args: cc_args,
+                        target_block: -1,
+                        target_block_else: -1
+                    }
+                    cctx = _push_stmt(cctx, cs)
+                    return _value(cctx, _local_op(cdst.id))
+                }
+            }
+        }
         let mut ctx_r = ctx
         let mut callee_text = ""
         let mut arg_ops: [Operand] = []
@@ -4004,6 +4130,31 @@ pub fn lower_hir(module: HModule) -> MModule {
     // _lower_fn / closure body resolves them via `_lr_globals` without
     // threading a per-ctx `globals` array.
     _lr_globals = globals
+    // ── fn-ref-as-value pre-pass: collect top-level fn names + arities ──
+    // Runs BEFORE the body-lowering loop so a fn used as a value (e.g.
+    // `thread_spawn(worker, 1)`) resolves even when referenced before its
+    // own declaration. Skips body-less `extern fn` (FFI decls — those are
+    // real `bl <name>` externs, never boxed as fn values). See
+    // _lr_fn_ref_arity + the `ident` value-position branch.
+    _lr_fn_ref_names = []
+    _lr_fn_ref_arities = []
+    let mut fpp = 0
+    while fpp < len(module.items) {
+        let fit = module.items[fpp]
+        if fit.kind == "ITEM_FN" {
+            let mut _is_ext = false
+            let mut _ea = 0
+            while _ea < len(fit.annotations) {
+                if fit.annotations[_ea].name == "__extern_decl" { _is_ext = true; break }
+                _ea = _ea + 1
+            }
+            if !_is_ext {
+                _lr_fn_ref_names.push(fit.name.substring(0, len(fit.name)))
+                _lr_fn_ref_arities.push(len(fit.sig_params))
+            }
+        }
+        fpp = fpp + 1
+    }
     let mut funcs: [MFunc] = []
     let mut fn_names: [string] = []
     let mut i = 0
