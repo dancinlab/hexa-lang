@@ -1,0 +1,146 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  test/channel_2p2c_e2e.hexa — FLEET 잔여 #4 r2: thread_channel producer/consumer
+//  end-to-end.
+//
+//  Builds on #4154 (thread_spawn/join real-pthread e2e). That lane proved
+//  spawn/join + a SHARED buffer; it did NOT exercise the mutex+condvar CHANNEL
+//  hand-off. This lane closes that gap: a SMALL N:M producer–consumer in which
+//  2 producers push integers into a `thread_channel_*` queue and 2 consumers
+//  drain it, with an order-insensitive total-sum oracle.
+//
+//  PRIMITIVE CENSUS (self/native/thread.c · emitter self/native/thread_emit.hexa):
+//    · thread_channel_new()            thread.c:134  → ch_id (>=0) / -errno
+//    · thread_channel_send(ch, v)      thread.c:157  → 0 / -errno (-EPIPE if closed,
+//                                                       blocks while full, CAP=1024)
+//    · thread_channel_recv(ch, t_ms)   thread.c:183  → val OR "" sentinel
+//                                                       t<0 block · t=0 nonblock · t>0 timed
+//    · thread_channel_close(ch)        thread.c:224  → 0 / -errno (broadcasts not_empty,
+//                                                       wakes blocked recv → "" once drained)
+//    fn-global carriers: thread.c:261-264 / runtime.h:735-738 (#4157 bind reg).
+//    Real pthread/condvar engaged only when runtime.c is built -DHEXA_THREADS
+//    (runtime_emit_full.hexa:2472); the DEFAULT build is a synchronous shim
+//    (cond_wait = no-op) so blocking ops would spin — therefore ALL channel ops
+//    live behind the `env("HEXA_THREADS")` gate, exactly like #4154.
+//
+//  ── TWO halves (both byteeq-NEUTRAL: NEW test file only, no runtime change) ──
+//    (1) ORACLE — always runs, DEFAULT-BUILD-SAFE. Pure arithmetic: the total
+//        sum each producer WILL push. No channel / thread ops. Locks the target.
+//    (2) REAL 2P+2C — runs only when env("HEXA_THREADS") != "" AND the build is
+//        -DHEXA_THREADS (real OS threads + condvars). 2 consumers spawn FIRST and
+//        BLOCK on the empty channel; 2 producers then push; producers join; the
+//        channel is closed; consumers drain remaining + see the close sentinel
+//        and return their partial sums. Σ(consumer sums) must == oracle.
+//
+//  Run on aiden (mini cannot build):
+//    HEXA_THREADS=1 hexa run test/channel_2p2c_e2e.hexa   # real 2P+2C
+//                   hexa run test/channel_2p2c_e2e.hexa   # oracle only
+//  (see tool/measure_thread_channel_e2e.sh for the -DHEXA_THREADS build recipe)
+// ═══════════════════════════════════════════════════════════════════════════
+
+let ITEMS = 200          // integers each producer pushes
+let BIG   = 1000000      // per-producer value offset (keeps producer ranges disjoint)
+let mut CH = -1          // channel id (set inside the threaded gate; referenced by workers)
+
+let mut pass_count = 0
+let mut fail_count = 0
+
+fn check(name, actual, expected) {
+    if to_string(actual) == to_string(expected) {
+        println("[PASS] " + name)
+        pass_count = pass_count + 1
+    } else {
+        println("[FAIL] " + name + " — expected: " + to_string(expected) + ", got: " + to_string(actual))
+        fail_count = fail_count + 1
+    }
+}
+
+// ── PRODUCER (one HexaVal arg = partition id 0/1). Pushes ITEMS integers
+//    base*BIG + i for i in 1..=ITEMS into the shared channel CH. Returns its
+//    own pushed-sum so the count of producers is also implicitly checked.
+fn producer(base) {
+    let mut i = 1
+    let mut s = 0
+    while i <= ITEMS {
+        let v = base * BIG + i
+        let _r = thread_channel_send(CH, v)
+        s = s + v
+        i = i + 1
+    }
+    return s
+}
+
+// ── CONSUMER (arg unused). Drains CH with blocking recv (-1) until the close
+//    sentinel ("" empty string) is observed; accumulates the integer sum of all
+//    items it pulled. Returns that partial sum.
+fn consumer(arg) {
+    let mut acc = 0
+    let mut running = 1
+    while running == 1 {
+        let v = thread_channel_recv(CH, -1)
+        if to_string(v) == "" {
+            running = 0
+        } else {
+            acc = acc + to_int(v)
+        }
+    }
+    return acc
+}
+
+println("═══════════════════════════════════════════════════════")
+println("  HEXA thread_channel 2P+2C producer–consumer — FLEET #4 r2")
+println("═══════════════════════════════════════════════════════")
+
+// ── (1) ORACLE — pure arithmetic total both producers will push ─────────────
+// producer base: Σ_{i=1..ITEMS} (base*BIG + i) = base*BIG*ITEMS + ITEMS*(ITEMS+1)/2
+let tri = (ITEMS * (ITEMS + 1)) / 2
+let oracle_total = (0 * BIG * ITEMS + tri) + (1 * BIG * ITEMS + tri)
+println("  ITEMS/producer=" + to_string(ITEMS) + "  producers=2  → oracle total sum=" + to_string(oracle_total))
+// Hand value: ITEMS=200 → tri=20100; p0=20100; p1=200*1e6+20100=200020100; total=200040200.
+check("oracle arithmetic == hand value 200040200", oracle_total, 200040200)
+
+// ── (2) REAL 2P+2C spawn → channel → drain → join (HEXA_THREADS opt-in) ──────
+if env("HEXA_THREADS") != "" {
+    println("--- real 2P+2C thread_channel hand-off (HEXA_THREADS opt-in) ---")
+    CH = thread_channel_new()
+    check("thread_channel_new returns valid id (>=0)", CH >= 0, true)
+
+    // (a) nonblocking recv on the empty channel returns the "" sentinel.
+    let empty_peek = thread_channel_recv(CH, 0)
+    check("nonblocking recv on empty channel == \"\" sentinel", to_string(empty_peek), "")
+
+    // (b) timed recv on the empty channel blocks then returns "" on timeout.
+    let timed_peek = thread_channel_recv(CH, 50)
+    check("timed (50ms) recv on empty channel == \"\" sentinel", to_string(timed_peek), "")
+
+    // 2 consumers spawn FIRST → they BLOCK on the empty channel (blocking hand-off).
+    let c0 = thread_spawn(consumer, 0)
+    let c1 = thread_spawn(consumer, 1)
+    // 2 producers push (signalling not_empty → wakes the blocked consumers).
+    let p0 = thread_spawn(producer, 0)
+    let p1 = thread_spawn(producer, 1)
+    // Join producers: guarantees every item has been pushed before we close.
+    let ps0 = thread_join(p0)
+    let ps1 = thread_join(p1)
+    check("Σ producer pushed-sums == oracle", to_int(ps0) + to_int(ps1), oracle_total)
+    // Close: broadcasts not_empty so blocked consumers drain remaining + see "".
+    let _cl = thread_channel_close(CH)
+    // Join consumers: each returns its order-insensitive partial sum.
+    let s0 = thread_join(c0)
+    let s1 = thread_join(c1)
+    let consumed_total = to_int(s0) + to_int(s1)
+    check("2P+2C channel consumed total == oracle (no loss/dup)", consumed_total, oracle_total)
+
+    // (c) after close, a fresh blocking recv still returns "" (closed signal).
+    let post_close = thread_channel_recv(CH, -1)
+    check("blocking recv on closed+drained channel == \"\" sentinel", to_string(post_close), "")
+} else {
+    println("--- real 2P+2C SKIPPED (set HEXA_THREADS to run) ---")
+}
+
+println("")
+println("═══════════════════════════════════════════════════════")
+println("  RESULT: " + to_string(pass_count) + " passed, " + to_string(fail_count) + " failed")
+println("═══════════════════════════════════════════════════════")
+if fail_count > 0 {
+    exit(1)
+}
