@@ -5625,6 +5625,14 @@ fn gen2_expr(node) {
         let r = gen2_expr(node.right)
         // Int arithmetic
         if op == "+" {
+            // Operator overloading (opt-in HEXA_OP_OVERLOAD, RFC operator-overload).
+            // When a struct type declares an `__add` impl method, dispatch `a + b`
+            // to it at runtime via hexa_is_type; otherwise emit the unchanged
+            // hexa_add path. Default OFF → byte-identical to the line below.
+            if _op_overload_enabled() {
+                let _ov = _op_overload_emit(_op_overload_method("+"), l, r, "hexa_add")
+                if _ov != "" { return _ov }
+            }
             return "hexa_add(" + l + ", " + r + ")"
         }
         // T23 fix: route -, *, /, % through runtime helpers (hexa_sub/
@@ -9938,6 +9946,99 @@ fn _method_registry_lookup(name) {
     return out
 }
 
+// ── Operator overloading (RFC operator-overload, opt-in) ─────────
+// GATED opt-in: HEXA_OP_OVERLOAD=1 (default OFF). When the flag is absent
+// EVERY binary-op codegen path is byte-for-byte UNCHANGED (the dispatch helper
+// is never consulted), so DEFAULT byteeq across all three targets is preserved.
+//
+// Design (reference-matched):
+//   Rust  std::ops::Add::add(self, rhs)   (library/core/src/ops/arith.rs)
+//   Swift static func + (lhs, rhs) -> Self (stdlib AdditiveArithmetic)
+// hexa surface: declare an ordinary method named `__add` in an `impl T { … }`
+// block — NO new keyword and NO new @attr (frozen-parser-safe). `a + b` then
+// lowers to `T__add(a, b)` when `a` is a runtime instance of a type T whose
+// impl block declares `__add`; any non-struct (int/float/string/array) operand
+// falls through to the existing `hexa_add` runtime path. Dispatch is RUNTIME
+// (via the already-shipping `hexa_is_type` substrate symbol) — no static type
+// inference and NO runtime.c edit (mirrors the P2-6 method-call dispatch at the
+// Call-on-Field site).
+//
+// Slice scope: `+` → `__add` only. The op→method table below already lists the
+// full Rust arithmetic set so follow-up rounds wire `-`/`*`/`/`/`%` by adding
+// one call site each; see state/rfc_operator_overload.md.
+fn _op_overload_enabled() {
+    return env("HEXA_OP_OVERLOAD") != ""
+}
+
+// Map a BinOp operator string to its overload method name, or "" when the
+// operator is not overloadable. Rust std::ops naming (add/sub/mul/div/rem).
+fn _op_overload_method(op) {
+    if op == "+" { return "__add" }
+    if op == "-" { return "__sub" }
+    if op == "*" { return "__mul" }
+    if op == "/" { return "__div" }
+    if op == "%" { return "__rem" }
+    return ""
+}
+
+// Pre-register every `impl T { … }` method into `_method_registry` BEFORE the
+// emit loop walks the AST, so operator-overload dispatch is independent of
+// whether the impl block precedes or follows the use site in source order.
+// Idempotent w.r.t. gen2_impl_block's own per-method push (the dispatch helper
+// dedups types), and a NO-OP unless the opt-in flag is set — so the DEFAULT
+// emit path never sees an extra registry entry. decreases nothing — pure scan.
+fn _op_overload_prescan(ast) {
+    if !_op_overload_enabled() { return }
+    let mut i = 0
+    while i < len(ast) {
+        if ast[i].kind == "ImplBlock" {
+            let _tn = ast[i].target
+            let _ms = ast[i].methods
+            let mut mi = 0
+            while mi < len(_ms) {
+                _method_registry.push([_ms[mi].name, _tn])
+                mi = mi + 1
+            }
+        }
+        i = i + 1
+    }
+}
+
+// Build the runtime-dispatched C expression for an overloaded binary operator.
+// `l`/`r` are the already-generated operand C-expressions; `fb_fn` is the
+// fallback runtime helper (e.g. "hexa_add"). Both operands are bound to single
+// temps so each side is evaluated exactly once (mirrors the P2-6 `__mr`
+// stmt-expr). Returns "" when no impl declares `method` (caller keeps its
+// existing fallback emission verbatim → byteeq when nothing overloads).
+fn _op_overload_emit(method, l, r, fb_fn) {
+    let _types = _method_registry_lookup(method)
+    if len(_types) == 0 { return "" }
+    // dedup type names (prescan + emit-time push can both register a type).
+    let mut _ut = []
+    let mut _ti = 0
+    while _ti < len(_types) {
+        let _t = _types[_ti]
+        let mut _seen = false
+        let mut _si = 0
+        while _si < len(_ut) {
+            if _ut[_si] == _t { _seen = true }
+            _si = _si + 1
+        }
+        if !_seen { _ut.push(_t) }
+        _ti = _ti + 1
+    }
+    // Innermost fallback uses the bound temps so the operands are evaluated
+    // once regardless of which arm fires.
+    let mut _chain = fb_fn + "(__ovl, __ovr)"
+    let mut _ci = len(_ut) - 1
+    while _ci >= 0 {
+        let _t = _ut[_ci]
+        _chain = "(hexa_is_type(__ovl, \"" + _t + "\") ? " + _t + "__" + method + "(__ovl, __ovr) : " + _chain + ")"
+        _ci = _ci - 1
+    }
+    return "({ HexaVal __ovl = " + l + "; HexaVal __ovr = " + r + "; " + _chain + "; })"
+}
+
 // Emit one C function per impl method using mangled name Type__method.
 // Returns a map with `forward` and `fn_code` strings and registers each
 // method into `_method_registry`.
@@ -13430,6 +13531,9 @@ fn codegen_full(ast) {
     _lambda_def_parts = []
     _lambda_fwd_sigs = []
     _method_registry = []
+    // Operator overloading (opt-in): pre-register impl methods so `a + b`
+    // dispatch is source-order-independent. NO-OP unless HEXA_OP_OVERLOAD set.
+    _op_overload_prescan(ast)
     _known_fn_globals = []
     _known_nonlocal_names = []
     _known_set_init()
