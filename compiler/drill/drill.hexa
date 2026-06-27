@@ -36,6 +36,7 @@
 use "compiler/drill/round"
 use "compiler/drill/checkpoint"
 use "compiler/drill/anti_hub"
+use "compiler/drill/emerge"
 use "compiler/smash/candidate"
 use "compiler/honesty/check"
 use "compiler/atlas/identity_engine"
@@ -894,6 +895,21 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
     // any round that verifies an identity widens round N+1's well.
     let mut absorbed_pool: array = []
 
+    // ── [B] Open-well Emerge vocab (ouroboros well-widening, README:75) ──
+    // The cumulative integer "open well" the Emerge step grows each round by
+    // COMBINING absorbed primitives into new structure the prior cycle could
+    // not express (archive-nexus/README.md:83/115 — "open well … every Absorb
+    // step widens the wall"). Seeded round 1 from V_0 {2,3} + the round's
+    // discovery candidate value signatures; each subsequent round it widens
+    // further (emerge_step). The frozen-LLM contrast (vocab fixed at the seed
+    // set) is reported alongside per round so the open-vs-frozen claim is
+    // MEASURED, not asserted. In-memory ONLY (never written to the embedded
+    // atlas; fold stays `hexa verify` g5 / PR). The decisive falsifiable spec
+    // (E4 — V_0={2,3}, 300 cycles, growth >= 50) is the `emerge` selftest
+    // (compiler/drill/emerge_test.hexa); this production wiring runs a bounded
+    // per-round step so the well grows across the drill loop.
+    let mut emerge_well: array = []
+
     // C5 novelty-fixpoint state. The cumulative distinct-id set spans the
     // whole invocation; _flush_discoveries_cum dedups against it and reports
     // `net_novel` (ids new THIS round). A round adding zero net-novel
@@ -971,6 +987,19 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
             seed_pool.push(to_string(absorbed_pool[ap]))
             ap = ap + 1
         }
+
+        // ── [B] Emerge step (open-well well-widening · README:75) ─────
+        // After Absorb feeds verified primitives forward, the Emerge step
+        // COMBINES the round's absorbed primitives into NEW structure the
+        // prior cycle had no primitive for (archive-nexus/README.md:75/83/
+        // 115). We grow the cumulative integer open well from this round's
+        // discovery candidate value signatures and emit a DRILL_EMERGE audit
+        // row contrasting the open well (grows) with the frozen-LLM vocab
+        // (fixed at the seed set {2,3} → size 2 — never grows). SAFE: in-
+        // memory only (no atlas write); deterministic (byte-eq preserved).
+        let es = emerge_step(emerge_well, round, rr.discoveries)
+        emerge_well = es.vocab
+        emerge_audit_emit(round, es.net_walls, es.vocab_size, 2)
 
         // ── surface proposals (no external oracle) ───────────────────
         // No EXTERNAL verifier installed (verifier_cmd == "" → native sweep
