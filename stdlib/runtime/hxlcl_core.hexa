@@ -281,6 +281,89 @@ pub fn hxlcl_strcat(dst: HexaVal, src: HexaVal) -> int {
     return pd
 }
 
+// ── SEARCH FAMILY (Route C batch F · pure byte-scan leaves, return raw pointer) ──
+//
+// SEARCH = a self-contained byte walk that returns a raw char* INTO the input
+// (the match position) or NULL(0). Same leaf class as the compare/copy family:
+// no syscall, no float, no inner call, no errno — every op is a raw-payload
+// intrinsic over ZERO-EXTENDED byte loads (__hx_ptr_load8). The `int` return
+// type carries the raw pointer word (never boxed), exactly like the
+// strcpy/strncpy/strcat leaves return the dst pointer raw. Reference-matched to
+// the frozen 0-libc floor bodies self/runtime.c rt_strchr:407 / rt_strstr:433 —
+// the same non-NULL-guarded source the compare leaves cite (C strchr/strstr with
+// a NULL arg is UB; every non-NULL caller is byte-identical). No arm64 call-shape
+// divergence (pure compute · NR-irrelevant · identical x86_64/arm64 codegen).
+
+// hxlcl_strchr: return a pointer to the first `c` byte of NUL-terminated `s`,
+// or NULL. BYTE-FAITHFUL to self/runtime.c:407 (rt_strchr):
+//   target=(unsigned char)c; for(i;;i++){ x=(unsigned char)s[i];
+//     if(x==target) return s+i; if(x==0) return (target==0)?s+i:NULL; }.
+// The (target==0) special case folds away by testing the target match BEFORE the
+// NUL check: for c==0 the terminator is the first byte equal to target, so the
+// match branch returns s+i there — musl's strchr.c relies on the same ordering.
+pub fn hxlcl_strchr(s: HexaVal, c: HexaVal) -> int {
+    let ps = __hx_payload_add(s, 0)
+    let target = __hx_payload_and(c, 255)     // (unsigned char)c
+    let mut i = 0
+    while true {
+        let x = __hx_ptr_load8(ps, i)         // (unsigned char)s[i]
+        if __hx_payload_eq(x, target) {
+            return __hx_payload_add(ps, i)    // s + i (match; also the NUL when target==0)
+        }
+        if __hx_payload_eq(x, 0) {
+            return 0                          // end of string, no match → NULL
+        }
+        i = __hx_payload_add(i, 1)
+    }
+    return 0
+}
+
+// hxlcl_strstr: return a pointer to the first occurrence of NUL-terminated needle
+// `n` in haystack `h`, or NULL. BYTE-FAITHFUL to self/runtime.c:433 (rt_strstr ·
+// naive O(|h|·|n|) byte compare — correctness, not two-way speed):
+//   if(n[0]==0) return h;
+//   for(i=0; h[i]; i++){ j=0; while(n[j] && h[i+j]==n[j]) j++;
+//                        if(n[j]==0) return h+i; }  return NULL.
+// `break`-free in the frozen-parser style of hxlcl_strncpy: the inner scan stops
+// by clearing a `cont` flag (needle exhausted OR mismatch), and after the inner
+// loop `nj` still holds n[j] — nj==0 means the needle was fully matched.
+pub fn hxlcl_strstr(h: HexaVal, n: HexaVal) -> int {
+    let ph = __hx_payload_add(h, 0)
+    let pn = __hx_payload_add(n, 0)
+    let n0 = __hx_ptr_load8(pn, 0)            // n[0]
+    if __hx_payload_eq(n0, 0) {
+        return ph                             // empty needle → match at h[0]
+    }
+    let mut i = 0
+    let mut hi = __hx_ptr_load8(ph, 0)        // h[i]
+    while __hx_payload_ne(hi, 0) {            // for(; h[i]; )
+        let mut j = 0
+        let mut nj = __hx_ptr_load8(pn, 0)    // n[j] (n[0] at j=0)
+        let mut cont = 1
+        while __hx_payload_ne(cont, 0) {      // while(n[j] && h[i+j]==n[j])
+            if __hx_payload_eq(nj, 0) {
+                cont = 0                      // needle exhausted → full match
+            }
+            if __hx_payload_ne(cont, 0) {
+                let off = __hx_payload_add(i, j)
+                let hij = __hx_ptr_load8(ph, off)   // h[i+j]
+                if __hx_payload_ne(hij, nj) {
+                    cont = 0                  // mismatch → stop inner scan
+                } else {
+                    j = __hx_payload_add(j, 1)
+                    nj = __hx_ptr_load8(pn, j)      // n[j]
+                }
+            }
+        }
+        if __hx_payload_eq(nj, 0) {           // n[j]==0 → needle fully matched
+            return __hx_payload_add(ph, i)    // h + i
+        }
+        i = __hx_payload_add(i, 1)
+        hi = __hx_ptr_load8(ph, i)            // h[i]
+    }
+    return 0                                  // not found → NULL
+}
+
 // ── COMPOSITE FAMILY (Route C r7 · non-leaf — inner C-ABI bl to a sibling) ──
 //
 // COMPOSITE = the body is not a self-contained byte loop; it CALLS another

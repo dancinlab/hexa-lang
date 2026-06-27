@@ -1287,6 +1287,15 @@ pub fn _is_cabi(fname: string) -> bool {
     // The darwin leg returns -1 (genuine 2nd-return-reg wall; real darwin pipe stays
     // the floor _cf shim). time/poll stay DEFERRED (need a scratch-buffer substrate).
     if fname == "hxlcl_pipe" { return true }
+    // batch F search family — strchr / strstr. Pure byte-scan LEAVES (no syscall,
+    // no float, no inner call, no errno): each walks the input with __hx_ptr_load8
+    // ZERO-EXTENDED reads and returns a raw char* (the match position) or NULL(0)
+    // in the single C-ABI result register — the SAME class as the compare/copy
+    // leaves (strcmp/strcpy …), only the return value is a pointer-into-input
+    // instead of a diff/dst. Byte-faithful to the frozen 0-libc floor bodies
+    // self/runtime.c rt_strchr / rt_strstr. No arm64 call-shape divergence.
+    if fname == "hxlcl_strchr" { return true }
+    if fname == "hxlcl_strstr" { return true }
     return false
 }
 

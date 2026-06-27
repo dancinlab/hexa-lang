@@ -78,7 +78,7 @@ miss=0
 # Tests the symbols CURRENTLY whitelisted on main (9 pure-arith + composites).
 # Each composite PR adds its symbol here — the standing ON-path gate grows with
 # the _is_cabi whitelist.
-for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe; do
+for s in strlen memcpy memset memcmp strcmp strncmp strcpy strncpy strcat atoi strdup calloc realloc getpid getuid getgid getppid geteuid getegid close read lseek dup2 mkdir stat waitpid write fcntl mmap open_sys getrusage pipe strchr strstr; do
     if grep -qE " T _hxlcl_${s}\$" <<<"$syms"; then
         :
     else
@@ -172,6 +172,13 @@ extern int    hxlcl_getrusage(int who, void *usage);
  * 2nd-return-register, unreachable by single-result __hx_syscall6); the Linux
  * sibling (pipe2 out-ptr) carries the success/roundtrip claim. */
 extern int    hxlcl_pipe(int fds[2]);
+
+/* batch F search family — strchr / strstr. Pure byte-scan leaves (no syscall, no
+ * errno, no inner call); each returns a raw char* into the input or NULL. Fully
+ * exercised here (cross-target-identical compute — the byteeq build proves the
+ * emit is bit-equal on all 3 targets; this run proves the BEHAVIOUR). */
+extern char  *hxlcl_strchr(const char *s, int c);
+extern char  *hxlcl_strstr(const char *h, const char *n);
 
 /* Inner-callee leaves the composites bl into — the retained-shim role, supplied
  * here (sole provider) so there is no multidef with the libc shim: atoll for
@@ -414,6 +421,31 @@ int main(void) {
         CK(hxlcl_pipe(pfd) == -1, "pipe() == -1 on darwin (documented 2nd-return-reg wall)");
     }
 
+    /* batch F: strchr / strstr — pure byte-scan leaves (cross-target-identical,
+     * fully exercised here). strchr returns a pointer INTO the input at the match
+     * (or NULL); the c==0 case must return the terminator pointer (folded match
+     * ordering). strstr returns a pointer to the first substring occurrence (or
+     * NULL); empty needle → haystack head. The returned pointers are checked by
+     * identity (== s + offset) AND by content, so a PAIR-MODEL ABI leak (boxed
+     * pointer) or an off-by-one would be caught. */
+    {
+        const char *abc = "abcXYZabc";
+        CK(hxlcl_strchr(abc, 'X') == abc + 3, "strchr finds first 'X' at &abc[3]");
+        CK(hxlcl_strchr(abc, 'a') == abc + 0, "strchr finds first 'a' at &abc[0]");
+        CK(hxlcl_strchr(abc, 'z') == NULL,    "strchr('z') → NULL (absent)");
+        CK(hxlcl_strchr(abc, 0) == abc + 9,   "strchr(0) → terminator pointer");
+    }
+    {
+        const char *hay = "hello world";
+        CK(hxlcl_strstr(hay, "ll")    == hay + 2, "strstr 'll' → &hay[2]");
+        CK(hxlcl_strstr(hay, "world") == hay + 6, "strstr 'world' → &hay[6]");
+        CK(hxlcl_strstr(hay, "hello") == hay + 0, "strstr 'hello' → &hay[0]");
+        CK(hxlcl_strstr(hay, "")      == hay + 0, "strstr empty needle → &hay[0]");
+        CK(hxlcl_strstr(hay, "xyz")   == NULL,    "strstr 'xyz' → NULL (absent)");
+        CK(hxlcl_strstr(hay, "worlds") == NULL,   "strstr needle past haystack end → NULL");
+        CK(hxlcl_strstr("aaa", "aab") == NULL,    "strstr partial-then-mismatch → NULL");
+    }
+
     if (fails == 0) { printf("[routec-smoke] all Route C asserts PASS\n"); return 0; }
     printf("[routec-smoke] %d assert(s) FAILED\n", fails);
     return 1;
@@ -426,4 +458,4 @@ echo "[routec-smoke] (3) compile harness + link Route C .o + run …"
 "$TMP/routec_smoke"
 rc=$?
 [ "$rc" -eq 0 ] || { echo "[routec-smoke] FATAL: behaviour run rc=$rc" >&2; exit 1; }
-echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (13 symbols: 9 pure-arith + atoi + strdup + calloc + realloc, darwin-arm64)"
+echo "[routec-smoke] GREEN — Route C ON-path emit links + runs correct (pure-arith + composite + syscall families + batch F search strchr/strstr, darwin-arm64)"
