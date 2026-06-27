@@ -1126,6 +1126,114 @@ fn _types_lookup_variant_payload_types(enum_name: string, variant_name: string) 
     return _types_miss_variant_lookup()
 }
 
+// Wall A r5 — struct field-type registry (parallel-array side index).
+//
+// The env's struct binding (`Type{kind="struct", args=[field types]}`) keeps
+// the field types in declaration ORDER but DROPS the field NAMES — and the
+// Module (the only carrier of `struct.params[i].name`) is NOT in `_infer_expr`
+// scope (CheckCtx holds only fn_name/fn_return/module). So a `s.field = expr`
+// field-assign cannot recover the declared field type from the env alone.
+// Mirror the enum payload registry exactly: at `_collect_item_types` time
+// (where the struct Item IS in scope) record, per struct, its field NAMES and
+// the NAMED-type SPELLING of each field, into module-global parallel arrays a
+// later `_infer_expr` site can query by (struct_name, field_name) without a
+// second pass over module.items. Lifetime == one `type_check()` call (reset on
+// entry, alongside the enum registry). Populated UNCONDITIONALLY (byte-neutral
+// — pure data, no diagnostic) but READ only under the opt-in flag, so the
+// default build is byte-identical (byteeq / gen3≡gen4 preserved). Only the
+// `kind == "named"` spelling is stored (the common scalar/nominal field case —
+// `x: i32`, `inner: Widget`); non-named fields store "" → the r5 fit check
+// conservatively skips them (r6+ scope).
+let mut _types_struct_names: [string] = []
+let mut _types_struct_field_offsets: [i64] = []
+let mut _types_struct_field_counts: [i64] = []
+let mut _types_struct_field_names: [string] = []
+let mut _types_struct_field_typenames: [string] = []
+
+fn _types_struct_registry_reset() {
+    _types_struct_names = []
+    _types_struct_field_offsets = []
+    _types_struct_field_counts = []
+    _types_struct_field_names = []
+    _types_struct_field_typenames = []
+}
+
+// Populate the registry for one struct Item. No-op for non-struct items.
+// Called from `_collect_item_types` per-item AFTER the cross-file collision
+// `continue` (so only the first, surviving struct of a duplicated name is
+// recorded) — same structural slot as `_types_register_enum_item_payloads`.
+fn _types_register_struct_item_fields(it: Item) {
+    if !_types_is_struct_item(it.kind) { return }
+    _types_struct_names.push(it.name)
+    _types_struct_field_offsets.push(len(_types_struct_field_names))
+    _types_struct_field_counts.push(len(it.params))
+    let mut fi = 0
+    while fi < len(it.params) {
+        let p = it.params[fi]
+        _types_struct_field_names.push(p.name)
+        let mut spell = ""
+        if p.typ.kind == "named" { spell = p.typ.name }
+        _types_struct_field_typenames.push(spell)
+        fi = fi + 1
+    }
+}
+
+// Result of a struct field lookup. `found=false` is the "skip" signal (the
+// receiver is not a known struct, or has no such field → the r5 fit check
+// stays silent — field-existence / HX2005-style diagnostics are r6+ scope).
+// `field_typename` is the declared field type's NAMED spelling, "" when the
+// field's type was non-named (r6+).
+pub struct StructFieldLookup {
+    found: bool,
+    field_typename: string
+}
+
+fn _types_lookup_struct_field_typename(struct_name: string, field_name: string) -> StructFieldLookup {
+    let mut si = 0
+    while si < len(_types_struct_names) {
+        if _types_struct_names[si] == struct_name {
+            let off = _types_struct_field_offsets[si]
+            let cnt = _types_struct_field_counts[si]
+            let mut fi = 0
+            while fi < cnt {
+                if _types_struct_field_names[off + fi] == field_name {
+                    return StructFieldLookup { found: true, field_typename: _types_struct_field_typenames[off + fi] }
+                }
+                fi = fi + 1
+            }
+            return StructFieldLookup { found: false, field_typename: "" }
+        }
+        si = si + 1
+    }
+    return StructFieldLookup { found: false, field_typename: "" }
+}
+
+// Wall A r5 — strip the `named:` prefix a struct-typed receiver's inferred /
+// recorded Type carries (`_types_lower_type_ref` lowers any non-primitive
+// named annotation `Point` to kind `named:Point`). Returns the bare struct
+// name, or "" when `k` is not a `named:` kind. `.chars()`-based mirror of
+// `_types_array_elem_kind` — no new builtin, frozen-seed-safe.
+fn _types_struct_name_of(k: string) -> string {
+    let pfx = "named:"
+    let chars = k.chars()
+    let n = len(chars)
+    let pch = pfx.chars()
+    let plen = len(pch)
+    if n <= plen { return "" }
+    let mut pi = 0
+    while pi < plen {
+        if chars[pi] != pch[pi] { return "" }
+        pi = pi + 1
+    }
+    let mut out = ""
+    let mut i = plen
+    while i < n {
+        out = out + to_string(chars[i])
+        i = i + 1
+    }
+    return out
+}
+
 // EnumPath text encodes "Enum::Variant" — mirror of bind.hexa's
 // `_enum_head` / `_enum_variant_tail` (kept module-local here to avoid
 // cross-module dependency between check/types.hexa and check/bind.hexa).
@@ -1686,6 +1794,45 @@ fn _types_is_index(k: ExprKind) -> bool {
     }
 }
 
+// Wall A r5 — Field-expr probe (stage0 has no derived Eq). Mirrors the
+// per-ExprKind match shape of `_types_is_index`; only `ExprKind::Field`
+// (a postfix `a.field` access, parser.hexa:715 — `text`=field name,
+// `children[0]`=receiver) is true. Used so the assign arm can distinguish a
+// `s.field = …` field-place LHS from a plain ident / index LHS.
+fn _types_is_field(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Field -> true,
+        ExprKind::Index -> false,
+        ExprKind::Assign -> false,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::Ident -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
 // Wall A r4 — parse the element-type spelling out of a sized/unsized array
 // annotation. The parser (parser.hexa:parse_type, RFC 085) encodes `[T; N]`
 // as the type-name `Array:<elem>:<N>` and bare `[T]` as `Array:<elem>`;
@@ -1822,6 +1969,26 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                             let elem = _types_array_elem_kind(tt)
                             if len(elem) > 0 && _types_kind_is_scalar(elem) {
                                 benv = _types_env_define(benv, "[]" + nm, _types_miss_def_id(), _prim(elem, ""))
+                            }
+                            // Wall A r5 — block-local struct-var tracking. A
+                            // `let s: Point` lowers to kind `named:Point`
+                            // (parser.hexa annotation → _types_lower_type_ref).
+                            // Record it under a COLLISION-FREE key, `{}<name>`
+                            // — an identifier can never start with `{`, so this
+                            // never shadows a plain ident lookup of `s` (the
+                            // whole-struct binding stays unrecorded, exactly as
+                            // before, mirroring r4's `[]name` discipline) — so a
+                            // LATER `s.field = <expr>` field-assign (Assign arm)
+                            // can recover the receiver's struct name. Params and
+                            // module-level struct `let`s already carry their
+                            // `named:` type in the env (bound by
+                            // `_types_bind_params` / `_collect_item_types`), so
+                            // the assign arm resolves those by re-inferring the
+                            // receiver — this block branch only adds coverage for
+                            // block-local decls. Whether it names a REAL struct
+                            // is gated downstream by the field registry lookup.
+                            if len(_types_struct_name_of(declared.kind)) > 0 {
+                                benv = _types_env_define(benv, "{}" + nm, _types_miss_def_id(), declared)
                             }
                         }
                     }
@@ -2061,6 +2228,53 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
                             if !_types_assignable(elem_t, rhs_t, e.children[1]) {
                                 _emit_hx3011(elem_t, rhs_t, e.span, out)
                                 r3_rejected = true
+                            }
+                        }
+                    }
+                } else if _types_is_field(e.children[0].kind) && len(e.children[0].children) > 0 {
+                    // Wall A r5 — struct field-type assign REJECT. The LHS is a
+                    // `s.field` access (Field: text=field name, children[0]=
+                    // receiver, parser.hexa:715). When the receiver is a plain
+                    // ident of a KNOWN struct type, the registered declared type
+                    // of `field` (side registry, since the env's struct Type
+                    // drops field names) and the inferred RHS are BOTH known
+                    // scalars that provably disagree, REJECT with HX3011 — the
+                    // Rust E0308 field-place coercion path:
+                    // rustc_hir_typeck/src/expr.rs `check_field` /
+                    // `check_expr_assign` → `demand_coerce` →
+                    // `FnCtxt::report_mismatched_types` (the SAME E0308 emitter
+                    // the r1/r2/r3/r4 arms mirror). `lhs_t` from `_infer_expr`
+                    // on a Field is the STUB-v1 unknown, so the field type comes
+                    // from the registry — NOT lhs_t. The receiver's struct name
+                    // is recovered two ways: a block-local `let s: Point` is in
+                    // the `{}name` env slot; a param / module-let struct var
+                    // carries its `named:Point` type directly, recovered by
+                    // re-inferring the receiver into a SCRATCH sink (no double-
+                    // report). int/float-literal RHS still coerces; an unknown
+                    // receiver, non-struct field, or non-scalar field stays r6+
+                    // silent. Suppresses the generic HX3001 (`r3_rejected`).
+                    let fnode = e.children[0]
+                    let recv = fnode.children[0]
+                    if _types_is_ident(recv.kind) && len(recv.text) > 0 && len(fnode.text) > 0 {
+                        let mut sname = ""
+                        let blk = _types_env_lookup(env, "{}" + recv.text)
+                        sname = _types_struct_name_of(blk.kind)
+                        if len(sname) == 0 {
+                            let mut rscratch: array = []
+                            let recv_t = _infer_expr(recv, env, ctx, rscratch)
+                            sname = _types_struct_name_of(recv_t.kind)
+                        }
+                        if len(sname) > 0 {
+                            let lk = _types_lookup_struct_field_typename(sname, fnode.text)
+                            if lk.found && len(lk.field_typename) > 0 {
+                                let ftr = TypeRef { kind: "named", name: lk.field_typename, args: [], span: fnode.span }
+                                let field_t = _types_lower_type_ref(ftr)
+                                if _types_kind_is_scalar(field_t.kind) && _types_kind_is_scalar(rhs_t.kind) {
+                                    if !_types_assignable(field_t, rhs_t, e.children[1]) {
+                                        _emit_hx3011(field_t, rhs_t, e.span, out)
+                                        r3_rejected = true
+                                    }
+                                }
                             }
                         }
                     }
@@ -3217,6 +3431,12 @@ fn _collect_item_types(module: Module, out: array) -> TypeEnv {
         } else if _types_is_struct_item(it.kind) {
             env = _types_env_define_attr(env, it.name, def,
                 _types_struct_type(it, def), it.is_pub, owning)
+            // Wall A r5 — record this struct's field NAMES + named-type
+            // spellings into the side registry (the env's struct Type keeps
+            // field types but drops names) so a later `s.field = …` assign can
+            // recover the declared field type. Mirrors the enum branch's
+            // `_types_register_enum_item_payloads` call below.
+            _types_register_struct_item_fields(it)
         } else if _types_is_enum_item(it.kind) {
             env = _types_env_define_attr(env, it.name, def,
                 _types_enum_type(def), it.is_pub, owning)
@@ -3268,6 +3488,11 @@ pub fn type_check(module: Module) -> array {
     // `type_check()` is called once per module pass; registry lifetime ==
     // this call (parallel to bind.hexa's arity registry reset shape).
     _types_enum_registry_reset()
+    // Wall A r5 — reset the per-module struct field-type registry alongside
+    // the enum one (same lifetime = this `type_check()` call). Populated by
+    // `_collect_item_types`; read only under HEXA_STATIC_TYPES at the field-
+    // assign site → byte-neutral for the default build.
+    _types_struct_registry_reset()
     // Type-alias substitution table — registered up front (before any TypeRef
     // is lowered) so `type Name = T` carriers resolve `Name` → `T` everywhere,
     // including forward references (`struct S { x: Name }` declared above the

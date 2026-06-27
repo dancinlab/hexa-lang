@@ -200,6 +200,22 @@ fn _index_expr(base: Expr, idx: Expr, file: string, line: i64, col: i64) -> Expr
     }
 }
 
+// Wall A r5 — `recv.field` access. text = field name, children = [receiver]
+// per the Field node the parser builds (parser.hexa:715) and the assign arm
+// in types.hexa:_infer_expr reads (children[0]=receiver).
+fn _field_expr(recv: Expr, field: string, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(recv)
+    return Expr {
+        kind: ExprKind::Field,
+        span: _span(file, line, col, len(field)),
+        text: field,
+        annotations: [],
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
 fn _block(children: [Expr], file: string, line: i64, col: i64) -> Expr {
     return Expr {
         kind: ExprKind::Block,
@@ -270,6 +286,21 @@ fn _enum_item(name: string, variants: [Param], file: string, line: i64) -> Item 
         span: _span(file, line, 1, len(name)),
         annotations: [],
         params: variants,
+        return_type: _empty_type_ref(),
+        body: _block([], file, line, 1),
+        is_pub: false
+    }
+}
+
+// Wall A r5 — struct item declaration (fields live in params[], same shape
+// `_types_struct_type` / `_types_register_struct_item_fields` read).
+fn _struct_item(name: string, fields: [Param], file: string, line: i64) -> Item {
+    return Item {
+        kind: ItemKind::Struct,
+        name: name,
+        span: _span(file, line, 1, len(name)),
+        annotations: [],
+        params: fields,
         return_type: _empty_type_ref(),
         body: _block([], file, line, 1),
         is_pub: false
@@ -632,6 +663,49 @@ fn _build_case_static_types_r4() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// Wall A r5 — struct field-type assign. A `struct Point { x: i32, y: i32 }`
+// records its field names + types into the side registry. A receiver of struct
+// type — a fn PARAM `p: Point` (carries `named:Point` via bind_params) OR a
+// block-local `let s: Point` (recorded under `{}s`) — lets a later
+// `recv.field = <expr>` recover `field`'s declared type and REJECT a scalar
+// mismatch with HX3011 (Rust E0308 check_field place-coercion). Three REJECT
+// shapes + one matching control:
+//   struct Point { x: i32, y: i32 }
+//   fn f(p: Point) {
+//       let s: Point          // block-local → record {}s : named:Point
+//       p.x = "s"             // REJECT: string ≠ i32 (param receiver)   → HX3011
+//       s.x = "z"             // REJECT: string ≠ i32 (block-local recv)  → HX3011
+//       p.y = 7               // matches (int-lit coercion)               → clean
+//   }
+// Under the flag exactly 2 HX3011; the matching `p.y = 7` and the default
+// build (flag-off) emit zero — the byteeq-neutral proof. Extends r4's element-
+// fit contract from the array place to the struct field place.
+fn _build_case_static_types_r5() -> Module {
+    let f = "case_static_r5.hexa"
+    // struct Point { x: i32, y: i32 }
+    let mut sfields = []
+    sfields.push(_param("x", "i32", f, 1, 15))
+    sfields.push(_param("y", "i32", f, 1, 23))
+    let item_pt = _struct_item("Point", sfields, f, 1)
+    // fn f(p: Point) { … }
+    let mut kids = []
+    kids.push(_let_decl_expr("s|Point", f, 3, 5))
+    // p.x = "s"   → string ≠ i32 (param receiver)
+    kids.push(_assign_expr(_field_expr(_ident_expr("p", f, 4, 5), "x", f, 4, 7), _string_expr("s", f, 4, 11), f, 4, 9))
+    // s.x = "z"   → string ≠ i32 (block-local receiver)
+    kids.push(_assign_expr(_field_expr(_ident_expr("s", f, 5, 5), "x", f, 5, 7), _string_expr("z", f, 5, 11), f, 5, 9))
+    // p.y = 7     → matches (int-lit coercion)
+    kids.push(_assign_expr(_field_expr(_ident_expr("p", f, 6, 5), "y", f, 6, 7), _int_expr("7", f, 6, 11), f, 6, 9))
+    let body = _block(kids, f, 2, 1)
+    let mut fparams = []
+    fparams.push(_param("p", "Point", f, 2, 6))
+    let item_f = _fn_item("f", fparams, _empty_type_ref(), body, f, 2)
+    let mut items = []
+    items.push(item_pt)
+    items.push(item_f)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // ── Driver ───────────────────────────────────────────────────
 
 fn _run_case(label: string, m: Module) -> array {
@@ -833,6 +907,30 @@ fn main() {
     } else {
         if nk != 0 {
             println("  FAIL: case (k) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nk) + " (total=" + to_string(len(diags_k)) + ")")
+            ok = false
+        } else {
+            println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
+        }
+    }
+
+    // (l) Wall A r5 — struct field-type assign. Under the flag, with
+    // `struct Point { x: i32, y: i32 }`, a param receiver `p.x = "s"` AND a
+    // block-local receiver `s.x = "z"` each REJECT with HX3011 (2 total), while
+    // the matching `p.y = 7` stays clean (int-literal coercion). On the default
+    // build → 0 (byteeq-neutral). Extends (k)'s element-fit contract from the
+    // array place to the struct field place.
+    let diags_l = _run_case("(l) static-types r5 — struct field-type assign mismatch (HEXA_STATIC_TYPES)", _build_case_static_types_r5())
+    let nl = _count_code(diags_l, "HX3011")
+    if env("HEXA_STATIC_TYPES") == "1" {
+        if nl != 2 {
+            println("  FAIL: case (l) HEXA_STATIC_TYPES=1 expected 2 HX3011 (p.x=\"s\" + s.x=\"z\"), got " + to_string(nl) + " (total=" + to_string(len(diags_l)) + ")")
+            ok = false
+        } else {
+            println("  ok: 2 HX3011 emitted (p.x:i32=\"s\" param + s.x:i32=\"z\" block-local; matching p.y:i32=7 stays clean)")
+        }
+    } else {
+        if nl != 0 {
+            println("  FAIL: case (l) default build expected 0 HX3011 (byteeq-neutral), got " + to_string(nl) + " (total=" + to_string(len(diags_l)) + ")")
             ok = false
         } else {
             println("  ok: 0 HX3011 (default-OFF → byteeq-neutral)")
