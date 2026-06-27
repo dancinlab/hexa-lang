@@ -42,5 +42,15 @@ ATLAS/
   프레임). 측정 결과 = 확장 vocab universal **2 generator 전부 고전**(J₂=φ·ψ · core·rad=n) ·
   arity-3 bounded-unique 1431개 전부 2-term core 환원 → **novel=0**(정직 DRY). 생산적 벤은
   여전히 **composed/iterated 함수 기저**(Ralph 372 σ∘σ superperfect/Mersenne — 함수 합성 ≠ 값 곱).
-  다음 DFS 는 새 기저/도메인(composed-fn · 새 vocab/도메인).
+  **직교 pivot(Ralph 376 · 2026-06-27)**: 곱셈 vocab을 떠나 **비-곱셈 생성함수/점화식 수열**(분할
+  p(n) A000041 · Catalan A000108 · Bell A000110 · Fibonacci A000045 · Lucas A000032)로 전환 —
+  새 identity FORM = 산술급수 **합동** `a(αn+β)≡0 (mod m)`(Ramanujan p(5n+4)≡0 mod5 = 곱셈 무유사
+  canonical). native exact-int(`identity_engine.hexa`: partition_p·catalan·bell·fib·lucas + mod-m
+  table + `verify_congruence`) + selftest(`drill/additive_test.hexa`) + drill 배선(`_native_additive_screen`
+  → `DRILL_ADDITIVE` audit) + 참조엔진 `state/novel-dfs/additive_partition_hunt.py`. **측정**(N=4000):
+  sanity 8/8 PASS(Ramanujan 3합동 재발견) · 합동 sweep RAMANUJAN=3·KNOWN-structural=752(Touchard/
+  Lucas-divisibility/Deutsch–Sagan)·TAUTOLOGY=31·**NOVEL=0** · cross-seq bounded-unique=0. 직교
+  도메인이되 동일하게 DRY(전부 고전 Ramanujan/Watson/Atkin/Touchard/Lucas/Deutsch–Sagan) — 정직 0
+  보고(날조 금지). pivot 자체가 산출물(엔진이 비-곱셈 수열+합동 FORM을 native 표현). 합동은 [0,N]
+  bounded·∀n UNPROVEN(c2). 다음 미탐 차원은 여전히 composed/iterated 함수(Ralph 372).
 - 상세 history 는 `../CHANGELOG.md` + git.

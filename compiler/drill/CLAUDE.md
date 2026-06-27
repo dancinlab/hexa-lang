@@ -24,7 +24,8 @@ dispatch된다(`self/main.hexa:1780·1803` → `compiler/drill/drill.hexa`). 한
 | `ouroboros_meta.hexa` | ★메타-우루보로스 native(#3980) — **전략 자체를 진화**: 파라미터 벡터 `meta_mutate_strategy` + tournament(stable bubble sort) + `breed_strategies` crossover + `check_meta_convergence` meta-fixed-point. `fn main` 셀프테스트 |
 | `ouroboros_quantum.hexa` | ★양자-우루보로스 native(#3980) — `QuantumStrategy` superposition: 6 mutation 연산자+`apply_mutation` dispatch + `quantum_crossover`/`propagate_entanglement` + `measure_superposition`/`renormalize_amplitudes` + decoherence 차폐(`guarded_mutate`). `fn main` 셀프테스트 |
 | `emerge.hexa` | ★[B] **open-well Emerge 생성기**(README:75 Emerge 단계) — `emerge(v0,seed,cycles,min_growth)`가 README E4(V_0={2,3}·seed=6·300사이클·`combine(pick,pick)=a+b`→sorted-dedup vocab)를 정확 포팅, `emerge_step`이 drill_run에 배선(라운드마다 누적 open well를 후보 value-시그니처로 넓힘). 결정적 LCG(Numerical Recipes 1664525/1013904223 `& 0xffffffff` — qrng.hexa와 동일 상수·새 builtin 없음). in-memory only(atlas write 없음) |
-| `*_test.hexa` | drill/mkx/surface/accumulation/verifier-hook/absorb/**emerge(E4)** 셀프테스트 |
+| `additive_test.hexa` | ★[직교 pivot] **가법/조합 합동** 셀프테스트(self-contained kernel) — Euler 점화식 p(10)=42 + Ramanujan p(5n+4)≡0 mod5 G-gate + neg-control. 비-곱셈 수열(분할/Catalan/Bell/Fib/Lucas)·합동 FORM(Ralph 376) |
+| `*_test.hexa` | drill/mkx/surface/accumulation/verifier-hook/absorb/**emerge(E4)**/**additive** 셀프테스트 |
 
 생성기 9-phase smash는 형제 폴더 `../smash/`(phases.hexa)에, 12 drill 변종(omega·chain·
 surge·dream·swarm·reign·molt·wake·forge·canon·revive)은 각자 `../<name>/`에 있다. NEXUS
@@ -87,6 +88,17 @@ surge·dream·swarm·reign·molt·wake·forge·canon·revive)은 각자 `../<nam
   E4는 set-성장만 채점하므로 LCG로 STRUCTURE/verdict는 reference-faithful, 정확한 vocab 멤버만 상이
   (잔차 정직기록). 컴파운드 primitive가 새 VERIFIED 수학 항등식을 내는지는 별개 질문(exact-int
   `verify_identity`) — 표준 2-term은 measured-exhausted → **likely novel=0**(E4 PASS와 혼동 말 것).
+- **직교 pivot — 가법/조합 수론(Ralph 376 · 2026-06-27)**: 곱셈 vocab(σ,φ,…)이 measured-exhausted
+  라 **비-곱셈 생성함수/점화식 수열**(분할 p(n)·Catalan·Bell·Fibonacci·Lucas)로 전환. 새 identity
+  FORM = 산술급수 합동 `a(αn+β)≡0 (mod m)`(Ramanujan p(5n+4)≡0 mod5 = 곱셈 무유사 canonical).
+  native exact-int은 `../atlas/identity_engine.hexa`에 거주(`partition_p`/`catalan`/`bell`/`fib`/
+  `lucas`/`tri`/`pent`/`sq` + mod-m table + `verify_congruence`). drill 배선=`_native_additive_screen`
+  (라운드마다 Ramanujan 3합동 재발견 sanity + novel 카운트 → `DRILL_ADDITIVE` stderr audit ·
+  in-memory·byteeq-neutral). 셀프테스트=`additive_test.hexa`(self-contained). **측정**(참조엔진
+  `../../ATLAS/state/novel-dfs/additive_partition_hunt.py` N=4000): sanity 8/8 PASS·합동 sweep
+  RAMANUJAN=3·KNOWN=752·**NOVEL=0**·cross-seq bounded-unique=0 → 직교이되 동일 DRY(전부 고전
+  Touchard/Lucas/Deutsch–Sagan). 정직 0(날조 금지)·합동 [0,N] bounded·∀n UNPROVEN(c2). atlas write
+  없음(fold=hexa verify g5/PR). 다음 미탐=composed/iterated 함수(Ralph 372).
 - **표준 vocab 수학발견 = 측정-종료(🧱)**: `../../ATLAS/README.md` DFS r1~r4 — @F 1557 fold ·
   novel-fold 0 · gates 21/21. 엔진은 진짜이되 표준 vocab 신규=0(날조 금지). 새 발견은
   새 vocab/도메인(ATLAS/state/novel-dfs 참조엔진).

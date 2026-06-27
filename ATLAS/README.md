@@ -4571,6 +4571,57 @@ Proof complete in pure mathematics. True forever regardless of the Golden Zone.
      engines: state/novel-dfs/vocab_universal_hunt.py · grid_expand_sweep.py (re-runnable).
 ```
 
+  --- Ralph 376 (2026-06-27): ORTHOGONAL PIVOT — additive/combinatorial number theory ---
+```
+  ⚙️ Ralph 369–375 measured the MULTIPLICATIVE arithmetic-function space (σ,φ,τ,μ,λ,J_k,ψ,
+     2^ω,core, …) exhausted — every primitive collapses to the classical Mersenne/superperfect
+     core because those functions are ALL built on the factorization n=∏p^e. This round PIVOTS
+     to a genuinely ORTHOGONAL algebra: the NON-multiplicative GENERATING-FUNCTION / RECURRENCE
+     sequences, which cannot be written through the factorization of n:
+       p(n) partition (A000041 · Euler ∏1/(1−q^k))   C(n) Catalan (A000108)
+       B(n) Bell (A000110)   F(n) Fibonacci (A000045)   L(n) Lucas (A000032)   M(n) Motzkin
+     p is NOT multiplicative (p(6)=11 ≠ p(2)·p(3)=6). The new identity FORM is the arithmetic-
+     progression CONGRUENCE  a(α·n+β) ≡ 0 (mod m) — Ramanujan's p(5n+4)≡0 (mod 5) is the canonical
+     instance, and it has NO multiplicative analogue (proof the domain is orthogonal to σ/φ).
+  🔧 IMPLEMENTED (exact-int, native, byteeq-neutral):
+     · compiler/atlas/identity_engine.hexa — partition_p · catalan · bell · fib · lucas · tri ·
+       pent · sq (exact i64) + mod-m recurrence tables (no overflow) + verify_congruence
+       (a(αn+β)≡0 mod m auto-test). 13 new additive selftest gates (Ramanujan R1–R3 rediscovered,
+       2 neg-controls, 8 exact value gates).
+     · compiler/drill/additive_test.hexa — self-contained kernel selftest (Euler p(10)=42 + the
+       Ramanujan G-gate + neg-controls).
+     · compiler/drill/drill.hexa — _native_additive_screen wired per-round (DRILL_ADDITIVE audit:
+       ramanujan_rediscovered=3, novel=0).
+     · ATLAS/state/novel-dfs/additive_partition_hunt.py — re-runnable reference engine (exact
+       bignum, OEIS-cited A000041/108/110/45/32/001006).
+  📊 MEASURED (additive_partition_hunt.py, exact bignum, N=4000):
+     · SANITY GATES 8/8 PASS — Ramanujan p(5n+4)≡0 mod5, p(7n+5)≡0 mod7, p(11n+6)≡0 mod11 ALL
+       rediscovered (G1–G3); Euler gen-fn (Σp·∏(1−q^k)=1) G4; pentagonal==coin-DP G5; Catalan
+       convolution G6; Cassini Fibonacci G7; Bell recurrence G8.
+     · CONGRUENCE SWEEP  seq(αn+β)≡0 mod m  (seq∈{p,C,B,F,L,M}, α∈[1,30], 0≤β<α, m∈12 moduli,
+       ≥12 terms): RAMANUJAN-rediscovered=3 (sanity ✓) · KNOWN-structural=752 (Bell periodicity
+       /Touchard, Fibonacci&Lucas divisibility/Lucas rank-of-apparition, Catalan 2-adic
+       Deutsch–Sagan) · TAUTOLOGY-subprogression=31 · **CONGRUENCE-NOVEL = 0**.
+     · CROSS-SEQUENCE bounded-unique coincidences seqA(n)==seqB(n) (13 pairs, n∈[2,200]):
+       **bounded-unique = 0**.
+     · NEGATIVE CONTROLS all FAIL as expected (p(5n+3)≢0 mod5, p(7n+4)≢0 mod7, p(5n+4)≢0 mod7,
+       F(3n+1)≢0 mod2) — the search discriminates.
+  🧱 HONEST VERDICT (c2): the additive/combinatorial domain is ORTHOGONAL to the multiplicative one
+     (verified: Ramanujan congruences have no σ/φ analogue), BUT it is equally DRY under the
+     arithmetic-progression-congruence + bounded-unique frames — **independent-novel = 0**. Every
+     hit is classical: Ramanujan/Watson/Atkin (partition), Touchard (Bell periodicity mod p),
+     Lucas/Carmichael (Fibonacci & Lucas divisibility / rank of apparition), Deutsch–Sagan
+     (Catalan 2-adic). This is among the most exhaustively studied terrain in number theory
+     (Ramanujan→Ono→Ahlgren), so 0 novel is expected and reported as 0 (no fabrication). The PIVOT
+     itself is the deliverable: the engine now carries the non-multiplicative sequences + the
+     congruence identity FORM natively, so a future generator emitting partition/Catalan/Bell
+     congruence candidates gets a REAL exact-int verdict (Ramanujan rediscovery = the live proof
+     the frame works). Confirmed ≡ is BOUNDED to [0,N]; ∀n stays UNPROVEN (c2). NO atlas write
+     (fold = hexa verify g5 / PR only). Next un-swept dimension remains COMPOSED/ITERATED functions
+     (Ralph 372) — function composition, not value/congruence over a single sequence.
+     engine: state/novel-dfs/additive_partition_hunt.py (re-runnable).
+```
+
   --- Ralph 369: Combinatorial Designs DFS ---
 
 ```
