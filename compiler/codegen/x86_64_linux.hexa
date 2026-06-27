@@ -920,28 +920,6 @@ fn _x86_64_assign_regs(mf: MFunc) -> X86AllocResult {
             }
             peb = peb + 1
         }
-        // DEBUG (HEXA_PACK_ESC_DEBUG=1): dump array_lit dst types + let links.
-        if env("HEXA_PACK_ESC_DEBUG") == "1" {
-            eprintln("[PESC-FN] fn=" + mf.name + " maxid=" + to_string(pe_maxid))
-            let mut dti = 0
-            while dti <= pe_maxid { if rm_local_type[dti] != 0 { eprintln("[PESC-TY] local " + to_string(dti) + " type=" + to_string(rm_local_type[dti])) } dti = dti + 1 }
-            let mut deb = 0
-            while deb < len(mf.blocks) {
-                let dblk = mf.blocks[deb]
-                let mut dss = 0
-                while dss < len(dblk.stmts) {
-                    let dst2 = dblk.stmts[dss]
-                    if dst2.kind == _STMT_ASSIGN && (dst2.op == "array_lit" || dst2.op == "let") {
-                        let dd = dst2.dst.id
-                        let dt = if dd >= 0 && dd <= pe_maxid { rm_local_type[dd] } else { -9 }
-                        let da0 = if len(dst2.args) >= 1 && dst2.args[0].kind == "local" { dst2.args[0].local_id } else { -1 }
-                        eprintln("[PESC] op=" + dst2.op + " dst=" + to_string(dd) + " type=" + to_string(dt) + " arg0_local=" + to_string(da0) + " is_alit_arg0=" + to_string(if da0 >= 0 && da0 <= pe_maxid { pe_is_alit[da0] } else { -1 }))
-                    }
-                    dss = dss + 1
-                }
-                deb = deb + 1
-            }
-        }
         // Pass 2: a typed (101/102) `let X = T` where T is an array_lit storage
         // propagates the typed element-kind back to T → esc-mint T.
         let mut peb2 = 0
